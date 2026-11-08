@@ -3,6 +3,11 @@ import type { TurnUsageContext } from '../turnUsageContext.js';
 import { Session, type AgentEvent, type AgentSessionHandle } from '@cindy/maker-core';
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 import { handleSessionEvent, type SessionEventDependencies } from '../sessionEventPipeline.js';
+import { flushSessionPiTurnUsage, retryPendingPiUsageReceipts } from '../piUsageReceipts.js';
+import { setCurrentDbClient, clearCurrentDbClient } from '../../localDb/client/current.js';
+import type { DbClient } from '../../localDb/client/DbClient.js';
+import type { PiUsageWrite } from '../../localDb/worker/opHandlers/piUsageTx.js';
+import * as broadcastTap from '../../device-link/broadcast-tap.js';
 import { createBotCompactRuntimeRefreshCoordinator } from '../botCompactRuntimeRefresh.js';
 import { createContextOverflowRollover } from '../contextOverflowRollover.js';
 import { setMainLocale } from '../../i18n.js';
@@ -57,9 +62,15 @@ vi.mock('../../maker-host/auth-adapters.js', () => ({
   readClaudeApiKey: effects.fn('readClaudeApiKey'),
 }));
 vi.mock('../../sessionSpendBroadcaster.js', () => ({
+  broadcastSessionSpend: effects.fn('broadcastSessionSpend'),
+  broadcastSessionTokens: effects.fn('broadcastSessionTokens'),
   recordSessionTurnSpend: effects.fn('recordSessionTurnSpend'),
   recordSessionTurnTokens: effects.fn('recordSessionTurnTokens'),
   recordSessionContextSnapshot: effects.fn('recordSessionContextSnapshot'),
+}));
+vi.mock('../../localDb/client/current.js', async importOriginal => ({
+  ...await importOriginal<typeof import('../../localDb/client/current.js')>(),
+  getDbClient: effects.fn('getDbClient'),
 }));
 vi.mock('../../turnCostBroadcaster.js', () => ({
   recordSchedulerTurnCost: effects.fn('recordSchedulerTurnCost'),
@@ -93,6 +104,8 @@ vi.mock('../../usage/referenceModelPricing.js', () => ({
 }));
 vi.mock('../../usage/ledgerCurrency.js', () => ({
   currentLedgerCurrency: effects.fn('currentLedgerCurrency'),
+  isLedgerCurrencyKnown: effects.fn('isLedgerCurrencyKnown'),
+  LEDGER_CURRENCY_FALLBACK: 'USD',
 }));
 vi.mock('../usage.js', () => ({
   triggerClaudeSubscriptionUsageRefresh: effects.fn('triggerClaudeSubscriptionUsageRefresh'),
@@ -419,6 +432,7 @@ beforeEach(() => {
     effects.fn(name).mockResolvedValue(undefined);
   effects.fn('getActiveCatalog').mockReturnValue({ providers: [] });
   effects.fn('currentLedgerCurrency').mockReturnValue('USD');
+  effects.fn('isLedgerCurrencyKnown').mockReturnValue(true);
   effects.fn('reserveTurnErrorPersistId').mockImplementation(() => {
     effects.calls.push('reserve');
     return 'error-row';
@@ -1898,6 +1912,214 @@ describe('usage through the production event pipeline', () => {
     effects.fn('piUsageToTokens').mockReturnValue(tokens);
     effects.fn('consumeLastAssistantPersistId').mockReturnValue('assistant-row');
   }
+
+  // #8887: production pipeline, unit tier. A request followed by a blocked
+  // price lookup must commit tokens now, retain its owner, and drain at teardown.
+  it('persists Pi requests before settlement and drains the captured owner while pricing waits', async () => {
+    const h = harness();
+    pricing(false);
+    const writes = vi.fn(async () => ({ changed: true }));
+    const otherWrites = vi.fn(async () => ({ changed: true }));
+    effects.fn('getDbClient').mockReturnValue({ tx: writes, queryOne: async () => ({ total: 130, legacy: 0.2, amount: 0.1, currency: 'USD', approximate: 0 }) });
+    let release!: (value: unknown) => void;
+    effects.fn('getGatewayModelPricingForModel').mockReturnValue(new Promise(resolve => { release = resolve; }));
+    const receiptUsage = { ...usage('pi'), settlementId: 'receipt-turn', receipts: [
+      { ...segment, recordedAt: Date.now(), id: 'pi:1' },
+    ] };
+    h.emit(event('account_usage', { type: 'pi/request_usage', usage: receiptUsage }, { source: 'pi' }));
+    await microtasks();
+    expect(writes).toHaveBeenCalledWith('usage.recordPiUsage', [expect.objectContaining({ amount: null, inputTokens: 100 })]);
+    expect(effects.fn('recordModelTurnUsage')).not.toHaveBeenCalled();
+    let drained = false;
+    const draining = flushSessionPiTurnUsage().then(() => { drained = true; });
+    effects.fn('getDbClient').mockReturnValue({ tx: otherWrites });
+    await microtasks();
+    expect(drained).toBe(false);
+    release({ xd: { 'test-model': effects.fn('getModelPriceQuote')() } });
+    await draining;
+    expect(otherWrites).not.toHaveBeenCalled();
+    expect(writes).toHaveBeenCalledTimes(2);
+    expect(writes.mock.calls[1]).toEqual(['usage.recordPiUsage', [expect.objectContaining({ amount: expect.any(Number) })]]);
+    expect(effects.fn('broadcastSessionSpend')).toHaveBeenCalledWith(expect.objectContaining({
+      sessionId: h.session.id, totalCostUsd: expect.closeTo(0.3),
+    }), expect.anything());
+    await h.dispose();
+  });
+
+  it('settles Pi error and done receipts without the legacy aggregate double-count path', async () => {
+    const h = harness();
+    pricing(false);
+    const writes = vi.fn(async () => ({ changed: true }));
+    effects.fn('getDbClient').mockReturnValue({ tx: writes, queryOne: async () => ({ total: 130 }) });
+    const receiptUsage = { ...usage('pi'), settlementId: 'paired-turn', receipts: [
+      { ...segment, recordedAt: Date.now(), id: 'pi:1' },
+    ] };
+    h.emit(event('error', { isTerminal: true, message: 'quota exceeded', usage: receiptUsage }, { source: 'pi' }));
+    h.emit(event('done', { status: 'failed', usage: receiptUsage }, { source: 'pi' }));
+    await flushSessionPiTurnUsage();
+    expect(writes).toHaveBeenCalled();
+    expect(effects.fn('recordModelTurnUsage')).not.toHaveBeenCalled();
+    expect(effects.fn('recordSessionTurnTokens')).not.toHaveBeenCalled();
+    expect(effects.fn('recordTurnSpend')).not.toHaveBeenCalled();
+    expect(effects.fn('recordSchedulerTurnCost')).toHaveBeenCalledTimes(1);
+    await h.dispose();
+  });
+
+  it('leaves unavailable Pi pricing pending so terminal replay can finish it', async () => {
+    const h = harness();
+    pricing(false);
+    const quote = effects.fn('getModelPriceQuote')();
+    effects.fn('getGatewayModelPricingForModel').mockResolvedValue(null);
+    const writes = vi.fn(async () => ({ changed: true }));
+    effects.fn('getDbClient').mockReturnValue({ tx: writes, queryOne: async () => null });
+    const receiptUsage = { ...usage('pi'), settlementId: 'missing-quote', receipts: [
+      { ...segment, recordedAt: Date.now(), id: 'pi:1' },
+    ] };
+    h.emit(event('account_usage', { type: 'pi/request_usage', usage: receiptUsage }, { source: 'pi' }));
+    await flushSessionPiTurnUsage();
+    expect(writes).toHaveBeenCalledTimes(1);
+    expect(writes.mock.calls[0]).toEqual(['usage.recordPiUsage', [expect.objectContaining({ amount: null })]]);
+    effects.fn('getGatewayModelPricingForModel').mockResolvedValue({ xd: { 'test-model': quote } });
+    h.emit(event('done', { usage: receiptUsage }, { source: 'pi' }));
+    await flushSessionPiTurnUsage();
+    expect(writes.mock.calls[2]).toEqual(['usage.recordPiUsage', [expect.objectContaining({ amount: expect.any(Number), actualCost: true })]]);
+    await h.dispose();
+  });
+
+  // #9030 review P2, unit: a resolved managed-provider reference estimate is
+  // intentionally message-only, whereas a missing quote must remain recoverable.
+  it.each(['estimate', 'missing'] as const)('finalizes only resolved managed-provider receipts (%s)', async mode => {
+    const h = harness();
+    pricing(false);
+    effects.fn('getSessionProvider').mockReturnValue('managed-provider');
+    effects.fn('isUserProviderSession').mockReturnValue(true);
+    effects.fn('getActiveCatalog').mockReturnValue({ providers: [
+      { id: 'managed-provider', auth: { method: 'api-key' }, access: { kind: 'managed' } },
+    ] });
+    const quote = {
+      providerId: 'managed-provider', modelId: 'test-model', currency: 'USD',
+      source: 'provider-reference', inputPerMtok: 1, outputPerMtok: 2, cacheReadPerMtok: 0.1,
+    };
+    effects.fn('getReferenceModelPricing').mockReturnValue(mode === 'missing' ? {} : {
+      'managed-provider': { 'test-model': quote },
+    });
+    const writes = vi.fn(async (_name: string, _rows: PiUsageWrite[]) => ({ changed: true }));
+    effects.fn('getDbClient').mockReturnValue({ tx: writes, queryOne: async () => null });
+    h.emit(event('account_usage', { usage: { settlementId: 'managed-turn', receipts: [
+      { ...segment, recordedAt: Date.now(), id: 'pi:managed' },
+    ] } }, { source: 'pi' }));
+    await flushSessionPiTurnUsage();
+    expect(writes).toHaveBeenCalledTimes(mode === 'estimate' ? 2 : 1);
+    expect(writes).toHaveBeenLastCalledWith('usage.recordPiUsage', [expect.objectContaining({
+      amount: mode === 'estimate' ? 0 : null, actualCost: false,
+    })]);
+    expect(effects.fn('broadcastSessionSpend')).not.toHaveBeenCalled();
+    await h.dispose();
+  });
+
+  // #9030 review P1, unit: the existing price-delay test keeps USD throughout.
+  // Use the production pipeline to prove that currency recovery does not freeze
+  // fallback USD into a receipt, either within a write or across product turns.
+  it.each(['during-write', 'next-turn', 'terminal-replay'] as const)(
+    'prices Pi subscription receipts in the recovered account currency (%s)', async mode => {
+      const h = harness();
+      pricing(true);
+      effects.fn('isLedgerCurrencyKnown').mockReturnValue(false);
+      let release!: (result: { changed: boolean }) => void;
+      const writes = vi.fn(async () => ({ changed: true }));
+      if (mode === 'during-write') writes.mockImplementationOnce(() => new Promise(resolve => { release = resolve; }));
+      effects.fn('getDbClient').mockReturnValue({ tx: writes, queryOne: async () => null });
+      const receiptUsage = { ...usage('pi'), settlementId: 'currency-turn-1', receipts: [
+        { ...segment, recordedAt: Date.now(), id: 'pi:1' },
+      ] };
+      h.emit(event('account_usage', { type: 'pi/request_usage', usage: receiptUsage }, { source: 'pi' }));
+      if (mode !== 'during-write') {
+        await flushSessionPiTurnUsage();
+        // Unknown currency is pending, not a final USD estimate.
+        expect(writes.mock.calls.every(call => (call as unknown as [string, Array<{ amount: unknown }>])[1]
+          .every(row => row.amount === null))).toBe(true);
+      }
+      effects.fn('currentLedgerCurrency').mockReturnValue('CNY');
+      effects.fn('isLedgerCurrencyKnown').mockReturnValue(true);
+      if (mode === 'during-write') release({ changed: true });
+      else h.emit(event(mode === 'terminal-replay' ? 'done' : 'account_usage', {
+        usage: { ...receiptUsage, settlementId: mode === 'next-turn' ? 'currency-turn-2' : receiptUsage.settlementId },
+      }, { source: 'pi' }));
+      await flushSessionPiTurnUsage();
+      expect(writes).toHaveBeenLastCalledWith('usage.recordPiUsage', [expect.objectContaining({
+        currency: 'CNY', amount: expect.any(Number), actualCost: false,
+      })]);
+      await h.dispose();
+    },
+  );
+
+  it('keeps a confirmed Pi currency with its owner when a late write crosses an account boundary', async () => {
+    const h = harness();
+    pricing(true);
+    const currentScope = vi.spyOn(broadcastTap, 'isDataOwnerBroadcastScopeCurrent').mockReturnValue(true);
+    let release!: (result: { changed: boolean }) => void;
+    const writes = vi.fn(async () => ({ changed: true }))
+      .mockImplementationOnce(() => new Promise(resolve => { release = resolve; }));
+    effects.fn('getDbClient').mockReturnValue({ tx: writes, queryOne: async () => null });
+    try {
+      h.emit(event('account_usage', { usage: { settlementId: 'owner-currency', receipts: [
+        { ...segment, recordedAt: Date.now(), id: 'pi:1' },
+      ] } }, { source: 'pi' }));
+      currentScope.mockReturnValue(false);
+      effects.fn('currentLedgerCurrency').mockReturnValue('CNY');
+      release({ changed: true });
+      await flushSessionPiTurnUsage();
+      expect(writes).toHaveBeenLastCalledWith('usage.recordPiUsage', [expect.objectContaining({
+        currency: 'USD', amount: expect.any(Number), actualCost: false,
+      })]);
+    } finally { currentScope.mockRestore(); await h.dispose(); }
+  });
+
+  // #9030 P1, unit: exercise the startup/catalog-recovery entry without a live
+  // Session or terminal replay, including owner changes during async pricing.
+  it.each(['recover', 'owner-switch', 'unavailable'] as const)('recovers durable Pi receipts without a terminal event (%s)', async mode => {
+    const h = harness();
+    pricing(false);
+    const quote = effects.fn('getModelPriceQuote')();
+    effects.fn('getGatewayModelPricingForModel').mockResolvedValue(null);
+    const writes = vi.fn(async (_name: string, _rows: PiUsageWrite[]) => ({ changed: true }));
+    effects.fn('getDbClient').mockReturnValue({ tx: writes, queryOne: async () => null });
+    h.emit(event('account_usage', { usage: { settlementId: 'recover-turn', receipts: [
+      { ...segment, recordedAt: Date.now(), id: 'pi:recover' },
+    ] } }, { source: 'pi' }));
+    await flushSessionPiTurnUsage();
+    const saved = JSON.parse(writes.mock.calls[0][1][0].pricingPayload!);
+    // A later timezone change must not move the money to a different day.
+    saved.day = '2020-01-01';
+    await h.dispose();
+    const pendingRow = { rowId: 1, sessionId: 'task', settlementId: 'recover-turn', receiptId: 'pi:recover', payload: JSON.stringify(saved) };
+    const replayWrites = vi.fn(async (_name: string, _rows: PiUsageWrite[]) => ({ changed: true }));
+    const rows = mode === 'unavailable' ? Array.from({ length: 20 }, (_, index) => ({ ...pendingRow, rowId: index + 1 })) : [pendingRow];
+    const query = vi.fn(async (_sql: string, params: number[]) => params[0] === 0 ? rows : []);
+    const db = { tx: replayWrites, query, queryOne: async () => null } as unknown as DbClient;
+    setCurrentDbClient(db, 'pi-recovery-owner');
+    let release!: (value: unknown) => void;
+    effects.fn('getGatewayModelPricing').mockReturnValue(new Promise(resolve => { release = resolve; }));
+    effects.fn('getGatewayModelPricingForModel').mockClear();
+    effects.fn('broadcastSessionTokens').mockClear();
+    effects.fn('rebroadcastTodaySpend').mockClear();
+    try {
+      const recovery = retryPendingPiUsageReceipts();
+      await microtasks();
+      expect(replayWrites).not.toHaveBeenCalled();
+      if (mode === 'owner-switch') clearCurrentDbClient();
+      release(mode === 'unavailable' ? null : { xd: { 'test-model': quote } });
+      await recovery;
+      expect(replayWrites).toHaveBeenCalledTimes(mode === 'recover' ? 1 : 0);
+      expect(effects.fn('getGatewayModelPricing')).toHaveBeenCalledTimes(1);
+      expect(effects.fn('getGatewayModelPricingForModel')).not.toHaveBeenCalled();
+      expect(effects.fn('broadcastSessionTokens')).not.toHaveBeenCalled();
+      expect(effects.fn('rebroadcastTodaySpend')).toHaveBeenCalledTimes(mode === 'recover' ? 1 : 0);
+      if (mode === 'recover') expect(replayWrites).toHaveBeenLastCalledWith('usage.recordPiUsage', [expect.objectContaining({
+        amount: expect.any(Number), actualCost: true, day: '2020-01-01', receiptId: 'pi:recover',
+      })]);
+    } finally { clearCurrentDbClient(db); await flushSessionPiTurnUsage(); }
+  });
 
   it.each(['priced', 'missing-write-price', 'legacy-summary'] as const)(
     'preserves Codex cache writes without guessing cost (%s)', async (mode) => {

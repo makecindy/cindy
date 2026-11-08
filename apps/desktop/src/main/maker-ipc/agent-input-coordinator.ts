@@ -1,8 +1,9 @@
+import { parseOutputLimitDetails, type OutputLimitDetails } from '@cindy/maker-shared';
 import { FORWARDED_REQUEST_RECEIPT, verifiedOwnerRequestText, type ForwardedRequestSource } from '../../shared/forwardedRequest.js';
 import { AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT } from '@cindy/maker-core';
 import { getDeviceLinkInvokeContext } from '../device-link/invoke-context.js';
 import { assertSharedTaskQueueMutation } from './sharedTaskInput.js';
-import { assertTaskActionCurrent, combineInputGuards, hasTaskActionAuthorization, taskActionRevocationCode, taskActionInputGuard, TASK_ACTION_INPUT_GUARD } from './taskActionAuthorization.js';
+import { acceptTaskActionRecoveryCopy, assertTaskActionCurrent, combineInputGuards, hasTaskActionAuthorization, taskActionRevocationCode, taskActionInputGuard, TASK_ACTION_INPUT_GUARD } from './taskActionAuthorization.js';
 import { isBotGroupClientId } from '../../shared/botGroupChat.js';
 import { SchedulerQueuedPreparationError } from './schedulerQueuedPreparation.js';
 import { ProviderGroupUsageLimitError } from '../provider-group/failurePolicy.js';
@@ -368,6 +369,7 @@ export interface AgentInputCoordinatorDeps {
     sdkError?: string;
     errorStatus?: number;
     toolLoop?: AgentInputToolLoopDetails;
+    outputLimit?: OutputLimitDetails;
   } | undefined;
   /** maker-core Session object identity; control-plane steer uses it to reject session reuse. */
   getTurnSessionIdentity?: (sessionId: string) => object | null;
@@ -779,6 +781,7 @@ interface SessionInputState {
   errorCanContinue: boolean;
   /** Bounded structured details for tool-loop terminal errors. */
   toolLoop: AgentInputToolLoopDetails | null;
+  outputLimit: OutputLimitDetails | null;
   stickyError: string | null;
   /**
    * 中断自愈接管中（退避窗口内）时的展示信息；`null` = 未接管。
@@ -888,6 +891,7 @@ interface PendingAutoResumeRecovery {
   error: string | null;
   errorReason: string | null;
   toolLoop: AgentInputToolLoopDetails | null;
+  outputLimit: OutputLimitDetails | null;
   stickyError: string | null;
   autoResumeInfo: AutoResumeInfo | null;
   /** 中断自愈的 attempt 令牌；额度重置后的自动继续不走那套记账，为 null。 */
@@ -918,6 +922,7 @@ function createInitialInputState(
     errorReason: null,
     errorCanContinue: false,
     toolLoop: null,
+    outputLimit: null,
     stickyError: null,
     autoResumePending: null,
     autoResumeAttemptToken: null,
@@ -1154,20 +1159,22 @@ function recordPendingTerminalEvent(active: ActiveTurn, event: ActiveTurnTermina
 }
 
 function clearErrorProjectionSignals(
-  state: Pick<SessionInputState, 'errorReason' | 'toolLoop' | 'errorCanContinue'>,
+  state: Pick<SessionInputState, 'errorReason' | 'toolLoop' | 'outputLimit' | 'errorCanContinue'>,
 ): void {
   state.errorReason = null;
   state.toolLoop = null;
+  state.outputLimit = null;
   state.errorCanContinue = false;
 }
 
 function setErrorProjectionSignals(
-  state: Pick<SessionInputState, 'errorReason' | 'toolLoop' | 'errorCanContinue'>,
+  state: Pick<SessionInputState, 'errorReason' | 'toolLoop' | 'outputLimit' | 'errorCanContinue'>,
   signals?: Omit<InterruptedTurnErrorSignals, 'message'>,
 ): void {
   state.errorReason =
     typeof signals?.reason === 'string' && signals.reason.length > 0 ? signals.reason : null;
   state.toolLoop = parseAgentInputToolLoopDetails(signals?.toolLoop) ?? null;
+  state.outputLimit = parseOutputLimitDetails(signals?.outputLimit) ?? null;
   state.errorCanContinue = false;
 }
 
@@ -2970,6 +2977,7 @@ export class AgentInputCoordinator {
     const priorError = accepted.error;
     const priorErrorReason = accepted.errorReason;
     const priorToolLoop = accepted.toolLoop;
+    const priorOutputLimit = accepted.outputLimit;
     const priorStickyError = accepted.stickyError;
     const priorRecovery = accepted.recovery;
     accepted.error = null;
@@ -3074,6 +3082,7 @@ export class AgentInputCoordinator {
         latest.error = priorError;
         latest.errorReason = priorErrorReason;
         latest.toolLoop = priorToolLoop;
+        latest.outputLimit = priorOutputLimit;
         latest.stickyError = priorStickyError;
         latest.recovery = priorRecovery;
       }
@@ -3443,7 +3452,7 @@ export class AgentInputCoordinator {
           }
         }
         const clientId = crypto.randomUUID();
-        continueItem = {
+        continueItem = acceptTaskActionRecoveryCopy(recovery.item, {
           ...recovery.item,
           clientId,
           text: continueText,
@@ -3474,7 +3483,7 @@ export class AgentInputCoordinator {
             content: continueText,
             createdAt: new Date().toISOString(),
           },
-        };
+        });
       }
     }
     // Only the verified group quota rejection can arm a queue-head wait: selection failed
@@ -3492,6 +3501,7 @@ export class AgentInputCoordinator {
     const previousError = state.error;
     const previousErrorReason = state.errorReason;
     const previousToolLoop = state.toolLoop;
+    const previousOutputLimit = state.outputLimit;
     const previousStickyError = state.stickyError;
     let retryItem = recovery.kind === 'active-turn' ? recovery.item : null;
     if (retryItem && groupRecovery) retryItem = { ...retryItem, text: groupRecoveryText };
@@ -3527,7 +3537,7 @@ export class AgentInputCoordinator {
       let item = continueItem;
       if (!item) {
         const clientId = crypto.randomUUID();
-        item = {
+        item = acceptTaskActionRecoveryCopy(recovery.item, {
           ...(retryItem ?? recovery.item),
           clientId,
           autoResume: automatic ? true : undefined,
@@ -3541,7 +3551,7 @@ export class AgentInputCoordinator {
             clientId,
             createdAt: new Date().toISOString(),
           },
-        };
+        });
       }
       if ((opts?.auto && attemptToken !== null) || usageWait) {
         this.pendingAutoResumeRecoveries.set(item.clientId, {
@@ -3552,6 +3562,7 @@ export class AgentInputCoordinator {
           error: previousError,
           errorReason: previousErrorReason,
           toolLoop: previousToolLoop,
+          outputLimit: previousOutputLimit,
           stickyError: previousStickyError,
           autoResumeInfo: previousAutoResumeInfo,
           attemptToken,
@@ -4313,6 +4324,7 @@ export class AgentInputCoordinator {
                 ? { errorStatus: observed.errorStatus }
                 : {}),
               ...(observed.toolLoop ? { toolLoop: observed.toolLoop } : {}),
+              ...(observed.outputLimit ? { outputLimit: observed.outputLimit } : {}),
             };
             // Codex/Claude 失败收尾是 terminal error 后再补 done。漏掉的 error
             // 回调不能被这道配对 done 先清掉 leftover activeTurn，否则 250ms
@@ -4626,6 +4638,7 @@ export class AgentInputCoordinator {
       ...(error && state.errorCanContinue ? { errorCanContinue: true } : {}),
       ...(error && state.errorReason ? { errorReason: state.errorReason } : {}),
       ...(error && state.toolLoop ? { toolLoop: state.toolLoop } : {}),
+      ...(error && state.outputLimit ? { outputLimit: state.outputLimit } : {}),
       recovery,
       ...(autoResumePending ? { autoResumePending } : {}),
       usageLimitWait: !groupSwitchHeld && isUsageLimitWaitLive(state)
@@ -4828,6 +4841,7 @@ export class AgentInputCoordinator {
       ...(observed.sdkError ? { sdkError: redactSensitiveText(observed.sdkError) } : {}),
       ...(typeof observed.errorStatus === 'number' ? { errorStatus: observed.errorStatus } : {}),
       ...(observed.toolLoop ? { toolLoop: observed.toolLoop } : {}),
+      ...(observed.outputLimit ? { outputLimit: observed.outputLimit } : {}),
     };
     return {
       message: redactSensitiveText(observed.message ?? 'Turn ended with an error'),
@@ -6249,6 +6263,7 @@ export class AgentInputCoordinator {
     state.error = pending.error;
     state.errorReason = pending.errorReason;
     state.toolLoop = pending.toolLoop;
+    state.outputLimit = pending.outputLimit;
     state.stickyError = pending.stickyError;
     state.recovery = pending.recovery;
     state.autoResumePending = pending.autoResumeInfo;

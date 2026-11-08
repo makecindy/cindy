@@ -327,6 +327,49 @@ it('keeps remote share installation separate from later page capability approval
   }
 });
 
+// #7408 P1, unit: the real stored-release install/update and receipt reload must
+// preserve legacy multibyte schemas; the same package remains invalid as a new package.
+it('keeps historical multibyte parameters usable across market install, update and restart', async () => {
+  const directory = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-parameter-history-')));
+  try {
+    const parameters = { type: 'object', description: '汉'.repeat(6_000) };
+    expect(JSON.stringify(parameters).length).toBeLessThan(16_384);
+    expect(new TextEncoder().encode(JSON.stringify(parameters)).length).toBeGreaterThan(16_384);
+    const raw = {
+      schemaVersion: 3, minCindyVersion: '0.0.0', id: 'historical-parameters',
+      name: 'Historical parameters', version: '1.0.0', entry: 'main.js',
+      tools: [{ name: 'run', description: 'Original tool', parameters }],
+    };
+    const options: GhostManagerOptions = {
+      getRootDir: () => path.join(directory, 'plugins'),
+      mutateSnapshot: async ({ parentDir, ...request }) => runGhostSnapshotWorkerRequest(request, parentDir),
+    };
+    const manager = new GhostManager(options);
+    const file = await writeTestCindyPackage(path.join(directory, 'historical.cindy'), raw);
+    expect(await manager.inspect(file)).toHaveProperty('rejection.code', 'file-invalid');
+    expect(await manager.install(file)).toHaveProperty('rejection.code', 'file-invalid');
+    const inspected = await manager.inspect(file, 'stored-release');
+    expect(inspected).not.toHaveProperty('rejection');
+    const installed = await manager.install(file, { manifestSource: 'stored-release', registrySource: 'market' });
+    if ('rejection' in installed) throw new Error(installed.rejection.reason);
+    const token = ghostInstallApprovalToken(installed.ghost.approval);
+    const next = await writeTestCindyPackage(path.join(directory, 'update.cindy'), { ...raw, version: '2.0.0' });
+    expect(await manager.update(next, { expectedInstalledApproval: token })).toHaveProperty('rejection.code', 'file-invalid');
+    const updated = await manager.update(next, { manifestSource: 'stored-release', expectedInstalledApproval: token });
+    expect(updated).toHaveProperty('ghost');
+    const restarted = new GhostManager(options);
+    expect(restarted.list()).toHaveLength(1);
+    const ghost = restarted.list()[0]!;
+    expect(ghost).toMatchObject({
+      enabled: true, approval: { state: 'approved' }, manifest: { version: '2.0.0', tools: raw.tools },
+    });
+    expect(pluginToolVisible(ghost.manifest, 'run', 'model')).toBe(true);
+    expect(restarted.readApprovedInstallReceipt(installedGhostStoragePart(ghost))?.manifest.tools).toEqual(raw.tools);
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
+
 // #7924 / 4420763926 compatibility: real stored-release install/update and startup
 // scan must keep ordinary tools enabled when a syntactically valid UI loses HTML.
 // Existing legacy tests cover malformed declarations only. Unit: absent package page.
@@ -453,19 +496,26 @@ it('accepts ordinary name prefixes while retaining member publisher identity pro
 });
 
 
-it('keeps an account-free local copy usable beside a same-ID account-managed market copy', () => {
+it('keeps an account-free local copy usable beside a same-ID account-managed market copy', async () => {
   const base = { manifest: { schemaVersion: 3 as const, id: 'helper', name: 'Helper', version: '1.0.0', kind: 'chip' as const, entry: 'main.js' },
     namespaceState: 'confirmed' as const, enabled: true, approval: { state: 'approved' as const, revision: 'receipt' } };
   const local = { ...base, namespace: 'local', instanceKey: '_ns__local__helper', dir: '/plugins/_ns/local/helper' };
   const root = { ...base, namespace: null, instanceKey: '_root__helper', dir: '/plugins/_ns/_root/helper', manifest: { ...base.manifest, cindy: { image: ['generate'] } } };
   const manager = { list: () => [root, local], findInstalledInstance: (id: string) => [root, local].find(ghost => ghost.instanceKey === id) };
-  const create = createGhostProductionCallbacks<{ findGhostForInstanceId(id: string): InstalledGhost | null }>({ functions: ['isGhostAvailableForActiveSession', 'availableGhosts', 'findGhostForInstanceId'] });
+  const create = createGhostProductionCallbacks<{
+    findGhostForInstanceId(id: string): InstalledGhost | null;
+    listAvailableGhostsAsync(): Promise<InstalledGhost[]>;
+  }>({ functions: ['isGhostAvailableForActiveSession', 'availableGhosts', 'findGhostForInstanceId', 'listAvailableGhostsAsync'] });
   const callbacks = create({ managerSingleton: manager, getGhostManager: () => manager,
     isAppSessionBoundaryPending: () => false, getAppCapabilities: () => ({ canUseCindyAccountServices: false }),
     findInstalledGhostByInstanceId, ghostRequiresCindyAccount,
+    listInstalledGhostsAsync: async () => [root, local],
   });
   expect(callbacks.findGhostForInstanceId(local.instanceKey)).toEqual(local);
   expect(callbacks.findGhostForInstanceId(root.instanceKey)).toBeNull();
+  const rescans = vi.spyOn(manager, 'list');
+  await expect(callbacks.listAvailableGhostsAsync()).resolves.toEqual([local]);
+  expect(rescans).not.toHaveBeenCalled();
 });
 
 

@@ -1,3 +1,4 @@
+import type { ViewInstance } from 'react-native';
 /**
  * HomeChromeDrawer —— 首页左上角系统菜单。
  *
@@ -142,7 +143,7 @@ export function HomeChromeDrawer({
     onClosedRef.current?.();
   }, [mounted]);
 
-  const settingsButtonRef = useRef<View>(null);
+  const settingsButtonRef = useRef<ViewInstance>(null);
   useEffect(() => {
     if (!open) return;
     const timer = setTimeout(() => {
@@ -307,8 +308,7 @@ export function HomeChromeDrawer({
             paddingTop: insets.top + spacing.xl,
           }]}>
             <View style={styles.accountRow} testID="home.chromeDrawer.account">
-              {/* Default letter avatar; the organisation logo is only the small icon below. */}
-              <MobileUserAvatar name={accountName} />
+              <MobileUserAvatar imageUrl={user?.avatar} name={accountName} />
               <View style={styles.accountTexts}>
                 <Text numberOfLines={1} style={styles.accountName}>{accountName}</Text>
                 {accountEmail && accountEmail !== accountName ? (

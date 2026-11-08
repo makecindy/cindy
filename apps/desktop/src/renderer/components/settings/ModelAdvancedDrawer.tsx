@@ -225,7 +225,7 @@ export function ModelAdvancedDrawer({
   const { t, i18n } = useTranslation();
   const selectionAvailable = provider.connected && !provider.suspended;
   const locale = i18n.resolvedLanguage ?? i18n.language ?? 'en';
-  const [priceDialogOpen, setPriceDialogOpen] = useState(false);
+  const pricePendingRef = useRef(false);
   const [protocolSaving, setProtocolSaving] = useState(false);
   const [imageCapabilitySaving, setImageCapabilitySaving] = useState(false);
   const titleRef = useRef<HTMLHeadingElement>(null);
@@ -241,6 +241,10 @@ export function ModelAdvancedDrawer({
     const model = row?.byAgent[agent];
     return model && isAgentSelectableModel(model, { userProvider: provider.source === 'user' });
   }), [row, provider.source]);
+  const priceRow = useMemo<UnionModelRow | null>(() => row && chatAgents.length ? {
+    ...row, avail: chatAgents,
+    byAgent: Object.fromEntries(chatAgents.map(agent => [agent, row.byAgent[agent]])),
+  } : null, [row, chatAgents]);
   const primaryCandidates = chatAgents?.length ? chatAgents : row?.avail;
   const primaryAgent =
     primaryCandidates?.find((agent) =>
@@ -398,11 +402,12 @@ export function ModelAdvancedDrawer({
   const routeWindow = supportsMillionContext ? 1_000_000
     : (contextModel ?? primaryModel)?.contextWindowMax
       ?? (primaryModel?.contextWindowVerified === true ? primaryModel.contextWindow : 0);
+  // Without a declared capacity, compare working defaults across engines only.
+  const engineWindowReference = routeWindow > 0 ? routeWindow : (primaryModel?.contextWindow ?? 0);
   const effectiveLimit = ctx.limit ?? (defaultWindow > 0 ? defaultWindow : null);
   useEffect(() => {
     ctxDirtyRef.current = false;
     setCtxDraft('');
-    setPriceDialogOpen(false);
   }, [open, primaryAgent, primaryModel?.id, provider.id]);
   useEffect(() => {
     if (ctx.loading || ctxDirtyRef.current) return;
@@ -499,11 +504,6 @@ export function ModelAdvancedDrawer({
     isModelVisibilityCustomized(agent, provider.id, modelId),
   );
   const description = localizedModelDescription(primaryModel, t);
-  const price = pricePresentationOf(primaryAgent, primaryModel);
-  // Ordinary Gateway chat models carry effective cost; keep their inferred discount.
-  const discount =
-    (!primaryModel.displayPricing && price?.kind === 'priced' ? price.discount : undefined) ??
-    primaryModel.costDiscount;
   const protocols = modelProtocolComparison(provider, row.byAgent);
   const protocolLabel = (api: PiModelApi | null) =>
     api ? MODEL_PROTOCOL_LABEL[api] ?? null : t('settings.providers.models.advanced.undeclared');
@@ -576,9 +576,107 @@ export function ModelAdvancedDrawer({
 
   const isLocalOllama = provider.id === MANAGED_OLLAMA_PROVIDER_ID;
 
+  const referencePricing = (model: CatalogModel, agent: AgentKind) => {
+    const price = pricePresentationOf(agent, model);
+    // Ordinary Gateway chat models carry effective cost; keep their inferred discount.
+    const discount =
+      (!model.displayPricing && price?.kind === 'priced' ? price.discount : undefined) ??
+      model.costDiscount;
+    return (
+      <Section title={t('settings.providers.models.advanced.pricing')}>
+        {model.displayPricing && model.currency ? (
+          <>
+            {(['input', 'output', 'cacheRead', 'cacheWrite'] as const).map((role) => {
+              const quotes = model.displayPricing?.summary?.[role];
+              if (!quotes?.length) return null;
+              const components = quotes.map(quote => displayPricingComponent(quote.component));
+              const component = components.every(value => value === components[0]) ? components[0] : undefined;
+              return (
+                <Row
+                  key={role}
+                  label={component
+                    ? t(`newChat.modelSelector.displayPricing.roles.${component}.${role}`)
+                    : t(`settings.providers.models.advanced.price.${role === 'cacheWrite' ? 'cacheCreate' : role}`)}
+                >
+                  <span className="flex flex-col items-end gap-1">
+                    {quotes.map((quote, index) => (
+                      <DisplayPricingQuote
+                        key={index}
+                        quote={quote}
+                        currency={model.currency!}
+                        costDiscount={discount}
+                        componentLabel={!component && components[index]
+                          ? t(`newChat.modelSelector.displayPricing.components.${components[index]}`)
+                          : undefined}
+                      />
+                    ))}
+                  </span>
+                </Row>
+              );
+            })}
+          </>
+        ) : price === null ? (
+          <Row label={t('settings.providers.models.advanced.pricingLabel')} muted>
+            {t(
+              provider.access?.kind === 'subscription'
+                ? 'settings.providers.models.subscription'
+                : 'settings.providers.models.advanced.noPricing',
+            )}
+          </Row>
+        ) : price.kind === 'free' ? (
+          <Row label={t('settings.providers.models.advanced.pricingLabel')}>
+            {t('newChat.modelSelector.pricing.free')}
+          </Row>
+        ) : (
+          modelPriceDetailRows(price.current, price.original).map((detail) => (
+            <Row
+              key={detail.kind}
+              label={t(`settings.providers.models.advanced.price.${detail.kind}`)}
+            >
+              {/* 有折扣时给**实付价**，标准价划掉跟在后面：只写标准价再另起一行
+              「折扣 40%」等于让人自己乘一遍，而实付才是他要判断的数。 */}
+              {detail.value}
+              {detail.originalValue && (
+                <span className="ml-1.5 text-11 text-[var(--text-tertiary)] line-through">
+                  {detail.originalValue}
+                </span>
+              )}
+              <span className="ml-1 text-11 text-[var(--text-tertiary)]">
+                {t('settings.providers.models.advanced.perMtok')}
+              </span>
+            </Row>
+          ))
+        )}
+        {discount !== undefined && discount > 0 && discount <= 1 && (
+          <Row label={t('settings.providers.models.advanced.discount')}>
+            <span
+              className="inline-flex items-center rounded-full px-2 py-[1px] text-10 font-medium"
+              style={{
+                color: EFFORT_TIER_COLORS.low,
+                backgroundColor: `color-mix(in srgb, ${EFFORT_TIER_COLORS.low} 14%, transparent)`,
+              }}
+            >
+              {`↓${Math.round(discount * 100)}%`}
+            </span>
+          </Row>
+        )}
+        {/* Keep conditions and notes after the primary quotes and their discount. */}
+        {model.displayPricing && model.currency &&
+          !isDisplayPricingTableRedundant(model.displayPricing) && (
+            <div className={model.displayPricing.summary ? 'pt-3' : undefined}>
+              <DisplayPricingDetails model={model} />
+            </div>
+          )}
+      </Section>
+    );
+  };
+
   return (
     <>
-      <Dialog.Root open={open} onOpenChange={onOpenChange}>
+      <Dialog.Root open={open} onOpenChange={(next) => {
+        if (!next && pricePendingRef.current) return;
+        onOpenChange(next);
+      }}>
         <Dialog.Portal>
           <Dialog.Overlay
             className={cn(
@@ -592,6 +690,10 @@ export function ModelAdvancedDrawer({
             )}
             style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
             aria-describedby={undefined}
+            onEscapeKeyDown={(event) => {
+              if (!(event.target instanceof HTMLElement) || !event.target.closest('[data-model-price-editor]')) return;
+              event.preventDefault();
+            }}
             onOpenAutoFocus={(event) => {
               event.preventDefault();
               titleRef.current?.focus();
@@ -608,7 +710,7 @@ export function ModelAdvancedDrawer({
                   </DropdownMenuTrigger>
                   <DropdownMenuContent className="z-[10003]" align="start">
                     <DropdownMenuRadioGroup value={row.id} onValueChange={(id) => {
-                      if (ctx.loading || ctxDirtyRef.current || protocolSaving) return;
+                      if (ctx.loading || ctxDirtyRef.current || protocolSaving || pricePendingRef.current) return;
                       const member = memberRows.find((candidate) => candidate.id === id);
                       if (member) onSelectMember?.(member);
                     }}>
@@ -670,7 +772,9 @@ export function ModelAdvancedDrawer({
                         if (model) {
                           // 同一模型在不同引擎下的元数据差异如实标出来 —— 这些值来自目录的
                           // perAgent 覆盖，用户看到「Codex 下 272K / 6 档」才知道差异是真的。
-                          if (!supportsMillionContext && model.contextWindow > 0 && model.contextWindow !== routeWindow) {
+                          // A shared saved budget overrides every engine's working default.
+                          if (!supportsMillionContext && (ctx.limit === null || ctx.mixed) &&
+                              model.contextWindow > 0 && model.contextWindow !== engineWindowReference) {
                             notes.push(approxTokens(model.contextWindow));
                           }
                           if (
@@ -1135,102 +1239,14 @@ export function ModelAdvancedDrawer({
                     </Row>
                   </Section>
 
-                  <Section title={t('settings.providers.models.advanced.pricing')}>
-                    {primaryModel.displayPricing && primaryModel.currency ? (
-                      <>
-                        {(['input', 'output', 'cacheRead', 'cacheWrite'] as const).map((role) => {
-                          const quotes = primaryModel.displayPricing?.summary?.[role];
-                          if (!quotes?.length) return null;
-                          const components = quotes.map(quote => displayPricingComponent(quote.component));
-                          const component = components.every(value => value === components[0]) ? components[0] : undefined;
-                          return (
-                            <Row
-                              key={role}
-                              label={component
-                                ? t(`newChat.modelSelector.displayPricing.roles.${component}.${role}`)
-                                : t(`settings.providers.models.advanced.price.${role === 'cacheWrite' ? 'cacheCreate' : role}`)}
-                            >
-                              <span className="flex flex-col items-end gap-1">
-                                {quotes.map((quote, index) => (
-                                  <DisplayPricingQuote
-                                    key={index}
-                                    quote={quote}
-                                    currency={primaryModel.currency!}
-                                    costDiscount={discount}
-                                    componentLabel={!component && components[index]
-                                      ? t(`newChat.modelSelector.displayPricing.components.${components[index]}`)
-                                      : undefined}
-                                  />
-                                ))}
-                              </span>
-                            </Row>
-                          );
-                        })}
-                      </>
-                    ) : price === null ? (
-                      <Row label={t('settings.providers.models.advanced.pricingLabel')} muted>
-                        {t(
-                          provider.access?.kind === 'subscription'
-                            ? 'settings.providers.models.subscription'
-                            : 'settings.providers.models.advanced.noPricing',
-                        )}
-                      </Row>
-                    ) : price.kind === 'free' ? (
-                      <Row label={t('settings.providers.models.advanced.pricingLabel')}>
-                        {t('newChat.modelSelector.pricing.free')}
-                      </Row>
-                    ) : (
-                      modelPriceDetailRows(price.current, price.original).map((detail) => (
-                        <Row
-                          key={detail.kind}
-                          label={t(`settings.providers.models.advanced.price.${detail.kind}`)}
-                        >
-                          {/* 有折扣时给**实付价**，标准价划掉跟在后面：只写标准价再另起一行
-                          「折扣 40%」等于让人自己乘一遍，而实付才是他要判断的数。 */}
-                          {detail.value}
-                          {detail.originalValue && (
-                            <span className="ml-1.5 text-11 text-[var(--text-tertiary)] line-through">
-                              {detail.originalValue}
-                            </span>
-                          )}
-                          <span className="ml-1 text-11 text-[var(--text-tertiary)]">
-                            {t('settings.providers.models.advanced.perMtok')}
-                          </span>
-                        </Row>
-                      ))
-                    )}
-                    {discount !== undefined && discount > 0 && discount <= 1 && (
-                      <Row label={t('settings.providers.models.advanced.discount')}>
-                        <span
-                          className="inline-flex items-center rounded-full px-2 py-[1px] text-10 font-medium"
-                          style={{
-                            color: EFFORT_TIER_COLORS.low,
-                            backgroundColor: `color-mix(in srgb, ${EFFORT_TIER_COLORS.low} 14%, transparent)`,
-                          }}
-                        >
-                          {`↓${Math.round(discount * 100)}%`}
-                        </span>
-                      </Row>
-                    )}
-                    {/* Keep conditions and notes after the primary quotes and their discount. */}
-                    {primaryModel.displayPricing && primaryModel.currency &&
-                      !isDisplayPricingTableRedundant(primaryModel.displayPricing) && (
-                        <div className={primaryModel.displayPricing.summary ? 'pt-3' : undefined}>
-                          <DisplayPricingDetails model={primaryModel} />
-                        </div>
-                      )}
-                    {/* 自定义报价:原「⋯」菜单的一项,搬到它真正相关的段落里。
-                    XD 网关的价格由服务端定,不给覆盖入口(与 IPC 侧的拒绝一致)。 */}
-                    {provider.id !== 'xd' && !isOrganizationManagedProvider(provider) && !paymentRequired && (
-                      <button
-                        type="button"
-                        onClick={() => setPriceDialogOpen(true)}
-                        className="mt-2 text-12 text-[var(--text-secondary)] transition-colors hover:text-[var(--text-primary)]"
-                      >
-                        {t('settings.providers.models.priceOverride.menu')}
-                      </button>
-                    )}
-                  </Section>
+                  {provider.id !== 'xd' && !isOrganizationManagedProvider(provider) && !paymentRequired && priceRow ? (
+                    <ModelPriceOverrideDialog provider={provider} row={priceRow} open={open} onOpenChange={onOpenChange}
+                      presentation="inline" referenceDetails={(agent) => {
+                        const model = priceRow.byAgent[agent];
+                        return model ? referencePricing(model, agent) : null;
+                      }}
+                      onPendingChange={(pending) => { pricePendingRef.current = pending; }} />
+                  ) : referencePricing(primaryModel, primaryAgent)}
                   <Section title={t('settings.providers.models.advanced.identity')}>
                     {description && (
                       <p className="mb-2 text-12 leading-relaxed text-[var(--text-secondary)]">{description}</p>
@@ -1264,7 +1280,8 @@ export function ModelAdvancedDrawer({
                   compact
                   type="button"
                   disabled={disabled && !selectionAvailable}
-                  onClick={() => onDisable(groupRow ?? row)}
+                  data-settings-search-action="Enable or disable the displayed model group"
+                  onClick={() => { if (!pricePendingRef.current) onDisable(groupRow ?? row); }}
                 >
                   {disabled
                     ? t('settings.providers.models.enableModel')
@@ -1277,7 +1294,8 @@ export function ModelAdvancedDrawer({
                     tone="danger"
                     compact
                     type="button"
-                    onClick={() => onDeleteLocal(row)}
+                    data-settings-search-action="Delete the displayed local model"
+                    onClick={() => { if (!pricePendingRef.current) onDeleteLocal(row); }}
                   >
                     <Trash2 size={13} />
                     {t('settings.providers.local.deleteModel')}
@@ -1288,15 +1306,6 @@ export function ModelAdvancedDrawer({
           </Dialog.Content>
         </Dialog.Portal>
       </Dialog.Root>
-
-      {priceDialogOpen && (
-        <ModelPriceOverrideDialog
-          provider={provider}
-          row={row}
-          open={priceDialogOpen}
-          onOpenChange={setPriceDialogOpen}
-        />
-      )}
     </>
   );
 }

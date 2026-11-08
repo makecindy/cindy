@@ -18,7 +18,8 @@ import type {
   MenubarView,
 } from '../../shared/menubarQuota.js';
 import { getAgentIslandService } from '../agent-island/service.js';
-import { isAppSessionBoundaryPending } from '../appSessionState.js';
+import { getActiveAppSession, isAppSessionBoundaryPending, onAppSessionInvalidated } from '../appSessionState.js';
+import { onAuthStateChange } from '../authManager.js';
 import {
   focusMainWindow,
   openMainWindowBillingTopUp,
@@ -27,15 +28,22 @@ import {
   openMainWindowVoiceSettings,
 } from '../deepLink.js';
 import { getActiveControllers } from '../device-link/dispatch.js';
-import { getResolvedMainLocale, rawMainString } from '../i18n.js';
+import { getReceivedShares, onProviderShareReceivedChanged, providerShareAccessEpoch } from '../device-link/providerShareGuest.js';
+import { readReceivedProviderShareQuota } from '../device-link/providerShareRuntime.js';
+import { getResolvedMainLocale, mainStringKeysUnder, rawMainString } from '../i18n.js';
 import { createLogger } from '../logger.js';
 import { inspectAppDefaultModel } from '../maker-ipc/appDefaultModelControl.js';
 import { applyNewMakerDraftRoute } from '../maker-ipc/register.js';
 import { getDesktopNotificationsEnabled } from '../notificationService.js';
+import { emptyMenubarInputs } from '../menubar/collect.js';
+import { MENUBAR_HARNESS_LOGOS } from '../menubar/logos.js';
 import { buildMenubarActivities } from '../menubar/activity.js';
-import { isLowOnEverything, type MenubarBuildInput } from '../menubar/snapshot.js';
-import { createMenubarTranslate } from '../menubar/strings.js';
+import { buildMenubarView, isLowOnEverything, type MenubarBuildInput, type MenubarSubscriptionInput } from '../menubar/snapshot.js';
+import { buildMenubarUiStrings, createMenubarTranslate } from '../menubar/strings.js';
+import { currentLedgerCurrency } from '../usage/ledgerCurrency.js';
 import { getQuotaOverviewService, type QuotaOverviewBuild, type QuotaOverviewService } from './service.js';
+
+import { SharedQuotaReader } from '../menubar/sharedSubscriptions.js';
 
 const log = createLogger('quota-panel');
 
@@ -69,6 +77,10 @@ export function refreshQuotaPanelsControlState(): void {
 export class QuotaPanelController {
   private readonly overview: QuotaOverviewService;
   private started = false;
+  private panelOpen = false;
+  private sharedSources: MenubarSubscriptionInput[] = [];
+  private sharedScope: string | null = null;
+  private sharedReader: SharedQuotaReader | null = null;
   private lastView: MenubarView | null = null;
   /** Null until the first build, so launching while low does not notify. */
   private wasLow: boolean | null = null;
@@ -119,6 +131,8 @@ export class QuotaPanelController {
         // Listener already gone.
       }
     }
+    this.panelOpen = false;
+    this.sharedReader?.setOpen(false);
     this.overview.setInteractive(false);
     this.lastView = null;
     this.lowNotification?.close();
@@ -139,10 +153,15 @@ export class QuotaPanelController {
   handle(command: QuotaPanelCommand): void {
     switch (command.type) {
       case 'panel':
-        if (this.started) this.overview.setInteractive(command.open);
+        if (this.started) {
+          this.panelOpen = command.open;
+          this.overview.setInteractive(command.open);
+          this.setSharedOpen();
+        }
         return;
       case 'refresh':
         this.overview.refresh(true);
+        this.sharedReader?.refresh();
         return;
       case 'open-app':
         showMainWindow();
@@ -176,13 +195,69 @@ export class QuotaPanelController {
 
   private publish(build: QuotaOverviewBuild): void {
     const gate = build.view.gate ?? undefined;
-    this.show({ ...build.view, ...this.taskOverview(gate), ...controlState(gate) });
+    // Received quotas belong only to this visible panel, never the overview/widget cache.
+    const owner = getActiveAppSession();
+    const sources = this.panelOpen && !gate && !isAppSessionBoundaryPending()
+      && this.sharedScope === `${owner.dataOwnerId}:${owner.generation}` ? this.sharedSources.map(source => ({
+      ...source, plan: build.input.t(source.shared?.highestWeekly ? 'shared.highestWeekly' : 'shared.label'),
+      shared: { ...source.shared, label: source.shared?.label ?? source.brand,
+        note: build.input.t(source.shared?.highestWeekly ? 'shared.highestWeeklyNote' : 'shared.note') },
+    })) : [];
+    const view = sources.length ? buildMenubarView({ ...build.input, nowMs: Date.now(), sources: [...build.input.sources, ...sources] }) : build.view;
+    this.show({ ...view, ...this.taskOverview(gate), ...controlState(gate) });
     if (gate) {
       // The first real build after signing in counts as a first build again.
       this.wasLow = null;
       return;
     }
     this.updateLowAlert(isLowOnEverything(build.input), build.input);
+  }
+
+  private setSharedOpen(): void {
+    if (!this.panelOpen) { this.sharedReader?.setOpen(false); return; }
+    this.sharedReader ??= new SharedQuotaReader({
+      scope: () => {
+        const scope = getActiveAppSession();
+        return isAppSessionBoundaryPending() || !scope.dataOwnerId ? null : `${scope.dataOwnerId}:${scope.generation}`;
+      },
+      shares: getReceivedShares,
+      accessEpoch: providerShareAccessEpoch,
+      read: readReceivedProviderShareQuota,
+      subscribe: changed => {
+        const offShares = onProviderShareReceivedChanged(changed);
+        const offAuth = onAuthStateChange(changed);
+        const offSession = onAppSessionInvalidated(changed);
+        return () => { offShares(); offAuth(); offSession(); };
+      },
+      publish: sources => {
+        this.sharedSources = sources;
+        const owner = getActiveAppSession();
+        this.sharedScope = `${owner.dataOwnerId}:${owner.generation}`;
+        const build = this.overview.latest();
+        if (this.started) {
+          if (build) this.publish(build);
+          else this.publishUnavailableOverview();
+        }
+      },
+    });
+    this.sharedReader.setOpen(this.started && this.panelOpen);
+  }
+
+  /** Identity invalidation cannot wait for an overview still collecting the old owner's data. */
+  private publishUnavailableOverview(): void {
+    const nowMs = Date.now();
+    const locale = getResolvedMainLocale();
+    const raw = (key: string) => rawMainString(key, locale);
+    const view = buildMenubarView({
+      ...emptyMenubarInputs(nowMs, ''), nowMs, locale,
+      moneySymbol: currentLedgerCurrency() === 'CNY' ? '¥' : '$', settings: this.settings,
+      harnessLogos: MENUBAR_HARNESS_LOGOS,
+      uiStrings: buildMenubarUiStrings(mainStringKeysUnder('menubar.ui'), raw, locale),
+      t: createMenubarTranslate(locale, raw),
+      ...(!getActiveAppSession().dataOwnerId ? { gate: 'sign-in' as const } : {}),
+    });
+    this.wasLow = null;
+    this.show({ ...view, ...this.taskOverview('sign-in'), ...controlState('sign-in') });
   }
 
   /** Unread changes must not wait for quota/history/network reads to finish. */

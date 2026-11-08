@@ -16,6 +16,8 @@ const sourceSkips = [
 ];
 
 module.exports = {
+  // Hash patched native sources, not just dependency versions.
+  preset: "strict",
   sourceSkips,
   // These entry points are outside the iOS podspec's source glob, and these
   // six core files are wholly guarded by #if os(macOS). Keep this an explicit
@@ -45,6 +47,7 @@ module.exports = {
     "cindy-link-2",
     "cindy-undo-2",
     "cindy-trash-2",
+    "cindy-pencil",
   ]
     .map((name) => ({
       type: "dir",

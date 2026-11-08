@@ -274,7 +274,7 @@ describe('资源取件的安全接线(源码级守卫)', () => {
   it('downloads signed URLs into private files before publishing every guarded HTML', () => {
     expect(snapshotSource).toContain('fetchRemoteAbsFileOnce(');
     expect(snapshotSource).toContain('createDownloadResumable(media.url, destination.uri');
-    expect(snapshotSource).toContain('destination.write(withSnapshotHtmlCsp(text))');
+    expect(snapshotSource).toContain('destination.writeSync(withSnapshotHtmlCsp(text))');
     expect(snapshotSource).toContain('return { url, documents: snapshotDocumentPaths(files), close }');
     expect(snapshotSource).not.toContain('return media.url');
   });

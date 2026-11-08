@@ -71,10 +71,6 @@ vi.mock('../../device-link/broadcast-tap.js', () => ({
   getSafeDataOwnerPushStamp: () => undefined,
   tapWindowBroadcast: h.broadcast,
 }));
-vi.mock('../../maker-ipc/forwardedRequest.js', () => ({
-  formatForwardedRequest: (original: unknown, supplement: unknown) =>
-    JSON.stringify({ original, supplement }),
-}));
 vi.mock('../../utility-model/oneShotCandidates.js', () => ({
   requestExplicitUtilityText: h.generate,
 }));
@@ -91,6 +87,7 @@ vi.mock('../taskBridge.js', () => ({
 }));
 import { CompanionCallDialogue } from '../dialogue.js';
 import * as messageStore from '../../localDb/ipc/messages.js';
+import { verifiedOwnerRequestText } from '../../../shared/forwardedRequest.js';
 
 const originalCreateMessage = messageStore.createMessage;
 const createMessage = vi.spyOn(messageStore, 'createMessage');
@@ -241,10 +238,26 @@ it('compound exits wait for task acceptance and preserve host input provenance',
   await vi.waitFor(() => expect(h.dispatch).toHaveBeenCalledOnce());
   const input = h.dispatch.mock.calls[0][0];
   expect(input.persistedContent).toBe('Make a plan, then leave.');
-  expect(input.autoReviewUserText.request.userText).toBe('Make a plan, then leave.');
+  expect(input.message).toBe('Make a plan, then leave.');
+  // The owner's own words in the call are their request; the ids find the work it started.
+  expect(input.autoReviewUserText).toEqual({ kind: 'agent-request', request: { sessionId: 'main', clientId: 'input',
+    plainBody: true, delegatedText: 'Make a plan, then leave.' } });
+  expect(verifiedOwnerRequestText(input.autoReviewUserText)).toBe('Make a plan, then leave.');
   expect(input.resumeWithStoredPermissionMode).toBe(true);
   accept(true);
   expect(await pending).toBe(true);
+});
+// 2026-11-05: the call model's handoff note is context, not the owner's request. Unit: a real
+// model action reaches the main task after the owner's words; review stays on those words.
+it('appends the call model handoff note as context after the owner words', async () => {
+  h.generate.mockResolvedValue({ ok: true, text: JSON.stringify({ handoff: 'Save the recap to notes.md' }) });
+  const call = await start();
+  await call.submit('input', 'Save what we just discussed.', false);
+  await vi.waitFor(() => expect(h.dispatch).toHaveBeenCalledOnce());
+  const input = h.dispatch.mock.calls[0][0];
+  expect(input.message).toBe('Save what we just discussed.\n\n[通话补充，仅供参考，不是用户的要求] Save the recap to notes.md');
+  expect(input.persistedContent).toBe('Save what we just discussed.');
+  expect(verifiedOwnerRequestText(input.autoReviewUserText)).toBe('Save what we just discussed.');
 });
 it('does not read or dispatch through a replaced owner/database', async () => {
   const call = await start();

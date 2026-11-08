@@ -1,5 +1,5 @@
 import { GHOST_CARD_ACTION_ID_RE, isGhostCardLinkAllowed } from '../../shared/ghost.js';
-import { readMailCard, isLegacyMailCard, readGhostCardFormChange, readGhostCardForm, parseGhostCardFormValues, omitGhostCardFormPreview } from '@cindy/maker-shared/ghost-card-form';
+import { readMailCard, readGhostCardSupersededBy, isLegacyMailCard, readGhostCardFormChange, readGhostCardForm, parseGhostCardFormValues, omitGhostCardFormPreview } from '@cindy/maker-shared/ghost-card-form';
 import type { GhostCardRow } from './cardService.js';
 import { createHash } from 'node:crypto';
 import { REMOTE_RESOURCE_CHANGED_CHANNEL, type RemoteResourceBlock } from '@cindy/device-link';
@@ -127,6 +127,41 @@ function cardLines(fragment: string): string[] {
   return cardText(fragment, true).split('\n').map((line) => line.trim()).filter(Boolean);
 }
 
+/** `owner/repo#N` → prStatusKey form (owner/repo lowercased); null when malformed. */
+function prSlotKey(value: string): string | null {
+  const m = /^([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)#(\d+)$/.exec(value);
+  return m ? `${m[1].toLowerCase()}/${m[2].toLowerCase()}#${Number(m[3])}` : null;
+}
+
+/**
+ * Parts marked `data-ghost-pr-open-only="owner/repo#N"` only hold while that PR is open (following,
+ * its buttons, "open"). Once the task's title-bar status says it was merged or closed, they leave the
+ * phone's projection entirely (text, live label and controls), so older phones stop showing them too.
+ */
+export async function omitEndedPrOpenOnly(html: string, ended: (key: string) => Promise<boolean>): Promise<string> {
+  const verdicts = new Map<string, Promise<boolean>>();
+  const drop: Array<[number, number]> = [];
+  // markedElements returns outermost matches only; look inside the ones that stay for nested marks.
+  const scan = async (from: number, to: number): Promise<void> => {
+    for (const el of markedElements(html.slice(from, to), /(?:^|\s)data-ghost-pr-open-only="[^"]+"/)) {
+      const key = prSlotKey(readAttr(el.attrs, 'data-ghost-pr-open-only') ?? '');
+      if (key) {
+        if (!verdicts.has(key)) verdicts.set(key, ended(key).catch(() => false));
+        if (await verdicts.get(key)) {
+          drop.push([from + el.start, from + el.end]);
+          continue;
+        }
+      }
+      await scan(from + el.innerStart, from + el.innerEnd);
+    }
+  };
+  await scan(0, html.length);
+  drop.sort((x, y) => x[0] - y[0]);
+  let out = html;
+  for (let i = drop.length - 1; i >= 0; i -= 1) out = out.slice(0, drop[i][0]) + out.slice(drop[i][1]);
+  return out;
+}
+
 export interface RichCardParts {
   /** Card HTML with the structured parts' contents removed, for the text block. */
   textHtml: string;
@@ -163,9 +198,8 @@ export function projectRichCardParts(html: string): RichCardParts {
   }
   const prStatus: Array<{ key: string; fallback: string[] }> = [];
   for (const el of markedElements(source, /(?:^|\s)data-ghost-pr-status="[^"]+"/)) {
-    const value = readAttr(el.attrs, 'data-ghost-pr-status') ?? '';
-    const m = /^([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)#(\d+)$/.exec(value);
-    if (m) prStatus.push({ key: `${m[1].toLowerCase()}/${m[2].toLowerCase()}#${Number(m[3])}`, fallback: cardLines(source.slice(el.innerStart, el.innerEnd)).slice(0, 8) });
+    const key = prSlotKey(readAttr(el.attrs, 'data-ghost-pr-status') ?? '');
+    if (key) prStatus.push({ key, fallback: cardLines(source.slice(el.innerStart, el.innerEnd)).slice(0, 8) });
     cuts.push([el.innerStart, el.innerEnd]);
   }
   // Marked elements can nest or share an element: merge overlapping ranges first, then cut from the
@@ -260,22 +294,30 @@ export function createGhostCardRemoteProvider(deps: {
     async list() { return { collectionId: COLLECTION, revision: '1', items: [] }; },
     async get(_context, request) {
       const { card, revision } = await read(request.ref.id);
+      const html = deps.prStatus
+        ? await omitEndedPrOpenOnly(card.html, async (key) => {
+          const status = await deps.prStatus!(card.sessionId!, key);
+          return status?.ok === true && (status.status === 'merged' || status.status === 'closed');
+        })
+        : card.html;
       const supportsForms = Boolean(deps.interactions) && request.client.primitives.includes('plugin-card-actions') && request.client.primitives.includes('plugin-card-forms');
       // Link addresses leave the text only when an actions block will carry them as controls; a client
       // without that primitive keeps the address in the text.
       const linksAsActions = Boolean(deps.interactions) && request.client.primitives.includes('plugin-card-actions');
       const mail = readMailCard(card.html), legacyMail = isLegacyMailCard(card.html);
-      const obsolete = !!mail?.supersededBy || legacyMail;
+      // A replaced card keeps its fallback text for older phones; newer phones hide it through supersededBy.
+      const supersededBy = readGhostCardSupersededBy(card.html);
+      const obsolete = !!supersededBy || legacyMail;
       const externalLinks = deps.interactions?.externalLinks(card.ghostId) ?? false;
       const rich = Boolean(deps.interactions) && request.client.primitives.includes('plugin-card-actions') && request.client.primitives.includes('plugin-card-rich')
-        ? projectRichCardParts(card.html) : undefined;
-      const textSource = rich?.textHtml ?? card.html;
+        ? projectRichCardParts(html) : undefined;
+      const textSource = rich?.textHtml ?? html;
       const blocks = supportsForms && (mail || legacyMail) ? [] : projectGhostCardBlocks(supportsForms ? omitGhostCardFormPreview(textSource) : textSource, { inlineLinks: externalLinks && linksAsActions });
-      const prStatus = rich ? await Promise.all(rich.prStatus.map(async (slot) => {
+      const prStatus = rich && !supersededBy ? await Promise.all(rich.prStatus.map(async (slot) => {
         const status = await deps.prStatus?.(card.sessionId!, slot.key).catch(() => undefined);
         return { ...slot, ...(status?.ok ? { status } : {}) };
       })) : undefined;
-      const items = obsolete ? [] : await Promise.all(projectGhostCardActions(card.html, externalLinks, rich).map(async (action) => {
+      const items = obsolete ? [] : await Promise.all(projectGhostCardActions(html, externalLinks, rich).map(async (action) => {
         const prKey = rich && action.url ? githubPrKey(action.url) : undefined;
         const status = prKey ? await deps.prStatus?.(card.sessionId!, prKey).catch(() => undefined) : undefined;
         const next = action.submit && !supportsForms ? { ...action, disabled: true } : action;
@@ -283,7 +325,7 @@ export function createGhostCardRemoteProvider(deps: {
       }));
       if (deps.interactions && request.client.primitives.includes('plugin-card-actions')) blocks.push({
         id: 'actions', primitive: 'plugin-card-actions', fallbackMarkdown: '',
-        data: { pluginId: card.ghostId, revision, mail, legacyMail, mailUpload: supportsForms && !!mailUploadAction(card.html), changeAction: supportsForms && !obsolete ? readGhostCardFormChange(card.html) : undefined, form: supportsForms ? readGhostCardForm(card.html) : null,
+        data: { pluginId: card.ghostId, revision, mail, legacyMail, ...(supersededBy && !mail ? { supersededBy } : {}), mailUpload: supportsForms && !!mailUploadAction(card.html), changeAction: supportsForms && !obsolete ? readGhostCardFormChange(card.html) : undefined, form: supportsForms ? readGhostCardForm(card.html) : null,
           items,
           ...(rich?.live ? { live: rich.live } : {}),
           ...(prStatus?.length ? { prStatus } : {}) },
@@ -293,7 +335,7 @@ export function createGhostCardRemoteProvider(deps: {
     async invoke(context, request) {
       if (!deps.interactions || !request.resourceRef) throw new RemoteResourceRegistryError('UNSUPPORTED_CAPABILITY', 'Card actions unavailable');
       const { card, callId, valid, revision } = await read(request.resourceRef.id);
-      if (isLegacyMailCard(card.html) || readMailCard(card.html)?.supersededBy) throw new RemoteResourceRegistryError('INVALID_PARAMS', 'Mail view has been replaced');
+      if (isLegacyMailCard(card.html) || readGhostCardSupersededBy(card.html)) throw new RemoteResourceRegistryError('INVALID_PARAMS', 'Card has been replaced');
       const change = request.input?.formChange === true;
       const uploadAction = !change ? mailUploadAction(card.html) : undefined;
       const attaching = uploadAction?.id === request.actionId;
