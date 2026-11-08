@@ -9908,6 +9908,8 @@
     "banner": {
       "title": "已更至 {{version}}",
       "subtitle": "重启以焕新",
+      "nativeBuildTitle": "Apple 芯片版已备",
+      "nativeBuildSubtitle": "重启即换，诸务与设置皆存",
       "viewNotes": "览更新之告",
       "viewNotesAria": "览 {{version}} 之更新公告",
       "button": "即重启",
@@ -12902,6 +12904,8 @@
   },
   "chat": {
     "teammateProcess": {
+      "empty": "此番无可示之处理记录",
+      "unavailable": "未能读取处理记录",
       "record": "理事录",
       "operations": "行事录",
       "elapsed": "已理 {{duration}}",
@@ -19377,6 +19381,7 @@
       "apply": "迁移"
     },
     "source": {
+      "receivingOn": "受端：{{name}}",
       "description": "选一台登录了同一帐号的电脑。它的法器、技艺、设置和连接会照原样装到这台电脑；密钥只在你在那台电脑上点「允许」后拷贝，登录状态不会离开那台电脑。",
       "loading": "方寻其余之机…",
       "empty": "没有找到这个账号的其他电脑。在另一台电脑上登录 Cindy 后再打开这里",
@@ -19683,5 +19688,14 @@
     "directory": "账号目录",
     "loginAgain": "重登",
     "login": "登录"
+  },
+  "crashDiagnosis": {
+    "title": "Cindy 前次异常而止",
+    "description": "欲究其因乎？将取退出之记与已隐敏文之日志，备为差事草稿，阅定乃发。强止或断电，亦可致此。",
+    "diagnose": "诊断其因",
+    "later": "暂置",
+    "logExcerpt": "相关日志（节录，或有未全）",
+    "logsUnavailable": "未得相关日志，其因未明。",
+    "failed": "诊断资料未备，请重试。"
   }
 }

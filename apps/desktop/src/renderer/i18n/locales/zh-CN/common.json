@@ -9908,6 +9908,8 @@
     "banner": {
       "title": "已更新到 {{version}}",
       "subtitle": "重启以应用更新",
+      "nativeBuildTitle": "Apple 芯片版已就绪",
+      "nativeBuildSubtitle": "重启即换装，任务和设置都会保留",
       "viewNotes": "查看更新公告",
       "viewNotesAria": "查看 {{version}} 的更新公告",
       "button": "立即重启",
@@ -12910,6 +12912,8 @@
       }
     },
     "teammateProcess": {
+      "empty": "本轮没有可显示的过程记录",
+      "unavailable": "未能读取过程记录",
       "record": "处理记录",
       "operations": "操作记录",
       "elapsed": "已处理 {{duration}}",
@@ -19245,6 +19249,7 @@
       "apply": "迁移"
     },
     "source": {
+      "receivingOn": "接收端：{{name}}",
       "description": "选一台登录了同一账号的电脑。它的插件、技能、设置和连接会照原样装到这台电脑；密钥只在你在那台电脑上点「允许」后复制，登录状态不会离开那台电脑。",
       "loading": "正在查找你的其他电脑…",
       "empty": "没有找到这个账号的其他电脑。在另一台电脑上登录 Cindy 后再打开这里",
@@ -19683,5 +19688,14 @@
     "directory": "账号目录",
     "loginAgain": "重新登录",
     "login": "登录"
+  },
+  "crashDiagnosis": {
+    "title": "Cindy 上次意外退出了",
+    "description": "要诊断原因吗？我们会把退出信息和脱敏日志整理成任务草稿，供你检查后发送。强制退出或断电也可能导致意外退出。",
+    "diagnose": "诊断问题",
+    "later": "暂不处理",
+    "logExcerpt": "相关日志（节选，可能不完整）",
+    "logsUnavailable": "没有可用的相关日志，暂时无法确定原因。",
+    "failed": "诊断材料准备失败，请重试。"
   }
 }

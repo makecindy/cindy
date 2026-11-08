@@ -10031,6 +10031,8 @@
     "banner": {
       "title": "Atualizado para {{version}}",
       "subtitle": "Reiniciar para aplicar",
+      "nativeBuildTitle": "Versão para Apple silicon pronta",
+      "nativeBuildSubtitle": "Reinicie para trocar; suas tarefas e configurações são mantidas",
       "viewNotes": "Ver novidades",
       "viewNotesAria": "Ver novidades da versão {{version}}",
       "button": "Reiniciar",
@@ -14274,6 +14276,8 @@
       "closeFailed": "Não foi possível fechar a conversa paralela. Tente novamente."
     },
     "teammateProcess": {
+      "empty": "Não há detalhes do processo para esta resposta",
+      "unavailable": "Não foi possível carregar os detalhes do processo",
       "record": "Atividade",
       "operations": "Registro de atividades",
       "elapsed": "Trabalhando há {{duration}}",
@@ -19491,6 +19495,7 @@
       "apply": "Transferir"
     },
     "source": {
+      "receivingOn": "Dispositivo de destino: {{name}}",
       "description": "Escolha um computador conectado a esta conta. Os plugins, habilidades, configurações e conexões dele são configurados aqui do mesmo jeito; logins e chaves só saem daquele computador se você permitir nele.",
       "loading": "Procurando seus outros computadores…",
       "empty": "Nenhum outro computador encontrado para esta conta. Entre no Cindy em outro computador e abra isto novamente",
@@ -19942,5 +19947,14 @@
     "directory": "Pasta da conta",
     "loginAgain": "Entrar novamente",
     "login": "Entrar"
+  },
+  "crashDiagnosis": {
+    "title": "O Cindy encerrou inesperadamente",
+    "description": "Quer diagnosticar a causa? Vamos preparar um rascunho de tarefa com os detalhes do encerramento e registros sem dados sensíveis para você revisar antes de enviar. Um encerramento forçado ou uma queda de energia também pode ser a causa.",
+    "diagnose": "Diagnosticar problema",
+    "later": "Agora não",
+    "logExcerpt": "Registros relevantes (trecho, possivelmente incompleto)",
+    "logsUnavailable": "Não há registros relevantes disponíveis. A causa ainda é desconhecida.",
+    "failed": "Não foi possível preparar o diagnóstico. Tente novamente."
   }
 }

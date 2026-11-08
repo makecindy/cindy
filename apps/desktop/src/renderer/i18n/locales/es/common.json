@@ -10031,6 +10031,8 @@
     "banner": {
       "title": "Actualizado a {{version}}",
       "subtitle": "Reiniciar para aplicar",
+      "nativeBuildTitle": "Versión para Apple silicon lista",
+      "nativeBuildSubtitle": "Reinicia para cambiar; tus tareas y ajustes se conservan",
       "viewNotes": "Ver novedades",
       "viewNotesAria": "Ver las novedades de {{version}}",
       "button": "Reiniciar",
@@ -14274,6 +14276,8 @@
       "closeFailed": "No se pudo cerrar el chat secundario. Inténtalo de nuevo."
     },
     "teammateProcess": {
+      "empty": "No hay detalles del proceso para esta respuesta",
+      "unavailable": "No se pudieron cargar los detalles del proceso",
       "record": "Actividad",
       "operations": "Registro de actividad",
       "elapsed": "Lleva {{duration}} trabajando",
@@ -19491,6 +19495,7 @@
       "apply": "Transferir"
     },
     "source": {
+      "receivingOn": "Equipo de destino: {{name}}",
       "description": "Elija una computadora que haya iniciado sesión con esta cuenta. Sus plugins, habilidades, ajustes y conexiones se configuran aquí de la misma forma; los inicios de sesión y las claves solo salen de esa computadora si usted lo permite en ella.",
       "loading": "Buscando sus otras computadoras…",
       "empty": "No se encontraron otras computadoras para esta cuenta. Inicie sesión en Cindy en otra computadora y vuelva a abrir esto",
@@ -19942,5 +19947,14 @@
     "directory": "Carpeta de la cuenta",
     "loginAgain": "Iniciar sesión nuevamente",
     "login": "Iniciar sesión"
+  },
+  "crashDiagnosis": {
+    "title": "Cindy se cerró inesperadamente",
+    "description": "¿Quieres diagnosticar la causa? Prepararemos un borrador de tarea con los detalles del cierre y registros sin datos sensibles para que lo revises antes de enviarlo. También puede deberse a un cierre forzado o un corte de energía.",
+    "diagnose": "Diagnosticar problema",
+    "later": "Ahora no",
+    "logExcerpt": "Registros relevantes (extracto, puede estar incompleto)",
+    "logsUnavailable": "No hay registros relevantes disponibles. La causa aún se desconoce.",
+    "failed": "No se pudo preparar el diagnóstico. Inténtalo de nuevo."
   }
 }

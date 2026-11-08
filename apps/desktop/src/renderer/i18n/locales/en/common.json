@@ -9951,6 +9951,8 @@
     "banner": {
       "title": "Updated to {{version}}",
       "subtitle": "Relaunch to apply",
+      "nativeBuildTitle": "Apple silicon version ready",
+      "nativeBuildSubtitle": "Restart to switch; your tasks and settings stay",
       "viewNotes": "See What's New",
       "viewNotesAria": "See what's new in {{version}}",
       "button": "Relaunch",
@@ -12962,6 +12964,8 @@
       }
     },
     "teammateProcess": {
+      "empty": "No process details to show for this reply",
+      "unavailable": "Could not load process details",
       "record": "Activity",
       "operations": "Activity log",
       "elapsed": "Working for {{duration}}",
@@ -19317,6 +19321,7 @@
       "apply": "Move"
     },
     "source": {
+      "receivingOn": "Receiving on: {{name}}",
       "description": "Pick a computer signed in to this account. Its plugins, skills, settings and connections are set up the same way here; keys are copied only after you allow it there, and sign-ins never leave that computer.",
       "loading": "Looking for your other computers…",
       "empty": "No other computers found for this account. Sign in to Cindy on another computer, then open this again",
@@ -19755,5 +19760,14 @@
     "directory": "Account folder",
     "loginAgain": "Sign in again",
     "login": "Sign in"
+  },
+  "crashDiagnosis": {
+    "title": "Cindy exited unexpectedly",
+    "description": "Would you like to diagnose what happened? We’ll prepare a task draft with exit details and redacted logs for you to review before sending. An unexpected exit can also result from a forced quit or power loss.",
+    "diagnose": "Diagnose problem",
+    "later": "Not now",
+    "logExcerpt": "Relevant logs (excerpt; may be incomplete)",
+    "logsUnavailable": "No relevant logs are available. The cause is not yet known.",
+    "failed": "Could not prepare the diagnosis. Please try again."
   }
 }

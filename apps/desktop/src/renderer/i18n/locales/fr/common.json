@@ -10031,6 +10031,8 @@
     "banner": {
       "title": "Mis à jour vers {{version}}",
       "subtitle": "Relancer pour appliquer",
+      "nativeBuildTitle": "Version Apple silicon prête",
+      "nativeBuildSubtitle": "Redémarrez pour basculer ; vos tâches et réglages sont conservés",
       "viewNotes": "Voir les nouveautés",
       "viewNotesAria": "Voir les nouveautés de la version {{version}}",
       "button": "Relancer",
@@ -14274,6 +14276,8 @@
       "closeFailed": "Impossible de fermer la conversation annexe. Veuillez réessayer."
     },
     "teammateProcess": {
+      "empty": "Aucun détail du traitement à afficher pour cette réponse",
+      "unavailable": "Impossible de charger les détails du traitement",
       "record": "Activité",
       "operations": "Journal d’activité",
       "elapsed": "En cours depuis {{duration}}",
@@ -19491,6 +19495,7 @@
       "apply": "Transférer"
     },
     "source": {
+      "receivingOn": "Appareil de destination : {{name}}",
       "description": "Choisissez un ordinateur connecté à ce compte. Ses plugins, compétences, réglages et connexions sont configurés de la même façon ici ; les connexions et les clés ne quittent cet ordinateur que si vous l'autorisez sur celui-ci.",
       "loading": "Recherche de vos autres ordinateurs…",
       "empty": "Aucun autre ordinateur trouvé pour ce compte. Connectez-vous à Cindy sur un autre ordinateur, puis rouvrez cette fenêtre",
@@ -19942,5 +19947,14 @@
     "directory": "Dossier du compte",
     "loginAgain": "Se reconnecter",
     "login": "Se connecter"
+  },
+  "crashDiagnosis": {
+    "title": "Cindy s’est fermé de manière inattendue",
+    "description": "Voulez-vous en diagnostiquer la cause ? Nous préparerons un brouillon de tâche avec les détails de l’arrêt et des journaux expurgés, à vérifier avant envoi. Un arrêt forcé ou une coupure de courant peut aussi en être la cause.",
+    "diagnose": "Diagnostiquer le problème",
+    "later": "Pas maintenant",
+    "logExcerpt": "Journaux pertinents (extrait potentiellement incomplet)",
+    "logsUnavailable": "Aucun journal pertinent disponible. La cause reste inconnue.",
+    "failed": "Impossible de préparer le diagnostic. Veuillez réessayer."
   }
 }

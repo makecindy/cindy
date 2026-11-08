@@ -75,6 +75,8 @@ pnpm mobile:sim:whoami -- --mock --json
 - App 里是一台在线的模拟电脑和一台离线电脑，任务、消息、插件演示、文件浏览都由
   `apps/mobile/src/debug/visualMock.ts` 在内存里提供，写操作只在本次进程内生效，重启即还原。
 - 生效条件是开发构建（`__DEV__`）；正式包不包含这条路径。
+- 设备画面连接页：`cindy://devices/desktop/cindy-visual-mock-mac?liveScreen=cindy-simulator%7Cpreview`。
+  mock provider 保持远程桌面请求等待，真实页面展示连接中、等待较久及原有超时状态，供返回按钮与明暗主题截图；不连接真实电脑。
 - 邮件阅读页：`cindy://mail-preview?deviceId=cindy-visual-mock-mac&sessionId=visual-running&url=<编码后的地址>`，
   地址取 `apps/mobile/src/debug/mailVisualFixture.ts` 的 `VISUAL_MAIL_URLS`（宽版营销邮件、三封往来邮件），均为合成数据。
 - 写邮件卡片：`cindy://sessions/visual-mail-draft?deviceId=cindy-visual-mock-mac`（仅手机端的模拟任务，含一张回复草稿卡）。
