@@ -9,9 +9,10 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { NavigationContext, NavigationRouteContext } from 'expo-router/react-navigation';
 import { TaskDrawerPresentationProvider, TaskDrawerPresentation } from '@/session/TaskDrawerPresentation';
 import { useConversationTaskDrawer } from '@/session/useConversationTaskDrawer';
+import { SessionTaskDrawerProvider } from '@/session/SessionTaskDrawer';
 const state = vi.hoisted(() => ({ persistent: false, mounts: 0, unmounts: 0, surface: null as any, drawer: null as any }));
 vi.mock('react-native', () => ({ Platform: { OS: 'ios' }, BackHandler: { addEventListener: () => ({ remove() {} }) } }));
-vi.mock('react-native-reanimated', async () => { const { useState } = await import('react'); return { useSharedValue: (value: any) => useState(() => ({ value }))[0] }; });
+vi.mock('react-native-reanimated', async () => { const { useState } = await import('react'); return { useSharedValue: (value: any) => useState(() => ({ value }))[0], cancelAnimation: () => {} }; });
 vi.mock('expo-router/react-navigation', async () => { const React = await import('react');
   const NavigationContext = React.createContext<any>(null), NavigationRouteContext = React.createContext<any>(null);
   return { NavigationContext, NavigationRouteContext, useIsFocused: () => React.useContext(NavigationContext).isFocused() };
@@ -89,4 +90,20 @@ it('drops the old presentation on account change and ignores its late completion
   act(() => root.render(<App account="two" />)); const surface = host.querySelector('[data-surface]');
   act(() => finish()); expect(host.querySelector('[data-surface]')).toBe(surface);
   expect(state.surface.name).toBe('task'); expect(state.surface.open).toBe(false);
+});
+it('keeps the floating drawer visible when the layout re-renders without a shared native drawer', () => {
+  // Drag-resize re-renders the layout; its closed column must not publish over the route's open drawer.
+  const Column = ({ persistent }: { persistent: boolean; width: number }) =>
+    <TaskDrawerPresentation element={<Surface name="column" width={0} open={persistent} persistent={persistent} />} />;
+  const Layout = ({ width }: { width: number }) => <SessionTaskDrawerProvider enabled={false} focused windowHeight={900}
+    topInset={0} floatingWidth={width} column={<Column persistent={false} width={width} />}>
+    <NavigationContext.Provider value={navigation}><NavigationRouteContext.Provider value={{ key: 'group', name: 'group' }}>
+      <Owner name="group" />
+    </NavigationRouteContext.Provider></NavigationContext.Provider>
+  </SessionTaskDrawerProvider>;
+  const Page = ({ width }: { width: number }) => <TaskDrawerPresentationProvider><Layout width={width} /></TaskDrawerPresentationProvider>;
+  act(() => root.render(<Page width={400} />));
+  act(() => state.drawer.openSessionListDrawer());
+  act(() => root.render(<Page width={440} />));
+  expect(state.surface.name).toBe('group'); expect(state.surface.open).toBe(true);
 });

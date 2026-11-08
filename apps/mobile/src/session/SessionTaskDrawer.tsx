@@ -65,11 +65,14 @@ export function SessionTaskDrawerProvider({ enabled, focused, windowHeight, topI
   // Home out of its native host while the departing screen is still visible.
   const retainedHeight = useRef(Math.max(1, windowHeight - (props.topInset ?? topInset)));
   if (focused) retainedHeight.current = Math.max(1, windowHeight - (props.topInset ?? topInset));
+  // Without sharing, only the persistent column belongs to this layout. A closed
+  // one would publish to the root presentation on every layout render and cover
+  // the route-owned floating drawer (e.g. while its edge is being dragged).
   const drawer = shared ? cloneElement(column, {
     ...props,
     onColumnReady: completeHandoff,
     retainedHeight: retainedHeight.current,
-  }) : column;
+  }) : column.props.persistent ? column : null;
   return <Context.Provider value={shared ? context : null}>
     {children}
     <MessageHistoryOverlay enabled={false}>{drawer}</MessageHistoryOverlay>
