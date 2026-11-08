@@ -23,6 +23,16 @@ type AppServerNotification = Notification;
 import { RESOURCE_MIME_TYPE } from '@modelcontextprotocol/ext-apps/server';
 import { MCP_APPS_EXTENSION } from './protocol.js';
 
+/** Per-child environment only; never mutate the Desktop's process.env. */
+export function localMcpEnvironment(overrides: Record<string, string>, platform = process.platform): Record<string, string> {
+  const defaults = getDefaultEnvironment();
+  if (platform !== 'win32') return { ...defaults, ...overrides };
+  // The SDK adds its uppercase defaults once more inside start(). Canonicalize
+  // both layers so those defaults cannot shadow an explicit Path/Temp override.
+  return Object.fromEntries([...Object.entries(defaults), ...Object.entries(overrides)]
+    .map(([name, value]) => [name.toUpperCase(), value]));
+}
+
 export interface AppServerConfig {
   id: string;
   url: string;
@@ -103,7 +113,7 @@ export class AppConnection {
         this.config.plugin ? this.config.plugin.createTransport() : local
           ? new StdioClientTransport({
               ...this.config.stdio!,
-              env: { ...getDefaultEnvironment(), ...this.config.stdio!.env },
+              env: localMcpEnvironment(this.config.stdio!.env),
               cwd: homedir(),
               // Third-party stderr may contain credentials; never inherit Desktop logs.
               stderr: 'ignore',
