@@ -17,7 +17,7 @@ import { Switch } from '@/components/ui/switch';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
 import { extractIpcError } from '@/utils/ipcError';
-import { SettingsBlock, SettingsCard } from '@/components/ui/settings-rows';
+import { SettingsBlock, SettingsCard, SettingsSection } from '@/components/ui/settings-rows';
 import { SettingsTextInput } from './SettingsTextInput';
 
 const CARD_CLASS = cn(
@@ -302,28 +302,18 @@ export function PiPackagesSection() {
     });
   };
   return (
-    <div className="flex flex-col gap-8">
-      <div className="flex flex-col gap-1">
-        <h2 className="text-16 font-medium leading-[1.2] text-[var(--settings-section-title)]">
-          {t('settings.piPackages.title')}
-        </h2>
-        <p className="text-12 leading-[1.45] text-[var(--settings-section-desc)]">
-          {t('settings.piPackages.description')}
-        </p>
-      </div>
+    <SettingsSection
+      variant="page"
+      title={t('settings.piPackages.title')}
+      description={t('settings.piPackages.description')}
+    >
 
-      <section className="flex flex-col gap-3" aria-labelledby="pi-extension-install-title">
-        <div className="flex flex-col gap-1">
-          <h3
-            id="pi-extension-install-title"
-            className="text-14 font-medium text-[var(--settings-section-sublabel)]"
-          >
-            {t('settings.piPackages.installSectionTitle')}
-          </h3>
-          <p className="text-12 leading-[1.45] text-[var(--settings-section-desc)]">
-            {t('settings.piPackages.installSectionDescription')}
-          </p>
-        </div>
+      <SettingsSection
+        aria-labelledby="pi-extension-install-title"
+        titleId="pi-extension-install-title"
+        title={t('settings.piPackages.installSectionTitle')}
+        description={t('settings.piPackages.installSectionDescription')}
+      >
         <SettingsCard>
           <SettingsBlock className="flex items-center gap-2">
             <SettingsTextInput
@@ -360,15 +350,13 @@ export function PiPackagesSection() {
             </p>
           </SettingsBlock>
         </SettingsCard>
-      </section>
+      </SettingsSection>
 
-      <section className="flex flex-col gap-3" aria-labelledby="pi-extension-installed-title">
-        <h3
-          id="pi-extension-installed-title"
-          className="text-14 font-medium text-[var(--settings-section-sublabel)]"
-        >
-          {t('settings.piPackages.installedSectionTitle')}
-        </h3>
+      <SettingsSection
+        aria-labelledby="pi-extension-installed-title"
+        titleId="pi-extension-installed-title"
+        title={t('settings.piPackages.installedSectionTitle')}
+      >
 
         {loadState === 'loading' && (
           <div
@@ -550,7 +538,7 @@ export function PiPackagesSection() {
             );
           })}
         </div>
-      </section>
-    </div>
+      </SettingsSection>
+    </SettingsSection>
   );
 }

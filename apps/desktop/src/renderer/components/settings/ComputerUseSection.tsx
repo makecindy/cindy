@@ -39,14 +39,7 @@ import screenRecordingPermissionIcon from '@/assets/system-settings/screen-recor
 import { toast } from '@/lib/toast';
 import { Switch } from '@/components/ui/switch';
 import { Spinner } from '@/components/ui/spinner';
-import {
-  SETTINGS_HINT,
-  SETTINGS_ROW_LABEL_CLASS,
-  SettingsBlock,
-  SettingsCard,
-  SettingsRow,
-  SettingsSection,
-} from '@/components/ui/settings-rows';
+import { SETTINGS_HINT, SettingsBlock, SettingsCard, SettingsField, SettingsRow, SettingsSection } from '@/components/ui/settings-rows';
 import { useOptionalConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import {
   DropdownMenu,
@@ -1543,6 +1536,7 @@ export function ComputerUseSection({ workingDir }: ComputerUseSectionProps) {
 
   return (
     <SettingsSection
+      variant="page"
       title={t(computerUseSettings.computerUse.sectionKey)}
       description={t('settings.computerUse.description')}
     >
@@ -1716,40 +1710,37 @@ export function ComputerUseSection({ workingDir }: ComputerUseSectionProps) {
           <>
             {/* Windows/Linux 没有 macOS TCC 权限,整块隐藏;安装进度改在下方状态行展示。 */}
             {window.electronAPI.platform === 'darwin' ? (
-              <SettingsBlock>
-                <div className="flex items-center justify-between gap-3">
-                  <p
-                    id={computerUseSettings.directControlPermissionsTitle.targetId}
-                    className={SETTINGS_ROW_LABEL_CLASS}
-                  >
+              <SettingsField
+                title={(
+                  <span id={computerUseSettings.directControlPermissionsTitle.targetId}>
                     {t(computerUseSettings.directControlPermissionsTitle.titleKey)}
-                  </p>
-                  {computerInstallPending || computerPermissionPending ? (
-                    <span className="inline-flex items-center gap-1.5 text-12 text-[var(--settings-section-desc)]">
-                      <Spinner size={12} />
-                      {computerInstallPending
-                        ? t('settings.computerUse.directControl.installing')
-                        : t('settings.computerUse.directControl.authorizing')}
-                    </span>
-                  ) : (
-                    <Button data-setting-id={computerUseSettings.directControlPermissionsTitle.id}
-                      variant="secondary"
-                      size="sm"
-                      className="px-2.5"
-                      loading={computerPermissionRecheckPending}
-                      type="button"
-                      onClick={() => void handleRecheckComputerStatus()}
-                      disabled={computerPermissionRecheckPending}
-                    >
-                      <RefreshCw size={12} className="shrink-0" />
-                      {t('settings.computerUse.directControl.permissions.recheck')}
-                    </Button>
-                  )}
-                </div>
-
+                  </span>
+                )}
+                action={computerInstallPending || computerPermissionPending ? (
+                  <span className="inline-flex items-center gap-1.5 text-12 text-[var(--settings-section-desc)]">
+                    <Spinner size={12} />
+                    {computerInstallPending
+                      ? t('settings.computerUse.directControl.installing')
+                      : t('settings.computerUse.directControl.authorizing')}
+                  </span>
+                ) : (
+                  <Button data-setting-id={computerUseSettings.directControlPermissionsTitle.id}
+                    variant="secondary"
+                    size="sm"
+                    className="px-2.5"
+                    loading={computerPermissionRecheckPending}
+                    type="button"
+                    onClick={() => void handleRecheckComputerStatus()}
+                    disabled={computerPermissionRecheckPending}
+                  >
+                    <RefreshCw size={12} className="shrink-0" />
+                    {t('settings.computerUse.directControl.permissions.recheck')}
+                  </Button>
+                )}
+              >
                 <div
                   id={computerUseSettings.directControlPermissionsAccessibilityLabel.targetId}
-                  className="mt-3 grid gap-2.5 sm:grid-cols-2"
+                  className="grid gap-2.5 sm:grid-cols-2"
                 >
                   <ComputerPermissionRow
                     label={t(computerUseSettings.directControlPermissionsAccessibilityLabel.titleKey)}
@@ -1798,7 +1789,7 @@ export function ComputerUseSection({ workingDir }: ComputerUseSectionProps) {
                     />
                   </div>
                 </div>
-              </SettingsBlock>
+              </SettingsField>
             ) : null}
 
             <SettingsBlock>

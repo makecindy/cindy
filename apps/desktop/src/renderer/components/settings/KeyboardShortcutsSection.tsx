@@ -27,7 +27,7 @@ import { useTranslation } from 'react-i18next';
 import { ArrowLeft, Package, Pencil, RotateCcw, Trash2 } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
-import { SettingsCard, SettingsRow, SettingsSection } from '@/components/ui/settings-rows';
+import { SettingsCard, SettingsPageHeader, SettingsRow, SettingsSection } from '@/components/ui/settings-rows';
 import {
   APP_SHORTCUT_DEFINITIONS,
   appShortcutCombosEqual,
@@ -386,20 +386,13 @@ export function KeyboardShortcutsSection() {
   }
   if (hardwarePane === 'accessories') {
     return (
-      <div className="flex flex-col gap-[14px]">
-        <div className="flex items-center gap-2">
-          <button data-setting-id={keyboardShortcutsSettings.shortcutsAccessoriesTitle.id}
-            type="button"
-            onClick={() => setHardwarePane('list')}
-            className="flex size-8 items-center justify-center rounded-md text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-chip)] hover:text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]"
-            aria-label={t('settings.shortcuts.accessories.back')}
-          >
-            <ArrowLeft size={17} />
-          </button>
-          <h2 className="text-16 font-medium leading-[1.2] text-[var(--settings-section-title)]">
-            {t(keyboardShortcutsSettings.shortcutsAccessoriesTitle.titleKey)}
-          </h2>
-        </div>
+      <div className="flex flex-col gap-6">
+        <SettingsPageHeader
+          title={t(keyboardShortcutsSettings.shortcutsAccessoriesTitle.titleKey)}
+          onBack={() => setHardwarePane('list')}
+          backLabel={t('settings.shortcuts.accessories.back')}
+          backProps={{ 'data-setting-id': keyboardShortcutsSettings.shortcutsAccessoriesTitle.id }}
+        />
         <SettingsCard className="flex flex-col">
           {VISIBLE_WORKLOUDER_MODELS.map((model) => (
             <WorkLouderCodexEntry

@@ -20,7 +20,7 @@ import {
 } from '@cindy/model-providers';
 
 import { ModelSelector } from '@/components/new-chat/ModelSelector';
-import { SETTINGS_HINT, SettingsBlock, SettingsCard, SettingsRow, SettingsSection } from '@/components/ui/settings-rows';
+import { SETTINGS_HINT, SettingsCard, SettingsField, SettingsRow, SettingsSection } from '@/components/ui/settings-rows';
 import { Switch } from '@/components/ui/switch';
 import { useProviders } from '@/hooks/useProviders';
 import { createLogger } from '@/lib/logger';
@@ -365,10 +365,10 @@ export function VisionBridgeSection() {
 
       {/* ── 卡 1：目标模型（走视觉桥的纯文本模型） ────────────────────── */}
       <SettingsCard>
-        <SettingsRow
+        <SettingsField
           title={<span id={visionBridgeSettings.targetModelsLabel.targetId}>{t(visionBridgeSettings.targetModelsLabel.titleKey)}</span>}
           hint={t(visionBridgeSettings.targetModelsLabel.descriptionKey)}
-          trailing={
+          action={(
             <DefaultOverrideControls
               isCustomized={targetModelsCustomized}
               disabled={pending}
@@ -376,18 +376,14 @@ export function VisionBridgeSection() {
                 void resetTargetModels();
               }}
             />
-          }
-        />
-
-        {targetRows.length === 0 ? (
-          <SettingsBlock>
+          )}
+        >
+          {targetRows.length === 0 ? (
             <p className="text-12 text-[var(--text-tertiary)]">
               {t('settings.visionBridge.targetModels.empty')}
             </p>
-          </SettingsBlock>
-        ) : (
-          // 列表自带行内边距；滚动容器放在 block 里面，避免裁掉 block 上方的分割线
-          <SettingsBlock className="p-0">
+          ) : (
+            // 首行不留上边距、末行不留下边距：名称到第一行 12px 由 SettingsField 负责
             <div className="flex max-h-[320px] flex-col overflow-y-auto">
               {targetRows.map((row) => {
                 // 未显式自定义 targetModels 时，no-vision 模型默认勾选（对齐设计文档）。
@@ -395,7 +391,7 @@ export function VisionBridgeSection() {
                 return (
                   <div
                     key={row.id}
-                    className={`flex items-center justify-between gap-3 px-4 py-3 ${enabled ? '' : 'pointer-events-none opacity-50'}`}
+                    className={`flex items-center justify-between gap-3 py-3 first:pt-0 last:pb-0 ${enabled ? '' : 'pointer-events-none opacity-50'}`}
                   >
                     <div className="flex min-w-0 flex-col gap-0.5">
                       <span className="truncate text-13 text-[var(--text-primary)]">{row.name}</span>
@@ -415,19 +411,17 @@ export function VisionBridgeSection() {
                 );
               })}
             </div>
-          </SettingsBlock>
-        )}
+          )}
+        </SettingsField>
       </SettingsCard>
 
       {/* ── 卡 2：视觉后端模型（主 + 备，最多两个） ────────────────────── */}
       <SettingsCard>
-        <SettingsRow
+        <SettingsField
           title={<span id={visionBridgeSettings.backendsLabel.targetId}>{t(visionBridgeSettings.backendsLabel.titleKey)}</span>}
           hint={t(visionBridgeSettings.backendsLabel.descriptionKey)}
-        />
-
-        {/* 关闭时只淡化选择器，分割线不跟着变淡 */}
-        <SettingsBlock>
+        >
+          {/* 关闭时只淡化选择器，名称、说明不跟着变淡 */}
           <div className={`flex flex-col gap-3 ${enabled ? '' : 'pointer-events-none opacity-50'}`}>
             {/* 主后端 */}
             <div className="flex items-center gap-4">
@@ -534,11 +528,11 @@ export function VisionBridgeSection() {
               </div>
             </div>
           </div>
-        </SettingsBlock>
 
-        <p className={`px-4 pb-4 ${SETTINGS_HINT}`}>
-          {t('settings.visionBridge.backends.hintSecondary')}
-        </p>
+          <p className={SETTINGS_HINT}>
+            {t('settings.visionBridge.backends.hintSecondary')}
+          </p>
+        </SettingsField>
       </SettingsCard>
     </SettingsSection>
   );

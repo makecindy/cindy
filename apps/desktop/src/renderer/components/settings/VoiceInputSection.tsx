@@ -16,7 +16,7 @@ import { Tip } from '@/components/ui/tooltip';
 import { useAuth } from '@/contexts/AuthContext';
 import { createLogger } from '@/lib/logger';
 import { SegmentedControl } from '@/components/ui/segmented-control';
-import { SETTINGS_HINT, SETTINGS_ROW_LABEL_CLASS, SettingsBlock, SettingsCard, SettingsRow, SettingsSection } from '@/components/ui/settings-rows';
+import { SETTINGS_HINT, SETTINGS_ROW_LABEL_CLASS, SettingsBlock, SettingsCard, SettingsField, SettingsRow, SettingsSection } from '@/components/ui/settings-rows';
 import { cn } from '@/lib/utils';
 import { extractIpcError } from '@/utils/ipcError';
 import { dictionaryTermKey } from '@cindy/voice-input-core';
@@ -947,17 +947,11 @@ function VoiceInputCollapsibleTextarea({
   className,
 }: VoiceInputCollapsibleTextareaProps) {
   return (
-    <div className={className}>
-      <div className="flex items-center justify-between gap-4">
-        <div className="flex min-w-0 flex-col gap-1">
-          <p className={SETTINGS_ROW_LABEL_CLASS}>
-            {label}
-          </p>
-          <p className={SETTINGS_HINT}>
-            {hint}
-          </p>
-        </div>
-
+    <SettingsField
+      className={className}
+      title={label}
+      hint={hint}
+      action={(
         <button data-settings-search-action="Expand or collapse the text editor"
           type="button"
           aria-expanded={expanded}
@@ -976,8 +970,8 @@ function VoiceInputCollapsibleTextarea({
             className={cn('transition-transform', expanded && 'rotate-180')}
           />
         </button>
-      </div>
-
+      )}
+    >
       {expanded ? (
         <textarea data-setting-id={voiceInputSettings.refinementInstructionsLabel.id}
           id={id}
@@ -988,7 +982,7 @@ function VoiceInputCollapsibleTextarea({
           aria-label={ariaLabel}
           placeholder={placeholder}
           className={cn(
-            'mt-4 min-h-[128px] w-full resize-y rounded-[14px] px-4 py-3',
+            'min-h-[128px] w-full resize-y rounded-lg px-4 py-3',
             'border border-[var(--settings-input-border)] bg-[var(--settings-input-bg)]',
             'text-13 leading-[1.45] text-[var(--settings-input-text)]',
             'placeholder:text-[var(--settings-input-placeholder)]',
@@ -997,7 +991,7 @@ function VoiceInputCollapsibleTextarea({
           )}
         />
       ) : null}
-    </div>
+    </SettingsField>
   );
 }
 
@@ -2082,35 +2076,26 @@ export function VoiceInputSection({ modelSelection }: VoiceInputSectionProps) {
         {settings.refinementEnabled ? (
           // 外层只承载搜索定位 id（覆盖规则与词典两块），两块各自带内边距和分割线
           <SettingsBlock id={voiceInputSettings.refinementInstructionsLabel.targetId} className="p-0">
-            <SettingsBlock>
-              <VoiceInputCollapsibleTextarea
-                id="voice-input-refinement-instructions"
-                label={t(voiceInputSettings.refinementInstructionsLabel.titleKey)}
-                hint={t(voiceInputSettings.refinementInstructionsLabel.descriptionKey)}
-                expanded={refinementRulesExpanded}
-                onExpandedChange={setRefinementRulesExpanded}
-                value={settings.refinementInstructions}
-                onChange={setRefinementInstructions}
-                maxLength={MAX_VOICE_INPUT_REFINEMENT_INSTRUCTIONS_CHARS}
-                rows={5}
-                ariaLabel={t('settings.voiceInput.refinement.instructions.ariaLabel')}
-                placeholder={t('settings.voiceInput.refinement.instructions.placeholder')}
-                editLabel={t('settings.voiceInput.refinement.instructions.edit')}
-                collapseLabel={t('settings.voiceInput.refinement.instructions.collapse')}
-              />
-            </SettingsBlock>
+            <VoiceInputCollapsibleTextarea
+              id="voice-input-refinement-instructions"
+              label={t(voiceInputSettings.refinementInstructionsLabel.titleKey)}
+              hint={t(voiceInputSettings.refinementInstructionsLabel.descriptionKey)}
+              expanded={refinementRulesExpanded}
+              onExpandedChange={setRefinementRulesExpanded}
+              value={settings.refinementInstructions}
+              onChange={setRefinementInstructions}
+              maxLength={MAX_VOICE_INPUT_REFINEMENT_INSTRUCTIONS_CHARS}
+              rows={5}
+              ariaLabel={t('settings.voiceInput.refinement.instructions.ariaLabel')}
+              placeholder={t('settings.voiceInput.refinement.instructions.placeholder')}
+              editLabel={t('settings.voiceInput.refinement.instructions.edit')}
+              collapseLabel={t('settings.voiceInput.refinement.instructions.collapse')}
+            />
 
-            <SettingsBlock>
-              <div className="flex items-center justify-between gap-4">
-                <div className="flex min-w-0 flex-col gap-1">
-                  <p id={voiceInputSettings.refinementDictionaryLabel.targetId} className={SETTINGS_ROW_LABEL_CLASS}>
-                    {t(voiceInputSettings.refinementDictionaryLabel.titleKey)}
-                  </p>
-                  <p className={SETTINGS_HINT}>
-                    {t(voiceInputSettings.refinementDictionaryLabel.descriptionKey)}
-                  </p>
-                </div>
-
+            <SettingsField
+              title={<span id={voiceInputSettings.refinementDictionaryLabel.targetId}>{t(voiceInputSettings.refinementDictionaryLabel.titleKey)}</span>}
+              hint={t(voiceInputSettings.refinementDictionaryLabel.descriptionKey)}
+              action={(
                 <Button data-setting-id={voiceInputSettings.refinementDictionaryLabel.id}
                   variant="secondary"
                   size="md"
@@ -2138,10 +2123,10 @@ export function VoiceInputSection({ modelSelection }: VoiceInputSectionProps) {
                     className={cn('transition-transform', customDictionaryExpanded && 'rotate-180')}
                   />
                 </Button>
-              </div>
-
+              )}
+            >
               {customDictionaryExpanded ? (
-                <div id="voice-input-custom-dictionary" className="mt-4 flex flex-col gap-3">
+                <div id="voice-input-custom-dictionary" className="flex flex-col gap-3">
                   <div className="flex items-center justify-between gap-4 rounded-[12px] border border-[var(--settings-input-border)] bg-[var(--settings-input-bg)] px-3 py-2.5">
                     <div className="flex min-w-0 flex-col gap-0.5">
                       <p className="text-13 font-medium text-[var(--settings-section-title)]">
@@ -2600,7 +2585,7 @@ export function VoiceInputSection({ modelSelection }: VoiceInputSectionProps) {
                   )}
                 </div>
               ) : null}
-            </SettingsBlock>
+            </SettingsField>
           </SettingsBlock>
         ) : null}
       </VoiceInputCard>

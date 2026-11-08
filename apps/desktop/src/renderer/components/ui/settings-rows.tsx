@@ -9,7 +9,7 @@
  * 行高收紧一档（行高 48，带头像 52），见 §4 Narrow drawer exception。
  */
 import { createContext, useContext, type ButtonHTMLAttributes, type HTMLAttributes, type ReactNode } from 'react';
-import { ChevronRight, Info } from 'lucide-react';
+import { ArrowLeft, ChevronRight, Info } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
 
@@ -39,6 +39,33 @@ export function SettingsDrawerScope({ children }: { children: ReactNode }) {
   return <DrawerScope.Provider value>{children}</DrawerScope.Provider>;
 }
 
+/**
+ * 设置页的页面标题区：20px 标题、13px 说明、右侧操作；子页面（配件、手柄）在标题前带返回按钮。
+ * 下面第一块内容和它隔 24px，由页面容器负责（SettingsSection variant="page" 已内置）。
+ */
+export function SettingsPageHeader({ title, titleId, description, action, adornment, onBack, backLabel, backProps }: {
+  title: ReactNode; titleId?: string; description?: ReactNode; action?: ReactNode;
+  /** 标题后的小标记，如 Beta。 */
+  adornment?: ReactNode;
+  onBack?: () => void; backLabel?: string;
+  /** 返回按钮上的搜索锚点等属性。 */
+  backProps?: ButtonHTMLAttributes<HTMLButtonElement> & Record<`data-${string}`, string | undefined>;
+}) {
+  return <div className="flex items-center justify-between gap-3">
+    <div className="flex min-w-0 items-center gap-2">
+      {onBack && <button {...backProps} type="button" onClick={onBack} aria-label={backLabel}
+        className="flex size-8 shrink-0 items-center justify-center rounded-full text-[var(--text-secondary)] transition-colors enabled:hover:bg-[var(--surface-chip)] enabled:hover:text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]">
+        <ArrowLeft size={17} />
+      </button>}
+      <div className="flex min-w-0 flex-col gap-1">
+        <h2 id={titleId} className={cn('flex min-w-0 items-center gap-2', SETTINGS_PAGE_TITLE_CLASS)}>{title}{adornment}</h2>
+        {description && <p className="text-13 leading-[1.5] text-[var(--settings-section-desc)]">{description}</p>}
+      </div>
+    </div>
+    {action}
+  </div>;
+}
+
 export function SettingsSection({ title, titleId, count, description, action, caption, children, testId, headingLevel, variant, className, ...rest }: {
   title?: ReactNode; count?: number; action?: ReactNode; caption?: ReactNode; children: ReactNode; testId?: string;
   /** 组名下面一行说明，紧贴组名；卡片下面的补充说明用 caption。 */
@@ -53,14 +80,15 @@ export function SettingsSection({ title, titleId, count, description, action, ca
   const drawer = useContext(DrawerScope);
   const underPage = useContext(PageScope);
   const page = variant === 'page';
-  const Heading = page ? 'h2' : (headingLevel ?? (drawer || underPage ? 3 : 2)) === 2 ? 'h2' : 'h3';
+  const Heading = (headingLevel ?? (drawer || underPage ? 3 : 2)) === 2 ? 'h2' : 'h3';
   const section = <section {...rest} className={cn('flex min-w-0 flex-col', page ? 'gap-6' : !drawer && 'gap-[14px]', className)} data-testid={testId}>
-    {(title || action) && <div className={cn('flex items-center justify-between gap-3', (drawer || action) && 'min-h-6', drawer && 'mb-2')}>
+    {page ? <SettingsPageHeader title={title} titleId={titleId} description={description} action={action} />
+      : (title || action) && <div className={cn('flex items-center justify-between gap-3', (drawer || action) && 'min-h-6', drawer && 'mb-2')}>
       <div className="flex min-w-0 flex-col gap-1">
-        <Heading id={titleId} className={cn('min-w-0', page ? SETTINGS_PAGE_TITLE_CLASS : drawer ? 'text-13 font-medium leading-[1.38] text-[var(--text-secondary)]' : SETTINGS_SECTION_TITLE_CLASS)}>
+        <Heading id={titleId} className={cn('min-w-0', drawer ? 'text-13 font-medium leading-[1.38] text-[var(--text-secondary)]' : SETTINGS_SECTION_TITLE_CLASS)}>
           {title}{count !== undefined && <span className="ml-1.5 font-normal tabular-nums text-[var(--text-tertiary)]">{count}</span>}
         </Heading>
-        {description && <p className={cn(page ? 'text-13 leading-[1.5]' : 'text-12 leading-[1.45]', 'text-[var(--settings-section-desc)]')}>{description}</p>}
+        {description && <p className="text-12 leading-[1.45] text-[var(--settings-section-desc)]">{description}</p>}
       </div>
       {action}
     </div>}
@@ -131,6 +159,26 @@ export function SettingsRow({ lead, title, tag, hint, value, chevron, trailing, 
 export function SettingsBlock({ className, ...rest }: HTMLAttributes<HTMLDivElement>) {
   const drawer = useContext(DrawerScope);
   return <div className={cn('px-4 py-4', drawer ? SETTINGS_DIVIDER : PAGE_DIVIDER, className)} {...rest} />;
+}
+
+/**
+ * 一项设置的名称和说明在上、宽控件在下（滑块、整宽选择器、输入框、列表）：名称与控件同属一项，
+ * 间隔 12px，中间不画分割线；分割线只出现在两项设置之间。右侧可放「已自定义 / 恢复默认」等操作。
+ */
+export function SettingsField({ title, hint, action, children, className, ...rest }: {
+  title: ReactNode; hint?: ReactNode; action?: ReactNode; children: ReactNode;
+} & Omit<HTMLAttributes<HTMLDivElement>, 'title' | 'children'>) {
+  const drawer = useContext(DrawerScope);
+  return <SettingsBlock {...rest} className={cn('flex flex-col gap-3', className)}>
+    <div className="flex items-center justify-between gap-3">
+      <div className="flex min-w-0 flex-col">
+        <div className={cn('min-w-0 text-13 font-medium [overflow-wrap:anywhere]', drawer ? 'leading-[1.38] text-[var(--text-primary)]' : 'leading-[1.5] text-[var(--settings-section-sublabel)]')}>{title}</div>
+        {hint && <div className={cn(drawer ? 'mt-0.5' : 'mt-1', SETTINGS_HINT)}>{hint}</div>}
+      </div>
+      {action && <div className="flex shrink-0 items-center gap-2">{action}</div>}
+    </div>
+    {children}
+  </SettingsBlock>;
 }
 
 /** A 32px round icon tile leading a row (群管理, AI 代答 without a teammate). */

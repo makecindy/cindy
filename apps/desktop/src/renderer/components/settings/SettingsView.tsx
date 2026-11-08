@@ -707,13 +707,15 @@ function SettingsViewContent() {
                 id={builtinToolsSettings.builtinTools.targetId}
                 aria-labelledby="settings-tab-builtin-tools"
               >
-                <section className="pb-[18px]" aria-label={t(builtinToolsSettings.title.titleKey)}>
-                  <BuiltinToolsSection workingDir={workingDir ?? undefined} />
-                </section>
                 {/* 外部(自定义)MCP 与内置工具同页管理:内置在上、外部在下,组成「工具」页。 */}
-                <section className="pb-[18px]" aria-label={t(builtinToolsSettings.builtinTools.sectionKey)}>
-                  <McpServersSection />
-                </section>
+                <SettingsSection variant="page" title={t('settings.tabs.builtinTools')}>
+                  <section className="pb-[18px]" aria-label={t(builtinToolsSettings.title.titleKey)}>
+                    <BuiltinToolsSection workingDir={workingDir ?? undefined} />
+                  </section>
+                  <section className="pb-[18px]" aria-label={t(builtinToolsSettings.builtinTools.sectionKey)}>
+                    <McpServersSection />
+                  </section>
+                </SettingsSection>
               </div>
             )}
 

@@ -19,7 +19,7 @@ import { personalizationDetailsSettings } from './PersonalizationDetails.setting
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { SelectParts as Select } from '@/components/ui/select';
-import { SETTINGS_HINT, SETTINGS_ROW_LABEL_CLASS, SettingsBlock, SettingsCard, SettingsSection } from '@/components/ui/settings-rows';
+import { SettingsCard, SettingsField, SettingsSection } from '@/components/ui/settings-rows';
 import { Check, ChevronDown, ChevronUp } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
@@ -105,23 +105,18 @@ export function TerminalShellSection() {
   return (
     <SettingsSection title={t('settings.terminalShell.title')} description={t('settings.terminalShell.description')}>
       <SettingsCard>
-        {/* 下拉框占满整行放在名称/说明下方, 整块放 SettingsBlock */}
-        <SettingsBlock className="flex flex-col gap-[14px]">
-          <div className="flex items-center justify-between gap-3">
-            <div className="flex min-w-0 flex-col gap-1">
-              <p className={SETTINGS_ROW_LABEL_CLASS}>
-                {t(personalizationDetailsSettings.terminalShellCardLabel.titleKey)}
-              </p>
-              <p className={SETTINGS_HINT}>
-                {t(personalizationDetailsSettings.terminalShellCardLabel.descriptionKey)}
-              </p>
-            </div>
+        {/* 下拉框占满整行放在名称/说明下方, 名称与下拉框同属一项 */}
+        <SettingsField
+          title={t(personalizationDetailsSettings.terminalShellCardLabel.titleKey)}
+          hint={t(personalizationDetailsSettings.terminalShellCardLabel.descriptionKey)}
+          action={(
             <DefaultOverrideControls
               isCustomized={isCustomized}
               disabled={resetting}
               onReset={() => void onReset()}
             />
-          </div>
+          )}
+        >
 
           <Select.Root
             value={pref}
@@ -179,7 +174,7 @@ export function TerminalShellSection() {
               </Select.Content>
             </Select.Portal>
           </Select.Root>
-        </SettingsBlock>
+        </SettingsField>
       </SettingsCard>
     </SettingsSection>
   );

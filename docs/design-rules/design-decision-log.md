@@ -1019,3 +1019,11 @@ Switch 解耦。插件插槽挂载同一个媒体组件，不再维护单独拖�
 
 实现：`components/ui/settings-rows.tsx` 与各设置页；现行规则见 `DESIGN.md` §4 Desktop settings rows。
 
+## 2026-11-08 · 页面标题区与「名称在上、控件在下」的间距统一
+
+用户检查开发版时指出模型供应商、IM 机器人、工具、自动操作的标题仍偏小，并要求统一卡片里小标题和下面内容的间距。核查后：页面标题到第一块内容的间距有 14、16、18、24、32px 五种，说明文字有 12px 和 13px 两种；卡片里名称与下方宽控件的间距有 6、8、12、14、16px，有的中间还画了分割线。
+
+统一为：所有设置标签页和子页面（含配件、手柄页）用 `SettingsPageHeader` / `SettingsSection variant="page"`，标题 20px、说明 13px、到第一块内容 24px，子页面返回按钮放在标题前；通用页没有页面标题，插件页保留自己的插件管理头部。名称在上、宽控件在下的一项设置用 `SettingsField`，名称到控件 12px，中间不画分割线。
+
+实现：`components/ui/settings-rows.tsx` 与各设置页；现行规则见 `DESIGN.md` §4 Desktop settings rows。
+

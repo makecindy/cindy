@@ -9,7 +9,7 @@ import { useTranslation } from 'react-i18next';
 
 import { useCompactionSettings, type CompactionAgent } from '@/hooks/useCompactionSettings';
 import { Slider } from '@/components/ui/slider';
-import { SETTINGS_HINT, SettingsBlock, SettingsCard, SettingsRow, SettingsSection } from '@/components/ui/settings-rows';
+import { SETTINGS_HINT, SettingsCard, SettingsField, SettingsSection } from '@/components/ui/settings-rows';
 import { toast } from '@/lib/toast';
 import { DefaultOverrideControls } from './DefaultOverrideControls';
 
@@ -27,29 +27,25 @@ function CompactionCard({ agent, pct, isCustomized, resetPct, setPct }: Compacti
 
   return (
     <SettingsCard>
-      <SettingsRow
+      <SettingsField
         title={t(`${key}.label`)}
         hint={t(`${key}.description`)}
-        trailing={
-          <div className="flex shrink-0 items-center gap-2">
-            <span className="shrink-0 rounded-full bg-[var(--surface-chip)] px-2.5 py-1 text-11 font-medium leading-none text-[var(--text-secondary)]">
-              {t(`${key}.badge`)}
-            </span>
-            <DefaultOverrideControls
-              isCustomized={isCustomized}
-              onReset={() => {
-                void resetPct()
-                  .then(() => toast.success(t('settings.defaults.restored')))
-                  .catch((err) => {
-                    toast.error(err instanceof Error ? err.message : t('settings.defaults.restoreFailed'));
-                  });
-              }}
-            />
-          </div>
-        }
-      />
-
-      <SettingsBlock className="flex flex-col gap-[14px]">
+        action={<>
+          <span className="shrink-0 rounded-full bg-[var(--surface-chip)] px-2.5 py-1 text-11 font-medium leading-none text-[var(--text-secondary)]">
+            {t(`${key}.badge`)}
+          </span>
+          <DefaultOverrideControls
+            isCustomized={isCustomized}
+            onReset={() => {
+              void resetPct()
+                .then(() => toast.success(t('settings.defaults.restored')))
+                .catch((err) => {
+                  toast.error(err instanceof Error ? err.message : t('settings.defaults.restoreFailed'));
+                });
+            }}
+          />
+        </>}
+      >
         <div className="flex items-center gap-[14px]">
           <div className="flex min-w-0 flex-1 flex-col gap-1.5">
             <Slider
@@ -74,7 +70,7 @@ function CompactionCard({ agent, pct, isCustomized, resetPct, setPct }: Compacti
         </div>
 
         <p className={SETTINGS_HINT}>{t(`${key}.hint`)}</p>
-      </SettingsBlock>
+      </SettingsField>
     </SettingsCard>
   );
 }

@@ -38,9 +38,9 @@ import { Tip } from '@/components/ui/tooltip';
 import { Slider } from '@/components/ui/slider';
 import { extractIpcError } from '@/utils/ipcError';
 import { DockIconPicker } from './DockIconPicker';
-import { FontFamilyPicker } from './FontFamilyPicker';
+import { FontFamilyPicker, FontFamilyResetButton } from './FontFamilyPicker';
 import { LayoutResetControl } from './LayoutResetControl';
-import { SETTINGS_PAGE_TITLE_CLASS, SettingsBlock, SettingsCard, SettingsRow, SettingsSection } from '@/components/ui/settings-rows';
+import { SETTINGS_PAGE_TITLE_CLASS, SettingsCard, SettingsField, SettingsRow, SettingsSection } from '@/components/ui/settings-rows';
 import { WallpaperSection } from './WallpaperSection';
 import {
   APPEARANCE_LIMITS,
@@ -723,34 +723,26 @@ export function AppearanceSection() {
           aria-label={t(appearanceSettings.fonts.titleKey)}
         >
           <SettingsCard>
-            <SettingsBlock id={appearanceSettings.fontUiFamilyLabel.targetId}>
+            <SettingsField
+              id={appearanceSettings.fontUiFamilyLabel.targetId}
+              title={t(appearanceSettings.fontUiFamilyLabel.titleKey)}
+              hint={t(appearanceSettings.fontUiFamilyLabel.descriptionKey)}
+              action={<FontFamilyResetButton value={uiFamily} onReset={resetUiFamily} />}
+            >
               <FontFamilyPicker data-setting-id={appearanceSettings.fontUiFamilyLabel.id}
-                label={t(appearanceSettings.fontUiFamilyLabel.titleKey)}
-                description={t(appearanceSettings.fontUiFamilyLabel.descriptionKey)}
                 ariaLabel={t('settings.appearance.font.uiFamily.aria')}
                 value={uiFamily}
                 presets={UI_FONT_PRESETS}
                 previewSample={t('settings.appearance.font.previewSamples.ui')}
                 previewFallbackFamily="var(--app-font-ui-default)"
                 onChange={setUiFamily}
-                onReset={resetUiFamily}
               />
-            </SettingsBlock>
+            </SettingsField>
 
-            <SettingsBlock className="flex flex-col gap-3">
-              <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <p
-                    id={appearanceSettings.fontUiSizeLabel.targetId}
-                    className="text-13 font-medium text-[var(--settings-section-sublabel)]"
-                    style={{ letterSpacing: '0.12px' }}
-                  >
-                    {t(appearanceSettings.fontUiSizeLabel.titleKey)}
-                  </p>
-                  <p className="mt-1 text-12 leading-[1.4] text-[var(--text-secondary)]">
-                    {t(appearanceSettings.fontUiSizeLabel.descriptionKey)}
-                  </p>
-                </div>
+            <SettingsField
+              title={<span id={appearanceSettings.fontUiSizeLabel.targetId}>{t(appearanceSettings.fontUiSizeLabel.titleKey)}</span>}
+              hint={t(appearanceSettings.fontUiSizeLabel.descriptionKey)}
+              action={(
                 <Tip text={t('settings.appearance.font.reset')}>
                   <Button data-setting-id={appearanceSettings.fontUiSizeLabel.id}
                     variant="secondary"
@@ -763,8 +755,8 @@ export function AppearanceSection() {
                     <RotateCcw size={14} />
                   </Button>
                 </Tip>
-              </div>
-
+              )}
+            >
               <div className="flex items-center gap-3">
                 <Slider data-setting-id={appearanceSettings.fontUiSizeLabel.id}
                   min={12}
@@ -799,12 +791,15 @@ export function AppearanceSection() {
                   )}
                 />
               </div>
-            </SettingsBlock>
+            </SettingsField>
 
-            <SettingsBlock id={appearanceSettings.fontCodeFamilyLabel.targetId}>
+            <SettingsField
+              id={appearanceSettings.fontCodeFamilyLabel.targetId}
+              title={t(appearanceSettings.fontCodeFamilyLabel.titleKey)}
+              hint={t(appearanceSettings.fontCodeFamilyLabel.descriptionKey)}
+              action={<FontFamilyResetButton value={codeFamily} onReset={resetCodeFamily} />}
+            >
               <FontFamilyPicker data-setting-id={appearanceSettings.fontCodeFamilyLabel.id}
-                label={t(appearanceSettings.fontCodeFamilyLabel.titleKey)}
-                description={t(appearanceSettings.fontCodeFamilyLabel.descriptionKey)}
                 ariaLabel={t('settings.appearance.font.codeFamily.aria')}
                 value={codeFamily}
                 presets={CODE_FONT_PRESETS}
@@ -812,24 +807,13 @@ export function AppearanceSection() {
                 previewLanguage="typescript"
                 previewFallbackFamily="var(--app-font-code-default)"
                 onChange={setCodeFamily}
-                onReset={resetCodeFamily}
               />
-            </SettingsBlock>
+            </SettingsField>
 
-            <SettingsBlock className="flex flex-col gap-3">
-              <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <p
-                    id={appearanceSettings.fontCodeSizeLabel.targetId}
-                    className="text-13 font-medium text-[var(--settings-section-sublabel)]"
-                    style={{ letterSpacing: '0.12px' }}
-                  >
-                    {t(appearanceSettings.fontCodeSizeLabel.titleKey)}
-                  </p>
-                  <p className="mt-1 text-12 leading-[1.4] text-[var(--text-secondary)]">
-                    {t(appearanceSettings.fontCodeSizeLabel.descriptionKey)}
-                  </p>
-                </div>
+            <SettingsField
+              title={<span id={appearanceSettings.fontCodeSizeLabel.targetId}>{t(appearanceSettings.fontCodeSizeLabel.titleKey)}</span>}
+              hint={t(appearanceSettings.fontCodeSizeLabel.descriptionKey)}
+              action={(
                 <Tip text={t('settings.appearance.font.reset')}>
                   <Button data-setting-id={appearanceSettings.fontCodeSizeLabel.id}
                     variant="secondary"
@@ -842,8 +826,8 @@ export function AppearanceSection() {
                     <RotateCcw size={14} />
                   </Button>
                 </Tip>
-              </div>
-
+              )}
+            >
               <div className="flex items-center gap-3">
                 <Slider data-setting-id={appearanceSettings.fontCodeSizeLabel.id}
                   min={10}
@@ -878,36 +862,28 @@ export function AppearanceSection() {
                   )}
                 />
               </div>
-            </SettingsBlock>
+            </SettingsField>
 
-            <SettingsBlock id={appearanceSettings.fontTerminalFamilyLabel.targetId}>
+            <SettingsField
+              id={appearanceSettings.fontTerminalFamilyLabel.targetId}
+              title={t(appearanceSettings.fontTerminalFamilyLabel.titleKey)}
+              hint={t(appearanceSettings.fontTerminalFamilyLabel.descriptionKey)}
+              action={<FontFamilyResetButton value={terminalFamily} onReset={resetTerminalFamily} />}
+            >
               <FontFamilyPicker data-setting-id={appearanceSettings.fontTerminalFamilyLabel.id}
-                label={t(appearanceSettings.fontTerminalFamilyLabel.titleKey)}
-                description={t(appearanceSettings.fontTerminalFamilyLabel.descriptionKey)}
                 ariaLabel={t('settings.appearance.font.terminalFamily.aria')}
                 value={terminalFamily}
                 presets={TERMINAL_FONT_PRESETS}
                 previewSample={t('settings.appearance.font.previewSamples.terminal')}
                 previewFallbackFamily={DEFAULT_TERMINAL_FONT_FAMILY}
                 onChange={setTerminalFamily}
-                onReset={resetTerminalFamily}
               />
-            </SettingsBlock>
+            </SettingsField>
 
-            <SettingsBlock className="flex flex-col gap-3">
-              <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <p
-                    id={appearanceSettings.fontTerminalSizeLabel.targetId}
-                    className="text-13 font-medium text-[var(--settings-section-sublabel)]"
-                    style={{ letterSpacing: '0.12px' }}
-                  >
-                    {t(appearanceSettings.fontTerminalSizeLabel.titleKey)}
-                  </p>
-                  <p className="mt-1 text-12 leading-[1.4] text-[var(--text-secondary)]">
-                    {t(appearanceSettings.fontTerminalSizeLabel.descriptionKey)}
-                  </p>
-                </div>
+            <SettingsField
+              title={<span id={appearanceSettings.fontTerminalSizeLabel.targetId}>{t(appearanceSettings.fontTerminalSizeLabel.titleKey)}</span>}
+              hint={t(appearanceSettings.fontTerminalSizeLabel.descriptionKey)}
+              action={(
                 <Tip text={t('settings.appearance.font.reset')}>
                   <Button data-setting-id={appearanceSettings.fontTerminalSizeLabel.id}
                     variant="secondary"
@@ -920,8 +896,8 @@ export function AppearanceSection() {
                     <RotateCcw size={14} />
                   </Button>
                 </Tip>
-              </div>
-
+              )}
+            >
               <div className="flex items-center gap-3">
                 <Slider data-setting-id={appearanceSettings.fontTerminalSizeLabel.id}
                   min={APPEARANCE_LIMITS.terminalSize.min}
@@ -956,7 +932,7 @@ export function AppearanceSection() {
                   )}
                 />
               </div>
-            </SettingsBlock>
+            </SettingsField>
           </SettingsCard>
         </SettingsSection>
 

@@ -1,7 +1,7 @@
 import { personalizationDetailsSettings } from './PersonalizationDetails.settings-search';
 import { useSettingDefinition } from './useSettingDefinition';
 import { Button } from '@/components/ui/button';
-import { SETTINGS_HINT, SETTINGS_ROW_LABEL_CLASS, SettingsBlock, SettingsCard, SettingsSection } from '@/components/ui/settings-rows';
+import { SettingsCard, SettingsField, SettingsSection } from '@/components/ui/settings-rows';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
@@ -42,17 +42,8 @@ export function UserPromptSection() {
   return (
     <SettingsSection variant="page" title={t('settings.personalization.title')}>
       <SettingsCard>
-        {/* 名称/说明在输入框上方, 整块不是「名称 + 控件」一行, 放 SettingsBlock */}
-        <SettingsBlock className="flex flex-col gap-[14px]">
-          <div className="flex flex-col gap-1">
-            <p className={SETTINGS_ROW_LABEL_CLASS}>
-              {setting.title}
-            </p>
-            <p className={SETTINGS_HINT}>
-              {setting.description}
-            </p>
-          </div>
-
+        {/* 名称/说明在输入框上方, 与输入框同属一项 */}
+        <SettingsField title={setting.title} hint={setting.description}>
           <textarea {...setting.anchorProps} {...setting.controlProps}
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
@@ -98,7 +89,7 @@ export function UserPromptSection() {
               {t('settings.personalization.save')}
             </Button>
           </div>
-        </SettingsBlock>
+        </SettingsField>
       </SettingsCard>
     </SettingsSection>
   );

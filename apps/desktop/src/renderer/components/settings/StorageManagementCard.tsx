@@ -34,7 +34,7 @@ import { Spinner } from '@/components/ui/spinner';
 import { Button } from '@/components/ui/button';
 import { FormField } from '@/components/ui/form-field';
 import { Switch } from '@/components/ui/switch';
-import { SettingsBlock, SettingsCard, SettingsRow, SettingsSection } from '@/components/ui/settings-rows';
+import { SettingsCard, SettingsField, SettingsRow, SettingsSection } from '@/components/ui/settings-rows';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { DefaultOverrideControls } from './DefaultOverrideControls';
 import { DialogueDirectorySection } from './DialogueDirectorySection';
@@ -433,19 +433,16 @@ export function StorageManagementCard() {
 
         {/* 清理:扫描 → 报数确认 → 执行 → 结果 */}
         <SettingsCard>
-          {/* 报数与结果紧贴在行下面,不另起分割线:行去掉自身内边距,由外层 block 承担 */}
-          <SettingsBlock className="flex flex-col gap-2">
-            <SettingsRow
-              className="p-0"
-              title={<span id={storageManagementCardSettings.aboutStorageCleanupLabel.targetId}>{t(storageManagementCardSettings.aboutStorageCleanupLabel.titleKey)}</span>}
-              hint={t(storageManagementCardSettings.aboutStorageCleanupLabel.descriptionKey)}
-              trailing={
-                <CardButton onClick={handleScan}>
-                  {t('settings.about.storage.scanButton')}
-                </CardButton>
-              }
-            />
-
+          {/* 报数与结果同属清理这一项,紧贴在名称下面,不另起分割线 */}
+          <SettingsField
+            title={<span id={storageManagementCardSettings.aboutStorageCleanupLabel.targetId}>{t(storageManagementCardSettings.aboutStorageCleanupLabel.titleKey)}</span>}
+            hint={t(storageManagementCardSettings.aboutStorageCleanupLabel.descriptionKey)}
+            action={(
+              <CardButton onClick={handleScan}>
+                {t('settings.about.storage.scanButton')}
+              </CardButton>
+            )}
+          >
             {phase.kind === 'scanned' && (
               <div className="flex flex-col gap-1.5 rounded-lg border border-[var(--settings-theme-card-border)] px-3 py-2.5">
                 {hasCleanable(phase.scan) ? (
@@ -521,22 +518,20 @@ export function StorageManagementCard() {
                 })}
               </p>
             )}
-          </SettingsBlock>
+          </SettingsField>
         </SettingsCard>
 
         {/* 体检(对账,只报不删) */}
         <SettingsCard>
-          <SettingsBlock className="flex flex-col gap-1.5">
-            <SettingsRow
-              className="p-0"
-              title={<span id={storageManagementCardSettings.aboutStorageReconcileLabel.targetId}>{t(storageManagementCardSettings.aboutStorageReconcileLabel.titleKey)}</span>}
-              hint={t(storageManagementCardSettings.aboutStorageReconcileLabel.descriptionKey)}
-              trailing={
-                <CardButton onClick={handleReconcile}>
-                  {t('settings.about.storage.reconcileButton')}
-                </CardButton>
-              }
-            />
+          <SettingsField
+            title={<span id={storageManagementCardSettings.aboutStorageReconcileLabel.targetId}>{t(storageManagementCardSettings.aboutStorageReconcileLabel.titleKey)}</span>}
+            hint={t(storageManagementCardSettings.aboutStorageReconcileLabel.descriptionKey)}
+            action={(
+              <CardButton onClick={handleReconcile}>
+                {t('settings.about.storage.reconcileButton')}
+              </CardButton>
+            )}
+          >
             {reconcile && (
               <p className="text-12 leading-[1.4] text-[var(--settings-section-sublabel)]">
                 {reconcile.orphanCount === 0 && reconcile.missingCount === 0 && reconcile.strayCount === 0
@@ -549,7 +544,7 @@ export function StorageManagementCard() {
                     })}
               </p>
             )}
-          </SettingsBlock>
+          </SettingsField>
         </SettingsCard>
       </SettingsSection>
     </SettingsSection>
@@ -848,23 +843,22 @@ function DatabaseSlimmingSection({
   );
 
   return (
-    <SettingsBlock className="flex flex-col gap-3" aria-busy={scanLoading}>
-      <SettingsRow
-        className="p-0"
-        title={<span id={storageManagementCardSettings.aboutStorageDbSlimmingLabel.targetId}>{t(storageManagementCardSettings.aboutStorageDbSlimmingLabel.titleKey)}</span>}
-        hint={t(storageManagementCardSettings.aboutStorageDbSlimmingLabel.descriptionKey)}
-        trailing={
-          <Button data-setting-id={storageManagementCardSettings.aboutStorageDbSlimmingLabel.id}
-            variant="cta"
-            size="md"
-            className="gap-1.5"
-            onClick={handleScan}
-            loading={scanLoading}
-          >
-            {t('settings.about.storage.dbSlimmingScanButton')}
-          </Button>
-        }
-      />
+    <SettingsField
+      aria-busy={scanLoading}
+      title={<span id={storageManagementCardSettings.aboutStorageDbSlimmingLabel.targetId}>{t(storageManagementCardSettings.aboutStorageDbSlimmingLabel.titleKey)}</span>}
+      hint={t(storageManagementCardSettings.aboutStorageDbSlimmingLabel.descriptionKey)}
+      action={(
+        <Button data-setting-id={storageManagementCardSettings.aboutStorageDbSlimmingLabel.id}
+          variant="cta"
+          size="md"
+          className="gap-1.5"
+          onClick={handleScan}
+          loading={scanLoading}
+        >
+          {t('settings.about.storage.dbSlimmingScanButton')}
+        </Button>
+      )}
+    >
 
       <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-2 rounded-lg border border-[var(--settings-theme-card-border)] px-3 py-2.5">
         <label
@@ -1103,7 +1097,7 @@ function DatabaseSlimmingSection({
           />
         </div>
       </div>
-    </SettingsBlock>
+    </SettingsField>
   );
 }
 

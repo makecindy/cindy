@@ -20,7 +20,7 @@ import {
 } from 'react';
 import { Check, ChevronDown, Volume2 } from 'lucide-react';
 
-import { SettingsBlock, SettingsCard, SettingsRow, SettingsSection } from '@/components/ui/settings-rows';
+import { SettingsBlock, SettingsCard, SettingsField, SettingsRow, SettingsSection } from '@/components/ui/settings-rows';
 import { Switch } from '@/components/ui/switch';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
@@ -338,15 +338,10 @@ export function AgentIslandSection() {
               }
             />
             {/* 显示器选择整宽放在说明下面，不是左右一行 */}
-            <SettingsBlock className="flex flex-col gap-3">
-              <div className="flex min-w-0 flex-col gap-1">
-                <p id={agentIslandSettings.displayLabel.targetId} className="text-13 font-medium text-[var(--settings-section-sublabel)]">
-                  {t(agentIslandSettings.displayLabel.titleKey)}
-                </p>
-                <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
-                  {t(agentIslandSettings.displayLabel.descriptionKey)}
-                </p>
-              </div>
+            <SettingsField
+              title={<span id={agentIslandSettings.displayLabel.targetId}>{t(agentIslandSettings.displayLabel.titleKey)}</span>}
+              hint={t(agentIslandSettings.displayLabel.descriptionKey)}
+            >
               <div className="relative min-w-0">
                 <select data-setting-id={agentIslandSettings.displayLabel.id}
                   value={displayTargetToOptionValue(displayTarget)}
@@ -381,7 +376,7 @@ export function AgentIslandSection() {
                   aria-hidden="true"
                 />
               </div>
-            </SettingsBlock>
+            </SettingsField>
           </>
         )}
       </SettingsCard>
