@@ -42,10 +42,194 @@ async function fixture(name: string) {
   const context = { agentKind: 'codex', workingDir, sessionId: 'task', sessionInstanceId: 'one' };
   const register = () => execute({ action: 'register', library_id: 'methods', sources: [source] }, context);
   const search = (query: string) => execute({ action: 'search', library_id: 'methods', query }, context);
-  return { home, source, put, state, embedding, execute, createCallback, context, register, search };
+  return { home, source, put, state, embedding, coordinator, execute, createCallback, context, register, search };
 }
 
 describe('native local Skill libraries', () => {
+  // Registration must not advertise an unusable route. Unit: first malformed source,
+  // then corrected registration; a foreign gateway must not alter an existing snapshot.
+  // Existing failed-replacement coverage only checks the already-published config/index.
+  it('installs the gateway only after a first registration succeeds', async () => {
+    const f = await fixture('failed-initial-gateway');
+    const broken = path.join(f.home, 'broken');
+    await fs.mkdir(broken);
+    await fs.writeFile(path.join(broken, 'SKILL.md'), 'Missing frontmatter');
+    expect(await f.execute({ action: 'register', library_id: 'methods', sources: [broken] }, f.context))
+      .toMatchObject({ ok: false, message: expect.stringContaining('frontmatter') });
+    const gateway = path.join(f.home, '.agents/skills/cindy-skill-library-methods/SKILL.md');
+    await expect(fs.stat(gateway)).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(await f.register()).toMatchObject({ ok: true });
+    expect(await fs.readFile(gateway, 'utf8')).toContain('search_local_skills');
+    expect(await f.search('字幕')).toMatchObject({ ok: true, matches: [{ name: 'video' }] });
+  });
+
+  it('rejects a conflicting gateway before changing the published library', async () => {
+    const f = await fixture('conflicting-gateway');
+    await f.register();
+    const library = path.join(f.home, 'owner/skill-libraries/methods');
+    const config = await fs.readFile(path.join(library, 'library.json'), 'utf8');
+    const index = await fs.readFile(path.join(library, 'index.json'), 'utf8');
+    const gateway = path.join(f.home, 'foreign-gateway');
+    await fs.mkdir(gateway);
+    await fs.writeFile(path.join(gateway, 'SKILL.md'), 'Existing unrelated Skill');
+    await f.put('audio', 'Music production');
+    expect(await f.execute({ action: 'register', library_id: 'methods', sources: [f.source], gateway_path: gateway }, f.context))
+      .toMatchObject({ ok: false, message: expect.stringContaining('different Skill') });
+    expect(await fs.readFile(path.join(library, 'library.json'), 'utf8')).toBe(config);
+    expect(await fs.readFile(path.join(library, 'index.json'), 'utf8')).toBe(index);
+    expect(await fs.readFile(path.join(gateway, 'SKILL.md'), 'utf8')).toBe('Existing unrelated Skill');
+  });
+
+  // Review 4506856284: a failed replacement must preserve the working registration.
+  // Unit: one valid Skill and one malformed replacement through the production callback.
+  it('preserves the registered library when a replacement source fails to build', async () => {
+    const f = await fixture('failed-registration');
+    expect(await f.register()).toMatchObject({ ok: true });
+    const library = path.join(f.home, 'owner/skill-libraries/methods');
+    const config = await fs.readFile(path.join(library, 'library.json'), 'utf8');
+    const index = await fs.readFile(path.join(library, 'index.json'), 'utf8');
+    const broken = path.join(f.home, 'broken');
+    await fs.mkdir(broken);
+    await fs.writeFile(path.join(broken, 'SKILL.md'), 'Missing frontmatter');
+    expect(await f.execute({ action: 'register', library_id: 'methods', sources: [broken] }, f.context))
+      .toMatchObject({ ok: false, message: expect.stringContaining('frontmatter') });
+    expect(await fs.readFile(path.join(library, 'library.json'), 'utf8')).toBe(config);
+    expect(await fs.readFile(path.join(library, 'index.json'), 'utf8')).toBe(index);
+    expect(await f.search('字幕')).toMatchObject({ ok: true, matches: [{ name: 'video' }] });
+  });
+
+  // Review 4506856288: queued original reads do not consume a refresh's result/error.
+  // Unit: hold one failing document embedding while a read of the old Skill queues.
+  it('reads the published original after a queued refresh fails', async () => {
+    const f = await fixture('read-after-failed-refresh');
+    const embed = vi.fn<SkillEmbeddingAdapter['embed']>(async texts => ({ vectors: texts.map(() => [1, 0]), modelUsed: 'model' }));
+    f.embedding.mockReturnValue({ identity: 'model', embed });
+    expect(await f.execute({ action: 'register', library_id: 'methods', sources: [f.source], embedding_model: 'model' }, f.context))
+      .toMatchObject({ ok: true });
+    const found = await f.search('字幕');
+    assertOk(found.ok);
+    const id = (found.matches as Array<{ id: string }>)[0].id;
+    await f.put('audio', '音乐制作');
+    let release!: () => void;
+    let started!: () => void;
+    const held = new Promise<void>(resolve => { release = resolve; });
+    const entered = new Promise<void>(resolve => { started = resolve; });
+    embed.mockImplementation(async () => { started(); await held; throw new Error('Embedding unavailable'); });
+    const refresh = f.execute({ action: 'refresh', library_id: 'methods' }, f.context);
+    await entered;
+    let queued!: () => void;
+    const enqueued = new Promise<void>(resolve => { queued = resolve; });
+    const set = f.coordinator.syncing.set.bind(f.coordinator.syncing);
+    const spy = vi.spyOn(f.coordinator.syncing, 'set').mockImplementation((key, value) => {
+      const result = set(key, value); queued(); return result;
+    });
+    try {
+      const read = f.execute({ action: 'read', library_id: 'methods', id }, f.context);
+      await enqueued;
+      release();
+      expect(await refresh).toMatchObject({ ok: false, message: 'Embedding unavailable' });
+      expect(await read).toMatchObject({ ok: true, content: expect.stringContaining('Original instructions for video') });
+      expect(embed.mock.calls.filter(([, type]) => type === 'document')).toHaveLength(2);
+    } finally { release(); spy.mockRestore(); }
+  });
+
+  // Native cancellation also covers keyword discovery, where no embedding callback runs.
+  // Unit: invalidate the task while reading one added original; retain both published files.
+  it.each(['refresh', 'register'] as const)('preserves publication when %s loses its task during discovery', async (action) => {
+    const f = await fixture(`cancel-discovery-${action}`);
+    expect(await f.register()).toMatchObject({ ok: true });
+    const library = path.join(f.home, 'owner/skill-libraries/methods');
+    const config = await fs.readFile(path.join(library, 'library.json'), 'utf8');
+    const index = await fs.readFile(path.join(library, 'index.json'), 'utf8');
+    await f.put('audio', 'Music production');
+    const read = fs.readFile.bind(fs);
+    const spy = vi.spyOn(fs, 'readFile').mockImplementation(async (...args) => {
+      const result = await read(...args);
+      if (String(args[0]) === path.join(f.source, 'audio/SKILL.md')) f.state.current = false;
+      return result;
+    });
+    try {
+      const result = action === 'register' ? await f.register()
+        : await f.execute({ action, library_id: 'methods' }, f.context);
+      expect(result).toMatchObject({ errorCode: 'CANCELLED' });
+      expect(await fs.readFile(path.join(library, 'library.json'), 'utf8')).toBe(config);
+      expect(await fs.readFile(path.join(library, 'index.json'), 'utf8')).toBe(index);
+    } finally { spy.mockRestore(); }
+  });
+
+  // Independent operations must not inherit a predecessor's failure. Existing shared
+  // search coverage only joined the same operation. Unit: failed v1→v2 incremental
+  // sync followed by explicit rebuild; old-source failure followed by a new registration.
+  it('executes an explicit rebuild queued behind a failed incremental synchronization', async () => {
+    const f = await fixture('queued-rebuild');
+    const embed = vi.fn<SkillEmbeddingAdapter['embed']>(async texts => ({ vectors: texts.map(() => [1, 0]), modelUsed: 'v1' }));
+    f.embedding.mockReturnValue({ identity: 'model', embed });
+    expect(await f.execute({ action: 'register', library_id: 'methods', sources: [f.source], embedding_model: 'model' }, f.context))
+      .toMatchObject({ ok: true });
+    await f.put('audio', 'Music production');
+    let release!: () => void;
+    let entered!: () => void;
+    const held = new Promise<void>(resolve => { release = resolve; });
+    const started = new Promise<void>(resolve => { entered = resolve; });
+    embed.mockImplementationOnce(async texts => {
+      entered(); await held;
+      return { vectors: texts.map(() => [1, 0]), modelUsed: 'v2' };
+    });
+    embed.mockImplementation(async texts => ({ vectors: texts.map(() => [1, 0]), modelUsed: 'v2' }));
+    const first = f.search('method');
+    await started;
+    let queued!: () => void;
+    const enqueued = new Promise<void>(resolve => { queued = resolve; });
+    const set = f.coordinator.syncing.set.bind(f.coordinator.syncing);
+    const spy = vi.spyOn(f.coordinator.syncing, 'set').mockImplementation((key, value) => {
+      const result = set(key, value); queued(); return result;
+    });
+    try {
+      const rebuild = f.execute({ action: 'refresh', library_id: 'methods', rebuild: true }, f.context);
+      await enqueued; release();
+      expect(await first).toMatchObject({ ok: false, message: expect.stringContaining('rebuild') });
+      expect(await rebuild).toMatchObject({ ok: true, vectors: { embedded: 2, reused: 0 } });
+      expect(await f.search('Music')).toMatchObject({ ok: true, mode: 'hybrid' });
+    } finally { release(); spy.mockRestore(); await first; }
+  });
+
+  it('searches a new registration after the pending old generation fails', async () => {
+    const f = await fixture('failed-old-generation');
+    await f.register();
+    await fs.writeFile(path.join(f.source, 'video/SKILL.md'), 'Missing frontmatter');
+    const unlink = fs.unlink.bind(fs);
+    let release!: () => void;
+    let entered!: () => void;
+    const held = new Promise<void>(resolve => { release = resolve; });
+    const unlocked = new Promise<void>(resolve => { entered = resolve; });
+    let paused = false;
+    const unlockSpy = vi.spyOn(fs, 'unlink').mockImplementation(async (...args) => {
+      await unlink(...args);
+      if (!paused && String(args[0]).endsWith('library.lock')) {
+        paused = true; entered(); await held;
+      }
+    });
+    const first = f.search('字幕');
+    await unlocked;
+    let queueSpy: { mockRestore(): void } | undefined;
+    try {
+      const source = path.join(f.home, 'replacement');
+      await fs.mkdir(source);
+      await fs.writeFile(path.join(source, 'SKILL.md'), '---\nname: audio\ndescription: Music production\n---\nInstructions\n');
+      expect(await f.execute({ action: 'register', library_id: 'methods', sources: [source] }, f.context)).toMatchObject({ ok: true });
+      let queued!: () => void;
+      const enqueued = new Promise<void>(resolve => { queued = resolve; });
+      const set = f.coordinator.syncing.set.bind(f.coordinator.syncing);
+      queueSpy = vi.spyOn(f.coordinator.syncing, 'set').mockImplementation((key, value) => {
+        const result = set(key, value); queued(); return result;
+      });
+      const next = f.search('Music');
+      await enqueued; release();
+      expect(await first).toMatchObject({ ok: false, message: expect.stringContaining('frontmatter') });
+      expect(await next).toMatchObject({ ok: true, matches: [{ name: 'audio' }] });
+    } finally { release(); unlockSpy.mockRestore(); queueSpy?.mockRestore(); await first; }
+  });
+
   it('keeps shared callback state separate for different libraries and owners', async () => {
     const f = await fixture('shared-scopes');
     const second = f.createCallback();

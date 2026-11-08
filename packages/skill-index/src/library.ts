@@ -102,6 +102,8 @@ export interface LibrarySyncOptions {
   config?: LibraryConfig;
   rebuild?: boolean;
   embedding?: SkillEmbeddingAdapter;
+  /** Host lifecycle check after building, immediately before publishing the snapshot. */
+  beforePublish?: () => void;
 }
 
 export async function syncLibrary(library: string, options: LibrarySyncOptions = {}) {
@@ -120,6 +122,7 @@ export async function syncLibraryUnlocked(library: string, options: LibrarySyncO
   const changes = index.sync(await discoverSkills(config.sources));
   const embedding = options.embedding ?? (config.embedding ? createSkillEmbeddingAdapter(config.embedding) : undefined);
   const vectors = embedding ? await index.buildVectors(embedding, options) : undefined;
+  options.beforePublish?.();
   await writeJson(path.join(library, 'index.json'), index.snapshot());
   return { ...changes, skills: index.snapshot().entries.length, ...(vectors ? { vectors } : {}) };
 }

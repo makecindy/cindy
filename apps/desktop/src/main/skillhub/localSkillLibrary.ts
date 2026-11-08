@@ -104,15 +104,22 @@ export function createLocalSkillLibraryTools(deps: LocalSkillLibraryDependencies
           // An existing gateway can be reused only when it is exactly this library's route.
           const gateway = helperDiscoverySkill(request.library_id, `cindy-skill-library-${request.library_id}`);
           const gatewayFile = path.join(gatewayPath, 'SKILL.md');
+          try {
+            if (await fs.readFile(gatewayFile, 'utf8') !== gateway) throw new Error('The gateway already contains a different Skill.');
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+          }
+          checkCurrent();
+          const changes = await syncLibraryUnlocked(library, { config, embedding, rebuild: request.rebuild, beforePublish: checkCurrent });
+          await writeJson(path.join(library, 'library.json'), config);
+          synchronized.delete(libraryKey);
+          // Make the route discoverable only once its library has been published.
           await fs.mkdir(gatewayPath, { recursive: true });
           try { await fs.writeFile(gatewayFile, gateway, { flag: 'wx' }); }
           catch (error) {
             if ((error as NodeJS.ErrnoException).code !== 'EEXIST' || await fs.readFile(gatewayFile, 'utf8') !== gateway) throw error;
           }
-          checkCurrent();
-          await writeJson(path.join(library, 'library.json'), config);
-          synchronized.delete(libraryKey);
-          return syncLibraryUnlocked(library, { embedding, rebuild: request.rebuild });
+          return changes;
         });
         checkCurrent();
         return { ok: true, library_id: request.library_id, gateway_path: gatewayPath, ...result,
@@ -156,7 +163,7 @@ export function createLocalSkillLibraryTools(deps: LocalSkillLibraryDependencies
           const needsSync = request.action === 'refresh' || (request.action === 'search'
             && (seen?.generation !== generation || !seen.sessions.has(sessionKey)));
           const changes = needsSync ? await syncLibraryUnlocked(library, {
-            embedding, rebuild: request.action === 'refresh' && request.rebuild,
+            embedding, rebuild: request.action === 'refresh' && request.rebuild, beforePublish: checkWork,
           }) : undefined;
           const index = await loadIndex(library);
           checkWork();
@@ -175,11 +182,9 @@ export function createLocalSkillLibraryTools(deps: LocalSkillLibraryDependencies
           && (seen?.generation !== requestedGeneration || !seen.sessions.has(sessionKey)));
         const work: LibraryWork = { participants: new Set([isCurrent]), cancelled: false };
         const previous = pending;
-        // A new operation may follow an abandoned one; API failures are never retried.
-        const promise = previous ? previous.promise.then(() => capture(work), (error) => {
-          if (previous.work.cancelled) return capture(work);
-          throw error;
-        }) : capture(work);
+        // Joining searches share a result above. A distinct operation only waits for
+        // its predecessor to finish; that predecessor's failure is not its result.
+        const promise = previous ? previous.promise.then(() => capture(work), () => capture(work)) : capture(work);
         pending = { generation: requestedGeneration, synchronize, work, promise };
         syncing.set(libraryKey, pending);
       }

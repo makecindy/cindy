@@ -36,14 +36,21 @@ function embedding(identity = 'test:model:3'): SkillEmbeddingAdapter & { embed: 
 }
 
 describe('SkillIndex task discovery', () => {
-  it.each(['C++', '帮我用 C++', 'C#', '使用 C# 写程序'])('retains symbolic language names in %s', async (query) => {
+  // PR #9374: one-letter language tokens disappeared in normal task queries.
+  // Extend the existing production search matrix with C/R and technical boundaries.
+  it.each<[string, string[]]>([
+    ['C++', ['cpp']], ['帮我用 C++', ['cpp']], ['C#', ['csharp']], ['使用 C# 写程序', ['csharp']],
+    ['C', ['c']], ['用 C 编程', ['c']], ['R', ['r']], ['用 R 拟合模型', ['r']], ['a i', []],
+  ])('retains complete language names in %s', async (query, expected) => {
     const index = new SkillIndex();
     index.sync([
       { ...entries[0]!, id: 'cpp', name: 'cpp-specialist', description: 'Develop C++ applications.' },
       { ...entries[0]!, id: 'csharp', name: 'dotnet-specialist', description: 'Develop applications.', tags: ['C#'] },
-      { ...entries[0]!, id: 'partial', name: 'other', description: 'EC++ SC# C++suffix C#suffix' },
+      { ...entries[0]!, id: 'c', name: 'c-development', description: 'Develop C applications.' },
+      { ...entries[0]!, id: 'r', name: 'r-statistics', description: 'Statistical modeling.', tags: ['R'] },
+      { ...entries[0]!, id: 'partial', name: 'other', description: 'EC++ SC# C++suffix C#suffix ARC CR C_suffix a i' },
     ]);
-    expect((await index.search(query)).matches.map(item => item.id)).toEqual([query.includes('++') ? 'cpp' : 'csharp']);
+    expect((await index.search(query)).matches.map(item => item.id)).toEqual(expected);
   });
 
   it.each([

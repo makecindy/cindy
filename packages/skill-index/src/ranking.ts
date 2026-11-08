@@ -1,7 +1,7 @@
 import type { SkillEntry } from './types.js';
 
 const segmenter = new Intl.Segmenter('zh', { granularity: 'word' });
-const STOP_WORDS = new Set(['the', 'and', 'for', 'with', 'please', 'help', '帮我', '帮忙', '一个', '一下', '如何', '怎么', '进行']);
+const STOP_WORDS = new Set(['a', 'i', 'the', 'and', 'for', 'with', 'please', 'help', '帮我', '帮忙', '一个', '一下', '如何', '怎么', '进行']);
 
 export function normalizeText(text: string): string {
   return text.normalize('NFKC').toLowerCase().replace(/\s+/gu, ' ').trim();
@@ -21,6 +21,10 @@ function queryTerms(query: string): string[] {
   for (const term of query.match(/(?<![a-z0-9_+#])[a-z][a-z0-9]*(?:\+\+|#)(?![a-z0-9_+#])/gu) ?? []) {
     terms.add(term);
   }
+  // Single-letter languages are words too, but C must remain distinct from C++/C#.
+  for (const term of query.match(/(?<![a-z0-9_+#])[a-z](?![a-z0-9_+#])/gu) ?? []) {
+    if (!STOP_WORDS.has(term)) terms.add(term);
+  }
   for (const part of segmenter.segment(query)) {
     if (part.isWordLike && part.segment.length > 1 && !STOP_WORDS.has(part.segment)) {
       terms.add(part.segment);
@@ -39,7 +43,7 @@ function queryTerms(query: string): string[] {
 }
 
 function containsTerm(text: string, term: string): boolean {
-  if (/^[a-z][a-z0-9]*(?:\+\+|#)$/u.test(term)) {
+  if (/^[a-z]$/u.test(term) || /^[a-z][a-z0-9]*(?:\+\+|#)$/u.test(term)) {
     const escaped = term.replace(/\+/g, '\\+');
     return new RegExp(`(^|[^a-z0-9_+#])${escaped}(?=$|[^a-z0-9_+#])`, 'u').test(text);
   }

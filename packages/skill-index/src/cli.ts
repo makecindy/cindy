@@ -20,6 +20,16 @@ Install only the generated gateway in Cindy's shared .agents/skills directory.
 API keys are read from the selected environment variable, never written to the library.
 `;
 
+/** A gateway may not exist yet; resolve links in its nearest existing ancestor. */
+async function canonicalOutputPath(directory: string): Promise<string> {
+  try { return await fs.realpath(directory); }
+  catch (error) {
+    const parent = path.dirname(directory);
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT' || parent === directory) throw error;
+    return path.join(await canonicalOutputPath(parent), path.basename(directory));
+  }
+}
+
 export async function runCli(args: string[], executable: string): Promise<unknown> {
   const { values, positionals } = parseArgs({
     args, allowPositionals: true,
@@ -56,18 +66,24 @@ export async function runCli(args: string[], executable: string): Promise<unknow
       return { name: path.basename(sourcePath), path: sourcePath };
     }));
     return withLibraryWrite(library, async () => {
+      let config: LibraryConfig;
       if (command === 'init') {
-        const config: LibraryConfig = { version: 1, sources };
-        await fs.mkdir(library, { recursive: true });
-        await fs.writeFile(configPath, JSON.stringify(config, null, 2) + '\n', { flag: 'wx', mode: 0o600 });
+        try {
+          await fs.access(configPath);
+          throw Object.assign(new Error(`Skill library already exists: ${library}`), { code: 'EEXIST' });
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+        }
+        config = { version: 1, sources };
       } else {
-        const config = await readConfig(library);
+        config = await readConfig(library);
         for (const source of sources) {
           if (!config.sources.some(existing => existing.path === source.path)) config.sources.push(source);
         }
-        await writeJson(configPath, config);
       }
-      return syncLibraryUnlocked(library);
+      const result = await syncLibraryUnlocked(library, { config });
+      await writeJson(configPath, config);
+      return result;
     });
   }
   if (command === 'sync') return syncLibrary(library, { rebuild: values.rebuild });
@@ -102,13 +118,22 @@ export async function runCli(args: string[], executable: string): Promise<unknow
     offset: integer(values.offset, 'offset'), chars: integer(values.chars, 'chars'), expectedSha256: values.sha256,
   });
   if (command === 'gateway') {
-    await readConfig(library);
-    const output = path.resolve(required(values.output, 'output'));
-    const content = discoverySkill(library, path.resolve(executable), values.name);
-    await fs.mkdir(output, { recursive: true });
-    const filePath = path.join(output, 'SKILL.md');
-    await fs.writeFile(filePath, content, { flag: 'wx' });
-    return { filePath, library };
+    return withLibraryWrite(library, async () => {
+      const config = await readConfig(library);
+      const output = await canonicalOutputPath(path.resolve(required(values.output, 'output')));
+      const contains = (relative: string) => relative === '' || (!path.isAbsolute(relative) && relative !== '..' && !relative.startsWith(`..${path.sep}`));
+      for (const source of config.sources) {
+        const original = await fs.realpath(source.path);
+        if (contains(path.relative(original, output)) || contains(path.relative(output, original))) {
+          throw new Error('Place the gateway outside the indexed source directories.');
+        }
+      }
+      const content = discoverySkill(library, path.resolve(executable), values.name);
+      await fs.mkdir(output, { recursive: true });
+      const filePath = path.join(output, 'SKILL.md');
+      await fs.writeFile(filePath, content, { flag: 'wx' });
+      return { filePath, library };
+    });
   }
   throw new Error(`Unknown command: ${command}. Use --help.`);
 }

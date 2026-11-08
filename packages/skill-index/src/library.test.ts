@@ -107,6 +107,47 @@ describe('local Skill library workflow', () => {
     await expect(runCli(['search', '--library', library], executable)).rejects.toThrow('--query');
   });
 
+  // PR #9374: failed init/add published unusable sources before discovery finished.
+  // Existing success/concurrency coverage missed failure persistence. Unit tier:
+  // one malformed source through runCli must leave the previous library usable.
+  it.each(['init', 'add'])('preserves the usable state after a failed %s', async (command) => {
+    const target = path.join(root, `failed-${command}`);
+    const invalid = path.join(root, `invalid-${command}`);
+    await fs.mkdir(invalid);
+    await fs.writeFile(path.join(invalid, 'SKILL.md'), '# Missing frontmatter');
+    if (command === 'add') await runCli(['init', '--library', target, '--source', source], executable);
+    const previous = command === 'add' ? await readConfig(target) : undefined;
+    await expect(runCli([command, '--library', target, '--source', invalid], executable)).rejects.toThrow('frontmatter');
+    if (previous) {
+      expect(await readConfig(target)).toEqual(previous);
+      expect(await runCli(['sync', '--library', target], executable)).toMatchObject({ skills: 2 });
+    } else {
+      await expect(readConfig(target)).rejects.toMatchObject({ code: 'ENOENT' });
+      expect(await runCli(['init', '--library', target, '--source', source], executable)).toMatchObject({ skills: 2 });
+    }
+    expect(await runCli(['search', '--library', target, '--query', 'motion'], executable)).toMatchObject({ matches: [expect.objectContaining({ name: 'motion-feel' })] });
+  });
+
+  // Gateway placement inside/above its source makes discovery index its own route
+  // or hide every original at the leaf boundary. Existing gateways were disjoint.
+  // Unit tier: real CLI, including an existing junction with a not-yet-created child.
+  it('rejects gateway placement overlapping physical source directories', async () => {
+    const container = path.join(root, 'gateway-overlap');
+    const originals = path.join(container, 'originals');
+    const target = path.join(root, 'gateway-overlap-library');
+    await fs.mkdir(originals, { recursive: true });
+    await fs.cp(source, originals, { recursive: true });
+    await runCli(['init', '--library', target, '--source', originals], executable);
+    for (const output of [originals, path.join(originals, 'new', 'gateway'), container]) {
+      await expect(runCli(['gateway', '--library', target, '--output', output], executable)).rejects.toThrow('outside');
+      await expect(fs.stat(path.join(output, 'SKILL.md'))).rejects.toMatchObject({ code: 'ENOENT' });
+    }
+    const alias = path.join(root, 'gateway-source-alias');
+    await fs.symlink(originals, alias, 'junction');
+    await expect(runCli(['gateway', '--library', target, '--output', path.join(alias, 'new', 'gateway')], executable)).rejects.toThrow('outside');
+    expect(await runCli(['sync', '--library', target], executable)).toMatchObject({ skills: 2 });
+  });
+
   it('uses the host embedding adapter and a short native helper route', async () => {
     const target = path.join(root, 'host-library');
     await runCli(['init', '--library', target, '--source', source], executable);
