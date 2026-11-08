@@ -43,8 +43,12 @@ function setMaterial(win: BrowserWindow, material: string | null): void {
 }
 
 function syncSidebar(win: BrowserWindow, getNative: () => NativeDesktopBlur | null): void {
-  const material = backdropConfigs.get(win)?.sidebarMaterial;
-  const cssWidth = material ? sidebarWidths.get(win) ?? 0 : 0;
+  const config = backdropConfigs.get(win);
+  const material = config?.sidebarMaterial;
+  // A radius that could not be applied leaves the whole-window system material as
+  // the fallback; a masked sidebar must neither replace nor clear it.
+  const radiusFailed = config?.desktopBlurRadius !== undefined && !appliedRadii.has(win);
+  const cssWidth = material && !radiusFailed ? sidebarWidths.get(win) ?? 0 : 0;
   if (!cssWidth && !activeSidebars.has(win)) return;
   const width = Math.min(cssWidth * win.webContents.getZoomFactor(), win.getContentBounds().width, 16384);
   const dark = material === 'dark';
@@ -55,7 +59,7 @@ function syncSidebar(win: BrowserWindow, getNative: () => NativeDesktopBlur | nu
       setMaterial(win, 'hud');
       const previous = activeSidebars.get(win);
       if (previous?.width === width && previous.dark === dark && !sidebarNeedsSync.has(win)) return;
-    } else if (backdropConfigs.get(win)?.desktopBlurRadius !== undefined) setMaterial(win, null);
+    } else if (config?.desktopBlurRadius !== undefined && !radiusFailed) setMaterial(win, null);
     if (getNative()?.setSidebar(win.getNativeWindowHandle(), width, dark)) {
       if (width > 0) activeSidebars.set(win, { width, dark });
       else activeSidebars.delete(win);
@@ -64,12 +68,7 @@ function syncSidebar(win: BrowserWindow, getNative: () => NativeDesktopBlur | nu
     }
   } catch { /* An unavailable native material keeps the readable CSS tint. */ }
   // Never leave an unmasked fixed material over the adjustable main backdrop.
-  // When the radius itself could not be applied, the system material is the
-  // documented fallback and must survive a sidebar failure.
-  if (width > 0) {
-    const config = backdropConfigs.get(win);
-    setMaterial(win, appliedRadii.has(win) || !config ? null : config.vibrancy);
-  }
+  if (width > 0) setMaterial(win, null);
   if (!warnedWindows.has(win)) {
     warnedWindows.add(win);
     log.warn('Sidebar material unavailable; retaining sidebar tint');
@@ -86,6 +85,14 @@ export function setMacSidebarWidth(
     || rawWidth < 0 || rawWidth > 16384) return;
   sidebarWidths.set(win, rawWidth);
   syncSidebar(win, getNative);
+}
+
+/** Page zoom changes the physical sidebar width without changing its CSS width. */
+export function refreshMacSidebarGeometry(
+  win: BrowserWindow,
+  getNative: () => NativeDesktopBlur | null = load,
+): void {
+  if (!win.isDestroyed()) syncSidebar(win, getNative);
 }
 
 /** Main and secondary windows use the same radius path. Artwork clears the

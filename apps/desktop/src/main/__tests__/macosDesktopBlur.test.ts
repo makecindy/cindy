@@ -1,6 +1,6 @@
 import type { BrowserWindow } from 'electron';
 import { describe, expect, it, vi } from 'vitest';
-import { applyMacWindowBackdrop, setMacSidebarWidth } from '../macosDesktopBlur';
+import { applyMacWindowBackdrop, refreshMacSidebarGeometry, setMacSidebarWidth } from '../macosDesktopBlur';
 
 // Unit regression for the nonzero -> nonzero slider bug: exercise the production
 // dispatcher, preserving radius and window identity. The existing resolver tests
@@ -86,6 +86,26 @@ describe('Mac desktop blur application', () => {
     setMacSidebarWidth(win as unknown as BrowserWindow, 260, () => null);
     applyMacWindowBackdrop(win as unknown as BrowserWindow, config, () => null);
     expect(win.setVibrancy.mock.lastCall).toEqual(['under-window']);
+  });
+
+  // Unit: addon loads but the radius call fails. The whole-window fallback stays and no masked
+  // sidebar replaces it; page zoom must reach the native mask without a CSS width change.
+  it('keeps the whole-window fallback when only the radius fails, and follows page zoom', () => {
+    const win = windowFixture();
+    const bw = win as unknown as BrowserWindow;
+    const native = { apply: vi.fn(() => false), setSidebar: vi.fn(() => true) };
+    const config = { vibrancy: 'under-window', backgroundColor: '#00000000', desktopBlurRadius: 5,
+      sidebarMaterial: 'light' as const };
+    setMacSidebarWidth(bw, 260, () => native);
+    applyMacWindowBackdrop(bw, config, () => native);
+    expect(native.setSidebar).not.toHaveBeenCalled();
+    expect(win.setVibrancy.mock.lastCall).toEqual(['under-window']);
+    native.apply.mockReturnValue(true);
+    applyMacWindowBackdrop(bw, config, () => native);
+    expect(native.setSidebar).toHaveBeenLastCalledWith(win.getNativeWindowHandle(), 260, false);
+    win.webContents.getZoomFactor.mockReturnValue(1.5);
+    refreshMacSidebarGeometry(bw, () => native);
+    expect(native.setSidebar).toHaveBeenLastCalledWith(win.getNativeWindowHandle(), 390, false);
   });
 
   it('retries a failed sidebar mask and replaces it when returning to a full system material', () => {
