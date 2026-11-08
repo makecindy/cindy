@@ -177,7 +177,7 @@ describe('PermissionPrompt i18n', () => {
     );
 
     expect(screen.getByText(
-      '自动审批模型网关额度已耗尽，暂时无法自动判断。请检查用量或计费，再确认这次操作。',
+      '自动审批模型网关配额已耗尽，暂时无法自动判断。请检查用量或计费，再确认这次操作。',
     )).toBeTruthy();
     expect(screen.getByText(/自动审批需要你决定：.*quota is exhausted/)).toBeTruthy();
   });
