@@ -8,8 +8,6 @@
  */
 
 import { app } from 'electron';
-import { authorizeGroupTool, GroupToolAuthorizationError } from './botGroupToolAuthorization.js';
-import { readChannelToolScope, type ChannelToolScope } from '../im/shared/channelToolScope.js';
 import { collectTeammateGuideMount } from './teammateGuideStore.js';
 import { botSkillRuntimeSummary, projectBotSkillMounts } from './botSkillRuntimeProjection.js';
 import { queryBotSkillIndex } from './botSkillQueryIndex.js';
@@ -80,28 +78,6 @@ export interface BotSkillServiceDeps {
   >;
 }
 
-/**
- * IM 专线(伙伴自有 Telegram / 飞书机器人的群、话题、外部私聊)上的技能访问判定。
- *
- * 专线与主任务共享同一个伙伴的 Profile / 家, 伙伴在专线里学到的做法同样该归自己名下 ——
- * 否则主人在群里让它「记成技能」只能得到「当前任务只读」。但群里谁都能说话: 写入技能
- * 等同改伙伴以后的做法, 只认主人触发的轮次(与渠道工具的管理动作同一口径); 读技能表
- * 不改任何东西, 专线上任何一轮都可以。身份只来自逐轮渠道作用域租约, 不来自模型参数;
- * 没有租约(桌面上没有人会打开隐藏专线)一律拒绝。
- */
-export function authorizeChannelLaneSkillAccess(
-  scope: Pick<ChannelToolScope, 'requesterIsOwner'> | null,
-  readOnly: boolean,
-): { ok: true } | { ok: false; errorCode: string; message: string } {
-  if (!scope) {
-    return { ok: false, errorCode: 'BOT_SESSION_READ_ONLY', message: '当前专线轮次没有渠道作用域，不能读写伙伴技能' };
-  }
-  if (!readOnly && !scope.requesterIsOwner) {
-    return { ok: false, errorCode: 'BOT_SKILL_OWNER_ONLY', message: '只有主人触发的轮次才能保存伙伴技能；这一轮由其他成员触发' };
-  }
-  return { ok: true };
-}
-
 interface BotSkillOwnerBoundary {
   userDataDir: string;
   scopeKey: string | null;
@@ -157,8 +133,6 @@ async function skillHomeOf(
 
 async function defaultResolveBotId(
   callerSessionId: string,
-  readOnly = false,
-  callerSessionInstanceId?: string,
 ): Promise<
   { ok: true; botId: string; canonicalSessionId: string | null; refresh?: () => Promise<void> } | { ok: false; errorCode: string; message: string }
 > {
@@ -167,7 +141,6 @@ async function defaultResolveBotId(
     .select({
       botId: botSessionLinks.botId,
       canonicalSessionId: botProfiles.canonicalSessionId,
-      role: botSessionLinks.role,
       sessionStatus: sessions.status,
       remoteHostId: sessions.remoteHostId,
       profileStatus: botProfiles.status,
@@ -184,28 +157,16 @@ async function defaultResolveBotId(
   if (row.sessionStatus !== 'active' || row.profileStatus !== 'active' || row.linkArchivedAt !== null) {
     return { ok: false, errorCode: 'BOT_SESSION_INACTIVE', message: '已归档的 Bot 任务不能沉淀技能' };
   }
-  const authority = row.role === 'group' && readOnly
-    ? await authorizeGroupTool(callerSessionId, row.botId, 'read-self') : null;
-  if (row.role === 'channel') {
-    const laneAccess = authorizeChannelLaneSkillAccess(
-      readChannelToolScope({ sessionId: callerSessionId, sessionInstanceId: callerSessionInstanceId }),
-      readOnly,
-    );
-    if (!laneAccess.ok) return laneAccess;
-  } else if (row.role !== 'canonical' && row.role !== 'thread' && row.role !== 'routine' && row.role !== 'delegation' && !authority) {
-    return { ok: false, errorCode: 'BOT_SESSION_READ_ONLY', message: '当前 Bot 历史任务为只读状态' };
-  }
   // Runtime hydration cannot mount the local personal shelf on an SSH host.
   // Reject before migration/read/write and before refreshing the local canonical.
   // Device-link callers executing on this desktop still have no remoteHostId.
   if (row.remoteHostId) {
     return { ok: false, errorCode: 'REMOTE_SKILLS_UNAVAILABLE', message: '当前远端任务尚未挂载伙伴自有 Skill 存储，不能读取或保存本机 Skill，也不能承诺远端生效' };
   }
-  return { ok: true, botId: row.botId, canonicalSessionId: row.canonicalSessionId, ...authority };
+  return { ok: true, botId: row.botId, canonicalSessionId: row.canonicalSessionId };
 }
 
 function storeError(cause: unknown): { ok: false; errorCode: string; message: string } {
-  if (cause instanceof GroupToolAuthorizationError) return { ok: false, errorCode: cause.code, message: cause.message };
   if (cause instanceof BotSkillStoreError) {
     return { ok: false, errorCode: cause.errorCode, message: cause.message };
   }
@@ -243,7 +204,7 @@ export async function saveBotSkillForSession(
   try {
     const boundary = captureOwnerBoundary(deps);
     const owner = await (deps.resolveBotId
-      ?? ((id, instanceId) => defaultResolveBotId(id, false, instanceId)))(
+      ?? defaultResolveBotId)(
       params.callerSessionId, params.callerSessionInstanceId,
     );
     if (!owner.ok) return owner;
@@ -284,7 +245,7 @@ export async function listBotSkillsForSession(
   try {
     const boundary = captureOwnerBoundary(deps);
     const owner = await (deps.resolveBotId
-      ?? ((id, instanceId) => defaultResolveBotId(id, true, instanceId)))(
+      ?? defaultResolveBotId)(
       params.callerSessionId, params.callerSessionInstanceId,
     );
     if (!owner.ok) return owner;

@@ -23,11 +23,6 @@ import type {
 
 const MAX_MESSAGE_CHARS = 16_000;
 
-/** Routine lanes speak as their companion, with the same per-turn tool authorization. */
-function isCompanionMessageSource(role: string | null | undefined): boolean {
-  return role === 'canonical' || role === 'routine';
-}
-
 /** Teammates on the account's other computers, read through device-link's account and control gates. */
 export interface TeammateDirectory {
   list(): Promise<{
@@ -49,7 +44,7 @@ export interface BotDirectMessageServiceDeps {
 }
 
 /** Local teammates with their main chat, the address send_to_session takes. */
-async function activeRoster(beforeReturn?: () => Promise<void>): Promise<Array<{ id: string; name: string; sessionId?: string }>> {
+async function activeRoster(): Promise<Array<{ id: string; name: string; sessionId?: string }>> {
   const db = getDbClient().drizzle;
   const [roster, mains] = await Promise.all([
     db.select({ id: botProfiles.id, name: botProfiles.displayName })
@@ -62,7 +57,6 @@ async function activeRoster(beforeReturn?: () => Promise<void>): Promise<Array<{
       .where(and(eq(botSessionLinks.role, 'canonical'), isNull(botSessionLinks.archivedAt),
         eq(sessions.source, 'bot'), eq(sessions.status, 'active'))),
   ]);
-  await beforeReturn?.();
   const mainOf = new Map(mains.map(row => [row.botId, row.sessionId]));
   // Demoted copies run on another computer, where list_agents finds them remotely.
   return roster.filter(row => !isCompanionShadowed(row.id)).map(row => {
@@ -177,19 +171,12 @@ export function createBotDirectMessageService(deps: BotDirectMessageServiceDeps)
   const listAgents = async (callerSessionId: string) => {
     const scope = deps.captureOwnerScope?.();
     const caller = await loadCaller(callerSessionId);
-    const groupAuthority = caller?.role === 'group'
-      ? await authorizeGroupTool(callerSessionId, caller.botId, 'owner-action') : null;
-    if (!caller || (!groupAuthority && !isCompanionMessageSource(caller.role)) || caller.linkArchivedAt !== null
+    if (!caller || caller.linkArchivedAt !== null
       || caller.sessionSource !== 'bot' || caller.sessionStatus !== 'active' || caller.botStatus !== 'active') {
-      return { ok: false as const, errorCode: 'NOT_A_BOT_SESSION', message: 'An active canonical teammate is required' };
+      return { ok: false as const, errorCode: 'NOT_A_BOT_SESSION', message: 'An active teammate task is required' };
     }
-    const local = (await activeRoster(groupAuthority?.refresh)).filter(row => row.id !== caller.botId)
+    const local = (await activeRoster()).filter(row => row.id !== caller.botId)
       .map(({ sessionId, ...row }) => ({ ...row, local: true, ...(sessionId ? { session_id: sessionId } : {}) }));
-    if (groupAuthority) {
-      if (scope !== undefined && deps.isOwnerScopeCurrent && !deps.isOwnerScopeCurrent(scope))
-        return { ok: false as const, errorCode: 'OWNER_CHANGED', message: t('groupTools.ownerChanged') };
-      return { ok: true as const, agents: local, unavailableDevices: [] };
-    }
     let remote: Awaited<ReturnType<TeammateDirectory['list']>> = { agents: [], unavailableDevices: [] };
     let discoveryError: string | undefined;
     try {

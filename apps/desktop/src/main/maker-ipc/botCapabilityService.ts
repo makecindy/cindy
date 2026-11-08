@@ -16,7 +16,6 @@ import type { BotProfileRuntimeDeps } from './botProfileRuntime.js';
 import type { BotModelRoute } from '../../shared/botModelChain.js';
 import { readEffectiveBotModelChain, readExplicitBotModelChain } from '../maker-host/bot-model-chain-settings-store.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
-import { authorizeGroupTool, GroupToolAuthorizationError } from './botGroupToolAuthorization.js';
 import {
   isBotSystemSkillId, isBotSystemSkillOn, readBotSystemSkillsOff, withBotSystemSkill, type BotSystemSkillId,
 } from '../../shared/botSystemSkills.js';
@@ -60,8 +59,8 @@ function featureEntries(config: Record<string, unknown>): Entry[] {
 const strings = (value: unknown): string[] =>
   Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === 'string') : [];
 
-/** Only the live owner may select capabilities; no caller-supplied Bot or connection config. */
-async function context(callerSessionId: string, opts?: { allowPaused?: boolean; readScope?: 'self' | 'owner' }) {
+/** Any of the teammate's own chats manages it, like a task in its project; no caller-supplied Bot or connection config. */
+async function context(callerSessionId: string, opts?: { allowPaused?: boolean }) {
   const owner = activeOwnerScopeKey();
   const assertOwner = () => {
     if (isAppSessionBoundaryPending() || activeOwnerScopeKey() !== owner)
@@ -99,17 +98,12 @@ async function context(callerSessionId: string, opts?: { allowPaused?: boolean; 
     .where(eq(botSessionLinks.sessionId, callerSessionId))
     .limit(1);
   assertOwner();
-  const groupAuthority = row?.role === 'group' && opts?.readScope
-    ? await authorizeGroupTool(callerSessionId, row.botId, opts.readScope === 'self' ? 'read-self' : 'owner-action') : null;
-  assertOwner();
   const profileAllowed =
     row?.profileStatus === 'active' ||
     (opts?.allowPaused === true && row?.profileStatus === 'paused');
   if (
     !row ||
     row.source !== 'bot' ||
-    // The owner's Bot Chat: the current main Chat or one of its private-chat topics.
-    (!groupAuthority && row.role !== 'thread' && row.role !== 'routine' && (row.role !== 'canonical' || row.canonicalSessionId !== callerSessionId)) ||
     row.archivedAt !== null ||
     row.sessionStatus !== 'active' ||
     !profileAllowed
@@ -121,11 +115,7 @@ async function context(callerSessionId: string, opts?: { allowPaused?: boolean; 
     parsed && typeof parsed === 'object' && !Array.isArray(parsed)
       ? (parsed as Record<string, unknown>)
       : {};
-  return { ...row, config: normalizeBotToolCapabilities(config), canReadOwnerModels: !groupAuthority || groupAuthority.mode === 'owner', assertOwner: () => {
-    assertOwner(); groupAuthority?.assertCurrent();
-  }, refresh: async () => {
-    assertOwner();
-    await groupAuthority?.refresh();
+  return { ...row, config: normalizeBotToolCapabilities(config), assertOwner, refresh: async () => {
     assertOwner();
   } };
 }
@@ -210,7 +200,7 @@ async function catalog(input: { callerSessionId: string; kind: Kind }, ctx: Pick
 
 async function findBotCapabilities(input: Input & { query?: string }, deps: BotCapabilityServiceDeps) {
   try {
-    const ctx = await context(input.callerSessionId, { readScope: 'owner' });
+    const ctx = await context(input.callerSessionId);
     const query = input.query?.trim().toLocaleLowerCase() ?? '';
     const entries = input.kind === 'feature' ? featureEntries(ctx.config) : await catalog({ ...input, kind: input.kind }, ctx, deps);
     const capabilities = entries.filter(
@@ -220,7 +210,6 @@ async function findBotCapabilities(input: Input & { query?: string }, deps: BotC
     await ctx.refresh();
     return { ok: true as const, capabilities: capabilities.slice(0, 50) };
   } catch (error) {
-    if (error instanceof GroupToolAuthorizationError) return { ok: false as const, errorCode: error.code, message: error.message };
     return {
       ok: false as const,
       errorCode: 'CAPABILITY_DISCOVERY_FAILED',
@@ -282,7 +271,6 @@ async function selectBotCapability(input: Input & { id: string; joined: boolean 
     ctx.assertOwner();
     return { ok: true as const, joined: input.joined, effective: 'next-turn' as const };
   } catch (error) {
-    if (error instanceof GroupToolAuthorizationError) return { ok: false as const, errorCode: error.code, message: error.message };
     return {
       ok: false as const,
       errorCode: 'CAPABILITY_SELECTION_FAILED',
@@ -296,12 +284,11 @@ export function createBotCapabilityService(deps: BotCapabilityServiceDeps) {
   return {
     async models(input: { callerSessionId: string }) {
       try {
-        const ctx = await context(input.callerSessionId, { readScope: 'owner' });
+        const ctx = await context(input.callerSessionId);
         const selection = await inspectAppDefaultModel();
         await ctx.refresh();
         return { ok: true as const, ...selection };
       } catch (error) {
-        if (error instanceof GroupToolAuthorizationError) return { ok: false as const, errorCode: error.code, message: error.message };
         return { ok: false as const, errorCode: 'MODEL_SETTINGS_UNAVAILABLE', message: '无法读取当前用户的默认模型和可用型号' };
       }
     },
@@ -312,27 +299,24 @@ export function createBotCapabilityService(deps: BotCapabilityServiceDeps) {
         ctx.assertOwner();
         return { ok: true as const, ...result };
       } catch (error) {
-        if (error instanceof GroupToolAuthorizationError) return { ok: false as const, errorCode: error.code, message: error.message };
         return { ok: false as const, errorCode: 'MODEL_DEFAULT_NOT_CONFIRMED', message: '默认模型未确认保存；型号可能已停用、账号或选择已变化，请重新查询当前设置。' };
       }
     },
     async inspect(input: { callerSessionId: string }) {
       try {
-        const ctx = await context(input.callerSessionId, { readScope: 'self' });
+        const ctx = await context(input.callerSessionId);
         const explicit = readExplicitBotModelChain(ctx.config);
-        // A self-read may report inherited selection without exposing owner route IDs.
-        const candidates = explicit === null && !ctx.canReadOwnerModels
-          ? [] : await readEffectiveBotModelChain(ctx.config);
-        const conversations: BotControlState['conversations'] = ctx.canReadOwnerModels ? {
+        const candidates = await readEffectiveBotModelChain(ctx.config);
+        const conversations: BotControlState['conversations'] = {
           scope: 'local',
           teammateId: ctx.botId,
           connections: await deps.readConversationConnections?.(ctx.botId) ?? [],
           connectionsAvailable: Boolean(deps.readConversationConnections),
           guidance: 'Recall a topic with search_chat_history(query, teammate_id=teammateId), without a workdir or creation-date filter. list_sessions(teammate_id=teammateId, time_field=activity) includes old active, archived and topic/channel chats. Read matching originals with get_chat_history. If no match, existing account-history permission permits a bounded topic search without teammate_id for unlinked legacy records; report companion=null as unverified ownership, never infer it from a current connection, name or directory. device=all queries online authorized computers; unavailable/older devices and capped results are incomplete coverage.',
-        } : undefined;
+        };
         await ctx.refresh();
         const state: BotControlState = {
-          ...(conversations ? { conversations } : {}),
+          conversations,
           profile: { id: ctx.botId, name: ctx.displayName, description: ctx.description,
             identitySource: ctx.identitySource, version: ctx.version },
           session: { id: input.callerSessionId, workingDir: ctx.workingDir, remoteHostId: ctx.remoteHostId },
@@ -344,7 +328,6 @@ export function createBotCapabilityService(deps: BotCapabilityServiceDeps) {
         };
         return { ok: true as const, state };
       } catch (error) {
-        if (error instanceof GroupToolAuthorizationError) return { ok: false as const, errorCode: error.code, message: error.message };
         return { ok: false as const, errorCode: 'BOT_STATE_UNAVAILABLE', message: '无法读取当前伙伴状态，请稍后重试' };
       }
     },
@@ -388,7 +371,6 @@ export function createBotCapabilityService(deps: BotCapabilityServiceDeps) {
         ctx.assertOwner();
         return { ok: true as const, effective: 'next-turn' as const };
       } catch (error) {
-        if (error instanceof GroupToolAuthorizationError) return { ok: false as const, errorCode: error.code, message: error.message };
         return { ok: false as const, errorCode: 'BOT_PROFILE_UPDATE_FAILED',
           message: '伙伴资料已变化，或所选模型及档位不可用；请重新读取伙伴状态和可用型号后重试' };
       }
@@ -437,8 +419,3 @@ export function createBotCapabilityService(deps: BotCapabilityServiceDeps) {
   };
 }
 
-/** Account-wide settings retain the same owner-only access as default model management. */
-export async function captureBotSettingsAccess(callerSessionId: string) {
-  const ctx = await context(callerSessionId, { readScope: 'owner' });
-  return async () => { await ctx.refresh(); ctx.assertOwner(); };
-}

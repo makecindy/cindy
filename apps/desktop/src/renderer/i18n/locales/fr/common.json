@@ -164,12 +164,7 @@
   },
   "taskActionConfirmation": {
     "title": "Confirmer l'action sur la session",
-    "once": "Vérifiez ci-dessous la cible, l'action et le contenu complet. « Autoriser » s'applique à cette action une seule fois.",
-    "remove": "Cette action libère l’adresse de réception de l’automatisation. Vérifiez la cible ; l’autorisation ne vaut que pour cette action.",
-    "permission": "Cette action répond à votre place à une demande d'autorisation dans une autre tâche. Vérifiez l'action ; l'approbation ne vaut que pour cette fois.",
-    "resume": "Cette action reprend une exécution en pause. Vérifiez la cible ; l'approbation ne vaut que pour cette fois.",
-    "command": "Cette action enregistre ou exécute une commande sur votre ordinateur, en dehors de l'approbation des outils de l'Agent. Vérifiez la commande et le dossier de travail ; l'approbation ne vaut que pour cette fois.",
-    "authority": "Cette action crée ou modifie des instructions d'automatisation que les prochaines exécutions considéreront comme une autorisation permanente. Vérifiez l'intégralité des instructions ; l'approbation vaut pour cet enregistrement."
+    "once": "Vérifiez ci-dessous la cible, l'action et le contenu complet. « Autoriser » s'applique à cette action une seule fois."
   },
   "logSupport": {
     "title": "Journaux et retours",

@@ -28,11 +28,6 @@ export const TODO_CHECK_ROUTINE_PREFIX = 'builtin-todo-check-';
 /** 内置「夜间学习」例行任务的 id 前缀；每个伙伴默认一条，完整 id 见 nightlyLearningRoutine.ts。 */
 export const BUILTIN_NIGHTLY_LEARNING_ROUTINE_PREFIX = 'builtin-nightly-learning-';
 
-/**
- * 内置例行任务（跟进 / 夜间学习）及沿用旧 id 的「每天查待办」派发时的 schedule id 前缀（`routine-${routine.id}`）。
- * 这些运行由宿主发起，按 autonomous 判定身份，不是主人的常驻指令。
- */
-export const BUILTIN_ROUTINE_SCHEDULE_PREFIX = 'routine-builtin-';
 
 /**
  * 伙伴例行任务派发时追加在指令之后的不可信事件块引导语。宿主据此把主人设下的指令与事件数据分开，

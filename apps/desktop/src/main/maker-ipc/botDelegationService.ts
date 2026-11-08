@@ -583,8 +583,6 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
     const db = getDbClient().drizzle;
     if (input.dispatcherSessionId && !input.autoReviewUserText) {
       const request = await captureRequest(input.dispatcherSessionId, input.message, { sessionId: row.childSessionId ?? undefined });
-      if (request.blocked) return { clientId: input.clientId, row,
-        result: { ok: false, errorCode: 'DELEGATION_NOT_AUTHORIZED', message: request.blocked } };
       input = { ...input, message: request.message, autoReviewUserText: request.autoReviewUserText, persistedContent: request.message };
     }
     const retry = parseRecord(row.permissionSnapshotJson).taskRecoveryRetry as
@@ -2462,7 +2460,6 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
     // group stays in that group (bot-group-chat.md §10). Its card, confirmations and result
     // are posted there as the teammate's messages; the lane itself is never woken for them.
     const request = await captureRequest(input.callerSessionId, input.objective);
-    if (request.blocked) return { ok: false, errorCode: 'DELEGATION_NOT_AUTHORIZED', message: request.blocked };
     const parentSessionId = input.callerSessionId;
     const delegationId = createId();
     let childSessionId = resolveBusinessSessionId(undefined);
@@ -3383,7 +3380,6 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
       originalObjective = initial?.content && initial.content.length <= MAX_OBJECTIVE_CHARS ? initial.content : null;
     }
     const request = await captureRequest(callerSessionId, trimmed, { sessionId: row.childSessionId ?? undefined });
-    if (request.blocked) return { ok: false, errorCode: 'DELEGATION_NOT_AUTHORIZED', message: request.blocked };
     const taskInput: SessionTaskInputSnapshot = { runSequence: row.runSequence + 1, originalObjective, followUp: trimmed, requestSource: request.autoReviewUserText.request };
     // Preserve unrecoverable legacy data, but never send its wrappers as a new goal.
     const continuationObjective = originalObjective ?? row.objective;

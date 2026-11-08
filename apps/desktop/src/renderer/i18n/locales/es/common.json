@@ -164,12 +164,7 @@
   },
   "taskActionConfirmation": {
     "title": "Confirmar acción de sesión",
-    "once": "Revise el objetivo, la acción y el contenido completo a continuación. Permitir se aplica a esta acción una vez.",
-    "remove": "Se liberará la dirección de recepción de la automatización. Revisa el destino; la autorización solo se aplica a esta acción.",
-    "permission": "Esto responde a una solicitud de permiso en otra tarea en su nombre. Revisar la acción; la aprobación se aplica sólo una vez.",
-    "resume": "Esto reanuda la ejecución pausada. Revisar el objetivo; la aprobación se aplica sólo una vez.",
-    "command": "Esto guarda o ejecuta un comando en tu computadora fuera de la aprobación de herramientas del Agent. Revisa el comando y la carpeta de trabajo. La autorización es válida una sola vez.",
-    "authority": "Esto crea o cambia instrucciones de automatización que las ejecuciones futuras tratarán como autorización permanente. Revise las instrucciones completas; La aprobación se aplica a este guardado."
+    "once": "Revise el objetivo, la acción y el contenido completo a continuación. Permitir se aplica a esta acción una vez."
   },
   "logSupport": {
     "title": "Registros y comentarios",

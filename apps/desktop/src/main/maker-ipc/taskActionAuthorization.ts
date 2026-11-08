@@ -1,7 +1,6 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { createHash } from 'node:crypto';
 import type { ToolCallAuthorizer } from '@cindy/mcps';
-import type { Schedule, ScheduleMutationGuard } from '@cindy/maker-scheduler';
 import type { AgentInputQueuedMessage } from '../../shared/agentInputQueue.js';
 
 type Call = Parameters<ToolCallAuthorizer>[0];
@@ -58,23 +57,10 @@ export const ORCA_TASK_ACTION_TOOLS: ReadonlySet<string> = new Set([
 /** A confirmed new delegation may advance only its own live execution. */
 export const DELEGATED_TASK_ACTIONS = ['message_session_task', 'stop_session_task'] as const;
 
-/**
- * Who a teammate turn speaks for, decided by the Host before any permission mode applies.
- * - owner: the owner typed this turn (or a verified owner request in a group / IM lane);
- * - entrusted: a standing owner grant (an owner-created routine, the teammate's own Orca team);
- * - autonomous: anything else (follow-up wake-ups, teammate messages, non-owner speakers).
- * Ordinary (non-teammate) callers carry no principal and keep the normal permission flow.
- */
-export type TaskActionPrincipal = 'owner' | 'entrusted' | 'autonomous';
-
 export interface TaskActionScope {
   /** Host identity/active-input generation, captured before the confirmation. */
   key: string;
   ownerInput: boolean;
-  principal?: TaskActionPrincipal;
-  routine?: { botId: string; id: string; revision: number };
-  /** Complete persisted schedule captured for an approved command/resume action. */
-  scheduleGuard?: ScheduleMutationGuard;
   /** Existing, explicitly confirmed delegation; never inferred from creator/follower. */
   delegated: boolean;
   /** Rechecked at mutation; includes account, target and delegation revocation. */
@@ -89,9 +75,6 @@ interface ActionContext {
   sessionId: string;
   tool: string;
   fingerprint: string;
-  principal?: TaskActionPrincipal;
-  routine?: TaskActionScope['routine'];
-  scheduleGuard?: ScheduleMutationGuard;
   assertCurrent(): Promise<void>;
   assertCurrentSync?(): void;
   assertDeliveryCurrent(): Promise<void>;
@@ -129,107 +112,8 @@ export const SCHEDULER_TASK_ACTION_TOOLS: ReadonlySet<string> = new Set([
   'schedule_webhook_release', 'schedule_webhook_restore',
 ]);
 
-export type TaskActionRisk = 'remove' | 'permission' | 'resume' | 'command' | 'authority';
-export type TaskActionScheduleDefinition = Pick<Schedule,
-  'id' | 'name' | 'prompt' | 'persistentSession' | 'useWorktree' | 'executionMode' | 'scriptConfig' | 'preRunHook' | 'workingDir' | 'targetSessionId'> & {
-  hookInstallation?: { workingDir?: string; fallbackDir: string };
-  preRunWorkingDir?: string;
-  mutationGuard?: ScheduleMutationGuard;
-};
 export interface TaskActionConfirmation {
   server: string;
-  risk?: TaskActionRisk;
-  details?: Record<string, unknown>;
-}
-
-export interface TaskActionTarget {
-  details: Record<string, unknown>;
-  assertCurrent(): void;
-}
-
-export interface TaskActionRoutineSnapshot {
-  prompt: string;
-  builtin?: boolean;
-  preRunCommand?: string;
-  details?: Record<string, unknown>;
-  enabled: boolean;
-  revision: number;
-  assertCurrent(): void;
-}
-
-/** Independent Agent runs use the runner's existing Full Access default; bound
- * continuations inherit their target permissions. Persistent runs may create a replacement. */
-export function taskActionStartsIndependentAgent(call: Pick<Call, 'server' | 'tool' | 'args'>,
-  schedule?: TaskActionScheduleDefinition | null): boolean {
-  if (call.server !== 'cindy_scheduler' || !['schedule_create', 'schedule_update', 'schedule_run_now', 'schedule_resume'].includes(call.tool))
-    return false;
-  const args = call.args && typeof call.args === 'object' && !Array.isArray(call.args)
-    ? call.args as Record<string, unknown> : {};
-  const definition = ['schedule_run_now', 'schedule_resume'].includes(call.tool) ? schedule : { ...schedule, ...args };
-  const bindsCurrent = call.tool !== 'schedule_run_now' && args.bindToCurrentSession === true;
-  return (definition?.executionMode ?? 'agent') === 'agent' &&
-    typeof definition?.prompt === 'string' && !!definition.prompt.trim() &&
-    (definition.persistentSession === true ||
-      (!(typeof definition.targetSessionId === 'string' && definition.targetSessionId.trim()) && !bindsCurrent));
-}
-
-/** This existing helper creation path starts Full Access; directory overrides inherit
- * the caller's permissions and existing-target sends keep their normal flow. */
-export function taskActionCreatesFullAccessTask(call: Pick<Call, 'server' | 'tool' | 'args'>): boolean {
-  const args = call.args as Record<string, unknown> | undefined;
-  return call.server === 'cindy_helper' && call.tool === 'send_to_session' &&
-    !args?.target_session_id && args?.working_dir === undefined;
-}
-
-/** A small, explicit risk list. Everything else follows the task's normal permissions. */
-export function taskActionRisk(call: Pick<Call, 'server' | 'tool' | 'args'>,
-  facts?: { routineEnabled?: boolean; routinePrompt?: string; routineBuiltin?: boolean; routinePreRunCommand?: string; schedule?: TaskActionScheduleDefinition | null }): TaskActionRisk | undefined {
-  const args = call.args && typeof call.args === 'object' && !Array.isArray(call.args)
-    ? call.args as Record<string, unknown> : {};
-  if (taskActionCreatesFullAccessTask(call)) return 'command';
-  // The local scheduler is a trusted MCP, but its script runner bypasses the
-  // harness's shell approval. Classify the command effect, not all scheduler writes.
-  if ((call.server === 'cindy_helper' || call.server === 'cindy_scheduler') &&
-    call.tool === 'schedule_set_pre_run_hook' &&
-    [args.script, args.description].some(value => typeof value === 'string' && value.trim()))
-    return 'command'; // both surfaces install and self-test through the same handler
-  if (call.server === 'cindy_scheduler') {
-    if (['schedule_create', 'schedule_update', 'schedule_run_now', 'schedule_resume'].includes(call.tool)) {
-      const definition = call.tool === 'schedule_run_now' ? facts?.schedule
-        : { ...facts?.schedule, ...args };
-      const hook = definition?.preRunHook;
-      if (definition?.executionMode === 'script' ||
-        (hook && typeof hook === 'object' && 'command' in hook && typeof hook.command === 'string' && hook.command.trim()))
-        return 'command';
-    }
-  }
-  if (call.tool === 'schedule_resume' && (taskActionStartsIndependentAgent(call, facts?.schedule) || facts?.schedule?.executionMode === 'script' || facts?.schedule?.preRunHook?.command?.trim()))
-    return 'command';
-  if (taskActionStartsIndependentAgent(call, facts?.schedule) &&
-    (call.tool !== 'schedule_update' ||
-      (['prompt', 'workingDir', 'useWorktree', 'executionMode', 'targetSessionId', 'persistentSession'] as const)
-        .some(key => key in args && args[key] !== facts?.schedule?.[key]))) return 'command';
-  if (call.tool === 'routine_run_now' && facts?.routinePreRunCommand?.trim()) return 'command';
-  const routineHook = args.preRunHook;
-  if (call.tool === 'routine_save' && routineHook && typeof routineHook === 'object' &&
-    'command' in routineHook && typeof routineHook.command === 'string' && routineHook.command.trim() &&
-    routineHook.command !== facts?.routinePreRunCommand) return 'command';
-  if (call.tool === 'schedule_webhook_release')
-    return 'remove';
-  if (call.tool === 'message_session_task' && args.decision !== undefined) return 'permission';
-  if ((call.tool === 'routine_save' && args.enabled === true || call.tool === 'routine_run_now') &&
-    facts?.routineEnabled === false) return 'resume';
-  // An active custom routine becomes a standing owner instruction on its next run.
-  // Drafts stay ordinary; manually running a draft requires the resume decision above.
-  if (call.tool === 'routine_save' && args.enabled === true && !facts?.routineBuiltin &&
-    typeof args.prompt === 'string' && args.prompt.trim() && args.prompt !== facts?.routinePrompt)
-    return 'authority';
-  if ((call.tool === 'message_session_task' && args.mode === 'resume') || call.tool === 'schedule_resume' || call.tool === 'schedule_webhook_restore')
-    return 'resume';
-  // The owner's off switch for memory or a system Skill stands until the owner turns it back on.
-  if ((call.tool === 'set_teammate_capability' || call.tool === 'set_bot_capability') &&
-    args.kind === 'feature' && args.joined === true) return 'resume';
-  return undefined;
 }
 
 export function taskActionFingerprint(call: Pick<Call, 'tool' | 'args'>): string {
@@ -290,9 +174,6 @@ export async function admitTaskAction(
           sessionId: call.sessionId!,
           tool: call.tool,
           fingerprint,
-          principal: scope.principal,
-          routine: scope.routine,
-          ...(scope.scheduleGuard ? { scheduleGuard: scope.scheduleGuard } : {}),
           assertCurrent: scope.assertCurrent,
           assertCurrentSync: scope.assertCurrentSync,
           assertDeliveryCurrent: scope.assertDeliveryCurrent ?? scope.assertCurrent,
@@ -311,24 +192,6 @@ export function approvedTaskDelegation(
   return current?.sessionId === callerSessionId && current.tool === 'start_session_task'
     ? { version: 1, actions: DELEGATED_TASK_ACTIONS }
     : undefined;
-}
-
-/** Host-decided principal of the admitted call, for receipts. Tool arguments cannot set it. */
-export function taskActionPrincipal(callerSessionId: string): TaskActionPrincipal | undefined {
-  const current = actionContext.getStore();
-  return current?.sessionId === callerSessionId ? current.principal : undefined;
-}
-
-/** Bind a routine save or manual execution to the service's atomic revision check. */
-export function taskActionRoutineRevision(botId: string, id?: string): number | undefined {
-  const current = actionContext.getStore();
-  return current && ['routine_save', 'routine_run_now'].includes(current.tool) && current.routine?.botId === botId && current.routine.id === id
-    ? current.routine.revision : undefined;
-}
-
-/** Host-only schedule snapshot for the scheduler mutation guard. */
-export function taskActionScheduleGuard(): ScheduleMutationGuard | undefined {
-  return actionContext.getStore()?.scheduleGuard;
 }
 
 export async function assertTaskActionCurrent(): Promise<void> {
@@ -446,7 +309,7 @@ export async function settleTaskActionInput(item: AgentInputQueuedMessage): Prom
   await (item as GuardedInput)[TASK_ACTION_INPUT_GUARD]?.onSettled?.();
 }
 
-/** Restored legacy Bot input has attribution, not consent. Never infer a grant from that data. */
+/** Restored input that needed a live grant has attribution, not consent. Never infer a grant from that data. */
 export function taskActionInputGuard(
   target: string,
   item: AgentInputQueuedMessage,
@@ -457,9 +320,8 @@ export function taskActionInputGuard(
     item.taskActionRequiresAuthorization ||
     item.clientId.startsWith('remote-task-action:') ||
     (item.origin?.kind === 'session' &&
-      (item.origin.senderBotId || item.origin.senderSessionId.includes('::')) &&
-      !item.botTaskCoordination &&
-      !item.clientId.startsWith('bot-dm:'))
+      item.origin.senderSessionId.includes('::') &&
+      !item.botTaskCoordination)
   )
     return async () => {
       throw new Error('TASK_ACTION_AUTHORIZATION_REQUIRED');
@@ -471,7 +333,7 @@ export function taskActionInputGuard(
  * A recovery copy (hidden "continue", manual retry, zero-output resend) of a turn the receiving
  * task already accepted. The delivery guard is judged only before the first persist, and the copy
  * has a new clientId and text: inheriting the original guard, its "requires authorization" mark or
- * the teammate-origin rule would discard it every time. The copy runs under the receiving task's
+ * the remote-origin rule would discard it every time. The copy runs under the receiving task's
  * own permissions; attribution (origin, requested owner words) stays on it. Items the guard never
  * covered are returned unchanged.
  */

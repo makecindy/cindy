@@ -7,7 +7,6 @@
  * - silentWhenIdle：没查到新待办不打扰主人。
  * - 早期版本把它存成宿主内置规则：调度器加载旧数据去掉内置标记的同时调用 localizedLegacyTodoCheck，把内置默认内容换成当前语言；
  *   只在这次迁移时做，之后主人保存的名称与指令不再被识别或改写。
- * - id 沿用 `builtin-` 前缀，运行仍按宿主发起（autonomous）判定身份，见 BUILTIN_ROUTINE_SCHEDULE_PREFIX。
  */
 import { createHash } from 'node:crypto';
 import type { Routine, RoutineInput } from '@cindy/maker-scheduler';

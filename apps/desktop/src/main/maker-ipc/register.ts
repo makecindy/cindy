@@ -27,7 +27,7 @@ import { createOrcaWorkerProjectHandlers } from './orcaWorkerProjectHandlers';
 import { getTeamByWorkerSession } from '../localDb/orcaTeamStore';
 import { readWorkerProjectContext, createWorkerWorktree, rememberWorkerProject, probeWorkerProject, resolveWorkerWorktreeSourceSelection, getWorkerOwnedWorktree } from './orcaWorkerProject';
 import type { WorkerWorktreeRequest } from '../../shared/orca-worker-project';
-import { captureAgentRequest as captureRequest, delegationReviewTarget, DelegationNotAuthorizedError, ownerChannelInputEvidence, type CapturedAgentRequest, type DelegationAuthorization, type DelegationTarget } from './forwardedRequest.js';
+import { captureAgentRequest as captureRequest, ownerChannelInputEvidence, type CapturedAgentRequest, type DelegationTarget } from './forwardedRequest.js';
 import { readChannelToolScope } from '../im/shared/channelToolScope.js';
 import { FORWARDED_REQUEST_RECEIPT, verifiedOwnerRequestText, type AgentRequestReceipt } from '../../shared/forwardedRequest.js';
 import { configureBotTodoDispatch, settleBotTodoForSession } from './botTodoAccess.js';
@@ -1011,7 +1011,7 @@ import {
 } from './orcaInterAgentDispatcher.js';
 import { resolveOrcaImageAttachmentInput } from './orcaImageAttachments.js';
 import { OrcaWorkerPermissionConfirmBridge } from './orcaWorkerPermissionConfirmBridge.js';
-import { assertTaskActionCurrent, runTaskActionRequest, captureTaskActionGuard, bindTaskActionInput, hasTaskActionAuthorization, taskActionInputGuard, taskActionPrincipal, settleTaskActionInput, TaskActionAuthorizationError, type TaskActionDeliveryGuard, type TaskActionConfirmation } from './taskActionAuthorization.js';
+import { assertTaskActionCurrent, runTaskActionRequest, captureTaskActionGuard, bindTaskActionInput, hasTaskActionAuthorization, taskActionInputGuard, settleTaskActionInput, TaskActionAuthorizationError, type TaskActionDeliveryGuard, type TaskActionConfirmation } from './taskActionAuthorization.js';
 import {
   getOrcaWorkspaceInfoReadOnly,
   getOrcaWorkerDiagnosticStatusReadOnly,
@@ -2658,9 +2658,7 @@ type SendToSessionInternalResult =
       message: string;
     };
 
-/** send_to_session 的结果：发送任务的审核没有确认用户要求这样转交时(2026-11-05)，没有发出。 */
-type SendToSessionResult = SendToSessionInternalResult
-  | { ok: false; errorCode: 'DELEGATION_NOT_AUTHORIZED'; message: string };
+type SendToSessionResult = SendToSessionInternalResult;
 
 /** 暴露给 xdt-helper MCP provider 的协同控制面，必须复用 IPC 同源业务路径。 */
 interface OrcaCollabService {
@@ -2691,7 +2689,6 @@ interface OrcaCollabService {
           | 'MESSAGE_CONSUMING'
           | 'NOT_AUTHORIZED'
           | 'INVALID_ARGS'
-          | 'DELEGATION_NOT_AUTHORIZED'
           | 'HOST_NOT_READY'
           | 'INTERNAL';
         message: string;
@@ -2711,7 +2708,6 @@ interface OrcaCollabService {
           | 'MESSAGE_CONSUMING'
           | 'NOT_AUTHORIZED'
           | 'INVALID_ARGS'
-          | 'DELEGATION_NOT_AUTHORIZED'
           | 'HOST_NOT_READY'
           | 'INTERNAL';
         message: string;
@@ -2746,7 +2742,6 @@ interface OrcaCollabService {
           | 'UNSUPPORTED_CAPABILITY'
           | 'INPUT_LOCKED'
           | 'DELIVERY_FAILED'
-          | 'DELEGATION_NOT_AUTHORIZED'
           | 'HOST_NOT_READY'
           | 'INTERNAL';
         message: string;
@@ -3509,15 +3504,11 @@ export async function confirmTaskAction(
   const unsubscribe = session.onStatusChange(status => {
     if (status !== 'active') controller.abort();
   });
-  const input = structuredClone(context?.details ? { action: args, ...context.details } : args) as Record<string, unknown>;
-  const description = t(context?.risk ? `taskActionConfirmation.${context.risk}` : 'taskActionConfirmation.once');
+  const input = structuredClone(args) as Record<string, unknown>;
   const request: Extract<InteractionRequest, { kind: 'permission' }> = {
     kind: 'permission', requestId: randomUUID(),
     title: t('taskActionConfirmation.title'),
-    // Generic tool previews are shortened. The owner must see the complete
-    // command, child request or standing instructions here, including on remote cards.
-    description: context?.risk
-      ? `${description}\n\n${JSON.stringify(input, null, 2)}` : description,
+    description: t('taskActionConfirmation.once'),
     toolName: `mcp__${context?.server ?? 'cindy_helper'}__${tool}`,
     input,
     metadata: { hostOwnedConfirmation: 'task_action' },
@@ -3531,27 +3522,6 @@ export async function confirmTaskAction(
   } finally {
     unsubscribe();
   }
-}
-
-/** Snapshot the actual child request after the delegation service checks its owner. */
-export async function captureTaskActionPermissionRequest(sessionId: string, taskId: string) {
-  const task = await botDelegationServiceHolder?.getSessionTask(sessionId, taskId);
-  if (!task?.ok || !task.task.session_id || !task.task.pendingInteraction) return null;
-  const childId = task.task.session_id;
-  const requestId = task.task.pendingInteraction.requestId;
-  const pending = getPendingInteractionsForSession(childId).find(entry => entry.request.requestId === requestId);
-  if (!pending || (pending.request.kind !== 'permission' && pending.request.kind !== 'plan_review')) return null;
-  const request = structuredClone(pending.request);
-  const signature = JSON.stringify(request);
-  const child = getMakerIfReady()?.getSession(childId);
-  return {
-    details: { task: { id: taskId, title: task.task.title }, request },
-    assertCurrent() {
-      const current = getPendingInteractionsForSession(childId).find(entry => entry.request.requestId === requestId);
-      if (getMakerIfReady()?.getSession(childId) !== child || !current || JSON.stringify(current.request) !== signature)
-        throw new Error('TASK_ACTION_AUTHORIZATION_EXPIRED');
-    },
-  };
 }
 
 /**
@@ -5074,46 +5044,21 @@ export function getSessionInputProvenance(sessionId: string) {
   return { input, executing: !!input || !!getMakerIfReady()?.getSession(sessionId)?.isTurnRunning() };
 }
 
-const DELEGATION_REVIEW_CONTEXT = 'Host check before Cindy hands this message to another task as the owner\'s request. '
-  + 'The receiving task\'s automatic review will treat the message text as what the owner asked it to do. '
-  + 'Allow when the message stays within what the owner asked for in this conversation, including coordination such as '
-  + 'status questions, progress and results. Block when it adds work, targets, data or permissions the owner did not ask for.';
-
 /**
- * Decide on the sending side, where the whole conversation is visible, whether the owner asked
- * for this hand-off (2026-11-05). Full Access already trusts this task; Ask confirmed the task
- * action with its arguments; Auto asks the task's own reviewer. Plan or a changing task sends none.
+ * Capture from the caller's accepted input before any asynchronous target work. A turn that
+ * speaks for the owner (their own input, its continuation or relay, or an IM turn the owner
+ * spoke in) hands its request on as is; any task can already open a Full Access task, so a
+ * second review would not protect anything (2026-11-08). Plan mode sends without authority.
  */
-async function authorizeSessionDelegation(sessionId: string, message: string,
-  target?: DelegationTarget): Promise<DelegationAuthorization> {
-  const session = getMakerIfReady()?.getSession(sessionId);
-  const permission = session?.stablePermissionModeState;
-  const plan = session?.stablePlanModeState;
-  if (!session || !permission || !plan || plan.enabled || permission.mode === 'plan') return { kind: 'none' };
-  if (permission.mode !== 'auto') return { kind: 'authorized' };
-  const { toolAutoReviewAction } = await import('@cindy/maker-core');
-  // A remote teammate has no local session id; its own identity replaces the fallback (#9198).
-  const decision = await session.reviewHostPermissionAction(toolAutoReviewAction('delegate_owner_request',
-    { ...delegationReviewTarget(target), message }, DELEGATION_REVIEW_CONTEXT));
-  if (decision.verdict === 'allow') return { kind: 'authorized' };
-  return { kind: 'blocked', reason: `Not sent: automatic review did not confirm the owner asked for this hand-off${
-    decision.reason ? ` (${decision.reason})` : ''}. Keep the message within the owner's request, or ask the owner first.` };
-}
-
-/** Capture from the caller's accepted input before any asynchronous target work. */
 export async function captureSessionAgentRequest(sessionId: string, supplement: string,
   target?: DelegationTarget): Promise<CapturedAgentRequest> {
   const scope = captureDataOwnerBroadcastScope();
   const active = agentInputCoordinatorHolder?.getAcceptedInputProvenance(sessionId) ?? null;
-  const lane = readChannelToolScope({ sessionId, sessionInstanceId: getMakerIfReady()?.getSession(sessionId)?.instanceId });
-  const principal = taskActionPrincipal(sessionId);
-  // Authorship follows the accepted request, not the sender's companion badge.
-  // Ordinary task handoffs must preserve it too; autonomous notifications stay plain.
-  const [companion] = await getDbClient().drizzle.select({ role: botSessionLinks.role })
-    .from(botSessionLinks).where(and(eq(botSessionLinks.sessionId, sessionId),
-      inArray(botSessionLinks.role, ['canonical', 'group', 'channel', 'thread', 'routine']), isNull(botSessionLinks.archivedAt))).limit(1);
-  const ownerVerified = companion ? principal === 'owner'
-    : agentInputCoordinatorHolder?.isActiveInputOwnerContinuation(sessionId) === true;
+  const session = getMakerIfReady()?.getSession(sessionId);
+  const lane = readChannelToolScope({ sessionId, sessionInstanceId: session?.instanceId });
+  const planning = session?.stablePlanModeState?.enabled === true || session?.stablePermissionModeState?.mode === 'plan';
+  const ownerVerified = !planning && (agentInputCoordinatorHolder?.isActiveInputOwnerContinuation(sessionId) === true
+    || (!active && lane?.requesterIsOwner === true));
   const evidence = active ?? (ownerVerified ? await ownerChannelInputEvidence(lane, async (clientId) => {
     const [row] = await getDbClient().drizzle.select({ content: messages.content }).from(messages)
       .where(and(eq(messages.sessionId, sessionId), eq(messages.clientId, clientId), eq(messages.role, 'user'),
@@ -5121,11 +5066,11 @@ export async function captureSessionAgentRequest(sessionId: string, supplement: 
       .limit(1);
     return row ? extractPlainText(row.content) : null;
   }) : null);
+  const relayed = !planning && (active?.delegatedRequest?.ownerVerified === true
+    || active?.delegatedRequest?.delegatedText !== undefined);
   const request = await captureRequest(sessionId, supplement, evidence,
     () => listMessagesForAgentHandoff(sessionId, 1, undefined, 'user'),
-    !!companion || ownerVerified || active?.delegatedRequest?.ownerVerified === true
-      || active?.delegatedRequest?.delegatedText !== undefined, ownerVerified,
-    { targetSessionId: target?.sessionId, authorize: () => authorizeSessionDelegation(sessionId, supplement, target) });
+    ownerVerified || relayed, ownerVerified, target?.sessionId);
   if (!isDataOwnerBroadcastScopeCurrent(scope)) throw new Error('Data owner changed before request capture');
   return request;
 }
@@ -5140,7 +5085,6 @@ export function getTaskActionInputState(sessionId: string) {
       (id) => getMakerIfReady()?.getSession(id), sessionId, session?.instanceId,
     ),
     ownerInput: isActiveInputOwnerAuthored(sessionId),
-    ownerContinuation: agentInputCoordinatorHolder?.isActiveInputOwnerContinuation(sessionId) ?? false,
     automatic: !!input.input && !isActiveInputOwnerAuthored(sessionId),
     orcaSenderSessionId: input.input?.orcaSenderSessionId,
     boundary: `${session?.instanceId ?? ''}:${agentInputCoordinatorHolder?.getGeneration(sessionId) ?? -1}`,
@@ -18249,7 +18193,6 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     captureRequest: (callerSessionId, message, target) => captureSessionAgentRequest(callerSessionId, message, target),
     createQueuedMessage: async ({ targetSessionId, callerSessionId, queuedMessageId, message }) => {
       const request = await captureSessionAgentRequest(callerSessionId, message, { sessionId: targetSessionId });
-      if (request.blocked) throw new DelegationNotAuthorizedError(request.blocked);
       message = request.message;
       const meta = await maker.getSessionMeta(targetSessionId);
       if (!meta) throw new Error(`session ${targetSessionId} not found`);
@@ -18378,7 +18321,6 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         ? { message: params.message, autoReviewUserText: { kind: 'agent-request' } }
         : await captureSessionAgentRequest(params.dispatcherSessionId ?? '', params.message,
           { sessionId: params.targetSessionId });
-      if (request.blocked) return { ok: false, errorCode: 'DELEGATION_NOT_AUTHORIZED', message: request.blocked };
       params = { ...params, message: request.message };
       let classification: Awaited<ReturnType<typeof classifySessionMessagePurpose>>;
       try {
