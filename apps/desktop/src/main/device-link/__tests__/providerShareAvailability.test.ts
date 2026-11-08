@@ -51,6 +51,18 @@ describe('standby client production entry points (all identities/providers are l
     expect(f.reconcile).toHaveBeenCalledWith(peer, null);
     expect(JSON.stringify(f.log.warn.mock.calls)).not.toContain('private member details');
   });
+  it('does not clean the new account when an old-scope NOT_FOUND arrives late', async () => {
+    const peer = providerShareGuestPeer('share', 'member', 'guest');
+    f.leases = [{ peer, sessionId: 'task', lease: { availability: true, nonce: 'new-account' } }];
+    f.netFetch.mockImplementation(async () => {
+      f.scope = 'new-account';
+      return new Response(JSON.stringify({ error: { code: 'NOT_FOUND' } }), { status: 404 });
+    });
+    f.request.mockImplementation(realApi.serverApiFetch);
+    await expect(prepareShareAvailability(peer)).rejects.toThrow('account changed');
+    expect(f.invalidate).not.toHaveBeenCalled();
+    expect(f.reconcile).not.toHaveBeenCalled();
+  });
   it.each([false, true])('captures completion before admission and retains it after revocation (lost response=%s)', async lost => {
     const peer = providerShareGuestPeer('share', 'member', 'guest');
     f.leases = [{ peer, sessionId: 'task', lease: { availability: true, generation: 'assignment-a' } }];

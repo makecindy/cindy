@@ -13,12 +13,16 @@ export async function shareAvailabilityRequest<T>(shareId: string, action: strin
     if (providerShareOwnerKey() !== owner || getClientEndpoint('deviceLinkApiBaseUrl') !== endpoint) throw new ProviderShareScopeChangedError();
   };
   verify();
-  const result = alternate
-    ? await alternate()
-    : await serverApiFetch<unknown>(`/api/device-link/provider-shares/availability/${encodeURIComponent(shareId)}/${action}`, {
+  const result = await (alternate
+    ? alternate()
+    : serverApiFetch<unknown>(`/api/device-link/provider-shares/availability/${encodeURIComponent(shareId)}/${action}`, {
       method: 'POST', body, baseUrl: () => { verify(); return endpoint; }, timeoutMs: 15_000,
       allowedRedactedErrorCodes: ['NOT_FOUND'],
       cache: 'no-store', logLabel: '/api/device-link/provider-shares/availability', redactErrorDetails: true,
+    })).catch(error => {
+      // Late errors must not trigger revocation cleanup in a different account.
+      verify();
+      throw error;
     });
   verify();
   return result as T;
