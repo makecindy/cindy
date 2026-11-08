@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { providerShareGuestPeer, type ProviderShareOwned } from '@cindy/device-link';
 const f = vi.hoisted(() => ({
-  scope: 'owner', self: 'owner-pc', remote: true, budget: false,
+  connected: true, scope: 'owner', self: 'owner-pc', remote: true, budget: false,
   request: vi.fn(), remember: vi.fn(), reconcile: vi.fn(), apply: vi.fn(), invalidate: vi.fn(),
   members: [] as any[], leases: [] as any[],
 }));
@@ -18,7 +18,7 @@ vi.mock('../../provider-group/store.js', () => ({ readProviderGroup: () => ({ al
 vi.mock('../../provider-group/fastPolicyStore.js', () => ({ groupFastPolicyStore: { outgoing: () => ({ group: { revision: 7, allowFast: false } }) } }));
 vi.mock('../../provider-group/runtime.js', () => ({ getProviderGroupDirectory: () => ({ resolveMembers: async () => f.members }) }));
 vi.mock('../../maker-host/remote-provider-access-store.js', () => ({ isRemoteProviderInvocationAllowed: () => true }));
-vi.mock('../../maker-host/createDesktopProviderService.js', () => ({ getDesktopProviderService: () => ({ listProviders: async () => [{ id: 'group', connected: true, models: { codex: [{ id: 'allowed' }] } }] }) }));
+vi.mock('../../maker-host/createDesktopProviderService.js', () => ({ getDesktopProviderService: () => ({ listProviders: async () => [{ id: 'group', connected: f.connected, models: { codex: [{ id: 'allowed' }] } }] }) }));
 vi.mock('../remoteModelAccess.js', () => ({ remoteModelAccess: { allowsDelegatedExecution: (_p: string, model: string) => !f.budget && model === 'allowed' } }));
 vi.mock('../settings-store.js', () => ({ readDeviceLinkSettings: () => ({ remoteControlEnabled: f.remote, disabledControlDeviceIds: [], revokedControllers: [] }) }));
 vi.mock('../providerShareCrossRegion.js', () => ({ isCrossRegionShare: () => false }));
@@ -30,7 +30,7 @@ const model = { id: 'allowed', name: 'Fake model', contextWindow: 200000, effort
 const owned = { shareId: 'share', hostDeviceId: 'owner-pc', providerId: 'group', members: [{ memberId: 'member', status: 'active', joinedAt: '2026-11-08T00:00:00Z' }] } as ProviderShareOwned;
 beforeEach(() => {
   vi.clearAllMocks();
-  f.scope = 'owner'; f.self = 'owner-pc'; f.remote = true; f.budget = false; f.leases = [];
+  f.connected = true; f.scope = 'owner'; f.self = 'owner-pc'; f.remote = true; f.budget = false; f.leases = [];
   f.members = [{ member: { kind: 'device', agentDeviceId: 'standby', providerId: 'local', limit: 2 }, state: 'ok', view: { connected: true, models: { codex: [model, { ...model, id: 'hidden', disabled: true }] } } }];
   f.request.mockImplementation(async (path: string) => path.endsWith('/policy') ? { revision: 5, executors: [] } : {});
 });
@@ -59,6 +59,14 @@ describe('standby client production entry points (all identities/providers are l
       executors: [{ deviceId: 'standby', providerId: 'local', limit: 2, models: [{ ...model, kind: 'codex' }] }],
       members: [{ memberId: 'member', models: ['allowed'] }] });
     expect(f.remember).toHaveBeenCalledWith('share', 'group');
+  });
+  it('keeps healthy group executors and member restrictions when the owner provider is logged out', async () => {
+    f.connected = false;
+    await publishShareAvailability([owned]);
+    const policy = f.request.mock.calls.find(([path]) => path.endsWith('/publish'))![1].body.policy;
+    expect(policy.executors.map((row: any) => row.deviceId)).toEqual(['standby']);
+    expect(policy.members[0].models).toEqual(['allowed']);
+    expect(f.request.mock.calls.some(([path]) => path.endsWith('/disable'))).toBe(false);
   });
   it('does not register third-party shares and denies unverifiable personal budgets', async () => {
     f.members.push({ ...f.members[0], member: { kind: 'share', agentDeviceId: 'foreign', providerId: 'foreign' } });

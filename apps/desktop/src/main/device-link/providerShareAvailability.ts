@@ -1,3 +1,9 @@
+import { shareAvailabilityRequest as requestAvailability, disableShareAvailability } from './providerShareAvailabilityTransport.js';
+export { disableShareAvailability } from './providerShareAvailabilityTransport.js';
+import { isCrossRegionShare, crossRegionAvailabilityRequest } from './providerShareCrossRegion.js';
+import { getDesktopProviderService } from '../maker-host/createDesktopProviderService.js';
+import { getProviderGroupDirectory } from '../provider-group/runtime.js';
+import { findReceivedShare } from './providerShareGuest.js';
 import { knownStandbyGuests, reconcileStandbyGuest } from './providerShareAvailabilityGuests.js';
 import { withAvailabilityPolicyLock, rememberAvailabilityShare } from './providerShareAvailabilityPolicy.js';
 /** Offline-owner admission. This contains public identities and grants, never provider credentials. */
@@ -5,7 +11,6 @@ import { parseProviderSharePeer, ProviderShareScopeChangedError, type ProviderSh
 import type { AgentKind, CatalogModel, ProviderView } from '@cindy/model-providers';
 import { getDeviceId } from '../authManager.js';
 import { getClientEndpoint } from '../clientEndpointsService.js';
-import { serverApiFetch } from '../serverApiClient.js';
 import { captureProviderManagementScope } from '../provider-group/managementScope.js';
 import { readProviderGroup } from '../provider-group/store.js';
 import { groupFastPolicyStore } from '../provider-group/fastPolicyStore.js';
@@ -24,31 +29,15 @@ interface Assignment { shareId: string; memberId: string; guestDeviceId: string;
   executorDeviceId: string; providerId: string; kind: AgentKind; model: string; generation: string; expiresAt: number }
 interface Preparation { joinedAt: number; ownerDeviceId: string; groupProviderId: string; allowFast: boolean; revision: number; assignments: Assignment[] }
 
-export async function shareAvailabilityRequest<T>(shareId: string, action: string, body: unknown = {}, guest = false): Promise<T> {
-  const assertCurrent = captureProviderManagementScope();
-  const owner = providerShareOwnerKey();
-  const endpoint = getClientEndpoint('deviceLinkApiBaseUrl');
-  const verify = () => {
-    assertCurrent();
-    if (providerShareOwnerKey() !== owner || getClientEndpoint('deviceLinkApiBaseUrl') !== endpoint) throw new ProviderShareScopeChangedError();
-  };
-  verify();
-  const crossRegion = guest ? await import('./providerShareCrossRegion.js') : null;
-  const result = crossRegion?.isCrossRegionShare(shareId)
-    ? await crossRegion!.crossRegionAvailabilityRequest(shareId, action, body)
-    : await serverApiFetch<unknown>(`/api/device-link/provider-shares/availability/${encodeURIComponent(shareId)}/${action}`, {
-      method: 'POST', body, baseUrl: () => { verify(); return endpoint; }, timeoutMs: 15_000,
-      cache: 'no-store', logLabel: '/api/device-link/provider-shares/availability', redactErrorDetails: true,
-    });
-  verify();
-  return result as T;
+export function shareAvailabilityRequest<T>(shareId: string, action: string, body: unknown = {}, guest = false): Promise<T> {
+  return requestAvailability<T>(shareId, action, body, guest && isCrossRegionShare(shareId)
+    ? () => crossRegionAvailabilityRequest(shareId, action, body) : undefined);
 }
 
 /** Only the live owner publishes; failed reads publish no permission, not an unrestricted default. */
 export function publishShareAvailability(shares: readonly ProviderShareOwned[]): Promise<void> {
   return withAvailabilityPolicyLock(() => publishUnlocked(shares));
 }
-export async function disableShareAvailability(shareId: string): Promise<void> { await shareAvailabilityRequest(shareId, 'disable'); }
 async function publishUnlocked(shares: readonly ProviderShareOwned[]): Promise<void> {
   const assertCurrent = captureProviderManagementScope();
   for (const share of shares) {
@@ -58,15 +47,13 @@ async function publishUnlocked(shares: readonly ProviderShareOwned[]): Promise<v
     const group = readProviderGroup(share.providerId);
     const policy: Policy = { revision: 0, executors: [], members: [], allowFast: false, fastRevision: 0, blockedGuestDeviceIds: [...readDeviceLinkSettings().revokedControllers] };
     if (group && readDeviceLinkSettings().remoteControlEnabled && isRemoteProviderInvocationAllowed(share.providerId)) {
-      const { getDesktopProviderService } = await import('../maker-host/createDesktopProviderService.js');
       const source = (await getDesktopProviderService().listProviders({ allowSideEffects: false })).find(view => view.id === share.providerId);
       assertCurrent();
-      if (!source || source.suspended || !source.connected) {
+      if (!source || source.suspended) {
         await disableShareAvailability(share.shareId);
         continue;
       }
       const offered = new Set(Object.values(source.models).flatMap(rows => (rows ?? []).filter(model => !model.disabled).map(model => model.id)));
-      const { getProviderGroupDirectory } = await import('../provider-group/runtime.js');
       const resolved = await getProviderGroupDirectory().resolveMembers(share.providerId, group);
       assertCurrent();
       for (const row of resolved) {
@@ -178,7 +165,6 @@ export async function reportShareAvailabilityStatus(shareId: string, sessionId: 
 }
 
 export async function lookupShareAvailability(shareId: string, sessionId: string): Promise<Assignment | null> {
-  const { findReceivedShare } = await import('./providerShareGuest.js');
   if (findReceivedShare(shareId)?.standbyOnline === undefined) return null;
   try { return (await shareAvailabilityRequest<{ assignment: Assignment | null }>(shareId, 'lookup', { sessionId }, true)).assignment; }
   catch (error) { if ((error as { code?: unknown })?.code === 'NOT_FOUND') return null; throw error; }

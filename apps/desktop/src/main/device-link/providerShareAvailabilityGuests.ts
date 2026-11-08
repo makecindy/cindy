@@ -3,6 +3,8 @@ import { activeOwnerScopeKey, ownerScopedUserDataPath } from '../appSessionState
 import { createOverrideSettingsFile } from '../maker-host/override-settings-file.js';
 import { createLogger } from '../logger.js';
 import { captureProviderManagementScope } from '../provider-group/managementScope.js';
+let revokeGuest: ((controller: string) => Promise<void>) | undefined;
+export function configureStandbyGuestCleanup(cleanup: (controller: string) => Promise<void>): void { revokeGuest = cleanup; }
 interface Member { joinedAt: number; pendingCleanup?: boolean }
 const filePath = () => ownerScopedUserDataPath('provider-share-standby-members.json');
 const store = createOverrideSettingsFile<{ members: Record<string, Member> | null }>({
@@ -41,8 +43,8 @@ export async function reconcileStandbyGuest(controller: string, joinedAt: number
   });
   assertCurrent();
   if (!cleanup) return;
-  const { revokeProviderShareControllers } = await import('./dispatch.js');
-  await revokeProviderShareControllers(peer => peer === controller, true);
+  if (!revokeGuest) throw new Error('Standby guest cleanup is not configured');
+  await revokeGuest(controller);
   assertCurrent();
   await store.updateAtomic(({ value }) => {
     assertCurrent();

@@ -1,3 +1,4 @@
+import { configureStandbyGuestCleanup } from './providerShareAvailabilityGuests.js';
 import { prepareShareAvailability } from './providerShareAvailability.js';
 import { parseKimiUsageRequest, isKimiCodingProvider } from '../../shared/kimiCodingUsage.js';
 import { isOpenCodeGoProvider, parseOpenCodeGoUsageRequest } from '../../shared/opencodeGoUsage.js';
@@ -5247,3 +5248,5 @@ export const __testing = {
 export function remoteAgentLimitUsage(): RemoteAgentLimitUsage {
   return remoteAgentHandler?.limitUsage?.() ?? { total: 0, devices: 0, largestDevice: 0 };
 }
+
+configureStandbyGuestCleanup(controller => revokeProviderShareControllers(peer => peer === controller, true));

@@ -330,6 +330,11 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
       }
       if (target === input.deviceId) {
         directTasks.delete(taskKey);
+        // An unavailable lookup cannot prove that this task has no pinned executor.
+        // Keep it outside the legacy owner fallback, including owner-link failures.
+        const pinned = await lookupShareAvailability(shareId, sessionId);
+        requireCurrent();
+        cloudAllocation = !!pinned || (findReceivedShare(shareId)?.hostDeviceOnline ?? findReceivedShare(shareId)?.hostOnline) === false;
         try {
           const owner = findReceivedShare(shareId);
           if (owner?.hostDeviceId && (owner.hostDeviceOnline ?? owner.hostOnline)) {
@@ -338,10 +343,7 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
           requireCurrent();
           const allocationStartedAt = Date.now();
           const allocationStartedMonotonic = performance.now();
-          const pinned = await lookupShareAvailability(shareId, sessionId);
-          requireCurrent();
-          const availability = !!pinned || (owner?.hostDeviceOnline ?? owner?.hostOnline) === false;
-          cloudAllocation = availability;
+          const availability = cloudAllocation;
           const allocation = availability
             ? await allocateShareAvailability(shareId, sessionId, input.agentKind, opts.model)
             : await remoteAgentInvoker(input.deviceId, deps.remoteInvoke)([{

@@ -1790,7 +1790,7 @@ export function registerProviderHandlers(
       deps.broadcastChanged();
       return { ok: true };
     };
-    return enqueueDisableWrite(() => withAvailabilityPolicyMutation(i.providerId as string, run));
+    return withAvailabilityPolicyMutation(i.providerId as string, () => enqueueDisableWrite(run));
   };
   registry.handle(MAKER_INVOKE.MODEL_DISABLE_SET, async (event, input: unknown) => {
     assertTrustedProviderMutationSender(event);

@@ -1,3 +1,4 @@
+import { disableShareAvailability } from './providerShareAvailabilityTransport.js';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -54,7 +55,6 @@ export function withAvailabilityPolicyMutation<T>(providerId: string | undefined
     if (registered === null) throw new Error('Shared standby registrations could not be read');
     const shares = Object.entries(registered).filter(([, provider]) => !providerId || provider === providerId);
     if (shares.length) {
-      const { disableShareAvailability } = await import('./providerShareAvailability.js');
       for (const [id] of shares) await disableShareAvailability(id);
       if (activeOwnerScopeKey() !== owner) throw new Error('Provider share account changed');
       await registry.updateAtomic(({ value }) => {

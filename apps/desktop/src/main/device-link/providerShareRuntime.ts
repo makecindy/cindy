@@ -334,18 +334,30 @@ const reshareEvents: ProviderShareReshareEvents = {
 
 /** 设备互联连上(本实例持有连接)时启动；断开、登出或失去持有权时停止。 */
 let stopAvailabilityPublisher: (() => void) | undefined;
-let availabilityPublishTail: Promise<void> = Promise.resolve();
+let availabilityPublishing = false;
+let availabilityPublishPending = false;
+let availabilityPublisherEpoch = 0;
+let availabilitySnapshot: string | undefined;
 function queueAvailabilityPublish(): void {
-  availabilityPublishTail = availabilityPublishTail.catch(() => undefined).then(async () => {
-    if (!running) return;
-    const shares = getProviderShareHostSnapshot();
-    for (const work of [refreshStandbyGuests, () => publishShareAvailability(shares), flushStandbyUsage,
-      ...shares.map(share => () => importStandbyUsage(share.shareId))]) {
-      if (!running) return;
-      try { await work(); }
-      catch (error) { log.warn('shared standby synchronization unavailable', { error: String(error) }); }
-    }
-  });
+  if (!running) return;
+  availabilityPublishPending = true;
+  if (availabilityPublishing) return;
+  availabilityPublishing = true;
+  void (async () => {
+    try {
+      while (running && availabilityPublishPending) {
+        availabilityPublishPending = false;
+        const epoch = availabilityPublisherEpoch;
+        const shares = getProviderShareHostSnapshot();
+        for (const work of [refreshStandbyGuests, () => publishShareAvailability(shares), flushStandbyUsage,
+          ...shares.map(share => () => importStandbyUsage(share.shareId))]) {
+          if (!running || epoch !== availabilityPublisherEpoch) break;
+          try { await work(); }
+          catch (error) { log.warn('shared standby synchronization unavailable', { error: String(error) }); }
+        }
+      }
+    } finally { availabilityPublishing = false; }
+  })();
 }
 export function startProviderShareRuntime(broadcast: Broadcast, options: { invoke?: ShareInvoke } = {}): void {
   stopAvailabilityPublisher?.();
@@ -355,7 +367,13 @@ export function startProviderShareRuntime(broadcast: Broadcast, options: { invok
   const stopSettings = onDeviceLinkSettingChanged(key => { if (key === 'remoteControlEnabled') queueAvailabilityPublish(); });
   const timer = setInterval(queueAvailabilityPublish, 60_000);
   timer.unref?.();
-  stopAvailabilityPublisher = () => { clearInterval(timer); stopGroup(); stopModels(); stopAccess(); stopSettings(); };
+  availabilitySnapshot = undefined;
+  availabilityPublisherEpoch += 1;
+  stopAvailabilityPublisher = () => {
+    availabilityPublisherEpoch += 1;
+    availabilityPublishPending = false;
+    clearInterval(timer); stopGroup(); stopModels(); stopAccess(); stopSettings();
+  };
 
   // 启动仲裁可能早于 IPC 注册；必须在 host 的第一轮快照前配置持久归属。
   configureProviderShareApprovalWindows({
@@ -410,7 +428,16 @@ export function startProviderShareRuntime(broadcast: Broadcast, options: { invok
       }, member.joinedAt);
     },
     changed() {
-      queueAvailabilityPublish();
+      // Polling also emits unchanged snapshots. Only permission/identity changes
+      // need an immediate full pass; periodic refresh still checks executor health.
+      const snapshot = JSON.stringify(getProviderShareHostSnapshot().map(share => ({
+        shareId: share.shareId, hostDeviceId: share.hostDeviceId, providerId: share.providerId,
+        members: share.members.map(member => [member.memberId, member.joinedAt, member.status]),
+      })));
+      if (snapshot !== availabilitySnapshot) {
+        availabilitySnapshot = snapshot;
+        queueAvailabilityPublish();
+      }
       emit(PROVIDER_SHARE_IPC.OWNED_CHANGED, null);
     },
     requested(request, share, quiet) {

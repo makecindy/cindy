@@ -1,3 +1,4 @@
+import { shareAvailabilityRequest } from './providerShareAvailabilityTransport.js';
 import fs from 'node:fs';
 import { activeOwnerScopeKey, ownerScopedUserDataPath } from '../appSessionState.js';
 import { createOverrideSettingsFile } from '../maker-host/override-settings-file.js';
@@ -57,7 +58,6 @@ export function flushStandbyUsage(): Promise<void> {
   if (flushing) return flushing;
   const assertCurrent = captureProviderManagementScope();
   const work = (async () => {
-    const { shareAvailabilityRequest } = await import('./providerShareAvailability.js');
     assertCurrent();
     outbox.invalidateIfChanged();
     const entries = outbox.read().entries;
@@ -82,7 +82,6 @@ export async function importStandbyUsage(shareId: string): Promise<void> {
   const assertCurrent = captureProviderManagementScope();
   const usage = getProviderShareUsageStore();
   if (!usage) return;
-  const { shareAvailabilityRequest } = await import('./providerShareAvailability.js');
   let cursor = '';
   // Pages are bounded server-side. Re-reading is idempotent, including after restart.
   for (;;) {
