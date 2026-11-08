@@ -6145,12 +6145,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
         list: (body: { botId: string; rootSessionId: string }): Promise<unknown> =>
           ipcRenderer.invoke('local-db:bots:dm-thread:list', body),
       },
-      todos: {
-        list: (botId: string) => ipcRenderer.invoke('local-db:bots:todos:list', botId),
-        update: (botId: string, patch: import('@cindy/maker-shared/teammate-todo').TodoPatch) => ipcRenderer.invoke('local-db:bots:todos:update', botId, patch),
-        act: (botId: string, input: {id:string;revision:number;requestId:string;locale?:string}) => ipcRenderer.invoke('local-db:bots:todos:act', botId, input),
-        dailyCheck: (botId: string, enabled?: boolean) => ipcRenderer.invoke('local-db:bots:todos:daily-check', botId, enabled),
-      },
       projects: {
         list: (botId: string): Promise<import('../shared/botWorkbench').BotProjectOption[]> =>
           ipcRenderer.invoke('local-db:bots:projects:list', botId),

@@ -40,7 +40,7 @@ import {
   BUILTIN_NIGHTLY_LEARNING_ROUTINE_PREFIX,
   ROUTINE_TRIGGER_DATA_LEAD,
 } from '../../shared/botAutonomy.js';
-import { buildTodoCheckRoutineInput, localizedLegacyTodoCheck, todoCheckRoutineId } from '../bot-autonomy/todoCheckRoutine.js';
+import { todoCheckRoutineId } from '../bot-autonomy/todoCheckRoutine.js';
 
 /** Bootstrap supplies live getters without a service -> scheduler -> IPC dependency cycle. */
 export interface RoutineHostDeps {
@@ -178,7 +178,9 @@ async function execute(scope: string, routine: Routine, run: RoutineRun, signal:
   shadowedRoutineBots.delete(routine.botId);
   // 主人关掉了这项系统技能：它的后台工作随提示与工具一起停（cindy-bots-runtime.md §6「伙伴技能分层」），不调用模型。
   // 夜间学习不属于任何系统技能，照常运行；主人自己建的例行任务也照常运行。
-  const skill = routine.builtin === 'follow-up' ? 'follow' : routine.id === todoCheckRoutineId(routine.botId) ? 'todo' : null;
+  // Teammates no longer keep todos: a leftover daily todo check has nothing to do.
+  if (routine.id === todoCheckRoutineId(routine.botId)) return { skipped: true };
+  const skill = routine.builtin === 'follow-up' ? 'follow' : null;
   if (skill) {
     const off = await botSystemSkillsOff(routine.botId);
     assertScope(scope);
@@ -452,7 +454,6 @@ export async function getRoutineEngine(): Promise<RoutineEngine> {
     }
     const engine = new RoutineEngine({
       load: async () => saved,
-      legacyTodoCheckContent: localizedLegacyTodoCheck,
       save: async (state) => {
         assertScope(scope);
         if (epoch !== generation) throw new Error('Routine service was reset');
@@ -723,31 +724,6 @@ export const routineTools = {
       return engine.history(id);
     }),
   sources: async () => (await getRoutineEngine()).listSources(),
-  /** 近况里「每天帮我查一次」：「每天查待办」是否存在且开着。 */
-  todoCheckEnabled: (botId: string) => withBot(botId, (engine) =>
-    engine.list(botId).some((routine) => routine.id === todoCheckRoutineId(botId) && routine.enabled)),
-  /**
-   * 没有这条时，打开按默认内容新建；已有时只切换 enabled，保留主人或伙伴改过的名称、指令与时间。
-   */
-  setTodoCheck: (botId: string, enabled: boolean) => withBot(botId, async (engine, scope) => {
-    // 系统技能「待办」关着时不能打开（关掉照常可以）：开了也会在执行时被跳过。
-    if (enabled) {
-      const off = await botSystemSkillsOff(botId);
-      assertScope(scope);
-      if (off.includes('todo')) throw Object.assign(new Error('SYSTEM_SKILL_OFF: this teammate\'s Todos system Skill is turned off'), { code: 'SYSTEM_SKILL_OFF' });
-    }
-    const id = todoCheckRoutineId(botId);
-    const routine = engine.list(botId).find((row) => row.id === id) ?? null;
-    if (!routine) {
-      if (!enabled) return false;
-      const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
-      return (await engine.createOnce(botId, buildTodoCheckRoutineInput(timezone), id)).enabled;
-    }
-    if (routine.enabled === enabled) return enabled;
-    const { name, prompt, triggers, silentWhenIdle, preRunHook } = routine;
-    const saved = await engine.put(botId, { name, prompt, triggers, silentWhenIdle, preRunHook, enabled }, id, routine.revision);
-    return saved.enabled;
-  }),
 };
 
 

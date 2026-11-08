@@ -10170,7 +10170,6 @@
     },
     "glance": {
       "open": "{{name}} at a glance",
-      "dueUnseen": "A todo is due",
       "computers": "Computers",
       "runningHere": "Running here",
       "online": "Online",
@@ -10178,38 +10177,15 @@
       "current": "Current",
       "offlineCount_one": "{{count}} offline",
       "offlineCount_other": "{{count}} offline",
-      "todos": "Todos",
       "showMore": "Show more",
       "showLess": "Show less",
       "doneCount_one": "{{count}} done",
       "doneCount_other": "{{count}} done",
-      "delete": "Delete",
-      "deleted": "Deleted. It won't be added again.",
-      "undo": "Undo",
-      "undoFailed": "Couldn't undo. Try again.",
-      "deleteFailed": "Couldn't delete. Try again.",
-      "check": "Check for me",
-      "checkMeta": "Look for new todos in connected mail and chats",
-      "checkPrompt": "Check my connected sources, like mail and messages, for anything new I need to handle, and add it to my todos.",
-      "checkFailed": "Couldn't send. Try again.",
-      "dailyCheck": "Check every day",
-      "dailyCheckMeta": "Weekdays at 9:00, quiet when nothing is new",
       "recentTasks": "Recent tasks",
       "unread": "Unread result",
-      "stopDailyCheck": "Stop daily checking",
-      "loadFailed": "Couldn’t load to-dos. Try again.",
-      "dailyCheckFailed": "Couldn't save. Try again.",
       "outputs": "Outputs",
       "outputMeta": "{{time}} · {{task}}",
-      "openFailed": "Couldn't open the file",
-      "source": {
-        "conversation": "You asked",
-        "mail": "From email",
-        "feishu": "From Feishu",
-        "github": "From GitHub",
-        "community": "From the community",
-        "task": "From a task"
-      }
+      "openFailed": "Couldn't open the file"
     },
     "autonomy": {
       "title": "Follow Up on My Sessions",
@@ -11260,11 +11236,6 @@
         "use": "Enable for this teammate",
         "whenOff": "When off",
         "items": {
-          "todo": {
-            "name": "Todos",
-            "hint": "Keeps what you ask for and what it notices, and reminds you when due.",
-            "off": "It stops recording, tidying and reminding you of todos. Existing todos are kept and resume when you switch this back on."
-          },
           "routine": {
             "name": "Routines",
             "hint": "Sets up and maintains routines that run on a schedule.",
@@ -11486,7 +11457,7 @@
       "mergeLabel": "Merge Duplicate Cindys",
       "mergeHint": "You have {{count}} Cindys: {{devices}}",
       "mergeTitle": "Merge {{count}} Cindys into one?",
-      "mergeDescription": "Only one Cindy remains. The others’ chat history, memories, skills, todos and routines come along; a memory or skill with the same name but different content is kept as a second copy, never overwritten. The other Cindys are turned off; their data stays in the cloud and on their computers.",
+      "mergeDescription": "Only one Cindy remains. The others’ chat history, memories, skills and routines come along; a memory or skill with the same name but different content is kept as a second copy, never overwritten. The other Cindys are turned off; their data stays in the cloud and on their computers.",
       "mergeKeep": "Keep the name, personality and settings of",
       "mergeAction": "Merge",
       "merged": "{{count}} Cindys merged into one, with {{messages}} messages brought along",

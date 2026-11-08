@@ -27,11 +27,8 @@ import { resolveAvailableTaskModels } from '../maker-ipc/appDefaultModelControl.
 import { botProfileDir, botProfileMemoryDir, readBotProfileFolder, writeBotProfileFolder } from '../maker-ipc/botProfileFolder.js';
 import { onBotRemoteResourceChanged } from '../maker-ipc/botRemoteResourceInvalidation.js';
 import { applyBotSkillFilesForBot, deleteBotSkillForBot, listBotSkillFilesForBot, listBotSkillSourcesForBot, readBotSkillFilesForBot, readBotSkillSourceForBot, saveBotSkillSourceForBot } from '../maker-ipc/botSkillService.js';
-import { companionTodoStore } from '../maker-ipc/botTodoAccess.js';
 import { mergeCompanionWorkbench, readCompanionWorkbench } from '../maker-ipc/botWorkbenchService.js';
 import { importCompanionRoutines, listCompanionRoutines, type CompanionRoutineValue } from '../routines/service.js';
-import type { TeammateTodo } from '@cindy/maker-shared/teammate-todo';
-import { portableTodo, travellingTodos } from './travel.js';
 import type { CompanionMaterializeHost } from './materialize.js';
 import { companionHomes } from './homes.js';
 import { createMcpServerNamesReader } from './mcpServerNames.js';
@@ -50,7 +47,6 @@ import {
   COMPANION_ROUTINE_PREFIX,
   COMPANION_SKILL_PREFIX,
   COMPANION_SKILL_FILES_PREFIX,
-  COMPANION_TODO_PREFIX,
   COMPANION_WORKBENCH_KEY,
   type CompanionPreferenceValue,
 } from './uploader.js';
@@ -115,15 +111,13 @@ export async function readCompanionValues(botId: string, selfDeviceId: string | 
     const files = await listBotSkillFilesForBot(botId, skill.slug, skill.enabled);
     if (files.length) values.push({ key: `${COMPANION_SKILL_FILES_PREFIX}${skill.slug}`, value: null, localFiles: files });
   }
-  // Todos, routines and the workbench move with the companion too (cloud-companions.md §2). A read
+  // Routines and the workbench move with the companion too (cloud-companions.md §2). A read
   // failure aborts the cycle like the files above, so nothing is tombstoned by mistake.
   // These parts are read separately: one that cannot be read now (e.g. routines before their engine
   // is ready) leaves its cloud values untouched instead of stopping the profile and memories.
   const part = async (prefix: string, read: () => Promise<CompanionPreferenceValue[]>) => {
     try { values.push(...await read()); } catch { values.push({ key: prefix, value: null, unread: true }); }
   };
-  await part(COMPANION_TODO_PREFIX, async () => travellingTodos((await companionTodoStore(botId).read()).items)
-    .map(item => ({ key: `${COMPANION_TODO_PREFIX}${item.id}`, value: portableTodo(item) })));
   await part(COMPANION_ROUTINE_PREFIX, async () => (await listCompanionRoutines(botId, selfDeviceId))
     .map(routine => ({ key: `${COMPANION_ROUTINE_PREFIX}${routine.id}`, value: routine })));
   if (selfDeviceId) await part(COMPANION_WORKBENCH_KEY, async () => {
@@ -149,13 +143,6 @@ function createMaterializer(input: {
   log?: CompanionLog;
 }): MaterializeLocal {
   return {
-    applyTodos: async (botId, items, remove, fence) => {
-      fence.assertCurrent();
-      const todos = items.filter((item): item is TeammateTodo => !!item && typeof item === 'object'
-        && typeof (item as { id?: unknown }).id === 'string' && (item as { id: string }).id.startsWith('todo:')
-        && typeof (item as { title?: unknown }).title === 'string' && Array.isArray((item as { history?: unknown }).history));
-      await companionTodoStore(botId).importItems(todos, remove);
-    },
     applyRoutines: async (botId, routines, remove, fence) => {
       fence.assertCurrent();
       const valid = routines.filter((routine): routine is CompanionRoutineValue => !!routine && typeof routine === 'object'

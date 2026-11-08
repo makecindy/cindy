@@ -100,17 +100,17 @@ describe('Bot Profile runtime prompt', () => {
   });
 
   it('names turned-off system Skills as unavailable and drops them from the list', () => {
-    const prompt = buildBotCapabilityContextPrompt({ systemSkillsOff: ['todo'] });
-    expect(prompt).toContain('On: `routine`');
-    expect(prompt).not.toContain(`\`todo\` — ${TEAMMATE_SYSTEM_SKILLS.todo.description}`);
-    expect(prompt).toContain('Off: `todo`. Their tools are unavailable');
+    const prompt = buildBotCapabilityContextPrompt({ systemSkillsOff: ['routine'] });
+    expect(prompt).toContain('On: `follow`');
+    expect(prompt).not.toContain(`\`routine\` — ${TEAMMATE_SYSTEM_SKILLS.routine.description}`);
+    expect(prompt).toContain('Off: `routine`. Their tools are unavailable');
   });
 
   // Greptile #8330: every local teammate mounts the same core file, so it must not claim a teammate's switches.
   it('keeps per-teammate system Skill state out of the shared core file', () => {
-    const shared = buildTeammateGuide({ shared: true, systemSkillsOff: ['todo'] });
+    const shared = buildTeammateGuide({ shared: true, systemSkillsOff: ['routine'] });
     expect(shared).not.toMatch(/\bOn: |\bOff: |All system Skills are off/);
-    for (const id of ['todo', 'routine', 'follow']) expect(shared).toContain(`\`${id}\` — `);
+    for (const id of ['routine', 'follow']) expect(shared).toContain(`\`${id}\` — `);
     expect(shared).toContain('your preloaded profile says which are on for you');
     expect(shared.length).toBeLessThanOrEqual(TEAMMATE_CORE_MAX_CHARS);
   });

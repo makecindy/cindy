@@ -10127,44 +10127,20 @@
     },
     "glance": {
       "open": "{{name}}の近況",
-      "dueUnseen": "期限が来た Todo があります",
       "computers": "コンピュータ",
       "runningHere": "このコンピュータで実行中",
       "online": "オンライン",
       "offline": "オフライン",
       "current": "現在",
       "offlineCount_other": "オフライン {{count}} 台",
-      "todos": "Todo",
       "showMore": "さらに表示",
       "showLess": "閉じる",
       "doneCount_other": "完了 {{count}}",
-      "delete": "削除",
-      "deleted": "削除しました。同じ件は今後記録しません",
-      "undo": "元に戻す",
-      "undoFailed": "元に戻せませんでした。もう一度お試しください",
-      "deleteFailed": "削除できませんでした。もう一度お試しください",
-      "check": "確認して",
-      "checkMeta": "接続済みのメールやメッセージから新しい Todo を探します",
-      "checkPrompt": "接続済みのメールやメッセージなどに、私が対応すべき新しい用件がないか確認して、あれば Todo に追加して。",
-      "checkFailed": "送信できませんでした。もう一度お試しください",
-      "dailyCheck": "毎日確認する",
-      "dailyCheckMeta": "平日 9:00、新しい Todo がなければ通知しません",
       "recentTasks": "最近のセッション",
       "unread": "未読の結果",
-      "stopDailyCheck": "毎日の確認を停止",
-      "loadFailed": "To-do を読み込めませんでした。再試行してください。",
-      "dailyCheckFailed": "保存できませんでした。もう一度お試しください",
       "outputs": "成果物",
       "outputMeta": "{{time}} · {{task}}",
-      "openFailed": "ファイルを開けませんでした",
-      "source": {
-        "conversation": "あなたの依頼",
-        "mail": "メールから",
-        "feishu": "Feishu から",
-        "github": "GitHub から",
-        "community": "コミュニティから",
-        "task": "タスクから"
-      }
+      "openFailed": "ファイルを開けませんでした"
     },
     "autonomy": {
       "title": "自分のセッションをフォロー",
@@ -11215,11 +11191,6 @@
         "use": "このチームメイトでオンにする",
         "whenOff": "オフにすると",
         "items": {
-          "todo": {
-            "name": "ToDo",
-            "hint": "頼まれたことや気づいたことを記録し、期限に知らせます。",
-            "off": "ToDo の記録、整理、通知をやめます。既存の ToDo は残り、オンに戻すと再開します。"
-          },
           "routine": {
             "name": "ルーティン",
             "hint": "定期的に実行するルーティンを作成・管理します。",
@@ -11441,7 +11412,7 @@
       "mergeLabel": "重複した Cindy を統合",
       "mergeHint": "Cindy が {{count}} 人います：{{devices}}",
       "mergeTitle": "{{count}} 人の Cindy を1人に統合しますか？",
-      "mergeDescription": "統合後は Cindy が1人だけ残ります。ほかの Cindy のチャット履歴、記憶、スキル、ToDo、ルーティンが引き継がれます。同じ名前で内容が違う記憶とスキルは別に保存され、上書きされません。ほかの Cindy はオフになり、データはクラウドと元のパソコンに残ります。",
+      "mergeDescription": "統合後は Cindy が1人だけ残ります。ほかの Cindy のチャット履歴、記憶、スキル、ルーティンが引き継がれます。同じ名前で内容が違う記憶とスキルは別に保存され、上書きされません。ほかの Cindy はオフになり、データはクラウドと元のパソコンに残ります。",
       "mergeKeep": "名前、性格、設定を残す Cindy",
       "mergeAction": "統合",
       "merged": "{{count}} 人の Cindy を1人に統合し、{{messages}} 件のメッセージを引き継ぎました",

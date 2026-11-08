@@ -12,11 +12,9 @@ import { SSH_STATUS_COMMAND } from '../machines/sshStatus.js';
 import { readGithub, manageGithubPrs } from '../git-context/githubReadRuntime';
 import type { GithubReadMethod } from '@cindy/maker-shared';
 import { reportTaskDelivery } from '../bot-autonomy/hub.js';
-import { todoForCaller } from '../maker-ipc/botTodoAccess.js';
 import { getDeviceId } from '../authManager.js';
 import { buildHistorySessionDeepLink } from '../deepLink.js';
 import { activeCompanionCloud } from '../companion-cloud/runtime.js';
-import { TodoError, queryTodoItems, type TodoListQuery, type TodoPatch, type preflightTodoEvents } from '@cindy/maker-shared/teammate-todo';
 import { t } from '../i18n.js';
 import { executeTaskTags } from '../localDb/ipc/taskTags.js';
 import { getPluginMarketService } from '../plugin-market/service.js';
@@ -1362,23 +1360,6 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       // 停止走通用的 stop_session_turn。
       botWorkbench: {
         projects: runBotProjectsTool,
-        todos: async (caller, operation, input) => {
-          try {
-            const access = await todoForCaller(caller, () => getTaskActionInputState(caller).ownerInput);
-            if (operation === 'list') {
-              const all = await access.list();
-              const q = (input ?? {}) as TodoListQuery & {id?:string;key?:string};
-              if (q.id || q.key) {
-                const items = all.items.filter(t => q.id ? t.id === q.id : t.key === q.key);
-                return {ok:true,items,total:items.length};
-              }
-              return {ok:true,...queryTodoItems(all.items,q)};
-            }
-            if (operation === 'update') return {ok:true,todo:await access.patch(input as TodoPatch)};
-            if (operation === 'preflight') return {ok:true,events:await access.preflight(input as Parameters<typeof preflightTodoEvents>[1])};
-            return {ok:true,...await access.ingest(input as Parameters<typeof access.ingest>[0])};
-          } catch(error) { return {ok:false,errorCode:error instanceof TodoError ? error.code : 'INTERNAL',message:error instanceof Error?error.message:'INTERNAL'}; }
-        },
         setResponsibility: (params) => runBotWorkbenchTool(workbenchHost, (access) => access.setResponsibility(params)),
         get: (params) => runBotWorkbenchTool(workbenchHost, (access) => access.get(params)),
         read: (params) => runBotWorkbenchTool(workbenchHost, (access) => access.read(params)),

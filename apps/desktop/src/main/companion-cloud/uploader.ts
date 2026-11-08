@@ -14,7 +14,7 @@ export const COMPANION_MEMORY_PREFIX = 'companion.memory.v1:';
 export const COMPANION_SKILL_PREFIX = 'companion.skill.v1:';
 /** Which room files hold what sits beside a skill's SKILL.md (skillFiles.ts). */
 export const COMPANION_SKILL_FILES_PREFIX = 'companion.skill-files.v1:';
-/** One open (or recently closed) todo per key; the whole file would not fit one value. */
+/** Teammates no longer keep todos. Still owned, so this computer clears its old rows in the cloud. */
 export const COMPANION_TODO_PREFIX = 'companion.todo.v1:';
 /** One routine definition per key (run history stays on the computer it ran on). */
 export const COMPANION_ROUTINE_PREFIX = 'companion.routine.v1:';

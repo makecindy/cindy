@@ -1,10 +1,8 @@
 import { emitSessionCreated } from './sessionCreatedBroadcast.js';
 import type { RoutineModel } from '@cindy/maker-scheduler';
-import { todoAccess } from '../../maker-ipc/botTodoAccess.js';
 import { loadBotReadState, loadAcknowledgedBotReadState, readBotReadPosition } from '../../maker-ipc/botReadStateStore.js';
 import { registerBotReadStateIpc } from '../../maker-ipc/botReadStateIpc.js';
 import { botLinkedProjectAccess } from '../../maker-ipc/botLinkedProjects.js';
-import type { TodoPatch } from '@cindy/maker-shared/teammate-todo';
 /** Cindy Bots 的 main-side 权威数据边界。
  *
  * Bot profile 与 Session 归属只在这里写入 SQLite；renderer 只读取投影，
@@ -130,7 +128,6 @@ import { getResolvedMainLocale } from '../../i18n.js';
 import { SUPPORTED_LOCALES, type SupportedLocale } from '../../../shared/locale.js';
 import { normalizeBotWelcomeContext, type BotWelcomeContext } from '../../../shared/botWelcomeContext';
 import { broadcastBotRemoteResourceChanged } from '../../maker-ipc/botRemoteResourceInvalidation.js';
-import { routineTools } from '../../routines/service.js';
 import { createBotMemoryService } from '../../maker-ipc/botMemoryService.js';
 import { readTeammateProjectMode } from '../../maker-ipc/botWorkspaceRuntime.js';
 import { resolveMemoryScopeKey } from '@cindy/maker-core';
@@ -2919,28 +2916,6 @@ export function registerBotIpc(): void {
       return access.set(id, rawLinked);
     });
   }
-  for (const operation of ['list', 'update', 'act'] as const) {
-    ipcMain.handle(`local-db:bots:todos:${operation}`, async (event, rawBotId: unknown, input: unknown) => {
-      assertTrustedAppRendererEvent(event);
-      const owner = captureBotOperationOwner();
-      const access = await todoAccess(readText(rawBotId, 'botId', 128, true));
-      owner.assertCurrent();
-      const result = operation === 'list' ? await access.list() : operation === 'update' ? await access.patch(input as TodoPatch)
-        : await access.act((input as {id:string}).id, (input as {revision:number}).revision, (input as {requestId:string}).requestId,(input as {locale?:string}).locale);
-      owner.assertCurrent();return result;
-    });
-  }
-  // 近况「每天帮我查一次」：不传 enabled 只读，传了就开 / 关「每天查待办」例行任务（没有就按默认内容新建）。返回当前是否开着。
-  ipcMain.handle('local-db:bots:todos:daily-check', async (event, rawBotId: unknown, rawEnabled: unknown) => {
-    assertTrustedAppRendererEvent(event);
-    const botId = readText(rawBotId, 'botId', 128, true);
-    if (rawEnabled !== undefined && typeof rawEnabled !== 'boolean') throw new Error('Invalid enabled');
-    const owner = captureBotOperationOwner();
-    const result = rawEnabled === undefined ? await routineTools.todoCheckEnabled(botId) : await routineTools.setTodoCheck(botId, rawEnabled);
-    owner.assertCurrent();
-    if (rawEnabled !== undefined) broadcastBotRemoteResourceChanged(botId);
-    return result;
-  });
   // Exact per-task responsibility IDs from the current owner, without message bodies.
   ipcMain.handle('local-db:bots:workbench:follow-scopes', async (event) => {
     assertTrustedAppRendererEvent(event);

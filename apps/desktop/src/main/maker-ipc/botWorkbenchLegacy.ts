@@ -3,7 +3,6 @@
  *
  * 新版工作台不再按项目认领任务。directories 由伙伴关联项目设置读写，旧判断保留，
  * 并继续用于以下兼容路径:
- * - 伙伴 Todo 把旧 PR / issue / 建议判断按稳定 id 兼容导入(`botTodoStore.ts`);
  * - 云端伙伴搬家时把旧文件原样随身带走(`botWorkbenchService.ts` 的 companion 读写),
  *   不让新版本把另一台还在旧版本上的电脑的数据清空。
  */

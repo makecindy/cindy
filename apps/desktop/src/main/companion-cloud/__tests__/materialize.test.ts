@@ -357,25 +357,22 @@ describe('materializeCompanion', () => {
     expect(local.rows[0]!.content).toBe('oldest');
   });
 
-  it('brings todos, routines and the workbench along in one batch each; a routine tombstone removes it, a todo one keeps it', async () => {
+  it('brings routines and the workbench along in one batch each, ignoring an older computer\'s todo rows', async () => {
     const todo = { id: 'todo:1', title: 'Compare quotes', history: [] };
     const routine = { id: 'routine-1', input: { name: 'Daily', prompt: 'p', enabled: true, triggers: [] }, originDeviceId: 'laptop' };
     const workbench = { directories: [{ path: '/projects/game', addedAt: 'x', deviceId: 'laptop' }], tasks: {} };
     const { api } = cloud([profilePref, { key: 'companion.todo.v1:todo:1', value: todo }, { key: 'companion.todo.v1:todo:gone', value: null },
       { key: 'companion.routine.v1:routine-1', value: routine }, { key: 'companion.routine.v1:routine-gone', value: null },
       { key: 'companion.workbench.v1', value: workbench }]);
-    const applyTodos = vi.fn(async () => undefined);
     const applyRoutines = vi.fn(async () => undefined);
     const applyWorkbench = vi.fn(async () => undefined);
-    const local = fakeLocal({ applyTodos, applyRoutines, applyWorkbench });
+    const local = fakeLocal({ applyRoutines, applyWorkbench });
     const { state } = memoryState();
     await materializeCompanion({ api, state, host: local.host, actor, roomId: async () => ROOM });
-    // A todo tombstone only means it left the travelling window: this computer keeps its copy.
-    expect(applyTodos).toHaveBeenCalledWith('bot_mia', [todo], [], expect.anything());
     expect(applyRoutines).toHaveBeenCalledWith('bot_mia', [routine], ['routine-gone'], expect.anything());
     expect(applyWorkbench).toHaveBeenCalledWith('bot_mia', workbench, expect.anything(), { replace: false });
-    // Applied keys may be tombstoned later by this computer.
-    expect(state.bot('bot_mia')?.prefs['companion.todo.v1:todo:1']?.local).toBe(true);
+    // Teammates keep no todos: an older computer's rows are left alone.
+    expect(state.bot('bot_mia')?.prefs['companion.todo.v1:todo:1']).toBeUndefined();
   });
 
   it('lets the cloud workbench replace one this computer synced before, a tombstone included; an unsynced one joins', async () => {

@@ -99,16 +99,16 @@ describe("cindy_helper MCP server", () => {
   });
 
   // Rule (cindy-bots-runtime.md §6「伙伴技能分层」, 2026-11-01): a system Skill the owner turned off loses its
-  // tools and its text together. Unit: the live switch hides and denies the todo tools for every
+  // tools and its text together. Unit: the live switch hides and denies the workbench tools for every
   // entry (category list, call_tool, direct tool) while other teammate tools keep working.
   it('denies the tools and the text of a system Skill the teammate turned off', async () => {
-    let off: string[] = ['todo'];
-    const todos = vi.fn(async () => ({ ok: true as const, items: [] }));
+    let off: string[] = ['follow'];
+    const setResponsibility = vi.fn(async () => ({ ok: true as const, taskId: 't', responsible: false }));
     const server = createXdtHelperMcpServer({
       resolveSurface: async () => 'bot-main',
       resolveSystemSkillsOff: async () => off,
       botWorkbench: {
-        todos,
+        setResponsibility,
         get: async () => ({ ok: true as const, workbench: {} as never }),
         read: async () => ({ ok: false as const, errorCode: 'NOT_FOUND', message: 'none' }),
         continueTask: async () => ({ ok: false as const, errorCode: 'NOT_FOUND', message: 'none' }),
@@ -126,19 +126,19 @@ describe("cindy_helper MCP server", () => {
     try {
       const listed = parsePayload(await client.callTool({ name: 'list_tools', arguments: { category: 'bots' } }));
       const names = (listed.tools as Array<{ name: string }>).map((tool) => tool.name);
-      expect(names).not.toContain('list_teammate_todos');
-      expect(names).toContain('get_workbench');
-      expect(await call('list_teammate_todos')).toMatchObject({ ok: false, errorCode: 'CAPABILITY_NOT_AVAILABLE' });
-      expect(parsePayload(await client.callTool({ name: 'list_teammate_todos', arguments: {} })))
+      const release = { task_id: 't', responsible: false };
+      expect(names).not.toContain('set_workbench_task_responsibility');
+      expect(await call('set_workbench_task_responsibility', release)).toMatchObject({ ok: false, errorCode: 'CAPABILITY_NOT_AVAILABLE' });
+      expect(parsePayload(await client.callTool({ name: 'set_workbench_task_responsibility', arguments: release })))
         .toMatchObject({ ok: false, errorCode: 'CAPABILITY_NOT_AVAILABLE' });
-      expect(todos).not.toHaveBeenCalled();
-      expect(await call('read_teammate_skill', { name: 'todo' })).toMatchObject({ ok: false, errorCode: 'SYSTEM_SKILL_OFF' });
+      expect(setResponsibility).not.toHaveBeenCalled();
+      expect(await call('read_teammate_skill', { name: 'follow' })).toMatchObject({ ok: false, errorCode: 'SYSTEM_SKILL_OFF' });
       expect(await call('read_teammate_skill', { name: 'routine' })).toMatchObject({ ok: true, kind: 'system', name: 'routine' });
       expect(await call('read_teammate_skill', { name: 'tasks' })).toMatchObject({ ok: true, kind: 'core' });
       // Turning it back on needs no new session: the next call reads the live switch.
       off = [];
-      expect(await call('list_teammate_todos')).toMatchObject({ ok: true });
-      expect(todos).toHaveBeenCalledOnce();
+      expect(await call('set_workbench_task_responsibility', release)).toMatchObject({ ok: true });
+      expect(setResponsibility).toHaveBeenCalledOnce();
     } finally { await client.close(); await server.close(); }
   });
 

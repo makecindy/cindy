@@ -44,19 +44,6 @@ export function teammateVisualReplyAt(sessionId: string): number {
   const bot = teammates.find(item => sessionId === `${VISUAL_TEAMMATE_SESSION_ID}:${item.id}`);
   return FIXTURE_NOW - (bot?.minutesAgo ?? 0) * MINUTE;
 }
-// In-memory mock state only: exercises the real glance actions without a host or automation.
-let dailyTodoCheck = true;
-let todoDeleted = false;
-const glanceTodo = {
-  id: 'visual-glance-todo', revision: 1, key: 'visual-review', origin: 'assigned',
-  title: '确认登录页的验收截图', progress: '', outcome: '', value: '', next: null,
-  sources: [], associations: [], status: 'open', createdAt: new Date(FIXTURE_NOW).toISOString(),
-  updatedAt: new Date(FIXTURE_NOW).toISOString(),
-  sourceDeadline: { kind: 'instant', date: new Date(FIXTURE_NOW + 60 * MINUTE).toISOString().slice(0, 10), timeZone: 'UTC', at: new Date(FIXTURE_NOW + 60 * MINUTE).toISOString() },
-  deadlineCandidate: null,
-  suggestedDate: null, decision: null, history: [], action: null,
-};
-
 export type GroupRunScene = 'single' | 'multiple' | 'stop-pending' | 'stop-failure' | 'stop-idle';
 let runSceneStopped = false;
 // Foreground refreshes deliver running -> idle -> another member's running round
@@ -95,10 +82,9 @@ function runSceneResource(id: string, scene: GroupRunScene, now: number) {
   };
 }
 
-const systemSkillsOn: Record<string, boolean> = { todo: false, routine: true, follow: true };
+const systemSkillsOn: Record<string, boolean> = { routine: true, follow: true };
 let learnedSkillOn = true;
 const SYSTEM_SKILLS: ReadonlyArray<[string, string, string]> = [
-  ['todo', '待办', '记下你交代的事和它留意到的事，到期提醒你。'],
   ['routine', '例行任务', '设置并维护按时运行的例行任务。'],
   ['follow', '工作台与跟进', '留意你所有任务的进展，跟进你交给它的任务。'],
 ];
@@ -181,22 +167,6 @@ export function teammateVisualFixture(channel: string, args: unknown[], now = FI
       actions: [{ id: 'open-create', label: 'New teammate' }] }],
   } satisfies RemoteResourceManifestResponse;
   const request = args[0] as { collectionId?: string; ref?: { collectionId?: string; id?: string }; resourceRef?: { id?: string }; actionId?: string; query?: string; input?: { enabled?: boolean; operation?: string; op?: string; args?: { id?: string } } } | undefined;
-  if (channel === REMOTE_RESOURCE_GET_CHANNEL && request?.ref?.id === 'todos:cindy-default') {
-    const query = JSON.parse(request.query ?? '{}');
-    const items = query.view === 'done' || todoDeleted ? [] : [glanceTodo];
-    return { ref: { collectionId: TEAMMATES, kind: 'bot', id: request.ref.id }, revision: 'visual-1',
-      display: { title: 'Todos' }, actions: [], links: [],
-      blocks: [{ id: 'todos', primitive: 'teammate-todos', fallbackMarkdown: glanceTodo.title, data: { items, total: items.length, dailyCheck: dailyTodoCheck } }] };
-  }
-  if (channel === REMOTE_RESOURCE_INVOKE_CHANNEL && request?.resourceRef?.id === 'todos:cindy-default' && request.actionId === 'todo-daily-check') {
-    dailyTodoCheck = request.input?.enabled === true;
-    return { effects: [], dailyCheck: dailyTodoCheck };
-  }
-  if (channel === REMOTE_RESOURCE_INVOKE_CHANNEL && request?.resourceRef?.id === 'todos:cindy-default' && request.actionId === 'todo-update') {
-    if (request.input?.operation === 'delete') todoDeleted = true;
-    if (request.input?.operation === 'restore') todoDeleted = false;
-    return { effects: [], todo: glanceTodo };
-  }
   // Skill layers (cindy-bots-runtime.md §6「伙伴技能分层」): Cindy's Skills page as the host draws it.
   // Open the teammate's settings → Skills in --mock.
   const skillsPage = /^settings:cindy-default\/skills(?:\/(.+))?$/.exec(request?.ref?.id ?? request?.resourceRef?.id ?? '');
@@ -311,8 +281,7 @@ export function teammateVisualFixture(channel: string, args: unknown[], now = FI
     if (bot) return {
       ref: { collectionId: TEAMMATES, kind: 'bot', id: request.ref.id }, revision: 'visual-1',
       display: { title: bot.name, avatar: bot.avatar, lastReplyAt: teammateVisualReplyAt(`${VISUAL_TEAMMATE_SESSION_ID}:${bot.id}`) },
-      links: [{ rel: 'conversation', target: { kind: 'session', sessionId: `${VISUAL_TEAMMATE_SESSION_ID}:${bot.id}` } },
-        ...(id === 'cindy-default' ? [{ rel: 'todos', target: { kind: 'resource', ref: { collectionId: TEAMMATES, kind: 'bot', id: 'todos:cindy-default' } } }] : [])],
+      links: [{ rel: 'conversation', target: { kind: 'session', sessionId: `${VISUAL_TEAMMATE_SESSION_ID}:${bot.id}` } }],
       actions: [], blocks: [{ id: 'profile', primitive: 'markdown', fallbackMarkdown: bot.preview },
         ...(id === 'cindy-default' ? [{ id: 'skills', primitive: 'list', fallbackMarkdown: '',
           data: { entries: [{ id: 'skills', title: '技能', resourceId: 'settings:cindy-default/skills' }] } }] : [])],

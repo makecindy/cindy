@@ -79,8 +79,12 @@ it('rejects a previously discovered hidden companion and allows it again after r
 
   await expect(get()).resolves.toMatchObject({
     display: { title: 'Sora' },
-    links: expect.arrayContaining([{ rel: 'conversation', target: { kind: 'session', sessionId: 'session-1' } },expect.objectContaining({rel:'todos',target:{kind:'resource',ref:{collectionId:'teammates',kind:'bot',id:'todos:bot-1'}}})]),
+    links: expect.arrayContaining([{ rel: 'conversation', target: { kind: 'session', sessionId: 'session-1' } }]),
   });
+  // Teammates keep no todos: new clients get no link; an older computer that still opens the page gets an empty list.
+  expect((await get()).links?.some((link) => link.rel === 'todos')).toBe(false);
+  await expect(remoteResourceRegistry.get(context, { client, ref: { ...discovered.ref, id: 'todos:bot-1' } }))
+    .resolves.toMatchObject({ blocks: [{ primitive: 'teammate-todos', data: { items: [], total: 0 } }] });
   // V2 retired teammate-to-teammate messages; an older computer still sending one gets a stable refusal.
   for (const actionId of ['send-message', 'verify-message', 'message-receipt']) {
     await expect(remoteResourceRegistry.invoke(context, { client, collectionId: 'teammates', actionId, resourceRef: discovered.ref,
@@ -147,9 +151,8 @@ it('reports a teammate this computer no longer has as not found, without failing
   await expect(remoteResourceRegistry.get(context, { client,
     ref: { collectionId: 'teammates', kind: 'bot', id: 'gone' } }))
     .rejects.toMatchObject({ code: 'NOT_FOUND', message: 'remote resource does not exist' });
-  await expect(remoteResourceRegistry.invoke(context, { client, collectionId: 'teammates',
-    actionId: 'todo-daily-check', resourceRef: { collectionId: 'teammates', kind: 'bot', id: 'todos:gone' },
-    input: { enabled: true } }))
+  await expect(remoteResourceRegistry.get(context, { client,
+    ref: { collectionId: 'teammates', kind: 'bot', id: 'todos:gone' } }))
     .rejects.toMatchObject({ code: 'NOT_FOUND', message: 'Teammate unavailable' });
 });
 

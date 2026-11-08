@@ -136,35 +136,36 @@ describe('portable teammate editors', () => {
   });
   // Skill layers (cindy-bots-runtime.md §6「伙伴技能分层」) on the phone's generic settings pages. Unit, in-memory deps.
   // Gap: the page listed learned skills only. Minimal input: one learned skill turned off, `routine` off.
-  it('lists the read-only core, the three system Skills and every learned skill, marking the ones turned off', async () => {
+  it('lists the read-only core, the system Skills and every learned skill, marking the ones turned off', async () => {
     const f = fixture(); f.settings.systemSkillsOff = ['routine'];
     await f.deps.setSkillEnabled('bot-a', 'learned', false);
     const shelf = await f.resource('settings:bot-a/skills');
     expect(shelf.blocks!.map(block => block.id)).toEqual(['core', 'system', 'skills']);
     expect(f.entries(shelf, 'core')).toMatchObject([{ resourceId: 'settings:bot-a/skills/_core', subtitle: { translations: { 'zh-CN': '所有伙伴共用 · 始终开启 · 随 Cindy 更新' } } }]);
     expect(f.entries(shelf, 'system').map(entry => [entry.resourceId, !!entry.subtitle])).toEqual([
-      ['settings:bot-a/skills/_todo', false], ['settings:bot-a/skills/_routine', true], ['settings:bot-a/skills/_follow', false]]);
+      ['settings:bot-a/skills/_routine', true], ['settings:bot-a/skills/_follow', false]]);
     expect(f.entries(shelf, 'skills')).toMatchObject([{ resourceId: 'settings:bot-a/skills/learned', subtitle: { fallback: 'Off' } }]);
     const core = await f.resource('settings:bot-a/skills/_core');
     expect(core.actions ?? []).toEqual([]);
     expect(core.blocks!.map(block => block.fallbackMarkdown)).toEqual([expect.stringContaining('了解与设置 Cindy'), '## teammate-guide\nOff: routine']);
     expect(f.deps.coreGuide).toHaveBeenCalledWith(['routine']);
-    // `_` never collides with a learned slug, and only the three system ids exist.
+    // `_` never collides with a learned slug, and only the system ids exist (V1 todos are gone).
     await expect(f.resource('settings:bot-a/skills/_memory')).rejects.toThrow();
+    await expect(f.resource('settings:bot-a/skills/_todo')).rejects.toThrow();
   });
   it('turns a system Skill off and on against the profile version the page was opened at', async () => {
     const f = fixture();
-    const todo = await f.resource('settings:bot-a/skills/_todo');
-    expect(todo.blocks![0]).toMatchObject({ id: 'capability', data: { values: { enabled: true } } });
-    expect(todo.blocks![0].fallbackMarkdown).toContain('到期提醒你');
-    await expect(f.send(todo, { enabled: 'no' })).rejects.toThrow();
-    await f.send(await f.resource('settings:bot-a/skills/_todo'), { enabled: false });
-    expect(f.deps.update).toHaveBeenLastCalledWith({ id: 'bot-a', capabilities: { systemSkillsOff: ['todo'] } }, 3);
     const follow = await f.resource('settings:bot-a/skills/_follow');
+    expect(follow.blocks![0]).toMatchObject({ id: 'capability', data: { values: { enabled: true } } });
+    expect(follow.blocks![0].fallbackMarkdown).toContain('跟进你交给它的任务');
+    await expect(f.send(follow, { enabled: 'no' })).rejects.toThrow();
+    await f.send(await f.resource('settings:bot-a/skills/_follow'), { enabled: false });
+    expect(f.deps.update).toHaveBeenLastCalledWith({ id: 'bot-a', capabilities: { systemSkillsOff: ['follow'] } }, 3);
+    const routine = await f.resource('settings:bot-a/skills/_routine');
     f.settings.source.currentVersion++;
-    await expect(f.send(follow, { enabled: false })).rejects.toThrow();
+    await expect(f.send(routine, { enabled: false })).rejects.toThrow();
     expect(f.deps.update).toHaveBeenCalledTimes(1);
-    await f.send(await f.resource('settings:bot-a/skills/_todo'), { enabled: true });
+    await f.send(await f.resource('settings:bot-a/skills/_follow'), { enabled: true });
     expect(f.deps.update).toHaveBeenLastCalledWith({ id: 'bot-a', capabilities: { systemSkillsOff: [] } }, 5);
   });
   it('turns a learned skill off without rewriting it and back on together with an edit', async () => {

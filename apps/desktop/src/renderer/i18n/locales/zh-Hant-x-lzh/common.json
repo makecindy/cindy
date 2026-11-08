@@ -10127,44 +10127,20 @@
     },
     "glance": {
       "open": "{{name}}之近況",
-      "dueUnseen": "有待辦已屆期",
       "computers": "機",
       "runningHere": "方行於此機",
       "online": "在線",
       "offline": "失聯",
       "current": "當前",
       "offlineCount_other": "{{count}} 機失聯",
-      "todos": "待理",
       "showMore": "顯更多",
       "showLess": "收",
       "doneCount_other": "已畢 {{count}}",
-      "delete": "刪",
-      "deleted": "已刪，同一事此後不再記",
-      "undo": "復之",
-      "undoFailed": "不能復原，請再試",
-      "deleteFailed": "不能刪，請再試",
-      "check": "為吾查之",
-      "checkMeta": "於已連之郵件與訊中尋新待辦",
-      "checkPrompt": "為吾查已連之信箱、訊息等來源，可有須吾處理之新事；有則記為待辦。",
-      "checkFailed": "未能遣出，請再試",
-      "dailyCheck": "每日為吾查一次",
-      "dailyCheckMeta": "工作日 9:00，無新待辦則不擾",
       "recentTasks": "近日差事",
       "unread": "未讀之果",
-      "stopDailyCheck": "止每日之查",
-      "loadFailed": "待辦載入未成，點之再試",
-      "dailyCheckFailed": "未能存，請再試",
       "outputs": "所出",
       "outputMeta": "{{time}} · {{task}}",
-      "openFailed": "不能啟卷",
-      "source": {
-        "conversation": "君所囑",
-        "mail": "出自郵件",
-        "feishu": "出自飛書",
-        "github": "出自 GitHub",
-        "community": "出自社群",
-        "task": "出自差事"
-      }
+      "openFailed": "不能啟卷"
     },
     "autonomy": {
       "title": "跟進吾之差事",
@@ -11215,11 +11191,6 @@
         "use": "為此伴開之",
         "whenOff": "關後",
         "items": {
-          "todo": {
-            "name": "待辦",
-            "hint": "記汝所囑與彼所察之事，期至則告汝。",
-            "off": "不復記、理、告待辦；舊有待辦存焉，復開則續。"
-          },
           "routine": {
             "name": "常例",
             "hint": "為汝立而守按時而行之常例。",
@@ -11441,7 +11412,7 @@
       "mergeLabel": "併重複之 Cindy",
       "mergeHint": "君有 {{count}} 個 Cindy：{{devices}}",
       "mergeTitle": "將 {{count}} 個 Cindy 合而為一？",
-      "mergeDescription": "合併之後，僅留一 Cindy。他 Cindy 之言談記錄、記憶、技藝、待辦與例行差事皆併入；同名而內容相異之記憶與技藝另存一份，不覆寫。他 Cindy 將停用，其資料仍存雲端與原機。",
+      "mergeDescription": "合併之後，僅留一 Cindy。他 Cindy 之言談記錄、記憶、技藝與例行差事皆併入；同名而內容相異之記憶與技藝另存一份，不覆寫。他 Cindy 將停用，其資料仍存雲端與原機。",
       "mergeKeep": "留何者之名、性情與規制",
       "mergeAction": "合而為一",
       "merged": "{{count}} 個 Cindy 已合而為一，攜來 {{messages}} 則訊",

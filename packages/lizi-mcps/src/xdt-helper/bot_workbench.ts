@@ -1,5 +1,4 @@
 import { z } from 'zod';
-import type { TodoPatch } from '@cindy/maker-shared/teammate-todo';
 
 import type { XdtHelperToolRegistry } from '../lizi_xdtHelperToolRegistry.js';
 import type { ControlResult, LiziMcpSessionContext } from '../types.js';
@@ -52,11 +51,6 @@ export interface WorkbenchTranscriptWire {
 export interface BotWorkbenchCallbacks {
   projects?: (params: { callerSessionId: string; projectId?: string; linked?: boolean; includeAvailable?: boolean }) => Promise<ControlResult<{ projects: Array<Record<string, unknown>> }, string>>;
   setResponsibility?: (params: { callerSessionId: string; taskId: string; responsible: boolean }) => Promise<ControlResult<{ taskId: string; responsible: boolean }, string>>;
-  todos?: (
-    callerSessionId: string,
-    operation: 'list' | 'update' | 'preflight' | 'ingest',
-    input?: unknown,
-  ) => Promise<ControlResult<Record<string, unknown>, string>>;
 
   get(params: { callerSessionId: string }): Promise<ControlResult<{ workbench: BotGlanceWire }, string>>;
   read(params: {
@@ -149,14 +143,13 @@ export function registerBotWorkbenchTools(
       },
     });
   }
-  if (deps.callbacks.todos) registerTodoTools(registry, callerSessionId, deps.callbacks.todos);
 
   if (deps.callbacks.setResponsibility) {
     const change = deps.callbacks.setResponsibility;
     registry.register({
       name: 'set_workbench_task_responsibility',
       category: 'bots',
-      description: 'Explicitly take or release responsibility for one Cindy task on this computer. Taking needs the owner\'s request in this turn; you may release on your own. Tasks you start yourself are recorded by the host. Release only changes your responsibility; it does not stop, move, archive or delete the task, and does not affect Todo. Taking responsibility alone does not start execution; the host then wakes you when the task gets stuck, waits, errors or finishes.',
+      description: 'Explicitly take or release responsibility for one Cindy task on this computer. Taking needs the owner\'s request in this turn; you may release on your own. Tasks you start yourself are recorded by the host. Release only changes your responsibility; it does not stop, move, archive or delete the task. Taking responsibility alone does not start execution; the host then wakes you when the task gets stuck, waits, errors or finishes.',
       inputShape: { task_id: z.string().min(1).max(256), responsible: z.boolean() },
       handler: async ({ task_id, responsible }) => {
         const id = callerSessionId();
@@ -239,143 +232,5 @@ export function registerBotWorkbenchTools(
           })
         : errorPayload(result.errorCode, result.message);
     },
-  });
-}
-
-const deadline = z.object({
-  kind: z.enum(['date', 'instant']),
-  date: z.string().max(10),
-  timeZone: z.string().max(100),
-  at: z.string().max(80).optional(),
-  sourceId: z.string().max(512).optional(),
-  sourceVersion: z.number().int().nonnegative().optional(),
-  quote: z.string().max(2000).optional(),
-  observedAt: z.string().max(80).optional(),
-});
-const todoPatch = z.object({
-  id: z.string().max(128).optional(),
-  expectedRevision: z.number().int().nonnegative().optional(),
-  key: z.string().min(1).max(512).optional(),
-  origin: z.enum(['assigned', 'discovered']).optional(),
-  title: z.string().min(1).max(300).optional(),
-  progress: z.string().max(4000).optional(),
-  outcome: z.string().min(1).max(4000).optional(),
-  value: z.string().max(4000).optional(),
-  next: z
-    .object({
-      label: z.string().min(1).max(100),
-      instruction: z.string().min(1).max(4000),
-      kind: z.enum(['advance', 'view', 'decide']),
-    })
-    .nullable()
-    .optional(),
-  sources: z
-    .array(
-      z.object({
-        kind: z.enum(['conversation', 'mail', 'feishu', 'github', 'community', 'task']),
-        id: z.string().min(1).max(512),
-        label: z.string().min(1).max(300),
-        ref: z.string().max(2000).optional(),
-        project: z.string().max(4096).optional(),
-        version: z.number().int().nonnegative().optional(),
-        observedAt: z.string().max(80).optional(),
-      }),
-    )
-    .max(100)
-    .optional(),
-  associations: z
-    .array(
-      z.object({
-        kind: z.enum(['task', 'pr']),
-        id: z.string().max(512),
-        label: z.string().max(300),
-      }),
-    )
-    .max(100)
-    .optional(),
-  sourceDeadline: deadline.nullable().optional(),
-  deadlineOverride: z.object({ value: deadline.nullable() }).optional(),
-  deadlineCandidate: z
-    .object({ value: deadline, reason: z.string().max(2000) })
-    .nullable()
-    .optional(),
-  suggestedDate: z.string().max(10).nullable().optional(),
-  resolvedActionRequestId: z.string().min(1).max(128).optional(),
-  operation: z
-    .enum(['complete', 'reopen', 'delete', 'mute', 'later', 'restore', 'confirm-deadline'])
-    .optional(),
-  until: z.string().max(80).optional(),
-  completion: z
-    .object({
-      summary: z.string().min(1).max(4000),
-      ref: z.string().max(2000).optional(),
-    })
-    .optional(),
-});
-function registerTodoTools(
-  registry: XdtHelperToolRegistry,
-  caller: () => string | null,
-  callback: NonNullable<BotWorkbenchCallbacks['todos']>,
-) {
-  const run = async (op: 'list' | 'update' | 'preflight' | 'ingest', input?: unknown) => {
-    const id = caller();
-    if (!id) return missingSession();
-    const result = await callback(id, op, input);
-    return result.ok ? okPayload(result) : errorPayload(result.errorCode, result.message);
-  };
-  registry.register({
-    name: 'list_teammate_todos',
-    category: 'bots',
-    description:
-      '按id/key读取同一事务（含完成/忽略记录），或分页搜索自己的清单，每页25条并返回总数。独立于项目/任务。维护优先精确读；无变化不扫描信息源。',
-    inputShape: {
-      id: z.string().max(128).optional(),
-      key: z.string().max(512).optional(),
-      query: z.string().max(300).optional(),
-      view: z.enum(['open', 'done', 'hidden']).optional(),
-      origin: z.enum(['all', 'assigned', 'discovered']).optional(),
-      offset: z.number().int().nonnegative().optional(),
-    },
-    handler: (input) => run('list', input),
-  });
-  registry.register({
-    name: 'update_teammate_todo',
-    category: 'bots',
-    description:
-      '新建或部分更新同一事务。新建必须带key、title、outcome（预期结果或完成标准）；key跨来源标识同一问题；已存在时用id+expectedRevision，冲突先读再合并，省略字段保留旧值。发现可入单但不自动授权执行/发送。完成必须携带可核验summary/ref；停止/合并未必满足outcome。删除/静音保留抑制记录，只有用户恢复可解除。来源可指向任务（kind=task，id 为本机任务 id 或 deviceId::sessionId），不需要项目。跟进处理完一件事后更新或完成对应事务。到期保留来源/时区，模糊日期用candidate，用户覆盖不被新来源改掉；稍后不修改期限。',
-    inputShape: { patch: todoPatch },
-    handler: ({ patch }) => run('update', patch satisfies TodoPatch),
-  });
-  registry.register({
-    name: 'preflight_teammate_todo_events',
-    category: 'bots',
-    description:
-      '现有已授权事件流的便宜增量预检：按来源游标、稳定问题key及忽略/完成记录过滤（project 只作原样回传，不再裁剪范围），只有review事件需要取相关正文/模型判断。本工具不连接、扫描或新建定时器；无新事件不调用。',
-    inputShape: {
-      events: z
-        .array(
-          z.object({
-            source: z.string().max(512),
-            sequence: z.number().int().nonnegative(),
-            key: z.string().max(512),
-            project: z.string().max(4096).optional(),
-          }),
-        )
-        .max(100),
-    },
-    handler: ({ events }) => run('preflight', events),
-  });
-  registry.register({
-    name: 'record_teammate_todo_event',
-    category: 'bots',
-    description:
-      '原子保存一条成功处理的增量事件与Todo更新或no-action结果。source+sequence幂等，按来源顺序逐条提交，不跳过失败事件；失败不会推进游标。重复、已完成、已忽略的同一key不会重建。不同来源同一反馈沿用key/id，不能擅自绕过用户拒绝。',
-    inputShape: {
-      source: z.string().max(512),
-      sequence: z.number().int().nonnegative(),
-      patch: todoPatch.optional(),
-      skip: z.enum(['duplicate', 'suppressed', 'outside-scope', 'no-action']).optional(),
-    },
-    handler: (input) => run('ingest', input),
   });
 }

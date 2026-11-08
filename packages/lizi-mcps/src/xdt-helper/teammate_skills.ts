@@ -12,7 +12,7 @@ import { errorPayload, okPayload } from "./_payload.js";
  * text and denies the tools listed in TEAMMATE_SYSTEM_SKILL_TOOLS. The ids are mirrored by
  * apps/desktop/src/shared/botSystemSkills.ts.
  */
-export const TEAMMATE_SYSTEM_SKILL_IDS = ["todo", "routine", "follow"] as const;
+export const TEAMMATE_SYSTEM_SKILL_IDS = ["routine", "follow"] as const;
 export type TeammateSystemSkillId = (typeof TEAMMATE_SYSTEM_SKILL_IDS)[number];
 
 export interface TeammateSkillText {
@@ -23,11 +23,10 @@ export interface TeammateSkillText {
 
 /**
  * Tools that belong to one system Skill. Off denies them for that teammate. Run-time tools of
- * built-in routines (`schedule_notify_current_run`) stay available: follow-up and todo checks run
+ * built-in routines (`schedule_notify_current_run`) stay available: follow-up checks run
  * as routines even when the teammate cannot manage routines itself.
  */
 export const TEAMMATE_SYSTEM_SKILL_TOOLS: Readonly<Record<TeammateSystemSkillId, readonly string[]>> = {
-  todo: ["list_teammate_todos", "update_teammate_todo", "preflight_teammate_todo_events", "record_teammate_todo_event"],
   routine: [
     "routine_list", "routine_sources", "routine_delivery_targets", "routine_save", "routine_history",
     "routine_delete", "routine_run_now", "schedule_list_models", "schedule_set_pre_run_hook",
@@ -56,18 +55,6 @@ export function teammateDeniedTools(off: readonly string[], projectMode = false)
 }
 
 export const TEAMMATE_SYSTEM_SKILLS: Readonly<Record<TeammateSystemSkillId, TeammateSkillText>> = {
-  todo: {
-    name: "todo",
-    description: "Keep the owner's assigned and discovered Todo affairs with sources, deadlines and next steps.",
-    body: [
-      "Todo maintenance is a shared responsibility alongside task execution. Use `list_teammate_todos` and `update_teammate_todo` for your own affairs; read by id/key when known, otherwise use the returned total and pagination. By default a Todo is an explicit user request or an actionable discovery from information you are already authorized to access; distinguish assigned from discovered, include sources, why it matters, an outcome and one concrete next action. Your own memory and personal Skills decide what counts as a Todo for this owner, which authorized sources to check and how to remind; they refine these defaults, never the authorization and safety rules below. No project or execution task is required. Optional task/PR links never duplicate an affair. Ordinary task titles, engine states and archives retain their own lifecycle and never delete Todos. A source may point to a task (local id or deviceId::sessionId).",
-      "Merge reminders for the same issue using existing events and records. Notify only on an important new change; do not repeat a task’s completion reply or duplicate an existing follow-up. Automatically discovered affairs are discovered, never assigned by the user. Keep sent history intact; an expired queued input is not a retraction of an already delivered message.",
-      "Each turn check for relevant new requests, corrections, progress or completion evidence, and maintain the same stable Todo id/key on task results and authorized follow-up. Read relevant records for progress questions even without a change; only write actual changes. Updates are partial: omitted fields preserve sources, links and deadlines. Use id plus expectedRevision for existing entries; on CONFLICT re-read and reconcile rather than overwrite. Read back or inspect the successful returned record; errors are not saving. Never encode state in title prefixes or leave old PR prose after new verified facts. Complete only with a verifiable completion summary/reference satisfying outcome. Task end, merge and archive do not by themselves finish every affair; remaining acceptance is the next step. Reopening retains completion history.",
-      "For proactive discovery, reuse available authorized events and existing routines, not new periodic scans. Use only available authorized sources. Never claim an unconnected mailbox, Feishu account or community was scanned, or read unrelated private message bodies. Apply cheap scope rules and stable event/problem ids, then `preflight_teammate_todo_events` against cursors, existing affairs and ignore records before fetching relevant bodies or using a model. Merge the same feedback from different sources into one key. Commit successful events in source order using `record_teammate_todo_event`; failure must not advance the cursor. Batch relevant summaries/cache results within the existing configured budget, never repeatedly scan full histories or wake an idle model to find no changes. No source event means no rescan. These tools maintain records and preflight supplied events; they do not install connectors, scanners or timers.",
-      "Deletion and not-suggesting-again retain a cross-source suppression for this issue only, not its whole source. Restore only at the user’s request; do not recreate a rejected issue from another source or silently bypass it because new facts arrived. Later is a separate deferral, not completion or an extended deadline. Preserve source deadline precision, time zone and quote; ambiguous relative dates need a candidate and visible confirmation, not a fabricated deadline. User overrides and clearing survive later source updates; suggested dates are distinct. Do not install reminder timers or execute merely because a date passed.",
-      "When the host delivers a todo-action with a stable Todo id, read that affair and advance its named next step without requiring the user to type it again. Stay within existing authorization: recording or reading an external message does not authorize sending, spending or wider access. A received or queued action is not proof of execution or completion. Maintain the same affair on actual receipts; acknowledge a finished attempt with resolvedActionRequestId matching its stored requestId and a factual progress summary, then offer the next step. A stale receipt must not acknowledge a newer attempt. Keep uncertain deliveries unverified and never blindly replay external sends. Prepare an actionable draft or decision when approval is required. Be useful without pressure or repeated nagging. Guidance runs on received events and authorized turns, not while unwoken. Report only the useful result and remaining work; no internal coordination or tool logs.",
-    ].join("\n"),
-  },
   routine: {
     name: "routine",
     description: "Create and maintain your own scheduled, repeating or event-triggered routines.",

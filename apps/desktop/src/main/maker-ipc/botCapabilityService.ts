@@ -45,7 +45,6 @@ const fields: Record<Kind, { list: string; mode: string }> = {
 /** `kind=feature`: this teammate's own switches. Memory keeps its own field; the rest are system Skills. */
 const FEATURES: { id: 'memory' | BotSystemSkillId; name: string; description: string }[] = [
   { id: 'memory', name: '记忆', description: '记住主人的偏好与背景；关闭后不读也不存记忆。' },
-  { id: 'todo', name: '待办', description: '系统技能：记录与提醒主人交代的和发现的待办。' },
   { id: 'routine', name: '例行任务', description: '系统技能：建立和维护自己的定期或事件触发的例行任务。' },
   { id: 'follow', name: '工作台与跟进', description: '系统技能：关注主人的任务近况，跟进交给自己的任务。' },
 ];
@@ -224,7 +223,7 @@ async function selectBotCapability(input: Input & { id: string; joined: boolean 
     if (input.kind === 'feature') {
       const feature = input.id === 'memory' ? 'memory' : isBotSystemSkillId(input.id) ? input.id : null;
       if (!feature) {
-        return { ok: false as const, errorCode: 'CAPABILITY_UNAVAILABLE', message: '没有这项功能；可选 memory、todo、routine、follow' };
+        return { ok: false as const, errorCode: 'CAPABILITY_UNAVAILABLE', message: '没有这项功能；可选 memory、routine、follow' };
       }
       ctx.assertOwner();
       await updateBotProfile({
@@ -254,7 +253,7 @@ async function selectBotCapability(input: Input & { id: string; joined: boolean 
         return {
           ok: false as const,
           errorCode: 'CAPABILITY_UNAVAILABLE',
-          // Weaker models guess kind=skill for todo/memory; point them at the right switch.
+          // Weaker models guess kind=skill for memory; point them at the right switch.
           message: !item && FEATURES.some((feature) => feature.id === input.id)
             ? `${input.id} 是伙伴自己的功能开关，请改用 kind=feature`
             : '该能力未安装、已停用或当前运行引擎不可用',

@@ -10170,7 +10170,6 @@
     },
     "glance": {
       "open": "{{name}} auf einen Blick",
-      "dueUnseen": "Ein To-do ist fällig",
       "computers": "Computer",
       "runningHere": "Läuft hier",
       "online": "Online",
@@ -10178,38 +10177,15 @@
       "current": "Aktuell",
       "offlineCount_one": "{{count}} offline",
       "offlineCount_other": "{{count}} offline",
-      "todos": "To-dos",
       "showMore": "Mehr anzeigen",
       "showLess": "Weniger anzeigen",
       "doneCount_one": "{{count}} erledigt",
       "doneCount_other": "{{count}} erledigt",
-      "delete": "Löschen",
-      "deleted": "Gelöscht. Wird nicht erneut hinzugefügt.",
-      "undo": "Rückgängig",
-      "undoFailed": "Rückgängig machen fehlgeschlagen. Versuche es erneut.",
-      "deleteFailed": "Löschen fehlgeschlagen. Versuche es erneut.",
-      "check": "Für mich prüfen",
-      "checkMeta": "In verbundenen E-Mails und Chats nach neuen To-dos suchen",
-      "checkPrompt": "Prüfe meine verbundenen Quellen wie E-Mails und Nachrichten auf Neues, um das ich mich kümmern muss, und füge es meinen To-dos hinzu.",
-      "checkFailed": "Senden fehlgeschlagen. Versuche es erneut.",
-      "dailyCheck": "Täglich prüfen",
-      "dailyCheckMeta": "Werktags um 9:00, keine Meldung ohne Neuigkeiten",
       "recentTasks": "Letzte Aufgaben",
       "unread": "Ungelesenes Ergebnis",
-      "stopDailyCheck": "Tägliche Prüfung beenden",
-      "loadFailed": "To-dos konnten nicht geladen werden. Versuche es erneut.",
-      "dailyCheckFailed": "Speichern fehlgeschlagen. Versuche es erneut.",
       "outputs": "Ergebnisse",
       "outputMeta": "{{time}} · {{task}}",
-      "openFailed": "Datei konnte nicht geöffnet werden",
-      "source": {
-        "conversation": "Deine Anfrage",
-        "mail": "Aus E-Mails",
-        "feishu": "Aus Feishu",
-        "github": "Aus GitHub",
-        "community": "Aus der Community",
-        "task": "Aus einer Aufgabe"
-      }
+      "openFailed": "Datei konnte nicht geöffnet werden"
     },
     "autonomy": {
       "title": "Meine Sitzungen weiterverfolgen",
@@ -11260,11 +11236,6 @@
         "use": "Für diesen Teammate einschalten",
         "whenOff": "Wenn aus",
         "items": {
-          "todo": {
-            "name": "To-dos",
-            "hint": "Hält fest, worum du bittest und was ihm auffällt, und erinnert dich rechtzeitig.",
-            "off": "Er erfasst, ordnet und meldet keine To-dos mehr. Bestehende To-dos bleiben erhalten und gehen weiter, sobald du wieder einschaltest."
-          },
           "routine": {
             "name": "Routinen",
             "hint": "Richtet regelmäßig laufende Routinen ein und pflegt sie.",
@@ -11486,7 +11457,7 @@
       "mergeLabel": "Doppelte Cindys zusammenführen",
       "mergeHint": "Du hast {{count}} Cindys: {{devices}}",
       "mergeTitle": "{{count}} Cindys zu einer zusammenführen?",
-      "mergeDescription": "Nur eine Cindy bleibt bestehen. Chatverläufe, Erinnerungen, Skills, To-dos und Routinen der anderen werden übernommen. Erinnerungen oder Skills mit gleichem Namen, aber anderem Inhalt bleiben als zweite Kopie erhalten und werden nie überschrieben. Die anderen Cindys werden deaktiviert; ihre Daten bleiben in der Cloud und auf ihren Computern.",
+      "mergeDescription": "Nur eine Cindy bleibt bestehen. Chatverläufe, Erinnerungen, Skills und Routinen der anderen werden übernommen. Erinnerungen oder Skills mit gleichem Namen, aber anderem Inhalt bleiben als zweite Kopie erhalten und werden nie überschrieben. Die anderen Cindys werden deaktiviert; ihre Daten bleiben in der Cloud und auf ihren Computern.",
       "mergeKeep": "Name, Persönlichkeit und Einstellungen übernehmen von",
       "mergeAction": "Zusammenführen",
       "merged": "{{count}} Cindys zu einer zusammengeführt und {{messages}} Nachrichten übernommen",

@@ -10127,44 +10127,20 @@
     },
     "glance": {
       "open": "{{name}}의 근황",
-      "dueUnseen": "기한이 된 할 일이 있습니다",
       "computers": "컴퓨터",
       "runningHere": "이 컴퓨터에서 실행 중",
       "online": "온라인",
       "offline": "오프라인",
       "current": "현재",
       "offlineCount_other": "오프라인 {{count}}대",
-      "todos": "할 일",
       "showMore": "더 보기",
       "showLess": "접기",
       "doneCount_other": "완료 {{count}}",
-      "delete": "삭제",
-      "deleted": "삭제했습니다. 같은 일은 다시 기록하지 않습니다",
-      "undo": "실행 취소",
-      "undoFailed": "실행 취소하지 못했습니다. 다시 시도하세요",
-      "deleteFailed": "삭제하지 못했습니다. 다시 시도하세요",
-      "check": "확인해 줘",
-      "checkMeta": "연결된 메일과 메시지에서 새 할 일을 찾습니다",
-      "checkPrompt": "연결된 메일, 메시지 등에서 내가 처리해야 할 새 일이 있는지 확인하고, 있으면 할 일에 추가해 줘.",
-      "checkFailed": "보내지 못했습니다. 다시 시도하세요",
-      "dailyCheck": "매일 확인",
-      "dailyCheckMeta": "평일 9:00, 새 할 일이 없으면 알리지 않습니다",
       "recentTasks": "최근 세션",
       "unread": "읽지 않은 결과",
-      "stopDailyCheck": "매일 확인 중지",
-      "loadFailed": "할 일을 불러오지 못했습니다. 다시 시도하세요.",
-      "dailyCheckFailed": "저장하지 못했습니다. 다시 시도하세요",
       "outputs": "결과물",
       "outputMeta": "{{time}} · {{task}}",
-      "openFailed": "파일을 열지 못했습니다",
-      "source": {
-        "conversation": "직접 부탁한 일",
-        "mail": "메일에서",
-        "feishu": "Feishu에서",
-        "github": "GitHub에서",
-        "community": "커뮤니티에서",
-        "task": "작업에서"
-      }
+      "openFailed": "파일을 열지 못했습니다"
     },
     "autonomy": {
       "title": "내 세션 후속 확인",
@@ -11215,11 +11191,6 @@
         "use": "이 팀원에게 켜기",
         "whenOff": "끄면",
         "items": {
-          "todo": {
-            "name": "할 일",
-            "hint": "맡긴 일과 발견한 일을 기록하고 기한에 알려 줍니다.",
-            "off": "할 일 기록, 정리, 알림을 멈춥니다. 기존 할 일은 남고 다시 켜면 이어집니다."
-          },
           "routine": {
             "name": "루틴",
             "hint": "정해진 때 실행되는 루틴을 만들고 관리합니다.",
@@ -11441,7 +11412,7 @@
       "mergeLabel": "중복된 Cindy 합치기",
       "mergeHint": "Cindy가 {{count}}명 있습니다: {{devices}}",
       "mergeTitle": "Cindy {{count}}명을 하나로 합칠까요?",
-      "mergeDescription": "합친 뒤에는 Cindy 한 명만 남습니다. 다른 Cindy의 채팅 기록, 기억, 스킬, 할 일, 루틴이 함께 옮겨집니다. 이름은 같지만 내용이 다른 기억과 스킬은 따로 저장되며 덮어쓰지 않습니다. 다른 Cindy는 꺼지고, 데이터는 클라우드와 원래 컴퓨터에 남습니다.",
+      "mergeDescription": "합친 뒤에는 Cindy 한 명만 남습니다. 다른 Cindy의 채팅 기록, 기억, 스킬, 루틴이 함께 옮겨집니다. 이름은 같지만 내용이 다른 기억과 스킬은 따로 저장되며 덮어쓰지 않습니다. 다른 Cindy는 꺼지고, 데이터는 클라우드와 원래 컴퓨터에 남습니다.",
       "mergeKeep": "이름, 성격, 설정을 남길 Cindy",
       "mergeAction": "합치기",
       "merged": "Cindy {{count}}명을 하나로 합치고 메시지 {{messages}}개를 옮겼습니다",

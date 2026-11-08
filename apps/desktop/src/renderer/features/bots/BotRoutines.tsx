@@ -36,7 +36,6 @@ import {
   DropdownMenuSubTrigger,
   DropdownMenuSubContent,
 } from '@/components/ui/dropdown-menu';
-import { TODO_CHECK_ROUTINE_PREFIX } from '../../../shared/botAutonomy';
 
 const menuClass = 'p-2';
 const fieldClass = 'block space-y-2';
@@ -69,10 +68,9 @@ export function BotRoutines({
   const primaryRoute = inheritedRoute ?? (settingsTarget.kind === 'local'
     ? localBots.find((bot) => bot.id === botId)?.capabilities.modelChain[0] : undefined);
   const routinesApi = settingsTarget.routines;
-  // Follow-up and the daily todo check belong to system Skills; off, the host skips them.
-  const skillOffFor = (routine: Routine): 'follow' | 'todo' | null =>
-    routine.builtin === 'follow-up' && systemSkillsOff.includes('follow') ? 'follow'
-      : routine.id.startsWith(TODO_CHECK_ROUTINE_PREFIX) && systemSkillsOff.includes('todo') ? 'todo' : null;
+  // Follow-up belongs to a system Skill; off, the host skips it.
+  const skillOffFor = (routine: Routine): 'follow' | null =>
+    routine.builtin === 'follow-up' && systemSkillsOff.includes('follow') ? 'follow' : null;
   const skillOffHint = (routine: Routine) => {
     const skill = skillOffFor(routine);
     return skill ? t('bots.systemSkills.offHint', { skill: t(`bots.capabilities.system.items.${skill}.name`) }) : undefined;
@@ -370,11 +368,7 @@ export function BotRoutines({
                   checked={routine.enabled}
                   disabled={busy || skillOffFor(routine) !== null}
                   onCheckedChange={(enabled) => void act(() =>
-                    // 每天查待办与近况开关走同一个入口，切换后近况跟着刷新。
-                    // 远程伙伴没有这个入口，按普通例行任务在伙伴所在的电脑上切换。
-                    routine.id.startsWith(TODO_CHECK_ROUTINE_PREFIX) && settingsTarget.kind === 'local'
-                      ? window.electronAPI.localDb.bots.todos.dailyCheck(botId, enabled)
-                      : routinesApi.save(botId, routineInput({ ...routine, enabled }), routine.id),
+                    routinesApi.save(botId, routineInput({ ...routine, enabled }), routine.id),
                   )}
                 />
               </div>

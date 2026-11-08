@@ -1,8 +1,4 @@
 import { TEAMMATE_STATUS_ORDER, resolveTeammateStatus } from '@cindy/maker-shared/teammate-status';
-import { createHash } from 'node:crypto';
-import { botTodoRemoteProjection } from './botTodoRemoteProjection.js';
-import { todoAccess } from '../../maker-ipc/botTodoAccess.js';
-import { queryTodoItems, type TodoListQuery, type TodoPatch } from '@cindy/maker-shared/teammate-todo';
 import { and, desc, eq, inArray, isNull } from 'drizzle-orm';
 import { getDbClient } from '../client/current.js';
 import { botSessionLinks } from '../schema.js';
@@ -21,8 +17,6 @@ import {
   listBotRemoteResourceSources,
 } from './bots.js';
 import { RemoteResourceRegistryError, remoteResourceRegistry } from '../../device-link/remoteResourceRegistry.js';
-import { routineTools } from '../../routines/service.js';
-import { broadcastBotRemoteResourceChanged } from '../../maker-ipc/botRemoteResourceInvalidation.js';
 import { markBotReadPositions, readBotReadPosition } from '../../maker-ipc/botReadStateStore.js';
 import { isIpcError } from '../../../shared/ipc-errors.js';
 import {
@@ -129,21 +123,12 @@ export function registerBotRemoteResourceProvider(management?: typeof botRemoteM
     },
     async get(context, request) {
       if (request.ref.id.startsWith('todos:')) {
-        const scope = captureDataOwnerBroadcastScope();
-        const botId = request.ref.id.slice(6);
-        const source = await readVisibleBotSource(botId);
-        if (!source || !isDataOwnerBroadcastScopeCurrent(scope)) throw new RemoteResourceRegistryError('NOT_FOUND', 'Teammate unavailable');
-        const access = await todoAccess(botId);
-        const all = await access.list();
-        if (!isDataOwnerBroadcastScopeCurrent(scope)) throw new RemoteResourceRegistryError('NOT_FOUND', 'Account changed');
-        const page = queryTodoItems(all.items, request.query ? JSON.parse(request.query) as TodoListQuery : {});
-        page.items = page.items.map(botTodoRemoteProjection);
-        // 近况「每天帮我查一次」的当前状态；旧客户端忽略，新客户端缺这个字段（旧宿主）时不显示开关。
-        // 例行任务读不到（引擎未就绪、伙伴暂停）或主人关掉了系统技能「待办」时不带这个字段，待办照常返回。
-        const dailyCheck = access.todoOff ? undefined : await routineTools.todoCheckEnabled(botId).catch(() => undefined);
-        if (!isDataOwnerBroadcastScopeCurrent(scope)) throw new RemoteResourceRegistryError('NOT_FOUND', 'Account changed');
-        return {ref:request.ref,revision:createHash('sha256').update(JSON.stringify(all.items)).digest('hex'),display:{title:source.name},links:[],
-          blocks:[{id:'todos',primitive:'teammate-todos',fallbackMarkdown:page.items.map(t=>t.title+' — '+t.progress).join('\n').slice(0,8000),data:{...page,...(dailyCheck === undefined ? {} : {dailyCheck})}}]};
+        // Teammates no longer keep todos. An older computer still opens this page, so answer with
+        // an empty list rather than an error; new clients are never linked here.
+        const source = await readVisibleBotSource(request.ref.id.slice(6));
+        if (!source) throw new RemoteResourceRegistryError('NOT_FOUND', 'Teammate unavailable');
+        return { ref: request.ref, revision: 'empty', display: { title: source.name }, links: [],
+          blocks: [{ id: 'todos', primitive: 'teammate-todos', fallbackMarkdown: '', data: { items: [], total: 0 } }] };
       }
 
       if (management && (request.ref.id === 'create' || request.ref.id.startsWith('settings:'))) {
@@ -184,35 +169,9 @@ export function registerBotRemoteResourceProvider(management?: typeof botRemoteM
           entries: [{ id: 'memories', title: editorCopy.memories, resourceId: `settings:${source.id}/memory` }],
         } });
       }
-      resource.links = [...(resource.links ?? []), {rel:'todos',label:{fallback:'Todos',translations:{'zh-CN':'待办','zh-TW':'待辦',ja:'Todo',ko:'할 일', "es":"Tareas pendientes","fr":"Tâches à faire","de":"Aufgaben","pt-PT":"Tarefas","pt-BR":"Tarefas","zh-Hant-x-lzh":"待辦","zh-Hans-x-lzh":"待办"}},target:{kind:'resource',ref:{collectionId:TEAMMATES_REMOTE_COLLECTION_ID,kind:'bot',id:'todos:'+source.id}}}];
       return resource;
     },
     async invoke(context, request) {
-      if (request.actionId === 'todo-update' || request.actionId === 'todo-act') {
-        const scope = captureDataOwnerBroadcastScope();
-        if (!request.resourceRef?.id.startsWith('todos:')) throw new RemoteResourceRegistryError('NOT_FOUND', 'Todo resource required');
-        const botId = request.resourceRef.id.slice(6);
-        const source = await readVisibleBotSource(botId);
-        if (!source || !isDataOwnerBroadcastScopeCurrent(scope)) throw new RemoteResourceRegistryError('NOT_FOUND', 'Teammate unavailable');
-        const access = await todoAccess(botId);
-        const input = request.input ?? {};
-        const result = request.actionId === 'todo-update' ? await access.patch(input as TodoPatch) : await access.act(input.id as string,input.revision as number,input.requestId as string,request.client.locale);
-        if (!isDataOwnerBroadcastScopeCurrent(scope)) throw new RemoteResourceRegistryError('NOT_FOUND', 'Account changed');
-        return {effects:[],todo:result ? botTodoRemoteProjection(result) : null};
-      }
-      if (request.actionId === 'todo-daily-check') {
-        const scope = captureDataOwnerBroadcastScope();
-        if (!request.resourceRef?.id.startsWith('todos:')) throw new RemoteResourceRegistryError('NOT_FOUND', 'Todo resource required');
-        const botId = request.resourceRef.id.slice(6);
-        const source = await readVisibleBotSource(botId);
-        if (!source || !isDataOwnerBroadcastScopeCurrent(scope)) throw new RemoteResourceRegistryError('NOT_FOUND', 'Teammate unavailable');
-        if (typeof request.input?.enabled !== 'boolean') throw new RemoteResourceRegistryError('INVALID_PARAMS', 'enabled must be boolean');
-        const dailyCheck = await routineTools.setTodoCheck(botId, request.input.enabled);
-        if (!isDataOwnerBroadcastScopeCurrent(scope)) throw new RemoteResourceRegistryError('NOT_FOUND', 'Account changed');
-        broadcastBotRemoteResourceChanged(botId);
-        return { effects: [], dailyCheck };
-      }
-
       if (request.actionId === 'read') {
         // The device showed this conversation up to `at` (host time, the reply it displayed).
         // With `threadSessionId` it is one of the teammate's private-chat topics, which keep their

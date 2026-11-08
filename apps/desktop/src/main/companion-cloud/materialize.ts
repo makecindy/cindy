@@ -17,7 +17,7 @@ import type { CompanionBotState, CompanionCloudState } from './state.js';
 import { readCompanionRows, storedValueHash, type CompanionStore } from './store.js';
 import { errorCode, isTransientAttachmentFailure, type CompanionApi, type CompanionLog } from './types.js';
 import {
-  COMPANION_CAPABILITIES_KEY, COMPANION_MEMORY_PREFIX, COMPANION_PROFILE_KEY, COMPANION_ROUTINE_PREFIX, COMPANION_SKILL_FILES_PREFIX, COMPANION_SKILL_PREFIX, COMPANION_TODO_PREFIX,
+  COMPANION_CAPABILITIES_KEY, COMPANION_MEMORY_PREFIX, COMPANION_PROFILE_KEY, COMPANION_ROUTINE_PREFIX, COMPANION_SKILL_FILES_PREFIX, COMPANION_SKILL_PREFIX,
   COMPANION_WORKBENCH_KEY, TOMBSTONE_HASH, isCompanionProfileSnapshot, valueHash,
 } from './uploader.js';
 
@@ -68,8 +68,6 @@ export interface CompanionMaterializeHost {
   /** Make a restored skill's folder hold these files. `fetch` gives a file's local path; null when it is gone for good. Returns the files that did not arrive. */
   applySkillFiles?: (botId: string, slug: string, files: BotSkillFile[], fetch: (file: BotSkillFile) => Promise<string | null>,
     options: { removeOthers: boolean; keep?: string[] }, fence: CompanionWriteFence) => Promise<string[]>;
-  /** The companion's todos from the cloud replace the same ids here; `remove` ids are deleted. */
-  applyTodos?: (botId: string, items: unknown[], remove: string[], fence: CompanionWriteFence) => Promise<void>;
   /** Its routines from the cloud are created or updated with their ids; `remove` ids are deleted. */
   applyRoutines?: (botId: string, routines: unknown[], remove: string[], fence: CompanionWriteFence) => Promise<void>;
   /**
@@ -287,12 +285,10 @@ export async function materializeCompanion(input: {
     });
   }
 
-  // Todos, routines and the workbench move with the companion: applied in one batch each (the
-  // cloud wins; a routine tombstone removes it here). A todo is deleted by marking it (the mark
-  // travels as a value); its tombstone only means it left the travelling window (closed long ago),
-  // so this computer keeps its own copy.
+  // Routines and the workbench move with the companion: applied in one batch each (the cloud
+  // wins; a routine tombstone removes it here). Teammates no longer keep todos: an older
+  // computer's todo rows are not applied.
   const batches = [
-    { prefix: COMPANION_TODO_PREFIX, kind: 'todo', run: host.applyTodos, removes: false },
     { prefix: COMPANION_ROUTINE_PREFIX, kind: 'routine', run: host.applyRoutines, removes: true },
   ] as const;
   for (const batch of batches) {

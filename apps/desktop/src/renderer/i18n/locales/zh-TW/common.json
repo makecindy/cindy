@@ -10127,44 +10127,20 @@
     },
     "glance": {
       "open": "{{name}}的近況",
-      "dueUnseen": "有待辦到期",
       "computers": "電腦",
       "runningHere": "正在這台上執行",
       "online": "線上",
       "offline": "離線",
       "current": "目前",
       "offlineCount_other": "離線 {{count}} 台",
-      "todos": "待辦",
       "showMore": "顯示更多",
       "showLess": "收起",
       "doneCount_other": "已完成 {{count}}",
-      "delete": "刪除",
-      "deleted": "已刪除，同一件事之後不再記錄",
-      "undo": "復原",
-      "undoFailed": "無法復原，請重試",
-      "deleteFailed": "無法刪除，請重試",
-      "check": "幫我查查",
-      "checkMeta": "在已連接的郵件和訊息裡找新待辦",
-      "checkPrompt": "幫我查查已連接的信箱、訊息等來源裡，有沒有需要我處理的新事項，有就記成待辦。",
-      "checkFailed": "沒能傳送，請重試",
-      "dailyCheck": "每天幫我查一次",
-      "dailyCheckMeta": "工作日 9:00，沒有新待辦不打擾",
       "recentTasks": "近期任務",
       "unread": "未讀結果",
-      "stopDailyCheck": "停止每天檢查",
-      "loadFailed": "待辦載入失敗，點擊重試",
-      "dailyCheckFailed": "沒能儲存，請重試",
       "outputs": "輸出內容",
       "outputMeta": "{{time}} · {{task}}",
-      "openFailed": "無法開啟檔案",
-      "source": {
-        "conversation": "你交代的",
-        "mail": "來自郵件",
-        "feishu": "來自飛書",
-        "github": "來自 GitHub",
-        "community": "來自社群",
-        "task": "來自任務"
-      }
+      "openFailed": "無法開啟檔案"
     },
     "autonomy": {
       "title": "跟進我的任務",
@@ -11215,11 +11191,6 @@
         "use": "為這位夥伴開啟",
         "whenOff": "關閉後",
         "items": {
-          "todo": {
-            "name": "待辦",
-            "hint": "記下你交代的事和它發現的事，到期提醒你。",
-            "off": "不再記錄、整理和提醒待辦；已有待辦保留，重新開啟後繼續。"
-          },
           "routine": {
             "name": "例行任務",
             "hint": "幫你建立和維護定期執行的例行任務。",
@@ -11441,7 +11412,7 @@
       "mergeLabel": "合併重複的 Cindy",
       "mergeHint": "你有 {{count}} 個 Cindy：{{devices}}",
       "mergeTitle": "把 {{count}} 個 Cindy 合成一個？",
-      "mergeDescription": "合併後只留下一個 Cindy。其他 Cindy 的對話紀錄、記憶、技能、待辦和例行任務會併進來；同名但內容不同的記憶和技能另存一份，不會覆蓋。其他 Cindy 會停用，它們的資料仍保留在雲端和原來的電腦上。",
+      "mergeDescription": "合併後只留下一個 Cindy。其他 Cindy 的對話紀錄、記憶、技能和例行任務會併進來；同名但內容不同的記憶和技能另存一份，不會覆蓋。其他 Cindy 會停用，它們的資料仍保留在雲端和原來的電腦上。",
       "mergeKeep": "保留哪一個的名字、個性和設定",
       "mergeAction": "合成一個",
       "merged": "{{count}} 個 Cindy 已合成一個，帶過來 {{messages}} 則訊息",
