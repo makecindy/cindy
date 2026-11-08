@@ -1665,6 +1665,7 @@ describe('group attachments', () => {
   // A topic with attachments must retain the same collapsed badge as the main group.
   // Otherwise blur hides the tray while send still includes those invisible attachments.
   it.each([false, true])('shows a picked photo as pending, then sends the upload with the text (topic=%s)', async topic => {
+    vi.useFakeTimers();
     h.chat.server = topic;
     h.local.addImages.mockImplementation(async () => {
       h.local.setPending([{ localId: 'l1', kind: 'image', previewUri: 'file:///tmp/a.jpg', name: 'a.jpg', size: 10 }]);
@@ -1676,12 +1677,15 @@ describe('group attachments', () => {
     await click('botGroup.contextSheetPhotoRow');
     expect(h.local.addImages).toHaveBeenLastCalledWith('library');
     expect(byId('botGroup.contextSheet')).toBeNull();
+    // Finish the picker's next-frame focus before collapsing and testing the badge's focus.
+    await act(async () => { await vi.advanceTimersToNextFrame(); });
     // Collapsed: a badge next to +; focused: the tray inside the card.
     await act(async () => h.row.onBlur());
     expect(byId('botGroup.attachmentTray')).toBeNull();
     expect(byId('botGroup.attachmentCollapsedBadge')?.textContent).toBe('1');
     h.inputFocus.mockClear();
     await click('botGroup.attachmentCollapsedBadge');
+    await act(async () => { await vi.advanceTimersToNextFrame(); });
     expect(h.inputFocus).toHaveBeenCalledOnce();
     await focusComposer();
     expect(byId('composer-row')?.getAttribute('data-card')).toBe('true');
