@@ -64,7 +64,12 @@ function syncSidebar(win: BrowserWindow, getNative: () => NativeDesktopBlur | nu
     }
   } catch { /* An unavailable native material keeps the readable CSS tint. */ }
   // Never leave an unmasked fixed material over the adjustable main backdrop.
-  if (width > 0) setMaterial(win, null);
+  // When the radius itself could not be applied, the system material is the
+  // documented fallback and must survive a sidebar failure.
+  if (width > 0) {
+    const config = backdropConfigs.get(win);
+    setMaterial(win, appliedRadii.has(win) || !config ? null : config.vibrancy);
+  }
   if (!warnedWindows.has(win)) {
     warnedWindows.add(win);
     log.warn('Sidebar material unavailable; retaining sidebar tint');

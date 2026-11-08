@@ -2114,10 +2114,11 @@ html:is([data-wallpaper-active='true'], [data-desktop-background='true']) :is(.l
 }
 /* Windows Acrylic 的 BrowserWindow backing 已在创建期铺同一份 85% 侧栏染色，确保快速
    扩窗时原生新区域先显示正确颜色。常规侧栏让 backing 直接透出，避免 CSS 再叠一遍导致
-   颜色变重；peek drawer 覆盖的是应用内容，仍保留下方独立的染色 + blur。 */
-[data-platform='win32'][data-window-backdrop-material='acrylic'][data-theme='cindy-light']
+   颜色变重；peek drawer 覆盖的是应用内容，仍保留下方独立的染色 + blur。
+   桌面背景模式的 backing 是全透明的（见 vibrancyConfig），侧栏自带语义染色，不在此清除。 */
+[data-platform='win32'][data-window-backdrop-material='acrylic'][data-theme='cindy-light']:not([data-desktop-background='true'])
   aside.bg-sidebar:not([data-sidebar-peek-drawer]) > .sidebar-frost,
-[data-platform='win32'][data-window-backdrop-material='acrylic'][data-theme='cindy-dark']
+[data-platform='win32'][data-window-backdrop-material='acrylic'][data-theme='cindy-dark']:not([data-desktop-background='true'])
   aside.bg-sidebar:not([data-sidebar-peek-drawer]) > .sidebar-frost {
   background: transparent;
 }

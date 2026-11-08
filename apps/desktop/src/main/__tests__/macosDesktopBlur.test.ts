@@ -77,6 +77,17 @@ describe('Mac desktop blur application', () => {
     expect(native.apply).toHaveBeenCalledTimes(2);
   });
 
+  // Unit: reviewer-reported main-window path (addon missing + expanded sidebar) ended with no
+  // material at all; the documented system fallback must remain. Earlier tests set no sidebar width.
+  it('keeps the system material fallback when the native addon is unavailable and the sidebar is expanded', () => {
+    const win = windowFixture();
+    const config = { vibrancy: 'under-window', backgroundColor: '#00000000', desktopBlurRadius: 5,
+      sidebarMaterial: 'light' as const };
+    setMacSidebarWidth(win as unknown as BrowserWindow, 260, () => null);
+    applyMacWindowBackdrop(win as unknown as BrowserWindow, config, () => null);
+    expect(win.setVibrancy.mock.lastCall).toEqual(['under-window']);
+  });
+
   it('retries a failed sidebar mask and replaces it when returning to a full system material', () => {
     const first = windowFixture();
     const win = first as unknown as BrowserWindow;
