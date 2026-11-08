@@ -1,3 +1,4 @@
+import { useWindowWidth } from '@/platform/windowDimension';
 /**
  * SwipeableSessionRow —— 首页会话行的 iOS 式滑动操作包装。
  *
@@ -21,7 +22,7 @@
  *    worklet 拖动中触发 —— 手指还按着时行被移除会拆手势树。
  */
 import { memo, useCallback, useEffect, useLayoutEffect, useRef, type ReactNode } from "react";
-import { Pressable, StyleSheet, View, useWindowDimensions } from "react-native";
+import { Pressable, StyleSheet, View } from "react-native";
 import {
   ReanimatedSwipeable as Swipeable,
   SwipeDirection,
@@ -120,7 +121,7 @@ function SwipeableSessionRowInner({
   const pinnedAt = session.pinnedAt;
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
-  const { width: windowWidth } = useWindowDimensions();
+  const windowWidth = useWindowWidth();
   const fullSwipeThreshold = windowWidth * FULL_SWIPE_RATIO;
 
   const methodsRef = useRef<SwipeableMethods | null>(null);

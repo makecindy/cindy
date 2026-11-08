@@ -1,10 +1,12 @@
-import { useCallback, useEffect, useMemo } from 'react';
+import { NavigationActionContext } from './NavigationActionContext';
+import { useCallback, useContext, useEffect, useMemo } from 'react';
 import { useFocusEffect, useNavigation, useRouter } from 'expo-router';
 
 import { createRefocusReset, forwardNavigationLock, navigationTargetKey } from './navigationLock';
 
 type Router = ReturnType<typeof useRouter>;
 type Href = Parameters<Router['push']>[0];
+export type GuardedNavigationAction = (href: Href, navigation: ReturnType<typeof useActionNavigation>) => void;
 
 /**
  * 有防重复守卫的 router.push(锁语义见 navigationLock.ts)。
@@ -25,9 +27,9 @@ type Href = Parameters<Router['push']>[0];
  * 确定性信号:第一次点击的导航 dispatch 即让本页失焦,其后处理到的补点必然
  * isFocused()===false,丢弃即用户想要的结果(导航已经在路上)。
  */
-export function useGuardedPush(): (href: Href) => void {
+export function useGuardedPush(navigate?: GuardedNavigationAction): (href: Href) => void {
   const router = useRouter();
-  const navigation = useNavigation();
+  const navigation = useActionNavigation();
   useEffect(() => {
     // native-stack 的 transitionEnd 不在默认 NavigationProp 事件类型里,宽化注册;
     // 不支持的平台不会触发,行为回退到 refocus 释放 + 时间窗兜底。
@@ -45,6 +47,12 @@ export function useGuardedPush(): (href: Href) => void {
   return useCallback((href: Href) => {
     if (navigation.isFocused() === false) return;
     if (!forwardNavigationLock.shouldAllow(navigationTargetKey(href))) return;
-    router.push(href);
-  }, [navigation, router]);
+    if (navigate) navigate(href, navigation);
+    else router.push(href);
+  }, [navigation, router, navigate]);
+}
+
+function useActionNavigation() {
+  const routeNavigation = useNavigation();
+  return useContext(NavigationActionContext) ?? routeNavigation;
 }

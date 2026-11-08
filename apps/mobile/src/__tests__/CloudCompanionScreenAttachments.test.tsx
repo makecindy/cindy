@@ -33,7 +33,7 @@ vi.mock('@/theme', async () => {
   return { useTheme: () => ({ colors }), useThemedStyles: (make: any) => make(colors) };
 });
 vi.mock('@/theme/userBubblePreference', () => ({ useUserBubbleAppearance: () => ({ colors: null }) }));
-vi.mock('@/utils/backGuard', () => ({ goBackGuarded: vi.fn() }));
+vi.mock('@/utils/useTaskListBack', () => ({ useTaskListBack: () => vi.fn() }));
 vi.mock('@/platform/AdaptiveWindowContext', () => ({ useAdaptiveWindow: () => ({ width: 402 }) }));
 vi.mock('@/session/BotGroupAvatars', () => ({ BOT_GROUP_MESSAGE_AVATAR_SIZE: 28 }));
 vi.mock('@/session/BotGroupMessageText', async () => {
