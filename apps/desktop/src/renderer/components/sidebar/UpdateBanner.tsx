@@ -191,7 +191,9 @@ export function UpdateBanner({ isCollapsed, onOpenVersionNotice }: UpdateBannerP
   //     让探测跟着弹窗开关反复重跑。
   const canOpenNotice = Boolean(onOpenVersionNotice);
   useEffect(() => {
-    if (status !== 'ready' || !version || !canOpenNotice || isCollapsed) {
+    // 同版本就绪 = 换装 Apple 芯片包，不展示公告链接，也就不必探测。
+    const nativeBuildSwitch = version === window.electronAPI?.appVersion;
+    if (status !== 'ready' || !version || !canOpenNotice || isCollapsed || nativeBuildSwitch) {
       setHasNotes(false);
       return;
     }

@@ -2197,12 +2197,19 @@ export async function checkAppUpdateForAgent(): Promise<{
   const currentVersion = app.getVersion();
   const unsupported = agentUpdateUnsupportedReason();
   if (unsupported) return { status: 'unsupported', currentVersion, reason: unsupported };
-  if (currentStatus === 'downloading' || currentStatus === 'superseding') {
+  // Agent 的安装结果按「重启后版本前进」判定：同版本换装 Apple 芯片包（下载中或已就绪）
+  // 不交给 Agent，落到下面按清单严格比较，只走侧栏更新提示。
+  const advancesVersion = (version: string | undefined) =>
+    compareAppUpdateVersions(version, currentVersion) === 'newer';
+  if (
+    (currentStatus === 'downloading' || currentStatus === 'superseding')
+    && advancesVersion(downloadingVersion)
+  ) {
     // `readyVersion` is unset during a first download and still names the old
     // patch while superseding; report the version actually being downloaded.
     return { status: 'downloading', currentVersion, targetVersion: downloadingVersion };
   }
-  if (currentStatus === 'ready' && readyVersion) {
+  if (currentStatus === 'ready' && readyVersion && advancesVersion(readyVersion)) {
     return { status: 'ready', currentVersion, targetVersion: readyVersion };
   }
   // An Agent check must not stage a patch: checkForUpdate() downloads it and

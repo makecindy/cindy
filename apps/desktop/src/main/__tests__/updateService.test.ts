@@ -1404,6 +1404,20 @@ describe('native architecture switch for Rosetta-translated macOS builds', () =>
     }
   });
 
+  // Agent 按「重启后版本前进」判定成功；同版本换装交给它会在换装成功后报失败。
+  it('does not offer a staged same-version switch to the Agent update flow', async () => {
+    runningTranslated.mockReturnValue(true);
+    const service = await freshUpdateService('darwin', 'x64');
+    const manifest = armManifest();
+    fetchManifest.mockResolvedValue(manifest);
+
+    await expect(service.checkForUpdate(manifest)).resolves.toBe('ready');
+
+    expect(await service.checkAppUpdateForAgent()).toMatchObject({
+      status: 'no_installable_update', currentVersion: '0.0.64',
+    });
+  });
+
   it.each([
     ['a native Intel Mac', false, true],
     ['an x64 manifest under translation', true, false],
