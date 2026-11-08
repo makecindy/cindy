@@ -5612,25 +5612,10 @@ interface ElectronAPI {
     listAvailableAgents: () => Promise<Array<'claude-code' | 'codex' | 'pi'>>;
     onAgentsChanged: (cb: () => void) => () => void;
     getCapabilities: (agentKind: 'claude-code' | 'codex' | 'pi') => Promise<unknown>;
+    /** Read-only: the V1 background tasks a teammate chat started (stored rows). */
     listBotDelegations: (
       parentSessionId: string,
     ) => Promise<import('../shared/botDelegation').BotDelegationListResult>;
-    cancelBotDelegation: (
-      parentSessionId: string,
-      delegationId: string,
-    ) => Promise<import('../shared/botDelegation').BotDelegationCancelResult>;
-    /** The owner's 补一句 from a task card leaves its trace in the Bot's chat (local tasks only). */
-    traceBotDelegationNote: (
-      parentSessionId: string,
-      delegationId: string,
-      text: string,
-    ) => Promise<import('../shared/botDelegation').BotDelegationNoteTraceResult>;
-    onBotDelegationChanged: (
-      cb: (
-        payload: import('../shared/botDelegation').BotDelegationChangedPayload,
-        ownerStamp?: import('../shared/dataOwnerPush').DataOwnerPushStamp,
-      ) => void,
-    ) => () => void;
     getBotDirectMessageThread: (
       threadId: string,
       viewerBotId: string,

@@ -830,8 +830,7 @@ import {
   createAutomationUserTurnGitBaselineHooks,
   registerModelVisibilitySyncIpc,
   registerMakerIpc as registerMakerCoreIpc,
-  tryGetBotDelegationService,
-  restoreBotRuntimeForCurrentOwner,
+  restoreTaskResultDeliveryForCurrentOwner,
   restoreOrcaRemoteWorkersForCurrentOwner,
   stopOrcaRemoteWorkersForOwnerBoundary,
   isSessionTurnPendingCompletion,
@@ -4662,11 +4661,7 @@ const registerIpcHandlers = () => {
   });
 
   // 系统级通知（CC Agent session 完成时弹出 / 可选飞书私聊）
-  const isCompletionHandledByTeammate = (sessionId: string): Promise<boolean> =>
-    tryGetBotDelegationService()?.isCompletionHandledByTeammate(sessionId) ?? Promise.resolve(false);
   initNotificationService({
-    isCompletionHandledByTeammate: (sessionId) => getAgentIslandService()?.waitForCompletionNotification(sessionId)
-      ?? isCompletionHandledByTeammate(sessionId),
     isTaskAlertShownElsewhere: (kind) => getAgentIslandService()?.ownsTaskAlert(kind) === true,
     getWindow: () => getWindow() ?? null,
     feishuIm,
@@ -4674,8 +4669,6 @@ const registerIpcHandlers = () => {
   initWecomGroupNotificationIpc();
   setCompanionAvatarResolver((request) => companionAvatarCache.resolve(request));
   initAgentIslandService({
-    // The relay waits for native done before checking the durable result handoff.
-    isCompletionHandledByTeammate,
     getMainWindow: () => getWindow() ?? null,
     isPlannedRemoteDaemonClose: isCcMgrUpgradeInFlight,
     onSessionActivityChange: (activity) => {
@@ -9773,10 +9766,10 @@ app.on('ready', async () => {
         });
       }
       checkDatabaseSizeWarningAtStartup();
-      // Bot recovery is owner-scoped and must start only after DbClient
+      // Task-result delivery is owner-scoped and must start only after DbClient
       // takeover. registerMakerIpc also invokes this once its services exist,
       // covering both possible splash/login orderings without duplicate runs.
-      void restoreBotRuntimeForCurrentOwner();
+      restoreTaskResultDeliveryForCurrentOwner();
       void restoreOrcaRemoteWorkersForCurrentOwner();
       startReadyWorktreeMaintenance();
       // An Agent-approved update restarted the app: write its outcome back to the task.

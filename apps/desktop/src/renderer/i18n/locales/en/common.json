@@ -10443,8 +10443,6 @@
       "actionFailed": "That didn't go through. Try again.",
       "retrying": "Hasn't started yet — retrying…",
       "status": {
-        "queued": "Getting started",
-        "waiting": "Waiting for input",
         "running": "Working on it",
         "completed": "Done",
         "failed": "Failed",
@@ -10460,13 +10458,6 @@
       },
       "viewResult": "View Result",
       "noWrittenResult": "No written result.",
-      "addNote": "Add a note",
-      "addNotePlaceholder": "Tell the background task… press Enter to send",
-      "addNoteSent": "Sent to the background task",
-      "stop": "Stop",
-      "lookAt": "Take a look",
-      "awaitingConfirm": "Waiting for you: {{summary}}",
-      "awaitingConfirmGeneric": "Waiting for you",
       "elapsed": "{{duration}} so far",
       "tookTime": "Took {{duration}}",
       "expandResult": "Show result",
@@ -10847,7 +10838,6 @@
         "planning": "Splitting the work…"
       },
       "task": {
-        "label": "Task",
         "state": {
           "started": "In progress",
           "waiting": "Waiting for your confirmation",
@@ -19369,10 +19359,7 @@
     "sourcePresent": "[Source] The host preserved the user’s original words as request background, without changes. The current request is in the Agent supplement.",
     "sourceMissing": "[Source] No verifiable original user text was found.",
     "userPrefix": "User’s original words:",
-    "agentPrefix": "Agent supplement:",
-    "taskSource": "[Task source] A companion started this task.",
-    "taskId": "Task ID:",
-    "contextReferences": "Context references:"
+    "agentPrefix": "Agent supplement:"
   },
   "sharing": {
     "loginRequired": "Sign In to Share",

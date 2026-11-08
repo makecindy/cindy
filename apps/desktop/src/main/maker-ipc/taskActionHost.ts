@@ -2,7 +2,6 @@ import { and, eq } from 'drizzle-orm';
 import type { ToolCallAuthorizer } from '@cindy/mcps';
 import type { Session } from '@cindy/maker-core';
 import {
-  botDelegations,
   botProfiles,
   botSessionLinks,
   sessions,
@@ -15,7 +14,6 @@ import {
   admitTaskAction,
   isolateTaskActionAuthorizer,
   createTaskActionAuthorizer,
-  DELEGATED_TASK_ACTIONS,
   type TaskActionConfirmation,
   taskActionFingerprint,
   type TaskActionScope,
@@ -147,46 +145,6 @@ export function createDesktopTaskActionAuthorizer(deps: {
         const runtime = !useRuntimePermissions && scheduled
           ? captureScheduledRuntime(sessionId, deps.getSession)
           : null;
-        const args =
-          call.args && typeof call.args === 'object' && !Array.isArray(call.args)
-            ? (call.args as Record<string, unknown>)
-            : {};
-        const taskId = typeof args.task_id === 'string' ? args.task_id : undefined;
-        const readDelegation = async (rechecking = false) => {
-          if (
-            !taskId ||
-            !DELEGATED_TASK_ACTIONS.includes(call.tool as (typeof DELEGATED_TASK_ACTIONS)[number])
-          )
-            return null;
-          const [row] = await db.drizzle
-            .select()
-            .from(botDelegations)
-            .where(
-              and(eq(botDelegations.id, taskId), eq(botDelegations.parentSessionId, sessionId)),
-            )
-            .limit(1);
-          if (!row || !['queued', 'running', 'waiting'].includes(row.status)) return null;
-          let snapshot: {
-            taskActionAuthority?: { version?: number; actions?: string[] };
-            taskPause?: unknown;
-          };
-          try {
-            snapshot = JSON.parse(row.permissionSnapshotJson);
-          } catch {
-            return null;
-          }
-          const grant = snapshot.taskActionAuthority;
-          // Paused work only resumes following a new owner request. Permission answers
-          // and model changes are also exact decisions, never a standing message grant.
-          // An admitted pause writes its intent before stopping the execution.
-          // That intent cannot revoke the very same stop; it still blocks every
-          // new admission and every message/resume delivery.
-          const completingPause = rechecking && call.tool === 'stop_session_task' && args.mode === 'pause';
-          if ((snapshot.taskPause && !completingPause) || args.decision || args.answers || args.mode === 'resume')
-            return null;
-          return grant?.version === 1 && grant.actions?.includes(call.tool) ? row : null;
-        };
-        const delegation = useRuntimePermissions ? null : await readDelegation();
         // A real Worker report continues its ordinary Lead's existing team. It
         // cannot authorize helper writes to unrelated tasks or create a new team.
         const readOrcaTeam = async () => {
@@ -215,7 +173,7 @@ export function createDesktopTaskActionAuthorizer(deps: {
         const orcaTeam = useRuntimePermissions ? null : await readOrcaTeam();
         // An admitted message outlives the turn that sent it. Delivery stops only on
         // real revocation: account switch, sender cleared or deleted, companion paused
-        // or archived, delegation run or team changed. The sender's live
+        // or archived, or team changed. The sender's live
         // Session incarnation, input generation and permission/Plan generation gate
         // executing this call (assertCurrent), never an already queued message.
         // The captured database client is the owner identity. A held app-session boundary alone
@@ -253,11 +211,6 @@ export function createDesktopTaskActionAuthorizer(deps: {
           const clearedInMemory = deps.input(sessionId).clearBoundaryMs;
           if (clearedInMemory != null && clearedInMemory > Math.max(input.clearBoundaryMs ?? 0, caller.clearedAt ?? 0))
             throw new Error('TASK_ACTION_AUTHORIZATION_EXPIRED');
-          if (delegation) {
-            const current = await readDelegation(true);
-            if (!current || current.runSequence !== delegation.runSequence)
-              throw new Error('TASK_ACTION_AUTHORIZATION_EXPIRED');
-          }
           if (orcaTeam) {
             if ((await readOrcaTeam())?.id !== orcaTeam.id)
               throw new Error('TASK_ACTION_AUTHORIZATION_EXPIRED');
@@ -276,7 +229,7 @@ export function createDesktopTaskActionAuthorizer(deps: {
         const scope: TaskActionScope = {
           key: input.key,
           ownerInput,
-          delegated: !!delegation || !!orcaTeam,
+          delegated: !!orcaTeam,
           assertDeliveryCurrent,
           assertCurrentSync,
           assertCurrent: async () => {
@@ -288,7 +241,7 @@ export function createDesktopTaskActionAuthorizer(deps: {
         };
         if (useRuntimePermissions) {
           // Owner requests and live execution modes use the normal Agent permission flow.
-          // Retain delivery evidence so workbench, queues and new delegations work too.
+          // Retain delivery evidence so queues and later deliveries work too.
           admittedScope = scope;
           return null;
         }

@@ -295,7 +295,7 @@ function harness() {
     botCompactRuntimeRefreshCoordinator: { noteBoundary: vi.fn() },
     wireNoteMemory: { reset: vi.fn() },
     attemptBotCompactRuntimeRefresh: vi.fn(),
-    botDelegationServiceHolder: { settleSession: vi.fn(async () => {}) },
+    taskCompletionDeliveryHolder: { settleTerminal: vi.fn(async () => {}) },
     isFencedStaleSessionTerminal: vi.fn(() => false),
     redactEventForRenderer: vi.fn((value: AgentEvent): AgentEvent => ({ ...value, data: { redacted: true } })),
     interruptedTurnAutoResumeGuard: {
@@ -2488,14 +2488,13 @@ describe('Bot adapters in the shared event pipeline', () => {
       isTerminal: true, result,
     }, { source: 'pi', sessionTurnGeneration: 4 }));
     await microtasks();
-    expect(h.deps.botDelegationServiceHolder.settleSession).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
-      childSessionId: 'task', outcome: 'error', resultText: result,
-      error: 'Pi reached the model output limit.',
+    expect(h.deps.taskCompletionDeliveryHolder.settleTerminal).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      sessionId: 'task', successful: false, text: result,
     }));
     h.deps.autoResumeBookkeeping.consumeFailedTurnCompletionTail.mockReturnValue(true);
     h.emit(event('done', { status: 'failed', result }, { source: 'pi', sessionTurnGeneration: 4 }));
     await microtasks();
-    expect(h.deps.botDelegationServiceHolder.settleSession).toHaveBeenCalledOnce();
+    expect(h.deps.taskCompletionDeliveryHolder.settleTerminal).toHaveBeenCalledOnce();
     await h.dispose();
   });
 
@@ -2744,9 +2743,6 @@ describe('Bot adapters in the shared event pipeline', () => {
     h.deps.agentInputCoordinatorHolder.getQueueControlSnapshot.mockReturnValue({ pendingQueue: [{}] });
     h.emit(event('done', { result: 'first result' }));
     await microtasks();
-    expect(h.deps.botDelegationServiceHolder.settleSession).toHaveBeenCalledWith(expect.objectContaining({
-      childSessionId: 'task', resultText: 'first result', hadPendingInputAtTerminal: true,
-    }));
     expect(h.deps.attemptBotCompactRuntimeRefresh).toHaveBeenCalledWith(h.session, 'event:done');
     expect(close).not.toHaveBeenCalled();
     expect(bootstrap).not.toHaveBeenCalled();

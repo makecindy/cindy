@@ -116,17 +116,15 @@ describe('稳定层:能力必须写进提示词', () => {
     // 2026-10-23 主人裁决：对话中只在主人明确要求时新建技能，其余交给夜间学习。
     expect(all).toContain('用户明确要你把一套做法记成技能时');
     expect(all).not.toContain('第一次验证完就');
-    expect(all).toContain('开后台任务，也可以给伙伴发消息');
-    expect(all).toContain('start_session_task');
-    expect(all).toContain('check_session_task');
-    expect(all).toContain('message_session_task');
-    expect(all).toContain('stop_session_task');
+    expect(all).toContain('你可以开任务，也可以给伙伴发消息');
+    expect(all).not.toContain('session_task');
+    expect(all).toContain('notify_when_done');
     expect(all).toContain('send_to_session');
     expect(all).not.toContain('send_to_agent');
     expect(all).toContain('不启动任务');
     expect(all).toContain('优先在当前对话完成能清楚收口的工作');
     expect(all).toContain('用户明确要求独立任务');
-    expect(all).toContain('隔离工作区、并行交付或独立跟踪');
+    expect(all).toContain('隔离工作区或并行交付');
     expect(all).not.toContain('编码实施和中大型工作');
     expect(all).toContain('不要只为“收到”“好的”互相确认');
     expect(all).not.toContain('collaborate_with_bot');
@@ -139,7 +137,7 @@ describe('稳定层:能力必须写进提示词', () => {
     expect(none).not.toContain('save_teammate_skill');
     expect(none).not.toContain('create_teammate');
     expect(none).not.toContain('make_pptx');
-    expect(none).not.toContain('start_session_task');
+    expect(none).not.toContain('你可以开任务');
   });
 
   it('交付纪律恒在:要真做出来,被挡住说实话,不许编', () => {
@@ -291,13 +289,11 @@ describe('Bot Mode 的角色边界', () => {
         botModeEnabled: false,
       },
     });
-    expect(canonical).toContain('你可以开后台任务，也可以给伙伴发消息');
+    expect(canonical).toContain('你可以开任务，也可以给伙伴发消息');
     expect(canonical).toContain('send_to_session');
-    expect(canonical).toContain('start_session_task');
     expect(canonical).not.toContain('list_tools');
-    expect(worker).not.toContain('你可以开后台任务，也可以给伙伴发消息');
+    expect(worker).not.toContain('你可以开任务，也可以给伙伴发消息');
     expect(worker).not.toContain('list_agents');
-    expect(worker).not.toContain('start_session_task');
   });
 });
 
@@ -358,7 +354,7 @@ describe('buildBotTeammateRoster', () => {
     const roster = buildBotTeammateRoster([{ id: 'bot-a', name: 'A' }]);
     expect(roster).toContain('别猜');
     expect(roster).toContain('send_to_session');
-    expect(roster).toContain('start_session_task');
+    expect(roster).not.toContain('start_session_task');
     expect(roster).not.toContain('list_tools');
     expect(roster).toContain('明确要联系');
     expect(roster).not.toContain('把任务交给某个伙伴');

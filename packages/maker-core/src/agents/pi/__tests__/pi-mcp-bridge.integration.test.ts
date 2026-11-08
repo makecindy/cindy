@@ -230,19 +230,6 @@ function scriptedAnthropicTurn(requestBody: string): string {
     const call = calls[toolResultCount];
     return call ? anthropicToolTurn(toolResultCount + 1, call.name, call.input) : anthropicTextTurn(4, 'Client tool complete');
   }
-  if (requestBody.includes('exercise task control modes')) {
-    const calls = [
-      { name: 'message_session_task', input: { task_id: 'task-fixture', mode: 'steer', message: 'new direction' } },
-      { name: 'stop_session_task', input: { task_id: 'task-fixture', mode: 'pause' } },
-      { name: 'message_session_task', input: { task_id: 'task-fixture', mode: 'resume' } },
-      { name: 'message_session_task', input: { task_id: 'task-fixture', mode: 'edit', queued_message_id: 'mine', message: 'revised' } },
-      { name: 'message_session_task', input: { task_id: 'task-fixture', mode: 'withdraw', queued_message_id: 'mine' } },
-      { name: 'stop_session_task', input: { task_id: 'task-fixture', mode: 'request-stop' } },
-    ];
-    const call = calls[toolResultCount];
-    return call ? anthropicToolTurn(toolResultCount + 1, call.name, call.input)
-      : anthropicTextTurn(5, 'Task controls complete');
-  }
   if (requestBody.includes('create an Orca worktree worker')) {
     const turns = [
       {name: 'cindy_mcp_list_tools', input: {server: 'cindy_orca', tool: 'create_worker'}},
@@ -296,15 +283,6 @@ function scriptedAnthropicTurn(requestBody: string): string {
     return toolResultCount === 0
       ? anthropicToolTurn(1, "list_agents", {})
       : anthropicTextTurn(2, "teammates listed");
-  }
-  if (requestBody.includes('direct Session task')) {
-    return toolResultCount === 0
-      ? anthropicToolTurn(1, 'start_session_task', {
-          title: 'Build the demo',
-          working_dir: '/repo',
-          instruction: 'Build and verify a standalone HTML demo.',
-        })
-      : anthropicTextTurn(2, 'independent Session task started');
   }
   if (requestBody.includes('direct Bot memory')) {
     return toolResultCount === 0
@@ -432,8 +410,6 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
   const workspaceLookupCalls: Array<{ query: string }> = [];
   const contactsLookupCalls: Array<{ query: string }> = [];
   const teammateLookupCalls: Array<Record<string, unknown>> = [];
-  const sessionTaskCalls: Array<Record<string, unknown>> = [];
-  const taskControlCalls: Array<{ name: string; args: unknown }> = [];
   const botMemoryCalls: Array<Record<string, unknown>> = [];
   // 记录假 MCP server 收到的请求 URL —— 断言真 pi(经 cindy-bridge fetch)把
   // host 下发的 `?session=<id>` 原样带到每个 MCP 请求上(orca 身份路由的 pi 侧半)。
@@ -773,21 +749,6 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
         );
       } else if (isHelper) {
         server.registerTool(
-          'start_session_task',
-          {
-            description: 'Start a real independent Cindy Session task',
-            inputSchema: {
-              instruction: z.string(),
-              title: z.string().optional(),
-              working_dir: z.string().optional(),
-            },
-          },
-          async (args) => {
-            sessionTaskCalls.push(args);
-            return { content: [{ type: 'text', text: 'SESSION_TASK[running]' }] };
-          },
-        );
-        server.registerTool(
               "list_agents",
               {
             description: "Discover teammates and their main chats",
@@ -800,23 +761,6 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
                 };
               },
             );
-            for (const name of [
-              "check_session_task",
-              "message_session_task",
-              "stop_session_task",
-            ]) {
-              server.registerTool(
-                name,
-                {
-                  description: name,
-                  inputSchema: { task_id: z.string(), mode: z.string().optional(), message: z.string().optional(), queued_message_id: z.string().optional() },
-                },
-                async (args) => {
-                  taskControlCalls.push({ name, args });
-                  return { content: [{ type: 'text', text: 'OK' }] };
-                },
-              );
-            }
           } else if (isMemory) {
         server.registerTool(
           'call_tool',
@@ -1345,81 +1289,6 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
         .map((data) => data.text)
         .join('');
       expect(finalText).toContain("teammates listed");
-    },
-  );
-
-  it('passes control modes through the real Pi facade and permission identity', { timeout: 90_000 }, async () => {
-    taskControlCalls.length = 0;
-    const permissions: Array<{ toolName: string; input: unknown }> = [];
-    const { requests } = await runOneTurn('ask', async (req) => {
-      if (req.kind === 'permission') permissions.push({ toolName: req.toolName, input: req.input });
-      return { kind: 'permission', behavior: 'allow' };
-    }, 'local-multi', 'exercise task control modes');
-    expect(taskControlCalls).toEqual([
-      { name: 'message_session_task', args: { task_id: 'task-fixture', mode: 'steer', message: 'new direction' } },
-      { name: 'stop_session_task', args: { task_id: 'task-fixture', mode: 'pause' } },
-      { name: 'message_session_task', args: { task_id: 'task-fixture', mode: 'resume' } },
-      { name: 'message_session_task', args: { task_id: 'task-fixture', mode: 'edit', queued_message_id: 'mine', message: 'revised' } },
-      { name: 'message_session_task', args: { task_id: 'task-fixture', mode: 'withdraw', queued_message_id: 'mine' } },
-      { name: 'stop_session_task', args: { task_id: 'task-fixture', mode: 'request-stop' } },
-    ]);
-    expect(permissions).toEqual(taskControlCalls.map(({ name, args }) => ({
-      toolName: `mcp__cindy_helper__${name}`, input: args,
-    })));
-    expect(requests).toHaveLength(7);
-  });
-
-  it(
-    'starts a typed independent Session task without selecting a Bot',
-    { timeout: 90_000 },
-    async () => {
-      sessionTaskCalls.length = 0;
-      const permissions: Array<{ toolName: string; input: unknown }> = [];
-      const { events, requests } = await runOneTurn(
-        'ask',
-        async (req) => {
-          if (req.kind === 'permission') {
-            permissions.push({ toolName: req.toolName, input: req.input });
-          }
-          return { kind: 'permission', behavior: 'allow' };
-        },
-        'local-multi',
-        'run direct Session task',
-      );
-
-      expect(sessionTaskCalls).toEqual([{
-        title: 'Build the demo',
-        working_dir: '/repo',
-        instruction: 'Build and verify a standalone HTML demo.',
-      }]);
-      expect(permissions).toEqual([{
-        toolName: 'mcp__cindy_helper__start_session_task',
-        input: {
-          title: 'Build the demo',
-          working_dir: '/repo',
-          instruction: 'Build and verify a standalone HTML demo.',
-        },
-      }]);
-      const startupToolNames = (requests[0]?.tools as Array<{ name?: string }> | undefined)
-        ?.map((tool) => tool.name) ?? [];
-      expect(startupToolNames).toContain('start_session_task');
-      expect(startupToolNames).toEqual(
-          expect.arrayContaining([
-            "check_session_task",
-            "message_session_task",
-            "stop_session_task",
-            "list_agents",
-          ]),
-        );
-        expect(startupToolNames).not.toContain('collaborate_with_bot');
-      expect(requests).toHaveLength(2);
-      const finalText = events
-        .filter((event) => event.type === 'text')
-        .map((event) => event.data as { text: string; isFinal?: boolean })
-        .filter((data) => data.isFinal)
-        .map((data) => data.text)
-        .join('');
-      expect(finalText).toContain('independent Session task started');
     },
   );
 

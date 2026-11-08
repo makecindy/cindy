@@ -621,8 +621,6 @@
       "minutes": "{{n}} 分",
       "hoursMinutes": "{{h}} 时 {{m}} 分"
     },
-    "retrying": "尚未起始，方再试…",
-    "stopTask": "止差事",
     "actionFailed": "暂不能读取或完成所为",
     "messages": "往来之讯",
     "readOnly": "仅供观览",

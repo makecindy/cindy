@@ -13,30 +13,14 @@ export interface TeammateSkillText {
   body: string;
 }
 
-/**
- * A project-mode teammate works like any project task: it opens tasks with the ordinary
- * `send_to_session` and automations with `cindy_scheduler`, so the teammate-only delegation
- * tools are left out.
- */
-export const TEAMMATE_PROJECT_MODE_HIDDEN_TOOLS: readonly string[] = [
-  "start_session_task", "check_session_task", "message_session_task", "stop_session_task",
-  "inspect_session_task_route", "advance_session_task_route",
-];
-
-export function teammateDeniedTools(projectMode: boolean): Set<string> {
-  return new Set<string>(projectMode ? TEAMMATE_PROJECT_MODE_HIDDEN_TOOLS : []);
-}
-
 /** Core details: always available, read only when the work needs them. */
 export const TEAMMATE_CORE_TOPICS: Readonly<Record<string, TeammateSkillText>> = {
   tasks: {
     name: "tasks",
-    description: "Background task options, queue receipts, pausing, stopping and other computers.",
+    description: "Opening tasks, getting their results back, and other computers.",
     body: [
-      "A real background task is a standalone Session in the user's task list. Prefer completing work in the current chat. Use `start_session_task` when the user explicitly requests an independent task or the work needs separate ongoing execution, an isolated workspace, parallel delivery, or independent tracking. Use `check_session_task`, `message_session_task`, and `stop_session_task` to control that same task when needed. Completion returns automatically; you remain responsible for reviewing and presenting the result.",
-      "For project work, set working_dir to the actual project and use_worktree=true for isolation before starting. check_session_task returns the registered directory. Shell cd/worktree creation does not relocate a Session. timeout_ms defaults to 30 minutes and supports up to 24 hours at creation; terminal follow-up inherits the original budget. Do not claim an existing deadline was extended without a verified host response.",
-      "message_session_task returns queued_message_id for queued or steered input. check_session_task exposes only your own queue; optionally query queued_message_id for queued/consuming/dispatched/not-found/unavailable; queue restore errors preserve task results and cannot prove a message is missing. Dispatched means accepted into host history, not proof of model action. Use mode=edit with message or mode=withdraw for your own unconsumed item; consuming input cannot be edited or withdrawn.",
-      "Control your own background tasks with `message_session_task` (mode=queue by default, mode=steer for same-turn input, mode=resume for a reversible pause) and `stop_session_task` (mode=cancel by default, request-stop for a graceful stop request, pause to hold execution and queued input). For other authorized task operations, query `get_capabilities` key `self-management` for the supported local and remote scope. After an execution ends, inspect_session_task_route and advance_session_task_route let you decide whether to use the next already-configured model route; switching alone does not retry or replay any work. A successful queue receipt is not a steer, and pausing/requested/unconfirmed is not proof the engine stopped. Check the returned control state; unsupported engines fail explicitly. Pause preserves the same task and Session, holds timers and automatic input, and resumes without replaying completed work. If paused, resume without a message before answering a pending interaction. These background-task controls apply only to tasks owned by your teammate.",
+      "Prefer completing work in the current chat. When the user asks for an independent task, or the work needs separate execution, an isolated workspace or parallel delivery, open an ordinary task with `send_to_session` (omit target to create one; pass a title, project_path and working_dir as needed). Pass the objective, constraints, known facts, relevant files and acceptance criteria in the message: the task does not inherit this chat. Set notify_when_done=true when you need its result: its final reply comes back here once. You remain responsible for reviewing and presenting the result; follow up by sending to the same task, not by opening another one.",
+      "For other task operations (queue, steer, stop, archive, runtime), query `get_capabilities` key `self-management` for the supported local and remote scope.",
       "You can also work on the user's other computers that allow remote control, through collaboration. `get_workspace_info` lists them as `execution_devices`; `create_worker` with `execution_device_id` runs that work, its directory and its commands on that computer, and never falls back to this one. A computer that is offline or has remote control turned off is unavailable.",
     ].join("\n"),
   },
@@ -44,8 +28,8 @@ export const TEAMMATE_CORE_TOPICS: Readonly<Record<string, TeammateSkillText>> =
     name: "teammates",
     description: "Finding and messaging other teammates, and creating teammates.",
     body: [
-      "Use `list_agents` to discover local and authorized remote teammates, including device identity. To talk to one, pass its returned `session_id` (its main chat) to `send_to_session`; never route by name. A message is not a task and has no progress or cancellation. Do not substitute a message to a teammate for `start_session_task`.",
-      "A teammate message does not rewrite another teammate's identity or make that teammate obey. If the user asks for obedience or control, explain this boundary and offer either a message or a tracked Session task, whichever matches the work.",
+      "Use `list_agents` to discover local and authorized remote teammates, including device identity. To talk to one, pass its returned `session_id` (its main chat) to `send_to_session`; never route by name. A message to a teammate is a request it handles in its own chat, not work you track.",
+      "A teammate message does not rewrite another teammate's identity or make that teammate obey. If the user asks for obedience or control, explain this boundary and offer a message instead.",
       "When the user wants another teammate, call `create_teammate` with a name and any identity details the user supplied. New teammates receive the same core and follow the user’s available default model; do not generate a fixed number of role Skills, prewrite a greeting, or require a profile form. Their personality, personal learning and memory remain independent.",
     ].join("\n"),
   },

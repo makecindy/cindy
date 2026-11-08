@@ -10,7 +10,7 @@ export default {
   viewport: { width: 1040, height: 760 },
   real: 'BotSessionContentHeader, BotGlancePopover (computers, tasks, outputs), Radix popover/menu, theme and translations',
   notCovered:
-    'Live delegation data, cloud companion home switching, remote teammates over device-link, opening files',
+    'Stored background-task data, cloud companion home switching, remote teammates over device-link, opening files',
   stubs: {
     'src/renderer/features/device-link/refreshRemoteSessions': `export const refreshRemoteDeviceSessions=async()=> 'done';`,
     'src/renderer/hooks/useCCSessions': `const tasks=[{id:'task-1',title:'整理项目反馈',status:'active',updatedAt:'2026-10-28T10:00:00Z'}, {id:'task-2',title:'完善手机任务入口',status:'active',updatedAt:'2026-10-28T09:00:00Z'}];export const useCCSessions=()=>({sessions:${data}.case==='new'?[]:tasks});`,
@@ -26,7 +26,7 @@ export default {
       {id:'cindy-default',name:'Cindy',deviceId:'imac',deviceName:'Office iMac',online:false,sessionId:'r3',avatar:'',status:'active'}];`,
     'src/renderer/features/device-link/useDeviceLinkDeviceList':
       "export const useDeviceLinkDeviceList=()=>[{deviceId:'self',name:'Mac-Studio',isSelf:true}];",
-    'src/renderer/features/bots/botDelegationLive': `export const useBotDelegations=()=>${data}.case==='new'?[]:[
+    'src/renderer/features/bots/botDelegationHistory': `export const useBotDelegationRecords=()=>${data}.case==='new'?[]:[
       {id:'d1',requestingBotId:'cindy-default',status:'completed',title:'October growth report',childSessionId:'c1',completedAt:${now},updatedAt:${now},
        artifacts:[{path:'reports/October growth report.docx',absolutePath:'/w/reports/October growth report.docx',status:'added'},{path:'src/app.ts',status:'modified'}]},
       {id:'d2',requestingBotId:'cindy-default',status:'completed',title:'Studio local capabilities',childSessionId:'c2',completedAt:${now - 86_400_000},updatedAt:${now - 86_400_000},

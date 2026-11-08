@@ -143,7 +143,7 @@ interface ShowSessionEventPayload {
 // 时就回收掉，导致 click handler 丢失甚至触发异常事件。用 Set 持引用，等
 // close/click 后再 release。
 const liveNotifications = new Set<Notification>();
-type NotifiedReply = ({ eventId: string } | { fallbackSentAt: number }) & { handledByTeammate?: true };
+type NotifiedReply = { eventId: string } | { fallbackSentAt: number };
 const notifiedReplies = new Map<string, NotifiedReply>();
 const pendingFeishuReplies = new Set<string>();
 const pendingFeishuFallbacks = new Map<string, number>();
@@ -163,7 +163,7 @@ function wasReplyNotified(key: string, eventId: string | undefined): boolean {
   // A turn started afterwards is new, even if it finishes immediately.
   const startedAt = /^turn:(\d+):\d+$/.exec(eventId)?.[1];
   if (startedAt && Number(startedAt) < notified.fallbackSentAt) {
-    notifiedReplies.set(key, { eventId, ...(notified.handledByTeammate ? { handledByTeammate: true as const } : {}) });
+    notifiedReplies.set(key, { eventId });
     return true;
   }
   return false;
@@ -233,7 +233,6 @@ export function showDeviceSessionDesktopEvent(
 }
 
 export interface NotificationServiceDeps {
-  isCompletionHandledByTeammate?: (sessionId: string) => Promise<boolean>;
   /**
    * The task surface already alerts for this event (Agent Notch, or the Live Activity
    * while it can show), so the OS notification would repeat it.
@@ -373,30 +372,9 @@ export function initNotificationService(deps: NotificationServiceDeps): void {
         const desktopKey = replyNotificationKey(ownerKey, sessionId, 'desktop');
         const mobileKey = replyNotificationKey(generation, sessionId, 'mobile');
         const feishuKey = replyNotificationKey(ownerKey, sessionId, 'feishu');
-        if (kind === 'done' && notifiedReplies.get(desktopKey)?.handledByTeammate && wasReplyNotified(desktopKey, eventId)) return;
-        // Decide at the send boundary, after preview enrichment. The native
-        // receipt and durable completion handoff are authoritative, never titles.
-        const handledByTeammate = kind === 'done' && deps.isCompletionHandledByTeammate
-          ? await deps.isCompletionHandledByTeammate(sessionId).catch((error) => {
-              log.warn('delegation completion notification check failed', { error: String(error) });
-              return false;
-            }) : false;
-        if (!isDataOwnerBroadcastScopeCurrent(ownerScope)) return;
-        if (kind === 'done' && deps.isCompletionHandledByTeammate) {
-          const afterHandoffSignal = getSessionNotificationTurnSignal(sessionId);
-          if (afterHandoffSignal?.id !== signal?.id || (afterHandoffSignal && !afterHandoffSignal.ended)) return;
-        }
-        // 取正文 / 等交接判定期间用户可能刚开了免打扰:真正发之前再确认一次。
+        // 取正文期间用户可能刚开了免打扰:真正发之前再确认一次。
         // 手机通道在 sendMobileSessionNotify 内另有同一道门。
         if (markAttention && isSessionNotificationsMutedSync(sessionId)) return;
-        if (kind === 'done' && handledByTeammate) {
-          // Consume this event in the existing per-channel ledger. Removing a
-          // delegation later must not replay a completion already handed off.
-          for (const key of [desktopKey, mobileKey, feishuKey]) {
-            notifiedReplies.set(key, eventId ? { eventId, handledByTeammate: true } : { fallbackSentAt: Date.now(), handledByTeammate: true });
-          }
-          return;
-        }
         const fallbackBody = teammate && kind === 'done' ? getTeammateNotificationFallback() : undefined;
         const mobileTeammateBotId = preview?.teammateBotId ?? teammateBotId;
         if (wantDesktop && (kind !== 'done' || !wasReplyNotified(desktopKey, eventId))) {

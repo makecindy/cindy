@@ -5,7 +5,8 @@
 > 发布判断依据实际证据，未连接的远程设备和未覆盖的长期运行场景必须明确列出。
 
 北极星用例：创建一个伙伴，日常对话中它用自己的记忆与技能直接帮忙；遇到大活时它用
-`start_session_task` 开一条真正的 Cindy 任务；需要与其他伙伴交流时用 `send_to_agent`。
+`send_to_session` 新建一条普通 Cindy 任务（V1 专用后台任务已于 2026-11-08 移除，见
+[伙伴运行时](cindy-bots-runtime.md) §6.1）；需要与其他伙伴交流时用 `send_to_agent`。
 发起方对话里的任务卡实时走到完成态，完成信号以用户不可见的内部指令叫醒它接手收尾。
 
 ## 产品完成线
@@ -19,8 +20,8 @@
 | canonical、历史与异常恢复    | `localDb/ipc/bots.ts`、`botCanonicalSessionRegistry.ts`、`botLifecycleService.ts`                                  | `botCanonicalSession.test.ts`、`botLifecycleService.test.ts`                         | 一个伙伴长期沿用同一条主任务；模型上下文原地压缩；只在记录丢失或被删除时恢复替代任务。                       |
 | 模型候选链                     | `bot-model-chain-settings-store.ts`、register.ts 的 fallback 路由                                            | `botModelChainSettingsStore.test.ts`、`botModelChain.test.ts`                             | 1–5 项有序候选；只有候选不可用错误才推进；不暗改 Profile。                                                 |
 | 伙伴消息（send_to_agent）      | `botDirectMessageService.ts`、`bot_direct_messages`                                                          | `botDirectMessageService.test.ts`、消息流投影用例                                         | 单条异步消息进入双方时间线入口；不建立任务；12 条硬上限、同方连续 2 条上限与冷却共同阻止死循环。           |
-| 后台任务（start_session_task） | `botDelegationService.ts`、`lizi_xdtHelperMcpServer.ts`                                                      | `botCanonicalSession.test.ts` 的 Session 任务用例                                         | 大活开成普通 Cindy 任务，出现在主任务列表、走自己的权限门；check/message/stop 控制同一任务。               |
-| 任务卡与完成信号               | `BotCollaborationCard.tsx`、`botDelegationLive.ts`、`deliverCompletion`                                      | `BotCollaborationCard.test.tsx`、Session 任务完成与重启补投用例                           | 父时间线只有一张持久任务卡；完成信号是隐藏指令，带持久送达标记、幂等键、退避重试和重启补投。               |
+| 开任务（send_to_session）       | `mcp-providers.ts` 的 `sendToSession`、`botTaskCreation.ts`；旧委派只读 `botDelegationHistory.ts` | `botTaskCreationResponsibility.test.ts`、`botCanonicalSession.test.ts` 的旧后台任务只读用例 | 旧任务卡、产出与「由谁开的」只读保留 |
+| 旧任务卡（只读）               | `BotCollaborationCard.tsx`、`botDelegationHistory.ts`（renderer）                                            | `BotCollaborationCard.test.tsx`                                                           | 不再有停止、补一句与完成唤醒 |
 | 统一通知                       | `useSessionRunningStatus.ts`、`sessionEventNotification.ts`、两个任务侧栏                                   | 侧栏与通知入口测试                                                                        | 任务侧栏是唯一观察者（伙伴路由共用该侧栏，正在看的伙伴会话视为注视中）；沿用全局通道与聚焦去重，通知点击回到伙伴路由。                     |
 | 自有技能学习                   | `botSkillStore.ts`、`botSkillService.ts`、`save_teammate_skill`                                                   | `botSkillStore.test.ts`、`botSkillService.test.ts`、`bot-own-skills-mount.test.ts`        | 沉淀真技能、同一聊天安全轮次加载、设置页可见可删。                                                                   |
 | Desktop UI                     | `renderer/features/bots/**`                                                                                  | renderer store 与视图测试、typecheck                                                      | 名册、聊天、最小设置（成长/模型/维护）；无工程概念暴露。                                                   |
@@ -42,8 +43,8 @@
 1. 创建伙伴并日常对话一轮，确认上下文里没有项目 AGENTS.md、没有 subagent 工具。
 2. 让两个伙伴用 `send_to_agent` 往返，确认双方时间线有入口、不触发 NEW 或左栏未读，
    并且达到往来上限后会结束本轮。
-3. 让伙伴真实调用 `start_session_task`，确认子任务出现在主任务列表、父时间线只有一张
-   持久任务卡、权限门照常工作、结果自动回传；再验证 check/message/stop 控制同一任务。
+3. 让伙伴用 `send_to_session` 新建任务并加 `notify_when_done`，确认任务出现在主任务列表、
+   带「由这位伙伴开的」标记、权限门照常工作、该轮结果回传一次；旧后台任务卡只读可见。
 4. 给伙伴挂载 docs 工具集，确认它能真的做出文档（而不是回答“做不了”）。
 5. Desktop 在 Light/Dark 下目检创建、列表、聊天、设置、历史、错误和空态。
 

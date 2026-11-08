@@ -29,10 +29,7 @@ import type { WorkerWorktreeRequest } from '../../shared/orca-worker-project';
 import { captureAgentRequest as captureRequest, ownerChannelInputEvidence, type CapturedAgentRequest, type DelegationTarget } from './forwardedRequest.js';
 import { readChannelToolScope } from '../im/shared/channelToolScope.js';
 import { FORWARDED_REQUEST_RECEIPT, verifiedOwnerRequestText, type AgentRequestReceipt } from '../../shared/forwardedRequest.js';
-import {
-  scheduleBotRemoteResourceChangedForDelegation,
-  scheduleBotRemoteResourceChangedForFollowedSession,
-} from './botRemoteResourceInvalidation.js';
+import { scheduleBotRemoteResourceChangedForFollowedSession } from './botRemoteResourceInvalidation.js';
 import { assertBotTaskCoordination, classifySessionMessagePurpose, coordinationInput } from './botTaskCoordination.js';
 import type { BotTaskCoordination, SessionMessagePurpose } from '../../shared/botTaskCoordination.js';
 import { openSession, setSessionOpeningModelAdmission } from '../localDb/sessionOpening.js';
@@ -171,6 +168,8 @@ import { clearXaiRateLimitSnapshot } from '../usageBroadcaster.js';
 import { subscriptionAccountKind, subscriptionAccountState, loginSubscriptionAccount, logoutSubscriptionAccount, cancelSubscriptionAccountLogin, removeSubscriptionAccountCredentialsReversibly } from '../maker-host/subscription-account-auth.js';
 import { isCodexAccountProvider, codexAccountState, codexAccountLoginName, loginCodexAccount, logoutCodexAccount, cancelCodexAccountLogin, removeCodexAccountCredentialsReversibly, retireCodexAccount } from '../maker-host/codex-account-auth.js';
 import { projectRemoteBotDelegations } from './remoteBotDelegations.js';
+import { hasExplicitSessionTaskModel, listBotDelegationHistory } from './botDelegationHistory.js';
+import { ensureBotCanonicalSession } from './botCanonicalSessionEnsure.js';
 /**
  * registerMakerIpc — 把 Maker Core 的能力暴露为 maker:* IPC channel。
  *
@@ -450,7 +449,6 @@ import {
   isDbClientNotReadyError,
   tryGetDbClient,
 } from '../localDb/client/current.js';
-import { createBotRuntimeRestoreCoordinator } from './botRuntimeRestore.js';
 import { createWorkingDirectoryRecovery, isUnavailableFilesystemError } from './workingDirectoryRecovery.js';
 import { createWorkingDirectoryPreflight } from './workingDirectoryPreflight.js';
 import { allocateDialogueRecoveryWorkspace, findDialogueRecoveryWorkspace, requiredDialogueRecoveryRoot } from './dialogueRecoveryWorkspace.js';
@@ -669,13 +667,6 @@ import {
   writeAgentResourceSetting,
 } from '../maker-host/agent-resource-settings-store.js';
 import { createAgentResourceSettingsIpc } from './agent-resource-settings-ipc.js';
-import {
-  createBotDelegationService,
-  discardDelegationQueuedInputs,
-  hasExplicitSessionTaskModel,
-  type BotDelegationService,
-} from './botDelegationService.js';
-import { createBotSessionTaskRouteBridge } from './botSessionTaskRouteBridge.js';
 import {
   createBotDirectMessageService,
   type BotDirectMessageService,
@@ -946,7 +937,6 @@ import {
   AcceptedCallbackDispatchCancelled,
   runAcceptedCallback,
 } from './acceptedCallbackRunner.js';
-import { GroupToolAuthorizationError } from './botGroupToolAuthorization.js';
 import { createElectronIpcHandlerRegistry } from './electronIpcRegistry.js';
 import { refreshCodexMcpEnvironment } from './codexMcpRefresh.js';
 
@@ -1006,7 +996,7 @@ import {
 } from './orcaInterAgentDispatcher.js';
 import { resolveOrcaImageAttachmentInput } from './orcaImageAttachments.js';
 import { OrcaWorkerPermissionConfirmBridge } from './orcaWorkerPermissionConfirmBridge.js';
-import { assertTaskActionCurrent, runTaskActionRequest, captureTaskActionGuard, bindTaskActionInput, hasTaskActionAuthorization, taskActionInputGuard, settleTaskActionInput, TaskActionAuthorizationError, type TaskActionDeliveryGuard, type TaskActionConfirmation } from './taskActionAuthorization.js';
+import { assertTaskActionCurrent, runTaskActionRequest, captureTaskActionGuard, bindTaskActionInput, hasTaskActionAuthorization, taskActionInputGuard, settleTaskActionInput, type TaskActionDeliveryGuard, type TaskActionConfirmation } from './taskActionAuthorization.js';
 import {
   getOrcaWorkspaceInfoReadOnly,
   getOrcaWorkerDiagnosticStatusReadOnly,
@@ -3120,7 +3110,6 @@ interface EnableOrcaOptions {
 }
 
 let orcaCollabServiceHolder: OrcaCollabService | null = null;
-let botDelegationServiceHolder: BotDelegationService | null = null;
 let taskCompletionDeliveryHolder: TaskCompletionDeliveryHost | null = null;
 /** Bound once the session handoff exists: delivers a finished turn back to the task that asked. */
 let taskResultDeliverer: ((input: TaskResultDelivery) => Promise<TaskResultDeliveryOutcome>) | null = null;
@@ -3195,24 +3184,9 @@ function companionFailureCode(code: string): CompanionCloudFailureCode {
   return COMPANION_FAILURE_CODES.has(code as CompanionCloudFailureCode) ? code as CompanionCloudFailureCode : 'FAILED';
 }
 
-const botRuntimeRestoreCoordinator = createBotRuntimeRestoreCoordinator({
-  readDbIdentity: () => {
-    const snapshot = getCurrentDbClientSnapshot();
-    return snapshot
-      ? { userId: snapshot.userId, clientEpoch: snapshot.clientEpoch }
-      : null;
-  },
-  readServices: () => ({
-    delegation: botDelegationServiceHolder,
-  }),
-  log,
-});
-
-export function restoreBotRuntimeForCurrentOwner(): Promise<boolean> {
-  // Owner-scoped like bot recovery: resume pending task-result deliveries after a restart or an
-  // account switch (the delivery host restores itself whenever the owner scope changes).
+/** Resume pending task-result deliveries after a restart or an account switch (owner-scoped). */
+export function restoreTaskResultDeliveryForCurrentOwner(): void {
   taskCompletionDeliveryForOwner();
-  return botRuntimeRestoreCoordinator.restoreCurrentOwner();
 }
 
 /** 按当前账号恢复协同远端 Worker 的轮询；数据库未就绪时跳过，由接管后的调用补上。 */
@@ -3303,10 +3277,6 @@ let piIdleReleaseWatcher: PiIdleReleaseWatcher | null = null;
  */
 export function tryGetOrcaCollabService(): OrcaCollabService | null {
   return orcaCollabServiceHolder;
-}
-
-export function tryGetBotDelegationService(): BotDelegationService | null {
-  return botDelegationServiceHolder;
 }
 
 export function tryGetBotDirectMessageService(): BotDirectMessageService | null {
@@ -3799,28 +3769,6 @@ function schedulePendingPermissionTimeout(requestId: string, entry: PendingInter
       : { kind: 'permission', behavior: 'deny', reason: 'timeout' });
     dismissRendererInteraction(pending, requestId, 'timeout', 'deny');
   }, remaining);
-}
-
-function setPendingInteractionTimeoutsPaused(sessionId: string, paused: boolean): string[] {
-  const applied: string[] = [];
-  for (const [requestId, entry] of pendingInteractionResolvers) {
-    if (entry.sessionId !== sessionId) continue;
-    if (!paused && entry.deferredDecision) {
-      if (resolvePendingInteraction(requestId, entry.deferredDecision, !!entry.sharedPermission)) applied.push(requestId);
-      continue;
-    }
-    if (entry.kind !== 'permission' && !(entry.request.kind === 'ask_user_question' && entry.request.isBlocking === false)) continue;
-    if (paused) {
-      if (entry.timeoutId === undefined) continue;
-      clearTimeout(entry.timeoutId);
-      entry.timeoutId = undefined;
-      entry.timeoutRemainingMs = Math.max(0, (entry.timeoutDeadlineAt ?? Date.now()) - Date.now());
-      entry.timeoutDeadlineAt = undefined;
-    } else {
-      schedulePendingPermissionTimeout(requestId, entry);
-    }
-  }
-  return applied;
 }
 
 type RecoverableInteractionSnapshot =
@@ -6373,7 +6321,6 @@ const sessionEventDependencies: SessionEventDependencies = {
   get botCompactRuntimeRefreshCoordinator() { return botCompactRuntimeRefreshCoordinator; },
   get wireNoteMemory() { return wireNoteMemory; },
   get attemptBotCompactRuntimeRefresh() { return attemptBotCompactRuntimeRefresh; },
-  get botDelegationServiceHolder() { return botDelegationServiceHolder; },
   get taskCompletionDeliveryHolder() { return taskCompletionDeliveryForOwner(); },
   get botGroupChatServiceHolder() { return botGroupChatServiceHolder; },
   get isFencedStaleSessionTerminal() {
@@ -6615,24 +6562,10 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
     onStart: (request, route) => {
       botGroupChatServiceHolder?.refreshPendingInteraction(session.id);
       ghostSessionTap.interactionObserver.onStart(request, route);
-      void botDelegationServiceHolder?.handleInteractionStart(session.id, request).catch((error) => {
-        log.warn('failed to project child interaction to requesting Bot', {
-          sessionId: session.id,
-          requestId: request.requestId,
-          error: error instanceof Error ? error.message : String(error),
-        });
-      });
     },
     onEnd: (request, route) => {
       botGroupChatServiceHolder?.refreshPendingInteraction(session.id);
       ghostSessionTap.interactionObserver.onEnd(request, route);
-      void botDelegationServiceHolder?.handleInteractionEnd(session.id, request).catch((error) => {
-        log.warn('failed to clear child interaction for requesting Bot', {
-          sessionId: session.id,
-          requestId: request.requestId,
-          error: error instanceof Error ? error.message : String(error),
-        });
-      });
     },
   });
 }
@@ -9788,9 +9721,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         return 'not-bot';
       }
       if (row.role === 'delegation') {
-        // These short-lived delegation runs own their own terminal archive
-        // transaction. Rebuilding one here would race that owner and could
-        // resurrect it.
+        // A V1 teammate-to-teammate background task: not a teammate conversation to rebuild.
         return 'not-bot';
       }
       if (
@@ -13618,12 +13549,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   botDirectMessageServiceHolder = createBotDirectMessageService({
     directory: createTeammateDirectory({
       listDevices: () => handleListDevices(deviceDirectoryDeps()), invoke: invokeBotPeer }),
-    ensureCanonicalSession: async (botId, beforeRecovery) => {
-      if (!botDelegationServiceHolder) {
-        return { ok: false as const, errorCode: 'DELEGATION_UNAVAILABLE', message: '伙伴消息服务尚未就绪' };
-      }
-      return botDelegationServiceHolder.ensureCanonicalSession(botId, beforeRecovery);
-    },
+    ensureCanonicalSession: (botId, beforeRecovery) =>
+      ensureBotCanonicalSession(botId, { beforeRecovery, onCreated: broadcastSessionCreated }),
     captureOwnerScope: captureDataOwnerBroadcastScope,
     isOwnerScopeCurrent: (scope) =>
       isDataOwnerBroadcastScopeCurrent(
@@ -13768,8 +13695,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     companionCloud: createCompanionCloudHost({
       log,
       ensureCanonicalSession: async (botId) => {
-        if (!botDelegationServiceHolder) throw new Error('DELEGATION_UNAVAILABLE');
-        const ensured = await botDelegationServiceHolder.ensureCanonicalSession(botId);
+        const ensured = await ensureBotCanonicalSession(botId, { onCreated: broadcastSessionCreated });
         if (!ensured.ok) throw new Error(ensured.errorCode);
         return ensured.sessionId;
       },
@@ -13811,8 +13737,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         // A room message drives the companion's main task like a same-account device: only where this
         // computer allows same-account device control (the room carries no authenticated device).
         if (!readDeviceLinkSettings().remoteControlEnabled) return { ok: false as const, errorCode: 'REMOTE_CONTROL_DISABLED' };
-        if (!botDelegationServiceHolder) return { ok: false as const, errorCode: 'DELEGATION_UNAVAILABLE' };
-        const ensured = await botDelegationServiceHolder.ensureCanonicalSession(botId);
+        const ensured = await ensureBotCanonicalSession(botId, { onCreated: broadcastSessionCreated });
         if (!ensured.ok) return { ok: false as const, errorCode: ensured.errorCode };
         // Content from the cloud room must not wake the task with more permission than the user chose.
         const result = await dispatchBotSessionMessage({ targetSessionId: ensured.sessionId, message: text, clientId,
@@ -13861,166 +13786,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   // Phones reach groups through the Remote Resource protocol (bot-group-chat.md §8).
   registerBotGroupRemoteResourceProvider(() => botGroupChatServiceHolder);
   taskCompletionDeliveryForOwner();
-  botDelegationServiceHolder?.dispose();
   // Archive / restore changes the open tasks a teammate's roster row links as followed.
   setSessionStatusPatchedListener(scheduleBotRemoteResourceChangedForFollowedSession);
-  botDelegationServiceHolder = createBotDelegationService({
-    captureRequest: captureSessionAgentRequest,
-    readSessionExecution: id => {
-      const session = maker.getSession(id);
-      return session ? { instanceId: session.instanceId, generation: session.getTurnGeneration() } : null;
-    },
-    // Native close cannot be cancelled by the ordinary send-lock watchdog.
-    withSessionLock: withSessionRestartLock,
-    taskControl: {
-      steer: (params) => sessionControlService.steerSession(params),
-      stop: (params) => sessionControlService.stopSessionTurn(params),
-      isActive: (id) => {
-        const session = maker.getSession(id);
-        return !!session && (session.isTurnRunning() || session.getTurnControlSnapshot().pendingInteractionCount > 0);
-      },
-      holdInput: (id, held) => {
-        inputCoordinator.setExecutionPaused(id, held);
-        return setPendingInteractionTimeoutsPaused(id, held);
-      },
-      // Wait for sends already admitted before the hold before sampling native activity.
-      waitForInputBoundary: (id) => withSendToSessionLock(id, async () => undefined),
-      preparePause: async (id) => {
-        resetAutomaticRecoveryForExplicitStop(id);
-        contextOverflowRolloverHolder?.cancelRecovery(id);
-        await pauseGoalBeforeExplicitStop(id);
-      },
-      restoreInput: (id) => inputCoordinator.ensureQueueRestored(id),
-      flushInput: awaitAgentInputQueueSnapshotPersistence,
-      resumeInput: async (id) => { inputCoordinator.resume(id); },
-    },
-    getWorktree: worktreeManager.getForSession,
-    reconcileWorktree: worktreeManager.reconcileSessionTransfer,
-    withTransferredWorktree: worktreeManager.withTransferredSession,
-    discardUnusedWorktree: async sessionId => {
-      const [row] = await getDbClient().drizzle.select({ id: sessions.id }).from(sessions)
-        .where(eq(sessions.id, sessionId)).limit(1);
-      if (!row) await worktreeManager.removeWorktreeForSession(sessionId);
-    },
-    prepareWorktree: async workingDir => {
-      const prepared = await prepareHandoffWorktree({
-        getForSession: worktreeManager.getForSession, listAll: worktreeManager.listAll,
-        detectCwd: worktreeManager.detectCwd, suggestName: worktreeManager.suggestName,
-        listBranches: worktreeManager.listBranches, resolveCommit: worktreeManager.revParseCommit,
-        createWorktree: worktreeManager.createWorktree, createId: () => randomUUID(),
-        resolveFreshSource: resolveFreshSourceBranch,
-      }, undefined, workingDir);
-      return prepared.ok ? { ok: true, sessionId: prepared.sessionId, workingDir: prepared.meta.path } : prepared;
-    },
-    taskQueue: {
-      inspect: async (id, callerSessionId) => {
-        await inputCoordinator.ensureQueueRestored(id);
-        if (!inputCoordinator.isQueueRestored(id)) throw new Error('Task queue restoration is incomplete');
-        return inputCoordinator.getQueueInspection(id)
-          .filter(item => item.source === 'session' && item.sourceLabel === callerSessionId)
-          .map(item => ({ queuedMessageId: item.queuedMessageId, consuming: item.consuming, message: item.content }));
-      },
-      update: params => sessionControlService.updateQueuedMessage(params),
-      cancel: params => sessionControlService.cancelQueuedMessage(params),
-    },
-    readCallerPermission: (sessionId) => {
-      const state = maker.getSession(sessionId)?.stablePermissionModeState;
-      return state?.mode ? { mode: state.mode, generation: state.generation } : null;
-    },
-    readCallerRuntime: (sessionId) => {
-      const session = maker.getSession(sessionId);
-      return session ? {
-        agentKind: makerToDbAgentKind(session.agentKind),
-        agentDeviceId: session.agentDeviceId ?? null,
-        model: session.model,
-        providerId: getSessionProvider(sessionId) ?? null,
-        effort: (getSessionEffort(sessionId) ?? undefined) as CreateOpts['effort'],
-        fastMode: getSessionFastMode(sessionId),
-      } : null;
-    },
-    taskRoute: createBotSessionTaskRouteBridge({
-      getSessionRuntime: params => sessionControlService.getSessionRuntime(params),
-      setSessionRuntime: params => sessionControlService.setSessionRuntime(params),
-      readConfiguredCandidate: (callerSessionId, current, childSessionId) =>
-        readBotFallbackCandidate(callerSessionId, current, childSessionId),
-    }),
-    dispatch: ({ targetSessionId, message, persistedContent, clientId, onAccepted, dispatcherSessionId, autoReviewUserText }) =>
-      dispatchBotSessionMessage({
-        autoReviewUserText,
-        targetSessionId,
-        message,
-        persistedContent,
-        clientId,
-        onAccepted: onAccepted ? async (replayed) => {
-          try {
-            await onAccepted(replayed);
-          } catch (error) {
-            if (error instanceof GroupToolAuthorizationError || error instanceof TaskActionAuthorizationError) {
-              throw new AcceptedCallbackDispatchCancelled(error.message);
-            }
-            throw error;
-          }
-        } : undefined,
-        dispatcherSessionId,
-        // 后台任务按发起时落库的权限档运行；冷启动不能退回 bypass。否则任务实际以
-        // Full access 运行，库里却是 Auto / Ask，绑定它的心跳每轮都因档位不一致被顺延。
-        resumeWithStoredPermissionMode: true,
-      }),
-    discardDelegationQueuedInputs: (sessionId, delegationId) =>
-      discardDelegationQueuedInputs(inputCoordinator, sessionId, delegationId, awaitAgentInputQueueSnapshotPersistence),
-    abortSession: (sessionId) => stopSessionTurnExplicitly(sessionId),
-    closeSession: (sessionId) => maker.closeSession(sessionId),
-    broadcastSessionCreated,
-    onChanged: (payload) => {
-      broadcastToAllWindows(MAKER_PUSH.BOT_DELEGATION_CHANGED, payload);
-      scheduleBotRemoteResourceChangedForDelegation(payload.delegationId, payload.childSessionId);
-    },
-    resolveInteraction: resolvePendingInteraction,
-    hasPendingInput: (sessionId) =>
-      inputCoordinator.getQueueControlSnapshot(sessionId).pendingQueue.length > 0,
-    readPendingInputClientIds: (sessionId) =>
-      inputCoordinator.getQueueControlSnapshot(sessionId).pendingQueue.flatMap(item => [item.clientId, ...(item.supersedesUserClientId ? [item.supersedesUserClientId] : []), ...(item.retrySourceClientId ? [item.retrySourceClientId] : [])]),
-    collectArtifacts: async (sessionId, inputClientIds) => {
-      await waitForTurnChangeSetSeal(sessionId);
-      const acceptedInputs = new Set(inputClientIds);
-      const changeSets = (await listTurnChangeSets(sessionId)).filter(changeSet => acceptedInputs.has(changeSet.anchorClientId));
-      const byPath = new Map<string, {
-        path: string;
-        absolutePath: string;
-        status: 'added' | 'modified' | 'deleted' | 'renamed';
-      }>();
-      for (const changeSet of changeSets) {
-        for (const file of changeSet.files) {
-          const status = file.status === 'added' || file.status === 'untracked' || file.status === 'copied'
-            ? 'added'
-            : file.status === 'deleted'
-              ? 'deleted'
-              : file.status === 'renamed'
-                ? 'renamed'
-                : 'modified';
-          byPath.set(file.path, {
-            path: file.path,
-            absolutePath: path.resolve(changeSet.cwd, file.path),
-            status,
-          });
-        }
-      }
-      return [...byPath.values()];
-    },
-    // A task started from a group posts its card, confirmations and result there as its teammate.
-    postGroupTaskMessage: async (input) => botGroupChatServiceHolder
-      ? botGroupChatServiceHolder.postCompanionTaskMessage(input)
-      : { ok: false as const, errorCode: 'GROUP_CHANNEL_UNAVAILABLE', retryable: true },
-  });
   registerBotLifecycleHandlers({
     maker,
     restartRuntime: restartBotCanonicalRuntime,
-    getDelegationService: () => botDelegationServiceHolder,
-    onResumed: async (botId) => {
-      // Task results that finished while the teammate was paused were held, not retried.
-      // The service retries its own failures.
-      void botDelegationServiceHolder?.resumeCompletionDelivery(botId);
-    },
     onBeforeDelete: async (botId) => {
       // 伙伴自有的 IM 机器人连接先停掉并清凭证: 伙伴没了, 它的 bot 不能继续收消息。
       await removeBotImConnectionsForBot(botId);
@@ -14038,8 +13808,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       await finishCompanionEnvironmentRemoval(ownerScopedUserDataPath(), botId, assertOwner);
     },
   });
-  const delegationForRestore = botDelegationServiceHolder;
-  void restoreBotRuntimeForCurrentOwner();
+  restoreTaskResultDeliveryForCurrentOwner();
 
   ipcMain.handle(
     MAKER_INVOKE.BOT_DELEGATIONS_LIST,
@@ -14048,7 +13817,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       if (typeof parentSessionId !== 'string' || (parentSessionId.length === 0 || parentSessionId.length > 128)) {
         throwIpcError('INVALID_PARAMS', 'parentSessionId required');
       }
-      const result = await delegationForRestore.listDelegations(parentSessionId);
+      const result = await listBotDelegationHistory(parentSessionId);
       return isDeviceLinkInvoke() ? projectRemoteBotDelegations(result) : result;
     },
   );
@@ -14336,41 +14105,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     assertTrustedAppRendererEvent(event);
     return botGroupChatServiceHolder ? botGroupChatServiceHolder.editPlanStep(input) : botGroupNotReady;
   });
-  ipcMain.handle(
-    MAKER_INVOKE.BOT_DELEGATION_CANCEL,
-    async (event, parentSessionId: unknown, delegationId: unknown) => {
-      if (!isDeviceLinkInvoke()) assertTrustedAppRendererEvent(event);
-      if (
-        typeof parentSessionId !== 'string'
-        || (parentSessionId.length === 0 || parentSessionId.length > 128)
-        || typeof delegationId !== 'string'
-        || (delegationId.length === 0 || delegationId.length > 128)
-      ) {
-        throwIpcError('INVALID_PARAMS', 'parentSessionId + delegationId required');
-      }
-      // The owner's own stop button: not a group tool call, so no live group execution is needed.
-      return delegationForRestore.cancelDelegationFromOwner(parentSessionId, delegationId);
-    },
-  );
-  ipcMain.handle(
-    MAKER_INVOKE.BOT_DELEGATION_NOTE_TRACE,
-    async (event, parentSessionId: unknown, delegationId: unknown, text: unknown) => {
-      // Local only: the card offers 补一句 for tasks on this computer and the channel
-      // stays out of the device-link allowlist, so the sender is always the app renderer.
-      assertTrustedAppRendererEvent(event);
-      if (
-        typeof parentSessionId !== 'string'
-        || (parentSessionId.length === 0 || parentSessionId.length > 128)
-        || typeof delegationId !== 'string'
-        || (delegationId.length === 0 || delegationId.length > 128)
-        || typeof text !== 'string'
-        || (text.trim().length === 0 || text.length > 4_000)
-      ) {
-        throwIpcError('INVALID_PARAMS', 'parentSessionId + delegationId + text required');
-      }
-      return delegationForRestore.traceOwnerNote(parentSessionId, delegationId, text);
-    },
-  );
+  // Older controllers still offer a stop chip on old task cards; nothing runs through them any more.
+  ipcMain.handle(MAKER_INVOKE.BOT_DELEGATION_CANCEL, async (event) => {
+    if (!isDeviceLinkInvoke()) assertTrustedAppRendererEvent(event);
+    return { ok: false as const, errorCode: 'UNSUPPORTED_CAPABILITY', message: 'Teammate background tasks were retired' };
+  });
   const captureSessionOwner = () => {
     const owner = getCurrentDbClientSnapshot();
     return () => {
@@ -20791,13 +20530,17 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       if (restoredFromSnapshot && item.clientId.startsWith('bot-dm:')) {
         throw new AcceptedCallbackDispatchCancelled('Teammate direct messages were retired');
       }
+      // Likewise a V1 background task's queued start / follow-up: nothing would deliver its result,
+      // and a task its teammate had paused must not start by itself.
+      if (restoredFromSnapshot && /^bot-delegation-(?:start|resume|unpause|interject):/.test(item.clientId)) {
+        throw new AcceptedCallbackDispatchCancelled('Teammate background tasks were retired');
+      }
       // 已派发 → 该项不会再走 discard,释放 scheduler 的 discard 监听防泄漏。
       schedulerQueuedPromptDiscardWatchers.delete(item.clientId);
       schedulerQueuedPromptPreparations.delete(item.clientId);
       // 返回 promise 让 coordinator 在 onPersisted 链路里 await —— worker 运行态与
       // pending auto-bridge 副作用必须先于 turn 启动完成；失败仍吞错落日志，不拦派发。
       await orcaInterAgentDispatcher.runQueuedOrcaInterAgentAcceptedCallback(sessionId, item);
-      await botDelegationServiceHolder?.acceptQueuedSessionInput(sessionId, item.clientId, item.supersedesUserClientId, restoredFromSnapshot, item.retrySourceClientId);
       const pluginTaskSession = maker.getSession(sessionId);
       if (pluginTaskSession && pluginTaskServiceForCurrentOwner) {
         await pluginTaskServiceForCurrentOwner().accept(sessionId, item, { instanceId: pluginTaskSession.instanceId, generation: pluginTaskSession.getTurnGeneration() });
@@ -20828,7 +20571,6 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       if (item.autoResume === true && item.autoResumeInfo?.reason === USAGE_LIMIT_RESET_AUTO_RESUME_REASON) {
         settleProviderGroupContinuation(sessionId, true);
       }
-      botDelegationServiceHolder?.confirmQueuedSessionInputDispatched(sessionId, item.clientId);
       welcomeDispatchReceipts.settle(sessionId, item.clientId, true);
       const attemptToken = autoResumeAttemptToken(item);
       const quotaClaim = pendingSchedulerAutoResumeRunBySession.get(sessionId);
@@ -21100,8 +20842,6 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     loadClearBoundary: async (sessionId) =>
       (await getSessionRowSnapshotStrict(sessionId))?.clearedAt,
     loadQueueSnapshot: async (sessionId) => {
-      // Rehydrate durable task holds before any entry point can drain restored/new input.
-      await botDelegationServiceHolder?.restorePauseForSession(sessionId);
       await restoreSavedUsageLimitWait(sessionId);
       return loadAgentInputQueueSnapshot(sessionId);
     },

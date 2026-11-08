@@ -30,7 +30,7 @@ import { BotAvatar } from './BotAvatar';
 import { isBotKnownOffline } from './BotConnectionStatus';
 import { HomeSwitchConfirm, useCompanionHomeSwitch, type HomeSwitch } from './BotHomeComputerSetting';
 import type { BotChatIdentity } from './BotSessionContentHeader';
-import { useBotDelegations } from './botDelegationLive';
+import { useBotDelegationRecords } from './botDelegationHistory';
 import { isBotPrimaryGeneratedFile } from './botGeneratedArtifacts';
 import { useBotProfiles, useBotUnreadCounts } from './botStore';
 import { cloudRemoteBots, withoutCloudCompanions, withoutShadowedBots } from './companionCloudPresentation';
@@ -314,7 +314,7 @@ function basename(path: string): string {
 }
 
 function useOutputs(sessionId: string, botId: string): OutputFile[] {
-  const delegations = useBotDelegations(sessionId);
+  const delegations = useBotDelegationRecords(sessionId);
   return useMemo(() => {
     const files: OutputFile[] = [];
     for (const delegation of delegations) {

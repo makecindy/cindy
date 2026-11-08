@@ -21,7 +21,6 @@ import { createLogger } from '../logger.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import { requireObject, requireString, throwIpcError } from '../utils/ipcValidate.js';
 import { MAKER_INVOKE, MAKER_PUSH } from './channels.js';
-import type { BotDelegationService } from './botDelegationService.js';
 import { resolveBotCanonicalSession } from './botCanonicalSessionRegistry.js';
 import { broadcastBotRemoteResourceChanged } from './botRemoteResourceInvalidation.js';
 import { signalBotProfilesChanged } from './botProfilesChangedSignal.js';
@@ -35,7 +34,6 @@ const log = createLogger('maker-ipc:bot-lifecycle');
 
 export interface BotLifecycleServiceDeps {
   maker: Maker;
-  getDelegationService: () => BotDelegationService | null;
   deleteProfileAndDetachSessions?: (
     botId: string,
     sessionIds: string[],
@@ -174,12 +172,7 @@ export function createBotLifecycleService(deps: BotLifecycleServiceDeps) {
       eventId: randomUUID(),
     });
 
-    const delegationService = deps.getDelegationService();
-    const [delegations, closed] = await Promise.all([
-      delegationService?.cancelDelegationsForBot(
-        botId,
-        'The Bot was paused by the user.',
-      ) ?? Promise.resolve(0),
+    const [closed] = await Promise.all([
       closeBotSessions(botId),
       deps.onPaused?.(botId),
     ]);
@@ -197,10 +190,7 @@ export function createBotLifecycleService(deps: BotLifecycleServiceDeps) {
       botId,
       'pause',
       'paused',
-      {
-        sessions: closed.count,
-        delegations,
-      },
+      { sessions: closed.count },
       warnings,
     );
     await notifyLifecycleChanged(botId, 'pause');
@@ -318,8 +308,7 @@ export function createBotLifecycleService(deps: BotLifecycleServiceDeps) {
       throwIpcError('PRECONDITION_FAILED', 'Bot 已在永久删除流程中');
     }
     // Hold the profile lock before pausing so a concurrent message cannot land halfway.
-    // Active delegations are cancelled while their target id is still intact. Historical
-    // foreign keys are detached only inside the final delete transaction.
+    // Historical foreign keys are detached only inside the final delete transaction.
     await getDbClient().tx('bots.prepareProfileDeletion', { botId: request.botId });
     assertOwnerUnchanged();
     let preparationWarnings: string[] = [];
@@ -337,13 +326,7 @@ export function createBotLifecycleService(deps: BotLifecycleServiceDeps) {
       .from(botSessionLinks)
       .where(eq(botSessionLinks.botId, request.botId));
     const sessionIds = [...new Set(links.map((row) => row.sessionId))];
-    const [delegations, closed] = await Promise.all([
-      deps.getDelegationService()?.cancelDelegationsForBot(
-        request.botId,
-        'The Bot was permanently deleted by the user.',
-      ) ?? Promise.resolve(0),
-      closeBotSessions(request.botId),
-    ]);
+    const closed = await closeBotSessions(request.botId);
 
     assertOwnerUnchanged();
     await deps.onBeforeDelete?.(request.botId);
@@ -386,7 +369,6 @@ export function createBotLifecycleService(deps: BotLifecycleServiceDeps) {
 
     const result = lifecycleResult(request.botId, 'delete', 'deleted', {
       sessions: sessionIds.length,
-      delegations,
     }, [...preparationWarnings, ...closed.warnings]);
     await notifyLifecycleChanged(request.botId, 'delete');
     return result;

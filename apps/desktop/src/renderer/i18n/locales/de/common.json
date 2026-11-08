@@ -10443,8 +10443,6 @@
       "actionFailed": "Das hat nicht geklappt. Versuch es erneut.",
       "retrying": "Noch nicht gestartet – neuer Versuch…",
       "status": {
-        "queued": "Erste Schritte",
-        "waiting": "Wartet auf Eingabe",
         "running": "In Arbeit",
         "completed": "Fertig",
         "failed": "Fehlgeschlagen",
@@ -10460,13 +10458,6 @@
       },
       "viewResult": "Ergebnis ansehen",
       "noWrittenResult": "Kein schriftliches Ergebnis.",
-      "addNote": "Notiz hinzufügen",
-      "addNotePlaceholder": "Schreib der Hintergrundaufgabe… mit Enter senden",
-      "addNoteSent": "An die Hintergrundaufgabe gesendet",
-      "stop": "Stoppen",
-      "lookAt": "Schau mal rein",
-      "awaitingConfirm": "Wartet auf dich: {{summary}}",
-      "awaitingConfirmGeneric": "Wartet auf dich",
       "elapsed": "Bisher {{duration}}",
       "tookTime": "Dauer: {{duration}}",
       "expandResult": "Ergebnis anzeigen",
@@ -10847,7 +10838,6 @@
         "planning": "Arbeit wird aufgeteilt…"
       },
       "task": {
-        "label": "Aufgabe",
         "state": {
           "started": "In Bearbeitung",
           "waiting": "Warten auf deine Bestätigung",
@@ -19369,10 +19359,7 @@
     "sourcePresent": "[Quelle] Der Host hat den ursprünglichen Wortlaut des Nutzers unverändert als Hintergrund der Anfrage beibehalten. Die aktuelle Anfrage steht in der Agent-Ergänzung.",
     "sourceMissing": "[Quelle] Es wurde kein überprüfbarer ursprünglicher Nutzertext gefunden.",
     "userPrefix": "Ursprünglicher Wortlaut des Nutzers:",
-    "agentPrefix": "Agent-Ergänzung:",
-    "taskSource": "[Aufgabenquelle] Ein Teammitglied hat diese Aufgabe gestartet.",
-    "taskId": "Aufgaben-ID:",
-    "contextReferences": "Kontextverweise:"
+    "agentPrefix": "Agent-Ergänzung:"
   },
   "sharing": {
     "loginRequired": "Zum Teilen anmelden",

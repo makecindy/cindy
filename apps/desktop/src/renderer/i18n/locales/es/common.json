@@ -10525,8 +10525,6 @@
       "actionFailed": "Eso no sucedió. Intentar otra vez.",
       "retrying": "Aún no ha comenzado. Volviendo a intentarlo…",
       "status": {
-        "queued": "Empezando",
-        "waiting": "Esperando entrada",
         "running": "trabajando en ello",
         "completed": "Listo",
         "failed": "Fallido",
@@ -10542,13 +10540,6 @@
       },
       "viewResult": "Ver resultado",
       "noWrittenResult": "Ningún resultado escrito.",
-      "addNote": "Agregar una nota",
-      "addNotePlaceholder": "Dile algo a la tarea en segundo plano… presiona Enter para enviar",
-      "addNoteSent": "Enviado a la tarea en segundo plano",
-      "stop": "Detener",
-      "lookAt": "Echa un vistazo",
-      "awaitingConfirm": "Te espera: {{summary}}",
-      "awaitingConfirmGeneric": "esperando por ti",
       "elapsed": "{{duration}} hasta ahora",
       "tookTime": "Tardó {{duration}}",
       "expandResult": "Mostrar resultado",
@@ -10936,7 +10927,6 @@
         "planning": "Dividiendo el trabajo…"
       },
       "task": {
-        "label": "Tarea",
         "state": {
           "started": "En progreso",
           "waiting": "Esperando tu confirmación",
@@ -19553,10 +19543,7 @@
     "sourcePresent": "[Fuente] El host conservó las palabras originales del usuario como contexto de la solicitud, sin cambios. La solicitud actual está en el suplemento del Agent.",
     "sourceMissing": "[Fuente] No se encontró texto original verificable del usuario.",
     "userPrefix": "Palabras originales del usuario:",
-    "agentPrefix": "Suplemento del Agent:",
-    "taskSource": "[Origen de la tarea] Un compañero inició esta tarea.",
-    "taskId": "ID de la tarea:",
-    "contextReferences": "Referencias de contexto:"
+    "agentPrefix": "Suplemento del Agent:"
   },
   "sharing": {
     "loginRequired": "Inicia sesión para compartir",

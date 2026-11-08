@@ -23,10 +23,6 @@ export const TASK_ACTION_TOOLS: ReadonlySet<string> = new Set([
   'cancel_session_queued_message',
   'steer_session_queued_message',
   'move_session_queued_message',
-  'start_session_task',
-  'message_session_task',
-  'stop_session_task',
-  'advance_session_task_route',
   'archive_sessions',
   'unarchive_sessions',
   'rename_sessions',
@@ -52,16 +48,13 @@ export const ORCA_TASK_ACTION_TOOLS: ReadonlySet<string> = new Set([
   'archive_worker',
 ]);
 
-/** A confirmed new delegation may advance only its own live execution. */
-export const DELEGATED_TASK_ACTIONS = ['message_session_task', 'stop_session_task'] as const;
-
 export interface TaskActionScope {
   /** Host identity/active-input generation, captured before the confirmation. */
   key: string;
   ownerInput: boolean;
-  /** Existing, explicitly confirmed delegation; never inferred from creator/follower. */
+  /** Already confirmed upstream (an Orca team or delegate_task); never inferred from creator/follower. */
   delegated: boolean;
-  /** Rechecked at mutation; includes account, target and delegation revocation. */
+  /** Rechecked at mutation; includes account, target and team revocation. */
   assertCurrent(): Promise<void>;
   /** Host generation check for existing synchronous commit/pre-send callbacks. */
   assertCurrentSync?(): void;
@@ -181,16 +174,6 @@ export async function admitTaskAction(
   };
 }
 
-/** Host-only creation evidence; no tool parameter can mint this snapshot. */
-export function approvedTaskDelegation(
-  callerSessionId: string,
-): { version: 1; actions: readonly string[] } | undefined {
-  const current = actionContext.getStore();
-  return current?.sessionId === callerSessionId && current.tool === 'start_session_task'
-    ? { version: 1, actions: DELEGATED_TASK_ACTIONS }
-    : undefined;
-}
-
 export async function assertTaskActionCurrent(): Promise<void> {
   await actionContext.getStore()?.assertCurrent();
 }
@@ -204,7 +187,7 @@ export function runTaskActionRequest<T>(operation: () => Promise<T>): Promise<T>
 
 /** Cover in-process callers too: authorize this invocation without ambient evidence,
  * then execute under only the returned admission. A bare allow intentionally keeps
- * ordinary-task semantics (no Bot delegation evidence or forced queue). */
+ * ordinary-task semantics (no confirmed-action evidence or forced queue). */
 export function isolateTaskActionAuthorizer(authorize: ToolCallAuthorizer): ToolCallAuthorizer {
   return (call) => runTaskActionRequest(async () => {
     const decision = await authorize(call);
@@ -215,13 +198,6 @@ export function isolateTaskActionAuthorizer(authorize: ToolCallAuthorizer): Tool
         decision.run ? decision.run(operation) : operation()),
     };
   });
-}
-
-/** Host lifecycle only: durable completion delivery is not another invocation
- * of the tool that started the task. Its caller must validate the persisted
- * delegation/run and recipient; this does not authorize any Agent task action. */
-export function runHostCompletionDelivery<T>(operation: () => Promise<T>): Promise<T> {
-  return actionContext.exit(operation);
 }
 
 /** Existing lifecycle callbacks can outlive the AsyncLocalStorage call itself. */

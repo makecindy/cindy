@@ -154,8 +154,6 @@ export interface PiExtraSpawnConfig {
     servers: PiMcpServerRef[];
     /** Bot-scoped memory is exposed as one typed Pi tool instead of nested discovery. */
     botMemoryFacade?: boolean;
-    /** Direct teammate tools hidden from this teammate (project mode); the helper also denies calls. */
-    deniedTools?: string[];
   } | null;
   /** 外部 MCP header 真值；只进 Pi 父进程 env，并在 bash spawn 边界剥离。 */
   mcpEnv?: Record<string, string>;

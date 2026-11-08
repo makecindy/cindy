@@ -3003,9 +3003,9 @@ export function getMaker(): Maker {
           const providerReady = await ensureCurrentAccountProviderReadiness();
           if (!providerReady) {
             // 未登录 / 正在切账号时这里恒 false。主机通路只把失败压成 errorCode +
-            // message 两个字符串，所以稳定标记必须写进 message 本身：调用方（如 Bot
-            // 委派）据此把「这不会自愈，得让用户去登录」和「瞬时故障，值得重试」分开，
-            // 而不是无差别重试到天荒地老。见 botDelegationDispatchOutcome.ts。
+            // message 两个字符串，所以稳定标记必须写进 message 本身：调用方据此把
+            // 「这不会自愈，得让用户去登录」和「瞬时故障，值得重试」分开，
+            // 而不是无差别重试到天荒地老。
             throw Object.assign(
               new Error(
                 `${ACCOUNT_PROVIDER_NOT_READY_CODE}: account provider models are not ready `

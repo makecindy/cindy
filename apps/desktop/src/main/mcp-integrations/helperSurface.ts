@@ -1,5 +1,4 @@
 import type { DbClient } from '../localDb/client/DbClient.js';
-import { readBotProjectMode } from '../../shared/botProjectMode.js';
 
 /** Companion tasks add their profile tools to the ordinary transport's helper surface.
  * Classification is a business-object distinction, not a separate permission tier.
@@ -39,35 +38,4 @@ export async function resolveHelperSurface(
     status: row.status,
     remoteHostId: row.remoteHostId,
   });
-}
-
-/** The teammate owning this task runs as a project (V2). */
-export async function resolveHelperTeammateProjectMode(
-  db: Pick<DbClient, 'queryOne'>,
-  sessionId: string,
-): Promise<boolean> {
-  const config = await readOwningBotConfig(db, sessionId);
-  return config ? readBotProjectMode(config) : false;
-}
-
-async function readOwningBotConfig(
-  db: Pick<DbClient, 'queryOne'>,
-  sessionId: string,
-): Promise<Record<string, unknown> | null> {
-  const row = await db.queryOne<{ config: string | null }>(
-    `SELECT v.capabilities_json AS config
-       FROM bot_session_links b
-       JOIN bot_profiles p ON p.id = b.bot_id
-       JOIN bot_profile_versions v ON v.bot_id = p.id AND v.version = p.current_version
-      WHERE b.session_id = ? AND b.archived_at IS NULL
-      LIMIT 1`,
-    [sessionId],
-  );
-  if (!row?.config) return null;
-  try {
-    const config = JSON.parse(row.config) as unknown;
-    return config && typeof config === 'object' && !Array.isArray(config) ? config as Record<string, unknown> : null;
-  } catch {
-    return null;
-  }
 }

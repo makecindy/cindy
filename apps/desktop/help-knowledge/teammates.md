@@ -1,7 +1,7 @@
 ---
 id: teammates
 title: Teammates (Cindy and custom companions)
-summary: Teammates are long-lived AI companions (the built-in Cindy plus ones you create) listed at the top of the left sidebar. Chat with them, set their profile, model, memory, capabilities, projects, voice, and messaging platforms; give them automations; let them run background tasks, follow up on your sessions, and keep todos; put several in a group chat; choose which computer runs them.
+summary: Teammates are long-lived AI companions (the built-in Cindy plus ones you create) listed at the top of the left sidebar. Chat with them, set their profile, model, memory, capabilities, projects, voice, and messaging platforms; give them automations; let them open tasks, follow up on your sessions, and keep todos; put several in a group chat; choose which computer runs them.
 ---
 A **teammate** is a long-lived AI companion with its own name, avatar, personality, memory, skills, and one continuous conversation. **Cindy** is built in and is added automatically the first time you use teammates; you can create more. A teammate belongs to your account, not to one computer: you see the same teammate on every computer and on your phone, but it runs on one **main computer**.
 
@@ -41,13 +41,13 @@ A **teammate** is a long-lived AI companion with its own name, avatar, personali
 - **Voice** — speech model, voice, speech speed, and **Read by sentence** for voice conversations (see below).
 - **Capabilities** — choose which **Built-in tools**, **MCP** servers, and **Skills** this teammate may use (items unavailable on this computer are marked). By default it follows the tools enabled on this computer; turning one off switches to an explicit list. **Input Handoff** lets it ask you to type a password or code on any of your devices; it never sees the value.
 - **Messaging platforms** — give the teammate its own bot (see below).
-- **Search teammate history** — search past messages, background tasks, and archived records.
+- **Search teammate history** — search past messages, tasks it opened, and archived records.
 - **Advanced configuration** — **Open folder** opens the teammate's own folder (SOUL.md, USER.md, system_prompt.md, skills/, memories/). Use it only to fix something by hand.
 - Also on the settings home: **Main Computer** (see below), **Restart teammate** (stops the current run for a fresh start; history, memory, and files are kept; send a message to continue), and **Permanently delete teammate**. Deleting removes its profile, memory, working directory, channel connections, and automated tasks. Task history and separate worktrees are kept. A paused teammate shows **Resume teammate**.
 
 **What a teammate can do for you:**
 
-- **Background tasks:** for bigger work, a teammate starts a normal Cindy task. The task shows in your task list as "…'s background task", and a **Background task** card in the chat lets you **Open task** or **Stop task**. The result comes back to the teammate's chat.
+- **Tasks:** for bigger work, a teammate opens an ordinary Cindy task. It shows in your task list with the teammate's avatar, and when the teammate asks for the result, its final reply comes back to the teammate's chat once. **Background task** cards from earlier versions stay in the chat history and still open their task; they no longer offer **Stop task** or adding a note.
 - **At a glance** (grid button in the chat header) has up to three blocks:
   - **Computers**: where it runs and other computers it can move to.
   - **Todos**: open todos, due ones first. Click one to quote it in the message box and tell the teammate what to change. Right-click → **Delete**. **Check for me** asks it to look through your connected mail and chats for new todos; **Check every day** does that on weekdays at 9:00 and stays quiet when nothing is new.
@@ -58,7 +58,7 @@ A **teammate** is a long-lived AI companion with its own name, avatar, personali
 **How permissions work (high level):**
 
 - When you ask in its chat, a teammate acts on your behalf under the chat's permission mode. **Full access** doesn't ask, **Auto-review** reviews automatically, and **Default permissions** asks you. No extra confirmation cards are added.
-- When it acts on its own (a follow-up wake-up, a message from another teammate or a stranger), it can only touch its own background tasks and tasks already handed to it. It can keep those going toward the original goal or switch their model. Anything else on your sessions (new requirements, stopping, renaming, archiving, creating or changing automations) becomes a todo or a note to you. Reply to it and the teammate does it on your behalf.
+- When it acts on its own (a follow-up wake-up, a message from another teammate or a stranger), it can only touch the tasks it opened and tasks already handed to it. It can keep those going toward the original goal or switch their model. Anything else on your sessions (new requirements, stopping, renaming, archiving, creating or changing automations) becomes a todo or a note to you. Reply to it and the teammate does it on your behalf.
 - Automations you set up run as your standing instructions.
 
 **Messaging platforms (the teammate's own bot):**

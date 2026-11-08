@@ -624,8 +624,6 @@
       "minutes": "{{n}} min",
       "hoursMinutes": "{{h}} h {{m}} min"
     },
-    "retrying": "Pas encore démarrée : nouvelle tentative…",
-    "stopTask": "Arrêter la tâche",
     "actionFailed": "Impossible de charger ou de terminer cette action",
     "messages": "Messages",
     "readOnly": "Lecture seule",

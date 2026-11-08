@@ -10525,8 +10525,6 @@
       "actionFailed": "A operação não foi concluída. Tente novamente.",
       "retrying": "Ainda não começou — a tentar novamente…",
       "status": {
-        "queued": "A começar",
-        "waiting": "A aguardar informações",
         "running": "A trabalhar",
         "completed": "Concluído",
         "failed": "Falhou",
@@ -10542,13 +10540,6 @@
       },
       "viewResult": "Ver resultado",
       "noWrittenResult": "Sem resultado escrito.",
-      "addNote": "Adicionar uma nota",
-      "addNotePlaceholder": "Diga algo à tarefa em segundo plano… prima Enter para enviar",
-      "addNoteSent": "Enviado para a tarefa em segundo plano",
-      "stop": "Parar",
-      "lookAt": "Dar uma vista de olhos",
-      "awaitingConfirm": "À sua espera: {{summary}}",
-      "awaitingConfirmGeneric": "À sua espera",
       "elapsed": "{{duration}} até agora",
       "tookTime": "Demorou {{duration}}",
       "expandResult": "Mostrar resultado",
@@ -10936,7 +10927,6 @@
         "planning": "A dividir o trabalho…"
       },
       "task": {
-        "label": "Tarefa",
         "state": {
           "started": "Em curso",
           "waiting": "À espera da sua confirmação",
@@ -19553,10 +19543,7 @@
     "sourcePresent": "[Origem] O anfitrião preservou as palavras originais do utilizador como contexto do pedido, sem alterações. O pedido atual está no suplemento do Agent.",
     "sourceMissing": "[Origem] Não foi encontrado texto original verificável do utilizador.",
     "userPrefix": "Palavras originais do utilizador:",
-    "agentPrefix": "Suplemento do Agent:",
-    "taskSource": "[Origem da tarefa] Um companheiro iniciou esta tarefa.",
-    "taskId": "ID da tarefa:",
-    "contextReferences": "Referências de contexto:"
+    "agentPrefix": "Suplemento do Agent:"
   },
   "sharing": {
     "loginRequired": "Iniciar sessão para partilhar",

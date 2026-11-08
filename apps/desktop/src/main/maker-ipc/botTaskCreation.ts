@@ -15,6 +15,7 @@ import {
 } from '../appSessionState.js';
 import { broadcastBotLinkedProjectsChanged } from './botLinkedProjectStore.js';
 import { broadcastBotRemoteResourceChanged } from './botRemoteResourceInvalidation.js';
+import { listBotDelegationChildIds } from './botDelegationHistory.js';
 import { createdSessionIds, readTaskResponsibilities, setTaskResponsibility } from './botTaskResponsibility.js';
 
 type Failure = { ok: false; errorCode: string; message: string };
@@ -73,15 +74,16 @@ async function readWorkbenchTarget(taskId: string): Promise<{
 }
 
 /**
- * The tasks this teammate opened with send_to_session, wherever they live. `delegatedSessionIds`
- * keeps every one of them (the owner chip); `sessionIds` drops the ones it released (the sidebar
- * avatar and teammate filter). Tasks in the teammate's own project are matched by path instead.
+ * The tasks this teammate opened with send_to_session, wherever they live, plus the children of
+ * its V1 background tasks (read from the existing rows). `delegatedSessionIds` keeps every one of
+ * them (the owner chip); `sessionIds` drops the ones it released (the sidebar avatar and teammate
+ * filter). Tasks in the teammate's own project are matched by path instead.
  */
 export async function readBotResponsibilityScope(
   userDataDir: string, botId: string,
 ): Promise<{ sessionIds: string[]; delegatedSessionIds: string[] }> {
   const records = await readTaskResponsibilities(userDataDir, botId);
-  const created = createdSessionIds(records);
+  const created = [...new Set([...createdSessionIds(records), ...await listBotDelegationChildIds(botId)])].sort();
   return {
     sessionIds: created.filter((id) => records[id]?.responsible !== false),
     delegatedSessionIds: created,

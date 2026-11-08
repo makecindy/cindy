@@ -50,6 +50,6 @@ export * from './computer/index.js';
 
 
 export { TEAMMATE_CONTROL_GUIDANCE, BOT_CONTROL_GUIDANCE, type BotControlState, type TeammateCapabilityKind } from './xdt-helper/bot_capabilities.js';
-export { TEAMMATE_CORE_TOPICS, teammateDeniedTools } from './xdt-helper/teammate_skills.js';
+export { TEAMMATE_CORE_TOPICS } from './xdt-helper/teammate_skills.js';
 
 export type { AppModelsRequest } from './xdt-helper/app_models.js';

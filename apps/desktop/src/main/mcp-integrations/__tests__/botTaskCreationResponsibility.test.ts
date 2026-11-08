@@ -5,7 +5,7 @@ import { expect, it, vi } from 'vitest';
 // Run the actual Desktop callback without importing unrelated Electron services.
 const source = readFileSync(new URL('../mcp-providers.ts', import.meta.url), 'utf8');
 const start = source.indexOf('      sendToSession: async ({');
-const callback = source.slice(start, source.indexOf('      sessionTasks:', start));
+const callback = source.slice(start, source.indexOf('      botMessaging:', start));
 const wired = ts.transpileModule(`return {${callback}}.sendToSession;`, {
   compilerOptions: { target: ts.ScriptTarget.ES2022 },
 }).outputText;

@@ -176,7 +176,6 @@ export async function openInputHandoffPicture(
 export interface RoutableMaker {
   predictNextPrompt: FullMaker['predictNextPrompt'];
   listBotDelegations: FullMaker['listBotDelegations'];
-  cancelBotDelegation: FullMaker['cancelBotDelegation'];
   getBotDirectMessageThread: FullMaker['getBotDirectMessageThread'];
   send: FullMaker['send'];
   setModel: FullMaker['setModel'];
@@ -285,7 +284,6 @@ function remoteMakerApi(deviceId: string): RoutableMaker {
   return {
     predictNextPrompt: t('maker:predict-prompt') as FullMaker['predictNextPrompt'],
     listBotDelegations: t('maker:bot-delegations:list') as FullMaker['listBotDelegations'],
-    cancelBotDelegation: t('maker:bot-delegation:cancel') as FullMaker['cancelBotDelegation'],
     getBotDirectMessageThread: t('maker:bot-direct-message-thread:get') as FullMaker['getBotDirectMessageThread'],
     applyTurnChangeSet: t('maker:turn-change-set:apply') as FullMaker['applyTurnChangeSet'],
     send: t('maker:send') as FullMaker['send'],

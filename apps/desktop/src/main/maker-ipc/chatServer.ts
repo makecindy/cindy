@@ -32,7 +32,7 @@ import { botGroupMentionAudience, splitBotGroupRelaySteps } from '@cindy/maker-s
 import { chatMigrationReceipts } from './chatMigrationReceipts.js';
 import { chatLocalHistory } from './chatLocalHistory.js';
 import { chatSendJournal } from './chatSendJournal.js';
-import { prepareBotGroupTaskPost, type BotGroupTaskPostSnapshot } from './botGroupTaskPostSnapshot.js';
+import type { BotGroupTaskPostSnapshot } from './botGroupTaskPostSnapshot.js';
 import { registerGroupToolAuthority, GroupToolAuthorizationError } from './botGroupToolAuthorization.js';
 import path from 'node:path';
 import { randomUUID, createHash } from 'node:crypto';
@@ -3941,7 +3941,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
             // A task started in a Thread reports into that Thread (bot-group-chat.md §10).
             const where = input.threadRootId ? { threadRootId: id.parse(input.threadRootId) } : {};
             const messages: BotGroupTaskPostSnapshot['messages'] = [{
-              operationId: input.clientId, content: [...(first ? [{ type: 'text', text: first }] : []), ...(input.card ? [input.card] : []), ...firstFiles], mentions: [], ...where,
+              operationId: input.clientId, content: [...(first ? [{ type: 'text', text: first }] : []), ...firstFiles], mentions: [], ...where,
             }];
             for (const [index, text] of rest.entries()) messages.push({
               operationId: `${input.clientId}:${index + 2}`, content: [{ type: 'text', text }], mentions: [], ...where,
@@ -3951,10 +3951,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
             });
             return { actorId: actor.id, messages };
           };
-        const frozen = input.preparePost ? await input.preparePost(prepare, { endpoint: config.baseUrl, selfId, roomId, clientId: input.clientId })
-          : input.card ? await prepareBotGroupTaskPost(input.card.data.meta.delegationId,
-            { endpoint: config.baseUrl, selfId, roomId, clientId: input.clientId }, prepare)
-          : (() => { throw new Error('TASK_DELIVERY_ORIGIN_MISSING'); })();
+        const frozen = await input.preparePost(prepare, { endpoint: config.baseUrl, selfId, roomId, clientId: input.clientId });
         if (!current()) return refused('OWNER_CHANGED');
         // Persist every part before the first POST. Retries (including after restart) use the
         // same card, localized fallback, text and media references even if their sources change.

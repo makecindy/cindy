@@ -10525,8 +10525,6 @@
       "actionFailed": "L'opération n'a pas abouti. Réessayez.",
       "retrying": "Pas encore démarrée : nouvelle tentative…",
       "status": {
-        "queued": "Démarrage",
-        "waiting": "Attend une réponse",
         "running": "En cours",
         "completed": "Terminée",
         "failed": "Échec",
@@ -10542,13 +10540,6 @@
       },
       "viewResult": "Voir le résultat",
       "noWrittenResult": "Aucun résultat écrit.",
-      "addNote": "Ajouter une note",
-      "addNotePlaceholder": "Dites à la tâche en arrière-plan… appuyez sur Enter pour envoyer",
-      "addNoteSent": "Envoyé à la tâche en arrière-plan",
-      "stop": "Arrêter",
-      "lookAt": "Jeter un œil",
-      "awaitingConfirm": "En attente de votre réponse : {{summary}}",
-      "awaitingConfirmGeneric": "En attente de votre réponse",
       "elapsed": "{{duration}} écoulé(es)",
       "tookTime": "Durée : {{duration}}",
       "expandResult": "Afficher le résultat",
@@ -10936,7 +10927,6 @@
         "planning": "Répartition du travail…"
       },
       "task": {
-        "label": "Tâche",
         "state": {
           "started": "En cours",
           "waiting": "En attente de votre confirmation",
@@ -19553,10 +19543,7 @@
     "sourcePresent": "[Source] L'hôte a conservé les mots d'origine de l'utilisateur, sans modification, comme contexte de la demande. La demande actuelle figure dans le complément de l'Agent.",
     "sourceMissing": "[Source] Aucun texte d'origine vérifiable de l'utilisateur n'a été trouvé.",
     "userPrefix": "Mots d'origine de l'utilisateur :",
-    "agentPrefix": "Complément de l'Agent :",
-    "taskSource": "[Source de la tâche] Un compagnon a lancé cette tâche.",
-    "taskId": "ID de la tâche :",
-    "contextReferences": "Références de contexte :"
+    "agentPrefix": "Complément de l'Agent :"
   },
   "sharing": {
     "loginRequired": "Se connecter pour partager",

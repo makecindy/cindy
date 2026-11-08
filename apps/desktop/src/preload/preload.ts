@@ -873,7 +873,6 @@ const fanOutMakerClaudeSessionRouteChanged = createIpcFanOut('maker:claude-sessi
 const fanOutMakerSessionBackgroundActivityChanged = createIpcFanOut(
   'maker:session-background-activity-changed',
 );
-const fanOutBotDelegationChanged = createIpcFanOut('maker:bot-delegation:changed');
 const fanOutBotGroupChanged = createIpcFanOut('maker:bot-group:changed');
 const fanOutBotGroupOutboxChanged = createIpcFanOut('maker:bot-group:outbox-changed');
 const fanOutBotReadStateChanged = createIpcFanOut('maker:bot-read-state:changed');
@@ -6541,18 +6540,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
       parentSessionId: string,
     ): Promise<import('../shared/botDelegation').BotDelegationListResult> =>
       ipcRenderer.invoke('maker:bot-delegations:list', parentSessionId),
-    cancelBotDelegation: (
-      parentSessionId: string,
-      delegationId: string,
-    ): Promise<import('../shared/botDelegation').BotDelegationCancelResult> =>
-      ipcRenderer.invoke('maker:bot-delegation:cancel', parentSessionId, delegationId),
-    traceBotDelegationNote: (
-      parentSessionId: string,
-      delegationId: string,
-      text: string,
-    ): Promise<import('../shared/botDelegation').BotDelegationNoteTraceResult> =>
-      ipcRenderer.invoke('maker:bot-delegation:note-trace', parentSessionId, delegationId, text),
-    onBotDelegationChanged: fanOutBotDelegationChanged,
     getBotDirectMessageThread: (
       threadId: string,
       viewerBotId: string,

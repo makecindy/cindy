@@ -64,7 +64,6 @@ import {
   type BotGroupSpeaker,
   type BotGroupSpeakingMode,
   type BotGroupSummary,
-  type BotGroupTaskCard,
 } from '../../shared/botGroupChat.js';
 
 /** docs/product-rules/bot-group-chat.md §4.2 — enforced here, never by prompt. */
@@ -2263,9 +2262,8 @@ export interface BotGroupTaskPostInput {
   /** Idempotent per event: retries return the message the server already stored. */
   clientId: string;
   text: string;
-  card?: BotGroupTaskCard;
-  /** Generic task outboxes freeze the same wire payload without a delegation row. */
-  preparePost?: (prepare: () => Promise<import('./botGroupTaskPostSnapshot.js').BotGroupTaskPostSnapshot>,
+  /** Freezes the wire payload before its first POST; retries and restarts reuse it. */
+  preparePost: (prepare: () => Promise<import('./botGroupTaskPostSnapshot.js').BotGroupTaskPostSnapshot>,
     destination: { endpoint: string; selfId: string; roomId: string; clientId: string }) => Promise<import('./botGroupTaskPostSnapshot.js').BotGroupTaskPostSnapshot>;
   /** Delivered files, uploaded as this teammate's attachments; unreadable ones are skipped. */
   files?: Array<{ absolutePath: string }>;

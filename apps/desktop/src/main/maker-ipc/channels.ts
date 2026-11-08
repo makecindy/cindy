@@ -800,15 +800,10 @@ export const MAKER_INVOKE = {
   GOAL_PAUSE: 'maker:goal:pause',
   GOAL_RESUME: 'maker:goal:resume',
   GOAL_UPDATE: 'maker:goal:update',
-  /** Cindy Bot 父任务列出自己发起的 Bot 间委派。 */
+  /** Read-only: the V1 background tasks (delegations) a teammate conversation started, for old task cards. */
   BOT_DELEGATIONS_LIST: 'maker:bot-delegations:list',
-  /** Cindy Bot 父任务取消仍在运行或等待中的委派。 */
+  /** Kept for older controllers over device-link; answers UNSUPPORTED_CAPABILITY. */
   BOT_DELEGATION_CANCEL: 'maker:bot-delegation:cancel',
-  /**
-   * 主人在伙伴聊天的任务卡上「补一句」后，给伙伴聊天留一条「已告诉后台任务：「…」」。
-   * 消息本身由渲染端以主人身份发进子任务；只本机可用，不进 device-link 白名单。
-   */
-  BOT_DELEGATION_NOTE_TRACE: 'maker:bot-delegation:note-trace',
   /** Read one hidden Bot-to-Bot conversation after a timeline trace is opened. */
   BOT_DIRECT_MESSAGE_THREAD_GET: 'maker:bot-direct-message-thread:get',
   /** 伙伴群聊：列表、详情、创建、修改、成员、删除、发言、继续讨论与停止。 */
@@ -1016,8 +1011,6 @@ export const MAKER_PUSH = {
   CINDY_MAKE_STATE_CHANGED: 'maker:cindy-make:state-changed',
   /** multi-worker: worker 增删改 / focus 切换时 broadcast, renderer useWorkers hook 订阅刷新。 */
   ORCA_WORKER_CHANGED: 'maker:orca:worker-changed',
-  /** Bot 间委派状态改变；payload 带父/子任务 id，广播自动附 owner generation。 */
-  BOT_DELEGATION_CHANGED: 'maker:bot-delegation:changed',
   /** A Bot group, its members, messages or running round changed. */
   BOT_GROUP_CHANGED: 'maker:bot-group:changed',
   /** Local complete-app windows only; never forwarded to Device Link. */

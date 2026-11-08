@@ -10398,8 +10398,6 @@
       "actionFailed": "没发出去，再试一次。",
       "retrying": "还没开始，正在重试…",
       "status": {
-        "queued": "正在开始",
-        "waiting": "等待处理",
         "running": "正在做",
         "completed": "已完成",
         "failed": "失败了",
@@ -10415,13 +10413,6 @@
       },
       "viewResult": "查看结果",
       "noWrittenResult": "没有文字结果。",
-      "addNote": "补一句",
-      "addNotePlaceholder": "补充给后台任务的话，回车发送",
-      "addNoteSent": "已发给后台任务",
-      "stop": "停止",
-      "lookAt": "看看",
-      "awaitingConfirm": "等你确认：{{summary}}",
-      "awaitingConfirmGeneric": "等你确认",
       "elapsed": "已做 {{duration}}",
       "tookTime": "用时 {{duration}}",
       "expandResult": "展开结果",
@@ -10802,7 +10793,6 @@
         "planning": "正在安排…"
       },
       "task": {
-        "label": "任务",
         "state": {
           "started": "进行中",
           "waiting": "等你确认",
@@ -19297,10 +19287,7 @@
     "sourcePresent": "[来源] 用户原话由宿主原样保留，作为请求背景；当前请求在 Agent补充。",
     "sourceMissing": "[来源] 未找到可核验的用户原话。",
     "userPrefix": "用户原话：",
-    "agentPrefix": "Agent补充：",
-    "taskSource": "[任务来源] 本任务由伙伴发起。",
-    "taskId": "任务 ID：",
-    "contextReferences": "参考资料："
+    "agentPrefix": "Agent补充："
   },
   "sharing": {
     "loginRequired": "登录后分享",

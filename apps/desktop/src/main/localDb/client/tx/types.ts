@@ -50,10 +50,6 @@ export type DbTxName =
   | 'bots.replaceCanonicalSession'
   | 'bots.prepareRuntime'
   | 'bots.finishRuntime'
-  | 'bots.finishDelegation'
-  | 'bots.reparentDelegations'
-  | 'bots.createDelegation'
-  | 'bots.reopenDelegation'
   | 'bots.pauseLifecycle'
   | 'bots.resumeLifecycle'
   | 'bots.archiveLifecycle'
@@ -777,56 +773,6 @@ export interface BotsFinishRuntimeArgs {
   eventType: 'runtime-applied' | 'runtime-failed';
   eventPayloadJson: string;
 }
-export interface BotsFinishDelegationArgs {
-  expectedRunSequence?: number;
-  expectedExecution?: { instanceId: string; generation: number };
-  delegationId: string;
-  status: 'completed' | 'failed' | 'cancelled' | 'timed-out';
-  resultSummary: string | null;
-  outputArtifactsJson: string;
-  lastError: string | null;
-  tokensUsed?: number;
-  completedAt: number;
-}
-
-export interface BotsFinishDelegationResult {
-  id: string;
-  targetBotId: string | null;
-  runSequence: number;
-  parentSessionId: string | null;
-  childSessionId: string | null;
-  status: 'queued' | 'running' | 'waiting' | 'completed' | 'failed' | 'cancelled' | 'timed-out';
-}
-
-export interface BotsReparentDelegationsArgs {
-  botId: string;
-  previousParentSessionId: string;
-  nextParentSessionId: string;
-  now: number;
-}
-
-export interface BotsReparentDelegationsResult {
-  delegationIds: string[];
-}
-
-export interface BotsCreateDelegationArgs {
-  maxActiveChildren: number;
-  delegation: {
-    id: string;
-    requestingBotId: string;
-    targetBotId: string | null;
-    parentSessionId: string;
-    childSessionId: string;
-    objective: string;
-    contextRefsJson: string;
-    permissionSnapshotJson: string;
-    lineageJson: string;
-    targetProfileVersion: number | null;
-    depth: number;
-    createdAt: number;
-  };
-  session: BotsReplaceCanonicalSessionArgs['session'];
-}
 
 export interface BotGroupsCreateLaneArgs {
   botId: string;
@@ -979,27 +925,6 @@ export interface BotGroupsAppendMessageResult {
   id: string;
   sequence: number;
   created: boolean;
-}
-
-export interface BotsReopenDelegationArgs {
-  worktreePath?: string | null;
-  maxActiveChildren: number;
-  delegationId: string;
-  requestingBotId: string;
-  expectedStatus: 'completed' | 'failed' | 'cancelled' | 'timed-out';
-  parentSessionId: string;
-  childSessionId: string;
-  objective: string;
-  permissionSnapshotJson: string;
-  targetBotId: string | null;
-  targetProfileVersion: number | null;
-  session: BotsReplaceCanonicalSessionArgs['session'];
-  reopenedAt: number;
-}
-
-export interface BotsReopenDelegationResult {
-  reopened: boolean;
-  previousParentSessionId: string | null;
 }
 
 export interface BotsLifecycleTransitionArgs {
@@ -1432,10 +1357,6 @@ export type DbTxArgsByName = {
   'bots.replaceCanonicalSession': BotsReplaceCanonicalSessionArgs;
   'bots.prepareRuntime': BotsPrepareRuntimeArgs;
   'bots.finishRuntime': BotsFinishRuntimeArgs;
-  'bots.finishDelegation': BotsFinishDelegationArgs;
-  'bots.reparentDelegations': BotsReparentDelegationsArgs;
-  'bots.createDelegation': BotsCreateDelegationArgs;
-  'bots.reopenDelegation': BotsReopenDelegationArgs;
   'bots.pauseLifecycle': BotsLifecycleTransitionArgs;
   'bots.resumeLifecycle': BotsLifecycleTransitionArgs;
   'bots.archiveLifecycle': BotsArchiveLifecycleArgs;
@@ -1534,10 +1455,6 @@ export type DbTxResultByName = {
   'bots.replaceCanonicalSession': BotsReplaceCanonicalSessionResult;
   'bots.prepareRuntime': undefined;
   'bots.finishRuntime': boolean;
-  'bots.finishDelegation': BotsFinishDelegationResult | null;
-  'bots.reparentDelegations': BotsReparentDelegationsResult;
-  'bots.createDelegation': undefined;
-  'bots.reopenDelegation': BotsReopenDelegationResult;
   'bots.pauseLifecycle': undefined;
   'bots.resumeLifecycle': undefined;
   'bots.archiveLifecycle': { sessions: number };

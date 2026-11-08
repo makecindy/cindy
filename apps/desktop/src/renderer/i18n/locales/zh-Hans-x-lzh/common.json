@@ -10398,8 +10398,6 @@
       "actionFailed": "未能遣出，再试之。",
       "retrying": "尚未始，方再试…",
       "status": {
-        "queued": "方始",
-        "waiting": "候处置",
         "running": "方为之",
         "completed": "已毕",
         "failed": "未成",
@@ -10415,13 +10413,6 @@
       },
       "viewResult": "览其果",
       "noWrittenResult": "无文字之果。",
-      "addNote": "补一言",
-      "addNotePlaceholder": "补言于背景差事，按 Enter 遣之",
-      "addNoteSent": "已遣予背景差事",
-      "stop": "止",
-      "lookAt": "一观",
-      "awaitingConfirm": "候君确认：{{summary}}",
-      "awaitingConfirmGeneric": "候君确认",
       "elapsed": "已行 {{duration}}",
       "tookTime": "历时 {{duration}}",
       "expandResult": "展其果",
@@ -10802,7 +10793,6 @@
         "planning": "方筹划…"
       },
       "task": {
-        "label": "差事",
         "state": {
           "started": "方进",
           "waiting": "候君确认",
@@ -19006,10 +18996,7 @@
     "sourcePresent": "[来源] 用户原话由宿主原样保留，以为请求之背景；目前之请求见 Agent补充。",
     "sourceMissing": "[来源] 未得可核验之用户原话。",
     "userPrefix": "用者原言：",
-    "agentPrefix": "Agent补述：",
-    "taskSource": "[差事来源] 此差事由同僚发起。",
-    "taskId": "差事 ID：",
-    "contextReferences": "参稽："
+    "agentPrefix": "Agent补述："
   },
   "sharing": {
     "loginRequired": "登门以分享",

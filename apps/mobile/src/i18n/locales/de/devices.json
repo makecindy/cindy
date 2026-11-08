@@ -621,8 +621,6 @@
       "minutes": "{{n}} Min.",
       "hoursMinutes": "{{h}} Std. {{m}} Min."
     },
-    "retrying": "Noch nicht gestartet – neuer Versuch…",
-    "stopTask": "Aufgabe stoppen",
     "actionFailed": "Diese Aktion konnte nicht geladen oder abgeschlossen werden",
     "messages": "Nachrichten",
     "readOnly": "Schreibgeschützt",

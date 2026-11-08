@@ -10398,8 +10398,6 @@
       "actionFailed": "沒送出去，再試一次。",
       "retrying": "還沒開始，正在重試…",
       "status": {
-        "queued": "正在開始",
-        "waiting": "等待處理",
         "running": "正在做",
         "completed": "已完成",
         "failed": "失敗了",
@@ -10415,13 +10413,6 @@
       },
       "viewResult": "查看結果",
       "noWrittenResult": "沒有文字結果。",
-      "addNote": "補一句",
-      "addNotePlaceholder": "補充給背景任務的話，按 Enter 傳送",
-      "addNoteSent": "已傳給背景任務",
-      "stop": "停止",
-      "lookAt": "看看",
-      "awaitingConfirm": "等你確認：{{summary}}",
-      "awaitingConfirmGeneric": "等你確認",
       "elapsed": "已做 {{duration}}",
       "tookTime": "用時 {{duration}}",
       "expandResult": "展開結果",
@@ -10802,7 +10793,6 @@
         "planning": "正在安排…"
       },
       "task": {
-        "label": "任務",
         "state": {
           "started": "進行中",
           "waiting": "等你確認",
@@ -19297,10 +19287,7 @@
     "sourcePresent": "[來源] 使用者原話由宿主原樣保留，作為請求背景；目前的請求在 Agent補充。",
     "sourceMissing": "[來源] 未找到可核驗的使用者原話。",
     "userPrefix": "使用者原話：",
-    "agentPrefix": "Agent補充：",
-    "taskSource": "[任務來源] 本任務由夥伴發起。",
-    "taskId": "任務 ID：",
-    "contextReferences": "參考資料："
+    "agentPrefix": "Agent補充："
   },
   "sharing": {
     "loginRequired": "登入後分享",

@@ -92,8 +92,7 @@ function subscribe(listener: () => void): () => void {
   if (!changeSubscribed) {
     // 窗口级订阅,不随任务行挂载 / 卸载反复增删(侧栏滚动时行会频繁重建)。
     const off = window.electronAPI?.maker?.onBotWorkbenchChanged?.(() => load());
-    const offDelegation = window.electronAPI?.maker?.onBotDelegationChanged?.(() => load());
-    changeSubscribed = off !== undefined || offDelegation !== undefined;
+    changeSubscribed = off !== undefined;
   }
   ensureOwner();
   if (!requested) {

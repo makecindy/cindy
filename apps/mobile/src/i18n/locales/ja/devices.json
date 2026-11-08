@@ -621,8 +621,6 @@
       "minutes": "{{n}} 分",
       "hoursMinutes": "{{h}} 時間 {{m}} 分"
     },
-    "retrying": "まだ開始できていません。再試行中…",
-    "stopTask": "タスクを停止",
     "actionFailed": "読み込みまたは操作を完了できません",
     "messages": "メッセージ",
     "readOnly": "閲覧のみ",

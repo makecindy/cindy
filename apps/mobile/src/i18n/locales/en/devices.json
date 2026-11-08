@@ -621,8 +621,6 @@
       "minutes": "{{n}} min",
       "hoursMinutes": "{{h}} h {{m}} min"
     },
-    "retrying": "Hasn't started yet — retrying…",
-    "stopTask": "Stop task",
     "actionFailed": "Unable to load or complete this action",
     "messages": "Messages",
     "readOnly": "Read only",

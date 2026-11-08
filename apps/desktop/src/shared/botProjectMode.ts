@@ -6,6 +6,3 @@ export function readBotProjectMode(config: Record<string, unknown> | { projectMo
   if (!('projectMode' in config)) return false;
   return config.projectMode === true;
 }
-
-/** vendorOptions key carrying the tools a project-mode teammate hides (Pi bridge listing). */
-export const BOT_DENIED_TOOLS_VENDOR_KEY = 'cindyBotDeniedTools';

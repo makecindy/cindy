@@ -100,6 +100,7 @@ import { botGroupRuntimeFailureCode, settleClosedBotGroupTurn, settleUndispatche
 import { authorizeGroupTool } from '../botGroupToolAuthorization.js';
 import { createAutoPermissionReviewer, type AutoPermissionReviewerDeps } from '../../maker-host/auto-permission-reviewer.js';
 import { createAutoReviewIntentProjection } from '@cindy/maker-shared/auto-review-intent';
+import type { BotGroupTaskPostSnapshot } from '../botGroupTaskPostSnapshot.js';
 import { buildBotGroupCapabilityNotice, botGroupQuoteFromMessage, buildBotGroupQuoteCard, buildBotGroupTaskCard, buildBotGroupThreadShareCard } from '../../../shared/botGroupChat.js';
 import type { BotGroupChatService, BotGroupChatServiceDeps } from '../botGroupChatService.js';
 import type { ChatHistoryState } from '@cindy/maker-shared/chat-history';
@@ -1901,6 +1902,8 @@ describe('Chat Server result delivery and refresh', () => {
       toBotName: 'Cindy', parentSessionId: 'lane', childSessionId: 'child-1', objective: 'Write the launch post' } as const;
     const taskLabels = { task: 'Task', untitled: 'Background task', states: { started: 'In progress', waiting: 'Waiting', completed: 'Done', failed: 'Failed', cancelled: 'Cancelled', 'timed-out': 'Timed out' } };
     const taskCard = buildBotGroupTaskCard({ meta: taskMeta, state: 'started', title: 'Launch post' }, taskLabels);
+    // The delivery outbox owns freezing; these cases post exactly what the adapter prepares.
+    const passThrough = async (prepare: () => Promise<BotGroupTaskPostSnapshot>) => prepare();
     const joined = (id: string, kind: 'bot' | 'human') => ({ id, kind, name: kind === 'bot' ? 'Bot' : 'Me', state: 'joined', role: 'member',
       ownerActorId: selfId, ownerName: '', nickname: null, displayName: kind === 'bot' ? 'Bot' : 'Me', guestAccess: 'none', accessRevision: 1 });
     // Delivery files are read from disk before upload: a real directory, cleaned up after each test.
@@ -1946,21 +1949,23 @@ describe('Chat Server result delivery and refresh', () => {
       });
       const files = await deliveryFiles(1);
       fixture.upload.mockResolvedValue([mediaBlock('1')]);
+      // A durable outbox keeps the first prepared payload across the restart.
+      let frozen: BotGroupTaskPostSnapshot | undefined;
+      const preparePost = async (prepare: () => Promise<BotGroupTaskPostSnapshot>) => (frozen ??= await prepare());
       const input = { groupId: roomId, botId: 'local-bot', clientId: `task-snapshot:${state}`, text: state === 'completed' ? 'x'.repeat(8_001) : 'Original result',
-        card: buildBotGroupTaskCard({ meta: taskMeta, state, title: 'Original title' }, taskLabels), files };
+        preparePost, files };
       expect(await service.postCompanionTaskMessage(input)).toMatchObject({ ok: false, retryable: true });
       service.dispose();
       service = withChatServer({ listGroups: vi.fn(async () => ({ ok: true, groups: [] })), dispose: vi.fn() } as unknown as BotGroupChatService, deps);
       await (await import('node:fs/promises')).unlink(files[0]!.absolutePath);
-      const edited = { ...input, text: 'Edited result', card: buildBotGroupTaskCard({ meta: { ...taskMeta, fromBotName: 'Renamed bot' }, state, title: 'Renamed task' },
-        { ...taskLabels, task: '任务' }) };
+      const edited = { ...input, text: 'Edited result' };
       expect(await service.postCompanionTaskMessage(edited)).toEqual({ ok: true, messageId: 'original-message' });
       expect(posted).toHaveLength(loseAt * 2);
       expect(posted.slice(loseAt)).toEqual(posted.slice(0, loseAt));
       expect(fixture.upload).toHaveBeenCalledTimes(1);
     });
 
-    it('posts the task card as the teammate itself, outside any execution, with its files', async () => {
+    it('posts the task message as the teammate itself, outside any execution, with its files', async () => {
       fixture.profiles = [{ id: 'local-bot', displayName: 'Bot', avatar: null, status: 'active' }];
       fixture.upload.mockResolvedValueOnce([{ type: 'media', mediaId: '60000000-0000-4000-8000-000000000001', caption: 'post.md' }]);
       fixture.handle.mockImplementation((route, method) => {
@@ -1970,11 +1975,11 @@ describe('Chat Server result delivery and refresh', () => {
       });
       const [file] = await deliveryFiles(1);
       const posted = await service.postCompanionTaskMessage({ groupId: roomId, botId: 'local-bot', clientId: 'bot-delegation-task:task-1:1:result',
-        text: 'Done: the post is drafted.', card: { ...taskCard, data: { ...taskCard.data, state: 'completed' } }, files: [file!, { absolutePath: '/no/such/file.md' }] });
+        text: 'Done: the post is drafted.', preparePost: passThrough, files: [file!, { absolutePath: '/no/such/file.md' }] });
       expect(posted).toEqual({ ok: true, messageId: '70000000-0000-4000-8000-000000000001' });
       const post = fixture.handle.mock.calls.find(([route, method]) => route === `/conversations/${roomId}/messages` && method === 'POST')!;
       expect(post[2]).toEqual({ operationId: 'bot-delegation-task:task-1:1:result', mentions: [],
-        content: [{ type: 'text', text: 'Done: the post is drafted.' }, expect.objectContaining({ namespace: 'cindy.task', data: expect.objectContaining({ state: 'completed' }) }),
+        content: [{ type: 'text', text: 'Done: the post is drafted.' },
           { type: 'media', mediaId: '60000000-0000-4000-8000-000000000001', caption: 'post.md' }] });
       // Never as the owner: the teammate's actor signs the message.
       expect(fixture.requests.findLast(request => request.url.endsWith(`/conversations/${roomId}/messages`))?.actor).toBe(botId);
@@ -1996,14 +2001,14 @@ describe('Chat Server result delivery and refresh', () => {
       });
       // A long result continues in a follow-up message: it must stay in the Thread too.
       expect(await service.postCompanionTaskMessage({ groupId: roomId, botId: 'local-bot', clientId: 'bot-delegation-task:task-1:1:result',
-        text: 'x'.repeat(8_001), card: taskCard, threadRootId: rootId })).toMatchObject({ ok: true });
+        text: 'x'.repeat(8_001), preparePost: passThrough, threadRootId: rootId })).toMatchObject({ ok: true });
       const posts = fixture.handle.mock.calls.filter(([route, method]) => route === `/conversations/${roomId}/messages` && method === 'POST');
       expect(posts).toHaveLength(2);
       expect(posts.every(([, , body]) => (body as { threadRootId?: string }).threadRootId === rootId)).toBe(true);
     });
 
-    // Unit: the generic creation entry has no delegation card; its outbox still freezes
-    // every wire part and receives the authenticated destination used for the actual POST.
+    // Unit: the delivery outbox freezes every wire part and receives the authenticated
+    // destination used for the actual POST.
     it('posts a generic task result into its original Thread through its own durable outbox', async () => {
       fixture.profiles = [{ id: 'local-bot', displayName: 'Bot', avatar: null, status: 'active' }];
       const rootId = '90000000-0000-4000-8000-0000000000aa';
@@ -2033,11 +2038,11 @@ describe('Chat Server result delivery and refresh', () => {
         return response(route);
       });
       const posted = await service.postCompanionTaskMessage({ groupId: roomId, botId: 'local-bot', clientId: 'bot-delegation-task:task-1:1:result',
-        text: 'Done.', card: taskCard, files });
+        text: 'Done.', preparePost: passThrough, files });
       expect(posted).toEqual({ ok: true, messageId: '70000000-0000-4000-8000-000000000001' });
       const sent = fixture.handle.mock.calls.filter(([route, method]) => route === `/conversations/${roomId}/messages` && method === 'POST');
       expect(sent).toHaveLength(1);
-      expect(sent[0][2].content).toEqual([{ type: 'text', text: 'Done.' }, taskCard, mediaBlock('file-01.md'), mediaBlock('file-03.md')]);
+      expect(sent[0][2].content).toEqual([{ type: 'text', text: 'Done.' }, mediaBlock('file-01.md'), mediaBlock('file-03.md')]);
       expect(warn).toHaveBeenCalledWith('Chat task delivery file refused', expect.objectContaining({ groupId: roomId }));
     });
 
@@ -2052,11 +2057,11 @@ describe('Chat Server result delivery and refresh', () => {
         return response(route);
       });
       const text = `${'a'.repeat(7990)}\n${'b'.repeat(20)}`;
-      const posted = await service.postCompanionTaskMessage({ groupId: roomId, botId: 'local-bot', clientId: 'bot-delegation-task:task-1:1:result', text, card: taskCard, files });
+      const posted = await service.postCompanionTaskMessage({ groupId: roomId, botId: 'local-bot', clientId: 'bot-delegation-task:task-1:1:result', text, preparePost: passThrough, files });
       expect(posted).toEqual({ ok: true, messageId: '70000001-0000-4000-8000-000000000001' });
       const bodies = fixture.handle.mock.calls.filter(([route, method]) => route === `/conversations/${roomId}/messages` && method === 'POST').map(([, , body]) => body);
       expect(bodies.map(body => body.operationId)).toEqual(['bot-delegation-task:task-1:1:result', 'bot-delegation-task:task-1:1:result:2', 'bot-delegation-task:task-1:1:result:files:2']);
-      expect(bodies[0].content).toEqual([{ type: 'text', text: 'a'.repeat(7990) }, taskCard, ...files.slice(0, 20).map((_, index) => mediaBlock(`file-${String(index + 1).padStart(2, '0')}.md`))]);
+      expect(bodies[0].content).toEqual([{ type: 'text', text: 'a'.repeat(7990) }, ...files.slice(0, 20).map((_, index) => mediaBlock(`file-${String(index + 1).padStart(2, '0')}.md`))]);
       expect(bodies[1].content).toEqual([{ type: 'text', text: 'b'.repeat(20) }]);
       expect(bodies[2].content).toEqual([mediaBlock('file-21.md'), mediaBlock('file-22.md'), mediaBlock('file-23.md')]);
       expect(bodies.every(body => body.content.filter((block: { type: string }) => block.type === 'media').length <= 20)).toBe(true);
@@ -2072,7 +2077,7 @@ describe('Chat Server result delivery and refresh', () => {
         if (route.endsWith('/messages') && method === 'POST') return { status, body: { error: { code: 'REFUSED' } } };
         return response(route);
       });
-      const posted = await service.postCompanionTaskMessage({ groupId: roomId, botId: 'local-bot', clientId: 'bot-delegation-task:task-1:started', text: '', card: taskCard });
+      const posted = await service.postCompanionTaskMessage({ groupId: roomId, botId: 'local-bot', clientId: 'bot-delegation-task:task-1:started', text: 'Started.', preparePost: passThrough });
       expect(posted).toMatchObject({ ok: false, retryable });
     });
 
@@ -2085,12 +2090,12 @@ describe('Chat Server result delivery and refresh', () => {
         return response(route);
       });
       const text = `${'a'.repeat(7990)}\n${'b'.repeat(20)}\n${'c'.repeat(8000)}${'d'.repeat(10)}`;
-      const posted = await service.postCompanionTaskMessage({ groupId: roomId, botId: 'local-bot', clientId: 'bot-delegation-task:task-1:1:result', text, card: taskCard });
+      const posted = await service.postCompanionTaskMessage({ groupId: roomId, botId: 'local-bot', clientId: 'bot-delegation-task:task-1:1:result', text, preparePost: passThrough });
       expect(posted).toEqual({ ok: true, messageId: '70000001-0000-4000-8000-000000000001' });
       const bodies = fixture.handle.mock.calls.filter(([route, method]) => route === `/conversations/${roomId}/messages` && method === 'POST').map(([, , body]) => body);
       expect(bodies.map(body => body.operationId)).toEqual(['bot-delegation-task:task-1:1:result', 'bot-delegation-task:task-1:1:result:2', 'bot-delegation-task:task-1:1:result:3']);
-      // The first piece breaks at the line before the limit and carries the card; nothing is lost.
-      expect(bodies[0].content).toEqual([{ type: 'text', text: 'a'.repeat(7990) }, taskCard]);
+      // The first piece breaks at the line before the limit; nothing is lost.
+      expect(bodies[0].content).toEqual([{ type: 'text', text: 'a'.repeat(7990) }]);
       expect(bodies[1].content).toEqual([{ type: 'text', text: `${'b'.repeat(20)}\n${'c'.repeat(7979)}` }]);
       expect(bodies[2].content).toEqual([{ type: 'text', text: `${'c'.repeat(21)}${'d'.repeat(10)}` }]);
       expect(bodies.every(body => body.content.every((block: { text?: string }) => (block.text ?? '').length <= 8000))).toBe(true);
@@ -2113,11 +2118,11 @@ describe('Chat Server result delivery and refresh', () => {
         return response(route);
       });
       const posted = await service.postCompanionTaskMessage({ groupId: roomId, botId: 'local-bot', clientId: 'bot-delegation-task:task-1:1:result',
-        text: 'Done.', card: taskCard, files: await deliveryFiles(1) });
+        text: 'Done.', preparePost: passThrough, files: await deliveryFiles(1) });
       expect(posted).toMatchObject(expected);
       const sent = fixture.handle.mock.calls.filter(([route, method]) => route === `/conversations/${roomId}/messages` && method === 'POST');
       expect(sent).toHaveLength(posts);
-      if (posts) expect(sent[0][2].content).toEqual([{ type: 'text', text: 'Done.' }, taskCard]);
+      if (posts) expect(sent[0][2].content).toEqual([{ type: 'text', text: 'Done.' }]);
     });
 
     it('retries the whole message when a delivery file cannot be checked for now, rather than dropping it', async () => {
@@ -2131,7 +2136,7 @@ describe('Chat Server result delivery and refresh', () => {
       fsFault.lstat = Object.assign(new Error('EBUSY: resource busy or locked, lstat'), { code: 'EBUSY', syscall: 'lstat', errno: -16 });
       try {
         const posted = await service.postCompanionTaskMessage({ groupId: roomId, botId: 'local-bot', clientId: 'bot-delegation-task:task-1:1:result',
-          text: 'Done.', card: taskCard, files });
+          text: 'Done.', preparePost: passThrough, files });
         expect(posted).toMatchObject({ ok: false, retryable: true });
         expect(fixture.handle.mock.calls.some(([route, method]) => route === `/conversations/${roomId}/messages` && method === 'POST')).toBe(false);
       } finally { fsFault.lstat = null; }
@@ -2143,7 +2148,7 @@ describe('Chat Server result delivery and refresh', () => {
       const legacy = withChatServer({ listGroups: vi.fn(async () => ({ ok: true, groups: [{ id: roomId }] })), postCompanionTaskMessage: localPost,
         settleLaneTurn: vi.fn(async () => false), dispose: vi.fn() } as unknown as BotGroupChatService, deps);
       try {
-        const input = { groupId: roomId, botId: 'local-bot', clientId: 'bot-delegation-task:task-1:started', text: '', card: taskCard };
+        const input = { groupId: roomId, botId: 'local-bot', clientId: 'bot-delegation-task:task-1:started', text: 'Started.', preparePost: passThrough };
         expect(await legacy.postCompanionTaskMessage(input)).toEqual({ ok: false, errorCode: 'GROUP_CHANNEL_UNAVAILABLE', retryable: false });
         expect(localPost).toHaveBeenCalledExactlyOnceWith(input);
         expect(migration.read).toHaveBeenCalledWith(roomId);
@@ -2166,7 +2171,7 @@ describe('Chat Server result delivery and refresh', () => {
         // A fresh service has an empty in-memory map; no timer/list read has started its migration.
         {
           expect(await legacy.postCompanionTaskMessage({ groupId: roomId, botId: 'local-bot', clientId: `task-restart:${state}`,
-            text: '', card: { ...taskCard, data: { ...taskCard.data, state } } })).toEqual({ ok: true, messageId: 'posted-task' });
+            text: `Task ${state}.`, preparePost: passThrough })).toEqual({ ok: true, messageId: 'posted-task' });
           expect(fixture.requests.findLast(request => request.url.endsWith(`/conversations/${target}/messages`))?.actor).toBe(botId);
         }
         expect(migration.read).toHaveBeenCalledWith(roomId);
@@ -2182,7 +2187,7 @@ describe('Chat Server result delivery and refresh', () => {
       if (failure === 'identity') fixture.token = '';
       else migration.read.mockImplementation(() => { throw new Error('RECEIPT_READ_FAILED'); });
       try {
-        expect(await legacy.postCompanionTaskMessage({ groupId: roomId, botId: 'local-bot', clientId: 'task-restart:completed', text: '', card: taskCard }))
+        expect(await legacy.postCompanionTaskMessage({ groupId: roomId, botId: 'local-bot', clientId: 'task-restart:completed', text: 'Done.', preparePost: passThrough }))
           .toMatchObject({ ok: false, retryable: true });
         expect(localPost).not.toHaveBeenCalled();
       } finally { legacy.dispose(); }
@@ -2192,7 +2197,7 @@ describe('Chat Server result delivery and refresh', () => {
       fixture.profiles = [{ id: 'local-bot', displayName: 'Bot', avatar: null, status: 'active' }];
       fixture.handle.mockImplementation(route => route.endsWith('/snapshot')
         ? { body: { room: room(roomId), members: [joined(selfId, 'human')], messages: [], cursor: '1' } } : response(route));
-      expect(await service.postCompanionTaskMessage({ groupId: roomId, botId: 'local-bot', clientId: 'bot-delegation-task:task-1:started', text: '', card: taskCard }))
+      expect(await service.postCompanionTaskMessage({ groupId: roomId, botId: 'local-bot', clientId: 'bot-delegation-task:task-1:started', text: 'Started.', preparePost: passThrough }))
         .toEqual({ ok: false, errorCode: 'MEMBER_UNAVAILABLE', retryable: false });
       expect(fixture.handle.mock.calls.some(([route, method]) => route.endsWith('/messages') && method === 'POST')).toBe(false);
     });

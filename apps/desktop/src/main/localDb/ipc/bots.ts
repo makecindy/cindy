@@ -24,12 +24,10 @@ import { getDbClient, tryGetDbClient } from '../client/current';
 import { flushAssistantSamplingMetadata } from '../../messagePersistBroadcaster.js';
 import { notifyAgentIslandCompanionChanged } from '../agentIslandSessionPatch.js';
 import type {
-  BotsReparentDelegationsResult,
   BotsReplaceCanonicalSessionResult,
   BotGroupsCreateLaneResult,
 } from '../client/tx/types.js';
 import {
-  botDelegations,
   botProfileVersions,
   botProfiles,
   botRuntimeSnapshots,
@@ -103,12 +101,10 @@ import {
   inferBotTemplatePresetId,
   isBotTemplatePresetId,
 } from '../../../shared/botTemplatePreset.js';
-import { createMessage } from './messages.js';
 import { syncBotLanePermission, syncBotLinkedLanePermissions, syncBotPermissionsByBotId } from '../../maker-ipc/botPermissionSync.js';
 import { withSessionPermissionChange } from '../../maker-ipc/sessionPermissionChange.js';
 import { withBotPermissionChangeForBot } from '../../maker-ipc/botPermissionDispatch.js';
 import { broadcastSessionPatched, restoreArchivedSessionForSend } from './sessions.js';
-import { BOT_DELEGATION_CLIENT_ID } from '../../../shared/botCollaboration.js';
 
 import { generateBotCreationDraft, readBotCreationDraft, generateBotCreationAvatar } from '../../maker-ipc/botCreationDraft.js';
 import { botInvitationProgress, type BotInvitationProgress } from '../../../shared/botInvitation.js';
@@ -2739,47 +2735,6 @@ export function registerBotIpc(): void {
       throwIpcError('PRECONDITION_FAILED', 'Bot 主任务创建失败');
     }
     if (archivedCanonicalSessionId) {
-      // A missing/deleted canonical is infrastructure recovery, not a user cancellation.
-      // Keep its active Session tasks alive, move their ownership to the replacement, and
-      // recreate idempotent card anchors there. Explicit archive/delete paths still cancel.
-      const reparented = await client.tx<BotsReparentDelegationsResult>(
-        'bots.reparentDelegations',
-        {
-          botId,
-          previousParentSessionId: archivedCanonicalSessionId,
-          nextParentSessionId: canonicalSessionId,
-          now: Date.now(),
-        },
-      );
-      if (reparented.delegationIds.length > 0) {
-        const rows = await db
-          .select()
-          .from(botDelegations)
-          .where(inArray(botDelegations.id, reparented.delegationIds));
-        for (const row of rows) {
-          await createMessage(canonicalSessionId, {
-            clientId: BOT_DELEGATION_CLIENT_ID.parentRequest(row.id),
-            role: 'assistant',
-            content: '',
-            createdAt: row.createdAt,
-            agentKind: null,
-            agentMeta: {
-              botCollaboration: {
-                v: 1,
-                role: 'delegation-request',
-                delegationId: row.id,
-                fromBotId: botId,
-                fromBotName: profile.displayName,
-                toBotId: null,
-                toBotName: 'Cindy',
-                parentSessionId: canonicalSessionId,
-                childSessionId: row.childSessionId,
-                objective: row.objective.slice(0, 400),
-              },
-            },
-          });
-        }
-      }
       await getMakerIfReady()
         ?.closeSession(archivedCanonicalSessionId)
         .catch(() => undefined);

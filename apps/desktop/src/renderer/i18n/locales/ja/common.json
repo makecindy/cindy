@@ -10398,8 +10398,6 @@
       "actionFailed": "送信できませんでした。もう一度お試しください。",
       "retrying": "まだ開始できていません。再試行中…",
       "status": {
-        "queued": "開始しています",
-        "waiting": "対応待ち",
         "running": "作業中",
         "completed": "完了",
         "failed": "失敗",
@@ -10415,13 +10413,6 @@
       },
       "viewResult": "結果を見る",
       "noWrittenResult": "テキストの結果はありません。",
-      "addNote": "ひとこと追加",
-      "addNotePlaceholder": "バックグラウンドタスクに伝える内容（Enter で送信）",
-      "addNoteSent": "バックグラウンドタスクに送信しました",
-      "stop": "停止",
-      "lookAt": "確認する",
-      "awaitingConfirm": "あなたの確認待ち：{{summary}}",
-      "awaitingConfirmGeneric": "あなたの確認待ち",
       "elapsed": "経過 {{duration}}",
       "tookTime": "所要 {{duration}}",
       "expandResult": "結果を表示",
@@ -10802,7 +10793,6 @@
         "planning": "役割分担を考えています…"
       },
       "task": {
-        "label": "タスク",
         "state": {
           "started": "進行中",
           "waiting": "確認待ち",
@@ -19297,10 +19287,7 @@
     "sourcePresent": "[出典] ホストがユーザーの原文を依頼の背景としてそのまま保持しています。現在の依頼は Agent の補足にあります。",
     "sourceMissing": "[出典] 確認可能なユーザーの原文が見つかりません。",
     "userPrefix": "ユーザーの原文：",
-    "agentPrefix": "Agent の補足：",
-    "taskSource": "[タスクの出典] このタスクはパートナーが開始しました。",
-    "taskId": "タスク ID：",
-    "contextReferences": "参考資料："
+    "agentPrefix": "Agent の補足："
   },
   "sharing": {
     "loginRequired": "ログインして共有",

@@ -70,7 +70,7 @@ vi.mock('@/contexts/PrRefsContext', () => ({
   usePrRefsForSessions: (ids: string[]) => h.refs.filter(ref => ids.includes(ref.sessionId as string)),
   usePrStatuses: () => ({ statuses: h.statuses, successfulStatuses: new Map() }),
 }));
-vi.mock('../botDelegationLive', () => ({ useBotDelegations: () => h.delegations }));
+vi.mock('../botDelegationHistory', () => ({ useBotDelegationRecords: () => h.delegations }));
 vi.mock('@/features/device-link/useDeviceLinkDeviceList', () => ({
   useDeviceLinkDeviceList: () => [{ deviceId: 'self', name: 'Mac-Studio', isSelf: true }],
 }));

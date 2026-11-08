@@ -53,7 +53,7 @@
 | 类别 | 伙伴专属工具或机制 | 普通任务或项目的对应 | 方向 |
 | --- | --- | --- | --- |
 | 例行任务 | `routine_list/save/delete/run_now/history/sources/delivery_targets`；内置「跟进」「夜间学习」 | 定时任务 `schedule_*`（`cindy_scheduler`）；项目仓库里的 `.cindy/automations/schedules.json`（改动只是预览，主人确认快照才生效） | **并入定时任务**。两者已共用调度执行器，`Schedule.source` 已有 `'bot'`。例行任务多出的只有：事件触发（插件事件、`host:sessions`）、多条件并列、送达方式（伙伴 / IM / 静默）——先补给定时任务，普通项目也能用。插件前置检查（`preRunPlugin`）已由 `schedule_create` / `schedule_update` / `routine_save` 共用，不是缺口；限制只在跨电脑不能设置、项目自动化配置文件不支持（[Agent 与用户同权](agent-user-parity.md)） |
-| 后台任务 | `start_session_task`、`check_session_task`、`message_session_task`、`stop_session_task`、路线检查与推进；完成回执与唤醒 | `send_to_session`、`get_task_digest`、插话、停止、队列工具（伙伴主任务已有，[伙伴运行时](cindy-bots-runtime.md) §6.4） | **并入通用任务工具**，委派只留一条「谁负责」关系。通用工具缺的任务卡、等你时代答、暂停与恢复、执行期限要先补齐 |
+| 后台任务 | `start_session_task`、`check_session_task`、`message_session_task`、`stop_session_task`、路线检查与推进；完成回执与唤醒 | `send_to_session`、`get_task_digest`、插话、停止、队列工具（伙伴主任务已有，[伙伴运行时](cindy-bots-runtime.md) §6.4） | **已并入**（2026-11-08）：伙伴用 `send_to_session` 开普通任务，`notify_when_done` 回传一次；委派工具与服务已移除，旧任务卡、产出与「由谁开的」只读保留（[伙伴运行时](cindy-bots-runtime.md) §6.1） |
 | 工作台 | `get_workbench`、`read_workbench_task`、`continue_workbench_task`、`set_workbench_task_responsibility` | `list_sessions`、`get_chat_history`、`get_task_digest`、`send_to_session`（跨电脑发消息已支持） | 读和继续并入通用工具；「谁负责」保留为通用的任务关系（也是「按项目跟进」的基础） |
 | 记忆 | 伙伴记忆独立服务（`botMemoryService.ts`） | Cindy 记忆（`cindy_memory`），按工作目录隔离 | 伙伴即项目后合成一套；保留「全局记忆开关不影响伙伴记忆」 |
 | 技能 | `save/list/read_teammate_skill`；核心 / 系统 / 用户三层 | 引擎原生项目技能、SkillHub | 用户技能并入项目技能；核心与系统技能由宿主提供 |

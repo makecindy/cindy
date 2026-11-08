@@ -1597,15 +1597,7 @@ describe('cindy-bridge extension source', () => {
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain("const CINDY_MCP_LIST_TOOLS = 'cindy_mcp_list_tools'");
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain("const CINDY_MCP_CALL_TOOL = 'cindy_mcp_call_tool'");
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).not.toContain("'send_to_agent'");
-    expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain(
-      "const CINDY_CHECK_SESSION_TASK_TOOL = 'check_session_task'",
-    );
-    expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain(
-      "const CINDY_MESSAGE_SESSION_TASK_TOOL = 'message_session_task'",
-    );
-    expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain(
-      "const CINDY_STOP_SESSION_TASK_TOOL = 'stop_session_task'",
-    );
+    expect(CINDY_BRIDGE_EXTENSION_SOURCE).not.toContain("'start_session_task'");
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain(
       "const CINDY_CREATE_TEAMMATE_TOOL = 'create_teammate'",
     );
@@ -1617,11 +1609,7 @@ describe('cindy-bridge extension source', () => {
       "enum: ['status', 'notify', 'call', 'reply', 'cancel']",
     );
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain("const CINDY_BOT_MEMORY_TOOL = 'bot_memory'");
-    expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain('mcpGateway.register(pi, {\n        botMemoryFacade: cfg.botMemoryFacade === true,');
-    // Tools the helper denies this teammate stay out of Pi's direct list too.
-    expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain(
-      "deniedTools: Array.isArray(cfg.deniedTools) ? cfg.deniedTools.filter((name) => typeof name === 'string') : [],",
-    );
+    expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain('mcpGateway.register(pi, { botMemoryFacade: cfg.botMemoryFacade === true });');
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain("qualifiedName: 'mcp__' + serverName + '__' + toolName");
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain('private readonly disclosedSchemas');
     // Post-compaction amnesia drives voluntary re-inspection: the persisted
@@ -2449,23 +2437,15 @@ it('routes Bot shortcuts through the scoped helper entry without exposing them t
   const ordinary: any[] = [];
   gateway.register({ registerTool: (tool: unknown) => ordinary.push(tool) });
   expect(ordinary.map((tool) => tool.name)).toEqual(['cindy_mcp_list_tools', 'cindy_mcp_call_tool']);
-  expect(gateway.resolveDirectHelperTool('start_session_task', {})).toBeNull();
+  expect(gateway.resolveDirectHelperTool('list_agents', {})).toBeNull();
 
   const bot: any[] = [];
   gateway.register({ registerTool: (tool: unknown) => bot.push(tool) }, { botMemoryFacade: true });
-  for (const name of ['start_session_task', 'check_session_task', 'message_session_task', 'stop_session_task', 'list_agents', 'create_teammate', 'get_task_digest']) {
+  for (const name of ['list_agents', 'create_teammate', 'get_task_digest']) {
     const tool = bot.find((item) => item.name === name);
     expect(tool).toBeDefined();
     const args = name === 'get_task_digest' ? { session_id: 'laptop::session-1' } : name === 'list_agents' ? {}
-      : name === 'start_session_task' ? { instruction: 'Prepare a report' }
-      : name === 'create_teammate' ? { name: 'Writer', description: 'Novelist', identity_source: 'Write stories', welcome_message: 'Hello' }
-      : name === 'message_session_task' ? { task_id: 'task-1', message: 'Add a summary' }
-      : { task_id: 'task-1' };
-    if (name === 'start_session_task') {
-      expect(tool.description).toContain('A repository, multiple files, tools, or a deliverable alone is not a reason to delegate');
-      expect(tool.description).toContain('the user explicitly requests an independent task');
-      expect(tool.description).toContain('Follow up with message_session_task on the same task');
-    }
+      : { name: 'Writer', description: 'Novelist', identity_source: 'Write stories', welcome_message: 'Hello' };
     const resolved = gateway.resolveDirectHelperTool(name, args);
     expect(resolved.qualifiedName).toBe('mcp__cindy_helper__' + name);
     expect(resolved.args).toEqual(args); // Permission review retains the actual operation and arguments.

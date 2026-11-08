@@ -95,7 +95,6 @@ function row(sqlite: Database.Database, table: string, id: string) {
 describe('Bot lifecycle coordinator', () => {
   let sqlite: Database.Database;
   let closeSession: ReturnType<typeof vi.fn>;
-  let cancelDelegationsForBot: ReturnType<typeof vi.fn>;
   let deleteProfileAndDetachSessions: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
@@ -105,7 +104,6 @@ describe('Bot lifecycle coordinator', () => {
     h.db = db;
     h.tx = async (name, args) => runWorkerTx(sqlite, { name: name as never, args } as never);
     closeSession = vi.fn(async () => undefined);
-    cancelDelegationsForBot = vi.fn(async () => 2);
     deleteProfileAndDetachSessions = vi.fn(async (
       botId: string,
       sessionIds: string[],
@@ -123,7 +121,6 @@ describe('Bot lifecycle coordinator', () => {
   function service(hooks: Partial<import('../botLifecycleService.js').BotLifecycleServiceDeps> = {}) {
     return createBotLifecycleService({
       maker: { closeSession } as unknown as Maker,
-      getDelegationService: () => ({ cancelDelegationsForBot } as never),
       deleteProfileAndDetachSessions,
       now: () => 10,
       ...hooks,
@@ -141,7 +138,6 @@ describe('Bot lifecycle coordinator', () => {
     expect(row(sqlite, 'sessions', 'canonical').status).toBe('active');
     expect(row(sqlite, 'bot_profiles', 'bot-1').canonical_session_id).toBe('canonical');
     expect(closeSession).not.toHaveBeenCalled();
-    expect(cancelDelegationsForBot).not.toHaveBeenCalled();
     expect(deleteProfileAndDetachSessions).not.toHaveBeenCalled();
   });
 
@@ -205,11 +201,10 @@ describe('Bot lifecycle coordinator', () => {
         "SELECT session_id FROM bot_lifecycle_events WHERE event_type = 'pause-requested'",
       ).get(),
     ).toEqual({ session_id: 'canonical' });
-    expect(cancelDelegationsForBot).toHaveBeenCalledWith('bot-1', expect.any(String));
     expect(closeSession).toHaveBeenCalledTimes(2);
     expect(closeSession).toHaveBeenCalledWith('canonical');
     expect(closeSession).toHaveBeenCalledWith('delegation-session');
-    expect(result).toMatchObject({ status: 'paused', affected: { sessions: 2, delegations: 2 } });
+    expect(result).toMatchObject({ status: 'paused', affected: { sessions: 2, delegations: 0 } });
     expect(h.broadcastRemoteResourceChanged).toHaveBeenCalledWith('bot-1');
   });
 
@@ -287,7 +282,6 @@ describe('Bot lifecycle coordinator', () => {
 
     await expect(lifecycle.run({ botId: 'bot-1', action: 'pause' })).rejects.toThrow('已被另一处操作更新');
     expect(row(sqlite, 'bot_profiles', 'bot-1').status).toBe('active');
-    expect(cancelDelegationsForBot).not.toHaveBeenCalled();
     expect(closeSession).not.toHaveBeenCalled();
   });
 

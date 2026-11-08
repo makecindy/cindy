@@ -2148,6 +2148,7 @@ export function routeFrame(env: Envelope, handlers: RouteFrameHandlers = {}): vo
     for (const listener of remoteOrcaWorkerChangedListeners) listener(env.src, leadSessionId);
     return;
   }
+  // Only older hosts still push these (V1 background tasks and teammate messages); newer ones never do.
   if (push.channel === 'maker:bot-delegation:changed' || push.channel === 'maker:bot-direct-message:changed') {
     for (const listener of remoteBotChangedListeners) listener(env.src, push.channel, push.payload);
     return;

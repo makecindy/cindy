@@ -4076,6 +4076,32 @@ plan action 的服务端权限，IPC `bot-group:stop` 追加可选 `scope`；
 手机外部推送在执行端及远控 Desktop 的通知出口完成去重，手机无需新增协议处理；
 移动列表继续原 phase/attention 语义。无需服务端、数据库 migration 或 Mobile fingerprint 改动。
 
+V1 伙伴后台任务退役后（2026-11-08，见下节），新执行端不再发出 `pending` / `teammate`：
+宿主不再判定「同一委派执行结果已交回伙伴」，完成通知按普通任务处理。控制端继续识别旧执行端
+发来的这两个值，不改字段或枚举。
+
+## 伙伴后台任务（委派）退役
+
+V2 伙伴用普通 `send_to_session` 开任务，V1 委派工具、服务与回调已移除（产品规则见
+[伙伴运行时](../product-rules/cindy-bots-runtime.md) §6.1）。线协议与存储兼容：
+
+- `bot_delegations` 表、历史 migration 与消息里的 `botCollaboration` 标记都不改；不再写入新行。
+- `maker:bot-delegations:list` 保留（本机 IPC 与 device-link 白名单），新 Host 只读应答旧行，
+  形状与 `projectRemoteBotDelegations` 投影不变；`pendingInteraction` 恒为 null，未落终态的旧行
+  保持存储状态。名册的创建来源与「一眼」产出继续读它，旧控制端也照常读取。
+- `maker:bot-delegation:cancel` 保留在白名单，新 Host 对旧控制端稳定返回
+  `{ ok: false, errorCode: 'UNSUPPORTED_CAPABILITY' }`；本机专用的 `maker:bot-delegation:note-trace`
+  已删除（从未进入白名单）。新 Host 不再推送 `maker:bot-delegation:changed`，推送白名单与 topic
+  映射保留，新控制端继续响应旧 Host 的该推送。
+- 新控制端连旧 Host：照常读取旧 Host 的实时行，只是不再提供停止与补一句；未知字段与旧形状按
+  只读卡片渲染，读取失败保持已有卡片并标记过期。
+- 伙伴引用快照的 `activeDelegations` 字段保留并恒为 0，旧读取端按原校验通过；模型可见文本不再
+  包含 `active_tracked_tasks`。
+- 升级前排队、尚未派发的委派输入（clientId 前缀 `bot-delegation-start` / `-resume` / `-unpause`
+  / `-interject`）在冷队列恢复时丢弃，不会在无人回传时自行开跑；完成回执输入照常投递。
+
+不增加 IPC channel、权限、服务端字段或数据库迁移。
+
 ## 伙伴创建时选择模型
 
 伙伴 `create` 表单块在 data 追加可选 `creationModelChain` 元数据，表示支持创建选模并给出默认首选。
@@ -4850,8 +4876,8 @@ Desktop 在通知点击事件携带可选 `conversationKind: direct`，落入现
 ## 伙伴名册的跟进任务链接
 
 `teammates` 伙伴行的 `links` 在原 `conversation` 链接之后追加 rel `following`，`target` 为
-`{ kind: 'session', sessionId }`，表示该伙伴在跟进的本机任务（伙伴发起的委派子任务与明确接手，
-扣除解除记录；来源与桌面侧栏「在跟进」相同）。只列在用伙伴、未归档、本机、普通来源且非 Orca
+`{ kind: 'session', sessionId }`，表示该伙伴在跟进的本机任务（伙伴用 `send_to_session` 开的任务与
+旧 V1 委派子任务，扣除解除记录；来源与桌面侧栏「在跟进」相同）。只列在用伙伴、未归档、本机、普通来源且非 Orca
 worker 的任务，按最近更新取前 200 条；伙伴行 `revision` 追加这组 ID 的摘要，变化时照常失效重读。
 责任记录、委派创建／状态变化都会广播伙伴远程资源变化。
 
@@ -4862,7 +4888,7 @@ worker 的任务，按最近更新取前 200 条；伙伴行 `revision` 追加�
 ## 桌面伙伴来源筛选
 
 桌面在读取 `teammates` 名册后，用每个伙伴的 `conversation` 任务 ID 调用既有的
-`maker:bot-delegations:list`。只将 `requestingBotId` 匹配、`childSessionId` 非空的记录
+`maker:bot-delegations:list`（委派退役后新 Host 只读应答旧行，见上文）。只将 `requestingBotId` 匹配、`childSessionId` 非空的记录
 作为创建来源；不把接手关系当创建，也不要求远端支持新增的 `created` link。
 包含活跃和归档任务，实际展示仍由任务列表状态筛选决定；旧版远端也能直接使用。
 已有 `following` 链接继续提供跟进标记，任务创建关系同时用于远程创建者头像。

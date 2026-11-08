@@ -87,7 +87,7 @@ describe('sendToSessionInternal lazy-resume permission mode', () => {
 /**
  * 伙伴后台任务冷启动的行为回归(2026-10-13 真机:按 Auto 委派的任务落库为 Auto,首次派发
  * 经 lazy-resume 被缺省 bypass 启动;绑定它的 PR 心跳每轮都在排队受理时因「落库 ≠ 运行态」
- * 被取消)。截取生产源码原样转译后执行:伙伴后台任务服务的 dispatch 适配器 →
+ * 被取消)。截取生产源码原样转译后执行:按库内档位恢复的 Host 派发 →
  * dispatchBotSessionMessage → 整个 sendToSessionInternal。闭包外依赖用合成桩注入,未声明的
  * 依赖一被读取就报错,避免桩悄悄改变执行路径。断言 lazy-resume 交给 bootstrapSession(随后
  * 进入 maker.createSession)的创建参数。
@@ -108,16 +108,12 @@ function botTaskDispatchSlice(): string {
     'const dispatchBotSessionMessage = async (params: {',
     '\n  setBotInvitationWelcomeDispatch(dispatchBotSessionMessage);',
   );
-  const delegationDispatch = slice(
-    '({ targetSessionId, message, persistedContent, clientId, onAccepted, dispatcherSessionId, autoReviewUserText }) =>',
-    ',\n    discardDelegationQueuedInputs:',
-    registerSource.indexOf('botDelegationServiceHolder = createBotDelegationService({'),
-  );
   return ts.transpileModule(
     `${sendWithBaseline}
 ${sendToSessionInternal}
 ${dispatchBotSessionMessage}
-const delegationDispatch = ${delegationDispatch};
+// Host-originated input to a teammate task (cloud room, group delivery) resumes with its stored mode.
+const delegationDispatch = (params) => dispatchBotSessionMessage({ ...params, resumeWithStoredPermissionMode: true });
 return { delegationDispatch, dispatchBotSessionMessage, sendToSessionInternal };`,
     { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None } },
   ).outputText;
@@ -492,7 +488,7 @@ describe('idle forwarded request authorization', () => {
   });
 });
 
-describe('Bot Session task cold start keeps the persisted permission and Plan', () => {
+describe('stored-mode Host dispatch keeps the persisted permission and Plan', () => {
   it.each([
     ['auto', false, 'auto'],
     ['ask', false, 'ask'],

@@ -621,8 +621,6 @@
       "minutes": "{{n}}분",
       "hoursMinutes": "{{h}}시간 {{m}}분"
     },
-    "retrying": "아직 시작하지 못했습니다. 다시 시도 중…",
-    "stopTask": "작업 중지",
     "actionFailed": "읽거나 작업을 완료할 수 없습니다",
     "messages": "메시지",
     "readOnly": "읽기 전용",

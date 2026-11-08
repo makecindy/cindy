@@ -2590,19 +2590,11 @@ interface McpServerRef {
 
 const CINDY_MCP_LIST_TOOLS = 'cindy_mcp_list_tools';
 const CINDY_MCP_CALL_TOOL = 'cindy_mcp_call_tool';
-const CINDY_START_SESSION_TASK_TOOL = 'start_session_task';
-const CINDY_CHECK_SESSION_TASK_TOOL = 'check_session_task';
-const CINDY_MESSAGE_SESSION_TASK_TOOL = 'message_session_task';
-const CINDY_STOP_SESSION_TASK_TOOL = 'stop_session_task';
 const CINDY_LIST_AGENTS_TOOL = 'list_agents';
 const CINDY_LIST_MACHINES_TOOL = 'list_machines';
 const CINDY_CREATE_TEAMMATE_TOOL = 'create_teammate';
 const CINDY_BOT_MEMORY_TOOL = 'bot_memory';
 const CINDY_DIRECT_BOT_TOOLS = new Set([
-  CINDY_START_SESSION_TASK_TOOL,
-  CINDY_CHECK_SESSION_TASK_TOOL,
-  CINDY_MESSAGE_SESSION_TASK_TOOL,
-  CINDY_STOP_SESSION_TASK_TOOL,
   CINDY_LIST_AGENTS_TOOL,
   CINDY_CREATE_TEAMMATE_TOOL,
   // A companion reads the short task summary of a task it is told about.
@@ -3380,10 +3372,6 @@ class CindyMcpGateway {
     return toolName === CINDY_BOT_MEMORY_TOOL ? this.resolveBotMemory(input) : null;
   }
 
-  resolveStartSessionTask(input: unknown): ResolvedMcpGatewayCall | null {
-    return this.resolveDirectHelperTool(CINDY_START_SESSION_TASK_TOOL, input);
-  }
-
   resolveCreateTeammate(input: unknown): ResolvedMcpGatewayCall | null {
     return this.resolveDirectHelperTool(CINDY_CREATE_TEAMMATE_TOOL, input);
   }
@@ -3896,13 +3884,6 @@ class CindyMcpGateway {
     return this.executeResolvedCall(resolved, signal);
   }
 
-  private async executeStartSessionTask(params: unknown, signal?: AbortSignal): Promise<{
-    content: Array<Record<string, unknown>>;
-    details: unknown;
-  }> {
-    return this.executeDirectHelperTool(CINDY_START_SESSION_TASK_TOOL, params, signal);
-  }
-
   private async executeCreateTeammate(params: unknown, signal?: AbortSignal): Promise<{
     content: Array<Record<string, unknown>>;
     details: unknown;
@@ -3925,8 +3906,7 @@ class CindyMcpGateway {
     return this.executeResolvedCall(resolved, signal);
   }
 
-  register(pi: any, options: { botMemoryFacade?: boolean; deniedTools?: string[] } = {}): void {
-    const deniedTools = new Set(options.deniedTools ?? []);
+  register(pi: any, options: { botMemoryFacade?: boolean } = {}): void {
     // Aborted turns may approve a call that Pi never executes.
     pi.on?.('agent_end', () => { this.approvedDefinitions.clear(); });
     pi.on?.('tool_result', (event: any) => {
@@ -4003,30 +3983,6 @@ class CindyMcpGateway {
       });
     }
 
-    if (!deniedTools.has(CINDY_START_SESSION_TASK_TOOL) && this.resolveStartSessionTask({})) {
-      pi.registerTool({
-        name: CINDY_START_SESSION_TASK_TOOL,
-        label: 'Start a Cindy Session task',
-        description:
-          'Start one real independent Cindy Session task in the background. Prefer completing work in the current chat, including status checks, bounded code or document reading, explaining existing results, and simple file work. A repository, multiple files, tools, or a deliverable alone is not a reason to delegate. Use this when the user explicitly requests an independent task or the work needs separate ongoing execution, an isolated workspace, parallel delivery, or independent tracking. Decide by execution needs, not time or file-count thresholds. When warranted, act without asking again merely to start a task; respect an explicit request to work inline. Include the objective, constraints, known facts, relevant files, completed actions, and acceptance criteria in instruction; the task does not automatically inherit this chat. This never selects or wakes a Bot, including a Bot named Cindy. Start it once, do not duplicate its work or poll, and review the result when it returns automatically. Follow up with message_session_task on the same task.',
-        parameters: {
-          type: 'object',
-          properties: {
-            instruction: { type: 'string', minLength: 1, maxLength: 12000 },
-            title: { type: 'string', minLength: 1, maxLength: 120 },
-            working_dir: { type: 'string', minLength: 1, maxLength: 1024 },
-            use_worktree: { type: 'boolean' },
-            context_refs: { type: 'array', items: { type: 'string' }, maxItems: 32 },
-            timeout_ms: { type: 'integer', minimum: 1000, maximum: 86400000 },
-          },
-          required: ['instruction'],
-          additionalProperties: false,
-        },
-        execute: async (_toolCallId: string, params: unknown, signal?: AbortSignal) =>
-          this.executeStartSessionTask(params, signal),
-      });
-    }
-
     // The first step of any work across computers: behind the MCP gateway, models answered
     // with their own ssh commands instead of finding it.
     if (this.resolveDirectHelperTool(CINDY_LIST_MACHINES_TOOL, {})) {
@@ -4051,66 +4007,6 @@ class CindyMcpGateway {
       });
     }
 
-    if (!deniedTools.has(CINDY_CHECK_SESSION_TASK_TOOL) && this.resolveDirectHelperTool(CINDY_CHECK_SESSION_TASK_TOOL, {})) {
-      pi.registerTool({
-        name: CINDY_CHECK_SESSION_TASK_TOOL,
-        label: 'Check Session task',
-        description: 'Read one Session task state when the user asks for progress or automatic completion appears to be missing. Do not poll.',
-        parameters: { type: 'object',
-          properties: { task_id: { type: 'string', minLength: 1, maxLength: 128 },
-            queued_message_id: { type: 'string', minLength: 1, maxLength: 256 } },
-          required: ['task_id'],
-          additionalProperties: false,
-        },
-        execute: async (_toolCallId: string, params: unknown, signal?: AbortSignal) =>
-          this.executeDirectHelperTool(CINDY_CHECK_SESSION_TASK_TOOL, params, signal),
-      });
-    }
-
-    if (!deniedTools.has(CINDY_MESSAGE_SESSION_TASK_TOOL) && this.resolveDirectHelperTool(CINDY_MESSAGE_SESSION_TASK_TOOL, {})) {
-      pi.registerTool({
-        name: CINDY_MESSAGE_SESSION_TASK_TOOL,
-        label: 'Message Session task',
-        description: 'Queue instructions (default), steer the running turn with mode=steer, or release a reversible pause with mode=resume. Steer never falls back to queue. If paused, resume before answering pending interactions. A terminal task with ordinary input starts a fresh execution under the same task ID.',
-        parameters: {
-          type: 'object',
-          properties: {
-            task_id: { type: 'string', minLength: 1, maxLength: 128 },
-            mode: { type: 'string', enum: ['queue', 'steer', 'resume', 'edit', 'withdraw'] },
-            queued_message_id: { type: 'string', minLength: 1, maxLength: 256 },
-            message: { type: 'string', minLength: 1, maxLength: 4000 },
-            decision: { type: 'string', enum: ['approve', 'deny'] },
-            answers: { type: 'object', additionalProperties: { type: 'string' } },
-            reason: { type: 'string', maxLength: 4000 },
-            idempotency_key: { type: 'string', minLength: 1, maxLength: 128 },
-          },
-          required: ['task_id'],
-          additionalProperties: false,
-        },
-        execute: async (_toolCallId: string, params: unknown, signal?: AbortSignal) =>
-          this.executeDirectHelperTool(CINDY_MESSAGE_SESSION_TASK_TOOL, params, signal),
-      });
-    }
-
-    if (!deniedTools.has(CINDY_STOP_SESSION_TASK_TOOL) && this.resolveDirectHelperTool(CINDY_STOP_SESSION_TASK_TOOL, {})) {
-      pi.registerTool({
-        name: CINDY_STOP_SESSION_TASK_TOOL,
-        label: 'Stop Session task',
-        description: 'mode=cancel (default) terminates the task; request-stop requests graceful stop only; pause holds the same task and queued input until explicit resume. Check returned control state: pausing/unconfirmed is not stopped.',
-        parameters: {
-          type: 'object',
-          properties: {
-            task_id: { type: 'string', minLength: 1, maxLength: 128 },
-            mode: { type: 'string', enum: ['cancel', 'request-stop', 'pause'] },
-          },
-          required: ['task_id'],
-          additionalProperties: false,
-        },
-        execute: async (_toolCallId: string, params: unknown, signal?: AbortSignal) =>
-          this.executeDirectHelperTool(CINDY_STOP_SESSION_TASK_TOOL, params, signal),
-      });
-    }
-
     // The task digest uses the same direct facade as teammate creation, so a companion does not
     // need nested discovery before reading a task it is told about.
     const taskIdProperty = { type: 'string', minLength: 1, description: 'Local task ID, or deviceId::sessionId for another computer.' };
@@ -4118,7 +4014,7 @@ class CindyMcpGateway {
       { name: 'get_task_digest', description: 'Read a short (<=2KB) summary of one task: phase, elapsed minutes, last ask and answer, pending question, error, route, suggested next route, PR status and queue. Read this before deciding how to follow up.', properties: { session_id: taskIdProperty }, required: ['session_id'] },
     ];
     for (const tool of followUpTools) {
-      if (deniedTools.has(tool.name) || !this.resolveDirectHelperTool(tool.name, {})) continue;
+      if (!this.resolveDirectHelperTool(tool.name, {})) continue;
       pi.registerTool({
         name: tool.name,
         label: tool.name,
@@ -5585,7 +5481,7 @@ export default async function cindyBridge(piApi: any) {
   // ── MCP 桥 ────────────────────────────────────────────────────────────────
   const raw = process.env.CINDY_PI_MCP_BRIDGE;
   if (!raw) return;
-  let cfg: { token?: string; servers?: McpServerRef[]; botMemoryFacade?: boolean; deniedTools?: string[] };
+  let cfg: { token?: string; servers?: McpServerRef[]; botMemoryFacade?: boolean };
   try {
     cfg = JSON.parse(raw);
   } catch {
@@ -5612,10 +5508,7 @@ export default async function cindyBridge(piApi: any) {
   // every low-frequency/external MCP still stays behind discovery.
   if (servers.length > 0) {
     try {
-      mcpGateway.register(pi, {
-        botMemoryFacade: cfg.botMemoryFacade === true,
-        deniedTools: Array.isArray(cfg.deniedTools) ? cfg.deniedTools.filter((name) => typeof name === 'string') : [],
-      });
+      mcpGateway.register(pi, { botMemoryFacade: cfg.botMemoryFacade === true });
       console.error('[cindy-bridge] MCP gateway ready (' + mcpGateway.size + ' tools; companion facade=' + (cfg.botMemoryFacade === true) + ')');
     } catch (err) {
       console.error('[cindy-bridge] MCP gateway registration failed: ' + String(err));

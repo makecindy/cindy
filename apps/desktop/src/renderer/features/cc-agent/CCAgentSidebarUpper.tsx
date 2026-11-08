@@ -1817,11 +1817,11 @@ function ExpandedView({
   // A teammate handed to another computer: its project here is hidden until it comes back.
   const teammatesElsewhere = useCompanionCloud().demotedBotIds;
   const visibleProjects = useMemo(() => {
-    const notHidden = withoutTeammateProjectsElsewhere(visibleSidebarProjects(
-      groupsWithPinnedProjects.projects,
+    const notHidden = visibleSidebarProjects(
+      withoutTeammateProjectsElsewhere(groupsWithPinnedProjects.projects, teammatesElsewhere),
       hiddenProjectKeys,
       localPlatform,
-    ), teammatesElsewhere);
+    );
     if (filter.projectsAsSet === null) return notHidden;
     const allowed = filter.projectsAsSet;
     // A teammate's project is not a project choice; the teammate filter decides its tasks.
