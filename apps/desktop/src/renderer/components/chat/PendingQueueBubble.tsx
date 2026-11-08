@@ -92,7 +92,7 @@ export function PendingQueueBubble({
         presentation.isScheduler ||
         presentation.isSession ||
         presentation.isPlugin
-      ? presentation.displayText
+      ? (presentation.rangedSourceText ?? presentation.displayText)
       : entry.chatMessage.content;
   const status = (
     <div className={`flex items-center justify-end gap-1 text-12 text-[var(--text-secondary)] ${simplifiedBotConversation ? "min-h-8" : "min-h-6"}`}>
