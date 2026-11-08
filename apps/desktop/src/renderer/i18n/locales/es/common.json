@@ -3832,6 +3832,8 @@
           "openaiImagesHint": "Utiliza la dirección de esta conexión y la clave API para /images/generations y /images/edits.. Al habilitarla, se selecciona esta como la única conexión de Imágenes del proveedor. Agregue manualmente los ID de modelo que faltan y luego declare su capacidad de imagen en los detalles del modelo.",
           "xaiVideos": "Utilice vídeos compatibles con xAI API",
           "xaiVideosHint": "Utiliza la dirección de esta conexión y la clave API para enviar y sondear tareas de video. Al habilitarlo, se selecciona esta como la única conexión de video del proveedor. Agregue las ID de modelo que faltan y luego declare la capacidad de video en los detalles del modelo.",
+          "minimaxVideos": "Usar API de vídeos compatible con MiniMax",
+          "minimaxVideosHint": "Utiliza la dirección y la clave API de esta conexión para enviar y sondear tareas de vídeo de MiniMax, como MiniMax-H3. Un proveedor solo puede usar una API de vídeo. Agregue las ID de modelo que faltan y luego declare la capacidad de vídeo en los detalles del modelo.",
           "runtimeSupportsImageGeneration": "Admite generación y edición de imágenes.",
           "runtimeSupportsImageGenerationHelpLabel": "Acerca del soporte para la generación y edición de imágenes",
           "runtimeSupportsImageGenerationConditionTitle": "Cuando habilitar",

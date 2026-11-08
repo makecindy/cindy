@@ -3740,6 +3740,8 @@
           "openaiImagesHint": "以此連線之位址與 API Key 呼 /images/generations 與 /images/edits。啟之，則此連線為供方唯一之圖連線。所缺模型可手增 ID，再於模型詳情中宣其圖之能。",
           "xaiVideos": "用 xAI 相容影介面",
           "xaiVideosHint": "以此連線之位址與 API Key 遞交、查詢影之差事。啟之，則此連線為供方唯一之影連線。所缺模型可手增 ID，再於模型詳情中宣其影之能。",
+          "minimaxVideos": "用 MiniMax 相容影介面",
+          "minimaxVideosHint": "以此連線之位址與 API Key 遞交、查詢 MiniMax 影之差事（如 MiniMax-H3）。每供方僅可用一種影介面。所缺模型可手增 ID，再於模型詳情中宣其影之能。",
           "runtimeSupportsImageGeneration": "支援圖之生成與編輯",
           "runtimeSupportsImageGenerationHelpLabel": "詳圖之生成與編輯支援",
           "runtimeSupportsImageGenerationConditionTitle": "適用之條",

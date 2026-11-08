@@ -3742,6 +3742,8 @@
           "openaiImagesHint": "使用此连接的地址和 API Key 调用 /images/generations 与 /images/edits。开启后，此连接将作为供应商唯一的图片连接。缺少的模型可手动添加 ID，再到模型详情声明图片能力。",
           "xaiVideos": "使用 xAI 兼容视频接口",
           "xaiVideosHint": "使用此连接的地址和 API Key 提交、查询视频任务。开启后，此连接将作为供应商唯一的视频连接。缺少的模型可手动添加 ID，再到模型详情声明视频能力。",
+          "minimaxVideos": "使用 MiniMax 兼容视频接口",
+          "minimaxVideosHint": "使用此连接的地址和 API Key 提交、查询 MiniMax 视频任务（如 MiniMax-H3）。每个供应商只能使用一种视频接口。缺少的模型可手动添加 ID，再到模型详情声明视频能力。",
           "runtimeSupportsImageGeneration": "支持图片生成与编辑",
           "runtimeSupportsImageGenerationHelpLabel": "了解图片生成与编辑支持",
           "runtimeSupportsImageGenerationConditionTitle": "适用条件",

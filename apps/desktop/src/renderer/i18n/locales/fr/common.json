@@ -3832,6 +3832,8 @@
           "openaiImagesHint": "Utilise l'adresse et la clé API de cette connexion pour /images/generations et /images/edits. L'activer en fait la seule connexion Images du fournisseur. Ajoutez manuellement les ID de modèles manquants, puis déclarez leur capacité de génération d'images dans les détails du modèle.",
           "xaiVideos": "Utiliser une API Videos compatible xAI",
           "xaiVideosHint": "Utilise l'adresse et la clé API de cette connexion pour soumettre et suivre les tâches vidéo. L'activer en fait la seule connexion vidéo du fournisseur. Ajoutez les ID de modèles manquants, puis déclarez leur capacité vidéo dans les détails du modèle.",
+          "minimaxVideos": "Utiliser une API Videos compatible MiniMax",
+          "minimaxVideosHint": "Utilise l'adresse et la clé API de cette connexion pour soumettre et suivre les tâches vidéo MiniMax, comme MiniMax-H3. Un fournisseur ne peut utiliser qu'une seule API vidéo. Ajoutez les ID de modèles manquants, puis déclarez leur capacité vidéo dans les détails du modèle.",
           "runtimeSupportsImageGeneration": "Prend en charge la génération et la modification d'images",
           "runtimeSupportsImageGenerationHelpLabel": "À propos de la prise en charge de la génération et de la modification d'images",
           "runtimeSupportsImageGenerationConditionTitle": "Quand l'activer",

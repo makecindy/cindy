@@ -5732,7 +5732,7 @@ function listLocalProviderVideoModels(respectDisplaySwitch = false): ProviderMed
           name: model.name,
           providerId: provider.id,
           mode: 'video_generation' as const,
-          ...(isCustomVideoProvider(provider) ? { videoProtocol: 'xai-videos' as const } : {}),
+          ...(isCustomVideoProvider(provider) && model.sourceAgent ? { videoProtocol: provider.routing[model.sourceAgent]?.videoApi } : {}),
           modalities: { input: [...modalities.input], output: [...modalities.output] },
           ...(model.officialDocs ? { officialDocs: model.officialDocs } : {}),
         },

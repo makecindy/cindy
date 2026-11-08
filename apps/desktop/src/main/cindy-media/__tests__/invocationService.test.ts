@@ -333,9 +333,10 @@ describe('Cindy Core media invocation state and security boundary', () => {
     mocks.prune.mockClear();
   });
 
-  function setupCustomVideo() {
-    const model = { id: 'private-video', name: 'Video', providerId: 'relay', mode: 'video_generation', videoProtocol: 'xai-videos', modalities: { input: ['text', 'image'], output: ['video'] } };
-    const connection = { baseUrl: 'https://relay.example/v1', headers: { authorization: 'Bearer test-relay-key' }, revision: '1:original', assertCurrent: vi.fn() };
+  function setupCustomVideo(videoProtocol: 'xai-videos' | 'minimax-videos' = 'xai-videos') {
+    const model = { id: 'private-video', name: 'Video', providerId: 'relay', mode: 'video_generation', videoProtocol, modalities: { input: ['text', 'image'], output: ['video'] } };
+    // The MiniMax connection is rooted at the API origin; its paths carry their own /v2 version.
+    const connection = { baseUrl: videoProtocol === 'minimax-videos' ? 'https://relay.example' : 'https://relay.example/v1', headers: { authorization: 'Bearer test-relay-key' }, revision: '1:original', assertCurrent: vi.fn() };
     mocks.models.mockResolvedValue([model, { ...model, providerId: 'xd' }]);
     mocks.providerModel.mockReturnValue(model);
     mocks.videoConnection.mockReturnValue(connection);
@@ -419,6 +420,43 @@ describe('Cindy Core media invocation state and security boundary', () => {
       expect(mocks.guardedOutboundFetch).not.toHaveBeenCalled();
     } else expect(mocks.outboundFetch.mock.calls[3]![1].headers ?? {}).not.toHaveProperty('authorization');
     expect(mocks.providerInvoke).not.toHaveBeenCalled();
+  });
+
+  // MiniMax V2 (MiniMax-H3): native content[] body, task and query under /v2 at the API root.
+  // Before this protocol, a relay's MiniMax video model could not be prepared at all.
+  it('custom MiniMax image-to-video submits one native task under /v2 and ingests the result', async () => {
+    setupCustomVideo('minimax-videos');
+    mocks.readBlob.mockResolvedValue({ buffer: PNG, mimeType: 'image/png' });
+    mocks.ingestMedia.mockResolvedValue({ url: `cindy-media://blobs/${'a'.repeat(64)}.mp4` });
+    const prepared = await callCindyMedia({ action: 'prepare', providerId: 'relay', modelId: 'private-video', capability: 'video.image_to_video' });
+    const invocationId = prepared.invocation_id as string;
+    expect(parsePreparedMediaInvocationGuide(JSON.parse(JSON.stringify(mocks.rows.get(invocationId)?.guide)))).toMatchObject({ ok: true });
+    const ref = { type: 'image_url', image_url: { url: `cindy-media://blobs/${'a'.repeat(64)}.png` } };
+    // Reference-to-video is outside this protocol: rejected before any paid request.
+    expect(await callCindyMedia({ action: 'request', invocationId, body: {
+      content: [{ type: 'text', text: 'cat waves' }, { ...ref, role: 'reference_image' }], resolution: '768P', duration: 6,
+    } })).toMatchObject({ errorCode: 'REQUEST_INVALID' });
+    expect(mocks.outboundFetch).not.toHaveBeenCalled();
+    expect(mocks.rows.get(invocationId)?.state).toBe('prepared');
+    mocks.outboundFetch.mockResolvedValueOnce(Response.json({ task_id: 'paid-task' }))
+      .mockResolvedValueOnce(Response.json({ task: { status: 'running' } }))
+      .mockResolvedValueOnce(Response.json({ task: { status: 'succeeded', content: { url: 'https://cdn.hailuoai.com/result.mp4' } } }))
+      .mockResolvedValueOnce(new Response(MP4, { headers: { 'content-type': 'video/mp4' } }));
+    expect(await callCindyMedia({ action: 'request', invocationId, body: {
+      content: [{ type: 'text', text: 'cat waves' }, { ...ref, role: 'first_frame' }], resolution: '768P', duration: 6,
+    } })).toMatchObject({ ok: true, status: 'pending' });
+    const [url, init] = mocks.outboundFetch.mock.calls[0]!;
+    expect(url).toBe('https://relay.example/v2/video_generation');
+    expect(init.headers.authorization).toBe('Bearer test-relay-key');
+    expect(JSON.parse(init.body)).toEqual({
+      model: 'private-video', resolution: '768P', duration: 6,
+      content: [{ type: 'text', text: 'cat waves' }, { type: 'image_url', image_url: { url: `data:image/png;base64,${PNG.toString('base64')}` }, role: 'first_frame' }],
+    });
+    expect(await callCindyMedia({ action: 'poll', invocationId })).toMatchObject({ status: 'pending' });
+    expect(await callCindyMedia({ action: 'poll', invocationId })).toMatchObject({ status: 'complete', xdt_video_urls: [`cindy-media://blobs/${'a'.repeat(64)}.mp4`] });
+    expect(mocks.outboundFetch.mock.calls[1]![0]).toBe('https://relay.example/v2/query/video_generation/paid-task');
+    expect(mocks.outboundFetch.mock.calls[3]![1].headers ?? {}).not.toHaveProperty('authorization');
+    expect(mocks.outboundFetch.mock.calls.filter(([, call]) => call.method === 'POST')).toHaveLength(1);
   });
 
   it('private task content stops at a redirect without following it or forwarding the key', async () => {
