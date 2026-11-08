@@ -9955,6 +9955,8 @@
     "banner": {
       "title": "Auf {{version}} aktualisiert",
       "subtitle": "Zum Anwenden neu starten",
+      "nativeBuildTitle": "Apple-silicon-Version bereit",
+      "nativeBuildSubtitle": "Neu starten zum Wechseln – Aufgaben und Einstellungen bleiben erhalten",
       "viewNotes": "Neuerungen ansehen",
       "viewNotesAria": "Neuerungen in {{version}} ansehen",
       "button": "Neu starten",

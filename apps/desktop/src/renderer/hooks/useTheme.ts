@@ -146,6 +146,11 @@ export function applyThemeClass(theme: Theme, force = false): void {
   themeService.applyTheme(nextTheme);
 }
 
+/** 无 ThemeProvider 的窗口用。 */
+export function followLocalThemeChanges(): () => void {
+  return onLocalThemesChange(() => applyThemeClass(getStoredTheme(), true));
+}
+
 /** index.tsx bootstrap 用 —— 不依赖 React context。首启亮色门在此生效:
  * 真首启(见 initLoginFirstLaunchLightGate)整个 pre-login 会话按亮色解析,
  * 品牌舞台首帧即亮色,无暗→亮闪变。 */

@@ -9912,6 +9912,8 @@
     "banner": {
       "title": "已更新到 {{version}}",
       "subtitle": "重啟以應用更新",
+      "nativeBuildTitle": "Apple 晶片版已就緒",
+      "nativeBuildSubtitle": "重新啟動即換裝，任務和設定都會保留",
       "viewNotes": "檢視更新公告",
       "viewNotesAria": "檢視 {{version}} 的更新公告",
       "button": "立即重啟",
