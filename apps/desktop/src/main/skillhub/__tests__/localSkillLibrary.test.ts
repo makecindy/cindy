@@ -1,4 +1,5 @@
 import fs from 'node:fs/promises';
+import { ok as assertOk } from 'node:assert/strict';
 import os from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
@@ -58,7 +59,8 @@ describe('native local Skill libraries', () => {
     for (let i = 1; i < 100; i++) await f.put(`method-${i}`, `Method ${i}`);
     expect(await f.register()).toMatchObject({ ok: true, skills: 100 });
     const result = await f.search('字幕');
-    const matches = (result as { matches: Array<{ id: string }> }).matches;
+    assertOk(result.ok);
+    const matches = result.matches as Array<{ id: string }>;
     expect(await f.execute({ action: 'read', library_id: 'methods', id: matches[0].id }, f.context)).toMatchObject({ ok: true });
     expect(await f.execute({ action: 'refresh', library_id: 'methods' }, f.context)).toMatchObject({ ok: true });
   });
@@ -71,7 +73,8 @@ describe('native local Skill libraries', () => {
     expect(gateway).not.toContain('视频字幕提取');
     const result = await f.search('字幕');
     expect(result).toMatchObject({ ok: true, mode: 'keyword', matches: [{ name: 'video' }] });
-    const matches = (result as { matches: Array<{ id: string }> }).matches;
+    assertOk(result.ok);
+    const matches = result.matches as Array<{ id: string }>;
     expect(result).not.toHaveProperty('content');
     expect(await f.execute({ action: 'read', library_id: 'methods', id: matches[0].id }, f.context))
       .toMatchObject({ ok: true, resourceRoot: path.join(f.source, 'video'), content: expect.stringContaining('Original instructions'), eof: true });
