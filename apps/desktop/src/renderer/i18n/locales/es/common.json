@@ -2323,6 +2323,10 @@
         },
         "visibilityLabel": "Visibilidad del fondo de pantalla",
         "visibilityHint": "0% oculta el fondo de pantalla; El 100% lo muestra sin superposición.",
+        "desktopVisibilityLabel": "Transparencia del escritorio",
+        "desktopVisibilityHint": "Muestra el escritorio y las ventanas detrás de Cindy. El texto y los controles se mantienen nítidos.",
+        "desktopBlurLabel": "Desenfoque del escritorio",
+        "desktopBlurHint": "Desenfoca el escritorio detrás de la ventana. 0 lo desactiva; un valor mayor aumenta el desenfoque. Los sistemas sin ajuste de intensidad usan su efecto predeterminado.",
         "blurLabel": "Fondo de pantalla borroso",
         "blurHint": "Desenfoca solo el fondo de pantalla. Establezca en 0 para apagar. El fondo de pantalla animado borroso aumenta el uso de GPU.",
         "motionLabel": "Pantalla",
@@ -2489,7 +2493,7 @@
       "skinLabel": "Personaje",
       "skinHint": "El personaje que aparece en Agent Notch y en la Dynamic Island.",
       "soundLabel": "Sonidos de eventos",
-      "soundHint": "Elija un sonido de 8 bits para cada aviso; Agent Notch y la Dynamic Island lo comparten. El sonido de toque solo suena al pulsar Agent Notch.",
+      "soundHint": "Si se configura un sonido de evento, solo se reproduce ese sonido. Si no se configura o se desactiva, se usan los ajustes de notificación del sistema.",
       "soundAria": "Alternar sonidos de Agent Notch",
       "soundSelectAria": "Sonido para {{event}}",
       "soundPreviewAria": "Vista previa del sonido {{event}}",
@@ -2544,7 +2548,7 @@
         "select": "Haga clic en acción"
       },
       "soundOptions": {
-        "none": "Ninguno",
+        "none": "Seguir al sistema",
         "startup-chime": "Timbre de inicio",
         "ring-chime": "timbre",
         "item-found": "Artículo encontrado",
@@ -10059,6 +10063,8 @@
     "banner": {
       "title": "Actualizado a {{version}}",
       "subtitle": "Reiniciar para aplicar",
+      "nativeBuildTitle": "Versión para Apple silicon lista",
+      "nativeBuildSubtitle": "Reinicia para cambiar; tus tareas y ajustes se conservan",
       "viewNotes": "Ver novedades",
       "viewNotesAria": "Ver las novedades de {{version}}",
       "button": "Reiniciar",
@@ -10188,6 +10194,12 @@
       "description": "La base de datos ocupa aproximadamente {{size}}, por encima de {{threshold}} G. Considera limpiarla en Almacenamiento.",
       "openSettings": "Abrir Almacenamiento",
       "disable": "No volver a recordármelo"
+    },
+    "nativeBuild": {
+      "title": "Estás usando la versión para Intel",
+      "description": "Esta Mac tiene Apple silicon y la versión para Intel va mucho más lenta por la traducción. Instala la versión para Apple silicon; tus datos se conservan.",
+      "dismiss": "Ocultar por ahora",
+      "download": "Descargar"
     },
     "horizontalTabbarAria": "Selector de vista principal",
     "tabs": {
@@ -11668,7 +11680,8 @@
         "lark": "Lark",
         "wecom": "WeCom",
         "dingtalk": "DingTalk",
-        "discord": "Discord"
+        "discord": "Discord",
+        "imessage": "iMessage"
       },
       "status": {
         "connected": "Conectado",
@@ -11801,6 +11814,22 @@
           "existing": "Usar el bot ya configurado en Cindy",
           "manual": "Ingresar nuevas credenciales",
           "moveNote": "El bot se retira de Configuración → Bots de mensajería instantánea, que quedará vacío. Sus chats continúan con {{name}}."
+        },
+        "imessage": {
+          "serverUrlLabel": "Servidor BlueBubbles",
+          "serverUrlPlaceholder": "http://192.168.1.20:1234",
+          "passwordLabel": "Contraseña de API",
+          "passwordPlaceholder": "••••••••",
+          "ownerAddressLabel": "Tu dirección de iMessage",
+          "ownerAddressPlaceholder": "owner@example.com",
+          "chatGuidsLabel": "GUID de chats (separados por comas)",
+          "chatGuidsPlaceholder": "any;-;owner@example.com",
+          "listenHostLabel": "Dirección local de escucha",
+          "listenHostPlaceholder": "192.168.1.10",
+          "listenPortLabel": "Puerto local de escucha",
+          "listenPortPlaceholder": "18747",
+          "hint": "Conecta BlueBubbles en la red local. Solo se procesan los chats seleccionados. Detén las demás respuestas automáticas de esos chats antes de conectar.",
+          "uncertain": "Hay {{count}} entregas por comprobar. Revisa el historial antes de reintentar para evitar duplicados."
         }
       },
       "removeConfirm": {
@@ -14296,6 +14325,8 @@
       "closeFailed": "No se pudo cerrar el chat secundario. Inténtalo de nuevo."
     },
     "teammateProcess": {
+      "empty": "No hay detalles del proceso para esta respuesta",
+      "unavailable": "No se pudieron cargar los detalles del proceso",
       "record": "Actividad",
       "operations": "Registro de actividad",
       "elapsed": "Lleva {{duration}} trabajando",
@@ -19513,6 +19544,7 @@
       "apply": "Transferir"
     },
     "source": {
+      "receivingOn": "Equipo de destino: {{name}}",
       "description": "Elija una computadora que haya iniciado sesión con esta cuenta. Sus plugins, habilidades, ajustes y conexiones se configuran aquí de la misma forma; los inicios de sesión y las claves solo salen de esa computadora si usted lo permite en ella.",
       "loading": "Buscando sus otras computadoras…",
       "empty": "No se encontraron otras computadoras para esta cuenta. Inicie sesión en Cindy en otra computadora y vuelva a abrir esto",
@@ -19964,5 +19996,14 @@
     "directory": "Carpeta de la cuenta",
     "loginAgain": "Iniciar sesión nuevamente",
     "login": "Iniciar sesión"
+  },
+  "crashDiagnosis": {
+    "title": "Cindy se cerró inesperadamente",
+    "description": "¿Quieres diagnosticar la causa? Prepararemos un borrador de tarea con los detalles del cierre y registros sin datos sensibles para que lo revises antes de enviarlo. También puede deberse a un cierre forzado o un corte de energía.",
+    "diagnose": "Diagnosticar problema",
+    "later": "Ahora no",
+    "logExcerpt": "Registros relevantes (extracto, puede estar incompleto)",
+    "logsUnavailable": "No hay registros relevantes disponibles. La causa aún se desconoce.",
+    "failed": "No se pudo preparar el diagnóstico. Inténtalo de nuevo."
   }
 }

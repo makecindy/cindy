@@ -1,5 +1,5 @@
 import { GHOST_CARD_ACTION_ID_RE, isGhostCardLinkAllowed } from '../../shared/ghost.js';
-import { readMailCard, readGhostCardSupersededBy, isLegacyMailCard, readGhostCardFormChange, readGhostCardForm, parseGhostCardFormValues, omitGhostCardFormPreview } from '@cindy/maker-shared/ghost-card-form';
+import { readMailCard, readGhostCardSupersededBy, isLegacyMailCard, readGhostCardFormChange, readGhostCardForm, parseGhostCardFormValues, omitGhostCardFormPreview, ghostCardSessionLinkId } from '@cindy/maker-shared/ghost-card-form';
 import type { GhostCardRow } from './cardService.js';
 import { createHash } from 'node:crypto';
 import { REMOTE_RESOURCE_CHANGED_CHANNEL, type RemoteResourceBlock } from '@cindy/device-link';
@@ -235,13 +235,17 @@ export function projectGhostCardActions(
   html: string,
   externalLinks: boolean,
   rich?: { toggles: Map<string, { title: string; hint?: string }> },
+  sessionLinks = false,
 ): RemotePluginCardAction[] {
   const source = stripStyleAndScript(html);
   const items: RemotePluginCardAction[] = [];
   for (const match of source.matchAll(/<([a-z][a-z0-9]*)\b([^>]*)>/gi)) {
     const attrs = match[2];
     const read = (name: string) => readAttr(attrs, name);
-    const action = read('data-ghost-action'), url = read('data-ghost-link');
+    const sessionLink = read('data-ghost-session-link');
+    const nativeSessionLink = sessionLinks && externalLinks && ghostCardSessionLinkId(sessionLink ?? '') ? sessionLink : undefined;
+    const action = nativeSessionLink ? undefined : read('data-ghost-action');
+    const url = nativeSessionLink ?? read('data-ghost-link');
     if (!(action && GHOST_CARD_ACTION_ID_RE.test(action)) && !(externalLinks && url && isGhostCardLinkAllowed(url))) continue;
     const after = source.slice(match.index! + match[0].length);
     const label = read('aria-label') ?? decodeText(after.slice(0, after.indexOf(`</${match[1]}>`) < 0 ? 256 : after.indexOf(`</${match[1]}>`)).replace(/<[^>]+>/g, '')).trim().slice(0, 512);
@@ -317,7 +321,8 @@ export function createGhostCardRemoteProvider(deps: {
         const status = await deps.prStatus?.(card.sessionId!, slot.key).catch(() => undefined);
         return { ...slot, ...(status?.ok ? { status } : {}) };
       })) : undefined;
-      const items = obsolete ? [] : await Promise.all(projectGhostCardActions(html, externalLinks, rich).map(async (action) => {
+      const items = obsolete ? [] : await Promise.all(projectGhostCardActions(html, externalLinks, rich,
+        request.client.primitives.includes('plugin-card-session-links')).map(async (action) => {
         const prKey = rich && action.url ? githubPrKey(action.url) : undefined;
         const status = prKey ? await deps.prStatus?.(card.sessionId!, prKey).catch(() => undefined) : undefined;
         const next = action.submit && !supportsForms ? { ...action, disabled: true } : action;

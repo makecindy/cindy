@@ -2255,6 +2255,10 @@
         },
         "visibilityLabel": "壁纸可见度",
         "visibilityHint": "0% 隐藏壁纸，100% 完全显示壁纸。",
+        "desktopVisibilityLabel": "桌面透明度",
+        "desktopVisibilityHint": "透出 Cindy 后面的桌面与窗口，文字和控件保持清晰。",
+        "desktopBlurLabel": "桌面模糊",
+        "desktopBlurHint": "模糊窗口后面的桌面，0 为关闭，数值越大越模糊。不支持强度调节的系统使用默认效果。",
         "blurLabel": "壁纸模糊",
         "blurHint": "仅模糊壁纸，0 为关闭。动态壁纸开启模糊后会增加显卡负载。",
         "motionLabel": "展示方式",
@@ -2421,7 +2425,7 @@
       "skinLabel": "角色",
       "skinHint": "任务胶囊和灵动岛里显示的角色。",
       "soundLabel": "事件音效",
-      "soundHint": "为每类提醒选择 8-bit 音效，任务胶囊和灵动岛共用；点按的音效只在点任务胶囊时播放。",
+      "soundHint": "设置了事件音效时，只播放所选音效；未设置或关闭事件音效时，跟随系统通知设置。",
       "soundAria": "切换任务胶囊音效",
       "soundSelectAria": "{{event}}的音效",
       "soundPreviewAria": "预览{{event}}音效",
@@ -2476,7 +2480,7 @@
         "select": "点击操作"
       },
       "soundOptions": {
-        "none": "无",
+        "none": "跟随系统",
         "startup-chime": "启动音",
         "ring-chime": "圆环音",
         "item-found": "发现道具",
@@ -9936,6 +9940,8 @@
     "banner": {
       "title": "已更新到 {{version}}",
       "subtitle": "重启以应用更新",
+      "nativeBuildTitle": "Apple 芯片版已就绪",
+      "nativeBuildSubtitle": "重启即换装，任务和设置都会保留",
       "viewNotes": "查看更新公告",
       "viewNotesAria": "查看 {{version}} 的更新公告",
       "button": "立即重启",
@@ -10065,6 +10071,12 @@
       "description": "数据库约占 {{size}}，已超过 {{threshold}} G。建议前往存储空间进行清理。",
       "openSettings": "打开存储空间",
       "disable": "不再提醒"
+    },
+    "nativeBuild": {
+      "title": "当前是 Intel 版 Cindy",
+      "description": "这台 Mac 是 Apple 芯片，Intel 版要转译运行，会明显变慢。改装 Apple 芯片版即可，数据都会保留。",
+      "dismiss": "本次不再提示",
+      "download": "下载"
     },
     "horizontalTabbarAria": "主区域视图切换",
     "tabs": {
@@ -11526,7 +11538,8 @@
         "lark": "Lark",
         "wecom": "企业微信",
         "dingtalk": "钉钉",
-        "discord": "Discord"
+        "discord": "Discord",
+        "imessage": "iMessage"
       },
       "status": {
         "connected": "已连接",
@@ -11657,6 +11670,22 @@
           "existing": "使用已在 Cindy 设置的机器人",
           "manual": "填写新的凭证",
           "moveNote": "这个机器人会从 设置 → IM 机器人 移过来，那里将变为空；原来的私聊和群聊改由 {{name}} 接着回复。"
+        },
+        "imessage": {
+          "serverUrlLabel": "BlueBubbles 服务器",
+          "serverUrlPlaceholder": "http://192.168.1.20:1234",
+          "passwordLabel": "API 密码",
+          "passwordPlaceholder": "••••••••",
+          "ownerAddressLabel": "你的 iMessage 地址",
+          "ownerAddressPlaceholder": "owner@example.com",
+          "chatGuidsLabel": "对话 GUID（用逗号分隔）",
+          "chatGuidsPlaceholder": "any;-;owner@example.com",
+          "listenHostLabel": "本机监听地址",
+          "listenHostPlaceholder": "192.168.1.10",
+          "listenPortLabel": "本机监听端口",
+          "listenPortPlaceholder": "18747",
+          "hint": "在本地网络连接 BlueBubbles，只处理所选对话。连接前，请先停止这些对话里的其它自动回复程序。",
+          "uncertain": "有 {{count}} 条消息的处理结果待核对。请先查看对话记录，再决定是否重试，避免重复回复。"
         }
       },
       "removeConfirm": {
@@ -12932,6 +12961,8 @@
       }
     },
     "teammateProcess": {
+      "empty": "本轮没有可显示的过程记录",
+      "unavailable": "未能读取过程记录",
       "record": "处理记录",
       "operations": "操作记录",
       "elapsed": "已处理 {{duration}}",
@@ -19267,6 +19298,7 @@
       "apply": "迁移"
     },
     "source": {
+      "receivingOn": "接收端：{{name}}",
       "description": "选一台登录了同一账号的电脑。它的插件、技能、设置和连接会照原样装到这台电脑；密钥只在你在那台电脑上点「允许」后复制，登录状态不会离开那台电脑。",
       "loading": "正在查找你的其他电脑…",
       "empty": "没有找到这个账号的其他电脑。在另一台电脑上登录 Cindy 后再打开这里",
@@ -19705,5 +19737,14 @@
     "directory": "账号目录",
     "loginAgain": "重新登录",
     "login": "登录"
+  },
+  "crashDiagnosis": {
+    "title": "Cindy 上次意外退出了",
+    "description": "要诊断原因吗？我们会把退出信息和脱敏日志整理成任务草稿，供你检查后发送。强制退出或断电也可能导致意外退出。",
+    "diagnose": "诊断问题",
+    "later": "暂不处理",
+    "logExcerpt": "相关日志（节选，可能不完整）",
+    "logsUnavailable": "没有可用的相关日志，暂时无法确定原因。",
+    "failed": "诊断材料准备失败，请重试。"
   }
 }

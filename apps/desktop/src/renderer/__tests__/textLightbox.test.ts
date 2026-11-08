@@ -30,7 +30,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
-import { formatBytes } from '../components/chat/TextLightbox';
+import { formatBytes } from '../components/chat/formatBytes';
 import { detectRenderable, buildFence } from '../lib/textPreview';
 
 const sourcePath = resolve(__dirname, '..', 'components', 'chat', 'TextLightbox.tsx');

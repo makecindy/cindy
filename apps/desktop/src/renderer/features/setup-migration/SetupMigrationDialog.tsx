@@ -1,3 +1,4 @@
+import { deviceDisplayName } from '@/lib/deviceName';
 /**
  * New-computer setup wizard (docs/product-rules/new-device-setup-migration.md).
  *
@@ -108,23 +109,24 @@ function PhaseIcon({ phase }: { phase: ItemPhase }) {
 }
 
 export function SetupMigrationDialog() {
-  const { open, deviceId, session } = useSetupMigrationDialog();
+  const { open, session } = useSetupMigrationDialog();
   if (!open) return null;
-  return <SetupMigrationDialogBody key={session} initialDeviceId={deviceId} />;
+  return <SetupMigrationDialogBody key={session} />;
 }
 
-function SetupMigrationDialogBody({ initialDeviceId }: { initialDeviceId: string | null }) {
+function SetupMigrationDialogBody() {
   const { t } = useTranslation();
   const dialog = useDialogExit();
   // One bridge object for this dialog's lifetime; effects must not re-run when the
   // host hands back a fresh wrapper on each property read.
   const api = useMemo(() => window.electronAPI.setupMigration, []);
-  const [phase, setPhase] = useState<Phase>(initialDeviceId ? 'reading' : 'source');
+  const [phase, setPhase] = useState<Phase>('source');
   const [sources, setSources] = useState<SetupMigrationSource[] | null>(null);
   const [sourcesFailed, setSourcesFailed] = useState(false);
-  const [deviceId, setDeviceId] = useState<string | null>(initialDeviceId);
+  const [directory, setDirectory] = useState<DeviceLinkDeviceView[]>([]);
+  const [deviceId, setDeviceId] = useState<string | null>(null);
   const [plan, setPlan] = useState<SetupMigrationPlan | null>(null);
-  const [readError, setReadError] = useState<string | null>(null);
+  const [readError, setReadError] = useState<{ code: string; sourceName: string } | null>(null);
   const [selected, setSelected] = useState<ReadonlySet<string>>(() => new Set());
   const [toolNames, setToolNames] = useState<ReadonlyMap<string, string>>(() => new Map());
   const [itemPhases, setItemPhases] = useState<ReadonlyMap<string, ItemPhase>>(() => new Map());
@@ -143,10 +145,15 @@ function SetupMigrationDialogBody({ initialDeviceId }: { initialDeviceId: string
     dialog.close(() => closeSetupMigration());
   }, [dialog]);
 
+  const displayDevices = useMemo(() => [...new Map([...directory, ...(sources ?? [])].map((device) => [device.deviceId, device])).values()], [directory, sources]);
   const sourceName = useMemo(() => {
-    if (plan) return plan.source.name;
-    return sources?.find((source) => source.deviceId === deviceId)?.name ?? '';
-  }, [deviceId, plan, sources]);
+    const source = plan?.source ?? sources?.find((candidate) => candidate.deviceId === deviceId);
+    return source ? deviceDisplayName(source.deviceId, source.name, displayDevices) : '';
+  }, [deviceId, plan, sources, displayDevices]);
+  const selectedSource = sources?.find((source) => source.deviceId === deviceId);
+  const canRead = Boolean(selectedSource && !selectedSource.unavailable);
+  const receiver = directory.find((device) => device.isSelf);
+  const receiverName = receiver ? deviceDisplayName(receiver.deviceId, receiver.name, displayDevices) : t('bots.cloud.unknownDevice');
 
   const loadSources = useCallback(() => {
     setSources(null);
@@ -155,21 +162,29 @@ function SetupMigrationDialogBody({ initialDeviceId }: { initialDeviceId: string
       .sources()
       .then((list) => {
         setSources(list);
-        setDeviceId((current) => current ?? list.find((source) => !source.unavailable)?.deviceId ?? null);
+        setDeviceId((current) => list.some((source) => source.deviceId === current && !source.unavailable) ? current : null);
       })
       .catch(() => setSourcesFailed(true));
   }, [api]);
 
   useEffect(() => {
     loadSources();
+    let cancelled = false;
+    void window.electronAPI.deviceLink.listDevices()
+      .then(({ devices }) => { if (!cancelled) setDirectory(devices); })
+      .catch(() => {});
     window.electronAPI.maker.plugins
       .list(undefined, true)
       .then((items) => setToolNames(new Map(items.map((item) => [item.id, item.name]))))
       .catch(() => {});
+    return () => { cancelled = true; };
   }, [loadSources]);
 
   const read = useCallback(
     (target: string) => {
+      if (busyRef.current || !sources?.some((source) => source.deviceId === target && !source.unavailable)) return;
+      // Lock immediately: a second activation can arrive before React disables Next.
+      busyRef.current = true;
       setPhase('reading');
       setReadError(null);
       api
@@ -181,18 +196,25 @@ function SetupMigrationDialogBody({ initialDeviceId }: { initialDeviceId: string
         })
         .catch((error: unknown) => {
           const code = extractIpcError(error)?.code;
-          setReadError(code && READ_ERROR_CODES.has(code) ? code : 'GENERIC');
+          const sourceUnavailable = code === 'NOT_FOUND' || code === 'SETUP_SOURCE_UNAVAILABLE';
+          setReadError({
+            code: sourceUnavailable ? 'SETUP_SOURCE_UNAVAILABLE' : code && READ_ERROR_CODES.has(code) ? code : 'GENERIC',
+            sourceName,
+          });
+          if (sourceUnavailable) {
+            // Main already checked the current directory. Only refresh on failure;
+            // require another explicit choice and never substitute another device.
+            setDeviceId(null);
+            loadSources();
+          }
           setPhase('source');
         });
     },
-    [api],
+    [api, sources, sourceName, loadSources],
   );
 
-  useEffect(() => {
-    if (initialDeviceId) read(initialDeviceId);
-  }, [initialDeviceId, read]);
 
-  const groups = useMemo(() => (plan ? buildReviewGroups(plan, t, toolNames) : []), [plan, t, toolNames]);
+  const groups = useMemo(() => (plan ? buildReviewGroups(plan, t, toolNames, sourceName) : []), [plan, t, toolNames, sourceName]);
   const presentCount = useMemo(
     () => groups.reduce((sum, group) => sum + group.rows.filter((row) => row.state === 'present').length, 0),
     [groups],
@@ -338,9 +360,9 @@ function SetupMigrationDialogBody({ initialDeviceId }: { initialDeviceId: string
         <p className="text-13 leading-[1.5] text-[var(--confirm-desc)]">{t('setupMigration.source.description')}</p>
         {readError ? (
           <ErrorNotice
-            message={t(`setupMigration.errors.${readError}`, { name: sourceName })}
+            message={t(`setupMigration.errors.${readError.code}`, { name: readError.sourceName })}
             actions={
-              deviceId ? (
+              deviceId && canRead ? (
                 <Button variant="secondary" size="sm" compact onClick={() => read(deviceId)}>
                   {t('setupMigration.source.readAgain')}
                 </Button>
@@ -387,7 +409,7 @@ function SetupMigrationDialogBody({ initialDeviceId }: { initialDeviceId: string
                     />
                     <Icon size={16} strokeWidth={1.8} aria-hidden="true" className="shrink-0 text-[var(--confirm-desc)]" />
                     <span className={cn('flex min-w-0 flex-1 flex-col', source.unavailable && 'opacity-60')}>
-                      <span className="truncate text-13 font-medium text-[var(--confirm-title)]">{source.name}</span>
+                      <span className="break-words text-13 font-medium text-[var(--confirm-title)]">{deviceDisplayName(source.deviceId, source.name, displayDevices)}</span>
                       <span className="text-12 text-[var(--confirm-desc)]">
                         {source.unavailable
                           ? t(`setupMigration.source.unavailable.${source.unavailable}`)
@@ -413,7 +435,7 @@ function SetupMigrationDialogBody({ initialDeviceId }: { initialDeviceId: string
     body = (
       <div className="flex flex-col gap-4">
         <p className="text-13 leading-[1.5] text-[var(--confirm-desc)]">
-          {t('setupMigration.review.description', { name: plan.source.name })}
+          {t('setupMigration.review.description', { name: sourceName })}
         </p>
         {plan.unavailable.length > 0 ? (
           <p className="text-12 leading-[1.5] text-[var(--confirm-desc)]">{t('setupMigration.review.partial')}</p>
@@ -486,7 +508,7 @@ function SetupMigrationDialogBody({ initialDeviceId }: { initialDeviceId: string
             </h3>
             <p className="px-2 pb-1 text-12 leading-[1.5] text-[var(--confirm-desc)]">
               {plan.secrets
-                ? t('setupMigration.review.checklistDescriptionWithKeys', { name: plan.source.name })
+                ? t('setupMigration.review.checklistDescriptionWithKeys', { name: sourceName })
                 : t('setupMigration.review.checklistDescription')}
             </p>
             <ul className="border-y border-[var(--border-default)] px-2 py-1">
@@ -630,9 +652,9 @@ function SetupMigrationDialogBody({ initialDeviceId }: { initialDeviceId: string
           style={WINDOW_NO_DRAG_STYLE}
           className="modal-panel fixed inset-0 z-[10000] m-auto flex h-fit max-h-[min(640px,85vh)] w-[min(600px,calc(100vw-32px))] flex-col overflow-hidden outline-none"
         >
-          <div className="flex items-center justify-between gap-4 px-4 pb-3 pt-4">
+          <div className="flex flex-col items-start gap-3 px-4 pb-3 pt-4">
             <Dialog.Title asChild>
-              <h2 className="min-w-0 truncate text-16 font-medium text-[var(--confirm-title)]">
+              <h2 className="min-w-0 break-words text-16 font-medium text-[var(--confirm-title)]">
                 {phase === 'permissions' ? t('setupMigration.permissions.title') : t('setupMigration.title')}
               </h2>
             </Dialog.Title>
@@ -670,6 +692,7 @@ function SetupMigrationDialogBody({ initialDeviceId }: { initialDeviceId: string
           </div>
 
           <div className="min-h-[240px] flex-1 overflow-y-auto border-y border-[var(--border-default)] px-4 py-4">
+            <p className="mb-3 text-12 leading-[1.5] text-[var(--confirm-desc)]">{t('setupMigration.source.receivingOn', { name: receiverName })}</p>
             {body}
           </div>
 
@@ -696,7 +719,7 @@ function SetupMigrationDialogBody({ initialDeviceId }: { initialDeviceId: string
                   size="lg"
                   type="button"
                   loading={phase === 'reading'}
-                  disabled={!deviceId || phase === 'reading' || Boolean(sources?.find((s) => s.deviceId === deviceId)?.unavailable)}
+                  disabled={!canRead || phase === 'reading'}
                   onClick={() => deviceId && read(deviceId)}
                 >
                   {t('setupMigration.source.next')}
@@ -769,6 +792,7 @@ export function buildReviewGroups(
   plan: SetupMigrationPlan,
   t: ReturnType<typeof useTranslation>['t'],
   toolNames: ReadonlyMap<string, string>,
+  sourceDisplayName: string = plan.source.name,
 ): ReviewGroup[] {
   const reasonMeta = (reason?: string) =>
     reason ? t(`setupMigration.review.reason.${reason}`) : t('setupMigration.review.kept');
@@ -877,7 +901,7 @@ export function buildReviewGroups(
     key: item.key,
     title: t(`setupMigration.review.access.${item.id}`),
     state: item.state,
-    meta: t(`setupMigration.review.access.${item.id}Hint`, { name: plan.source.name }),
+    meta: t(`setupMigration.review.access.${item.id}Hint`, { name: sourceDisplayName }),
   }));
   return [
     { id: 'plugins', title: t('setupMigration.review.groups.plugins'), rows: plugins },
@@ -887,13 +911,13 @@ export function buildReviewGroups(
     {
       id: 'secrets',
       title: t('setupMigration.review.groups.secrets'),
-      description: t('setupMigration.review.secrets.description', { name: plan.source.name }),
+      description: t('setupMigration.review.secrets.description', { name: sourceDisplayName }),
       rows: secrets,
     },
     {
       id: 'ssh',
       title: t('setupMigration.review.groups.ssh'),
-      description: t('setupMigration.review.sshDescription', { name: plan.source.name }),
+      description: t('setupMigration.review.sshDescription', { name: sourceDisplayName }),
       rows: ssh,
     },
     { id: 'access', title: t('setupMigration.review.groups.access'), rows: access },

@@ -33,7 +33,7 @@ import { BuiltinPanelBridgeProvider } from '@/panels/BuiltinPanelBridge';
 import { WindowControls } from '@/components/title-bar/WindowControls';
 import { UpdateNoticeDialog } from '@/components/UpdateNoticeDialog';
 import { FeishuConflictDialogHost } from '@/components/feishuBot/FeishuConflictDialogHost';
-import { InterruptedTasksResumeDialog } from '@/features/cc-agent/InterruptedTasksResumeDialog';
+import { StartupRecoveryDialogs } from '@/components/log-support/StartupRecoveryDialogs';
 import { GlobalDropImportListener } from '@/components/layout/GlobalDropImportListener';
 import { SessionShareImportWizard } from '@/components/settings/SessionShareImportWizard';
 import { ControlledBanner } from '@/features/remote-device/ControlledBanner';
@@ -2006,9 +2006,9 @@ export function MainLayout() {
           onDismiss={dismissNotice}
         />
       )}
-      {/* 意外退出后重启:列出被中断的任务供一键继续;更新说明弹窗关闭后再出现。 */}
+      {/* 重启提示按更新说明、中断任务恢复、意外退出诊断的顺序出现。 */}
       {!isSecondaryWindow() && (
-        <InterruptedTasksResumeDialog suspended={Boolean(releaseNotes && noticeOpen)} />
+        <StartupRecoveryDialogs suspended={Boolean(releaseNotes && noticeOpen)} />
       )}
       {/* FeiShu Bot conflict dialog -- subscribes to main process push and surfaces a global modal */}
       <FeishuConflictDialogHost />

@@ -1,4 +1,5 @@
 import { app, nativeTheme } from 'electron';
+import { APPEARANCE_LIMITS } from '../shared/appearanceSettings';
 import path from 'node:path';
 
 import { desktopMakerLogger } from './maker-host/logger-adapter.js';
@@ -24,6 +25,7 @@ export interface WindowThemeVibrancyPayload {
   mode?: AppThemeMode;
   systemModeFollowsSystem?: boolean;
   wallpaperCovered?: boolean;
+  desktopBlur?: number | null;
 }
 
 const DEFAULTS: WindowThemeSnapshot = { mode: 'system' };
@@ -37,6 +39,10 @@ export function parseWindowThemeVibrancyPayload(raw: unknown): WindowThemeVibran
     value.familyId.trim().length === 0 ||
     value.familyId.length > MAX_FAMILY_ID_LENGTH ||
     typeof value.isDark !== 'boolean' ||
+    (value.desktopBlur != null && (typeof value.desktopBlur !== 'number' ||
+      !Number.isInteger(value.desktopBlur) ||
+      value.desktopBlur < APPEARANCE_LIMITS.wallpaperBlur.min ||
+      value.desktopBlur > APPEARANCE_LIMITS.wallpaperBlur.max)) ||
     (value.wallpaperCovered !== undefined && typeof value.wallpaperCovered !== 'boolean') ||
     (value.mode !== undefined && !isAppThemeMode(value.mode)) ||
     (value.systemModeFollowsSystem !== undefined &&
@@ -44,6 +50,7 @@ export function parseWindowThemeVibrancyPayload(raw: unknown): WindowThemeVibran
   )
     return null;
   return {
+    ...(value.desktopBlur !== undefined ? { desktopBlur: value.desktopBlur as number | null } : {}),
     familyId: value.familyId,
     isDark: value.isDark,
     ...(typeof value.wallpaperCovered === 'boolean'
