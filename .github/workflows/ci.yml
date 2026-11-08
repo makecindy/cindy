@@ -193,10 +193,29 @@ jobs:
         if: matrix.shard == 1
         run: pnpm --filter desktop exec vitest run src/main/localDb/ipc/__tests__/botCanonicalSession.test.ts src/main/localDb/ipc/__tests__/botRemoteResourceProvider.test.ts
 
+  # Detect once without dependency installation; unrelated changes allocate no
+  # Windows/macOS Host runners. All event types retain the stable verify gate.
+  host-changes:
+    name: Select Host regressions
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      required: ${{ steps.changes.outputs.required }}
+    steps:
+      - name: Checkout client
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Select Host regressions
+        id: changes
+        run: node scripts/ci-host-tests.mjs
+
   # Host's Node tests are outside the Vitest workspace tiers. Exercise its
   # actual loaders, HTTP authorization and worker processes on every desktop OS.
   # Credential tests use synthetic records; no login or system keychain access.
   host-regressions:
+    needs: host-changes
+    if: needs.host-changes.outputs.required == 'true'
     name: Host regressions (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
@@ -224,13 +243,14 @@ jobs:
       - name: Run Host regressions
         run: pnpm --filter @cindy/host test
 
-  # 保留原 required check 名 verify；检查、Linux 分片和三平台 Host 任一失败都阻断。
+  # 保留原 required check 名 verify；Host 仅允许明确无关时跳过，选择失败也阻断。
   verify:
     name: verify
     if: ${{ always() }}
     needs:
       - verify-checks
       - linux-unit-shards
+      - host-changes
       - host-regressions
     runs-on: ubuntu-latest
     steps:
@@ -238,11 +258,17 @@ jobs:
         env:
           VERIFY_CHECKS_RESULT: ${{ needs.verify-checks.result }}
           LINUX_UNIT_SHARDS_RESULT: ${{ needs.linux-unit-shards.result }}
+          HOST_CHANGES_RESULT: ${{ needs.host-changes.result }}
+          HOST_REQUIRED: ${{ needs.host-changes.outputs.required }}
           HOST_REGRESSIONS_RESULT: ${{ needs.host-regressions.result }}
         run: |
           test "$VERIFY_CHECKS_RESULT" = "success"
           test "$LINUX_UNIT_SHARDS_RESULT" = "success"
-          test "$HOST_REGRESSIONS_RESULT" = "success"
+          test "$HOST_CHANGES_RESULT" = "success"
+          case "$HOST_REQUIRED:$HOST_REGRESSIONS_RESULT" in
+            true:success|false:skipped) ;;
+            *) echo "Host selection or regressions did not pass"; exit 1 ;;
+          esac
 
   # Linux 全绿不能覆盖 path separator、盘符、大小写和文件系统能力差异。四个
   # Windows 分片并行运行，分片并集仍完整覆盖 test:unit，不能缩成少量 smoke。
