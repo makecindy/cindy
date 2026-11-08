@@ -404,6 +404,8 @@ export class ProjectAutomationLoader {
     const content = `${JSON.stringify(file, null, 2)}\n`;
     await fs.writeFile(tmpPath, content, 'utf8');
     await fs.rename(tmpPath, filePath);
+    // A read cached before this write (e.g. "no file yet") must not hide it.
+    this.cache.delete(path.resolve(workingDir));
   }
 
   private async listKnownWorkingDirs(): Promise<string[]> {

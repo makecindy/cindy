@@ -239,7 +239,11 @@ describe('project automation provider reconciliation', () => {
         logger: { warn: vi.fn(), debug: vi.fn() },
       });
       const config = { ...projectConfig({ model: 'remote-model', providerId: 'remote-provider' }), agentDeviceId: 'studio' };
+      // PR #9314 hand-over acceptance: a teammate arriving on a new computer read "no file" just
+      // before its first save, and that cached read hid the new file from the restore right after.
+      expect(await loader.loadProjectSchedules(dir)).toBeNull();
       expect(await loader.upsertSchedule(dir, config)).toMatchObject({ inserted: 1, updated: 0 });
+      expect((await loader.loadProjectSchedules(dir))?.map((item) => item.id)).toEqual([config.id]);
       expect(saved).toMatchObject({ agentDeviceId: 'studio', model: 'remote-model', providerId: 'remote-provider' });
       expect(await loader.reconcile(dir)).toMatchObject({ inserted: 0, updated: 0 });
       expect(await loader.upsertSchedule(dir, { ...config, agentDeviceId: 'shared-device' }))
