@@ -155,16 +155,17 @@ describe('mobile session header desktop-first surface', () => {
     expect(drawerSelectionSource).toContain('switchDrawerSessionInPlace(navigation, destination);');
     expect(drawerSelectionSource).not.toContain('router.replace');
     expect(drawerSelectionSource).not.toContain("pathname: '/sessions/[sessionId]'");
-    // 导航入口等 drawer overlay 完整卸载；新建可能原生换屏，
-    // 切任务虽已改为 replaceParams，也不和 Reanimated 子树退场抢同一帧。
+    // Root-owned drawers switch concurrently; route-local fallbacks retain their
+    // unmount fence. taskDrawerPresentation.test.tsx and
+    // conversationTaskDrawer.test.tsx exercise the two lifetimes.
     expect(source).toContain('const pendingDrawerNavigationRef = useRef<(() => void) | null>(null);');
     expect(source).toContain('const sessionListDrawerClosingRef = useRef(false);');
     expect(source).toContain('const [sessionListDrawerOverlayMounted, setSessionListDrawerOverlayMounted] = useState(false);');
     expect(source).toContain('const queueDrawerNavigation = useCallback((action: () => void) => {');
     // 纯关闭(遮罩/back/左滑/当前任务)的 pending 仍为空,必须由独立 closing 闸门
     // 同步锁住约 200ms 退场期;快速二次导航不能登记或改写首次关闭意图。
-    expect(source).toContain('if (sessionListDrawerClosingRef.current || pendingDrawerNavigationRef.current) return;');
-    expect(source).toContain('sessionListDrawerClosingRef.current = true;\n    pendingDrawerNavigationRef.current = action;');
+    // The first intent and close-only gate are checked through the real hook in
+    // conversationTaskDrawer.test.tsx, without requiring adjacent assignments.
     expect(source).toContain('const closeSessionListDrawer = useCallback(() => {\n    if (!sessionListDrawerOverlayMounted) return;\n    if (sessionListDrawerClosingRef.current) return;\n    sessionListDrawerClosingRef.current = true;');
     // Same-task selection versus search navigation is exercised through the actual
     // layout callback in sideChatTaskBoundary.test.tsx, rather than a source literal.

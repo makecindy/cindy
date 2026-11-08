@@ -8,7 +8,8 @@ import { Alert, Platform, StyleSheet, View } from 'react-native';
 import { useLocalSearchParams, useNavigation } from 'expo-router';
 import { useIsFocused } from 'expo-router/react-navigation';
 import { useTranslation } from 'react-i18next';
-import { useAdaptiveWindow } from '@/platform/AdaptiveWindowContext';
+import { useAdaptiveWindow, useAdaptiveWindowDimensions } from '@/platform/AdaptiveWindowContext';
+import { useSessionHeaderHeight } from './useSessionHeaderHeight';
 import { CindyMakeSessionGate } from './CindyMakeSessionGate';
 import { SessionTaskDrawerProvider } from './SessionTaskDrawer';
 import { buildWideSessionNavLayout } from './wideSessionNav';
@@ -47,10 +48,15 @@ export function SessionTaskLayout({ children }: {
   }, [legacyHistory, deviceId, sessionId, navigation, params.deviceName, params.focusClientId, params.taskListEntry]);
   const paneLayout = useSessionPaneLayout();
   const adaptiveWindow = useAdaptiveWindow();
+  const dimensions = useAdaptiveWindowDimensions();
+  const nativeHeaderHeight = useSessionHeaderHeight(JSON.stringify([
+    dimensions.width, dimensions.height, dimensions.fontScale,
+    adaptiveWindow.insets.top, adaptiveWindow.insets.bottom, adaptiveWindow.insets.left, adaptiveWindow.insets.right, adaptiveWindow.barEdge,
+  ]));
   const focused = useIsFocused();
   const sidebarWidthPreference = useSessionSidebarWidthPreference();
   const floatingWidth = buildWideSessionNavLayout({ windowWidth: adaptiveWindow.width,
-    preferredWidth: sidebarWidthPreference.width, trailingReserve: sharedStatusRowTrailingReserve(adaptiveWindow) }).drawerWidth;
+    preferredWidth: sidebarWidthPreference.width, trailingReserve: sharedStatusRowTrailingReserve(adaptiveWindow, nativeHeaderHeight) }).drawerWidth;
   const shareDrawer = Platform.OS === 'ios' && adaptiveWindow.regularWidth && adaptiveWindow.reservedRegionsSupported
     && (adaptiveWindow.barEdge !== 'none' || adaptiveWindow.regions.some(region => region.kind === 'occlusion'));
   const { t } = useTranslation();

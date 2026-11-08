@@ -31,6 +31,20 @@ it('cancels a pull before its opening render without leaving an input blocker', 
   expect(drawer.sessionListDrawerOpen).toBe(false); expect(drawer.sessionListDrawerOverlayMounted).toBe(false);
   act(() => drawer.openSessionListDrawer()); expect(drawer.sessionListDrawerOpen).toBe(true);
 });
+// Unit: replace the retired source-order guard with the observable close-only
+// race. Existing duplicate-navigation coverage has a pending destination; this
+// case must also reject a tap while closing without any pending destination.
+it('rejects navigation during a close-only exit and accepts it after reopening', () => {
+  act(() => root.render(<Probe />)); act(() => drawer.openSessionListDrawer());
+  const next = vi.fn();
+  act(() => { drawer.closeSessionListDrawer(); drawer.queueDrawerNavigation(next); });
+  expect(drawer.sessionListDrawerOpen).toBe(false);
+  expect(drawer.sessionListDrawerOverlayMounted).toBe(true);
+  act(() => drawer.handleSessionListDrawerClosed()); expect(next).not.toHaveBeenCalled();
+  act(() => drawer.openSessionListDrawer());
+  act(() => drawer.queueDrawerNavigation(next));
+  act(() => drawer.handleSessionListDrawerClosed()); expect(next).toHaveBeenCalledOnce();
+});
 it('finishes pending navigation after docking, then restores the portrait gesture', () => {
   act(() => root.render(<Probe />)); act(() => drawer.openSessionListDrawer());
   const next = vi.fn(); act(() => drawer.queueDrawerNavigation(next));

@@ -24,7 +24,7 @@ export function BotGroupPaneLayout({ children }: { children: ReactNode }) {
   const { threadRootId } = useLocalSearchParams<{ threadRootId?: string }>();
   const preference = useSessionSidebarWidthPreference();
   const layout = buildWideSessionNavLayout({ windowWidth: width, preferredWidth: preference.width,
-    trailingReserve: sharedStatusRowTrailingReserve(geometry) });
+    trailingReserve: sharedStatusRowTrailingReserve(geometry, headerHeight) });
   const { persistent, detail } = paneLayout;
   const drawer = useConversationTaskDrawer({ enabled: layout.enabled && !threadRootId, persistent, width: layout.drawerWidth });
   const viewport = useMemo(() => ({ x: detail.x, y: detail.y, width: detail.width, height }),

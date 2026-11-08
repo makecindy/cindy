@@ -41,6 +41,7 @@ vi.mock('expo-router', () => ({
   }),
 }));
 vi.mock('expo-router/react-navigation', () => ({ useIsFocused: () => state.focused }));
+vi.mock('@/session/useSessionHeaderHeight', () => ({ useSessionHeaderHeight: () => 44 }));
 vi.mock('../session/remoteSessionStore', () => ({
   remoteSessionStore: {
     getSessionDeviceId: () => 'host',
@@ -63,6 +64,7 @@ vi.mock('../session/ResidentHomeList', () => ({ useSessionSidebarWidthPreference
   persistent: true, sidebarWidth: 320, detail: { x: 320, y: 0, width: 680, height: 800 },
 }) }));
 vi.mock('@/platform/AdaptiveWindowContext', () => ({
+  useAdaptiveWindowDimensions: () => ({ width: 1000, height: 800, fontScale: 1 }),
   useAdaptiveWindow: () => ({ barEdge: 'left', width: 1000, height: 800, insets: { top: 0, left: 0, right: 0, bottom: 0 }, regions: [], regularWidth: true, reservedRegionsSupported: false }),
   PaneViewportProvider: ({ children }: { children: React.ReactNode }) => children,
 }));
