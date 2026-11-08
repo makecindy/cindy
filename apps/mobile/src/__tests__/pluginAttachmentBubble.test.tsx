@@ -92,29 +92,32 @@ import { companionConversationItems } from '@/session/companionConversationPrese
 import type { RemoteMessage } from '@/session/types';
 const msg = (id: string, role: RemoteMessage['role'], content: unknown, extra: Partial<RemoteMessage> = {}): RemoteMessage => ({ id, clientId: id, sessionId: 's', role, content, toolUseId: null, agentMeta: null, createdAt: '2026-01-01T00:00:00Z', ...extra });
 
-function render(showPluginInvocations = true, settled = false, withCall = true, kind: 'file' | 'image' = 'file') {
+function render(companion = false, settled = false, withCall = true, kind: 'file' | 'image' = 'file') {
   const messages = [msg('u', 'user', JSON.stringify(kind === 'file' ? { text: '', files: [{ name: 'sample.txt', path: '/tmp/sample.txt' }] } : { text: '', images: [{ url: 'https://example.com/sample.png', originalName: 'sample.png', mimeType: 'image/png' }] }))];
   if (withCall) messages.push(msg('c', 'tool_use', { toolName: 'mcp__cindy__ghost_call', toolUseId: 'c', input: { ghost_id: 'art', tool: 'generate' } }, { toolUseId: 'c' }));
   if (settled) messages.push(msg('r', 'tool_result', 'done', { toolUseId: 'c' }));
   const items = buildMobileMessageRenderItems(messages, { isSessionStreaming: true }).filter((item) => item.type === 'message');
   expect(items[0]).toMatchObject({ message: { body: '', attachments: [{ kind }] } });
-  return renderToStaticMarkup(<MessageRenderer items={items} isSessionStreaming showPluginInvocations={showPluginInvocations} />);
+  return renderToStaticMarkup(<MessageRenderer items={items} isSessionStreaming companion={companion} />);
 }
 
+// Unit regression, 2026-11-07: real normalizer/model/renderer; a plugin call
+// must not create a header or an empty user bubble around attachment-only input.
+// Existing expectations incorrectly required the whole-turn calling label.
 describe('attachment-only user plugin bubble', () => {
-  it.each(['file', 'image'] as const)('renders a %s-only plugin header through completion', (kind) => {
+  it.each(['file', 'image'] as const)('does not turn a %s-only user message into a plugin execution bubble', (kind) => {
     for (const settled of [false, true]) {
-      const html = render(true, settled, true, kind);
-      expect(html).toContain('message.userBubble');
-      expect(html).toContain('Art');
-      expect(html).toContain(settled ? 'Called' : 'Calling…');
+      const html = render(false, settled, true, kind);
+      expect(html).not.toContain('message.userBubble');
+      expect(html).not.toContain('Art');
+      expect(html).not.toContain(settled ? 'Called' : 'Calling…');
     }
   });
   it('keeps partner attachment messages free of plugin shells', () => {
-    expect(render(false)).not.toContain('message.userBubble');
+    expect(render(true)).not.toContain('message.userBubble');
   });
   it('does not add an empty bubble to ordinary attachments', () => {
-    expect(render(true, false, false)).not.toContain('message.userBubble');
+    expect(render(false, false, false)).not.toContain('message.userBubble');
   });
 });
 
@@ -488,3 +491,6 @@ describe('companion native read position', () => {
 });
 
 vi.mock('@/session/RemoteAttachmentPreview', () => ({ RemoteAttachmentPreview: () => null }));
+
+// Native blur rendering is outside the attachment layout contract.
+vi.mock('expo-blur', () => ({ BlurView: () => null }));

@@ -4,13 +4,8 @@ import '@fontsource-variable/inter';
 import '@fontsource-variable/jetbrains-mono';
 import 'harmonyos-sans-sc-webfont-splitted';
 
-// Registers the `<model-viewer>` custom element globally. Used by
-// ModelLightbox to preview mivo-generated 3D models. Side-effect-only
-// import — the package self-registers when loaded.
-import '@google/model-viewer';
-
-// 在任何 React 组件渲染前先 import 触发 i18next 同步 init —— 否则首屏 useTranslation
-// 拿到的会是 fallback 英文文案再瞬切到目标语言，造成可见闪烁。
+// i18next 在此之前已 init：分发入口 index.tsx 等当前语言包加载完才加载本模块，
+// 首屏 useTranslation 直接拿到目标语言，不会先显示英文再切换。
 import '@/i18n';
 import './themes/colors';
 

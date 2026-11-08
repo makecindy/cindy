@@ -7,6 +7,8 @@ const fixture = vi.hoisted(() => ({
   calls: [] as any[],
   owner: 'a:1',
   debug: vi.fn(),
+  canUseDeviceLink: true,
+  persistedMode: 'cloud',
 }));
 vi.mock('electron', () => ({
   BrowserWindow: { fromWebContents: () => null },
@@ -20,10 +22,11 @@ vi.mock('../../logger', () => ({
 }));
 vi.mock('../../appSessionState', () => ({
   activeOwnerScopeKey: () => fixture.owner,
+  getPersistedAppSessionMode: () => fixture.persistedMode,
   isAppSessionBoundaryPending: () => false,
 }));
 vi.mock('../../appCapabilities', () => ({
-  getAppCapabilities: () => ({ canUseDeviceLink: true }),
+  getAppCapabilities: () => ({ canUseDeviceLink: fixture.canUseDeviceLink }),
 }));
 vi.mock('../preferences', () => ({
   readViewerPreferences: () => ({
@@ -122,6 +125,8 @@ afterEach(() => {
   fixture.calls = [];
   fixture.handlers.clear();
   fixture.owner = 'a:1';
+  fixture.canUseDeviceLink = true;
+  fixture.persistedMode = 'cloud';
   fixture.debug.mockClear();
   vi.restoreAllMocks();
 });
@@ -352,6 +357,25 @@ it('prewarms without network or focus, reuses the target window and cleans only 
   expect(fixture.calls.filter((c) => c[2][0].op === 'stop').map((c) => c[0])).toEqual(['a']);
   expect(a.isDestroyed()).toBe(false);
 });
+// A spare shell costs a hidden renderer for the whole run, so profiles that can
+// never use remote desktop skip it; a saved cloud session still prewarms while
+// auth verifies the account at startup, before canUseDeviceLink turns true.
+it.each([
+  [false, 'local', 0],
+  [false, 'signed-out', 0],
+  [false, 'cloud', 1],
+  [true, 'cloud', 1],
+] as const)(
+  'prewarm with canUseDeviceLink=%s and saved mode %s creates %i spare window',
+  (canUseDeviceLink, persistedMode, created) => {
+    fixture.canUseDeviceLink = canUseDeviceLink;
+    fixture.persistedMode = persistedMode;
+    manager = new RemoteDesktopViewerWindows(() => true);
+    manager.register();
+    manager.prewarm();
+    expect(fixture.windows).toHaveLength(created);
+  },
+);
 it('rejects subframes and stale window/account generations even with a valid channel', async () => {
   const sender: any = { id: 100 };
   manager = new RemoteDesktopViewerWindows((value) => value === sender);

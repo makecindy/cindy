@@ -71,6 +71,8 @@ Agent 新建普通独立任务（`send_to_session` create 与 `start_session_tas
 
 | 对象     | 操作                                                       | 本机 | 跨电脑           |
 | -------- | ---------------------------------------------------------- | ---- | ---------------- |
+| 模型供应商 | `configure_model_connection`：查询预设、读取／添加／编辑／删除 API 与免密本机连接、安全填写或更换密钥、发现与设置型号、验证连接 | 有（2026-11-07；复用设置页事务，保存、目录获取与推理验证分别报告） | 在执行电脑的任务中调用；手机及同账号电脑沿原有加密代输入卡填写密钥，不支持指定另一台电脑或 SSH |
+| 订阅账号 | `configure_model_provider` 的 `subscriptionAccounts`：查看、官方 CLI 登录、暂停、限额、权重与调度策略 | 有（Claude / Codex，同供应商内多账号） | 工具按目标电脑的本机任务执行；同账号远控 UI 复用管理 IPC |
 | 任务     | 列出、搜索、读聊天记录、发现电脑                           | 有   | 有               |
 | 任务     | 获取可直接引用的任务链接（列表、搜索、聊天记录与摘要返回 sessionUrl） | 有 | 有（链接携带所属电脑；旧远端查询结果由调用端补齐） |
 | 任务     | 读摘要（状态、最后的要求与回答、模型路线、PR、排队数）     | 有   | 有（2026-10-17） |
@@ -78,6 +80,7 @@ Agent 新建普通独立任务（`send_to_session` create 与 `start_session_tas
 | 机器     | 看账号下的电脑与 SSH 主机及实时资源（`list_machines`，[规则](cindy-machines.md)） | 有（含 SSH 普通任务） | 有（2026-11-02） |
 | 任务     | 给既有任务发消息                                           | 有   | 有（2026-10-14） |
 | 任务     | 新建任务（继承项目、选择已有项目或不绑项目，执行目录独立）   | 有   | 无               |
+| 任务     | 新建任务时选择 Agent 所在电脑（`send_to_session` create 的 `agent_device_id`，取 `list_available_models` 的 `locations[]`；只换 Agent 用的远程或分享供应商，任务与文件仍在本机） | 有 | 有（2026-11-07；SSH 任务不支持；那台没有所需模型或连不上返回 `PROVIDER_ROUTE_UNAVAILABLE`，不自动换电脑） |
 | 任务     | 归档 / 取消归档                                             | 有   | 有（2026-10-16） |
 | 共享任务 | 为当前原任务生成原生邀请、查询共享状态（`create_shared_task_invitation` / `get_shared_task_state`） | 有（房主；沿用任务权限，Plan 只读） | 手机或同账号其他电脑控制当前任务时在任务宿主执行；不支持指定其他任务 |
 | 任务     | 改名、移动、标签                                            | 有   | 无               |
@@ -108,7 +111,7 @@ Agent 新建普通独立任务（`send_to_session` create 与 `start_session_tas
 | 伙伴     | 按已证实归属搜索跨渠道聊天、按最近活动列出旧任务           | 有   | 有（历史查询，两端需支持筛选参数） |
 | 伙伴     | 查看自己的本机 IM 连接分配与状态                         | 有   | 无               |
 | 伙伴     | 开关自己的记忆与系统技能（待办、例行任务、工作台与跟进；`set_teammate_capability` kind=feature，与能力页同一份设置；读取核心细则与系统技能全文用 `read_teammate_skill`） | 有（2026-11-01） | 无（远程设置界面可管理） |
-| 伙伴     | 给自己添加消息平台连接（Telegram、飞书 / Lark、企业微信、钉钉、Discord；`connect_account` kind=host、id=`im-<渠道>` 发授权卡，主人在可信电脑卡片上逐项填写凭证，与「消息平台」设置页同一添加实现；移除仍在设置页） | 有（2026-11-01） | 无 |
+| 伙伴     | 给自己添加消息平台连接（Telegram、飞书 / Lark、企业微信、钉钉、Discord、iMessage / BlueBubbles；`connect_account` kind=host、id=`im-<渠道>` 发授权卡，主人在可信电脑卡片上逐项填写凭证，与「消息平台」设置页同一添加实现；移除仍在设置页） | 有（2026-11-01） | 无 |
 | 伙伴     | 「一眼」投影（等你 / 在做；用户界面已改为近况，2026-10-21） | 有   | 无               |
 | 伙伴     | 跟进任务：读取与继续（自动跟进所有任务的伙伴）             | 有   | 有（2026-10-17） |
 | 伙伴     | 查看与更换主力电脑                                         | 有   | 有（2026-10-17） |
@@ -138,6 +141,9 @@ Worker 工具省略 working_dir 时保持继承 Lead 任务记录目录，不跟
   `apps/desktop/src/main/mcp-integrations/schedulerDevices.ts`。
 - 跨电脑发消息：`apps/desktop/src/main/mcp-integrations/sessionHandoffRemote.ts`、
   `apps/desktop/src/main/maker-ipc/sessionHandoffIpc.ts`。
+- 新建任务的 Agent 所在电脑：`packages/lizi-mcps/src/xdt-helper/send_to_session.ts` 的 `agent_device_id`，
+  host 侧解析见 `apps/desktop/src/main/maker-ipc/sendToSessionExecutionConfig.ts`
+  （`resolveSendToSessionCreateRoute`）。
 - 任务摘要（`get_task_digest`）：`packages/lizi-mcps/src/xdt-helper/get_task_digest.ts`（输出合同 ≤2KB）、
   `apps/desktop/src/main/mcp-integrations/taskDigest.ts` 与 `taskDigestHost.ts`（跨电脑只读，复用
   `local-db:sessions:get`、`maker:list-active`、历史消息与 PR 状态通道）。
@@ -180,8 +186,7 @@ Ask 或审核要求确认时复用现有确认入口；Plan 不允许副作用�
 审核到执行及延迟投递均保留账号、实例、权限／Plan 代次与输入边界校验，
 不得借定时工作扩大原授权范围。
 2026-10-29 修订：伙伴的来源记录与访问权限、操作风险分开。移除自主工具白名单与
-例行任务的静默 `NEEDS_OWNER_REQUEST`；普通操作沿用任务权限，仅对自主删除自动化、
-代答授权、恢复暂停、调度命令、独立完全访问 Agent、授予常驻指令等明确风险显示可操作的一次性授权请求与等待状态。
+例行任务的静默 `NEEDS_OWNER_REQUEST`；普通操作沿用任务权限，仅对自主代答授权、恢复暂停、调度命令、独立完全访问 Agent、授予常驻指令等明确风险显示可操作的一次性授权请求与等待状态。
 确认、拒绝与取消共用桌面／手机原交互通道。见 [伙伴操作权限](teammate-authority.md)。
 2026-10-22 修订：伙伴、转入消息与定时跟进的任务操作
 统一沿用普通任务权限流程：Full Access 免审、Auto 使用原有自动审核、Ask 使用原有确认。

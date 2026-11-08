@@ -71,6 +71,7 @@ import {
   type ProviderShareMemberActions,
 } from './ShareMemberControls';
 import type { ShareTimeFormat } from './useShareTimeFormat';
+import { SETTINGS_SECTION_TITLE_CLASS } from '@/components/ui/settings-rows';
 
 /** 读取状态：legacy = 那台电脑是旧版本，只有所有时间的合计。 */
 export type ProviderUsageStatus = 'loading' | 'ready' | 'failed' | 'legacy';
@@ -354,7 +355,7 @@ export function ProviderUsageSection({
     <section className="usage-history-charts mt-8 shrink-0" aria-labelledby="provider-usage-title">
       {/* 标题在左、筛选在右；放不下时筛选整组换到下一行、靠左。下拉本身写着「所有人」「所有组内电脑」，不另加说明文字。 */}
       <div className="mb-3 flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
-        <h3 id="provider-usage-title" className="text-13 font-medium text-[var(--settings-section-title)]">
+        <h3 id="provider-usage-title" className={SETTINGS_SECTION_TITLE_CLASS}>
           {t('providerGroup.usage.title')}
         </h3>
         <div className="flex min-w-0 flex-wrap items-center gap-2" data-testid="provider-usage-filters">

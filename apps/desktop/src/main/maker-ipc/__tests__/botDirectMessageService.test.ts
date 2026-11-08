@@ -1185,6 +1185,32 @@ describe('cross-device teammate messages', () => {
     expect(h.createMessage).toHaveBeenCalledTimes(4);
   });
 
+  // #9198: the sender-side delegation review must see the confirmed remote teammate,
+  // not the "a new task" fallback — the contradicting target made an authorized
+  // cross-device hand-off refused even after the owner confirmed the recipient.
+  it('names the confirmed remote teammate for the sender delegation review', async () => {
+    const captureRequest = vi.fn((sessionId: string, message: string, target?: { sessionId?: string; peer?: string }) =>
+      captureAgentRequest(sessionId, message, { clientId: 'owner-input', authoredText: 'Ask Mimi on the other computer for the status.' },
+        async () => [], true, true,
+        { targetSessionId: target?.sessionId, authorize: async () => ({ kind: 'authorized' as const }) }));
+    const service = createBotDirectMessageService({
+      dispatch: leftDispatch, transport: {
+        selfDeviceId: () => 'left',
+        list: async () => ({ agents: [], unavailableDevices: [] }),
+        resolve: async () => ({ id: 'right::bot-b', name: 'Mimi' }),
+        verifySender: async () => false,
+        send: async () => ({ ok: true, targetBotId: 'right::bot-b', targetBotName: 'Mimi', targetSessionId: '',
+          wakeKind: 'queued', threadId: 'thread', messageId: 'message', messageCount: 1,
+          remainingMessages: 11, conversationEnded: false, accepted: true, delivered: false }),
+      }, captureRequest,
+    });
+    expect(await atLeft(() => service.messageAgent({ callerSessionId: 'a-main', targetBotId: 'right::bot-b', message: 'Please send the status.' })))
+      .toMatchObject({ ok: true });
+    // The service → register contract: a remote target carries the resolved teammate
+    // identity; the review action would otherwise label it "a new task" and refuse.
+    expect(captureRequest.mock.calls[0]![2]).toEqual({ targetTeammate: { name: 'Mimi', id: 'right::bot-b' } });
+  });
+
   it('does not deadlock when both devices send concurrently', async () => {
     const result = await Promise.all([
       atLeft(() => left.messageAgent({ callerSessionId: 'a-main', targetBotId: 'right::bot-b', message: 'one' })),

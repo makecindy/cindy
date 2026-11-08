@@ -112,7 +112,7 @@ describe('伙伴创建兼容旧创建链接', () => {
   const sidebar = readFileSync(resolve(__dirname, '..', 'TeammatesSection.tsx'), 'utf8');
 
   it('挂在 /bots/roster,且静态段排在 :botId 之前', () => {
-    expect(router).toContain("{ path: 'roster', element: <BotRosterView /> }");
+    expect(router).toMatch(/path: 'roster',\s*lazy: \(\) => import\('@\/features\/bots\/BotRosterView'\)/);
     expect(router.indexOf("path: 'roster'")).toBeLessThan(router.indexOf("path: ':botId'"));
   });
 

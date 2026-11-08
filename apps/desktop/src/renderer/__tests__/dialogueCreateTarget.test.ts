@@ -5,9 +5,9 @@ import { MACHINE_ALL, MACHINE_LOCAL } from '@/features/device-link/selectedMachi
 import type { SwitcherDevice } from '@/features/device-link/switcherDevices';
 
 const devices: SwitcherDevice[] = [
-  { deviceId: 'remote-a', name: 'Remote A', status: 'connected' },
-  { deviceId: 'remote-b', name: 'Remote B', status: 'connecting' },
-  { deviceId: 'remote-rejected', name: 'Rejected', status: 'rejected' },
+  { deviceId: 'remote-a', name: 'Remote A', status: 'connected', online: true },
+  { deviceId: 'remote-b', name: 'Remote B', status: 'connecting', online: true },
+  { deviceId: 'remote-rejected', name: 'Rejected', status: 'rejected', online: false },
 ];
 
 describe('resolveDialogueDeviceTarget', () => {

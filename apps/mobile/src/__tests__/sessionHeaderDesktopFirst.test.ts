@@ -102,11 +102,9 @@ describe('mobile session header desktop-first surface', () => {
     expect(source).toContain('testID="session.composerFrost"');
     expect(source).toContain('<View ref={topOverlayRef} onLayout={handleTopOverlayLayout} pointerEvents="box-none" style={styles.sessionChrome} testID="session.chrome">');
     expect(source).toContain('<View style={[styles.sessionChromeContent, { paddingTop: horizontalSystemHeader ? nativeHeaderHeight : insets.top + (paneLayout.persistent ? spacing.lg : 0) }, companionChat && Platform.OS !== \'ios\' && { backgroundColor: colors.surface }]}>');
-    // 临时任务列表抽屉在树内,盖不住 iOS 系统栏:抽屉存续期间收起系统栏,内容区沿用打开前的顶栏高度。
-    expect(source).toContain(']), sessionListDrawerOverlayMounted);');
-    expect(source).toContain('systemBarHidden={sessionListDrawerOverlayMounted}');
-    // Stack.Toolbar 左右栏会强制 headerShown: true,收起期间整组不渲染。
-    expect(source).toContain('if (systemBarHidden) return <Stack.Screen options={{ headerShown: false }} />;');
+    // iOS 临时任务列表抽屉放进独立窗口盖住系统栏;系统栏不随抽屉开合收起。
+    expect(source).toContain("aboveSystemBar={Platform.OS === 'ios'}");
+    expect(source).not.toContain('systemBarHidden');
     expect(chromeStyle).toContain("position: 'absolute'");
     // Let native glass press feedback extend beyond the 44pt iOS header.
     expect(chromeStyle).toContain("overflow: Platform.OS === 'ios' ? 'visible' : 'hidden'");
@@ -252,7 +250,7 @@ describe('mobile session header desktop-first surface', () => {
     expect(source).toContain('discardAllPendingUploadsForScopeChange();\n    discardSessionComposerAttachmentStateRef.current();');
 
     // 复用页面实例时输入原生子树也按 sessionId 换代，旧粘贴异步事件没有新任务入口。
-    expect(source).toContain('<MobileComposerInputRow\n                    key={sessionId}');
+    expect(source).toContain('<ResizableComposerInputRow resize={composerResize}\n                    key={sessionId}');
     // key 重挂载前必须在 render 阶段把 composer state 归属切到 B；不能先拿 A 文档
     // 创建 B 的 WebView，再等被动 effect 才纠正。同步缓存缺失时 B 首帧为空态。
     const draftScopeStart = source.indexOf('const activeComposerDraftScopeKey = composerDraftScopeKey(sessionId, routeDraft);');

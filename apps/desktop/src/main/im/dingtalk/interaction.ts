@@ -6,7 +6,7 @@ import type { SharedPermission } from '../../maker-ipc/sharedPermission';
 import { permissionOutcomeText } from '../shared/permissionPresentation';
 
 export function handleDingTalkTextInteraction(
-  im: DingTalkIM,
+  im: Pick<DingTalkIM, 'requestTextReply' | 'sendText'>,
   userId: string,
   request: InteractionRequest,
   options?: { timeoutMs?: number; sharedPermission?: SharedPermission },
@@ -32,7 +32,7 @@ export function handleDingTalkTextInteraction(
 }
 
 async function answerQuestions(
-  im: DingTalkIM,
+  im: Pick<DingTalkIM, 'requestTextReply' | 'sendText'>,
   userId: string,
   request: Extract<InteractionRequest, { kind: 'ask_user_question' }>,
 ): Promise<InteractionDecision> {

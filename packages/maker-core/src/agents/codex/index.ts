@@ -68,6 +68,7 @@ import {
 import { skillEntryPath, snapshotDisabledSkillLaunch, currentDisabledSkillLaunchPaths } from '../shared/skill-activation.js';
 import { snapshotManagedSkillGrants } from '../shared/managed-skill-policy.js';
 import type { AgentCredentialMode } from '../../interfaces/auth-adapter.js';
+import { NATIVE_SUBSCRIPTION_ACCOUNT, type NativeSubscriptionAccount } from '../../interfaces/auth-adapter.js';
 import type {
   Capabilities,
   EffortDescriptor,
@@ -124,6 +125,8 @@ import {
   appendAutoReviewUserIntent,
   normalizeAutoReviewUserIntent,
   createAutoReviewActionContext,
+  createAutoReviewAgentTextTracker,
+  isAutoReviewNewUserInput,
   type AutoReviewUserIntent,
   isSystemPermissionDenialReason,
   formatPermissionDenial,
@@ -198,6 +201,9 @@ import {
 import {
   newCodexRuntimeState,
   isAuthRelatedErrorMessage,
+  isCodexModelUnavailableError,
+  CODEX_MODEL_UNAVAILABLE_MESSAGE,
+  CODEX_MODEL_UNAVAILABLE_REASON,
   classifyCodexError,
   translateErrorNotification,
   translateItemNotification,
@@ -254,6 +260,7 @@ import {
   terminalRateLimitRetryDelayMs,
 } from './terminal-rate-limit-retry.js';
 import { createStdioTransport } from './app-server/stdioTransport.js';
+import { parseMcpElicitationForm, mcpElicitationFormContent, mcpElicitationUrl } from './mcp-elicitation.js';
 import { CodexInteractionBroker } from './interaction-broker.js';
 import { SYSTEM_PROMPT_APPEND as MAKER_CODEX_SYSTEM_PROMPT_APPEND } from './system-prompt-append.js';
 import { nativeAutoReviewContinuationConfig } from './native-auto-review-policy.js';
@@ -2448,6 +2455,7 @@ export class CodexAgent extends BaseAgent {
     remoteHostId?: string,
     credentialMode?: AgentCredentialMode,
     opts: {
+      nativeSubscriptionAccount?: NativeSubscriptionAccount;
       providerId?: string;
       ignoreBindingLeases?: number;
       routeIsCurrent?: () => boolean;
@@ -2700,6 +2708,7 @@ assertRouteCurrent();
         opts.deviceHostedGuestModelIds,
         opts.localToolCatalog,
         opts.customContextProviderId,
+        opts.nativeSubscriptionAccount,
       ).finally(() => {
         // 成功: this.hosts 已赋值, 后续走快路径; 失败: 清掉 promise 让下次调用能重试
         const current = this.hostPromises.get(key);
@@ -2816,11 +2825,12 @@ assertRouteCurrent();
    * 不能只读 models_cache.json：OAuth 登录前会清旧 cache，model/list 也是 cache ready barrier。
    */
   override async refreshLocalModels(options?: RefreshLocalModelsOptions): Promise<boolean> {
-    const credentialMode = options?.credentialMode;
+    const nativeSubscriptionAccount = options?.[NATIVE_SUBSCRIPTION_ACCOUNT];
+    const credentialMode = nativeSubscriptionAccount ? 'oauth-bearer' : options?.credentialMode;
     if (!credentialMode) return this.refreshLocalModelsWithinDeadline(options);
 
     const key = codexLocalAuthHostIdentity(
-      options?.providerId ? `local-account:${options.providerId}:models` : localControlPlaneHostKey(credentialMode),
+      nativeSubscriptionAccount ? `local-account:${nativeSubscriptionAccount.id}:models` : options?.providerId ? `local-account:${options.providerId}:models` : localControlPlaneHostKey(credentialMode),
       credentialMode === 'gateway-key' || credentialMode === 'provider-oauth' ? 'isolated' : 'legacy-shared',
     );
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -2850,11 +2860,12 @@ assertRouteCurrent();
   private async refreshLocalModelsWithinDeadline(
     options?: RefreshLocalModelsOptions,
   ): Promise<boolean> {
-    const credentialMode = options?.credentialMode;
+    const nativeSubscriptionAccount = options?.[NATIVE_SUBSCRIPTION_ACCOUNT];
+    const credentialMode = nativeSubscriptionAccount ? 'oauth-bearer' : options?.credentialMode;
     // 显式 provider 刷新使用独立 control-plane app-server。不能为了发一次 model/list
     // 切换共享 local host 的凭证形态：切换协调器会关闭空闲会话，忙碌会话则直接拒绝。
     const key = codexLocalAuthHostIdentity(
-      options?.providerId ? `local-account:${options.providerId}:models` : credentialMode
+      nativeSubscriptionAccount ? `local-account:${nativeSubscriptionAccount.id}:models` : options?.providerId ? `local-account:${options.providerId}:models` : credentialMode
         ? localControlPlaneHostKey(credentialMode) : hostKey(),
       credentialMode === 'gateway-key' || credentialMode === 'provider-oauth' ? 'isolated' : 'legacy-shared',
     );
@@ -2863,6 +2874,7 @@ assertRouteCurrent();
       host: credentialMode
         ? await this.getHost(undefined, credentialMode, {
           providerId: options?.providerId,
+          nativeSubscriptionAccount,
           ...(credentialMode === 'gateway-key' || credentialMode === 'provider-oauth'
             ? { localAuthPolicy: 'isolated' as const } : {}),
           keyOverride: key,
@@ -2872,7 +2884,7 @@ assertRouteCurrent();
     }), async (host) => {
       const init = await host.ensureStarted();
       // API capability probes use an isolated control plane, not the shared history home.
-      if (init.codexHome && !options?.providerId && credentialMode !== 'provider-oauth') this.codexHome = init.codexHome;
+      if (init.codexHome && !options?.providerId && !nativeSubscriptionAccount && credentialMode !== 'provider-oauth') this.codexHome = init.codexHome;
 
       const models: CodexModelListResponse['data'] = [];
       const seenCursors = new Set<string>();
@@ -2957,6 +2969,7 @@ assertRouteCurrent();
     deviceHostedGuestModelIds?: readonly string[],
     localToolCatalog?: string,
     customContextProviderId?: string | null,
+    nativeSubscriptionAccount?: NativeSubscriptionAccount,
   ): Promise<AppServerHost> {
     const seq = (this.createHostSeqByKey.get(key) ?? 0) + 1;
     this.createHostSeqByKey.set(key, seq);
@@ -3037,12 +3050,14 @@ assertRouteCurrent();
     let hostRetirementCleanup: CodexExtraSpawnConfig['onHostRetired'];
     // Capture the owner/account reader before any asynchronous authentication work.
     const readAccountTokens = !remoteHostId && historyHome
-      ? this.deps.createCodexAuthTokenReader?.(providerId)
+      ? nativeSubscriptionAccount ? nativeSubscriptionAccount.readCodexTokens : this.deps.createCodexAuthTokenReader?.(providerId)
       : undefined;
     for (;;) {
       const upgradedToSuperset = spawnCredentialMode !== credentialMode;
       onSpawnCredentialModeResolved?.(spawnCredentialMode);
-      const authOptions = spawnCredentialMode || providerId ? { credentialMode: spawnCredentialMode, ...(providerId ? { providerId } : {}) } : undefined;
+      nativeSubscriptionAccount?.assertCurrent();
+      const authOptions = spawnCredentialMode || providerId || nativeSubscriptionAccount
+        ? { credentialMode: spawnCredentialMode, ...(providerId ? { providerId } : {}), nativeSubscriptionAccount } : undefined;
       const state =
         spawnCredentialMode === 'gateway-key' && requestedGatewayState
           ? requestedGatewayState
@@ -3081,11 +3096,11 @@ assertRouteCurrent();
             {
               remoteHostId,
               ...(providerId ? { providerId } : {}),
-              ...(key.startsWith('local-account:') ? { codexHome: env.CODEX_HOME } : {}),
+              ...(key.startsWith('local-account:') || nativeSubscriptionAccount ? { codexHome: env.CODEX_HOME } : {}),
               ...(!remoteHostId && historyHome ? { runtimeCodexHome: historyHome } : {}),
               // 受邀者任务的 app-server 与账号会话一样走按 host 分开的 proxy(鉴权注入方式冻结在这个 host 上)，
               // 不改写本机用户任务共用的 proxy 状态。
-              ...(key.startsWith('local-account:') || key.startsWith(LOCAL_GUEST_HOST_PREFIX) || deviceHostedGuestProviderId || localToolCatalog
+              ...(key.startsWith('local-account:') || nativeSubscriptionAccount || key.startsWith(LOCAL_GUEST_HOST_PREFIX) || deviceHostedGuestProviderId || localToolCatalog
                 ? { accountHostKey: `${key}:${generation}` } : {}),
               credentialMode: spawnCredentialMode,
               ...(localAuthPolicy === 'isolated'
@@ -3226,11 +3241,15 @@ assertRouteCurrent();
             let tokens = await readAccountTokens();
             assertCurrentGeneration('external authentication scope');
             if (refresh && tokens.accessToken === staleAccessToken) {
-              await this.withStartedAccountHost(providerId, async (accountHost) => {
-                assertCurrentGeneration('account token refresh');
-                await accountHost.request('account/read', { refreshToken: true }, { timeoutMs: 8_000 });
-              }, 8_000);
-              tokens = await readAccountTokens();
+              if (nativeSubscriptionAccount?.readCodexTokens) {
+                tokens = await nativeSubscriptionAccount.readCodexTokens(true);
+              } else {
+                await this.withStartedAccountHost(providerId, async (accountHost) => {
+                  assertCurrentGeneration('account token refresh');
+                  await accountHost.request('account/read', { refreshToken: true }, { timeoutMs: 8_000 });
+                }, 8_000);
+                tokens = await readAccountTokens();
+              }
             }
             assertCurrentGeneration('external authentication result');
             return tokens;
@@ -3682,6 +3701,17 @@ assertRouteCurrent();
     }
 
     const eventQueue: AsyncQueue<AgentEvent> = createAsyncQueue<AgentEvent>();
+    // Reviewer context only: the agent's public text and tool calls, in the order the user sees them.
+    const autoReviewAgentText = createAutoReviewAgentTextTracker();
+    {
+      const push = eventQueue.push.bind(eventQueue);
+      eventQueue.push = (event) => {
+        // Only events the queue accepted count: a refused (ended-queue) event never reaches the user.
+        const accepted = push(event);
+        if (accepted) autoReviewAgentText.observe(event);
+        return accepted;
+      };
+    }
     const usageTracker = new UsageTracker();
     const translatorRt: CodexRuntimeState = newCodexRuntimeState();
     const liveUsageSnapshot = () => {
@@ -4315,7 +4345,7 @@ assertRouteCurrent();
     const turnRetryTracker = new TurnRetryTracker();
     // 上下文压缩不收敛的终局升级 (见 compaction-storm.ts): codex 按陈旧窗口反复
     // 压缩、每次压完水位纹丝不动时, 本地熔断并合成终态错误, 与上面的 retry-loop
-    // 升级同路径 (onUpstreamIdleTimeout)。
+    // 升级同路径 (interruptTurnForProviderFailure)。
     const compactionStormTracker = new CompactionStormTracker();
     /**
      * 会话中途切过模型的记录 (from = 本会话最初那个模型)。只服务压缩风暴的诊断
@@ -4852,8 +4882,10 @@ assertRouteCurrent();
     let currentAutoReviewAuthority: ReturnType<typeof autoReviewContext>;
     const priorAutoReviewIntent = () => !autoReviewIntentInitialized ? undefined : JSON.stringify(currentAutoReviewAuthority ?? null) === JSON.stringify(autoReviewContext() ?? null) ? currentAutoReviewIntent : '';
     const autoReviewDecisionCache = new Map<string, Promise<AutoReviewDecision>>();
-    const setAutoReviewIntent = (content: AutoReviewUserIntent, source = { authority: currentAutoReviewAuthority }): void => {
+    // A synthetic continuation is not new user input, so it must not move the reply the user answered.
+    const setAutoReviewIntent = (content: AutoReviewUserIntent, source = { authority: currentAutoReviewAuthority }, newUserInput = true): void => {
       autoReviewActionContext.advance(typeof content !== 'string' && JSON.stringify(currentAutoReviewAuthority ?? null) === JSON.stringify(source.authority ?? null));
+      if (newUserInput) autoReviewAgentText.beginUserInput();
       currentAutoReviewIntent = normalizeAutoReviewUserIntent(content);
       autoReviewIntentInitialized = true;
       currentAutoReviewAuthority = source.authority && { ...source.authority };
@@ -4974,7 +5006,9 @@ assertRouteCurrent();
       ...(!reviewMode && !opts[LOCAL_AGENT_CLIENT]?.hostToolsOnly && shouldRegisterAskUserDynamicTool(opts) ? [ASK_USER_DYNAMIC_TOOL] : []),
     ];
     const accountProviderId = this.deps.isCodexAccountProvider?.(opts.providerId) ? opts.providerId! : undefined;
-    const accountSessionHost = !opts.remoteHostId && (accountProviderId !== undefined || this.deps.isolateCodexAccountSessions === true);
+    const nativeSubscriptionAccount = opts[NATIVE_SUBSCRIPTION_ACCOUNT];
+    nativeSubscriptionAccount?.assertCurrent();
+    const accountSessionHost = !opts.remoteHostId && (nativeSubscriptionAccount !== undefined || accountProviderId !== undefined || this.deps.isolateCodexAccountSessions === true);
     if (opts.remoteHostId && accountProviderId) throw new Error('This Codex account belongs to the local device');
     const startupRouteSignal = this.routeResolutionAbort.signal;
     let routeSelection = opts.remoteHostId
@@ -5028,6 +5062,7 @@ assertRouteCurrent();
       setOpts?: { providerId?: string | null },
     ): Promise<boolean> => {
       const nextProvider = setOpts && Object.hasOwn(setOpts, 'providerId') ? setOpts.providerId : mutableProviderId;
+      if (nativeSubscriptionAccount && nextProvider !== opts.providerId) return true;
       if ((this.deps.isCodexAccountProvider?.(nextProvider) ? nextProvider : undefined) !== accountProviderId) return true;
       for (let attempt = 0; ; attempt++) {
         const selection = opts.remoteHostId ? null : await this.resolveLocalAuthSelection(
@@ -5072,7 +5107,8 @@ assertRouteCurrent();
       reviewMode, customContext: usesCustomContextHost, storage: sessionStorage, policy: localAuthPolicy,
       environmentIdentity: companionEnvironment?.identity,
       ...(guestCodexHome ? { guestSession: true } : {}),
-    }) + (localToolCatalog ? `:host-tools-only:${opts.model ?? ''}` : '');
+    }) + (nativeSubscriptionAccount ? `:subscription:${nativeSubscriptionAccount.id}` : '')
+      + (localToolCatalog ? `:host-tools-only:${opts.model ?? ''}` : '');
     let currentHostKey = resolveSessionHostKey();
     let releaseHostBindingLease: (() => void) | null = null;
     const acquireHostBindingLeaseIfNeeded = (): void => {
@@ -5093,6 +5129,7 @@ assertRouteCurrent();
       if (!routeSelection.isCurrent()) throw new CodexRouteSelectionChangedError();
       acquireHostBindingLeaseIfNeeded();
       return await this.getHost(opts.remoteHostId, credentialMode, {
+        nativeSubscriptionAccount,
         ...(localToolCatalog ? {keyOverride:currentHostKey,localToolCatalog} : {}),
         ...(companionEnvironment ? { keyOverride: currentHostKey } : {}),
         ...(accountProviderId ? { providerId: accountProviderId } : {}),
@@ -5313,7 +5350,7 @@ assertRouteCurrent();
       throw error;
     }
     const sessionCodexHome = initResp.codexHome ?? null;
-    if (initResp.codexHome && !accountProviderId && !sessionStorage) this.codexHome = initResp.codexHome;
+    if (initResp.codexHome && !accountProviderId && !nativeSubscriptionAccount && !sessionStorage) this.codexHome = initResp.codexHome;
     // reviewer 路由的凭证模式判定: 远程 daemon 用的是 auth sync 推过去的
     // 同一份订阅凭证, reviewer 调用发生在 daemon 本地 — 订阅下走 daemon →
     // chatgpt.com 直连, 与本地订阅同构 (远端出网由用户网络或 agent-proxy
@@ -5705,7 +5742,7 @@ assertRouteCurrent();
     // 关掉抹平 → fail-closed(不把远端 /private/tmp 误当 /tmp 区内)。本地用真实 process.platform。
     // 定义在此(startSession 作用域,opts=session)以避开 awaitApprovalDecision 内层 opts 的遮蔽。
     const sessionReviewPlatform: NodeJS.Platform = opts.remoteHostId ? 'linux' : hosted ? hosted.platform : process.platform;
-    const reviewAutoAction = (action: ReviewableAction, hostAutoApprove = false, hostShortcutOnly = false): Promise<AutoReviewDecision> => {
+    const reviewAutoAction = (action: ReviewableAction, hostAutoApprove = false, hostShortcutOnly = false, subagentCall = false): Promise<AutoReviewDecision> => {
       const directoryGeneration = autoReviewDirectoryGeneration;
       const request = {
         sessionId: opts.sessionId,
@@ -5717,6 +5754,7 @@ assertRouteCurrent();
         model: mutableCatalogModel ?? mutableModel,
         userIntent: currentAutoReviewIntent,
         precedingBlockedActions: autoReviewActionContext.precedingBlockedActions,
+        ...((agentContext) => agentContext ? { agentContext } : {})(autoReviewAgentText.snapshot(undefined, !subagentCall)),
         ...(currentAutoReviewAuthority ? { authorizationContext: currentAutoReviewAuthority } : {}),
         action,
         workspaceRoots: runtimeWorkspaceRoots().filter(
@@ -7793,6 +7831,8 @@ assertRouteCurrent();
     const seenGuardianReviewIds = new Set<string>();
     const userInputBroker = new CodexInteractionBroker<ToolRequestUserInputResponse>();
     const dynamicToolBroker = new CodexInteractionBroker<DynamicToolCallResponse>();
+    const elicitationBroker = new CodexInteractionBroker<McpServerElicitationRequestResponse>();
+    const cancelledElicitation = (): McpServerElicitationRequestResponse => ({ action: 'cancel', content: null, _meta: null });
     const activeToolContexts = new Map<string, ActiveToolContext>();
     const approvalDenials = new Map<string, { turnId: string; reason: string }>();
     const approvalDenialKey = (thread: string, turn: string, item: string) => JSON.stringify([thread, turn, item]);
@@ -8116,6 +8156,8 @@ assertRouteCurrent();
                 : opts.autoReviewAction,
               opts?.hostAutoApprove === true && !forcePrompt,
               reviewPermissionMode !== 'auto',
+              // A subagent's call must not borrow the main agent's explanation.
+              descendant,
             );
           } finally {
             if (pendingApprovals.get(requestId) === reviewEntry) pendingApprovals.delete(requestId);
@@ -8301,6 +8343,9 @@ assertRouteCurrent();
       predicate: (meta: { threadId?: string; turnId?: string | null }) => boolean,
     ): void {
       const dismissed = new Set<string>();
+      for (const meta of elicitationBroker.cancelWhere(predicate, cancelledElicitation())) {
+        dismissLiveAskUser(serverInteractionId(meta.requestId), reason);
+      }
       const cancelledUserInput = userInputBroker.cancelWhere(
         predicate,
         { answers: {} },
@@ -8328,6 +8373,9 @@ assertRouteCurrent();
     }
 
     function detachPendingAskUserForSuccessfulTurn(turnId: string): void {
+      for (const meta of elicitationBroker.cancelWhere((meta) => meta.turnId === turnId, cancelledElicitation())) {
+        dismissLiveAskUser(serverInteractionId(meta.requestId), 'turn_completed');
+      }
       const cancelledUserInput = userInputBroker.cancelWhere(
         (meta) => meta.turnId === turnId,
         { answers: {} },
@@ -8441,9 +8489,9 @@ assertRouteCurrent();
     const turnsCompletedBeforeStartResp = new Set<string>();
     /**
      * @param opts.suppressFailureEvent 终失败时不推 'permission-tighten-interrupt-failed'
-     *        非终态 error。给 upstream-idle watchdog 用:它已经推过一条终态 error,
+     *        非终态 error。给 provider failure cleanup 用:调用方负责推终态 error,
      *        再补一条"收紧权限时没能停下任务"既词不达意也是重复打扰;它对失败的处置
-     *        是直接作废 host(见 onUpstreamIdleTimeout)。
+     *        是直接作废 host(见 interruptTurnForProviderFailure)。
      * @returns true = app-server 确认收到中断;false = 两次 ack 都超时/报错(daemon
      *          对我们哑火)。调用方据此决定要不要升级处置;忽略返回值即维持原行为。
      */
@@ -8671,7 +8719,7 @@ assertRouteCurrent();
           armUpstreamIdleSlice();
           return;
         }
-        onUpstreamIdleTimeout();
+        interruptTurnForProviderFailure();
       }, slice);
       (upstreamIdleTimer as unknown as { unref?: () => void }).unref?.();
     }
@@ -8780,7 +8828,7 @@ assertRouteCurrent();
             threadId !== stalledThreadId ||
             reconnectStallTurnGeneration !== stalledTurnGeneration
           ) return;
-          onUpstreamIdleTimeout({
+          interruptTurnForProviderFailure({
             reason,
             timeoutMs: CODEX_RECONNECT_STALL_TIMEOUT_MS,
             ignorePendingTools: true,
@@ -8880,17 +8928,17 @@ assertRouteCurrent();
       }
     }
     /**
-     * 上游连续静默超阈值:daemon 对我们彻底哑火。推一条终态 error 收口(renderer 停
-     * 转圈 / scheduler 把 run 记 failed / IM 转播 finalize),再 turn/interrupt 让
-     * daemon 侧那个 turn 停掉(与用户手动 Stop 同路径,thread 保持可用)。
+     * Interrupt the current native turn after a watchdog timeout or a definitive
+     * provider rejection. Use the same bounded cleanup before releasing a turn.
      */
-    function onUpstreamIdleTimeout(opts?: {
+    function interruptTurnForProviderFailure(opts?: {
       reason?: string;
       timeoutMs?: number;
       message?: string;
       logLabel?: string;
       ignorePendingTools?: boolean;
       allowPendingTurnStart?: boolean;
+      modelRejectionError?: Parameters<typeof finishCodexSamplingTurn>[4];
     }): void {
       if (closed) return;
       const pendingTurnId =
@@ -8904,8 +8952,9 @@ assertRouteCurrent();
         upstreamIdleLastEventAt > 0 ? Date.now() - upstreamIdleLastEventAt : null;
       const turnId = currentTurnId ?? pendingTurnId;
       const timeoutReason = opts?.reason ?? 'upstream_response_idle_timeout';
+      const isModelRejection = timeoutReason === CODEX_MODEL_UNAVAILABLE_REASON;
       const deferTurnCleanupUntilInterrupt =
-        timeoutReason === 'codex_reconnect_stalled' ||
+        isModelRejection || timeoutReason === 'codex_reconnect_stalled' ||
         timeoutReason === 'upstream_response_idle_timeout';
       if (deferTurnCleanupUntilInterrupt && !pendingTurnId && turnId) {
         // Keep Session.isTurnRunning() true until the interrupt ACK (or the
@@ -8924,34 +8973,40 @@ assertRouteCurrent();
       // 先立终态墓碑:下面合成的本地收口据此走 suppressTerminalUi 分支(只清状态、
       // 不再推一遍终态 UI),迟到的 item / error 也一并被 stale guard 拦住。
       if (turnId) terminalErroredTurnIds.add(turnId);
-      const timeoutEvent: AgentEvent = {
-        type: 'error',
-        data: {
-          // reason 与 claude-code 侧共用同一稳定 key(renderer i18n 映射,规则 18);
-          // message 仅作非 renderer 消费方(IM / orca / 日志)的英文兜底。
-          reason: timeoutReason,
-          message: opts?.message ??
-            (`The upstream response has been silent for ${Math.round(idleMs / 1000)}s; ` +
-              'the turn was interrupted automatically to avoid hanging forever. ' +
-              'You can send the next message to continue.'),
-          isTerminal: true,
-          idleMs,
-          lastEventType: upstreamIdleLastEventType,
-          msSinceLastEvent: msSinceLast,
-        },
-        source: 'codex',
+      const timeoutData = {
+        // reason 与 claude-code 侧共用同一稳定 key(renderer i18n 映射,规则 18);
+        // message 仅作非 renderer 消费方(IM / orca / 日志)的英文兜底。
+        reason: timeoutReason,
+        message: opts?.message ??
+          (`The upstream response has been silent for ${Math.round(idleMs / 1000)}s; ` +
+            'the turn was interrupted automatically to avoid hanging forever. ' +
+            'You can send the next message to continue.'),
+        isTerminal: true,
+        ...(isModelRejection ? { willRetry: false } : {
+          idleMs, lastEventType: upstreamIdleLastEventType, msSinceLastEvent: msSinceLast,
+        }),
       };
-      // Publish a reconnect timeout only after interrupt settles: a late successful
+      // Publish the failure only after interrupt settles: a late successful
       // completion must win, and recovery must not race the still-running turn.
       const deferTimeoutError =
-        timeoutReason === 'codex_reconnect_stalled' &&
+        (isModelRejection || timeoutReason === 'codex_reconnect_stalled') &&
         !pendingTurnId && !!turnId;
       const interruptedSend = overloadRetry;
       let timeoutEmitted = false;
       const emitTimeout = (settled = false): void => {
         if (timeoutEmitted || closed) return;
         timeoutEmitted = true;
-        if (!deferTimeoutError || !interruptedSend?.isCancelled()) eventQueue.push(timeoutEvent);
+        if (!deferTimeoutError || !interruptedSend?.isCancelled()) {
+          const assistantAttemptFailure = isModelRejection && turnId
+            ? finishCodexSamplingTurn(translatorRt, threadId, turnId, 'failed', opts?.modelRejectionError)
+            : undefined;
+          if (assistantAttemptFailure && turnId) assistantReplyByTurn.delete(turnId);
+          eventQueue.push({
+            type: 'error',
+            data: { ...timeoutData, ...(assistantAttemptFailure ? { assistantAttemptFailure } : {}) },
+            source: 'codex',
+          });
+        }
         if (deferTimeoutError && settled) {
           // Session drains terminal errors with an idle tail. Do not leave its
           // drain watchdog armed when Main cannot recover this thread.
@@ -8962,7 +9017,7 @@ assertRouteCurrent();
           });
         }
       };
-      if (deferTimeoutError) {
+      if (deferTimeoutError && !isModelRejection) {
         eventQueue.push({
           type: 'status',
           data: {
@@ -8971,7 +9026,7 @@ assertRouteCurrent();
           },
           source: 'codex',
         });
-      } else emitTimeout();
+      } else if (!deferTimeoutError) emitTimeout();
       if (pendingTurnId) {
         // 重连提示可能早于 turnStarted 到达。此时 turn/start 仍在飞，不能只清掉
         // 看门狗：迟到的 response / turnStarted 必须被隔离，否则用户已经看到终态后
@@ -9142,7 +9197,9 @@ assertRouteCurrent();
         // 推过自己的终态 error 并在 close 里解除了订阅,不必再收一遍。
         try {
           await retireUnresponsiveHost(
-            `codex app-server unresponsive: no upstream activity for ${Math.round(idleMs / 1000)}s and turn/interrupt was never acknowledged`,
+            isModelRejection
+              ? 'codex app-server unresponsive: turn/interrupt after model rejection was never acknowledged'
+              : `codex app-server unresponsive: no upstream activity for ${Math.round(idleMs / 1000)}s and turn/interrupt was never acknowledged`,
           );
         } catch (e) {
           log.warn('upstream-idle watchdog host retire threw', { error: String(e) });
@@ -9178,26 +9235,35 @@ assertRouteCurrent();
     // ── ServerRequest handlers (Phase 2 approval, Phase 5 dismiss-on-mode-change) ──
     const commandExecutionApproval = async (
       params: CommandExecutionRequestApprovalParams,
+      rpc?: { requestId: string | number },
     ): Promise<CommandExecutionRequestApprovalResponse> => {
       if (reviewMode) return { decision: 'decline' };
       // buffered/墓碑 turn 的审批请求不得上 UI (codex R12 P1) — 孤儿直接拒。
       const turnGate = gateServerRequestTurn(params.turnId, params.threadId);
       if (turnGate === false) return { decision: 'decline' };
       if (turnGate instanceof Promise && !(await turnGate)) return { decision: 'decline' };
-      // requestId: approvalId 优先 (zsh-exec-bridge 多 callback 场景); 否则用 itemId
-      const requestId = params.approvalId ?? params.itemId;
+      // RPC identity owns cancellation; itemId remains the execution identity.
+      const requestId = rpc ? serverInteractionId(rpc.requestId) : params.approvalId ?? params.itemId;
+      if (rpc && resolvedWhileBufferedRequestIds.delete(String(rpc.requestId))) return { decision: 'cancel' };
       const decision = await awaitApprovalDecision(params.threadId, params.turnId, requestId, 'commandExecution', {
         kind: 'permission',
         requestId,
         toolUseId: params.itemId,
-        toolName: 'exec',
-        input: commandExecutionDisplayInput(params.command ?? '', params.cwd ?? ''),
-        title: 'Allow Codex to run this command?',
+        toolName: params.kind === 'writeStdin' ? 'write_stdin' : 'exec',
+        input: {
+          ...commandExecutionDisplayInput(params.command ?? '', params.cwd ?? ''),
+          ...(params.kind ? { approvalKind: params.kind } : {}),
+          ...(params.environmentId ? { environmentId: params.environmentId } : {}),
+          ...(params.networkApprovalContext ? { networkApprovalContext: params.networkApprovalContext } : {}),
+        },
+        title: params.kind === 'writeStdin' ? 'Allow Codex to send input to this terminal?' : 'Allow Codex to run this command?',
         description: params.reason ?? undefined,
         suggestions: commandSupportsAcceptForSession(params) ? codexSessionApprovalSuggestions() : undefined,
         metadata: params.reason ? { reason: params.reason } : undefined,
       }, {
-        autoReviewAction: {
+        autoReviewAction: params.kind === 'writeStdin' || params.networkApprovalContext || params.environmentId
+          ? { kind: 'other', description: JSON.stringify({ kind: params.kind ?? 'command', command: params.command, cwd: params.cwd, environmentId: params.environmentId, networkApprovalContext: params.networkApprovalContext }) }
+          : {
           kind: 'exec',
           command: params.command ?? '',
           ...(opts.remoteHostId ? { destructivePathResolution: 'unavailable' as const } : {}),
@@ -9216,13 +9282,15 @@ assertRouteCurrent();
 
     const fileChangeApproval = async (
       params: FileChangeRequestApprovalParams,
+      rpc?: { requestId: string | number },
     ): Promise<FileChangeRequestApprovalResponse> => {
       if (reviewMode) return { decision: 'decline' };
       // buffered/墓碑 turn 的审批请求不得上 UI (codex R12 P1) — 孤儿直接拒。
       const turnGate = gateServerRequestTurn(params.turnId, params.threadId);
       if (turnGate === false) return { decision: 'decline' };
       if (turnGate instanceof Promise && !(await turnGate)) return { decision: 'decline' };
-      const requestId = params.itemId;
+      const requestId = rpc ? serverInteractionId(rpc.requestId) : params.itemId;
+      if (rpc && resolvedWhileBufferedRequestIds.delete(String(rpc.requestId))) return { decision: 'cancel' };
       const activeChange = activeToolContexts.get(params.itemId);
       const changes = params.changes ?? (activeChange?.type === 'fileChange' && activeChange.turnId === params.turnId
         ? activeChange.changes : undefined);
@@ -9403,6 +9471,7 @@ assertRouteCurrent();
 
     const mcpServerElicitation = async (
       params: McpServerElicitationRequestParams,
+      rpc?: { requestId: string | number },
     ): Promise<McpServerElicitationRequestResponse> => {
       if (reviewMode) return { action: 'decline', content: null, _meta: null };
       // buffered/墓碑 turn 的 elicitation 不得上 UI / auto-approve (codex R12 P1)。
@@ -9412,11 +9481,32 @@ assertRouteCurrent();
         return { action: 'decline', content: null, _meta: null };
       }
       if (!isMcpToolApprovalElicitation(params)) {
-        log.warn('unsupported MCP server elicitation -> decline', {
-          serverName: params.serverName,
-          mode: params.mode,
+        const rawId = rpc?.requestId ?? `mcp-elicitation:${++mcpElicitationSeq}`;
+        const requestId = serverInteractionId(rawId);
+        if (resolvedWhileBufferedRequestIds.delete(String(rawId))) return cancelledElicitation();
+        const form = params.mode === 'form' ? parseMcpElicitationForm(params.requestedSchema, params.message) : undefined;
+        const url = params.mode === 'url' ? mcpElicitationUrl(params.url) : undefined;
+        if (!form && !url) {
+          eventQueue.push({ type: 'error', data: {
+            message: `Cindy cannot display this MCP request from ${params.serverName} (${params.mode}). Ask the server to use an ordinary non-secret text, boolean or single-choice form, or an HTTP(S) link. Unsupported schema constraints (including pattern/format) cannot be accepted.`,
+            isTerminal: false,
+          }, source: 'codex' });
+          return cancelledElicitation();
+        }
+        // Elicitation asks for information/completion, never permission to run a
+        // tool: Full access, Auto review and mode changes must not answer it.
+        return elicitationBroker.track({ connectionId, requestId: rawId, kind: 'mcp_elicitation',
+          threadId: params.threadId, turnId: params.turnId }, async (settle) => {
+          const decision = await dispatchInteraction(form ? {
+            kind: 'ask_user_question', requestId, questions: form.questions,
+          } : {
+            kind: 'permission', requestId, toolName: 'mcp_url',
+            title: params.serverName, description: params.message, input: { url: url!, serverName: params.serverName },
+          });
+          const content = form ? mcpElicitationFormContent(form, decision) : null;
+          const accepted = form ? content !== undefined : decision.kind === 'permission' && decision.behavior === 'allow';
+          settle({ action: accepted ? 'accept' : 'cancel', content: content ?? null, _meta: null });
         });
-        return { action: 'decline', content: null, _meta: null };
       }
 
       const capabilityRoute = findCapabilityRouteOverride(
@@ -9491,7 +9581,8 @@ assertRouteCurrent();
       const toolTitle = stringFromMeta(meta, 'tool_title');
       const innerToolName = mcpInnerToolName(params);
       const toolUseId = activeMcpToolUseId(params);
-      const requestId = `mcp-elicitation:${params.serverName}:${params.turnId ?? params.threadId}:${++mcpElicitationSeq}`;
+      const requestId = rpc ? serverInteractionId(rpc.requestId) : `mcp-elicitation:${params.serverName}:${params.turnId ?? params.threadId}:${++mcpElicitationSeq}`;
+      if (rpc && resolvedWhileBufferedRequestIds.delete(String(rpc.requestId))) return { action: 'cancel', content: null, _meta: null };
       const decision = await awaitApprovalDecision(
         params.threadId,
         params.turnId,
@@ -9541,6 +9632,7 @@ assertRouteCurrent();
 
     const permissionsApproval = async (
       params: PermissionsRequestApprovalParams,
+      rpc?: { requestId: string | number },
     ): Promise<PermissionsRequestApprovalResponse> => {
       if (reviewMode) return { permissions: {}, scope: 'turn' };
       // buffered/墓碑 turn 的审批请求不得上 UI (codex R12 P1) — 孤儿直接拒
@@ -9548,7 +9640,8 @@ assertRouteCurrent();
       const turnGate = gateServerRequestTurn(params.turnId, params.threadId);
       if (turnGate === false) return { permissions: {}, scope: 'turn' };
       if (turnGate instanceof Promise && !(await turnGate)) return { permissions: {}, scope: 'turn' };
-      const requestId = params.itemId ?? params.turnId;
+      const requestId = rpc ? serverInteractionId(rpc.requestId) : params.itemId ?? params.turnId;
+      if (rpc && resolvedWhileBufferedRequestIds.delete(String(rpc.requestId))) return { permissions: {}, scope: 'turn' };
       // Capability changes share the same decision lifecycle as command approvals.
       // Auto reviews their complete permission payload rather than inventing a command.
       const decision = await awaitApprovalDecision(params.threadId, params.turnId, requestId, 'commandExecution', {
@@ -9716,6 +9809,7 @@ assertRouteCurrent();
       isRequestPending: () => boolean = () => true,
       toolUseId?: string,
       delivery?: 'async',
+      isBlocking?: boolean,
     ): Promise<ToolRequestUserInputResponse> {
       if (questions.some((q) => q.isSecret)) {
         log.warn('requestUserInput secret question refused', {
@@ -9771,7 +9865,7 @@ assertRouteCurrent();
             turnId,
           });
           return isRequestPending()
-            ? askUserViaInteraction(requestId, questions, turnId, isRequestPending, toolUseId, delivery)
+            ? askUserViaInteraction(requestId, questions, turnId, isRequestPending, toolUseId, delivery, isBlocking)
             : emptyUserInputResponse(questions);
         }
         return responseFromUserInputAnswersByPosition(questions, joined.answersByPosition);
@@ -9799,6 +9893,7 @@ assertRouteCurrent();
           ...(toolUseId ? { toolUseId } : {}),
           ...(delivery ? { delivery } : {}),
           questions: questionsToAskUserItems(questions),
+          ...(isBlocking === false ? { isBlocking: false } : {}),
         });
         if (decision.kind !== 'ask_user_question') {
           log.warn('requestUserInput got mismatched ask decision', { requestId, decKind: decision.kind });
@@ -9825,7 +9920,7 @@ assertRouteCurrent();
         // currentAutoReviewIntent；plan_review 已用 planRequestAutoReviewIntent 防漂。
         const continuationAutoReviewIntent = composeAutoReviewIntentWithClarification(
           live?.autoReviewIntent ?? currentAutoReviewIntent,
-          Object.entries(decision.answers ?? {}).map(([question, answer]) => ({ question, answer })),
+          questions.map((q) => ({ question: q.question, answer: decision.answers[q.id] ?? decision.answers[q.question] ?? '' })),
         );
         setAutoReviewIntent(continuationAutoReviewIntent);
         if (
@@ -9911,7 +10006,7 @@ assertRouteCurrent();
     ): boolean {
       const rawQuestions = asyncUserInputQuestions(params.item);
       if (!rawQuestions) return false;
-      // Do not render the fallback prose as a final answer or open child-agent cards.
+      // Only the completed root message opens the question editor. Its prose remains in history.
       if (phase !== 'completed' || reviewMode || params.threadId !== threadId) return true;
       let seen = asyncQuestionItemsByTurn.get(params.turnId);
       if (seen?.has(params.item.id)) return true;
@@ -9921,7 +10016,7 @@ assertRouteCurrent();
       void askUserViaInteraction(requestId, normalizeRequestUserInputQuestions(rawQuestions),
         params.turnId, () => !closed && !completedTurnIds.has(params.turnId), undefined, 'async')
         .catch((error: unknown) => log.warn('async user input interaction failed', { requestId, error: String(error) }));
-      return true;
+      return false;
     }
 
     async function requestUserInputAsPermission(
@@ -10026,6 +10121,8 @@ assertRouteCurrent();
                 params.turnId,
                 () => userInputBroker.has({ connectionId, requestId: meta.requestId }),
                 params.itemId,
+                undefined,
+                params.isBlocking,
               );
           settle(response);
         },
@@ -10142,17 +10239,20 @@ assertRouteCurrent();
     function handleServerRequestResolved(params: ServerRequestResolvedNotification['params']): void {
       const requestId = String(params.requestId);
       const uiRequestId = serverInteractionId(params.requestId);
-      const pendingApproval = pendingApprovals.get(requestId);
+      const approvalKey = pendingApprovals.has(uiRequestId) ? uiRequestId : requestId;
+      const pendingApproval = pendingApprovals.get(approvalKey);
       let approvalCancelled = false;
       if (pendingApproval && !pendingApproval.settled) {
         pendingApproval.settled = true;
-        pendingApprovals.delete(requestId);
+        pendingApprovals.delete(approvalKey);
         pendingApproval.resolve('decline');
         approvalCancelled = true;
       }
       const brokerKey = { connectionId, requestId: params.requestId };
       const userInputPending = userInputBroker.has(brokerKey);
       const dynamicPending = dynamicToolBroker.has(brokerKey);
+      const elicitationCancelled = elicitationBroker.cancel(brokerKey, cancelledElicitation());
+      if (elicitationCancelled) dismissLiveAskUser(uiRequestId, 'server_request_resolved');
       if (userInputPending || dynamicPending) {
         // Wake joined duplicates before settling the owner's outer broker
         // response. Also remove the live question synchronously: turn/completed
@@ -10174,11 +10274,11 @@ assertRouteCurrent();
       if (approvalCancelled) {
         eventQueue.push({
           type: 'interaction_dismissed',
-          data: { requestId, reason: 'server_request_resolved', resolvedAs: 'deny' },
+          data: { requestId: approvalKey, reason: 'server_request_resolved', resolvedAs: 'deny' },
           source: 'codex',
         });
       }
-      if (!approvalCancelled && !userInputCancelled && !dynamicCancelled && bufferedOrphanTurnIds.size > 0) {
+      if (!approvalCancelled && !userInputCancelled && !dynamicCancelled && !elicitationCancelled && bufferedOrphanTurnIds.size > 0) {
         // cancel 未命中且有 buffered turn: 可能是挂起中的请求 (尚未注册到
         // broker) 被服务端取消 (greptile R13 P1) — 记下 requestId, 对账放行
         // 后 handler 自查回空响应, 不上 UI。requestId 是一次性的 (消费即删),
@@ -10823,6 +10923,7 @@ assertRouteCurrent();
       deadTurnId: string,
       error: { message?: string; additionalDetails?: unknown; codexErrorInfo?: CodexErrorInfo | null } | null | undefined,
     ): boolean => {
+      if (isCodexModelUnavailableError(error)) return false;
       const state = overloadRetry;
       const summaryRecovery = canRecoverRemoteCompaction(deadTurnId, error);
       if (
@@ -10913,6 +11014,11 @@ assertRouteCurrent();
         recoveryState?.pendingAutomaticRecovery?.deadTurnId === turn.id
           ? recoveryState.pendingAutomaticRecovery
           : null;
+      if (recoveryState && pendingRecovery && isCodexModelUnavailableError(turn.error)) {
+        // An authoritative model rejection can arrive after a recovery intent.
+        recoveryState.pendingAutomaticRecovery = null;
+        pendingRecovery = null;
+      }
       if (
         turn.status === 'failed'
         && (!terminalErroredTurnIds.has(turn.id) || pendingRecovery)
@@ -12407,7 +12513,7 @@ assertRouteCurrent();
           // ignorePendingTools: idle watchdog 停表是因为"球在 daemon 手里, 不该算它
           // 超时"; 而这里的判据是"压缩本身失效了", 与球在谁手里无关。留着那道闸只会
           // 让残留的未收口工具条目把熔断挡在门外, 用户继续看着它循环。
-          onUpstreamIdleTimeout({
+          interruptTurnForProviderFailure({
             reason,
             message,
             logLabel: 'compaction storm — interrupting current turn',
@@ -12861,6 +12967,26 @@ assertRouteCurrent();
             && (!idLessCapacityError || idLessCapacityTargetsActiveTurn))
           || targetsPendingTurn
           || targetsIdLessPendingStart;
+        // Interrupt only an identified active turn. Generic reconnect notices
+        // and errors without a turn ID do not prove this turn's model was rejected.
+        if (
+          !isTerminalError && !isTransportError && isTurnInFlight &&
+          params.threadId === threadId && params.turnId && params.turnId === currentTurnId &&
+          isCodexModelUnavailableError(params.error)
+        ) {
+          if (reconnectStallCleanupTurnId === params.turnId || skipIfStaleHost('turn/interrupt')) return;
+          if (overloadRetry?.pendingAutomaticRecovery?.deadTurnId === params.turnId) {
+            overloadRetry.pendingAutomaticRecovery = null;
+          }
+          interruptTurnForProviderFailure({
+            reason: CODEX_MODEL_UNAVAILABLE_REASON,
+            message: CODEX_MODEL_UNAVAILABLE_MESSAGE,
+            logLabel: 'Codex rejected the selected model — interrupting current turn',
+            ignorePendingTools: true,
+            modelRejectionError: params.error,
+          });
+          return;
+        }
         if (
           !isTerminalError &&
           targetsCurrentTurn &&
@@ -12996,7 +13122,7 @@ assertRouteCurrent();
           tryTakeOverTerminalRateLimit: () => {
             // willRetry=true 仍归 daemon 自己退避，绝不叠第二层。这里只接它已经明确
             // 耗尽内部 retry budget 的终态 429；usageLimitExceeded 由判定器排除。
-            if (params.willRetry === true) return null;
+            if (params.willRetry === true || isCodexModelUnavailableError(effectiveParams.error)) return null;
             const rawMessage = effectiveParams.error?.message ?? '';
             const signals = extractNonSecretErrorSignals(rawMessage);
             if (
@@ -13339,7 +13465,7 @@ assertRouteCurrent();
           autoReviewIntent !== currentAutoReviewIntent
           || JSON.stringify(currentAutoReviewAuthority ?? null) !== JSON.stringify(autoReviewContext() ?? null)
         ) {
-          setAutoReviewIntent(autoReviewIntent ?? appendAutoReviewUserIntent(priorAutoReviewIntent(), message.content, sendOpts), { authority: autoReviewContext() });
+          setAutoReviewIntent(autoReviewIntent ?? appendAutoReviewUserIntent(priorAutoReviewIntent(), message.content, sendOpts), { authority: autoReviewContext() }, isAutoReviewNewUserInput(sendOpts));
         }
         assertCurrentHost('turn/start');
         // 本条消息的计划意图:sendOpts.planMode 是点击发送瞬间的快照(排队行透传),
@@ -14106,7 +14232,7 @@ assertRouteCurrent();
             turnId: steeredTurnId,
           });
         }
-        setAutoReviewIntent(appendAutoReviewUserIntent(priorAutoReviewIntent(), message.content, sendOpts));
+        setAutoReviewIntent(appendAutoReviewUserIntent(priorAutoReviewIntent(), message.content, sendOpts), undefined, isAutoReviewNewUserInput(sendOpts));
       },
 
       async requestGracefulStop(stopOpts) {
@@ -14941,6 +15067,8 @@ assertRouteCurrent();
   }
 
   async forkSdkSession(opts: ForkSdkSessionOptions): Promise<ForkSdkSessionResult> {
+    const nativeSubscriptionAccount = opts[NATIVE_SUBSCRIPTION_ACCOUNT];
+    nativeSubscriptionAccount?.assertCurrent();
     const log = this.deps.logger.child('codex/fork');
     const tailTurnsToDrop = normalizeTailTurnsToDrop(opts.tailTurnsToDrop);
     let lastTurnId = normalizeNativeForkTurnId(opts.lastTurnId);
@@ -15024,11 +15152,13 @@ assertRouteCurrent();
       }
       // Source history inspection must not depend on the credentials we are leaving.
       let preparedSourcePath = opts.stripEncryptedReasoning && !guestCodexHome
-        ? await this.deps.prepareCodexResumeSession?.(opts.sourceSdkSessionId)
+        ? nativeSubscriptionAccount
+          ? await this.deps.prepareCodexResumeSession?.(opts.sourceSdkSessionId, { codexHome: nativeSubscriptionAccount.configDir })
+          : await this.deps.prepareCodexResumeSession?.(opts.sourceSdkSessionId)
         : undefined;
       let historyChecked = false;
       if (opts.stripEncryptedReasoning && (preparedSourcePath || this.codexHome)) {
-        await assertCodexRolloutRewriteSupported(preparedSourcePath || await this.findRolloutPath(opts.sourceSdkSessionId));
+        await assertCodexRolloutRewriteSupported(preparedSourcePath || await this.findRolloutPath(opts.sourceSdkSessionId, undefined, nativeSubscriptionAccount?.configDir));
         historyChecked = true;
       }
       const forkSqliteHome = forkStorage?.sqliteHome;
@@ -15044,6 +15174,7 @@ assertRouteCurrent();
           try {
             const leased = await this.acquireHostOperation(async () => {
             const host = await this.getHost(undefined, forkCredentialMode, {
+              nativeSubscriptionAccount,
               keyOverride: forkHostKey,
               ...(forkAccountId ? { providerId: forkAccountId } : {}),
               ...(forkSqliteHome ? { sqliteHome: forkSqliteHome } : {}),
@@ -15072,18 +15203,20 @@ assertRouteCurrent();
             // Child rollout discovery scans this.codexHome. The fork host may be
             // the first host started by this process, so hydrate it here.
             forkCodexHome = initResp.codexHome ?? undefined;
-            if (forkCodexHome && !forkAccountId && !forkStorage) this.codexHome = forkCodexHome;
+            if (forkCodexHome && !forkAccountId && !nativeSubscriptionAccount && !forkStorage) this.codexHome = forkCodexHome;
             // Imported Codex threads may still live under another CODEX_HOME. Resume
             // already asks the desktop host to link/adopt their state and rollout;
             // fork must cross the same preparation boundary before thread/fork or the
             // fork app-server cannot resolve a freshly imported thread.
             // A first host may have just created the managed state DB needed for imports.
             stage = 'source-prepare';
-            if (!guestCodexHome) preparedSourcePath ??= await this.deps.prepareCodexResumeSession?.(opts.sourceSdkSessionId);
+            if (!guestCodexHome) preparedSourcePath ??= nativeSubscriptionAccount
+              ? await this.deps.prepareCodexResumeSession?.(opts.sourceSdkSessionId, { codexHome: forkCodexHome ?? nativeSubscriptionAccount.configDir })
+              : await this.deps.prepareCodexResumeSession?.(opts.sourceSdkSessionId);
             if (opts.stripEncryptedReasoning && !historyChecked) {
               // Check before allocating a child: indexed native history must go through
               // Cindy's handoff recovery, never a file rewrite that invalidates Codex's DB.
-              await assertCodexRolloutRewriteSupported(preparedSourcePath || await this.findRolloutPath(opts.sourceSdkSessionId));
+              await assertCodexRolloutRewriteSupported(preparedSourcePath || await this.findRolloutPath(opts.sourceSdkSessionId, undefined, forkCodexHome ?? nativeSubscriptionAccount?.configDir));
             }
             if (
               !lastTurnId && (tailTurnsToDrop > 0 || opts.forkAtTimestampMs !== undefined) && !opts.stripEncryptedReasoning

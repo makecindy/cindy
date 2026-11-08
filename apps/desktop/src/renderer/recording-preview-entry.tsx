@@ -9,13 +9,14 @@ import { RecordingPreview } from './features/region-screenshot/RecordingPreview'
 import { ScreenshotErrorBoundary } from './features/region-screenshot/ScreenshotErrorBoundary';
 import type { RecordingPreviewDocument } from '../shared/regionCapture';
 import { applyFontSettings, getInitialFontSettings } from './hooks/useFontSettings';
-import { getInitialThemeVariant } from './hooks/useTheme';
+import { followLocalThemeChanges, getInitialThemeVariant } from './hooks/useTheme';
 import { bootstrapLocalThemesSync } from './themes/local-themes';
 import { themeService } from './themes/theme-service';
 
 document.documentElement.dataset.platform = window.electronAPI.platform;
 bootstrapLocalThemesSync();
 themeService.applyTheme(getInitialThemeVariant().theme);
+followLocalThemeChanges();
 applyFontSettings(getInitialFontSettings());
 const bridge = window.recordingPreview!;
 function App() {

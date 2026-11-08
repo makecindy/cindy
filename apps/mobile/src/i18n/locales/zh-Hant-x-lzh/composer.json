@@ -66,7 +66,7 @@
     "pasteTimeout": "貼圖處理逾時，請再試。",
     "clipboardReadFailed": "剪貼簿之圖讀取未成，請重錄後再貼。",
     "maxAttachments": "至多加 {{count}} 個附件。",
-    "simulatorNoCamera": "模擬器無相機，請用「照片」自相簿擇之。",
+    "simulatorNoCamera": "模擬器無相機。請由「照片與影片」擇取。",
     "cameraPermission": "相機權限未開，請於系統設定中允許 {{appName}} 使用相機。",
     "photoPermission": "照片權限未開，請於系統設定中允許 {{appName}} 存取照片。",
     "noFileRead": "未讀得可上傳之卷。"

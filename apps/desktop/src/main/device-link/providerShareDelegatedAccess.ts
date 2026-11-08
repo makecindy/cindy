@@ -19,8 +19,8 @@ const MAX_BLOCKED_PEERS = 20_000;
 type Delegate = Extract<RemoteAgentRequest, { op: 'delegate' }>;
 type Access = { shareId: string; memberId: string; providerId: string };
 type Lease = { ownerScope: string; ownerDeviceId: string; access: Access; model: string;
-  generation: string; cleanupEpoch: number; wallUntil: number; monoUntil: number; nonce: string };
-type ReceiptAuthority = Pick<Lease, 'ownerScope' | 'ownerDeviceId' | 'generation' | 'wallUntil' | 'monoUntil'>;
+  generation: string; availability?: boolean; cleanupEpoch: number; wallUntil: number; monoUntil: number; nonce: string };
+type ReceiptAuthority = Pick<Lease, 'ownerScope' | 'ownerDeviceId' | 'generation' | 'availability' | 'wallUntil' | 'monoUntil'>;
 /** One guest peer may have concurrent tasks with different approved models. */
 const leases = new Map<string, Map<string, Lease>>();
 /** Accounting only: never consulted by guest admission, model access, or run lifetime. */
@@ -41,7 +41,7 @@ function retainReceiptAuthority(peer: string, sessionId: string, lease: Lease,
   const key = receiptKey(peer, sessionId);
   receiptOnlyAuthorities.delete(key);
   receiptOnlyAuthorities.set(key, { ownerScope: lease.ownerScope, ownerDeviceId: lease.ownerDeviceId,
-    generation: lease.generation, wallUntil, monoUntil });
+    generation: lease.generation, availability: lease.availability, wallUntil, monoUntil });
   while (receiptOnlyAuthorities.size > MAX_RECEIPT_AUTHORITIES) {
     receiptOnlyAuthorities.delete(receiptOnlyAuthorities.keys().next().value!);
   }
@@ -80,7 +80,7 @@ function validTask(peer: string, sessionId: string): Lease | null {
 
 /** A grant only comes from a same-account, authenticated device-link peer; runHost checks that before calling. */
 export async function applyProviderShareDelegation(ownerDeviceId: string, request: Delegate,
-  check: typeof checkProviderShareDelegation = checkProviderShareDelegation): Promise<boolean> {
+  check: typeof checkProviderShareDelegation = checkProviderShareDelegation, availability = false): Promise<boolean> {
   if (isProviderSharePeer(ownerDeviceId) || !getDeviceId() || ownerDeviceId === getDeviceId()) {
     throw new Error('REMOTE_AGENT_INVALID');
   }
@@ -172,7 +172,7 @@ export async function applyProviderShareDelegation(ownerDeviceId: string, reques
     next.set(request.sessionId, {
       ownerScope: scope, ownerDeviceId,
       access: { shareId: request.shareId, memberId: request.memberId, providerId: request.providerId },
-      model: request.model, generation: request.generation,
+      model: request.model, generation: request.generation, availability,
       cleanupEpoch: request.cleanupEpoch ?? 0,
       wallUntil: Date.now() + duration, monoUntil: performance.now() + duration,
       nonce: randomUUID(),
@@ -235,14 +235,14 @@ export function delegatedProviderShareOwnerDevice(controller: string, sessionId:
 }
 
 export function delegatedProviderShareReceiptAuthority(controller: string, sessionId: string):
-  { ownerDeviceId: string; generation: string } | null {
+  { ownerDeviceId: string; generation: string; availability?: true } | null {
   // Accounting a finished turn is independent of whether another turn could
   // start now; prune still enforces expiry and the current account scope.
   prune();
   const lease = leases.get(controller)?.get(sessionId);
-  if (lease) return { ownerDeviceId: lease.ownerDeviceId, generation: lease.generation };
+  if (lease) return { ownerDeviceId: lease.ownerDeviceId, generation: lease.generation, ...(lease.availability ? { availability: true as const } : {}) };
   const expired = receiptOnlyAuthorities.get(receiptKey(controller, sessionId));
-  return expired ? { ownerDeviceId: expired.ownerDeviceId, generation: expired.generation } : null;
+  return expired ? { ownerDeviceId: expired.ownerDeviceId, generation: expired.generation, ...(expired.availability ? { availability: true as const } : {}) } : null;
 }
 
 /** An authenticated O's deletion invalidates every old task for exactly this direct guest. */

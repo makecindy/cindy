@@ -180,7 +180,7 @@
 
 本轮补充 16:`ControlActionButton` 现在会把缺少 handler 的入口当作 disabled,避免 controls sheet 动作出现“可点但无动作”的状态。该改动不改变 rename/pin/archive/delete/model/effort/permission/fast/extraDirs/context 的远程协议、capability projection 或锚点。
 
-本轮补充 17:composer 输入框和附件移除状态已回到 shared `buildSessionComposerLayout` 输出,发送中会锁定输入、语音入口和附件调整,附件处理中会锁定附件入口与移除动作。移动端只消费 `composerLayout.input` / `composerLayout.attachment.remove` 渲染原生输入区和附件 chip,不再在页面里分散维护这组状态;enqueue、附件上传、语音转写和 device-link 协议不变。
+本轮补充 17:composer 输入框和附件移除状态已回到 shared `buildSessionComposerLayout` 输出,发送中会锁定语音入口和附件调整；输入框在 2026-11-07 修正为保持可编辑与键盘焦点，完成态仅清除匹配的发送快照，见 `docs/dev-rules/mobile-development.md`「Android 组字与发送快照」。附件处理中会锁定附件入口与移除动作。移动端只消费 `composerLayout.input` / `composerLayout.attachment.remove` 渲染原生输入区和附件 chip,不再在页面里分散维护这组状态;enqueue、附件上传、语音转写和 device-link 协议不变。
 
 本轮补充 18:`ScreenHeader` 左侧返回按钮已从裸 `Pressable` 收敛成内部 `ScreenBackButton`,主窗口 header 的返回入口现在也具备统一 pressed / disabled / accessibility state。该改动不改变返回箭头视觉、`deviceDetail.backButton` / `session.backButton` / `files.backButton` 等锚点,也不改变 `router.back()` 行为。
 

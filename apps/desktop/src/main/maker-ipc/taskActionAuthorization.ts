@@ -21,6 +21,7 @@ export const TASK_ACTION_TOOLS: ReadonlySet<string> = new Set([
   'update_app_settings',
   'set_model_configuration',
   'configure_model_provider',
+  'configure_model_connection',
   'reset_app_settings',
   'update_session_queued_message',
   'cancel_session_queued_message',
@@ -214,7 +215,7 @@ export function taskActionRisk(call: Pick<Call, 'server' | 'tool' | 'args'>,
   if (call.tool === 'routine_save' && routineHook && typeof routineHook === 'object' &&
     'command' in routineHook && typeof routineHook.command === 'string' && routineHook.command.trim() &&
     routineHook.command !== facts?.routinePreRunCommand) return 'command';
-  if (call.tool === 'routine_delete' || call.tool === 'schedule_delete' || call.tool === 'schedule_webhook_release')
+  if (call.tool === 'schedule_webhook_release')
     return 'remove';
   if (call.tool === 'message_session_task' && args.decision !== undefined) return 'permission';
   if ((call.tool === 'routine_save' && args.enabled === true || call.tool === 'routine_run_now') &&

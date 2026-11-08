@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { createElement } from 'react';
-import { cleanup, fireEvent, render, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import i18n from '@/i18n';
@@ -227,4 +227,44 @@ describe('AskUserQuestionPrompt model-authored "Other" options', () => {
       'Which approaches?': JSON.stringify(['Approach A', 'Approach C']),
     });
   });
+});
+
+// PR #9271 review: server enums are exact values; required/length errors must
+// retain the multi-field draft rather than resolve the request as cancellation.
+it('keeps MCP form drafts on validation errors and returns the literal Other enum', async () => {
+  vi.useFakeTimers();
+  try {
+    const { view, onAnswer } = renderAskUser({ requestId: 'mcp-form', questions: [
+      { id: 'name', question: 'Name', answerConstraints: { required: true, minLength: 3, maxLength: 5 } },
+      { id: 'kind', question: 'Kind', options: [{ label: 'Personal' }, { label: 'Other' }],
+        answerConstraints: { required: true, choices: ['Personal', 'Other'] } },
+    ] });
+    fireEvent.click(view.getByRole('button', { name: 'Skip' }));
+    expect(view.getByRole('alert').textContent).toContain('required');
+    expect(onAnswer).not.toHaveBeenCalled();
+    const input = view.getByPlaceholderText('Type your answer…');
+    fireEvent.change(input, { target: { value: 'ab' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    expect(view.getByRole('alert').textContent).toContain('at least 3');
+    expect((input as HTMLTextAreaElement).value).toBe('ab');
+    fireEvent.change(input, { target: { value: 'abcdef' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    expect(view.getByRole('alert').textContent).toContain('no more than 5');
+    fireEvent.change(input, { target: { value: 'Orbit' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    await act(async () => vi.advanceTimersByTime(220));
+    expect(view.queryByText('Type something else…')).toBeNull();
+    fireEvent.click(view.getByRole('button', { name: 'Skip' }));
+    expect(onAnswer).not.toHaveBeenCalled();
+    fireEvent.click(view.getByText('Other'));
+    expect(onAnswer).toHaveBeenCalledWith('mcp-form', { name: 'Orbit', kind: 'Other' });
+  } finally { vi.useRealTimers(); }
+});
+
+it('cancels an MCP form only through its explicit cancel action', () => {
+  const { view, onAnswer } = renderAskUser({ requestId: 'cancel-form', questions: [
+    { id: 'name', question: 'Name', answerConstraints: { required: true } },
+  ] });
+  fireEvent.click(view.getByRole('button', { name: 'Cancel' }));
+  expect(onAnswer).toHaveBeenCalledWith('cancel-form', {});
 });
