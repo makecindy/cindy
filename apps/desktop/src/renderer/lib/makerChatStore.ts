@@ -838,6 +838,25 @@ export interface PendingAppPermission extends PendingPermission {
   mcpApp: { clientId: string; serverId: string; title: string; scope: string };
 }
 
+/** Shared MCP-app permission classification for live dispatch and snapshot
+ * reconciliation. App permissions live in their own panel and are cleared by
+ * their own receipt path, so they must never enter the ordinary FIFO. */
+function mcpAppPermission(
+  metadata: Record<string, unknown> | undefined,
+): PendingAppPermission['mcpApp'] | null {
+  const app = metadata?.mcpApp as Record<string, unknown> | undefined;
+  if (!app || typeof app.clientId !== 'string' || typeof app.serverId !== 'string' ||
+    typeof app.title !== 'string') {
+    return null;
+  }
+  return {
+    clientId: app.clientId,
+    serverId: app.serverId,
+    title: app.title,
+    scope: app.scope === 'session' ? 'session' : 'once',
+  };
+}
+
 function parsePendingPermissionRequest(
   request: Record<string, unknown> | undefined,
 ): PendingPermission | null {
@@ -845,6 +864,10 @@ function parsePendingPermissionRequest(
     return null;
   }
   const metadata = request.metadata as Record<string, unknown> | undefined;
+  // Snapshot reconciliation must use the same classification as live dispatch.
+  // Mixing app requests into the ordinary FIFO leaves a copy behind after the
+  // app receipt clears pendingAppPermissions, blocking later permissions.
+  if (mcpAppPermission(metadata)) return null;
   return {
     requestId: request.requestId,
     toolName: typeof request.toolName === 'string' ? request.toolName : '',
@@ -3284,6 +3307,16 @@ function releasePermissionResponseGuard(sessionId: string): void {
   if (timer !== undefined) clearTimeout(timer);
   permissionResponseGuardTimers.delete(sessionId);
   permissionResponseInFlight.delete(sessionId);
+}
+
+/**
+ * Release the guard only when this caller still owns it. A stale request that
+ * settles after a newer one took over must not clear the newer request's
+ * in-flight entry or dedupe timer.
+ */
+function releaseOwnedPermissionResponseGuard(sessionId: string, requestId: string): void {
+  if (permissionResponseInFlight.get(sessionId) !== requestId) return;
+  releasePermissionResponseGuard(sessionId);
 }
 
 /**
@@ -8841,8 +8874,8 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
 
     if (request.kind === 'permission') {
       const metadata = request.metadata as Record<string, unknown> | undefined;
-      const app = metadata?.mcpApp as Record<string, unknown> | undefined;
-      if (app && typeof app.clientId === 'string' && typeof app.serverId === 'string' && typeof app.title === 'string') {
+      const app = mcpAppPermission(metadata);
+      if (app) {
         const permission: PendingAppPermission = {
           requestId: request.requestId as string, toolName: request.toolName as string,
           input: (request.input as Record<string, unknown>) ?? {},
@@ -8851,7 +8884,7 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
           autoReviewUnavailable: metadata?.autoReviewUnavailable === true,
           autoReviewReason: typeof metadata?.autoReviewReason === 'string' ? metadata.autoReviewReason : undefined,
           suggestions: Array.isArray(request.suggestions) ? request.suggestions : undefined,
-          mcpApp: { clientId: app.clientId, serverId: app.serverId, title: app.title, scope: app.scope === 'session' ? 'session' : 'once' },
+          mcpApp: app,
         };
         setState(sessionId, s => {
           const previous = s.pendingAppPermissions ?? [];
@@ -17802,8 +17835,10 @@ function respondToPermission(sessionId: string, result: CCAgentPermissionResult,
     } catch (err) {
       // Failure path: the card must be retryable immediately — release the
       // guard instead of arming the dedupe window (an uncertain reply must
-      // not lock the user out of retrying).
-      releasePermissionResponseGuard(sessionId);
+      // not lock the user out of retrying). Only release the guard this call
+      // owns: a stale A may reject after B took over, and clearing B's guard
+      // would let a late input for A authorize the card that follows.
+      releaseOwnedPermissionResponseGuard(sessionId, requestId);
       if (!hasCurrentCard()) return;
       log.warn('Permission decision receipt unavailable', err);
       toast.warning(i18n.t('newChat.permissionPrompt.submissionFailed'));

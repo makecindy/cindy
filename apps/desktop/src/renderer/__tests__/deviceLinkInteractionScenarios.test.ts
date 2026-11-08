@@ -522,6 +522,103 @@ describe('device-link 远程交互往返 — permission', () => {
     expect(makerChatStore.getSnapshot(s).pendingPermissionQueue).toEqual([]);
   });
 
+  it('reconnect snapshot keeps MCP-app permissions out of the ordinary FIFO', async () => {
+    const s = openRemoteSession();
+    host.seedPending(s, {
+      kind: 'permission',
+      requestId: 'app-snapshot-permission',
+      toolName: 'MCP App: save',
+      input: {},
+      metadata: {
+        mcpApp: { clientId: 'planner', serverId: 'custom', title: 'Planner', scope: 'once' },
+      },
+    });
+    host.seedPending(s, {
+      kind: 'permission',
+      requestId: 'model-snapshot-permission',
+      toolName: 'Bash',
+      input: { command: 'ls' },
+    });
+    await makerChatStore.reconcilePendingInteractions(s);
+
+    // The app card must live in its own panel, not in the ordinary FIFO that
+    // its receipt path never clears.
+    const state = makerChatStore.getSnapshot(s);
+    expect(state.pendingPermission?.requestId).toBe('model-snapshot-permission');
+    expect(state.pendingPermissionQueue).toEqual([]);
+    expect(state.pendingAppPermissions?.map((permission) => permission.requestId))
+      .toEqual(['app-snapshot-permission']);
+
+    makerChatStore.respondToPermission(s, { behavior: 'allow' }, 'app-snapshot-permission');
+    await flush();
+    expect(makerChatStore.getSnapshot(s).pendingAppPermissions).toEqual([]);
+    expect(makerChatStore.getSnapshot(s).pendingPermission?.requestId).toBe('model-snapshot-permission');
+  });
+
+  it('A 的迟到失败回执不清除 B 的防重 guard', async () => {
+    vi.useFakeTimers();
+    const s = openRemoteSession();
+    host.hostInteraction(s, {
+      kind: 'permission',
+      requestId: 'late-failure-a',
+      toolName: 'Read',
+      input: { file_path: '/a.txt' },
+    });
+    host.hostInteraction(s, {
+      kind: 'permission',
+      requestId: 'late-failure-b',
+      toolName: 'Read',
+      input: { file_path: '/b.txt' },
+    });
+    host.hostInteraction(s, {
+      kind: 'permission',
+      requestId: 'late-failure-c',
+      toolName: 'Read',
+      input: { file_path: '/c.txt' },
+    });
+    await flush();
+
+    // A's receipt stays unresolved while another controller dismisses A and
+    // promotes B.
+    let rejectA!: (error: Error) => void;
+    host.invoke.mockReturnValueOnce(new Promise((_resolve, reject) => { rejectA = reject; }));
+    makerChatStore.respondToPermission(s, { behavior: 'allow' });
+    await flush();
+    host.hostDismiss(s, 'late-failure-a', 'resolved', { behavior: 'allow' });
+    await flush();
+    expect(makerChatStore.getSnapshot(s).pendingPermission?.requestId).toBe('late-failure-b');
+
+    // The dismissal window for A expires; the user then answers B.
+    await vi.advanceTimersByTimeAsync(PERMISSION_GUARD_ADVANCE_MS);
+    let resolveB!: (value: { accepted: boolean }) => void;
+    host.invoke.mockReturnValueOnce(new Promise((resolve) => { resolveB = resolve; }));
+    makerChatStore.respondToPermission(s, { behavior: 'allow' });
+    await flush();
+    expect(host.resolved).toEqual([]);
+
+    // A's invoke finally rejects. It owns neither B's in-flight entry nor its
+    // dedupe window, so B's guard must stay armed.
+    rejectA(new Error('late rejection'));
+    await flush();
+
+    // B is resolved by another controller and C is promoted. A late or
+    // repeated approval gesture must not approve C inside the window.
+    host.hostDismiss(s, 'late-failure-b', 'resolved', { behavior: 'allow' });
+    await flush();
+    expect(makerChatStore.getSnapshot(s).pendingPermission?.requestId).toBe('late-failure-c');
+    makerChatStore.respondToPermission(s, { behavior: 'allow' });
+    await flush();
+    expect(host.resolved).toEqual([]);
+
+    // After the window, C remains actionable.
+    await vi.advanceTimersByTimeAsync(PERMISSION_GUARD_ADVANCE_MS);
+    makerChatStore.respondToPermission(s, { behavior: 'allow' });
+    await flush();
+    expect(host.resolved.map((item) => item.requestId)).toEqual(['late-failure-c']);
+    resolveB({ accepted: true });
+    await flush();
+  });
+
   it('reconnect snapshot A-B rearm guard: A delayed input does not approve B, then B actionable', async () => {
     vi.useFakeTimers();
     const s = openRemoteSession();

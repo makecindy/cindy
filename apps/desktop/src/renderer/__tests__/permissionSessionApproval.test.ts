@@ -353,7 +353,16 @@ describe('permission interaction IPC', () => {
     showPermission('receipt-2');
     snapshot.resolve([]);
     await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(makerChatStore.getSnapshot(SESSION_ID).pendingPermission).toMatchObject({ requestId: 'receipt-2' });
+    // The stale empty snapshot must not retire either card. Under the parallel
+    // FIFO, A stays the actionable head because its receipt was never
+    // acknowledged, and B waits behind it instead of replacing it.
+    const current = makerChatStore.getSnapshot(SESSION_ID);
+    expect(current.pendingPermission).toMatchObject({
+      requestId: 'receipt-1',
+      submitting: false,
+      submissionFailed: true,
+    });
+    expect(current.pendingPermissionQueue.map((permission) => permission.requestId)).toEqual(['receipt-2']);
   });
 
   it('does not restore a submitted permission after the session is purged', async () => {
