@@ -194,7 +194,7 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
       await api.registerWebhook(listener.url);
       this.assertLive(generation);
       this.setStatus({ kind: 'connected', appId: this.botContextId });
-      await this.catchUp(generation);
+      await this.catchUp(generation, false);
       this.schedule(generation);
     } catch (error) {
       if (this.live(generation)) {
@@ -268,11 +268,22 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
     this.deferredTimer.unref?.();
   }
   async reconcile(): Promise<void> { await this.catchUp(this.generation); }
-  private catchUp(generation: number): Promise<void> {
+  private catchUp(generation: number, resumeOnFailure = true): Promise<void> {
     if (this.recovery) return this.recovery;
     this.recovering = true;
-    const operation = this.recover(generation).finally(() => {
-      if (this.recovery === operation) { this.recovery = null; this.recovering = false; }
+    const operation = this.recover(generation).catch(error => {
+      if (resumeOnFailure) this.fail(generation, error);
+      throw error;
+    }).finally(() => {
+      if (this.recovery !== operation) return;
+      const interrupted = this.recovering;
+      this.recovery = null;
+      this.recovering = false;
+      // Keep the history error visible, but release already-durable live ingress.
+      // Startup failures retain init's existing listener teardown/reconnect path.
+      if (interrupted && resumeOnFailure && this.live(generation)) {
+        void this.pump(generation).catch(error => this.fail(generation, error));
+      }
     });
     this.recovery = operation;
     return operation;
@@ -457,9 +468,13 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
           receipts.mark(guid, 'pending');
         }
         let blocked = false;
+        let earlierInQueue = true;
+        const sentAt = this.eventSentAt.get(event)!;
         for (const [id, earlier] of this.deferredEvents) {
-          if (id === guid) break;
-          if (earlier.chatId === event.chatId) { blocked = true; break; }
+          if (id === guid) { earlierInQueue = false; continue; }
+          const earlierSentAt = this.eventSentAt.get(earlier)!;
+          if (earlier.chatId === event.chatId && (earlierSentAt < sentAt
+            || (earlierSentAt === sentAt && earlierInQueue))) { blocked = true; break; }
         }
         this.deferredEvents.set(guid, event);
         if (!stop && blocked) {

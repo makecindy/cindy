@@ -58,6 +58,62 @@ async function fixture(initialState: BlueBubblesState | null = null, media?: IMH
 }
 
 describe('BlueBubbles local ingress', () => {
+  // Tier 1, #9250/r4506126025: a failed history page must not strand a durable
+  // stop/reply until another webhook or the five-minute sweep wakes the pump.
+  it.each(['stop', 'reply'])('resumes a gated %s after history fails without another ingress event', async kind => {
+    const f = await fixture();
+    let answer: string | undefined;
+    if (kind === 'reply') void f.im.requestTextReply(f.chat.guid, 'Confirm?', value => value === 'yes' ? value : null)
+      .then(value => { answer = value; }, () => {});
+    let release!: () => void, started!: () => void;
+    const waiting = new Promise<void>(resolve => { started = resolve; });
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    vi.mocked(f.api.history).mockImplementationOnce(async () => { started(); await gate; throw new Error('history 503'); });
+    f.im.onMessage(event => {
+      if (event.text === '/stop') { event.delivery!.awaitPersistence(); event.delivery!.cancelPending!(); event.delivery!.accept(); }
+    });
+    const recovering = f.im.reconcile();
+    const failure = expect(recovering).rejects.toThrow('history 503');
+    try {
+      await waiting;
+      f.message('gated-control', { text: kind === 'stop' ? '/stop' : 'yes' });
+      expect((await f.webhook('gated-control')).status).toBe(202);
+      expect(f.state().inbox['gated-control'].state).toBe('pending');
+    } finally { release(); await failure; }
+    // Flush the current I/O turn only: no clock advance, retry, reconcile or webhook.
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(f.state().inbox['gated-control'].state).toBe('accepted');
+    if (kind === 'reply') expect(answer).toBe('yes');
+    else expect(f.received.map(event => event.messageId)).toEqual(['gated-control']);
+    expect(f.im.getStatus().kind).toBe('error'); // History is still unavailable.
+  });
+
+  // Tier 1, #9250/r4506126028: a pre-existing prepared barrier must follow
+  // verified send order when recovery discovers older work behind it.
+  it('runs recovered older work before a newer input already in the busy barrier', async () => {
+    const f = await fixture();
+    f.advance(500);
+    let busy = true;
+    const accepted: string[] = [];
+    f.im.onMessage(event => {
+      event.delivery!.awaitPersistence();
+      if (busy) event.delivery!.defer();
+      else { accepted.push(event.messageId!); event.delivery!.accept(); }
+    });
+    f.message('newer-prepared', { dateCreated: 1300 });
+    await f.webhook('newer-prepared');
+    await f.im.reconcile();
+    expect(f.state().inbox['newer-prepared'].state).toBe('pending');
+    f.message('older-recovered', { dateCreated: 1200 });
+    await f.im.reconcile();
+    expect(f.state().inbox['older-recovered'].state).toBe('pending');
+    busy = false;
+    await f.im.reconcile();
+    expect(accepted).toEqual(['older-recovered', 'newer-prepared']);
+    expect(f.state().inbox['older-recovered'].state).toBe('accepted');
+    expect(f.state().inbox['newer-prepared'].state).toBe('accepted');
+  });
+
   // Tier 1, #9250/r4506059629: verified send time must override webhook arrival
   // order, including a newer input whose identity cannot yet be looked up.
   it('preserves later-sent work when its webhook arrives before a delayed stop', async () => {
