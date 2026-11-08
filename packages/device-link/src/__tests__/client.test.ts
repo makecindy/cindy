@@ -11702,10 +11702,15 @@ describe('直连优先、中继兜底(Device Link direct path)', () => {
       const pathRows = rows.filter(row => row.stage === 'path');
       const snapshot = Object.assign({}, ...pathRows.map(row => row.transport ?? {}));
       // Capture before detach clears the path: later fallback logs cannot show
-      // which unacknowledged prefix was still on the relay.
+      // which unacknowledged prefix was still in flight.
       const heads = snapshot.head ?? pathRows.find(row => row['transport.head'])?.['transport.head'];
-      expect(heads).toEqual(expect.arrayContaining([expect.objectContaining({ seq: expect.any(Number),
-        bytes: expect.any(Number), path: 'relay', sent: true })]));
+      // 2026-11-04(#8795)之后,接上直连会把还在 relay 上等确认的帧改经直连重发。
+      // 中断瞬间:seq 1 已经在直连上发出(sent),排在后面的 seq 2 还没被调度(unsent)。
+      // 快照要留下这一刻的真实状态 —— 迁移前的「还在 relay 上」已经不是合同了。
+      expect(heads).toEqual(expect.arrayContaining([
+        expect.objectContaining({ seq: 1, bytes: expect.any(Number), path: 'direct', sent: true }),
+        expect.objectContaining({ seq: 2, bytes: expect.any(Number), path: 'unsent', sent: false }),
+      ]));
       expect(pathRows[0]).toMatchObject({ reason: 'send-failed' });
       const fallbackHead = h.current().sent.slice(initial.length).filter(env => env.id === 'head');
       expect(fallbackHead).toHaveLength(initialHead.length);
