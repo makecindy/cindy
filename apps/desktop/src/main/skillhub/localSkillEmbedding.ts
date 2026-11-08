@@ -6,6 +6,7 @@ import type { EmbeddingService } from '../embedding-host/EmbeddingService';
 export function createLocalSkillEmbeddingAdapter(
   model: EmbeddingModelId,
   getService: () => Pick<EmbeddingService, 'embedSync'>,
+  checkCurrent: () => void,
 ): SkillEmbeddingAdapter {
   return {
     identity: `cindy-host:${model}:query-document:v1`,
@@ -14,9 +15,11 @@ export function createLocalSkillEmbeddingAdapter(
       let modelUsed: string = model;
       // Match the CLI/host worker batch size; the Skill index already persists reusable vectors.
       for (let offset = 0; offset < texts.length; offset += 32) {
+        checkCurrent();
         const result = await getService().embedSync(texts.slice(offset, offset + 32), {
           modelId: model, inputType, timeoutMs: 30_000, bypassCache: true,
         });
+        checkCurrent();
         if (offset > 0 && result.modelUsed !== modelUsed) {
           throw new Error('Embedding model changed between batches; rebuild with a stable model');
         }

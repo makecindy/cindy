@@ -43,6 +43,93 @@ async function fixture(name: string) {
 }
 
 describe('native local Skill libraries', () => {
+  it('keeps an in-flight query on its captured index while the same configuration is registered again', async () => {
+    const f = await fixture('query-snapshot');
+    let release!: () => void;
+    let entered!: () => void;
+    const waiting = new Promise<void>((resolve) => { release = resolve; });
+    const paused = new Promise<void>((resolve) => { entered = resolve; });
+    let held = false;
+    f.embedding.mockImplementation((model) => ({ identity: model, embed: async (texts, inputType) => {
+      if (inputType === 'query' && !held) { held = true; entered(); await waiting; }
+      return { vectors: texts.map(() => [1, 0]), modelUsed: model };
+    } }));
+    const request = { action: 'register' as const, library_id: 'methods', sources: [f.source], embedding_model: 'model' };
+    await f.execute(request, f.context);
+    const configFile = path.join(f.home, 'owner/skill-libraries/methods/library.json');
+    const originalGeneration = JSON.parse(await fs.readFile(configFile, 'utf8')).generation;
+    const first = f.search('unrelated semantic task');
+    await paused;
+    try {
+      await f.put('audio', 'Music production');
+      expect(await f.execute(request, { ...f.context, sessionId: 'registrar' })).toMatchObject({ ok: true });
+      expect(JSON.parse(await fs.readFile(configFile, 'utf8')).generation).not.toBe(originalGeneration);
+      const next = await f.execute({ action: 'search', library_id: 'methods', query: 'unrelated semantic task' }, { ...f.context, sessionId: 'next-task' });
+      assertOk(next.ok);
+      expect(next.mode).toBe('hybrid');
+      expect(next.matches).toHaveLength(2);
+    } finally { release(); }
+    expect(await first).toMatchObject({ ok: true, mode: 'hybrid', matches: [{ name: 'video' }] });
+  });
+  it('does not treat a pending read as the first search synchronization', async () => {
+    const f = await fixture('read-before-search');
+    await f.register();
+    const snapshot = JSON.parse(await fs.readFile(path.join(f.home, 'owner/skill-libraries/methods/index.json'), 'utf8'));
+    await f.put('audio', 'Music production');
+    const open = fs.open.bind(fs);
+    let release!: () => void;
+    let entered!: () => void;
+    const waiting = new Promise<void>((resolve) => { release = resolve; });
+    const paused = new Promise<void>((resolve) => { entered = resolve; });
+    let held = false;
+    const spy = vi.spyOn(fs, 'open').mockImplementation(async (...args) => {
+      if (!held && String(args[0]).endsWith('library.lock')) { held = true; entered(); await waiting; }
+      return open(...args);
+    });
+    try {
+      const read = f.execute({ action: 'read', library_id: 'methods', id: snapshot.entries[0].entry.id }, f.context);
+      await paused;
+      const search = f.search('Music');
+      release();
+      expect(await read).toMatchObject({ ok: true });
+      expect(await search).toMatchObject({ ok: true, matches: [{ name: 'audio' }] });
+    } finally { release(); spy.mockRestore(); }
+  });
+  it('pairs a resumed first search with the registration that owns the acquired lock', async () => {
+    const f = await fixture('registration-generation');
+    f.embedding.mockImplementation((model) => ({ identity: model, embed: async (texts) => ({
+      vectors: texts.map(() => model === 'model-a' ? [1, 0] : [0, 1]), modelUsed: model,
+    }) }));
+    await f.execute({ action: 'register', library_id: 'methods', sources: [f.source], embedding_model: 'model-a' }, f.context);
+    const sourceB = path.join(f.home, 'methods-b');
+    await fs.mkdir(sourceB);
+    await fs.writeFile(path.join(sourceB, 'SKILL.md'), '---\nname: audio\ndescription: Music production\n---\nAudio instructions\n');
+    const open = fs.open.bind(fs);
+    let release!: () => void;
+    let entered!: () => void;
+    const waiting = new Promise<void>((resolve) => { release = resolve; });
+    const paused = new Promise<void>((resolve) => { entered = resolve; });
+    let held = false;
+    const spy = vi.spyOn(fs, 'open').mockImplementation(async (...args) => {
+      if (!held && String(args[0]).endsWith('library.lock')) {
+        held = true; entered(); await waiting;
+      }
+      return open(...args);
+    });
+    try {
+      const first = f.search('unrelated semantic task');
+      await paused;
+      expect(await f.execute({ action: 'register', library_id: 'methods', sources: [sourceB], embedding_model: 'model-b' }, { ...f.context, sessionId: 'registrar' }))
+        .toMatchObject({ ok: true });
+      const joined = f.execute({ action: 'search', library_id: 'methods', query: 'unrelated semantic task' }, { ...f.context, sessionId: 'new-task' });
+      release();
+      expect(await first).toMatchObject({ ok: true, mode: 'hybrid', matches: [{ name: 'audio' }] });
+      expect(await joined).toMatchObject({ ok: true, mode: 'hybrid', matches: [{ name: 'audio' }] });
+      const snapshot = JSON.parse(await fs.readFile(path.join(f.home, 'owner/skill-libraries/methods/index.json'), 'utf8'));
+      expect(snapshot.vectorIdentity).toBe('model-b');
+      expect(await f.search('unrelated semantic task')).toMatchObject({ mode: 'hybrid', matches: [{ name: 'audio' }] });
+    } finally { release(); spy.mockRestore(); }
+  });
   it('requires a current local task and reads only a selected index id', async () => {
     const f = await fixture('task-scope');
     f.state.current = false;

@@ -1538,13 +1538,9 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
           const db = tryGetDbClient();
           return !!db && await resolveHelperSurface(db, context.sessionId!) === 'default';
         },
-        embedding: (model) => {
+        embedding: (model, checkCurrent) => {
           if (!isKnownEmbeddingModel(model) || !isCindyEmbeddingModelAvailable(getDesktopSelectableCatalog(), model)) return undefined;
-          const owner = activeOwnerScopeKey();
-          return createLocalSkillEmbeddingAdapter(model, () => {
-            if (isAppSessionBoundaryPending() || activeOwnerScopeKey() !== owner) throw new Error('Account changed');
-            return ensureEmbeddingServiceForPluginVector();
-          });
+          return createLocalSkillEmbeddingAdapter(model, ensureEmbeddingServiceForPluginVector, checkCurrent);
         },
       }),
       history: {

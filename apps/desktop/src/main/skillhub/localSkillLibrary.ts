@@ -1,11 +1,13 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { randomUUID } from 'node:crypto';
 import type { LiziMcpSessionContext, LocalSkillLibraryCallback } from '@cindy/mcps';
 import { resolveCanonicalSessionPath } from '@cindy/mcps';
-import type { SkillEmbeddingAdapter } from '@cindy/skill-index';
-import { helperDiscoverySkill, loadIndex, readConfig, readSkill, syncLibrary, syncLibraryUnlocked, withLibraryWrite, writeJson, type LibraryConfig } from '@cindy/skill-index/library';
+import type { SkillEmbeddingAdapter, SkillIndex } from '@cindy/skill-index';
+import { helperDiscoverySkill, loadIndex, readConfig, readSkill, syncLibraryUnlocked, withLibraryWrite, writeJson, type LibraryConfig } from '@cindy/skill-index/library';
 
 interface Registration extends LibraryConfig {
+  generation: string;
   gatewayPath: string;
   embeddingModel?: string;
   registered: boolean;
@@ -17,15 +19,22 @@ export interface LocalSkillLibraryDependencies {
   homeDir: () => string;
   isCurrentSession: (context: LiziMcpSessionContext) => boolean;
   isOrdinaryTask: (context: LiziMcpSessionContext) => Promise<boolean>;
-  embedding: (model: string) => SkillEmbeddingAdapter | undefined;
+  embedding: (model: string, checkCurrent: () => void) => SkillEmbeddingAdapter | undefined;
+}
+
+interface LibraryView {
+  config: Registration;
+  generation: string;
+  index: SkillIndex;
+  changes?: Awaited<ReturnType<typeof syncLibraryUnlocked>>;
 }
 
 const fail = (errorCode: string, message: string) => ({ ok: false as const, errorCode, message });
 
 /** Explicit, owner-local libraries. Only their small gateway is mounted by the agent. */
 export function createLocalSkillLibraryTools(deps: LocalSkillLibraryDependencies): LocalSkillLibraryCallback {
-  const synchronized = new Map<string, Set<string>>();
-  const syncing = new Map<string, ReturnType<typeof syncLibrary>>();
+  const synchronized = new Map<string, { generation: string; sessions: Set<string> }>();
+  const syncing = new Map<string, { generation: string; synchronize: boolean; promise: Promise<LibraryView> }>();
   return async (request, context) => {
     if (!context.sessionId || context.remoteHostId || !deps.isCurrentSession(context)) {
       return fail('NO_SESSION_CONTEXT', 'A current local Cindy task is required.');
@@ -44,7 +53,7 @@ export function createLocalSkillLibraryTools(deps: LocalSkillLibraryDependencies
       const sessionKey = JSON.stringify([context.sessionId, context.sessionInstanceId]);
       const libraryKey = JSON.stringify([owner, library]);
       const adapter = (config: Registration): SkillEmbeddingAdapter | undefined => {
-        const embedding = config.embeddingModel ? deps.embedding(config.embeddingModel) : undefined;
+        const embedding = config.embeddingModel ? deps.embedding(config.embeddingModel, checkCurrent) : undefined;
         return embedding && { identity: embedding.identity, embed: async (texts, inputType) => {
           checkCurrent();
           const result = await embedding.embed(texts, inputType);
@@ -72,7 +81,7 @@ export function createLocalSkillLibraryTools(deps: LocalSkillLibraryDependencies
             return fail('INVALID_ARGS', 'Place the gateway outside the indexed source directories.');
           }
         }
-        const config: Registration = { version: 1, sources, gatewayPath, registered: true,
+        const config: Registration = { version: 1, generation: randomUUID(), sources, gatewayPath, registered: true,
           ...(request.embedding_model ? { embeddingModel: request.embedding_model } : {}) };
         const embedding = adapter(config);
         if (config.embeddingModel && !embedding) return fail('INVALID_ARGS', 'Choose an available Cindy embedding model, or omit embedding_model for keyword search.');
@@ -109,31 +118,51 @@ export function createLocalSkillLibraryTools(deps: LocalSkillLibraryDependencies
         return { ok: true, library_id: request.library_id, gateway_path: config.gatewayPath,
           guidance: 'Registration removed. Source Skills and the gateway are preserved; remove the gateway from its reported folder if no longer needed.' };
       }
-      const embedding = adapter(config);
-      if (config.embeddingModel && !embedding && request.action !== 'read') {
-        return fail('MODEL_UNAVAILABLE', 'The configured embedding model is unavailable. Enable it or register this library again without embedding_model to use keyword search.');
-      }
-      if (request.action === 'refresh' || (request.action === 'search' && !synchronized.get(libraryKey)?.has(sessionKey))) {
-        // Ordinary first-use searches share the same disk publication across tasks.
-        let pending = syncing.get(libraryKey);
-        if (!pending || request.action === 'refresh') {
-          if (pending) await pending;
-          checkCurrent();
-          pending = syncLibrary(library, { embedding, rebuild: request.action === 'refresh' && request.rebuild });
-          syncing.set(libraryKey, pending);
-        }
-        let result: Awaited<ReturnType<typeof syncLibrary>>;
-        try { result = await pending; }
-        finally { if (syncing.get(libraryKey) === pending) syncing.delete(libraryKey); }
+      // The outer read selects a shared operation only. Configuration, adapter and index
+      // are paired again under the writer lock, including when registration changed meanwhile.
+      const requestedGeneration = JSON.stringify(config);
+      const capture = () => withLibraryWrite(library, async (): Promise<LibraryView> => {
+        const currentConfig = await readConfig(library) as Registration;
         checkCurrent();
-        if (request.action === 'refresh') synchronized.delete(libraryKey);
-        const sessions = synchronized.get(libraryKey) ?? new Set<string>();
-        sessions.add(sessionKey);
-        synchronized.set(libraryKey, sessions);
-        if (request.action === 'refresh') return { ok: true, library_id: request.library_id, ...result };
+        if (!currentConfig.registered) throw new Error('This local Skill library is not registered.');
+        const generation = JSON.stringify(currentConfig);
+        const embedding = request.action === 'read' ? undefined : adapter(currentConfig);
+        if (currentConfig.embeddingModel && !embedding && request.action !== 'read') {
+          throw Object.assign(new Error('The configured embedding model is unavailable. Enable it or register without embedding_model.'), { code: 'MODEL_UNAVAILABLE' });
+        }
+        let seen = synchronized.get(libraryKey);
+        const needsSync = request.action === 'refresh' || (request.action === 'search'
+          && (seen?.generation !== generation || !seen.sessions.has(sessionKey)));
+        const changes = needsSync ? await syncLibraryUnlocked(library, {
+          embedding, rebuild: request.action === 'refresh' && request.rebuild,
+        }) : undefined;
+        const index = await loadIndex(library);
+        checkCurrent();
+        if (needsSync) {
+          if (request.action === 'refresh' || seen?.generation !== generation) seen = { generation, sessions: new Set() };
+          seen!.sessions.add(sessionKey);
+          synchronized.set(libraryKey, seen!);
+        }
+        return { config: currentConfig, generation, index, changes };
+      });
+      let pending = syncing.get(libraryKey);
+      if (request.action !== 'search' || !pending?.synchronize || pending.generation !== requestedGeneration) {
+        checkCurrent();
+        const seen = synchronized.get(libraryKey);
+        const synchronize = request.action === 'refresh' || (request.action === 'search'
+          && (seen?.generation !== requestedGeneration || !seen.sessions.has(sessionKey)));
+        const promise = pending ? pending.promise.then(() => { checkCurrent(); return capture(); }) : capture();
+        pending = { generation: requestedGeneration, synchronize, promise };
+        syncing.set(libraryKey, pending);
       }
-      const index = await loadIndex(library);
+      let view: LibraryView;
+      try { view = await pending!.promise; }
+      finally { if (syncing.get(libraryKey) === pending) syncing.delete(libraryKey); }
       checkCurrent();
+      const seen = synchronized.get(libraryKey);
+      if (request.action === 'search' && seen?.generation === view.generation) seen.sessions.add(sessionKey);
+      if (request.action === 'refresh') return { ok: true, library_id: request.library_id, ...view.changes };
+      const index = view.index;
       if (request.action === 'read') {
         const entry = index.resolve(request.id);
         if (!entry) return fail('NOT_FOUND', 'Search this library to select a Skill id.');
@@ -142,14 +171,15 @@ export function createLocalSkillLibraryTools(deps: LocalSkillLibraryDependencies
         return { ok: true, ...result };
       }
       if (request.action === 'search') {
-        const result = await index.search(request.query, { limit: request.limit, embedding });
+        const result = await index.search(request.query, { limit: request.limit, embedding: adapter(view.config) });
         checkCurrent();
         return { ok: true, library_id: request.library_id, ...result };
       }
       return fail('INVALID_ARGS', 'Unsupported library action.');
     } catch (error) {
       if (!isCurrent()) return fail('CANCELLED', 'The account or task changed.');
-      return fail((error as NodeJS.ErrnoException).code === 'ENOENT' ? 'NOT_FOUND' : 'LOCAL_SKILL_LIBRARY_ERROR', error instanceof Error ? error.message : String(error));
+      const code = (error as NodeJS.ErrnoException).code;
+      return fail(code === 'ENOENT' ? 'NOT_FOUND' : code === 'MODEL_UNAVAILABLE' ? code : 'LOCAL_SKILL_LIBRARY_ERROR', error instanceof Error ? error.message : String(error));
     }
   };
 }

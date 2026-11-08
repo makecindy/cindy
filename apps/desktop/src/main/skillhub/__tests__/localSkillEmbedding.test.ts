@@ -1,9 +1,17 @@
 import path from 'node:path';
-import { describe, expect, it, vi } from 'vitest';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { EmbeddingClient } from '@cindy/embedding-client';
 import { SkillIndex } from '@cindy/skill-index';
 import { EmbeddingService } from '../../embedding-host/EmbeddingService';
 import { createLocalSkillEmbeddingAdapter } from '../localSkillEmbedding';
+import { createLocalSkillLibraryTools } from '../localSkillLibrary';
+
+vi.mock('@cindy/mcps', () => import('../../../../../../packages/lizi-mcps/src/session-path-auth'));
+let root: string;
+beforeAll(async () => { root = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-skill-embedding-')); });
+afterAll(async () => { await fs.rm(root, { recursive: true, force: true }); });
 
 // Production adapter -> EmbeddingService -> real EmbeddingClient, with only fetch and the
 // desktop route setting injected. Protects bounded native API calls and explicit rebuilds
@@ -34,11 +42,61 @@ function fixture() {
     isVecAvailable: () => false,
     log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } as never,
   });
-  const adapter = createLocalSkillEmbeddingAdapter('text-embedding-3-small', () => service);
+  const adapter = createLocalSkillEmbeddingAdapter('text-embedding-3-small', () => service, () => {});
   return { state, batches, fetchImpl, client, service, adapter };
 }
 
 describe('native local Skill embeddings', () => {
+  it('cancels a host refresh after one batch and preserves the published index', async () => {
+    const f = fixture();
+    const source = path.join(root, 'methods');
+    await Promise.all(Array.from({ length: 65 }, async (_, i) => {
+      const folder = path.join(source, `skill-${i}`);
+      await fs.mkdir(folder, { recursive: true });
+      await fs.writeFile(path.join(folder, 'SKILL.md'), `---\nname: skill-${i}\ndescription: Task ${i}\n---\nInstructions\n`);
+    }));
+    let current = true;
+    const execute = createLocalSkillLibraryTools({
+      ownerScope: () => 'same-owner', storageRoot: () => path.join(root, 'libraries'), homeDir: () => root,
+      isCurrentSession: () => current, isOrdinaryTask: async () => true,
+      embedding: (_model, checkCurrent) => createLocalSkillEmbeddingAdapter('text-embedding-3-small', () => f.service, checkCurrent),
+    });
+    const context = { agentKind: 'codex', workingDir: root, sessionId: 'task', sessionInstanceId: 'instance' };
+    expect(await execute({ action: 'register', library_id: 'methods', sources: [source], embedding_model: 'text-embedding-3-small' }, context)).toMatchObject({ ok: true });
+    const indexFile = path.join(root, 'libraries/methods/index.json');
+    const before = await fs.readFile(indexFile, 'utf8');
+    f.fetchImpl.mockClear();
+    const fetchImpl = f.fetchImpl.getMockImplementation()!;
+    f.fetchImpl.mockImplementation(async (...args) => {
+      const response = await fetchImpl(...args);
+      current = false;
+      return response;
+    });
+    expect(await execute({ action: 'refresh', library_id: 'methods', rebuild: true }, context)).toMatchObject({ errorCode: 'CANCELLED' });
+    expect(f.fetchImpl).toHaveBeenCalledTimes(1);
+    expect(await fs.readFile(indexFile, 'utf8')).toBe(before);
+  });
+  it('stops after the first HTTP batch when the task instance expires', async () => {
+    const f = fixture();
+    let current = true;
+    const adapter = createLocalSkillEmbeddingAdapter('text-embedding-3-small', () => f.service, () => {
+      if (!current) throw new Error('Task instance changed');
+    });
+    const index = new SkillIndex();
+    index.sync(Array.from({ length: 65 }, (_, i) => ({
+      id: `skill-${i}`, name: `skill-${i}`, description: `Task ${i}`, source: 'library', filePath: path.resolve(`skill-${i}`, 'SKILL.md'),
+    })));
+    const before = index.snapshot();
+    const fetchImpl = f.fetchImpl.getMockImplementation()!;
+    f.fetchImpl.mockImplementation(async (...args) => {
+      const response = await fetchImpl(...args);
+      current = false;
+      return response;
+    });
+    await expect(index.buildVectors(adapter)).rejects.toThrow('Task instance changed');
+    expect(f.fetchImpl).toHaveBeenCalledTimes(1);
+    expect(index.snapshot()).toEqual(before);
+  });
   it('serializes 65 entries into 32/32/1 HTTP batches and preserves every vector', async () => {
     const f = fixture();
     const texts = Array.from({ length: 65 }, (_, i) => `skill-${i}`);
@@ -90,7 +148,7 @@ describe('native local Skill embeddings', () => {
         f.state.model = 'backend-v2';
       }
       return f.service;
-    });
+    }, () => {});
     await expect(index.buildVectors(adapter, { rebuild: true })).rejects.toThrow(changed === 'owner' ? 'Account changed' : 'Embedding model changed between batches');
     expect(f.fetchImpl).toHaveBeenCalledTimes(changed === 'owner' ? 1 : 2);
     expect(index.snapshot()).toEqual(before);
