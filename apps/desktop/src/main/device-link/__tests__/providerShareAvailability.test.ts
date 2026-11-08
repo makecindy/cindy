@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { providerShareGuestPeer, type ProviderShareOwned } from '@cindy/device-link';
 const f = vi.hoisted(() => ({
   connected: true, scope: 'owner', self: 'owner-pc', remote: true, budget: false,
-  netFetch: vi.fn(), log: { warn: vi.fn(), error: vi.fn(), debug: vi.fn() }, request: vi.fn(), remember: vi.fn(), reconcile: vi.fn(), apply: vi.fn(), invalidate: vi.fn(),
+  invoke: vi.fn(), netFetch: vi.fn(), log: { warn: vi.fn(), error: vi.fn(), debug: vi.fn() }, request: vi.fn(), remember: vi.fn(), reconcile: vi.fn(), apply: vi.fn(), invalidate: vi.fn(),
   members: [] as any[], leases: [] as any[],
 }));
 vi.mock('electron', () => ({ net: { fetch: (...args: any[]) => f.netFetch(...args) } }));
@@ -29,6 +29,9 @@ vi.mock('../providerShareGuest.js', () => ({ findReceivedShare: () => ({ standby
 vi.mock('../providerShareDelegatedAccess.js', () => ({ applyProviderShareDelegation: (...args: any[]) => f.apply(...args), delegatedProviderShareLeases: () => f.leases,
   invalidateProviderShareDelegation: (...args: any[]) => f.invalidate(...args) }));
 import { publishShareAvailability, prepareShareAvailability, allocateShareAvailability, readShareAvailabilityCatalog, beginShareAvailabilityTurn } from '../providerShareAvailability.js';
+import { readDeviceProviderCatalog, readRemoteProviderRoute } from '../../remote-agent/controller/deviceCatalog.js';
+import { remoteAgentProviders } from '../../../renderer/components/new-chat/unifiedModelSelection.js';
+vi.mock('../../device-link', () => ({ remoteBackgroundInvoke: (...args: unknown[]) => f.invoke(...args) }));
 const realApi = await vi.importActual<typeof import('../../serverApiClient.js')>('../../serverApiClient.js');
 const model = { id: 'allowed', name: 'Fake model', contextWindow: 200000, efforts: ['high'], defaultEffort: 'high' };
 const owned = { shareId: 'share', hostDeviceId: 'owner-pc', providerId: 'group', members: [{ memberId: 'member', status: 'active', joinedAt: '2026-11-08T00:00:00Z' }] } as ProviderShareOwned;
@@ -122,6 +125,30 @@ describe('standby client production entry points (all identities/providers are l
     expect((await readShareAvailabilityCatalog('share')).providers[0].models.codex?.[0]).toEqual(model);
     f.request.mockResolvedValue({ shareId: 'other', sessionId: 'task', kind: 'codex', model: 'allowed', executorDeviceId: 'standby', generation: '11111111-1111-4111-8111-111111111111', expiresAt: Date.now() + 60_000 });
     await expect(allocateShareAvailability('share', 'task', 'codex', 'allowed')).rejects.toThrow('Invalid');
+  });
+  // Production projection and consumers, with only HTTP/IPC transport replaced.
+  // A populated cloud catalog must survive the existing remote permission filters.
+  it.each(['menu', 'main', 'scheduled'] as const)('keeps authorized standby models usable by %s', async consumer => {
+    f.request.mockImplementation(realApi.serverApiFetch);
+    f.netFetch.mockResolvedValue(new Response(JSON.stringify({ providerId: 'group', providerLabel: 'Fake',
+      models: [{ ...model, kind: 'codex' }] }), { status: 200 }));
+    const catalog = await readShareAvailabilityCatalog('share');
+    f.invoke.mockResolvedValue({ ok: true, result: JSON.parse(JSON.stringify(catalog)) });
+    if (consumer === 'menu') {
+      const views = remoteAgentProviders(catalog.providers);
+      expect(views.map(view => view.id)).toEqual(['group']);
+      expect(views[0].models.codex).toEqual([model]);
+    } else if (consumer === 'main') {
+      const { views } = await readDeviceProviderCatalog(f.invoke, 'share:share');
+      expect(views.map(view => view.id)).toEqual(['group']);
+      expect(views[0].models.codex).toEqual([model]);
+    } else {
+      const route = await readRemoteProviderRoute({ agentDeviceId: 'share:share', agentKind: 'codex', providerId: 'group', model: 'allowed' });
+      expect(route.provider.id).toBe('group');
+      expect(route.model).toEqual(model);
+      await expect(readRemoteProviderRoute({ agentDeviceId: 'share:share', agentKind: 'codex', providerId: 'group', model: 'hidden' }))
+        .rejects.toThrow('REMOTE_AGENT_UNAVAILABLE');
+    }
   });
   it('binds only server-verified tasks to this executor and clears revoked cloud leases', async () => {
     f.self = 'standby';

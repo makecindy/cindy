@@ -113,7 +113,7 @@ export async function readShareAvailabilityCatalog(shareId: string): Promise<{ p
     (models[row.kind] ??= []).push({ ...row.metadata, id: row.id, name: row.name, contextWindow: row.contextWindow, efforts: row.efforts, defaultEffort: row.defaultEffort });
   }
   return { providers: [{ id: value.providerId, name: value.providerLabel, source: 'user', auth: { method: 'none' }, routing: {},
-    agents: Object.keys(models) as AgentKind[], models, connected: value.models.length > 0 }],
+    agents: Object.keys(models) as AgentKind[], models, connected: value.models.length > 0, remoteInvocationEnabled: true }],
     providerOrder: [value.providerId], modelVisibilityOverrides: {} };
 }
 
