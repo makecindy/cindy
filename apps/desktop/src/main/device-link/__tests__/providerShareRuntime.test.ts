@@ -25,6 +25,8 @@ const state = vi.hoisted(() => ({
   boundaryPending: false,
 }));
 
+// This fixture exercises owner/delegation access without a cloud standby registration.
+vi.mock('../providerShareAvailability.js', () => ({ prepareShareAvailability: vi.fn(async () => null) }));
 vi.mock('../../appSessionState.js', () => ({
   activeOwnerScopeKey: () => state.scope,
   isAppSessionBoundaryPending: () => state.boundaryPending,
