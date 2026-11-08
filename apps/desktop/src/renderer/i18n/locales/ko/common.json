@@ -9908,6 +9908,8 @@
     "banner": {
       "title": "{{version}}로 업데이트됨",
       "subtitle": "재시작해 적용",
+      "nativeBuildTitle": "Apple 칩 버전이 준비되었습니다",
+      "nativeBuildSubtitle": "재시작하면 전환됩니다. 작업과 설정은 그대로 유지됩니다",
       "viewNotes": "업데이트 소식 보기",
       "viewNotesAria": "{{version}} 업데이트 소식 보기",
       "button": "재시작",
