@@ -185,9 +185,10 @@ async function waitReady(c, release, launched, dataDir, requireHeartbeat) {
   }
   throw new Error('Startup deadline exceeded');
 }
-async function stopOwned(c, release, dataDir = c.runtime.dataDir) {
+async function stopOwned(c, release, dataDir = c.runtime.dataDir, expectedPid) {
   const s = snapshot(c, release, dataDir);
   check(!s.unknown, 'Process identity unavailable; cannot stop or recover safely');
+  if (expectedPid !== undefined) check(s.pid === expectedPid && s.ready, 'Confirmed instance changed; no signal sent');
   if (!s.pid) { check(!hasLaunchRunner(c, release, dataDir), 'A launch runner is still active; recovery deferred'); return; }
   process.kill(s.pid, 'SIGTERM');
   const deadline = Date.now() + 60000;
@@ -310,133 +311,195 @@ async function prepareManualUpgrade(file, reportFile, output) {
       smoke: { ...proof, ready: true, releaseId: release.id }, rollbackPolicy: 'manual' });
   } finally { unlock(); }
 }
+function manualCandidate(c, store, manualFile) {
+  const report = read(manualFile), build = verifyReport(report.buildReport);
+  verifyUpgradeSnapshot(c, build);
+  check(build.state === 'checked', 'Manual candidate checks were invalidated');
+  const release = releaseDescriptor(build.directory), state = store.read();
+  const manual = validateManualUpgrade(report, c, state, release);
+  check(manual.id !== state.good.id && manual.directory !== state.good.directory, 'Candidate is already selected');
+  verifyRelease(manual); verifyRelease(state.good);
+  return { manual, baseline: state.good };
+}
+async function verifyLaunchProfile(c) {
+  const startup = await import(pathToFileURL(path.join(c.app.checkout, 'scripts/restart-desktop-remote.mjs')));
+  const expected = c.runtime.mode === 'shared' ? startup.productionUserDataDir(c.region) : startup.defaultIsolatedUserDataDir(c.name, c.region);
+  check(path.resolve(expected) === c.runtime.dataDir, 'Configured data directory does not match the actual launch profile');
+}
+
+/** One-use manual handover. Hold the same lock from preflight through the new supervisor's
+ * lifetime. In particular, never stop the app and THEN discover an occupied supervisor lock.
+ * Injected process operations keep failure/race tests away from the real desktop/profile. */
+export async function restartWithSupervisorLock(lockFile, expectedPid, { prepare, observe, stop, activate, record }) {
+  check(Number.isSafeInteger(expectedPid) && expectedPid > 0, 'An explicit positive --expected-pid is required');
+  let unlock, phase = 'preflight', verified = false;
+  const write = extra => record({ phase, verified, ...extra });
+  try {
+    unlock = acquire(lockFile);
+    write();
+    await prepare();
+    const before = await observe();
+    check(!before.unknown && before.ready && before.pid === expectedPid, 'Confirmed instance changed; no signal sent');
+    phase = 'stopping'; write({ pid: expectedPid });
+    await stop(expectedPid);
+    const after = await observe();
+    check(!after.unknown && !after.pid, 'Shutdown unconfirmed; candidate was not started');
+    phase = 'starting'; write();
+    return await activate(() => { verified = true; phase = 'verified'; write(); });
+  } catch (e) {
+    const failedPhase = phase;
+    phase = phase === 'preflight' ? 'blocked-before-stop' : phase === 'stopping' ? 'shutdown-unconfirmed'
+      : verified ? 'supervision-failed' : 'activation-failed';
+    write({ failedPhase, error: e.message });
+    throw e;
+  } finally { unlock?.(); }
+}
+async function restartManual(file, manualFile, expectedPid, output) {
+  check(process.platform === 'darwin' && process.stdin.isTTY, 'Run the personal developer launcher in Terminal');
+  check(Number.isSafeInteger(expectedPid) && expectedPid > 0, 'An explicit positive --expected-pid is required');
+  const c = config(file), store = journal(c);
+  // Exclusive creation makes interrupted commands one-use. Inspect the receipt and live process;
+  // never replay an old restart approval against a later PID or an already activated candidate.
+  fs.mkdirSync(path.dirname(output), { recursive: true, mode: 0o700 });
+  const fd = fs.openSync(output, 'wx', 0o600);
+  try { fs.writeFileSync(fd, JSON.stringify({ phase: 'created', at: Date.now() }) + '\n'); fs.fsyncSync(fd); }
+  finally { fs.closeSync(fd); }
+  let baseline, manual;
+  return restartWithSupervisorLock(path.join(root(c), 'supervisor.lock'), expectedPid, {
+    prepare: async () => {
+      await verifyLaunchProfile(c);
+      ({ baseline, manual } = manualCandidate(c, store, manualFile));
+    },
+    observe: () => snapshot(c, baseline),
+    stop: pid => stopOwned(c, baseline, c.runtime.dataDir, pid),
+    // No nested acquire, release/reacquire gap, or competing supervisor process.
+    activate: onVerified => superviseLocked(file, c, store, undefined, manualFile, onVerified),
+    record: state => durableWrite(output, { ...state, at: Date.now(), expectedPid,
+      baseline: baseline?.id, candidate: manual?.id, report: path.resolve(manualFile),
+      dataDir: c.runtime.dataDir, region: c.region }),
+  });
+}
 export async function supervise(file, bootstrapFile, manualFile) {
   check(process.platform === 'darwin', 'Automatic developer launcher currently supports macOS');
-  const c = config(file), unlock = acquire(path.join(root(c), 'supervisor.lock')), store = journal(c);
+  const c = config(file), unlock = acquire(path.join(root(c), 'supervisor.lock'));
+  try { return await superviseLocked(file, c, journal(c), bootstrapFile, manualFile); }
+  finally { unlock(); }
+}
+async function superviseLocked(file, c, store, bootstrapFile, manualFile, onVerified) {
   let background, current;
-  try {
-    const startup = await import(pathToFileURL(path.join(c.app.checkout, 'scripts/restart-desktop-remote.mjs')));
-    const expected = c.runtime.mode === 'shared' ? startup.productionUserDataDir(c.region) : startup.defaultIsolatedUserDataDir(c.name, c.region);
-    check(path.resolve(expected) === c.runtime.dataDir, 'Configured data directory does not match the actual launch profile');
-    let bootstrap, manual;
-    if (manualFile) {
-      const report = read(manualFile), build = verifyReport(report.buildReport);
-      verifyUpgradeSnapshot(c, build);
-      check(build.state === 'checked', 'Manual candidate checks were invalidated');
-      const release = releaseDescriptor(build.directory);
-      manual = validateManualUpgrade(report, c, store.read(), release);
-      verifyRelease(manual); verifyRelease(store.read().good);
+  await verifyLaunchProfile(c);
+  let bootstrap, manual;
+  if (manualFile) ({ manual } = manualCandidate(c, store, manualFile));
+  if (bootstrapFile) {
+    check(c.automatic.enabled !== true, 'Keep unattended updates disabled during first bootstrap');
+    const report = read(bootstrapFile);
+    verifyRelease(report.baseline); verifyRelease(report.candidate);
+    git(report.candidate.directory, 'merge-base', '--is-ancestor', report.baseline.head, report.candidate.head);
+    const files = git(report.candidate.directory, 'diff', '--name-only', report.baseline.head, report.candidate.head).split('\n').filter(Boolean);
+    bootstrap = validateBootstrap(report, c.runtime.clientDir, files);
+    check(report.dataDir === c.runtime.dataDir && report.region === c.region, 'Bootstrap profile changed');
+    const old = snapshot(c, report.baseline);
+    check(!old.unknown && !old.pid && !hasLaunchRunner(c, report.baseline), 'Exit the original application normally before bootstrap');
+    if (!fs.existsSync(store.file)) store.init(report.baseline);
+    check(store.read().good.id === report.baseline.id, 'Bootstrap baseline changed; prepare again');
+  }
+  if (!fs.existsSync(store.file)) {
+    const initial = releaseDescriptor(c.runtime.clientDir);
+    const existing = snapshot(c, initial); check(!existing.unknown && !existing.pid && !hasLaunchRunner(c, initial), 'Existing personal app must exit normally before first supervised launch');
+    const launched = start(c, initial);
+    let pid;
+    try { pid = await waitReady(c, initial, launched, c.runtime.dataDir, initial.monitorProtocol === 1); }
+    catch (e) { await stopLaunch(c, initial, launched); throw e; }
+    store.init({ ...initial, verified: true }); current = { launched, pid };
+  }
+  let s = store.read();
+  // An interrupted trial never becomes good merely because it survived its supervisor.
+  if (s.phase === 'trial') { await stopOwned(c, s.selected); s = store.recoverInterrupted(); }
+  check(s.phase !== 'blocked', s.error || 'Recovery previously failed; inspect the journal before restarting');
+  if (!current && s.phase === 'stable') {
+    const existing = snapshot(c, s.good); check(!existing.unknown && !existing.pid && !hasLaunchRunner(c, s.good), 'A personal application is already running');
+    let v = manual || bootstrap || (c.automatic.enabled === true ? candidate(c, s) : null);
+    if (v && !manual && !bootstrap) {
+      try { verifyUpgradeSnapshot(c, verifyReport(v.buildReport)); }
+      catch(e) { status(c, 'stale-candidate', {error:e.message}); v = null; }
     }
-    if (bootstrapFile) {
-      check(c.automatic.enabled !== true, 'Keep unattended updates disabled during first bootstrap');
-      const report = read(bootstrapFile);
-      verifyRelease(report.baseline); verifyRelease(report.candidate);
-      git(report.candidate.directory, 'merge-base', '--is-ancestor', report.baseline.head, report.candidate.head);
-      const files = git(report.candidate.directory, 'diff', '--name-only', report.baseline.head, report.candidate.head).split('\n').filter(Boolean);
-      bootstrap = validateBootstrap(report, c.runtime.clientDir, files);
-      check(report.dataDir === c.runtime.dataDir && report.region === c.region, 'Bootstrap profile changed');
-      const old = snapshot(c, report.baseline);
-      check(!old.unknown && !old.pid && !hasLaunchRunner(c, report.baseline), 'Exit the original application normally before bootstrap');
-      if (!fs.existsSync(store.file)) store.init(report.baseline);
-      check(store.read().good.id === report.baseline.id, 'Bootstrap baseline changed; prepare again');
+    if (v) {
+      if (manual) store.beginManual(v, { prepared: true, stopped: true, manualRequested: true, smokeVerified: true, profileVerified: true });
+      else store.begin(v, { compatible: true, prepared: true, idle: true, stopped: true });
+      try { current = await trial(c, store, v); } catch (e) { status(c, store.read().phase, { error: e.message }); }
     }
-    if (!fs.existsSync(store.file)) {
-      const initial = releaseDescriptor(c.runtime.clientDir);
-      const existing = snapshot(c, initial); check(!existing.unknown && !existing.pid && !hasLaunchRunner(c, initial), 'Existing personal app must exit normally before first supervised launch');
-      const launched = start(c, initial);
-      let pid;
-      try { pid = await waitReady(c, initial, launched, c.runtime.dataDir, initial.monitorProtocol === 1); }
-      catch (e) { await stopLaunch(c, initial, launched); throw e; }
-      store.init({ ...initial, verified: true }); current = { launched, pid };
-    }
-    let s = store.read();
-    // An interrupted trial never becomes good merely because it survived its supervisor.
-    if (s.phase === 'trial') { await stopOwned(c, s.selected); s = store.recoverInterrupted(); }
-    check(s.phase !== 'blocked', s.error || 'Recovery previously failed; inspect the journal before restarting');
-    if (!current && s.phase === 'stable') {
-      const existing = snapshot(c, s.good); check(!existing.unknown && !existing.pid && !hasLaunchRunner(c, s.good), 'A personal application is already running');
-      let v = manual || bootstrap || (c.automatic.enabled === true ? candidate(c, s) : null);
-      if (v && !manual && !bootstrap) {
-        try { verifyUpgradeSnapshot(c, verifyReport(v.buildReport)); }
-        catch(e) { status(c, 'stale-candidate', {error:e.message}); v = null; }
-      }
-      if (v) {
-        if (manual) store.beginManual(v, { prepared: true, stopped: true, manualRequested: true, smokeVerified: true, profileVerified: true });
-        else store.begin(v, { compatible: true, prepared: true, idle: true, stopped: true });
-        try { current = await trial(c, store, v); } catch (e) { status(c, store.read().phase, { error: e.message }); }
-      }
-    }
+  }
+  s = store.read();
+  check(s.phase !== 'blocked', s.error || 'Upgrade blocked; inspect before recovery');
+  if (!current) {
+    if (s.failed) { const p = snapshot(c, s.failed); check(!p.unknown && !p.pid && !hasLaunchRunner(c, s.failed), 'Candidate shutdown is unconfirmed; refusing concurrent recovery'); }
+    verifyRelease(s.good);
+    const launched = start(c, s.good);
+    try {
+      const pid = await waitReady(c, s.good, launched, c.runtime.dataDir, s.good.monitorProtocol === 1);
+      if (s.phase === 'recovering') store.finishRecovery(true);
+      current = { launched, pid };
+    } catch (e) { if (s.phase === 'recovering') store.finishRecovery(false); await stopLaunch(c, s.good, launched); throw e; }
+  }
+  onVerified?.();
+  let nextCheck = 0;
+  const pluginRequests = new Set();
+  while (true) {
+    c.automatic = config(file).automatic;
     s = store.read();
-    check(s.phase !== 'blocked', s.error || 'Upgrade blocked; inspect before recovery');
-    if (!current) {
-      if (s.failed) { const p = snapshot(c, s.failed); check(!p.unknown && !p.pid && !hasLaunchRunner(c, s.failed), 'Candidate shutdown is unconfirmed; refusing concurrent recovery'); }
-      verifyRelease(s.good);
-      const launched = start(c, s.good);
-      try {
-        const pid = await waitReady(c, s.good, launched, c.runtime.dataDir, s.good.monitorProtocol === 1);
-        if (s.phase === 'recovering') store.finishRecovery(true);
-        current = { launched, pid };
-      } catch (e) { if (s.phase === 'recovering') store.finishRecovery(false); await stopLaunch(c, s.good, launched); throw e; }
+    const present = snapshot(c, s.good);
+    if (!present.unknown && !present.pid) break; // Respect the user's normal quit; no respawn loop.
+    if (c.automatic.enabled === true && Date.now() >= nextCheck && !background) {
+      nextCheck = Date.now() + c.automatic.intervalMinutes * 60000;
+      const fd = fs.openSync(path.join(root(c), 'prepare.log'), 'a', 0o600);
+      background = spawn(c.runtime.node, [cli, 'auto-check', '--config', path.resolve(file)], { cwd: path.dirname(cli), env: runtimeEnv(c, file), stdio: ['inherit', fd, fd] });
+      fs.closeSync(fd); background.once('error', () => { background = null; }); background.once('exit', () => { background = null; });
     }
-    let nextCheck = 0;
-    const pluginRequests = new Set();
-    while (true) {
-      c.automatic = config(file).automatic;
-      s = store.read();
-      const present = snapshot(c, s.good);
-      if (!present.unknown && !present.pid) break; // Respect the user's normal quit; no respawn loop.
-      if (c.automatic.enabled === true && Date.now() >= nextCheck && !background) {
-        nextCheck = Date.now() + c.automatic.intervalMinutes * 60000;
-        const fd = fs.openSync(path.join(root(c), 'prepare.log'), 'a', 0o600);
-        background = spawn(c.runtime.node, [cli, 'auto-check', '--config', path.resolve(file)], { cwd: path.dirname(cli), env: runtimeEnv(c, file), stdio: ['inherit', fd, fd] });
-        fs.closeSync(fd); background.once('error', () => { background = null; }); background.once('exit', () => { background = null; });
-      }
-      const v = c.automatic.enabled === true ? candidate(c, s) : null;
-      const h = readHeartbeat(current.launched, current.pid, { remote: c.automatic.requireRemote });
-      // A failed app trial never touches installed local plugins. Only the
-      // committed good release can request an update, once per launch.
-      if (s.phase === 'stable' && s.good.localPlugins && h?.healthy && !h.busy && h.idle &&
-          !pluginRequests.has(current.launched.generation)) {
-        durableWrite(path.join(current.launched.dir, 'plugins-request.json'), {
-          action: 'update-local-plugins', generation: current.launched.generation,
-          pid: current.pid, requireRemote: c.automatic.requireRemote, expiresAt: Date.now() + 30_000,
-        });
-        pluginRequests.add(current.launched.generation);
-      }
-      if (v && h?.healthy && h.busy === false && h.idle === true) {
-        try { verifyUpgradeSnapshot(c, verifyReport(v.buildReport)); }
-        catch (e) { status(c, 'stale-candidate', {error:e.message}); await sleep(60000); continue; }
-        durableWrite(path.join(current.launched.dir, 'request.json'), { action: 'quit', generation: current.launched.generation, pid: current.pid, requireRemote: c.automatic.requireRemote, expiresAt: Date.now() + 10000 });
-        // The host rechecks all activity and exits normally. Silence is not an acknowledgement.
-        const deadline = Date.now() + 30000; let stopped = false;
-        while (Date.now() < deadline) {
-          const p = snapshot(c, s.good);
-          if (!p.unknown && !p.pid) { stopped = true; break; }
-          await sleep(1000);
-        }
-        fs.rmSync(path.join(current.launched.dir, 'request.json'), { force: true });
-        if (stopped && config(file).automatic.enabled !== true) {
-          const launched = start(c, s.good);
-          try { current = { launched, pid: await waitReady(c, s.good, launched, c.runtime.dataDir, s.good.monitorProtocol === 1) }; }
-          catch (e) { await stopLaunch(c, s.good, launched); throw e; }
-          continue;
-        }
-        if (stopped) {
-          store.begin(v, { compatible: compatibility(s.good, v).compatible, prepared: true, idle: true, stopped: true });
-          try { current = await trial(c, store, v); }
-          catch (e) {
-            status(c, 'recovering', { error: e.message });
-            const failed = snapshot(c, v); check(!failed.unknown && !failed.pid, 'Candidate shutdown is unconfirmed; refusing concurrent recovery');
-            const old = store.read().good; verifyRelease(old);
-            const launched = start(c, old);
-            try { const pid = await waitReady(c, old, launched, c.runtime.dataDir, old.monitorProtocol === 1); store.finishRecovery(true); current = { launched, pid }; }
-            catch (recoveryError) { store.finishRecovery(false); await stopLaunch(c, old, launched); throw recoveryError; }
-          }
-        }
-      }
-      await sleep(2000);
+    const v = c.automatic.enabled === true ? candidate(c, s) : null;
+    const h = readHeartbeat(current.launched, current.pid, { remote: c.automatic.requireRemote });
+    // A failed app trial never touches installed local plugins. Only the
+    // committed good release can request an update, once per launch.
+    if (s.phase === 'stable' && s.good.localPlugins && h?.healthy && !h.busy && h.idle &&
+        !pluginRequests.has(current.launched.generation)) {
+      durableWrite(path.join(current.launched.dir, 'plugins-request.json'), {
+        action: 'update-local-plugins', generation: current.launched.generation,
+        pid: current.pid, requireRemote: c.automatic.requireRemote, expiresAt: Date.now() + 30_000,
+      });
+      pluginRequests.add(current.launched.generation);
     }
-  } finally { unlock(); }
+    if (v && h?.healthy && h.busy === false && h.idle === true) {
+      try { verifyUpgradeSnapshot(c, verifyReport(v.buildReport)); }
+      catch (e) { status(c, 'stale-candidate', {error:e.message}); await sleep(60000); continue; }
+      durableWrite(path.join(current.launched.dir, 'request.json'), { action: 'quit', generation: current.launched.generation, pid: current.pid, requireRemote: c.automatic.requireRemote, expiresAt: Date.now() + 10000 });
+      // The host rechecks all activity and exits normally. Silence is not an acknowledgement.
+      const deadline = Date.now() + 30000; let stopped = false;
+      while (Date.now() < deadline) {
+        const p = snapshot(c, s.good);
+        if (!p.unknown && !p.pid) { stopped = true; break; }
+        await sleep(1000);
+      }
+      fs.rmSync(path.join(current.launched.dir, 'request.json'), { force: true });
+      if (stopped && config(file).automatic.enabled !== true) {
+        const launched = start(c, s.good);
+        try { current = { launched, pid: await waitReady(c, s.good, launched, c.runtime.dataDir, s.good.monitorProtocol === 1) }; }
+        catch (e) { await stopLaunch(c, s.good, launched); throw e; }
+        continue;
+      }
+      if (stopped) {
+        store.begin(v, { compatible: compatibility(s.good, v).compatible, prepared: true, idle: true, stopped: true });
+        try { current = await trial(c, store, v); }
+        catch (e) {
+          status(c, 'recovering', { error: e.message });
+          const failed = snapshot(c, v); check(!failed.unknown && !failed.pid, 'Candidate shutdown is unconfirmed; refusing concurrent recovery');
+          const old = store.read().good; verifyRelease(old);
+          const launched = start(c, old);
+          try { const pid = await waitReady(c, old, launched, c.runtime.dataDir, old.monitorProtocol === 1); store.finishRecovery(true); current = { launched, pid }; }
+          catch (recoveryError) { store.finishRecovery(false); await stopLaunch(c, old, launched); throw recoveryError; }
+        }
+      }
+    }
+    await sleep(2000);
+  }
 }
 export async function automaticCommand(command, options) {
   check(options.config, '--config required');
@@ -450,6 +513,10 @@ export async function automaticCommand(command, options) {
   if (command === 'manual-activate') {
     check(options.report, '--report required');
     return supervise(options.config, undefined, options.report);
+  }
+  if (command === 'manual-restart') {
+    check(options.report && options.out, '--report and a new --out receipt are required');
+    return restartManual(options.config, options.report, Number(options['expected-pid']), path.resolve(options.out));
   }
   const c = config(options.config);
   if (command === 'auto-recover') {

@@ -496,11 +496,38 @@ rescue receipt also marks rollback compatibility unverified until successful pro
 restore or overwrite databases, credentials or plugin ledgers. Preserve both version directories for
 inspection. This path does not accept changed migration artifacts or private database scripts.
 
-For an explicitly authorized immediate restart, an external one-use Terminal handover may stop the
-exact observed old PID normally and then invoke manual activation; it must not force-kill, fabricate
-an idle result, or create a persistent restart job. `desktop-whoami` exit 1 means no matching ready
-instance, not necessarily a scan failure: parse `processScan.ok` and use `--all` when checking shared
-profile exclusivity. Record no-instance, readiness, and scan errors separately.
+For an explicitly authorized immediate restart, use the single Terminal command:
+
+```sh
+node scripts/personal-build.mjs manual-restart --config FILE --report NEW_MANUAL_REPORT --expected-pid OBSERVED_PID --out NEW_HANDOFF_RECEIPT
+```
+
+This command acquires `supervisor.lock` **before any shutdown**, validates the frozen candidate,
+isolated proof, baseline and launch profile, then rechecks the exact ready PID before sending normal
+SIGTERM. It retains that same lock through shutdown, startup, health probation and the new supervisor's
+lifetime. Never generate an external script that quits the app before calling `manual-activate`, or
+check the lock and release it before quitting: either can leave no working app when another supervisor
+wins the lock. `manual-activate` remains available after an independently requested normal quit.
+
+A live supervisor owner causes `manual-restart` to fail before touching the app. Do not delete its lock,
+kill an unverified PID, or stop the app to get around it. With an older already-running supervisor,
+inspect its process identity and exit **only that supervisor** normally before retrying; the app must
+remain running. Automatic takeover of a live supervisor is not implemented. A competing launcher can
+still win the lock, but then this command leaves the current app running. Dead owners are reclaimed by
+the existing lock implementation, never by the handover script.
+
+The output receipt is created exclusively: use a new path for each approved attempt. It records
+`blocked-before-stop`, `stopping`, `shutdown-unconfirmed`, `starting`, `activation-failed`, or `verified`.
+A crash leaves the last durable phase; inspect the receipt, journal and actual processes instead of
+replaying an old restart command. `verified` requires continuous readiness/remote-service probation,
+not phone UI testing. A startup failure keeps the existing manual rollback policy; it does not blindly
+launch old code against possibly changed data. No force kill, fabricated idle result, automatic enable,
+or persistent restart job is added. A current restart confirmation is still required when tasks run.
+
+`desktop-whoami` exit 1 means no matching ready instance, not necessarily a scan failure: parse
+`processScan.ok` and use `--all` when checking shared profile exclusivity. Record no-instance,
+readiness, and scan errors separately. Regression coverage is in
+`scripts/__tests__/personal-build-recovery.test.mjs`.
 
 ### First observed health-bridge handover (legacy bootstrap)
 

@@ -4,8 +4,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { spawnSync } from 'node:child_process';
+import { main } from '../personal-build.mjs';
 import { RecoveryJournal, compatibility, durableWrite } from '../personal-build/recovery.mjs';
-import { readHeartbeat, acquire, validateBootstrap, validateManualUpgrade } from '../personal-build/automatic.mjs';
+import { readHeartbeat, acquire, validateBootstrap, validateManualUpgrade, restartWithSupervisorLock } from '../personal-build/automatic.mjs';
 
 // Script integration: the old launcher forgot its fallback at first ready and had no durable trial
 // recovery. Real on-disk journal, separate terminating writer process, injected time (no sleeps).
@@ -152,4 +153,110 @@ test('first health bootstrap preserves the observed baseline and rejects data, r
   assert.throws(() => validateBootstrap({ ...report, smoke: { ready: false } }, '/old', files), /startup/);
   assert.throws(() => validateBootstrap(report, '/old', ['apps/desktop/src/main/localDb/index.ts']), /only add/);
   for (const key of ['migrations', 'runtime', 'plugins']) assert.throws(() => validateBootstrap({ ...report, candidate: { ...candidate, [key]: 'changed' } }, '/old', files), /cannot change/);
+});
+
+// Regression: an external handover quit the old app before discovering a live supervisor lock.
+// Existing journal tests start after shutdown and cannot catch this ordering/race. Script integration:
+// use real filesystem locks/receipts, injected process operations, no live Cindy profile or waits.
+test('manual restart keeps the old app alive on lock contention and failed preflight', async t => {
+  const f = fixture(t), lock = path.join(f.dir, 'supervisor.lock');
+  const phases = [], calls = [];
+  const operations = {
+    prepare: () => { calls.push('prepare'); throw Error('candidate changed'); },
+    observe: () => { calls.push('observe'); return { pid: 42, ready: true }; },
+    stop: () => calls.push('stop'), activate: () => calls.push('activate'),
+    record: value => phases.push(value),
+  };
+  const unlock = acquire(lock);
+  try {
+    await assert.rejects(restartWithSupervisorLock(lock, 42, operations), /Already running/);
+    assert.deepEqual(calls, []);
+    assert.equal(phases.at(-1).phase, 'blocked-before-stop');
+    assert.equal(JSON.parse(fs.readFileSync(path.join(lock, 'owner.json'))).pid, process.pid);
+  } finally { unlock(); }
+  await assert.rejects(restartWithSupervisorLock(lock, 42, operations), /candidate changed/);
+  assert.deepEqual(calls, ['prepare']); assert.equal(fs.existsSync(lock), false);
+  for (const observed of [{ unknown: true }, { pid: 43, ready: true }, { pid: 42, ready: false }]) {
+    calls.length = 0;
+    await assert.rejects(restartWithSupervisorLock(lock, 42, { ...operations,
+      prepare: () => {}, observe: () => observed }), /Confirmed instance changed/);
+    assert.deepEqual(calls, []); assert.equal(phases.at(-1).phase, 'blocked-before-stop');
+  }
+});
+
+test('manual restart retains exclusive control through shutdown, promotion and supervision', async t => {
+  const f = fixture(t), lock = path.join(f.dir, 'supervisor.lock'), receipt = path.join(f.dir, 'handoff.json');
+  let live = true, promoted;
+  const compete = () => assert.throws(() => acquire(lock), /Already running/);
+  const result = await restartWithSupervisorLock(lock, 42, {
+    prepare: compete,
+    observe: () => ({ pid: live ? 42 : undefined, ready: live }),
+    stop: pid => { assert.equal(pid, 42); compete(); live = false; },
+    activate: onVerified => {
+      compete(); assert.equal(live, false);
+      assert.equal(JSON.parse(fs.readFileSync(receipt)).phase, 'starting');
+      onVerified(); compete(); promoted = JSON.parse(fs.readFileSync(receipt));
+      return 'normal quit';
+    },
+    record: value => durableWrite(receipt, value),
+  });
+  assert.equal(result, 'normal quit'); assert.equal(promoted.phase, 'verified');
+  assert.equal(promoted.verified, true); assert.equal(fs.existsSync(lock), false);
+});
+
+test('uncertain shutdown never launches a candidate; launch failures retain their actual stage', async t => {
+  const f = fixture(t), lock = path.join(f.dir, 'supervisor.lock');
+  for (const failure of ['stop-error', 'still-running', 'unknown', 'launch-error']) {
+    let stopped = false, started = false, last;
+    await assert.rejects(restartWithSupervisorLock(lock, 42, {
+      prepare: () => {},
+      observe: () => !stopped ? { pid: 42, ready: true } : failure === 'unknown'
+        ? { unknown: true } : { pid: failure === 'still-running' ? 42 : undefined },
+      stop: () => { if (failure === 'stop-error') throw Error('normal exit timed out'); stopped = true; },
+      activate: () => { started = true; throw Error('startup failed'); },
+      record: value => { last = value; },
+    }));
+    assert.equal(started, failure === 'launch-error');
+    assert.equal(last.phase, started ? 'activation-failed' : 'shutdown-unconfirmed');
+    assert.equal(last.verified, false); assert.equal(fs.existsSync(lock), false);
+  }
+});
+
+test('interrupted handover leaves its phase and only a terminated owner can be reclaimed', t => {
+  const f = fixture(t), lock = path.join(f.dir, 'supervisor.lock'), receipt = path.join(f.dir, 'handoff.json');
+  const module = new URL('../personal-build/automatic.mjs', import.meta.url).href;
+  const script = `import fs from 'node:fs'; import {restartWithSupervisorLock} from ${JSON.stringify(module)};
+    await restartWithSupervisorLock(process.argv[1], 42, {
+      prepare: () => {}, observe: () => ({pid:42,ready:true}),
+      stop: () => process.exit(71), activate: () => process.exit(72),
+      record: value => fs.writeFileSync(process.argv[2], JSON.stringify(value))
+    });`;
+  const result = spawnSync(process.execPath, ['--input-type=module', '-e', script, lock, receipt]);
+  assert.equal(result.status, 71);
+  assert.equal(JSON.parse(fs.readFileSync(receipt)).phase, 'stopping');
+  const unlock = acquire(lock); unlock();
+});
+
+// Actual CLI dispatch/output contract: even with a checked-report argument, occupied ownership
+// produces a durable no-stop receipt, and repeating that command cannot overwrite the first result.
+test('manual-restart CLI records lock refusal and refuses reuse of an attempt receipt', { skip: process.platform !== 'darwin' }, async t => {
+  const f = fixture(t), configFile = path.join(f.dir, 'config.json'), out = path.join(f.dir, 'attempt.json');
+  const stateDir = path.join(f.dir, 'state'), lock = path.join(stateDir, 'automatic/supervisor.lock');
+  durableWrite(configFile, { version: 1, name: 'fixture', region: 'global',
+    app: { checkout: f.dir, repository: 'example/app' }, automatic: { enabled: false },
+    runtime: { mode: 'isolated', clientDir: './client', stagingDir: './stage', stateDir, dataDir: './data' } });
+  const unlock = acquire(lock), tty = Object.getOwnPropertyDescriptor(process.stdin, 'isTTY');
+  Object.defineProperty(process.stdin, 'isTTY', { value: true, configurable: true });
+  try {
+    const args = ['manual-restart', '--config', configFile, '--report', path.join(f.dir, 'manual.json'),
+      '--expected-pid', '42', '--out', out];
+    await assert.rejects(main(args), /Already running/);
+    const receipt = fs.readFileSync(out, 'utf8');
+    assert.equal(JSON.parse(receipt).phase, 'blocked-before-stop');
+    await assert.rejects(main(args), /EEXIST/);
+    assert.equal(fs.readFileSync(out, 'utf8'), receipt);
+  } finally {
+    if (tty) Object.defineProperty(process.stdin, 'isTTY', tty); else delete process.stdin.isTTY;
+    unlock();
+  }
 });

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-/** Portable developer builds. Never installs plugins into a live profile or switches a running app. */
+/** Portable developer builds and explicitly requested supervised personal upgrades. */
 import fs from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
@@ -328,14 +328,14 @@ export async function main(argv) {
   const options = {};
   for (let i = 0; i < rest.length; i += 2) {
     invariant(/^--[a-z-]+$/.test(rest[i]) && rest[i + 1] && !rest[i + 1].startsWith('--'), 'Options require a value');
-    invariant(['config', 'out', 'app', 'plugins', 'report', 'brain', 'action', 'receipt'].includes(rest[i].slice(2)), `Unknown option ${rest[i]}`);
+    invariant(['config', 'out', 'app', 'plugins', 'report', 'brain', 'action', 'receipt', 'expected-pid'].includes(rest[i].slice(2)), `Unknown option ${rest[i]}`);
     options[rest[i].slice(2)] = rest[i + 1];
   }
   const need = key => { invariant(options[key], `--${key} is required`); return path.resolve(options[key]); };
   if (['mobile-build', 'mobile-next', 'mobile-record', 'mobile-status'].includes(command)) {
     const {mobileCommand} = await import('./personal-build/mobile.mjs'); return mobileCommand(command, options);
   }
-  if (['auto-check', 'auto-launch', 'auto-status', 'auto-recover', 'auto-bootstrap', 'manual-check', 'manual-activate'].includes(command)) { const { automaticCommand } = await import('./personal-build/automatic.mjs'); return automaticCommand(command, options); }
+  if (['auto-check', 'auto-launch', 'auto-status', 'auto-recover', 'auto-bootstrap', 'manual-check', 'manual-activate', 'manual-restart'].includes(command)) { const { automaticCommand } = await import('./personal-build/automatic.mjs'); return automaticCommand(command, options); }
   if (['launch', 'stage', 'apply', 'rollback', 'doctor', 'sync-plugins', 'select', 'request', 'export'].includes(command)) {
     const { managedCommand } = await import('./personal-build/managed.mjs');
     return managedCommand(command, options);
@@ -396,7 +396,7 @@ export async function main(argv) {
     pnpm(['restart:desktop:remote', '--', `--region=${r.region}`, `--isolated=${r.name}`], r.directory); return;
   }
   invariant(!command || command === 'help', `Unknown command ${command}`);
-  console.log('personal-build: init --config FILE [--app CHECKOUT] [--plugins CHECKOUT]\nprepare --config FILE --out NEW_DIRECTORY\ncheck|start|status --report FILE\naudit --brain CINDY_BRAIN_DIRECTORY\ncontinue --report FILE\nexport --report FILE --out NEW_DIRECTORY\nlaunch|doctor|sync-plugins|stage|apply|rollback --config FILE\nselect --config FILE --report FILE\nrequest --config FILE --action stage|stage-restart|restart\nbundle-tools --out NEW_DIRECTORY\nauto-launch|auto-check|auto-status|auto-recover --config FILE\nauto-bootstrap --config FILE --report BOOTSTRAP_REPORT\nmanual-check --config FILE --report BUILD_REPORT --out NEW_MANUAL_REPORT\nmanual-activate --config FILE --report MANUAL_REPORT\nmobile-build|mobile-next|mobile-status --report BUILD_REPORT\nmobile-record --report BUILD_REPORT --action devices|info|install --receipt PLUGIN_RECEIPT\nManaged macOS lifecycle requires explicit runtime configuration. Restart only follows a request.');
+  console.log('personal-build: init --config FILE [--app CHECKOUT] [--plugins CHECKOUT]\nprepare --config FILE --out NEW_DIRECTORY\ncheck|start|status --report FILE\naudit --brain CINDY_BRAIN_DIRECTORY\ncontinue --report FILE\nexport --report FILE --out NEW_DIRECTORY\nlaunch|doctor|sync-plugins|stage|apply|rollback --config FILE\nselect --config FILE --report FILE\nrequest --config FILE --action stage|stage-restart|restart\nbundle-tools --out NEW_DIRECTORY\nauto-launch|auto-check|auto-status|auto-recover --config FILE\nauto-bootstrap --config FILE --report BOOTSTRAP_REPORT\nmanual-check --config FILE --report BUILD_REPORT --out NEW_MANUAL_REPORT\nmanual-activate --config FILE --report MANUAL_REPORT\nmanual-restart --config FILE --report MANUAL_REPORT --expected-pid PID --out NEW_RECEIPT\nmobile-build|mobile-next|mobile-status --report BUILD_REPORT\nmobile-record --report BUILD_REPORT --action devices|info|install --receipt PLUGIN_RECEIPT\nManaged macOS lifecycle requires explicit runtime configuration. Restart only follows a request.');
 }
 if (process.argv[1] && fs.existsSync(process.argv[1]) && fs.realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)) {
   main(process.argv.slice(2)).catch(error => { console.error(error.message); process.exitCode = 1; });
