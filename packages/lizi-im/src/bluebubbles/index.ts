@@ -7,7 +7,7 @@ import type { TextChannelIM, ImFinalOutput } from '../channelIM.js';
 import type { IMHost, IMMessageEvent, IMStatus, SendFileResult } from '../types.js';
 import { classifyInboundAttachment, UnsupportedInboundMediaError } from '../inboundKind.js';
 import { isPrivateListener, LocalWebhookReceiver } from '../localWebhook.js';
-import { BlueBubblesApi, blueBubblesOrigin, BLUEBUBBLES_MAX_BYTES, type BlueBubblesChat } from './api.js';
+import { BlueBubblesApi, BlueBubblesApiError, blueBubblesOrigin, BLUEBUBBLES_MAX_BYTES, type BlueBubblesChat } from './api.js';
 import { BlueBubblesReceipts, type BlueBubblesStateStorage } from './state.js';
 
 export interface BlueBubblesConfig {
@@ -70,6 +70,9 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
   // Prepared inputs retain chat order until actual acceptance, including the
   // asynchronous interval before a handler reports busy or persists the message.
   private readonly deferredEvents = new Map<string, IMMessageEvent>();
+  // Verified inputs enter in queue order before downloading/staging. Failed
+  // preparation remains cancellable even though it is not ready for dispatch.
+  private readonly pendingInputs = new Map<string, IMMessageEvent>();
   private readonly cancelledEvents = new WeakSet<IMMessageEvent>();
   private readonly eventSentAt = new WeakMap<IMMessageEvent, number>();
   private readonly pendingReplies = new Map<string, { requestId?: string; createdAt: number; accept(text: string): boolean; cancel(): void }>();
@@ -91,6 +94,7 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
     if (this.activeDispatches.has(guid)) {
       this.receipts?.mark(guid, 'accepted');
       this.deferredEvents.delete(guid);
+      this.pendingInputs.delete(guid);
     }
   }
   get botContextId(): string { return this.config ? createHash('sha256').update(this.config.serverUrl).digest('hex').slice(0, 24) : ''; }
@@ -200,6 +204,7 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
     this.pumping = null;
     this.activeDispatches.clear(); this.activeSends.clear();
     this.deferredEvents.clear();
+    this.pendingInputs.clear();
     for (const pending of this.pendingReplies.values()) pending.cancel();
     this.pendingReplies.clear();
     const listener = this.listener;
@@ -269,7 +274,7 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
     if (!api || !config || !receipts || !this.messages.size) return;
     const attempted = new Set<string>();
     let hadFailure = false;
-    for (;;) {
+    inputs: for (;;) {
       this.assertLive(generation);
       const guid = receipts.nextPending(attempted, this.activeDispatches);
       if (!guid) {
@@ -287,7 +292,7 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
           if (message.guid !== guid || message.isFromMe || !chat || !sender || message.handle?.service !== 'iMessage'
             || !Number.isFinite(message.dateCreated) || message.dateCreated < receipts.activatedAt
             || (message.associatedMessageType !== undefined && message.associatedMessageType >= 2000)) {
-            receipts.mark(guid, 'ignored'); continue;
+            receipts.mark(guid, 'ignored'); this.pendingInputs.delete(guid); continue;
           }
           event = { channelName: 'imessage', senderId: chat.guid, chatId: chat.guid,
             contextId: this.botContextId, messageId: guid, text: message.text ?? '', attachments: [], unsupported: [],
@@ -296,10 +301,20 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
             ...(this.isGroup(chat.guid) ? { ambient: !this.isGroupInvocation(message.text ?? ''),
               invoked: this.isGroupInvocation(message.text ?? '') } : {}) };
           this.eventSentAt.set(event, message.dateCreated);
+          this.pendingInputs.set(guid, event);
           for (const attachment of message.attachments ?? []) {
             const name = attachment.transferName || attachment.guid;
             if ((attachment.totalBytes ?? 0) > BLUEBUBBLES_MAX_BYTES) { event.unsupported.push({ type: 'oversize', label: name }); continue; }
-            const bytes = await api.download(attachment.guid); this.assertLive(generation);
+            let bytes: Uint8Array;
+            try { bytes = await api.download(attachment.guid); }
+            catch (error) {
+              this.assertLive(generation);
+              if (!(error instanceof BlueBubblesApiError) || error.code !== 'BLUEBUBBLES_RESPONSE_TOO_LARGE') throw error;
+              event.unsupported.push({ type: 'oversize', label: name });
+              continue;
+            }
+            this.assertLive(generation);
+            if (this.cancelledEvents.has(event)) continue inputs;
             const kind = classifyInboundAttachment(attachment.mimeType, name);
             let stored: { absPath: string; url?: string; mimeType?: string; discard?: () => Promise<void> } | null | undefined;
             try {
@@ -314,12 +329,14 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
               continue;
             }
             if (!this.live(generation)) { await stored?.discard?.(); return; }
+            if (this.cancelledEvents.has(event)) { await stored?.discard?.(); continue inputs; }
             if (!stored) { event.unsupported.push({ type: 'unsupported', label: name }); continue; }
             event.attachments.push({ kind: kind.kind === 'image' ? 'image' : 'file', absPath: stored.absPath,
               originalName: name, mimeType: 'mimeType' in stored && stored.mimeType ? stored.mimeType : kind.mimeType,
               ...(stored.url ? { url: stored.url } : {}) });
           }
         }
+        if (this.cancelledEvents.has(event)) continue;
         const pending = this.pendingReplies.get(event.chatId);
         const command = event.text.trim().toLowerCase();
         const stop = event.attachments.length === 0 && event.unsupported.length === 0
@@ -334,7 +351,7 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
           && (this.eventSentAt.get(event) ?? 0) > pending.createdAt) {
           receipts.mark(guid, 'dispatching');
           if (pending.accept(event.text)) {
-            receipts.mark(guid, 'accepted'); continue;
+            receipts.mark(guid, 'accepted'); this.pendingInputs.delete(guid); continue;
           }
           receipts.mark(guid, 'pending');
         }
@@ -359,7 +376,7 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
           cancelPending: () => {
             this.assertLive(generation);
             let count = 0;
-            for (const [id, queued] of this.deferredEvents) {
+            for (const [id, queued] of this.pendingInputs) {
               // Only withdraw inputs preceding this command. Preparation may
               // hold the chat lock while later work is already being received.
               if (id === guid) break;
@@ -367,6 +384,7 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
               receipts.mark(id, 'ignored');
               this.cancelledEvents.add(queued);
               this.deferredEvents.delete(id);
+              this.pendingInputs.delete(id);
               count++;
             }
             return count;
@@ -384,6 +402,7 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
             if (!this.cancelledEvents.has(event!)) {
               receipts.mark(guid, 'accepted');
               this.deferredEvents.delete(guid);
+              this.pendingInputs.delete(guid);
             }
           },
         };
@@ -395,11 +414,12 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
           if (this.live(generation) && !awaitPersistence && !deferred && !this.cancelledEvents.has(event!)) {
             receipts.mark(guid, 'accepted');
             this.deferredEvents.delete(guid);
+            this.pendingInputs.delete(guid);
           }
         }).catch(() => this.fail(generation)).finally(() => {
           if (this.live(generation)) {
             this.activeDispatches.delete(guid);
-            if (!deferred) this.deferredEvents.delete(guid);
+            if (!deferred) { this.deferredEvents.delete(guid); this.pendingInputs.delete(guid); }
             if (deferred) this.retryDeferred(generation);
             this.setStatus(this.status);
           }

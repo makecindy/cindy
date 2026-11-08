@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { IMHost, IMMessageEvent } from '../types.js';
 import { LocalWebhookReceiver } from '../localWebhook.js';
-import { BlueBubblesApi, type BlueBubblesMessage } from './api.js';
+import { BlueBubblesApi, BLUEBUBBLES_MAX_BYTES, type BlueBubblesMessage } from './api.js';
 import { BlueBubblesIM } from './index.js';
 import { UnsupportedInboundMediaError } from '../inboundKind.js';
 import { BlueBubblesReceipts, type BlueBubblesState } from './state.js';
@@ -54,6 +54,74 @@ async function fixture(initialState: BlueBubblesState | null = null, media?: IMH
 }
 
 describe('BlueBubbles local ingress', () => {
+  // Tier 1, #9250/r4505831913: absent/zero size metadata must not turn the
+  // production downloader's permanent byte limit into startup/retry failure.
+  it('keeps text and the listener after the real downloader rejects oversized bytes', async () => {
+    const f = await fixture();
+    const fetcher = vi.fn<typeof fetch>(async () => new Response(new ReadableStream({
+      start(controller) {
+        controller.enqueue(new Uint8Array(BLUEBUBBLES_MAX_BYTES));
+        controller.enqueue(new Uint8Array([1]));
+        controller.close();
+      },
+    })));
+    const downloader = new BlueBubblesApi(f.api.origin, 'test-only', fetcher);
+    vi.spyOn(f.api, 'download').mockImplementation(guid => downloader.download(guid));
+    for (const [guid, size] of [['missing-size', undefined], ['zero-size', 0]] as const) {
+      f.message(guid, { text: guid, attachments: [{ guid, transferName: 'large.bin', totalBytes: size }] });
+      expect((await f.webhook(guid)).status).toBe(202);
+    }
+    await f.im.reconcile();
+    expect(f.received.map(event => [event.text, event.unsupported])).toEqual([
+      ['missing-size', [{ type: 'oversize', label: 'large.bin' }]],
+      ['zero-size', [{ type: 'oversize', label: 'large.bin' }]],
+    ]);
+    expect(f.state().inbox['missing-size'].state).toBe('accepted');
+    expect(f.state().inbox['zero-size'].state).toBe('accepted');
+    await f.im.dispose();
+    await f.im.init();
+    expect(f.im.getStatus().kind).toBe('connected');
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    f.message('after-oversize');
+    expect((await f.webhook('after-oversize')).status).toBe(202);
+    await f.im.reconcile();
+    expect(f.received.map(event => event.messageId)).toEqual(['missing-size', 'zero-size', 'after-oversize']);
+  });
+
+  // Tier 1, #9250/r4505831911: failed download/staging has not entered the
+  // prepared queue. Stop must still cancel it durably, not later/other-chat work.
+  it('withdraws old failed preparation on stop and preserves later and other-chat inputs on restart', async () => {
+    const cacheImage = vi.fn(async (): Promise<{ absPath: string; url: string }> => { throw new Error('temporary staging failure'); });
+    const f = await fixture(null, { cacheImage, getCachedImage: async () => null, resolveMediaUrl: () => null }, true);
+    const download = vi.spyOn(f.api, 'download').mockImplementation(async guid => {
+      if (guid !== 'staging') throw new Error('temporary download failure');
+      return new Uint8Array([1]);
+    });
+    let cancelled = -1;
+    f.im.onMessage(event => {
+      if (event.text === '/stop') { cancelled = event.delivery!.cancelPending!(); event.delivery!.accept(); }
+    });
+    f.message('old-download', { attachments: [{ guid: 'download', transferName: 'old.bin' }] });
+    f.message('old-staging', { attachments: [{ guid: 'staging', transferName: 'old.png' }] });
+    await expect(f.im.reconcile()).rejects.toThrow('BLUEBUBBLES_RECEIVE_FAILED');
+    f.message('stop-preparation', { text: '/stop' });
+    f.message('later-preparation', { attachments: [{ guid: 'later', transferName: 'later.bin' }] });
+    f.message('other-preparation', { chats: [f.otherChat], attachments: [{ guid: 'other', transferName: 'other.bin' }] });
+    expect((await f.webhook('stop-preparation')).status).toBe(202);
+    await expect(f.im.reconcile()).rejects.toThrow('BLUEBUBBLES_RECEIVE_FAILED');
+    expect(cancelled).toBe(2);
+    for (const guid of ['old-download', 'old-staging']) expect(f.state().inbox[guid].state).toBe('ignored');
+    for (const guid of ['later-preparation', 'other-preparation']) expect(f.state().inbox[guid].state).toBe('pending');
+    await f.im.dispose();
+    download.mockClear().mockResolvedValue(new Uint8Array([1]));
+    cacheImage.mockResolvedValue({ absPath: '/staging/image.png', url: 'cindy-media://image' });
+    const before = f.received.length;
+    await f.im.init();
+    expect(f.im.getStatus().kind).toBe('connected');
+    expect(f.received.slice(before).map(event => event.messageId)).toEqual(['later-preparation', 'other-preparation']);
+    expect(download.mock.calls.map(([guid]) => guid)).toEqual(['later', 'other']);
+  });
+
   // Tier 1, #9250: permanent format rejection must not poison startup catch-up.
   // Existing transient-download regression must keep its pending/retry behavior.
   it('dispatches accompanying text after permanent media rejection and restarts without redownloading it', async () => {
