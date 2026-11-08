@@ -1519,8 +1519,61 @@ export function NewMakerDraftRoute() {
     const healthy = calibrationProviders.filter((p) => !p.modelDiscoveryFailure);
     return healthy.length > 0 ? healthy : calibrationProviders;
   }, [calibrationProviders, draftModelChosenByUser, draftPreferredProviderId]);
+  /**
+   * 目录在运行 Agent 的那台(同账号另一台电脑 / 分享来的供应商)时,草稿的模型必须存在于
+   * **那份目录**里。
+   *
+   * 旧口径把**本机**草稿里的模型 id 原样带过去(见下方 draftCalibration 的 usesDeviceCatalog
+   * 分支)。本机走的是 Cindy AI 网关的型号、分享来的是宿主自己的 Anthropic 订阅型号,两个
+   * 集合基本不重叠 —— 那个 id 在目标目录里查不到,于是新对话的模型选择器没有任何一行命中,
+   * 整个留空,用户每次新建对话都要手动重选一次(#9353)。
+   *
+   * 现在按目标目录校准:目标目录里没有这个模型 → 落到那份目录自己的可用默认;目标目录整个
+   * 读不到(分享被收回 / 宿主离线)→ 退回本机默认,选择器不留空。此时发送仍由主进程按
+   * provider-sharing.md §5.3 给出「已暂停 / 已不可用」并让用户换模型,界面不替他改来源。
+   */
+  const remoteCatalogCalibration = useMemo<DraftModelCalibrationResult | null>(() => {
+    if (!usesDeviceCatalog) return null;
+    const targetHasModel = (modelId: string) =>
+      agentCatalogProviders.some((provider) =>
+        (provider.models[capabilityAgentKind] ?? []).some((model) => model.id === modelId));
+    // 用户上次在这台电脑 / 这个分享上选的模型 —— 本次运行内的记忆(与草稿里的 agentDeviceId
+    // 一样不跨重启)。它属于**目标目录**,不能用本机草稿里那个 id 顶替:本机的型号多半是
+    // Cindy AI 网关的,目标目录里没有,顶替的结果就是选择器里一行都命中不了。
+    const remembered = effectiveAgentDeviceId
+      ? recallAgentDeviceSelection(effectiveAgentDeviceId, capabilityAgentKind)
+      : null;
+    const wantedModel = remembered?.model || chatPrefs.model;
+    if (targetHasModel(wantedModel)) {
+      return { model: wantedModel, providerId: remembered?.providerId ?? null };
+    }
+    const picked = calibrateDraftModel({
+      providers: agentCatalogProviders,
+      // 远端目录已是可选清单(remoteInvocationModels 已按开放模型收窄),本机可见性偏好不适用。
+      agent: capabilityAgentKind,
+      model: wantedModel,
+      // 本机那份「用户显式选过」说的是**本机目录**里的选择,对目标目录不成立:留着这个标记
+      // 等于把一个目标目录里没有的 id 钉死(校准直接短路,选择器留空)。
+      chosenByUser: false,
+      // 同理:上次选中的来源属于目标目录;本机草稿里那个来源对目标目录没有意义。
+      preferredProviderId: remembered?.providerId ?? null,
+      providersLoading: deviceProvidersLoading,
+    });
+    // 目标目录里没有可用模型(空 / 全不可用)→ null,让调用方退回本机默认。
+    return targetHasModel(picked.model) ? picked : null;
+  }, [
+    usesDeviceCatalog,
+    agentCatalogProviders,
+    capabilityAgentKind,
+    effectiveAgentDeviceId,
+    chatPrefs.model,
+    deviceProvidersLoading,
+  ]);
   const draftCalibration = useMemo<DraftModelCalibrationResult>(() => {
-    if (usesDeviceCatalog) return { model: chatPrefs.model, providerId: null };
+    // 目录在远端 / 分享那台时,目标目录里挑到了模型就用它;目标目录没有可用模型(空 / 全不可用)
+    // → 退回本机默认,选择器不留空。此时发送仍由主进程按 provider-sharing.md §5.3 给出
+    // 「已暂停 / 已不可用」并让用户换模型,界面不替他改来源。
+    if (usesDeviceCatalog && remoteCatalogCalibration) return remoteCatalogCalibration;
     return calibrateDraftModel({
       providers: autoCalibrationProviders,
       // 远端 model/list 已是可选清单,本机可见性偏好不适用于它。
@@ -1533,6 +1586,7 @@ export function NewMakerDraftRoute() {
     });
   }, [
     usesDeviceCatalog,
+    remoteCatalogCalibration,
     autoCalibrationProviders,
     sshCodexDraftHostId,
     capabilityAgentKind,
@@ -2125,7 +2179,10 @@ export function NewMakerDraftRoute() {
   // 校准);本地草稿用 chatPrefs(逐字节不变)。device-link 在 holder seed 完成前(等隧道 / 能力)
   // 极早期暂用 chatPrefs,随后被 deviceLinkInitial 取代。
   const { model: draftInitialModel, effort: draftInitialEffort } = useMemo(() => {
-    if (usesDeviceCatalog && deviceLinkInitial) {
+    // 播种出来的模型可能是空串(那份目录没给出可用型号,见 resolveDeviceLinkDraftDefaults 的
+    // 「models.length === 0」分支)。空串会让输入框的模型胶囊整个空着、来源也解析不出来 ——
+    // 与其把空串一路传下去,不如用校准出来的模型(那份目录里真实存在的型号)。
+    if (usesDeviceCatalog && deviceLinkInitial?.model) {
       return { model: deviceLinkInitial.model, effort: deviceLinkInitial.effort };
     }
     // 校准在 calibratedDraftModel 一处完成,effort / fast / 来源都已按它推导 —— 这里

@@ -10,6 +10,10 @@ import { parseDeviceProvidersPayload } from '@/hooks/useDeviceProviders';
 import { extractIpcError } from '@/utils/ipcError';
 import { dbToMakerAgentKind, normalizeDbAgentKind } from '../../../../shared/agentKindConversion';
 import { modelCatalogKey } from '../../../../shared/controlledModelCatalog';
+import {
+  calibrateDraftModel,
+  type DraftModelCalibrationResult,
+} from '../../../../shared/draftModelCalibration';
 import { isProviderShareAgentDeviceId } from '../../../../shared/providerShare';
 import {
   resolveDeviceLinkDraftDefaults,
@@ -240,5 +244,132 @@ describe('Agent location chosen on a controlled new-task draft', () => {
       controllerTouched: dlRuntimeTouchedRef.current,
       remoteModelChosenByUser: true,
     })).toBe(false);
+  });
+});
+
+// A new task whose Agent runs on another computer (or on a shared provider) resolves its
+// model against **that** catalog. The local draft's model id is usually not offered there
+// (the gateway models and the share host's own subscription models barely overlap), and the
+// old code carried that id over unchanged: no row of the target catalog matched it, so the
+// model picker came up empty on every new conversation (#9353).
+describe('new task model resolves against the catalog it will use', () => {
+  function providerWithModel(id: string, modelId: string): ProviderView {
+    return {
+      id, name: id, source: 'user', connected: true,
+      agents: ['pi'], auth: { method: 'none' },
+      routing: { pi: { upstream: 'https://provider.invalid', authStrategy: 'none' } },
+      models: { pi: [{
+        id: modelId, name: modelId, contextWindow: 200_000,
+        efforts: ['medium'], defaultEffort: 'medium', effortsUnknown: false,
+      }] },
+    };
+  }
+
+  function calibrate(options: {
+    targetProviders: ProviderView[];
+    localProviders: ProviderView[];
+    draftModel: string;
+    chosenByUser?: boolean;
+    usesDeviceCatalog?: boolean;
+    rememberedModel?: string;
+  }): DraftModelCalibrationResult {
+    const shared = {
+      usesDeviceCatalog: options.usesDeviceCatalog !== false,
+      capabilityAgentKind: 'pi',
+      effectiveAgentDeviceId: options.usesDeviceCatalog === false ? undefined : 'share:abc',
+      recallAgentDeviceSelection: () =>
+        options.rememberedModel ? { model: options.rememberedModel } : null,
+      chatPrefs: {
+        model: options.draftModel, effort: 'medium', permissionMode: 'auto',
+        planMode: false, providerId: null,
+      },
+      calibrateDraftModel,
+      isModelEnabled: () => true,
+      sshCodexDraftHostId: null,
+      draftPreferredProviderId: null,
+      draftModelChosenByUser: options.chosenByUser === true,
+      draftLocalProvidersLoading: false,
+      autoCalibrationProviders: options.localProviders,
+      deviceProvidersLoading: false,
+      agentCatalogProviders: options.targetProviders,
+    };
+    const remote = callback<() => DraftModelCalibrationResult | null>('remoteCatalogCalibration', shared);
+    const draft = callback<() => DraftModelCalibrationResult>('draftCalibration', {
+      ...shared,
+      remoteCatalogCalibration: remote(),
+    });
+    return draft();
+  }
+
+  it('picks a model the target catalog offers instead of the local draft model', () => {
+    const result = calibrate({
+      targetProviders: [providerWithModel('shared-source', 'shared-model')],
+      localProviders: [providerWithModel('local-source', 'local-model')],
+      draftModel: 'local-model',
+    });
+    expect(result.model).toBe('shared-model');
+  });
+
+  it('keeps the model the user picked on that computer', () => {
+    const result = calibrate({
+      targetProviders: [providerWithModel('shared-source', 'shared-model')],
+      localProviders: [providerWithModel('local-source', 'local-model')],
+      draftModel: 'local-model',
+      rememberedModel: 'shared-model',
+    });
+    expect(result.model).toBe('shared-model');
+  });
+
+  it('falls back to the local default when the target catalog offers nothing', () => {
+    const result = calibrate({
+      targetProviders: [],
+      localProviders: [providerWithModel('local-source', 'local-model')],
+      draftModel: 'local-model',
+    });
+    expect(result.model).toBe('local-model');
+  });
+
+  it('keeps the local draft model on a local draft even when the user chose it', () => {
+    const result = calibrate({
+      usesDeviceCatalog: false,
+      targetProviders: [],
+      localProviders: [providerWithModel('local-source', 'local-model')],
+      draftModel: 'local-model',
+      chosenByUser: true,
+    });
+    expect(result.model).toBe('local-model');
+  });
+});
+
+// A catalog that offers no model seeds an empty model id; an empty id would leave the
+// composer pill blank and resolve no source, so the calibrated model takes over.
+describe('new task model falls back when the seeded model is empty', () => {
+  function initialModel(deviceLinkInitial: { model: string; effort: Effort | null } | null): string {
+    const initial = compile<() => { model: string; effort: Effort | null }>(
+      'draftInitialModel',
+      (node) =>
+        ts.isVariableDeclaration(node) &&
+        ts.isObjectBindingPattern(node.name) &&
+        node.name.elements.some((element) => element.name.getText(source) === 'draftInitialModel') &&
+        node.initializer &&
+        ts.isCallExpression(node.initializer)
+          ? node.initializer.arguments[0]
+          : undefined,
+      {
+        usesDeviceCatalog: true,
+        deviceLinkInitial,
+        calibratedDraftModel: 'shared-model',
+        localDraftEffort: 'medium',
+      },
+    );
+    return initial().model;
+  }
+
+  it('uses the seeded model when the catalog offers one', () => {
+    expect(initialModel({ model: 'seeded-model', effort: 'high' })).toBe('seeded-model');
+  });
+
+  it('uses the calibrated model when the seeded model is empty', () => {
+    expect(initialModel({ model: '', effort: null })).toBe('shared-model');
   });
 });
