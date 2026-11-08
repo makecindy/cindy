@@ -49,9 +49,9 @@ const invoke = vi.fn(async (_d: string, channel: string) => {
   if (channel === 'worktree:removal-preview') return h.preview;
   throw new Error(`unexpected ${channel}`);
 });
-const Page = ({ id }: { id: string }) => {
+const Page = ({ id, messages = [] }: { id: string; messages?: unknown[] }) => {
   useTaskAutoArchive({ session: { ...session, id } as never, deviceId: 'mac', invoke: invoke as never, enabled: true,
-    historyLoaded: true, messages: [], archive: () => {}, patchSession: patchSession as never });
+    historyLoaded: true, messages: messages as never, archive: () => {}, patchSession: patchSession as never });
   return null;
 };
 const settle = () => act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
@@ -92,6 +92,32 @@ describe('auto-archive when leaving the phone task page', () => {
     await act(async () => root.render(createElement(Page, { id: 'other' })));
     await settle();
     expect(patches.map(({ session: target, patch }) => [target.id, patch.status])).toEqual([['s', 'archived']]);
+    await act(async () => root.unmount());
+  });
+
+  // Bug (review of #9325): messages from other tasks, Orca and auto-resume were taken for the user typing, which
+  // cancelled a pending auto-archive for good. Minimal input: one such row after the card became pending.
+  it('keeps a pending auto-archive through internal messages and cancels it for a real one', async () => {
+    const row = (clientId: string, agentMeta: Record<string, unknown> | null) => ({ role: 'user', clientId, agentMeta });
+    const root = createRoot(document.createElement('div'));
+    const render = (messages: unknown[]) => act(async () => root.render(createElement(Page, { id: 's', messages })));
+    const before = [row('u1', null)];
+    await render(before);
+    taskAutoArchive.setArmed('s', 'card', true);
+    for (const [i, meta] of [
+      { origin: { kind: 'session', senderSessionId: 'other' } },
+      { origin: { kind: 'orca', senderSessionId: 'lead' } },
+      { origin: { kind: 'scheduler', scheduleId: 'daily' } },
+      { autoResume: true },
+      { parentToolUseId: 'toolu_01abc' },
+      { sourcePlugin: { pluginId: 'cindy-github' } },
+    ].entries()) {
+      await render([...before, row(`internal-${i}`, meta)]);
+      expect(taskAutoArchive.getState('s')).toBe('pending');
+    }
+    // A person's message through an IM hook counts, like one typed on the phone.
+    await render([...before, row('hook', { origin: { kind: 'scheduler', scheduleId: 'hook:slack' } })]);
+    expect(taskAutoArchive.getState('s')).toBe('cancelled');
     await act(async () => root.unmount());
   });
 
