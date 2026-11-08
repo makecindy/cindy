@@ -682,6 +682,58 @@ describe('syncIndependentCodexAuth (#9277)', () => {
     });
     expect(fs.lstatSync(myAuth).isSymbolicLink()).toBe(true);
   });
+
+  // #9316 review:同机另一个 Cindy profile(或本机 Codex)原子替换凭证时会经历
+  // rm → rename 的空窗,路径在那一瞬读不到。这不是终态失败:抛出去会让 getState()
+  // 整个拒绝,登录路径还会写下断线标记 —— 文件其实可能已经回来了。
+  it('系统凭证在对账途中瞬时消失:重新对账,不抛异常', async () => {
+    fs.writeFileSync(systemAuth, SYSTEM_CONTENT);
+    const originalStat = fs.promises.stat.bind(fs.promises);
+    let systemStatCalls = 0;
+    vi.spyOn(fs.promises, 'stat').mockImplementation(async (target, opts) => {
+      // 第一次是对账前的存在性检查,第二次才是对账循环里读代次的那次。
+      if (String(target) === systemAuth && opts === undefined) {
+        systemStatCalls += 1;
+        if (systemStatCalls === 2) {
+          const err = new Error('ENOENT: no such file or directory') as NodeJS.ErrnoException;
+          err.code = 'ENOENT';
+          throw err;
+        }
+      }
+      return originalStat(target as never, opts as never);
+    });
+
+    const out = await syncIndependentCodexAuth(systemAuth, myAuth, 'win32');
+
+    expect(out.kind).toBe('copied-from-system');
+    expect(fs.readFileSync(myAuth, 'utf8')).toBe(SYSTEM_CONTENT);
+  });
+
+  it('本地凭证在对账途中瞬时消失:重新对账,不抛异常', async () => {
+    fs.writeFileSync(systemAuth, SYSTEM_CONTENT);
+    fs.writeFileSync(myAuth, MY_CONTENT);
+    const newer = new Date(Date.now() + 60_000);
+    fs.utimesSync(myAuth, newer, newer);
+    const originalStat = fs.promises.stat.bind(fs.promises);
+    let localStatCalls = 0;
+    vi.spyOn(fs.promises, 'stat').mockImplementation(async (target, opts) => {
+      // 非 bigint 的第一次 stat(myAuth) 就是对账循环里读本地代次的那次。
+      if (String(target) === myAuth && opts === undefined) {
+        localStatCalls += 1;
+        if (localStatCalls === 1) {
+          const err = new Error('ENOENT: no such file or directory') as NodeJS.ErrnoException;
+          err.code = 'ENOENT';
+          throw err;
+        }
+      }
+      return originalStat(target as never, opts as never);
+    });
+
+    const out = await syncIndependentCodexAuth(systemAuth, myAuth, 'win32');
+
+    expect(out.kind).toBe('copied-from-system');
+    expect(fs.readFileSync(myAuth, 'utf8')).toBe(SYSTEM_CONTENT);
+  });
 });
 
 describe('inspectCodexAuthLink', () => {

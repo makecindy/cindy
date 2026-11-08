@@ -429,6 +429,16 @@ async function breakResidualSystemCodexHardlinksDetailed(
   }
 }
 
+/**
+ * 路径瞬时消失时的重试间隔。同机另一个 Cindy profile(或本机 Codex)原子替换凭证时
+ * 会经历 rm → rename 的空窗, 窗口很短但不是零:立刻重试大概率还在空窗里。
+ */
+const TRANSIENT_PATH_RETRY_DELAY_MS = 50;
+
+async function waitBeforePathRetry(): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, TRANSIENT_PATH_RETRY_DELAY_MS));
+}
+
 export type CodexAuthCopySyncKind =
   | 'copied-from-system'
   | 'copied-from-local'
@@ -562,7 +572,16 @@ export async function syncIndependentCodexAuth(
       local = null;
     }
     if (local?.isSymbolicLink()) return { kind: 'skipped' };
-    const systemStat = await fsp.stat(systemAuth);
+    // 路径可能在同机另一个 Cindy profile 的 rm → rename 空窗里瞬时消失:这一代
+    // stat 读不到就是「再对一次账」,不是终态失败。抛出去会让 getState() 整个
+    // 拒绝, 登录路径还会写下断线标记 —— 文件其实可能已经回来了(#9316 review)。
+    let systemStat: Awaited<ReturnType<typeof fsp.stat>>;
+    try {
+      systemStat = await fsp.stat(systemAuth);
+    } catch {
+      await waitBeforePathRetry();
+      continue;
+    }
     if (!local || await sameCodexAuthInode(systemAuth, myAuth)) {
       // 存量 hardlink: 复制一份到 myAuth 会拆掉本沙箱这一端的链接。系统路径上还
       // 挂着别的 profile 的硬链时 nlink 仍 > 1,Codex 照样拒绝写 —— 一并换到新 inode。
@@ -590,7 +609,15 @@ export async function syncIndependentCodexAuth(
       return { kind: 'unchanged' };
     }
 
-    const localStat = await fsp.stat(myAuth);
+    // 本地凭证同样可能在对账途中被本机 Codex 换掉(原子替换的 rm → rename 空窗):
+    // 读不到就重新对账, 不要让整个同步失败(#9316 review)。
+    let localStat: Awaited<ReturnType<typeof fsp.stat>>;
+    try {
+      localStat = await fsp.stat(myAuth);
+    } catch {
+      await waitBeforePathRetry();
+      continue;
+    }
     // 两侧 mtime 相同但内容不同(备份恢复、时间精度)不是「未变化」:必须挑一个确定
     // 的权威端,否则 reconcile 会把旧 token/旧账号当成已对齐,永不自愈。
     // 权威端由调用方授权决定:允许回写且本地不比系统旧 → 本地赢;否则系统凭证获胜。

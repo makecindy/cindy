@@ -2812,16 +2812,19 @@ describe('Codex system credential suppression marker', () => {
     );
     expect(fs.statSync(systemAuth).nlink).toBe(2);
 
-    const originalRename = fs.promises.rename.bind(fs.promises);
+    // 拆硬链一直失败(瞬时 EBUSY):系统路径仍是 nlink=2,Codex 存不住凭证。
+    // 失败点选在写 sidecar 上:它在任何平台专属步骤(Windows 先删系统路径再
+    // rename)之前 —— 失败点在 rename 上时,Windows 已经把系统路径删掉又用
+    // 内存里的内容写回了一份新文件,nlink 已经是 1,两种平台的失败形态不一致。
+    const originalWriteFile = fs.promises.writeFile.bind(fs.promises);
     let breakFails = true;
-    vi.spyOn(fs.promises, 'rename').mockImplementation(async (from, to) => {
-      // 拆硬链一直失败(瞬时 EBUSY):系统路径仍是 nlink=2,Codex 存不住凭证。
-      if (String(to) === systemAuth && String(from).includes('.copytmp') && breakFails) {
+    vi.spyOn(fs.promises, 'writeFile').mockImplementation(async (file, data, options) => {
+      if (String(file).includes('.copytmp') && breakFails) {
         const err = new Error('EBUSY: resource busy') as NodeJS.ErrnoException;
         err.code = 'EBUSY';
         throw err;
       }
-      return originalRename(from as never, to as never);
+      return originalWriteFile(file as never, data as never, options as never);
     });
 
     const { DesktopCodexAuthAdapter } = await import('../auth-adapters.js');
