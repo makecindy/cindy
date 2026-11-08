@@ -286,6 +286,7 @@ export interface RemoteAgentHostDeps {
     locate?(controller: string, request: Extract<RemoteAgentRequest, { op: 'direct-locate' }>): Promise<{ deviceId: string } | null>;
     /** O accepts fresh relay history; native history must stay on its recorded M. */
     acceptDelegated?(controller: string, sessionId: string): Promise<void>;
+    beginDelegatedTurn?(controller: string, sessionId: string, executionId: string): Promise<(() => Promise<void>) | undefined>;
     acceptRelay?(controller: string, sessionId: string, hasNativeHistory: boolean): Promise<void>;
     allocate(controller: string, request: Extract<RemoteAgentRequest, { op: 'allocate' }>): Promise<{ deviceId: string; generation: string; leaseDurationMs?: number } | null>;
     status(controller: string, request: Extract<RemoteAgentRequest, { op: 'direct-status' }>): void;
@@ -480,6 +481,8 @@ interface Run {
   ownerRoute?: OwnerProviderRouteBinding;
   /** 换模型/来源串行，避免失败回滚覆盖后一次选择。 */
   modelChange?: Promise<void>;
+  /** Executor-owned receipt; retained after revocation until this turn has stopped. */
+  standbyTurn?: { complete(): Promise<void>; pending: boolean; completing?: Promise<void> };
   usageMeter?: ReturnType<typeof createGuestUsageMeter>;
   lastState?: string;
   stateTimer?: ReturnType<typeof setInterval>;
@@ -1180,6 +1183,9 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
   function emitState(run: Run): void {
     if (!run.handle || run.closing) return;
     const state = snapshotHandleState(run.handle);
+    void completeStandbyTurn(run).catch(error => {
+      deps.log?.warn('standby completion deferred', { runId: run.id, error: String(error) });
+    });
     if (typeof state.turnRunning === 'boolean') {
       run.turnRunning = state.turnRunning;
       run.groupLoad?.setRunning(state.turnRunning);
@@ -2506,14 +2512,19 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
     if (run.stateTimer) clearInterval(run.stateTimer);
     for (const pending of run.pending.values()) pending.reject(new Error('[REMOTE_AGENT_EXPIRED] task has ended'));
     run.pending.clear();
+    let stopped = false;
     if (closeHandle && run.handle) {
       try {
         if (mode === 'detach' && run.handle.detach) await run.handle.detach({ reason: teardown });
         else await run.handle.close({ reason: teardown });
+        stopped = mode === 'close';
       } catch (error) {
         deps.log?.warn('remote agent close failed', { runId: run.id, error: String(error) });
       }
     }
+    await completeStandbyTurn(run, stopped).catch(error => {
+      deps.log?.warn('standby completion deferred after close', { runId: run.id, error: String(error) });
+    });
     // 中转任务：结束组内电脑上的那个任务(撤权、受邀者离开、关闭都走这里)，并放掉它占的负载。
     const relay = run.relay;
     if (relay) {
@@ -2614,10 +2625,22 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
     await change;
   }
 
+  async function completeStandbyTurn(run: Run, stopped = false): Promise<void> {
+    const turn = run.standbyTurn;
+    if (!turn || (!stopped && (turn.pending || (run.handle && activityBusy(handleActivity(run.handle)))))) return;
+    if (!turn.completing) {
+      turn.completing = turn.complete().then(() => {
+        if (run.standbyTurn === turn) run.standbyTurn = undefined;
+      }).finally(() => { turn.completing = undefined; });
+    }
+    await turn.completing;
+  }
+
   async function callOnHandle(run: Run, callId: string, method: RemoteAgentMethod, payload: RemoteAgentPayload): Promise<void> {
     if (run.relay?.started) return relayCall(run, run.relay, callId, method, payload);
     const handle = run.handle;
     let rollbackProvider: (() => void) | undefined;
+    let standbyTurn: Run['standbyTurn'];
     try {
       if (run.closing) fail('REMOTE_AGENT_EXPIRED', 'task has ended');
       if (!delegatedRunAllowed(run)) fail('REMOTE_AGENT_UNAVAILABLE', 'this shared task is no longer authorized');
@@ -2692,6 +2715,15 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
         rollbackProvider = () => binding.setProvider(previousProviderId);
       }
       let value: unknown;
+      if (method === 'send' && run.trust === 'guest' && run.sessionId
+        && deps.directGuestExecution?.sessionDelegated(run.controller, run.sessionId)) {
+        await completeStandbyTurn(run);
+        if (run.standbyTurn) fail('REMOTE_AGENT_UNAVAILABLE', 'previous shared turn is still running');
+        const complete = await deps.directGuestExecution.beginDelegatedTurn?.(run.controller, run.sessionId, `${run.id}:${callId}`);
+        if (complete) run.standbyTurn = standbyTurn = { complete, pending: true };
+        if (run.closing) fail('REMOTE_AGENT_EXPIRED', 'task has ended');
+        if (!delegatedRunAllowed(run)) fail('REMOTE_AGENT_UNAVAILABLE', 'this shared task is no longer authorized');
+      }
       try {
         value = await (target as (...a: unknown[]) => unknown).apply(handle, callArgs);
       } catch (error) {
@@ -2712,6 +2744,12 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
       }
       append(run, { t: 'result', callId, ok: false, error: info });
     } finally {
+      if (standbyTurn) {
+        standbyTurn.pending = false;
+        await completeStandbyTurn(run).catch(error => {
+          deps.log?.warn('standby completion deferred', { runId: run.id, error: String(error) });
+        });
+      }
       run.calls.set(callId, 'done');
       if (run.calls.size > MAX_REMEMBERED_CALLS) {
         for (const [id, status] of run.calls) {

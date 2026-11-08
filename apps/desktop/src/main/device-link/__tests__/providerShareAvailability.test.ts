@@ -25,7 +25,7 @@ vi.mock('../providerShareCrossRegion.js', () => ({ isCrossRegionShare: () => fal
 vi.mock('../providerShareGuest.js', () => ({ findReceivedShare: () => ({ standbyOnline: true }) }));
 vi.mock('../providerShareDelegatedAccess.js', () => ({ applyProviderShareDelegation: (...args: any[]) => f.apply(...args), delegatedProviderShareLeases: () => f.leases,
   invalidateProviderShareDelegation: (...args: any[]) => f.invalidate(...args) }));
-import { publishShareAvailability, prepareShareAvailability, allocateShareAvailability, readShareAvailabilityCatalog } from '../providerShareAvailability.js';
+import { publishShareAvailability, prepareShareAvailability, allocateShareAvailability, readShareAvailabilityCatalog, beginShareAvailabilityTurn } from '../providerShareAvailability.js';
 const model = { id: 'allowed', name: 'Fake model', contextWindow: 200000, efforts: ['high'], defaultEffort: 'high' };
 const owned = { shareId: 'share', hostDeviceId: 'owner-pc', providerId: 'group', members: [{ memberId: 'member', status: 'active', joinedAt: '2026-11-08T00:00:00Z' }] } as ProviderShareOwned;
 beforeEach(() => {
@@ -35,6 +35,23 @@ beforeEach(() => {
   f.request.mockImplementation(async (path: string) => path.endsWith('/policy') ? { revision: 5, executors: [] } : {});
 });
 describe('standby client production entry points (all identities/providers are local fakes)', () => {
+  it('keeps a turn-bound completion receipt after revocation, without crossing account scope', async () => {
+    const peer = providerShareGuestPeer('share', 'member', 'guest');
+    f.leases = [{ peer, sessionId: 'task', lease: { availability: true, generation: 'assignment-a' } }];
+    const complete = await beginShareAvailabilityTurn(peer, 'task', 'turn-a');
+    expect(f.request).toHaveBeenLastCalledWith(expect.stringMatching(/\/accept$/), expect.objectContaining({
+      body: { memberId: 'member', guestDeviceId: 'guest', sessionId: 'task', generation: 'assignment-a', executionId: 'turn-a' },
+    }));
+    f.leases = [];
+    await complete!();
+    expect(f.request).toHaveBeenLastCalledWith(expect.stringMatching(/\/complete$/), expect.objectContaining({
+      body: { sessionId: 'task', generation: 'assignment-a', executionId: 'turn-a' },
+    }));
+    const count = f.request.mock.calls.length;
+    f.scope = 'other-account';
+    await expect(complete!()).rejects.toThrow('account changed');
+    expect(f.request).toHaveBeenCalledTimes(count);
+  });
   it('publishes local provider mapping and exact model permission without credentials', async () => {
     await publishShareAvailability([owned]);
     const body = f.request.mock.calls.find(([path]) => path.endsWith('/publish'))![1].body.policy;

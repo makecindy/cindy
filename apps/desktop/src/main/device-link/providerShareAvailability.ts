@@ -191,6 +191,24 @@ export async function acceptShareAvailability(controller: string, sessionId: str
   await shareAvailabilityRequest(peer.shareId, 'accept', { memberId: peer.memberId, guestDeviceId: peer.deviceId, sessionId, generation: item.lease.generation });
 }
 
+/** Capture the receipt before execution: revoking the local grant must not strand its capacity. */
+export async function beginShareAvailabilityTurn(controller: string, sessionId: string, executionId: string): Promise<(() => Promise<void>) | undefined> {
+  const item = delegatedProviderShareLeases().find(row => row.peer === controller && row.sessionId === sessionId);
+  if (!item?.lease.availability) return;
+  const peer = parseProviderSharePeer(controller);
+  if (peer?.role !== 'guest') throw new Error('Invalid guest');
+  const assertCurrent = captureProviderManagementScope();
+  const owner = providerShareOwnerKey();
+  const endpoint = getClientEndpoint('deviceLinkApiBaseUrl');
+  const generation = item.lease.generation;
+  await shareAvailabilityRequest(peer.shareId, 'accept', { memberId: peer.memberId, guestDeviceId: peer.deviceId, sessionId, generation, executionId });
+  return async () => {
+    assertCurrent();
+    if (providerShareOwnerKey() !== owner || getClientEndpoint('deviceLinkApiBaseUrl') !== endpoint) throw new ProviderShareScopeChangedError();
+    await shareAvailabilityRequest(peer.shareId, 'complete', { sessionId, generation, executionId });
+  };
+}
+
 export async function refreshStandbyGuests(): Promise<void> {
   for (const controller of knownStandbyGuests()) {
     try { await prepareShareAvailability(controller); } catch { /* A failed read never renews a lease. */ }

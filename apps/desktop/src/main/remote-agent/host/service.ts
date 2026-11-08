@@ -1,5 +1,5 @@
 import { recordStandbyUsage, flushStandbyUsage } from '../../device-link/providerShareAvailabilityUsage.js';
-import { prepareShareAvailability, acceptShareAvailability } from '../../device-link/providerShareAvailability.js';
+import { prepareShareAvailability, acceptShareAvailability, beginShareAvailabilityTurn } from '../../device-link/providerShareAvailability.js';
 import { assertMemberBudget, memberBudgetDenial, memberBudgetAllows } from '../../device-link/providerShareBudgetRuntime.js';
 import { readRemoteAgentLimitsState } from './limitsStore.js';
 /**
@@ -1017,6 +1017,7 @@ export function installRemoteAgentHost(options: {
     groupContinuity: hasProviderGroupContinuityHandler,
     directGuestExecution: {
       acceptDelegated: acceptShareAvailability,
+      beginDelegatedTurn: beginShareAvailabilityTurn,
       ownerScope: providerShareOwnerKey,
       async locate(controller, request) {
         const key = JSON.stringify([controller, request.sessionId]);

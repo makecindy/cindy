@@ -182,6 +182,38 @@ afterEach(() => {
 });
 
 describe('guest shadow workspace', () => {
+  it('admits each standby turn and releases its receipt after completion or revoked close', async () => {
+    const started: Started[] = [];
+    let authorized = true;
+    let busy = false;
+    const receipts = [vi.fn(async () => {}), vi.fn(async () => {})];
+    const begin = vi.fn().mockResolvedValueOnce(receipts[0]).mockRejectedValueOnce(new Error('executor busy')).mockResolvedValueOnce(receipts[1]);
+    const host = makeHost(started, { isTurnRunning: () => busy, directGuestExecution: {
+      ownerScope: () => 'fake-owner', sessionAllowed: () => authorized, sessionDelegated: () => true,
+      beginDelegatedTurn: begin, allocate: async () => null, status: () => {}, release: async () => {},
+      switch: async () => ({}), usage: async () => {}, delegate: async () => true, forget: () => true,
+    } });
+    const send = (callId: string) => host.handle(GUEST, { op: 'call', runId: RUN_1, callId, method: 'send',
+      payload: { json: [{ content: 'fake turn', attachments: [] }] } });
+    try {
+      await host.handle(GUEST, { op: 'open', runId: RUN_1, agentKind: 'claude-code', payload: { json: openPayload('standby-task') } });
+      await waitForStarted(host, GUEST, RUN_1);
+      await send(CALL_1);
+      await vi.waitFor(() => expect(receipts[0]).toHaveBeenCalledTimes(1));
+      expect(begin).toHaveBeenLastCalledWith(GUEST, 'standby-task', `${RUN_1}:${CALL_1}`);
+      await send(RUN_2);
+      await vi.waitFor(() => expect(begin).toHaveBeenCalledTimes(2));
+      expect(started[0].sends).toHaveLength(1);
+      busy = true;
+      await send('44444444-4444-4444-8444-444444444444');
+      await vi.waitFor(() => expect(started[0].sends).toHaveLength(2));
+      expect(receipts[1]).not.toHaveBeenCalled();
+      authorized = false;
+      await host.abortControllers(controller => controller === GUEST);
+      await vi.waitFor(() => expect(receipts[1]).toHaveBeenCalledTimes(1));
+    } finally { host.dispose(); }
+  });
+
   it('requires standby assignment acceptance before starting the fake engine', async () => {
     const started: Started[] = [];
     const accept = vi.fn(async (): Promise<void> => { throw new Error('revoked assignment'); });
