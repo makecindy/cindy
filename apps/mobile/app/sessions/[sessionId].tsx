@@ -11357,30 +11357,6 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
             selectComposerPlugin={selectComposerPlugin}
             selectAtResource={selectAtResource}
           />
-          {!shareSelectionActive && !isSharedTaskPeer(deviceId) && !sessionManagedByHost && goalStatus ? (
-            <Pressable
-              accessibilityLabel={`${t('session.common.goalMode')} · ${goalStatusLabel(goalStatus.status, goalStatus.lastReason)}`}
-              accessibilityRole="button"
-              onPress={() => {
-                setModelSheetOpen(false);
-                setContextSheetView('goal');
-                setContextSheetOpen(true);
-              }}
-              style={({ pressed }) => [
-                styles.queueEditBar,
-                { minHeight: 44, marginHorizontal: composerTouchLayout.composerPaddingHorizontal },
-                pressed && styles.collabBarPressed,
-              ]}
-              testID="session.goalStatusBar"
-            >
-              <Target color={goalStatus.status === 'active' ? colors.statusAccent : colors.textSecondary} size={iconSize.sm} strokeWidth={iconStroke.regular} />
-              <Text numberOfLines={2} style={styles.queueEditBarText}>
-                {t('session.common.goalMode')} ·{" "}
-                          {goalStatusLabel(goalStatus.status, goalStatus.lastReason)}
-              </Text>
-              <ChevronRight color={colors.textTertiary} size={iconSize.sm} strokeWidth={iconStroke.regular} />
-            </Pressable>
-          ) : null}
           <PluginUiEnablePrompt deviceId={deviceId} deviceName={deviceName} sessionId={sessionId}
             online={!remoteRealtimeControlsUnavailable} active={creationScreenFocused && !shareSelectionActive} />
           {/*
@@ -11565,6 +11541,31 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
                   testID="session.sideChat.returnMain">
                   <MessagesSquare color={colors.textTertiary} size={iconSize.sm} strokeWidth={iconStroke.regular} />
                   <Text numberOfLines={1} style={styles.queueEditBarText}>{t('session.sideChat.returnMain')}</Text>
+                  <ChevronRight color={colors.textTertiary} size={iconSize.sm} strokeWidth={iconStroke.regular} />
+                </Pressable>
+              ) : null}
+              {/* Goal 状态条与其它条一样贴在输入框正上方,位于活动行之下,避免被活动行的留白隔开。 */}
+              {!shareSelectionActive && !isSharedTaskPeer(deviceId) && !sessionManagedByHost && goalStatus ? (
+                <Pressable
+                  accessibilityLabel={`${t('session.common.goalMode')} · ${goalStatusLabel(goalStatus.status, goalStatus.lastReason)}`}
+                  accessibilityRole="button"
+                  onPress={() => {
+                    setModelSheetOpen(false);
+                    setContextSheetView('goal');
+                    setContextSheetOpen(true);
+                  }}
+                  style={({ pressed }) => [
+                    styles.queueEditBar,
+                    { minHeight: 44, marginHorizontal: composerTouchLayout.composerPaddingHorizontal },
+                    pressed && styles.collabBarPressed,
+                  ]}
+                  testID="session.goalStatusBar"
+                >
+                  <Target color={goalStatus.status === 'active' ? colors.statusAccent : colors.textSecondary} size={iconSize.sm} strokeWidth={iconStroke.regular} />
+                  <Text numberOfLines={2} style={styles.queueEditBarText}>
+                    {t('session.common.goalMode')} ·{" "}
+                              {goalStatusLabel(goalStatus.status, goalStatus.lastReason)}
+                  </Text>
                   <ChevronRight color={colors.textTertiary} size={iconSize.sm} strokeWidth={iconStroke.regular} />
                 </Pressable>
               ) : null}
