@@ -1,7 +1,7 @@
 import { personalizationDetailsSettings } from './PersonalizationDetails.settings-search';
 import { useSettingDefinition } from './useSettingDefinition';
 import { Button } from '@/components/ui/button';
-import { SettingsCard, SettingsField, SettingsSection } from '@/components/ui/settings-rows';
+import { SettingsCard, SettingsField } from '@/components/ui/settings-rows';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
@@ -40,57 +40,55 @@ export function UserPromptSection() {
   );
 
   return (
-    <SettingsSection variant="page" title={t('settings.personalization.title')}>
-      <SettingsCard>
-        {/* 名称/说明在输入框上方, 与输入框同属一项 */}
-        <SettingsField title={setting.title} hint={setting.description}>
-          <textarea {...setting.anchorProps} {...setting.controlProps}
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            placeholder={t('settings.personalization.placeholder')}
-            aria-label={t('settings.personalization.ariaLabel')}
-            rows={7}
+    <SettingsCard>
+      {/* 名称/说明在输入框上方, 与输入框同属一项 */}
+      <SettingsField title={setting.title} hint={setting.description}>
+        <textarea {...setting.anchorProps} {...setting.controlProps}
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          placeholder={t('settings.personalization.placeholder')}
+          aria-label={t('settings.personalization.ariaLabel')}
+          rows={7}
+          className={cn(
+            'min-h-[160px] w-full resize-y rounded-lg',
+            'p-4',
+            'bg-[var(--settings-input-bg)]',
+            'border border-[var(--settings-input-border)]',
+            'text-13 leading-[1.6] text-[var(--settings-input-text)]',
+            'placeholder:font-normal placeholder:text-[var(--settings-input-placeholder)]',
+            'outline-none focus:border-[var(--settings-input-border-focus)]',
+            'transition-colors',
+          )}
+          style={{ userSelect: 'text', WebkitUserSelect: 'text' }}
+        />
+
+        <div className="flex items-center justify-between gap-3">
+          <p
             className={cn(
-              'min-h-[160px] w-full resize-y rounded-xl',
-              'p-4',
-              'bg-[var(--settings-input-bg)]',
-              'border border-[var(--settings-input-border)]',
-              'text-13 leading-[1.6] text-[var(--settings-input-text)]',
-              'placeholder:font-normal placeholder:text-[var(--settings-input-placeholder)]',
-              'outline-none focus:border-[var(--settings-input-border-focus)]',
-              'transition-colors',
+              'text-12 tabular-nums',
+              overLimit
+                ? 'text-[var(--settings-error-text)]'
+                : 'text-[var(--settings-source-meta)]',
             )}
-            style={{ userSelect: 'text', WebkitUserSelect: 'text' }}
-          />
+            style={{ letterSpacing: '0.12px' }}
+            aria-live="polite"
+          >
+            {counter}
+            {overLimit ? t('settings.personalization.overLimit') : ''}
+          </p>
 
-          <div className="flex items-center justify-between gap-3">
-            <p
-              className={cn(
-                'text-12 tabular-nums',
-                overLimit
-                  ? 'text-[var(--settings-error-text)]'
-                  : 'text-[var(--settings-source-meta)]',
-              )}
-              style={{ letterSpacing: '0.12px' }}
-              aria-live="polite"
-            >
-              {counter}
-              {overLimit ? t('settings.personalization.overLimit') : ''}
-            </p>
-
-            <Button {...setting.controlProps}
-              variant="cta"
-              size="md"
-              compact
-              type="button"
-              onClick={handleSave}
-              disabled={!canSave}
-            >
-              {t('settings.personalization.save')}
-            </Button>
-          </div>
-        </SettingsField>
-      </SettingsCard>
-    </SettingsSection>
+          <Button {...setting.controlProps}
+            variant="cta"
+            size="md"
+            compact
+            type="button"
+            onClick={handleSave}
+            disabled={!canSave}
+          >
+            {t('settings.personalization.save')}
+          </Button>
+        </div>
+      </SettingsField>
+    </SettingsCard>
   );
 }

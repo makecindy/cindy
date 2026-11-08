@@ -40,17 +40,27 @@ export function SettingsDrawerScope({ children }: { children: ReactNode }) {
 }
 
 /**
+ * 页面标题之下的内容：里面的分区默认是 h3。SettingsSection variant="page" 自带；
+ * 用 SettingsPageHeader 自己排版的页面把整页包在这里面。
+ */
+export function SettingsPageScope({ children }: { children: ReactNode }) {
+  return <PageScope.Provider value>{children}</PageScope.Provider>;
+}
+
+type PageBack =
+  | { onBack?: undefined; backLabel?: undefined; backProps?: undefined }
+  /** 子页面的返回按钮必须有可读名称。 */
+  | { onBack: () => void; backLabel: string; backProps?: ButtonHTMLAttributes<HTMLButtonElement> & Record<`data-${string}`, string | undefined> };
+
+/**
  * 设置页的页面标题区：20px 标题、13px 说明、右侧操作；子页面（配件、手柄）在标题前带返回按钮。
- * 下面第一块内容和它隔 24px，由页面容器负责（SettingsSection variant="page" 已内置）。
+ * 标题到第一块内容 24px、分区之间 36px，由页面容器负责（SettingsSection variant="page" 已内置）。
  */
 export function SettingsPageHeader({ title, titleId, description, action, adornment, onBack, backLabel, backProps }: {
   title: ReactNode; titleId?: string; description?: ReactNode; action?: ReactNode;
   /** 标题后的小标记，如 Beta。 */
   adornment?: ReactNode;
-  onBack?: () => void; backLabel?: string;
-  /** 返回按钮上的搜索锚点等属性。 */
-  backProps?: ButtonHTMLAttributes<HTMLButtonElement> & Record<`data-${string}`, string | undefined>;
-}) {
+} & PageBack) {
   return <div className="flex items-center justify-between gap-3">
     <div className="flex min-w-0 items-center gap-2">
       {onBack && <button {...backProps} type="button" onClick={onBack} aria-label={backLabel}
@@ -74,16 +84,26 @@ export function SettingsSection({ title, titleId, count, description, action, ca
   titleId?: string;
   /** 设置页的分区是 h2；抽屉、页面标题之下和页内的子分区是 h3。 */
   headingLevel?: 2 | 3;
-  /** page：这一节的标题就是整页的页面标题，20px，下面 24px，里面的分区自动是 h3。 */
+  /**
+   * page：这一节的标题就是整页的页面标题（20px），第一块内容在标题下 24px，相邻分区之间 36px，
+   * 里面的分区自动是 h3。没有组名、连着放的几张卡片包进一个不带标题的 SettingsSection，彼此 14px。
+   */
   variant?: 'page';
 } & Omit<HTMLAttributes<HTMLElement>, 'title' | 'children'>) {
   const drawer = useContext(DrawerScope);
   const underPage = useContext(PageScope);
   const page = variant === 'page';
   const Heading = (headingLevel ?? (drawer || underPage ? 3 : 2)) === 2 ? 'h2' : 'h3';
-  const section = <section {...rest} className={cn('flex min-w-0 flex-col', page ? 'gap-6' : !drawer && 'gap-[14px]', className)} data-testid={testId}>
-    {page ? <SettingsPageHeader title={title} titleId={titleId} description={description} action={action} />
-      : (title || action) && <div className={cn('flex items-center justify-between gap-3', (drawer || action) && 'min-h-6', drawer && 'mb-2')}>
+  if (page) {
+    return <PageScope.Provider value>
+      <section {...rest} className={cn('flex min-w-0 flex-col', className)} data-testid={testId}>
+        <SettingsPageHeader title={title} titleId={titleId} description={description} action={action} />
+        <div className="mt-6 flex min-w-0 flex-col gap-9">{children}</div>
+      </section>
+    </PageScope.Provider>;
+  }
+  return <section {...rest} className={cn('flex min-w-0 flex-col', !drawer && 'gap-[14px]', className)} data-testid={testId}>
+    {(title || action) && <div className={cn('flex items-center justify-between gap-3', (drawer || action) && 'min-h-6', drawer && 'mb-2')}>
       <div className="flex min-w-0 flex-col gap-1">
         <Heading id={titleId} className={cn('min-w-0', drawer ? 'text-13 font-medium leading-[1.38] text-[var(--text-secondary)]' : SETTINGS_SECTION_TITLE_CLASS)}>
           {title}{count !== undefined && <span className="ml-1.5 font-normal tabular-nums text-[var(--text-tertiary)]">{count}</span>}
@@ -95,7 +115,6 @@ export function SettingsSection({ title, titleId, count, description, action, ca
     {children}
     {caption && <p className={cn(drawer && 'mt-2', SETTINGS_HINT)}>{caption}</p>}
   </section>;
-  return page ? <PageScope.Provider value>{section}</PageScope.Provider> : section;
 }
 
 export function SettingsCard({ className, ...rest }: HTMLAttributes<HTMLDivElement>) {

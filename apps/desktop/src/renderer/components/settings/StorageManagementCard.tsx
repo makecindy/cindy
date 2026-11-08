@@ -278,80 +278,83 @@ export function StorageManagementCard() {
       title={t(storageManagementCardSettings.storage.sectionKey)}
       description={t('settings.about.storage.overviewDescription')}
     >
-      <DialogueDirectorySection />
+      {/* 目录与占用总览同属一组，彼此 14px */}
+      <SettingsSection>
+        <DialogueDirectorySection />
 
-      <ProjectsRootSection />
+        <ProjectsRootSection />
 
-      {/* 占用总览 */}
-      <div
-        className={cn(
-          'grid gap-4 rounded-xl px-5 py-5 md:grid-cols-[1.15fr_0.85fr] md:items-center',
-          'bg-[var(--settings-theme-card-bg)]',
-          'border border-[var(--settings-theme-card-border)]',
-        )}
-      >
-        <div>
-          <h3 className="text-13 font-medium text-[var(--settings-section-title)]">
-            {t('settings.about.storage.overviewTitle')}
-          </h3>
-          <p className="mt-1 text-12 leading-[1.5] text-[var(--settings-section-sublabel)]">
-            {t('settings.about.storage.overviewDescription')}
-          </p>
-          <div id={storageManagementCardSettings.aboutStorageDatabaseSectionTitle.targetId}
-            role="progressbar"
-            aria-label={t(storageManagementCardSettings.aboutStorageDatabaseSectionTitle.titleKey)}
-            aria-valuemin={0}
-            aria-valuemax={100}
-            aria-valuenow={overviewPercent ?? undefined}
-            className="mt-4 h-2 overflow-hidden rounded-full bg-[var(--settings-theme-card-border)]"
-          >
-            {overviewPercent !== null && (
-              <span
-                className="block h-full rounded-full bg-[var(--accent-cta-bg)] transition-[width]"
-                style={{ width: `${overviewPercent}%` }}
-              />
-            )}
+        {/* 占用总览 */}
+        <div
+          className={cn(
+            'grid gap-4 rounded-xl px-5 py-5 md:grid-cols-[1.15fr_0.85fr] md:items-center',
+            'bg-[var(--settings-theme-card-bg)]',
+            'border border-[var(--settings-theme-card-border)]',
+          )}
+        >
+          <div>
+            <h3 className="text-13 font-medium text-[var(--settings-section-title)]">
+              {t('settings.about.storage.overviewTitle')}
+            </h3>
+            <p className="mt-1 text-12 leading-[1.5] text-[var(--settings-section-sublabel)]">
+              {t('settings.about.storage.overviewDescription')}
+            </p>
+            <div id={storageManagementCardSettings.aboutStorageDatabaseSectionTitle.targetId}
+              role="progressbar"
+              aria-label={t(storageManagementCardSettings.aboutStorageDatabaseSectionTitle.titleKey)}
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={overviewPercent ?? undefined}
+              className="mt-4 h-2 overflow-hidden rounded-full bg-[var(--settings-theme-card-border)]"
+            >
+              {overviewPercent !== null && (
+                <span
+                  className="block h-full rounded-full bg-[var(--accent-cta-bg)] transition-[width]"
+                  style={{ width: `${overviewPercent}%` }}
+                />
+              )}
+            </div>
           </div>
-        </div>
-        <div className="flex items-end justify-between gap-3 md:flex-col md:items-end">
-          <div className="text-right">
-            <strong className="block text-24 font-medium leading-none tracking-[-0.04em] text-[var(--settings-section-title)]">
-              {totalBytes === null ? t('settings.about.storage.unknown') : formatBytes(totalBytes)}
-            </strong>
-            <span id={storageManagementCardSettings.aboutStorageMediaSectionTitle.targetId} className="mt-1 block text-11 text-[var(--settings-section-sublabel)]">
-              {t('settings.about.storage.databaseUsage', {
-                size: databaseBytes === null
+          <div className="flex items-end justify-between gap-3 md:flex-col md:items-end">
+            <div className="text-right">
+              <strong className="block text-24 font-medium leading-none tracking-[-0.04em] text-[var(--settings-section-title)]">
+                {totalBytes === null ? t('settings.about.storage.unknown') : formatBytes(totalBytes)}
+              </strong>
+              <span id={storageManagementCardSettings.aboutStorageMediaSectionTitle.targetId} className="mt-1 block text-11 text-[var(--settings-section-sublabel)]">
+                {t('settings.about.storage.databaseUsage', {
+                  size: databaseBytes === null
+                    ? t('settings.about.storage.unknown')
+                    : formatBytes(databaseBytes),
+                })}{' '}
+                · {t(storageManagementCardSettings.aboutStorageMediaSectionTitle.titleKey)} {mediaBytes === null
                   ? t('settings.about.storage.unknown')
-                  : formatBytes(databaseBytes),
-              })}{' '}
-              · {t(storageManagementCardSettings.aboutStorageMediaSectionTitle.titleKey)} {mediaBytes === null
-                ? t('settings.about.storage.unknown')
-                : formatBytes(mediaBytes)}{' '}
-              · {t('settings.about.storage.legacyImagesLabel')} {fixedCacheBytes === null
-                ? t('settings.about.storage.unknown')
-                : formatBytes(fixedCaches?.legacyImages.bytes ?? 0)}{' '}
-              · {t('settings.about.storage.chatAttachmentsLabel')} {fixedCacheBytes === null
-                ? t('settings.about.storage.unknown')
-                : formatBytes(fixedCaches?.chatAttachments.bytes ?? 0)}
-            </span>
-            {statsFailed && (
-              <span className="mt-1 block text-11 text-[var(--warning-fg)]">
-                {t('settings.about.storage.statsFailed')}
+                  : formatBytes(mediaBytes)}{' '}
+                · {t('settings.about.storage.legacyImagesLabel')} {fixedCacheBytes === null
+                  ? t('settings.about.storage.unknown')
+                  : formatBytes(fixedCaches?.legacyImages.bytes ?? 0)}{' '}
+                · {t('settings.about.storage.chatAttachmentsLabel')} {fixedCacheBytes === null
+                  ? t('settings.about.storage.unknown')
+                  : formatBytes(fixedCaches?.chatAttachments.bytes ?? 0)}
               </span>
-            )}
+              {statsFailed && (
+                <span className="mt-1 block text-11 text-[var(--warning-fg)]">
+                  {t('settings.about.storage.statsFailed')}
+                </span>
+              )}
+            </div>
+            <Button data-setting-id={storageManagementCardSettings.aboutStorageMediaSectionTitle.id}
+              variant="secondary"
+              size="md"
+              onClick={() => void refreshStats()}
+              disabled={statsRefreshing}
+              loading={statsRefreshing}
+            >
+              <RefreshCw className="h-3.5 w-3.5" aria-hidden />
+              {t('settings.about.storage.refreshStatsButton')}
+            </Button>
           </div>
-          <Button data-setting-id={storageManagementCardSettings.aboutStorageMediaSectionTitle.id}
-            variant="secondary"
-            size="md"
-            onClick={() => void refreshStats()}
-            disabled={statsRefreshing}
-            loading={statsRefreshing}
-          >
-            <RefreshCw className="h-3.5 w-3.5" aria-hidden />
-            {t('settings.about.storage.refreshStatsButton')}
-          </Button>
         </div>
-      </div>
+      </SettingsSection>
 
       <SettingsSection
         title={t(storageManagementCardSettings.aboutStorageMediaSectionTitle.titleKey)}

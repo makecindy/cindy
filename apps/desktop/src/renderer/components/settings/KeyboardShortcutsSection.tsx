@@ -433,147 +433,150 @@ export function KeyboardShortcutsSection() {
         </button>
       )}
     >
-      {globalError && <span className="text-12 text-[var(--error-fg)]">{globalError}</span>}
+      {/* 快捷键页的内容同属一组，彼此 14px */}
+      <SettingsSection>
+        {globalError && <span className="text-12 text-[var(--error-fg)]">{globalError}</span>}
 
-      {VISIBLE_WORKLOUDER_MODELS.filter((model) => workLouderConnected[model]).map((model) => (
-        <WorkLouderCodexEntry
-          key={model}
-          model={model}
-          state={workLouderBoards[model].state}
-          loading={workLouderBoards[model].loading}
-          onOpen={() => openWorkLouder(model, 'list')}
-        />
-      ))}
-      {VISIBLE_GAMEPAD_FAMILIES.filter((family) => gamepadConnected[family]).map((family) => (
-        <XboxGamepadEntry
-          key={family}
-          family={family}
-          state={gamepads[family].state}
-          loading={gamepads[family].loading}
-          onOpen={() => openGamepad(family, 'list')}
-        />
-      ))}
-      <AccessoriesEntry onOpen={() => setHardwarePane('accessories')} />
+        {VISIBLE_WORKLOUDER_MODELS.filter((model) => workLouderConnected[model]).map((model) => (
+          <WorkLouderCodexEntry
+            key={model}
+            model={model}
+            state={workLouderBoards[model].state}
+            loading={workLouderBoards[model].loading}
+            onOpen={() => openWorkLouder(model, 'list')}
+          />
+        ))}
+        {VISIBLE_GAMEPAD_FAMILIES.filter((family) => gamepadConnected[family]).map((family) => (
+          <XboxGamepadEntry
+            key={family}
+            family={family}
+            state={gamepads[family].state}
+            loading={gamepads[family].loading}
+            onOpen={() => openGamepad(family, 'list')}
+          />
+        ))}
+        <AccessoriesEntry onOpen={() => setHardwarePane('accessories')} />
 
-      {/* 快捷键列表是带组合键与行内报错的紧凑列表，不套 SettingsRow */}
-      <SettingsCard className="flex flex-col gap-1 p-5">
-        {visibleDefs.map((def) => {
-          // Plugin commands are dynamic and belong to the shortcuts page;
-          // only built-in shortcuts have individual static search entries.
-          const setting = appShortcutSettings[def.id];
-          const controlSetting = 'pluginName' in def
-            ? keyboardShortcutsSettings.shortcuts
-            : appShortcutSettings[def.id];
-          const isRecording = recordingId === def.id;
-          const customized = def.id in overrides;
-          const combos = getAppShortcutCombos(def.id);
-          // 写入错误优先; 否则提示全局快捷键当前未能注册 (被其它应用占用)。
-          const rowError =
-            error?.id === def.id
-              ? error.message
-              : combos.length > 0 && globalFailures.includes(def.id)
-                ? t('settings.shortcuts.errors.globalOccupied')
-                : null;
-          return (
-            <div id={setting?.targetId} key={def.id} className="flex items-center gap-2 py-2">
-              {/* 条目标题 + 说明双行: 标题主文字色 + 说明次级色,
-                  对齐 LinkOpenSection 卡片条目的用色规范 */}
-              <div className="flex min-w-0 flex-1 flex-col gap-[2px]">
-                <p className="truncate text-13 font-medium text-[var(--text-primary)]">
-                  {itemLabel(def)}
-                </p>
-                <p className="truncate text-12 leading-[1.4] text-[var(--text-secondary)]">
-                  {t(def.descriptionKey, { defaultValue: '' })}
-                </p>
-              </div>
-              {rowError && !isRecording && (
-                <span className="text-12 text-[var(--error-fg)]">{rowError}</span>
-              )}
-
-              {/* 组合键展示位: 录制中显示提示, 无绑定显示"未设置" */}
-              <span
-                className={cn(
-                  'inline-flex min-w-[72px] items-center justify-center rounded-[4px] px-2 py-1',
-                  // 不用 font-mono: 项目的 mono 映射到 --app-font-code (代码字体),
-                  // 普遍缺 ⌘⇧⌥⌃ 字形, 会 fallback 渲染得又小又不协调。系统 UI
-                  // 字体自带这些符号的正确字形 (与 VoiceInputSection 显示一致)。
-                  'border text-12 font-medium',
-                  isRecording
-                    ? 'border-[var(--focus-ring)] text-[var(--text-primary)] bg-[var(--surface-chip)]'
-                    : 'border-[var(--settings-theme-card-border)] bg-[var(--surface-chip)]',
-                  !isRecording && combos.length === 0
-                    ? 'text-[var(--text-tertiary)]'
-                    : 'text-[var(--text-secondary)]',
+        {/* 快捷键列表是带组合键与行内报错的紧凑列表，不套 SettingsRow */}
+        <SettingsCard className="flex flex-col gap-1 p-5">
+          {visibleDefs.map((def) => {
+            // Plugin commands are dynamic and belong to the shortcuts page;
+            // only built-in shortcuts have individual static search entries.
+            const setting = appShortcutSettings[def.id];
+            const controlSetting = 'pluginName' in def
+              ? keyboardShortcutsSettings.shortcuts
+              : appShortcutSettings[def.id];
+            const isRecording = recordingId === def.id;
+            const customized = def.id in overrides;
+            const combos = getAppShortcutCombos(def.id);
+            // 写入错误优先; 否则提示全局快捷键当前未能注册 (被其它应用占用)。
+            const rowError =
+              error?.id === def.id
+                ? error.message
+                : combos.length > 0 && globalFailures.includes(def.id)
+                  ? t('settings.shortcuts.errors.globalOccupied')
+                  : null;
+            return (
+              <div id={setting?.targetId} key={def.id} className="flex items-center gap-2 py-2">
+                {/* 条目标题 + 说明双行: 标题主文字色 + 说明次级色,
+                    对齐 LinkOpenSection 卡片条目的用色规范 */}
+                <div className="flex min-w-0 flex-1 flex-col gap-[2px]">
+                  <p className="truncate text-13 font-medium text-[var(--text-primary)]">
+                    {itemLabel(def)}
+                  </p>
+                  <p className="truncate text-12 leading-[1.4] text-[var(--text-secondary)]">
+                    {t(def.descriptionKey, { defaultValue: '' })}
+                  </p>
+                </div>
+                {rowError && !isRecording && (
+                  <span className="text-12 text-[var(--error-fg)]">{rowError}</span>
                 )}
-              >
-                {isRecording
-                  ? t('settings.shortcuts.recording')
-                  : combos.length === 0
-                    ? t('settings.shortcuts.none')
-                    : combos.map((c) => formatAppShortcutCombo(c, platform)).join(' / ')}
-              </span>
 
-              {isRecording ? (
-                <Button data-settings-search-action="Cancel recording the keyboard shortcut"
-                  variant="secondary"
-                  size="sm"
-                  compact
-                  tone="quiet"
-                  type="button"
-                  onClick={() => setRecordingId(null)}
+                {/* 组合键展示位: 录制中显示提示, 无绑定显示"未设置" */}
+                <span
+                  className={cn(
+                    'inline-flex min-w-[72px] items-center justify-center rounded-[4px] px-2 py-1',
+                    // 不用 font-mono: 项目的 mono 映射到 --app-font-code (代码字体),
+                    // 普遍缺 ⌘⇧⌥⌃ 字形, 会 fallback 渲染得又小又不协调。系统 UI
+                    // 字体自带这些符号的正确字形 (与 VoiceInputSection 显示一致)。
+                    'border text-12 font-medium',
+                    isRecording
+                      ? 'border-[var(--focus-ring)] text-[var(--text-primary)] bg-[var(--surface-chip)]'
+                      : 'border-[var(--settings-theme-card-border)] bg-[var(--surface-chip)]',
+                    !isRecording && combos.length === 0
+                      ? 'text-[var(--text-tertiary)]'
+                      : 'text-[var(--text-secondary)]',
+                  )}
                 >
-                  {t('settings.shortcuts.cancel')}
-                </Button>
-              ) : (
-                <div className="flex shrink-0 items-center gap-1">
-                  <button data-setting-id={controlSetting.id}
+                  {isRecording
+                    ? t('settings.shortcuts.recording')
+                    : combos.length === 0
+                      ? t('settings.shortcuts.none')
+                      : combos.map((c) => formatAppShortcutCombo(c, platform)).join(' / ')}
+                </span>
+
+                {isRecording ? (
+                  <Button data-settings-search-action="Cancel recording the keyboard shortcut"
+                    variant="secondary"
+                    size="sm"
+                    compact
+                    tone="quiet"
                     type="button"
-                    disabled={!def.rebindable}
-                    onClick={() => {
-                      beginShortcutAction();
-                      setRecordingId(def.id);
-                    }}
-                    className={cn(
-                      iconButtonClass,
-                      !def.rebindable && 'opacity-50 pointer-events-none',
-                    )}
-                    aria-label={t('settings.shortcuts.editAria', { name: itemLabel(def) })}
-                    title={t('settings.shortcuts.edit')}
+                    onClick={() => setRecordingId(null)}
                   >
-                    <Pencil size={13} />
-                  </button>
-                  {combos.length > 0 && (
+                    {t('settings.shortcuts.cancel')}
+                  </Button>
+                ) : (
+                  <div className="flex shrink-0 items-center gap-1">
                     <button data-setting-id={controlSetting.id}
                       type="button"
                       disabled={!def.rebindable}
-                      onClick={() => handleDeleteOne(def.id)}
+                      onClick={() => {
+                        beginShortcutAction();
+                        setRecordingId(def.id);
+                      }}
                       className={cn(
                         iconButtonClass,
                         !def.rebindable && 'opacity-50 pointer-events-none',
                       )}
-                      aria-label={t('settings.shortcuts.deleteAria', { name: itemLabel(def) })}
-                      title={t('settings.shortcuts.delete')}
+                      aria-label={t('settings.shortcuts.editAria', { name: itemLabel(def) })}
+                      title={t('settings.shortcuts.edit')}
                     >
-                      <Trash2 size={13} />
+                      <Pencil size={13} />
                     </button>
-                  )}
-                  {customized && (
-                    <button data-setting-id={controlSetting.id}
-                      type="button"
-                      onClick={() => handleResetOne(def.id)}
-                      className={iconButtonClass}
-                      aria-label={t('settings.shortcuts.reset')}
-                      title={t('settings.shortcuts.reset')}
-                    >
-                      <RotateCcw size={13} />
-                    </button>
-                  )}
-                </div>
-              )}
-            </div>
-          );
-        })}
-      </SettingsCard>
+                    {combos.length > 0 && (
+                      <button data-setting-id={controlSetting.id}
+                        type="button"
+                        disabled={!def.rebindable}
+                        onClick={() => handleDeleteOne(def.id)}
+                        className={cn(
+                          iconButtonClass,
+                          !def.rebindable && 'opacity-50 pointer-events-none',
+                        )}
+                        aria-label={t('settings.shortcuts.deleteAria', { name: itemLabel(def) })}
+                        title={t('settings.shortcuts.delete')}
+                      >
+                        <Trash2 size={13} />
+                      </button>
+                    )}
+                    {customized && (
+                      <button data-setting-id={controlSetting.id}
+                        type="button"
+                        onClick={() => handleResetOne(def.id)}
+                        className={iconButtonClass}
+                        aria-label={t('settings.shortcuts.reset')}
+                        title={t('settings.shortcuts.reset')}
+                      >
+                        <RotateCcw size={13} />
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </SettingsCard>
+      </SettingsSection>
     </SettingsSection>
   );
 }

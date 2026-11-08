@@ -302,198 +302,201 @@ export function AgentIslandSection() {
 
   return (
     <SettingsSection variant="page" title={t('settings.agentIsland.title')}>
-      {/* Agent Notch's own options grow out of its card, so they read as part of it. */}
-      <SettingsCard className="flex flex-col">
-        <SettingsRow
-          title={<span id={agentIslandSettings.enableLabel.targetId}>{t(agentIslandSettings.enableLabel.titleKey)}</span>}
-          hint={t(agentIslandSettings.enableLabel.descriptionKey)}
-          trailing={
-            <Switch data-setting-id={agentIslandSettings.enableLabel.id}
-              checked={enabled}
-              onCheckedChange={setEnabled}
-              aria-label={t('settings.agentIsland.enableAria')}
-            />
-          }
-        />
-        {enabled && (
-          <>
+      {/* 几张卡片同属一组，彼此 14px */}
+      <SettingsSection>
+        {/* Agent Notch's own options grow out of its card, so they read as part of it. */}
+        <SettingsCard className="flex flex-col">
+          <SettingsRow
+            title={<span id={agentIslandSettings.enableLabel.targetId}>{t(agentIslandSettings.enableLabel.titleKey)}</span>}
+            hint={t(agentIslandSettings.enableLabel.descriptionKey)}
+            trailing={
+              <Switch data-setting-id={agentIslandSettings.enableLabel.id}
+                checked={enabled}
+                onCheckedChange={setEnabled}
+                aria-label={t('settings.agentIsland.enableAria')}
+              />
+            }
+          />
+          {enabled && (
+            <>
+              <SettingsRow
+                title={<span id={agentIslandSettings.subtleRemindersLabel.targetId}>{t(agentIslandSettings.subtleRemindersLabel.titleKey)}</span>}
+                hint={t(agentIslandSettings.subtleRemindersLabel.descriptionKey)}
+                trailing={
+                  <div className="flex shrink-0 items-center gap-2">
+                    <DefaultOverrideControls
+                      isCustomized={subtleRemindersCustomized}
+                      disabled={subtleRemindersPending}
+                      onReset={() => void handleResetSubtleReminders()}
+                    />
+                    <Switch
+                      data-setting-id={agentIslandSettings.subtleRemindersLabel.id}
+                      checked={subtleReminders}
+                      disabled={subtleRemindersPending}
+                      onCheckedChange={handleSubtleRemindersChange}
+                      aria-label={t('settings.agentIsland.subtleRemindersLabel')}
+                    />
+                  </div>
+                }
+              />
+              {/* 显示器选择整宽放在说明下面，不是左右一行 */}
+              <SettingsField
+                title={<span id={agentIslandSettings.displayLabel.targetId}>{t(agentIslandSettings.displayLabel.titleKey)}</span>}
+                hint={t(agentIslandSettings.displayLabel.descriptionKey)}
+              >
+                <div className="relative min-w-0">
+                  <select data-setting-id={agentIslandSettings.displayLabel.id}
+                    value={displayTargetToOptionValue(displayTarget)}
+                    onChange={(event) => setDisplayTarget(displayTargetFromOptionValue(event.target.value))}
+                    className={cn(
+                      'h-9 w-full min-w-0 appearance-none rounded-full border py-0 pl-3 pr-9 text-12 outline-none',
+                      'bg-[var(--settings-input-bg)] text-[var(--settings-input-text)]',
+                      'border-[var(--settings-input-border)] focus:ring-2 focus:ring-[var(--focus-ring-soft)]',
+                    )}
+                    aria-label={t('settings.agentIsland.displaySelectAria')}
+                  >
+                    <option value={DISPLAY_ALL_OPTION_VALUE}>
+                      {t('settings.agentIsland.displayAll')}
+                    </option>
+                    {displayOptions.map((option) => (
+                      <option
+                        key={option.id}
+                        value={displayTargetToOptionValue({ mode: 'display', displayId: option.id })}
+                      >
+                        {displayOptionLabels.get(option.id)}
+                      </option>
+                    ))}
+                    {selectedDisplayMissing && (
+                      <option value={displayTargetToOptionValue(displayTarget)}>
+                        {t('settings.agentIsland.displayMissing', { id: displayTarget.displayId })}
+                      </option>
+                    )}
+                  </select>
+                  <ChevronDown
+                    size={15}
+                    className="pointer-events-none absolute right-3.5 top-1/2 -translate-y-1/2 text-[var(--text-secondary-mid)]"
+                    aria-hidden="true"
+                  />
+                </div>
+              </SettingsField>
+            </>
+          )}
+        </SettingsCard>
+
+        {/* Independent of our own island: the system shows it even when ours is off. */}
+        {liveActivitySupported && (
+          <SettingsCard>
             <SettingsRow
-              title={<span id={agentIslandSettings.subtleRemindersLabel.targetId}>{t(agentIslandSettings.subtleRemindersLabel.titleKey)}</span>}
-              hint={t(agentIslandSettings.subtleRemindersLabel.descriptionKey)}
+              title={<span id={agentIslandSettings.liveActivityLabel.targetId}>{t(agentIslandSettings.liveActivityLabel.titleKey)}</span>}
+              hint={t(agentIslandSettings.liveActivityLabel.descriptionKey)}
               trailing={
                 <div className="flex shrink-0 items-center gap-2">
                   <DefaultOverrideControls
-                    isCustomized={subtleRemindersCustomized}
-                    disabled={subtleRemindersPending}
-                    onReset={() => void handleResetSubtleReminders()}
+                    isCustomized={liveActivityCustomized}
+                    disabled={liveActivityPending}
+                    onReset={() => void handleResetLiveActivity()}
                   />
                   <Switch
-                    data-setting-id={agentIslandSettings.subtleRemindersLabel.id}
-                    checked={subtleReminders}
-                    disabled={subtleRemindersPending}
-                    onCheckedChange={handleSubtleRemindersChange}
-                    aria-label={t('settings.agentIsland.subtleRemindersLabel')}
+                    data-setting-id={agentIslandSettings.liveActivityLabel.id}
+                    checked={liveActivity}
+                    disabled={liveActivityPending}
+                    onCheckedChange={(next) => void handleLiveActivityChange(next)}
+                    aria-label={t('settings.agentIsland.liveActivityLabel')}
                   />
                 </div>
               }
             />
-            {/* 显示器选择整宽放在说明下面，不是左右一行 */}
-            <SettingsField
-              title={<span id={agentIslandSettings.displayLabel.targetId}>{t(agentIslandSettings.displayLabel.titleKey)}</span>}
-              hint={t(agentIslandSettings.displayLabel.descriptionKey)}
-            >
-              <div className="relative min-w-0">
-                <select data-setting-id={agentIslandSettings.displayLabel.id}
-                  value={displayTargetToOptionValue(displayTarget)}
-                  onChange={(event) => setDisplayTarget(displayTargetFromOptionValue(event.target.value))}
-                  className={cn(
-                    'h-9 w-full min-w-0 appearance-none rounded-full border py-0 pl-3 pr-9 text-12 outline-none',
-                    'bg-[var(--settings-input-bg)] text-[var(--settings-input-text)]',
-                    'border-[var(--settings-input-border)] focus:ring-2 focus:ring-[var(--focus-ring-soft)]',
-                  )}
-                  aria-label={t('settings.agentIsland.displaySelectAria')}
-                >
-                  <option value={DISPLAY_ALL_OPTION_VALUE}>
-                    {t('settings.agentIsland.displayAll')}
-                  </option>
-                  {displayOptions.map((option) => (
-                    <option
-                      key={option.id}
-                      value={displayTargetToOptionValue({ mode: 'display', displayId: option.id })}
-                    >
-                      {displayOptionLabels.get(option.id)}
-                    </option>
-                  ))}
-                  {selectedDisplayMissing && (
-                    <option value={displayTargetToOptionValue(displayTarget)}>
-                      {t('settings.agentIsland.displayMissing', { id: displayTarget.displayId })}
-                    </option>
-                  )}
-                </select>
-                <ChevronDown
-                  size={15}
-                  className="pointer-events-none absolute right-3.5 top-1/2 -translate-y-1/2 text-[var(--text-secondary-mid)]"
-                  aria-hidden="true"
-                />
-              </div>
-            </SettingsField>
-          </>
+          </SettingsCard>
         )}
-      </SettingsCard>
 
-      {/* Independent of our own island: the system shows it even when ours is off. */}
-      {liveActivitySupported && (
-        <SettingsCard>
-          <SettingsRow
-            title={<span id={agentIslandSettings.liveActivityLabel.targetId}>{t(agentIslandSettings.liveActivityLabel.titleKey)}</span>}
-            hint={t(agentIslandSettings.liveActivityLabel.descriptionKey)}
-            trailing={
-              <div className="flex shrink-0 items-center gap-2">
-                <DefaultOverrideControls
-                  isCustomized={liveActivityCustomized}
-                  disabled={liveActivityPending}
-                  onReset={() => void handleResetLiveActivity()}
-                />
-                <Switch
-                  data-setting-id={agentIslandSettings.liveActivityLabel.id}
-                  checked={liveActivity}
-                  disabled={liveActivityPending}
-                  onCheckedChange={(next) => void handleLiveActivityChange(next)}
-                  aria-label={t('settings.agentIsland.liveActivityLabel')}
-                />
-              </div>
-            }
-          />
-        </SettingsCard>
-      )}
-
-      {/* Character and event sounds serve Agent Notch and the Live Activity alike; they
-      show whenever either is on, so no heading is needed. */}
-      {sharedVisible && (
-        <>
-          <SettingsCard className="flex flex-col">
-            <SettingsRow
-              data-setting-id={agentIslandSettings.skinLabel.id}
-              aria-expanded={skinsOpen}
-              aria-controls="settings-agent-island-skins"
-              onClick={() => setSkinsOpen((open) => !open)}
-              title={<span id={agentIslandSettings.skinLabel.targetId}>{t(agentIslandSettings.skinLabel.titleKey)}</span>}
-              hint={t(agentIslandSettings.skinLabel.descriptionKey)}
-              trailing={
-                <span className="flex shrink-0 items-center gap-2">
-                  {/* The list's own preview, scaled down: sprite PNGs carry no eyes on their own. */}
-                  <span className="relative h-8 w-9 overflow-hidden rounded-lg" aria-hidden="true">
-                    <span className="absolute left-0 top-0 origin-top-left scale-[0.64]">
-                      <MascotPreview skin={mascotSkin} mode={animationModeForStep(animationSteps[mascotSkin])} />
+        {/* Character and event sounds serve Agent Notch and the Live Activity alike; they
+        show whenever either is on, so no heading is needed. */}
+        {sharedVisible && (
+          <>
+            <SettingsCard className="flex flex-col">
+              <SettingsRow
+                data-setting-id={agentIslandSettings.skinLabel.id}
+                aria-expanded={skinsOpen}
+                aria-controls="settings-agent-island-skins"
+                onClick={() => setSkinsOpen((open) => !open)}
+                title={<span id={agentIslandSettings.skinLabel.targetId}>{t(agentIslandSettings.skinLabel.titleKey)}</span>}
+                hint={t(agentIslandSettings.skinLabel.descriptionKey)}
+                trailing={
+                  <span className="flex shrink-0 items-center gap-2">
+                    {/* The list's own preview, scaled down: sprite PNGs carry no eyes on their own. */}
+                    <span className="relative h-8 w-9 overflow-hidden rounded-lg" aria-hidden="true">
+                      <span className="absolute left-0 top-0 origin-top-left scale-[0.64]">
+                        <MascotPreview skin={mascotSkin} mode={animationModeForStep(animationSteps[mascotSkin])} />
+                      </span>
                     </span>
+                    <span className="text-13 text-[var(--text-secondary)]">
+                      {t(`settings.agentIsland.skins.${mascotSkin}.name`)}
+                    </span>
+                    <ChevronDown
+                      size={15}
+                      className={cn('text-[var(--text-secondary-mid)] transition-transform', skinsOpen && 'rotate-180')}
+                      aria-hidden="true"
+                    />
                   </span>
-                  <span className="text-13 text-[var(--text-secondary)]">
-                    {t(`settings.agentIsland.skins.${mascotSkin}.name`)}
-                  </span>
-                  <ChevronDown
-                    size={15}
-                    className={cn('text-[var(--text-secondary-mid)] transition-transform', skinsOpen && 'rotate-180')}
-                    aria-hidden="true"
-                  />
-                </span>
-              }
-            />
-            {skinsOpen && (
-              <>
-                <SettingsBlock id="settings-agent-island-skins" className="grid gap-2">
-                  {AGENT_ISLAND_MASCOT_SKINS.map((skin) => (
-                    <AgentIslandSkinRow
-                      key={skin}
-                      skin={skin}
-                      animationMode={animationModeForStep(animationSteps[skin])}
-                      onNextAnimation={handleNextMascotAnimation}
-                      selected={mascotSkin === skin}
-                      onSelect={setMascotSkin}
+                }
+              />
+              {skinsOpen && (
+                <>
+                  <SettingsBlock id="settings-agent-island-skins" className="grid gap-2">
+                    {AGENT_ISLAND_MASCOT_SKINS.map((skin) => (
+                      <AgentIslandSkinRow
+                        key={skin}
+                        skin={skin}
+                        animationMode={animationModeForStep(animationSteps[skin])}
+                        onNextAnimation={handleNextMascotAnimation}
+                        selected={mascotSkin === skin}
+                        onSelect={setMascotSkin}
+                      />
+                    ))}
+                  </SettingsBlock>
+                </>
+              )}
+            </SettingsCard>
+
+            <SettingsCard className="flex flex-col">
+              <SettingsRow
+                title={<span id={agentIslandSettings.soundLabel.targetId}>{t(agentIslandSettings.soundLabel.titleKey)}</span>}
+                hint={t(agentIslandSettings.soundLabel.descriptionKey)}
+                trailing={
+                  <div className="flex shrink-0 items-center gap-2">
+                    <DefaultOverrideControls
+                      isCustomized={soundCustomized}
+                      disabled={soundResetPending}
+                      onReset={() => void handleResetSoundSettings()}
+                    />
+                    <Switch data-setting-id={agentIslandSettings.soundLabel.id}
+                      checked={soundSettings.enabled}
+                      disabled={soundResetPending}
+                      onCheckedChange={setSoundEnabled}
+                      aria-label={t('settings.agentIsland.soundAria')}
+                    />
+                  </div>
+                }
+              />
+
+              {soundSettings.enabled && (
+                <SettingsBlock className="grid gap-2">
+                  {AGENT_ISLAND_SOUND_EVENTS.map((event) => (
+                    <AgentIslandSoundRow
+                      key={event}
+                      event={event}
+                      value={soundSettings.sounds[event]}
+                      onChange={(sound) => setSound(event, sound)}
+                      onSelectCustom={selectSoundFile}
+                      onPreview={previewSound}
                     />
                   ))}
                 </SettingsBlock>
-              </>
-            )}
-          </SettingsCard>
-
-          <SettingsCard className="flex flex-col">
-            <SettingsRow
-              title={<span id={agentIslandSettings.soundLabel.targetId}>{t(agentIslandSettings.soundLabel.titleKey)}</span>}
-              hint={t(agentIslandSettings.soundLabel.descriptionKey)}
-              trailing={
-                <div className="flex shrink-0 items-center gap-2">
-                  <DefaultOverrideControls
-                    isCustomized={soundCustomized}
-                    disabled={soundResetPending}
-                    onReset={() => void handleResetSoundSettings()}
-                  />
-                  <Switch data-setting-id={agentIslandSettings.soundLabel.id}
-                    checked={soundSettings.enabled}
-                    disabled={soundResetPending}
-                    onCheckedChange={setSoundEnabled}
-                    aria-label={t('settings.agentIsland.soundAria')}
-                  />
-                </div>
-              }
-            />
-
-            {soundSettings.enabled && (
-              <SettingsBlock className="grid gap-2">
-                {AGENT_ISLAND_SOUND_EVENTS.map((event) => (
-                  <AgentIslandSoundRow
-                    key={event}
-                    event={event}
-                    value={soundSettings.sounds[event]}
-                    onChange={(sound) => setSound(event, sound)}
-                    onSelectCustom={selectSoundFile}
-                    onPreview={previewSound}
-                  />
-                ))}
-              </SettingsBlock>
-            )}
-          </SettingsCard>
-        </>
-      )}
+              )}
+            </SettingsCard>
+          </>
+        )}
+      </SettingsSection>
     </SettingsSection>
   );
 }

@@ -361,7 +361,6 @@ export function AboutSection() {
         <LegalLinksRows />
       </SettingsCard>
 
-      {/* 存储空间(媒体总仓占用 / 清理 / 体检) */}
       <SocialLinksPanel />
     </SettingsSection>
   );
@@ -434,7 +433,7 @@ function SocialLinksPanel() {
   };
 
   return (
-    <div className="mt-5 flex flex-col gap-2.5">
+    <div className="flex flex-col gap-2.5">
       <h3 className="text-13 font-medium text-[var(--settings-section-title)]">
         {t('settings.about.social.title')}
       </h3>

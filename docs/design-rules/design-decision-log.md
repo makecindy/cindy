@@ -1027,3 +1027,9 @@ Switch 解耦。插件插槽挂载同一个媒体组件，不再维护单独拖�
 
 实现：`components/ui/settings-rows.tsx` 与各设置页；现行规则见 `DESIGN.md` §4 Desktop settings rows。
 
+## 2026-11-08 · 设置页内的分区间距
+
+页面标题统一后，页内相邻分区的距离出现三种：通用、外观 36px，用 `variant="page"` 的页面 24px，个性化、工具页叠加外层 18px 下边距后 42px；没有组名、连着放的卡片之间也被拉到 24px。用户裁决：页面标题到第一块 24px，分区之间 36px，同一分区内的卡片和说明 14px，与通用、外观已定稿的节奏一致；连着的无标题卡片算一个分区。`SettingsSection variant="page"` 内置这套间距，自己排版的页面用 `SettingsPageHeader` 加 `SettingsPageScope`（让里面的分区成为 `h3`）。§4 同时列出尚未迁移的已知例外，不再写成「一律」。
+
+实现：`components/ui/settings-rows.tsx` 与各设置页；现行规则见 `DESIGN.md` §4 Desktop settings rows。
+
