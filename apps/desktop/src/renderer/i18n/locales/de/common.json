@@ -9951,6 +9951,8 @@
     "banner": {
       "title": "Auf {{version}} aktualisiert",
       "subtitle": "Zum Anwenden neu starten",
+      "nativeBuildTitle": "Apple-silicon-Version bereit",
+      "nativeBuildSubtitle": "Neu starten zum Wechseln – Aufgaben und Einstellungen bleiben erhalten",
       "viewNotes": "Neuerungen ansehen",
       "viewNotesAria": "Neuerungen in {{version}} ansehen",
       "button": "Neu starten",
@@ -10080,6 +10082,12 @@
       "description": "Die Datenbank ist etwa {{size}} groß und liegt über {{threshold}} G. Du kannst sie unter „Speicher“ bereinigen.",
       "openSettings": "Speicher öffnen",
       "disable": "Nicht mehr erinnern"
+    },
+    "nativeBuild": {
+      "title": "Du verwendest die Intel-Version",
+      "description": "Dieser Mac hat Apple silicon – die Intel-Version läuft übersetzt und deutlich langsamer. Installiere die Apple-silicon-Version; deine Daten bleiben erhalten.",
+      "dismiss": "Vorerst ausblenden",
+      "download": "Laden"
     },
     "horizontalTabbarAria": "Hauptansicht wechseln",
     "tabs": {
@@ -19311,6 +19319,7 @@
       "apply": "Übernehmen"
     },
     "source": {
+      "receivingOn": "Zielgerät: {{name}}",
       "description": "Wähle einen Computer, der mit diesem Konto angemeldet ist. Seine Plugins, Skills, Einstellungen und Verbindungen werden hier genauso eingerichtet; Anmeldungen und Schlüssel verlassen den Computer nur, wenn du es dort erlaubst.",
       "loading": "Deine anderen Computer werden gesucht…",
       "empty": "Keine anderen Computer für dieses Konto gefunden. Melde dich auf einem anderen Computer bei Cindy an und öffne dies dann erneut",

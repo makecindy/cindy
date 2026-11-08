@@ -136,6 +136,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
         return { success: false, error: String(error), themes: [], diagnostics: [] };
       }
     },
+    onChanged: (cb: (payload: LocalThemesResult) => void): (() => void) =>
+      onPayload('local-themes:changed', cb),
   },
   appShortcuts: {
     getState: (): { overrides: Record<string, unknown>; platform: string } =>

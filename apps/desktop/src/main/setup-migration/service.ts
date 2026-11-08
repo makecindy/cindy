@@ -198,6 +198,11 @@ export function createSetupMigrationService(deps: SetupMigrationServiceDeps) {
       (candidate) => candidate.deviceId === deviceId && isSetupMigrationSourceCandidate(candidate),
     );
     if (!device) setupError('NOT_FOUND', 'This computer is no longer on your account');
+    // Reuse this fresh directory read for availability, rather than making the
+    // renderer list sources again immediately before previewing the chosen device.
+    if (toSource(device).unavailable) {
+      setupError('SETUP_SOURCE_UNAVAILABLE', 'This computer is not available for migration');
+    }
     const snapshot = await readSnapshot(deviceId);
     const installable = snapshot.plugins.filter((plugin) => plugin.pluginId !== null);
     const [catalog, marketNames, localSkills, mcpIds, providerIds, builtinTools, sshHostIds] = await Promise.all([
