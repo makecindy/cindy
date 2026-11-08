@@ -82,6 +82,8 @@ vi.mock('react-native', () => {
         height: [style].flat().filter(Boolean).findLast((item: any) => item.height !== undefined)?.height,
         display: [style].flat().filter(Boolean).findLast((item: any) => item.display !== undefined)?.display } }, children);
   return {
+    PanResponder: { create: () => ({ panHandlers: {} }) },
+    UIManager: {}, LayoutAnimation: { configureNext() {} },
     View: box('div'), ScrollView: ({ ref, children, ...props }: any) => {
       h.scroll = props;
       h.scrolls[props.testID] = props;
@@ -222,13 +224,45 @@ vi.mock('@/session/BotGroupSpeakerRow', () => ({
       onStop ? el('button', { 'data-testid': 'botGroup.work.stop', disabled: stopPending, onClick: onStop }, 'stop') : null);
   },
 }));
+vi.mock('expo-constants', () => ({ default: { executionEnvironment: 'bare' }, ExecutionEnvironment: { StoreClient: 'storeClient' } }));
+// Native animation/gesture adapters; the production resize hook and row still run.
+vi.mock('react-native-reanimated', async () => {
+  const { useRef } = await import('react');
+  return {
+    default: { View: ({ children }: any) => el('div', null, children) },
+    useSharedValue: (value: unknown) => useRef({ value }).current,
+    useAnimatedRef: () => useRef(null),
+    useDerivedValue: (calculate: () => unknown) => ({ get value() { return calculate(); } }),
+    useAnimatedStyle: (calculate: () => any) => new Proxy({}, { get: (_target, key) => calculate()[key] }),
+    useAnimatedReaction: () => {}, measure: () => null,
+    runOnUI: (fn: any) => fn, runOnJS: (fn: any) => fn,
+  };
+});
+vi.mock('@/platform/gestureHandler', () => {
+  const gesture = () => { const chain: any = new Proxy({}, { get: () => () => chain }); return chain; };
+  return { Gesture: { Pan: gesture, Native: gesture, Manual: gesture },
+    GestureDetector: ({ children }: any) => children };
+});
+vi.mock('@/session/useMobileKeyboardState', () => ({ useMobileKeyboardState: () => ({ visible: false, height: 0, transition: { current: null } }) }));
+vi.mock('@/session/ComposerDockKeyboardFollow', () => ({ DockKeyboardBottomSpacer: () => null }));
+vi.mock('@/session/composerPullThrough', async () => {
+  const { useMemo } = await import('react');
+  const { ScrollView } = await import('react-native');
+  return {
+    useComposerPullThroughBridge: () => useMemo(() => ({ armed: { value: false }, event: { value: null }, grabberRef: { current: null } }), []),
+    ComposerPullThroughScrollView: ({ bridge, ...props }: any) => el(ScrollView, props),
+  };
+});
 vi.mock('@/session/MobileComposerInputRow', () => ({
   // Like the real row: the card shows the tray above the input and the toolbar below it.
+  MOBILE_COMPOSER_INPUT_SINGLE_LINE_HEIGHT: 28,
+  MOBILE_COMPOSER_INPUT_MAX_HEIGHT: 160,
+  ComposerResizeGrabber: ({ onAdjust }: any) => el('button', { 'data-testid': 'fixture.resize', onClick: () => onAdjust(1) }),
   MobileComposerInputRow: (props: any) => {
     h.row = props;
     if (props.inputRef) props.inputRef.current = { focus: h.inputFocus, blur: h.inputBlur, isFocused: () => h.inputFocused };
     return el('div', { 'data-testid': 'composer-row', 'data-card': props.cardActive ? 'true' : 'false' },
-      props.cardActive ? props.accessoryAbove : props.leading,
+      props.resizeHandle, props.cardActive ? props.accessoryAbove : props.leading,
       el('span', { 'data-testid': 'placeholder' }, props.placeholder),
       props.cardActive ? props.toolbar : props.trailing);
   },
@@ -316,6 +350,7 @@ vi.mock('@/session/ThinkingDots', () => ({ ThinkingDots: () => null }));
 const taskCardDevices = vi.hoisted(() => [] as string[]);
 vi.mock('@/session/CompanionMessageCard', () => ({ CompanionTaskCard: ({ deviceId }: { deviceId: string }) => { taskCardDevices.push(deviceId); return null; } }));
 import { BotGroupChatScreen } from '@/session/BotGroupChatScreen';
+import { BotGroupComposer } from '@/session/BotGroupComposer';
 import { parseBotGroupChatData } from '@/session/botGroupRemote';
 import { GeometryContext } from '@/platform/AdaptiveWindowContext';
 import { navigationChrome } from '@/theme/tokens';
@@ -796,7 +831,7 @@ describe('group timeline', () => {
     h.scrollToEnd.mockClear();
     await act(async () => h.scroll.onContentSizeChange(400, 2300));
     expect(h.scrollToEnd).not.toHaveBeenCalled();
-    await act(async () => h.scroll.onScroll({ nativeEvent: {
+    await act(async () => h.scroll.onScrollEndDrag({ nativeEvent: {
       contentOffset: { y: 1500 }, contentSize: { height: 2000 }, layoutMeasurement: { height: 500 },
     } }));
     expect(byId('botGroup.jumpToLatest')).toBeNull();
@@ -1281,6 +1316,53 @@ describe('group timeline', () => {
 });
 
 describe('group composer', () => {
+  // Unit regression: topic and maskIndicator each used to force an idle composer open.
+  // The ordinary draft test below cannot catch either branch. Render the production composer
+  // with only that distinguishing input; its toolbar/resize affordance must wait for focus.
+  it.each(['topic', 'mask'] as const)('keeps the %s composer collapsed until interaction', async variant => {
+    await act(async () => root.render(el(BotGroupComposer, {
+      members: group().members,
+      identityFor: (botId, name) => ({ botId, name: name ?? botId }),
+      deviceId: 'mac', online: true, running: false, planState: null,
+      attachmentsSupported: false, onSend: async () => {}, onStop: async () => {},
+      topic: variant === 'topic',
+      maskIndicator: variant === 'mask' ? el('span', null, 'Companion identity') : undefined,
+    })));
+    expect(h.inputFocus).not.toHaveBeenCalled();
+    expect(byId('composer-row')?.getAttribute('data-card')).toBe('false');
+    expect(byId('fixture.resize')).toBeNull();
+    expect(h.row.toolbar).toBeUndefined();
+    await act(async () => h.row.onFocus());
+    expect(byId('composer-row')?.getAttribute('data-card')).toBe('true');
+    expect(byId('fixture.resize')).not.toBeNull();
+    await act(async () => h.row.onBlur());
+    expect(byId('composer-row')?.getAttribute('data-card')).toBe('false');
+    expect(h.row.toolbar).toBeUndefined();
+  });
+
+  // Unit regression: an ordinary focused draft used to stay a pill with no resize affordance.
+  // Exercise the real group composer and shared resize row; native gesture math has its own suite.
+  it('expands a text-only draft, resizes it, and collapses without losing the draft', async () => {
+    await render(group());
+    expect(byId('composer-row')?.getAttribute('data-card')).toBe('false');
+    await act(async () => { h.row.onFocus(); h.row.onChangeText('Keep this draft'); });
+    expect(byId('composer-row')?.getAttribute('data-card')).toBe('true');
+    await act(async () => h.row.onContentSizeChange({ nativeEvent: { contentSize: { width: 300, height: 100 } } }));
+    await click('fixture.resize');
+    expect(h.row.value).toBe('Keep this draft');
+    const resizedHeight = h.row.inputFrameAnimatedStyle.height;
+    expect(resizedHeight).toBeGreaterThan(34);
+    await act(async () => h.row.onBlur());
+    expect(byId('composer-row')?.getAttribute('data-card')).toBe('false');
+    expect(byId('fixture.resize')).toBeNull();
+    await act(async () => h.row.onFocus());
+    expect(h.row.value).toBe('Keep this draft');
+    expect(byId('fixture.resize')).not.toBeNull();
+    expect(h.row.inputFrameAnimatedStyle.height).toBe(resizedHeight);
+    await act(async () => h.row.onChangeText(''));
+    expect(h.row.inputFrameAnimatedStyle.height).toBe('auto');
+  });
+
   async function type(text: string) {
     await act(async () => {
       h.row.onFocus();
@@ -2260,6 +2342,36 @@ it.each(['jump', 'send'])('releases nested work-area space on outer %s without c
   expect(byId('botGroup.work.toggle')!.getAttribute('aria-label')).toContain('groupChat.work.collapse');
 });
 
+// Unit / keyboard-dismiss scroll interruption: mounted timeline callbacks must
+// not issue an imperative tail scroll while native drag/deceleration owns it.
+// Existing history tests start away from the tail; this reproduces resize at the
+// tail before the first scroll sample has arrived.
+it.each(['drag', 'momentum'])('keeps keyboard resize from interrupting %s', async phase => {
+  await render(group());
+  const event = { nativeEvent: { contentOffset: { y: 1200 }, contentSize: { height: 2000 }, layoutMeasurement: { height: 800 } } };
+  await act(async () => {
+    h.scroll.onLayout({ nativeEvent: { layout: { height: 800 } } });
+    h.scroll.onContentSizeChange(390, 2000);
+    h.scroll.onScroll(event);
+    h.scroll.onScrollBeginDrag();
+    if (phase === 'momentum') {
+      h.scroll.onScrollEndDrag(event);
+      h.scroll.onMomentumScrollBegin();
+    }
+  });
+  h.scrollToEnd.mockClear();
+  await act(async () => {
+    h.scroll.onLayout({ nativeEvent: { layout: { height: 850 } } });
+    h.scroll.onContentSizeChange(390, 2010);
+  });
+  expect(h.scrollToEnd).not.toHaveBeenCalled();
+  await act(async () => {
+    h.scroll[phase === 'drag' ? 'onScrollEndDrag' : 'onMomentumScrollEnd'](event);
+    h.scroll.onContentSizeChange(390, 2020);
+  });
+  expect(h.scrollToEnd).toHaveBeenCalledWith({ animated: false });
+});
+
 // Unit / #9249 r4501133784: the final native position can arrive first in an
 // end event. Real screen+WorkArea must resume before losing gesture ownership.
 // Older coverage only sends positions via onScroll, so it misses end-before-scroll.
@@ -2727,6 +2839,7 @@ describe('mobile group threads', () => {
     const follow = () => node.querySelector<HTMLButtonElement>('button[aria-label="groupChat.thread.follow"], button[aria-label="groupChat.thread.following"]')!;
     expect(follow()).not.toBeNull();
     await act(async () => follow().click()); expect(h.chat.followThread).toHaveBeenCalledWith(true);
+    await act(async () => h.row.onFocus());
     await click('botGroup.thread.alsoSend'); await act(async () => h.row.onChangeText('Both destinations'));
     await click('botGroup.composer.send');
     expect(h.chat.act).toHaveBeenLastCalledWith('send', expect.objectContaining({ text: 'Both destinations', alsoSendToMain: true }));
@@ -2763,6 +2876,7 @@ describe('mobile group threads', () => {
     await render(data, 'ready', rootId, '');
     const event = { nativeEvent: { contentOffset: { y: 100 }, contentSize: { height: 1200 }, layoutMeasurement: { height: 500 } } };
     await act(async () => { h.scroll.onScrollBeginDrag(); h.scroll.onScroll(event); });
+    await act(async () => h.scroll.onScrollEndDrag(event));
     h.chat.loadingOlder = false;
     await render(data, 'ready', rootId, '');
     await click('botGroup.jumpToLatest');
@@ -2807,6 +2921,7 @@ describe('mobile group threads', () => {
     h.chat.server = true;
     await render(threadGroup({ messages: [rootMessage(), message('reply', 2, { threadRootId: rootId, content: 'Only this reply' })] }), 'ready', rootId, '');
     await act(async () => h.row.onChangeText('Keep my draft'));
+    await act(async () => h.row.onFocus());
     await click('botGroup.thread.alsoSend');
     await openTopicMenu('reply');
     await click('botGroup.thread.context.reply.action.image');

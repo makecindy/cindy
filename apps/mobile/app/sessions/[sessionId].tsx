@@ -1,3 +1,7 @@
+import { composerRowChrome } from '@/session/composerGeometry';
+import { ResizableComposerInputRow } from '@/session/ResizableComposerInputRow';
+import { useComposerDragOpen } from '@/session/useComposerDragOpen';
+import type { ViewInstance, ScrollViewInstance } from 'react-native';
 import { ComposerAttachmentPreview } from "@/session/ComposerAttachmentPreview";
 import { snapshotRichAnswerValues } from '@/session/RichAnswer';
 import { PluginUiEnablePrompt } from '@/plugins/PluginUiEnablePrompt';
@@ -118,7 +122,7 @@ import { MobileAgentMark } from '@/components/MobileAgentMark';
 import { mobileInteractionStyles } from '@/components/mobileInteractionStyles';
 import { SessionHeaderNativeBack, SessionHeaderNativeActions, SessionHeaderNativeTitle, SessionHeaderNativeBlur } from '@/session/SessionHeaderNativeControls';
 import { TaskTagDots } from '@/session/TaskTags';
-import type { TextInput as NativeTextInput } from 'react-native';
+
 import { ScreenBackButton } from '@/components/MobilePrimitives';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuth } from '@/auth/AuthContext';
@@ -489,7 +493,6 @@ import {
   canContinueFailedTurn,
 } from '@cindy/maker-shared/synthetic-trigger';
 import {
-  ComposerResizeGrabber,
   ComposerToolbarLeftGroup,
   ComposerToolbarSpacer,
   ComposerToolbarVoiceSlot,
@@ -500,7 +503,6 @@ import {
   MOBILE_COMPOSER_INPUT_SINGLE_LINE_HEIGHT,
   MOBILE_COMPOSER_MIN_TOUCH_TARGET,
   MOBILE_COMPOSER_TOOL_GAP,
-  MobileComposerInputRow,
   VoiceMicWaveCaret,
   resolveMobileComposerVoiceButtonPlacement,
 } from '@/session/MobileComposerInputRow';
@@ -822,16 +824,14 @@ const COMPOSER_CONTROL_HIT_SLOP = { bottom: 8, left: 8, right: 8, top: 8 };
 const COMPANION_NATIVE_HEADER_OPTIONS = { headerShown: false, headerTitle: '' } as const;
 const COMPOSER_INPUT_SINGLE_LINE_CONTENT_HEIGHT = MOBILE_COMPOSER_INPUT_SINGLE_LINE_HEIGHT;
 const COMPOSER_INPUT_MULTILINE_CONTENT_THRESHOLD = 34;
-/** 拉开拖动松手后等焦点到达的兜底时长；聚焦被拒时到点收回单行。 */
-const COMPOSER_DRAG_OPEN_FOCUS_GRACE_MS = 800;
 const COMPOSER_INPUT_LINE_HEIGHT = MOBILE_COMPOSER_INPUT_LINE_HEIGHT;
 const COMPOSER_INPUT_MAX_CONTENT_HEIGHT = MOBILE_COMPOSER_INPUT_MAX_HEIGHT;
-const COMPOSER_VERTICAL_PADDING_HEIGHT = 12;
+const COMPOSER_VERTICAL_PADDING_HEIGHT = composerRowChrome.verticalPadding;
 const COMPOSER_STATUS_ROW_RESERVED_HEIGHT = 28;
 const COMPOSER_STACK_GAP_HEIGHT = 4;
-const COMPOSER_INPUT_ROW_CHROME_HEIGHT = 22;
+const COMPOSER_INPUT_ROW_CHROME_HEIGHT = composerRowChrome.collapsed;
 // 聚焦卡片形态的 row chrome:paddingTop 26 + paddingBottom 8 + 层间 gap 8 + 工具排 ~36。
-const COMPOSER_CARD_ROW_CHROME_HEIGHT = 78;
+const COMPOSER_CARD_ROW_CHROME_HEIGHT = composerRowChrome.expanded;
 // 重开且检测到有新内容时,只拉最新小窗对账(比首开整窗 80 便宜很多);payload 过大再逐档退。
 const REOPEN_MESSAGE_WINDOW_LIMITS = [20, 10, 5, 1] as const;
 // session-tail-banner「重试」短窗口隐藏的超时兜底(接管信号全部丢失时恢复错误入口);
@@ -1293,8 +1293,8 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     draftRef.current = nextDraft;
   }
   const conversationShareSvgRef = useRef<ConversationShareSvgHandle | null>(null);
-  const topOverlayRef = useRef<View>(null);
-  const bottomOverlayRef = useRef<View>(null);
+  const topOverlayRef = useRef<ViewInstance>(null);
+  const bottomOverlayRef = useRef<ViewInstance>(null);
   const shareSelectionActiveRef = useRef(shareSelectionActive);
   shareSelectionActiveRef.current = shareSelectionActive;
   const shareSelectionRevisionRef = useRef(shareSelectionRevision);
@@ -2165,7 +2165,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     draftOverride?: string;
     documentOverride?: ComposerDocument;
   }) => Promise<boolean | void>) | null>(null);
-  const sendButtonRef = useRef<View>(null);
+  const sendButtonRef = useRef<ViewInstance>(null);
   const composerSendTargetEnabledRef = useRef(false);
   // Match the keyed palette lifetime. Old requests/cleanup retain their old
   // reference and cannot affect command dispatch in the next draft scope.
@@ -3140,14 +3140,18 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   // Wide nonpersistent windows offer quick switching separately from back navigation.
   // Its width is the same preference as the side column's.
   const sidebarWidthPreference = useSessionSidebarWidthPreference();
+  const nativeHeaderHeight = useSessionHeaderHeight(JSON.stringify([
+    windowDimensions.width, windowDimensions.height, windowDimensions.fontScale,
+    insets.top, insets.bottom, insets.left, insets.right, adaptiveWindow.barEdge,
+  ]));
   const wideSessionNav = useMemo(() => buildWideSessionNavLayout({
     iosPad: Platform.OS === 'ios' && Platform.isPad,
     platform: Platform.OS,
     preferredWidth: sidebarWidthPreference.width,
-    trailingReserve: sharedStatusRowTrailingReserve(adaptiveWindow),
+    trailingReserve: sharedStatusRowTrailingReserve(adaptiveWindow, nativeHeaderHeight),
     windowHeight: windowDimensions.height,
     windowWidth: windowDimensions.width,
-  }), [adaptiveWindow, sidebarWidthPreference.width, windowDimensions.height, windowDimensions.width]);
+  }), [adaptiveWindow, nativeHeaderHeight, sidebarWidthPreference.width, windowDimensions.height, windowDimensions.width]);
   const [sessionListDrawerOpen, setSessionListDrawerOpen] = useState(false);
   // 父级镜像 overlay 的真实存续期:打开时立即 true,退场动画完成 + native 子树卸载后的
   // onClosed 才 false。它同时保证退场期 TalkBack 背景隔离,以及旋转/收窄退出宽屏时
@@ -3155,10 +3159,6 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   const [sessionListDrawerOverlayMounted, setSessionListDrawerOverlayMounted] = useState(false);
   // iOS 系统导航栏在 RN 内容之上,临时抽屉放进独立窗口(aboveSystemBar)盖住它,系统栏
   // 留在遮罩下原地不动,不随抽屉开合收起。
-  const nativeHeaderHeight = useSessionHeaderHeight(JSON.stringify([
-    windowDimensions.width, windowDimensions.height, windowDimensions.fontScale,
-    insets.top, insets.bottom, insets.left, insets.right, adaptiveWindow.barEdge,
-  ]));
   // Duo shares the status area with its native toolbar. Its measured height
   // already includes that area; safeArea.top + 44 would count the toolbar twice.
   const topChromeHeight = Math.max(topOverlayHeight,
@@ -12200,7 +12200,7 @@ function SessionHeaderIconButton({
   active?: boolean;
   attention?: boolean;
   /** 需要外部定位本钮时传入(如三条杠:抽屉关闭后读屏焦点归还锚点)。 */
-  buttonRef?: RefObject<View | null>;
+  buttonRef?: RefObject<ViewInstance | null>;
   disabled?: boolean;
   /** 38×38 可见钮低于 44 触控底线时用它补热区(如左上角三条杠)。 */
   hitSlop?: PressableProps['hitSlop'];
@@ -12679,40 +12679,16 @@ function SessionComposerInput({
   const composerDock = useComposerDock();
   const [composerFocused, setComposerFocused] = useState(false);
   const composerPillOpen = useComposerPillOpen(composerDock.enabled && canUseComposer, () => composerInputRef.current?.focus());
-  // 收起态往上拖拉开：拖动中保持卡片态让输入区跟手拉高；松手拉够了就聚焦，
-  // 焦点到达（或兜底超时，聚焦被拒）后交还给 composerFocused。
-  const [composerDragOpen, setComposerDragOpen] = useState(false);
-  const composerDragOpenTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const clearComposerDragOpenTimer = useCallback(() => {
-    if (composerDragOpenTimerRef.current) clearTimeout(composerDragOpenTimerRef.current);
-    composerDragOpenTimerRef.current = null;
-  }, []);
-  useEffect(() => clearComposerDragOpenTimer, [clearComposerDragOpenTimer]);
-  const handleComposerDragOpenChange = useCallback((opening: boolean) => {
-    clearComposerDragOpenTimer();
-    setComposerDragOpen(opening);
-  }, [clearComposerDragOpenTimer]);
-  const handleComposerDragOpenCommit = useCallback(() => {
-    clearComposerDragOpenTimer();
-    composerInputRef.current?.focus();
-    composerDragOpenTimerRef.current = setTimeout(() => {
-      composerDragOpenTimerRef.current = null;
-      setComposerDragOpen(false);
-    }, COMPOSER_DRAG_OPEN_FOCUS_GRACE_MS);
-  }, [clearComposerDragOpenTimer, composerInputRef]);
-  useEffect(() => {
-    if (!composerFocused) return;
-    clearComposerDragOpenTimer();
-    setComposerDragOpen(false);
-  }, [clearComposerDragOpenTimer, composerFocused]);
+  const { composerDragOpen, handleComposerDragOpenChange, handleComposerDragOpenCommit } =
+    useComposerDragOpen(composerFocused, () => composerInputRef.current?.focus());
   const [composerInputContentHeight, setComposerInputContentHeight] = useState(COMPOSER_INPUT_SINGLE_LINE_CONTENT_HEIGHT);
   const [composerAttachmentTrayHeight, setComposerAttachmentTrayHeight] = useState(0);
   const [voiceDraftCaretFrame, setVoiceDraftCaretFrame] = useState({ left: 0, top: 0 });
-  const voiceDraftCaretRef = useRef<View>(null);
-  const voiceDraftMeasuredBlockRef = useRef<View>(null);
-  const composerScrollViewRef = useRef<ScrollView>(null);
+  const voiceDraftCaretRef = useRef<ViewInstance>(null);
+  const voiceDraftMeasuredBlockRef = useRef<ViewInstance>(null);
+  const composerScrollViewRef = useRef<ScrollViewInstance>(null);
   const composerScrollEnabledRef = useRef(false);
-  const voiceDraftScrollRef = useRef<ScrollView>(null);
+  const voiceDraftScrollRef = useRef<ScrollViewInstance>(null);
   const composerTrigger = useMemo(() => detectComposerTrigger(draft), [draft]);
   const voiceUiAvailable = shouldShowMobileVoiceUi(Platform.OS);
   const voiceIsListening = voiceState === 'listening';
@@ -12894,11 +12870,6 @@ function SessionComposerInput({
     singleLineContentHeight: COMPOSER_INPUT_SINGLE_LINE_CONTENT_HEIGHT,
     windowHeight: windowDimensions.height,
   });
-  // 只有展开卡片态（顶边热区可见）才接手聊天记录里的下拉。
-  useEffect(() => {
-    composerPullThrough.armed.value = composerCardActive;
-    return () => { composerPullThrough.armed.value = false; };
-  }, [composerCardActive, composerPullThrough]);
   // manual 高度跨聚焦/失焦、键盘开合保留(用户拖出的高度是显式意图);
   // 唯一自然失效点:草稿清空(发送成功/删光)回 auto,避免空输入框残留定高。
   const composerResizeReset = composerResize.reset;
@@ -12950,17 +12921,6 @@ function SessionComposerInput({
       setVoiceDraftCaretFrame((current) => current.left === nextFrame.left && current.top === nextFrame.top ? current : nextFrame);
     }, () => undefined);
   }, []);
-
-  const renderComposerResizeHandle = () => (
-    <ComposerResizeGrabber
-      onAdjust={composerResize.adjustByLine}
-      panHandlers={composerResize.panHandlers}
-      gesture={composerResize.gesture}
-      measureRef={composerPullThrough.grabberRef}
-      testID="session.composerResizeGrabber"
-      visible
-    />
-  );
 
   const voiceDraftInsertionEnd = composerInputRef.current?.getSelection(draft).end ?? draft.length;
   const renderComposerInputOverlay = () => voiceIsListening && nativeComposerAvailable ? (
@@ -13097,12 +13057,12 @@ function SessionComposerInput({
                   style={styles.composerScrollFrame}
                 >
                 {/* 卡片任意处上下拖动调高；文字区先滚动、滚到头才调高（resolveComposerBodyDrag）。 */}
-                <GestureDetector gesture={composerResize.bodyGesture}>
+
                 <View style={[
                   styles.composerSurface,
                   compactComposer && !composerCardActive && styles.composerSurfaceCompact,
                 ]}>
-                  <MobileComposerInputRow
+                  <ResizableComposerInputRow resize={composerResize}
                     key={sessionId}
                     frameOutside={nativeComposerFrameAvailable}
                     bodyScrollGesture={composerResize.scrollGesture}
@@ -13185,7 +13145,8 @@ function SessionComposerInput({
                     onPressIn={handleComposerInputPressIn}
                     placeholder={voiceIsListening ? '' : composerLayout.input.placeholder}
                     placeholderTextColor={colors.textPlaceholder}
-                    resizeHandle={composerCardActive ? renderComposerResizeHandle() : null}
+                    pullThrough={composerPullThrough}
+                    grabberTestID="session.composerResizeGrabber"
                     scrollEnabled={composerInputScrollEnabled}
                     selectionColor={colors.inputCaret}
                     testID="session.composerInputRow"
@@ -13195,7 +13156,6 @@ function SessionComposerInput({
                     voicePlacement={composerVoicePlacement}
                   />
                 </View>
-                </GestureDetector>
                 </ComposerFrame>
               </Reanimated.View>
     </>
@@ -13503,7 +13463,7 @@ interface RouteActionButtonProps {
   testID?: string;
 }
 
-const RouteActionButton = forwardRef<View, RouteActionButtonProps>(function RouteActionButton({
+const RouteActionButton = forwardRef<ViewInstance, RouteActionButtonProps>(function RouteActionButton({
   accessibilityHint,
   accessibilityLabel,
   active = false,

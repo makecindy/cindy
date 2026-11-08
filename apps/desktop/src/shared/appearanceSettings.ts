@@ -19,6 +19,8 @@ export interface AppearanceOverrides {
   wallpaperOverlay?: number;
   /** null removes the explicit visibility override. */
   wallpaperVisibility?: number | null;
+  /** Explicit desktop transparency; absent/null means opaque, never inherit artwork. */
+  desktopVisibility?: number | null;
   /** Blur radius in CSS pixels; null removes the override (default: off). */
   wallpaperBlur?: number | null;
   wallpaperMotion?: WallpaperMotion;
@@ -58,6 +60,8 @@ export interface AppearanceSettings {
   wallpaperOverlay: number;
   /** Absent for legacy/default preferences; derive visibility from the theme's old veil. */
   wallpaperVisibility?: number | null;
+  /** Explicit desktop transparency; absent/null means opaque, never inherit artwork. */
+  desktopVisibility?: number | null;
   wallpaperBlur?: number | null;
   wallpaperMotion: WallpaperMotion;
   appIcon: AppIcon;
@@ -162,6 +166,16 @@ export function getWallpaperVisibility(
     : (100 - getWallpaperVeil(settings.wallpaperOverlay, isDark)) / 100;
 }
 
+/** Reuse the control, but never interpret a legacy artwork preference as desktop opt-in. */
+export function getBackgroundVisibility(
+  settings: Pick<AppearanceSettings, 'wallpaperId' | 'wallpaperOverlay' | 'wallpaperVisibility' | 'desktopVisibility'>,
+  isDark: boolean,
+): number {
+  return settings.wallpaperId === 'none'
+    ? clampAppearanceWallpaperVisibility(settings.desktopVisibility ?? 0)
+    : getWallpaperVisibility(settings, isDark);
+}
+
 export function clampAppearanceWallpaperOverlay(
   value: number,
   fallback = DEFAULT_APPEARANCE_SETTINGS.wallpaperOverlay,
@@ -260,6 +274,9 @@ export function normalizeAppearanceSettings(raw: unknown): AppearanceSettings {
       : {}),
     ...(typeof value.wallpaperVisibility === 'number' && Number.isFinite(value.wallpaperVisibility)
       ? { wallpaperVisibility: clampAppearanceWallpaperVisibility(value.wallpaperVisibility) }
+      : {}),
+    ...(typeof value.desktopVisibility === 'number' && Number.isFinite(value.desktopVisibility)
+      ? { desktopVisibility: clampAppearanceWallpaperVisibility(value.desktopVisibility) }
       : {}),
     customWallpaperUrl: normalizeCustomWallpaperUrl(value.customWallpaperUrl),
   };

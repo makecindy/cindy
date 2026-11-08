@@ -428,6 +428,18 @@ describe('application wallpaper lifecycle', () => {
       expect(style.getPropertyValue('--app-wallpaper-figure-position')).toBe('');
     },
   );
+  // Windows without the native backdrop bridge (the detached sidebar) must keep their opaque canvas
+  // when no wallpaper is chosen; the main window opts into the desktop background by default.
+  it('enables the desktop background with no wallpaper unless the window opts out', () => {
+    vi.stubGlobal('electronAPI', {
+      appearanceSettings: { getSync: () => ({ ...DEFAULT_APPEARANCE_SETTINGS, wallpaperId: 'none' }) },
+    });
+    const first = render(<WallpaperSettingsProvider><Controls /></WallpaperSettingsProvider>);
+    expect(document.documentElement.dataset.desktopBackground).toBe('true');
+    first.unmount();
+    render(<WallpaperSettingsProvider desktopBackground={false}><Controls /></WallpaperSettingsProvider>);
+    expect(document.documentElement.dataset.desktopBackground).toBeUndefined();
+  });
   it('covers the document, including portals, and restores the theme on reset/unmount', () => {
     vi.stubGlobal('electronAPI', undefined);
     const { unmount } = render(

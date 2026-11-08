@@ -2323,6 +2323,10 @@
         },
         "visibilityLabel": "Visibilidade do papel de parede",
         "visibilityHint": "0% oculta o papel de parede; 100% o exibe sem sobreposição.",
+        "desktopVisibilityLabel": "Transparência da área de trabalho",
+        "desktopVisibilityHint": "Mostra a área de trabalho e as janelas atrás da Cindy. Textos e controles permanecem nítidos.",
+        "desktopBlurLabel": "Desfoque da área de trabalho",
+        "desktopBlurHint": "Desfoca a área de trabalho atrás da janela. 0 desativa; valores maiores aumentam o desfoque. Sistemas sem ajuste de intensidade usam o efeito padrão.",
         "blurLabel": "Desfoque do papel de parede",
         "blurHint": "Desfoque apenas o papel de parede. Defina como 0 para desativar. Desfocar papéis de parede animados aumenta o uso da GPU.",
         "motionLabel": "Exibição",
@@ -5658,12 +5662,12 @@
         "userBrowserSetup": {
           "installPluginTitle": "Instalar o plugin Cindy Chrome",
           "enablePluginTitle": "Ativar o plugin Cindy Chrome",
-          "installExtensionTitle": "Adicionar a extensão Cindy ao seu navegador",
+          "connectExtensionTitle": "Extensão do navegador desconectada",
           "pluginBody": "Meu navegador acessa seu Chrome ou Edge pelo plugin Cindy Chrome e sua extensão de navegador. Primeiro, instale o plugin em Cindy e siga a orientação para adicionar a extensão.",
-          "extensionBody": "Adicionar extensão ao navegador abre a página da extensão Cindy na loja do seu navegador; escolha Adicionar e o status mudará automaticamente para conectado. Já adicionou? Ative-a nas configurações de extensões do navegador.",
+          "connectionBody": "Mantenha Cindy e o navegador abertos e verifique se a extensão Cindy está ativada. A falta de conexão não significa que seja necessário reinstalá-la. O status é atualizado automaticamente ao reconectar.",
           "installPlugin": "Instalar plugin",
           "enablePlugin": "Ativar",
-          "installExtension": "Adicionar extensão ao navegador",
+          "openExtensionStore": "Abrir loja de extensões",
           "updatingTitle": "Atualizando a conexão do navegador",
           "updatingBody": "A conexão será restaurada automaticamente após a atualização.",
           "selectPluginTitle": "Selecionar extensão do navegador",
@@ -10045,6 +10049,8 @@
     "banner": {
       "title": "Atualizado para {{version}}",
       "subtitle": "Reiniciar para aplicar",
+      "nativeBuildTitle": "Versão para Apple silicon pronta",
+      "nativeBuildSubtitle": "Reinicie para trocar; suas tarefas e configurações são mantidas",
       "viewNotes": "Ver novidades",
       "viewNotesAria": "Ver novidades da versão {{version}}",
       "button": "Reiniciar",
@@ -10174,6 +10180,12 @@
       "description": "O banco de dados tem cerca de {{size}}, acima de {{threshold}} G. Considere fazer uma limpeza em Armazenamento.",
       "openSettings": "Abrir Armazenamento",
       "disable": "Não me lembrar"
+    },
+    "nativeBuild": {
+      "title": "Você está usando a versão para Intel",
+      "description": "Este Mac tem Apple silicon, e a versão para Intel fica bem mais lenta por rodar com tradução. Instale a versão para Apple silicon; seus dados são mantidos.",
+      "dismiss": "Ocultar por enquanto",
+      "download": "Baixar"
     },
     "horizontalTabbarAria": "Seletor da visualização principal",
     "tabs": {
@@ -14282,6 +14294,8 @@
       "closeFailed": "Não foi possível fechar a conversa paralela. Tente novamente."
     },
     "teammateProcess": {
+      "empty": "Não há detalhes do processo para esta resposta",
+      "unavailable": "Não foi possível carregar os detalhes do processo",
       "record": "Atividade",
       "operations": "Registro de atividades",
       "elapsed": "Trabalhando há {{duration}}",
@@ -19499,6 +19513,7 @@
       "apply": "Transferir"
     },
     "source": {
+      "receivingOn": "Dispositivo de destino: {{name}}",
       "description": "Escolha um computador conectado a esta conta. Os plugins, habilidades, configurações e conexões dele são configurados aqui do mesmo jeito; logins e chaves só saem daquele computador se você permitir nele.",
       "loading": "Procurando seus outros computadores…",
       "empty": "Nenhum outro computador encontrado para esta conta. Entre no Cindy em outro computador e abra isto novamente",
@@ -19950,5 +19965,14 @@
     "directory": "Pasta da conta",
     "loginAgain": "Entrar novamente",
     "login": "Entrar"
+  },
+  "crashDiagnosis": {
+    "title": "O Cindy encerrou inesperadamente",
+    "description": "Quer diagnosticar a causa? Vamos preparar um rascunho de tarefa com os detalhes do encerramento e registros sem dados sensíveis para você revisar antes de enviar. Um encerramento forçado ou uma queda de energia também pode ser a causa.",
+    "diagnose": "Diagnosticar problema",
+    "later": "Agora não",
+    "logExcerpt": "Registros relevantes (trecho, possivelmente incompleto)",
+    "logsUnavailable": "Não há registros relevantes disponíveis. A causa ainda é desconhecida.",
+    "failed": "Não foi possível preparar o diagnóstico. Tente novamente."
   }
 }

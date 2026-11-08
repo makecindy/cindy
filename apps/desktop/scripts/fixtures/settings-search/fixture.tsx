@@ -5,6 +5,7 @@ import { WallpaperSettingsProvider } from '../../../src/renderer/hooks/useWallpa
 import { SUBAGENT_MODEL_SETTINGS_DEFAULTS } from '../../../src/shared/subagentModelSettings';
 import { VISION_BRIDGE_SETTINGS_DEFAULTS } from '../../../src/shared/visionBridgeSettings';
 import { getDefaultVoiceInputSettings } from '../../../src/shared/voiceInputData';
+import { DEFAULT_APPEARANCE_SETTINGS } from '../../../src/shared/appearanceSettings';
 
 const read = <T,>(value: T) => async () => value;
 const state = <T extends object>(defaults: T) => ({ ...defaults, defaults, isCustomized: false, customizedKeys: [] });
@@ -19,10 +20,22 @@ const relayState = {
   deployments: [], deployJob: null, bundledRelayVersion: '0.3.1', joinLink: null, pendingRequests: [], join: { status: 'idle' },
 };
 const emptyDirectory = { bytes: 0, fileCount: 0 };
+const visibilityWrites: unknown[] = [];
+Object.assign(window, { visibilityWrites });
 
 void mountPage({
   route: `/settings?tab=${ctx.data.tab}`,
   host: {
+    ...(ctx.data.hiddenBackground || ctx.data.glassBackground || ctx.data.previewBackground ? {
+      appearanceSettings: {
+        getSync: () => ({ ...DEFAULT_APPEARANCE_SETTINGS, wallpaperId: ctx.data.hiddenBackground ?? ctx.data.glassBackground ?? ctx.data.previewBackground,
+          wallpaperVisibility: ctx.data.visibility ?? 0, desktopVisibility: ctx.data.visibility ?? 0, wallpaperBlur: 12 }),
+        onChanged: subscription('appearance'),
+        setPatch: ctx.data.previewBackground
+          ? async (patch: unknown) => { visibilityWrites.push(patch); }
+          : forbid('appearance.setPatch'),
+      },
+    } : {}),
     platform: ctx.data.tab === 'agent-island' ? 'darwin' : ctx.platform, osRelease: '24.0.0',
     agentIsland: { getDisplayOptions: read([]) },
     appVersion: '0.0.0', appDisplayVersion: 'UI fixture', supportsBetaUpdateChannel: true,

@@ -2255,6 +2255,10 @@
         },
         "visibilityLabel": "壁纸可见度",
         "visibilityHint": "0% 隐藏壁纸，100% 完全显示壁纸。",
+        "desktopVisibilityLabel": "桌面透明度",
+        "desktopVisibilityHint": "透出 Cindy 后面的桌面与窗口，文字和控件保持清晰。",
+        "desktopBlurLabel": "桌面模糊",
+        "desktopBlurHint": "模糊窗口后面的桌面，0 为关闭，数值越大越模糊。不支持强度调节的系统使用默认效果。",
         "blurLabel": "壁纸模糊",
         "blurHint": "仅模糊壁纸，0 为关闭。动态壁纸开启模糊后会增加显卡负载。",
         "motionLabel": "展示方式",
@@ -5557,12 +5561,12 @@
         "userBrowserSetup": {
           "installPluginTitle": "安装 Cindy Chrome 插件",
           "enablePluginTitle": "启用 Cindy Chrome 插件",
-          "installExtensionTitle": "把 Cindy 扩展装进浏览器",
+          "connectExtensionTitle": "浏览器扩展尚未连接",
           "pluginBody": "「我的浏览器」通过 Cindy Chrome 插件和它的浏览器扩展连接你的 Chrome / Edge。先在 Cindy 里装好插件，再按提示把扩展装进浏览器。",
-          "extensionBody": "点「安装浏览器扩展」会在你的浏览器里打开 Cindy 扩展的商店页面，点「添加」后这里会自动变成已连接。已经装过？在浏览器的扩展管理里启用它。",
+          "connectionBody": "保持 Cindy 和浏览器运行，并检查 Cindy 扩展是否启用。未连接不代表需要重新安装；连接恢复后，这里会自动更新。",
           "installPlugin": "安装插件",
           "enablePlugin": "去启用",
-          "installExtension": "安装浏览器扩展",
+          "openExtensionStore": "打开扩展商店",
           "updatingTitle": "正在更新浏览器连接",
           "updatingBody": "更新完成后会自动恢复连接。",
           "selectPluginTitle": "选择浏览器扩展",
@@ -9922,6 +9926,8 @@
     "banner": {
       "title": "已更新到 {{version}}",
       "subtitle": "重启以应用更新",
+      "nativeBuildTitle": "Apple 芯片版已就绪",
+      "nativeBuildSubtitle": "重启即换装，任务和设置都会保留",
       "viewNotes": "查看更新公告",
       "viewNotesAria": "查看 {{version}} 的更新公告",
       "button": "立即重启",
@@ -10051,6 +10057,12 @@
       "description": "数据库约占 {{size}}，已超过 {{threshold}} G。建议前往存储空间进行清理。",
       "openSettings": "打开存储空间",
       "disable": "不再提醒"
+    },
+    "nativeBuild": {
+      "title": "当前是 Intel 版 Cindy",
+      "description": "这台 Mac 是 Apple 芯片，Intel 版要转译运行，会明显变慢。改装 Apple 芯片版即可，数据都会保留。",
+      "dismiss": "本次不再提示",
+      "download": "下载"
     },
     "horizontalTabbarAria": "主区域视图切换",
     "tabs": {
@@ -12918,6 +12930,8 @@
       }
     },
     "teammateProcess": {
+      "empty": "本轮没有可显示的过程记录",
+      "unavailable": "未能读取过程记录",
       "record": "处理记录",
       "operations": "操作记录",
       "elapsed": "已处理 {{duration}}",
@@ -19253,6 +19267,7 @@
       "apply": "迁移"
     },
     "source": {
+      "receivingOn": "接收端：{{name}}",
       "description": "选一台登录了同一账号的电脑。它的插件、技能、设置和连接会照原样装到这台电脑；密钥只在你在那台电脑上点「允许」后复制，登录状态不会离开那台电脑。",
       "loading": "正在查找你的其他电脑…",
       "empty": "没有找到这个账号的其他电脑。在另一台电脑上登录 Cindy 后再打开这里",
@@ -19691,5 +19706,14 @@
     "directory": "账号目录",
     "loginAgain": "重新登录",
     "login": "登录"
+  },
+  "crashDiagnosis": {
+    "title": "Cindy 上次意外退出了",
+    "description": "要诊断原因吗？我们会把退出信息和脱敏日志整理成任务草稿，供你检查后发送。强制退出或断电也可能导致意外退出。",
+    "diagnose": "诊断问题",
+    "later": "暂不处理",
+    "logExcerpt": "相关日志（节选，可能不完整）",
+    "logsUnavailable": "没有可用的相关日志，暂时无法确定原因。",
+    "failed": "诊断材料准备失败，请重试。"
   }
 }

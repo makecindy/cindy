@@ -1,6 +1,6 @@
 // Native ABI: changing this contract requires a new self-host runtime.
 const NATIVE_OTA_VERSION = 1;
-const EXPO_UPDATES_VERSION = '57.0.18';
+const EXPO_UPDATES_VERSION = '58.0.21';
 const SHARED_CLIENT_ID = '00000000-0000-4000-8000-000000000000';
 const CHANNEL_HEADER = 'x-cindy-update-channel';
 

@@ -2255,6 +2255,10 @@
         },
         "visibilityLabel": "桌布可見度",
         "visibilityHint": "0% 隱藏桌布，100% 完全顯示桌布。",
+        "desktopVisibilityLabel": "桌面透明度",
+        "desktopVisibilityHint": "透出 Cindy 後面的桌面與視窗，文字和控制項保持清晰。",
+        "desktopBlurLabel": "桌面模糊",
+        "desktopBlurHint": "模糊視窗後面的桌面，0 為關閉，數值越大越模糊。不支援強度調整的系統使用預設效果。",
         "blurLabel": "桌布模糊",
         "blurHint": "僅模糊桌布，0 為關閉。動態桌布開啟模糊後會增加顯示卡負載。",
         "motionLabel": "展示方式",
@@ -5557,12 +5561,12 @@
         "userBrowserSetup": {
           "installPluginTitle": "安裝 Cindy Chrome 插件",
           "enablePluginTitle": "啟用 Cindy Chrome 插件",
-          "installExtensionTitle": "把 Cindy 擴充功能裝進瀏覽器",
+          "connectExtensionTitle": "瀏覽器擴充功能尚未連線",
           "pluginBody": "「我的瀏覽器」透過 Cindy Chrome 插件和它的瀏覽器擴充功能連接你的 Chrome / Edge。先在 Cindy 裡裝好插件，再依提示把擴充功能裝進瀏覽器。",
-          "extensionBody": "點「安裝瀏覽器擴充功能」會在你的瀏覽器裡開啟 Cindy 擴充功能的商店頁面，點「新增」後這裡會自動變成已連線。已經裝過？在瀏覽器的擴充功能管理裡啟用它。",
+          "connectionBody": "保持 Cindy 和瀏覽器執行，並檢查 Cindy 擴充功能是否啟用。未連線不代表需要重新安裝；連線恢復後，這裡會自動更新。",
           "installPlugin": "安裝插件",
           "enablePlugin": "前往啟用",
-          "installExtension": "安裝瀏覽器擴充功能",
+          "openExtensionStore": "開啟擴充功能商店",
           "updatingTitle": "正在更新瀏覽器連線",
           "updatingBody": "更新完成後會自動恢復連線。",
           "selectPluginTitle": "選擇瀏覽器擴充功能",
@@ -9922,6 +9926,8 @@
     "banner": {
       "title": "已更新到 {{version}}",
       "subtitle": "重啟以應用更新",
+      "nativeBuildTitle": "Apple 晶片版已就緒",
+      "nativeBuildSubtitle": "重新啟動即換裝，任務和設定都會保留",
       "viewNotes": "檢視更新公告",
       "viewNotesAria": "檢視 {{version}} 的更新公告",
       "button": "立即重啟",
@@ -10051,6 +10057,12 @@
       "description": "資料庫約佔 {{size}}，已超過 {{threshold}} G。建議前往儲存空間進行清理。",
       "openSettings": "開啟儲存空間",
       "disable": "不再提醒"
+    },
+    "nativeBuild": {
+      "title": "目前是 Intel 版 Cindy",
+      "description": "這台 Mac 是 Apple 晶片，Intel 版要轉譯執行，會明顯變慢。改裝 Apple 晶片版即可，資料都會保留。",
+      "dismiss": "本次不再提示",
+      "download": "下載"
     },
     "horizontalTabbarAria": "主區域檢視切換",
     "tabs": {
@@ -12918,6 +12930,8 @@
       }
     },
     "teammateProcess": {
+      "empty": "本輪沒有可顯示的過程記錄",
+      "unavailable": "未能讀取過程記錄",
       "record": "處理紀錄",
       "operations": "操作記錄",
       "elapsed": "已處理 {{duration}}",
@@ -19253,6 +19267,7 @@
       "apply": "遷移"
     },
     "source": {
+      "receivingOn": "接收端：{{name}}",
       "description": "選一台登入了同一帳號的電腦。它的插件、技能、設定和連線會照原樣裝到這台電腦；金鑰只在你在那台電腦上點「允許」後複製，登入狀態不會離開那台電腦。",
       "loading": "正在尋找你的其他電腦…",
       "empty": "沒有找到這個帳號的其他電腦。在另一台電腦上登入 Cindy 後再開啟這裡",
@@ -19691,5 +19706,14 @@
     "directory": "帳號目錄",
     "loginAgain": "重新登入",
     "login": "登入"
+  },
+  "crashDiagnosis": {
+    "title": "Cindy 上次意外結束了",
+    "description": "要診斷原因嗎？我們會把結束資訊和去識別化日誌整理成任務草稿，供你檢查後傳送。強制結束或斷電也可能造成意外結束。",
+    "diagnose": "診斷問題",
+    "later": "暫不處理",
+    "logExcerpt": "相關日誌（節錄，可能不完整）",
+    "logsUnavailable": "沒有可用的相關日誌，暫時無法確定原因。",
+    "failed": "診斷資料準備失敗，請重試。"
   }
 }

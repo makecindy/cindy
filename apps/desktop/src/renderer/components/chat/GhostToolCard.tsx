@@ -38,7 +38,7 @@ import sliderCss from '@/components/ui/slider.css?inline';
  * 历史卡片纯静态(净化器已剥 CSS 动画之外的一切动源,iframe 无脚本)。
  */
 
-import { useCallback, useEffect, useLayoutEffect, useId, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useId, useMemo, useRef, useState, useSyncExternalStore, type ReactNode, type RefObject } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Check, ChevronDown, Copy, FolderOpen, Ghost, Loader2 } from 'lucide-react';
 
@@ -193,6 +193,20 @@ export function MailCardEditor({ callId, html, height, sessionId }: { callId: st
     themeVars={themeVars} ariaTitle={t('mailReader.title')} running={false} mailPanel />;
 }
 
+/** A second view of the same card; actions keep the original call identity. */
+export function GhostCardPreview({ callId, ghostId, html, sessionId, onEscape, settingsButtonRef, inDialog }: {
+  callId: string; ghostId: string; html: string; sessionId: string; inDialog?: boolean; onEscape?: () => void; settingsButtonRef?: RefObject<HTMLButtonElement | null>;
+}) {
+  const themeVars = useGhostCardThemeVars();
+  const ghosts = useInstalledGhosts();
+  const ghost = findInstalledGhostByInstanceId(ghosts, ghostId);
+  const { t } = useTranslation();
+  return <GhostCardCanvas callId={callId} html={html} height={GHOST_CARD_HEIGHT_MIN}
+    sessionId={sessionId} themeVars={themeVars} running={false} persistHeight={false} inDialog={inDialog} onEscape={onEscape} settingsButtonRef={settingsButtonRef}
+    ariaTitle={t('chat.ghostCall.cardAria', { name: ghost?.manifest.name ?? ghostId, tool: '' })}
+    allowExternalLinks={ghost?.manifest.card?.externalLinks} />;
+}
+
 /**
  * 单块意识画布(母卡与衍生卡共用):沙箱 iframe + 点击桥(lightbox /
  * card-action / data-ghost-prompt 输入面板)+ 权威量高与写回。自带一层
@@ -209,6 +223,10 @@ function GhostCardCanvas({
   sessionId,
   allowExternalLinks,
   mailPanel = false,
+  persistHeight = true,
+  inDialog = false,
+  onEscape,
+  settingsButtonRef,
 }: {
   /** 本画布的卡片键(母卡 = 调用 callId;衍生卡 = spawnCallId)。 */
   callId: string;
@@ -222,10 +240,17 @@ function GhostCardCanvas({
   /** 插件是否声明了 card.externalLinks;未声明则卡内 data-ghost-link 不激活。 */
   allowExternalLinks?: boolean;
   mailPanel?: boolean;
+  persistHeight?: boolean;
+  inDialog?: boolean;
+  onEscape?: () => void;
+  settingsButtonRef?: RefObject<HTMLButtonElement | null>;
 }): ReactNode {
   const { t } = useTranslation();
   const editorId = useId();
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
+  // The iframe is not rebuilt when a plugin update adds card.externalLinks, so already-bound action handlers read this live.
+  const allowExternalLinksRef = useRef(allowExternalLinks);
+  allowExternalLinksRef.current = allowExternalLinks;
   const anchorRef = useRef<HTMLDivElement | null>(null);
   const liveDisposeRef = useRef<(() => void) | null>(null);
   useEffect(() => () => liveDisposeRef.current?.(), []);
@@ -357,7 +382,7 @@ function GhostCardCanvas({
   autoArchiveStateRef.current = autoArchiveState;
   const fillPrStatus = useCallback((doc: Document) => {
     if (!prSlotKey) return;
-    setTaskAutoArchive(fillGhostCardPrStatus(doc, (key) => prStatusesRef.current.get(key), t, taskArchiveEligible));
+    setTaskAutoArchive(fillGhostCardPrStatus(doc, (key) => prStatusesRef.current.get(`github:github.com/${key}`) ?? prStatusesRef.current.get(key), t, taskArchiveEligible));
     fillGhostCardTaskAutoArchiveHint(doc, taskArchiveEligible ? autoArchiveStateRef.current : 'inactive', {
       pending: t('chat.ghostCall.taskAutoArchivePending'),
       cancel: t('chat.ghostCall.taskAutoArchiveCancel'),
@@ -417,7 +442,7 @@ function GhostCardCanvas({
     const body = doc?.body;
     if (!doc || !body) return;
     // scrollHeight is at least the iframe viewport height, so it cannot shrink a footer.
-    const h = Math.ceil(formFields ? body.getBoundingClientRect().height : body.scrollHeight);
+    const h = Math.ceil(formFields || !persistHeight ? body.getBoundingClientRect().height : body.scrollHeight);
     if (h <= 0) return;
     const clamped = Math.min(GHOST_CARD_HEIGHT_MAX, Math.max(GHOST_CARD_HEIGHT_MIN, h));
     const imagesPending = Array.from(doc.images).some((img) => !img.complete);
@@ -432,11 +457,11 @@ function GhostCardCanvas({
     // 权威实测双写回(fire-and-forget):内存卡片库(本次运行内重挂载即
     // 准确首帧)+ 磁盘(重启后的历史回放)。下次渲染不再经历
     // "声明值 → 实测值"的可见收敛。
-    if (!formFields && Math.abs(clamped - height) > 2) {
+    if (persistHeight && !formFields && Math.abs(clamped - height) > 2) {
       noteCardMeasuredHeight(callId, clamped);
       window.electronAPI?.ghosts?.reportCardHeight?.(callId, clamped)?.catch(() => {});
     }
-  }, [callId, height, formFields]);
+  }, [callId, height, formFields, persistHeight]);
 
   /** data-ghost-audio 插槽装配:注入标准播放器行 + 双向接线(UI → audio 控制,
    *  audio 事件 → UI 刷新)。同 url 复用同一 <audio>(跨文档重载接续播放)。 */
@@ -645,6 +670,7 @@ function GhostCardCanvas({
     // 卡内零脚本、点击委托全在这里(父层可信上下文,同源 iframe 无 allow-scripts)。
     const actionEls = doc.querySelectorAll<HTMLElement>('[data-ghost-action]');
     actionEls.forEach((el) => {
+      if (allowExternalLinks && ghostCardSessionLinkId(el.dataset.ghostSessionLink ?? '')) return;
       if (el.dataset.xdtActionBridged === '1') return;
       el.dataset.xdtActionBridged = '1';
       const actionId = el.dataset.ghostAction ?? '';
@@ -654,6 +680,8 @@ function GhostCardCanvas({
         e.stopPropagation();
         // 已锁(点过、等新卡)则忽略连点。
         if (el.getAttribute('aria-disabled') === 'true' || (el as HTMLButtonElement).disabled) return;
+        // 插件更新后才声明 externalLinks:任务链接改由宿主直接跳转,不再走降级动作。
+        if (allowExternalLinksRef.current && ghostCardSessionLinkId(el.dataset.ghostSessionLink ?? '')) return;
         if (el.dataset.ghostSubmit === 'true') {
           if (!readGhostCardForm(html) || formState.current.busy) return;
           formState.current.busy = true;
@@ -744,8 +772,9 @@ function GhostCardCanvas({
     // 动作声明优先(净化器已互斥,同为纵深)。
     // 须声明 card.externalLinks 才激活(未声明的插件属性保留但不挂桥)。
     const taskLinks: HTMLElement[] = [];
-    if (allowExternalLinks) doc.querySelectorAll<HTMLElement>('[data-ghost-link]').forEach((el) => {
-      if (ghostCardSessionLinkId(el.dataset.ghostLink ?? '') && !el.dataset.ghostAction) {
+    if (allowExternalLinks) doc.querySelectorAll<HTMLElement>('[data-ghost-link], [data-ghost-session-link]').forEach((el) => {
+      if (ghostCardSessionLinkId(el.dataset.ghostSessionLink ?? '') ||
+          (ghostCardSessionLinkId(el.dataset.ghostLink ?? '') && !el.dataset.ghostAction)) {
         el.style.cursor = 'pointer';
         el.setAttribute('tabindex', '0');
         el.setAttribute('role', 'link');
@@ -908,7 +937,25 @@ function GhostCardCanvas({
           ref={iframeRef}
           sandbox="allow-same-origin"
           srcDoc={mail ? initialMailDocument.current : cardSrcDoc}
-          onLoad={refreshMailDocument}
+          onLoad={() => {
+            refreshMailDocument();
+            if (settingsButtonRef) {
+              const button = iframeRef.current?.contentDocument?.querySelector<HTMLButtonElement>('button[data-ghost-action="prui:settings"]') ?? null;
+              settingsButtonRef.current = button;
+              if (button) {
+                // Live PR status updates may restore the plugin's inline display.
+                // Hide only this preview's relocated control, never the chat card.
+                const style = button.ownerDocument.createElement('style');
+                style.textContent = 'button[data-ghost-action="prui:settings"]{display:none!important}';
+                button.ownerDocument.head.appendChild(style);
+                measureHeight();
+              }
+            }
+            // Keyboard events in the sandbox document do not bubble to the popover.
+            if (onEscape) iframeRef.current?.contentDocument?.addEventListener('keydown', (event) => {
+              if (event.key === 'Escape') { event.preventDefault(); onEscape(); }
+            });
+          }}
           title={ariaTitle}
           className="block w-full border-0"
           style={{
@@ -964,7 +1011,7 @@ function GhostCardCanvas({
         />
       ) : null}
       {modelAsk ? (
-        <GhostCardModelSelect
+        <GhostCardModelSelect inDialog={inDialog}
           rect={modelAsk.rect}
           initial={modelAsk.initial}
           onSelect={(route) => {

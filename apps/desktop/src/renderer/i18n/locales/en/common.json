@@ -2285,6 +2285,10 @@
         },
         "visibilityLabel": "Wallpaper Visibility",
         "visibilityHint": "0% hides the wallpaper; 100% shows it without an overlay.",
+        "desktopVisibilityLabel": "Desktop Transparency",
+        "desktopVisibilityHint": "Reveal the desktop and windows behind Cindy. Text and controls stay clear.",
+        "desktopBlurLabel": "Desktop Blur",
+        "desktopBlurHint": "Blur the desktop behind the window. 0 turns it off; higher values increase blur. Systems without adjustable blur use their default effect.",
         "blurLabel": "Wallpaper Blur",
         "blurHint": "Blur only the wallpaper. Set to 0 to turn off. Blurring animated wallpaper increases GPU usage.",
         "motionLabel": "Display",
@@ -5600,12 +5604,12 @@
         "userBrowserSetup": {
           "installPluginTitle": "Install the Cindy Chrome plugin",
           "enablePluginTitle": "Enable the Cindy Chrome plugin",
-          "installExtensionTitle": "Add the Cindy extension to your browser",
+          "connectExtensionTitle": "Browser Extension Not Connected",
           "pluginBody": "My browser reaches your Chrome or Edge through the Cindy Chrome plugin and its browser extension. Install the plugin in Cindy first, then follow its prompt to add the extension.",
-          "extensionBody": "Add browser extension opens the Cindy extension’s store page in your browser; choose Add and this changes to connected on its own. Already added? Enable it in the browser’s extension settings.",
+          "connectionBody": "Keep Cindy and your browser open, and check that the Cindy extension is enabled. This does not mean it needs reinstalling. The status updates automatically when it reconnects.",
           "installPlugin": "Install plugin",
           "enablePlugin": "Enable",
-          "installExtension": "Add browser extension",
+          "openExtensionStore": "Open Extension Store",
           "updatingTitle": "Updating browser connection",
           "updatingBody": "The connection will recover automatically when the update finishes.",
           "selectPluginTitle": "Select a browser extension",
@@ -9965,6 +9969,8 @@
     "banner": {
       "title": "Updated to {{version}}",
       "subtitle": "Relaunch to apply",
+      "nativeBuildTitle": "Apple silicon version ready",
+      "nativeBuildSubtitle": "Restart to switch; your tasks and settings stay",
       "viewNotes": "See What's New",
       "viewNotesAria": "See what's new in {{version}}",
       "button": "Relaunch",
@@ -10094,6 +10100,12 @@
       "description": "The database is about {{size}}, above {{threshold}} G. Consider cleaning it up in Storage.",
       "openSettings": "Open Storage",
       "disable": "Do not remind me"
+    },
+    "nativeBuild": {
+      "title": "You're using the Intel version",
+      "description": "This Mac has Apple silicon, so the Intel version runs much slower through translation. Install the Apple silicon version; your data stays.",
+      "dismiss": "Hide for now",
+      "download": "Download"
     },
     "horizontalTabbarAria": "Main view switcher",
     "tabs": {
@@ -12970,6 +12982,8 @@
       }
     },
     "teammateProcess": {
+      "empty": "No process details to show for this reply",
+      "unavailable": "Could not load process details",
       "record": "Activity",
       "operations": "Activity log",
       "elapsed": "Working for {{duration}}",
@@ -19325,6 +19339,7 @@
       "apply": "Move"
     },
     "source": {
+      "receivingOn": "Receiving on: {{name}}",
       "description": "Pick a computer signed in to this account. Its plugins, skills, settings and connections are set up the same way here; keys are copied only after you allow it there, and sign-ins never leave that computer.",
       "loading": "Looking for your other computers…",
       "empty": "No other computers found for this account. Sign in to Cindy on another computer, then open this again",
@@ -19763,5 +19778,14 @@
     "directory": "Account folder",
     "loginAgain": "Sign in again",
     "login": "Sign in"
+  },
+  "crashDiagnosis": {
+    "title": "Cindy exited unexpectedly",
+    "description": "Would you like to diagnose what happened? We’ll prepare a task draft with exit details and redacted logs for you to review before sending. An unexpected exit can also result from a forced quit or power loss.",
+    "diagnose": "Diagnose problem",
+    "later": "Not now",
+    "logExcerpt": "Relevant logs (excerpt; may be incomplete)",
+    "logsUnavailable": "No relevant logs are available. The cause is not yet known.",
+    "failed": "Could not prepare the diagnosis. Please try again."
   }
 }

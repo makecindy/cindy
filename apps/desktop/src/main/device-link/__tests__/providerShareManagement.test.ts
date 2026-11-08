@@ -1,3 +1,6 @@
+const standby = vi.hoisted(() => ({ publish: vi.fn(), refresh: vi.fn(), flush: vi.fn(), usage: vi.fn() }));
+vi.mock('../providerShareAvailability.js', () => ({ publishShareAvailability: standby.publish, refreshStandbyGuests: standby.refresh }));
+vi.mock('../providerShareAvailabilityUsage.js', () => ({ flushStandbyUsage: standby.flush, importStandbyUsage: standby.usage }));
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -31,7 +34,7 @@ const usageStores = vi.hoisted(() => ({ ownHistory: vi.fn(), memberTokenSnapshot
 const memberNotes = vi.hoisted(() => ({ read: vi.fn(), set: vi.fn() }));
 vi.mock('../providerShareQuota.js', () => ({ readProviderShareQuota: vi.fn(), readProviderShareQuotaAccount: vi.fn() }));
 const visibility = vi.hoisted(() => ({ read: vi.fn(), set: vi.fn() }));
-const modelAccess = vi.hoisted(() => ({ read: vi.fn(), set: vi.fn(), allows: vi.fn() }));
+const modelAccess = vi.hoisted(() => ({ subscribe: () => () => undefined, read: vi.fn(), set: vi.fn(), allows: vi.fn() }));
 const fastPolicy = vi.hoisted(() => ({ allows: vi.fn(), set: vi.fn(), changed: vi.fn(), publish: vi.fn() }));
 const localBroadcast = vi.hoisted(() => vi.fn());
 vi.mock('../index.js', () => ({ broadcast: localBroadcast }));
@@ -52,7 +55,7 @@ vi.mock('../../logger.js', () => ({ createLogger: () => ({ warn: vi.fn() }) }));
 vi.mock('../../maker-host/createDesktopProviderService.js', () => ({
   getDesktopProviderService: () => ({ listProviders }),
 }));
-vi.mock('../../maker-host/remote-provider-access-store.js', () => ({ isRemoteProviderInvocationAllowed: () => true }));
+vi.mock('../../maker-host/remote-provider-access-store.js', () => ({ isRemoteProviderInvocationAllowed: () => true, onRemoteProviderAccessChanged: () => () => undefined }));
 vi.mock('../../textClipboard.js', () => ({ rememberIssuedClipboardText: remember }));
 vi.mock('../../security/trustedAppRenderer.js', () => ({ assertTrustedAppRendererEvent: vi.fn() }));
 vi.mock('../../usage/ledgerCurrency.js', () => ({ currentLedgerCurrency: () => 'USD' }));
@@ -75,7 +78,7 @@ vi.mock('../providerShareUsageStore.js', async (importOriginal) => ({
     acknowledgeDirectCleanup: usageStores.acknowledgeDirectCleanup }),
   providerUsageLocalDay: () => '2026-10-17',
 }));
-vi.mock('../settings-store.js', () => ({ readDeviceLinkSettings: () => ({ remoteControlEnabled: true }), readLastKnownDeviceNames: () => ({}) }));
+vi.mock('../settings-store.js', () => ({ onDeviceLinkSettingChanged: () => () => undefined, readDeviceLinkSettings: () => ({ remoteControlEnabled: true }), readLastKnownDeviceNames: () => ({}) }));
 vi.mock('../providerShareApi.js', () => ({
   providerShareApi: api,
   fetchIdentityCard: identityCard,
@@ -934,4 +937,41 @@ describe('subscription Fast management through the owner command', () => {
     expect(fastPolicy.set).not.toHaveBeenCalled();
     expect(fastPolicy.publish).not.toHaveBeenCalled();
   });
+});
+
+// Exercise the production scheduler with deferred fake network work, never real shares.
+it('coalesces pending syncs, ignores unchanged polling and retains periodic refresh', async () => {
+  vi.useFakeTimers();
+  let finish!: () => void;
+  const blocked = new Promise<void>(resolve => { finish = resolve; });
+  standby.publish.mockImplementationOnce(() => blocked);
+  const events = vi.mocked(startProviderShareHost).mock.lastCall![0];
+  const flush = async () => { for (let i = 0; i < 50; i++) await Promise.resolve(); };
+  try {
+    events.changed(host.snapshot());
+    await flush();
+    expect(standby.publish).toHaveBeenCalledTimes(1);
+    for (let i = 0; i < 20; i++) events.changed(host.snapshot());
+    await flush();
+    finish(); await flush();
+    expect(standby.publish).toHaveBeenCalledTimes(1);
+    let release!: () => void;
+    standby.publish.mockImplementationOnce(() => new Promise<void>(resolve => { release = resolve; }));
+    // The timer was installed before fake timers, so restart with the fake clock.
+    startProviderShareRuntime(vi.fn());
+    const current = vi.mocked(startProviderShareHost).mock.lastCall![0];
+    current.changed(host.snapshot()); await flush();
+    expect(standby.publish).toHaveBeenCalledTimes(2);
+    for (let i = 0; i < 20; i++) {
+      host.snapshot.mockReturnValue([{ shareId: 'share', members: [{ memberId: 'm1', joinedAt: String(i), status: 'active' }] }]);
+      current.changed(host.snapshot());
+    }
+    await vi.advanceTimersByTimeAsync(180_000);
+    expect(standby.publish).toHaveBeenCalledTimes(2);
+    release(); await flush();
+    expect(standby.publish).toHaveBeenCalledTimes(3);
+    expect(standby.publish.mock.lastCall![0][0].members[0].joinedAt).toBe('19');
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(standby.publish).toHaveBeenCalledTimes(4);
+  } finally { finish(); stopProviderShareRuntime(); vi.useRealTimers(); }
 });

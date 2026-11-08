@@ -79,6 +79,21 @@ describe('catalog mapping independent of desktop platform', () => {
     expect(matchOfficialProviders(url + '/unregistered', presets)).toEqual([]);
     expect(matchOfficialProviders(url + '?token=fake', presets)).toEqual([]);
   });
+  // #9101: author only server-compatible Chat runtimes; the existing portable
+  // preset expansion adds Claude Code without assuming a native Messages API.
+  // This catches dropped presets and accidental native-protocol defaults.
+  it('keeps Hinoki selectable through the existing Claude Chat bridge', () => {
+    const url = 'https://inference.hinoki.security/v1';
+    const preset = presets.find(p => p.id === 'hinoki')!;
+    expect(Object.keys(preset.runtimes)).toEqual(['codex', 'pi', 'claude-code']);
+    expect(matchOfficialProviders(url, presets).map(p => p.id)).toEqual(['hinoki']);
+    for (const agent of ['claude-code', 'codex', 'pi'] as const) {
+      expect(bindDetectedProvider(preset, agent, url)?.runtimes[agent]).toMatchObject({ baseUrl: url, wireProtocol: 'openai-chat' });
+    }
+    for (const fake of [url.replace('.security', '.security.evil.test'), url + '/unregistered', url + '?token=fake']) {
+      expect(matchOfficialProviders(fake, presets)).toEqual([]);
+    }
+  });
   it.each(['cn', 'global'] as const)('classifies the entire active catalog without region filtering: %s', region => {
     expect(presets.length).toBeGreaterThan(28);
     for (const p of sortPresetsForRegion(presets, region)) {

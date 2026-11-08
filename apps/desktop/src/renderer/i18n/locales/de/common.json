@@ -2285,6 +2285,10 @@
         },
         "visibilityLabel": "Sichtbarkeit des Hintergrundbilds",
         "visibilityHint": "0 % blendet das Hintergrundbild aus; 100 % zeigt es ohne Überlagerung.",
+        "desktopVisibilityLabel": "Desktop-Transparenz",
+        "desktopVisibilityHint": "Zeigt den Desktop und Fenster hinter Cindy. Text und Bedienelemente bleiben klar.",
+        "desktopBlurLabel": "Desktop-Unschärfe",
+        "desktopBlurHint": "Verwischt den Desktop hinter dem Fenster. 0 schaltet den Effekt aus, höhere Werte verstärken ihn. Systeme ohne einstellbare Stärke verwenden ihren Standardeffekt.",
         "blurLabel": "Unschärfe des Hintergrundbilds",
         "blurHint": "Nur das Hintergrundbild weichzeichnen. Zum Deaktivieren auf 0 setzen. Das Weichzeichnen animierter Hintergrundbilder erhöht die GPU-Auslastung.",
         "motionLabel": "Anzeige",
@@ -5600,12 +5604,12 @@
         "userBrowserSetup": {
           "installPluginTitle": "Cindy Chrome-Plugin installieren",
           "enablePluginTitle": "Cindy Chrome-Plugin aktivieren",
-          "installExtensionTitle": "Cindy-Erweiterung zum Browser hinzufügen",
+          "connectExtensionTitle": "Browser-Erweiterung nicht verbunden",
           "pluginBody": "Mein Browser greift über das Cindy Chrome-Plugin und dessen Browser-Erweiterung auf deinen Chrome oder Edge zu. Installiere zuerst das Plugin in Cindy und folge dann der Aufforderung, die Erweiterung hinzuzufügen.",
-          "extensionBody": "„Browser-Erweiterung hinzufügen“ öffnet die Store-Seite der Cindy-Erweiterung in deinem Browser. Wähle „Hinzufügen“, dann wechselt der Status automatisch zu „Verbunden“. Bereits hinzugefügt? Aktiviere sie in den Erweiterungseinstellungen deines Browsers.",
+          "connectionBody": "Lass Cindy und deinen Browser geöffnet und prüfe, ob die Cindy-Erweiterung aktiviert ist. Eine fehlende Verbindung erfordert nicht unbedingt eine Neuinstallation. Der Status aktualisiert sich nach der Verbindung automatisch.",
           "installPlugin": "Plugin installieren",
           "enablePlugin": "Aktivieren",
-          "installExtension": "Browser-Erweiterung hinzufügen",
+          "openExtensionStore": "Erweiterungs-Store öffnen",
           "updatingTitle": "Browserverbindung wird aktualisiert",
           "updatingBody": "Nach dem Update wird die Verbindung automatisch wiederhergestellt.",
           "selectPluginTitle": "Browsererweiterung auswählen",
@@ -9965,6 +9969,8 @@
     "banner": {
       "title": "Auf {{version}} aktualisiert",
       "subtitle": "Zum Anwenden neu starten",
+      "nativeBuildTitle": "Apple-silicon-Version bereit",
+      "nativeBuildSubtitle": "Neu starten zum Wechseln – Aufgaben und Einstellungen bleiben erhalten",
       "viewNotes": "Neuerungen ansehen",
       "viewNotesAria": "Neuerungen in {{version}} ansehen",
       "button": "Neu starten",
@@ -10094,6 +10100,12 @@
       "description": "Die Datenbank ist etwa {{size}} groß und liegt über {{threshold}} G. Du kannst sie unter „Speicher“ bereinigen.",
       "openSettings": "Speicher öffnen",
       "disable": "Nicht mehr erinnern"
+    },
+    "nativeBuild": {
+      "title": "Du verwendest die Intel-Version",
+      "description": "Dieser Mac hat Apple silicon – die Intel-Version läuft übersetzt und deutlich langsamer. Installiere die Apple-silicon-Version; deine Daten bleiben erhalten.",
+      "dismiss": "Vorerst ausblenden",
+      "download": "Laden"
     },
     "horizontalTabbarAria": "Hauptansicht wechseln",
     "tabs": {
@@ -14151,6 +14163,8 @@
       "closeFailed": "Der Nebenchat konnte nicht geschlossen werden. Versuch es erneut."
     },
     "teammateProcess": {
+      "empty": "Für diese Antwort sind keine Prozessdetails vorhanden",
+      "unavailable": "Prozessdetails konnten nicht geladen werden",
       "record": "Aktivität",
       "operations": "Aktivitätsprotokoll",
       "elapsed": "In Bearbeitung seit {{duration}}",
@@ -19325,6 +19339,7 @@
       "apply": "Übernehmen"
     },
     "source": {
+      "receivingOn": "Zielgerät: {{name}}",
       "description": "Wähle einen Computer, der mit diesem Konto angemeldet ist. Seine Plugins, Skills, Einstellungen und Verbindungen werden hier genauso eingerichtet; Anmeldungen und Schlüssel verlassen den Computer nur, wenn du es dort erlaubst.",
       "loading": "Deine anderen Computer werden gesucht…",
       "empty": "Keine anderen Computer für dieses Konto gefunden. Melde dich auf einem anderen Computer bei Cindy an und öffne dies dann erneut",
@@ -19763,5 +19778,14 @@
     "directory": "Kontoordner",
     "loginAgain": "Erneut anmelden",
     "login": "Anmelden"
+  },
+  "crashDiagnosis": {
+    "title": "Cindy wurde unerwartet beendet",
+    "description": "Möchtest du die Ursache untersuchen? Wir bereiten einen Aufgabenentwurf mit Beendigungsdetails und bereinigten Protokollen vor, den du vor dem Senden prüfen kannst. Auch erzwungenes Beenden oder ein Stromausfall kann die Ursache sein.",
+    "diagnose": "Problem untersuchen",
+    "later": "Nicht jetzt",
+    "logExcerpt": "Relevante Protokolle (Auszug, möglicherweise unvollständig)",
+    "logsUnavailable": "Keine relevanten Protokolle verfügbar. Die Ursache ist noch unbekannt.",
+    "failed": "Die Diagnose konnte nicht vorbereitet werden. Bitte versuche es erneut."
   }
 }

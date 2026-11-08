@@ -2255,6 +2255,10 @@
         },
         "visibilityLabel": "壁紙の表示濃度",
         "visibilityHint": "0% で壁紙を非表示にし、100% でそのまま表示します。",
+        "desktopVisibilityLabel": "デスクトップの透明度",
+        "desktopVisibilityHint": "Cindy の背後にあるデスクトップやウィンドウを透かします。文字や操作部分は鮮明に保たれます。",
+        "desktopBlurLabel": "デスクトップのぼかし",
+        "desktopBlurHint": "背後のデスクトップをぼかします。0 でオフ、値が大きいほど強くなります。強さを調整できない OS では標準の効果を使います。",
         "blurLabel": "壁紙のぼかし",
         "blurHint": "壁紙だけをぼかします。0でオフになります。動く壁紙のぼかしはGPU負荷を増やします。",
         "motionLabel": "表示方法",
@@ -5557,12 +5561,12 @@
         "userBrowserSetup": {
           "installPluginTitle": "Cindy Chrome プラグインをインストール",
           "enablePluginTitle": "Cindy Chrome プラグインを有効にする",
-          "installExtensionTitle": "ブラウザに Cindy 拡張機能を追加",
+          "connectExtensionTitle": "ブラウザー拡張機能が未接続です",
           "pluginBody": "「自分のブラウザ」は Cindy Chrome プラグインとそのブラウザ拡張機能を通じて Chrome / Edge に接続します。まず Cindy でプラグインをインストールし、案内に従って拡張機能を追加してください。",
-          "extensionBody": "「ブラウザ拡張機能を追加」を押すと、使用中のブラウザで Cindy 拡張機能のストアページが開きます。「追加」を押すと、ここは自動的に「接続済み」になります。追加済みの場合は、ブラウザの拡張機能管理で有効にしてください。",
+          "connectionBody": "Cindy とブラウザーを起動したまま、Cindy 拡張機能が有効になっているか確認してください。未接続でも再インストールが必要とは限りません。再接続すると表示が自動で更新されます。",
           "installPlugin": "プラグインをインストール",
           "enablePlugin": "有効にする",
-          "installExtension": "ブラウザ拡張機能を追加",
+          "openExtensionStore": "拡張機能ストアを開く",
           "updatingTitle": "ブラウザー接続を更新中",
           "updatingBody": "更新が完了すると自動的に再接続します。",
           "selectPluginTitle": "ブラウザー拡張機能を選択",
@@ -9922,6 +9926,8 @@
     "banner": {
       "title": "{{version}} に更新済み",
       "subtitle": "再起動して適用",
+      "nativeBuildTitle": "Apple シリコン版の準備ができました",
+      "nativeBuildSubtitle": "再起動すると切り替わります。タスクと設定はそのまま残ります",
       "viewNotes": "更新情報を見る",
       "viewNotesAria": "{{version}} の更新情報を見る",
       "button": "再起動",
@@ -10051,6 +10057,12 @@
       "description": "データベースは約 {{size}} で、{{threshold}} G を超えています。ストレージでのクリーンアップをおすすめします。",
       "openSettings": "ストレージを開く",
       "disable": "今後通知しない"
+    },
+    "nativeBuild": {
+      "title": "Intel 版の Cindy を使用中です",
+      "description": "この Mac は Apple シリコン搭載のため、Intel 版は変換して動作し大幅に遅くなります。Apple シリコン版に入れ替えても、データはそのまま残ります。",
+      "dismiss": "今回は表示しない",
+      "download": "ダウンロード"
     },
     "horizontalTabbarAria": "メインビュー切り替え",
     "tabs": {
@@ -12918,6 +12930,8 @@
       }
     },
     "teammateProcess": {
+      "empty": "この返信には表示できる処理記録がありません",
+      "unavailable": "処理記録を読み込めませんでした",
       "record": "作業履歴",
       "operations": "操作履歴",
       "elapsed": "処理中 {{duration}}",
@@ -19253,6 +19267,7 @@
       "apply": "移行"
     },
     "source": {
+      "receivingOn": "移行先：{{name}}",
       "description": "同じアカウントでログインしているパソコンを選んでください。そのパソコンのプラグイン、スキル、設定、接続をこのパソコンに同じように設定します。キーはそのパソコンで許可した後にだけコピーされ、ログイン状態はそのパソコンから出ません。",
       "loading": "ほかのパソコンを探しています…",
       "empty": "このアカウントのほかのパソコンが見つかりません。別のパソコンで Cindy にログインしてから、もう一度開いてください",
@@ -19691,5 +19706,14 @@
     "directory": "アカウントフォルダー",
     "loginAgain": "再ログイン",
     "login": "ログイン"
+  },
+  "crashDiagnosis": {
+    "title": "Cindy が予期せず終了しました",
+    "description": "原因を診断しますか？終了情報と機密情報を除いたログをタスクの下書きにまとめます。確認してから送信できます。強制終了や停電でも発生することがあります。",
+    "diagnose": "問題を診断",
+    "later": "今はしない",
+    "logExcerpt": "関連ログ（抜粋、不完全な場合があります）",
+    "logsUnavailable": "関連ログがありません。原因はまだ不明です。",
+    "failed": "診断情報を準備できませんでした。もう一度お試しください。"
   }
 }

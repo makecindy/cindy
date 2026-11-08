@@ -2323,6 +2323,10 @@
         },
         "visibilityLabel": "Visibilité du fond d'écran",
         "visibilityHint": "0 % masque le fond d'écran ; 100 % l'affiche sans superposition.",
+        "desktopVisibilityLabel": "Transparence du bureau",
+        "desktopVisibilityHint": "Laisse voir le bureau et les fenêtres derrière Cindy. Le texte et les commandes restent nets.",
+        "desktopBlurLabel": "Flou du bureau",
+        "desktopBlurHint": "Floute le bureau derrière la fenêtre. 0 désactive le flou ; une valeur plus élevée le renforce. Les systèmes sans réglage utilisent leur effet par défaut.",
         "blurLabel": "Flou du fond d'écran",
         "blurHint": "Floute uniquement le fond d'écran. Réglez sur 0 pour désactiver. Flouter un fond d'écran animé augmente l'utilisation du GPU.",
         "motionLabel": "Affichage",
@@ -5658,12 +5662,12 @@
         "userBrowserSetup": {
           "installPluginTitle": "Installer le plugin Cindy Chrome",
           "enablePluginTitle": "Activer le plugin Cindy Chrome",
-          "installExtensionTitle": "Ajouter l'extension Cindy à votre navigateur",
+          "connectExtensionTitle": "Extension du navigateur non connectée",
           "pluginBody": "« Mon navigateur » accède à votre Chrome ou Edge via le plugin Cindy Chrome et son extension de navigateur. Installez d'abord le plugin dans Cindy, puis suivez ses indications pour ajouter l'extension.",
-          "extensionBody": "« Ajouter l'extension » ouvre la page de l'extension Cindy dans la boutique de votre navigateur ; choisissez Ajouter et l'état passera à connecté de lui-même. Déjà ajoutée ? Activez-la dans les paramètres des extensions du navigateur.",
+          "connectionBody": "Gardez Cindy et votre navigateur ouverts et vérifiez que l’extension Cindy est activée. Une déconnexion ne signifie pas qu’il faut la réinstaller. L’état se met à jour automatiquement à la reconnexion.",
           "installPlugin": "Installer le plugin",
           "enablePlugin": "Activer",
-          "installExtension": "Ajouter l'extension",
+          "openExtensionStore": "Ouvrir la boutique d’extensions",
           "updatingTitle": "Mise à jour de la connexion au navigateur",
           "updatingBody": "La connexion sera rétablie automatiquement après la mise à jour.",
           "selectPluginTitle": "Choisir une extension de navigateur",
@@ -10045,6 +10049,8 @@
     "banner": {
       "title": "Mis à jour vers {{version}}",
       "subtitle": "Relancer pour appliquer",
+      "nativeBuildTitle": "Version Apple silicon prête",
+      "nativeBuildSubtitle": "Redémarrez pour basculer ; vos tâches et réglages sont conservés",
       "viewNotes": "Voir les nouveautés",
       "viewNotesAria": "Voir les nouveautés de la version {{version}}",
       "button": "Relancer",
@@ -10174,6 +10180,12 @@
       "description": "La base de données fait environ {{size}}, au-delà de {{threshold}} Go. Pensez à la nettoyer dans Stockage.",
       "openSettings": "Ouvrir Stockage",
       "disable": "Ne plus me le rappeler"
+    },
+    "nativeBuild": {
+      "title": "Vous utilisez la version Intel",
+      "description": "Ce Mac a une puce Apple silicon : traduite, la version Intel est nettement plus lente. Installez la version Apple silicon ; vos données sont conservées.",
+      "dismiss": "Masquer pour l'instant",
+      "download": "Télécharger"
     },
     "horizontalTabbarAria": "Sélecteur de vue principale",
     "tabs": {
@@ -14282,6 +14294,8 @@
       "closeFailed": "Impossible de fermer la conversation annexe. Veuillez réessayer."
     },
     "teammateProcess": {
+      "empty": "Aucun détail du traitement à afficher pour cette réponse",
+      "unavailable": "Impossible de charger les détails du traitement",
       "record": "Activité",
       "operations": "Journal d’activité",
       "elapsed": "En cours depuis {{duration}}",
@@ -19499,6 +19513,7 @@
       "apply": "Transférer"
     },
     "source": {
+      "receivingOn": "Appareil de destination : {{name}}",
       "description": "Choisissez un ordinateur connecté à ce compte. Ses plugins, compétences, réglages et connexions sont configurés de la même façon ici ; les connexions et les clés ne quittent cet ordinateur que si vous l'autorisez sur celui-ci.",
       "loading": "Recherche de vos autres ordinateurs…",
       "empty": "Aucun autre ordinateur trouvé pour ce compte. Connectez-vous à Cindy sur un autre ordinateur, puis rouvrez cette fenêtre",
@@ -19950,5 +19965,14 @@
     "directory": "Dossier du compte",
     "loginAgain": "Se reconnecter",
     "login": "Se connecter"
+  },
+  "crashDiagnosis": {
+    "title": "Cindy s’est fermé de manière inattendue",
+    "description": "Voulez-vous en diagnostiquer la cause ? Nous préparerons un brouillon de tâche avec les détails de l’arrêt et des journaux expurgés, à vérifier avant envoi. Un arrêt forcé ou une coupure de courant peut aussi en être la cause.",
+    "diagnose": "Diagnostiquer le problème",
+    "later": "Pas maintenant",
+    "logExcerpt": "Journaux pertinents (extrait potentiellement incomplet)",
+    "logsUnavailable": "Aucun journal pertinent disponible. La cause reste inconnue.",
+    "failed": "Impossible de préparer le diagnostic. Veuillez réessayer."
   }
 }
