@@ -70,6 +70,9 @@ export function bootstrapLocalThemesSync(): void {
   } catch (error) {
     log.warn('Failed to bootstrap local themes:', error);
   }
+  window.electronAPI.localThemes.onChanged((payload) => {
+    if (updateCachedThemes(payload)) didChange.fire(undefined);
+  });
 }
 
 export async function refreshLocalThemes(): Promise<LocalThemesResult> {

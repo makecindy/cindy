@@ -21,6 +21,7 @@ export const TASK_ACTION_TOOLS: ReadonlySet<string> = new Set([
   'update_app_settings',
   'set_model_configuration',
   'configure_model_provider',
+  'configure_model_connection',
   'reset_app_settings',
   'update_session_queued_message',
   'cancel_session_queued_message',
@@ -126,6 +127,7 @@ export const SCHEDULER_TASK_ACTION_TOOLS: ReadonlySet<string> = new Set([
   'routine_save', 'routine_delete', 'routine_run_now',
   'schedule_create', 'schedule_update', 'schedule_delete', 'schedule_run_now',
   'schedule_pause', 'schedule_resume', 'schedule_set_pre_run_hook',
+  'schedule_webhook_release', 'schedule_webhook_restore',
 ]);
 
 export type TaskActionRisk = 'remove' | 'permission' | 'resume' | 'command' | 'authority';
@@ -213,7 +215,7 @@ export function taskActionRisk(call: Pick<Call, 'server' | 'tool' | 'args'>,
   if (call.tool === 'routine_save' && routineHook && typeof routineHook === 'object' &&
     'command' in routineHook && typeof routineHook.command === 'string' && routineHook.command.trim() &&
     routineHook.command !== facts?.routinePreRunCommand) return 'command';
-  if (call.tool === 'routine_delete' || call.tool === 'schedule_delete')
+  if (call.tool === 'schedule_webhook_release')
     return 'remove';
   if (call.tool === 'message_session_task' && args.decision !== undefined) return 'permission';
   if ((call.tool === 'routine_save' && args.enabled === true || call.tool === 'routine_run_now') &&
@@ -223,7 +225,7 @@ export function taskActionRisk(call: Pick<Call, 'server' | 'tool' | 'args'>,
   if (call.tool === 'routine_save' && args.enabled === true && !facts?.routineBuiltin &&
     typeof args.prompt === 'string' && args.prompt.trim() && args.prompt !== facts?.routinePrompt)
     return 'authority';
-  if ((call.tool === 'message_session_task' && args.mode === 'resume') || call.tool === 'schedule_resume')
+  if ((call.tool === 'message_session_task' && args.mode === 'resume') || call.tool === 'schedule_resume' || call.tool === 'schedule_webhook_restore')
     return 'resume';
   // The owner's off switch for memory or a system Skill stands until the owner turns it back on.
   if ((call.tool === 'set_teammate_capability' || call.tool === 'set_bot_capability') &&

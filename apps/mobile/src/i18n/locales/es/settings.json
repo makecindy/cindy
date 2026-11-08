@@ -351,5 +351,44 @@
     "title": "Desarrollador",
     "identity": "Identificadores",
     "updateInfo": "Actualizar información"
+  },
+  "handheld": {
+    "sectionTitle": "Consola portátil",
+    "label": "Modo portátil",
+    "entryHint": "Usa Cindy con el mando integrado de una consola portátil y mantén pulsada la tecla de voz para hablar.",
+    "on": "Activado",
+    "off": "Desactivado",
+    "openAccessibility": "Abrir la configuración del modo portátil",
+    "title": "Modo portátil",
+    "hint": "Usa Cindy solo con el mando: la cruceta o el stick izquierdo mueven el foco, A selecciona y B vuelve atrás.",
+    "saveFailed": "No se pudo guardar este ajuste. Seguirá activo hasta que cierres Cindy.",
+    "reset": "Restablecer los valores predeterminados",
+    "voiceKey": {
+      "title": "Tecla de voz",
+      "hint": "Mantén pulsada esta tecla para hablar y suéltala para parar. El texto se queda en el cuadro de mensaje. Si la mantienes pulsada en la pantalla de inicio, se abre una tarea nueva. Si eliges A, B, L1 o R1, ese botón deja de hacer su función habitual.",
+      "capture": "Pulsa un botón del mando para asignarlo",
+      "capturing": "Pulsa el botón que quieras usar…"
+    },
+    "display": {
+      "title": "Pantalla",
+      "secondary": "Mostrar en la segunda pantalla",
+      "hint": "Cindy pasa a la segunda pantalla, como la inferior de una consola de doble pantalla. Al desactivar el modo portátil vuelve a la pantalla principal.",
+      "none": "Este dispositivo tiene una sola pantalla. Cindy se adapta a su tamaño.",
+      "current": "Pantalla actual",
+      "single": "Pantalla principal"
+    },
+    "controls": {
+      "title": "Mando",
+      "gamepad": "Mando",
+      "noGamepad": "No detectado",
+      "moveKeys": "Cruceta / stick izquierdo",
+      "move": "Mover el foco",
+      "confirm": "Seleccionar",
+      "back": "Atrás",
+      "voice": "Mantener para hablar",
+      "scrollKeys": "Stick derecho",
+      "scroll": "Desplazar",
+      "page": "Pasar página"
+    }
   }
 }

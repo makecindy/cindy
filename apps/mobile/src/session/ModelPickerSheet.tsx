@@ -1,3 +1,4 @@
+import type { ScrollViewInstance, TextInputInstance } from 'react-native';
 import { modelNeedsReselection } from './modelReselection';
 /**
  * Shared model and permission selection for new and existing tasks.
@@ -9,17 +10,8 @@ import { UnifiedModelPickerSheet, type UnifiedMobilePickerOptions } from './Unif
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ChevronRight, Search, X } from 'lucide-react-native';
-import {
-  Animated,
-  Easing,
-  Platform,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  View,
-  useWindowDimensions,
-} from 'react-native';
-import type { TextInput as RNTextInput } from 'react-native';
+import { Animated, Easing, Platform, Pressable, StyleSheet, View, useWindowDimensions } from 'react-native';
+
 import { Text, TextInput } from '@/components/AppText';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -179,8 +171,8 @@ function LegacyModelPickerSheet({
   const [primarySnap, setPrimarySnap] = useState<ContextSheetSnap>('half');
   const [secondarySnap, setSecondarySnap] = useState<ContextSheetSnap>('half');
   const [query, setQuery] = useState('');
-  const scrollRef = useRef<ScrollView | null>(null);
-  const searchInputRef = useRef<RNTextInput>(null);
+  const scrollRef = useRef<ScrollViewInstance | null>(null);
+  const searchInputRef = useRef<TextInputInstance>(null);
   const didAutoScrollRef = useRef(false);
   // 二级 Surface 滑入/滑出动画(0 = 就位;windowHeight = 屏下)。动画期间锁交互防连点。
   const secondaryTranslate = useRef(new Animated.Value(windowHeight)).current;

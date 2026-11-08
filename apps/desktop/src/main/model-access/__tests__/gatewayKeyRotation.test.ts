@@ -19,16 +19,19 @@ function harness(schedule = vi.fn(), beforeStore = () => {}) {
   const owner = { scope: 'cloud:account-a:1', pending: false };
   const write = vi.fn(() => true);
   const notify = vi.fn();
+  const read = vi.fn(() => 'invalid-previous-key');
+  const recordReplacement = vi.fn();
   const context = vm.createContext({
     activeOwnerScopeKey: () => owner.scope,
     isAppSessionBoundaryPending: () => owner.pending,
     scheduleCodexGatewayKeyRefresh: schedule,
-    getProviderSecretStore: () => { beforeStore(); return { set: write }; },
+    getProviderSecretStore: () => { beforeStore(); return { set: write, get: read }; },
     notifyXdProviderKeyChanged: notify,
+    noteCindyGatewayKeyReplaced: recordReplacement,
     log: { warn: vi.fn() },
   });
   const rotate = vm.runInContext(`${compiled}\nwriteXdKeyWithCodexSideEffect`, context) as (key: string) => Promise<boolean>;
-  return { owner, schedule, write, notify, rotate };
+  return { owner, schedule, write, read, recordReplacement, notify, rotate };
 }
 
 describe('gateway key rotation writer', () => {
@@ -38,6 +41,7 @@ describe('gateway key rotation writer', () => {
     const result = h.rotate('invalid-test-key');
     expect(h.write).toHaveBeenCalledExactlyOnceWith('xd', 'invalid-test-key');
     expect(await result).toBe(true);
+    expect(h.recordReplacement).toHaveBeenCalledExactlyOnceWith('invalid-previous-key', 'invalid-test-key');
     expect(h.notify).toHaveBeenCalledOnce();
     expect(h.schedule).toHaveBeenCalledOnce();
   });
@@ -100,5 +104,6 @@ describe('gateway key rotation writer', () => {
     expect(await h.rotate('invalid-test-key')).toBe(false);
     expect(h.notify).not.toHaveBeenCalled();
     expect(h.schedule).not.toHaveBeenCalled();
+    expect(h.recordReplacement).not.toHaveBeenCalled();
   });
 });

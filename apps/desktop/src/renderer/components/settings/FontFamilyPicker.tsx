@@ -163,7 +163,7 @@ export function FontFamilyPicker({
           className={cn(
             'w-[min(var(--radix-popover-trigger-width),560px)] rounded-xl p-2',
             'border border-[var(--settings-input-border)]',
-            'bg-[var(--settings-theme-card-bg)] shadow-[var(--shadow-menu)]',
+            'bg-[var(--settings-theme-card-bg)] shadow-[shadow:var(--shadow-menu)]',
           )}
           onMouseLeave={() => setPreviewFamily(null)}
         >

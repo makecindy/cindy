@@ -16,6 +16,7 @@ import { useTranslation } from 'react-i18next';
 import * as Dialog from '@radix-ui/react-dialog';
 import { SelectParts as Select } from '@/components/ui/select';
 
+import { SETTINGS_ROW_LABEL_CLASS, SettingsCard, SettingsRow } from '@/components/ui/settings-rows';
 import { Switch } from '@/components/ui/switch';
 import { useXboxGamepad } from '@/hooks/useXboxGamepad';
 import { useSkillhub } from '@/features/skillhub/hooks/useSkillhub';
@@ -332,10 +333,10 @@ export function XboxGamepadSettings({ family, onBack }: { family: GamepadFamily;
         </div>
       )}
 
-      <SettingsCard className="flex items-center gap-4">
+      <SettingsCard className="flex items-center p-4 gap-4">
         <div className="flex min-w-0 flex-1 flex-col gap-2">
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <p className="text-13 font-medium text-[var(--text-primary)]">
+            <p className={SETTINGS_ROW_LABEL_CLASS}>
               {t('settings.shortcuts.xboxGamepad.connection.toggle.label')}
             </p>
             <div className="flex items-center gap-2">
@@ -357,9 +358,9 @@ export function XboxGamepadSettings({ family, onBack }: { family: GamepadFamily;
         </div>
       </SettingsCard>
 
-      <SettingsCard className="flex flex-col gap-3">
+      <SettingsCard className="flex flex-col gap-3 p-4">
         <div className="flex flex-col gap-1">
-          <h3 className="text-13 font-medium text-[var(--text-primary)]">
+          <h3 className={SETTINGS_ROW_LABEL_CLASS}>
             {t('settings.shortcuts.xboxGamepad.layout.title')}
           </h3>
           <p className="text-12 leading-[1.45] text-[var(--text-secondary)]">
@@ -398,9 +399,11 @@ export function XboxGamepadSettings({ family, onBack }: { family: GamepadFamily;
       >
         {editing && !isStickPart(editing) && settings && (
           <SettingsRow
-            label={t('settings.shortcuts.xboxGamepad.layout.editor.assigned')}
-            description={t('settings.shortcuts.xboxGamepad.layout.editor.assignedDescription')}
-            control={
+            wrap
+            flush
+            title={t('settings.shortcuts.xboxGamepad.layout.editor.assigned')}
+            hint={t('settings.shortcuts.xboxGamepad.layout.editor.assignedDescription')}
+            trailing={
               <BindingSelect
                 binding={settings.layout.buttons[editing]}
                 skills={enabledSkills}
@@ -431,11 +434,13 @@ export function XboxGamepadSettings({ family, onBack }: { family: GamepadFamily;
         closeLabel={t('settings.shortcuts.xboxGamepad.layout.editor.done')}
       >
         {editing && isStickPart(editing) && settings && (
-          <div className="flex flex-col gap-3">
+          <div className="flex flex-col">
             <SettingsRow
-              label={t('settings.shortcuts.xboxGamepad.stick.mode.label')}
-              description={t('settings.shortcuts.xboxGamepad.stick.mode.description')}
-              control={
+              wrap
+              flush
+              title={t('settings.shortcuts.xboxGamepad.stick.mode.label')}
+              hint={t('settings.shortcuts.xboxGamepad.stick.mode.description')}
+              trailing={
                 <SelectControl
                   value={settings.layout.sticks[editing].mode}
                   disabled={!state || saving}
@@ -462,31 +467,32 @@ export function XboxGamepadSettings({ family, onBack }: { family: GamepadFamily;
             />
             {settings.layout.sticks[editing].mode === 'custom' &&
               XBOX_GAMEPAD_STICK_DIRECTIONS.map((direction) => (
-                <div key={direction}>
-                  <SettingsDivider />
-                  <SettingsRow
-                    label={t(`settings.shortcuts.xboxGamepad.directions.${direction}`)}
-                    description={t('settings.shortcuts.xboxGamepad.stick.customDescription')}
-                    control={
-                      <BindingSelect
-                        binding={settings.layout.sticks[editing].directions[direction]}
-                        skills={enabledSkills}
-                        disabled={!state || saving}
-                        onChange={(binding) =>
-                          patchLayout((layout) => {
-                            layout.sticks[editing].directions[direction] = binding;
-                          })
-                        }
-                      />
-                    }
-                  />
-                </div>
+                <SettingsRow
+                  key={direction}
+                  wrap
+                  flush
+                  title={t(`settings.shortcuts.xboxGamepad.directions.${direction}`)}
+                  hint={t('settings.shortcuts.xboxGamepad.stick.customDescription')}
+                  trailing={
+                    <BindingSelect
+                      binding={settings.layout.sticks[editing].directions[direction]}
+                      skills={enabledSkills}
+                      disabled={!state || saving}
+                      onChange={(binding) =>
+                        patchLayout((layout) => {
+                          layout.sticks[editing].directions[direction] = binding;
+                        })
+                      }
+                    />
+                  }
+                />
               ))}
-            <SettingsDivider />
             <SettingsRow
-              label={t(familyControlKey(family, stickClickButton(editing)))}
-              description={t('settings.shortcuts.xboxGamepad.layout.editor.assignedDescription')}
-              control={
+              wrap
+              flush
+              title={t(familyControlKey(family, stickClickButton(editing)))}
+              hint={t('settings.shortcuts.xboxGamepad.layout.editor.assignedDescription')}
+              trailing={
                 <BindingSelect
                   binding={settings.layout.buttons[stickClickButton(editing)]}
                   skills={enabledSkills}
@@ -504,9 +510,9 @@ export function XboxGamepadSettings({ family, onBack }: { family: GamepadFamily;
         )}
       </XboxGamepadPartEditor>
 
-      <SettingsCard className="flex items-center justify-between gap-4">
+      <SettingsCard className="flex items-center p-4 justify-between gap-4">
         <div className="flex min-w-0 flex-col gap-1">
-          <p className="text-13 font-medium text-[var(--text-primary)]">
+          <p className={SETTINGS_ROW_LABEL_CLASS}>
             {t('settings.shortcuts.xboxGamepad.layout.reset.title')}
           </p>
           <p className="text-12 leading-[1.45] text-[var(--text-secondary)]">
@@ -717,43 +723,6 @@ function SelectControl({
       </Select.Portal>
     </Select.Root>
   );
-}
-
-function SettingsCard({ className, children }: { className?: string; children: ReactNode }) {
-  return (
-    <div
-      className={cn(
-        'rounded-xl border border-[var(--settings-theme-card-border)] bg-[var(--settings-theme-card-bg)] p-5',
-        className,
-      )}
-    >
-      {children}
-    </div>
-  );
-}
-
-function SettingsRow({
-  label,
-  description,
-  control,
-}: {
-  label: string;
-  description: string;
-  control: ReactNode;
-}) {
-  return (
-    <div className="flex flex-wrap items-center justify-between gap-5 py-2">
-      <div className="flex min-w-[220px] flex-1 flex-col gap-1">
-        <p className="text-13 font-medium text-[var(--text-primary)]">{label}</p>
-        <p className="text-12 leading-[1.45] text-[var(--text-secondary)]">{description}</p>
-      </div>
-      <div className="min-w-0 shrink-0 max-sm:w-full">{control}</div>
-    </div>
-  );
-}
-
-function SettingsDivider() {
-  return <div className="my-1 h-px bg-[var(--settings-theme-card-border)]" />;
 }
 
 function familyControlKey(family: GamepadFamily, part: string): string {

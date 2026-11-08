@@ -180,6 +180,15 @@ background resets the optional automatic-unlock attempt. Media recovery and iOS
 repeated by network retries. This changes only the local phone attempt flag, not
 any Device Link transport or other controller.
 
+Returning to the app, or to the remote desktop screen after it released the lease,
+still reconnects with `resume` so the host can refuse it (for example after an idle
+lock). On macOS that return may nevertheless use the saved password: unlocking waits
+for the first frame, which only follows the host accepting the start. Previously the
+resume flag alone suppressed unlocking, so a Mac that locked while the phone was away
+stayed locked after the return. Linux prepares unlocking before the start request
+and therefore keeps suppressing it for every resume. The return marker is cleared as
+soon as a lease starts, so later network recovery remains automatic and does not unlock.
+
 Phone-native failures distinguish inactive application, concurrent authentication,
 missing saved password, changed saved binding, and fixed Keychain read failure
 categories. Local diagnostics whitelist these codes; passwords, binding values,

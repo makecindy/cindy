@@ -29,6 +29,7 @@ import { CHROME_ACTIONS_GEOMETRY } from '@/components/layout/chromeActionsGeomet
 import { SidebarTopNav } from './SidebarTopNav';
 import { UpdateBanner } from './UpdateBanner';
 import { DatabaseSizeWarningBanner } from './DatabaseSizeWarningBanner';
+import { NativeBuildBanner } from './NativeBuildBanner';
 import { UserInfoSection } from './UserInfoSection';
 
 /** 折叠态 rail 宽度（px）——78px 与 ContentHeader 的红绿灯让位(pl-[78px])对齐:
@@ -160,7 +161,7 @@ export function Sidebar({
               // 触发钮保持可点(点击 = pin)。阴影复用 --shadow-menu(中型悬浮卡,
               // 同色 Surface 上的辅助分离),1px hairline 仍是主分隔手段(docs/design-rules/cindy-design-system.md)。
               'fixed inset-y-0 left-0 z-[15]',
-              'border-r border-sidebar-border shadow-[var(--shadow-menu)]',
+              'border-r border-sidebar-border shadow-[shadow:var(--shadow-menu)]',
               peekState === 'peeking' &&
                 'animate-[sidebar-peek-in_200ms_cubic-bezier(0.22,1,0.36,1)] motion-reduce:animate-none',
               peekState === 'peekClosing' &&
@@ -259,6 +260,7 @@ export function Sidebar({
           isCollapsed={(isCollapsed && !isPeek) || isRail}
           onOpenStorage={onOpenStorage}
         />
+        <NativeBuildBanner isCollapsed={(isCollapsed && !isPeek) || isRail} />
 
         {/* Bottom: User info (Shell-level, shared across all features)
           isCollapsed 在这里表达"窄布局"（rail 居中头像）；完全隐藏态 w-0 整体裁掉。 */}
