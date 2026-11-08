@@ -226,6 +226,7 @@ import {
   DEVICE_HOSTED_DISALLOWED_CLAUDE_TOOLS,
   DEVICE_HOSTED_EXEC_MCP_SERVER,
   DEVICE_HOSTED_GUEST_CLAUDE_TOOLS,
+  DEVICE_HOSTED_MCP_TIMEOUT_MS,
   deviceHostedBuiltinToolName,
   deviceHostedClaudeNote,
   deviceHostedGhostRoster,
@@ -1685,6 +1686,9 @@ export class ClaudeCodeAgent extends BaseAgent {
       ? `${DEVICE_HOSTED_GUEST_ROUTE_HEADER}: ${guestProvider.routeToken}`
       : undefined;
     if (guestProvider) env.ANTHROPIC_SMALL_FAST_MODEL = sdkModel;
+    // 设备托管的 Cindy 工具都经隧道连回任务所在电脑：链路慢时也要等它们连上(见常量说明)。
+    // 用户自己设过 MCP_TIMEOUT 时以用户为准。
+    if (hosted && !env.MCP_TIMEOUT) env.MCP_TIMEOUT = String(DEVICE_HOSTED_MCP_TIMEOUT_MS);
     // Input handoff askpass for this owner's own local tasks only.
     if (!opts.remoteHostId && !hosted && !reviewMode && opts.sessionId) {
       Object.assign(env, this.deps.runtimeConfig.taskShellEnv?.({ sessionId: opts.sessionId }));

@@ -28,7 +28,7 @@ import { ChatBotAccessField } from './ChatBotAccessField';
 import { ChatGroupNotificationSettings } from './ChatGroupNotificationSettings';
 import { ChatGroupInviteMenu } from './ChatGroupInviteMenu';
 import { ACCESS_LABELS, ChatGroupMembersTab, type MemberActions } from './ChatGroupMembersTab';
-import { SETTINGS_HINT, SettingsCard, SettingsNotice, SettingsRow, SettingsRowIcon, SettingsSection } from './ChatGroupSettingsRows';
+import { SETTINGS_HINT, SettingsCard, SettingsNotice, SettingsRow, SettingsRowIcon, SettingsSection } from '@/components/ui/settings-rows';
 import { useBotProfiles } from './botStore';
 import { BotAvatar } from './BotAvatar';
 import { BotGroupSidebarAvatar } from './BotGroupAvatars';
