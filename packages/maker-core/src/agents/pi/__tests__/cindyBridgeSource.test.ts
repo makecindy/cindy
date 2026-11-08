@@ -619,6 +619,8 @@ describe('cindy-bridge extension source', () => {
       .toBe(600_000 - 44_448);
     expect(730_000 + reserve({ max_tokens: 344_480 }, model)!.max_tokens)
       .toBeLessThanOrEqual(model.contextWindow);
+    expect(reserve({ max_tokens: 70_000 }, { ...model, maxTokens: 384_000 })?.max_tokens)
+      .toBe(16_384);
   });
 
   it('is valid standalone TypeScript for the Pi runtime to load', () => {

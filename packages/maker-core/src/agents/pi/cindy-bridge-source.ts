@@ -4526,7 +4526,8 @@ function reserveLargeCompletionHeadroom(payload, model) {
   const estimatedPrompt = contextWindow - requested - 4096;
   if (estimatedPrompt < 0) return undefined;
   const reserve = Math.max(16_384, Math.ceil(estimatedPrompt * 0.1));
-  return { ...payload, [field]: Math.max(1, requested - reserve) };
+  // Keep enough response space for a useful answer even close to compaction.
+  return { ...payload, [field]: Math.max(16_384, requested - reserve) };
 }
 
 async function nativeFastPayload(payload, model, ctx) {
