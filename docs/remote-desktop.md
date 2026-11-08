@@ -627,13 +627,21 @@ Text first uses stable keys from the current XKB layout, comparing legacy and
 Unicode keysyms by their Unicode value. Shift and the layout's actual
 ISO_Level3_Shift selector cover third/fourth levels (not a Ctrl+Alt shortcut
 approximation), with paired modifier release and Caps/Num Lock handling.
+Ordinary exact symbols across all supported selector states take precedence over
+Unicode-equivalent aliases, with keypad aliases considered last; terminal
+application-keypad control sequences must not replace available punctuation.
 Characters absent from that layout use
 an unused, unpressed keycode with a temporary symbol mapping. This requires a
 focused application advertising the ordered EWMH `_NET_WM_PING` protocol: its
 reply fences each remapped key before the helper reuses or restores the mapping.
 An X server roundtrip or fixed delay alone is not a client-consumption fence.
-Clients without this protocol still accept text present in their layout; a text
-containing other characters is refused before any part of that text is injected.
+Clients without this protocol still accept text present in their layout. The
+host sends a whole-text `text-check` over the existing private helper pipe and
+waits for its ACK before sending per-character commands. It uses the same native
+planner without posting keys or changing the mapping; unsupported text (including
+an otherwise supported prefix) is refused before any character is injected.
+This is not a device-link wire change. Preflight is not a transaction against
+later focus/layout changes or application failure; a later failure may be partial.
 Missing replies time out as an input failure, never a successful text ACK. Window
 disappearance, cancellation and timeout also restore the original mapping.
 

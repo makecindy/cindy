@@ -123,6 +123,9 @@ with tempfile.TemporaryDirectory(prefix='cindy-x11-test-') as temp:
                     X.XSync(display,False);observed+=drain();return observed
             raise AssertionError('helper acknowledgement timed out')
         p=start()
+        # The host's private text-check must not alter even a supported prefix.
+        seen=send(p,[dict(kind='text-check',text='ab')]);assert not seen and before==mapping()
+        seen=send(p,[dict(kind='text-check',text='a中🙂')]);assert not seen and before==mapping()
         send(p,[dict(kind='move',x=1,y=1)])
         assert pointer()[:2]==(499,349),pointer()
         send(p,[dict(kind='button',x=0,y=0,button=0,down=True),dict(kind='key',code='ShiftLeft',down=True)])
@@ -162,7 +165,9 @@ with tempfile.TemporaryDirectory(prefix='cindy-x11-test-') as temp:
         X.XSetWMProtocols(display,win,advertised,0);X.XSync(display,False)
         seen=send(p,[dict(kind='text',text='ab')])
         assert [v for t,v in seen if t==2]==[97,98],seen
-        p.stdin.write('[{"kind":"text","text":"a中"}]\n'.encode());p.stdin.flush()
+        # Same serialized host sequence: preflight + queued per-character text.
+        # A rejection must terminate processing before the queued "a" command.
+        p.stdin.write('[{"kind":"text-check","text":"a中"}]\n[{"kind":"text","text":"a"}]\n[{"kind":"text","text":"中"}]\n'.encode());p.stdin.flush()
         assert p.wait(timeout=3)==2 and p.stdout.read()==b'', 'unsupported text acknowledged'
         assert not drain() and before==mapping(), 'unsupported text partly injected or remapped'
         X.XSetWMProtocols(display,win,advertised,1);X.XSync(display,False)
@@ -182,6 +187,12 @@ with tempfile.TemporaryDirectory(prefix='cindy-x11-test-') as temp:
         # Real current-layout fallback: legacy keysyms and level-three selectors
         # must not require a client ping or any temporary global remapping.
         X.XSetWMProtocols(display,win,advertised,0);X.XSync(display,False)
+        # XLookupString's raw keysyms must be ordinary punctuation, not keypad
+        # aliases; application-keypad terminals treat those aliases differently.
+        p=start();seen=send(p,[dict(kind='text-check',text='+*'),dict(kind='text',text='+*')])
+        punctuation=[v for t,v in seen if t==2 and XKB.xkb_keysym_to_utf32(v)]
+        assert punctuation==[ord('+'),ord('*')],seen
+        p.stdin.close();assert p.wait(timeout=3)==0
         for layout,text in [('ru','а'),('gr','α'),('ara','ش'),('il','א'),('de','@Ω')]:
             subprocess.run(['setxkbmap','-display',os.environ['DISPLAY'],layout],check=True,timeout=3)
             if layout=='de':

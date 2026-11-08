@@ -381,7 +381,7 @@ static bool event(json_object *object, bool apply) {
       key((uint32_t)mapped, down);
     return true;
   }
-  if (!strcmp(kind, "text")) {
+  if (!strcmp(kind, "text") || !strcmp(kind, "text-check")) {
     const char *text = string(object, "text");
     if (!text || strlen(text) > 16384)
       return false;
@@ -392,7 +392,13 @@ static bool event(json_object *object, bool apply) {
       if (++count > 4096)
         return false;
     }
-    return !apply || text_input(text);
+    if (!apply) return true;
+    if (!strcmp(kind, "text-check")) {
+      if (!use_x11) return false;
+      release_all();
+      return x11_text_check(text);
+    }
+    return text_input(text);
   }
   return false;
 }

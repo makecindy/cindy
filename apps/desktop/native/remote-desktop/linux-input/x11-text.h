@@ -69,7 +69,7 @@ static bool x11_text_ping(Window target, Atom protocols, Atom ping) {
   }
   return false;
 }
-static bool x11_text(const char *text) {
+static bool x11_text_plan(const char *text, bool apply) {
   struct {
     KeySym symbol;
     KeyCode code;
@@ -109,6 +109,9 @@ static bool x11_text(const char *text) {
       c < 256 ? c : 0x01000000u | c;
     plan[count].symbol = symbol;
     plan[count].code = 0;
+    // Search every selector state for ordinary exact symbols before accepting
+    // Unicode equivalents. Keypad symbols can send terminal application escapes.
+    for (int preference = 0; preference < 3 && !plan[count].code; preference++)
     for (int selectors = 0; selectors < 4 && !plan[count].code; selectors++) {
       if ((selectors & 2) && !level3_mask) continue;
       for (int k = min; k <= max; k++) {
@@ -116,8 +119,11 @@ static bool x11_text(const char *text) {
         unsigned consumed;
         unsigned mods = XkbBuildCoreState(state.mods |
           ((selectors & 1) ? ShiftMask : 0) | ((selectors & 2) ? level3_mask : 0), state.group);
-        if (XkbTranslateKeyCode(layout, (KeyCode)k, mods, &consumed, &translated) &&
-            (translated == symbol || xkb_keysym_to_utf32((uint32_t)translated) == c)) {
+        if (!XkbTranslateKeyCode(layout, (KeyCode)k, mods, &consumed, &translated)) continue;
+        bool keypad = translated >= XK_KP_Space && translated <= XK_KP_Equal;
+        bool matches = preference == 0 ? !keypad && translated == symbol :
+          (preference == 1 ? !keypad : keypad) && xkb_keysym_to_utf32((uint32_t)translated) == c;
+        if (matches) {
           plan[count].code = (KeyCode)k;
           plan[count].shift = (selectors & 1) != 0;
           plan[count].level3 = (selectors & 2) != 0;
@@ -150,6 +156,10 @@ static bool x11_text(const char *text) {
       if (empty) spare = k;
     }
     if (!spare || !(symbols = calloc((size_t)per, sizeof(KeySym)))) goto cleanup;
+  }
+  if (!apply) {
+    ok = !stopping && !x11_text_failed;
+    goto cleanup;
   }
   for (size_t i = 0; i < count && !stopping && !x11_text_failed; i++) {
     if (plan[i].code) {
@@ -192,3 +202,5 @@ cleanup:
   free(symbols);
   return ok;
 }
+static bool x11_text(const char *text) { return x11_text_plan(text, true); }
+static bool x11_text_check(const char *text) { return x11_text_plan(text, false); }

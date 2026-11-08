@@ -36,6 +36,8 @@ static void consume(void) {
   for (size_t i = 0; i < pending_count; i++) {
     KeySym sym = mapping[pending[i].code];
     if (sym == 'a' && (pending[i].shift != !!(mods & LockMask))) sym = 'A';
+    if (pending[i].code == 21 && pending[i].shift) sym = '+';
+    if (pending[i].code == 22 && pending[i].shift) sym = '*';
     if (pending[i].code == 24 && pending[i].level3)
       sym = pending[i].shift ? XK_Greek_OMEGA : '@';
     received[received_count++] = sym;
@@ -70,6 +72,8 @@ uint32_t xkb_keysym_to_utf32(uint32_t symbol) {
     case XK_Greek_OMEGA: return 0x3a9;
     case XK_Arabic_sheen: return 0x634;
     case XK_hebrew_aleph: return 0x5d0;
+    case XK_KP_Add: return '+';
+    case XK_KP_Multiply: return '*';
     default: return symbol < 256 ? symbol : (symbol & 0xff000000) == 0x01000000 ? symbol & 0xffffff : 0;
   }
 }
@@ -93,6 +97,8 @@ Bool XkbTranslateKeyCode(XkbDescPtr keys, KeyCode code, unsigned state,
                          unsigned *consumed, KeySym *symbol) {
   (void)keys; *consumed = 0; *symbol = mapping[code];
   if (*symbol == 'a' && (!!(state & ShiftMask) != !!(state & LockMask))) *symbol = 'A';
+  if (code == 21 && (state & ShiftMask)) *symbol = '+';
+  if (code == 22 && (state & ShiftMask)) *symbol = '*';
   if (code == 24 && (state & Mod5Mask))
     *symbol = (state & ShiftMask) ? XK_Greek_OMEGA : '@';
   return *symbol != NoSymbol;
@@ -221,6 +227,22 @@ int main(void) {
   reset(); mods = LockMask;
   assert(x11_text("aA")); consume();
   assert(received[0] == 'a' && received[1] == 'A'); restored();
+
+  reset(); supports_ping = false;
+  original[19] = mapping[19] = XK_KP_Multiply;
+  original[20] = mapping[20] = XK_KP_Add;
+  original[21] = mapping[21] = '=';
+  original[22] = mapping[22] = '8';
+  assert(x11_text("+*"));
+  assert(pending_count == 2 && pending[0].code == 21 && pending[1].code == 22);
+  consume(); assert(received[0] == '+' && received[1] == '*'); restored();
+
+  reset(); supports_ping = false;
+  assert(x11_text_check("aA"));
+  assert(!x11_text_check("a\xe4\xb8\xad"));
+  assert(pending_count == 0 && received_count == 0 && changes == 0); restored();
+  reset(); assert(x11_text_check("\xe4\xb8\xad"));
+  assert(pending_count == 0 && received_count == 0 && changes == 0); restored();
 
   const struct { KeySym symbol; const char *text; } legacy[] = {
     {XK_Cyrillic_a, "\xd0\xb0"}, {XK_Greek_alpha, "\xce\xb1"},

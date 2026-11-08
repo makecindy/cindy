@@ -373,6 +373,10 @@ export class DesktopInputHost {
         }
         flush();
         const chars = Array.from(event.text);
+        // Preflight the whole logical text on the SAME serialized helper pipe.
+        // A refusal rejects this write chain before any per-character command.
+        if (this.x11Geometry && chars.length)
+          this.write([{ kind: 'text-check', text: event.text }], this.activity!.begin([]));
         // X11 may need two 2 s client fences (preflight + key consumption).
         // One code point per ACK stays below both the 6 s native watchdog and
         // the 10 s parent ACK deadline even for a consistently slow receiver.
