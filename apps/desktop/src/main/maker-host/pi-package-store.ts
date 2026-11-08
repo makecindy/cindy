@@ -354,11 +354,26 @@ function stopPiPackageChangeTokenWatcher(): void {
 function watchPiPackageChangeTokenDirectory(): void {
   if (!changeTokenWatcherActive || changeTokenDirectoryWatcher) return;
   let watcher: FSWatcher;
+  const directoryName = path.basename(packageHome());
   try {
     watcher = watch(packageHome(), { persistent: false }, (_event, fileName) => {
+      const name = fileName ? String(fileName) : null;
+      if (name === directoryName) {
+        // The watched directory itself was removed or moved. Linux reports this
+        // as a rename of the directory and never raises `error`, and the handle
+        // stays bound to the old directory. Drop it and watch a recreated
+        // directory right away; if none exists yet, the poll reattaches later.
+        if (changeTokenDirectoryWatcher === watcher) {
+          closePiPackageChangeTokenDirectoryWatcher();
+          watchPiPackageChangeTokenDirectory();
+        } else {
+          watcher.close();
+        }
+        void observePiPackageChangeToken();
+        return;
+      }
       // Atomic writes rename `<token>.<uuid>.tmp` into place; some platforms
       // report only one side of the rename, so match the token prefix.
-      const name = fileName ? String(fileName) : null;
       if (name && !CHANGE_TOKEN_FILE_NAMES.some((token) => name.startsWith(token))) return;
       void observePiPackageChangeToken();
     });
@@ -382,17 +397,18 @@ function watchPiPackageChangeTokenDirectory(): void {
 function readChangeTokenDirectoryIdentity(): string | undefined {
   try {
     const stats = statSync(packageHome());
-    return `${stats.dev}:${stats.ino}`;
+    // A recreated directory can reuse the old inode number (seen on Linux), so
+    // the birth time is part of the identity where the filesystem reports it.
+    return `${stats.dev}:${stats.ino}:${stats.birthtimeMs}`;
   } catch {
     return undefined;
   }
 }
 
 /**
- * Deleting and recreating the package home does not always raise `error`
- * (inotify / FSEvents report a rename of the watched directory itself, which the
- * token filter ignores), leaving a handle bound to the old directory. The stat
- * poll runs this before reattaching so such a watcher is replaced instead of
+ * Fallback for platforms that report a replaced package home neither as `error`
+ * nor as a rename of the directory itself: the stat poll runs this before
+ * reattaching, so a handle bound to the old directory is replaced instead of
  * blocking reattachment for the rest of the session.
  */
 function detachReplacedChangeTokenDirectoryWatcher(): void {

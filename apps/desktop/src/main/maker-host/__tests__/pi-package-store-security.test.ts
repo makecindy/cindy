@@ -4393,7 +4393,8 @@ describe('Pi package executable-code boundary', () => {
 
       await fs.rm(home, { recursive: true, force: true });
       await fs.mkdir(home, { recursive: true });
-      // Only the fallback poll can see the first edge in the new directory.
+      // The first edge may arrive through events still queued on the old handle
+      // or through the fallback poll, depending on the platform.
       await publishPeerRuntimeToken('first-after-replace');
       await waitForNotifications(2, 5_000);
 
