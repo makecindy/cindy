@@ -671,13 +671,22 @@ describe('session navigation interaction policy', () => {
 });
 
 
-it('opens the original task from an inert card link and removes handlers when the card leaves', async () => {
-  const element = document.createElement('a');
-  element.dataset.ghostLink = 'cindy://session/original-task';
+it.each(['link', 'fallback'] as const)('opens the original task from an inert card %s and removes handlers when the card leaves', async (kind) => {
+  mocks.navigate.mockClear();
+  mocks.openSessionInNewWindow.mockClear();
+  const element = document.createElement('button');
+  if (kind === 'fallback') {
+    element.dataset.ghostAction = 'open';
+    element.dataset.ghostSessionLink = 'cindy://session/original-task';
+  } else element.dataset.ghostLink = 'cindy://session/original-task';
   const view = render(<GhostCardSessionLink element={element} />);
   fireEvent.click(element);
   await waitFor(() => expect(mocks.navigate).toHaveBeenCalledWith('/cc-agent/original-task', undefined));
   mocks.navigate.mockClear();
+  element.disabled = true;
+  fireEvent.keyDown(element, { key: 'Enter' });
+  expect(mocks.navigate).not.toHaveBeenCalled();
+  element.disabled = false;
   fireEvent.keyDown(element, { key: 'Enter' });
   await waitFor(() => expect(mocks.navigate).toHaveBeenCalledOnce());
   mocks.navigate.mockClear();

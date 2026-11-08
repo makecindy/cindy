@@ -82,6 +82,8 @@ vi.mock('react-native', () => {
         height: [style].flat().filter(Boolean).findLast((item: any) => item.height !== undefined)?.height,
         display: [style].flat().filter(Boolean).findLast((item: any) => item.display !== undefined)?.display } }, children);
   return {
+    PanResponder: { create: () => ({ panHandlers: {} }) },
+    UIManager: {}, LayoutAnimation: { configureNext() {} },
     View: box('div'), ScrollView: ({ ref, children, ...props }: any) => {
       h.scroll = props;
       h.scrolls[props.testID] = props;
@@ -222,13 +224,45 @@ vi.mock('@/session/BotGroupSpeakerRow', () => ({
       onStop ? el('button', { 'data-testid': 'botGroup.work.stop', disabled: stopPending, onClick: onStop }, 'stop') : null);
   },
 }));
+vi.mock('expo-constants', () => ({ default: { executionEnvironment: 'bare' }, ExecutionEnvironment: { StoreClient: 'storeClient' } }));
+// Native animation/gesture adapters; the production resize hook and row still run.
+vi.mock('react-native-reanimated', async () => {
+  const { useRef } = await import('react');
+  return {
+    default: { View: ({ children }: any) => el('div', null, children) },
+    useSharedValue: (value: unknown) => useRef({ value }).current,
+    useAnimatedRef: () => useRef(null),
+    useDerivedValue: (calculate: () => unknown) => ({ get value() { return calculate(); } }),
+    useAnimatedStyle: (calculate: () => any) => new Proxy({}, { get: (_target, key) => calculate()[key] }),
+    useAnimatedReaction: () => {}, measure: () => null,
+    runOnUI: (fn: any) => fn, runOnJS: (fn: any) => fn,
+  };
+});
+vi.mock('@/platform/gestureHandler', () => {
+  const gesture = () => { const chain: any = new Proxy({}, { get: () => () => chain }); return chain; };
+  return { Gesture: { Pan: gesture, Native: gesture, Manual: gesture },
+    GestureDetector: ({ children }: any) => children };
+});
+vi.mock('@/session/useMobileKeyboardState', () => ({ useMobileKeyboardState: () => ({ visible: false, height: 0, transition: { current: null } }) }));
+vi.mock('@/session/ComposerDockKeyboardFollow', () => ({ DockKeyboardBottomSpacer: () => null }));
+vi.mock('@/session/composerPullThrough', async () => {
+  const { useMemo } = await import('react');
+  const { ScrollView } = await import('react-native');
+  return {
+    useComposerPullThroughBridge: () => useMemo(() => ({ armed: { value: false }, event: { value: null }, grabberRef: { current: null } }), []),
+    ComposerPullThroughScrollView: ({ bridge, ...props }: any) => el(ScrollView, props),
+  };
+});
 vi.mock('@/session/MobileComposerInputRow', () => ({
   // Like the real row: the card shows the tray above the input and the toolbar below it.
+  MOBILE_COMPOSER_INPUT_SINGLE_LINE_HEIGHT: 28,
+  MOBILE_COMPOSER_INPUT_MAX_HEIGHT: 160,
+  ComposerResizeGrabber: ({ onAdjust }: any) => el('button', { 'data-testid': 'fixture.resize', onClick: () => onAdjust(1) }),
   MobileComposerInputRow: (props: any) => {
     h.row = props;
     if (props.inputRef) props.inputRef.current = { focus: h.inputFocus, blur: h.inputBlur, isFocused: () => h.inputFocused };
     return el('div', { 'data-testid': 'composer-row', 'data-card': props.cardActive ? 'true' : 'false' },
-      props.cardActive ? props.accessoryAbove : props.leading,
+      props.resizeHandle, props.cardActive ? props.accessoryAbove : props.leading,
       el('span', { 'data-testid': 'placeholder' }, props.placeholder),
       props.cardActive ? props.toolbar : props.trailing);
   },
@@ -316,6 +350,7 @@ vi.mock('@/session/ThinkingDots', () => ({ ThinkingDots: () => null }));
 const taskCardDevices = vi.hoisted(() => [] as string[]);
 vi.mock('@/session/CompanionMessageCard', () => ({ CompanionTaskCard: ({ deviceId }: { deviceId: string }) => { taskCardDevices.push(deviceId); return null; } }));
 import { BotGroupChatScreen } from '@/session/BotGroupChatScreen';
+import { BotGroupComposer } from '@/session/BotGroupComposer';
 import { parseBotGroupChatData } from '@/session/botGroupRemote';
 import { GeometryContext } from '@/platform/AdaptiveWindowContext';
 import { navigationChrome } from '@/theme/tokens';
@@ -1281,6 +1316,53 @@ describe('group timeline', () => {
 });
 
 describe('group composer', () => {
+  // Unit regression: topic and maskIndicator each used to force an idle composer open.
+  // The ordinary draft test below cannot catch either branch. Render the production composer
+  // with only that distinguishing input; its toolbar/resize affordance must wait for focus.
+  it.each(['topic', 'mask'] as const)('keeps the %s composer collapsed until interaction', async variant => {
+    await act(async () => root.render(el(BotGroupComposer, {
+      members: group().members,
+      identityFor: (botId, name) => ({ botId, name: name ?? botId }),
+      deviceId: 'mac', online: true, running: false, planState: null,
+      attachmentsSupported: false, onSend: async () => {}, onStop: async () => {},
+      topic: variant === 'topic',
+      maskIndicator: variant === 'mask' ? el('span', null, 'Companion identity') : undefined,
+    })));
+    expect(h.inputFocus).not.toHaveBeenCalled();
+    expect(byId('composer-row')?.getAttribute('data-card')).toBe('false');
+    expect(byId('fixture.resize')).toBeNull();
+    expect(h.row.toolbar).toBeUndefined();
+    await act(async () => h.row.onFocus());
+    expect(byId('composer-row')?.getAttribute('data-card')).toBe('true');
+    expect(byId('fixture.resize')).not.toBeNull();
+    await act(async () => h.row.onBlur());
+    expect(byId('composer-row')?.getAttribute('data-card')).toBe('false');
+    expect(h.row.toolbar).toBeUndefined();
+  });
+
+  // Unit regression: an ordinary focused draft used to stay a pill with no resize affordance.
+  // Exercise the real group composer and shared resize row; native gesture math has its own suite.
+  it('expands a text-only draft, resizes it, and collapses without losing the draft', async () => {
+    await render(group());
+    expect(byId('composer-row')?.getAttribute('data-card')).toBe('false');
+    await act(async () => { h.row.onFocus(); h.row.onChangeText('Keep this draft'); });
+    expect(byId('composer-row')?.getAttribute('data-card')).toBe('true');
+    await act(async () => h.row.onContentSizeChange({ nativeEvent: { contentSize: { width: 300, height: 100 } } }));
+    await click('fixture.resize');
+    expect(h.row.value).toBe('Keep this draft');
+    const resizedHeight = h.row.inputFrameAnimatedStyle.height;
+    expect(resizedHeight).toBeGreaterThan(34);
+    await act(async () => h.row.onBlur());
+    expect(byId('composer-row')?.getAttribute('data-card')).toBe('false');
+    expect(byId('fixture.resize')).toBeNull();
+    await act(async () => h.row.onFocus());
+    expect(h.row.value).toBe('Keep this draft');
+    expect(byId('fixture.resize')).not.toBeNull();
+    expect(h.row.inputFrameAnimatedStyle.height).toBe(resizedHeight);
+    await act(async () => h.row.onChangeText(''));
+    expect(h.row.inputFrameAnimatedStyle.height).toBe('auto');
+  });
+
   async function type(text: string) {
     await act(async () => {
       h.row.onFocus();
@@ -1505,6 +1587,35 @@ describe('group attachments', () => {
   }
   async function focusComposer() { await act(async () => { h.row.onFocus(); }); }
 
+  // Unit regression: the real screen hid both attachment support and + in topics.
+  // Main-group cases below never entered a topic. A supported topic must open the
+  // shared pickers, without exposing the unsupported arrangement action.
+  it('opens topic attachments beside also-send and removes unavailable actions', async () => {
+    h.chat.server = true;
+    const data = group({ supportsAttachments: true });
+    await render(data, 'ready', 'm1', '');
+    await focusComposer();
+    expect(byId('botGroup.thread.alsoSend')).not.toBeNull();
+    await click('botGroup.composer.more');
+    expect(byId('botGroup.contextSheetDivisionRow')).toBeNull();
+    await click('botGroup.contextSheetPhotoRow');
+    expect(h.local.addImages).toHaveBeenLastCalledWith('library');
+    await click('botGroup.contextSheetCameraRow');
+    expect(h.local.addImages).toHaveBeenLastCalledWith('camera');
+    await click('botGroup.contextSheetFileRow');
+    expect(h.local.addDocument).toHaveBeenCalledOnce();
+    await act(async () => h.row.onPasteImages(['file:///cache/cindy-composer-paste-topic.png']));
+    expect(h.local.addPastedImages).toHaveBeenCalledOnce();
+    h.chat.online = false;
+    await render(data, 'ready', 'm1', '');
+    expect(byId('botGroup.composer.more')?.disabled).toBe(true);
+    expect(byId('botGroup.contextSheetPhotoRow')).toBeNull();
+    expect(byId('botGroup.contextSheetDivisionRow')).toBeNull();
+    expect(byId('botGroup.composer.menu')).toBeNull();
+    await render({ ...data, supportsAttachments: undefined }, 'ready', 'm1', '');
+    expect(byId('botGroup.composer.more')).toBeNull();
+  });
+
   it('offers no attachments when the computer does not support them, and ignores pasted images', async () => {
     await render(group({ openPlan: null }));
     expect(byId('botGroup.composer.menu.action.division')).not.toBeNull();
@@ -1551,18 +1662,31 @@ describe('group attachments', () => {
     expect(byId('botGroup.contextSheetDivisionRow')?.textContent).toContain('groupChat.composer.divisionBusy');
   });
 
-  it('shows a picked photo as pending, then sends the upload with the text', async () => {
+  // A topic with attachments must retain the same collapsed badge as the main group.
+  // Otherwise blur hides the tray while send still includes those invisible attachments.
+  it.each([false, true])('shows a picked photo as pending, then sends the upload with the text (topic=%s)', async topic => {
+    vi.useFakeTimers();
+    h.chat.server = topic;
     h.local.addImages.mockImplementation(async () => {
       h.local.setPending([{ localId: 'l1', kind: 'image', previewUri: 'file:///tmp/a.jpg', name: 'a.jpg', size: 10 }]);
       h.local.options.onPicked();
     });
-    await render(group({ openPlan: null, supportsAttachments: true }));
+    await render(group({ openPlan: null, supportsAttachments: true }), 'ready', topic ? 'm1' : undefined, topic ? '' : 'mac');
+    await focusComposer();
     await click('botGroup.composer.more');
     await click('botGroup.contextSheetPhotoRow');
     expect(h.local.addImages).toHaveBeenLastCalledWith('library');
     expect(byId('botGroup.contextSheet')).toBeNull();
+    // Finish the picker's next-frame focus before collapsing and testing the badge's focus.
+    await act(async () => { await vi.advanceTimersToNextFrame(); });
     // Collapsed: a badge next to +; focused: the tray inside the card.
+    await act(async () => h.row.onBlur());
+    expect(byId('botGroup.attachmentTray')).toBeNull();
     expect(byId('botGroup.attachmentCollapsedBadge')?.textContent).toBe('1');
+    h.inputFocus.mockClear();
+    await click('botGroup.attachmentCollapsedBadge');
+    await act(async () => { await vi.advanceTimersToNextFrame(); });
+    expect(h.inputFocus).toHaveBeenCalledOnce();
     await focusComposer();
     expect(byId('composer-row')?.getAttribute('data-card')).toBe('true');
     expect(byId('tray.pending.l1')?.textContent).toBe('a.jpg');
@@ -1580,8 +1704,11 @@ describe('group attachments', () => {
     expect(h.discarded).toEqual([]);
   });
 
-  it('sends attachments without text and keeps them when the send fails', async () => {
-    await render(group({ openPlan: null, supportsAttachments: true, round: { status: 'running', speakers: [], canContinue: false } }));
+  it.each([false, true])('sends attachments without text and keeps them when the send fails (topic=%s)', async topic => {
+    h.chat.server = topic;
+    await render(group({ openPlan: null, supportsAttachments: true, round: { status: 'running', speakers: [], canContinue: false } }), 'ready', topic ? 'm1' : undefined, topic ? '' : 'mac');
+    await focusComposer();
+    if (topic) await click('botGroup.thread.alsoSend');
     const file = uploaded('att-2', 'spec.pdf', 'pdf');
     await finishUpload(file);
     await focusComposer();
@@ -1591,16 +1718,22 @@ describe('group attachments', () => {
     h.chat.act.mockRejectedValueOnce(new Error('[NOT_CONNECTED] offline'));
     await click('botGroup.composer.send');
     expect(h.chat.act).toHaveBeenLastCalledWith('send', expect.objectContaining({ text: '', clientId: 'uuid-1', attachments: [file] }));
+    expect(h.chat.act.mock.calls.at(-1)?.[1].alsoSendToMain).toBe(topic ? true : undefined);
     expect(h.alert).toHaveBeenCalledWith('groupChat.composer.sendFailed');
     expect(byId('tray.attachment.att-2')).not.toBeNull();
     // The retry is the same message.
+    await act(async () => h.row.onBlur());
+    expect(byId('botGroup.attachmentTray')).toBeNull();
+    expect(byId('botGroup.attachmentCollapsedBadge')?.textContent).toBe('1');
     await click('botGroup.composer.send');
     expect(h.chat.act).toHaveBeenLastCalledWith('send', expect.objectContaining({ clientId: 'uuid-1', attachments: [file] }));
     expect(byId('tray.attachment.att-2')).toBeNull();
+    expect(byId('botGroup.attachmentCollapsedBadge')).toBeNull();
   });
 
-  it('does not send while an upload failed, and reclaims a removed upload', async () => {
-    await render(group({ openPlan: null, supportsAttachments: true }));
+  it.each([false, true])('does not send while an upload failed, and reclaims a removed upload (topic=%s)', async topic => {
+    h.chat.server = topic;
+    await render(group({ openPlan: null, supportsAttachments: true }), 'ready', topic ? 'm1' : undefined, topic ? '' : 'mac');
     const photo = uploaded('att-3', 'b.jpg');
     await finishUpload(photo);
     await focusComposer();
@@ -1612,6 +1745,23 @@ describe('group attachments', () => {
     await click('tray.attachment.att-3');
     expect(h.discarded).toEqual([photo]);
     expect(byId('botGroup.attachmentTray')).toBeNull();
+  });
+
+  it('does not carry topic attachments or draft into another topic or the main group', async () => {
+    h.chat.server = true;
+    const data = group({ supportsAttachments: true });
+    await render(data, 'ready', 'm1', '');
+    await focusComposer();
+    await finishUpload(uploaded('topic-photo', 'photo.jpg'));
+    await act(async () => h.row.onChangeText('Only for the first topic'));
+    await click('botGroup.thread.alsoSend');
+    await render(data, 'ready', 'm2', '');
+    expect(byId('botGroup.attachmentTray')).toBeNull();
+    expect(h.row.value).toBe('');
+    expect(byId('botGroup.composer.send')?.disabled).toBe(true);
+    await render(data, 'ready', undefined, '');
+    expect(byId('botGroup.attachmentTray')).toBeNull();
+    expect(h.chat.act).not.toHaveBeenCalled();
   });
 
   // Leaving mid-upload drops the photo: ask first, and never send the text alone.
@@ -2757,6 +2907,7 @@ describe('mobile group threads', () => {
     const follow = () => node.querySelector<HTMLButtonElement>('button[aria-label="groupChat.thread.follow"], button[aria-label="groupChat.thread.following"]')!;
     expect(follow()).not.toBeNull();
     await act(async () => follow().click()); expect(h.chat.followThread).toHaveBeenCalledWith(true);
+    await act(async () => h.row.onFocus());
     await click('botGroup.thread.alsoSend'); await act(async () => h.row.onChangeText('Both destinations'));
     await click('botGroup.composer.send');
     expect(h.chat.act).toHaveBeenLastCalledWith('send', expect.objectContaining({ text: 'Both destinations', alsoSendToMain: true }));
@@ -2838,6 +2989,7 @@ describe('mobile group threads', () => {
     h.chat.server = true;
     await render(threadGroup({ messages: [rootMessage(), message('reply', 2, { threadRootId: rootId, content: 'Only this reply' })] }), 'ready', rootId, '');
     await act(async () => h.row.onChangeText('Keep my draft'));
+    await act(async () => h.row.onFocus());
     await click('botGroup.thread.alsoSend');
     await openTopicMenu('reply');
     await click('botGroup.thread.context.reply.action.image');

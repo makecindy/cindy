@@ -28,6 +28,7 @@ import { Puzzle, ChevronDown, Check, Folder, UserRound } from 'lucide-react';
 import { basename, cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import { Switch } from '@/components/ui/switch';
+import { SettingsCard, SettingsSection } from '@/components/ui/settings-rows';
 import { createLogger } from '@/lib/logger';
 import { extractIpcError } from '@/utils/ipcError';
 import { recentWorkdirsStore, type RecentWorkdirEntry } from '@/lib/recentWorkdirsStore';
@@ -197,31 +198,22 @@ export function BuiltinToolsSection({ workingDir }: BuiltinToolsSectionProps) {
   if (!plugins) return null;
 
   return (
-    <div className="flex flex-col gap-[14px]">
-      <div className="flex items-start justify-between gap-3">
-        <div className="flex flex-col gap-1 min-w-0">
-          <h2 id={builtinToolsSettings.title.targetId} className="text-16 font-medium leading-[1.2] text-[var(--settings-section-title)]">
-            {t(builtinToolsSettings.title.titleKey)}
-          </h2>
-          <p className="text-13 leading-[1.5] text-[var(--settings-section-desc)]">
-            {t(builtinToolsSettings.title.descriptionKey)}
-          </p>
-        </div>
+    <SettingsSection
+      titleId={builtinToolsSettings.title.targetId}
+      title={t(builtinToolsSettings.title.titleKey)}
+      description={t(builtinToolsSettings.title.descriptionKey)}
+      action={
         <ScopePicker
           effectiveWorkingDir={effectiveWorkingDir}
           activeSessionWorkingDir={activeProjectWorkingDir}
           recentWorkdirs={recentWorkdirs}
           onPick={setSelectedScope}
         />
-      </div>
-
-      <div
-        className={cn(
-          'flex flex-col overflow-hidden rounded-xl',
-          'bg-[var(--settings-theme-card-bg)]',
-          'border border-[var(--settings-theme-card-border)]',
-        )}
-      >
+      }
+      caption={t('settings.builtinTools.toggleHint')}
+    >
+      {/* 工具列表自带图标与来源标签，行样式保留 */}
+      <SettingsCard className="flex flex-col">
         {plugins.map((plugin, index) => (
           <BuiltinToolRow
             key={plugin.id}
@@ -241,12 +233,8 @@ export function BuiltinToolsSection({ workingDir }: BuiltinToolsSectionProps) {
             </p>
           </div>
         )}
-      </div>
-
-      <p className="text-12 leading-[1.5] text-[var(--settings-section-desc)]">
-        {t('settings.builtinTools.toggleHint')}
-      </p>
-    </div>
+      </SettingsCard>
+    </SettingsSection>
   );
 }
 

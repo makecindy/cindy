@@ -17,6 +17,7 @@ import { AlertTriangle, CheckCircle2, Puzzle, RefreshCw } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { SegmentedControl } from '@/components/ui/segmented-control';
 import { Button } from '@/components/ui/button';
+import { SettingsBlock, SettingsRow } from '@/components/ui/settings-rows';
 import type {
   BrowserBackendHealth,
   BrowserBackendHealthReason,
@@ -111,28 +112,26 @@ export function BrowserBackendSubsection({
         ? PLUGIN_STEP_KEYS[userBrowserPluginState]
         : { title: `${SETUP_KEY}.connectExtensionTitle`, body: `${SETUP_KEY}.connectionBody`, action: `${SETUP_KEY}.openExtensionStore` };
   return (
-    <div {...setting.anchorProps} className="border-t border-[var(--settings-theme-card-border)]">
-      <div className="cindy-segmented-row px-4 py-[14px]">
-        <div className="flex min-w-0 flex-col gap-1">
-          <p className="text-12 font-medium leading-[1.4] text-[var(--settings-section-title)]">
-            {setting.title}
-          </p>
-          {/* 选中哪个就介绍哪个,切换时一起变。 */}
-          <p className="text-12 leading-[1.5] text-[var(--settings-section-desc)]" aria-live="polite">
-            {selectedOption ? t(selectedOption.descriptionKey) : null}
-          </p>
-        </div>
-        <SegmentedControl<BackendKind>
-          {...setting.controlProps}
-          value={active}
-          disabled={pending}
-          onValueChange={onSelect}
-          aria-label={setting.title}
-          options={setting.options}
-        />
-      </div>
+    // 外层只负责和上一行的分割线;里面第一行是选择器,下面的连接状态各占一行。
+    <SettingsBlock {...setting.anchorProps} className="p-0">
+      <SettingsRow
+        className="cindy-segmented-row"
+        title={setting.title}
+        // 选中哪个就介绍哪个,切换时一起变。
+        hint={<span aria-live="polite">{selectedOption ? t(selectedOption.descriptionKey) : null}</span>}
+        trailing={
+          <SegmentedControl<BackendKind>
+            {...setting.controlProps}
+            value={active}
+            disabled={pending}
+            onValueChange={onSelect}
+            aria-label={setting.title}
+            options={setting.options}
+          />
+        }
+      />
       {embeddedHealth ? (
-        <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[var(--settings-theme-card-border)] px-4 py-[14px]">
+        <SettingsBlock className="flex flex-wrap items-center justify-between gap-3">
           <div
             className={cn(
               'flex min-w-0 flex-1 items-start gap-2 text-12 leading-[1.5]',
@@ -168,7 +167,7 @@ export function BrowserBackendSubsection({
               ? t('settings.computerUse.browserBackend.health.recover')
               : t('settings.computerUse.browserBackend.health.reconnect')}
           </Button>
-        </div>
+        </SettingsBlock>
       ) : null}
       {userBrowserHealth &&
       userBrowserHealth.status === 'error' &&
@@ -177,7 +176,7 @@ export function BrowserBackendSubsection({
         userBrowserHealth.reason === 'plugin-missing' ||
         userBrowserHealth.reason === 'extension-disconnected') ? (
         // 「我的浏览器」还差一步:说清缺的是哪一步,并给出直接去做的按钮;连上后父组件轮询会自动变绿。
-        <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[var(--settings-theme-card-border)] px-4 py-[14px]">
+        <SettingsBlock className="flex flex-wrap items-center justify-between gap-3">
           <div
             className="flex min-w-0 flex-1 basis-[280px] items-start gap-2 text-12 leading-[1.5]"
             role="status"
@@ -208,11 +207,11 @@ export function BrowserBackendSubsection({
               {t(setupKeys.action)}
             </Button>
           ) : null}
-        </div>
+        </SettingsBlock>
       ) : userBrowserHealth ? (
-        <div
+        <SettingsBlock
           className={cn(
-            'flex items-start gap-2 border-t border-[var(--settings-theme-card-border)] px-4 py-[14px] text-12 leading-[1.5]',
+            'flex items-start gap-2 text-12 leading-[1.5]',
             userBrowserHealth.status === 'error'
               ? 'text-[var(--error-fg)]'
               : 'text-[var(--settings-section-desc)]',
@@ -231,8 +230,8 @@ export function BrowserBackendSubsection({
                 })
               : t('settings.computerUse.browserBackend.health.userBrowserReady')}
           </span>
-        </div>
+        </SettingsBlock>
       ) : null}
-    </div>
+    </SettingsBlock>
   );
 }

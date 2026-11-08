@@ -1004,3 +1004,32 @@ Switch 解耦。插件插槽挂载同一个媒体组件，不再维护单独拖�
 此前有三套写法：群设置抽屉的 `ChatGroupSettingsRows`、手柄页各自复制的局部组件、设置页的 `settingsRowClasses` 类名。提升为 `components/ui/settings-rows.tsx`，行名称按用户裁决统一 13px/500（群设置原为 14px）。局部副本已删除；其余设置页仍用类名，按页面分批迁移。
 
 用户确认 13px 符合 §4 后，同时把窄抽屉登记为例外：群设置抽屉保留 13px 次要色组名和 48px 行高，不套用设置页的 16px 组名与 `py-4`，行名称仍是 13px/500。
+
+## 2026-11-08 · 设置页全部迁到设置行组件
+
+剩下 17 个直接用 `settingsRowClasses` 类名的设置页迁到 `SettingsSection`、`SettingsCard`、`SettingsRow`，`settingsRowClasses.ts` 删除。迁移时补了几处组件此前没覆盖的约定：设置页分区标题是 `h2`、标题到卡片 14px（与其余设置页一致，抽屉仍是 8px），组名下一行说明用 `description`；滑块、字体选择这类不是「名称 + 控件」的内容用 `SettingsBlock`；原来同一卡片里靠「不画分割线」表示一组的行（应用连接和它的开关），改为一组一张卡片。组件原本沿用群设置抽屉的行距（名称行高 1.38、与说明间隔 2px），迁过来的设置行会矮约 3px；§4 此前没写行高。用户裁决设置页沿用原来的节奏：名称行高 1.5、说明 1.4、间隔 4px，分割线和手写卡片里一样占 1px 高度，与没用组件的手写设置行一致，迁移前后行高不变；抽屉维持紧凑行距。
+
+实现：`components/ui/settings-rows.tsx` 与各设置页；现行规则见 `DESIGN.md` §4 Desktop settings rows。
+
+## 2026-11-08 · 手写设置区块迁到组件，设置页面标题统一 20px
+
+一直手写的设置区块（语音输入、存储、关于、帮助、自动操作、记忆、小技巧、辅助模型、视觉桥、上下文压缩、供应商共享等）迁到 `SettingsSection` / `SettingsCard` / `SettingsRow` / `SettingsBlock`。只迁「组名 + 卡片 + 设置行」结构；对话框、模型和供应商列表、图表、键位图、连接向导这类不是设置行的内容保持原样。手写卡片的 20px 内边距、14px 标题、全宽分割线等走样统一到 §4 的数值。
+
+迁移后有自己页面标题的设置页里，分组标题变成 16px，和 16px 的页面标题一样大，同一页还混着 13px 的手写小标题。用户裁决：设置页的页面标题统一 20px（沿用外观页先例），页内分组一律 16px 组名，不再用更小的页内小标题。组件新增 `variant="page"` 和 `SETTINGS_PAGE_TITLE_CLASS`。
+
+实现：`components/ui/settings-rows.tsx` 与各设置页；现行规则见 `DESIGN.md` §4 Desktop settings rows。
+
+## 2026-11-08 · 页面标题区与「名称在上、控件在下」的间距统一
+
+用户检查开发版时指出模型供应商、IM 机器人、工具、自动操作的标题仍偏小，并要求统一卡片里小标题和下面内容的间距。核查后：页面标题到第一块内容的间距有 14、16、18、24、32px 五种，说明文字有 12px 和 13px 两种；卡片里名称与下方宽控件的间距有 6、8、12、14、16px，有的中间还画了分割线。
+
+统一为：所有设置标签页和子页面（含配件、手柄页）用 `SettingsPageHeader` / `SettingsSection variant="page"`，标题 20px、说明 13px、到第一块内容 24px，子页面返回按钮放在标题前；通用页没有页面标题，插件页保留自己的插件管理头部。名称在上、宽控件在下的一项设置用 `SettingsField`，名称到控件 12px，中间不画分割线。
+
+实现：`components/ui/settings-rows.tsx` 与各设置页；现行规则见 `DESIGN.md` §4 Desktop settings rows。
+
+## 2026-11-08 · 设置页内的分区间距
+
+页面标题统一后，页内相邻分区的距离出现三种：通用、外观 36px，用 `variant="page"` 的页面 24px，个性化、工具页叠加外层 18px 下边距后 42px；没有组名、连着放的卡片之间也被拉到 24px。用户裁决：页面标题到第一块 24px，分区之间 36px，同一分区内的卡片和说明 14px，与通用、外观已定稿的节奏一致；连着的无标题卡片算一个分区。`SettingsSection variant="page"` 内置这套间距，自己排版的页面用 `SettingsPageHeader` 加 `SettingsPageScope`（让里面的分区成为 `h3`）。§4 同时列出尚未迁移的已知例外，不再写成「一律」。
+
+实现：`components/ui/settings-rows.tsx` 与各设置页；现行规则见 `DESIGN.md` §4 Desktop settings rows。
+
