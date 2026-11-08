@@ -878,8 +878,17 @@ function parsePendingPermissionRequest(
     title: typeof request.title === 'string' ? request.title : undefined,
     displayName: typeof request.displayName === 'string' ? request.displayName : undefined,
     description: typeof request.description === 'string' ? request.description : undefined,
+    // Rebuilding from a snapshot must not downgrade the card: the live path
+    // keeps the IM source and the Auto-review reason, and a later same-id
+    // live dispatch is deduped, so this is their only chance to survive.
+    sourceDescription: typeof metadata?.imSourceDescription === 'string'
+      ? metadata.imSourceDescription
+      : undefined,
     suggestions: Array.isArray(request.suggestions) ? request.suggestions : undefined,
     autoReviewUnavailable: metadata?.autoReviewUnavailable === true,
+    autoReviewReason: typeof metadata?.autoReviewReason === 'string'
+      ? metadata.autoReviewReason
+      : undefined,
   };
 }
 
@@ -10964,26 +10973,31 @@ function reconcilePendingInteractions(
         }
       }
       if (!isCurrentInteractionReconcile()) return 0;
-      // Capture the old pending permission before reconciliation so we can
-      // release the stale permissionResponseInFlight guard when the snapshot
-      // advances (P1: device-link reconnects while a permission request was
-      // in flight — the old guard blocks every action on the new request).
-      const oldPendingPermission = getOrCreateState(sessionId).pendingPermission;
       setState(sessionId, (state) => {
         // Permission snapshots are authoritative too. In particular, do not
         // append the snapshot behind a stale displayed request: a renderer can
         // miss A's dismissal, reconnect while B is pending, and otherwise keep
         // showing A forever while B waits in the new FIFO queue.
+        //
+        // Host list order is not FIFO (ordinary requests come before bridge
+        // ones), so keep the still-valid displayed order and append only the
+        // requests this renderer has not seen yet. Reusing the existing object
+        // also preserves renderer-only state such as `submitting`.
         const existingPermissions = [
           ...(state.pendingPermission ? [state.pendingPermission] : []),
           ...state.pendingPermissionQueue,
         ];
-        const existingByRequestId = new Map(
-          existingPermissions.map((permission) => [permission.requestId, permission]),
+        const reconciledPermissions = existingPermissions.filter(
+          (permission) => authoritativePermissionIds.has(permission.requestId),
         );
-        const reconciledPermissions = authoritativePermissions.map(
-          (permission) => existingByRequestId.get(permission.requestId) ?? permission,
+        const knownPermissionIds = new Set(
+          reconciledPermissions.map((permission) => permission.requestId),
         );
+        for (const permission of authoritativePermissions) {
+          if (knownPermissionIds.has(permission.requestId)) continue;
+          knownPermissionIds.add(permission.requestId);
+          reconciledPermissions.push(permission);
+        }
         const nextPermission = reconciledPermissions[0] ?? null;
         const nextPermissionQueue = reconciledPermissions.slice(1);
         const permissionChanged =
@@ -11108,17 +11122,21 @@ function reconcilePendingInteractions(
           pendingRemoteDesktopConfirmationQueue: remainingRemoteConfirmations,
         };
       });
-      // P1 security: When the authoritative snapshot replaces the displayed
-      // permission (e.g. device-link reconnects while old request A was in
-      // flight), we must use requestId-based comparison — not reference equality
-      // — because reconciliation may recreate the permission object with the
-      // same requestId.  If the permission actually changed (different
-      // requestId), rearm the gesture window to protect the newly promoted card.
-      const newPendingPermission = getOrCreateState(sessionId).pendingPermission;
-      const oldRequestId = oldPendingPermission?.requestId;
-      const newRequestId = newPendingPermission?.requestId;
-      if (permissionResponseInFlight.has(sessionId) && oldRequestId !== newRequestId && oldRequestId != null) {
-        rearmPermissionResponseGuard(sessionId);
+      // P1 security: reconcile the gesture guard against this same authoritative
+      // snapshot. Comparing displayed request ids is not enough — MCP-app
+      // requests are excluded from the ordinary FIFO, so the guard can belong
+      // to a request the snapshot just removed while B is still pending.
+      // Rearm while something remains (a delayed click on the old card must not
+      // answer the newly promoted one); release when nothing is left, so B is
+      // not blocked until the stale IPC call times out.
+      const inFlightRequestId = permissionResponseInFlight.get(sessionId);
+      if (inFlightRequestId !== undefined
+        && !authoritativePermissionIds.has(inFlightRequestId)) {
+        if (authoritativePermissionIds.size > 0) {
+          rearmPermissionResponseGuard(sessionId);
+        } else {
+          releaseOwnedPermissionResponseGuard(sessionId, inFlightRequestId);
+        }
       }
       for (const item of list) {
         if (!isCurrentInteractionReconcile()) return 0;

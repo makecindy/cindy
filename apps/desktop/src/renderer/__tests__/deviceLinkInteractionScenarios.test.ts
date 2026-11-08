@@ -555,6 +555,113 @@ describe('device-link 远程交互往返 — permission', () => {
     expect(makerChatStore.getSnapshot(s).pendingPermission?.requestId).toBe('model-snapshot-permission');
   });
 
+  it('reconnect snapshot keeps the IM source and the Auto-review reason', async () => {
+    const s = openRemoteSession();
+    host.seedPending(s, {
+      kind: 'permission',
+      requestId: 'snapshot-metadata',
+      toolName: 'Bash',
+      input: { command: 'ls' },
+      metadata: {
+        imSourceDescription: 'Telegram · 开发群',
+        autoReviewUnavailable: true,
+        autoReviewReason: 'The review gateway quota is exhausted.',
+      },
+    });
+    await makerChatStore.reconcilePendingInteractions(s);
+
+    // A later same-id live dispatch is deduped, so the snapshot is the only
+    // chance to preserve these user-visible fields.
+    expect(makerChatStore.getSnapshot(s).pendingPermission).toMatchObject({
+      requestId: 'snapshot-metadata',
+      sourceDescription: 'Telegram · 开发群',
+      autoReviewUnavailable: true,
+      autoReviewReason: 'The review gateway quota is exhausted.',
+    });
+  });
+
+  it('reconnect snapshot preserves the displayed FIFO order instead of the host list order', async () => {
+    const s = openRemoteSession();
+    host.hostInteraction(s, {
+      kind: 'permission',
+      requestId: 'fifo-head-a',
+      toolName: 'Read',
+      input: { file_path: '/fifo-a.txt' },
+    });
+    host.hostInteraction(s, {
+      kind: 'permission',
+      requestId: 'fifo-tail-b',
+      toolName: 'Read',
+      input: { file_path: '/fifo-b.txt' },
+    });
+    await flush();
+    expect(makerChatStore.getSnapshot(s).pendingPermission?.requestId).toBe('fifo-head-a');
+
+    // The Host lists ordinary requests before bridge requests, so its snapshot
+    // can be reversed while both requests are still pending.
+    host.clearPending(s);
+    host.seedPending(s, {
+      kind: 'permission',
+      requestId: 'fifo-tail-b',
+      toolName: 'Read',
+      input: { file_path: '/fifo-b.txt' },
+    });
+    host.seedPending(s, {
+      kind: 'permission',
+      requestId: 'fifo-head-a',
+      toolName: 'Read',
+      input: { file_path: '/fifo-a.txt' },
+    });
+    await makerChatStore.reconcilePendingInteractions(s);
+
+    // Reordering would move the already-submitting A to the tail; if its
+    // receipt then failed, it would promote back as an unanswerable head.
+    const state = makerChatStore.getSnapshot(s);
+    expect(state.pendingPermission?.requestId).toBe('fifo-head-a');
+    expect(state.pendingPermissionQueue.map((permission) => permission.requestId))
+      .toEqual(['fifo-tail-b']);
+  });
+
+  it('reconnect snapshot expires the guard of a removed app request within the gesture window', async () => {
+    vi.useFakeTimers();
+    const s = openRemoteSession();
+    const appRequest = (requestId: string) => ({
+      kind: 'permission',
+      requestId,
+      toolName: 'MCP App: save',
+      input: {},
+      metadata: {
+        mcpApp: { clientId: 'planner', serverId: 'custom', title: 'Planner', scope: 'once' },
+      },
+    });
+    host.hostInteraction(s, appRequest('app-guard-a'));
+    host.hostInteraction(s, appRequest('app-guard-b'));
+    await flush();
+    expect(makerChatStore.getSnapshot(s).pendingAppPermissions?.map((p) => p.requestId))
+      .toEqual(['app-guard-a', 'app-guard-b']);
+
+    // A's receipt is lost while the Host has already answered A. B remains, so
+    // the guard must expire on the short dedupe window, not the 15s receipt
+    // timeout (app requests never appear in the ordinary FIFO).
+    host.invoke.mockReturnValueOnce(new Promise(() => {}));
+    makerChatStore.respondToPermission(s, { behavior: 'allow' }, 'app-guard-a');
+    await flush();
+    host.clearPending(s);
+    host.seedPending(s, appRequest('app-guard-b'));
+    await makerChatStore.reconcilePendingInteractions(s);
+    expect(makerChatStore.getSnapshot(s).pendingAppPermissions?.map((p) => p.requestId))
+      .toEqual(['app-guard-b']);
+
+    makerChatStore.respondToPermission(s, { behavior: 'allow' }, 'app-guard-b');
+    await flush();
+    expect(host.resolved).toEqual([]);
+
+    await vi.advanceTimersByTimeAsync(PERMISSION_GUARD_ADVANCE_MS);
+    makerChatStore.respondToPermission(s, { behavior: 'allow' }, 'app-guard-b');
+    await flush();
+    expect(host.resolved.map((item) => item.requestId)).toEqual(['app-guard-b']);
+  });
+
   it('A 的迟到失败回执不清除 B 的防重 guard', async () => {
     vi.useFakeTimers();
     const s = openRemoteSession();
