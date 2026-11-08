@@ -488,3 +488,20 @@ and icon. The icon is included in the capability receipt. This display-only bran
 does not rename the executable/helpers, change the stable bundle identifier, or alter
 the profile / safeStorage identity. Existing checked candidates are immutable: prepare
 and check a new candidate to apply branding; do not patch a running or approved bundle.
+
+
+### Fresh selections for upgrades
+
+Each new preparation queries the current default branch and all open PRs by the configured
+(or authenticated) author in both the app and plugin repositories, including drafts. Closed
+unmerged PRs are omitted; merged changes arrive through the current base. Only explicit
+configured exclusions may omit an open PR. Conflicts fail visibly and preserve the worktree.
+`continue` retains the conflict-resolution snapshot; it does not claim the snapshot is current.
+
+`freshness --config FILE --report BUILD_REPORT` checks the live base, PR numbers/head commits,
+draft status, exclusions and local refs against the prepared report. Run it before stopping a
+live app for a manual handover. Manual checks revalidate before and after isolated startup;
+manual activation also revalidates. Automatic preparation and switching enforce the same
+selection gate. Network failure or changed selections cannot be treated as a current build:
+prepare/check a new candidate, keeping the running instance. Normal launch/recovery of the
+known-good version remains available without a GitHub freshness check.

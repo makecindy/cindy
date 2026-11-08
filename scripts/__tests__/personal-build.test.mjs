@@ -5,7 +5,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { localPluginsIdentity } from '../personal-build/automatic.mjs';
 import { exportBuild, parseManifest, syncPlugins } from '../personal-build/managed.mjs';
-import { auditPlugins, configFrom, copyPlugin, discover, packageHash, prepare, prepareLocalPlugins, run, verifyReport } from '../personal-build.mjs';
+import { auditPlugins, configFrom, copyPlugin, discover, packageHash, prepare, prepareLocalPlugins, run, verifyReport, verifyFreshSelection } from '../personal-build.mjs';
 
 // Script integration tier, explicit in test:runner like the existing worktree runner tests.
 // Production entry: prepare/discover/copyPlugin/auditPlugins. Previous personal scripts hardcoded
@@ -205,4 +205,22 @@ test('local plugin release identity ignores where and when a bundle was prepared
   assert.equal(localPluginsIdentity(a), localPluginsIdentity(b));
   put(path.join(b, 'sample/main.js'), 'changed bytes');
   assert.notEqual(localPluginsIdentity(a), localPluginsIdentity(b));
+});
+
+// Regression: an old checked build used to bypass current draft/new PRs during upgrades.
+// Integration-script tier, injected GitHub replies; exercise the real selection gate without network.
+test('upgrade freshness rejects changed main, draft heads, new/closed PRs and plugin selections', () => {
+ const repo={repository:'example/app',checkout:'.'}, config={author:'somebody',app:repo,plugins:{...repo,repository:'example/plugins'}};
+ let base='b'.repeat(40), app=[pr(1,'draft')], plugins=[];
+ const exec=(_cmd,args)=> args[1].includes('/commits/') ? base :
+   JSON.stringify(args[1].includes('/pulls?') ? (args[1].includes('example/plugins')?plugins:app) : {default_branch:'main'});
+ const snapshot=r=>{const d=discover(r,'somebody',exec);return {repository:r.repository,base:d.base,baseSha:d.baseSha,prs:d.selected,excluded:d.excluded};};
+ const report={author:'somebody',app:snapshot(config.app),pluginRepository:snapshot(config.plugins)};
+ assert.equal(verifyFreshSelection(config,report,exec).author,'somebody');
+ app=[pr(1,'draft'),pr(2,'new')];assert.throws(()=>verifyFreshSelection(config,report,exec),/app: main or PR/);
+ app=[];assert.throws(()=>verifyFreshSelection(config,report,exec),/app: main or PR/);
+ app=[pr(1,'draft')];app[0].head.sha='c'.repeat(40);assert.throws(()=>verifyFreshSelection(config,report,exec),/app: main or PR/);
+ app=[pr(1,'draft')];base='d'.repeat(40);assert.throws(()=>verifyFreshSelection(config,report,exec),/app: main or PR/);
+ base='b'.repeat(40);plugins=[pr(3,'plugin-draft')];assert.throws(()=>verifyFreshSelection(config,report,exec),/plugins: main or PR/);
+ assert.throws(()=>verifyFreshSelection(config,report,()=>{throw Error('offline')}),/offline/);
 });

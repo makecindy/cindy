@@ -93,6 +93,27 @@ export function discover(repo, author, exec = run) {
     excluded: excluded.map(p => p.number) };
 }
 
+/** Re-query both repositories before accepting an upgrade; never silently reuse a stale selection. */
+export function verifyFreshSelection(config, report, exec = run) {
+  const author = config.author || exec('gh', ['api', 'user', '--jq', '.login'], config.app.checkout);
+  invariant(report.author?.toLowerCase() === author.toLowerCase(), 'Build author changed; prepare a new build');
+  const prs = values => values.map(p => [p.number, p.sha, p.draft === true]).sort((a,b) => a[0]-b[0]);
+  for (const key of ['app', 'plugins']) {
+    const repo = config[key], built = report[key === 'app' ? 'app' : 'pluginRepository'];
+    if (!repo) { invariant(!built, `${key}: repository removed; prepare a new build`); continue; }
+    invariant(built?.repository === repo.repository, `${key}: repository changed; prepare a new build`);
+    const latest = discover(repo, author, exec);
+    invariant(built.base === latest.base && built.baseSha === latest.baseSha &&
+      JSON.stringify(prs(built.prs || [])) === JSON.stringify(prs(latest.selected)) &&
+      JSON.stringify([...(built.excluded || [])].sort()) === JSON.stringify([...latest.excluded].sort()),
+      `${key}: main or PR selection changed (including drafts); prepare a new build`);
+    const refs = (repo.localRefs || []).map(ref => [ref, exec('git', ['rev-parse', '--verify', `${ref}^{commit}`], repo.checkout)]).sort();
+    invariant(JSON.stringify(refs) === JSON.stringify((built.localRefs || []).map(p => [p.ref,p.sha]).sort()),
+      `${key}: local refs changed; prepare a new build`);
+  }
+  return { checkedAt: new Date().toISOString(), author };
+}
+
 /** Hash exactly the copyable package, rejecting symlinks instead of following them outside its root. */
 export function pluginFiles(dir) {
   const files = [];
@@ -263,6 +284,9 @@ export async function main(argv) {
   if (['launch', 'stage', 'apply', 'rollback', 'doctor', 'sync-plugins', 'select', 'request', 'export'].includes(command)) {
     const { managedCommand } = await import('./personal-build/managed.mjs');
     return managedCommand(command, options);
+  }
+  if (command === 'freshness') {
+    console.log(JSON.stringify(verifyFreshSelection(configFrom(need('config')), verifyReport(need('report'))))); return;
   }
   if (command === 'bundle-tools') {
     const { toolBundle } = await import('./personal-build/managed.mjs');

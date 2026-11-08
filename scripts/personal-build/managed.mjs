@@ -6,7 +6,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { resumableCompose } from './composition.mjs';
 import { readJournal } from './recovery.mjs';
-import { configFrom, discover, copyPlugin, packageHash, auditPlugins, run, verifyReport } from '../personal-build.mjs';
+import { configFrom, discover, copyPlugin, packageHash, auditPlugins, run, verifyReport, verifyFreshSelection } from '../personal-build.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const cli = path.join(here, '../personal-build.mjs');
@@ -198,6 +198,7 @@ export function syncPlugins(c, exec = run) {
 
 export function selectBuild(c, reportFile) {
   const report = verifyReport(reportFile);
+  verifyFreshSelection(c, report);
   // Managed stage still validates shared profile compatibility, even when the isolated check passed.
   run('git', ['-C', c.app.checkout, 'cat-file', '-e', `${report.app.target}^{commit}`], c.app.checkout);
   const m = { TARGET: report.app.target, MAIN: report.app.baseSha, PACK: '', FETCH: '', DB_SCRIPT: '', LABEL: `Personal build ${report.app.target.slice(0, 10)}` };

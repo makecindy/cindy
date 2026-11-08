@@ -5,7 +5,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { managedConfig, runtimeEnv } from './managed.mjs';
-import { prepare, main, run, packageHash, verifyReport } from '../personal-build.mjs';
+import { prepare, main, run, packageHash, verifyReport, verifyFreshSelection } from '../personal-build.mjs';
 import { nativeIdentity } from './native-capabilities.mjs';
 import { checkCheckout } from './checkout-guard.mjs';
 import { RecoveryJournal, durableWrite, compatibility } from './recovery.mjs';
@@ -215,9 +215,11 @@ export async function automaticCheck(file) {
     await main(['check', '--report', path.join(out, 'report.json')]);
     // Materialize assets before activation; recovery never depends on downloading a replacement runtime.
     run(c.runtime.node, ['scripts/ensure-dev-runtime-assets.mjs'], report.directory);
+    verifyFreshSelection(c, report);
     const proof = await smoke(c, release);
+    verifyFreshSelection(c, report);
     // Publish only a complete candidate; supervisor owns the promotion journal independently.
-    durableWrite(path.join(root(c), 'candidate.json'), { ...release, prepared: true, smoke: proof });
+    durableWrite(path.join(root(c), 'candidate.json'), { ...release, prepared: true, smoke: proof, buildReport: path.join(out, 'report.json') });
     status(c, 'prepared', { id: release.id });
   } catch (e) { status(c, 'preparation-failed', { error: e.message }); throw e; }
   finally { unlock(); }
@@ -291,7 +293,9 @@ async function prepareManualUpgrade(file, reportFile, output) {
     const old = snapshot(c, state.good);
     check(old.pid && old.ready && !old.unknown, 'Manual upgrade needs an observed ready baseline');
     run(c.runtime.node, ['scripts/ensure-dev-runtime-assets.mjs'], report.directory);
+    verifyFreshSelection(c, report);
     const proof = await smoke(c, release);
+    verifyFreshSelection(c, report);
     verifyRelease(release);
     durableWrite(output, { kind: 'personal-manual-upgrade', checked: true, buildReport: path.resolve(reportFile),
       baseline: state.good, candidate: release, dataDir: c.runtime.dataDir, region: c.region,
@@ -309,6 +313,7 @@ export async function supervise(file, bootstrapFile, manualFile) {
     let bootstrap, manual;
     if (manualFile) {
       const report = read(manualFile), build = verifyReport(report.buildReport);
+      verifyFreshSelection(c, build);
       check(build.state === 'checked', 'Manual candidate checks were invalidated');
       const release = releaseDescriptor(build.directory);
       manual = validateManualUpgrade(report, c, store.read(), release);
@@ -342,7 +347,11 @@ export async function supervise(file, bootstrapFile, manualFile) {
     check(s.phase !== 'blocked', s.error || 'Recovery previously failed; inspect the journal before restarting');
     if (!current && s.phase === 'stable') {
       const existing = snapshot(c, s.good); check(!existing.unknown && !existing.pid && !hasLaunchRunner(c, s.good), 'A personal application is already running');
-      const v = manual || bootstrap || (c.automatic.enabled === true ? candidate(c, s) : null);
+      let v = manual || bootstrap || (c.automatic.enabled === true ? candidate(c, s) : null);
+      if (v && !manual && !bootstrap) {
+        try { verifyFreshSelection(c, verifyReport(v.buildReport)); }
+        catch(e) { status(c, 'stale-candidate', {error:e.message}); v = null; }
+      }
       if (v) {
         if (manual) store.beginManual(v, { prepared: true, stopped: true, manualRequested: true, smokeVerified: true, profileVerified: true });
         else store.begin(v, { compatible: true, prepared: true, idle: true, stopped: true });
@@ -387,6 +396,8 @@ export async function supervise(file, bootstrapFile, manualFile) {
         pluginRequests.add(current.launched.generation);
       }
       if (v && h?.healthy && h.busy === false && h.idle === true) {
+        try { verifyFreshSelection(c, verifyReport(v.buildReport)); }
+        catch (e) { status(c, 'stale-candidate', {error:e.message}); await sleep(60000); continue; }
         durableWrite(path.join(current.launched.dir, 'request.json'), { action: 'quit', generation: current.launched.generation, pid: current.pid, requireRemote: c.automatic.requireRemote, expiresAt: Date.now() + 10000 });
         // The host rechecks all activity and exits normally. Silence is not an acknowledgement.
         const deadline = Date.now() + 30000; let stopped = false;
