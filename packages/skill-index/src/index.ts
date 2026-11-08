@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { cosineSimilarity, normalizeText, reciprocalRankScore, retrievalText, scoreKeywords } from './ranking.js';
+import { cosineSimilarity, prepareKeywordQuery, reciprocalRankScore, retrievalText, scoreKeywords } from './ranking.js';
 import type { SkillEmbeddingAdapter, SkillEntry, SkillIndexSnapshot, SkillSearchOptions, SkillSearchResult } from './types.js';
 
 export type { SkillEmbeddingAdapter, SkillEntry, SkillIndexSnapshot, SkillMatch, SkillSearchOptions, SkillSearchResult } from './types.js';
@@ -96,11 +96,12 @@ export class SkillIndex {
   async search(query: string, options: SkillSearchOptions = {}): Promise<SkillSearchResult> {
     const limit = options.limit ?? 5;
     if (!Number.isInteger(limit) || limit < 1) throw new Error('limit must be a positive integer');
-    if (!normalizeText(query) || !this.entries.size) return { mode: 'keyword', matches: [] };
+    const preparedQuery = prepareKeywordQuery(query);
+    if (!preparedQuery.normalized || !this.entries.size) return { mode: 'keyword', matches: [] };
     // Keep this query on the generation it selected before awaiting the API.
     // buildVectors replaces vector arrays; retaining their references is enough.
     const entries = [...this.entries.values()].map((item) => ({ ...item }));
-    const lexical = entries.map((item) => ({ item, ...scoreKeywords(item.entry, query) }));
+    const lexical = entries.map((item) => ({ item, ...scoreKeywords(item.entry, preparedQuery) }));
     const keywords = lexical.filter((item) => item.score > 0)
       .sort((a, b) => Number(b.exact) - Number(a.exact) || b.score - a.score || a.item.entry.id.localeCompare(b.item.entry.id));
     const keywordRanks = new Map(keywords.map((item, i) => [item.item.entry.id, i + 1]));

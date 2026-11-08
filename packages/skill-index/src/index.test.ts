@@ -36,6 +36,51 @@ function embedding(identity = 'test:model:3'): SkillEmbeddingAdapter & { embed: 
 }
 
 describe('SkillIndex task discovery', () => {
+  // Reviews 4507301730/4507301733: real search must tokenize once per query and
+  // must not give Preact.js lexical credit for React.js. Unit: six entries plus
+  // controlled vectors distinguish ranking mechanics from model quality.
+  it('keeps dotted Latin terms distinct in keyword and hybrid rankings', async () => {
+    const index = new SkillIndex();
+    index.sync([
+      { ...entries[0]!, id: 'react', name: 'frontend-guide', description: 'Build interfaces with React.js', tags: [] },
+      ...Array.from({ length: 5 }, (_, n) => ({ ...entries[0]!, id: `preact-${n}`, name: `compact-guide-${n}`, description: 'Compact interfaces', tags: ['Preact.js'] })),
+    ]);
+    const keyword = await index.search('React.js');
+    expect(keyword.matches.map(item => item.id)).toEqual(['react']);
+    const adapter: SkillEmbeddingAdapter = {
+      identity: 'controlled', embed: async (texts, kind) => ({ modelUsed: 'controlled',
+        vectors: texts.map(text => kind === 'query' || text.startsWith('frontend-guide') ? [1, 0] : [0.8, 0.6]),
+      }),
+    };
+    await index.buildVectors(adapter);
+    const hybrid = await index.search('React.js', { embedding: adapter });
+    expect(hybrid.matches[0]?.id).toBe('react');
+    expect(hybrid.matches.slice(1).every(item => !item.matchedTerms.includes('react.js'))).toBe(true);
+    expect((await index.search('Preact.js')).matches).toHaveLength(5);
+  });
+
+  it('segments each search query once regardless of catalog size', async () => {
+    const index = indexed();
+    const segment = vi.spyOn(Intl.Segmenter.prototype, 'segment');
+    try {
+      expect((await index.search('把课程转成字幕')).matches[0]?.id).toBe('video');
+      expect(segment).toHaveBeenCalledTimes(1);
+      expect((await index.search('制作游戏特效')).matches[0]?.id).toBe('game');
+      expect(segment).toHaveBeenCalledTimes(2);
+    } finally { segment.mockRestore(); }
+  });
+
+  it('keeps boundaries around punctuated Latin identifiers as well as dotted names', async () => {
+    const index = new SkillIndex();
+    index.sync([
+      { ...entries[0]!, id: 'right', name: 'identifier-guide', description: 'Use foo_bar and React.js.' },
+      { ...entries[0]!, id: 'wrong', name: 'partial-guide', description: 'prefix_foo_bar React.jsx Reactxjs Preact.js' },
+    ]);
+    for (const query of ['foo_bar', 'React.js']) {
+      expect((await index.search(query)).matches.map(item => item.id)).toEqual(['right']);
+    }
+  });
+
   // PR #9374: one-letter language tokens disappeared in normal task queries.
   // Extend the existing production search matrix with C/R and technical boundaries.
   it.each<[string, string[]]>([
