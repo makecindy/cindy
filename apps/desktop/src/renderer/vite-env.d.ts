@@ -4105,12 +4105,14 @@ interface ElectronAPI {
   setUpdateRelaunchTheme: (theme: 'light' | 'dark') => void;
   // E4D 毛玻璃:family 切换/启动通知 main 开关 vibrancy(仅 CINDY 透壁纸)
   theme: {
+    setSidebarWidth: (width: number) => void;
     applyVibrancy: (
       familyId: string,
       isDark: boolean,
       mode: 'system' | 'light' | 'dark',
       systemModeFollowsSystem: boolean,
       wallpaperCovered?: boolean,
+      desktopBlur?: number | null,
     ) => void;
   };
   /**

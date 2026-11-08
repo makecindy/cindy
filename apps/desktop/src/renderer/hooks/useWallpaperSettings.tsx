@@ -47,6 +47,7 @@ interface WallpaperSettingsContextValue extends WallpaperSettings {
   visibility: number;
   setWallpaper: (id: WallpaperId) => void;
   setVisibility: (value: number) => void;
+  previewVisibility: (value: number | null) => void;
   setBlur: (value: number) => void;
   previewBlur: (value: number | null) => void;
   setMotion: (value: WallpaperMotion) => void;
@@ -82,6 +83,7 @@ function pickWallpaperSettings(settings: AppearanceSettings): WallpaperSettings 
 export function WallpaperSettingsProvider({ children }: { children: ReactNode }) {
   const [settings, setSettings] = useState<WallpaperSettings>(getInitialWallpaperSettings);
   const [blurPreview, setBlurPreview] = useState<number | null>(null);
+  const [visibilityPreview, setVisibilityPreview] = useState<number | null>(null);
   const [failedUrl, setFailedUrl] = useState('');
   const onPlaybackFailure = useCallback(
     () => setFailedUrl(settings.customWallpaperUrl ?? ''),
@@ -89,7 +91,9 @@ export function WallpaperSettingsProvider({ children }: { children: ReactNode })
   );
   const onPlaybackReady = useCallback(() => setFailedUrl(''), []);
   const isDark = useIsDarkMode();
-  const visibility = getWallpaperVisibility(settings, isDark);
+  const isDarkRef = useRef(isDark);
+  isDarkRef.current = isDark;
+  const visibility = visibilityPreview ?? getWallpaperVisibility(settings, isDark);
   const reducedMotion = useReducedMotion();
   const imageAsset = useWallpaperAsset(settings.wallpaperId, 'image', visibility > 0);
   const videoAsset = useWallpaperAsset(
@@ -119,6 +123,7 @@ export function WallpaperSettingsProvider({ children }: { children: ReactNode })
         : getBuiltinWallpaperBackground(settings.wallpaperId);
   useWallpaperBackground({
     background,
+    desktopBackground: settings.wallpaperId === 'none',
     visibility,
     blur: blurPreview ?? settings.wallpaperBlur ?? 0,
     reducedMotion,
@@ -203,11 +208,23 @@ export function WallpaperSettingsProvider({ children }: { children: ReactNode })
       });
   }, []);
 
-  const setWallpaper = useCallback((wallpaperId: WallpaperId) => patch({ wallpaperId }), [patch]);
+  const setWallpaper = useCallback((wallpaperId: WallpaperId) => {
+    setVisibilityPreview(null);
+    patch({ wallpaperId });
+  }, [patch]);
   const setVisibility = useCallback(
-    (value: number) => patch({ wallpaperVisibility: clampAppearanceWallpaperVisibility(value) }),
+    (value: number) => {
+      setVisibilityPreview(null);
+      patch({ wallpaperVisibility: clampAppearanceWallpaperVisibility(value) });
+    },
     [patch],
   );
+  const previewVisibility = useCallback((value: number | null) => {
+    const next = value === null ? null : clampAppearanceWallpaperVisibility(value);
+    // Keyboard commit precedes change in Radix. Read the optimistic committed
+    // value synchronously so a failed save cannot leave a stale preview behind.
+    setVisibilityPreview(next === getWallpaperVisibility(settingsRef.current, isDarkRef.current) ? null : next);
+  }, []);
   const setMotion = useCallback(
     (value: WallpaperMotion) => patch({ wallpaperMotion: value }),
     [patch],
@@ -224,14 +241,14 @@ export function WallpaperSettingsProvider({ children }: { children: ReactNode })
     // Radix keyboard input commits before its change callback. Do not recreate
     // a preview for the value already queued for saving (or the unchanged value).
     setBlurPreview(
-      settingsRef.current.wallpaperId === 'none' ||
-        blur === (settingsRef.current.wallpaperBlur ?? 0)
+      blur === (settingsRef.current.wallpaperBlur ?? 0)
         ? null
         : blur,
     );
   }, []);
   const resetWallpaper = useCallback(() => {
     setBlurPreview(null);
+    setVisibilityPreview(null);
     patch({
       wallpaperId: DEFAULT_APPEARANCE_SETTINGS.wallpaperId,
       wallpaperOverlay: DEFAULT_APPEARANCE_SETTINGS.wallpaperOverlay,
@@ -253,6 +270,7 @@ export function WallpaperSettingsProvider({ children }: { children: ReactNode })
       retryDownload,
       setWallpaper,
       setVisibility,
+      previewVisibility,
       setBlur,
       previewBlur,
       setMotion,
@@ -262,6 +280,7 @@ export function WallpaperSettingsProvider({ children }: { children: ReactNode })
       resetWallpaper,
       setMotion,
       setVisibility,
+      previewVisibility,
       setBlur,
       previewBlur,
       blurPreview,
