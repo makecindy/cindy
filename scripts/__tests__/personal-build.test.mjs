@@ -5,7 +5,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { localPluginsIdentity } from '../personal-build/automatic.mjs';
 import { exportBuild, parseManifest, syncPlugins } from '../personal-build/managed.mjs';
-import { auditPlugins, configFrom, copyPlugin, discover, packageHash, prepare, prepareLocalPlugins, run, verifyReport, verifyFreshSelection } from '../personal-build.mjs';
+import { auditPlugins, configFrom, copyPlugin, discover, packageHash, prepare, prepareLocalPlugins, run, verifyReport, verifyFreshSelection, verifyUpgradeSnapshot } from '../personal-build.mjs';
 
 // Script integration tier, explicit in test:runner like the existing worktree runner tests.
 // Production entry: prepare/discover/copyPlugin/auditPlugins. Previous personal scripts hardcoded
@@ -135,7 +135,7 @@ test('a conflicting PR leaves an explicit failed report, not a partial successfu
   put(path.join(out, 'app/file'), 'resolved\n');
   run('git', ['add', 'file'], path.join(out, 'app'));
   run('git', ['commit', '-m', 'resolve fixture conflict'], path.join(out, 'app'));
-  const continued = prepare(f.config, out, f.exec, { resume: true });
+  const continued = prepare(f.config, out, (cmd,args,cwd) => { assert.notEqual(cmd,'gh','continuation must not rediscover the selection'); return f.exec(cmd,args,cwd); }, { resume: true });
   assert.equal(continued.state, 'prepared');
   assert.equal(continued.app.prs.length, 2);
   assert.equal(fs.readFileSync(path.join(out, 'app/file'), 'utf8'), 'resolved\n');
@@ -150,7 +150,12 @@ test('application and local plugin compositions share a report without replacing
   f.config.plugins = f.config.app;
   f.config.localPlugins = { sample: source };
   const out = path.join(f.root, 'with plugins');
-  const result = prepare(f.config, out, f.exec), file = path.join(out, 'report.json');
+  let composing = false;
+  const result = prepare(f.config, out, (cmd,args,cwd) => {
+    if (cmd === 'gh') assert.equal(composing,false,'both repositories must be captured before composition');
+    if (cmd === 'git' && args.includes('worktree') && args.includes('add')) composing = true;
+    return f.exec(cmd,args,cwd);
+  }), file = path.join(out, 'report.json');
   assert.equal(result.pluginRepository.prs.length, 2);
   assert.equal(result.plugins.length, 0);
   assert.equal(result.localPlugins[0].namespace, 'local');
@@ -223,4 +228,22 @@ test('upgrade freshness rejects changed main, draft heads, new/closed PRs and pl
  app=[pr(1,'draft')];base='d'.repeat(40);assert.throws(()=>verifyFreshSelection(config,report,exec),/app: main or PR/);
  base='b'.repeat(40);plugins=[pr(3,'plugin-draft')];assert.throws(()=>verifyFreshSelection(config,report,exec),/plugins: main or PR/);
  assert.throws(()=>verifyFreshSelection(config,report,()=>{throw Error('offline')}),/offline/);
+});
+
+// Upgrade-start policy: snapshot validation must stay offline while detecting omitted/changed PRs.
+// Existing freshness tests cover live comparison, not a long-running build's fixed selection.
+test('each preparation captures a new selection; activation checks the fixed snapshot offline', t => {
+ const f=fixture(t), report=prepare(f.config,path.join(f.root,'first-build'),f.exec);
+ assert.equal(verifyUpgradeSnapshot(f.config,report).author,'somebody');
+ const changedExec=(cmd,args,cwd)=>cmd==='gh' && args[1].includes('/pulls?') ? '[]' : f.exec(cmd,args,cwd);
+ const next=prepare(f.config,path.join(f.root,'next-build'),changedExec);
+ assert.equal(next.app.prs.length,0);
+ assert.equal(report.app.prs.length,2);
+ assert.equal(verifyUpgradeSnapshot(f.config,report).author,'somebody');
+ const omitted=structuredClone(report);omitted.app.prs.pop();
+ assert.throws(()=>verifyUpgradeSnapshot(f.config,omitted),/differs from upgrade snapshot/);
+ const changed=structuredClone(report);changed.app.prs[0].sha='f'.repeat(40);
+ assert.throws(()=>verifyUpgradeSnapshot(f.config,changed),/differs from upgrade snapshot/);
+ const old=structuredClone(report);delete old.upgradeSnapshot;
+ assert.throws(()=>verifyUpgradeSnapshot(f.config,old),/Missing upgrade snapshot/);
 });

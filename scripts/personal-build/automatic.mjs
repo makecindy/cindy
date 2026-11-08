@@ -5,7 +5,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { managedConfig, runtimeEnv } from './managed.mjs';
-import { prepare, main, run, packageHash, verifyReport, verifyFreshSelection } from '../personal-build.mjs';
+import { prepare, main, run, packageHash, verifyReport, verifyUpgradeSnapshot } from '../personal-build.mjs';
 import { nativeIdentity } from './native-capabilities.mjs';
 import { checkCheckout } from './checkout-guard.mjs';
 import { RecoveryJournal, durableWrite, compatibility } from './recovery.mjs';
@@ -207,17 +207,18 @@ export async function automaticCheck(file) {
     const out = path.join(root(c), 'versions', randomUUID());
     status(c, 'preparing');
     const report = prepare(c, out);
-    const release = releaseDescriptor(report.directory);
+    let release = releaseDescriptor(report.directory);
     if (release.id === state.good.id || state.rejected.some(r => r.id === release.id)) { status(c, 'unchanged-or-rejected', { id: release.id }); return; }
     const compat = compatibility(state.good, release);
     if (release.monitorProtocol !== 1) { compat.compatible = false; compat.reasons.push('host health protocol missing'); }
     if (!compat.compatible) { status(c, 'deferred', { reasons: compat.reasons, report: path.join(out, 'report.json') }); return; }
     await main(['check', '--report', path.join(out, 'report.json')]);
+    release = releaseDescriptor(report.directory); // Native artifacts participate in the checked identity.
     // Materialize assets before activation; recovery never depends on downloading a replacement runtime.
     run(c.runtime.node, ['scripts/ensure-dev-runtime-assets.mjs'], report.directory);
-    verifyFreshSelection(c, report);
+    verifyUpgradeSnapshot(c, report);
     const proof = await smoke(c, release);
-    verifyFreshSelection(c, report);
+    verifyUpgradeSnapshot(c, report);
     // Publish only a complete candidate; supervisor owns the promotion journal independently.
     durableWrite(path.join(root(c), 'candidate.json'), { ...release, prepared: true, smoke: proof, buildReport: path.join(out, 'report.json') });
     status(c, 'prepared', { id: release.id });
@@ -293,9 +294,9 @@ async function prepareManualUpgrade(file, reportFile, output) {
     const old = snapshot(c, state.good);
     check(old.pid && old.ready && !old.unknown, 'Manual upgrade needs an observed ready baseline');
     run(c.runtime.node, ['scripts/ensure-dev-runtime-assets.mjs'], report.directory);
-    verifyFreshSelection(c, report);
+    verifyUpgradeSnapshot(c, report);
     const proof = await smoke(c, release);
-    verifyFreshSelection(c, report);
+    verifyUpgradeSnapshot(c, report);
     verifyRelease(release);
     durableWrite(output, { kind: 'personal-manual-upgrade', checked: true, buildReport: path.resolve(reportFile),
       baseline: state.good, candidate: release, dataDir: c.runtime.dataDir, region: c.region,
@@ -313,7 +314,7 @@ export async function supervise(file, bootstrapFile, manualFile) {
     let bootstrap, manual;
     if (manualFile) {
       const report = read(manualFile), build = verifyReport(report.buildReport);
-      verifyFreshSelection(c, build);
+      verifyUpgradeSnapshot(c, build);
       check(build.state === 'checked', 'Manual candidate checks were invalidated');
       const release = releaseDescriptor(build.directory);
       manual = validateManualUpgrade(report, c, store.read(), release);
@@ -349,7 +350,7 @@ export async function supervise(file, bootstrapFile, manualFile) {
       const existing = snapshot(c, s.good); check(!existing.unknown && !existing.pid && !hasLaunchRunner(c, s.good), 'A personal application is already running');
       let v = manual || bootstrap || (c.automatic.enabled === true ? candidate(c, s) : null);
       if (v && !manual && !bootstrap) {
-        try { verifyFreshSelection(c, verifyReport(v.buildReport)); }
+        try { verifyUpgradeSnapshot(c, verifyReport(v.buildReport)); }
         catch(e) { status(c, 'stale-candidate', {error:e.message}); v = null; }
       }
       if (v) {
@@ -396,7 +397,7 @@ export async function supervise(file, bootstrapFile, manualFile) {
         pluginRequests.add(current.launched.generation);
       }
       if (v && h?.healthy && h.busy === false && h.idle === true) {
-        try { verifyFreshSelection(c, verifyReport(v.buildReport)); }
+        try { verifyUpgradeSnapshot(c, verifyReport(v.buildReport)); }
         catch (e) { status(c, 'stale-candidate', {error:e.message}); await sleep(60000); continue; }
         durableWrite(path.join(current.launched.dir, 'request.json'), { action: 'quit', generation: current.launched.generation, pid: current.pid, requireRemote: c.automatic.requireRemote, expiresAt: Date.now() + 10000 });
         // The host rechecks all activity and exits normally. Silence is not an acknowledgement.

@@ -490,18 +490,25 @@ the profile / safeStorage identity. Existing checked candidates are immutable: p
 and check a new candidate to apply branding; do not patch a running or approved bundle.
 
 
-### Fresh selections for upgrades
+### Upgrade-start snapshots
 
-Each new preparation queries the current default branch and all open PRs by the configured
-(or authenticated) author in both the app and plugin repositories, including drafts. Closed
-unmerged PRs are omitted; merged changes arrive through the current base. Only explicit
-configured exclusions may omit an open PR. Conflicts fail visibly and preserve the worktree.
-`continue` retains the conflict-resolution snapshot; it does not claim the snapshot is current.
+Every new upgrade starts with `upgrade-check --config FILE --out NEW_DIRECTORY` (or
+`prepare`, then `check` and `manual-check`). It queries the current main branch and every
+open PR by the configured/authenticated author in both repositories, including drafts,
+before composing either repository. Merged PRs arrive through main; closed unmerged PRs
+are omitted. Only explicit configured exclusions may omit an open PR. Local refs are
+resolved to commits at the same preparation stage.
 
-`freshness --config FILE --report BUILD_REPORT` checks the live base, PR numbers/head commits,
-draft status, exclusions and local refs against the prepared report. Run it before stopping a
-live app for a manual handover. Manual checks revalidate before and after isolated startup;
-manual activation also revalidates. Automatic preparation and switching enforce the same
-selection gate. Network failure or changed selections cannot be treated as a current build:
-prepare/check a new candidate, keeping the running instance. Normal launch/recovery of the
-known-good version remains available without a GitHub freshness check.
+The report stores `upgradeSnapshot` with capture time, author and both complete selections.
+Build, conflict continuation, isolated startup and activation use that fixed snapshot.
+New commits during the build belong to the next upgrade, not an endless rebuild loop.
+`continue` resumes the same attempt without querying GitHub again. Every new `prepare`
+queries again and requires a new output directory. Never clone an older report to begin
+another upgrade. Old reports without snapshots must be prepared again for upgrade.
+
+`snapshot --config FILE --report BUILD_REPORT` verifies that the composed PRs, commits,
+local refs and exclusions exactly match this attempt. Manual and automatic activation
+use this offline check plus artifact/commit verification. `freshness` remains an optional
+live comparison for diagnostics, not a switching gate. Existing known-good launch and
+recovery stay available offline. Conflicts/check failures remain visible and never
+silently drop a PR. Capturing a snapshot does not authorize a restart.

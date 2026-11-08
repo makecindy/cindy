@@ -114,6 +114,29 @@ export function verifyFreshSelection(config, report, exec = run) {
   return { checkedAt: new Date().toISOString(), author };
 }
 
+/** Validate the immutable selection captured at upgrade start, without re-querying GitHub. */
+export function verifyUpgradeSnapshot(config, report) {
+  const snapshot = report.upgradeSnapshot;
+  invariant(snapshot?.version === 1 && Number.isFinite(Date.parse(snapshot.capturedAt)), 'Missing upgrade snapshot; prepare a new build');
+  invariant(snapshot.author === report.author && (!config.author || config.author.toLowerCase() === snapshot.author.toLowerCase()), 'Upgrade author changed');
+  const commits = values => values.map(p => [p.number ?? p.ref, p.sha, p.draft === true]).sort((a,b) => String(a[0]).localeCompare(String(b[0])));
+  for (const key of ['app', 'plugins']) {
+    const repo = config[key], frozen = snapshot.repositories[key], built = report[key === 'app' ? 'app' : 'pluginRepository'];
+    if (!repo) { invariant(!frozen && !built, `${key}: repository changed`); continue; }
+    invariant(frozen?.repository === repo.repository && built?.repository === repo.repository,
+      `${key}: snapshot repository mismatch`);
+    invariant(built.base === frozen.base && built.baseSha === frozen.baseSha &&
+      JSON.stringify(commits(built.prs || [])) === JSON.stringify(commits(frozen.selected)) &&
+      JSON.stringify(commits(built.localRefs || [])) === JSON.stringify(commits(frozen.localRefs)) &&
+      JSON.stringify([...(built.excluded || [])].sort()) === JSON.stringify([...frozen.excluded].sort()),
+      `${key}: build differs from upgrade snapshot`);
+    invariant(JSON.stringify([...(repo.localRefs || [])].sort()) === JSON.stringify(frozen.localRefs.map(p => p.ref).sort()) &&
+      JSON.stringify([...(repo.exclude || [])].sort()) === JSON.stringify([...(snapshot.configuration[key].exclude || [])].sort()),
+      `${key}: upgrade configuration changed`);
+  }
+  return { capturedAt: snapshot.capturedAt, author: snapshot.author };
+}
+
 /** Hash exactly the copyable package, rejecting symlinks instead of following them outside its root. */
 export function pluginFiles(dir) {
   const files = [];
@@ -206,13 +229,25 @@ export function prepare(config, out, exec = run, { resume = false } = {}) {
   report.state = 'preparing'; delete report.error; report.directory = path.join(out, 'app');
   write(file, report);
   try {
-    const author = config.author || exec('gh', ['api', 'user', '--jq', '.login'], config.app.checkout);
+    const author = report.upgradeSnapshot?.author || config.author || exec('gh', ['api', 'user', '--jq', '.login'], config.app.checkout);
     report.author = author;
+    // Query BOTH repositories before composing either. Continuation reuses exactly this snapshot.
+    if (!report.upgradeSnapshot) {
+      invariant(!resume, 'Old preparation has no upgrade snapshot; prepare a new build');
+      const repositories = {};
+      for (const key of ['app', 'plugins']) {
+        const repo = config[key]; if (!repo) continue;
+        repositories[key] = { repository: repo.repository, ...discover(repo, author, exec),
+          localRefs: (repo.localRefs || []).map(ref => ({ref, sha:exec('git', ['rev-parse', '--verify', `${ref}^{commit}`], repo.checkout)})) };
+      }
+      report.upgradeSnapshot = {version:1, capturedAt:new Date().toISOString(), author, repositories, configuration:config};
+      write(file, report);
+    }
     for (const key of ['app', 'plugins']) {
       const repo = config[key]; if (!repo) continue;
       const field = key === 'app' ? 'app' : 'pluginRepository';
       if (report[field]?.target) continue;
-      const selection = report[field]?.selected ? report[field] : discover(repo, author, exec);
+      const selection = report.upgradeSnapshot.repositories[key];
       report[field] = { repository: repo.repository, ...selection }; write(file, report);
       report[field] = resumableCompose(repo, selection, path.join(out, key), path.join(out, `${key}-composition.json`), exec);
       write(file, report);
@@ -242,6 +277,7 @@ export function prepare(config, out, exec = run, { resume = false } = {}) {
         { repository: repo.repository, commit: info.target, prs: info.prs, localRefs: info.localRefs });
       if (report.localPlugins.length) report.localPluginsHash = packageHash(path.join(report.directory, 'apps/desktop/resources/personal-plugins'));
     }
+    verifyUpgradeSnapshot(config, report);
     report.state = 'prepared'; write(file, report); return report;
   } catch (error) {
     report.state = 'failed'; report.error = error.message; write(file, report); throw error;
@@ -284,6 +320,16 @@ export async function main(argv) {
   if (['launch', 'stage', 'apply', 'rollback', 'doctor', 'sync-plugins', 'select', 'request', 'export'].includes(command)) {
     const { managedCommand } = await import('./personal-build/managed.mjs');
     return managedCommand(command, options);
+  }
+  if (command === 'upgrade-check') {
+    const c = configFrom(need('config')), out = need('out');
+    prepare(c, out);
+    await main(['check', '--report', path.join(out, 'report.json')]);
+    await main(['manual-check', '--config', need('config'), '--report', path.join(out, 'report.json'), '--out', path.join(out, 'manual-upgrade.json')]);
+    return;
+  }
+  if (command === 'snapshot') {
+    console.log(JSON.stringify(verifyUpgradeSnapshot(configFrom(need('config')), verifyReport(need('report'))))); return;
   }
   if (command === 'freshness') {
     console.log(JSON.stringify(verifyFreshSelection(configFrom(need('config')), verifyReport(need('report'))))); return;
