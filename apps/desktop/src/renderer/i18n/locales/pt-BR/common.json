@@ -11652,7 +11652,8 @@
         "lark": "Lark",
         "wecom": "WeCom",
         "dingtalk": "DingTalk",
-        "discord": "Discord"
+        "discord": "Discord",
+        "imessage": "iMessage"
       },
       "status": {
         "connected": "Conectado",
@@ -11785,6 +11786,22 @@
           "existing": "Usar o bot já configurado em Cindy",
           "manual": "Inserir novas credenciais",
           "moveNote": "O bot sai de Configurações → Bots de mensagens, que ficará vazio. Suas conversas continuam com {{name}}."
+        },
+        "imessage": {
+          "serverUrlLabel": "Servidor BlueBubbles",
+          "serverUrlPlaceholder": "http://192.168.1.20:1234",
+          "passwordLabel": "Senha da API",
+          "passwordPlaceholder": "••••••••",
+          "ownerAddressLabel": "Seu endereço do iMessage",
+          "ownerAddressPlaceholder": "owner@example.com",
+          "chatGuidsLabel": "GUIDs dos chats (separados por vírgulas)",
+          "chatGuidsPlaceholder": "any;-;owner@example.com",
+          "listenHostLabel": "Endereço local de escuta",
+          "listenHostPlaceholder": "192.168.1.10",
+          "listenPortLabel": "Porta local de escuta",
+          "listenPortPlaceholder": "18747",
+          "hint": "Conecte o BlueBubbles na rede local. Apenas os chats selecionados são processados. Pare as outras respostas automáticas desses chats antes de conectar.",
+          "uncertain": "É preciso verificar {{count}} envios. Confira o histórico antes de tentar novamente para evitar duplicatas."
         }
       },
       "removeConfirm": {

@@ -11510,7 +11510,8 @@
         "lark": "Lark",
         "wecom": "企業微信",
         "dingtalk": "釘釘",
-        "discord": "Discord"
+        "discord": "Discord",
+        "imessage": "iMessage"
       },
       "status": {
         "connected": "已連線",
@@ -11641,6 +11642,22 @@
           "existing": "使用已在 Cindy 設定的機器人",
           "manual": "填寫新的憑證",
           "moveNote": "這個機器人會從 設定 → IM 機器人 移過來，那裡將變為空；原本的私訊和群組改由 {{name}} 接著回覆。"
+        },
+        "imessage": {
+          "serverUrlLabel": "BlueBubbles 伺服器",
+          "serverUrlPlaceholder": "http://192.168.1.20:1234",
+          "passwordLabel": "API 密碼",
+          "passwordPlaceholder": "••••••••",
+          "ownerAddressLabel": "你的 iMessage 位址",
+          "ownerAddressPlaceholder": "owner@example.com",
+          "chatGuidsLabel": "對話 GUID（以逗號分隔）",
+          "chatGuidsPlaceholder": "any;-;owner@example.com",
+          "listenHostLabel": "本機監聽位址",
+          "listenHostPlaceholder": "192.168.1.10",
+          "listenPortLabel": "本機監聽連接埠",
+          "listenPortPlaceholder": "18747",
+          "hint": "在區域網路連接 BlueBubbles，只處理所選對話。連接前，請先停止這些對話裡的其他自動回覆程式。",
+          "uncertain": "有 {{count}} 則訊息的處理結果待核對。請先查看對話記錄，再決定是否重試，以免重複回覆。"
         }
       },
       "removeConfirm": {

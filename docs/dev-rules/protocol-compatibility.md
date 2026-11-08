@@ -5209,6 +5209,28 @@ Agent 的 GitHub 工具和脚本入口仍不支持 GitLab，不复用其 GitHub 
 
 MCP 表单的问题可选携带 `answerConstraints`（required、choices、minLength、maxLength）。新端保留 choices 的所有精确枚举值（包括 Other），提交前就地校验并保留草稿，取消使用独立动作；普通模型问题不携带该字段，原自由回答行为不变。旧端忽略新字段，执行端仍校验回传值；不得把旧端未校验的数据作为有效内容接受。无新通道/中转帧，官方与自建 relay 沿现有 interaction 透传。pattern、format 等暂不支持的验证约束在展示前明确报错并取消，不回传不符合 schema 的 accept。
 
+## iMessage 伙伴设置的可选投影（2026-11-07）
+
+伙伴设置 `channels.im.*` 调用参数新增可选 `supportedChannels`，连接列表与移除操作返回的
+`connections` 仅向声明 `imessage` 的新客户端投影该渠道。新宿主向未声明能力的旧客户端省略新增类型，旧客户端原有
+平台不受影响；新客户端调用旧宿主时新增参数被忽略，继续接收旧平台。连接状态新增可选 `health`
+字段，缺失即不显示恢复计数。没有新增 relay 消息类型、服务器端点或自建中转要求，仍走既有
+伙伴设置 RPC。旧参数、新能力声明与远程转发回归见 `botRemoteSettingsHost.test.ts` 与 `remoteBotSettingsTarget.test.ts`。
+
+## iMessage 远程轮次权限来源（2026-11-08）
+
+远程 Agent 的 `started.handle` 新增可选 `imessageSendContext: true`，由实际执行电脑声明支持
+`turnPolicy.origin` 与 `cindy.mainOwned.origin` 的 `imessage` 来源。控制端在每次 `send` / `steer`
+完成连接或重连后核对该声明；缺省、false 或非布尔值均视为不支持，带 iMessage 来源的输入在发送前
+以 `REMOTE_AGENT_PEER_TOO_OLD` 拒绝，不允许旧执行端丢掉权限后继续。Desktop 和其他既有来源照常互通。
+新执行端还会拒绝无法解码的显式权限或身份来源，不再静默省略；未携带这些可选上下文的旧请求不变。
+
+能力随实际执行端的启动描述刷新，不借用控制端或中转电脑的版本；供应商组的中转保持原样转发最终
+执行端的 `started.handle`。既有 device-link `started` 记录保留 handle 的可选字段，官方和自建中转
+只转发既有 invoke/poll envelope，无新增 channel、顶层帧、allowlist 或服务器接口，无需升级中转。
+兼容验证覆盖新控制端与旧执行端的拒绝、旧格式 Desktop 请求、新执行端的 iMessage 双上下文还原，
+以及重连到旧执行端后的再次拒绝；真实自建中转互通继续使用既有加入、签名与重连脚本。
+
 ## 分享供应商备用执行（2026-11-08）
 
 `provider-share-availability-v1` 是设备能力声明。服务端 `/provider-shares/availability/:shareId/:action`

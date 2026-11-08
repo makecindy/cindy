@@ -11510,7 +11510,8 @@
         "lark": "Lark",
         "wecom": "企业微信",
         "dingtalk": "钉钉",
-        "discord": "Discord"
+        "discord": "Discord",
+        "imessage": "iMessage"
       },
       "status": {
         "connected": "已连",
@@ -11641,6 +11642,22 @@
           "existing": "用已于 Cindy 设置之机器人",
           "manual": "填新凭证",
           "moveNote": "此机器人将自 规制 → IM 机器人 移来，彼处将空；原有私讯与群组改由 {{name}} 接续回复。"
+        },
+        "imessage": {
+          "serverUrlLabel": "BlueBubbles 服务端",
+          "serverUrlPlaceholder": "http://192.168.1.20:1234",
+          "passwordLabel": "API 密钥",
+          "passwordPlaceholder": "••••••••",
+          "ownerAddressLabel": "君之 iMessage 地址",
+          "ownerAddressPlaceholder": "owner@example.com",
+          "chatGuidsLabel": "言谈 GUID（逗号相隔）",
+          "chatGuidsPlaceholder": "any;-;owner@example.com",
+          "listenHostLabel": "本机侦听地址",
+          "listenHostPlaceholder": "192.168.1.10",
+          "listenPortLabel": "本机侦听端口",
+          "listenPortPlaceholder": "18747",
+          "hint": "于本地网络接 BlueBubbles，仅理所选言谈。接入前，须先停其余自动应答程序，以免重答。",
+          "uncertain": "{{count}} 条消息尚待核验。先查往来记录，再议重试，勿重答。"
         }
       },
       "removeConfirm": {
