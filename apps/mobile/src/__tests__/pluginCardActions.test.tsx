@@ -22,10 +22,13 @@ vi.mock('lucide-react-native', async () => {
   return Object.fromEntries(['Settings', 'ChevronDown', 'ExternalLink', 'GitPullRequest', 'GitMerge', 'GitPullRequestClosed', 'GitPullRequestDraft', 'Check', 'CircleMinus', 'CircleX', 'Clock'].map((name) => [name, icon(name)]));
 });
 
-const h = vi.hoisted(() => ({ invoke: vi.fn(), pick: vi.fn(), resolve: vi.fn(), inject: vi.fn(), web: {} as any, mode: 'light' }));
+const h = vi.hoisted(() => ({ noticeFrame: { y: 400, height: 24 }, invoke: vi.fn(), pick: vi.fn(), resolve: vi.fn(), inject: vi.fn(), web: {} as any, mode: 'light' }));
 vi.mock("react-native", () => {
-  const View = ({ children }: { children?: ReactNode }) =>
-    createElement("div", {}, children);
+  // The notice's frame comes from h.noticeFrame; every other View ignores its ref.
+  const View = ({ children, ref }: { children?: ReactNode; ref?: { current: unknown } }) =>
+    createElement("div", { ref: (el: HTMLElement | null) => {
+      if (ref) ref.current = el && Object.assign(el, { measureInWindow: (cb: (x: number, y: number, w: number, h: number) => void) => cb(0, h.noticeFrame.y, 300, h.noticeFrame.height) });
+    } }, children);
   return {
     View,
     KeyboardAvoidingView: View,
@@ -53,6 +56,7 @@ vi.mock("react-native", () => {
       visible: boolean;
     }) => (visible ? createElement("div", {}, children) : null),
     Platform: { OS: "ios" },
+    useWindowDimensions: () => ({ width: 400, height: 800 }),
     StyleSheet: { create: (value: unknown) => value },
     AppState: {
       currentState: "active",
@@ -117,6 +121,7 @@ afterEach(() => {
   unmount?.();
   unmount = undefined;
   h.mode = 'light';
+  h.noticeFrame = { y: 400, height: 24 };
   vi.clearAllMocks();
 });
 // Unit: the phone used to show the PR card as a raw URL, identical grey buttons and "开启「…」"
@@ -211,6 +216,34 @@ describe("rich plugin card hints", () => {
     await act(async () => remount.render(createElement(PluginCardActions, { deviceId: 'device', sessionId: 's-archive', callId: 'c', text: '#9 Fix login',
       data: { pluginId: 'cindy-github', revision: '2', items: [], taskArchive: { auto: true } } })));
     expect(container.textContent).toContain('plugins.taskArchive.pending');
+  });
+
+  // Bug (review of #9325): a row passes the list's 5% visibility with a tall neighbour card on screen, so an armed card
+  // below the window was marked "seen" and archived without its notice or Cancel ever being shown.
+  it('marks the task seen only when the notice itself is inside the window', async () => {
+    const { taskAutoArchive } = await import('../plugins/taskAutoArchive');
+    const disable = taskAutoArchive.enable('s-seen');
+    const container = document.createElement('div'), root = createRoot(container);
+    unmount = () => { act(() => root.unmount()); disable(); taskAutoArchive.setArmed('s-seen', 'c', false); };
+    const card = () => act(async () => root.render(createElement(PluginCardActions, {
+      deviceId: 'device', sessionId: 's-seen', callId: 'c', text: '#9 Fix login',
+      data: { pluginId: 'cindy-github', revision: '1', items: [], taskArchive: { auto: true } } })));
+    h.noticeFrame = { y: 1200, height: 24 };
+    await card();
+    expect(container.textContent).toContain('plugins.taskArchive.pending');
+    expect(taskAutoArchive.takeSeen('s-seen')).toBe(false);
+    h.noticeFrame = { y: -60, height: 24 };
+    await card();
+    expect(taskAutoArchive.takeSeen('s-seen')).toBe(false);
+    // Back on screen (a fresh mount measures again): now the notice is really seen.
+    act(() => root.unmount());
+    h.noticeFrame = { y: 300, height: 24 };
+    const again = createRoot(container);
+    unmount = () => { act(() => again.unmount()); disable(); taskAutoArchive.setArmed('s-seen', 'c', false); };
+    await act(async () => again.render(createElement(PluginCardActions, {
+      deviceId: 'device', sessionId: 's-seen', callId: 'c', text: '#9 Fix login',
+      data: { pluginId: 'cindy-github', revision: '1', items: [], taskArchive: { auto: true } } })));
+    expect(taskAutoArchive.takeSeen('s-seen')).toBe(true);
   });
 
   it('draws PR checks, a live state, a primary action, a link by its host and settings as switches', async () => {

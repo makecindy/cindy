@@ -1,5 +1,5 @@
 import { ghostCardSessionLinkId } from '@cindy/maker-shared/ghost-card-form';
-import { useContext, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useContext, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { prStatusItemKeys, type PrStatusKind, type PrStatusResult } from "@cindy/maker-shared";
 import {
   parseGhostCardForm,
@@ -31,7 +31,9 @@ import {
   Pressable,
   StyleSheet,
   Switch,
+  useWindowDimensions,
   View,
+  type ViewInstance,
 } from "react-native";
 import { useIsFocused } from "expo-router";
 import { useTranslation } from "react-i18next";
@@ -317,10 +319,22 @@ function CardControls({
     () => taskAutoArchive.getState(sessionId),
   );
   // "Seen": this armed card was on screen in the focused task page with the app in front, not merely mounted.
+  // The message row is only the first gate (a row can hold several cards and passes at 5%): the notice itself must be
+  // inside the window. A frame that cannot be measured does not count, and neither does one that scrolled into view later
+  // inside a tall row (no event reports it); both only mean no auto-archive, never an archive nobody saw.
   const viewable = useContext(MessageListItemViewableContext) ?? true;
-  useEffect(() => {
-    if (autoArchive && autoArchiveState === "pending" && viewable && focused && foreground) taskAutoArchive.markSeen(sessionId);
-  }, [autoArchive, autoArchiveState, viewable, focused, foreground, sessionId]);
+  const { height: windowHeight } = useWindowDimensions();
+  const noticeRef = useRef<ViewInstance>(null);
+  const seenGate = useRef({ pending: false, viewable, focused, foreground });
+  seenGate.current = { pending: autoArchive && autoArchiveState === "pending", viewable, focused, foreground };
+  const checkNoticeSeen = useCallback(() => {
+    const gate = seenGate.current;
+    if (!gate.pending || !gate.viewable || !gate.focused || !gate.foreground) return;
+    noticeRef.current?.measureInWindow((_x, y, _width, height) => {
+      if (Number.isFinite(y) && height > 0 && y + height > 0 && y < windowHeight) taskAutoArchive.markSeen(sessionId);
+    });
+  }, [sessionId, windowHeight]);
+  useEffect(checkNoticeSeen, [checkNoticeSeen, autoArchive, autoArchiveState, viewable, focused, foreground]);
   const archiveHint = autoArchive && autoArchiveState !== "inactive" ? autoArchiveState : undefined;
   const [prompt, setPrompt] = useState<Action>();
   const [draft, setDraft] = useState("");
@@ -818,7 +832,7 @@ function CardControls({
           </Pressable> : null}
         </View> : null}
         </View> : null}
-        {archiveHint ? <View style={styles.archiveHint} accessibilityLiveRegion="polite">
+        {archiveHint ? <View ref={noticeRef} onLayout={checkNoticeSeen} style={styles.archiveHint} accessibilityLiveRegion="polite">
           <Text style={styles.note}>{t(archiveHint === "pending" ? "plugins.taskArchive.pending" : "plugins.taskArchive.cancelled")}</Text>
           {archiveHint === "pending" ? <Pressable accessibilityRole="button" accessibilityLabel={t("plugins.taskArchive.cancel")}
             hitSlop={{ top: spacing.xs, bottom: spacing.xs }}
