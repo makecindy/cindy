@@ -393,7 +393,12 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
       if (!guid) {
         if (this.retryAt.size) {
           let delay = Infinity;
-          for (const dueAt of this.retryAt.values()) delay = Math.min(delay, Math.max(1, dueAt - this.now()));
+          for (const [id, dueAt] of this.retryAt) {
+            // In-flight retries wake the scanner on completion; their expired
+            // deadline must not install a new 1 ms timer throughout slow I/O.
+            if (this.lookups.has(id) || this.preparations.has(id) || this.activeDispatches.has(id)) continue;
+            delay = Math.min(delay, Math.max(1, dueAt - this.now()));
+          }
           if (Number.isFinite(delay)) this.retryDeferred(generation, delay);
           throw new BlueBubblesReceiveError();
         }

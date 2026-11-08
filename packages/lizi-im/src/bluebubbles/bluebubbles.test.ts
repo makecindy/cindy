@@ -58,6 +58,54 @@ async function fixture(initialState: BlueBubblesState | null = null, media?: IMH
 }
 
 describe('BlueBubbles local ingress', () => {
+  // Tier 1, #9250/r4506424107: a still-pending retry is active, not terminal.
+  // Its expired deadline must not flood host status broadcasts during slow I/O.
+  it.each(['lookup', 'download'])('does not repeatedly wake an in-flight %s retry at its expired deadline', async phase => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    let release!: () => void;
+    const held = new Promise<void>(resolve => { release = resolve; });
+    let entered!: () => void;
+    const retryStarted = new Promise<void>(resolve => { entered = resolve; });
+    let f: Awaited<ReturnType<typeof fixture>> | undefined;
+    try {
+      f = await fixture(null, undefined, false, { stage: async () => ({ absPath: '/synthetic/retry.txt', discard: async () => {} }) });
+      const original = vi.mocked(f.api.message).getMockImplementation()!;
+      let attempts = 0;
+      const retry = async () => {
+        if (++attempts === 1) throw new Error('temporary 503');
+        entered(); await held;
+      };
+      vi.mocked(f.api.message).mockImplementation(async guid => {
+        if (phase === 'lookup') await retry();
+        return original(guid);
+      });
+      vi.spyOn(f.api, 'download').mockImplementation(async () => {
+        if (phase === 'download') await retry();
+        return new Uint8Array([1]);
+      });
+      f.message('active-retry', { attachments: phase === 'download' ? [{ guid: 'retry-file', transferName: 'retry.txt' }] : [] });
+      await expect(f.im.reconcile()).rejects.toThrow('BLUEBUBBLES_RECEIVE_FAILED');
+      const statuses = vi.fn(); f.im.onStatusChange(statuses);
+      f.advance(30_000);
+      await vi.advanceTimersByTimeAsync(30_000);
+      await retryStarted;
+      const before = statuses.mock.calls.length;
+      await vi.advanceTimersByTimeAsync(25);
+      expect(statuses).toHaveBeenCalledTimes(before);
+      expect(attempts).toBe(2);
+      expect(f.state().inbox['active-retry'].state).toBe('pending');
+      release();
+      // Completion itself must wake ingress, without another webhook/reconcile.
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect(f.state().inbox['active-retry'].state).toBe('accepted');
+      expect(f.im.getStatus().kind).toBe('connected');
+    } finally {
+      release();
+      await f?.im.dispose();
+      vi.useRealTimers();
+    }
+  });
+
   // Tier 1, #9250/r4506349655: hold identity lookup rather than attachment I/O.
   // Controls must proceed, while ordinary work cannot overtake an unknown input.
   it('answers and stops another chat while an older identity lookup remains unresolved', async () => {
