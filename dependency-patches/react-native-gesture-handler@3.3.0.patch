@@ -1,8 +1,9 @@
 diff --git a/android/src/main/java/com/swmansion/gesturehandler/core/NativeViewGestureHandler.kt b/android/src/main/java/com/swmansion/gesturehandler/core/NativeViewGestureHandler.kt
+index 85e8a61..fe20c72 100644
 --- a/android/src/main/java/com/swmansion/gesturehandler/core/NativeViewGestureHandler.kt
 +++ b/android/src/main/java/com/swmansion/gesturehandler/core/NativeViewGestureHandler.kt
-@@ -125,12 +125,15 @@
-     } else if (state == STATE_UNDETERMINED || state == STATE_BEGAN) {
+@@ -184,12 +184,15 @@ class NativeViewGestureHandler : GestureHandler() {
+ 
        when {
          shouldActivateOnStart -> {
 -          tryIntercept(view, event)
@@ -18,13 +19,12 @@ diff --git a/android/src/main/java/com/swmansion/gesturehandler/core/NativeViewG
            hook.sendTouchEvent(view, event)
            activate()
          }
-@@ -335,7 +338,27 @@
+@@ -541,6 +544,26 @@ class NativeViewGestureHandler : GestureHandler() {
    }
  
    private class ScrollViewHook : NativeViewGestureHandlerHook {
 +    private var hasInterceptedTouchStream = false
 +
-     override fun shouldCancelRootViewGestureHandlerIfNecessary() = true
 +
 +    fun onIntercept() {
 +      hasInterceptedTouchStream = true
@@ -43,6 +43,6 @@ diff --git a/android/src/main/java/com/swmansion/gesturehandler/core/NativeViewG
 +      }
 +      return handled
 +    }
-   }
+     override fun shouldCancelRootViewGestureHandlerIfNecessary() = true
  
-   private class ReactViewGroupHook : NativeViewGestureHandlerHook {
+     // ScrollView starts a nested scroll on DOWN but never stops it itself. Without this the

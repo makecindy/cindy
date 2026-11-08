@@ -21,6 +21,8 @@ if (!crypto.randomUUID) {
 interface GroupData {
   processRecord?: boolean;
   processVariant?: 'empty' | 'late';
+  processEmpty?: boolean;
+  processUnavailable?: boolean;
   processOtherOwner?: boolean;
   /** Controlled receipts for the real renderer send/settle layout regression. */
   sendStatus?: boolean;
@@ -456,9 +458,9 @@ void mountPage({
         onStatusChanged: subscription('deviceLinkStatus'),
         onPresenceChanged: subscription('deviceLinkPresence'),
         onResponsivenessChanged: subscription('deviceLinkResponsiveness'),
-        invoke: async (_device: string, _channel: string, args: Array<{ ref?: { collectionId?: string } }>) => _channel === 'local-db:messages:around-client-id' ? (data.processVariant ? [
+        invoke: async (_device: string, _channel: string, args: Array<{ ref?: { collectionId?: string } }>) => _channel === 'local-db:messages:around-client-id' ? data.processUnavailable ? Promise.reject(new Error('Process unavailable')) : (data.processEmpty || data.processVariant ? [
           { clientId: 'fixture-source', role: 'user', content: 'Request' },
-          { clientId: 'fixture-end', role: 'assistant', content: 'Result', agentMeta: { turnCompleted: true } },
+          { clientId: 'fixture-end', role: 'assistant', content: 'Result', agentMeta: { assistantPhase: 'final_answer', turnCompleted: true } },
           ...(data.processVariant === 'late' ? [{ clientId: 'fixture-late', role: 'thinking', content: 'Hidden reasoning' }] : []),
         ] : [
           { clientId: 'fixture-source', role: 'user', content: 'Request' },

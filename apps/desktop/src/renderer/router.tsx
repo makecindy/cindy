@@ -1,3 +1,4 @@
+import { SettingsView } from '@/components/settings/SettingsView';
 import { RemoteBotSessionView } from '@/features/bots/RemoteBotSessionView';
 import { createHashRouter, Navigate } from 'react-router-dom';
 
@@ -5,7 +6,6 @@ import { MainLayout } from '@/components/layout/MainLayout';
 import { MainEntryRedirect } from '@/components/layout/MainEntryRedirect';
 import { RouteErrorFallback } from '@/components/error/RouteErrorFallback';
 import { SidebarWindowLayout } from '@/components/layout/SidebarWindowLayout';
-import { SettingsView } from '@/components/settings/SettingsView';
 import { LoginPage } from '@/components/login/LoginPage';
 import { AddAccountLoginPage } from '@/components/login/AddAccountLoginPage';
 import { ProtectedRoute } from '@/components/auth/ProtectedRoute';

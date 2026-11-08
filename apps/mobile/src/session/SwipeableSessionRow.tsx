@@ -46,7 +46,7 @@ const FULL_SWIPE_RATIO = 0.55;
 /** 「归档」按钮越过全滑阈值时扩展盖满右侧面板的过渡时长。 */
 const ARM_ANIMATION_MS = 150;
 const ICON_SIZE = iconSize.swipeAction;
-type SwipeTranslation = Animated.AnimatedInterpolation<number>;
+type SwipeTranslation = Parameters<NonNullable<React.ComponentProps<typeof Swipeable>["renderLeftActions"]>>[1];
 type ReadableSwipeTranslation = SwipeTranslation & { __getValue?(): unknown };
 type ClassicSwipeDirection = 'left' | 'right';
 

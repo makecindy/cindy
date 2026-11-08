@@ -1,5 +1,5 @@
 diff --git a/ios/RNSBarButtonItem.h b/ios/RNSBarButtonItem.h
-index a26d1254eafd89268f65d968988cf6a3b8c1e457..ddf5b9daa192ca0f13e7cea8ecd15d268c1b3c4c 100644
+index a26d125..ddf5b9d 100644
 --- a/ios/RNSBarButtonItem.h
 +++ b/ios/RNSBarButtonItem.h
 @@ -15,6 +15,14 @@ typedef void (^RNSBarButtonMenuItemAction)(NSString *menuId);
@@ -18,7 +18,7 @@ index a26d1254eafd89268f65d968988cf6a3b8c1e457..ddf5b9daa192ca0f13e7cea8ecd15d26
  
  @end
 diff --git a/ios/RNSBarButtonItem.mm b/ios/RNSBarButtonItem.mm
-index 0eb1f09dee82edd99e3e614938233db5cdeaebfe..2d015f69554ef6088945893837a54f2b2708d737 100644
+index c435fdd..bc4ed79 100644
 --- a/ios/RNSBarButtonItem.mm
 +++ b/ios/RNSBarButtonItem.mm
 @@ -6,9 +6,63 @@
@@ -85,7 +85,7 @@ index 0eb1f09dee82edd99e3e614938233db5cdeaebfe..2d015f69554ef6088945893837a54f2b
  }
  
  - (instancetype)initWithConfig:(NSDictionary<NSString *, id> *)dict
-@@ -116,10 +170,13 @@ - (instancetype)initWithConfig:(NSDictionary<NSString *, id> *)dict
+@@ -131,10 +185,13 @@ - (instancetype)initWithConfig:(NSDictionary<NSString *, id> *)dict
      NSDictionary *menu = dict[@"menu"];
      if (menu) {
        self.menu = [[self class] initUIMenuWithDict:menu menuAction:menuAction imageLoader:imageLoader];
@@ -99,7 +99,7 @@ index 0eb1f09dee82edd99e3e614938233db5cdeaebfe..2d015f69554ef6088945893837a54f2b
    NSString *buttonId = dict[@"buttonId"];
    if (buttonId && action) {
      self.target = self;
-@@ -130,6 +187,180 @@ - (instancetype)initWithConfig:(NSDictionary<NSString *, id> *)dict
+@@ -145,6 +202,180 @@ - (instancetype)initWithConfig:(NSDictionary<NSString *, id> *)dict
    return self;
  }
  
@@ -280,32 +280,7 @@ index 0eb1f09dee82edd99e3e614938233db5cdeaebfe..2d015f69554ef6088945893837a54f2b
  + (void)resolveImageFromConfig:(NSDictionary *)dict
                     imageLoader:(RCTImageLoader *)imageLoader
                 completionBlock:(void (^)(UIImage *_Nullable))completionBlock
-@@ -188,11 +419,19 @@ + (UIMenu *)initUIMenuWithDict:(NSDictionary<NSString *, id> *)dict
-                  image = img;
-                }];
- 
--  return [UIMenu menuWithTitle:dict[@"title"]
--                         image:image
--                    identifier:nil
--                       options:RNSMakeUIMenuOptionsFromConfig(dict)
--                      children:elements];
-+  UIMenu *menu = [UIMenu menuWithTitle:dict[@"title"]
-+                                 image:image
-+                            identifier:nil
-+                               options:RNSMakeUIMenuOptionsFromConfig(dict)
-+                              children:elements];
-+  // Cindy patch: submenus show their current value under the title (UIMenuElement.subtitle).
-+  NSString *subtitle = dict[@"subtitle"];
-+  if (subtitle != nil) {
-+    if (@available(iOS 15.0, *)) {
-+      menu.subtitle = subtitle;
-+    }
-+  }
-+  return menu;
- }
- 
- + (UIAction *)createActionItemFromConfig:(NSDictionary *)dict
-@@ -200,11 +439,21 @@ + (UIAction *)createActionItemFromConfig:(NSDictionary *)dict
+@@ -222,11 +453,21 @@ + (UIAction *)createActionItemFromConfig:(NSDictionary *)dict
                               imageLoader:(RCTImageLoader *)imageLoader
  {
    NSString *menuId = dict[@"menuId"];
@@ -329,10 +304,10 @@ index 0eb1f09dee82edd99e3e614938233db5cdeaebfe..2d015f69554ef6088945893837a54f2b
                                                }];
  
 diff --git a/ios/RNSScreenStackHeaderConfig.mm b/ios/RNSScreenStackHeaderConfig.mm
-index 1c844846a5c66e31cfa530ca462774d2fb6bbea1..0607a759241ee9823cca347e382b146ef73bb5cd 100644
+index 12f2272..811b3d8 100644
 --- a/ios/RNSScreenStackHeaderConfig.mm
 +++ b/ios/RNSScreenStackHeaderConfig.mm
-@@ -559,8 +559,13 @@ + (void)updateViewController:(UIViewController *)vc
+@@ -676,8 +676,13 @@ + (void)updateViewController:(UIViewController *)vc
    navitem.leftItemsSupplementBackButton = config.backButtonInCustomView;
  #endif
    navitem.titleView = nil;
@@ -348,7 +323,7 @@ index 1c844846a5c66e31cfa530ca462774d2fb6bbea1..0607a759241ee9823cca347e382b146e
  
  #if !TARGET_OS_TV
    // We want to set navitem.searchController to nil only if we are sure
-@@ -573,17 +578,11 @@ + (void)updateViewController:(UIViewController *)vc
+@@ -690,17 +695,11 @@ + (void)updateViewController:(UIViewController *)vc
      // `- [RNSScreenStackHeaderConfig replaceNavigationBarViewsWithSnapshotOfSubview:]` method.
      switch (subview.type) {
        case RNSScreenStackHeaderSubviewTypeLeft: {
@@ -368,7 +343,7 @@ index 1c844846a5c66e31cfa530ca462774d2fb6bbea1..0607a759241ee9823cca347e382b146e
          break;
        }
        case RNSScreenStackHeaderSubviewTypeCenter:
-@@ -648,10 +647,18 @@ + (void)updateViewController:(UIViewController *)vc
+@@ -765,10 +764,18 @@ + (void)updateViewController:(UIViewController *)vc
    // This assignment should be done after `navitem.titleView = ...` assignment (iOS 16.0 bug).
    // See: https://github.com/software-mansion/react-native-screens/issues/1570 (comments)
    navitem.title = config.title;
@@ -391,7 +366,7 @@ index 1c844846a5c66e31cfa530ca462774d2fb6bbea1..0607a759241ee9823cca347e382b146e
  
    // Setting navigation bar visibility is split to mitigate iOS 26 bug with bar button items
    // (setting nav bar visibility should be done after `navitem.*BarButtonItems`).
-@@ -784,6 +791,7 @@ - (void)applySemanticContentAttributeIfNeededToNavCtrl:(UINavigationController *
+@@ -901,6 +908,7 @@ - (void)applySemanticContentAttributeIfNeededToNavCtrl:(UINavigationController *
  
  - (NSArray<UIBarButtonItem *> *)barButtonItemsFromConfigs:(NSArray<NSDictionary<NSString *, id> *> *)dicts
                                           withCurrentItems:(NSArray<UIBarButtonItem *> *)currentItems
@@ -399,7 +374,7 @@ index 1c844846a5c66e31cfa530ca462774d2fb6bbea1..0607a759241ee9823cca347e382b146e
  {
    if (dicts.count == 0) {
      return currentItems;
-@@ -793,7 +801,27 @@ - (void)applySemanticContentAttributeIfNeededToNavCtrl:(UINavigationController *
+@@ -910,7 +918,27 @@ - (void)applySemanticContentAttributeIfNeededToNavCtrl:(UINavigationController *
    for (NSUInteger i = 0; i < dicts.count; i++) {
      NSDictionary *dict = dicts[i];
      if (dict[@"buttonId"] || dict[@"menu"]) {
@@ -428,7 +403,7 @@ index 1c844846a5c66e31cfa530ca462774d2fb6bbea1..0607a759241ee9823cca347e382b146e
            action:^(NSString *buttonId) {
              auto eventEmitter = std::static_pointer_cast<const facebook::react::RNSScreenStackHeaderConfigEventEmitter>(
                  self->_eventEmitter);
-@@ -803,15 +831,7 @@ - (void)applySemanticContentAttributeIfNeededToNavCtrl:(UINavigationController *
+@@ -920,15 +948,7 @@ - (void)applySemanticContentAttributeIfNeededToNavCtrl:(UINavigationController *
                        .buttonId = std::string([buttonId UTF8String])});
              }
            }
@@ -448,7 +423,7 @@ index 1c844846a5c66e31cfa530ca462774d2fb6bbea1..0607a759241ee9823cca347e382b146e
 diff --git a/ios/RNSScreenStack.mm b/ios/RNSScreenStack.mm
 --- a/ios/RNSScreenStack.mm
 +++ b/ios/RNSScreenStack.mm
-@@ -170,6 +170,7 @@
+@@ -256,6 +256,7 @@ @implementation RNSPanGestureRecognizer
  @implementation RNSScreenStackView {
    UINavigationController *_controller;
    NSMutableArray<RNSScreenView *> *_reactSubviews;
@@ -456,31 +431,31 @@ diff --git a/ios/RNSScreenStack.mm b/ios/RNSScreenStack.mm
    BOOL _invalidated;
    BOOL _isFullWidthSwipingWithPanGesture; // used only for content swipe with RNSPanGestureRecognizer
    RNSPercentDrivenInteractiveTransition *_interactionController;
-@@ -1313,7 +1314,13 @@
+@@ -1401,7 +1402,13 @@ - (nullable RNSScreenView *)childScreenForTag:(react::Tag)tag
  - (void)unmountChildComponentView:(UIView<RCTComponentViewProtocol> *)childComponentView index:(NSInteger)index
  {
    RNSScreenView *screenChildComponent = (RNSScreenView *)childComponentView;
--  [screenChildComponent.controller setViewToSnapshot];
+-  [screenChildComponent.controller addSnapshotToView];
 +  // Cindy: Fabric expresses a reorder as Remove + Insert of the same screen.
 +  // Keep its live UIKit view in place; snapshots belong only to departing screens.
 +  BOOL moving = [_screensMovedInCurrentTransaction containsObject:@(screenChildComponent.tag)] &&
 +      !screenChildComponent.isMarkedForUnmountInCurrentTransaction;
 +  if (!moving) {
-+    [screenChildComponent.controller setViewToSnapshot];
++    [screenChildComponent.controller addSnapshotToView];
 +  }
-
+ 
    RCTAssert(screenChildComponent.reactSuperview == self,
              @"Attempt to unmount a view which is mounted inside different view. (parent: %@, child: %@, index: %@)",
-@@ -1330,13 +1337,22 @@
-       @([[_reactSubviews objectAtIndex:index] tag]));
+@@ -1419,7 +1426,7 @@ - (void)unmountChildComponentView:(UIView<RCTComponentViewProtocol> *)childCompo
    screenChildComponent.reactSuperview = nil;
    [_reactSubviews removeObject:screenChildComponent];
--  [screenChildComponent removeFromSuperview];
-+  if (!moving) {
-+    [screenChildComponent removeFromSuperview];
-+  }
+ 
+-  if (screenChildComponent.window == nil) {
++  if (!moving && screenChildComponent.window == nil) {
+     [screenChildComponent removeFromSuperview];
+   }
  }
-
+@@ -1427,7 +1434,14 @@ - (void)unmountChildComponentView:(UIView<RCTComponentViewProtocol> *)childCompo
  - (void)mountingTransactionWillMount:(const facebook::react::MountingTransaction &)transaction
                  withSurfaceTelemetry:(const facebook::react::SurfaceTelemetry &)surfaceTelemetry
  {

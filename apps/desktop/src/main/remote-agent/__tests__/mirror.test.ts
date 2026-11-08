@@ -49,6 +49,20 @@ function write(file: string, content: string): void {
   fs.writeFileSync(file, content);
 }
 
+it('propagates strict standby cleanup failure without an owner usage-ledger entry', async () => {
+  const controller = providerShareGuestPeer('s', 'm', 'G');
+  const purgeControllers = vi.fn(async (match: (peer: string) => boolean, strict?: boolean) => {
+    expect(match(controller)).toBe(true);
+    expect(strict).toBe(true);
+    throw new Error('standby history busy');
+  });
+  const purge = createProviderShareMemberPurger({ userDataDir: root,
+    usage: createProviderShareUsageStore(path.join(root, 'usage.json')),
+    current: { purgeControllers, activeControllers: () => [] }, ownerScope: () => 'owner',
+    ownerDeviceId: () => 'M', isCurrent: () => true, hasAccess: () => false });
+  await expect(purge(peer => peer === controller, true)).rejects.toThrow('standby history busy');
+});
+
 // Unit tier: real membership ledger, host cleanup adapter and disk index. Controlled
 // legacy purge models its documented best-effort failure, which previously let a
 // reapproved member revive old native IDs / pending relay tombstones after restart.

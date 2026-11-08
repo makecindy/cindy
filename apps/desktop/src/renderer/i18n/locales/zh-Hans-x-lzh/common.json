@@ -5557,12 +5557,17 @@
         "userBrowserSetup": {
           "installPluginTitle": "纳 Cindy Chrome 法器",
           "enablePluginTitle": "启 Cindy Chrome 法器",
-          "installExtensionTitle": "将 Cindy 扩充装入浏览器",
+          "connectExtensionTitle": "浏览器扩充尚未连",
           "pluginBody": "「我之浏览器」藉 Cindy Chrome 法器及其浏览器扩充，连君之 Chrome / Edge。先于 Cindy 中纳法器，再依提示将扩充装入浏览器。",
-          "extensionBody": "点「纳浏览器扩充」，将于君之浏览器开 Cindy 扩充之商店页，点「添加」后此处自转为已连。早已装过？请于浏览器之扩充功能管理中启之。",
+          "connectionBody": "请保持 Cindy 与浏览器运行，并查 Cindy 扩充是否已启。未连非须重装；复连后，此处自更。",
           "installPlugin": "纳法器",
           "enablePlugin": "往启",
-          "installExtension": "纳浏览器扩充",
+          "openExtensionStore": "开扩充商店",
+          "updatingTitle": "正更新浏览器连接",
+          "updatingBody": "更新既毕，连接自复。",
+          "selectPluginTitle": "择浏览器扩展",
+          "selectPluginBody": "请启法器详情，择「使用此浏览器扩展」，以定 Cindy 所用。",
+          "selectPlugin": "启法器",
           "updatePluginTitle": "更新 Cindy Chrome 法器",
           "updatePluginBody": "所纳 Cindy Chrome 法器版本较旧，尚不支持「我之浏览器」。更新至最新版后，再依提示将扩充装入浏览器。",
           "updatePlugin": "往更新",
@@ -9903,6 +9908,8 @@
     "banner": {
       "title": "已更至 {{version}}",
       "subtitle": "重启以焕新",
+      "nativeBuildTitle": "Apple 芯片版已备",
+      "nativeBuildSubtitle": "重启即换，诸务与设置皆存",
       "viewNotes": "览更新之告",
       "viewNotesAria": "览 {{version}} 之更新公告",
       "button": "即重启",
@@ -10032,6 +10039,12 @@
       "description": "数据库约占 {{size}}，已逾 {{threshold}} G。宜往保存空间清理之。",
       "openSettings": "启保存空间",
       "disable": "勿再提醒"
+    },
+    "nativeBuild": {
+      "title": "今用 Intel 版 Cindy",
+      "description": "此 Mac 用 Apple 芯片，Intel 版须转译而行，迟缓甚矣。改装 Apple 芯片版即可，资料皆存。",
+      "dismiss": "此番勿再提",
+      "download": "取之"
     },
     "horizontalTabbarAria": "主区视图切换",
     "tabs": {
@@ -12891,6 +12904,8 @@
   },
   "chat": {
     "teammateProcess": {
+      "empty": "此番无可示之处理记录",
+      "unavailable": "未能读取处理记录",
       "record": "理事录",
       "operations": "行事录",
       "elapsed": "已理 {{duration}}",
@@ -14045,8 +14060,10 @@
       "mailLegacy": "旧稿（唯读）",
       "taskAutoArchived": "「{{title}}」已封存",
       "taskAutoArchivedUndo": "撤",
-      "taskAutoArchivePending": "去则自封存",
-      "taskAutoArchiveCancel": "此番不封"
+      "taskAutoArchivePending": "离此任务后自封存",
+      "taskAutoArchiveCancel": "取消",
+      "taskAutoArchiveCancelled": "此番不自封存",
+      "taskArchiveNow": "即封存"
     },
     "ghostHook": {
       "blockedFallback": "讯为法器所拦，未遣",
@@ -19364,6 +19381,7 @@
       "apply": "迁移"
     },
     "source": {
+      "receivingOn": "受端：{{name}}",
       "description": "选一台登录了同一帐号的电脑。它的法器、技艺、设置和连接会照原样装到这台电脑；密钥只在你在那台电脑上点「允许」后拷贝，登录状态不会离开那台电脑。",
       "loading": "方寻其余之机…",
       "empty": "没有找到这个账号的其他电脑。在另一台电脑上登录 Cindy 后再打开这里",
@@ -19670,5 +19688,14 @@
     "directory": "账号目录",
     "loginAgain": "重登",
     "login": "登录"
+  },
+  "crashDiagnosis": {
+    "title": "Cindy 前次异常而止",
+    "description": "欲究其因乎？将取退出之记与已隐敏文之日志，备为差事草稿，阅定乃发。强止或断电，亦可致此。",
+    "diagnose": "诊断其因",
+    "later": "暂置",
+    "logExcerpt": "相关日志（节录，或有未全）",
+    "logsUnavailable": "未得相关日志，其因未明。",
+    "failed": "诊断资料未备，请重试。"
   }
 }

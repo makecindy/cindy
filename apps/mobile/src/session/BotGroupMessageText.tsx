@@ -1,3 +1,4 @@
+import type { ViewInstance } from 'react-native';
 /**
  * 群正文按需启用富文本和 HTTP(S) 链接；其它回看入口保持轻量，本人消息保留原文。
  */
@@ -34,7 +35,7 @@ type BodyOptions = {
 /** Observe touches without claiming the responder or changing the native text tree. */
 function useMentionTouchContext(context?: BotGroupMentionContext) {
   const touch = useRef<BotGroupMentionPoint | undefined>(undefined);
-  const body = useRef<View>(null);
+  const body = useRef<ViewInstance>(null);
   return {
     ref: body,
     onTouchStart: (event: GestureResponderEvent) => {

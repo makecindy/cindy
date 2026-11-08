@@ -61,6 +61,7 @@ vi.mock('@/session/MessageRenderer', async () => {
   };
 });
 import { SESSION_SYNC_CHANNEL, type Topic } from '@cindy/device-link';
+import { i18n } from '@/i18n';
 import { SubscriptionAcknowledgements } from '@/device-link/subscriptionAcknowledgements';
 import { remoteSessionStore } from '@/session/remoteSessionStore';
 import { BotGroupProcess, BotGroupProcessEntries } from '@/session/BotGroupProcess';
@@ -103,14 +104,20 @@ const meta = { botPrivateReply: true, botGroupLane: true };
 const source = { clientId: 'source', role: 'user', content: 'Request' };
 const final = { clientId: 'final', role: 'assistant', content: 'Final answer', agentMeta: { ...meta, turnCompleted: true } };
 
-it('does not offer an empty group disclosure before or after its deferred read completes', async () => {
+// Unit: main now explains final-only records; settle all bounded windows and
+// preserve #8979's no-disclosure-before-read guarantee.
+it('waits for the complete group read before explaining final-only history', async () => {
   let finish!: (rows: unknown[]) => void;
-  history.invoke.mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+  const pending = new Promise<unknown[]>(resolve => { finish = resolve; });
+  history.invoke.mockReturnValue(pending);
   await act(async () => root.render(group()));
   expect(header()).toBeNull();
   expect(history.invoke).toHaveBeenCalledTimes(1);
   await act(async () => finish([source, final]));
-  expect(header()).toBeNull();
+  expect(header()).not.toBeNull();
+  await act(async () => header().click());
+  expect(node.textContent).toContain(i18n.t('chat.teammateProcess.empty'));
+  expect(node.textContent).not.toContain('Final answer');
 });
 
 it('keeps group notes and tool details available through collapse and historical remount', async () => {

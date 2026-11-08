@@ -5190,12 +5190,13 @@ it('reads historical group process from the execution computer after a home chan
   expect(mocks.remoteInvoke.mock.calls.every(([device]) => device === 'original-mac')).toBe(true);
 });
 
-// 2026-11-05: a successful history read with only a final answer left an empty
-// clickable process. Use the real group disclosure, not a mocked shell (unit).
-it('never advertises a completed process before finding work, including final-only history', async () => {
+// Unit: reconcile main's explicit empty-record explanation with #8979's
+// availability prefetch; settle every bounded window before asserting the result.
+it('waits for readable completed process before explaining final-only history', async () => {
   const process = { groupId: 'g1', executionId: 'empty-process', sessionId: 'lane', clientId: 'source', deviceId: 'original-mac' };
   let finish!: (rows: unknown[]) => void;
-  mocks.remoteInvoke.mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+  const pending = new Promise<unknown[]>(resolve => { finish = resolve; });
+  mocks.remoteInvoke.mockReturnValue(pending);
   const rows = [{ clientId: 'source', role: 'user', content: 'Request' },
     { clientId: 'final', role: 'assistant', content: 'Only the answer', agentMeta: { turnCompleted: true, botPrivateReply: true, botGroupLane: true } }];
   const view = render(<Tooltip.Provider><BotGroupProcess process={process}
@@ -5203,7 +5204,10 @@ it('never advertises a completed process before finding work, including final-on
   expect(view.container.querySelector('[data-teammate-process]')).toBeNull();
   expect(mocks.remoteInvoke).toHaveBeenCalled();
   await act(async () => finish(rows));
-  await waitFor(() => expect(view.container.querySelector('[data-teammate-process]')).toBeNull());
+  await waitFor(() => expect(view.container.querySelector('[data-teammate-process]')).not.toBeNull());
+  fireEvent.click(view.container.querySelector('[data-teammate-process] > button')!);
+  await screen.findByText('chat.teammateProcess.empty');
+  expect(screen.queryByText('chat.teammateProcess.unavailable')).toBeNull();
   expect(view.container.textContent).not.toContain('Only the answer');
 });
 
@@ -5547,4 +5551,25 @@ it.each(['before-read', 'after-read'])('keeps a failed initial history subscript
     expect(view.queryByRole('button', { name: 'chat.errorBanner.retry' })).toBeNull();
     expect(view.container.textContent).toContain('Snapshot remains readable');
   } finally { view.unmount(); releaseRead(); vi.useRealTimers(); }
+});
+
+// Unit regression: the reported weather reply has a valid anchor and only a
+// final answer. Existing historical coverage only exercised nonempty notes.
+// Verify the real disclosure distinguishes empty content from a failed read.
+it('explains a final-only group process and retries an unavailable record', async () => {
+  const process = { groupId: 'g1', executionId: 'empty-record', sessionId: 'lane', clientId: 'source', deviceId: 'original-mac', durationMs: 250137 };
+  const rows = [{ clientId: 'source', role: 'user', content: 'Weather request' },
+    { clientId: 'seal', role: 'assistant', content: 'Which city?', agentMeta: { assistantPhase: 'final_answer', turnCompleted: true } }];
+  mocks.remoteInvoke.mockRejectedValueOnce(new Error('Record unavailable')).mockResolvedValue(rows);
+  const view = render(<Tooltip.Provider><BotGroupProcess process={process}
+    member={{ ...detail().members[0]!, isOwned: true }} /></Tooltip.Provider>);
+  await waitFor(() => expect(view.container.querySelector('[data-teammate-process] button')).not.toBeNull());
+  fireEvent.click(view.container.querySelector('[data-teammate-process] button')!);
+  await screen.findByText('chat.teammateProcess.unavailable');
+  expect(screen.queryByText('chat.teammateProcess.empty')).toBeNull();
+  fireEvent.click(screen.getByText('chat.errorBanner.retry'));
+  await screen.findByText('chat.teammateProcess.empty');
+  expect(screen.queryByText('chat.teammateProcess.unavailable')).toBeNull();
+  expect(screen.queryByText('chat.errorBanner.retry')).toBeNull();
+  expect(screen.queryByText('Which city?')).toBeNull();
 });

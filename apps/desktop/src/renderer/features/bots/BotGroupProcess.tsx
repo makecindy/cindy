@@ -124,12 +124,17 @@ function BotGroupProcessHistory({ process, deviceId }: { process: BotGroupProces
   const projection = projectBotGroupProcess(result?.messages ?? [], false);
   const failed = result?.failed || subscriptionFailed;
   // Resolve availability before advertising a disclosure, just like private chat.
-  if (!result || (!failed && !projection.segments.length)) return null;
+  if (!result) return null;
   return <WorkGroupBlock blockId={`group-process:${process.executionId}`} journal durationMs={process.durationMs ?? projection.durationMs}
     childItems={[{ kind: 'rendered', key: process.executionId, renderNode: () => <>
       {loading && <Spinner size={14} />}
-      {failed && !loading && <Button variant="secondary" tone="quiet" size="sm" onClick={() => retry(v => v + 1)}>{t('chat.errorBanner.retry')}</Button>}
-      {result && <BotGroupProcessEntries messages={result.messages} id={`group-process:${process.executionId}`} />}
+      {failed && !loading && <>
+        <p className="text-14 text-[var(--text-secondary)]">{t('chat.teammateProcess.unavailable')}</p>
+        <Button variant="secondary" tone="quiet" size="sm" onClick={() => retry(v => v + 1)}>{t('chat.errorBanner.retry')}</Button>
+      </>}
+      {projection.segments.length
+        ? <BotGroupProcessEntries messages={result.messages} id={`group-process:${process.executionId}`} />
+        : !failed && !loading && <p className="text-14 text-[var(--text-secondary)]">{t('chat.teammateProcess.empty')}</p>}
     </> }]} />;
 }
 

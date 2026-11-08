@@ -5658,12 +5658,17 @@
         "userBrowserSetup": {
           "installPluginTitle": "Instalar o plugin Cindy Chrome",
           "enablePluginTitle": "Ativar o plugin Cindy Chrome",
-          "installExtensionTitle": "Adicionar a extensão Cindy ao seu navegador",
+          "connectExtensionTitle": "Extensão do navegador desligada",
           "pluginBody": "O meu navegador acede ao seu Chrome ou Edge através do plugin Cindy Chrome e da respetiva extensão do navegador. Instale primeiro o plugin na Cindy e siga as instruções para adicionar a extensão.",
-          "extensionBody": "Adicionar extensão do navegador abre a página da extensão Cindy na loja no seu navegador; escolha Adicionar e o estado muda automaticamente para ligado. Já a adicionou? Ative-a nas definições de extensões do navegador.",
+          "connectionBody": "Mantenha o Cindy e o navegador abertos e verifique se a extensão Cindy está ativada. A falta de ligação não significa que seja necessário reinstalá-la. O estado é atualizado automaticamente ao voltar a ligar.",
           "installPlugin": "Instalar plugin",
           "enablePlugin": "Ativar",
-          "installExtension": "Adicionar extensão do navegador",
+          "openExtensionStore": "Abrir loja de extensões",
+          "updatingTitle": "A atualizar a ligação ao navegador",
+          "updatingBody": "A ligação será restabelecida automaticamente após a atualização.",
+          "selectPluginTitle": "Selecionar extensão do navegador",
+          "selectPluginBody": "Abra os detalhes do plugin e escolha «Usar esta extensão do navegador» para confirmar qual extensão o Cindy deve usar.",
+          "selectPlugin": "Abrir plugin",
           "updatePluginTitle": "Atualizar o plugin Cindy Chrome",
           "updatePluginBody": "O plugin Cindy Chrome instalado é demasiado antigo para O meu navegador. Atualize-o para a versão mais recente e siga as instruções para adicionar a extensão.",
           "updatePlugin": "Atualizar",
@@ -10026,6 +10031,8 @@
     "banner": {
       "title": "Atualizado para {{version}}",
       "subtitle": "Reiniciar para aplicar",
+      "nativeBuildTitle": "Versão para Apple silicon pronta",
+      "nativeBuildSubtitle": "Reinicie para mudar; as suas tarefas e definições são mantidas",
       "viewNotes": "Ver novidades",
       "viewNotesAria": "Ver as novidades da versão {{version}}",
       "button": "Reiniciar",
@@ -10155,6 +10162,12 @@
       "description": "A base de dados ocupa cerca de {{size}}, acima de {{threshold}} G. Considere limpá-la em Armazenamento.",
       "openSettings": "Abrir Armazenamento",
       "disable": "Não voltar a lembrar"
+    },
+    "nativeBuild": {
+      "title": "Está a usar a versão para Intel",
+      "description": "Este Mac tem Apple silicon, e a versão para Intel fica muito mais lenta por funcionar com tradução. Instale a versão para Apple silicon; os seus dados são mantidos.",
+      "dismiss": "Ocultar por agora",
+      "download": "Transferir"
     },
     "horizontalTabbarAria": "Seletor da vista principal",
     "tabs": {
@@ -14216,8 +14229,10 @@
       "mailLegacy": "Histórico de rascunhos (só de leitura)",
       "taskAutoArchived": "\"{{title}}\" arquivada",
       "taskAutoArchivedUndo": "Desfazer",
-      "taskAutoArchivePending": "Arquiva ao sair",
-      "taskAutoArchiveCancel": "Manter desta vez"
+      "taskAutoArchivePending": "Será arquivada ao sair desta tarefa",
+      "taskAutoArchiveCancel": "Cancelar",
+      "taskAutoArchiveCancelled": "Sem arquivo automático desta vez",
+      "taskArchiveNow": "Arquivar agora"
     },
     "ghostHook": {
       "blockedFallback": "Mensagem bloqueada por um plugin; não enviada",
@@ -14261,6 +14276,8 @@
       "closeFailed": "Não foi possível fechar a conversa paralela. Tente novamente."
     },
     "teammateProcess": {
+      "empty": "Não há detalhes do processo para esta resposta",
+      "unavailable": "Não foi possível carregar os detalhes do processo",
       "record": "Atividade",
       "operations": "Registo de atividade",
       "elapsed": "A trabalhar há {{duration}}",
@@ -19478,6 +19495,7 @@
       "apply": "Transferir"
     },
     "source": {
+      "receivingOn": "Dispositivo de destino: {{name}}",
       "description": "Escolha um computador com sessão iniciada nesta conta. Os plugins, competências, definições e ligações dele são configurados aqui da mesma forma; os inícios de sessão e as chaves só saem desse computador se o permitir nele.",
       "loading": "A procurar os seus outros computadores…",
       "empty": "Não foram encontrados outros computadores para esta conta. Inicie sessão no Cindy noutro computador e volte a abrir isto",
@@ -19929,5 +19947,14 @@
     "directory": "Pasta da conta",
     "loginAgain": "Iniciar sessão novamente",
     "login": "Iniciar sessão"
+  },
+  "crashDiagnosis": {
+    "title": "O Cindy encerrou inesperadamente",
+    "description": "Quer diagnosticar a causa? Vamos preparar um rascunho de tarefa com os detalhes do encerramento e registos sem dados sensíveis para rever antes de enviar. Um encerramento forçado ou uma falha de energia também pode ser a causa.",
+    "diagnose": "Diagnosticar problema",
+    "later": "Agora não",
+    "logExcerpt": "Registos relevantes (excerto, possivelmente incompleto)",
+    "logsUnavailable": "Não há registos relevantes disponíveis. A causa ainda é desconhecida.",
+    "failed": "Não foi possível preparar o diagnóstico. Tente novamente."
   }
 }

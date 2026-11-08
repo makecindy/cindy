@@ -5658,12 +5658,17 @@
         "userBrowserSetup": {
           "installPluginTitle": "Instale el complemento Cindy Chrome",
           "enablePluginTitle": "Habilite el complemento Cindy Chrome",
-          "installExtensionTitle": "Agregue la extensión Cindy a su navegador",
+          "connectExtensionTitle": "Extensión del navegador sin conexión",
           "pluginBody": "Mi navegador llega a su Chrome o Edge a través del complemento Cindy Chrome y su extensión de navegador. Primero instale el complemento en Cindy, luego siga las indicaciones para agregar la extensión.",
-          "extensionBody": "Agregar extensión del navegador abre la página de tienda de la extensión Cindy en su navegador; elija Agregar y esto cambiará a conectado por sí solo. ¿Ya agregado? Habilítelo en la configuración de extensión del navegador.",
+          "connectionBody": "Mantén Cindy y el navegador abiertos y comprueba que la extensión Cindy esté activada. La falta de conexión no significa que debas reinstalarla. El estado se actualiza automáticamente al reconectarse.",
           "installPlugin": "Instalar complemento",
           "enablePlugin": "Activar",
-          "installExtension": "Agregar extensión del navegador",
+          "openExtensionStore": "Abrir tienda de extensiones",
+          "updatingTitle": "Actualizando la conexión del navegador",
+          "updatingBody": "La conexión se restablecerá automáticamente al terminar la actualización.",
+          "selectPluginTitle": "Elegir extensión del navegador",
+          "selectPluginBody": "Abre los detalles del complemento y elige «Usar esta extensión del navegador» para confirmar cuál usará Cindy.",
+          "selectPlugin": "Abrir complemento",
           "updatePluginTitle": "Actualice el complemento Cindy Chrome",
           "updatePluginBody": "El complemento Cindy Chrome instalado es demasiado antiguo para Mi navegador. Actualícelo a la última versión y luego siga las indicaciones para agregar la extensión.",
           "updatePlugin": "Actualizar",
@@ -10026,6 +10031,8 @@
     "banner": {
       "title": "Actualizado a {{version}}",
       "subtitle": "Reiniciar para aplicar",
+      "nativeBuildTitle": "Versión para Apple silicon lista",
+      "nativeBuildSubtitle": "Reinicia para cambiar; tus tareas y ajustes se conservan",
       "viewNotes": "Ver novedades",
       "viewNotesAria": "Ver las novedades de {{version}}",
       "button": "Reiniciar",
@@ -10155,6 +10162,12 @@
       "description": "La base de datos ocupa aproximadamente {{size}}, por encima de {{threshold}} G. Considera limpiarla en Almacenamiento.",
       "openSettings": "Abrir Almacenamiento",
       "disable": "No volver a recordármelo"
+    },
+    "nativeBuild": {
+      "title": "Estás usando la versión para Intel",
+      "description": "Esta Mac tiene Apple silicon y la versión para Intel va mucho más lenta por la traducción. Instala la versión para Apple silicon; tus datos se conservan.",
+      "dismiss": "Ocultar por ahora",
+      "download": "Descargar"
     },
     "horizontalTabbarAria": "Selector de vista principal",
     "tabs": {
@@ -14216,8 +14229,10 @@
       "mailLegacy": "Historial de borradores (solo lectura)",
       "taskAutoArchived": "Se archivó «{{title}}»",
       "taskAutoArchivedUndo": "Deshacer",
-      "taskAutoArchivePending": "Se archiva al salir",
-      "taskAutoArchiveCancel": "Conservar esta vez"
+      "taskAutoArchivePending": "Se archivará al salir de esta tarea",
+      "taskAutoArchiveCancel": "Cancelar",
+      "taskAutoArchiveCancelled": "No se archivará automáticamente esta vez",
+      "taskArchiveNow": "Archivar ahora"
     },
     "ghostHook": {
       "blockedFallback": "Mensaje bloqueado por un complemento; no se envió",
@@ -14261,6 +14276,8 @@
       "closeFailed": "No se pudo cerrar el chat secundario. Inténtalo de nuevo."
     },
     "teammateProcess": {
+      "empty": "No hay detalles del proceso para esta respuesta",
+      "unavailable": "No se pudieron cargar los detalles del proceso",
       "record": "Actividad",
       "operations": "Registro de actividad",
       "elapsed": "Lleva {{duration}} trabajando",
@@ -19478,6 +19495,7 @@
       "apply": "Transferir"
     },
     "source": {
+      "receivingOn": "Equipo de destino: {{name}}",
       "description": "Elija una computadora que haya iniciado sesión con esta cuenta. Sus plugins, habilidades, ajustes y conexiones se configuran aquí de la misma forma; los inicios de sesión y las claves solo salen de esa computadora si usted lo permite en ella.",
       "loading": "Buscando sus otras computadoras…",
       "empty": "No se encontraron otras computadoras para esta cuenta. Inicie sesión en Cindy en otra computadora y vuelva a abrir esto",
@@ -19929,5 +19947,14 @@
     "directory": "Carpeta de la cuenta",
     "loginAgain": "Iniciar sesión nuevamente",
     "login": "Iniciar sesión"
+  },
+  "crashDiagnosis": {
+    "title": "Cindy se cerró inesperadamente",
+    "description": "¿Quieres diagnosticar la causa? Prepararemos un borrador de tarea con los detalles del cierre y registros sin datos sensibles para que lo revises antes de enviarlo. También puede deberse a un cierre forzado o un corte de energía.",
+    "diagnose": "Diagnosticar problema",
+    "later": "Ahora no",
+    "logExcerpt": "Registros relevantes (extracto, puede estar incompleto)",
+    "logsUnavailable": "No hay registros relevantes disponibles. La causa aún se desconoce.",
+    "failed": "No se pudo preparar el diagnóstico. Inténtalo de nuevo."
   }
 }

@@ -1,3 +1,4 @@
+import type { ViewInstance } from 'react-native';
 import { resolveAttachmentPreviewSource } from './messagePayload';
 import {
   PreviewHeader,
@@ -643,7 +644,7 @@ interface MessageActions {
   /** 正在 composer 里编辑的消息:它的编辑按钮保持禁用。 */
   editingMessageClientId?: string | null;
   onEnterShareSelection?: (clientId: string) => void;
-  onShareableMessageViewChange?: (clientId: string, view: View | null) => void;
+  onShareableMessageViewChange?: (clientId: string, view: ViewInstance | null) => void;
   shareSelectionActive?: boolean;
   shareSelectionBusy?: boolean;
   /** 待发送气泡(pending_send 项)的展开态与队列操作回调。 */
@@ -851,7 +852,7 @@ export function MessageRenderer({
   const listMetricsRef = useRef<LegendListMetrics>({ footerSize: 0, headerSize: 0 });
   const listTopPaddingRef = useRef(0);
   const listBottomPaddingRef = useRef(0);
-  const shareableMessageViewsRef = useRef(new Map<string, View>());
+  const shareableMessageViewsRef = useRef(new Map<string, ViewInstance>());
   const windowDimensions = usePaneViewport();
   const viewportLayout = useMemo(() => buildMobileReadableViewportLayout({
     screenHeight: windowDimensions.height,
@@ -1780,7 +1781,7 @@ export function MessageRenderer({
     loading: loadingEarlier === true,
     visibleMessageCount: listData.length,
   });
-  const handleShareableMessageViewChange = useCallback((clientId: string, view: View | null) => {
+  const handleShareableMessageViewChange = useCallback((clientId: string, view: ViewInstance | null) => {
     if (view) {
       shareableMessageViewsRef.current.set(clientId, view);
     } else {
@@ -2916,6 +2917,7 @@ export function MessageRenderer({
         importantForAccessibility={listRevealed ? 'auto' : 'no-hide-descendants'}>
       <LegendList
         keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="on-drag"
         // 与 main 一致：每个任务用完整历史重挂；首次命令式落底在 opacity 遮罩下完成。
         key={scrollResetKey}
         data={listData}
@@ -2968,8 +2970,8 @@ export function MessageRenderer({
             </MessageListActionButton>
           ) : null}
         </>}
-        ListFooterComponent={queueFooter || processViewport.footerHeight > 0
-          ? <>{queueFooter}{processViewport.footerHeight > 0 && <View style={{ height: processViewport.footerHeight }} />}</> : null}
+        ListFooterComponent={(queueFooter || processViewport.footerHeight > 0
+          ? <>{queueFooter}{processViewport.footerHeight > 0 && <View style={{ height: processViewport.footerHeight }} />}</> : null) ?? undefined}
         onLayout={handleListLayout}
         onMetricsChange={handleListMetricsChange}
         onContentSizeChange={handleContentSize}
@@ -3600,7 +3602,7 @@ function MessageBubble({
   const isStreamingAssistant = item.message.kind === 'assistant' && item.message.isStreaming === true;
   const clientId = messageClientId(item);
   const shareableMessage = isShareableMessage(item.message);
-  const handleShareableMessageViewChange = useCallback((view: View | null) => {
+  const handleShareableMessageViewChange = useCallback((view: ViewInstance | null) => {
     actions.onShareableMessageViewChange?.(clientId, view);
   }, [actions.onShareableMessageViewChange, clientId]);
   const shareSelectionActive = actions.shareSelectionActive === true

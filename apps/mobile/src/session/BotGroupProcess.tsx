@@ -8,10 +8,11 @@ import { mobileToolRowWording } from '@/i18n/toolWording';
 import { projectBotGroupProcess, readBotGroupProcessMessages, isBotGroupProcessMessageVisible, type BotGroupProcessRef, type BotGroupProcessMessage } from '@cindy/maker-shared/botGroupChat';
 import { projectWorkActivities, summarizeTeammateWork, teammateWorkSummaryText } from '@cindy/maker-shared/work-activity-projection';
 import { MainWindowActionButton } from '@/components/MobilePrimitives';
+import { Text } from '@/components/AppText';
 import { useDeviceLink } from '@/device-link/DeviceLinkContext';
 import { useAuth } from '@/auth/AuthContext';
 import { useTheme } from '@/theme';
-import { spacing } from '@/theme/tokens';
+import { spacing, typeScale, lineHeight } from '@/theme/tokens';
 import { TeammateProcess, TeammateWorkSegment, useTeammateElapsedTitle } from './TeammateProcess';
 import { BotGroupMarkdownText } from './BotGroupMessageText';
 import { MessagePayloadModal, WorkToolActivityRow } from './MessageRenderer';
@@ -120,11 +121,16 @@ function BotGroupProcessHistory({ process, deviceId }: { process: BotGroupProces
   }, [subscriptionIdentity]);
   const failed = result?.failed || subscriptionFailed;
   // Resolve availability before advertising a disclosure, just like private chat.
-  if (!result || (!failed && !projection.segments.length)) return null;
+  if (!result) return null;
   return <TeammateProcess id={`group-process:${process.executionId}`} title={title}>
     {loading && <ActivityIndicator color={colors.textSecondary} />}
-    {failed && !loading && <MainWindowActionButton action={{ label: t('message.renderer.retryPreview'), onPress: () => retry(v => v + 1) }} />}
-    {result && <BotGroupProcessEntries messages={result.messages} id={`group-process:${process.executionId}`} deviceId={deviceId} sessionId={process.sessionId} />}
+    {failed && !loading && <>
+      <Text style={{ color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption }}>{t('chat.teammateProcess.unavailable')}</Text>
+      <MainWindowActionButton action={{ label: t('chat.teammateProcess.retry'), onPress: () => retry(v => v + 1) }} />
+    </>}
+    {projection.segments.length
+      ? <BotGroupProcessEntries messages={result.messages} id={`group-process:${process.executionId}`} deviceId={deviceId} sessionId={process.sessionId} />
+      : !failed && !loading && <Text style={{ color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption }}>{t('chat.teammateProcess.empty')}</Text>}
   </TeammateProcess>;
 }
 

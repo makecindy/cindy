@@ -18,6 +18,28 @@ const audio = `cindy-media://blobs/${'c'.repeat(64)}.mp3`;
 const request = { ref: { collectionId: 'plugin-results', kind: 'card', id: JSON.stringify(['s', 'c']) }, client: { protocolVersion: 1, primitives: [] } };
 const context = { controllerDeviceId: 'phone' };
 
+// Unit: the same card viewed by old and new phones must expose exactly one usable
+// entry. Host version alone cannot establish the viewing phone's navigation support.
+it('negotiates native task navigation per reader and retains the fallback action for old phones', async () => {
+  const html = '<button data-ghost-action="open" data-ghost-session-link="cindy://session/target">Open task</button>';
+  let permitted = true;
+  const provider = createGhostCardRemoteProvider({
+    readCard: async () => ({ sessionId: 's', callId: 'c', ghostId: 'example', html, v: 2, height: 80 }),
+    authorize: async () => {}, captureScope: () => () => true,
+    interactions: { externalLinks: () => permitted, dispatch: async () => true },
+  });
+  const read = async (native: boolean) => {
+    const result = await provider.get!(context, { ...request, client: { protocolVersion: 1,
+      primitives: ['plugin-card-actions', ...(native ? ['plugin-card-session-links'] : [])] } });
+    return result.blocks?.find(block => block.id === 'actions')?.data;
+  };
+  expect(await read(false)).toMatchObject({ items: [{ id: 'open', label: 'Open task' }] });
+  expect((await read(false) as { items: unknown[] }).items[0]).not.toHaveProperty('url');
+  expect(await read(true)).toMatchObject({ items: [{ id: 'link:0', label: 'Open task', url: 'cindy://session/target' }] });
+  permitted = false;
+  expect((await read(true) as { items: unknown[] }).items[0]).not.toHaveProperty('url');
+});
+
 it('mail imports reuse task attachment cleanup and verify downloaded bytes before provider delivery', async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'mail-upload-test-'));
   try {
