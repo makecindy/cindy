@@ -76,7 +76,7 @@ export class PrFollowWatch {
   private readonly signatures = new Map<string, string>();
   private readonly lastTriggered = new Map<string, number>();
   /** PR URLs whose trigger found no free slot; retried on the next observation. */
-  private readonly pending = new Set<string>();
+  private readonly pending = new Map<string, () => boolean>();
   private readonly now: () => number;
 
   constructor(private readonly deps: PrFollowWatchDeps) {
@@ -101,24 +101,30 @@ export class PrFollowWatch {
     });
   }
 
+  /** An authenticated doorbell may represent a new comment without changing status counts. */
+  async notify(url: string, isCurrent: () => boolean = () => true): Promise<void> {
+    await this.trigger(url, isCurrent);
+  }
+
   private retryPending(): void {
-    for (const url of Array.from(this.pending)) {
+    for (const [url, isCurrent] of Array.from(this.pending)) {
       this.pending.delete(url);
-      void this.trigger(url).catch(() => undefined);
+      void this.trigger(url, isCurrent).catch(() => undefined);
     }
   }
 
-  private async trigger(url: string): Promise<void> {
-    if (!url || !this.deps.autoRunAllowed()) return;
+  private async trigger(url: string, isCurrent: () => boolean = () => true): Promise<void> {
+    if (!url || !isCurrent() || !this.deps.autoRunAllowed()) return;
     const schedules = (await this.deps.listActive()).filter((schedule) => watchesPr(schedule, url));
     const now = this.now();
     for (const schedule of schedules) {
+      if (!isCurrent()) return;
       if (schedule.status !== 'active' || !schedule.recurring || schedule.manual) continue;
       if (this.deps.inflight(schedule.id) > 0) continue;
       const last = this.lastTriggered.get(schedule.id);
       if (last !== undefined && now - last < MIN_RETRIGGER_MS) continue;
       if (!this.deps.hasCapacity()) {
-        this.pending.add(url);
+        this.pending.set(url, isCurrent);
         break;
       }
       this.lastTriggered.set(schedule.id, now);

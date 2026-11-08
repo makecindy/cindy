@@ -704,7 +704,7 @@ describe('PR follow watch', () => {
       await svc.getStatuses([Q], { waitForFresh: true });
       await new Promise((resolve) => setImmediate(resolve));
     };
-    return { look, runNow, inflight, hasCapacity, autoRunAllowed };
+    return { look, runNow, inflight, hasCapacity, autoRunAllowed, watch };
   }
 
   it('runs only recurring schedules naming this PR, once per change, skipping in-flight and recent ones', async () => {
@@ -747,6 +747,23 @@ describe('PR follow watch', () => {
     await look(10);
     await look(100_000, 'b2');
     expect(runNow).not.toHaveBeenCalled();
+  });
+
+  // App comments can be new without changing the PR summary. Queued wakeups retain owner guards.
+  it('handles doorbells without a baseline and drops pending work when its connection changes', async () => {
+    const { watch, runNow, hasCapacity, look } = setup();
+    let current = true;
+    hasCapacity.mockReturnValue(false);
+    await watch.notify('https://github.com/makecindy/cindy/pull/85', () => current);
+    expect(runNow).not.toHaveBeenCalled();
+    current = false;
+    hasCapacity.mockReturnValue(true);
+    await look(10);
+    expect(runNow).not.toHaveBeenCalled();
+    await watch.notify('https://github.com/makecindy/cindy/pull/85', () => true);
+    expect(runNow).toHaveBeenCalledTimes(1);
+    await watch.notify('https://github.com/makecindy/cindy/pull/85', () => true);
+    expect(runNow).toHaveBeenCalledTimes(1);
   });
 
   it('treats failed reads as no news and keeps the baseline', async () => {

@@ -1,3 +1,4 @@
+import { followedGithubPrs, GITHUB_WATCH_SCHEDULE, matchingGithubPrs, type GithubAppStatus } from './github';
 /**
  * 自动化任务 Webhook 的服务器通道：地址和密钥走 webhook-server，事件经 Desktop 主动拨出的
  * 长连接送达，本机不开端口。合同见 cindy-server 仓 docs/webhook-server.md。
@@ -61,6 +62,7 @@ export interface RemoteWebhookQuota {
 }
 
 export interface ScheduleWebhookRemoteDeps {
+  onGithubPrs?(urls: string[], isCurrent: () => boolean): Promise<void>;
   /** 空字符串表示当前环境没有部署 webhook-server。 */
   baseUrl(): string;
   getAccessToken(): Promise<string | null>;
@@ -134,6 +136,10 @@ function parseBatch(frame: Record<string, unknown>): (RemoteWebhookBatch & { bat
 }
 
 export class ScheduleWebhookRemote {
+  private githubPrs: string[] = [];
+  private github: GithubAppStatus = { available: false };
+  private githubSynced = '';
+  private githubError: unknown = null;
   private wanted = new Map<string, WantedEndpoint>();
   private readonly views = new Map<string, RemoteEndpointView>();
   private readonly problems = new Map<string, RemoteEndpointProblem>();
@@ -169,13 +175,16 @@ export class ScheduleWebhookRemote {
 
   /** 同步“哪些任务需要接收”。登录后调用；未登录时调用也安全。 */
   sync(schedules: readonly Schedule[]): Promise<void> {
+    this.githubPrs = followedGithubPrs(schedules);
     const wanted = new Map<string, WantedEndpoint>();
     for (const schedule of schedules) {
       const trigger = schedule.webhookTrigger;
       if (trigger) wanted.set(schedule.id, {
         identity: trigger.endpointId,
         events: trigger.events ?? [], format: resolveScheduleWebhookFormat(trigger.source),
+        // eslint-disable-next-line no-control-regex -- Strip control characters from display names.
         scheduleName: schedule.name.replace(/[\u0000-\u001f\u007f]/g, ' ').slice(0, 200),
+        // eslint-disable-next-line no-control-regex -- Same display-name sanitization for devices.
         deviceName: this.deps.deviceName?.().replace(/[\u0000-\u001f\u007f]/g, ' ').slice(0, 200),
       });
     }
@@ -193,6 +202,9 @@ export class ScheduleWebhookRemote {
     this.replaced = false;
     this.exhausted = null;
     this.views.clear();
+    this.github = { available: false };
+    this.githubError = null;
+    this.githubSynced = '';
     this.problems.clear();
     this.releases.clear();
     this.clearTimers();
@@ -224,6 +236,42 @@ export class ScheduleWebhookRemote {
 
   isSuspended(): boolean {
     return this.suspended;
+  }
+
+  async githubStatus(): Promise<GithubAppStatus> {
+    if (!this.deps.baseUrl() || !(await this.deps.getAccessToken())) return { available: false };
+    await this.refresh();
+    if (this.githubError) throw this.githubError;
+    if (this.running && !this.loaded) throw new Error('GITHUB_CONNECTION_UNAVAILABLE');
+    return this.github;
+  }
+
+  async connectGithub(): Promise<string> {
+    const { url } = await this.request<{ url: string }>('POST', '/github/connect');
+    return url;
+  }
+
+  async disconnectGithub(): Promise<void> {
+    await this.request('DELETE', '/github');
+    this.github = { available: true, login: null };
+    this.githubSynced = '';
+    this.updateConnection();
+  }
+
+  private async syncGithub(): Promise<void> {
+    const state = await this.request<GithubAppStatus>('GET', '/github').catch(error => {
+      if (error instanceof RemoteRequestError && error.status === 404) return { available: false } as GithubAppStatus;
+      throw error;
+    });
+    this.github = state;
+    this.githubError = null;
+    if (!state.available || !state.login) { this.githubSynced = ''; return; }
+    const repositories = [...new Set(this.githubPrs.map(url => url.split('/').slice(3, 5).join('/')))].sort();
+    const key = JSON.stringify([state.login, state.endpointId, repositories]);
+    if (key !== this.githubSynced) {
+      this.github = await this.request<GithubAppStatus>('PUT', '/github/repositories', { repositories });
+      this.githubSynced = JSON.stringify([this.github.login, this.github.endpointId, repositories]);
+    }
   }
 
   async accountOverview(): Promise<WebhookAccountOverview> {
@@ -265,7 +313,7 @@ export class ScheduleWebhookRemote {
 
   /** 打开详情、回到窗口或服务器通知时读取最新状态；不增加常驻轮询。 */
   async refresh(): Promise<void> {
-    await this.enqueue(async () => { this.loaded = false; await this.reconcile(); });
+    await this.enqueue(async () => { this.loaded = false; this.githubSynced = ''; await this.reconcile(); });
   }
 
   /** 服务器不发恢复通知，到了恢复时刻自然失效。 */
@@ -373,6 +421,13 @@ export class ScheduleWebhookRemote {
       for (const scheduleId of this.identities.keys()) {
         if (!this.wanted.has(scheduleId)) this.rememberIdentity(scheduleId, undefined);
       }
+      try { await this.syncGithub(); }
+      catch (error) {
+        if (generation !== this.generation) return;
+        this.githubError = error;
+        this.scheduleRetry();
+      }
+      if (generation !== this.generation) return;
       this.suspended = false;
     } catch (error) {
       if (generation !== this.generation) return;
@@ -449,7 +504,7 @@ export class ScheduleWebhookRemote {
 
   /** 只有需要接收事件时才保持连接。 */
   private updateConnection(): void {
-    if (this.running && this.wanted.size > 0 && !this.suspended && !this.replaced) void this.connect();
+    if (this.running && (this.wanted.size > 0 || (this.github.login && this.githubPrs.length > 0)) && !this.suspended && !this.replaced) void this.connect();
     else this.closeSocket();
   }
 
@@ -561,7 +616,13 @@ export class ScheduleWebhookRemote {
     const batch = parseBatch(frame);
     if (!batch) return;
     const { batchId, ...delivery } = batch;
-    this.deps.onBatch(delivery).then(
+    const receive = this.enqueue(async () => {
+      if (this.socket !== socket || !this.running) return;
+      if (delivery.scheduleId !== GITHUB_WATCH_SCHEDULE) { await this.deps.onBatch(delivery); return; }
+      if (delivery.endpointId !== this.github.endpointId || !this.github.login) throw new Error('GitHub subscription is not reconciled');
+      await this.deps.onGithubPrs?.(matchingGithubPrs(this.githubPrs, delivery.events), () => this.socket === socket && this.running);
+    });
+    receive.then(
       () => {
         if (socket.readyState === socket.OPEN) socket.send(JSON.stringify({ type: 'ack', batchId }));
       },

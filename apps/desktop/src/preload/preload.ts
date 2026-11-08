@@ -5694,6 +5694,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   gitContext: {
     readGithub: (method: import('@cindy/maker-shared').GithubReadMethod, args: unknown): Promise<unknown> =>
       ipcRenderer.invoke('git-context:github-read', { method, args }),
+    githubAppStatus: (): Promise<import('../shared/githubSetup').GithubAppConnectionState> => ipcRenderer.invoke('git-context:github-app:status'),
+    connectGithubApp: (): Promise<void> => ipcRenderer.invoke('git-context:github-app:connect'),
+    installGithubApp: (): Promise<void> => ipcRenderer.invoke('git-context:github-app:install'),
+    disconnectGithubApp: (): Promise<void> => ipcRenderer.invoke('git-context:github-app:disconnect'),
     githubConnection: (): Promise<import('../shared/githubSetup').GithubConnectionState> =>
       ipcRenderer.invoke('git-context:github-setup:connection'),
     githubSetupStatus: (): Promise<import('../shared/githubSetup').GithubSetupState> =>

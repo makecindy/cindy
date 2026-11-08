@@ -1,3 +1,4 @@
+import type { GithubAppStatus } from './github';
 /**
  * 自动化任务 Webhook 的宿主：账号隔离的事件队列，以及两种事件来源。
  * 正式来源是 webhook-server（需要 Cindy 账号）；本机接收服务只在开发版显式开启时启动，
@@ -249,6 +250,20 @@ export class ScheduleWebhookHost {
     if (this.options.local || this.stopped) return;
     if (ownerChanged) this.remote?.pause();
     this.onChanged();
+  }
+
+  async githubStatus(): Promise<GithubAppStatus> {
+    return this.remote?.githubStatus() ?? { available: false };
+  }
+
+  async connectGithub(): Promise<string> {
+    if (this.receiver() !== 'cloud' || !this.remote) throw new Error('WEBHOOK_ACCOUNT_REQUIRED');
+    return this.remote.connectGithub();
+  }
+
+  async disconnectGithub(): Promise<void> {
+    if (this.receiver() !== 'cloud' || !this.remote) throw new Error('WEBHOOK_ACCOUNT_REQUIRED');
+    await this.remote.disconnectGithub();
   }
 
   async accountOverview() {

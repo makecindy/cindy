@@ -14968,6 +14968,16 @@
             "recheck": "Verbindung prüfen",
             "summary": "Verwalte GitHub-Repositories, Issues, Pull Requests und Actions.",
             "otherMethods": "Andere Verbindungsmethoden"
+          },
+          "app": {
+            "title": "Repository-Ereignisse",
+            "description": "Verbinde die Cindy GitHub App, um verfolgte PRs bei Änderungen an Reviews oder CI zu aktualisieren.",
+            "connected": "Verbunden als {{login}} · Beobachtete Repositorys: {{count}}",
+            "missing": "App-Installation und Zugriff prüfen: {{repositories}}",
+            "error": "Verbindung konnte nicht geprüft werden. Versuche es erneut.",
+            "repositories": "Repositorys auswählen",
+            "disconnect": "Ereignisse trennen",
+            "connect": "GitHub App verbinden"
           }
         },
         "unresolved": "Ungelöste Review-Threads: {{count}}",

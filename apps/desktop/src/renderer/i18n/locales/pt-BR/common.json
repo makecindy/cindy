@@ -15111,6 +15111,16 @@
             "recheck": "Verificar conexão",
             "summary": "Gerencie repositórios, issues, pull requests e Actions do GitHub.",
             "otherMethods": "Outros métodos de conexão"
+          },
+          "app": {
+            "title": "Eventos dos repositórios",
+            "description": "Conecte a GitHub App da Cindy para atualizar os PRs acompanhados quando as revisões ou a CI mudarem.",
+            "connected": "Conectado como {{login}} · Repositórios acompanhados: {{count}}",
+            "missing": "Verifique a instalação do App e o acesso a: {{repositories}}",
+            "error": "Não foi possível verificar a conexão. Tente novamente.",
+            "repositories": "Escolher repositórios",
+            "disconnect": "Desconectar eventos",
+            "connect": "Conectar GitHub App"
           }
         },
         "unresolved": "Discussões de revisão não resolvidas: {{count}}",

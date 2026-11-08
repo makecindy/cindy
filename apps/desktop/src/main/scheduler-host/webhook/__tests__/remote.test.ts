@@ -62,6 +62,7 @@ interface FakeEndpoint {
 
 /** 与 webhook-server 合同相同的最小实现。 */
 class FakeServer {
+  github: { available: boolean; login: string; endpointId: string; repositories: string[] } | null = null;
   readonly releases = new Map<string, string>();
   accountManagement = false;
   readonly requests: string[] = [];
@@ -150,6 +151,8 @@ class FakeServer {
           return reply(201, endpoint);
         }
       }
+      if (this.github && route === 'GET /api/v1/github') return reply(200, this.github);
+      if (this.github && route === 'PUT /api/v1/github/repositories') { this.github.repositories = body().repositories as string[]; return reply(200, this.github); }
       if (route === 'GET /api/v1/endpoints') return reply(200, { endpoints: [...this.endpoints.values()] });
       if (upsert?.[1]) {
         const scheduleId = upsert[1];
@@ -623,4 +626,64 @@ describe('ScheduleWebhookHost 服务器通道', () => {
     await vi.waitFor(() => expect(server.endpoints.size).toBe(0));
     await vi.waitFor(() => expect(server.sockets[0]?.readyState).toBe(server.sockets[0]?.CLOSED));
   });
+});
+
+// New protocol outcome: managed GitHub events reach only active PR follow-up gates,
+// through the production remote receiver; stale account deliveries cannot cross owners.
+it('discards a GitHub reconciliation response after the account is paused', async () => {
+  const server = new FakeServer();
+  server.github = { available: true, login: 'example-user', endpointId: 'whk-github', repositories: [] };
+  const baseUrl = await server.listen();
+  let complete!: () => void;
+  const pending = new Promise<void>(resolve => { complete = resolve; });
+  let waiting = false;
+  const onChanged = vi.fn();
+  const remote = new ScheduleWebhookRemote({ baseUrl: () => baseUrl, getAccessToken: async () => 'token-1',
+    refreshAccessToken: async () => false, fetch: async (input, init) => {
+      const response = await fetch(input, init);
+      if (String(input).endsWith('/github')) { waiting = true; await pending; }
+      return response;
+    }, socketOptions: async () => ({}), logger: {}, onBatch: async () => {}, onChanged });
+  try {
+    const sync = remote.sync([]);
+    await vi.waitFor(() => expect(waiting).toBe(true));
+    remote.pause();
+    onChanged.mockClear();
+    complete();
+    await sync;
+    expect(onChanged).not.toHaveBeenCalled();
+    expect(remote.isConnected()).toBe(false);
+    expect(server.requests).not.toContain('PUT /api/v1/github/repositories');
+  } finally { complete(); remote.stop(); await server.close(); }
+});
+
+it('routes managed GitHub events to matching active follow-ups and acknowledges after processing', async () => {
+  const server = new FakeServer();
+  server.github = { available: true, login: 'example-user', endpointId: 'whk-github', repositories: [] };
+  const baseUrl = await server.listen();
+  let complete!: () => void;
+  const pending = new Promise<void>(resolve => { complete = resolve; });
+  const onGithubPrs = vi.fn<(urls: string[], isCurrent: () => boolean) => Promise<void>>(() => pending);
+  const onBatch = vi.fn(async () => {});
+  const remote = new ScheduleWebhookRemote({ baseUrl: () => baseUrl, getAccessToken: async () => 'token-1',
+    refreshAccessToken: async () => false, fetch, socketOptions: async () => ({}), logger: {}, onBatch, onGithubPrs });
+  const follow = (number: number, status = 'active') => ({ id: `follow-${number}`, name: 'Follow PR', status,
+    recurring: true, manual: false, preRunHook: { command: `node gate.mjs https://github.com/example/project/pull/${number}` } }) as Schedule;
+  try {
+    await remote.sync([follow(12), follow(123), follow(9, 'paused')]);
+    await vi.waitFor(() => expect(remote.isConnected()).toBe(true));
+    server.push({ batchId: 'github-batch', endpointId: 'whk-github', scheduleId: '__github_pr_watch__', omitted: 0,
+      events: [{ deliveryId: 'g-1', event: 'pull_request_review', repository: 'example/project', number: 12, receivedAt: 1 }] });
+    await vi.waitFor(() => expect(onGithubPrs).toHaveBeenCalledOnce());
+    expect(onGithubPrs.mock.calls[0]?.[0]).toEqual(['https://github.com/example/project/pull/12']);
+    expect(onBatch).not.toHaveBeenCalled();
+    expect(server.frames).not.toContainEqual({ type: 'ack', batchId: 'github-batch' });
+    expect(server.github.repositories).toEqual(['example/project']);
+    complete();
+    await vi.waitFor(() => expect(server.frames).toContainEqual({ type: 'ack', batchId: 'github-batch' }));
+    const stillCurrent = onGithubPrs.mock.calls[0]?.[1];
+    expect(stillCurrent?.()).toBe(true);
+    remote.pause();
+    expect(stillCurrent?.()).toBe(false);
+  } finally { complete(); remote.stop(); await server.close(); }
 });

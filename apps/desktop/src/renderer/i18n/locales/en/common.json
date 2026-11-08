@@ -14968,6 +14968,16 @@
             "recheck": "Check connection",
             "summary": "Manage GitHub repositories, issues, pull requests, and Actions.",
             "otherMethods": "Other connection methods"
+          },
+          "app": {
+            "title": "Repository events",
+            "description": "Connect the Cindy GitHub App to update followed PRs when reviews or CI change.",
+            "connected": "Connected as {{login}} · Repositories watched: {{count}}",
+            "missing": "Check App installation and access for: {{repositories}}",
+            "error": "Could not check the connection. Try again.",
+            "repositories": "Choose repositories",
+            "disconnect": "Disconnect events",
+            "connect": "Connect GitHub App"
           }
         },
         "unresolved": "Unresolved review threads: {{count}}",

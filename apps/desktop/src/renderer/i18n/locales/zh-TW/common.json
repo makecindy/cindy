@@ -14902,6 +14902,16 @@
             "recheck": "檢查連接",
             "summary": "管理 GitHub 儲存庫、Issues、PR 和 Actions。",
             "otherMethods": "其他連線方式"
+          },
+          "app": {
+            "title": "儲存庫事件",
+            "description": "連接 Cindy GitHub App，在審查或 CI 變更時更新正在跟進的 PR。",
+            "connected": "已連接 {{login}} · 正在關注 {{count}} 個儲存庫",
+            "missing": "請檢查這些儲存庫的 App 安裝與存取權限：{{repositories}}",
+            "error": "無法檢查連線，請重試。",
+            "repositories": "選擇儲存庫",
+            "disconnect": "中斷事件連線",
+            "connect": "連接 GitHub App"
           }
         },
         "unresolved": "{{count}} 條未解決的 review 評論",

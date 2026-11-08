@@ -86,6 +86,8 @@ checkout 占用而中止，不要换命令绕过，应把 verdict 交给用户�
 不要为只替换设备互联服务而启动完整 `local` 模式：它会把两个账号区域固定到同一套
 本机服务，不能承载真实双区企业 SSO。
 
+只调试本机 Webhook/GitHub App 时，使用相同的 remote 隔离启动方式，并设置 `XDT_WEBHOOK_GLOBAL_LOCAL_URL=http://127.0.0.1:8793`（中国大陆账号用 `XDT_WEBHOOK_CN_LOCAL_URL`）。只替换本区 Webhook API，保留真实认证；只接受带端口的回环地址，正式版忽略此覆盖。
+
 两个 restart 命令都支持下列参数。不加任何模式旗标时默认走固定的 `--isolated=dev`
 命名沙箱；要回到旧的共库行为必须显式加 `--shared`。这些参数只对 dev 生效，不影响
 用户机器上的正式版。

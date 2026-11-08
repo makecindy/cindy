@@ -14902,6 +14902,16 @@
             "recheck": "察连接",
             "summary": "掌 GitHub 保存库、Issues、PR 与 Actions。",
             "otherMethods": "他种连接之法"
+          },
+          "app": {
+            "title": "仓库之变",
+            "description": "连 Cindy GitHub App，评审或 CI 有变，则更新所随之 PR。",
+            "connected": "已连 {{login}} · 所察仓库 {{count}} 个",
+            "missing": "请核此仓之 App 安装及访问权限：{{repositories}}",
+            "error": "未能验其连接，请重试。",
+            "repositories": "择仓库",
+            "disconnect": "断事件之连",
+            "connect": "连 GitHub App"
           }
         },
         "unresolved": "{{count}} 条未决之 review 评论",

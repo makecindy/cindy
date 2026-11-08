@@ -14902,6 +14902,16 @@
             "recheck": "接続を確認",
             "summary": "GitHub のリポジトリ、Issue、PR、Actions を管理。",
             "otherMethods": "その他の接続方法"
+          },
+          "app": {
+            "title": "リポジトリのイベント",
+            "description": "Cindy GitHub App を接続すると、レビューや CI の変更時に追跡中の PR が更新されます。",
+            "connected": "{{login}} として接続済み · {{count}} 件のリポジトリを追跡中",
+            "missing": "次のリポジトリの App インストールとアクセス権を確認してください：{{repositories}}",
+            "error": "接続を確認できませんでした。もう一度お試しください。",
+            "repositories": "リポジトリを選択",
+            "disconnect": "イベント接続を解除",
+            "connect": "GitHub App を接続"
           }
         },
         "unresolved": "未解決のレビューコメント: {{count}} 件",

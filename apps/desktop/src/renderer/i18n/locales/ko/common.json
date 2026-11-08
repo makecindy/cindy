@@ -14902,6 +14902,16 @@
             "recheck": "연결 확인",
             "summary": "GitHub 저장소, 이슈, PR 및 Actions를 관리합니다.",
             "otherMethods": "다른 연결 방법"
+          },
+          "app": {
+            "title": "저장소 이벤트",
+            "description": "Cindy GitHub App을 연결하면 리뷰나 CI가 변경될 때 추적 중인 PR이 업데이트됩니다.",
+            "connected": "{{login}} 계정으로 연결됨 · 저장소 {{count}}개 추적 중",
+            "missing": "다음 저장소의 App 설치 및 접근 권한을 확인하세요: {{repositories}}",
+            "error": "연결을 확인하지 못했습니다. 다시 시도하세요.",
+            "repositories": "저장소 선택",
+            "disconnect": "이벤트 연결 해제",
+            "connect": "GitHub App 연결"
           }
         },
         "unresolved": "미해결 리뷰 코멘트: {{count}}건",

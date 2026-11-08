@@ -160,3 +160,15 @@ ASCII 字母、数字、下划线和连字符，无参数、片段或子路径�
 解析 18 项通过；Desktop/Mobile 类型检查通过。只读卡片 Light/Dark 定向渲染通过。
 全页面 `ui:check --changed --theme all` 在依赖扫描阶段耗时超过三分钟，已停止，未取得
 全页面验证结果。上述证据不替代真实账号下跨任务导航和旧版客户端兼容验收。
+
+## GitHub App 事件（可选服务能力）
+
+GitHub 插件详情中的原生事件连接卡与本机 GitHub 登录分开。用户在执行任务的 Desktop 发起身份授权，随后在 GitHub 给个人或组织安装 App，并选择仓库。服务器未配置 App 时隐藏入口；手机这一版不增加远程授权流程。
+
+只从已有 active、重复、非手动的定时任务 preRunHook 中提取 GitHub PR URL，订阅对应仓库。事件只包含固定元数据；到达后重新读取当前 PR，再进入现有 `PrFollowWatch` 和前置检查，不创建新任务、不跳过并发/被动实例/60 秒节流。新评论即使未改变 PR 汇总，也可触发检查；没有空位的待触发记录保留连接代次校验，换账号或断线后不得沿用旧事件。
+
+连接使用本区 Cindy 身份，服务器另行验证 GitHub numeric user ID 与当前仓库权限。安装 App 不代表获得任意仓库访问权。GitHub App 注册申请 Metadata、Pull requests、Issues、Checks、Commit statuses、Actions、Deployments、Contents 的只读权限；后三项为后续日志、部署和代码读取预留，本版没有实现这些新增能力。Issues read 是普通 PR 评论 Webhook 的订阅要求，也允许读取所选仓库的 Issues；适配器会忽略普通 Issue 评论。写操作继续走原用户 GitHub 登录与现有授权。
+
+原定时检查保留作事件丢失兜底，不能因启用 App 自动删掉。每个有跟进的设备占一个受控 Webhook 地址；释放后需在事件连接卡断开再连接，不能自动重建。用户断开事件账号时清除该账号所有设备的事件订阅；不影响本机 gh 登录。
+
+服务器部署、签名、安装生命周期、数据库与接口契约的正本在 cindy-server 仓 `docs/github-app-events.md`。客户端回归覆盖 `remote.test.ts`、`gitContextPrStatusService.test.ts`、`githubSetupIpc.test.ts`、`githubAppCard.test.tsx`；真实 OAuth/安装仍需测试 App 验收。

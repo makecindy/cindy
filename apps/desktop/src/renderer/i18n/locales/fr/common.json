@@ -15111,6 +15111,16 @@
             "recheck": "Vérifier la connexion",
             "summary": "Gérez les dépôts, issues, pull requests et Actions GitHub.",
             "otherMethods": "Autres méthodes de connexion"
+          },
+          "app": {
+            "title": "Événements des dépôts",
+            "description": "Connectez la GitHub App de Cindy pour actualiser les PR suivies lorsque les revues ou la CI changent.",
+            "connected": "Connecté en tant que {{login}} · Dépôts suivis : {{count}}",
+            "missing": "Vérifiez l’installation de l’App et les droits d’accès à : {{repositories}}",
+            "error": "Impossible de vérifier la connexion. Réessayez.",
+            "repositories": "Choisir les dépôts",
+            "disconnect": "Déconnecter les événements",
+            "connect": "Connecter GitHub App"
           }
         },
         "unresolved": "Fils de revue non résolus : {{count}}",

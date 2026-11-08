@@ -3,6 +3,7 @@ import { pluginHasToolUi } from '@cindy/plugin-protocol';
 import type { PreparedPluginContribution } from '../../../shared/pluginContributions';
 import { PluginShareButton } from './PluginShareButton';
 import { Button } from '@/components/ui/button';
+import { GithubAppCard } from '@/features/cc-agent/GithubAppCard';
 import { GithubAccountCard } from '@/features/cc-agent/GithubAccountCard';
 import { shouldShowOpenPathError } from '../../../shared/openPathResult';
 /**
@@ -488,9 +489,10 @@ export function GhostPluginDetailView({
                       reloadKey={githubConnectionVersion}
                       account={
                         hasGithubConnection ? (
-                          <GithubAccountCard
-                            onConnected={() => setGithubConnectionVersion((version) => version + 1)}
-                          />
+                          <div>
+                            <GithubAccountCard onConnected={() => setGithubConnectionVersion((version) => version + 1)} />
+                            {ghost.manifest.id === 'cindy-github' && ghost.namespace === null && <GithubAppCard />}
+                          </div>
                         ) : undefined
                       }
                       ghost={ghost}

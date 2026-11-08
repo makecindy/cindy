@@ -1073,6 +1073,8 @@ function devEnvEntries(env) {
     ['XDT_DEVICE_LINK_LOCAL_URL', env.XDT_DEVICE_LINK_LOCAL_URL],
     ['XDT_DEVICE_LINK_CN_LOCAL_URL', env.XDT_DEVICE_LINK_CN_LOCAL_URL],
     ['XDT_DEVICE_LINK_GLOBAL_LOCAL_URL', env.XDT_DEVICE_LINK_GLOBAL_LOCAL_URL],
+    ['XDT_WEBHOOK_CN_LOCAL_URL', env.XDT_WEBHOOK_CN_LOCAL_URL],
+    ['XDT_WEBHOOK_GLOBAL_LOCAL_URL', env.XDT_WEBHOOK_GLOBAL_LOCAL_URL],
     // 模型目录闭环调试覆写。dev 默认仍不联网；只有显式给 URL 时，主进程才允许
     // 从该地址拉取 Catalog。PATH / DISABLE 同步透传，避免 runner 吞掉已有契约。
     ['XDT_MODELS_URL', env.XDT_MODELS_URL],

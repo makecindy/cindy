@@ -181,6 +181,20 @@ const prFollowWatch = new PrFollowWatch({
   },
   log,
 });
+/** Re-read current facts before running the existing follow-up gate. No new agent task. */
+export async function notifyGithubPrEvents(urls: readonly string[], isCurrent: () => boolean): Promise<void> {
+  if (!prStatusService) throw new Error('HOST_NOT_READY');
+  for (const url of urls) {
+    if (!isCurrent()) return;
+    const match = /^https:\/\/github\.com\/([^/]+)\/([^/]+)\/pull\/(\d+)$/.exec(url);
+    if (!match) continue;
+    const query = { owner: match[1]!, repo: match[2]!, prNumber: Number(match[3]) };
+    const [result] = await prStatusService.getStatuses([query], { waitForFresh: true, refresh: true });
+    if (!result?.ok) throw new Error('PR_VERIFICATION_FAILED');
+    if (isCurrent()) await prFollowWatch.notify(url, isCurrent);
+  }
+}
+
 export async function manageGithubPrs(
   sessionId: string,
   args: Record<string, unknown>,
