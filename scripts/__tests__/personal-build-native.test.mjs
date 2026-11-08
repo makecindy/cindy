@@ -1,0 +1,46 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import {createHash} from 'node:crypto';
+import {sdkSupported,nativeIdentity,detachRuntime} from '../personal-build/native-capabilities.mjs';
+test('Live Activity SDK gate rejects old/invalid SDKs and accepts newer SDKs',()=>{
+ for(const v of ['27.0','27.2','26.9','','invalid']) assert.equal(sdkSupported(v),false,v);
+ for(const v of ['27.3','27.3.1','28.0']) assert.equal(sdkSupported(v),true,v);
+});
+test('native capability identity detects removed/replaced artifacts and rejects incomplete receipts',()=>{
+ const root=fs.mkdtempSync(path.join(os.tmpdir(),'personal-native-test-'));
+ try {
+  assert.equal(nativeIdentity(root),null);
+  const file=path.join(root,'apps/desktop/resources/personal-native.json');fs.mkdirSync(path.dirname(file),{recursive:true});
+  const files={};for(const name of ['addon','extension','plist']){fs.writeFileSync(path.join(root,name),name);files[name]=createHash('sha256').update(name).digest('hex');}
+  const save=files=>fs.writeFileSync(file,JSON.stringify({version:1,state:'built',files}));save(files);
+  const identity=nativeIdentity(root);assert.equal(identity.length,64);
+  fs.writeFileSync(path.join(root,'addon'),'replacement');assert.throws(()=>nativeIdentity(root),/changed/);
+  fs.writeFileSync(path.join(root,'addon'),'addon');assert.equal(nativeIdentity(root),identity);
+  save({addon:files.addon});assert.throws(()=>nativeIdentity(root),/Incomplete/);
+  save(files);fs.unlinkSync(path.join(root,'extension'));assert.throws(()=>nativeIdentity(root));
+ }finally{fs.rmSync(root,{recursive:true,force:true});}
+});
+
+test('runtime copy preserves signed framework links and breaks shared file hard links',()=>{
+ const root=fs.mkdtempSync(path.join(os.tmpdir(),'personal-runtime-test-'));
+ try {
+  const app=path.join(root,'Electron.app');fs.mkdirSync(path.join(app,'Versions/A'),{recursive:true});
+  const store=path.join(root,'store');fs.writeFileSync(store,'original');fs.linkSync(store,path.join(app,'Versions/A/binary'));
+  fs.symlinkSync('A',path.join(app,'Versions/Current'));fs.symlinkSync('Versions/Current/binary',path.join(app,'binary'));
+  detachRuntime(app);
+  assert.equal(fs.readlinkSync(path.join(app,'binary')),'Versions/Current/binary');
+  assert.equal(fs.readlinkSync(path.join(app,'Versions/Current')),'A');
+  fs.writeFileSync(path.join(app,'binary'),'changed');assert.equal(fs.readFileSync(store,'utf8'),'original');
+  assert.equal(fs.readFileSync(app+'.before-native/binary','utf8'),'original');
+ }finally{fs.rmSync(root,{recursive:true,force:true});}
+});
+
+test('mac app launch preserves argv, waits for exit, and resolves the project before LaunchServices changes cwd',async()=>{
+ const {macAppArgs}=await import('../personal-build/macos-app-launch.mjs');
+ const args=macAppArgs('/tmp/Personal App.app',['.','--flag','a b'],'/tmp/project','/dev/ttys123');
+ assert.deepEqual(args,['-W','-n','-a','/tmp/Personal App.app','-o','/dev/ttys123','--stderr','/dev/ttys123','--args','/tmp/project','--flag','a b']);
+ assert.throws(()=>macAppArgs('/tmp/App.app',['.'],'/tmp','/tmp/not-terminal'));
+});

@@ -8,6 +8,8 @@ import { fileURLToPath } from 'node:url';
 import { parseManifest, queueRequest, runtimeEnv, toolBundle } from '../personal-build/managed.mjs';
 import { checkCheckout } from '../personal-build/checkout-guard.mjs';
 import { run } from '../personal-build.mjs';
+import { personalLaunchCommand } from '../personal-build/automatic.mjs';
+import { createHash } from 'node:crypto';
 
 // Script integration tier. Legacy update errors could overwrite work or roll old code onto a
 // partially migrated database. Exercise the actual shell engine in disposable Git worktrees;
@@ -16,6 +18,33 @@ import { run } from '../personal-build.mjs';
 const here = path.dirname(fileURLToPath(import.meta.url));
 const temp = t => { const p = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-managed-')); t.after(() => fs.rmSync(p, { recursive: true, force: true })); return p; };
 const put = (p, s) => { fs.mkdirSync(path.dirname(p), { recursive: true }); fs.writeFileSync(p, s); };
+
+test('supervised terminal forwards the same credential certificate as the legacy resolver', { skip: process.platform !== 'darwin' }, t => {
+  const root = temp(t), bin = path.join(root, 'bin'), data = path.join(root, 'profile');
+  fs.mkdirSync(bin); fs.mkdirSync(data);
+  const cert = 'fixture certificate, not a real credential';
+  const previous = createHash('sha1').update(cert).digest('hex').toUpperCase(), other = 'B'.repeat(40);
+  const stub = (name, body) => { put(path.join(bin, name), '#!/bin/sh\n' + body); fs.chmodSync(path.join(bin, name), 0o755); };
+  stub('security', `printf '%s\\n' '  1) ${previous} "Apple Development: Fixture"' '  2) ${other} "Apple Development: Other"'`);
+  stub('zsh', 'printf "%s\\n" "$TEST_SHELL_IDENTITY"');
+  stub('codesign', 'for arg do case "$arg" in --extract-certificates=*) prefix=${arg#*=};; esac; done\nprintf "%s" "fixture certificate, not a real credential" > "${prefix}0"');
+  const env = { PATH: `${bin}:/usr/bin:/bin`, HOME: root, ZDOTDIR: root,
+    PERSONAL_DATA_DIR: data, PERSONAL_STATE_DIR: root,
+    PERSONAL_TOOLS_DIR: path.resolve(here, '../personal-build') };
+  const start = extra => {
+    const r = spawnSync('/bin/zsh', ['-f', '-c', personalLaunchCommand, 'personal-build',
+      '/bin/sh', '-c', 'printf "CHILD_IDENTITY=%s\\n" "$CINDY_REMOTE_CREDENTIALS_SIGNING_IDENTITY"'],
+      { env: { ...env, ...extra }, encoding: 'utf8' });
+    assert.equal(r.status, 0, r.stderr);
+    return /CHILD_IDENTITY=(.*)/.exec(r.stdout)?.[1];
+  };
+  assert.equal(start({ CINDY_REMOTE_CREDENTIALS_SIGNING_IDENTITY: other }), other);
+  assert.equal(start({ TEST_SHELL_IDENTITY: previous }), previous);
+  // Multiple identities must not pick an arbitrary certificate.
+  assert.equal(start({}), '');
+  put(path.join(data, 'remote-desktop/native-credentials/old/cindy-macos-remote-credentials'), 'fixture');
+  assert.equal(start({}), previous);
+});
 
 test('legacy manifests stay data, unsafe paths fail, and pending requests cannot be overwritten', t => {
   const root = temp(t), target = 'a'.repeat(40);

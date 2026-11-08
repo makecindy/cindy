@@ -5,7 +5,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { RecoveryJournal, compatibility, durableWrite } from '../personal-build/recovery.mjs';
-import { readHeartbeat, acquire, validateBootstrap } from '../personal-build/automatic.mjs';
+import { readHeartbeat, acquire, validateBootstrap, validateManualUpgrade } from '../personal-build/automatic.mjs';
 
 // Script integration: the old launcher forgot its fallback at first ready and had no durable trial
 // recovery. Real on-disk journal, separate terminating writer process, injected time (no sleeps).
@@ -21,6 +21,45 @@ const fixture = t => {
   return { dir, j, good, candidate, clock: value => { now = value; } };
 };
 const evidence = { compatible: true, prepared: true, idle: true, stopped: true };
+
+test('manual upgrade failure blocks code rollback, including interrupted trials and independent rescue', t => {
+  const f = fixture(t);
+  const proof = { prepared: true, stopped: true, manualRequested: true, smokeVerified: true, profileVerified: true };
+  for (const key of Object.keys(proof)) assert.throws(() => f.j.beginManual(f.candidate, { ...proof, [key]: false }), /prepared/);
+  f.j.beginManual(f.candidate, proof);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(f.dir, 'known-good.json'))).rollbackSafe, false);
+  const blocked = f.j.recoverInterrupted();
+  assert.equal(blocked.phase, 'blocked'); assert.equal(blocked.failed.id, 'candidate');
+  assert.equal(blocked.good.id, 'good');
+  assert.throws(() => f.j.finishRecovery(true), /No recovery/);
+});
+
+test('manual promotion needs continuous health and restores a verified rescue receipt', t => {
+  const f = fixture(t);
+  const s = f.j.beginManual(f.candidate, { prepared: true, stopped: true, manualRequested: true, smokeVerified: true, profileVerified: true });
+  const h = { generation: s.generation, id: 'candidate', healthy: true, processAlive: true };
+  assert.equal(f.j.observe(h, 100).phase, 'trial'); f.clock(1100);
+  assert.equal(f.j.observe(h, 100).good.id, 'candidate');
+  const rescue = JSON.parse(fs.readFileSync(path.join(f.dir, 'known-good.json')));
+  assert.equal(rescue.verified, true); assert.equal(rescue.rollbackSafe, undefined);
+  f.j.begin({ id: 'third', directory: '/third' }, evidence);
+  assert.equal(f.j.reject('automatic failure').phase, 'recovering');
+});
+
+test('manual reports bind checked startup to the exact baseline, candidate, profile and unchanged migrations', () => {
+  const c = { automatic: { enabled: false }, runtime: { dataDir: '/profile' }, region: 'global' };
+  const release = { id: 'new', monitorProtocol: 1, migrations: 'm' };
+  const state = { phase: 'stable', good: { id: 'old', migrations: 'm' }, rejected: [] };
+  const r = { kind: 'personal-manual-upgrade', checked: true, baseline: state.good, candidate: release,
+    dataDir: '/profile', region: 'global', smoke: { ready: true, releaseId: 'new' } };
+  assert.equal(validateManualUpgrade(r, c, state, release), release);
+  for (const change of [{ dataDir: '/other' }, { baseline: { id: 'wrong' } }, { candidate: { id: 'wrong' } },
+    { checked: false }, { smoke: { ready: true, releaseId: 'wrong' } }])
+    assert.throws(() => validateManualUpgrade({ ...r, ...change }, c, state, release));
+  assert.throws(() => validateManualUpgrade(r, { ...c, automatic: { enabled: true } }, state, release));
+  assert.throws(() => validateManualUpgrade(r, c, state, { ...release, migrations: 'changed' }));
+  assert.throws(() => validateManualUpgrade(r, c, { ...state, rejected: [{ id: 'new' }] }, release));
+});
 
 test('first ready does not promote; healthy observation commits only after probation', t => {
   const f = fixture(t); const s = f.j.begin(f.candidate, evidence);

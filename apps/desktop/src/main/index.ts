@@ -1,3 +1,4 @@
+import './personalLaunchCwd.js';
 // Entry: Electron startup → bootstrap-electron.ts (dynamic import).
 import fixPath from 'fix-path';
 import { ensureMacPackageManagerPath } from './agentToolPath.js';

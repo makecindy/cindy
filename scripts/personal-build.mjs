@@ -6,6 +6,7 @@ import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { resumableCompose } from './personal-build/composition.mjs';
+import { nativeIdentity } from './personal-build/native-capabilities.mjs';
 
 export function run(command, args, cwd) {
   return execFileSync(command, args, { cwd, encoding: 'utf8', maxBuffer: 32 * 1024 * 1024,
@@ -228,6 +229,7 @@ export function prepare(config, out, exec = run, { resume = false } = {}) {
 
 export function verifyReport(file) {
   const r = json(file);
+  if (r.nativeCapabilities) invariant(nativeIdentity(r.directory), 'Native capability receipt missing; run check again');
   invariant(r.version === 1 && ['prepared', 'checked'].includes(r.state) && shaPattern.test(r.app?.target), 'Build is not prepared');
   invariant(run('git', ['rev-parse', 'HEAD'], r.directory) === r.app.target, 'Build HEAD changed; prepare again');
   invariant(run('git', ['status', '--porcelain', '--untracked-files=no'], r.directory) === '', 'Build has tracked changes; prepare again');
@@ -257,7 +259,7 @@ export async function main(argv) {
     options[rest[i].slice(2)] = rest[i + 1];
   }
   const need = key => { invariant(options[key], `--${key} is required`); return path.resolve(options[key]); };
-  if (['auto-check', 'auto-launch', 'auto-status', 'auto-recover', 'auto-bootstrap'].includes(command)) { const { automaticCommand } = await import('./personal-build/automatic.mjs'); return automaticCommand(command, options); }
+  if (['auto-check', 'auto-launch', 'auto-status', 'auto-recover', 'auto-bootstrap', 'manual-check', 'manual-activate'].includes(command)) { const { automaticCommand } = await import('./personal-build/automatic.mjs'); return automaticCommand(command, options); }
   if (['launch', 'stage', 'apply', 'rollback', 'doctor', 'sync-plugins', 'select', 'request', 'export'].includes(command)) {
     const { managedCommand } = await import('./personal-build/managed.mjs');
     return managedCommand(command, options);
@@ -290,6 +292,8 @@ export async function main(argv) {
     try {
       pnpm(['install', '--frozen-lockfile'], r.directory);
       for (const args of [['--filter', 'desktop', 'db:validate'], ['check:design-inventory'], ['--filter', 'desktop', 'run', 'typecheck']]) pnpm(args, r.directory);
+      const { prepareNativeCapabilities } = await import('./personal-build/native-capabilities.mjs');
+      r.nativeCapabilities = prepareNativeCapabilities(r.directory);
       verifyReport(file); r.state = 'checked'; r.checkedAt = new Date().toISOString(); write(file, r);
     } catch (error) { r.state = 'prepared'; r.checkError = error.message; write(file, r); throw error; }
     return;
@@ -301,7 +305,7 @@ export async function main(argv) {
     pnpm(['restart:desktop:remote', '--', `--region=${r.region}`, `--isolated=${r.name}`], r.directory); return;
   }
   invariant(!command || command === 'help', `Unknown command ${command}`);
-  console.log('personal-build: init --config FILE [--app CHECKOUT] [--plugins CHECKOUT]\nprepare --config FILE --out NEW_DIRECTORY\ncheck|start|status --report FILE\naudit --brain CINDY_BRAIN_DIRECTORY\ncontinue --report FILE\nexport --report FILE --out NEW_DIRECTORY\nlaunch|doctor|sync-plugins|stage|apply|rollback --config FILE\nselect --config FILE --report FILE\nrequest --config FILE --action stage|stage-restart|restart\nbundle-tools --out NEW_DIRECTORY\nauto-launch|auto-check|auto-status|auto-recover --config FILE\nauto-bootstrap --config FILE --report BOOTSTRAP_REPORT\nManaged macOS lifecycle requires explicit runtime configuration. Restart only follows a request.');
+  console.log('personal-build: init --config FILE [--app CHECKOUT] [--plugins CHECKOUT]\nprepare --config FILE --out NEW_DIRECTORY\ncheck|start|status --report FILE\naudit --brain CINDY_BRAIN_DIRECTORY\ncontinue --report FILE\nexport --report FILE --out NEW_DIRECTORY\nlaunch|doctor|sync-plugins|stage|apply|rollback --config FILE\nselect --config FILE --report FILE\nrequest --config FILE --action stage|stage-restart|restart\nbundle-tools --out NEW_DIRECTORY\nauto-launch|auto-check|auto-status|auto-recover --config FILE\nauto-bootstrap --config FILE --report BOOTSTRAP_REPORT\nmanual-check --config FILE --report BUILD_REPORT --out NEW_MANUAL_REPORT\nmanual-activate --config FILE --report MANUAL_REPORT\nManaged macOS lifecycle requires explicit runtime configuration. Restart only follows a request.');
 }
 if (process.argv[1] && fs.existsSync(process.argv[1]) && fs.realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)) {
   main(process.argv.slice(2)).catch(error => { console.error(error.message); process.exitCode = 1; });

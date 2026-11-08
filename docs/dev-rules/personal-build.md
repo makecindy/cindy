@@ -316,6 +316,15 @@ versions. Good/current/candidate directories are not automatically deleted. The 
 an update remains pinned; this rollout does not automatically replace its own recovery implementation.
 The old private launcher backup remains the independent bootstrap recovery route.
 
+Both the legacy launcher and supervised terminal source `credential-signing.zsh` before invoking
+the restart wrapper. It resolves `CINDY_REMOTE_CREDENTIALS_SIGNING_IDENTITY` from the explicit
+environment, interactive shell, a previously signed credential helper, or the sole available developer
+certificate, in that order. Multiple unselected certificates remain ambiguous. This is the remote
+desktop credential helper's identity, not the Electron application's signature. `remoteReady` only
+proves device-link connectivity; it does not prove saved-credential automatic login. A changed launcher
+does not inject environment variables into an already running host: verify helper signing and remote
+login separately after the next authorized safe restart.
+
 Real cold-switch/rollback and compatibility acceptance remain required before enabling this on the
 live shared profile. Unit/state-machine success and a mock startup are distinct evidence, not a claim
 of a completed live upgrade. The following target constraints describe the complete acceptance bar;
@@ -402,7 +411,30 @@ Still unverified: shared-profile bootstrap/handoff, live remote reconnection dur
 recovery, and the full fault matrix above. Automatic activation remains disabled for the live profile.
 
 
-### First observed health-bridge handover
+### Explicit manual upgrade after the health bridge
+
+When the user requests an immediate upgrade that changes backend/runtime/plugin content, use
+`manual-check --config FILE --report BUILD_REPORT --out NEW_MANUAL_REPORT` followed, after the old
+instance exits normally, by `manual-activate --config FILE --report NEW_MANUAL_REPORT`. These commands
+do not enable automatic updates and do not pretend that the automatic compatibility gate passed.
+The checked build, exact baseline/candidate/profile, unchanged migration fingerprint and isolated
+startup proof are required. A failed/rejected candidate cannot be silently retried. The existing
+restart wrapper still enforces profile exclusivity and runtime startup checks.
+
+Manual activation journals an explicit manual rollback policy before starting the candidate. It
+requires the same continuous readiness/remote-health probation before promotion. Failure/interruption
+blocks further starts instead of launching old code against potentially changed data; the independent
+rescue receipt also marks rollback compatibility unverified until successful promotion. This does not
+restore or overwrite databases, credentials or plugin ledgers. Preserve both version directories for
+inspection. This path does not accept changed migration artifacts or private database scripts.
+
+For an explicitly authorized immediate restart, an external one-use Terminal handover may stop the
+exact observed old PID normally and then invoke manual activation; it must not force-kill, fabricate
+an idle result, or create a persistent restart job. `desktop-whoami` exit 1 means no matching ready
+instance, not necessarily a scan failure: parse `processScan.ok` and use `--all` when checking shared
+profile exclusivity. Record no-instance, readiness, and scan errors separately.
+
+### First observed health-bridge handover (legacy bootstrap)
 
 `auto-bootstrap --config FILE --report BOOTSTRAP_REPORT` is an explicit operator handover, not an
 automatic-update exception. The report must name the observed ready original checkout, a separately
@@ -419,3 +451,24 @@ A failed first candidate restores the original directory. This path does not mig
 an official release, or enable the old Cindy Make product. A one-use external Terminal handover can wait
 for current turns to finish and quit the explicitly selected source instance after the user has selected
 that developer-launcher method; it must not install a persistent restart job or force-kill an unknown PID.
+
+### Native capability acceptance for source personal builds
+
+`check` also prepares native Live Activity components on Apple-silicon macOS 27.3+.
+It uses an explicitly selected `DEVELOPER_DIR`, or discovers a compatible installed Xcode
+without changing `xcode-select`. A missing SDK or skipped required component fails the check.
+Older systems record `unsupported`; startup readiness is not complete feature acceptance.
+
+The source addon alone is insufficient: the candidate's own Electron app must contain the
+WidgetKit extension, Live Activity plist declaration and silent alert sound. The builder copies
+Electron before changing it (pnpm store hard links must not affect another checkout), retains the
+original runtime, preserves the extension's sandbox signature, and verifies the resulting bundle.
+It refuses a running candidate. No installed application or user data is modified.
+
+`resources/personal-native.json` records SDK, capability state and artifact hashes. Supervised
+release identity includes this receipt and validates its files before activation. Missing/replaced
+native artifacts invalidate the candidate. A rebuilt native runtime can therefore be a distinct
+release even when its source commit has not changed. Test actual Live Activity availability after
+isolated startup; do not equate a built addon, a visible setting, or `remoteReady` with a rendered
+system activity. Signing here is ad-hoc developer bundle signing; remote credential identity
+resolution remains a separate certificate-backed launch requirement.
