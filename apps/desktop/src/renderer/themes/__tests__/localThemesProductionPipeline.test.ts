@@ -46,7 +46,8 @@ import { loadLocalThemesSync, resetLocalThemesMigrationForTest } from '../../../
 import { resetOmarchyThemeForTest } from '../../../main/local-themes/omarchy';
 import '../colors';
 import { tryGetFamily } from '../families';
-import { bootstrapLocalThemesSync, getLocalThemes } from '../local-themes';
+import type { LocalThemesResult } from '../../../shared/local-themes';
+import { bootstrapLocalThemesSync, getLocalThemes, onLocalThemesChange } from '../local-themes';
 import type { Theme } from '../types';
 
 const FIXTURE_DIR = fileURLToPath(new URL('./fixtures/local-themes/', import.meta.url));
@@ -58,6 +59,8 @@ const FIXTURE_FILES = [
   'external-import-missing-switch.json',
 ] as const;
 
+let pushLocalThemes: (payload: LocalThemesResult) => void = () => {};
+
 /** 用真实 loader 读盘并走 renderer 生产装载路径，返回按 id 索引的 Theme。 */
 function loadViaProductionPipeline(): Map<string, Theme> {
   const payload = loadLocalThemesSync();
@@ -68,6 +71,10 @@ function loadViaProductionPipeline(): Map<string, Theme> {
     electronAPI: {
       localThemes: {
         listSync: () => payload,
+        onChanged: (cb: (next: LocalThemesResult) => void) => {
+          pushLocalThemes = cb;
+          return () => {};
+        },
       },
     },
   });
@@ -220,5 +227,21 @@ describe('Omarchy 主题经生产链路成为 omarchy 家族', () => {
     } finally {
       fs.chmodSync(currentDir(), 0o755);
     }
+  });
+
+  it('Omarchy 换主题推送后窗口内主题随之更新', () => {
+    writeOmarchyTheme(OMARCHY_LIGHT);
+    loadViaProductionPipeline();
+    const onChange = vi.fn();
+    const unsubscribe = onLocalThemesChange(onChange);
+    writeOmarchyTheme(JSON.stringify({
+      name: 'Omarchy',
+      type: 'dark',
+      colors: { 'editor.background': '#142620', 'editor.foreground': '#dfede5' },
+    }));
+    pushLocalThemes(loadLocalThemesSync());
+    unsubscribe();
+    expect(onChange).toHaveBeenCalledTimes(1);
+    expect(tryGetFamily('omarchy')?.dark?.colors.surface).toBe('#142620');
   });
 });

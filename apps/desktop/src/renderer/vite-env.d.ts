@@ -1255,6 +1255,7 @@ interface ElectronAPI {
     openDir: () => Promise<LocalThemeOpenDirResult>;
     /** 导入 VSCode / Obsidian 主题文件；对话框与读文件都在 main 侧。 */
     importExternal: () => Promise<import('../shared/theme-import/types').LocalThemeImportResult>;
+    onChanged: (cb: (payload: LocalThemesResult) => void) => () => void;
   };
 
   /** RSB terminal tab —— PTY 后端 + xterm.js,详见 shared/terminal-bridge.ts 注释。 */
