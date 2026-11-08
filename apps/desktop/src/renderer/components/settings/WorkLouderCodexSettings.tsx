@@ -149,42 +149,33 @@ export function WorkLouderCodexEntry({
 }: WorkLouderCodexEntryProps) {
   const { t } = useTranslation();
   const enabled = state?.settings.deviceEnabled ?? false;
-  return (
-    <button
-      type="button"
+  // 单独出现时自成一张卡片；配件列表里由外层卡片包住
+  const row = (
+    <SettingsRow
       onClick={onOpen}
-      className={cn(
-        'flex w-full items-center gap-3 text-left outline-none transition-colors',
-        grouped
-          ? 'rounded-none border-0 bg-transparent px-4 py-[14px]'
-          : 'rounded-xl border p-4 border-[var(--settings-theme-card-border)] bg-[var(--settings-theme-card-bg)]',
-        'enabled:hover:bg-[var(--settings-menu-bg-hover)] focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]',
-      )}
       aria-label={t(workLouderCopyKey(model, 'openAria'))}
-    >
-      <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-[var(--surface-chip)] text-[var(--text-secondary)]">
-        <CodexMicroGlyph />
-      </span>
-      <span className="flex min-w-0 flex-1 flex-col gap-1">
-        <span className="truncate text-13 font-medium text-[var(--text-primary)]">
-          {t(workLouderCopyKey(model, 'title'))}
+      lead={
+        <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-[var(--surface-chip)] text-[var(--text-secondary)]">
+          <CodexMicroGlyph />
         </span>
-        <span className="text-12 leading-[1.4] text-[var(--text-secondary)]">
-          {t(workLouderCopyKey(model, 'entryDescription'))}
+      }
+      title={t(workLouderCopyKey(model, 'title'))}
+      hint={t(workLouderCopyKey(model, 'entryDescription'))}
+      trailing={
+        <span className="flex shrink-0 items-center gap-2">
+          <ConnectionStatus
+            enabled={enabled}
+            present={state?.devicePresent ?? null}
+            connectionStatus={state?.connectionStatus}
+            loading={loading}
+            compact
+          />
+          <ChevronRight size={16} className="text-[var(--text-tertiary)]" aria-hidden="true" />
         </span>
-      </span>
-      <span className="flex shrink-0 items-center gap-2">
-        <ConnectionStatus
-          enabled={enabled}
-          present={state?.devicePresent ?? null}
-          connectionStatus={state?.connectionStatus}
-          loading={loading}
-          compact
-        />
-        <ChevronRight size={16} className="text-[var(--text-tertiary)]" aria-hidden="true" />
-      </span>
-    </button>
+      }
+    />
   );
+  return grouped ? row : <SettingsCard>{row}</SettingsCard>;
 }
 
 export function WorkLouderCodexEntryContainer({
@@ -557,12 +548,48 @@ export function WorkLouderCodexSettings({
         />
       </div>
 
-      <SettingsCard className="flex items-center p-4 gap-4">
-        <div className="flex min-w-0 flex-1 flex-col gap-2">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <p className={SETTINGS_ROW_LABEL_CLASS}>
-              {t('settings.shortcuts.workLouderCodex.connection.toggle.label')}
-            </p>
+      <SettingsCard>
+        <SettingsRow
+          wrap
+          title={t('settings.shortcuts.workLouderCodex.connection.toggle.label')}
+          hint={
+            <span className="flex flex-col gap-2">
+              <span>
+                {settings.deviceEnabled
+                  ? connectionDescription(t, model, state)
+                  : presenceDescription(t, model)}
+              </span>
+              {((settings.deviceEnabled && state?.connectionStatus === 'connected') ||
+                state?.devicePresent === true) &&
+                state?.device.deviceType && (
+                  <div className="flex flex-wrap gap-2 pt-1">
+                    <DeviceChip icon={<Keyboard size={12} />}>
+                      {state.device.deviceType === 'creator-micro-2'
+                        ? 'Creator Micro 2'
+                        : 'Codex Micro'}
+                    </DeviceChip>
+                    {state.device.isUsbConnection && (
+                      <DeviceChip icon={<Usb size={12} />}>USB</DeviceChip>
+                    )}
+                    {state.device.batteryPercentage !== null && (
+                      <DeviceChip
+                        icon={state.device.isCharging ? <BatteryCharging size={12} /> : undefined}
+                      >
+                        {state.device.batteryPercentage}%
+                      </DeviceChip>
+                    )}
+                    {state.device.firmwareVersion && (
+                      <DeviceChip>
+                        {t('settings.shortcuts.workLouderCodex.device.firmware', {
+                          version: state.device.firmwareVersion,
+                        })}
+                      </DeviceChip>
+                    )}
+                  </div>
+                )}
+            </span>
+          }
+          trailing={
             <div className="flex items-center gap-2">
               <Switch
                 checked={settings.deviceEnabled}
@@ -577,41 +604,8 @@ export function WorkLouderCodexSettings({
                 loading={loading}
               />
             </div>
-          </div>
-          <p className="text-12 leading-[1.45] text-[var(--text-secondary)]">
-            {settings.deviceEnabled
-              ? connectionDescription(t, model, state)
-              : presenceDescription(t, model)}
-          </p>
-          {((settings.deviceEnabled && state?.connectionStatus === 'connected') ||
-            state?.devicePresent === true) &&
-            state?.device.deviceType && (
-              <div className="flex flex-wrap gap-2 pt-1">
-                <DeviceChip icon={<Keyboard size={12} />}>
-                  {state.device.deviceType === 'creator-micro-2'
-                    ? 'Creator Micro 2'
-                    : 'Codex Micro'}
-                </DeviceChip>
-                {state.device.isUsbConnection && (
-                  <DeviceChip icon={<Usb size={12} />}>USB</DeviceChip>
-                )}
-                {state.device.batteryPercentage !== null && (
-                  <DeviceChip
-                    icon={state.device.isCharging ? <BatteryCharging size={12} /> : undefined}
-                  >
-                    {state.device.batteryPercentage}%
-                  </DeviceChip>
-                )}
-                {state.device.firmwareVersion && (
-                  <DeviceChip>
-                    {t('settings.shortcuts.workLouderCodex.device.firmware', {
-                      version: state.device.firmwareVersion,
-                    })}
-                  </DeviceChip>
-                )}
-              </div>
-            )}
-        </div>
+          }
+        />
       </SettingsCard>
 
       <SettingsCard className="flex flex-col gap-3 p-4">

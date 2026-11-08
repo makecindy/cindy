@@ -11,6 +11,7 @@ import { Check, ChevronDown } from 'lucide-react';
 import type { ClassicalReplyStyleId } from '@cindy/maker-shared/classical-reply';
 import { classicalStyleOptions, languageSettings } from './LanguageSection.settings-search';
 import { SelectParts as Select } from '@/components/ui/select';
+import { SettingsCard, SettingsRow, SettingsSection } from '@/components/ui/settings-rows';
 
 import { cn } from '@/lib/utils';
 import { useLocale } from '@/hooks/useLocale';
@@ -115,89 +116,61 @@ export function LanguageSection() {
   };
 
   return (
-    <div className="flex flex-col gap-[14px]">
-      <h2 className="text-16 font-medium leading-[1.2] text-[var(--settings-section-title)]">
-        {t(languageSettings.language.sectionKey)}
-      </h2>
-
-      <div
-        className={cn(
-          'flex flex-col rounded-xl px-4',
-          'bg-[var(--settings-theme-card-bg)]',
-          'border border-[var(--settings-theme-card-border)]',
-        )}
-      >
-        <div
+    <SettingsSection title={t(languageSettings.language.sectionKey)}>
+      <SettingsCard>
+        <SettingsRow
           id={languageSettings.language.targetId}
-          className="flex flex-row items-center justify-between gap-6 py-4"
-        >
-          <div className="min-w-0 flex-1">
-            <p
-              className="text-13 font-medium text-[var(--settings-section-sublabel)]"
-              style={{ letterSpacing: '0.12px' }}
-            >
-              {t(languageSettings.language.titleKey)}
-            </p>
-            <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
-              {t(languageSettings.language.descriptionKey)}
-            </p>
-          </div>
-          <PillSelect<LanguageOption>
-            data-setting-id={languageSettings.language.id}
-            value={classical ? CLASSICAL_OPTION : locale}
-            options={languageSettings.language.options.map((option) => ({
-              value: option.value,
-              label: t(option.labelKey),
-            }))}
-            onChange={chooseLanguage}
-            ariaLabel={t('settings.language.ariaLabel')}
-            className="w-[320px]"
-          />
-        </div>
+          title={t(languageSettings.language.titleKey)}
+          hint={t(languageSettings.language.descriptionKey)}
+          trailing={
+            <PillSelect<LanguageOption>
+              data-setting-id={languageSettings.language.id}
+              value={classical ? CLASSICAL_OPTION : locale}
+              options={languageSettings.language.options.map((option) => ({
+                value: option.value,
+                label: t(option.labelKey),
+              }))}
+              onChange={chooseLanguage}
+              ariaLabel={t('settings.language.ariaLabel')}
+              className="w-[320px]"
+            />
+          }
+        />
 
         {classical ? (
-          <div
+          <SettingsRow
             id={languageSettings.classical.targetId}
-            className="flex flex-row items-center justify-between gap-6 border-t border-[var(--settings-theme-card-border)] py-4"
-          >
-            <div className="min-w-0 flex-1">
-              <p
-                className="text-13 font-medium text-[var(--settings-section-sublabel)]"
-                style={{ letterSpacing: '0.12px' }}
-              >
-                {t(languageSettings.classical.titleKey)}
-              </p>
-              <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
-                {t(languageSettings.classical.descriptionKey)}
-              </p>
-            </div>
-            <div className="flex w-[320px] max-w-full shrink-0 flex-row gap-2">
-              <PillSelect<ClassicalLocale>
-                data-setting-id={languageSettings.classical.id}
-                value={classical}
-                options={languageSettings.classical.options.map((script) => ({
-                  value: script.value,
-                  label: t(script.labelKey),
-                }))}
-                onChange={setLocale}
-                ariaLabel={t('settings.language.classical.scriptAriaLabel')}
-                className="w-[112px]"
-              />
-              <PillSelect<ClassicalReplyStyleId>
-                data-setting-id={languageSettings.classical.id}
-                value={classicalStyle}
-                options={classicalStyleOptions.map((style) => ({
-                  value: style.value,
-                  label: t(style.labelKey),
-                }))}
-                onChange={setClassicalStyle}
-                ariaLabel={t('settings.language.classical.styleAriaLabel')}
-                className="min-w-0 flex-1"
-              />
-            </div>
-          </div>
+            title={t(languageSettings.classical.titleKey)}
+            hint={t(languageSettings.classical.descriptionKey)}
+            trailing={
+              <div className="flex w-[320px] max-w-full shrink-0 flex-row gap-2">
+                <PillSelect<ClassicalLocale>
+                  data-setting-id={languageSettings.classical.id}
+                  value={classical}
+                  options={languageSettings.classical.options.map((script) => ({
+                    value: script.value,
+                    label: t(script.labelKey),
+                  }))}
+                  onChange={setLocale}
+                  ariaLabel={t('settings.language.classical.scriptAriaLabel')}
+                  className="w-[112px]"
+                />
+                <PillSelect<ClassicalReplyStyleId>
+                  data-setting-id={languageSettings.classical.id}
+                  value={classicalStyle}
+                  options={classicalStyleOptions.map((style) => ({
+                    value: style.value,
+                    label: t(style.labelKey),
+                  }))}
+                  onChange={setClassicalStyle}
+                  ariaLabel={t('settings.language.classical.styleAriaLabel')}
+                  className="min-w-0 flex-1"
+                />
+              </div>
+            }
+          />
         ) : null}
-      </div>
-    </div>
+      </SettingsCard>
+    </SettingsSection>
   );
 }

@@ -40,7 +40,7 @@ import { extractIpcError } from '@/utils/ipcError';
 import { DockIconPicker } from './DockIconPicker';
 import { FontFamilyPicker } from './FontFamilyPicker';
 import { LayoutResetControl } from './LayoutResetControl';
-import { SettingsBlock, SettingsCard, SettingsRow, SettingsSection } from '@/components/ui/settings-rows';
+import { SETTINGS_PAGE_TITLE_CLASS, SettingsBlock, SettingsCard, SettingsRow, SettingsSection } from '@/components/ui/settings-rows';
 import { WallpaperSection } from './WallpaperSection';
 import {
   APPEARANCE_LIMITS,
@@ -592,7 +592,7 @@ export function AppearanceSection() {
   return (
     <div className="flex flex-col gap-6">
       {/* 页面标题:比各节标题(16px)高一级,标题段 20px / 1.3 */}
-      <h2 className="text-20 font-medium leading-[1.3] text-[var(--settings-section-title)]">
+      <h2 className={SETTINGS_PAGE_TITLE_CLASS}>
         {t('settings.appearance.title')}
       </h2>
 

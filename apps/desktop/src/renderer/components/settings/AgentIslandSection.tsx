@@ -20,7 +20,7 @@ import {
 } from 'react';
 import { Check, ChevronDown, Volume2 } from 'lucide-react';
 
-import { SettingsCard } from '@/components/ui/settings-rows';
+import { SettingsBlock, SettingsCard, SettingsRow, SettingsSection } from '@/components/ui/settings-rows';
 import { Switch } from '@/components/ui/switch';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
@@ -288,72 +288,57 @@ export function AgentIslandSection() {
 
   if (!supported) {
     return (
-      <div className="flex flex-col gap-[14px]">
-        <h2 className="text-16 font-medium leading-[1.2] text-[var(--settings-section-title)]">
-          {t('settings.agentIsland.title')}
-        </h2>
-        <SettingsCard className="p-5">
-          <p className="text-13 leading-[1.45] text-[var(--text-secondary)]">
-            {t('settings.agentIsland.unsupported')}
-          </p>
+      <SettingsSection variant="page" title={t('settings.agentIsland.title')}>
+        <SettingsCard>
+          <SettingsBlock>
+            <p className="text-13 leading-[1.45] text-[var(--text-secondary)]">
+              {t('settings.agentIsland.unsupported')}
+            </p>
+          </SettingsBlock>
         </SettingsCard>
-      </div>
+      </SettingsSection>
     );
   }
 
   return (
-    <div className="flex flex-col gap-[14px]">
-      <h2 className="text-16 font-medium leading-[1.2] text-[var(--settings-section-title)]">
-        {t('settings.agentIsland.title')}
-      </h2>
-
+    <SettingsSection variant="page" title={t('settings.agentIsland.title')}>
       {/* Agent Notch's own options grow out of its card, so they read as part of it. */}
       <SettingsCard className="flex flex-col">
-        <div className="flex items-center justify-between gap-3 p-5">
-          <div className="flex min-w-0 flex-col gap-1">
-            <p id={agentIslandSettings.enableLabel.targetId} className="text-13 font-medium text-[var(--settings-section-sublabel)]">
-              {t(agentIslandSettings.enableLabel.titleKey)}
-            </p>
-            <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
-              {t(agentIslandSettings.enableLabel.descriptionKey)}
-            </p>
-          </div>
-
-          <Switch data-setting-id={agentIslandSettings.enableLabel.id}
-            checked={enabled}
-            onCheckedChange={setEnabled}
-            aria-label={t('settings.agentIsland.enableAria')}
-          />
-        </div>
+        <SettingsRow
+          title={<span id={agentIslandSettings.enableLabel.targetId}>{t(agentIslandSettings.enableLabel.titleKey)}</span>}
+          hint={t(agentIslandSettings.enableLabel.descriptionKey)}
+          trailing={
+            <Switch data-setting-id={agentIslandSettings.enableLabel.id}
+              checked={enabled}
+              onCheckedChange={setEnabled}
+              aria-label={t('settings.agentIsland.enableAria')}
+            />
+          }
+        />
         {enabled && (
           <>
-            <div className={ROW_DIVIDER_CLASS} />
-            <div className="flex items-center justify-between gap-3 p-5">
-              <div className="flex min-w-0 flex-col gap-1">
-                <p id={agentIslandSettings.subtleRemindersLabel.targetId} className="text-13 font-medium text-[var(--settings-section-sublabel)]">
-                  {t(agentIslandSettings.subtleRemindersLabel.titleKey)}
-                </p>
-                <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
-                  {t(agentIslandSettings.subtleRemindersLabel.descriptionKey)}
-                </p>
-              </div>
-              <div className="flex shrink-0 items-center gap-2">
-                <DefaultOverrideControls
-                  isCustomized={subtleRemindersCustomized}
-                  disabled={subtleRemindersPending}
-                  onReset={() => void handleResetSubtleReminders()}
-                />
-                <Switch
-                  data-setting-id={agentIslandSettings.subtleRemindersLabel.id}
-                  checked={subtleReminders}
-                  disabled={subtleRemindersPending}
-                  onCheckedChange={handleSubtleRemindersChange}
-                  aria-label={t('settings.agentIsland.subtleRemindersLabel')}
-                />
-              </div>
-            </div>
-            <div className={ROW_DIVIDER_CLASS} />
-            <div className="flex flex-col gap-3 p-5">
+            <SettingsRow
+              title={<span id={agentIslandSettings.subtleRemindersLabel.targetId}>{t(agentIslandSettings.subtleRemindersLabel.titleKey)}</span>}
+              hint={t(agentIslandSettings.subtleRemindersLabel.descriptionKey)}
+              trailing={
+                <div className="flex shrink-0 items-center gap-2">
+                  <DefaultOverrideControls
+                    isCustomized={subtleRemindersCustomized}
+                    disabled={subtleRemindersPending}
+                    onReset={() => void handleResetSubtleReminders()}
+                  />
+                  <Switch
+                    data-setting-id={agentIslandSettings.subtleRemindersLabel.id}
+                    checked={subtleReminders}
+                    disabled={subtleRemindersPending}
+                    onCheckedChange={handleSubtleRemindersChange}
+                    aria-label={t('settings.agentIsland.subtleRemindersLabel')}
+                  />
+                </div>
+              }
+            />
+            {/* 显示器选择整宽放在说明下面，不是左右一行 */}
+            <SettingsBlock className="flex flex-col gap-3">
               <div className="flex min-w-0 flex-col gap-1">
                 <p id={agentIslandSettings.displayLabel.targetId} className="text-13 font-medium text-[var(--settings-section-sublabel)]">
                   {t(agentIslandSettings.displayLabel.titleKey)}
@@ -396,36 +381,34 @@ export function AgentIslandSection() {
                   aria-hidden="true"
                 />
               </div>
-            </div>
+            </SettingsBlock>
           </>
         )}
       </SettingsCard>
 
       {/* Independent of our own island: the system shows it even when ours is off. */}
       {liveActivitySupported && (
-        <SettingsCard className="flex items-center justify-between gap-3 p-5">
-          <div className="flex min-w-0 flex-col gap-1">
-            <p id={agentIslandSettings.liveActivityLabel.targetId} className="text-13 font-medium text-[var(--settings-section-sublabel)]">
-              {t(agentIslandSettings.liveActivityLabel.titleKey)}
-            </p>
-            <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
-              {t(agentIslandSettings.liveActivityLabel.descriptionKey)}
-            </p>
-          </div>
-          <div className="flex shrink-0 items-center gap-2">
-            <DefaultOverrideControls
-              isCustomized={liveActivityCustomized}
-              disabled={liveActivityPending}
-              onReset={() => void handleResetLiveActivity()}
-            />
-            <Switch
-              data-setting-id={agentIslandSettings.liveActivityLabel.id}
-              checked={liveActivity}
-              disabled={liveActivityPending}
-              onCheckedChange={(next) => void handleLiveActivityChange(next)}
-              aria-label={t('settings.agentIsland.liveActivityLabel')}
-            />
-          </div>
+        <SettingsCard>
+          <SettingsRow
+            title={<span id={agentIslandSettings.liveActivityLabel.targetId}>{t(agentIslandSettings.liveActivityLabel.titleKey)}</span>}
+            hint={t(agentIslandSettings.liveActivityLabel.descriptionKey)}
+            trailing={
+              <div className="flex shrink-0 items-center gap-2">
+                <DefaultOverrideControls
+                  isCustomized={liveActivityCustomized}
+                  disabled={liveActivityPending}
+                  onReset={() => void handleResetLiveActivity()}
+                />
+                <Switch
+                  data-setting-id={agentIslandSettings.liveActivityLabel.id}
+                  checked={liveActivity}
+                  disabled={liveActivityPending}
+                  onCheckedChange={(next) => void handleLiveActivityChange(next)}
+                  aria-label={t('settings.agentIsland.liveActivityLabel')}
+                />
+              </div>
+            }
+          />
         </SettingsCard>
       )}
 
@@ -434,46 +417,35 @@ export function AgentIslandSection() {
       {sharedVisible && (
         <>
           <SettingsCard className="flex flex-col">
-            <button
-              type="button"
+            <SettingsRow
               data-setting-id={agentIslandSettings.skinLabel.id}
               aria-expanded={skinsOpen}
               aria-controls="settings-agent-island-skins"
               onClick={() => setSkinsOpen((open) => !open)}
-              className={cn(
-                'flex w-full items-center justify-between gap-3 rounded-xl p-5 text-left outline-none',
-                'focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--focus-ring-soft)]',
-              )}
-            >
-              <span className="flex min-w-0 flex-col gap-1">
-                <span id={agentIslandSettings.skinLabel.targetId} className="text-13 font-medium text-[var(--settings-section-sublabel)]">
-                  {t(agentIslandSettings.skinLabel.titleKey)}
-                </span>
-                <span className="text-12 leading-[1.4] text-[var(--text-secondary)]">
-                  {t(agentIslandSettings.skinLabel.descriptionKey)}
-                </span>
-              </span>
-              <span className="flex shrink-0 items-center gap-2">
-                {/* The list's own preview, scaled down: sprite PNGs carry no eyes on their own. */}
-                <span className="relative h-8 w-9 overflow-hidden rounded-lg" aria-hidden="true">
-                  <span className="absolute left-0 top-0 origin-top-left scale-[0.64]">
-                    <MascotPreview skin={mascotSkin} mode={animationModeForStep(animationSteps[mascotSkin])} />
+              title={<span id={agentIslandSettings.skinLabel.targetId}>{t(agentIslandSettings.skinLabel.titleKey)}</span>}
+              hint={t(agentIslandSettings.skinLabel.descriptionKey)}
+              trailing={
+                <span className="flex shrink-0 items-center gap-2">
+                  {/* The list's own preview, scaled down: sprite PNGs carry no eyes on their own. */}
+                  <span className="relative h-8 w-9 overflow-hidden rounded-lg" aria-hidden="true">
+                    <span className="absolute left-0 top-0 origin-top-left scale-[0.64]">
+                      <MascotPreview skin={mascotSkin} mode={animationModeForStep(animationSteps[mascotSkin])} />
+                    </span>
                   </span>
+                  <span className="text-13 text-[var(--text-secondary)]">
+                    {t(`settings.agentIsland.skins.${mascotSkin}.name`)}
+                  </span>
+                  <ChevronDown
+                    size={15}
+                    className={cn('text-[var(--text-secondary-mid)] transition-transform', skinsOpen && 'rotate-180')}
+                    aria-hidden="true"
+                  />
                 </span>
-                <span className="text-13 text-[var(--text-secondary)]">
-                  {t(`settings.agentIsland.skins.${mascotSkin}.name`)}
-                </span>
-                <ChevronDown
-                  size={15}
-                  className={cn('text-[var(--text-secondary-mid)] transition-transform', skinsOpen && 'rotate-180')}
-                  aria-hidden="true"
-                />
-              </span>
-            </button>
+              }
+            />
             {skinsOpen && (
               <>
-                <div className={ROW_DIVIDER_CLASS} />
-                <div id="settings-agent-island-skins" className="grid gap-2 p-5">
+                <SettingsBlock id="settings-agent-island-skins" className="grid gap-2">
                   {AGENT_ISLAND_MASCOT_SKINS.map((skin) => (
                     <AgentIslandSkinRow
                       key={skin}
@@ -484,38 +456,34 @@ export function AgentIslandSection() {
                       onSelect={setMascotSkin}
                     />
                   ))}
-                </div>
+                </SettingsBlock>
               </>
             )}
           </SettingsCard>
 
-          <SettingsCard className="flex flex-col gap-3 p-5">
-            <div className="flex items-center justify-between gap-3">
-              <div className="flex min-w-0 flex-col gap-1">
-                <p id={agentIslandSettings.soundLabel.targetId} className="text-13 font-medium text-[var(--settings-section-sublabel)]">
-                  {t(agentIslandSettings.soundLabel.titleKey)}
-                </p>
-                <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
-                  {t(agentIslandSettings.soundLabel.descriptionKey)}
-                </p>
-              </div>
-              <div className="flex shrink-0 items-center gap-2">
-                <DefaultOverrideControls
-                  isCustomized={soundCustomized}
-                  disabled={soundResetPending}
-                  onReset={() => void handleResetSoundSettings()}
-                />
-                <Switch data-setting-id={agentIslandSettings.soundLabel.id}
-                  checked={soundSettings.enabled}
-                  disabled={soundResetPending}
-                  onCheckedChange={setSoundEnabled}
-                  aria-label={t('settings.agentIsland.soundAria')}
-                />
-              </div>
-            </div>
+          <SettingsCard className="flex flex-col">
+            <SettingsRow
+              title={<span id={agentIslandSettings.soundLabel.targetId}>{t(agentIslandSettings.soundLabel.titleKey)}</span>}
+              hint={t(agentIslandSettings.soundLabel.descriptionKey)}
+              trailing={
+                <div className="flex shrink-0 items-center gap-2">
+                  <DefaultOverrideControls
+                    isCustomized={soundCustomized}
+                    disabled={soundResetPending}
+                    onReset={() => void handleResetSoundSettings()}
+                  />
+                  <Switch data-setting-id={agentIslandSettings.soundLabel.id}
+                    checked={soundSettings.enabled}
+                    disabled={soundResetPending}
+                    onCheckedChange={setSoundEnabled}
+                    aria-label={t('settings.agentIsland.soundAria')}
+                  />
+                </div>
+              }
+            />
 
             {soundSettings.enabled && (
-              <div className="grid gap-2 border-t border-[var(--settings-theme-card-border)] pt-4">
+              <SettingsBlock className="grid gap-2">
                 {AGENT_ISLAND_SOUND_EVENTS.map((event) => (
                   <AgentIslandSoundRow
                     key={event}
@@ -526,17 +494,14 @@ export function AgentIslandSection() {
                     onPreview={previewSound}
                   />
                 ))}
-              </div>
+              </SettingsBlock>
             )}
           </SettingsCard>
         </>
       )}
-    </div>
+    </SettingsSection>
   );
 }
-
-/** Divider between rows of one card, inset like this page's 20px card padding. */
-const ROW_DIVIDER_CLASS = 'mx-5 h-px bg-[var(--settings-theme-card-border)]';
 
 function AgentIslandSkinRow({
   skin,

@@ -70,6 +70,7 @@ import {
 } from './PlanChangeDialog';
 import { useBillingCheckout } from './useBillingCheckout';
 import { usePlanChange, type PlanChangeSettledKind } from './usePlanChange';
+import { SETTINGS_PAGE_TITLE_CLASS } from '@/components/ui/settings-rows';
 
 type CatalogOfferEntry = {
   product: BillingCatalogProduct;
@@ -1081,7 +1082,7 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
     <>
       <div>
         <div className="flex items-start justify-between gap-6">
-          <h2 className="text-16 font-medium leading-[1.2] text-[var(--settings-section-title)]">
+          <h2 className={SETTINGS_PAGE_TITLE_CLASS}>
             {t('billing.settings.title')}
           </h2>
           <Button

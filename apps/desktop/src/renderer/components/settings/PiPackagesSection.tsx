@@ -17,6 +17,7 @@ import { Switch } from '@/components/ui/switch';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
 import { extractIpcError } from '@/utils/ipcError';
+import { SettingsBlock, SettingsCard } from '@/components/ui/settings-rows';
 import { SettingsTextInput } from './SettingsTextInput';
 
 const CARD_CLASS = cn(
@@ -323,8 +324,8 @@ export function PiPackagesSection() {
             {t('settings.piPackages.installSectionDescription')}
           </p>
         </div>
-        <div className={CARD_CLASS}>
-          <div className="flex items-center gap-2 px-4 py-4">
+        <SettingsCard>
+          <SettingsBlock className="flex items-center gap-2">
             <SettingsTextInput
               value={source}
               onChange={setSource}
@@ -352,12 +353,13 @@ export function PiPackagesSection() {
               {busy?.action === 'install' ? <Spinner size={14} /> : <Puzzle size={14} />}
               {t('settings.piPackages.install')}
             </Button>
-          </div>
-          <div className="mx-4 h-px bg-[var(--settings-theme-card-border)]" />
-          <p className="px-4 py-3 text-12 leading-[1.45] text-[var(--settings-section-desc)]">
-            {t('settings.piPackages.inspectionHint')}
-          </p>
-        </div>
+          </SettingsBlock>
+          <SettingsBlock>
+            <p className="text-12 leading-[1.45] text-[var(--settings-section-desc)]">
+              {t('settings.piPackages.inspectionHint')}
+            </p>
+          </SettingsBlock>
+        </SettingsCard>
       </section>
 
       <section className="flex flex-col gap-3" aria-labelledby="pi-extension-installed-title">

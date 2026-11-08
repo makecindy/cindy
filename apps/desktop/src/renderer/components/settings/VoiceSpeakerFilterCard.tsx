@@ -10,6 +10,7 @@ import {
 import { Button } from '@/components/ui/button';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { SegmentedControl } from '@/components/ui/segmented-control';
+import { SettingsBlock, SettingsCard, SettingsRow, SettingsSection } from '@/components/ui/settings-rows';
 import { Spinner } from '@/components/ui/spinner';
 import { Switch } from '@/components/ui/switch';
 import { useVoiceSpeakerFilterStatus } from '@/hooks/useVoiceSpeakerFilterStatus';
@@ -98,73 +99,73 @@ export function VoiceSpeakerFilterCard({
   if (window.electronAPI.platform !== 'darwin' && window.electronAPI.platform !== 'win32') return null;
 
   return (
-    <section
-      className={cn(
-        'flex flex-col gap-4 rounded-xl p-4',
-        'bg-[var(--settings-theme-card-bg)]',
-        'border border-[var(--settings-theme-card-border)]',
-      )}
+    <SettingsSection
+      headingLevel={3}
+      title={t('settings.voiceInput.sections.speakerFilter')}
+      caption={supported ? t('settings.voiceInput.speakerFilter.privacy') : undefined}
     >
-      <h3
-        className="text-13 font-medium text-[var(--settings-section-sublabel)]"
-        style={{ letterSpacing: '0.12px' }}
-      >
-        {t('settings.voiceInput.sections.speakerFilter')}
-      </h3>
-
-      <div className="flex items-center justify-between gap-5">
-        <div className="flex min-w-0 flex-col gap-1">
-          <p
-            id={voiceInputSettings.speakerFilterLabel.targetId}
-            className="text-13 font-medium text-[var(--settings-section-title)]"
-            style={{ letterSpacing: '0.12px' }}
-          >
-            {t(voiceInputSettings.speakerFilterLabel.titleKey)}
-          </p>
-          <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
-            {supported
-              ? t(voiceInputSettings.speakerFilterLabel.descriptionKey)
-              : t('settings.voiceInput.speakerFilter.unsupported')}
-          </p>
-        </div>
-        <Switch data-setting-id={voiceInputSettings.speakerFilterLabel.id}
-          checked={enabled && supported}
-          disabled={!supported || status === null}
-          onCheckedChange={toggle}
-          aria-label={t('settings.voiceInput.speakerFilter.ariaLabel')}
+      <SettingsCard>
+        <SettingsRow
+          title={<span id={voiceInputSettings.speakerFilterLabel.targetId}>{t(voiceInputSettings.speakerFilterLabel.titleKey)}</span>}
+          hint={supported
+            ? t(voiceInputSettings.speakerFilterLabel.descriptionKey)
+            : t('settings.voiceInput.speakerFilter.unsupported')}
+          trailing={
+            <Switch data-setting-id={voiceInputSettings.speakerFilterLabel.id}
+              checked={enabled && supported}
+              disabled={!supported || status === null}
+              onCheckedChange={toggle}
+              aria-label={t('settings.voiceInput.speakerFilter.ariaLabel')}
+            />
+          }
         />
-      </div>
 
-      {showDetails && status ? (
-        // Every row gets the same hairline the other voice-input rows use.
-        <div
-          className={cn(
-            'flex flex-col gap-4 border-t border-[var(--settings-theme-card-border)] pt-4',
-            '[&>*+*]:border-t [&>*+*]:border-[var(--settings-theme-card-border)] [&>*+*]:pt-4',
-          )}
-        >
-          {!modelsReady ? <ModelRow status={status} onDownload={downloadModels} /> : null}
+        {showDetails && status ? (
+          <>
+            {!modelsReady ? <ModelRow status={status} onDownload={downloadModels} /> : null}
 
-          {modelsReady ? (
-            <div className="flex items-center justify-between gap-5">
-              <div className="flex min-w-0 flex-col gap-1">
-                <p className="text-13 font-medium text-[var(--settings-section-title)]">
-                  {t(
-                    status.enrolled
-                      ? 'settings.voiceInput.speakerFilter.profile.enrolled'
-                      : 'settings.voiceInput.speakerFilter.profile.missing',
-                  )}
-                </p>
-                <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
-                  {status.enrolled && status.enrolledAt
-                    ? t('settings.voiceInput.speakerFilter.profile.enrolledAt', {
-                        date: new Date(status.enrolledAt).toLocaleDateString(i18n.language),
-                      })
-                    : t('settings.voiceInput.speakerFilter.profile.missingHint')}
-                </p>
-              </div>
-              <div className="flex shrink-0 items-center gap-2">
-                {status.enrolled ? (
+            {modelsReady ? (
+              <SettingsRow
+                title={t(
+                  status.enrolled
+                    ? 'settings.voiceInput.speakerFilter.profile.enrolled'
+                    : 'settings.voiceInput.speakerFilter.profile.missing',
+                )}
+                hint={status.enrolled && status.enrolledAt
+                  ? t('settings.voiceInput.speakerFilter.profile.enrolledAt', {
+                      date: new Date(status.enrolledAt).toLocaleDateString(i18n.language),
+                    })
+                  : t('settings.voiceInput.speakerFilter.profile.missingHint')}
+                trailing={
+                  <div className="flex shrink-0 items-center gap-2">
+                    {status.enrolled ? (
+                      <Button data-setting-id={voiceInputSettings.speakerFilterLabel.id}
+                        variant="secondary"
+                        size="md"
+                        compact
+                        tone="quiet"
+                        type="button"
+                        onClick={() => {
+                          void deleteProfile();
+                        }}
+                      >
+                        {t('settings.voiceInput.speakerFilter.profile.delete')}
+                      </Button>
+                    ) : null}
+                    <Button data-setting-id={voiceInputSettings.speakerFilterLabel.id} variant="secondary" size="md" compact type="button" onClick={() => setEnrolling(true)}>
+                      {t(
+                        status.enrolled
+                          ? 'settings.voiceInput.speakerFilter.profile.reenroll'
+                          : 'settings.voiceInput.speakerFilter.profile.enroll',
+                      )}
+                    </Button>
+                  </div>
+                }
+              />
+            ) : status.enrolled ? (
+              <SettingsRow
+                title={t('settings.voiceInput.speakerFilter.profile.enrolled')}
+                trailing={
                   <Button data-setting-id={voiceInputSettings.speakerFilterLabel.id}
                     variant="secondary"
                     size="md"
@@ -177,75 +178,41 @@ export function VoiceSpeakerFilterCard({
                   >
                     {t('settings.voiceInput.speakerFilter.profile.delete')}
                   </Button>
-                ) : null}
-                <Button data-setting-id={voiceInputSettings.speakerFilterLabel.id} variant="secondary" size="md" compact type="button" onClick={() => setEnrolling(true)}>
-                  {t(
-                    status.enrolled
-                      ? 'settings.voiceInput.speakerFilter.profile.reenroll'
-                      : 'settings.voiceInput.speakerFilter.profile.enroll',
-                  )}
-                </Button>
-              </div>
-            </div>
-          ) : status.enrolled ? (
-            <div className="flex items-center justify-between gap-5">
-              <p className="text-13 font-medium text-[var(--settings-section-title)]">
-                {t('settings.voiceInput.speakerFilter.profile.enrolled')}
-              </p>
-              <Button data-setting-id={voiceInputSettings.speakerFilterLabel.id}
-                variant="secondary"
-                size="md"
-                compact
-                tone="quiet"
-                type="button"
-                onClick={() => {
-                  void deleteProfile();
-                }}
-              >
-                {t('settings.voiceInput.speakerFilter.profile.delete')}
-              </Button>
-            </div>
-          ) : null}
+                }
+              />
+            ) : null}
 
-          {status.enrolled ? (
-            <div className="flex flex-wrap items-center justify-between gap-x-5 gap-y-3">
-              <div className="flex min-w-0 flex-1 basis-[240px] flex-col gap-1">
-                <p className="text-13 font-medium text-[var(--settings-section-title)]">
-                  {t('settings.voiceInput.speakerFilter.strictness.label')}
-                </p>
-                <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
-                  {t('settings.voiceInput.speakerFilter.strictness.hint')}
-                </p>
-              </div>
-              <div className="flex shrink-0 items-center gap-2">
-                <DefaultOverrideControls
-                  isCustomized={strictnessCustomized}
-                  onReset={() => {
-                    void onStrictnessReset().then((ok) => {
-                      if (ok) toast.success(t('settings.defaults.restored'));
-                    });
-                  }}
-                />
-                <SegmentedControl data-setting-id={voiceInputSettings.speakerFilterLabel.id}
-                  aria-label={t('settings.voiceInput.speakerFilter.strictness.label')}
-                  value={strictness}
-                  onValueChange={onStrictnessChange}
-                  options={SPEAKER_GATE_STRICTNESS_VALUES.map((value) => ({
-                    value,
-                    label: t(`settings.voiceInput.speakerFilter.strictness.options.${value}`),
-                  }))}
-                />
-              </div>
-            </div>
-          ) : null}
-        </div>
-      ) : null}
-
-      {supported ? (
-        <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
-          {t('settings.voiceInput.speakerFilter.privacy')}
-        </p>
-      ) : null}
+            {status.enrolled ? (
+              <SettingsRow
+                wrap
+                title={t('settings.voiceInput.speakerFilter.strictness.label')}
+                hint={t('settings.voiceInput.speakerFilter.strictness.hint')}
+                trailing={
+                  <div className="flex shrink-0 items-center gap-2">
+                    <DefaultOverrideControls
+                      isCustomized={strictnessCustomized}
+                      onReset={() => {
+                        void onStrictnessReset().then((ok) => {
+                          if (ok) toast.success(t('settings.defaults.restored'));
+                        });
+                      }}
+                    />
+                    <SegmentedControl data-setting-id={voiceInputSettings.speakerFilterLabel.id}
+                      aria-label={t('settings.voiceInput.speakerFilter.strictness.label')}
+                      value={strictness}
+                      onValueChange={onStrictnessChange}
+                      options={SPEAKER_GATE_STRICTNESS_VALUES.map((value) => ({
+                        value,
+                        label: t(`settings.voiceInput.speakerFilter.strictness.options.${value}`),
+                      }))}
+                    />
+                  </div>
+                }
+              />
+            ) : null}
+          </>
+        ) : null}
+      </SettingsCard>
 
       <VoiceSpeakerEnrollmentDialog
         open={enrolling}
@@ -253,7 +220,7 @@ export function VoiceSpeakerFilterCard({
         microphoneDeviceId={microphoneDeviceId}
         onEnrolled={setStatus}
       />
-    </section>
+    </SettingsSection>
   );
 }
 
@@ -263,7 +230,7 @@ function ModelRow({ status, onDownload }: { status: VoiceSpeakerFilterStatus; on
 
   if (status.modelState === 'downloading') {
     return (
-      <div className="flex items-center justify-between gap-5">
+      <SettingsBlock className="flex items-center justify-between gap-5">
         <p className="flex min-w-0 items-center gap-2 text-13 text-[var(--settings-section-title)]">
           <Spinner size={14} aria-hidden />
           {t('settings.voiceInput.speakerFilter.model.downloading', {
@@ -282,13 +249,13 @@ function ModelRow({ status, onDownload }: { status: VoiceSpeakerFilterStatus; on
         >
           {t('settings.voiceInput.speakerFilter.model.cancel')}
         </Button>
-      </div>
+      </SettingsBlock>
     );
   }
 
   const failed = status.modelState === 'failed';
   return (
-    <div className="flex items-center justify-between gap-5">
+    <SettingsBlock className="flex items-center justify-between gap-5">
       <p
         role={failed ? 'alert' : undefined}
         className={cn(
@@ -303,7 +270,7 @@ function ModelRow({ status, onDownload }: { status: VoiceSpeakerFilterStatus; on
       <Button data-settings-search-action="Download or cancel the speaker-filter model download" variant="secondary" size="md" compact type="button" onClick={onDownload}>
         {t(failed ? 'settings.voiceInput.speakerFilter.model.retry' : 'settings.voiceInput.speakerFilter.model.download')}
       </Button>
-    </div>
+    </SettingsBlock>
   );
 }
 

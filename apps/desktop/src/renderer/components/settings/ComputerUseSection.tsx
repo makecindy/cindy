@@ -39,6 +39,14 @@ import screenRecordingPermissionIcon from '@/assets/system-settings/screen-recor
 import { toast } from '@/lib/toast';
 import { Switch } from '@/components/ui/switch';
 import { Spinner } from '@/components/ui/spinner';
+import {
+  SETTINGS_HINT,
+  SETTINGS_ROW_LABEL_CLASS,
+  SettingsBlock,
+  SettingsCard,
+  SettingsRow,
+  SettingsSection,
+} from '@/components/ui/settings-rows';
 import { useOptionalConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import {
   DropdownMenu,
@@ -180,10 +188,10 @@ function ConfigurationReadStatus({
   const { t } = useTranslation();
   if (status === 'ready') return null;
   return (
-    <div
+    <SettingsBlock
       role="status"
       aria-label={label}
-      className="flex flex-wrap items-center gap-2 border-t border-[var(--settings-theme-card-border)] px-4 py-3 text-12 text-[var(--settings-section-desc)]"
+      className="flex flex-wrap items-center gap-2 text-12 text-[var(--settings-section-desc)]"
     >
       {status !== 'error' ? <Spinner size={12} /> : null}
       <span>{t(`settings.computerUse.configurationRead.${status}`, { section: label })}</span>
@@ -192,7 +200,7 @@ function ConfigurationReadStatus({
           {t('settings.computerUse.configurationRead.retry')}
         </Button>
       ) : null}
-    </div>
+    </SettingsBlock>
   );
 }
 
@@ -1534,53 +1542,37 @@ export function ComputerUseSection({ workingDir }: ComputerUseSectionProps) {
   const androidAdbPathBusy = androidAdbPathPending || androidPreparePending;
 
   return (
-    <div className="flex flex-col gap-[14px]">
-      <div className="flex flex-col gap-1 min-w-0">
-        <h2 className="text-16 font-medium leading-[1.2] text-[var(--settings-section-title)]">
-          {t(computerUseSettings.computerUse.sectionKey)}
-        </h2>
-        <p className="text-13 leading-[1.5] text-[var(--settings-section-desc)]">
-          {t('settings.computerUse.description')}
-        </p>
-      </div>
-
-      <div
-        id="automation-browser"
-        className={cn(
-          'flex flex-col overflow-hidden rounded-xl',
-          'bg-[var(--settings-theme-card-bg)]',
-          'border border-[var(--settings-theme-card-border)]',
-        )}
-      >
-        <div className="flex items-center justify-between gap-3 px-4 py-[14px]">
-          <div className="flex min-w-0 items-center gap-3">
-            <div
+    <SettingsSection
+      title={t(computerUseSettings.computerUse.sectionKey)}
+      description={t('settings.computerUse.description')}
+    >
+      <SettingsCard id="automation-browser">
+        <SettingsRow
+          lead={
+            <span
               className={cn(
                 'flex h-9 w-9 shrink-0 items-center justify-center rounded-lg',
                 'bg-[var(--settings-input-bg)]',
               )}
             >
               <Globe size={16} className="text-[var(--settings-section-title)]" />
-            </div>
-            <div className="flex min-w-0 flex-col gap-[8px]">
-              <p
-                id={computerUseSettings.browserTitle.targetId}
-                className="truncate text-14 font-medium leading-none text-[var(--settings-section-title)]"
-              >
-                {t(computerUseSettings.browserTitle.titleKey)}
-              </p>
-              <p className="truncate text-12 leading-none text-[var(--settings-section-desc)]">
-                {t(computerUseSettings.browserTitle.descriptionKey)}
-              </p>
-            </div>
-          </div>
-          <Switch data-setting-id={computerUseSettings.browserTitle.id}
-            checked={browserEnabled ?? false}
-            disabled={browserEnabled === null || togglePending}
-            onCheckedChange={handleToggleBrowser}
-            aria-label={t('settings.computerUse.browser.toggleAria')}
-          />
-        </div>
+            </span>
+          }
+          title={
+            <span id={computerUseSettings.browserTitle.targetId}>
+              {t(computerUseSettings.browserTitle.titleKey)}
+            </span>
+          }
+          hint={t(computerUseSettings.browserTitle.descriptionKey)}
+          trailing={
+            <Switch data-setting-id={computerUseSettings.browserTitle.id}
+              checked={browserEnabled ?? false}
+              disabled={browserEnabled === null || togglePending}
+              onCheckedChange={handleToggleBrowser}
+              aria-label={t('settings.computerUse.browser.toggleAria')}
+            />
+          }
+        />
         <ConfigurationReadStatus
           label={t(computerUseSettings.browserTitle.titleKey)}
           status={browserRead.status}
@@ -1632,8 +1624,8 @@ export function ComputerUseSection({ workingDir }: ComputerUseSectionProps) {
           />
         ) : null}
         {browserBackendKind === 'external' && availability !== null ? (
-          <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[var(--settings-theme-card-border)] px-4 py-[14px]">
-            <p className="min-w-0 text-12 leading-[1.5] text-[var(--settings-section-desc)]">
+          <SettingsBlock className="flex flex-wrap items-center justify-between gap-3">
+            <p className={cn('min-w-0', SETTINGS_HINT)}>
               {availability.detected
                 ? t('settings.computerUse.browser.detected', {
                     browser: (availability.browserKind ?? 'chromium').replace(/^./, (c) =>
@@ -1665,80 +1657,70 @@ export function ComputerUseSection({ workingDir }: ComputerUseSectionProps) {
                 {t('settings.computerUse.browser.download')}
               </Button>
             )}
-          </div>
+          </SettingsBlock>
         ) : null}
-      </div>
+      </SettingsCard>
 
       {browserBackendKind === 'external' && availability?.detected ? (
-        <p className="text-12 leading-[1.5] text-[var(--settings-section-desc)]">
+        <p className={SETTINGS_HINT}>
           {t('settings.computerUse.browser.openForLoginHint')}
         </p>
       ) : null}
-      <p className="text-12 leading-[1.5] text-[var(--settings-section-desc)]">
+      <p className={SETTINGS_HINT}>
         {t('settings.computerUse.browser.toggleHint')}
       </p>
 
       <div aria-hidden="true" className="h-px bg-[var(--settings-theme-card-border)]" />
 
-      <div
-        id="automation-computer"
-        className={cn(
-          'flex flex-col overflow-hidden rounded-xl',
-          'bg-[var(--settings-theme-card-bg)]',
-          'border border-[var(--settings-theme-card-border)]',
-        )}
-      >
-        <div className="flex items-center justify-between gap-3 px-4 py-[14px]">
-          <div className="flex min-w-0 items-center gap-3">
-            <div
+      <SettingsCard id="automation-computer">
+        <SettingsRow
+          lead={
+            <span
               className={cn(
                 'flex h-9 w-9 shrink-0 items-center justify-center rounded-lg',
                 'bg-[var(--settings-input-bg)]',
               )}
             >
               <MonitorCog size={16} className="text-[var(--settings-section-title)]" />
-            </div>
-            <div className="flex min-w-0 flex-col gap-[8px]">
-              <p
-                id={computerUseSettings.directControlTitle.targetId}
-                className="truncate text-14 font-medium leading-none text-[var(--settings-section-title)]"
-              >
-                {t(computerUseSettings.directControlTitle.titleKey)}
-              </p>
-              <p className="truncate text-12 leading-none text-[var(--settings-section-desc)]">
-                {t(computerUseSettings.directControlTitle.descriptionKey)}
-              </p>
-            </div>
-          </div>
-          <Switch data-setting-id={computerUseSettings.directControlTitle.id}
-            checked={computerSwitchChecked}
-            disabled={computerSwitchDisabled}
-            onCheckedChange={handleToggleComputer}
-            aria-label={t('settings.computerUse.directControl.toggleAria')}
-          />
-        </div>
+            </span>
+          }
+          title={
+            <span id={computerUseSettings.directControlTitle.targetId}>
+              {t(computerUseSettings.directControlTitle.titleKey)}
+            </span>
+          }
+          hint={t(computerUseSettings.directControlTitle.descriptionKey)}
+          trailing={
+            <Switch data-setting-id={computerUseSettings.directControlTitle.id}
+              checked={computerSwitchChecked}
+              disabled={computerSwitchDisabled}
+              onCheckedChange={handleToggleComputer}
+              aria-label={t('settings.computerUse.directControl.toggleAria')}
+            />
+          }
+        />
         <ConfigurationReadStatus
           label={t(computerUseSettings.directControlTitle.titleKey)}
           status={computerRead.status}
           retry={computerRead.retry}
         />
         {computerStatus === null ? (
-          <div
+          <SettingsBlock
             role="status"
-            className="flex items-center gap-2 border-t border-[var(--settings-theme-card-border)] px-4 py-4 text-12 text-[var(--settings-section-desc)]"
+            className="flex items-center gap-2 text-12 text-[var(--settings-section-desc)]"
           >
             <Spinner size={12} />
             {t('settings.computerUse.directControl.update.readingVersion')}
-          </div>
+          </SettingsBlock>
         ) : (
           <>
             {/* Windows/Linux 没有 macOS TCC 权限,整块隐藏;安装进度改在下方状态行展示。 */}
             {window.electronAPI.platform === 'darwin' ? (
-              <div className="border-t border-[var(--settings-theme-card-border)] px-4 py-4">
+              <SettingsBlock>
                 <div className="flex items-center justify-between gap-3">
                   <p
                     id={computerUseSettings.directControlPermissionsTitle.targetId}
-                    className="text-13 font-medium text-[var(--settings-section-title)]"
+                    className={SETTINGS_ROW_LABEL_CLASS}
                   >
                     {t(computerUseSettings.directControlPermissionsTitle.titleKey)}
                   </p>
@@ -1816,10 +1798,10 @@ export function ComputerUseSection({ workingDir }: ComputerUseSectionProps) {
                     />
                   </div>
                 </div>
-              </div>
+              </SettingsBlock>
             ) : null}
 
-            <div className="relative border-t border-[var(--settings-theme-card-border)] px-4 py-2.5">
+            <SettingsBlock>
               <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
                 <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
                   <span className="text-11 text-[var(--settings-section-desc)]">
@@ -1981,16 +1963,16 @@ export function ComputerUseSection({ workingDir }: ComputerUseSectionProps) {
                   />
                 </div>
               ) : null}
-            </div>
+            </SettingsBlock>
 
             {computerDetailsOpen ? (
-              <div className="flex flex-col gap-3 border-t border-[var(--settings-theme-card-border)] px-4 py-3.5">
+              <SettingsBlock className="flex flex-col gap-3">
                 <div className="flex flex-col gap-2">
-                  <p className="text-12 leading-[1.5] text-[var(--settings-section-desc)]">
+                  <p className={SETTINGS_HINT}>
                     {t('settings.computerUse.directControl.driverInfo')}
                   </p>
                   {window.electronAPI.platform === 'darwin' ? (
-                    <p className="text-12 leading-[1.5] text-[var(--settings-section-desc)]">
+                    <p className={SETTINGS_HINT}>
                       {computerReady
                         ? t('settings.computerUse.directControl.permissions.runtimeConfirmations')
                         : t('settings.computerUse.directControl.permissions.macosHint')}
@@ -2009,163 +1991,150 @@ export function ComputerUseSection({ workingDir }: ComputerUseSectionProps) {
                     {t('settings.computerUse.directControl.openSourceProject')}
                   </Button>
                 </div>
-              </div>
+              </SettingsBlock>
             ) : null}
           </>
         )}
-      </div>
+      </SettingsCard>
 
       <div aria-hidden="true" className="h-px bg-[var(--settings-theme-card-border)]" />
 
-      <div
-        id="automation-android"
-        className={cn(
-          'flex flex-col overflow-hidden rounded-xl',
-          'bg-[var(--settings-theme-card-bg)]',
-          'border border-[var(--settings-theme-card-border)]',
-        )}
-      >
-        <div className="flex items-center justify-between gap-3 px-4 py-[14px]">
-          <div className="flex min-w-0 items-center gap-3">
-            <div
+      <SettingsCard id="automation-android">
+        <SettingsRow
+          lead={
+            <span
               className={cn(
                 'flex h-9 w-9 shrink-0 items-center justify-center rounded-lg',
                 'bg-[var(--settings-input-bg)]',
               )}
             >
               <Smartphone size={16} className="text-[var(--settings-section-title)]" />
-            </div>
-            <div className="flex min-w-0 flex-col gap-[8px]">
-              <p
-                id={computerUseSettings.androidTitle.targetId}
-                className="truncate text-14 font-medium leading-none text-[var(--settings-section-title)]"
-              >
-                {t(computerUseSettings.androidTitle.titleKey)}
-              </p>
-              <p className="truncate text-12 leading-none text-[var(--settings-section-desc)]">
-                {t(computerUseSettings.androidTitle.descriptionKey)}
-              </p>
-            </div>
-          </div>
-          <Switch data-setting-id={computerUseSettings.androidTitle.id}
-            checked={androidEnabled ?? false}
-            disabled={androidEnabled === null || androidTogglePending}
-            onCheckedChange={handleToggleAndroid}
-            aria-label={t('settings.computerUse.android.toggleAria')}
-          />
-        </div>
-        <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[var(--settings-theme-card-border)] px-4 py-[14px]">
-          <div className="flex min-w-0 flex-col gap-1">
-            <p className="text-12 font-medium leading-[1.5] text-[var(--settings-section-title)]">
-              {t('settings.computerUse.android.device.title')}
-            </p>
-            <p className="min-w-0 text-12 leading-[1.5] text-[var(--settings-section-desc)]">
-              {androidDeviceStatusText}
-            </p>
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <button data-setting-id={computerUseSettings.androidTitle.id}
-                  type="button"
-                  disabled={androidDevicePending || !androidStatus}
-                  className={cn(ACTION_BUTTON_CLASS, 'max-w-[260px] px-2.5')}
-                  aria-label={t('settings.computerUse.android.device.ariaLabel')}
-                  title={configuredDefaultAndroidDevice ?? undefined}
-                >
-                  <Smartphone size={12} className="shrink-0" />
-                  <span className="truncate">{androidDeviceTriggerLabel}</span>
-                  <ChevronDown size={12} className="shrink-0 opacity-60" />
-                </button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="min-w-[260px] max-w-[360px]">
-                <DropdownMenuItem
-                  onClick={() => void handleSelectAndroidDevice(ANDROID_AUTO_DEVICE_VALUE)}
-                  className="flex items-start gap-2"
-                >
-                  <Check
-                    size={14}
-                    className={cn(
-                      'mt-0.5 shrink-0',
-                      !configuredDefaultAndroidDevice ? 'opacity-100' : 'opacity-0',
-                    )}
-                  />
-                  <div className="flex min-w-0 flex-col gap-0.5">
-                    <span className="truncate">
-                      {t('settings.computerUse.android.device.auto')}
-                    </span>
-                    <span className="truncate text-12 leading-[1.33] text-[var(--cmd-palette-item-meta)]">
-                      {t('settings.computerUse.android.device.autoHint')}
-                    </span>
-                  </div>
-                </DropdownMenuItem>
-                {hasStaleConfiguredAndroidDevice ? (
+            </span>
+          }
+          title={
+            <span id={computerUseSettings.androidTitle.targetId}>
+              {t(computerUseSettings.androidTitle.titleKey)}
+            </span>
+          }
+          hint={t(computerUseSettings.androidTitle.descriptionKey)}
+          trailing={
+            <Switch data-setting-id={computerUseSettings.androidTitle.id}
+              checked={androidEnabled ?? false}
+              disabled={androidEnabled === null || androidTogglePending}
+              onCheckedChange={handleToggleAndroid}
+              aria-label={t('settings.computerUse.android.toggleAria')}
+            />
+          }
+        />
+        <SettingsRow
+          wrap
+          title={t('settings.computerUse.android.device.title')}
+          hint={androidDeviceStatusText}
+          trailing={
+            <div className="flex flex-wrap items-center gap-2">
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <button data-setting-id={computerUseSettings.androidTitle.id}
+                    type="button"
+                    disabled={androidDevicePending || !androidStatus}
+                    className={cn(ACTION_BUTTON_CLASS, 'max-w-[260px] px-2.5')}
+                    aria-label={t('settings.computerUse.android.device.ariaLabel')}
+                    title={configuredDefaultAndroidDevice ?? undefined}
+                  >
+                    <Smartphone size={12} className="shrink-0" />
+                    <span className="truncate">{androidDeviceTriggerLabel}</span>
+                    <ChevronDown size={12} className="shrink-0 opacity-60" />
+                  </button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="min-w-[260px] max-w-[360px]">
                   <DropdownMenuItem
-                    onClick={() =>
-                      void handleSelectAndroidDevice(configuredDefaultAndroidDevice ?? '')
-                    }
+                    onClick={() => void handleSelectAndroidDevice(ANDROID_AUTO_DEVICE_VALUE)}
                     className="flex items-start gap-2"
                   >
-                    <Check size={14} className="mt-0.5 shrink-0 opacity-100" />
+                    <Check
+                      size={14}
+                      className={cn(
+                        'mt-0.5 shrink-0',
+                        !configuredDefaultAndroidDevice ? 'opacity-100' : 'opacity-0',
+                      )}
+                    />
                     <div className="flex min-w-0 flex-col gap-0.5">
-                      <span className="truncate">{configuredDefaultAndroidDevice}</span>
+                      <span className="truncate">
+                        {t('settings.computerUse.android.device.auto')}
+                      </span>
                       <span className="truncate text-12 leading-[1.33] text-[var(--cmd-palette-item-meta)]">
-                        {t('settings.computerUse.android.device.unavailable')}
+                        {t('settings.computerUse.android.device.autoHint')}
                       </span>
                     </div>
                   </DropdownMenuItem>
-                ) : null}
-                {androidDevices.length === 0 ? (
-                  <div className="px-2 py-2 text-12 text-[var(--settings-section-desc)]">
-                    {t('settings.computerUse.android.device.none')}
-                  </div>
-                ) : (
-                  androidDevices.map((device) => {
-                    const selected = configuredDefaultAndroidDevice === device.device_serial;
-                    const ready = device.state === 'device';
-                    return (
-                      <DropdownMenuItem
-                        key={device.device_serial}
-                        disabled={!ready}
-                        onClick={() => void handleSelectAndroidDevice(device.device_serial)}
-                        className="flex items-start gap-2"
-                      >
-                        <Check
-                          size={14}
-                          className={cn('mt-0.5 shrink-0', selected ? 'opacity-100' : 'opacity-0')}
-                        />
-                        <div className="flex min-w-0 flex-col gap-0.5">
-                          <span className="truncate">{androidDeviceLabel(device)}</span>
-                          <span className="truncate text-12 leading-[1.33] text-[var(--cmd-palette-item-meta)]">
-                            {ready
-                              ? t('settings.computerUse.android.device.ready')
-                              : t('settings.computerUse.android.device.state', {
-                                  state: device.state,
-                                })}
-                          </span>
-                        </div>
-                      </DropdownMenuItem>
-                    );
-                  })
-                )}
-              </DropdownMenuContent>
-            </DropdownMenu>
-            <Button data-settings-search-action="Retry, inspect or install the selected computer-control dependency"
-              variant="secondary"
-              size="sm"
-              className="px-3"
-              loading={androidStatusPending}
-              type="button"
-              onClick={() => void handleRefreshAndroidStatus()}
-              disabled={androidStatusPending}
-            >
-              <RefreshCw size={12} className="shrink-0" />
-              {t('settings.computerUse.android.refresh')}
-            </Button>
-          </div>
-        </div>
+                  {hasStaleConfiguredAndroidDevice ? (
+                    <DropdownMenuItem
+                      onClick={() =>
+                        void handleSelectAndroidDevice(configuredDefaultAndroidDevice ?? '')
+                      }
+                      className="flex items-start gap-2"
+                    >
+                      <Check size={14} className="mt-0.5 shrink-0 opacity-100" />
+                      <div className="flex min-w-0 flex-col gap-0.5">
+                        <span className="truncate">{configuredDefaultAndroidDevice}</span>
+                        <span className="truncate text-12 leading-[1.33] text-[var(--cmd-palette-item-meta)]">
+                          {t('settings.computerUse.android.device.unavailable')}
+                        </span>
+                      </div>
+                    </DropdownMenuItem>
+                  ) : null}
+                  {androidDevices.length === 0 ? (
+                    <div className="px-2 py-2 text-12 text-[var(--settings-section-desc)]">
+                      {t('settings.computerUse.android.device.none')}
+                    </div>
+                  ) : (
+                    androidDevices.map((device) => {
+                      const selected = configuredDefaultAndroidDevice === device.device_serial;
+                      const ready = device.state === 'device';
+                      return (
+                        <DropdownMenuItem
+                          key={device.device_serial}
+                          disabled={!ready}
+                          onClick={() => void handleSelectAndroidDevice(device.device_serial)}
+                          className="flex items-start gap-2"
+                        >
+                          <Check
+                            size={14}
+                            className={cn('mt-0.5 shrink-0', selected ? 'opacity-100' : 'opacity-0')}
+                          />
+                          <div className="flex min-w-0 flex-col gap-0.5">
+                            <span className="truncate">{androidDeviceLabel(device)}</span>
+                            <span className="truncate text-12 leading-[1.33] text-[var(--cmd-palette-item-meta)]">
+                              {ready
+                                ? t('settings.computerUse.android.device.ready')
+                                : t('settings.computerUse.android.device.state', {
+                                    state: device.state,
+                                  })}
+                            </span>
+                          </div>
+                        </DropdownMenuItem>
+                      );
+                    })
+                  )}
+                </DropdownMenuContent>
+              </DropdownMenu>
+              <Button data-settings-search-action="Retry, inspect or install the selected computer-control dependency"
+                variant="secondary"
+                size="sm"
+                className="px-3"
+                loading={androidStatusPending}
+                type="button"
+                onClick={() => void handleRefreshAndroidStatus()}
+                disabled={androidStatusPending}
+              >
+                <RefreshCw size={12} className="shrink-0" />
+                {t('settings.computerUse.android.refresh')}
+              </Button>
+            </div>
+          }
+        />
         {androidConnectionGuideKind ? (
-          <div className="border-t border-[var(--settings-theme-card-border)] px-4 py-3">
+          <SettingsBlock>
             <div className="rounded-xl bg-[var(--settings-input-bg)] px-3 py-3">
               <p className="text-12 font-medium leading-[1.5] text-[var(--settings-section-title)]">
                 {t(
@@ -2193,66 +2162,64 @@ export function ComputerUseSection({ workingDir }: ComputerUseSectionProps) {
                 </p>
               )}
             </div>
-          </div>
+          </SettingsBlock>
         ) : null}
-        <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[var(--settings-theme-card-border)] px-4 py-[14px]">
-          <div className="flex min-w-0 flex-col gap-1">
-            <p
-              id={computerUseSettings.androidAdbTitle.targetId}
-              className="text-12 font-medium leading-[1.5] text-[var(--settings-section-title)]"
-            >
+        <SettingsRow
+          wrap
+          title={
+            <span id={computerUseSettings.androidAdbTitle.targetId}>
               {t(computerUseSettings.androidAdbTitle.titleKey)}
-            </p>
-            <p className="min-w-0 break-all text-12 leading-[1.5] text-[var(--settings-section-desc)]">
-              {androidAdbSourceText}
-            </p>
-          </div>
-          <div className="flex min-w-[240px] flex-1 flex-wrap items-center justify-end gap-2">
-            <input data-setting-id={computerUseSettings.androidAdbTitle.id}
-              value={androidAdbPathDraft}
-              onChange={(event) => {
-                setAndroidAdbPathDraft(event.target.value);
-                setAndroidAdbPathEdited(true);
-              }}
-              disabled={androidAdbPathBusy}
-              placeholder={t('settings.computerUse.android.adb.placeholder')}
-              aria-label={t('settings.computerUse.android.adb.pathAria')}
-              className={cn(
-                'h-8 min-w-[220px] flex-1 rounded-full px-3 text-12 outline-none',
-                'border border-[var(--settings-input-border)]',
-                'bg-[var(--settings-input-bg)] text-[var(--settings-input-text)]',
-                'placeholder:text-[var(--settings-input-placeholder)]',
-                'focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
-                'disabled:opacity-50',
-              )}
-            />
-            <Button data-setting-id={computerUseSettings.androidAdbTitle.id}
-              variant="secondary"
-              size="sm"
-              className="px-3"
-              type="button"
-              onClick={() => void handleSaveAndroidAdbPath()}
-              disabled={!androidAdbPathCanSave || androidAdbPathBusy}
-            >
-              {t('settings.computerUse.android.adb.save')}
-            </Button>
-            <Button data-setting-id={computerUseSettings.androidAdbTitle.id}
-              variant="secondary"
-              size="sm"
-              className="px-3"
-              type="button"
-              onClick={() => void handleUseDefaultAndroidAdbPath()}
-              disabled={androidAdbPathBusy}
-            >
-              {t('settings.computerUse.android.adb.useDefault')}
-            </Button>
-          </div>
-        </div>
-      </div>
+            </span>
+          }
+          hint={<span className="break-all">{androidAdbSourceText}</span>}
+          trailing={
+            <div className="flex min-w-[240px] flex-1 flex-wrap items-center justify-end gap-2">
+              <input data-setting-id={computerUseSettings.androidAdbTitle.id}
+                value={androidAdbPathDraft}
+                onChange={(event) => {
+                  setAndroidAdbPathDraft(event.target.value);
+                  setAndroidAdbPathEdited(true);
+                }}
+                disabled={androidAdbPathBusy}
+                placeholder={t('settings.computerUse.android.adb.placeholder')}
+                aria-label={t('settings.computerUse.android.adb.pathAria')}
+                className={cn(
+                  'h-8 min-w-[220px] flex-1 rounded-full px-3 text-12 outline-none',
+                  'border border-[var(--settings-input-border)]',
+                  'bg-[var(--settings-input-bg)] text-[var(--settings-input-text)]',
+                  'placeholder:text-[var(--settings-input-placeholder)]',
+                  'focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
+                  'disabled:opacity-50',
+                )}
+              />
+              <Button data-setting-id={computerUseSettings.androidAdbTitle.id}
+                variant="secondary"
+                size="sm"
+                className="px-3"
+                type="button"
+                onClick={() => void handleSaveAndroidAdbPath()}
+                disabled={!androidAdbPathCanSave || androidAdbPathBusy}
+              >
+                {t('settings.computerUse.android.adb.save')}
+              </Button>
+              <Button data-setting-id={computerUseSettings.androidAdbTitle.id}
+                variant="secondary"
+                size="sm"
+                className="px-3"
+                type="button"
+                onClick={() => void handleUseDefaultAndroidAdbPath()}
+                disabled={androidAdbPathBusy}
+              >
+                {t('settings.computerUse.android.adb.useDefault')}
+              </Button>
+            </div>
+          }
+        />
+      </SettingsCard>
 
-      <p className="text-12 leading-[1.5] text-[var(--settings-section-desc)]">
+      <p className={SETTINGS_HINT}>
         {t('settings.computerUse.android.toggleHint')}
       </p>
-    </div>
+    </SettingsSection>
   );
 }

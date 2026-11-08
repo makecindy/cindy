@@ -9,6 +9,7 @@ import { useTranslation } from 'react-i18next';
 
 import { useCompactionSettings, type CompactionAgent } from '@/hooks/useCompactionSettings';
 import { Slider } from '@/components/ui/slider';
+import { SETTINGS_HINT, SettingsBlock, SettingsCard, SettingsRow, SettingsSection } from '@/components/ui/settings-rows';
 import { toast } from '@/lib/toast';
 import { DefaultOverrideControls } from './DefaultOverrideControls';
 
@@ -25,55 +26,56 @@ function CompactionCard({ agent, pct, isCustomized, resetPct, setPct }: Compacti
   const key = agent === 'pi' ? 'settings.compaction.piCard' : 'settings.compaction.card';
 
   return (
-    <div className="flex flex-col gap-[14px] rounded-xl border border-[var(--settings-theme-card-border)] bg-[var(--settings-theme-card-bg)] p-4">
-      <div className="flex items-center justify-between gap-3">
-        <p className="text-14 font-medium leading-none text-[var(--text-primary)]">
-          {t(`${key}.label`)}
-        </p>
-        <div className="flex items-center gap-2">
-          <span className="shrink-0 rounded-full bg-[var(--surface-chip)] px-2.5 py-1 text-11 font-medium leading-none text-[var(--text-secondary)]">
-            {t(`${key}.badge`)}
-          </span>
-          <DefaultOverrideControls
-            isCustomized={isCustomized}
-            onReset={() => {
-              void resetPct()
-                .then(() => toast.success(t('settings.defaults.restored')))
-                .catch((err) => {
-                  toast.error(err instanceof Error ? err.message : t('settings.defaults.restoreFailed'));
-                });
-            }}
-          />
-        </div>
-      </div>
-
-      <p className="text-12 leading-[1.5] text-[var(--text-secondary)]">{t(`${key}.description`)}</p>
-
-      <div className="flex items-center gap-[14px]">
-        <div className="flex min-w-0 flex-1 flex-col gap-1.5">
-          <Slider
-            value={[pct]}
-            min={50}
-            max={95}
-            step={1}
-            onValueChange={(value: number[]) => {
-              const next = value[0];
-              if (typeof next === 'number') setPct(next);
-            }}
-            aria-label={t(`${key}.sliderAria`)}
-          />
-          <div className="flex items-center justify-between text-11 leading-none text-[var(--text-tertiary)]">
-            <span>50%</span>
-            <span>95%</span>
+    <SettingsCard>
+      <SettingsRow
+        title={t(`${key}.label`)}
+        hint={t(`${key}.description`)}
+        trailing={
+          <div className="flex shrink-0 items-center gap-2">
+            <span className="shrink-0 rounded-full bg-[var(--surface-chip)] px-2.5 py-1 text-11 font-medium leading-none text-[var(--text-secondary)]">
+              {t(`${key}.badge`)}
+            </span>
+            <DefaultOverrideControls
+              isCustomized={isCustomized}
+              onReset={() => {
+                void resetPct()
+                  .then(() => toast.success(t('settings.defaults.restored')))
+                  .catch((err) => {
+                    toast.error(err instanceof Error ? err.message : t('settings.defaults.restoreFailed'));
+                  });
+              }}
+            />
           </div>
-        </div>
-        <span className="shrink-0 rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3 py-1.5 text-13 font-medium leading-none text-[var(--text-primary)]">
-          {pct}%
-        </span>
-      </div>
+        }
+      />
 
-      <p className="text-12 leading-[1.5] text-[var(--text-secondary)]">{t(`${key}.hint`)}</p>
-    </div>
+      <SettingsBlock className="flex flex-col gap-[14px]">
+        <div className="flex items-center gap-[14px]">
+          <div className="flex min-w-0 flex-1 flex-col gap-1.5">
+            <Slider
+              value={[pct]}
+              min={50}
+              max={95}
+              step={1}
+              onValueChange={(value: number[]) => {
+                const next = value[0];
+                if (typeof next === 'number') setPct(next);
+              }}
+              aria-label={t(`${key}.sliderAria`)}
+            />
+            <div className="flex items-center justify-between text-11 leading-none text-[var(--text-tertiary)]">
+              <span>50%</span>
+              <span>95%</span>
+            </div>
+          </div>
+          <span className="shrink-0 rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3 py-1.5 text-13 font-medium leading-none text-[var(--text-primary)]">
+            {pct}%
+          </span>
+        </div>
+
+        <p className={SETTINGS_HINT}>{t(`${key}.hint`)}</p>
+      </SettingsBlock>
+    </SettingsCard>
   );
 }
 
@@ -85,16 +87,10 @@ export function CompactionSection() {
   if (claude.pct === null || pi.pct === null) return null;
 
   return (
-    <div className="flex flex-col gap-[14px]">
-      <div className="flex flex-col gap-1">
-        <h2 className="text-16 font-medium leading-[1.2] text-[var(--settings-section-title)]">
-          {t('settings.compaction.title')}
-        </h2>
-        <p className="text-13 leading-[1.5] text-[var(--settings-section-desc)]">
-          {t('settings.compaction.description')}
-        </p>
-      </div>
-
+    <SettingsSection
+      title={t('settings.compaction.title')}
+      description={t('settings.compaction.description')}
+    >
       <CompactionCard
         agent="claude"
         pct={claude.pct}
@@ -109,6 +105,6 @@ export function CompactionSection() {
         resetPct={pi.resetPct}
         setPct={pi.setPct}
       />
-    </div>
+    </SettingsSection>
   );
 }

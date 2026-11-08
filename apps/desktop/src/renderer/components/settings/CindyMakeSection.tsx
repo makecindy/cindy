@@ -3,6 +3,7 @@ import { FolderOpen, RefreshCw, Trash2, Wrench } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { Switch } from '@/components/ui/switch';
+import { SettingsCard, SettingsRow } from '@/components/ui/settings-rows';
 import { Button } from '@/components/ui/button';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { Spinner } from '@/components/ui/spinner';
@@ -374,36 +375,32 @@ export function CindyMakeSection() {
       >
         <div className="flex flex-col gap-[18px]">
           {import.meta.env.DEV && (
-            <div className="flex flex-col gap-3 rounded-xl border border-[var(--settings-theme-card-border)] bg-[var(--settings-theme-card-bg)] p-5">
-              <div className="flex items-start justify-between gap-4">
-                <div className="min-w-0">
-                  <p className="text-13 font-medium text-[var(--settings-section-sublabel)]">
-                    {t('settings.cindyMake.forceManaged.title')}
-                  </p>
-                  <p className="mt-1 text-12 leading-[1.45] text-[var(--settings-section-desc)]">
-                    {t('settings.cindyMake.forceManaged.description')}
-                  </p>
-                </div>
-                <Switch
-                  checked={forceManagedTools}
-                  onCheckedChange={(checked) => {
-                    // Toggling the developer switch is a diagnostic recheck. Never
-                    // let it restart an in-progress preparation run implicitly.
-                    setRunMode('check');
-                    setTrackedPreparationId(undefined);
-                    setForceManagedTools(checked);
-                  }}
-                  aria-label={t('settings.cindyMake.forceManaged.ariaLabel')}
-                />
-              </div>
-              {forceManagedTools ? (
-                <div className="space-y-2">
-                  <p className="text-12 leading-[1.45] text-[var(--settings-section-desc)]">
-                    {t('settings.cindyMake.forceManaged.enabledHint')}
-                  </p>
-                </div>
-              ) : null}
-            </div>
+            <SettingsCard>
+              <SettingsRow
+                title={t('settings.cindyMake.forceManaged.title')}
+                hint={
+                  <span className="flex flex-col gap-2">
+                    <span>{t('settings.cindyMake.forceManaged.description')}</span>
+                    {forceManagedTools ? (
+                      <span>{t('settings.cindyMake.forceManaged.enabledHint')}</span>
+                    ) : null}
+                  </span>
+                }
+                trailing={
+                  <Switch
+                    checked={forceManagedTools}
+                    onCheckedChange={(checked) => {
+                      // Toggling the developer switch is a diagnostic recheck. Never
+                      // let it restart an in-progress preparation run implicitly.
+                      setRunMode('check');
+                      setTrackedPreparationId(undefined);
+                      setForceManagedTools(checked);
+                    }}
+                    aria-label={t('settings.cindyMake.forceManaged.ariaLabel')}
+                  />
+                }
+              />
+            </SettingsCard>
           )}
 
           {displayReport ? (

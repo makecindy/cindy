@@ -1,6 +1,7 @@
 import { personalizationDetailsSettings } from './PersonalizationDetails.settings-search';
 import { useSettingDefinition } from './useSettingDefinition';
 import { Button } from '@/components/ui/button';
+import { SETTINGS_HINT, SETTINGS_ROW_LABEL_CLASS, SettingsBlock, SettingsCard, SettingsSection } from '@/components/ui/settings-rows';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
@@ -39,76 +40,66 @@ export function UserPromptSection() {
   );
 
   return (
-    <div className="flex flex-col gap-[14px]">
-      <h2 className="text-16 font-medium leading-[1.2] text-[var(--settings-section-title)]">
-        {t('settings.personalization.title')}
-      </h2>
+    <SettingsSection variant="page" title={t('settings.personalization.title')}>
+      <SettingsCard>
+        {/* 名称/说明在输入框上方, 整块不是「名称 + 控件」一行, 放 SettingsBlock */}
+        <SettingsBlock className="flex flex-col gap-[14px]">
+          <div className="flex flex-col gap-1">
+            <p className={SETTINGS_ROW_LABEL_CLASS}>
+              {setting.title}
+            </p>
+            <p className={SETTINGS_HINT}>
+              {setting.description}
+            </p>
+          </div>
 
-      <div
-        className={cn(
-          'flex flex-col gap-[14px] rounded-xl p-5',
-          'bg-[var(--settings-theme-card-bg)]',
-          'border border-[var(--settings-theme-card-border)]',
-        )}
-      >
-        <div className="flex flex-col gap-1">
-          <p
-            className="text-13 font-medium text-[var(--settings-section-sublabel)]"
-            style={{ letterSpacing: '0.12px' }}
-          >
-            {setting.title}
-          </p>
-          <p className="text-13 leading-[1.5] text-[var(--settings-section-desc)]">
-            {setting.description}
-          </p>
-        </div>
-
-        <textarea {...setting.anchorProps} {...setting.controlProps}
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          placeholder={t('settings.personalization.placeholder')}
-          aria-label={t('settings.personalization.ariaLabel')}
-          rows={7}
-          className={cn(
-            'min-h-[160px] w-full resize-y rounded-xl',
-            'p-4',
-            'bg-[var(--settings-input-bg)]',
-            'border border-[var(--settings-input-border)]',
-            'text-13 leading-[1.6] text-[var(--settings-input-text)]',
-            'placeholder:font-normal placeholder:text-[var(--settings-input-placeholder)]',
-            'outline-none focus:border-[var(--settings-input-border-focus)]',
-            'transition-colors',
-          )}
-          style={{ userSelect: 'text', WebkitUserSelect: 'text' }}
-        />
-
-        <div className="flex items-center justify-between gap-3">
-          <p
+          <textarea {...setting.anchorProps} {...setting.controlProps}
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            placeholder={t('settings.personalization.placeholder')}
+            aria-label={t('settings.personalization.ariaLabel')}
+            rows={7}
             className={cn(
-              'text-12 tabular-nums',
-              overLimit
-                ? 'text-[var(--settings-error-text)]'
-                : 'text-[var(--settings-source-meta)]',
+              'min-h-[160px] w-full resize-y rounded-xl',
+              'p-4',
+              'bg-[var(--settings-input-bg)]',
+              'border border-[var(--settings-input-border)]',
+              'text-13 leading-[1.6] text-[var(--settings-input-text)]',
+              'placeholder:font-normal placeholder:text-[var(--settings-input-placeholder)]',
+              'outline-none focus:border-[var(--settings-input-border-focus)]',
+              'transition-colors',
             )}
-            style={{ letterSpacing: '0.12px' }}
-            aria-live="polite"
-          >
-            {counter}
-            {overLimit ? t('settings.personalization.overLimit') : ''}
-          </p>
+            style={{ userSelect: 'text', WebkitUserSelect: 'text' }}
+          />
 
-          <Button {...setting.controlProps}
-            variant="cta"
-            size="md"
-            compact
-            type="button"
-            onClick={handleSave}
-            disabled={!canSave}
-          >
-            {t('settings.personalization.save')}
-          </Button>
-        </div>
-      </div>
-    </div>
+          <div className="flex items-center justify-between gap-3">
+            <p
+              className={cn(
+                'text-12 tabular-nums',
+                overLimit
+                  ? 'text-[var(--settings-error-text)]'
+                  : 'text-[var(--settings-source-meta)]',
+              )}
+              style={{ letterSpacing: '0.12px' }}
+              aria-live="polite"
+            >
+              {counter}
+              {overLimit ? t('settings.personalization.overLimit') : ''}
+            </p>
+
+            <Button {...setting.controlProps}
+              variant="cta"
+              size="md"
+              compact
+              type="button"
+              onClick={handleSave}
+              disabled={!canSave}
+            >
+              {t('settings.personalization.save')}
+            </Button>
+          </div>
+        </SettingsBlock>
+      </SettingsCard>
+    </SettingsSection>
   );
 }

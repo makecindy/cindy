@@ -34,6 +34,7 @@ import { Spinner } from '@/components/ui/spinner';
 import { Button } from '@/components/ui/button';
 import { FormField } from '@/components/ui/form-field';
 import { Switch } from '@/components/ui/switch';
+import { SettingsBlock, SettingsCard, SettingsRow, SettingsSection } from '@/components/ui/settings-rows';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { DefaultOverrideControls } from './DefaultOverrideControls';
 import { DialogueDirectorySection } from './DialogueDirectorySection';
@@ -271,18 +272,12 @@ export function StorageManagementCard() {
     : Math.min(100, (databaseBytes / (warningThresholdGiB * GIB_BYTES)) * 100);
 
   return (
-    <div id="settings-storage-section" className="flex flex-col gap-3">
-      <div className="flex items-end justify-between gap-4 px-0.5">
-        <div className="min-w-0">
-          <h2 className="text-16 font-medium leading-[1.2] text-[var(--settings-section-title)]">
-            {t(storageManagementCardSettings.storage.sectionKey)}
-          </h2>
-          <p className="mt-1 text-13 leading-[1.5] text-[var(--settings-section-desc)]">
-            {t('settings.about.storage.overviewDescription')}
-          </p>
-        </div>
-      </div>
-
+    <SettingsSection
+      variant="page"
+      id="settings-storage-section"
+      title={t(storageManagementCardSettings.storage.sectionKey)}
+      description={t('settings.about.storage.overviewDescription')}
+    >
       <DialogueDirectorySection />
 
       <ProjectsRootSection />
@@ -358,244 +353,206 @@ export function StorageManagementCard() {
         </div>
       </div>
 
-      <div className="flex items-baseline justify-between gap-3 px-0.5">
-        <h3 className="text-13 font-medium text-[var(--settings-section-title)]">
-          {t(storageManagementCardSettings.aboutStorageMediaSectionTitle.titleKey)}
-        </h3>
-        <span className="text-11 text-[var(--settings-section-sublabel)]">
-          {t(storageManagementCardSettings.aboutStorageMediaSectionTitle.descriptionKey)}
-        </span>
-      </div>
-      <div
-        className={cn(
-          'overflow-hidden rounded-xl',
-          'bg-[var(--settings-theme-card-bg)]',
-          'border border-[var(--settings-theme-card-border)]',
-        )}
+      <SettingsSection
+        title={t(storageManagementCardSettings.aboutStorageMediaSectionTitle.titleKey)}
+        action={
+          <span className="text-11 text-[var(--settings-section-sublabel)]">
+            {t(storageManagementCardSettings.aboutStorageMediaSectionTitle.descriptionKey)}
+          </span>
+        }
       >
-        <div className="flex items-center justify-between gap-3 px-[18px] py-4">
-          <div className="flex min-w-0 flex-col gap-1">
-            <span className="text-13 text-[var(--settings-section-sublabel)]">
-              {t('settings.about.storage.legacyImagesLabel')}
-            </span>
-            <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
-              {t('settings.about.storage.legacyImagesDescription')}
-            </p>
-          </div>
-          <div className="flex shrink-0 items-center gap-2">
-            <CardButton onClick={handleOpenLegacyImagesDir}>
-              {t('settings.about.storage.legacyImagesOpenButton')}
-            </CardButton>
-            <CardButton onClick={handleClearLegacyImagesDir}>
-              {t('settings.about.storage.legacyImagesClearButton')}
-            </CardButton>
-          </div>
-        </div>
-
-        <div
-          aria-hidden
-          className="h-px w-full bg-[var(--settings-theme-card-border)]"
-        />
-
-        <div className="flex items-center justify-between gap-3 px-[18px] py-4">
-          <div className="flex min-w-0 flex-col gap-1">
-            <span className="text-13 text-[var(--settings-section-sublabel)]">
-              {t('settings.about.storage.chatAttachmentsLabel')}
-            </span>
-            <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
-              {t('settings.about.storage.chatAttachmentsDescription')}
-            </p>
-          </div>
-          <div className="flex shrink-0 items-center gap-2">
-            <CardButton onClick={handleOpenChatAttachmentsDir}>
-              {t('settings.about.storage.chatAttachmentsOpenButton')}
-            </CardButton>
-            <CardButton onClick={handleClearChatAttachmentsDir}>
-              {t('settings.about.storage.chatAttachmentsClearButton')}
-            </CardButton>
-          </div>
-        </div>
-        <div aria-hidden className="h-px w-full bg-[var(--settings-theme-card-border)]" />
-        <div className="flex items-center justify-between gap-3 px-[18px] py-4">
-          <div className="flex min-w-0 flex-col gap-1">
-            <span className="text-13 text-[var(--settings-section-sublabel)]">
-              <span id={storageManagementCardSettings.aboutStorageRemoteMediaLabel.targetId}>{t(storageManagementCardSettings.aboutStorageRemoteMediaLabel.titleKey)}</span>
-              {' · '}{stats?.remoteMedia ? formatBytes(stats.remoteMedia.bytes) : t('settings.about.storage.unknown')}
-            </span>
-            <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
-              {t(storageManagementCardSettings.aboutStorageRemoteMediaLabel.descriptionKey)}
-            </p>
-          </div>
-          <CardButton onClick={handleClearRemoteMedia}>
-            {t('settings.about.storage.remoteMediaClearButton')}
-          </CardButton>
-        </div>
-      </div>
-
-      <div className="flex items-baseline justify-between gap-3 px-0.5">
-        <h3 className="text-13 font-medium text-[var(--settings-section-title)]">
-          {t(storageManagementCardSettings.aboutStorageDatabaseSectionTitle.titleKey)}
-        </h3>
-        <span className="text-11 text-[var(--settings-section-sublabel)]">
-          {databaseBytes === null
-            ? t('settings.about.storage.unknown')
-            : t('settings.about.storage.databaseUsage', { size: formatBytes(databaseBytes) })}
-        </span>
-      </div>
-      <div
-        className={cn(
-          'overflow-hidden rounded-xl',
-          'bg-[var(--settings-theme-card-bg)]',
-          'border border-[var(--settings-theme-card-border)]',
-        )}
-      >
-        <DatabaseSlimmingSection
-          warningThresholdGiB={warningThresholdGiB}
-          onWarningThresholdChange={setWarningThresholdGiB}
-        />
-      </div>
-
-      <div className="flex items-start gap-2 rounded-xl bg-[var(--warning-bg-soft)] px-3.5 py-3 text-12 text-[var(--warning-fg)]">
-        <span className="text-14 font-semibold leading-none" aria-hidden>
-          !
-        </span>
-        <span>{t('settings.about.storage.databaseWarningNote')}</span>
-      </div>
-
-      {/* 清理:扫描 → 报数确认 → 执行 → 结果 */}
-      <div
-        className={cn(
-          'flex flex-col gap-2 rounded-xl px-[18px] py-4',
-          'bg-[var(--settings-theme-card-bg)]',
-          'border border-[var(--settings-theme-card-border)]',
-        )}
-      >
-        <div className="flex items-center justify-between gap-3">
-          <div className="flex min-w-0 flex-col gap-1">
-            <span id={storageManagementCardSettings.aboutStorageCleanupLabel.targetId} className="text-13 text-[var(--settings-section-sublabel)]">
-              {t(storageManagementCardSettings.aboutStorageCleanupLabel.titleKey)}
-            </span>
-            <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
-              {t(storageManagementCardSettings.aboutStorageCleanupLabel.descriptionKey)}
-            </p>
-          </div>
-          <CardButton onClick={handleScan}>
-            {t('settings.about.storage.scanButton')}
-          </CardButton>
-        </div>
-
-        {phase.kind === 'scanned' && (
-          <div className="flex flex-col gap-1.5 rounded-lg border border-[var(--settings-theme-card-border)] px-3 py-2.5">
-            {hasCleanable(phase.scan) ? (
+        <SettingsCard>
+          <SettingsRow
+            title={t('settings.about.storage.legacyImagesLabel')}
+            hint={t('settings.about.storage.legacyImagesDescription')}
+            trailing={
+              <div className="flex shrink-0 items-center gap-2">
+                <CardButton onClick={handleOpenLegacyImagesDir}>
+                  {t('settings.about.storage.legacyImagesOpenButton')}
+                </CardButton>
+                <CardButton onClick={handleClearLegacyImagesDir}>
+                  {t('settings.about.storage.legacyImagesClearButton')}
+                </CardButton>
+              </div>
+            }
+          />
+          <SettingsRow
+            title={t('settings.about.storage.chatAttachmentsLabel')}
+            hint={t('settings.about.storage.chatAttachmentsDescription')}
+            trailing={
+              <div className="flex shrink-0 items-center gap-2">
+                <CardButton onClick={handleOpenChatAttachmentsDir}>
+                  {t('settings.about.storage.chatAttachmentsOpenButton')}
+                </CardButton>
+                <CardButton onClick={handleClearChatAttachmentsDir}>
+                  {t('settings.about.storage.chatAttachmentsClearButton')}
+                </CardButton>
+              </div>
+            }
+          />
+          <SettingsRow
+            title={
               <>
-                <ReportLine
-                  visible={phase.scan.zeroRef.count > 0}
-                  text={t('settings.about.storage.reportZeroRef', {
-                    count: phase.scan.zeroRef.count,
-                    size: formatBytes(phase.scan.zeroRef.bytes),
-                  })}
-                />
-                <ReportLine
-                  visible={phase.scan.zeroRef.protectedCount > 0}
-                  text={t('settings.about.storage.reportProtected', {
-                    count: phase.scan.zeroRef.protectedCount,
-                  })}
-                />
-                <ReportLine
-                  visible={phase.scan.cache.evictable.length > 0}
-                  text={t('settings.about.storage.reportCache', {
-                    size: formatBytes(
-                      phase.scan.cache.evictable.reduce((sum, e) => sum + e.bytes, 0),
-                    ),
-                    total: formatBytes(phase.scan.cache.totalBytes),
-                    limit: formatBytes(phase.scan.cache.limitBytes),
-                  })}
-                />
-                <ReportLine
-                  visible={phase.scan.deadDirs.some((d) => d.eligible)}
-                  text={t('settings.about.storage.reportDeadDirs', {
-                    size: formatBytes(
-                      phase.scan.deadDirs
-                        .filter((d) => d.eligible)
-                        .reduce((sum, d) => sum + d.bytes, 0),
-                    ),
-                  })}
-                />
-                <ReportLine
-                  visible={phase.scan.tmpFileCount > 0}
-                  text={t('settings.about.storage.reportTmpFiles', {
-                    count: phase.scan.tmpFileCount,
-                  })}
-                />
-                <div className="mt-1 flex items-center justify-end gap-2">
-                  <CardButton onClick={() => setPhase({ kind: 'idle' })}>
-                    {t('settings.about.storage.cancelButton')}
-                  </CardButton>
-                  <CardButton emphasis onClick={() => handleCleanup(phase.scan)}>
-                    {cleanableBytes(phase.scan) > 0
-                      ? t('settings.about.storage.confirmCleanup', {
-                          size: formatBytes(cleanableBytes(phase.scan)),
-                        })
-                      : t('settings.about.storage.confirmCleanupNoSize')}
-                  </CardButton>
-                </div>
+                <span id={storageManagementCardSettings.aboutStorageRemoteMediaLabel.targetId}>{t(storageManagementCardSettings.aboutStorageRemoteMediaLabel.titleKey)}</span>
+                {' · '}{stats?.remoteMedia ? formatBytes(stats.remoteMedia.bytes) : t('settings.about.storage.unknown')}
               </>
-            ) : (
-              <p className="text-12 text-[var(--settings-section-sublabel)]">
-                {t('settings.about.storage.nothingToClean')}
+            }
+            hint={t(storageManagementCardSettings.aboutStorageRemoteMediaLabel.descriptionKey)}
+            trailing={
+              <CardButton onClick={handleClearRemoteMedia}>
+                {t('settings.about.storage.remoteMediaClearButton')}
+              </CardButton>
+            }
+          />
+        </SettingsCard>
+      </SettingsSection>
+
+      <SettingsSection
+        title={t(storageManagementCardSettings.aboutStorageDatabaseSectionTitle.titleKey)}
+        action={
+          <span className="text-11 text-[var(--settings-section-sublabel)]">
+            {databaseBytes === null
+              ? t('settings.about.storage.unknown')
+              : t('settings.about.storage.databaseUsage', { size: formatBytes(databaseBytes) })}
+          </span>
+        }
+      >
+        <SettingsCard>
+          <DatabaseSlimmingSection
+            warningThresholdGiB={warningThresholdGiB}
+            onWarningThresholdChange={setWarningThresholdGiB}
+          />
+        </SettingsCard>
+
+        <div className="flex items-start gap-2 rounded-xl bg-[var(--warning-bg-soft)] px-3.5 py-3 text-12 text-[var(--warning-fg)]">
+          <span className="text-14 font-semibold leading-none" aria-hidden>
+            !
+          </span>
+          <span>{t('settings.about.storage.databaseWarningNote')}</span>
+        </div>
+
+        {/* 清理:扫描 → 报数确认 → 执行 → 结果 */}
+        <SettingsCard>
+          {/* 报数与结果紧贴在行下面,不另起分割线:行去掉自身内边距,由外层 block 承担 */}
+          <SettingsBlock className="flex flex-col gap-2">
+            <SettingsRow
+              className="p-0"
+              title={<span id={storageManagementCardSettings.aboutStorageCleanupLabel.targetId}>{t(storageManagementCardSettings.aboutStorageCleanupLabel.titleKey)}</span>}
+              hint={t(storageManagementCardSettings.aboutStorageCleanupLabel.descriptionKey)}
+              trailing={
+                <CardButton onClick={handleScan}>
+                  {t('settings.about.storage.scanButton')}
+                </CardButton>
+              }
+            />
+
+            {phase.kind === 'scanned' && (
+              <div className="flex flex-col gap-1.5 rounded-lg border border-[var(--settings-theme-card-border)] px-3 py-2.5">
+                {hasCleanable(phase.scan) ? (
+                  <>
+                    <ReportLine
+                      visible={phase.scan.zeroRef.count > 0}
+                      text={t('settings.about.storage.reportZeroRef', {
+                        count: phase.scan.zeroRef.count,
+                        size: formatBytes(phase.scan.zeroRef.bytes),
+                      })}
+                    />
+                    <ReportLine
+                      visible={phase.scan.zeroRef.protectedCount > 0}
+                      text={t('settings.about.storage.reportProtected', {
+                        count: phase.scan.zeroRef.protectedCount,
+                      })}
+                    />
+                    <ReportLine
+                      visible={phase.scan.cache.evictable.length > 0}
+                      text={t('settings.about.storage.reportCache', {
+                        size: formatBytes(
+                          phase.scan.cache.evictable.reduce((sum, e) => sum + e.bytes, 0),
+                        ),
+                        total: formatBytes(phase.scan.cache.totalBytes),
+                        limit: formatBytes(phase.scan.cache.limitBytes),
+                      })}
+                    />
+                    <ReportLine
+                      visible={phase.scan.deadDirs.some((d) => d.eligible)}
+                      text={t('settings.about.storage.reportDeadDirs', {
+                        size: formatBytes(
+                          phase.scan.deadDirs
+                            .filter((d) => d.eligible)
+                            .reduce((sum, d) => sum + d.bytes, 0),
+                        ),
+                      })}
+                    />
+                    <ReportLine
+                      visible={phase.scan.tmpFileCount > 0}
+                      text={t('settings.about.storage.reportTmpFiles', {
+                        count: phase.scan.tmpFileCount,
+                      })}
+                    />
+                    <div className="mt-1 flex items-center justify-end gap-2">
+                      <CardButton onClick={() => setPhase({ kind: 'idle' })}>
+                        {t('settings.about.storage.cancelButton')}
+                      </CardButton>
+                      <CardButton emphasis onClick={() => handleCleanup(phase.scan)}>
+                        {cleanableBytes(phase.scan) > 0
+                          ? t('settings.about.storage.confirmCleanup', {
+                              size: formatBytes(cleanableBytes(phase.scan)),
+                            })
+                          : t('settings.about.storage.confirmCleanupNoSize')}
+                      </CardButton>
+                    </div>
+                  </>
+                ) : (
+                  <p className="text-12 text-[var(--settings-section-sublabel)]">
+                    {t('settings.about.storage.nothingToClean')}
+                  </p>
+                )}
+              </div>
+            )}
+
+            {phase.kind === 'done' && (
+              <p className="text-12 leading-[1.4] text-[var(--settings-section-sublabel)]">
+                {t('settings.about.storage.cleanupResult', {
+                  size: formatBytes(phase.result.freedBytes),
+                  skipped:
+                    phase.result.zeroRef.skipped +
+                    phase.result.cacheEvicted.skipped +
+                    phase.result.deadDirs.skipped.length,
+                })}
               </p>
             )}
-          </div>
-        )}
+          </SettingsBlock>
+        </SettingsCard>
 
-        {phase.kind === 'done' && (
-          <p className="text-12 leading-[1.4] text-[var(--settings-section-sublabel)]">
-            {t('settings.about.storage.cleanupResult', {
-              size: formatBytes(phase.result.freedBytes),
-              skipped:
-                phase.result.zeroRef.skipped +
-                phase.result.cacheEvicted.skipped +
-                phase.result.deadDirs.skipped.length,
-            })}
-          </p>
-        )}
-      </div>
-
-      {/* 体检(对账,只报不删) */}
-      <div
-        className={cn(
-          'flex flex-col gap-1.5 rounded-xl px-[18px] py-4',
-          'bg-[var(--settings-theme-card-bg)]',
-          'border border-[var(--settings-theme-card-border)]',
-        )}
-      >
-        <div className="flex items-center justify-between gap-3">
-          <div className="flex min-w-0 flex-col gap-1">
-            <span id={storageManagementCardSettings.aboutStorageReconcileLabel.targetId} className="text-13 text-[var(--settings-section-sublabel)]">
-              {t(storageManagementCardSettings.aboutStorageReconcileLabel.titleKey)}
-            </span>
-            <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
-              {t(storageManagementCardSettings.aboutStorageReconcileLabel.descriptionKey)}
-            </p>
-          </div>
-          <CardButton onClick={handleReconcile}>
-            {t('settings.about.storage.reconcileButton')}
-          </CardButton>
-        </div>
-        {reconcile && (
-          <p className="text-12 leading-[1.4] text-[var(--settings-section-sublabel)]">
-            {reconcile.orphanCount === 0 && reconcile.missingCount === 0 && reconcile.strayCount === 0
-              ? t('settings.about.storage.reconcileHealthy')
-              : t('settings.about.storage.reconcileIssues', {
-                  orphans: reconcile.orphanCount,
-                  orphanSize: formatBytes(reconcile.orphanBytes),
-                  missing: reconcile.missingCount,
-                  stray: reconcile.strayCount,
-                })}
-          </p>
-        )}
-      </div>
-    </div>
+        {/* 体检(对账,只报不删) */}
+        <SettingsCard>
+          <SettingsBlock className="flex flex-col gap-1.5">
+            <SettingsRow
+              className="p-0"
+              title={<span id={storageManagementCardSettings.aboutStorageReconcileLabel.targetId}>{t(storageManagementCardSettings.aboutStorageReconcileLabel.titleKey)}</span>}
+              hint={t(storageManagementCardSettings.aboutStorageReconcileLabel.descriptionKey)}
+              trailing={
+                <CardButton onClick={handleReconcile}>
+                  {t('settings.about.storage.reconcileButton')}
+                </CardButton>
+              }
+            />
+            {reconcile && (
+              <p className="text-12 leading-[1.4] text-[var(--settings-section-sublabel)]">
+                {reconcile.orphanCount === 0 && reconcile.missingCount === 0 && reconcile.strayCount === 0
+                  ? t('settings.about.storage.reconcileHealthy')
+                  : t('settings.about.storage.reconcileIssues', {
+                      orphans: reconcile.orphanCount,
+                      orphanSize: formatBytes(reconcile.orphanBytes),
+                      missing: reconcile.missingCount,
+                      stray: reconcile.strayCount,
+                    })}
+              </p>
+            )}
+          </SettingsBlock>
+        </SettingsCard>
+      </SettingsSection>
+    </SettingsSection>
   );
 }
 
@@ -891,26 +848,23 @@ function DatabaseSlimmingSection({
   );
 
   return (
-    <div className="flex flex-col gap-3 px-[18px] py-4" aria-busy={scanLoading}>
-      <div className="flex items-center justify-between gap-3">
-        <div className="flex min-w-0 flex-col gap-1">
-          <span id={storageManagementCardSettings.aboutStorageDbSlimmingLabel.targetId} className="text-13 text-[var(--settings-section-sublabel)]">
-            {t(storageManagementCardSettings.aboutStorageDbSlimmingLabel.titleKey)}
-          </span>
-          <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
-            {t(storageManagementCardSettings.aboutStorageDbSlimmingLabel.descriptionKey)}
-          </p>
-        </div>
-        <Button data-setting-id={storageManagementCardSettings.aboutStorageDbSlimmingLabel.id}
-          variant="cta"
-          size="md"
-          className="gap-1.5"
-          onClick={handleScan}
-          loading={scanLoading}
-        >
-          {t('settings.about.storage.dbSlimmingScanButton')}
-        </Button>
-      </div>
+    <SettingsBlock className="flex flex-col gap-3" aria-busy={scanLoading}>
+      <SettingsRow
+        className="p-0"
+        title={<span id={storageManagementCardSettings.aboutStorageDbSlimmingLabel.targetId}>{t(storageManagementCardSettings.aboutStorageDbSlimmingLabel.titleKey)}</span>}
+        hint={t(storageManagementCardSettings.aboutStorageDbSlimmingLabel.descriptionKey)}
+        trailing={
+          <Button data-setting-id={storageManagementCardSettings.aboutStorageDbSlimmingLabel.id}
+            variant="cta"
+            size="md"
+            className="gap-1.5"
+            onClick={handleScan}
+            loading={scanLoading}
+          >
+            {t('settings.about.storage.dbSlimmingScanButton')}
+          </Button>
+        }
+      />
 
       <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-2 rounded-lg border border-[var(--settings-theme-card-border)] px-3 py-2.5">
         <label
@@ -1149,7 +1103,7 @@ function DatabaseSlimmingSection({
           />
         </div>
       </div>
-    </div>
+    </SettingsBlock>
   );
 }
 

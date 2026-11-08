@@ -67,6 +67,7 @@ import {
 } from '../../../shared/sessionImport';
 import { normalizeWorkingDirForGrouping } from '../../../shared/workingDir';
 import { SessionShareImportWizard } from './SessionShareImportWizard';
+import { SETTINGS_PAGE_TITLE_CLASS } from '@/components/ui/settings-rows';
 
 const MB = 1024 * 1024;
 /** 结果里「可以继续」超过这么多条时折叠成一行。 */
@@ -479,7 +480,7 @@ export function SessionImportSection() {
     <div className="flex h-full min-h-0 w-full min-w-0 flex-col gap-4">
       <header className="flex shrink-0 items-end justify-between gap-6">
         <div className="flex min-w-0 max-w-[560px] flex-col gap-1">
-          <h2 className="text-16 font-medium leading-[1.2] text-[var(--settings-section-title)]">
+          <h2 className={SETTINGS_PAGE_TITLE_CLASS}>
             {t('settings.sessionImport.title')}
           </h2>
           <p className="text-13 leading-[1.5] text-[var(--settings-section-desc)]">

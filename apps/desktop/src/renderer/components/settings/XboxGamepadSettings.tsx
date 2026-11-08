@@ -161,36 +161,27 @@ export function XboxGamepadEntry({
 }) {
   const { t } = useTranslation();
   const ns = gamepadCopyNs(family);
-  return (
-    <button
-      type="button"
+  // 单独出现时自成一张卡片；配件列表里由外层卡片包住
+  const row = (
+    <SettingsRow
       onClick={onOpen}
-      className={cn(
-        'flex w-full items-center gap-3 text-left outline-none transition-colors',
-        grouped
-          ? 'rounded-none border-0 bg-transparent px-4 py-[14px]'
-          : 'rounded-xl border p-4 border-[var(--settings-theme-card-border)] bg-[var(--settings-theme-card-bg)]',
-        'hover:bg-[var(--settings-menu-bg-hover)] focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]',
-      )}
       aria-label={t(`settings.shortcuts.${ns}.openAria`)}
-    >
-      <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-[var(--surface-chip)] text-[var(--text-secondary)]">
-        <Gamepad2 size={18} aria-hidden="true" />
-      </span>
-      <span className="flex min-w-0 flex-1 flex-col gap-1">
-        <span className="truncate text-13 font-medium text-[var(--text-primary)]">
-          {t(`settings.shortcuts.${ns}.title`)}
+      lead={
+        <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-[var(--surface-chip)] text-[var(--text-secondary)]">
+          <Gamepad2 size={18} aria-hidden="true" />
         </span>
-        <span className="text-12 leading-[1.4] text-[var(--text-secondary)]">
-          {t(`settings.shortcuts.${ns}.entryDescription`)}
+      }
+      title={t(`settings.shortcuts.${ns}.title`)}
+      hint={t(`settings.shortcuts.${ns}.entryDescription`)}
+      trailing={
+        <span className="flex shrink-0 items-center gap-2">
+          <ConnectionBadge state={state} loading={loading} compact />
+          <ChevronRight size={16} className="text-[var(--text-tertiary)]" aria-hidden="true" />
         </span>
-      </span>
-      <span className="flex shrink-0 items-center gap-2">
-        <ConnectionBadge state={state} loading={loading} compact />
-        <ChevronRight size={16} className="text-[var(--text-tertiary)]" aria-hidden="true" />
-      </span>
-    </button>
+      }
+    />
   );
+  return grouped ? row : <SettingsCard>{row}</SettingsCard>;
 }
 
 export function XboxGamepadEntryContainer({
@@ -333,12 +324,17 @@ export function XboxGamepadSettings({ family, onBack }: { family: GamepadFamily;
         </div>
       )}
 
-      <SettingsCard className="flex items-center p-4 gap-4">
-        <div className="flex min-w-0 flex-1 flex-col gap-2">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <p className={SETTINGS_ROW_LABEL_CLASS}>
-              {t('settings.shortcuts.xboxGamepad.connection.toggle.label')}
-            </p>
+      <SettingsCard>
+        <SettingsRow
+          wrap
+          title={t('settings.shortcuts.xboxGamepad.connection.toggle.label')}
+          hint={
+            <span className="flex flex-col gap-2">
+              <span>{t(`settings.shortcuts.${ns}.connection.descriptions.${key}`)}</span>
+              {state?.devicePresent && <XboxDeviceChips device={state.device} />}
+            </span>
+          }
+          trailing={
             <div className="flex items-center gap-2">
               <Switch
                 checked={enabled}
@@ -350,12 +346,8 @@ export function XboxGamepadSettings({ family, onBack }: { family: GamepadFamily;
               />
               <ConnectionBadge state={state} loading={loading} />
             </div>
-          </div>
-          <p className="text-12 leading-[1.45] text-[var(--text-secondary)]">
-            {t(`settings.shortcuts.${ns}.connection.descriptions.${key}`)}
-          </p>
-          {state?.devicePresent && <XboxDeviceChips device={state.device} />}
-        </div>
+          }
+        />
       </SettingsCard>
 
       <SettingsCard className="flex flex-col gap-3 p-4">
@@ -510,28 +502,26 @@ export function XboxGamepadSettings({ family, onBack }: { family: GamepadFamily;
         )}
       </XboxGamepadPartEditor>
 
-      <SettingsCard className="flex items-center p-4 justify-between gap-4">
-        <div className="flex min-w-0 flex-col gap-1">
-          <p className={SETTINGS_ROW_LABEL_CLASS}>
-            {t('settings.shortcuts.xboxGamepad.layout.reset.title')}
-          </p>
-          <p className="text-12 leading-[1.45] text-[var(--text-secondary)]">
-            {t('settings.shortcuts.xboxGamepad.layout.reset.description')}
-          </p>
-        </div>
-        <Button
-          variant="secondary"
-          size="md"
-          compact
-          loading={saving}
-          type="button"
-          disabled={!state || saving}
-          onClick={() => void resetSettings()}
-          className="shrink-0"
-        >
-          <RotateCcw size={13} />
-          {t('settings.shortcuts.xboxGamepad.layout.reset.button')}
-        </Button>
+      <SettingsCard>
+        <SettingsRow
+          title={t('settings.shortcuts.xboxGamepad.layout.reset.title')}
+          hint={t('settings.shortcuts.xboxGamepad.layout.reset.description')}
+          trailing={
+            <Button
+              variant="secondary"
+              size="md"
+              compact
+              loading={saving}
+              type="button"
+              disabled={!state || saving}
+              onClick={() => void resetSettings()}
+              className="shrink-0"
+            >
+              <RotateCcw size={13} />
+              {t('settings.shortcuts.xboxGamepad.layout.reset.button')}
+            </Button>
+          }
+        />
       </SettingsCard>
     </div>
   );

@@ -26,36 +26,48 @@ export const SETTINGS_HINT = 'text-12 leading-[1.4] text-[var(--text-secondary)]
 
 /** 卡片标题这类不是设置行、但要和行名称同一档的文字（手柄页的卡片标题）。 */
 export const SETTINGS_ROW_LABEL_CLASS = 'text-13 font-medium text-[var(--settings-section-sublabel)]';
-const SETTINGS_SECTION_TITLE_CLASS = 'text-16 font-medium leading-[1.2] text-[var(--settings-section-title)]';
+/** 组名：SettingsSection 之外、结构特殊的分区标题（带计数或兄弟元素）也用它，和组件同一档。 */
+export const SETTINGS_SECTION_TITLE_CLASS = 'text-16 font-medium leading-[1.2] text-[var(--settings-section-title)]';
+/** 设置页的页面标题：比 16px 组名高一级（DESIGN.md §4）。没用 SettingsSection variant="page" 的手写页面标题用它。 */
+export const SETTINGS_PAGE_TITLE_CLASS = 'text-20 font-medium leading-[1.3] text-[var(--settings-section-title)]';
 
 const DrawerScope = createContext(false);
+/** 在页面标题之下：里面的分区默认是 h3。 */
+const PageScope = createContext(false);
 
 export function SettingsDrawerScope({ children }: { children: ReactNode }) {
   return <DrawerScope.Provider value>{children}</DrawerScope.Provider>;
 }
 
-export function SettingsSection({ title, count, description, action, caption, children, testId, headingLevel, className, ...rest }: {
+export function SettingsSection({ title, titleId, count, description, action, caption, children, testId, headingLevel, variant, className, ...rest }: {
   title?: ReactNode; count?: number; action?: ReactNode; caption?: ReactNode; children: ReactNode; testId?: string;
   /** 组名下面一行说明，紧贴组名；卡片下面的补充说明用 caption。 */
   description?: ReactNode;
-  /** 设置页的分区是 h2（页面标题是 h1），抽屉和页内的子分区是 h3。 */
+  /** 组名元素的 id：设置搜索定位、aria-labelledby 指向组名时用。 */
+  titleId?: string;
+  /** 设置页的分区是 h2；抽屉、页面标题之下和页内的子分区是 h3。 */
   headingLevel?: 2 | 3;
+  /** page：这一节的标题就是整页的页面标题，20px，下面 24px，里面的分区自动是 h3。 */
+  variant?: 'page';
 } & Omit<HTMLAttributes<HTMLElement>, 'title' | 'children'>) {
   const drawer = useContext(DrawerScope);
-  const Heading = (headingLevel ?? (drawer ? 3 : 2)) === 2 ? 'h2' : 'h3';
-  return <section {...rest} className={cn('flex min-w-0 flex-col', !drawer && 'gap-[14px]', className)} data-testid={testId}>
+  const underPage = useContext(PageScope);
+  const page = variant === 'page';
+  const Heading = page ? 'h2' : (headingLevel ?? (drawer || underPage ? 3 : 2)) === 2 ? 'h2' : 'h3';
+  const section = <section {...rest} className={cn('flex min-w-0 flex-col', page ? 'gap-6' : !drawer && 'gap-[14px]', className)} data-testid={testId}>
     {(title || action) && <div className={cn('flex items-center justify-between gap-3', (drawer || action) && 'min-h-6', drawer && 'mb-2')}>
       <div className="flex min-w-0 flex-col gap-1">
-        <Heading className={cn('min-w-0', drawer ? 'text-13 font-medium leading-[1.38] text-[var(--text-secondary)]' : SETTINGS_SECTION_TITLE_CLASS)}>
+        <Heading id={titleId} className={cn('min-w-0', page ? SETTINGS_PAGE_TITLE_CLASS : drawer ? 'text-13 font-medium leading-[1.38] text-[var(--text-secondary)]' : SETTINGS_SECTION_TITLE_CLASS)}>
           {title}{count !== undefined && <span className="ml-1.5 font-normal tabular-nums text-[var(--text-tertiary)]">{count}</span>}
         </Heading>
-        {description && <p className="text-12 leading-[1.45] text-[var(--settings-section-desc)]">{description}</p>}
+        {description && <p className={cn(page ? 'text-13 leading-[1.5]' : 'text-12 leading-[1.45]', 'text-[var(--settings-section-desc)]')}>{description}</p>}
       </div>
       {action}
     </div>}
     {children}
     {caption && <p className={cn(drawer && 'mt-2', SETTINGS_HINT)}>{caption}</p>}
   </section>;
+  return page ? <PageScope.Provider value>{section}</PageScope.Provider> : section;
 }
 
 export function SettingsCard({ className, ...rest }: HTMLAttributes<HTMLDivElement>) {

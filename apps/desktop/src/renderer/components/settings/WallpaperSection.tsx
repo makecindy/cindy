@@ -21,7 +21,7 @@ import {
   SELECTABLE_WALLPAPER_IDS,
   type WallpaperId,
 } from '@/../shared/appearanceSettings';
-import { SettingsBlock, SettingsCard, SettingsSection } from '@/components/ui/settings-rows';
+import { SETTINGS_HINT, SettingsBlock, SettingsCard, SettingsRow, SettingsSection } from '@/components/ui/settings-rows';
 
 export function WallpaperSection() {
   const { t } = useTranslation();
@@ -347,25 +347,23 @@ export function WallpaperSection() {
           )}
         </SettingsBlock>
 
-        <SettingsBlock className="flex flex-col gap-3">
-          {(isSceneWallpaper(wallpaperId) || (wallpaperId === 'custom' && customVideo)) && (
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <p className="text-13 font-medium text-[var(--settings-section-sublabel)]">
-                  {t('settings.appearance.wallpaper.motionLabel')}
-                </p>
-                <p className="mt-1 text-12 leading-[1.4] text-[var(--text-secondary)]">
-                  {t('settings.appearance.wallpaper.motionHint')}
-                </p>
-              </div>
+        {(isSceneWallpaper(wallpaperId) || (wallpaperId === 'custom' && customVideo)) && (
+          <SettingsRow
+            title={t('settings.appearance.wallpaper.motionLabel')}
+            hint={t('settings.appearance.wallpaper.motionHint')}
+            trailing={
               <SegmentedControl data-setting-id={appearanceSettings.wallpaperCustomChoose.id}
                 aria-label={t('settings.appearance.wallpaper.motionLabel')}
                 value={wallpaperMotion}
                 onValueChange={setMotion}
                 options={appearanceSettings.wallpaperCustomChoose.options.map(({ value, labelKey }) => ({ value, label: t(labelKey) }))}
               />
-            </div>
-          )}
+            }
+          />
+        )}
+
+        {/* 滑块的名称和数值在同一行，不是设置行 */}
+        <SettingsBlock className="flex flex-col gap-3">
           <div className="flex items-center gap-3">
             <span className="shrink-0 text-12 text-[var(--settings-section-sublabel)]">
               {t('settings.appearance.wallpaper.visibilityLabel')}
@@ -385,10 +383,7 @@ export function WallpaperSection() {
               {Math.round(visibility * 100)}%
             </span>
           </div>
-          <p
-            id="wallpaper-visibility-hint"
-            className="text-12 text-[var(--text-secondary)]"
-          >
+          <p id="wallpaper-visibility-hint" className={SETTINGS_HINT}>
             {t('settings.appearance.wallpaper.visibilityHint')}
           </p>
           <div className="flex items-center gap-3">
@@ -416,10 +411,7 @@ export function WallpaperSection() {
               {wallpaperBlur ?? 0}
             </span>
           </div>
-          <p
-            id="wallpaper-blur-hint"
-            className="text-12 text-[var(--text-secondary)]"
-          >
+          <p id="wallpaper-blur-hint" className={SETTINGS_HINT}>
             {t('settings.appearance.wallpaper.blurHint')}
           </p>
         </SettingsBlock>

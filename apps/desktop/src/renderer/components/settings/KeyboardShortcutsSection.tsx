@@ -24,9 +24,10 @@ import { Button } from '@/components/ui/button';
 
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { useTranslation } from 'react-i18next';
-import { ArrowLeft, ChevronRight, Package, Pencil, RotateCcw, Trash2 } from 'lucide-react';
+import { ArrowLeft, Package, Pencil, RotateCcw, Trash2 } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
+import { SettingsCard, SettingsRow, SettingsSection } from '@/components/ui/settings-rows';
 import {
   APP_SHORTCUT_DEFINITIONS,
   appShortcutCombosEqual,
@@ -82,30 +83,25 @@ type HardwarePane = 'list' | 'accessories' | WorkLouderModel | GamepadFamily;
 function AccessoriesEntry({ onOpen }: { onOpen(): void }) {
   const { t } = useTranslation();
   return (
-    <button data-setting-id={keyboardShortcutsSettings.shortcutsAccessoriesTitle.id}
-      type="button"
-      onClick={onOpen}
-      data-testid="settings-shortcuts-accessories"
-      className={cn(
-        'flex w-full items-center gap-3 rounded-xl border p-4 text-left outline-none transition-colors',
-        'border-[var(--settings-theme-card-border)] bg-[var(--settings-theme-card-bg)]',
-        'hover:bg-[var(--settings-menu-bg-hover)] focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]',
-      )}
-      aria-label={t('settings.shortcuts.accessories.openAria')}
-    >
-      <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-[var(--surface-chip)] text-[var(--text-secondary)]">
-        <Package size={18} aria-hidden="true" />
-      </span>
-      <span className="flex min-w-0 flex-1 flex-col gap-1">
-        <span id={keyboardShortcutsSettings.shortcutsAccessoriesTitle.targetId} className="truncate text-13 font-medium text-[var(--text-primary)]">
-          {t(keyboardShortcutsSettings.shortcutsAccessoriesTitle.titleKey)}
-        </span>
-        <span className="text-12 leading-[1.4] text-[var(--text-secondary)]">
-          {t(keyboardShortcutsSettings.shortcutsAccessoriesTitle.descriptionKey)}
-        </span>
-      </span>
-      <ChevronRight size={16} className="shrink-0 text-[var(--text-tertiary)]" aria-hidden="true" />
-    </button>
+    <SettingsCard>
+      <SettingsRow data-setting-id={keyboardShortcutsSettings.shortcutsAccessoriesTitle.id}
+        onClick={onOpen}
+        data-testid="settings-shortcuts-accessories"
+        aria-label={t('settings.shortcuts.accessories.openAria')}
+        lead={
+          <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-[var(--surface-chip)] text-[var(--text-secondary)]">
+            <Package size={18} aria-hidden="true" />
+          </span>
+        }
+        title={
+          <span id={keyboardShortcutsSettings.shortcutsAccessoriesTitle.targetId}>
+            {t(keyboardShortcutsSettings.shortcutsAccessoriesTitle.titleKey)}
+          </span>
+        }
+        hint={t(keyboardShortcutsSettings.shortcutsAccessoriesTitle.descriptionKey)}
+        chevron
+      />
+    </SettingsCard>
   );
 }
 
@@ -404,14 +400,7 @@ export function KeyboardShortcutsSection() {
             {t(keyboardShortcutsSettings.shortcutsAccessoriesTitle.titleKey)}
           </h2>
         </div>
-        <div
-          className={cn(
-            'flex flex-col overflow-hidden rounded-xl',
-            'bg-[var(--settings-theme-card-bg)]',
-            'border border-[var(--settings-theme-card-border)]',
-            '[&>*+*]:border-t [&>*+*]:border-[var(--settings-theme-card-border)]',
-          )}
-        >
+        <SettingsCard className="flex flex-col">
           {VISIBLE_WORKLOUDER_MODELS.map((model) => (
             <WorkLouderCodexEntry
               key={model}
@@ -432,27 +421,25 @@ export function KeyboardShortcutsSection() {
               onOpen={() => openGamepad(family, 'accessories')}
             />
           ))}
-        </div>
+        </SettingsCard>
       </div>
     );
   }
 
   return (
-    <div className="flex flex-col gap-[14px]">
-      <div className="flex items-center justify-between gap-3">
-        <h2 className="text-16 font-medium leading-[1.2] text-[var(--settings-section-title)]">
-          {t('settings.shortcuts.title')}
-        </h2>
-        {hasAnyOverride && (
-          <button data-setting-id={keyboardShortcutsSettings.shortcuts.id}
-            type="button"
-            onClick={handleResetAll}
-            className="shrink-0 text-12 text-[var(--text-secondary)] hover:text-[var(--text-primary)] transition-colors"
-          >
-            {t('settings.shortcuts.resetAll')}
-          </button>
-        )}
-      </div>
+    <SettingsSection
+      variant="page"
+      title={t('settings.shortcuts.title')}
+      action={hasAnyOverride && (
+        <button data-setting-id={keyboardShortcutsSettings.shortcuts.id}
+          type="button"
+          onClick={handleResetAll}
+          className="shrink-0 text-12 text-[var(--text-secondary)] hover:text-[var(--text-primary)] transition-colors"
+        >
+          {t('settings.shortcuts.resetAll')}
+        </button>
+      )}
+    >
       {globalError && <span className="text-12 text-[var(--error-fg)]">{globalError}</span>}
 
       {VISIBLE_WORKLOUDER_MODELS.filter((model) => workLouderConnected[model]).map((model) => (
@@ -475,13 +462,8 @@ export function KeyboardShortcutsSection() {
       ))}
       <AccessoriesEntry onOpen={() => setHardwarePane('accessories')} />
 
-      <div
-        className={cn(
-          'flex flex-col rounded-xl p-5 gap-1',
-          'bg-[var(--settings-theme-card-bg)]',
-          'border border-[var(--settings-theme-card-border)]',
-        )}
-      >
+      {/* 快捷键列表是带组合键与行内报错的紧凑列表，不套 SettingsRow */}
+      <SettingsCard className="flex flex-col gap-1 p-5">
         {visibleDefs.map((def) => {
           // Plugin commands are dynamic and belong to the shortcuts page;
           // only built-in shortcuts have individual static search entries.
@@ -598,7 +580,7 @@ export function KeyboardShortcutsSection() {
             </div>
           );
         })}
-      </div>
-    </div>
+      </SettingsCard>
+    </SettingsSection>
   );
 }

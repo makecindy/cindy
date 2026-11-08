@@ -30,6 +30,7 @@ import { RemoteDesktopSetting } from './RemoteDesktopSetting';
 import { RemoteSection } from './RemoteSection';
 import { useAuth } from '@/contexts/AuthContext';
 import { useSettingsSearchNavigation } from './SettingsSearchNavigation';
+import { SETTINGS_PAGE_TITLE_CLASS } from '@/components/ui/settings-rows';
 
 const DEVICES_SECTION_PARAMS = ['devices', 'remoteControl.devices'];
 
@@ -262,7 +263,7 @@ export function RemoteControlSection() {
   return (
     <div className="flex flex-col gap-2">
       <div className="flex flex-col gap-1">
-        <h2 className="text-16 font-medium leading-[1.2] text-[var(--settings-section-title)]">
+        <h2 className={SETTINGS_PAGE_TITLE_CLASS}>
           {t('settings.remoteControl.title')}
         </h2>
         <p className="text-13 leading-[1.5] text-[var(--settings-section-desc)]">
