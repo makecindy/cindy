@@ -33,3 +33,12 @@ export function lastGoodOmarchyTheme(): LocalThemeWire | null {
 export function resetOmarchyThemeForTest(): void {
   lastGoodTheme = null;
 }
+
+/** 换主题后回调。 */
+export function watchOmarchyTheme(onSwitch: () => void): fs.FSWatcher | null {
+  const dir = getOmarchyStateDir();
+  if (!fs.statSync(dir, { throwIfNoEntry: false })) return null;
+  return fs.watch(dir, (_event, filename) => {
+    if (filename === 'theme.name') onSwitch();
+  });
+}
