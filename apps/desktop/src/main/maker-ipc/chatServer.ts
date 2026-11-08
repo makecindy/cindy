@@ -641,7 +641,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       const reason = message.mentions?.includes(selfId) ? words('mention')
         : quote && !quote.deleted && quote.authorId === selfId ? words('reply') : message.threadRootId ? words('threadReply') : '';
       const preview = notificationPreview([botGroupMessageSummaryText(view), ...attachments].filter(Boolean).join(' '), 240, words('image')) || words('message');
-      return { senderName, avatar: member?.avatar ?? localBot(message.authorId)?.avatar ?? '',
+      return { senderName, fromTeammate: message.author.kind === 'bot', avatar: member?.avatar ?? localBot(message.authorId)?.avatar ?? '',
         conversationKind: snapshot.room.kind === 'direct' ? 'direct' as const : 'group' as const,
         ...(message.threadRootId ? { threadName: root && !root.deleted ? notificationPreview(displayText(root), 48) || words('thread') : words('thread') } : {}),
         preview: [reason,preview].filter(Boolean).join(': ') };

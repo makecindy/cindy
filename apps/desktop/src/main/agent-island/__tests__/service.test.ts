@@ -3434,6 +3434,38 @@ describe('AgentIslandService native publishing', () => {
     expect(liveActivity.sync).toHaveBeenCalledWith(null);
   });
 
+  // Unit regression: completion without a Cindy sound must use OS settings, while
+  // another configured event still plays only its own sound. Covers both native surfaces.
+  it.each(['configured', 'none', 'disabled'].flatMap(choice =>
+    [false, true].map(liveOnly => ({ choice, liveOnly }))))('uses per-event sound ownership (%j)', async ({ choice, liveOnly }) => {
+    const { AgentIslandService } = await import('../service.js');
+    const publish = vi.fn(() => true);
+    const playSound = vi.fn(() => true);
+    let liveOwnsAlerts = liveOnly;
+    const liveActivity = { sync: vi.fn(), ownsAlerts: () => liveOwnsAlerts };
+    const service = new AgentIslandService({ getMainWindow: () => null,
+      nativeHost: { failed: false, publish, playSound },
+      liveActivity: liveActivity as unknown as AgentIslandLiveActivity,
+      playSoundWithoutHelper: playSound,
+    });
+    service.setEnabled(!liveOnly);
+    service.setSoundSettings({ enabled: choice !== 'disabled', sounds: {
+      ...DEFAULT_AGENT_ISLAND_SOUND_SETTINGS.sounds,
+      complete: choice === 'none' ? { type: 'builtin', id: 'none' } : customSound('complete.wav'),
+    } });
+    service.handleUserPrompt({ sessionId: 'sound-policy', agentKind: 'codex' }, 'run');
+    playSound.mockClear();
+    service.handleAgentEvent({ sessionId: 'sound-policy', agentKind: 'codex' }, doneEvent());
+    expect(playSound.mock.calls.length > 0).toBe(choice === 'configured');
+    expect(service.shouldSilenceTaskNotification('done')).toBe(choice === 'configured');
+    expect(service.ownsTaskAlert('done')).toBe(choice === 'configured');
+    expect(service.shouldSilenceTaskNotification('needs-reply')).toBe(choice !== 'disabled');
+    expect(service.shouldSilenceTaskNotification('error')).toBe(choice !== 'disabled');
+    liveOwnsAlerts = false;
+    service.setEnabled(false);
+    expect(service.shouldSilenceTaskNotification('done')).toBe(false);
+  });
+
   it('plays the start sound on user prompt without waiting for an isRunning status event', async () => {
     const { AgentIslandService } = await import('../service.js');
     const publish = vi.fn((state: AgentIslandDisplayState, frameOrFrames: AgentIslandNativeFrame | AgentIslandNativeFrame[]) => {

@@ -2421,7 +2421,7 @@
       "skinLabel": "角色",
       "skinHint": "任务胶囊与灵动岛中所显之角色。",
       "soundLabel": "事之音",
-      "soundHint": "为诸类提醒择 8-bit 之音，任务胶囊与灵动岛共之；点按之音唯触任务胶囊时鸣。",
+      "soundHint": "事件设音，则独奏所择之声；未设或关之，则从系统通知之设。",
       "soundAria": "切换任务胶囊之音",
       "soundSelectAria": "{{event}}之音",
       "soundPreviewAria": "先听{{event}}之音",
@@ -2476,7 +2476,7 @@
         "select": "点击"
       },
       "soundOptions": {
-        "none": "无",
+        "none": "从系统",
         "startup-chime": "启动之音",
         "ring-chime": "圆环之音",
         "item-found": "得宝",

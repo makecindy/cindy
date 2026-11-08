@@ -52,6 +52,7 @@ export type { SessionEventKind } from './sessionNotificationCopy';
 
 const log = createLogger('notificationService');
 let desktopNotificationsEnabled = true;
+let shouldSilenceTaskNotification: (kind: SessionEventKind) => boolean = () => false;
 
 /** Renderer owns persistence; main keeps the current value for scheduler-originated toasts. */
 export function getDesktopNotificationsEnabled(): boolean {
@@ -79,6 +80,7 @@ export async function showDesktopChatMessage(payload: ChatMessageNotification, c
   const icon = thumbnail ? nativeImage.createFromBuffer(Buffer.from(thumbnail, 'base64')) : undefined;
   const notification = new Notification({ title: payload.conversationKind === 'direct' ? payload.senderName : [payload.groupName,payload.threadName].filter(Boolean).join(' · '),
     body: payload.conversationKind === 'direct' ? payload.preview : [payload.senderName,payload.preview].filter(Boolean).join(': '),
+    silent: payload.fromTeammate === true && shouldSilenceTaskNotification('done'),
     ...(icon && !icon.isEmpty() ? { icon } : devNotificationIcon ? { icon: devNotificationIcon } : {}),
   });
   liveNotifications.add(notification);
@@ -233,6 +235,7 @@ export function showDeviceSessionDesktopEvent(
 }
 
 export interface NotificationServiceDeps {
+  shouldSilenceTaskNotification?: (kind: SessionEventKind) => boolean;
   isCompletionHandledByTeammate?: (sessionId: string) => Promise<boolean>;
   /**
    * The task surface already alerts for this event (Agent Notch, or the Live Activity
@@ -249,6 +252,7 @@ export interface NotificationServiceDeps {
 
 export function initNotificationService(deps: NotificationServiceDeps): void {
   const { getWindow, feishuIm } = deps;
+  shouldSilenceTaskNotification = deps.shouldSilenceTaskNotification ?? (() => false);
 
   ipcMain.handle('notification:set-desktop-enabled', (_event, enabled: unknown) => {
     if (typeof enabled !== 'boolean') {
@@ -511,7 +515,7 @@ function showDesktopToast(safeTitle: string, kind: SessionEventKind, onClick: ()
     title: teammate && safeTitle.trim().toLowerCase() === 'cindy'
       ? CLIENT_NOTIFICATION_NAME : `${CLIENT_NOTIFICATION_NAME} · ${safeTitle}`,
     body,
-    // silent 默认 false——发声音，与 Electron 默认一致。
+    silent: shouldSilenceTaskNotification(kind),
     ...(avatar && !avatar.isEmpty() ? { icon: avatar } : devNotificationIcon ? { icon: devNotificationIcon } : {}),
   });
   liveNotifications.add(notif);

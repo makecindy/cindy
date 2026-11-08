@@ -220,6 +220,26 @@ const baseDeps = (feishuIm: FakeFeishuIM) => ({
 });
 
 describe('notificationService — channels 分发', () => {
+  // Unit regression: direct scheduler/autonomy and teammate chat toasts bypassed the
+  // renderer's island gate and played a second sound. Exercise actual OS options.
+  it('applies the sound policy at both native notification exits', async () => {
+    const { initNotificationService, showDesktopSessionEvent, showDesktopChatMessage } = await freshService();
+    let silent = true;
+    initNotificationService({ ...baseDeps(makeFeishuIm(null)), shouldSilenceTaskNotification: (kind) => silent && kind !== 'error' });
+    showDesktopSessionEvent(() => null, { sessionId: 'sound-task', title: 'Task', kind: 'done' });
+    expect(notificationCtor).toHaveBeenLastCalledWith(expect.objectContaining({ silent: true }));
+    showDesktopSessionEvent(() => null, { sessionId: 'sound-task', title: 'Task', kind: 'error' });
+    expect(notificationCtor).toHaveBeenLastCalledWith(expect.objectContaining({ silent: false }));
+    const chat = { groupId: 'sound-chat', groupName: 'Chat', messageId: 'reply', senderName: 'Cindy', avatar: '', preview: 'Done', fromTeammate: true };
+    await showDesktopChatMessage(chat, () => true);
+    expect(notificationCtor).toHaveBeenLastCalledWith(expect.objectContaining({ silent: true }));
+    await showDesktopChatMessage({ ...chat, fromTeammate: false }, () => true);
+    expect(notificationCtor).toHaveBeenLastCalledWith(expect.objectContaining({ silent: false }));
+    silent = false;
+    showDesktopSessionEvent(() => null, { sessionId: 'sound-task', title: 'Task', kind: 'done' });
+    expect(notificationCtor).toHaveBeenLastCalledWith(expect.objectContaining({ silent: false }));
+  });
+
   // Regression: OS click must keep host + original task + reply anchor through reload,
   // and a notification from the previous account must not navigate the new account.
   it('routes desktop notification clicks with their original host and message, fenced by owner', async () => {

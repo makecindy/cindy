@@ -4703,6 +4703,7 @@ const registerIpcHandlers = () => {
     isCompletionHandledByTeammate: (sessionId) => getAgentIslandService()?.waitForCompletionNotification(sessionId)
       ?? isCompletionHandledByTeammate(sessionId),
     isTaskAlertShownElsewhere: (kind) => getAgentIslandService()?.ownsTaskAlert(kind) === true,
+    shouldSilenceTaskNotification: (kind) => getAgentIslandService()?.shouldSilenceTaskNotification(kind) === true,
     getWindow: () => getWindow() ?? null,
     feishuIm,
   });

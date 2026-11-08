@@ -63,6 +63,7 @@ import {
   isAgentIslandSoundId,
   isAgentIslandSupportedPlatform,
   isSilentAgentIslandSoundChoice,
+  hasAgentIslandNotificationSound,
   normalizeAgentIslandDisplayTarget,
   normalizeAgentIslandSoundChoice,
   normalizeAgentIslandSoundSettings,
@@ -861,8 +862,16 @@ export class AgentIslandService {
    * is on; it has no error presentation.
    */
   ownsTaskAlert(kind: 'done' | 'needs-reply' | 'error'): boolean {
+    // Keep the OS notification when this event has no enabled Cindy sound.
+    if (!hasAgentIslandNotificationSound(this.soundSettings, kind)) return false;
     if (this.isEnabled()) return true;
     return kind !== 'error' && this.deps.liveActivity?.ownsAlerts() === true;
+  }
+
+  /** Direct main callers and teammate replies use the same per-event sound policy. */
+  shouldSilenceTaskNotification(kind: 'done' | 'needs-reply' | 'error'): boolean {
+    if (!this.isEnabled() && this.deps.liveActivity?.ownsAlerts() !== true) return false;
+    return hasAgentIslandNotificationSound(this.soundSettings, kind);
   }
 
   refreshLocalization(): void {

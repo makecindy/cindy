@@ -7,6 +7,8 @@ export interface ChatMessageNotification {
   conversationKind?: 'direct' | 'group';
   threadName?: string;
   senderName: string;
+  /** Only teammate replies share the task sound policy; human messages keep OS sounds. */
+  fromTeammate?: boolean;
   avatar: string;
   preview: string;
 }
