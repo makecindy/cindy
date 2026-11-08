@@ -478,3 +478,32 @@ node apps/desktop/scripts/check-windows-remote-desktop-runtime.mjs
 `sidebarPresentation.test.tsx`、`LayoutRoot.test.tsx`、`rootDividerDrag.test.tsx` 与
 `RightSidebar.presentation.test.tsx`。覆盖几何边界、快速开关、首次恢复、拖宽后收起、
 宽度落盘重载、临时夹取不写偏好，以及原生扩宽后继续拖分隔线。
+
+## 意外退出后的诊断入口
+
+主窗口重启后，`StartupRecoveryDialogs` 在开屏与数据库就绪、更新说明关闭后，
+先显示已有的中断任务恢复入口，用户选择继续、暂不继续或关闭后，再询问是否诊断意外退出。
+没有中断任务时直接进入诊断提示；任务列表加载期间不会抢先弹诊断，继续任务无需等执行完成。正常退出、更新重启、
+显式信号退出和仍在运行的并存实例不触发；多条异常运行记录合并为一次提示。
+提示由 `crash-diagnosis.ts` 消费既有启动诊断快照，处理状态留在 main 内存，
+窗口重载不重复提示；历史 run marker 的清理仍归启动诊断，不改日志补传标记。
+PID 复用延迟核对出的陈旧退出仍只写日志，不触发新提示。
+
+点击「诊断问题」才读取现有白名单与脱敏管道的 main 日志，取退出锚点前后五分钟的
+最多 100 条、16,000 字符完整记录，按与退出时刻的距离优先选择，并排除本轮进程启动后的
+记录，避免重启噪声挤掉故障现场。无可靠时间或日志不可读时只带退出摘要并说明
+材料不足。原生 dump、Agent 日志、任务正文和原始请求不进入这份草稿。
+此路径不上传日志，也不改变崩溃自动上传偏好。
+
+诊断沿用错误卡的 `buildErrorDiagnosisPrompt` / `prefillErrorDiagnosisDraft`，
+保留已有未发送草稿，用户检查并发送后才交给模型分析。若需反馈，继续使用已有
+issue 提交确认卡，不自动公开材料。这里的「意外退出」不等于已证明软件崩溃，
+强制终止、断电等原因由诊断结合证据区分。
+
+三个 `crash-diagnosis:*` IPC 仅供本机可信顶层应用窗口，不进入 device-link
+allowlist；SSH、远程任务及手机不会误触本机重启提示。此功能不恢复或改变任务执行状态，
+诊断失败不会阻止使用应用；关闭提示后仍可从任务已有入口继续中断任务。
+
+验证入口：`crashDiagnosis.test.ts`、`StartupRecoveryDialogs.test.tsx`，以及
+`pnpm ui:check --page crash-diagnosis --case all --theme all`。单页场景不覆盖原生崩溃、
+真实模型执行或 issue 提交，须与定向测试及完整 Desktop 验收分开报告。

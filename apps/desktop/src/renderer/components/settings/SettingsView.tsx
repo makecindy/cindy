@@ -19,12 +19,11 @@ import { imBotSettings } from './ImBotSection.settings-search';
 import { helpSettings } from './HelpSection.settings-search';
 import { aboutSettings } from './AboutSection.settings-search';
 import { storageManagementCardSettings } from './StorageManagementCard.settings-search';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { lazy, Suspense, useTransition, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Navigate, useNavigate, useOutletContext, useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useSyncExternalStore } from 'react';
 import { ArrowLeft, ChevronRight } from 'lucide-react';
-
 import { cn } from '@/lib/utils';
 import { Tip } from '@/components/ui/tooltip';
 import { TAB_IDS, isSettingsTab } from '@/lib/tabLabels';
@@ -43,62 +42,64 @@ import type { SettingsSearchContext } from './settingsSearchTypes';
 import { useSettingsSectionTarget } from './useSettingsSectionTarget';
 import { useSettingsEscape } from './useSettingsEscape';
 import { UserProfileCard } from './UserProfileCard';
-import { VoiceInputSection } from './VoiceInputSection';
-import { AppearanceSection } from './AppearanceSection';
-import { SubagentModelSection } from './SubagentModelSection';
-import { AuxiliaryModelSection } from './AuxiliaryModelSection';
-import { VisionBridgeSection } from './VisionBridgeSection';
-import { ProvidersSection } from './ProvidersSection';
-import { McpServersSection } from './McpServersSection';
-import { RemoteControlSection } from './RemoteControlSection';
-import { LocalAgentSection } from './LocalAgentSection';
-import { SharedTaskDialog } from '@/features/device-link/SharedTaskDialog';
 import { NotificationSection } from './NotificationSection';
 import { WindowBehaviorSection } from './WindowBehaviorSection';
 import { ComposerSendShortcutSection } from './ComposerSendShortcutSection';
-import { KeyboardShortcutsSection } from './KeyboardShortcutsSection';
-import { AgentIslandSection } from './AgentIslandSection';
 import { LanguageSection } from './LanguageSection';
 import { LogoutSection } from './LogoutSection';
 import { ImBotSection, isImBotSettingsGroup, type ImBotSettingsGroup } from './ImBotSection';
-import { AboutSection } from './AboutSection';
-import { WorktreeRecycleCard } from './WorktreeRecycleCard';
-import { StorageManagementCard } from './StorageManagementCard';
-import { UserPromptSection } from './UserPromptSection';
-import { MemorySection } from './MemorySection';
 import { TerminalShellSection } from './TerminalShellSection';
 import { LinkOpenSection } from './LinkOpenSection';
-import { StreamFadeSection } from './StreamFadeSection';
 import { TipsSection } from './TipsSection';
 import { ExperimentalSection } from './ExperimentalSection';
 import { GitSafetySection } from './GitSafetySection';
-import { SessionImportSection } from './SessionImportSection';
-import { HelpSection } from './HelpSection';
 import { HelpAssistantPanel } from './HelpAssistantPanel';
 import { NewChatDefaultPermissionSection } from './NewChatDefaultPermissionSection';
 import { AgentResourceSection } from './AgentResourceSection';
-import { PiPackagesSection } from './PiPackagesSection';
 import { CollaborationSection } from './CollaborationSection';
 import { SetupMigrationSection } from './SetupMigrationSection';
-import { BuiltinToolsSection } from './BuiltinToolsSection';
-import { ComputerUseSection } from './ComputerUseSection';
 import { useAuth } from '@/contexts/AuthContext';
 import { useLocale } from '@/hooks/useLocale';
 import { useWallpaperSettings } from '@/hooks/useWallpaperSettings';
 import { isSceneWallpaper } from '@/lib/wallpaper';
 import { isCustomWallpaperVideo } from '../../../shared/appearanceSettings';
-import { SettingsCatalogPanel } from './SettingsCatalogPanel';
 import { getLastWorkingDir, subscribeToLastWorkingDir } from '@/state/lastWorkingDir';
-import { BillingSettingsSection } from '@/features/billing/BillingPage';
 import { BotsGlobalSettingsSection } from '@/features/bots/BotsGlobalSettingsSection';
 import { canAccessBillingSettings } from './billingVisibility';
 import { canAccessUsageSettings } from './usageVisibility';
-import { UsageHistorySection } from './usage/UsageHistorySection';
 import { CURRENT_CINDY_REGION } from '../../../shared/brandRegion';
 import { useVoiceInputModelSelection } from '@/hooks/useVoiceInputModelSelection';
 import { useVoiceSpeakerFilterStatus } from '@/hooks/useVoiceSpeakerFilterStatus';
 import { getVoiceInputSettings } from '@/hooks/useVoiceInputSettings';
 import { getAgentIslandEnabled, getAgentIslandLiveActivity, getAgentIslandSoundSettings, isAgentIslandSupported, loadAgentIslandLiveActivitySupport, subscribeAgentIslandSettings } from '@/hooks/useAgentIslandSettings';
+
+// Keep General available with the route; load other sections only when opened.
+const VoiceInputSection = lazy(() => import('./VoiceInputSection').then(module => ({ default: module.VoiceInputSection })));
+const AppearanceSection = lazy(() => import('./AppearanceSection').then(module => ({ default: module.AppearanceSection })));
+const SubagentModelSection = lazy(() => import('./SubagentModelSection').then(module => ({ default: module.SubagentModelSection })));
+const AuxiliaryModelSection = lazy(() => import('./AuxiliaryModelSection').then(module => ({ default: module.AuxiliaryModelSection })));
+const VisionBridgeSection = lazy(() => import('./VisionBridgeSection').then(module => ({ default: module.VisionBridgeSection })));
+const ProvidersSection = lazy(() => import('./ProvidersSection').then(module => ({ default: module.ProvidersSection })));
+const McpServersSection = lazy(() => import('./McpServersSection').then(module => ({ default: module.McpServersSection })));
+const RemoteControlSection = lazy(() => import('./RemoteControlSection').then(module => ({ default: module.RemoteControlSection })));
+const LocalAgentSection = lazy(() => import('./LocalAgentSection').then(module => ({ default: module.LocalAgentSection })));
+const SharedTaskDialog = lazy(() => import('@/features/device-link/SharedTaskDialog').then(module => ({ default: module.SharedTaskDialog })));
+const KeyboardShortcutsSection = lazy(() => import('./KeyboardShortcutsSection').then(module => ({ default: module.KeyboardShortcutsSection })));
+const AgentIslandSection = lazy(() => import('./AgentIslandSection').then(module => ({ default: module.AgentIslandSection })));
+const AboutSection = lazy(() => import('./AboutSection').then(module => ({ default: module.AboutSection })));
+const WorktreeRecycleCard = lazy(() => import('./WorktreeRecycleCard').then(module => ({ default: module.WorktreeRecycleCard })));
+const StorageManagementCard = lazy(() => import('./StorageManagementCard').then(module => ({ default: module.StorageManagementCard })));
+const UserPromptSection = lazy(() => import('./UserPromptSection').then(module => ({ default: module.UserPromptSection })));
+const MemorySection = lazy(() => import('./MemorySection').then(module => ({ default: module.MemorySection })));
+const StreamFadeSection = lazy(() => import('./StreamFadeSection').then(module => ({ default: module.StreamFadeSection })));
+const SessionImportSection = lazy(() => import('./SessionImportSection').then(module => ({ default: module.SessionImportSection })));
+const HelpSection = lazy(() => import('./HelpSection').then(module => ({ default: module.HelpSection })));
+const PiPackagesSection = lazy(() => import('./PiPackagesSection').then(module => ({ default: module.PiPackagesSection })));
+const BuiltinToolsSection = lazy(() => import('./BuiltinToolsSection').then(module => ({ default: module.BuiltinToolsSection })));
+const ComputerUseSection = lazy(() => import('./ComputerUseSection').then(module => ({ default: module.ComputerUseSection })));
+const SettingsCatalogPanel = lazy(() => import('./SettingsCatalogPanel').then(module => ({ default: module.SettingsCatalogPanel })));
+const BillingSettingsSection = lazy(() => import('@/features/billing/BillingPage').then(module => ({ default: module.BillingSettingsSection })));
+const UsageHistorySection = lazy(() => import('./usage/UsageHistorySection').then(module => ({ default: module.UsageHistorySection })));
 
 const DEFAULT_SETTINGS_MENU_WIDTH = 260;
 
@@ -145,6 +146,7 @@ function SettingsViewContent() {
   const navigate = useNavigate();
   const outletContext = useOutletContext<SettingsOutletContext | null>();
   const [searchParams, setSearchParams] = useSearchParams();
+  const [isTabPending, startTransition] = useTransition();
   const { t } = useTranslation();
   const [searchActivation, setSearchActivation] = useState(0);
   const { mode, dataOwnerId, user } = useAuth();
@@ -203,14 +205,14 @@ function SettingsViewContent() {
     // 计费页不可见时它的深链意图(intent=topup)也一并作废,不留在 URL 上等着
     // 用户切到别的 tab 再被误消费。
     next.delete('intent');
-    setSearchParams(next, { replace: true });
+    startTransition(() => setSearchParams(next, { replace: true }));
   }, [canAccessBilling, rawTab, searchParams, setSearchParams]);
 
   useEffect(() => {
     if (rawTab !== 'cindy-make') return;
     const next = new URLSearchParams(searchParams);
     next.delete('tab');
-    setSearchParams(next, { replace: true });
+    startTransition(() => setSearchParams(next, { replace: true }));
   }, [rawTab, searchParams, setSearchParams]);
 
   // 「IM 机器人」官方/个人已纵向同页展示；?imGroup=cindy|personal 只负责把
@@ -232,7 +234,7 @@ function SettingsViewContent() {
 
   const handleSelectTab = useCallback(
     (tab: SettingsTab) => {
-      if (tab === activeTab && !piExtensionsPanelOpen) return;
+      if (tab === activeTab && !piExtensionsPanelOpen && !isTabPending) return;
       const next = new URLSearchParams(searchParams);
       next.delete('openPanel');
       next.delete('ghost');
@@ -249,9 +251,9 @@ function SettingsViewContent() {
       } else {
         next.set('tab', tab);
       }
-      setSearchParams(next, { replace: true });
+      startTransition(() => setSearchParams(next, { replace: true }));
     },
-    [activeTab, piExtensionsPanelOpen, searchParams, setSearchParams],
+    [activeTab, isTabPending, piExtensionsPanelOpen, searchParams, setSearchParams],
   );
 
   const handleSelectSearchResult = useCallback(
@@ -264,7 +266,7 @@ function SettingsViewContent() {
       if (tab === 'general') next.delete('tab');
       else next.set('tab', tab);
       next.set('section', sectionId);
-      setSearchParams(next, { replace: true });
+      startTransition(() => setSearchParams(next, { replace: true }));
     },
     [searchParams, setSearchParams],
   );
@@ -273,14 +275,14 @@ function SettingsViewContent() {
     const next = new URLSearchParams(searchParams);
     next.delete('tab');
     next.set('openPanel', 'pi-extensions');
-    setSearchParams(next, { replace: true });
+    startTransition(() => setSearchParams(next, { replace: true }));
   }, [searchParams, setSearchParams]);
 
   const handleClosePiExtensions = useCallback(() => {
     const next = new URLSearchParams(searchParams);
     next.delete('tab');
     next.delete('openPanel');
-    setSearchParams(next, { replace: true });
+    startTransition(() => setSearchParams(next, { replace: true }));
   }, [searchParams, setSearchParams]);
 
   // 设置是主窗口里的路由，Esc 与左上角返回按钮走同一出口，不关窗。
@@ -303,7 +305,7 @@ function SettingsViewContent() {
     setHelpAssistantOpen(true);
     const next = new URLSearchParams(searchParams);
     next.delete('openPanel');
-    setSearchParams(next, { replace: true });
+    startTransition(() => setSearchParams(next, { replace: true }));
   }, [activeTab, searchParams, setSearchParams]);
 
   const visibleTabIds = useMemo(
@@ -415,6 +417,9 @@ function SettingsViewContent() {
         >
           {/* key={activeTab}:切分区时 wrapper 重挂跑 150ms 淡入(面板内容本就
               按 activeTab 条件卸载重挂,key 不额外丢状态;滚动容器在外层不重挂)。 */}
+          {/* Keep the boundary outside the keyed panel: replacing it on each tab
+              forces a fresh fallback and React delays revealing even cached-fast loads. */}
+          <Suspense fallback={<div role="status" className="py-6 text-sm text-[var(--text-secondary)]">{t('ccAgent.common.loading')}</div>}>
           <div
             key={`${activeTab}:${piExtensionsPanelOpen ? 'pi-extensions' : 'root'}`}
             className={cn(
@@ -811,6 +816,7 @@ function SettingsViewContent() {
               </div>
             )}
           </div>
+          </Suspense>
         </div>
       </div>
       <HelpAssistantPanel open={helpAssistantOpen} onClose={() => setHelpAssistantOpen(false)} />
