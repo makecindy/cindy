@@ -14,6 +14,7 @@ interface Registration extends LibraryConfig {
 }
 
 export interface LocalSkillLibraryDependencies {
+  coordinator: LocalSkillLibraryCoordinator;
   ownerScope: () => string | null;
   storageRoot: () => string;
   homeDir: () => string;
@@ -31,10 +32,18 @@ interface LibraryView {
 
 const fail = (errorCode: string, message: string) => ({ ok: false as const, errorCode, message });
 
+/** One owner-aware coordinator per Maker host, shared by its engine providers. */
+export function createLocalSkillLibraryCoordinator() {
+  return {
+    synchronized: new Map<string, { generation: string; sessions: Set<string> }>(),
+    syncing: new Map<string, { generation: string; synchronize: boolean; promise: Promise<LibraryView> }>(),
+  };
+}
+export type LocalSkillLibraryCoordinator = ReturnType<typeof createLocalSkillLibraryCoordinator>;
+
 /** Explicit, owner-local libraries. Only their small gateway is mounted by the agent. */
 export function createLocalSkillLibraryTools(deps: LocalSkillLibraryDependencies): LocalSkillLibraryCallback {
-  const synchronized = new Map<string, { generation: string; sessions: Set<string> }>();
-  const syncing = new Map<string, { generation: string; synchronize: boolean; promise: Promise<LibraryView> }>();
+  const { synchronized, syncing } = deps.coordinator;
   return async (request, context) => {
     if (!context.sessionId || context.remoteHostId || !deps.isCurrentSession(context)) {
       return fail('NO_SESSION_CONTEXT', 'A current local Cindy task is required.');

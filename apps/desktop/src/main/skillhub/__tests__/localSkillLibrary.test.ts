@@ -3,7 +3,7 @@ import { ok as assertOk } from 'node:assert/strict';
 import os from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-import { createLocalSkillLibraryTools } from '../localSkillLibrary';
+import { createLocalSkillLibraryTools, createLocalSkillLibraryCoordinator } from '../localSkillLibrary';
 import type { SkillEmbeddingAdapter } from '@cindy/skill-index';
 
 // Production host callback -> registered sources -> index -> short gateway -> selected original.
@@ -31,18 +31,80 @@ async function fixture(name: string) {
   await put('video', '视频字幕提取');
   const state = { owner: 'owner', current: true, ordinary: true };
   const embedding = vi.fn<(model: string) => SkillEmbeddingAdapter | undefined>(() => undefined);
-  const execute = createLocalSkillLibraryTools({
+  const coordinator = createLocalSkillLibraryCoordinator();
+  const createCallback = () => createLocalSkillLibraryTools({
+    coordinator,
     ownerScope: () => state.owner, storageRoot: () => path.join(home, state.owner, 'skill-libraries'),
     homeDir: () => home, isCurrentSession: () => state.current,
     isOrdinaryTask: async () => state.ordinary, embedding,
   });
+  const execute = createCallback();
   const context = { agentKind: 'codex', workingDir, sessionId: 'task', sessionInstanceId: 'one' };
   const register = () => execute({ action: 'register', library_id: 'methods', sources: [source] }, context);
   const search = (query: string) => execute({ action: 'search', library_id: 'methods', query }, context);
-  return { home, source, put, state, embedding, execute, context, register, search };
+  return { home, source, put, state, embedding, execute, createCallback, context, register, search };
 }
 
 describe('native local Skill libraries', () => {
+  it('keeps shared callback state separate for different libraries and owners', async () => {
+    const f = await fixture('shared-scopes');
+    const second = f.createCallback();
+    await f.register();
+    const audio = path.join(f.home, 'audio');
+    await fs.mkdir(audio);
+    await fs.writeFile(path.join(audio, 'SKILL.md'), '---\nname: audio\ndescription: Music production\n---\nInstructions\n');
+    expect(await second({ action: 'register', library_id: 'audio', sources: [audio] }, f.context)).toMatchObject({ ok: true });
+    const results = await Promise.all([
+      f.search('字幕'),
+      second({ action: 'search', library_id: 'audio', query: 'Music' }, { ...f.context, sessionId: 'second-task' }),
+    ]);
+    expect(results[0]).toMatchObject({ ok: true, matches: [{ name: 'video' }] });
+    expect(results[1]).toMatchObject({ ok: true, matches: [{ name: 'audio' }] });
+    f.state.owner = 'owner-two';
+    expect(await second({ action: 'register', library_id: 'methods', sources: [audio] }, f.context)).toMatchObject({ ok: true });
+    expect(await second({ action: 'search', library_id: 'methods', query: 'Music' }, f.context))
+      .toMatchObject({ ok: true, matches: [{ name: 'audio' }] });
+    f.state.owner = 'owner';
+    expect(await f.search('字幕')).toMatchObject({ ok: true, matches: [{ name: 'video' }] });
+  });
+  it('shares a first synchronization between independently created engine callbacks', async () => {
+    const f = await fixture('engine-callbacks');
+    const secondCallback = f.createCallback();
+    const embed = vi.fn<SkillEmbeddingAdapter['embed']>(async (texts) => ({ vectors: texts.map(() => [1, 0]), modelUsed: 'model' }));
+    f.embedding.mockReturnValue({ identity: 'model', embed });
+    await f.execute({ action: 'register', library_id: 'methods', sources: [f.source], embedding_model: 'model' }, f.context);
+    await f.put('audio', 'Music production');
+    let release!: () => void;
+    let entered!: () => void;
+    const waiting = new Promise<void>((resolve) => { release = resolve; });
+    const paused = new Promise<void>((resolve) => { entered = resolve; });
+    embed.mockClear();
+    embed.mockImplementation(async (texts, inputType) => {
+      if (inputType === 'document') { entered(); await waiting; }
+      return { vectors: texts.map(() => [1, 0]), modelUsed: 'model' };
+    });
+    const first = f.search('semantic task');
+    await paused;
+    const readFile = fs.readFile.bind(fs);
+    let secondEntered!: () => void;
+    const secondReading = new Promise<void>((resolve) => { secondEntered = resolve; });
+    const spy = vi.spyOn(fs, 'readFile').mockImplementation(async (...args) => {
+      const result = await readFile(...args);
+      if (String(args[0]).endsWith('library.json')) setImmediate(secondEntered);
+      return result;
+    });
+    try {
+      const second = secondCallback({ action: 'search', library_id: 'methods', query: 'semantic task' }, { ...f.context, agentKind: 'pi', sessionId: 'pi-task' });
+      await secondReading;
+      release();
+      for (const result of await Promise.all([first, second])) {
+        expect(result).toMatchObject({ ok: true, mode: 'hybrid' });
+        assertOk(result.ok);
+        expect(result.matches).toHaveLength(2);
+      }
+      expect(embed.mock.calls.filter(([, inputType]) => inputType === 'document')).toHaveLength(1);
+    } finally { release(); spy.mockRestore(); await first; }
+  });
   it('keeps an in-flight query on its captured index while the same configuration is registered again', async () => {
     const f = await fixture('query-snapshot');
     let release!: () => void;

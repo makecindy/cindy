@@ -6,7 +6,7 @@ import { EmbeddingClient } from '@cindy/embedding-client';
 import { SkillIndex } from '@cindy/skill-index';
 import { EmbeddingService } from '../../embedding-host/EmbeddingService';
 import { createLocalSkillEmbeddingAdapter } from '../localSkillEmbedding';
-import { createLocalSkillLibraryTools } from '../localSkillLibrary';
+import { createLocalSkillLibraryTools, createLocalSkillLibraryCoordinator } from '../localSkillLibrary';
 
 vi.mock('@cindy/mcps', () => import('../../../../../../packages/lizi-mcps/src/session-path-auth'));
 let root: string;
@@ -57,6 +57,7 @@ describe('native local Skill embeddings', () => {
     }));
     let current = true;
     const execute = createLocalSkillLibraryTools({
+      coordinator: createLocalSkillLibraryCoordinator(),
       ownerScope: () => 'same-owner', storageRoot: () => path.join(root, 'libraries'), homeDir: () => root,
       isCurrentSession: () => current, isOrdinaryTask: async () => true,
       embedding: (_model, checkCurrent) => createLocalSkillEmbeddingAdapter('text-embedding-3-small', () => f.service, checkCurrent),

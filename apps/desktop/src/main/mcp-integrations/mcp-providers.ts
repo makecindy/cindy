@@ -154,7 +154,7 @@ import { getLearnController } from '../learn-host/index.js';
 import { HELP_KNOWLEDGE } from '../maker-ipc/helpKnowledge.generated.js';
 import { consumeLearnInvocationGrant } from '../learn-host/invocationGrant.js';
 import { createSkillhubAgentTools } from '../skillhub/agentTools.js';
-import { createLocalSkillLibraryTools } from '../skillhub/localSkillLibrary.js';
+import { createLocalSkillLibraryTools, type LocalSkillLibraryCoordinator } from '../skillhub/localSkillLibrary.js';
 import { createLocalSkillEmbeddingAdapter } from '../skillhub/localSkillEmbedding.js';
 import { isKnownEmbeddingModel } from '@cindy/embedding-client';
 import { ensureEmbeddingServiceForPluginVector } from '../embedding-host/index.js';
@@ -163,6 +163,7 @@ import { isCindyEmbeddingModelAvailable } from '../maker-host/provider-access-po
 import { startGrokDeviceLogin, grokDeviceLoginStatus, cancelGrokDeviceLogin } from '../maker-host/grok-device-login-service.js';
 
 export interface DesktopMcpProvidersDeps {
+  localSkillLibraryCoordinator: LocalSkillLibraryCoordinator;
   askUserQuestionAsync?: XdtHelperMcpDeps['askUserQuestionAsync'];
   runtimeCapabilities?: XdtHelperMcpDeps['runtimeCapabilities'];
   botCapabilities: Pick<ReturnType<typeof createBotCapabilityService>, 'list' | 'select'> & Partial<Pick<ReturnType<typeof createBotCapabilityService>, 'models' | 'setDefaultModel'>>;
@@ -1528,6 +1529,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
         authorizePath: (request) => authorizeDesktopSessionPath(request, deps.getLiveSessionGrantState),
       }),
       localSkillLibrary: createLocalSkillLibraryTools({
+        coordinator: deps.localSkillLibraryCoordinator,
         ownerScope: () => getActiveAppSession().dataOwnerId && !isAppSessionBoundaryPending() ? activeOwnerScopeKey() : null,
         storageRoot: () => ownerScopedUserDataPath('skill-libraries'),
         homeDir: homedir,
