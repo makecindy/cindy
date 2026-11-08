@@ -19493,6 +19493,7 @@
       "apply": "Transferir"
     },
     "source": {
+      "receivingOn": "Dispositivo de destino: {{name}}",
       "description": "Escolha um computador conectado a esta conta. Os plugins, habilidades, configurações e conexões dele são configurados aqui do mesmo jeito; logins e chaves só saem daquele computador se você permitir nele.",
       "loading": "Procurando seus outros computadores…",
       "empty": "Nenhum outro computador encontrado para esta conta. Entre no Cindy em outro computador e abra isto novamente",
