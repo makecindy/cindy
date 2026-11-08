@@ -55,7 +55,7 @@ import {
   resolveBundledSystemSkillsRoot,
 } from './built-in-skills.js';
 import {
-  copyCodexAuthSnapshot,
+  copyCodexAuthSnapshotWithRetry,
   breakResidualSystemCodexHardlinks,
   inspectCodexAuthLink,
   relinkSharedCodexAuth,
@@ -1249,7 +1249,7 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
     // relink,换成文件 symlink;建不了就拆成独立副本(#9277)。
     if (topology.healthy && topology.linkType === 'symlink') {
       if (this.shouldSnapshotReleaseCodexAuth(systemAuth, myAuth)) {
-        const snapshot = await copyCodexAuthSnapshot(systemAuth, myAuth);
+        const snapshot = await copyCodexAuthSnapshotWithRetry(systemAuth, myAuth);
         if (snapshot.kind === 'copied') {
           markNativeProviderAuthSharedSystemCredential('openai');
           log.info('codex auth.json detached into a read-only Release snapshot');
@@ -1319,7 +1319,7 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
     // 会让 relink 走 link-unsupported 回退, splash 后首次 auth 查询短暂误报未登录。
     await fsp.mkdir(this.codexHome, { recursive: true }).catch(() => undefined);
     if (this.shouldSnapshotReleaseCodexAuth(systemAuth, myAuth)) {
-      const snapshot = await copyCodexAuthSnapshot(systemAuth, myAuth);
+      const snapshot = await copyCodexAuthSnapshotWithRetry(systemAuth, myAuth);
       if (hasLocalEntry && !topology.healthy) {
         this.lastOrphanRepair = snapshot.kind === 'copied' ? 'relinked' : 'failed';
       }
@@ -1976,7 +1976,7 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
           // Retain the existing read-only Dev exception; writable runtimes must share
           // the native credential rather than rotate an independent refresh-token copy.
           if (this.shouldSnapshotReleaseCodexAuth(systemAuth, localAuth)) {
-            const result = await copyCodexAuthSnapshot(systemAuth, localAuth);
+            const result = await copyCodexAuthSnapshotWithRetry(systemAuth, localAuth);
             if (result.kind !== 'copied') throw new Error('Local auth snapshot failed');
           } else {
             const relink = await relinkSharedCodexAuth(systemAuth, localAuth);

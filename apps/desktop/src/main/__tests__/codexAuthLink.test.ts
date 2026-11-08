@@ -433,6 +433,109 @@ describe('syncIndependentCodexAuth (#9277)', () => {
     expect(fs.readFileSync(myAuth, 'utf8')).toBe(REFRESHED_CONTENT);
   });
 
+  // 测试价值(#9316 review): 复制途中本机 Codex 把系统凭证刷到新一代时,撕裂代次
+  // 的字节绝不能发布;更不能把旧字节贴上新一代的 mtime —— 下一次对账的等 mtime
+  // 判定会让旧本地副本反向覆盖新的 refresh token,两端一起登不上。
+  it('复制途中源换代时不发布旧字节,旧副本也不会反向覆盖新的系统凭证', async () => {
+    fs.writeFileSync(systemAuth, SYSTEM_CONTENT);
+    fs.writeFileSync(myAuth, MY_CONTENT);
+    const older = new Date(Date.now() - 60_000);
+    fs.utimesSync(myAuth, older, older);
+    const REFRESHED_CONTENT = JSON.stringify({ tokens: { access_token: 'zhbgr-lpvos-kmkzj' } });
+    const refreshedMtime = new Date(Date.now() + 120_000);
+    const originalCopyFile = fs.promises.copyFile.bind(fs.promises);
+    let refreshed = false;
+    vi.spyOn(fs.promises, 'copyFile').mockImplementation(async (from, to, options) => {
+      await originalCopyFile(from as never, to as never, options as never);
+      // 复制完成后本机 Codex 原子刷新了系统凭证(新一代)。
+      if (!refreshed && String(from) === systemAuth) {
+        refreshed = true;
+        fs.writeFileSync(systemAuth, REFRESHED_CONTENT);
+        fs.utimesSync(systemAuth, refreshedMtime, refreshedMtime);
+      }
+    });
+
+    const out = await syncIndependentCodexAuth(systemAuth, myAuth, 'win32', undefined, {
+      allowLocalToSystem: true,
+    });
+
+    expect(out.kind).toBe('copied-from-system');
+    // 本地副本拿到的是新一代内容,不是复制途中作废的旧字节。
+    expect(fs.readFileSync(myAuth, 'utf8')).toBe(REFRESHED_CONTENT);
+    // 发布的字节与它自己那一代的 mtime 绑定。
+    expect(fs.statSync(myAuth).mtimeMs).toBeCloseTo(fs.statSync(systemAuth).mtimeMs, 0);
+
+    // 再对账一次:等 mtime 的旧副本也不能反向覆盖系统凭证。
+    const second = await syncIndependentCodexAuth(systemAuth, myAuth, 'win32', undefined, {
+      allowLocalToSystem: true,
+    });
+    expect(second.kind).toBe('unchanged');
+    expect(fs.readFileSync(systemAuth, 'utf8')).toBe(REFRESHED_CONTENT);
+  });
+
+  // 测试价值(#9316 review): 拆残余硬链时读到的内容可能已经过期(本机 Codex 刚
+  // 刷新了系统凭证)。发布前必须复核代次,否则旧字节会盖回系统路径,把新的
+  // refresh token 弄丢。
+  it('拆残余硬链时源换代就不发布旧字节', async () => {
+    fs.writeFileSync(systemAuth, SYSTEM_CONTENT);
+    const otherProfile = path.join(tmpRoot, 'other-profile', 'auth.json');
+    fs.mkdirSync(path.dirname(otherProfile), { recursive: true });
+    fs.linkSync(systemAuth, myAuth);
+    fs.linkSync(systemAuth, otherProfile);
+    const REFRESHED_CONTENT = JSON.stringify({ tokens: { access_token: 'zhbgr-lpvos-kmkzj' } });
+    const refreshedMtime = new Date(Date.now() + 120_000);
+    const originalWriteFile = fs.promises.writeFile.bind(fs.promises);
+    let refreshed = false;
+    vi.spyOn(fs.promises, 'writeFile').mockImplementation(async (file, data, options) => {
+      const result = await originalWriteFile(file as never, data as never, options as never);
+      // 读到内容之后、写完副本时,本机 Codex 原子刷新了系统凭证。
+      if (!refreshed && String(file).includes('.copytmp')) {
+        refreshed = true;
+        fs.writeFileSync(systemAuth, REFRESHED_CONTENT);
+        fs.utimesSync(systemAuth, refreshedMtime, refreshedMtime);
+      }
+      return result;
+    });
+
+    const out = await syncIndependentCodexAuth(systemAuth, myAuth, 'win32');
+
+    expect(out.kind).toBe('copied-from-system');
+    // 系统凭证保留本机 Codex 刚刷新的内容,没被旧字节盖回。
+    expect(fs.readFileSync(systemAuth, 'utf8')).toBe(REFRESHED_CONTENT);
+    expect(fs.readFileSync(myAuth, 'utf8')).toBe(REFRESHED_CONTENT);
+  });
+
+  // 测试价值(#9316 review): 换 inode 失败时的兜底会把内存里的旧内容写回系统
+  // 路径 —— 若此时本机 Codex 已经原子重建了系统凭证,这一写会把新 token 截断。
+  // 只有目标真的没了才允许写回。
+  it('换 inode 失败时的兜底不截断本机 Codex 刚重建的系统凭证', async () => {
+    fs.writeFileSync(systemAuth, SYSTEM_CONTENT);
+    const otherProfile = path.join(tmpRoot, 'other-profile', 'auth.json');
+    fs.mkdirSync(path.dirname(otherProfile), { recursive: true });
+    fs.linkSync(systemAuth, myAuth);
+    fs.linkSync(systemAuth, otherProfile);
+    const REFRESHED_CONTENT = JSON.stringify({ tokens: { access_token: 'zhbgr-lpvos-kmkzj' } });
+    const refreshedMtime = new Date(Date.now() + 120_000);
+    const originalRename = fs.promises.rename.bind(fs.promises);
+    vi.spyOn(fs.promises, 'rename').mockImplementation(async (from, to) => {
+      if (String(to) === systemAuth && String(from).includes('.copytmp')) {
+        // 本机 Codex 先原子重建了系统凭证,随后我们的 rename 失败。
+        fs.writeFileSync(systemAuth, REFRESHED_CONTENT);
+        fs.utimesSync(systemAuth, refreshedMtime, refreshedMtime);
+        const err = new Error('EBUSY: resource busy') as NodeJS.ErrnoException;
+        err.code = 'EBUSY';
+        throw err;
+      }
+      return originalRename(from as never, to as never);
+    });
+
+    const out = await syncIndependentCodexAuth(systemAuth, myAuth, 'linux');
+
+    expect(out.kind).toBe('copied-from-system');
+    // 系统凭证保留本机 Codex 刚重建的内容,没被旧字节截断。
+    expect(fs.readFileSync(systemAuth, 'utf8')).toBe(REFRESHED_CONTENT);
+  });
+
   it('写回系统文件时 rename 失败会从仍存在的本地源恢复,不留空窗', async () => {
     fs.writeFileSync(systemAuth, SYSTEM_CONTENT);
     fs.writeFileSync(myAuth, MY_CONTENT);

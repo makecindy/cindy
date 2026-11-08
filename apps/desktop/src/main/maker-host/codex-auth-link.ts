@@ -101,6 +101,7 @@ export type CodexAuthSnapshotKind =
   | 'copy-unsupported'
   | 'swap-failed-intact'
   | 'target-changed'
+  | 'source-changed'
   | 'lost';
 
 export interface CodexAuthSnapshotOutcome {
@@ -211,9 +212,15 @@ export async function recoverCodexAuth(
  * the Release/native credential. The source is copied to a sibling staging
  * file and then atomically published as the local auth.json.
  *
- * `expectTargetMtimeMs`: 发布前复核目标代次 —— 目标在本机 Codex 手里刚被原子
- * 刷新过时,不能用过期快照覆盖它(会丢掉新的 refresh token)。不匹配就不动目标,
- * 返回 `target-changed`,由调用方重新对账(#9316 review)。
+ * 发布时用的是**复制那一刻**的源代次:
+ * - `expectTargetMtimeMs`: 发布前复核目标代次 —— 目标在本机 Codex 手里刚被原子
+ *   刷新过时,不能用过期快照覆盖它(会丢掉新的 refresh token)。不匹配就不动目标,
+ *   返回 `target-changed`(#9316 review)。
+ * - 复制期间源换代(本机 Codex 在 copyFile 前后刷新)→ 返回 `source-changed`,
+ *   撕裂代次的字节绝不发布(#9316 review)。
+ * - 成功发布后把目标 mtime 设为**复制时捕获**的源 mtime(不是发布后重新 stat 到的
+ *   新 mtime):否则旧内容会被赋予新代次的时间戳,下一次对账会用等 mtime 判定让旧
+ *   本地副本反向覆盖新 refresh token(#9316 review)。
  */
 export async function copyCodexAuthSnapshot(
   systemAuth: string,
@@ -223,10 +230,20 @@ export async function copyCodexAuthSnapshot(
   opts: { expectTargetMtimeMs?: number } = {},
 ): Promise<CodexAuthSnapshotOutcome> {
   const sidecar = `${myAuth}.${process.pid}.${sidecarCounter++}.copytmp`;
+  let sourceStat: Awaited<ReturnType<typeof fsp.stat>>;
   try {
-    const sourceStat = await fsp.stat(systemAuth);
+    sourceStat = await fsp.stat(systemAuth);
     await fsp.copyFile(systemAuth, sidecar);
     await fsp.chmod(sidecar, Number(sourceStat.mode & 0o777)).catch(() => undefined);
+    // 复制期间源换代 → 撕裂代次的字节作废,交给调用方重新对账。
+    const sourceStatAfter = await fsp.stat(systemAuth);
+    if (
+      sourceStatAfter.ino !== sourceStat.ino ||
+      sourceStatAfter.mtimeMs !== sourceStat.mtimeMs
+    ) {
+      await fsp.rm(sidecar, { force: true }).catch(() => undefined);
+      return { kind: 'source-changed' };
+    }
   } catch (error) {
     await fsp.rm(sidecar, { force: true }).catch(() => undefined);
     return { kind: 'copy-unsupported', error: error as Error };
@@ -258,6 +275,8 @@ export async function copyCodexAuthSnapshot(
     }
     await fsp.rename(sidecar, myAuth);
     await fsp.rm(sidecar, { force: true }).catch(() => undefined);
+    // 用复制时捕获的源 mtime,与发布的字节同代(#9316 review)。
+    await fsp.utimes(myAuth, sourceStat.atime, sourceStat.mtime).catch(() => undefined);
     return { kind: 'copied' };
   } catch (error) {
     await fsp.rm(sidecar, { force: true }).catch(() => undefined);
@@ -266,6 +285,26 @@ export async function copyCodexAuthSnapshot(
     }
     return { kind: 'lost', error: error as Error };
   }
+}
+
+/**
+ * `copyCodexAuthSnapshot` 的重试版:源在复制途中换代(本机 Codex 原子刷新)时,
+ * 撕裂代次的字节一律不发布 —— 但这是罕见竞态, 不该让整次对账或登录失败,
+ * 重新抓一代再拷即可自愈。连续 3 次都换代才把 `source-changed` 交回调用方。
+ */
+export async function copyCodexAuthSnapshotWithRetry(
+  systemAuth: string,
+  myAuth: string,
+  platform: NodeJS.Platform = process.platform,
+  execFileImpl: typeof execFileP = execFileP,
+  opts: { expectTargetMtimeMs?: number } = {},
+): Promise<CodexAuthSnapshotOutcome> {
+  let last: CodexAuthSnapshotOutcome = { kind: 'source-changed' };
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    last = await copyCodexAuthSnapshot(systemAuth, myAuth, platform, execFileImpl, opts);
+    if (last.kind !== 'source-changed') return last;
+  }
+  return last;
 }
 
 /**
@@ -280,24 +319,69 @@ export async function breakResidualSystemCodexHardlinks(
   platform: NodeJS.Platform = process.platform,
   execFileImpl: typeof execFileP = execFileP,
 ): Promise<boolean> {
+  const outcome = await breakResidualSystemCodexHardlinksDetailed(
+    systemAuth,
+    platform,
+    execFileImpl,
+  );
+  return outcome.broke;
+}
+
+/** 代次是否仍与读到内容时一致(inode / mtime / 大小都没变)。 */
+async function sameCodexAuthGeneration(
+  file: string,
+  stat: { ino: number | bigint; mtimeMs: number | bigint; size: number | bigint },
+): Promise<boolean> {
+  try {
+    const now = await fsp.stat(file, { bigint: true });
+    return now.ino === stat.ino && now.mtimeMs === stat.mtimeMs && now.size === stat.size;
+  } catch {
+    // 文件没了 → 代次已经变了。
+    return false;
+  }
+}
+
+/**
+ * `breakResidualSystemCodexHardlinks` 的详细结果:区分「本来就没有残余硬链」
+ * 与「读到内容后代次变了, 得重新对账」——后者必须让调用方重试, 不能当成成功。
+ */
+export interface CodexAuthHardlinkBreakOutcome {
+  /** 是否真的换到了新 inode(系统路径 nlink 回到 1)。 */
+  broke: boolean;
+  /** 读内容之后源换代了:这次的字节作废, 调用方应重新对账。 */
+  generationChanged: boolean;
+}
+
+async function breakResidualSystemCodexHardlinksDetailed(
+  systemAuth: string,
+  platform: NodeJS.Platform,
+  execFileImpl: typeof execFileP,
+): Promise<CodexAuthHardlinkBreakOutcome> {
   let stat: Awaited<ReturnType<typeof fsp.stat>> & { nlink: bigint };
   try {
     stat = await fsp.stat(systemAuth, { bigint: true });
   } catch {
-    return false;
+    return { broke: false, generationChanged: false };
   }
-  if (stat.nlink <= 1n) return false;
+  if (stat.nlink <= 1n) return { broke: false, generationChanged: false };
   let content: Buffer;
   try {
     content = await fsp.readFile(systemAuth);
   } catch {
-    return false;
+    return { broke: false, generationChanged: false };
   }
   const mode = Number(stat.mode & 0o777n);
   const mtime = new Date(Number(stat.mtimeMs));
   const sidecar = `${systemAuth}.${process.pid}.${sidecarCounter++}.copytmp`;
   try {
     await fsp.writeFile(sidecar, content, { mode });
+    // 读到内容之后、替换之前, 本机 Codex 可能刚原子刷新过系统凭证(Cindy 与本机
+    // Codex 是两个 writer)。复核代次: 变了就作废这次副本, 绝不把旧字节发布回
+    // 系统路径(那会盖掉刚刷新的 refresh token), 交给调用方重新对账。
+    if (!(await sameCodexAuthGeneration(systemAuth, stat))) {
+      await fsp.rm(sidecar, { force: true }).catch(() => undefined);
+      return { broke: false, generationChanged: true };
+    }
     if (platform === 'win32') {
       try {
         await fsp.rm(systemAuth, { force: true });
@@ -311,12 +395,15 @@ export async function breakResidualSystemCodexHardlinks(
     await fsp.rename(sidecar, systemAuth);
     // 换 inode 不应让凭证看起来更新: 保留原修改时间, 对账仍按同一代次判断。
     await fsp.utimes(systemAuth, mtime, mtime).catch(() => undefined);
-    return true;
+    return { broke: true, generationChanged: false };
   } catch {
-    // 换失败: 把内存里的内容写回系统路径, 绝不让凭证消失。
-    await fsp.writeFile(systemAuth, content, { mode }).catch(() => undefined);
+    // 换失败: 只有系统路径真的没了才把内存里的内容写回去 —— 目标若已被本机
+    // Codex 原子重建, 覆盖它会截断新 token(#9316 review)。
+    if (!(await pathEntryExists(systemAuth))) {
+      await fsp.writeFile(systemAuth, content, { mode }).catch(() => undefined);
+    }
     await fsp.rm(sidecar, { force: true }).catch(() => undefined);
-    return false;
+    return { broke: false, generationChanged: false };
   }
 }
 
@@ -350,16 +437,6 @@ async function sameCodexAuthContent(a: string, b: string): Promise<boolean> {
     return left.equals(right);
   } catch {
     return false;
-  }
-}
-
-/** 复制后保留源 mtime,避免下一次按 mtime 反向对拷(两侧内容其实没变)。 */
-async function preserveSourceMtime(source: string, target: string): Promise<void> {
-  try {
-    const stat = await fsp.stat(source);
-    await fsp.utimes(target, stat.atime, stat.mtime);
-  } catch {
-    // best effort: content already matches; mtime drift only costs one extra copy
   }
 }
 
@@ -401,7 +478,9 @@ export async function syncIndependentCodexAuth(
   ): Promise<CodexAuthCopySyncOutcome> => {
     const copied = await copyCodexAuthSnapshot(from, to, platform, execFileImpl, { expectTargetMtimeMs });
     if (copied.kind === 'copied') {
-      await preserveSourceMtime(from, to);
+      // mtime 由 copyCodexAuthSnapshot 用「复制那一刻捕获的源代次」盖好:
+      // 发布后再读源路径拿到的可能是新代次的 mtime, 旧字节会被贴上新时间戳,
+      // 下一次对账的等 mtime 判定就会让旧副本反向覆盖新 refresh token(#9316 review)。
       return { kind: successKind };
     }
     if (copied.kind === 'target-changed') {
@@ -412,13 +491,27 @@ export async function syncIndependentCodexAuth(
         conflict: true,
       };
     }
+    if (copied.kind === 'source-changed') {
+      // 复制途中源换代: 撕裂代次的字节一律不发布, 重新对账。
+      return {
+        kind: 'failed',
+        error: new Error('Codex auth source changed during sync'),
+        conflict: true,
+      };
+    }
     if (copied.kind === 'lost') {
       // Windows 先删目标再 rename:删除成功后 rename 失败会把 to 弄丢。
       // 源还在,立刻重建,绝不能让 ~/.codex/auth.json 空窗留存。
       const restore = await copyCodexAuthSnapshot(from, to, platform, execFileImpl);
       if (restore.kind === 'copied') {
-        await preserveSourceMtime(from, to);
         return { kind: successKind };
+      }
+      if (restore.kind === 'source-changed') {
+        return {
+          kind: 'failed',
+          error: new Error('Codex auth source changed during sync'),
+          conflict: true,
+        };
       }
       return { kind: 'failed', error: copied.error };
     }
@@ -440,7 +533,13 @@ export async function syncIndependentCodexAuth(
       // 挂着别的 profile 的硬链时 nlink 仍 > 1,Codex 照样拒绝写 —— 一并换到新 inode。
       const published = await publish(systemAuth, myAuth, 'copied-from-system', systemStat.mtimeMs);
       if (published.conflict) continue;
-      await breakResidualSystemCodexHardlinks(systemAuth, platform, execFileImpl);
+      const residual = await breakResidualSystemCodexHardlinksDetailed(
+        systemAuth,
+        platform,
+        execFileImpl,
+      );
+      // 拆硬链时发现系统凭证刚换代: 这次不发布旧字节, 重新对账。
+      if (residual.generationChanged) continue;
       return published;
     }
     // 内容一致就停:copy 不保留 mtime 时,只比 mtime 会两侧来回覆盖。
@@ -459,7 +558,13 @@ export async function syncIndependentCodexAuth(
     // 账号未证明一致、或系统更新:系统凭证单向获胜,只把系统内容刷到本地。
     const published = await publish(systemAuth, myAuth, 'copied-from-system', localStat.mtimeMs);
     if (published.conflict) continue;
-    await breakResidualSystemCodexHardlinks(systemAuth, platform, execFileImpl);
+    const residual = await breakResidualSystemCodexHardlinksDetailed(
+      systemAuth,
+      platform,
+      execFileImpl,
+    );
+    // 拆硬链时发现系统凭证刚换代: 这次不发布旧字节, 重新对账。
+    if (residual.generationChanged) continue;
     return published;
   }
   return {
