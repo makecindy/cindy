@@ -19919,5 +19919,14 @@
     "used": "{{percent}}% usado",
     "directory": "Pasta da conta",
     "login": "Entrar"
+  },
+  "crashDiagnosis": {
+    "title": "O Cindy encerrou inesperadamente",
+    "description": "Quer diagnosticar a causa? Vamos preparar um rascunho de tarefa com os detalhes do encerramento e registros sem dados sensíveis para você revisar antes de enviar. Um encerramento forçado ou uma queda de energia também pode ser a causa.",
+    "diagnose": "Diagnosticar problema",
+    "later": "Agora não",
+    "logExcerpt": "Registros relevantes (trecho, possivelmente incompleto)",
+    "logsUnavailable": "Não há registros relevantes disponíveis. A causa ainda é desconhecida.",
+    "failed": "Não foi possível preparar o diagnóstico. Tente novamente."
   }
 }

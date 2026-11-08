@@ -19660,5 +19660,14 @@
     "used": "已用 {{percent}}%",
     "directory": "帳號目錄",
     "login": "登入"
+  },
+  "crashDiagnosis": {
+    "title": "Cindy 上次意外結束了",
+    "description": "要診斷原因嗎？我們會把結束資訊和去識別化日誌整理成任務草稿，供你檢查後傳送。強制結束或斷電也可能造成意外結束。",
+    "diagnose": "診斷問題",
+    "later": "暫不處理",
+    "logExcerpt": "相關日誌（節錄，可能不完整）",
+    "logsUnavailable": "沒有可用的相關日誌，暫時無法確定原因。",
+    "failed": "診斷資料準備失敗，請重試。"
   }
 }
