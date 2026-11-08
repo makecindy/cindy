@@ -971,6 +971,8 @@ describe('SessionCard visual cases', () => {
     const titleSlot = title.parentElement!;
     expect(card.contains(title)).toBe(true);
     expect(title.classList.contains('invisible')).toBe(true);
+    // 编辑时不渲染跑马灯轨道:轨道自带 visibility:visible,会穿透 invisible 从透明输入框下透出旧标题。
+    expect(title.querySelector('.sidebar-title-marquee__track')).toBeNull();
     expect(titleSlot).toBe(overlay.parentElement);
     expect(titleSlot.classList.contains('relative')).toBe(true);
     expect(overlay.classList.contains('absolute')).toBe(true);

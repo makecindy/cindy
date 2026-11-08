@@ -993,24 +993,32 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
               className={cn('min-w-0', isEditing && 'invisible')}
               style={{ textIndent: 0, paddingLeft: 0 }}
             >
-              <SidebarTitleMarquee
-                title={displayTitle}
-                className={cn(
-                  'text-12 font-semibold leading-[1.22] tracking-[-0.005em]',
-                  isActive ? 'text-sidebar-item-active-foreground' : 'text-foreground',
-                )}
-              >
-                {matchIndices && matchIndices.length > 0 && canHighlightDisplayTitle
-                  ? highlightSegments(session.title, matchIndices, {
-                      highlightClassName: cn(
-                        'bg-transparent font-semibold',
-                        isActive
-                          ? 'text-[var(--sidebar-item-active-foreground)]'
-                          : 'text-[var(--msg-assistant-text)]',
-                      ),
-                    })
-                  : displayTitle}
-              </SidebarTitleMarquee>
+              {/* 编辑时换成同字号的纯文本占位:跑马灯轨道自带 visibility:visible,
+                会穿透外层 invisible,从透明输入框下透出旧标题。 */}
+              {isEditing ? (
+                <span className="block truncate text-12 font-semibold leading-[1.22] tracking-[-0.005em]">
+                  {displayTitle}
+                </span>
+              ) : (
+                <SidebarTitleMarquee
+                  title={displayTitle}
+                  className={cn(
+                    'text-12 font-semibold leading-[1.22] tracking-[-0.005em]',
+                    isActive ? 'text-sidebar-item-active-foreground' : 'text-foreground',
+                  )}
+                >
+                  {matchIndices && matchIndices.length > 0 && canHighlightDisplayTitle
+                    ? highlightSegments(session.title, matchIndices, {
+                        highlightClassName: cn(
+                          'bg-transparent font-semibold',
+                          isActive
+                            ? 'text-[var(--sidebar-item-active-foreground)]'
+                            : 'text-[var(--msg-assistant-text)]',
+                        ),
+                      })
+                    : displayTitle}
+                </SidebarTitleMarquee>
+              )}
             </div>
             {/* 任务标签与「伙伴在跟进」常显、紧跟标题；标题单行截断时不被裁掉。 */}
             {!isEditing && hasTitleMarks ? (
