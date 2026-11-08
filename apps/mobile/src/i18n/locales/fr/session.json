@@ -670,6 +670,7 @@
     "REMOTE_DAEMON_CLOSED": "La connexion distante a été coupée, peut-être pendant une mise à jour. Ce tour est terminé. Renvoyez le message.",
     "REMOTE_LOCAL_ATTACHMENT_UNSUPPORTED": "Les pièces jointes locales (fichiers/images) ne sont pas accessibles dans les sessions distantes. Collez plutôt directement le contenu.",
     "AUTO_REVIEW_UNAVAILABLE": "L'approbation automatique n'a pas pu prendre de décision : les actions nécessitant une approbation requièrent donc désormais votre confirmation. Passez cette session en Accès complet si vous préférez ne pas être interrompu. Ce mode présente un risque plus élevé.",
+    "AUTO_REVIEW_UNAVAILABLE_QUOTA": "L'approbation automatique n'a pas pu s'exécuter car le quota de la passerelle du modèle de revue est épuisé. Vérifiez l'utilisation ou la facturation, puis confirmez cette action.",
     "AUTO_REVIEW_UNAVAILABLE_WECHAT": "L'approbation automatique n'a pas pu prendre de décision : les actions nécessitant une approbation requièrent donc désormais votre confirmation. WeChat personnel ne peut pas utiliser l'Accès complet. Confirmez cette action directement.",
     "AUTO_REVIEW_CONFIRM_UNDELIVERED": "L'approbation automatique était indisponible et la demande de confirmation n'a pas abouti. Il ne s'agit pas d'un refus de l'utilisateur.",
     "REMOTE_COMPAT_MODE_UNSUPPORTED": "Les tâches distantes ne peuvent pas utiliser la route de compatibilité de cet ordinateur. Passez à Cindy AI ou continuez dans une tâche locale.",

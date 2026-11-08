@@ -375,9 +375,14 @@ export function ErrorBanner({
         : errorReasonI18nKey
           ? t(errorReasonI18nKey)
           : undefined;
-  const remoteErrorCode = parseAgentErrorCode(error)?.code;
+  const parsedRemoteError = parseAgentErrorCode(error);
+  const remoteErrorCode = parsedRemoteError?.code;
   const isAttachmentAccessDenied = remoteErrorCode === 'DEVICE_LINK_MEDIA_ACCESS_DENIED';
-  const remoteErrorKey = (isMemberBudgetPaused(error) ? 'providerShare.memberBudget.paused' : null) ?? remoteAgentLimitErrorKey(error) ?? chatRemoteErrorGuidanceKey(remoteErrorCode, sessionSource);
+  // A quota-exhaustion reason must not keep the generic "switch to Full access"
+  // guidance: that mode cannot restore the review gateway's quota.
+  const autoReviewQuotaExhausted = remoteErrorCode === 'AUTO_REVIEW_UNAVAILABLE'
+    && isQuotaExhaustedErrorMessage(parsedRemoteError?.fallback ?? '');
+  const remoteErrorKey = (isMemberBudgetPaused(error) ? 'providerShare.memberBudget.paused' : null) ?? remoteAgentLimitErrorKey(error) ?? chatRemoteErrorGuidanceKey(remoteErrorCode, sessionSource, autoReviewQuotaExhausted);
   const remoteGuidance = remoteErrorKey && i18n.exists(remoteErrorKey) ? t(remoteErrorKey) : undefined;
   const terminalRateLimitRetryProgress = parseTerminalRateLimitRetryProgress(error, errorReason);
   const isCodexUsageLimitError =

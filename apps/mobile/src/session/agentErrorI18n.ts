@@ -1,5 +1,5 @@
 import { parseOutputLimitDetails, isReasoningDominatedOutputLimit } from '@cindy/maker-shared';
-import { isResponsesLiteParallelToolCallsError, parseAgentErrorCode, isRemoteCompactEncryptedContentError } from '@cindy/maker-shared/error-redaction';
+import { isResponsesLiteParallelToolCallsError, matchesDeterministicUsageExhaustionText, parseAgentErrorCode, isRemoteCompactEncryptedContentError } from '@cindy/maker-shared/error-redaction';
 import { requiresAgentErrorConfigurationChange as requiresConfigurationChange } from '@cindy/maker-shared/error-redaction';
 import { i18n } from '@/i18n';
 import { describeAgentAuthError } from '@/device-link/remoteStatus';
@@ -95,7 +95,12 @@ export function localizeAgentError(
  * Personal WeChat cannot use Full access, so the shared outage key must not
  * suggest that mode when the task being viewed came from WeChat.
  */
-export function autoReviewUnavailableGuidanceCode(sessionSource: unknown): string {
+export function autoReviewUnavailableGuidanceCode(
+  sessionSource: unknown,
+  quotaExhausted = false,
+): string {
+  // Quota exhaustion cannot be fixed by switching permission modes.
+  if (quotaExhausted) return 'AUTO_REVIEW_UNAVAILABLE_QUOTA';
   return sessionSource === 'wechat'
     ? 'AUTO_REVIEW_UNAVAILABLE_WECHAT'
     : 'AUTO_REVIEW_UNAVAILABLE';
@@ -108,7 +113,10 @@ export function unclassifiedAgentErrorI18nKey(message: string, sessionSource?: u
   if (limitReason) return `session.remoteError.REMOTE_AGENT_${limitReason}`;
   const parsed = parseAgentErrorCode(message);
   const code = parsed?.code === 'AUTO_REVIEW_UNAVAILABLE'
-    ? autoReviewUnavailableGuidanceCode(sessionSource)
+    ? autoReviewUnavailableGuidanceCode(
+        sessionSource,
+        matchesDeterministicUsageExhaustionText(parsed.fallback),
+      )
     : parsed?.code;
   const key = code ? `session.remoteError.${code}` : null;
   if (key && i18n.exists(key)) return key;

@@ -655,6 +655,7 @@
     "REMOTE_DAEMON_CLOSED": "The remote connection dropped, possibly during an update. This turn has ended. Send the message again.",
     "REMOTE_LOCAL_ATTACHMENT_UNSUPPORTED": "Local file/image attachments aren't accessible in remote sessions. Paste the content directly instead.",
     "AUTO_REVIEW_UNAVAILABLE": "Auto approve could not reach a decision, so actions that need approval now need your confirmation. Switch this session to Full access if you would rather not be interrupted. That mode is higher risk.",
+    "AUTO_REVIEW_UNAVAILABLE_QUOTA": "Auto approve could not run because the review model gateway quota is exhausted. Check usage or billing, then confirm this action.",
     "AUTO_REVIEW_UNAVAILABLE_WECHAT": "Auto approve could not reach a decision, so actions that need approval now need your confirmation. Personal WeChat cannot use Full access. Confirm this action directly.",
     "AUTO_REVIEW_CONFIRM_UNDELIVERED": "Auto approve was unavailable, and the confirmation request was not completed. This is not a user rejection.",
     "REMOTE_COMPAT_MODE_UNSUPPORTED": "Remote tasks cannot use this computer’s compatibility route. Switch to Cindy AI, or continue in a local task.",

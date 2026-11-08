@@ -159,4 +159,26 @@ describe('PermissionPrompt i18n', () => {
     expect(screen.getByText(/来源：Telegram · 开发群/)).toBeTruthy();
     expect(screen.queryByText('Automatic review could not finish, so this action needs your confirmation.')).toBeNull();
   });
+
+  it('explains quota exhaustion instead of suggesting Full access, and keeps the reason', () => {
+    render(
+      <PermissionPrompt
+        permission={{
+          requestId: 'permission-quota',
+          toolName: 'exec',
+          input: { command: 'npx tsc --noEmit' },
+          title: 'Allow Codex to run this command?',
+          autoReviewUnavailable: true,
+          autoReviewReason: 'The automatic review model gateway quota is exhausted. '
+            + 'Check usage or billing, then confirm this action.',
+        }}
+        onRespond={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText(
+      '自动审批模型网关额度已耗尽，暂时无法自动判断。请检查用量或计费，再确认这次操作。',
+    )).toBeTruthy();
+    expect(screen.getByText(/自动审批需要你决定：.*quota is exhausted/)).toBeTruthy();
+  });
 });

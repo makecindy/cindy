@@ -667,6 +667,7 @@
     "REMOTE_DAEMON_CLOSED": "远程连接中断，或方更新。此轮已毕，请重遣。",
     "REMOTE_LOCAL_ATTACHMENT_UNSUPPORTED": "远程差事不能访问本地之卷或图附件。请径贴其内容。",
     "AUTO_REVIEW_UNAVAILABLE": "自动审批暂不能决断，须审批之操作已改由君确认。欲少受打扰，可将差事切至「完全访问」，然风险更高。",
+    "AUTO_REVIEW_UNAVAILABLE_QUOTA": "自动审批模型网关额度已耗尽，自动审批暂难定夺。请核用量或计费，再确认此操作。",
     "AUTO_REVIEW_UNAVAILABLE_WECHAT": "自动审批暂不能决断，须审批之操作已改由君确认。个人微信不能用「完全访问」，请径确认此次操作。",
     "AUTO_REVIEW_CONFIRM_UNDELIVERED": "自动审批未竟，确认亦未送达或未被点按。此次拒绝非君所点。",
     "REMOTE_COMPAT_MODE_UNSUPPORTED": "远程差事不能用此机之兼容通道。请改用 Cindy AI，或于本机差事中续之。",

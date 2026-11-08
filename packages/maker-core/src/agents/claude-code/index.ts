@@ -2726,9 +2726,10 @@ export class ClaudeCodeAgent extends BaseAgent {
           if (autoDecision.unavailable) {
             autoReviewUnavailableNotice.notify(autoDecision.reason);
             unavailableHandoff = true;
-          } else {
-            autoReviewAskReason = autoDecision.reason;
           }
+          // 故障 handoff 也要把原因带进确认请求：额度耗尽等具体原因必须能到卡片，
+          // 而不是只剩通用兜底文案。
+          autoReviewAskReason = autoDecision.reason;
           forcePrompt = true;
         }
       } else {
@@ -4179,9 +4180,9 @@ export class ClaudeCodeAgent extends BaseAgent {
               if (autoDecision.unavailable) {
                 autoReviewUnavailableNotice.notify(autoDecision.reason);
                 remoteUnavailableHandoff = true;
-              } else {
-                remoteAutoReviewAskReason = autoDecision.reason;
               }
+              // 与本地分支同口径：故障 handoff 的原因也要进确认请求。
+              remoteAutoReviewAskReason = autoDecision.reason;
               remoteForcePrompt = true;
             } else {
               remoteForcePrompt = remoteForcePrompt || remoteMcpPolicy === 'prompt-each-time';

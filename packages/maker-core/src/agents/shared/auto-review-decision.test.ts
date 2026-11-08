@@ -14,6 +14,7 @@ import {
   AUTO_REVIEW_RETRY_BACKOFF_MS,
   annotatePermissionRequestForUnavailableReview,
   autoReviewRetryBudgetMs,
+  autoReviewUnavailableDetail,
   getAutoReviewDelegateHardCeilingMs,
   DEFAULT_AUTO_REVIEW_TIMEOUT_POLICY,
   classifyLocalAutoReviewTier,
@@ -411,6 +412,15 @@ describe('isAutoReviewUnavailableNotice', () => {
     expect(isAutoReviewUnavailableNotice(undefined)).toBe(false);
     expect(isAutoReviewUnavailableNotice(null)).toBe(false);
     expect(isAutoReviewUnavailableNotice(123)).toBe(false);
+  });
+
+  it('extracts the bounded detail without consuming other codes', () => {
+    expect(autoReviewUnavailableDetail(
+      `[${AUTO_REVIEW_UNAVAILABLE_CODE}] The review gateway quota is exhausted.`,
+    )).toBe('The review gateway quota is exhausted.');
+    expect(autoReviewUnavailableDetail(`[${AUTO_REVIEW_UNAVAILABLE_CODE}]   `)).toBeUndefined();
+    expect(autoReviewUnavailableDetail('[REMOTE_LOCAL_ATTACHMENT_UNSUPPORTED] nope')).toBeUndefined();
+    expect(autoReviewUnavailableDetail(undefined)).toBeUndefined();
   });
 });
 

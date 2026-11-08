@@ -670,6 +670,7 @@
     "REMOTE_DAEMON_CLOSED": "La conexión remota se interrumpió, posiblemente durante una actualización. Este turno ha terminado. Envía el mensaje nuevamente.",
     "REMOTE_LOCAL_ATTACHMENT_UNSUPPORTED": "No se puede acceder a los archivos adjuntos locales file/image en sesiones remotas. En su lugar, pegue el contenido directamente.",
     "AUTO_REVIEW_UNAVAILABLE": "La aprobación automática no pudo llegar a una decisión, por lo que las acciones que necesitan aprobación ahora necesitan su confirmación. Cambie esta sesión a Acceso total si prefiere que no lo interrumpan. Ese modo es de mayor riesgo.",
+    "AUTO_REVIEW_UNAVAILABLE_QUOTA": "La aprobación automática no pudo ejecutarse porque se agotó la cuota de la pasarela del modelo de revisión. Revisa el uso o la facturación y luego confirma esta acción.",
     "AUTO_REVIEW_UNAVAILABLE_WECHAT": "La aprobación automática no pudo llegar a una decisión, por lo que las acciones que necesitan aprobación ahora necesitan su confirmación. Personal WeChat no puede utilizar el acceso completo. Confirma esta acción directamente.",
     "AUTO_REVIEW_CONFIRM_UNDELIVERED": "La aprobación automática no estaba disponible y la solicitud de confirmación no se completó. Esto no es un rechazo del usuario.",
     "REMOTE_COMPAT_MODE_UNSUPPORTED": "Las tareas remotas no pueden utilizar la ruta de compatibilidad de esta computadora. Cambie a Cindy AI o continúe en una tarea local.",

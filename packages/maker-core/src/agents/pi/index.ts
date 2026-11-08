@@ -5026,7 +5026,9 @@ export class PiAgent extends BaseAgent {
           if (decision.unavailable) autoReviewUnavailableNotice.notify(decision.reason);
           return requestUserDecision({
             forcePrompt: true,
-            ...(decision.unavailable ? { unavailableHandoff: true } : { autoReviewReason: decision.reason }),
+            ...(decision.unavailable ? { unavailableHandoff: true } : {}),
+            // 故障 handoff 也要带上原因（额度等），否则确认卡只剩通用提示。
+            ...(decision.reason ? { autoReviewReason: decision.reason } : {}),
           });
         } catch (error) {
           this.deps.logger.warn('PI Subagent auto-review failed; denying', {

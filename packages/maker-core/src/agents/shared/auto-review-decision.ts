@@ -65,6 +65,16 @@ export function isAutoReviewUnavailableNotice(message: unknown): boolean {
     && message.startsWith(`[${AUTO_REVIEW_UNAVAILABLE_CODE}]`);
 }
 
+/** 取出 `[AUTO_REVIEW_UNAVAILABLE] detail` 里的 detail；不是该提示时返回 undefined。
+ * 消费方据此给额度等具体原因选专属文案，不要各自切 `[CODE]` 前缀。 */
+export function autoReviewUnavailableDetail(message: unknown): string | undefined {
+  if (!isAutoReviewUnavailableNotice(message)) return undefined;
+  const detail = (message as string)
+    .slice(`[${AUTO_REVIEW_UNAVAILABLE_CODE}]`.length)
+    .trim();
+  return detail || undefined;
+}
+
 /**
  * 会话级**一次性**提示的去重器 —— 逐条提示会把 Auto 档退化成比 Ask 更烦的东西，
  * 而完全不提示就是 issue #1574 报的「静默永久拒绝」。所以一个会话只说一次。

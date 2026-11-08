@@ -295,4 +295,17 @@ describe.each(SUPPORTED_LOCALES)('WeChat auto-review guidance in %s', locale => 
     expect(host.textContent).toContain(i18n.t(wechatKey));
     expect(host.textContent).not.toContain(i18n.t(genericKey));
   });
+
+  it('routes deterministic quota exhaustion to the quota guidance on every surface', async () => {
+    await i18n.changeLanguage(locale);
+    const message = '[AUTO_REVIEW_UNAVAILABLE] The automatic review model gateway quota is '
+      + 'exhausted. Check usage or billing, then confirm this action.';
+    const quotaKey = 'session.remoteError.AUTO_REVIEW_UNAVAILABLE_QUOTA';
+    expect(unclassifiedAgentErrorI18nKey(message, 'desktop')).toBe(quotaKey);
+    expect(unclassifiedAgentErrorI18nKey(message, 'wechat')).toBe(quotaKey);
+    const [historical] = normalizeRemoteMessages([row(message)], { sessionSource: 'wechat' });
+    expect(historical.body).toBe(i18n.t(quotaKey));
+    expect(historical.errorSummaryKey).toBe(quotaKey);
+    expect(historical.body).not.toContain('Full access');
+  });
 });
