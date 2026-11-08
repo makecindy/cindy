@@ -216,6 +216,7 @@ vi.mock("react-native", async () => {
       },
     },
     Dimensions: {
+      addEventListener: () => ({ remove() {} }),
       get: (kind: string) =>
         kind === "screen"
           ? (fixture.displaySize ?? fixture.size)
@@ -262,9 +263,13 @@ vi.mock("expo-router", () => ({
   }),
 }));
 vi.mock("@/utils/backGuard", () => ({ goBackGuarded: vi.fn() }));
-vi.mock("react-native-safe-area-context", () => ({
-  useSafeAreaInsets: () => fixture.safe,
-}));
+vi.mock("react-native-safe-area-context", async () => {
+  const { createContext } = await import("react");
+  return {
+    SafeAreaInsetsContext: createContext(fixture.safe),
+    useSafeAreaInsets: () => fixture.safe,
+  };
+});
 vi.mock("react-i18next", () => {
   const t = (key: string) => key;
   return { useTranslation: () => ({ t }) };
