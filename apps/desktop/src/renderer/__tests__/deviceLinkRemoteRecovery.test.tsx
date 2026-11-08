@@ -518,6 +518,49 @@ describe('stale device directory', () => {
     });
     expect(listDevices.mock.calls.length).toBe(afterFresh);
   });
+
+  // 跳过旧快照的 offline 行不能把冷缓存设备永远留在「检测中」:缓存种入时标 connecting,
+  // 而宽限计时器只在 relay 不在线时才降级 —— relay 在线时没人收口,它会一直「检测中」。
+  // 旧快照的 offline 至少能证明此刻连不上,收成离线(与跳过之前的呈现一致)。
+  it('settles a cold-cache device the stale snapshot reports as offline', async () => {
+    vi.mocked(readCachedSessionList).mockImplementation(async () => ([
+      { deviceId: 'cached', deviceName: 'cached', sessions: [{ id: 's-cached' }] },
+    ]) as never);
+    onTestFinished(() => {
+      vi.mocked(readCachedSessionList).mockImplementation(async () => []);
+    });
+    const listDevices = window.electronAPI.deviceLink.listDevices as unknown as ReturnType<typeof vi.fn>;
+    listDevices.mockImplementation(async () => ({
+      devices: [{ deviceId: 'cached', name: 'cached', online: false, remoteControlEnabled: false, isSelf: false }],
+      stale: true,
+    }));
+    renderHook(() => useDeviceLinkRemoteProjects());
+    await settle();
+    const status = () => remoteProjectsStore.getDeviceSessions('cached')[0]?.deviceLinkConnectionStatus;
+    expect(status()).toBe('disconnected');
+  });
+
+  // 服务端限流给了重试期限:退避要让过那个期限,否则每个挂载窗口都在限流窗口里继续追问。
+  it('waits for the server retry deadline before re-reading a rate-limited directory', async () => {
+    const listDevices = window.electronAPI.deviceLink.listDevices as unknown as ReturnType<typeof vi.fn>;
+    const deadline = Date.now() + 30_000;
+    listDevices.mockImplementation(async () => ({
+      devices: stalePeers(), stale: true, retryAtMs: deadline,
+    }));
+    renderHook(() => useDeviceLinkRemoteProjects());
+    await settle();
+    const initial = listDevices.mock.calls.length;
+    // 自己的阶梯是 5 秒,但期限在 30 秒后:15 秒时不该重读。
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(15_000);
+    });
+    expect(listDevices.mock.calls.length).toBe(initial);
+    // 过了期限才重读。
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(20_000);
+    });
+    expect(listDevices.mock.calls.length).toBe(initial + 1);
+  });
 });
 
 // Review (#8381): a cache read that lands after getState() seeds `connecting` shards. They must

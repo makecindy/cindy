@@ -5141,6 +5141,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       /** Bounded last-known directory; absence is not an authoritative removal. */
       stale?: boolean;
       displayBudget?: { remainingMs: number };
+      /** Server rate-limit deadline (wall-clock ms) for the next directory read. */
+      retryAtMs?: number;
     }> => ipcRenderer.invoke('device-link:list-devices'),
     renameDevice: (
       deviceId: string,

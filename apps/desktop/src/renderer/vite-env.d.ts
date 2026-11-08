@@ -4234,7 +4234,7 @@ interface ElectronAPI {
       enabled: boolean,
     ) => Promise<{ deviceId: string; enabled: boolean; disabledControlDeviceIds: string[] }>;
     listDevices: () => Promise<{ devices: DeviceLinkDeviceView[]; stale?: boolean;
-      displayBudget?: { remainingMs: number } }>;
+      displayBudget?: { remainingMs: number }; retryAtMs?: number }>;
     renameDevice: (
       deviceId: string,
       name: string | null,

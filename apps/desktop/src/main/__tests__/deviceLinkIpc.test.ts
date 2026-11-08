@@ -34,6 +34,7 @@ vi.mock('../serverApiClient', () => {
       public readonly code: string,
       public readonly statusCode: number,
       message: string,
+      public readonly retryAt?: number,
     ) {
       super(message);
     }
@@ -413,6 +414,24 @@ describe('device-link IPC handlers', () => {
     expect(stale.displayBudget?.remainingMs).toBeGreaterThan(0);
     await expect(handleListDevices(deps)).rejects.toThrow('denied');
     await expect(handleListDevices(deps)).rejects.toThrow('temporarily unavailable');
+  });
+
+  // 目录读要有期限:serverApiFetch 默认不超时,挂死的一条读会让每次重读都再开一条。
+  // 限流期限要带给调用方:否则渲染进程的退避会在限流窗口里继续追问,延长限流。
+  it('listDevices:目录读带期限，限流时把服务端的重试期限带给调用方', async () => {
+    __resetDeviceListCoalescingForTests();
+    const retryAt = Date.now() + 60_000;
+    const apiFetch = vi.fn()
+      .mockResolvedValueOnce({ devices: [{ deviceId: 'dev-1', name: 'Member', online: true }] })
+      .mockRejectedValueOnce(new ServerApiError('UNAVAILABLE', 429, 'rate limited', retryAt));
+    const deps = makeDeps({ apiFetch });
+    await expect(handleListDevices(deps)).resolves.not.toHaveProperty('stale');
+    expect(apiFetch).toHaveBeenCalledWith('/api/device-link/devices', {
+      timeoutMs: expect.any(Number),
+    });
+    const limited = await handleListDevices(deps);
+    expect(limited).toMatchObject({ stale: true });
+    expect(limited.retryAtMs).toBe(retryAt);
   });
 
 

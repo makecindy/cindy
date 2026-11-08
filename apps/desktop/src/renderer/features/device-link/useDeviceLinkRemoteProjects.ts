@@ -478,6 +478,11 @@ export function useDeviceLinkRemoteProjects(
     const DIRECTORY_RETRY_MAX_MS = 60_000;
     let directoryRetryTimer: ReturnType<typeof setTimeout> | null = null;
     let directoryRetryDelayMs = DIRECTORY_RETRY_BASE_MS;
+    /**
+     * 服务端限流给出的重试期限(墙钟 ms):目录读被 429 拒过时,下一次重读要等到那之后。
+     * 没有它,每个挂载窗口都会在限流窗口里继续追问,延长限流并放大共享目录压力。
+     */
+    let directoryRetryDeadlineMs = 0;
     /** relay 在线时才跑 anti-entropy；初始状态未知时保守暂停，避免离线失败重试。 */
     let linkOnline: boolean | null = null;
     let directDataDevices = new Set<string>();
@@ -821,11 +826,14 @@ export function useDeviceLinkRemoteProjects(
       if (linkOnline === false) return;
       const delay = directoryRetryDelayMs;
       directoryRetryDelayMs = Math.min(DIRECTORY_RETRY_MAX_MS, directoryRetryDelayMs * 2);
+      // 服务端明确说了多久之后再问(429 的 Retry-After):退避要让过那个期限。
+      const deadline = Math.max(0, directoryRetryDeadlineMs - Date.now());
+      const wait = Math.max(delay, deadline);
       directoryRetryTimer = setTimeout(() => {
         directoryRetryTimer = null;
         if (disposed || linkOnline === false) return;
         void reseed();
-      }, delay);
+      }, wait);
     };
 
     /** 全量重播(初始 + WS 重连):listDevices 带 isSelf,权威。 */
@@ -833,15 +841,29 @@ export function useDeviceLinkRemoteProjects(
       const generation = directoryGeneration;
       return window.electronAPI.deviceLink
         .listDevices()
-        .then(({ devices, stale }) => {
+        .then(({ devices, stale, retryAtMs }) => {
           if (disposed || generation !== directoryGeneration) return;
+          // 服务端限流给了重试期限:记住它,退避要让过那个期限。
+          if (typeof retryAtMs === 'number' && Number.isFinite(retryAtMs)) {
+            directoryRetryDeadlineMs = Math.max(directoryRetryDeadlineMs, retryAtMs);
+          }
           for (const d of devices) {
             // 有界旧快照里的 offline 行不是 presence 证据:主进程在 relay 掉线时清掉了
             // presence 视图,而重连后的目录补齐可能还没成功,旧快照于是把每台设备都投影成
             // offline。拿它当离线判据会把在线设备踢出同步名单,而 presence 是增量流,
             // 一直在线的设备不会再发 presence —— 没有任何事件会把它加回来,只能重启
             // Cindy(#9342)。旧快照里 online 的行是经数据通道验证的,照常使用。
-            if (stale && !d.online) continue;
+            if (stale && !d.online) {
+              // 已合格的设备保持同步资格:旧快照证明不了缺席,更证明不了此刻不在线。
+              if (eligible.has(d.deviceId)) continue;
+              // 但**尚未合格**的冷缓存设备不能永远停在「检测中」:缓存种入时标 connecting,
+              // 而宽限计时器只在 relay 不在线时才降级,relay 在线时就没人收口了。旧快照的
+              // offline 至少能证明此刻连不上 —— 收成离线(与这次修复前的呈现一致),
+              // 但不动它的同步资格(它本来就没有)。
+              remoteProjectsStore.markDeviceDisconnected(d.deviceId);
+              remoteProjectAliases.suspend(d.deviceId);
+              continue;
+            }
             applyDevice({
               deviceId: d.deviceId,
               name: d.name,
@@ -881,6 +903,8 @@ export function useDeviceLinkRemoteProjects(
             }
             // 拿到新目录:目录重读退避到此为止,下一次目录不可用时再从头开始。
             stopDirectoryRetry();
+            // 新目录到手 = 服务端没有在限流,期限作废。
+            directoryRetryDeadlineMs = 0;
           } else {
             // 仍然只有旧快照:按退避重读,直到目录恢复。
             scheduleDirectoryRetry();

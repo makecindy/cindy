@@ -360,6 +360,11 @@ function ensureStarted(): void {
   let linkStatusRevision = 0;
   let retryTimer: ReturnType<typeof setTimeout> | null = null;
   let retryDelayMs = 0;
+  /**
+   * 服务端限流给出的目录重试期限(墙钟 ms):重读要让过那个期限,否则限流窗口里
+   * 每个挂载的窗口都继续追问,延长限流并放大共享目录压力。
+   */
+  let retryDeadlineMs = 0;
   let backgroundRetryGeneration: number | null = null;
   let backgroundRetryRefreshPending = false;
   let backgroundRetryReplayActive = false;
@@ -392,12 +397,14 @@ function ensureStarted(): void {
   const scheduleRetry = (): void => {
     if (retryTimer !== null || linkStatus === 'stopped') return;
     retryDelayMs = nextDeviceListRetryDelay(retryDelayMs);
+    // 服务端明确说了多久之后再问(429 的 Retry-After):退避要让过那个期限。
+    const wait = Math.max(retryDelayMs, Math.max(0, retryDeadlineMs - Date.now()));
     retryTimer = setTimeout(() => {
       retryTimer = null;
       // 后台恢复不能把已结算的目录重新打回 initialRequestSettled=false；否则持久化的
       // 远端选择会在每次退避尝试时暂时恢复、遮住本地侧栏。请求仍在飞，但选择/加载态保持稳定。
       refresh(false, true);
-    }, retryDelayMs);
+    }, wait);
   };
 
   const enterLoading = (): void => {
@@ -466,6 +473,12 @@ function ensureStarted(): void {
       }
       clearRetryTimer();
       retryDelayMs = 0;
+      // 服务端限流期限:记住了就让下一次退避让过它;拿到权威目录 = 没有在限流,期限作废。
+      if (typeof result?.retryAtMs === 'number' && Number.isFinite(result.retryAtMs)) {
+        retryDeadlineMs = Math.max(retryDeadlineMs, result.retryAtMs);
+      } else if (result?.stale !== true) {
+        retryDeadlineMs = 0;
+      }
       const displayed = setDevices(list, result?.displayBudget
         ? { requestedAt, remainingMs: result.displayBudget.remainingMs } : undefined,
       result?.stale !== true);

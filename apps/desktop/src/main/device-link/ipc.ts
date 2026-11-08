@@ -168,7 +168,7 @@ export interface DeviceLinkIpcDeps {
   getState(): DeviceLinkState;
   setEnabled(enabled: boolean): Promise<void>;
   setKeepAwake(enabled: boolean): Promise<void>;
-  apiFetch<T>(path: string, opts?: { method?: string; body?: unknown }): Promise<T>;
+  apiFetch<T>(path: string, opts?: { method?: string; body?: unknown; timeoutMs?: number }): Promise<T>;
   openLink(deviceId: string): Promise<LinkAcceptPayload>;
   closeLink(deviceId: string): void;
   invoke(deviceId: string, channel: string, args: unknown[], options?: { background?: boolean; diagnosticSource?: 'renderer' }): Promise<InvokeResultPayload>;
@@ -414,6 +414,11 @@ type DeviceListResult = {
    * an explicit 0 means the source budget has already ended.
    */
   displayBudget?: { remainingMs: number };
+  /**
+   * Server-side rate-limit deadline (wall-clock ms) for the next directory read.
+   * Present only while the server is throttling this account's directory.
+   */
+  retryAtMs?: number;
 };
 
 /**
@@ -443,9 +448,26 @@ function invalidateDeviceListCoalescing(): void {
  */
 const DEVICE_LIST_COALESCE_WINDOW_MS = 300;
 
+/**
+ * 目录 REST 读取的上限。一次目录读挂死不能无限期占住连接:重试会叠加,而
+ * `serverApiFetch` 默认没有期限(0 = 不超时),挂死的读会让后续每次重读都再开一条。
+ * 超时按暂时性失败处理(见 handleListDevices),读者仍能沿用有界旧快照。
+ */
+const DIRECTORY_READ_TIMEOUT_MS = 8_000;
+
+/** 服务端限流(429)给出的目录重试期限(墙钟 ms),按 owner 记。 */
+let directoryRetryAt: { owner: string; retryAtMs: number } | null = null;
+
+/** fetch 被中止时抛出的错误:目录读取超时走这条(而不是当成权威拒绝)。 */
+function isAbortError(error: unknown): boolean {
+  const name = (error as { name?: unknown } | null | undefined)?.name;
+  return name === 'AbortError' || name === 'TimeoutError';
+}
+
 /** 仅测试:重置合并窗口状态,避免跨用例共用在途 promise。 */
 export function __resetDeviceListCoalescingForTests(): void {
   latestDeviceListRequest = null;
+  directoryRetryAt = null;
   invalidateProviderDirectoryContinuity();
 }
 
@@ -464,7 +486,23 @@ export function handleListDevices(
   const directoryEpoch = providerDirectoryGeneration();
     const request = readProviderDirectoryContinuity(() => deps.apiFetch<{ devices: DeviceLinkServerDeviceView[] }>(
       '/api/device-link/devices',
-    )).then(
+      { timeoutMs: DIRECTORY_READ_TIMEOUT_MS },
+    ).catch((error: unknown) => {
+      // 429 的 Retry-After:服务端明确说了多久之后再问。把期限带给调用方(渲染进程的目录
+      // 退避要让过它),否则限流窗口里每个挂载的窗口都会继续追问,延长限流并放大共享
+      // 目录压力。期限按 owner 记:换账号不该继承上一个账号的限流期限。
+      const retryAt = (error as { retryAt?: unknown } | null | undefined)?.retryAt;
+      if (typeof retryAt === 'number' && Number.isFinite(retryAt)) {
+        const known = directoryRetryAt?.owner === owner ? directoryRetryAt.retryAtMs : 0;
+        directoryRetryAt = { owner, retryAtMs: Math.max(known, retryAt) };
+      }
+      // 读取超时是**暂时性**失败:让 continuity reader 沿用有界旧快照,而不是把快照一起
+      // 丢掉(丢掉的话渲染进程连旧设备都看不到)。statusCode 0 = 连不上,不是权威拒绝。
+      if (isAbortError(error)) {
+        throw Object.assign(new Error('设备目录读取超时'), { statusCode: 0 });
+      }
+      throw error;
+    })).then(
     async ({ value: result, stale, remainingMs }) => {
       if (activeOwnerScopeKey() !== owner) throw new Error('[DEVICE_LINK_NOT_CONNECTED] device directory account changed');
       // A rename/delete supersedes a request that started before it, even when
@@ -484,6 +522,8 @@ export function handleListDevices(
         latest = latestDeviceListRequest;
         if (latest && latest.sequence > sequence) return latest.promise;
       }
+      // 拿到权威目录 = 服务端没有在限流:上一轮的限流期限作废。
+      if (!stale && directoryRetryAt?.owner === owner) directoryRetryAt = null;
       const reconciled = reconcileDeviceNames(
         result,
         deps,
@@ -535,6 +575,8 @@ export function handleListDevices(
         // Never drop an exhausted budget: absent means an old endpoint with no
         // stamp, while zero means this read is already outside its source window.
         displayBudget: { remainingMs: Math.max(0, remainingMs) },
+        // 服务端限流给出的重试期限:调用方的退避要让过它(见 handleListDevices)。
+        ...(directoryRetryAt?.owner === owner ? { retryAtMs: directoryRetryAt.retryAtMs } : {}),
       };
     },
     (err: unknown) => {
