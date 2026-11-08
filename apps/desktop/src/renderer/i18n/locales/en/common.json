@@ -10081,6 +10081,12 @@
       "openSettings": "Open Storage",
       "disable": "Do not remind me"
     },
+    "nativeBuild": {
+      "title": "You're using the Intel version",
+      "description": "This Mac has Apple silicon, so the Intel version runs much slower through translation. Install the Apple silicon version; your data stays.",
+      "dismiss": "Hide for now",
+      "download": "Download"
+    },
     "horizontalTabbarAria": "Main view switcher",
     "tabs": {
       "projects": "Projects",

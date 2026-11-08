@@ -10081,6 +10081,12 @@
       "openSettings": "Speicher öffnen",
       "disable": "Nicht mehr erinnern"
     },
+    "nativeBuild": {
+      "title": "Du verwendest die Intel-Version",
+      "description": "Dieser Mac hat Apple silicon – die Intel-Version läuft übersetzt und deutlich langsamer. Installiere die Apple-silicon-Version; deine Daten bleiben erhalten.",
+      "dismiss": "Vorerst ausblenden",
+      "download": "Laden"
+    },
     "horizontalTabbarAria": "Hauptansicht wechseln",
     "tabs": {
       "projects": "Projekte",

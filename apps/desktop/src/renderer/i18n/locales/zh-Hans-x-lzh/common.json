@@ -10038,6 +10038,12 @@
       "openSettings": "启保存空间",
       "disable": "勿再提醒"
     },
+    "nativeBuild": {
+      "title": "今用 Intel 版 Cindy",
+      "description": "此 Mac 用 Apple 芯片，Intel 版须转译而行，迟缓甚矣。改装 Apple 芯片版即可，资料皆存。",
+      "dismiss": "此番勿再提",
+      "download": "取之"
+    },
     "horizontalTabbarAria": "主区视图切换",
     "tabs": {
       "projects": "案",

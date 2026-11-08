@@ -10038,6 +10038,12 @@
       "openSettings": "打开存储空间",
       "disable": "不再提醒"
     },
+    "nativeBuild": {
+      "title": "当前是 Intel 版 Cindy",
+      "description": "这台 Mac 是 Apple 芯片，Intel 版要转译运行，会明显变慢。改装 Apple 芯片版即可，数据都会保留。",
+      "dismiss": "本次不再提示",
+      "download": "下载"
+    },
     "horizontalTabbarAria": "主区域视图切换",
     "tabs": {
       "projects": "项目",
