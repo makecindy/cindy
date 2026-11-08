@@ -1,3 +1,5 @@
+import { recordStandbyUsage, flushStandbyUsage } from '../../device-link/providerShareAvailabilityUsage.js';
+import { prepareShareAvailability, acceptShareAvailability } from '../../device-link/providerShareAvailability.js';
 import { assertMemberBudget, memberBudgetDenial, memberBudgetAllows } from '../../device-link/providerShareBudgetRuntime.js';
 import { readRemoteAgentLimitsState } from './limitsStore.js';
 /**
@@ -292,6 +294,12 @@ export function installRemoteAgentHost(options: {
   stopDelegationChecks = startProviderShareDelegationRechecks({
     leases: delegatedProviderShareLeases,
     async check(first) {
+      const cloud = delegatedProviderShareLeases().find(item => item.peer === first.peer && item.sessionId === first.sessionId)?.lease.availability;
+      if (cloud) {
+        await prepareShareAvailability(first.peer);
+        const lease = delegatedProviderShareLeases().find(item => item.peer === first.peer && item.sessionId === first.sessionId)?.lease;
+        return { active: !!lease, ownerDeviceId: lease?.ownerDeviceId };
+      }
       const peer = parseProviderSharePeer(first.peer);
       const deviceId = getSelfDeviceId();
       if (peer?.role !== 'guest' || !deviceId) throw new Error('Provider share executor is unavailable');
@@ -976,7 +984,11 @@ export function installRemoteAgentHost(options: {
       if (peer?.role === 'guest' && peer.memberId) {
         // O receives only model/counter data for the matching delegated task.
         const authority = sessionId && delegatedProviderShareReceiptAuthority(controller, sessionId);
-        if (authority) {
+        if (authority?.availability && sessionId) {
+          void recordStandbyUsage({ shareId: peer.shareId, memberId: peer.memberId, guestDeviceId: peer.deviceId,
+            sessionId, generation: authority.generation }, sample.samples).then(flushStandbyUsage)
+            .catch(error => log.warn('standby usage persistence/upload unavailable', { error: String(error) }));
+        } else if (authority) {
           for (let i = 0; i < sample.samples.length; i += 64) {
             const usageId = randomUUID();
             const request: Extract<RemoteAgentRequest, { op: 'direct-usage' }> = {
@@ -1004,6 +1016,7 @@ export function installRemoteAgentHost(options: {
     groupRelay,
     groupContinuity: hasProviderGroupContinuityHandler,
     directGuestExecution: {
+      acceptDelegated: acceptShareAvailability,
       ownerScope: providerShareOwnerKey,
       async locate(controller, request) {
         const key = JSON.stringify([controller, request.sessionId]);

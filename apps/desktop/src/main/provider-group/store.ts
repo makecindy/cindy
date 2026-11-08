@@ -1,3 +1,4 @@
+import { withAvailabilityPolicyMutation } from '../device-link/providerShareAvailabilityPolicy.js';
 /**
  * 供应商组设置：按账号存在本机(`provider-group-prefs.json`)，不同步到其他电脑。
  * 组只是「这台电脑上这个供应商」的一项设置，没有账号级的组(docs/product-rules/provider-groups.md §3)。
@@ -124,7 +125,7 @@ export async function writeProviderGroup(
   if (!isProviderGroupProviderId(providerId)) throw new Error('Invalid provider id');
   const normalized = config === null ? null : normalizeProviderGroupConfig(config, providerId);
   const expected = expectedConfig === undefined ? undefined : normalizeProviderGroupConfig(expectedConfig, providerId);
-  const next = await withProviderGroupMutation(() => store.updateAtomic(({ value }) => {
+  const next = await withAvailabilityPolicyMutation(providerId, () => withProviderGroupMutation(() => store.updateAtomic(({ value }) => {
     assertCurrent();
     // 必须在已有跨进程写锁内重读并比较，不能在等待目录或写锁前检查后再无条件覆盖。
     if (expected !== undefined && !isDeepStrictEqual(value.groups[providerId] ?? null, expected)) {
@@ -152,7 +153,7 @@ export async function writeProviderGroup(
     }
     // 与移出组同一把锁、同一次原子替换：崩溃、离线、重新加入都不能丢掉清空旧同意的意图。
     return { groups, reshareCleanups, bindingCleanups };
-  }));
+  })));
   assertCurrent();
   notifyProviderGroupChanged(providerId);
   return next.groups[providerId] ?? null;
@@ -182,7 +183,7 @@ export async function updateProviderGroup(
   updater: (current: ProviderGroupConfig | null) => ProviderGroupConfig | null | undefined,
 ): Promise<ProviderGroupConfig | null> {
   if (!isProviderGroupProviderId(providerId)) throw new Error('Invalid provider id');
-  const next = await store.updateAtomic(({ value }) => {
+  const next = await withAvailabilityPolicyMutation(providerId, () => store.updateAtomic(({ value }) => {
     const current = value.groups[providerId] ?? null;
     const updated = updater(current);
     if (updated === undefined) return {};
@@ -197,7 +198,7 @@ export async function updateProviderGroup(
       if (!remaining.has(device)) reshareCleanups[device] = randomUUID();
     }
     return { groups, reshareCleanups };
-  });
+  }));
   notifyProviderGroupChanged(providerId);
   return next.groups[providerId] ?? null;
 }

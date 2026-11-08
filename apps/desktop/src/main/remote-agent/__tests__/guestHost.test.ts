@@ -51,6 +51,7 @@ function makeHost(
   started: Started[],
   options: {
     nativeId?: string;
+    directGuestExecution?: Parameters<typeof createRemoteAgentHost>[0]['directGuestExecution'];
     forkHosted?: Parameters<typeof createRemoteAgentHost>[0]['forkHosted'];
     purge?: (ids: readonly string[], nativeIds: readonly string[]) => Promise<void>;
     events?: AgentEvent[];
@@ -73,6 +74,7 @@ function makeHost(
     : options.bindGuestProviderRoute ?? (async () => ({ routeToken: 'route-token', modelIds: ['claude-opus'], release: () => {} }));
   return createRemoteAgentHost({
     forkHosted: options.forkHosted,
+    directGuestExecution: options.directGuestExecution,
     isAgentAvailable: () => true,
     startHosted: async (input) => {
       const record: Started = { input, sends: [], calls: [] };
@@ -180,6 +182,27 @@ afterEach(() => {
 });
 
 describe('guest shadow workspace', () => {
+  it('requires standby assignment acceptance before starting the fake engine', async () => {
+    const started: Started[] = [];
+    const accept = vi.fn(async (): Promise<void> => { throw new Error('revoked assignment'); });
+    const host = makeHost(started, { directGuestExecution: {
+      ownerScope: () => 'fake-owner', sessionAllowed: () => true, sessionDelegated: () => true,
+      acceptDelegated: accept, allocate: async () => null, status: () => {}, release: async () => {},
+      switch: async () => ({}), usage: async () => {}, delegate: async () => true, forget: () => true,
+    } });
+    const request = { op: 'open' as const, runId: RUN_1, agentKind: 'claude-code' as const, payload: { json: openPayload('standby-task') } };
+    try {
+      await expect(host.handle(GUEST, request)).rejects.toThrow('revoked assignment');
+      expect(started).toHaveLength(0);
+      accept.mockImplementation(async () => undefined);
+      await host.handle(GUEST, request);
+      await waitForStarted(host, GUEST, RUN_1);
+      expect(started).toHaveLength(1);
+      expect(accept).toHaveBeenCalledWith(GUEST, 'standby-task');
+      expect(started[0].input.guest).toBe(true);
+    } finally { host.dispose(); }
+  });
+
   it('writes only allowlisted, sanitized files for a guest', async () => {
     const started: Started[] = [];
     const host = makeHost(started);

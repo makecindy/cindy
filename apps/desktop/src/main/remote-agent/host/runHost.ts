@@ -285,6 +285,7 @@ export interface RemoteAgentHostDeps {
     ownerScope(): string;
     locate?(controller: string, request: Extract<RemoteAgentRequest, { op: 'direct-locate' }>): Promise<{ deviceId: string } | null>;
     /** O accepts fresh relay history; native history must stay on its recorded M. */
+    acceptDelegated?(controller: string, sessionId: string): Promise<void>;
     acceptRelay?(controller: string, sessionId: string, hasNativeHistory: boolean): Promise<void>;
     allocate(controller: string, request: Extract<RemoteAgentRequest, { op: 'allocate' }>): Promise<{ deviceId: string; generation: string; leaseDurationMs?: number } | null>;
     status(controller: string, request: Extract<RemoteAgentRequest, { op: 'direct-status' }>): void;
@@ -3438,6 +3439,10 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
         if (!relayTo && !deps.isAgentAvailable(request.agentKind)) {
           reserved?.release();
           fail('REMOTE_AGENT_UNSUPPORTED', `${request.agentKind} is not available on this computer`);
+        }
+        if (controllerTrust === 'guest' && deps.directGuestExecution?.sessionDelegated(controller, payload.sessionId)) {
+          try { await deps.directGuestExecution.acceptDelegated?.(controller, payload.sessionId); }
+          catch (error) { reserved?.release(); throw error; }
         }
         if (controllerTrust === 'guest' && !relayKey
           && !deps.directGuestExecution?.sessionDelegated(controller, payload.sessionId)) {

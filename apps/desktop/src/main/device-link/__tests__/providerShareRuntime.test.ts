@@ -276,6 +276,23 @@ describe('delegated executor access', () => {
     } finally { vi.useRealTimers(); }
   });
 
+  it('retains the cloud accounting destination after standby execution expires', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      const peer = guest('m1');
+      const generation = '44444444-4444-4444-8444-444444444444';
+      await applyProviderShareDelegation('owner-pc', { op: 'delegate', action: 'grant',
+        shareId: 'share-1', memberId: 'm1', guestDeviceId: 'laptop', providerId: 'anthropic',
+        sessionId: 'cloud_task', model: 'model-one', generation }, async () => ({ active: true,
+        ownerDeviceId: 'owner-pc', generation, expiresAt: Date.now() + 30 * 60_000 }), true);
+      vi.setSystemTime(new Date(Date.now() + 30 * 60_000 + 1));
+      expect(delegatedProviderShareLeases()).toEqual([]);
+      expect(delegatedProviderShareReceiptAuthority(peer, 'cloud_task'))
+        .toEqual({ ownerDeviceId: 'owner-pc', generation, availability: true });
+      expect(delegatedProviderShareSessionAllowed(peer, 'cloud_task')).toBe(false);
+    } finally { vi.useRealTimers(); }
+  });
+
   it('clears an expired task accounting authority on account change', async () => {
     vi.useFakeTimers({ toFake: ['Date'] });
     try {
