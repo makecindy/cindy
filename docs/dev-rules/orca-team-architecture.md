@@ -421,6 +421,22 @@ Git worktree，不改变供应商、模型与 Worker 创建权限偏好。
 
    `hasPendingWorkerReports` 只统计仍欠回报的 Worker，不代表仍在运行的 Worker。最后一份回报被接收时，沿已有 `onLeadWorkerReportsSettled` 通知灵动岛；Lead 自身忙碌或有队列时仍由其现有完成规则处理。相较旧实现等 Worker 终态再清 pending，这可能更早解除 Lead 的完成暂缓；不另增加「Worker 仍在工作」条件。
 
+4a. **冷启动 Lead 的回报先留存，再恢复投递（状态：不变量）**<br>
+   宿主接管 `send_to_lead` 时先核对 Worker 关系，不为取得 Lead 实例提前启动远程 Agent。
+   Lead 尚无运行时的报告进入原输入队列；快照持久化成功前不返回 queued，也不派发。
+   手动回报与本机 auto-bridge 共用这条路径。保存失败仍欠回报，不能声称已经接收。
+   主进程重启后只恢复当前账号、有效 Worker→Lead 关系且 Lead 为 active 的待投递报告；
+   普通排队输入继续暂停，已落库 clientId 与清空边界沿用原有去重。内部恢复标记不接受
+   renderer／远控传入，也不进入投影。停止后持久阻止自动恢复，重新尝试由用户发起。
+   用户编辑或合并报告后不再继承自动恢复资格。启动前先持久标记本次尝试结果尚未确认；
+   若进程在分配或授权途中退出，保留报告等待人工重试，不把在途尝试当作从未发送的队列项。
+
+   报告尚未接收且启动失败已确认属于原电脑建链阶段的瞬时故障时，复用现有自动续跑
+   退避与次数上限，重试同一队首和 clientId，显示既有重新连接活动。分配、授权以及
+   已分配后的执行电脑／能力失败不能重跑整条启动链；安全探测只在原步骤内有界补试。
+   权限、额度、容量、版本不支持和未知原因保留报告并沿用分类错误提示；`unknown` 不等于离线。
+   恢复不重启 App、不拆共享 relay、不影响其他任务，不新增服务端接口或迁移。
+
 5. **手动中断不 auto-bridge（状态：不变量）**<br>
    用户手动 stop / abort worker 后，terminal turn 不应把最后消息 auto-bridge 给 Lead。实现指针：`register.ts` 的 stop / abort IPC handlers，以及 `orcaTeamService.ts` 的 `handleWorkerTerminalTurn`。
 

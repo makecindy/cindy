@@ -201,7 +201,7 @@ export interface OrcaInterAgentDispatcherDeps<TSessionMeta> {
     sessionId: string,
     meta: TSessionMeta,
   ) => Promise<AgentInputCreateOpts>;
-  enqueueQueuedMessage: (sessionId: string, item: AgentInputQueuedMessage) => void;
+  enqueueQueuedMessage: (sessionId: string, item: AgentInputQueuedMessage) => void | Promise<void>;
   /** Restore first, then synchronously reserve the item at the live queue head. */
   reserveNextQueuedMessage: (
     sessionId: string,
@@ -517,6 +517,10 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
         createOpts,
         ...(imageFiles.length ? { files: imageFiles } : {}),
       });
+      if (params.source === 'worker' && params.workerId) {
+        queued.orcaReportDelivery = { workerId: params.workerId };
+        queued.durableDelivery = true;
+      }
       if (params.onAccepted) {
         registerQueuedOrcaInterAgentAcceptedCallback(
           clientId,
@@ -525,7 +529,12 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
           params.onAcceptedCommit,
         );
       }
-      deps.enqueueQueuedMessage(params.targetSessionId, queued);
+      try {
+        await deps.enqueueQueuedMessage(params.targetSessionId, queued);
+      } catch (error) {
+        discardQueuedOrcaInterAgentAcceptedCallback(clientId);
+        throw error;
+      }
       log.info(logEvent, {
         targetSessionId: params.targetSessionId,
         clientId,
@@ -612,7 +621,8 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
       }
     }
 
-    const shouldQueue = deps.shouldQueueNewTurn(params.targetSessionId)
+    const shouldQueue = (params.source === 'worker' && !deps.getLiveSession(params.targetSessionId))
+      || deps.shouldQueueNewTurn(params.targetSessionId)
       || deps.hasSendToSessionLock(params.targetSessionId)
       || deps.getLiveSession(params.targetSessionId)?.isTurnRunning?.() === true;
     if (shouldQueue) {
@@ -717,8 +727,8 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
       if (liveResult) return liveResult;
       // 带图 no-live(换窗/重建中)与纯文本排队语义对齐:携 files 入队,
       // drain 经 sendToAgent 用 createOpts 重建 session 后送达,不静默丢图。
-      if (imageFiles.length > 0) {
-        return enqueueQueuedMessage('orca inter-agent message queued for no-live target with images');
+      if (imageFiles.length > 0 || params.source === 'worker') {
+        return enqueueQueuedMessage('orca inter-agent message queued for no-live target');
       }
       return await sendToInternal();
     } catch (err) {

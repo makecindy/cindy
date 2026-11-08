@@ -140,6 +140,27 @@ describe('sender-chosen steering into an active turn', () => {
     });
     return { ...h, live, steer, lock };
   }
+  // Unit regression: no-live reports used to bootstrap before retaining the
+  // message, and a queued ACK could precede persistence. Exercise the dispatcher.
+  it('retains a cold Lead report and waits for its queue receipt before acknowledging', async () => {
+    let release!: () => void;
+    const persisted = new Promise<void>(resolve => { release = resolve; });
+    const h = createHarness({ getLiveSession: () => null,
+      enqueueQueuedMessage: vi.fn(async () => persisted),
+    });
+    let accepted = false;
+    const pending = h.dispatcher.dispatchOrEnqueueOrcaInterAgentMessage({
+      targetSessionId: 'target-session', rawContent: 'Review complete', source: 'worker',
+      senderLabel: 'reviewer', workerId: 'worker-1', meta: { source: 'mcp-tool', context: 'report' },
+    }).then(result => { accepted = true; return result; });
+    for (let i = 0; i < 20; i++) await Promise.resolve();
+    expect(h.deps.sendToSessionInternal).not.toHaveBeenCalled();
+    expect(h.deps.enqueueQueuedMessage).toHaveBeenCalledOnce();
+    expect(accepted).toBe(false);
+    release();
+    await expect(pending).resolves.toMatchObject({ ok: true, mode: 'queued', clientId: 'client-1' });
+  });
+
   it('uses same-turn delivery with Orca identity and never runs turn-start callbacks', async () => {
     const h = setup();
     const order: string[] = [];
@@ -955,8 +976,8 @@ describe('Orca lead/worker dispatcher', () => {
 
     const internal = createHarness({ resolveWorkerSenderLabel, getLiveSession: vi.fn(() => null) });
     await internal.dispatcher.dispatchOrEnqueueOrcaInterAgentMessage(params);
-    expect(internal.deps.sendToSessionInternal).toHaveBeenCalledWith(
-      expect.objectContaining({ message: expectedText }),
+    expect(internal.deps.enqueueQueuedMessage).toHaveBeenCalledWith(
+      params.targetSessionId, expect.objectContaining({ text: expectedText }),
     );
 
     const reserved = createHarness({ resolveWorkerSenderLabel });

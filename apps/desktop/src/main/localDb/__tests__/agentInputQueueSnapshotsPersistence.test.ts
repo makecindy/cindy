@@ -17,6 +17,7 @@ import {
   awaitAgentInputQueueSnapshotPersistence,
   loadAgentInputQueueSnapshotCounts,
   loadAgentInputQueueSnapshot,
+  listQueuedOrcaReportSessionIds,
   saveAgentInputQueueSnapshot,
   saveCancelledInputDelivery,
   hasInputDeliveryCancellation,
@@ -70,6 +71,23 @@ function installDb(
 }
 
 describe('agent input queue snapshot durability boundary', () => {
+  // DB-tier: startup discovery must find retained Worker reports without loading
+  // ordinary message bodies or waking stopped reports; malformed legacy rows stay harmless.
+  it('discovers only eligible report snapshots for startup restoration', async () => {
+    const sqlite = new Database(':memory:');
+    sqlite.exec('CREATE TABLE agent_input_queue_snapshots (session_id TEXT PRIMARY KEY, payload TEXT NOT NULL, updated_at INTEGER)');
+    const insert = sqlite.prepare('INSERT INTO agent_input_queue_snapshots VALUES (?, ?, 1)');
+    const report = { ...queued('report'), origin: { kind: 'orca', senderLabel: 'reviewer' },
+      orcaReportDelivery: { workerId: 'worker' } };
+    insert.run('pending', JSON.stringify([null, 'legacy', report]));
+    insert.run('stopped', JSON.stringify([{ ...report, orcaReportDelivery: { workerId: 'worker', recoveryBlocked: true } }]));
+    insert.run('ordinary', JSON.stringify([queued('ordinary')]));
+    insert.run('corrupt', '{');
+    mocks.getDbClient.mockReturnValue({ query: async (text: string, args: unknown[]) => sqlite.prepare(text).all(...args) });
+    try { expect(await listQueuedOrcaReportSessionIds()).toEqual(['pending']); }
+    finally { sqlite.close(); }
+  });
+
   it.each([false, true])('matches restoration when a persisted array contains malformed rows (all malformed: %s)', async (allMalformed) => {
     const sqlite = new Database(':memory:');
     sqlite.exec(`

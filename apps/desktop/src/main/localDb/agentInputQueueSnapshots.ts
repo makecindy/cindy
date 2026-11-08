@@ -284,6 +284,24 @@ export async function loadAllQueueSnapshotPayloads(): Promise<string[]> {
   return rows.map((r) => r.payload);
 }
 
+/** Startup discovery only; restoration still validates the receipt, clear boundary and Orca link. */
+export async function listQueuedOrcaReportSessionIds(): Promise<string[]> {
+  const owner = queueOwner();
+  const rows = await owner.client.query<{ sessionId: string }>(
+    `SELECT session_id AS sessionId FROM agent_input_queue_snapshots
+     WHERE EXISTS (
+       SELECT 1 FROM json_each(CASE WHEN json_valid(payload) THEN payload ELSE '[]' END) AS item
+       WHERE CASE WHEN item.type = 'object' THEN
+         json_type(item.value, '$.orcaReportDelivery.workerId') = 'text'
+         AND COALESCE(json_extract(item.value, '$.orcaReportDelivery.recoveryBlocked'), 0) = 0
+         AND json_extract(item.value, '$.origin.kind') = 'orca'
+       ELSE 0 END
+     )`, [],
+  );
+  assertQueueOwner(owner);
+  return rows.map(row => row.sessionId);
+}
+
 /**
  * Count restorable snapshot rows in SQLite without returning or parsing their message bodies in JS.
  *

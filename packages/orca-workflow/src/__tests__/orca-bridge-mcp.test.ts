@@ -625,6 +625,62 @@ describe('orca_worker_bridge MCP helpers', () => {
     expect(lead.sent).toHaveLength(1);
   });
 
+  // Unit regression: a completed Lead can have no runtime. Its remote bootstrap
+  // failing must not prevent the host from retaining the Worker's report.
+  it('hands a report to the host without starting the missing Lead runtime', async () => {
+    const dispatch = vi.fn<NonNullable<OrcaBridgeMcpDeps['dispatchInterAgentMessage']>>(async () => ({
+      ok: true, mode: 'queued', clientId: 'report-1',
+    }));
+    const h = makeWorkerBridgeLeadHarness(makeSession('lead-1'), dispatch);
+    delete h.activeSessions['lead-1'];
+    const start = vi.spyOn(h.maker, 'createSession').mockRejectedValue(new Error(
+      '[REMOTE_AGENT_UNAVAILABLE] [SHARED_TASK_RECOVERY_unknown] [SHARED_TASK_STAGE_allocation]',
+    ));
+    const result = await h.server._registeredTools.send_to_lead.handler({ worker_id: 'worker-1', message: 'Review complete' });
+    expect(parseToolJson(result)).toMatchObject({ ok: true, queued: true, lead_session_id: 'lead-1' });
+    expect(start).not.toHaveBeenCalled();
+    expect(dispatch).toHaveBeenCalledWith(expect.objectContaining({ rawContent: 'Review complete', targetSessionId: 'lead-1' }));
+    expect(h.finishReport).toHaveBeenCalledWith(true);
+  });
+
+  it.each([false, true])('captures the host-owned Lead reply before the first read, cold=%s', async cold => {
+    const lead = makeSession('lead-1');
+    const dispatch = vi.fn<NonNullable<OrcaBridgeMcpDeps['dispatchInterAgentMessage']>>(async params => {
+      h.activeSessions['lead-1'] = lead;
+      await params.onAccepted?.();
+      lead.emit({ type: 'text', data: { text: 'Lead reply', isFinal: true } } as AgentEvent);
+      lead.emit({ type: 'done', data: {} } as AgentEvent);
+      return { ok: true, mode: 'dispatched', clientId: 'report-client' };
+    });
+    const h = makeWorkerBridgeLeadHarness(lead, dispatch);
+    if (cold) delete h.activeSessions['lead-1'];
+    await h.server._registeredTools.send_to_lead.handler({ worker_id: 'worker-1', message: 'Review complete' });
+    expect(parseToolJson(await h.server._registeredTools.read_lead.handler({ worker_id: 'worker-1' })))
+      .toMatchObject({ status: 'done', result: 'Lead reply' });
+  });
+
+  it.each(['failed', 'thrown', 'queued', 'new-result'] as const)('rolls back only the cancelled host acceptance: %s', async mode => {
+    const lead = makeSession('lead-1');
+    let consume: (() => Promise<void>) | undefined;
+    const dispatch = vi.fn<NonNullable<OrcaBridgeMcpDeps['dispatchInterAgentMessage']>>(async params => {
+      consume = async () => {
+        await params.onAccepted?.();
+        if (mode === 'new-result') lead.emit({ type: 'done', data: { result: 'New result' } } as AgentEvent);
+        await params.onAcceptedRollback?.();
+      };
+      if (mode === 'queued') return { ok: true, mode: 'queued', clientId: 'report-client' };
+      await consume();
+      if (mode === 'thrown') throw new Error('cancelled');
+      return { ok: false };
+    });
+    const h = makeWorkerBridgeLeadHarness(lead, dispatch);
+    await h.seedExistingLeadResult();
+    await h.server._registeredTools.send_to_lead.handler({ worker_id: 'worker-1', message: 'Review complete' });
+    if (mode === 'queued') await consume?.();
+    expect(parseToolJson(await h.server._registeredTools.read_lead.handler({ worker_id: 'worker-1' })))
+      .toMatchObject({ status: 'done', result: mode === 'new-result' ? 'New result' : 'Existing lead result' });
+  });
+
   it.each(['dispatched', 'queued', 'steered'] as const)('settles host-owned %s reports without waiting for lead completion', async mode => {
     const lead = makeSession('lead-1');
     lead.turnRunning = true;

@@ -11,6 +11,8 @@ import { AUTO_REVIEW_DELEGATED_CONTINUATION, restoreAutoReviewUserIntent, type A
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { admitTaskAction, bindTaskActionInput, settleTaskActionInput, taskActionInputGuard } from '../taskActionAuthorization.js';
 import { AgentInputCoordinator } from '../agent-input-coordinator.js';
+import { canRecoverUndeliveredOrcaReport } from '../../../shared/sharedTaskRecovery.js';
+import { AutoResumeBookkeeping } from '../autoResumeBookkeeping.js';
 import { ProviderGroupUsageLimitError, providerGroupSwitchCause } from '../../provider-group/failurePolicy.js';
 import type { Session } from '@cindy/maker-core';
 import { createSessionBindingLifecycle, createSessionCloseTeardown } from '../sessionBindingLifecycle.js';
@@ -1594,6 +1596,8 @@ function unsupportedChatBridgeImageError(feature = "input content part 'input_im
 }
 
 function createHarness(opts?: {
+  canRestoreOrcaReport?: AgentInputCoordinatorDeps['canRestoreOrcaReport'];
+  awaitQueuePersistence?: AgentInputCoordinatorDeps['awaitQueuePersistence'];
   getRecoveryContextSnapshot?: (sessionId: string, userClientId: string) => Promise<RecoveryContextSnapshot>;
   providerGroupSwitchCandidate?: AgentInputCoordinatorDeps['providerGroupSwitchCandidate'];
 }) {
@@ -1813,6 +1817,8 @@ function createHarness(opts?: {
     onUserMessageRewritten,
     emitProjection,
     persistQueueSnapshot,
+    canRestoreOrcaReport: opts?.canRestoreOrcaReport,
+    awaitQueuePersistence: opts?.awaitQueuePersistence,
     loadClearBoundary: (sessionId) =>
       loadClearBoundary ? loadClearBoundary(sessionId) : Promise.resolve(null),
     loadQueueSnapshot: (sessionId) =>
@@ -13024,6 +13030,303 @@ describe('AgentInputCoordinator replaceQueuedMessage(Orca lead 排队消息修�
 
     steer.resolve();
     await steerPromise;
+  });
+});
+
+// Unit regressions for lost Worker reports: production enqueue/restore/retry
+// entries, with an in-memory persistence boundary. Existing auto-bridge tests
+// manually replayed terminal events and never exercised a cold Lead's queue.
+describe('Orca report durable recovery', () => {
+  const report = () => makeItem('report-1', 'Review complete', {
+    origin: { kind: 'orca', senderLabel: 'reviewer', senderSessionId: 'worker-session' },
+    orcaReportDelivery: { workerId: 'worker-1' }, durableDelivery: true,
+  });
+
+  function failedBootstrap(failure: string) {
+    const transaction = createMakerSendTransaction({
+      getSession: () => undefined, closeSession: async () => {}, preflightBotRuntimeResources: async () => {},
+      getSessionMeta: async () => ({}), ensureRemoteReadyForSessionStart: async () => {},
+      checkWorkDirExists: async () => true, isOrcaMcpHydrated: () => true,
+      buildCreateOptsWithStderr: x => x, synthesizeOrcaVendorOptionsFromDb: async () => false,
+      statDirectory: async () => ({ isDirectory: () => true }),
+      readSessionExtraDirsFromDb: async () => [], readSessionWorkingDirFromDb: async () => '/repo',
+      readWorkingDirectoryRecoveryCreateOpts: async () => ({ agentKind: 'codex', workingDir: '/repo', model: 'model' }),
+      withRehydrateCloseSuppressed: async (_id, fn) => fn(),
+      bootstrapSession: async () => { throw new Error(failure); },
+      markOrcaRoleIfNeeded: async () => {}, broadcastSessionCreated: () => {},
+      prepareSendUserMessage: async (_id, message) => message as string,
+      createDbMessage: async () => {}, isSessionRunningError: () => false, log: mocks.logger,
+    });
+    const send: AgentInputCoordinatorDeps['sendToAgent'] = async (...args) =>
+      (await transaction.sendToAgentAccepted(...args)).outcome;
+    return send;
+  }
+
+  // Exercise the real host scheduling callback with its guard and bookkeeping;
+  // a hand-written retry timer would miss pending-token and retry-budget bugs.
+  it('retries the same report through the host scheduler and stops at its existing budget', async () => {
+    vi.useFakeTimers();
+    try {
+      const h = createHarness();
+      const guard = new InterruptedTurnAutoResumeGuard({ isEnabled: () => true, log: mocks.logger, random: () => 0.5 });
+      const book = new AutoResumeBookkeeping({
+        persistSuppressedError: vi.fn(), markOutcome: vi.fn(),
+        rollbackGuardPendingResume: (sid, token) => { if (token !== undefined) guard.noteResumeSendFailed(sid, token); },
+        abandonTakeover: (sid, message, token) => h.coordinator.abandonAutoResume(sid, message, token),
+      });
+      const source = readFileSync(resolve(__dirname, '..', 'register.ts'), 'utf8');
+      const start = source.indexOf('    onResumableTurnError: (');
+      const end = source.indexOf('    steerToAgent:', start);
+      const deps = {
+        inputCoordinator: h.coordinator,
+        canRecoverTurn: (signals: { message?: string }) => canRecoverUndeliveredOrcaReport(signals.message),
+        botFallbackInputs: new WeakSet(), isBotCandidateUnavailable: () => false,
+        isInterruptedTurnError, interruptedTurnAutoResumeGuard: guard,
+        log: mocks.logger, saveTurnStartedAtForDeferred: vi.fn(), autoResumeBookkeeping: book,
+        isContinuationOnlyAutoResumeReason: () => false,
+        maybeApplySessionRuntimeFallback: async () => ({ session: null }),
+        canResumeAfterRuntimeFallback: () => true,
+      };
+      const host = new Function(...Object.keys(deps), transpileModule(
+        `return ({${source.slice(start, end)}}).onResumableTurnError;`,
+        { compilerOptions: { target: ScriptTarget.ES2022 } },
+      ).outputText)(...Object.values(deps));
+      h.onResumableTurnError.mockImplementation(host);
+      const failure = '[REMOTE_AGENT_UNAVAILABLE] [SHARED_TASK_RECOVERY_relay] [SHARED_TASK_STAGE_owner]';
+      h.sendToAgent.mockImplementation(failedBootstrap(failure));
+      await h.coordinator.ensureQueueRestored('lead');
+      h.coordinator.enqueue('lead', report());
+      await flush();
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(h.sendToAgent).toHaveBeenCalledTimes(1 + INTERRUPTED_TURN_MAX_CONSECUTIVE_ATTEMPTS);
+      expect(new Set(h.sendToAgent.mock.calls.map(call => call[3].persistUserMessage?.clientId))).toEqual(new Set(['report-1']));
+      expect(h.coordinator.getProjection('lead').autoResumePending).toBeUndefined();
+      expect(h.coordinator.getProjection('lead')).toMatchObject({ error: expect.stringContaining(failure),
+        recovery: { kind: 'queue-head', clientId: 'report-1' } });
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('does not dispatch a report before persistence or after a failed receipt', async () => {
+    const write = deferred<void>();
+    const h = createHarness({ awaitQueuePersistence: () => write.promise });
+    const pending = h.coordinator.enqueueDurably('lead', report());
+    const rejected = expect(pending).rejects.toThrow('disk unavailable');
+    await flush();
+    expect(h.sendToAgent).not.toHaveBeenCalled();
+    write.reject(new Error('disk unavailable'));
+    await rejected;
+    await flush();
+    expect(h.sendToAgent).not.toHaveBeenCalled();
+    expect(h.coordinator.getProjection('lead').pendingQueue).toEqual([]);
+  });
+
+  it('keeps ordinary Lead assignments accepted when best-effort snapshot persistence fails', async () => {
+    const h = createHarness();
+    await h.coordinator.ensureQueueRestored('worker');
+    h.setRunning(true);
+    h.persistQueueSnapshot.mockRejectedValueOnce(new Error('disk unavailable'));
+    const source = readFileSync(resolve(__dirname, '..', 'register.ts'), 'utf8');
+    const start = source.indexOf('    enqueueQueuedMessage: async');
+    const end = source.indexOf('    reserveNextQueuedMessage:', start);
+    const awaitWrite = vi.fn(async () => { throw new Error('disk unavailable'); });
+    const enqueue = new Function('inputCoordinator', 'activeOwnerScopeKey', 'isAppSessionBoundaryPending',
+      'awaitAgentInputQueueSnapshotPersistence', transpileModule(
+        `return ({${source.slice(start, end)}}).enqueueQueuedMessage;`,
+        { compilerOptions: { target: ScriptTarget.ES2022 } },
+      ).outputText)(h.coordinator, () => 'owner', () => false, awaitWrite);
+    await expect(enqueue('worker', makeItem('assignment', 'Review this change', {
+      origin: { kind: 'orca', senderLabel: 'Lead', senderSessionId: 'lead' },
+    }))).resolves.toBeUndefined();
+    h.setRunning(false);
+    h.coordinator.wakeSession('worker', 'idle');
+    await flush();
+    expect(h.sendToAgent).toHaveBeenCalledOnce();
+    expect(h.sendToAgent.mock.calls[0][3].persistUserMessage?.clientId).toBe('assignment');
+  });
+
+  it('acknowledges a retained report and releases its lock when Stop cancels another preparation', async () => {
+    const write = deferred<void>(), prepare = deferred<string | undefined>();
+    const h = createHarness({ awaitQueuePersistence: () => write.promise });
+    await h.coordinator.ensureQueueRestored('lead');
+    h.getSdkSessionId.mockReturnValueOnce(prepare.promise);
+    h.coordinator.enqueue('lead', makeItem('earlier', 'earlier input'));
+    await flush();
+    const pending = h.coordinator.enqueueDurably('lead', report());
+    const accepted = expect(pending).resolves.toBeUndefined();
+    await flush();
+    h.coordinator.stop('lead', { keepQueue: true, pauseQueue: true });
+    write.resolve();
+    prepare.resolve(undefined);
+    await accepted;
+    await flush();
+    expect(h.coordinator.getProjection('lead')).toMatchObject({ queueInteractionLocks: [], queuePaused: true });
+    expect(h.sendToAgent).not.toHaveBeenCalled();
+  });
+
+  it('persists Stop while a saved report is still being revalidated', async () => {
+    const permission = deferred<boolean>();
+    const h = createHarness({ canRestoreOrcaReport: () => permission.promise });
+    h.setLoadQueueSnapshot(async () => [report()]);
+    const restoring = h.coordinator.ensureQueueRestored('lead');
+    await flush();
+    h.coordinator.stop('lead');
+    permission.resolve(true);
+    await restoring;
+    await flush();
+    expect(h.sendToAgent).not.toHaveBeenCalled();
+    const saved = h.persistQueueSnapshot.mock.calls.at(-1)![1];
+    const restarted = createHarness({ canRestoreOrcaReport: async () => true });
+    restarted.setLoadQueueSnapshot(async () => saved);
+    await restarted.coordinator.ensureQueueRestored('lead');
+    await flush();
+    expect(restarted.sendToAgent).not.toHaveBeenCalled();
+  });
+
+  it('persists an uncertain attempt before startup and does not replay it after a crash', async () => {
+    const write = deferred<void>(), startup = deferred<AgentInputSendResult>();
+    const h = createHarness({ awaitQueuePersistence: () => write.promise });
+    h.sendToAgent.mockReturnValue(startup.promise);
+    await h.coordinator.ensureQueueRestored('lead');
+    h.coordinator.enqueue('lead', report());
+    await flush();
+    expect(h.sendToAgent).not.toHaveBeenCalled();
+    write.resolve();
+    await flush();
+    expect(h.sendToAgent).toHaveBeenCalledOnce();
+    const snapshot = JSON.parse(JSON.stringify(h.persistQueueSnapshot.mock.calls.at(-1)![1]));
+    const restarted = createHarness({ canRestoreOrcaReport: async () => true });
+    restarted.setLoadQueueSnapshot(async () => snapshot);
+    await restarted.coordinator.ensureQueueRestored('lead');
+    await flush();
+    expect(restarted.sendToAgent).not.toHaveBeenCalled();
+    expect(restarted.coordinator.getProjection('lead').pendingQueue).toHaveLength(1);
+    startup.resolve(sendSuccess());
+    await flush();
+  });
+
+  it.each(['active', 'ended', 'account-changed'] as const)('revalidates the actual host membership before restoring: %s', async mode => {
+    const source = readFileSync(resolve(__dirname, '..', 'register.ts'), 'utf8');
+    const start = source.indexOf('    canRestoreOrcaReport: async');
+    const end = source.indexOf('    loadClearBoundary:', start);
+    let owner = 'owner';
+    const validate = new Function('activeOwnerScopeKey', 'isAppSessionBoundaryPending',
+      'listWorkersByLead', 'getSessionRowSnapshotStrict', transpileModule(
+        `return ({${source.slice(start, end)}}).canRestoreOrcaReport;`,
+        { compilerOptions: { target: ScriptTarget.ES2022 } },
+      ).outputText)(() => owner, () => false, async () => {
+        if (mode === 'account-changed') owner = 'another';
+        return mode === 'ended' ? [] : [{ id: 'worker-1', sessionId: 'worker-session' }];
+      }, async () => ({ status: 'active' }));
+    const h = createHarness({ canRestoreOrcaReport: validate });
+    h.setLoadQueueSnapshot(async () => [report()]);
+    await h.coordinator.ensureQueueRestored('lead');
+    await flush();
+    expect(h.sendToAgent).toHaveBeenCalledTimes(mode === 'active' ? 1 : 0);
+  });
+
+  it('does not inherit automatic restoration through an owner edit', async () => {
+    const h = createHarness();
+    h.setRunning(true);
+    await h.coordinator.ensureQueueRestored('lead');
+    h.coordinator.enqueue('lead', report());
+    h.coordinator.updateText('lead', 'report-1', 'Owner-edited input');
+    const restarted = createHarness({ canRestoreOrcaReport: async () => true });
+    restarted.setLoadQueueSnapshot(async () => h.persistQueueSnapshot.mock.calls.at(-1)![1]);
+    await restarted.coordinator.ensureQueueRestored('lead');
+    await flush();
+    expect(restarted.sendToAgent).not.toHaveBeenCalled();
+    expect(restarted.coordinator.getProjection('lead').pendingQueue[0].text).toBe('Owner-edited input');
+  });
+
+  it('rejects a controller-supplied automatic report marker', async () => {
+    const source = readFileSync(resolve(__dirname, '..', 'register.ts'), 'utf8');
+    const start = source.indexOf('  const requireQueuedMessage = (');
+    const end = source.indexOf('  ipcMain.handle(DL_SESSION_REFERENCE_CAPABILITY_CHANNEL', start);
+    const parse = new Function('throwIpcError', 'requireSessionRefs', 'isDeviceLinkInvoke', transpileModule(
+      `${source.slice(start, end)}\nreturn requireQueuedMessage;`,
+      { compilerOptions: { target: ScriptTarget.ES2022 } },
+    ).outputText)((code: string) => { throw new Error(code); }, () => [], () => false);
+    const h = createHarness({ canRestoreOrcaReport: async () => true });
+    h.setLoadQueueSnapshot(async () => [parse(report())]);
+    await h.coordinator.ensureQueueRestored('lead');
+    await flush();
+    expect(h.sendToAgent).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])('automatically retries an unaccepted report, respecting Stop=%s', async stop => {
+    vi.useFakeTimers();
+    try {
+      const h = createHarness();
+      const failure = '[REMOTE_AGENT_UNAVAILABLE] [SHARED_TASK_RECOVERY_relay] [SHARED_TASK_STAGE_owner]';
+      h.sendToAgent.mockImplementationOnce(failedBootstrap(failure));
+      h.onResumableTurnError.mockImplementation((sid, signals) => {
+        if (!canRecoverUndeliveredOrcaReport(signals.message)) return null;
+        setTimeout(() => { void h.coordinator.autoRetryLastError(sid, 1); }, 3_000);
+        return { reason: 'orca-report-preparation', error: signals.message, attempt: 1, maxAttempts: 5, sessionTotal: 1 };
+      });
+      await h.coordinator.ensureQueueRestored('lead');
+      h.coordinator.enqueue('lead', report());
+      await flush();
+      await h.sendToAgent.mock.results[0].value;
+      await flush();
+      expect(h.coordinator.getProjection('lead')).toMatchObject({ error: null, autoResumePending: { attempt: 1 } });
+      if (stop) h.coordinator.stop('lead');
+      await vi.advanceTimersByTimeAsync(3_000);
+      await flush();
+      expect(h.sendToAgent).toHaveBeenCalledTimes(stop ? 1 : 2);
+      if (!stop) {
+        expect(h.sendToAgent.mock.calls[1][1]).toMatchObject({ content: 'Review complete' });
+        expect(h.sendToAgent.mock.calls[1][3].persistUserMessage?.clientId).toBe('report-1');
+      }
+    } finally { vi.useRealTimers(); }
+  });
+
+  it.each(['unknown', 'denied', 'budget', 'capacity', 'unsupported', 'history'])('retains a classified %s failure without automatic replay', async reason => {
+    const h = createHarness();
+    const failure = `[REMOTE_AGENT_UNAVAILABLE] [SHARED_TASK_RECOVERY_${reason}] [SHARED_TASK_STAGE_allocation]`;
+    h.sendToAgent.mockImplementationOnce(failedBootstrap(failure));
+    h.onResumableTurnError.mockImplementation((_sid, signals) => {
+      expect(canRecoverUndeliveredOrcaReport(signals.message)).toBe(false);
+      return null;
+    });
+    await h.coordinator.ensureQueueRestored('lead');
+    h.coordinator.enqueue('lead', report());
+    await flush();
+    await h.sendToAgent.mock.results[0].value;
+    await flush();
+    expect(h.coordinator.getProjection('lead')).toMatchObject({ error: expect.stringContaining(failure),
+      recovery: { kind: 'queue-head', clientId: 'report-1' } });
+    expect(h.sendToAgent).toHaveBeenCalledOnce();
+    const restarted = createHarness({ canRestoreOrcaReport: async () => true });
+    restarted.setLoadQueueSnapshot(async () => h.persistQueueSnapshot.mock.calls.at(-1)![1]);
+    await restarted.coordinator.ensureQueueRestored('lead');
+    await flush();
+    expect(restarted.sendToAgent).not.toHaveBeenCalled();
+  });
+
+  it.each([true, false])('restores only an authorized report automatically, current link=%s', async allowed => {
+    const h = createHarness({ canRestoreOrcaReport: async () => allowed });
+    h.setLoadQueueSnapshot(async () => [report(), makeItem('ordinary', 'do not auto-send')]);
+    await h.coordinator.ensureQueueRestored('lead');
+    await flush();
+    expect(h.sendToAgent).toHaveBeenCalledTimes(allowed ? 1 : 0);
+    expect(h.coordinator.getProjection('lead').queuePaused).toBe(true);
+    expect(h.coordinator.getProjection('lead').pendingQueue.map(item => item.clientId))
+      .toEqual(allowed ? ['ordinary'] : ['report-1', 'ordinary']);
+  });
+
+  it('does not restore automatic delivery after an explicit retained-queue Stop', async () => {
+    const h = createHarness({ canRestoreOrcaReport: async () => true });
+    h.setRunning(true);
+    await h.coordinator.ensureQueueRestored('lead');
+    h.coordinator.enqueue('lead', report());
+    h.coordinator.stop('lead', { keepQueue: true });
+    const saved = h.persistQueueSnapshot.mock.calls.at(-1)![1];
+    const restored = createHarness({ canRestoreOrcaReport: async () => true });
+    restored.setLoadQueueSnapshot(async () => saved);
+    await restored.coordinator.ensureQueueRestored('lead');
+    await flush();
+    expect(restored.sendToAgent).not.toHaveBeenCalled();
   });
 });
 
