@@ -72,13 +72,22 @@ export function loadManifest(state) {
 export function runtimeEnv(c, configFile, manifest = {}) {
   const r = c.runtime;
   const escape = text => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  // A native build launches from the shared runtime cache: the process is that cache's Cindy.app run
+  // for this checkout. Recognize it by checkout (never by the shared executable alone), or the
+  // update gates and launcher stop checks cannot see the real application.
+  let nativeRuntime = null;
+  try { nativeRuntime = read(path.join(r.clientDir, 'apps/desktop/resources/personal-native.json')).runtime?.directory ?? null; } catch { /* Ordinary Electron checkout. */ }
+  const sourceElectron = `${escape(path.join(r.clientDir, 'node_modules/electron/dist/Electron.app/Contents/MacOS/Electron'))}( |$)`;
+  const electronPattern = typeof nativeRuntime === 'string' && path.isAbsolute(nativeRuntime)
+    ? `(${sourceElectron}|${escape(path.join(nativeRuntime, 'Cindy.app/Contents/MacOS/Electron'))} .*${escape(path.join(r.clientDir, 'apps/desktop'))}( |$))`
+    : sourceElectron;
   const result = { ...process.env,
     PERSONAL_CONFIG: path.resolve(configFile), PERSONAL_CLI: cli, PERSONAL_TOOLS_DIR: here,
     PERSONAL_SOURCE_DIR: c.app.checkout, PERSONAL_CLIENT_DIR: r.clientDir, PERSONAL_STAGING_DIR: r.stagingDir,
     PERSONAL_STATE_DIR: r.stateDir, PERSONAL_DATA_DIR: r.dataDir, PERSONAL_REGION: c.region,
     PERSONAL_MODE: r.mode, PERSONAL_PROFILE_NAME: c.name, PERSONAL_INSTALLED_APP: r.installedApp,
     PERSONAL_PREVIOUS_REF: `personal-build/${c.name}/previous`, PERSONAL_IDLE_MINUTES: String(r.idleMinutes),
-    PERSONAL_ELECTRON_RE: `${escape(path.join(r.clientDir, 'node_modules/electron/dist/Electron.app/Contents/MacOS/Electron'))}( |$)`,
+    PERSONAL_ELECTRON_RE: electronPattern,
     PERSONAL_FETCH_COMMITS: (manifest.FETCH_COMMITS || []).join(' '), PERSONAL_REPOSITORY: c.app.repository,
     PERSONAL_NODE: r.node, PERSONAL_TOOL_PATH: r.toolPaths.join(path.delimiter),
     PATH: [path.dirname(r.node), ...r.toolPaths, process.env.PATH || ''].join(path.delimiter),

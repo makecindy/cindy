@@ -66,6 +66,18 @@ test('deployed bundle is self-contained and paths with spaces survive dispatch',
   assert.ok(new RegExp(env.PERSONAL_ELECTRON_RE).test(path.join(c.runtime.clientDir, 'node_modules/electron/dist/Electron.app/Contents/MacOS/Electron')));
 });
 
+// Legacy gates identify the app by process name; a native build runs from the shared runtime cache.
+// Minimal input: one checkout with a native receipt plus another checkout using the same runtime.
+test('legacy process identity covers a native build\'s shared runtime for its own checkout only', { skip: process.platform !== 'darwin' && 'macOS-only native runtime' }, t => {
+  const root = temp(t), client = path.join(root, 'client'), runtime = path.join(root, 'runtime');
+  put(path.join(client, 'apps/desktop/resources/personal-native.json'), JSON.stringify({ state: 'built', runtime: { directory: runtime } }));
+  const c = { name: 'fixture', region: 'global', app: { checkout: root, repository: 'example/app' }, runtime: { clientDir: client, stagingDir: 'stage', stateDir: 'state', dataDir: 'data', node: process.execPath, mode: 'shared', toolPaths: [], idleMinutes: 120 } };
+  const re = new RegExp(runtimeEnv(c, path.join(root, 'config.json')).PERSONAL_ELECTRON_RE), exe = path.join(runtime, 'Cindy.app/Contents/MacOS/Electron');
+  assert.ok(re.test(`${exe} ${client}/apps/desktop`));
+  assert.equal(re.test(`${exe} ${path.join(root, 'other')}/apps/desktop`), false);
+  assert.equal(re.test(`${exe}-helper ${client}/apps/desktop`), false);
+});
+
 const shellAvailable = spawnSync('zsh', ['--version']).status === 0 && spawnSync('sqlite3', ['--version']).status === 0;
 test('real engine stages, preserves edits, switches, rolls back and blocks partial database recovery', { skip: !shellAvailable }, t => {
   const root = temp(t), source = path.join(root, 'source'), client = path.join(root, 'client'), state = path.join(root, 'state'), data = path.join(root, 'data'), bin = path.join(root, 'bin');
