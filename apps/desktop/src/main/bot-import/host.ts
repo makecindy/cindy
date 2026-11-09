@@ -10,6 +10,7 @@ import sharp from 'sharp';
 import { atomicWriteFileSync, readAtomicFileSync } from '../utils/atomicWriteFile.js';
 import { parseRoutineInput, type RoutineInput } from '@cindy/maker-scheduler';
 import { normalizeBotName } from '../../shared/botCreation.js';
+import { companionShadowIdsForLocalNameCheck } from '../companion-cloud/homes.js';
 import { listBotRemoteResourceSources } from '../localDb/ipc/bots.js';
 import { validateBotAvatarBuffer, decodeBotAvatarImage } from '../localDb/ipc/botAvatarSelection.js';
 import { toSdrAvatarImage } from '../hdrAvatarToSdr.js';
@@ -644,7 +645,9 @@ export async function startCompanionImport(selection: CompanionImportSelection, 
   await validateImportRequestIdentity(snapshot, selection, prior, readLegacyDeferSetup); scope.assert();
   if (!prior) {
     const profiles = await listBotRemoteResourceSources(); scope.assert();
-    if (profiles.some(profile => profile.status !== 'archived' && normalizeBotName(profile.name) === normalizeBotName(selection.name))) throw new CompanionImportError('IMPORT_NAME_EXISTS');
+    const shadowedIds = new Set(companionShadowIdsForLocalNameCheck()); scope.assert();
+    if (profiles.some(profile => profile.status !== 'archived' && !shadowedIds.has(profile.id)
+      && normalizeBotName(profile.name) === normalizeBotName(selection.name))) throw new CompanionImportError('IMPORT_NAME_EXISTS');
   }
   const jobKey = `${scope.scope}:${selection.requestId}`;
   const running = jobs.get(jobKey);
