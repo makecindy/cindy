@@ -190,7 +190,7 @@ import { resolveSessionCcDebugFile, trackSessionCcDebugFile } from '../logger.js
 import { resetProviderModelAutoRefreshCooldowns } from './provider-model-auto-refresh.js';
 import { getThinkingEnabledFromMemory } from './newMakerDefaultsCache.js';
 import { registerUsagePricing, clearUsagePricing } from './model-usage-pricing.js';
-import { getSessionFastMode } from './session-effort-store.js';
+import { getSessionEffort, getSessionFastMode } from './session-effort-store.js';
 import { createSshDaemonTransport } from './codex-remote-transport.js';
 import { getRemoteSshPool, broadcastSilentInstallStatus, ensureRemoteAgentInstalledOrInstall } from '../remote-ssh/index.js';
 import {
@@ -382,6 +382,7 @@ import {
   codexSmartSubagentRoutingSignature,
   prepareCodexSmartSubagentConfig,
   selectCodexSmartSubagentCandidates,
+  withParentReasoningEffort,
 } from './codex-smart-subagent-routing.js';
 import { readSubagentModelSettings } from './subagent-model-settings-store.js';
 import {
@@ -2341,10 +2342,22 @@ export function getMaker(): Maker {
         text,
         subagentRoute,
         smartSubagentRoutes,
+        reasoningEffort,
       }) =>
         registerCodexProxyComposed(sessionId, threadId, text, {
           ...(subagentRoute ? { subagentRoute } : {}),
-          ...(smartSubagentRoutes ? { smartSubagentRoutes } : {}),
+          // 共享的 app-server 目录不带档位。只给这条线程的智能路由盖上父任务当前档位，
+          // 避免恢复后子代理掉回目录默认 low。优先用登记时带上的活档位：冷恢复
+          // 这一刻 session store 还没从数据库 hydrate。没带才回退 store。空字符串是
+          // 「不用推理」，不能再去 store 里找一个默认档。
+          ...(smartSubagentRoutes
+            ? {
+                smartSubagentRoutes: withParentReasoningEffort(
+                  smartSubagentRoutes,
+                  reasoningEffort !== undefined ? reasoningEffort : getSessionEffort(sessionId),
+                ),
+              }
+            : {}),
         }),
       getCodexSubagentIdentity: ({ childThreadId }) =>
         getObservedCodexSubagentIdentity(childThreadId),

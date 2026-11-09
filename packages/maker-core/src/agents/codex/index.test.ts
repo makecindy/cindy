@@ -1866,6 +1866,10 @@ function installFakeHost(
       catalogModel: string;
       reasoningEffort: import('./app-server/protocol.js').ReasoningEffort | null;
     };
+    smartSubagentRoutes?: Array<{
+      providerId: string;
+      catalogModel: string;
+    }>;
     observedSubagentIdentities?: Record<string, { model: string; reasoningEffort?: string }>;
     openAiWebSocketsEnabled?: boolean;
     userAgent?: string;
@@ -1976,6 +1980,7 @@ function installFakeHost(
   );
   const getSubagentModelFallback = vi.fn(() => opts.subagentModelFallback);
   const getSubagentRoute = vi.fn(() => opts.subagentRoute);
+  const getSmartSubagentRoutes = vi.fn(() => opts.smartSubagentRoutes);
   const getObservedSubagentIdentity = vi.fn(
     (childThreadId: string) => opts.observedSubagentIdentities?.[childThreadId],
   );
@@ -2005,6 +2010,7 @@ function installFakeHost(
     getSessionMcpConfig,
     getSubagentModelFallback,
     getSubagentRoute,
+    getSmartSubagentRoutes,
     getObservedSubagentIdentity,
     getOpenAiWebSocketsEnabled,
     getConnectionId: () => opts.connectionId ?? 'test-connection',
@@ -7859,6 +7865,111 @@ describe('CodexAgent send', () => {
       expect(turns.at(-1)?.collaborationMode).toMatchObject({
         mode: 'default', settings: { reasoning_effort: null },
       });
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it('restored empty effort does not overwrite the stored level', async () => {
+    const registerCodexSystemPromptForThread = vi.fn();
+    const agent = new CodexAgent(createDeps({}, { registerCodexSystemPromptForThread }));
+    const smartRoute = { providerId: 'custom', catalogModel: 'gpt-5.6-sol' };
+    const turns: TurnStartParams[] = [];
+    const host = installFakeHost(agent, (method, params) => {
+      if (method === Method.TurnStart) {
+        turns.push(JSON.parse(JSON.stringify(params)) as TurnStartParams);
+        return { turn: { id: `turn-${turns.length}` } };
+      }
+      return undefined;
+    }, {
+      codexProxyActive: true,
+      smartSubagentRoutes: [smartRoute],
+    });
+    const handle = await agent.startSession({
+      sessionId: 'session-restored-xhigh',
+      model: 'gpt-5.6-sol',
+      effort: 'xhigh',
+      workingDir: '/repo',
+      resumeSessionId: '11111111-1111-4111-8111-111111111111',
+    });
+    try {
+      expect(registerCodexSystemPromptForThread).toHaveBeenLastCalledWith(expect.objectContaining({
+        sessionId: 'session-restored-xhigh',
+        threadId: 'resume-thread-id',
+        smartSubagentRoutes: [smartRoute],
+        reasoningEffort: 'xhigh',
+      }));
+      host.getThreadHandlers()?.threadSettingsUpdated?.({
+        threadId: 'resume-thread-id',
+        threadSettings: { model: 'gpt-5.6-sol', effort: null, serviceTier: null },
+      });
+      host.getThreadHandlers()?.threadSettingsUpdated?.({
+        threadId: 'resume-thread-id',
+        threadSettings: { model: 'gpt-5.6-sol', effort: 'none', serviceTier: null },
+      });
+      expect(registerCodexSystemPromptForThread).toHaveBeenCalledTimes(1);
+      expect(handle.getEffort?.()).toBe('xhigh');
+      await handle.send({ type: 'user', content: 'continue' });
+      expect(turns).toHaveLength(1);
+      expect(turns[0]?.effort).toBe('xhigh');
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it('an explicit this-turn effort wins', async () => {
+    const registerCodexSystemPromptForThread = vi.fn();
+    const agent = new CodexAgent(createDeps({}, { registerCodexSystemPromptForThread }));
+    const smartRoute = { providerId: 'custom', catalogModel: 'gpt-5.6-sol' };
+    const turns: TurnStartParams[] = [];
+    const host = installFakeHost(agent, (method, params) => {
+      if (method === Method.TurnStart) {
+        turns.push(JSON.parse(JSON.stringify(params)) as TurnStartParams);
+        return { turn: { id: `turn-${turns.length}` } };
+      }
+      if (method === Method.ThreadSettingsUpdate) return {};
+      return undefined;
+    }, {
+      codexProxyActive: true,
+      smartSubagentRoutes: [smartRoute],
+    });
+    const handle = await agent.startSession({
+      sessionId: 'session-explicit-effort',
+      model: 'gpt-5.6-sol',
+      effort: 'xhigh',
+      workingDir: '/repo',
+      resumeSessionId: '11111111-1111-4111-8111-111111111111',
+    });
+    try {
+      await handle.setEffort?.('max');
+      host.getThreadHandlers()?.threadSettingsUpdated?.({
+        threadId: 'resume-thread-id',
+        threadSettings: { model: 'gpt-5.6-sol', effort: null, serviceTier: null },
+      });
+      expect(handle.getEffort?.()).toBe('max');
+      expect(registerCodexSystemPromptForThread).toHaveBeenLastCalledWith(expect.objectContaining({
+        reasoningEffort: 'max',
+        smartSubagentRoutes: [smartRoute],
+      }));
+      await handle.send({ type: 'user', content: 'continue' });
+      expect(turns.at(-1)?.effort).toBe('max');
+
+      // 当轮显式改成「不用推理」后，server 回带的默认档不得再填回去。
+      await handle.setEffort?.('' as Effort);
+      host.getThreadHandlers()?.threadSettingsUpdated?.({
+        threadId: 'resume-thread-id',
+        threadSettings: { model: 'gpt-5.6-sol', effort: 'high', serviceTier: null },
+      });
+      expect(handle.getEffort?.()).toBe('');
+      expect(registerCodexSystemPromptForThread).toHaveBeenLastCalledWith(expect.objectContaining({
+        reasoningEffort: '',
+      }));
+      host.getThreadHandlers()?.turnCompleted?.({
+        threadId: 'resume-thread-id',
+        turn: { id: 'turn-1', status: 'completed' },
+      });
+      await handle.send({ type: 'user', content: 'again' });
+      expect(turns.at(-1)).not.toHaveProperty('effort');
     } finally {
       await handle.close();
     }

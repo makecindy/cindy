@@ -2011,6 +2011,18 @@ describe('chatBridgeCapabilitiesForRoute', () => {
         reasoningEffort: 'low',
       });
 
+      // 没盖父档位时，子请求自己没写 effort 也不得被代理填上一个更高的档。
+      expect(forcedRouteTransform({
+        model: 'smart/model-cheap',
+        input: [],
+      }, {
+        ...ctx,
+        headers: { ...ctx.headers, 'thread-id': 'thread-smart-child-bare' },
+      })).toEqual({
+        model: 'smart/model-cheap',
+        input: [],
+      });
+
       await expect(Promise.resolve(host.createModelRoutingTransform()(
         { model: 'smart/model-cheap', input: [] },
         ctx,
@@ -2022,6 +2034,89 @@ describe('chatBridgeCapabilitiesForRoute', () => {
     } finally {
       host.unregister('session-smart-parent');
       clearSessionProvider('session-smart-parent');
+      setCustomProviderKeyReader(() => null);
+      setCustomProviders([]);
+    }
+  });
+
+  it('parent level is written into the subagent route', async () => {
+    const host = await freshCodexProxyHost();
+    const { setCustomProviders } = await import('../active-catalog.js');
+    const { setCustomProviderKeyReader } = await import('../provider-route.js');
+    const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+    setCustomProviders([{
+      id: 'smart-subagent-provider',
+      name: 'Smart Subagent Provider',
+      source: 'user',
+      agents: ['codex'],
+      auth: { method: 'apiKey' },
+      routing: {
+        codex: {
+          wireProtocol: 'openai-responses',
+          upstream: 'https://smart-subagent.invalid/v1',
+          authStrategy: 'api-key-header',
+        },
+      },
+      models: { codex: [{ id: 'smart/model-cheap', name: 'Smart Cheap Model', efforts: ['low', 'xhigh'] }] },
+    } as never]);
+    setCustomProviderKeyReader(() => 'smart-subagent-key');
+    mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
+      url: 'http://127.0.0.1:43211',
+      dispose: vi.fn(async () => undefined),
+    });
+    await host.ensureCodexProxyReady();
+    host.setCodexProxyAuthInjection('oauth-bearer');
+    host.registerComposed(
+      'session-smart-parent-effort',
+      'thread-smart-parent-effort',
+      'PRODUCT_PROMPT',
+      {
+        smartSubagentRoutes: [{
+          providerId: 'smart-subagent-provider',
+          catalogModel: 'smart/model-cheap',
+          reasoningEffort: 'xhigh',
+        }],
+      },
+    );
+    setSessionProvider('session-smart-parent-effort', 'openai');
+
+    try {
+      const transforms = mockState.createAnthropicCompatProxy.mock.calls.at(-1)?.[0]?.transformRequest ?? [];
+      const forcedRouteTransform = transforms[4];
+      if (!forcedRouteTransform) throw new Error('expected smart Subagent route transform');
+      const headers = {
+        'thread-id': 'thread-smart-child-effort',
+        'x-openai-subagent': 'collab_spawn',
+        'x-codex-parent-thread-id': 'thread-smart-parent-effort',
+      };
+      const ctx = { reqId: 1, method: 'POST', url: '/responses', headers };
+      expect(forcedRouteTransform({
+        model: 'smart/model-cheap',
+        reasoning: { effort: 'low', summary: 'auto' },
+        input: [],
+      }, ctx)).toEqual({
+        model: 'smart/model-cheap',
+        reasoning: { effort: 'xhigh', summary: 'auto' },
+        input: [],
+      });
+      expect(forcedRouteTransform({
+        model: 'smart/model-cheap',
+        input: [],
+      }, {
+        ...ctx,
+        headers: { ...headers, 'thread-id': 'thread-smart-child-effort-bare' },
+      })).toEqual({
+        model: 'smart/model-cheap',
+        reasoning: { effort: 'xhigh' },
+        input: [],
+      });
+      expect(host.getObservedCodexSubagentIdentity('thread-smart-child-effort-bare')).toEqual({
+        model: 'smart/model-cheap',
+        reasoningEffort: 'xhigh',
+      });
+    } finally {
+      host.unregister('session-smart-parent-effort');
+      clearSessionProvider('session-smart-parent-effort');
       setCustomProviderKeyReader(() => null);
       setCustomProviders([]);
     }
