@@ -1195,6 +1195,22 @@ describe('notificationService — channels 分发', () => {
     await invokeHandler(failed);
     expect(notificationCtor).toHaveBeenCalledTimes(3);
   });
+
+  // #9317 / unit: a done with no turn id and a failed preview read records only a
+  // send time. An alert keeps its own ledger, so a later needs-reply or error of
+  // the same task — even one that also has no id — must still toast.
+  it('still notifies an alert after a completion fell back to a send time', async () => {
+    const { initNotificationService } = await freshService();
+    initNotificationService(baseDeps(makeFeishuIm(null)));
+    getSessionNotificationTurnSignal.mockReturnValue(undefined);
+    readSessionNotificationPreview.mockRejectedValue(new Error('read unavailable'));
+    const channels = { desktop: true, feishu: false, mobile: false };
+    await invokeHandler({ sessionId: 's1', title: 'Task', kind: 'done', channels });
+    expect(notificationCtor).toHaveBeenCalledTimes(1);
+    await invokeHandler({ sessionId: 's1', title: 'Task', kind: 'needs-reply', channels });
+    await invokeHandler({ sessionId: 's1', title: 'Task', kind: 'error', channels });
+    expect(notificationCtor).toHaveBeenCalledTimes(3);
+  });
 });
 
 

@@ -81,6 +81,25 @@ const QUEUE_DEBOUNCE_MS = 500;
 let pendingReminderOwnerId: string | null = null;
 const notifiedPendingRequests = new Map<string, Set<string>>();
 
+/**
+ * Identity of one needs-reply or error, built from the turn that produced it.
+ * The same turn plus the same pending request (or the same failure) is one
+ * desktop toast; a later turn, or a different request, is a new one.
+ * No turn clock means no identity: the caller still notifies, it just cannot
+ * collapse a repeat.
+ */
+export function sessionAlertEventId(
+  kind: 'error' | 'needs-reply',
+  turnStartedAt: number | null | undefined,
+  requestKey?: string,
+): string | undefined {
+  if (typeof turnStartedAt !== 'number' || !Number.isFinite(turnStartedAt) || turnStartedAt <= 0) {
+    return undefined;
+  }
+  const turn = `turn:${Math.floor(turnStartedAt)}`;
+  return kind === 'error' ? `${turn}:error` : `${turn}:${requestKey ?? 'needs-reply'}`;
+}
+
 interface UseSessionRunningStatusOptions {
   /**
    * Fired when a session transitions running → done. Filters out errored
@@ -89,13 +108,13 @@ interface UseSessionRunningStatusOptions {
    * the consumer's. The in-app dot still skips active session via its own
    * branch; the callback fires for any non-error done.
    */
-  onSessionDone?: (sessionId: string) => void;
+  onSessionDone?: (sessionId: string, alertEventId?: string) => void;
   /**
    * Fired when a session transitions running → terminal error. It mirrors
    * onSessionDone's no-active-session-filter policy so the consumer can gate
    * on focus state and notification channel settings.
    */
-  onSessionError?: (sessionId: string) => void;
+  onSessionError?: (sessionId: string, alertEventId?: string) => void;
   /**
    * Fired when a session enters a pending state needing user input
    * (`pendingAskUser` / `pendingPermission` / `pendingPlanReview` /
@@ -103,7 +122,12 @@ interface UseSessionRunningStatusOptions {
    * edge fires for a new request (or new input-handoff step) in the session.
    * Like onSessionDone, no active-session filter; the consumer decides.
    */
-  onSessionNeedsReply?: (sessionId: string, options?: { inputHandoff: true; inputHandoffRequestId?: string }) => void;
+  onSessionNeedsReply?: (
+    sessionId: string,
+    options?:
+      | { inputHandoff: true; inputHandoffRequestId?: string; alertEventId?: string }
+      | { alertEventId: string },
+  ) => void;
 }
 
 /**
@@ -247,7 +271,11 @@ export function useSessionRunningStatus(
           // 的 done 语义。清除只能来自用户处置横幅或 pending-alerts 派生收敛。
           addSessionAttention(sessionId, 'error');
           liveErrorMarkedRef.current.add(sessionId);
-          if (!notificationOwnedByScheduler) onSessionErrorRef.current?.(sessionId);
+          if (!notificationOwnedByScheduler) {
+            const alertEventId = sessionAlertEventId('error', info?.turnStartedAt);
+            if (alertEventId) onSessionErrorRef.current?.(sessionId, alertEventId);
+            else onSessionErrorRef.current?.(sessionId);
+          }
           continue;
         }
 
@@ -392,14 +420,24 @@ export function useSessionRunningStatus(
               && !info.hasPendingPermission
               && !info.hasPendingPlanReview
               && !info.hasPendingPluginSetup;
+          const alertEventId = sessionAlertEventId(
+            'needs-reply',
+            info.turnStartedAt,
+            (newKeys ?? keys)?.join(','),
+          );
           if (handoffOnly) {
             const handoffKey = (newKeys ?? keys)?.find((key) => key.startsWith('handoff:'));
             const requestId = handoffKey?.slice('handoff:'.length, handoffKey.lastIndexOf(':'));
             onSessionNeedsReplyRef.current?.(id, {
               inputHandoff: true,
               ...(requestId ? { inputHandoffRequestId: requestId } : {}),
+              ...(alertEventId ? { alertEventId } : {}),
             });
-          } else onSessionNeedsReplyRef.current?.(id);
+          } else if (alertEventId) {
+            onSessionNeedsReplyRef.current?.(id, { alertEventId });
+          } else {
+            onSessionNeedsReplyRef.current?.(id);
+          }
         }
         // Other hook consumers only read running status. They may add the
         // in-app dot, but must not consume the system notification owner's edge.

@@ -154,12 +154,27 @@ interface ShowSessionEventPayload {
 const liveNotifications = new Set<Notification>();
 type NotifiedReply = { eventId: string } | { fallbackSentAt: number };
 const notifiedReplies = new Map<string, NotifiedReply>();
+/**
+ * needs-reply / error 的去重账本，和上面的完成通知账本分开。完成通知在拿不到
+ * 轮次标识、正文又读失败时会记一条只有发送时刻的兜底；如果告警也来查那本账，
+ * 同一任务随后的无标识告警会被当成“已经通知过”吞掉。两本账互不读取。
+ */
+const notifiedAlerts = new Map<string, string>();
 const pendingFeishuReplies = new Set<string>();
 const pendingFeishuFallbacks = new Map<string, number>();
 type ReplyNotificationChannel = 'desktop' | 'mobile' | 'feishu';
 
 function replyNotificationKey(scope: string | number, sessionId: string, channel: ReplyNotificationChannel): string {
   return `${scope}:${sessionId}:${channel}`;
+}
+
+/**
+ * 同一告警标识只弹一次。没有标识的调用（旧客户端，或这一轮还没有开始时刻）
+ * 不去重，照常通知：宁可多弹一次，也不能把新的提问或失败吞掉。
+ */
+function wasAlertNotified(key: string, alertEventId: string | undefined): boolean {
+  if (!alertEventId) return false;
+  return notifiedAlerts.get(key) === alertEventId;
 }
 
 function wasReplyNotified(key: string, eventId: string | undefined): boolean {
@@ -392,19 +407,20 @@ export function initNotificationService(deps: NotificationServiceDeps): void {
         if (markAttention && isSessionNotificationsMutedSync(sessionId)) return;
         const fallbackBody = teammate && kind === 'done' ? getTeammateNotificationFallback() : undefined;
         const mobileTeammateBotId = preview?.teammateBotId ?? teammateBotId;
-        if (wantDesktop && (kind !== 'done'
-          ? !wasReplyNotified(desktopKey, alertEventId)
-          : !wasReplyNotified(desktopKey, eventId))) {
+        if (wantDesktop && (kind === 'done'
+          ? !wasReplyNotified(desktopKey, eventId)
+          : !wasAlertNotified(desktopKey, alertEventId))) {
           try {
             const accepted = showDesktopSessionEvent(getWindow, {
               sessionId, title: notificationTitle, kind, teammate, markAttention, avatarJpeg,
               messageClientId: preview?.reply?.clientId,
               body: teammate ? notificationPreview(detail ?? '', 240, getNotificationImageLabel()) || fallbackBody : undefined,
             });
-            if (accepted && (kind === 'done' ? eventId : alertEventId)) {
-              notifiedReplies.set(desktopKey, { eventId: (kind === 'done' ? eventId : alertEventId)! });
-            } else if (kind === 'done' && accepted) {
-              notifiedReplies.set(desktopKey, { fallbackSentAt: Date.now() });
+            if (kind === 'done' && accepted) {
+              notifiedReplies.set(desktopKey, eventId ? { eventId } : { fallbackSentAt: Date.now() });
+            } else if (accepted && alertEventId) {
+              // 只记下有标识的告警。无标识的不留记录，下一次同样无标识的调用仍要通知。
+              notifiedAlerts.set(desktopKey, alertEventId);
             }
           } catch (err) {
             log.warn('[notification] desktop reply notification failed (non-fatal)', err);

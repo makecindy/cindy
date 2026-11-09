@@ -1240,7 +1240,11 @@ function ExpandedView({
   const unnamedLabelRef = useRef('');
   unnamedLabelRef.current = t('ccAgent.common.unnamedSession');
   const fireSessionNotification = useCallback(
-    (sessionId: string, kind: 'done' | 'error' | 'needs-reply', options?: { inputHandoff: true; inputHandoffRequestId?: string }) => {
+    (sessionId: string, kind: 'done' | 'error' | 'needs-reply', options?: {
+      inputHandoff?: true;
+      inputHandoffRequestId?: string;
+      alertEventId?: string;
+    }) => {
       const session = findSessionNotificationSession(sessionId, [
         sessionsRef.current,
         allSessionsForNotificationRef.current,
@@ -1296,11 +1300,17 @@ function ExpandedView({
     [fireSessionNotification],
   );
   const handleSessionError = useCallback(
-    (sessionId: string) => fireSessionNotification(sessionId, 'error'),
+    (sessionId: string, alertEventId?: string) => fireSessionNotification(
+      sessionId, 'error', alertEventId ? { alertEventId } : undefined,
+    ),
     [fireSessionNotification],
   );
   const handleSessionNeedsReply = useCallback(
-    (sessionId: string, options?: { inputHandoff: true; inputHandoffRequestId?: string }) => fireSessionNotification(sessionId, 'needs-reply', options),
+    (sessionId: string, options?: {
+      inputHandoff?: true;
+      inputHandoffRequestId?: string;
+      alertEventId?: string;
+    }) => fireSessionNotification(sessionId, 'needs-reply', options),
     [fireSessionNotification],
   );
 

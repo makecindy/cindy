@@ -820,6 +820,11 @@ export interface AgentStatus {
   contextWindowFromRuntime?: boolean;
   isRunning: boolean;
   startedAt: number | null;
+  /**
+   * Clock of the turn that most recently started. Unlike `startedAt`, this stays
+   * after the agent stops so a following needs-reply or error can name that turn.
+   */
+  lastStartedAt?: number | null;
   /** Turn-cumulative output tokens for live TPS. */
   outputTokens?: number;
   /** Generation-only milliseconds including any open interval at emit time. */
@@ -3079,6 +3084,7 @@ function createInitialState(): SessionChatState {
       contextWindow: 0,
       isRunning: false,
       startedAt: null,
+      lastStartedAt: null,
     },
     error: null,
     usageLimitRecovery: null,
@@ -3165,6 +3171,7 @@ export const EMPTY_SESSION_STATE: SessionChatState = Object.freeze({
     contextWindow: 0,
     isRunning: false,
     startedAt: null,
+    lastStartedAt: null,
   },
   error: null,
   usageLimitRecovery: null,
@@ -6483,6 +6490,7 @@ export function handleStreamEvent(
             ...state.agentStatus,
             isRunning: true,
             startedAt: state.agentStatus.startedAt ?? Date.now(),
+            lastStartedAt: state.agentStatus.lastStartedAt ?? state.agentStatus.startedAt ?? Date.now(),
           },
         };
       }
@@ -6604,6 +6612,7 @@ export function handleStreamEvent(
           ...state.agentStatus,
           isRunning: false,
           startedAt: null,
+          lastStartedAt: state.agentStatus.lastStartedAt ?? state.agentStatus.startedAt,
         },
       };
     }
@@ -6709,6 +6718,7 @@ export function handleStreamEvent(
                     ...state.agentStatus,
                     isRunning: true,
                     startedAt: state.agentStatus.startedAt ?? Date.now(),
+                    lastStartedAt: state.agentStatus.lastStartedAt ?? state.agentStatus.startedAt ?? Date.now(),
                   }),
             },
           };
@@ -6732,6 +6742,7 @@ export function handleStreamEvent(
             ...state.agentStatus,
             isRunning: true,
             startedAt: state.agentStatus.startedAt ?? Date.now(),
+            lastStartedAt: state.agentStatus.lastStartedAt ?? state.agentStatus.startedAt ?? Date.now(),
           },
         };
       }
@@ -6826,6 +6837,7 @@ export function handleStreamEvent(
           ...state.agentStatus,
           isRunning: false,
           startedAt: null,
+          lastStartedAt: state.agentStatus.lastStartedAt ?? state.agentStatus.startedAt,
         },
       };
     }
@@ -7362,6 +7374,7 @@ function forceFinalizeOnSessionClosed(state: SessionChatState): SessionChatState
       ...finalized.agentStatus,
       isRunning: false,
       startedAt: null,
+      lastStartedAt: finalized.agentStatus.lastStartedAt ?? finalized.agentStatus.startedAt,
     },
   };
 }
@@ -7474,6 +7487,9 @@ function handleStatusUpdate(
     return state;
   }
   const startedAt = update.isRunning ? (state.agentStatus.startedAt ?? Date.now()) : null;
+  // Remember the turn that just ran. `startedAt` is cleared the moment the agent
+  // stops, but a needs-reply or error that follows still has to name this turn.
+  const lastStartedAt = startedAt ?? state.agentStatus.lastStartedAt ?? null;
 
   // skipTurnReset: side-channel running 信号 (mivo MJ 按钮等不走 LLM 的后台任务)。
   // 只翻 isRunning + 接收新的 status 文案("Mivo …"), 不当 turn 起止处理 —
@@ -7491,6 +7507,7 @@ function handleStatusUpdate(
         status: update.status || state.agentStatus.status,
         isRunning: update.isRunning,
         startedAt,
+        lastStartedAt,
         sideTaskRunning: update.isRunning,
       },
       isStreaming: update.isRunning
@@ -7581,6 +7598,7 @@ function handleStatusUpdate(
       contextWindowFromRuntime: hasContextSnapshot || state.agentStatus.contextWindowFromRuntime,
       isRunning: update.isRunning,
       startedAt,
+      lastStartedAt,
       ...mergeLiveGenerationStatus(isTurnStart, update, state.agentStatus),
     },
     activeTurnRetryText: isTurnComplete ? null : state.activeTurnRetryText,
@@ -10448,6 +10466,12 @@ export interface SessionStatusInfo {
   hasActionableInputHandoff?: boolean;
   /** Stable identities for pending interactions; changes even when pending booleans stay true. */
   pendingRequestKeys?: readonly string[];
+  /**
+   * The turn this snapshot belongs to. Started when the agent begins running and
+   * kept after it stops, so a later needs-reply or error can name that turn.
+   * Absent for a pending card that appeared without a running edge in this window.
+   */
+  turnStartedAt?: number | null;
 }
 
 /**
@@ -10548,6 +10572,9 @@ function computeRunningSnapshot(): Map<string, SessionStatusInfo> {
     const hasActionableInputHandoff = !!state.pendingInputHandoff &&
       inputHandoffDialogHasContent(state.pendingInputHandoff, false);
     const requestKeys = pendingRequestKeys(state);
+    // Keep the turn clock after the agent stops. A needs-reply or error that
+    // follows this turn has to name the same turn, not "whatever is running now".
+    const turnStartedAt = state.agentStatus.startedAt ?? state.agentStatus.lastStartedAt ?? null;
 
     // 后台 subagent 折算:主 turn 已结束但 wake 型后台任务(local_agent /
     // local_workflow)还在跑,或正处于「任务终态 → wake turn 启动」的桥接空窗
@@ -10572,6 +10599,7 @@ function computeRunningSnapshot(): Map<string, SessionStatusInfo> {
         hasPendingInputHandoff,
         hasActionableInputHandoff,
         pendingRequestKeys: requestKeys,
+        turnStartedAt,
       });
     } else if (
       hasPendingAskUser ||
@@ -10592,6 +10620,7 @@ function computeRunningSnapshot(): Map<string, SessionStatusInfo> {
         hasPendingInputHandoff,
         hasActionableInputHandoff,
         pendingRequestKeys: requestKeys,
+        turnStartedAt,
       });
     }
   }
@@ -10619,6 +10648,7 @@ function computeRunningSnapshot(): Map<string, SessionStatusInfo> {
       hasActionableInputHandoff: !!state.pendingInputHandoff &&
         inputHandoffDialogHasContent(state.pendingInputHandoff, false),
       pendingRequestKeys: pendingRequestKeys(state),
+      turnStartedAt: state.agentStatus.startedAt ?? state.agentStatus.lastStartedAt ?? null,
     });
   }
 
@@ -10887,6 +10917,7 @@ function syncActiveTurnsFromMain(): void {
               status: s.agentStatus.status || 'Running',
               isRunning: true,
               startedAt: s.agentStatus.startedAt ?? Date.now(),
+              lastStartedAt: s.agentStatus.lastStartedAt ?? s.agentStatus.startedAt ?? Date.now(),
             },
           };
         });
@@ -16639,6 +16670,7 @@ function stopSession(
         contextWindow: s.agentStatus.contextWindow,
         isRunning: false,
         startedAt: null,
+        lastStartedAt: s.agentStatus.lastStartedAt ?? s.agentStatus.startedAt,
       },
     };
   });
@@ -17289,6 +17321,7 @@ async function clearSessionAfterGuardImpl(sessionId: string, clearedAt: string):
         contextWindow: 0,
         isRunning: false,
         startedAt: null,
+        lastStartedAt: null,
       },
     };
   });
