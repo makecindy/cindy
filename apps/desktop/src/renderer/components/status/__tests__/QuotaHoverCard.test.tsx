@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { fireEvent, isInaccessible, render, screen, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { ClaudeSubscriptionUsageSnapshot } from '../../../../shared/claudeSubscriptionUsage';
@@ -144,12 +144,12 @@ describe('QuotaHoverCard', () => {
     const title = screen.getByText(longTitle);
     expect(title.classList.contains('truncate')).toBe(true);
     expect(title.getAttribute('title')).toBe(longTitle);
-    const countdown = screen.getByText('1小时 5分钟');
+    const countdown = screen.getByTitle('1小时 5分钟后重置');
     expect(countdown.classList.contains('truncate')).toBe(true);
     expect(countdown.getAttribute('title')).toBe('1小时 5分钟后重置');
   });
 
-  it('keeps repeated row wording in embedded tooltips and progressbar labels', () => {
+  it('keeps full embedded quota and reset wording available to screen readers', () => {
     render(
       <UsageCard
         variant="embedded"
@@ -175,6 +175,8 @@ describe('QuotaHoverCard', () => {
       '剩余 96%',
     );
     expect(screen.queryByText('剩余 96%')).toBeNull();
+    expect(isInaccessible(screen.getByText('1小时 5分钟'))).toBe(true);
+    expect(isInaccessible(screen.getByText('1小时 5分钟后重置'))).toBe(false);
     // An elapsed window has no duration to show, so it keeps the pending notice.
     expect(screen.getByText('等待重置数据更新')).toBeTruthy();
   });

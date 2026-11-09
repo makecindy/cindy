@@ -200,11 +200,12 @@ function WindowBlock({
   if (compact) {
     // 嵌入态(设置页)一行一个窗口:标题 | 进度条 | 百分比 | 重置倒计时,列宽由外层 grid 统一,
     // 各行进度条左右对齐。明细(绝对重置时间 / 节奏 / breakdown)只在悬浮卡里展示。
-    // 每行都重复的「剩余」「后重置」只放在悬停提示里,进度条的读屏文案仍是完整的 percentText。
+    // 可见行省略重复的「剩余」「后重置」;进度条和重置说明的读屏文案仍保留完整语义。
     const percentValue = new Intl.NumberFormat(locale, {
       style: 'percent',
       maximumFractionDigits: 0,
     }).format(Math.round(showRemaining ? 100 - usedPercent : usedPercent) / 100);
+    const resetDuration = formatQuotaResetDuration(window.resetsAt, nowMs, t);
     return (
       <section
         data-testid="quota-window"
@@ -219,7 +220,14 @@ function WindowBlock({
           className="min-w-0 truncate text-right text-12 text-[var(--text-secondary)]"
           title={resetCountdown ?? undefined}
         >
-          {formatQuotaResetDuration(window.resetsAt, nowMs, t) ?? resetCountdown}
+          {resetDuration === null ? (
+            resetCountdown
+          ) : (
+            <>
+              <span aria-hidden="true">{resetDuration}</span>
+              <span className="sr-only">{resetCountdown}</span>
+            </>
+          )}
         </span>
       </section>
     );
