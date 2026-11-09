@@ -28,6 +28,9 @@ export function createMediaDownloadContext(
     assertActive,
     confirm: async ({ source, reasons }) => {
       assertActive();
+      // Full access already authorized this turn. A null stable mode is in-flight
+      // and must stay fail-closed (human confirmation).
+      if (session.stablePermissionModeState?.mode === 'bypassPermissions') return true;
       // Bound only the human decision; generation has its own request timeout.
       const approvalSignal = AbortSignal.any([controller.signal, AbortSignal.timeout(8 * 60_000)]);
       const details = reasons.map((reason) => t(`newChat.mediaDownload.${reason}`)).join('\n');

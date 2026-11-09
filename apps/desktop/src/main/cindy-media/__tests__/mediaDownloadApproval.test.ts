@@ -6,12 +6,13 @@ const mocks = vi.hoisted(() => ({ request: vi.fn() }));
 vi.mock('../../i18n.js', () => ({ t: (key: string) => key }));
 vi.mock('../../maker-ipc/interactionRouter.js', () => ({ requestHostInteraction: mocks.request }));
 
-function hostSession() {
+function hostSession(permissionMode?: string) {
   let status = 'active';
   let onStatus = () => {};
   const unsubscribe = vi.fn();
   const session = {
     id: 'task-1', instanceId: 'instance-1',
+    stablePermissionModeState: { mode: permissionMode },
     runHostInteraction: (_request: unknown, resolve: () => Promise<unknown>) => resolve(),
     getTurnGeneration: () => 1,
     getStatus: () => status,
@@ -73,6 +74,27 @@ describe('Host media permission', () => {
     try {
       await expect(ctx.confirm({ source: 'https://cdn.example.com', reasons: ['network'] })).rejects.toMatchObject({ code: 'MEDIA_DOWNLOAD_DEFERRED' });
       expect(ctx.signal?.aborted).toBe(true);
+    } finally { ctx.dispose?.(); }
+  });
+
+  it('skips the download confirmation under full access', async () => {
+    mocks.request.mockClear();
+    const host = hostSession('bypassPermissions');
+    const ctx = createMediaDownloadContext(host.session, () => true);
+    try {
+      await expect(ctx.confirm({ source: 'https://cdn.example.com', reasons: ['source'] })).resolves.toBe(true);
+      expect(mocks.request).not.toHaveBeenCalled();
+    } finally { ctx.dispose?.(); }
+  });
+
+  it('still asks for confirmation when the session is not in full access', async () => {
+    mocks.request.mockClear();
+    const host = hostSession('auto');
+    const ctx = createMediaDownloadContext(host.session, () => true);
+    mocks.request.mockResolvedValue({ kind: 'permission', behavior: 'allow' });
+    try {
+      await expect(ctx.confirm({ source: 'https://cdn.example.com', reasons: ['source'] })).resolves.toBe(true);
+      expect(mocks.request).toHaveBeenCalledOnce();
     } finally { ctx.dispose?.(); }
   });
 
