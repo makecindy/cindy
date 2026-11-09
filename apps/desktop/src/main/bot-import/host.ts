@@ -20,7 +20,7 @@ import { createBotCanonicalSession, createBotProfile, getBotMemoryService, getBo
 import { readBotProfileFolder, writeBotProfileFolder, BOT_PROFILE_TEXT_MAX_BYTES } from '../maker-ipc/botProfileFolder.js';
 import { splitImportedMemoryText } from '../maker-ipc/botMemoryService.js';
 import { memoryFileContent } from './memoryFiles.js';
-import { importBotSkillFiles, normalizeBotSkillSlug, validateBotSkillFiles } from '../maker-ipc/botSkillStore.js';
+import { importBotSkillDirectory, importBotSkillFiles, normalizeBotSkillSlug, validateBotSkillFiles } from '../maker-ipc/botSkillStore.js';
 import { withBotProfileLocks } from '../maker-ipc/botProfileLock.js';
 import { getRoutineEngine, routineTools, updateBotRoutineLifecycle } from '../routines/service.js';
 import { previewImportRedactions, retainedImportRedactions, resolveImportReferences, selectedImportEnvironment, selectedImportRedactions } from './environmentSelection.js';
@@ -36,6 +36,7 @@ import { changeSourceAutomationState } from './takeover.js';
 import { verifyImportedAutomation } from './verification.js';
 import { importMemoryMedia } from './memoryMedia.js';
 import { projectImportedSkill } from './skillResources.js';
+import { captureSkillArchive, materializeSkillArchive } from './skillArchive.js';
 import { assertImportedAutomationReady } from './automationRuntime.js';
 import { BOT_PACKAGE_IDS, applyNativeLocale, readNativeBotPackage } from './nativePackage.js';
 import type { BotMarketEntry, BotPackageIdentity } from '../../shared/botMarket.js';
@@ -684,6 +685,10 @@ export async function startCompanionImport(selection: CompanionImportSelection, 
   };
   const transferDeps: TransferDeps = {
     assertOwner: scope.assert,
+    async captureSkill(botId, item) {
+      const { ref, redactions } = await captureSkillArchive(botId, item, companionEnvironmentStore, contentSecrets, scope.assert);
+      item.skillArchive = ref; item.archiveRedactions = redactions; item.files = undefined;
+    },
     async validateItems(items) {
       // Repaired manifests can reveal credentials that were unavailable at preview time.
       const previousMaskCount = knownValues.size;
@@ -696,7 +701,7 @@ export async function startCompanionImport(selection: CompanionImportSelection, 
       // Capturing lazily selected resources may grow even a rejected selection.
       const cached = previews.get(selection.previewId);
       if (cached?.value === snapshot) await retainPreview(selection.previewId, cached, scope.assert, true);
-      for (const item of items.filter(item => item.view.category === 'skills' && !item.captureIssue)) {
+      for (const item of items.filter(item => item.view.category === 'skills' && !item.captureIssue && !item.skillArchive)) {
         try {
           const slug = skillSlug(item);
           validateBotSkillFiles(slug, projectImportedSkill(item.files ?? [], slug, contentSecrets).files);
@@ -734,8 +739,12 @@ export async function startCompanionImport(selection: CompanionImportSelection, 
       let persistedItem = item;
       if (item.view.category === 'skills') {
         const slug = skillSlug(item);
-        const projected = projectImportedSkill(item.files ?? [], slug, contentSecrets);
-        await importBotSkillFiles(scope.root, botId, slug, projected.files, scope.assert, item.view.enabled !== false);
+        if (item.skillArchive) await importBotSkillDirectory(scope.root, botId, slug,
+          directory => materializeSkillArchive(item.skillArchive!, directory, companionEnvironmentStore, contentSecrets, scope.assert, true, slug), scope.assert, item.view.enabled !== false);
+        else {
+          const projected = projectImportedSkill(item.files ?? [], slug, contentSecrets);
+          await importBotSkillFiles(scope.root, botId, slug, projected.files, scope.assert, item.view.enabled !== false);
+        }
       } else if (snapshot.nativePackage && item.role === 'identity') {
         // Native identity belongs to SOUL, never reference/user memory.
         completedDocumentIds.add(item.view.id);
@@ -820,6 +829,7 @@ export async function startCompanionImport(selection: CompanionImportSelection, 
         for (const [id, text] of documentEntries(persistedItem)) { environment.documents ??= {}; environment.documents[id] = text; }
         if (item.view.category === 'skills') {
           const slug = skillSlug(item);
+          if (item.skillArchive) { environment.skillArchives ??= {}; environment.skillArchives[slug] = item.skillArchive; }
           const originals = projectImportedSkill(item.files ?? [], slug, contentSecrets).originals;
           if (originals) { environment.skillFiles ??= {}; environment.skillFiles[slug] = originals; }
         }
@@ -866,6 +876,7 @@ export async function startCompanionImport(selection: CompanionImportSelection, 
         fileExecutables: Object.fromEntries(items.flatMap(item => item.asset && !isMemoryItem(item) ? [[item.asset.name, item.asset.executable === true]] : [])),
         memoryFiles: Object.fromEntries(items.flatMap(memoryFileEntries)),
         skillFiles,
+        skillArchives: Object.fromEntries(items.filter(item => item.skillArchive).map(item => [skillSlug(item), item.skillArchive!])),
         documents,
         contentRedactions: publicationRedactions(items),
         sourceAutomations: snapshot.source.kind === 'cindy' ? [] : items.flatMap(item => item.automation ? [{ entryId: item.view.id, kind: snapshot.source.kind as 'hermes' | 'openclaw', original: item.automation.original }] : []),
