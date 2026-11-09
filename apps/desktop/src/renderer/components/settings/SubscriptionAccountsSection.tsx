@@ -329,7 +329,7 @@ export function SubscriptionAccountsSection({
                           </div>
                         </div>
                       </div>
-                      <div className="ml-auto flex shrink-0 items-center gap-1.5">
+                      <div className="ml-auto flex max-w-full shrink-0 flex-wrap items-center justify-end gap-1.5">
                         <Select
                           {...accountSetting.controlProps}
                           label={t('providerGroup.member.limitAria', { name })}

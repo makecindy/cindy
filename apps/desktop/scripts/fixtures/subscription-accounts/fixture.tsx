@@ -76,7 +76,7 @@ function Section({ codexPool }: { codexPool: boolean }) {
 
 void mountPage({
   host: (ctx) => {
-    const isCodex = ctx.case === 'codex';
+    const isCodex = ctx.case === 'codex' || ctx.case === 'narrow-weight';
     let view: SubscriptionPoolView = {
       providerId: isCodex ? 'openai' : 'anthropic',
       configured: true,
@@ -146,9 +146,9 @@ void mountPage({
   render: (ctx) => (
     <main
       className="mx-auto w-full max-w-[680px] min-w-0"
-      style={ctx.case === 'narrow' ? { maxWidth: 320 } : undefined}
+      style={ctx.case === 'narrow' || ctx.case === 'narrow-weight' ? { maxWidth: 320 } : undefined}
     >
-      <Section codexPool={ctx.case === 'codex'} />
+      <Section codexPool={ctx.case === 'codex' || ctx.case === 'narrow-weight'} />
     </main>
   ),
 });

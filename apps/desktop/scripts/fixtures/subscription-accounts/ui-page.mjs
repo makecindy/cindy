@@ -9,6 +9,7 @@ export default {
   cases: {
     default: { about: 'Three Claude accounts: provider card on the default row, a low weekly quota, a paused limited account' },
     narrow: { about: '320-pixel content width without clipped account controls' },
+    'narrow-weight': { about: '320-pixel content width with task limit, weight, assignment and account menu controls' },
     codex: { about: 'Codex accounts and weight strategy' },
     error: { about: 'Unavailable status read and inline retry on focus' },
   },
@@ -28,7 +29,7 @@ export default {
         return `${Math.round(box.left)}-${Math.round(box.right)}`;
       }),
     );
-    assert.equal(bars.length, ui.case === 'codex' ? 6 : 8);
+    assert.equal(bars.length, ui.case === 'codex' || ui.case === 'narrow-weight' ? 6 : 8);
     assert.deepEqual([...new Set(bars)], [bars[0]]);
     await page.getByRole('button', { name: await ui.t('providerGroup.member.moreAria', { name: 'alex@example.com' }) }).click();
     await page.getByRole('menuitem', { name: await ui.t('subscriptionAccounts.openDirectory') }).waitFor();
