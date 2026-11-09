@@ -184,7 +184,7 @@ describe('shared session event notifications', () => {
       inputHandoff: true, remoteDevice: true, remoteDeviceId: 'host',
     });
     expect(showSessionEvent).toHaveBeenCalledExactlyOnceWith({
-      sessionId: 'remote-handoff', title: 'Task', kind: 'needs-reply', markAttention: false,
+      sessionId: 'remote-handoff', title: 'Task', kind: 'needs-reply', markAttention: false, remoteDeviceId: 'host',
       channels: { desktop: false, feishu: false, mobile: false },
     });
     expect(getSession).not.toHaveBeenCalled();
@@ -255,7 +255,7 @@ describe('shared session event notifications', () => {
     resolve(handled);
     await relay.waitForCompletionNotification('remote-task');
     expect(showSessionEvent).toHaveBeenCalledTimes(handled ? 0 : 1);
-    if (!handled) expect(showSessionEvent).toHaveBeenCalledWith({ sessionId: 'remote-task', title: 'Task', kind: 'done', markAttention: false, channels: { desktop: false, feishu: true, mobile: true } });
+    if (!handled) expect(showSessionEvent).toHaveBeenCalledWith({ sessionId: 'remote-task', title: 'Task', kind: 'done', markAttention: false, remoteDeviceId: 'host', channels: { desktop: false, feishu: true, mobile: true } });
     expect(markAttention).not.toHaveBeenCalled();
     expect(getRemoteSessionActivity('remote-task', 'host')).toMatchObject({ phase: 'completed', attention: true, compactDetail: 'Final result' });
     relay.replay([completed]);

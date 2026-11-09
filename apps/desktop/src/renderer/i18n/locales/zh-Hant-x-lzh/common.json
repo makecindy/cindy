@@ -10722,6 +10722,9 @@
         "stepFailed": "{{name}}此步生謬，未竟",
         "stepTimeout": "{{name}}久未竟，此步暫止",
         "stepUnavailable": "{{name}}今不可用，此步無從行",
+        "runtimeFailureReason": {
+          "unclaimed_timeout": "{{name}}逾候未始處理，此請已終。\n請夥伴之主查其電腦之 Cindy 運行與網路連線。"
+        },
         "runtimeFailure": {
           "REMOTE_DEVICE_LIMIT": "{{name}}不能回覆：同僚所在裝置所留之遠端差事數已達上限。\n請同僚之主封存暫不用之差事，或請遠方之機之主於「遠端與分享」中提高上限。",
           "REMOTE_TOTAL_LIMIT": "{{name}}不能回覆：遠方之機所留差事總數已達上限。\n請彼機之主釋暫不用之差事，或於「遠端與分享」中提高上限。",
@@ -19706,7 +19709,8 @@
     "removeTitle": "移出 {{name}}？",
     "removeDescription": "Cindy 將不再給這個帳號分配任務。CLI 登入和對話歷史仍保留在本機。",
     "failed": "無法讀取或更新帳號。請檢查 CLI 登入和網路連線後重試。",
-    "directory": "帳號目錄",
+    "openDirectory": "啟帳號目錄",
+    "openDirectoryFailed": "帳號目錄未能啟，或已移或已刪。",
     "loginAgain": "重登",
     "login": "登入"
   },

@@ -3,7 +3,7 @@
 // providers and reports readiness. It never imports auth, stores, agent runtimes or IPC.
 import '@fontsource-variable/inter';
 import '@fontsource-variable/jetbrains-mono';
-import 'harmonyos-sans-sc-webfont-splitted';
+import '../../../src/renderer/styles/cjk-webfont.css';
 import '../../../src/renderer/themes/colors';
 import '../../../src/renderer/styles/sortable.css';
 import type { ReactNode } from 'react';

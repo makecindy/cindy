@@ -330,7 +330,15 @@ vi.mock('@/session/ImageLightbox', () => ({
     return el('div', { 'data-testid': 'lightbox', 'data-url': url, 'data-count': String(images.length) });
   },
 }));
-vi.mock('@/session/MessageRenderer', () => ({
+vi.mock('@/session/MessageRenderer', async () => {
+  const { useSessionQuickSend } = await import('@/session/SessionQuickSendContext');
+  const { richAnswerText } = await import('@cindy/maker-shared/rich-answer');
+  const { createContext } = await import('react');
+  return { MessageHeavyContentVisibilityContext: createContext(true),
+  MarkdownBody: ({ text }: any) => {
+    const send = useSessionQuickSend();
+    return el('button', { 'data-testid': 'rich-group-send', disabled: !send, onClick: () => send?.('Visible rich reply') }, richAnswerText(text));
+  },
   MessagePayloadModal: ({ payload, onClose }: any) => payload
     ? el('div', { 'data-testid': 'diagramModal', 'data-source': payload.body },
       el('button', { 'data-testid': 'diagramModal.close', onClick: onClose }, '关闭'))
@@ -344,7 +352,8 @@ vi.mock('@/session/MessageRenderer', () => ({
         ? { kind: 'media', media: { kind: 'image', url: item.uri, previewable: false } }
         : { kind: 'file', title: item.name, body: '' }),
     }, item.name))),
-}));
+};
+});
 vi.mock('@/session/useBotGroupRemoteMedia', () => {
   const resolve = async (media: any) => ({ url: media.url, previewable: true, mimeType: 'image/png' });
   return { useBotGroupRemoteMedia: () => resolve };
@@ -1082,6 +1091,22 @@ describe('group timeline', () => {
     expect(h.chat.act).not.toHaveBeenCalled();
     await act(async () => toggle.click());
     expect(all('botGroup.notice')[0]?.textContent).not.toContain(`groupChat.notice.runtimeFailure.${runtimeFailureCode}.details`);
+  });
+
+  it.each([false, true])('shows unclaimed timeout guidance in main and thread without model setup advice (thread=%s)', async thread => {
+    h.chat.server = true;
+    await render(group({ messages: [message('failure', 1, { kind: 'notice', authorKind: 'system',
+      authorName: 'Bot', noticeCode: 'member-timeout', runtimeFailureCode: 'RUNTIME_TIMEOUT',
+      runtimeFailureReason: 'unclaimed_timeout', ...(thread ? { threadRootId: 'thread-root' } : {}) })] }),
+      'ready', thread ? 'thread-root' : '', '');
+    const notice = all('botGroup.notice')[0]!;
+    expect(notice.textContent).toContain('groupChat.notice.runtimeFailureReason.unclaimed_timeout.summary(name=Bot)');
+    expect(notice.textContent).not.toContain('runtimeFailure.RUNTIME_TIMEOUT');
+    const toggle = [...notice.querySelectorAll('button')].find(button => button.textContent === 'session.tail.showErrorDetails')!;
+    await act(async () => toggle.click());
+    expect(notice.textContent).toContain('groupChat.notice.runtimeFailureReason.unclaimed_timeout.details');
+    expect(notice.textContent).not.toContain('runtimeFailureSetupHint');
+    expect(h.chat.act).not.toHaveBeenCalled();
   });
 
   // #7769: model-switch advice must retain its computer location after disclosure.
@@ -2626,6 +2651,38 @@ describe('mobile group threads', () => {
     messages: [rootMessage()], plans: [], openPlan: null, serverBacked: true, ...overrides,
   });
 
+  it.each(['user', 'bot'] as const)('shows copy feedback for a %s message and restores the action after 1.5 seconds', async authorKind => {
+    vi.useFakeTimers();
+    const clipboard = vi.mocked((await import('expo-clipboard')).setStringAsync);
+    let finish!: () => void;
+    clipboard.mockReturnValueOnce(new Promise<boolean>(resolve => { finish = () => resolve(true); }));
+    await render(threadGroup({ messages: [message(rootId, 1, { authorKind, isSelf: authorKind === 'user', content: 'Copy this message' })] }), 'ready', undefined, '');
+    const id = `botGroup.thread.context.${rootId}.action.copy`;
+    await click(id);
+    expect(byId(id)!.disabled).toBe(true);
+    expect(byId(id)!.getAttribute('aria-label')).toBe('message.renderer.copyStateCopying');
+    await click(id);
+    expect(clipboard).toHaveBeenCalledExactlyOnceWith('Copy this message');
+    await act(async () => finish());
+    expect(byId(id)!.disabled).toBe(false);
+    expect(byId(id)!.getAttribute('aria-label')).toBe('message.renderer.copyStateCopied');
+    await act(async () => vi.advanceTimersByTime(1500));
+    expect(byId(id)!.getAttribute('aria-label')).toBe('groupChat.thread.copy');
+  });
+
+  it('does not report success when clipboard writing fails and lets the user retry', async () => {
+    const clipboard = vi.mocked((await import('expo-clipboard')).setStringAsync);
+    clipboard.mockRejectedValueOnce(new Error('Clipboard unavailable'));
+    await render(threadGroup(), 'ready', undefined, '');
+    const id = `botGroup.thread.context.${rootId}.action.copy`;
+    await click(id);
+    expect(byId(id)!.getAttribute('aria-label')).toBe('message.renderer.copyStateFailed');
+    expect(byId(id)!.disabled).toBe(false);
+    await click(id);
+    expect(clipboard).toHaveBeenCalledTimes(2);
+    expect(byId(id)!.getAttribute('aria-label')).toBe('message.renderer.copyStateCopied');
+  });
+
   // Unit: attachment-only messages retain footer actions without wrapping the attachment.
   it.each(['user', 'bot'] as const)('opens a thread from an attachment-only %s message using More', async authorKind => {
     h.chat.server = true;
@@ -3104,6 +3161,33 @@ vi.mock('@/session/ModelDocumentPreview', () => ({ ModelDocumentPreview: () => n
 vi.mock('@/session/BotGroupTextAttachmentPreview', () => ({ BotGroupTextAttachmentPreview: () => null, botGroupTextAttachmentPreviewKind: () => null }));
 vi.mock('@/session/NativeVideoPlayer', () => ({ NativeVideoPlayer: () => null }));
 vi.mock('@/session/mediaPlayerWebView', () => ({ RemoteMediaPlayerWebView: () => null }));
+
+// Unit: verify the group screen supplies its own sender in both main and thread surfaces.
+// Rich controls themselves are exercised in BotGroupMarkdownText.test.tsx.
+it.each([undefined, 'thread-root'])('sends a rich answer independently of the composer in %s', async threadRootId => {
+  h.chat.server = true;
+  const content = '```cindy-ui\n' + JSON.stringify({ seq: 1, version: 1, op: 'create', id: 'submit', kind: 'button', props: { label: 'Reply', send: 'Visible rich reply' } }) + '\n```';
+  const data = group({ openPlan: null, plans: [], messages: [message('rich-screen', 1, { authorBotId: 'mimi', content, threadRootId })] });
+  await render(data, 'ready', threadRootId, '');
+  await act(async () => h.row.onChangeText('Keep composer draft'));
+  expect(h.chat.act).not.toHaveBeenCalled();
+  await click('rich-group-send');
+  expect(h.chat.act).toHaveBeenCalledWith('send', { text: 'Visible rich reply', clientId: 'uuid-1', mentions: { all: false, botIds: [] } });
+  expect(h.row.value).toBe('Keep composer draft');
+  await render({ ...data, archived: true }, 'ready', threadRootId, '');
+  expect(byId('rich-group-send')!.disabled).toBe(true);
+});
+
+it('keeps a shared rich thread answer readable without inheriting the main group sender', async () => {
+  h.chat.server = true;
+  const content = '```cindy-ui\n' + JSON.stringify({ seq: 1, version: 1, op: 'create', id: 'submit', kind: 'button', props: { label: 'Reply', send: 'Visible rich reply' } }) + '\n```';
+  await render(group({ openPlan: null, plans: [], messages: [message('rich-share', 1, { authorKind: 'user', isSelf: false, threadShare: {
+    messageId: 'rich-original', threadRootId: 'thread-root', status: 'available', authorKind: 'bot', authorBotId: 'mimi',
+    authorName: 'Mimi', sharedByAuthor: false, content, attachments: [], createdAt: 1000, edited: false,
+  } })] }), 'ready', undefined, '');
+  expect(byId('rich-group-send')!.disabled).toBe(true);
+  expect(h.chat.act).not.toHaveBeenCalled();
+});
 
 // Behavior/performance: UI-only rerenders must not regroup the whole history; new data must.
 it('reuses history time grouping across unrelated UI renders and invalidates for messages', async () => {

@@ -10854,6 +10854,9 @@
         "stepFailed": "{{name}} encontrou um problema e não concluiu este passo",
         "stepTimeout": "{{name}} demorou demasiado, pelo que este passo foi parado",
         "stepUnavailable": "{{name}} está indisponível e não pode executar este passo",
+        "runtimeFailureReason": {
+          "unclaimed_timeout": "{{name}} não começou a processar dentro do prazo de espera. Este pedido terminou.\nPeça ao proprietário do parceiro para verificar se a Cindy está a funcionar e se o respetivo computador está ligado à rede."
+        },
         "runtimeFailure": {
           "REMOTE_DEVICE_LIMIT": "{{name}} não pode responder: o dispositivo do colega atingiu o limite de sessões remotas.\nPeça ao proprietário do colega para arquivar sessões não utilizadas ou ao proprietário do computador remoto para aumentar o limite em Acesso remoto e partilha.",
           "REMOTE_TOTAL_LIMIT": "{{name}} não pode responder: o computador remoto atingiu o limite total de sessões remotas.\nPeça ao proprietário desse computador para libertar sessões não utilizadas ou aumentar o limite em Acesso remoto e partilha.",
@@ -19965,7 +19968,8 @@
     "removeTitle": "Remover {{name}}?",
     "removeDescription": "A Cindy deixará de atribuir tarefas a esta conta. A sessão da CLI e o histórico de conversas permanecem neste computador.",
     "failed": "Não foi possível ler ou atualizar a conta. Verifique a sessão da CLI e a ligação à rede e tente novamente.",
-    "directory": "Pasta da conta",
+    "openDirectory": "Abrir pasta da conta",
+    "openDirectoryFailed": "Não foi possível abrir a pasta da conta. Pode ter sido movida ou eliminada.",
     "loginAgain": "Iniciar sessão novamente",
     "login": "Iniciar sessão"
   },

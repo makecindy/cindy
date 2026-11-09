@@ -25,7 +25,7 @@ import { UsageFilterSelect, type UsageFilterOption } from '@/components/settings
 import { UsageSeriesBars } from '@/components/settings/usage/UsageTokenBars';
 import { formatUsagePercent } from '@/components/settings/usage/formatUsagePercent';
 import { usageHistoryModelColor } from '@/components/settings/usage/usageHistoryColors';
-import { isUsageHistorySingleDay, usageRangeDay, type UsageHistoryRange } from '@/components/settings/usage/usageHistoryStats';
+import { isUsageHistorySingleDay, modelTokenTotal, usageRangeDay, type UsageHistoryRange } from '@/components/settings/usage/usageHistoryStats';
 import { Input } from '@/components/ui/input';
 import { SegmentedControl } from '@/components/ui/segmented-control';
 import { Spinner } from '@/components/ui/spinner';
@@ -49,6 +49,7 @@ import { providerShareComputerName, useProviderShareOwnerNameOf } from './provid
 import { deviceIdOfMemberKey, shareAgentDeviceIdOfMemberKey } from './providerUsageBreakdown';
 import {
   computerOrder,
+  currentComputerKey,
   filterUsageRows,
   groupUsageRows,
   keysByTokens,
@@ -321,9 +322,9 @@ export function ProviderUsageSection({
   );
   const series = useMemo(() => chartRows.flatMap((row) => row.day === null ? [] : [{
     day: row.day,
-    key: stack === 'party' ? row.party : stack === 'computer' ? row.computer ?? UNATTRIBUTED : modelKeyOf(row),
-    tokens: row.inputTokens + row.outputTokens,
-  }]), [chartRows, stack]);
+    key: stack === 'party' ? row.party : stack === 'computer' ? currentComputerKey(memberKeys, row.computer) ?? UNATTRIBUTED : modelKeyOf(row),
+    tokens: modelTokenTotal(row),
+  }]), [chartRows, memberKeys, stack]);
   const seriesOrder = useMemo(() => stack === 'party'
     ? parties.map((item) => item.key)
     : stack === 'computer'
@@ -634,7 +635,7 @@ function PartyTable({
       list,
       totals: summarizeUsageRows(list),
       today: summarizeUsageRows(todayByParty.get(party.key) ?? []).tokens,
-      computers: new Set(list.filter((row) => row.computer !== null && row.inputTokens + row.outputTokens > 0).map((row) => row.computer)).size,
+      computers: new Set(list.filter((row) => row.computer !== null && modelTokenTotal(row) > 0).map((row) => row.computer)).size,
       color: colorOf(party.key),
     };
   });
@@ -735,7 +736,7 @@ function PartyTable({
                       <td className={cn(tdClass, 'text-[var(--text-tertiary)]')}>{today > 0 ? formatShareTokens(today) : NONE}</td>
                     )}
                     <td className={cn(tdClass, used && 'text-[var(--text-primary)]')}>
-                      {used && totals.amount ? formatShareMoney(totals.amount) : NONE}
+                      {totals.amount ? formatShareMoney(totals.amount) : NONE}
                     </td>
                     {showComputers && (
                       <td className={cn(tdClass, 'text-[var(--text-tertiary)]')}>{computers > 0 ? computers : NONE}</td>
@@ -798,7 +799,7 @@ function ComputerTable({
   onToggle: (key: string) => void;
 }) {
   const { t } = useTranslation();
-  const keyOf = (row: ProviderUsageRow) => row.computer !== null && groupKeys.includes(row.computer) ? row.computer : null;
+  const keyOf = (row: ProviderUsageRow) => currentComputerKey(groupKeys, row.computer);
   const byComputer = groupUsageRows(filterUsageRows(rows, filter, { computer: true }), keyOf);
   const todayByComputer = groupUsageRows(filterUsageRows(rows, { ...filter, range: 'today' }, { computer: true }), keyOf);
   const computers = [...groupKeys, ...(byComputer.has(null) ? [null] : [])];
@@ -809,12 +810,12 @@ function ComputerTable({
         key,
         totals: summarizeUsageRows(list),
         today: summarizeUsageRows(todayByComputer.get(key) ?? []).tokens,
-        parties: new Set(list.filter((row) => row.inputTokens + row.outputTokens > 0).map((row) => row.party)).size,
+        parties: new Set(list.filter((row) => modelTokenTotal(row) > 0).map((row) => row.party)).size,
         color: colorOf(key),
       };
     })
-    // 组里的电脑都列；更早的记录只在这段时间用过时列。
-    .filter((item) => item.totals.tokens > 0 || (item.key !== null && groupKeys.includes(item.key)));
+    // 组里的电脑都列；更早的记录只在这段时间有 token 或金额时列。
+    .filter((item) => item.totals.tokens > 0 || item.totals.amount !== null || (item.key !== null && groupKeys.includes(item.key)));
   const total = items.reduce((sum, item) => sum + item.totals.tokens, 0);
   return (
     <>
@@ -880,7 +881,7 @@ function ComputerTable({
                     <td className={cn(TD_CLASS, 'text-[var(--text-tertiary)]')}>{today > 0 ? formatShareTokens(today) : NONE}</td>
                   )}
                   <td className={cn(TD_CLASS, used && 'text-[var(--text-primary)]')}>
-                    {used && totals.amount ? formatShareMoney(totals.amount) : NONE}
+                    {totals.amount ? formatShareMoney(totals.amount) : NONE}
                   </td>
                   <td className={cn(TD_CLASS, 'text-[var(--text-tertiary)]')}>{used ? parties : NONE}</td>
                 </tr>
@@ -908,7 +909,7 @@ function ModelTable({
   const { t } = useTranslation();
   const items = [...groupUsageRows(rows, modelKeyOf).entries()]
     .map(([key, list]) => ({ key, kind: list[0]!.kind, model: list[0]!.model, totals: summarizeUsageRows(list) }))
-    .filter((item) => item.totals.tokens > 0 || item.totals.turns > 0)
+    .filter((item) => item.totals.tokens > 0 || item.totals.turns > 0 || item.totals.amount !== null)
     .sort((a, b) => b.totals.tokens - a.totals.tokens || order.indexOf(a.key) - order.indexOf(b.key));
   const total = items.reduce((sum, item) => sum + item.totals.tokens, 0);
   if (items.length === 0) {
@@ -933,6 +934,7 @@ function ModelTable({
         <tbody>
           {items.map(({ key, kind, model, totals }) => {
             const color = colorOf(key);
+            const used = totals.tokens > 0;
             return (
               <tr key={key} data-testid="provider-usage-model">
                 <td className={cn(TD_CLASS, FIRST_COL_CLASS, 'text-left')}>
@@ -944,8 +946,8 @@ function ModelTable({
                     </span>
                   </span>
                 </td>
-                <td className={TD_CLASS}>{formatShareTokens(totals.tokens)}</td>
-                <ShareCell share={total > 0 ? totals.tokens / total : 0} color={color} />
+                <td className={TD_CLASS}>{used ? formatShareTokens(totals.tokens) : NONE}</td>
+                {used && total > 0 ? <ShareCell share={totals.tokens / total} color={color} /> : <td className={TD_CLASS}>{NONE}</td>}
                 <td className={TD_CLASS}>{formatShareTokens(totals.inputTokens)}</td>
                 <td className={TD_CLASS}>{formatShareTokens(totals.outputTokens)}</td>
                 <td className={TD_CLASS}>{formatShareTokens(totals.cacheReadTokens)}</td>
