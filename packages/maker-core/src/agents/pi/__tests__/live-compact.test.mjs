@@ -39,6 +39,7 @@ const FAKE_VENDOR_TOKENS = [
   ['lin', 'api', 'abcdefghijklmnopqrstuvwxyz0123'].join('_'),
   ['shpat', 'abcdefghijklmnopqrstuvwxyz0123'].join('_'),
   ['doo', 'v1', 'abcdefghijklmnopqrstuvwxyz0123'].join('_'),
+  ['dop', 'v1', 'abcdefghijklmnopqrstuvwxyz0123'].join('_'),
   ['SG', 'abcdefghijklmnopqrstuv', 'abcdefghijklmnopqrstuvwxyz0123456789AB'].join('.'),
   ['atlasv1', 'abcdefghijklmnopqrstuvwxyz0123456789'].join('.'),
   ['key', '0123456789abcdef0123456789abcdef'].join('-'),
@@ -52,6 +53,8 @@ const FAKE_LONG_JWT = ['eyJhbGciOiJSUzI1NiJ9', 'BD'.repeat(1945), 'c2lnbmF0dXJlL
 // 短载荷 JWT:claims 是 `{}` 时紧凑载荷只有 `e30` 三个字符,载荷下限设高了会整条漏掉。
 const FAKE_SHORT_JWT = ['eyJhbGciOiJub25lIn0', 'e30', 'c2lnbmF0dXJlMTIzNDU2'].join('.');
 const FAKE_BRACKET_PASSWORD = ['abc', '[defghijklmnop'].join('');
+// 带空格的口令:引号是明确边界,值整段打码。口令本身按词拼,源码里不出现连续形态。
+const FAKE_SPACED_PASSPHRASE = ['correct', 'horse', 'battery', 'staple'].join(' ');
 
 const extensionModule = await import('../../../../extensions/live-compact/index.ts');
 const registerLiveCompact = extensionModule.default;
@@ -189,6 +192,13 @@ describe('live compact spine selection', () => {
       [`{"Authorization":"Basic ${FAKE_BASIC}"}`, FAKE_BASIC],
       [`Authorization: Digest username="alice", response="${FAKE_BASIC}", nonce="abc"`, FAKE_BASIC],
       [`password="${FAKE_BRACKET_PASSWORD}"`, FAKE_BRACKET_PASSWORD],
+      // 引号里的值可能带空格:只认非空白的值类只吃到第一个词,剩下的口令尾巴会原样落盘。
+      [`password="${FAKE_SPACED_PASSPHRASE}"`, FAKE_SPACED_PASSPHRASE],
+      [`{"password":"${FAKE_SPACED_PASSPHRASE}"}`, FAKE_SPACED_PASSPHRASE],
+      [`PASSWORD="${FAKE_SPACED_PASSPHRASE}"`, FAKE_SPACED_PASSPHRASE],
+      [`passphrase = "${FAKE_SPACED_PASSPHRASE}"`, FAKE_SPACED_PASSPHRASE],
+      // 引号没闭合(输出被截断)时,值要一直吃到行尾,不能只打掉第一个词。
+      [`password="${FAKE_SPACED_PASSPHRASE}`, FAKE_SPACED_PASSPHRASE],
       [`postgres://cindy:${FAKE_DB_PASSWORD}@db.internal:5432/app`, FAKE_DB_PASSWORD],
       [`echo ${FAKE_NPM_TOKEN}`, FAKE_NPM_TOKEN],
       [`echo ${FAKE_GH_PAT}`, FAKE_GH_PAT],

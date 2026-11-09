@@ -1645,6 +1645,18 @@ function estimateTokens(message: any): number {
 
 // shadow 会落盘成 .txt,而 toolResult 里可能含 `export KEY=sk-...` 这类命令;
 // 写入前对常见凭证形态打码 —— 卡片里的路径是给模型 read 的,读到打码版比读到明文密钥安全。
+// 键名两类:大写下划线(env/配置的通用写法,只要以敏感后缀结尾就命中)与小写/驼峰/
+// 连字符显式列表(apiKey、refresh-token)。两类各一份定义、四种规则共用,免得两处漂。
+// 大写下划线键名只要以 KEY/TOKEN/SECRET/... 结尾就命中;MONKEY/TURKEY/HOCKEY/WHISKEY/
+// JOKEY 这类以 KEY 结尾的普通词用小 stoplist 挡掉;「MAX_TOKENS」「MODEL_TOKEN_LIMIT」
+// 这类不以后缀结尾的不受影响(后缀后必须紧跟引号?/=/:)。
+// 开头的 (?<![A-Z0-9_]) 是性能红线:没有它,连续大写/数字段会从每个位置重扫,
+// 128K 字符要 25 秒(实测);有它只从标识符起点尝试,同样输入 <1ms。redactSecrets
+// 跑在同步的 agent_before_settle 钩子里,卡住就是卡住整个 settle。
+const UPPER_SECRET_KEY =
+  "(?<![A-Z0-9_])[_A-Z0-9]*(?:KEY|TOKEN|SECRET|PASSWD|PASSWORD|PASSPHRASE|CREDENTIALS?|AUTH)(?<!MONKEY)(?<!TURKEY)(?<!HOCKEY)(?<!WHISKEY)(?<!JOKEY)";
+const LOWER_SECRET_KEY =
+  "(?:api[_-]?key|access[_-]?key|access[_-]?token|auth[_-]?token|session[_-]?token|refresh[_-]?token|id[_-]?token|client[_-]?secret|secret[_-]?key|private[_-]?key|password|passwd|passphrase|secret)";
 const REDACT_RULES: Array<[RegExp, string]> = [
   // PEM 私钥整块必须**排在最前**:键名规则会把 `private_key="-----BEGIN` 先换成 `[REDACTED]`,
   // 之后整块规则就认不出开始标记,密钥正文会原样留下。先按块整体吃掉,再让键名规则收尾。
@@ -1668,16 +1680,17 @@ const REDACT_RULES: Array<[RegExp, string]> = [
   [/((?:proxy-)?authorization["'`]?\s*[=:]\s*["'`]?(?:basic|token)\s+)(?!\[REDACTED)[A-Za-z0-9+/=._~-]{8,}/gi, "$1[REDACTED]"],
   // 键名规则按「类」匹配,不再枚举厂商:十多轮 review 的漏点全是同一种形态 ——
   // `AWS_SESSION_TOKEN=`、`NPM_TOKEN=`、`STRIPE_SECRET_KEY=` 这类「下划线大写 + 敏感后缀」。
-  // 大写下划线键名(env/配置的通用写法)只要以 KEY/TOKEN/SECRET/... 结尾就命中;
-  // MONKEY/TURKEY/HOCKEY/WHISKEY/JOKEY 这类以 KEY 结尾的普通词用小 stoplist 挡掉。
-  // 「MAX_TOKENS」「MODEL_TOKEN_LIMIT」这类不以后缀结尾的不受影响(后缀后必须紧跟引号?/=/:)。
-  // 开头的 (?<![A-Z0-9_]) 是性能红线:没有它,连续大写/数字段会从每个位置重扫,
-  // 128K 字符要 25 秒(实测);有它只从标识符起点尝试,同样输入 <1ms。redactSecrets
-  // 跑在同步的 agent_before_settle 钩子里,卡住就是卡住整个 settle。
-  [/((?<![A-Z0-9_])[_A-Z0-9]*(?:KEY|TOKEN|SECRET|PASSWD|PASSWORD|PASSPHRASE|CREDENTIALS?|AUTH)(?<!MONKEY)(?<!TURKEY)(?<!HOCKEY)(?<!WHISKEY)(?<!JOKEY)["'`]?\s*[=:]\s*)(["'`]?)(?!\[REDACTED)([^\s"'`]{8,})/g, "$1$2[REDACTED]"],
-  // 小写/驼峰/连字符键名没有统一后缀(apiKey、refresh-token),保留显式小列表。
-  // 值里允许 `[`(密码可能含方括号),只豁免「已经是替换标记」的情况,否则会把标记再啃一口。
-  [/((?:api[_-]?key|access[_-]?key|access[_-]?token|auth[_-]?token|session[_-]?token|refresh[_-]?token|id[_-]?token|client[_-]?secret|secret[_-]?key|private[_-]?key|password|passwd|secret)["'`]?\s*[=:]\s*)(["'`]?)(?!\[REDACTED)([^\s"'`]{8,})/gi, "$1$2[REDACTED]"],
+  // 引号里的值可能带空格(`password="correct horse battery staple"`):只认非空白的
+  // 值类只会吃到第一个词,剩下的口令尾巴原样落盘;第一个词不到 8 个字时整条一个都
+  // 不打。引号是明确边界,按整段打码;引号没闭合(输出被截断)时吃掉这一行剩下的部分。
+  // 引号那两条排在「不带引号」那两条前面:带空格的值若先被后者吃掉前半段,后半段就
+  // 成了没人管的口令尾巴(实测 `password="abcdefghij klm"` 会剩下 ` klm"`)。
+  [new RegExp(`((?:${UPPER_SECRET_KEY})["'\`]?\\s*[=:]\\s*)(["'\`])(?!\\[REDACTED)([^\\r\\n]+?)(\\2|$)`, "gm"), "$1$2[REDACTED]$4"],
+  [new RegExp(`((?:${LOWER_SECRET_KEY})["'\`]?\\s*[=:]\\s*)(["'\`])(?!\\[REDACTED)([^\\r\\n]+?)(\\2|$)`, "gim"), "$1$2[REDACTED]$4"],
+  // 不带引号的值:一条非空白串、至少 8 个字符(值里允许 `[`,密码可能含方括号);
+  // 只豁免「已经是替换标记」的情况,否则会把标记再啃一口。
+  [new RegExp(`((?:${UPPER_SECRET_KEY})["'\`]?\\s*[=:]\\s*)(["'\`]?)(?!\\[REDACTED)([^\\s"'\`]{8,})`, "g"), "$1$2[REDACTED]"],
+  [new RegExp(`((?:${LOWER_SECRET_KEY})["'\`]?\\s*[=:]\\s*)(["'\`]?)(?!\\[REDACTED)([^\\s"'\`]{8,})`, "gi"), "$1$2[REDACTED]"],
   // RFC 6750 的 b64token 还允许 `~ + /` 和结尾的 `=`:只认 `._-` 时,以 `/` 或 `+` 开头的
   // base64 凭证第一个字符就被排除,整条 token 原样留下。
   [/(?<![A-Za-z0-9])Bearer\s+[A-Za-z0-9._~+/-]{16,}={0,2}/gi, "Bearer [REDACTED]"],
@@ -1703,7 +1716,7 @@ const REDACT_RULES: Array<[RegExp, string]> = [
   [/(?<![A-Za-z0-9])pypi-AgEIcHlwa[A-Za-z0-9_-]{10,}/g, "[REDACTED]"],
   [/(?<![A-Za-z0-9])(?:sbp|vercel|ddapi|ddapp|lin_api)_[A-Za-z0-9]{20,}/g, "[REDACTED]"],
   [/(?<![A-Za-z0-9])(?:shpat|shpca|shppa|shpss)_[A-Za-z0-9]{20,}/g, "[REDACTED]"],
-  [/(?<![A-Za-z0-9])do[or]_v1_[A-Za-z0-9]{20,}/g, "[REDACTED]"],
+  [/(?<![A-Za-z0-9])do[opr]_v1_[A-Za-z0-9]{20,}/g, "[REDACTED]"],
   [/(?<![A-Za-z0-9])SG\.[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{30,}/g, "[REDACTED]"],
   [/(?<![A-Za-z0-9])atlasv1\.[A-Za-z0-9_-]{20,}/g, "[REDACTED]"],
   // Mailgun 的 `key-<32 位十六进制>`:限定长度,不误伤 `key-value` 这类普通标识。
