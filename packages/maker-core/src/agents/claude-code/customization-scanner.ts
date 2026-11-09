@@ -74,21 +74,23 @@ export async function scanClaudeCustomizations(
   opts: ListCustomizationsOptions,
 ): Promise<ListCustomizationsResult> {
   // Each working dir contributes its own project; SkillHub passes the whole
-  // catalogue, not just the active one. Two dirs inside the same repository
-  // resolve to the same scan root, so the first one owns the entry.
+  // catalogue, not just the active one. Two projects inside one repository
+  // share a scan root but remain distinct owners, so both keep an entry.
   const seen = new Set<string>();
   const targets: PluginScanTarget[] = [];
   for (const dir of opts.workingDirs ?? []) {
     const ownerRoot = path.resolve(dir);
-    const scanRoot = resolveGitRoot(dir) ?? ownerRoot;
-    if (seen.has(scanRoot)) continue;
-    seen.add(scanRoot);
-    targets.push({ scanRoot, ownerRoot });
+    if (seen.has(ownerRoot)) continue;
+    seen.add(ownerRoot);
+    targets.push({ scanRoot: resolveGitRoot(dir) ?? ownerRoot, ownerRoot });
   }
   return scanClaudeCustomizationsAtConfig(
     opts,
     path.join(os.homedir(), '.claude'),
     targets,
+    // Aggregate listing: keep the global view even when a project disables the
+    // plugin, because other projects (and no-project sessions) still load it.
+    { includeUserPass: true },
   );
 }
 
@@ -96,6 +98,14 @@ function scanClaudeCustomizationsAtConfig(
   opts: ListCustomizationsOptions,
   configDir: string,
   targets?: readonly PluginScanTarget[],
+  scanOptions?: {
+    /**
+     * Aggregate listings keep a global pass so a plugin disabled by one project
+     * still appears; runtime views must not, because they describe exactly what
+     * the live session loads.
+     */
+    includeUserPass?: boolean;
+  },
 ): ListCustomizationsResult {
   const workingDirs = opts.workingDirs ?? [];
   const kindFilter = opts.kinds && opts.kinds.length > 0 ? new Set(opts.kinds) : null;
@@ -111,9 +121,12 @@ function scanClaudeCustomizationsAtConfig(
   // the most specific entry per Skill name, so reordering recent projects never
   // changes what the page shows.
   if (!kindFilter || kindFilter.has('skill')) {
-    // Always run a user-only pass first: a plugin enabled globally but disabled
-    // by every listed project must still appear in the global list.
-    const passes: (PluginScanTarget | undefined)[] = [undefined, ...(targets ?? [])];
+    // Aggregate listings run a user-only pass first: a plugin enabled globally
+    // but disabled by every listed project must still appear in the global
+    // list. Runtime views skip it — they describe the live project context.
+    const passes: (PluginScanTarget | undefined)[] = scanOptions?.includeUserPass === false
+      ? [...(targets ?? [])]
+      : [undefined, ...(targets ?? [])];
     const seen = new Set<string>();
     for (const target of passes) {
       const scanRoot = target?.scanRoot;
@@ -211,5 +224,7 @@ export async function scanClaudeRuntimeSkills(
     { workingDirs, kinds: ['skill', 'command'] },
     configDir,
     [{ scanRoot, ownerRoot }],
+    // Runtime view: only what this project actually loads.
+    { includeUserPass: false },
   );
 }

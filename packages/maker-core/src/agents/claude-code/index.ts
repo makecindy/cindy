@@ -1180,7 +1180,11 @@ export class ClaudeCodeAgent extends BaseAgent {
         excludePluginSkills: opts.excludePluginSkills,
       });
     }
-    const projectRoot = opts.workingDir ? resolveGitRoot(opts.workingDir) : undefined;
+    // Claude projects do not require a Git repository, so a non-Git working
+    // directory is its own project context.
+    const projectRoot = opts.workingDir
+      ? (resolveGitRoot(opts.workingDir) ?? path.resolve(opts.workingDir))
+      : undefined;
     const raw = await scanClaudeSlashCommands({
       ...(opts.workingDir ? { workingDir: opts.workingDir } : {}),
       configDir,
