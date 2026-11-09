@@ -258,6 +258,47 @@ it('removes a favorite copy without applying a fallback and keeps its details op
   expect(test.view.options.isFavorite).toBe(false);
 });
 
+// #9590, unit: the real picker must remove the opened saved UID even when a
+// seed omits effort. Existing removal coverage only used explicit valid effort.
+// Also keep the original copy when the user changes the displayed parameters.
+it.each([false, true])('removes the opened seed UID and preserves a matching displayed copy (twin=%s)', async twin => {
+  const seed = { uid: 'seed', providerId: 'account', modelId: 'model', agent: 'codex', effort: '', fast: false };
+  const explicit = { ...seed, uid: 'explicit', effort: 'medium' };
+  test.prefs.favorites = twin ? [explicit, seed] : [seed];
+  const { onSelect } = await mount();
+  const seedRow = test.view.groups.find((group: any) => group.key === 'favorites').rows.find((row: any) => row.favorite.uid === seed.uid);
+  await act(async () => test.view.onOptions(seedRow));
+  expect(test.view.options.isFavorite).toBe(true);
+  await act(async () => test.view.options.onFavorite());
+  expect(test.prefs.favorites).toEqual(twin ? [explicit] : []);
+  expect(test.view.options.row.config.effort).toBe('medium');
+  expect(onSelect).not.toHaveBeenCalled();
+});
+
+it('rejects saving an edited seed as an existing explicit configuration', async () => {
+  const seed = { uid: 'seed', providerId: 'account', modelId: 'model', agent: 'codex', effort: '', fast: false };
+  const explicit = { ...seed, uid: 'explicit', effort: 'medium' };
+  test.prefs.favorites = [explicit, seed];
+  await mount();
+  await act(async () => test.view.onOptions(test.view.groups[0].rows[1]));
+  await act(async () => test.view.options.onEditFavorite());
+  await act(async () => test.view.options.onSaveEdit());
+  expect(test.view.error).toBe('models.unified.favoriteExists');
+  expect(test.prefs.favorites).toEqual([explicit, seed]);
+  expect(test.save).not.toHaveBeenCalled();
+});
+
+it('keeps a seed UID after editing its displayed parameters and saves a separate copy', async () => {
+  const seed = { uid: 'seed', providerId: 'account', modelId: 'model', agent: 'codex', effort: '', fast: false };
+  test.prefs.favorites = [seed];
+  await mount();
+  await act(async () => test.view.onOptions(test.view.groups[0].rows[0]));
+  await act(async () => test.view.options.onChange({ ...test.view.options.row.config, effort: 'high' }));
+  expect(test.view.options.isFavorite).toBe(false);
+  await act(async () => test.view.options.onFavorite());
+  expect(test.prefs.favorites).toEqual([seed, expect.objectContaining({ effort: 'high' })]);
+});
+
 it('adjusts model preferences from favorite details without overwriting the original copy', async () => {
   const saved = {uid:'original',providerId:'account',modelId:'model',agent:'codex',effort:'high',fast:true};
   test.prefs.favorites=[saved];

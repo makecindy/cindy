@@ -779,22 +779,37 @@ export function UnifiedModelPickerSheet(
     }
   };
   const favoriteSource = row ? favoriteSourceOf(row) : null;
-  // A source model can have several saved configurations. Match the complete
-  // configuration without applying capability fallbacks to the saved values.
+  // Source rows match saved configurations exactly. An opened saved row may
+  // also resolve omitted or obsolete parameters without losing its own UID.
   const favoriteEntries = row?.remoteDevice
     ? remoteDirectories.find(directory => directory.catalog.deviceId === row.remoteDevice!.deviceId)?.entries ?? []
     : entries;
+  // The opened UID wins over another copy with the same displayed settings.
+  // Explicit edits still use exact matching to detect duplicate saved copies.
+  const anchoredFavorite =
+    row && originFavorite && !favoriteEdit &&
+    originFavorite.providerId === favoriteSource &&
+    resolveStoredModelEntry(favoriteEntries, row.entry.providerId, originFavorite.modelId) === row.entry &&
+    sameConfiguration(
+      resolveMobileModelConfig(row.entry, {
+        favorite: originFavorite,
+        fastCapable: row.remoteDevice ? () => true : fastCapable,
+      }),
+      row.config,
+    ) ? originFavorite : undefined;
   const matchingFavorite =
-    row &&
-    favoriteSource !== null &&
-    prefs.value.favorites.find(
-      (item) =>
-        item.providerId === favoriteSource &&
-        resolveStoredModelEntry(favoriteEntries, row.entry.providerId, item.modelId) === row.entry &&
-        sameConfiguration(
-          { ...item, providerId: row.config.providerId, modelId: row.config.modelId },
-          row.config,
-        ),
+    anchoredFavorite ?? (
+      row &&
+      favoriteSource !== null &&
+      prefs.value.favorites.find(
+        (item) =>
+          item.providerId === favoriteSource &&
+          resolveStoredModelEntry(favoriteEntries, row.entry.providerId, item.modelId) === row.entry &&
+          sameConfiguration(
+            { ...item, providerId: row.config.providerId, modelId: row.config.modelId },
+            row.config,
+          ),
+      )
     );
   const recommendedConfig =
     row &&
