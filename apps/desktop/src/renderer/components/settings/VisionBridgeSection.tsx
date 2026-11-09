@@ -364,8 +364,9 @@ export function VisionBridgeSection() {
         />
       </SettingsCard>
 
-      {/* 关闭时收起明细，保留已保存选择；展开/收起复用共享 Collapse 动效。 */}
-      <Collapse open={enabled} innerClassName="flex flex-col gap-[14px]">
+      {/* 关闭时收起明细，保留已保存选择；外层 gap 与负 margin 相消，14px 间距放在裁剪内容里随高度动画。 */}
+      <Collapse open={enabled} className="-mt-[14px]">
+      <div className="flex flex-col gap-[14px] pt-[14px]">
       {/* ── 卡 1：目标模型（走视觉桥的纯文本模型） ────────────────────── */}
       <SettingsCard>
         <SettingsField
@@ -537,6 +538,7 @@ export function VisionBridgeSection() {
           </p>
         </SettingsField>
       </SettingsCard>
+      </div>
       </Collapse>
     </SettingsSection>
   );
