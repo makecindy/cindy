@@ -178,7 +178,15 @@ describe('HY4 inline reasoning through Pi production adapters', () => {
     '示例：\n```xml\n</think:6124c78e>\n````\n结束。',
     '> ```js\n> const fence = "```";\n> const token = "</think:6124c78e>";\n> ```',
     '- ```js\n  const fence = "```";\n  const token = "</think:6124c78e>";\n  ```',
-  ])('keeps literal tags inside real fenced code in live, final and history projection: %s', text => {
+    '示例：\n\n    const token = "</think:6124c78e>";\n\n请保留以上代码。',
+    '示例：\n\n\tconst token = "</think:6124c78e>";',
+    '示例：\n\n \tconst token = "</think:6124c78e>";',
+    '> 示例：\n>\n>     const token = "</think:6124c78e>";',
+    '-     const token = "</think:6124c78e>";',
+    '- 一级\n  - 二级\n\n    ```js\n    const fence = "```";\n    const token = "</think:6124c78e>";\n    ```',
+    '    <think>literal</think:6124c78e>',
+    '\t<think:6124c78e>literal</think:6124c78e>',
+  ])('keeps literal tags inside Markdown code in live, final and history projection: %s', text => {
     const h = harness();
     h.start();
     for (const char of text) h.delta(char);
@@ -197,6 +205,17 @@ describe('HY4 inline reasoning through Pi production adapters', () => {
 
   it('recognizes a real boundary after a fenced example containing a literal boundary', () => {
     const reasoning = '检查代码：\n```js\nconst fence = "```";\nconst token = "</think:6124c78e>";\n```\n';
+    const h = harness();
+    h.start();
+    for (const char of reasoning + marker + answer) h.delta(char);
+    h.end(reasoning + marker + answer);
+    expect(h.texts().at(-1)?.text).toBe(answer);
+    expect(h.thoughts().filter(e => e.stage === 'final').map(e => e.text)).toEqual([reasoning]);
+    disposePiTranslateContext(h.ctx);
+  });
+
+  it('recognizes a real boundary after indented code containing a literal boundary', () => {
+    const reasoning = '检查代码：\n\n    const token = "</think:6124c78e>";\n\n';
     const h = harness();
     h.start();
     for (const char of reasoning + marker + answer) h.delta(char);

@@ -10,7 +10,8 @@ export interface Hy4InlineThinking {
 
 /** Only interpret a confirmed HY4 boundary, never infer reasoning from prose/language. */
 export function splitHy4InlineThinking(text: string, final = false): Hy4InlineThinking | null {
-  const open = /^\s*<think(?::([a-f0-9]{8}))?>/i.exec(text);
+  // Four spaces or a tab introduce literal indented code, not a protocol opener.
+  const open = /^(?:[\t ]*\r?\n)* {0,3}<think(?::([a-f0-9]{8}))?>/i.exec(text);
   if (open) {
     const close = open[1] ? `</think:${open[1]}>` : '</think>';
     const end = text.toLowerCase().indexOf(close.toLowerCase(), open[0].length);
@@ -38,6 +39,18 @@ export function splitHy4InlineThinking(text: string, final = false): Hy4InlineTh
       if (close && close[1].length <= fenceIndent + 3
           && close[2][0] === fence[0] && close[2].length >= fence.length) fence = '';
     } else {
+      // Strip quote/list containers before checking code indentation. Protect
+      // nested-list fences too: their absolute indentation can exceed three.
+      let codeLine = line;
+      while (true) {
+        const container = /^ {0,3}(?:>[\t ]?|(?:[-+*]|\d+[.)])[\t ])/.exec(codeLine);
+        if (!container) break;
+        codeLine = codeLine.slice(container[0].length);
+      }
+      if (!inlineWidth && /^(?: {4}| {0,3}\t)/.test(codeLine)) {
+        offset += line.length + 1;
+        continue;
+      }
       const open = inlineWidth === 0
         ? /^((?: {0,3}>[\t ]?)*)( {0,3})((?:(?:[-+*]|\d+[.)])[\t ]+)*)(`{3,}|~{3,})(.*)$/.exec(line)
         : null;
