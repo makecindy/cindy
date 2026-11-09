@@ -14589,13 +14589,16 @@ assertRouteCurrent();
 
       async setEffort(newEffort: Effort) {
         if (reviewMode) return;
-        if (newEffort === mutableEffort) return; // 去重: 值没变不重推
+        // 启动没传 effort 时 mutableEffort 被填成目录默认 high，但 hasSelectedEffort
+        // 仍是 false。当轮显式选同一个 high 也是「未选 → 已选」，不能在这里返回：
+        // 否则标记永远立不起来，当轮拉起的跨供应商子代理不会继承这个档位。
+        const becameSelected = !hasSelectedEffort;
+        if (newEffort === mutableEffort && !becameSelected) return; // 去重: 值没变且已选过，不重推
         const clamped = clampEffortForCodex(mutableModel, newEffort);
         log.debug('setEffort', { from: mutableEffort, to: newEffort, clamped });
         mutableEffort = newEffort;
-        // 当轮显式改档（含改成「不用推理」的空字符串）算已选，后面的重登
-        // 才会把这个档位交给宿主。与默认 high 相同的值在上面已经返回，
-        // 不会被误记成已选。
+        // 当轮显式改档（含改成「不用推理」的空字符串，以及首次选中与默认相同的 high）
+        // 算已选，后面的重登才会把这个档位交给宿主。
         hasSelectedEffort = true;
         // thread 已启动 → 立即经 thread/settings/update 生效; 未启动由首个 turn/start
         // 携带 (TurnStartParams.effort, v2.rs:5800)。发 clamp 后的值, 与 turn/start 一致。

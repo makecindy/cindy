@@ -7703,11 +7703,15 @@ describe('CodexAgent thread/settings/update channel', () => {
       model: 'gpt-5.4',
       workingDir: '/repo',
     });
-    // 模拟 renderer 单次切换全量重调 set*: 都是与启动时相同的值 → 一条 RPC 都不该发
+    // 模拟 renderer 单次切换全量重调 set*: 模型与 fast 和启动时相同，一条 RPC 都不该发。
+    // 档位例外：启动没传 effort 时 high 只是目录默认，当轮显式选 high 是「未选 → 已选」，
+    // 必须推一次，后面拉起的子代理才继承得到。
     await handle.setModel?.('gpt-5.4'); // 同 model
-    await handle.setEffort?.('high'); // 默认就是 high
+    await handle.setEffort?.('high');
     await handle.setFastMode?.(false); // 启动未开 fast → 仍是关
-    expect(settingsCalls(host)).toEqual([]);
+    expect(settingsCalls(host)).toEqual([
+      { threadId: 'start-thread-id', effort: 'high' },
+    ]);
     await handle.close();
   });
 
@@ -7930,6 +7934,46 @@ describe('CodexAgent send', () => {
       expect(registerCodexSystemPromptForThread).toHaveBeenLastCalledWith(expect.objectContaining({
         sessionId: 'session-restored-high',
         threadId: 'resume-thread-id',
+        smartSubagentRoutes: [smartRoute],
+        reasoningEffort: 'high',
+      }));
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it('selecting the catalog default high still counts as an explicit choice', async () => {
+    // 测试价值
+    // - 生产入口与可观察结果：startSession 不传 effort 时档位是默认 high，但没登记给宿主。
+    //   当轮 setEffort('high') 必须补上登记，跨供应商子代理才跟父任务走。
+    // - Bug／规则依据：PR #9582 P2。同值去重把「未选 → 已选」也跳过了。
+    // - 现有覆盖缺口：相邻用例改的是 low，值和默认不同，盖不住这条同值路径。
+    // - 最小失败输入：startSession 不传 effort，随后 setEffort('high')。
+    // - tier：unit。只走内存 fake host，不碰网络或进程。
+    const registerCodexSystemPromptForThread = vi.fn();
+    const agent = new CodexAgent(createDeps({}, { registerCodexSystemPromptForThread }));
+    const smartRoute = { providerId: 'custom', catalogModel: 'gpt-5.6-sol' };
+    installFakeHost(agent, (method) => {
+      if (method === Method.ThreadSettingsUpdate) return {};
+      return undefined;
+    }, {
+      codexProxyActive: true,
+      smartSubagentRoutes: [smartRoute],
+    });
+    const handle = await agent.startSession({
+      sessionId: 'session-select-default-high',
+      model: 'gpt-5.6-sol',
+      workingDir: '/repo',
+    });
+    try {
+      expect(handle.getEffort?.()).toBe('high');
+      expect(registerCodexSystemPromptForThread.mock.calls.at(-1)?.[0]).not.toHaveProperty('reasoningEffort');
+      const callsBefore = registerCodexSystemPromptForThread.mock.calls.length;
+      await handle.setEffort?.('high');
+      expect(registerCodexSystemPromptForThread.mock.calls.length).toBeGreaterThan(callsBefore);
+      expect(registerCodexSystemPromptForThread).toHaveBeenLastCalledWith(expect.objectContaining({
+        sessionId: 'session-select-default-high',
+        threadId: 'start-thread-id',
         smartSubagentRoutes: [smartRoute],
         reasoningEffort: 'high',
       }));
