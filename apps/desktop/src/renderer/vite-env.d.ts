@@ -3014,6 +3014,7 @@ interface ElectronAPI {
     title: string;
     kind: 'done' | 'error' | 'needs-reply';
     inputHandoffRequestId?: string;
+    remoteDeviceId?: string;
     /**
      * 选择性走哪些通知通道; 缺省 / 未传 → 兼容旧行为(仅桌面)。
      * renderer 侧 gate(localStorage notifications.enabled /

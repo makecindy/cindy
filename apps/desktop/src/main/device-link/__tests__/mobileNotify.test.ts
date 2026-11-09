@@ -40,6 +40,15 @@ describe('buildSessionNotifyPayload', () => {
     );
   });
 
+  it('routes a remote task to its execution host and scopes collapse/sender to that host', () => {
+    const remote = buildSessionNotifyPayload({ ...base, targetDeviceId: 'execution-host', teammateBotId: 'bot-1' });
+    const local = buildSessionNotifyPayload({ ...base, teammateBotId: 'bot-1' });
+    expect(remote.deepLink).toBe('/sessions/session-1234?deviceId=execution-host&resourceCollectionId=teammates&resourceId=bot-1&resourceKind=bot');
+    expect(remote.collapseId).toBe(createHash('sha256').update('execution-host:session-1234').digest('hex').slice(0, 32));
+    expect(remote.collapseId).not.toBe(local.collapseId);
+    expect(remote.sender?.id).not.toBe(local.sender?.id);
+  });
+
   it('detail 摘要作为正文:折叠空白、超协议上限截断;缺省回退终态文案', () => {
     const withDetail = buildSessionNotifyPayload({
       ...base,
