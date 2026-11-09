@@ -94,9 +94,9 @@ export function PushNotificationsBridge() {
         const enabled = await readPushEnabled();
         if (cancelled) return;
         if (!enabled) { if (lastToken === token) lastToken = undefined; return; }
-        await syncPushRegistration({ enabled, apiFetch: apiFetchRef.current, deviceToken })
-          .catch(() => { if (lastToken === token) lastToken = undefined; });
-      })();
+        const result = await syncPushRegistration({ enabled, apiFetch: apiFetchRef.current, deviceToken });
+        if (result !== 'registered' && lastToken === token) lastToken = undefined;
+      })().catch(() => { if (lastToken === token) lastToken = undefined; });
     });
     return () => { cancelled = true; sub.remove(); };
   }, [auth.accountGeneration, auth.initialized, auth.isAuthenticated]);
