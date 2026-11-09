@@ -2535,11 +2535,9 @@ export function getMaker(): Maker {
       // 轮 27 HIGH-1:Claude 凭证失效同样失效 PI bridge。
       invalidatePiEnvironment();
     });
-    // 预热 codex-home 骨架 + 与本机 codex CLI reconcile 凭证。原本挂在
-    // DesktopCodexAuthAdapter 构造函数里(import 即写盘),会让所有传递性 import 到
-    // auth-adapters 的测试在真实文件系统留痕(2026-07-03 曾把含真实凭证硬链的
-    // codex-home 生成进仓库),现改为装配 maker 时显式预热,import 保持零副作用。
-    desktopCodexAuthAdapter.warmUp();
+    // 只协调已有的本机 Codex 登录；运行目录内的资源在登录或实际调用时准备。
+    // 不在构造/import 阶段写盘，也不因装配全部 agent 就初始化未使用的 harness。
+    void desktopCodexAuthAdapter.warmUp();
 
     // pi(实验性,个人分支):二进制在位才注册;缺失时 agents map 不含 pi,
     // 既有环境零影响。模型清单走目录 pi 投影(xd 网关模型经 active-catalog 按
