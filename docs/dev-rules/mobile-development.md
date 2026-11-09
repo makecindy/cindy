@@ -185,7 +185,9 @@ TypeScript 测试不能替代这些原生验收。
 iOS 每次 `getDevicePushTokenAsync()` 完成都会发出 token 事件，不代表 token 已轮换。
 `PushNotificationsBridge` 的监听器必须直接把事件携带的 token 交给注册函数，不能再次
 读取原生 token；否则“读取 → 事件 → 注册 → 读取”会持续向两个推送端点重复注册。
-同一次账号生命周期内相同事件去重，实际 token 变化仍注册；关闭通知或离开旧账号后不再提交。
+事件注册必须持有本代次非事件注册成功产生的内存许可；相同 token 不再请求，真实轮换
+仍注册。注销同步撤销许可，注册全过程复查 AuthOwner，防止 React 仍显示已登录的清理
+窗口重新 PUT 旧账号。原生读取在注销时产生的事件也只能 skipped。
 回归分别由 `pushNotificationsBridge.test.ts`（事件接线与去重）和
 `pushNotificationsRealm.test.ts`（真实注册函数与端点请求）覆盖。
 

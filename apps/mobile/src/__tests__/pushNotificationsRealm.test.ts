@@ -64,12 +64,15 @@ vi.mock('@/config/devServerEnvironment', () => ({
 }));
 
 import {
+  type AuthedApiFetch,
   configureForegroundNotificationBehavior,
   retryPendingUnregister,
   syncPushRegistration,
   unregisterPushTokenBestEffort,
 } from '@/notifications/pushNotifications';
 import { setActiveSelfHostedRelay } from '@/device-link/selfHostedRelayRouting';
+
+import { setMobileAuthOwner } from '@/auth/authOwnerGeneration';
 
 const REGISTERED_KEY = 'cindy.push.registered';
 const PENDING_KEY = 'cindy.push.pendingUnregister';
@@ -90,6 +93,32 @@ function readStoredRealms(key: string): string[] {
 }
 
 describe('push notification realm routing', () => {
+  // Real mutation module + native token event simulation: old code re-PUT after logout DELETE.
+  // Also covers duplicate bootstrap events, which the separately mocked bridge test cannot prove.
+  it('fences native token callbacks during logout and permits a new authenticated lifecycle', async () => {
+    const requests: string[] = [], events: Promise<unknown>[] = [];
+    const apiFetch: AuthedApiFetch = async (_path, opts) => { requests.push(opts.method!); return {registered:true} as never; };
+    vi.stubGlobal('fetch', vi.fn(async (_url, opts) => { requests.push(opts.method); return {ok:true,status:200}; }));
+    mocks.getDevicePushTokenAsync.mockImplementation(async () => {
+      const token = { type:'ios' as const, data:'apns-device-token' };
+      events.push(syncPushRegistration({enabled:true,apiFetch,deviceToken:token}));
+      return token;
+    });
+    await syncPushRegistration({enabled:true,apiFetch});
+    await Promise.all(events.splice(0));
+    expect(requests).toEqual(['PUT','PUT']);
+    // AuthContext clears the synchronous owner before its async cleanup, while React still
+    // presents isAuthenticated=true. Both listener and bootstrap work must be rejected here.
+    setMobileAuthOwner(null);
+    await unregisterPushTokenBestEffort('fixture-access-token','cn');
+    await syncPushRegistration({enabled:true,apiFetch});
+    await Promise.all(events.splice(0));
+    expect(requests).toEqual(['PUT','PUT','DELETE','DELETE']);
+    setMobileAuthOwner('next-user','cn');
+    await syncPushRegistration({enabled:true,apiFetch});
+    await Promise.all(events.splice(0));
+    expect(requests.slice(4)).toEqual(['PUT','PUT']);
+  });
   it('retains per-service registration failure without leaking tokens or errors', async () => {
     const apiFetch = vi.fn(async (path: string) => {
       if (path === '/v1/push-token') throw Object.assign(new Error('secret-token-in-error'), { status: 503 });
@@ -149,6 +178,8 @@ describe('push notification realm routing', () => {
     expect(await handler.handleNotification(notification)).toMatchObject({ shouldShowBanner: false, shouldPlaySound: false });
   });
   beforeEach(() => {
+    setMobileAuthOwner(null);
+    setMobileAuthOwner('fixture-user', 'cn');
     vi.clearAllMocks();
     store.clear();
     envState.activeRealm = 'cn';
@@ -179,6 +210,8 @@ describe('push notification realm routing', () => {
   // must upload the supplied token, not request a token and feed itself forever.
   it('registers a rotated token without requesting another native token', async () => {
     const apiFetch = vi.fn().mockResolvedValue({ registered: true });
+    await syncPushRegistration({ enabled: true, apiFetch });
+    apiFetch.mockClear(); mocks.getDevicePushTokenAsync.mockClear();
     await expect(syncPushRegistration({ enabled: true, apiFetch,
       deviceToken: { type: 'ios', data: 'rotated-device-token' },
     })).resolves.toBe('registered');
