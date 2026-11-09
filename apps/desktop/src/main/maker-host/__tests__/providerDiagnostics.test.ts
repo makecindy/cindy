@@ -29,10 +29,15 @@ import {
 } from '../provider-diagnostics.js';
 import { probeProviderProtocols } from '../provider-protocol-probe.js';
 import { setCustomProviders } from '../active-catalog.js';
+import {
+  __resetModelVisibilityMirrorForTest,
+  setModelVisibilityMirror,
+} from '../model-visibility-mirror.js';
 
 afterEach(() => {
   setCustomProviders([]);
   setDiagnosticsKeyReader(() => null);
+  __resetModelVisibilityMirrorForTest();
   probeLog.warn.mockClear();
 });
 
@@ -772,6 +777,68 @@ describe('resolveSavedProbeSpec / testProviderConnection(saved)', () => {
         },
       },
     ]);
+    setDiagnosticsKeyReader(() => 'sk-saved');
+    expect(resolveSavedProbeSpec('my-relay', 'claude-code').modelId).toBe('glm-5.2');
+  });
+
+  it('用户明确开启的不是列表第一个聊天模型时,探测用该可见模型(issue #9470)', () => {
+    const provider = buildUserProvider(config);
+    setCustomProviders([
+      {
+        ...provider,
+        models: {
+          ...provider.models,
+          'claude-code': [
+            {
+              id: 'glm-5.2',
+              name: 'GLM',
+              contextWindow: 128_000,
+              efforts: [],
+              defaultEffort: null,
+            },
+            {
+              id: 'glm-4.5',
+              name: 'GLM 4.5',
+              contextWindow: 128_000,
+              efforts: [],
+              defaultEffort: null,
+            },
+          ],
+        },
+      },
+    ]);
+    setModelVisibilityMirror({ 'claude-code:my-relay:glm-4.5': true });
+    setDiagnosticsKeyReader(() => 'sk-saved');
+    expect(resolveSavedProbeSpec('my-relay', 'claude-code').modelId).toBe('glm-4.5');
+  });
+
+  it('没有显式可见偏好时,探测仍退回第一个聊天模型', () => {
+    const provider = buildUserProvider(config);
+    setCustomProviders([
+      {
+        ...provider,
+        models: {
+          ...provider.models,
+          'claude-code': [
+            {
+              id: 'glm-5.2',
+              name: 'GLM',
+              contextWindow: 128_000,
+              efforts: [],
+              defaultEffort: null,
+            },
+            {
+              id: 'glm-4.5',
+              name: 'GLM 4.5',
+              contextWindow: 128_000,
+              efforts: [],
+              defaultEffort: null,
+            },
+          ],
+        },
+      },
+    ]);
+    setModelVisibilityMirror({});
     setDiagnosticsKeyReader(() => 'sk-saved');
     expect(resolveSavedProbeSpec('my-relay', 'claude-code').modelId).toBe('glm-5.2');
   });

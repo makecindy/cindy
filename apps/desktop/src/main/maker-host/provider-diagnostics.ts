@@ -34,6 +34,7 @@ import {
   type ProviderErrorCode,
 } from '../../shared/providerErrors.js';
 import { getActiveCatalog } from './active-catalog.js';
+import { getModelVisibilityOverride } from './model-visibility-mirror.js';
 import { withOpenCodeGoSessionHeader } from './opencode-go-session.js';
 import { withProviderAppAttribution } from './provider-app-attribution.js';
 import { createMakerLogger } from './logger-adapter.js';
@@ -462,9 +463,20 @@ export function resolveSavedProbeSpec(providerId: string, agent: AgentKind): Pro
   // 探测发的是聊天形状的最小请求(见下方 requestPath/body 组装);挑第一个非聊天模型
   // (image/embedding/...)会把探测发给一个本来就不接受聊天请求的端点,得到的失败结论
   // 和"这个供应商配置是坏的"完全无关(2026-07 review,与 issue #882 第 3 点同一类问题)。
-  const model = (provider.models[agent] ?? []).find((m) =>
-    isAgentSelectableModel(m, { userProvider: provider.source === 'user' }),
-  );
+  // 列表第一个聊天模型若与上游协议不兼容,也会把整个供应商误报为连不上(issue #9470)。
+  // 用户明确打开的模型优先;镜像未就绪或没有任何显式开启时,仍退回第一个聊天模型。
+  const candidates = provider.models[agent] ?? [];
+  const selectable = (m: (typeof candidates)[number]): boolean =>
+    isAgentSelectableModel(m, { userProvider: provider.source === 'user' });
+  let preferred: (typeof candidates)[number] | undefined;
+  try {
+    preferred = candidates.find(
+      (m) => selectable(m) && getModelVisibilityOverride(agent, providerId, m.id) === true,
+    );
+  } catch {
+    preferred = undefined;
+  }
+  const model = preferred ?? candidates.find(selectable);
   if (!model) throw new Error(`provider '${providerId}' has no chat models for '${agent}'`);
   // Pi's HTTP-only route helper intentionally excludes SDK transports. A native
   // probe must keep the SDK route instead of treating that exclusion as failure.
