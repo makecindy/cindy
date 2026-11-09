@@ -5,7 +5,6 @@ import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
 
-const exec = promisify(execFile);
 const binaryName = 'cindy-windows-atomic-rename.exe';
 let resolvingBinary: Promise<string> | undefined;
 
@@ -54,7 +53,7 @@ async function resolveBinary(): Promise<string> {
   const buildDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-atomic-rename-build-'));
   const built = path.join(buildDirectory, binaryName);
   try {
-    await exec(await resolveRustc(), [
+    await promisify(execFile)(await resolveRustc(), [
       source,
       '--edition=2021',
       '-C', 'opt-level=s',
@@ -83,7 +82,7 @@ export async function atomicReplaceWindowsDirectoryEntry(
   destination: string,
 ): Promise<void> {
   const binary = await (resolvingBinary ??= resolveBinary());
-  await exec(binary, [source, destination], {
+  await promisify(execFile)(binary, [source, destination], {
     timeout: 15_000,
     windowsHide: true,
     maxBuffer: 64 * 1024,

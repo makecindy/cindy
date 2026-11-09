@@ -340,7 +340,7 @@ describe('desktop scheduler cross-device transport', () => {
 
   it('keeps the post-handler rejection text in sync with the dispatcher', () => {
     const dispatch = readFileSync(
-      fileURLToPath(new URL('../../device-link/dispatch.desktop.ts', import.meta.url)),
+      fileURLToPath(new URL('../../device-link/dispatch.ts', import.meta.url)),
       'utf8',
     );
     expect(dispatch).toContain("throw new Error('[NOT_FOUND] Session does not exist')");

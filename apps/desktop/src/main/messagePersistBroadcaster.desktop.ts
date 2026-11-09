@@ -20,16 +20,16 @@ import {
 const persistence = createMessagePersistence({
   assistantSamplingSettlements,
   broadcastTap,
-  commitMessageMediaRefs,
-  broadcastMessageRow,
-  broadcastMessageDeleted,
-  discardPersistedAssistantMessage,
-  broadcastMessageAgentMetaUpdate,
-  createDbMessage,
-  findVisibleToolUseMessageByAliases,
-  patchMessageAgentMetaWithResult,
-  updateDbMessageContent,
-  materializeToolProcessMedia,
+  commitMessageMediaRefs: (...args) => commitMessageMediaRefs(...args),
+  broadcastMessageRow: (...args) => broadcastMessageRow(...args),
+  broadcastMessageDeleted: (...args) => broadcastMessageDeleted(...args),
+  discardPersistedAssistantMessage: (...args) => discardPersistedAssistantMessage(...args),
+  broadcastMessageAgentMetaUpdate: (...args) => broadcastMessageAgentMetaUpdate(...args),
+  createDbMessage: (...args) => createDbMessage(...args),
+  findVisibleToolUseMessageByAliases: (...args) => findVisibleToolUseMessageByAliases(...args),
+  patchMessageAgentMetaWithResult: (...args) => patchMessageAgentMetaWithResult(...args),
+  updateDbMessageContent: (...args) => updateDbMessageContent(...args),
+  materializeToolProcessMedia: (...args) => materializeToolProcessMedia(...args),
   onErrorPersisted(sessionId, persistId, ownerScope) {
     const ownerStamp = ownerScope ? ownerScope.ownerStamp : broadcastTap.getSafeDataOwnerPushStamp?.();
     const payload = { sessionId, persistId };

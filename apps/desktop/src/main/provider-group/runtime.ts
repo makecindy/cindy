@@ -429,6 +429,7 @@ export async function readProviderGroupOfSession(sessionId: string): Promise<Pro
 export interface ProviderGroupSessionRebalance {
   suggest(sessionId: string): Promise<ProviderGroupRebalanceSuggestion>;
   decide(sessionId: string, memberKey: string, remember: boolean, clientId?: string): Promise<boolean>;
+  preference(sessionId: string, enabled: boolean): Promise<boolean>;
 }
 
 let sessionRebalance: ProviderGroupSessionRebalance | null = null;
@@ -455,6 +456,12 @@ export async function recordProviderGroupRebalanceDecision(sessionId: string, me
   } catch {
     return false;
   }
+}
+
+/** 任务偏好由所属电脑保存；失败不伪报成功。 */
+export async function setProviderGroupRebalancePreference(sessionId: string, enabled: boolean): Promise<boolean> {
+  if (!sessionRebalance) return false;
+  return sessionRebalance.preference(sessionId, enabled);
 }
 
 /** register 装配会话表后注入：这台电脑上每个供应商正在运行一轮的任务数(localLoad.ts)。 */

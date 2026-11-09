@@ -7,5 +7,7 @@ import {
 import { createBroadcastTap } from "./broadcastTapCore.js";
 export type * from "./broadcastTapCore.js";
 export const { getSafeDataOwnerPushStamp, captureDataOwnerBroadcastScope, isDataOwnerBroadcastScopeCurrent, tapWindowBroadcast, setBroadcastTapListener, hasBroadcastTapListener, tapRemoteModelCatalogChange } = createBroadcastTap({
-activeOwnerScopeKey, getActiveDataOwnerPushStamp, isAppSessionBoundaryPending,
+  activeOwnerScopeKey: () => activeOwnerScopeKey(),
+  getActiveDataOwnerPushStamp: () => getActiveDataOwnerPushStamp(),
+  isAppSessionBoundaryPending: () => isAppSessionBoundaryPending(),
 });

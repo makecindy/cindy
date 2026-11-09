@@ -15,7 +15,7 @@ import { createGhostProductionCallbacks } from './ghostProductionCallbacksFixtur
 
 const loadPipe = createGhostProductionCallbacks<{
   send(event: { sender: { id: number; isDestroyed(): boolean } }, payload: unknown): Promise<unknown>;
-}>({ callbacks: { send: ['ipcMain.handle', 'ghost-pipe:send'] } });
+}>({ variables: ['executionPipe'], callbacks: { send: ['ipcMain.handle', 'ghost-pipe:send'] } });
 
 const receipts = new Map<string, PluginTargetReceipt>();
 const key = (pluginId: string, requestKey: string) => JSON.stringify([pluginId, requestKey]);

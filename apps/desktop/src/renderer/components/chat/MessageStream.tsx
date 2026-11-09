@@ -332,6 +332,7 @@ function hasNestedScrollableAncestorThatCanScrollDown(
 import { UserMessage } from './UserMessage';
 import { AssistantMessage } from './AssistantMessage';
 import { MessageSourceLabels } from './MessageSourceLabels';
+import { BotMessageTimelineHeader } from './BotMessageTimelineHeader';
 import { AskUserQuestionBubble } from './AskUserQuestionBubble';
 import type { ErrorDiagnosisSource } from '@/lib/errorDiagnosisPrompt';
 import { ErrorMessageCard } from './ErrorMessageCard';
@@ -428,7 +429,6 @@ const NO_UNREAD_KEYS: ReadonlySet<string> = new Set();
 import {
   collectBotMessageTimeGroups,
   findFirstUnreadBotReplyClientId,
-  formatBotMessageGroupTime,
 } from '@/features/bots/botConversationTimeline';
 import { NAVIGATION_KEYS, useNavigationKeyListener } from './useNavigationKeyListener';
 export function isScrollNavigationKey(key: string): boolean {
@@ -6814,29 +6814,8 @@ export function MessageStream({
                           data-message-client-id={msg.clientId}
                           className={cn('scroll-mt-20 rounded-xl transition-[background-color,box-shadow]', highlightClass)}
                         >
-                          {startsUnread ? (
-                            <div
-                              className="mb-3 flex items-center gap-3"
-                              role="separator"
-                              aria-label={t('bots.chat.newMessagesBoundary')}
-                            >
-                              <div className="h-px flex-1 bg-[var(--bot-unread-bg)] opacity-30" />
-                              <span className="shrink-0 text-11 font-medium tracking-[0.08em] text-[var(--bot-unread-bg)]">
-                                {t('bots.chat.newMessagesBoundary')}
-                              </span>
-                              <div className="h-px flex-1 bg-[var(--bot-unread-bg)] opacity-30" />
-                            </div>
-                          ) : null}
-                          {groupTimestamp !== undefined ? (
-                            <time
-                              dateTime={new Date(groupTimestamp).toISOString()}
-                              className="mb-3 block text-center text-11 text-[var(--text-tertiary)]"
-                            >
-                              {formatBotMessageGroupTime(
-                                groupTimestamp,
-                                i18n.resolvedLanguage ?? i18n.language,
-                              )}
-                            </time>
+                          {startsUnread || groupTimestamp !== undefined ? (
+                            <BotMessageTimelineHeader startsUnread={startsUnread} groupTimestamp={groupTimestamp} />
                           ) : null}
                           <div {...shareAttributes} className={cn(shareable && 'relative')}>
                             {shareable && shareSelectionActive ? (

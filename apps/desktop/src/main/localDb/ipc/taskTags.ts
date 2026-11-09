@@ -16,8 +16,10 @@ import { broadcastSessionPatched } from './sessions';
 const log = createLogger('taskTags');
 export { TASK_TAG_CHANNEL };
 export const { executeTaskTags } = createTaskTagService({
-  captureDataOwnerBroadcastScope, isDataOwnerBroadcastScopeCurrent, tapWindowBroadcast,
-  broadcastSessionPatched,
+  captureDataOwnerBroadcastScope: (...args) => captureDataOwnerBroadcastScope(...args),
+  isDataOwnerBroadcastScopeCurrent: (...args) => isDataOwnerBroadcastScopeCurrent(...args),
+  tapWindowBroadcast: (...args) => tapWindowBroadcast(...args),
+  broadcastSessionPatched: (...args) => broadcastSessionPatched(...args),
   broadcastTagsChanged(payload, ownerStamp) {
     for (const window of BrowserWindow.getAllWindows()) {
       try {

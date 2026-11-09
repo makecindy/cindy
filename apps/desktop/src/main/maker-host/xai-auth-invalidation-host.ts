@@ -9,4 +9,7 @@
 
 import { peekGrokAccessToken, recoverGrokAuthAfterRejection } from './grok-oauth-login.desktop.js';
 import { createXaiAuthInvalidationHost } from './xaiAuthInvalidationCore.js';
-export const { setXaiAuthInvalidatedHandler, invalidateXaiBridgeAuth, createXaiProxyAuthInvalidationObserver } = createXaiAuthInvalidationHost({ peekGrokAccessToken, recoverGrokAuthAfterRejection });
+export const { setXaiAuthInvalidatedHandler, invalidateXaiBridgeAuth, createXaiProxyAuthInvalidationObserver } = createXaiAuthInvalidationHost({
+  peekGrokAccessToken: (...args) => peekGrokAccessToken(...args),
+  recoverGrokAuthAfterRejection: (...args) => recoverGrokAuthAfterRejection(...args),
+});

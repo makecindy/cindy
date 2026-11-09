@@ -938,9 +938,13 @@
       "description": "Para usar a quota de todas as contas de forma equilibrada, envia esta mensagem a partir de {{label}} ({{quota}}). As últimas mensagens e um resumo são transferidos; os detalhes mais antigos podem perder-se.",
       "quota": "{{left}}% restante",
       "quotaReset": "{{left}}% restante · {{reset}}",
-      "confirm": "Mudar",
-      "cancel": "Cancelar",
-      "remember": "Mudar automaticamente a partir de agora (apenas esta tarefa)"
+      "confirm": "Mudar só desta vez",
+      "cancel": "Agora não",
+      "remember": "Mudar automaticamente sem voltar a perguntar",
+      "disable": "Não mudar automaticamente nem voltar a perguntar",
+      "disableFailed": "Não foi possível confirmar se a tua escolha foi guardada. Verifica a ligação e se o Cindy está atualizado no computador onde está a tarefa e tenta novamente. Esta mensagem será enviada normalmente.",
+      "choiceLabel": "Mudança de computador (só nesta tarefa)",
+      "send": "Enviar mensagem"
     },
     "deleteConfirm": {
       "title": "Eliminar o grupo de fornecedores de {{provider}}?",
@@ -14274,6 +14278,7 @@
       "taskAutoArchived": "\"{{title}}\" arquivada",
       "taskAutoArchivedUndo": "Desfazer",
       "taskAutoArchivePending": "Será arquivada ao sair desta tarefa",
+      "taskAutoArchiveBlockedDirty": "«{{title}}» não foi arquivada automaticamente: há alterações não submetidas no espaço de trabalho",
       "taskAutoArchiveCancel": "Cancelar",
       "taskAutoArchiveCancelled": "Sem arquivo automático desta vez",
       "taskArchiveNow": "Arquivar agora"
@@ -19976,10 +19981,10 @@
       "useCodex": "Iniciar sessão com o Codex"
     },
     "title": "Contas de subscrição",
-    "note": "A primeira conta usa a pasta predefinida da CLI. As contas adicionais iniciam sessão separadamente. As novas tarefas são distribuídas; as existentes mantêm a sua conta.",
     "strategy": "Distribuição de carga",
     "add": "Adicionar conta",
     "default": "Pasta predefinida",
+    "defaultTag": "Predefinida",
     "ready": "Ligada",
     "signedOut": "É necessário iniciar sessão",
     "unavailable": "Estado indisponível",

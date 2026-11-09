@@ -6,7 +6,7 @@ export { MCP_TRANSPORTS, CUSTOM_MCP_ID_RE, isUnsafeMcpServerId, validateCustomMc
 export type { CustomMcpConfig, McpTransport, ValidationResult } from './custom-mcp-store.js';
 
 export const { listCustomMcpServers, listCustomMcpNamesForSetup, listCustomMcpRuntimeGenerations, getCustomMcpServer, customMcpServerExists, createCustomMcpServer, updateCustomMcpServer, deleteCustomMcpServer } = createCustomMcpStore({
-  getDbClient,
+  getDbClient: () => getDbClient(),
   credentials: {
     assertAvailable() {
       if (!oauthSecureStorageAvailable({ platform: process.platform,

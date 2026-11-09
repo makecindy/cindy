@@ -5,6 +5,7 @@ import { useTranslation } from 'react-i18next';
 import { unifiedModelKeyId } from '@cindy/model-providers';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Checkbox } from '@/components/ui/checkbox';
 import { ErrorNotice } from '@/components/ui/error-notice';
 import { SettingsCard, SettingsRow, SettingsSection } from '@/components/ui/settings-rows';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
@@ -134,7 +135,7 @@ export function RemoteModelAccessDialog({ providerId, deviceId, memberId, member
       <div className="min-h-0 overflow-y-auto overscroll-contain">
       <p className="mt-2 text-13 leading-[1.5] text-[var(--confirm-desc)]">{t(key + (memberId ? 'memberDescription' : 'description'), { name: memberName })}</p>
       <label className="mt-4 flex min-h-8 items-center gap-2 text-13 leading-[1.5] text-[var(--text-primary)]">
-        <input type="checkbox" className="h-4 w-4 shrink-0 accent-[var(--text-primary)]" checked={models === null} disabled={!view || saving} onChange={(event) => setModels(event.target.checked ? null : [])} />
+        <Checkbox checked={models === null} disabled={!view || saving} onChange={(event) => setModels(event.target.checked ? null : [])} />
         {t(key + (memberId ? 'inherit' : 'allFuture'))}
       </label>
       <div className="mt-3"><Input inputRef={searchRef} value={search} onChange={setSearch} placeholder={t(key + 'search')} aria-label={t(key + 'search')} disabled={!view || saving} /></div>
@@ -146,8 +147,8 @@ export function RemoteModelAccessDialog({ providerId, deviceId, memberId, member
           const checked = selectedIds.length > 0 && allowedIds.every(id => selectedIds.includes(id));
           const partial = selectedIds.length > 0 && !checked;
           return <label key={model.id} className="flex min-h-9 items-center gap-3 rounded-lg px-2 py-2 text-13 leading-[1.5] text-[var(--text-primary)] hover:bg-[var(--surface-hover)]">
-            <input type="checkbox" className="h-4 w-4 shrink-0 accent-[var(--text-primary)]" aria-label={model.name} aria-checked={partial ? 'mixed' : checked}
-              ref={input => { if (input) input.indeterminate = partial; }} checked={checked} disabled={!view || saving || (!allowed && selectedIds.length === 0)} onChange={(event) => {
+            <Checkbox aria-label={model.name} indeterminate={partial}
+              checked={checked} disabled={!view || saving || (!allowed && selectedIds.length === 0)} onChange={(event) => {
               const current = models ?? available.filter((entry) => providerAllows(entry.id)).map((entry) => entry.id);
               setModels(event.target.checked ? [...new Set([...current, ...allowedIds])] : current.filter((id) => !model.ids.includes(id)));
             }} />

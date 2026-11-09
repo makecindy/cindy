@@ -1,4 +1,5 @@
 import { isOrdinaryTaskListSession } from '../../shared/sessionSource';
+import { applySessionRebalancePreferencePatch } from '@/features/provider-group/sessionRebalanceCache';
 import { emitTaskTagCatalog } from '@/features/task-tags/taskTagEvents';
 import { normalizeTaskTags, reconcileTaskTags } from '@cindy/maker-shared';
 /**
@@ -1404,6 +1405,7 @@ if (typeof window !== 'undefined') {
   if (sessionsPush) {
     sessionsPush.onPatched(({ sessionId, patch }, ownerStamp) => {
       if (!isDataOwnerPushCurrent(ownerStamp)) return;
+      applySessionRebalancePreferencePatch(sessionId, patch);
       sessionsStore.patchLocal(sessionId, patch);
     });
     sessionsPush.onCreated((_payload, ownerStamp) => {

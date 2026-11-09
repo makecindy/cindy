@@ -8,7 +8,7 @@ import { knownStandbyGuests, reconcileStandbyGuest } from './providerShareAvaila
 import { withAvailabilityPolicyLock, rememberAvailabilityShare } from './providerShareAvailabilityPolicy.js';
 /** Offline-owner admission. This contains public identities and grants, never provider credentials. */
 import { parseProviderSharePeer, ProviderShareScopeChangedError, type ProviderShareOwned } from '@cindy/device-link';
-import type { AgentKind, CatalogModel, ProviderView } from '@cindy/model-providers';
+import { remoteInvocationModels, type AgentKind, type CatalogModel, type ProviderView } from '@cindy/model-providers';
 import { getDeviceId } from '../authManager.js';
 import { getClientEndpoint } from '../clientEndpointsService.js';
 import { captureProviderManagementScope } from '../provider-group/managementScope.js';
@@ -69,7 +69,8 @@ async function publishUnlocked(shares: readonly ProviderShareOwned[]): Promise<v
         }
         if (row.state !== 'ok' || !row.view?.connected || row.view.suspended || row.providerContinuity?.stale) continue;
         const models: Model[] = [];
-        for (const kind of ['claude-code', 'codex', 'pi'] as const) for (const model of row.view.models[kind] ?? []) {
+        const effectiveView = remoteInvocationModels(row.view);
+        for (const kind of ['claude-code', 'codex', 'pi'] as const) for (const model of effectiveView.models[kind] ?? []) {
           if (!model.disabled && model.availability !== 'requires_payment'
             && (!row.view.remoteModelIds || row.view.remoteModelIds.includes(model.id))) {
             const metadata = Object.fromEntries(['supportsToolCalls', 'reasoningRequired', 'supportsImageInput', 'supportsFastMode', 'supportsUltrafastMode', 'thinkingToggle', 'effortsUnknown', 'defaultEnabled', 'group', 'mode', 'family', 'icon', 'status', 'modalities'].flatMap(key => {

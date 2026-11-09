@@ -1205,7 +1205,8 @@ export async function touchUserSendInDb(id: string, atMs?: number): Promise<void
  * 不是未发送任务时什么都不做。最近项目由随后的 touchUserSend 照常记录。
  */
 const sessionDraftPorts = {
-  emitSessionCreated, emitSessionListChangedLocally,
+  emitSessionCreated: (...args: Parameters<typeof emitSessionCreated>) => emitSessionCreated(...args),
+  emitSessionListChangedLocally: (...args: Parameters<typeof emitSessionListChangedLocally>) => emitSessionListChangedLocally(...args),
   notifyPluginSessionCreated: (input: { sessionId: string; workdir?: string }) => {
     void import('../../cindy-brain/index.js').then(m => m.notifyGhostSessionEvent('created', input)).catch(() => {});
   },

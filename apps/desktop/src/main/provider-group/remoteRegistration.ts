@@ -19,6 +19,7 @@ import {
   readProviderRunningTurnsByProvider,
   recordProviderGroupRebalanceDecision,
   setProviderGroupContinuityHandler,
+  setProviderGroupRebalancePreference,
 } from './runtime.js';
 import { readProviderGroup } from './store.js';
 import { isProviderManagementRequest } from '../../shared/providerManagement.js';
@@ -42,6 +43,7 @@ export function registerProviderGroupRemoteHandler(options: { onGroupChanged?: (
     sessionGroup: readProviderGroupOfSession,
     rebalanceSuggestion: readProviderGroupRebalanceSuggestion,
     rebalanceDecision: recordProviderGroupRebalanceDecision,
+    rebalancePreference: setProviderGroupRebalancePreference,
   };
   setProviderGroupRemoteHandler({
     handle: (controller, raw) => isGroupContinuityRequest(raw) ? continuity.handle(controller, raw) : isProviderManagementRequest(raw)

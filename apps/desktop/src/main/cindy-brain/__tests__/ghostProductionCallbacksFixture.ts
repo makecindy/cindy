@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import ts from 'typescript';
 import { confirmedAutoTools } from '../ghostInstallConsent.js';
 import { setPluginEnabled } from '../pluginEnableService.js';
+import { createGhostExecutionPipe } from '../executionPipe.js';
 import { ghostInstallTargetContext, resolveForgeInstallTarget } from '../ghostInstallTarget.js';
 import {
   parsePluginStoragePart,
@@ -16,6 +17,7 @@ import {
 } from '../../../shared/pluginIdentity.js';
 
 const productionIdentityDeps = {
+  createGhostExecutionPipe,
   setPluginEnabled,
   parsePluginStoragePart,
   parsePluginInstallRelId,

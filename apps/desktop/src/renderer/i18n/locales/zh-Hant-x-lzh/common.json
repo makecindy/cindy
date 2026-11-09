@@ -913,9 +913,13 @@
       "description": "為均用各名籍之限額，宜將此訊易至 {{label}} 遣之（{{quota}}）。易後攜近數輪言談與摘要，更早之細節或記不全。",
       "quota": "尚餘 {{left}}%",
       "quotaReset": "尚餘 {{left}}%，{{reset}}",
-      "confirm": "易之",
-      "cancel": "罷",
-      "remember": "此後自動易之，不復詢問（僅此差事）"
+      "confirm": "惟此次換之",
+      "cancel": "暫不換",
+      "remember": "此後自動切換，不復問",
+      "disable": "勿自動切換，亦不復問",
+      "disableFailed": "未能確認此選擇已存。請查連線，並確認任務所在電腦之 Cindy 已更新，再試。此訊仍照常送出。",
+      "choiceLabel": "切換之法（僅此任務）",
+      "send": "續發此訊"
     },
     "deleteConfirm": {
       "title": "刪 {{provider}} 之供方組乎？",
@@ -14105,6 +14109,7 @@
       "taskAutoArchived": "「{{title}}」已封存",
       "taskAutoArchivedUndo": "撤",
       "taskAutoArchivePending": "離此任務後自封存",
+      "taskAutoArchiveBlockedDirty": "「{{title}}」工作區尚有未提交之改，未自封存",
       "taskAutoArchiveCancel": "取消",
       "taskAutoArchiveCancelled": "此番不自封存",
       "taskArchiveNow": "即封存"
@@ -19717,10 +19722,10 @@
       "useCodex": "以 Codex 登入"
     },
     "title": "訂閱帳號",
-    "note": "首號沿用 CLI 預設目錄，增號各自登入。新務依策分派，舊務仍用原號。",
     "strategy": "負載平衡",
     "add": "新增帳號",
     "default": "預設目錄",
+    "defaultTag": "預設",
     "ready": "已連線",
     "signedOut": "須登入",
     "unavailable": "狀態暫不可得",

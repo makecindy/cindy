@@ -6,7 +6,7 @@ import { cn } from '@/lib/utils';
 import type { BotGroupSummary, ChatGroupAction } from '../../../shared/botGroupChat';
 import { refreshBotGroups } from './botGroupStore';
 import { chatErrorKey } from './ChatServerControls';
-import { SETTINGS_DIVIDER, SETTINGS_HINT, SettingsCard, SettingsSection } from '@/components/ui/settings-rows';
+import { SettingsCard, SettingsRow, SettingsSection } from '@/components/ui/settings-rows';
 
 const key = (name: string) => `bots.groupChat.server.settings.${name}`;
 type Access = 'none' | 'chat' | 'tools';
@@ -65,21 +65,15 @@ export function ChatBotAccessField({ groupId, member, disabled = false }: {
     <SettingsCard role="radiogroup" aria-label={question}>
       {OPTIONS.map(option => {
         const selected = current === option.value;
-        return <button key={option.value} type="button" role="radio" aria-checked={selected} disabled={locked}
+        // Radio rows top-align with a long hint; a locked choice still reads as the current one.
+        return <SettingsRow key={option.value} role="radio" aria-checked={selected} disabled={locked}
+          className={cn('items-start', locked && selected && 'opacity-100')}
           onClick={() => void change(option.value)}
-          className={cn('flex w-full items-start gap-3 px-4 py-3.5 text-left outline-none transition-colors duration-[var(--motion-fast)] ease-[var(--motion-ease-out)]',
-            SETTINGS_DIVIDER, 'focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--focus-ring)] enabled:hover:bg-[var(--surface-hover)] disabled:cursor-default',
-            locked && !selected && 'opacity-60')}>
-          <span aria-hidden className={cn('relative mt-px h-[18px] w-[18px] shrink-0 rounded-full border-[1.5px] transition-colors duration-[var(--motion-fast)]',
-            selected ? 'border-[var(--switch-track-on)] after:absolute after:inset-[3px] after:rounded-full after:bg-[var(--switch-track-on)]' : 'border-[var(--text-tertiary)]')} />
-          <span className="flex min-w-0 flex-1 flex-col">
-            <span className="flex flex-wrap items-baseline gap-x-2 text-14 leading-[1.43] text-[var(--text-primary)]">
-              {t(key(option.title))}
-              {option.value === 'chat' && <span className="text-12 leading-[1.33] text-[var(--text-tertiary)]">{t(key('defaultTag'))}</span>}
-            </span>
-            <span className={cn('mt-0.5', SETTINGS_HINT)}>{t(key(option.hint), { name: member.name })}</span>
-          </span>
-        </button>;
+          lead={<span aria-hidden className={cn('relative mt-px h-[18px] w-[18px] shrink-0 rounded-full border-[1.5px] transition-colors duration-[var(--motion-fast)]',
+            selected ? 'border-[var(--switch-track-on)] after:absolute after:inset-[3px] after:rounded-full after:bg-[var(--switch-track-on)]' : 'border-[var(--text-tertiary)]')} />}
+          title={t(key(option.title))}
+          tag={option.value === 'chat' ? t(key('defaultTag')) : undefined}
+          hint={t(key(option.hint), { name: member.name })} />;
       })}
     </SettingsCard>
     {error && <p role="alert" className="mt-2 text-12 leading-[1.42] text-[var(--text-danger)]">{error}</p>}

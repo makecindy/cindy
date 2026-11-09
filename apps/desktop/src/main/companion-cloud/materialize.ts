@@ -32,6 +32,8 @@ export interface CompanionWriteFence {
 /** Local profile, Bot Home and Session operations, all through the existing services. */
 export interface CompanionMaterializeHost {
   readProfile: (botId: string) => Promise<CompanionLocalProfile | null>;
+  /** A different, non-archived Cindy identity; never match by display name. */
+  findConflictingCindy?: (botId: string) => Promise<string | null>;
   /**
    * The cloud avatar is restored when its bytes are still available. A temporary download failure
    * rejects; a permanent one stores the default avatar together with durable local-only provenance.
@@ -118,6 +120,22 @@ const text = (value: unknown) => typeof value === 'string' ? value : undefined;
 const record = (value: unknown) => value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null;
 const noFence: CompanionWriteFence = { assertCurrent: () => undefined };
 
+/** A local identity conflict needs a deliberate merge or move, not another creation attempt. */
+export class CompanionIdentityConflict extends Error {
+  constructor(readonly conflictingBotId: string) { super('LOCAL_CINDY_CONFLICT'); }
+}
+
+export async function assertCompanionIdentity(
+  host: Pick<CompanionMaterializeHost, 'findConflictingCindy'>,
+  botId: string, templateId: unknown, fence: CompanionWriteFence,
+): Promise<void> {
+  fence.assertCurrent();
+  if (templateId !== 'cindy' || !host.findConflictingCindy) return;
+  const conflict = await host.findConflictingCindy(botId);
+  fence.assertCurrent();
+  if (conflict) throw new CompanionIdentityConflict(conflict);
+}
+
 export async function materializeCompanion(input: {
   api: CompanionApi;
   store?: CompanionStore;
@@ -173,6 +191,10 @@ export async function materializeCompanion(input: {
   // Without the home's profile snapshot this copy's own (or empty) profile would be published as
   // the companion's identity: wait (demoted, retried) until the home has uploaded one.
   if (!profile) throw new Error('PROFILE_SNAPSHOT_MISSING');
+  const templateId = text(record(profile)?.templateId);
+  // The cloud externalId is the only reusable local identity. Another Cindy (even one with
+  // the same name) must not be overwritten, re-keyed or silently merged into this actor.
+  await assertCompanionIdentity(host, botId, templateId, fence);
   // An existing local copy is saved before the cloud copy replaces (or deletes) its files.
   let backup: string | null | undefined;
   if (local && !(known?.actorId === actor.id && known.backedUp) && host.backupHome) {
@@ -182,7 +204,6 @@ export async function materializeCompanion(input: {
     state.update(botId, actor.id, entry => { entry.backedUp = true; });
   }
   const name = text(profile?.name)?.trim() || actor.name || local?.displayName || '伙伴';
-  const templateId = text(record(profile)?.templateId);
   if (!local) {
     await step(() => host.createProfile({ id: botId, name, description: text(profile?.description) ?? '',
       identitySource: text(profile?.soul) ?? '', userContextSource: text(profile?.user) ?? '', avatar: actor.avatar,

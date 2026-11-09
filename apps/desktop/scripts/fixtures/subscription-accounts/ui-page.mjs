@@ -21,7 +21,7 @@ export default {
       return;
     }
     assert.equal(await page.getByRole('switch').count(), 3);
-    assert.equal(await page.getByRole('combobox').first().getAttribute('data-setting-id'), 'providers.subscriptionAccounts');
+    assert.equal(await page.getByRole('radiogroup', { name: await ui.t('subscriptionAccounts.strategy'), exact: true }).getAttribute('data-setting-id'), 'providers.subscriptionAccounts');
     // Every account's bars share one column, whatever each account's own labels and numbers are.
     const bars = await page.getByRole('progressbar').evaluateAll(elements =>
       elements.map(element => {

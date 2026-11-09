@@ -14,7 +14,8 @@ import type { CustomMcpConfig } from '../../../shared/customMcp.js';
 import { detectMcpDuplicates, resolveMcpDuplicateChoices } from '../../maker-host/mcp-duplicate-detection.js';
 import type { McpDuplicateChoice } from '../../../shared/customMcp.js';
 
-const storeMock = vi.hoisted(() => ({ listCustomMcpServers: vi.fn() }));
+const storeMock = vi.hoisted(() => ({ listCustomMcpServers: vi.fn(), owner: {} as object | null }));
+vi.mock('../../localDb/client/current.js', () => ({ getCurrentDbClientSnapshot: () => storeMock.owner }));
 
 // This suite uses isolated SQLite fixtures; OS encryption is covered by the store suite.
 vi.mock('electron', async (importOriginal) => {
@@ -67,10 +68,39 @@ function builtin(name: string): McpProvider {
 
 beforeEach(() => {
   resetCustomMcpRegistry();
+  storeMock.owner = {};
   storeMock.listCustomMcpServers.mockReset();
 });
 
 describe('refreshCustomMcpProviders', () => {
+  // 2026-11-10, unit: Maker's initial refresh ran before DB takeover. A missing
+  // DB must defer, then the existing onReady refresh must publish saved MCPs.
+  it('defers before DB readiness and publishes saved providers when onReady refreshes', async () => {
+    const arr: McpProvider[] = [builtin('built_in')];
+    registerCustomMcpArrays(arr);
+    storeMock.owner = null;
+    storeMock.listCustomMcpServers.mockResolvedValue([config('saved')]);
+    await refreshCustomMcpProviders();
+    expect(storeMock.listCustomMcpServers).not.toHaveBeenCalled();
+    expect(arr.map(p => p.name)).toEqual(['built_in']);
+    storeMock.owner = {};
+    await refreshCustomMcpProviders();
+    await refreshCustomMcpProviders();
+    expect(arr.map(p => p.name)).toEqual(['built_in', 'saved']);
+  });
+
+  it('discards a slow DB read from a replaced owner instead of publishing it into the new registry', async () => {
+    const arr: McpProvider[] = [builtin('built_in')];
+    registerCustomMcpArrays(arr);
+    let release!: (rows: CustomMcpConfig[]) => void;
+    storeMock.listCustomMcpServers.mockImplementationOnce(() => new Promise(resolve => { release = resolve; }));
+    const refresh = refreshCustomMcpProviders();
+    storeMock.owner = {};
+    release([config('old_owner')]);
+    await refresh;
+    expect(arr.map(p => p.name)).toEqual(['built_in']);
+  });
+
   // PR #9055: duplicate diagnostics must use registration's real admission rules.
   // Unit: one native endpoint and legacy invalid rows; prior registry tests did not
   // exercise source choices, so they missed disabling the only usable connection.

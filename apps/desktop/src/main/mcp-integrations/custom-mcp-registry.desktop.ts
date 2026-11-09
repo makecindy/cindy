@@ -4,5 +4,10 @@ import { createAppServerProxy } from '../mcp-apps/serverProxy.desktop.js';
 import { registerAppServer, resetAppServers, clearAppServerConfigs } from '../mcp-apps/runtime.js';
 import { createCustomMcpRegistry } from './custom-mcp-registry.js';
 export const { registerCustomMcpArrays, resetCustomMcpRegistry, getBuiltinMcpServerNames, listRegistrableCustomMcpServers, refreshCustomMcpProviders, __resetCustomMcpRegistryForTest } = createCustomMcpRegistry({
-  listCustomMcpServers, readCustomMcpToken, createAppServerProxy, registerAppServer, resetAppServers, clearAppServerConfigs,
+  listCustomMcpServers: (...args) => listCustomMcpServers(...args),
+  readCustomMcpToken: (...args) => readCustomMcpToken(...args),
+  createAppServerProxy: (...args) => createAppServerProxy(...args),
+  registerAppServer: (...args) => registerAppServer(...args),
+  resetAppServers: (...args) => resetAppServers(...args),
+  clearAppServerConfigs: (...args) => clearAppServerConfigs(...args),
 });

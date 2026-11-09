@@ -923,9 +923,13 @@
       "description": "To use every account’s quota evenly, send this message from {{label}} ({{quota}}). The last few messages and a summary carry over; older details may be lost.",
       "quota": "{{left}}% left",
       "quotaReset": "{{left}}% left · {{reset}}",
-      "confirm": "Switch",
-      "cancel": "Cancel",
-      "remember": "Switch automatically from now on (this task only)"
+      "confirm": "Switch this time only",
+      "cancel": "Not now",
+      "remember": "Switch automatically from now on",
+      "disable": "Do not switch automatically",
+      "disableFailed": "Couldn't confirm whether your choice was saved. Check the connection and make sure Cindy on the task’s computer is up to date, then try again. This message will still be sent as usual.",
+      "choiceLabel": "Switching preference (this task only)",
+      "send": "Send message"
     },
     "deleteConfirm": {
       "title": "Delete the {{provider}} provider group?",
@@ -14180,6 +14184,7 @@
       "taskAutoArchived": "Archived \"{{title}}\"",
       "taskAutoArchivedUndo": "Undo",
       "taskAutoArchivePending": "Will archive when you leave this task",
+      "taskAutoArchiveBlockedDirty": "“{{title}}” was not auto-archived: its workspace has uncommitted changes",
       "taskAutoArchiveCancel": "Cancel",
       "taskAutoArchiveCancelled": "Will not auto-archive this time",
       "taskArchiveNow": "Archive now"
@@ -19789,10 +19794,10 @@
       "useCodex": "Sign in with Codex"
     },
     "title": "Subscription accounts",
-    "note": "The first account uses the CLI’s default folder. Additional accounts sign in separately. New tasks are balanced across accounts; existing tasks keep their account.",
     "strategy": "Load balancing",
     "add": "Add account",
     "default": "Default folder",
+    "defaultTag": "Default",
     "ready": "Connected",
     "signedOut": "Sign in required",
     "unavailable": "Status unavailable",

@@ -24,6 +24,6 @@ describe('workdir probe packaging contract', () => {
     );
     expect(wiring).toContain('5_000');
     const bootstrap = fs.readFileSync(path.join(desktopRoot, 'src/main/bootstrap-electron.ts'), 'utf8');
-    expect(bootstrap).toContain("app.once('before-quit', () => workdirProbeHostClient.dispose())");
+    expect(bootstrap).toContain("onQuit('workdir-probe-host', () => workdirProbeHostClient.dispose(), 'sync')");
   });
 });

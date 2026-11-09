@@ -1,6 +1,6 @@
 import { createXaiProviderTokenReader } from './xaiProviderToken.js';
 import { createCatalogCache } from './catalogCache.js';
-import { isModelContextLimitCustomized } from './model-context-limit-store.js';
+import { isModelContextLimitCustomized, readModelContextLimits } from './model-context-limit-store.js';
 import { requestCodexApiModelProbe } from './codex-api-model-capabilities.js';
 import { readModelPriceOverrideView } from '../usage/modelPriceOverrideStore.js';
 import { readProviderPresentation } from './provider-presentation-store.js';
@@ -283,7 +283,10 @@ let endpointReloadInflight: {
   promise: Promise<Catalog>;
 } | null = null;
 
-const readXaiProviderOAuthToken = createXaiProviderTokenReader({ getGrokAccessToken, recoverGrokAuthAfterRejection });
+const readXaiProviderOAuthToken = createXaiProviderTokenReader({
+  getGrokAccessToken: (...args) => getGrokAccessToken(...args),
+  recoverGrokAuthAfterRejection: (...args) => recoverGrokAuthAfterRejection(...args),
+});
 
 /** Set 用稳定函数引用去重，ensureActiveCatalogLoaded 的幂等调用不会重复注册清理副作用。 */
 function handleProviderSecretsCleared(): void {
@@ -848,6 +851,7 @@ export function getDesktopProviderService(options: { allowSideEffects?: boolean 
   }
   if (singleton) return singleton;
   singleton = createProviderService({
+    getModelContextLimits: readModelContextLimits,
     projectProvider: projectSubscriptionFastPolicy,
     getProviderPresentation: (providerId) => {
       const presentation = readProviderPresentation(providerId);

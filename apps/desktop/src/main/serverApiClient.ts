@@ -21,6 +21,6 @@ export type { ApiFetchOptions } from './serverApiClientCore.js';
 export const serverApiFetch = createServerApiClient({
   fetch: (url, init) => net.fetch(url instanceof URL ? url.href : url, init),
   auth: authManager,
-  locale: getResolvedMainLocale,
+  locale: () => getResolvedMainLocale(),
   log: createLogger('serverApiClient'),
 });

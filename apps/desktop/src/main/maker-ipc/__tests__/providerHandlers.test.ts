@@ -920,6 +920,33 @@ describe('model-disable:set handler', () => {
 });
 
 describe('provider:models-rediscover handler', () => {
+  it('helper rediscovery waits for SDK discovery and returns the new subscription models', async () => {
+    const harness = new IpcHarness();
+    let models = ['claude-fable-5-1'];
+    let finish!: () => void;
+    const discovery = new Promise<void>((resolve) => { finish = resolve; });
+    const deps = makeDeps({
+      listProviders: async () => [catalogView('anthropic', { 'claude-code': models })],
+      currentOwnerSession: () => ({ dataOwnerId: 'test-user', generation: 1 }),
+      refreshBuiltinModels: vi.fn(async () => {
+        await discovery;
+        models = ['claude-fable-5-2'];
+      }),
+    });
+    configureModelSettingsActions(registerProviderHandlers(harness, deps));
+    let settled = false;
+    const result = manageAppModels({ operation: 'provider', change: {
+      action: 'rediscover', providerId: 'anthropic',
+    } }, async () => {}).then((value) => { settled = true; return value; });
+    await vi.waitFor(() => expect(deps.refreshBuiltinModels).toHaveBeenCalledWith('anthropic'));
+    expect(settled).toBe(false);
+    finish();
+    expect(await result).toMatchObject({ providers: [{ models: {
+      'claude-code': [{ id: 'claude-fable-5-2' }],
+    } }] });
+    expect(deps.rediscoverModels).not.toHaveBeenCalled();
+  });
+
   it('校验 sender 后才发起重新发现;不可信 sender 直接拒绝', async () => {
     const harness = new IpcHarness();
     const assertTrustedSender = vi.fn(() => {
@@ -933,6 +960,7 @@ describe('provider:models-rediscover handler', () => {
     ).rejects.toThrow(/PERMISSION_DENIED/);
     // 拒绝发生在任何上游动作之前:绝不让不可信 sender 触发带凭证的请求。
     expect(deps.rediscoverModels).not.toHaveBeenCalled();
+    expect(deps.refreshBuiltinModels).not.toHaveBeenCalled();
   });
 
   it('守卫未接线时 fail-closed,不靠可选链静默放行', async () => {
@@ -946,17 +974,19 @@ describe('provider:models-rediscover handler', () => {
       harness.invoke(MAKER_INVOKE.PROVIDER_MODELS_REDISCOVER, 'anthropic'),
     ).rejects.toThrow(/PERMISSION_DENIED/);
     expect(deps.rediscoverModels).not.toHaveBeenCalled();
+    expect(deps.refreshBuiltinModels).not.toHaveBeenCalled();
   });
 
-  it('成功时返回 ok 且不重复广播(发现流程自己收口)', async () => {
+  it.each(['anthropic', 'openai', 'xai', 'xd'])('refreshes %s from its live source without duplicate broadcasts', async (providerId) => {
     const harness = new IpcHarness();
     const deps = makeDeps();
     registerProviderHandlers(harness, deps);
 
-    await expect(harness.invoke(MAKER_INVOKE.PROVIDER_MODELS_REDISCOVER, 'anthropic')).resolves.toEqual({
+    await expect(harness.invoke(MAKER_INVOKE.PROVIDER_MODELS_REDISCOVER, providerId)).resolves.toEqual({
       ok: true,
     });
-    expect(deps.rediscoverModels).toHaveBeenCalledWith('anthropic');
+    expect(deps.refreshBuiltinModels).toHaveBeenCalledWith(providerId);
+    expect(deps.rediscoverModels).not.toHaveBeenCalled();
     expect(deps.broadcastChanged).not.toHaveBeenCalled();
   });
 
@@ -971,7 +1001,7 @@ describe('provider:models-rediscover handler', () => {
     };
     registerProviderHandlers(harness, makeDeps({ rediscoverModels: vi.fn(async () => failure) }));
 
-    const res = (await harness.invoke(MAKER_INVOKE.PROVIDER_MODELS_REDISCOVER, 'anthropic')) as {
+    const res = (await harness.invoke(MAKER_INVOKE.PROVIDER_MODELS_REDISCOVER, 'custom')) as {
       ok: boolean;
       failure?: Record<string, unknown>;
     };
@@ -984,8 +1014,8 @@ describe('provider:models-rediscover handler', () => {
     registerProviderHandlers(
       harness,
       makeDeps({
-        rediscoverModels: vi.fn(async () => {
-          throw new Error('disk full');
+        refreshBuiltinModels: vi.fn(async () => {
+          throw new Error('upstream error with private details');
         }),
       }),
     );

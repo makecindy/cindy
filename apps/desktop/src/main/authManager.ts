@@ -2654,7 +2654,10 @@ async function withAccountFreeOwnerCommit(opts: {
     const release = releaseBoundary as (() => void) | null;
     release?.();
     if (heldOwnerChangeShell) leaveOwnerChangeShellPending();
-    if (release && notify) notifyRenderer();
+    // prepareTransition already published a pending projection. Even silent
+    // cold-start recovery must settle it: renderer auth initialization keeps a
+    // newer push over the IPC response, otherwise startup stays pending forever.
+    if (release) notifyRenderer();
   }
 
   requestStableOwnerPostCommit('owner-commit');

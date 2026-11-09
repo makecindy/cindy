@@ -71,7 +71,7 @@ describe('Node runtime packaging contract', () => {
       'utf8',
     );
     const broker = fs.readFileSync(
-      path.join(desktopRoot, 'src/main/cindy-brain/nodeRuntimeBroker.ts'),
+      path.join(desktopRoot, 'src/main/cindy-brain/nodeRuntimeBroker.desktop.ts'),
       'utf8',
     );
     expect(entry).toContain('}).parentPort');
@@ -122,11 +122,11 @@ describe('Node runtime packaging contract', () => {
       'utf8',
     );
     const broker = fs.readFileSync(
-      path.join(desktopRoot, 'src/main/cindy-brain/nodeRuntimeBrokerCore.ts'),
+      path.join(desktopRoot, 'src/main/cindy-brain/nodeRuntimeBroker.ts'),
       'utf8',
     );
     const adapter = fs.readFileSync(
-      path.join(desktopRoot, 'src/main/cindy-brain/nodeRuntimeBroker.ts'), 'utf8',
+      path.join(desktopRoot, 'src/main/cindy-brain/nodeRuntimeBroker.desktop.ts'), 'utf8',
     );
     // 窄接口冻结挂载,原样模式伪装 argv,不引 child_process 自己生进程。
     expect(worker).toContain('__CINDY_NODE__');
