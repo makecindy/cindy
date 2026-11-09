@@ -1,6 +1,6 @@
 {
   "schemaVersion": 6,
-  "updatedAt": "2026-11-06T16:51:20.313Z",
+  "updatedAt": "2026-11-06T21:22:03.000Z",
   "models": [
     {
       "id": "openai/gpt-6.1-sol",
@@ -4678,6 +4678,32 @@
                 "kind": "provider-official",
                 "url": "https://platform.claude.com/docs/en/about-claude/pricing",
                 "verifiedAt": "2026-11-05"
+              }
+            },
+            {
+              "currency": "USD",
+              "variant": "batch",
+              "maxInputTokens": 100001,
+              "inputPerMtok": 0.05,
+              "outputPerMtok": 0.25,
+              "effectiveFrom": "2026-11-06",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://platform.claude.com/docs/en/about-claude/pricing",
+                "verifiedAt": "2026-11-06"
+              }
+            },
+            {
+              "currency": "USD",
+              "variant": "batch",
+              "minInputTokens": 100001,
+              "inputPerMtok": 0.25,
+              "outputPerMtok": 1.25,
+              "effectiveFrom": "2026-11-06",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://platform.claude.com/docs/en/about-claude/pricing",
+                "verifiedAt": "2026-11-06"
               }
             }
           ]
