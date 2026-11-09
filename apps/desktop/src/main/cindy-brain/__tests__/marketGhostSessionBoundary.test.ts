@@ -456,6 +456,23 @@ describe('market Ghost session boundary', () => {
     expect(injections).toBeGreaterThanOrEqual(2);
   });
 
+  // Guard: persisted paid-task bindings must survive process restart; only live
+  // dispatch guards may depend on the process-local owner/login generations.
+  // index.ts requires Electron bootstrap, so this stays in the existing auth guard tier.
+  it('keeps native video persisted bindings independent of process-local generations', () => {
+    const start = source.indexOf('async function resolveNativeVideoConnection(');
+    const end = source.indexOf('\nfunction resolveCustomVideoConnection(', start);
+    const body = source.slice(start, end);
+    const revision = body.match(/revision: ([^\n]+)/)?.[1];
+    expect(body).toContain("captureNativeProviderAuthorizationGeneration('xai')");
+    expect(revision).toBeDefined();
+    expect(revision).toContain('authorizationGeneration');
+    expect(revision).not.toMatch(/\b(owner|generation)\b/);
+    expect(body).toContain('activeOwnerScopeKey() !== owner');
+    expect(body).toContain('getGrokOAuthCredentialGeneration() !== generation');
+    expect(body).toContain('!hasGrokOAuthLogin()');
+  });
+
   it('Ghost 媒体持久化写入守卫也绑定当前进程的 owner scope', () => {
     // 这两处是 GhostCindySlot 的源图读取与结果挂引用 deps。
     // 跨 await 的守卫必须同时检查本进程边界与 scope generation。
