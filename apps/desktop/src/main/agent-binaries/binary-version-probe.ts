@@ -72,7 +72,11 @@ export async function probeBinaryVersion(
  * neither initialize ~/.codex nor touch an inherited task/account runtime home.
  * Share this boundary between startup arbitration and the About-page probe.
  */
-export async function readBinaryVersionOutput(binaryPath: string, signal?: AbortSignal): Promise<string> {
+export async function readBinaryVersionOutput(
+  binaryPath: string,
+  signal?: AbortSignal,
+  timeoutMs = VERSION_PROBE_TIMEOUT_MS,
+): Promise<string> {
   const home = await mkdtemp(path.join(os.tmpdir(), 'cindy-version-probe-'));
   try {
     return await new Promise<string>((resolve, reject) => {
@@ -82,7 +86,7 @@ export async function readBinaryVersionOutput(binaryPath: string, signal?: Abort
         {
           encoding: 'utf8',
           maxBuffer: VERSION_PROBE_MAX_BUFFER,
-          timeout: VERSION_PROBE_TIMEOUT_MS,
+          timeout: timeoutMs,
           windowsHide: true,
           signal,
           env: { ...process.env, CODEX_HOME: home },
