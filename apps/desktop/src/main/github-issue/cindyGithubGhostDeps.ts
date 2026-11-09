@@ -11,6 +11,7 @@
 
 import { getGhostManager, getGhostPipeDispatcher } from '../cindy-brain';
 import { isGhostDisabledForWorkdir } from '../cindy-brain/ghostWorkdirPrefs.js';
+import { installedGhostStoragePart } from '../../shared/pluginIdentity.js';
 import { createLogger } from '../logger.js';
 import { ghostSecretSaved } from '../secrets/providerSecretStore';
 import {
@@ -18,6 +19,7 @@ import {
   CINDY_GITHUB_SECRET_KEY,
   type GithubUserIssueSubmitterDeps,
 } from './githubUserIssueSubmitter';
+import type { InstalledGhost } from '../../shared/ghost.js';
 
 let sharedDeps: GithubUserIssueSubmitterDeps | null = null;
 const log = createLogger('github-issue/github-user');
@@ -36,13 +38,38 @@ export function getSharedGithubUserSubmitterDeps(): GithubUserIssueSubmitterDeps
   return sharedDeps;
 }
 
+/**
+ * 凭证键必须与插件设置页写入时用的 instanceKey 一致。
+ * 设置页以 installedGhostStoragePart(ghost) 作 storeId；新版 root 命名空间
+ * 安装(_ns/_root/cindy-github)得到 `_root__cindy-github`，旧版扁平安装则是裸
+ * `cindy-github`。只认裸 ghostId 会让新安装的用户明明填了 PAT，/issue 确认卡
+ * 仍只剩官方 Bot(见 #9546)。两种键都保留，覆盖新旧安装与企业命名空间实例。
+ *
+ * 导出供回归测试：这里只做键推导，不读凭证库、不碰 Electron。
+ */
+export function githubCredentialInstanceKeys(ghosts: readonly InstalledGhost[]): string[] {
+  const keys = new Set<string>([CINDY_GITHUB_GHOST_ID]);
+  for (const ghost of ghosts) {
+    if (ghost.manifest.id !== CINDY_GITHUB_GHOST_ID) continue;
+    try {
+      keys.add(installedGhostStoragePart(ghost));
+    } catch {
+      // 安装目录形态异常时保留裸 ghostId 兜底，不让反馈入口挂掉。
+    }
+  }
+  return [...keys];
+}
+
 export function buildGithubUserSubmitterDeps(): GithubUserIssueSubmitterDeps {
   return {
     isGithubGhostEnabled: () =>
       getGhostManager()
         .list()
         .some((ghost) => ghost.manifest.id === CINDY_GITHUB_GHOST_ID && ghost.enabled),
-    isGithubCredentialSaved: () => ghostSecretSaved(CINDY_GITHUB_GHOST_ID, CINDY_GITHUB_SECRET_KEY),
+    isGithubCredentialSaved: () =>
+      githubCredentialInstanceKeys(getGhostManager().list()).some((instanceKey) =>
+        ghostSecretSaved(instanceKey, CINDY_GITHUB_SECRET_KEY),
+      ),
     isGithubGhostDisabledForWorkdir: (workdir) =>
       isGhostDisabledForWorkdir(CINDY_GITHUB_GHOST_ID, workdir),
     callGhostTool: (request) => getGhostPipeDispatcher().callGhostTool(request),
