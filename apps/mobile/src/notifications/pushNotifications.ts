@@ -330,6 +330,7 @@ async function syncPushRegistrationInternal(
   opts: {
     enabled: boolean;
     apiFetch: AuthedApiFetch;
+    onPermissionGranted?: () => Promise<void>;
   },
   lifecycleGeneration: number,
 ): Promise<PushSyncResult> {
@@ -370,6 +371,11 @@ async function syncPushRegistrationInternal(
     mobileDebugLog('warn', 'network', 'push registration', { stage: 'permission-denied', realm });
     return 'permission-denied';
   }
+
+  // Android direct delivery must start while the Activity is visible, without
+  // waiting for Google. iOS keeps its existing register-before-enable behavior.
+  if (Platform.OS === 'android') await opts.onPermissionGranted?.();
+  if (lifecycleGeneration !== pushLifecycleGeneration) return 'skipped';
 
   let deviceToken;
   try { deviceToken = await Notifications.getDevicePushTokenAsync(); }
@@ -439,6 +445,8 @@ async function syncPushRegistrationInternal(
 export function syncPushRegistration(opts: {
   enabled: boolean;
   apiFetch: AuthedApiFetch;
+  /** Android settings opt-in, after system permission and before token acquisition. */
+  onPermissionGranted?: () => Promise<void>;
 }): Promise<PushSyncResult> {
   const lifecycleGeneration = pushLifecycleGeneration;
   return runPushMutation(() =>
@@ -450,6 +458,23 @@ export function syncPushRegistration(opts: {
       throw error;
     }),
   );
+}
+
+/** User opt-in: activate Android's independent receiver as soon as permission allows. */
+export async function enablePushNotifications(opts: {
+  apiFetch: AuthedApiFetch;
+  onEnabled: () => void;
+}): Promise<PushSyncResult> {
+  let enabledLocally = false;
+  const enableLocally = async () => {
+    await writePushEnabled(true);
+    opts.onEnabled();
+    enabledLocally = true;
+  };
+  const result = await syncPushRegistration({ enabled: true, apiFetch: opts.apiFetch,
+    onPermissionGranted: enableLocally });
+  if (result !== 'permission-denied' && !enabledLocally) await enableLocally();
+  return result;
 }
 
 /**

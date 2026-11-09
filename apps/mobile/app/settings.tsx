@@ -66,6 +66,7 @@ import {
   isPushSupported,
   readPushEnabled,
   syncPushRegistration,
+  enablePushNotifications,
   writePushEnabled,
   readPushPreviewEnabled,
   writePushPreviewEnabled,
@@ -537,13 +538,12 @@ export default function SettingsScreen() {
         }
         return;
       }
-      const result = await syncPushRegistration({ enabled: true, apiFetch: auth.apiFetch });
+      const result = await enablePushNotifications({ apiFetch: auth.apiFetch,
+        onEnabled: () => setPushEnabled(true) });
       if (result === 'permission-denied') {
         setPushMessage(t('settings.notifications.permissionDenied'));
         return; // 权限被拒:开关保持关闭,不落盘
       }
-      await writePushEnabled(true);
-      setPushEnabled(true);
       if (result === 'local-only') setPushMessage(t('settings.notifications.googleUnavailable'));
     } catch (error) {
       setPushMessage(formatRemoteError(error));

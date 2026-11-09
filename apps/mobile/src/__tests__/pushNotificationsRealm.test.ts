@@ -68,6 +68,9 @@ import {
   configureForegroundNotificationBehavior,
   retryPendingUnregister,
   syncPushRegistration,
+  enablePushNotifications,
+  writePushEnabled,
+  readPushEnabled,
   unregisterPushTokenBestEffort,
 } from '@/notifications/pushNotifications';
 import { setActiveSelfHostedRelay } from '@/device-link/selfHostedRelayRouting';
@@ -92,6 +95,38 @@ function readStoredRealms(key: string): string[] {
 }
 
 describe('push notification realm routing', () => {
+  // Unit r4512939585: first opt-in must notify the direct receiver before Google
+  // resolves. Existing registration tests only inspect the final sync result.
+  // Minimal input: permission granted, Google token promise pending indefinitely.
+  it('activates Android delivery after permission and before waiting for Google', async () => {
+    envState.platform = 'android';
+    await writePushEnabled(false);
+    let tokenEntered!: () => void;
+    const entered = new Promise<void>(resolve => { tokenEntered = resolve; });
+    let failToken!: (error: Error) => void;
+    mocks.getDevicePushTokenAsync.mockImplementationOnce(() => {
+      tokenEntered(); return new Promise((_, reject) => { failToken = reject; });
+    });
+    const onEnabled = vi.fn();
+    const sync = enablePushNotifications({ apiFetch: vi.fn(), onEnabled });
+    await entered;
+    try {
+      expect(await readPushEnabled()).toBe(true);
+      expect(onEnabled).toHaveBeenCalledTimes(1);
+    } finally { failToken(new Error('Google unavailable')); await sync; }
+  });
+  it.each(['ios', 'denied'])('does not early-activate delivery for %s', async condition => {
+    envState.platform = condition === 'ios' ? 'ios' : 'android';
+    if (condition === 'denied') mocks.getPermissionsAsync.mockResolvedValueOnce({ status: 'denied', canAskAgain: false });
+    const onEnabled = vi.fn();
+    mocks.getDevicePushTokenAsync.mockImplementationOnce(async () => {
+      expect(onEnabled).not.toHaveBeenCalled();
+      return { data: 'native-token' };
+    });
+    const result = await enablePushNotifications({ apiFetch: async <T,>() => ({} as T), onEnabled });
+    expect(result).toBe(condition === 'ios' ? 'registered' : 'permission-denied');
+    expect(onEnabled).toHaveBeenCalledTimes(condition === 'ios' ? 1 : 0);
+  });
   // Unit: task-only registration cannot turn off the shared native fallback.
   // Existing tests only covered throwing registration failures, not optional 404/405.
   it.each([404, 405])('keeps direct delivery when task push succeeds but chat registration returns %s', async status => {
