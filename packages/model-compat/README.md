@@ -53,6 +53,16 @@ implementations. Protocol bridges remain bridges; they are not replaced with Ope
 configuration files, or account manager. Cindy's collision-safe `exec` conversion is retained ahead
 of upstream's generic conversion, with reverse transforms applied in reverse order.
 
+## xAI tool-result attachments
+
+The xAI ModelInput sanitizer preserves `input_image` and `input_file` parts in
+`function_call_output.output`, alongside text and the original `call_id`. The same
+normalization applies to Codex custom-tool results and legacy tool-role messages.
+It uses the existing message attachment normalization and remains idempotent for
+subscription forwarding and 422 recovery; text-only results retain their string form.
+This follows the [xAI Responses input schema](https://docs.x.ai/developers/rest-api-reference/inference/responses).
+Regression coverage lives in `anthropic-compat-proxy/src/xai-model-input.test.ts`.
+
 ## Responses initial item repair
 
 The existing uncompressed SSE passthrough repair also fills absent initialization fields on
