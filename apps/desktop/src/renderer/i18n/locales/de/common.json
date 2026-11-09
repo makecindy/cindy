@@ -2285,6 +2285,10 @@
         },
         "visibilityLabel": "Sichtbarkeit des Hintergrundbilds",
         "visibilityHint": "0 % blendet das Hintergrundbild aus; 100 % zeigt es ohne Überlagerung.",
+        "desktopVisibilityLabel": "Desktop-Transparenz",
+        "desktopVisibilityHint": "Zeigt den Desktop und Fenster hinter Cindy. Text und Bedienelemente bleiben klar.",
+        "desktopBlurLabel": "Desktop-Unschärfe",
+        "desktopBlurHint": "Verwischt den Desktop hinter dem Fenster. 0 schaltet den Effekt aus, höhere Werte verstärken ihn. Systeme ohne einstellbare Stärke verwenden ihren Standardeffekt.",
         "blurLabel": "Unschärfe des Hintergrundbilds",
         "blurHint": "Nur das Hintergrundbild weichzeichnen. Zum Deaktivieren auf 0 setzen. Das Weichzeichnen animierter Hintergrundbilder erhöht die GPU-Auslastung.",
         "motionLabel": "Anzeige",
@@ -2451,7 +2455,7 @@
       "skinLabel": "Figur",
       "skinHint": "Die Figur in Agent Notch und in der Dynamic Island.",
       "soundLabel": "Ereignistöne",
-      "soundHint": "Wähle für jeden Hinweis einen 8-Bit-Sound, gemeinsam für Agent Notch und die Dynamic Island. Der Tipp-Sound ertönt nur beim Tippen auf Agent Notch.",
+      "soundHint": "Ist ein Ereigniston festgelegt, wird nur dieser abgespielt. Ohne Ereigniston oder bei deaktivierten Ereignistönen gelten die Systembenachrichtigungseinstellungen.",
       "soundAria": "Agent Notch-Sounds ein-/ausschalten",
       "soundSelectAria": "Ton für {{event}}",
       "soundPreviewAria": "Ton für {{event}} vorhören",
@@ -2506,7 +2510,7 @@
         "select": "Aktion beim Klicken"
       },
       "soundOptions": {
-        "none": "Keine",
+        "none": "Systemeinstellung verwenden",
         "startup-chime": "Startklang",
         "ring-chime": "Klingelton",
         "item-found": "Gegenstand gefunden",
@@ -10763,6 +10767,9 @@
         "stepFailed": "{{name}} ist auf ein Problem gestoßen und hat diesen Schritt nicht abgeschlossen",
         "stepTimeout": "{{name}} hat zu lange gebraucht, daher wurde dieser Schritt gestoppt",
         "stepUnavailable": "{{name}} ist nicht verfügbar und kann diesen Schritt nicht ausführen",
+        "runtimeFailureReason": {
+          "unclaimed_timeout": "{{name}} hat die Verarbeitung nicht innerhalb der Wartezeit begonnen. Diese Anfrage ist beendet.\nBitte den Besitzer des Partners zu prüfen, ob Cindy auf dem zugehörigen Computer läuft und eine Netzwerkverbindung besteht."
+        },
         "runtimeFailure": {
           "REMOTE_DEVICE_LIMIT": "{{name}} kann nicht antworten: Das Gerät des Teammitglieds hat sein Limit für Remote-Sitzungen erreicht.\nBitte den Besitzer des Teammitglieds, ungenutzte Sitzungen zu archivieren, oder den Besitzer des Remote-Computers, das Limit unter „Remote & Freigabe“ zu erhöhen.",
           "REMOTE_TOTAL_LIMIT": "{{name}} kann nicht antworten: Der Remote-Computer hat sein Gesamtlimit für Remote-Sitzungen erreicht.\nBitte den Besitzer dieses Computers, ungenutzte Sitzungen freizugeben oder das Limit unter „Remote & Freigabe“ zu erhöhen.",
@@ -11551,7 +11558,8 @@
         "lark": "Lark",
         "wecom": "WeCom",
         "dingtalk": "DingTalk",
-        "discord": "Discord"
+        "discord": "Discord",
+        "imessage": "iMessage"
       },
       "status": {
         "connected": "Verbunden",
@@ -11683,6 +11691,22 @@
           "existing": "Den bereits in Cindy eingerichteten Bot verwenden",
           "manual": "Neue Zugangsdaten eingeben",
           "moveNote": "Der Bot wird aus Einstellungen → IM-Bots verschoben; dieser Bereich bleibt leer. Seine Chats werden mit {{name}} fortgesetzt."
+        },
+        "imessage": {
+          "serverUrlLabel": "BlueBubbles-Server",
+          "serverUrlPlaceholder": "http://192.168.1.20:1234",
+          "passwordLabel": "API-Passwort",
+          "passwordPlaceholder": "••••••••",
+          "ownerAddressLabel": "Deine iMessage-Adresse",
+          "ownerAddressPlaceholder": "owner@example.com",
+          "chatGuidsLabel": "Chat-GUIDs (durch Kommas getrennt)",
+          "chatGuidsPlaceholder": "any;-;owner@example.com",
+          "listenHostLabel": "Lokale Empfangsadresse",
+          "listenHostPlaceholder": "192.168.1.10",
+          "listenPortLabel": "Lokaler Empfangsport",
+          "listenPortPlaceholder": "18747",
+          "hint": "Verbindet BlueBubbles im lokalen Netzwerk. Nur ausgewählte Chats werden verarbeitet. Stoppe andere automatische Antworten für diese Chats vor dem Verbinden.",
+          "uncertain": "{{count}} Zustellungen müssen geprüft werden. Prüfe vor einem erneuten Versuch den Chatverlauf, um Duplikate zu vermeiden."
         }
       },
       "removeConfirm": {
@@ -12507,6 +12531,12 @@
       "missingDir": "Ordner nicht gefunden"
     },
     "pendingQueue": {
+      "stopping": "Wird gestoppt",
+      "queued": "In der Warteschlange",
+      "editingInComposer": "Wird im Eingabefeld unten bearbeitet…",
+      "moveUp": "Nach vorne verschieben",
+      "moveDown": "Nach hinten verschieben",
+      "cancelSend": "Senden abbrechen",
       "regionAria": "Warteschlange ausstehender Nachrichten",
       "listAria": "Nachrichten in der Warteschlange",
       "pausedFooter": "Aufgabe gestoppt, Warteschlange pausiert",
@@ -14145,6 +14175,8 @@
       "closeFailed": "Der Nebenchat konnte nicht geschlossen werden. Versuch es erneut."
     },
     "teammateProcess": {
+      "empty": "Für diese Antwort sind keine Prozessdetails vorhanden",
+      "unavailable": "Prozessdetails konnten nicht geladen werden",
       "record": "Aktivität",
       "operations": "Aktivitätsprotokoll",
       "elapsed": "In Bearbeitung seit {{duration}}",
@@ -19329,6 +19361,7 @@
       "apply": "Übernehmen"
     },
     "source": {
+      "receivingOn": "Zielgerät: {{name}}",
       "description": "Wähle einen Computer, der mit diesem Konto angemeldet ist. Seine Plugins, Skills, Einstellungen und Verbindungen werden hier genauso eingerichtet; Anmeldungen und Schlüssel verlassen den Computer nur, wenn du es dort erlaubst.",
       "loading": "Deine anderen Computer werden gesucht…",
       "empty": "Keine anderen Computer für dieses Konto gefunden. Melde dich auf einem anderen Computer bei Cindy an und öffne dies dann erneut",
@@ -19764,8 +19797,30 @@
     "removeTitle": "{{name}} entfernen?",
     "removeDescription": "Cindy weist diesem Konto keine Aufgaben mehr zu. Die CLI-Anmeldung und der Gesprächsverlauf bleiben auf diesem Computer erhalten.",
     "failed": "Das Konto konnte nicht gelesen oder aktualisiert werden. Prüfe die CLI-Anmeldung und die Netzwerkverbindung und versuche es erneut.",
-    "directory": "Kontoordner",
+    "openDirectory": "Kontoordner öffnen",
+    "openDirectoryFailed": "Der Kontoordner konnte nicht geöffnet werden. Er wurde möglicherweise verschoben oder gelöscht.",
     "loginAgain": "Erneut anmelden",
     "login": "Anmelden"
+  },
+  "crashDiagnosis": {
+    "title": "Cindy wurde unerwartet beendet",
+    "description": "Möchtest du die Ursache untersuchen? Wir bereiten einen Aufgabenentwurf mit Beendigungsdetails und bereinigten Protokollen vor, den du vor dem Senden prüfen kannst. Auch erzwungenes Beenden oder ein Stromausfall kann die Ursache sein.",
+    "diagnose": "Problem untersuchen",
+    "later": "Nicht jetzt",
+    "logExcerpt": "Relevante Protokolle (Auszug, möglicherweise unvollständig)",
+    "logsUnavailable": "Keine relevanten Protokolle verfügbar. Die Ursache ist noch unbekannt.",
+    "failed": "Die Diagnose konnte nicht vorbereitet werden. Bitte versuche es erneut."
+  },
+  "githubStar": {
+    "title": "Gefällt dir Cindy?",
+    "description": "Gib Cindy auf GitHub einen Stern, um das Projekt zu unterstützen.",
+    "dismiss": "Nicht mehr anzeigen",
+    "action": "Cindy unterstützen",
+    "starring": "Ein Stern leuchtet…",
+    "thanks": "Danke für den Stern!",
+    "thanksDescription": "Deine Unterstützung hilft Cindy zu wachsen.",
+    "browserFallback": "Öffne GitHub, um Cindy einen Stern zu geben.",
+    "openGithub": "GitHub öffnen",
+    "openFailed": "GitHub konnte nicht geöffnet werden."
   }
 }

@@ -14,6 +14,8 @@ const NATIVE_PROBE_REASONS = new Set([
   "target-not-unique",
   "native-fingerprint-timeout",
   "native-fingerprint-unavailable",
+  "installed-fingerprint-timeout",
+  "installed-fingerprint-unreadable",
 ]);
 
 export class SimUpFailure extends Error {

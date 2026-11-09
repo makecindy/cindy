@@ -18,7 +18,7 @@ import { PluginCardActions } from '@/plugins/PluginCardActions';
 import { McpAppCard } from './McpAppCard';
 import { RichContentContext } from './richContentContext';
 import { RichContentRuntime } from './richContentRuntime';
-import { MessageListVisibility, MessageListVisibilityContext, useMessageListItemVisible } from './messageListVisibility';
+import { MessageListItemViewableContext, MessageListVisibility, MessageListVisibilityContext, useMessageListItemVisible } from './messageListVisibility';
 import { MessageContentLongPressContext } from './messageContentLongPress';
 import { CompanionLearningFooter } from './CompanionLearningFooter';
 import { CompanionTaskResultCard } from './CompanionTaskResultCard';
@@ -451,7 +451,7 @@ const MESSAGE_LIST_VIEWABILITY_CONFIG_ID = 'message-heavy-content';
 
 // Heavy Markdown blocks inherit the visibility of their outer list cell. Nested
 // work/sub-agent cards should not create a second visibility window of their own.
-const MessageHeavyContentVisibilityContext = createContext(true);
+export const MessageHeavyContentVisibilityContext = createContext(true);
 const MarkdownRemoteMediaContext = createContext<ResolveRemoteMediaFn | undefined>(undefined);
 
 /** 分享模式吸顶 check 与行内 check 共用 44px 触达高度。 */
@@ -2876,12 +2876,14 @@ export function MessageRenderer({
       companion,
       companionWorkingLabel,
       companionPluginWork,
+      // Topic capabilities, busy state and reply counts can arrive without new messages.
+      companionThreads,
       // Cross-row state a kept row reads through `actions`: which reply is the last for its message,
       // and the five-minute stamps. Both keep their identity until they really change.
       lastCompanionReplyKey,
       companionTimeGroups,
     }),
-    [pendingSend?.selectedClientId, shareSelectionActive, companion, companionWorkingLabel, companionPluginWork,
+    [pendingSend?.selectedClientId, shareSelectionActive, companion, companionWorkingLabel, companionPluginWork, companionThreads,
       lastCompanionReplyKey, companionTimeGroups],
   );
   // Keep production and regular DEV screens on keyed remounts. With Fabric,
@@ -3288,9 +3290,11 @@ const RenderListItemView = memo(function RenderListItemView({
     ? { ...actions, onOpenPayload: (next: MessagePayload) => openPayloadFromItem(next, item.key) }
     : actions, [actions, item.key, openPayloadFromItem]);
   return (
+    <MessageListItemViewableContext.Provider value={isViewable}>
     <MessageHeavyContentVisibilityContext.Provider value={heavyContentVisible}>
       <RenderItemView actions={itemActions} focused={focused} item={item} />
     </MessageHeavyContentVisibilityContext.Provider>
+    </MessageListItemViewableContext.Provider>
   );
 });
 
@@ -6060,6 +6064,7 @@ function MarkdownBodyBase({
   allowIosUITextView = true,
   codeCopyEnabled = true,
   boundTextRuns = false,
+  publicMediaOnly = false,
   markdownImageCacheKey,
   layout,
   onOpenPayload,
@@ -6070,6 +6075,8 @@ function MarkdownBodyBase({
   text,
 }: {
   renderRichAnswers?: boolean;
+  /** Shared room bodies cannot resolve task-local media from model-authored paths. */
+  publicMediaOnly?: boolean;
   /** Persisted row ids may replace stream ids; clientId stays stable across that handoff. */
   richStateKey?: string;
   /** 普通任务的超长展开正文可禁用 UITextView，伙伴改用有界文本分组。 */
@@ -6140,11 +6147,11 @@ function MarkdownBodyBase({
     });
   }, [markdownParse]);
   const blocks = markdownParse.result.blocks;
-  const managedImagePreviewUrl = useCallback((url: string) => resolveMarkdownMedia
+  const managedImagePreviewUrl = useCallback((url: string) => !publicMediaOnly && resolveMarkdownMedia
     ? mobileMarkdownManagedImagePreviewUrl(
       url, chatFilePathContext?.workdir, markdownImageCacheKey,
       chatFilePathContext?.remoteHostId, chatFilePathContext?.sessionId,
-    ) : null, [chatFilePathContext, markdownImageCacheKey, resolveMarkdownMedia]);
+    ) : null, [chatFilePathContext, markdownImageCacheKey, publicMediaOnly, resolveMarkdownMedia]);
   const imageRendersPreview = useCallback((inline: Extract<MobileMarkdownInline, { type: 'image' }>) =>
       isMobileMarkdownImageDirectUrl(inline.url) || managedImagePreviewUrl(inline.url) !== null, [managedImagePreviewUrl]);
   // 图片预览内嵌 View，不能放进 Android selectable Text 或 iOS UITextView。
@@ -7124,10 +7131,20 @@ function PluginResultCard({ callId, sessionId, excludedUrls, actions }: {
 /**
  * 附件图原图尺寸的模块级缓存(键 = 源 media.url,跨 presign 刷新稳定)。
  * FlatList 虚拟化反复 unmount/remount MediaPreview,组件态存不住尺寸;
- * 上限兜底防长会话无界增长(整表清空即可,下次解码时重新记录)。
+ * 到达上限只逐出最旧记录；清空整表会让已打开的图片再次经历占位尺寸 → 实际尺寸。
  */
 const attachmentIntrinsicSizeCache = new Map<string, AttachmentImageIntrinsicSize>();
 const ATTACHMENT_INTRINSIC_CACHE_MAX = 500;
+
+function rememberAttachmentIntrinsicSize(size: AttachmentImageIntrinsicSize, ...uris: string[]) {
+  for (const uri of uris) {
+    attachmentIntrinsicSizeCache.delete(uri);
+    attachmentIntrinsicSizeCache.set(uri, size);
+  }
+  while (attachmentIntrinsicSizeCache.size > ATTACHMENT_INTRINSIC_CACHE_MAX) {
+    attachmentIntrinsicSizeCache.delete(attachmentIntrinsicSizeCache.keys().next().value!);
+  }
+}
 
 // 相册候选仍可能是 ph://，必须由 expo-image 加载；只复用正式附件的布局，
 // 不把本地相册地址声明为 RN Image / 远端查看器可直接预览的媒体。
@@ -7143,9 +7160,7 @@ function PendingAttachmentImage({ layout, uri, sourceUri = uri, onError, onSize,
   // The upload copy and materialized reference describe the same pixels. Carry their measured frame.
   useLayoutEffect(() => {
     if (!intrinsicSize) return;
-    if (attachmentIntrinsicSizeCache.size >= ATTACHMENT_INTRINSIC_CACHE_MAX) attachmentIntrinsicSizeCache.clear();
-    attachmentIntrinsicSizeCache.set(sourceUri, intrinsicSize);
-    attachmentIntrinsicSizeCache.set(uri, intrinsicSize);
+    rememberAttachmentIntrinsicSize(intrinsicSize, sourceUri, uri);
   }, [intrinsicSize, sourceUri, uri]);
   const displaySize = attachmentImageDisplaySize(
     intrinsicSize, layout.attachmentImageMaxWidth, layout.attachmentImageMaxHeight,
@@ -7159,11 +7174,7 @@ function PendingAttachmentImage({ layout, uri, sourceUri = uri, onError, onSize,
         onError={onError}
         onLoad={({ source: { width, height } }) => {
           if (!(width > 0 && height > 0)) return;
-          if (attachmentIntrinsicSizeCache.size >= ATTACHMENT_INTRINSIC_CACHE_MAX) {
-            attachmentIntrinsicSizeCache.clear();
-          }
-          attachmentIntrinsicSizeCache.set(uri, { width, height });
-          attachmentIntrinsicSizeCache.set(sourceUri, { width, height });
+          rememberAttachmentIntrinsicSize({ width, height }, uri, sourceUri);
           setIntrinsicSize({ width, height });
           onSize?.({ width, height });
         }}
@@ -7220,6 +7231,7 @@ function MediaPreview({
   const localUri = [localCandidate, durableUri].find((uri) => uri && !failedLocalUris.includes(uri)) ?? null;
   const autoResolve = !localUri && shouldAutoResolveMediaThumbnail(media, !!onResolveRemoteMedia);
   const [resolveState, setResolveState] = usePreviewState<MediaThumbnailResolveState>({ status: 'idle' });
+  const resolvedSourceRef = useRef<string | null>(null);
   // attachment 变体的原图尺寸。初值走模块级缓存:FlatList 虚拟化会反复
   // unmount/remount 本组件,不缓存的话每次划回都重新 getSize、重演一次
   // 占位帧 → 真图尺寸的切换(规则 7 的跳变)。
@@ -7241,7 +7253,10 @@ function MediaPreview({
       { signal, forceRefresh },
     )
       .then((resolved) => {
-        if (!cancelled && !signal?.aborted) setResolveState({ status: 'ready', media: resolved });
+        if (!cancelled && !signal?.aborted) {
+          resolvedSourceRef.current = media.url;
+          setResolveState({ status: 'ready', media: resolved });
+        }
       })
       .catch((error: unknown) => {
         if (!cancelled && !signal?.aborted) setResolveState({ status: 'error', error });
@@ -7253,6 +7268,10 @@ function MediaPreview({
 
   useEffect(() => {
     if (!autoResolve) return;
+    // A resident row receives a new resolver when its route is recreated. Keep
+    // its decoded image instead of replacing it with a loader on every reentry.
+    // Source changes still resolve; actual decode failures use the latest resolver.
+    if (resolveState.status === 'ready' && resolvedSourceRef.current === media.url) return;
     imageRetryUsedRef.current = false;
     const controller = new AbortController();
     const cancel = resolveThumbnail(false, controller.signal);
@@ -7287,10 +7306,7 @@ function MediaPreview({
   const handleImageLoad = useCallback(({ source: { width, height } }: { source: AttachmentImageIntrinsicSize;
     }) => {
     if (!(width > 0 && height > 0)) return;
-    if (attachmentIntrinsicSizeCache.size >= ATTACHMENT_INTRINSIC_CACHE_MAX) {
-      attachmentIntrinsicSizeCache.clear();
-    }
-    attachmentIntrinsicSizeCache.set(media.url, { width, height });
+    rememberAttachmentIntrinsicSize({ width, height }, media.url);
     setIntrinsicSize({ width, height });
   }, [media.url, setIntrinsicSize]);
 
@@ -10239,12 +10255,16 @@ export function MarkdownBody(props: Parameters<typeof MarkdownBodyBase>[0]) {
 /** Each composed column supplies its actual width; media never assumes a full message row. */
 function RichAnswerMedia({ node, body }: { node: RichNode; body: Parameters<typeof MarkdownBodyBase>[0];
 }) {
+  const styles = useThemedStyles(makeStyles);
   const origin = useContext(ChatFilePathContext);
   const resolver = useContext(MarkdownRemoteMediaContext);
   const visible = useContext(MessageHeavyContentVisibilityContext);
   const [width, setWidth] = useState(0);
   const raw = richMediaSource(node);
   if (!raw || (node.kind !== 'image' && node.kind !== 'video' && node.kind !== 'audio')) return null;
+  if (body.publicMediaOnly && !/^https?:\/\//i.test(raw)) {
+    return <Text style={styles.messageText}>{richString(node, 'alt') || richString(node, 'label') || '◇'}</Text>;
+  }
   if (node.kind === 'video' && youtubeVideo(raw)) return (
       <VideoSitePreview src={raw} title={richString(node, 'alt', 'YouTube')} />
     );

@@ -1,3 +1,4 @@
+import { recordGithubStarPromptSend, recordGithubStarPromptCompletion } from './githubStarPrompt';
 import { parseOutputLimitDetails, type OutputLimitDetails } from '@cindy/maker-shared';
 import { pendingGhostCardFormDelivery } from '@cindy/maker-shared/ghost-card-form';
 import { isVoiceCallTaskMessage } from '../../shared/voiceConversation';
@@ -571,6 +572,16 @@ export interface ChatMessage {
   /** Provider phase survives live deltas and durable history projection. */
   assistantPhase?: string;
   failedSamplingAttempt?: boolean;
+  /** 采样尚未确认(运行时关闭时遗留的未封口输出):属于工作过程,不是正式回复(#8655 review)。 */
+  samplingAttemptPending?: boolean;
+  /**
+   * 历史恢复时被过滤掉的隐藏 thinking 行(redacted / omitted 占位)留下的活动边界。
+   * 它已不在渲染序列里，但主进程 `canonicalReplyVisibility` 仍把 thinking 行算作
+   * 「后续活动」，所以边界挂在时间线上相邻的可见消息上：`hiddenThinkingBefore` 表示
+   * 本行之前有一段隐藏思考，`hiddenThinkingAfter` 表示本行之后还有(#8655 review)。
+   */
+  hiddenThinkingBefore?: boolean;
+  hiddenThinkingAfter?: boolean;
   /** user 消息投递方式:普通新 turn 或运行中 steer。 */
   delivery?: 'turn' | 'steer';
   /** Hook 来源元数据(IM 平台 + 用户干净原文 + thread 上下文),UserMessage 据此渲染 Cindy 任务卡片。 */
@@ -3016,6 +3027,9 @@ export type SessionChatLightState = Pick<
   | 'pendingQueue'
   | 'steeringQueueClientIds'
   | 'queuePaused'
+  | 'queueEditLocks'
+  | 'queueInteractionLocks'
+  | 'queueAbortPending'
   | 'queueExpanded'
   | 'fastMode'
   | 'planModeEnabled'
@@ -6890,14 +6904,15 @@ export function handleStreamEvent(
         const answers = resolved?.answers as Record<string, string> | undefined;
         const dismissed = resolved?.dismissed === true;
         const askUserReply = answers && !dismissed ? formatAskUserReply(answers) : '';
+        const releasesProtectedAsk = data.reason === 'resolved' && !dismissed &&
+          state.protectedAskUser?.pending.requestId === data.requestId;
         return {
           ...state,
-          protectedAskUser: data.reason === 'resolved' && !dismissed && state.protectedAskUser?.pending.requestId === data.requestId
-            ? undefined : state.protectedAskUser,
+          protectedAskUser: releasesProtectedAsk ? undefined : state.protectedAskUser,
           pendingAskUser:
             state.pendingAskUser?.requestId === data.requestId ? null : state.pendingAskUser,
           askUserViewerState:
-            state.pendingAskUser?.requestId === data.requestId ? 'expanded' : state.askUserViewerState,
+            state.pendingAskUser?.requestId === data.requestId || releasesProtectedAsk ? 'expanded' : state.askUserViewerState,
           askUserDraft:
             state.pendingAskUser?.requestId === data.requestId ? null : state.askUserDraft,
           messages: state.messages.map((m) =>
@@ -7035,9 +7050,11 @@ export function handleStreamEvent(
           isBlocking: data.isBlocking,
           persistId: event.persistId,
         },
-        // Optional questions start minimized so the original message stays readable.
-        // Replayed requests preserve the user's existing viewing state.
-        askUserViewerState: keepAskProgress ? state.askUserViewerState : data.delivery === 'async' ? 'minimized' : 'expanded',
+        // Async delivery lets the agent continue; every new question still starts expanded.
+        // Replayed requests preserve the user's existing viewing state, and so does a new
+        // request queued behind a draft-protected one: the visible card is still the old one.
+        // It opens expanded once the protected question is released.
+        askUserViewerState: keepAskProgress || state.protectedAskUser ? state.askUserViewerState : 'expanded',
         // Only an unchanged pending request may retain its draft. A new batch
         // or changed question content starts clean, even with the same requestId.
         askUserDraft: keepAskProgress ? state.askUserDraft : null,
@@ -8519,6 +8536,20 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
         event.data as Record<string, unknown> | null,
         event.agentMeta ?? null,
       );
+    }
+
+    if ((isProductTurnDoneEvent(event) || event.type === 'error') && event.turnScope !== 'background') {
+      const state = sessions.get(sessionId);
+      const successful = isProductTurnDoneEvent(event) && event.turnOrigin?.kind === 'user'
+        && event.turnOrigin.surface !== 'im' && state
+        && !state.turnStoppedByUser && !state.lastStopWasSideTask
+        && !state.lastStopWasPrivateReply && !state.lastStopWasGroupLane
+        && !hasGithubStarBlockingWork();
+      // Main stamps the accepted input before releasing the turn/draining the queue.
+      // Never infer ownership from the last bubble: it may be a newer queued/steered input.
+      const completedClientId = successful && typeof event.agentMeta?.replyToClientId === 'string'
+        ? event.agentMeta.replyToClientId : null;
+      recordGithubStarPromptCompletion(sessionId, completedClientId, dataOwnerAtIngress);
     }
 
     // done / error 副作用 (从老 stream listener 搬过来)
@@ -10096,6 +10127,9 @@ function selectLightState(state: SessionChatState): SessionChatLightState {
     pendingQueue: state.pendingQueue,
     steeringQueueClientIds: state.steeringQueueClientIds,
     queuePaused: state.queuePaused,
+    queueEditLocks: state.queueEditLocks,
+    queueInteractionLocks: state.queueInteractionLocks,
+    queueAbortPending: state.queueAbortPending,
     queueExpanded: state.queueExpanded,
     fastMode: state.fastMode,
     planModeEnabled: state.planModeEnabled,
@@ -10149,6 +10183,9 @@ function lightStateEquals(a: SessionChatLightState, b: SessionChatLightState): b
     a.pendingQueue === b.pendingQueue &&
     a.steeringQueueClientIds === b.steeringQueueClientIds &&
     a.queuePaused === b.queuePaused &&
+    a.queueEditLocks === b.queueEditLocks &&
+    a.queueInteractionLocks === b.queueInteractionLocks &&
+    a.queueAbortPending === b.queueAbortPending &&
     a.queueExpanded === b.queueExpanded &&
     a.fastMode === b.fastMode &&
     a.planModeEnabled === b.planModeEnabled &&
@@ -10223,6 +10260,16 @@ function getPromptRecommendationCompletionStatus(
     // 自动续跑队列则等最终一轮结束后再生成。
     hasAutoDrainingQueue: state.pendingQueue.length > 0 && !state.queuePaused,
   };
+}
+
+/** Non-creating read: optional invitations yield to all known work and unresolved errors. */
+function hasGithubStarBlockingWork(): boolean {
+  for (const [sessionId, state] of sessions) {
+    if (_isSessionBusy(sessionId, state) || state.error || state.recoverableError
+      || state.pendingQueue.length > 0 || state.steeringQueueClientIds.length > 0 || state.pendingAppPermissions?.length
+      || state.credentialSwitchWait || state._authRetryInFlight || state.queueAbortPending) return true;
+  }
+  return false;
 }
 
 /**
@@ -15564,6 +15611,7 @@ async function sendMessageCore(
   ) {
     return false;
   }
+  const starPromptOwner = getDataOwnerGeneration();
   const current = getOrCreateState(sessionId);
   const wasFirst = current.isFirstMessage;
 
@@ -15708,6 +15756,7 @@ async function sendMessageCore(
     // preflight/invoke so a weak link never holds the composer dispatch lock.
     remoteRecord.composerResolvedOptimistically = true;
     void pumpRemoteOptimisticSends(sessionId);
+    if (!opts?.authRetryPersistOnProjectionError) recordGithubStarPromptSend(sessionId, queued.clientId, starPromptOwner);
     return true;
   }
 
@@ -15736,6 +15785,7 @@ async function sendMessageCore(
       ) {
         clearSessionStarting(sessionId);
       }
+      if (!opts?.authRetryPersistOnProjectionError) recordGithubStarPromptSend(sessionId, queued.clientId, starPromptOwner);
       return true;
     })
     .catch((err) => {
@@ -16001,6 +16051,7 @@ async function steerMessageCore(
   ) {
     return false;
   }
+  const starPromptOwner = getDataOwnerGeneration();
   const queued = buildQueuedMessage(
     sessionId,
     text,
@@ -16086,6 +16137,7 @@ async function steerMessageCore(
     remoteRecord.composerResolvedOptimistically = true;
     _disposedLiveErrorIntents.delete(sessionId);
     void pumpRemoteOptimisticSends(sessionId);
+    recordGithubStarPromptSend(sessionId, queued.clientId, starPromptOwner);
     return true;
   }
 
@@ -16097,6 +16149,7 @@ async function steerMessageCore(
         _disposedLiveErrorIntents.delete(sessionId);
         commitAutoTitle();
         requestInputProjection(sessionId);
+        recordGithubStarPromptSend(sessionId, queued.clientId, starPromptOwner);
         return true;
       }
       // steer 失败后拉一次权威 projection:投递结果不确定时 coordinator 会把这条
@@ -16117,6 +16170,7 @@ async function steerMessageCore(
           // (review P1)。是否真该改名仍由 main 权威判定。
           _disposedLiveErrorIntents.delete(sessionId);
           commitAutoTitle();
+          recordGithubStarPromptSend(sessionId, queued.clientId, starPromptOwner);
           return true;
         }
       } catch (err) {
@@ -17331,7 +17385,7 @@ async function sendProtectedQuestionSupplement(sessionId: string, requestId: str
   if (protectedQuestion?.pending.requestId !== requestId) return;
   const text = formatAsyncQuestionSupplement(protectedQuestion.pending.questions, answers);
   const clear = () => setState(sessionId, (s) => s.protectedAskUser?.pending.requestId === requestId
-    ? { ...s, protectedAskUser: undefined } : s);
+    ? { ...s, protectedAskUser: undefined, askUserViewerState: 'expanded' } : s);
   const key = `${sessionId}:${requestId}:supplement`;
   if (questionDecisionsInFlight.has(key)) return;
   questionDecisionsInFlight.add(key);
@@ -17359,7 +17413,7 @@ async function sendProtectedQuestionSupplement(sessionId: string, requestId: str
     );
     if (!current()) return;
     if (!needsSupplement) {
-      setState(sessionId, (s) => ({ ...s, protectedAskUser: undefined,
+      setState(sessionId, (s) => ({ ...s, protectedAskUser: undefined, askUserViewerState: 'expanded',
         pendingAskUser: s.pendingAskUser?.requestId === requestId ? null : s.pendingAskUser,
         askUserDraft: s.askUserDraft?.requestId === requestId ? null : s.askUserDraft,
       }));
@@ -18623,6 +18677,7 @@ export const makerChatStore = {
   getPromptRecommendationRunStartedAt,
   /** 输入框推荐后台完成资格的 non-creating 终态快照。 */
   getPromptRecommendationCompletionStatus,
+  hasGithubStarBlockingWork,
   ensureInitialMessages,
   prefetchRemoteHistories,
   reloadMessages,
@@ -19423,6 +19478,25 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
   );
   const filtered = serverMsgs.filter((m) => !isHiddenThinkingRow(m));
   const ordered = filtered.sort(compareMessageTimeline);
+  // 被隐藏的 thinking 行(redacted / omitted 占位)仍是活动边界:主进程
+  // `canonicalReplyVisibility` 把 thinking 行算作「后续活动」,而这里它已经不在渲染
+  // 序列里。把边界挂到时间线上相邻的可见消息,供收尾回复判定使用(#8655 P2)。
+  const hiddenThinkingBefore = new Set<string>();
+  const hiddenThinkingAfter = new Set<string>();
+  {
+    const timeline = [...serverMsgs].sort(compareMessageTimeline);
+    timeline.forEach((row, index) => {
+      if (!isHiddenThinkingRow(row)) return;
+      const next = timeline.slice(index + 1).find((candidate) => !isHiddenThinkingRow(candidate));
+      if (next) {
+        hiddenThinkingBefore.add(next.clientId);
+        return;
+      }
+      const previous = [...timeline.slice(0, index)].reverse()
+        .find((candidate) => !isHiddenThinkingRow(candidate));
+      if (previous) hiddenThinkingAfter.add(previous.clientId);
+    });
+  }
   const legacyUserTurnCosts = projectLegacyUserTurnCosts(ordered);
   const mapped = ordered.map((m) => {
     if (m.role === 'assistant' && m.agentMeta?.voiceCall?.version === 1) return {
@@ -20005,6 +20079,14 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
       ...(m.role === 'assistant' ? { sourceGroup: readMessageSourceGroup(m.agentMeta) } : {}),
       ...(m.role === 'assistant' && typeof m.agentMeta?.assistantPhase === 'string' ? { assistantPhase: m.agentMeta.assistantPhase } : {}),
       ...(m.role === 'assistant' && m.agentMeta?.failedSamplingAttempt ? { failedSamplingAttempt: true } : {}),
+      // 与主进程 canonicalReplyVisibility 同源的 pending 判据:运行时关闭后遗留的
+      // 未确认输出不能当成正式回复(#8655 review)。
+      // `false` 必须显式映射出来:确认广播只带 `samplingAttemptPending: false`,
+      // 若这里省略,`hydratePersistedMessage` 的 `{ ...existing, ...persisted }`
+      // 会让内存里旧的 `true` 永远残留,已接受的收尾回复一直藏在折叠里。
+      ...(m.role === 'assistant' && typeof m.agentMeta?.samplingAttemptPending !== 'undefined'
+        ? { samplingAttemptPending: m.agentMeta.samplingAttemptPending !== false }
+        : {}),
       ...(m.role === 'assistant' && m.agentMeta?.explicitDelivery === true ? { explicitDelivery: true } : {}),
       ...(botStarterOptions.length ? { botStarterOptions } : {}),
       ...(m.role === 'assistant' ? { botLearning: m.agentMeta?.botLearning } : {}),
@@ -20068,18 +20150,24 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
     const remoteContentTruncated = remoteContentTruncatedById.get(cm.clientId) === true;
     const remoteRowsTrimmed = remoteRowsTrimmedById.get(cm.clientId) === true;
     const legacyUserTurnCost = legacyUserTurnCosts.get(cm.clientId);
+    const hiddenBefore = hiddenThinkingBefore.has(cm.clientId);
+    const hiddenAfter = hiddenThinkingAfter.has(cm.clientId);
     if (
       !iso &&
       rowid === undefined &&
       !remoteContentTruncated &&
       !remoteRowsTrimmed &&
       !legacyUserTurnCost &&
-      !serverId
+      !serverId &&
+      !hiddenBefore &&
+      !hiddenAfter
     ) {
       return cm;
     }
     return {
       ...cm,
+      ...(hiddenBefore ? { hiddenThinkingBefore: true } : {}),
+      ...(hiddenAfter ? { hiddenThinkingAfter: true } : {}),
       ...(legacyUserTurnCost ?? {}),
       ...(iso ? { createdAt: iso } : {}),
       ...(typeof serverId === 'string' && serverId.length > 0 ? { id: serverId } : {}),

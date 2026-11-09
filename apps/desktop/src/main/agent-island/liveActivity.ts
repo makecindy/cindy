@@ -30,6 +30,8 @@ export interface AgentIslandLiveActivityState {
   runningCount: number;
   attentionCount: number;
   title: string;
+  /** Destination of the displayed task; absent for older payloads. */
+  taskUrl?: string;
   detail: string;
   /** The rest of the work, e.g. "2 more tasks running"; empty when the title says it all. */
   summary: string;
@@ -73,8 +75,10 @@ export function agentIslandLiveActivityStateFromPill(
   mascot: string,
   strings: AgentIslandLiveActivityStrings,
   companion?: AgentIslandCompanionSnapshot,
+  taskUrl?: string,
 ): AgentIslandLiveActivityState | null {
   const state = liveActivityStatusFromPill(pill, mascot, strings);
+  if (state && taskUrl) state.taskUrl = taskUrl;
   if (!state || state.status === 'running' || !companion) return state;
   const imageJpeg = companion.imageJpeg && companion.imageJpeg.length <= MAX_COMPANION_JPEG_LENGTH
     ? companion.imageJpeg
@@ -181,6 +185,7 @@ function sameState(a: AgentIslandLiveActivityState | null, b: AgentIslandLiveAct
   return a.status === b.status
     && a.runningCount === b.runningCount
     && a.attentionCount === b.attentionCount
+    && a.taskUrl === b.taskUrl
     && a.title === b.title
     && a.detail === b.detail
     && a.summary === b.summary

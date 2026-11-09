@@ -366,5 +366,13 @@
     "merged": "Fusionnée",
     "closed": "Fermée",
     "draft": "Brouillon"
+  },
+  "taskArchive": {
+    "now": "Archiver maintenant",
+    "pending": "Archivage automatique en quittant cette tâche",
+    "cancel": "Annuler",
+    "cancelled": "Pas d’archivage automatique cette fois",
+    "archived": "« {{title}} » archivée",
+    "undo": "Annuler"
   }
 }

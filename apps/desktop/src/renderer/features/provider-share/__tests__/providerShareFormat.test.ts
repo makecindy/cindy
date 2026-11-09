@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { ProviderShareReceived } from '@cindy/device-link';
 
-import type { ProviderShareModelUsageView, ProviderShareOwnedView } from '../../../../shared/providerShare';
+import type { ProviderShareOwnedView } from '../../../../shared/providerShare';
 import {
   diffReceivedShares,
   formatShareCountdown,
@@ -17,25 +17,8 @@ import {
   shareAvatarInitial,
   shareLinkRemainingMs,
   sharesClaudeLoginEmail,
-  summarizeShareUsage,
 } from '../providerShareFormat';
 import { PROVIDER_SHARE_MANAGE_PARAM, providerShareManagePath } from '../providerShareNavigation';
-
-function usage(partial: Partial<ProviderShareModelUsageView>): ProviderShareModelUsageView {
-  return {
-    kind: 'claude-code',
-    providerId: 'xd',
-    memberKey: 'local',
-    model: 'claude-opus-5-5',
-    turns: 1,
-    inputTokens: 0,
-    outputTokens: 0,
-    cacheReadTokens: 0,
-    cacheCreateTokens: 0,
-    amount: null,
-    ...partial,
-  };
-}
 
 function received(partial: Partial<ProviderShareReceived>): ProviderShareReceived {
   return {
@@ -78,25 +61,6 @@ describe('providerShareFormat', () => {
     expect(shareLinkRemainingMs('2026-10-07T10:05:00Z', now)).toBe(300_000);
     expect(shareLinkRemainingMs('2026-10-07T09:59:00Z', now)).toBe(0);
     expect(shareLinkRemainingMs('not a time', now)).toBe(0);
-  });
-
-  it('sums input + output tokens and same-currency amounts', () => {
-    const totals = summarizeShareUsage([
-      usage({ inputTokens: 1_000, outputTokens: 500, cacheReadTokens: 9_999, amount: { amount: 1.25, currency: 'USD' } }),
-      usage({ inputTokens: 2_000, outputTokens: 0, amount: null }),
-      usage({ inputTokens: 0, outputTokens: 100, amount: { amount: 0.75, currency: 'USD' } }),
-    ]);
-    expect(totals.tokens).toBe(3_600);
-    expect(totals.amount).toEqual({ amount: 2, currency: 'USD' });
-  });
-
-  it('does not invent a total across currencies', () => {
-    const totals = summarizeShareUsage([
-      usage({ amount: { amount: 1, currency: 'USD' } }),
-      usage({ amount: { amount: 7, currency: 'CNY' } }),
-    ]);
-    expect(totals.amount).toBeNull();
-    expect(summarizeShareUsage([]).amount).toBeNull();
   });
 
   it('formats tokens compactly and money with two decimals', () => {

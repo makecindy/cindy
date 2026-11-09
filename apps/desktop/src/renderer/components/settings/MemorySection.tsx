@@ -11,8 +11,7 @@ import { useAppSettingsRevision } from '@/hooks/useAppSettingsRevision';
  *           'next-session' 时 toast 提示 "新会话生效"
  *   - 重置: 必走 useConfirmDialog 二次确认, 确认后 memoryReset → toast 反馈条目数
  *
- * 跟 UserPromptSection 同视觉栈 (settings-* css var token), Memory 主标题用同
- * 的 16/medium, 卡片 bg/border 用 settings-theme-card-* token。
+ * 版式用 settings-rows 的分区/卡片/行, 每行左侧保留 agent 图标块。
  */
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -21,6 +20,7 @@ import { RotateCcw, Sparkles } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import { Switch } from '@/components/ui/switch';
+import { SettingsCard, SettingsRow, SettingsSection } from '@/components/ui/settings-rows';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { ClaudeMark } from '@/components/icons/ClaudeMark';
 import { CodexMark } from '@/components/icons/CodexMark';
@@ -274,74 +274,58 @@ export function MemorySection() {
   );
 
   return (
-    <div className="flex flex-col gap-[14px]">
-      <div className="flex flex-col gap-1">
-        <div className="flex items-center justify-between gap-3">
-          <h2 className="text-16 font-medium leading-[1.2] text-[var(--settings-section-title)]">
-            {t('settings.memory.title')}
-          </h2>
-          <DefaultOverrideControls
-            isCustomized={settingsCustomized}
-            disabled={makerTogglePending}
-            onReset={() => void handleResetSettings()}
-          />
-        </div>
-        <p className="text-13 leading-[1.5] text-[var(--settings-section-desc)]">
-          {t('settings.memory.description')}
-        </p>
-      </div>
-
-      <div
-        className={cn(
-          'flex flex-col overflow-hidden rounded-xl',
-          'bg-[var(--settings-theme-card-bg)]',
-          'border border-[var(--settings-theme-card-border)]',
-        )}
-      >
+    <SettingsSection
+      title={t('settings.memory.title')}
+      description={t('settings.memory.description')}
+      action={
+        <DefaultOverrideControls
+          isCustomized={settingsCustomized}
+          disabled={makerTogglePending}
+          onReset={() => void handleResetSettings()}
+        />
+      }
+    >
+      <SettingsCard>
         {/* Maker Memory cell — 顶部独立, 启用时下方 Claude / Codex 强制 disable + 视觉变灰 */}
-        <div className="flex items-center justify-between gap-3 px-4 py-[14px]">
-          <div className="flex items-center gap-3">
-            <div
+        <SettingsRow
+          lead={
+            <span
               className={cn(
                 'flex h-9 w-9 shrink-0 items-center justify-center rounded-lg',
                 'bg-[var(--settings-input-bg)]',
               )}
             >
               <Sparkles size={18} className="text-[var(--settings-section-title)]" />
+            </span>
+          }
+          title={t(personalizationDetailsSettings.memoryMakerLabel.titleKey)}
+          hint={t(personalizationDetailsSettings.memoryMakerLabel.descriptionKey)}
+          trailing={
+            <div className="flex items-center gap-2">
+              <Switch data-setting-id={personalizationDetailsSettings.memoryMakerLabel.id}
+                checked={makerEnabled}
+                disabled={makerResetPending || makerTogglePending}
+                onCheckedChange={(v) => void handleMakerToggle(v)}
+                aria-label={t('settings.memory.maker.toggleAria')}
+              />
+              <button data-setting-id={personalizationDetailsSettings.memoryMakerLabel.id}
+                type="button"
+                onClick={() => void handleMakerReset()}
+                disabled={makerResetPending || makerTogglePending}
+                aria-label={t('settings.memory.maker.resetAria')}
+                className={cn(
+                  'flex h-[30px] w-[30px] items-center justify-center rounded-lg',
+                  'text-[var(--settings-section-desc)]',
+                  'hover:bg-[var(--settings-input-bg)] hover:text-[var(--settings-section-title)]',
+                  'transition-colors',
+                  'disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent',
+                )}
+              >
+                <RotateCcw size={16} />
+              </button>
             </div>
-            <div className="flex flex-col gap-[8px]">
-              <p className="text-14 font-medium leading-none text-[var(--settings-section-title)]">
-                {t(personalizationDetailsSettings.memoryMakerLabel.titleKey)}
-              </p>
-              <p className="text-12 leading-none text-[var(--settings-section-desc)]">
-                {t(personalizationDetailsSettings.memoryMakerLabel.descriptionKey)}
-              </p>
-            </div>
-          </div>
-          <div className="flex items-center gap-2">
-            <Switch data-setting-id={personalizationDetailsSettings.memoryMakerLabel.id}
-              checked={makerEnabled}
-              disabled={makerResetPending || makerTogglePending}
-              onCheckedChange={(v) => void handleMakerToggle(v)}
-              aria-label={t('settings.memory.maker.toggleAria')}
-            />
-            <button data-setting-id={personalizationDetailsSettings.memoryMakerLabel.id}
-              type="button"
-              onClick={() => void handleMakerReset()}
-              disabled={makerResetPending || makerTogglePending}
-              aria-label={t('settings.memory.maker.resetAria')}
-              className={cn(
-                'flex h-[30px] w-[30px] items-center justify-center rounded-lg',
-                'text-[var(--settings-section-desc)]',
-                'hover:bg-[var(--settings-input-bg)] hover:text-[var(--settings-section-title)]',
-                'transition-colors',
-                'disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent',
-              )}
-            >
-              <RotateCcw size={16} />
-            </button>
-          </div>
-        </div>
+          }
+        />
 
         {AGENTS.map((agent) => {
           const slot = slots[agent.kind];
@@ -356,60 +340,50 @@ export function MemorySection() {
           const label = t(definition.titleKey);
           const description = t(definition.descriptionKey);
           return (
-            <div
+            <SettingsRow
               key={agent.kind}
-              className={cn(
-                'flex items-center justify-between gap-3 px-4 py-[14px]',
-                'border-t border-[var(--settings-theme-card-border)]',
-                (agent.requiresMaker ? !makerEnabled : makerEnabled) && 'opacity-50',
-              )}
-            >
-              <div className="flex items-center gap-3">
-                <div
+              className={cn((agent.requiresMaker ? !makerEnabled : makerEnabled) && 'opacity-50')}
+              lead={
+                <span
                   className={cn(
                     'flex h-9 w-9 shrink-0 items-center justify-center rounded-lg',
                     'bg-[var(--settings-input-bg)]',
                   )}
                 >
                   <agent.Mark />
+                </span>
+              }
+              title={label}
+              hint={description}
+              trailing={
+                <div className="flex items-center gap-2">
+                  <Switch data-setting-id={definition.id}
+                    checked={checked}
+                    disabled={disabled}
+                    onCheckedChange={(v) => void handleToggle(agent.kind, v, label)}
+                    aria-label={t('settings.memory.agent.toggleAria', { label })}
+                  />
+                  <button data-settings-search-action="Restore the selected memory preference"
+                    type="button"
+                    onClick={() => void handleReset(agent.kind, label)}
+                    disabled={disabled}
+                    aria-label={t('settings.memory.agent.resetAria', { label })}
+                    className={cn(
+                      'flex h-[30px] w-[30px] items-center justify-center rounded-lg',
+                      'text-[var(--settings-section-desc)]',
+                      'hover:bg-[var(--settings-input-bg)] hover:text-[var(--settings-section-title)]',
+                      'transition-colors',
+                      'disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent',
+                    )}
+                  >
+                    <RotateCcw size={16} />
+                  </button>
                 </div>
-                <div className="flex flex-col gap-[8px]">
-                  <p className="text-14 font-medium leading-none text-[var(--settings-section-title)]">
-                    {label}
-                  </p>
-                  <p className="text-12 leading-none text-[var(--settings-section-desc)]">
-                    {description}
-                  </p>
-                </div>
-              </div>
-
-              <div className="flex items-center gap-2">
-                <Switch data-setting-id={definition.id}
-                  checked={checked}
-                  disabled={disabled}
-                  onCheckedChange={(v) => void handleToggle(agent.kind, v, label)}
-                  aria-label={t('settings.memory.agent.toggleAria', { label })}
-                />
-                <button data-settings-search-action="Restore the selected memory preference"
-                  type="button"
-                  onClick={() => void handleReset(agent.kind, label)}
-                  disabled={disabled}
-                  aria-label={t('settings.memory.agent.resetAria', { label })}
-                  className={cn(
-                    'flex h-[30px] w-[30px] items-center justify-center rounded-lg',
-                    'text-[var(--settings-section-desc)]',
-                    'hover:bg-[var(--settings-input-bg)] hover:text-[var(--settings-section-title)]',
-                    'transition-colors',
-                    'disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent',
-                  )}
-                >
-                  <RotateCcw size={16} />
-                </button>
-              </div>
-            </div>
+              }
+            />
           );
         })}
-      </div>
-    </div>
+      </SettingsCard>
+    </SettingsSection>
   );
 }

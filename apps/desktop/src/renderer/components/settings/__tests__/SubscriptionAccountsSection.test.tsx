@@ -2,6 +2,7 @@
 
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { toast } from '@/lib/toast';
 import type { SubscriptionPoolView } from '../../../../shared/subscriptionAccounts';
 
 vi.mock('react-i18next', () => ({
@@ -67,7 +68,7 @@ describe('SubscriptionAccountsSection usage', () => {
       />,
     );
     const original = await screen.findByTestId('original-card');
-    const rows = screen.getByTestId('subscription-accounts').querySelectorAll('.py-4');
+    const rows = screen.getAllByTestId('subscription-account');
     expect(rows).toHaveLength(2);
     expect(within(rows[0] as HTMLElement).getByTestId('original-card')).toBe(original);
     expect(screen.getAllByTestId('original-card')).toHaveLength(1);
@@ -103,5 +104,18 @@ describe('SubscriptionAccountsSection usage', () => {
     const trigger = await screen.findByRole('button', { name: 'providerGroup.member.moreAria' });
     fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false, pointerType: 'mouse' });
     expect(await screen.findByRole('menuitem', { name: label })).toBeTruthy();
+  });
+  // The folder path used to be an always-visible disclosure under every account; it is now a menu action.
+  it('opens the account folder from the account menu and reports a failure', async () => {
+    const openPath = vi.fn(async () => ({ success: false, error: 'missing' }));
+    Object.assign(window.electronAPI, { openPath });
+    const error = vi.spyOn(toast, 'error').mockImplementation(() => '');
+    render(<SubscriptionAccountsSection providerId="anthropic" />);
+    const [, second] = await screen.findAllByRole('button', { name: 'providerGroup.member.moreAria' });
+    fireEvent.pointerDown(second, { button: 0, ctrlKey: false, pointerType: 'mouse' });
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'subscriptionAccounts.openDirectory' }));
+    await vi.waitFor(() => expect(openPath).toHaveBeenCalledWith('/home/.claude-second'));
+    await vi.waitFor(() => expect(error).toHaveBeenCalledWith('subscriptionAccounts.openDirectoryFailed'));
+    expect(screen.queryByText('/home/.claude-second')).toBeNull();
   });
 });

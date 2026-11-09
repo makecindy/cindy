@@ -39,6 +39,7 @@ vi.mock('../../../../main/maker-host/createDesktopProviderService.js', () => ({
 }));
 vi.mock('../../../../main/maker-host/remote-provider-access-store.js', () => ({
   isRemoteProviderInvocationAllowed: () => true,
+  onRemoteProviderAccessChanged: () => () => undefined,
 }));
 vi.mock('../../../../main/i18n.js', () => ({ t: (key: string) => key }));
 vi.mock('../../../../main/textClipboard.js', () => ({ rememberIssuedClipboardText: vi.fn() }));

@@ -12,7 +12,7 @@ import WebSocket from 'ws';
 import { mapClaudeHostedEvent } from '../controller/eventMap';
 import { execServerActions, execServerCommand } from '../controller/execServerRelay';
 import { collectProjectInstructionFiles } from '../controller/projectFiles';
-import { approvalActionsFor, createRemoteAgentHandle, innerShellScript } from '../controller/proxyHandle';
+import { approvalActionsFor, createRemoteAgentHandle, innerShellScript, parseStartedInfo } from '../controller/proxyHandle';
 import type { RemoteAgentRunClient } from '../controller/runClient';
 import { credentialConfirmation, takeGroupSwitchState } from '../controller/startRemote';
 import { EventLog, LineSplitter } from '../eventLog';
@@ -364,6 +364,33 @@ describe('tunnel', () => {
 });
 
 describe('remote AgentSessionHandle close', () => {
+  // #9263 unit: old execution hosts silently strip iMessage permissions. Check
+  // send/steer before dispatch, including a reconnect that changes host version.
+  it('requires current executor support before sending iMessage context', async () => {
+    const callWithId = vi.fn(async () => undefined);
+    const started = { id: 'remote', model: 'm', shadowDir: '', methods: [], state: {} };
+    const controller = createRemoteAgentHandle({
+      client: { callWithId } as unknown as RemoteAgentRunClient,
+      started: parseStartedInfo(started, 'pi'),
+      workspace: new ExecutorWorkspace({ workingDir: root }),
+      recordApproval() {}, newId: () => 'req', dispose: async () => undefined,
+    });
+    const origin = { kind: 'im', channel: 'imessage', taskId: 'guest-task' } as const;
+    const policy = { origin, confirmationSurface: 'desktop' as const, forceConfirmToolCall: () => true };
+    const message = { type: 'user' as const, content: 'work' };
+    await expect(controller.handle.send(message, { turnPermissionPolicy: policy })).rejects.toThrow('REMOTE_AGENT_PEER_TOO_OLD');
+    await expect(controller.handle.steer!(message, { [MAIN_OWNED_SEND_CONTEXT]: { origin } })).rejects.toThrow('REMOTE_AGENT_PEER_TOO_OLD');
+    expect(callWithId).not.toHaveBeenCalled();
+    // Existing Desktop turns still work with an old peer.
+    await controller.handle.send(message, { [MAIN_OWNED_SEND_CONTEXT]: { origin: { kind: 'desktop' } } });
+    controller.onReconnected(parseStartedInfo({ ...started, imessageSendContext: true }, 'pi'));
+    await controller.handle.send(message, { turnPermissionPolicy: policy, [MAIN_OWNED_SEND_CONTEXT]: { origin } });
+    expect(callWithId).toHaveBeenCalledTimes(2);
+    controller.onReconnected(parseStartedInfo(started, 'pi'));
+    await expect(controller.handle.send(message, { turnPermissionPolicy: policy })).rejects.toThrow('REMOTE_AGENT_PEER_TOO_OLD');
+    expect(callWithId).toHaveBeenCalledTimes(2);
+  });
+
   // #6921 unit: the production handle must distinguish remote notification failure
   // from local cleanup failure. The navigation-only test below missed this boundary.
   // Minimal inputs: a pending/rejected close and an onClosed cleanup still in flight.
@@ -715,6 +742,25 @@ describe('wire payloads', () => {
       writeAttachment: async () => '',
     });
     expect(decoded.turnPermissionPolicy?.forceConfirmToolCall('Read', {})).toBe(true);
+  });
+
+  // #9263 unit: no previous wire roundtrip included the new IM origin. Both
+  // policy and Main-owned identity must survive; unknown origins must reject.
+  it('preserves iMessage permission and identity and rejects undecodable origins', async () => {
+    const callbacks = { onTranscriptUserEntry: async () => {}, onInteractionStateChange() {}, writeAttachment: async () => '' };
+    const origin = { kind: 'im', channel: 'imessage', taskId: 'guest-task' } as const;
+    const encoded = await encodeSendOptions({
+      turnPermissionPolicy: { origin, confirmationSurface: 'desktop', forceConfirmToolCall: () => true },
+      [MAIN_OWNED_SEND_CONTEXT]: { origin, rawChannelText: 'work' },
+    }, async () => Buffer.alloc(0));
+    const decoded = await decodeSendOptions(JSON.parse(JSON.stringify(encoded.wire)), callbacks);
+    expect(decoded.turnPermissionPolicy?.origin).toEqual(origin);
+    expect(decoded.turnPermissionPolicy?.forceConfirmToolCall('Bash', {})).toBe(true);
+    expect(decoded[MAIN_OWNED_SEND_CONTEXT]).toEqual({ origin, rawChannelText: 'work' });
+    for (const value of [
+      { turnPolicy: { origin: { kind: 'im', channel: 'future-channel' } } },
+      { cindy: { mainOwned: { origin: { kind: 'im', channel: 'future-channel' } } } },
+    ]) await expect(decodeSendOptions(value, callbacks)).rejects.toThrow('REMOTE_AGENT_INVALID');
   });
 
   it('carries Auto-review references in Main context and re-projects them on decode', async () => {

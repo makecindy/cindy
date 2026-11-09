@@ -1,3 +1,4 @@
+import { copyChatSelection } from '@/components/chat/chatSelectionClipboard';
 import { useProcessDisclosureScroll } from './useProcessDisclosureScroll';
 /**
  * 话题（Thread）面板：与主时间线同一套消息行（BotGroupTimelineItem）与密度规则——根消息、
@@ -43,6 +44,17 @@ import { ThreadPanel, ThreadPanelRoot } from './ThreadPanel';
 import type { ThreadPanelResize } from './useThreadPanelResize';
 const key = (name: string) => `bots.groupChat.server.${name}`;
 const api = () => window.electronAPI.maker.chatServer;
+/** Unconfirmed rich replies keep their operation id across panel remounts, isolated by account. */
+const richReplyAttempts = { owner: getDataOwnerGeneration().dataOwnerId, ids: new Map<string, string>() };
+function richReplyClientId(key: string): string {
+  const owner = getDataOwnerGeneration().dataOwnerId;
+  if (richReplyAttempts.owner !== owner) { richReplyAttempts.owner = owner; richReplyAttempts.ids.clear(); }
+  const clientId = richReplyAttempts.ids.get(key) ?? crypto.randomUUID();
+  richReplyAttempts.ids.delete(key);
+  richReplyAttempts.ids.set(key, clientId);
+  if (richReplyAttempts.ids.size > 256) richReplyAttempts.ids.delete(richReplyAttempts.ids.keys().next().value!);
+  return clientId;
+}
 const STICK_TO_BOTTOM_PX = 48;
 /** Earlier pages read while looking for a reply opened from the main chat. */
 const FOCUS_PAGE_LIMIT = 5;
@@ -570,6 +582,24 @@ export function ChatThreadPanel({ group, rootId, quoteSources = group.messages, 
     return result;
   };
   const onSent = useCallback(() => { refreshRef.current(); refreshBotGroups(); }, []);
+  // A component reply belongs to this thread; the composer's “also send” choice and draft stay intact.
+  const sendRichAnswer = async (text: string, sourceMessageId: string) => {
+    if (readOnly || sharing) return false;
+    const owner = getDataOwnerGeneration();
+    const attemptKey = JSON.stringify([group.id, rootId, sourceMessageId, text]);
+    const input = { text, clientId: richReplyClientId(attemptKey), mentions: { all: false, botIds: [] } };
+    onSendStart({ ...input, attachments: [], quote: null });
+    try {
+      const result = await api().reply({ groupId: group.id, rootId, ...input });
+      if (!isDataOwnerGenerationCurrent(owner)) return false;
+      onSendSettled(input.clientId, result.ok ? { ok: true, messageId: result.messageId } : { ok: false });
+      if (result.ok) { richReplyAttempts.ids.delete(attemptKey); onSent(); }
+      return result.ok;
+    } catch {
+      if (isDataOwnerGenerationCurrent(owner)) onSendSettled(input.clientId, { ok: false });
+      return false;
+    }
+  };
 
   // Follow new replies while the reader is at the bottom, including content that grows later.
   const lastKey = replyRows[replyRows.length - 1]?.id ?? '';
@@ -610,6 +640,8 @@ export function ChatThreadPanel({ group, rootId, quoteSources = group.messages, 
         locale={locale}
         shareScope={shareScope}
         sharing={sharing}
+        readOnly={readOnly}
+        onRichSend={text => sendRichAnswer(text, message.id)}
         reactionGroupId={group.id}
         readersEnabled={group.supportsMessageReaders === true}
         reactionRevision={messageReactionRevision(group, message.id)}
@@ -649,7 +681,7 @@ export function ChatThreadPanel({ group, rootId, quoteSources = group.messages, 
               </Tip>
             ) : null}
         </>}>
-        <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-5 pb-4 pt-3"
+        <div ref={scrollRef} onCopy={copyChatSelection} className="min-h-0 flex-1 overflow-y-auto px-5 pb-4 pt-3"
           onClickCapture={processScroll.onClickCapture}
           onWheel={event => navigateTimeline(() => processScroll.onWheel(event))}
           onKeyDown={event => navigateTimeline(() => processScroll.onKeyDown(event))}

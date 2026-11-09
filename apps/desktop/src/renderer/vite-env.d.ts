@@ -2288,6 +2288,9 @@ interface ElectronAPI {
   // ── 客户端日志上报(设置 → 关于)──
   // 只上报 App 自身的运行记录 + 设备环境信息;对话内容、文件内容、提示词、工作目录路径
   // 永不上报,凭证与邮箱在上传前被自动抹除(实现见 main/log-upload/)。
+  getCrashDiagnosis: () => Promise<import('../shared/crashDiagnosis').CrashDiagnosisSummary | null>;
+  prepareCrashDiagnosis: () => Promise<import('../shared/crashDiagnosis').CrashDiagnosisEvidence | null>;
+  dismissCrashDiagnosis: () => Promise<void>;
   getLogUploadSettings: () => Promise<LogUploadSettingsPayload>;
   setLogUploadCrashAuto: (enabled: boolean) => Promise<LogUploadSettingsPayload>;
   /** 恢复默认:删掉 override,重新跟随当前版本默认的“已有 Git 项目”模式。 */
@@ -3011,6 +3014,7 @@ interface ElectronAPI {
     title: string;
     kind: 'done' | 'error' | 'needs-reply';
     inputHandoffRequestId?: string;
+    remoteDeviceId?: string;
     /**
      * 选择性走哪些通知通道; 缺省 / 未传 → 兼容旧行为(仅桌面)。
      * renderer 侧 gate(localStorage notifications.enabled /
@@ -4106,12 +4110,14 @@ interface ElectronAPI {
   setUpdateRelaunchTheme: (theme: 'light' | 'dark') => void;
   // E4D 毛玻璃:family 切换/启动通知 main 开关 vibrancy(仅 CINDY 透壁纸)
   theme: {
+    setSidebarWidth: (width: number) => void;
     applyVibrancy: (
       familyId: string,
       isDark: boolean,
       mode: 'system' | 'light' | 'dark',
       systemModeFollowsSystem: boolean,
       wallpaperCovered?: boolean,
+      desktopBlur?: number | null,
     ) => void;
   };
   /**
@@ -4675,6 +4681,8 @@ interface ElectronAPI {
     connectGithubApp: () => Promise<void>;
     installGithubApp: () => Promise<void>;
     disconnectGithubApp: () => Promise<void>;
+    checkCindyStar: () => Promise<boolean | null>;
+    starCindy: () => Promise<boolean | null>;
     githubConnection: () => Promise<import('../shared/githubSetup').GithubConnectionState>;
     startGithubSetup: () => Promise<import('../shared/githubSetup').GithubSetupState>;
     cancelGithubSetup: () => Promise<import('../shared/githubSetup').GithubSetupState>;

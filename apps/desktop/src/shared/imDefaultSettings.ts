@@ -9,7 +9,7 @@ export type ImDefaultEffort = 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 
  * 在这个键上 — 两者互不影响。
  */
 export type ImDefaultSettingsChannel =
-  'feishu' | 'slack' | 'discord' | 'wechat' | 'telegram' | 'dingtalk' | 'wecom';
+  'feishu' | 'slack' | 'discord' | 'wechat' | 'telegram' | 'dingtalk' | 'wecom' | 'imessage';
 
 export interface ImDefaultAgentSettings {
   /** Agent 所在电脑；share:<id> 表示分享供应商，缺省为本机。 */
@@ -87,6 +87,7 @@ export const IM_DEFAULT_SETTINGS_CHANNELS: readonly ImDefaultSettingsChannel[] =
   'telegram',
   'dingtalk',
   'wecom',
+  'imessage',
 ];
 
 export const IM_DEFAULT_EFFORT_OVERRIDES: Readonly<Partial<Record<string, ImDefaultEffort>>> = {
