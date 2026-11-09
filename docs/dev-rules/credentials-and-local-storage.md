@@ -66,6 +66,28 @@
 请求头；应前滚修复，不把密文转回明文来恢复兼容。实现与回归：`maker-host/custom-mcp-store.ts`
 及同名测试。Bearer token 继续走现有独立安全存储。
 
+## Codex 共享凭证与 Windows 独立登录
+
+Codex 共享登录使用文件软链接，不创建硬链接。Windows 无文件软链接权限时，
+显式连接进入现有的 Cindy 独立 OAuth 登录流程，凭证由 Codex 写在该实例的
+`codex-home/auth.json`；后台对账不复制 token，不按时间戳双向同步。
+独立 OAuth 回退仍受普通 Dev 禁止发起登录的写入门禁约束。启动 OAuth 前须确认
+本实例 auth 路径缺失或为单链接普通文件；旧别名清理失败、仍有共享链接或无法
+确认文件类型时拒绝启动，不把系统凭证交给声称独立的登录流程。
+
+升级只迁移当前实例的旧硬链接：可创建软链接则替换本实例的别名；不可创建时，
+仅移除仍与系统文件同 inode 的本实例硬链接，系统文件的字节和 inode 保持不变。
+已有独立文件保留。其它 profile 的别名由对应 profile 升级时迁移，不通过重写
+系统文件一次性拆链。早期开发实现遗留的 `.swapbak` / `.copytmp` 保留原样，
+不自动恢复或删除，避免撤销原生 Codex 登出或干扰仍在运行的旧实例。
+既有只读 Dev 消费 Release 凭证的一次性快照例外保持不变。
+目录 junction 或软链接可能让两个不同路径实际指向同一 `auth.json` 目录项。
+判断时展开父目录别名，不能仅比较路径字符串，也不能将不同名字的硬链接视为
+同一目录项；同一目录项直接复用，不执行迁移、快照覆盖或失效时的文件删除。
+
+实现与回归见 `maker-host/codex-auth-link.ts`、`auth-adapters.ts`、
+`codexAuthLink.test.ts` 和 `codexAuthInvalidation.test.ts`。
+
 ## Claude 订阅只经 Claude Code 自己的登录
 
 Anthropic 只允许用户用自己的订阅登录**未修改的 Claude Code**；第三方应用不得提供
