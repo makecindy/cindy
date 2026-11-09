@@ -190,7 +190,7 @@ export const HELPER_CATEGORY_DESCRIPTIONS: Record<(typeof CATEGORY_ENUM)[number]
   handoff: '给已有任务发消息或新建任务。新建可指定 title；省略 project_path 继承来源归属，传已有项目路径切换项目，传 null 创建不绑项目的任务。执行目录独立，不隐式创建项目。发给已有任务可跨电脑（deviceId::sessionId）；新建的任务与文件仍在本机，新建时可用 agent_device_id 选择 Agent 使用哪台电脑的远程或分享供应商（取 list_available_models 的 locations）。',
   skills: 'Skill 的搜索、发布与学习。本机与 SkillHub。',
   app_update: `检查与安装本机的 ${BRAND_NAME} 更新。本机。`,
-  bots: '伙伴：本机目标配置（inspect_teammate_configuration / update_teammate_configuration）与头像（set_target_teammate_avatar）、资料、能力、关联项目（list_teammate_projects / set_teammate_project，仅自身）、工作台、待办、后台任务、伙伴间消息与主力电脑。例行任务用 routine_list / routine_save；schedule_list_models 查可选模型、来源、档位与已知价格，modelOverride 与 sessionMode 设置每条例行任务的模型与运行方式。伙伴间消息（list_agents / send_to_agent）、主力电脑（get_teammate_home / move_teammate_home）、总调度伙伴读取与继续另一台电脑上的任务（read_workbench_task / continue_workbench_task 传 deviceId::sessionId）可跨电脑；其余本机。',
+  bots: '伙伴：普通任务与伙伴共用本机名单与原生创建（list_teammates / create_teammate）、目标配置（inspect_teammate_configuration / update_teammate_configuration）与头像（set_target_teammate_avatar）；伙伴专属的自身资料、能力、关联项目（list_teammate_projects / set_teammate_project，仅自身）、工作台、待办、后台任务、伙伴间消息与主力电脑。例行任务用 routine_list / routine_save；schedule_list_models 查可选模型、来源、档位与已知价格，modelOverride 与 sessionMode 设置每条例行任务的模型与运行方式。伙伴间消息（list_agents / send_to_agent）、主力电脑（get_teammate_home / move_teammate_home）、总调度伙伴读取与继续另一台电脑上的任务（read_workbench_task / continue_workbench_task 传 deviceId::sessionId）可跨电脑；其余本机。',
 };
 
 interface SessionTaskCallbacks {
@@ -276,11 +276,19 @@ function cindyAvailableForSession(sessionCtx: XdtHelperMcpSessionCtx): boolean {
   return !ctx.remoteHostId || ctx.agentKind === 'pi';
 }
 
+// Account management also belongs to ordinary local tasks. Self tools, messaging,
+// memory and routines still require a companion identity.
+const LOCAL_TEAMMATE_MANAGEMENT = new Set([
+  'list_teammates', 'create_teammate', 'inspect_teammate_configuration',
+  'update_teammate_configuration', 'set_target_teammate_avatar',
+]);
+
 interface HelperSurfaceAllow {
   /** null means every registered category. An empty set means none. */
   categories: ReadonlySet<string> | null;
   /** Tools of system Skills this teammate turned off (teammate_skills.ts). */
   deniedTools?: ReadonlySet<string>;
+  allowedTools?: ReadonlySet<string>;
 }
 
 function toolAllowed(
@@ -289,7 +297,7 @@ function toolAllowed(
 ): boolean {
   if (allow.deniedTools?.has(tool.name)) return false;
   if (!allow.categories) return true;
-  return allow.categories.has(tool.category);
+  return allow.categories.has(tool.category) || allow.allowedTools?.has(tool.name) === true;
 }
 
 function registerListToolsEntry(
@@ -967,6 +975,7 @@ export function createXdtHelperMcpServer(
     }
     const allow = (categories: ReadonlySet<string>): HelperSurfaceAllow => ({
       categories,
+      ...(sessionId && !context.remoteHostId ? { allowedTools: LOCAL_TEAMMATE_MANAGEMENT } : {}),
     });
     if (!sessionId) return allow(remoteBotOnly ? new Set() : defaultCategories);
     if (!deps.resolveSurface) return allow(remoteBotOnly ? new Set(['auth', 'cindy']) : defaultCategories);
@@ -1299,7 +1308,7 @@ export function createXdtHelperMcpServer(
         description: definition.description, inputSchema: z.strictObject(definition.inputShape),
       }, async (args) => {
         const allowed = await allowedSurface();
-        if (!allowed.categories?.has('bots') || !toolAllowed(allowed, definition)) {
+        if (!toolAllowed(allowed, definition)) {
           return errorPayload('CAPABILITY_NOT_AVAILABLE', '这个工具不属于当前任务的能力面。');
         }
         const sessionId = resolveLiziMcpSessionContext(sessionCtx).sessionId;
@@ -1333,11 +1342,10 @@ export function createXdtHelperMcpServer(
         ...(await askOwnerListing()),
         ...(await asyncQuestionListing()),
         ...(await machineListing()),
-        ...(allowed.categories?.has('bots')
-          ? withCindyGatedBotToolDescriptions(
-            botTools.filter((tool) => !allowed.deniedTools?.has(tool.name)),
-            cindyAvailableForSession(sessionCtx),
-          ) : []),
+        ...withCindyGatedBotToolDescriptions(
+          botTools.filter((tool) => toolAllowed(allowed, { ...tool, category: 'bots' })),
+          cindyAvailableForSession(sessionCtx),
+        ),
       ] };
     });
   }

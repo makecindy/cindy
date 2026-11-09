@@ -1892,7 +1892,9 @@ export async function setBotProfileAvatar(botId: string, image: { buffer: Buffer
 export interface RestoredBotOrigin { templateId?: unknown; avatarFallback?: boolean; replacesUnfinishedMeeting?: true; allowSameName?: true }
 
 /** Main-owned creation path shared by the renderer and Bot runtime tools. */
-export async function createBotProfile(raw: unknown, restored?: RestoredBotOrigin) {
+export async function createBotProfile(raw: unknown, restored?: RestoredBotOrigin,
+  guard?: { assertCurrent(): void; beforeCommit(): Promise<void>; onCommitted(bot: { id: string; name: string; description: string }): void }) {
+  guard?.assertCurrent();
   const body =
     raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
   const draftEntry = body.creationDraftToken ? readBotCreationDraft(body.creationDraftToken) : undefined;
@@ -1994,11 +1996,14 @@ export async function createBotProfile(raw: unknown, restored?: RestoredBotOrigi
   }
   const selectedImage = avatarImage ?? (!requestedAvatar ? await readDefaultTeammatePortrait(existingIds.length) : null);
   if (selectedImage) {
-    const written = await storeTeammateAvatarImage(selectedImage, db, assertCreationOwnerStillCurrent);
+    const written = await storeTeammateAvatarImage(selectedImage, db, () => { assertCreationOwnerStillCurrent(); guard?.assertCurrent(); });
     avatar = written.url;
     botAvatarRef = { id: randomUUID(), hash: written.hash, createdAt: now };
   }
   try {
+  await guard?.beforeCommit();
+  assertCreationOwnerStillCurrent();
+  guard?.assertCurrent();
   await client.tx('bots.createProfile', {
     id,
     ...(botAvatarRef ? { botAvatarRef } : {}),
@@ -2011,6 +2016,7 @@ export async function createBotProfile(raw: unknown, restored?: RestoredBotOrigi
     ...(restored?.allowSameName === true ? { allowDuplicateName: true } : {}),
     now,
   });
+  guard?.onCommitted({ id, name, description });
   } catch (error) {
     assertCreationOwnerStillCurrent();
     if (templateId === 'cindy' && (error as { code?: string }).code === 'ALREADY_EXISTS') {

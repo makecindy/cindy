@@ -31,11 +31,11 @@ export function registerBotAvatarTools(registry: XdtHelperToolRegistry, deps: {
       imageSource: z.string().regex(/^cindy-media:\/\/blobs\/[0-9a-f]{64}\.(?:png|jpe?g|webp)$/),
       expectedVersion: z.number().int().positive(),
       expectedAvatar: z.string().min(1).max(2000),
-      crop: z.strictObject({ left: z.number().int().nonnegative(), top: z.number().int().nonnegative(), width: z.number().int().positive(), height: z.number().int().positive() }).optional(),
+      crop: z.strictObject({ left: z.number().int().nonnegative(), top: z.number().int().nonnegative(), width: z.number().int().positive(), height: z.number().int().positive() }).optional().describe('Square crop in EXIF-oriented ORIGINAL image pixels, before any HDR downscaling; must fit wholly inside the source.'),
     },
     handler: async input => {
       const callerSessionId = deps.getSessionContext().sessionId;
-      if (!callerSessionId) return errorPayload('NOT_A_BOT_SESSION', '当前调用未绑定伙伴任务');
+      if (!callerSessionId) return errorPayload('NO_SESSION_CONTEXT', '当前调用未绑定任务');
       const result = await deps.callbacks.set({ ...input, callerSessionId });
       if (!result.ok) return errorPayload(result.errorCode, result.message);
       return okPayload({ target: result.target, avatar: result.avatar, profileVersion: result.profileVersion, imageFormat: result.imageFormat, synchronization: result.synchronization, ...(result.warning ? { warning: result.warning } : {}) });

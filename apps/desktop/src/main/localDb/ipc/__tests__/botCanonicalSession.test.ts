@@ -11339,6 +11339,64 @@ describe('Target teammate configuration', () => {
     expect(await service.inspectConfiguration({ callerSessionId, botId: 'design-target' })).toMatchObject({ ok: false });
   });
 
+  // #9433 P1: ordinary-task creation/target selection previously stopped in the
+  // Bot-only host callback. Real profile/DB fixture; no live account or greetings.
+  it('lists local active and paused targets without provisioning, and creates from an ordinary task', async () => {
+    const { callerSessionId, service } = await pair();
+    h.sqlite!.prepare("UPDATE bot_profiles SET status = 'paused' WHERE id = 'design-target'").run();
+    const count = () => h.sqlite!.prepare('SELECT count(*) AS count FROM bot_profiles').get();
+    const before = count();
+    expect(await service.listTeammates({ callerSessionId })).toMatchObject({ ok: true, teammates: expect.arrayContaining([
+      { id: 'bot-1', name: expect.any(String), description: expect.any(String), status: 'active' },
+      { id: 'design-target', name: 'Target', description: expect.any(String), status: 'paused' },
+    ]) });
+    expect(count()).toEqual(before);
+    h.sqlite!.prepare('DELETE FROM bot_session_links WHERE session_id = ?').run(callerSessionId);
+    h.sqlite!.prepare("UPDATE sessions SET source = 'desktop' WHERE id = ?").run(callerSessionId);
+    const created = await service.createTeammate({ callerSessionId, name: 'Created in task', description: 'Scoped purpose', identitySource: 'Scoped identity', welcomeMessage: '' });
+    expect(created).toMatchObject({ ok: true, bot: { name: 'Created in task', description: 'Scoped purpose' } });
+    if (!created.ok) throw new Error('Creation failed');
+    // The native invitation prepares the target chat asynchronously; creation is
+    // not a claim that its first model turn has already run. Exercise that boundary.
+    expect(await service.inspectConfiguration({ callerSessionId, botId: created.bot.id })).toMatchObject({ ok: false, errorCode: 'PRECONDITION_FAILED' });
+    expect(await invoke('local-db:bots:get', created.bot.id)).toMatchObject({ identitySource: 'Scoped identity', currentVersion: 1, invitation: { stage: 'skills' } });
+    companionHomes.setPersistedShadows(['design-target']);
+    try {
+      const list = await service.listTeammates({ callerSessionId });
+      if (!list.ok) throw new Error('List failed');
+      expect(list.teammates.map(t => t.id)).not.toContain('design-target');
+    } finally { companionHomes.setPersistedShadows([]); }
+    h.sqlite!.prepare("UPDATE bot_profiles SET status = 'archived' WHERE id = 'design-target'").run();
+    const list = await service.listTeammates({ callerSessionId });
+    if (!list.ok) throw new Error('List failed');
+    expect(list.teammates.map(t => t.id)).not.toContain('design-target');
+    const after = count();
+    h.sqlite!.prepare("UPDATE sessions SET source = 'shared' WHERE id = ?").run(callerSessionId);
+    expect(await service.listTeammates({ callerSessionId })).toMatchObject({ ok: false });
+    expect(await service.createTeammate({ callerSessionId, name: 'Denied', description: '', identitySource: '', welcomeMessage: '' })).toMatchObject({ ok: false });
+    expect(count()).toEqual(after);
+  });
+
+  it('rejects creation when authorization expires before the real profile transaction', async () => {
+    const { callerSessionId, service } = await pair();
+    h.sqlite!.prepare('DELETE FROM bot_session_links WHERE session_id = ?').run(callerSessionId);
+    h.sqlite!.prepare("UPDATE sessions SET source = 'desktop' WHERE id = ?").run(callerSessionId);
+    let checks = 0;
+    let revoked = false;
+    const decision = await admitTaskAction({ sessionId: callerSessionId, server: 'cindy_helper', tool: 'create_teammate', args: {} }, {
+      key: 'create-call', ownerInput: true, delegated: true,
+      assertCurrent: async () => {
+        if (revoked) throw new TaskActionAuthorizationError();
+        if (++checks === 4) queueMicrotask(() => { revoked = true; });
+      },
+      assertCurrentSync: () => { if (revoked) throw new TaskActionAuthorizationError(); },
+    });
+    if (!decision.ok || !decision.run) throw new Error('Expected admitted call');
+    expect(await decision.run(() => service.createTeammate({ callerSessionId, name: 'Must not create', description: '', identitySource: '', welcomeMessage: '' }))).toMatchObject({ ok: false });
+    expect(checks).toBe(4);
+    expect(h.sqlite!.prepare("SELECT id FROM bot_profiles WHERE display_name = 'Must not create'").all()).toEqual([]);
+  });
+
   it('preserves the committed version when runtime refresh fails after saving', async () => {
     const { callerSessionId, service } = await pair();
     h.requestRuntimeRefresh.mockImplementationOnce(() => { throw new Error('refresh unavailable'); });

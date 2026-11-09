@@ -522,11 +522,11 @@ describe('Owner-delegated scheduled task actions', () => {
 describe('Desktop owner input task actions', () => {
   // Target configuration is also available to ordinary tasks; their bare-allow
   // shortcut must not discard the fence needed by the final persistence callback.
-  it('retains a final configuration guard for ordinary tasks and rejects a late Plan switch', async () => {
+  it.each(['create_teammate', 'update_teammate_configuration'])('retains a final %s guard for ordinary tasks and rejects a late Plan switch', async tool => {
     const h = desktopFixture('private');
     h.caller.botId = null; h.caller.source = 'desktop';
     h.activeInput.permission = { permissionMode: 'auto', planModeEnabled: false, isCurrent: () => true };
-    await withToolCallAuthority(h.authorize, call('update_teammate_configuration'), async () => {
+    await withToolCallAuthority(h.authorize, call(tool), async () => {
       const guard = captureTaskActionSyncGuard();
       expect(guard).toBeTypeOf('function');
       guard!();
@@ -539,7 +539,7 @@ describe('Desktop owner input task actions', () => {
   // Each tool must be admitted by the guard; the three plan-state sources share
   // one predicate, so cover its alternate branches with one representative tool.
   it.each([
-    ...['update_teammate_configuration', 'set_target_teammate_avatar']
+    ...['create_teammate', 'update_teammate_configuration', 'set_target_teammate_avatar']
       .map(tool => ({ tool, state: 'plan-permission' })),
     { tool: 'update_teammate_configuration', state: 'plan-enabled' },
     { tool: 'update_teammate_configuration', state: 'runtime-plan' },

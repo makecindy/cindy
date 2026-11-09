@@ -3,8 +3,8 @@
   "packages": [
     {
       "name": "companion-designer",
-      "sha256": "0879252a14f92ea51665e28af9cca8b490999ec6cb52030ac8c1f5b7ca819763",
-      "bytes": 8860,
+      "sha256": "5b517a876aa7e382dfa591c87abc3b44cb0f3e13a469389e27dc3a739188cf12",
+      "bytes": 9056,
       "files": [
         {
           "relPath": "LICENSE",
@@ -13,8 +13,8 @@
         },
         {
           "relPath": "references/host-adapters.md",
-          "size": 2144,
-          "sha256": "1334c9c4e37a7df6d75053111cf3097f2c68a4c8dfa1ecf397960b160cc61a0c"
+          "size": 2472,
+          "sha256": "b36e0450c3b9935ab5ed15258ed1a69ae196a916254e9d944b4cdda5550f7dd5"
         },
         {
           "relPath": "SKILL.md",

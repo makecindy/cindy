@@ -1,11 +1,11 @@
 import { assertTaskActionCurrent, captureTaskActionSyncGuard } from './taskActionAuthorization.js';
 import { inspectAppDefaultModel, changeAppDefaultModel } from './appDefaultModelControl.js';
 import { extractIpcError } from '../../shared/ipcError.js';
-import type { BotCapabilityCallbacks, BotControlState, TeammateConfiguration } from '@cindy/mcps';
+import type { BotCapabilityCallbacks, BotControlState, CreateTeammateCallbacks, TeammateConfiguration } from '@cindy/mcps';
 import { and, desc, eq } from 'drizzle-orm';
 import { botProfiles, botProfileVersions, botSessionLinks, botRuntimeSnapshots, sessions } from '../localDb/schema.js';
 import { getDbClient, getCurrentDbClientSnapshot } from '../localDb/client/current.js';
-import { updateBotProfile } from '../localDb/ipc/bots.js';
+import { createBotProfile, updateBotProfile } from '../localDb/ipc/bots.js';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState.js';
 import { listCustomMcpServers } from '../maker-host/custom-mcp-store.js';
 import { normalizeBotToolCapabilities } from '../../shared/botCapabilitySelection.js';
@@ -375,6 +375,42 @@ export function createBotCapabilityService(deps: BotCapabilityServiceDeps) {
         if (intent === 'write') await assertTaskActionCurrent();
         caller.assertOwner();
       } };
+    },
+    async listTeammates(input: { callerSessionId: string }): ReturnType<NonNullable<BotCapabilityCallbacks['listTeammates']>> {
+      try {
+        const caller = await configurationCaller(input.callerSessionId);
+        const profiles = await getDbClient().drizzle.select({ id: botProfiles.id, name: botProfiles.displayName,
+          description: botProfiles.description, status: botProfiles.status }).from(botProfiles).orderBy(botProfiles.createdAt, botProfiles.id);
+        await caller.refresh();
+        // Use the same target boundary as inspect/update, without the settings
+        // roster's default provisioning and pending-invitation side effects.
+        const teammates = profiles.flatMap(profile => (profile.status === 'active' || profile.status === 'paused')
+          && !companionHomes.isShadowed(profile.id) && companionHomes.isHomeHere(profile.id)
+          ? [{ ...profile, status: profile.status }] : []);
+        return { ok: true, scope: 'local', teammates };
+      } catch (error) { return configurationError(error); }
+    },
+    async createTeammate(input: Parameters<CreateTeammateCallbacks['create']>[0]): ReturnType<CreateTeammateCallbacks['create']> {
+      const commitGuard = captureTaskActionSyncGuard();
+      try {
+        const caller = await configurationCaller(input.callerSessionId);
+        await assertTaskActionCurrent();
+        let committed: { id: string; name: string; description: string } | undefined;
+        try {
+          const profile = await createBotProfile({ name: input.name, description: input.description,
+            identitySource: input.identitySource, prepareInvitation: true }, undefined, {
+            assertCurrent: () => { caller.assertOwner(); commitGuard?.(); },
+            beforeCommit: async () => { await caller.refresh(); await assertTaskActionCurrent(); },
+            onCommitted: bot => { committed = bot; },
+          });
+          caller.assertOwner();
+          return { ok: true, bot: { id: profile.id, name: profile.name, description: profile.description } };
+        } catch (error) {
+          caller.assertOwner();
+          if (!committed) throw error;
+          return { ok: true, bot: committed, warning: '伙伴已创建，但后续读取或开场尚未确认。请用返回的 id 重新读取，不要重复创建。' };
+        }
+      } catch (error) { return configurationError(error); }
     },
     async inspectConfiguration(input: { callerSessionId: string; botId: string; catalog?: Kind }) {
       try {

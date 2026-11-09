@@ -149,7 +149,7 @@ export function createDesktopTaskActionAuthorizer(deps: {
           .limit(1);
         if (!caller) throw new Error('TASK_UNAVAILABLE');
         const input = deps.input(sessionId);
-        const configurationWrite = ['update_teammate_configuration', 'set_target_teammate_avatar'].includes(call.tool);
+        const configurationWrite = ['create_teammate', 'update_teammate_configuration', 'set_target_teammate_avatar'].includes(call.tool);
         if (configurationWrite &&
           (input.permission?.permissionMode === 'plan' || input.permission?.planModeEnabled === true || deps.getSession(sessionId)?.stablePlanModeState?.enabled === true)) {
           rejectedDecision = { ok: false, errorCode: 'TASK_ACTION_PLAN_MODE', message: '计划模式下只读取伙伴配置；退出计划模式后再应用修改。' };

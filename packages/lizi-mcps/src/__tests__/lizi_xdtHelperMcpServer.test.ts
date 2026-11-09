@@ -33,6 +33,65 @@ it('exposes GitHub to all harnesses without implicit association', async () => {
   }
 });
 
+// #9433 P1: registry-only tests missed live default-surface filtering. Unit: a real
+// MCP client must discover and call the management chain, without self-only tools.
+it.each(['codex', 'claude-code', 'pi'] as const)('opens local teammate management to ordinary %s tasks', async agentKind => {
+  let surface: 'default' | 'restricted' = 'default';
+  let context = { agentKind, workingDir: '/fixture', sessionId: 'ordinary-task', remoteHostId: undefined as string | undefined };
+  const calls: string[] = [];
+  const server = createXdtHelperMcpServer({
+    resolveSurface: async () => surface,
+    botProfiles: { create: async () => { calls.push('create'); return { ok: true, bot: { id: 'target', name: 'Target', description: '' } }; } },
+    botCapabilities: {
+      list: async () => ({ ok: true, capabilities: [] }), select: async () => ({ ok: true, effective: 'next-turn', joined: true }),
+      listTeammates: async () => { calls.push('list'); return { ok: true, scope: 'local', teammates: [{ id: 'target', name: 'Target', description: '', status: 'paused' }] }; },
+      inspectConfiguration: async () => { calls.push('inspect'); return { ok: true, configuration: { profile: { id: 'target', version: 1 } } as never }; },
+      updateConfiguration: async () => { calls.push('update'); return { ok: true, savedVersion: 2, effective: 'next-turn' }; },
+      inspect: async () => ({ ok: true, state: {} as never }),
+    },
+    appModels: { models: async () => ({ ok: true, current: null, available: [] }) },
+    botAvatar: { set: async () => { calls.push('avatar'); return { ok: true, target: 'target', avatar: 'saved', profileVersion: 2, imageFormat: '256px-png' }; } },
+  }, { ...context, getSessionContext: () => context });
+  const client = new Client({ name: 'ordinary-companion-test', version: '1' });
+  const [ct, st] = InMemoryTransport.createLinkedPair();
+  await Promise.all([server.connect(st), client.connect(ct)]);
+  const call = async (name: string, args = {}) => parsePayload(await client.callTool({ name: 'call_tool', arguments: { name, args } }));
+  const management = ['list_teammates', 'create_teammate', 'inspect_teammate_configuration', 'update_teammate_configuration', 'set_target_teammate_avatar'];
+  try {
+    const overview = parsePayload(await client.callTool({ name: 'list_tools', arguments: {} }));
+    expect(overview.categories).toEqual(expect.arrayContaining([expect.objectContaining({ name: 'bots', description: expect.stringContaining('list_teammates') })]));
+    expect(await call('get_capabilities', { scope: 'control', key: 'teammates.configuration' })).toMatchObject({ ok: true });
+    const listed = parsePayload(await client.callTool({ name: 'list_tools', arguments: { category: 'bots' } }));
+    expect(listed).toMatchObject({ ok: true });
+    expect((listed.tools as { name: string }[]).map(t => t.name).sort()).toEqual([...management].sort());
+    expect(await call('list_teammates')).toMatchObject({ ok: true, scope: 'local', teammates: [{ id: 'target', status: 'paused' }] });
+    expect(await call('create_teammate', { name: 'Target' })).toMatchObject({ ok: true, bot: { id: 'target' } });
+    expect(await call('get_app_default_model')).toMatchObject({ ok: true });
+    expect(await call('inspect_teammate_configuration', { botId: 'target' })).toMatchObject({ ok: true });
+    expect(await call('update_teammate_configuration', { botId: 'target', expectedVersion: 1, patch: { name: 'Renamed' } })).toMatchObject({ ok: true, savedVersion: 2 });
+    expect(await call('set_target_teammate_avatar', { target: 'target', imageSource: `cindy-media://blobs/${'a'.repeat(64)}.png`, expectedVersion: 2, expectedAvatar: 'old' })).toMatchObject({ ok: true, avatar: 'saved' });
+    expect(await call('get_teammate_state')).toMatchObject({ ok: false, errorCode: 'CAPABILITY_NOT_AVAILABLE' });
+    if (agentKind !== 'pi') {
+      expect((await client.listTools()).tools.map(t => t.name)).toEqual(expect.arrayContaining(management));
+      expect(parsePayload(await client.callTool({ name: 'list_teammates', arguments: {} }))).toMatchObject({ ok: true });
+      expect(parsePayload(await client.callTool({ name: 'inspect_teammate_configuration', arguments: { botId: 'target' } }))).toMatchObject({ ok: true });
+      expect(parsePayload(await client.callTool({ name: 'update_teammate_configuration', arguments: { botId: 'target', expectedVersion: 1, patch: { name: 'Direct' } } }))).toMatchObject({ ok: true, savedVersion: 2 });
+      expect(parsePayload(await client.callTool({ name: 'set_target_teammate_avatar', arguments: { target: 'target', imageSource: `cindy-media://blobs/${'a'.repeat(64)}.png`, expectedVersion: 2, expectedAvatar: 'old' } }))).toMatchObject({ ok: true, avatar: 'saved' });
+      expect(parsePayload(await client.callTool({ name: 'get_teammate_state', arguments: {} }))).toMatchObject({ ok: false });
+    }
+    const before = calls.length;
+    surface = 'restricted';
+    expect(await call('create_teammate', { name: 'Denied' })).toMatchObject({ ok: false });
+    surface = 'default'; context = { ...context, remoteHostId: 'remote-host' };
+    expect(await call('list_teammates')).toMatchObject({ ok: false });
+    if (agentKind !== 'pi') {
+      expect((await client.listTools()).tools.map(t => t.name)).not.toContain('list_teammates');
+      expect(parsePayload(await client.callTool({ name: 'list_teammates', arguments: {} }))).toMatchObject({ ok: false });
+    }
+    expect(calls).toHaveLength(before);
+  } finally { await client.close(); await server.close(); }
+});
+
 function parsePayload(result: unknown): Record<string, unknown> {
   const content = (
     result as { content?: Array<{ type: string; text?: string }> }
@@ -958,7 +1017,7 @@ describe("cindy_helper MCP server", () => {
     } finally { await client.close(); await server.close(); }
   });
 
-  it.each(["default", "restricted", "error", "unbound"] as const)("hides and blocks all companion commands on %s surface", async (surface) => {
+  it.each(["default", "restricted", "error", "unbound"] as const)("keeps companion-only commands closed on %s surface", async (surface) => {
     const callback = vi.fn(async () => ({ ok: false as const, errorCode: "UNEXPECTED", message: "must not run" }));
     const server = createXdtHelperMcpServer({
       resolveSurface: async () => {
@@ -973,10 +1032,12 @@ describe("cindy_helper MCP server", () => {
     const client = new Client({ name: "helper-surface-denial", version: "0.0.0" });
     await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
     try {
-      expect((await client.listTools()).tools.map((tool) => tool.name).sort()).toEqual(["call_tool", "list_tools"]);
+      expect((await client.listTools()).tools.map((tool) => tool.name).sort()).toEqual(surface === "default" ? ["call_tool", "create_teammate", "list_tools"] : ["call_tool", "list_tools"]);
       const discovery = parsePayload(await client.callTool({ name: "list_tools", arguments: { category: "bots" } }));
-      expect(discovery).toMatchObject({ ok: false, errorCode: "CAPABILITY_NOT_AVAILABLE" });
-      for (const name of ["start_session_task", "check_session_task", "message_session_task", "stop_session_task", "send_to_agent", "send_to_user", "check_agent_message", "create_teammate"]) {
+      expect(discovery).toMatchObject(surface === 'default'
+        ? { ok: true, tools: [expect.objectContaining({ name: 'create_teammate' })] }
+        : { ok: false, errorCode: 'CAPABILITY_NOT_AVAILABLE' });
+      for (const name of ["start_session_task", "check_session_task", "message_session_task", "stop_session_task", "send_to_agent", "send_to_user", "check_agent_message", ...(surface === "default" ? [] : ["create_teammate"])]) {
         const result = parsePayload(await client.callTool({ name: "call_tool", arguments: { name, args: {} } }));
         expect(result).toMatchObject({ ok: false, errorCode: "CAPABILITY_NOT_AVAILABLE" });
       }

@@ -25,6 +25,9 @@ export interface TeammateConfiguration {
 }
 
 export interface BotCapabilityCallbacks {
+  listTeammates?(params: { callerSessionId: string }): Promise<ControlResult<{
+    scope: 'local'; teammates: { id: string; name: string; description: string; status: 'active' | 'paused' }[];
+  }, string>>;
   inspectConfiguration?(params: { callerSessionId: string; botId: string; catalog?: 'skill' | 'mcp' | 'toolset' }): Promise<ControlResult<{ configuration: TeammateConfiguration }, string>>;
   updateConfiguration?(params: { callerSessionId: string; botId: string; expectedVersion: number; patch: TeammateConfigurationPatch }): Promise<ControlResult<{
     savedVersion: number; effective: 'next-turn' | 'unconfirmed'; warning?: string;
@@ -148,14 +151,25 @@ export function registerBotCapabilityTools(
     cindyAvailable?: boolean;
   },
 ): void {
-  const botId = z.string().regex(/^[A-Za-z0-9_-]{1,128}$/).describe('Local stable botId from list_agents.');
+  if (deps.callbacks.listTeammates) registry.register({
+    name: 'list_teammates', category: 'bots',
+    description: '列出当前账号在本机可管理的伙伴，返回稳定 id、名称、简介和 active/paused 状态，包含自己和暂停的伙伴。只读，不创建伙伴或启动开场；不包含归档伙伴、迁走的副本和其他电脑的消息地址。普通任务与伙伴均可用。读取配置用 inspect_teammate_configuration；发消息仍用 list_agents 的名册。',
+    inputShape: {},
+    handler: async () => {
+      const callerSessionId = deps.getSessionContext().sessionId;
+      if (!callerSessionId) return errorPayload('NO_SESSION_CONTEXT', '当前调用未绑定任务');
+      const result = await deps.callbacks.listTeammates!({ callerSessionId });
+      return result.ok ? okPayload({ scope: result.scope, teammates: result.teammates }) : errorPayload(result.errorCode, result.message);
+    },
+  });
+  const botId = z.string().regex(/^[A-Za-z0-9_-]{1,128}$/).describe('Local stable botId from list_teammates or create_teammate.');
   if (deps.callbacks.inspectConfiguration) registry.register({
     name: 'inspect_teammate_configuration', category: 'bots',
-    description: '读取本机指定伙伴已保存的资料、版本、模型偏好、能力引用与运行版本。先用 list_agents 获取稳定 id。默认不加载能力目录；需要时用 catalog 单独查询目标的 skill/mcp/toolset，目录失败不隐藏已保存的配置。model.candidates=null 表示跟随默认，可用型号另查 get_app_default_model。普通任务和伙伴均可用，不读取记忆、用户画像或连接凭证。',
+    description: '读取本机指定伙伴已保存的资料、版本、模型偏好、能力引用与运行版本。先用 list_teammates 获取稳定 id。默认不加载能力目录；需要时用 catalog 单独查询目标的 skill/mcp/toolset，目录失败不隐藏已保存的配置。model.candidates=null 表示跟随默认，可用型号另查 get_app_default_model。普通任务和伙伴均可用，不读取记忆、用户画像或连接凭证。',
     inputShape: { botId, catalog: z.enum(['skill', 'mcp', 'toolset']).optional() },
     handler: async (input) => {
       const callerSessionId = deps.getSessionContext().sessionId;
-      if (!callerSessionId) return errorPayload('NOT_A_BOT_SESSION', '当前调用未绑定伙伴任务');
+      if (!callerSessionId) return errorPayload('NO_SESSION_CONTEXT', '当前调用未绑定任务');
       const result = await deps.callbacks.inspectConfiguration!({ ...input, callerSessionId });
       return result.ok ? okPayload({ configuration: result.configuration }) : errorPayload(result.errorCode, result.message);
     },
@@ -179,7 +193,7 @@ export function registerBotCapabilityTools(
     },
     handler: async (input) => {
       const callerSessionId = deps.getSessionContext().sessionId;
-      if (!callerSessionId) return errorPayload('NOT_A_BOT_SESSION', '当前调用未绑定伙伴任务');
+      if (!callerSessionId) return errorPayload('NO_SESSION_CONTEXT', '当前调用未绑定任务');
       const result = await deps.callbacks.updateConfiguration!({ ...input, callerSessionId });
       return result.ok ? okPayload({ savedVersion: result.savedVersion, effective: result.effective, ...(result.warning ? { warning: result.warning } : {}) }) : errorPayload(result.errorCode, result.message);
     },
