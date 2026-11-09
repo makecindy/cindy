@@ -13,6 +13,7 @@ import { buildBotMemoryScopeKey, MemoryError, type AgentKind, type MemoryRecord 
 import { activeOwnerScopeKey, isAppSessionBoundaryPending, ownerScopedUserDataPath } from '../appSessionState.js';
 import { getDbClient } from '../localDb/client/current.js';
 import { drainPersistQueue } from '../messagePersistBroadcaster.js';
+import type { UtilityTextRequestOptions } from '../utility-model/oneShotCandidates.js';
 import { createLogger } from '../logger.js';
 import { listInstalledSkills } from '../learn-host/skillsIndex.js';
 import { isSyntheticTriggerText } from '@cindy/maker-shared/synthetic-trigger';
@@ -404,25 +405,22 @@ async function runLocked(
       candidates: candidates.map((c) => ({ id: c.id, title: c.title, summary: c.summary, firstSeenAt: new Date(c.firstSeenAt).toISOString() })),
       declined: state?.declined ?? [],
     });
-  const request = {
-    systemPrompt: nightlyLearningInstructions,
-    maxTokens: 8000,
-    timeoutMs: 120_000,
-    validateResponse: (text: string) => {
-      try { return nightlyLearningSchema.safeParse(JSON.parse(text)).success; } catch { return false; }
-    },
-    beforeDispatch: async () => current() && !!(await readBot(botId)),
-  };
-  let result = await requestUtilityText(getMaker(), input, request);
-  // 默认辅助模型链没有可用候选（例如没登录 Cindy、只连了自己的模型账号）时，改用这个伙伴主对话的模型路线。
-  if (!result.ok && result.reason === 'no_candidate' && bot.agentKind && bot.model && current()) {
-    result = await requestUtilityText(getMaker(), input, {
-      ...request,
-      agentKind: bot.agentKind as AgentKind,
-      model: bot.model,
+  const ask = async (input: string, options: UtilityTextRequestOptions) => {
+    const request = { ...options, timeoutMs: 120_000, beforeDispatch: async () => current() && !!(await readBot(botId)) };
+    const result = await requestUtilityText(getMaker(), input, request);
+    if (result.ok || result.reason !== 'no_candidate' || !bot.agentKind || !bot.model || !current()) return result;
+    return requestUtilityText(getMaker(), input, {
+      ...request, agentKind: bot.agentKind as AgentKind, model: bot.model,
       ...(bot.providerId ? { providerId: bot.providerId } : {}),
     });
-  }
+  };
+  const result = await ask(input, {
+    systemPrompt: nightlyLearningInstructions,
+    maxTokens: 8000,
+    validateResponse: (text) => {
+      try { return nightlyLearningSchema.safeParse(JSON.parse(text)).success; } catch { return false; }
+    },
+  });
   if (!current()) return { skipped: true, resultText: 'Owner changed' };
   if (!result.ok) {
     log.warn('nightly learning model call failed', { botId });
