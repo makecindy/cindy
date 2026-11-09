@@ -594,14 +594,19 @@ describe('SessionCard visual cases', () => {
     expect(mocks.ensureInitialMessages).toHaveBeenCalledWith('short-idle-cc');
   });
 
-  it('does not expose split creation in the card task menu', () => {
+  it('does not expose split creation in the card task menu', async () => {
+    const reactErrors = vi.spyOn(console, 'error');
     renderCase('short-idle-cc');
 
-    fireEvent.click(
-      screen.getByRole('button', {
-        name: /^(?:更多操作|ccAgent\.sidebar\.sessionMenu\.moreActions)$/,
-      }),
-    );
+    // Opening the real menu also loads TaskTagMenuSection asynchronously.
+    // Finish its updates before React/DOM teardown, just like the export cases.
+    await act(async () => {
+      fireEvent.click(
+        screen.getByRole('button', {
+          name: /^(?:更多操作|ccAgent\.sidebar\.sessionMenu\.moreActions)$/,
+        }),
+      );
+    });
 
     const menu = screen.getByRole('menu');
     expect(within(menu).getByRole('menuitem', { name: '重命名' })).toBeTruthy();
@@ -610,6 +615,9 @@ describe('SessionCard visual cases', () => {
         name: /(?:splitGroup\.openInSplit|在分栏中打开)/,
       }),
     ).toBeNull();
+    // Observe one scheduler turn while jsdom still exists; do not hide late errors.
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(reactErrors).not.toHaveBeenCalled();
   });
 
   it.each(['card', 'list'] as const)(
