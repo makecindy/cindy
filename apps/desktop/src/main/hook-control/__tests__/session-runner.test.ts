@@ -395,6 +395,8 @@ function makeFakeSession(id: string) {
 
 const fakeMaker = {
   createSession: vi.fn(async (opts: { id?: string }) => makeFakeSession(opts.id ?? 'sess-x')),
+  // 默认无漂移:漂移相关用例按需覆写(maker 方法缺省 false → 不回收)
+  recyclePiRuntimeIfResourcesDrifted: vi.fn(async () => false),
   getSessionMeta: vi.fn(async () => ({
     workDir: 'D:/repo',
     model: 'meta-model',
@@ -815,6 +817,36 @@ describe('hook task model selection on next send', () => {
     }));
     expect(result.status).toBe('error');
     expect(release).toHaveBeenCalledOnce();
+  });
+
+  it('surfaces the real rebuild failure after a drift recycle instead of sending on the closed instance', async () => {
+    // 回收已关旧实例后重建失败:错误必须原样上抛,不得吞掉后拿已关闭实例投递
+    // (那只会报误导性的「会话已关闭」,真正的启动原因被吞 —— Greptile P2)。
+    const oldSession = makeFakeSession('sess-old');
+    fakeMaker.recyclePiRuntimeIfResourcesDrifted.mockResolvedValueOnce(true);
+    fakeMaker.createSession
+      .mockImplementationOnce(async () => oldSession)
+      .mockRejectedValueOnce(new Error('pi startup failed: bad extension'));
+    const result = await createMakerHookSessionRunner({ log }).run(baseReq({ isNew: false }));
+    expect(result.status).toBe('error');
+    expect(result.errorMessage).toContain('pi startup failed: bad extension');
+    expect(fakeMaker.createSession).toHaveBeenCalledTimes(2);
+    expect(oldSession.send).not.toHaveBeenCalled();
+  });
+
+  it('keeps delivering on the live instance when the recycle itself fails', async () => {
+    // 回收本身失败 → 旧实例仍可用:原样投递(hook 轮次不因回收故障中断)。
+    const session = makeFakeSession('sess-new');
+    session.send.mockResolvedValue({ accepted: true });
+    fakeMaker.createSession.mockResolvedValueOnce(session);
+    fakeMaker.recyclePiRuntimeIfResourcesDrifted.mockRejectedValueOnce(new Error('recycle boom'));
+    const run = createMakerHookSessionRunner({ log }).run(baseReq({ isNew: false }));
+    await vi.waitFor(() => expect(session.send).toHaveBeenCalledOnce());
+    h.eventCbs.get('sess-new')!({ type: 'done', data: null });
+    const result = await run;
+    expect(result.status).toBe('ok');
+    expect(fakeMaker.createSession).toHaveBeenCalledTimes(1);
+    expect(session.send).toHaveBeenCalledOnce();
   });
 
   it('does not send with the old model when applying the choice fails', async () => {

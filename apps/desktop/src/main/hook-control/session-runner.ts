@@ -974,9 +974,18 @@ export function createMakerHookSessionRunner(deps: {
 
       // 项目资源漂移(会话中途新增 skill/extension):createSession 可能复用活实例,
       // 空闲时经 Maker 回收后重取 —— 再走一次同样的获取路径即得重建实例。
-      // 失败按原样投递(hook 轮次不应因回收故障而中断)。
+      // 两种失败分开:回收本身失败 → 旧实例大概率仍可用,原样投递(hook 轮次
+      // 不因回收故障中断);回收成功(旧实例已关)后的重建失败必须上抛 —— 继续
+      // 用已关闭实例只会把真实启动原因(如新增扩展导致 pi 启动失败)换成误导
+      // 性的「会话已关闭」(2026-11-09 Greptile P2)。
+      let driftedRecycled = false;
       try {
-        if (await maker.recyclePiRuntimeIfResourcesDrifted(session)) {
+        driftedRecycled = await maker.recyclePiRuntimeIfResourcesDrifted(session);
+      } catch {
+        // 保持原样投递
+      }
+      if (driftedRecycled) {
+        try {
           session = req.isNew
             ? await openChannelSession(req.sessionId, newSessionRoute, (admitted) => {
                 sessionProviderId = admitted.providerId;
@@ -988,9 +997,13 @@ export function createMakerHookSessionRunner(deps: {
                 });
               }, assertAccount)
             : await maker.createSession(createOpts);
+        } catch (err) {
+          // session 未建成: 预建 worktree 同步回收(同上方新建失败路径), 防孤儿泄漏
+          if (req.isNew && worktreeStore.get(req.sessionId)) {
+            void WorktreeManager.removeWorktreeForSession(req.sessionId).catch(() => undefined);
+          }
+          return fail(err instanceof Error ? err.message : String(err));
         }
-      } catch {
-        // 保持原样投递
       }
 
       // 运行时来源注入(路由层经 session-provider-store 决定上游与钥匙)必须先于

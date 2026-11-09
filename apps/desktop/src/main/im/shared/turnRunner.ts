@@ -1657,15 +1657,20 @@ export function createTurnRunner(
       // 项目资源漂移(如会话中途 openspec init):空闲时经 Maker 以 runtime-refresh
       // 回收运行时,再按 DB 行自愈重建 —— 与桌面发送事务同口径,IM 直发不用旧资源。
       // 无 agent-switch 锁的装配不支持关闭后重建,保持原样投递。
+      // 两种失败分开:回收本身失败 → 旧实例仍可用,原样投递;回收成功(旧实例
+      // 已关)后的重建失败必须上抛 —— 继续用已关闭实例只会把真实原因换成误
+      // 导性的「会话已关闭」(2026-11-09 Greptile P2)。
+      let driftRecycled = false;
       try {
-        if (deps.acquirePendingAgentSwitch
-          && await getMaker().recyclePiRuntimeIfResourcesDrifted(state.makerSession)) {
-          await refreshSessionAfterPendingAgentSwitch(state, state.makerSession.id, userId);
-          log.info('im send: project resources drifted, recycled runtime before dispatch');
-        }
+        driftRecycled = !!(deps.acquirePendingAgentSwitch
+          && await getMaker().recyclePiRuntimeIfResourcesDrifted(state.makerSession));
       } catch (err) {
         log.warn('im send: resource-drift recycle failed, sending as-is',
           err instanceof Error ? err.message : String(err));
+      }
+      if (driftRecycled) {
+        await refreshSessionAfterPendingAgentSwitch(state, state.makerSession.id, userId);
+        log.info('im send: project resources drifted, recycled runtime before dispatch');
       }
       // 回收+重建是异步窗口:/stop 可能恰好落在其中;喊停后不得再开始执行,
       // 与上方 aborted 检查同口径收尾(此时尚未发送,无 chunked 终态章要补)。
