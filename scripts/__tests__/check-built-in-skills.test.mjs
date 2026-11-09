@@ -35,10 +35,17 @@ test('invalid bundle versions cannot be built', () => {
 
 test('build gate checks real bytes and both parents of a clean synthetic merge', t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-skill-build-'));
-  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  // Git for Windows cannot open Node's \\.\nul device path as a config file.
+  const configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-skill-build-config-'));
+  const globalConfig = path.join(configDir, 'empty.gitconfig');
+  fs.writeFileSync(globalConfig, '');
+  t.after(() => {
+    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(configDir, { recursive: true, force: true });
+  });
   const git = (...args) => execFileSync('git', args, {
     cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
-    env: { ...process.env, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: os.devNull },
+    env: { ...process.env, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: globalConfig },
   }).trim();
   const put = (relative, bytes) => {
     const file = path.join(root, relative);
