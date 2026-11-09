@@ -28,6 +28,7 @@ import {
   formatCodexPlanLabel,
 } from '@/lib/subscriptionPlanLabel';
 import { toast } from '@/lib/toast';
+import { extractIpcError } from '@/utils/ipcError';
 import { cn } from '@/lib/utils';
 import {
   QUOTA_WINDOW_COLUMNS,
@@ -131,8 +132,13 @@ export function SubscriptionAccountsSection({
       await window.electronAPI.subscriptionAccounts.command(command);
       await refresh();
     } catch (error) {
-      if (!String(error).includes('SUBSCRIPTION_LOGIN_CANCELLED'))
-        toast.error(t('subscriptionAccounts.failed'));
+      const code = extractIpcError(error)?.code;
+      if (code !== 'SUBSCRIPTION_LOGIN_CANCELLED')
+        toast.error(t(
+          code === 'SUBSCRIPTION_CODEX_PROVIDER_AUTH'
+            ? 'subscriptionAccounts.providerManagedAuth'
+            : 'subscriptionAccounts.failed',
+        ));
       await refresh();
     } finally {
       inFlight.current = false;

@@ -108,6 +108,35 @@ beforeEach(() => {
 });
 
 describe('native account assignment on the executing computer', () => {
+  // #9517, unit: the real connection/reconnection entry must reject the CLI's
+  // provider-managed auth state before login. Existing cases only cover signed-in/out.
+  it.each([
+    { action: 'connect', target: 'default', providerId: 'openai', loginKey: 'provider' },
+    { action: 'add', providerId: 'openai', loginKey: 'provider' },
+    { action: 'login', accountId: 'second', providerId: 'openai', loginKey: 'provider' },
+  ] as const)('does not relaunch login for provider-managed authentication ($action)', async (command) => {
+    h.bound = false;
+    h.pools.openai = { strategy: 'least', accounts: [account('default'), account('second')] };
+    h.read.mockResolvedValue({ authenticated: false, errorReason: 'codex_provider_managed_auth' });
+    if (command.action === 'connect') {
+      const preview = await runSubscriptionAccountCommand({ action: 'preview', providerId: 'openai' });
+      expect(preview.accounts[0]).toMatchObject({ status: 'signed-out', authIssue: 'codex-provider-managed-auth' });
+      expect(h.usage).not.toHaveBeenCalled();
+    }
+    await expect(runSubscriptionAccountCommand(command)).rejects.toThrow('codex_provider_managed_auth');
+    expect(h.login).not.toHaveBeenCalled();
+    // The blocked attempt releases its login reservation, and "new" keeps using
+    // its own directory instead of the incompatible default profile.
+    h.read.mockImplementation(async (_provider, directory) => ({
+      authenticated: !directory.endsWith('/default'),
+      ...(directory.endsWith('/default') ? { errorReason: 'codex_provider_managed_auth' } : {}),
+    }));
+    const next = await runSubscriptionAccountCommand({ action: 'connect', target: 'new', providerId: 'openai', loginKey: 'next' });
+    expect(h.login).toHaveBeenCalledOnce();
+    expect(h.login.mock.calls[0][1]).not.toBe('openai/default');
+    expect(next.accounts.at(-1)?.status).toBe('ready');
+  });
+
   // Unit, #9295 review: reset lookups refresh the pinned profile rather than
   // taking a different ready account; prior tests only covered pool availability.
   it.each([

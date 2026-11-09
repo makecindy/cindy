@@ -40,6 +40,11 @@ export function registerSubscriptionAccountsIpc(): void {
       return await executeSubscriptionAccountCommand(command);
     } catch (error) {
       const reason = error instanceof Error ? error.message : '';
+      if (reason === 'codex_provider_managed_auth')
+        throwIpcError(
+          'SUBSCRIPTION_CODEX_PROVIDER_AUTH',
+          'The active Codex provider does not expose a ChatGPT account',
+        );
       throwIpcError(
         reason === 'login_cancelled'
           ? 'SUBSCRIPTION_LOGIN_CANCELLED'

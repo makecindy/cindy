@@ -70,12 +70,18 @@ export async function readNativeAccount(
   }
   const result = (await codexAccountRpc(directory, 'account/read', { refreshToken: false })) as {
     account?: { type?: string; email?: string; planType?: string } | null;
+    requiresOpenaiAuth?: boolean;
   };
   return {
     authenticated: result.account?.type === 'chatgpt',
     identity: result.account?.email,
     plan: result.account?.planType,
     authSource: 'oauth',
+    // The CLI can hide an existing ChatGPT login when its active provider owns
+    // authentication. Repeating login cannot make that provider expose the account.
+    ...(result.account === null && result.requiresOpenaiAuth === false
+      ? { errorReason: 'codex_provider_managed_auth' }
+      : {}),
   };
 }
 
@@ -266,6 +272,11 @@ export async function loginNativeAccount(
       else resolve();
     });
   });
-  if (!(await readNativeAccount(provider, directory)).authenticated)
-    throw new Error('not_a_subscription');
+  const state = await readNativeAccount(provider, directory);
+  if (!state.authenticated)
+    throw new Error(
+      state.errorReason === 'codex_provider_managed_auth'
+        ? 'codex_provider_managed_auth'
+        : 'not_a_subscription',
+    );
 }

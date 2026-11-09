@@ -19969,6 +19969,7 @@
     "lineNumbers": "Números de línea"
   },
   "subscriptionAccounts": {
+    "providerManagedAuth": "El proveedor actual de Codex no permite consultar la cuenta de ChatGPT. Al añadir el proveedor, elige «$t(subscriptionAccounts.signIn.anotherAccount)» para usar una carpeta independiente.",
     "signIn": {
       "checking": "Comprobando la cuenta local…",
       "detected": "Se encontró una cuenta conectada",

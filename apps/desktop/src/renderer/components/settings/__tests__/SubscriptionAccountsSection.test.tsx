@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { toast } from '@/lib/toast';
 import type { SubscriptionPoolView } from '../../../../shared/subscriptionAccounts';
@@ -60,6 +60,19 @@ beforeEach(() => {
 });
 
 describe('SubscriptionAccountsSection usage', () => {
+  // #9517, unit: existing settings tests never exercised an account operation
+  // failure. A serialized provider-auth error must show the recovery instruction.
+  it('explains provider-managed authentication when account login fails', async () => {
+    const error = vi.spyOn(toast, 'error').mockImplementation(() => '');
+    vi.mocked(window.electronAPI.subscriptionAccounts.command).mockImplementation(async command => {
+      if (command.action === 'add') throw new Error('[SUBSCRIPTION_CODEX_PROVIDER_AUTH] Account unavailable');
+      return { ...view, providerId: 'openai' };
+    });
+    render(<SubscriptionAccountsSection providerId="openai" />);
+    fireEvent.click(await screen.findByRole('button', { name: 'subscriptionAccounts.add' }));
+    await waitFor(() => expect(error).toHaveBeenCalledWith('subscriptionAccounts.providerManagedAuth'));
+  });
+
   it('keeps the provider card on the default account and shows every window of added accounts', async () => {
     render(
       <SubscriptionAccountsSection
