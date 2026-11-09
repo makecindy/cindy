@@ -1080,7 +1080,13 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
   ): Promise<ResolveSessionResult | null> {
     const sessionId = sess.id;
     if (deps.isOrcaMcpHydrated(sessionId)) return null;
-    const co = deps.buildCreateOptsWithStderr({ ...createOpts, id: sessionId });
+    // Launch-only preferences (custom prompt, memory, reasoning display) live only on the
+    // running handle; callers that rebuild createOpts from the DB do not carry them.
+    const startupPreferences = Object.fromEntries(
+      Object.entries(sess.hostStartupPreferences ?? {})
+        .filter(([key]) => createOpts[key as keyof typeof createOpts] === undefined),
+    );
+    const co = deps.buildCreateOptsWithStderr({ ...createOpts, ...startupPreferences, id: sessionId });
     const shouldHydrateOrcaMcp = await deps.synthesizeOrcaVendorOptionsFromDb(sessionId, co);
     if (!shouldHydrateOrcaMcp) return null;
     if (sess.isTurnRunning()) {
