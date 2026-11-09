@@ -15,12 +15,50 @@ import { formatQuoteForSend } from '@/lib/chatQuotes';
 
 import { SelectionQuoteButton } from '../components/chat/SelectionQuoteButton';
 
+const outsideSelectionCase = vi.hoisted(() => () => {
+  throw new Error('This selection case must not render or invoke an unrelated feature');
+});
+
 vi.mock('@/contexts/AuthContext', () => ({ useAuth: () => ({ user: { id: 'selection-test' } }) }));
+// Use the same production helpers through narrow entries; the shared barrel
+// eagerly imports unrelated task/runtime modules in the unit runner.
+vi.mock('@cindy/maker-shared', async () => {
+  const { leadingSlashInvocation } = await import('@cindy/maker-shared/composer-palette');
+  const { normalizeTaskTags, reconcileTaskTags } = await import('../../../../../packages/maker-shared/src/taskTags');
+  return { leadingSlashInvocation, normalizeTaskTags, reconcileTaskTags };
+});
+vi.mock('@cindy/device-link', async () => ({
+  ...await import('../../../../../packages/device-link/src/sharedTaskPeer'),
+  ...await import('../../../../../packages/device-link/src/metadataContinuity'),
+}));
+// Selection never edits/resends messages or controls an Agent session. Keep the
+// real message bodies/actions, without booting those unrelated dependency trees.
+vi.mock('@/lib/makerChatStore', () => ({ makerChatStore: {} }));
+vi.mock('../components/chat/UserMessageEditBox', () => ({ UserMessageEditBox: outsideSelectionCase }));
+// No attachments or expanded previews in these cases. Fail if a case starts
+// using a replacement instead of silently masking its rendered output.
+vi.mock('../components/chat/ImageLightbox', () => ({ ImageLightbox: outsideSelectionCase }));
+vi.mock('../components/chat/ToolPayloadLightbox', () => ({ ToolPayloadLightbox: outsideSelectionCase }));
+vi.mock('../components/chat/ModelLightbox', () => ({ ModelLightbox: outsideSelectionCase }));
+vi.mock('../components/chat/useFileChipContextMenu', () => ({ useFileChipContextMenu: outsideSelectionCase }));
+vi.mock('@/features/bots/BotSessionTaskResultCard', () => ({ BotSessionTaskResultCard: outsideSelectionCase }));
+vi.mock('@/components/ui/file-type-icon', () => ({ FileTypeIcon: outsideSelectionCase }));
+vi.mock('../components/chat/ErrorMessageCard', () => ({ ErrorMessageCard: outsideSelectionCase }));
+vi.mock('@/i18n', async () => {
+  const { createInstance } = await import('i18next');
+  const i18n = createInstance();
+  await i18n.init({ lng: 'en', resources: {} });
+  return { i18n, DEFAULT_LOCALE: 'en' };
+});
+// Costs/timestamps still use the real action bar. These cases have no model name.
+vi.mock('../../shared/usageModelLabel', () => ({ formatModelShort: outsideSelectionCase }));
+vi.mock('@/lib/modelShortLabel', () => ({ formatModelShortLabel: outsideSelectionCase }));
+vi.mock('../components/chat/AutomationOriginBadge', () => ({ AutomationOriginBadge: outsideSelectionCase }));
 // Plugin cards are absent from these text-only messages; avoid loading their editors.
 vi.mock('../components/chat/GhostToolCard', () => ({
   CARD_EXPAND_TOGGLE_EVENT: 'xdt-card-expand-toggle',
-  GhostToolCard: () => null,
-  MailCardEditor: () => null,
+  GhostToolCard: outsideSelectionCase,
+  MailCardEditor: outsideSelectionCase,
 }));
 vi.mock('react-i18next', async (importOriginal) => {
   const t = (key: string) => key;
