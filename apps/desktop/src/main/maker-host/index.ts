@@ -190,7 +190,7 @@ import { resolveSessionCcDebugFile, trackSessionCcDebugFile } from '../logger.js
 import { resetProviderModelAutoRefreshCooldowns } from './provider-model-auto-refresh.js';
 import { getThinkingEnabledFromMemory } from './newMakerDefaultsCache.js';
 import { registerUsagePricing, clearUsagePricing } from './model-usage-pricing.js';
-import { getSessionEffort, getSessionFastMode } from './session-effort-store.js';
+import { getSessionFastMode } from './session-effort-store.js';
 import { createSshDaemonTransport } from './codex-remote-transport.js';
 import { getRemoteSshPool, broadcastSilentInstallStatus, ensureRemoteAgentInstalledOrInstall } from '../remote-ssh/index.js';
 import {
@@ -2348,13 +2348,16 @@ export function getMaker(): Maker {
           ...(subagentRoute ? { subagentRoute } : {}),
           // 共享的 app-server 目录不带档位。只给这条线程的智能路由盖上父任务当前档位，
           // 避免恢复后子代理掉回目录默认 low。优先用登记时带上的活档位：冷恢复
-          // 这一刻 session store 还没从数据库 hydrate。没带才回退 store。空字符串是
-          // 「不用推理」，不能再去 store 里找一个默认档。
+          // 这一刻 session store 还没从数据库 hydrate。
+          // 空字符串是「不用推理」的显式哨兵，不能再去 store 里找一个默认档。
+          // 字段缺席是「这一轮没有已选档位」（agent 不把目录默认 high 登记过来），
+          // 同样不盖章：store 在任务从没存过档位时也会被填成目录默认，读它
+          // 会把子代理自己选的 low 盖掉。
           ...(smartSubagentRoutes
             ? {
                 smartSubagentRoutes: withParentReasoningEffort(
                   smartSubagentRoutes,
-                  reasoningEffort !== undefined ? reasoningEffort : getSessionEffort(sessionId),
+                  reasoningEffort !== undefined ? reasoningEffort : null,
                 ),
               }
             : {}),

@@ -4955,6 +4955,12 @@ assertRouteCurrent();
     // default (`high`). Restoring a task passes the persisted level in
     // opts.effort, including the empty no-effort sentinel; a missing field is
     // the one case that still means "never chosen".
+    // hasSelectedEffort is that distinction: the catalog default still fills
+    // mutableEffort so the parent turn keeps its old behavior, but it must not
+    // be registered as the parent's reasoning level. The host stamps whatever
+    // is registered onto this thread's smart subagent routes, which would
+    // override a subagent's own low and make "never stored" look chosen.
+    let hasSelectedEffort = opts.effort !== undefined;
     let mutableEffort: Effort = opts.effort ?? 'high';
     let mutablePermissionMode: PermissionMode =
       reviewMode ? 'ask' : opts.permissionMode ?? 'ask';
@@ -6966,9 +6972,15 @@ assertRouteCurrent();
         threadId,
         text,
         ...(subagentRoute ? { subagentRoute } : {}),
-        // 共享的 app-server 目录不带档位。这条线程登记时把当前 mutableEffort
-        // 一并交给宿主，宿主只给本线程的智能路由盖章，不能等 session store hydrate。
-        ...(smartSubagentRoutes ? { smartSubagentRoutes, reasoningEffort: mutableEffort } : {}),
+        // 共享的 app-server 目录不带档位。只有存档或当轮显式选过的档位
+        // 才交给宿主：宿主会用它给本线程的智能路由盖章。目录默认 high
+        // 不算已选，留空后宿主不盖章，子代理保留自己选的档位。
+        ...(smartSubagentRoutes
+          ? {
+              smartSubagentRoutes,
+              ...(hasSelectedEffort ? { reasoningEffort: mutableEffort } : {}),
+            }
+          : {}),
       });
       codexProxyPromptRegistered = true;
     };
@@ -12881,6 +12893,10 @@ assertRouteCurrent();
         const nextEffort = reconcileMutableEffortFromThreadSettings(mutableEffort, s.effort);
         const effortChanged = nextEffort !== mutableEffort;
         mutableEffort = nextEffort;
+        // 快照里的真实档位是这条线程实际在用的档，算已选。空快照
+        // （null / '' / 'none'）不会改 mutableEffort，也不能把「从未存过」
+        // 提升成已选，否则目录默认 high 又会被登记给宿主。
+        if (effortChanged && isStoredCodexEffort(s.effort)) hasSelectedEffort = true;
         // 快照真的改了档位时，已经登记过的智能路由要跟上。还没登记过就别写：
         // 空的 prompt 会先占位，随后的 thread/start 会用对齐后的档位正式登记。
         if (effortChanged && codexProxyPromptRegistered) {
@@ -14577,6 +14593,10 @@ assertRouteCurrent();
         const clamped = clampEffortForCodex(mutableModel, newEffort);
         log.debug('setEffort', { from: mutableEffort, to: newEffort, clamped });
         mutableEffort = newEffort;
+        // 当轮显式改档（含改成「不用推理」的空字符串）算已选，后面的重登
+        // 才会把这个档位交给宿主。与默认 high 相同的值在上面已经返回，
+        // 不会被误记成已选。
+        hasSelectedEffort = true;
         // thread 已启动 → 立即经 thread/settings/update 生效; 未启动由首个 turn/start
         // 携带 (TurnStartParams.effort, v2.rs:5800)。发 clamp 后的值, 与 turn/start 一致。
         if (clamped !== undefined) await pushThreadSettings({ effort: clamped });
