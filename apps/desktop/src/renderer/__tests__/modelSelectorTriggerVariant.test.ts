@@ -719,6 +719,33 @@ describe('ModelSelector trigger variants', () => {
     }
   });
 
+  // PR #9369 review(第二轮):本机同名模型的名字只够用于**新建草稿**。已建会话的模型
+  // 身份由目标目录决定,目标目录里没有这个模型时不能借本机名字 —— 路由与候选仍指向
+  // 远端目标,名字却来自本机,等于显示成一个「看着正常但其实不对」的模型。
+  it('does not borrow the local catalog name for an existing session whose remote catalog lacks the model', () => {
+    const originalModels = visibleModelsRef.models;
+    visibleModelsRef.models = [];
+    const view = render(
+      React.createElement(ModelSelector, {
+        remoteAgent: undefined,
+        modelId: 'claude-opus-4-8',
+        effort: 'high',
+        onModelChange: vi.fn(),
+        onEffortChange: vi.fn(),
+        vendorKey: 'cc',
+        deviceId: 'dev-a',
+        actualRoute: true,
+      }),
+    );
+    try {
+      expect(screen.queryByRole('button', { name: /Opus 4\.8/ })).toBeNull();
+      expect(screen.getByRole('button', { name: /模型信息暂不可用/ })).toBeTruthy();
+    } finally {
+      view.unmount();
+      visibleModelsRef.models = originalModels;
+    }
+  });
+
   // 同一条回退不能抢跑:目录还在读取时仍显示加载文案(否则远端在途时本地同名模型会
   // 闪一下本地名字再换远端名字)。
   it('keeps the remote loading text while the catalog is in flight even when the model exists locally', () => {

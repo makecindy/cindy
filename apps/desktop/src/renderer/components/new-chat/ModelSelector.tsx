@@ -4374,7 +4374,10 @@ export function ModelSelector({
   // 模型(PR #9369 review),名称也回本机目录取 —— trigger 显示真实名字而不是
   // 「模型信息暂不可用」。仅显示口径:路由 / 能力 / 面板候选仍只看目标目录;加载中与
   // 读取失败保持原有提示(失败态有重试入口,不做名称回退)。
-  const localFallbackName = deviceId && remoteModelListStatus === 'ready' && agentKind
+  // 只限新建草稿(!actualRoute):已建会话的模型身份由目标目录决定,目标目录里没有这个
+  // 模型时不能用本机同名模型的名字顶替 —— 路由与候选仍指向远端目标,名字却来自本机,
+  // 会显示成一个「看着正常但其实不对」的模型。
+  const localFallbackName = !actualRoute && deviceId && remoteModelListStatus === 'ready' && agentKind
     ? localProviders.providers
         .map((provider) => findCatalogModel(provider, modelId, agentKind, { exact: true })?.name)
         .find((name) => name !== undefined)
