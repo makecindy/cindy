@@ -17,6 +17,7 @@ import path from 'node:path';
 
 import {
   copyCodexAuthSnapshot,
+  codexAuthFileGenerationOf,
   codexAuthLinkAcceptanceFor,
   codexAuthPathsShareIdentity,
   inspectCodexAuthLink,
@@ -911,11 +912,11 @@ describe('系统凭证的发布与崩溃窗口 (#9316 review 第二轮)', () => 
     const originalStat = fs.promises.stat.bind(fs.promises);
     let systemStatCalls = 0;
     vi.spyOn(fs.promises, 'stat').mockImplementation(async (target, opts) => {
-      // 第三次非 bigint 的系统凭证 stat 是发布前的目标复核 —— 就在那一刻,
-      // 本机 Codex 登出, 把系统凭证删了。
-      if (String(target) === systemAuth && opts === undefined) {
+      // 系统凭证的 bigint stat:第一次是方向判定的代次捕获,第二次是发布前的目标
+      // 复核(完整代次比对) —— 就在那一刻,本机 Codex 登出,把系统凭证删了。
+      if (String(target) === systemAuth && (opts as { bigint?: boolean } | undefined)?.bigint === true) {
         systemStatCalls += 1;
-        if (systemStatCalls === 3) fs.unlinkSync(systemAuth);
+        if (systemStatCalls === 2) fs.unlinkSync(systemAuth);
       }
       return originalStat(target as never, opts as never);
     });
@@ -929,6 +930,32 @@ describe('系统凭证的发布与崩溃窗口 (#9316 review 第二轮)', () => 
     expect(out.kind).toBe('failed');
     expect(out.conflict).toBe(true);
     expect(fs.existsSync(systemAuth)).toBe(false);
+  });
+
+  // 这套协议故意给 sidecar 盖**源** mtime:等 mtime 但换了 inode 的两代是常态
+  // (同账号轮换 token 的原子替换)。只比 mtimeMs 会把「新一代」当成「同一代」,
+  // 用旧快照盖掉刚轮换的 token —— 目标复核必须比完整代次(dev/ino/mtimeNs/size)
+  // (#9316 review 第十二轮)。
+  it('等 mtime 但换了 inode 的目标也算换代,不用过期快照覆盖', async () => {
+    fs.writeFileSync(systemAuth, SYSTEM_CONTENT);
+    // 与 MY_CONTENT 等长的「轮换后」内容:只有内容与 inode 不同,mtime 刻意保持相同。
+    const rotated = MY_CONTENT.replace('stale-local-token', 'rotated-ttttttttt');
+    expect(rotated.length).toBe(MY_CONTENT.length);
+    fs.writeFileSync(myAuth, MY_CONTENT);
+    // 记下目标这一代的完整代次,然后另一个 writer 原子换掉它(rm → 重建)。
+    const generation = codexAuthFileGenerationOf(fs.statSync(myAuth, { bigint: true }));
+    const original = fs.statSync(myAuth);
+    fs.rmSync(myAuth);
+    fs.writeFileSync(myAuth, rotated);
+    fs.utimesSync(myAuth, original.atime, original.mtime);
+
+    const out = await copyCodexAuthSnapshot(systemAuth, myAuth, process.platform, undefined, {
+      expectTargetGeneration: generation,
+    });
+
+    // 换了 inode 就是换代:不动它,交回调用方重新对账。
+    expect(out.kind).toBe('target-changed');
+    expect(fs.readFileSync(myAuth, 'utf8')).toBe(rotated);
   });
 
   // 写回系统凭证时旧目标先挪到可恢复的备份里: 崩在「挪走之后、发布之前」,

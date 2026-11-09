@@ -1299,6 +1299,7 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
         const snapshot = await copyCodexAuthSnapshotWithRetry(systemAuth, myAuth);
         if (snapshot.kind === 'copied') {
           markNativeProviderAuthSharedSystemCredential('openai');
+          this.lastKnownCodexCredentialScope = 'system-shared';
           log.info('codex auth.json detached into a read-only Release snapshot');
         } else {
           credPathLog.warn('failed to detach Release auth snapshot; shared link left intact', {
@@ -1306,6 +1307,11 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
           });
           throw snapshot.error ?? new Error('Failed to detach Release auth snapshot');
         }
+        // 只读 Dev 消费的是 Release 的快照副本:Release 文件本身的残留硬链不该由这个
+        // 只读进程去清 —— 清 = 换掉 Release 的 inode(写操作),违背「Release 凭证的
+        // 字节与 inode 都不变」的边界(#9316 review)。本地 Codex 写的是快照副本,
+        // Release 那份的 nlink 与这个进程无关。
+        return;
       }
       // 同机另一个升级前的 profile 可能还硬链着系统 auth.json:系统路径 nlink 仍 > 1
       // 时 Codex 0.165+ 拒绝写它。这里一并清掉;清不掉就不记「共享已就绪」,
@@ -2042,7 +2048,13 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
         // Codex 0.165+ 拒绝写 nlink>1 的文件,只凭身份相同就短路会跳过清理, 登录照旧
         // 报 system-shared,凭证却存不住新 token(#9316 review)。nlink<=1 时这里是
         // no-op, symlink / 独立副本的快路径不受影响。
-        await this.clearResidualSystemCodexHardlinks(systemAuth);
+        //
+        // 例外:只读 Dev 消费的是 Release 凭证的**快照副本**(见下方 snapshot 分支) ——
+        // 这个进程对 Release 文件是只读的,清残留硬链等于换掉 Release 的 inode(写操作),
+        // 本地 Codex 写的又不是它,没有资格也没有必要动它(#9316 review)。
+        if (!this.shouldSnapshotReleaseCodexAuth(systemAuth, localAuth)) {
+          await this.clearResidualSystemCodexHardlinks(systemAuth);
+        }
         // 本地凭证已经共享系统凭证时不必再重建 —— 身份判定对共享链接按链接目标
         // 路径来,本机 Codex 在核对期间原子替换系统凭证也不会误判成「不是同一份」
         // (#9316 review)。

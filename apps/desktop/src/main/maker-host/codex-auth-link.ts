@@ -218,6 +218,29 @@ export async function recoverCodexAuth(
 }
 
 /**
+ * 一份凭证文件的完整代次(dev/ino/mtimeNs/size)。比对必须用 bigint:NTFS 的 file id
+ * 可能超出安全整数范围,四舍五入后两个不同的 inode 会比较成相等(#9316 review)。
+ */
+export interface CodexAuthFileGeneration {
+  dev: bigint;
+  ino: bigint;
+  mtimeNs: bigint;
+  size: bigint;
+}
+
+/** 从 bigint stat 取完整代次。 */
+export function codexAuthFileGenerationOf(stat: BigIntStats): CodexAuthFileGeneration {
+  return { dev: stat.dev, ino: stat.ino, mtimeNs: stat.mtimeNs, size: stat.size };
+}
+
+function sameCodexAuthFileGeneration(stat: BigIntStats, generation: CodexAuthFileGeneration): boolean {
+  return stat.dev === generation.dev &&
+    stat.ino === generation.ino &&
+    stat.mtimeNs === generation.mtimeNs &&
+    stat.size === generation.size;
+}
+
+/**
  * Publish a read-only Dev snapshot without sharing the source inode.
  *
  * A symlink/hardlink is intentionally not used here: the Codex child may
@@ -226,9 +249,12 @@ export async function recoverCodexAuth(
  * file and then atomically published as the local auth.json.
  *
  * 发布时用的是**复制那一刻**的源代次:
- * - `expectTargetMtimeMs`: 发布前复核目标代次 —— 目标在本机 Codex 手里刚被原子
- *   刷新过时,不能用过期快照覆盖它(会丢掉新的 refresh token)。不匹配就不动目标,
- *   返回 `target-changed`(#9316 review)。
+ * - `expectTargetGeneration`: 发布前复核目标代次 —— 目标在本机 Codex 手里刚被原子
+ *   刷新过时,不能用过期快照覆盖它(会丢掉新的 refresh token)。比对的是**完整代次**
+ *   (dev/ino/mtimeNs/size,与源代次同一份口径):这套协议故意给 sidecar 盖源 mtime,
+ *   等 mtime 但内容不同的两代是常态(同账号轮换 token),只比 mtimeMs 会把「换了
+ *   inode 的新一代」当成「还是那一代」而覆盖它(#9316 review)。不匹配就不动目标,
+ *   返回 `target-changed`。
  * - `expectTargetAbsent`: 只在目标**仍然不存在**时发布(丢文件后的重建路径)。
  *   目标被本机 Codex 重新建出来时返回 `target-changed`,不覆盖它(#9316 review)。
  * - 复制期间源换代(本机 Codex 在 copyFile 前后刷新)→ 返回 `source-changed`,
@@ -244,7 +270,7 @@ export async function copyCodexAuthSnapshot(
   platform: NodeJS.Platform = process.platform,
   execFileImpl: typeof execFileP = execFileP,
   opts: {
-    expectTargetMtimeMs?: number;
+    expectTargetGeneration?: CodexAuthFileGeneration;
     expectTargetAbsent?: boolean;
     /**
      * 目标是**系统凭证**(`~/.codex/auth.json`)时:发布前先把旧目标挪到可恢复的
@@ -288,11 +314,12 @@ export async function copyCodexAuthSnapshot(
       await fsp.rm(sidecar, { force: true }).catch(() => undefined);
       return { kind: 'target-changed' };
     }
-  } else if (opts.expectTargetMtimeMs !== undefined) {
+  } else if (opts.expectTargetGeneration !== undefined) {
     try {
-      const targetStat = await fsp.stat(myAuth);
-      if (targetStat.mtimeMs !== opts.expectTargetMtimeMs) {
-        // 目标已经换代: 不用过期快照盖掉它。
+      const targetStat = await fsp.stat(myAuth, { bigint: true });
+      if (!sameCodexAuthFileGeneration(targetStat, opts.expectTargetGeneration)) {
+        // 目标已经换代: 不用过期快照盖掉它。等 mtime 不算同一代 —— 这套协议故意给
+        // sidecar 盖源 mtime,同账号轮换 token 的两代 mtime 相同是常态(#9316 review)。
         await fsp.rm(sidecar, { force: true }).catch(() => undefined);
         return { kind: 'target-changed' };
       }
@@ -387,7 +414,7 @@ export async function copyCodexAuthSnapshotWithRetry(
   myAuth: string,
   platform: NodeJS.Platform = process.platform,
   execFileImpl: typeof execFileP = execFileP,
-  opts: { expectTargetMtimeMs?: number; expectTargetAbsent?: boolean } = {},
+  opts: { expectTargetGeneration?: CodexAuthFileGeneration; expectTargetAbsent?: boolean } = {},
 ): Promise<CodexAuthSnapshotOutcome> {
   let last: CodexAuthSnapshotOutcome = { kind: 'source-changed' };
   for (let attempt = 0; attempt < 3; attempt += 1) {
@@ -856,7 +883,7 @@ export async function syncIndependentCodexAuth(
     to: string,
     successKind: CodexAuthCopySyncKind,
     target: {
-      expectTargetMtimeMs?: number;
+      expectTargetGeneration?: CodexAuthFileGeneration;
       expectTargetAbsent?: boolean;
       backupTarget?: boolean;
     } = {},
@@ -957,9 +984,11 @@ export async function syncIndependentCodexAuth(
     // 路径可能在同机另一个 Cindy profile 的 rm → rename 空窗里瞬时消失:这一代
     // stat 读不到就是「再对一次账」,不是终态失败。抛出去会让 getState() 整个
     // 拒绝, 登录路径还会写下断线标记 —— 文件其实可能已经回来了(#9316 review)。
-    let systemStat: Awaited<ReturnType<typeof fsp.stat>>;
+    let systemStat: BigIntStats;
     try {
-      systemStat = await fsp.stat(systemAuth);
+      // 代次比对用 bigint stat:发布前复核的是完整代次(dev/ino/mtimeNs/size),
+      // 只比 mtimeMs 会把「等 mtime 但换了 inode 的新一代」当成同一代(#9316 review)。
+      systemStat = await fsp.stat(systemAuth, { bigint: true });
     } catch {
       await waitBeforePathRetry();
       continue;
@@ -970,8 +999,9 @@ export async function syncIndependentCodexAuth(
       //
       // 本地副本整个不在时: 重建的前提是「目标仍然不存在」(本机 Codex 刚建出来的
       // 那份是新的一代, 不能覆盖) —— 走 expectTargetAbsent, 不走代次比对。
+      // 共享 inode 时系统那份的代次就是本地这份的代次。
       const published = await publish(systemAuth, myAuth, 'copied-from-system', local
-        ? { expectTargetMtimeMs: systemStat.mtimeMs }
+        ? { expectTargetGeneration: codexAuthFileGenerationOf(systemStat) }
         : { expectTargetAbsent: true });
       if (published.conflict) continue;
       const residual = await detachHardlinks(systemAuth);
@@ -1002,9 +1032,9 @@ export async function syncIndependentCodexAuth(
 
     // 本地凭证同样可能在对账途中被本机 Codex 换掉(原子替换的 rm → rename 空窗):
     // 读不到就重新对账, 不要让整个同步失败(#9316 review)。
-    let localStat: Awaited<ReturnType<typeof fsp.stat>>;
+    let localStat: BigIntStats;
     try {
-      localStat = await fsp.stat(myAuth);
+      localStat = await fsp.stat(myAuth, { bigint: true });
     } catch {
       await waitBeforePathRetry();
       continue;
@@ -1020,7 +1050,7 @@ export async function syncIndependentCodexAuth(
       if (!confirmed) {
         // 账号不再一致 → 不写回系统,系统凭证单向获胜。
         const published = await publish(systemAuth, myAuth, 'copied-from-system', {
-          expectTargetMtimeMs: localStat.mtimeMs,
+          expectTargetGeneration: codexAuthFileGenerationOf(localStat),
         });
         if (published.conflict) continue;
         const residual = await detachHardlinks(systemAuth);
@@ -1037,7 +1067,7 @@ export async function syncIndependentCodexAuth(
       // 消失, 本机 Codex 凭空掉登录(本地那份还在, 用户却已经登出)。备份让崩溃窗口
       // 里的凭证可恢复(#9316 review)。
       const published = await publish(myAuth, systemAuth, 'copied-from-local', {
-        expectTargetMtimeMs: systemStat.mtimeMs,
+        expectTargetGeneration: codexAuthFileGenerationOf(systemStat),
         backupTarget: true,
       });
       if (published.conflict) continue;
@@ -1052,7 +1082,7 @@ export async function syncIndependentCodexAuth(
     }
     // 账号未证明一致、或系统更新:系统凭证单向获胜,只把系统内容刷到本地。
     const published = await publish(systemAuth, myAuth, 'copied-from-system', {
-      expectTargetMtimeMs: localStat.mtimeMs,
+      expectTargetGeneration: codexAuthFileGenerationOf(localStat),
     });
     if (published.conflict) continue;
     const residual = await detachHardlinks(systemAuth);
