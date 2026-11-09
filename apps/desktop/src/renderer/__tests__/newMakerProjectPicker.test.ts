@@ -1754,7 +1754,11 @@ describe('Shared create project picker', () => {
       '() => (effectiveAgentDeviceId ? remoteAgentProviders(deviceProviders) : deviceProviders),',
     );
     expect(body).toContain('draftInitialModel,');
-    expect(body).toContain('return deviceLinkInitial?.providerId || effectiveSourceIdForModel(');
+    // 播种来源只有在**最终型号**上还能路由时才保留:播种型号被换成目录里的别的型号后,
+    // 那个来源往往不提供新型号,显式带上它会让发送侧对着一个路由不出该型号的来源建任务。
+    expect(body).toContain('const seedProviderId = resolveDraftProviderForModel(');
+    expect(body).toContain('deviceLinkInitial?.providerId,');
+    expect(body).toContain('return seedProviderId || effectiveSourceIdForModel(');
   });
 
   it('keeps recent-folder storage out of project-option selection', () => {
