@@ -100,7 +100,7 @@ describe('草稿页:建到被控电脑的任务也能选第三台电脑', () => 
       initialProvider,
       draftRouteSource.indexOf('\n  const ', initialProvider),
     );
-    expect(providerMemo).toContain('effectiveSourceIdForModel(\n      agentCatalogProviders,');
+    expect(providerMemo).toContain('effectiveSourceIdForModel(\n      targetSelectableProviders,');
     // 远程协同(普通发送与新建目标)按同一份收窄。
     expect(
       draftRouteSource.match(/draftEnableOrcaOptions\(\s*effectiveCollab,\s*agentCatalogProviders,/g),

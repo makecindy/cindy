@@ -1749,7 +1749,9 @@ describe('Shared create project picker', () => {
     // 远程分支按**模型目录所在电脑**的目录 + 草稿当前模型复算,用与 main 同源的解析函数。
     // 目录通常就是被控端的;Agent 在另一台电脑运行时只取那台开放了远程调用的供应商(2026-10-09)。
     expect(body).toContain('effectiveSourceIdForModel(');
-    expect(body).toContain('agentCatalogProviders,');
+    // 目标目录里**可选**的型号清单(新路由准入 + 被控端自己的显示/隐藏过滤):
+    // 被退役 / 要付费 / 被藏起来的型号不能被选成来源(Codex review #9369)。
+    expect(body).toContain('targetSelectableProviders,');
     expect(newMakerDraftRouteSource).toContain(
       '() => (effectiveAgentDeviceId ? remoteAgentProviders(deviceProviders) : deviceProviders),',
     );

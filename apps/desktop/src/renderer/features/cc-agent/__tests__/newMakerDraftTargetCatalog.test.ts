@@ -4,7 +4,8 @@ import ts from 'typescript';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { Effort, ProviderView } from '@cindy/model-providers';
-import { chatEligibleSourcesForModel, effectiveSourceIdForModel, getModel, reconcileInvocationEffort } from '@cindy/model-providers';
+import { chatEligibleSourcesForModel, effectiveSourceIdForModel, getModel, isModelSelectableForNewRoute, reconcileInvocationEffort } from '@cindy/model-providers';
+import { isDeviceModelVisible } from '@/lib/providerModels';
 import type { RemoteProjectTarget } from '@/components/new-chat/AddRemoteProjectDialog';
 import type { AgentCapabilities } from '@/hooks/useAgentCapabilities';
 import { parseDeviceProvidersPayload } from '@/hooks/useDeviceProviders';
@@ -64,6 +65,21 @@ function callback<T>(name: string, bindings: Record<string, unknown>): T {
     ? node.initializer.arguments[0]
     : undefined, bindings);
 }
+// 目标目录里**可选**的型号清单:与路由同一份过滤(新路由准入 + 被控端自己的显示/隐藏)。
+function selectableProviders(
+  providers: ProviderView[],
+  overrides?: Record<string, boolean>,
+): ProviderView[] {
+  return callback<() => ProviderView[]>('targetSelectableProviders', {
+    usesDeviceCatalog: true,
+    agentCatalogProviders: providers,
+    capabilityAgentKind: 'pi',
+    deviceModelVisibilityOverrides: overrides,
+    isModelSelectableForNewRoute,
+    isDeviceModelVisible,
+  })();
+}
+
 // Effects are anonymous, so their log line identifies them.
 function effect(marker: string, bindings: Record<string, unknown>): () => void {
   return compile<() => void>(marker, node => ts.isCallExpression(node) && node.expression.getText(source) === 'useEffect'
@@ -265,6 +281,8 @@ describe('new task model resolves against the catalog it will use', () => {
       connected?: boolean;
       suspended?: boolean;
       access?: ProviderView['access'];
+      retired?: boolean;
+      requiresPayment?: boolean;
     } = {},
   ): ProviderView {
     return {
@@ -276,6 +294,8 @@ describe('new task model resolves against the catalog it will use', () => {
       models: { pi: [{
         id: modelId, name: modelId, contextWindow: 200_000,
         efforts: ['medium'], defaultEffort: 'medium', effortsUnknown: false,
+        ...(options.retired ? { status: 'retired' } : {}),
+        ...(options.requiresPayment ? { availability: 'requires_payment' as const } : {}),
       }] },
     };
   }
@@ -288,6 +308,7 @@ describe('new task model resolves against the catalog it will use', () => {
     usesDeviceCatalog?: boolean;
     rememberedModel?: string;
     rememberedProviderId?: string | null;
+    modelVisibilityOverrides?: Record<string, boolean>;
   }): DraftModelCalibrationResult {
     const shared = {
       usesDeviceCatalog: options.usesDeviceCatalog !== false,
@@ -314,7 +335,12 @@ describe('new task model resolves against the catalog it will use', () => {
       deviceProvidersLoading: false,
       agentCatalogProviders: options.targetProviders,
     };
-    const remote = callback<() => DraftModelCalibrationResult | null>('remoteCatalogCalibration', shared);
+    // 目标目录里可选的型号清单:同一份过滤只做一次,校准与播种都用它。
+    const targetSelectableProviders = selectableProviders(
+      options.targetProviders, options.modelVisibilityOverrides);
+    const remote = callback<() => DraftModelCalibrationResult | null>('remoteCatalogCalibration', {
+      ...shared, targetSelectableProviders,
+    });
     const draft = callback<() => DraftModelCalibrationResult>('draftCalibration', {
       ...shared,
       remoteCatalogCalibration: remote(),
@@ -439,6 +465,7 @@ describe('new task model resolves against the catalog it will use', () => {
       return callback<() => string | null>('draftInitialProviderId', {
         usesDeviceCatalog: true,
         agentCatalogProviders: options.targetProviders,
+        targetSelectableProviders: selectableProviders(options.targetProviders),
         draftInitialModel: options.model,
         capabilityAgentKind: 'pi',
         remoteCatalogCalibration: options.calibrated ?? null,
@@ -490,6 +517,42 @@ describe('new task model resolves against the catalog it will use', () => {
       })).toBe('xd');
     });
   });
+
+/**
+ * 目标目录里**可选**的型号才配当默认值(Codex review #9369)。
+ *
+ * 被退役 / 要付费的型号,以及被控端自己藏起来的型号:选择器里没有它们,主进程的新路由
+ * 准入(model-route-guard)也会拒掉首发 —— 草稿停在这样的型号上,首条消息必然失败,
+ * 而那份目录里明明还有别的可选型号。
+ */
+describe('the target model must be selectable on that target', () => {
+  it('falls back to another target model when the target retired it', () => {
+    const result = calibrate({
+      targetProviders: [
+        providerWithModel('shared-source', 'shared-model', { retired: true }),
+        providerWithModel('other-source', 'other-model'),
+      ],
+      localProviders: [providerWithModel('local-source', 'local-model')],
+      draftModel: 'local-model',
+      rememberedModel: 'shared-model',
+    });
+    expect(result.model).toBe('other-model');
+  });
+
+  it('falls back to another target model when the target hid it', () => {
+    const result = calibrate({
+      targetProviders: [
+        providerWithModel('shared-source', 'shared-model'),
+        providerWithModel('other-source', 'other-model'),
+      ],
+      localProviders: [providerWithModel('local-source', 'local-model')],
+      draftModel: 'local-model',
+      rememberedModel: 'shared-model',
+      modelVisibilityOverrides: { 'pi:shared-source:shared-model': false },
+    });
+    expect(result.model).toBe('other-model');
+  });
+});
 });
 
 // A catalog that offers no model seeds an empty model id; an empty id would leave the
@@ -508,6 +571,8 @@ describe('new task model falls back when the seeded model is empty', () => {
         options.targetEfforts ?? ['medium'],
       ),
     ];
+    // 目标目录里可选的型号清单(新路由准入 + 被控端自己的显示/隐藏)。
+    const targetSelectableProviders = selectableProviders(agentCatalogProviders);
     // 播种分支:被控端给的型号与档位原样用。
     const seeded = compile<() => { model: string; effort: Effort | null } | null>(
       'draftSeedSelection',
@@ -522,6 +587,7 @@ describe('new task model falls back when the seeded model is empty', () => {
         usesDeviceCatalog: true,
         deviceLinkInitial: options.deviceLinkInitial,
         agentCatalogProviders,
+        targetSelectableProviders,
         capabilityAgentKind: 'pi',
         chatEligibleSourcesForModel,
         deviceProvidersLoading: false,
@@ -543,6 +609,7 @@ describe('new task model falls back when the seeded model is empty', () => {
         calibratedDraftModel: 'shared-model',
         localDraftEffort: options.localEffort ?? 'medium',
         agentCatalogProviders,
+        targetSelectableProviders,
         capabilityAgentKind: 'pi',
         effectiveAgentDeviceId: 'share:abc',
         // 目录里只有这一家来源,最终来源就是它。
@@ -635,6 +702,7 @@ describe('the source follows the final model', () => {
       deviceLinkInitial: { providerId: 'stale' },
       draftInitialModel: 'shared-model',
       agentCatalogProviders: providers,
+      targetSelectableProviders: selectableProviders(providers),
       capabilityAgentKind: 'pi',
       draftInitialProviderId: 'good',
       resolveDraftProviderForModel,
@@ -652,6 +720,7 @@ describe('the source follows the final model', () => {
       deviceLinkInitial: { providerId: 'chosen' },
       draftInitialModel: 'shared-model',
       agentCatalogProviders: [],
+      targetSelectableProviders: selectableProviders([]),
       capabilityAgentKind: 'pi',
       draftInitialProviderId: 'other',
       resolveDraftProviderForModel,
@@ -667,6 +736,7 @@ describe('the source follows the final model', () => {
       deviceLinkInitial: { providerId: 'chosen' },
       draftInitialModel: 'shared-model',
       agentCatalogProviders: [offline, sourceProvider('other', 'shared-model')],
+      targetSelectableProviders: selectableProviders([offline, sourceProvider('other', 'shared-model')]),
       capabilityAgentKind: 'pi',
       draftInitialProviderId: 'other',
       resolveDraftProviderForModel,
@@ -682,6 +752,7 @@ describe('the source follows the final model', () => {
       usesDeviceCatalog: true,
       dlSel: { providerId: 'stale', model: 'other-model' },
       agentCatalogProviders: providers,
+      targetSelectableProviders: selectableProviders(providers),
       draftInitialModel: 'shared-model',
       draftInitialProviderId: 'good',
       effectiveSourceId: null,
@@ -722,6 +793,7 @@ describe('the effort follows the final provider and model', () => {
       calibratedDraftModel: bindings.calibratedDraftModel ?? 'shared-model',
       localDraftEffort: bindings.localDraftEffort ?? 'medium',
       agentCatalogProviders: bindings.agentCatalogProviders,
+      targetSelectableProviders: selectableProviders(bindings.agentCatalogProviders),
       capabilityAgentKind: 'pi',
       effectiveAgentDeviceId: 'share:abc',
       chatInitialProviderId: bindings.chatInitialProviderId,
@@ -756,5 +828,88 @@ describe('the effort follows the final provider and model', () => {
       }),
     });
     expect(effort).toBe('high');
+  });
+});
+
+// Codex review #9369(第八轮):播种型号在目标目录里路由不出去、被换成目录里的另一个型号时,
+// holder 还握着旧型号 —— 改档 / 改 Fast 会把**新型号**的改动写到旧型号的远端草稿记忆上,
+// agent-device 草稿还会被 rememberAgentDeviceSelection 再记一次旧型号。
+describe('the remote draft holder follows the displayed model', () => {
+  const staleHolder: DeviceLinkDraftSelection = {
+    model: 'shared-model', providerId: 'source', effort: 'high', fastMode: false,
+  };
+  function pushBindings() {
+    const invoke = vi.fn<
+      (deviceId: string, channel: string, payload: unknown[]) => Promise<undefined>
+    >(async () => undefined);
+    return {
+      isDeviceLinkDraft: true,
+      effectiveDeviceLinkDeviceId: 'target-device',
+      effectiveAgentDeviceId: undefined,
+      capabilityAgentKind: 'pi',
+      draftInitialModel: 'other-model',
+      dlSel: staleHolder,
+      deviceLinkInitial: staleHolder,
+      remoteDraftRevisionRef: { current: 0 },
+      forgetRemoteDraftDefaults: vi.fn(),
+      window: { electronAPI: { deviceLink: { invoke } } },
+      invoke,
+    };
+  }
+  function pushPref(bindings: ReturnType<typeof pushBindings>) {
+    return callback<
+      (patch: { effort?: Effort; fast?: boolean | 'ultrafast' }) => void
+    >('pushActiveDraftPref', bindings);
+  }
+
+  it('writes the displayed model to the controlled draft, not the stale seed model', () => {
+    const bindings = pushBindings();
+    pushPref(bindings)({ effort: 'low' });
+    expect(bindings.invoke).toHaveBeenCalledWith(
+      'target-device',
+      'maker:apply-new-maker-draft-pref',
+      [expect.objectContaining({ modelId: 'other-model', effort: 'low' })],
+    );
+  });
+
+  it('does not push the stale model\'s effort onto the displayed model', () => {
+    const bindings = pushBindings();
+    pushPref(bindings)({ fast: true });
+    const payload = (bindings.invoke.mock.calls[0][2] as Record<string, unknown>[])[0];
+    expect(payload.modelId).toBe('other-model');
+    expect(payload).not.toHaveProperty('effort');
+  });
+
+  it('synchronizes the holder to the calibrated tuple', () => {
+    const setDlSel = vi.fn();
+    effect('holder 同步到显示的那一对', {
+      usesDeviceCatalog: true,
+      dlSel: staleHolder,
+      draftSeedSelection: null,
+      draftInitialModel: 'other-model',
+      chatInitialProviderId: 'other',
+      draftInitialEffort: 'medium',
+      setDlSel,
+    })();
+    expect(setDlSel).toHaveBeenCalledWith({
+      ...staleHolder,
+      model: 'other-model',
+      providerId: 'other',
+      effort: 'medium',
+    });
+  });
+
+  it('leaves the holder alone while the seed model is still the displayed one', () => {
+    const setDlSel = vi.fn();
+    effect('holder 同步到显示的那一对', {
+      usesDeviceCatalog: true,
+      dlSel: staleHolder,
+      draftSeedSelection: { model: 'shared-model', effort: 'high' },
+      draftInitialModel: 'shared-model',
+      chatInitialProviderId: 'source',
+      draftInitialEffort: 'high',
+      setDlSel,
+    })();
+    expect(setDlSel).not.toHaveBeenCalled();
   });
 });

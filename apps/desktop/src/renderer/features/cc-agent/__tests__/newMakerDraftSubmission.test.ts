@@ -4,6 +4,7 @@ import { runInNewContext } from 'node:vm';
 import ts from 'typescript';
 import { describe, expect, it, vi } from 'vitest';
 import { buildUserProvider, chatEligibleSourcesForModel, connectedProvidersForAgent, getModel, isModelSelectableForNewRoute, reconcileInvocationEffort, type PiReasoningEffort, type ProviderView } from '@cindy/model-providers';
+import { isDeviceModelVisible } from '@/lib/providerModels';
 import { createWorkerLabel } from '../workerLabel';
 import type { CollabDraft } from '@/state/newMakerDraft';
 import { resolveSessionExecutionSelection } from '../../../../main/maker-ipc/sessionExecutionSelection';
@@ -43,7 +44,7 @@ function visit(node: ts.Node) {
   }
   if (ts.isVariableDeclaration(node) && node.initializer && ts.isCallExpression(node.initializer)) {
     const name = ts.isIdentifier(node.name) ? node.name.text : '';
-    if (['createSession', 'handleSend', 'handleCreateGoal', 'localDraftEffort', 'draftSeedSelection', 'draftInitialEffort'].includes(name)) {
+    if (['createSession', 'handleSend', 'handleCreateGoal', 'localDraftEffort', 'draftSeedSelection', 'draftInitialEffort', 'targetSelectableProviders'].includes(name)) {
       callbacks[name] = node.initializer.arguments[0];
     }
   }
@@ -237,6 +238,7 @@ async function submit(options: {
     effectiveDeviceLinkDeviceId: options.deviceId, effectiveDeviceLinkDeviceName: options.deviceId,
     catalogDeviceId: modelCatalogKey(options.agentDeviceId ?? options.deviceId, options.catalogHostDeviceId),
     agentCatalogProviders: providers, deviceProvidersLoading: false, deviceProvidersUnsupported: false,
+    deviceModelVisibilityOverrides: undefined, isModelSelectableForNewRoute, isDeviceModelVisible,
     matchNavigationCommandName: () => null,
     wtRef: { current: hasWorktree
       ? { enabled: true, confirmedIneligible: false, baseRepo, name: 'creator', sourceBranch: 'other-branch', branchPreferenceReady: true, supportsRecoveryKeyDiscard: true }
@@ -293,13 +295,18 @@ async function submit(options: {
     });
   }
   const localDraftEffort = runInNewContext(executable('localDraftEffort'), environment)();
+  // 目标目录里可选的型号清单(按新路由准入 + 被控端自己的显示/隐藏过滤)。
+  const targetSelectableProviders = runInNewContext(
+    executable('targetSelectableProviders'), environment)();
   // The route resolves the seeded pair and the effort of the final provider/model
   // in two steps; compose them the way the route does.
-  const seeded = runInNewContext(executable('draftSeedSelection'), environment)();
+  const seeded = runInNewContext(executable('draftSeedSelection'), {
+    ...environment, targetSelectableProviders,
+  })();
   const selection = {
     model: seeded?.model ?? environment.calibratedDraftModel,
     effort: runInNewContext(executable('draftInitialEffort'), {
-      ...environment, localDraftEffort, draftSeedSelection: seeded,
+      ...environment, localDraftEffort, draftSeedSelection: seeded, targetSelectableProviders,
     })(),
   };
   Object.assign(environment, { draftInitialModel: selection.model, draftInitialEffort: selection.effort });

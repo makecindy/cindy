@@ -303,6 +303,7 @@ import { useDeviceLinkProjects } from '@/hooks/useDeviceLinkProjects';
 import {
   resolveFastSupported,
   filterChatBridgedCodexProviders,
+  isDeviceModelVisible,
 } from '@/lib/providerModels';
 import {
   chatEligibleSourcesForModel,
@@ -1405,6 +1406,7 @@ export function NewMakerDraftRoute() {
     loading: deviceProvidersLoading,
     error: deviceProvidersError,
     unsupported: deviceProvidersUnsupported,
+    modelVisibilityOverrides: deviceModelVisibilityOverrides,
   } = useDeviceProviders(catalogDeviceId);
   // SSH Codex 草稿:Codex 只走远端主机的原生连接,默认模型、来源与档位都按远端清单校准;
   // 本机目录里的 Codex 来源(网关等)发到远端会被 main 拒绝(LAZY_CREATE_FAILED)。
@@ -1450,6 +1452,41 @@ export function NewMakerDraftRoute() {
     () => (effectiveAgentDeviceId ? remoteAgentProviders(deviceProviders) : deviceProviders),
     [effectiveAgentDeviceId, deviceProviders],
   );
+  /**
+   * 目标目录里**可选**的型号清单:与选择器 / 主进程的新路由准入同口径。
+   *
+   * `chatEligibleSourcesForModel` 只看「连上了 / 没停用 / runtime 可用 / 是聊天模型」,
+   * 不看两件事:
+   *   · 型号本身被退役(`status: 'retired'`)或要付费(`availability: 'requires_payment'`)
+   *     —— 主进程的新路由准入(`model-route-guard` 里的 isModelSelectableForNewRoute)会
+   *     拒掉首发,于是草稿停在一个「选择器里没有、首发必然被拒」的型号上;
+   *   · 被控端自己把这个型号藏起来了(`modelVisibilityOverrides`)—— 选择器里那一行不显示,
+   *     草稿却把它当成默认型号。
+   *
+   * 这份清单只用于**挑型号 / 来源 / 档位**;提交仍带完整目录(被控端自己再判一次)。
+   * 过滤只动型号条目、不丢来源:来源本身还在目录里(只是没有可选型号),发送侧才认得出
+   * 「这个来源不提供这个型号」,而不是当成「目录里查不到这个来源」而保留显式身份。
+   */
+  const targetSelectableProviders = useMemo(() => {
+    if (!usesDeviceCatalog) return agentCatalogProviders;
+    return agentCatalogProviders.map((provider) => {
+      const models = (provider.models[capabilityAgentKind] ?? []).filter((model) =>
+        isModelSelectableForNewRoute(model, { userProvider: provider.source === 'user' }) &&
+        isDeviceModelVisible(
+          deviceModelVisibilityOverrides,
+          capabilityAgentKind,
+          provider.id,
+          model,
+        ),
+      );
+      return { ...provider, models: { ...provider.models, [capabilityAgentKind]: models } };
+    });
+  }, [
+    usesDeviceCatalog,
+    agentCatalogProviders,
+    capabilityAgentKind,
+    deviceModelVisibilityOverrides,
+  ]);
   // 新旧用户统一使用 A。老被控端只有 capabilities、没有供应商目录时，
   // 保留兼容列表与引擎下拉；否则联合列表会为空，也无法切换引擎。
   const unifiedModelPanelEnabled = !catalogDeviceId || !deviceProvidersUnsupported;
@@ -1551,7 +1588,7 @@ export function NewMakerDraftRoute() {
     // 同样不能当默认值:首条消息必然失败。本机自动路径已经剔掉这类来源,目标目录这条路
     // 同一口径 —— 用户为这个目标记下的来源保留,全失败时退回完整候选。
     const healthyCatalogProviders = filterHealthyDraftProviders(
-      agentCatalogProviders,
+      targetSelectableProviders,
       remembered?.providerId ?? null,
     );
     // 目标目录里这个型号**能不能路由**:目录里有这个型号 ≠ 能路由 —— 来源可能没连上、
@@ -1592,7 +1629,7 @@ export function NewMakerDraftRoute() {
     ).length > 0 ? picked : null;
   }, [
     usesDeviceCatalog,
-    agentCatalogProviders,
+    targetSelectableProviders,
     capabilityAgentKind,
     effectiveAgentDeviceId,
     chatPrefs.model,
@@ -1794,6 +1831,40 @@ export function NewMakerDraftRoute() {
     capabilityAgentKind,
     agentCatalogProviders,
   ]);
+
+  // 选中模型 + effort:device-link 用镜像 holder(deviceLinkInitial,被控端草稿值已按 capabilities
+  // 校准);本地草稿用 chatPrefs(逐字节不变)。device-link 在 holder seed 完成前(等隧道 / 能力)
+  // 极早期暂用 chatPrefs,随后被 deviceLinkInitial 取代。
+  // 播种出来的模型与档位:被控端给的原样用(目录还在读 / 老被控端只有拍平 capabilities 时)。
+  const draftSeedSelection = useMemo(() => {
+    // 播种出来的模型可能是空串(那份目录没给出可用型号,见 resolveDeviceLinkDraftDefaults 的
+    // 「models.length === 0」分支)。空串会让输入框的模型胶囊整个空着、来源也解析不出来 ——
+    // 与其把空串一路传下去,不如用校准出来的模型(那份目录里真实存在的型号)。
+    if (!(usesDeviceCatalog && deviceLinkInitial?.model)) return null;
+    // 播种模型来自被控端**全量** capabilities(跨来源并集),而目标目录只开放了其中一部分
+    // 来源 —— 那个型号在目标目录里路由不出去时,选择器里一行都命中不了、胶囊整个空着
+    // (Codex review #9369)。目录还在读 / 老被控端只有拍平 capabilities 时,不知道目标开放
+    // 了哪些来源,先按播种值显示,不闪本机模型。
+    const seedRoutable = chatEligibleSourcesForModel(
+      targetSelectableProviders,
+      deviceLinkInitial.model,
+      capabilityAgentKind,
+    ).length > 0;
+    if (deviceProvidersLoading || deviceProvidersUnsupported || seedRoutable) {
+      return { model: deviceLinkInitial.model, effort: deviceLinkInitial.effort };
+    }
+    return null;
+  }, [
+    usesDeviceCatalog,
+    deviceLinkInitial,
+    targetSelectableProviders,
+    capabilityAgentKind,
+    deviceProvidersLoading,
+    deviceProvidersUnsupported,
+  ]);
+
+  // 播种分支之外的型号:一律用校准后的那个(校准在 calibratedDraftModel 一处完成)。
+  const draftInitialModel = draftSeedSelection?.model ?? calibratedDraftModel;
 
   // ── device-link 草稿列表「纯显示镜像」(非选中行的 effort/fast) ──────────────────
   // scopeKey 按设备隔离。镜像 = 被控端 providerModelMemory 全量快照(草稿列表行的真实读源),
@@ -2106,7 +2177,10 @@ export function NewMakerDraftRoute() {
       // Agent 在另一台电脑运行:选中的是那台目录里的模型,不写进被控端的新建草稿记忆
       // (档位已由 ChatInput 记进本机为那台电脑记的一份)。
       if (effectiveAgentDeviceId && !options?.taskComputerSelection) return;
-      const model = target?.modelId ?? dlSel?.model ?? deviceLinkInitial?.model;
+      // 写穿的型号必须是**当前显示的那一个**:播种型号在目标目录里路由不出去、被换成目录里
+      // 的另一个型号时,holder 里还握着旧型号 —— 改档 / 改 Fast 就会把新型号的改动写到旧型号
+      // 的远端草稿记忆上(Codex review #9369)。
+      const model = target?.modelId ?? draftInitialModel ?? dlSel?.model ?? deviceLinkInitial?.model;
       if (!model) return;
       // Until the host pushes the saved preference, do not reuse the old model on reopen.
       remoteDraftRevisionRef.current += 1;
@@ -2114,12 +2188,18 @@ export function NewMakerDraftRoute() {
       // 只改 Fast 时也要带上激活档(被控端 trigger 要更新激活 effort)。给了显式目标就**只**
       // 认目标自己的档:此刻 dlSel 里还是上一个模型的档,拿它顶上等于把 A 的档写到 B 头上;
       // 目标没档就整个不下发 effort,让被控端保留它为该模型记的那份。
+      // 下发的档位必须属于**同一个型号**:holder 里记的是上一个型号的档,型号换过之后那份
+      // 档不属于它 —— 整个不下发 effort,让被控端保留它为该型号记的那份。
+      const holderEffort =
+        dlSel?.model === model || deviceLinkInitial?.model === model
+          ? (dlSel?.effort ?? deviceLinkInitial?.effort)
+          : undefined;
       const activeEffort =
         patch.effort ??
         (patch.fast !== undefined
           ? target
             ? target.effort
-            : (dlSel?.effort ?? deviceLinkInitial?.effort)
+            : holderEffort
           : undefined);
       window.electronAPI.deviceLink
         .invoke(effectiveDeviceLinkDeviceId, 'maker:apply-new-maker-draft-pref', [
@@ -2144,6 +2224,7 @@ export function NewMakerDraftRoute() {
       effectiveDeviceLinkDeviceId,
       effectiveAgentDeviceId,
       capabilityAgentKind,
+      draftInitialModel,
       dlSel,
       deviceLinkInitial,
     ],
@@ -2155,40 +2236,6 @@ export function NewMakerDraftRoute() {
   const effectivePlanMode = isDeviceLinkDraft
     ? capabilities?.planMode?.supported === true && remoteDraftPlan?.key === remotePlanKey && remoteDraftPlan.enabled
     : chatPrefs.planMode === true;
-
-  // 选中模型 + effort:device-link 用镜像 holder(deviceLinkInitial,被控端草稿值已按 capabilities
-  // 校准);本地草稿用 chatPrefs(逐字节不变)。device-link 在 holder seed 完成前(等隧道 / 能力)
-  // 极早期暂用 chatPrefs,随后被 deviceLinkInitial 取代。
-  // 播种出来的模型与档位:被控端给的原样用(目录还在读 / 老被控端只有拍平 capabilities 时)。
-  const draftSeedSelection = useMemo(() => {
-    // 播种出来的模型可能是空串(那份目录没给出可用型号,见 resolveDeviceLinkDraftDefaults 的
-    // 「models.length === 0」分支)。空串会让输入框的模型胶囊整个空着、来源也解析不出来 ——
-    // 与其把空串一路传下去,不如用校准出来的模型(那份目录里真实存在的型号)。
-    if (!(usesDeviceCatalog && deviceLinkInitial?.model)) return null;
-    // 播种模型来自被控端**全量** capabilities(跨来源并集),而目标目录只开放了其中一部分
-    // 来源 —— 那个型号在目标目录里路由不出去时,选择器里一行都命中不了、胶囊整个空着
-    // (Codex review #9369)。目录还在读 / 老被控端只有拍平 capabilities 时,不知道目标开放
-    // 了哪些来源,先按播种值显示,不闪本机模型。
-    const seedRoutable = chatEligibleSourcesForModel(
-      agentCatalogProviders,
-      deviceLinkInitial.model,
-      capabilityAgentKind,
-    ).length > 0;
-    if (deviceProvidersLoading || deviceProvidersUnsupported || seedRoutable) {
-      return { model: deviceLinkInitial.model, effort: deviceLinkInitial.effort };
-    }
-    return null;
-  }, [
-    usesDeviceCatalog,
-    deviceLinkInitial,
-    agentCatalogProviders,
-    capabilityAgentKind,
-    deviceProvidersLoading,
-    deviceProvidersUnsupported,
-  ]);
-
-  // 播种分支之外的型号:一律用校准后的那个(校准在 calibratedDraftModel 一处完成)。
-  const draftInitialModel = draftSeedSelection?.model ?? calibratedDraftModel;
 
   // 远程草稿的权限档 / 来源同样取镜像 holder;本地走 chatPrefs。
   // Agent 在另一台电脑运行时权限仍在被控电脑上生效:那台的能力清单里没有这一档(被夹掉)时,回落到
@@ -2227,7 +2274,7 @@ export function NewMakerDraftRoute() {
   const draftInitialProviderId = useMemo<string | null>(() => {
     if (!usesDeviceCatalog) return null;
     const sources = chatEligibleSourcesForModel(
-      agentCatalogProviders,
+      targetSelectableProviders,
       draftInitialModel,
       capabilityAgentKind,
     );
@@ -2246,7 +2293,7 @@ export function NewMakerDraftRoute() {
     );
   }, [
     usesDeviceCatalog,
-    agentCatalogProviders,
+    targetSelectableProviders,
     draftInitialModel,
     capabilityAgentKind,
     remoteCatalogCalibration,
@@ -2262,11 +2309,11 @@ export function NewMakerDraftRoute() {
     const seedProviderId = resolveDraftProviderForModel(
       deviceLinkInitial?.providerId,
       draftInitialModel,
-      agentCatalogProviders,
+      targetSelectableProviders,
       capabilityAgentKind,
     );
     return seedProviderId || effectiveSourceIdForModel(
-      agentCatalogProviders,
+      targetSelectableProviders,
       draftInitialProviderId,
       draftInitialModel,
       capabilityAgentKind,
@@ -2274,7 +2321,7 @@ export function NewMakerDraftRoute() {
   }, [
     usesDeviceCatalog,
     localProviderIdForDraft,
-    agentCatalogProviders,
+    targetSelectableProviders,
     deviceLinkInitial?.providerId,
     draftInitialProviderId,
     draftInitialModel,
@@ -2296,13 +2343,13 @@ export function NewMakerDraftRoute() {
       // 来源上都有条目时,各家的档位表可以不一样(第一份明确没有档位、选中的却是后面那份
       // 订阅)—— 按目录顺序取会把档位算到另一个账号上(Codex review #9369)。
       const finalProvider = chatInitialProviderId
-        ? agentCatalogProviders.find((provider) => provider.id === chatInitialProviderId)
+        ? targetSelectableProviders.find((provider) => provider.id === chatInitialProviderId)
         : undefined;
       const targetModel =
         (finalProvider
           ? getModel(finalProvider, calibratedDraftModel, capabilityAgentKind)
           : undefined) ??
-        agentCatalogProviders
+        targetSelectableProviders
           .map((provider) => getModel(provider, calibratedDraftModel, capabilityAgentKind))
           .find((model) => model);
       if (targetModel) {
@@ -2339,10 +2386,36 @@ export function NewMakerDraftRoute() {
     usesDeviceCatalog,
     calibratedDraftModel,
     localDraftEffort,
-    agentCatalogProviders,
+    targetSelectableProviders,
     capabilityAgentKind,
     effectiveAgentDeviceId,
     chatInitialProviderId,
+  ]);
+
+  // holder 同步到显示的那一对(Codex review #9369):播种型号在目标目录里路由不出去、被换成
+  // 目录里的另一个型号时,holder 还握着旧型号 —— 改档 / 改 Fast 会把新型号的改动写到旧型号
+  // 的远端草稿记忆上,agent-device 草稿也会被 rememberAgentDeviceSelection 再记一次旧型号。
+  // 这里把 holder 换成显示的那一对(型号 + 来源 + 档位),holder 与显示从此不再分叉。
+  useEffect(() => {
+    // holder 同步到显示的那一对(Codex review #9369)
+    if (!usesDeviceCatalog || !dlSel) return;
+    // 播种值可用时 holder 就是对的(它就是显示的那一个),不动它。
+    if (draftSeedSelection) return;
+    if (dlSel.model === draftInitialModel) return;
+    setDlSel({
+      ...dlSel,
+      model: draftInitialModel,
+      providerId: chatInitialProviderId,
+      effort: draftInitialEffort,
+    });
+  }, [
+    usesDeviceCatalog,
+    dlSel,
+    draftSeedSelection,
+    draftInitialModel,
+    chatInitialProviderId,
+    draftInitialEffort,
+    setDlSel,
   ]);
 
   // Fast 可用判定:本地 + device-link 统一走 resolveFastSupported(共享 per-provider 逻辑,
@@ -2359,7 +2432,7 @@ export function NewMakerDraftRoute() {
       ? resolveDraftFastProviderId(
           dlSel?.providerId,
           draftInitialModel,
-          agentCatalogProviders,
+          targetSelectableProviders,
           capabilityAgentKind,
           draftInitialProviderId,
         )
@@ -2378,7 +2451,7 @@ export function NewMakerDraftRoute() {
   }, [
     usesDeviceCatalog,
     dlSel,
-    agentCatalogProviders,
+    targetSelectableProviders,
     draftInitialModel,
     draftInitialProviderId,
     effectiveSourceId,

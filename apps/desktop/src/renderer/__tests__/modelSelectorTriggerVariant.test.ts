@@ -719,6 +719,36 @@ describe('ModelSelector trigger variants', () => {
     }
   });
 
+  // Codex review #9369(第八轮):本机目录回退出来的名字**不能进缓存**。目录后来读失败时
+  // 它会消失,而缓存里那份还在 —— trigger 于是继续显示一个「看着可用」的本机型号,
+  // 失败状态(重试入口)被藏起来。
+  it('stops showing the local fallback name once the remote catalog fails', () => {
+    const originalModels = visibleModelsRef.models;
+    const originalError = deviceProvidersRef.error;
+    visibleModelsRef.models = [];
+    const props = () => ({
+      remoteAgent: undefined,
+      modelId: 'claude-opus-4-8',
+      effort: 'high' as const,
+      onModelChange: vi.fn(),
+      onEffortChange: vi.fn(),
+      vendorKey: 'cc' as const,
+      deviceId: 'dev-a',
+    });
+    const view = render(React.createElement(ModelSelector, props()));
+    try {
+      expect(screen.getByRole('button', { name: /Opus 4\.8/ })).toBeTruthy();
+      deviceProvidersRef.error = 'offline';
+      view.rerender(React.createElement(ModelSelector, props()));
+      expect(screen.queryByRole('button', { name: /Opus 4\.8/ })).toBeNull();
+      expect(screen.getByRole('button', { name: /模型读取失败/ })).toBeTruthy();
+    } finally {
+      view.unmount();
+      visibleModelsRef.models = originalModels;
+      deviceProvidersRef.error = originalError;
+    }
+  });
+
   // PR #9369 review(第二轮):本机同名模型的名字只够用于**新建草稿**。已建会话的模型
   // 身份由目标目录决定,目标目录里没有这个模型时不能借本机名字 —— 路由与候选仍指向
   // 远端目标,名字却来自本机,等于显示成一个「看着正常但其实不对」的模型。
