@@ -210,6 +210,12 @@ async function invokeHandler(payload: unknown): Promise<void> {
 /** mobile 分支是 fire-and-forget 的独立 async 块;断言它之前先把微任务队列排空。 */
 const flushAsync = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 
+// 有的用例会切到假定时器，而且这个文件不止一个 describe。恢复必须盖住整个文件，
+// 否则前一个用例留下的假定时器会让后面用例里的 setTimeout(0) 永远不跑。
+afterEach(() => {
+  vi.useRealTimers();
+});
+
 const baseDeps = (feishuIm: FakeFeishuIM) => ({
   getWindow: () => null,
   // 实参在主进程是 FeishuIM, 测试里用结构兼容的 fake 就够 — 仅访问
@@ -272,13 +278,6 @@ describe('notificationService — channels 分发', () => {
     await showDesktopChatMessage({ ...payload, threadRootId: 'thread-2' }, () => true);
     expect(notificationCtor).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ title: 'Group', body: 'Other: Reply' }));
   });
-  beforeEach(() => {
-    // 每个用例重新注册 handler,避免相互污染。
-  });
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
   // #6754 review 4373832302 / unit: a finished handoff's delayed event keeps
   // its host-recorded routing decision; current pending state can already differ.
   it('uses request ownership after a handoff ends and rejects unknown or cross-session request IDs', async () => {
@@ -1216,6 +1215,68 @@ describe('notificationService — channels 分发', () => {
       sessionId: 's1', title: 'Ask', kind: 'error', alertEventId: 'turn:200:error', channels,
     });
     expect(notificationCtor).toHaveBeenCalledTimes(3);
+  });
+
+  // #9575 review / unit: two alerts of one task both read the preview before either
+  // finishes. The ledger used to keep whichever id finished last, so an older
+  // alert completing after a newer one rewrote the newer id and the next delivery
+  // of that newer alert toasted again. Order is the turn clock inside the id,
+  // not whose preview read returns first. The repeated id below is the one that
+  // must stay swallowed after the out-of-order completion.
+  it.each([
+    {
+      name: 'newer preview finishes first',
+      first: { kind: 'needs-reply', alertEventId: 'turn:100:ask:1' },
+      second: { kind: 'needs-reply', alertEventId: 'turn:200:ask:2' },
+      finish: 'second-then-first' as const,
+      repeat: 'turn:200:ask:2',
+    },
+    {
+      name: 'older preview finishes first',
+      first: { kind: 'needs-reply', alertEventId: 'turn:100:ask:1' },
+      second: { kind: 'needs-reply', alertEventId: 'turn:200:ask:2' },
+      finish: 'first-then-second' as const,
+      repeat: 'turn:100:ask:1',
+    },
+    {
+      name: 'two different alerts of one turn',
+      first: { kind: 'needs-reply', alertEventId: 'turn:100:ask:1' },
+      second: { kind: 'error', alertEventId: 'turn:100:error' },
+      finish: 'second-then-first' as const,
+      repeat: 'both' as const,
+    },
+  ])('toasts each concurrent alert once ($name)', async ({ first, second, finish, repeat }) => {
+    const { initNotificationService } = await freshService();
+    initNotificationService(baseDeps(makeFeishuIm(null)));
+    const channels = { desktop: true, feishu: false, mobile: false };
+    const pending: Array<() => void> = [];
+    // Each delivery reads the preview once before it can toast. Hold those reads so
+    // this test, not the 1s preview timeout, decides which one finishes first.
+    readSessionNotificationPreview.mockImplementation(() => new Promise(resolve => {
+      pending.push(() => resolve({}));
+    }));
+    const handler = registeredHandlers.get('notification:show-session-event')!;
+    const started = [
+      handler({}, { sessionId: 's1', title: 'Ask', ...first, channels }),
+      handler({}, { sessionId: 's1', title: 'Ask', ...second, channels }),
+    ];
+    await vi.waitFor(() => expect(pending).toHaveLength(2));
+    const release = finish === 'second-then-first' ? [pending[1]!, pending[0]!] : [pending[0]!, pending[1]!];
+    release[0]();
+    await vi.waitFor(() => expect(notificationCtor).toHaveBeenCalledTimes(1));
+    release[1]();
+    await Promise.all(started);
+    await vi.waitFor(() => expect(notificationCtor).toHaveBeenCalledTimes(2));
+    const again = repeat === 'both' ? [first.alertEventId, second.alertEventId] : [repeat];
+    for (const alertEventId of again) {
+      const kind = alertEventId === second.alertEventId ? second.kind : first.kind;
+      await invokeHandler({ sessionId: 's1', title: 'Ask', kind, alertEventId, channels });
+    }
+    expect(notificationCtor).toHaveBeenCalledTimes(2);
+    // Each delivery starts a second preview read for the avatar and never awaits it.
+    // Leave those unresolved and the next test's completion toast fires early.
+    for (const release of pending.splice(0)) release();
+    await Promise.resolve();
   });
 
   // #9317 / unit: a done with no turn id and a failed preview read records only a

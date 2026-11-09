@@ -158,8 +158,25 @@ const notifiedReplies = new Map<string, NotifiedReply>();
  * needs-reply / error 的去重账本，和上面的完成通知账本分开。完成通知在拿不到
  * 轮次标识、正文又读失败时会记一条只有发送时刻的兜底；如果告警也来查那本账，
  * 同一任务随后的无标识告警会被当成“已经通知过”吞掉。两本账互不读取。
+ *
+ * 账本按「事件产生顺序」而不是 preview 读完顺序记。同一任务两条告警会并发去读
+ * preview：后产生的那条可能先读完并已经弹过。此时若把账本改回较早的标识，后产生
+ * 的告警再投一次就会被当成没弹过。所以每个 key 留最近若干个已接受的标识，并记下它们
+ * 产生时的序号；序号更早的完成不能把更晚的标识盖掉。
  */
-const notifiedAlerts = new Map<string, string>();
+interface NotifiedAlert {
+  /** 告警标识。同一标识再来不再弹。 */
+  id: string;
+  /**
+   * 产生顺序。`turn` 来自标识里的轮次开始时间；没有这段时间时，`delivery` 是
+   * 投递入口同步分配的单调序号。两者只在同一种来源之间比较，不混成一条数轴。
+   */
+  order: { source: 'turn' | 'delivery'; value: number };
+}
+const NOTIFIED_ALERTS_PER_KEY = 8;
+const notifiedAlerts = new Map<string, NotifiedAlert[]>();
+/** 没有 turn 时间的告警，在投递入口同步分配的单调序号。只和同样没有 turn 时间的告警比先后。 */
+let nextAlertDeliveryOrder = 0;
 const pendingFeishuReplies = new Set<string>();
 const pendingFeishuFallbacks = new Map<string, number>();
 type ReplyNotificationChannel = 'desktop' | 'mobile' | 'feishu';
@@ -169,12 +186,40 @@ function replyNotificationKey(scope: string | number, sessionId: string, channel
 }
 
 /**
- * 同一告警标识只弹一次。没有标识的调用（旧客户端，或这一轮还没有开始时刻）
- * 不去重，照常通知：宁可多弹一次，也不能把新的提问或失败吞掉。
+ * 告警的产生顺序。renderer 把轮次开始时间写在标识开头（`turn:<毫秒>:...`）；
+ * 拿不到这段时间（旧客户端、或这一轮还没有开始时刻）时，用投递入口同步分配的序号。
+ * 序号在进入异步 preview 之前就定下来，所以比较的是产生顺序，不是读完顺序。
+ */
+function alertOrder(alertEventId: string, deliveryOrder: number): NotifiedAlert['order'] {
+  const turn = /^turn:(\d{1,16})(?::|$)/.exec(alertEventId)?.[1];
+  if (turn !== undefined) {
+    const value = Number(turn);
+    if (Number.isSafeInteger(value) && value > 0) return { source: 'turn', value };
+  }
+  return { source: 'delivery', value: deliveryOrder };
+}
+
+/**
+ * 同一告警标识只弹一次。没有标识的调用不去重，照常通知：宁可多弹一次，
+ * 也不能把新的提问或失败吞掉。
  */
 function wasAlertNotified(key: string, alertEventId: string | undefined): boolean {
   if (!alertEventId) return false;
-  return notifiedAlerts.get(key) === alertEventId;
+  return notifiedAlerts.get(key)?.some(alert => alert.id === alertEventId) === true;
+}
+
+/**
+ * 记下刚弹过的告警。序号不比账本里已有的更晚，说明这是更早的事件晚到了，
+ * 不能用它盖掉已经记下的更新告警。同一种来源按数值比较；来源不同时保留两边，
+ * 因为没有共同的时间轴可以判断谁先产生。每个 key 只留最近若干条，避免一直涨。
+ */
+function rememberAlert(key: string, alertEventId: string, order: NotifiedAlert['order']): void {
+  const current = notifiedAlerts.get(key) ?? [];
+  if (current.some(alert => alert.id === alertEventId)) return;
+  const newer = current.filter(alert => alert.order.source === order.source && alert.order.value > order.value);
+  if (newer.length > 0) return;
+  const next = [...current.filter(alert => !(alert.order.source === order.source && alert.order.value < order.value)), { id: alertEventId, order }];
+  notifiedAlerts.set(key, next.length > NOTIFIED_ALERTS_PER_KEY ? next.slice(-NOTIFIED_ALERTS_PER_KEY) : next);
 }
 
 function wasReplyNotified(key: string, eventId: string | undefined): boolean {
@@ -296,6 +341,9 @@ export function initNotificationService(deps: NotificationServiceDeps): void {
       // 告警标识是可选的去重键,不是通知本身:超长或空串只丢掉它,
       // 需要回复 / 失败仍要弹出来。其它字段仍然不合法就整条拒绝。
       const alertEventId = takeUsableAlertEventId(payload);
+      // 序号必须在任何 await 之前定下来。两条告警会并发去读 preview，后读完的
+      // 不一定是后产生的；拿不到标识里的轮次时间时，就靠这个入口序号分先后。
+      const alertDeliveryOrder = alertEventId === undefined ? undefined : nextAlertDeliveryOrder++;
       assertValidSessionEventPayload(payload);
       const { sessionId, title, kind, channels } = payload;
       const markAttention = payload.markAttention !== false;
@@ -399,6 +447,9 @@ export function initNotificationService(deps: NotificationServiceDeps): void {
         // question or a later failure of the same task. A completion never uses
         // it, and an unusable id was already stripped before validation.
         const usableAlertEventId = kind === 'done' ? undefined : alertEventId;
+        const usableAlertOrder = usableAlertEventId !== undefined && alertDeliveryOrder !== undefined
+          ? alertOrder(usableAlertEventId, alertDeliveryOrder)
+          : undefined;
         const mobileEventId = preview?.eventId ?? signal?.fallbackEventId;
         // A device-link handoff advances only the mobile send generation. It
         // must not make an already accepted desktop/Feishu reply eligible again.
@@ -422,9 +473,10 @@ export function initNotificationService(deps: NotificationServiceDeps): void {
             });
             if (kind === 'done' && accepted) {
               notifiedReplies.set(desktopKey, eventId ? { eventId } : { fallbackSentAt: Date.now() });
-            } else if (accepted && usableAlertEventId) {
+            } else if (accepted && usableAlertEventId && usableAlertOrder) {
               // 只记下有标识的告警。无标识的不留记录，下一次同样无标识的调用仍要通知。
-              notifiedAlerts.set(desktopKey, usableAlertEventId);
+              // 更早产生、更晚读完的告警不能把这里改回旧标识。
+              rememberAlert(desktopKey, usableAlertEventId, usableAlertOrder);
             }
           } catch (err) {
             log.warn('[notification] desktop reply notification failed (non-fatal)', err);
