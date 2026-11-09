@@ -37,6 +37,7 @@ const h = vi.hoisted(() => ({ t: (key: string) => key, confirm: vi.fn(), editor:
   ghosts: [] as InstalledGhost[],
   showPluginChoices: false,
   providerCall: vi.fn(async (..._args: unknown[]): Promise<unknown> => ({ updates: [] })),
+  mentionEntry: null as ComposerSuggestionEntry | null,
 }));
 vi.mock('@/cindy-brain/useInstalledGhosts', () => ({ useInstalledGhosts: () => h.ghosts, readInstalledGhostsSnapshot: () => h.ghosts }));
 vi.mock('react-i18next', async (original) => ({ ...await original<typeof import('react-i18next')>(), useTranslation: () => ({ t: h.t }) }));
@@ -77,7 +78,9 @@ vi.mock('../ExtraDirsButton', () => ({ ExtraDirsButton: () => null }));
 vi.mock('../PermissionSelector', () => ({ PermissionSelector: () => <span data-testid="permission-selector" /> }));
 vi.mock('../NewGoalDialog', () => ({ NewGoalDialog: () => null }));
 vi.mock('../FolderPickerPopover', () => ({ FolderPickerPopover: () => null, addRecentFolder: vi.fn() }));
-vi.mock('../AtMentionPanel', () => ({ AtMentionPanel: ({ entries, onSelect }: { entries: ComposerSuggestionEntry[]; onSelect(entry: ComposerSuggestionEntry): void }) => h.showPluginChoices
+vi.mock('../AtMentionPanel', () => ({ AtMentionPanel: ({ entries, onSelect }: { entries: ComposerSuggestionEntry[]; onSelect(entry: ComposerSuggestionEntry): void }) => h.mentionEntry
+  ? <button data-testid="pick-mention" onClick={() => onSelect(h.mentionEntry!)}>Select mention</button>
+  : h.showPluginChoices
   ? <>{entries.filter(entry => entry.kind === 'action' && entry.action.id.startsWith('plugin-completion:')).map(entry =>
     <button key={entry.kind === 'action' ? entry.action.id : ''} onClick={() => onSelect(entry)}>Reference</button>)}</> : null }));
 vi.mock('../SlashCommandPalette', () => ({ SlashCommandPalette: ({ additionalCommands, onSelect }: { additionalCommands?: UnifiedCommand[]; onSelect(command: UnifiedCommand): void }) => h.showPluginChoices
@@ -155,6 +158,40 @@ it.each([['@', ''], ['/', ''], ['@', 'suffix'], ['/', 'suffix']] as const)('inse
   fireEvent.click(screen.getByRole('button', { name: 'Reference' }));
   expect(h.editor!.getText()).toBe(`<b>plain</b>${suffix}`);
   expect(h.editor!.getHTML()).not.toContain('<b>plain</b>');
+});
+
+it.each([
+  { input: '@|word rest', name: 'README.md', remaining: ' word rest' },
+  { input: '@fo|obar rest', name: 'folder', remaining: ' obar rest' },
+  { input: '@| word rest', name: 'README.md', remaining: '  word rest' },
+  { input: '@fo|obar rest', name: 'foobar', remaining: ' rest' },
+  { input: '@fo|obarbaz rest', name: 'foobar', remaining: ' obarbaz rest' },
+  { input: '@fo|', name: 'folder', remaining: ' ' },
+  { input: '@fo|obar rest', name: 'foobar', remaining: '@foobar/ rest', directory: true },
+  { input: '@|word rest', name: null, remaining: 'word rest' },
+])('preserves unrelated draft text when selecting @ completion in $input ($name)', async ({ input, name, remaining, directory }) => {
+  const run = vi.fn();
+  h.mentionEntry = name === null
+    ? { kind: 'action', action: { id: 'attach-files', label: 'Attach files', run } }
+    : { kind: 'resource', item: { type: directory ? 'dir' : 'file', name, relPath: name } };
+  try {
+    render(<ChatInput {...props} sessionId={undefined} onSend={vi.fn()} />);
+    await waitFor(() => expect(h.editor).not.toBeNull());
+    const caret = input.indexOf('|');
+    await act(async () => {
+      h.editor!.commands.setContent({ type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: input.replace('|', '') }] }] });
+      h.editor!.commands.setTextSelection(caret + 1);
+    });
+    await waitFor(() => expect(screen.getByTestId('pick-mention')).toBeTruthy());
+    await act(async () => { fireEvent.click(screen.getByTestId('pick-mention')); });
+    const nodes = h.editor!.getJSON().content![0].content ?? [];
+    const doc = h.editor!.state.doc;
+    expect(doc.textBetween(0, doc.content.size, '', '')).toBe(remaining);
+    expect(nodes.filter(node => node.type === 'mentionChip')).toHaveLength(name === null || directory ? 0 : 1);
+    expect(run).toHaveBeenCalledTimes(name === null ? 1 : 0);
+  } finally {
+    h.mentionEntry = null;
+  }
 });
 
 // #8232, unit: the real composer Escape listener must not cancel a covered

@@ -5413,58 +5413,31 @@ export function ChatInput({
     [editor, planModeCommandAvailable, planModeEntry, pluginSkillSetup, trigger, pluginSlashChoices, pluginCompletionKey],
   );
 
-  const resolveEffectiveAtRange = useCallback((): { from: number; to: number } | null => {
+  const resolveEffectiveAtRange = useCallback((replacementNames: readonly string[] = [], consumeFollowingWhitespace = true): { from: number; to: number } | null => {
     if (!editor || !effectiveAt) return null;
     const { from } = effectiveAt;
 
     // synthetic query 没有文档内触发符，替换范围由 transaction mapping 单独跟踪。
-    // 不能像 typed `@` 一样向后扫到空白，否则在已有单词中间激活并输入过滤词时
-    // 会把激活前就存在的单词后缀一起删除。
     if (effectiveAt.activation === 'synthetic') {
       const to = syntheticAtRangeEndRef.current;
       return to !== null && to >= from ? { from, to } : null;
     }
 
-    // Extend replace-range to the end of the complete query run (up to
-    // whitespace / chip boundary / end of paragraph). The caret may sit
-    // inside either a typed `@query` or a synthetic `query`; selecting an
-    // entry must not leave the suffix after the caret behind.
-    let $from;
-    try {
-      $from = editor.state.doc.resolve(from);
-    } catch {
-      return null;
-    }
-    const parent = $from.parent;
-    const parentStart = $from.start();
-    const triggerOffset = 1;
-    let runEnd = from + triggerOffset;
-    const offset = from - parentStart + triggerOffset;
-    let stopped = false;
-    parent.forEach((child, childOffset) => {
-      if (stopped || childOffset + child.nodeSize <= offset) return;
-      if (child.type.name === 'mentionChip' || !child.isText) {
-        stopped = true;
-        return;
-      }
-      const localStart = Math.max(0, offset - childOffset);
-      const text = child.text ?? '';
-      for (let i = localStart; i < text.length; i++) {
-        if (/\s/.test(text[i])) {
-          runEnd = parentStart + childOffset + i;
-          stopped = true;
-          return;
-        }
-      }
-      runEnd = parentStart + childOffset + text.length;
-    });
-    return { from, to: runEnd };
+    return {
+      from,
+      to: resolveSlashCommandRunEnd(editor.state.doc, from, effectiveAt.query, replacementNames, { consumeFollowingWhitespace }),
+    };
   }, [editor, effectiveAt]);
 
   const insertAtResource = useCallback(
     (selectedItem: AtResourceItem) => {
       if (!editor || !effectiveAt) return;
-      const range = resolveEffectiveAtRange();
+      const directoryQuery = getAtDirectoryCompletionQuery(selectedItem);
+      const range = resolveEffectiveAtRange(selectedItem.type === 'plugin-command' ? [] : [
+        selectedItem.name,
+        selectedItem.name.replace(/\.md$/, ''),
+        selectedItem.relPath,
+      ], !directoryQuery);
       if (!range) return;
       const { from, to } = range;
       // `file-picker` remains in the shared AtResourceItem protocol for
@@ -5495,7 +5468,6 @@ export function ChatInput({
         closeAtPanel();
         return;
       }
-      const directoryQuery = getAtDirectoryCompletionQuery(selectedItem);
       if (directoryQuery) {
         // 合成「+」形态:查询词在面板搜索框里 —— 钻取改搜索框就行,不往编辑器正文塞
         // 路径文本(那会在选完文件后残留一段没人要的字);也不要把焦点从搜索框抢走,
