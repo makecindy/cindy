@@ -464,19 +464,26 @@ export function resolveSavedProbeSpec(providerId: string, agent: AgentKind): Pro
   // (image/embedding/...)会把探测发给一个本来就不接受聊天请求的端点,得到的失败结论
   // 和"这个供应商配置是坏的"完全无关(2026-07 review,与 issue #882 第 3 点同一类问题)。
   // 列表第一个聊天模型若与上游协议不兼容,也会把整个供应商误报为连不上(issue #9470)。
-  // 用户明确打开的模型优先;镜像未就绪或没有任何显式开启时,仍退回第一个聊天模型。
+  // 用户明确打开的模型优先。镜像只存显式开关:true 是打开,false 是关掉,没拨过则无条目。
+  // 兜底先排除显式隐藏,再按原顺序取第一个可选模型;全部显式隐藏时仍退回第一个可选模型,
+  // 避免测试连接因「没有可见模型」变成空失败。镜像未就绪或读取失败时忽略可见性,走原兜底。
   const candidates = provider.models[agent] ?? [];
   const selectable = (m: (typeof candidates)[number]): boolean =>
     isAgentSelectableModel(m, { userProvider: provider.source === 'user' });
-  let preferred: (typeof candidates)[number] | undefined;
+  let explicitlyShown: (typeof candidates)[number] | undefined;
+  let notHidden: (typeof candidates)[number] | undefined;
   try {
-    preferred = candidates.find(
-      (m) => selectable(m) && getModelVisibilityOverride(agent, providerId, m.id) === true,
-    );
+    for (const candidate of candidates) {
+      if (!selectable(candidate)) continue;
+      const override = getModelVisibilityOverride(agent, providerId, candidate.id);
+      if (override === true && !explicitlyShown) explicitlyShown = candidate;
+      if (override !== false && !notHidden) notHidden = candidate;
+    }
   } catch {
-    preferred = undefined;
+    explicitlyShown = undefined;
+    notHidden = undefined;
   }
-  const model = preferred ?? candidates.find(selectable);
+  const model = explicitlyShown ?? notHidden ?? candidates.find(selectable);
   if (!model) throw new Error(`provider '${providerId}' has no chat models for '${agent}'`);
   // Pi's HTTP-only route helper intentionally excludes SDK transports. A native
   // probe must keep the SDK route instead of treating that exclusion as failure.
