@@ -53,6 +53,11 @@ export interface HostDaemonsServiceDeps {
    * 由 main 接线时传入 `activeOwnerScopeKey`。
    */
   ownerScopeKey?: () => string;
+  /**
+   * 账号边界是否正在进行（拆运行时 / 换库）。期间读到的是旧账号的消息、写的是
+   * 新账号的台账，任何归属结论都不可信，必须整体作废。
+   */
+  isOwnerBoundaryPending?: () => boolean;
 }
 
 function toState(raw: string): HostDaemonState {
@@ -101,9 +106,23 @@ export interface HostDaemonsService {
   remove(id: string): Promise<void>;
 }
 
+/** 边界进行中的哨兵值：永远不会等于任何真实账号的 key。 */
+const SCOPE_BOUNDARY = 'boundary:pending';
+
 export function createHostDaemonsService(deps: HostDaemonsServiceDeps): HostDaemonsService {
   const now = deps.now ?? Date.now;
   const platform = deps.platform ?? process.platform;
+
+  /**
+   * 账号边界快照。null = 未接线（纯逻辑 / 单测不校验账号）。
+   * 归属记录带会话标题，所以任何跨 await 的读、以及任何台账写入，都必须先取得
+   * 这个值，再在之后重新比对；不一致就整体作废，不能只把返回值清空。
+   */
+  function scopeStamp(): string | null {
+    if (!deps.ownerScopeKey) return null;
+    if (deps.isOwnerBoundaryPending?.()) return SCOPE_BOUNDARY;
+    return deps.ownerScopeKey();
+  }
 
   async function traceOwner(
     task: RawScheduledTask,
@@ -112,11 +131,11 @@ export function createHostDaemonsService(deps: HostDaemonsServiceDeps): HostDaem
     const fromMs = task.definitionMtimeMs - ATTRIBUTION_WINDOW_MS;
     const toMs = task.definitionMtimeMs + ATTRIBUTION_WINDOW_MS;
     // 追溯要读消息库（跨 await）：切号期间读到的可能已是另一个账号的库。
-    const scopeBefore = deps.ownerScopeKey?.();
+    const scopeBefore = scopeStamp();
     const rows = await deps.readToolMessages(fromMs, toMs);
     // 切号后作废在途查询：旧账号的结果不能写进新账号的台账。undefined ≠ null ——
     // null 是「查无此人」（可写负缓存），undefined 是「结果不可信」（不得写任何台账）。
-    if (scopeBefore !== undefined && scopeBefore !== deps.ownerScopeKey?.()) return undefined;
+    if (scopeBefore !== scopeStamp()) return undefined;
     const picked = pickOwnerSession(rows, [task.name]);
     return picked ? { sessionId: picked.sessionId, title: picked.title } : null;
   }
@@ -147,7 +166,12 @@ export function createHostDaemonsService(deps: HostDaemonsServiceDeps): HostDaem
     if (!id.startsWith('\\') || isSystemScheduledTaskId(id)) {
       throw new HostDaemonActionError('NOT_FOUND', 'host daemon is not operable');
     }
+    const scopeBefore = scopeStamp();
     const tasks = await deps.scanTasks();
+    // 扫描期间切号：这条授权可能来自上一个账号的台账，不能拿来操作本机任务。
+    if (scopeBefore !== scopeStamp()) {
+      throw new HostDaemonActionError('NOT_OWNED', 'account changed during the rescan');
+    }
     const task = tasks.find((candidate) => candidate.id === id);
     if (!task) throw new HostDaemonActionError('NOT_FOUND', 'scheduled task no longer exists');
     // 只有本功能登记过、且定义没变过的条目才允许操作 —— 绝不变成任意计划任务管理器。
@@ -165,13 +189,17 @@ export function createHostDaemonsService(deps: HostDaemonsServiceDeps): HostDaem
       }
       // 清单里的条目带归属会话标题：账号切换后本次结果作废，不能把旧账号的标题
       // 交给新账号的界面（下次扫描会按新账号重新归属）。
-      const scopeBefore = deps.ownerScopeKey?.();
+      const scopeBefore = scopeStamp();
       const tasks = await deps.scanTasks();
       const entries: HostDaemonEntry[] = [];
       let unrelatedCount = 0;
       let traces = 0;
+      let scopeLost = scopeBefore !== scopeStamp();
 
       for (const task of tasks) {
+        // 每一轮都重新核对：上一轮的 setOwner / setMissMtime 已经改了内存台账，
+        // 一旦切号就不能再写，也不能落盘到新账号的台账文件里。
+        if (scopeLost) break;
         let owner = currentOwner(task);
 
         if (!owner) {
@@ -202,6 +230,11 @@ export function createHostDaemonsService(deps: HostDaemonsServiceDeps): HostDaem
             unrelatedCount += 1;
             continue;
           }
+          // 查询返回后到写台账之间没有 await，这里的核对就是写入前的最后一道闸。
+          if (scopeBefore !== scopeStamp()) {
+            scopeLost = true;
+            break;
+          }
           if (traced) {
             deps.ledger.setOwner(task.id, {
               ...traced,
@@ -224,6 +257,12 @@ export function createHostDaemonsService(deps: HostDaemonsServiceDeps): HostDaem
         entries.push(toEntry(task, owner));
       }
 
+      if (scopeLost || scopeBefore !== scopeStamp()) {
+        // 作废本次扫描：把已经写进内存台账的结论一并丢弃，绝不落盘到当前账号。
+        deps.ledger.discard();
+        return { capturedAtMs, supported: true, entries: [], unrelatedCount };
+      }
+
       try {
         // save() 自身只在有改动时落盘；撤销授权也走这里。
         deps.ledger.save();
@@ -232,9 +271,6 @@ export function createHostDaemonsService(deps: HostDaemonsServiceDeps): HostDaem
       }
 
       entries.sort((left, right) => left.name.localeCompare(right.name));
-      if (scopeBefore !== undefined && scopeBefore !== deps.ownerScopeKey?.()) {
-        return { capturedAtMs, supported: true, entries: [], unrelatedCount };
-      }
       return { capturedAtMs, supported: true, entries, unrelatedCount };
     },
 
@@ -250,7 +286,10 @@ export function createHostDaemonsService(deps: HostDaemonsServiceDeps): HostDaem
 
     async remove(id) {
       await requireOwnedTask(id);
+      const scopeBefore = scopeStamp();
       await deps.deleteTask(id);
+      // 删除期间切号：新账号的台账不是这次授权的来源，不能顺手动它。
+      if (scopeBefore !== scopeStamp()) return;
       // 任务已不在：顺手撤掉授权，避免同名任务重建后继承。
       deps.ledger.clearOwner(id);
       try {

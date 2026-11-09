@@ -1171,6 +1171,7 @@ import {
   getActiveAppSession,
   getActiveDataOwnerPushStamp,
   isAppSessionBoundaryPending,
+  onAppSessionInvalidated,
   ownerScopedUserDataPath,
   setAppSessionCommitBoundaryHook,
 } from './appSessionState.js';
@@ -2525,6 +2526,11 @@ const resourceUsageWindowController = new ResourceUsageWindowController({
   },
 });
 registerResourceUsageWindowIpc({ controller: resourceUsageWindowController });
+// 资源监视器是独立 renderer，账号切换不会重载它：不主动关掉，上一账号的
+// 「本机常驻」清单（含会话标题）会原样留在屏幕上。
+onAppSessionInvalidated(() => {
+  resourceUsageWindowController.destroyWindow();
+});
 const remoteDesktopViewerWindows = new RemoteDesktopViewerWindows((sender) =>
   isResourceUsageOpenSender({
     sender,
@@ -2644,7 +2650,9 @@ registerHostDaemonsIpc({
       runTask: runScheduledTask,
       deleteTask: deleteScheduledTask,
       // 切号即作废在途追溯与本次清单：归属记录带会话标题，不能跨账号。
+      // 边界进行中（拆运行时 / 换库）读写的账号可能不一致，同样整体作废。
       ownerScopeKey: activeOwnerScopeKey,
+      isOwnerBoundaryPending: isAppSessionBoundaryPending,
     });
     return hostDaemonsService;
   },

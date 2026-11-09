@@ -11,7 +11,7 @@
  * - tier：unit。扫描与数据库全部注入，不触碰真实 PowerShell / SQLite。
  */
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import type { ToolMessageRow } from '../attribution.js';
 import { pickOwnerSession } from '../attribution.js';
@@ -19,17 +19,33 @@ import type { HostDaemonLedger, HostDaemonOwnerRecord } from '../ledger.js';
 import { parseScheduledTaskScan, type RawScheduledTask } from '../scheduledTasks.js';
 import { HostDaemonActionError, createHostDaemonsService } from '../service.js';
 
-function memoryLedger(): HostDaemonLedger & { owners: Map<string, HostDaemonOwnerRecord> } {
+type MemoryLedger = HostDaemonLedger & {
+  owners: Map<string, HostDaemonOwnerRecord>;
+  /** 只包含真正落盘过的记录（save 之前不算）。 */
+  saved: Map<string, HostDaemonOwnerRecord>;
+};
+
+/** 双层台账：工作区 + 已落盘快照，discard() 回滚到快照，与真实文件的语义一致。 */
+function memoryLedger(): MemoryLedger {
   const owners = new Map<string, HostDaemonOwnerRecord>();
+  const saved = new Map<string, HostDaemonOwnerRecord>();
   const misses = new Map<string, number>();
   return {
     owners,
+    saved,
     getOwner: (id) => owners.get(id) ?? null,
     setOwner: (id, record) => void owners.set(id, record),
     clearOwner: (id) => void owners.delete(id),
     getMissMtime: (id) => misses.get(id) ?? null,
     setMissMtime: (id, mtimeMs) => void misses.set(id, mtimeMs),
-    save: () => {},
+    discard: () => {
+      owners.clear();
+      for (const [id, record] of saved) owners.set(id, record);
+    },
+    save: () => {
+      saved.clear();
+      for (const [id, record] of owners) saved.set(id, record);
+    },
   };
 }
 
@@ -379,5 +395,96 @@ describe('hostDaemons service', () => {
 
     const snapshot = await service.list();
     expect(snapshot.entries).toEqual([]);
+  });
+
+  // 只把返回的清单清零不够：本次扫描已经写进台账的旧账号标题会在下一次扫描时
+  // 当作「已归属」直接返回给新账号。
+  it('does not persist attribution traced while the account changed', async () => {
+    let scope = 'account-a';
+    const ledger = memoryLedger();
+    const service = createHostDaemonsService({
+      scanTasks: async () => {
+        scope = 'account-b';
+        return [task()];
+      },
+      readToolMessages: async () => [
+        { sessionId: 'session-a', title: '账号A的标题', content: 'schtasks /create /tn airlink-autopm' },
+      ],
+      ledger,
+      stopTask: async () => {},
+      runTask: async () => {},
+      deleteTask: async () => {},
+      platform: 'win32',
+      now: () => 1_800_000_000_000,
+      ownerScopeKey: () => scope,
+    });
+
+    await service.list();
+    expect(ledger.owners.size).toBe(0);
+    expect(ledger.saved.size).toBe(0);
+
+    // 切到新账号再扫一次（这次查不到归属），旧账号的标题绝不能冒出来。
+    scope = 'account-c';
+    const afterSwitch = await service.list();
+    expect(afterSwitch.entries).toEqual([]);
+  });
+
+  // 账号边界进行中（拆运行时/换库）时，读到的消息可能属于旧账号、写的台账可能
+  // 属于新账号：这一段时间里的任何归属结论与台账写入都必须作废。
+  it('treats an in-progress account boundary as a scope change', async () => {
+    let pending = false;
+    const ledger = memoryLedger();
+    const service = createHostDaemonsService({
+      scanTasks: async () => {
+        pending = true;
+        return [task()];
+      },
+      readToolMessages: async () => [
+        { sessionId: 'session-a', title: '账号A的标题', content: 'schtasks /create /tn airlink-autopm' },
+      ],
+      ledger,
+      stopTask: async () => {},
+      runTask: async () => {},
+      deleteTask: async () => {},
+      platform: 'win32',
+      now: () => 1_800_000_000_000,
+      ownerScopeKey: () => 'account-a',
+      isOwnerBoundaryPending: () => pending,
+    });
+
+    const snapshot = await service.list();
+    expect(snapshot.entries).toEqual([]);
+    expect(ledger.owners.size).toBe(0);
+    expect(ledger.getMissMtime('\\airlink-autopm')).toBeNull();
+  });
+
+  it('refuses to act on a task when the account changed after the rescan', async () => {
+    let scope = 'account-a';
+    const ledger = memoryLedger();
+    const stopTask = vi.fn(async () => {});
+    const service = createHostDaemonsService({
+      scanTasks: async () => {
+        scope = 'account-b';
+        return [task()];
+      },
+      readToolMessages: async () => [],
+      ledger,
+      stopTask,
+      runTask: async () => {},
+      deleteTask: async () => {},
+      platform: 'win32',
+      now: () => 1_800_000_000_000,
+      ownerScopeKey: () => scope,
+    });
+    ledger.owners.set('\\airlink-autopm', {
+      sessionId: 'session-a',
+      title: '账号A的标题',
+      atMs: 1_800_000_000_000,
+      definitionMtimeMs: 1_793_028_922_179,
+      command: 'C:\\py\\pythonw.exe C:\\Users\\me\\airlink\\autopm.py',
+    });
+
+    await expect(service.stop('\\airlink-autopm')).rejects.toBeInstanceOf(HostDaemonActionError);
+    expect(stopTask).not.toHaveBeenCalled();
   });
 });
