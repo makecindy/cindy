@@ -61,11 +61,9 @@ function RunningDot() {
   return <RNAnimated.View style={[styles.runningDot, { opacity }]} testID="botGroup.plan.running" />;
 }
 
-/** 16pt leading mark: the step number before 开始, its live status afterwards. */
-function StepLead({ plan, step, index }: { plan: BotGroupPlanView; step: BotGroupPlanStepView; index: number }) {
-  const styles = useThemedStyles(makeStyles);
+/** The state mark stays beside its label, leaving the avatar as the row's only leading item. */
+function StepStatusMark({ plan, step }: { plan: BotGroupPlanView; step: BotGroupPlanStepView }) {
   const { colors } = useTheme();
-  if (!started(plan)) return <Text style={styles.stepNumber}>{index + 1}</Text>;
   // M8: a finished step's check eases in (fast 150ms, from 0.6) when it changes while on screen.
   if (step.status === 'done') return <CompanionFadeIn play={started(plan) && plan.status !== 'done'} distance={0} scaleFrom={0.6} duration={motionDuration.fast}>
     <CircleCheck size={iconSize.md} color={colors.textSecondary} />
@@ -92,13 +90,13 @@ function stepStatusKey(plan: BotGroupPlanView, step: BotGroupPlanStepView) {
   return plan.kind === 'talk' && state === 'running' ? 'groupChat.plan.stepExecuting' : STEP_STATUS_KEYS[state];
 }
 
-function StepRowContent({ plan, step, index, identity, deviceId, online, muted, runningSince, doneAt }: {
-  plan: BotGroupPlanView; step: BotGroupPlanStepView; index: number; identity: BotGroupIdentity;
+function StepRowContent({ plan, step, identity, deviceId, online, muted, runningSince, doneAt }: {
+  plan: BotGroupPlanView; step: BotGroupPlanStepView; identity: BotGroupIdentity;
   deviceId: string; online: boolean; muted: boolean; runningSince: number | null; doneAt?: number;
 }) {
   const { t, i18n } = useTranslation();
   const styles = useThemedStyles(makeStyles);
-  const statusKey = started(plan) ? stepStatusKey(plan, step) : undefined;
+  const statusKey = started(plan) ? stepStatusKey(plan, step) ?? 'groupChat.plan.stepPending' : undefined;
   const running = plan.status === 'running' && botGroupPlanStepState(plan, step) === 'running' && runningSince !== null && Number.isFinite(runningSince) && runningSince > 0;
   const [now, setNow] = useState(Date.now);
   useEffect(() => {
@@ -110,16 +108,18 @@ function StepRowContent({ plan, step, index, identity, deviceId, online, muted, 
   const timing = running ? formatLocalizedSeconds((now - runningSince!) / 1000)
     : step.status === 'done' && doneAt !== undefined && Number.isFinite(doneAt) && doneAt > 0 ? new Date(doneAt).toLocaleTimeString(i18n.language, { hour: '2-digit', minute: '2-digit' }) : null;
   return <>
-    <View style={styles.stepLead}><StepLead plan={plan} step={step} index={index} /></View>
     <View style={muted ? styles.muted : undefined}>
       <BotGroupAvatar deviceId={deviceId} identity={identity} size={BOT_GROUP_STEP_AVATAR_SIZE} online={online} />
     </View>
     <View style={styles.stepBody}>
       <Text style={[styles.stepText, muted && styles.stepTextMuted]}>
         <Text style={[styles.stepName, muted && styles.stepTextMuted]}>{identity.name}</Text>
-        {' '}{step.task}
+        {' · '}{step.task}
       </Text>
-      {statusKey ? <Text style={styles.stepStatus}>{[t(statusKey), timing].filter(Boolean).join(' · ')}</Text> : null}
+      {statusKey ? <View style={styles.workStatus}>
+        <StepStatusMark plan={plan} step={step} />
+        <Text style={styles.stepStatus}>{[t(statusKey), timing].filter(Boolean).join(' · ')}</Text>
+      </View> : null}
     </View>
   </>;
 }
@@ -167,7 +167,9 @@ function BotGroupTalkCard({ plan, identityFor, deviceId, online, pending, onEdit
         const identity = identityFor(step.botId, step.botName);
         const state = botGroupPlanStepState(plan, step);
         return <View key={step.position} style={styles.talkRow} testID="botGroup.plan.step">
-          <BotGroupAvatar deviceId={deviceId} identity={identity} size={BOT_GROUP_INLINE_AVATAR_SIZE} online={online} />
+          <View style={styles.talkAvatar}>
+            <BotGroupAvatar deviceId={deviceId} identity={identity} size={BOT_GROUP_INLINE_AVATAR_SIZE} online={online} />
+          </View>
           <View style={styles.talkMember}>
             <Text style={styles.talkName}>{identity.name}</Text>
             <View style={[styles.talkTail, canSkipBotGroupPlanStep(plan, step) && styles.talkActionTail]}>
@@ -242,11 +244,10 @@ export function BotGroupPlanCard({
     : finalNote ? t(finalNote) : '';
   return <View testID="botGroup.plan" style={[styles.card, muted && styles.cardMuted]}>
     <View style={styles.eyebrow}>
-      <ListChecks size={iconSize.sm} color={colors.textSecondary} />
+      <ListChecks size={iconSize.md} color={colors.textSecondary} />
       <Text style={styles.eyebrowText}>{t('groupChat.plan.eyebrow', { count: steps })}</Text>
       {progress ? <Text style={styles.eyebrowStatus} testID={finalNote ? 'botGroup.plan.finalNote' : `botGroup.plan.${plan.status}`}>{progress}</Text> : null}
     </View>
-    <Text selectable style={styles.planTitle}>{t('groupChat.plan.intro', { count: steps })}</Text>
     <View style={styles.steps}>
       {plan.steps.map((step, index) => {
         const identity = identityFor(step.botId, step.botName);
@@ -254,7 +255,7 @@ export function BotGroupPlanCard({
         const label = stepAccessibility(t, plan, step, index, identity.name);
         if (!editable) {
           return <View key={step.position} accessible accessibilityLabel={label} style={styles.stepRow} testID="botGroup.plan.step">
-            <StepRowContent plan={plan} step={step} index={index} identity={identity} deviceId={deviceId} online={online} muted={muted} runningSince={runningSince} doneAt={doneAt?.get(step.position)} />
+            <StepRowContent plan={plan} step={step} identity={identity} deviceId={deviceId} online={online} muted={muted} runningSince={runningSince} doneAt={doneAt?.get(step.position)} />
           </View>;
         }
         const sections: BotGroupMenuSection[] = [{
@@ -289,7 +290,7 @@ export function BotGroupPlanCard({
             accessibilityState={{ disabled: busy }} onPress={open}
             style={({ pressed }) => [styles.stepRow, pressed && mobileInteractionStyles.pressed, busy && styles.muted]}
             testID="botGroup.plan.step">
-            <StepRowContent plan={plan} step={step} index={index} identity={identity} deviceId={deviceId} online={online} muted={false} runningSince={runningSince} doneAt={doneAt?.get(step.position)} />
+            <StepRowContent plan={plan} step={step} identity={identity} deviceId={deviceId} online={online} muted={false} runningSince={runningSince} doneAt={doneAt?.get(step.position)} />
           </Pressable>}
         </BotGroupMenu>;
       })}
@@ -407,16 +408,17 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   followUpTask: { flexShrink: 1, color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
   followUpActions: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: spacing.xs, marginLeft: 'auto' },
   quietAction: { backgroundColor: 'transparent', borderWidth: 0 },
-  // Approved r3 talk bubble: one surface, 28pt inline pills with 44pt touch targets.
+  // One card surface; compact visual pills retain 44pt native touch targets.
   talkCard: { backgroundColor: colors.surfaceElevated, borderColor: colors.border, borderWidth: 1,
     borderRadius: radius.container, paddingHorizontal: spacing.md + 2, paddingVertical: spacing.sm + 2, width: '100%', maxWidth: 720 },
   talkHeader: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', columnGap: spacing.sm, rowGap: spacing.xs },
-  talkTitle: { flexGrow: 1, flexShrink: 1, color: colors.textPrimary, fontSize: typeScale.bodySmall, lineHeight: lineHeight.bodyRelaxed, fontWeight: fontWeight.semibold },
+  talkTitle: { flexGrow: 1, flexShrink: 1, color: colors.textPrimary, fontSize: typeScale.body, lineHeight: lineHeight.body, fontWeight: fontWeight.semibold },
   talkProgress: { color: colors.textTertiary, fontSize: typeScale.caption, lineHeight: lineHeight.bodyRelaxed, fontVariant: ['tabular-nums'] },
-  talkRow: { flexDirection: 'row', alignItems: 'flex-start', gap: spacing.sm + 2, paddingVertical: spacing.sm - 1 },
-  talkMember: { flex: 1, minWidth: 0, gap: 2 },
-  talkName: { color: colors.textPrimary, fontSize: typeScale.bodySmall, lineHeight: lineHeight.bodySmall, fontWeight: fontWeight.medium },
-  talkTail: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'center', gap: spacing.sm, minHeight: lineHeight.bodySmall },
+  talkRow: { flexDirection: 'row', alignItems: 'flex-start', gap: spacing.sm + 2, minHeight: 44, paddingVertical: spacing.xs },
+  talkAvatar: { paddingTop: spacing.md },
+  talkMember: { flex: 1, minWidth: 0, minHeight: 44, flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', alignContent: 'center', columnGap: spacing.sm, rowGap: spacing.xs },
+  talkName: { flexGrow: 1, flexShrink: 1, minWidth: typeScale.bodySmall * 8, color: colors.textPrimary, fontSize: typeScale.bodySmall, lineHeight: lineHeight.bodySmall, fontWeight: fontWeight.medium },
+  talkTail: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'flex-end', alignItems: 'center', gap: spacing.sm, minHeight: lineHeight.bodySmall, marginLeft: 'auto' },
   // Keep the expanded hitSlop inside the parent's bounds on native platforms.
   talkActionTail: { minHeight: 44 },
   talkStatus: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs },
@@ -431,9 +433,8 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     borderRadius: radius.container, padding: spacing.lg, gap: spacing.xs, overflow: 'hidden' },
   cardMuted: { opacity: 0.6 },
   eyebrow: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs + 2, minHeight: lineHeight.caption },
-  eyebrowText: { flex: 1, minWidth: 0, color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption, fontWeight: fontWeight.medium },
+  eyebrowText: { flex: 1, minWidth: 0, color: colors.textPrimary, fontSize: typeScale.body, lineHeight: lineHeight.body, fontWeight: fontWeight.semibold },
   eyebrowStatus: { flexShrink: 0, color: colors.textTertiary, fontSize: typeScale.caption, lineHeight: lineHeight.caption, fontVariant: ['tabular-nums'] },
-  planTitle: { marginTop: 2, color: colors.textPrimary, fontSize: typeScale.body, lineHeight: lineHeight.body, fontWeight: fontWeight.medium },
   steps: { marginTop: spacing.xs },
   stepRow: { flexDirection: 'row', alignItems: 'flex-start', gap: spacing.sm, minHeight: 44, paddingVertical: spacing.sm },
   runningDot: { width: 8, height: 8, borderRadius: radius.pill, backgroundColor: colors.statusAccent },
@@ -441,9 +442,8 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   whoAvatar: { marginTop: 1 },
   whoText: { flex: 1, minWidth: 0, color: colors.textPrimary, fontSize: typeScale.body, lineHeight: lineHeight.body },
   whoName: { color: colors.textPrimary, fontSize: typeScale.body, lineHeight: lineHeight.body, fontWeight: fontWeight.medium },
-  stepLead: { width: iconSize.md, alignItems: 'center', justifyContent: 'center' },
-  stepNumber: { color: colors.textTertiary, fontSize: typeScale.caption, lineHeight: lineHeight.caption, fontVariant: ['tabular-nums'] },
   stepBody: { flex: 1, minWidth: 0, gap: spacing.xs },
+  workStatus: { flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', gap: spacing.xs },
   stepText: { color: colors.textSecondary, fontSize: typeScale.bodySmall, lineHeight: lineHeight.bodySmall },
   stepName: { color: colors.textPrimary, fontSize: typeScale.bodySmall, lineHeight: lineHeight.bodySmall, fontWeight: fontWeight.medium },
   stepTextMuted: { color: colors.textTertiary, fontWeight: fontWeight.regular },

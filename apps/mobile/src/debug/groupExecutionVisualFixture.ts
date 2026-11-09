@@ -48,7 +48,7 @@ export function groupExecutionVisualFixture(channel: string, args: unknown[]): u
       ...(index === 0 ? { resultMessageId: 'qa-done' } : {}) }));
     const plan = { id: 'qa-plan', kind: talk ? 'talk' : 'work', status: talk ? 'waiting' : 'running', revision: 1,
       organizerBotId: members[0].botId, organizerName: members[0].name, steps, currentStep: talk ? 0 : 1,
-      canManage: true, createdAt: NOW - 90_000, updatedAt: NOW - 20_000 };
+      canManage: true, supportsPendingSkip: talk, createdAt: NOW - 90_000, updatedAt: NOW - 20_000 };
     return { ref: { collectionId: BOT_GROUP_REMOTE_COLLECTION_ID, kind: BOT_GROUP_REMOTE_RESOURCE_KIND, id: groupId }, revision: '1',
       display: { title: talk ? '讨论 · 模拟数据' : '分工 · 模拟数据' }, actions: [], links: [], blocks: [{ id: 'chat', primitive: BOT_GROUP_CHAT_PRIMITIVE, fallbackMarkdown: '', data: {
         id: groupId, name: talk ? '讨论 · 模拟数据' : '分工 · 模拟数据', serverBacked: true, replyMode: 'mentioned', speakingMode: 'auto',
