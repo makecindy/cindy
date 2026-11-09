@@ -9,7 +9,6 @@ import { parseManifest, queueRequest, runtimeEnv, toolBundle } from '../personal
 import { checkCheckout } from '../personal-build/checkout-guard.mjs';
 import { run } from '../personal-build.mjs';
 import { personalLaunchCommand } from '../personal-build/automatic.mjs';
-import { createHash } from 'node:crypto';
 
 // Script integration tier. Legacy update errors could overwrite work or roll old code onto a
 // partially migrated database. Exercise the actual shell engine in disposable Git worktrees;
@@ -22,8 +21,9 @@ const put = (p, s) => { fs.mkdirSync(path.dirname(p), { recursive: true }); fs.w
 test('supervised terminal forwards the same credential certificate as the legacy resolver', { skip: process.platform !== 'darwin' }, t => {
   const root = temp(t), bin = path.join(root, 'bin'), data = path.join(root, 'profile');
   fs.mkdirSync(bin); fs.mkdirSync(data);
-  const cert = 'fixture certificate, not a real credential';
-  const previous = createHash('sha1').update(cert).digest('hex').toUpperCase(), other = 'B'.repeat(40);
+  // Apple names signing identities by the SHA-1 fingerprint of the certificate; this is the fingerprint of
+  // the stubbed fixture bytes below (printf "fixture certificate, not a real credential" | shasum -a 1).
+  const previous = '39D80FB7DBAD88F2C9CAD8CD560F6C31611D8F04', other = 'B'.repeat(40);
   const stub = (name, body) => { put(path.join(bin, name), '#!/bin/sh\n' + body); fs.chmodSync(path.join(bin, name), 0o755); };
   stub('security', `printf '%s\\n' '  1) ${previous} "Apple Development: Fixture"' '  2) ${other} "Apple Development: Other"'`);
   stub('zsh', 'printf "%s\\n" "$TEST_SHELL_IDENTITY"');
