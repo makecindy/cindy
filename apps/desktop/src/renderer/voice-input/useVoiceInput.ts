@@ -59,7 +59,7 @@ import { getVoiceInputWorkletUrl } from './workletUrl';
 import { buildRefinementPreviewText } from './refinementPreviewText';
 import { useSpeakerFilterNotice } from './useSpeakerFilterNotice';
 import { clearVoiceInputDraftInTransaction } from '@/components/new-chat/VoiceInputDraftDecoration';
-import { isVoiceInputEventScopeActive, shouldHandleVoiceInputEvent } from './eventScope';
+import { dispatchVoiceInputEvent } from './eventScope';
 import {
   clampEditorTextRangeToDoc,
   mapEditorTextRange,
@@ -953,12 +953,16 @@ export function useVoiceInput(
   }, [upsertDictionaryLearningWatch]);
 
   useEffect(() => {
+    let subscribed = true;
     const unsubscribe = window.electronAPI.voiceInput.onEvent((event) => {
-      if (!shouldHandleVoiceInputEvent(
-        ownedRunIdRef.current,
-        event.runId,
-        isVoiceInputEventScopeActive(stateRef.current),
-      )) return;
+      dispatchVoiceInputEvent(
+        event,
+        () => subscribed ? ownedRunIdRef.current : null,
+        startReadyRef.current?.promise,
+        handleEvent,
+      );
+    });
+    function handleEvent(event: VoiceInputRendererEvent): void {
       switch (event.type) {
         case 'auth-required':
           promptCodexSessionExpired(event.reason);
@@ -1125,19 +1129,23 @@ export function useVoiceInput(
           }
           break;
       }
-    });
+    }
+    const stopListening = () => {
+      subscribed = false;
+      unsubscribe();
+    };
     return () => {
       if (hasArmedDetachedVoiceDraft(optionsRef.current?.getDraftStorageKey?.())) {
-        const timeoutId = window.setTimeout(unsubscribe, STOP_WAIT_REFINEMENT_FAILSAFE_MS);
+        const timeoutId = window.setTimeout(stopListening, STOP_WAIT_REFINEMENT_FAILSAFE_MS);
         const intervalId = window.setInterval(() => {
           if (hasArmedDetachedVoiceDraft(optionsRef.current?.getDraftStorageKey?.())) return;
           window.clearInterval(intervalId);
           window.clearTimeout(timeoutId);
-          unsubscribe();
+          stopListening();
         }, 100);
         return;
       }
-      unsubscribe();
+      stopListening();
     };
   }, [applyRefinedText, clampEditorTextRange, commitUsageStats, formatVoiceInputError, insertSubmittedText, promptCodexSessionExpired, recordVisibleTextChanged, reportVoiceInputError, resolveStopCompletion, restoreEditorFocusAfterVoiceInput, restoreSystemAudioForRecording, setVoiceState, showSpeakerFiltered, stopEngine, upsertDictionaryLearningWatch]);
 

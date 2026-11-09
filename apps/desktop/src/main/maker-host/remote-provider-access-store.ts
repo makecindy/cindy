@@ -1,3 +1,4 @@
+import { withAvailabilityPolicyMutation } from '../device-link/providerShareAvailabilityPolicy.js';
 /**
  * 远程 Agent 的供应商级授权。
  *
@@ -5,7 +6,7 @@
  * 这份设置只决定同账号另一台电脑能否使用本机该供应商的登录与额度，
  * 不改变本机选择器里的模型可见性，也不把凭证或路由细节写进 device-link。
  */
-import { ownerScopedUserDataPath } from '../appSessionState.js';
+import { ownerScopedPath as ownerScopedUserDataPath } from '../ownerContext.js';
 import { createOverrideSettingsFile } from './override-settings-file.js';
 import { desktopMakerLogger } from './logger-adapter.js';
 
@@ -58,7 +59,8 @@ export function isRemoteProviderInvocationAllowed(providerId: string): boolean {
   return store.read().allowedProviders[providerId] === true;
 }
 
-export function setRemoteProviderInvocationEnabled(providerId: string, enabled: boolean): void {
+export async function setRemoteProviderInvocationEnabled(providerId: string, enabled: boolean): Promise<void> {
+  return withAvailabilityPolicyMutation(providerId, async () => {
   if (!providerId) return;
   store.invalidateIfChanged();
   const allowedProviders = { ...store.read().allowedProviders };
@@ -81,6 +83,7 @@ export function setRemoteProviderInvocationEnabled(providerId: string, enabled: 
     try { listener(providerId); } catch { log.warn('remote provider access listener failed'); }
   }
   log.info('remote provider access updated', { providerId, enabled });
+  });
 }
 
 export const __testing = { normalize };

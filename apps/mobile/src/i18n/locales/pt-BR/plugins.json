@@ -366,5 +366,13 @@
     "merged": "Mesclada",
     "closed": "Fechada",
     "draft": "Rascunho"
+  },
+  "taskArchive": {
+    "now": "Arquivar agora",
+    "pending": "Será arquivada ao sair desta tarefa",
+    "cancel": "Cancelar",
+    "cancelled": "Não será arquivada automaticamente desta vez",
+    "archived": "\"{{title}}\" arquivada",
+    "undo": "Desfazer"
   }
 }

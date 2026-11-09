@@ -51,6 +51,7 @@ export interface ProviderGroupRemoteHandlerDeps {
   rebalanceSuggestion?(sessionId: string): Promise<ProviderGroupRebalanceSuggestion>;
   /** 记下用户确认的换号。 */
   rebalanceDecision?(sessionId: string, memberKey: string, remember: boolean, clientId?: string): Promise<boolean>;
+  rebalancePreference?(sessionId: string, enabled: boolean): Promise<boolean>;
 }
 
 /** 每个账号、每台报告来的电脑最近收下的用量报告序号(乱序到达的旧份丢弃)。按账号的负载对象区分账号。 */
@@ -129,6 +130,9 @@ export async function handleProviderGroupRemote(
   if (request.action === 'session-group') return { group: await deps.sessionGroup(request.sessionId) };
   if (request.action === 'rebalance-suggestion') {
     return deps.rebalanceSuggestion ? await deps.rebalanceSuggestion(request.sessionId) : null;
+  }
+  if (request.action === 'rebalance-preference') {
+    return { ok: await deps.rebalancePreference?.(request.sessionId, request.enabled) ?? false };
   }
   if (request.action === 'rebalance-decision') {
     return {

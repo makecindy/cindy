@@ -53,21 +53,24 @@ afterEach(() => {
 
 describe('settings subscription card', () => {
   it('renders secondary-only weekly quota and uses the task account plan instead of generic subscription', () => {
-    const data = buildSettingsCodexUsageCard(makeSnapshot(), { planType: 'pro' }, t, now);
+    const snapshot = makeSnapshot();
+    snapshot.account.accountId = 'same-account';
+    const data = buildSettingsCodexUsageCard(snapshot, { accountId: 'same-account', planType: 'pro' }, t, now);
     expect(data.planLabel).toBe('Pro');
     expect(data.windows).toHaveLength(1);
     render(<QuotaHoverCard variant="embedded" account={data} />);
     expect(screen.getByTestId('quota-plan-badge').textContent).toBe('Pro');
     expect(screen.getByRole('progressbar').getAttribute('aria-valuenow')).toBe('12');
-    expect(screen.getByText('Remaining 12%')).toBeTruthy();
+    expect(screen.getByText('12%').getAttribute('title')).toBe('Remaining 12%');
     expect(screen.getByTestId('quota-hover-card').className).not.toContain('w-[340px]');
     expect(screen.getByTestId('quota-hover-card').style.boxShadow).toBe('');
   });
   it('keeps valid plan fallback when direct identity reports unknown and shows plan without counters', () => {
     const snapshot = makeSnapshot();
+    snapshot.account.accountId = 'same-account';
     snapshot.account.planType = 'unknown';
     snapshot.rateLimits = {};
-    const data = buildSettingsCodexUsageCard(snapshot, { planType: 'pro' }, t, now);
+    const data = buildSettingsCodexUsageCard(snapshot, { accountId: 'same-account', planType: 'pro' }, t, now);
     expect(data.planLabel).toBe('Pro');
     expect(data.windows).toHaveLength(0);
   });
@@ -111,13 +114,14 @@ describe('settings subscription card', () => {
     expect(result.current?.planLabel).toBe('Pro');
     rerender({ id: 'second-account' });
     expect(result.current?.planLabel).toBe('Plus');
-    expect(mocks.rates).toHaveBeenLastCalledWith(true, 'second-account');
+    expect(mocks.rates).toHaveBeenLastCalledWith(true, 'second-account', {});
     expect(mocks.account).toHaveBeenLastCalledWith(
       undefined,
       'codex',
       'app-server',
       undefined,
       'second-account',
+      {},
     );
   });
 });

@@ -53,6 +53,7 @@ import {
 } from './projectCollapsedAttention';
 import { AutomationTimerIcon } from './AutomationTimerIcon';
 import { SessionCard } from './SessionCard';
+import { sessionRowKey } from './sessionRowKey';
 import type { FolderPickerOption } from '@/components/new-chat/FolderPickerPopover';
 import type { SessionMoveTarget } from './sessionMoveTarget';
 
@@ -921,14 +922,14 @@ export const AutomationSessionGroupItem = withSidebarNavigation<AutomationSessio
 
               return sessionVariant === 'list' ? (
                 <SessionCard
-                  key={session.id}
+                  key={sessionRowKey(session)}
                   {...commonProps}
                   variant="list"
                   isFirst={index === 0}
                   hideBottomDivider={nextHighlighted}
                 />
               ) : (
-                <SessionItem key={session.id} {...commonProps} insideAutomationGroup />
+                <SessionItem key={sessionRowKey(session)} {...commonProps} insideAutomationGroup />
               );
             })}
             {!showAll && childView.isOverflowing && (

@@ -16,6 +16,7 @@ import { createOverrideSettingsFile } from '../../maker-host/override-settings-f
 import { ownerScopedImUserDataPath } from '../ownerScopedStorage.js';
 import {
   BOT_IM_CHANNELS,
+  isBotImGroupChatId,
   type BotImChannel,
   type BotImConnectionRecord,
   type BotImFeishuService,
@@ -118,7 +119,7 @@ function normalizeGroupActivation(raw: unknown): Record<string, 'always'> | unde
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
   const out: Record<string, 'always'> = {};
   for (const [chatId, mode] of Object.entries(raw as Record<string, unknown>)) {
-    if (/^-?\d{1,32}$/.test(chatId) && mode === 'always') out[chatId] = 'always';
+    if (isBotImGroupChatId(chatId) && mode === 'always') out[chatId] = 'always';
   }
   return Object.keys(out).length > 0 ? out : undefined;
 }

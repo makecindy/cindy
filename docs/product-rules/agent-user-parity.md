@@ -78,7 +78,7 @@ Agent 新建普通独立任务（`send_to_session` create 与 `start_session_tas
 | 任务     | 读摘要（状态、最后的要求与回答、模型路线、PR、排队数）     | 有   | 有（2026-10-17） |
 | GitHub | 查询明确 PR 的 CI、评审和变化；明确关联、移除、恢复、固定、排序 | 有（桌面与手机关联管理） | 有：helper `github` 类目，同账号跨电脑；脚本 `github.read` |
 | 机器     | 看账号下的电脑与 SSH 主机及实时资源（`list_machines`，[规则](cindy-machines.md)） | 有（含 SSH 普通任务） | 有（2026-11-02） |
-| 任务     | 给既有任务发消息                                           | 有   | 有（2026-10-14） |
+| 任务     | 给既有任务发消息（隐藏群专线不是群聊收件地址，返回不支持且说明未送达） | 有 | 有（2026-10-14；接收电脑执行同一判定，隐藏目标仍优先遵守可见性检查） |
 | 任务     | 新建任务（继承项目、选择已有项目或不绑项目，执行目录独立）   | 有   | 无               |
 | 任务     | 新建任务时选择 Agent 所在电脑（`send_to_session` create 的 `agent_device_id`，取 `list_available_models` 的 `locations[]`；只换 Agent 用的远程或分享供应商，任务与文件仍在本机） | 有 | 有（2026-11-07；SSH 任务不支持；那台没有所需模型或连不上返回 `PROVIDER_ROUTE_UNAVAILABLE`，不自动换电脑） |
 | 任务     | 归档 / 取消归档                                             | 有   | 有（2026-10-16） |
@@ -111,7 +111,7 @@ Agent 新建普通独立任务（`send_to_session` create 与 `start_session_tas
 | 伙伴     | 按已证实归属搜索跨渠道聊天、按最近活动列出旧任务           | 有   | 有（历史查询，两端需支持筛选参数） |
 | 伙伴     | 查看自己的本机 IM 连接分配与状态                         | 有   | 无               |
 | 伙伴     | 开关自己的记忆与系统技能（待办、例行任务、工作台与跟进；`set_teammate_capability` kind=feature，与能力页同一份设置；读取核心细则与系统技能全文用 `read_teammate_skill`） | 有（2026-11-01） | 无（远程设置界面可管理） |
-| 伙伴     | 给自己添加消息平台连接（Telegram、飞书 / Lark、企业微信、钉钉、Discord；`connect_account` kind=host、id=`im-<渠道>` 发授权卡，主人在可信电脑卡片上逐项填写凭证，与「消息平台」设置页同一添加实现；移除仍在设置页） | 有（2026-11-01） | 无 |
+| 伙伴     | 给自己添加消息平台连接（Telegram、飞书 / Lark、企业微信、钉钉、Discord、iMessage / BlueBubbles；`connect_account` kind=host、id=`im-<渠道>` 发授权卡，主人在可信电脑卡片上逐项填写凭证，与「消息平台」设置页同一添加实现；移除仍在设置页） | 有（2026-11-01） | 无 |
 | 伙伴     | 「一眼」投影（等你 / 在做；用户界面已改为近况，2026-10-21） | 有   | 无               |
 | 伙伴     | 跟进任务：读取与继续（自动跟进所有任务的伙伴）             | 有   | 有（2026-10-17） |
 | 伙伴     | 查看与更换主力电脑                                         | 有   | 有（2026-10-17） |
@@ -252,3 +252,9 @@ Webhook 跨电脑配置（2026-11-06）：`schedule_create` / `schedule_update` 
 伙伴例行任务送达与发现（2026-10-30）：Pi 直接 `routine_save` 与 helper 同时提供 `modelOverride`、`sessionMode`、`delivery`；伙伴 essential tools 提供 `schedule_list_models` 和 `routine_delivery_targets`。价格与能力来自实际连接来源，保留 unknown；本机位置 `local` 保存为 null。桌面、Agent 和另一电脑上的设置共用 `routineTools`，默认结果直接显示在发起伙伴主任务；显式处理才唤醒模型，IM 只使用已连接机器人的已知收件人。执行和送达失败分开记录，静默检查仍静默。
 
 GitHub 查询与关联的独立语义、缓存和游标合同见 [GitHub 状态与关联](github-status-and-associations.md)。
+
+### 普通提问入口（2026-11-08）
+
+Claude Code／Pi 的非阻塞澄清恢复独立的 `ask_user_question_async`；Pi 同步展示为直接工具，
+无需先检索 MCP。Codex 保持原生提问入口。`ask_owner` 只负责用户操作交接
+（fill／scan／connect），不再兼作普通问题卡入口；既有同步提问、卡片和回答生命周期保持不变。

@@ -8,6 +8,7 @@ import {
   type RemoteCollectionListResponse,
   type RemoteResourceManifestResponse,
 } from '@cindy/device-link';
+import { groupSwitchVisualFixture } from './groupSwitchVisualFixture';
 import { UI_MOCK_ID_PREFIX } from '@cindy/maker-shared/ui-mock';
 import { BOT_GROUP_CHAT_PRIMITIVE, BOT_GROUP_REMOTE_COLLECTION_ID, BOT_GROUP_REMOTE_RESOURCE_KIND } from '@cindy/maker-shared/botGroupChat';
 
@@ -178,8 +179,11 @@ export function teammateVisualFixture(channel: string, args: unknown[], now = FI
   if (channel === REMOTE_RESOURCE_MANIFEST_CHANNEL) return {
     protocolVersion: REMOTE_RESOURCE_PROTOCOL_VERSION,
     collections: [{ id: TEAMMATES, resourceKind: 'bot', title: 'Teammates', placement: 'home-scope',
-      actions: [{ id: 'open-create', label: 'New teammate' }] }],
+      actions: [{ id: 'open-create', label: 'New teammate' }] },
+      { id: BOT_GROUP_REMOTE_COLLECTION_ID, resourceKind: BOT_GROUP_REMOTE_RESOURCE_KIND, title: 'Groups', placement: 'home-scope' }],
   } satisfies RemoteResourceManifestResponse;
+  const groupSwitch = groupSwitchVisualFixture(channel, args[0]);
+  if (groupSwitch !== undefined) return groupSwitch;
   const request = args[0] as { collectionId?: string; ref?: { collectionId?: string; id?: string }; resourceRef?: { id?: string }; actionId?: string; query?: string; input?: { enabled?: boolean; operation?: string; op?: string; args?: { id?: string } } } | undefined;
   if (channel === REMOTE_RESOURCE_GET_CHANNEL && request?.ref?.id === 'todos:cindy-default') {
     const query = JSON.parse(request.query ?? '{}');

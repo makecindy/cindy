@@ -16,6 +16,7 @@ import type {
   DictationRefinementContext,
   VoiceInputErrorCode,
   VoiceInputState,
+  VoiceInputRendererEvent,
 } from '@cindy/voice-input-core';
 
 import { Spinner } from '@/components/ui/spinner';
@@ -78,7 +79,7 @@ import {
 } from './readinessRecovery';
 import { buildRefinementPreviewText } from './refinementPreviewText';
 import { useVoiceProcessingIndicator } from './useVoiceProcessingIndicator';
-import { isVoiceInputEventScopeActive, shouldHandleVoiceInputEvent } from './eventScope';
+import { dispatchVoiceInputEvent } from './eventScope';
 import { VoiceInputStatusErrorIcon, VoiceInputStatusNotice } from './VoiceInputStatusNotice';
 import { useVoiceInputOverlayDrag } from './useVoiceInputOverlayDrag';
 import { useSpeakerFilterNotice } from './useSpeakerFilterNotice';
@@ -1344,12 +1345,16 @@ export function VoiceInputOverlay() {
   }, []);
 
   useEffect(() => {
-    return window.electronAPI.voiceInput.onEvent((event) => {
-      if (!shouldHandleVoiceInputEvent(
-        ownedRunIdRef.current,
-        event.runId,
-        isVoiceInputEventScopeActive(stateRef.current),
-      )) return;
+    let subscribed = true;
+    const unsubscribe = window.electronAPI.voiceInput.onEvent((event) => {
+      dispatchVoiceInputEvent(
+        event,
+        () => subscribed ? ownedRunIdRef.current : null,
+        startReadyRef.current?.promise,
+        handleEvent,
+      );
+    });
+    function handleEvent(event: VoiceInputRendererEvent): void {
       switch (event.type) {
         case 'auth-required':
           codexSessionPromptActiveRef.current = requestCodexSessionExpiredPrompt(event.reason);
@@ -1482,7 +1487,11 @@ export function VoiceInputOverlay() {
           }
           break;
       }
-    });
+    }
+    return () => {
+      subscribed = false;
+      unsubscribe();
+    };
   }, [formatVoiceInputError, requestCodexSessionExpiredPrompt, resolveDoneWaiters, setVoiceState, showSpeakerFiltered]);
 
   useEffect(() => {

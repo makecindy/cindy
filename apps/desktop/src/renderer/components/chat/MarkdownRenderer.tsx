@@ -128,7 +128,7 @@ import { ChatVideoView } from './ChatVideoView';
 import { isManagedMarkdownVideoUrl, markdownMediaFilename } from './markdownMedia';
 import { MarkdownDiffBlock } from './MarkdownDiffBlock';
 import { MarkdownMermaidBlock } from './MarkdownMermaidBlock';
-import { TextLightbox } from './TextLightbox';
+import { TextLightbox } from './lazyPreviewLightboxes';
 import { ModelLightbox } from './ModelLightbox';
 import { useFileChipContextMenu } from './useFileChipContextMenu';
 import {
@@ -565,6 +565,7 @@ function CodeBlockPre({ children, ...props }: HTMLAttributes<HTMLPreElement>) {
         <button
           type="button"
           onClick={handleCopy}
+          data-chat-copy-exclude
           aria-label={copied ? t('chat.markdownRenderer.codeCopied') : t('chat.markdownRenderer.copyCode')}
           className={cn(
             CHAT_ICON_BUTTON_CLASS,
@@ -924,6 +925,7 @@ function LightboxImage({
   return (
     <>
       <button
+        data-chat-image-preview
         type="button"
         aria-label={zoomLabel}
         title={t('chat.media.clickToZoom')}
@@ -1080,6 +1082,7 @@ function FileTargetChip({
   return (
     <>
       <code
+        data-chat-copy-content
         ref={chipRef}
         role="button"
         tabIndex={0}
