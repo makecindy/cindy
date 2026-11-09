@@ -1,5 +1,13 @@
 # 跨端协议兼容
 
+## 当前错误的历史行关联（2026-11-09）
+
+`AgentInputProjection` 可选返回 `errorPersistId`，指向当前错误横幅承接的持久化错误行。
+新 Desktop 在重载、重连仅收到状态快照时恢复该 ID，沿用现有精确 ID 去重，不按文案合并
+不同失败。旧 Host 缺字段时保留同一错误已知的事件关联；错误替换或清除时不继承旧 ID。
+旧客户端忽略此可选字段；Mobile 原有终态事件关联保持兼容。沿用既有 invoke／push 与
+授权，官方和自建中转均只透传既有 payload，无需服务端或 relay 升级。
+
 ## 供应商内多订阅账号（2026-11-07，未发布）
 
 同账号远控新增 `maker:subscription-accounts`（查看、添加、重连、取消、移出、策略）及
@@ -3188,6 +3196,25 @@ B 上的 Worker 是一条普通任务，`sessions.orca_remote_lead`(migration 01
 
 ## 供应商组任务进行中换号
 
+2026-11-03 新增独立动作 `rebalance-preference { sessionId, enabled: boolean }` → `{ ok: boolean }`，
+发给**任务所在电脑**，与下面两种动作复用本机 IPC 和同账号 `provider-group:remote` 入口及原有准入。
+`enabled: false` 显式关闭本任务的配额均衡换号（含同账号自动接续），不关闭故障恢复或手动换电脑；
+`true` 删除该 override，恢复原默认/自动偏好。`sessionId` 沿用已有 id 校验，非布尔值回 `[INVALID_PARAMS]`。
+任务尚未归组或服务未装配回 `ok: false`；落盘失败不能回成功。关闭后清理未消费决定，发送前再次核对关闭状态，
+拒绝旧控制端的缓存 `rebalance-decision`。
+保存前读取当前组和任务实际位置核验归属，不能仅凭尚未清理的旧绑定写入。控制端 5 秒等待到期只释放发送，
+继续处理迟到的保存回包；不能把界面超时当作明确失败，连接错误提示保存结果未确认。
+成功保存后经已有 `local-db:sessions:patched` 广播可选布尔字段 `providerGroupRebalanceEnabled`，本机窗口与同账号
+控制端据此按任务电脑 + 任务 id 清理已缓存及在途提议；广播沿用写入前捕获的 owner scope。旧端忽略新字段。
+旧端不认识新动作时明确拒绝，控制端提示保存失败并在原位置发送，
+不得降级成换号确认。旧动作和旧客户端不变。
+
+持久文件新增可选 `disabledRebalance: { [sessionId]: at }`（每类偏好最多 4000 条），旧 `autoRebalance` 保留；
+新端读取旧文件按未关闭处理。降级旧版本无法执行关闭语义，可能恢复旧版配额均衡行为，旧版写入也可能丢弃新字段。
+本次只扩展端到端 invoke 的业务 payload，不改变 envelope、channel、allowlist、relay 握手/路由或重连；
+官方及自建中转均按现有通用通道透传，无需更改服务器。协议与业务回归由 `remoteHandler.test.ts`、
+`ipc.test.ts`、`service.test.ts` 及两端提示测试覆盖。
+
 产品规则见 [`provider-groups.md`](../product-rules/provider-groups.md) §6.2（2026-10-21 用户裁决：上一轮结束、用户发下一条消息
 前弹窗问要不要换号，可为这个任务选「以后自动换」，手机与电脑一致）。
 
@@ -3213,8 +3240,10 @@ B 上的 Worker 是一条普通任务，`sessions.orca_remote_lead`(migration 01
   分配，但不能作为主动换号结果；旧调用端不传该字段，行为不变。
 - **分隔条内容可选 `switchReason: 'quota-rebalance'`**：`agent_switch` 边界行（`AgentSwitchBoundaryContent`）只在供应商组为此换了
   电脑时带上，桌面与手机在位置后写「· 这个账号的配额更该先用」。旧端忽略，照常只显示位置。
-- **本机持久数据**：「以后自动换」存在按账号隔离的 `provider-group-session-prefs.json`（`{ autoRebalance: { [sessionId]: at } }`，
-  最多 4000 条、超出丢最早的；读不出时保留原文件、按都没选过处理）。不同步、不外发；降级旧版忽略这个文件，相当于每次都不提议。
+- **本机持久数据**：自动偏好与显式关闭状态存在按账号隔离的 `provider-group-session-prefs.json`
+  （`{ autoRebalance: { [sessionId]: at }, disabledRebalance?: { [sessionId]: at } }`），每类最多 4000 条、超出丢最早的；
+  读不出时保留原文件、按都没选过处理。文件不同步、不外发；手机与其他控制端通过上述动作读取建议、保存选择。
+  不支持新动作的旧版本会忽略关闭状态，降级风险见本节开头。
 - 实现：`provider-group/service.ts`、`usage.ts`(`providerGroupRebalanceTarget`)、`router.ts`(`rebalanceCandidates`)、`runtime.ts`、
   `ipc.ts`、`remoteHandler.ts`、`remoteRegistration.ts`、`sessionPrefs.ts`、`maker-ipc/sessionAgentSwitchHandler.ts`；客户端
   `renderer/features/provider-group/sessionRebalancePrompt.ts` 与 `apps/mobile/src/session/sessionRebalancePrompt.ts`。回归见
