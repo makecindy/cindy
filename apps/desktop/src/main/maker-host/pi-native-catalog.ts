@@ -480,9 +480,16 @@ export function buildPiNativeProvidersFromConfigs(
           contextWindow: m.contextWindow ?? bundledModel?.contextWindow,
           ...(resolved?.maxOutput !== undefined || bundledModel?.maxTokens !== undefined
             ? { maxTokens: resolved?.maxOutput ?? bundledModel?.maxTokens } : {}),
+          // #9478: a custom OpenAI-compatible model with no capability fact is text-only.
+          // Precedence is the explicit flag, then same-origin bundled metadata, then a
+          // catalog modalities declaration; only a true fact opts into images.
           ...(m.supportsImageInput !== undefined
-            ? { input: (m.supportsImageInput ? ['text', 'image'] : ['text']) as Array<'text' | 'image'> }
-            : bundledModel?.input ? { input: [...bundledModel.input] } : {}),
+            ? { input: (m.supportsImageInput === true ? ['text', 'image'] : ['text']) as Array<'text' | 'image'> }
+            : bundledModel?.input
+              ? { input: [...bundledModel.input] }
+              : resolved?.modalities?.input?.includes('image') === true
+                ? { input: ['text', 'image'] as Array<'text' | 'image'> }
+                : { input: ['text'] as Array<'text' | 'image'> }),
           ...(m.reasoning !== undefined || m.reasoningEfforts !== undefined
             ? {
                 reasoning: m.reasoning ?? (m.reasoningEfforts?.length ?? 0) > 0,

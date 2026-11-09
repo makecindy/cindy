@@ -924,7 +924,8 @@ describe('buildPiNativeProvidersFromConfigs', () => {
       id: 'models-url-only',
       name: 'Models URL Only',
       contextWindow: 64_000,
-      // 无目录元数据的 Chat Completions 模型默认收敛 system role(#3832)。
+      // 无目录元数据：Chat Completions 收敛 system role(#3832)，图片能力按未声明视为纯文本(#9478)。
+      input: ['text'],
       compat: { supportsDeveloperRole: false },
     });
   });
@@ -1051,7 +1052,38 @@ describe('buildPiNativeProvidersFromConfigs', () => {
 
     expect(providers[0]?.models[0]).toMatchObject({ id: 'server-model', name: 'Server Model' });
     expect(providers[0]?.models[0]).not.toHaveProperty('reasoning');
-    expect(providers[0]?.models[0]).not.toHaveProperty('input');
+    // A conflicting bundled catalog no longer lends image input, so the model is
+    // explicitly text-only instead of omitting the field (#9478).
+    expect(providers[0]?.models[0]?.input).toEqual(['text']);
+  });
+
+  // #9478: a custom model whose list returns only a name has no capability fact.
+  // It must be written text-only; an explicit flag and bundled metadata still opt in.
+  it('writes a custom model with no image capability as text-only (#9478)', () => {
+    const { providers } = buildPiNativeProvidersFromConfigs(
+      [
+        {
+          id: 'company-gateway',
+          name: 'Company Gateway',
+          auth: { method: 'apiKey' },
+          runtimes: {
+            pi: piRuntime({
+              baseUrl: 'https://gateway.example/v1',
+              wireProtocol: 'openai-chat',
+              models: [
+                { id: 'glm-5.3', name: 'GLM 5.3' },
+                { id: 'glm-5.3-flash', name: 'GLM 5.3 Flash', supportsImageInput: true },
+              ],
+            }),
+          },
+        },
+      ],
+      () => 'gateway-key',
+    );
+    expect(providers[0]?.models.map((model) => ({ id: model.id, input: model.input }))).toEqual([
+      { id: 'glm-5.3', input: ['text'] },
+      { id: 'glm-5.3-flash', input: ['text', 'image'] },
+    ]);
   });
 
   it('defaults unknown custom Chat Completions models to system role (#3832)', () => {
@@ -2826,7 +2858,7 @@ describe('buildPiNativeProvidersFromConfigs', () => {
         input: ['text', 'image'],
         ...chatDefaultCompat,
       },
-      { id: 'legacy', name: 'Legacy', contextWindow: undefined, ...chatDefaultCompat },
+      { id: 'legacy', name: 'Legacy', contextWindow: undefined, input: ['text'], ...chatDefaultCompat },
     ]);
   });
 
@@ -2969,6 +3001,7 @@ describe('buildPiNativeProvidersFromConfigs', () => {
         id: 'reasoner',
         name: 'Reasoner',
         contextWindow: undefined,
+        input: ['text'],
         reasoning: true,
         thinkingLevelMap: {
           minimal: null,
@@ -2979,7 +3012,7 @@ describe('buildPiNativeProvidersFromConfigs', () => {
           max: null,
         },
       },
-      { id: 'legacy', name: 'Legacy', contextWindow: undefined },
+      { id: 'legacy', name: 'Legacy', contextWindow: undefined, input: ['text'] },
     ]);
   });
 
@@ -3014,8 +3047,8 @@ describe('buildPiNativeProvidersFromConfigs', () => {
       id,
       name,
       contextWindow: id === 'deepseek-v4-pro' ? 1_000_000 : undefined,
-      ...(id === 'deepseek-v4-pro' ? { maxTokens: 384_000, input: ['text'] } : {}),
-      ...(visual ? { input: ['text', 'image'] } : {}),
+      ...(id === 'deepseek-v4-pro' ? { maxTokens: 384_000 } : {}),
+      input: visual ? ['text', 'image'] : ['text'],
       reasoning: true,
       thinkingLevelMap: {
         minimal: null,

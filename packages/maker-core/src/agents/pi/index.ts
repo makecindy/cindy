@@ -2492,7 +2492,9 @@ export class PiAgent extends BaseAgent {
           ...(m.api ? { api: m.api } : {}),
           reasoning: m.reasoning ?? false,
           ...(m.thinkingLevelMap ? { thinkingLevelMap: { ...m.thinkingLevelMap } } : {}),
-          input: m.input ?? ['text', 'image'],
+          // #9478: undeclared native input is text-only. Gateway models keep their own
+          // default (supportsImageInput !== false) above; only this native block changes.
+          input: m.input ?? ['text'],
           contextWindow,
           maxTokens: m.maxTokens && m.maxTokens > 0 ? m.maxTokens : piMaxTokensFallback(contextWindow),
           ...(m.cost ? { cost: structuredClone(m.cost) } : {}),
@@ -6844,7 +6846,7 @@ export class PiAgent extends BaseAgent {
       const supportsImageInput =
         mutablePiProviderId === PI_PROVIDER_ID
           ? gatewayImageInputByModel.get(mutableModel) === true
-          : nativeModel !== undefined && (nativeModel.input ?? ['text', 'image']).includes('image');
+          : nativeModel !== undefined && (nativeModel.input ?? ['text']).includes('image');
       if (supportsImageInput) return;
       throw new PiImageInputUnsupportedError();
     };
