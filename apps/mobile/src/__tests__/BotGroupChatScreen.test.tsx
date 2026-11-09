@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, createElement as el, useContext, useEffect, useImperativeHandle, useRef, useState } from 'react';
+import { act, createContext, createElement as el, useContext, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { buildBotGroupCapabilityNotice, BOT_GROUP_RUNTIME_FAILURE_CODES, type BotGroupRemoteChatData } from '@cindy/maker-shared/botGroupChat';
@@ -9,8 +9,12 @@ import { i18n, SUPPORTED_LOCALES } from '@/i18n';
 import { resolveBotGroupMentions } from '@cindy/maker-shared/botGroupMentions';
 import { ProcessDisclosureViewport } from '@/session/useProcessDisclosureViewport';
 
+const testThemeContext = createContext('light');
+
 const h = vi.hoisted(() => ({
+  window: { width: 390, height: 844, fontScale: 1, scale: 3 },
   processRead: vi.fn(),
+  textRender: vi.fn(),
   translate: null as null | ((key: string, options?: Record<string, unknown>) => string),
   chat: null as any, pngExport: vi.fn(async () => 'encoded'), sharedImage: vi.fn(async () => {}), exported: [] as any[],
   management: null as any,
@@ -50,7 +54,7 @@ const h = vi.hoisted(() => ({
   discarded: [] as any[],
   deleted: [] as string[],
   keyboardAvoidingView: null as any,
-  platform: { OS: 'ios' }, insets: { top: 59, bottom: 34, left: 0, right: 0 },
+  spacer: null as any, platform: { OS: 'ios' }, insets: { top: 59, bottom: 34, left: 0, right: 0 },
   headerBlur: [] as number[], headerFade: [] as (number | undefined)[], screenOptions: [] as any[],
 }));
 
@@ -64,8 +68,11 @@ vi.mock('@/session/ConversationShareWebView', () => ({ cleanupConversationShareP
 vi.mock('expo-sharing', () => ({ shareAsync: h.sharedImage }));
 vi.mock('expo-clipboard', () => ({ setStringAsync: vi.fn(async () => {}) }));
 vi.mock('react-native-uitextview', () => ({
-  UITextView: ({ children, testID, onPress, onTouchStart, style }: any) => el('span', { 'data-testid': testID, onClick: onPress, onTouchStart,
-    'data-style': JSON.stringify(Object.assign({}, ...[style].flat(Infinity).filter(Boolean))) }, children),
+  UITextView: ({ children, testID, onPress, onTouchStart, style }: any) => {
+    h.textRender();
+    return el('span', { 'data-testid': testID, onClick: onPress, onTouchStart,
+      'data-style': JSON.stringify(Object.assign({}, ...[style].flat(Infinity).filter(Boolean))) }, children);
+  },
 }));
 vi.mock('expo-modules-core', () => ({ requireOptionalNativeModule: () => null }));
 vi.mock('expo-file-system', () => ({ Directory: class {}, File: class {}, Paths: { cache: 'file:///test-cache' } }));
@@ -78,7 +85,10 @@ vi.mock('react-native', () => {
         if (node) { node.nativeLayout = onLayout; node.measureInWindow = (callback: any) => callback(0, 62, 402, 812); }
         if (typeof ref === 'function') ref(node); else if (ref) ref.current = node;
       },
-      style: { opacity: [style].flat().filter(Boolean).findLast((item: any) => item.opacity !== undefined)?.opacity,
+      style: { paddingBottom: [style].flat().filter(Boolean).findLast((item: any) => item.paddingBottom !== undefined)?.paddingBottom,
+        paddingLeft: [style].flat().filter(Boolean).findLast((item: any) => item.paddingLeft !== undefined)?.paddingLeft,
+        paddingRight: [style].flat().filter(Boolean).findLast((item: any) => item.paddingRight !== undefined)?.paddingRight,
+        opacity: [style].flat().filter(Boolean).findLast((item: any) => item.opacity !== undefined)?.opacity,
         height: [style].flat().filter(Boolean).findLast((item: any) => item.height !== undefined)?.height,
         display: [style].flat().filter(Boolean).findLast((item: any) => item.display !== undefined)?.display } }, children);
   return {
@@ -100,7 +110,8 @@ vi.mock('react-native', () => {
     StyleSheet: { create: (value: unknown) => value, flatten: (style: unknown) => Object.assign({}, ...[style].flat(Infinity).filter(Boolean)), hairlineWidth: 1 },
     Platform: { get OS() { return h.platform.OS; }, select: (value: any) => value[h.platform.OS] },
     Alert: { alert: h.alert },
-    useWindowDimensions: () => ({ width: 390, height: 844, fontScale: 1, scale: 3 }),
+    useWindowDimensions: () => h.window,
+    Dimensions: { get: () => h.window, addEventListener: () => ({ remove() {} }) },
     AppState: { get currentState() { return h.appState; }, addEventListener: (_event: string, listener: (state: string) => void) => {
       h.appStateListeners.add(listener); return { remove: () => h.appStateListeners.delete(listener) };
     } },
@@ -111,7 +122,9 @@ vi.mock('react-native', () => {
     Easing: { inOut: () => undefined, ease: undefined, bezier: () => undefined },
   };
 });
-vi.mock('expo-router', () => ({
+vi.mock('expo-router', () => {
+  const router = { back: h.back, replace: h.replace, push: h.push };
+  return {
   useIsFocused: () => h.focused,
   Stack: {
     Screen: ({ options }: any) => { h.screenOptions.push(options); return typeof options.headerTitle === 'function' ? options.headerTitle() : null; },
@@ -122,25 +135,25 @@ vi.mock('expo-router', () => ({
       }, children),
     }),
   },
-  useRouter: () => ({ back: h.back, replace: h.replace, push: h.push }),
+  useRouter: () => router,
   useNavigation: () => ({ getState: () => h.navigation }),
   useFocusEffect: (effect: () => void) => useEffect(() => h.focused ? effect() : undefined, [effect, h.focused]),
-}));
+}; });
 vi.mock('expo-router/react-navigation', () => ({ useHeaderHeight: () => 72 }));
-vi.mock('react-native-safe-area-context', () => ({ SafeAreaView: ({ children }: any) => el('main', null, children), useSafeAreaInsets: () => h.insets }));
+vi.mock('react-native-safe-area-context', () => ({ SafeAreaInsetsContext: createContext(h.insets),
+  SafeAreaView: ({ children, testID }: any) => el('main', { 'data-testid': testID }, children), useSafeAreaInsets: () => h.insets }));
 vi.mock('@/session/SessionHeaderNativeControls', () => ({ SessionHeaderNativeBlur: ({ height, fadeInside }: any) => {
   h.headerBlur.push(height); h.headerFade.push(fadeInside);
   return el('div', { 'data-testid': 'headerBlur', 'data-height': height });
 } }));
-vi.mock('react-i18next', async (importOriginal) => ({
-  ...await importOriginal<typeof import('react-i18next')>(),
-  useTranslation: () => ({
-    t: (key: string, options?: Record<string, unknown>) => h.translate ? h.translate(key, options) : options
+vi.mock('react-i18next', async (importOriginal) => {
+  const t = (key: string, options?: Record<string, unknown>) => h.translate ? h.translate(key, options) : options
       ? `${key}(${Object.entries(options).map(([name, value]) => `${name}=${String(value)}`).join(',')})`
-      : key,
-    i18n: { language: 'zh-CN' },
-  }),
-}));
+      : key;
+  return { ...await importOriginal<typeof import('react-i18next')>(),
+    useTranslation: () => ({ t, i18n: { language: 'zh-CN' } }),
+  };
+});
 vi.mock('expo-crypto', () => ({ randomUUID: () => `uuid-${++h.uuid}` }));
 vi.mock('lucide-react-native', () => Object.fromEntries(
   ['Copy', 'Share', 'ArrowUpRight', 'CornerDownRight', 'Circle', 'Bell', 'ChevronLeft', 'Settings2', 'Plus', 'Square', 'Users', 'X', 'Check', 'CircleAlert', 'CircleCheck', 'CircleDashed', 'FileText', 'Sparkles', 'Folder', 'Camera', 'Image',
@@ -149,15 +162,16 @@ vi.mock('lucide-react-native', () => Object.fromEntries(
 ));
 vi.mock('@/theme', async () => {
   const tokens = await import('@/theme/tokens');
-  const colors = () => tokens.palettes[h.themeMode as keyof typeof tokens.palettes];
-  return { ...tokens, useThemedStyles: (makeStyles: any) => makeStyles(colors()),
-    useTheme: () => ({ mode: h.themeMode, colors: colors() }), monoFont: 'mono' };
+  const useColors = () => tokens.palettes[useContext(testThemeContext) as keyof typeof tokens.palettes];
+  return { ...tokens, useThemedStyles: (makeStyles: any) => makeStyles(useColors()),
+    useTheme: () => ({ mode: useContext(testThemeContext), colors: useColors() }), monoFont: 'mono' };
 });
 vi.mock('@/device-link/DeviceLinkContext', () => ({ useDeviceLink: () => ({ invoke: h.processRead, getPresenceAvailability: () => true }) }));
 vi.mock('@/auth/AuthContext', () => ({ useAuth: () => ({
   user: { id: 'owner' }, accountGeneration: 1, getAccessToken: async () => 'token', apiFetch: async () => ({}),
 }) }));
 vi.mock('@/utils/backGuard', () => ({ goBackGuarded: h.leave }));
+vi.mock('@/utils/useTaskListBack', () => ({ useTaskListBack: () => h.leave }));
 vi.mock('@/platform/chrome/AnchoredPullDownMenu', () => ({ AnchoredPullDownMenu: ({ children }: any) => children }));
 vi.mock('@/device-link/remoteResourceCache', () => ({ markRemoteResourceRead: h.markRead }));
 vi.mock('@/device-link/remoteResourceAvailability', () => ({ readRemoteCollectionCache: () => [] }));
@@ -210,11 +224,13 @@ vi.mock('@/session/BotGroupMentionPopover', () => ({
     'data-testid': 'mentionPopover', 'data-position': JSON.stringify(position),
   }, el('div', { 'data-testid': 'botGroup.mention.identity' }, name, displayName, caption), el('button', { 'data-testid': 'botGroup.mention.identity.close', onClick: onClose }, 'Close')),
 }));
-vi.mock('@/session/BotGroupAvatars', () => ({
+vi.mock('@/session/BotGroupAvatars', () => {
+  const identity = (botId: string, fallbackName = '', member?: { name: string }) => ({ botId, name: fallbackName || member?.name || botId });
+  return {
   BOT_GROUP_MESSAGE_AVATAR_SIZE: 28, BOT_GROUP_STEP_AVATAR_SIZE: 24, BOT_GROUP_INLINE_AVATAR_SIZE: 20, BOT_GROUP_ROW_AVATAR_SIZE: 32, BOT_GROUP_MENTION_AVATAR_SIZE: 48,
   BotGroupAvatar: () => null, BotGroupDuoAvatar: () => null,
-  useBotGroupIdentities: () => (botId: string, fallbackName = '', member?: { name: string }) => ({ botId, name: fallbackName || member?.name || botId }),
-}));
+  useBotGroupIdentities: () => identity,
+}; });
 vi.mock('@/session/TeammateProcess', () => ({ useTeammateElapsedTitle: () => 'Working', TeammateWorkSegment: ({ title, children }: any) => el('div', null, title, children), TeammateProcessLink: ({ title, onPress }: any) => el('button', { onClick: onPress }, title), TeammateProcess: ({ title, children }: any) => el('section', null, title, children) }));
 vi.mock('@/session/BotGroupSpeakerRow', () => ({
   BotGroupSpeakerRow: ({ identity, activity, sessionId, onStop, stopPending }: any) => {
@@ -244,7 +260,7 @@ vi.mock('@/platform/gestureHandler', () => {
     GestureDetector: ({ children }: any) => children };
 });
 vi.mock('@/session/useMobileKeyboardState', () => ({ useMobileKeyboardState: () => ({ visible: false, height: 0, transition: { current: null } }) }));
-vi.mock('@/session/ComposerDockKeyboardFollow', () => ({ DockKeyboardBottomSpacer: () => null }));
+vi.mock('@/session/ComposerDockKeyboardFollow', () => ({ DockKeyboardBottomSpacer: (props: any) => { h.spacer = props; return null; } }));
 vi.mock('@/session/composerPullThrough', async () => {
   const { useMemo } = await import('react');
   const { ScrollView } = await import('react-native');
@@ -314,7 +330,15 @@ vi.mock('@/session/ImageLightbox', () => ({
     return el('div', { 'data-testid': 'lightbox', 'data-url': url, 'data-count': String(images.length) });
   },
 }));
-vi.mock('@/session/MessageRenderer', () => ({
+vi.mock('@/session/MessageRenderer', async () => {
+  const { useSessionQuickSend } = await import('@/session/SessionQuickSendContext');
+  const { richAnswerText } = await import('@cindy/maker-shared/rich-answer');
+  const { createContext } = await import('react');
+  return { MessageHeavyContentVisibilityContext: createContext(true),
+  MarkdownBody: ({ text }: any) => {
+    const send = useSessionQuickSend();
+    return el('button', { 'data-testid': 'rich-group-send', disabled: !send, onClick: () => send?.('Visible rich reply') }, richAnswerText(text));
+  },
   MessagePayloadModal: ({ payload, onClose }: any) => payload
     ? el('div', { 'data-testid': 'diagramModal', 'data-source': payload.body },
       el('button', { 'data-testid': 'diagramModal.close', onClick: onClose }, '关闭'))
@@ -328,8 +352,12 @@ vi.mock('@/session/MessageRenderer', () => ({
         ? { kind: 'media', media: { kind: 'image', url: item.uri, previewable: false } }
         : { kind: 'file', title: item.name, body: '' }),
     }, item.name))),
-}));
-vi.mock('@/session/useBotGroupRemoteMedia', () => ({ useBotGroupRemoteMedia: () => async (media: any) => ({ url: media.url, previewable: true, mimeType: 'image/png' }) }));
+};
+});
+vi.mock('@/session/useBotGroupRemoteMedia', () => {
+  const resolve = async (media: any) => ({ url: media.url, previewable: true, mimeType: 'image/png' });
+  return { useBotGroupRemoteMedia: () => resolve };
+});
 vi.mock('@/session/useHostTeammates', () => ({ useHostTeammates: (_host: unknown, _enabled: boolean, query = '') => { h.teammateQuery = query; return h.teammates; } }));
 vi.mock('@/session/useBotGroupChat', () => ({ useBotGroupChat: (...args: unknown[]) => { h.hookCalls(...args); return h.chat; } }));
 vi.mock('@/session/useBotGroupSettingsManagement', () => ({ useBotGroupSettingsManagement: () => h.management ?? ({
@@ -353,7 +381,7 @@ import { BotGroupChatScreen } from '@/session/BotGroupChatScreen';
 import { BotGroupComposer } from '@/session/BotGroupComposer';
 import { parseBotGroupChatData } from '@/session/botGroupRemote';
 import { GeometryContext } from '@/platform/AdaptiveWindowContext';
-import { navigationChrome } from '@/theme/tokens';
+import { CHAT_HEADER_MIN_HEIGHT } from '@/session/ChatIdentityHeader';
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 
@@ -417,7 +445,8 @@ async function render(data: BotGroupRemoteChatData | null = group(), kind: 'read
     ...h.chat,
     state: kind === 'ready' ? { kind, group: data } : kind === 'error' ? { kind, message: 'x' } : { kind },
   };
-  await act(async () => root.render(el(BotGroupChatScreen, { deviceId, deviceName: deviceId ? 'Mac' : '', groupId: 'g1', threadRootId })));
+  await act(async () => root.render(el(testThemeContext.Provider, { value: h.themeMode },
+    el(BotGroupChatScreen, { deviceId, deviceName: deviceId ? 'Mac' : '', groupId: 'g1', threadRootId }))));
 }
 
 beforeEach(() => {
@@ -840,6 +869,30 @@ describe('group timeline', () => {
     expect(h.scrollToEnd).toHaveBeenCalledWith({ animated: false });
   });
 
+  // Unit regression: a ready group first used no bottom clearance, then lost 34pt
+  // after the native SafeAreaView attached. Header clearance likewise arrived late.
+  // Existing header tests skipped the first layout. The window snapshot is already
+  // authoritative even while an older safe-area broadcast describes another posture.
+  it('reserves the group viewport from the window snapshot before native layout callbacks', async () => {
+    h.insets = { top: 59, bottom: 0, left: 0, right: 0 };
+    const geometry = { width: 951, height: 669, insets: { top: 0, right: 84, bottom: 34, left: 0 },
+      regularWidth: true, regularHeight: true, barEdge: 'right' as const, regions: [], reservedRegionsSupported: false };
+    h.chat = { ...h.chat, state: { kind: 'ready', group: group() } };
+    const screen = () => act(async () => root.render(el(GeometryContext.Provider, { value: geometry },
+      el(BotGroupChatScreen, { deviceId: 'mac', deviceName: 'Mac', groupId: 'g1' }))));
+    await screen();
+    // iOS keeps the bottom inset in the composer dock's spacer, not in the screen padding.
+    expect(byId('botGroup.screen')?.style.paddingBottom).toBe('0px');
+    expect(h.spacer.restingBottom).toBe(34);
+    expect(byId('botGroup.screen')?.style.paddingRight).toBe('0px');
+    expect(h.scroll.scrollIndicatorInsets.top).toBeGreaterThan(0);
+    const clearance = h.scroll.scrollIndicatorInsets.top;
+    h.insets = { ...geometry.insets };
+    await screen();
+    expect(h.spacer.restingBottom).toBe(34);
+    expect(h.scroll.scrollIndicatorInsets.top).toBe(clearance);
+  });
+
   // #8303: beside the persistent task list the system bar would span both panes,
   // so the wide iOS window uses the in-pane header; narrowing restores the native bar.
   it('uses the in-pane iOS header beside the persistent sidebar and the native bar when narrow', async () => {
@@ -849,15 +902,17 @@ describe('group timeline', () => {
     const screen = (width: number) => act(async () => root.render(el(GeometryContext.Provider, { value: window(width) },
       el(BotGroupChatScreen, { deviceId: 'mac', deviceName: 'Mac', groupId: 'g1' }))));
     await screen(1000);
-    expect(h.headerBlur.at(-1)).toBe(59 + navigationChrome.target);
+    expect(h.headerBlur.at(-1)).toBe(59 + CHAT_HEADER_MIN_HEIGHT);
+    let header = byId('botGroup.header') as HTMLElement & { nativeLayout?: (event: unknown) => void };
+    while (!header.nativeLayout) header = header.parentElement as typeof header;
+    await act(async () => header.nativeLayout!({ nativeEvent: { layout: { height: 59 + CHAT_HEADER_MIN_HEIGHT } } }));
     await screen(430);
     expect(h.headerBlur.at(-1)).toBe(72);
   });
 
-  // #8303, component/unit: the real screen must not cover messages with a 44pt blur
-  // when Duo puts navigation at either side. The old test checked buttons only;
-  // a vertical bar with zero top inset is the minimal failing geometry.
-  it.each(['left', 'right'] as const)('keeps Duo %s navigation without duplicate controls or a top blur', async barEdge => {
+  // #8303, component/unit: Duo's side rail adds no horizontal navigation bar.
+  // Reserve only the in-page identity header, including before its first measurement.
+  it.each(['left', 'right'] as const)('keeps Duo %s controls native and limits clearance to the identity header', async barEdge => {
     h.insets = { top: 0, right: barEdge === 'right' ? 59 : 0, bottom: 0, left: barEdge === 'left' ? 59 : 0 };
     const geometry = { width: 1000, height: 800, insets: h.insets,
       regularWidth: true, regularHeight: true, barEdge, regions: [], reservedRegionsSupported: false };
@@ -868,14 +923,15 @@ describe('group timeline', () => {
     expect(node.querySelectorAll('button[aria-label="groupChat.settings.open"]')).toHaveLength(1);
     expect(byId('botGroup.back')).toBeNull();
     expect(byId('botGroup.settingsButton')).toBeNull();
-    expect(h.screenOptions.at(-1)?.headerTitle).toBe(group().name);
-    expect(byId('headerBlur')).toBeNull();
-    expect(h.scroll.scrollIndicatorInsets.top).toBe(0);
+    expect(h.screenOptions.some(options => options.headerTitle === group().name)).toBe(false);
+    expect(node.textContent).toContain(group().name);
+    expect(Number(byId('headerBlur')!.dataset.height)).toBe(CHAT_HEADER_MIN_HEIGHT);
+    expect(h.scroll.scrollIndicatorInsets.top).toBe(CHAT_HEADER_MIN_HEIGHT);
   });
 
   // Vertical navigation can still have in-page chrome. Its measured height must
-  // match both blur and content clearance, then return to zero when dismissed.
-  it.each(['offline notice', 'image selection'] as const)('sizes Duo blur to the %s and removes it afterwards', async content => {
+  // match both blur and content clearance, then restore the identity when dismissed.
+  it.each(['offline notice', 'image selection'] as const)('sizes Duo blur to the %s and restores the identity afterwards', async content => {
     vi.useFakeTimers();
     h.insets = { top: 0, right: 59, bottom: 0, left: 0 };
     const geometry = { width: 1000, height: 800, insets: h.insets,
@@ -889,15 +945,15 @@ describe('group timeline', () => {
     let header = byId(content === 'offline notice' ? 'botGroup.offlineNote' : 'session.shareImage.selectAll') as HTMLElement & { nativeLayout?: (event: unknown) => void };
     expect(header).not.toBeNull();
     while (!header.nativeLayout) header = header.parentElement as typeof header;
-    const height = content === 'offline notice' ? 24 : 44;
+    const height = content === 'offline notice' ? CHAT_HEADER_MIN_HEIGHT + 24 : 44;
     await act(async () => header.nativeLayout!({ nativeEvent: { layout: { height } } }));
     expect(Number(byId('headerBlur')!.dataset.height)).toBe(height);
     expect(h.scroll.scrollIndicatorInsets.top).toBe(height);
     if (content === 'offline notice') { h.chat.online = true; await screen(); }
     else await act(async () => shareSelectionStore.exit());
-    await act(async () => header.nativeLayout!({ nativeEvent: { layout: { height: 0 } } }));
-    expect(byId('headerBlur')).toBeNull();
-    expect(h.scroll.scrollIndicatorInsets.top).toBe(0);
+    await act(async () => header.nativeLayout!({ nativeEvent: { layout: { height: CHAT_HEADER_MIN_HEIGHT } } }));
+    expect(Number(byId('headerBlur')!.dataset.height)).toBe(CHAT_HEADER_MIN_HEIGHT);
+    expect(h.scroll.scrollIndicatorInsets.top).toBe(CHAT_HEADER_MIN_HEIGHT);
   });
 
   it('waits for measured tail positioning before acknowledging replies, including new snapshots', async () => {
@@ -1180,9 +1236,8 @@ describe('group timeline', () => {
     expect(h.chat.act).toHaveBeenLastCalledWith('plan-start', { planId: 'p1' });
     await click('botGroup.plan.dismiss');
     expect(h.chat.act).toHaveBeenLastCalledWith('plan-dismiss', { planId: 'p1' });
-    data.plans[0]!.status = 'superseded';
-    data.openPlan = null;
-    await render(data);
+    await render({ ...data, openPlan: null,
+      plans: data.plans.map((plan, index) => index === 0 ? { ...plan, status: 'superseded' } : plan) });
     expect(byId('botGroup.plan.finalNote')?.textContent).toBe('groupChat.plan.superseded');
     expect(byId('botGroup.plan.start')).toBeNull();
   });
@@ -1255,9 +1310,9 @@ describe('group timeline', () => {
     expect(byId('botGroup.plan.finalNote')?.textContent).toBe('groupChat.plan.superseded');
     // #5759 runtime: stopping a queued execution can leave its step running.
     // The real card must not continue to claim active work after the plan stops.
-    data.plans[0] = { ...data.plans[0]!, status: 'stopped', currentStep: 1,
-      steps: [{ ...data.plans[0]!.steps[0]!, status: 'done' }, { ...data.plans[0]!.steps[1]!, status: 'running' }] };
-    await render(data);
+    // Remote projections replace arrays; keep the fixture immutable like the real producer.
+    await render({ ...data, plans: [{ ...data.plans[0]!, status: 'stopped', currentStep: 1,
+      steps: [{ ...data.plans[0]!.steps[0]!, status: 'done' }, { ...data.plans[0]!.steps[1]!, status: 'running' }] }, ...data.plans.slice(1)] });
     expect(byId('botGroup.plan.finalNote')?.textContent).toBe('groupChat.plan.stopped');
     expect(byId('botGroup.plan.running')).toBeNull();
     expect(byId('botGroup.message.plan')?.textContent).not.toContain('groupChat.plan.stepRunning');
@@ -1285,8 +1340,7 @@ describe('group timeline', () => {
     expect(card.querySelectorAll('[data-testid="botGroup.plan.step"]')).toHaveLength(6);
     await click('botGroup.plan.skipTurn');
     expect(h.chat.act).toHaveBeenLastCalledWith('plan-edit', { planId: 'p1', position: 1, action: 'skip', executionId: 'queued-turn' });
-    data.plans[0] = { ...plan, steps: plan.steps.map(step => step.position === 1 ? { ...step, executionStatus: 'running' } : step) };
-    await render(data);
+    await render({ ...data, plans: [{ ...plan, steps: plan.steps.map(step => step.position === 1 ? { ...step, executionStatus: 'running' } : step) }, ...data.plans.slice(1)] });
     expect(card.querySelectorAll('[data-testid="botGroup.plan.step"]')[1]?.querySelector('[data-testid="botGroup.plan.skipTurn"]')).toBeNull();
     await click('botGroup.plan.skipTurn');
     expect(h.chat.act).toHaveBeenLastCalledWith('plan-edit', { planId: 'p1', position: 2, action: 'skip', executionId: undefined });
@@ -3059,3 +3113,60 @@ vi.mock('@/session/ModelDocumentPreview', () => ({ ModelDocumentPreview: () => n
 vi.mock('@/session/BotGroupTextAttachmentPreview', () => ({ BotGroupTextAttachmentPreview: () => null, botGroupTextAttachmentPreviewKind: () => null }));
 vi.mock('@/session/NativeVideoPlayer', () => ({ NativeVideoPlayer: () => null }));
 vi.mock('@/session/mediaPlayerWebView', () => ({ RemoteMediaPlayerWebView: () => null }));
+
+// Unit: verify the group screen supplies its own sender in both main and thread surfaces.
+// Rich controls themselves are exercised in BotGroupMarkdownText.test.tsx.
+it.each([undefined, 'thread-root'])('sends a rich answer independently of the composer in %s', async threadRootId => {
+  h.chat.server = true;
+  const content = '```cindy-ui\n' + JSON.stringify({ seq: 1, version: 1, op: 'create', id: 'submit', kind: 'button', props: { label: 'Reply', send: 'Visible rich reply' } }) + '\n```';
+  const data = group({ openPlan: null, plans: [], messages: [message('rich-screen', 1, { authorBotId: 'mimi', content, threadRootId })] });
+  await render(data, 'ready', threadRootId, '');
+  await act(async () => h.row.onChangeText('Keep composer draft'));
+  expect(h.chat.act).not.toHaveBeenCalled();
+  await click('rich-group-send');
+  expect(h.chat.act).toHaveBeenCalledWith('send', { text: 'Visible rich reply', clientId: 'uuid-1', mentions: { all: false, botIds: [] } });
+  expect(h.row.value).toBe('Keep composer draft');
+  await render({ ...data, archived: true }, 'ready', threadRootId, '');
+  expect(byId('rich-group-send')!.disabled).toBe(true);
+});
+
+it('keeps a shared rich thread answer readable without inheriting the main group sender', async () => {
+  h.chat.server = true;
+  const content = '```cindy-ui\n' + JSON.stringify({ seq: 1, version: 1, op: 'create', id: 'submit', kind: 'button', props: { label: 'Reply', send: 'Visible rich reply' } }) + '\n```';
+  await render(group({ openPlan: null, plans: [], messages: [message('rich-share', 1, { authorKind: 'user', isSelf: false, threadShare: {
+    messageId: 'rich-original', threadRootId: 'thread-root', status: 'available', authorKind: 'bot', authorBotId: 'mimi',
+    authorName: 'Mimi', sharedByAuthor: false, content, attachments: [], createdAt: 1000, edited: false,
+  } })] }), 'ready', undefined, '');
+  expect(byId('rich-group-send')!.disabled).toBe(true);
+  expect(h.chat.act).not.toHaveBeenCalled();
+});
+
+// Behavior/performance: UI-only rerenders must not regroup the whole history; new data must.
+it('reuses history time grouping across unrelated UI renders and invalidates for messages', async () => {
+  const timeline = await import('@cindy/maker-shared/botTimeline');
+  const grouping = vi.spyOn(timeline, 'collectBotMessageTimeGroups');
+  const data = group();
+  await render(data);
+  const before = grouping.mock.calls.length;
+  for (let i = 0; i < 10; i++) await render(data);
+  expect(grouping.mock.calls.length - before).toBe(0);
+  await render({ ...data, messages: [...data.messages, message('fresh', 99, { content: 'Fresh reply' })] });
+  expect(grouping.mock.calls.length).toBeGreaterThan(before);
+  expect(node.textContent).toContain('Fresh reply');
+  grouping.mockRestore();
+});
+
+// Regression: first native layout/scroll notifications must not redraw unchanged
+// message text. Exercise the production screen, then verify new content still renders.
+it('keeps message text mounted through initial viewport updates', async () => {
+  const data = group({ messages: [message('first', 1, { content: 'Existing reply' })] });
+  await render(data);
+  const before = h.textRender.mock.calls.length;
+  expect(before).toBeGreaterThan(0);
+  await act(async () => h.scrolls['botGroup.timeline'].onLayout({ nativeEvent: { layout: { height: 700 } } }));
+  await act(async () => h.scrolls['botGroup.timeline'].onContentSizeChange(390, 1500));
+  expect(h.textRender.mock.calls.length).toBe(before);
+  await render({ ...data, messages: [...data.messages, message('next', 2, { content: 'New reply' })] });
+  expect(node.textContent).toContain('New reply');
+  expect(h.textRender.mock.calls.length).toBeGreaterThan(before);
+});

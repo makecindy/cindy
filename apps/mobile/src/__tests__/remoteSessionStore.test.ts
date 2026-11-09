@@ -92,6 +92,27 @@ it('finishing an older archive preview keeps a newer preview hidden and cannot r
 // Unit: side-chat details are omitted by the Host list. A list refresh must
 // retain opened details without leaking them into Home, and deletion must still
 // remove them. Existing tests only cover ordinary listed task reconciliation.
+it.each(['side-chat', 'bot'] as const)('retains hidden %s details across list refresh without changing composer availability', source => {
+  remoteSessionStore.clear();
+  try {
+    const detail = session('hidden', { source });
+    remoteSessionStore.upsertDeviceSession('dev-1', 'Computer', detail);
+    const previous = remoteSessionStore.getSessions().find(row => row.id === 'hidden');
+    const observed: boolean[] = [];
+    const off = remoteSessionStore.subscribe(() => observed.push(remoteSessionStore.getSessions().some(row => row.id === 'hidden')));
+    try {
+      for (let i = 0; i < 3; i++) remoteSessionStore.setDeviceSessions('dev-1', 'Computer', [session('ordinary')]);
+      expect(remoteSessionStore.getSessions().find(row => row.id === 'hidden')).toBe(previous);
+      expect(observed).not.toContain(false);
+      expect(remoteSessionStore.getHomeSessions().map(row => row.id)).toEqual(['ordinary']);
+      remoteSessionStore.applySessionPatch('dev-1', 'hidden', { status: 'deleted' });
+      expect(remoteSessionStore.getSessions().some(row => row.id === 'hidden')).toBe(false);
+      remoteSessionStore.setDeviceSessions('dev-1', 'Computer', []);
+      expect(remoteSessionStore.getSessions()).toEqual([]);
+    } finally { off(); }
+  } finally { remoteSessionStore.clear(); }
+});
+
 it.each(['deleted', 'archived'] as const)('retains hidden side-chat details across refresh, then reports %s after removal', status => {
   remoteSessionStore.clear();
   const parent = session('main');
