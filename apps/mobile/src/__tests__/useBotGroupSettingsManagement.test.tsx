@@ -212,3 +212,41 @@ it('creates an invite link as the manager and rejects a malformed token', async 
   await act(async () => { await expect(result.invite()).rejects.toThrow('CHAT_RESPONSE_INVALID'); });
   expect(shareFetch).toHaveBeenCalledTimes(1);
 });
+
+// #9459: a share acknowledgement can be lost after the invite was created.
+// Unit: the real settings hook/client must retry the original server receipt;
+// the earlier creation test covered only success and malformed invite responses.
+it('reuses an invitation receipt after a lost share response and clears it after success', async () => {
+  await render();
+  const invite = { token: 'A'.repeat(43), expiresAt: null, reusable: true };
+  request.mockResolvedValueOnce(invite);
+  shareFetch.mockRejectedValueOnce(new Error('share-response-lost'));
+  await act(async () => { await expect(result.invite()).rejects.toThrow('share-response-lost'); });
+  const first = writes().at(-1)!;
+  request.mockResolvedValueOnce(invite);
+  await act(async () => { await expect(result.invite()).resolves.toMatchObject({ link: `${shareBase}/chat-invite/${shareId}` }); });
+  expect(writes().at(-1)).toEqual(first);
+  expect(shareFetch.mock.calls.map(([, options]) => options.body.token)).toEqual([invite.token, invite.token]);
+  request.mockResolvedValueOnce({ ...invite, token: 'B'.repeat(43) });
+  await act(async () => { await result.invite(); });
+  expect(writes().at(-1)?.[2].operationId).not.toBe(first[2].operationId);
+});
+
+it.each(['account', 'group', 'manager'] as const)('does not reuse an uncertain invitation across a changed %s', async scope => {
+  await render();
+  const invite = { token: 'A'.repeat(43), expiresAt: null, reusable: true };
+  shareFetch.mockRejectedValue(new Error('share-offline'));
+  request.mockResolvedValueOnce(invite);
+  await act(async () => { await expect(result.invite()).rejects.toThrow('share-offline'); });
+  const first = writes().at(-1)!;
+  if (scope === 'account') h.api = api('account-2');
+  if (scope === 'group') snapshot.room.id = id(5);
+  if (scope === 'manager') { snapshot.members[0].role = 'member'; snapshot.members[1].role = 'admin'; }
+  source = chatGroupView({ snapshot, messages: [], before: null }, id(2));
+  await render();
+  request.mockResolvedValueOnce(invite);
+  await act(async () => { await expect(result.invite()).rejects.toThrow('share-offline'); });
+  expect(writes().at(-1)?.[2].operationId).not.toBe(first[2].operationId);
+  expect(writes().at(-1)?.[0]).toBe(`/conversations/${scope === 'group' ? id(5) : id(1)}/invite-links`);
+  expect(writes().at(-1)?.[3]).toBe(scope === 'manager' ? id(3) : id(2));
+});
