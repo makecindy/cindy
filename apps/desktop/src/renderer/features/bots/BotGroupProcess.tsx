@@ -44,6 +44,7 @@ function BotGroupProcessHistory({ process, deviceId }: { process: BotGroupProces
     let timer: ReturnType<typeof setTimeout> | undefined;
     const subscription = deviceId ? createRemoteSessionSubscription(deviceId, process.sessionId) : undefined;
     let closed = false;
+    let peerAvailable: boolean | undefined;
     const stopUpdates = () => { if (closed) return; closed = true; clearTimeout(timer); off(); recoveryOffs.forEach(off => off?.()); subscription?.release(); if (current()) setSubscriptionFailed(false); };
     const refresh = () => {
       if (!current() || closed) return;
@@ -101,19 +102,26 @@ function BotGroupProcessHistory({ process, deviceId }: { process: BotGroupProces
         if (p.deviceId === deviceId) recover();
       }),
       window.electronAPI.deviceLink.onPresenceChanged?.(p => {
-        if (p.deviceId === deviceId && p.online && p.remoteControlEnabled) recover();
+        if (p.deviceId !== deviceId) return;
+        const available = p.online && p.remoteControlEnabled;
+        const recovered = available && peerAvailable !== true;
+        peerAvailable = available;
+        if (recovered) recover();
       }),
       window.electronAPI.deviceLink.onResponsivenessChanged?.(p => {
         if (p.deviceId === deviceId && !p.unresponsive && p.recovered !== false) recover();
       }),
       window.electronAPI.deviceLink.onStatusChanged?.(p => {
         if (p.dataPathChangedDeviceId && p.dataPathChangedDeviceId !== deviceId) return;
+        if (p.status === 'stopped') peerAvailable = false;
         if (p.status === 'online' || p.directDataDeviceIds?.includes(deviceId)) recover();
       }),
     ] : [];
     // A readable snapshot does not prove that subsequent pushes are subscribed.
-    void subscription?.subscribe().catch(() => {
-      if (current() && !closed) setSubscriptionFailed(true);
+    void subscription?.subscribe().then(() => {
+      if (current() && !closed) peerAvailable ??= true;
+    }).catch(() => {
+      if (current() && !closed) { peerAvailable = false; setSubscriptionFailed(true); }
     });
     refresh();
     return () => {

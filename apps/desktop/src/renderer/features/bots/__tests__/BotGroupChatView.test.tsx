@@ -5458,6 +5458,9 @@ it.each(['onStatusChanged', 'onPresenceChanged', 'onPeerLinkReset', 'onResponsiv
     const reads = mocks.remoteInvoke.mock.calls.length;
     await act(async () => { emit('neighbor-mac'); await vi.advanceTimersByTimeAsync(50); });
     expect(mocks.remoteInvoke).toHaveBeenCalledTimes(reads);
+    if (event === 'onPresenceChanged') {
+      await act(async () => { listeners.get(event)!.forEach(cb => cb({ deviceId: 'original-mac', online: false, remoteControlEnabled: true })); });
+    }
     rows.push({ clientId: 'lost-thinking', role: 'thinking', content: 'Hidden reasoning from disconnected period' });
     await act(async () => { emit('original-mac'); await vi.advanceTimersByTimeAsync(50); });
     expect(mocks.remoteInvoke).toHaveBeenCalledTimes(reads + 2);
@@ -5695,4 +5698,30 @@ it('explains a final-only group process and retries an unavailable record', asyn
   expect(screen.queryByText('chat.teammateProcess.unavailable')).toBeNull();
   expect(screen.queryByText('chat.errorBanner.retry')).toBeNull();
   expect(screen.queryByText('Which city?')).toBeNull();
+});
+
+// PR #8979: busy-only presence is not a recovery. Use the actual history
+// component and reader; two events outside the debounce window must do no IO.
+it('does not reread group history for busy-only online presence', async () => {
+  vi.useFakeTimers();
+  const callbacks = new Set<(p: any) => void>();
+  Object.assign(window.electronAPI.deviceLink, { onPresenceChanged: (cb: (p: any) => void) => { callbacks.add(cb); return () => { callbacks.delete(cb); }; } });
+  mocks.remoteInvoke.mockResolvedValue([
+    { clientId: 'source', role: 'user', content: 'Request' },
+    { clientId: 'note', role: 'assistant', content: 'Cached progress', agentMeta: { assistantPhase: 'commentary' } },
+    { clientId: 'seal', role: 'assistant', content: 'Answer', agentMeta: { turnCompleted: true } },
+  ]);
+  const view = render(<Tooltip.Provider><BotGroupProcess process={{ groupId: 'g1', executionId: 'presence-edge', sessionId: 'lane', clientId: 'source', deviceId: 'original-mac' }}
+    member={{ ...detail().members[0]!, isOwned: true }} /></Tooltip.Provider>);
+  const emit = (online: boolean, busy = false) => callbacks.forEach(cb => cb({ deviceId: 'original-mac', online, remoteControlEnabled: true, busy }));
+  try {
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    const reads = mocks.remoteInvoke.mock.calls.length;
+    for (const busy of [true, false]) {
+      await act(async () => { emit(true, busy); await vi.advanceTimersByTimeAsync(60); });
+      expect(mocks.remoteInvoke).toHaveBeenCalledTimes(reads);
+    }
+    await act(async () => { emit(false); emit(true); await vi.advanceTimersByTimeAsync(60); });
+    expect(mocks.remoteInvoke).toHaveBeenCalledTimes(reads + 2);
+  } finally { view.unmount(); vi.useRealTimers(); }
 });

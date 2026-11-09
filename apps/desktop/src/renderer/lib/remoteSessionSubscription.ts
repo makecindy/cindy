@@ -3,6 +3,7 @@ interface Subscription {
   owners: Set<symbol>;
   pending: number;
   ack?: Promise<void>;
+  offStatus?: () => void;
 }
 const subscriptions = new Map<string, Subscription>();
 
@@ -14,6 +15,7 @@ export function createRemoteSessionSubscription(deviceId: string, sessionId: str
   const releaseIfUnused = (entry: Subscription) => {
     if (subscriptions.get(key) !== entry || entry.owners.size || entry.pending) return;
     subscriptions.delete(key);
+    entry.offStatus?.();
     void window.electronAPI.deviceLink.unsubscribe(deviceId, topics).catch(() => undefined);
   };
   return {
@@ -23,6 +25,13 @@ export function createRemoteSessionSubscription(deviceId: string, sessionId: str
     subscribe({ reuse = false }: { reuse?: boolean } = {}) {
       if (released) return Promise.resolve();
       const entry: Subscription = subscriptions.get(key) ?? { owners: new Set<symbol>(), pending: 0 };
+      if (!subscriptions.has(key)) {
+        // Main clears window topic references when the active link is torn down.
+        // Keep the owners, but never reuse an ACK from that stopped link.
+        entry.offStatus = window.electronAPI.deviceLink.onStatusChanged?.(({ status }) => {
+          if (status === 'stopped') entry.ack = undefined;
+        });
+      }
       subscriptions.set(key, entry);
       const recovering = !reuse && entry.owners.has(token);
       entry.owners.add(token);

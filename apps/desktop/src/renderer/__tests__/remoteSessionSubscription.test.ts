@@ -2,9 +2,10 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { createRemoteSessionSubscription } from '@/lib/remoteSessionSubscription';
 
-const subscribe = vi.fn(async () => ({ ok: true }));
+const statusListeners = new Set<(p: { status: 'stopped' | 'connecting' | 'online' }) => void>();
+const subscribe = vi.fn(async (_deviceId: string, _topics: string[]) => ({ ok: true as const }));
 const unsubscribe = vi.fn(async () => ({ ok: true }));
-Object.assign(window, { electronAPI: { deviceLink: { subscribe, unsubscribe } } });
+Object.assign(window, { electronAPI: { deviceLink: { subscribe, unsubscribe, onStatusChanged: (cb: (p: { status: 'stopped' | 'connecting' | 'online' }) => void) => { statusListeners.add(cb); return () => { statusListeners.delete(cb); }; } } } });
 afterEach(() => { subscribe.mockReset().mockResolvedValue({ ok: true }); unsubscribe.mockClear(); });
 const settle = async () => { await Promise.resolve(); await Promise.resolve(); await Promise.resolve(); };
 
@@ -128,4 +129,28 @@ it('keeps the newer recovery ACK when an older acquisition fails late', async ()
     live.release(); history.release();
   }
   expect(unsubscribe).toHaveBeenCalledExactlyOnceWith('mac', ['session:recovery-race']);
+});
+
+// PR #8979: Main drops its window topic references on relay teardown, but a
+// readable collapsed history remains mounted. Its old ACK cannot survive that.
+it('reacquires one shared ACK after Main tears down the relay link', async () => {
+  const refs = await import('../../main/device-link/subscriptionRefcount');
+  refs.resetAll();
+  subscribe.mockImplementation(async (deviceId, topics) => { refs.recordSubscribe(1, deviceId, topics); return { ok: true }; });
+  const owners = [createRemoteSessionSubscription('mac', 'relay-reset'), createRemoteSessionSubscription('mac', 'relay-reset')];
+  try {
+    await Promise.all(owners.map(owner => owner.subscribe()));
+    expect(subscribe).toHaveBeenCalledTimes(1);
+    expect(refs.snapshotSubscriptions()).toEqual([{ deviceId: 'mac', topics: ['session:relay-reset'] }]);
+    refs.resetAll();
+    statusListeners.forEach(cb => cb({ status: 'stopped' }));
+    statusListeners.forEach(cb => cb({ status: 'connecting' }));
+    statusListeners.forEach(cb => cb({ status: 'online' }));
+    await Promise.all(owners.map(owner => owner.subscribe({ reuse: true })));
+    expect(subscribe).toHaveBeenCalledTimes(2);
+    expect(refs.snapshotSubscriptions()).toEqual([{ deviceId: 'mac', topics: ['session:relay-reset'] }]);
+    await owners[0].subscribe({ reuse: true });
+    expect(subscribe).toHaveBeenCalledTimes(2);
+  } finally { owners.forEach(owner => owner.release()); refs.resetAll(); }
+  expect(statusListeners.size).toBe(0);
 });
