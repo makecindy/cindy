@@ -1,6 +1,6 @@
 import type { Session } from '@cindy/maker-core';
 import { createChannelTurnObserver } from './channelTurnSignal';
-import { MANAGED_LLAMACPP_PROVIDER_ID } from '../../shared/llamaCpp.js';
+import { isManagedSidecarProviderId } from '../../shared/localModelRuntime.js';
 import { ensureManagedOllamaReadyForSession } from '../local-model-runtime/preflight.js';
 import { createLogger } from '../logger.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
@@ -88,10 +88,16 @@ export function installSessionTurnObserver(deps: InstallSessionTurnObserverDeps,
           throwIpcError('INVALID_PARAMS', describeModelRouteRejection(verdict.reason, model, getSessionProvider(session.id)));
         }
       }
-      // Existing tasks must restore the managed service after a manual stop too.
-      // Reuse the common send boundary so IM/Goal/Scheduler get the same behavior.
+      // 既有任务在手动停止托管 sidecar（llama.cpp / Ollama）后也要恢复服务。
+      // 复用公共发送边界，IM/Goal/Scheduler 与 renderer 拿到同一行为；新会话已由
+      // create-session 的 admitLocalRoute 做同一次就绪探测。托管 sidecar 是每台电脑
+      // 一份的本机服务，Agent 在另一台电脑上运行时不代远端启动（见上方注释）。
       const providerId = getSessionProvider(session.id);
-      if (!providerOnOtherDevice && providerId === MANAGED_LLAMACPP_PROVIDER_ID) {
+      if (
+        !providerOnOtherDevice
+        && providerId !== null
+        && isManagedSidecarProviderId(providerId)
+      ) {
         await ensureManagedOllamaReadyForSession({ providerId, onlyIfStopped: true });
       }
       deps.silentStopTurnLeaseGate.supersede(session.id);
