@@ -97,6 +97,8 @@ const parseMeta = (raw: string | null) => {
 
 type TurnScan = {
   turns: Turn[];
+  /** Full owner inputs for evidence review, kept outside the planning snapshot budget. */
+  ownerTexts: Map<string, string>;
   /** 读到了 until 之前的全部回复；否则 scannedThrough 是这一批扫到的最后一条回复的时间。 */
   complete: boolean;
   scannedThrough: number;
@@ -133,6 +135,7 @@ async function readTurns(botId: string, after: number, until: number, learned: R
     [botId, after, until],
   );
   const turns: Turn[] = [];
+  const ownerTexts = new Map<string, string>();
   let holdAt = Infinity;
   for (const row of rows.slice(0, MAX_REPLIES)) {
     const meta = parseMeta(row.meta);
@@ -148,6 +151,7 @@ async function readTurns(botId: string, after: number, until: number, learned: R
     const userText = row.role === 'channel' && typeof source?.userText === 'string'
       ? source.userText : textOf(row.inputContent ?? '');
     if (!userText.trim() || isSyntheticTriggerText(userText)) continue;
+    if (userText.length <= MESSAGE_BUDGET) ownerTexts.set(row.inputId, userText);
     turns.push({
       sessionId: row.sessionId,
       createdAt: row.createdAt,
@@ -158,7 +162,7 @@ async function readTurns(botId: string, after: number, until: number, learned: R
     });
   }
   const complete = rows.length <= MAX_REPLIES;
-  return { turns, complete, scannedThrough: complete ? until : rows[MAX_REPLIES - 1]!.createdAt, holdAt };
+  return { turns, ownerTexts, complete, scannedThrough: complete ? until : rows[MAX_REPLIES - 1]!.createdAt, holdAt };
 }
 
 /** 从工具调用记录里数这个伙伴的技能被读了几次：调用技能，或读了它技能目录下的 SKILL.md。 */
