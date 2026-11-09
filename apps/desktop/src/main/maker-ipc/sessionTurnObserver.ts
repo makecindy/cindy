@@ -33,7 +33,7 @@ export function installSessionTurnObserver(deps: InstallSessionTurnObserverDeps,
       assertPermissionDispatch?.();
       channelTurn.onDispatching();
     },
-    beforeProviderStart: async (turnGeneration) => {
+    beforeProviderStart: async (turnGeneration, signal) => {
       assertPermissionDispatch = undefined;
       if (session.remoteHostId) {
         await channelTurn.beforeProviderStart();
@@ -98,8 +98,9 @@ export function installSessionTurnObserver(deps: InstallSessionTurnObserverDeps,
         && providerId !== null
         && isManagedSidecarProviderId(providerId)
       ) {
-        await ensureManagedOllamaReadyForSession({ providerId, onlyIfStopped: true });
+        await ensureManagedOllamaReadyForSession({ providerId, onlyIfStopped: true, signal });
       }
+      signal?.throwIfAborted();
       deps.silentStopTurnLeaseGate.supersede(session.id);
       // Keep Review's exact-instance liveness listener lazy. PID-only turn
       // leases remain fail-closed until this process actually starts Review.

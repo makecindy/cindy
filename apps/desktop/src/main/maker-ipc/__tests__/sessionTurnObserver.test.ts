@@ -123,7 +123,7 @@ describe('installSessionTurnObserver provider precheck', () => {
     const local = setup({});
     await local.start();
     expect(h.ensureLlama).toHaveBeenCalledTimes(1);
-    expect(h.ensureLlama).toHaveBeenCalledWith({ providerId: MANAGED_LLAMACPP_PROVIDER_ID, onlyIfStopped: true });
+    expect(h.ensureLlama).toHaveBeenCalledWith({ providerId: MANAGED_LLAMACPP_PROVIDER_ID, onlyIfStopped: true, signal: undefined });
   });
 
   it('starts the managed Ollama sidecar for an existing local session turn', async () => {
@@ -134,7 +134,7 @@ describe('installSessionTurnObserver provider precheck', () => {
     const { deps, start } = setup({});
     await start();
     expect(h.ensureLlama).toHaveBeenCalledTimes(1);
-    expect(h.ensureLlama).toHaveBeenCalledWith({ providerId: MANAGED_OLLAMA_PROVIDER_ID, onlyIfStopped: true });
+    expect(h.ensureLlama).toHaveBeenCalledWith({ providerId: MANAGED_OLLAMA_PROVIDER_ID, onlyIfStopped: true, signal: undefined });
     expect(deps.sessionTurnLeaseTracker.markTurnStarted).toHaveBeenCalledWith('s1', 'i1:1');
   });
 

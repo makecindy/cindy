@@ -114,10 +114,17 @@ function localRuntimeAvailable(deps: OllamaRuntimeDeps): boolean {
 }
 
 export async function probeOllamaStatus(deps: OllamaRuntimeDeps): Promise<LocalRuntimeStatus> {
+  deps.signal?.throwIfAborted();
   const appInstalled = localRuntimeAvailable(deps);
   const canInstallRuntime = canInstall(deps);
   try {
-    const info = await fetchOllamaVersion(deps.fetchImpl);
+    const info = await fetchOllamaVersion((url, init) => deps.fetchImpl(url, {
+      ...init,
+      // Keep the probe timeout while allowing only this caller's HTTP request
+      // to be interrupted. Cancellation never stops the shared Ollama process.
+      signal: deps.signal ? AbortSignal.any([init.signal, deps.signal]) : init.signal,
+    }));
+    deps.signal?.throwIfAborted();
     return {
       runtime: 'ollama',
       kind: 'ready',
@@ -126,6 +133,7 @@ export async function probeOllamaStatus(deps: OllamaRuntimeDeps): Promise<LocalR
       version: info.version,
     };
   } catch (error) {
+    deps.signal?.throwIfAborted();
     if (error instanceof OllamaHttpError) {
       if (error.kind === 'conflict') {
         return {
@@ -167,6 +175,7 @@ export async function probeOllamaStatus(deps: OllamaRuntimeDeps): Promise<LocalR
 
 export async function startOfficialOllamaApp(deps: OllamaRuntimeDeps): Promise<LocalRuntimeStatus> {
   const current = await probeOllamaStatus(deps);
+  deps.signal?.throwIfAborted();
   if (
     current.kind === 'ready' ||
     current.kind === 'port-conflict' ||

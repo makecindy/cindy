@@ -59,6 +59,49 @@ describe('managed Ollama process lifetime', () => {
     expect(spawnImpl).toHaveBeenCalledTimes(1);
   });
 
+  // PR #9420: one cancelled readiness waiter must not stop another session's sidecar.
+  // Unit tier, real runtime + process ownership; suspend one poll while the other succeeds.
+  it('cancels only its readiness wait while another caller uses the shared process', async () => {
+    const child = childProcess();
+    const spawnImpl = vi.fn(() => child as unknown as ChildProcess);
+    const controller = new AbortController();
+    let entered!: () => void;
+    const polling = new Promise<void>((resolve) => { entered = resolve; });
+    const localAppData = 'C:\\test-data';
+    const binary = path.join(localAppData, 'Programs', 'Ollama', 'ollama.exe');
+    const runtime: Omit<OllamaRuntimeDeps, 'fetchImpl'> = {
+      platform: 'win32', arch: 'x64', env: { LOCALAPPDATA: localAppData },
+      appExists: file => file === binary,
+      spawnSidecar: file => { spawnManagedSidecar(file, spawnImpl as unknown as typeof spawn); },
+    };
+    const cancelled = startOfficialOllamaApp({
+      ...runtime, signal: controller.signal,
+      fetchImpl: async () => { throw new OllamaHttpError('refused', 'down'); },
+      sleep: () => { entered(); return new Promise(() => undefined); },
+    });
+    const result = expect(cancelled).rejects.toThrow('aborted');
+    await polling;
+    let otherEntered!: () => void;
+    const otherPolling = new Promise<void>((resolve) => { otherEntered = resolve; });
+    let ready!: () => void;
+    const readiness = new Promise<void>((resolve) => { ready = resolve; });
+    const other = startOfficialOllamaApp({
+      ...runtime,
+      sleep: () => { otherEntered(); return readiness; },
+      fetchImpl: vi.fn().mockRejectedValueOnce(new OllamaHttpError('refused', 'down'))
+        .mockImplementation(async () => new Response(JSON.stringify({ version: '0.32.14' }))),
+    });
+    await otherPolling;
+    controller.abort();
+    await result;
+    expect(child.kill).not.toHaveBeenCalled();
+    ready();
+    const next = await other;
+    expect(next.kind).toBe('ready');
+    expect(spawnImpl).toHaveBeenCalledOnce();
+    expect(child.kill).not.toHaveBeenCalled();
+  });
+
   // Reusing a live child must not prevent recovery after a genuine exit or stop.
   it.each(['exit', 'stop', 'signal'] as const)('allows a replacement after %s without losing it to an old exit event', (reason) => {
     const first = childProcess();
