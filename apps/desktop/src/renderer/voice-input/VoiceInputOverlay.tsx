@@ -1969,7 +1969,7 @@ export function VoiceInputOverlay() {
                   }}
                   onClick={suppressOverlayButtonClick}
                   disabled={state === 'submitting' || state === 'refining'}
-                  className="shrink-0 shadow-sm"
+                  className="shrink-0"
                 >
                   <ArrowUp className="h-3.5 w-3.5" />
                   {sessionPromptError ? t('voiceInputOverlay.retry') : t('voiceInputOverlay.sessionPrompt.submit')}
