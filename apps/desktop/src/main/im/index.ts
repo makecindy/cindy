@@ -1,3 +1,4 @@
+import { wireIMessageOrchestrator } from './imessage/adapter';
 /**
  * main/im/index.ts
  * ---------------------------------------------------------------------------
@@ -76,6 +77,7 @@ import {
   wecomIm,
   createBotDingTalkIM,
   createBotDiscordIM,
+  createBotIMessageIM,
   createBotFeishuIM,
   createBotTelegramIM,
   createBotWecomIM,
@@ -293,6 +295,11 @@ export function startImOrchestrators(): void {
     },
     create: (record) => {
       const prefix = secretKeyPrefixFor(record.id);
+      if (record.channel === 'imessage') {
+        const im = createBotIMessageIM(prefix, record.id);
+        const orchestrator = wireIMessageOrchestrator(im, DINGTALK_CONFIG, { instanceKey: `imessage#${record.id}`, companionBotId: record.botId, connectionId: record.id });
+        return { kind: 'imessage', im, orchestrator };
+      }
       if (record.channel === 'telegram') {
         // 群参与模式按连接各一份, 每次使用时现读 → 伙伴页改动即生效, 不重启传输层。
         const im = createBotTelegramIM(prefix, {

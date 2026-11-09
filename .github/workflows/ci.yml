@@ -171,6 +171,14 @@ jobs:
       # XDT_SKIP_AGENT_BIN_INSTALL 跳过了 postinstall 的全部 agent 二进制,但
       # runtime-configs.ts 模块顶层的 bundledRipgrepDir() 缺 rg 时直接 throw,
       # 会让 apps/desktop 单测在收集阶段全挂——每个分片都必须单独装回来。
+      # 缓存 bundled ripgrep：各分片都要装，GitHub Releases 偶发 504 时会整批变红。
+      # 命中后 install:ripgrep 按 .version 标记直接跳过下载。
+      - name: Cache bundled ripgrep
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: apps/ripgrep-bin
+          key: ripgrep-bin-${{ runner.os }}-${{ hashFiles('tools/ripgrep/latest.json') }}
+
       - name: Install bundled ripgrep
         env:
           GITHUB_TOKEN: ${{ github.token }}
@@ -247,6 +255,14 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      # 缓存 bundled ripgrep：各分片都要装，GitHub Releases 偶发 504 时会整批变红。
+      # 命中后 install:ripgrep 按 .version 标记直接跳过下载。
+      - name: Cache bundled ripgrep
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: apps/ripgrep-bin
+          key: ripgrep-bin-${{ runner.os }}-${{ hashFiles('tools/ripgrep/latest.json') }}
+
       - name: Install bundled ripgrep
         env:
           GITHUB_TOKEN: ${{ github.token }}
@@ -285,6 +301,14 @@ jobs:
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+
+      # 缓存 bundled ripgrep：各分片都要装，GitHub Releases 偶发 504 时会整批变红。
+      # 命中后 install:ripgrep 按 .version 标记直接跳过下载。
+      - name: Cache bundled ripgrep
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: apps/ripgrep-bin
+          key: ripgrep-bin-${{ runner.os }}-${{ hashFiles('tools/ripgrep/latest.json') }}
 
       - name: Install bundled ripgrep
         env:
@@ -354,6 +378,14 @@ jobs:
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+
+      # 缓存 bundled ripgrep：各分片都要装，GitHub Releases 偶发 504 时会整批变红。
+      # 命中后 install:ripgrep 按 .version 标记直接跳过下载。
+      - name: Cache bundled ripgrep
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: apps/ripgrep-bin
+          key: ripgrep-bin-${{ runner.os }}-${{ hashFiles('tools/ripgrep/latest.json') }}
 
       - name: Install bundled ripgrep
         env:

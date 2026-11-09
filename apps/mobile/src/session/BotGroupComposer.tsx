@@ -1,3 +1,15 @@
+import { useWindowDimensions } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useComposerResize } from './useComposerResize';
+import { useComposerDragOpen } from './useComposerDragOpen';
+import { useComposerPillOpen } from './useComposerPillOpen';
+import { useComposerCardTransition } from './useComposerCardTransition';
+import { useMobileKeyboardState } from './useMobileKeyboardState';
+import { buildSessionNativeShellLayout } from './mobileNativeShellLayout';
+import { composerGeometry, composerRowChrome } from './composerGeometry';
+import { ResizableComposerInputRow } from './ResizableComposerInputRow';
+import { MOBILE_COMPOSER_INPUT_MAX_HEIGHT, MOBILE_COMPOSER_INPUT_SINGLE_LINE_HEIGHT } from './MobileComposerInputRow';
+import type { ComposerPullThroughBridge } from './composerPullThrough';
 import type { TextInputInstance } from 'react-native';
 /**
  * 群聊输入框（对照桌面 BotGroupComposer.tsx，docs/product-rules/bot-group-chat.md §4.1 / §7.2 / §8）。
@@ -49,7 +61,7 @@ import { useComposerPendingImagePreview } from './useComposerPendingImagePreview
 import { ContextSheet, ContextSheetGroup, ContextSheetRow } from './ContextSheet';
 import { RecentPhotosStrip } from './ContextSheetMediaViews';
 import { ImageLightbox } from './ImageLightbox';
-import { ComposerToolbarLeftGroup, ComposerToolbarSpacer, MobileComposerInputRow } from './MobileComposerInputRow';
+import { ComposerToolbarLeftGroup, ComposerToolbarSpacer } from './MobileComposerInputRow';
 import { CompanionFadeIn } from './CompanionEntering';
 import { nextBotGroupSendAttempt, type BotGroupSendAttempt } from './botGroupRemote';
 import { canBrowsePhotoLibraryDirectly } from './photoLibraryPolicy';
@@ -78,8 +90,9 @@ type MentionOption =
   | { kind: 'member'; label: string; member: BotGroupMemberView };
 
 export function BotGroupComposer({
-  members, identityFor, deviceId, online, allowMentionAllBots = false, running, planState, attachmentsSupported, divisionSupported = true, uploadAttachment, quoteMessageId, focusRequest, onSend, onStop, topic = false, placeholder: placeholderOverride, maskIndicator, onParticipate,
+  pullThrough, members, identityFor, deviceId, online, allowMentionAllBots = false, running, planState, attachmentsSupported, divisionSupported = true, uploadAttachment, quoteMessageId, focusRequest, onSend, onStop, topic = false, placeholder: placeholderOverride, maskIndicator, onParticipate,
 }: {
+  pullThrough?: ComposerPullThroughBridge;
   maskIndicator?: import('react').ReactNode;
   onParticipate?(): void;
   members: readonly BotGroupMemberView[];
@@ -176,8 +189,38 @@ export function BotGroupComposer({
     && (attachmentsSupported || !hasAttachments);
   const showStop = running && trimmed.length === 0 && !hasAttachments;
   const divisionBlocked = isBotGroupDivisionBlocked(planState);
-  // Same as the task composer: the tray shows inside the focused card, a badge otherwise.
-  const cardActive = topic || (focused && hasAttachments) || !!maskIndicator;
+  const window = useWindowDimensions();
+  const insets = useSafeAreaInsets();
+  const keyboard = useMobileKeyboardState();
+  const [contentHeight, setContentHeight] = useState(MOBILE_COMPOSER_INPUT_SINGLE_LINE_HEIGHT);
+  const [accessoryHeight, setAccessoryHeight] = useState(0);
+  const pill = useComposerPillOpen(Platform.OS === 'ios' && online && hasMembers, () => inputRef.current?.focus());
+  const { composerDragOpen, handleComposerDragOpenChange, handleComposerDragOpenCommit } =
+    useComposerDragOpen(focused, () => inputRef.current?.focus());
+  const cardActive = focused || pill.opening || composerDragOpen || sheetOpen;
+  useComposerCardTransition(cardActive, keyboard);
+  const shell = buildSessionNativeShellLayout({
+    screenHeight: window.height, screenWidth: window.width,
+    platform: Platform.OS === 'ios' ? 'ios' : Platform.OS === 'android' ? 'android' : 'web',
+    keyboardHeight: keyboard.height, keyboardVisible: keyboard.visible,
+    safeAreaBottomInset: insets.bottom, attachmentPickerOpen: false, paletteOpen: pickerOpen,
+  });
+  const chromeHeight = (cardActive ? composerRowChrome.expanded : composerRowChrome.collapsed) + composerRowChrome.verticalPadding + accessoryHeight;
+  const shellScrolls = shell.composerScrollEnabled && hasAttachments;
+  const resize = useComposerResize({
+    autoMaxContentHeight: Math.max(MOBILE_COMPOSER_INPUT_SINGLE_LINE_HEIGHT,
+      Math.min(MOBILE_COMPOSER_INPUT_MAX_HEIGHT, shell.composerMaxHeight - chromeHeight)),
+    collapsed: !cardActive, composerChromeHeight: chromeHeight, contentHeight,
+    keyboardHeight: keyboard.visible ? keyboard.height : 0,
+    singleLineContentHeight: MOBILE_COMPOSER_INPUT_SINGLE_LINE_HEIGHT, windowHeight: window.height,
+    bodyDragEnabled: online && hasMembers && (!cardActive || !shellScrolls),
+    onDragOpenChange: handleComposerDragOpenChange, onDragOpenCommit: handleComposerDragOpenCommit,
+    onSnapToAuto: () => { inputRef.current?.blur(); setFocused(false); },
+    pullThrough,
+  });
+  const resetResize = resize.reset;
+  useEffect(() => { if (!text) resetResize(); }, [text, resetResize]);
+
 
   const choose = (option: MentionOption) => {
     if (!query) return;
@@ -290,7 +333,7 @@ export function BotGroupComposer({
   const plus = !divisionSupported && !attachmentsSupported ? null : attachmentsEnabled
     // The same panel as a 1:1 chat's 「+」: attachments, then the group's own 安排分工.
     ? plusButton(() => { tray.armMediaTap(); setSheetOpen(true); })
-    : divisionBlocked
+    : !divisionSupported ? plusButton(undefined) : divisionBlocked
       // Nothing to pick while a plan runs or waits; say why instead of showing a dead menu.
       ? plusButton(() => Alert.alert(t('groupChat.composer.division'), t('groupChat.composer.divisionBusy')))
       : <BotGroupMenu title={moreLabel} accessibilityLabel={moreLabel} disabled={!online} testID="botGroup.composer.menu"
@@ -349,7 +392,18 @@ export function BotGroupComposer({
         </Pressable>
       </View>
     </View> : null}
-    <MobileComposerInputRow
+    <ResizableComposerInputRow
+      resize={resize}
+      autoMaxHeight={shell.composerMaxHeight}
+      chromeHeight={chromeHeight}
+      pullThrough={pullThrough}
+      grabberTestID="botGroup.composerResizeGrabber"
+      collapsedHeight={composerGeometry.pillHeight}
+      onCollapsedPress={pill.onCollapsedPress}
+      expandToken={pill.expandToken}
+      bodyScrollEnabled={shellScrolls && !resize.dragging}
+      onAccessoryAboveHeightChange={setAccessoryHeight}
+      onContentSizeChange={event => setContentHeight(Math.max(MOBILE_COMPOSER_INPUT_SINGLE_LINE_HEIGHT, Math.ceil(event.nativeEvent.contentSize.height)))}
       accessibilityLabel={t('groupChat.composer.label')}
       inputRef={inputRef}
       inputTestID="botGroup.composer.input"
@@ -396,17 +450,17 @@ export function BotGroupComposer({
         onPreview={setPreviewId} onRemove={tray.removeAttachment} onRemovePending={tray.removePendingUpload}
         onRetryPending={tray.retryPendingUpload} removeDisabled={sending} testIDPrefix="botGroup" /> : null}
       toolbar={cardActive ? <>
-        <ComposerToolbarLeftGroup>{topic ? <Pressable accessibilityRole="checkbox"
+        <ComposerToolbarLeftGroup>{plus}{topic ? <Pressable accessibilityRole="checkbox"
           accessibilityState={{ checked: alsoSendToMain, disabled: sending || !online }} disabled={sending || !online}
           onPress={() => { setAlsoSendToMain(value => !value); attemptRef.current = null; }}
           style={styles.topicOption} testID="botGroup.thread.alsoSend">
           {alsoSendToMain ? <CircleCheck size={iconSize.lg} color={colors.textPrimary} /> : <Circle size={iconSize.lg} color={colors.textSecondary} />}
           <Text style={styles.topicOptionText}>{t('groupChat.thread.alsoSend')}</Text>
-        </Pressable> : plus}{!topic && maskIndicator}</ComposerToolbarLeftGroup>
+        </Pressable> : maskIndicator}</ComposerToolbarLeftGroup>
         <ComposerToolbarSpacer />
         {trailing}
       </> : undefined}
-      leading={topic ? undefined : leading}
+      leading={!topic || hasAttachments ? leading : undefined}
       trailing={trailing}
       testID="botGroup.composer.row"
     />
@@ -416,8 +470,7 @@ export function BotGroupComposer({
       title={moreLabel}
       keyboardAvoidingBehavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       error={tray.error}
-      // The panel only opens while attachments are possible; if the computer drops off meanwhile
-      // the attachment entries go away and only 安排分工 is left.
+      // If attachment access goes away while open, keep only supported group actions.
       media={mediaLibraryEnabled && attachmentsEnabled ? <RecentPhotosStrip busyAssetIds={tray.busyAssetIds}
         enabled={sheetOpen} onToggleAsset={tray.toggleMediaAsset} selectedAssetIds={tray.selectedAssetIds}
         testID="botGroup.contextSheetPhotos" /> : null}
@@ -434,13 +487,13 @@ export function BotGroupComposer({
           icon={<Folder color={colors.textPrimary} size={iconSize.lg} strokeWidth={iconStroke.regular} />}
           label={t('session.common.file')} onPress={() => void tray.addDocument()} testID="botGroup.contextSheetFileRow" />
       </ContextSheetGroup> : null}
-      <ContextSheetGroup label={t('session.common.groupMode')}>
+      {divisionSupported ? <ContextSheetGroup label={t('session.common.groupMode')}>
         <ContextSheetRow disabled={divisionBlocked} dismissBeforePress
           icon={<Users color={colors.textPrimary} size={iconSize.lg} strokeWidth={iconStroke.regular} />}
           label={t('groupChat.composer.division')}
           detail={t(divisionBlocked ? 'groupChat.composer.divisionBusy' : 'groupChat.composer.divisionDescription')}
           onPress={() => { setDivision(true); inputRef.current?.focus(); }} testID="botGroup.contextSheetDivisionRow" />
-      </ContextSheetGroup>
+      </ContextSheetGroup> : null}
     </ContextSheet>
     {pendingImagePreview.host}
     {previewUrl ? <ImageLightbox images={tray.galleryImages} initialUrl={previewUrl} onClose={() => setPreviewId(null)} /> : null}
@@ -448,9 +501,9 @@ export function BotGroupComposer({
 }
 
 const makeStyles = (colors: ThemeColors) => StyleSheet.create({
-  topicOption: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, minHeight: 44 },
-  topicOptionText: { color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption, fontWeight: fontWeight.regular },
-  wrap: { gap: spacing.sm, paddingHorizontal: spacing.lg, paddingTop: spacing.sm, paddingBottom: spacing.sm },
+  topicOption: { flexDirection: 'row', flexShrink: 1, minWidth: 0, alignItems: 'center', gap: spacing.sm, minHeight: 44 },
+  topicOptionText: { flexShrink: 1, color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption, fontWeight: fontWeight.regular },
+  wrap: { gap: spacing.sm, paddingHorizontal: spacing.lg, paddingTop: spacing.xs, paddingBottom: spacing.sm },
   // The badge brings its own trailing margin (shared with the task composer).
   leading: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs },
   control: { width: CONTROL_SIZE, height: CONTROL_SIZE, borderRadius: radius.pill, alignItems: 'center', justifyContent: 'center',

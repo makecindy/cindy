@@ -8,13 +8,13 @@ import { appearanceSettings } from './AppearanceSection.settings-search';
  *
  * 存储走 useStreamFadePreference(localStorage 只存 override,切回默认即
  * 清除,规则 20)。切换即时生效,正在流式的消息也立刻应用。
- * 卡片样式与 ChipMetricsSection 对齐(rounded 12 / Card bg / 1px Board)。
+ * 版式用 settings-rows 的分区/卡片/行(外观页的子分区,组名 h3)。
  */
 
 import { useTranslation } from 'react-i18next';
 
 import { Switch } from '@/components/ui/switch';
-import { cn } from '@/lib/utils';
+import { SettingsCard, SettingsRow, SettingsSection } from '@/components/ui/settings-rows';
 import { useStreamFadePreference } from '@/hooks/useStreamFadePreference';
 
 export function StreamFadeSection() {
@@ -23,36 +23,20 @@ export function StreamFadeSection() {
   const enabled = preference === 'on';
 
   return (
-    <div className="flex flex-col gap-[14px]">
-      <h3 className="text-16 font-medium leading-[1.2] text-[var(--settings-section-title)]">
-        {t('settings.streamFade.title')}
-      </h3>
-
-      <div
-        className={cn(
-          'flex items-center justify-between gap-3 rounded-xl px-4 py-4',
-          'bg-[var(--settings-theme-card-bg)]',
-          'border border-[var(--settings-theme-card-border)]',
-        )}
-      >
-        <div className="flex min-w-0 flex-col gap-1">
-          <p
-            className="text-13 font-medium text-[var(--settings-section-sublabel)]"
-            style={{ letterSpacing: '0.12px' }}
-          >
-            {t(appearanceSettings.streamFadeLabel.titleKey)}
-          </p>
-          <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
-            {t(appearanceSettings.streamFadeLabel.descriptionKey)}
-          </p>
-        </div>
-
-        <Switch data-setting-id={appearanceSettings.streamFadeLabel.id}
-          checked={enabled}
-          onCheckedChange={(next) => setPreference(next ? 'on' : 'off')}
-          aria-label={t('settings.streamFade.toggleAria')}
+    <SettingsSection title={t('settings.streamFade.title')} headingLevel={3}>
+      <SettingsCard>
+        <SettingsRow
+          title={t(appearanceSettings.streamFadeLabel.titleKey)}
+          hint={t(appearanceSettings.streamFadeLabel.descriptionKey)}
+          trailing={
+            <Switch data-setting-id={appearanceSettings.streamFadeLabel.id}
+              checked={enabled}
+              onCheckedChange={(next) => setPreference(next ? 'on' : 'off')}
+              aria-label={t('settings.streamFade.toggleAria')}
+            />
+          }
         />
-      </div>
-    </div>
+      </SettingsCard>
+    </SettingsSection>
   );
 }

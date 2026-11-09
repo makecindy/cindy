@@ -148,6 +148,9 @@ pnpm --filter mobile test:smoke
   [Mobile 设计规范](../../apps/mobile/docs/mobile-design-guide.md)。
 - 记录实际执行和结果；未执行的高相关检查必须说明原因。
 
+消息与任务行的尺寸订阅、代码着色优化及测量边界见
+[手机消息渲染的共享优化](../../apps/mobile/docs/mobile-render-performance.md)。
+
 ## 专项入口
 
 ### Android 组字与发送快照

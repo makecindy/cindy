@@ -116,6 +116,7 @@ describe('automation-generated sessions', () => {
       'wechat',
       'dingtalk',
       'wecom',
+      'imessage',
       'scheduler',
       'learn',
       'review',

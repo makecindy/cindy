@@ -2088,6 +2088,14 @@ const config: ForgeConfig = {
       buildWindowsAtomicRenameHelper(platform, arch);
       buildWindowsTaskbarAddon(platform, arch);
       if (platform === 'darwin') {
+        const desktopBlurBuild = spawnSync(
+          process.execPath,
+          [path.join(__dirname, 'native/desktop-blur/build.mjs'),
+            path.join(__dirname, 'resources/tools/desktop-blur/cindy-desktop-blur.node'), arch],
+          { stdio: 'inherit' },
+        );
+        if (desktopBlurBuild.error || desktopBlurBuild.status !== 0)
+          throw new Error('Native desktop blur build failed');
         const trackpadBuild = spawnSync(
           process.execPath,
           [

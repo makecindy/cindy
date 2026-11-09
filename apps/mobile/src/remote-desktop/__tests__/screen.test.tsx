@@ -18,6 +18,7 @@ import { retroDesktopViewport } from "../FoldDesktopSkin";
 import { RemoteDesktopControls } from "../RemoteDesktopControls";
 import { AppState } from "react-native";
 import { goBackGuarded } from "@/utils/backGuard";
+import { resolveMobileInvokeTimeoutMs } from "@/device-link/invokeTimeouts";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { darkColors, lightColors } from "@/theme/tokens";
 
@@ -216,6 +217,7 @@ vi.mock("react-native", async () => {
       },
     },
     Dimensions: {
+      addEventListener: () => ({ remove() {} }),
       get: (kind: string) =>
         kind === "screen"
           ? (fixture.displaySize ?? fixture.size)
@@ -262,9 +264,13 @@ vi.mock("expo-router", () => ({
   }),
 }));
 vi.mock("@/utils/backGuard", () => ({ goBackGuarded: vi.fn() }));
-vi.mock("react-native-safe-area-context", () => ({
-  useSafeAreaInsets: () => fixture.safe,
-}));
+vi.mock("react-native-safe-area-context", async () => {
+  const { createContext } = await import("react");
+  return {
+    SafeAreaInsetsContext: createContext(fixture.safe),
+    useSafeAreaInsets: () => fixture.safe,
+  };
+});
 vi.mock("react-i18next", () => {
   const t = (key: string) => key;
   return { useTranslation: () => ({ t }) };
@@ -3793,6 +3799,28 @@ describe("remote desktop controls", () => {
     expect(requests().filter((r) => r.op === "start")).toHaveLength(1);
     expect(host.textContent).toContain("remoteDesktop.backgroundDisconnected");
   });
+  // Unit regression: a missing heartbeat reply must not block renewal beyond the
+  // host's 12s lease. Existing cases rejected immediately; here the mock waits
+  // for the timeout the real mobile transport resolves for this request.
+  it("renews before the host lease expires when a heartbeat reply is missing", async () => {
+    await connect();
+    const original = fixture.invoke.getMockImplementation()!;
+    let heartbeats = 0;
+    fixture.invoke.mockImplementation((...args) => {
+      if (args[2][0].op === "heartbeat" && ++heartbeats === 1) {
+        return new Promise((_, reject) => setTimeout(
+          () => reject({ code: "INVOKE_TIMEOUT" }),
+          resolveMobileInvokeTimeoutMs(args[1], args[2]) ?? 30_000,
+        ));
+      }
+      return original(...args);
+    });
+    await act(async () => vi.advanceTimersByTimeAsync(11_000));
+    expect(heartbeats).toBeGreaterThanOrEqual(2);
+    expect(requests().filter((r) => r.op === "start")).toHaveLength(1);
+    expect(requests().filter((r) => r.op === "stop")).toHaveLength(0);
+  });
+
   it("keeps the host idle clock alive during a transient protected reconnect", async () => {
     fixture.idleSupported = true;
     await connect();
@@ -7080,6 +7108,7 @@ describe("live screen controls", () => {
   const open = async (
     page = <RemoteDesktopScreen />,
     buttons = screen.buttons,
+    firstFrame = true,
   ) => {
     act(() => root.unmount());
     fixture.liveScreen = `${screen.plugin}|${screen.id}`;
@@ -7096,7 +7125,10 @@ describe("live screen controls", () => {
     });
     root = createRoot(host);
     act(() => root.render(page));
-    await connect();
+    if (firstFrame) await connect();
+    else await act(async () => {
+      fixture.message!({ nativeEvent: { data: '{"type":"ready"}' } });
+    });
     await act(async () => {});
   };
   const control = (testID: string) =>
@@ -7115,6 +7147,20 @@ describe("live screen controls", () => {
         .click(),
     );
   };
+
+  // Regression: a plugin screen without a first frame had no visible Back.
+  // Existing live-screen tests only exercised controls after opening (unit tier).
+  it("keeps an exit and identifies the device screen until its first frame", async () => {
+    await open(undefined, undefined, false);
+    expect(control("remoteDesktop.backPosition")).not.toBeNull();
+    expect(host.textContent).toContain("remoteDesktop.liveScreenConnecting");
+    act(() =>
+      fixture.message!({
+        nativeEvent: { data: '{"type":"framePresented","epoch":"lease"}' },
+      }),
+    );
+    expect(control("remoteDesktop.backPosition")).toBeNull();
+  });
 
   it("tells a reloaded viewer again that fingers touch the device", async () => {
     await open();
