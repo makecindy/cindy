@@ -884,7 +884,15 @@ function CCAgentSessionContent({
       })),
     [rosterProfiles, companionCloud],
   );
-  const composerBotMentions = botMentions ?? ordinaryTaskBotMentions
+  // 设备互联的远端任务（含归属未解析期间）消息经 dispatchRemoteOptimisticSend 发往被控电脑，
+  // 伙伴由那台电脑的 botProfiles 解析；控制端本机名册的 botId 在对端解析不了，
+  // 这类任务不自动供给名册，保持原有的任务引用候选（显式 botMentions 仍优先）。
+  const autoBotRosterBlocked = Boolean(
+    sessionSnapshotProp?.deviceLinkDeviceId
+      || sessionSnapshotProp?.remoteHostId
+      || (sessionIdProp ? getStickySessionDeviceId(sessionIdProp) : undefined),
+  );
+  const composerBotMentions = botMentions ?? (autoBotRosterBlocked ? undefined : ordinaryTaskBotMentions);
   const { sessionId: paramSessionId } = useParams<{ sessionId: string }>();
   const sessionId = sessionIdProp ?? paramSessionId;
   const navigate = useNavigate();
