@@ -185,6 +185,7 @@
 - 选中 = `{ kind:'model', providerId, modelId }` 或 `{ kind:'fav', uid }`(锚点语义)。
 - 落到既有链路:选中确定后派生 `(vendor, model, effort, fastMode, providerId)` 写入 `newMakerDraft`(`vendor` 由推荐/override 引擎决定,`lastByVendor`/`modelChosenByVendor` 语义原样保留),createSession 组装不变;会话内走 SET_MODEL / set-fast-mode / SWITCH_SESSION_AGENT 不变。
 - `sendProviderId` 契约保留:跟随默认路由时**不得**具体化为 'xd'(cohort 基线)。
+- **新建任务沿用当前任务的模型**：在任务页经任一新建入口（顶部新建、快捷键、折叠栏、项目「+」、对话分组「+」、「通过 Cindy 打开」文件夹、拖入文件夹、Work Louder 打开文件夹键）新建时，带上该任务输入框此刻显示的完整组合——引擎、来源、模型、深度、Fast 与 Agent 所在电脑（待生效的切换优先于正在运行的路由；远程任务刚切模型、被控端尚未回流时，取输入框乐观显示的那一份）。创建页按手动选择套用，因此会封住自动下放，并成为之后新建任务的默认。只在新任务仍在同一台任务电脑（本机、同一台被控电脑、同一台 SSH 主机）时套用；换到别的电脑沿用那台原有的默认。Agent 在另一台电脑时，先换好 Agent 所在电脑，等那台的目录播种完再判断引擎是否可用并套用。SSH 任务不读控制端本机的切换意图。请求只消费一次，后退不重放；Bot 任务与非任务页不带模型。实现见 `features/cc-agent/lib/genericNewMakerRouteState.ts` 与 `NewMakerDraftRoute.tsx`，回归见 `genericNewMakerRouteState.test.ts`、`newMakerRouteState.test.ts`。
 
 ### 2.5 三类用户行为(configuration-and-overrides §3)
 

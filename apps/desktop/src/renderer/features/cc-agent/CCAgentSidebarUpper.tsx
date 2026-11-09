@@ -321,7 +321,10 @@ import {
 } from '@/features/scheduler/lib/archiveScheduleWarning';
 import { resolveDialogueDeviceTarget, type DialogueDeviceTarget } from './lib/dialogueCreateTarget';
 import { makeDialogueNewMakerRouteState } from './lib/newMakerRouteState';
-import { makeGenericNewMakerRouteState } from './lib/genericNewMakerRouteState';
+import {
+  makeGenericNewMakerRouteState,
+  withCurrentTaskModelInheritance,
+} from './lib/genericNewMakerRouteState';
 
 const log = createLogger('CCAgentSidebarUpper');
 // perf-baseline(与 MessageStream 的 perf/session-switch 探针同通道):
@@ -2785,9 +2788,11 @@ function ExpandedView({
         deviceLinkDeviceId: project.deviceLinkDeviceId ?? null,
         deviceLinkDeviceName: project.deviceLinkDeviceName ?? null,
       });
-      navigate('/cc-agent/new', { state: makeNewMakerRouteState('dialogue') });
+      navigate('/cc-agent/new', {
+        state: withCurrentTaskModelInheritance(makeNewMakerRouteState('dialogue'), location.pathname),
+      });
     },
-    [handleClearSelection, navigate, t],
+    [handleClearSelection, location.pathname, navigate, t],
   );
 
   const handleCreateProject = useCallback(async () => {
@@ -2813,7 +2818,9 @@ function ExpandedView({
       }
       handleClearSelection();
       patchNewMakerDraft({ workingDir: result.path, remoteHostId: null });
-      navigate('/cc-agent/new', { state: makeNewMakerRouteState('dialogue') });
+      navigate('/cc-agent/new', {
+        state: withCurrentTaskModelInheritance(makeNewMakerRouteState('dialogue'), location.pathname),
+      });
     } catch (err) {
       log.warn('create project directory picker failed', err);
       toast.error(t('ccAgent.sidebar.createProjectFailed'));
@@ -2822,6 +2829,7 @@ function ExpandedView({
     filter.ensureProjectIncluded,
     handleClearSelection,
     hiddenProjectKeys,
+    location.pathname,
     navigate,
     setProjectHidden,
     t,
@@ -2848,10 +2856,13 @@ function ExpandedView({
       }
       handleClearSelection();
       navigate('/cc-agent/new', {
-        state: makeDialogueNewMakerRouteState(target),
+        state: withCurrentTaskModelInheritance(
+          makeDialogueNewMakerRouteState(target),
+          location.pathname,
+        ),
       });
     },
-    [handleClearSelection, navigate, selectedDialogueDeviceResolution],
+    [handleClearSelection, location.pathname, navigate, selectedDialogueDeviceResolution],
   );
 
   const handleImportFromTools = useCallback(

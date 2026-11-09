@@ -97,7 +97,10 @@ describe('Project 行内 + 也对标统一 New(delayed-create)', () => {
     // 断言关键字段而非整块字面量(对格式 / 字段增减鲁棒)。
     expect(sidebarSource).toContain('workingDir: project.workingDir');
     expect(sidebarSource).toContain('deviceLinkDeviceId: project.deviceLinkDeviceId');
-    expect(sidebarSource).toMatch(/navigate\(['`]\/cc-agent\/new['`],\s*\{\s*state:\s*makeNewMakerRouteState\('dialogue'\)\s*\}\)/);
+    // 项目内新建同样沿用当前任务的模型(创建页只在同一台任务电脑上套用)。
+    expect(sidebarSource).toMatch(
+      /navigate\(['`]\/cc-agent\/new['`],\s*\{\s*state:\s*withCurrentTaskModelInheritance\(makeNewMakerRouteState\('dialogue'\),\s*location\.pathname\),?\s*\}\)/,
+    );
   });
 
   it('Projects 段头新建项目先选择目录，再预填 workingDir 进入 /cc-agent/new', () => {

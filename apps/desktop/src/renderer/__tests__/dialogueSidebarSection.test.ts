@@ -178,7 +178,10 @@ describe('Mixed main list (sidebar-redesign D 期)', () => {
     // 无显式目标时仍走作用域推断(pending 守卫 + resolution.target);显式目标见下一条。
     expect(handler).toContain('if (deviceTarget === undefined)');
     expect(handler).toContain('target = selectedDialogueDeviceResolution.target;');
-    expect(handler).toContain('state: makeDialogueNewMakerRouteState(target)');
+    // 新建对话同样沿用当前任务的模型(创建页只在同一台任务电脑上套用)。
+    expect(handler).toMatch(
+      /state: withCurrentTaskModelInheritance\(\s*makeDialogueNewMakerRouteState\(target\),\s*location\.pathname,?\s*\)/,
+    );
     expect(handler).not.toContain('resetDraftWorkspaceTargets');
     expect(handler).not.toContain('patchNewMakerDraft');
     expect(newMakerDraftRouteSource).toContain('readNewMakerDialogueTargetRequest(location.state)');

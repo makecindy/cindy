@@ -103,8 +103,8 @@ describe('ChatInput session switch focus contract', () => {
     expect(mainLayoutSource).toContain("routeSidebarCommand({ type: 'toggle-review-tab', sessionId })");
     expect(mainLayoutSource).toContain('if (reviewIsActive && reviewTab) {');
     expect(mainLayoutSource).toContain('await closeTab(sessionId, reviewTab.id);');
-    expect(mainLayoutSource).toContain(
-      "navigate('/cc-agent/new', { state: makeFolderPickerNewMakerRouteState() })",
+    expect(mainLayoutSource).toMatch(
+      /navigate\('\/cc-agent\/new', \{\s*state: withCurrentTaskModelInheritance\(\s*makeFolderPickerNewMakerRouteState\(\),/,
     );
     expect(newMakerDraftRouteSource).toContain('readNewMakerFolderPickerRequest(location.state)');
     expect(newMakerDraftRouteSource).toContain('setFolderPickerOpen(true)');
