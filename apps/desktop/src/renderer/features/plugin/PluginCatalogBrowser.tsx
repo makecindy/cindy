@@ -186,7 +186,7 @@ export function PluginCatalogBrowser({ cacheRef, ownerKey, revision, query, scop
       }} />
     <div ref={sentinel} className="flex min-h-12 items-center justify-center gap-3 text-12 text-[var(--text-tertiary)]" aria-live="polite">
       {cache.error !== null ? <><span>{t('settings.ghosts.market.unavailable')}</span>
-        <Button size="sm" onClick={() => { void read(cache.error!); rerender(); }}>{t('common.retry')}</Button></>
+        <Button size="sm" onClick={() => { void read(cache.error!); rerender(); }}>{t('commonUi.retry')}</Button></>
         : pending || !cache.metadata ? <><Spinner /><span>{t(query.trim() ? 'settings.ghosts.page.searching' : 'common.loading')}</span></>
           : count === 0 ? cache.metadata?.organizationAccessError || cache.metadata?.unavailableCustomSourceNames.length ? null : <span>{t('settings.ghosts.page.emptyFiltered')}</span>
             : !cache.hasNext ? <span>{t('settings.ghosts.page.allLoaded', { count })}</span> : null}

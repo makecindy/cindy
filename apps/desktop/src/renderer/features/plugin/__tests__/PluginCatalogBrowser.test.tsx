@@ -165,7 +165,7 @@ it('retries a failed page and reuses the same query after a detail return', asyn
   const load = vi.fn().mockRejectedValueOnce(new Error('unavailable')).mockResolvedValue(page(0, 1));
   const { cache, view } = fixture(load);
   const mounted = render(view());
-  fireEvent.click(await screen.findByRole('button', { name: 'common.retry' }));
+  fireEvent.click(await screen.findByRole('button', { name: 'commonUi.retry' }));
   await screen.findByText('Tool 0');
   mounted.unmount();
   render(view());

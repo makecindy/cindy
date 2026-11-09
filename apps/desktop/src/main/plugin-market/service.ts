@@ -1338,11 +1338,10 @@ export class PluginMarketService {
     }
     } catch (error) {
       assertCurrent();
-      if (isIpcError(error) || (typeof error === 'object' && error !== null
-        && (error as { code?: unknown }).code === 'PLUGIN_LIST_CHANGED')) throw error;
       const code = typeof error === 'object' && error !== null ? (error as { code?: unknown }).code : null;
       if (typeof code === 'string' && (code === 'PLUGIN_NAMESPACE_CLIENT_REQUIRED' || code === 'PLUGIN_NAMESPACE_CONFIG_REQUIRED'))
         organizationAccessError = code;
+      else if (isIpcError(error) || code === 'PLUGIN_LIST_CHANGED') throw error;
       else unavailableReason = 'unavailable';
       state.serverDone = true;
       counts = null;

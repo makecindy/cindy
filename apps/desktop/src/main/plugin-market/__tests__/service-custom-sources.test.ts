@@ -388,6 +388,23 @@ function harness(items: VisiblePluginSummary[], marketDirs: Array<{ name: string
 }
 
 describe('PluginMarketService 自定义市场聚合', () => {
+  // Unit, #9487: registered namespace errors also satisfy isIpcError. Both the
+  // combined page and custom-only count read must retain independently readable plugins.
+  it.each(
+    (['PLUGIN_NAMESPACE_CLIENT_REQUIRED', 'PLUGIN_NAMESPACE_CONFIG_REQUIRED'] as const)
+      .flatMap(code => (['all', 'custom'] as const).map(scope => ({ code, scope }))),
+  )('keeps local plugins for $code in the $scope source', async ({ code, scope }) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-custom-namespace-'));
+    roots.push(root);
+    const dir = writeLocalMarket(root, 'team-lib', [{ rel: 'plugins/alpha', id: 'alpha' }]);
+    const h = harness([], [{ name: 'team-lib', dir }]);
+    h.api.catalog.mockRejectedValue(Object.assign(new Error('namespace unavailable'), { code }));
+    const page = await h.service.query({ scope });
+    expect(page.items).toMatchObject([{ ghostId: 'alpha', sourceType: 'local-market' }]);
+    expect(page.organizationAccessError).toBe(code);
+    expect(page.unavailableReason).toBeNull();
+  });
+
   // Unit: source filters reuse counts; neither an unrelated local scan nor a server
   // catalog request is needed just to read the selected source with counts=false.
   it('reads only the selected source when search-wide counts are already known', async () => {
