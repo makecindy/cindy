@@ -6,6 +6,31 @@
 import { act, createElement, useImperativeHandle, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { beforeAll, describe, expect, it, vi } from "vitest";
+// This suite renders zh-CN only. Keep the real i18n initializer, Chinese catalog
+// and English fallback without collecting the ten unused locale catalogs.
+vi.mock('@/i18n/locales/es', () => ({ default: {} }));
+vi.mock('@/i18n/locales/fr', () => ({ default: {} }));
+vi.mock('@/i18n/locales/de', () => ({ default: {} }));
+vi.mock('@/i18n/locales/pt-PT', () => ({ default: {} }));
+vi.mock('@/i18n/locales/pt-BR', () => ({ default: {} }));
+vi.mock('@/i18n/locales/zh-Hant-x-lzh', () => ({ default: {} }));
+vi.mock('@/i18n/locales/zh-Hans-x-lzh', () => ({ default: {} }));
+vi.mock('@/i18n/locales/zh-TW', () => ({ default: {} }));
+vi.mock('@/i18n/locales/ja', () => ({ default: {} }));
+vi.mock('@/i18n/locales/ko', () => ({ default: {} }));
+// Use the production exports needed by this renderer through their narrow
+// entries; the barrels eagerly collect unrelated catalogs and runtime modules.
+vi.mock('@cindy/maker-shared', async () => ({
+  ...await import('../../../../packages/maker-shared/src/filePresentation'),
+  ...await import('../../../../packages/maker-shared/src/sessionPrRefs'),
+  ...await import('../../../../packages/maker-shared/src/sharedTask'),
+  ...await import('../../../../packages/maker-shared/src/outputLimitError'),
+  ...await import('../../../../packages/maker-shared/src/taskTags'),
+  ...await import('../../../../packages/maker-shared/src/userBubbleAppearance'),
+}));
+vi.mock('@cindy/model-providers', async () => ({
+  ...await import('../../../../packages/model-providers/src/classification'),
+}));
 vi.mock('@/platform/gestureHandler', () => {
   const chain = (): any => new Proxy({}, { get: (_target, key) => key === 'then' ? undefined : () => chain() });
   return { GestureDetector: ({ children }: { children: unknown }) => children, Gesture: { LongPress: chain } };
