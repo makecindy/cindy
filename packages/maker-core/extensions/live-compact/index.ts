@@ -1672,6 +1672,14 @@ const REDACT_RULES: Array<[RegExp, string]> = [
   // 终结符的半块一并打掉 —— 否则截断得越巧,密钥越完整地留在备份里。贪心吃完整段
   // base64/空白(无上界),所以超大块与截断块都不会只打一半。
   [/-----BEGIN [A-Z ]*PRIVATE KEY-----(?:\r?\n(?:Proc-Type|DEK-Info):[^\r\n]*)*\r?\n?[A-Za-z0-9+/=:,\s\\]+/g, "[REDACTED PRIVATE KEY]"],
+  // PGP armor(gpg --armor --export-secret-keys):标记带 ` BLOCK` 后缀,块里还有
+  // `Version: GnuPG v2` 这类头行(不是 base64,但不含密钥材料)。正文类要比 PEM 宽一档
+  // (允许 `.` `(` `)`),否则头行会把 base64 正文挡在规则外 —— 密钥正文原样留在影子
+  // 文件里等于没打码。正文类同样不含 `-`:遇到下一个 armor 标记就断住,不会把后面的
+  // 内容一起吃掉(线性度同理)。截断的 armor(输出被砍断、没有 END 标记)按半块规则
+  // 吃到正文末尾。
+  [/-----BEGIN PGP [A-Z ]*KEY BLOCK-----[A-Za-z0-9+/=:,.()\s\\]*?-----END PGP [A-Z ]*KEY BLOCK-----/g, "[REDACTED PRIVATE KEY]"],
+  [/-----BEGIN PGP [A-Z ]*KEY BLOCK-----[A-Za-z0-9+/=:,.()\s\\]+/g, "[REDACTED PRIVATE KEY]"],
   // HTTP 认证头要先单独处理:`Authorization: Basic dXNlcjpwYXNz` 的值不是"键名=值"形态,
   // 键名规则只认到方案名(不足 8 字),base64 里的可复用凭证会原样留下。Bearer 仍由下面那条兜。
   // 冒号后可能是引号(JSON `{"Authorization":"Basic …"}`),方案后面也可能是 Digest 那种
@@ -1685,12 +1693,12 @@ const REDACT_RULES: Array<[RegExp, string]> = [
   // 不打。引号是明确边界,按整段打码;引号没闭合(输出被截断)时吃掉这一行剩下的部分。
   // 引号那两条排在「不带引号」那两条前面:带空格的值若先被后者吃掉前半段,后半段就
   // 成了没人管的口令尾巴(实测 `password="abcdefghij klm"` 会剩下 ` klm"`)。
-  [new RegExp(`((?:${UPPER_SECRET_KEY})["'\`]?\\s*[=:]\\s*)(["'\`])(?!\\[REDACTED)([^\\r\\n]+?)(\\2|$)`, "gm"), "$1$2[REDACTED]$4"],
-  [new RegExp(`((?:${LOWER_SECRET_KEY})["'\`]?\\s*[=:]\\s*)(["'\`])(?!\\[REDACTED)([^\\r\\n]+?)(\\2|$)`, "gim"), "$1$2[REDACTED]$4"],
+  [new RegExp(`((?:${UPPER_SECRET_KEY})["'\`]?\\s*[=:]\\s*)(["'\`])(?!\\[REDACTED)([^\\r\\n]*?)(\\2|$)`, "gm"), "$1$2[REDACTED]$4"],
+  [new RegExp(`((?:${LOWER_SECRET_KEY})["'\`]?\\s*[=:]\\s*)(["'\`])(?!\\[REDACTED)([^\\r\\n]*?)(\\2|$)`, "gim"), "$1$2[REDACTED]$4"],
   // 不带引号的值:一条非空白串、至少 8 个字符(值里允许 `[`,密码可能含方括号);
   // 只豁免「已经是替换标记」的情况,否则会把标记再啃一口。
-  [new RegExp(`((?:${UPPER_SECRET_KEY})["'\`]?\\s*[=:]\\s*)(["'\`]?)(?!\\[REDACTED)([^\\s"'\`]{8,})`, "g"), "$1$2[REDACTED]"],
-  [new RegExp(`((?:${LOWER_SECRET_KEY})["'\`]?\\s*[=:]\\s*)(["'\`]?)(?!\\[REDACTED)([^\\s"'\`]{8,})`, "gi"), "$1$2[REDACTED]"],
+  [new RegExp(`((?:${UPPER_SECRET_KEY})["'\`]?\\s*[=:]\\s*)(["'\`]?)(?!\\[REDACTED)([^\\s"'\`]{1,})`, "g"), "$1$2[REDACTED]"],
+  [new RegExp(`((?:${LOWER_SECRET_KEY})["'\`]?\\s*[=:]\\s*)(["'\`]?)(?!\\[REDACTED)([^\\s"'\`]{1,})`, "gi"), "$1$2[REDACTED]"],
   // RFC 6750 的 b64token 还允许 `~ + /` 和结尾的 `=`:只认 `._-` 时,以 `/` 或 `+` 开头的
   // base64 凭证第一个字符就被排除,整条 token 原样留下。
   [/(?<![A-Za-z0-9])Bearer\s+[A-Za-z0-9._~+/-]{16,}={0,2}/gi, "Bearer [REDACTED]"],

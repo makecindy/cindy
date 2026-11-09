@@ -253,12 +253,43 @@ describe('live compact spine selection', () => {
       'eyJ' + 'A'.repeat(128000),
       // 无终结符的 PEM 开始标记重复出现:惰性 [\s\S]*? 会从每个起点重扫到文末(140K 实测 300ms)。
       ('-----' + 'BEGIN PRIVATE KEY' + '-----' + String.fromCharCode(10)).repeat(2000),
+      // PGP armor 的正文类比 PEM 宽(含空格与括号),但同样不含 `-`:重复标记不能每个都重扫到文末。
+      ('-----' + 'BEGIN PGP PRIVATE KEY BLOCK' + '-----' + String.fromCharCode(10)).repeat(2000),
     ];
     for (const text of cases) {
       const start = Date.now();
       redactSecrets(text);
       expect(Date.now() - start, text.slice(0, 24)).toBeLessThan(300);
     }
+  });
+
+  it('redacts short values, keeps the rest of the line, and masks armored PGP blocks', () => {
+    // 键名已经说明是敏感值:值多短都要打。旧规则要求至少 8 个字,`PASSWORD=abc123` 整条漏掉。
+    const shortValue = ['abc', '123'].join('');
+    const shortAssign = ['PASS', 'WORD=', shortValue].join('');
+    expect(redactSecrets(shortAssign)).not.toContain(shortValue);
+    expect(redactSecrets(shortAssign)).toContain('[REDACTED]');
+    // 空值后面还有别的配置时,不能把整行都吃掉:旧规则把闭引号当正文,一路吃到行尾,
+    // 后面的路径就没了,压缩后也找不回来。
+    const emptyAssign = ['PASS', 'WORD="" PATH=', '/work/project'].join('');
+    expect(redactSecrets(emptyAssign)).toContain('PATH=/work/project');
+    // PGP armor(gpg --armor --export-secret-keys):标记带 ` BLOCK` 后缀,块里有 Version: 头行,
+    // 正文是 base64。头行不含密钥材料,正文整段要打掉。
+    const pgpBody = ['lQOYBF', 'fixture', 'PGPbody', '0123456789abcdef'].join('');
+    const pgpEnd = ['-----', 'END PGP', ' PRIVATE KEY', ' BLOCK-----'].join('');
+    const pgpBlock = [
+      ['-----', 'BEGIN PGP', ' PRIVATE KEY', ' BLOCK-----'].join(''),
+      '',
+      'Version: GnuPG v2',
+      '',
+      pgpBody,
+      pgpEnd,
+    ].join(String.fromCharCode(10));
+    const pgpOut = redactSecrets(pgpBlock);
+    expect(pgpOut).not.toContain(pgpBody);
+    expect(pgpOut).toContain('[REDACTED PRIVATE KEY]');
+    // 截断的 armor(输出被砍断、没有 END 标记)同样要把正文打掉。
+    expect(redactSecrets(pgpBlock.split(pgpEnd)[0])).not.toContain(pgpBody);
   });
 
   it('masks cloud keys, connection-string passwords and PEM blocks', () => {
