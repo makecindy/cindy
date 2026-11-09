@@ -138,13 +138,13 @@ Metro，那里没有 Metro 响应时才退回 `8081`。`8081` 属于其他任务
 
 WidgetKit 的收起、最小、展开与锁屏视图在 `plugins/usage-widgets/CindyAgentActivityWidget.swift`，
 复用已有扩展；ActivityAttributes 从原生模块复制到扩展编译，避免两份 schema 漂移。
-美术直接复用桌面默认角色：`node apps/mobile/scripts/export-agent-activity-artwork.mjs`
+美术直接复用桌面角色目录中的 Cindy（手机版选定角色）：`node apps/mobile/scripts/export-agent-activity-artwork.mjs`
 调用桌面 helper 的 `--export-mascots`，导出含眼睛和姿态的三张静帧，并从桌面实时活动导出
 运行中橙／待处理青／完成绿的颜色目录；手机计数使用「待关注 · 运行中」，待关注包含等待操作和
 未读完成／错误结果。有等待操作时左侧为青色，否则为完成绿；例如一个未读结果和五个运行中
 显示绿色 `1` 与橙色 `5`，只有未读结果时也显示数量。左侧数量由既有总数减运行数得到，兼容旧活动数据。
 生成物随原生 Asset Catalog 编译，不另画手机角色。桌面角色或颜色更新后重跑导出并提交生成物；加 `--check`
-可在任意平台核验源文件与生成物的哈希。手机目前使用桌面默认角色，不同步电脑的个性化皮肤选择。
+可在任意平台核验角色选择、源文件与生成物的哈希。手机固定使用 Cindy，不同步电脑的个性化皮肤选择。
 Android 与没有此模块的旧安装包不调用 ActivityKit。
 
 本阶段仅在手机收到既有连接更新时同步；没有 ActivityKit APNs token 注册或服务端后台续更。

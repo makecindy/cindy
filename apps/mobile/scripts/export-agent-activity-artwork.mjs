@@ -12,10 +12,9 @@ const mobile = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const desktop = path.resolve(mobile, '../desktop/native/agent-island');
 const helperSource = path.join(desktop, 'macos-agent-island-helper.swift');
 const widgetSource = path.join(desktop, 'live-activity/CindyAgentActivityWidget.swift');
-const source = fs.readFileSync(helperSource, 'utf8');
 const palette = fs.readFileSync(widgetSource, 'utf8');
-const skin = source.match(/private let defaultAgentIslandMascotSkin = "([a-z]+)"/)?.[1];
-if (!skin) throw new Error('Desktop default mascot declaration changed; update the exporter.');
+// Mobile uses the owner's selected Cindy character from the desktop catalog.
+const skin = 'cindy';
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
 const sourceHashes = Object.fromEntries([helperSource, widgetSource,
   ...fs.readdirSync(path.join(desktop, 'mascots')).sort().map(file => path.join(desktop, 'mascots', file)),
@@ -24,7 +23,8 @@ const output = path.join(mobile, 'plugins/usage-widgets');
 const manifestPath = path.join(output, 'agent-activity-artwork.json');
 if (process.argv.includes('--check')) {
   const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
-  if (JSON.stringify(manifest.sources) !== JSON.stringify(sourceHashes)
+  if (manifest.defaultMascot !== skin
+    || JSON.stringify(manifest.sources) !== JSON.stringify(sourceHashes)
     || Object.entries(manifest.files).some(([file, digest]) => hash(fs.readFileSync(path.join(output, file))) !== digest)) {
     throw new Error('Desktop artwork changed. Run export-agent-activity-artwork.mjs on macOS and commit the regenerated assets.');
   }

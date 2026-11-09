@@ -1,5 +1,5 @@
 {
-  "defaultMascot": "pululu",
+  "defaultMascot": "cindy",
   "sources": {
     "../desktop/native/agent-island/macos-agent-island-helper.swift": "5d8f1c55ce01f1efe34d909b9a3f808dabf3c244a2b7d6fa66a1713d4085d1d7",
     "../desktop/native/agent-island/live-activity/CindyAgentActivityWidget.swift": "acfbd1603178a9e7c597a1c1a3149e13c1609a1518aa2486b003a036e8683c84",
@@ -14,13 +14,13 @@
     "../desktop/native/agent-island/mascots/whitesnow.png": "a05a55d0ba6c3ba3536094c304925f659ec61c10d6169b705a4b0f5c68535e86"
   },
   "files": {
-    "Assets.xcassets/agent-island-running.imageset/agent-island-running.png": "e2652def34a0367b74ba6a304cceb012724543528cc9a8c587b3f95391add453",
+    "Assets.xcassets/agent-island-running.imageset/agent-island-running.png": "ff3641e14da668e623ea3be212d701ce47983379aaefb6b56e96a7566ea2fe5f",
     "Assets.xcassets/agent-island-running.imageset/Contents.json": "545b32be122170f4ba0d2e4cff9ec6129c56dd5c09cb8251c9a9708fb151449f",
     "Assets.xcassets/agent-island-running.colorset/Contents.json": "ae9256f1c0f86f80925dc04a083131ee7e0a42f2bf93ef1a9b53ca850e43b915",
-    "Assets.xcassets/agent-island-attention.imageset/agent-island-attention.png": "a61bda9a5aad717eab8a94c1dfa11e8ef0da15af1d1e91375783aae64b337d0e",
+    "Assets.xcassets/agent-island-attention.imageset/agent-island-attention.png": "9680c00bea5c82631c74d23188510b69d9b053dfca958505e4b906d83b7350c9",
     "Assets.xcassets/agent-island-attention.imageset/Contents.json": "c8b8300505b56f786f5bd2a28c1c9a07bd2d5e23ebf23bb6cba09a8a0b9dbe80",
     "Assets.xcassets/agent-island-attention.colorset/Contents.json": "f40d1075bf03c6a1f16f442d75fbe7b84262497e751df29ce4aa91a4cacd2443",
-    "Assets.xcassets/agent-island-completed.imageset/agent-island-completed.png": "74550df1463bf215a514acf8db2a0b73e56bed4f833831882d6d4f09ca3285c3",
+    "Assets.xcassets/agent-island-completed.imageset/agent-island-completed.png": "39a224f8150c3f2dfe0f3a6a19f0f1dce3cfdb8b6717ea1f6e3359af9b15d0d3",
     "Assets.xcassets/agent-island-completed.imageset/Contents.json": "53be2154b212b916288c8741be05607e05358f5768361538be6c2930d292e085",
     "Assets.xcassets/agent-island-completed.colorset/Contents.json": "bf96dd96ea340271d762ee936e5856db66cc2ac2c4af4941c8c1193e4919fdc8"
   }
