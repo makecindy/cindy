@@ -1985,12 +1985,16 @@ function hasOutboundControlSubscription(deviceId: string): boolean {
   return hasControlSubscription(snapshotSubscriptions(deviceId).find((entry) => entry.deviceId === deviceId)?.topics ?? []);
 }
 
+function hasExplicitForegroundOpenInCurrentEpoch(deviceId: string): boolean {
+  return explicitForegroundOpens.get(deviceId) === (openLinkCloseEpochs.get(deviceId) ?? 0);
+}
+
 /** Release only a legacy link opened as background, after its last foreground consumer leaves. */
 export function closeLegacyBackgroundLinkIfIdle(deviceId: string): void {
   const epoch = openLinkCloseEpochs.get(deviceId) ?? 0;
   if (legacyBackgroundLinksNeedingCleanup.get(deviceId) !== epoch ||
     hasOutboundControlSubscription(deviceId) || hasForegroundInvokeInCurrentEpoch(deviceId) ||
-    hasForegroundLinkHoldInCurrentEpoch(deviceId) || explicitForegroundOpens.get(deviceId) === epoch) return;
+    hasForegroundLinkHoldInCurrentEpoch(deviceId) || hasExplicitForegroundOpenInCurrentEpoch(deviceId)) return;
   closeRemoteLink(deviceId);
 }
 
@@ -2089,7 +2093,7 @@ export async function openRemoteLink(
       !parseSharedTaskPeer(deviceId)) {
       legacyBackgroundLinksNeedingCleanup.set(deviceId, closeEpoch);
       if (!hasOutboundControlSubscription(deviceId) && !hasForegroundInvokeInCurrentEpoch(deviceId) &&
-        explicitForegroundOpens.get(deviceId) !== closeEpoch &&
+        !hasExplicitForegroundOpenInCurrentEpoch(deviceId) &&
         !hasForegroundLinkHoldInCurrentEpoch(deviceId)) {
         closeLegacyBackgroundLinkIfIdle(deviceId);
         throw new Error('[UNSUPPORTED_CAPABILITY] remote device does not support background links');
@@ -2462,7 +2466,8 @@ export async function remoteSubscribe(
           hasOutboundControlSubscription: () => hasControlSubscription(
             snapshotSubscriptions(deviceId).find((entry) => entry.deviceId === deviceId)?.topics ?? [],
           ),
-          hasForegroundInvoke: () => hasForegroundInvokeInCurrentEpoch(deviceId) || hasForegroundLinkHoldInCurrentEpoch(deviceId),
+          hasForegroundInvoke: () => hasForegroundInvokeInCurrentEpoch(deviceId) ||
+            hasForegroundLinkHoldInCurrentEpoch(deviceId) || hasExplicitForegroundOpenInCurrentEpoch(deviceId),
           closeLink: () => closeRemoteLink(deviceId),
         });
       }

@@ -4,6 +4,7 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { ProviderView } from '@cindy/model-providers';
+import { REMOTE_DESKTOP_CHANNEL } from '@cindy/device-link';
 import { createProviderGroupDirectory } from '../provider-group/directory';
 
 const capabilities = vi.hoisted(() => ({ canUseDeviceLink: true }));
@@ -1253,6 +1254,14 @@ describe('device-link controller handlers', () => {
     expect(deps.invoke).toHaveBeenCalledWith('dev-2', 'local-db:sessions:list', args, { background: true, passiveLink: true });
     await handleInvoke(deps, 'dev-2', 'local-db:sessions:list', args, { background: 'true' });
     expect(deps.invoke).toHaveBeenLastCalledWith('dev-2', 'local-db:sessions:list', args, { passiveLink: true });
+  });
+
+  it('treats an automatic remote-desktop capability probe as passive', async () => {
+    const deps = makeDeps({ invoke: vi.fn().mockResolvedValue({ ok: true, result: {} }) });
+    await handleInvoke(deps, 'dev-2', REMOTE_DESKTOP_CHANNEL, [{ op: 'capabilities' }]);
+    expect(deps.invoke).toHaveBeenCalledWith(
+      'dev-2', REMOTE_DESKTOP_CHANNEL, [{ op: 'capabilities' }], { passiveLink: true },
+    );
   });
 
   it('invoke:CHANNEL_NOT_ALLOWED → 映射 IpcError', async () => {

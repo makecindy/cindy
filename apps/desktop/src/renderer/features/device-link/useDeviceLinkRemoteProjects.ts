@@ -528,6 +528,8 @@ export function useDeviceLinkRemoteProjects(
      * 不补订就会一直「列表可见、运行状态全无」,直到下一次重连 / 熔断恢复重跑 bootstrap。
      */
     const sessionsSubscribeRetry = new Set<string>();
+    /** Old peers cannot suppress their legacy wildcard for passive reads. */
+    const backgroundLinkIncompatible = new Set<string>();
 
     /** 隧道调用是否因「访问权限已被撤销」失败(被控端逐设备黑名单)。 */
     const isAccessRevoked = (err: unknown): boolean =>
@@ -589,6 +591,7 @@ export function useDeviceLinkRemoteProjects(
       clearArchivedSessionRetry(deviceId);
       eligible.delete(deviceId);
       sessionsSubscribeRetry.delete(deviceId);
+      backgroundLinkIncompatible.delete(deviceId);
       revokedDevicesStore.markRevoked(deviceId);
       remoteProjectsStore.removeDevice(deviceId);
       remoteProjectAliases.remove(deviceId);
@@ -639,6 +642,7 @@ export function useDeviceLinkRemoteProjects(
       };
       try {
         await window.electronAPI.deviceLink.subscribe(deviceId, ['sessions']);
+        backgroundLinkIncompatible.delete(deviceId);
         if (sessionsSubscribeRetry.delete(deviceId) && mode === 'resubscribe') {
           log.debug(`subscribe(sessions) recovered for ${deviceId.slice(0, 8)}`);
         }
@@ -648,6 +652,10 @@ export function useDeviceLinkRemoteProjects(
         if (isPermanentSubscribeError(err)) sessionsSubscribeRetry.delete(deviceId);
         else sessionsSubscribeRetry.add(deviceId);
         if (!disposed) log.debug(`subscribe(sessions) failed for ${deviceId.slice(0, 8)}`, err);
+        if (extractIpcError(err)?.code === 'UNSUPPORTED_CAPABILITY') {
+          backgroundLinkIncompatible.add(deviceId);
+          return;
+        }
       }
       // 补订成功后被控端会定向重放当前活动快照,运行图标与灵动岛随之恢复;列表由周期对账负责。
       if (mode === 'resubscribe') return;
@@ -761,6 +769,7 @@ export function useDeviceLinkRemoteProjects(
       } else {
         const wasEligible = eligible.delete(d.deviceId);
         sessionsSubscribeRetry.delete(d.deviceId);
+        backgroundLinkIncompatible.delete(d.deviceId);
         const action = resolveIneligibleRemoteProjectAction({
           wasEligible,
           hasCachedShard: remoteProjectsStore.hasDevice(d.deviceId),
@@ -921,7 +930,7 @@ export function useDeviceLinkRemoteProjects(
       );
     });
     const periodicReconcile = startRemoteSessionsReconciler(
-      () => [...eligible].filter(([id]) => peerReadable(id) && !unresponsiveDevicesStore.has(id)),
+      () => [...eligible].filter(([id]) => peerReadable(id) && !unresponsiveDevicesStore.has(id) && !backgroundLinkIncompatible.has(id)),
       async (deviceId, name) => {
         log.debug(`sessions refresh trigger=periodic window=${windowRole} peer=${deviceId.slice(0, 8)} visible=${periodicReconcileActiveRef.current}`);
         if (sessionsSubscribeRetry.has(deviceId)) {
@@ -1204,6 +1213,7 @@ export function useDeviceLinkRemoteProjects(
       cancelDeviceReseeds(deviceId);
       clearArchivedSessionRetry(deviceId);
       sessionsSubscribeRetry.delete(deviceId);
+      backgroundLinkIncompatible.delete(deviceId);
       remoteProjectAliases.remove(deviceId);
       if (eligible.delete(deviceId)) {
         window.electronAPI.deviceLink.unsubscribe(deviceId, ['sessions']).catch(() => {});

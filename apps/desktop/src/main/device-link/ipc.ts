@@ -15,6 +15,7 @@ import {
   REMOTE_RESOURCE_MANIFEST_CHANNEL,
   REMOTE_RESOURCE_INVOKE_CHANNEL,
   REMOTE_RESOURCE_PROTOCOL_VERSION,
+  REMOTE_DESKTOP_CHANNEL,
   isProviderSharePeer,
 } from '@cindy/device-link';
 import { confirmRemoteSkillMutation, isRemoteSkillApproval } from './remoteSkillConfirmation';
@@ -757,6 +758,15 @@ const PASSIVE_LINK_INVOKE_CHANNELS: ReadonlySet<string> = new Set([
   'sidebar-settings:get-project-aliases',
 ]);
 
+/** A mounted device row probes remote-desktop capability without starting a viewer. */
+function isPassiveLinkInvoke(channel: string, args: unknown[]): boolean {
+  return PASSIVE_LINK_INVOKE_CHANNELS.has(channel) ||
+    (channel === REMOTE_DESKTOP_CHANNEL &&
+      args.length === 1 &&
+      typeof args[0] === 'object' && args[0] !== null &&
+      (args[0] as { op?: unknown }).op === 'capabilities');
+}
+
 export async function handleInvoke(
   deps: DeviceLinkIpcDeps,
   deviceId: unknown,
@@ -908,7 +918,7 @@ export async function handleInvoke(
     // Local admission hint only: never forward this field or change authorization.
     const background = scheduling && typeof scheduling === 'object'
       && 'background' in scheduling && scheduling.background === true;
-    const passiveLink = PASSIVE_LINK_INVOKE_CHANNELS.has(channel);
+    const passiveLink = isPassiveLinkInvoke(channel, callArgs);
     result = background || passiveLink
       ? await deps.invoke(normalizedDeviceId, channel, callArgs, {
         ...(background ? { background: true } : {}),
