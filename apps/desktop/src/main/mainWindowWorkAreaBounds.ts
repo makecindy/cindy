@@ -19,6 +19,18 @@ export interface WorkAreaRect {
 /** DPI rounding and the 1px border Windows reports around a filled work area. */
 const WORK_AREA_FILL_TOLERANCE_PX = 2;
 
+/**
+ * A restore rectangle that equals the work area is the bug this file exists for:
+ * unmaximize then has nowhere smaller to go. When a saved size is moved onto a
+ * shorter monitor it must stay strictly inside, so each side keeps this gap.
+ * Below the window minimum (800×600) the gap still wins: forcing the minimum
+ * there would make the rectangle fill that work area again.
+ */
+const RESTORE_INSET = 64;
+/** BrowserWindow minWidth / minHeight in bootstrap-electron. */
+const MIN_RESTORE_WIDTH = 800;
+const MIN_RESTORE_HEIGHT = 600;
+
 export function boundsFillWorkArea(
   bounds: WorkAreaRect,
   workArea: WorkAreaRect,
@@ -162,8 +174,25 @@ export function persistedBoundsDecision(
   return { bounds: previousNormalBounds ?? bounds, reportMaximized: true };
 }
 
-function workAreasMatch(a: WorkAreaRect, b: WorkAreaRect): boolean {
-  return a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height;
+/** The whole rectangle sits inside the work area. A partial overlap still counts as off-screen. */
+function rectInsideWorkArea(rect: WorkAreaRect, workArea: WorkAreaRect): boolean {
+  return (
+    rect.x >= workArea.x &&
+    rect.y >= workArea.y &&
+    rect.x + rect.width <= workArea.x + workArea.width &&
+    rect.y + rect.height <= workArea.y + workArea.height
+  );
+}
+
+function fitRestoreSize(size: number, workAreaSize: number, minimum: number): number {
+  if (size < workAreaSize) return size;
+  // Clamping onto the work area itself recreates the unmaximize target. Keep a gap
+  // on the side that would otherwise fill it. The window cannot be created below
+  // its minimum, so prefer that when the work area can hold it. A work area smaller
+  // than the minimum cannot: clamping up would fill it, so the gap wins instead.
+  const room = Math.max(0, workAreaSize - RESTORE_INSET);
+  const floor = workAreaSize >= minimum ? minimum : 0;
+  return Math.min(Math.max(floor, Math.min(size, room)), room);
 }
 
 /**
@@ -171,6 +200,10 @@ function workAreasMatch(a: WorkAreaRect, b: WorkAreaRect): boolean {
  * work area the window is on now, keeping its size. A size that no longer fits is
  * clamped first, then x/y are kept inside that work area. Same monitor: the same
  * object comes back, so callers can tell a move from a no-op.
+ *
+ * "Same monitor" requires the saved rectangle to be fully inside the work area it
+ * matched. A disconnected monitor's coordinates also match the surviving display,
+ * and treating that as the same monitor would keep the off-screen position.
  */
 function placeOntoLiveDisplay(
   bounds: WorkAreaRect,
@@ -179,9 +212,9 @@ function placeOntoLiveDisplay(
 ): WorkAreaRect {
   const from = screenApi.getDisplayMatching(bounds).workArea;
   const to = screenApi.getDisplayMatching(live).workArea;
-  if (workAreasMatch(from, to)) return bounds;
-  const width = Math.min(Math.max(0, bounds.width), to.width);
-  const height = Math.min(Math.max(0, bounds.height), to.height);
+  if (rectInsideWorkArea(bounds, from) && rectInsideWorkArea(bounds, to)) return bounds;
+  const width = fitRestoreSize(bounds.width, to.width, MIN_RESTORE_WIDTH);
+  const height = fitRestoreSize(bounds.height, to.height, MIN_RESTORE_HEIGHT);
   const maxX = to.x + Math.max(0, to.width - width);
   const maxY = to.y + Math.max(0, to.height - height);
   return {

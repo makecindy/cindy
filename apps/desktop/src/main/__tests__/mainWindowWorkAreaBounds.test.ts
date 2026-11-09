@@ -490,4 +490,114 @@ describe('manageWindowStatePreservingNormalBounds', () => {
     expect(onB.length).toBeGreaterThan(0);
     expect(saved).toMatchObject({ x: 2048, y: 41, width: 1280, height: 800, isMaximized: true });
   });
+
+  // #9572 复审：目标屏更矮时，把 1280×800 钳到正好等于 1280×680 的工作区，再带着最大化标记保存，
+  // 重启后还原目标又是整块工作区。生产入口同上。最小输入：记下 1280×800，live 变成矮屏的贴满矩形。
+  // 保存的宽高必须至少有一边严格小于工作区。Tier: unit。
+  it('keeps the restore rectangle strictly inside a shorter display', () => {
+    const tall = {
+      bounds: { x: 0, y: 0, width: 1536, height: 864 },
+      workArea: { x: 0, y: 19, width: 1536, height: 845 },
+    };
+    const short = {
+      bounds: { x: 1920, y: 0, width: 1280, height: 720 },
+      workArea: { x: 1920, y: 40, width: 1280, height: 680 },
+    };
+    const screens: WorkAreaScreen = {
+      getPrimaryDisplay: () => tall,
+      getDisplayMatching: (rect) => (rect.x >= 1920 ? short : tall),
+    };
+    const window = createWindow({ x: 128, y: 41, width: 1280, height: 800 });
+    const saved: { x?: number; y?: number; width?: number; height?: number; isMaximized?: boolean } =
+      {};
+    manageWindowStatePreservingNormalBounds(
+      {
+        manage: (win) => {
+          const read = win.getBounds.bind(win);
+          const write = () => {
+            const normal = !win.isMaximized() && !win.isMinimized() && !win.isFullScreen();
+            if (normal) Object.assign(saved, read());
+            saved.isMaximized = win.isMaximized();
+          };
+          win.on?.('resize', write);
+          win.on?.('close', write);
+        },
+      },
+      window.win,
+      screens,
+      'win32',
+    );
+
+    window.emit('resize');
+    window.win.isSnapped = () => true;
+    window.setBounds(short.workArea);
+    window.emit('move');
+    window.emit('close');
+
+    expect(saved.isMaximized).toBe(true);
+    expect(saved.x).toBeGreaterThanOrEqual(short.workArea.x);
+    expect(saved.y).toBeGreaterThanOrEqual(short.workArea.y);
+    expect((saved.width ?? 0) < short.workArea.width || (saved.height ?? 0) < short.workArea.height).toBe(
+      true,
+    );
+    expect(
+      planWindowRestore(
+        {
+          x: saved.x ?? 0,
+          y: saved.y ?? 0,
+          width: saved.width ?? 0,
+          height: saved.height ?? 0,
+          isMaximized: true,
+        },
+        screens,
+        { platform: 'win32' },
+      ),
+    ).toEqual({ restoreMaximized: true, replaceWithDefaultSize: false });
+  });
+
+  // #9572 复审：副屏断开后，屏外的保留矩形也会被 getDisplayMatching 配到幸存屏，于是被当成同一块屏
+  // 而不重定位，下次启动的坐标还在已消失的屏幕上。最小输入：保留矩形完全在幸存屏左侧之外。Tier: unit。
+  it('relocates a restore rectangle whose display has disconnected', () => {
+    const surviving = {
+      bounds: { x: 0, y: 0, width: 1536, height: 864 },
+      workArea: { x: 0, y: 19, width: 1536, height: 845 },
+    };
+    const onlyScreen: WorkAreaScreen = {
+      getPrimaryDisplay: () => surviving,
+      getDisplayMatching: () => surviving,
+    };
+    const window = createWindow({ x: -1800, y: 40, width: 1280, height: 800 });
+    const saved: { x?: number; y?: number; width?: number; height?: number } = {};
+    manageWindowStatePreservingNormalBounds(
+      {
+        manage: (win) => {
+          const read = win.getBounds.bind(win);
+          const write = () => {
+            if (!win.isMaximized() && !win.isMinimized() && !win.isFullScreen()) {
+              Object.assign(saved, read());
+            }
+          };
+          win.on?.('resize', write);
+          win.on?.('close', write);
+        },
+      },
+      window.win,
+      onlyScreen,
+      'win32',
+    );
+
+    window.win.isSnapped = () => true;
+    window.setBounds(surviving.workArea);
+    window.emit('move');
+    window.emit('close');
+
+    expect(saved.x).toBeGreaterThanOrEqual(surviving.workArea.x);
+    expect(saved.y).toBeGreaterThanOrEqual(surviving.workArea.y);
+    expect((saved.x ?? 0) + (saved.width ?? 0)).toBeLessThanOrEqual(
+      surviving.workArea.x + surviving.workArea.width,
+    );
+    expect((saved.y ?? 0) + (saved.height ?? 0)).toBeLessThanOrEqual(
+      surviving.workArea.y + surviving.workArea.height,
+    );
+  });
 });
