@@ -24,6 +24,7 @@ const alive = pid => { try { process.kill(pid, 0); return true; } catch (e) { re
 const git = (cwd, ...args) => run('git', ['-C', cwd, ...args], cwd);
 function config(file) {
   const c = managedConfig(file);
+  check(!Object.hasOwn(c, 'rehearsalApp'), 'rehearsalApp is internal; do not configure an extra installation destination');
   c.automatic ??= {};
   for (const [key, value, min, max] of [['intervalMinutes', 360, 15, 10080], ['startupSeconds', 900, 30, 1800], ['probationSeconds', 120, 30, 900]]) {
     c.automatic[key] ??= value;
