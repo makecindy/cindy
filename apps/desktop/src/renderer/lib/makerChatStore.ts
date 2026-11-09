@@ -5095,7 +5095,16 @@ function applyInputProjection(
         projection.error || projection.credentialSwitchWait ? null : s.recoverableError,
       errorRetryText: projection.errorRetryText,
       errorCanContinue: projection.errorCanContinue === true,
-      errorPersistId: projection.error ? s.errorPersistId : null,
+      // Snapshot-only restore does not replay the terminal event that originally
+      // supplied persistId. Prefer the Host identity; an old Host may omit it.
+      // The fallback only belongs to the same error, never a replacement error.
+      errorPersistId: !projection.error
+        ? null
+        : projection.errorPersistId !== undefined
+          ? (typeof projection.errorPersistId === 'string' && projection.errorPersistId.length > 0
+            ? projection.errorPersistId : null)
+          : s.error && liveErrorTextMatchesRow(s.error, projection.error, projectionErrorReason ?? undefined)
+            ? s.errorPersistId : null,
       credentialSwitchWait: projection.credentialSwitchWait ?? null,
       usageLimitWait:
         projection.error && projection.usageLimitWait
