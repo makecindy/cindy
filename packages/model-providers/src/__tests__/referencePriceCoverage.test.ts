@@ -8,6 +8,31 @@ import {
 const registry = BUNDLED_CATALOG.modelRegistry;
 const at = "2026-09-23";
 
+// Unit: real shared price selectors previously returned unknown for K3 Batch.
+// Cover both markets, XD's official copy, cache TTLs and standard/date isolation.
+describe("Kimi K3 Batch tariffs adopted on November 7", () => {
+  it.each([
+    ["moonshot-kimi-cn", "kimi-k3", "kimi-k3", "cn", "CNY", 12, 60, 1.2, 24, 20],
+    ["moonshot-kimi-global", "kimi-k3", "kimi-k3", "global", "USD", 1.8, 9, 0.18, 3.6, 3],
+    ["xd", "moonshot/kimi-k3", "xd/moonshotai-kimi-k3", "global", "USD", 1.8, 9, 0.18, 3.6, 3],
+    ["xd", "moonshotai/kimi-k3", "xd/moonshotai-kimi-k3", "global", "USD", 1.8, 9, 0.18, 3.6, 3],
+  ] as const)("resolves %s/%s Batch only when explicitly selected",
+    (provider, model, base, priceGroup, currency, input, output, read, write1h, standardInput) => {
+      const options = { at: "2026-11-07", officialOnly: true, variant: "batch" as const };
+      const price = resolveModelReferencePrice(registry, provider, model, options)?.price;
+      expect(price).toEqual({
+        currency, variant: "batch", inputPerMtok: input, outputPerMtok: output,
+        cacheReadPerMtok: read, cacheWritePerMtok: input, cacheWrite1hPerMtok: write1h,
+        effectiveFrom: "2026-11-07",
+        source: { kind: "provider-official", url: `https://platform.kimi.${priceGroup === "cn" ? "com" : "ai"}/docs/pricing/batch`, verifiedAt: "2026-11-07" },
+      });
+      expect(resolveBaseModelReferencePrice(registry, base, { ...options, priceGroup })?.price).toEqual(price);
+      expect(resolveModelReferencePrice(registry, provider, model, { ...options, at: "2026-11-06" })).toBeUndefined();
+      expect(resolveModelReferencePrice(registry, provider, model, { ...options, currency: currency === "USD" ? "CNY" : "USD" })).toBeUndefined();
+      expect(resolveModelReferencePrice(registry, provider, model, { at: options.at })?.price).toMatchObject({ variant: "standard", inputPerMtok: standardInput });
+    });
+});
+
 // Production price resolution: the existing CN route previously had no quote.
 // Unit tier; also protects currency/date/variant boundaries for all consumers.
 describe("MiniMax M3.1 Flash verified China tariff", () => {
