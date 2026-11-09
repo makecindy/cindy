@@ -25,7 +25,7 @@ export async function reviewNightlyEvidence(
   question: string,
   items: ReviewItem[],
   commonSources: ReviewItem['sources'] = [],
-): Promise<Map<number, LearningCitation>> {
+): Promise<Map<number, LearningCitation> | null> {
   const accepted = new Map<number, LearningCitation>();
   const batch = learningSnapshotBudget(items, 100_000);
   if (!batch.length) return accepted;
@@ -42,7 +42,7 @@ export async function reviewNightlyEvidence(
         try { return verdicts.safeParse(JSON.parse(text)).success; } catch { return false; }
       },
     });
-    if (!result.ok) return accepted;
+    if (!result.ok) return null;
     const parsed = verdicts.parse(JSON.parse(result.text));
     for (const { id, source, quote } of parsed.supported) {
       const item = batch.find((entry) => entry.id === id);
@@ -50,7 +50,8 @@ export async function reviewNightlyEvidence(
         accepted.set(id, { source, quote });
     }
   } catch {
-    // An unavailable reviewer cannot authorize a write; other work in the run can still proceed.
+    // Distinguish a transient review failure from a supported response with no approvals.
+    return null;
   }
   return accepted;
 }
