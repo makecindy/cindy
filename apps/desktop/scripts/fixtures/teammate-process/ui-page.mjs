@@ -240,11 +240,11 @@ export default {
     const journal = page.locator('[data-teammate-process]');
     await journal.waitFor();
     assert.equal(await journal.count(), 1, 'One disclosure owns all intermediate notes');
-    // 2026-11-09 screenshot and cindy-bots-runtime: work belongs to the reply
-    // below, not a separate speaker. Actual MessageStream covers live/completed UI.
+    // Visible UI regression: process and reply each own a portrait; expansion
+    // must not repeat it in tool details. Hidden spacers failed this check.
     const processPortrait = journal.locator('xpath=../..').getByTestId('fixture-partner-avatar');
     assert.equal(await processPortrait.count(), 1);
-    assert.equal(await processPortrait.isVisible(), false, 'The process leaves the portrait column empty');
+    assert.equal(await processPortrait.isVisible(), true, 'The process portrait is visible');
     const heading = journal.locator(':scope > button');
     if (definition.data.retry) {
       const action = journal.locator('[data-teammate-segment] > button');
@@ -286,10 +286,8 @@ export default {
       assert.equal(await heading.getAttribute('aria-expanded'), 'true', 'Keep inspected work open on completion');
     }
     await ui.capture('records');
-    assert.equal(await page.locator('[data-testid="fixture-partner-avatar"]:visible').count(), 1, 'The completed process shares the final reply identity');
-    assert.equal(await processPortrait.isVisible(), false, 'Expanding completed details never adds another portrait');
-    const reply = page.locator('[data-bot-reply-bubble]').last();
-    assert.ok(Math.abs((await journal.boundingBox()).x - (await reply.boundingBox()).x) <= 0.5, 'The record aligns with its reply column');
+    assert.equal(await page.getByTestId('fixture-partner-avatar').count(), 2, 'Expanded process and final reply each have one portrait');
+    assert.equal(await processPortrait.isVisible(), true);
     await heading.click();
     assert.equal(await heading.getAttribute('aria-expanded'), 'false');
   },

@@ -2876,7 +2876,7 @@ export const WorkGroupRenderItemView = memo(function WorkGroupRenderItemView({
   item: Extract<RenderItem, { type: 'work_group' }>;
   context: WorkGroupRenderContext;
   compact: boolean;
-  /** 伙伴聊天：沿用回复头像列；过程只占位，头像归下方回复。 */
+  /** 伙伴聊天：过程区与最终回复各显示一个头像，正文保持同列。 */
   companionAvatar?: ReactNode;
 }) {
   // 完成态外层时间线可包含内层 work_group。递归只负责形状映射,
@@ -6308,7 +6308,7 @@ export function MessageStream({
     previousLocalFileRefsRef.current = localFileRefs;
   }, [localFileRefs]);
 
-  // 成果与处理记录和回复正文同列，复用头像占位，不重复显示伙伴头像。
+  // 成果与回复正文同列，只占头像宽度；过程区单独显示伙伴头像。
   const botReplyColumnSpacer = useMemo(
     () =>
       simplifiedBotConversation && assistantAvatar ? (
@@ -6645,7 +6645,7 @@ export function MessageStream({
                           // 伙伴聊天与普通任务同一套工作过程：运行中露最近 5 条活动与计时，
                           // 组头按内容宽；最终答复后保留折叠过程，按需展开。
                           compact={false}
-                          companionAvatar={botReplyColumnSpacer}
+                          companionAvatar={simplifiedBotConversation ? assistantAvatar : undefined}
                         />
                       );
                     }

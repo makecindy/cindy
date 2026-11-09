@@ -181,6 +181,18 @@ export default {
       await page.getByText('任务与 PR 的进展已整理，以下是需要跟进的事项。').waitFor();
       if (definition.data.processOtherOwner) { assert.equal(await journal.count(), 0); return; }
       await journal.waitFor();
+      // 2026-11-09 group-only regression: the record belongs to the reply below.
+      // Use the real group row; private-chat MessageStream is outside this scenario.
+      const assertReplyOwnership = async () => {
+        const row = page.locator('[data-bot-group-message-id="process-answer"]');
+        const portrait = row.locator('article > div').first();
+        const reply = row.getByTestId('bot-group-bubble');
+        const [recordBox, portraitBox, replyBox] = await Promise.all([journal.boundingBox(), portrait.boundingBox(), reply.boundingBox()]);
+        assert.ok(portraitBox.y >= recordBox.y + recordBox.height - 0.5, 'The group record has no portrait beside it; identity follows the reply');
+        assert.ok(Math.abs(recordBox.x - replyBox.x) <= 0.5, 'The group record and reply share the same content column');
+        assert.equal(await row.locator('article').count(), 1, 'The record stays owned by one reply row');
+      };
+      await assertReplyOwnership();
       const heading = journal.locator(':scope > button');
       assert.equal(await heading.getAttribute('aria-expanded'), 'false');
       await heading.click();
@@ -203,6 +215,7 @@ export default {
         return;
       }
       await journal.getByText('我先核对任务的最近进展，再看未完成 PR 的阻塞点。').waitFor();
+      await assertReplyOwnership();
       await ui.capture('history-expanded');
       const endError = await journal.evaluate(root => {
         const rail = root.querySelector('[data-process-guide]').getBoundingClientRect();
@@ -211,6 +224,7 @@ export default {
       });
       assert.ok(endError <= 0.5, `Group guide footer alignment error: ${endError}`);
       await heading.click();
+      await assertReplyOwnership();
       await ui.capture('history-collapsed');
       return;
     }

@@ -563,6 +563,15 @@ function BotGroupTimelineItemImpl(props: BotGroupTimelineItemProps) {
   const dateTime = timed ? new Date(message.createdAt).toISOString() : undefined;
   return (
     <Row {...rowProps} block={continued ? 'continued' : 'author'}>
+      {message.process && message.process.groupId === props.reactionGroupId ? (
+        <div className={cn('flex min-w-0 gap-2.5', sharing && 'ml-8')}>
+          <span aria-hidden className="w-7 shrink-0" />
+          <div className="min-w-0 flex-1">
+            <BotGroupProcess process={message.process}
+              member={members.find(member => member.botId === message.authorBotId)} />
+          </div>
+        </div>
+      ) : null}
       <article
         {...shareAttrs}
         className={cn('group/message relative flex min-w-0 items-start gap-2.5 rounded-lg py-0.5', sharing && 'ml-8')}
@@ -597,8 +606,6 @@ function BotGroupTimelineItemImpl(props: BotGroupTimelineItemProps) {
           ) : null}
           <div className={cn('relative flex min-w-0 flex-col', CHAT_BUBBLE_COLUMN_CLASS)}>
             <ChatMessageReactions corner groupId={props.reactionGroupId} message={message} members={members} reactionRevision={props.reactionRevision} onChanged={props.onChanged} />
-            {message.process && message.process.groupId === props.reactionGroupId ? <BotGroupProcess process={message.process}
-              member={members.find(member => member.botId === message.authorBotId)} /> : null}
             <ChatBubble data-testid="bot-group-bubble" className="flex flex-col gap-2">
               {isPlanCard ? (
                 <div>
