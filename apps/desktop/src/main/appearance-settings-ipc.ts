@@ -12,6 +12,7 @@ import {
   clampAppearanceTerminalSize,
   clampAppearanceUiSize,
   clampAppearanceWindowZoom,
+  isAppIcon,
   type AppearanceOverrides,
   type AppearanceSettings,
   type WallpaperId,
@@ -23,6 +24,7 @@ import {
 import { assertTrustedAppRendererEvent } from './security/trustedAppRenderer.js';
 import { throwIpcError } from './utils/ipcValidate.js';
 import { isAppContentWindow } from './windowFocusClassifier.js';
+import { refreshMacSidebarGeometry } from './macosDesktopBlur.js';
 import {
   readAppearanceSettings,
   readAppearanceSettingsState,
@@ -30,6 +32,7 @@ import {
   updateAppearanceSettingsAtomic,
   writeAppearanceSettingsPatch,
 } from './appearance-settings-store.js';
+import { applyDockIcon } from './app-icon.js';
 
 export { writeAppearanceSettingsPatch } from './appearance-settings-store.js';
 
@@ -129,6 +132,7 @@ export function applyAppearanceToWindow(
 ): void {
   if (win.isDestroyed() || win.webContents.isDestroyed() || !isAppContentWindow(win)) return;
   win.webContents.setZoomFactor(settings.windowZoom);
+  if (process.platform === 'darwin') refreshMacSidebarGeometry(win);
 }
 
 export function applyAppearanceToWindows(settings = readAppearanceSettings()): void {
@@ -222,8 +226,10 @@ function parsePatch(rawPatch: unknown): AppearanceOverrides {
     'wallpaperId',
     'wallpaperOverlay',
     'wallpaperVisibility',
+    'desktopVisibility',
     'wallpaperBlur',
     'wallpaperMotion',
+    'appIcon',
   ]);
   for (const key of Object.keys(raw)) {
     if (!allowed.has(key)) throwIpcError('INVALID_PARAMS', `unknown appearance field: ${key}`);
@@ -296,6 +302,17 @@ function parsePatch(rawPatch: unknown): AppearanceOverrides {
             APPEARANCE_LIMITS.wallpaperVisibility,
           );
   }
+  if ('desktopVisibility' in raw) {
+    patch.desktopVisibility =
+      raw.desktopVisibility === null
+        ? null
+        : parseNumber(
+            raw.desktopVisibility,
+            'desktopVisibility',
+            clampAppearanceWallpaperVisibility,
+            APPEARANCE_LIMITS.wallpaperVisibility,
+          );
+  }
   if ('wallpaperBlur' in raw) {
     patch.wallpaperBlur =
       raw.wallpaperBlur === null
@@ -306,6 +323,10 @@ function parsePatch(rawPatch: unknown): AppearanceOverrides {
             clampAppearanceWallpaperBlur,
             APPEARANCE_LIMITS.wallpaperBlur,
           );
+  }
+  if ('appIcon' in raw) {
+    if (!isAppIcon(raw.appIcon)) throwIpcError('INVALID_PARAMS', 'appIcon is not supported');
+    patch.appIcon = raw.appIcon;
   }
   return patch;
 }
@@ -340,12 +361,14 @@ export const __testing = { parsePatch };
 export async function updateAppearanceFromSettings(rawPatch: unknown) {
   const settings = await writeAppearanceSettingsPatch(parsePatch(rawPatch));
   applyAppearanceToWindows(settings);
+  applyDockIcon(settings);
   broadcast(settings);
   return settings;
 }
 export async function resetAppearanceFromSettings() {
   const settings = await resetAppearanceSettings();
   applyAppearanceToWindows(settings);
+  applyDockIcon(settings);
   broadcast(settings);
   return settings;
 }

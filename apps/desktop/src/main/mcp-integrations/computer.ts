@@ -379,6 +379,12 @@ export interface ComputerDriverUpdateCheck {
   /** Optional on the wire for older desktop peers. */
   checkStatus?: 'success' | 'error';
   checkedAt?: number;
+  /**
+   * 失败原因分类。checkStatus 只有 success/error 两态,无法区分「等一会就能好」
+   * 与「需要用户处理」;这里单独给出可执行的那一类。旧版 renderer 忽略该字段,
+   * 仍按 checkStatus 显示原来的失败文案。
+   */
+  checkError?: { kind: 'rate_limited' | 'network' };
 }
 
 export interface ComputerDriverPermissionGrantResult {
@@ -2943,6 +2949,35 @@ export function getCuaDriverReleaseAssetName(
   return null;
 }
 
+/**
+ * GitHub 未鉴权 REST 限额(60/h,按出口 IP 共享)打满时的 403/429。
+ * 单独建模:它不代表检查本身有问题,而是「等配额重置再试就能成功」,
+ * 需要和真正的网络/上游故障区分开。
+ */
+class GitHubRateLimitError extends Error {
+  constructor(readonly status: number, readonly resetAt: number | null) {
+    super(`GitHub API rate limit reached (${status})`);
+    this.name = 'GitHubRateLimitError';
+  }
+}
+
+/**
+ * 403 也可能是仓库不可访问;只有配额确认见底(x-ratelimit-remaining: 0)
+ * 或显式 429 才按限流处理,避免把别的问题报成「稍后重试」。
+ */
+function toGitHubRateLimitError(res: {
+  ok: boolean;
+  status: number;
+  headers?: { get(name: string): string | null } | null;
+}): GitHubRateLimitError | null {
+  if (res.ok) return null;
+  const remaining = res.headers?.get('x-ratelimit-remaining') ?? null;
+  if (res.status !== 429 && !(res.status === 403 && remaining === '0')) return null;
+  const resetSeconds = Number(res.headers?.get('x-ratelimit-reset'));
+  const resetAt = Number.isFinite(resetSeconds) && resetSeconds > 0 ? resetSeconds * 1000 : null;
+  return new GitHubRateLimitError(res.status, resetAt);
+}
+
 /** 携带 HTTP status,供多候选探测区分可继续的上游 5xx 与应立即停止的错误。 */
 class CuaDriverReleaseHttpError extends Error {
   constructor(readonly status: number, version: string) {
@@ -2980,6 +3015,8 @@ async function fetchInstallableCuaDriverRelease(
     return null;
   }
   if (!res.ok) {
+    const rateLimited = toGitHubRateLimitError(res);
+    if (rateLimited) throw rateLimited;
     throw new CuaDriverReleaseHttpError(res.status, version);
   }
 
@@ -3064,6 +3101,8 @@ async function fetchDriverUpdateCheck(
         { headers, signal: AbortSignal.timeout(UPDATE_CHECK_TIMEOUT_MS) },
       );
       if (!res.ok) {
+        const rateLimited = toGitHubRateLimitError(res);
+        if (rateLimited) throw rateLimited;
         throw new Error(`GitHub matching-refs API responded ${res.status}`);
       }
       const batch = (await res.json()) as Array<{ ref?: unknown }>;
@@ -3132,10 +3171,28 @@ async function fetchDriverUpdateCheck(
     cachedDriverReleaseAssets = [];
     return { currentVersion, latestVersion: currentVersion, updateAvailable: false };
   } catch (err) {
+    if (err instanceof GitHubRateLimitError) {
+      // 限流不是用户侧故障,但它是「现在查不到」的主因;warn 级别让日志能自证。
+      logger.warn('cua-driver update check rate limited by GitHub', {
+        status: err.status,
+        resetAt: err.resetAt === null ? null : new Date(err.resetAt).toISOString(),
+      });
+      return {
+        currentVersion,
+        latestVersion: null,
+        updateAvailable: false,
+        checkError: { kind: 'rate_limited' },
+      };
+    }
     logger.debug('cua-driver update check failed', {
       message: err instanceof Error ? err.message : String(err),
     });
-    return { currentVersion, latestVersion: null, updateAvailable: false };
+    return {
+      currentVersion,
+      latestVersion: null,
+      updateAvailable: false,
+      checkError: { kind: 'network' },
+    };
   }
 }
 
@@ -3156,6 +3213,7 @@ function commitDriverUpdateCheck(
       updateAvailable: cachedDriverUpdateCheck.updateAvailable && cachedDriverUpdateCheck.latestVersion !== null
         && compareSemver(result.currentVersion, cachedDriverUpdateCheck.latestVersion) < 0,
       checkStatus: result.checkStatus,
+      checkError: result.checkError,
       checkedAt: result.checkedAt,
     };
   }
@@ -3620,7 +3678,17 @@ function hookPowerMonitor(): void {
   }
 }
 
-/** True when the screen is locked, from events when seen, else the idle-state probe. */
+/**
+ * Lock state read from the console session at startup, before any lock/unlock event:
+ * Electron's idle-state probe never reports 'locked' on macOS, so a Cindy started on a
+ * locked screen would otherwise believe it is unlocked. A later event always wins.
+ */
+export function seedDesktopScreenLocked(locked: boolean): void {
+  hookPowerMonitor();
+  if (screenLockedByEvent === undefined) screenLockedByEvent = locked;
+}
+
+/** True when the screen is locked, from events (or the startup seed), else the idle-state probe. */
 export function isDesktopScreenLocked(): boolean {
   hookPowerMonitor();
   if (screenLockedByEvent !== undefined) return screenLockedByEvent;
@@ -3631,8 +3699,11 @@ export function isDesktopScreenLocked(): boolean {
   }
 }
 
-/** Milliseconds since the last system HID input not explained by the Agent's own dispatch, or null when unknown. */
-function msSinceForeignDesktopInput(now = Date.now()): number | null {
+/**
+ * Milliseconds since the last system HID input not explained by the Agent's own dispatch, or null when unknown.
+ * Also tells the away guard whether its owner is still at this Mac.
+ */
+export function msSinceForeignDesktopInput(now = Date.now()): number | null {
   let idleSeconds: number;
   try {
     idleSeconds = powerMonitor.getSystemIdleTime();
@@ -3650,13 +3721,23 @@ function msSinceForeignDesktopInput(now = Date.now()): number | null {
   return idleSeconds * 1000;
 }
 
+let physicalInputShielded: () => boolean = () => false;
+/**
+ * The away cover swallows all physical input and locks on a deliberate press, so
+ * device noise under it (a drifting mouse) is not a person using this computer.
+ */
+export function setPhysicalInputShielded(isShielded: () => boolean): void {
+  physicalInputShielded = isShielded;
+}
+
 /** Refuse foreground delivery while a person is using this computer. */
 export function assertNoRecentUserInput(name: ComputerMcpToolName, args: Record<string, unknown>): void {
   if (getComputerTool(name)?.readOnly === true || args.delivery_mode !== 'foreground') return;
+  if (physicalInputShielded()) return;
   const since = msSinceForeignDesktopInput();
   if (since === null || since >= USER_INPUT_ACTIVE_WINDOW_MS) return;
   throw new ComputerDriverError(
-    `Someone is using this computer (keyboard or mouse input ${Math.max(0, Math.round(since / 100) / 10)}s ago). Foreground input was not sent so it cannot land in their window. Wait until they stop, use background delivery or set_value, or ask them before taking the foreground.`,
+    `Someone is using this computer (keyboard or mouse input ${Math.max(0, Math.round(since / 100) / 10)}s ago). Foreground input was not sent so it cannot land in their window. Continue in the background: background delivery, window-local coordinates, double_click, a menu bar item, set_value, or files and command-line tools for the same change. Wait or ask them before taking the foreground only when none of these can do it.`,
     'USER_INPUT_ACTIVE',
   );
 }

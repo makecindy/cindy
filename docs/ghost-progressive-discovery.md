@@ -84,7 +84,8 @@ frontmatter `name + description` 的召回作用；`manual.items` 只是插件�
 
 `ghost_info`、`ghost_call`、`ghost_manual` 和 `connect_account` 都接受可选 `namespace`：
 
-- 省略：同名实例只有一个时解析到它，包括升级普查中还没有 namespace 字段的旧安装。
+- 省略：按下述日常版本规则选择 public/local 副本；其它同名实例仍须明确寻址。
+  同名实例只有一个时解析到它，包括升级普查中还没有 namespace 字段的旧安装。
 - `null`：已确认的 root。不能用来点名唯一的待迁移旧安装。
 - `"local"`：本地开发副本；其它字符串为企业 orgSlug。
 
@@ -100,6 +101,23 @@ frontmatter `name + description` 的召回作用；`manual.items` 只是插件�
 `ghostVisibility.test.ts` 和 `ghostWorkdirGate.test.ts`。
 
 同名多实例返回 `GHOST_AMBIGUOUS`，`candidates` 是 `{ ghostId, namespace }`。已确认 root 的 namespace 为 null，local 副本为字符串 local，企业实例为 orgSlug。待迁移旧安装没有 namespace 字段；它和另一个实例同名时，候选里的 null 可以点到这个待迁移实例。`/命令` 对没有 namespace 字段的旧安装不写 namespace，沿用 `(id: <ghostId>)`。已确认 root 写 `namespace: null`，企业实例写 `namespace: <orgSlug>`。
+
+### 2.2 日常调用的 public/local 版本选择
+
+同一逻辑 id 同时存在已确认的 public（`namespace: null`）与 local 副本时，
+花名册、`ghost_list` 和省略 namespace 的默认查询／调用只选择版本较新的一份。
+按 SemVer 比较数值段和预发布标识，build metadata 不影响版本优先级；版本相同选 public。
+不是本地优先，也不是公开版永久优先。每次实时查询重新选择，更新／启停／工作目录变化
+后不沿用旧胜者。已停用、下线或当前账号／工作目录不可用的副本不遮挡可用副本。
+
+企业 namespace、尚未确认的旧身份、无法比较的历史版本和重复物理身份不按名字强行合并，
+保持原来的明确寻址／歧义处理。显式 namespace 或物理实例键仍精确指向原安装，供明确指定
+来源的调试、历史页面与在途调用使用；不得静默把已绑定的请求、凭据或文件授权换给另一副本。
+管理列表保留所有安装，不改启用设置、不搬凭据和数据、不删除旧包。
+
+生产判据为 `ghostVisibility.ts` 的 `preferLatestLocalOrPublicGhosts`；
+花名册与实时清单在现有可见性过滤后复用它，默认名称解析也复用同一判据。
+回归见 `ghostVisibility.test.ts` 与 `ghostWorkdirGate.test.ts`。
 
 ## 3. 花名册（roster）
 

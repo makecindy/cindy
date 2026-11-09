@@ -1,3 +1,4 @@
+import { withAvailabilityPolicyMutation } from './providerShareAvailabilityPolicy.js';
 import fs from 'node:fs';
 import { isProviderShareMemberBudget, type ProviderShareMemberBudget } from '../../shared/providerShareBudget.js';
 import { activeOwnerScopeKey, ownerScopedUserDataPath } from '../appSessionState.js';
@@ -13,7 +14,7 @@ const object = (value: unknown): value is Record<string, unknown> => Boolean(val
 const selection = (value: unknown): string[] => isRemoteModelSelection(value) && value !== null ? value : [];
 
 /** Remote-only authorization; local model preferences and supplier credentials never pass through this store. */
-export function createRemoteModelAccessStore(options: { filePath(): string; scopeKey(): string }) {
+export function createRemoteModelAccessStore(options: { filePath(): string; scopeKey(): string; withMutation?<T>(providerId: string, work: () => Promise<T>): Promise<T> }) {
   const listeners = new Set<() => void>();
   const log = createLogger('remote-model-access');
   const store = createOverrideSettingsFile<Settings>({
@@ -81,6 +82,7 @@ export function createRemoteModelAccessStore(options: { filePath(): string; scop
       if (memberBudget !== undefined && (!memberId || (memberBudget !== null && !isProviderShareMemberBudget(memberBudget))))
         throwIpcError('INVALID_PARAMS', 'Invalid member budget settings');
       assertCurrent();
+      return (options.withMutation ?? ((_id, work) => work()))(providerId, async () => {
       await store.updateAtomic(({ value }) => {
         assertCurrent();
         if (value.providers === null) throwIpcError('PRECONDITION_FAILED', 'Remote model permissions could not be read');
@@ -109,6 +111,7 @@ export function createRemoteModelAccessStore(options: { filePath(): string; scop
         catch (error) { log.warn('remote model access listener failed', { error: String(error) }); }
       }
       return updated;
+      });
     },
     subscribe(listener: () => void): () => void {
       listeners.add(listener);
@@ -118,6 +121,7 @@ export function createRemoteModelAccessStore(options: { filePath(): string; scop
 }
 
 export const remoteModelAccess = createRemoteModelAccessStore({
+  withMutation: withAvailabilityPolicyMutation,
   filePath: () => ownerScopedUserDataPath('remote-model-access.json'),
   scopeKey: () => { captureProviderManagementScope(); return activeOwnerScopeKey(); },
 });

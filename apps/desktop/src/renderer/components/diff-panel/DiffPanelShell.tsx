@@ -211,7 +211,7 @@ export function DiffPanelShell({
           isFloating
             ? 'right-3 top-3 bottom-3 overflow-hidden rounded-xl border border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)] text-[var(--msg-assistant-text)]'
             : 'right-0 top-[46px] bottom-0 border-l border-border bg-popover text-popover-foreground',
-          showShadow && (isFloating ? 'shadow-[var(--shadow-menu)]' : 'shadow-xl'),
+          showShadow && 'shadow-[shadow:var(--shadow-menu)]',
           'flex flex-col',
           'transition-transform duration-200 ease-out',
           open ? 'translate-x-0' : isFloating ? 'pointer-events-none translate-x-[calc(100%+16px)]' : 'translate-x-full',

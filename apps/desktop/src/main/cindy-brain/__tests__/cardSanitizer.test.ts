@@ -9,7 +9,7 @@ import { describe, expect, it } from 'vitest';
 
 import { sanitizeGhostCardHtml } from '../cardSanitizer';
 import { GHOST_CARD_HTML_MAX_BYTES, ghostCardDeclaresModelSelect } from '../../../shared/ghost';
-import { readGhostCardForm } from '@cindy/maker-shared/ghost-card-form';
+import { readGhostCardForm, readGhostCardSupersededBy } from '@cindy/maker-shared/ghost-card-form';
 
 const HASH = 'a'.repeat(64);
 const GOOD_IMG = `cindy-media://blobs/${HASH}.png`;
@@ -21,6 +21,11 @@ function ok(html: string): string {
 }
 
 describe('sanitizeGhostCardHtml', () => {
+  it('keeps plugin HTML from posing as a card the Host marked superseded', () => {
+    // Views hide a superseded card, so only the Host may set the marker (cardService, with sourceCallId).
+    expect(readGhostCardSupersededBy(ok('<div data-cindy-superseded-by="victim" hidden></div><p>x</p>'))).toBeUndefined();
+  });
+
   it('permits inert form declarations without enabling native forms, scripts or navigation', () => {
     const fields = [{ name: 'body', label: 'Message', value: '<script>"&', multiline: true }];
     const encoded = JSON.stringify(fields).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
@@ -445,6 +450,25 @@ describe('sanitizeGhostCardHtml · PR 状态位(data-ghost-pr-status)', () => {
     expect(ok('<div data-ghost-pr-status="octo/repo#0">a</div><div data-ghost-pr-status="octo/repo#1&quot; x=&quot;">b</div><span data-ghost-pr-status="octo/repo#1">c</span>'))
       .toBe('<div>a</div><div>b</div><span>c</span>');
   });
+
+  // Rule (2026-11-06): a card merged outside it kept saying "following" with live buttons; the host
+  // hides parts marked open-only. Minimal input: each allowed tag, a bad value and a disallowed tag.
+  it('放行 div / span / button 上的 data-ghost-pr-open-only,其它值和标签只丢属性', () => {
+    expect(ok('<div data-ghost-pr-open-only="o/r#9">a</div><span data-ghost-pr-open-only="o/r#9">b</span><button data-ghost-pr-open-only="o/r#9">c</button>'))
+      .toBe('<div data-ghost-pr-open-only="o/r#9">a</div><span data-ghost-pr-open-only="o/r#9">b</span><button data-ghost-pr-open-only="o/r#9" type="button">c</button>');
+    expect(ok('<div data-ghost-pr-open-only="o/r">a</div><p data-ghost-pr-open-only="o/r#9">b</p>')).toBe('<div>a</div><p>b</p>');
+  });
+
+  // Rule (2026-11-06): the archive-task button is handled by the host, never by the plugin, so it
+  // only stays on a plain button; on one that also dispatches to the plugin or opens a link it is dropped.
+  it('只在没有动作和外链的 button 上放行 data-ghost-task-archive 及其快照和自动标记', () => {
+    expect(ok('<button data-ghost-task-archive="o/r#9" data-ghost-task-archive-state="merged" data-ghost-task-archive-auto aria-label="A"></button>'))
+      .toBe('<button data-ghost-task-archive="o/r#9" data-ghost-task-archive-state="merged" data-ghost-task-archive-auto="" type="button" aria-label="A"></button>');
+    expect(ok('<button data-ghost-action="pr:x" data-ghost-task-archive="o/r#9">a</button><button data-ghost-link="https://github.com/o/r" data-ghost-task-archive="o/r#9">b</button>'))
+      .toBe('<button data-ghost-action="pr:x" type="button">a</button><button data-ghost-link="https://github.com/o/r" type="button">b</button>');
+    expect(ok('<button data-ghost-task-archive="o/r#9" data-ghost-task-archive-state="open">a</button><div data-ghost-task-archive="o/r#9">b</div>'))
+      .toBe('<button data-ghost-task-archive="o/r#9" type="button">a</button><div>b</div>');
+  });
 });
 
 // 宿主按归一后的字面量判断卡片的位置和宽度,净化器只能放出这一种写法。
@@ -562,4 +586,26 @@ describe('sanitizeGhostCardHtml · 卡内外链声明(v3,data-ghost-link)', () =
     );
     expect(out).toBe('<a data-ghost-link="https://a.com/">x</a>');
   });
+});
+
+
+it('preserves only navigation-only Cindy task links, never commands or ambiguous targets', () => {
+  expect(ok('<a href="cindy://session/task-42">打开原任务</a>')).toBe('<a data-ghost-link="cindy://session/task-42">打开原任务</a>');
+  for (const url of ['cindy://settings', 'cindy://session/task?command=run', 'cindy://session/../settings', 'cindy://session/%2e%2e', 'cindy://session/task#x', 'cindy://session/task/other']) {
+    expect(ok(`<a href="${url}">open</a>`)).toBe('<a>open</a>');
+  }
+});
+
+// Unit: older clients need the ordinary action; only safe, input-free buttons
+// may opt into native navigation. Existing href tests do not cover this fallback.
+it('retains the legacy action and validates the optional native task entry', () => {
+  expect(ok('<button data-ghost-action="open" data-ghost-session-link="cindy://session/task">Open</button>'))
+    .toBe('<button data-ghost-action="open" data-ghost-session-link="cindy://session/task" type="button">Open</button>');
+  for (const attrs of ['data-ghost-action="open" data-ghost-prompt=""', 'data-ghost-action="open" data-ghost-submit="true"', '', 'data-ghost-action="!bad"']) {
+    expect(ok(`<button ${attrs} data-ghost-session-link="cindy://session/task">Open</button>`)).not.toContain('data-ghost-session-link');
+  }
+  for (const url of ['cindy://settings', 'cindy://session/task?run=1', 'https://example.test']) {
+    expect(ok(`<button data-ghost-action="open" data-ghost-session-link="${url}">Open</button>`))
+      .toBe('<button data-ghost-action="open" type="button">Open</button>');
+  }
 });

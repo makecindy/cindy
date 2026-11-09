@@ -17,6 +17,7 @@
  */
 
 import { createAttachmentRecovery } from './oversized-attachment-recovery.js';
+import { getSessionSubscriptionAccount } from '../subscription-accounts/session.js';
 import {
   createAnthropicCompatProxy,
   createActiveStripTransform,
@@ -28,6 +29,7 @@ import {
   createEncryptedContentRecoveryRule,
   createToolExchangeAdjacencyRecoveryRule,
   createToolUseProviderSpecificFieldsRecoveryRule,
+  createToolReferenceRecoveryRule,
   createXaiModelInputRecoveryRule,
   createXaiModelInputSanitizeTransform,
   createAnthropicEffortCompatibilityRule,
@@ -137,6 +139,7 @@ import {
 import {
   authenticatePiProxySession,
   getPiProxySessionProvider,
+  getPiProxySubscriptionAccount,
   isPiProxySubagentRoute,
 } from './pi-proxy-session-auth.js';
 import { createXdToolResultImageNoticeTransform } from './xd-tool-result-image-notice.js';
@@ -744,7 +747,8 @@ export function createModelRoutingTransform(): RoutingTransform {
         // PI has already built the provider-native request. The local handler
         // authenticates and forwards it; the xAI forwarder also restores its
         // provider server tools, but no Claude protocol bridge runs.
-        localHandler: getPiNativeSubscriptionHandler(piProviderId, piSessionId),
+        localHandler: getPiNativeSubscriptionHandler(piProviderId, piSessionId, undefined,
+          getPiProxySubscriptionAccount(piSessionId, claimedPiSessionToken)),
       };
     }
     const isPiGatewayRequest = Boolean(
@@ -837,7 +841,8 @@ export function createModelRoutingTransform(): RoutingTransform {
       fastIdentities.set(ctx.headers, { sessionId, providerId: bridgeProviderId });
       const denied = authorizeClaudeRoute(bridgeProviderId, bridgedSubscriptionModel(wireModel));
       if (denied) return denied;
-      const bridgeHandler = getResponsesBridgeHandler((isOpenAiSubscriptionProviderId(selectedProviderId) || isXaiSubscriptionProviderId(selectedProviderId)) ? selectedProviderId! : undefined);
+      const bridgeHandler = getResponsesBridgeHandler((isOpenAiSubscriptionProviderId(selectedProviderId) || isXaiSubscriptionProviderId(selectedProviderId)) ? selectedProviderId! : undefined,
+        bridgeProviderId === 'openai' ? getSessionSubscriptionAccount(sessionId) : undefined);
       if (!bridgeHandler) {
         if (isExclusiveXaiModelId(wireModel)) {
           log.warn('exclusive xAI model but responses handler unavailable; refusing default gateway', {
@@ -1331,6 +1336,7 @@ export async function ensureAnthropicCompatProxyReady(): Promise<void> {
           onRetry: (threadId, model) => emptyAssistantStripController.markActive(threadId, model),
         }),
         createToolUseProviderSpecificFieldsRecoveryRule(),
+        createToolReferenceRecoveryRule(),
         // tool 配对断裂 400(moonshot `tool_call_id is not found` / Anthropic
         // `unexpected tool_use_id` / `tool_use ids were found without tool_result`
         // / OpenAI 系 wording)→ 组合结构修复重发,always-on。

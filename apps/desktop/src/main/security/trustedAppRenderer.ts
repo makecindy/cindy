@@ -70,9 +70,14 @@ export function isTrustedTopLevelCindyRendererEventForLocation(
   event: MainIpcEvent,
   options: TrustedRendererUrlOptions,
 ): boolean {
-  const frame = event.senderFrame;
-  if (!frame || frame !== event.sender.mainFrame || frame.parent !== null) return false;
-  return isTrustedAppRendererUrl(frame.url, options);
+  try {
+    const frame = event.senderFrame;
+    if (!frame || frame !== event.sender.mainFrame || frame.parent !== null) return false;
+    return isTrustedAppRendererUrl(frame.url, options);
+  } catch {
+    // Renderer 已退出时 Electron 的 frame getter 会直接抛错；失效页面一律不可信。
+    return false;
+  }
 }
 
 /** 与生产判定相同，但允许测试显式传入 renderer 地址。 */
@@ -109,9 +114,15 @@ export function isTrustedCindyRendererWindowForLocation(
   options: TrustedRendererUrlOptions,
 ): boolean {
   if (!win || win.isDestroyed() || win.webContents.isDestroyed()) return false;
-  const frame = win.webContents.mainFrame;
-  if (!frame) return false;
-  return isTrustedAppRendererUrl(frame.url, options);
+  try {
+    const frame = win.webContents.mainFrame;
+    if (!frame) return false;
+    return isTrustedAppRendererUrl(frame.url, options);
+  } catch {
+    // Renderer 进程退出后窗口与 WebContents 仍未销毁，但读取 mainFrame / url 会抛
+    // "Render frame was disposed"。广播与退出清理都会走到这里，必须失败关闭而不是抛出。
+    return false;
+  }
 }
 
 /** 与生产判定相同，但允许测试显式传入 renderer 地址。 */

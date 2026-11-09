@@ -2,6 +2,7 @@ import { PluginShareButton } from './PluginShareButton';
 import { Button } from '@/components/ui/button';
 import { PluginVersionUpdates } from './PluginVersionUpdates';
 import { ToolsSection } from './GhostPluginDetailView';
+import { PluginReadmeSection } from './PluginReadmeSection';
 import { useId } from 'react';
 import { Download, ShieldCheck } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
@@ -123,6 +124,7 @@ export function MarketPluginDetailView({
           ) : null}
         </header>
 
+        <PluginReadmeSection readme={detail.readme ?? null} />
         {detail.manifest.tools?.length ? <ToolsSection tools={detail.manifest.tools} /> : null}
         <section className="mt-10" aria-labelledby="market-security-title">
           <h2

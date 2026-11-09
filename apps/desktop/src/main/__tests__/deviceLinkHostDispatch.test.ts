@@ -65,7 +65,11 @@ import type { InvokeResultPayload } from '@cindy/device-link';
 
 const SRC = 'controller-device';
 const kimiRead = vi.hoisted(() => vi.fn());
-vi.mock('../maker-host/provider-account-usage.js', () => ({ readKimiCodingAccountUsage: kimiRead }));
+const opencodeGoRead = vi.hoisted(() => vi.fn());
+vi.mock('../maker-host/provider-account-usage.js', () => ({
+  readKimiCodingAccountUsage: kimiRead,
+  readOpenCodeGoAccountUsage: opencodeGoRead,
+}));
 const TMP_DIR = os.tmpdir(); // 真实存在的目录(模拟"浏览到/新建的远程目录")
 let managedWorktreeTestRoot = '';
 let managedWorktreeDir = '';
@@ -470,16 +474,34 @@ describe('Kimi same-account quota read', () => {
   });
 });
 
+describe('OpenCode Go same-account quota read', () => {
+  it('forwards only the validated query and preserves the read-only result', async () => {
+    opencodeGoRead.mockResolvedValueOnce({ status: 'unavailable', error: 'auth' });
+    const result = await runInvoke(SRC, {
+      channel: 'maker:usage:opencode-go',
+      args: [{ providerId: 'opencode-go', agent: 'codex', forceRefresh: true, token: 'untrusted' }],
+    });
+    expect(result).toEqual({ ok: true, result: { status: 'unavailable', error: 'auth' } });
+    expect(opencodeGoRead).toHaveBeenLastCalledWith({ providerId: 'opencode-go', agent: 'codex', forceRefresh: true });
+  });
+});
+
 // Tier 2: the real tunnel must advertise quota support without releasing routes.
 it('advertises Kimi quota only from official routes in the redacted remote catalog', async () => {
   registerHandler('maker:provider:list', async () => ({ providers: [
     { id: 'kimi', name: 'Kimi', auth: { method: 'apiKey' }, agents: ['pi'], models: {}, routing: { pi: { upstream: 'https://api.kimi.com/coding/v1', authStrategy: 'api-key-header' } } },
     { id: 'proxy', name: 'Proxy', auth: { method: 'apiKey' }, agents: ['pi'], models: {}, kimiCodingUsageAgents: ['pi'], routing: { pi: { upstream: 'https://proxy.example/coding/v1' } } },
+    { id: 'opencode-go', name: 'OpenCode Go', source: 'user', auth: { method: 'apiKey' }, agents: ['codex'], models: {}, routing: { codex: { upstream: 'https://opencode.ai/zen/go/v1', authStrategy: 'api-key-header' } } },
+    { id: 'fake-opencode', name: 'Fake OpenCode', source: 'user', auth: { method: 'apiKey' }, agents: ['codex'], models: {}, opencodeGoUsageAgents: ['codex'], routing: { codex: { upstream: 'https://proxy.example/zen/go/v1' } } },
   ] }));
   const result = await runInvoke(SRC, { channel: 'maker:provider:list', args: [] });
-  expect(result).toMatchObject({ ok: true, result: { providers: [{ id: 'kimi', kimiCodingUsageAgents: ['pi'] }, { id: 'proxy' }] } });
+  expect(result).toMatchObject({ ok: true, result: { providers: [
+    { id: 'kimi', kimiCodingUsageAgents: ['pi'] }, { id: 'proxy' },
+    { id: 'opencode-go', opencodeGoUsageAgents: ['codex'] }, { id: 'fake-opencode' },
+  ] } });
   const text = JSON.stringify(result);
   expect(text).not.toContain('api.kimi.com');
   expect(text).not.toContain('proxy.example');
   expect(text.match(/kimiCodingUsageAgents/g)).toHaveLength(1);
+  expect(text.match(/opencodeGoUsageAgents/g)).toHaveLength(1);
 });

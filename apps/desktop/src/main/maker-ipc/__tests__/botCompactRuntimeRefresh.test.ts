@@ -240,8 +240,15 @@ describe('capability refresh input admission', () => {
     interaction = true;
     await expect(admit()).resolves.toBe('deferred');
     interaction = false;
+    // Regression: a background job used to block every send for as long as it ran.
+    // Input now runs on the current runtime; the refresh (which would close the
+    // runtime and kill the job) stays pending until the session is truly idle.
     h.setBackgroundTasks(1);
+    await expect(admit()).resolves.toBe('kept-current-runtime');
+    expect(coordinator.hasPending(h.session.id, h.session)).toBe(true);
+    h.setRunning(true);
     await expect(admit()).resolves.toBe('deferred');
+    h.setRunning(false);
     expect(refresh).not.toHaveBeenCalled();
     h.setBackgroundTasks(0);
     await expect(admit()).resolves.toBe('refreshed');

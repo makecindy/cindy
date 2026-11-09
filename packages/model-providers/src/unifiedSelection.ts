@@ -63,6 +63,7 @@ import {
 import { deriveModelList } from './modelList.js';
 import { modelProtocolComparison } from './modelProtocol.js';
 import { effortRank } from './effortResolution.js';
+import { markedSelectionAliasGroups, type SelectionAliasPreferences } from './selectionAliasGroups.js';
 import {
   CHATGPT_MODEL_PREFIX,
   XAI_MODEL_PREFIX,
@@ -560,6 +561,8 @@ export interface UnifiedModelEntry {
   /** Scoped preference key keeps ambiguous legacy bridge preferences off another route. */
   enginePreferenceId?: string;
   legacyEnginePreferenceId?: string;
+  /** Exact original rows, retained for history, favorite targets and preference read/write keys. */
+  aliasEntries?: readonly UnifiedModelEntry[];
   providerId: string;
   /** ★**归一化 id**(行的稳定身份 / override / 收藏 key)。发请求请用 `capabilities[agent].wireModelId`。 */
   modelId: string;
@@ -589,6 +592,8 @@ export interface UnifiedModelEntry {
 }
 
 export interface UnifiedModelEntriesOptions {
+  /** Omitted = preserve separate alias rows; no caller may discard uninspected preferences. */
+  aliasPreferences?: (providerId: string, agent: AgentKind, modelId: string) => SelectionAliasPreferences;
   providers: readonly ProviderView[];
   /** 参与联合的引擎;缺省 = 全部三个。 */
   agents?: readonly AgentKind[];
@@ -880,7 +885,35 @@ export function unifiedModelEntries(opts: UnifiedModelEntriesOptions): UnifiedMo
       capabilities,
     });
   }
-  return out;
+  return mergeAliasEntries(out, opts);
+}
+
+function mergeAliasEntries(entries: UnifiedModelEntry[], options: UnifiedModelEntriesOptions): UnifiedModelEntry[] {
+  if (!options.aliasPreferences) return entries;
+  const groups = options.providers.flatMap((provider) => markedSelectionAliasGroups(provider,
+    (agent, modelId) => options.aliasPreferences!(provider.id, agent, modelId)));
+  const emitted = new Set<string>();
+  return entries.flatMap((entry) => {
+    const group = groups.find((g) => g.providerId === entry.providerId &&
+      Object.values(g.members).some((models) => models?.some((m) => m.id === entry.modelId)));
+    if (!group) return [entry];
+    const key = `${group.providerId}:${group.keyModelId}`;
+    if (emitted.has(key)) return [];
+    emitted.add(key);
+    const aliases = entries.filter((candidate) => candidate.providerId === group.providerId &&
+      Object.values(group.members).some((models) => models?.some((m) => m.id === candidate.modelId)));
+    if (aliases.length < 2) return aliases;
+    const preferred = aliases.find((a) => a.modelId === group.keyModelId) ?? aliases[0];
+    const capabilities: UnifiedModelEntry['capabilities'] = {};
+    for (const agent of UNIFIED_AGENT_PRIORITY) {
+      const kept = options.keepModel?.agent === agent && options.keepModel.providerId === group.providerId
+        ? aliases.find((a) => a.capabilities[agent]?.wireModelId === options.keepModel!.modelId) : undefined;
+      const source = kept ?? (preferred.capabilities[agent] ? preferred : aliases.find((a) => a.capabilities[agent]));
+      if (source?.capabilities[agent]) capabilities[agent] = source.capabilities[agent];
+    }
+    const candidates = UNIFIED_AGENT_PRIORITY.filter((agent) => capabilities[agent]);
+    return [{ ...preferred, modelId: group.keyModelId, candidates, capabilities, aliasEntries: aliases }];
+  });
 }
 
 /**
@@ -936,7 +969,10 @@ export function resolveStoredModelEntry(
   if (legacy.length) return legacy.length === 1 && legacy[0].legacyEnginePreferenceId === modelId
     ? legacy[0] : undefined;
   return candidates.find(entry => entry.modelId === modelId)
-    ?? candidates.find(entry => Object.values(entry.capabilities).some(capability => capability?.wireModelId === modelId));
+    ?? candidates.find(entry => Object.values(entry.capabilities).some(capability => capability?.wireModelId === modelId))
+    // Stored shortcuts still name real members, even when a new pick uses the preferred ID.
+    ?? candidates.find(entry => entry.aliasEntries &&
+      resolveStoredModelEntry(entry.aliasEntries, providerId, modelId) !== undefined);
 }
 
 /** Display an offline shortcut without exposing its storage namespace. */

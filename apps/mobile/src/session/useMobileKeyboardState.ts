@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from 'react';
+import { useEffect, useLayoutEffect, useReducer, useRef, useState, type RefObject } from 'react';
 import {
   AccessibilityInfo,
   Keyboard,
@@ -9,7 +9,15 @@ import {
   type KeyboardMetrics,
 } from 'react-native';
 import type { LoginKeyboardRect } from '@/auth/loginKeyboardAvoidance';
-import { isDockedKeyboard } from '@/auth/loginKeyboardAvoidance';
+import {
+  fallbackKeyboardHeight,
+  hasRememberedKeyboardHeight,
+  iosKeyboardOverlap,
+  isImplausibleIPhoneKeyboardFrame,
+  loadDockedKeyboardHeights,
+  rememberDockedKeyboard,
+  subscribeDockedKeyboardHeights,
+} from '@/session/keyboardOverlap';
 import { getCachedReduceMotionEnabled } from '@/hooks/useReduceMotion';
 import { mobileDebugLog } from '@/debug/mobileDebugLog';
 
@@ -29,6 +37,12 @@ export interface MobileKeyboardState {
  */
 export function useMobileKeyboardState(enabled = true): MobileKeyboardState {
   const viewport = useWindowDimensions();
+  const viewportRef = useRef({ width: viewport.width, height: viewport.height, changedAt: 0 });
+  if (viewportRef.current.width !== viewport.width || viewportRef.current.height !== viewport.height) {
+    viewportRef.current = { width: viewport.width, height: viewport.height, changedAt: Date.now() };
+  }
+  // 本机记录读完后重渲染，重新计算已显示键盘的遮挡高度。
+  const [, refreshHeights] = useReducer((count: number) => count + 1, 0);
   const [state, setState] = useState(() => readKeyboardSnapshot(enabled));
   const snapshot = useRef(state);
   const transition = useRef<MobileKeyboardState['transition']['current']>(null);
@@ -36,6 +50,7 @@ export function useMobileKeyboardState(enabled = true): MobileKeyboardState {
   useLayoutEffect(() => {
     transition.current = null;
     if (!enabled) return;
+    loadDockedKeyboardHeights();
     // A hidden consumer missed native events. Reconcile before paint without
     // replaying an animation, including reopening while the keyboard is up.
     const current = readKeyboardSnapshot(true);
@@ -52,6 +67,20 @@ export function useMobileKeyboardState(enabled = true): MobileKeyboardState {
       const previous = snapshot.current;
       if (previous.shown === shown && sameKeyboardFrame(previous.frame, frame)) return;
       mobileDebugLog('debug', 'keyboard', 'frame received', { shown, durationMs: event.duration, easing: event.easing, frame: event.endCoordinates });
+      if (frame && Platform.OS === 'ios') {
+        const size = viewportRef.current;
+        if (isImplausibleIPhoneKeyboardFrame(frame, size)) {
+          mobileDebugLog('info', 'keyboard', 'implausible frame replaced', {
+            frame,
+            viewport: { width: size.width, height: size.height },
+            fallbackHeight: fallbackKeyboardHeight(size),
+            remembered: hasRememberedKeyboardHeight(size),
+          });
+        } else if (Date.now() - size.changedAt >= ROTATION_SETTLE_MS) {
+          // 转屏途中会发来整宽贴底、但高度不对的过渡帧（Duo 横屏实测 308，实际 264）。
+          rememberDockedKeyboard(frame, size);
+        }
+      }
       const next = { shown, frame };
       snapshot.current = next;
       transition.current = { event, startedAt: Date.now() };
@@ -111,18 +140,17 @@ export function useMobileKeyboardState(enabled = true): MobileKeyboardState {
         update({ duration: 0, easing: 'keyboard', endCoordinates: initialFrame });
       }
     }
+    const unsubscribeHeights = subscribeDockedKeyboardHeights(refreshHeights);
     return () => {
       disposed = true;
+      unsubscribeHeights();
       for (const subscription of subscriptions) subscription.remove();
     };
   }, [enabled]);
 
   const frame = enabled && state.shown ? state.frame : null;
   const height = !frame ? 0 : Platform.OS === 'ios'
-    ? isDockedKeyboard({ x: frame.screenX, y: frame.screenY, ...frame }, viewport.width)
-      && frame.screenY + frame.height >= viewport.height
-      ? Math.max(0, Math.min(frame.height, viewport.height - frame.screenY))
-      : 0
+    ? iosKeyboardOverlap(frame, viewport)
     : Math.max(0, frame.height);
   return { height, visible: height > 0, transition };
 }
@@ -143,6 +171,8 @@ function sameKeyboardFrame(a: KeyboardMetrics | null, b: KeyboardMetrics | null)
     && a.screenX === b.screenX && a.screenY === b.screenY
     && a.width === b.width && a.height === b.height);
 }
+
+const ROTATION_SETTLE_MS = 1000;
 
 /** 登录键盘契约的完整矩形状态(visible + endCoordinates 矩形)。 */
 export interface LoginKeyboardRectState {

@@ -180,6 +180,12 @@ describe('provider weekly quota identity and windows', () => {
     ).toBe('codex');
     expect(providerWeeklyQuotaSource(provider('anthropic'))).toBe('claude');
     expect(providerWeeklyQuotaSource(provider('xai'))).toBe('xai');
+    expect(providerWeeklyQuotaSource(provider('opencode-go', {
+      source: 'user',
+      auth: { method: 'apiKey' },
+      access: { kind: 'api' },
+      routing: { pi: { upstream: 'https://opencode.ai/zen/go/v1', authStrategy: 'api-key-header' } },
+    }))).toBe('opencode-go');
     for (const p of [
       provider('openai', { connected: false }),
       provider('openai', { suspended: true }),

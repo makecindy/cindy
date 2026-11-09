@@ -1741,6 +1741,41 @@ describe('landed user route selection', () => {
 });
 
 describe('远程 Agent:选模型时换 Agent 所在电脑', () => {
+  // Unit regression for provider-groups §6.1: companion eligibility can change
+  // while history or the target is read. Earlier cancellation tests only changed
+  // the synchronous lease, not the host's asynchronous companion-state guard.
+  it.each(['handoff', 'native-transfer', 'route-recheck'] as const)(
+    'stops companion relocation when eligibility is revoked during %s', async phase => {
+      let eligible = true;
+      let routeChecks = 0;
+      const { deps } = makeDeps({
+        getSessionRow: vi.fn(async () => makeRow({ source: 'bot', workingDir: '/project', agentDeviceId: 'source' })),
+        listMessagesForHandoff: vi.fn(async () => {
+          if (phase === 'handoff') eligible = false;
+          return [{ role: 'user', content: 'continue the task', createdAt: 1 }];
+        }),
+        relocateNativeHistory: vi.fn(async () => {
+          if (phase === 'native-transfer') eligible = false;
+          return 'transferred';
+        }),
+        assertModelRouteUsable: vi.fn(async () => {
+          if (++routeChecks > 1 && phase === 'route-recheck') eligible = false;
+          return undefined;
+        }),
+      });
+      await expect(performSessionAgentSwitch(deps, {
+        sessionId: 's1', targetAgentKind: 'claude-code', model: 'claude-fable-5',
+        providerId: 'xd', agentDeviceId: 'target', applyNow: true, providerGroupRelocation: true,
+        beforeMutation: async () => { if (!eligible) throw new Error('companion is no longer eligible'); },
+      })).rejects.toThrow('companion is no longer eligible');
+      expect(deps.closeSession).toHaveBeenCalledTimes(phase === 'handoff' ? 0 : 1);
+      expect(deps.applyAgentSwitchToDb).not.toHaveBeenCalled();
+      expect(deps.insertBoundaryMessage).not.toHaveBeenCalled();
+      expect(deps.setPendingHandoff).not.toHaveBeenCalled();
+      expect(deps.bootstrapSwitchedSession).not.toHaveBeenCalled();
+    },
+  );
+
   function relocationHarness(rowOverrides: Partial<AgentSwitchSessionRow> = {}) {
     const pending = createPendingAgentSwitchRegistry();
     const row = makeRow({ agentDeviceId: 'studio-mac', providerId: 'anthropic', ...rowOverrides });

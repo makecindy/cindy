@@ -72,6 +72,9 @@ import {
   type TurnEndPayload,
   type TelegramCommandMenu,
   makeProviderCommandsSet,
+  CHANNEL_HISTORY_MAX_MESSAGES,
+  CHANNEL_HISTORY_ENTRY_MAX_CHARS,
+  CHANNEL_HISTORY_ATTACHMENT_TEXT_MAX_CHARS,
 } from '@cindy/slack-hook-protocol';
 import { createTelegramMessageLifecycle, type TelegramMessageLifecycle } from '@cindy/im';
 import type { SendOrigin } from '@cindy/maker-core';
@@ -538,9 +541,10 @@ const SOURCE_TRIGGER_MESSAGE_ID_MAX = 64;
 const SOURCE_CHANNEL_NAME_MAX = 160;
 const SOURCE_TEAM_ID_MAX = 128;
 const SOURCE_TEAM_NAME_MAX = 160;
-const SOURCE_THREAD_CONTEXT_MAX = 20;
+const SOURCE_THREAD_CONTEXT_MAX = CHANNEL_HISTORY_MAX_MESSAGES;
 const SOURCE_THREAD_AUTHOR_MAX = 128;
-const SOURCE_THREAD_TEXT_MAX = 4_000;
+// History body plus timestamp and bounded attachment status must remain visible.
+const SOURCE_THREAD_TEXT_MAX = CHANNEL_HISTORY_ENTRY_MAX_CHARS + CHANNEL_HISTORY_ATTACHMENT_TEXT_MAX_CHARS + 256;
 
 /**
  * Bound IM display metadata before it reaches session persistence. The wire
@@ -565,7 +569,7 @@ export function normalizeTaskSource(source: TaskSource): TaskSource {
   const displayContext = source.im === 'x' && source.triggerMessageId && source.userText?.trim()
     ? source.threadContext?.filter((entry) => entry.messageId !== source.triggerMessageId)
     : source.threadContext;
-  const threadContext = displayContext?.slice(0, SOURCE_THREAD_CONTEXT_MAX).map((entry) => ({
+  const threadContext = displayContext?.slice(-SOURCE_THREAD_CONTEXT_MAX).map((entry) => ({
     ...(entry.messageId !== undefined ? { messageId: entry.messageId.slice(0, SOURCE_TRIGGER_MESSAGE_ID_MAX) } : {}),
     ...(entry.authorId !== undefined ? { authorId: entry.authorId.slice(0, SOURCE_THREAD_AUTHOR_MAX) } : {}),
     ...(entry.replyToMessageId !== undefined ? { replyToMessageId: entry.replyToMessageId?.slice(0, SOURCE_TRIGGER_MESSAGE_ID_MAX) ?? null } : {}),
@@ -688,14 +692,15 @@ interface PendingTurnEnd {
 /**
  * 渠道形态(dm / group)—— 只看 externalKey 的前缀形状, 不查任何状态。
  *
- * **唯一用途**: 官方 Telegram 群轮次在 send 时取 session turn lease, 把
+ * **唯一用途**: 官方 Telegram / 飞书群轮次在 send 时取 session turn lease, 把
  * 「前台 done → 后台任务续跑」这段空窗也算作本轮独占, 否则 Desktop 轮次会被
  * 放进来与它共享 session 事件流 / origin / 交互路由(codex review #1490)。
  * 与权限档**无关** —— 群轮次不再改用户配的权限模式(见 session-runner)。
  * execute() 与续跑观察共用同一判据, 分叉会让续跑轮丢掉这层独占。
+ * 官方飞书 / Lark 的群消息一律在话题里回复(`feishu:topic:…`), 同样是多人可见的群轮次。
  */
 function deriveLaneKind(externalKey: string): 'dm' | 'group' {
-  return /^telegram:(group|topic):/.test(externalKey) ? 'group' : 'dm';
+  return /^(?:telegram|feishu):(?:group|topic):/.test(externalKey) ? 'group' : 'dm';
 }
 
 interface PendingReopen {
@@ -2710,7 +2715,9 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
           titleText,
           bareKey,
           payload.source?.teamName ??
-            (payload.source?.im === 'telegram' || payload.source?.im === 'x'
+            (payload.source?.im === 'telegram' ||
+            payload.source?.im === 'x' ||
+            payload.source?.im === 'feishu'
               ? payload.source.channelName
               : null),
         ),

@@ -223,13 +223,16 @@ describe('buildSetupPlan', () => {
   it('drops interface preferences outside the portable whitelist', () => {
     const plan = buildSetupPlan(
       planInputs({
-        snapshot: snapshot({ rendererPrefs: { theme: 'dark', 'sidebar-collapsed': 'true', 'experimental.x': '1' } }),
+        snapshot: snapshot({ rendererPrefs: {
+          theme: 'dark', 'sidebar-collapsed': 'true', 'experimental.x': '1',
+          'notifications.agentIslandSubtleReminders': 'true',
+        } }),
       }),
     );
     expect(plan.rendererPrefs).toEqual({
       key: 'renderer-prefs',
       state: 'ready',
-      values: { theme: 'dark', 'experimental.x': '1' },
+      values: { theme: 'dark', 'experimental.x': '1', 'notifications.agentIslandSubtleReminders': 'true' },
     });
   });
 });

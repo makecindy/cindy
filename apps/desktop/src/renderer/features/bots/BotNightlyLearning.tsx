@@ -10,13 +10,11 @@ import { SegmentedControl } from '@/components/ui/segmented-control';
 import { Spinner } from '@/components/ui/spinner';
 import { Switch } from '@/components/ui/switch';
 import {
-  SETTINGS_CARD_CLASS,
-  SETTINGS_ROW_CLASS,
-  SETTINGS_ROW_DIVIDER_CLASS,
-  SETTINGS_ROW_HINT_CLASS,
-  SETTINGS_ROW_LABEL_CLASS,
-  SETTINGS_SECTION_TITLE_CLASS,
-} from '@/components/settings/settingsRowClasses';
+  SETTINGS_HINT,
+  SettingsCard,
+  SettingsRow,
+  SettingsSection,
+} from '@/components/ui/settings-rows';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
@@ -106,117 +104,113 @@ export function BotNightlyLearning({ botId }: { botId: string }) {
   return (
     <div className="space-y-3">
       {view.enabled === null ? (
-        <div className={SETTINGS_CARD_CLASS}>
-          <p className={cn(SETTINGS_ROW_CLASS, SETTINGS_ROW_HINT_CLASS)}>{t('routines.nightly.notHere')}</p>
-        </div>
+        <SettingsCard>
+          <p className={cn('px-4 py-4', SETTINGS_HINT)}>{t('routines.nightly.notHere')}</p>
+        </SettingsCard>
       ) : (
-        <div className={SETTINGS_CARD_CLASS}>
-          <div className={SETTINGS_ROW_CLASS}>
-            <div className="min-w-0">
-              <p className={SETTINGS_ROW_LABEL_CLASS}>{t('routines.nightly.switchLabel')}</p>
-              <p className={cn(SETTINGS_ROW_HINT_CLASS, 'mt-0.5')}>
-                {view.memoryEnabled ? t('routines.nightly.switchHint') : t('routines.nightly.memoryOff')}
-              </p>
-            </div>
-            <Switch
-              aria-label={t('routines.nightly.switchLabel')}
-              checked={view.enabled}
-              disabled={busy}
-              onCheckedChange={(enabled) => void act(() => api.setEnabled(botId, enabled === true))}
-            />
-          </div>
-          <div className={SETTINGS_ROW_DIVIDER_CLASS} />
-          <div className={cn(SETTINGS_ROW_CLASS, 'flex-wrap')}>
-            <div className="min-w-0">
-              <p className={SETTINGS_ROW_LABEL_CLASS}>{t('routines.nightly.frequency')}</p>
-              <p className={cn(SETTINGS_ROW_HINT_CLASS, 'mt-0.5')}>
-                {t(view.frequency === 'weekly' ? 'routines.nightly.weeklyHint' : 'routines.nightly.dailyHint')}
-              </p>
-            </div>
-            <SegmentedControl<NightlyLearningFrequency>
-              aria-label={t('routines.nightly.frequency')}
-              value={view.frequency}
-              options={frequencyOptions}
-              disabled={busy}
-              onValueChange={(frequency) => void act(() => api.setFrequency(botId, frequency))}
-            />
-          </div>
-          <div className={SETTINGS_ROW_DIVIDER_CLASS} />
-          <div className={SETTINGS_ROW_CLASS}>
-            <div className="min-w-0">
-              <p className={SETTINGS_ROW_LABEL_CLASS}>{t('routines.nightly.pending')}</p>
-              <p className={cn(SETTINGS_ROW_HINT_CLASS, 'mt-0.5 tabular-nums')}>{pendingHint}</p>
-            </div>
-            <Button
-              variant="secondary"
-              size="sm"
-              disabled={busy}
-              loading={view.running}
-              onClick={() => void act(() => api.runNow(botId))}
-            >
-              {t('routines.nightly.runNow')}
-            </Button>
-          </div>
-        </div>
+        <SettingsCard>
+          <SettingsRow
+            title={t('routines.nightly.switchLabel')}
+            hint={view.memoryEnabled ? t('routines.nightly.switchHint') : t('routines.nightly.memoryOff')}
+            trailing={
+              <Switch
+                aria-label={t('routines.nightly.switchLabel')}
+                checked={view.enabled}
+                disabled={busy}
+                onCheckedChange={(enabled) => void act(() => api.setEnabled(botId, enabled === true))}
+              />
+            }
+          />
+          <SettingsRow
+            wrap
+            title={t('routines.nightly.frequency')}
+            hint={t(view.frequency === 'weekly' ? 'routines.nightly.weeklyHint' : 'routines.nightly.dailyHint')}
+            trailing={
+              <SegmentedControl<NightlyLearningFrequency>
+                aria-label={t('routines.nightly.frequency')}
+                value={view.frequency}
+                options={frequencyOptions}
+                disabled={busy}
+                onValueChange={(frequency) => void act(() => api.setFrequency(botId, frequency))}
+              />
+            }
+          />
+          <SettingsRow
+            title={t('routines.nightly.pending')}
+            hint={<span className="tabular-nums">{pendingHint}</span>}
+            trailing={
+              <Button
+                variant="secondary"
+                size="sm"
+                disabled={busy}
+                loading={view.running}
+                onClick={() => void act(() => api.runNow(botId))}
+              >
+                {t('routines.nightly.runNow')}
+              </Button>
+            }
+          />
+        </SettingsCard>
       )}
 
-      <h3 className={cn(SETTINGS_SECTION_TITLE_CLASS, 'pt-4')}>{t('routines.nightly.history')}</h3>
-      <div className={SETTINGS_CARD_CLASS}>
-        {view.runs.length === 0 ? (
-          <p className={cn(SETTINGS_ROW_CLASS, SETTINGS_ROW_HINT_CLASS)}>{t('routines.nightly.empty')}</p>
-        ) : view.runs.map((run, index) => (
-          <div key={run.id} className={cn('py-1', index > 0 && 'border-t border-[var(--settings-theme-card-border)]')}>
-            {run.items.length > 0 ? (
-              <>
-                <div className="flex items-baseline justify-between gap-3 px-4 pb-1 pt-3">
-                  <span className="whitespace-nowrap text-13 font-medium tabular-nums text-[var(--text-primary)]">{when(run.at)}</span>
-                  <span className="text-right text-12 tabular-nums text-[var(--text-tertiary)]">{runMeta(run)}</span>
-                </div>
-                {run.items.map((item) => (
-                  <div key={item.id} className="flex items-start gap-2.5 px-4 py-2">
-                    <span className="mt-0.5 text-[var(--text-secondary)]" aria-hidden="true">
-                      {item.kind === 'skill' ? <BookOpen size={14} /> : <Brain size={14} />}
-                    </span>
-                    <div className="min-w-0 flex-1">
-                      <p className={cn('text-13 leading-5', item.undone
-                        ? 'text-[var(--text-tertiary)] line-through decoration-[var(--text-placeholder)]'
-                        : 'text-[var(--text-primary)]')}>
-                        {itemText(t, item)}
-                      </p>
-                      <p className={cn('mt-px text-12 leading-[1.5]', item.undone ? 'text-[var(--text-tertiary)]' : 'text-[var(--text-secondary)]')}>
-                        {item.undone ? t('routines.nightly.undone') : item.reason}
-                      </p>
-                    </div>
-                    <button
-                      type="button"
-                      className={ACTION_BUTTON_CLASS}
-                      disabled={busy}
-                      onClick={() => void act(() => api.revert(botId, run.id, item.id, !!item.undone))}
-                    >
-                      {t(item.undone ? 'routines.nightly.redo' : 'routines.nightly.undo')}
-                    </button>
+      <SettingsSection title={t('routines.nightly.history')} headingLevel={3} className="pt-4">
+        <SettingsCard>
+          {view.runs.length === 0 ? (
+            <p className={cn('px-4 py-4', SETTINGS_HINT)}>{t('routines.nightly.empty')}</p>
+          ) : view.runs.map((run, index) => (
+            <div key={run.id} className={cn('py-1', index > 0 && 'border-t border-[var(--settings-theme-card-border)]')}>
+              {run.items.length > 0 ? (
+                <>
+                  <div className="flex items-baseline justify-between gap-3 px-4 pb-1 pt-3">
+                    <span className="whitespace-nowrap text-13 font-medium tabular-nums text-[var(--text-primary)]">{when(run.at)}</span>
+                    <span className="text-right text-12 tabular-nums text-[var(--text-tertiary)]">{runMeta(run)}</span>
                   </div>
-                ))}
-                <div className="h-2" />
-              </>
-            ) : (
-              <div className="flex items-baseline justify-between gap-3 px-4 py-3">
-                <span className="whitespace-nowrap text-13 tabular-nums text-[var(--text-secondary)]">{when(run.at)}</span>
-                <span className="text-right text-12 text-[var(--text-tertiary)]">
-                  {run.outcome === 'failed' ? t('routines.nightly.lastFailed') : `${runMeta(run)} · ${t('routines.nightly.nothing')}`}
-                </span>
-              </div>
-            )}
-          </div>
-        ))}
-      </div>
+                  {run.items.map((item) => (
+                    <div key={item.id} className="flex items-start gap-2.5 px-4 py-2">
+                      <span className="mt-0.5 text-[var(--text-secondary)]" aria-hidden="true">
+                        {item.kind === 'skill' ? <BookOpen size={14} /> : <Brain size={14} />}
+                      </span>
+                      <div className="min-w-0 flex-1">
+                        <p className={cn('text-13 leading-5', item.undone
+                          ? 'text-[var(--text-tertiary)] line-through decoration-[var(--text-placeholder)]'
+                          : 'text-[var(--text-primary)]')}>
+                          {itemText(t, item)}
+                        </p>
+                        <p className={cn('mt-px text-12 leading-[1.5]', item.undone ? 'text-[var(--text-tertiary)]' : 'text-[var(--text-secondary)]')}>
+                          {item.undone ? t('routines.nightly.undone') : item.reason}
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        className={ACTION_BUTTON_CLASS}
+                        disabled={busy}
+                        onClick={() => void act(() => api.revert(botId, run.id, item.id, !!item.undone))}
+                      >
+                        {t(item.undone ? 'routines.nightly.redo' : 'routines.nightly.undo')}
+                      </button>
+                    </div>
+                  ))}
+                  <div className="h-2" />
+                </>
+              ) : (
+                <div className="flex items-baseline justify-between gap-3 px-4 py-3">
+                  <span className="whitespace-nowrap text-13 tabular-nums text-[var(--text-secondary)]">{when(run.at)}</span>
+                  <span className="text-right text-12 text-[var(--text-tertiary)]">
+                    {run.outcome === 'failed' ? t('routines.nightly.lastFailed') : `${runMeta(run)} · ${t('routines.nightly.nothing')}`}
+                  </span>
+                </div>
+              )}
+            </div>
+          ))}
+        </SettingsCard>
+      </SettingsSection>
 
       {view.candidates.length > 0 ? (
-        <div className={SETTINGS_CARD_CLASS}>
+        <SettingsCard>
           <button
             type="button"
             aria-expanded={watchOpen}
-            className="flex w-full items-center gap-1.5 rounded-xl px-4 py-3.5 text-left text-13 font-medium text-[var(--text-primary)] outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+            className="flex w-full items-center gap-1.5 rounded-xl px-4 py-3.5 text-left text-13 font-medium text-[var(--text-primary)] outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--focus-ring)]"
             onClick={() => setWatchOpen((open) => !open)}
           >
             <Eye size={14} className="text-[var(--text-secondary)]" aria-hidden="true" />
@@ -252,7 +246,7 @@ export function BotNightlyLearning({ botId }: { botId: string }) {
               <div className="h-2" />
             </div>
           </div>
-        </div>
+        </SettingsCard>
       ) : null}
     </div>
   );

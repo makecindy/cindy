@@ -436,6 +436,57 @@ describe('shared history view lifecycle', () => {
     expect(view.getSnapshot().expanded.size).toBe(0);
   });
 
+  // Unit: a refreshed projection can remove a work range while its detail read
+  // is pending. That late response must not resurrect an unreachable body.
+  it('discards late details for a range removed by a refreshed page', async () => {
+    let rows = [row(1, 'thinking', 'old')];
+    let resolve!: (page: { version: 1; messages: HistoryMessageSource[]; hasMore: false; nextCursor: null }) => void;
+    const view = new HistoryViewController<HistoryMessageSource>({
+      page: async () => ({ version: 1, items: projectHistoryView(rows, false), hasMore: false, nextCursor: null }),
+      details: () => new Promise<Parameters<typeof resolve>[0]>(done => { resolve = done; }),
+      expanded: async () => undefined,
+    });
+    await view.refresh();
+    const group = view.getSnapshot().items[0];
+    if (group.type !== 'work') throw new Error('Expected a work group');
+    view.setExpanded(group.key, true);
+    const pending = view.loadDetails(group.summary);
+    rows = [row(1, 'assistant', 'updated')];
+    await view.refresh();
+    expect(historyWorkSummaries(view.getSnapshot().items)).toHaveLength(0);
+    resolve({ version: 1, messages: [row(1, 'thinking', 'late body')], hasMore: false, nextCursor: null });
+    await pending;
+    expect(view.getSnapshot().details.size).toBe(0);
+  });
+
+  it('releases a large partial detail body when collapsed during pagination', async () => {
+    const body = row(1, 'thinking', 'x'.repeat(1024 * 1024));
+    let finish!: (page: { version: 1; messages: HistoryMessageSource[]; hasMore: false; nextCursor: null }) => void;
+    let started!: () => void;
+    const secondPage = new Promise<void>(resolve => { started = resolve; });
+    const view = new HistoryViewController<HistoryMessageSource>({
+      page: async () => ({ version: 1, items: projectHistoryView([body], false), hasMore: false, nextCursor: null }),
+      details: async (_ref, after) => {
+        if (!after) return { version: 1, messages: [body], hasMore: true, nextCursor: 'next' };
+        started();
+        return new Promise<Parameters<typeof finish>[0]>(resolve => { finish = resolve; });
+      },
+      expanded: async () => undefined,
+    });
+    await view.refresh();
+    const group = view.getSnapshot().items[0];
+    if (group.type !== 'work') throw new Error('Expected a work group');
+    view.setExpanded(group.key, true);
+    const pending = view.loadDetails(group.summary);
+    await secondPage;
+    expect(view.getSnapshot().details.get(group.key)?.messages).toHaveLength(1);
+    view.setExpanded(group.key, false);
+    expect(view.getSnapshot().details.size).toBe(0);
+    finish({ version: 1, messages: [], hasMore: false, nextCursor: null });
+    await pending;
+    expect(view.getSnapshot().details.size).toBe(0);
+  });
+
   it.each([false, true])('joins an expanded detail read through its latest revision (changed=%s)', async (changed) => {
     let rows = [row(1, 'thinking', 'old')];
     const replies: Array<(page: { version: 1; messages: HistoryMessageSource[]; hasMore: false; nextCursor: null }) => void> = [];

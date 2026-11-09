@@ -204,7 +204,8 @@ it('uses LegendList virtualization with platform-scoped history anchoring', () =
       scrollSource.indexOf('const wasNearBottom'),
     )).toContain('return;');
     expect(scrollSource).toContain('shouldPreserveMobileHistoryBrowseIntent({');
-    expect(scrollSource).toContain('historyBrowseIntent: userScrollForOlderRef.current');
+    // History/process browse ownership is exercised by messageFollowGesture.test.ts;
+    // keep native ordering guards here rather than pinning the JS input expression.
     expect(scrollSource).toContain('userControllingScroll: isDragSample');
     // 深链 / 搜索定位本身就是明确的历史浏览意图,后续近顶自动补页无需再拖一下。
     const focusEffectStart = source.indexOf('// 深链/搜索:滚到指定消息');
@@ -283,8 +284,8 @@ it('measures mounted shareable messages for manual sharing sticky selection', ()
     expect(readerEnd).toBeGreaterThan(readerStart);
     const readerSource = source.slice(readerStart, readerEnd);
 
-    expect(source).toContain('shareableMessageViewsRef = useRef(new Map<string, View>())');
-    expect(source).toContain('onShareableMessageViewChange?: (clientId: string, view: View | null) => void');
+    expect(source).toContain('shareableMessageViewsRef = useRef(new Map<string, ViewInstance>())');
+    expect(source).toContain('onShareableMessageViewChange?: (clientId: string, view: ViewInstance | null) => void');
     expect(source).toContain('ref={shareableMessage ? handleShareableMessageViewChange : undefined}');
     expect(readerSource).toContain('shareableMessageViewsRef.current.entries()');
     expect(readerSource).not.toContain("token.item.type !== 'message'");
@@ -329,9 +330,10 @@ it('renders message bodies natively with in-place per-block selectable text', ()
     // 列表内正文只有原生渲染路径:无选择 WebView、无全屏选择查看器。
     expect(markdownBodySource).toContain('testID="message.markdownBody"');
     // Agent 回复二次测宽:stretch 量到像素宽后钉死,避免 UITextView 首帧偏矮被列表裁切。
+    // 只在 iOS 测宽;Android 行为由 userMessageCollapse.test.ts 执行真实 MarkdownBody 覆盖。
     expect(markdownBodySource).toContain('nextSettledContentWidth');
     expect(markdownBodySource).toContain('collapsable={false}');
-    expect(markdownBodySource).toContain('onLayout={handleSettledWidthLayout}');
+    expect(markdownBodySource).toContain('onLayout={measuresSettledWidth ? handleSettledWidthLayout : undefined}');
     expect(markdownBodySource).toContain('pinContentWidth');
     expect(markdownBodySource).toContain('pinSettledWidth');
     expect(markdownBodySource).toContain("pinContentWidth ? { alignSelf: 'stretch' } : null");

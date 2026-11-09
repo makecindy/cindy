@@ -934,6 +934,38 @@ describe('translateErrorNotification', () => {
     });
   });
 
+  it.each([
+    'unexpected status 400 Bad Request: {"error":{"code":"model_not_found"}}',
+    "The 'gpt-6.1-sol' model is not supported when using Codex with a ChatGPT account.",
+  ])('tells the user to switch models on a definitive Codex error: %s', async message => {
+    const q = createAsyncQueue<AgentEvent>();
+    translateErrorNotification(makeParams({ willRetry: false, message }), q, makeCtx(newCodexRuntimeState()));
+    expect(await collect(q)).toEqual([
+      expect.objectContaining({ type: 'error', data: expect.objectContaining({
+        message: expect.stringContaining('[MODEL_SELECTION_UNAVAILABLE]'),
+        reason: 'model_unavailable', isTerminal: true,
+      }) }),
+    ]);
+  });
+
+  it('does not interpret a generic HTTP 404 or reconnect notice as an unavailable model', () => {
+    expect(classifyCodexError({ message: 'unexpected status 404 Not Found' }).reason).toBeUndefined();
+    expect(classifyCodexError({ message: 'Reconnecting... 1/5' }).reason).toBeUndefined();
+    expect(classifyCodexError({
+      message: '{"error":{"code":"invalid_request","metadata":{"code":"model_not_found"}}}',
+    }).reason).toBeUndefined();
+  });
+
+  it('keeps structured rate limits and explicit 5xx failures on their existing error paths', () => {
+    const modelCode = '{"error":{"code":"model_not_found"}}';
+    expect(classifyCodexError({
+      message: modelCode,
+      codexErrorInfo: { responseTooManyFailedAttempts: { httpStatusCode: 429 } },
+    }).reason).toBeUndefined();
+    expect(classifyCodexError({ message: `HTTP/1.1 503: ${modelCode}` }).reason).toBeUndefined();
+    expect(classifyCodexError({ message: `unexpected status code 502: ${modelCode}` }).reason).toBeUndefined();
+  });
+
   it('classifyCodexError 把 contextWindowExceeded 与 overload 映射成稳定 reason', () => {
     expect(classifyCodexError({
       message: 'window full',
