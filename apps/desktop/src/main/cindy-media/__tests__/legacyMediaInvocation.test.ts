@@ -34,7 +34,7 @@ describe('旧接口适配 Core media', () => {
     })).toMatchObject({ url: videoUrl });
     expect(wait).toHaveBeenCalledWith(15);
     expect(callCore.mock.calls.map(([request]) => request.action)).toEqual(['prepare', 'request', 'poll']);
-    expect(callCore).toHaveBeenLastCalledWith({ action: 'poll', invocationId: 'existing-core-id' });
+    expect(callCore.mock.calls.at(-1)?.[0]).toEqual({ action: 'poll', invocationId: 'existing-core-id' });
   });
 
   it('输入无法表达必填参数时，付费提交之前拒绝', async () => {
@@ -96,5 +96,11 @@ describe('旧接口适配 Core media', () => {
     }, { video: { duration: 7, resolution: '1080p', aspect_ratio: '4:3' } })).toEqual({
       durationSeconds: 7, resolution: '1080p', ratio: '4:3', fps: 24, audio: true,
     });
+  });
+
+  it('旧视频回执保留 Seedance 实际帧率，优先于请求值与默认值', () => {
+    expect(legacyVideoReceipt({ kind: 'gen_video', model: 'video', prompt: '移动', fps: 24 }, {
+      duration: 6, resolution: '720p', ratio: '16:9', fps: 24,
+    }, { framespersecond: 30 }).fps).toBe(30);
   });
 });

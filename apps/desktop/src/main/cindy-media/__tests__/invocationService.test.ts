@@ -204,6 +204,7 @@ vi.mock('../mediaInvocationStore.js', () => ({
 }));
 
 import { callCindyMedia as invokeMedia } from '../invocationService.js';
+import { invokeLegacyMedia } from '../legacyMediaInvocation.js';
 import { ServerApiError } from '../../serverApiClient.js';
 
 // This harness supplies a real Host approval boundary. Individual cases replace
@@ -1643,6 +1644,45 @@ describe('Cindy Core media invocation state and security boundary', () => {
       callCindyMedia({ action: 'request', invocationId, body: { prompt: 'cat' } }),
     ).resolves.toMatchObject({ ok: false, errorCode: 'INVOCATION_ALREADY_USED' });
     expect(mocks.outboundFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('旧入口等待付费 claim 时开始切号，即使 owner 代次未变也不提交', async () => {
+    const op = { ...operation({ mode: 'sync', media: [{ path: ['data'], encoding: 'base64', kind: 'image' }] }),
+      inputSchema: { type: 'object', properties: { prompt: { type: 'string' } }, required: ['prompt'] } };
+    mocks.guide.mockResolvedValue(resolvedGuide(op));
+    mocks.outboundFetch.mockResolvedValue(Response.json({ data: PNG.toString('base64') }));
+    let boundaryPending = false;
+    mocks.onClaim.mockImplementationOnce(() => { boundaryPending = true; });
+    await expect(invokeLegacyMedia({ kind: 'gen_image', model: 'image-model', prompt: 'cat' }, {
+      callCore: invokeMedia, timeoutMs: 1000,
+      assertCurrent() { if (boundaryPending) throw new Error('owner boundary pending'); },
+    })).rejects.toThrow('owner boundary pending');
+    expect(mocks.outboundFetch).not.toHaveBeenCalled();
+    expect(mocks.ingestMedia).not.toHaveBeenCalled();
+  });
+
+  it.each([true, false])('旧入口结果下载复用 Host 审批（allow=%s），不重复付费', async allow => {
+    const op = { ...operation({ mode: 'sync', media: [{ path: ['data'], encoding: 'url', kind: 'image', allowedUrlHosts: ['known.example.com'] }] }),
+      inputSchema: { type: 'object', properties: { prompt: { type: 'string' } }, required: ['prompt'] } };
+    mocks.guide.mockResolvedValue(resolvedGuide(op));
+    mocks.confirm.mockResolvedValue(allow);
+    mocks.outboundFetch.mockResolvedValueOnce(Response.json({ data: 'https://new.example.com/generated.png' }))
+      .mockResolvedValueOnce(new Response(PNG, { headers: { 'content-type': 'image/png' } }));
+    const result = invokeLegacyMedia({ kind: 'gen_image', model: 'image-model', prompt: 'cat' }, {
+      callCore: invokeMedia, timeoutMs: 1000, assertCurrent() {},
+      downloadContext: { assertActive() {}, confirm: mocks.confirm, approvals: new Set<string>() },
+    });
+    if (allow) {
+      await expect(result).resolves.toMatchObject({ url: `cindy-media://blobs/${'a'.repeat(64)}.png` });
+      expect(mocks.ingestMedia).toHaveBeenCalledOnce();
+      expect(mocks.outboundFetch.mock.calls[1]?.[1]?.headers).toBeUndefined();
+    } else {
+      await expect(result).rejects.toThrow('用户未允许本次下载');
+      expect(mocks.ingestMedia).not.toHaveBeenCalled();
+      expect(mocks.outboundFetch).toHaveBeenCalledOnce();
+    }
+    expect(mocks.confirm).toHaveBeenCalledOnce();
+    expect(mocks.outboundFetch.mock.calls.filter(([, init]) => init.method === 'POST')).toHaveLength(1);
   });
 
   it('付费提交准备参数期间账号切换时不发出上游请求', async () => {

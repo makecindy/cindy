@@ -738,6 +738,7 @@ import { createXaiVideoProvider } from '../cindy-proxy-media/video/providers/xai
 import * as blobStore from '../cindy-media/blobStore.js';
 import { callCindyMedia } from '../cindy-media/invocationService.js';
 import { invokeLegacyMedia, legacyVideoReceipt } from '../cindy-media/legacyMediaInvocation.js';
+import { createMediaDownloadContext } from '../cindy-media/mediaDownloadApproval.js';
 import { probeImageSize } from './imageProbe.js';
 import {
   configureProviderMediaRuntime,
@@ -5820,6 +5821,10 @@ export function getGhostCindySlot(): GhostCindySlot {
       // 旧协议只适配参数/结果；付费提交、轮询和入仓全部复用 Core。
       invokeMedia: async ({ imagePaths, imageRefs, sessionId, assertCurrent, ...request }) => {
         assertCurrent();
+        const maker = sessionId ? (await import('../maker-host/index.js')).getMakerIfReady() : undefined;
+        assertCurrent();
+        const session = sessionId ? maker?.getSession(sessionId) : undefined;
+        const turnGeneration = session?.getTurnGeneration();
         const video = request.kind.endsWith('video');
         assertMediaModelStillEnabled(video ? 'video' : 'image', request.model,
           request.providerId, request.kind.startsWith('edit_') ? 'edit' : 'generate');
@@ -5833,10 +5838,13 @@ export function getGhostCindySlot(): GhostCindySlot {
         const input = { ...request, ...(images.length ? { images } : {}),
           ...(defaults ? { videoDefaults: defaults } : {}) };
         let response: unknown;
+        const downloadContext = session ? createMediaDownloadContext(session, () =>
+          maker?.getSession(session.id) === session && session.getTurnGeneration() === turnGeneration) : undefined;
         const result = await invokeLegacyMedia(input, {
-          callCore: operation => callCindyMedia(operation, undefined, sessionId, value => { response = value; }),
+          callCore: (operation, context) => callCindyMedia(operation, context, sessionId, value => { response = value; }),
+          downloadContext,
           assertCurrent, timeoutMs: (source ? source.expectedSeconds * 3 : 600) * 1000,
-        }).catch(humanizeImageChannelError);
+        }).catch(humanizeImageChannelError).finally(() => downloadContext?.dispose?.());
         assertCurrent();
         const parsed = blobStore.parseBlobUrl(result.url);
         if (!parsed) throw new Error('Core 媒体结果地址不合法');

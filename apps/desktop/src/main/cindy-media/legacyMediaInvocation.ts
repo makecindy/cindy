@@ -1,6 +1,7 @@
 import { setTimeout as delay } from 'node:timers/promises';
 import type { CindyMediaToolRequest } from 'cindy-tools';
 import type { GhostVideoRefMode, GhostVideoResultParams } from '../../shared/ghost.js';
+import { MediaDownloadError, type MediaDownloadContext } from './mediaDownload.js';
 
 export type LegacyMediaKind = 'gen_image' | 'edit_image' | 'gen_video' | 'edit_video';
 export interface LegacyVideoDefaults {
@@ -124,7 +125,7 @@ export function legacyVideoReceipt(
     durationSeconds: number(video.duration ?? raw.duration ?? usage.duration, request.duration ?? defaults.duration),
     resolution: string(video.resolution ?? raw.resolution ?? (typeof usage.SR === 'number' ? `${usage.SR}p` : undefined), request.resolution ?? defaults.resolution),
     ratio: string(video.aspect_ratio ?? raw.ratio ?? usage.ratio, request.ratio ?? defaults.ratio),
-    fps: number(video.fps ?? raw.fps, request.fps ?? defaults.fps),
+    fps: number(video.fps ?? raw.fps ?? raw.framespersecond, request.fps ?? defaults.fps),
     ...(typeof audio === 'boolean' ? { audio } : {}),
   };
 }
@@ -132,25 +133,39 @@ export function legacyVideoReceipt(
 export async function invokeLegacyMedia(
   request: LegacyMediaRequest,
   deps: {
-    callCore(request: CindyMediaToolRequest): Promise<Record<string, unknown>>;
+    callCore(request: CindyMediaToolRequest, context: MediaDownloadContext): Promise<Record<string, unknown>>;
     assertCurrent(): void;
+    downloadContext?: MediaDownloadContext;
     timeoutMs: number;
     wait?(ms: number): Promise<unknown>;
   },
 ): Promise<{ url: string; invocationId: string }> {
+  // Legacy submit/query jobs may outlive the caller's turn. Keep their owner
+  // guard active throughout Core; only an actual approval needs the live turn.
+  const context: MediaDownloadContext = {
+    approvals: deps.downloadContext?.approvals ?? new Set<string>(),
+    assertActive: deps.assertCurrent,
+    confirm: async input => {
+      deps.assertCurrent();
+      if (!deps.downloadContext) {
+        throw new MediaDownloadError('MEDIA_DOWNLOAD_CONFIRMATION_REQUIRED', '本次下载需要用户确认，当前任务的审批通道不可用');
+      }
+      return deps.downloadContext.confirm(input);
+    },
+  };
   deps.assertCurrent();
   const prepared = await deps.callCore({
     action: 'prepare', modelId: request.model,
     ...(request.providerId ? { providerId: request.providerId } : {}),
     capability: CAPABILITIES[request.kind],
-  });
+  }, context);
   deps.assertCurrent();
   if (!prepared.ok || typeof prepared.invocation_id !== 'string') {
     throw new Error(String(prepared.message ?? '媒体调用准备失败'));
   }
   const invocationId = prepared.invocation_id;
   const body = legacyMediaBody(request, object(prepared.input_schema));
-  let result = await deps.callCore({ action: 'request', invocationId, body });
+  let result = await deps.callCore({ action: 'request', invocationId, body }, context);
   deps.assertCurrent();
   const deadline = Date.now() + deps.timeoutMs;
   while ((result.ok && result.status !== 'complete') || (!result.ok && result.retryable === true)) {
@@ -159,7 +174,7 @@ export async function invokeLegacyMedia(
       ? result.recommended_poll_after_ms : 5_000;
     await (deps.wait ?? delay)(interval);
     deps.assertCurrent();
-    result = await deps.callCore({ action: 'poll', invocationId });
+    result = await deps.callCore({ action: 'poll', invocationId }, context);
     deps.assertCurrent();
   }
   if (!result.ok) throw new Error(`${String(result.message ?? '媒体调用失败')}（${invocationId}）`);
