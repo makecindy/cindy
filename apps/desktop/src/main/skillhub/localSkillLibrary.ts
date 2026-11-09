@@ -50,14 +50,15 @@ export type LocalSkillLibraryCoordinator = ReturnType<typeof createLocalSkillLib
 /** Explicit, owner-local libraries. Only their small gateway is mounted by the agent. */
 export function createLocalSkillLibraryTools(deps: LocalSkillLibraryDependencies): LocalSkillLibraryCallback {
   const { synchronized, syncing } = deps.coordinator;
-  return async (request, context) => {
+  return async (request, context, signal) => {
     if (!context.sessionId || context.remoteHostId || !deps.isCurrentSession(context)) {
       return fail('NO_SESSION_CONTEXT', 'A current local Cindy task is required.');
     }
     const owner = deps.ownerScope();
     if (!owner) return fail('UNAUTHORIZED', 'An active Cindy profile is required.');
-    const isCurrent = () => deps.ownerScope() === owner && deps.isCurrentSession(context);
-    const checkCurrent = () => { if (!isCurrent()) throw new Error('The account or task changed.'); };
+    const isCurrent = () => !signal?.aborted && deps.ownerScope() === owner && deps.isCurrentSession(context);
+    const cancelledMessage = () => signal?.aborted ? 'The tool request was cancelled.' : 'The account or task changed.';
+    const checkCurrent = () => { if (!isCurrent()) throw new Error(cancelledMessage()); };
     try {
       if (!await deps.isOrdinaryTask(context)) return fail('UNSUPPORTED_CAPABILITY', 'Personal local libraries are available to ordinary tasks. Teammates use their own Skill library.');
       checkCurrent();
@@ -253,7 +254,7 @@ export function createLocalSkillLibraryTools(deps: LocalSkillLibraryDependencies
       return fail('INVALID_ARGS', 'Unsupported library action.');
     } catch (error) {
       // A failed rollback must remain visible even when cancellation initiated it.
-      if (!isCurrent() && !(error instanceof AggregateError)) return fail('CANCELLED', 'The account or task changed.');
+      if (!isCurrent() && !(error instanceof AggregateError)) return fail('CANCELLED', cancelledMessage());
       const code = (error as NodeJS.ErrnoException).code;
       return fail(code === 'ENOENT' ? 'NOT_FOUND' : code === 'MODEL_UNAVAILABLE' ? code : 'LOCAL_SKILL_LIBRARY_ERROR', error instanceof Error ? error.message : String(error));
     }

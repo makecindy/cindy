@@ -7,6 +7,8 @@ import { SkillIndex } from '@cindy/skill-index';
 import { EmbeddingService } from '../../embedding-host/EmbeddingService';
 import { createLocalSkillEmbeddingAdapter } from '../localSkillEmbedding';
 import { createLocalSkillLibraryTools, createLocalSkillLibraryCoordinator } from '../localSkillLibrary';
+import { XdtHelperToolRegistry } from '../../../../../../packages/lizi-mcps/src/lizi_xdtHelperToolRegistry';
+import { registerLocalSkillLibraryTools } from '../../../../../../packages/lizi-mcps/src/xdt-helper/local_skills';
 
 vi.mock('@cindy/mcps', () => import('../../../../../../packages/lizi-mcps/src/session-path-auth'));
 let root: string;
@@ -47,6 +49,74 @@ function fixture() {
 }
 
 describe('native local Skill embeddings', () => {
+  // Review 4507777247: request cancellation does not dispose its task instance.
+  // Real registry/handler -> host -> adapter/service/client; only HTTP is injected.
+  it.each([false, true])('honors request cancellation with the task still active (other waiter=%s)', async otherWaiter => {
+    const f = fixture();
+    const home = path.join(root, `request-cancel-${otherWaiter}`);
+    const source = path.join(home, 'methods');
+    await fs.mkdir(source, { recursive: true });
+    const coordinator = createLocalSkillLibraryCoordinator();
+    const registry = new XdtHelperToolRegistry();
+    registerLocalSkillLibraryTools(registry, {
+      getSessionContext: () => ({ agentKind: 'codex', workingDir: home, sessionId: 'active-task', sessionInstanceId: 'same-instance' }),
+      execute: createLocalSkillLibraryTools({
+        coordinator, ownerScope: () => 'owner', storageRoot: () => path.join(home, 'libraries'), homeDir: () => home,
+        isCurrentSession: () => true, isOrdinaryTask: async () => true,
+        embedding: (_model, checkCurrent) => createLocalSkillEmbeddingAdapter('text-embedding-3-small', () => f.service, checkCurrent),
+      }),
+    });
+    const call = async (name: string, args: unknown, signal?: AbortSignal) => {
+      const response = await registry.call(name, args, signal);
+      return JSON.parse((response.content[0] as { text: string }).text);
+    };
+    expect(await call('configure_local_skill_library', { action: 'register', library_id: 'methods', sources: [source], embedding_model: 'text-embedding-3-small' })).toMatchObject({ ok: true });
+    const indexFile = path.join(home, 'libraries/methods/index.json');
+    const before = await fs.readFile(indexFile, 'utf8');
+    await Promise.all(Array.from({ length: 65 }, async (_, i) => {
+      const folder = path.join(source, `skill-${i}`);
+      await fs.mkdir(folder);
+      await fs.writeFile(path.join(folder, 'SKILL.md'), `---\nname: skill-${i}\ndescription: Method ${i}\n---\nInstructions\n`);
+    }));
+    let release!: () => void;
+    let entered!: () => void;
+    const held = new Promise<void>(resolve => { release = resolve; });
+    const started = new Promise<void>(resolve => { entered = resolve; });
+    const fetchImpl = f.fetchImpl.getMockImplementation()!;
+    f.fetchImpl.mockImplementationOnce(async (...args) => {
+      const response = await fetchImpl(...args);
+      entered(); await held; return response;
+    });
+    const controller = new AbortController();
+    const first = call('configure_local_skill_library', { action: 'refresh', library_id: 'methods' }, controller.signal);
+    await started;
+    let second: Promise<unknown> | undefined;
+    try {
+      if (otherWaiter) {
+        const pending = [...coordinator.syncing.values()][0]!;
+        let joined!: () => void;
+        const joining = new Promise<void>(resolve => { joined = resolve; });
+        const add = pending.work.participants.add.bind(pending.work.participants);
+        const spy = vi.spyOn(pending.work.participants, 'add').mockImplementation(value => { const result = add(value); joined(); return result; });
+        try {
+          second = call('search_local_skills', { library_id: 'methods', query: 'semantic task' });
+          await joining;
+        } finally { spy.mockRestore(); }
+      }
+      controller.abort(); release();
+      expect(await first).toMatchObject({ ok: false, errorCode: 'CANCELLED' });
+      if (otherWaiter) {
+        expect(await second).toMatchObject({ ok: true, mode: 'hybrid' });
+        expect(f.batches.map(batch => batch.length)).toEqual([32, 32, 1, 1]);
+        expect(JSON.parse(await fs.readFile(indexFile, 'utf8')).entries).toHaveLength(65);
+      } else {
+        expect(f.batches.map(batch => batch.length)).toEqual([32]);
+        expect(await fs.readFile(indexFile, 'utf8')).toBe(before);
+      }
+      await expect(fs.stat(path.join(home, 'libraries/methods/library.lock'))).rejects.toMatchObject({ code: 'ENOENT' });
+    } finally { release(); await Promise.all([first, second]); }
+  });
+
   it.each(['waiting', 'none', 'late'] as const)('keeps synchronization scoped to its current participants: %s', async (mode) => {
     const waiterCurrent = mode !== 'none';
     const f = fixture();

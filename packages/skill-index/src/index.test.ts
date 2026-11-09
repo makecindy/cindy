@@ -111,6 +111,37 @@ describe('SkillIndex task discovery', () => {
     } finally { segment.mockRestore(); }
   });
 
+  // Review 4507777249: distinct terms previously recompiled per metadata field.
+  // Unit: real search output plus the number of actual regex constructions; no timing threshold.
+  it('prepares each Latin matcher once per query and reuses it without regex state', async () => {
+    const index = new SkillIndex();
+    index.sync(Array.from({ length: 4 }, (_, i) => ({ ...entries[0]!, id: `method-${i}`,
+      name: `method-${i}`, description: 'alpha beta gamma', aliases: ['method'], tags: ['other'],
+    })));
+    let constructed = 0;
+    class CountingRegExp extends RegExp {
+      constructor(pattern: string | RegExp, flags?: string) {
+        super(pattern, flags);
+        // The runner may transpile the global Unicode scanner into a constructor too.
+        if (!this.global && !this.sticky) constructed++;
+      }
+    }
+    vi.stubGlobal('RegExp', CountingRegExp);
+    const observed = [];
+    try {
+      for (let run = 0; run < 2; run++) {
+        const before = constructed;
+        const pending = index.search('alpha beta gamma');
+        const compiled = constructed - before;
+        observed.push({ result: await pending, compiled });
+      }
+    } finally { vi.unstubAllGlobals(); }
+    expect(observed[0]!.result.matches).toHaveLength(4);
+    expect(observed[0]!.result.matches.every(item => item.matchedTerms.join(' ') === 'alpha beta gamma')).toBe(true);
+    expect(observed.map(item => item.compiled)).toEqual([3, 3]);
+    expect(observed[1]!.result).toEqual(observed[0]!.result);
+  });
+
   it('keeps boundaries around punctuated Latin identifiers as well as dotted names', async () => {
     const index = new SkillIndex();
     index.sync([

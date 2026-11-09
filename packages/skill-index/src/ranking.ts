@@ -44,12 +44,13 @@ function queryTerms(query: string): string[] {
   return [...terms];
 }
 
-function containsTerm(text: string, term: string): boolean {
+function prepareTermMatcher(term: string): (text: string) => boolean {
   if (/^[a-z0-9][a-z0-9._+#'-]*$/u.test(term)) {
     const escaped = term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    return new RegExp(`(^|[^a-z0-9_+#])${escaped}(?=$|[^a-z0-9_+#])`, 'u').test(text);
+    const pattern = new RegExp(`(^|[^a-z0-9_+#])${escaped}(?=$|[^a-z0-9_+#])`, 'u');
+    return text => pattern.test(text);
   }
-  return text.includes(term);
+  return text => text.includes(term);
 }
 
 export interface KeywordScore {
@@ -61,7 +62,7 @@ export interface KeywordScore {
 /** Query work is independent of catalog size. */
 export function prepareKeywordQuery(query: string) {
   const normalized = normalizeText(query);
-  return { normalized, terms: queryTerms(normalized) };
+  return { normalized, terms: queryTerms(normalized).map(term => ({ term, matches: prepareTermMatcher(term) })) };
 }
 
 export function scoreKeywords(entry: SkillEntry, query: ReturnType<typeof prepareKeywordQuery>): KeywordScore {
@@ -72,10 +73,10 @@ export function scoreKeywords(entry: SkillEntry, query: ReturnType<typeof prepar
   const description = normalizeText(entry.description);
   let score = exact ? 100 : 0;
   const matchedTerms: string[] = exact ? [normalized] : [];
-  for (const term of terms) {
-    const weight = names.some((name) => containsTerm(name, term)) ? 4
-      : containsTerm(tags, term) ? 3
-      : containsTerm(description, term) ? 1 : 0;
+  for (const { term, matches } of terms) {
+    const weight = names.some(matches) ? 4
+      : matches(tags) ? 3
+      : matches(description) ? 1 : 0;
     if (weight) {
       score += weight;
       if (!matchedTerms.includes(term)) matchedTerms.push(term);

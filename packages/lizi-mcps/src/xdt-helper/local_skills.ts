@@ -14,6 +14,7 @@ export type LocalSkillLibraryRequest =
 export type LocalSkillLibraryCallback = (
   request: LocalSkillLibraryRequest,
   context: LiziMcpSessionContext,
+  signal?: AbortSignal,
 ) => Promise<ControlResult<Record<string, unknown>, string>>;
 
 const libraryId = z.string().trim().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/).max(40);
@@ -24,11 +25,11 @@ export function registerLocalSkillLibraryTools(registry: XdtHelperToolRegistry, 
   getSessionContext: () => LiziMcpSessionContext;
   execute: LocalSkillLibraryCallback;
 }): void {
-  const execute = async (request: LocalSkillLibraryRequest) => {
+  const execute = async (request: LocalSkillLibraryRequest, signal?: AbortSignal) => {
     const context = deps.getSessionContext();
     if (!context.sessionId) return errorPayload('NO_SESSION_CONTEXT', 'No Cindy task is bound to this call.');
     if (context.remoteHostId) return errorPayload('UNSUPPORTED_CAPABILITY', 'Local Skill libraries are available in tasks running on this Cindy computer.');
-    const result = await deps.execute(request, context);
+    const result = await deps.execute(request, context, signal);
     return result.ok ? okPayload(result) : errorPayload(result.errorCode, result.message);
   };
 
@@ -40,7 +41,7 @@ export function registerLocalSkillLibraryTools(registry: XdtHelperToolRegistry, 
       query: z.string().trim().min(1).max(4096),
       limit: z.number().int().min(1).max(50).optional(),
     },
-    handler: (input) => execute({ action: 'search', ...input }),
+    handler: (input, signal) => execute({ action: 'search', ...input }, signal),
   });
   registry.register({
     name: 'read_local_skill', category: 'skills',
@@ -52,7 +53,7 @@ export function registerLocalSkillLibraryTools(registry: XdtHelperToolRegistry, 
       sha256: z.string().regex(/^[a-f0-9]{64}$/).optional(),
       chars: z.number().int().min(1).max(24000).optional(),
     },
-    handler: (input) => execute({ action: 'read', ...input }),
+    handler: (input, signal) => execute({ action: 'read', ...input }, signal),
   });
   registry.register({
     name: 'configure_local_skill_library', category: 'skills',
@@ -65,19 +66,19 @@ export function registerLocalSkillLibraryTools(registry: XdtHelperToolRegistry, 
       embedding_model: z.string().trim().min(1).max(256).optional(),
       rebuild: z.boolean().optional(),
     },
-    handler: async (input) => {
+    handler: async (input, signal) => {
       if (input.action === 'register') {
         if (!input.sources) return errorPayload('INVALID_ARGS', 'Register requires the complete sources list.');
-        return execute({ ...input, action: 'register', sources: input.sources });
+        return execute({ ...input, action: 'register', sources: input.sources }, signal);
       }
       if (input.sources !== undefined || input.gateway_path !== undefined || input.embedding_model !== undefined) {
         return errorPayload('INVALID_ARGS', 'Use register to change library sources, discovery folder or embedding model.');
       }
       if (input.action === 'remove') {
         if (input.rebuild !== undefined) return errorPayload('INVALID_ARGS', 'remove does not rebuild the library.');
-        return execute({ action: 'remove', library_id: input.library_id });
+        return execute({ action: 'remove', library_id: input.library_id }, signal);
       }
-      return execute({ action: 'refresh', library_id: input.library_id, rebuild: input.rebuild });
+      return execute({ action: 'refresh', library_id: input.library_id, rebuild: input.rebuild }, signal);
     },
   });
 }

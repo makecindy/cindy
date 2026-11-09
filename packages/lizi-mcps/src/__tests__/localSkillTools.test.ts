@@ -26,11 +26,31 @@ const read = (value: ToolResponse) => JSON.parse(value.content[0]!.text!);
 const serverTools = (server: unknown) => (server as {
   _registeredTools: Record<string, {
     description: string; inputSchema: z.ZodType;
-    handler(args: unknown): Promise<ToolResponse>;
+    handler(args: unknown, extra?: { signal?: AbortSignal }): Promise<ToolResponse>;
   }>;
 })._registeredTools;
 
 describe('local Skill library helper', () => {
+  // Review 4507777247: all local routes must retain MCP's per-request Stop signal.
+  it('passes the MCP request signal through every local library action', async () => {
+    const f = fixture();
+    const server = createXdtHelperMcpServer({ localSkillLibrary: f.execute }, f.current);
+    const controller = new AbortController();
+    const routes = [
+      ['search_local_skills', { library_id: 'work', query: 'method' }],
+      ['read_local_skill', { library_id: 'work', id: 'selected-id' }],
+      ['configure_local_skill_library', { library_id: 'work', action: 'register', sources: [path.resolve('skills')] }],
+      ['configure_local_skill_library', { library_id: 'work', action: 'refresh' }],
+      ['configure_local_skill_library', { library_id: 'work', action: 'remove' }],
+    ] as const;
+    try {
+      for (const [name, args] of routes) {
+        expect(read(await serverTools(server).call_tool!.handler({ name, args }, { signal: controller.signal }))).toEqual(result);
+        expect(f.execute.mock.calls.at(-1)?.[2]).toBe(controller.signal);
+      }
+    } finally { await server.close(); }
+  });
+
   it.each(['claude-code', 'codex', 'pi'] as const)('discovers local tools through stable %s startup schemas', async (agentKind) => {
     const f = fixture({ agentKind });
     const sessionContext = { ...f.current, agentKind };
@@ -53,7 +73,7 @@ describe('local Skill library helper', () => {
         name: 'search_local_skills', args: { library_id: 'personal-work', query: 'release notes', limit: 3 },
       }));
       expect(searched).toEqual(result);
-      expect(f.execute).toHaveBeenLastCalledWith({ action: 'search', library_id: 'personal-work', query: 'release notes', limit: 3 }, f.current);
+      expect(f.execute).toHaveBeenLastCalledWith({ action: 'search', library_id: 'personal-work', query: 'release notes', limit: 3 }, f.current, undefined);
       const control = read(await serverTools(enabled).call_tool!.handler({
         name: 'get_capabilities', args: { scope: 'control', key: 'tools.skills', operation: 'read_local_skill' },
       }));
@@ -73,26 +93,26 @@ describe('local Skill library helper', () => {
     f.execute.mockResolvedValue({ ok: true, content: 'selected source page', sha256: 'a'.repeat(64), nextOffset: 120, eof: false });
     const args = { library_id: 'personal-work', id: 'selected-id', offset: 60, sha256: 'a'.repeat(64), chars: 60 };
     expect(read(await f.registry.call('read_local_skill', args))).toMatchObject({ content: 'selected source page', nextOffset: 120, eof: false });
-    expect(f.execute).toHaveBeenCalledWith({ action: 'read', ...args }, f.current);
+    expect(f.execute).toHaveBeenCalledWith({ action: 'read', ...args }, f.current, undefined);
   });
 
   it('registers complete sources with an optional gateway/model and keeps refresh/remove distinct', async () => {
     const f = fixture();
     const sources = [path.resolve('source-one'), path.resolve('source-two')];
     await f.registry.call('configure_local_skill_library', { action: 'register', library_id: 'work', sources });
-    expect(f.execute).toHaveBeenLastCalledWith({ action: 'register', library_id: 'work', sources }, f.current);
+    expect(f.execute).toHaveBeenLastCalledWith({ action: 'register', library_id: 'work', sources }, f.current, undefined);
     const configured = {
       action: 'register', library_id: 'work', sources: [sources[1]], gateway_path: path.resolve('discovery'),
       embedding_model: 'text-embedding-3-small', rebuild: true,
     };
     await f.registry.call('configure_local_skill_library', configured);
-    expect(f.execute).toHaveBeenLastCalledWith(configured, f.current);
+    expect(f.execute).toHaveBeenLastCalledWith(configured, f.current, undefined);
     await f.registry.call('configure_local_skill_library', { action: 'refresh', library_id: 'work', rebuild: true });
-    expect(f.execute).toHaveBeenLastCalledWith({ action: 'refresh', library_id: 'work', rebuild: true }, f.current);
+    expect(f.execute).toHaveBeenLastCalledWith({ action: 'refresh', library_id: 'work', rebuild: true }, f.current, undefined);
     f.execute.mockResolvedValue({ ok: true, removed: true, gateway_path: path.resolve('discovery') });
     const removed = read(await f.registry.call('configure_local_skill_library', { action: 'remove', library_id: 'work' }));
     expect(removed).toMatchObject({ removed: true, gateway_path: path.resolve('discovery') });
-    expect(f.execute).toHaveBeenLastCalledWith({ action: 'remove', library_id: 'work' }, f.current);
+    expect(f.execute).toHaveBeenLastCalledWith({ action: 'remove', library_id: 'work' }, f.current, undefined);
   });
 
   it.each([
