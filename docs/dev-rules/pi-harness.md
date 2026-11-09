@@ -164,14 +164,21 @@ system section 与工具增删，按启动时实际追加文本匹配来源；�
 不与原生总量强行配平，不参与计费、压缩或窗口判断。仅返回来源类别与数值，不将提示词／
 工具正文传到界面。旧 Pi 缺 system 快照或诊断读取失败时保留原生总量，不伪造分项。
 
-图片能力未声明时，Pi 的模型配置与发送校验默认允许图片输入，不因新型号缺少能力资料而
-提前拦截。目录、原生模型资料或用户配置明确声明 `supportsImageInput: false` / `input: ['text']`
-时仍保持仅文本；此默认值不写回用户配置，也不代表上游接口保证支持图片。活动任务沿用启动时
-能力快照。回归见 `pi-provider-routing.test.ts` 与 `piNativeProviders.test.ts`。
+图片能力按路径分开，不能当成一条统一缺省。活动任务都沿用启动时写进 `models.json` 的能力
+快照；下面的默认都不写回用户配置，也不代表上游接口保证识图。
 
-Codex / Claude Code 复用的 `pi-provider-transport.ts` 原生桥接也沿用此缺省口径：
-活动目录的显式图片开关或模态声明优先于原生兜底资料，只有均未声明时才允许图片。
-此行为只决定图片是否进入原生 SDK 请求，不保证上游识图；回归见 `piProviderTransport.test.ts`。
+Cindy AI 网关模型缺少能力资料时仍默认允许图片（`supportsImageInput !== false`），不因新型号
+没有资料而提前拦截。只有目录或用户配置明确写成 `supportsImageInput: false` 时才是纯文本。
+
+自定义与原生供应商模型相反：没有任何能力事实时默认纯文本（#9478，纯文本后端收到
+`image_url` 会 400，整段会话中断）。允许图片的优先级是：显式 `supportsImageInput: true` ＞同源
+目录元数据（bundled / 官方目录的 `input` 含 `image`）＞ 活动目录的 `modalities.input` 含 `image`。
+显式 `false` 与完全未声明都是纯文本；只有确认为 true 的声明才写入图片能力。发送校验读这份快照，
+快照缺 `input` 时也按纯文本拦截。回归见 `pi-provider-routing.test.ts` 与 `piNativeProviders.test.ts`。
+
+Codex / Claude Code 复用的 `pi-provider-transport.ts` 原生桥接不走上面这条纯文本默认：活动目录的显式
+图片开关或模态声明优先于原生兜底资料，只有均未声明时才允许图片。此行为只决定图片是否进入
+原生 SDK 请求，不保证上游识图；回归见 `piProviderTransport.test.ts`。
 
 Cindy 显式设置:models.json、`settings.json` 的 `transport:sse` 与 `retry.maxRetries=6`
 （`retry.provider.maxRetries` 保持 0）、`--append-system-prompt`、`--session-dir`、启动时 RPC

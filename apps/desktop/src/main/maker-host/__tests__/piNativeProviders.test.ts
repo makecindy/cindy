@@ -1086,6 +1086,86 @@ describe('buildPiNativeProvidersFromConfigs', () => {
     ]);
   });
 
+  // #9478 review: an explicit declaration outranks bundled metadata, which outranks
+  // a catalog modalities fact. Only a confirmed true opts into images; false and an
+  // absent declaration are both text-only when nothing lower supplies a fact.
+  it.each([
+    { declared: true, bundled: ['text'] as Array<'text' | 'image'>, expected: ['text', 'image'] },
+    { declared: false, bundled: ['text', 'image'] as Array<'text' | 'image'>, expected: ['text'] },
+    { declared: undefined, bundled: ['text', 'image'] as Array<'text' | 'image'>, expected: ['text', 'image'] },
+    { declared: undefined, bundled: ['text'] as Array<'text' | 'image'>, expected: ['text'] },
+  ])('honors explicit image input $declared over bundled $bundled (#9478)', ({ declared, bundled, expected }) => {
+    const { providers } = buildPiNativeProvidersFromConfigs(
+      [
+        {
+          id: 'company-gateway',
+          name: 'Company Gateway',
+          auth: { method: 'apiKey' },
+          runtimes: {
+            pi: piRuntime({
+              baseUrl: 'https://api.openai.com/v1',
+              wireProtocol: 'openai-chat',
+              models: [{ id: 'gpt-4o', name: 'GPT-4o', supportsImageInput: declared }],
+            }),
+          },
+        },
+      ],
+      () => 'gateway-key',
+      undefined,
+      new Map([['openai', new Map([['gpt-4o', piBundledModel('gpt-4o', 'openai-completions', {
+        baseUrl: 'https://api.openai.com/v1',
+        input: bundled,
+      })]])]]),
+    );
+    expect(providers[0]?.models[0]?.input).toEqual(expected);
+  });
+
+  it.each([true, false, undefined])(
+    'uses catalog modalities only when the model has no bundled entry and no explicit flag (%s)',
+    (declared) => {
+      const catalog: Catalog = {
+        ...BUNDLED_CATALOG,
+        providers: [{
+          ...BUNDLED_CATALOG.providers[0]!,
+          id: 'company-gateway',
+          models: {
+            pi: [{
+              id: 'custom-vision',
+              name: 'Custom Vision',
+              contextWindow: 32_000,
+              efforts: [],
+              defaultEffort: null,
+              modalities: { input: ['text', 'image'], output: ['text'] },
+            }],
+          },
+        }],
+      };
+      const { providers } = buildPiNativeProvidersFromConfigs(
+        [
+          {
+            id: 'company-gateway',
+            name: 'Company Gateway',
+            auth: { method: 'apiKey' },
+            runtimes: {
+              pi: piRuntime({
+                baseUrl: 'https://gateway.example/v1',
+                wireProtocol: 'openai-chat',
+                models: [{ id: 'custom-vision', name: 'Custom Vision', supportsImageInput: declared }],
+              }),
+            },
+          },
+        ],
+        () => 'gateway-key',
+        undefined,
+        undefined,
+        catalog,
+      );
+      expect(providers[0]?.models[0]?.input).toEqual(
+        declared === false ? ['text'] : ['text', 'image'],
+      );
+    },
+  );
+
   it('defaults unknown custom Chat Completions models to system role (#3832)', () => {
     const { providers } = buildPiNativeProvidersFromConfigs(
       [
