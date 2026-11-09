@@ -1,8 +1,5 @@
-/** Quick-switch panel sizing. Back navigation remains available at every width. */
-const DRAWER_MIN_WIDTH = 300;
-/** At least a regular phone's portrait list (iPhone 393–440 pt), so the floating
- * drawer never shows less of the list than the phone does. */
-const DRAWER_DEFAULT_WIDTH = 400;
+import { taskListResizeBounds, taskListWidth } from './taskListWidth';
+
 /** Leave enough scrim beside the drawer to see the task and tap to close. */
 const DRAWER_MIN_SCRIM = 96;
 
@@ -36,17 +33,10 @@ export function buildWideSessionNavLayout(
   const enabled = windowWidth >= 600;
   if (!enabled) return { drawerWidth: 0, enabled, resizeBounds: null };
   const reserve = Math.max(DRAWER_MIN_SCRIM, normalizeDimension(input.trailingReserve));
-  const max = Math.max(DRAWER_MIN_WIDTH, windowWidth - reserve);
-  const resizeBounds = { min: DRAWER_MIN_WIDTH, max };
-  const preferred = input.preferredWidth;
-  const requested = typeof preferred === 'number' && Number.isFinite(preferred) ? preferred : DRAWER_DEFAULT_WIDTH;
-  return { drawerWidth: Math.round(clamp(requested, resizeBounds.min, resizeBounds.max)), enabled, resizeBounds };
+  const resizeBounds = taskListResizeBounds(windowWidth - reserve);
+  return { drawerWidth: taskListWidth(input.preferredWidth, resizeBounds), enabled, resizeBounds };
 }
 
 function normalizeDimension(value: number | undefined): number {
   return Number.isFinite(value) && value !== undefined && value > 0 ? value : 0;
-}
-
-function clamp(value: number, min: number, max: number): number {
-  return Math.min(Math.max(value, min), max);
 }

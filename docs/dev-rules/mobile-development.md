@@ -74,11 +74,11 @@ Expo Updates 开发指纹。`native-mismatch` 或 `native-unknown` 不能作为�
 的真实指纹，避免跨 worktree 复用不兼容的原生包；不匹配的缓存会跳过。不要通过临时修改
 JS 参数协议来适配另一版本原生依赖。此检查不修改 App 配置或发布指纹。
 
-Xcode 27 构建的 App 在 iOS 27 上还必须采用 UIScene 生命周期。当前 SDK 57 使用
-Expo 官方回移支持（`expo >= 57.0.23`，`expo-build-properties` 的
-`ios.enableSceneSupport: true`），由 prebuild 生成主 App 的 Scene manifest 和工厂入口。
-不要只手改忽略目录里的 AppDelegate 或绕过原生指纹。启用该配置及升级原生依赖会改变
-runtime fingerprint，必须按下文冷更边界审核；链接唤起、前后台切换与页面显示须单独验证。
+Xcode 27 构建的 App 在 iOS 27 上必须采用 UIScene 生命周期。SDK 58 默认由 prebuild
+生成主 App 的 Scene manifest 和工厂入口，不再使用 SDK 57 的
+`expo-build-properties.ios.enableSceneSupport` 回移开关。不要只改忽略目录里的 AppDelegate。
+升级原生依赖会改变 runtime fingerprint，必须按下文冷更边界审核；链接唤起、前后台切换
+与页面显示须单独验证。
 
 ```bash
 pnpm mobile:sim:rebuild
@@ -147,6 +147,9 @@ pnpm --filter mobile test:smoke
 - 视觉改动同时遵守 [Cindy 设计规范](../design-rules/cindy-design-system.md) 与
   [Mobile 设计规范](../../apps/mobile/docs/mobile-design-guide.md)。
 - 记录实际执行和结果；未执行的高相关检查必须说明原因。
+
+消息与任务行的尺寸订阅、代码着色优化及测量边界见
+[手机消息渲染的共享优化](../../apps/mobile/docs/mobile-render-performance.md)。
 
 ## 专项入口
 

@@ -364,5 +364,13 @@
     "merged": "Birleştirildi",
     "closed": "Kapatıldı",
     "draft": "Taslak"
+  },
+  "taskArchive": {
+    "archived": "\"{{title}}\" arşivlendi",
+    "cancel": "İptal",
+    "cancelled": "Bu sefer otomatik arşivlenmeyecek",
+    "now": "Şimdi arşivle",
+    "pending": "Bu görevden ayrıldığınızda arşivlenecek",
+    "undo": "Geri Al"
   }
 }

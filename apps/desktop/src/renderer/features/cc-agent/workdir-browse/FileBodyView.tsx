@@ -40,12 +40,15 @@ import { ErrorNotice } from '@/components/ui/error-notice';
 
 import {
   forwardRef,
+  lazy,
+  Suspense,
   useCallback,
   useEffect,
   useImperativeHandle,
   useLayoutEffect,
   useRef,
   useState,
+  type ComponentProps,
 } from 'react';
 import { createPortal } from 'react-dom';
 import { Save, Table2 } from 'lucide-react';
@@ -76,7 +79,6 @@ import type { FileContent } from './hooks/useFileContent';
 import { useDelayedFlag } from './hooks/useDelayedFlag';
 import { DrawioPreview } from './DrawioPreview';
 import { ImagePreview } from './ImagePreview';
-import { PdfPreview } from './PdfPreview';
 import { UnrenderablePlaceholder } from './UnrenderablePlaceholder';
 import { DocSearchBar } from './DocSearchBar';
 import { setActiveFileBodyHandle } from './lib/activeFileBodyHandle';
@@ -92,6 +94,21 @@ import {
   normalizeBaseline,
   type MarkdownAutosaveHandle,
 } from './lib/markdownAutosave';
+
+// pdf.js (~0.45 MB) would otherwise ride along with every window that can show
+// a file body, including the main window's first screen. PdfPreview renders its
+// own loading state, so the brief chunk load only needs an empty fallback.
+const LazyPdfPreview = lazy(() =>
+  import('./PdfPreview').then((module) => ({ default: module.PdfPreview })),
+);
+
+function PdfPreview(props: ComponentProps<typeof LazyPdfPreview>) {
+  return (
+    <Suspense fallback={null}>
+      <LazyPdfPreview {...props} />
+    </Suspense>
+  );
+}
 
 /**
  * project-search 跳转要的是「目标行第一个**可见**命中的下标」。

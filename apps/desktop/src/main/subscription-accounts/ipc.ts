@@ -9,10 +9,15 @@ import {
 import { parseSubscriptionAccountCommand } from './commands.js';
 export { parseSubscriptionAccountCommand } from './commands.js';
 import { executeSubscriptionAccountCommand } from './service.js';
-import { onSubscriptionAccountsChanged, readSubscriptionPoolUsage } from './runtime.js';
+import { onSubscriptionAccountsChanged, readSubscriptionPoolUsage, readLegacySubscriptionPoolUsage, readSubscriptionSessionUsage } from './runtime.js';
 import { broadcast } from '../device-link/index.js';
+import { setRemoteSubscriptionPoolQuotaReader } from '../device-link/dispatch.js';
+import { readLegacySubscriptionQuota } from './legacyQuota.js';
 
 export function registerSubscriptionAccountsIpc(): void {
+  setRemoteSubscriptionPoolQuotaReader((channel, args) =>
+    readLegacySubscriptionQuota(readLegacySubscriptionPoolUsage, channel, args, readSubscriptionSessionUsage),
+  );
   onSubscriptionAccountsChanged((providerId) =>
     broadcast('subscription-accounts:changed', { providerId }),
   );

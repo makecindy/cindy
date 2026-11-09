@@ -231,7 +231,25 @@ describe('BrowserBackendHealthService', () => {
     await expect(service.getHealth()).resolves.toEqual({
       active: 'user-browser', status: 'error', canRecover: false, reason: 'plugin-missing',
     });
+    // Preserve the actual reason through the settings health projection (2026-11-07 regression).
+    for (const reason of ['plugin-updating', 'plugin-selection-required']) {
+      ctl.call.mockResolvedValueOnce({ ok: true, action: 'status', status: 200, data: { configured: false, reason } });
+      await expect(service.getHealth()).resolves.toMatchObject({ reason, canRecover: false });
+    }
     expect(ctl.restartEmbedded).not.toHaveBeenCalled();
     expect(ctl.probeActiveControl).not.toHaveBeenCalled();
   });
+  // Unit regression: transport/probe errors must not become an extension-install instruction.
+  it.each(['result', 'bridge', 'throw'])('reports %s probe failures separately from disconnection', async (kind) => {
+    const ctl = controller();
+    ctl.getCurrentBackendKind.mockReturnValue('user-browser');
+    if (kind === 'throw') ctl.call.mockRejectedValueOnce(new Error('probe unavailable'));
+    else ctl.call.mockResolvedValueOnce(kind === 'result'
+      ? { ok: false, action: 'status', status: 503 }
+      : { ok: true, action: 'status', status: 200, data: { configured: true, error: 'BRIDGE_UNAVAILABLE' } });
+    await expect(new BrowserBackendHealthService(ctl, logger()).getHealth()).resolves.toMatchObject({
+      status: 'error', reason: 'status-failed', canRecover: false,
+    });
+  });
+
 });

@@ -160,6 +160,13 @@
       "GROUP_AUTHORIZATION_REQUIRED": "{{name}} bu aracı çalıştıramadı: grup yetkilendirmesinin süresi dolmuş veya bu eyleme izin vermiyor. Takım arkadaşının sahibi bu grupta isteği tekrar gönderebilir.",
       "GROUP_AUTHORIZATION_UNAVAILABLE": "{{name}} için grup yetkilendirmesi doğrulanamadı, bu nedenle araç çalıştırılamadı. Bağlantı düzeldikten sonra tekrar deneyin.",
       "ATTACHMENTS_UNAVAILABLE": "İndirme hatası veya ek boyutu sınırı nedeniyle bazı ekler {{name}} kullanıcısına teslim edilemedi. Bu istek için gerekli ekleri tekrar gönderin."
+    },
+    "runtimeFailureReason": {
+      "unclaimed_timeout": {
+        "advice": "Takım arkadaşının sahibinden Cindy'nin çalıştığını ve ağın bağlı olduğunu kontrol etmesini isteyin.",
+        "details": "Cindy ve ağ tekrar çalıştığında mesajı yeniden gönderin.",
+        "summary": "{{name}} bekleme süresi içinde işleme başlayamadı. Bu istek sonlandırıldı."
+      }
     }
   },
   "plan": {

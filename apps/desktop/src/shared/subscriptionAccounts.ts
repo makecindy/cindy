@@ -3,6 +3,8 @@ import type { ClaudeSubscriptionUsageSnapshot } from './claudeSubscriptionUsage.
 
 export const SUBSCRIPTION_ACCOUNTS_CHANNEL = 'maker:subscription-accounts';
 export const SUBSCRIPTION_ACCOUNTS_CHANGED = 'subscription-accounts:changed';
+/** Appended to legacy remote quota queries when the caller needs the CLI default account itself. */
+export const DEFAULT_ACCOUNT_USAGE_SCOPE = 'default-subscription-account';
 export type SubscriptionProvider = 'anthropic' | 'openai';
 export interface SubscriptionAccountConfig {
   id: string;

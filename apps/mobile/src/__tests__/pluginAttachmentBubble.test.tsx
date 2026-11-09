@@ -21,6 +21,7 @@ vi.mock('@/session/NativeVideoPlayer', () => ({ NativeVideoPlayer: () => null })
 // Only native surfaces and unrelated heavy viewers are replaced for Node rendering.
 vi.mock('react-native', async () => {
   const React = await import('react');
+  const window = { width: 402, height: 874, scale: 3, fontScale: 1 };
   const view = ({ children, testID, accessibilityLabel, onPress }: any) => React.createElement('div', { 'data-testid': testID, 'aria-label': accessibilityLabel, onClick: onPress }, children);
   class Value { constructor(public value: number) {} interpolate() { return 0; } setValue() {} stopAnimation() {} }
   return {
@@ -32,6 +33,7 @@ vi.mock('react-native', async () => {
     StyleSheet: { create: (s: any) => s, flatten: (s: any) => s, hairlineWidth: 1 },
     Easing: { linear: (n: number) => n, bezier: () => (n: number) => n },
     AccessibilityInfo: { isReduceMotionEnabled: () => Promise.resolve(true), addEventListener: () => ({ remove() {} }) }, Alert: {}, Linking: {}, StatusBar: {},
+    Dimensions: { get: () => window, addEventListener: () => ({ remove() {} }) },
     useWindowDimensions: () => ({ width: 402, height: 874, scale: 3, fontScale: 1 }),
   };
 });
@@ -491,3 +493,6 @@ describe('companion native read position', () => {
 });
 
 vi.mock('@/session/RemoteAttachmentPreview', () => ({ RemoteAttachmentPreview: () => null }));
+
+// Native blur rendering is outside the attachment layout contract.
+vi.mock('expo-blur', () => ({ BlurView: () => null }));

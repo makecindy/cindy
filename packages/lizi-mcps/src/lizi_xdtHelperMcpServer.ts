@@ -15,7 +15,7 @@ import { registerSessionTagTools, type SessionTagsCallback } from './xdt-helper/
  * 设计:
  *  - server name = `cindy_helper`,essential(常开,不可被用户关闭)
  *  - 通用工具走 `list_tools` / `call_tool` 两个入口,渐进式发现:
- *    找主人（选择、亲自输入、扫码、连接账号）使用独立的 ask_owner 入口，以便 harness 验证根代理身份。
+ *    用户操作交接（亲自输入、扫码、连接账号）使用独立的 ask_owner 入口，以便 harness 验证根代理身份。
  *    - 'cindy'   : 只读自省 (get_capabilities / get_current_session_id)
  *    - 'auth'    : MCP 设置表单（request_mcp_setup）与 Grok 设备码状态、取消；旧名
  *                  request_input_handoff / start_grok_device_login 不再列出，仍可经 call_tool 调用
@@ -53,8 +53,12 @@ import {
   askOwnerKinds,
   registerAskOwnerTool,
   type AskOwnerDeps,
-  type AskUserQuestionAsyncCallback,
 } from './xdt-helper/ask_owner.js';
+import {
+  registerAsyncQuestionTool,
+  supportsAsyncQuestionTool,
+  type AskUserQuestionAsyncCallback,
+} from './xdt-helper/ask_user_question_async.js';
 import { stringArrayParam } from './xdt-helper/_array-param.js';
 
 import { XdtHelperToolRegistry } from './lizi_xdtHelperToolRegistry.js';
@@ -148,7 +152,7 @@ export type {
 
 const D_LIST_TOOLS =
   'Cindy 设置/控制入口：query 搜索壁纸、模型、伙伴、自动化、设备等；key 读单项说明；name 读已发现工具的参数。例：list_tools({query:"伙伴模型"})。' +
-  `探索当前任务获准的 ${BRAND_NAME} 能力。要主人选择、亲自输入账号密码验证码、扫码或连接账号时直接用 ask_owner，不经这里；` +
+  `探索当前任务获准的 ${BRAND_NAME} 能力。要用户亲自登录、输入密码验证码、扫码或连接账号时直接用 ask_owner，不经这里；` +
   'github 类目用于定时追踪 PR/CI/评审变化与管理任务 PR 关联，不替代 gh 等命令行；查询不会建立任务关联。其它先不传 category 查看用途与本机/跨电脑范围，再按类目发现工具，用 call_tool 执行。';
 
 const D_CALL_TOOL =
@@ -1193,16 +1197,15 @@ export function createXdtHelperMcpServer(
     ...(deps.authorizeCall ? { authorizeCall: deps.authorizeCall } : {}),
   }, allowedSurface);
 
-  // ask_owner: the one listed way to have the owner choose, type what only they
-  // may, scan a sign-in code or connect an account. A dedicated tool identity
+  // Keep ordinary questions separate from user-operated sign-in and account handoff.
+  // A dedicated tool identity
   // lets native Claude enforce root-only provenance before MCP dispatch. Do not
   // expose an alias through the generic call_tool.
   const askOwnerDeps: AskOwnerDeps = {
-    ...(deps.askUserQuestionAsync ? { ask: deps.askUserQuestionAsync } : {}),
     ...(deps.inputHandoff ? { inputHandoff: deps.inputHandoff } : {}),
     ...(deps.grokLogin ? { grokLogin: deps.grokLogin } : {}),
   };
-  const hasAskOwner = !!(deps.askUserQuestionAsync || deps.inputHandoff || deps.grokLogin);
+  const hasAskOwner = !!(deps.inputHandoff || deps.grokLogin);
   if (hasAskOwner) {
     const owner = new XdtHelperToolRegistry();
     registerAskOwnerTool(
@@ -1231,6 +1234,25 @@ export function createXdtHelperMcpServer(
       description: askOwnerDescription(kinds, context),
       inputSchema: z.toJSONSchema(z.strictObject(askOwnerInputShape(kinds))) as Tool['inputSchema'],
     }];
+  };
+
+  // A dedicated identity preserves root-only provenance; no generic call_tool alias.
+  const questions = new XdtHelperToolRegistry();
+  if (deps.askUserQuestionAsync) {
+    registerAsyncQuestionTool(questions, () => resolveLiziMcpSessionContext(sessionCtx),
+      deps.askUserQuestionAsync, async () => (await allowedSurface()).categories);
+    const definition = questions.get('ask_user_question_async')!;
+    server.registerTool(definition.name, {
+      description: definition.description, inputSchema: z.strictObject(definition.inputShape),
+    }, async (args) => questions.call(definition.name, args));
+  }
+  const asyncQuestionListing = async (): Promise<Tool[]> => {
+    const definition = questions.get('ask_user_question_async');
+    const allowed = await allowedSurface();
+    if (!definition || !supportsAsyncQuestionTool(resolveLiziMcpSessionContext(sessionCtx))
+      || (allowed.categories && !allowed.categories.has('cindy'))) return [];
+    return [{ name: definition.name, description: definition.description,
+      inputSchema: z.toJSONSchema(z.strictObject(definition.inputShape)) as Tool['inputSchema'] }];
   };
 
   // list_machines: the first step of any work across computers, so it is listed
@@ -1304,6 +1326,7 @@ export function createXdtHelperMcpServer(
       return { tools: [
         ...entryTools,
         ...(await askOwnerListing()),
+        ...(await asyncQuestionListing()),
         ...(await machineListing()),
         ...(allowed.categories?.has('bots')
           ? withCindyGatedBotToolDescriptions(

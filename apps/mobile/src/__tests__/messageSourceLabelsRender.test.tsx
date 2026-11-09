@@ -3,7 +3,7 @@
  * 消息来源标签渲染:设备(查看者自己发的不标)、插件、共享任务作者(气泡上方)、
  * 脱敏自动化、本机 IM 卡片(保留普通用户操作)。沿用 pluginAttachmentBubble 的 RN 替身。
  */
-import { act, createElement, useImperativeHandle, useState } from "react";
+import { act, createElement, useImperativeHandle, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 vi.mock('@/platform/gestureHandler', () => {
@@ -27,6 +27,7 @@ const viewportHarness = vi.hoisted(() => ({
   finishReveal: null as any,
   renders: 0,
   captureNativeOpacity: false,
+  memoizedCells: false,
   opacityTargets: new Set<HTMLElement>(),
 }));
 
@@ -34,6 +35,7 @@ const viewportHarness = vi.hoisted(() => ({
 // Only native surfaces and unrelated heavy viewers are replaced for Node rendering.
 vi.mock("react-native", async () => {
   const React = await import("react");
+  const window = { width: 402, height: 874, scale: 3, fontScale: 1 };
   // onLongPress 映射到 contextmenu,便于测试长按显示来源 ID。
   const view = ({ children, testID, accessibilityLabel, accessibilityHint, onLongPress, onPress, disabled, selectable, style, nativeRef }: any) =>
     React.createElement(
@@ -110,6 +112,7 @@ vi.mock("react-native", async () => {
     Alert: {},
     Linking: {},
     StatusBar: {},
+    Dimensions: { get: () => window, addEventListener: () => ({ remove() {} }) },
     useWindowDimensions: () => ({
       width: 402,
       height: 874,
@@ -129,9 +132,10 @@ vi.mock("@legendapp/list/react-native", () => ({
         return undefined;
       },
     }));
-    return data.map((item: any, index: number) =>
+    // Model retained native cells: changing renderItem alone need not redraw them.
+    return useMemo(() => data.map((item: any, index: number) =>
       createElement("section", { key: item.key }, renderItem({ item, index })),
-    );
+    ), [data, props.extraData, viewportHarness.memoizedCells ? null : renderItem]);
   },
   useRecyclingState: (initial: any) => useState(initial),
   useViewability: () => {},
@@ -346,6 +350,30 @@ function mount(messages: RemoteMessage[], props: Record<string, unknown> = {}) {
 
 beforeAll(async () => {
   await i18n.changeLanguage("zh-CN");
+});
+
+it('updates retained companion cells when topic replies change without new messages', () => {
+  viewportHarness.memoizedCells = true;
+  const open = vi.fn();
+  const topics = (replyCount: number) => ({
+    avatar: null, busy: false, open,
+    threads: new Map([['topic-root', { rootClientId: 'topic-root', replyCount }]]),
+  });
+  const h = mount([{ ...msg('topic-root', 'An existing answer', { turnCompleted: true }), role: 'assistant' }],
+    { companion: true, companionThreads: topics(1) });
+  try {
+    const row = () => h.host.querySelector('[data-testid="companion.thread.topic-root"]');
+    expect(row()?.textContent).toContain(i18n.t('groupChat.thread.replyCount', { count: 1 }));
+    const initial = row();
+    h.rerender({ companionThreads: topics(3) });
+    expect(row()).toBe(initial);
+    expect(row()?.textContent).toContain(i18n.t('groupChat.thread.replyCount', { count: 3 }));
+    act(() => row()!.dispatchEvent(new MouseEvent('click', { bubbles: true })));
+    expect(open).toHaveBeenCalledTimes(1);
+  } finally {
+    h.unmount();
+    viewportHarness.memoizedCells = false;
+  }
 });
 
 // Native replay: opening the keyboard restored opacity=0 on a revealed list.

@@ -1,5 +1,5 @@
 import { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { PanResponder, type View } from 'react-native';
+import { PanResponder, type ViewInstance } from 'react-native';
 import Constants, { ExecutionEnvironment } from 'expo-constants';
 import { measure, runOnJS, runOnUI, useAnimatedReaction, useAnimatedRef, useAnimatedStyle, useDerivedValue, useSharedValue } from 'react-native-reanimated';
 import { Gesture } from '@/platform/gestureHandler';
@@ -205,7 +205,7 @@ export function useComposerResize(input: UseComposerResizeInput) {
   // 按在卡片任意处上下拖动调高。Manual 而非 Pan：待定期间不装一个与之竞争的
   // UIPanGestureRecognizer，不拖住 iOS 侧滑返回和视频控件（同 composerPullThrough）；
   // 判定为调高前编辑器照常收到触摸，点按、选字、滚动文字不受影响。
-  const textFrameRef = useAnimatedRef<View>();
+  const textFrameRef = useAnimatedRef<ViewInstance>();
   const textScrollEdge = useSharedValue<ComposerTextScrollEdge | null>(null);
   const setTextScrollEdge = useCallback((edge: ComposerTextScrollEdge | null) => {
     textScrollEdge.value = edge;

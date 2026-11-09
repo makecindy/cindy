@@ -1,3 +1,4 @@
+import * as customProviderStore from '../../maker-host/custom-provider-store.js';
 import { configureModelSettingsActions, manageAppModels } from '../../app-settings/models';
 import Database from 'better-sqlite3';
 import { readFileSync } from 'node:fs';
@@ -3515,6 +3516,34 @@ describe('provider:custom:* CRUD handlers', () => {
       }
     },
   );
+
+  it('serializes deletion before model disable without reversing the availability lock order', async () => {
+    mountDb();
+    await createCustomProvider(validConfig);
+    const harness = new IpcHarness();
+    const deps = makeDeps({ listProviders: async () => [catalogView('openrouter', { codex: ['meta/llama-4'] })] });
+    registerProviderHandlers(harness, deps);
+    let release!: () => void;
+    let entered!: () => void;
+    const reached = new Promise<void>(resolve => { entered = resolve; });
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const original = customProviderStore.getCustomProvider;
+    vi.spyOn(customProviderStore, 'getCustomProvider').mockImplementationOnce(async id => {
+      entered(); await gate; return original(id);
+    });
+    const deletion = harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_DELETE, 'openrouter');
+    await reached;
+    const disable = harness.invoke(MAKER_INVOKE.MODEL_DISABLE_SET, {
+      kind: 'model', providerId: 'openrouter', modelIds: ['meta/llama-4'], disabled: true,
+    });
+    // Let the disable request enter its queues while deletion holds the policy lock.
+    for (let i = 0; i < 20; i++) await Promise.resolve();
+    release();
+    await expect(deletion).resolves.toEqual({ ok: true });
+    await expect(disable).resolves.toEqual({ ok: true });
+    expect(await getCustomProvider('openrouter')).toBeNull();
+    expect(deps.setModelsDisabled).toHaveBeenCalled();
+  });
 
   it('deletes (idempotent) + broadcasts; bad providerId → INVALID_PARAMS', async () => {
     mountDb();

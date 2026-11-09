@@ -2252,7 +2252,11 @@
         "customFailed": "Could not save the wallpaper. Please try again.",
         "downloading": "Downloading wallpaper…",
         "downloadFailed": "Some wallpaper assets are unavailable. Using the available background.",
-        "retryDownload": "Retry Download"
+        "retryDownload": "Retry Download",
+        "desktopBlurHint": "Pencerenin arkasındaki masaüstünü bulanıklaştırın. 0 kapatır; daha yüksek değerler bulanıklığı artırır. Ayarlanabilir bulanıklığı olmayan sistemler varsayılan efektini kullanır.",
+        "desktopBlurLabel": "Masaüstü Bulanıklığı",
+        "desktopVisibilityHint": "Cindy'nin arkasındaki masaüstünü ve pencereleri gösterin. Metin ve kontroller net kalır.",
+        "desktopVisibilityLabel": "Masaüstü Saydamlığı"
       },
       "layout": {
         "label": "Panel layout",
@@ -5563,16 +5567,21 @@
         "userBrowserSetup": {
           "installPluginTitle": "Install the Cindy Chrome plugin",
           "enablePluginTitle": "Enable the Cindy Chrome plugin",
-          "installExtensionTitle": "Add the Cindy extension to your browser",
           "pluginBody": "My browser reaches your Chrome or Edge through the Cindy Chrome plugin and its browser extension. Install the plugin in Cindy first, then follow its prompt to add the extension.",
-          "extensionBody": "Add browser extension opens the Cindy extension’s store page in your browser; choose Add and this changes to connected on its own. Already added? Enable it in the browser’s extension settings.",
           "installPlugin": "Install plugin",
           "enablePlugin": "Enable",
-          "installExtension": "Add browser extension",
           "updatePluginTitle": "Update the Cindy Chrome plugin",
           "updatePluginBody": "The installed Cindy Chrome plugin is too old for My browser. Update it to the latest version, then follow its prompt to add the extension.",
           "updatePlugin": "Güncelle",
-          "storeOpened": "Opened the Cindy extension page in your browser. Choose Add to Chrome and it connects on its own."
+          "storeOpened": "Opened the Cindy extension page in your browser. Choose Add to Chrome and it connects on its own.",
+          "connectExtensionTitle": "Tarayıcı Uzantısı Bağlı Değil",
+          "connectionBody": "Cindy'yi ve tarayıcınızı açık tutun ve Cindy uzantısının etkin olduğunu kontrol edin. Bu, yeniden yüklenmesi gerektiği anlamına gelmez. Durum yeniden bağlandığında otomatik olarak güncellenir.",
+          "openExtensionStore": "Uzantı Mağazasını Aç",
+          "selectPlugin": "Eklentiyi aç",
+          "selectPluginBody": "Cindy'nin hangi uzantıyı kullanacağını onaylamak için eklenti ayrıntılarını açın ve «Bu tarayıcı uzantısını kullan»ı seçin.",
+          "selectPluginTitle": "Bir tarayıcı uzantısı seçin",
+          "updatingBody": "Güncelleme bittiğinde bağlantı otomatik olarak kurtarılacaktır.",
+          "updatingTitle": "Tarayıcı bağlantısı güncelleniyor"
         }
       },
       "android": {
@@ -9946,7 +9955,9 @@
       "confirmAria": "Restart anyway and apply the update, interrupting the running task",
       "cancelAria": "Cancel update",
       "dismiss": "Daha Sonra",
-      "dismissAria": "Dismiss update banner for now"
+      "dismissAria": "Dismiss update banner for now",
+      "nativeBuildSubtitle": "Geçiş yapmak için yeniden başlatın; görevleriniz ve ayarlarınız korunur",
+      "nativeBuildTitle": "Apple Silicon sürümü hazır"
     },
     "notice": {
       "title": "Yenilikler",
@@ -10116,6 +10127,12 @@
         "enabled": "Etkin"
       },
       "close": "Close Download Dialog"
+    },
+    "nativeBuild": {
+      "description": "Bu Mac Apple Silicon işlemciye sahiptir, bu nedenle Intel sürümü çeviri yoluyla çok daha yavaş çalışır. Apple Silicon sürümünü yükleyin; verileriniz korunur.",
+      "dismiss": "Şimdilik gizle",
+      "download": "İndir",
+      "title": "Intel sürümünü kullanıyorsunuz"
     }
   },
   "bots": {
@@ -10729,6 +10746,9 @@
           "GROUP_AUTHORIZATION_REQUIRED": "{{name}} bu aracı çalıştıramadı: grup yetkilendirmesinin süresi doldu veya bu eyleme izin vermiyor. Takım arkadaşının sahibi bu grupta isteği tekrar yapabilir.",
           "GROUP_AUTHORIZATION_UNAVAILABLE": "{{name}} için grup yetkilendirmesi doğrulanamadı, bu nedenle bu araç çalıştırılmadı. Bağlantı düzeldikten sonra tekrar deneyin.",
           "ATTACHMENTS_UNAVAILABLE": "İndirme hatası veya ek sınırı nedeniyle bazı ekler {{name}} adlı takım arkadaşına teslim edilemedi. Bu istek için gereken ekleri yeniden gönderin."
+        },
+        "runtimeFailureReason": {
+          "unclaimed_timeout": "{{name}} bekleme süresi içinde işleme başlayamadı. Bu istek sonlandırıldı.\nTakım arkadaşının sahibinden Cindy'nin çalıştığını ve ağın bağlı olduğunu kontrol etmesini isteyin."
         }
       },
       "settings": {
@@ -11500,7 +11520,8 @@
         "lark": "Lark",
         "wecom": "WeCom",
         "dingtalk": "DingTalk",
-        "discord": "Discord"
+        "discord": "Discord",
+        "imessage": "iMessage"
       },
       "status": {
         "connected": "Connected",
@@ -11632,6 +11653,22 @@
           "existing": "Use the bot already set up in Cindy",
           "manual": "Enter new credentials",
           "moveNote": "The bot moves out of Settings → IM bots, which will be left empty. Its chats continue with {{name}}."
+        },
+        "imessage": {
+          "chatGuidsLabel": "Sohbet GUID'leri (virgülle ayrılmış)",
+          "chatGuidsPlaceholder": "any;-;owner@example.com",
+          "hint": "Yerel ağdaki BlueBubbles sunucunuza bağlanın. Yalnızca seçilen sohbetler işlenir. Bağlanmadan önce bu sohbetler için diğer otomatik yanıtlayıcıları durdurun.",
+          "listenHostLabel": "Yerel dinleme adresi",
+          "listenHostPlaceholder": "192.168.1.10",
+          "listenPortLabel": "Yerel dinleme bağlantı noktası",
+          "listenPortPlaceholder": "18747",
+          "ownerAddressLabel": "iMessage adresiniz",
+          "ownerAddressPlaceholder": "owner@example.com",
+          "passwordLabel": "API parolası",
+          "passwordPlaceholder": "••••••••",
+          "serverUrlLabel": "BlueBubbles sunucusu",
+          "serverUrlPlaceholder": "http://192.168.1.20:1234",
+          "uncertain": "{{count}} iletinin kontrol edilmesi gerekiyor. Yinelenmeleri önlemek için tekrar denemeden önce sohbet geçmişini inceleyin."
         }
       },
       "removeConfirm": {
@@ -12487,7 +12524,13 @@
       "editSaveAria": "Save edit (Enter)",
       "editCancelAria": "Cancel edit (Esc)",
       "syntheticContinueLabel": "Bitmemiş göreve devam et (sistem talimatı)",
-      "syntheticTriggerLabel": "Sistem talimatı"
+      "syntheticTriggerLabel": "Sistem talimatı",
+      "cancelSend": "Göndermeyi iptal et",
+      "editingInComposer": "Aşağıdaki giriş kutusunda düzenleniyor…",
+      "moveDown": "Aşağı taşı",
+      "moveUp": "Yukarı taşı",
+      "queued": "Kuyrukta",
+      "stopping": "Durduruluyor"
     },
     "newChatView": {
       "missing": {
@@ -12946,7 +12989,9 @@
           "delegate": "İş devredildi",
           "plan": "Plan güncellendi"
         }
-      }
+      },
+      "empty": "Bu yanıt için gösterilecek işlem ayrıntısı yok",
+      "unavailable": "İşlem ayrıntıları yüklenemedi"
     },
     "imageDelivery": {
       "stored": "Resim teslim edildi",
@@ -14084,7 +14129,9 @@
       "taskAutoArchived": "“{{title}}” arşivlendi",
       "taskAutoArchivedUndo": "Geri Al",
       "taskAutoArchivePending": "Ayrıldığınızda arşivlenir",
-      "taskAutoArchiveCancel": "Bu seferlik sakla"
+      "taskAutoArchiveCancel": "Bu seferlik sakla",
+      "taskArchiveNow": "Şimdi arşivle",
+      "taskAutoArchiveCancelled": "Bu sefer otomatik arşivlenmeyecek"
     },
     "ghostHook": {
       "blockedFallback": "Message blocked by a plugin; not sent",
@@ -19396,7 +19443,8 @@
         "offline": "Çevrimdışı. Buraya aktarmak için o bilgisayarda Cindy'yi açın",
         "remote-control-off": "Önce o bilgisayarda “Aynı hesaptaki cihazların bu makineyi kontrol etmesine izin ver” seçeneğini etkinleştirin",
         "control-disabled": "O bilgisayarın kontrolü burada devre dışı bırakıldı. Uzaktan Bağlantı ayarlarından tekrar etkinleştirin"
-      }
+      },
+      "receivingOn": "Şurada alınıyor: {{name}}"
     },
     "reading": "“{{name}}” üzerindeki ayarlar okunuyor…",
     "errors": {
@@ -19740,8 +19788,30 @@
     "removeTitle": "{{name}} kaldırılsın mı?",
     "removeDescription": "Cindy bu hesaba görev atamayı durduracaktır. CLI girişi ve konuşma geçmişi bu bilgisayarda kalır.",
     "failed": "Bu hesap okunamadı veya güncellenemedi. CLI girişini ve bağlantıyı kontrol edin, ardından tekrar deneyin.",
-    "directory": "Hesap klasörü",
     "loginAgain": "Tekrar oturum aç",
-    "login": "Giriş yap"
+    "login": "Giriş yap",
+    "openDirectory": "Hesap klasörünü aç",
+    "openDirectoryFailed": "Hesap klasörü açılamadı. Taşınmış veya silinmiş olabilir."
+  },
+  "crashDiagnosis": {
+    "description": "Ne olduğunu teşhis etmek ister misiniz? Göndermeden önce incelemeniz için çıkış ayrıntılarını ve sansürlenmiş günlükleri içeren bir görev taslağı hazırlayacağız. Beklenmeyen bir çıkış, zorla kapatma veya güç kaybından da kaynaklanabilir.",
+    "diagnose": "Sorunu teşhis et",
+    "failed": "Teşhis hazırlanamadı. Lütfen tekrar deneyin.",
+    "later": "Şimdi değil",
+    "logExcerpt": "İlgili günlükler (alıntı; eksik olabilir)",
+    "logsUnavailable": "İlgili günlük mevcut değil. Neden henüz bilinmiyor.",
+    "title": "Cindy beklenmedik şekilde kapandı"
+  },
+  "githubStar": {
+    "action": "Cindy'ye destek ol",
+    "browserFallback": "Cindy'ye yıldız vermek için GitHub'ı açın.",
+    "description": "Projeyi desteklemek için GitHub'da Cindy'ye bir yıldız verin.",
+    "dismiss": "Kapat",
+    "openFailed": "GitHub açılamadı.",
+    "openGithub": "GitHub'ı Aç",
+    "starring": "Yıldız veriliyor…",
+    "thanks": "Yıldız için Teşekkürler!",
+    "thanksDescription": "Desteğiniz Cindy'nin büyümesine yardımcı oluyor.",
+    "title": "Cindy hoşunuza gitti mi?"
   }
 }

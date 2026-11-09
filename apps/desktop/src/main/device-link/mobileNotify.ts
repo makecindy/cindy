@@ -35,6 +35,8 @@ export function buildSessionNotifyPayload(opts: {
   title: string;
   kind: MobileSessionEventKind;
   selfDeviceId: string;
+  /** Deep-link and notification identity belong to the execution host when remote. */
+  targetDeviceId?: string;
   /** 由 main host 按发送时的当前 locale 解析；本纯模块不依赖 Electron i18n。 */
   fallbackBody: string;
   imageFallback?: string;
@@ -49,24 +51,25 @@ export function buildSessionNotifyPayload(opts: {
 }): NotifyPayload {
   const safeTitle = truncateNotificationText(opts.title.trim() || opts.sessionId.slice(0, 8), NOTIFY_TITLE_MAX_LENGTH);
   const detail = opts.detail ? notificationPreview(opts.detail, NOTIFY_BODY_MAX_LENGTH, opts.imageFallback) : '';
+  const targetDeviceId = opts.targetDeviceId ?? opts.selfDeviceId;
   return {
     category: CATEGORY_BY_KIND[opts.kind],
     title: safeTitle,
     body: detail || truncateNotificationText(opts.fallbackBody, NOTIFY_BODY_MAX_LENGTH),
-    deepLink: sessionDeepLink(opts.sessionId, opts.selfDeviceId, opts.teammateBotId),
+    deepLink: sessionDeepLink(opts.sessionId, targetDeviceId, opts.teammateBotId),
     ...(opts.teammateBotId ? {
       sender: {
-        id: createHash('sha256').update(`${opts.selfDeviceId}:bot:${opts.teammateBotId}`).digest('hex'),
+        id: createHash('sha256').update(`${targetDeviceId}:bot:${opts.teammateBotId}`).digest('hex'),
         ...(opts.teammateAvatar ? { avatar: opts.teammateAvatar } : {}),
       },
     } : {}),
-    // 同会话的通知在系统层合并(APNs collapse-id / thread-id);混入 srcDeviceId,
+    // 同会话的通知在系统层合并(APNs collapse-id / thread-id);混入任务归属设备 ID,
     // 多台桌面推同名会话时互不顶替。原样拼接不可行:deviceId 可能是 64 位
     // machineId,拼出 100+ 字符会被 APNs 的 64 字节 collapse-id 上限截断成
     // 设备级合并键(该设备所有会话的通知互相顶替)。取 sha256 前 32 hex:
     // 确定性、每(设备,会话)唯一、稳低于协议与 APNs 双上限。
     collapseId: createHash('sha256')
-      .update(`${opts.selfDeviceId}:${opts.sessionId}`)
+      .update(`${targetDeviceId}:${opts.sessionId}`)
       .digest('hex')
       .slice(0, 32),
   };

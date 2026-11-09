@@ -1,3 +1,6 @@
+import { useComposerDragOpen } from '@/session/useComposerDragOpen';
+import { ResizableComposerInputRow } from '@/session/ResizableComposerInputRow';
+import type { ViewInstance, TextInputInstance, ScrollViewInstance } from 'react-native';
 import { useBotGroupRemoteMedia } from "@/session/useBotGroupRemoteMedia";
 import { ComposerAttachmentPreview } from "@/session/ComposerAttachmentPreview";
 import { PluginUiEnablePrompt } from '@/plugins/PluginUiEnablePrompt';
@@ -96,7 +99,7 @@ import {
   type ViewStyle,
 } from 'react-native';
 import { Text } from '@/components/AppText';
-import type { TextInput as NativeTextInput } from 'react-native';
+
 import {
   Camera,
   Check,
@@ -303,7 +306,6 @@ import { confirmFullAccessChange } from '@/session/fullAccessConfirmation';
 import { MobileVendorIcon } from '@/components/MobileVendorIcon';
 import { PlanModeChip } from '@/session/PlanModeChip';
 import {
-  ComposerResizeGrabber,
   ComposerToolbarLeftGroup,
   ComposerToolbarSpacer,
   ComposerToolbarVoiceSlot,
@@ -313,7 +315,6 @@ import {
   MOBILE_COMPOSER_INPUT_MAX_HEIGHT,
   MOBILE_COMPOSER_INPUT_SINGLE_LINE_HEIGHT,
   MOBILE_COMPOSER_MIN_TOUCH_TARGET,
-  MobileComposerInputRow,
   VoiceMicWaveCaret,
   resolveMobileComposerVoiceButtonPlacement,
 } from '@/session/MobileComposerInputRow';
@@ -717,8 +718,8 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
   const [goalBusy, setGoalBusy] = useState(false);
   const [goalError, setGoalError] = useState<string | null>(null);
   const [workspacePickerOpen, setWorkspacePickerOpen] = useState(false);
-  const workspacePickerHostRef = useRef<View>(null);
-  const workspacePickerAnchorRef = useRef<View>(null);
+  const workspacePickerHostRef = useRef<ViewInstance>(null);
+  const workspacePickerAnchorRef = useRef<ViewInstance>(null);
   const [workspacePickerFrame, setWorkspacePickerFrame] = useState<WorkspacePickerFrame | null>(null);
   const measureWorkspacePicker = useCallback(() => {
     if (nativeSelectionSheet || !workspacePickerOpen) return;
@@ -1000,9 +1001,9 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
   // 权限记忆只在偏好加载后恢复一次(之后由用户选择 / 切 agent 驱动),防止重复覆盖。
   const appliedPermissionMemoryRef = useRef(false);
   const userTouchedWorkspaceRef = useRef(false);
-  const firstMessageInputRef = useRef<NativeTextInput>(null);
+  const firstMessageInputRef = useRef<TextInputInstance>(null);
   const composerPillOpen = useComposerPillOpen(composerDock.enabled, () => firstMessageInputRef.current?.focus());
-  const voiceDraftScrollRef = useRef<ScrollView>(null);
+  const voiceDraftScrollRef = useRef<ScrollViewInstance>(null);
   const voiceRecordingActiveRef = useRef(false);
   const voicePermissionRequestInFlightRef = useRef(false);
   const voicePermissionRequestSeqRef = useRef(0);
@@ -1020,8 +1021,8 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
   const [firstMessageInputContentHeight, setFirstMessageInputContentHeight] = useState(MOBILE_COMPOSER_INPUT_SINGLE_LINE_HEIGHT);
   const [firstMessageInputFocused, setFirstMessageInputFocused] = useState(visualFocusComposer);
   const [voiceDraftCaretFrame, setVoiceDraftCaretFrame] = useState({ left: 0, top: 0 });
-  const voiceDraftCaretRef = useRef<View>(null);
-  const voiceDraftMeasuredBlockRef = useRef<View>(null);
+  const voiceDraftCaretRef = useRef<ViewInstance>(null);
+  const voiceDraftMeasuredBlockRef = useRef<ViewInstance>(null);
   // 自动默认运行配置(跟随被控电脑新建任务默认 / 区域默认 / 列表最上面)的守卫:用户一旦手动选过模型,就不再自动覆盖;
   // 记录已自动应用过的设备,切设备时(未手动选过)按新设备重算。
   const userTouchedRuntimeRef = useRef(false);
@@ -1616,7 +1617,9 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
   const pendingImagePreview = useComposerPendingImagePreview({ attachments, previews: attachmentPreviews, pendingUploads, getUploadedAttachmentId });
   const composerImageCount = attachments.filter((item) => item.category === 'image').length + composerIncomingImageCount;
   const { active: composerImageHoldActive, collapse: collapseComposerImages } = useComposerImageExpansion(composerImageCount, imageSelectionRevision);
-  const composerCardActive = firstMessageInputFocused || composerPillOpen.opening
+  const { composerDragOpen, handleComposerDragOpenChange, handleComposerDragOpenCommit } =
+    useComposerDragOpen(firstMessageInputFocused, () => firstMessageInputRef.current?.focus());
+  const composerCardActive = firstMessageInputFocused || composerPillOpen.opening || composerDragOpen
     || composerImageHoldActive
     || modelSheetOpen
     || permissionSheetOpen
@@ -1639,6 +1642,9 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
   const composerChromeHeight = (composerCardActive ? COMPOSER_CARD_CHROME_HEIGHT : COMPOSER_RESIZE_CHROME_HEIGHT)
     + composerAttachmentTrayHeight;
   const composerResize = useComposerResize({
+    bodyDragEnabled: !creating && (!composerCardActive || composerAttachmentTrayHeight === 0),
+    onDragOpenChange: handleComposerDragOpenChange,
+    onDragOpenCommit: handleComposerDragOpenCommit,
     autoMaxContentHeight: Math.max(
       MOBILE_COMPOSER_INPUT_SINGLE_LINE_HEIGHT,
       Math.min(MOBILE_COMPOSER_INPUT_MAX_HEIGHT, composerCardMaxHeight - composerChromeHeight),
@@ -3348,15 +3354,6 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
     setVoiceDraftCaretFrame({ left: 0, top: 0 });
   }, [draft.firstMessage.length, voiceIsListening]);
 
-  const renderComposerResizeHandle = () => (
-    <ComposerResizeGrabber
-      onAdjust={composerResize.adjustByLine}
-      panHandlers={composerResize.panHandlers}
-      gesture={composerResize.gesture}
-      testID="newSession.composerResizeGrabber"
-      visible
-    />
-  );
   const renderAttachmentToggleButton = () => (
     <Pressable
       accessibilityLabel={t('session.common.openContextPanel')}
@@ -5513,9 +5510,9 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
                   nestedScrollEnabled
                   keyboardShouldPersistTaps="handled"
                   showsVerticalScrollIndicator
-                  ListEmptyComponent={!browseLoading && !browseError ? (
+                  ListEmptyComponent={(!browseLoading && !browseError ? (
                     <Text style={styles.hint}>{newSessionText('emptyDirectory')}</Text>
-                  ) : null}
+                  ) : null) ?? undefined}
                 />
               </View>
             ) : null}
@@ -5615,7 +5612,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
               <View style={[styles.composerToolbarWrap, composerCardActive && {
                 minHeight: COMPOSER_CARD_CHROME_HEIGHT + MOBILE_COMPOSER_INPUT_SINGLE_LINE_HEIGHT,
               }]}>
-                <MobileComposerInputRow
+                <ResizableComposerInputRow resize={composerResize}
                   accessibilityLabel={t('session.new.firstMessagePlaceholder')}
                   bodyScrollGesture={composerResize.scrollGesture}
                   bodyScrollEnabled={!composerResize.dragging}
@@ -5656,7 +5653,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
                   onPasteImagesLoadFailed={failPastePlaceholders}
 
                   placeholderTextColor={colors.textPlaceholder}
-                  resizeHandle={composerCardActive ? renderComposerResizeHandle() : null}
+                  grabberTestID="newSession.composerResizeGrabber"
                   scrollEnabled={composerInputScrollEnabled}
 
                   selectionColor={colors.inputCaret}

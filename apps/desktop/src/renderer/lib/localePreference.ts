@@ -5,7 +5,7 @@ import {
 } from '@cindy/maker-shared/classical-reply';
 import { DEFAULT_LOCALE, SUPPORTED_LOCALES, type LocalePreference, type SupportedLocale } from '../../shared/locale';
 
-const LOCALE_STORAGE_KEY = 'language';
+export const LOCALE_STORAGE_KEY = 'language';
 let unpersistedPreference: LocalePreference | undefined;
 
 export function writeStoredLocale(preference: LocalePreference): void {

@@ -1,3 +1,4 @@
+import { prepareShareAvailability } from './providerShareAvailability.js';
 /**
  * 供应商分享 · 分享者这台电脑(host)。
  *
@@ -598,7 +599,10 @@ export function providerShareGuestDenial(controller: string): ProviderShareGuest
 /** 不认识的受邀者连进来：可能是刚同意的成员，按需立即拉一次(限频)。 */
 export async function ensureProviderSharePeerKnown(controller: string): Promise<void> {
   const rt = runtime;
-  if (!rt || providerShareGuestAccess(controller)) return;
+  if (!rt || ownedProviderShareGuestAccess(controller)) return;
+  // A second task may arrive on an already admitted executor connection.
+  try { await prepareShareAvailability(controller); } catch { /* Old server or no registered standby: retain the existing owner path. */ }
+  if (providerShareGuestAccess(controller)) return;
   const now = Date.now();
   if (now - rt.lastOnDemandAt < ON_DEMAND_MIN_INTERVAL_MS) {
     await rt.refreshing;

@@ -32,7 +32,10 @@
         "delegate": "İş devredildi",
         "plan": "Plan güncellendi"
       }
-    }
+    },
+    "empty": "Bu yanıt için gösterilecek işlem ayrıntısı yok",
+    "retry": "Yeniden Dene",
+    "unavailable": "İşlem ayrıntıları yüklenemedi"
   },
   "imageDelivery": {
     "stored": "Resim teslim edildi",

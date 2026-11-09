@@ -2255,6 +2255,10 @@
         },
         "visibilityLabel": "桌布顯度",
         "visibilityHint": "0% 隱桌布，100% 盡顯桌布。",
+        "desktopVisibilityLabel": "桌面透明度",
+        "desktopVisibilityHint": "透見 Cindy 後之桌面與視窗，文字控件仍清晰。",
+        "desktopBlurLabel": "桌面模糊",
+        "desktopBlurHint": "模糊窗後桌面；0 則關閉，值愈大則愈朦朧。系統若不可調，仍用預設之效。",
         "blurLabel": "桌布朦朧",
         "blurHint": "僅朦朧桌布，0 為闔。動態桌布啟朦朧則增顯示卡之負。",
         "motionLabel": "展示之式",
@@ -2421,7 +2425,7 @@
       "skinLabel": "角色",
       "skinHint": "任務膠囊與動態島中所顯之角色。",
       "soundLabel": "事之音",
-      "soundHint": "為諸類提醒擇 8-bit 之音，任務膠囊與動態島共之；點按之音唯觸任務膠囊時鳴。",
+      "soundHint": "事件設音，則獨奏所擇之聲；未設或關之，則從系統通知之設。",
       "soundAria": "切換任務膠囊之音",
       "soundSelectAria": "{{event}}之音",
       "soundPreviewAria": "先聽{{event}}之音",
@@ -2476,7 +2480,7 @@
         "select": "點選"
       },
       "soundOptions": {
-        "none": "無",
+        "none": "從系統",
         "startup-chime": "啟動之音",
         "ring-chime": "圓環之音",
         "item-found": "得寶",
@@ -5558,12 +5562,17 @@
         "userBrowserSetup": {
           "installPluginTitle": "納 Cindy Chrome 法器",
           "enablePluginTitle": "啟 Cindy Chrome 法器",
-          "installExtensionTitle": "將 Cindy 擴充裝入瀏覽器",
+          "connectExtensionTitle": "瀏覽器擴充尚未連",
           "pluginBody": "「我之瀏覽器」藉 Cindy Chrome 法器及其瀏覽器擴充，連君之 Chrome / Edge。先於 Cindy 中納法器，再依提示將擴充裝入瀏覽器。",
-          "extensionBody": "點「納瀏覽器擴充」，將於君之瀏覽器開 Cindy 擴充之商店頁，點「新增」後此處自轉為已連。早已裝過？請於瀏覽器之擴充功能管理中啟之。",
+          "connectionBody": "請保持 Cindy 與瀏覽器運行，並查 Cindy 擴充是否已啟。未連非須重裝；復連後，此處自更。",
           "installPlugin": "納法器",
           "enablePlugin": "往啟",
-          "installExtension": "納瀏覽器擴充",
+          "openExtensionStore": "開擴充商店",
+          "updatingTitle": "正更新瀏覽器連線",
+          "updatingBody": "更新既畢，連線自復。",
+          "selectPluginTitle": "擇瀏覽器擴充功能",
+          "selectPluginBody": "請啟法器詳情，擇「使用此瀏覽器擴充功能」，以定 Cindy 所用。",
+          "selectPlugin": "啟法器",
           "updatePluginTitle": "更新 Cindy Chrome 法器",
           "updatePluginBody": "所納 Cindy Chrome 法器版本較舊，尚不支援「我之瀏覽器」。更新至最新版後，再依提示將擴充裝入瀏覽器。",
           "updatePlugin": "往更新",
@@ -9904,6 +9913,8 @@
     "banner": {
       "title": "已更至 {{version}}",
       "subtitle": "重啟以煥新",
+      "nativeBuildTitle": "Apple 晶片版已備",
+      "nativeBuildSubtitle": "重啟即換，諸務與設定皆存",
       "viewNotes": "覽更新之告",
       "viewNotesAria": "覽 {{version}} 之更新公告",
       "button": "即重啟",
@@ -10033,6 +10044,12 @@
       "description": "資料庫約佔 {{size}}，已逾 {{threshold}} G。宜往儲存空間清理之。",
       "openSettings": "啟儲存空間",
       "disable": "勿再提醒"
+    },
+    "nativeBuild": {
+      "title": "今用 Intel 版 Cindy",
+      "description": "此 Mac 用 Apple 晶片，Intel 版須轉譯而行，遲緩甚矣。改裝 Apple 晶片版即可，資料皆存。",
+      "dismiss": "此番勿再提",
+      "download": "取之"
     },
     "horizontalTabbarAria": "主區視圖切換",
     "tabs": {
@@ -10706,6 +10723,9 @@
         "stepFailed": "{{name}}此步生謬，未竟",
         "stepTimeout": "{{name}}久未竟，此步暫止",
         "stepUnavailable": "{{name}}今不可用，此步無從行",
+        "runtimeFailureReason": {
+          "unclaimed_timeout": "{{name}}逾候未始處理，此請已終。\n請夥伴之主查其電腦之 Cindy 運行與網路連線。"
+        },
         "runtimeFailure": {
           "REMOTE_DEVICE_LIMIT": "{{name}}不能回覆：同僚所在裝置所留之遠端差事數已達上限。\n請同僚之主封存暫不用之差事，或請遠方之機之主於「遠端與分享」中提高上限。",
           "REMOTE_TOTAL_LIMIT": "{{name}}不能回覆：遠方之機所留差事總數已達上限。\n請彼機之主釋暫不用之差事，或於「遠端與分享」中提高上限。",
@@ -11494,7 +11514,8 @@
         "lark": "Lark",
         "wecom": "企業微信",
         "dingtalk": "釘釘",
-        "discord": "Discord"
+        "discord": "Discord",
+        "imessage": "iMessage"
       },
       "status": {
         "connected": "已連",
@@ -11625,6 +11646,22 @@
           "existing": "用已於 Cindy 設置之機器人",
           "manual": "填新憑證",
           "moveNote": "此機器人將自 規制 → IM 機器人 移來，彼處將空；原有私訊與群組改由 {{name}} 接續回覆。"
+        },
+        "imessage": {
+          "serverUrlLabel": "BlueBubbles 服務端",
+          "serverUrlPlaceholder": "http://192.168.1.20:1234",
+          "passwordLabel": "API 密鑰",
+          "passwordPlaceholder": "••••••••",
+          "ownerAddressLabel": "君之 iMessage 位址",
+          "ownerAddressPlaceholder": "owner@example.com",
+          "chatGuidsLabel": "言談 GUID（逗號相隔）",
+          "chatGuidsPlaceholder": "any;-;owner@example.com",
+          "listenHostLabel": "本機偵聽位址",
+          "listenHostPlaceholder": "192.168.1.10",
+          "listenPortLabel": "本機偵聽埠",
+          "listenPortPlaceholder": "18747",
+          "hint": "於本地網路接 BlueBubbles，僅理所選言談。接入前，須先停其餘自動應答程式，以免重答。",
+          "uncertain": "{{count}} 則消息尚待核驗。先查往來記錄，再議重試，勿重答。"
         }
       },
       "removeConfirm": {
@@ -12449,6 +12486,12 @@
       "missingDir": "目錄不存"
     },
     "pendingQueue": {
+      "stopping": "方止",
+      "queued": "方候",
+      "editingInComposer": "方於下方輸入框修之…",
+      "moveUp": "前移一位",
+      "moveDown": "後移一位",
+      "cancelSend": "罷遣",
       "regionAria": "待遣之訊佇列",
       "listAria": "佇列之訊",
       "pausedFooter": "差事已止，佇列暫停",
@@ -12892,6 +12935,8 @@
   },
   "chat": {
     "teammateProcess": {
+      "empty": "此番無可示之處理記錄",
+      "unavailable": "未能讀取處理記錄",
       "record": "理事錄",
       "operations": "行事錄",
       "elapsed": "已理 {{duration}}",
@@ -14046,8 +14091,10 @@
       "mailLegacy": "舊稿（唯讀）",
       "taskAutoArchived": "「{{title}}」已封存",
       "taskAutoArchivedUndo": "撤",
-      "taskAutoArchivePending": "去則自封存",
-      "taskAutoArchiveCancel": "此番不封"
+      "taskAutoArchivePending": "離此任務後自封存",
+      "taskAutoArchiveCancel": "取消",
+      "taskAutoArchiveCancelled": "此番不自封存",
+      "taskArchiveNow": "即封存"
     },
     "ghostHook": {
       "blockedFallback": "訊為法器所攔，未遣",
@@ -19365,6 +19412,7 @@
       "apply": "遷移"
     },
     "source": {
+      "receivingOn": "受端：{{name}}",
       "description": "選一台登入了同一帳號的電腦。它的法器、技藝、設定和連線會照原樣裝到這台電腦；金鑰只在你在那台電腦上點「允許」後複製，登入狀態不會離開那台電腦。",
       "loading": "方尋其餘之機…",
       "empty": "沒有找到這個帳號的其他電腦。在另一台電腦上登入 Cindy 後再開啟這裡",
@@ -19668,8 +19716,30 @@
     "removeTitle": "移出 {{name}}？",
     "removeDescription": "Cindy 將不再給這個帳號分配任務。CLI 登入和對話歷史仍保留在本機。",
     "failed": "無法讀取或更新帳號。請檢查 CLI 登入和網路連線後重試。",
-    "directory": "帳號目錄",
+    "openDirectory": "啟帳號目錄",
+    "openDirectoryFailed": "帳號目錄未能啟，或已移或已刪。",
     "loginAgain": "重登",
     "login": "登入"
+  },
+  "crashDiagnosis": {
+    "title": "Cindy 前次異常而止",
+    "description": "欲究其因乎？將取退出之記與已隱敏文之日誌，備為差事草稿，閱定乃發。強止或斷電，亦可致此。",
+    "diagnose": "診斷其因",
+    "later": "暫置",
+    "logExcerpt": "相關日誌（節錄，或有未全）",
+    "logsUnavailable": "未得相關日誌，其因未明。",
+    "failed": "診斷資料未備，請重試。"
+  },
+  "githubStar": {
+    "title": "喜用 Cindy 乎？",
+    "description": "願於 GitHub 點 Star，以助 Cindy",
+    "dismiss": "毋再提醒",
+    "action": "為 Cindy 喝采",
+    "starring": "點亮此星…",
+    "thanks": "承蒙賜 Star！",
+    "thanksDescription": "得君相助，Cindy 日進",
+    "browserFallback": "請至 GitHub 為 Cindy 點 Star",
+    "openGithub": "開啟 GitHub",
+    "openFailed": "未能開啟 GitHub"
   }
 }

@@ -19,7 +19,8 @@ import { useStableTranslation as useTranslation } from '@/hooks/useStableTransla
 import { ImageLightbox } from '@/components/chat/ImageLightbox';
 import { AnnotationStrokesSvg } from '@/components/chat/AnnotationStrokesSvg';
 import { ImageHoverPreview } from '@/components/chat/ImageHoverPreview';
-import { formatBytes, TextLightbox } from '@/components/chat/TextLightbox';
+import { formatBytes } from '@/components/chat/formatBytes';
+import { TextLightbox } from '@/components/chat/lazyPreviewLightboxes';
 import { AttachmentTypeThumb } from './AttachmentTypeThumb';
 import { cn } from '@/lib/utils';
 import type { AttachedFile, ImageAnnotationStroke } from '@/lib/fileTypes';

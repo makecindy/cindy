@@ -16,6 +16,8 @@ import { formatRemoteError } from '@/device-link/remoteStatus';
 import { useRemoteSyncCoordinator } from '@/device-link/remoteSyncTask';
 import { isTransientRemoteError } from '@/device-link/remoteRetry';
 import { BOT_GROUP_CLIENT_PRIMITIVES, botGroupChatDataFromResource, botGroupErrorCode, botGroupResourceRef } from './botGroupRemote';
+import type { DurableOutboxRecord } from './durableOutbox';
+import { reuseJsonSnapshot } from '@/utils/reuseJsonSnapshot';
 
 export type BotGroupChatState =
   | { kind: 'loading' }
@@ -26,6 +28,7 @@ export type BotGroupChatState =
 /** Pushes for one change arrive in bursts (messages, round, plan); read once per burst. */
 const PUSH_COALESCE_MS = 150;
 const READ_RECOVERY_MS = 30_000;
+const NO_PENDING: readonly DurableOutboxRecord[] = [];
 let cacheOwner = getMobileAuthOwner();
 const cachedGroups = new Map<string, BotGroupRemoteChatData>();
 
@@ -59,6 +62,15 @@ export function useBotGroupChat(host: RemoteResourceHostTarget, groupId: string,
       fresh.current++; cachedGroups.delete(cacheKey); void clearHistoryDisk(namespace, groupId);
       setState({ identity, value: { kind: 'missing' } }); return;
     }
+    const known = cachedGroups.get(cacheKey);
+    if (known) {
+      // Memory may already be ahead of an in-flight/failed disk write. Reopening
+      // should validate with the host, never roll the visible conversation back.
+      recovery.current.hasGroup = true;
+      setState(previous => previous.identity === identity && previous.value.kind === 'ready' && previous.value.group === known
+        ? previous : { identity, value: { kind: 'ready', group: known } });
+      return;
+    }
     let cancelled = false;
     const revision = fresh.current;
     const authority = historyDiskAuthority(namespace, groupId);
@@ -87,12 +99,14 @@ export function useBotGroupChat(host: RemoteResourceHostTarget, groupId: string,
       await openLink(host.deviceId);
       const resource = await getRemoteResource(invoke, host, botGroupResourceRef(groupId), i18n.language, BOT_GROUP_CLIENT_PRIMITIVES);
       if (!valid()) return;
-      const group = botGroupChatDataFromResource(resource);
-      if (!group || group.id !== groupId) throw new Error('INVALID_GROUP_DATA');
+      const incoming = botGroupChatDataFromResource(resource);
+      if (!incoming || incoming.id !== groupId) throw new Error('INVALID_GROUP_DATA');
+      const group = reuseJsonSnapshot(cachedGroups.get(cacheKey), incoming);
       fresh.current++; cachedGroups.set(cacheKey, group);
       void writeConversationDisk(authority, resource);
       recovery.current.hasGroup = true;
-      setState({ identity: owner, value: { kind: 'ready', group } });
+      setState(previous => previous.identity === owner && previous.value.kind === 'ready' && previous.value.group === group
+        ? previous : { identity: owner, value: { kind: 'ready', group } });
     } catch (error) {
       if (!valid()) return;
       if (['NOT_FOUND', 'PERMISSION_DENIED'].includes(botGroupErrorCode(error) ?? '')) {
@@ -208,5 +222,5 @@ export function useBotGroupChat(host: RemoteResourceHostTarget, groupId: string,
   // Unknown presence still allows actions; the host answers or the link reports offline.
   const online = status === 'online' && !!host.deviceId && getPresenceAvailability(host.deviceId) !== false;
   return !host.deviceId ? { ...server, server: true } : { state: value, reload, act, online, server: false, listHidden: server.listHidden, loadOlder: undefined, loadingOlder: false, media: undefined, markRead,
-    uploadAttachment: undefined, pending: [], pendingAction: undefined, canQueue: false, threadMeta: undefined, followThread: undefined, shareToMain: undefined, react: undefined };
+    uploadAttachment: undefined, pending: NO_PENDING, pendingAction: undefined, canQueue: false, threadMeta: undefined, followThread: undefined, shareToMain: undefined, react: undefined };
 }

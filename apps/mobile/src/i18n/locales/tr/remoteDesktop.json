@@ -205,5 +205,8 @@
   "pictureZoom": "Yakınlaştır",
   "zoomHint": "Yakınlaştırmak için sıkıştırın, taşımak için sürükleyin",
   "zoomDone": "Bitti",
-  "volume": "Ses Düzeyi"
+  "volume": "Ses Düzeyi",
+  "liveScreenConnecting": "Cihaz ekranına bağlanılıyor…",
+  "liveScreenReconnecting": "Cihaz ekranına yeniden bağlanılıyor…",
+  "liveScreenTitle": "Cihaz ekranı"
 }
