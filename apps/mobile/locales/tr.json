@@ -1,0 +1,7 @@
+{
+  "ios": {
+    "NSMicrophoneUsageDescription": "Cindy, uzak görevlerde sesli giriş için mikrofon erişimine ihtiyaç duyar.",
+    "NSCameraUsageDescription": "Cindy, uzak görevlere fotoğraf eklemek için kamera erişimine ihtiyaç duyar.",
+    "NSPhotoLibraryUsageDescription": "Cindy, hızlı ekleme için son fotoğrafları ve ekran görüntülerini göstermek üzere fotoğraf kitaplığı erişimine ihtiyaç duyar."
+  }
+}

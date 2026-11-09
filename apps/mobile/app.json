@@ -17,7 +17,8 @@
       "fr": "./locales/fr.json",
       "de": "./locales/de.json",
       "pt-PT": "./locales/pt-PT.json",
-      "pt-BR": "./locales/pt-BR.json"
+      "pt-BR": "./locales/pt-BR.json",
+      "tr": "./locales/tr.json"
     },
     "runtimeVersion": {
       "policy": "fingerprint"

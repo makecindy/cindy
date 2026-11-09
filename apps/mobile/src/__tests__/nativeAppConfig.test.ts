@@ -58,7 +58,7 @@ describe('mobile native app config', () => {
     const { getResolvedLocalesAsync } = require(join(dirname(require.resolve('@expo/config-plugins')), 'utils/locales.js'));
     const config = buildConfig();
     const ios = await getResolvedLocalesAsync(process.cwd(), config.locales, 'ios');
-    expect(Object.keys(ios.localesMap).sort()).toEqual(['de', 'en', 'es', 'fr', 'ja', 'ko', 'pt-BR', 'pt-PT', 'zh-Hans', 'zh-Hant']);
+    expect(Object.keys(ios.localesMap).sort()).toEqual(['de', 'en', 'es', 'fr', 'ja', 'ko', 'pt-BR', 'pt-PT', 'tr', 'zh-Hans', 'zh-Hant']);
     expect(ios.localesMap.fr.NSCameraUsageDescription).toContain('Cindy');
     expect(ios.localesMap['pt-PT'].NSPhotoLibraryUsageDescription).not.toBe(ios.localesMap.en.NSPhotoLibraryUsageDescription);
     for (const copy of Object.values(ios.localesMap) as Record<string, string>[]) {
