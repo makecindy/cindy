@@ -67,11 +67,12 @@ describe('旧接口适配 Core media', () => {
     expect(callCore).toHaveBeenCalledTimes(2);
   });
 
-  it('保持首尾帧顺序、显式时长与音频关闭，不把画面参数拼进 prompt', () => {
+  it.each([false, true])('保持首尾帧顺序、显式时长与音频关闭，兼容同时要求 prompt 的接口（%s）', promptField => {
     expect(legacyMediaBody({
       kind: 'edit_video', model: 'video', prompt: '镜头前进',
       images: ['first', 'last'], duration: 8, resolution: '720p', ratio: '16:9', audio: false,
-    }, { properties: { content: {}, duration: {}, resolution: {}, ratio: {}, generate_audio: {} } })).toEqual({
+    }, { properties: { content: {}, duration: {}, resolution: {}, ratio: {}, generate_audio: {}, ...(promptField ? { prompt: {} } : {}) } })).toEqual({
+      ...(promptField ? { prompt: '镜头前进' } : {}),
       content: [
         { type: 'text', text: '镜头前进' },
         { type: 'image_url', image_url: { url: 'first' }, role: 'first_frame' },

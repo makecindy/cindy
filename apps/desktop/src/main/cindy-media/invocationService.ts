@@ -44,7 +44,7 @@ import {
   type ProviderMediaRuntimeModel,
   type ProviderVideoConnection,
 } from './providerMediaRuntime.js';
-import { validateCustomVideoBody } from './customVideoProtocol.js';
+import { validateCustomVideoBody, videoRelayResultHosts } from './customVideoProtocol.js';
 import { fetchVideoTaskContent, isVideoTaskContentRef } from './videoTaskContent.js';
 import { sniffMediaMime, additionalMp3BytesNeeded } from './sniffMediaMime.js';
 import {
@@ -104,7 +104,7 @@ interface MediaAuthScope {
   generation: number;
   downloadContext?: MediaDownloadContext;
   assertSourceCurrent?(): void;
-  taskContent?: { connection: ProviderVideoConnection; taskId: string };
+  taskContent?: { connection: ProviderVideoConnection; taskId: string; resultHosts?: string[] };
 }
 
 function currentAuthScope(downloadContext?: MediaDownloadContext): MediaAuthScope {
@@ -823,7 +823,7 @@ async function mediaBytes(
       ? await fetchVideoTaskContent(scope.taskContent.connection, scope.taskContent.taskId, scope.downloadContext?.signal)
       : await downloadMediaResult({
       raw,
-      allowedHosts: extractor.allowedUrlHosts,
+      allowedHosts: [...(extractor.allowedUrlHosts ?? []), ...(scope.taskContent?.resultHosts ?? [])],
       context: scope.downloadContext,
       assertActive: () => assertAuthScope(scope),
     });
@@ -1242,12 +1242,13 @@ async function prepareInvocation(
     if (capability === 'image.generate' || capability === 'image.edit') {
       protocol = providerModel.imageProtocol ?? 'provider-images';
       binding = { providerId: model.providerId, executor: 'provider-image' };
-    } else if (providerModel.videoProtocol === 'xai-videos') {
+    } else if (providerModel.videoProtocol) {
       const connection = await resolveProviderVideoConnection(model.providerId, resolvedModelId);
       assertAuthScope(scope);
       if (!connection) return failure('CONNECTION_UNAVAILABLE', '视频来源的接口或凭证未就绪');
       protocol = providerModel.videoProtocol;
-      binding = { providerId: model.providerId, executor: 'provider-video', connectionRevision: connection.revision };
+      binding = { providerId: model.providerId, executor: 'provider-video', connectionRevision: connection.revision,
+        videoProtocol: providerModel.videoProtocol };
     } else {
       return failure('CAPABILITY_NOT_SUPPORTED', '该第三方 Provider 当前不支持请求的媒体能力');
     }
@@ -1417,8 +1418,10 @@ async function submitInvocation(
     return failure('MODEL_NOT_AVAILABLE', '该模型已下架或被停用，本次生成未发出');
   }
   let validatedBody = body;
+  const videoProtocol = invocation.guide.binding.executor === 'provider-video'
+    ? invocation.guide.binding.videoProtocol : undefined;
   if (isClientVideoInvocation(invocation)) {
-    try { validateCustomVideoBody(body, invocation.capability === 'video.image_to_video'); }
+    try { validateCustomVideoBody(body, invocation.capability === 'video.image_to_video', videoProtocol); }
     catch (error) { throw new MediaInvocationError('REQUEST_INVALID', (error as Error).message); }
   }
   const requestBody = await prepareRequestBody(validatedBody, invocation.guide);
@@ -1426,7 +1429,7 @@ async function submitInvocation(
   if (isClientVideoInvocation(invocation)) {
     // Managed refs have now become data URLs with their actual stored media MIME.
     const { model: _injectedModel, ...videoBody } = requestBody;
-    try { validateCustomVideoBody(videoBody, invocation.capability === 'video.image_to_video'); }
+    try { validateCustomVideoBody(videoBody, invocation.capability === 'video.image_to_video', videoProtocol); }
     catch (error) { throw new MediaInvocationError('REQUEST_INVALID', (error as Error).message); }
   }
   let connection: MediaConnection;
@@ -1701,6 +1704,8 @@ async function pollInvocation(
       scope.taskContent = {
         connection: { baseUrl: connection.baseUrl, headers: connection.headers ?? {}, revision: invocation.guide.binding.connectionRevision, assertCurrent: () => assertAuthScope(scope, invocation.owner) },
         taskId: invocation.taskId,
+        ...(invocation.guide.binding.videoProtocol === 'openai-videos'
+          ? { resultHosts: videoRelayResultHosts(connection.baseUrl) } : {}),
       };
     }
     catch (error) { return failure('CONNECTION_CHANGED', (error as Error).message); }

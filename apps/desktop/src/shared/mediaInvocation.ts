@@ -1,7 +1,9 @@
 import {
   MODEL_ACCESS_MEDIA_CAPABILITIES,
+  isProviderVideoApi,
   type MediaCapability,
   type ModelAccessParseResult,
+  type ProviderVideoApi,
 } from '@cindy/model-providers';
 
 export const MODEL_ACCESS_INVOCATION_GUIDE_SCHEMA_VERSION = 1 as const;
@@ -89,7 +91,7 @@ export interface ResolvedMediaInvocationGuide {
 /** Local execution state, never supplied by the protocol Guide. */
 export type MediaInvocationBinding =
   | { providerId: string; executor: 'gateway' | 'provider-image' }
-  | { providerId: string; executor: 'provider-video'; connectionRevision: string };
+  | { providerId: string; executor: 'provider-video'; connectionRevision: string; videoProtocol?: ProviderVideoApi };
 
 /** Persisted operation snapshot plus the independently selected local binding. */
 export type PreparedMediaInvocationGuide = Omit<MediaInvocationGuide, 'operations'> &
@@ -248,7 +250,6 @@ function extractorError(value: unknown, path: string): string | null {
   if (value.encoding === 'url') {
     if (
       !Array.isArray(value.allowedUrlHosts) ||
-      value.allowedUrlHosts.length === 0 ||
       value.allowedUrlHosts.length > 16 ||
       value.allowedUrlHosts.some(
         (host) =>
@@ -575,7 +576,7 @@ export function parsePreparedMediaInvocationGuide(
   }
   if (!isPlainObject(binding)) return fail('guide.binding must be an object');
   const bindingFields = binding.executor === 'provider-video'
-    ? ['providerId', 'executor', 'connectionRevision'] : ['providerId', 'executor'];
+    ? ['providerId', 'executor', 'connectionRevision', 'videoProtocol'] : ['providerId', 'executor'];
   const bindingError = unknownField(binding, bindingFields, 'guide.binding');
   if (bindingError) return fail(bindingError);
   if (!boundedString(binding.providerId, 128) || !/^[a-zA-Z0-9_-]+$/.test(binding.providerId)) {
@@ -586,6 +587,9 @@ export function parsePreparedMediaInvocationGuide(
   }
   if (binding.executor === 'provider-video' && !boundedString(binding.connectionRevision, 128)) {
     return fail('guide.binding.connectionRevision must be a bounded string');
+  }
+  if (binding.videoProtocol !== undefined && !isProviderVideoApi(binding.videoProtocol)) {
+    return fail('guide.binding.videoProtocol must be supported');
   }
   const { connection: _legacyConnection, ...snapshot } = value;
   return ok({ ...snapshot, binding } as unknown as PreparedMediaInvocationGuide);

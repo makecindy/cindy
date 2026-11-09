@@ -7,6 +7,25 @@ import { parsePreparedMediaInvocationGuide } from '../../../shared/mediaInvocati
 const model = { id: 'private-video', name: 'Video', providerId: 'relay', mode: 'video_generation' as const, modalities: { input: ['text', 'image'], output: ['video'] } };
 
 describe('custom xAI Videos protocol', () => {
+  it.each([
+    ['minimax-videos', 'https://video.example/v1', 'https://video.example'],
+    ['minimax-videos', 'https://video.example/prefix/v1', 'https://video.example/prefix'],
+    ['openai-videos', 'https://video.example/v1', 'https://video.example/v1'],
+  ] as const)('resolves the declared %s connection without borrowing the chat route', (videoApi, baseUrl, expected) => {
+    const provider = buildUserProvider({ id: 'relay', name: 'Relay', runtimes: {
+      pi: { baseUrl, wireProtocol: 'openai-chat', videoApi, models: [{ ...model }] },
+    } });
+    expect(resolveCustomMediaConnection({ getProvider: () => provider, readApiKey: () => 'test-key',
+      isOwnerBoundaryPending: () => false }, model.id, 'video')).toMatchObject({ baseUrl: expected, videoApi });
+  });
+
+  it('changing the explicit video API invalidates the connection while old xAI digests remain compatible', () => {
+    const binding = { agent: 'pi' as const, baseUrl: 'https://video.example/v1', headers: { authorization: 'Bearer test-key' } };
+    const original = videoConnectionRevision('relay', model.id, binding);
+    expect(videoConnectionRevision('relay', model.id, { ...binding, videoApi: 'xai-videos' })).toBe(original);
+    expect(videoConnectionRevision('relay', model.id, { ...binding, videoApi: 'openai-videos' })).not.toBe(original);
+  });
+
   it('restores a legacy paid task and its original connection digest without a credential', () => {
     const legacySnapshot = {
       schemaVersion: 1, guideId: 'cindy-provider-xai-video-v1', revision: '1:opaque-binding',

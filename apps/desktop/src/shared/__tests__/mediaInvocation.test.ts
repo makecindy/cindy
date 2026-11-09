@@ -33,6 +33,18 @@ describe('媒体协议说明与本地执行绑定', () => {
       .toEqual({ ok: true, value: snapshot });
     expect(parsePreparedMediaInvocationGuide({ ...snapshot, binding: { providerId: 'relay', executor: 'provider-video' } }))
       .toMatchObject({ ok: false });
+    expect(parsePreparedMediaInvocationGuide({ ...snapshot, binding: { ...snapshot.binding, videoProtocol: 'openai-videos' } }))
+      .toMatchObject({ ok: true });
+    expect(parsePreparedMediaInvocationGuide({ ...snapshot, binding: { ...snapshot.binding, videoProtocol: 'unknown' } }))
+      .toMatchObject({ ok: false });
+  });
+
+  it('允许协议没有固定成片域名，仍拒绝把 IP 当成自动信任的来源', () => {
+    const guide = (allowedUrlHosts: string[]) => ({ ...protocol, operations: [{ ...operation,
+      response: { ...operation.response, media: [{ ...operation.response.media[0], allowedUrlHosts }] },
+    }] });
+    expect(parseMediaInvocationGuide(guide([]))).toMatchObject({ ok: true });
+    expect(parseMediaInvocationGuide(guide(['127.0.0.1']))).toMatchObject({ ok: false });
   });
 
   it('仅解码旧视频任务时把旧 revision 还原为连接摘要', () => {

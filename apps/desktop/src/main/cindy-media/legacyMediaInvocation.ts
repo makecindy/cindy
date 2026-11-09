@@ -64,7 +64,7 @@ export function legacyMediaBody(
   const body: Record<string, unknown> = {};
   const video = request.kind === 'gen_video' || request.kind === 'edit_video';
   if (properties.prompt) body.prompt = request.prompt;
-  else if (video && properties.content) {
+  if (video && properties.content) {
     body.content = [
       { type: 'text', text: request.prompt },
       ...(request.images ?? []).map((url, index) => ({
@@ -73,7 +73,7 @@ export function legacyMediaBody(
           ? 'reference_image' : index === 0 ? 'first_frame' : 'last_frame',
       })),
     ];
-  } else throw new Error('所选模型的输入无法由旧媒体接口表达，请通过 Core 媒体工具调用');
+  } else if (!properties.prompt) throw new Error('所选模型的输入无法由旧媒体接口表达，请通过 Core 媒体工具调用');
   if (request.images?.length && properties.image) {
     const field = object(properties.image);
     if (field.type === 'object') {
