@@ -12485,6 +12485,12 @@
       "missingDir": "フォルダが見つかりません"
     },
     "pendingQueue": {
+      "stopping": "停止処理中",
+      "queued": "順番待ち",
+      "editingInComposer": "下の入力欄で編集中…",
+      "moveUp": "1つ前へ",
+      "moveDown": "1つ後ろへ",
+      "cancelSend": "送信をキャンセル",
       "regionAria": "送信待ちメッセージのキュー",
       "listAria": "キュー内のメッセージ",
       "pausedFooter": "タスク停止、キューは一時停止中",

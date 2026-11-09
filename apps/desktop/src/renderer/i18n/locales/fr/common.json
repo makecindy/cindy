@@ -12629,6 +12629,12 @@
       "missingDir": "Dossier introuvable"
     },
     "pendingQueue": {
+      "stopping": "Arrêt en cours",
+      "queued": "En file d'attente",
+      "editingInComposer": "Modification dans la zone de saisie ci-dessous…",
+      "moveUp": "Avancer",
+      "moveDown": "Reculer",
+      "cancelSend": "Annuler l'envoi",
       "regionAria": "File d'attente des messages",
       "listAria": "Messages en file d'attente",
       "pausedFooter": "Tâche arrêtée, file d'attente en pause",

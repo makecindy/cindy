@@ -12629,6 +12629,12 @@
       "missingDir": "Pasta não encontrada"
     },
     "pendingQueue": {
+      "stopping": "Parando",
+      "queued": "Na fila",
+      "editingInComposer": "Editando na caixa de entrada abaixo…",
+      "moveUp": "Mover para antes",
+      "moveDown": "Mover para depois",
+      "cancelSend": "Cancelar envio",
       "regionAria": "Fila de mensagens pendentes",
       "listAria": "Mensagens na fila",
       "pausedFooter": "Tarefa interrompida, fila pausada",

@@ -12485,6 +12485,12 @@
       "missingDir": "폴더를 찾을 수 없음"
     },
     "pendingQueue": {
+      "stopping": "중지 처리 중",
+      "queued": "대기 중",
+      "editingInComposer": "아래 입력창에서 편집 중…",
+      "moveUp": "한 칸 앞으로",
+      "moveDown": "한 칸 뒤로",
+      "cancelSend": "전송 취소",
       "regionAria": "전송 대기 중인 메시지 큐",
       "listAria": "큐의 메시지",
       "pausedFooter": "작업 중지됨, 대기열 일시정지",
