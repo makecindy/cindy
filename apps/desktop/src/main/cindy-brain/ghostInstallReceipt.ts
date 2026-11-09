@@ -144,6 +144,7 @@ export interface GhostInstallReceipt {
    */
   approvedAutoTools?: string[];
   observeCapabilityApproved?: true;
+  observeFilesCapabilityApproved?: true;
   companionsCapabilityApproved?: true;
   schemaVersion: typeof RECEIPT_SCHEMA_VERSION;
   id: string;
@@ -1311,6 +1312,7 @@ export function createGhostInstallReceipt(input: {
   approvedControlPoints?: readonly string[];
   approvedAutoTools?: readonly string[];
   observeCapabilityApproved?: true;
+  observeFilesCapabilityApproved?: true;
   companionsCapabilityApproved?: true;
   manifest: GhostManifest;
   localeResources: Record<string, GhostManifestLocaleResource>;
@@ -1350,6 +1352,7 @@ export function createGhostInstallReceipt(input: {
     ...approvedControlPointsField(input.approvedControlPoints, input.manifest),
     ...approvedAutoToolsField(input.approvedAutoTools, input.manifest),
     ...(input.observeCapabilityApproved === true ? { observeCapabilityApproved: true as const } : {}),
+    ...(input.observeFilesCapabilityApproved === true ? { observeFilesCapabilityApproved: true as const } : {}),
     ...(input.companionsCapabilityApproved === true ? { companionsCapabilityApproved: true as const } : {}),
     ...(input.packageSha256 ? { packageSha256: input.packageSha256 } : {}),
     ...(input.iconDataUrl ? { iconDataUrl: input.iconDataUrl } : {}),
@@ -1570,6 +1573,7 @@ function validateReceipt(
       ...approvedControlPointsField(value.approvedControlPoints, manifestResult.manifest),
       ...approvedAutoToolsField(value.approvedAutoTools, manifestResult.manifest),
       ...(value.observeCapabilityApproved === true ? { observeCapabilityApproved: true as const } : {}),
+      ...(value.observeFilesCapabilityApproved === true ? { observeFilesCapabilityApproved: true as const } : {}),
       ...(value.companionsCapabilityApproved === true ? { companionsCapabilityApproved: true as const } : {}),
       ...(typeof value.packageSha256 === 'string' ? { packageSha256: value.packageSha256 } : {}),
       ...(typeof value.iconDataUrl === 'string' ? { iconDataUrl: value.iconDataUrl } : {}),

@@ -37,10 +37,10 @@ export function hasPluginDelegationApproval(ghost: InstalledGhost | null | undef
   return hasPluginTargetApproval(ghost) && ghost?.manifest.agent?.delegation === true && ghost.delegationCapabilityApproved === true;
 }
 
-export type PluginTaskCapability = 'tasks' | 'targets' | 'delegation' | 'observe' | 'companions';
+export type PluginTaskCapability = 'tasks' | 'targets' | 'delegation' | 'observe' | 'observeFiles' | 'companions';
 
 export function pluginCapabilityApproval(capability: PluginTaskCapability): (ghost: InstalledGhost | null | undefined) => boolean {
-  return capability === 'companions' ? hasPluginCompanionsApproval : capability === 'observe' ? hasPluginObserveApproval
+  return capability === 'observeFiles' ? hasPluginObserveFilesApproval : capability === 'companions' ? hasPluginCompanionsApproval : capability === 'observe' ? hasPluginObserveApproval
     : capability === 'delegation' ? hasPluginDelegationApproval : capability === 'targets' ? hasPluginTargetApproval : hasPluginTaskApproval;
 }
 
@@ -64,6 +64,10 @@ export function hasPluginObserveApproval(ghost: InstalledGhost | null | undefine
   );
 }
 
+export function hasPluginObserveFilesApproval(ghost: InstalledGhost | null | undefined): boolean {
+  return hasPluginObserveApproval(ghost) && ghost?.manifest.agent?.observeFiles === true && ghost.observeFilesCapabilityApproved === true;
+}
+
 /** Reuse Host permission UI; no plugin-supplied confirmation or manifest flag is authority. */
 export async function ensurePluginTaskApproval(
   id: string,
@@ -80,8 +84,9 @@ export async function ensurePluginTaskApproval(
   if (pluginCapabilityApproval(capability)(ghost)) return true;
   if (
     !ghost?.enabled ||
-    (capability === 'observe' || capability === 'companions' ? ghost.manifest.agent?.[capability] !== true : ghost.manifest.agent?.tasks !== true) ||
+    (capability === 'observe' || capability === 'observeFiles' || capability === 'companions' ? ghost.manifest.agent?.[capability] !== true : ghost.manifest.agent?.tasks !== true) ||
     ghost.approval?.state !== 'approved' ||
+    (capability === 'observeFiles' && (!hasPluginObserveApproval(ghost) || ghost.manifest.agent?.observeFiles !== true)) ||
     (capability === 'targets' && (!hasPluginTaskApproval(ghost) || ghost.manifest.agent?.targets !== true)) ||
     (capability === 'delegation' && (!hasPluginTargetApproval(ghost) || ghost.manifest.agent?.delegation !== true))
   )

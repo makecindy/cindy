@@ -1,3 +1,4 @@
+import { PluginObserveFiles } from './pluginObserveFiles.js';
 import { registerRuntimeSettingsSection } from '../app-settings/runtime.js';
 import { z as settingsSchema } from 'zod';
 import { registerPreferenceControlIpc } from '../app-settings/preferences.js';
@@ -53,6 +54,7 @@ import {
   setPluginTaskHandler,
   setPluginTargetAdapter,
   setPluginObserveAdapter,
+  openPluginObservedFile,
   setPluginCompanionAdapter,
   assertPluginTargetQueuedDelivery,
   getPluginTaskSourceSessionId,
@@ -68,7 +70,7 @@ import {
   acceptPluginInvocation,
 } from '../cindy-brain/index.js';
 import { listPluginTargetCandidates, resolvePluginTargetSession } from './pluginTargetCandidates.js';
-import { assertPluginObservableTask, listPluginObserveTasks } from './pluginObserveTasks.js';
+import { assertPluginObservableTask, listPluginObserveTasks, readPluginObserveFileSource } from './pluginObserveTasks.js';
 import { createPluginCompanionHost } from './pluginCompanionHost.js';
 import { createPluginTargetStore } from './pluginTargetStore.js';
 import { collectPluginAttachmentPayloadTexts, withPluginMessageAttachments } from '../cindy-media/pluginMessageAttachments.js';
@@ -15319,7 +15321,22 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     }
   };
   setPluginTaskHandler(handlePluginTask);
+  const observeFiles = new PluginObserveFiles({
+    read: (project, taskId) => readPluginObserveFileSource(project, taskId, (id, row) => {
+      const binding = worktreeStore.get(id);
+      return binding
+        ? { root: binding.quarantinePath ? null : binding.path, identity: JSON.stringify([binding.path, binding.generation, binding.quarantinePath]) }
+        : { root: row.worktreePath ? null : row.workingDir, identity: JSON.stringify([row.workingDir, row.worktreePath]) };
+    }),
+    open: (taskId, relativePath, guard) => {
+      guard();
+      openMainWindowSession(taskId, { focus: 'if-active' });
+      openPluginObservedFile(taskId, relativePath, guard);
+    },
+  });
   setPluginObserveAdapter({
+    taskFiles: (project, taskId, scope, guard) => observeFiles.list(project, taskId, scope, guard),
+    openFile: (project, taskId, fileId, scope, guard) => observeFiles.open(project, taskId, fileId, scope, guard),
     projectTasks: listPluginObserveTasks,
     openTask: async (taskId, guard) => {
       await assertPluginObservableTask(taskId);

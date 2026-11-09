@@ -254,6 +254,8 @@ export interface GhostAgentNeeds {
    * 不依赖 tasks,需独立批准(observeCapabilityApproved)。
    */
   observe?: boolean;
+  /** Final-answer file references; independent Host consent, requires observe. */
+  observeFiles?: boolean;
   /**
    * companions = 只读查看伙伴(含主人其他电脑上的)名单、实时状态、工作阶段、待处理请求摘要与最新回复,
    * 并在主窗口打开伙伴的任务。不能替用户批准或回答;不依赖 tasks,需独立批准(companionsCapabilityApproved)。
@@ -1915,6 +1917,7 @@ export interface InstalledGhost {
   approvedAutoTools?: string[];
   /** Independent Host consent for read-only project task observation. */
   observeCapabilityApproved?: true;
+  observeFilesCapabilityApproved?: true;
   /** Independent Host consent for reading companions: roster, live status, pending request summaries and latest reply. */
   companionsCapabilityApproved?: true;
   manifest: GhostManifest;
@@ -2296,6 +2299,9 @@ export function ghostPermissionItems(manifest: GhostManifest): GhostPermissionIt
     }
     if (manifest.agent?.tasks === true && manifest.agent.targets === true) {
       items.unshift({ key: 'agent:targets', kind: 'agent', labelKey: 'agentTargets', detailKey: 'agentTargetsDetail' });
+    }
+    if (manifest.agent?.observe === true && manifest.agent?.observeFiles === true) {
+      items.unshift({ key: 'agent:observeFiles', kind: 'agent', labelKey: 'agentObserveFiles', detailKey: 'agentObserveFilesDetail' });
     }
     if (manifest.agent?.observe === true) {
       items.unshift({ key: 'agent:observe', kind: 'agent', labelKey: 'agentObserve', detailKey: 'agentObserveDetail' });
@@ -5002,11 +5008,14 @@ function validateGhostManifestInput(
     if (agentRaw.schedule !== undefined && typeof agentRaw.schedule !== 'boolean') {
       return { ok: false, reason: 'agent.schedule 必须是布尔值' };
     }
+    if (!preserveHistoricalTasks && agentRaw.observeFiles !== undefined && (typeof agentRaw.observeFiles !== 'boolean' || (agentRaw.observeFiles === true && agentRaw.observe !== true))) {
+      return { ok: false, reason: 'agent.observeFiles requires boolean and agent.observe: true' };
+    }
     if (!preserveHistoricalTasks && agentRaw.observe !== undefined && typeof agentRaw.observe !== 'boolean') {
       return { ok: false, reason: 'agent.observe must be boolean' };
     }
     if (!preserveHistoricalTasks && agentRaw.companions !== undefined && typeof agentRaw.companions !== 'boolean') return { ok: false, reason: 'agent.companions must be boolean' };
-    if (agentRaw.background !== true && agentRaw.errand !== true && agentRaw.schedule !== true && agentRaw.tasks !== true && agentRaw.observe !== true && agentRaw.companions !== true && Object.keys(unknownDeclarationFields(agentRaw, preserveHistoricalTasks ? ['background', 'errand', 'schedule'] : ['background', 'errand', 'schedule', 'tasks', 'hiddenTasks', 'targets', 'delegation', 'observe', 'companions'])).length === 0) {
+    if (agentRaw.background !== true && agentRaw.errand !== true && agentRaw.schedule !== true && agentRaw.tasks !== true && agentRaw.observe !== true && agentRaw.companions !== true && Object.keys(unknownDeclarationFields(agentRaw, preserveHistoricalTasks ? ['background', 'errand', 'schedule'] : ['background', 'errand', 'schedule', 'tasks', 'hiddenTasks', 'targets', 'delegation', 'observe', 'observeFiles', 'companions'])).length === 0) {
       return {
         ok: false,
         reason:
@@ -5014,7 +5023,7 @@ function validateGhostManifestInput(
       };
     }
     agent = {
-      ...unknownDeclarationFields(agentRaw, preserveHistoricalTasks ? ['background', 'errand', 'schedule'] : ['background', 'errand', 'schedule', 'tasks', 'hiddenTasks', 'targets', 'delegation', 'observe', 'companions']),
+      ...unknownDeclarationFields(agentRaw, preserveHistoricalTasks ? ['background', 'errand', 'schedule'] : ['background', 'errand', 'schedule', 'tasks', 'hiddenTasks', 'targets', 'delegation', 'observe', 'observeFiles', 'companions']),
       ...(agentRaw.background === true ? { background: true } : {}),
       ...(agentRaw.errand === true ? { errand: true } : {}),
       ...(agentRaw.tasks === true ? { tasks: true } : {}),
@@ -5023,6 +5032,7 @@ function validateGhostManifestInput(
       ...(agentRaw.tasks === true && agentRaw.hiddenTasks === true ? { hiddenTasks: true } : {}),
       ...(agentRaw.schedule === true ? { schedule: true } : {}),
       ...(agentRaw.observe === true ? { observe: true } : {}),
+      ...(agentRaw.observe === true && agentRaw.observeFiles === true ? { observeFiles: true } : {}),
       ...(agentRaw.companions === true ? { companions: true } : {}),
     };
   }

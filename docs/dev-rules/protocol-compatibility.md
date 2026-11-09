@@ -5107,6 +5107,16 @@ agent.companions 为可选独立能力，只有 Host 确认的 `companionsCapabi
 不推断其他内容；请求带 `version`，未知版本返回 `INVALID_PARAMS`。返回字段只增不改，查看端逐字段校验后再交给插件。
 请求 `kind` 为 `list` / `reply` / `history`；不认识 `history` 的主力电脑返回 `INVALID_PARAMS`，查看端把对话记录当作读不到（null），不影响列表与回复。
 
+## 插件最终回复文件引用（未发布）
+
+`agent.observeFiles` 为依赖 `observe` 的可选新能力，`observeFilesCapabilityApproved` 为独立批准事实。
+旧 observe 批准仍只含任务元数据；新包校验 observeFiles 的布尔类型与依赖，历史快照原样保留但不自动授权。
+可选 receipt 字段无需 migration，旧插件的已启用状态与原有能力继续有效。
+`observe-request` 增加 `task-files/open-file`，只在本机 Desktop 消费；SDK 必须逐方法探测，
+旧 Host 不支持时停止文件调用并提示升级，不调用私有 IPC。打开事件仅发送本机主窗口，
+不进入 device-link allowlist，不改变 relay、远程设备及 Mobile 协议。
+详见 [任务文件引用](../plugin-task-file-references.md)。
+
 ## 伙伴列表的可选活动摘要
 
 RemoteResourceDisplay 与 BotGroupSummary 可选携带 `teammateActivity: { phase }`。宿主从现有运行、待确认、完成、错误状态投影，Desktop/iOS/Android 共用状态优先级。生成文案、确认权限、已读回执均保持原有路径。旧控制端忽略字段；新控制端连接旧宿主时回退已有 generation、确认快照及普通未读，不把缺失状态推断成完成。

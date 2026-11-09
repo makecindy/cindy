@@ -2144,6 +2144,14 @@ describe('tool approval declaration', () => {
   });
 });
 
+it('validates final-answer file observation as an independent addition requiring observe', () => {
+  const base = { schemaVersion: 3, minCindyVersion: '0.1.0', id: 'observe-files', name: 'Files', version: '1.0.0', entry: 'main.js' };
+  const result = validateGhostManifest({ ...base, agent: { observe: true, observeFiles: true } });
+  expect(result.ok && result.manifest.agent).toEqual({ observe: true, observeFiles: true });
+  expect(validateGhostManifest({ ...base, agent: { observeFiles: true } }).ok).toBe(false);
+  expect(validateGhostManifest({ ...base, agent: { observe: true, observeFiles: 'yes' } }).ok).toBe(false);
+});
+
 describe('readme declarations', () => {
   // 作者契约(FORGE_GUIDE §2「详细介绍」):readme 规范化保留在 manifest 上,与已声明文件冲突时拒绝。
   it('keeps a valid readme map and rejects paths that collide with other declared files', () => {

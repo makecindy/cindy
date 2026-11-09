@@ -99,7 +99,7 @@ import { handlePluginTaskRequest, type PluginTaskHandler } from './taskSlot.js';
 import { PluginTargetSlot, type PluginTargetAdapter } from './pluginTargetSlot.js';
 import { handlePluginObserveRequest, type PluginObserveAdapter } from './pluginObserveSlot.js';
 import { createCompanionWatchHub, handlePluginCompanionRequest, type CompanionWatchHub, type PluginCompanionAdapter } from './pluginCompanionSlot.js';
-import { ensurePluginTaskApproval, hasPluginCompanionsApproval, hasPluginTaskApproval, hasPluginTargetApproval, hasPluginDelegationApproval, hasPluginObserveApproval, pluginCapabilityApproval, PluginTaskApprovalGate, type PluginTaskCapability } from './taskCapability.js';
+import { ensurePluginTaskApproval, hasPluginCompanionsApproval, hasPluginObserveFilesApproval, hasPluginTaskApproval, hasPluginTargetApproval, hasPluginDelegationApproval, hasPluginObserveApproval, pluginCapabilityApproval, PluginTaskApprovalGate, type PluginTaskCapability } from './taskCapability.js';
 import {
   registerGhostCardRemoteProvider,
   persistGhostCardWithRemoteChange,
@@ -7786,6 +7786,7 @@ async function installAndDockLocked(
     approvedControlPoints: confirmedControlPoints(opts.consent.decision, installedBefore, opts.consent.manifest),
     approvedAutoTools: confirmedAutoTools(opts.consent.decision, installedBefore, opts.consent.manifest),
     observeCapabilityApproved: confirmedTaskCapability(opts.consent.decision, installedBefore, opts.consent.manifest, 'observe'),
+    observeFilesCapabilityApproved: confirmedTaskCapability(opts.consent.decision, installedBefore, opts.consent.manifest, 'observeFiles'),
     companionsCapabilityApproved: confirmedTaskCapability(opts.consent.decision, installedBefore, opts.consent.manifest, 'companions'),
     initiallyEnabled: opts.enable ?? false,
     expectedPackageSha256: opts.expectedPackageSha256,
@@ -7985,6 +7986,7 @@ async function updateLocalGhostPackageLocked(
           approvedControlPoints: confirmedControlPoints(consent, previousGhost, inspected.manifest),
           approvedAutoTools: confirmedAutoTools(consent, previousGhost, inspected.manifest),
           observeCapabilityApproved: confirmedTaskCapability(consent, previousGhost, inspected.manifest, 'observe'),
+          observeFilesCapabilityApproved: confirmedTaskCapability(consent, previousGhost, inspected.manifest, 'observeFiles'),
           companionsCapabilityApproved: confirmedTaskCapability(consent, previousGhost, inspected.manifest, 'companions'),
           expectedPackageSha256,
           expectedInstalledApproval,
@@ -8569,6 +8571,7 @@ async function installOrUpdateMarketGhostPackageLocked(
           approvedControlPoints: confirmedControlPoints(expected.consent, installed, inspected.manifest),
           approvedAutoTools: confirmedAutoTools(expected.consent, installed, inspected.manifest),
           observeCapabilityApproved: confirmedTaskCapability(expected.consent, installed, inspected.manifest, 'observe'),
+          observeFilesCapabilityApproved: confirmedTaskCapability(expected.consent, installed, inspected.manifest, 'observeFiles'),
           companionsCapabilityApproved: confirmedTaskCapability(expected.consent, installed, inspected.manifest, 'companions'),
           expectedPackageSha256: inspected.packageSha256,
           expectedInstalledApproval: expected.expectedInstalledApproval!,
@@ -9840,6 +9843,7 @@ export function registerGhostIpc(): void {
     // 的 runner(maker-ipc)。
     // observe-request = 只读查看项目任务元数据并打开任务;独立于 tasks,仅本机逻辑页。
     if (type === 'observe-request') {
+      const fileRequest = ['task-files', 'open-file'].includes(String((payload as { kind?: unknown } | null)?.kind));
       if (findGhostForInstanceId(id)?.manifest.agent?.observe !== true) {
         return { ok: false, error: { code: 'PERMISSION_DENIED', message: 'PERMISSION_DENIED', retryable: false } };
       }
@@ -9864,11 +9868,21 @@ export function registerGhostIpc(): void {
       } catch {
         return { ok: false, error: { code: 'PERMISSION_DENIED', message: 'PERMISSION_DENIED', retryable: false } };
       }
+      if (fileRequest) {
+        try {
+          if (!await requestPluginTaskApproval(id, isCurrent, confirmCapability, false, 'observeFiles')) {
+            return { ok: false, error: { code: 'PERMISSION_DENIED', message: 'PERMISSION_DENIED', retryable: false } };
+          }
+        } catch {
+          return { ok: false, error: { code: 'PERMISSION_DENIED', message: 'PERMISSION_DENIED', retryable: false } };
+        }
+      }
       const revision = pluginObserveAuthorizationRevision(id);
       return handlePluginObserveRequest(pluginObserveAdapter, payload, () => {
-        if (!isCurrent() || !revision || pluginObserveAuthorizationRevision(id) !== revision)
+        if (!isCurrent() || !revision || pluginObserveAuthorizationRevision(id) !== revision ||
+            (fileRequest && !hasPluginObserveFilesApproval(findGhostForInstanceId(id))))
           throw Object.assign(new Error('PERMISSION_DENIED'), { code: 'PERMISSION_DENIED' });
-      });
+      }, fileRequest ? JSON.stringify([id, owner.dataOwnerId, owner.ownerGeneration, revision]) : undefined);
     }
     if (type === 'companions-request') {
       if (findGhostForInstanceId(id)?.manifest.agent?.companions !== true) {
@@ -10988,8 +11002,8 @@ export function registerGhostIpc(): void {
   ipcMain.handle('ghosts:request-task-approval', async (event, id: unknown, capability: unknown) => {
     assertTrustedAppRendererEvent(event);
     if (typeof id !== 'string' || !id.trim()) throwIpcError('INVALID_PARAMS', 'id must be a non-empty string');
-    if (capability !== undefined && capability !== 'observe' && capability !== 'companions') {
-      throwIpcError('INVALID_PARAMS', 'capability must be observe or companions when provided');
+    if (capability !== undefined && capability !== 'observe' && capability !== 'companions' && capability !== 'observeFiles') {
+      throwIpcError('INVALID_PARAMS', 'capability must be observe, observeFiles or companions when provided');
     }
     requireGhostAvailableForActiveSession(id);
     const isCurrent = () => {
@@ -11695,4 +11709,12 @@ function broadcastGhostRuntimeStates(): void {
 export function refreshInstalledPluginApps(): void {
   refreshPluginApps(getGhostManager().list(), { find: findGhostForInstanceId,
     evidence: id => getGhostManager().approvedInstallEvidence(id), available: () => !isGhostBoundaryPending() });
+}
+
+/** Local main-window presentation only; no device-link transport or OS file execution. */
+export function openPluginObservedFile(sessionId: string, relativePath: string, guard: () => void): void {
+  const window = getDeepLinkMainWindow();
+  if (!window || !isTrustedAppRendererWindow(window)) throw new Error('HOST_NOT_READY');
+  guard();
+  sendGhostWindowPush(window, 'ghosts:observe-file-open', { sessionId, relativePath });
 }

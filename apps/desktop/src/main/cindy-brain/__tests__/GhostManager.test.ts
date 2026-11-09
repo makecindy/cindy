@@ -627,6 +627,30 @@ describe('GhostManager · 存量插件一次性迁移(§5 升级无感)', () => 
     const result = await manager.update(removed, { expectedInstalledApproval: ghostInstallApprovalToken(updated.ghost.approval) });
     expect(result).not.toHaveProperty('ghost.observeCapabilityApproved');
   });
+  it('approves files only after observe and preserves it only while the same instance still declares it', async () => {
+    const manifest = { ...goodManifest(), slots: ['tool', 'agent'], agent: { observe: true, observeFiles: true } };
+    const pkg = await makeCindy('observe.cindy', manifest, { 'main.js': '// plugin' });
+    await manager.install(pkg, { taskCapabilityApproved: true, targetCapabilityApproved: true });
+    const selected = manager.list()[0]!;
+    if (selected.approval.state !== 'approved') throw new Error('fixture not approved');
+    const id = installedGhostStoragePart(selected);
+    expect(selected).not.toHaveProperty('observeFilesCapabilityApproved');
+    expect(selected).not.toHaveProperty('taskCapabilityApproved');
+    expect(await manager.approveTaskCapability(id, selected.approval.revision, () => true, 'tasks')).toBe(false);
+    expect(await manager.approveTaskCapability(id, 'stale', () => true, 'observeFiles')).toBe(false);
+    expect(await manager.approveTaskCapability(id, selected.approval.revision, () => false, 'observeFiles')).toBe(false);
+    expect(await manager.approveTaskCapability(id, selected.approval.revision, () => true, 'observeFiles')).toBe(false);
+    expect(await manager.approveTaskCapability(id, selected.approval.revision, () => true, 'observe')).toBe(true);
+    expect(await manager.approveTaskCapability(id, selected.approval.revision, () => true, 'observeFiles')).toBe(true);
+    expect(manager.list()[0]?.observeFilesCapabilityApproved).toBe(true);
+    const update = await makeCindy('observe-update.cindy', { ...manifest, version: '1.0.1' }, { 'main.js': '// update' });
+    const updated = await manager.update(update, { expectedInstalledApproval: ghostInstallApprovalToken(selected.approval) });
+    expect(updated).toHaveProperty('ghost.observeFilesCapabilityApproved', true);
+    if (!('ghost' in updated) || updated.ghost.approval.state !== 'approved') throw new Error('fixture update failed');
+    const removed = await makeCindy('observe-removed.cindy', { ...manifest, version: '1.0.2', agent: { errand: true } }, { 'main.js': '// update' });
+    const result = await manager.update(removed, { expectedInstalledApproval: ghostInstallApprovalToken(updated.ghost.approval) });
+    expect(result).not.toHaveProperty('ghost.observeFilesCapabilityApproved');
+  });
 
   it('approves companions on its own and keeps it only while the same instance still declares it', async () => {
     const manifest = { ...goodManifest(), slots: ['tool', 'agent'], agent: { companions: true } };

@@ -800,6 +800,7 @@ const fanOutForgeOidcInstallConfirmRequest = createIpcFanOut('forge-oidc-install
 const fanOutGhostInstallConsentRequest = createIpcFanOut('ghosts:install-consent:request');
 const fanOutGhostInstallConsentDismissed = createIpcFanOut('ghosts:install-consent:dismissed');
 // 插件预览开页(preview 槽:renderer 在右侧栏开 web-browser 标签)。
+const fanOutGhostObserveFileOpen = createIpcFanOut('ghosts:observe-file-open');
 const fanOutGhostPreviewOpen = createIpcFanOut('ghosts:preview-open');
 const fanOutGhostTaskViewOpen = createIpcFanOut('ghosts:task-view-open');
 // 插件自动化草稿(agent 槽 schedule 加档:renderer 开自动化创建面板并预填)。
@@ -1554,7 +1555,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     uiPrompts: (): Promise<Array<{id: string; name: string; version: string}>> => ipcRenderer.invoke('ghosts:ui-prompts'),
     deferUiPrompt: (id: string, version: string): Promise<void> => ipcRenderer.invoke('ghosts:defer-ui-prompt', id, version),
     requestUiApproval: (id: string): Promise<{ granted: boolean }> => ipcRenderer.invoke('ghosts:request-ui-approval', id),
-    requestTaskApproval: (id: string, capability?: 'observe' | 'companions'): Promise<{ granted: boolean }> =>
+    requestTaskApproval: (id: string, capability?: 'observe' | 'observeFiles' | 'companions'): Promise<{ granted: boolean }> =>
       ipcRenderer.invoke('ghosts:request-task-approval', id, capability),
     /** 本插件声明的控制节点(运行前检查)与生效状态。 */
     getControlPoints: (id: string): Promise<GhostControlPointInfo[]> =>
@@ -1653,6 +1654,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     resolveInstallConsent: (requestId: string, confirmed: boolean): Promise<{ handled: boolean }> =>
       ipcRenderer.invoke('ghosts:install-consent:resolve', { requestId, confirmed }),
     onPreviewOpen: fanOutGhostPreviewOpen,
+    onObserveFileOpen: fanOutGhostObserveFileOpen,
     onTaskViewOpen: fanOutGhostTaskViewOpen,
     onScheduleDraft: fanOutGhostScheduleDraft,
     getCard: (

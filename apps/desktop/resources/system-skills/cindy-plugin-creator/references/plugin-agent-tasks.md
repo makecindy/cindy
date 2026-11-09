@@ -427,6 +427,27 @@ instanceId、generation、outcome（completed/failed/cancelled/interrupted）及
 - `openTask({taskId})`：在主窗口打开该任务；Cindy 未在前台时不抢焦点。只接受 `projectTasks` 能列出的任务，否则返回 `TARGET_UNAVAILABLE`。返回 `{opened:true}`。
 - 只读，不能发送消息、修改、归档或停止任务；需要这些操作请改用 `cindy.tasks` / `cindy.targets` 并声明对应权限。状态变化不推送，插件自行按需刷新。
 
+
+### 最终回复中的文件引用（未发布）
+
+需要在项目看板展示结果文件时，另声明 `"agent":{"observe":true,"observeFiles":true}`。
+文件权限 `agent:observeFiles` 独立确认，旧 observe/tasks/targets 批准不会授予。
+拒绝返回 `PERMISSION_DENIED`，通过插件详情页主动重新确认，禁止循环重试。
+
+先检查 `typeof cindy.observe?.taskFiles === 'function'` 和 `typeof cindy.observe?.openFile === 'function'`。
+旧客户端缺入口时提示升级并停止调用，不能扫描目录或使用私有 IPC 代替；仅本机 Desktop 逻辑页支持。
+
+- `taskFiles({project,taskId})` 返回 `{files:[{fileId,name,referencedAt,source,status}],partial}`。
+  project 与任务必须属于同一已登记本机项目，任务可见性同 `projectTasks`。
+  来源 `source:'final-answer-link'` 仅指未撤回最终 assistant 回复中的明确 Markdown 文件链接；
+  不含用户附件、代码示例、工具输出或目录扫描，不保证覆盖全部成果，也不证明文件由任务创建。
+  `referencedAt` 为消息 Unix 毫秒时间；不含消息正文、绝对路径、文件内容或通用下载 URL。
+  状态为 `available | missing | not-local | blocked | unsupported`，分别表示可打开、缺失、非本机、边界拒绝、暂不支持的媒体协议。
+  最多读取最近 200 条 assistant 消息，每条 128,000 字符、每链接 4096 字符，返回 100 条；截断或跳过超长来源时 `partial:true`，必须提示结果不完整。
+- `openFile({project,taskId,fileId})` 只接受本次能力查询所得且当前有效的 available 标识，返回 `{opened:true}` 表示已请求本机侧栏展示。
+  宿主重查授权、任务、来源与文件，不调用系统 shell。只允许真实执行目录内的普通文件，拒绝软/硬链接、敏感/隐藏路径及穿越。
+  `TARGET_UNAVAILABLE` 表示目标/标识失效，`FILE_UNAVAILABLE` 表示文件不可用；重启、更新授权或文件恢复后重新查询。
+  标识不跨插件、账号、项目、任务使用；不跨设备转发，不保证文件仍是最初引用时的内容。
 ## 4.11.9 查看伙伴和状态（未发布）
 
 插件要把伙伴画成角色、头像墙或状态面板时，声明 `"agent": { "companions": true }`，在本机 Desktop 逻辑页使用 `cindy.companions`。

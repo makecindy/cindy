@@ -78,6 +78,14 @@ describe('openInSidebarFileBrowser', () => {
     expect(requestRightSidebarVisibility).toHaveBeenCalledWith('open', { sessionId: 's1' });
   });
 
+  // Plugin requests must retain background routing instead of acting as a user focus gesture.
+  it('passes background intent through the production file-open entry', async () => {
+    await openFileInSidebarFileBrowser('s1', 'report.md', { userInitiated: false });
+    expect(routeSidebarCommand).toHaveBeenCalledWith({
+      type: 'open-file-browser', sessionId: 's1', relPath: 'report.md', targetKind: 'file',
+    }, { userInitiated: false });
+  });
+
   it('keeps directory reveal behavior separate from file selection', async () => {
     await openDirInSidebarFileBrowser('s1', 'src/components');
 

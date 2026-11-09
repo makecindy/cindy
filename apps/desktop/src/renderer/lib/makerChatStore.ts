@@ -1,3 +1,4 @@
+import { openFileInSidebarFileBrowser } from '../features/right-sidebar/lib/openInSidebarFileBrowser';
 import { recordGithubStarPromptSend, recordGithubStarPromptCompletion } from './githubStarPrompt';
 import { parseOutputLimitDetails, type OutputLimitDetails } from '@cindy/maker-shared';
 import { pendingGhostCardFormDelivery } from '@cindy/maker-shared/ghost-card-form';
@@ -9919,6 +9920,21 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
       });
     },
     'ghosts-notify',
+  );
+
+  // Host has revalidated the plugin, task, final-answer reference and local file.
+  bindOptionalIpc(
+    window.electronAPI.ghosts?.onObserveFileOpen,
+    window.electronAPI.ghosts,
+    (raw: unknown, ownerStamp?: unknown) => {
+      if (!isCurrentLocalLiveIngress(ownerStamp) || isSidebarWindow() || isSecondaryWindow()) return;
+      const p = raw as { sessionId?: unknown; relativePath?: unknown } | null;
+      if (!p || typeof p.sessionId !== 'string' || typeof p.relativePath !== 'string') return;
+      void openFileInSidebarFileBrowser(p.sessionId, p.relativePath, { userInitiated: false }).catch(() => {
+        toast.error(i18n.t('settings.ghosts.errors.generic'));
+      });
+    },
+    'ghosts-observe-file-open',
   );
 
   // ── 插件预览开页(preview 槽):main 已按身份卡白名单守门 + 限速 + 解析
