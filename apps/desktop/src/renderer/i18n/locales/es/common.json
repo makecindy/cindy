@@ -19956,10 +19956,10 @@
       "useCodex": "Iniciar sesión con Codex"
     },
     "title": "Cuentas de suscripción",
-    "note": "La primera cuenta usa la carpeta predeterminada de la CLI. Las cuentas adicionales inician sesión por separado. Las tareas nuevas se distribuyen; las existentes conservan su cuenta.",
     "strategy": "Equilibrio de carga",
     "add": "Añadir cuenta",
     "default": "Carpeta predeterminada",
+    "defaultTag": "Predeterminada",
     "ready": "Conectada",
     "signedOut": "Requiere iniciar sesión",
     "unavailable": "Estado no disponible",

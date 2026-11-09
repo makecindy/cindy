@@ -19956,10 +19956,10 @@
       "useCodex": "Se connecter avec Codex"
     },
     "title": "Comptes d’abonnement",
-    "note": "Le premier compte utilise le dossier par défaut de la CLI. Les comptes ajoutés se connectent séparément. Les nouvelles tâches sont réparties ; les tâches existantes conservent leur compte.",
     "strategy": "Répartition de charge",
     "add": "Ajouter un compte",
     "default": "Dossier par défaut",
+    "defaultTag": "Par défaut",
     "ready": "Connecté",
     "signedOut": "Connexion requise",
     "unavailable": "État indisponible",

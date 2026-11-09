@@ -19697,10 +19697,10 @@
       "useCodex": "以 Codex 登录"
     },
     "title": "订阅账号",
-    "note": "首号沿用 CLI 默认目录，增号各自登录。新务依策分派，旧务仍用原号。",
     "strategy": "负载均衡",
     "add": "添加账号",
     "default": "默认目录",
+    "defaultTag": "默认",
     "ready": "已连接",
     "signedOut": "须登录",
     "unavailable": "状态暂不可得",

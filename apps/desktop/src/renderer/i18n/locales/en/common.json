@@ -19769,10 +19769,10 @@
       "useCodex": "Sign in with Codex"
     },
     "title": "Subscription accounts",
-    "note": "The first account uses the CLI’s default folder. Additional accounts sign in separately. New tasks are balanced across accounts; existing tasks keep their account.",
     "strategy": "Load balancing",
     "add": "Add account",
     "default": "Default folder",
+    "defaultTag": "Default",
     "ready": "Connected",
     "signedOut": "Sign in required",
     "unavailable": "Status unavailable",

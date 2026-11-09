@@ -19697,10 +19697,10 @@
       "useCodex": "以 Codex 登入"
     },
     "title": "訂閱帳號",
-    "note": "首號沿用 CLI 預設目錄，增號各自登入。新務依策分派，舊務仍用原號。",
     "strategy": "負載平衡",
     "add": "新增帳號",
     "default": "預設目錄",
+    "defaultTag": "預設",
     "ready": "已連線",
     "signedOut": "須登入",
     "unavailable": "狀態暫不可得",
