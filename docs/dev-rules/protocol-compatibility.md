@@ -164,7 +164,9 @@ Desktop 与 Mobile 明确标注估算和排除项。旧端忽略可选字段，�
 - `query.request` 新增可选 `recipient = { scopeId, principalId }`：多个组织共用的服务（官方飞书）发出的查询
   代表哪个应用的哪个账号；带上时两项都须是非空字符串。其它服务不发，旧桌面端忽略。
 - 客户端端点清单新增 `feishuHookWsUrl`（`wss:`），登记为跨区域端点：服务只在海外部署一套，
-  两份区域清单都指向 `cindy.app`。服务部署前正式清单不写该字段，入口不显示。
+  两份区域清单都指向 `cindy.app`。服务部署并核验后，在两份正式清单同时填写并发布该字段；
+  缺省或清空时入口不显示，可用于回滚。dev 使用独立开发服务，配置与发布步骤见
+  [端点清单说明](../../config/README.md)。
 
 飞书群上下文由服务端组装进 `task.dispatch.prompt`（含 `<thread_context>`、引用与当前发言人）；`source.threadContext` 同时供来源卡展示，客户端继续保留服务端完整 prompt，不再从展示元数据重复注入。X 的客户端 prompt 组装只作用于 X，不能据此推断其它渠道丢失上下文。
 
