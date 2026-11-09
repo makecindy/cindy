@@ -902,6 +902,8 @@
     "moveTo": "移至「{{device}}」",
     "moveTitle": "令 {{name}} 移至「{{device}}」行事乎？",
     "moveDescription": "自今以后，{{name}} 行于「{{device}}」，言谈之录一并携往。工作目录、连接与此机之卷，仍留原机。",
+    "olderTarget": "旧版 Cindy",
+    "olderTargetNote": "「{{device}}」之 Cindy 为旧版，{{name}} 于彼依旧法而行：对话记录照常同步，项目规约与自动之事于彼不行。",
     "moveAction": "移至「{{device}}」",
     "moving": "方将 {{name}} 移至「{{device}}」…",
     "busyTitle": "{{name}} 尚在作覆",

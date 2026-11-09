@@ -172,8 +172,9 @@ const REMOTE_HAND_OVER_VERSION = 2;
  */
 const COMPANION_CLOUD_STORE_READ_VERSION = 3;
 /**
- * Targets that run a V2 teammate (a project with rules, automations and project memory). Every
- * teammate here is V2, so an older computer is listed as outdated and never receives one.
+ * Targets that run a V2 teammate (a project with rules, automations and project memory). An older
+ * computer is listed as outdated but can still take one (2026-11-10 owner): it runs there as before,
+ * with the chat history; the project rules and automations apply again back on a newer computer.
  */
 const COMPANION_CLOUD_TEAMMATE_PROJECT_VERSION = 4;
 /** How long a move waits for the companion to finish its turn (the device-link budget is larger). */
@@ -796,7 +797,7 @@ export function startCompanionCloud(input: {
     async transferTargets() {
       const devices = (await input.host.listDevices?.().catch(() => []) ?? []).filter(isCompanionTransferTarget);
       // Older Cindy versions cannot take a companion over: never strand one there. One that takes
-      // companions but not V2 teammates is listed as outdated, so the owner knows to update it.
+      // companions but not V2 teammates is listed as outdated, so the owner knows what moving there means.
       const versions = await Promise.all(devices.map(device => targetVersion(device.deviceId)));
       return devices.flatMap((device, index) => versions[index]! < 1 ? [] : [{ deviceId: device.deviceId, name: device.name, online: device.online,
         ...(versions[index]! < COMPANION_CLOUD_TEAMMATE_PROJECT_VERSION ? { outdated: true } : {}) }]);
@@ -811,9 +812,6 @@ export function startCompanionCloud(input: {
       const target = devices.find(device => device.deviceId === targetDeviceId && isCompanionTransferTarget(device));
       const targetVersionNow = target ? await targetVersion(targetDeviceId) : 0;
       if (!target || targetVersionNow < 1) return { ok: false, code: 'TARGET_UNAVAILABLE' };
-      // A V2 teammate (a project) would arrive on an older Cindy as a V1 teammate without its rules,
-      // automations or project memory: that computer is updated first.
-      if (targetVersionNow < COMPANION_CLOUD_TEAMMATE_PROJECT_VERSION) return { ok: false, code: 'TARGET_OUTDATED' };
       // No background cycle may write in between: one already in flight could carry older values
       // past the flush, or past the move. Background sync resumes after the copy is demoted.
       // Still working: wait for (or stop) the turn first, outside the sync lock so its reply keeps syncing.
@@ -856,7 +854,6 @@ export function startCompanionCloud(input: {
       if (choices.mode === 'unavailable') return { ok: false, code: choices.reason === 'HOME_OUTDATED' ? 'HOME_OUTDATED' : 'FAILED' };
       const chosen = choices.targets.find(target => target.deviceId === targetDeviceId);
       if (!chosen) return { ok: false, code: 'TARGET_UNAVAILABLE' };
-      if (chosen.outdated) return { ok: false, code: 'TARGET_OUTDATED' };
       if (choices.mode === 'local') return runtime.transfer(botId, targetDeviceId, options);
       if (choices.mode === 'takeOver') return runtime.takeOver(botId);
       // The home hands it over itself (flush, busy check, compare-and-set), exactly as from its own settings.

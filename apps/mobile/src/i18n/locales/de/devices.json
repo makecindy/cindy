@@ -902,6 +902,8 @@
     "moveTo": "Auf „{{device}}“ verschieben",
     "moveTitle": "{{name}} auf „{{device}}“ ausführen?",
     "moveDescription": "Ab jetzt läuft {{name}} auf „{{device}}“ und der Chatverlauf zieht mit um. Arbeitsverzeichnisse, Verbindungen und lokale Dateien bleiben auf ihrem bisherigen Computer.",
+    "olderTarget": "Ältere Cindy",
+    "olderTargetNote": "Auf „{{device}}“ läuft eine ältere Cindy-Version, daher arbeitet {{name}} dort wie bisher: Der Chatverlauf wird weiter synchronisiert, Projektregeln und Automatisierungen gelten dort aber nicht.",
     "moveAction": "Auf „{{device}}“ verschieben",
     "moving": "{{name}} wird zu „{{device}}“ verschoben…",
     "busyTitle": "{{name}} antwortet noch",

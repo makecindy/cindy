@@ -902,6 +902,8 @@
     "moveTo": "“{{device}}”(으)로 옮기기",
     "moveTitle": "{{name}}을(를) “{{device}}”에서 실행할까요?",
     "moveDescription": "이제부터 {{name}}은(는) “{{device}}”에서 실행되며 채팅 기록도 함께 옮겨집니다. 작업 디렉터리, 연결, 로컬 파일은 원래 컴퓨터에 남습니다.",
+    "olderTarget": "이전 버전 Cindy",
+    "olderTargetNote": "“{{device}}”의 Cindy가 이전 버전이라 {{name}}은(는) 그곳에서 기존 방식으로 동작합니다. 채팅 기록은 계속 동기화되지만 프로젝트 규칙과 자동화는 그곳에서 적용되지 않습니다.",
     "moveAction": "“{{device}}”(으)로 옮기기",
     "moving": "{{name}}을(를) “{{device}}”(으)로 옮기는 중…",
     "busyTitle": "{{name}}이(가) 아직 답장 중입니다",

@@ -902,6 +902,8 @@
     "moveTo": "「{{device}}」に移す",
     "moveTitle": "{{name}} を「{{device}}」で実行しますか？",
     "moveDescription": "今後 {{name}} は「{{device}}」で実行され、チャット履歴も一緒に移ります。作業ディレクトリ、接続、ローカルのファイルは元のパソコンに残ります。",
+    "olderTarget": "旧バージョンの Cindy",
+    "olderTargetNote": "「{{device}}」の Cindy は旧バージョンのため、{{name}} はそこで従来どおりに動きます。チャット履歴は同期されますが、プロジェクトのルールと自動化はそこでは適用されません。",
     "moveAction": "「{{device}}」に移す",
     "moving": "{{name}} を「{{device}}」に移しています…",
     "busyTitle": "{{name}} はまだ返信中です",

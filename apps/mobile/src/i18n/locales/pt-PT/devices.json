@@ -911,6 +911,8 @@
     "moveTo": "Mover para «{{device}}»",
     "moveTitle": "Executar {{name}} em «{{device}}»?",
     "moveDescription": "A partir de agora, {{name}} é executado em «{{device}}», juntamente com o histórico da conversa. As pastas de trabalho, as ligações e os ficheiros locais permanecem no computador onde estão.",
+    "olderTarget": "Cindy antigo",
+    "olderTargetNote": "«{{device}}» tem uma versão antiga do Cindy, por isso {{name}} funcionará aí como antes: o histórico da conversa continua sincronizado, mas as regras e automatizações do projeto não se aplicam aí.",
     "moveAction": "Mover para «{{device}}»",
     "moving": "A mover {{name}} para «{{device}}»…",
     "busyTitle": "{{name}} ainda está a responder",

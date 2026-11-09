@@ -902,6 +902,8 @@
     "moveTo": "Move to “{{device}}”",
     "moveTitle": "Run {{name}} on “{{device}}”?",
     "moveDescription": "From now on {{name}} runs on “{{device}}”, and the chat history comes along. Working directories, connections and local files stay on the computer they are on.",
+    "olderTarget": "Older Cindy",
+    "olderTargetNote": "“{{device}}” runs an older Cindy, so {{name}} works the older way there: the chat history still syncs, but project rules and automations don’t apply there.",
     "moveAction": "Move to “{{device}}”",
     "moving": "Moving {{name}} to “{{device}}”…",
     "busyTitle": "{{name}} is still replying",

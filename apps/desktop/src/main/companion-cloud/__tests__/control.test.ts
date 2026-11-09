@@ -367,7 +367,7 @@ describe('transfer', () => {
   // transfer decision with the shipped declaration, not a hardcoded v3 test peer.
   it.each([
     { peer: 'current', version: COMPANION_CLOUD_VERSION, storeEnabled: true, succeeds: true },
-    { peer: 'old', version: 2, storeEnabled: true, succeeds: false, code: 'TARGET_OUTDATED' },
+    { peer: 'old', version: 2, storeEnabled: true, succeeds: false },
     { peer: 'current without server store', version: COMPANION_CLOUD_VERSION, storeEnabled: false, succeeds: false },
   ])('hands large content only to a capable peer ($peer)', async ({ version, storeEnabled, succeeds, code }) => {
     const key = 'companion.skill.v1:large';
@@ -401,9 +401,9 @@ describe('transfer', () => {
     } else expect(stored).toBeUndefined();
   });
 
-  // Teammate V2 (cloud-companions.md §2.1 第 4 条): a computer whose Cindy cannot run a V2 teammate
-  // (caps < 4) is listed as outdated and never receives one, from here or asked by another computer.
-  it('does not hand a V2 teammate to a computer that runs an older Cindy, and lists it as outdated', async () => {
+  // Teammate V2 (cloud-companions.md §2.1 第 4 条, 2026-11-10 owner): a computer whose Cindy cannot run
+  // a V2 teammate (caps < 4) is listed as outdated, and still receives one, from here or asked elsewhere.
+  it('hands a V2 teammate to a computer that runs an older Cindy, listed as outdated', async () => {
     const homeLink = { version: vi.fn(async (deviceId: string) => (deviceId === 'laptop' ? 3 : COMPANION_CLOUD_VERSION)),
       targets: vi.fn(async () => []), handOver: vi.fn(async () => ({ ok: true as const })) };
     const t = setup({ home: 'desk', devices: [device('laptop'), device('tablet')], homeLink });
@@ -411,15 +411,14 @@ describe('transfer', () => {
       { deviceId: 'laptop', name: 'laptop', online: true, outdated: true },
       { deviceId: 'tablet', name: 'tablet', online: true },
     ]);
-    expect(await t.runtime.transfer('bot_mia', 'laptop')).toEqual({ ok: false, code: 'TARGET_OUTDATED' });
-    expect(await t.runtime.switchHome('bot_mia', 'laptop')).toEqual({ ok: false, code: 'TARGET_OUTDATED' });
-    expect(t.calls.some(call => call.method === 'PATCH' || call.route === '/conversations')).toBe(false);
-    expect(t.state.isDemoted('bot_mia')).toBe(false);
-    // Asked from another computer: the home's list says so, and nothing is asked of the home.
+    expect(await t.runtime.switchHome('bot_mia', 'laptop')).toEqual({ ok: true });
+    expect(t.calls.some(call => call.method === 'PATCH')).toBe(true);
+    expect(t.state.isDemoted('bot_mia')).toBe(true);
+    // Asked from another computer: the home hands it over.
     const remote = setup({ home: 'laptop', devices: [device('laptop')], homeLink: { ...homeLink, version: vi.fn(async () => COMPANION_CLOUD_VERSION),
       targets: vi.fn(async () => [{ deviceId: 'tablet', name: 'Tablet', online: true, outdated: true }]) } });
-    expect(await remote.runtime.switchHome('bot_mia', 'tablet')).toEqual({ ok: false, code: 'TARGET_OUTDATED' });
-    expect(homeLink.handOver).not.toHaveBeenCalled();
+    expect(await remote.runtime.switchHome('bot_mia', 'tablet')).toEqual({ ok: true });
+    expect(homeLink.handOver).toHaveBeenCalledOnce();
   });
 
   it('only transfers from the home computer', async () => {
