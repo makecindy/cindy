@@ -19722,5 +19722,17 @@
     "logExcerpt": "関連ログ（抜粋、不完全な場合があります）",
     "logsUnavailable": "関連ログがありません。原因はまだ不明です。",
     "failed": "診断情報を準備できませんでした。もう一度お試しください。"
+  },
+  "githubStar": {
+    "title": "Cindy は気に入りましたか？",
+    "description": "GitHub でスターを付けて Cindy を応援しませんか。",
+    "dismiss": "今後表示しない",
+    "action": "Cindy を応援する",
+    "starring": "星を灯しています…",
+    "thanks": "スターをありがとうございます！",
+    "thanksDescription": "応援が Cindy の成長につながります。",
+    "browserFallback": "GitHub を開いて Cindy にスターを付けてください。",
+    "openGithub": "GitHub を開く",
+    "openFailed": "GitHub を開けませんでした。"
   }
 }

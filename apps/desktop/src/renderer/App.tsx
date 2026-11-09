@@ -29,6 +29,8 @@ import { LoginBrandStage } from '@/components/login/LoginBrandStage';
 import { StartupLogSupport } from '@/components/log-support/StartupLogSupport';
 import { isSecondaryWindow } from '@/lib/secondaryWindow';
 import { isSidebarWindow } from '@/lib/sidebarWindow';
+import { installGithubStarPrompt } from '@/lib/githubStarPrompt';
+import { createGithubStarPromptEnvironment } from '@/lib/githubStarPromptHost';
 import { ToastContainer } from '@/components/ui/toast';
 import { LegacyMigrationDialog } from '@/components/auth/LegacyMigrationDialog';
 import { Tooltip } from '@/components/ui/tooltip';
@@ -197,6 +199,11 @@ function MakerBootstrap() {
   const { isAuthenticated, dataOwnerId, dataOwnerRecoveryEpoch } = useAuth();
 
   useResyncAgentIslandSettingsAfterLogin(isAuthenticated);
+
+  useEffect(() => {
+    if (!isAuthenticated || isSecondaryWindow() || isSidebarWindow()) return;
+    return installGithubStarPrompt(createGithubStarPromptEnvironment(router));
+  }, [isAuthenticated, dataOwnerId, dataOwnerRecoveryEpoch]);
 
   useEffect(() => {
     setPromptRecommendationOwner(`${dataOwnerId ?? 'signed-out'}:${dataOwnerRecoveryEpoch}`);

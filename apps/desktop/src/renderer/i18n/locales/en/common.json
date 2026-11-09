@@ -19794,5 +19794,17 @@
     "logExcerpt": "Relevant logs (excerpt; may be incomplete)",
     "logsUnavailable": "No relevant logs are available. The cause is not yet known.",
     "failed": "Could not prepare the diagnosis. Please try again."
+  },
+  "githubStar": {
+    "title": "Enjoying Cindy?",
+    "description": "Give Cindy a star on GitHub to support the project.",
+    "dismiss": "Dismiss",
+    "action": "Cheer on Cindy",
+    "starring": "Lighting a star…",
+    "thanks": "Thanks for the Star!",
+    "thanksDescription": "Your support helps Cindy grow.",
+    "browserFallback": "Open GitHub to star Cindy.",
+    "openGithub": "Open GitHub",
+    "openFailed": "Could not open GitHub."
   }
 }

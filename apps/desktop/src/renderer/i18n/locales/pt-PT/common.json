@@ -19981,5 +19981,17 @@
     "logExcerpt": "Registos relevantes (excerto, possivelmente incompleto)",
     "logsUnavailable": "Não há registos relevantes disponíveis. A causa ainda é desconhecida.",
     "failed": "Não foi possível preparar o diagnóstico. Tente novamente."
+  },
+  "githubStar": {
+    "title": "Gostas do Cindy?",
+    "description": "Dá uma estrela ao Cindy no GitHub para apoiar o projeto.",
+    "dismiss": "Não voltar a mostrar",
+    "action": "Apoiar o Cindy",
+    "starring": "A acender uma estrela…",
+    "thanks": "Obrigado pela estrela!",
+    "thanksDescription": "O teu apoio ajuda o Cindy a crescer.",
+    "browserFallback": "Abre o GitHub para dar uma estrela ao Cindy.",
+    "openGithub": "Abrir GitHub",
+    "openFailed": "Não foi possível abrir o GitHub."
   }
 }

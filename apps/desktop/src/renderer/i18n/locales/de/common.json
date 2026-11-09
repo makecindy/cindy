@@ -19794,5 +19794,17 @@
     "logExcerpt": "Relevante Protokolle (Auszug, möglicherweise unvollständig)",
     "logsUnavailable": "Keine relevanten Protokolle verfügbar. Die Ursache ist noch unbekannt.",
     "failed": "Die Diagnose konnte nicht vorbereitet werden. Bitte versuche es erneut."
+  },
+  "githubStar": {
+    "title": "Gefällt dir Cindy?",
+    "description": "Gib Cindy auf GitHub einen Stern, um das Projekt zu unterstützen.",
+    "dismiss": "Nicht mehr anzeigen",
+    "action": "Cindy unterstützen",
+    "starring": "Ein Stern leuchtet…",
+    "thanks": "Danke für den Stern!",
+    "thanksDescription": "Deine Unterstützung hilft Cindy zu wachsen.",
+    "browserFallback": "Öffne GitHub, um Cindy einen Stern zu geben.",
+    "openGithub": "GitHub öffnen",
+    "openFailed": "GitHub konnte nicht geöffnet werden."
   }
 }

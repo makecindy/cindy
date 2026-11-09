@@ -19722,5 +19722,17 @@
     "logExcerpt": "相關日誌（節錄，可能不完整）",
     "logsUnavailable": "沒有可用的相關日誌，暫時無法確定原因。",
     "failed": "診斷資料準備失敗，請重試。"
+  },
+  "githubStar": {
+    "title": "喜歡 Cindy 嗎？",
+    "description": "在 GitHub 點個 Star，支持 Cindy",
+    "dismiss": "不再提醒",
+    "action": "給 Cindy 按讚",
+    "starring": "點亮星星…",
+    "thanks": "感謝你的 Star！",
+    "thanksDescription": "你的支持讓 Cindy 繼續成長",
+    "browserFallback": "前往 GitHub 為 Cindy 點 Star",
+    "openGithub": "開啟 GitHub",
+    "openFailed": "無法開啟 GitHub"
   }
 }

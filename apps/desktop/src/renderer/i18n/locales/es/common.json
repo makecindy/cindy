@@ -19981,5 +19981,17 @@
     "logExcerpt": "Registros relevantes (extracto, puede estar incompleto)",
     "logsUnavailable": "No hay registros relevantes disponibles. La causa aún se desconoce.",
     "failed": "No se pudo preparar el diagnóstico. Inténtalo de nuevo."
+  },
+  "githubStar": {
+    "title": "¿Te gusta Cindy?",
+    "description": "Dale una estrella a Cindy en GitHub para apoyar el proyecto.",
+    "dismiss": "No volver a mostrar",
+    "action": "Apoyar a Cindy",
+    "starring": "Encendiendo una estrella…",
+    "thanks": "¡Gracias por la estrella!",
+    "thanksDescription": "Tu apoyo ayuda a Cindy a crecer.",
+    "browserFallback": "Abre GitHub para darle una estrella a Cindy.",
+    "openGithub": "Abrir GitHub",
+    "openFailed": "No se pudo abrir GitHub."
   }
 }

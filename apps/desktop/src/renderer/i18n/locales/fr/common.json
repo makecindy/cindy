@@ -19981,5 +19981,17 @@
     "logExcerpt": "Journaux pertinents (extrait potentiellement incomplet)",
     "logsUnavailable": "Aucun journal pertinent disponible. La cause reste inconnue.",
     "failed": "Impossible de préparer le diagnostic. Veuillez réessayer."
+  },
+  "githubStar": {
+    "title": "Vous aimez Cindy ?",
+    "description": "Ajoutez une étoile sur GitHub pour soutenir Cindy.",
+    "dismiss": "Ne plus afficher",
+    "action": "Encourager Cindy",
+    "starring": "Une étoile s’allume…",
+    "thanks": "Merci pour l’étoile !",
+    "thanksDescription": "Votre soutien aide Cindy à grandir.",
+    "browserFallback": "Ouvrez GitHub pour ajouter une étoile à Cindy.",
+    "openGithub": "Ouvrir GitHub",
+    "openFailed": "Impossible d’ouvrir GitHub."
   }
 }
