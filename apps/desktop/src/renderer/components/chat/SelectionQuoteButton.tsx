@@ -25,7 +25,7 @@ import { useTranslation } from 'react-i18next';
 
 import type { ChatQuote } from '@/lib/chatQuotes';
 import { appendQuoteToDraft } from '@/lib/composerDraftStore';
-import { CHAT_SELECTION_EXCLUDE_SELECTOR } from './chatSelectionClipboard';
+import { CHAT_SELECTION_EXCLUDE_SELECTOR, hasChatSelectionGap, isChatSelectionRow } from './chatSelectionClipboard';
 
 /** 单条引用的长度上限:防止误选整篇转录把 prompt 撑爆;超出截断并加省略号。 */
 const QUOTE_MAX_CHARS = 4000;
@@ -150,6 +150,7 @@ function readQuoteText(selection: Selection, range: Range): string {
 
   let text = '';
   let pendingBreaks = 0;
+  let pendingSpace = false;
   let tableRow: { separator: string; inCell: boolean } | null = null;
   const selectability = new WeakMap<Element, boolean>();
   const canSelect = (el: Element): boolean => {
@@ -176,10 +177,12 @@ function readQuoteText(selection: Selection, range: Range): string {
       text += tableRow.separator;
       tableRow.separator = '';
     }
+    if (pendingSpace && text && !/\s$/.test(text) && !/^\s/.test(value)) text += ' ';
     text += value;
     pendingBreaks = 0;
+    pendingSpace = false;
   };
-  const visit = (node: Node) => {
+  const visit = (node: Node, parentStyle?: CSSStyleDeclaration) => {
     if (!range.intersectsNode(node)) return;
     const el = node instanceof Element ? node : node.parentElement;
     if (!el) return;
@@ -202,7 +205,9 @@ function readQuoteText(selection: Selection, range: Range): string {
     if (node.tagName === 'BR') { if (canSelect(node)) append('\n'); return; }
     // Keep paragraph/list/table boundaries and preformatted whitespace when a
     // cross-message selection is rebuilt. Range.toString() alone joins blocks.
-    const breaks = node.tagName === 'P' ? 2
+    // Flex/grid blockification must not turn inline labels/values into lines.
+    const rowItem = style.display === 'block' && parentStyle && isChatSelectionRow(parentStyle);
+    const breaks = node.tagName === 'P' ? 2 : rowItem ? 0
       : /^(block|flex|grid|list-item|table|table-row)$/.test(style.display) ? 1 : 0;
     const outerRow = tableRow;
     if (style.display === 'table-row') tableRow = { separator: '', inCell: false };
@@ -212,9 +217,20 @@ function readQuoteText(selection: Selection, range: Range): string {
       // Closed disclosures render only their first direct summary. Their other
       // descendants can still report normal display/visibility in computed style.
       const summary = Array.from(node.children).find(child => child.tagName === 'SUMMARY');
-      if (summary) visit(summary);
+      if (summary) visit(summary, style);
+    } else if (hasChatSelectionGap(style) && !node.closest('.katex-html')) {
+      const outerSpace = pendingSpace;
+      let selectedChild = false;
+      node.childNodes.forEach(child => {
+        const before = text.length;
+        pendingSpace ||= selectedChild;
+        visit(child, style);
+        selectedChild ||= text.length > before;
+      });
+      // A gap belongs between selected children, never after the last one.
+      pendingSpace = selectedChild ? false : outerSpace;
     } else {
-      node.childNodes.forEach(visit);
+      node.childNodes.forEach(child => visit(child, style));
     }
     pendingBreaks = Math.max(pendingBreaks, breaks);
     if (style.display === 'table-cell' && tableRow) {
@@ -223,7 +239,7 @@ function readQuoteText(selection: Selection, range: Range): string {
     }
     tableRow = outerRow;
   };
-  visit(common);
+  visit(common, common.parentElement ? getComputedStyle(common.parentElement) : undefined);
   return text;
 }
 

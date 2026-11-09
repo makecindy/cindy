@@ -17,6 +17,7 @@ import { ChatSoundEffectCard } from '../components/chat/ChatSoundEffectCard';
 import { BotTaskCard } from '../features/bots/BotCollaborationCard';
 import { clearDraft, getDraft } from '@/lib/composerDraftStore';
 import { formatQuoteForSend } from '@/lib/chatQuotes';
+import { installRichAnswerClipboardStyles } from '../../test/vitest/rendererSelectionStyles';
 
 import { SelectionQuoteButton } from '../components/chat/SelectionQuoteButton';
 
@@ -468,6 +469,37 @@ describe('SelectionQuoteButton — message body selection actions', () => {
     fireEvent.click(screen.getByRole('button', { name: 'chat.quote.addToChat' }));
     expect(getDraft(sessionId)?.text?.content?.[0]?.content?.[0]?.attrs?.text)
       .toBe(`${userText}\nChoose a fruit\n\nFollowing body\n\n${nextUser}`);
+  });
+
+  // PR #9503 discussion_r4515827011: a real range label uses spaced flex
+  // children. Unit/DOM with production CSS: preserve that gap in both actions,
+  // but keep column controls on separate lines and partial endpoints partial.
+  it.each([false, true])('preserves rich control layout in a cross-message quote (partial=%s)', async (partial) => {
+    vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
+    const style = installRichAnswerClipboardStyles();
+    try {
+      const onAskInSideChat = vi.fn(async (_quote: string) => true);
+      const nextUser = 'Please continue';
+      const operations = [
+        { version: 1, seq: 1, op: 'create', id: 'budget', kind: 'range', props: {
+          label: 'Budget', min: 0, max: 100, default: 50, suffix: '%',
+        } },
+        { seq: 2, op: 'create', id: 'name', kind: 'input', props: { label: 'Name', default: 'Private draft' } },
+        { seq: 3, op: 'create', id: 'email', kind: 'input', props: { label: 'Email' } },
+      ];
+      await renderMessages(onAskInSideChat, `\`\`\`cindy-ui\n${operations.map(op => JSON.stringify(op)).join('\n')}\n\`\`\``, nextUser);
+      selectText(screen.getByText(userText), partial ? screen.getByText('50%') : screen.getByText(nextUser), 0, partial ? 1 : undefined);
+      const expected = `${userText}\nBudget ${partial ? '5' : `50%\nName\nEmail\n${nextUser}`}`;
+      if (partial) {
+        fireEvent.click(screen.getByRole('button', { name: 'chat.quote.addToChat' }));
+        expect(getDraft(sessionId)?.text?.content?.[0]?.content?.[0]?.attrs?.text).toBe(expected);
+      } else {
+        await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'chat.sideChat.title' })); });
+        expect(onAskInSideChat).toHaveBeenCalledExactlyOnceWith(expected);
+      }
+    } finally {
+      style.remove();
+    }
   });
 
   // PR #9503 discussion_r4515427401: production media controls and screen-reader
