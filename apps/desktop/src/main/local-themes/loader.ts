@@ -15,6 +15,7 @@ import {
 import { findVisibleAlphaBounds } from '../../shared/imageVisibleBounds';
 import type { ImageVisibleBounds } from '../../shared/imageVisibleBounds';
 import { createLogger } from '../logger';
+import { lastGoodOmarchyTheme, OMARCHY_THEME_FILE, readOmarchyTheme } from './omarchy';
 
 const log = createLogger('local-themes');
 
@@ -261,6 +262,19 @@ function processEntries(
       log.warn(`Failed to load local theme '${entry.file}': ${message}`);
       diagnostics.push({ file: entry.file, error: message });
     }
+  }
+
+  try {
+    const omarchy = readOmarchyTheme();
+    if (omarchy) themes.push(omarchy);
+  } catch (error) {
+    log.warn(`Failed to load Omarchy theme: ${normalizeError(error)}`);
+    diagnostics.push({
+      file: OMARCHY_THEME_FILE,
+      error: (error as NodeJS.ErrnoException).code ?? normalizeError(error),
+    });
+    const lastGood = lastGoodOmarchyTheme();
+    if (lastGood) themes.push(lastGood);
   }
 
   return { success: true, themes, diagnostics };

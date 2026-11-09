@@ -193,6 +193,7 @@ function PrNumberPiece({ prRef, isActive }: { prRef: SessionPrRef; isActive?: bo
       isActive: Boolean(isActive),
       backgroundLightness,
     }),
+    status?.ok ? status.conflicts : null,
   );
   const baseTitle = kind
     ? `${prRef.owner}/${prRef.repo}${prNumberLabel(prRef)} · ${t(`ccAgent.gitContext.pr.status.${kind}`)}`

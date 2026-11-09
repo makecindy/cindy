@@ -244,7 +244,7 @@ async function listSameSiteTabs(
   runtime: BrowserControlRuntime,
   profile: string | undefined,
   opened: BrowserControlResult,
-): Promise<Array<{ targetId: string; url: string; title?: string }>> {
+): Promise<Array<{ targetId: string; url: string; title?: string; owner?: string }>> {
   const data = opened.data as { url?: unknown; targetId?: unknown } | undefined;
   if (typeof data?.url !== 'string') return [];
   const host = new URL(data.url).hostname;
@@ -253,7 +253,7 @@ async function listSameSiteTabs(
     new Promise<null>((resolve) => setTimeout(() => resolve(null), 3000)),
   ]);
   const tabs = (listed?.ok ? (listed.data as { tabs?: unknown } | undefined)?.tabs : undefined) ?? [];
-  const out: Array<{ targetId: string; url: string; title?: string }> = [];
+  const out: Array<{ targetId: string; url: string; title?: string; owner?: string }> = [];
   for (const tab of Array.isArray(tabs) ? (tabs as Array<Record<string, unknown>>) : []) {
     const url = typeof tab.url === 'string' ? tab.url : '';
     const id = typeof tab.suggestedTargetId === 'string' ? tab.suggestedTargetId : typeof tab.targetId === 'string' ? tab.targetId : '';
@@ -263,7 +263,12 @@ async function listSameSiteTabs(
     } catch {
       continue;
     }
-    out.push({ targetId: id, url, ...(typeof tab.title === 'string' ? { title: tab.title.slice(0, 120) } : {}) });
+    out.push({
+      targetId: id,
+      url,
+      ...(typeof tab.title === 'string' ? { title: tab.title.slice(0, 120) } : {}),
+      ...(tab.owner === 'user' || tab.owner === 'cindy' ? { owner: tab.owner } : {}),
+    });
     if (out.length >= 5) break;
   }
   return out;
@@ -963,9 +968,13 @@ export function registerBrowserTools(registry: BrowserToolRegistry, deps: Browse
               try {
                 // Bundled recipes predate validation metadata; their guide
                 // supplies the owning site. Never guess from a host substring.
-                const sites = persisted.validation ? [persisted.validation.site] :
+                // A recipe listed under several guides for discovery keeps its
+                // first `match` host as the single persistence owner.
+                let sites = persisted.validation ? [persisted.validation.site] :
                   [...siteGuideRegistryFrom(await resolveUserLayer(deps)).values()]
                     .filter((g) => g.guide.recipes?.includes(id)).map((g) => g.guide.site);
+                const owner = persisted.match?.[0];
+                if (sites.length > 1 && owner && sites.includes(owner)) sites = [owner];
                 if (sites.length === 1) {
                   const saved = await deps.saveUserRecipe({ site: sites[0],
                     recipe: { ...persisted, validation: { ...persisted.validation, site: sites[0], state: 'suspended' } } });
@@ -1220,13 +1229,16 @@ export function registerBrowserTools(registry: BrowserToolRegistry, deps: Browse
         }
         // Every backend: a new page on a site that already has open tabs is usually a detour — those tabs are
         // often already signed in to the right account and place. Point them out (best effort, never fails open).
+        // The user's own tabs (My browser) are not taken over: their address carries the account and place.
         if (args.action === 'open' && result.ok) {
           const sameSiteTabs = await listSameSiteTabs(runtime, args.profile, result).catch(() => []);
           if (sameSiteTabs.length) {
             result = {
               ...result,
               sameSiteTabs,
-              sameSiteHint: '这个网站已有打开的页面(往往已在正确的账号和位置):优先在它们上面继续,不要从入口重新找;新开的页面不需要时可以 close。',
+              sameSiteHint: sameSiteTabs.some((tab) => tab.owner === 'user')
+                ? '这个网站已有打开的页面。owner:"user" 是用户自己的页签:不要在上面点击、输入或跳转;需要它的账号或位置时,把它的 url 传给刚打开的这一页 navigate。owner:"cindy" 的页面可以直接继续,新开的页面不需要时可以 close。'
+                : '这个网站已有打开的页面(往往已在正确的账号和位置):优先在它们上面继续,不要从入口重新找;新开的页面不需要时可以 close。',
             } as typeof result;
           }
         }
@@ -1283,17 +1295,19 @@ export function registerBrowserTools(registry: BrowserToolRegistry, deps: Browse
           if (restricted) { retainResult = false; results.clear(); }
           if (!scopeIsCurrent() || !result.ok || extractFailed || restricted || args.action === 'close' || args.request?.kind === 'close') {
             if (targetKey) experiences.clear(targetKey);
-          } else if (args.action === 'open' || args.action === 'navigate') {
+          } else if (args.action === 'open' || args.action === 'navigate' || args.action === 'snapshot') {
             const actualUrl = (result.data as { url?: unknown } | undefined)?.url;
             const url = typeof actualUrl === 'string' ? actualUrl : args.url ?? args.targetUrl;
             if (url) {
               const site = new URL(url).hostname;
-              if (targetKey) experiences.start(targetKey, url);
+              if (targetKey && args.action !== 'snapshot') experiences.start(targetKey, url);
               const user = await resolveUserLayer(deps);
-              const key = JSON.stringify([site, args.profile ?? '', args.intent ?? '']);
+              const suggestions = suggestRecipes(recipeRegistryFrom(user), site, args.intent, args.profile, url);
+              // A homepage must not consume the later post-specific suggestion.
+              // Deduplicate by suggested capabilities, not every individual URL.
+              const key = JSON.stringify([site, args.profile ?? '', args.intent ?? '', suggestions.map(s => s.id)]);
               const version = user?.version ?? '';
               if (discovered.get(key) !== version) {
-                const suggestions = suggestRecipes(recipeRegistryFrom(user), site, args.intent, args.profile);
                 if (discovered.size >= 64) discovered.delete(discovered.keys().next().value!);
                 discovered.set(key, version);
                 if (suggestions.length) result = { ...result, recipeSuggestions: suggestions } as typeof result;

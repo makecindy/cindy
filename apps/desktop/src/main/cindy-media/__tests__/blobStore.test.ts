@@ -556,6 +556,16 @@ describe('parseBlobUrl / resolveSafe(取件形状校验)', () => {
 });
 
 describe('readFile(读回一致性)', () => {
+  // #8673 / unit: write/read the real byte store with a valid RGBA PNG containing
+  // transparent and semitransparent pixels. Existing fixtures are only headers.
+  it('保留原生输出 PNG 的透明与半透明像素字节', async () => {
+    const transparentPng = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAIAAAABCAYAAAD0In+KAAAADklEQVR4nGP4zwAC/xsACn8Cf0Yvh0oAAAAASUVORK5CYII=', 'base64');
+    const result = await blobStore.writeBlob({ buffer: transparentPng, mimeType: 'image/png' });
+    const { buffer, mimeType } = await blobStore.readFile(result.url);
+    expect(mimeType).toBe('image/png');
+    expect(buffer).toEqual(transparentPng);
+  });
+
   it('读回的字节与写入完全一致', async () => {
     await blobStore.writeBlob({ buffer: PNG_BYTES, mimeType: 'image/png' });
     const { buffer, mimeType } = await blobStore.readFile(

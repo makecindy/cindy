@@ -25,7 +25,14 @@ import {
   type UserBrowserPageControl,
 } from '../user-browser-backend';
 
-type Tab = { id: number; url: string; title?: string; active?: boolean; redacted?: boolean };
+type Tab = {
+  id: number;
+  url: string;
+  title?: string;
+  active?: boolean;
+  redacted?: boolean;
+  cindyWindow?: boolean;
+};
 
 function fakeControl(
   options: { clients?: string[]; tabs?: Record<string, Tab[]>; version?: string } = {},
@@ -95,6 +102,13 @@ const call = (b: UserBrowserBackend, req: Record<string, unknown>) =>
   b.call(req as unknown as BrowserControlRequest);
 
 describe('UserBrowserBackend · 就绪与连接', () => {
+  // Actual absence and temporarily unavailable selection must not share the old-plugin advice.
+  it.each(['plugin-updating', 'plugin-selection-required'] as const)('status preserves %s from the plugin slot', async reason => {
+    const b = new UserBrowserBackend({ getPageControl: () => null, getUnavailableReason: () => reason,
+      logger: { info: vi.fn(), warn: vi.fn() } });
+    expect(await call(b, { action: 'status' })).toMatchObject({ data: { configured: false, reason } });
+  });
+
   it('没有页面控制插件时 status 如实报告,动作按未配置拒绝', async () => {
     const b = backend(null);
     expect(await call(b, { action: 'status' })).toMatchObject({
@@ -160,6 +174,26 @@ describe('UserBrowserBackend · 就绪与连接', () => {
 });
 
 describe('UserBrowserBackend · 标签页与寻址', () => {
+  // 2026-11-06: the agent kept working in the user's own ChatGPT tab (snapshot, clicks, two
+  // navigations) because tabs listed it like any page Cindy had opened.
+  it('tabs 标出页签归属:Cindy 窗口里的是 cindy,其余是用户自己的', async () => {
+    const fake = fakeControl({
+      version: '0.4.43',
+      tabs: {
+        'client-aaaaaaaa': [
+          { id: 7, url: 'https://chat.example.test/', title: 'Chat', active: true },
+          { id: 8, url: 'https://chat.example.test/billing', title: 'Billing', cindyWindow: true },
+        ],
+      },
+    });
+    const listed = await call(backend(fake.control), { action: 'tabs' });
+    expect((listed.data as { tabs: Array<Record<string, unknown>> }).tabs).toMatchObject([
+      { url: 'https://chat.example.test/', owner: 'user' },
+      { url: 'https://chat.example.test/billing', owner: 'cindy' },
+    ]);
+    expect((listed.data as { note: string }).note).toContain('owner:"user"');
+  });
+
   it('tabs 映射稳定 targetId 与别名,保留被打码行;open 返回可用 targetId 并记住 label', async () => {
     const fake = fakeControl({
       tabs: {
@@ -182,6 +216,8 @@ describe('UserBrowserBackend · 标签页与寻址', () => {
       active: true,
     });
     expect(tabs[1]).toMatchObject({ targetId: 'client-a:9', redacted: true });
+    // An extension that does not mark Cindy's window gets no guessed owner.
+    expect(tabs[0]).not.toHaveProperty('owner');
     fake.tabs['client-aaaaaaaa'].push({ id: 11, url: 'https://example.test/b', title: 'B' });
     const opened = await call(b, {
       action: 'open',
@@ -973,20 +1009,48 @@ describe('UserBrowserBackend · 读取与动作', () => {
     });
   });
 
-  it('status 先等扩展重连几秒,不在刷新后的空档里报未连接', async () => {
-    const fake = fakeControl({ version: '0.4.46' });
-    let calls = 0;
-    const realStatus = (fake.control.bridge as unknown as { status: () => Promise<{ ok: boolean; clients: Array<{ connected: boolean }> }> }).status;
-    (fake.control.bridge as unknown as { status: () => Promise<unknown> }).status = async () => {
-      const s = await realStatus();
-      // Connected first, then dropped for two reads (an extension reload), then back.
-      ++calls;
-      return calls === 2 || calls === 3 ? { ...s, clients: s.clients.map((c) => ({ ...c, connected: false })) } : s;
-    };
-    const b = new UserBrowserBackend({ getPageControl: () => fake.control, reconnectWaitMs: 5000, logger: { info: vi.fn(), warn: vi.fn() } });
-    expect(await call(b, { action: 'status' })).toMatchObject({ ok: true, data: { connected: true } });
-    expect(await call(b, { action: 'status' })).toMatchObject({ ok: true, data: { connected: true } });
-    expect(calls).toBe(4);
+  // Regression: live-client filtering removed the expired client, skipping reconnect grace.
+  // Unit tier: production call(), empty status list then reconnect, fake clock (no real sleep).
+  it.each([false, true])('waits for an expired client omitted from status (first read: %s)', async (firstRead) => {
+    vi.useFakeTimers();
+    try {
+      const fake = fakeControl();
+      const connected = await fake.control.bridge.status();
+      vi.spyOn(fake.control.bridge, 'status')
+        .mockResolvedValueOnce(firstRead ? { ...connected, clients: [], hadConnectedClient: true } : connected)
+        .mockResolvedValueOnce({ ...connected, clients: [], hadConnectedClient: true })
+        .mockResolvedValue(connected);
+      const b = new UserBrowserBackend({ getPageControl: () => fake.control, reconnectWaitMs: 5000, logger: { info: vi.fn(), warn: vi.fn() } });
+      if (!firstRead) await call(b, { action: 'status' });
+      const pending = call(b, { action: 'status' });
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(await pending).toMatchObject({ ok: true, data: { connected: true } });
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('does not wait for an unpaired install even after another browser connected', async () => {
+    const fake = fakeControl();
+    const status = await fake.control.bridge.status();
+    const statusRead = vi.spyOn(fake.control.bridge, 'status').mockResolvedValue({
+      ...status, hadConnectedClient: true,
+      clients: status.ok ? status.clients.map((c) => ({ ...c, connected: false, trusted: false })) : [],
+    });
+    const b = new UserBrowserBackend({ getPageControl: () => fake.control, logger: { info: vi.fn(), warn: vi.fn() } });
+    expect(await call(b, { action: 'status' })).toMatchObject({ data: { connected: false, reason: 'pairing-required' } });
+    expect(statusRead).toHaveBeenCalledTimes(1);
+  });
+
+  it('ends reconnect grace when the browser remains closed', async () => {
+    vi.useFakeTimers();
+    try {
+      const fake = fakeControl({ clients: [] });
+      const disconnected = await fake.control.bridge.status();
+      vi.spyOn(fake.control.bridge, 'status').mockResolvedValue({ ...disconnected, hadConnectedClient: true });
+      const b = new UserBrowserBackend({ getPageControl: () => fake.control, reconnectWaitMs: 1000, logger: { info: vi.fn(), warn: vi.fn() } });
+      const pending = call(b, { action: 'status' });
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(await pending).toMatchObject({ ok: true, data: { connected: false } });
+    } finally { vi.useRealTimers(); }
   });
 
   // Review 2026-10-29: an installed but unpaired extension waited 8 s and was then told to install

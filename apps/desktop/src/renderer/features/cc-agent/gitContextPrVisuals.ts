@@ -117,6 +117,12 @@ export const PR_STATUS_COLOR: Record<PrStatusKind, string> = {
   closed: 'var(--error-fg)',
 };
 
+/** A conflict warns only on an open PR; draft/merged/closed keep their main-state color. */
+export function prStatusColor(kind: PrStatusKind | null, conflicts?: boolean | null): string {
+  if (kind === 'open' && conflicts === true) return 'var(--warning-fg)';
+  return kind ? PR_STATUS_COLOR[kind] : 'var(--text-tertiary)';
+}
+
 /** 侧栏任务行 PR icon 所在表面:跟实际底色走,不跟主题名走。 */
 export type PrIconSurface = 'light' | 'dark';
 
@@ -149,7 +155,12 @@ export function prIconSurface(opts: {
   return opts.themeIsDark ? 'dark' : 'light';
 }
 
-export function prStatusIconColor(kind: PrStatusKind | null, surface: PrIconSurface): string {
+export function prStatusIconColor(
+  kind: PrStatusKind | null,
+  surface: PrIconSurface,
+  conflicts?: boolean | null,
+): string {
+  if (conflicts === true) return prStatusColor(kind, conflicts);
   if (kind === 'open') {
     return surface === 'light' ? 'var(--pr-open-on-light)' : 'var(--pr-open-on-dark)';
   }

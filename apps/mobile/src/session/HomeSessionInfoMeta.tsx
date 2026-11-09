@@ -24,6 +24,7 @@ import {
 } from './homeDisplaySettings';
 import {
   homeSessionPrCacheKey,
+  hydrateHomeSessionPr,
   loadHomeSessionPr,
   readHomeSessionPr,
   refreshHomeSessionPr,
@@ -137,7 +138,11 @@ function InfoMetaContent({
             <SessionRelativeTime lastActivityAt={item.lastActivityAt} style={textStyle} />
           ) : piece.key === 'pr' && pr ? (
             <PrPiece
-              color={prStatusVisual(pr.status?.ok ? pr.status.status : null, colors)}
+              color={prStatusVisual(
+                pr.status?.ok ? pr.status.status : null,
+                colors,
+                pr.status?.ok ? pr.status.conflicts : null,
+              )}
               label={`${prNumberLabel(pr.ref)}`}
               testID={`home.sessionInfo.pr.${session.id}`}
               textStyle={textStyle}
@@ -173,10 +178,16 @@ export function useHomeSessionPr(
   includeRelated = false,
 ): HomeSessionPrInfo | null {
   const link = useDeviceLink();
-  const { accountGeneration } = useAuth();
+  const { accountGeneration, user } = useAuth();
+  const scope = String(accountGeneration);
+  const userId = user?.id ?? '';
   const key = enabled && deviceId
-    ? homeSessionPrCacheKey(String(accountGeneration), deviceId, sessionId) + (includeRelated ? ':related' : '')
+    ? homeSessionPrCacheKey(scope, deviceId, sessionId, includeRelated)
     : null;
+  // 冷启动先显示上次保存的结果,不等连上电脑;读回只按账号代次做一次。
+  useEffect(() => {
+    if (key) void hydrateHomeSessionPr(scope, userId);
+  }, [key, scope, userId]);
   const subscribe = useCallback(
     (listener: () => void) => (key ? subscribeHomeSessionPr(key, listener) : () => undefined),
     [key],
@@ -196,6 +207,7 @@ export function useHomeSessionPr(
       const retryIn = refreshHomeSessionPr(key, (previous) => loadHomeSessionPr(link.invoke, deviceId, sessionId, previous, includeRelated), {
         eventful,
         now: Date.now(),
+        persist: userId ? { deviceId, related: includeRelated, scope, sessionId, userId } : undefined,
         refreshKey,
       });
       // 事件触发却撞上在途请求或 10 秒防抖:到点补查一次,不等下一轮轮询。
@@ -218,7 +230,7 @@ export function useHomeSessionPr(
       stopResume();
       appState.remove();
     };
-  }, [deviceId, foreground, includeRelated, isActive, key, link.connectionEpoch, link.invoke, onResume, online, refreshKey, sessionId]);
+  }, [deviceId, foreground, includeRelated, isActive, key, link.connectionEpoch, link.invoke, onResume, online, refreshKey, scope, sessionId, userId]);
   return value;
 }
 

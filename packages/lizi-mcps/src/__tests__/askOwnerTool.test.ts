@@ -4,9 +4,9 @@ import { describe, expect, it, vi } from 'vitest';
 import { createXdtHelperMcpServer, type XdtHelperMcpDeps } from '../lizi_xdtHelperMcpServer.js';
 import type { LiziMcpSessionContext } from '../types.js';
 
-// ask_owner is the one listed way to reach the owner (choose / fill / scan / connect).
-// Entry: tools/list and tools/call on the cindy_helper server. It took over
-// ask_user_question_async, so the choice cases keep that tool's guarantees
+// Regression: optional questions must be independently discoverable from login handoff.
+// Exercise real MCP listing/calls (unit); a choose-only host previously listed ask_owner.
+// Entry: tools/list and tools/call on the cindy_helper server. Choice cases preserve
 // (root-only, no call_tool alias, request-time identity); the handoff and
 // connect cases guard the 2026-10-30 incident where the agent never found
 // input handoff and a bad target only failed minutes later. Tier: unit.
@@ -23,7 +23,7 @@ async function connect(deps: XdtHelperMcpDeps, factoryKind: 'claude-code' | 'cod
 
 const questions = [{ question: 'Which scope?', options: [{ label: 'Personal' }, { label: 'Both' }] }];
 
-describe.each(['claude-code', 'pi'] as const)('%s ask_owner choose', (agentKind) => {
+describe.each(['claude-code', 'pi'] as const)('%s independent async question', (agentKind) => {
   it('discovers and calls the same tool with request-time identity and a pending-only receipt', async () => {
     let context: LiziMcpSessionContext | undefined = {
       agentKind, workingDir: '/repo', sessionId: 'task-1', sessionInstanceId: 'instance-1',
@@ -31,18 +31,19 @@ describe.each(['claude-code', 'pi'] as const)('%s ask_owner choose', (agentKind)
     };
     const ask = vi.fn(() => 'question-1');
     const { client, close } = await connect({ askUserQuestionAsync: ask }, agentKind, () => context);
-    const call = (args: Record<string, unknown>) => client.callTool({ name: 'ask_owner', arguments: { kind: 'choose', ...args } });
+    const call = (args: Record<string, unknown>) => client.callTool({ name: 'ask_user_question_async', arguments: args });
     try {
       const prefix = await client.listTools();
-      expect(prefix.tools.some((tool) => tool.name === 'ask_owner')).toBe(true);
-      expect(prefix.tools.some((tool) => tool.name === 'ask_user_question_async')).toBe(false);
-      const bypass = await client.callTool({ name: 'call_tool', arguments: { name: 'ask_owner', args: { kind: 'choose', questions } } });
+      expect(prefix.tools.some((tool) => tool.name === 'ask_owner')).toBe(false);
+      expect(prefix.tools.some((tool) => tool.name === 'ask_user_question_async')).toBe(true);
+      const bypass = await client.callTool({ name: 'call_tool', arguments: { name: 'ask_user_question_async', args: { questions } } });
       expect(bypass.isError).toBe(true);
       expect(parse(await call({ questions }))).toEqual({ ok: true, request_id: 'question-1', status: 'pending' });
       expect(ask).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'task-1', remoteHostId: 'ssh-host' }), questions);
       context = { ...context!, sessionId: 'task-2', sessionInstanceId: 'instance-2' };
-      await call({ questions });
-      expect(ask).toHaveBeenLastCalledWith(expect.objectContaining({ sessionId: 'task-2' }), questions);
+      const freeform = [{ question: 'What is the context?' }];
+      await call({ questions: freeform });
+      expect(ask).toHaveBeenLastCalledWith(expect.objectContaining({ sessionId: 'task-2' }), freeform);
       context = undefined;
       expect(parse(await call({ questions })).errorCode).toBe('NO_SESSION_CONTEXT');
       expect(ask).toHaveBeenCalledTimes(2);
@@ -60,7 +61,7 @@ describe.each(['claude-code', 'pi'] as const)('%s ask_owner choose', (agentKind)
       context = { ...context!, mcpCallerKind: 'root', mcpCallerAttested: true };
       expect((await call({ questions: [...questions, ...questions] })).isError).toBe(true);
       expect((await call({ questions, sessionId: 'spoofed' })).isError).toBe(true);
-      expect(parse(await call({})).errorCode).toBe('INVALID_ARGS');
+      expect((await call({})).isError).toBe(true);
       expect(ask).toHaveBeenCalledTimes(2);
       ask.mockImplementationOnce(() => { throw new Error('stale instance'); });
       expect(parse(await call({ questions })).errorCode).toBe('QUESTION_UNAVAILABLE');
@@ -84,13 +85,13 @@ it.each(['codex', 'claude-code'] as const)('keeps one choice entry per harness w
       context = { ...context, agentKind };
       const supported = agentKind === 'claude-code' || agentKind === 'pi';
       // With only choices wired, a harness that owns its own questions has nothing here.
-      expect((await client.listTools()).tools.some((t) => t.name === 'ask_owner')).toBe(supported);
+      expect((await client.listTools()).tools.some((t) => t.name === 'ask_user_question_async')).toBe(supported);
       ask.mockClear();
       // A cached tool name must not open a second card through direct invocation.
-      const result = await client.callTool({ name: 'ask_owner', arguments: { kind: 'choose', questions } });
+      const result = await client.callTool({ name: 'ask_user_question_async', arguments: { questions } });
       expect(result.isError === true).toBe(!supported);
       expect(ask).toHaveBeenCalledTimes(supported ? 1 : 0);
-      const alias = await client.callTool({ name: 'call_tool', arguments: { name: 'ask_owner', args: { kind: 'choose', questions } } });
+      const alias = await client.callTool({ name: 'call_tool', arguments: { name: 'ask_user_question_async', args: { questions } } });
       expect(alias.isError).toBe(true);
     }
     context = { ...context, agentKind: 'claude-code' };
@@ -112,12 +113,12 @@ describe('ask_owner fill / scan / connect', () => {
     return { ...conn, start, startImage, grok, call };
   };
 
-  it('lists the kinds a Codex task can use, and leaves choices to its own question tool', async () => {
-    const { client, close } = await setup(() => root);
+  it.each(['codex', 'claude-code', 'pi'])('keeps %s handoff separate from ordinary questions', async (agentKind) => {
+    const { client, close } = await setup(() => ({ ...root, agentKind }));
     try {
       const tool = (await client.listTools()).tools.find((t) => t.name === 'ask_owner')!;
       expect((tool.inputSchema.properties as Record<string, { enum?: string[] }>).kind.enum).toEqual(['fill', 'scan', 'connect']);
-      expect(tool.description).toContain('request_user_input');
+      expect(tool.inputSchema.properties).not.toHaveProperty('questions');
       // The old names keep working for saved calls but are no longer offered.
       const auth = parse(await client.callTool({ name: 'list_tools', arguments: { category: 'auth' } }));
       expect(auth.tools.map((t: { name: string }) => t.name)).toEqual(['get_grok_login_status', 'cancel_grok_device_login']);
@@ -126,7 +127,7 @@ describe('ask_owner fill / scan / connect', () => {
 
   it('routes each kind to the existing host flow and reports missing parts at once', async () => {
     let context = root;
-    const { close, call, start, startImage, grok } = await setup(() => context);
+    const { client, close, call, start, startImage, grok } = await setup(() => context);
     try {
       expect(await call({ kind: 'fill', title: 'Sign in to Feishu', target: { app: 'Google Chrome' } }))
         .toMatchObject({ ok: true, request_id: 'handoff-1', status: 'pending' });
@@ -148,7 +149,7 @@ describe('ask_owner fill / scan / connect', () => {
         { kind: 'scan', title: 'x', image: 'a.png', target: { app: 'Chrome' } },
         { kind: 'connect' },
       ]) expect((await call(args)).errorCode).toBe('INVALID_ARGS');
-      expect((await call({ kind: 'choose', questions })).errorCode).toBe('CAPABILITY_NOT_AVAILABLE');
+      expect((await client.callTool({ name: 'ask_owner', arguments: { kind: 'choose', questions } })).isError).toBe(true);
 
       context = { ...root, mcpCallerKind: 'descendant' };
       expect((await call({ kind: 'fill', title: 'x', target: { app: 'Chrome' } })).errorCode).toBe('ROOT_REQUIRED');

@@ -60,6 +60,54 @@ describe('classifyGhostVisibility namespace', () => {
     });
   });
 
+  // Daily version selection must respect availability without merging identities.
+  // Unit entry: classifyGhostVisibility; minimal input is one public/local pair.
+  // Existing coverage only exercised root/organization ambiguity.
+  it.each(['disabled', 'workdir', 'unavailable', 'retired'] as const)(
+    'does not let a newer %s local copy hide the public copy', (reason) => {
+      const local = ghost('helper', 'local');
+      local.manifest.version = '2.0.0';
+      if (reason === 'disabled') local.enabled = false;
+      if (reason === 'retired') local.retirement = {} as NonNullable<InstalledGhost['retirement']>;
+      const pairDeps = { ...deps, listGhosts: () => [local, root],
+        isAvailableForActiveSession: (id: string) => reason !== 'unavailable' || id !== '_ns__local__helper',
+        isDisabledForWorkdir: (id: string) => reason === 'workdir' && id === '_ns__local__helper' };
+      expect(classifyGhostVisibility('helper', null, pairDeps)).toMatchObject({ ok: true, ghost: root });
+    },
+  );
+
+  // ghost_list shows only discoverable copies; a bare name must pick among the same set,
+  // or a newer panel-only local copy hides the listed public one from ghost_info.
+  it('does not let a newer undiscoverable local copy win a bare name', () => {
+    const local = ghost('helper', 'local');
+    local.manifest.version = '2.0.0';
+    const pairDeps = { ...deps, listGhosts: () => [local, root], isDiscoverable: (g: InstalledGhost) => g !== local };
+    expect(classifyGhostVisibility('helper', null, pairDeps)).toMatchObject({ ok: true, ghost: root });
+    expect(classifyGhostVisibility('_ns__local__helper', null, pairDeps)).toMatchObject({ ok: true, ghost: local });
+  });
+
+  it.each(['legacy', 'pending', 'unconfirmed', 'invalid-version', 'organization'] as const)(
+    'keeps %s identities explicit instead of guessing a version winner', (reason) => {
+      const local = ghost('helper', 'local');
+      const other = { ...root, manifest: { ...root.manifest } };
+      if (reason === 'legacy' || reason === 'pending') delete other.namespace;
+      if (reason === 'pending' || reason === 'unconfirmed') other.namespaceState = reason;
+      if (reason === 'invalid-version') other.manifest.version = 'development';
+      if (reason === 'organization') other.namespace = 'acme';
+      expect(classifyGhostVisibility('helper', null, { ...deps, listGhosts: () => [local, other] }))
+        .toMatchObject({ ok: false, errorCode: 'GHOST_AMBIGUOUS' });
+    },
+  );
+
+  it('keeps explicit local addresses and in-flight calls bound to the original installation', () => {
+    const local = ghost('helper', 'local');
+    local.manifest.version = '0.9.0';
+    const pairDeps = { ...deps, listGhosts: () => [root, local] };
+    expect(classifyGhostVisibility('helper', null, pairDeps)).toMatchObject({ ok: true, ghost: root });
+    expect(classifyGhostVisibility('helper', null, pairDeps, 'local')).toMatchObject({ ok: true, ghost: local });
+    expect(classifyInstalledGhostVisibility(local, null, pairDeps)).toMatchObject({ ok: true, ghost: local });
+  });
+
   it.each([
     { installed: root, requested: 'null', target: { ghost_id: 'helper', namespace: null } },
     { installed: enterprise, requested: null, target: { ghost_id: 'helper', namespace: 'acme' } },

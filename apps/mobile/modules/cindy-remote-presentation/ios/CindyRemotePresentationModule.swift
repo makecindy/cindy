@@ -1,13 +1,23 @@
 import ExpoModulesCore
 import UIKit
 import AVFoundation
+import AudioToolbox
 import UniformTypeIdentifiers
 import WebRTC
 
 public class CindyRemotePresentationModule: Module {
   private var previousAudio: (AVAudioSession.Category, AVAudioSession.Mode, AVAudioSession.CategoryOptions)?
+  private lazy var keyboardFeedback = RemoteKeyboardFeedback()
   public func definition() -> ModuleDefinition {
     Name("CindyRemotePresentation")
+    AsyncFunction("keyFeedback") {
+      guard UIApplication.shared.applicationState == .active else { return }
+      self.keyboardFeedback.play()
+    }.runOnQueue(.main)
+    AsyncFunction("keyFeedbackForSkin") { (skin: String, code: String) in
+      guard UIApplication.shared.applicationState == .active else { return }
+      self.keyboardFeedback.play(skin: skin, code: code)
+    }.runOnQueue(.main)
     AsyncFunction("clipboardVersion") { () -> String in
       try RemoteClipboard.foreground()
       return String(UIPasteboard.general.changeCount)
@@ -84,6 +94,50 @@ public class CindyRemotePresentationModule: Module {
         self.previousAudio = nil
       }
     }.runOnQueue(.main)
+  }
+}
+
+/** A short UI sound uses System Sound Services, never changing the shared
+ * AVAudioSession used by remote playback or voice capture. */
+private final class RemoteKeyboardFeedback {
+  private let impact = UIImpactFeedbackGenerator(style: .light)
+  private var sounds: [String: SystemSoundID] = [:]
+
+  init() {
+    let bundleURL = Bundle.main.url(forResource: "CindyRemoteFeedback", withExtension: "bundle")
+      ?? Bundle(for: CindyRemotePresentationModule.self)
+        .url(forResource: "CindyRemoteFeedback", withExtension: "bundle")
+    if let bundleURL, let bundle = Bundle(url: bundleURL) {
+      for name in ["macbook-key", "macbook-space", "classic-key", "macii-key", "powerbook-key", "thinkpad-key"] {
+        guard let url = bundle.url(forResource: name, withExtension: "wav") else { continue }
+        var sound: SystemSoundID = 0
+        if AudioServicesCreateSystemSoundID(url as CFURL, &sound) == noErr {
+          sounds[name] = sound
+        }
+      }
+    }
+    impact.prepare()
+  }
+
+  func play(skin: String = "modern", code: String = "") {
+    // Retro samples are style pairings, not recordings of these exact computers.
+    let name: String
+    switch skin {
+    case "classic", "compact", "edge": name = "classic-key"
+    case "macii": name = "macii-key"
+    case "powerbook": name = "powerbook-key"
+    case "thinkpad": name = "thinkpad-key"
+    default: name = code == "Space" ? "macbook-space" : "macbook-key"
+    }
+    if let sound = sounds[name] { AudioServicesPlaySystemSound(sound) }
+    // Use the light preset's full pulse; scaling it to 0.3 is barely perceptible
+    // when holding the unfolded phone by its edges.
+    impact.impactOccurred()
+    impact.prepare()
+  }
+
+  deinit {
+    for sound in sounds.values { AudioServicesDisposeSystemSoundID(sound) }
   }
 }
 

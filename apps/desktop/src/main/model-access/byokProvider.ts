@@ -32,6 +32,7 @@ export function buildByokProvider({ provider, credential }: ByokConnection): Pro
       // Anthropic SDK appends /v1/messages, while Codex expects a /v1 base.
       upstream: agent === 'codex' ? `${inferenceBase}/v1` : inferenceBase,
       authStrategy: 'api-key-header',
+      ...(agent === 'codex' ? { forceCindyCodexOriginator: true } : {}),
       // Pi consumes per-model piApi; the gateway accepts all declared protocols.
       wireProtocol: agent === 'claude-code' ? 'anthropic-messages' : 'openai-responses',
       ...(agent === 'codex' && provider.imageBinding

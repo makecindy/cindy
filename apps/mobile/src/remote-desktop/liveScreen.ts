@@ -78,3 +78,10 @@ export const LIVE_SCREEN_NOT_IN_MENU: ReadonlySet<string> = new Set([
   "orientation-landscape",
   "shake",
 ]);
+
+/** A foldable's hinge poses (closed, half open, flat): their own row, not the menu. */
+export const LIVE_SCREEN_POSTURES: readonly string[] = [
+  "posture-closed",
+  "posture-open",
+  "posture-flat",
+];

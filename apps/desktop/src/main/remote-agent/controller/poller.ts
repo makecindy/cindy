@@ -79,6 +79,12 @@ export function remoteAgentErrorFrom(error: unknown, fallbackCode = 'REMOTE_AGEN
   };
 }
 
+/** The executor no longer holds this task's in-memory delegation grant. */
+export function isSharedTaskAuthorizationDenied(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /\[REMOTE_AGENT_INVALID\] this shared task is not authorized on this computer/i.test(message);
+}
+
 export class RemoteAgentPoller {
   private readonly entries = new Map<string, Entry>();
   private inflight = 0;

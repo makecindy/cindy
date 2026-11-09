@@ -1,5 +1,6 @@
+import type { TextInstance } from 'react-native';
 import { useContext, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { findNodeHandle, Platform, type Text as NativeText, type TextProps } from 'react-native';
+import { findNodeHandle, Platform, type TextProps } from 'react-native';
 import { requireOptionalNativeModule } from 'expo-modules-core';
 
 import { Text } from '@/components/AppText';
@@ -25,7 +26,7 @@ export function SelectionMenuText({ onLayout, ...props }: TextProps) {
   // The quote callback identifies the host/draft scope. A changing side-chat
   // callback in the same task must not detach a menu that is already on screen.
   const quoteCallback = ctx?.commitQuote;
-  const textRef = useRef<NativeText>(null);
+  const textRef = useRef<TextInstance>(null);
   const [tag, setTag] = useState<number | null>(null);
   const quoteLabel = selectionQuoteMenuLabel();
   const sideChatLabel = ctx?.askInSideChat ? i18n.t('session.sideChat.title') : '';
@@ -48,7 +49,7 @@ export function SelectionMenuText({ onLayout, ...props }: TextProps) {
   }, [tag, props.selectable, quoteCallback, quoteLabel, sideChatLabel]);
 
   return <Text {...props} ref={textRef} onLayout={(event) => {
-    if (native && ctx && props.selectable) setTag(findNodeHandle(textRef.current));
+    if (native && ctx && props.selectable) setTag(findNodeHandle(textRef.current) ?? null);
     onLayout?.(event);
   }} />;
 }

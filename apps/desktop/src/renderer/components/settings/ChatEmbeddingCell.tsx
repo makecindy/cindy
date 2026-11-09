@@ -8,12 +8,15 @@
  *   - 不带 "需新会话生效" 后缀: 嵌入开关立即生效 (下一条新消息即可)
  *   - 不带 confirm dialog: 关闭只是停止入队, 已嵌入的向量不删, 用户无可见副作用
  */
+import { additionalSettings } from './AdditionalSettings.settings-search';
+import { useSettingDefinition } from './useSettingDefinition';
 import { useCallback, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Database } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
+import { SettingsRow } from '@/components/ui/settings-rows';
 import { Switch } from '@/components/ui/switch';
 import { createLogger } from '@/lib/logger';
 import { chatEmbeddingFailureKey, refreshChatEmbeddingFromMain } from '@/lib/chatEmbeddingStore';
@@ -23,6 +26,7 @@ import { DefaultOverrideControls } from './DefaultOverrideControls';
 const log = createLogger('ChatEmbeddingCell');
 
 export function ChatEmbeddingCell() {
+  const setting = useSettingDefinition(additionalSettings.chatEmbedding);
   const { t } = useTranslation();
   const { enabled, isCustomized, beginMutation, completeMutation, rollbackMutation } =
     useChatEmbedding();
@@ -80,38 +84,36 @@ export function ChatEmbeddingCell() {
   }, [beginMutation, completeMutation, rollbackMutation, t]);
 
   return (
-    <div className="flex items-center justify-between gap-3 px-4 py-[14px]">
-      <div className="flex items-center gap-3">
-        <div
+    <SettingsRow
+      {...setting.anchorProps}
+      lead={
+        <span
           className={cn(
             'flex h-9 w-9 shrink-0 items-center justify-center rounded-lg',
             'bg-[var(--settings-input-bg)]',
           )}
         >
           <Database size={18} className="text-[var(--settings-section-title)]" />
+        </span>
+      }
+      title={setting.title}
+      hint={setting.description}
+      trailing={
+        <div className="flex items-center gap-2">
+          <DefaultOverrideControls
+            isCustomized={isCustomized}
+            disabled={pending}
+            onReset={() => void handleReset()}
+          />
+          <Switch
+            {...setting.controlProps}
+            checked={enabled}
+            disabled={pending}
+            onCheckedChange={(v) => void handleToggle(v)}
+            aria-label={t('settings.chatEmbedding.toggleAria')}
+          />
         </div>
-        <div className="flex flex-col gap-[8px]">
-          <p className="text-14 font-medium leading-none text-[var(--settings-section-title)]">
-            {t('settings.chatEmbedding.cell.label')}
-          </p>
-          <p className="text-12 leading-none text-[var(--settings-section-desc)]">
-            {t('settings.chatEmbedding.cell.description')}
-          </p>
-        </div>
-      </div>
-      <div className="flex items-center gap-2">
-        <DefaultOverrideControls
-          isCustomized={isCustomized}
-          disabled={pending}
-          onReset={() => void handleReset()}
-        />
-        <Switch
-          checked={enabled}
-          disabled={pending}
-          onCheckedChange={(v) => void handleToggle(v)}
-          aria-label={t('settings.chatEmbedding.toggleAria')}
-        />
-      </div>
-    </div>
+      }
+    />
   );
 }

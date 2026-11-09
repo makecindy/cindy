@@ -1,3 +1,4 @@
+import { ghostCardSessionLinkId } from '@cindy/maker-shared/ghost-card-form';
 import { isSafeGhostRelativePath as isSafePluginUiPath, getPluginToolUi, validateWithStoredMcpApps, parseGhostMcpApps } from '@cindy/plugin-protocol';
 import { pluginHasToolUi, pluginToolVisible, pluginUiDomains, pluginUiPermissionsExpand } from '@cindy/plugin-protocol';
 import { parseGhostSecretCheck, type GhostSecretCheckDecl } from '@cindy/plugin-protocol';
@@ -11,6 +12,8 @@ import {
   GHOST_MANIFEST_SUMMARY_MAX_CHARS,
   GHOST_OAUTH_SCOPES_MAX,
   isValidCindyVersion,
+  selectGhostReadmePath,
+  validateGhostReadmeDeclaration,
   type GhostLocale,
   type GhostManifestLocales,
 } from '@cindy/plugin-protocol';
@@ -1686,6 +1689,11 @@ export interface GhostManifest {
    * (见 ghostIconMimeType);由 main 读盘转 data URL 随清单下发,
    * renderer 直接 <img> 渲染——cindy-ghost:// 协议只挂沙箱分区,主窗口不走它。
    */
+  /**
+   * 详细介绍(仅展示用):语言到包内 Markdown 文件的映射,必须提供 en。正本与解析
+   * 规则在 plugin-protocol 的 readme.ts;不进模型上下文。
+   */
+  readme?: GhostManifestLocales;
   icon?: string;
   /**
    * 意识形态,恒 'chip'(2026-07-12 单形态定案)。清单里可省略(同日晚间
@@ -3408,6 +3416,7 @@ const GHOST_MANIFEST_KNOWN_TOP_LEVEL_FIELDS = new Set([
   'resolvedLocale',
   'description',
   'whenToUse',
+  'readme',
   'icon',
   'kind',
   'entry',
@@ -3614,6 +3623,22 @@ export function ghostLocalePathFor(
   return (
     (manifestLocale ? manifest.locales[manifestLocale] : undefined) ?? manifest.locales.en ?? null
   );
+}
+
+/** 详细介绍选用的资源语言：文言用对应现代语言，插件不支持的语言固定为英文。 */
+export function ghostReadmeLocale(locale: string | undefined | null): GhostLocale {
+  const resourceLocale = isClassicalLocale(locale) ? modernLocaleOf(locale) : locale;
+  return (GHOST_LOCALES as readonly string[]).includes(resourceLocale ?? '')
+    ? (resourceLocale as GhostLocale)
+    : 'en';
+}
+
+/** 按界面语言选详细介绍文件；缺少该语言时固定回退英文。 */
+export function ghostReadmePathFor(
+  manifest: GhostManifest,
+  locale: string | undefined | null,
+): string | null {
+  return selectGhostReadmePath(manifest.readme, ghostReadmeLocale(locale));
 }
 
 /** 插件 app-context 只暴露协议旧四语；宿主新增语言固定回退英文以兼容存量插件。 */
@@ -4289,20 +4314,24 @@ export function resolveGhostManifestLocale(
  * 顶层字段原样保留但不解释、不展示、不授权。任何已知字段不合格都给出 reason。
  */
 export function validateGhostManifest(value: unknown): ManifestValidation {
-  return validateGhostManifestInput(value, false);
+  return validateGhostManifestInput(value, false, false);
 }
 
-/** Stored market releases tolerate only historical mcpApps; other fields remain strict. */
+/** Stored market releases retain historical mcpApps and parameter sizes; other fields remain strict. */
 export function validateStoredGhostManifest(value: unknown): ManifestValidation {
-  return validateWithStoredMcpApps(value, validateGhostManifest);
+  return validateWithStoredMcpApps(value, raw => validateGhostManifestInput(raw, false, true));
 }
 
 /** Installed snapshots retain historical unknown tasks data without granting it. */
 export function validateInstalledGhostManifest(value: unknown): ManifestValidation {
-  return validateWithStoredMcpApps(value, raw => validateGhostManifestInput(raw, true));
+  return validateWithStoredMcpApps(value, raw => validateGhostManifestInput(raw, true, true));
 }
 
-function validateGhostManifestInput(value: unknown, preserveHistoricalTasks: boolean): ManifestValidation {
+function validateGhostManifestInput(
+  value: unknown,
+  preserveHistoricalTasks: boolean,
+  preserveHistoricalParameterSize: boolean,
+): ManifestValidation {
   const preparation = prepareGhostManifestForValidation(value);
   if (!preparation.ok) return preparation;
   const prepared = preparation.prepared;
@@ -4422,6 +4451,23 @@ function validateGhostManifestInput(value: unknown, preserveHistoricalTasks: boo
       normalized[locale] = localePath;
     }
     locales = normalized as GhostManifestLocales;
+  }
+  let readme: GhostManifest['readme'];
+  if (raw.readme !== undefined) {
+    const localeFolds = Object.values(locales ?? {}).map((path) => path.toLowerCase());
+    const contentDirFolds = [raw.skill, raw.manual]
+      .flatMap((decl) => (isPlainObject(decl) && Array.isArray(decl.items) ? decl.items : []))
+      .map((item) => (isPlainObject(item) ? item.dir : undefined))
+      .filter((value): value is string => typeof value === 'string')
+      .map((value) => value.toLowerCase());
+    const result = validateGhostReadmeDeclaration(
+      raw.readme,
+      (fold) =>
+        [...declaredFilePathFolds, ...localeFolds].some((path) => pathsConflict(path, fold)) ||
+        contentDirFolds.some((dir) => pathsConflict(dir, fold)),
+    );
+    if (!result.ok) return result;
+    readme = result.readme;
   }
   if (
     raw.description !== undefined &&
@@ -4783,7 +4829,12 @@ function validateGhostManifestInput(value: unknown, preserveHistoricalTasks: boo
         if (!isPlainObject(t.parameters))
           return { ok: false, reason: 'tools[].parameters 必须是对象(JSON Schema)' };
         try {
-          if (JSON.stringify(t.parameters).length > 16_384) {
+          const serialized = JSON.stringify(t.parameters);
+          // 新包按 UTF-8 字节计;市场 release 与已装快照沿用旧 UTF-16 长度口径。
+          const size = preserveHistoricalParameterSize
+            ? serialized.length
+            : new TextEncoder().encode(serialized).length;
+          if (size > 16_384) {
             return { ok: false, reason: 'tools[].parameters 过大(上限 16KB)' };
           }
         } catch {
@@ -6688,6 +6739,7 @@ function validateGhostManifestInput(value: unknown, preserveHistoricalTasks: boo
       ...(locales !== undefined ? { locales } : {}),
       ...(raw.description !== undefined ? { description: raw.description as string } : {}),
       ...(raw.whenToUse !== undefined ? { whenToUse: raw.whenToUse as string } : {}),
+      ...(readme !== undefined ? { readme } : {}),
       ...(raw.icon !== undefined ? { icon: raw.icon as string } : {}),
       entry: raw.entry,
       ...(raw.launch !== undefined ? { launch: raw.launch as GhostLaunchMode } : {}),
@@ -7702,6 +7754,11 @@ export interface GhostPipeCardUpdate {
   type: 'card-update';
   /** Active tool call in the same task, when refreshing an earlier owned card. */
   sourceCallId?: string;
+  /**
+   * Only with sourceCallId, and equal to it: this earlier card moved to the active call's card.
+   * Views that know the marker hide it; older views show this update's html instead.
+   */
+  supersededBy?: string;
   /** 归因号:tool-call 下发的 callId 原样带回(主机验"这单是不是派给你的")。 */
   callId: string;
   /** 卡片正文(静态 HTML+CSS;≤ GHOST_CARD_HTML_MAX_BYTES,超限整条拒)。 */
@@ -7740,8 +7797,8 @@ export const GHOST_CARD_WORKING_WINDOW_MS = 30 * 60_000;
 
 /** 卡片 html 字节上限(UTF-8;与 manifest tools[].parameters 16KB 同精神,卡片放宽一倍)。 */
 export const GHOST_CARD_HTML_MAX_BYTES = 32 * 1024;
-/** 卡片渲染高度下限 px。 */
-export const GHOST_CARD_HEIGHT_MIN = 120;
+/** 卡片渲染高度下限 px:卡片按实测内容高度显示,这里只挡掉非正数。 */
+export const GHOST_CARD_HEIGHT_MIN = 1;
 /** 卡片渲染高度上限 px(容 ~460 宽通栏竖图 9:16 + 题注;与 generic 图卡的
  *  "高图可以很高"口径对齐,再高截断)。 */
 export const GHOST_CARD_HEIGHT_MAX = 900;
@@ -7780,7 +7837,7 @@ export const GHOST_CARD_LINK_MAX_LEN = 2048;
 
 /**
  * 卡内外链声明的白名单校验(净化器与宿主点击桥共用,双层同判):
- * 仅整串 http/https URL;空白与控制字符出现即拒——URL 构造器会静默剥掉
+ * 仅整串 http/https URL，或导航专用 cindy://session/<id>;空白与控制字符出现即拒——URL 构造器会静默剥掉
  * TAB/CR/LF,校验对象与落地属性值必须是同一串,不给"解析后合法、原文
  * 混淆"留缝。真实跳转仍由 main 的 shell:open-external 再验一道协议(第三道)。
  */
@@ -7792,6 +7849,7 @@ export function isGhostCardLinkAllowed(url: string): boolean {
     const c = url.charCodeAt(i);
     if (c <= 32 || c === 127) return false;
   }
+  if (ghostCardSessionLinkId(url)) return true;
   if (!/^https?:\/\//i.test(url)) return false;
   try {
     const parsed = new URL(url);

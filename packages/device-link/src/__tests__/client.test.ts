@@ -41,6 +41,7 @@ import { DIRECT_LINK_SIGNAL, type DirectRuntime, type DirectRuntimeEvents } from
 import { providerShareGuestPeer, providerShareHostPeer } from '../providerSharePeer.js';
 import { createDirectRuntimeBridge, createDirectRuntimeHost } from '../directRuntimeBridge.js';
 import { resolveRemoteInvokeTimeoutMs } from '../invokePolicy.js';
+import { parseRemoteActionInvokeRequest } from '../remoteResources.js';
 import { SESSION_ACTIVITY_CHANNEL } from '../topics.js';
 import { resolveDesktopIceServers, REMOTE_DESKTOP_ICE_CONFIG_TIMEOUT_MS } from '../remoteDesktopIceConfig.js';
 import { REMOTE_DESKTOP_ICE_SERVERS } from '../remoteDesktopIce.js';
@@ -148,6 +149,128 @@ function makeHarness(opts?: {
 const tick = (ms = 0): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 describe('outbound invoke admission', () => {
+  // Unit, PR #9153: resource actions share one channel. Valid parsed actionId
+  // values must survive in actual INFO request evidence, while unknown IDs and
+  // input remain private. Previous diagnostics tests covered channels only.
+  it.each(['management:snapshot', 'management:ui-consent', 'PRIVATE_ACTION'])(
+    'classifies parsed remote resource actionId %s in slow request diagnostics', async actionId => {
+      vi.useFakeTimers();
+      const info = vi.fn();
+      const h = makeHarness({ logger: { info, debug: vi.fn(), warn: vi.fn(), error: vi.fn() },
+        timing: { pingIntervalMs: 60_000, requestTimeoutMs: 10_000 } });
+      try {
+        const input = parseRemoteActionInvokeRequest({
+          client: { protocolVersion: 1, primitives: ['action'] }, collectionId: 'plugins',
+          actionId, input: { value: 'PRIVATE_INPUT' },
+        });
+        expect(input).not.toBeNull();
+        h.client.start(); await vi.advanceTimersByTimeAsync(0); h.current().ack();
+        const request = h.client.invoke('abcdef12', { channel: 'maker:remote-resources:invoke', args: [input] });
+        const sent = h.current().sent.find(frame => frame.kind === 'invoke')!;
+        await vi.advanceTimersByTimeAsync(1000);
+        h.current().push({ v: PROTOCOL_VERSION, kind: 'invoke-result', id: sent.id, src: sent.dst,
+          payload: { ok: true, result: {} } });
+        await expect(request).resolves.toMatchObject({ ok: true });
+        const records = info.mock.calls.filter(([s]) => s.startsWith('device-link diagnostic '))
+          .map(([s]) => JSON.parse(s.slice('device-link diagnostic '.length)));
+        expect(records).toContainEqual(expect.objectContaining({ stage: 'request', channel: 'maker:remote-resources:invoke',
+          operation: actionId === 'PRIVATE_ACTION' ? 'other-resource-action' : actionId }));
+        expect(JSON.stringify(info.mock.calls)).not.toContain('PRIVATE_');
+      } finally { h.client.stop(); vi.useRealTimers(); }
+    },
+  );
+
+  // Unit, PR #9153: three larger direct-only queues must not hide the smaller
+  // queue sharing the relay socket. Exercise production links and timeout logs.
+  it('ranks competing relay backlog ahead of larger direct-only queues in stall evidence', async () => {
+    vi.useFakeTimers();
+    const info = vi.fn();
+    const h = makeHarness({ logger: { info, debug: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      timing: { pingIntervalMs: 60_000, transportRetryIntervalMs: 60_000 } });
+    try {
+      h.client.start(); await vi.advanceTimersByTimeAsync(0); h.current().ack();
+      for (const [index, peer] of ['aaaa0001', 'aaaa0002', 'aaaa0003', 'bbbb0001'].entries()) {
+        const linked = establishInboundReliableLink(h, `stream-${peer}`, 1, peer);
+        await vi.advanceTimersByTimeAsync(0); await linked;
+        if (index < 3) h.client.attachDirectPath(peer, { send() {}, close() {} });
+        h.client.sendInvokeResult(peer, `reply-${index}`, { ok: true, result: 'x'.repeat((4 - index) * 1000) });
+      }
+      const request = h.client.invoke('cccc0001', { channel: 'maker:list-active', args: [] }, 1000);
+      const rejected = expect(request).rejects.toMatchObject({ code: 'INVOKE_TIMEOUT' });
+      await vi.advanceTimersByTimeAsync(1000); await rejected;
+      const record = info.mock.calls.filter(([s]) => s.startsWith('device-link diagnostic '))
+        .map(([s]) => JSON.parse(s.slice('device-link diagnostic '.length)))
+        .find(row => row.stage === 'request' && row.outcome === 'timeout');
+      expect(record.transport.otherPeers).toHaveLength(3);
+      expect(record.transport.otherPeers[0]).toMatchObject({ peer: 'bbbb0001', relayBytes: expect.any(Number) });
+      expect(record.transport.otherPeers[0].relayBytes).toBeGreaterThan(1000);
+      expect(record.transport.otherPeers.slice(1).every((peer: { relayBytes: number }) => peer.relayBytes === 0)).toBe(true);
+      expect(record.transport.omittedPeers).toBe(1);
+      for (const peer of ['aaaa0001', 'aaaa0002', 'aaaa0003', 'bbbb0001']) {
+        expect(h.client.getReliableSendQueueDepth(peer)).toBe(1);
+      }
+    } finally { h.client.stop(); vi.useRealTimers(); }
+  });
+
+  // Unit, PR #9153: timeout cleanup replaced a large unacknowledged invoke with
+  // a small skip before taking its diagnostic snapshot, hiding the original size.
+  it('captures the original reliable timeout head before replacing it with a skip', async () => {
+    vi.useFakeTimers();
+    const info = vi.fn();
+    const h = makeHarness({ logger: { info, debug: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      timing: { pingIntervalMs: 60_000, transportRetryIntervalMs: 60_000 } });
+    try {
+      h.client.start(); await vi.advanceTimersByTimeAsync(0); h.current().ack();
+      const linked = establishInboundReliableLink(h, 'peer-stream');
+      await vi.advanceTimersByTimeAsync(0); await linked;
+      const request = h.client.invoke('dev-b', { channel: 'maker:send', args: ['PRIVATE'.repeat(50_000)] }, 1000);
+      const rejected = expect(request).rejects.toMatchObject({ code: 'INVOKE_TIMEOUT', inFlight: true });
+      const sent = h.current().sent.find(frame => frame.kind === 'invoke')!;
+      await vi.advanceTimersByTimeAsync(1000); await rejected;
+      const record = info.mock.calls.filter(([s]) => s.startsWith('device-link diagnostic '))
+        .map(([s]) => JSON.parse(s.slice('device-link diagnostic '.length)))
+        .find(row => row.stage === 'request' && row.outcome === 'timeout');
+      expect(record.transport.head[0]).toMatchObject({ request: sent.id!.slice(0, 8), attempts: 1,
+        channel: 'invoke:maker:send', sent: true, path: 'relay', ageMs: 1000 });
+      expect(record.transport.head[0].bytes).toBeGreaterThan(350_000);
+      const retired = h.current().sent.filter(frame => frame.kind === 'invoke').at(-1)!;
+      const skip = parseTransportPayload(retired.payload)!;
+      expect(retired.id).toBe(sent.id);
+      expect(skip.meta.seq).toBe(parseTransportPayload(sent.payload)!.meta.seq);
+      expect(isTransportSkipPayload(JSON.parse(skip.data))).toBe(true);
+      expect(JSON.stringify(info.mock.calls)).not.toContain('PRIVATE');
+    } finally { h.client.stop(); vi.useRealTimers(); }
+  });
+
+  // Unit: default-level evidence must distinguish time after write from a large
+  // reply, without logging either request arguments or response text.
+  it('records split request timings and reply bytes at INFO without payloads', async () => {
+    vi.useFakeTimers();
+    const info = vi.fn();
+    const h = makeHarness({ logger: { info, debug: vi.fn(), warn: vi.fn(), error: vi.fn() }, timing: { pingIntervalMs: 60_000, requestTimeoutMs: 10_000 } });
+    try {
+      h.client.start(); await vi.advanceTimersByTimeAsync(0); h.current().ack();
+      const invoke = () => h.client.invoke('abcdef12-0000-0000-0000-000000000000',
+        { channel: 'local-db:sessions:list', args: ['PRIVATE_REQUEST'] }, undefined, { diagnosticSource: 'renderer' });
+      const reply = (result: unknown) => {
+        const sent = h.current().sent.filter(e => e.kind === 'invoke').at(-1)!;
+        h.current().push({ v: 1, kind: 'invoke-result', id: sent.id, src: sent.dst, payload: { ok: true, result } });
+        return sent.id!.slice(0, 8);
+      };
+      const slow = invoke(); await vi.advanceTimersByTimeAsync(1500);
+      const slowId = reply('PRIVATE_RESPONSE'); await slow;
+      const large = invoke(); const largeId = reply('PRIVATE_RESPONSE'.repeat(30_000)); await large;
+      const rows = info.mock.calls.filter(([s]) => s.startsWith('device-link diagnostic '))
+        .map(([s]) => JSON.parse(s.slice('device-link diagnostic '.length)));
+      expect(rows).toContainEqual(expect.objectContaining({ stage: 'request', request: slowId,
+        source: 'renderer', admissionMs: 0, firstWriteWaitMs: 0, afterFirstWriteMs: 1500 }));
+      expect(rows).toContainEqual(expect.objectContaining({ stage: 'request', request: largeId,
+        afterFirstWriteMs: 0, replyBytes: expect.any(Number) }));
+      expect(rows.find(r => r.request === largeId)?.replyBytes).toBeGreaterThan(256 * 1024);
+      expect(JSON.stringify(info.mock.calls)).not.toContain('PRIVATE_');
+    } finally { h.client.stop(); vi.useRealTimers(); }
+  });
+
   it('distinguishes a suspended reliable peer from legacy reads and another healthy controller', async () => {
     const h = makeHarness({ timing: { pingIntervalMs: 60_000 } });
     try {
@@ -1154,7 +1277,7 @@ function makeRelayClient(
   deviceId: string,
   timing?: ConstructorParameters<typeof DeviceLinkClient>[0]['timing'],
   extra?: Pick<ConstructorParameters<typeof DeviceLinkClient>[0], 'transferCodec' | 'invokeMetrics' | 'directRuntime' | 'frameAuth' | 'logger'>
-    & { remoteControlEnabled?: boolean; retainDirectPathsOnRelayLoss?: boolean },
+    & { remoteControlEnabled?: boolean; retainDirectPathsOnRelayLoss?: boolean; isPeerBusy?: (peer: string) => boolean },
 ): DeviceLinkClient {
   return new DeviceLinkClient({
     ...extra,
@@ -11062,10 +11185,15 @@ describe('automatic LAN connection through platform bridges', () => {
   // The old tests cover failed RTC sessions, not a rejected capacity admission.
   it('serves a full peer over relay then upgrades it when a slot is released, with anonymous reasons', async () => {
     vi.useFakeTimers();
-    const relay = new MemoryRelay(true), rtc = new MemoryDirectRuntime(), logs: string[] = [];
+    const relay = new MemoryRelay(true), rtc = new MemoryDirectRuntime();
+    let reportCapacity!: (line: string) => void;
+    const capacityDiagnostic = new Promise<string>(resolve => { reportCapacity = resolve; });
     const sockets = vi.spyOn(relay, 'makeWebSocket');
     const host = makeRelayClient(relay, 'a-host', undefined, { directRuntime: rtc.createRuntime({ maxPeers: 1 }),
-      logger: { debug() {}, info: (...args) => logs.push(args.join(' ')), warn() {}, error() {} } });
+      logger: { debug() {}, info: (...args) => {
+        const line = args.join(' ');
+        if (line.includes('reason=capacity-full')) reportCapacity(line);
+      }, warn() {}, error() {} } });
     const first = makeRelayClient(relay, 'b-first', undefined, { directRuntime: rtc.createRuntime() });
     const second = makeRelayClient(relay, 'c-second', undefined, { directRuntime: rtc.createRuntime() });
     const pump = () => relay.settle(async () => { await vi.advanceTimersByTimeAsync(1); });
@@ -11090,13 +11218,194 @@ describe('automatic LAN connection through platform bridges', () => {
       expect(second.isLinkReady('a-host')).toBe(true);
       expect(sockets).toHaveBeenCalledTimes(socketCount);
       expect(executions).toBe(1);
-      // WebCrypto runs outside fake timers; await this diagnostic's actual hash.
-      for (let i = 0; i < 30 && !logs.some(s => s.includes('reason=capacity-full')); i++) await new Promise(r => setImmediate(r));
-      const diagnostic = logs.find(s => s.includes('reason=capacity-full'));
+      // WebCrypto runs outside fake timers. Await its actual completion rather
+      // than setImmediate, which is frozen here and can strand a slow digest.
+      // CI regression: a timeout's late finally also reset the next test's timers.
+      const diagnostic = await capacityDiagnostic;
       expect(diagnostic).toMatch(/peerHash=[0-9a-f]{16} kind=device active=1 limit=1 queued=1/);
       expect(diagnostic).not.toContain('c-second');
     } finally { host.stop(); first.stop(); second.stop(); vi.useRealTimers(); }
   });
+  const wireDirectHost = (client: ReturnType<typeof makeRelayClient>, result: string) => client.onFrame(env => {
+    if (env.kind === 'link-open') client.sendLinkAccept(env.src!, env.id!, { appVersion: '1', allowlistHash: 'hash' });
+    if (env.kind === 'invoke') client.sendInvokeResult(env.src!, env.id!, { ok: true, result });
+  });
+
+  it('protects an offline-retained direct path from a shared-pool waiter until its original grace expires', async () => {
+    vi.useFakeTimers();
+    const relay = new MemoryRelay(true), rtc = new MemoryDirectRuntime();
+    const shared = rtc.createRuntime({ maxPeers: 1 });
+    const offlineTiming = { reconnectBaseMs: 1_000_000_000, reconnectMaxMs: 1_000_000_000,
+      pingIntervalMs: 1_000_000_000, requestTimeoutMs: 2_000 };
+    const a = makeRelayClient(relay, 'a-main', offlineTiming, { directRuntime: shared, retainDirectPathsOnRelayLoss: true });
+    const b = makeRelayClient(relay, 'b-cross', undefined, { directRuntime: shared, retainDirectPathsOnRelayLoss: true,
+      isPeerBusy: peer => peer === 'host-2' });
+    const h1 = makeRelayClient(relay, 'host-1', undefined, { directRuntime: rtc.createRuntime(), retainDirectPathsOnRelayLoss: true });
+    const h2 = makeRelayClient(relay, 'host-2', undefined, { directRuntime: rtc.createRuntime(), retainDirectPathsOnRelayLoss: true });
+    const pump = () => relay.settle(async () => { await vi.advanceTimersByTimeAsync(1); });
+    const advance = async (ms: number) => {
+      for (let remaining = ms; remaining > 0; remaining -= 30_000) {
+        await vi.advanceTimersByTimeAsync(Math.min(remaining, 30_000)); await pump();
+      }
+    };
+    const pushes: Envelope[] = [];
+    a.onFrame(env => { if (env.kind === 'push') pushes.push(env); });
+    const off1 = wireDirectHost(h1, 'h1-result'), off2 = wireDirectHost(h2, 'h2-result');
+    try {
+      for (const client of [a, b, h1, h2]) client.start(); await pump();
+      const open = (client: ReturnType<typeof makeRelayClient>, peer: string) => client.openLink(peer,
+        { controllerName: 'Controller', protocolVersion: 1, appVersion: '1' });
+      const oa = open(a, 'host-1'); await pump(); await oa;
+      const ob = open(b, 'host-2'); await pump(); await ob;
+      expect(a.getPeerPath('host-1')).toBe('direct');
+      expect(b.getPeerPath('host-2')).toBe('relay');
+      relay.disconnect('a-main'); await pump();
+      expect(a.hasOfflineDirectPath('host-1')).toBe(true);
+      await advance(5 * 60_000);
+      expect(a.getStatus()).not.toBe('online');
+      expect(a.hasOfflineDirectPath('host-1')).toBe(true);
+      expect(a.getPeerPath('host-1')).toBe('direct');
+      expect(b.getPeerPath('host-2')).toBe('relay');
+      const result = a.invoke('host-1', { channel: 'maker:remote-agent:v1', args: [{ op: 'caps' }] });
+      await pump(); await expect(result).resolves.toEqual({ ok: true, result: 'h1-result' });
+      h1.sendPush('a-main', 'maker:event', { retained: true }); await pump();
+      expect(pushes).toHaveLength(1);
+      await advance(25 * 60_000);
+      expect(a.hasOfflineDirectPath('host-1')).toBe(false);
+      expect(a.getPeerPath('host-1')).toBe('relay');
+      expect(b.getPeerPath('host-2')).toBe('direct');
+      await advance(5 * 60_000);
+      expect(a.hasOfflineDirectPath('host-1')).toBe(false);
+    } finally {
+      off1(); off2(); for (const client of [a, b, h1, h2]) client.stop(); vi.useRealTimers();
+    }
+  });
+
+  it('releases the offline-retained protection once relay signaling recovers', async () => {
+    vi.useFakeTimers();
+    const relay = new MemoryRelay(true), rtc = new MemoryDirectRuntime();
+    const shared = rtc.createRuntime({ maxPeers: 1 });
+    const offlineTiming = { reconnectBaseMs: 1_000_000_000, reconnectMaxMs: 1_000_000_000,
+      pingIntervalMs: 1_000_000_000, requestTimeoutMs: 2_000 };
+    const a = makeRelayClient(relay, 'a-main', offlineTiming, { directRuntime: shared, retainDirectPathsOnRelayLoss: true });
+    const b = makeRelayClient(relay, 'b-cross', undefined, { directRuntime: shared, retainDirectPathsOnRelayLoss: true,
+      isPeerBusy: peer => peer === 'host-2' });
+    const h1 = makeRelayClient(relay, 'host-1', undefined, { directRuntime: rtc.createRuntime(), retainDirectPathsOnRelayLoss: true });
+    const h2 = makeRelayClient(relay, 'host-2', undefined, { directRuntime: rtc.createRuntime(), retainDirectPathsOnRelayLoss: true });
+    const pump = () => relay.settle(async () => { await vi.advanceTimersByTimeAsync(1); });
+    const off1 = wireDirectHost(h1, 'h1-result'), off2 = wireDirectHost(h2, 'h2-result');
+    try {
+      for (const client of [a, b, h1, h2]) client.start(); await pump();
+      const open = (client: ReturnType<typeof makeRelayClient>, peer: string) => client.openLink(peer,
+        { controllerName: 'Controller', protocolVersion: 1, appVersion: '1' });
+      const oa = open(a, 'host-1'); await pump(); await oa;
+      const ob = open(b, 'host-2'); await pump(); await ob;
+      relay.disconnect('a-main'); await pump();
+      await vi.advanceTimersByTimeAsync(5 * 60_000); await pump();
+      expect(a.getPeerPath('host-1')).toBe('direct');
+      a.connectNow('test-relay-recovery'); await pump();
+      expect(a.getStatus()).toBe('online');
+      await vi.advanceTimersByTimeAsync(60_000); await pump();
+      expect(b.getPeerPath('host-2')).toBe('direct');
+      expect(a.getPeerPath('host-1')).toBe('relay');
+    } finally {
+      off1(); off2(); for (const client of [a, b, h1, h2]) client.stop(); vi.useRealTimers();
+    }
+  });
+
+  it('still yields an online idle path to a shared-pool waiter', async () => {
+    vi.useFakeTimers();
+    const relay = new MemoryRelay(true), rtc = new MemoryDirectRuntime();
+    const shared = rtc.createRuntime({ maxPeers: 1 });
+    const offlineTiming = { reconnectBaseMs: 1_000_000_000, reconnectMaxMs: 1_000_000_000,
+      pingIntervalMs: 1_000_000_000, requestTimeoutMs: 2_000 };
+    const a = makeRelayClient(relay, 'a-main', offlineTiming, { directRuntime: shared, retainDirectPathsOnRelayLoss: true });
+    const b = makeRelayClient(relay, 'b-cross', undefined, { directRuntime: shared, retainDirectPathsOnRelayLoss: true,
+      isPeerBusy: peer => peer === 'host-2' });
+    const h1 = makeRelayClient(relay, 'host-1', undefined, { directRuntime: rtc.createRuntime(), retainDirectPathsOnRelayLoss: true });
+    const h2 = makeRelayClient(relay, 'host-2', undefined, { directRuntime: rtc.createRuntime(), retainDirectPathsOnRelayLoss: true });
+    const pump = () => relay.settle(async () => { await vi.advanceTimersByTimeAsync(1); });
+    const off1 = wireDirectHost(h1, 'h1-result'), off2 = wireDirectHost(h2, 'h2-result');
+    try {
+      for (const client of [a, b, h1, h2]) client.start(); await pump();
+      const open = (client: ReturnType<typeof makeRelayClient>, peer: string) => client.openLink(peer,
+        { controllerName: 'Controller', protocolVersion: 1, appVersion: '1' });
+      const oa = open(a, 'host-1'); await pump(); await oa;
+      const ob = open(b, 'host-2'); await pump(); await ob;
+      await vi.advanceTimersByTimeAsync(5 * 60_000); await pump();
+      expect(b.getPeerPath('host-2')).toBe('direct');
+     expect(a.getPeerPath('host-1')).toBe('relay');
+   } finally {
+     off1(); off2(); for (const client of [a, b, h1, h2]) client.stop(); vi.useRealTimers();
+   }
+ });
+
+  it('protects a locally offline provider-share lease from a shared-pool waiter', async () => {
+    vi.useFakeTimers();
+    const relay = new MemoryRelay(true), rtc = new MemoryDirectRuntime();
+    const shared = rtc.createRuntime({ maxPeers: 1 });
+    const offlineTiming = { reconnectBaseMs: 1_000_000_000, reconnectMaxMs: 1_000_000_000,
+      pingIntervalMs: 1_000_000_000, requestTimeoutMs: 2_000 };
+    const a = makeRelayClient(relay, 'a-share', offlineTiming, { directRuntime: shared, retainDirectPathsOnRelayLoss: true });
+    const b = makeRelayClient(relay, 'b-cross', undefined, { directRuntime: shared, isPeerBusy: peer => peer === 'host-2' });
+    const h1 = makeRelayClient(relay, 'host-1', undefined, { directRuntime: rtc.createRuntime(), retainDirectPathsOnRelayLoss: true });
+    const h2 = makeRelayClient(relay, 'host-2', undefined, { directRuntime: rtc.createRuntime() });
+    const hostPeer = providerShareHostPeer('share-lease', 'host-1');
+    const pump = () => relay.settle(async () => { await vi.advanceTimersByTimeAsync(1); });
+    const advance = async (ms: number) => {
+      for (let remaining = ms; remaining > 0; remaining -= 30_000) {
+        await vi.advanceTimersByTimeAsync(Math.min(remaining, 30_000)); await pump();
+      }
+    };
+    const off1 = wireDirectHost(h1, 'h1-result'), off2 = wireDirectHost(h2, 'h2-result');
+    try {
+      for (const client of [a, b, h1, h2]) client.start(); await pump();
+      const oa = a.openLink(hostPeer, { controllerName: 'Guest', protocolVersion: 1, appVersion: '1' });
+      await pump(); await oa;
+      const ob = b.openLink('host-2', { controllerName: 'Controller', protocolVersion: 1, appVersion: '1' });
+      await pump(); await ob;
+      expect(a.getPeerPath(hostPeer)).toBe('direct');
+      expect(b.getPeerPath('host-2')).toBe('relay');
+      relay.disconnect('a-share'); await pump();
+      expect(a.hasOfflineDirectPath(hostPeer)).toBe(true);
+      await advance(5 * 60_000);
+      expect(a.hasOfflineDirectPath(hostPeer)).toBe(true);
+      expect(b.getPeerPath('host-2')).toBe('relay');
+      const result = a.invoke(hostPeer, { channel: 'maker:remote-agent:v1', args: [{ op: 'caps' }] });
+      await pump(); await expect(result).resolves.toEqual({ ok: true, result: 'h1-result' });
+      await advance(25 * 60_000);
+      expect(a.hasOfflineDirectPath(hostPeer)).toBe(false);
+      expect(b.getPeerPath('host-2')).toBe('direct');
+    } finally {
+      off1(); off2(); for (const client of [a, b, h1, h2]) client.stop(); vi.useRealTimers();
+    }
+  });
+
+  it('does not pin an online provider-share lease against a shared-pool waiter', async () => {
+    vi.useFakeTimers();
+    const relay = new MemoryRelay(true), rtc = new MemoryDirectRuntime();
+    const shared = rtc.createRuntime({ maxPeers: 1 });
+    const a = makeRelayClient(relay, 'a-share', undefined, { directRuntime: shared, retainDirectPathsOnRelayLoss: true });
+    const b = makeRelayClient(relay, 'b-cross', undefined, { directRuntime: shared, isPeerBusy: peer => peer === 'host-2' });
+    const h1 = makeRelayClient(relay, 'host-1', undefined, { directRuntime: rtc.createRuntime() });
+    const h2 = makeRelayClient(relay, 'host-2', undefined, { directRuntime: rtc.createRuntime() });
+    const hostPeer = providerShareHostPeer('share-lease', 'host-1');
+    const pump = () => relay.settle(async () => { await vi.advanceTimersByTimeAsync(1); });
+    const off1 = wireDirectHost(h1, 'h1-result'), off2 = wireDirectHost(h2, 'h2-result');
+    try {
+      for (const client of [a, b, h1, h2]) client.start(); await pump();
+      const oa = a.openLink(hostPeer, { controllerName: 'Guest', protocolVersion: 1, appVersion: '1' });
+      await pump(); await oa;
+      const ob = b.openLink('host-2', { controllerName: 'Controller', protocolVersion: 1, appVersion: '1' });
+      await pump(); await ob;
+      await vi.advanceTimersByTimeAsync(5 * 60_000); await pump();
+      expect(b.getPeerPath('host-2')).toBe('direct');
+      expect(a.getPeerPath(hostPeer)).toBe('relay');
+    } finally {
+      off1(); off2(); for (const client of [a, b, h1, h2]) client.stop(); vi.useRealTimers();
+    }
+  });
+
   // Unit, provider-sharing-direct-execution.md authorization contract: a renewed
   // scoped link must survive the former deadline on the same RTC session. The
   // relay-restart cases below do not advance through a successful lease renewal.
@@ -11364,7 +11673,8 @@ describe('automatic LAN connection through platform bridges', () => {
 describe('直连优先、中继兜底(Device Link direct path)', () => {
   it('replays a partially written large head while an older relay tail is still in flight', async () => {
     vi.useFakeTimers();
-    const h = makeHarness({ timing: { pingIntervalMs: 1_000_000, transportRetryIntervalMs: 1_000 } });
+    const info = vi.fn();
+    const h = makeHarness({ logger: { info, debug: vi.fn(), warn: vi.fn(), error: vi.fn() }, timing: { pingIntervalMs: 1_000_000, transportRetryIntervalMs: 1_000 } });
     try {
       h.client.start(); await vi.advanceTimersByTimeAsync(0); h.current().ack();
       const opening = establishInboundReliableLink(h, 'peer-stream');
@@ -11382,9 +11692,29 @@ describe('直连优先、中继兜底(Device Link direct path)', () => {
         send() { if (++writes > TRANSPORT_RETRY_PASS_BUDGET) throw new Error('direct write interrupted'); },
         close() {},
       });
-      await vi.advanceTimersByTimeAsync(61_000);
+      // Attaching moves both relay messages onto the direct path at once; stay before their
+      // next size-paced relay retry so only the fallback replay is counted.
+      await vi.advanceTimersByTimeAsync(1_000);
       expect(writes).toBe(TRANSPORT_RETRY_PASS_BUDGET + 1);
       expect(h.client.getPeerPath('dev-b')).toBe('relay');
+      const rows = info.mock.calls.filter(([s]) => s.startsWith('device-link diagnostic '))
+        .map(([s]) => JSON.parse(s.slice('device-link diagnostic '.length)));
+      // A row may be split into `transport.head` when it is too large for one upload line.
+      const headOf = (row: Record<string, any>): any[] => row.transport?.head ?? row['transport.head'] ?? [];
+      // Attaching moves the unacknowledged relay head onto the direct path, so the attach row
+      // is the only place that still shows which relay prefix had held the cumulative ACK.
+      const movedRow = rows.find(row => row.stage === 'send' && row.outcome === 'moved-to-direct');
+      expect(movedRow).toMatchObject({ moved: 2 });
+      expect(headOf(movedRow!)).toEqual([
+        expect.objectContaining({ seq: 1, bytes: expect.any(Number), path: 'relay', sent: true }),
+        expect.objectContaining({ seq: 2, bytes: expect.any(Number), path: 'relay', sent: true }),
+      ]);
+      // The detach row is recorded before the direct frames are reset, so it reports the
+      // interrupted direct write instead.
+      const pathRows = rows.filter(row => row.stage === 'path');
+      expect(pathRows[0]).toMatchObject({ reason: 'send-failed' });
+      expect(headOf(pathRows[0])).toEqual(expect.arrayContaining([expect.objectContaining({
+        path: 'direct', sent: true, attempts: expect.any(Number) })]));
       const fallbackHead = h.current().sent.slice(initial.length).filter(env => env.id === 'head');
       expect(fallbackHead).toHaveLength(initialHead.length);
       // Reuse the original sequence and every fragment; the receiver can assemble and deduplicate it.
@@ -11583,6 +11913,61 @@ describe('直连优先、中继兜底(Device Link direct path)', () => {
     }
   });
 
+  // 2026-11-04: under steady remote-agent traffic a healthy LAN path was dropped for
+  // ack-timeout 8–10s after every attach (34 times an hour). An older frame was still
+  // waiting on the slow relay, so the cumulative ACK could not reach the direct frames.
+  // More lost requests than one retry pass may send: the moved frames go out in batches.
+  it.each([1, TRANSPORT_RETRY_PASS_BUDGET + 2])('keeps a new direct path when older relay frames hold back the ACK (lost=%i)', async (lost) => {
+    vi.useFakeTimers();
+    const relay = new MemoryRelay();
+    const timing = { transportRetryIntervalMs: 1_000, requestTimeoutMs: 30_000 };
+    const host = makeRelayClient(relay, 'desktop', timing);
+    const a = makeRelayClient(relay, 'viewer-a', timing);
+    const pump = () => relay.settle(async () => { await vi.advanceTimersByTimeAsync(1); });
+    const executed: string[] = [];
+    host.onFrame((env) => {
+      if (env.kind === 'link-open') host.sendLinkAccept(env.src!, env.id!, { appVersion: '1', allowlistHash: 'hash' });
+      if (env.kind !== 'invoke') return;
+      executed.push(env.id!);
+      host.sendInvokeResult(env.src!, env.id!, { ok: true, result: `done-${executed.length}` });
+    });
+    const pathChanges: DeviceLinkPeerPathChanged[] = [];
+    a.onPeerPathChanged(change => pathChanges.push(change));
+    try {
+      host.start(); a.start();
+      await pump();
+      const opening = a.openLink('desktop', { controllerName: 'Viewer', protocolVersion: 1, appVersion: '1' });
+      await pump(); await opening;
+      // The relay loses these requests; their size-paced relay retry is due long after the direct deadline.
+      const results: unknown[] = [];
+      for (let index = 0; index < lost; index++) {
+        relay.dropNext((sender, env) => sender === 'viewer-a' && env.kind === 'invoke');
+        void a.invoke('desktop', { channel: 'local-db:sessions:get', args: ['x'.repeat(64 * 1024)] })
+          .then(value => { results[index] = value; });
+      }
+      await pump();
+      expect(executed).toHaveLength(0);
+
+      const direct = connectDirect({ id: 'viewer-a', client: a }, { id: 'desktop', client: host });
+      void a.invoke('desktop', { channel: 'local-db:sessions:get', args: ['after-attach'] })
+        .then(value => { results[lost] = value; });
+      await pump();
+      // Past the direct ACK deadline and the retry pass that would judge it.
+      await vi.advanceTimersByTimeAsync(2_500);
+      await pump();
+
+      expect(results).toEqual(Array.from({ length: lost + 1 }, (_, index) => ({ ok: true, result: `done-${index + 1}` })));
+      expect(executed).toHaveLength(lost + 1);
+      expect(pathChanges.filter(change => change.path === 'relay')).toEqual([]);
+      expect(a.getPeerPath('desktop')).toBe('direct');
+      expect(direct.isOpen()).toBe(true);
+      expect(reliableKinds(direct.frames.toRight, 'invoke')).toBe(lost + 1);
+    } finally {
+      host.stop(); a.stop();
+      vi.useRealTimers();
+    }
+  });
+
   it('keeps link control, scopes and peer identity under relay authority', async () => {
     vi.useFakeTimers();
     const relay = new MemoryRelay();
@@ -11678,7 +12063,39 @@ describe('explicit provider-share relay rejection', () => {
       await pump();
       expect(guest.getPeerPath(hostPeer)).toBe('relay');
       expect(guest.hasOfflineDirectPath(hostPeer)).toBe(false);
+
+
       expect(host.getPeerPath(guestPeer)).toBe('relay');
+    } finally { host.stop(); guest.stop(); vi.useRealTimers(); }
+  });
+
+  // Unit: a scoped provider-share lease must have a pure readiness query too;
+  // asking it cannot detach the RTC path, and actual I/O still owns cleanup.
+  it('peeks an expired provider-share lease without detaching and lets actual I/O clean it', async () => {
+    vi.useFakeTimers();
+    const relay = new MemoryRelay(true), rtc = new MemoryDirectRuntime();
+    const host = makeRelayClient(relay, 'desktop', undefined, { directRuntime: rtc.createRuntime(), retainDirectPathsOnRelayLoss: true });
+    const guest = makeRelayClient(relay, 'viewer', undefined, { directRuntime: rtc.createRuntime(), retainDirectPathsOnRelayLoss: true });
+    const hostPeer = providerShareHostPeer('share', 'desktop');
+    const pump = () => relay.settle(async () => { await vi.advanceTimersByTimeAsync(1); });
+    const pathChanges: unknown[] = [];
+    guest.onPeerPathChanged(change => pathChanges.push(change));
+    host.onFrame(env => { if (env.kind === 'link-open') host.sendLinkAccept(env.src!, env.id!, { appVersion: '1', allowlistHash: 'hash' }); });
+    try {
+      host.start(); guest.start(); await pump();
+      const opening = guest.openLink(hostPeer, { controllerName: 'Guest', protocolVersion: 1, appVersion: '1' });
+      await pump(); await opening;
+      expect(guest.peekOfflineDirectPath(hostPeer)).toBe(true);
+      expect(guest.hasOfflineDirectPath(hostPeer)).toBe(true);
+      relay.disconnect('viewer');
+      expect(guest.peekOfflineDirectPath(hostPeer)).toBe(true);
+      const eventsBefore = pathChanges.length;
+      vi.setSystemTime(Date.now() + 30 * 60_000 + 1);
+      expect(guest.peekOfflineDirectPath(hostPeer)).toBe(false);
+      expect(pathChanges).toHaveLength(eventsBefore);
+      await expect(guest.invoke(hostPeer, { channel: 'maker:remote-agent:v1', args: [{ op: 'poll' }] }))
+        .rejects.toMatchObject({ code: 'NOT_CONNECTED' });
+      expect(pathChanges.length).toBeGreaterThan(eventsBefore);
     } finally { host.stop(); guest.stop(); vi.useRealTimers(); }
   });
 });
@@ -11688,8 +12105,8 @@ describe('bounded ordinary direct continuity', () => {
   const timing = { reconnectBaseMs: 1_000_000_000, reconnectMaxMs: 1_000_000_000,
     pingIntervalMs: 1_000_000_000, requestTimeoutMs: 2_000 };
   const continuity = { retainDirectPathsOnRelayLoss: true };
-  const presence = (deviceId: string, online: boolean) => ({ v: PROTOCOL_VERSION,
-    kind: 'presence-changed', payload: { deviceId, online, remoteControlEnabled: true,
+  const presence = (deviceId: string, online: boolean, remoteControlEnabled = true) => ({ v: PROTOCOL_VERSION,
+    kind: 'presence-changed', payload: { deviceId, online, remoteControlEnabled,
       deviceName: deviceId, platform: 'darwin', appVersion: '1', lastSeenAt: 0, busy: false } });
 
   it('keeps group RPCs and the second controller alive through local relay loss and peer offline presence', async () => {
@@ -11734,6 +12151,117 @@ describe('bounded ordinary direct continuity', () => {
       expect(owner.getReliableSendQueueDepth('executor')).toBe(0);
       expect(executor.getReliableSendQueueDepth('group-owner')).toBe(0);
     } finally { owner.stop(); executor.stop(); other.stop(); vi.useRealTimers(); }
+  });
+
+  it('blocks new outbound control after an explicit control-off but keeps the retained path for reverse traffic', async () => {
+    vi.useFakeTimers();
+    const relay = new MemoryRelay(), owner = makeRelayClient(relay, 'group-owner', timing, continuity),
+      executor = makeRelayClient(relay, 'executor', timing, continuity);
+    const sockets = vi.spyOn(relay, 'makeWebSocket');
+    const pump = () => relay.settle(async () => { await vi.advanceTimersByTimeAsync(1); });
+    const executions: string[] = [];
+    const inverse: Envelope[] = [];
+    owner.onFrame(env => { if (env.kind === 'push') inverse.push(env); });
+    executor.onFrame(env => {
+      if (env.kind === 'link-open') executor.sendLinkAccept(env.src!, env.id!, { appVersion: '1', allowlistHash: 'hash' });
+      if (env.kind === 'invoke') { executions.push(env.id!); executor.sendInvokeResult(env.src!, env.id!, { ok: true, result: 'ok' }); }
+    });
+    try {
+      owner.start(); executor.start(); await pump();
+      const opening = owner.openLink('executor', { controllerName: 'Group owner', protocolVersion: 1, appVersion: '1' }); await pump(); await opening;
+      const direct = connectDirect({ id: 'group-owner', client: owner }, { id: 'executor', client: executor });
+      const socket = sockets.mock.results.find(r => r.value.ownerId === 'group-owner')!.value;
+      socket.push(presence('executor', true, false));
+      await pump();
+      expect(owner.getPeerPath('executor')).toBe('direct');
+      // The relay masks an offline peer to false; that must not clear the
+      // explicit online refusal above, nor make the retained path disappear.
+      socket.push(presence('executor', false, false));
+      await pump();
+      expect(owner.hasOfflineDirectPath('executor')).toBe(true);
+      const rejected = owner.invoke('executor', { channel: 'maker:remote-agent:v1', args: [{ op: 'send' }] })
+        .then(result => ({ result }), error => ({ error }));
+      await pump();
+      expect(await rejected).toMatchObject({ error: { code: 'REMOTE_DISABLED' } });
+      expect(executions).toEqual([]);
+      executor.sendPush('group-owner', 'maker:event', { sessionId: 'reverse' });
+      await pump();
+      expect(inverse).toHaveLength(1);
+      owner.restartConnection('test-relay-reconnect');
+      await pump();
+      expect(owner.getStatus()).toBe('online');
+      expect(owner.getPeerPath('executor')).toBe('direct');
+      const stillRejected = owner.invoke('executor', { channel: 'maker:remote-agent:v1', args: [{ op: 'send' }] })
+        .then(result => ({ result }), error => ({ error }));
+      await pump();
+      expect(await stillRejected).toMatchObject({ error: { code: 'REMOTE_DISABLED' } });
+      expect(executions).toEqual([]);
+      owner.noteRemoteControlEnabled('executor');
+      const allowed = owner.invoke('executor', { channel: 'maker:remote-agent:v1', args: [{ op: 'poll' }] });
+      await pump();
+      await expect(allowed).resolves.toMatchObject({ ok: true });
+      expect(executions).toHaveLength(1);
+      expect(direct.isOpen()).toBe(true);
+    } finally { owner.stop(); executor.stop(); vi.useRealTimers(); }
+  });
+
+  it('keeps a fresh directory control-off gate until positive authority arrives', async () => {
+    vi.useFakeTimers();
+    const relay = new MemoryRelay(), owner = makeRelayClient(relay, 'group-owner', timing, continuity),
+      executor = makeRelayClient(relay, 'executor', timing, continuity);
+    const pump = () => relay.settle(async () => { await vi.advanceTimersByTimeAsync(1); });
+    const executions: string[] = [];
+    executor.onFrame(env => {
+      if (env.kind === 'link-open') executor.sendLinkAccept(env.src!, env.id!, { appVersion: '1', allowlistHash: 'hash' });
+      if (env.kind === 'invoke') { executions.push(env.id!); executor.sendInvokeResult(env.src!, env.id!, { ok: true, result: 'ok' }); }
+    });
+    try {
+      owner.start(); executor.start(); await pump();
+      const opening = owner.openLink('executor', { controllerName: 'Group owner', protocolVersion: 1, appVersion: '1' });
+      await pump(); await opening;
+      owner.noteRemoteControlDisabled('executor');
+      const rejected = owner.invoke('executor', { channel: 'maker:remote-agent:v1', args: [{ op: 'send' }] })
+        .then(result => ({ result }), error => ({ error }));
+      await pump();
+      expect(await rejected).toMatchObject({ error: { code: 'REMOTE_DISABLED' } });
+      expect(executions).toEqual([]);
+      owner.noteRemoteControlEnabled('executor');
+      const allowed = owner.invoke('executor', { channel: 'maker:remote-agent:v1', args: [{ op: 'poll' }] });
+      await pump();
+      await expect(allowed).resolves.toMatchObject({ ok: true });
+      expect(executions).toHaveLength(1);
+    } finally { owner.stop(); executor.stop(); vi.useRealTimers(); }
+  });
+
+  // Unit: the relay always masks an offline peer's control bit to false. That
+  // signaling loss must not arm the explicit refusal gate on a healthy direct path.
+  it('keeps new outbound control available through an offline presence mask on a retained path', async () => {
+    vi.useFakeTimers();
+    const relay = new MemoryRelay(), owner = makeRelayClient(relay, 'group-owner', timing, continuity),
+      executor = makeRelayClient(relay, 'executor', timing, continuity);
+    const sockets = vi.spyOn(relay, 'makeWebSocket');
+    const pump = () => relay.settle(async () => { await vi.advanceTimersByTimeAsync(1); });
+    const executions: string[] = [];
+    executor.onFrame(env => {
+      if (env.kind === 'link-open') executor.sendLinkAccept(env.src!, env.id!, { appVersion: '1', allowlistHash: 'hash' });
+      if (env.kind === 'invoke') { executions.push(env.id!); executor.sendInvokeResult(env.src!, env.id!, { ok: true, result: 'ok' }); }
+    });
+    try {
+      owner.start(); executor.start(); await pump();
+      const opening = owner.openLink('executor', { controllerName: 'Group owner', protocolVersion: 1, appVersion: '1' });
+      await pump(); await opening;
+      const direct = connectDirect({ id: 'group-owner', client: owner }, { id: 'executor', client: executor });
+      const socket = sockets.mock.results.find(r => r.value.ownerId === 'group-owner')!.value;
+      socket.push(presence('executor', false, false));
+      await pump();
+      expect(owner.hasOfflineDirectPath('executor')).toBe(true);
+      expect(owner.getPeerPath('executor')).toBe('direct');
+      const result = owner.invoke('executor', { channel: 'maker:remote-agent:v1', args: [{ op: 'send' }] });
+      await pump();
+      await expect(result).resolves.toMatchObject({ ok: true });
+      expect(executions).toHaveLength(1);
+      expect(direct.isOpen()).toBe(true);
+    } finally { owner.stop(); executor.stop(); vi.useRealTimers(); }
   });
 
   it.each(['DEVICE_OFFLINE', 'REMOTE_DISABLED'] as const)('handles a delayed %s without replaying a rejected write', async code => {
@@ -11821,6 +12349,107 @@ describe('bounded ordinary direct continuity', () => {
         expect(reliableKinds(relay.deliveredTo.get('executor'), 'invoke')).toBe(1);
       }
     } finally { owner.stop(); executor.stop(); vi.useRealTimers(); }
+  });
+
+  // Unit: relay recovery must not leave a retained data path armed to tear down
+  // its now-healthy peer link at the original 30-minute deadline.
+  it('releases a retained path at its deadline without reporting peer loss after relay recovery', async () => {
+    vi.useFakeTimers();
+    const relay = new MemoryRelay(), owner = makeRelayClient(relay, 'group-owner', timing, continuity),
+      executor = makeRelayClient(relay, 'executor', timing, continuity);
+    const pump = () => relay.settle(async () => { await vi.advanceTimersByTimeAsync(1); });
+    const executions: string[] = [];
+    executor.onFrame(env => {
+      if (env.kind === 'link-open') executor.sendLinkAccept(env.src!, env.id!, { appVersion: '1', allowlistHash: 'hash' });
+      if (env.kind === 'invoke') {
+        executions.push(env.id!);
+        executor.sendInvokeResult(env.src!, env.id!, { ok: true, result: 'via relay' });
+      }
+    });
+    try {
+      owner.start(); executor.start(); await pump();
+      const opening = owner.openLink('executor', { controllerName: 'Group owner', protocolVersion: 1, appVersion: '1' });
+      await pump(); await opening;
+      const direct = connectDirect({ id: 'group-owner', client: owner }, { id: 'executor', client: executor });
+      relay.disconnect('group-owner');
+      owner.connectNow('test-relay-recovery'); await pump();
+      expect(owner.getStatus()).toBe('online');
+      expect(direct.isOpen()).toBe(true);
+      await vi.advanceTimersByTimeAsync(30 * 60_000);
+      expect(direct.isOpen()).toBe(false);
+      expect(owner.hasOfflineDirectPath('executor')).toBe(false);
+      expect(owner.isLinkReady('executor')).toBe(true);
+      const request = owner.invoke('executor', { channel: 'maker:remote-agent:v1', args: [{ op: 'poll' }] });
+      await pump();
+      await expect(request).resolves.toEqual({ ok: true, result: 'via relay' });
+      expect(executions).toHaveLength(1);
+    } finally { owner.stop(); executor.stop(); vi.useRealTimers(); }
+  });
+
+  // Unit: render-time readiness must be able to ask for a retained path without
+  // expiring/detaching/emitting. The real invoke path still owns cleanup.
+  it('peeks an expired retained path without side effects and cleans only that target', async () => {
+    vi.useFakeTimers();
+    const relay = new MemoryRelay();
+    const owner = makeRelayClient(relay, 'group-owner', timing, continuity);
+    const other = makeRelayClient(relay, 'other-owner', timing, continuity);
+    const executor = makeRelayClient(relay, 'executor', timing, continuity);
+    const pump = () => relay.settle(async () => { await vi.advanceTimersByTimeAsync(1); });
+    const executions: string[] = [];
+    let ownerMono = 0, otherMono = 0;
+    const ownerClock = vi.spyOn(owner as unknown as { monotonicNow(): number }, 'monotonicNow').mockImplementation(() => ownerMono);
+    const otherClock = vi.spyOn(other as unknown as { monotonicNow(): number }, 'monotonicNow').mockImplementation(() => otherMono);
+    const pathChanges: unknown[] = [];
+    owner.onPeerPathChanged(change => pathChanges.push(change));
+    executor.onFrame(env => {
+      if (env.kind === 'link-open') executor.sendLinkAccept(env.src!, env.id!, { appVersion: '1', allowlistHash: 'hash' });
+      if (env.kind === 'invoke') {
+        executions.push(env.src!);
+        executor.sendInvokeResult(env.src!, env.id!, { ok: true, result: 'ok' });
+      }
+    });
+    try {
+      owner.start(); other.start(); executor.start(); await pump();
+      const ownerOpening = owner.openLink('executor', { controllerName: 'Owner', protocolVersion: 1, appVersion: '1' });
+      const otherOpening = other.openLink('executor', { controllerName: 'Other', protocolVersion: 1, appVersion: '1' });
+      await pump(); await Promise.all([ownerOpening, otherOpening]);
+      const ownerDirect = connectDirect({ id: 'group-owner', client: owner }, { id: 'executor', client: executor });
+      const otherDirect = connectDirect({ id: 'other-owner', client: other }, { id: 'executor', client: executor });
+      relay.disconnect('group-owner');
+      relay.disconnect('other-owner');
+      expect(owner.peekOfflineDirectPath('executor')).toBe(true);
+      expect(other.peekOfflineDirectPath('executor')).toBe(true);
+      const eventsBefore = pathChanges.length;
+      ownerMono = 30 * 60_000;
+      expect(owner.peekOfflineDirectPath('executor')).toBe(false);
+      expect(ownerDirect.isOpen()).toBe(true);
+      expect(pathChanges).toHaveLength(eventsBefore);
+      expect(other.peekOfflineDirectPath('executor')).toBe(true);
+      await expect(owner.invoke('executor', { channel: 'maker:remote-agent:v1', args: [{ op: 'poll' }] }))
+        .rejects.toMatchObject({ code: 'NOT_CONNECTED' });
+      expect(ownerDirect.isOpen()).toBe(false);
+      expect(pathChanges.length).toBeGreaterThan(eventsBefore);
+      const neighbour = other.invoke('executor', { channel: 'maker:remote-agent:v1', args: [{ op: 'poll' }] });
+      await pump();
+      await expect(neighbour).resolves.toMatchObject({ ok: true });
+      expect(executions).toContain('other-owner');
+      expect(otherDirect.isOpen()).toBe(true);
+      other.noteRemoteControlDisabled('executor');
+      expect(other.peekOfflineDirectPath('executor')).toBe(true);
+      await expect(other.invoke('executor', { channel: 'maker:remote-agent:v1', args: [{ op: 'poll' }] }))
+        .rejects.toMatchObject({ code: 'REMOTE_DISABLED' });
+      other.noteRemoteControlEnabled('executor');
+      vi.setSystemTime(Date.now() + 30 * 60_000 + 1);
+      expect(other.peekOfflineDirectPath('executor')).toBe(false);
+      expect(otherDirect.isOpen()).toBe(true);
+      await expect(other.invoke('executor', { channel: 'maker:remote-agent:v1', args: [{ op: 'poll' }] }))
+        .rejects.toMatchObject({ code: 'NOT_CONNECTED' });
+      other.stop();
+      expect(other.peekOfflineDirectPath('executor')).toBe(false);
+    } finally {
+      ownerClock.mockRestore(); otherClock.mockRestore();
+      owner.stop(); other.stop(); executor.stop(); vi.useRealTimers();
+    }
   });
 
   it('bounds signaling loss to thirty minutes without renewal by traffic or repeated offline reports', async () => {

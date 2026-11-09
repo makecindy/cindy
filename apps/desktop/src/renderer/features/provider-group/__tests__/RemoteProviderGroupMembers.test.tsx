@@ -28,6 +28,24 @@ vi.mock('../GroupMemberQuota', () => ({
   groupMemberQuotaTarget: () => null,
 }));
 
+vi.mock('@/components/ui/tooltip', () => ({
+  Tip: ({ children }: { children?: unknown }) => children,
+}));
+
+vi.mock('lucide-react', () => ({
+  ChevronRight: () => null,
+  Monitor: () => null,
+}));
+
+
+vi.mock('@/components/status/usageCardModel', () => ({
+  formatQuotaResetAt: () => 'reset',
+}));
+
+vi.mock('@cindy/device-link', () => ({
+  readProviderMetadataContinuity: () => undefined,
+}));
+
 const VM = {
   key: 'device:vm:anthropic',
   kind: 'device' as const,
@@ -69,6 +87,31 @@ function mountWith(
   Object.assign(window, { electronAPI: { providerGroup: { command }, deviceLink: { listDevices } } });
   const mounted = render(<RemoteProviderGroupMembers deviceId="mini" providerId="anthropic" config={config} />);
   return { command, listDevices, ...mounted };
+}
+
+function configWithMember(key: string, label: string): ProviderGroupConfig {
+  return { ...CONFIG, members: [{ ...VM, key, agentDeviceId: key, label }] };
+}
+
+function viewWithBudget(config: ProviderGroupConfig, remainingMs?: number): ProviderGroupView {
+  return {
+    providerId: 'anthropic',
+    config,
+    members: config.members.map((member) => ({
+      ...member, label: member.label ?? member.key, state: 'available', running: 2,
+    })),
+    ...(remainingMs === undefined ? {} : {
+      providerContinuity: { stale: false, remainingMs },
+    }),
+  };
+}
+
+async function flushAsync(): Promise<void> {
+  await act(async () => {
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+  });
 }
 
 beforeEach(() => setDataOwnerGeneration('owner-a', 1));
@@ -224,6 +267,46 @@ describe('RemoteProviderGroupMembers', () => {
     expect(host.textContent).toContain('Group host');
   });
 
+  it('does not present a stale group snapshot as live status', async () => {
+    const view: ProviderGroupView = {
+      providerId: 'anthropic', config: CONFIG,
+      members: [{ ...VM, label: 'grok-bot-vm', state: 'available', running: 2 }],
+      providerContinuity: { stale: true, remainingMs: 1000 },
+    };
+    mountWith({}, { readView: async () => view });
+    await waitFor(() => expect(screen.getByTestId('remote-provider-group-member')
+      .getAttribute('data-member-state')).toBe('loading'));
+    expect(screen.getByText('providerGroup.member.status.checking')).toBeTruthy();
+    expect(screen.queryByText('providerGroup.member.runningCount:{"count":2}')).toBeNull();
+  });
+
+  it('stops presenting the last group status once a live re-read fails', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    let failed = false;
+    const view: ProviderGroupView = {
+      providerId: 'anthropic', config: CONFIG,
+      members: [{ ...VM, label: 'grok-bot-vm', state: 'available', running: 2 }],
+    };
+    mountWith({}, { readView: async () => {
+      if (failed) throw new Error('group host offline');
+      return view;
+    } });
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(screen.getByTestId('remote-provider-group-member').getAttribute('data-member-state'))
+      .toBe('available');
+
+    failed = true;
+    await act(async () => { await vi.advanceTimersByTimeAsync(15_000); await Promise.resolve(); });
+
+    expect(screen.getByTestId('remote-provider-group-member').getAttribute('data-member-state'))
+      .toBe('loading');
+    expect(screen.queryByText('providerGroup.member.runningCount:{"count":2}')).toBeNull();
+  });
+
   it('says this computer cannot reach a computer the group computer still sees as usable', async () => {
     mountWith({ unreachableHere: true });
     await waitFor(() => expect(screen.getByText('providerGroup.member.status.unreachableHere')).toBeTruthy());
@@ -238,5 +321,173 @@ describe('RemoteProviderGroupMembers', () => {
     await waitFor(() => expect(screen.getByText('providerGroup.member.runningCount:{"count":2}')).toBeTruthy());
     expect(screen.queryByText('providerGroup.member.status.unreachableHere')).toBeNull();
     expect(screen.getByTestId('remote-provider-group-member').getAttribute('data-unreachable-here')).toBeNull();
+  });
+  it('retires a view at its own shorter deadline and uses the current catalog config', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'performance', 'setTimeout', 'clearTimeout'] });
+    const current = configWithMember('device:current:anthropic', 'current-vm');
+    const old = configWithMember('device:old:anthropic', 'old-vm');
+    mountWith({}, { config: current, readView: async () => viewWithBudget(old, 1_000) });
+    await flushAsync();
+    expect(screen.getByText('old-vm')).toBeTruthy();
+    expect(screen.queryByText('current-vm')).toBeNull();
+    await act(async () => { await vi.advanceTimersByTimeAsync(1_001); });
+    expect(screen.queryByText('old-vm')).toBeNull();
+    expect(screen.getByText('current-vm')).toBeTruthy();
+    expect(screen.getByTestId('remote-provider-group-member').getAttribute('data-member-state')).toBe('loading');
+  });
+
+  it('deducts the view request time before starting its remaining budget', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'performance', 'setTimeout', 'clearTimeout'] });
+    const current = configWithMember('device:current:anthropic', 'current-vm');
+    const old = configWithMember('device:old:anthropic', 'old-vm');
+    const pending = deferred<ProviderGroupView>();
+    mountWith({}, { config: current, readView: () => pending.promise });
+    await act(async () => { await vi.advanceTimersByTimeAsync(600); });
+    await act(async () => {
+      pending.resolve(viewWithBudget(old, 1_000));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(screen.getByText('old-vm')).toBeTruthy();
+    await act(async () => { await vi.advanceTimersByTimeAsync(399); });
+    expect(screen.getByText('old-vm')).toBeTruthy();
+    await act(async () => { await vi.advanceTimersByTimeAsync(2); });
+    expect(screen.queryByText('old-vm')).toBeNull();
+    expect(screen.getByText('current-vm')).toBeTruthy();
+  });
+
+  it('keeps the original view deadline when a poll fails', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'Date', 'performance', 'setTimeout', 'clearTimeout'] });
+    let fail = false;
+    const current = configWithMember('device:current:anthropic', 'current-vm');
+    const old = configWithMember('device:old:anthropic', 'old-vm');
+    mountWith({}, { config: current, readView: async () => {
+      if (fail) throw new Error('group host offline');
+      return viewWithBudget(old, 31_000);
+    } });
+    await flushAsync();
+    expect(screen.getByText('old-vm')).toBeTruthy();
+    expect(screen.getByTestId('remote-provider-group-member').getAttribute('data-member-state')).toBe('available');
+
+    fail = true;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(15_000);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(screen.getByText('old-vm')).toBeTruthy();
+    expect(screen.getByTestId('remote-provider-group-member').getAttribute('data-member-state')).toBe('loading');
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(15_000);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(screen.getByText('old-vm')).toBeTruthy();
+    expect(screen.getByTestId('remote-provider-group-member').getAttribute('data-member-state')).toBe('loading');
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(999); });
+    expect(screen.getByText('old-vm')).toBeTruthy();
+    await act(async () => { await vi.advanceTimersByTimeAsync(2); });
+    expect(screen.queryByText('old-vm')).toBeNull();
+    expect(screen.getByText('current-vm')).toBeTruthy();
+    expect(screen.getByTestId('remote-provider-group-member').getAttribute('data-member-state')).toBe('loading');
+  });
+
+  it('expires by the monotonic remainder when the wall clock rolls back', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const wall = { now: 1_000_000 };
+    const mono = { now: 2_000_000 };
+    const dateNow = vi.spyOn(Date, 'now').mockImplementation(() => wall.now);
+    const monoNow = vi.spyOn(performance, 'now').mockImplementation(() => mono.now);
+    try {
+      const current = configWithMember('device:current:anthropic', 'current-vm');
+      const old = configWithMember('device:old:anthropic', 'old-vm');
+      const pending = deferred<ProviderGroupView>();
+      mountWith({}, { config: current, readView: () => pending.promise });
+      wall.now -= 500;
+      mono.now += 600;
+      await act(async () => {
+        pending.resolve(viewWithBudget(old, 1_000));
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(screen.getByText('old-vm')).toBeTruthy();
+      await act(async () => { await vi.advanceTimersByTimeAsync(399); });
+      expect(screen.getByText('old-vm')).toBeTruthy();
+      await act(async () => { await vi.advanceTimersByTimeAsync(2); });
+      expect(screen.queryByText('old-vm')).toBeNull();
+      expect(screen.getByText('current-vm')).toBeTruthy();
+    } finally {
+      dateNow.mockRestore();
+      monoNow.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it('discards a late view response after switching to a different group', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'performance', 'setTimeout', 'clearTimeout'] });
+    const first = configWithMember('device:first:anthropic', 'first-vm');
+    const second = configWithMember('device:second:anthropic', 'second-vm');
+    const pending = deferred<ProviderGroupView>();
+    let calls = 0;
+    const { rerender } = mountWith({}, { config: first, readView: () => {
+      calls += 1;
+      return calls === 1 ? pending.promise : Promise.resolve(viewWithBudget(second, 60_000));
+    } });
+    await flushAsync();
+    expect(screen.getByText('first-vm')).toBeTruthy();
+    rerender(<RemoteProviderGroupMembers deviceId="other" providerId="anthropic" config={second} />);
+    await flushAsync();
+    expect(screen.getByText('second-vm')).toBeTruthy();
+    await act(async () => {
+      pending.resolve(viewWithBudget(first, 60_000));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(screen.getByText('second-vm')).toBeTruthy();
+    expect(screen.queryByText('first-vm')).toBeNull();
+  });
+
+  it('retires the view when the wall deadline passes between reads and does not revive on rollback', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'setTimeout', 'clearTimeout'] });
+    const wall = { now: 1_000_000 };
+    const mono = { now: 2_000_000 };
+    const dateNow = vi.spyOn(Date, 'now').mockImplementation(() => wall.now);
+    const monoNow = vi.spyOn(performance, 'now').mockImplementation(() => mono.now);
+    try {
+      const current = configWithMember('device:current:anthropic', 'current-vm');
+      const old = configWithMember('device:old:anthropic', 'old-vm');
+      let authoritative = viewWithBudget(old, 1_000);
+      const { rerender } = mountWith({}, { config: current, readView: async () => authoritative });
+      await flushAsync();
+      expect(screen.getByText('old-vm')).toBeTruthy();
+      expect(screen.getByTestId('remote-provider-group-member').getAttribute('data-member-state')).toBe('available');
+
+      // Only the process wall clock moves; no fake timer tick and no reload.
+      wall.now += 1_001;
+      rerender(<RemoteProviderGroupMembers deviceId="mini" providerId="anthropic" config={current} />);
+      expect(screen.getByText('current-vm')).toBeTruthy();
+      expect(screen.queryByText('old-vm')).toBeNull();
+      expect(screen.getByTestId('remote-provider-group-member').getAttribute('data-member-state')).toBe('loading');
+
+      wall.now -= 2_000;
+      rerender(<RemoteProviderGroupMembers deviceId="mini" providerId="anthropic" config={current} />);
+      expect(screen.getByText('current-vm')).toBeTruthy();
+      expect(screen.queryByText('old-vm')).toBeNull();
+
+      authoritative = viewWithBudget(old, 60_000);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(15_000);
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(screen.getByText('old-vm')).toBeTruthy();
+      expect(screen.getByTestId('remote-provider-group-member').getAttribute('data-member-state')).toBe('available');
+    } finally {
+      dateNow.mockRestore();
+      monoNow.mockRestore();
+      vi.useRealTimers();
+    }
   });
 });

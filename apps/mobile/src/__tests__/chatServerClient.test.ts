@@ -745,7 +745,7 @@ it('reads Cindy preset identity without inferring from names and retains known I
   const actors = [1, 2, 3, 4].map(n => ({ id: id(n), externalId: `bot-${n}`, kind: 'bot', name: 'Cindy', avatar: null, homeDeviceId: 'mac' }));
   const ids = await createChatServerClient(request as any).cindyCompanionIds(actors, ['bot-4']);
   expect(ids).toEqual(['bot-1', 'bot-2', 'bot-4']);
-  expect(request.mock.calls.every(call => call[0] === '/preferences' && call[1] === 'GET')).toBe(true);
+  expect(request.mock.calls.every(call => call[0] === '/preferences?key=companion.profile.v1' && call[1] === 'GET')).toBe(true);
 });
 
 // Unit: group and thread projections retain the optional process locator while
@@ -854,14 +854,17 @@ it.each([{ status: 403, code: 'PERMISSION_DENIED' }, { status: 404, code: 'CONVE
 // root summaries, explicit following, or trustworthy thread-share source resolution.
 it('projects authoritative reply counts, distinct responders, unread mentions and resolved shares', () => {
   const root = { ...message(20), replyCount: 17 };
-  const reply = { ...message(21), threadRootId: root.id, mentions: [id(11)] };
-  const share = { ...message(22), content: [{ type: 'card', namespace: 'cindy.thread-share', schemaRevision: 1,
+  const reply = { ...message(21), threadRootId: root.id, mentions: [id(11)], mentionAudience: 'bots' as const };
+  const share = { ...message(22), mentions: [id(10)], content: [{ type: 'card', namespace: 'cindy.thread-share', schemaRevision: 1,
     data: { messageId: reply.id, threadRootId: root.id }, fallback: 'Untrusted old text' }] };
   const s = { ...snapshot(), messages: [share, reply, root], reads: [] };
   const view = chatGroupView({ snapshot: s, messages: [root, share], before: null }, id(11));
   expect(view.messages[0]).toMatchObject({ replyCount: 17, threadUnread: { count: 1, mentioned: true },
     threadPreview: { responders: [{ authorBotId: reply.authorId }], replies: [{ id: reply.id }] } });
-  expect(view.messages[1]).toMatchObject({ content: '', threadShare: { status: 'available', content: '21', sharedByAuthor: true } });
+  // PR #8818: source identity travels with source text; delivery recipients stay intact.
+  expect(view.messages[1]).toMatchObject({ content: '', mentions: { all: false, botIds: [id(10)] },
+    threadShare: { status: 'available', content: '21', sharedByAuthor: true,
+      mentions: { all: false, allBots: true, botIds: [id(11)] } } });
   expect(chatGroupView({ snapshot: { ...s, reads: undefined }, messages: [root], before: null }, id(11)).messages[0].threadUnread).toBeUndefined();
   expect(chatGroupView({ snapshot: s, messages: [share], before: null, threadSources: { [reply.id]: null } }, id(11)).messages[0])
     .toMatchObject({ content: '', threadShare: { status: 'unavailable', content: '', attachments: [] } });

@@ -27,7 +27,7 @@ vi.mock('node:http', async () => {
     const req = Object.assign(new EventEmitter(), {
       end: (data?: string) => {
         const target = new URL(url);
-        void Promise.resolve().then(() => fixture.handle(target.pathname.slice(3) + target.search, options.method,
+        void Promise.resolve().then(() => fixture.handle(target.pathname.slice(3) + (target.pathname === '/v1/preferences' ? '' : target.search), options.method,
           data ? JSON.parse(data) : undefined, options.headers['X-Chat-Actor']))
           .then(result => {
             const response = Object.assign(new EventEmitter(), { statusCode: result?.status ?? 200, headers: {} });

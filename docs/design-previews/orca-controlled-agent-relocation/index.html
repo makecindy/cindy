@@ -5,13 +5,15 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>HTML 预览 · 远程操作时协同任务换电脑（非实机）</title>
 <!--
-  HTML 模拟界面，非实机截图。对应 makecindy/cindy#8840。
+  HTML 模拟界面，非实机截图。对应 makecindy/cindy#8840（桌面）与 #8841（手机）。
   取值出处：
   - 配色变量：沿用 docs/design-previews/model-picker-harness-lock/index.html 的 :root / dark 变量。
   - 「搜索模型…」：apps/desktop/src/renderer/i18n/locales/zh-CN/common.json:3750
   - 确认框标题 / 说明 / 按钮：同文件 12458–12464（newChat.chatInput.agentRelocation.*）
   - 显示规则：apps/desktop/src/renderer/components/new-chat/ChatInput.tsx 的 sessionRemoteAgentOptions
     （被控电脑上的协同任务要被控端声明 supportsOrcaAgentRelocation 才列其他电脑；运行设备 Worker 始终不列）。
+  - 手机：确认框文案同 apps/mobile/src/i18n/locales/zh-CN/models.json:67–75（agentRelocation.*），
+    判据见 apps/mobile/app/sessions/[sessionId].tsx 的 orcaAgentLocationLocked / agentLocationMovable。
   电脑与来源名称是示例数据。
 -->
 <style>
@@ -40,6 +42,10 @@
     border-radius: 999px; padding: 5px 11px; font-size: 12px; cursor: pointer; }
   .controls button[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
   .stage { padding: 4px 20px 24px; }
+  html[data-client="phone"] .panel { width: min(360px, 100%); border-radius: 18px 18px 0 0; }
+  html[data-client="phone"] .body { flex-direction: column; }
+  html[data-client="phone"] .rail { width: auto; flex-direction: row; flex-wrap: wrap; border-right: 0; border-bottom: 1px solid var(--border); }
+  html[data-client="phone"] .rail .sep { width: 1px; height: auto; margin: 4px 6px; }
   .panel { width: min(560px, 100%); background: var(--surface-elevated); border: 1px solid var(--border);
     border-radius: 14px; box-shadow: var(--shadow); overflow: hidden; }
   .search { padding: 10px 14px; border-bottom: 1px solid var(--border); color: var(--text-tertiary); font-size: 13px; }
@@ -71,9 +77,13 @@
 </style>
 </head>
 <body>
-<div class="banner">HTML 模拟界面，非实机截图（makecindy/cindy#8840）。场景：在电脑 A 上远程操作被控电脑，打开被控电脑上的任务，展开模型列表。实机截图见该 issue 的 SC6。</div>
+<div class="banner">HTML 模拟界面，非实机截图（makecindy/cindy#8840 桌面、#8841 手机）。场景：在电脑 A 或手机上远程操作被控电脑，打开被控电脑上的任务，展开模型列表。实机截图见两个 issue 的实机验收项。</div>
 
 <div class="controls">
+  <div class="group" data-key="client"><span>控制端</span>
+    <button data-v="desktop" aria-pressed="true">桌面</button>
+    <button data-v="phone" aria-pressed="false">手机</button>
+  </div>
   <div class="group" data-key="host"><span>被控电脑</span>
     <button data-v="new" aria-pressed="true">新版本（声明 supportsOrcaAgentRelocation）</button>
     <button data-v="old" aria-pressed="false">旧版本（未声明）</button>
@@ -114,7 +124,7 @@
 </div>
 
 <script>
-  const state = { host: 'new', task: 'lead', mode: 'light' };
+  const state = { client: 'desktop', host: 'new', task: 'lead', mode: 'light' };
   const local = { name: '被控电脑', sources: [
     { source: 'Cindy AI', models: ['Claude Sonnet 5.5', 'DeepSeek V4.1 Flash'] },
     { source: 'Art Cindy', models: ['gpt-6.1-sol'] },
@@ -134,6 +144,7 @@
 
   function render() {
     document.documentElement.dataset.mode = state.mode;
+    document.documentElement.dataset.client = state.client;
     document.querySelectorAll('.group').forEach((g) => {
       g.querySelectorAll('button').forEach((b) => b.setAttribute('aria-pressed', String(state[g.dataset.key] === b.dataset.v)));
     });
@@ -151,8 +162,9 @@
     const note = document.getElementById('note');
     if (state.task === 'device-worker') note.innerHTML = '<b>运行设备 Worker：</b>任务本身就在另一台电脑上，用户不能给它换 Agent 位置，只列被控电脑自己的来源（与改动前相同）。';
     else if (state.task === 'normal') note.innerHTML = '<b>普通任务：</b>改动前后都列出其他电脑与分享。';
-    else if (state.host === 'new') note.innerHTML = '<b>改动后：</b>被控电脑声明了 supportsOrcaAgentRelocation，协同任务和普通任务一样列出其他电脑与分享；选中后弹确认，下一条消息发出时生效，任务仍是协同成员。';
-    else note.innerHTML = '<b>旧被控电脑：</b>没有声明这一位（v0.1.104–v0.1.110 会拒绝换位置），协同任务只列被控电脑自己的来源，和改动前一样，不出现能点却必失败的选项。';
+    else if (state.host === 'new') note.innerHTML = (state.client === 'phone' ? '<b>手机（#8841）：</b>' : '<b>改动后：</b>') + '被控电脑声明了 supportsOrcaAgentRelocation，协同任务和普通任务一样列出其他电脑与分享；选中后弹确认，下一条消息发出时生效，任务仍是协同成员。';
+    else note.innerHTML = '<b>旧被控电脑：</b>没有声明这一位（v0.1.104–v0.1.110 会拒绝换位置），协同任务只列被控电脑自己的来源，和改动前一样，不出现能点却必失败的选项。' +
+      (state.client === 'phone' ? '手机上如果 Agent 已经在别的电脑，只在那台原地选模。' : '');
     document.getElementById('toast').textContent = '';
   }
 

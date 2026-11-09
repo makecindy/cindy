@@ -28,6 +28,7 @@ DS-11 按2026-09-15用户复核意见修订，Cindy亮暗逐项对照与未验�
 | [`usage-history-charts.md`](./usage-history-charts.md) | 用量历史图表与日期选择 | 专题补充 |
 | [`design-governance.md`](./design-governance.md) | 设计系统治理合同：管道与记账（§1.1）、四种真相边界、Token 层级与现行 §10 三档的映射、兼容红线、工具单选、两级证据合同、PR 风险分类、治理接线纪律、待裁决登记、存量门禁处置表、实施路线图、已知边界（§13） | **治理正本**（管流程；视觉规则仍以 `DESIGN.md` 为准） |
 | [`design-inventory.md`](./design-inventory.md) | Cindy Desktop / Mobile 生产可达 UI 台账：GENERATED 登记事实（稳定 ID / 平台 / 标题 / 入口 / 路由覆盖）+ 人工迁移状态；组件、样式来源与 Token / 裸值统计不入库 | **台账正本**（schema 见 [`design-governance.md`](./design-governance.md) §2.1；生成 `pnpm design:inventory`，校验 `pnpm check:design-inventory`，统计报告 `pnpm design:inventory:report`） |
+| [`desktop-bot-list-status.md`](./desktop-bot-list-status.md) | Desktop 伙伴与群列表状态、未读提示、时间保留和收起头像选中态 | 平台补充（由 DESIGN §15.14 授权） |
 | [`ios-native-design.md`](./ios-native-design.md) | iOS 导航、原生面板与分组、玻璃材质、任务详情、紧凑搜索及触控验收；附当前迁移审查 | 平台补充（由 DESIGN Mobile 节授权） |
 | [Token README](../../packages/design-tokens/README.md) | Desktop DTCG 生产生成、维护/回退、实际接管与保留项，Mobile 待新方案共同确认 | **Token 合同入口**（构建期接管 Desktop，运行时只读生成子集） |
 | [`token-decision-table.md`](./token-decision-table.md) | 登录链路色值 / 尺寸 → token 决策记录（新增 / 复用 / 豁免的判定理由 + 各 wave 增补台账） | 决策记录（现行 token 清单与值以 `login-flow.md §16.1` + `colors.ts` 为准） |
@@ -60,6 +61,8 @@ DS-11 按2026-09-15用户复核意见修订，Cindy亮暗逐项对照与未验�
 以上仓内入口即可开始贡献；无需访问个人桌面记录。此阅读路径检查不代替 G2 的独立贡献者试用。
 
 ## 版本记录
+
+- **2026-11-04（规范矛盾第二轮清理，纯文档）**：统一 CINDY 色值的决策记录与数值源指向；§9 示例改用 Token；红色白名单收敛到 §15.10；登录禁用态按两端分写；焦点写法明确为 box-shadow；语言范围改为全部支持语言；退役已不存在的群聊进度胶囊登记。不改任何界面数值，详见 `design-decision-log.md` 11-04。
 
 - **2026-11-04（`DESIGN.md` 拆分专题，纯文档）**：§16 登录链路、§14.5 可点性、§14.4 容器形变、§2 壁纸与 §4 macOS 菜单栏面板移到同目录专题文件；iOS 导航并入 `ios-native-design.md` §8，手机气泡色、任务首页伙伴区和新建按钮形变并入手机设计指南 §9。正文逐字搬动，原位置保留标题和跳转，章节编号不变；`DESIGN.md` 开头新增「阅读路由」，改 UI 时按路由读取。登录色表的生成目标改为 `login-flow.md`。不改任何规则和界面数值。
 

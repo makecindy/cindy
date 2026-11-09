@@ -1,15 +1,20 @@
+const standby = vi.hoisted(() => ({ publish: vi.fn(), refresh: vi.fn(), flush: vi.fn(), usage: vi.fn() }));
+vi.mock('../providerShareAvailability.js', () => ({ publishShareAvailability: standby.publish, refreshStandbyGuests: standby.refresh }));
+vi.mock('../providerShareAvailabilityUsage.js', () => ({ flushStandbyUsage: standby.flush, importStandbyUsage: standby.usage }));
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ipcMain } from 'electron';
-import { REMOTE_AGENT_CHANNEL, type ProviderShareOwned } from '@cindy/device-link';
+import { PROVIDER_SHARE_RECEIVED_CATALOGS_CHANNEL, REMOTE_AGENT_CHANNEL, type InvokeResultPayload,
+  type ProviderShareOwned, type ProviderShareReceived } from '@cindy/device-link';
 
 import type { ProviderShareManagementCommand } from '../../../shared/providerManagement';
 import type { ProviderUsageHistoryView } from '../../../shared/providerShare';
 import type { ModelPriceQuote } from '../../../shared/regionalMoney';
 
 const state = vi.hoisted(() => ({ owner: 'owner-a', boundaryPending: false }));
+const received = vi.hoisted(() => ({ shares: [] as ProviderShareReceived[], ready: true }));
 vi.mock('electron', () => ({
   app: { getPath: () => 'test-provider-share-user-data' },
   ipcMain: { handle: vi.fn() },
@@ -29,7 +34,7 @@ const usageStores = vi.hoisted(() => ({ ownHistory: vi.fn(), memberTokenSnapshot
 const memberNotes = vi.hoisted(() => ({ read: vi.fn(), set: vi.fn() }));
 vi.mock('../providerShareQuota.js', () => ({ readProviderShareQuota: vi.fn(), readProviderShareQuotaAccount: vi.fn() }));
 const visibility = vi.hoisted(() => ({ read: vi.fn(), set: vi.fn() }));
-const modelAccess = vi.hoisted(() => ({ read: vi.fn(), set: vi.fn(), allows: vi.fn() }));
+const modelAccess = vi.hoisted(() => ({ subscribe: () => () => undefined, read: vi.fn(), set: vi.fn(), allows: vi.fn() }));
 const fastPolicy = vi.hoisted(() => ({ allows: vi.fn(), set: vi.fn(), changed: vi.fn(), publish: vi.fn() }));
 const localBroadcast = vi.hoisted(() => vi.fn());
 vi.mock('../index.js', () => ({ broadcast: localBroadcast }));
@@ -50,7 +55,7 @@ vi.mock('../../logger.js', () => ({ createLogger: () => ({ warn: vi.fn() }) }));
 vi.mock('../../maker-host/createDesktopProviderService.js', () => ({
   getDesktopProviderService: () => ({ listProviders }),
 }));
-vi.mock('../../maker-host/remote-provider-access-store.js', () => ({ isRemoteProviderInvocationAllowed: () => true }));
+vi.mock('../../maker-host/remote-provider-access-store.js', () => ({ isRemoteProviderInvocationAllowed: () => true, onRemoteProviderAccessChanged: () => () => undefined }));
 vi.mock('../../textClipboard.js', () => ({ rememberIssuedClipboardText: remember }));
 vi.mock('../../security/trustedAppRenderer.js', () => ({ assertTrustedAppRendererEvent: vi.fn() }));
 vi.mock('../../usage/ledgerCurrency.js', () => ({ currentLedgerCurrency: () => 'USD' }));
@@ -73,7 +78,7 @@ vi.mock('../providerShareUsageStore.js', async (importOriginal) => ({
     acknowledgeDirectCleanup: usageStores.acknowledgeDirectCleanup }),
   providerUsageLocalDay: () => '2026-10-17',
 }));
-vi.mock('../settings-store.js', () => ({ readDeviceLinkSettings: () => ({ remoteControlEnabled: true }), readLastKnownDeviceNames: () => ({}) }));
+vi.mock('../settings-store.js', () => ({ onDeviceLinkSettingChanged: () => () => undefined, readDeviceLinkSettings: () => ({ remoteControlEnabled: true }), readLastKnownDeviceNames: () => ({}) }));
 vi.mock('../providerShareApi.js', () => ({
   providerShareApi: api,
   fetchIdentityCard: identityCard,
@@ -107,7 +112,8 @@ vi.mock('../providerShareHost.js', () => ({
   },
 }));
 const guest = vi.hoisted(() => ({ revision: 0, share: null as unknown }));
-vi.mock('../providerShareGuest.js', () => ({ startProviderShareGuest: vi.fn(), stopProviderShareGuest: vi.fn(), findReceivedShare: () => guest.share, providerShareReceivedRevision: () => guest.revision }));
+vi.mock('../providerShareGuest.js', () => ({ startProviderShareGuest: vi.fn(), stopProviderShareGuest: vi.fn(), findReceivedShare: () => guest.share, providerShareAccessEpoch: () => guest.revision,
+  getReceivedSharesSnapshot: () => ({ received: received.shares }), isReceivedSharesReady: () => received.ready }));
 vi.mock('../providerShareGuestPrefs.js', () => ({ configureProviderShareGuestPrefs: vi.fn(), invalidateProviderShareGuestPrefsCache: vi.fn() }));
 vi.mock('../providerShareGuestPrefsIpc.js', () => ({ setProviderShareCredentialConsentFromIpc: vi.fn() }));
 
@@ -126,6 +132,11 @@ import { CONTROLLED_MODEL_CATALOG_CHANGED } from '../../../shared/controlledMode
 import { PROVIDER_SHARE_IPC } from '../../../shared/providerShare';
 import { createProviderShareUsageStore } from '../providerShareUsageStore';
 import { revokeProviderShareControllers } from '../dispatch';
+import {
+  clearAllProviderShareCatalogs,
+  getCachedProviderShareCatalogs,
+  refreshProviderShareCatalogs,
+} from '../../../../../mobile/src/device-link/providerShareCatalogCache';
 
 const createLink: ProviderShareManagementCommand = { action: 'create-link', providerId: 'anthropic' };
 const LINK_ID = 'a'.repeat(64);
@@ -154,6 +165,9 @@ beforeEach(() => {
   state.boundaryPending = false;
   usageStores.actual = null;
   listProviders.mockResolvedValue([{ id: 'anthropic', name: 'Anthropic', connected: true, agents: ['claude-code'] }]);
+  received.shares = [];
+  received.ready = true;
+  clearAllProviderShareCatalogs();
   identityCard.mockResolvedValue({ card: 'test-identity-card' });
   api.createLink.mockResolvedValue({ invitation: 'test-invitation', linkId: LINK_ID });
   api.approve.mockResolvedValue({ ok: true });
@@ -212,6 +226,95 @@ it('refreshes local windows but does not push a catalog change for an unchanged 
   expect(local).toHaveBeenCalledWith(PROVIDER_SHARE_IPC.RECEIVED_CHANGED, []);
   expect(local).not.toHaveBeenCalledWith(CONTROLLED_MODEL_CATALOG_CHANGED, {});
   expect(remote).not.toHaveBeenCalledWith(CONTROLLED_MODEL_CATALOG_CHANGED, {}, expect.anything());
+});
+
+/* Unit integration: the real received-catalogs producer must distinguish an explicit
+ * per-share provider refusal from a temporary/offline null, and the real Mobile parser/cache
+ * must retire only that share. */
+it('propagates a per-share provider denial as an empty zero-budget catalog and keeps transient neighbors', async () => {
+  const provider = (id = 'anthropic') => ({
+    id, name: 'Anthropic', source: 'builtin', agents: ['claude-code'], auth: { method: 'none' },
+    routing: { 'claude-code': { upstream: 'https://example.invalid', authStrategy: 'none' } },
+    models: { 'claude-code': [] }, connected: true,
+  });
+  const receivedShare = (id: string): ProviderShareReceived => ({
+    shareId: id, memberId: 'm-' + id, providerId: 'anthropic', providerLabel: 'Anthropic',
+    hostDeviceId: 'host-' + id, deviceName: 'Device ' + id,
+    owner: { displayName: 'Owner', avatarUrl: null, region: 'global' },
+    status: 'active', hostOnline: true, hostCapable: true,
+  });
+  const mobileShare = (id: string, catalog: unknown) => ({
+    agentDeviceId: 'share:' + id, shareId: id, providerId: 'anthropic', providerLabel: 'Anthropic',
+    deviceName: 'Device ' + id, owner: { displayName: 'Owner', avatarUrl: null },
+    status: 'active', hostOnline: true, catalog,
+  });
+  received.shares = [receivedShare('a'), receivedShare('b'), receivedShare('c'), receivedShare('d'), receivedShare('e')];
+  const invoke = vi.fn(async (agentDeviceId: string): Promise<InvokeResultPayload> => {
+    if (agentDeviceId === 'share:a') {
+      return { ok: false, error: { code: 'ACCESS_REVOKED', message: 'denied' } };
+    }
+    if (agentDeviceId === 'share:b') return { ok: true, result: { providers: [provider()] } };
+    if (agentDeviceId === 'share:d') throw Object.assign(new Error('revoked'), { code: 'ACCESS_REVOKED' });
+    if (agentDeviceId === 'share:e') {
+      throw Object.assign(new Error('disabled'), { code: 'PROVIDER_SHARE_CROSS_REGION_DISABLED' });
+    }
+    return { ok: false, error: { code: 'INVOKE_TIMEOUT', message: 'timeout' } };
+  });
+  stopProviderShareRuntime();
+  startProviderShareRuntime(vi.fn(), { invoke });
+  registerProviderShareIpc();
+  const handler = vi.mocked(ipcMain.handle).mock.calls
+    .find(([channel]) => channel === PROVIDER_SHARE_RECEIVED_CATALOGS_CHANNEL)![1];
+  const producerResult = await handler({} as Electron.IpcMainInvokeEvent,
+    [{ capabilities: ['provider-logo-kinds-v2'] }]) as { ready: boolean; shares: Array<{
+      agentDeviceId: string; shareId: string; catalog: unknown }> };
+  const producerById = new Map(producerResult.shares.map(share => [share.shareId, share]));
+  expect(producerById.get('a')?.catalog).toEqual({ providers: [],
+    providerContinuity: { stale: true, remainingMs: 0 } });
+  expect((producerById.get('b')?.catalog as { providers?: unknown[] } | null)?.providers).toHaveLength(1);
+  expect(producerById.get('c')?.catalog).toBeNull();
+  expect(producerById.get('d')?.catalog).toEqual({ providers: [],
+    providerContinuity: { stale: true, remainingMs: 0 } });
+  // A region feature flag is not a per-share revocation.
+  expect(producerById.get('e')?.catalog).toBeNull();
+
+  vi.useFakeTimers({ toFake: ['Date', 'performance', 'setTimeout', 'clearTimeout'] });
+  try {
+    const seededCatalog = { providers: [provider()],
+      providerContinuity: { stale: false, remainingMs: 10_000 } };
+    await refreshProviderShareCatalogs('host', async () => ({ ready: true, shares: [
+      mobileShare('a', seededCatalog), mobileShare('b', seededCatalog), mobileShare('c', seededCatalog),
+      mobileShare('d', seededCatalog), mobileShare('e', seededCatalog),
+    ] }));
+    expect(getCachedProviderShareCatalogs('host')?.filter(entry => entry.payload))
+      .toHaveLength(5);
+
+    await vi.advanceTimersByTimeAsync(500);
+    await refreshProviderShareCatalogs('host', async () => producerResult);
+    const after = new Map((getCachedProviderShareCatalogs('host') ?? []).map(entry => [entry.shareId, entry]));
+    expect(after.get('a')?.payload).toBeNull();
+    expect(after.get('b')?.payload?.providers).toHaveLength(1);
+    expect(after.get('c')?.payload?.providers).toHaveLength(1);
+    expect(after.get('d')?.payload).toBeNull();
+    expect(after.get('e')?.payload?.providers).toHaveLength(1);
+
+    // C was never renewed by the transient null: its original 10s budget expires.
+    await vi.advanceTimersByTimeAsync(9_501);
+    const expired = new Map((getCachedProviderShareCatalogs('host') ?? []).map(entry => [entry.shareId, entry]));
+    expect(expired.get('c')?.payload).toBeNull();
+    expect(expired.get('e')?.payload).toBeNull();
+
+    // A fresh authoritative read restores A without touching B/C.
+    const freshA = { ...producerById.get('a')!, catalog: { providers: [provider()] } };
+    await refreshProviderShareCatalogs('host', async () => ({ ...producerResult,
+      shares: [freshA, producerById.get('b')!, producerById.get('c')!, producerById.get('d')!, producerById.get('e')!] }));
+    const recovered = new Map((getCachedProviderShareCatalogs('host') ?? []).map(entry => [entry.shareId, entry]));
+    expect(recovered.get('a')?.payload?.providers).toHaveLength(1);
+    expect(recovered.get('b')?.payload?.providers).toHaveLength(1);
+  } finally {
+    vi.useRealTimers();
+    clearAllProviderShareCatalogs();
+  }
 });
 
 /* Deleting a member must use the live host callback and retain offline M until it ACKs. tier: unit. */
@@ -834,4 +937,41 @@ describe('subscription Fast management through the owner command', () => {
     expect(fastPolicy.set).not.toHaveBeenCalled();
     expect(fastPolicy.publish).not.toHaveBeenCalled();
   });
+});
+
+// Exercise the production scheduler with deferred fake network work, never real shares.
+it('coalesces pending syncs, ignores unchanged polling and retains periodic refresh', async () => {
+  vi.useFakeTimers();
+  let finish!: () => void;
+  const blocked = new Promise<void>(resolve => { finish = resolve; });
+  standby.publish.mockImplementationOnce(() => blocked);
+  const events = vi.mocked(startProviderShareHost).mock.lastCall![0];
+  const flush = async () => { for (let i = 0; i < 50; i++) await Promise.resolve(); };
+  try {
+    events.changed(host.snapshot());
+    await flush();
+    expect(standby.publish).toHaveBeenCalledTimes(1);
+    for (let i = 0; i < 20; i++) events.changed(host.snapshot());
+    await flush();
+    finish(); await flush();
+    expect(standby.publish).toHaveBeenCalledTimes(1);
+    let release!: () => void;
+    standby.publish.mockImplementationOnce(() => new Promise<void>(resolve => { release = resolve; }));
+    // The timer was installed before fake timers, so restart with the fake clock.
+    startProviderShareRuntime(vi.fn());
+    const current = vi.mocked(startProviderShareHost).mock.lastCall![0];
+    current.changed(host.snapshot()); await flush();
+    expect(standby.publish).toHaveBeenCalledTimes(2);
+    for (let i = 0; i < 20; i++) {
+      host.snapshot.mockReturnValue([{ shareId: 'share', members: [{ memberId: 'm1', joinedAt: String(i), status: 'active' }] }]);
+      current.changed(host.snapshot());
+    }
+    await vi.advanceTimersByTimeAsync(180_000);
+    expect(standby.publish).toHaveBeenCalledTimes(2);
+    release(); await flush();
+    expect(standby.publish).toHaveBeenCalledTimes(3);
+    expect(standby.publish.mock.lastCall![0][0].members[0].joinedAt).toBe('19');
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(standby.publish).toHaveBeenCalledTimes(4);
+  } finally { finish(); stopProviderShareRuntime(); vi.useRealTimers(); }
 });

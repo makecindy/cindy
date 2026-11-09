@@ -1,5 +1,6 @@
 import { isPeerResetRetryableInvoke, bypassInvokeScheduling, resolveInvokePriority } from './invokePolicy.js';
 import { InvokeScheduler } from './invokeScheduler.js';
+import { StallDiagnostics, diagnosticChannel, diagnosticOperation, diagnosticRef } from './stallDiagnostics.js';
 import { SessionMessageReuse } from './sessionMessageReuse.js';
 import {
   InboundInvokeTransferOptions,
@@ -810,12 +811,16 @@ interface ReceiveStreamState {
 // ─── 客户端实现 ───────────────────────────────────────────────────────────────
 
 export class DeviceLinkClient {
+  private readonly stallDiagnostics = new StallDiagnostics(message => this.log.info(message));
+  private readonly receivedDiagnosticBytes = new WeakMap<Envelope, number>();
   private readonly invokeScheduler = new InvokeScheduler((id) => {
     const peer = this.peerTransport.get(id);
     return (this.ws?.bufferedAmount ?? 0) > SOCKET_DATA_LOW_WATER_BYTES
       || (peer?.pendingBytes ?? 0) > SOCKET_DATA_LOW_WATER_BYTES
       || (peer?.pending.size ?? 0) >= MAX_TRANSPORT_REASSEMBLIES / 2;
-  });
+  }, (dst, reason, snapshot) => {
+    this.stallDiagnostics.record('admission', { dst: diagnosticRef(dst), reason, ...snapshot, transport: this.transportDiagnostic(dst) });
+  }, () => this.monotonicNow());
   private readonly opts: DeviceLinkClientOptions;
   private readonly timing: DeviceLinkTiming;
   private readonly log: DeviceLinkLogger;
@@ -948,6 +953,8 @@ export class DeviceLinkClient {
   private readonly directDiagnostics = new Map<string, {
     logged: Partial<Record<DirectDiagnosticReason, number>>; hash: Promise<string>;
   }>();
+  /** Last explicit same-account control status; blocks new outbound RPCs only. */
+  private readonly remoteControlDisabled = new Set<string>();
   private readonly sameAccountDirectGrace = new Map<string, {
     wallUntil: number; monotonicUntil: number; timer: ReturnType<typeof setTimeout>; peerOffline: boolean;
   }>();
@@ -970,7 +977,8 @@ export class DeviceLinkClient {
       isBusy: (id) => {
         const peer = this.peerTransport.get(id);
         return this.opts.isPeerBusy?.(id) === true || !!peer?.pending.size || [...this.pending.values()].some(p => p.dst === id)
-          || !!peer && [...peer.receive.values()].some(s => s.deliveringSeq !== null || s.bufferedBytes > 0);
+          || !!peer && [...peer.receive.values()].some(s => s.deliveringSeq !== null || s.bufferedBytes > 0)
+          || this.isOfflineRetainedDirectPath(id);
       },
       diagnostic: (id, event) => this.logDirectDiagnostic(id, event),
       canSignal: (peer) => this.status === 'online'
@@ -1254,6 +1262,7 @@ export class DeviceLinkClient {
 
   stop(): void {
     this.stopConnection();
+    this.stallDiagnostics.flush();
   }
 
   /** 只停这一条连接:中转移除本设备只影响它自己的线路,host 的 stop 才结束整个 client。 */
@@ -1445,9 +1454,44 @@ export class DeviceLinkClient {
     }
     this.detachDirectPath(deviceId, 'replaced');
     this.directPaths.set(deviceId, channel);
-    this.log.info(`device-link direct path attached dst=${deviceId.slice(0, 8)}`);
+    const moved = this.moveRelayPendingToDirect(deviceId);
+    this.log.info(`device-link direct path attached dst=${deviceId.slice(0, 8)}${moved > 0 ? ` resendViaDirect=${moved}` : ''}`);
     this.emitPeerPathChanged({ deviceId, path: 'direct' });
     return handle;
+  }
+
+  /**
+   * 直连接上时，把仍在 relay 上等待确认的帧改经直连重发。累计 ACK 只能按序推进：
+   * relay 上的旧帧没到，经直连送达的后续帧就拿不到确认，会被误判为直连超时撤下
+   * (2026-11-04 实测：持续的远程 Agent 流量下，局域网直连每次接上 8–10 秒即因
+   * ack-timeout 撤下，一小时 34 次)。接收端按 seq 去重，同一帧经两条路径各到一次
+   * 也只执行一次。只作用于这一台设备，不重连 relay、不重建链路。
+   */
+  private moveRelayPendingToDirect(deviceId: string): number {
+    const peer = this.peerTransport.get(deviceId);
+    if (!peer?.reliable || !this.isPeerSendReady(peer)) return 0;
+    const moving = [...peer.pending.values()].filter(pending => pending.sent && pending.path === 'relay');
+    if (moving.length === 0) return 0;
+    // 与 detachDirectPath 相同：必须在清空现场之前留下旧 relay 队头，否则直连撤下时
+    // 只剩「已经搬走、还没写出」的状态，看不出哪些帧原本在慢中继上挡住了累计 ACK。
+    // 独立 outcome 分桶，不与大帧入队的 send 证据争采样名额。
+    this.stallDiagnostics.record('send', { outcome: 'moved-to-direct', dst: diagnosticRef(deviceId),
+      moved: moving.length, transport: this.transportDiagnostic(deviceId) });
+    for (const pending of moving) {
+      pending.path = undefined;
+      pending.sent = false;
+      resetReliableSendRound(pending);
+    }
+    const moved = moving.length;
+    // 与 detachDirectPath 相同：调用方可能处于发送路径中，下一个微任务再重放。
+    void Promise.resolve().then(() => {
+      this.retryPending(deviceId, { ignoreInterval: false, onlyUnsent: true });
+      const current = this.peerTransport.get(deviceId);
+      if (current?.reliable && this.isPeerSendReady(current) && current.pending.size > 0) {
+        this.ensureRetryTimer(deviceId);
+      }
+    });
+    return moved;
   }
 
   /** 该设备的数据面路径：接入了直连通道即为 'direct'(链路就绪后启用)，否则走 relay。 */
@@ -1455,10 +1499,55 @@ export class DeviceLinkClient {
     return this.usableDirectPath(deviceId) ? 'direct' : 'relay';
   }
 
+  /** Fresh, current authority says the peer accepts outbound control again. */
+  noteRemoteControlEnabled(deviceId: string): void {
+    if (!isScopedPeer(deviceId)) this.remoteControlDisabled.delete(deviceId);
+  }
+
+  /** Fresh, current authority says the peer refuses outbound control. */
+  noteRemoteControlDisabled(deviceId: string): void {
+    if (!isScopedPeer(deviceId)) this.remoteControlDisabled.add(deviceId);
+  }
+
   /** Existing, leased data path usable while the relay is reconnecting. */
   hasOfflineDirectPath(deviceId: string): boolean {
     return !!this.usableDirectPath(deviceId) && this.isLinkReady(deviceId)
       && (isProviderSharePeer(deviceId) || this.hasSameAccountDirectGrace(deviceId));
+  }
+
+  /**
+   * Read-only twin of hasOfflineDirectPath for render-time readiness probes.
+   * It never expires, detaches, clears pending work or emits peer path changes;
+   * the actual send/subscribe paths still perform their own fail-closed checks.
+   */
+  peekOfflineDirectPath(deviceId: string): boolean {
+    return this.hasRetainedDirectPathReadOnly(deviceId);
+  }
+
+  /**
+   * Read-only proof that a direct path and its retention lease/grace are still
+   * within both clocks. Unlike usableDirectPath this never expires or detaches.
+   */
+  private hasRetainedDirectPathReadOnly(deviceId: string): boolean {
+    if (this.stopped || !this.directPaths.has(deviceId) || !this.isLinkReady(deviceId)) return false;
+    if (isProviderSharePeer(deviceId)) {
+      const lease = this.providerShareDirectLeases.get(deviceId);
+      return !!lease && Date.now() < lease.wallUntil && this.monotonicNow() < lease.monotonicUntil;
+    }
+    const grace = this.sameAccountDirectGrace.get(deviceId);
+    return !!grace && Date.now() < grace.wallUntil && this.monotonicNow() < grace.monotonicUntil;
+  }
+
+  /**
+   * A healthy data path retained while signaling to this peer is unavailable.
+   * Read-only: unlike usableDirectPath/hasSameAccountDirectGrace it never
+   * expires or detaches during a capacity scan, so isBusy has no re-entrancy.
+   */
+  private isOfflineRetainedDirectPath(deviceId: string): boolean {
+    if (!this.hasRetainedDirectPathReadOnly(deviceId)) return false;
+    if (isProviderSharePeer(deviceId)) return this.status !== 'online';
+    const grace = this.sameAccountDirectGrace.get(deviceId);
+    return !!grace && (this.status !== 'online' || grace.peerOffline);
   }
 
   /** Repeated signaling loss cannot renew the original deadline. */
@@ -1493,12 +1582,23 @@ export class DeviceLinkClient {
   }
 
   private expireSameAccountDirectGrace(deviceId: string): void {
-    if (!this.sameAccountDirectGrace.has(deviceId)) return;
+    const grace = this.sameAccountDirectGrace.get(deviceId);
+    if (!grace) return;
+    // The 30-minute budget releases the retained path even after local relay
+    // recovery, but a healthy relay must not be reported as a lost peer. Let
+    // detachDirectPath apply the same signaling-loss criteria; it keeps the
+    // peer link ready and falls back to relay when only the grace expired.
+    if (this.directPaths.has(deviceId)) {
+      this.detachDirectPath(deviceId, 'link-closed');
+      return;
+    }
     this.clearSameAccountDirectGrace(deviceId);
-    this.invokeScheduler.cancel(deviceId, new DeviceLinkError('NOT_CONNECTED', 'direct signaling grace expired'));
-    const peer = this.peerTransport.get(deviceId);
-    if (peer) this.markPeerLinkDown(peer);
-    this.notifyPeerRouteOffline(deviceId, this.getPeerLinkGeneration(deviceId));
+    if (this.status !== 'online' || grace.peerOffline) {
+      this.invokeScheduler.cancel(deviceId, new DeviceLinkError('NOT_CONNECTED', 'direct signaling grace expired'));
+      const peer = this.peerTransport.get(deviceId);
+      if (peer) this.markPeerLinkDown(peer);
+      this.notifyPeerRouteOffline(deviceId, this.getPeerLinkGeneration(deviceId));
+    }
   }
 
   private hasProviderShareDirectLease(deviceId: string): boolean {
@@ -1818,12 +1918,15 @@ export class DeviceLinkClient {
     dst: string,
     payload: InvokePayload,
     timeoutMs?: number,
-    options?: { preSend?: () => void; background?: boolean },
+    options?: { preSend?: () => void; background?: boolean; diagnosticSource?: 'renderer' | 'main' | 'mobile' },
   ): Promise<InvokeResultPayload> {
     if (this.status !== 'online' && !this.hasOfflineDirectPath(dst)) {
       throw new DeviceLinkError('NOT_CONNECTED', 'not connected to relay');
     }
+    const requestId = createRequestId();
+    const queuedAt = this.monotonicNow();
     const send = async () => {
+      const admissionMs = Math.round(this.monotonicNow() - queuedAt);
       // Admission may wait: validate caller ownership/cancellation after dequeue,
       // synchronously before creating the request or retaining a transport frame.
       options?.preSend?.();
@@ -1842,23 +1945,26 @@ export class DeviceLinkClient {
       const env = await this.request(
         { v: PROTOCOL_VERSION, kind: 'invoke', dst, payload: transfer?.payload ?? tagged },
         'invoke-result',
-        timeoutMs,
+        timeoutMs, true, { id: requestId, admissionMs, source: options?.diagnosticSource ?? 'client', operation: diagnosticOperation(payload) },
       );
       this.reportInvokeMetric(payload, env.payload as InvokeResultPayload);
+      const decodeStarted = this.monotonicNow();
       const result = transfer
         ? await transfer.decode(env.payload as InvokeResultPayload, (timing) => this.reportInvokeDecode(payload, timing))
         : env.payload as InvokeResultPayload;
-      return result.ok
+      const decoded = result.ok
         ? {
             ...result,
             result: reuse.decode(decodeModelSpeedPayload(payload.channel, decodeSessionTagCatalog(payload.channel, result.result))),
           }
         : result;
+      const decodeMs = Math.round(this.monotonicNow() - decodeStarted);
+      if (decodeMs >= 250) this.stallDiagnostics.record('decode', { request: diagnosticRef(requestId), channel: diagnosticChannel(payload.channel), decodeMs });
+      return decoded;
     };
-    const queuedAt = this.monotonicNow();
     return (bypassInvokeScheduling(payload) ? send() : this.invokeScheduler.run(
       dst, resolveInvokePriority(payload.channel, options?.background),
-      Math.min(timeoutMs ?? this.timing.requestTimeoutMs, 30_000), send,
+      Math.min(timeoutMs ?? this.timing.requestTimeoutMs, 30_000), send, { channel: payload.channel, request: requestId, source: options?.diagnosticSource ?? 'client' },
     )).catch((error: unknown) => {
       if (error instanceof DeviceLinkError && error.code === 'BACKPRESSURE' && !error.inFlight) {
         this.log.debug(`device-link invoke admission failed dst=${dst.slice(0, 8)} channel=${payload.channel} priority=${resolveInvokePriority(payload.channel, options?.background)} elapsedMs=${Math.round(this.monotonicNow() - queuedAt)} reason=${error.message}`);
@@ -1869,9 +1975,12 @@ export class DeviceLinkClient {
 
   /** 被控端:回 invoke-result(对应入站 invoke 的 id) */
   sendInvokeResult(dst: string, requestId: string, payload: InvokeResultPayload): void {
+    const encodeStarted = this.monotonicNow();
     const transfer = this.opts.transferCodec ? this.inboundInvokeTransfer.get(dst, requestId) : undefined;
     if (transfer) payload = encodeInvokeResultTransfer(transfer, payload, this.opts.transferCodec!);
     const peer = this.peerTransport.get(dst);
+    const encodeMs = Math.round(this.monotonicNow() - encodeStarted);
+    if (encodeMs >= 250) this.stallDiagnostics.record('encode', { request: diagnosticRef(requestId), dst: diagnosticRef(dst), encodeMs });
     const env: Envelope = { v: PROTOCOL_VERSION, kind: 'invoke-result', id: requestId, dst, payload };
     // 死锁绕行:relay 在线但控制链路未就绪时,result 不能只进可靠队列等一个可能永远
     // 不来的 link-accept(2026-08-03 线上实锤:队列冻结 30+ 分钟,每个执行成功的
@@ -2062,11 +2171,15 @@ export class DeviceLinkClient {
     expectKind: 'invoke-result' | 'link-accept',
     timeoutMs?: number,
     allowPeerResetRetry = true,
+    diagnostic?: { id: string; admissionMs: number; source: string; operation: string },
   ): Promise<Envelope> {
+    if (env.dst && this.remoteControlDisabled.has(env.dst)) {
+      return Promise.reject(new DeviceLinkError('REMOTE_DISABLED', 'remote control is disabled by the target'));
+    }
     if (this.status !== 'online' && !(env.kind === 'invoke' && env.dst && this.hasOfflineDirectPath(env.dst))) {
       return Promise.reject(new DeviceLinkError('NOT_CONNECTED', 'not connected to relay'));
     }
-    const id = createRequestId();
+    const id = diagnostic?.id ?? createRequestId();
     const timeout = timeoutMs ?? this.timing.requestTimeoutMs;
     const startedAt = Date.now();
     const startedMonotonicAt = this.monotonicNow();
@@ -2076,9 +2189,21 @@ export class DeviceLinkClient {
     let deadlineWallAt = startedAt + sendWaitMs;
     const requestDescription = `${this.describeRequest(env, expectKind)} request=${id.slice(0, 8)}`;
 
-    const logFinished = (outcome: 'ok' | 'timeout' | 'error', err?: DeviceLinkError): void => {
+    const logFinished = (outcome: 'ok' | 'timeout' | 'error', err?: DeviceLinkError, frame?: Envelope,
+      transportSnapshot?: Record<string, unknown>): void => {
       const elapsedMs = Math.max(0, Math.round(this.monotonicNow() - startedMonotonicAt));
       const wallElapsedMs = Math.max(0, Date.now() - startedAt);
+      const replyBytes = frame ? this.receivedDiagnosticBytes.get(frame) : undefined;
+      if (outcome === 'timeout' || elapsedMs >= SLOW_REQUEST_WARN_MS || (replyBytes ?? 0) >= 256 * 1024) {
+        this.stallDiagnostics.record('request', { request: diagnosticRef(id), dst: diagnosticRef(env.dst),
+          channel: diagnosticChannel((env.payload as InvokePayload)?.channel ?? env.kind),
+          operation: diagnostic?.operation, source: diagnostic?.source, outcome, elapsedMs, wallElapsedMs,
+          admissionMs: diagnostic?.admissionMs ?? 0,
+          firstWriteWaitMs: firstWriteAt === undefined ? null : Math.round(firstWriteAt - startedMonotonicAt),
+          afterFirstWriteMs: firstWriteAt === undefined ? null : Math.round(this.monotonicNow() - firstWriteAt),
+          replyBytes: replyBytes ?? null, transport: transportSnapshot ?? (env.dst ? this.transportDiagnostic(env.dst) : undefined),
+          admission: env.dst ? this.invokeScheduler.snapshot(env.dst) : undefined });
+      }
       const stages = firstWriteAt === undefined ? ' firstWrite=none'
         : ` firstWriteWaitMs=${Math.round(firstWriteAt - startedMonotonicAt)}`
           + ` afterFirstWriteMs=${Math.round(this.monotonicNow() - firstWriteAt)}`;
@@ -2102,10 +2227,13 @@ export class DeviceLinkClient {
     return new Promise<Envelope>((resolve, reject) => {
       const expire = () => {
         if (!this.pending.delete(id)) return;
+        // Retirement replaces the original frame with a small skip and may send
+        // it immediately. Preserve the causal evidence before that mutation.
+        const transportSnapshot = env.dst ? this.transportDiagnostic(env.dst) : undefined;
         clearTimeout(timer);
         if (env.dst) this.settleOutboundRouteAttemptsForId(env.dst, id);
         if (env.dst && env.kind === 'invoke') this.dropReliablePendingForRequest(env.dst, id);
-        logFinished('timeout');
+        logFinished('timeout', undefined, undefined, transportSnapshot);
         // No physical write is local backpressure, not evidence against the peer.
         const err = firstWriteAt === undefined
           ? new DeviceLinkError('BACKPRESSURE', `request expired before socket write within ${sendWaitMs}ms`)
@@ -2143,7 +2271,7 @@ export class DeviceLinkClient {
         hasWritten: () => firstWriteAt !== undefined,
         resolve: (frame) => {
           clearTimeout(timer);
-          logFinished('ok');
+          logFinished('ok', undefined, frame);
           resolve(frame);
         },
         reject: (err) => {
@@ -2784,6 +2912,9 @@ export class DeviceLinkClient {
       return;
     }
 
+    // Legacy results bypass the business queue; capture their existing wire text
+    // here so fast, large replies are visible without reserializing payloads.
+    if (env.kind === 'invoke-result') this.receivedDiagnosticBytes.set(env, byteLength(raw));
     if (isLegacyBusinessFrame(env.kind)) {
       this.enqueueLegacyEnvelope(env);
       return;
@@ -2934,6 +3065,16 @@ export class DeviceLinkClient {
         return true;
       case 'presence-changed': {
         const snap = env.payload as PresenceSnapshot;
+        if (!isScopedPeer(snap.deviceId) && snap.online === true) {
+          // Presence describes the peer as a control target, not its own outbound
+          // control of this device. Keep the shared path for reverse traffic, but
+          // fail closed before any new outbound RPC while control is refused.
+          // Offline presence is masked to remoteControlEnabled=false by the relay;
+          // that is signaling loss, not an explicit refusal. Only an online
+          // snapshot may arm or clear the outbound gate.
+          if (snap.remoteControlEnabled === false) this.remoteControlDisabled.add(snap.deviceId);
+          else this.remoteControlDisabled.delete(snap.deviceId);
+        }
         // A missing signaling route is not proof that the authenticated data path died.
         if (snap.online === false) {
           if (!this.retainDirectPathOnSignalingLoss(snap.deviceId, true)) this.detachDirectPath(snap.deviceId, 'peer-offline');
@@ -3404,10 +3545,12 @@ export class DeviceLinkClient {
           if (!this.isReceiveStreamActive(src, streamId, stream)) break;
           const nextSeq = stream.lastDeliveredSeq + 1;
           const ready = stream.ready.get(nextSeq)!;
+          const deliveredBytes = byteLength(ready.json);
           let logical: Envelope;
           try {
             const payload = decodeTransportJson(ready.json);
             logical = { ...ready.env, payload };
+            if (logical.kind === 'invoke-result') this.receivedDiagnosticBytes.set(logical, deliveredBytes);
           } catch {
             this.log.warn(`dropping reliable payload decode failure seq=${nextSeq}`);
             break;
@@ -3418,6 +3561,8 @@ export class DeviceLinkClient {
           const orderedWaitMs = Math.round(this.monotonicNow() - ready.readyAt);
           if ((logical.kind === 'invoke' || logical.kind === 'invoke-result')
             && (assemblyMs >= 250 || orderedWaitMs >= 250)) {
+            this.stallDiagnostics.record('receive', { request: diagnosticRef(logical.id), src: diagnosticRef(src), seq: nextSeq,
+              assemblyMs, orderedWaitMs, bytes: deliveredBytes });
             this.log.debug(`device-link receive timing kind=${logical.kind} request=${logical.id?.slice(0, 8) ?? 'none'}`
               + ` src=${src.slice(0, 8)} seq=${nextSeq}`
               + ` assemblyMs=${assemblyMs} orderedWaitMs=${orderedWaitMs}`);
@@ -3437,7 +3582,6 @@ export class DeviceLinkClient {
             break;
           }
           stream.ready.delete(nextSeq);
-          const deliveredBytes = byteLength(ready.json);
           stream.bufferedBytes -= deliveredBytes;
           stream.lastDeliveredSeq = nextSeq;
           this.applyReceiveStreamBase(stream);
@@ -3752,6 +3896,8 @@ export class DeviceLinkClient {
     peer.pendingBytes += reservedBytes;
     peer.nextSeq = seq + 1;
     this.warnSendBacklog(env.dst, peer, 'high');
+    if (reservedBytes >= 256 * 1024) this.stallDiagnostics.record('send', { outcome: 'queued', request: diagnosticRef(routedEnv.id),
+      dst: diagnosticRef(env.dst), channel: pending.diagChannel, seq, bytes: reservedBytes, transport: this.transportDiagnostic(env.dst) });
     if (willSendNow) {
       try {
         const sentFrames = this.sendReliableFrames(peer, pending);
@@ -3986,6 +4132,9 @@ export class DeviceLinkClient {
     }
     const channel = this.directPaths.get(deviceId);
     if (!channel) return;
+    if (reason === 'ack-timeout' || reason === 'buffer-timeout' || reason === 'send-failed') {
+      this.stallDiagnostics.record('path', { dst: diagnosticRef(deviceId), reason, transport: this.transportDiagnostic(deviceId) });
+    }
     this.directPaths.delete(deviceId);
     const grace = this.sameAccountDirectGrace.get(deviceId);
     // A local hello-ack may restore relay delivery without a fresh peer presence
@@ -5007,6 +5156,12 @@ export class DeviceLinkClient {
       } else {
         deliverySampleValid = false;
       }
+      if (pending.bytes >= 256 * 1024 || acknowledgedAt - pending.enqueuedAt >= 1_000) {
+        this.stallDiagnostics.record('send', { outcome: 'acked', request: diagnosticRef(pending.envelope.id), dst: diagnosticRef(src),
+          channel: pending.diagChannel, seq, bytes: pending.bytes, path: pending.path ?? 'unsent', attempts: pending.attempts,
+          queueToAckMs: Math.round(acknowledgedAt - pending.enqueuedAt),
+          currentAttemptToAckMs: pending.firstSentAt === undefined ? null : Math.round(acknowledgedAt - pending.firstSentAt) });
+      }
       peer.pending.delete(seq);
       peer.pendingBytes -= pending.bytes;
     }
@@ -5869,6 +6024,27 @@ export class DeviceLinkClient {
     return stalledOthers > 0;
   }
 
+  private transportDiagnostic(dst: string): Record<string, unknown> {
+    const peer = this.peerTransport.get(dst);
+    const now = this.monotonicNow();
+    const others = [...this.peerTransport].filter(([id, p]) => id !== dst && p.pendingBytes > 0)
+      .map(([id, p]) => ({ peer: diagnosticRef(id), pending: p.pending.size, bytes: p.pendingBytes,
+        relayBytes: [...p.pending.values()].reduce((sum, frame) => sum + (frame.path === 'direct' ? 0 : frame.bytes), 0) }))
+      .sort((a, b) => b.relayBytes - a.relayBytes || b.bytes - a.bytes);
+    return { stream: diagnosticRef(peer?.streamId), relay: this.status, socketBytes: this.ws?.bufferedAmount ?? 0, directBytes: this.directPaths.get(dst)?.bufferedAmount ?? null,
+      sendPhase: peer?.sendPhase ?? 'absent', ack: peer?.highestAckSeq ?? null, next: peer?.nextSeq ?? null,
+      pending: peer?.pending.size ?? 0, bytes: peer?.pendingBytes ?? 0,
+      head: [...(peer?.pending.values() ?? [])].slice(0, 3).map(p => ({ seq: p.seq, request: diagnosticRef(p.envelope.id),
+        channel: p.diagChannel ?? 'unknown', bytes: p.bytes, path: p.path ?? 'unsent', sent: p.sent,
+        ageMs: Math.round(Math.max(0, now - p.enqueuedAt)), attempts: p.attempts, gate: p.lastBlockedBy ?? 'none' })),
+      receive: [...(peer?.receive.entries() ?? [])].slice(0, 2).map(([stream, r]) => ({ stream: diagnosticRef(stream), delivered: r.lastDeliveredSeq, delivering: r.deliveringSeq,
+        firstReady: r.ready.size ? Math.min(...r.ready.keys()) : null, firstAssembly: r.assemblies.size ? Math.min(...r.assemblies.keys()) : null,
+        ready: r.ready.size, assembling: r.assemblies.size, bytes: r.bufferedBytes })),
+      otherPeers: others.slice(0, 3),
+      omittedPeers: Math.max(0, others.length - 3),
+    };
+  }
+
   /**
    * Final timeout evidence only: no payload or full device identifiers. This
    * separates "ACK never advanced" from an ACK send exception and records the
@@ -5879,6 +6055,7 @@ export class DeviceLinkClient {
     seq: number,
     peer: PeerTransportState | undefined,
   ): string {
+    this.stallDiagnostics.record('ack', { dst: diagnosticRef(dst), seq, transport: this.transportDiagnostic(dst) });
     if (!peer) {
       return `dst=${dst.slice(0, 8)} seq=${seq} peer=missing conn=${this.connEpoch}`;
     }
@@ -5943,6 +6120,7 @@ export class DeviceLinkClient {
   }
 
   private clearPeerTransport(): void {
+    this.remoteControlDisabled.clear();
     for (const id of this.sameAccountDirectGrace.keys()) this.clearSameAccountDirectGrace(id);
     this.directNegotiator?.clear();
     this.directPeerSupport.clear();

@@ -10,3 +10,4 @@ export * from './publicPresentation.js';
 export * from './localSharing.js';
 export * from './toolUi.js';
 export * from './appCsp.js';
+export * from './readme.js';

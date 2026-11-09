@@ -160,7 +160,7 @@ describe('overloadFailureNotice', () => {
 describe('terminalErrorText', () => {
   it('maps output-limit for user turns, scheduler relay and hook failures', () => {
     expect(terminalErrorText({ reason: 'output-limit', message: 'Pi reached the model output limit.' }))
-      .toBe('模型已达到输出长度上限，本轮回复可能不完整。可以直接发送下一条消息继续。');
+      .toBe('模型已达到输出长度上限，本轮回复可能不完整。可以发送新消息继续；若反复触发，请降低推理强度或先压缩对话记录。');
     expect(terminalErrorText({ reason: 'output-limit' })).toContain('回复可能不完整');
   });
 
@@ -371,5 +371,22 @@ describe('额度类终态错误', () => {
     const text = terminalErrorText({ message: 'insufficient_quota for key sk-abcdefghijklmnop' },
       { ...PERSONAL, taskLabel: 'key sk-abcdefghijklmnop' });
     expect(text).not.toContain('sk-abcdefghijklmnop');
+  });
+});
+
+describe('output-limit usage guidance', () => {
+  it('explains reasoning exhaustion and gives recovery actions', () => {
+    const text = terminalErrorText({ reason: 'output-limit', outputLimit: { outputTokens: 131072, reasoningTokens: 131064 } });
+    expect(text).toContain('131064');
+    expect(text).toContain('131072');
+    expect(text).toContain('降低推理强度');
+    expect(text).toContain('先压缩');
+    expect(text).not.toContain('可以发送新消息继续');
+  });
+  it('keeps ordinary output limits distinct and supports legacy payloads', () => {
+    const text = terminalErrorText({ reason: 'output-limit', outputLimit: { outputTokens: 131072, reasoningTokens: 1000 } });
+    expect(text).toContain('1000');
+    expect(text).toContain('可以发送新消息继续');
+    expect(terminalErrorText({ reason: 'output-limit' })).not.toContain('tokens');
   });
 });

@@ -63,22 +63,24 @@ describe('Creator Micro 2 task keys', () => {
     });
   });
 
-  it('keeps Codex factory HID codes as physical keys', () => {
+  it('routes HID by the factory key names when the board keeps its factory keymap', () => {
     const taskKeys = ['ACT06'] as const;
-    expect(resolveWorkLouderHidRole('ACT06', taskKeys, 'codex-micro')).toEqual({
+    expect(resolveWorkLouderHidRole('ACT06', taskKeys, { factoryKeymap: true })).toEqual({
       role: 'task',
       slot: 0,
       physical: 'ACT06',
     });
-    expect(resolveWorkLouderHidRole('AG00', taskKeys, 'codex-micro')).toEqual({
+    expect(resolveWorkLouderHidRole('AG00', taskKeys, { factoryKeymap: true })).toEqual({
       role: 'command',
       physical: 'AG00',
     });
-    expect(resolveWorkLouderHidRole('AG00', taskKeys, 'creator-micro-2')).toEqual({
-      role: 'task',
-      slot: 0,
-      physical: 'ACT06',
-    });
+    for (const device of [{}, { factoryKeymap: false }, null]) {
+      expect(resolveWorkLouderHidRole('AG00', taskKeys, device)).toEqual({
+        role: 'task',
+        slot: 0,
+        physical: 'ACT06',
+      });
+    }
   });
 
   it('lets leftover AG codes sit on extra command keys when there are fewer than six tasks', () => {
@@ -89,43 +91,35 @@ describe('Creator Micro 2 task keys', () => {
     expect(new Set(hid.values()).size).toBe(WORKLOUDER_CREATOR_PROGRAMMABLE_KEYS.length);
   });
 
-  it('still treats leftover AG06 HID as the seventh task key', () => {
-    const taskKeys = [...WORKLOUDER_CREATOR_DEFAULT_TASK_KEYS, 'ACT06'] as const;
-    expect(resolveCreatorHidRole('AG06', taskKeys)).toEqual({
-      role: 'task',
-      slot: 6,
-      physical: 'ACT06',
-    });
-  });
-
-  it('puts extra task keys on ACT HID so firmware-unknown AG06+ is never required', () => {
+  // Creator Micro 2 firmware 0.6.2 lights AG06–AG12 on hardware; every task key gets its own thread.
+  it('binds every task key to its own AG code so all thirteen can light', () => {
     const taskKeys = [...WORKLOUDER_CREATOR_PROGRAMMABLE_KEYS];
-    const hid = assignCreatorHidCodes(taskKeys);
-    expect(hid.get('AG00')).toBe('AG00');
-    expect(hid.get('AG05')).toBe('AG05');
-    expect(hid.get('ACT06')).toBe('ACT06');
-    expect(hid.get('ACT12')).toBe('ACT12');
-    expect(resolveCreatorHidRole('ACT06', taskKeys)).toEqual({
-      role: 'task',
-      slot: 6,
-      physical: 'ACT06',
-    });
-    expect(resolveCreatorHidRole('ACT12', taskKeys)).toEqual({
+    expect(buildCreatorMicro2AgentKeymap(taskKeys)).toEqual([
+      ['KV_OAI_AG00', 'KV_OAI_AG01'],
+      ['KV_OAI_AG02', 'KV_OAI_AG03', 'KV_OAI_AG04', 'KV_OAI_AG05'],
+      ['KV_OAI_AG06', 'KV_OAI_AG07', 'KV_OAI_AG08', 'KV_OAI_AG09'],
+      ['KV_OAI_AG10', 'KV_OAI_AG11', 'KV_OAI_AG12'],
+    ]);
+    expect(resolveCreatorHidRole('AG12', taskKeys)).toEqual({
       role: 'task',
       slot: 12,
       physical: 'ACT12',
     });
   });
 
-  it('keeps the original six AG codes and rides ACT HID for a seventh task key', () => {
+  it('gives a seventh task key AG06 while command keys keep ACT codes', () => {
     const taskKeys = [...WORKLOUDER_CREATOR_DEFAULT_TASK_KEYS, 'ACT06'] as const;
     const hid = assignCreatorHidCodes(taskKeys);
-    expect(hid.get('AG00')).toBe('AG00');
-    expect(hid.get('ACT06')).toBe('ACT06');
-    expect(resolveCreatorHidRole('ACT06', taskKeys)).toEqual({
+    expect(hid.get('ACT06')).toBe('AG06');
+    expect(hid.get('ACT07')).toBe('ACT06');
+    expect(resolveCreatorHidRole('AG06', taskKeys)).toEqual({
       role: 'task',
       slot: 6,
       physical: 'ACT06',
+    });
+    expect(resolveCreatorHidRole('ACT06', taskKeys)).toEqual({
+      role: 'command',
+      physical: 'ACT07',
     });
   });
 
