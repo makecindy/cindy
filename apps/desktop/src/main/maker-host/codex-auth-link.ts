@@ -102,6 +102,7 @@ export type CodexAuthSnapshotKind =
   | 'copied'
   | 'copy-unsupported'
   | 'swap-failed-intact'
+  | 'swap-pending'
   | 'target-changed'
   | 'source-changed'
   | 'lost';
@@ -233,11 +234,16 @@ export function codexAuthFileGenerationOf(stat: BigIntStats): CodexAuthFileGener
   return { dev: stat.dev, ino: stat.ino, mtimeNs: stat.mtimeNs, size: stat.size };
 }
 
-function sameCodexAuthFileGeneration(stat: BigIntStats, generation: CodexAuthFileGeneration): boolean {
-  return stat.dev === generation.dev &&
+function sameCodexAuthFileGeneration(
+  stat: BigIntStats,
+  generation: CodexAuthFileGeneration,
+): boolean {
+  return (
+    stat.dev === generation.dev &&
     stat.ino === generation.ino &&
     stat.mtimeNs === generation.mtimeNs &&
-    stat.size === generation.size;
+    stat.size === generation.size
+  );
 }
 
 /**
@@ -332,36 +338,51 @@ export async function copyCodexAuthSnapshot(
     }
   }
 
-  // 备份与 sidecar 共用同一个 token:崩在窗口里时两者都在, 启动对账只认**配对**的
-  // 备份与 sidecar(发布成功后 sidecar 已被 rename 成目标, 备份即使没删掉也不再
-  // 可恢复 —— 恢复它会在本机 Codex 之后登出时把旧账号凭证倒回来,#9316 review)。
+  // 备份与 sidecar 共用同一个 token:启动对账只认配对文件，恢复实际取得的备份。
+  // 发布或恢复完成后清掉配对；缺少 sidecar 的孤儿备份不再代表未完成的替换。
   let backupPath: string | null = null;
   try {
-    // 时间戳打在 sidecar 上:随 rename 原子生效,发布后不再按路径改时间
-    // (本机 Codex 在 rename 之后刷新的话,按路径改会把新凭证盖上旧代次时间戳)。
-    // 必须在**挪走旧目标之前**打好:崩在窗口里时 sidecar 会被启动对账按它恢复,
-    // 那时它必须已经带着源那一代的时间戳。
-    await fsp.utimes(
-      sidecar,
-      codexAuthTimestampSeconds(sourceStat.atimeNs),
-      codexAuthTimestampSeconds(sourceStat.mtimeNs),
-    ).catch(() => undefined);
+    // 时间戳在发布前打在 sidecar 上，发布后不再按目标路径改时间，
+    // 避免给本机 Codex 刚刷新的凭证盖上旧代次时间戳。
+    await fsp
+      .utimes(
+        sidecar,
+        codexAuthTimestampSeconds(sourceStat.atimeNs),
+        codexAuthTimestampSeconds(sourceStat.mtimeNs),
+      )
+      .catch(() => undefined);
     if (platform === 'win32') {
       if (opts.backupTarget === true) {
         // 目标是系统凭证: 先把旧目标挪到可恢复的备份名, 发布成功后再删备份。
         // 崩在「挪走之后、发布之前」时备份还在, 下次启动对账按它恢复 —— 否则
         // ~/.codex/auth.json 就此消失, 本机 Codex 凭空掉登录(#9316 review)。
-        backupPath = `${myAuth}.${token}.swapbak`;
+        const backup = `${myAuth}.${token}.swapbak`;
         try {
-          await fsp.rename(myAuth, backupPath);
+          await fsp.rename(myAuth, backup);
         } catch (renameError) {
-          if (!isWindowsAclDenied(renameError) || !(await healWindowsAuthAcl(myAuth, execFileImpl))) {
-            // 挪不动(ACL / 被占用) → 照旧走删除路径, 行为不变。
-            await fsp.rm(myAuth, { force: true });
-            backupPath = null;
-          } else {
-            await fsp.rename(myAuth, backupPath);
+          if ((renameError as NodeJS.ErrnoException).code === 'ENOENT') {
+            await fsp.rm(sidecar, { force: true }).catch(() => undefined);
+            return { kind: 'target-changed' };
           }
+          if (
+            !isWindowsAclDenied(renameError) ||
+            !(await healWindowsAuthAcl(myAuth, execFileImpl))
+          ) {
+            throw renameError;
+          }
+          await fsp.rename(myAuth, backup);
+        }
+        backupPath = backup;
+        if (
+          opts.expectTargetGeneration &&
+          !(await sameCodexAuthGeneration(backup, opts.expectTargetGeneration))
+        ) {
+          // 校验实际取得的文件，而不只是 rename 之前的路径快照。
+          // 恢复使用独占 link，不能覆盖在缺口里新建的登录凭证。
+          if (await restoreCodexAuthBackup(backup, myAuth)) {
+            await fsp.rm(sidecar, { force: true }).catch(() => undefined);
+          }
+          return { kind: 'target-changed' };
         }
       } else {
         try {
@@ -374,32 +395,28 @@ export async function copyCodexAuthSnapshot(
         }
       }
     }
-    await fsp.rename(sidecar, myAuth);
-    if (backupPath) await fsp.rm(backupPath, { force: true }).catch(() => undefined);
+    if (backupPath) {
+      // 备份挪走后本机 Codex 仍可能重新登录。独占发布不覆盖这个新目标。
+      await fsp.link(sidecar, myAuth);
+      await fsp.rm(backupPath, { force: true });
+    } else {
+      await fsp.rename(sidecar, myAuth);
+    }
     await fsp.rm(sidecar, { force: true }).catch(() => undefined);
     return { kind: 'copied' };
   } catch (error) {
-    await fsp.rm(sidecar, { force: true }).catch(() => undefined);
     if (backupPath) {
-      if (await pathEntryExists(myAuth)) {
-        // 目标已被本机 Codex 重建出来: 备份是旧代次, 留着也没用。
-        await fsp.rm(backupPath, { force: true }).catch(() => undefined);
-      } else {
-        // 目标此刻只在备份里(刚被我们挪走的)。源还在: 用源重建, 重建成功就把备份
-        // 清掉; 重建失败就把备份挪回原位 —— 旧凭证绝不凭空消失(#9316 review)。
-        const restored = await copyCodexAuthSnapshot(systemAuth, myAuth, platform, execFileImpl, {
-          expectTargetAbsent: true,
-        });
-        if (restored.kind === 'copied') {
-          await fsp.rm(backupPath, { force: true }).catch(() => undefined);
-          return { kind: 'copied' };
-        }
-        await fsp.rename(backupPath, myAuth).catch(() => undefined);
-      }
+      // 不递归生成另一份副本。恢复失败时原配对仍在，下次启动可恢复。
+      const restored = await restoreCodexAuthBackup(backupPath, myAuth);
+      if (restored) await fsp.rm(sidecar, { force: true }).catch(() => undefined);
+    } else {
+      await fsp.rm(sidecar, { force: true }).catch(() => undefined);
     }
     if (await pathEntryExists(myAuth)) {
       return { kind: 'swap-failed-intact', error: error as Error };
     }
+    // 已保留备份配对时，不让同步器的 lost 兜底重新复制旧源。
+    if (backupPath) return { kind: 'swap-pending', error: error as Error };
     return { kind: 'lost', error: error as Error };
   }
 }
@@ -527,18 +544,25 @@ export async function breakResidualSystemCodexHardlinks(
   platform: NodeJS.Platform = process.platform,
   execFileImpl: typeof execFileP = execFileP,
 ): Promise<boolean> {
-  const outcome = await breakResidualCodexHardlinksDetailed(
-    systemAuth,
-    platform,
-    execFileImpl,
-  );
+  const outcome = await breakResidualCodexHardlinksDetailed(systemAuth, platform, execFileImpl);
   return outcome.broke;
+}
+
+/** 恢复实际取得的目标；目标被另一写者重建时保留它，不做覆盖式 rename。 */
+async function restoreCodexAuthBackup(backup: string, target: string): Promise<boolean> {
+  try {
+    await fsp.link(backup, target);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') return false;
+  }
+  await fsp.rm(backup, { force: true }).catch(() => undefined);
+  return true;
 }
 
 /** 代次是否仍与读到内容时一致(dev / inode / mtime / 大小都没变)。 */
 async function sameCodexAuthGeneration(
   file: string,
-  stat: BigIntStats,
+  stat: CodexAuthFileGeneration,
 ): Promise<boolean> {
   try {
     const now = await fsp.stat(file, { bigint: true });
@@ -623,36 +647,40 @@ async function breakResidualCodexHardlinksDetailed(
         await fsp.rename(file, backup);
         backupPath = backup;
       } catch (renameError) {
-        // 挪不动(ACL 拒绝 / 被占用)就照旧走删除路径, 行为不变。
-        if (!isWindowsAclDenied(renameError) || !(await healWindowsAuthAcl(file, execFileImpl))) {
-          await fsp.rm(file, { force: true });
-        } else {
-          await fsp.rename(file, backup);
-          backupPath = backup;
+        if ((renameError as NodeJS.ErrnoException).code === 'ENOENT') {
+          await fsp.rm(sidecar, { force: true }).catch(() => undefined);
+          return { broke: false, generationChanged: true };
         }
+        if (!isWindowsAclDenied(renameError) || !(await healWindowsAuthAcl(file, execFileImpl))) {
+          throw renameError;
+        }
+        await fsp.rename(file, backup);
+        backupPath = backup;
+      }
+      if (!(await sameCodexAuthGeneration(backup, stat))) {
+        if (await restoreCodexAuthBackup(backup, file)) {
+          await fsp.rm(sidecar, { force: true }).catch(() => undefined);
+        }
+        return { broke: false, generationChanged: true };
       }
     }
     // 换 inode 不应让凭证看起来更新: 保留原修改时间, 对账仍按同一代次判断。
-    await fsp.rename(sidecar, file);
-    if (backupPath) await fsp.rm(backupPath, { force: true }).catch(() => undefined);
+    if (backupPath) {
+      await fsp.link(sidecar, file);
+      await fsp.rm(backupPath, { force: true });
+      await fsp.rm(sidecar, { force: true });
+    } else {
+      await fsp.rename(sidecar, file);
+    }
     return { broke: true, generationChanged: false };
   } catch {
-    // 换失败: 只有目标真的没了才把内存里的内容写回去 —— 目标若已被本机
-    // Codex 原子重建, 覆盖它会截断新 token(#9316 review)。
     if (backupPath) {
-      if (await pathEntryExists(file)) {
-        // 目标已被本机 Codex 重建出来: 不拿旧字节盖掉它。备份是旧代次, 留着也没用。
-        await fsp.rm(backupPath, { force: true }).catch(() => undefined);
-      } else {
-        // 旧目标就在备份里, 原样挪回去(保住原来的 inode 与时间戳)。
-        await fsp.rename(backupPath, file).catch(async () => {
-          await fsp.writeFile(file, content, { mode }).catch(() => undefined);
-        });
+      if (await restoreCodexAuthBackup(backupPath, file)) {
+        await fsp.rm(sidecar, { force: true }).catch(() => undefined);
       }
-    } else if (!(await pathEntryExists(file))) {
-      await fsp.writeFile(file, content, { mode }).catch(() => undefined);
+    } else {
+      await fsp.rm(sidecar, { force: true }).catch(() => undefined);
     }
-    await fsp.rm(sidecar, { force: true }).catch(() => undefined);
     return { broke: false, generationChanged: false };
   }
 }
@@ -691,7 +719,10 @@ export async function recoverInterruptedCodexAuthSwap(file: string): Promise<boo
     const stamped = await Promise.all(
       paired.map(async (name) => ({
         name,
-        mtimeMs: await fsp.stat(path.join(dir, name)).then((s) => s.mtimeMs).catch(() => 0),
+        mtimeMs: await fsp
+          .stat(path.join(dir, name))
+          .then((s) => s.mtimeMs)
+          .catch(() => 0),
       })),
     );
     stamped.sort((a, b) => b.mtimeMs - a.mtimeMs);
@@ -699,36 +730,25 @@ export async function recoverInterruptedCodexAuthSwap(file: string): Promise<boo
     const chosen = path.join(dir, chosenName);
     const token = chosenName.slice(prefix.length, -'.swapbak'.length);
     const sidecar = path.join(dir, `${prefix}${token}.copytmp`);
-    // 发布**配对的 sidecar**,不是备份那个 inode: 备份正是当初 nlink>1 才进清理
-    // 流程的那份 —— 把它硬链回去等于把残余硬链原样恢复, Codex 0.165+ 照样写不进去,
-    // 用户再也存不住登录态。sidecar 是清理时写出的独立副本(nlink=1), 恢复它才是
-    // 「一份干净的系统凭证」(#9316 review)。
-    //
-    // 目标可能在上面那次 exists 检查之后被本机 Codex 重建:rename 会直接盖掉它。
-    // link 是原子占位 —— 目标已存在时报 EEXIST, 换代的新凭证原样留下。
+    // 恢复实际取得的目标，而不是发布前准备的旧 sidecar：rename 取得目标后、
+    // 代次复核前也可能中断。复制备份到独立 inode，既保住那一代，也不恢复旧硬链。
+    const recovery = `${file}.${process.pid}.${sidecarCounter++}.recoverytmp`;
+    const copied = await copyCodexAuthSnapshot(chosen, recovery);
+    if (copied.kind !== 'copied') return false;
     let published = false;
     let conflict = false;
     try {
-      await fsp.link(sidecar, file);
+      await fsp.link(recovery, file);
       published = true;
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === 'EEXIST') {
         conflict = true;
-      } else if (!(await pathEntryExists(file))) {
-        // 不支持硬链等:退回 rename, 但先再确认一次目标仍然不在。
-        try {
-          await fsp.rename(sidecar, file);
-          published = true;
-        } catch {
-          published = false;
-        }
-      } else {
-        conflict = true;
       }
+    } finally {
+      await fsp.rm(recovery, { force: true }).catch(() => undefined);
     }
     if (published) {
-      // sidecar 的名字去掉, 目标上只剩一个链接(nlink 回到 1); 备份那个旧 inode 只剩
-      // 别的 profile 的链接, 删掉这个名字即可。
+      // recovery 临时名字已去掉，目标是独立 inode；清掉原备份与配对标记。
       await fsp.rm(sidecar, { force: true }).catch(() => undefined);
       await fsp.rm(chosen, { force: true }).catch(() => undefined);
       await retireSwaps(dir, prefix, backups, chosenName);
@@ -757,9 +777,9 @@ async function retireSwaps(
   for (const name of backups) {
     if (name === keep) continue;
     const token = name.slice(prefix.length, -'.swapbak'.length);
-    await fsp.rm(path.join(dir, `${prefix}${token}.copytmp`), { force: true }).catch(() =>
-      undefined,
-    );
+    await fsp
+      .rm(path.join(dir, `${prefix}${token}.copytmp`), { force: true })
+      .catch(() => undefined);
     await fsp.rm(path.join(dir, name), { force: true }).catch(() => undefined);
   }
 }
@@ -775,11 +795,7 @@ async function waitBeforePathRetry(): Promise<void> {
 }
 
 export type CodexAuthCopySyncKind =
-  | 'copied-from-system'
-  | 'copied-from-local'
-  | 'unchanged'
-  | 'skipped'
-  | 'failed';
+  'copied-from-system' | 'copied-from-local' | 'unchanged' | 'skipped' | 'failed';
 
 export interface CodexAuthCopySyncOutcome {
   kind: CodexAuthCopySyncKind;
@@ -796,10 +812,10 @@ export interface CodexAuthCopySyncOutcome {
 }
 
 /** 只在确实有残余时带上字段,避免 undefined 混进结果对象。 */
-function residualFields(residual: {
-  system?: number;
-  local?: number;
-}): { residualSystemHardlinks?: number; residualLocalHardlinks?: number } {
+function residualFields(residual: { system?: number; local?: number }): {
+  residualSystemHardlinks?: number;
+  residualLocalHardlinks?: number;
+} {
   return {
     ...(residual.system !== undefined ? { residualSystemHardlinks: residual.system } : {}),
     ...(residual.local !== undefined ? { residualLocalHardlinks: residual.local } : {}),
@@ -993,16 +1009,21 @@ export async function syncIndependentCodexAuth(
       await waitBeforePathRetry();
       continue;
     }
-    if (!local || await sameCodexAuthInode(systemAuth, myAuth)) {
+    if (!local || (await sameCodexAuthInode(systemAuth, myAuth))) {
       // 存量 hardlink: 复制一份到 myAuth 会拆掉本沙箱这一端的链接。系统路径上还
       // 挂着别的 profile 的硬链时 nlink 仍 > 1,Codex 照样拒绝写 —— 一并换到新 inode。
       //
       // 本地副本整个不在时: 重建的前提是「目标仍然不存在」(本机 Codex 刚建出来的
       // 那份是新的一代, 不能覆盖) —— 走 expectTargetAbsent, 不走代次比对。
       // 共享 inode 时系统那份的代次就是本地这份的代次。
-      const published = await publish(systemAuth, myAuth, 'copied-from-system', local
-        ? { expectTargetGeneration: codexAuthFileGenerationOf(systemStat) }
-        : { expectTargetAbsent: true });
+      const published = await publish(
+        systemAuth,
+        myAuth,
+        'copied-from-system',
+        local
+          ? { expectTargetGeneration: codexAuthFileGenerationOf(systemStat) }
+          : { expectTargetAbsent: true },
+      );
       if (published.conflict) continue;
       const residual = await detachHardlinks(systemAuth);
       // 拆硬链时发现系统凭证刚换代: 这次不发布旧字节, 重新对账。
@@ -1043,7 +1064,7 @@ export async function syncIndependentCodexAuth(
     // 的权威端,否则 reconcile 会把旧 token/旧账号当成已对齐,永不自愈。
     // 权威端由调用方授权决定:允许回写且本地不比系统旧 → 本地赢;否则系统凭证获胜。
     const localWins = opts.allowLocalToSystem === true;
-    if (localWins && localStat.mtimeMs >= systemStat.mtimeMs) {
+    if (localWins && localStat.mtimeNs >= systemStat.mtimeNs) {
       // 写回前重新核对账号:先前读到的账号结论可能已过期(本机 Codex 换号),
       // 过期的结论会授权旧账号覆盖新登录(#9316 review)。
       const confirmed = opts.confirmLocalToSystem ? await opts.confirmLocalToSystem() : true;
