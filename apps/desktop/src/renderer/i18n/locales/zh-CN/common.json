@@ -10722,6 +10722,9 @@
         "stepFailed": "{{name}}这一步出错了，没做完",
         "stepTimeout": "{{name}}太久没做完，这一步先停下",
         "stepUnavailable": "{{name}}现在不可用，这一步没法做",
+        "runtimeFailureReason": {
+          "unclaimed_timeout": "{{name}}未能在等待期限内开始处理，本次请求已结束。\n请伙伴的主人检查所属电脑上的 Cindy 是否正常运行、网络是否连接。"
+        },
         "runtimeFailure": {
           "REMOTE_DEVICE_LIMIT": "{{name}}无法回复：伙伴所在设备保留的远程任务数已达上限。\n请伙伴的主人归档暂时不用的任务，或请远程电脑的主人在“远程与分享”中提高上限。",
           "REMOTE_TOTAL_LIMIT": "{{name}}无法回复：远程电脑保留的任务总数已达上限。\n请那台电脑的主人释放暂时不用的任务，或在“远程与分享”中提高上限。",
@@ -19706,7 +19709,8 @@
     "removeTitle": "移出 {{name}}？",
     "removeDescription": "Cindy 将不再给这个账号分配任务。CLI 登录和对话历史仍保留在本机。",
     "failed": "无法读取或更新账号。请检查 CLI 登录和网络连接后重试。",
-    "directory": "账号目录",
+    "openDirectory": "打开账号目录",
+    "openDirectoryFailed": "无法打开账号目录，它可能已被移动或删除。",
     "loginAgain": "重新登录",
     "login": "登录"
   },

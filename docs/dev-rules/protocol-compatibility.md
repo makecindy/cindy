@@ -51,6 +51,19 @@ OpenAI 池快照增加可选 `nativeAccountPool` 标记，当前控制端让三�
 仅复用既有远程 Agent 的目录、open/send/poll/stop 通道，任务和历史仍归插件电脑，
 不添加 device-link allowlist、帧、relay 能力或服务端请求。官方与自建中转继续透传既有协议，无需升级。
 同账号与跨账号授权仍由原通道及执行电脑核验，来源不可用不回落本机、不重放付费输入。
+## 群内等待领取超时原因（2026-11-09，未发布）
+
+Chat Server 的 `/executions` 与 `/execution-failures` 保留 `failure_code: RUNTIME_TIMEOUT`，
+仅对服务端确认的当前尝试等待领取超时追加可选 `failure_reason: unclaimed_timeout`。
+这只说明请求在就绪等待期限内未被领取，不证明所属电脑离线、关机或模型服务异常。
+细分原因随当前执行代次收尾，显式重试后不沿用旧原因；不改变原排队、租约或断线取消语义。
+
+客户端共享解析仅接受与 `RUNTIME_TIMEOUT` 匹配的已知原因，派生消息视图可选携带
+`runtimeFailureReason`；桌面、手机直连与手机经电脑读取的群视图使用同一判据。
+字段缺失、未知或不匹配时保持原通用错误展示，不读取或显示私有 detail。
+旧客户端忽略新增字段；新客户端连接旧服务端／旧电脑时使用通用提示。
+服务端可先发布，客户端随后发布。Device Link、IPC channel、allowlist、权限、数据库 Schema
+与 Mobile 原生配置均不变。
 
 ## 插件详细介绍 `manifest.readme`（2026-11-06，未发布）
 
@@ -164,7 +177,10 @@ Desktop 与 Mobile 明确标注估算和排除项。旧端忽略可选字段，�
 - `query.request` 新增可选 `recipient = { scopeId, principalId }`：多个组织共用的服务（官方飞书）发出的查询
   代表哪个应用的哪个账号；带上时两项都须是非空字符串。其它服务不发，旧桌面端忽略。
 - 客户端端点清单新增 `feishuHookWsUrl`（`wss:`），登记为跨区域端点：服务只在海外部署一套，
-  两份区域清单都指向 `cindy.app`。服务部署前正式清单不写该字段，入口不显示。
+  两份区域清单都指向 `cindy.app`。服务部署并核验后，在两份正式清单同时填写并发布该字段；
+  缺省或清空后，重启读取新清单会停止连接；未开启的用户不显示入口，已开启的用户保留卡片并提示
+  地址未配置，以便关闭，可用于回滚。dev 使用独立开发服务，配置与发布步骤见
+  [端点清单说明](../../config/README.md)。
 
 飞书群上下文由服务端组装进 `task.dispatch.prompt`（含 `<thread_context>`、引用与当前发言人）；`source.threadContext` 同时供来源卡展示，客户端继续保留服务端完整 prompt，不再从展示元数据重复注入。X 的客户端 prompt 组装只作用于 X，不能据此推断其它渠道丢失上下文。
 

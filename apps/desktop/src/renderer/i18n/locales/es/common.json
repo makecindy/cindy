@@ -10854,6 +10854,9 @@
         "stepFailed": "{{name}} tuvo un problema y no completó este paso",
         "stepTimeout": "{{name}} tardó demasiado, por lo que se detuvo este paso.",
         "stepUnavailable": "{{name}} no está disponible y no puede realizar este paso",
+        "runtimeFailureReason": {
+          "unclaimed_timeout": "{{name}} no empezó a procesar dentro del plazo de espera. Esta solicitud ha finalizado.\nPide al propietario del compañero que compruebe que Cindy está funcionando y que su ordenador tiene conexión de red."
+        },
         "runtimeFailure": {
           "REMOTE_DEVICE_LIMIT": "{{name}} no puede responder: el dispositivo del compañero alcanzó su límite de sesiones remotas.\nPídele al propietario del compañero que archive las sesiones sin usar o al propietario de la computadora remota que aumente el límite en Acceso remoto y uso compartido.",
           "REMOTE_TOTAL_LIMIT": "{{name}} no puede responder: la computadora remota alcanzó su límite total de sesiones remotas.\nPídele al propietario de esa computadora que libere las sesiones sin usar o aumente el límite en Acceso remoto y uso compartido.",
@@ -19965,7 +19968,8 @@
     "removeTitle": "¿Quitar {{name}}?",
     "removeDescription": "Cindy dejará de asignar tareas a esta cuenta. La sesión de la CLI y el historial de conversaciones permanecerán en este equipo.",
     "failed": "No se pudo leer o actualizar la cuenta. Comprueba el inicio de sesión de la CLI y la conexión, e inténtalo de nuevo.",
-    "directory": "Carpeta de la cuenta",
+    "openDirectory": "Abrir carpeta de la cuenta",
+    "openDirectoryFailed": "No se pudo abrir la carpeta de la cuenta. Puede que se haya movido o eliminado.",
     "loginAgain": "Iniciar sesión nuevamente",
     "login": "Iniciar sesión"
   },

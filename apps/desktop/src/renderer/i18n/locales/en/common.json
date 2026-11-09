@@ -865,8 +865,8 @@
       "runningCount_one": "{{count}} task running",
       "runningCount_other": "{{count}} tasks running",
       "limitAria": "Task limit for {{name}}",
-      "limitOption_one": "Max {{count}}",
-      "limitOption_other": "Max {{count}}",
+      "limitOption_one": "Limit {{count}}",
+      "limitOption_other": "Limit {{count}}",
       "weightAria": "Weight for {{name}}",
       "weightOption": "Weight {{weight}}",
       "assignAria": "Assign tasks to {{name}}",
@@ -10767,6 +10767,9 @@
         "stepFailed": "{{name}} ran into a problem and didn’t finish this step",
         "stepTimeout": "{{name}} took too long, so this step was stopped",
         "stepUnavailable": "{{name}} is unavailable and can’t do this step",
+        "runtimeFailureReason": {
+          "unclaimed_timeout": "{{name}} did not start processing within the waiting period. This request has ended.\nAsk the teammate’s owner to check that Cindy is running and the network is connected on its computer."
+        },
         "runtimeFailure": {
           "REMOTE_DEVICE_LIMIT": "{{name}} can’t reply: the teammate’s device has reached its remote session limit.\nAsk the teammate’s owner to archive unused sessions, or ask the remote computer’s owner to raise the limit in Remote & sharing.",
           "REMOTE_TOTAL_LIMIT": "{{name}} can’t reply: the remote computer has reached its total remote session limit.\nAsk that computer’s owner to release unused sessions or raise the limit in Remote & sharing.",
@@ -19778,7 +19781,8 @@
     "removeTitle": "Remove {{name}}?",
     "removeDescription": "Cindy will stop assigning tasks to this account. Its CLI login and conversation history remain on this computer.",
     "failed": "Could not read or update this account. Check the CLI login and connection, then try again.",
-    "directory": "Account folder",
+    "openDirectory": "Open account folder",
+    "openDirectoryFailed": "Couldn’t open the account folder. It may have been moved or deleted.",
     "loginAgain": "Sign in again",
     "login": "Sign in"
   },

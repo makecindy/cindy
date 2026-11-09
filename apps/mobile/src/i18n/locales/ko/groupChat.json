@@ -98,6 +98,13 @@
     "stepFailed": "{{name}} 님이 오류로 이 단계를 끝내지 못했습니다",
     "stepTimeout": "{{name}} 님의 작업이 너무 오래 걸려 이 단계를 멈췄습니다",
     "stepUnavailable": "{{name}} 님을 지금 사용할 수 없어 이 단계를 진행할 수 없습니다",
+    "runtimeFailureReason": {
+      "unclaimed_timeout": {
+        "summary": "{{name}}이(가) 대기 시간 내에 처리를 시작하지 못해 이번 요청이 종료되었습니다.",
+        "advice": "파트너의 소유자에게 해당 컴퓨터에서 Cindy가 정상 실행 중이고 네트워크에 연결되어 있는지 확인해 달라고 요청하세요.",
+        "details": "Cindy와 네트워크가 정상으로 돌아오면 메시지를 다시 보내세요."
+      }
+    },
     "runtimeFailure": {
       "REMOTE_DEVICE_LIMIT": {
         "summary": "{{name}}이(가) 답장할 수 없습니다. 이 동료가 있는 기기의 원격 세션 수가 한도에 도달했습니다.",
