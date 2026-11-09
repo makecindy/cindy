@@ -244,6 +244,9 @@ export async function automaticCheck(file) {
     if (!compat.compatible) { status(c, 'deferred', { reasons: compat.reasons, report: path.join(out, 'report.json') }); return; }
     await main(['check', '--report', path.join(out, 'report.json')]);
     release = releaseDescriptor(report.directory); // Native artifacts participate in the checked identity.
+    // The first comparison predates the native receipt; repeat it on the final identity so an
+    // unchanged or previously rejected release never reruns assets, smoke startup or publication.
+    if (release.id === state.good.id || state.rejected.some(r => r.id === release.id)) { status(c, 'unchanged-or-rejected', { id: release.id }); return; }
     // Materialize assets before activation; recovery never depends on downloading a replacement runtime.
     run(c.runtime.node, ['scripts/ensure-dev-runtime-assets.mjs'], report.directory);
     verifyUpgradeSnapshot(c, report);

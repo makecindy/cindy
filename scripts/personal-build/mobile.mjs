@@ -64,7 +64,9 @@ export async function buildMobile(file) {
       }
     }
     const counter = path.join(m.stateDir, 'build-number.json');
-    const build = d?.build || mobileBuildNumber(fs.existsSync(counter) ? read(counter).last : 0);
+    // Every attempt takes a fresh number from the shared counter: reusing a failed attempt's number could
+    // write the counter backwards after a later candidate built with a larger one.
+    const build = mobileBuildNumber(fs.existsSync(counter) ? read(counter).last : 0);
     durableWrite(counter, {last:Number(build)});
     const attempt = (d?.attempt || 0) + 1;
     const work = path.join(out, `attempt-${attempt}`);
@@ -103,7 +105,7 @@ export async function buildMobile(file) {
       exec('xcodebuild', ['-workspace', path.join(mobile, 'ios', workspaces[0]), '-scheme', scheme,
         '-configuration', 'Release', '-destination', `platform=iOS,id=${m.hardwareUdid}`, '-derivedDataPath', derived,
         '-allowProvisioningUpdates', `DEVELOPMENT_TEAM=${m.teamId}`, 'CODE_SIGN_STYLE=Automatic',
-        'CODE_SIGN_IDENTITY=Apple Development', 'SWIFT_ENABLE_EXPLICIT_MODULES=NO',
+        `CODE_SIGN_IDENTITY=${m.signingCertificateSha1}`, 'SWIFT_ENABLE_EXPLICIT_MODULES=NO',
         'CLANG_ENABLE_EXPLICIT_MODULES=NO', `CURRENT_PROJECT_VERSION=${build}`, '-quiet', 'build']);
       d.app = path.join(derived, 'Build/Products/Release-iphoneos', `${scheme}.app`);
     } finally { fs.closeSync(log); }

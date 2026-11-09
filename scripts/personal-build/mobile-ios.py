@@ -87,7 +87,9 @@ def verify(request, app):
             prefix = str(pathlib.Path(temp) / 'cert')
             output('codesign', '-d', '--extract-certificates=' + prefix, str(entry))
             cert = pathlib.Path(prefix + '0').read_bytes()
-            require(hashlib.sha1(cert).hexdigest().upper() == identity['signingCertificateSha1'], 'Certificate mismatch')
+            # Apple's keychain and codesign name signing identities by SHA-1 fingerprint. This only matches
+            # the public certificate's identifier; it protects no secret and is not a security hash.
+            require(hashlib.sha1(cert, usedforsecurity=False).hexdigest().upper() == identity['signingCertificateSha1'], 'Certificate mismatch')
             require(cert in profile['DeveloperCertificates'], 'Certificate not authorized by profile')
         if bundle != main_id + '.CindyNotificationService':
             group = identity['appGroupId']
