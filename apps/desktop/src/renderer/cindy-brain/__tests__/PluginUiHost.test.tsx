@@ -59,3 +59,27 @@ it('rejects an old replacement revision after flushing newer typing', async () =
   expect(timers.size).toBe(0);
   expect(invoke).toHaveBeenCalledWith(null, expect.objectContaining({ op: 'host-result', error: 'MCP_APP_DRAFT_CHANGED' }));
 });
+
+it('streams the original draft with one in-flight reply and releases the subscription on unwatch', async () => {
+  const { timers } = draftWithPendingTyping('watched-task');
+  let accept!: () => void;
+  invoke.mockImplementationOnce(() => new Promise(resolve => { accept = () => resolve({}); }));
+  render(<PluginUiHost />);
+  await act(async () => receive({ requestId: 'watch', ownerStamp: { dataOwnerId: 'owner', ownerGeneration: 1 },
+    kind: 'draft-watch', sessionId: 'watched-task' }));
+  expect(timers.size).toBe(0);
+  expect(invoke).toHaveBeenCalledTimes(1);
+  expect(invoke).toHaveBeenCalledWith(null, expect.objectContaining({ requestId: 'watch',
+    result: expect.objectContaining({ text: plainTextToTiptapDoc('Latest typing') }) }));
+  await act(async () => {
+    for (let i = 0; i < 1000; i++) saveDraft('watched-task', { text: plainTextToTiptapDoc(`Typing ${i}`), attachments: [] }, { silent: true });
+  });
+  expect(invoke).toHaveBeenCalledTimes(1);
+  await act(async () => accept());
+  expect(invoke).toHaveBeenCalledTimes(2);
+  expect(invoke).toHaveBeenLastCalledWith(null, expect.objectContaining({ requestId: 'watch',
+    result: expect.objectContaining({ text: plainTextToTiptapDoc('Typing 999') }) }));
+  await act(async () => receive({ requestId: 'watch', kind: 'draft-unwatch' }));
+  await act(async () => saveDraft('watched-task', { text: plainTextToTiptapDoc('After close'), attachments: [] }, { silent: true }));
+  expect(invoke).toHaveBeenCalledTimes(2);
+});

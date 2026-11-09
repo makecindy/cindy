@@ -67,6 +67,10 @@
 - `context`、`selection`：仅任务页面获准 context 后提供。正文页面可含 message/tool 投影；task 为开页时的标题、目录、模型快照。
 - `draft:{revision,text}`：仅获准 draft 后提供；text 为编辑器文档，不是普通字符串。
 
+草稿读取和修改均由原任务编辑器处理，独立窗口中的页面也订阅同一份草稿。
+读取或修改前先保存编辑器待处理的输入；旧 revision 的替换会被拒绝。
+只有打开的获准任务页面订阅草稿，页面关闭即释放，连续变更合并为最新快照。
+
 ```js
 import { App } from '@modelcontextprotocol/ext-apps';
 const app = new App({ name: '工作台', version: '1.0.0' }, {}, { autoResize: true });

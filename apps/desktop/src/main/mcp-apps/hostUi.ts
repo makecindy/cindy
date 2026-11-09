@@ -6,6 +6,7 @@ import { readPluginHostUi } from '../mcp-integrations/plugin-app-registry.js';
 import type { McpAppResourceBinding } from './host.js';
 import { activeOwnerScopeKey } from '../appSessionState.js';
 import { getSafeDataOwnerPushStamp } from '../device-link/broadcast-tap.js';
+import { getDeepLinkMainWindow } from '../deepLink.js';
 
 type Reply = { caller: string; finish(value: unknown, error?: string): void };
 const replies = new Map<string, Reply>();
@@ -26,26 +27,44 @@ function callerWindow(caller: string) {
 }
 
 async function rendererAction(caller: string, input: Record<string, unknown>, signal: AbortSignal,
-  assertCurrent: () => void | Promise<void>): Promise<unknown> {
+  assertCurrent: () => void | Promise<void>, observe?: (value: unknown) => void): Promise<unknown> {
   await assertCurrent();
   signal.throwIfAborted();
-  const window = callerWindow(caller);
+  callerWindow(caller);
+  // Detached pages still operate on the original editor and layout owners.
+  const window = getDeepLinkMainWindow();
+  if (!window || window.isDestroyed()) throw new Error('MCP_APP_ACTION_UNAVAILABLE');
   const requestId = randomUUID();
+  const ownerStamp = getSafeDataOwnerPushStamp();
   const result = await new Promise<unknown>((resolve, reject) => {
-    const finish = (value: unknown, error?: string) => {
+    let active = true;
+    const cleanup = () => {
+      if (!active) return;
+      active = false;
       clearTimeout(timer);
       signal.removeEventListener('abort', abort);
       window.webContents.removeListener('destroyed', abort);
       replies.delete(requestId);
-      if (error) reject(new Error(error)); else resolve(value);
+      if (observe && !window.isDestroyed() && !window.webContents.isDestroyed()) {
+        try { window.webContents.send('plugin-ui:action', { kind: 'draft-unwatch', requestId, ownerStamp }); } catch { /* Window closed. */ }
+      }
+    };
+    const finish = (value: unknown, error?: string) => {
+      if (!active) return;
+      if (error) { cleanup(); reject(new Error(error)); return; }
+      try { observe?.(value); } catch (failure) { cleanup(); reject(failure); return; }
+      clearTimeout(timer);
+      if (!observe) cleanup();
+      resolve(value);
     };
     const abort = () => finish(undefined, 'MCP_APP_ACTION_CANCELLED');
     const timer = setTimeout(() => finish(undefined, 'MCP_APP_ACTION_TIMEOUT'), 30_000);
     timer.unref();
-    replies.set(requestId, { caller, finish });
+    replies.set(requestId, { caller: `renderer:${window.webContents.id}`, finish });
     signal.addEventListener('abort', abort, { once: true });
     window.webContents.once('destroyed', abort);
-    window.webContents.send('plugin-ui:action', { ...input, requestId, ownerStamp: getSafeDataOwnerPushStamp() });
+    try { window.webContents.send('plugin-ui:action', { ...input, requestId, ownerStamp }); }
+    catch (failure) { cleanup(); reject(failure); }
   });
   await assertCurrent();
   return result;
@@ -75,6 +94,7 @@ export function bindPluginUiResource(caller: string, sessionId: string | null, i
   assertCurrent();
   const assertOperation = async () => { assertCurrent(); await assertScope?.(); assertCurrent(); };
   const capabilities = entry.host.capabilities ?? [];
+  let draft: unknown = null;
   const tools: Tool[] = [tool('open', 'Open another approved view of this plugin.', { viewId: { type: 'string' }, input: { type: 'object' } }, ['viewId'])];
   if (capabilities.includes('draft') && sessionId !== null) tools.push(tool('draft',
     'Edit the bound task draft. Replacing requires the revision from hostContext.cindy.draft; never sends a message.', {
@@ -90,6 +110,20 @@ export function bindPluginUiResource(caller: string, sessionId: string | null, i
   return {
     id: `${instance}:${viewId}`, title: view.title, serverId: entry.config.id,
     serverRevision: revision(entry.config), resourceUri: view.resourceUri, assertCurrent, assertOperation, hostTools: tools,
+    ...(sessionId !== null && capabilities.includes('draft') ? {
+      async observeContext(changed: () => void, signal: AbortSignal) {
+        const watching = new AbortController();
+        const stop = () => { signal.removeEventListener('abort', stop); watching.abort(); };
+        signal.addEventListener('abort', stop, { once: true });
+        if (signal.aborted) stop();
+        try {
+          await rendererAction(caller, { kind: 'draft-watch', sessionId }, watching.signal, assertCurrent, value => {
+            assertCurrent(); draft = value; changed();
+          });
+          return stop;
+        } catch (failure) { stop(); throw failure; }
+      },
+    } : {}),
     projectContext(context: McpUiHostContext) {
       const supplied = context.cindy && typeof context.cindy === 'object' && !Array.isArray(context.cindy)
         ? context.cindy as Record<string, unknown> : {};
@@ -99,7 +133,7 @@ export function bindPluginUiResource(caller: string, sessionId: string | null, i
           context: { ...(supplied.context && typeof supplied.context === 'object' && !Array.isArray(supplied.context) ? supplied.context : {}),
             ...(task ? { task } : {}), sessionId }, selection: supplied.selection ?? '',
         } : {}),
-        ...(sessionId !== null && capabilities.includes('draft') ? { draft: supplied.draft ?? null } : {}),
+        ...(sessionId !== null && capabilities.includes('draft') ? { draft } : {}),
       };
     },
     async callHostTool(name, args, signal) {

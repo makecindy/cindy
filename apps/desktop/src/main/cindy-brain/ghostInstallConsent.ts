@@ -189,7 +189,7 @@ export async function obtainGhostInstallConsent(
   return {
     mode: 'confirmed',
     ...(policy.prompt.uiCapabilityApproval === false ? { uiCapabilityUnsupported: true as const } : {}),
-    ...(policy.prompt.hostUiCapabilityApproval !== true ? { hostUiCapabilityUnsupported: true as const } : {}),
+    ...(ghostHostUiApprovalTokens(manifest).length && policy.prompt.hostUiCapabilityApproval !== true ? { hostUiCapabilityUnsupported: true as const } : {}),
     ...(forced ? { forced: true as const } : {}),
     key: ghostInstallConsentKey(
       facts,

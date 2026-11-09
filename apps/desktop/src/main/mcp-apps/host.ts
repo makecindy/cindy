@@ -86,6 +86,8 @@ export interface McpAppResourceBinding {
   /** Task lifetime is checked at open/operations, not on each pushed state update. */
   assertOperation?(): Promise<void>;
   projectContext?(context: McpUiHostContext): Record<string, unknown>;
+  /** A visible View owns its context source, independently of iframe reloads. */
+  observeContext?(changed: () => void, signal: AbortSignal): Promise<() => void>;
   hostTools?: Tool[];
   callHostTool?(name: string, args: Record<string, unknown>, signal: AbortSignal): Promise<CallToolResult>;
 }
@@ -199,6 +201,7 @@ interface View {
   context: McpUiHostContext;
   lastUsed: number;
   unlisten: (() => void)[];
+  stopContext?: () => void;
   links: Map<string, { url: string; claim: () => void; resolve: (success: boolean) => void }>;
 }
 
@@ -446,6 +449,8 @@ export class McpAppsHost {
         : (this.deps.connection?.(config) ?? (config.plugin ? sharedPluginConnection(config, owner) : new AppConnection(config)));
     const registeredId = this.registerConnection(connection, owner);
     if (detached) this.connections.get(registeredId)!.retired = true;
+    let stopContext: (() => void) | undefined;
+    let liveView: View | undefined;
     try {
       const client = await connection.getClient();
       signal.throwIfAborted();
@@ -493,6 +498,11 @@ export class McpAppsHost {
         createLogger('mcp-apps').warn('Host SDK omitted: page fits the remote budget, but page plus SDK exceeds it; bare SDK imports will fail in this View');
       }
       const transport = new ViewTransport(remote ? MCP_APPS_MAX_REMOTE_BYTES : MCP_APPS_MAX_BYTES, !remote || !config.plugin);
+      stopContext = await resourceBinding?.observeContext?.(() => {
+        if (liveView && this.views.get(viewId) === liveView)
+          this.context(caller, sessionId, viewId, { cindy: liveView.context.cindy });
+      }, signal);
+      signal.throwIfAborted();
       const { toolInfo: _untrustedToolInfo, cindy: _untrustedCindy, ...environmentContext } = hostContext;
       const context: McpUiHostContext = {
         ...environmentContext,
@@ -559,9 +569,12 @@ export class McpAppsHost {
         resultSent: false,
         lastUsed: Date.now(),
         unlisten: [],
+        stopContext,
         links: new Map(),
       };
       this.views.set(viewId, view);
+      liveView = view;
+      stopContext = undefined;
       if (!this.sweepTimer) {
         this.sweepTimer = setInterval(() => {
           void this.sweep().catch(() => {});
@@ -940,6 +953,7 @@ export class McpAppsHost {
       }
       return document;
     } catch (error) {
+      stopContext?.();
       if (detached) await this.releaseConnection(connection).catch(() => {});
       throw error;
     }
@@ -1204,6 +1218,7 @@ export class McpAppsHost {
       }
     }
     this.views.delete(id);
+    view.stopContext?.();
     view.files?.close();
     if (!this.views.size) {
       clearInterval(this.sweepTimer);

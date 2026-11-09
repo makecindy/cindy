@@ -1,9 +1,11 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 const boundary = vi.hoisted(() => ({ owner: 'owner', entry: null as unknown,
-  send: vi.fn(), contents: { isDestroyed: () => false, once: vi.fn(), removeListener: vi.fn() } }));
-vi.mock('electron', () => ({ webContents: { fromId: () => boundary.contents },
+  send: vi.fn(), contents: { id: 1, isDestroyed: () => false, once: vi.fn(), removeListener: vi.fn() } }));
+vi.mock('electron', () => ({ webContents: { fromId: (id: number) => ({ ...boundary.contents, id }) },
   BrowserWindow: { fromWebContents: () => ({ isDestroyed: () => false,
     webContents: { ...boundary.contents, send: boundary.send } }) } }));
+vi.mock('../../deepLink.js', () => ({ getDeepLinkMainWindow: () => ({ isDestroyed: () => false,
+  webContents: { ...boundary.contents, send: boundary.send } }) }));
 vi.mock('../../appSessionState.js', () => ({ activeOwnerScopeKey: () => boundary.owner }));
 vi.mock('../../device-link/broadcast-tap.js', () => ({ getSafeDataOwnerPushStamp: () => ({ dataOwnerId: 'owner', ownerGeneration: 1 }) }));
 vi.mock('../../mcp-integrations/plugin-app-registry.js', () => ({ readPluginHostUi: () => boundary.entry }));
@@ -72,4 +74,38 @@ it('projects only approved context under the real scope without querying the tas
   const global = bindPluginUiResource('renderer:1', null, 'plugin', 'global', () => 'rev');
   expect(global.projectContext!(supplied)).not.toHaveProperty('context');
   expect(global.projectContext!(supplied)).not.toHaveProperty('selection');
+});
+
+it('routes detached-view draft operations to the original composer window and binds its acknowledgement', async () => {
+  const binding = bindPluginUiResource('renderer:2', 'task-a', 'plugin', 'task', () => 'rev');
+  const abort = new AbortController();
+  const pending = binding.callHostTool!('cindy.ui.draft', { mode: 'append', text: 'Popup' }, abort.signal);
+  try {
+    await vi.waitFor(() => expect(boundary.send).toHaveBeenCalledTimes(1));
+    const action = boundary.send.mock.calls[0][1];
+    expect(() => finishPluginUiAction('renderer:2', action.requestId, {})).toThrow('MCP_APP_ACTION_UNAVAILABLE');
+    finishPluginUiAction('renderer:1', action.requestId, { saved: true });
+    await pending;
+  } finally { abort.abort(); await pending.catch(() => {}); }
+});
+
+it('takes draft context from the original composer stream and releases it with the View', async () => {
+  const binding = bindPluginUiResource('renderer:2', 'task-a', 'plugin', 'task', () => 'rev');
+  const changed = vi.fn(), abort = new AbortController();
+  const watching = binding.observeContext!(changed, abort.signal);
+  let stop: (() => void) | undefined;
+  try {
+    await vi.waitFor(() => expect(boundary.send).toHaveBeenCalledTimes(1));
+    const action = boundary.send.mock.calls[0][1];
+    expect(action).toMatchObject({ kind: 'draft-watch', sessionId: 'task-a' });
+    const first = { revision: 'one', text: { type: 'doc', content: [] } };
+    finishPluginUiAction('renderer:1', action.requestId, first);
+    stop = await watching;
+    expect(binding.projectContext!({ cindy: { draft: { revision: 'popup-stale' } } }).draft).toEqual(first);
+    finishPluginUiAction('renderer:1', action.requestId, { ...first, revision: 'two' });
+    expect(changed).toHaveBeenCalledTimes(2);
+    stop();
+    expect(boundary.send).toHaveBeenLastCalledWith('plugin-ui:action', expect.objectContaining({ kind: 'draft-unwatch', requestId: action.requestId }));
+    expect(() => finishPluginUiAction('renderer:1', action.requestId, first)).toThrow('MCP_APP_ACTION_UNAVAILABLE');
+  } finally { stop?.(); abort.abort(); await watching.catch(() => {}); }
 });

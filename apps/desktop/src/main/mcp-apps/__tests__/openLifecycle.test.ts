@@ -90,6 +90,42 @@ describe('MCP App open cancellation', () => {
     expect(f.writeCard).not.toHaveBeenCalled();
   });
 
+  it('initializes from the authoritative context source and keeps it until the View closes', async () => {
+    const f = fixture();
+    let changed!: () => void;
+    let draft = { revision: 'original' };
+    const stop = vi.fn();
+    const observeContext = vi.fn(async (notify: () => void) => { changed = notify; notify(); return stop; });
+    const document = await f.host.openResource('renderer:1', null, { ...f.binding,
+      observeContext, projectContext: () => ({ draft }),
+    }, {});
+    vi.useFakeTimers();
+    const initialize = async (id: number) => {
+      await f.host.dispatch('renderer:1', null, document.viewId, {
+        jsonrpc: '2.0', id, method: 'ui/initialize', params: {
+          protocolVersion: '2026-01-26', appInfo: { name: 'Workspace', version: '1' }, appCapabilities: {},
+        },
+      });
+      await f.host.dispatch('renderer:1', null, document.viewId, { jsonrpc: '2.0', method: 'ui/notifications/initialized' });
+      await vi.advanceTimersByTimeAsync(0);
+      return f.host.poll('renderer:1', null, document.viewId, 0);
+    };
+    expect(await initialize(1)).toContainEqual(expect.objectContaining({
+      message: expect.objectContaining({ id: 1, result: expect.objectContaining({ hostContext: expect.objectContaining({ cindy: { draft } }) }) }),
+    }));
+    draft = { revision: 'after-edit' }; changed();
+    expect(await initialize(2)).toContainEqual(expect.objectContaining({
+      message: expect.objectContaining({ id: 2, result: expect.objectContaining({ hostContext: expect.objectContaining({ cindy: { draft } }) }) }),
+    }));
+    expect(observeContext).toHaveBeenCalledTimes(1);
+    expect(stop).not.toHaveBeenCalled();
+    expect(f.readCard).not.toHaveBeenCalled();
+    expect(f.writeCard).not.toHaveBeenCalled();
+    await f.host.releaseCaller('renderer:1');
+    expect(stop).toHaveBeenCalledTimes(1);
+    expect(() => changed()).not.toThrow();
+  });
+
   it('calls a standalone resource host tool through the official App SDK without a task or tool card', async () => {
     const f = fixture();
     const callHostTool = vi.fn(async () => ({ content: [{ type: 'text' as const, text: '{"opened":true}' }] }));
