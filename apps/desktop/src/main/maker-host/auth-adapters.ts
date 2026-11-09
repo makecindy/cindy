@@ -2030,6 +2030,11 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
         const identity = parseCodexAccountIdentity(raw);
         const tokens = JSON.parse(raw).tokens;
         if (typeof tokens?.access_token !== 'string' || !tokens.access_token) return { authenticated: false, errorReason: 'no_oauth' };
+        // 存量硬链(升级前的 profile 把本地这份硬链到系统凭证)即使两侧身份相同也要先拆:
+        // Codex 0.165+ 拒绝写 nlink>1 的文件,只凭身份相同就短路会跳过清理, 登录照旧
+        // 报 system-shared,凭证却存不住新 token(#9316 review)。nlink<=1 时这里是
+        // no-op, symlink / 独立副本的快路径不受影响。
+        await this.clearResidualSystemCodexHardlinks(systemAuth);
         // 本地凭证已经共享系统凭证时不必再重建 —— 身份判定对共享链接按链接目标
         // 路径来,本机 Codex 在核对期间原子替换系统凭证也不会误判成「不是同一份」
         // (#9316 review)。

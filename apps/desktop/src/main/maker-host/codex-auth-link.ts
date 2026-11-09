@@ -507,13 +507,17 @@ async function breakResidualCodexHardlinksDetailed(
   }
   const mode = Number(stat.mode & 0o777n);
   const mtime = codexAuthTimestampSeconds(stat.mtimeNs);
-  const sidecar = `${file}.${process.pid}.${sidecarCounter++}.copytmp`;
+  // sidecar 与备份共用同一个 token:恢复时只有「备份 + 同一次调用留下的 sidecar」
+  // 同时在才算崩在发布之前 —— 发布成功后 sidecar 已经被 rename 成目标,备份即使
+  // 没删掉也不再可恢复(#9316 review)。
+  const token = `${process.pid}.${sidecarCounter++}`;
+  const sidecar = `${file}.${token}.copytmp`;
   // 旧目标在替换发布之前不能被销毁。Windows 上原来走「删掉目标 → rename 发布」两步:
   // 两步之间有一个「目标不存在」的窗口, 进程在这个窗口里崩掉, 系统凭证就彻底没了 ——
   // 下次启动看到系统路径缺失就直接返回, 既不回灌本机副本也不看 sidecar, 用户看到的是
   // Codex 凭空掉登录(#9316 review)。改成先把旧目标挪到可恢复的备份名, 新凭证发布成功
   // 之后再删备份; 崩在窗口里时备份还在, 启动对账按它恢复。
-  const backup = `${file}.${process.pid}.${sidecarCounter++}.swapbak`;
+  const backup = `${file}.${token}.swapbak`;
   let backupPath: string | null = null;
   try {
     await fsp.writeFile(sidecar, content, { mode });
@@ -568,46 +572,103 @@ async function breakResidualCodexHardlinksDetailed(
 
 /**
  * 上一次替换崩在「旧目标已挪走、新凭证还没发布」的窗口里时, 目标路径会缺失, 而备份
- * (`<basename>.*.swapbak`)还在。启动对账时按备份把凭证放回原位 —— 否则这里直接返回,
- * 用户看到的是 Codex 凭空掉登录。
+ * (`<basename>.<pid>.<n>.swapbak`)与同一次调用的 sidecar 还在。启动对账时按备份把凭证
+ * 放回原位 —— 否则这里直接返回, 用户看到的是 Codex 凭空掉登录。
  *
- * 只认我们自己的备份名: 本机 Codex 主动登出(它自己删掉 auth.json)不会留下备份, 不会被
- * 误当成崩过的替换而把登录态倒回来。
+ * 两条边界(都是 #9316 review):
+ *   · 只认**配对**的备份(同 token 的 `.copytmp` 还在 = 崩在发布之前)。发布成功后
+ *     sidecar 已经被 rename 成目标, 备份即使删除失败也只是孤儿 —— 恢复它, 会在本机
+ *     Codex 之后登出时把旧账号凭证倒回来, 等于撤销登出。
+ *   · 目标可能在我们检查之后被本机 Codex 重建出来:用 link 做原子占位, 目标已存在时
+ *     报 EEXIST 直接放弃, 绝不拿备份盖掉刚轮换的 refresh token。
  */
 export async function recoverInterruptedCodexAuthSwap(file: string): Promise<boolean> {
-  // 目标已经在(比如本机 Codex 刚重建出来): 不动它, 免得用旧字节盖掉新凭证。
-  if (await pathEntryExists(file)) return false;
   const dir = path.dirname(file);
   const base = path.basename(file);
+  const prefix = `${base}.`;
   let names: string[];
   try {
     names = await fsp.readdir(dir);
   } catch {
     return false;
   }
-  const backups = names
-    .filter((name) => name.startsWith(`${base}.`) && name.endsWith('.swapbak'))
-    .map((name) => path.join(dir, name));
-  if (backups.length === 0) return false;
-  // 最新的备份优先: 它是最后一次替换留下的。
-  const stamped = await Promise.all(
-    backups.map(async (candidate) => ({
-      candidate,
-      mtimeMs: await fsp.stat(candidate).then((s) => s.mtimeMs).catch(() => 0),
-    })),
+  const backups = names.filter((name) => name.startsWith(prefix) && name.endsWith('.swapbak'));
+  const sidecars = new Set(
+    names.filter((name) => name.startsWith(prefix) && name.endsWith('.copytmp')),
   );
-  stamped.sort((a, b) => b.mtimeMs - a.mtimeMs);
-  const chosen = stamped[0].candidate;
-  try {
-    await fsp.rename(chosen, file);
-  } catch {
-    return false;
+  const paired = backups.filter((name) =>
+    sidecars.has(`${prefix}${name.slice(prefix.length, -'.swapbak'.length)}.copytmp`),
+  );
+
+  if (paired.length > 0 && !(await pathEntryExists(file))) {
+    const stamped = await Promise.all(
+      paired.map(async (name) => ({
+        name,
+        mtimeMs: await fsp.stat(path.join(dir, name)).then((s) => s.mtimeMs).catch(() => 0),
+      })),
+    );
+    stamped.sort((a, b) => b.mtimeMs - a.mtimeMs);
+    const chosenName = stamped[0].name;
+    const chosen = path.join(dir, chosenName);
+    const token = chosenName.slice(prefix.length, -'.swapbak'.length);
+    // 目标可能在上面那次 exists 检查之后被本机 Codex 重建:rename 会直接盖掉它。
+    // link 是原子占位 —— 目标已存在时报 EEXIST, 换代的新凭证原样留下。
+    let published = false;
+    let conflict = false;
+    try {
+      await fsp.link(chosen, file);
+      published = true;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'EEXIST') {
+        conflict = true;
+      } else if (!(await pathEntryExists(file))) {
+        // 不支持硬链等:退回 rename, 但先再确认一次目标仍然不在。
+        try {
+          await fsp.rename(chosen, file);
+          published = true;
+        } catch {
+          published = false;
+        }
+      } else {
+        conflict = true;
+      }
+    }
+    if (published) {
+      await fsp.rm(chosen, { force: true }).catch(() => undefined);
+      await fsp.rm(path.join(dir, `${prefix}${token}.copytmp`), { force: true }).catch(() =>
+        undefined,
+      );
+      await retireSwaps(dir, prefix, backups, chosenName);
+      return true;
+    }
+    if (!conflict) {
+      // 发布因为瞬时原因失败(ACL / 占用):备份与 sidecar 都留着, 下次对账再试。
+      return false;
+    }
+    // 本机 Codex 在缺口里重建了凭证:备份是旧代次, 作废。
   }
-  // 其余残留清掉(只清同名的备份, 不动别的文件)。
-  for (const other of backups) {
-    if (other !== chosen) await fsp.rm(other, { force: true }).catch(() => undefined);
+
+  // 走到这里:目标在(不需要恢复), 或没有可恢复的配对。发布完成后的孤儿备份必须清掉 ——
+  // 留着它, 本机 Codex 之后登出时会被当成交断替换把旧账号凭证倒回来(#9316 review)。
+  await retireSwaps(dir, prefix, backups);
+  return false;
+}
+
+/** 清掉同名前缀下的残留备份(以及它们配对的 sidecar), 不动别的文件。 */
+async function retireSwaps(
+  dir: string,
+  prefix: string,
+  backups: readonly string[],
+  keep?: string,
+): Promise<void> {
+  for (const name of backups) {
+    if (name === keep) continue;
+    const token = name.slice(prefix.length, -'.swapbak'.length);
+    await fsp.rm(path.join(dir, `${prefix}${token}.copytmp`), { force: true }).catch(() =>
+      undefined,
+    );
+    await fsp.rm(path.join(dir, name), { force: true }).catch(() => undefined);
   }
-  return true;
 }
 
 /**

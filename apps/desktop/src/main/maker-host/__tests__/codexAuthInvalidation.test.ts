@@ -3133,8 +3133,12 @@ describe('Codex 系统凭证替换崩在窗口里的恢复 (#9316 review)', () =
     const systemAuth = path.join(home, '.codex', 'auth.json');
     fs.mkdirSync(path.dirname(systemAuth), { recursive: true });
     fs.writeFileSync(systemAuth, JSON.stringify({ tokens: { access_token: 'recovered-token' } }));
-    // 模拟上一次替换崩在窗口里:旧目标被挪到备份名,新凭证还没发布。
-    fs.renameSync(systemAuth, `${systemAuth}.4242.0.swapbak`);
+    // 模拟上一次替换崩在窗口里:旧目标被挪到备份名,新凭证还没发布 —— 同一次调用的
+    // sidecar 还在,配对才是「崩在发布之前」的凭据(#9316 review)。
+    const backup = `${systemAuth}.4242.0.swapbak`;
+    const sidecar = `${systemAuth}.4242.0.copytmp`;
+    fs.renameSync(systemAuth, backup);
+    fs.writeFileSync(sidecar, JSON.stringify({ tokens: { access_token: 'recovered-token' } }));
 
     const { DesktopCodexAuthAdapter } = await import('../auth-adapters.js');
     const adapter = new DesktopCodexAuthAdapter();
@@ -3143,6 +3147,8 @@ describe('Codex 系统凭证替换崩在窗口里的恢复 (#9316 review)', () =
 
     expect(fs.existsSync(systemAuth)).toBe(true);
     expect(JSON.parse(fs.readFileSync(systemAuth, 'utf8')).tokens.access_token).toBe('recovered-token');
+    expect(fs.existsSync(backup)).toBe(false);
+    expect(fs.existsSync(sidecar)).toBe(false);
   });
 
   it('系统凭证缺失且没有备份时不凭空造出登录态', async () => {
@@ -3159,5 +3165,54 @@ describe('Codex 系统凭证替换崩在窗口里的恢复 (#9316 review)', () =
     await adapter.getState({ credentialMode: 'oauth-bearer' }).catch(() => undefined);
 
     expect(fs.existsSync(systemAuth)).toBe(false);
+  });
+
+  // 升级前的 profile 把本地这份硬链到系统凭证(nlink=2)。durable disconnect 期间对账被
+  // 抑制,硬链一直没迁移;本地登录若只凭「身份相同」就短路,会跳过残留硬链清理 ——
+  // 登录报 system-shared,Codex 0.165+ 却因为 nlink>1 存不住新 token(#9316 review)。
+  it('本地登录把升级前的存量硬链拆掉,不再报 system-shared 却存不住凭证', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'xdt-codex-legacy-hardlink-login-'));
+    dirs.push(root);
+    h.userDataDir = path.join(root, 'user-data');
+    h.dataOwnerId = 'owner-a';
+    const home = path.join(root, 'home');
+    const systemAuth = path.join(home, '.codex', 'auth.json');
+    const codexHome = path.join(h.userDataDir, 'codex-home');
+    const localAuth = path.join(codexHome, 'auth.json');
+    vi.spyOn(os, 'homedir').mockReturnValue(home);
+    fs.mkdirSync(path.dirname(systemAuth), { recursive: true });
+    fs.mkdirSync(codexHome, { recursive: true });
+    fs.writeFileSync(
+      systemAuth,
+      JSON.stringify({ tokens: { access_token: 'legacy-token', account_id: 'acct-1' } }),
+    );
+    fs.linkSync(systemAuth, localAuth);
+    expect(fs.statSync(systemAuth, { bigint: true }).nlink).toBe(2n);
+    // durable disconnect 抑制着对账:存量硬链因此一直没被迁移。
+    expect(
+      writeInvalidatedSystemCodexAuthMarker(
+        codexHome,
+        systemAuth,
+        CODEX_USER_DISCONNECT_REASON,
+        localAuth,
+      ),
+    ).toBe(true);
+
+    const { DesktopCodexAuthAdapter } = await import('../auth-adapters.js');
+    const adapter = new DesktopCodexAuthAdapter();
+    await expect(adapter.triggerLogin({ mode: 'local' })).resolves.toMatchObject({
+      authenticated: true,
+    });
+
+    expect(fs.statSync(systemAuth, { bigint: true }).nlink).toBe(1n);
+    // 拆链后本地这份不再与系统凭证共用 inode(换成新 inode 或改成软链),内容仍可用 ——
+    // 登录读的是系统凭证。
+    expect(fs.lstatSync(localAuth, { bigint: true }).ino).not.toBe(
+      fs.statSync(systemAuth, { bigint: true }).ino,
+    );
+    expect(JSON.parse(fs.readFileSync(localAuth, 'utf8')).tokens.access_token).toBe(
+      JSON.parse(fs.readFileSync(systemAuth, 'utf8')).tokens.access_token,
+    );
+    expect(fs.existsSync(getCodexAuthInvalidationMarkerPath(codexHome))).toBe(false);
   });
 });

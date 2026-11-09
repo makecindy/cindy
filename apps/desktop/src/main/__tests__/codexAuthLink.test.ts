@@ -1104,27 +1104,39 @@ describe('Windows 系统凭证替换的崩溃窗口 (#9316 review)', () => {
     expect(leftoverBackups()).toEqual([]);
   });
 
+  /** 造一个「崩在发布之前」的现场:目标被挪到备份名,同一次调用的 sidecar 还在。 */
+  function seedInterruptedSwap(
+    content = SYSTEM_CONTENT,
+    token = '4242.0',
+  ): { backup: string; sidecar: string } {
+    fs.writeFileSync(systemAuth, content);
+    const backup = `${systemAuth}.${token}.swapbak`;
+    const sidecar = `${systemAuth}.${token}.copytmp`;
+    fs.renameSync(systemAuth, backup);
+    fs.writeFileSync(sidecar, content);
+    return { backup, sidecar };
+  }
+
   it('系统路径缺失时按备份恢复(崩在窗口里的下一次启动)', async () => {
-    fs.writeFileSync(systemAuth, SYSTEM_CONTENT);
-    // 模拟崩在窗口里:旧目标被挪到备份名,新凭证没发布。
-    fs.renameSync(systemAuth, `${systemAuth}.4242.0.swapbak`);
+    const { sidecar } = seedInterruptedSwap();
 
     await expect(recoverInterruptedCodexAuthSwap(systemAuth)).resolves.toBe(true);
     expect(fs.readFileSync(systemAuth, 'utf8')).toBe(SYSTEM_CONTENT);
     expect(leftoverBackups()).toEqual([]);
+    expect(fs.existsSync(sidecar)).toBe(false);
   });
 
   it('多份备份时恢复最新的一份,其余清掉', async () => {
-    const older = `${systemAuth}.4242.0.swapbak`;
-    const newer = `${systemAuth}.4242.1.swapbak`;
-    fs.writeFileSync(older, SYSTEM_CONTENT);
-    fs.writeFileSync(newer, SYSTEM_CONTENT);
-    fs.utimesSync(older, new Date(1000), new Date(1000));
-    fs.utimesSync(newer, new Date(2000), new Date(2000));
+    const older = seedInterruptedSwap(SYSTEM_CONTENT, '4242.0');
+    fs.utimesSync(older.backup, new Date(1000), new Date(1000));
+    const newer = seedInterruptedSwap(SYSTEM_CONTENT, '4242.1');
+    fs.utimesSync(newer.backup, new Date(2000), new Date(2000));
+    fs.utimesSync(newer.sidecar, new Date(2000), new Date(2000));
 
     await expect(recoverInterruptedCodexAuthSwap(systemAuth)).resolves.toBe(true);
     expect(fs.readFileSync(systemAuth, 'utf8')).toBe(SYSTEM_CONTENT);
-    expect(fs.existsSync(older)).toBe(false);
+    expect(fs.existsSync(older.backup)).toBe(false);
+    expect(fs.existsSync(older.sidecar)).toBe(false);
     expect(leftoverBackups()).toEqual([]);
   });
 
@@ -1133,5 +1145,33 @@ describe('Windows 系统凭证替换的崩溃窗口 (#9316 review)', () => {
 
     await expect(recoverInterruptedCodexAuthSwap(systemAuth)).resolves.toBe(false);
     expect(fs.existsSync(systemAuth)).toBe(false);
+  });
+
+  // 发布成功后备份只是删除失败留下的孤儿(sidecar 已经被 rename 成目标):恢复它,
+  // 会在本机 Codex 之后登出时把旧账号凭证倒回来,等于撤销登出(#9316 review)。
+  it('发布完成后的孤儿备份不再可恢复,顺手清掉', async () => {
+    fs.writeFileSync(`${systemAuth}.4242.0.swapbak`, SYSTEM_CONTENT);
+
+    await expect(recoverInterruptedCodexAuthSwap(systemAuth)).resolves.toBe(false);
+    expect(fs.existsSync(systemAuth)).toBe(false);
+    expect(leftoverBackups()).toEqual([]);
+  });
+
+  // 目标可能在「检查缺失」之后被本机 Codex 重建出来:link 是原子占位,已存在时报
+  // EEXIST —— 备份绝不盖掉刚轮换的 refresh token(#9316 review)。
+  it('恢复期间本机 Codex 重建了凭证时,备份不盖掉它', async () => {
+    const refreshed = JSON.stringify({ tokens: { access_token: 'refreshed-token' } });
+    const { backup } = seedInterruptedSwap();
+    const realLink = fs.promises.link.bind(fs.promises);
+    vi.spyOn(fs.promises, 'link').mockImplementation(async (from, to) => {
+      // 模拟「检查缺失」与「发布」之间本机 Codex 重建了目标。
+      fs.writeFileSync(systemAuth, refreshed);
+      return realLink(from as never, to as never);
+    });
+
+    await expect(recoverInterruptedCodexAuthSwap(systemAuth)).resolves.toBe(false);
+    expect(fs.readFileSync(systemAuth, 'utf8')).toBe(refreshed);
+    expect(fs.existsSync(backup)).toBe(false);
+    expect(leftoverBackups()).toEqual([]);
   });
 });
