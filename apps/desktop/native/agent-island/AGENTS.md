@@ -121,6 +121,7 @@ pnpm --filter desktop preview:island-mascots
   JPEG 缩略图，没有图时用表情或首字配色相底）；运行中仍显示角色。内容更新整体不能超过 4 KB，超限的头像
   直接丢掉、改用首字。动态图片用 `NSImage(data:)` 可以正常显示，只有从文件读的才会变灰块。
   颜色与计数格式跟我们的岛一致：运行中橙、等你处理青、未读完成绿，计数写成「等你处理 · 运行中」。
+- **点击任务**：主进程把当前展示任务的 `taskUrl`（远程任务带 `device`）随内容下发，Widget 的 banner 与 Dynamic Island 都用 `widgetURL` 打开；标题和计数相同但目标变化时也必须更新。字段可选以兼容旧活动。群聊汇总不是任务 ID，暂保留打开应用的行为。
 - **提醒展开**：只有「等你处理的任务变多」或「转为已完成」时带 `AlertConfiguration` 更新，系统会把活动
   短暂展开（菜单栏里是药丸下方的展开卡片）；计数下降和普通进度更新不提醒，首次发起也不提醒。提醒音用
   应用 `Resources` 里的静音 `cindy-live-activity-silent.caf`（`build.mjs` 生成），声音仍由我们的岛和通知负责。

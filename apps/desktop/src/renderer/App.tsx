@@ -44,6 +44,7 @@ import { SetupMigrationHost } from '@/features/setup-migration/SetupMigrationHos
 import { PluginPublisherConfirmHost } from '@/features/plugin/PluginPublisherConfirmHost';
 import { GithubSetupRequestHost } from '@/features/cc-agent/GithubSetupRequestHost';
 import { makerChatStore } from '@/lib/makerChatStore';
+import { schedulePreviewLightboxPreload } from '@/components/chat/lazyPreviewLightboxes';
 import {
   initializePromptRecommendationStore,
   setPromptRecommendationOwner,
@@ -265,6 +266,9 @@ export function App() {
     syncNewMakerPrefs();
     return subscribeDraft(syncNewMakerPrefs);
   }, []);
+
+  // 文本／Mermaid 预览弹窗不进首屏;窗口可见、首帧稳定后空闲预取,首次点开不必等加载。
+  useEffect(() => schedulePreviewLightboxPreload(), []);
 
   useModelFavoritesHost();
 

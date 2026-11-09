@@ -42,6 +42,7 @@
     "./ui-mock": "./src/uiMock.ts",
     "./ghost-command": "./src/ghostCommand.ts",
     "./ghost-card-form": "./src/ghostCardForm.ts",
+    "./ghost-card-task-archive": "./src/ghostCardTaskArchive.ts",
     "./mail-text-edit": "./src/mailTextEdit.ts",
     "./mail-message": "./src/mailMessage.ts",
     "./goal-command": "./src/goalCommand.ts",

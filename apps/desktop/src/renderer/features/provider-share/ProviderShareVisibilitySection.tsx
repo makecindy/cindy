@@ -1,5 +1,11 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import {
+  SETTINGS_HINT,
+  SettingsCard,
+  SettingsRow,
+  SettingsSection,
+} from '@/components/ui/settings-rows';
 import { Switch } from '@/components/ui/switch';
 import {
   getDataOwnerGeneration,
@@ -114,44 +120,42 @@ export function ProviderShareVisibilitySection({
     }
   };
   return (
-    <section className="mt-6 shrink-0" data-testid="provider-share-visibility">
-      <h3 className="text-13 font-medium leading-[1.5] text-[var(--settings-section-title)]">
-        {t('providerShare.insights.visibilityTitle')}
-      </h3>
-      <p className="mt-1 text-12 leading-[1.5] text-[var(--text-secondary)]">
-        {t('providerShare.insights.visibilityNote')}
-      </p>
-      <div className="mt-3 divide-y divide-[var(--border-default)] rounded-xl border border-[var(--settings-theme-card-border)] bg-[var(--settings-theme-card-bg)] px-4">
+    <SettingsSection
+      className="mt-6 shrink-0"
+      testId="provider-share-visibility"
+      headingLevel={3}
+      title={t('providerShare.insights.visibilityTitle')}
+      description={t('providerShare.insights.visibilityNote')}
+    >
+      <SettingsCard>
         {(['quota', 'usage'] as const).map((key) => (
-          <div key={key} className="flex items-center justify-between gap-4 py-3">
-            <div className="min-w-0 flex-1">
-              <p className="text-13 leading-[1.5] text-[var(--text-primary)]">
-                {t(`providerShare.insights.allow${key === 'quota' ? 'Quota' : 'Usage'}`)}
-              </p>
-              {key === 'usage' && (
-                <p
-                  id={usageDescriptionId}
-                  className="mt-1 text-12 leading-[1.5] text-[var(--text-secondary)]"
-                >
+          <SettingsRow
+            key={key}
+            title={t(`providerShare.insights.allow${key === 'quota' ? 'Quota' : 'Usage'}`)}
+            hint={
+              key === 'usage' ? (
+                <span id={usageDescriptionId}>
                   {t('providerShare.insights.allowUsageDescription')}
-                </p>
-              )}
-            </div>
-            <Switch
-              aria-describedby={key === 'usage' ? usageDescriptionId : undefined}
-              checked={currentView?.[key] === true}
-              disabled={!currentView || busy}
-              aria-label={t(`providerShare.insights.allow${key === 'quota' ? 'Quota' : 'Usage'}`)}
-              onCheckedChange={(value) => void save(key, value)}
-            />
-          </div>
+                </span>
+              ) : undefined
+            }
+            trailing={
+              <Switch
+                aria-describedby={key === 'usage' ? usageDescriptionId : undefined}
+                checked={currentView?.[key] === true}
+                disabled={!currentView || busy}
+                aria-label={t(`providerShare.insights.allow${key === 'quota' ? 'Quota' : 'Usage'}`)}
+                onCheckedChange={(value) => void save(key, value)}
+              />
+            }
+          />
         ))}
-      </div>
+      </SettingsCard>
       {error && (
-        <p role="status" className="mt-2 text-12 leading-[1.5] text-[var(--text-secondary)]">
+        <p role="status" className={SETTINGS_HINT}>
           {t(`providerShare.insights.${error}`)}
         </p>
       )}
-    </section>
+    </SettingsSection>
   );
 }

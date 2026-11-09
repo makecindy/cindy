@@ -242,6 +242,8 @@ export function endLoginFirstLaunchLightGate(): void {
     mode,
     systemModeFollowsSystem(familyId),
     document.documentElement.dataset.wallpaperActive === 'true',
+    document.documentElement.dataset.desktopBackground === 'true'
+      ? Number(document.documentElement.dataset.desktopBlur ?? 0) : null,
   );
 }
 
@@ -363,24 +365,28 @@ export function ThemeProvider({
   useEffect(() => {
     if (!syncWindowVibrancy) return;
     const root = document.documentElement;
-    let lastCovered: boolean | undefined;
+    let lastState: string | undefined;
     const sync = () => {
       // Use the same condition as the opaque wallpaper canvas, including a
       // retained image while its replacement loads and the 0%-visibility veil.
       const covered = root.dataset.wallpaperActive === 'true';
-      if (covered === lastCovered) return;
-      lastCovered = covered;
+      const desktopBlur = root.dataset.desktopBackground === 'true'
+        ? Number(root.dataset.desktopBlur ?? 0) : null;
+      const state = `${covered}:${desktopBlur}`;
+      if (state === lastState) return;
+      lastState = state;
       window.electronAPI?.theme?.applyVibrancy?.(
         familyId,
         resolveSessionIsDark(theme),
         theme,
         systemModeFollowsSystem(familyId),
         covered,
+        desktopBlur,
       );
     };
     sync();
     const observer = new MutationObserver(sync);
-    observer.observe(root, { attributes: true, attributeFilter: ['data-wallpaper-active'] });
+    observer.observe(root, { attributes: true, attributeFilter: ['data-wallpaper-active', 'data-desktop-background', 'data-desktop-blur'] });
     return () => observer.disconnect();
   }, [familyId, localThemeRev, syncWindowVibrancy, theme, systemPrefersDark]);
 

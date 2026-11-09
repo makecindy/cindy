@@ -2255,6 +2255,10 @@
         },
         "visibilityLabel": "壁纸可见度",
         "visibilityHint": "0% 隐藏壁纸，100% 完全显示壁纸。",
+        "desktopVisibilityLabel": "桌面透明度",
+        "desktopVisibilityHint": "透出 Cindy 后面的桌面与窗口，文字和控件保持清晰。",
+        "desktopBlurLabel": "桌面模糊",
+        "desktopBlurHint": "模糊窗口后面的桌面，0 为关闭，数值越大越模糊。不支持强度调节的系统使用默认效果。",
         "blurLabel": "壁纸模糊",
         "blurHint": "仅模糊壁纸，0 为关闭。动态壁纸开启模糊后会增加显卡负载。",
         "motionLabel": "展示方式",
@@ -2421,7 +2425,7 @@
       "skinLabel": "角色",
       "skinHint": "任务胶囊和灵动岛里显示的角色。",
       "soundLabel": "事件音效",
-      "soundHint": "为每类提醒选择 8-bit 音效，任务胶囊和灵动岛共用；点按的音效只在点任务胶囊时播放。",
+      "soundHint": "设置了事件音效时，只播放所选音效；未设置或关闭事件音效时，跟随系统通知设置。",
       "soundAria": "切换任务胶囊音效",
       "soundSelectAria": "{{event}}的音效",
       "soundPreviewAria": "预览{{event}}音效",
@@ -2476,7 +2480,7 @@
         "select": "点击操作"
       },
       "soundOptions": {
-        "none": "无",
+        "none": "跟随系统",
         "startup-chime": "启动音",
         "ring-chime": "圆环音",
         "item-found": "发现道具",
@@ -10718,6 +10722,9 @@
         "stepFailed": "{{name}}这一步出错了，没做完",
         "stepTimeout": "{{name}}太久没做完，这一步先停下",
         "stepUnavailable": "{{name}}现在不可用，这一步没法做",
+        "runtimeFailureReason": {
+          "unclaimed_timeout": "{{name}}未能在等待期限内开始处理，本次请求已结束。\n请伙伴的主人检查所属电脑上的 Cindy 是否正常运行、网络是否连接。"
+        },
         "runtimeFailure": {
           "REMOTE_DEVICE_LIMIT": "{{name}}无法回复：伙伴所在设备保留的远程任务数已达上限。\n请伙伴的主人归档暂时不用的任务，或请远程电脑的主人在“远程与分享”中提高上限。",
           "REMOTE_TOTAL_LIMIT": "{{name}}无法回复：远程电脑保留的任务总数已达上限。\n请那台电脑的主人释放暂时不用的任务，或在“远程与分享”中提高上限。",
@@ -11506,7 +11513,8 @@
         "lark": "Lark",
         "wecom": "企业微信",
         "dingtalk": "钉钉",
-        "discord": "Discord"
+        "discord": "Discord",
+        "imessage": "iMessage"
       },
       "status": {
         "connected": "已连接",
@@ -11637,6 +11645,22 @@
           "existing": "使用已在 Cindy 设置的机器人",
           "manual": "填写新的凭证",
           "moveNote": "这个机器人会从 设置 → IM 机器人 移过来，那里将变为空；原来的私聊和群聊改由 {{name}} 接着回复。"
+        },
+        "imessage": {
+          "serverUrlLabel": "BlueBubbles 服务器",
+          "serverUrlPlaceholder": "http://192.168.1.20:1234",
+          "passwordLabel": "API 密码",
+          "passwordPlaceholder": "••••••••",
+          "ownerAddressLabel": "你的 iMessage 地址",
+          "ownerAddressPlaceholder": "owner@example.com",
+          "chatGuidsLabel": "对话 GUID（用逗号分隔）",
+          "chatGuidsPlaceholder": "any;-;owner@example.com",
+          "listenHostLabel": "本机监听地址",
+          "listenHostPlaceholder": "192.168.1.10",
+          "listenPortLabel": "本机监听端口",
+          "listenPortPlaceholder": "18747",
+          "hint": "在本地网络连接 BlueBubbles，只处理所选对话。连接前，请先停止这些对话里的其它自动回复程序。",
+          "uncertain": "有 {{count}} 条消息的处理结果待核对。请先查看对话记录，再决定是否重试，避免重复回复。"
         }
       },
       "removeConfirm": {
@@ -12918,6 +12942,8 @@
       }
     },
     "teammateProcess": {
+      "empty": "本轮没有可显示的过程记录",
+      "unavailable": "未能读取过程记录",
       "record": "处理记录",
       "operations": "操作记录",
       "elapsed": "已处理 {{duration}}",
@@ -19689,8 +19715,18 @@
     "removeTitle": "移出 {{name}}？",
     "removeDescription": "Cindy 将不再给这个账号分配任务。CLI 登录和对话历史仍保留在本机。",
     "failed": "无法读取或更新账号。请检查 CLI 登录和网络连接后重试。",
-    "directory": "账号目录",
+    "openDirectory": "打开账号目录",
+    "openDirectoryFailed": "无法打开账号目录，它可能已被移动或删除。",
     "loginAgain": "重新登录",
     "login": "登录"
+  },
+  "crashDiagnosis": {
+    "title": "Cindy 上次意外退出了",
+    "description": "要诊断原因吗？我们会把退出信息和脱敏日志整理成任务草稿，供你检查后发送。强制退出或断电也可能导致意外退出。",
+    "diagnose": "诊断问题",
+    "later": "暂不处理",
+    "logExcerpt": "相关日志（节选，可能不完整）",
+    "logsUnavailable": "没有可用的相关日志，暂时无法确定原因。",
+    "failed": "诊断材料准备失败，请重试。"
   }
 }

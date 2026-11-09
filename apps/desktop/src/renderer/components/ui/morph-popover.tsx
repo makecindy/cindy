@@ -214,10 +214,9 @@ export function MorphPopover({
   const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // 收合焦点快照的 setTimeout(0) id:见收合分支注释(快照必须晚于浏览器默认聚焦)。
   const focusSnapTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // 开场双 rAF 的 id:关闭打断时必须取消,否则已排队的回调会在 open 已翻 false 后
+  // 开场 rAF 的 id:关闭打断时必须取消,否则已排队的回调会在 open 已翻 false 后
   // 仍套用"打开几何 + opacity 1",菜单闪回一下(codex P2)。
-  const openRaf1Ref = useRef<number | null>(null);
-  const openRaf2Ref = useRef<number | null>(null);
+  const openRafRef = useRef<number | null>(null);
   // 收合的回归几何 = 打开瞬间的 chip rect(开合期间 chip 布局不变,可安全复用)
   const chipRectRef = useRef<DOMRect | null>(null);
   // 初始形变是否已完成(ResizeObserver 只在其后接管,避免和开场动画打架)
@@ -376,25 +375,25 @@ export function MorphPopover({
       panel.style.height = `${rect.height}px`;
       void panel.offsetHeight;
       panel.style.transition = reduced ? 'none' : MORPH_TRANSITION;
-      // 4) 双 rAF 过渡:生长 + 脱身位移到停靠位(reduced-motion 时等效直切)。
-      //    id 存起来,关闭打断时取消(见 else 分支 + cleanup),防菜单闪回。
-      openRaf1Ref.current = requestAnimationFrame(() => {
-        openRaf2Ref.current = requestAnimationFrame(() => {
-          openRaf1Ref.current = null;
-          openRaf2Ref.current = null;
-          if (!panelRef.current) return;
-          const dock = dockedAnchor(rect);
-          panel.dataset.state = 'open';
-          panel.style.width = `${m.w}px`;
-          panel.style.height = `${m.h}px`;
-          panel.style[dock.prop] = `${dock.value}px`;
-          panel.style.borderRadius = '12px';
-          panel.style.backgroundColor = endBg;
-          panel.style.borderColor = endBorderColor;
-          panel.style.boxShadow = 'var(--shadow-menu)';
-          panel.style.opacity = '1';
-        });
-      });
+      // 4) The flush above already commits the starting geometry. One rAF is enough
+      // to start the transition; a second would add a frame of input latency.
+      // Reduced motion applies the final geometry immediately, without frame waits.
+      const reveal = () => {
+        openRafRef.current = null;
+        if (!panelRef.current) return;
+        const dock = dockedAnchor(rect);
+        panel.dataset.state = 'open';
+        panel.style.width = `${m.w}px`;
+        panel.style.height = `${m.h}px`;
+        panel.style[dock.prop] = `${dock.value}px`;
+        panel.style.borderRadius = '12px';
+        panel.style.backgroundColor = endBg;
+        panel.style.borderColor = endBorderColor;
+        panel.style.boxShadow = 'var(--shadow-menu)';
+        panel.style.opacity = '1';
+      };
+      if (reduced) reveal();
+      else openRafRef.current = requestAnimationFrame(reveal);
       // 5) §14.2 焦点:autofocus 标记 → 首个 input → 首个可交互项(按钮/选项)→ 面板容器。
       //    无 input 的菜单(权限 / +)必须落到首个可交互项,否则键盘落在 role=group 容器上
       //    无法直接方向键/回车操作,可达性回退(codex P2)。
@@ -419,10 +418,8 @@ export function MorphPopover({
       // 收合:缩回 chip 几何并整体淡出(与位移耦合的溶解,防末帧空胶囊盖住
       // chip 文字),动画完卸载并归还焦点。先取消可能仍在排队的开场 rAF,
       // 否则它会在 open 已 false 后套用"打开几何 + opacity 1",菜单闪回。
-      if (openRaf1Ref.current !== null) cancelAnimationFrame(openRaf1Ref.current);
-      if (openRaf2Ref.current !== null) cancelAnimationFrame(openRaf2Ref.current);
-      openRaf1Ref.current = null;
-      openRaf2Ref.current = null;
+      if (openRafRef.current !== null) cancelAnimationFrame(openRafRef.current);
+      openRafRef.current = null;
       settledRef.current = false;
       // 收合目标几何 = trigger chip 的**当前**位置/尺寸(脱身上浮下 chip 全程可见,可实测)。
       // 不能复用打开瞬间的 chipRectRef:开着期间 trigger 可能变(换模型/权限、±引用目录改 ×N
@@ -475,8 +472,7 @@ export function MorphPopover({
     return () => {
       if (closeTimerRef.current) clearTimeout(closeTimerRef.current);
       if (focusSnapTimerRef.current) clearTimeout(focusSnapTimerRef.current);
-      if (openRaf1Ref.current !== null) cancelAnimationFrame(openRaf1Ref.current);
-      if (openRaf2Ref.current !== null) cancelAnimationFrame(openRaf2Ref.current);
+      if (openRafRef.current !== null) cancelAnimationFrame(openRafRef.current);
     };
   }, [
     mounted,

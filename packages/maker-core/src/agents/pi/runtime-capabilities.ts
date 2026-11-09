@@ -357,3 +357,51 @@ export async function capturePiRuntimeCapabilityManifest(
     return errorManifest(identity, generation, stage, failure, statusForFailureCode(failure.code));
   }
 }
+
+/**
+ * Bridge MCP 初始化在扩展加载期内同步占用 ready 窗口:每个 server 的 startup
+ * 预算默认 10s(可配至 30s),而单次采集的请求超时只有 5s —— 宿主侧任何
+ * 慢/黑洞 MCP 都会让首次采集超时(2026-11-09 实报:新任务打字预热后项目
+ * Skill 永远灰)。所以在非 loaded 结果上带退避重试,覆盖 bridge 的预算上界。
+ * 每个 attempt 的结果都经 onAttemptFailed 即时上报(调用方应即时发布,
+ * 让面板先看到 failed/unknown 而不是长时间 undefined);isFinalAttempt=true
+ * 表示重试已耗尽且不会再有下一次采集,调用方应升级为 warn。
+ */
+export const PI_RUNTIME_CAPABILITY_RETRY_DELAYS_MS = [4_000, 10_000, 20_000] as const;
+
+export async function capturePiRuntimeCapabilitiesWithRetry(
+  requester: Parameters<typeof capturePiRuntimeCapabilityManifest>[0],
+  identity: { sessionId?: string; sdkSessionId?: string },
+  generation: number,
+  stage: PiRuntimeCapabilityErrorStage,
+  opts: {
+    retryDelaysMs?: readonly number[];
+    sleep?: (delayMs: number) => Promise<void>;
+    /** 会话已关闭或刷新已被更新代接替时中止重试。 */
+    isCurrent?: () => boolean;
+    onAttemptFailed?: (manifest: PiRuntimeCapabilityManifest, attempt: number, isFinalAttempt: boolean) => void;
+  } = {},
+): Promise<PiRuntimeCapabilityManifest> {
+  const retryDelaysMs = opts.retryDelaysMs ?? PI_RUNTIME_CAPABILITY_RETRY_DELAYS_MS;
+  const sleep = opts.sleep
+    ?? ((delayMs: number) => new Promise<void>((resolve) => {
+      // 后台自愈重试不应托住进程退出。
+      const timer = setTimeout(resolve, delayMs);
+      timer.unref?.();
+    }));
+  let manifest = await capturePiRuntimeCapabilityManifest(requester, identity, generation, stage);
+  let attempt = 0;
+  while (manifest.status !== 'loaded') {
+    attempt += 1;
+    // 每次失败的采集都要上报(含最后一次);isFinalAttempt 只在不会再有
+    // 下一次采集时为 true —— 否则「放弃」日志先于真正的末次尝试出现,
+    // 末次成功留下错误的放弃记录、末次失败反而无日志(Greptile/Codex P2)。
+    const isFinalAttempt = attempt > retryDelaysMs.length;
+    opts.onAttemptFailed?.(manifest, attempt, isFinalAttempt);
+    if (isFinalAttempt || (opts.isCurrent && !opts.isCurrent())) return manifest;
+    await sleep(retryDelaysMs[attempt - 1]!);
+    if (opts.isCurrent && !opts.isCurrent()) return manifest;
+    manifest = await capturePiRuntimeCapabilityManifest(requester, identity, generation, stage);
+  }
+  return manifest;
+}

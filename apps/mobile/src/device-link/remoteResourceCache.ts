@@ -167,8 +167,16 @@ async function update(userId: string, change: (snapshot: Snapshot) => void): Pro
     const snapshot = await readRemoteResourceSnapshot(userId);
     if (expected !== epoch) return;
     const before = JSON.stringify(snapshot);
+    const previousCloudHomes = { ...snapshot.cloudHomes };
     change(snapshot);
     const cleaned = normalize(snapshot);
+    // Selectors need stable snapshots: normalizing unrelated task/read changes must not
+    // invalidate companion consumers. Writers replace cloud homes rather than mutate them.
+    for (const [realm, home] of Object.entries(cleaned.cloudHomes ?? {})) {
+      const previousHome = previousCloudHomes[realm];
+      if (previousHome && (snapshot.cloudHomes?.[realm] === previousHome
+        || JSON.stringify(previousHome) === JSON.stringify(home))) cleaned.cloudHomes![realm] = previousHome;
+    }
     const raw = JSON.stringify(cleaned);
     snapshots.set(userId, cleaned);
     // An unchanged cache must stay silent: subscribers re-render on every emit, and an

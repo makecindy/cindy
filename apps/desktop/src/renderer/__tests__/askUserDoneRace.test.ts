@@ -244,11 +244,14 @@ describe('ask_user 与 done 的时序', () => {
     },
   );
 
-  it('keeps optional questions minimized and snoozes only a matching nonblocking RPC', async () => {
-    emitAskUserRequest('optional', [{ id: 'q', question: 'Continue?' }], 'async');
+  it('opens new async questions, preserves manual collapse, and snoozes only a matching nonblocking RPC', async () => {
+    // Regression: async delivery does not make a question optional or initially hidden.
+    emitAskUserRequest('async-visible', [{ id: 'q', question: 'Continue?' }], 'async');
+    expect(makerChatStore.getLightSnapshot(SESSION_ID).askUserViewerState).toBe('expanded');
+    makerChatStore.setAskUserViewerState(SESSION_ID, 'minimized');
+    emitAskUserRequest('async-visible', [{ id: 'q', question: 'Continue?' }], 'async');
     expect(makerChatStore.getLightSnapshot(SESSION_ID).askUserViewerState).toBe('minimized');
-    makerChatStore.setAskUserViewerState(SESSION_ID, 'expanded');
-    emitAskUserRequest('optional', [{ id: 'q', question: 'Continue?' }], 'async');
+    emitAskUserRequest('async-next', [{ id: 'q', question: 'Continue?' }], 'async');
     expect(makerChatStore.getLightSnapshot(SESSION_ID).askUserViewerState).toBe('expanded');
     onInteractionRequest?.({ sessionId: SESSION_ID, request: { kind: 'ask_user_question', requestId: 'rpc',
       isBlocking: false, questions: [{ id: 'q', question: 'Continue?' }] } });
@@ -257,6 +260,18 @@ describe('ask_user 与 done 的时序', () => {
       kind: 'ask_user_question', answers: {}, inProgress: true,
     }));
     expect(makerChatStore.getLightSnapshot(SESSION_ID).pendingAskUser?.requestId).toBe('rpc');
+  });
+
+  it('keeps a collapsed protected async question collapsed when the next one arrives', () => {
+    emitAskUserRequest('async-1', [{ question: 'Original?' }], 'async');
+    makerChatStore.setAskUserDraft(SESSION_ID, {
+      requestId: 'async-1', currentIndex: 0, answers: {}, started: true, customInput: 'Typing',
+    });
+    makerChatStore.setAskUserViewerState(SESSION_ID, 'minimized');
+    emitAskUserRequest('async-2', [{ question: 'Next?' }], 'async');
+    const snapshot = makerChatStore.getLightSnapshot(SESSION_ID);
+    expect(snapshot.pendingAskUser?.requestId).toBe('async-1');
+    expect(snapshot.askUserViewerState).toBe('minimized');
   });
 
   it('does not send a protected supplement after its task is purged', async () => {

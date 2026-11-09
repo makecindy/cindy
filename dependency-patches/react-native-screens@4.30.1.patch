@@ -303,6 +303,27 @@ index c435fdd..bc4ed79 100644
                                                  menuAction(menuId);
                                                }];
  
+diff --git a/ios/RNSScreen.mm b/ios/RNSScreen.mm
+index 9b66012dc8db1e3af0cb5457f8dad86e7f2fe5e3..b158bd573bbbba236daaf206c00180e385743fb4 100644
+--- a/ios/RNSScreen.mm
++++ b/ios/RNSScreen.mm
+@@ -638,8 +638,14 @@ - (void)didMoveToWindow
+     if (_touchHandler == nil) {
+       _touchHandler = [RCTSurfaceTouchHandler new];
+     }
+-    [_touchHandler attachToView:self];
+-  } else {
++    // Cindy: docking a retained surface can deliver another window move while
++    // the screen is already attached. Preserve active touches on that move.
++    if (_touchHandler.view != self) {
++      [_touchHandler attachToView:self];
++    }
++  } else if (_touchHandler.view != nil) {
++    // A screen moved under another screen/root has already detached its own
++    // handler. A later window removal must not detach the same handler twice.
+     [_touchHandler detachFromView:self];
+   }
+ }
 diff --git a/ios/RNSScreenStackHeaderConfig.mm b/ios/RNSScreenStackHeaderConfig.mm
 index 12f2272..811b3d8 100644
 --- a/ios/RNSScreenStackHeaderConfig.mm
