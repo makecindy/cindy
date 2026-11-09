@@ -593,15 +593,17 @@ When the user requests an immediate upgrade that changes backend/runtime/plugin 
 instance exits normally, by `manual-activate --config FILE --report NEW_MANUAL_REPORT`. These commands
 do not enable automatic updates and do not pretend that the automatic compatibility gate passed.
 The checked build, exact baseline/candidate/profile, unchanged migration fingerprint and isolated
-startup proof are required. A failed/rejected candidate cannot be silently retried. The existing
+handoff proof are required. A failed/rejected candidate cannot be silently retried. The existing
 restart wrapper still enforces profile exclusivity and runtime startup checks.
 
 Manual activation journals an explicit manual rollback policy before starting the candidate. It
 requires the same continuous readiness/remote-health probation before promotion. Failure/interruption
-blocks further starts instead of launching old code against potentially changed data; the independent
+after any spawn attempt blocks further starts instead of launching old code against potentially changed data; the independent
 rescue receipt also marks rollback compatibility unverified until successful promotion. This does not
 restore or overwrite databases, credentials or plugin ledgers. Preserve both version directories for
-inspection. This path does not accept changed migration artifacts or private database scripts.
+inspection. A caught failure proven to precede any spawn attempt can restore the old version;
+its result is `recovered`, not `verified`. Missing readiness or an interrupted supervisor is not that proof.
+This path does not accept changed migration artifacts or private database scripts.
 
 For an explicitly authorized immediate restart, use the single Terminal command:
 
@@ -624,7 +626,7 @@ still win the lock, but then this command leaves the current app running. Dead o
 the existing lock implementation, never by the handover script.
 
 The output receipt is created exclusively: use a new path for each approved attempt. It records
-`blocked-before-stop`, `stopping`, `shutdown-unconfirmed`, `starting`, `activation-failed`, or `verified`.
+`blocked-before-stop`, `stopping`, `shutdown-unconfirmed`, `starting`, `activation-failed`, `recovered`, or `verified`.
 A crash leaves the last durable phase; inspect the receipt, journal and actual processes instead of
 replaying an old restart command. `verified` requires continuous readiness/remote-service probation,
 not phone UI testing. A startup failure keeps the existing manual rollback policy; it does not blindly
@@ -747,7 +749,10 @@ never install/replace the formal entry automatically.
 
 `fixed-install.mjs` copies and verifies the signed candidate next to the destination, then
 records a durable transition before renaming anything. The old physical bundle is retained
-as a hidden sibling; old runtime caches and business journal pointers are also retained.
+under the immutable runtime store’s `install-backups/previous-<uuid>.bundle`, outside
+Applications; old runtime caches and business journal pointers are also retained. The store must
+be on the installation volume so renames remain atomic. Existing version-1 sibling transitions
+can still be completed; legacy backups are reported by `doctor`, never silently deleted.
 An unchanged runtime is verified and reused without replacing its directory. A changed
 runtime requires the exact installed app to be stopped, the same Bundle ID and developer
 certificate, and the existing supervisor profile/stop guards. Changing signing identity is
@@ -806,3 +811,42 @@ environment and numeric HTTP failure status. It never records the native token o
 headers. A registered event confirms only registration, and a desktop notify-sent log confirms
 only enqueueing; neither proves APNs acceptance or notification display. Verify provider logs
 and the target phone before calling delivery successful.
+
+
+## 个人版交接与故障验收（2026-11-10）
+
+这套流程面向具备源码、GitHub 登录与本机签名环境的贡献者；目前仍运行签名外壳加源码
+开发服务，不是面向普通用户的独立分发包，也不承诺升级后自动继承 macOS 授权。
+
+- 每次新的升级请求重新 `prepare`，冻结 main、全部选中 PR（含草稿）的最新 SHA、插件仓
+  与本地补丁。用户等待确认期间不暗中改候选。确认前可运行 `freshness --config FILE
+  --report BUILD_REPORT` 查询是否有变化；失败表示需展示差异并选择重建或明确接受冻结版，
+  不能宣称它仍是最新。合成冲突留在候选目录供检查；优先更新冲突 PR，不重复维护私有解法。
+- `manual-check` 现在先在独立 mock 数据目录、临时安装位置启动旧版，再复用正式的
+  `restartWithSupervisorLock`、退出等待、固定包安装及 `trial` 观察流程切换候选。
+  只有完整演练通过才生成含 `handoff` 的手动升级报告；旧的仅 smoke 报告需要重新验收。
+  演练安装位置和日志保留在 `automatic/rehearsals/<uuid>`，不复用真实账号。
+- 演练检查签名要求与安装交接，mock 不证明真实账号、远程连接、推送或系统授权有效。
+  真正切换仍需本次用户授权；线上仍运行完整健康观察。签名要求变化在退出旧版前阻断，
+  需要明确身份迁移与重新授权流程。不得通过重置 TCC 或修改权限库“修复”检查。
+- 主进程启动时消费并清除监控环境变量，生成目录只允许一个主进程写心跳；准备子进程
+  同样清除继承值。读取方继续验证 PID、代次与新鲜度，未知活动仍视为忙。
+- 只有当前调用栈确认**尚未尝试 spawn**，才允许恢复旧版；没有 ready、超时或监督程序
+  被中断都不构成这一证据。恢复结果标为 `recovered`、`verified:false`，不是新版升级成功。
+  候选一旦尝试启动且无法确认兼容性，保持 blocked。使用 `doctor` / `auto-status`
+  检查及受保护的 `auto-recover`，不得手改 journal 或删除拒绝记录绕过检查。
+- 每次实际切换后分别核对屏幕录制与辅助功能的当前进程检查结果。系统设置里的开关、
+  codesign 成功、窗口出现、远程设备在线均不能替代这两项检查；未实测就保留未验收状态。
+
+`node scripts/personal-build.mjs prune-plan --config FILE` 只生成保留建议：保护 journal 的
+当前／上一版／失败版、独立 known-good、待切换候选、最新已检查版和最近两次准备；证据
+缺失则全部保留。没有删除能力，不遍历或删除任意 worktree、工具版本、原生缓存、旧备份。
+实施清理前必须再次检查运行进程、脏文件、Git 引用和恢复依赖；不能把按时间排序当成安全删除证明。
+
+验收分层：`personal-build-recovery.test.mjs` 在临时目录通过生产交接、安装器和 journal
+覆盖正常晋升、启动前恢复、启动后阻断，进程与时间为注入模型；它不冒充真实 GUI 演练。
+真实演练由上述 `manual-check` 执行。自动升级仍默认关闭，不能仅凭若干次通过就打开。
+
+后续独立阶段：迁移到正式打包产物、可执行且会重新验证占用的清理流程、监督程序自身交接。
+这些需要独立验收；本轮没有改变当前运行实例或安装手机包。Push 注册缺陷独立于个人版工具
+交付，注册成功不是 APNs 送达证据；应分别核对签名环境、注册回执与目标真机收到通知。

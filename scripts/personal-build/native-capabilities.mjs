@@ -159,6 +159,12 @@ export function signDeveloperRuntime(app, identity) {
   };
   walk(app); sign(app, true);
 }
+export function designatedRequirement(app) {
+  const result = spawnSync('codesign', ['-d', '-r-', app], {encoding:'utf8'});
+  const requirement = `${result.stdout || ''}\n${result.stderr || ''}`.split('\n').find(line => line.startsWith('designated => '));
+  if (result.status !== 0 || !requirement) throw Error('Cannot read personal app signing requirement');
+  return requirement;
+}
 export function verifyDeveloperSignature(app, identity) {
   execFileSync('codesign', ['--verify','--deep','--strict', app], {stdio:'pipe'});
   const result = spawnSync('codesign', ['-dv','--verbose=4',app], {encoding:'utf8'});

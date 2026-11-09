@@ -1,4 +1,5 @@
 import { createPluginFileAccess } from '../mcp-apps/pluginFileAccess.js';
+import { ownsPersonalBuildMonitor } from '../personalBuildMonitor.js';
 import { importPickedFiles } from './pickedFiles.js';
 import { mediaTypeForLibraryPath } from './runtime/ghostFiles.js';
 import { pluginUiPromptDeclined, pluginUiPromptSuppressed, deferPluginUiPrompt, declinePluginUiPrompt } from './pluginUiPreferences.js';
@@ -8039,7 +8040,7 @@ async function updateLocalGhostPackageLocked(
 
 /** Developer supervisor post-promotion only. Never updates a public/org copy. */
 export async function updatePersonalLocalPlugins() {
-  if (app.isPackaged || !process.env.CINDY_PERSONAL_MONITOR_DIR || !process.env.CINDY_PERSONAL_GENERATION)
+  if (app.isPackaged || !ownsPersonalBuildMonitor())
     throw new Error('Personal plugin updates require the developer supervisor');
   const owner = captureGhostMutationOwner();
   const scope = activeOwnerScopeKey();

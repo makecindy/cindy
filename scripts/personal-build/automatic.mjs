@@ -8,8 +8,8 @@ import { managedConfig, runtimeEnv } from './managed.mjs';
 import { prepare, main, run, packageHash, verifyReport, verifyUpgradeSnapshot } from '../personal-build.mjs';
 import {acquire} from './lock.mjs';
 export {acquire} from './lock.mjs';
-import {installFixedRuntime} from './fixed-install.mjs';
-import { nativeIdentity, verifyDeveloperSignature } from './native-capabilities.mjs';
+import {installFixedRuntime, preflightFixedRuntime} from './fixed-install.mjs';
+import { nativeIdentity, verifyDeveloperSignature, designatedRequirement } from './native-capabilities.mjs';
 import { checkCheckout } from './checkout-guard.mjs';
 import { RecoveryJournal, durableWrite, compatibility } from './recovery.mjs';
 
@@ -144,12 +144,13 @@ function assertFixedAppStopped(app) {
   check(pids.length === 0, `Personal app is still running (PID ${pids.join(', ')}); no replacement`);
   return false;
 }
-function start(c, release, { mock = false } = {}) {
+function start(c, release, { mock = false, beforeSpawn = () => {} } = {}) {
   check(process.stdin.isTTY, 'Run the personal developer launcher in Terminal; a live TTY is required for the repository startup wrapper');
   verifyRelease(release);
   const nativeFile = path.join(release.directory, 'apps/desktop/resources/personal-native.json');
   const runtime = fs.existsSync(nativeFile) ? read(nativeFile).runtime : null;
-  const fixedApp = runtime && !mock && c.runtime.mode === 'shared' ? installFixedRuntime(runtime, c.runtime.personalApp, {verifySignature:verifyDeveloperSignature, isRunning:assertFixedAppStopped}) : null;
+  const destination = c.runtime.mode === 'shared' ? c.runtime.personalApp : c.rehearsalApp;
+  const fixedApp = runtime && !mock && destination ? installFixedRuntime(runtime, destination, {verifySignature:verifyDeveloperSignature, isRunning:assertFixedAppStopped}) : null;
   const generation = randomUUID(), dir = path.join(root(c), 'launches', generation);
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 }); fs.chmodSync(dir, 0o700);
   const env = runtimeEnv(c, cli);
@@ -165,6 +166,7 @@ function start(c, release, { mock = false } = {}) {
   const output = fs.openSync(log, 'a', 0o600);
   let child;
   try {
+    beforeSpawn();
     child = spawn('/bin/zsh', ['-c', personalLaunchCommand,
       'personal-build', c.runtime.node, path.join(release.directory, 'scripts/desktop-restart-runner.mjs'),
       '--wait-ready', '--reuse-terminal', `--region=${c.region}`, ...mode], {
@@ -229,6 +231,47 @@ async function smoke(c, release) {
   finally { await stopLaunch(c, release, launched, profile); }
   return { at: Date.now(), profile, log: launched.log };
 }
+/** Exercise the actual launcher/stop/install/trial path against a disposable mock profile.
+ * Internal configuration is constructed here, never accepted from a user's shared config. */
+async function rehearseHandoff(c, baseline, release) {
+  const nonce = randomUUID(), name = `personal-handoff-${nonce.slice(0, 8)}`;
+  const directory = path.join(root(c), 'rehearsals', nonce);
+  const startup = await import(pathToFileURL(path.join(c.app.checkout, 'scripts/restart-desktop-remote.mjs')));
+  const dataDir = startup.defaultIsolatedUserDataDir(name, c.region);
+  const isolated = { ...c, name, rehearsalApp: path.join(directory, 'Applications', 'Cindy Rehearsal.app'),
+    runtime: { ...c.runtime, mode: 'isolated', stateDir: directory, dataDir },
+    automatic: { ...c.automatic, enabled: false, mock: true, requireRemote: false } };
+  check(dataDir !== c.runtime.dataDir, 'Handoff rehearsal must use a separate profile');
+  for (const r of [baseline, release]) {
+    const native = read(path.join(r.directory, 'apps/desktop/resources/personal-native.json'));
+    check(native.runtime, 'Handoff rehearsal needs prepared signed runtimes for both versions');
+  }
+  const store = journal(isolated), receipt = path.join(directory, 'handoff.json');
+  let oldLaunch, newLaunch;
+  try {
+    oldLaunch = start(isolated, baseline);
+    const pid = await waitReady(isolated, baseline, oldLaunch, dataDir, true);
+    store.init({ ...baseline, verified: true });
+    await restartWithSupervisorLock(path.join(root(isolated), 'supervisor.lock'), pid, {
+      prepare: () => { verifyRelease(baseline); verifyRelease(release); preflightInstallation(isolated, release); },
+      observe: () => snapshot(isolated, baseline),
+      stop: exactPid => stopOwned(isolated, baseline, dataDir, exactPid),
+      activate: async onVerified => {
+        store.beginManual(release, { prepared: true, stopped: true, manualRequested: true, smokeVerified: true, profileVerified: true });
+        newLaunch = await trial(isolated, store, release);
+        onVerified({releaseId: store.read().good.id});
+      },
+      record: value => durableWrite(receipt, value),
+    });
+    check(store.read().good.id === release.id && read(receipt).verified, 'Handoff rehearsal did not promote the candidate');
+    return { at: Date.now(), ready: true, releaseId: release.id, baselineId: baseline.id, profile: dataDir,
+      receipt, log: newLaunch.launched.log, installedApp: isolated.rehearsalApp, remoteTested: false };
+  } finally {
+    // Only the two exact isolated source/profile identities are eligible for cleanup.
+    await stopLaunch(isolated, release, newLaunch?.launched, dataDir);
+    if (oldLaunch) await stopLaunch(isolated, baseline, oldLaunch, dataDir);
+  }
+}
 export async function automaticCheck(file) {
   const c = config(file), unlock = acquire(path.join(root(c), 'prepare.lock'));
   try {
@@ -264,22 +307,36 @@ function candidate(c, s) {
     verifyRelease(v); return v;
   } catch { return null; }
 }
-async function trial(c, store, release) {
+export function startTrial(store, launch) {
+  let spawnAttempted = false;
+  try { return launch(() => { spawnAttempted = true; }); }
+  catch (error) {
+    if (!spawnAttempted) store.rejectBeforeLaunch(error.message);
+    throw error;
+  }
+}
+export async function trial(c, store, release, operations = {}) {
+  const launch = operations.start || start;
+  const ready = operations.waitReady || waitReady;
+  const heartbeat = operations.readHeartbeat || readHeartbeat;
+  const inspect = operations.snapshot || snapshot;
+  const wait = operations.sleep || sleep;
+  const stop = operations.stopLaunch || stopLaunch;
   let launched, pid;
   try {
-    launched = start(c, release);
-    pid = await waitReady(c, release, launched, c.runtime.dataDir, true);
+    launched = startTrial(store, beforeSpawn => launch(c, release, { beforeSpawn }));
+    pid = await ready(c, release, launched, c.runtime.dataDir, true);
     while (store.read().phase === 'trial') {
-      const state = store.read(), h = readHeartbeat(launched, pid, { remote: c.automatic.requireRemote });
-      const s = snapshot(c, release);
+      const state = store.read(), h = heartbeat(launched, pid, { remote: c.automatic.requireRemote });
+      const s = inspect(c, release);
       store.observe({ generation: state.generation, id: release.id, healthy: !!h?.healthy && s.ready, processAlive: s.pid === pid }, c.automatic.probationSeconds * 1000);
-      if (store.read().phase === 'trial') await sleep(2000);
+      if (store.read().phase === 'trial') await wait(2000);
     }
     if (store.read().phase === 'stable') return { launched, pid };
     throw new Error('Health probation failed');
   } catch (e) {
     if (store.read().phase === 'trial') store.reject(e.message);
-    await stopLaunch(c, release, launched);
+    await stop(c, release, launched);
     throw e;
   }
 }
@@ -307,6 +364,8 @@ export function validateManualUpgrade(report, c, state, release) {
     report.dataDir === c.runtime.dataDir && report.region === c.region, 'Manual upgrade identity/profile changed');
   check(release.monitorProtocol === 1 && report.smoke?.ready === true && report.smoke.releaseId === release.id,
     'Manual upgrade needs a successful isolated startup for this candidate');
+  check(report.handoff?.ready === true && report.handoff.releaseId === release.id && report.handoff.baselineId === state.good.id,
+    'Manual upgrade needs a complete isolated handoff rehearsal for this baseline and candidate');
   check(release.migrations === state.good.migrations && !release.dbScript,
     'Manual upgrade does not permit migration changes or private database scripts');
   check(!state.rejected.some(r => r.id === release.id), 'Candidate was rejected; inspect before retrying');
@@ -325,14 +384,15 @@ async function prepareManualUpgrade(file, reportFile, output) {
     check(!state.rejected.some(r => r.id === release.id), 'Candidate was previously rejected');
     const old = snapshot(c, state.good);
     check(old.pid && old.ready && !old.unknown, 'Manual upgrade needs an observed ready baseline');
+    preflightInstallation(c, release);
     run(c.runtime.node, ['scripts/ensure-dev-runtime-assets.mjs'], report.directory);
     verifyUpgradeSnapshot(c, report);
-    const proof = await smoke(c, release);
+    const proof = await rehearseHandoff(c, state.good, release);
     verifyUpgradeSnapshot(c, report);
     verifyRelease(release);
     durableWrite(output, { kind: 'personal-manual-upgrade', checked: true, buildReport: path.resolve(reportFile),
       baseline: state.good, candidate: release, dataDir: c.runtime.dataDir, region: c.region,
-      smoke: { ...proof, ready: true, releaseId: release.id }, rollbackPolicy: 'manual' });
+      smoke: { ...proof, ready: true, releaseId: release.id }, handoff: proof, rollbackPolicy: 'manual' });
   } finally { unlock(); }
 }
 function manualCandidate(c, store, manualFile) {
@@ -343,7 +403,15 @@ function manualCandidate(c, store, manualFile) {
   const manual = validateManualUpgrade(report, c, state, release);
   check(manual.id !== state.good.id && manual.directory !== state.good.directory, 'Candidate is already selected');
   verifyRelease(manual); verifyRelease(state.good);
+  preflightInstallation(c, manual);
   return { manual, baseline: state.good };
+}
+function preflightInstallation(c, release) {
+  const file = path.join(release.directory, 'apps/desktop/resources/personal-native.json');
+  const runtime = fs.existsSync(file) ? read(file).runtime : null;
+  const destination = c.runtime.mode === 'shared' ? c.runtime.personalApp : c.rehearsalApp;
+  if (runtime && destination) preflightFixedRuntime(runtime, destination,
+    {verifySignature: verifyDeveloperSignature, requirement: designatedRequirement});
 }
 async function verifyLaunchProfile(c) {
   const startup = await import(pathToFileURL(path.join(c.app.checkout, 'scripts/restart-desktop-remote.mjs')));
@@ -369,7 +437,11 @@ export async function restartWithSupervisorLock(lockFile, expectedPid, { prepare
     const after = await observe();
     check(!after.unknown && !after.pid, 'Shutdown unconfirmed; candidate was not started');
     phase = 'starting'; write();
-    return await activate(() => { verified = true; phase = 'verified'; write(); });
+    return await activate((outcome = {}) => {
+      verified = outcome.recovered !== true;
+      phase = verified ? 'verified' : 'recovered';
+      write(outcome);
+    });
   } catch (e) {
     const failedPhase = phase;
     phase = phase === 'preflight' ? 'blocked-before-stop' : phase === 'stopping' ? 'shutdown-unconfirmed'
@@ -444,7 +516,7 @@ async function superviseLocked(file, c, store, bootstrapFile, manualFile, onVeri
     const existing = snapshot(c, s.good); check(!existing.unknown && !existing.pid && !hasLaunchRunner(c, s.good), 'A personal application is already running');
     let v = manual || bootstrap || (c.automatic.enabled === true ? candidate(c, s) : null);
     if (v && !manual && !bootstrap) {
-      try { verifyUpgradeSnapshot(c, verifyReport(v.buildReport)); }
+      try { verifyUpgradeSnapshot(c, verifyReport(v.buildReport)); preflightInstallation(c, v); }
       catch(e) { status(c, 'stale-candidate', {error:e.message}); v = null; }
     }
     if (v) {
@@ -465,7 +537,7 @@ async function superviseLocked(file, c, store, bootstrapFile, manualFile, onVeri
       current = { launched, pid };
     } catch (e) { if (s.phase === 'recovering') store.finishRecovery(false); await stopLaunch(c, s.good, launched); throw e; }
   }
-  onVerified?.();
+  onVerified?.({ releaseId: store.read().good.id, recovered: !!manual && store.read().good.id !== manual.id });
   let nextCheck = 0;
   const pluginRequests = new Set();
   while (true) {
@@ -492,14 +564,14 @@ async function superviseLocked(file, c, store, bootstrapFile, manualFile, onVeri
       pluginRequests.add(current.launched.generation);
     }
     if (v && h?.healthy && h.busy === false && h.idle === true) {
-      try { verifyUpgradeSnapshot(c, verifyReport(v.buildReport)); }
+      try { verifyUpgradeSnapshot(c, verifyReport(v.buildReport)); preflightInstallation(c, v); }
       catch (e) { status(c, 'stale-candidate', {error:e.message}); await sleep(60000); continue; }
       durableWrite(path.join(current.launched.dir, 'request.json'), { action: 'quit', generation: current.launched.generation, pid: current.pid, requireRemote: c.automatic.requireRemote, expiresAt: Date.now() + 10000 });
       // The host rechecks all activity and exits normally. Silence is not an acknowledgement.
       const deadline = Date.now() + 30000; let stopped = false;
       while (Date.now() < deadline) {
         const p = snapshot(c, s.good);
-        if (!p.unknown && !p.pid) { stopped = true; break; }
+        if (!p.unknown && !p.pid && !alive(current.pid) && !hasLaunchRunner(c, s.good)) { stopped = true; break; }
         await sleep(1000);
       }
       fs.rmSync(path.join(current.launched.dir, 'request.json'), { force: true });

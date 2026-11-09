@@ -21,10 +21,30 @@ export function verifyInstalledRuntime(runtime, app, verifySignature) {
   verifyApp(app, receipt, verifySignature);
   return app;
 }
+/** Read-only gate, also run before stopping the current instance. A different requirement may
+ * invalidate macOS grants; it needs a separate, explicit identity migration. */
+export function preflightFixedRuntime(runtime, app, {verifySignature, requirement}) {
+  const next = verifyRuntime(runtime, verifySignature);
+  check(path.isAbsolute(app) && app.endsWith('.app'), 'An absolute personal .app path is required');
+  check(!exists(app + '.personal-transition.json'), 'Unfinished personal installation; recover it before another upgrade');
+  if (!exists(app)) return { installed: false };
+  check(exists(app + '.personal-install.json'), 'Refusing to replace an unmanaged application');
+  const previous = read(app + '.personal-install.json');
+  verifyApp(app, previous, verifySignature);
+  check(previous.inputs.bundleId === next.inputs.bundleId && previous.signingIdentity === next.signingIdentity,
+    'Personal app identity changed; an explicit identity migration is required');
+  check(requirement(app) === requirement(path.join(runtime.directory, 'Cindy.app')),
+    'Personal app signing requirement changed; review identity migration and permission reauthorization before switching');
+  const archiveParent = path.dirname(path.dirname(runtime.directory));
+  check(fs.statSync(archiveParent).dev === fs.statSync(path.dirname(app)).dev, 'Personal backup store must be on the installation volume');
+  return { installed: true, sameRequirement: true };
+}
 /** Finish a recorded filesystem transition, not a business/data rollback. Never overwrite unknown files. */
-function finishTransition(app, file, {isRunning, verifySignature, rename}) {
+function finishTransition(app, file, {isRunning, verifySignature, rename, backupRoot}) {
   const t = read(file), parent = path.dirname(app), prefix = '.' + path.basename(app) + '.';
-  check(t.version === 1 && t.app === app && [t.stage,t.backup].every(p => path.dirname(p) === parent && path.basename(p).startsWith(prefix)), 'Invalid personal installation transition');
+  const legacy = t.version === 1 && path.dirname(t.backup) === parent && path.basename(t.backup).startsWith(prefix);
+  const archived = t.version === 2 && path.dirname(t.backup) === backupRoot && /^previous-[a-f0-9-]{36}\.bundle$/.test(path.basename(t.backup));
+  check(t.app === app && path.dirname(t.stage) === parent && path.basename(t.stage).startsWith(prefix) && (legacy || archived), 'Invalid personal installation transition');
   if (exists(app)) {
     // New bundle was renamed before the process stopped: only finish its metadata.
     if (treeIdentity(app) === t.next.digest) {
@@ -52,10 +72,15 @@ export function installFixedRuntime(runtime, app, {isRunning, verifySignature, r
   fs.mkdirSync(path.dirname(app),{recursive:true,mode:0o700});
   app = path.join(fs.realpathSync(path.dirname(app)),path.basename(app));
   const transition=app+'.personal-transition.json', metadata=app+'.personal-install.json';
+  // Keep retired bundles outside Applications/LaunchServices discovery. Rename remains atomic.
+  const archive = path.join(path.dirname(path.dirname(runtime.directory)), 'install-backups');
+  fs.mkdirSync(archive,{recursive:true,mode:0o700});
+  const backupRoot = fs.realpathSync(archive);
+  check(fs.statSync(backupRoot).dev === fs.statSync(path.dirname(app)).dev, 'Personal backup store must be on the installation volume');
   // Serializes separate profiles targeting the same destination too. No stale lock is silently removed.
   const unlock=acquire(app+'.personal-install.lock');
   try {
-    if(exists(transition)) finishTransition(app,transition,{isRunning,verifySignature,rename});
+    if(exists(transition)) finishTransition(app,transition,{isRunning,verifySignature,rename,backupRoot});
     let previous = null;
     if(exists(app)) {
       check(exists(metadata),'Refusing to replace an unmanaged application');
@@ -66,13 +91,13 @@ export function installFixedRuntime(runtime, app, {isRunning, verifySignature, r
     } else check(!exists(metadata),'Managed app is missing; inspect before installing');
     check(!isRunning(app),'Personal app is still running; no replacement');
     const suffix=randomUUID(), prefix=path.join(path.dirname(app),'.'+path.basename(app)+'.');
-    const stage=prefix+'stage-'+suffix, backup=prefix+'previous-'+suffix;
+    const stage=prefix+'stage-'+suffix, backup=path.join(backupRoot,'previous-'+suffix+'.bundle');
     try {
       fs.cpSync(path.join(runtime.directory,'Cindy.app'),stage,{recursive:true,verbatimSymlinks:true});
       verifyApp(stage,receipt,verifySignature);
     } catch(e) { fs.rmSync(stage,{recursive:true,force:true}); throw e; }
-    durableWrite(transition,{version:1,app,stage,backup,previous,next:receipt});
-    finishTransition(app,transition,{isRunning,verifySignature,rename});
+    durableWrite(transition,{version:2,app,stage,backup,previous,next:receipt});
+    finishTransition(app,transition,{isRunning,verifySignature,rename,backupRoot});
     return app;
   } finally { unlock(); }
 }

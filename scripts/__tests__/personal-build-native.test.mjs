@@ -83,7 +83,7 @@ test('runtime reuse, failure isolation, live selection guard and previous-versio
 // Existing cache tests only covered a symlink. Tier: filesystem integration, injected rename failure.
 test('fixed installation reuses its path and resumes a failed switch with old runtime retained',async()=>{
  const {prepareRuntime}=await import('../personal-build/runtime-store.mjs');
- const {installFixedRuntime,verifyInstalledRuntime}=await import('../personal-build/fixed-install.mjs');
+ const {installFixedRuntime,verifyInstalledRuntime,preflightFixedRuntime}=await import('../personal-build/fixed-install.mjs');
  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'personal-fixed-install-'));
  try {
   const prepare=(v,identity='fixture')=>prepareRuntime({store:path.join(dir,'store'),inputs:{bundleId:'personal-test',version:v},signingIdentity:identity,
@@ -92,6 +92,9 @@ test('fixed installation reuses its path and resumes a failed switch with old ru
   const app=path.join(fs.realpathSync(dir),'Applications','Cindy Personal.app');
   const options={isRunning:()=>false,verifySignature:()=>{}};
   installFixedRuntime(first,app,options);
+  assert.deepEqual(preflightFixedRuntime(second,app,{...options,requirement:()=> 'same designated requirement'}),{installed:true,sameRequirement:true});
+  // Same certificate/bundle ID is insufficient: reject changed designated requirements before quit.
+  assert.throws(()=>preflightFixedRuntime(second,app,{...options,requirement:where=>where === app ? 'old' : 'new'}),/signing requirement changed/);
   assert.equal(fs.lstatSync(app).isSymbolicLink(),false);
   const before=fs.statSync(path.join(app,'binary')).mtimeMs;
   installFixedRuntime(first,app,{...options,isRunning:()=>true});
@@ -103,6 +106,8 @@ test('fixed installation reuses its path and resumes a failed switch with old ru
   assert.equal(fs.existsSync(app),false);
   const pending=JSON.parse(fs.readFileSync(app+'.personal-transition.json'));
   assert.equal(fs.readFileSync(path.join(pending.backup,'binary'),'utf8'),'one');
+  assert.equal(path.dirname(pending.backup),path.join(fs.realpathSync(dir),'store','install-backups'));
+  assert.ok(!pending.backup.endsWith('.app'));
   installFixedRuntime(second,app,options);
   assert.equal(verifyInstalledRuntime(second,app,()=>{}),app);
   assert.equal(fs.readFileSync(path.join(app,'binary'),'utf8'),'two');

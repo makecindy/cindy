@@ -92,6 +92,9 @@ export function runtimeEnv(c, configFile, manifest = {}) {
     PERSONAL_NODE: r.node, PERSONAL_TOOL_PATH: r.toolPaths.join(path.delimiter),
     PATH: [path.dirname(r.node), ...r.toolPaths, process.env.PATH || ''].join(path.delimiter),
   };
+  // Routing belongs to one supervised Main, never to a preparation subprocess or nested dev app.
+  delete result.CINDY_PERSONAL_MONITOR_DIR;
+  delete result.CINDY_PERSONAL_GENERATION;
   for (const key of ['TARGET', 'MAIN', 'PACK', 'LABEL', 'DB_SCRIPT', 'FETCH']) result[`PERSONAL_${key}`] = manifest[key] || '';
   return result;
 }
@@ -123,6 +126,12 @@ export function doctor(c, exec = run) {
     const f = path.join(r.stateDir, file); if (fs.existsSync(f)) result[file] = fs.readFileSync(f, 'utf8').trim();
   }
   if (fs.existsSync(path.join(r.stateDir, '.database-transition'))) result.issues.push('Unfinished database transition; inspect apply-result');
+  if (fs.existsSync(r.personalApp + '.personal-transition.json')) result.issues.push('Unfinished fixed app installation; retain the transition and inspect it before switching');
+  const appParent=path.dirname(r.personalApp), legacyPrefix='.'+path.basename(r.personalApp)+'.previous-';
+  result.legacyAppBackups=fs.existsSync(appParent) ? fs.readdirSync(appParent).filter(name=>name.startsWith(legacyPrefix)).map(name=>path.join(appParent,name)) : [];
+  result.recoveryAdvice = result.supervised?.phase === 'blocked'
+    ? 'Inspect the failed launch and data compatibility; do not edit the journal or clear rejected versions.'
+    : 'Use auto-status to inspect supervision; auto-recover checks its independent known-good receipt before recovery.';
   const pluginReport = path.join(r.stateDir, 'plugins-report.json');
   if (fs.existsSync(pluginReport)) { result.plugins = read(pluginReport); if (result.plugins.state === 'failed') result.issues.push('Latest plugin synchronization failed; previous seeds retained'); }
   for (const b of brains(c)) result.duplicates.push(...auditPlugins(b).duplicates);

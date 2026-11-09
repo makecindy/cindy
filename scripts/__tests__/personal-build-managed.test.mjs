@@ -61,7 +61,18 @@ test('deployed bundle is self-contained and paths with spaces survive dispatch',
   const help = run(process.execPath, [path.join(bundle, 'personal-build.mjs'), 'help'], root);
   assert.match(help, /sync-plugins/);
   const c = { name: 'fixture', region: 'global', app: { checkout: root, repository: 'example/app' }, runtime: { clientDir: path.join(root, 'app [test]'), stagingDir: 'stage', stateDir: 'state', dataDir: 'data', node: process.execPath, mode: 'shared', toolPaths: [], idleMinutes: 120 } };
-  const env = runtimeEnv(c, path.join(root, 'config file.json'));
+  const oldRouting = [process.env.CINDY_PERSONAL_MONITOR_DIR,process.env.CINDY_PERSONAL_GENERATION];
+  process.env.CINDY_PERSONAL_MONITOR_DIR='/inherited-monitor';process.env.CINDY_PERSONAL_GENERATION='inherited-generation';
+  let env;
+  try {
+    env = runtimeEnv(c, path.join(root, 'config file.json'));
+    assert.equal(env.CINDY_PERSONAL_MONITOR_DIR,undefined);
+    assert.equal(env.CINDY_PERSONAL_GENERATION,undefined);
+  } finally {
+    for(const [i,key] of ['CINDY_PERSONAL_MONITOR_DIR','CINDY_PERSONAL_GENERATION'].entries()) {
+      if(oldRouting[i]===undefined)delete process.env[key];else process.env[key]=oldRouting[i];
+    }
+  }
   assert.equal(env.PERSONAL_CONFIG, path.join(root, 'config file.json'));
   assert.ok(new RegExp(env.PERSONAL_ELECTRON_RE).test(path.join(c.runtime.clientDir, 'node_modules/electron/dist/Electron.app/Contents/MacOS/Electron')));
 });
