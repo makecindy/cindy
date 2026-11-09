@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Session } from '@cindy/maker-core';
 import { createMediaDownloadContext } from '../mediaDownloadApproval.js';
+import type { MediaDownloadReason } from '../mediaDownload.js';
 
 const mocks = vi.hoisted(() => ({ request: vi.fn() }));
 vi.mock('../../i18n.js', () => ({ t: (key: string) => key }));
@@ -84,6 +85,28 @@ describe('Host media permission', () => {
     try {
       await expect(ctx.confirm({ source: 'https://cdn.example.com', reasons: ['source'] })).resolves.toBe(true);
       expect(mocks.request).not.toHaveBeenCalled();
+    } finally { ctx.dispose?.(); }
+  });
+
+  // confirm() is the production approval entry. Full access skips only an ordinary
+  // source; http / credentials / network (and a non-default port) must still raise the
+  // card. The source-only case above does not catch an early return that approves every
+  // reason. Smallest failing input: bypassPermissions plus one of those reasons.
+  // Rule: docs/dev-rules/media-storage-and-protocols.md 「已授权生成任务的结果下载」. tier: unit.
+  it.each<MediaDownloadReason[][]>([
+    [['http']],
+    [['credentials']],
+    [['network']],
+    [['port']],
+    [['source', 'http']],
+  ])('still asks under full access when reasons are %j', async (reasons) => {
+    mocks.request.mockClear();
+    const host = hostSession('bypassPermissions');
+    const ctx = createMediaDownloadContext(host.session, () => true);
+    mocks.request.mockResolvedValue({ kind: 'permission', behavior: 'allow' });
+    try {
+      await expect(ctx.confirm({ source: 'https://cdn.example.com', reasons })).resolves.toBe(true);
+      expect(mocks.request).toHaveBeenCalledOnce();
     } finally { ctx.dispose?.(); }
   });
 
