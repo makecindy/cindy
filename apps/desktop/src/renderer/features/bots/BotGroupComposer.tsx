@@ -357,20 +357,20 @@ export function BotGroupComposer({
    */
   const sendThreadReply = async () => {
     if (!canSend || sendingRef.current || getBotGroupThreadReplyAttempt(draftKey)?.sending || !sendReply) return;
-    if (mention.ambiguous(text)) { setError(t('bots.groupChat.errors.ambiguousMention')); return; }
-    groupMask?.participate();
     const files = attachmentState.attachments;
     const attachmentSignature = botGroupAttachmentSignature(files);
     const previous = getBotGroupThreadReplyAttempt(draftKey);
-    const attempt: BotGroupThreadReplyAttempt =
-      previous && previous.text === trimmed
+    const reusePrevious = previous && previous.text === trimmed
       && previous.attachmentSignature === attachmentSignature
-      && sameBotGroupMentions(mention.resolve(text, previous.roster), previous.mentions)
-        ? previous
-        : {
-            text: trimmed, draft: text, clientId: crypto.randomUUID(), attachmentSignature, files,
-            mentions: mention.resolve(text), roster: members, tracked: mention.tracked, sending: true,
-          };
+      && sameBotGroupMentions(mention.resolve(text, previous.roster), previous.mentions);
+    // Retry the original operation after a roster change; only a new intent must
+    // be resolved against the current roster before it can be sent.
+    if (!reusePrevious && mention.ambiguous(text)) { setError(t('bots.groupChat.errors.ambiguousMention')); return; }
+    groupMask?.participate();
+    const attempt: BotGroupThreadReplyAttempt = reusePrevious && previous ? previous : {
+      text: trimmed, draft: text, clientId: crypto.randomUUID(), attachmentSignature, files,
+      mentions: mention.resolve(text), roster: members, tracked: mention.tracked, sending: true,
+    };
     setBotGroupThreadReplyAttempt(draftKey, { ...attempt, sending: true, errorKey: undefined });
     const draft = text;
     const mentions = attempt.mentions;

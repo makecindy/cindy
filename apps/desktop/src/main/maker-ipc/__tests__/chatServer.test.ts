@@ -3028,6 +3028,24 @@ describe('Chat Server result delivery and refresh', () => {
         expect(workspaceSettings.get(roomId)).toMatchObject({ startedHere: [planId] });
       });
 
+      // #9427 review, unit: a draft with historical full @labels must not inject
+      // owner names into the actual steps after the group enables short names.
+      it('keeps old owner labels out of written division tasks with short names enabled', async () => {
+        singleSpeaker((route, method) => {
+          if (route.endsWith('/snapshot')) return { body: { room: { ...room(roomId), hide_companion_owner_names: true }, members: named(), messages: [], cursor: '1' } };
+          if (route === `/conversations/${roomId}/messages` && method === 'POST') return { body: { id: sourceId } };
+          if (route === `/conversations/${roomId}/plans` && method === 'POST') return { body: { id: planId, revision: 1 } };
+          if (route === `/conversations/${roomId}/plans`) return { body: [] };
+          return undefined;
+        });
+        deps.decidePlan = vi.fn() as typeof deps.decidePlan;
+        await send('@Bot (Peer) 出方案，然后 @Nova (Peer) 按方案实现');
+        expect(posts().find(([route]) => route === `/conversations/${roomId}/plans`)![2]).toMatchObject({
+          steps: [{ botId, task: '出方案' }, { botId: otherBot, task: '按方案实现' }],
+        });
+        expect(deps.decidePlan).not.toHaveBeenCalled();
+      });
+
       it('lets the organizer arrange it when a picked teammate no longer reads in the text', async () => {
         divisionServer();
         deps.decidePlan = vi.fn(async () => ({ needsPlan: true as const, steps: [{ botId, task: 'design' }, { botId: otherBot, task: 'build' }] }));

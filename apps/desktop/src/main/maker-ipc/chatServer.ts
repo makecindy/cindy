@@ -2087,8 +2087,14 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
   /** Steps a 分工 request wrote out (§7.0), as teammates this account may give work to. */
   function writtenPlanSteps(s: Snapshot, text: string, picked: string[]): PlanStepDraft[] | null {
     const bots = s.members.filter(m => m.kind === 'bot' && m.state === 'joined');
+    const hideOwnerNames = s.room.hide_companion_owner_names === true;
+    const ownerNamePreferenceAvailable = typeof s.room.hide_companion_owner_names === 'boolean';
     const written = splitBotGroupRelaySteps(text, { allLabels: [],
-      members: bots.map(m => ({ botId: m.id, name: memberName(m, s.members, s.room.hide_companion_owner_names === true), displayName: m.name, nickname: m.nickname })) });
+      members: bots.map(m => {
+        const name = memberName(m, s.members, hideOwnerNames);
+        return { botId: m.id, name, displayName: m.name, nickname: m.nickname,
+          ...(ownerNamePreferenceAvailable ? { ownerName: chatGroupOwnerName(m, s.members), ownerNameHidden: hideOwnerNames && name === m.name, shortOwnerNamesEnabled: hideOwnerNames } : {}) };
+      }) });
     // A picked teammate whose name no longer reads in the text (renamed meanwhile) would silently
     // drop its step: let the organizer arrange it instead.
     if (written && !picked.every(target => written.some(step => step.botId === target || localBot(step.botId)?.id === target))) return null;
