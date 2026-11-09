@@ -434,4 +434,60 @@ describe('manageWindowStatePreservingNormalBounds', () => {
     window.emit('close');
     expect(saved).toEqual({ isMaximized: false });
   });
+
+  // #9572 复审：贴满工作区的窗口从显示器 A 直接拖到同尺寸的 B，中间没有更小的正常矩形。
+  // 保存库看到最大化标记就不更新坐标，下次启动仍在 A 上创建。
+  // 生产入口：manageWindowStatePreservingNormalBounds。现有用例只有一块屏。
+  // 最小输入：A 上记下 1280×800，live 直接变成 B 上的贴满矩形。keeper 读到的矩形必须落在 B
+  // 的工作区内，随后的 close 把它写进持久化结果，并仍标成最大化。Tier: unit。
+  it('moves the saved restore rectangle onto the display the filled window was dragged to', () => {
+    const displayA = {
+      bounds: { x: 0, y: 0, width: 1536, height: 864 },
+      workArea: { x: 0, y: 19, width: 1536, height: 845 },
+    };
+    const displayB = {
+      bounds: { x: 1920, y: 0, width: 1536, height: 864 },
+      workArea: { x: 1920, y: 19, width: 1536, height: 845 },
+    };
+    const twoScreens: WorkAreaScreen = {
+      getPrimaryDisplay: () => displayA,
+      getDisplayMatching: (rect) => (rect.x >= 1920 ? displayB : displayA),
+    };
+    const window = createWindow({ x: 128, y: 41, width: 1280, height: 800 });
+    const saved: { x?: number; y?: number; width?: number; height?: number; isMaximized?: boolean } =
+      {};
+    const seen: Array<{ x: number; y: number }> = [];
+    manageWindowStatePreservingNormalBounds(
+      {
+        manage: (win) => {
+          const read = win.getBounds.bind(win);
+          const write = () => {
+            const bounds = read();
+            seen.push({ x: bounds.x, y: bounds.y });
+            const normal = !win.isMaximized() && !win.isMinimized() && !win.isFullScreen();
+            if (normal) Object.assign(saved, bounds);
+            saved.isMaximized = win.isMaximized();
+          };
+          win.on?.('resize', write);
+          win.on?.('close', write);
+        },
+      },
+      window.win,
+      twoScreens,
+      'win32',
+    );
+
+    window.emit('resize');
+    window.win.isSnapped = () => true;
+    window.setBounds({ x: 0, y: 19, width: 1536, height: 845 });
+    window.emit('resize');
+    // Dragged straight onto the other monitor while still filling its work area.
+    window.setBounds({ x: 1920, y: 19, width: 1536, height: 845 });
+    window.emit('move');
+    window.emit('close');
+
+    const onB = seen.filter((bounds) => bounds.x >= 1920 && bounds.x < 1920 + 1536);
+    expect(onB.length).toBeGreaterThan(0);
+    expect(saved).toMatchObject({ x: 2048, y: 41, width: 1280, height: 800, isMaximized: true });
+  });
 });

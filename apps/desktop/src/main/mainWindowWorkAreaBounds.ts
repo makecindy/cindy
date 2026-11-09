@@ -162,6 +162,36 @@ export function persistedBoundsDecision(
   return { bounds: previousNormalBounds ?? bounds, reportMaximized: true };
 }
 
+function workAreasMatch(a: WorkAreaRect, b: WorkAreaRect): boolean {
+  return a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height;
+}
+
+/**
+ * The saved restore rectangle still belongs to another monitor. Shift it into the
+ * work area the window is on now, keeping its size. A size that no longer fits is
+ * clamped first, then x/y are kept inside that work area. Same monitor: the same
+ * object comes back, so callers can tell a move from a no-op.
+ */
+function placeOntoLiveDisplay(
+  bounds: WorkAreaRect,
+  live: WorkAreaRect,
+  screenApi: Pick<WorkAreaScreen, 'getDisplayMatching'>,
+): WorkAreaRect {
+  const from = screenApi.getDisplayMatching(bounds).workArea;
+  const to = screenApi.getDisplayMatching(live).workArea;
+  if (workAreasMatch(from, to)) return bounds;
+  const width = Math.min(Math.max(0, bounds.width), to.width);
+  const height = Math.min(Math.max(0, bounds.height), to.height);
+  const maxX = to.x + Math.max(0, to.width - width);
+  const maxY = to.y + Math.max(0, to.height - height);
+  return {
+    x: Math.min(Math.max(to.x + (bounds.x - from.x), to.x), maxX),
+    y: Math.min(Math.max(to.y + (bounds.y - from.y), to.y), maxY),
+    width,
+    height,
+  };
+}
+
 export function normalBoundsForPersistence(
   win: PersistableWindow,
   previousNormalBounds: WorkAreaRect | null,
@@ -258,6 +288,13 @@ export function manageWindowStatePreservingNormalBounds(
     platform,
   ).reportMaximized;
   const originalGetBounds = win.getBounds.bind(win);
+  // electron-window-state reads getBounds() and then, while isMaximized() is
+  // true, leaves x/y alone. A filled window dragged onto another monitor never
+  // gets a smaller rectangle, so the flag stays true and the old monitor is what
+  // gets saved. After handing over the relocated rectangle, the next
+  // isMaximized() says "normal" once so this update copies the new coordinates;
+  // the read after that still reports maximized.
+  let copyBoundsOnce = false;
   const boundsForKeeper = () => {
     const live = originalGetBounds();
     if (win.isMinimized()) return previousNormalBounds ?? live;
@@ -267,7 +304,13 @@ export function manageWindowStatePreservingNormalBounds(
       screenApi,
       platform,
     );
-    return decision.bounds ?? live;
+    if (!decision.bounds) return live;
+    const relocated = placeOntoLiveDisplay(decision.bounds, live, screenApi);
+    if (relocated !== decision.bounds) {
+      previousNormalBounds = relocated;
+      copyBoundsOnce = true;
+    }
+    return relocated;
   };
   const remember = () => {
     if (win.isMaximized() || win.isMinimized() || win.isFullScreen()) return;
@@ -278,11 +321,22 @@ export function manageWindowStatePreservingNormalBounds(
       screenApi,
       platform,
     ).reportMaximized;
+    if (filling && previousNormalBounds) {
+      const relocated = placeOntoLiveDisplay(previousNormalBounds, live, screenApi);
+      if (relocated !== previousNormalBounds) {
+        previousNormalBounds = relocated;
+        copyBoundsOnce = true;
+      }
+    }
     syntheticMaximized = filling;
     if (filling) return;
     previousNormalBounds = live;
   };
   const reportMaximized = () => {
+    if (copyBoundsOnce) {
+      copyBoundsOnce = false;
+      return false;
+    }
     if (win.isMinimized()) return syntheticMaximized;
     return persistedBoundsDecision(
       windowStateView(win, originalGetBounds),
