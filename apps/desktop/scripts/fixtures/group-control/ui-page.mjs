@@ -181,15 +181,20 @@ export default {
       await page.getByText('任务与 PR 的进展已整理，以下是需要跟进的事项。').waitFor();
       if (definition.data.processOtherOwner) { assert.equal(await journal.count(), 0); return; }
       await journal.waitFor();
-      // 2026-11-09 group-only regression: the record belongs to the reply below.
+      // 2026-11-09: one group-message identity precedes its process and reply.
       // Use the real group row; private-chat MessageStream is outside this scenario.
       const assertReplyOwnership = async () => {
         const row = page.locator('[data-bot-group-message-id="process-answer"]');
         const portrait = row.locator('article > div').first();
         const reply = row.getByTestId('bot-group-bubble');
-        const [recordBox, portraitBox, replyBox] = await Promise.all([journal.boundingBox(), portrait.boundingBox(), reply.boundingBox()]);
-        assert.ok(portraitBox.y >= recordBox.y + recordBox.height - 0.5, 'The group record has no portrait beside it; identity follows the reply');
+        const author = row.locator('article > div').nth(1).locator(':scope > span').first();
+        const [recordBox, portraitBox, authorBox, replyBox] = await Promise.all([journal.boundingBox(), portrait.boundingBox(), author.boundingBox(), reply.boundingBox()]);
+        assert.ok(portraitBox.y <= recordBox.y + 0.5, 'The shared avatar precedes the process, never below it');
+        assert.ok(authorBox.y + authorBox.height <= recordBox.y + 0.5, 'The author header precedes the process');
+        assert.ok(recordBox.y + recordBox.height <= replyBox.y + 0.5, 'The process precedes the reply body');
         assert.ok(Math.abs(recordBox.x - replyBox.x) <= 0.5, 'The group record and reply share the same content column');
+        assert.equal(await row.locator('article [data-teammate-process]').count(), 1, 'Process and reply belong to the same message article');
+        assert.equal(await portrait.locator(':scope > span').count(), 1, 'Only the shared message identity owns an avatar');
         assert.equal(await row.locator('article').count(), 1, 'The record stays owned by one reply row');
       };
       await assertReplyOwnership();
