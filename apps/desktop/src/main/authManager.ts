@@ -6001,7 +6001,16 @@ async function runLoginAction(
     }
     const code = error instanceof AuthApiError ? error.code : 'AUTH_REQUEST_FAILED';
     const status = error instanceof AuthApiError ? error.statusCode : 0;
-    log.warn(`login action failed action=${action.type} status=${status} code=${code}`);
+    // #9356: keep RATE_LIMITED as the category, and record whether the server
+    // named its own code, gave a usable wait, and a correlation id. Missing
+    // fields stay explicit so a later log can be matched to the auth request
+    // without guessing a window or copying the response body.
+    const serverCode = error instanceof AuthApiError ? (error.serverCode ?? 'none') : 'none';
+    const retryKnown = error instanceof AuthApiError && error.retryAt !== undefined ? 'yes' : 'no';
+    const requestId = error instanceof AuthApiError ? (error.requestId ?? 'none') : 'none';
+    log.warn(
+      `login action failed action=${action.type} status=${status} code=${code} serverCode=${serverCode} retryKnown=${retryKnown} requestId=${requestId}`,
+    );
     const flowCannotRetry = [
       'INVALID_LOGIN_TICKET',
       'INVALID_BIND_TICKET',
