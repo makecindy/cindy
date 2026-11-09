@@ -209,16 +209,19 @@ function wasAlertNotified(key: string, alertEventId: string | undefined): boolea
 }
 
 /**
- * 记下刚弹过的告警。序号不比账本里已有的更晚，说明这是更早的事件晚到了，
- * 不能用它盖掉已经记下的更新告警。同一种来源按数值比较；来源不同时保留两边，
- * 因为没有共同的时间轴可以判断谁先产生。每个 key 只留最近若干条，避免一直涨。
+ * 记下刚弹过的告警。已经弹过的标识都留着：更新的到来只是不再让更早的投递
+ * 把「最近一条」改回去，不能把旧标识从账本里抹掉。顺序只决定本条插在末尾
+ * （成为最近一条）还是插在已有更新记录之前。同一种来源按数值比较；来源不同
+ * 时没有共同的时间轴，本条追加到末尾。每个 key 只留最近若干条，超出丢最旧的。
  */
 function rememberAlert(key: string, alertEventId: string, order: NotifiedAlert['order']): void {
   const current = notifiedAlerts.get(key) ?? [];
   if (current.some(alert => alert.id === alertEventId)) return;
-  const newer = current.filter(alert => alert.order.source === order.source && alert.order.value > order.value);
-  if (newer.length > 0) return;
-  const next = [...current.filter(alert => !(alert.order.source === order.source && alert.order.value < order.value)), { id: alertEventId, order }];
+  const entry = { id: alertEventId, order };
+  const newerAt = current.findIndex(alert => alert.order.source === order.source && alert.order.value > order.value);
+  const next = newerAt === -1
+    ? [...current, entry]
+    : [...current.slice(0, newerAt), entry, ...current.slice(newerAt)];
   notifiedAlerts.set(key, next.length > NOTIFIED_ALERTS_PER_KEY ? next.slice(-NOTIFIED_ALERTS_PER_KEY) : next);
 }
 

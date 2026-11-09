@@ -1223,6 +1223,12 @@ describe('notificationService — channels 分发', () => {
   // of that newer alert toasted again. Order is the turn clock inside the id,
   // not whose preview read returns first. The repeated id below is the one that
   // must stay swallowed after the out-of-order completion.
+  //
+  // The replay used to keep the held preview mock. invokeHandler only waits for
+  // the IPC return and one macrotask, so the duplicate toast was still pending
+  // when the count was asserted, and releasing that read afterwards could show
+  // a third toast without failing the test. Settle the chain first, then send
+  // the same id once more: a broken dedup key makes that third delivery toast.
   it.each([
     {
       name: 'newer preview finishes first',
@@ -1267,16 +1273,27 @@ describe('notificationService — channels 分发', () => {
     release[1]();
     await Promise.all(started);
     await vi.waitFor(() => expect(notificationCtor).toHaveBeenCalledTimes(2));
-    const again = repeat === 'both' ? [first.alertEventId, second.alertEventId] : [repeat];
-    for (const alertEventId of again) {
+    // Drop the held preview before any replay. A still-pending read lets the
+    // duplicate decide after this assertion, so a missed dedup key still passes.
+    readSessionNotificationPreview.mockImplementation(async () => ({}));
+    for (const releaseLeft of pending.splice(0)) releaseLeft();
+    await flushAsync();
+    expect(notificationCtor).toHaveBeenCalledTimes(2);
+    const deliver = async (alertEventId: string) => {
       const kind = alertEventId === second.alertEventId ? second.kind : first.kind;
       await invokeHandler({ sessionId: 's1', title: 'Ask', kind, alertEventId, channels });
+    };
+    const again = repeat === 'both' ? [first.alertEventId, second.alertEventId] : [repeat];
+    for (const alertEventId of again) {
+      await deliver(alertEventId);
+      expect(notificationCtor).toHaveBeenCalledTimes(2);
     }
-    expect(notificationCtor).toHaveBeenCalledTimes(2);
-    // Each delivery starts a second preview read for the avatar and never awaits it.
-    // Leave those unresolved and the next test's completion toast fires early.
-    for (const release of pending.splice(0)) release();
-    await Promise.resolve();
+    // Third delivery of the same id. The count stays 2 only while that id is
+    // still in the ledger; dropping the key makes this toast and fails here.
+    for (const alertEventId of again) {
+      await deliver(alertEventId);
+      expect(notificationCtor).toHaveBeenCalledTimes(2);
+    }
   });
 
   // #9317 / unit: a done with no turn id and a failed preview read records only a
