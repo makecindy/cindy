@@ -278,9 +278,6 @@ export async function prepareBotProjectWorkspace(input: {
   legacyUserDataDir?: string;
 }): Promise<BotProjectPreparation> {
   const workspace = await ensureBotWorkspaceDir(input.ownerRoot, input.botId, input.legacyUserDataDir);
-  // A clean starter template, before the first version, so the project starts from it.
-  const templated = await applyTeammateTemplate(workspace, input.displayName);
-  await writeIfMissing(path.join(workspace, 'CLAUDE.md'), '@AGENTS.md\n');
   // Memory and Skills become the project's own, before the first V2 turn reads them. A project
   // memory kept outside the folder (earlier versions) comes first: it is newer than the V1 copy.
   const moved = await moveTeammateMemoryIntoProject({ botId: input.botId, ownerRoot: input.ownerRoot, workspace });
@@ -290,6 +287,10 @@ export async function prepareBotProjectWorkspace(input: {
     path.join(botProfileDir(input.ownerRoot, input.botId), 'skills'),
     path.join(workspace, '.agents', 'skills'),
   );
+  // The starter template only fills what the teammate does not have yet: its own skills and
+  // rules (copied just above) win over a template file of the same name. Before the first version.
+  const templated = await applyTeammateTemplate(workspace, input.displayName);
+  await writeIfMissing(path.join(workspace, 'CLAUDE.md'), '@AGENTS.md\n');
   setBotProjectSkillsDir(input.ownerRoot, input.botId, true);
   let repository: BotProjectPreparation['repository'];
   try {

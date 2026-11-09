@@ -26,8 +26,10 @@ vi.mock('../../localDb/ipc/projectAliases.js', () => ({
   listProjectAliases: async () => aliases.rows,
   upsertProjectAlias: aliases.upsert,
 }));
+vi.mock('../../localDb/ipc/recentWorkdirs.js', () => ({ normalizeRecentWorkdirPath: (p: string) => p, upsertRecentWorkdir: async () => false }));
+vi.mock('../../worktree/WorktreeManager.js', () => ({ detectCwd: async () => ({ gitInstalled: false }) }));
 
-import { BOT_PROJECT_MEMORY_REVIEW_ID, ensureBotProjectAutomations, moveTeammateMemoryIntoProject, nameBotProject } from '../botProjectMode.js';
+import { BOT_PROJECT_MEMORY_REVIEW_ID, ensureBotProjectAutomations, moveTeammateMemoryIntoProject, nameBotProject, prepareBotProjectWorkspace } from '../botProjectMode.js';
 import { legacyTeammateProjectMemoryDir, teammateProjectMemoryDir, teammateWorkspaceDir } from '../botProjectMemory.js';
 
 // Teammate V2 (2026-11-06): the nightly review is the project's own automation,
@@ -129,5 +131,26 @@ describe('moveTeammateMemoryIntoProject', () => {
     await expect(moveTeammateMemoryIntoProject({ botId: 'bot_mia', ownerRoot: root, workspace })).resolves.toBeNull();
     await expect(fs.stat(path.join(inside, 'project_launch.md'))).rejects.toThrow();
     expect(snapshot).toHaveBeenCalledOnce();
+  });
+});
+
+// 2026-11-09 review: a V1 teammate that already had its own hand-off skill lost it to the
+// starter template's copy during the upgrade. The teammate's own skill must win.
+describe('prepareBotProjectWorkspace', () => {
+  let root = '';
+  afterEach(async () => { if (root) await fs.rm(root, { recursive: true, force: true }); });
+
+  it("keeps a V1 teammate's own skill over the starter template's", async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), 'teammate-skill-upgrade-'));
+    const legacy = path.join(root, 'bots', 'bot_mia', 'skills', 'hand-off');
+    await fs.mkdir(legacy, { recursive: true });
+    const own = '---\nname: hand-off\ndescription: Team handover rules\n---\nOwner-specific handover\n';
+    await fs.writeFile(path.join(legacy, 'SKILL.md'), own);
+    await fs.writeFile(path.join(legacy, 'checklist.md'), 'company checklist');
+
+    const { workingDir } = await prepareBotProjectWorkspace({ botId: 'bot_mia', displayName: 'Mia', ownerRoot: root });
+    const skill = path.join(workingDir, '.agents', 'skills', 'hand-off');
+    await expect(fs.readFile(path.join(skill, 'SKILL.md'), 'utf8')).resolves.toBe(own);
+    await expect(fs.readFile(path.join(skill, 'checklist.md'), 'utf8')).resolves.toBe('company checklist');
   });
 });

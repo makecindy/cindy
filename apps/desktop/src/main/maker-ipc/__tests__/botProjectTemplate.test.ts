@@ -32,5 +32,13 @@ describe('applyTeammateTemplate', () => {
     expect(JSON.parse(await read(TEAMMATE_TEMPLATE_RECORD))).toMatchObject({
       version: 2, pending: ['.agents/skills/hand-off/SKILL.md'],
     });
+
+    // A later version still offers its newer copy for the file the owner changed.
+    await expect(applyTeammateTemplate(dir, 'Mimi', 3, { ...v2, '.agents/skills/hand-off/SKILL.md': 'v3 skill\n' })).resolves.toBe(true);
+    await expect(read('.agents/skills/hand-off/SKILL.md')).resolves.toBe('reshaped\n');
+    await expect(read('.cindy/template/.agents/skills/hand-off/SKILL.md')).resolves.toBe('v3 skill\n');
+    expect(JSON.parse(await read(TEAMMATE_TEMPLATE_RECORD))).toMatchObject({
+      version: 3, pending: ['.agents/skills/hand-off/SKILL.md'],
+    });
   });
 });

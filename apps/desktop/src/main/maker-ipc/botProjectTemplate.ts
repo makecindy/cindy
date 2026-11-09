@@ -91,8 +91,10 @@ export async function applyTeammateTemplate(workspace: string, displayName: stri
       if (current !== content) await write(target, content);
       next.files[relative] = hash(content);
     } else if (base !== undefined) {
-      // Changed by the owner or the teammate: the new version waits beside it to be merged.
+      // Changed by the owner or the teammate: the new version waits beside it to be merged. The
+      // file stays tracked against the version it was changed from, so later versions wait there too.
       await write(path.join(workspace, PENDING_DIR, relative), content);
+      next.files[relative] = base;
       next.pending!.push(relative);
     }
     // A file the project had before any template stays its own and is not tracked.
