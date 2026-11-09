@@ -986,6 +986,24 @@ export function translateSdkMessage(
       return;
     }
 
+    case 'command_lifecycle': {
+      // CLI 2.1.312 emits these command receipts although SDK 0.3.292's
+      // SDKMessage union omits them. A command may be folded into another turn;
+      // completed can precede OR follow result, so it must not drive Cindy's
+      // input queue, UI status or onTurnEnd. The existing result path owns that.
+      const commandUuid = msg.command_uuid;
+      const state = msg.state;
+      if (
+        typeof commandUuid === 'string' && commandUuid.length > 0 &&
+        (state === 'queued' || state === 'started' || state === 'completed')
+      ) return;
+      // cancelled/discarded/refused can describe a command that never ran.
+      // Keep them, malformed receipts and future states diagnosable without
+      // treating a command-level receipt as a whole-turn failure or retry signal.
+      ctx.log.warn('SDK ▷ non-success or unknown command lifecycle', { commandUuid, state });
+      return;
+    }
+
     default: {
       // 未识别 type: 走 logger.warn (诊断用), 不再 emit vendor-raw —— renderer
       // default case 直接丢, 走 IPC 也是浪费。Codex translator 同款做法。
