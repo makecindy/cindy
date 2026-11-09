@@ -129,6 +129,11 @@ async function rawFetch<T>(apiPath: string, opts: ApiFetchOptions): Promise<RawR
       data = (await response.json()) as T;
     } catch (error) {
       opts.signal?.throwIfAborted();
+      // 自己的超时把响应体掐断了:这是**超时**,不是「服务端返回了空体」。
+      // 吞掉它会让上层拿到 200 + 空体(EMPTY_RESPONSE),被当成一次权威响应 ——
+      // 设备目录那一路会因此把有界旧快照一起丢掉(超时本该只是暂时性失败)。
+      // 保留 abort 原因,让它按 status 0 的暂时性失败走。
+      if (controller?.signal.aborted) throw error;
       log.warn('response read failed', opts.logLabel ?? redactedLogPath(apiPath),
         { status: response.status },
         opts.redactErrorDetails || opts.logLabel ? '[response details hidden]' : requestErrorMessage(error));

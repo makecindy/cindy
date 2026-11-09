@@ -541,6 +541,10 @@ function ensureStarted(): void {
       // 重新登录 → relay 重连到 'online' 时下面重新拉取。
       clearRetryTimer();
       retryDelayMs = 0;
+      // 账号边界:上一个账号的限流期限不该被下一个账号继承(main 侧按 owner 记期限,
+      // 渲染侧这份模块级单例同理)。留着它,新账号的第一次目录读失败就会一直等到
+      // 旧期限 —— 换账号后的恢复被上一个账号的限流窗口拖住。
+      retryDeadlineMs = 0;
       clearDevices();
       backgroundRetryGeneration = null;
       backgroundRetryRefreshPending = false;
@@ -557,6 +561,8 @@ function ensureStarted(): void {
   window.electronAPI.deviceLink.onDeviceDirectoryInvalidated?.(() => {
     clearRetryTimer();
     retryDelayMs = 0;
+    // 目录被权威作废:上一轮的限流期限一并作废,下一次读按新的节奏来。
+    retryDeadlineMs = 0;
     backgroundRetryGeneration = null;
     backgroundRetryRefreshPending = false;
     backgroundRetryReplayActive = false;

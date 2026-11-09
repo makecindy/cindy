@@ -561,6 +561,32 @@ describe('stale device directory', () => {
     });
     expect(listDevices.mock.calls.length).toBe(initial + 1);
   });
+
+  // 账号边界:main 侧按 owner 记限流期限,渲染侧也得跟着清 —— 否则新账号的目录读失败时,
+  // 退避会一直等到上一个账号留下的期限。
+  it('clears the server retry deadline when the relay stops', async () => {
+    const listDevices = window.electronAPI.deviceLink.listDevices as unknown as ReturnType<typeof vi.fn>;
+    const deadline = Date.now() + 60_000;
+    listDevices.mockImplementation(async () => ({
+      devices: stalePeers(), stale: true, retryAtMs: deadline,
+    }));
+    renderHook(() => useDeviceLinkRemoteProjects());
+    await settle();
+
+    // 登出 / relay 停止 = 账号边界。
+    act(() => listeners.onStatusChanged({ status: 'stopped', directDataDeviceIds: [] }));
+    // 新账号上线,目录读失败 → 退避按自己的阶梯(5 秒)走,不等旧期限(60 秒)。
+    listDevices.mockImplementation(async () => {
+      throw new Error('relay unavailable');
+    });
+    act(() => listeners.onStatusChanged({ status: 'online', directDataDeviceIds: [] }));
+    await settle();
+    const afterOnline = listDevices.mock.calls.length;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000);
+    });
+    expect(listDevices.mock.calls.length).toBe(afterOnline + 1);
+  });
 });
 
 // Review (#8381): a cache read that lands after getState() seeds `connecting` shards. They must

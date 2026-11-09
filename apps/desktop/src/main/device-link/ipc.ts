@@ -484,25 +484,35 @@ export function handleListDevices(
   const requestEpoch = deps.captureControllerDisplayNameRequestEpoch();
   const presenceRequestEpoch = deps.captureControllerPresenceRequestEpoch();
   const directoryEpoch = providerDirectoryGeneration();
-    const request = readProviderDirectoryContinuity(() => deps.apiFetch<{ devices: DeviceLinkServerDeviceView[] }>(
-      '/api/device-link/devices',
-      { timeoutMs: DIRECTORY_READ_TIMEOUT_MS },
-    ).catch((error: unknown) => {
-      // 429 的 Retry-After:服务端明确说了多久之后再问。把期限带给调用方(渲染进程的目录
-      // 退避要让过它),否则限流窗口里每个挂载的窗口都会继续追问,延长限流并放大共享
-      // 目录压力。期限按 owner 记:换账号不该继承上一个账号的限流期限。
-      const retryAt = (error as { retryAt?: unknown } | null | undefined)?.retryAt;
-      if (typeof retryAt === 'number' && Number.isFinite(retryAt)) {
-        const known = directoryRetryAt?.owner === owner ? directoryRetryAt.retryAtMs : 0;
-        directoryRetryAt = { owner, retryAtMs: Math.max(known, retryAt) };
+    const request = readProviderDirectoryContinuity(() => {
+      // 限流窗口内不再发**物理读**:每次追问都会让服务端把窗口重新推后,越问越久。
+      // 冷启动(没有旧快照可沿用)时尤其明显:本地退避是 5 秒起,一路追问到窗口之后。
+      // 这里按 owner 记住的期限直接回一个暂时性失败(429),让调用方按自己的节奏重试;
+      // 期限按 owner 记(main 侧刻意如此),换账号不该继承上一个账号的限流期限。
+      const throttledUntil = directoryRetryAt?.owner === owner ? directoryRetryAt.retryAtMs : 0;
+      if (throttledUntil !== 0 && throttledUntil > Date.now()) {
+        throw Object.assign(new Error('设备目录限流退避中'), { statusCode: 429 });
       }
-      // 读取超时是**暂时性**失败:让 continuity reader 沿用有界旧快照,而不是把快照一起
-      // 丢掉(丢掉的话渲染进程连旧设备都看不到)。statusCode 0 = 连不上,不是权威拒绝。
-      if (isAbortError(error)) {
-        throw Object.assign(new Error('设备目录读取超时'), { statusCode: 0 });
-      }
-      throw error;
-    })).then(
+      return deps.apiFetch<{ devices: DeviceLinkServerDeviceView[] }>(
+        '/api/device-link/devices',
+        { timeoutMs: DIRECTORY_READ_TIMEOUT_MS },
+      ).catch((error: unknown) => {
+        // 429 的 Retry-After:服务端明确说了多久之后再问。把期限带给调用方(渲染进程的目录
+        // 退避要让过它),否则限流窗口里每个挂载的窗口都会继续追问,延长限流并放大共享
+        // 目录压力。期限按 owner 记:换账号不该继承上一个账号的限流期限。
+        const retryAt = (error as { retryAt?: unknown } | null | undefined)?.retryAt;
+        if (typeof retryAt === 'number' && Number.isFinite(retryAt)) {
+          const known = directoryRetryAt?.owner === owner ? directoryRetryAt.retryAtMs : 0;
+          directoryRetryAt = { owner, retryAtMs: Math.max(known, retryAt) };
+        }
+        // 读取超时是**暂时性**失败:让 continuity reader 沿用有界旧快照,而不是把快照一起
+        // 丢掉(丢掉的话渲染进程连旧设备都看不到)。statusCode 0 = 连不上,不是权威拒绝。
+        if (isAbortError(error)) {
+          throw Object.assign(new Error('设备目录读取超时'), { statusCode: 0 });
+        }
+        throw error;
+      });
+    }).then(
     async ({ value: result, stale, remainingMs }) => {
       if (activeOwnerScopeKey() !== owner) throw new Error('[DEVICE_LINK_NOT_CONNECTED] device directory account changed');
       // A rename/delete supersedes a request that started before it, even when

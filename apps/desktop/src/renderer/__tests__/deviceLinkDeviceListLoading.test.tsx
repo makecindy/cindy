@@ -523,6 +523,58 @@ describe('useDeviceLinkDeviceList initial request', () => {
     expect(result.current.request).toEqual({ status: 'ready', error: null });
   });
 
+  // 账号边界:main 侧按 owner 记限流期限,渲染侧这份模块级单例也得跟着清 ——
+  // 否则新账号的第一次目录读失败时,退避会一直等到上一个账号留下的期限。
+  it('does not carry the previous account rate-limit deadline across a relay stop', async () => {
+    let statusChanged:
+      ((payload: { status: 'stopped' | 'connecting' | 'online' }) => void) | undefined;
+    const deadline = Date.now() + 60_000;
+    const listDevices = vi.fn()
+      .mockResolvedValueOnce({ devices: [], retryAtMs: deadline })
+      .mockRejectedValue(new Error('relay unavailable'));
+    vi.useFakeTimers();
+    vi.stubGlobal('electronAPI', {
+      deviceLink: {
+        listDevices,
+        getState: vi.fn().mockResolvedValue({ linkStatus: 'online' }),
+        onPresenceChanged: vi.fn(),
+        onStatusChanged: vi.fn(
+          (callback: (payload: { status: 'stopped' | 'connecting' | 'online' }) => void) => {
+            statusChanged = callback;
+          },
+        ),
+        onControlTargetChanged: vi.fn(),
+      },
+    });
+
+    const {
+      useDeviceLinkDeviceList,
+      nextDeviceListRetryDelay,
+    } = await import('@/features/device-link/useDeviceLinkDeviceList');
+    renderHook(() => useDeviceLinkDeviceList());
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(listDevices).toHaveBeenCalledTimes(1);
+
+    // 登出 / relay 停止 = 账号边界:上一个账号的限流期限到此为止。
+    act(() => statusChanged?.({ status: 'stopped' }));
+    // 新账号上线,第一次目录读失败 → 退避按自己的阶梯(2 秒)走,不等旧期限(60 秒)。
+    act(() => statusChanged?.({ status: 'online' }));
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(listDevices).toHaveBeenCalledTimes(2);
+    await act(async () => {
+      vi.advanceTimersByTime(nextDeviceListRetryDelay(0));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(listDevices).toHaveBeenCalledTimes(3);
+  });
+
   it('caps silent retry backoff while preserving recovery', async () => {
     const { nextDeviceListRetryDelay } =
       await import('@/features/device-link/useDeviceLinkDeviceList');

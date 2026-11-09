@@ -1210,6 +1210,9 @@ export function useDeviceLinkRemoteProjects(
         // 重连,被拒状态应跨重连保留(正常在线期一直可见),故不清。登出 unmount 时的 clearAll 仍是兜底。
         if (p.status === 'stopped') {
           linkExpectedToConnect = false;
+          // 账号边界:上一个账号的限流期限不该被下一个账号继承(main 侧按 owner 记期限,
+          // 渲染侧同理)。否则新账号的第一次目录读失败时,退避会一直等到旧期限。
+          directoryRetryDeadlineMs = 0;
           for (const deviceId of revokedDevicesStore.getSnapshot()) {
             if (!isSharedTaskPeer(deviceId)) revokedDevicesStore.clearRevoked(deviceId);
           }

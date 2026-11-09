@@ -106,6 +106,32 @@ describe('serverApiFetch', () => {
     expect(JSON.stringify(mocks.logger.warn.mock.calls)).not.toContain('private upstream details');
   });
 
+  // Unit: a response body that stalls past our own deadline is a **timeout**, not
+  // an empty 200. Swallowing it made the caller see EMPTY_RESPONSE/200, which reads
+  // as an authoritative answer — the device directory then dropped its bounded
+  // snapshot for a failure it had meant to treat as temporary.
+  it('reports a stalled response body as a temporary status-0 failure', async () => {
+    mocks.netFetch.mockImplementationOnce((_url: string, opts: RequestInit) => Promise.resolve({
+      ok: true,
+      status: 200,
+      json: () => new Promise((_yes, no) => {
+        opts.signal?.addEventListener('abort', () => {
+          const error = new Error('the body read was aborted');
+          error.name = 'AbortError';
+          no(error);
+        }, { once: true });
+      }),
+    } as unknown as Response));
+    try {
+      await serverApiFetch('/api/device-link/devices', {
+        baseUrl: 'https://api.example.invalid', timeoutMs: 5,
+      });
+      expect.fail('the stalled body must reject');
+    } catch (error) {
+      expect(error).toMatchObject({ code: 'NETWORK_ERROR', statusCode: 0 });
+    }
+  });
+
   // Unit: exercise the real quota reader through the HTTP client. Previously its
   // mocked client hid recurring warnings for a successful legacy fallback.
   it.each([

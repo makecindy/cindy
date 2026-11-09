@@ -434,6 +434,27 @@ describe('device-link IPC handlers', () => {
     expect(limited.retryAtMs).toBe(retryAt);
   });
 
+  // 冷启动(没有旧快照可沿用)时,限流窗口里的每次追问都会让服务端把窗口重新推后。
+  // 期限按 owner 记在 main 侧:窗口内的物理读一律不发,只回一个暂时性失败。
+  it('listDevices:限流窗口内不再发物理读,冷启动也不一路追问', async () => {
+    __resetDeviceListCoalescingForTests();
+    const retryAt = Date.now() + 60_000;
+    const apiFetch = vi.fn()
+      .mockRejectedValueOnce(new ServerApiError('UNAVAILABLE', 429, 'rate limited', retryAt));
+    const deps = makeDeps({ apiFetch });
+    try {
+      // 第一次读撞上限流:没有旧快照可沿用,这次读以失败告终。
+      await expect(handleListDevices(deps)).rejects.toThrow(/rate limited/);
+      expect(apiFetch).toHaveBeenCalledTimes(1);
+      // 窗口内的第二次读:不发物理读(否则每次追问都会把限流窗口推后)。
+      await expect(handleListDevices(deps)).rejects.toThrow();
+      expect(apiFetch).toHaveBeenCalledTimes(1);
+    } finally {
+      // 限流期限是模块级状态:留给下一个用例就等于替它限流。
+      __resetDeviceListCoalescingForTests();
+    }
+  });
+
 
   // Integration: a stale REST directory row is marked online only through the
   // target's current verified data path; the real provider-group directory
