@@ -133,6 +133,8 @@ export interface GhostInstallReceipt {
   /** Host-only: historical archive UI entries were absent, non-regular or oversized. Canonical manifest stays intact. */
   unavailableUiResources?: true;
   delegationCapabilityApproved?: true;
+  /** Independent Host grant; older receipts remain valid without it. */
+  backgroundSearchCapabilityApproved?: true;
   /**
    * 用户在安装/更新确认里看到并接受过的控制节点(will- 拦截点)。缺项 = 一个都没
    * 批准：插件提前声明 Host 当时还不认识的节点，升级后不会静默生效。
@@ -1308,6 +1310,7 @@ export function createGhostInstallReceipt(input: {
   /** Host-only: historical archive UI entries were absent, non-regular or oversized. Canonical manifest stays intact. */
   unavailableUiResources?: true;
   delegationCapabilityApproved?: true;
+  backgroundSearchCapabilityApproved?: true;
   approvedControlPoints?: readonly string[];
   approvedAutoTools?: readonly string[];
   observeCapabilityApproved?: true;
@@ -1347,6 +1350,8 @@ export function createGhostInstallReceipt(input: {
     ...(input.taskCapabilityApproved === true ? { taskCapabilityApproved: true as const } : {}),
     ...(input.targetCapabilityApproved === true ? { targetCapabilityApproved: true as const } : {}),
     ...(input.delegationCapabilityApproved === true ? { delegationCapabilityApproved: true as const } : {}),
+    ...(input.backgroundSearchCapabilityApproved === true && input.manifest.cindy?.search?.includes('background_web')
+      ? { backgroundSearchCapabilityApproved: true as const } : {}),
     ...approvedControlPointsField(input.approvedControlPoints, input.manifest),
     ...approvedAutoToolsField(input.approvedAutoTools, input.manifest),
     ...(input.observeCapabilityApproved === true ? { observeCapabilityApproved: true as const } : {}),
@@ -1567,6 +1572,8 @@ function validateReceipt(
       ...(value.taskCapabilityApproved === true ? { taskCapabilityApproved: true as const } : {}),
       ...(value.targetCapabilityApproved === true ? { targetCapabilityApproved: true as const } : {}),
       ...(value.delegationCapabilityApproved === true ? { delegationCapabilityApproved: true as const } : {}),
+      ...(value.backgroundSearchCapabilityApproved === true && manifestResult.manifest.cindy?.search?.includes('background_web')
+        ? { backgroundSearchCapabilityApproved: true as const } : {}),
       ...approvedControlPointsField(value.approvedControlPoints, manifestResult.manifest),
       ...approvedAutoToolsField(value.approvedAutoTools, manifestResult.manifest),
       ...(value.observeCapabilityApproved === true ? { observeCapabilityApproved: true as const } : {}),

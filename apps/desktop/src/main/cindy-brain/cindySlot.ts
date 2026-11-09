@@ -57,7 +57,6 @@ import {
   GHOST_CINDY_MAX_ASYNC_JOBS,
   GHOST_CINDY_SEARCH_DEFAULT_RESULTS,
   GHOST_CINDY_SEARCH_MAX_QUERY_CHARS,
-  GHOST_CINDY_SEARCH_MAX_RESULTS,
   GHOST_IMAGE_ASPECT_RATIOS,
   GHOST_MODEL_TIERS,
   GHOST_ONESHOT_TEXT_MAX_PROMPT_CHARS,
@@ -1308,23 +1307,39 @@ export class GhostCindySlot {
         errorCode: 'PERMISSION_DENIED',
       };
     }
-    const declared: readonly string[] = ghost.manifest.cindy?.search ?? [];
-    if (!declared.includes('web')) {
-      return {
-        ok: false,
-        message:
-          '本意识未声明搜索「网页搜索」能力(身份卡 cindy.search 缺 "web")，请意识作者更新声明',
-        errorCode: 'PERMISSION_DENIED',
-      };
-    }
-
     const p = payload as {
       query?: unknown;
       limit?: unknown;
       provider?: unknown;
+      background?: unknown;
       callId?: unknown;
       callerTool?: unknown;
     };
+    if (p.background !== undefined && typeof p.background !== 'boolean') {
+      return { ok: false, message: 'background 必须是布尔值', errorCode: 'INVALID_PARAMS' };
+    }
+    const background = p.background === true;
+    const declared: readonly string[] = ghost.manifest.cindy.search ?? [];
+    if (background) {
+      if (!declared.includes('background_web') || ghost.backgroundSearchCapabilityApproved !== true ||
+        ghost.approval?.state !== 'approved') {
+        return {
+          ok: false,
+          message: '插件未获后台 Cindy 搜索授权，请通过插件更新确认后台搜索权限',
+          errorCode: 'PERMISSION_DENIED',
+        };
+      }
+      if (p.callId !== undefined || p.callerTool !== undefined) {
+        return { ok: false, message: '后台搜索不接受 Agent callId 或 callerTool', errorCode: 'INVALID_PARAMS' };
+      }
+    } else if (!declared.includes('web')) {
+      return {
+        ok: false,
+        message: '本意识未声明搜索「网页搜索」能力(身份卡 cindy.search 缺 "web")，请意识作者更新声明',
+        errorCode: 'PERMISSION_DENIED',
+      };
+    }
+    const approvalRevision = ghost.approval?.state === 'approved' ? ghost.approval.revision : undefined;
     if (p.provider !== 'cindy') {
       return {
         ok: false,
@@ -1346,39 +1361,38 @@ export class GhostCindySlot {
     if (
       p.limit !== undefined &&
       (typeof p.limit !== 'number' ||
-        !Number.isInteger(p.limit) ||
-        p.limit < 1 ||
-        p.limit > GHOST_CINDY_SEARCH_MAX_RESULTS)
+        !Number.isSafeInteger(p.limit) ||
+        p.limit < 1)
     ) {
       return {
         ok: false,
-        message: `limit 不合法(1–${GHOST_CINDY_SEARCH_MAX_RESULTS} 的整数，或不传)`,
+        message: 'limit 不合法(正安全整数，或不传)',
         errorCode: 'INVALID_PARAMS',
       };
     }
-    if (
+    if (!background && (
       typeof p.callId !== 'string' ||
       p.callId.length === 0 ||
       p.callId.length > MAX_CALL_ID_LEN
-    ) {
+    )) {
       return {
         ok: false,
         message: 'callId 不合法(搜索必须透传 1–128 字符的 tool-call 归因号)',
         errorCode: 'INVALID_PARAMS',
       };
     }
-    const callId = p.callId;
-    if (
+    if (!background && (
       typeof p.callerTool !== 'string' ||
       !/^[a-z][a-z0-9_-]{0,63}$/.test(p.callerTool)
-    ) {
+    )) {
       return {
         ok: false,
         message: 'callerTool 不合法(必须透传本次 tool-call 的 msg.tool)',
         errorCode: 'INVALID_PARAMS',
       };
     }
-    const callerTool = p.callerTool;
+    const invocation = background ? null : { callId: p.callId as string, callerTool: p.callerTool as string };
+    const callId = invocation?.callId ?? randomUUID();
     const searchWeb = this.deps.searchWeb;
     if (!searchWeb) {
       return {
@@ -1414,11 +1428,11 @@ export class GhostCindySlot {
         .update('\0')
         .update(String(limit))
         .digest('hex');
-      if (
+      if (invocation &&
         !this.deps.claimPipeCall?.(
           ghostId,
-          callId,
-          callerTool,
+          invocation.callId,
+          invocation.callerTool,
           'cindy.search.web',
           requestKey,
         )
@@ -1434,6 +1448,7 @@ export class GhostCindySlot {
         ghostId,
         callId,
         logicalProvider: 'cindy',
+        ...(background ? { background: true } : {}),
       });
       let allowRetry = false;
       try {
@@ -1449,12 +1464,21 @@ export class GhostCindySlot {
             errorCode: 'UPSTREAM_UNAVAILABLE',
           };
         }
+        if (background) {
+          const current = this.deps.getGhost(ghostId);
+          if (!current?.enabled || current.backgroundSearchCapabilityApproved !== true ||
+            !current.manifest.cindy?.search?.includes('background_web') ||
+            current.approval?.state !== 'approved' || current.approval.revision !== approvalRevision) {
+            return { ok: false, message: '后台搜索期间插件已停用或授权已改变，本次结果已丢弃', errorCode: 'PERMISSION_DENIED' };
+          }
+        }
         if (!outcome.ok) {
           allowRetry = outcome.requestStarted === false;
           this.deps.log?.warn('ghost cindy-request search_web failed', {
             ghostId,
             callId,
             logicalProvider: 'cindy',
+            ...(background ? { background: true } : {}),
             errorCode: outcome.errorCode,
             ...(outcome.status !== undefined ? { status: outcome.status } : {}),
             ...(outcome.requestId ? { requestId: outcome.requestId } : {}),
@@ -1470,6 +1494,7 @@ export class GhostCindySlot {
           ghostId,
           callId,
           logicalProvider: 'cindy',
+          ...(background ? { background: true } : {}),
           resultCount: outcome.results.length,
           ...(outcome.webSearchRequests !== undefined
             ? { webSearchRequests: outcome.webSearchRequests }
@@ -1480,12 +1505,13 @@ export class GhostCindySlot {
           ok: true,
           provider: 'cindy',
           results: outcome.results,
+          ...(outcome.metadata !== undefined ? { metadata: outcome.metadata } : {}),
         };
       } finally {
-        this.deps.settlePipeCallClaim?.(
+        if (invocation) this.deps.settlePipeCallClaim?.(
           ghostId,
-          callId,
-          callerTool,
+          invocation.callId,
+          invocation.callerTool,
           'cindy.search.web',
           requestKey,
           allowRetry,

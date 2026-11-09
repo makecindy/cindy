@@ -116,12 +116,26 @@ const search = await cindy.send({
   type: 'cindy-request',
   kind: 'search_web',
   query: 'Cindy 最新版本',
-  limit: 5,                       // 可选,1–10,缺省 5
+  limit: 10,                      // 可选,正安全整数,缺省 10;实际条数由上游决定
   provider: 'cindy',
   callId: msg.callId,             // 搜索只由 tool-call 触发,必须透传
   callerTool: msg.tool,            // 与 callId 配对验身,必须逐字透传
 });
-// search = { ok:true, provider:'cindy', results:[{ title, url, snippet }] }
+// search = { ok:true, provider:'cindy', results:[{ title, url, snippet, ...nativeFields }], metadata }
+// 上游实际返回的结果不按 limit 再裁掉;metadata 保留原始内容块和用量,不含内部模型路由。
+// 大结果应完整写入当前任务文件,工具仅返回预算内预览;不要为读取同次结果重新搜索。
+//
+// 后台搜索（新增能力，尚未发布）：另声明并获准 cindy.search:["background_web"]。
+// 可从插件定时器/后台代码调用，不启动 Agent；不传 callId/callerTool，也不需要 tools。
+const backgroundSearch = await cindy.send({
+  type: 'cindy-request', kind: 'search_web', background: true,
+  provider: 'cindy', query: 'Cindy 最新动态', limit: 50,
+});
+// 返回同形的完整 results/metadata，不经过 Agent 预览预算。
+// Host 生成每次请求的插件归因号，沿用当前账号、Cindy AI 用量与已有并发设置；
+// 账号切换、插件停用或批准变更后丢弃在途结果。额度不足原样返回，不自动重试。
+// 未获准或旧 Host 不支持时明确报错；不能伪造 Agent callId，也不静默降级到 Agent。
+// 后台没有当前任务工作目录；结果按插件已有的业务存储能力处理，不借用任务文件权限。
 // 改图(需详单含 "edit";源图必须是本插件名下的,1–4 张——含用户过户给你的
 // args.attachments 指纹):
 //   { kind: 'edit_image', prompt, hashes: ['<指纹>'] }

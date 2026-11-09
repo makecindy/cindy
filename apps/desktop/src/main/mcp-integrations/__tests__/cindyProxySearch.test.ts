@@ -124,23 +124,126 @@ describe('cindyProxySearch', () => {
       ok: true,
       requestId: 'call-123',
       webSearchRequests: 2,
+      metadata: expect.objectContaining({
+        id: 'msg-search-123',
+        content: expect.any(Array),
+        usage: { server_tool_use: { web_search_requests: 2 } },
+      }),
       results: [
         {
+          type: 'web_search_result',
           title: 'Cindy',
           url: 'https://example.test/cindy',
           snippet: 'Cindy search result',
         },
         {
+          type: 'web_search_result',
           title: 'Second',
           url: 'https://example.test/second',
           snippet: 'Second search result',
         },
         {
+          type: 'web_search_result_location',
           title: 'Citation only',
           url: 'https://example.test/citation-only',
+          cited_text: 'Citation-only result',
           snippet: 'Citation-only result',
         },
       ],
+    });
+  });
+
+  it('保留原始搜索字段、完整工具块和实际返回条数', async () => {
+    const items = Array.from({ length: 12 }, (_, index) => ({
+      type: 'web_search_result',
+      title: `Result ${index}`,
+      url: `https://example.test/result-${index}`,
+      snippet: `  ${'原始摘要'.repeat(300)}  `,
+      summary: 'Independent summary',
+      content: '  Full page content\n',
+      date: null,
+      page_age: '2026-11-01',
+      score: 0,
+      encrypted_content: 'opaque-upstream-content',
+      provider_extra: { index },
+    }));
+    const content = [
+      { type: 'web_search_tool_result', tool_use_id: 'search-1', content: items },
+      { type: 'text', text: 'Additional upstream explanation' },
+    ];
+    const usage = { server_tool_use: { web_search_requests: 1 } };
+    const fetchImpl = vi.fn(async () =>
+      response({ model: 'private-upstream-model', content, usage, stop_reason: 'end_turn' }),
+    ) as unknown as typeof fetch;
+    const service = createCindyProxySearchService({
+      getBaseUrl: () => 'https://gateway.example.test',
+      getApiKey: () => 'test-key',
+      fetchImpl,
+    });
+
+    const result = await service.search({ query: 'Cindy', limit: 5 });
+
+    expect(result).toMatchObject({
+      ok: true,
+      results: items,
+      metadata: { content, usage, stop_reason: 'end_turn' },
+    });
+    expect(JSON.stringify(result)).not.toContain('private-upstream-model');
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it('优先保留原始摘要，空摘要仍可使用引用原文', async () => {
+    const service = createCindyProxySearchService({
+      getBaseUrl: () => 'https://gateway.example.test',
+      getApiKey: () => 'test-key',
+      fetchImpl: vi.fn(async () =>
+        response({
+          content: [{
+            type: 'web_search_tool_result',
+            content: [
+              {
+                type: 'web_search_result', title: 'Native', url: 'https://example.test/native',
+                snippet: 'Native snippet', cited_text: 'Quoted excerpt',
+              },
+              {
+                type: 'web_search_result', title: 'Empty', url: 'https://example.test/empty',
+                snippet: '', cited_text: 'Quoted excerpt',
+              },
+            ],
+          }],
+        }),
+      ) as unknown as typeof fetch,
+    });
+
+    await expect(service.search({ query: 'Cindy', limit: 5 })).resolves.toMatchObject({
+      ok: true,
+      results: [{ snippet: 'Native snippet' }, { snippet: 'Quoted excerpt' }],
+    });
+  });
+
+  it('补写摘要完整保留，预览裁剪由调用方负责', async () => {
+    const snippet = '完整摘要'.repeat(300);
+    const service = createCindyProxySearchService({
+      getBaseUrl: () => 'https://gateway.example.test',
+      getApiKey: () => 'test-key',
+      fetchImpl: vi.fn(async () =>
+        response({
+          content: [
+            {
+              type: 'web_search_tool_result',
+              content: [
+                { type: 'web_search_result', title: 'Cindy', url: 'https://example.test/cindy' },
+              ],
+            },
+            { type: 'text', text: `https://example.test/cindy | ${snippet}` },
+          ],
+        }),
+      ) as unknown as typeof fetch,
+    });
+
+    await expect(service.search({ query: 'Cindy', limit: 1 })).resolves.toMatchObject({
+      ok: true,
+      results: [{ snippet }],
     });
   });
 
@@ -194,23 +297,38 @@ describe('cindyProxySearch', () => {
 
     await expect(service.search({ query: 'Cindy', limit: 4 })).resolves.toEqual({
       ok: true,
+      metadata: { content: expect.any(Array) },
       results: [
         {
+          type: 'web_search_result',
           title: 'Release',
           url: 'https://example.test/release',
           snippet: 'Release notes for v1.',
         },
         {
+          type: 'web_search_result',
           title: 'example.test',
           url: 'http://example.test/readme/',
           snippet: 'The README describes Cindy.',
         },
         {
+          type: 'web_search_result',
           title: 'Channel',
           url: 'https://example.test/ch',
           snippet: 'Channel news | with a pipe.',
         },
-        { title: 'Cited', url: 'https://example.test/cited', snippet: 'Quoted from the page' },
+        {
+          type: 'web_search_result',
+          title: 'Cited',
+          url: 'https://example.test/cited',
+          snippet: 'Quoted from the page',
+        },
+        {
+          type: 'web_search_result',
+          title: 'Beyond limit',
+          url: 'https://example.test/x',
+          snippet: '',
+        },
       ],
     });
   });

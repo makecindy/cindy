@@ -10,6 +10,7 @@ import {
 import {
   abortAllGhostInstallConsentPrompts,
   assertGhostInstallConsent,
+  confirmedBackgroundSearchCapability,
   confirmedControlPoints,
   confirmedAutoTools,
   confirmedTaskCapability,
@@ -57,6 +58,31 @@ const userPrompt = (answer: boolean | Error) =>
   });
 
 const reviewedDigest = 'a'.repeat(64);
+
+// 后台搜索契约：批准来自实际显示的新权限，旧 Host 保留的未知动作不授予能力。
+// 现有控制节点/auto-tools 用例不覆盖搜索。最小输入：同清单、无新批准字段（unit）。
+it('后台搜索单独确认一次，旧声明不静默扩权，拒绝及自动更新保留旧安装', async () => {
+  const ordinary = { ...manifest(['api.weather.test']), cindy: { search: ['web'] },
+    tools: [{ name: 'search', description: 'Search' }] } as GhostManifest;
+  const next = { ...ordinary, cindy: { search: ['web', 'background_web'] } } as GhostManifest;
+  const old = installed(ordinary);
+  const prompt = userPrompt(true);
+  const policy = { mode: 'prompt' as const, prompt, initiator: 'user' as const, origin: 'market' as const };
+  const decision = await obtainGhostInstallConsent(policy, old, next, reviewedDigest);
+  assertGhostInstallConsent(decision, old, next, reviewedDigest);
+  expect(prompt).toHaveBeenCalledWith(expect.objectContaining({ facts: expect.objectContaining({ kind: 'update', added: [
+    expect.objectContaining({ key: 'cindy:search.background_web' }),
+  ] }) }));
+  expect(confirmedBackgroundSearchCapability(decision, old, next)).toBe(true);
+  expect(confirmedBackgroundSearchCapability({ mode: 'unprompted' }, old, next)).toBeUndefined();
+  const predeclared = installed(next);
+  await expect(obtainGhostInstallConsent({ mode: 'automatic' }, predeclared, next, reviewedDigest)).rejects.toThrow();
+  const approved = { ...installed(next), backgroundSearchCapabilityApproved: true as const };
+  expect(await obtainGhostInstallConsent({ mode: 'automatic' }, approved, next, reviewedDigest)).toEqual({ mode: 'unprompted' });
+  expect(await obtainGhostInstallConsent({ mode: 'automatic' }, old, ordinary, reviewedDigest)).toEqual({ mode: 'unprompted' });
+  await expect(obtainGhostInstallConsent({ ...policy, prompt: userPrompt(false) }, old, next, reviewedDigest)).rejects.toThrow();
+  expect(old).toMatchObject({ enabled: true, manifest: ordinary, approval: { state: 'approved' } });
+});
 // Contract: the Host grants auto tools only when the exact tool permission was shown.
 // A predeclared auto tool with no receipt grant is the minimal old-Host input (unit).
 it('grants only auto tools included in the install or update confirmation', async () => {

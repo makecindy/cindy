@@ -37,7 +37,7 @@
   "cindy": { "image": ["generate", "edit"] },   // 直接声明能力及详单,见下
   // 类目按需申请:image / video 的动作是 "generate" | "edit";media 只有
   // "deposit"(把你手里的媒体字节寄存进总仓换指纹,见 §4.0.1);
-  // text 只有 "oneshot";search 只有 "web"(Cindy 托管公网搜索)。每条都会
+  // text 只有 "oneshot";search 有 "web"(Agent 搜索)与 "background_web"(独立批准的后台搜索)。每条都会
   // 在插件详情的能力清单里单独列给用户看。
   "panel": { "title": "面板标题", "html": "panel.html", "position": "left",
              "minWidth": 240, "defaultFraction": 0.24,
@@ -314,10 +314,16 @@ node 详单**不接受** `command` / `args` / `shell` / `env` 或其它自造字
 或多张参考图,详见 §4 的 cindy-request 视频段)、`media`(`deposit`=把手里的
 媒体字节存进媒体库,§4.0.1)、`text`(`oneshot`=快问快答,§4.0.2)、
 `embed`(`text`=文本转向量,§4.0.3)、`search`(`web`=Cindy 托管
-公网搜索,见 §4 的 `search_web` 段)。
+Agent 搜索；`background_web`=无需唤醒 Agent 的后台搜索，独立批准后使用 Cindy AI 用量，见 §4 的 `search_web` 段)。
 详单里没申请的动作,运行时点单直接被拒。`search.web` 只能由真实 tool-call
 触发,还必须同时声明至少一个 `tools` 条目。旧 v2 包的 model slot/字段仍兼容，
 但新插件一律使用 v3 的 `cindy` 字段。
+
+后台搜索另声明 `cindy: { "search": ["background_web"] }`，调用时显式传 `background: true`，
+不传 Agent 的 `callId/callerTool`。这项能力不要求 `tools`；申请两种调用则声明两个动作。
+新增权限沿用安装/更新确认，已批准后无需逐次确认。旧 `web` 授权不包含后台权限，
+旧 Host 曾保留的未知动作也不算批准；未使用后台搜索的插件不要申请。
+此后台能力尚未发布；旧 Host 拒绝时应说明不支持，不能补造 callId 或启动 Agent 静默代替。
 
 **network 详单**(声明 network 时必写,详见 §4.7):
 

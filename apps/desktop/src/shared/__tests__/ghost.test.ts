@@ -2121,6 +2121,27 @@ describe('ghost · cindy 能力详单校验(字段旧名 model 别名兼容)', (
     expect(!withoutTool.ok && withoutTool.reason).toContain('tool');
   });
 
+  // 后台搜索契约：无 Agent 工具的插件也可申请，但必须单独向用户展示额度授权。
+  // 现有用例仅覆盖 web；最小输入为仅声明 background_web 的清单（unit）。
+  it('后台搜索无需 tool 槽，并在 Desktop 和协议校验中保留独立权限', () => {
+    const raw = chipWithModel({ search: ['background_web'] });
+    for (const validate of [validateGhostManifest, validateProtocolManifest]) {
+      const parsed = validate(raw);
+      expect(parsed.ok, JSON.stringify(parsed)).toBe(true);
+      if (!parsed.ok) continue;
+      expect(parsed.manifest.cindy?.search).toEqual(['background_web']);
+    }
+    const parsed = validateGhostManifest(raw);
+    if (!parsed.ok) throw new Error(parsed.reason);
+    expect(ghostPermissionItems(parsed.manifest)).toContainEqual({
+      key: 'cindy:search.background_web',
+      kind: 'cindy',
+      labelKey: 'cindySearchBackgroundWeb',
+      detailKey: 'cindySearchBackgroundWebDetail',
+    });
+    expect(ghostPermissionItems(parsed.manifest).some(item => item.key === 'cindy:search.web')).toBe(false);
+  });
+
   it('oneshotModel 形态非法 / 无 text.oneshot 本体单挂 → 拒', () => {
     for (const bad of [
       { text: ['oneshot'], oneshotModel: '' },

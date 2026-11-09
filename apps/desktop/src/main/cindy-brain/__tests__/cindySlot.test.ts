@@ -372,6 +372,102 @@ describe('Cindy Web Search', () => {
 
   const searchGhost = () => fakeGhost({ model: { search: ['web'] } });
 
+  const backgroundGhost = (): InstalledGhost => ({
+    ...fakeGhost({ model: { search: ['background_web'] } }),
+    backgroundSearchCapabilityApproved: true,
+    approval: { state: 'approved', revision: '11111111-1111-4111-8111-111111111111' },
+  });
+  const BACKGROUND_REQ = {
+    type: 'cindy-request', kind: 'search_web', background: true,
+    provider: 'cindy', query: '  Cindy Web Search  ', limit: 50,
+  };
+
+  // 后台搜索契约：真实 slot 入口须独立批准，不依赖或伪造 Agent callId。
+  // 旧用例仅有 Agent 分支；最小输入为获准插件 + 显式后台请求（unit，受控搜索服务）。
+  it('后台搜索直接取得完整结果，每次由 Host 生成独立归因号，不消费 Agent binding', async () => {
+    const results = Array.from({ length: 50 }, (_, i) => ({
+      title: String(i), url: 'https://example.test/' + i, snippet: '摘要'.repeat(500),
+      date: null, summary: '长摘要', content: '正文',
+    }));
+    const metadata = { usage: { server_tool_use: { web_search_requests: 1 } } };
+    const log = { info: vi.fn(), warn: vi.fn() };
+    const { slot, claimPipeCall, settlePipeCallClaim } = makeSlot({
+      getGhost: backgroundGhost, searchWeb: vi.fn(async () => ({ ok: true as const, results, metadata })), log,
+    });
+    for (let i = 0; i < 2; i++) {
+      expect(await slot.handleModelRequest('art', BACKGROUND_REQ)).toEqual({
+        ok: true, provider: 'cindy', results, metadata,
+      });
+    }
+    const starts = log.info.mock.calls.filter(([event]) => event === 'ghost cindy-request search_web start');
+    expect(starts).toHaveLength(2);
+    const attribution = starts.map(([, fields]) => fields as { ghostId: string; callId: string; background: boolean });
+    for (const fields of attribution) {
+      expect(fields).toMatchObject({
+        ghostId: 'art', background: true, callId: expect.stringMatching(/^[a-f0-9-]{36}$/),
+      });
+    }
+    expect(attribution[0].callId).not.toBe(attribution[1].callId);
+    expect(claimPipeCall).not.toHaveBeenCalled();
+    expect(settlePipeCallClaim).not.toHaveBeenCalled();
+  });
+
+  it('后台必须同时声明并获准，停用或无有效批准一律不出网，且不能借用工具归因', async () => {
+    for (const ghost of [
+      searchGhost(),
+      { ...searchGhost(), backgroundSearchCapabilityApproved: true },
+      { ...backgroundGhost(), backgroundSearchCapabilityApproved: undefined },
+      { ...backgroundGhost(), enabled: false },
+      { ...backgroundGhost(), approval: { state: 'invalid' } },
+    ] as InstalledGhost[]) {
+      const { slot, searchWeb } = makeSlot({ getGhost: () => ghost });
+      expect(await slot.handleModelRequest('art', BACKGROUND_REQ)).toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });
+      expect(searchWeb).not.toHaveBeenCalled();
+    }
+    const { slot, searchWeb } = makeSlot({ getGhost: backgroundGhost });
+    expect(await slot.handleModelRequest('art', { ...BACKGROUND_REQ, callId: SEARCH_REQ.callId, callerTool: SEARCH_REQ.callerTool }))
+      .toMatchObject({ ok: false, errorCode: 'INVALID_PARAMS' });
+    expect(await slot.handleModelRequest('art', { ...BACKGROUND_REQ, background: 'true' }))
+      .toMatchObject({ ok: false, errorCode: 'INVALID_PARAMS' });
+    expect(searchWeb).not.toHaveBeenCalled();
+    const ordinary = makeSlot({ getGhost: searchGhost });
+    expect(await ordinary.slot.handleModelRequest('art', { ...BACKGROUND_REQ, background: false }))
+      .toMatchObject({ ok: false, errorCode: 'INVALID_PARAMS' });
+    expect(ordinary.searchWeb).not.toHaveBeenCalled();
+  });
+
+  it.each(['owner', 'disabled', 'approval'] as const)('后台搜索期间 %s 改变时丢弃结果', async (changed) => {
+    let owner = 'owner-1', ghost = backgroundGhost();
+    const searchWeb = vi.fn(async () => {
+        if (changed === 'owner') owner = 'owner-2';
+        if (changed === 'disabled') ghost = { ...ghost, enabled: false };
+        if (changed === 'approval') ghost = { ...ghost, approval: { state: 'approved', revision: '22222222-2222-4222-8222-222222222222' } };
+        return { ok: true as const, results: [{ title: 'Private', url: 'https://example.test', snippet: 'Private' }] };
+    });
+    const { slot } = makeSlot({
+      getGhost: () => ghost, getOwnerScopeKey: () => owner, searchWeb,
+    });
+    expect(await slot.handleModelRequest('art', BACKGROUND_REQ)).toMatchObject({ ok: false });
+    expect(searchWeb).toHaveBeenCalledOnce();
+  });
+
+  it('后台沿用并发上限、账号切换前置检查和额度不足错误，不自动重试', async () => {
+    for (const overrides of [
+      { getInflightLimit: () => 0, errorCode: 'RATE_LIMITED' },
+      { isOwnerBoundaryPending: () => true, errorCode: 'UPSTREAM_UNAVAILABLE' },
+    ]) {
+      const { errorCode, ...deps } = overrides;
+      const { slot, searchWeb } = makeSlot({ getGhost: backgroundGhost, ...deps });
+      expect(await slot.handleModelRequest('art', BACKGROUND_REQ)).toMatchObject({ ok: false, errorCode });
+      expect(searchWeb).not.toHaveBeenCalled();
+    }
+    const searchWeb = vi.fn(async () => ({ ok: false as const, errorCode: 'QUOTA_EXHAUSTED' as const,
+      message: '搜索额度不足', requestStarted: true }));
+    const { slot } = makeSlot({ getGhost: backgroundGhost, searchWeb });
+    expect(await slot.handleModelRequest('art', BACKGROUND_REQ)).toMatchObject({ ok: false, errorCode: 'QUOTA_EXHAUSTED' });
+    expect(searchWeb).toHaveBeenCalledExactlyOnceWith({ query: 'Cindy Web Search', limit: 50 });
+  });
+
   it('按能力声明放行，trim query、补默认结果数并保持逻辑 Provider 为 cindy', async () => {
     const searchWeb = vi.fn(async () => ({
       ok: true as const,
@@ -391,7 +487,7 @@ describe('Cindy Web Search', () => {
 
     const result = await slot.handleModelRequest('art', SEARCH_REQ);
 
-    expect(searchWeb).toHaveBeenCalledWith({ query: 'Cindy Web Search', limit: 5 });
+    expect(searchWeb).toHaveBeenCalledWith({ query: 'Cindy Web Search', limit: 10 });
     expect(claimPipeCall).toHaveBeenCalledWith(
       'art',
       'call-search-1',
@@ -418,6 +514,37 @@ describe('Cindy Web Search', () => {
         },
       ],
     });
+  });
+
+  it('允许请求更多结果，并把原始字段和响应元数据完整交给插件', async () => {
+    const results = [
+      {
+        title: 'Result',
+        url: 'https://example.test/result',
+        snippet: '原始摘要'.repeat(300),
+        summary: 'Independent summary',
+        page_age: '2026-11-01',
+        date: null,
+        score: 0,
+      },
+    ];
+    const metadata = {
+      content: [{ type: 'web_search_tool_result', content: results }],
+      usage: { server_tool_use: { web_search_requests: 1 } },
+    };
+    const searchWeb = vi.fn(async () => ({ ok: true as const, results, metadata }));
+    const { slot } = makeSlot({
+      getGhost: searchGhost,
+      searchWeb,
+    });
+
+    await expect(slot.handleModelRequest('art', { ...SEARCH_REQ, limit: 50 })).resolves.toEqual({
+      ok: true,
+      provider: 'cindy',
+      results,
+      metadata,
+    });
+    expect(searchWeb).toHaveBeenCalledExactlyOnceWith({ query: 'Cindy Web Search', limit: 50 });
   });
 
   it('权限不足返回 PERMISSION_DENIED；非法参数返回 INVALID_PARAMS，且不出网', async () => {
@@ -451,7 +578,7 @@ describe('Cindy Web Search', () => {
       { ...SEARCH_REQ, query: 'x'.repeat(2001) },
       { ...SEARCH_REQ, limit: 0 },
       { ...SEARCH_REQ, limit: 1.5 },
-      { ...SEARCH_REQ, limit: 11 },
+      { ...SEARCH_REQ, limit: Number.MAX_SAFE_INTEGER + 1 },
       { ...SEARCH_REQ, callId: '' },
       { ...SEARCH_REQ, callerTool: '' },
     ]) {

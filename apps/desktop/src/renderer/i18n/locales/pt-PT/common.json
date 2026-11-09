@@ -7805,6 +7805,8 @@
         "cindyEmbedTextDetail": "O texto é enviado para o modelo de embeddings do sistema e convertido em números, até {{max}} itens por chamada. Podem aplicar-se custos de modelos. Os vetores são enviados apenas para o plugin — nada é escrito na sua biblioteca.",
         "cindySearchWeb": "Pode pesquisar na Web pública com Cindy AI",
         "cindySearchWebDetail": "Os pedidos de pesquisa acedem à Web pública e podem consumir a quota de Cindy AI.",
+        "cindySearchBackgroundWeb": "Pode pesquisar automaticamente com Cindy AI em segundo plano",
+        "cindySearchBackgroundWebDetail": "Pode pesquisar na Web pública sem iniciar um Agent nem pedir confirmação de cada vez. As pesquisas contam para a sua utilização de Cindy AI.",
         "cindyTextOneshotModelDetail": "Usa a cadeia de modelos utilitários leves do sistema (o mesmo canal dos títulos automáticos). Sem intervenção de Agent nem acesso a ficheiros. Podem aplicar-se custos de modelos. O plugin declara um modelo preferido: {{model}} (aplicável quando disponível no catálogo atual; o modelo que fixou tem prioridade).",
         "agentUserAction": "Pode iniciar um novo turno de Agent após clicar num cartão do plugin",
         "agentUserActionDetail": "Cada clique permite apenas um turno, e apenas na sessão à qual pertence o cartão.",

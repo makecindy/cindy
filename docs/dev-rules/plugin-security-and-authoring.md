@@ -289,6 +289,13 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
   前再次复核同一 `callId`；直连与系统代理都只能连接该次守门确认的 IP，代理不得
   重新解析插件提供的域名。选中代理不构成私网授权；无法证明由当前代理生成的 fake-IP
   仍按特殊用途／私有地址拒绝。
+- **后台 Cindy 搜索（未发布）**：`cindy.search.background_web` 与现有 Agent 搜索 `web`
+  独立。安装/更新的既有权限确认展示后台自动执行和 Cindy AI 用量后，由 Main 保存可选
+  `backgroundSearchCapabilityApproved: true`；仅有清单或旧 `web` 批准不授予后台能力。
+  显式 `background: true` 请求不接受 Agent 的 callId/callerTool，Host 为每次请求生成归因号，
+  复用当前账号、搜索接口与并发设置，返回完整结构化数据。响应前复核同一 owner、启用态和批准
+  revision。旧 receipt 缺字段保持有效且普通工具照常使用，提前声明未知动作的旧安装在申请更新时
+  单独确认新增项，不因 Host 升级自动获得权限；不 bump schema、不要求存量插件重装或重新配置。
 - **控制节点（2026-10-31）**：Host 预埋的 `will-` 拦截点目录在 `shared/ghost.ts`
   `GHOST_CONTROL_POINTS`，新增节点 = 加目录项 + 在对应流程按任务配置调用 `screenGhostControlPoint`，
   插件不需要 Host 再发版。四条不变量：只问用户在该任务里选定的插件（定时任务 / 例行任务的

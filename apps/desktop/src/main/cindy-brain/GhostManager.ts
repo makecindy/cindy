@@ -3052,6 +3052,7 @@ export class GhostManager {
           ...(receipt.uiCapabilityApproved === true && pluginHasToolUi(localizedManifest) ? { uiCapabilityApproved: true as const } : {}),
           ...(receipt.targetCapabilityApproved === true ? { targetCapabilityApproved: true as const } : {}),
           ...(receipt.delegationCapabilityApproved === true ? { delegationCapabilityApproved: true as const } : {}),
+          ...(receipt.backgroundSearchCapabilityApproved === true ? { backgroundSearchCapabilityApproved: true as const } : {}),
           ...approvedControlPointsProjection(receipt),
           ...approvedAutoToolsProjection(receipt),
           ...(receipt.observeCapabilityApproved === true ? { observeCapabilityApproved: true as const } : {}),
@@ -4006,6 +4007,7 @@ export class GhostManager {
       /** Main-only provenance: immutable market release or shared installed snapshot, never local authoring. */
       manifestSource?: 'stored-release';
       delegationCapabilityApproved?: true;
+      backgroundSearchCapabilityApproved?: true;
       /** Control points whose permission row the user saw in this confirmation. */
       approvedControlPoints?: readonly string[];
       /** `approval: "auto"` tools whose permission row the user saw in this confirmation. */
@@ -4041,6 +4043,7 @@ export class GhostManager {
       /** Main-only provenance: immutable market release or shared installed snapshot, never local authoring. */
       manifestSource?: 'stored-release';
       delegationCapabilityApproved?: true;
+      backgroundSearchCapabilityApproved?: true;
       /** Control points whose permission row the user saw in this confirmation. */
       approvedControlPoints?: readonly string[];
       /** `approval: "auto"` tools whose permission row the user saw in this confirmation. */
@@ -4223,6 +4226,7 @@ export class GhostManager {
           ...(opts?.taskCapabilityApproved === true && approvedManifest.agent?.tasks === true ? {taskCapabilityApproved:true as const} : {}),
           ...(opts?.targetCapabilityApproved === true && approvedManifest.agent?.tasks === true && approvedManifest.agent.targets === true ? {targetCapabilityApproved:true as const} : {}),
           ...(opts?.delegationCapabilityApproved === true && approvedManifest.agent?.tasks === true && approvedManifest.agent.targets === true && approvedManifest.agent.delegation === true ? {delegationCapabilityApproved:true as const} : {}),
+          ...(opts?.backgroundSearchCapabilityApproved === true ? { backgroundSearchCapabilityApproved: true as const } : {}),
           ...(opts?.approvedControlPoints?.length ? { approvedControlPoints: opts.approvedControlPoints } : {}),
           ...(opts?.approvedAutoTools?.length ? { approvedAutoTools: opts.approvedAutoTools } : {}),
           ...(opts?.observeCapabilityApproved === true && approvedManifest.agent?.observe === true ? {observeCapabilityApproved:true as const} : {}),
@@ -4354,6 +4358,7 @@ export class GhostManager {
       /** Main-only provenance: immutable market release or shared installed snapshot, never local authoring. */
       manifestSource?: 'stored-release';
       delegationCapabilityApproved?: true;
+      backgroundSearchCapabilityApproved?: true;
       /** Control points whose permission row the user saw in this confirmation. */
       approvedControlPoints?: readonly string[];
       /** `approval: "auto"` tools whose permission row the user saw in this confirmation. */
@@ -4386,6 +4391,7 @@ export class GhostManager {
       /** Main-only provenance: immutable market release or shared installed snapshot, never local authoring. */
       manifestSource?: 'stored-release';
       delegationCapabilityApproved?: true;
+      backgroundSearchCapabilityApproved?: true;
       /** Control points whose permission row the user saw in this confirmation. */
       approvedControlPoints?: readonly string[];
       /** `approval: "auto"` tools whose permission row the user saw in this confirmation. */
@@ -4672,6 +4678,8 @@ export class GhostManager {
           approvedManifest.agent?.tasks === true && approvedManifest.agent.targets === true ? { targetCapabilityApproved: true as const } : {}),
         ...((opts.delegationCapabilityApproved === true || (archiveId === undefined && approvalResult.state === 'approved' && approvalResult.receipt.delegationCapabilityApproved === true)) &&
           approvedManifest.agent?.tasks === true && approvedManifest.agent.targets === true && approvedManifest.agent.delegation === true ? { delegationCapabilityApproved: true as const } : {}),
+        ...((opts.backgroundSearchCapabilityApproved === true || (archiveId === undefined && approvalResult.state === 'approved' && approvalResult.receipt.backgroundSearchCapabilityApproved === true))
+          ? { backgroundSearchCapabilityApproved: true as const } : {}),
         // 已批准节点随同一实例延续(仍声明的才保留，receipt 构造时按新 manifest 过滤)；
         // 本次确认新显示的节点并入。换源归档(archiveId)不继承旧批准。
         approvedControlPoints: [
@@ -5102,6 +5110,7 @@ export class GhostManager {
         ...(current.state === 'approved' && current.receipt.delegationCapabilityApproved === true &&
           approvedManifest.agent?.tasks === true && approvedManifest.agent.targets === true && approvedManifest.agent.delegation === true ? { delegationCapabilityApproved: true as const } : {}),
         // 随包种子由 Cindy 自己发布，声明的控制节点与免确认工具视为已随版本批准。
+        ...(approvedManifest.cindy?.search?.includes('background_web') ? { backgroundSearchCapabilityApproved: true as const } : {}),
         approvedControlPoints: approvedManifest.subscribe?.hooks ?? [],
         approvedAutoTools: declaredAutoApproveTools(approvedManifest),
         ...(current.state === 'approved' && current.receipt.observeCapabilityApproved === true &&

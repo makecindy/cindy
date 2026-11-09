@@ -77,6 +77,21 @@ export function confirmedTaskCapability(
   return shown?.some(item => item.key === `agent:${capability}`) ? true : undefined;
 }
 
+/** 只登记本次确认实际显示的后台搜索权限；旧批准不因存在声明而扩权。 */
+export function confirmedBackgroundSearchCapability(
+  decision: GhostInstallConsentDecision,
+  installed: InstalledGhost | null | undefined,
+  next: GhostManifest,
+): true | undefined {
+  if (!next.cindy?.search?.includes('background_web')) return undefined;
+  // 服务端默认安装沿用既有发行方批准策略，不增加另一套确认流程。
+  if (decision.mode === 'exempt') return true;
+  if (decision.mode !== 'confirmed') return undefined;
+  const facts = evaluateGhostInstallConsent(installed, next);
+  const shown = facts?.kind === 'install' ? facts.permissions : facts?.added;
+  return shown?.some(item => item.key === 'cindy:search.background_web') ? true : undefined;
+}
+
 /**
  * 本次确认里用户看到过的控制节点。服务端默认安装(exempt)与随包种子一样由发行方
  * 负责，视为已批准声明的全部节点；未确认/无需确认时返回空，已批准节点由 update 延续。

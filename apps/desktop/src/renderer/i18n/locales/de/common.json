@@ -7735,6 +7735,8 @@
         "cindyEmbedTextDetail": "Text wird an das Embedding-Modell des Systems gesendet und in Zahlen umgewandelt, bis zu {{max}} Elemente pro Aufruf. Es können Modellkosten anfallen. Die Vektoren gehen nur an das Plugin – in deiner eigenen Bibliothek wird nichts gespeichert.",
         "cindySearchWeb": "Kann mit Cindy AI das öffentliche Web durchsuchen",
         "cindySearchWebDetail": "Suchanfragen greifen auf das öffentliche Web zu und können Cindy AI-Kontingent verbrauchen.",
+        "cindySearchBackgroundWeb": "Kann mit Cindy AI automatisch im Hintergrund suchen",
+        "cindySearchBackgroundWebDetail": "Kann das öffentliche Web durchsuchen, ohne einen Agent zu starten oder jedes Mal nachzufragen. Die Suchen zählen zu Ihrer Cindy AI-Nutzung.",
         "cindyTextOneshotModelDetail": "Verwendet die schlanke Hilfsmodellkette des Systems (denselben Verarbeitungspfad wie automatische Titel). Kein Agent beteiligt und kein Dateizugriff. Es können Modellkosten anfallen. Das Plugin gibt ein bevorzugtes Modell an: {{model}} (wird verwendet, wenn es im aktuellen Katalog verfügbar ist; deine angeheftete Auswahl hat Vorrang).",
         "agentUserAction": "Kann einen neuen Agent-Durchlauf starten, nachdem du auf eine Plugin-Karte geklickt hast",
         "agentUserActionDetail": "Jeder Klick erlaubt nur einen Durchgang und nur in der Sitzung, zu der die Karte gehört.",

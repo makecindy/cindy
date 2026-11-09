@@ -644,9 +644,10 @@ export type GhostCindyEmbedAction = (typeof GHOST_CINDY_EMBED_ACTIONS)[number];
  * `web` = Cindy 托管的公网搜索:意识只递查询词与结果数，主机固定走当前
  * model-access 下发的 XD endpoint + XD user key，通过固定模型别名调用
  * Anthropic Messages 原生网页搜索，不把网关 key、模型名或工具定义暴露给
- * 意识。它与 network 槽里的 BYO Brave/Tavily 是两条独立凭证与计费路径。
+ * 意识。`background_web` 为独立批准的自主搜索；`web` 保留 Agent 调用绑定。
+ * 它与 network 槽里的 BYO Brave/Tavily 是两条独立凭证与计费路径。
  */
-export const GHOST_CINDY_SEARCH_ACTIONS = ['web'] as const;
+export const GHOST_CINDY_SEARCH_ACTIONS = ['web', 'background_web'] as const;
 export type GhostCindySearchAction = (typeof GHOST_CINDY_SEARCH_ACTIONS)[number];
 
 /**
@@ -667,7 +668,7 @@ export interface GhostCindyNeeds {
   text?: GhostCindyTextAction[];
   /** 向量类:text=文本转向量(只生成不存储,向量原样递回意识自己保管)。 */
   embed?: GhostCindyEmbedAction[];
-  /** 搜索类:web=Cindy 托管的公网搜索(主机固定路由，意识不经手网关凭证)。 */
+  /** 搜索类:web=Agent 工具搜索，background_web=独立批准的后台搜索；均不交出凭证。 */
   search?: GhostCindySearchAction[];
   /**
    * 快问快答偏好模型(目录模型 id,如 "codex/gpt-5.5";须与 text 含 "oneshot"
@@ -1909,6 +1910,8 @@ export interface InstalledGhost {
   /** Read-only remote management projection; never persisted as approval. */
   uiPromptSuppressed?: true;
   delegationCapabilityApproved?: true;
+  /** Host receipt fact: independent consent to autonomous Cindy searches and their usage charges. */
+  backgroundSearchCapabilityApproved?: true;
   /** Host receipt fact: control points the user confirmed, filtered to ones this Host knows and the manifest declares. */
   approvedControlPoints?: GhostControlPointId[];
   /** Host receipt fact: tools declared `approval: "auto"` that the user confirmed in an install/update prompt. */
@@ -2125,6 +2128,7 @@ const GHOST_CINDY_PERM_LABEL: Record<string, string> = {
   'text.oneshot': 'cindyTextOneshot',
   'embed.text': 'cindyEmbedText',
   'search.web': 'cindySearchWeb',
+  'search.background_web': 'cindySearchBackgroundWeb',
 };
 
 /**
@@ -2139,6 +2143,7 @@ const GHOST_CINDY_PERM_DETAIL: Record<string, string> = {
   // (向量归意识自己保管)。单次条数上限一并插值,同 deposit 的口径。
   'embed.text': 'cindyEmbedTextDetail',
   'search.web': 'cindySearchWebDetail',
+  'search.background_web': 'cindySearchBackgroundWebDetail',
 };
 
 /**
@@ -2905,6 +2910,11 @@ export function diffInstalledGhostPermissionItems(
     const previous = {
       ...installed.manifest,
       mcpApps: installed.uiCapabilityApproved === true ? installed.manifest.mcpApps : undefined,
+      // 旧 Host 保留的未知后台动作不等于用户批准，更新时须单独显示。
+      cindy: installed.backgroundSearchCapabilityApproved === true ? installed.manifest.cindy : {
+        ...installed.manifest.cindy,
+        search: installed.manifest.cindy?.search?.filter(action => action !== 'background_web'),
+      },
       // 同理：声明了但用户从没确认过的控制节点不算旧权限，更新时作为新增项复核。
       subscribe: withoutUnapprovedControlPoints(installed),
       tools: withoutUnapprovedAutoTools(installed),
@@ -8287,8 +8297,7 @@ export const GHOST_ONESHOT_TEXT_TIMEOUT_MS = 60_000;
 
 /** Cindy 托管 Web Search 的请求边界。 */
 export const GHOST_CINDY_SEARCH_MAX_QUERY_CHARS = 2000;
-export const GHOST_CINDY_SEARCH_DEFAULT_RESULTS = 5;
-export const GHOST_CINDY_SEARCH_MAX_RESULTS = 10;
+export const GHOST_CINDY_SEARCH_DEFAULT_RESULTS = 10;
 
 /**
  * ── embed_text 政策参数(2026-08-04 开闸)──────────────────────────────
@@ -8436,7 +8445,7 @@ export type GhostPipeCindyRequest =
       /** 异步模式(同 gen_video 分支)。 */
       mode?: 'submit';
     }
-  | {
+  | ({
       /**
        * Cindy 托管 Web Search:主机固定使用当前 XD endpoint、XD user key
        * 与内置 Anthropic Messages 搜索模型，不接受意识传入
@@ -8444,21 +8453,28 @@ export type GhostPipeCindyRequest =
        * `provider` 固定为 cindy，用于与插件 network 槽的 BYO Brave/Tavily
        * 明确分账。
        *
-       * 须声明 'cindy' 卡槽 + `cindy.search: ["web"]`。
+       * Agent 调用声明 `cindy.search: ["web"]`；后台调用单独声明并批准 `background_web`。
        */
       type: 'cindy-request';
       kind: 'search_web';
       /** 用户原话查询，trim 后 1–2000 字符。 */
       query: string;
-      /** 结果条数，1–10，缺省 5。 */
+      /** 所需条数提示，正安全整数，缺省 10；实际返回数量由上游决定。 */
       limit?: number;
       /** 固定为 cindy；其它值明拒。 */
       provider: 'cindy';
+    } & ({
+      background?: false;
       /** 搜索只由 tool-call 触发，必须透传本次 callId 用于账单与日志归因。 */
       callId: string;
       /** 必须透传本次 tool-call 的 msg.tool，供宿主与 callId 事实表配对验身。 */
       callerTool: string;
-    }
+    } | {
+      /** 独立获准的后台搜索，不唤醒 Agent；归因号由 Host 生成。 */
+      background: true;
+      callId?: never;
+      callerTool?: never;
+    }))
   | {
       type: 'cindy-request';
       kind: 'query_job';
@@ -8771,10 +8787,13 @@ export type GhostPipeModelResult =
       ok: true;
       provider: 'cindy';
       results: Array<{
+        [field: string]: unknown;
         title: string;
         url: string;
         snippet: string;
       }>;
+      /** 原始内容块与响应元数据，不含内部模型路由。 */
+      metadata?: Record<string, unknown>;
     }
   | {
       ok: false;

@@ -7678,6 +7678,8 @@
         "cindyEmbedTextDetail": "文字将送至系统之矢量模型算为一串数字，每次至多 {{max}} 条，或生模型费用。所得矢量仅交法器自存，不写入君之数据库。",
         "cindySearchWeb": "可用 Cindy AI 搜索公网",
         "cindySearchWebDetail": "查找将访问公网，或耗 Cindy AI 限额。",
+        "cindySearchBackgroundWeb": "可在后台自动使用 Cindy AI 搜索",
+        "cindySearchBackgroundWebDetail": "可自动搜索公网，无需启动 Agent 或逐次确认；产生的用量计入你的 Cindy AI 账号。",
         "cindyTextOneshotModelDetail": "行系统之轻量任务模型链(与自动拟题同一通道)，不动 Agent，不触君之卷，或生模型费用。法器声明偏好模型：{{model}}(当前目录可用时生效；君之钉选为先)。",
         "agentUserAction": "用户点法器卡片后，可令 Agent 新起一轮",
         "agentUserActionDetail": "每点仅许起一次，且仅可用此卡所属之差事。",

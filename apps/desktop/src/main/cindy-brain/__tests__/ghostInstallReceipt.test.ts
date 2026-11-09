@@ -384,6 +384,23 @@ describe('GhostInstallReceiptStore cleanup', () => {
     });
   });
 
+  // 后台搜索批准必须持久化；旧 receipt 缺字段仍可用，但未知声明不自动成为批准。
+  // 原用例不覆盖搜索，最小输入为旧 receipt + background_web 声明（unit，真实临时目录）。
+  it('后台搜索批准往返保存，缺字段的旧 receipt 保持启用且不自动授权', async () => {
+    const receipt = createSetupReceipt();
+    receipt.manifest.cindy = { search: ['background_web'] };
+    await store.write(receipt);
+    const old = store.read('hello');
+    if (old.state !== 'approved') throw new Error('fixture not approved');
+    expect(old.receipt).toMatchObject({ enabled: receipt.enabled, revision: receipt.revision });
+    expect(old.receipt.backgroundSearchCapabilityApproved).toBeUndefined();
+    const approved = createGhostInstallReceipt({ ...old.receipt, backgroundSearchCapabilityApproved: true });
+    await store.write(approved);
+    expect(store.read('hello')).toMatchObject({ state: 'approved', receipt: {
+      backgroundSearchCapabilityApproved: true, revision: approved.revision,
+    } });
+  });
+
   it('round trips independent observe approval without inferring it from tasks or targets grants', async () => {
     const receipt = createSetupReceipt();
     receipt.manifest.agent = { tasks: true, targets: true, observe: true };

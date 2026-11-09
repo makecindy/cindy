@@ -13,10 +13,9 @@ export const CINDY_SEARCH_MODEL_NAME = 'cindy/web-search';
 const CINDY_SEARCH_WEB_TOOL_TYPE = 'web_search_20250305';
 const CINDY_SEARCH_MAX_TOKENS = 2_048;
 const CINDY_SEARCH_TIMEOUT_MS = 30_000;
-const CINDY_SEARCH_MAX_SNIPPET_CHARS = 500;
 
 /**
- * 搜索后端的结果只带标题、链接与加密正文，没有 cited_text / citations，摘要会全空；
+ * 部分搜索后端只带标题、链接与加密正文，没有 cited_text / citations，摘要会全空；
  * 后端模型也会无视 max_uses 再搜一次。让模型只搜一次，并为前 limit 条结果各写一行
  * `<url> | 摘要`，由 parseSearchResponse 按链接回填 snippet。
  */
@@ -69,7 +68,7 @@ export type CindyProxySearchErrorCode =
   | 'RESPONSE_INVALID'
   | 'INTERNAL';
 
-export interface CindyProxySearchItem {
+export interface CindyProxySearchItem extends Record<string, unknown> {
   title: string;
   url: string;
   snippet: string;
@@ -79,6 +78,7 @@ export type CindyProxySearchOutcome =
   | {
       ok: true;
       results: CindyProxySearchItem[];
+      metadata?: Record<string, unknown>;
       requestId?: string;
       webSearchRequests?: number;
     }
@@ -317,20 +317,17 @@ function collectSnippetLines(text: string, into: Map<string, string>): void {
     const url = normalizedHttpUrl(match[1]);
     if (!url) continue;
     const key = sourceMatchKey(url);
-    if (!into.has(key)) into.set(key, match[2].slice(0, CINDY_SEARCH_MAX_SNIPPET_CHARS));
+    if (!into.has(key)) into.set(key, match[2]);
   }
 }
 
-interface SearchSource {
-  url: string;
-  title: string;
-  snippet: string;
-}
+type SearchSource = CindyProxySearchItem;
 
 type ParsedSearchResponse =
   | {
       ok: true;
       results: CindyProxySearchItem[];
+      metadata: Record<string, unknown>;
     }
   | {
       ok: false;
@@ -343,12 +340,12 @@ function sourceFromRecord(value: Record<string, unknown>): SearchSource | null {
   if (!url) return null;
   const title = cleanTitle(value.title, url);
   const snippet =
-    typeof value.cited_text === 'string'
-      ? value.cited_text.trim()
-      : typeof value.snippet === 'string'
-        ? value.snippet.trim()
+    typeof value.snippet === 'string' && value.snippet.length > 0
+      ? value.snippet
+      : typeof value.cited_text === 'string'
+        ? value.cited_text.trim()
         : '';
-  return { url, title, snippet };
+  return { ...value, url, title, snippet };
 }
 
 function invalidSearchResponse(): ParsedSearchResponse {
@@ -391,7 +388,7 @@ function searchToolFailure(errorCode: unknown): ParsedSearchResponse {
   return invalidSearchResponse();
 }
 
-function parseSearchResponse(raw: unknown, limit: number): ParsedSearchResponse {
+function parseSearchResponse(raw: unknown): ParsedSearchResponse {
   if (!isRecord(raw) || !Array.isArray(raw.content)) {
     return invalidSearchResponse();
   }
@@ -455,11 +452,14 @@ function parseSearchResponse(raw: unknown, limit: number): ParsedSearchResponse 
     if (toolError) return searchToolFailure(toolError.errorCode);
     if (sawCandidate) return invalidSearchResponse();
   }
-  const results = Array.from(sources.values()).slice(0, limit);
+  const results = Array.from(sources.values());
   for (const result of results) {
     if (!result.snippet) result.snippet = snippetLines.get(sourceMatchKey(result.url)) ?? '';
   }
-  return { ok: true, results };
+  const metadata = { ...raw };
+  // The logical Cindy provider must not expose the internal model route.
+  delete metadata.model;
+  return { ok: true, results, metadata };
 }
 
 function webSearchRequestsOf(raw: unknown): number | undefined {
@@ -586,7 +586,7 @@ export function createCindyProxySearchService(deps: CindyProxySearchDeps): Cindy
       } catch {
         decoded = null;
       }
-      const parsed = parseSearchResponse(decoded, limit);
+      const parsed = parseSearchResponse(decoded);
       const webSearchRequests = webSearchRequestsOf(decoded);
       if (!parsed.ok) {
         deps.log?.warn('cindy search response rejected', {
@@ -622,6 +622,7 @@ export function createCindyProxySearchService(deps: CindyProxySearchDeps): Cindy
       return {
         ok: true,
         results,
+        metadata: parsed.metadata,
         ...(webSearchRequests !== undefined ? { webSearchRequests } : {}),
         ...(requestId ? { requestId } : {}),
       };

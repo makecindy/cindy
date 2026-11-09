@@ -9,7 +9,7 @@ import JSZip from 'jszip';
 import type { InstalledGhost } from '../../../shared/ghost.js';
 import type { GhostInstallConsentRequest } from '../../../shared/ghostInstallConsent.js';
 import { findInstalledGhostForDeliveryTarget, findInstalledGhostByInstanceId, installedGhostStoragePart } from '../../../shared/pluginIdentity.js';
-import { assertGhostInstallConsent, confirmedControlPoints, confirmedUiCapability, confirmedTaskCapability, obtainGhostInstallConsent } from '../ghostInstallConsent.js';
+import { assertGhostInstallConsent, confirmedBackgroundSearchCapability, confirmedControlPoints, confirmedUiCapability, confirmedTaskCapability, obtainGhostInstallConsent } from '../ghostInstallConsent.js';
 import { ghostInstallApprovalToken, ghostRequiresCindyAccount } from '../../../shared/ghost.js';
 import { createGhostProductionCallbacks } from './ghostProductionCallbacksFixture.js';
 import { GhostManager, type GhostManagerOptions } from '../GhostManager.js';
@@ -27,6 +27,42 @@ const createCallbacks = createGhostProductionCallbacks<{
 }>({
   functions: ['installAndDock', 'installAndDockLocked'],
   callbacks: { install: ['ipcMain.handle', 'ghosts:install'] },
+});
+
+// 后台搜索契约：真实安装、更新和启动扫描须保留独立批准，不从旧清单推断。
+// 旧用例只覆盖页面和工具；最小输入为已启用但无后台批准字段的旧安装（unit）。
+it('后台搜索批准随同实例更新和重启保留，旧安装缺字段仍启用', async () => {
+  const directory = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-search-consent-')));
+  try {
+    const raw = { schemaVersion: 3, minCindyVersion: '0.0.0', id: 'background-search',
+      name: 'Background search', version: '1.0.0', entry: 'main.js', cindy: { search: ['background_web'] } };
+    const options: GhostManagerOptions = { getRootDir: () => path.join(directory, 'plugins'),
+      mutateSnapshot: async ({ parentDir, ...request }) => runGhostSnapshotWorkerRequest(request, parentDir) };
+    const manager = new GhostManager(options);
+    const file = await writeTestCindyPackage(path.join(directory, 'search.cindy'), raw);
+    const first = await manager.install(file, { initiallyEnabled: true });
+    if ('rejection' in first) throw new Error(first.rejection.reason);
+    const old = new GhostManager(options).list()[0]!;
+    expect(old).toMatchObject({ enabled: true, approval: { state: 'approved' } });
+    expect(old.backgroundSearchCapabilityApproved).toBeUndefined();
+    const inspected = await manager.inspect(file);
+    if ('rejection' in inspected) throw new Error(inspected.rejection.reason);
+    const consent = await obtainGhostInstallConsent({ mode: 'prompt', prompt: vi.fn(async () => true),
+      initiator: 'user', origin: 'local-file' }, old, inspected.manifest, inspected.packageSha256);
+    assertGhostInstallConsent(consent, old, inspected.manifest, inspected.packageSha256);
+    const updated = await manager.update(file, { expectedInstalledApproval: ghostInstallApprovalToken(old.approval),
+      backgroundSearchCapabilityApproved: confirmedBackgroundSearchCapability(consent, old, inspected.manifest) });
+    if ('rejection' in updated) throw new Error(updated.rejection.reason);
+    expect(updated.ghost.backgroundSearchCapabilityApproved).toBe(true);
+    const next = await writeTestCindyPackage(path.join(directory, 'next.cindy'), { ...raw, version: '1.1.0' });
+    const retained = await manager.update(next, { expectedInstalledApproval: ghostInstallApprovalToken(updated.ghost.approval) });
+    if ('rejection' in retained) throw new Error(retained.rejection.reason);
+    expect(new GhostManager(options).list()[0]).toMatchObject({
+      enabled: true, backgroundSearchCapabilityApproved: true, manifest: { version: '1.1.0' },
+    });
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true });
+  }
 });
 
 describe('local installation consent identity', () => {
@@ -55,7 +91,7 @@ describe('local installation consent identity', () => {
       rejectBrokerWithoutDeclaredRedirectPort: vi.fn(), rejectUnauthorizedTokenBroker: vi.fn(),
       throwIpcError: (code: string) => { throw new Error(code); },
       throwInstallError: () => { throw new Error('install rejected'); },
-      obtainGhostInstallConsent, assertGhostInstallConsent, confirmedUiCapability, confirmedTaskCapability, confirmedControlPoints,
+      obtainGhostInstallConsent, assertGhostInstallConsent, confirmedUiCapability, confirmedTaskCapability, confirmedControlPoints, confirmedBackgroundSearchCapability,
       createWindowGhostInstallConsentPrompt: () => prompt,
       findInstalledGhostForDeliveryTarget, installedGhostStoragePart,
       withGhostInstallLock: async (_id: string, operation: () => unknown) => operation(),
@@ -201,7 +237,7 @@ it.each([false, true])('commits a shared archive with its exact digest (missing 
       installLocalPluginSharePackage: (file: string, options: Record<string, unknown>) => Promise<InstalledGhost>;
     }>({ functions: ['installLocalPluginSharePackage', 'installAndDock', 'installAndDockLocked'] });
     const install = factory({ confirmedUiCapability, getGhostManager: () => manager, captureGhostMutationOwner: () => 'owner', beginGhostMutation: () => () => {},
-      findInstalledGhostForDeliveryTarget, obtainGhostInstallConsent, assertGhostInstallConsent, confirmedTaskCapability, confirmedControlPoints,
+      findInstalledGhostForDeliveryTarget, obtainGhostInstallConsent, assertGhostInstallConsent, confirmedTaskCapability, confirmedControlPoints, confirmedBackgroundSearchCapability,
       withGhostInstallLock: async (_id: string, run: () => unknown) => run(),
       rejectReservedGhostId() {}, rejectBrokerWithoutDeclaredRedirectPort() {}, rejectUnauthorizedTokenBroker() {},
       throwInstallError: (value: { reason: string }) => { throw new Error(value.reason); },
@@ -275,7 +311,7 @@ it('keeps remote share installation separate from later page capability approval
       mutateSnapshot: async ({ parentDir, ...request }) => runGhostSnapshotWorkerRequest(request, parentDir) });
     const callbacks = shareUiCallbacks({ confirmedUiCapability, getGhostManager: () => manager,
       captureGhostMutationOwner: () => 'owner', beginGhostMutation: () => () => {},
-      findInstalledGhostForDeliveryTarget, obtainGhostInstallConsent, assertGhostInstallConsent, confirmedTaskCapability, confirmedControlPoints,
+      findInstalledGhostForDeliveryTarget, obtainGhostInstallConsent, assertGhostInstallConsent, confirmedTaskCapability, confirmedControlPoints, confirmedBackgroundSearchCapability,
       withGhostInstallLock: async (_id: string, run: () => unknown) => run(),
       rejectReservedGhostId() {}, rejectBrokerWithoutDeclaredRedirectPort() {}, rejectUnauthorizedTokenBroker() {},
       throwInstallError: (value: { reason: string }) => { throw new Error(value.reason); },

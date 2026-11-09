@@ -367,8 +367,8 @@ export type GhostCindyTextAction = (typeof GHOST_CINDY_TEXT_ACTIONS)[number];
 export const GHOST_CINDY_EMBED_ACTIONS = ['text'] as const;
 export type GhostCindyEmbedAction = (typeof GHOST_CINDY_EMBED_ACTIONS)[number];
 
-/** cindy 槽·搜索类可申请的动作(web=Cindy 托管的公网搜索)。 */
-export const GHOST_CINDY_SEARCH_ACTIONS = ['web'] as const;
+/** cindy 槽·搜索类动作：web=Agent 工具搜索，background_web=独立批准的后台搜索。 */
+export const GHOST_CINDY_SEARCH_ACTIONS = ['web', 'background_web'] as const;
 export type GhostCindySearchAction = (typeof GHOST_CINDY_SEARCH_ACTIONS)[number];
 
 /**
@@ -388,7 +388,7 @@ export interface GhostCindyNeeds {
   text?: GhostCindyTextAction[];
   /** 向量类:text=文本转向量(只生成不存储,向量原样递回意识自己保管)。 */
   embed?: GhostCindyEmbedAction[];
-  /** 搜索类:web=Cindy 托管的公网搜索(主机固定路由,插件不经手网关凭证)。 */
+  /** 搜索类:web=Agent 工具搜索，background_web=后台搜索；主机固定路由，插件不经手凭证。 */
   search?: GhostCindySearchAction[];
   /**
    * 快问快答偏好模型(目录模型 id,如 "codex/gpt-5.5";须与 text 含 "oneshot"
