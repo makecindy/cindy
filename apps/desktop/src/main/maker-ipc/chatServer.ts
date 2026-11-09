@@ -1556,7 +1556,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
    * message can be quoted; the snapshot never comes from the controller's input. A thread
    * share's own text is only its card's fallback, so a share is not quotable either.
    */
-  async function quoteSnapshot(roomId: string, messageId: string, members: Promise<Member[]>, direct: boolean, hideOwnerNames: Promise<boolean>): Promise<BotGroupQuoteView & { recipientActorId?: string }> {
+  async function quoteSnapshot(roomId: string, messageId: string, snapshot: Promise<Snapshot>, direct: boolean): Promise<BotGroupQuoteView & { recipientActorId?: string }> {
     let quoted: Message;
     try {
       quoted = await api<Message>(`/conversations/${roomId}/messages/${messageId}`);
@@ -1564,8 +1564,8 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       if (error instanceof ChatResponseError && [403, 404].includes(error.status)) throw new Error('QUOTE_UNAVAILABLE');
       throw error;
     }
-    const resolvedMembers = await members;
-    const view = messageView(quoted, resolvedMembers, direct ? [] : resolvedMembers, await hideOwnerNames);
+    const { members, room } = await snapshot;
+    const view = messageView(quoted, members, direct ? [] : members, !direct && room.hide_companion_owner_names === true);
     if (quoted.id !== messageId || quoted.deleted || quoted.threadRootId !== null || quoted.origin === 'system'
       || view.kind !== 'message' || view.authorKind === 'system' || readBotGroupThreadShareCard(quoted)) throw new Error('QUOTE_UNAVAILABLE');
     return { ...botGroupQuoteFromMessage({ ...view, content: quotedText(quoted),
@@ -3612,11 +3612,10 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     if (!rooms.has(i.groupId)) await snapshotRead;
     const quoteKey = i.quote ? JSON.stringify([i.groupId, i.clientId, i.quote.messageId, i.text, i.mentions, i.division]) : '';
     const knownQuote = i.quote ? postedQuotes.get(quoteKey) : undefined;
-    const snapshotMembers = snapshotRead.then(value => value.members);
-    const quoteRead = i.quote && !knownQuote && !recovered ? quoteSnapshot(i.groupId, i.quote.messageId, snapshotMembers, direct, snapshotRead.then(value => !direct && value.room.hide_companion_owner_names === true)) : undefined;
+    const quoteRead = i.quote && !knownQuote && !recovered ? quoteSnapshot(i.groupId, i.quote.messageId, snapshotRead, direct) : undefined;
     const plansRead = recovered ? Promise.resolve(recovered.plans) : direct ? Promise.resolve([] as ServerPlan[]) : api<ServerPlan[]>(`/conversations/${i.groupId}/plans`);
     const membersRead = recovered ? Promise.resolve(recovered.members) : namesNobody(i.mentions) && !i.quote ? undefined : api<Member[]>(`/conversations/${i.groupId}/members`);
-    for (const read of [snapshotMembers, quoteRead, plansRead, membersRead]) read?.catch(() => undefined);
+    for (const read of [quoteRead, plansRead, membersRead]) read?.catch(() => undefined);
     const s = await snapshotRead;
     if (!recovered && i.mentions.allBots && (direct || !supportsMentionAudiences || !s.room.allow_mention_all_bots)) throw new Error('ALL_BOTS_MENTION_DISABLED');
     // Read before preparing attachments: an unavailable quote must not stage files.

@@ -1165,6 +1165,26 @@ describe('Chat Server result delivery and refresh', () => {
     }
     const posts = () => fixture.handle.mock.calls.filter(([route, method]) => route.endsWith('/messages') && method === 'POST');
 
+    // #9427 review, unit: a subscribed room may need a fresh snapshot when a
+    // quote is sent. Its failure must not leave an unhandled derived Promise.
+    it('handles a snapshot failure during a quoted send without an unhandled rejection', async () => {
+      fixture.handle.mockImplementation(quoteResponse(quoted()));
+      expect(await service.getGroup(roomId)).toMatchObject({ ok: true });
+      fixture.handle.mockImplementation((route, method) => route.endsWith('/snapshot')
+        ? { status: 503, body: { error: { code: 'UPSTREAM_FAILED' } } } : quoteResponse(quoted())(route, method));
+      const unhandled = vi.fn();
+      process.on('unhandledRejection', unhandled);
+      try {
+        expect(await service.sendMessage({ groupId: roomId, text: 'Agreed', clientId: 'quote-snapshot-failure',
+          mentions: { all: false, botIds: [] }, quote: { messageId: quotedId } })).toMatchObject({ ok: false });
+        await new Promise<void>(resolve => setImmediate(resolve));
+        expect(unhandled).not.toHaveBeenCalled();
+        expect(posts()).toHaveLength(0);
+      } finally {
+        process.off('unhandledRejection', unhandled);
+      }
+    });
+
     it('addresses the quoted companion without creating a Thread or requiring an explicit mention', async () => {
       fixture.handle.mockImplementation(quoteResponse(quoted()));
       expect(await service.sendMessage({ groupId: roomId, text: 'Agreed', clientId: 'quote-send-1', mentions: { all: false, botIds: [] },
