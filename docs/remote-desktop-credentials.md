@@ -196,9 +196,10 @@ post-press timeout/cancellation, and the invariant that each attempt presses at
 most once. Identity, window, secure-field, and same-parent button checks are not
 relaxed by these diagnostics.
 
-Mobile preserves the host's fixed `CREDENTIAL_*` failure code when an encrypted
-authentication result is rejected, instead of reporting every rejection as a wrong
-password. Automatic unlock failures are shown as a dismissible non-modal
+The native bridge reports a rejected authentication with a fixed `CREDENTIAL_*`
+failure by throwing that code; Mobile preserves the exception and maps it to the
+existing user-facing error. A rejected result without a native failure remains a
+password rejection. Automatic unlock failures are shown as a dismissible non-modal
 `ErrorNotice` on the remote picture; the Security page keeps the same notice without
 duplicating the banner while it is open.
 

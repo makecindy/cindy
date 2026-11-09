@@ -23,6 +23,7 @@ vi.mock("../../../modules/cindy-remote-credentials/src", () => ({
   remoteCredentials: fixture.native,
 }));
 import {
+  credentialErrorKey,
   isCredentialFailure,
   RemoteDesktopCredentialSession,
 } from "../credentialSession";
@@ -79,31 +80,50 @@ describe("native credential session coordination", () => {
       "exchange",
     ]);
   });
-  // 回归：Host 已把锁屏/权限等固定 failure 放进认证结果；旧 ensure 全部误报为密码错误。
-  // 生产入口 ensure；最小输入 accepted:false + failure；unit，不访问真实锁屏。
+  // 回归：原生 receive 以异常/固定 code 传递 Host failure；旧用例误造 JSON failure。
+  // 生产入口 ensure；最小输入 receive reject；unit，不访问真实锁屏或密码。
   it.each([
-    ["CREDENTIAL_UNLOCK_UNAVAILABLE", "CREDENTIAL_UNLOCK_UNAVAILABLE"],
-    ["CREDENTIAL_ACCESSIBILITY_REQUIRED", "CREDENTIAL_ACCESSIBILITY_REQUIRED"],
-    ["CREDENTIAL_CANCELLED", "CREDENTIAL_CANCELLED"],
-    [undefined, "CREDENTIAL_PASSWORD_REJECTED"],
-    ["private OS detail", "CREDENTIAL_PASSWORD_REJECTED"],
+    [new Error("CREDENTIAL_UNLOCK_UNAVAILABLE"), "credentialUnlockUnavailable"],
+    [
+      {
+        code: "CREDENTIAL_ACCESSIBILITY_REQUIRED",
+        message: "private OS detail",
+      },
+      "credentialAccessibilityRequired",
+    ],
+    [new Error("CREDENTIAL_CANCELLED"), "credentialCancelled"],
   ])(
-    "preserves fixed host failure %s instead of inventing a password error",
+    "preserves native failure %s and its user-facing key",
     async (failure, expected) => {
       fixture.native.receive
         .mockReset()
         .mockResolvedValueOnce(JSON.stringify({ kind: "ready", saved: true }))
-        .mockResolvedValueOnce(
-          JSON.stringify({ kind: "authenticated", accepted: false, failure }),
-        );
+        .mockRejectedValueOnce(failure);
       const session = new RemoteDesktopCredentialSession();
-      await expect(
-        session.ensure("computer", invoke, "en", "light"),
-      ).rejects.toThrow(expected);
-      expect(session.matches("local")).toBe(false);
+      const error = await session
+        .ensure("computer", invoke, "en", "light")
+        .catch((error: unknown) => error);
+      expect(error).toBe(failure);
+      expect(credentialErrorKey(error)).toBe(expected);
       expect(fixture.native.password).toHaveBeenCalledTimes(1);
+      session.close();
     },
   );
+  it("reports accepted:false without a native failure as password rejection", async () => {
+    fixture.native.receive
+      .mockReset()
+      .mockResolvedValueOnce(JSON.stringify({ kind: "ready", saved: true }))
+      .mockResolvedValueOnce(
+        JSON.stringify({ kind: "authenticated", accepted: false }),
+      );
+    const session = new RemoteDesktopCredentialSession();
+    await expect(
+      session.ensure("computer", invoke, "en", "light"),
+    ).rejects.toThrow("CREDENTIAL_PASSWORD_REJECTED");
+    expect(session.matches("local")).toBe(false);
+    expect(fixture.native.password).toHaveBeenCalledTimes(1);
+    session.close();
+  });
   it.each(["frame", "cancel", "close", "owner"])(
     "prepares the channel before the first-frame gate and handles %s",
     async (outcome) => {
