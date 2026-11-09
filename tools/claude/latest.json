@@ -6,25 +6,25 @@
     "url": "https://github.com/anthropics/claude-code/issues"
   },
   "dist": {
-    "shasum": "de62c221b1c50d0a946a0005123b37bf047ba3d4",
-    "tarball": "https://registry.npmjs.org/@anthropic-ai/claude-code/-/claude-code-2.1.312.tgz",
+    "shasum": "42d8d219efe8ffbd5410f6eee1cd50abc86aeac8",
+    "tarball": "https://registry.npmjs.org/@anthropic-ai/claude-code/-/claude-code-2.1.321.tgz",
     "fileCount": 7,
-    "integrity": "sha512-/gx8byG8VOm4YoNuT5tal/Ov5Z5oydJzZkmHCJcBFLbNGGpyYDbKA/CNdB+iIKwcLQC8pVwBoj6Dt7H3L2J5bw==",
+    "integrity": "sha512-g9IMBKV0t092/KXM1iHE3LrsPzDaOqeYO6nHtXkztwP42Rf/w+pg/G4h5QVU51p3Nnkf/RyR0xi3V/1GEqmRsA==",
     "signatures": [
       {
-        "sig": "MEUCIFqtXNWvGV9EW3mdAR6gJ24FgxwrruR8WhMsWF52oxsvAiEAm3C9G7GUIw9+4mUZIL2Ibbk5im6KTP6lHuNXnUKyn1o=",
+        "sig": "MEQCIH7xzoYaceqzSNvKy8RkKXPQsTbIy2zfNDOj9w1spOlzAiB+NvVajEwIrKRwUaou+W5BDINr5m9kMpL24px3gKzMig==",
         "keyid": "SHA256:DhQ8wR5APBvFHLF/+Tc+AYvPOdTpcIDqOhxsBHRwC7U"
       },
       {
-        "sig": "MEQCIFzWxMNObg/Tpxe0Kqb0LhaVmAVGXmqlMYa4eL233Ms2AiA6IUvBeTpriqJDUscYqqyFAS4N5oL//SZTGIAvKQMJ6A==",
+        "sig": "MEUCIQCghlSkGtKKH2KEHNxGu6WNSOm0HKdrF55mXOj+QzX7yQIgCm/qhGp3iHyQQtsfr40ZRoQ12N2xcUuJ0YvrXVJqwOc=",
         "keyid": "SHA256:DhQ8wR5APBvFHLF/+Tc+AYvPOdTpcIDqOhxsBHRwC7U"
       }
     ],
-    "unpackedSize": 190085
+    "unpackedSize": 202413
   },
   "name": "@anthropic-ai/claude-code",
   "type": "module",
-  "_from": "file:staged-npm/anthropic-ai-claude-code-2.1.312.tgz",
+  "_from": "file:staged-npm/anthropic-ai-claude-code-2.1.321.tgz",
   "author": {
     "name": "Anthropic",
     "email": "support@anthropic.com"
@@ -42,13 +42,13 @@
     "email": "npm-oidc-no-reply@github.com",
     "trustedPublisher": {
       "id": "github",
-      "oidcConfigId": "ed8551cb-3303-4af8-bcf8-5818707a0f2d"
+      "oidcConfigId": "df15d230-bb3e-43de-b950-7df4011b9a31"
     }
   },
   "homepage": "https://github.com/anthropics/claude-code",
-  "_resolved": "/home/runner/work/claude-cli-internal/claude-cli-internal/staged-npm/anthropic-ai-claude-code-2.1.312.tgz",
-  "_integrity": "sha512-/gx8byG8VOm4YoNuT5tal/Ov5Z5oydJzZkmHCJcBFLbNGGpyYDbKA/CNdB+iIKwcLQC8pVwBoj6Dt7H3L2J5bw==",
-  "_npmVersion": "11.19.0",
+  "_resolved": "/home/runner/work/apps/apps/staged-npm/anthropic-ai-claude-code-2.1.321.tgz",
+  "_integrity": "sha512-g9IMBKV0t092/KXM1iHE3LrsPzDaOqeYO6nHtXkztwP42Rf/w+pg/G4h5QVU51p3Nnkf/RyR0xi3V/1GEqmRsA==",
+  "_npmVersion": "11.19.1",
   "description": "Use Claude, Anthropic's AI assistant, right from your terminal. Claude can understand your codebase, edit files, run terminal commands, and handle entire workflows for you.",
   "directories": {},
   "maintainers": [
@@ -113,50 +113,51 @@
       "email": "joan@anthropic.com"
     }
   ],
-  "_nodeVersion": "24.21.0",
+  "_nodeVersion": "24.22.2",
   "dependencies": {},
   "_hasShrinkwrap": false,
+  "readmeFilename": "README.md",
   "optionalDependencies": {
-    "@anthropic-ai/claude-code-linux-x64": "2.1.312",
-    "@anthropic-ai/claude-code-win32-x64": "2.1.312",
-    "@anthropic-ai/claude-code-darwin-x64": "2.1.312",
-    "@anthropic-ai/claude-code-linux-arm64": "2.1.312",
-    "@anthropic-ai/claude-code-win32-arm64": "2.1.312",
-    "@anthropic-ai/claude-code-darwin-arm64": "2.1.312",
-    "@anthropic-ai/claude-code-linux-x64-musl": "2.1.312",
-    "@anthropic-ai/claude-code-linux-arm64-musl": "2.1.312"
+    "@anthropic-ai/claude-code-linux-x64": "2.1.321",
+    "@anthropic-ai/claude-code-win32-x64": "2.1.321",
+    "@anthropic-ai/claude-code-darwin-x64": "2.1.321",
+    "@anthropic-ai/claude-code-linux-arm64": "2.1.321",
+    "@anthropic-ai/claude-code-win32-arm64": "2.1.321",
+    "@anthropic-ai/claude-code-darwin-arm64": "2.1.321",
+    "@anthropic-ai/claude-code-linux-x64-musl": "2.1.321",
+    "@anthropic-ai/claude-code-linux-arm64-musl": "2.1.321"
   },
   "_npmOperationalInternal": {
-    "tmp": "tmp/claude-code_2.1.312_1793126170045_0.6020059861887522",
+    "tmp": "tmp/claude-code_2.1.321_1794250967537_0.028791774104404366",
     "host": "s3://npm-registry-packages-npm-production"
   },
-  "_id": "@anthropic-ai/claude-code@2.1.312",
-  "version": "2.1.312",
+  "_id": "@anthropic-ai/claude-code@2.1.321",
+  "version": "2.1.321",
   "runtimeAssets": {
     "darwin-arm64": {
-      "url": "https://downloads.claude.ai/claude-code-releases/2.1.312/darwin-arm64/claude",
-      "sha256": "6b5ec691195e551b02c41df9f7d723f4ea61eaa03c2df90acefe3736f1aeb620",
-      "size": 275988512
+      "url": "https://downloads.claude.ai/claude-code-releases/2.1.321/darwin-arm64/claude",
+      "sha256": "abc9feeeca8091d51b623291e044cf0528c2f6b74e0c1d6ef671d52c73f7cd3c",
+      "size": 323686048
     },
     "darwin-x64": {
-      "url": "https://downloads.claude.ai/claude-code-releases/2.1.312/darwin-x64/claude",
-      "sha256": "9534770e162cfd6e39301d9ab775affce214df032a68484085bdbab966a7f8cf",
-      "size": 287239296
+      "url": "https://downloads.claude.ai/claude-code-releases/2.1.321/darwin-x64/claude",
+      "sha256": "f4e04d8726ee1343999679ad745eca2f6d263c2941f132b1fdca4283ee6d5f02",
+      "size": 338384032
     },
     "linux-x64": {
-      "url": "https://downloads.claude.ai/claude-code-releases/2.1.312/linux-x64/claude",
-      "sha256": "4f4178ce41d83e23341ebfbaecdbcf8ea6bf7baea0690025abe49eeec3a5d01d",
-      "size": 293592432
+      "url": "https://downloads.claude.ai/claude-code-releases/2.1.321/linux-x64/claude",
+      "sha256": "426c33815ca6645a772f722fbff10dbf2cbdb124a8aeab733c1365dbf8bbf61f",
+      "size": 341910032
     },
     "linux-arm64": {
-      "url": "https://downloads.claude.ai/claude-code-releases/2.1.312/linux-arm64/claude",
-      "sha256": "dc4af28917455e009d26704b82a438353a06149e825b6cdf782908b2d28661f5",
-      "size": 293462200
+      "url": "https://downloads.claude.ai/claude-code-releases/2.1.321/linux-arm64/claude",
+      "sha256": "6bea0633074627ba79328e00115ed0588c3acf906a8463612b25db696dbfd3f0",
+      "size": 341501368
     },
     "win32-x64": {
-      "url": "https://downloads.claude.ai/claude-code-releases/2.1.312/win32-x64/claude.exe",
-      "sha256": "6099672ebe5dcb518b67d1d32dde1e3360bc6bee1dae7f8d28a69c49acc7c865",
-      "size": 298690208
+      "url": "https://downloads.claude.ai/claude-code-releases/2.1.321/win32-x64/claude.exe",
+      "sha256": "e6dae5fc45902b15751f2591a02f51760351c4788c5fd8291b3f1443d40c13a4",
+      "size": 346487456
     }
   }
 }
