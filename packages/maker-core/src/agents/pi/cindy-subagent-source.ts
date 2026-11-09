@@ -598,7 +598,7 @@ function parseExecutionPolicy(raw) {
   };
 }
 
-/** canonical 编码:HMAC 的被签内容 —— 与 Host 的 canonicalExecutionPolicy 逐字一致。 */
+/** canonical 编码(被签内容) —— 与 Host 的 canonicalExecutionPolicy 逐字一致。 */
 function policyCanonical(snapshot) {
   return JSON.stringify({
     version: snapshot.version,

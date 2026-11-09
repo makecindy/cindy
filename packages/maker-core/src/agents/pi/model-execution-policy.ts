@@ -180,7 +180,7 @@ export function parseModelExecutionPolicy(raw: unknown): ModelExecutionPolicySna
 }
 
 /**
- * 快照 canonical 编码:HMAC 的被签内容。字段顺序固定,数组顺序保留,
+ * 快照 canonical 编码(被签内容,对 Ed25519 签名)。字段顺序固定,数组顺序保留,
  * 可选字段缺失时省略 —— Host 签名与扩展/runner 校验必须逐字一致。
  */
 export function canonicalExecutionPolicy(snapshot: ModelExecutionPolicySnapshot): string {
