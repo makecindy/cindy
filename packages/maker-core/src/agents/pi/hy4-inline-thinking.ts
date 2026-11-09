@@ -7,6 +7,29 @@ export function isHy4Model(model: unknown): boolean {
   return typeof model === 'string' && /^(?:tencent\/)?hy4(?:-preview)?$/i.test(model);
 }
 
+/** Pi's provider already separated reasoning before text; keep its native channels. */
+export function hasNativePiReasoning(content: unknown): boolean {
+  if (!Array.isArray(content)) return false;
+  for (const block of content) {
+    if (!block || typeof block !== 'object') continue;
+    if (block.type === 'text') return false;
+    // Pi records the provider reasoning field (or opaque replay signature) here.
+    // Unsigned legacy thinking alone does not prove content was separated.
+    if (block.type === 'thinking' && typeof block.thinkingSignature === 'string' && block.thinkingSignature.length > 0) return true;
+  }
+  return false;
+}
+
+const HY4_CLOSER = /<\/think(?::([a-f0-9]{8}))?>/gi;
+const CLOSER_LOOKBEHIND = '</think:00000000>'.length - 1;
+
+/** Keep only a split-marker suffix, like the existing bridge's streaming control buffer. */
+export function advanceHy4CandidateTail(tail: string, delta: string): { tail: string; complete: boolean } {
+  const next = tail + delta;
+  const complete = [...next.matchAll(HY4_CLOSER)].some(match => match.index + match[0].length > tail.length);
+  return { tail: next.slice(-CLOSER_LOOKBEHIND), complete };
+}
+
 export interface Hy4InlineThinking {
   thinking: string;
   text: string;
@@ -33,8 +56,13 @@ interface TextRange { start: number; end: number }
 
 /** Both opener dialects use the renderer's CommonMark/GFM code boundaries. */
 function findThinkingBoundary(text: string, expectedClose: string | null, final: boolean): { index: number; length: number } | null {
-  const candidates = [...text.matchAll(/<\/think(?::([a-f0-9]{8}))?>/gi)]
-    .filter(match => expectedClose ? match[0].toLowerCase() === expectedClose : Boolean(match[1]));
+  const candidates = [...text.matchAll(HY4_CLOSER)]
+    .filter(match => {
+      if (expectedClose ? match[0].toLowerCase() !== expectedClose : !match[1]) return false;
+      let start = match.index;
+      while (start > 0 && text[start - 1] === '\\') start--;
+      return (match.index - start) % 2 === 0;
+    });
   if (candidates.length === 0) return null;
   // Parse only after a complete potential boundary arrives, not on ordinary
   // deltas. These are the same CommonMark/GFM extensions used by remark-gfm.
@@ -87,7 +115,7 @@ export function hy4ContentBlocks(model: unknown, content: unknown): Array<Record
   if (!Array.isArray(content)) return [];
   const blocks = content.filter((block): block is Record<string, unknown> =>
     typeof block === 'object' && block !== null);
-  if (!isHy4Model(model)) return blocks;
+  if (!isHy4Model(model) || hasNativePiReasoning(blocks)) return blocks;
   return blocks.flatMap(block => {
     if (block.type !== 'text' || typeof block.text !== 'string') return [block];
     const split = splitHy4InlineThinking(block.text, true);

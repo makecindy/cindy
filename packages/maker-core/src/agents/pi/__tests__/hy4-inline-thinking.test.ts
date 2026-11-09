@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { createPiTranslateContext, disposePiTranslateContext, translatePiEvent } from '../translator.js';
 import { activePiHistoryFromTree } from '../session-tree.js';
 import type { AgentEvent } from '../../../types/events.js';
@@ -10,6 +10,13 @@ const logger = { trace() {}, debug() {}, info() {}, warn() {}, error() {}, fatal
 const marker = '</think:6124c78e>';
 const thought = 'Check the window drag region first.';
 const answer = '再开一个任务。';
+
+const markdownParse = vi.hoisted(() => vi.fn());
+vi.mock('mdast-util-from-markdown', async importOriginal => {
+  const original = await importOriginal<typeof import('mdast-util-from-markdown')>();
+  markdownParse.mockImplementation(original.fromMarkdown);
+  return { ...original, fromMarkdown: markdownParse };
+});
 
 function harness(model = 'tencent/hy4') {
   const ctx = createPiTranslateContext(logger);
@@ -29,6 +36,54 @@ function harness(model = 'tencent/hy4') {
 }
 
 describe('HY4 inline reasoning through Pi production adapters', () => {
+  it.each(['reasoning_content', 'reasoning', 'reasoning_text'])('reuses native Pi reasoning and streams ordinary text immediately (%s)', thinkingSignature => {
+    const h = harness();
+    const content = [{ type: 'thinking', thinking: thought, thinkingSignature }, { type: 'text', text: '' }];
+    h.start();
+    h.send({ type: 'message_update', assistantMessageEvent: { type: 'thinking_start', contentIndex: 0, partial: { model: 'tencent/hy4', content } } });
+    h.send({ type: 'message_update', assistantMessageEvent: { type: 'thinking_end', contentIndex: 0, content: thought, partial: { model: 'tencent/hy4', content } } });
+    for (const delta of ['普通回答。', '继续回答。']) {
+      h.send({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', contentIndex: 1, delta, partial: { model: 'tencent/hy4', content } } });
+      expect(h.texts().filter(e => !e.isFinal).at(-1)?.text).toBe(delta);
+    }
+    content[1].text = '普通回答。继续回答。';
+    h.send({ type: 'message_end', message: { role: 'assistant', model: 'tencent/hy4', stopReason: 'stop', content } });
+    expect(h.texts().at(-1)?.text).toBe(content[1].text);
+    expect(h.thoughts().filter(e => e.stage === 'final').map(e => e.text)).toEqual([thought]);
+    const rows = activePiHistoryFromTree({ leafId: 'native', tree: [{ entry: { type: 'message', id: 'native', message: { role: 'assistant', model: 'tencent/hy4', content } }, children: [] }] });
+    expect(rows.map(r => r.role)).toEqual(['thinking', 'assistant']);
+    expect(rows[1].content).toBe(content[1].text);
+    disposePiTranslateContext(h.ctx);
+  });
+
+  it.each(['示例：\\</think:6124c78e>，请原样保留。', '示例：\\\\\\</think:6124c78e>'])('preserves CommonMark-escaped literal closers: %s', text => {
+    const h = harness();
+    h.start(); for (const char of text) h.delta(char); h.end(text);
+    expect(h.texts().at(-1)?.text).toBe(text);
+    expect(h.thoughts()).toEqual([]);
+    const rows = activePiHistoryFromTree({ leafId: 'escaped', tree: [{ entry: { type: 'message', id: 'escaped', message: { role: 'assistant', model: 'tencent/hy4', content: [{ type: 'text', text }] } }, children: [] }] });
+    expect(rows.map(r => r.role)).toEqual(['assistant']);
+    expect(rows[0].content).toBe(text);
+    disposePiTranslateContext(h.ctx);
+  });
+
+  it('does not repeatedly parse an unchanged rejected candidate while a long code answer streams', () => {
+    const h = harness();
+    const prefix = '```xml\n' + marker + '\n';
+    markdownParse.mockClear();
+    h.start(); h.delta(prefix);
+    for (let i = 0; i < 1024; i++) h.delta('x'.repeat(64));
+    h.delta('\n```');
+    const text = prefix + 'x'.repeat(65536) + '\n```';
+    h.end(text);
+    expect(h.texts().at(-1)?.text).toBe(text);
+    expect(h.thoughts()).toEqual([]);
+    // The real parser is retained. Bound costly whole-document work per new
+    // delimiter/final event, independently of the number of ordinary deltas.
+    expect(markdownParse.mock.calls.length).toBeLessThanOrEqual(3);
+    disposePiTranslateContext(h.ctx);
+  });
+
   it.each(Array.from({ length: marker.length + 1 }, (_, i) => i))('holds split salted terminators at offset %i before publishing any text', offset => {
     const h = harness();
     h.start();

@@ -56,7 +56,7 @@ import {
 import { isNetworkishErrorMessage, PI_GATEWAY_DROP_REASON } from '../shared/network-error.js';
 import { isContextModeDoctorToolName } from './context-mode-doctor-path.js';
 import type { PiRpcEvent } from './rpc-client.js';
-import { hy4ContentBlocks, isHy4Model, splitHy4InlineThinking } from './hy4-inline-thinking.js';
+import { advanceHy4CandidateTail, hasNativePiReasoning, hy4ContentBlocks, isHy4Model, splitHy4InlineThinking } from './hy4-inline-thinking.js';
 import {
   parsePiSubagentProgress,
   type PiSubagentUsage,
@@ -197,7 +197,8 @@ export interface PiTranslateContext {
   streamStopTokenByIndex: Map<number, StandaloneStopTokenHold>;
   /** HY4 may omit its opener: hold text until a confirmed boundary or message end. */
   inlineThinkingModel: string | undefined;
-  inlineThinkingByIndex: Map<number, { pending: string; released: boolean; thinkingEmitted: boolean }>;
+  inlineThinkingNative: boolean;
+  inlineThinkingByIndex: Map<number, { pending: string; candidateTail: string; released: boolean; thinkingEmitted: boolean }>;
   /**
    * 本 turn 最后一条 assistant 回复全文（正常 stop 即使无文字也覆盖；agent_start 重置）。
    * 用于 agent_settled 的 done.data.result —— 与 CC/Codex 对齐:register.ts 的
@@ -296,6 +297,7 @@ export function createPiTranslateContext(logger: Logger): PiTranslateContext {
     thinkingBlocks: new Map(),
     streamStopTokenByIndex: new Map(),
     inlineThinkingModel: undefined,
+    inlineThinkingNative: false,
     inlineThinkingByIndex: new Map(),
     finalAssistantText: '',
     finalAssistantStopReason: null,
@@ -865,6 +867,7 @@ export function translatePiEvent(
       ctx.toolNamesByCallId.clear();
       ctx.streamStopTokenByIndex.clear();
       ctx.inlineThinkingModel = undefined;
+      ctx.inlineThinkingNative = false;
       ctx.inlineThinkingByIndex.clear();
       pushStatus(queue, ctx, 'Working…', true);
       return;
@@ -881,8 +884,9 @@ export function translatePiEvent(
       ctx.thinkingBlocks.clear();
       ctx.streamStopTokenByIndex.clear();
       ctx.inlineThinkingByIndex.clear();
-      const message = event.message as { usage?: PiUsage; timestamp?: number; model?: string } | undefined;
+      const message = event.message as { usage?: PiUsage; timestamp?: number; model?: string; content?: unknown } | undefined;
       ctx.inlineThinkingModel = message?.model;
+      ctx.inlineThinkingNative = hasNativePiReasoning(message?.content);
       const bridgedPriceVariant = priceVariantFromServiceTier(message?.usage?.service_tier);
       ctx.pendingPriceVariants.push(bridgedPriceVariant ?? ctx.getPriceVariant?.() ?? 'standard');
       startPiGenerationHeartbeat(ctx);
@@ -945,7 +949,7 @@ export function translatePiEvent(
         outputTokens: message.usage?.output, reasoningTokens: message.usage?.reasoning,
       });
       // Final-only events and retries use the same split as the live stream.
-      if (isHy4Model(message.model)) {
+      if (isHy4Model(message.model) && !hasNativePiReasoning(message.content)) {
         for (const [index, block] of (message.content ?? []).entries()) {
           if (block.type !== 'text' || typeof block.text !== 'string') continue;
           const split = splitHy4InlineThinking(block.text, true);
@@ -995,6 +999,7 @@ export function translatePiEvent(
       }
       ctx.inlineThinkingByIndex.clear();
       ctx.inlineThinkingModel = undefined;
+      ctx.inlineThinkingNative = false;
       ctx.tokenSpeed.pause();
       // Only the parent's own reported output calibrates the meter; delegated
       // subagent tokens belong to the tool window, not to parent generation.
@@ -1481,18 +1486,22 @@ function handleAssistantDelta(
   ctx: PiTranslateContext,
 ): void {
   const contentIndex = typeof delta.contentIndex === 'number' ? delta.contentIndex : 0;
+  const partial = delta.partial as { model?: string; content?: unknown } | undefined;
+  if (hasNativePiReasoning(partial?.content)) ctx.inlineThinkingNative = true;
 
   switch (delta.type) {
     case 'text_delta': {
       if (typeof delta.delta === 'string' && delta.delta.length > 0) {
         let text = delta.delta;
-        const partial = delta.partial as { model?: string } | undefined;
-        if (isHy4Model(partial?.model ?? ctx.inlineThinkingModel)) {
+        if (isHy4Model(partial?.model ?? ctx.inlineThinkingModel) && !ctx.inlineThinkingNative) {
           const state = ctx.inlineThinkingByIndex.get(contentIndex)
-            ?? { pending: '', released: false, thinkingEmitted: false };
+            ?? { pending: '', candidateTail: '', released: false, thinkingEmitted: false };
           ctx.inlineThinkingByIndex.set(contentIndex, state);
           if (!state.released) {
             state.pending += text;
+            const candidate = advanceHy4CandidateTail(state.candidateTail, text);
+            state.candidateTail = candidate.tail;
+            if (!candidate.complete) return;
             const split = splitHy4InlineThinking(state.pending);
             if (!split) return;
             emitHy4Thinking(contentIndex, split.thinking, queue, ctx);
