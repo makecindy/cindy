@@ -5098,7 +5098,8 @@ function applyInputProjection(
         : projection.errorPersistId !== undefined
           ? (typeof projection.errorPersistId === 'string' && projection.errorPersistId.length > 0
             ? projection.errorPersistId : null)
-          : projection.error === s.error ? s.errorPersistId : null,
+          : s.error && liveErrorTextMatchesRow(s.error, projection.error, projectionErrorReason ?? undefined)
+            ? s.errorPersistId : null,
       credentialSwitchWait: projection.credentialSwitchWait ?? null,
       usageLimitWait:
         projection.error && projection.usageLimitWait
