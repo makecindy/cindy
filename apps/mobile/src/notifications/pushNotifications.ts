@@ -24,6 +24,31 @@ import { buildPushTokenRegistrationBody, parseNotificationResponseDeepLink } fro
 const PUSH_ENABLED_KEY = 'cindy.push.enabled';
 /** 成功或可能成功注册过 token 的区域集合，避免把注销请求发到错误区域。 */
 const PUSH_REGISTERED_KEY = 'cindy.push.registered';
+// Last registration attempt, not a delivery receipt. One bounded phone-local
+// snapshot lets support distinguish registration from the compensation marker.
+const PUSH_LAST_REGISTRATION_KEY = 'cindy.push.lastRegistration';
+
+interface PushRegistrationStatus {
+  version: 1;
+  at: number;
+  realm: ClientEndpointRegion;
+  stage: string;
+  appVariant?: string;
+  apnsEnv?: string;
+  endpoints?: Array<{ service: 'device-link' | 'chat'; outcome: 'accepted' | 'unsupported' | 'failed'; status?: number }>;
+}
+
+function httpErrorStatus(error: unknown): number | undefined {
+  const status = (error as { status?: unknown } | null)?.status;
+  return typeof status === 'number' && Number.isInteger(status) && status >= 100 && status <= 599 ? status : undefined;
+}
+
+async function saveRegistrationStatus(status: PushRegistrationStatus, scope: PushStateScope): Promise<void> {
+  // No token, account identity, endpoint URL, payload, or raw error is persisted.
+  // This is registration state, independent of optional debug log recording.
+  const key = pushStateStorageKeys(PUSH_LAST_REGISTRATION_KEY, scope.environment).primary;
+  await AsyncStorage.setItem(key, JSON.stringify(status)).catch(() => undefined);
+}
 /**
  * 注销失败的区域集合。只允许在以后重新持有同一区域登录态时补偿，
  * 不会用 CN token 请求 Global，也不会用 Global token 请求 CN。
@@ -207,15 +232,27 @@ function pushTargets(realm: ClientEndpointRegion, method: 'PUT' | 'DELETE' = 'DE
   } catch { /* Older endpoint snapshots do not advertise chat. */ }
   return targets;
 }
-async function mutatePushTokens(apiFetch: AuthedApiFetch, realm: ClientEndpointRegion, method: 'PUT' | 'DELETE', body?: unknown) {
-  const results = await Promise.allSettled(pushTargets(realm, method).map(async target => {
-    try { await apiFetch(target.path, { baseUrl: target.baseUrl, method, headers: { 'Accept-Language': i18n.language || 'en' }, ...(body ? { body } : {}) }); }
+async function mutatePushTokens(apiFetch: AuthedApiFetch, realm: ClientEndpointRegion, method: 'PUT' | 'DELETE', body?: unknown, registration?: PushRegistrationStatus) {
+  const targets = pushTargets(realm, method);
+  const outcomes: NonNullable<PushRegistrationStatus['endpoints']> = [];
+  const results = await Promise.allSettled(targets.map(async target => {
+    const service = target.optional ? 'chat' as const : 'device-link' as const;
+    try {
+      await apiFetch(target.path, { baseUrl: target.baseUrl, method, headers: { 'Accept-Language': i18n.language || 'en' }, ...(body ? { body } : {}) });
+      outcomes.push({ service, outcome: 'accepted' });
+    }
     catch (error) {
       // An older chat server can roll forward independently of existing task pushes.
-      if (target.optional && [404, 405].includes((error as { status?: number }).status ?? 0)) return;
+      const status = httpErrorStatus(error);
+      if (target.optional && [404, 405].includes(status ?? 0)) {
+        outcomes.push({ service, outcome: 'unsupported', ...(status ? { status } : {}) });
+        return;
+      }
+      outcomes.push({ service, outcome: 'failed', ...(status ? { status } : {}) });
       throw error;
     }
   }));
+  if (registration) registration.endpoints = outcomes;
   for (const result of results) if (result.status === 'rejected') throw result.reason;
 }
 
@@ -325,11 +362,12 @@ async function syncPushRegistrationInternal(
     apiFetch: AuthedApiFetch;
   },
   lifecycleGeneration: number,
+  registration: PushRegistrationStatus,
+  stateScope: PushStateScope,
 ): Promise<PushSyncResult> {
   if (!isPushSupported()) return 'unsupported';
   if (lifecycleGeneration !== pushLifecycleGeneration) return 'skipped';
-  const realm = getActiveMobileSessionRealm();
-  const stateScope = capturePushStateScope(realm);
+  const realm = stateScope.legacyRealm;
 
   if (!opts.enabled) {
     const registeredRealms = await readPushRealms(
@@ -353,6 +391,7 @@ async function syncPushRegistrationInternal(
     return 'unregistered';
   }
 
+  registration.stage = 'permission';
   let permission = await Notifications.getPermissionsAsync();
   if (lifecycleGeneration !== pushLifecycleGeneration) return 'skipped';
   if (permission.status !== 'granted' && permission.canAskAgain) {
@@ -365,6 +404,7 @@ async function syncPushRegistrationInternal(
   }
 
   let deviceToken;
+  registration.stage = 'device-token';
   try { deviceToken = await Notifications.getDevicePushTokenAsync(); }
   catch (error) {
     if (lifecycleGeneration !== pushLifecycleGeneration) return 'skipped';
@@ -372,6 +412,7 @@ async function syncPushRegistrationInternal(
     throw error;
   }
   if (lifecycleGeneration !== pushLifecycleGeneration) return 'skipped';
+  registration.stage = 'signing-environment';
   const apnsEnvironment = Platform.OS === 'ios' ? await readIosPushEnvironment() : undefined;
   if (lifecycleGeneration !== pushLifecycleGeneration) return 'skipped';
   const body = buildPushTokenRegistrationBody({
@@ -381,6 +422,8 @@ async function syncPushRegistrationInternal(
     platform: Platform.OS === 'android' ? 'android' : 'ios',
   });
   if (!body) return 'skipped';
+  Object.assign(registration, { stage: 'registering', appVariant: body.appVariant, apnsEnv: body.apnsEnv });
+  await saveRegistrationStatus(registration, stateScope);
   mobileDebugLog('info', 'network', 'push registration', { stage: 'registering', realm,
     appVariant: body.appVariant, apnsEnv: body.apnsEnv });
 
@@ -392,7 +435,7 @@ async function syncPushRegistrationInternal(
     return 'skipped';
   }
   try {
-    await mutatePushTokens(opts.apiFetch, realm, 'PUT', { ...body, preview: await readPushPreviewEnabled() });
+    await mutatePushTokens(opts.apiFetch, realm, 'PUT', { ...body, preview: await readPushPreviewEnabled() }, registration);
   } catch (error) {
     if (lifecycleGeneration !== pushLifecycleGeneration) {
       await addPushRealm(PUSH_PENDING_UNREGISTER_KEY, realm, stateScope).catch(
@@ -426,15 +469,25 @@ export function syncPushRegistration(opts: {
   apiFetch: AuthedApiFetch;
 }): Promise<PushSyncResult> {
   const lifecycleGeneration = pushLifecycleGeneration;
-  return runPushMutation(() =>
-    syncPushRegistrationInternal(opts, lifecycleGeneration).catch((error: unknown) => {
-      const status = (error as { status?: unknown } | null)?.status;
+  return runPushMutation(async () => {
+    const scope = capturePushStateScope(getActiveMobileSessionRealm());
+    const registration: PushRegistrationStatus = { version: 1, at: Date.now(), realm: scope.legacyRealm, stage: 'starting' };
+    if (opts.enabled) await saveRegistrationStatus(registration, scope);
+    try {
+      const result = await syncPushRegistrationInternal(opts, lifecycleGeneration, registration, scope);
+      registration.stage = result;
+      return result;
+    } catch (error: unknown) {
+      const status = httpErrorStatus(error);
+      registration.stage = `failed:${registration.stage}`;
       // Only structured, non-secret diagnostics. Never log a token, request body or raw error.
       mobileDebugLog('warn', 'network', 'push registration', { stage: 'failed',
         ...(typeof status === 'number' ? { status } : {}) });
       throw error;
-    }),
-  );
+    } finally {
+      if (opts.enabled) await saveRegistrationStatus({ ...registration, at: Date.now() }, scope);
+    }
+  });
 }
 
 /**

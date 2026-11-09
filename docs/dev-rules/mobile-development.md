@@ -519,6 +519,23 @@ A、B、L1、R1 会占用其原有操作，设置页有明确提示。
 偏好与跨页按住交接回归：`src/__tests__/handheldMode.test.ts`。Android 窗口按键拦截和换屏
 必须随新原生包交付，仍受下文冷更审核门约束。
 
+## 手机推送排障：注册不等于投递
+
+`cindy.push.enabled` 只记录偏好；`cindy.push.registered` 是请求前写入的注销补偿标记，
+不能证明服务器注册成功。Desktop 的 `sendNotify()` 返回 true 也只说明已向 relay 发送，
+不是 APNs 接受或手机展示的回执。不要据此宣布推送恢复。
+
+手机在 AsyncStorage `cindy.push.lastRegistration` 保留最近一次启用注册尝试的单条状态，
+CindyDev 按 `.dev` / `.release` 分开。状态记录时间、账号区域（不含身份）、签名对应的
+APNs 环境、失败阶段和 device-link/chat 分别接受、失败或不支持的结果及 HTTP 状态码。
+它不依赖调试日志开关，不含 token、账号 ID、地址、正文或原始错误；写入失败不影响注册。
+这是有时间戳的历史尝试，关闭推送或切换账号后不能当作当前订阅状态；`registered` 只证明
+注册 API 请求完成，不能替代实际通知验收。回归见 `pushNotificationsRealm.test.ts`。
+
+若注册成功仍无通知，继续核对签名 team/topic 与服务端配置、服务端 token 选择及 APNs
+响应，最后核对手机的系统通知展示条件。本地服务器源码不能证明线上部署；缺少投递日志时
+保留“尚未确定”的结论，不让用户反复切开关，也不通过不断广播测试通知替代定位。
+
 ## 原生配置与 runtime fingerprint(冷更边界)
 
 ### 伙伴通信通知

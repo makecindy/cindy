@@ -90,6 +90,34 @@ function readStoredRealms(key: string): string[] {
 }
 
 describe('push notification realm routing', () => {
+  it('retains per-service registration failure without leaking tokens or errors', async () => {
+    const apiFetch = vi.fn(async (path: string) => {
+      if (path === '/v1/push-token') throw Object.assign(new Error('secret-token-in-error'), { status: 503 });
+      return { registered: true };
+    });
+    await expect(syncPushRegistration({ enabled: true, apiFetch: apiFetch as any })).rejects.toThrow();
+    const raw = store.get('cindy.push.lastRegistration')!;
+    const result = JSON.parse(raw);
+    expect(result).toMatchObject({ realm: 'cn', appVariant: 'cn', apnsEnv: 'sandbox', stage: 'failed:registering' });
+    expect(result.endpoints).toEqual(expect.arrayContaining([
+      { service: 'device-link', outcome: 'accepted' },
+      { service: 'chat', outcome: 'failed', status: 503 },
+    ]));
+    expect(raw).not.toContain('secret-token-in-error');
+    expect(raw).not.toContain('apns-device-token');
+    expect(raw).not.toContain('https://');
+  });
+
+  it('records native failure before HTTP and replaces it after a successful retry', async () => {
+    mocks.getDevicePushTokenAsync.mockRejectedValueOnce(new Error('private native details'));
+    const apiFetch = vi.fn().mockResolvedValue({ registered: true });
+    await expect(syncPushRegistration({ enabled: true, apiFetch })).rejects.toThrow();
+    expect(apiFetch).not.toHaveBeenCalled();
+    expect(JSON.parse(store.get('cindy.push.lastRegistration')!)).toMatchObject({ stage: 'failed:device-token' });
+    await syncPushRegistration({ enabled: true, apiFetch });
+    expect(JSON.parse(store.get('cindy.push.lastRegistration')!)).toMatchObject({ stage: 'registered' });
+  });
+
   it('compensates both endpoints when first enable partially fails, retaining retry state if DELETE fails', async () => {
     let failDelete = true;
     const apiFetch = vi.fn(async (path: string, opts: { method?: string }) => {
