@@ -84,7 +84,10 @@ export function registerGithubSetupIpc(invalidateStatuses: () => void): void {
     owner: () => getActiveAppSession().dataOwnerId ? activeOwnerScopeKey() : null,
     readToken: async () => {
       const owner = activeOwnerScopeKey();
-      const token = await getSharedGhCliTokenSource().readToken();
+      // `gh auth switch` happens outside Cindy: never act as a previously cached account.
+      const source = getSharedGhCliTokenSource();
+      source.invalidate();
+      const token = await source.readToken();
       if (owner !== activeOwnerScopeKey()) return null;
       return token ?? readGhostSecret(cindyGithubRootInstance(), 'github_pat')
         ?? readGhostSecret('cindy-github', 'github_pat');

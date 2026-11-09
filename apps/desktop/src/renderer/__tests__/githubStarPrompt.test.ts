@@ -64,6 +64,14 @@ describe('GitHub Star prompt', () => {
     h.record('task', 'latest'); h.complete('task', id);
     await vi.advanceTimersByTimeAsync(60_000); expect(h.show).not.toHaveBeenCalled();
   });
+  it('keeps a queued turn eligible when the earlier turn completes first', async () => {
+    const h = setup(); h.record('task', 'first'); vi.setSystemTime(Date.now() + TWO_DAYS);
+    h.record('task', 'a'); h.record('task', 'b');
+    h.complete('task', null); h.complete('task', 'a');
+    await vi.advanceTimersByTimeAsync(60_000); expect(h.show).not.toHaveBeenCalled();
+    h.complete('task', 'b');
+    await vi.advanceTimersByTimeAsync(60_000); expect(h.show).toHaveBeenCalledOnce();
+  });
   it('remembers actual presentation even when the app exits without dismissing', async () => {
     const h = setup(); eligible(h); await vi.advanceTimersByTimeAsync(60_000); h.dispose();
     const next = setup(); next.record('task', 'next'); next.complete('task', 'next');
@@ -174,6 +182,12 @@ describe('production notification admission', () => {
     document.body.append(dialog); await vi.advanceTimersByTimeAsync(0);
     dialog.remove(); await vi.advanceTimersByTimeAsync(60_000);
     expect(getToastSnapshot().some(t => t.icon === 'star')).toBe(false);
+  });
+  it('keeps working after a same-owner repair advances the generation', async () => {
+    install();
+    setDataOwnerGeneration('user', 99);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(getToastSnapshot().some(t => t.icon === 'star')).toBe(true);
   });
   it.each([true, false])('stars only on click and retains opt-out on success/browser fallback (%s)', async starred => {
     const { starCindy, openExternal } = install(starred);

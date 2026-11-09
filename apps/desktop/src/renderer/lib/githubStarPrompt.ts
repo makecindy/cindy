@@ -1,5 +1,5 @@
 import i18n from '@/i18n';
-import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
+import { getDataOwnerGeneration, isDataOwnerGenerationCurrent, isDataOwnerIdCurrent } from '@/contexts/dataOwnerGeneration';
 import { getToastSnapshot, subscribeToastStore, toast, type ToastActionPoint } from './toast';
 import { getFileTransferToasts, subscribeFileTransferToasts } from './fileTransferToasts';
 
@@ -117,9 +117,12 @@ export function createGithubStarPrompt(deps: PromptEnvironment & {
       } catch { /* No persistence, no invitation. */ }
     },
     complete(sessionId: string, successfulClientId: string | null) {
+      // A completion that is not the recorded input (an earlier turn, or null while newer work is
+      // queued) must not consume the newer turn's receipt.
       const expected = accepted.get(sessionId);
+      if (!expected || expected !== successfulClientId) return;
       accepted.delete(sessionId);
-      if (!expected || expected !== successfulClientId || attempted || !current()) return;
+      if (attempted || !current()) return;
       try {
         const raw = deps.storage.getItem(firstUsedKey);
         const firstUsedAt = Number(raw);
@@ -175,7 +178,8 @@ export function installGithubStarPrompt(environment: PromptEnvironment & {
   let storage: Storage;
   try { storage = window.localStorage; } catch { return () => {}; }
   let stopped = false;
-  const isCurrent = () => !stopped && isDataOwnerGenerationCurrent(owner);
+  // Same-owner repairs advance the generation without remounting; storage is keyed by owner id only.
+  const isCurrent = () => !stopped && isDataOwnerIdCurrent(owner);
   const controller = createGithubStarPrompt({
     ...environment,
     isQuiet: () => environment.isQuiet() && !hasGithubStarBlockingUi(),
