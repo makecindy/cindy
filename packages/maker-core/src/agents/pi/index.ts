@@ -6463,11 +6463,14 @@ export class PiAgent extends BaseAgent {
       // get_commands starts asynchronously after Pi's ready boundary. A prompt
       // template selected on a brand-new task must wait for that exact runtime
       // catalog instead of being escaped into ordinary model text.
-      // 重试链最长 ~34s,模板派发只等到默认 bridge 启动预算(10s):到期后按
-      // 当前已发布(可能 failed/unknown)的清单继续,不把用户卡在派发上。
+      // race 上限要覆盖重试链全生命周期(末次 5s + Σ(delay_i+5s) = 5+4+5+10+5+20+5
+      // ≈ 54s,确定性有界):cap 从派发时刻起算,/template 可能恰在 ready 即发出,
+      // 此时初次采集还在跑 —— 上限必须盖住链尾,否则重试成功前一瞬仍会逃逸
+      // (Codex P2:10s cap 在 10.6s 才就绪的场景下提前胜出)。链结束或耗尽时
+      // promise 已 settle,race 立即返回,不把用户卡在派发上。
       await Promise.race([
         runtimeCapabilityRefreshPromise,
-        new Promise<void>((resolve) => { setTimeout(resolve, 10_000).unref?.(); }),
+        new Promise<void>((resolve) => { setTimeout(resolve, 60_000).unref?.(); }),
       ]);
     };
     const routeManagedPackageCommand = async (
