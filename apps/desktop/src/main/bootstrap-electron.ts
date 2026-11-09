@@ -138,7 +138,7 @@ import {
 } from './mainWindowMaximizeRecovery';
 import {
   manageWindowStatePreservingNormalBounds,
-  shouldTreatPersistedBoundsAsMaximized,
+  planWindowRestore,
 } from './mainWindowWorkAreaBounds';
 import { prewarmMacComputerPermissionGuideHelper } from './computer-permission-guide/MacComputerPermissionGuideNativeHost.js';
 import { handleOpenChatGPTApp } from './chatgpt-app.js';
@@ -4335,10 +4335,12 @@ const createWindow = () => {
   const persistedMaximized = readPersistedWindowMaximized(
     path.join(app.getPath('userData'), mainWindowStateFile),
   );
+  const defaultWindowWidth = 1280;
+  const defaultWindowHeight = 800;
   const mainWindowState = windowStateKeeper({
     file: mainWindowStateFile,
-    defaultWidth: 1280,
-    defaultHeight: 800,
+    defaultWidth: defaultWindowWidth,
+    defaultHeight: defaultWindowHeight,
     // Applying fullscreen while a hidden macOS window is still starting can
     // leave the restored window without native traffic lights.
     fullScreen: process.platform !== 'darwin',
@@ -4348,31 +4350,32 @@ const createWindow = () => {
   // That becomes the unmaximize target, so the maximize button looks dead and an
   // auto-hidden taskbar stays visible. Come back maximized, and create from the
   // library default size so the first unmaximize is not the work area again.
-  const snapFilledWorkArea =
-    !shouldRestoreMacFullscreen &&
-    !persistedMaximized &&
-    !mainWindowState.isMaximized &&
-    shouldTreatPersistedBoundsAsMaximized(
-      {
-        x: mainWindowState.x,
-        y: mainWindowState.y,
-        width: mainWindowState.width,
-        height: mainWindowState.height,
-        isMaximized: false,
-        isFullScreen: Boolean(mainWindowState.isFullScreen),
-      },
-      screen,
-    );
-  const shouldRestoreMaximized =
-    !shouldRestoreMacFullscreen &&
-    (persistedMaximized || Boolean(mainWindowState.isMaximized) || snapFilledWorkArea);
-  if (snapFilledWorkArea) mainWindowState.resetStateToDefault();
-
+  // A later save writes the real maximize flag and keeps the last normal size.
+  const restorePlan = planWindowRestore(
+    {
+      x: mainWindowState.x,
+      y: mainWindowState.y,
+      width: mainWindowState.width,
+      height: mainWindowState.height,
+      isMaximized: persistedMaximized || Boolean(mainWindowState.isMaximized),
+      isFullScreen: Boolean(mainWindowState.isFullScreen),
+    },
+    screen,
+    { restoringMacFullscreen: shouldRestoreMacFullscreen },
+  );
+  const shouldRestoreMaximized = restorePlan.restoreMaximized;
+  // A snapped rectangle is not a legal restore size. Create from the same
+  // defaults the keeper uses on a first launch; leave x/y unset so Electron
+  // centers it. State fields are readonly, so this stays on the constructor.
   const mainWindow = new BrowserWindow({
-    x: mainWindowState.x,
-    y: mainWindowState.y,
-    width: mainWindowState.width,
-    height: mainWindowState.height,
+    ...(restorePlan.replaceWithDefaultSize
+      ? { width: defaultWindowWidth, height: defaultWindowHeight }
+      : {
+          x: mainWindowState.x,
+          y: mainWindowState.y,
+          width: mainWindowState.width,
+          height: mainWindowState.height,
+        }),
     minWidth: 800,
     minHeight: 600,
     title: BRAND_NAME,
