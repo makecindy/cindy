@@ -239,12 +239,12 @@ export function tailReplyClientIds(messages: readonly ChatMessage[]): ReadonlySe
     // 历史恢复时被过滤掉的隐藏 thinking 行(redacted / omitted 占位)在映射阶段已经
     // 从 `displayMessages` 消失,但主进程仍把 thinking 行算作后续活动;边界以相邻
     // 消息上的标记保留(`mapServerMessages`),这里按同样的语义处理。
-    if (message.hiddenThinkingAfter) {
-      activityAfter = true;
-      continue;
-    }
     const hiddenBefore = message.hiddenThinkingBefore === true;
+    const hiddenAfter = message.hiddenThinkingAfter === true;
     if (message.role === 'user') {
+      // 用户行自身仍然要处理边界:`hiddenThinkingAfter` 的思考属于**新**轮次
+      // (例如新轮还没输出就被停掉),不能让它反过来否掉上一轮的收尾回复;主进程
+      // 的后续活动扫描同样以真实用户输入为界。
       if (isContinuationMessage(message)) {
         superseded = true;
       } else if (!isSteerUserRow(message)) {
@@ -252,6 +252,10 @@ export function tailReplyClientIds(messages: readonly ChatMessage[]): ReadonlySe
         superseded = false;
       }
       if (hiddenBefore) activityAfter = true;
+      continue;
+    }
+    if (hiddenAfter) {
+      activityAfter = true;
       continue;
     }
     if (message.role === 'thinking' || message.role === 'tool_use' || message.role === 'tool_result') {

@@ -631,6 +631,28 @@ describe('companion closing reply and read position', () => {
     expect(proseIds(projectBot(rows, accepted))).toEqual(['wake', 'unconfirmed']);
   });
 
+  // 新轮次以「隐藏 thinking」结尾(例如新轮还没输出就被停掉)时,这条边界属于新轮,
+  // 不能反过来否掉上一轮的收尾回复(主进程的后续活动扫描同样以真实用户输入为界)。
+  it('keeps the previous turn closing reply when the next turn ends in hidden thinking', () => {
+    const at = (minute: number) => new Date(Date.UTC(2026, 10, 9, 2, minute)).toISOString();
+    const rows: RenderItem[] = [
+      message('u', 'user', 'Check the inbox', { createdAt: at(0) }),
+      message('wake', 'assistant', 'Woke up: inbox empty', { turnCompleted: true, createdAt: at(1) }),
+      message('closing', 'assistant', 'Two PRs need your review', { createdAt: at(2) }),
+      message('u2', 'user', 'And the calendar?', { createdAt: at(3) }),
+    ];
+    const messages: ChatMessage[] = [
+      message('u', 'user').message,
+      message('wake', 'assistant').message,
+      message('closing', 'assistant').message,
+      // 新轮的隐藏 thinking 在映射阶段被删除,边界挂到了这条用户行上。
+      { clientId: 'u2', role: 'user', content: 'And the calendar?', hiddenThinkingAfter: true } as ChatMessage,
+    ];
+    const projected = projectBot(rows, messages);
+    expect(proseIds(projected)).toEqual(['wake', 'closing']);
+    expect(latestSettledAssistantMs(projected)).toBe(Date.parse(at(2)));
+  });
+
   // 续跑（recovery）开启的是新一次尝试:它之前的正文已被 groupWorkRuns 的 resumed 分支
   // 折进工作过程,不能因为后面没有工具就重新提升成正式回复（codex review P2）。
   it('keeps a superseded attempt folded when the recovery answers directly', () => {
