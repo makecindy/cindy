@@ -389,6 +389,9 @@ Git worktree，不改变供应商、模型与 Worker 创建权限偏好。
 1a. **空闲 live 直发前必须先做换窗预检（状态：不变量）**<br>
 目标空闲且已有 live session 时，dispatcher 仍走 `session.send()`，不经过 `sendToSessionInternal()`。这条直发必须先调用与用户发送相同的 `prepareUnhealthySession`：满窗或当前进程内 `needsRollover` 锁存时关闭旧原生窗口，再 `getLiveSession`。不能把 inter-agent 消息打进应被丢弃的旧窗口。prepare → 重新取 live → send 整段必须复用 `sendToSessionInternal` 的 per-session 锁；锁已被占用时先排队，不要把 in-flight prepare 当成健康状态继续直发。没有 live 后释放锁再走 `sendToSessionInternal`，避免自己把自己排队。实现指针：`orcaInterAgentDispatcher.ts` 的 live 分支，以及 `register.ts` 注入的 `prepareUnhealthySession` / `withSendToSessionLock`。
 
+1d. **空闲 live 直发前必须先补齐 Orca 装载（状态：不变量）**<br>
+runtime 已在线的 session 之后才成为 Lead（例如从协同面板开启协同）时，宿主只写 role 并对 live handle 调 `setVendorOptions`；Lead 说明要到 runtime 重建时才由 `bootstrapSession` 注入，`isOrcaMcpHydrated` 在此之前为 false。用户发送在 `sendToAgentAccepted` 内按该标记重建；inter-agent 直发不经过这个事务，必须在 `prepareUnhealthySession` 之后、重新取 live 之前调用同一套重建（`MakerSendTransaction.hydrateActiveOrcaSession`），并留在同一把 per-session 锁内。漏掉这一步，Worker 回报会开启一个没有 Lead 说明的 turn，Lead 可能直接以空回复结束（2026-11-10 实报：面板新建的 Worker 回报后，Lead 等到用户发话才响应）。已装载时不读库、不重建；重建失败不阻断投递：旧 runtime 仍在就照旧直发，已关闭则落到 `sendToSessionInternal` 的 lazy-resume，由它按持久化 role 启动。实现指针：`orcaInterAgentDispatcher.ts` 的 `hydrateOrcaSessionIfNeeded`、`makerSendTransaction.ts` 的 `hydrateActiveOrcaSessionIfNeeded`，以及 `register.ts` 的注入。
+
 1c. **图片附件仅限本机目标，走既有附件通道（状态：不变量）**<br>
    `send_to_worker` 与 `create_worker` / `create_workers` 的 `images` 参数接受两类地址：
    用户在会话里贴的图用受管地址（`cindy-media://blobs/` / `xdt-image://`，即上下文

@@ -62,6 +62,8 @@ import { readProviderShareQuota, readProviderShareQuotaAccountResult } from './p
 import { isDataOwnerPushStamp } from '../../shared/dataOwnerPush.js';
 import { t } from '../i18n.js';
 import { createLogger } from '../logger.js';
+import { focusMainWindow } from '../deepLink.js';
+import { isFocusedAppContentWindow } from '../windowFocusClassifier.js';
 import { getDesktopProviderService } from '../maker-host/createDesktopProviderService.js';
 import { isRemoteProviderInvocationAllowed } from '../maker-host/remote-provider-access-store.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
@@ -163,6 +165,7 @@ let directForgetAgain = false;
 let directForgetCursor = 0;
 let directForgetEpoch = 0;
 const liveNotifications = new Set<Notification>();
+let notificationSequence = 0;
 
 function emit(channel: string, payload: unknown): void {
   try {
@@ -177,18 +180,8 @@ function notifyControlledModelCatalogChanged(): void {
   tapWindowBroadcast(CONTROLLED_MODEL_CATALOG_CHANGED, {});
 }
 
-function focusMainWindow(): void {
-  const win = BrowserWindow.getAllWindows().find((candidate) => !candidate.isDestroyed());
-  if (!win) return;
-  if (win.isMinimized()) win.restore();
-  win.setAlwaysOnTop(true);
-  win.show();
-  win.focus();
-  win.setAlwaysOnTop(false);
-}
-
 function appInForeground(): boolean {
-  return BrowserWindow.getAllWindows().some((win) => !win.isDestroyed() && win.isVisible() && win.isFocused());
+  return BrowserWindow.getAllWindows().some((win) => isFocusedAppContentWindow(win) && win.isVisible());
 }
 
 /** 系统通知：不含配对码(产品规则 §6.1)。点击把窗口拉到前台并打开对应界面。 */
@@ -201,15 +194,21 @@ async function notify(title: string, body: string, onClick: () => void): Promise
     return;
   }
   const notification = new Notification({ title, body });
+  // Local sequence only: never log notification text, pairing codes or share URLs.
+  const sequence = ++notificationSequence;
+  const trace = (phase: string) => log.info('share notification lifecycle', { sequence, phase });
+  trace('created');
   liveNotifications.add(notification);
   const release = () => liveNotifications.delete(notification);
+  notification.on('show', () => trace('show'));
   notification.on('click', () => {
+    trace('click');
     focusMainWindow();
     onClick();
     release();
   });
-  notification.on('close', release);
-  notification.on('failed', release);
+  notification.on('close', () => { trace('close'); release(); });
+  notification.on('failed', () => { trace('failed'); release(); });
   notification.show();
 }
 
@@ -441,6 +440,7 @@ export function startProviderShareRuntime(broadcast: Broadcast, options: { invok
       emit(PROVIDER_SHARE_IPC.OWNED_CHANGED, null);
     },
     requested(request, share, quiet) {
+      log.info('share approval received', { source: 'owner', quiet });
       emit(PROVIDER_SHARE_IPC.REQUESTED, {
         request,
         share: { shareId: share.shareId, providerId: share.providerId, providerLabel: share.providerLabel },
@@ -455,6 +455,7 @@ export function startProviderShareRuntime(broadcast: Broadcast, options: { invok
       );
     },
     watchedRequested(item) {
+      log.info('share approval received', { source: 'watcher' });
       emit(PROVIDER_SHARE_IPC.REQUESTED, item);
       // 审批弹窗已在排队：点通知只把窗口拉到前台。
       void notify(
@@ -1348,6 +1349,7 @@ export function registerProviderShareIpc(): void {
 
 /** 深链 `cindy://provider-share/join?...` → 让 Renderer 打开申请弹窗。 */
 export function openProviderShareJoin(link: string): void {
+  log.info('share join activation');
   focusMainWindow();
   emit(PROVIDER_SHARE_IPC.OPEN_JOIN, { link });
 }

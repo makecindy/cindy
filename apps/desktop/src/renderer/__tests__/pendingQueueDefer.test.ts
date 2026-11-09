@@ -377,6 +377,11 @@ describe('renderer input queue facade', () => {
     expect(snap.queueInteractionLocks).toEqual(['drag']);
     expect(snap.queueEditLocks).toEqual(['q-1']);
     expect(snap.queueAbortPending).toBe(true);
+    // Queue menus subscribe to the lightweight view, not the full message store.
+    // The full-state assertions alone cannot catch missing lock/stop projection.
+    expect(makerChatStore.getLightSnapshot(sid)).toMatchObject({
+      queueEditLocks: ['q-1'], queueInteractionLocks: ['drag'], queueAbortPending: true,
+    });
     expect(snap.error).toBe('paused');
     expect(snap.errorRetryText).toBe('from main');
 
@@ -384,6 +389,9 @@ describe('renderer input queue facade', () => {
     // Continue 标记永久留在 renderer。
     projectionHandler?.(projection(sid));
     expect(makerChatStore.getSnapshot(sid).continuationInFlightClientId).toBeNull();
+    expect(makerChatStore.getLightSnapshot(sid)).toMatchObject({
+      queueEditLocks: [], queueInteractionLocks: [], queueAbortPending: false,
+    });
   });
 
   it('delegates queue row operations to main input intents', async () => {

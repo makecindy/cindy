@@ -236,7 +236,7 @@ function LearnedPage({ bot, slug, editing, onEdit, onDeleted, onChanged, editorD
           {t('bots.capabilities.learned.edit')}
         </Button>
         <span className="flex-1" />
-        <Button variant="secondary" tone="quiet" size="md" onClick={() => void remove()} disabled={busy}>
+        <Button variant="secondary" tone="danger" size="md" onClick={() => void remove()} disabled={busy}>
           {t('bots.capabilities.learned.delete')}
         </Button>
       </div>

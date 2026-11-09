@@ -41,6 +41,7 @@ export interface TransferDeps {
   readReceipt(requestId: string): Promise<ImportReceipt | undefined>;
   readLegacyDeferSetup?(botId: string): Promise<boolean | undefined>;
   readSkillConfig?(source: ImportSource, budget: ImportReadBudget): Promise<Record<string, unknown>>;
+  captureSkill?(botId: string, item: ImportItem): Promise<void>;
   /** Return serialized UTF-8 bytes when available, avoiding a second full serialization. */
   saveReceipt(receipt: ImportReceipt): Promise<number | void>;
   createCompanion(botId: string, selection: CompanionImportSelection): Promise<void>;
@@ -195,6 +196,9 @@ export async function transferCompanion(snapshot: ImportSnapshot, selection: Com
   // Capture only selected resources, then publish a non-secret request index
   // before storing credentials. Acceptance still waits for the full checkpoint.
   if (!receipt.checkpointSaved || items.some(item => item.captureIssue)) {
+    // Index the request before streaming ciphertext so a restart/deletion can
+    // reclaim even a capture interrupted before its checkpoint was accepted.
+    await save();
     const budget = createImportBudget();
     await reserveSnapshotItems(snapshot.items, budget, deps.assertOwner);
     for (const item of items) {
@@ -250,9 +254,11 @@ export async function transferCompanion(snapshot: ImportSnapshot, selection: Com
         const captured = item.files ?? [];
         const names = new Set(captured.map(file => file.name));
         try {
-          item.files = [...captured, ...await readImportSkillTree(item.sourceDirectory, name => !names.has(name), budget)];
+          if (item.view.category === 'skills' && deps.captureSkill) await deps.captureSkill(botId, item);
+          else item.files = [...captured, ...await readImportSkillTree(item.sourceDirectory, name => !names.has(name), budget)];
           if (metadataPending) {
-            const manifest = item.files.find(file => file.name === 'SKILL.md')?.bytes.toString('utf8');
+            const manifest = item.skillArchive ? await import('./skillFileStreams.js').then(module => module.readImportSkillManifest(item.sourceDirectory!))
+              : item.files?.find(file => file.name === 'SKILL.md')?.bytes.toString('utf8');
             if (!manifest?.trim() || !deps.readSkillConfig) throw new CompanionImportError('SOURCE_CONFIG_INVALID');
             const config = await deps.readSkillConfig(snapshot.source, budget);
             deps.assertOwner();

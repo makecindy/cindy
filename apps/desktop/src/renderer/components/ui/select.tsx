@@ -5,18 +5,24 @@ import { cn } from '@/lib/utils';
 import type { AriaAttributes, ReactNode } from 'react';
 import { Button } from './button';
 
+export interface SelectOption {
+  value: string;
+  label: string;
+  disabled?: boolean;
+  title?: string;
+  endAdornment?: ReactNode;
+}
+
 export interface SelectProps {
   id?: string;
   'data-setting-id'?: string;
+  /** Settings search checker reason, forwarded to the trigger. */
+  'data-settings-search-action'?: string;
   label: string;
   value: string;
-  options: ReadonlyArray<{
-    value: string;
-    label: string;
-    disabled?: boolean;
-    title?: string;
-    endAdornment?: ReactNode;
-  }>;
+  options?: ReadonlyArray<SelectOption>;
+  /** Labelled option groups (e.g. commands / keys); use instead of options. */
+  groups?: ReadonlyArray<{ label?: string; options: ReadonlyArray<SelectOption> }>;
   /** Optional non-interactive status indicators, kept outside the searchable label. */
   triggerAdornment?: ReactNode;
   /** Compact pickers can ellipsize labels; ordinary form fields retain wrapping. */
@@ -27,11 +33,18 @@ export interface SelectProps {
   className?: string;
   /** Size a compact trigger's menu independently; ordinary fields keep equal width. */
   contentClassName?: string;
+  /** Trigger height: default 36px; compact 32px for narrow drawers and dense lists. */
+  size?: 'default' | 'compact';
+  /** Trigger width preset: 220px / 320px, or full width for stacked fields. Omit to size by className. */
+  width?: 'sm' | 'md' | 'full';
   'aria-describedby'?: string;
   'aria-invalid'?: AriaAttributes['aria-invalid'];
   'aria-required'?: AriaAttributes['aria-required'];
   error?: boolean;
 }
+
+/** Width presets, also for SelectParts triggers that compose their own rows. */
+export const SELECT_WIDTHS = { sm: 'w-[220px]', md: 'w-[320px]', full: 'w-full' } as const;
 
 /** Desktop single-value field (DESIGN.md §4): standard secondary Button,
  * equal-width Radix panel, 12px container / 8px rows and semantic theme colors.
@@ -40,9 +53,11 @@ export interface SelectProps {
 export function Select({
   id,
   'data-setting-id': settingId,
+  'data-settings-search-action': searchAction,
   label,
   value,
   options,
+  groups,
   triggerAdornment,
   truncateOptions = false,
   onValueChange,
@@ -50,12 +65,36 @@ export function Select({
   disabled,
   className,
   contentClassName,
+  size = 'default',
+  width,
   'aria-describedby': describedBy,
   'aria-invalid': invalid,
   'aria-required': required,
   error = false,
 }: SelectProps) {
-  const selected = options.find((option) => option.value === value);
+  const allOptions = groups ? groups.flatMap((group) => group.options) : options ?? [];
+  const selected = allOptions.find((option) => option.value === value);
+  const renderItem = (option: SelectOption) => (
+    <SelectPrimitive.Item
+      key={option.value}
+      value={option.value}
+      disabled={option.disabled}
+      title={option.title ?? (truncateOptions ? option.label : undefined)}
+      className="relative flex min-h-8 cursor-pointer select-none items-center rounded-lg py-1 pl-2 pr-6 outline-none [overflow-wrap:anywhere] data-[disabled]:opacity-60"
+    >
+      {truncateOptions ? (
+        <span className="min-w-0 flex-1 truncate">
+          <SelectPrimitive.ItemText>{option.label}</SelectPrimitive.ItemText>
+        </span>
+      ) : <SelectPrimitive.ItemText>{option.label}</SelectPrimitive.ItemText>}
+      {option.endAdornment ? (
+        <span className="ml-2 flex shrink-0 items-center gap-1.5">{option.endAdornment}</span>
+      ) : null}
+      <SelectPrimitive.ItemIndicator className="absolute right-1 flex">
+        <Check size={14} aria-hidden="true" />
+      </SelectPrimitive.ItemIndicator>
+    </SelectPrimitive.Item>
+  );
   return (
     <SelectPrimitive.Root
       value={value}
@@ -68,8 +107,9 @@ export function Select({
           pressFeedback={false}
           id={id}
           data-setting-id={settingId}
+          data-settings-search-action={searchAction}
           variant="secondary"
-          size="lg"
+          size={size === 'compact' ? 'md' : 'lg'}
           aria-label={label}
           aria-describedby={describedBy}
           aria-invalid={error ? true : invalid}
@@ -77,6 +117,7 @@ export function Select({
           title={selected?.title ?? selected?.label}
           className={cn(
             'min-w-0 max-w-full justify-between gap-2 px-3 font-normal [-webkit-app-region:no-drag]',
+            width && SELECT_WIDTHS[width],
             className,
             (error || (invalid !== undefined && invalid !== false && invalid !== 'false')) &&
               '[--button-face-border:var(--error-border)] focus-visible:[--button-face-border:var(--error-fg)] focus-visible:ring-[var(--error-fg)]',
@@ -107,27 +148,18 @@ export function Select({
             <ChevronUp size={14} aria-hidden="true" />
           </SelectPrimitive.ScrollUpButton>
           <SelectPrimitive.Viewport className="max-h-64 min-w-0">
-            {options.map((option) => (
-              <SelectPrimitive.Item
-                key={option.value}
-                value={option.value}
-                disabled={option.disabled}
-                title={option.title ?? (truncateOptions ? option.label : undefined)}
-                className="relative flex min-h-8 cursor-pointer select-none items-center rounded-lg py-1 pl-2 pr-6 outline-none [overflow-wrap:anywhere] data-[disabled]:opacity-60"
-              >
-                {truncateOptions ? (
-                  <span className="min-w-0 flex-1 truncate">
-                    <SelectPrimitive.ItemText>{option.label}</SelectPrimitive.ItemText>
-                  </span>
-                ) : <SelectPrimitive.ItemText>{option.label}</SelectPrimitive.ItemText>}
-                {option.endAdornment ? (
-                  <span className="ml-2 flex shrink-0 items-center gap-1.5">{option.endAdornment}</span>
-                ) : null}
-                <SelectPrimitive.ItemIndicator className="absolute right-1 flex">
-                  <Check size={14} aria-hidden="true" />
-                </SelectPrimitive.ItemIndicator>
-              </SelectPrimitive.Item>
-            ))}
+            {groups
+              ? groups.map((group, index) => (
+                <SelectPrimitive.Group key={group.label ?? `group-${index}`}>
+                  {group.label ? (
+                    <SelectPrimitive.Label className="px-2 pb-1 pt-2 text-12 font-medium text-[var(--text-tertiary)]">
+                      {group.label}
+                    </SelectPrimitive.Label>
+                  ) : null}
+                  {group.options.map(renderItem)}
+                </SelectPrimitive.Group>
+              ))
+              : allOptions.map(renderItem)}
           </SelectPrimitive.Viewport>
           <SelectPrimitive.ScrollDownButton className="flex h-6 items-center justify-center">
             <ChevronDown size={14} aria-hidden="true" />

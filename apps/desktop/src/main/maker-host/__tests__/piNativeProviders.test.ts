@@ -146,13 +146,13 @@ it('materializes a separate native ChatGPT provider for each independent account
 });
 
 it.each(['google/gemini-3.8-flash', 'google/gemini-99-pro-preview'])(
-  'does not pass a misleading Gateway Responses hint to Pi for %s',
+  'uses the Global Gateway Responses route for %s in local and remote Pi',
   (id) => {
     setActiveCatalog(BUNDLED_CATALOG);
     setXdGatewayModels([{ id, agents: ['pi'], perAgent: { pi: { wireProtocol: 'openai-responses' } } }]);
-    expect(resolvePiCindyGatewayModelApi('xd', id)).toBe('google-generative-ai');
-    expect(resolvePiCindyGatewayModelSpec('xd', id)).toMatchObject({ api: 'google-generative-ai' });
-    expect(resolvePiCindyGatewayModelSpec('xd', id, { remote: true })).toMatchObject({ api: 'google-generative-ai' });
+    expect(resolvePiCindyGatewayModelApi('xd', id)).toBe('openai-responses');
+    expect(resolvePiCindyGatewayModelSpec('xd', id)).toEqual({ api: 'openai-responses' });
+    expect(resolvePiCindyGatewayModelSpec('xd', id, { remote: true })).toEqual({ api: 'openai-responses' });
   },
 );
 
@@ -176,6 +176,29 @@ const piBundledModel = (
   contextWindow: 272_000,
   maxTokens: 128_000,
   ...over,
+});
+
+it('keeps Google API-key connections native when Global Gateway Gemini uses Responses', () => {
+  const modelId = 'gemini-3.7-flash';
+  setActiveCatalog(BUNDLED_CATALOG);
+  setXdGatewayModels([{
+    id: `google/${modelId}`, agents: ['pi'],
+    perAgent: { pi: { wireProtocol: 'openai-responses' } },
+  }]);
+  const { providers } = buildPiNativeProvidersFromConfigs([{
+    id: 'google-direct', name: 'Google direct', auth: { method: 'apiKey' },
+    runtimes: { pi: piRuntime({
+      baseUrl: 'https://generativelanguage.googleapis.com/v1beta',
+      wireProtocol: 'google-generative-ai',
+      models: [{ id: modelId, name: 'Gemini' }],
+    }) },
+  }], () => 'test-google-key');
+  expect(providers[0]).toMatchObject({
+    api: 'google-generative-ai',
+    baseUrl: 'https://generativelanguage.googleapis.com/v1beta',
+  });
+  expect(providers[0].models[0].id).toBe(modelId);
+  expect(resolvePiCindyGatewayModelApi('xd', `google/${modelId}`)).toBe('openai-responses');
 });
 
 it.each(['absent', 'compatible', 'other-api'] as const)(

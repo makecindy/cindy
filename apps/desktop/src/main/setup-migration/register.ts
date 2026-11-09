@@ -378,8 +378,12 @@ export function registerSetupMigration(options: RegisterSetupMigrationOptions): 
     targetGhosts: () => listGhosts().map(ghostFact),
     catalog: async (plugins: SetupSnapshotPlugin[]) => {
       const out = new Map<string, TargetCatalogFact>();
-      const snapshot = await market().snapshot({ discoveryOnly: true });
-      const visible = new Set(snapshot.items.map((item) => item.pluginId));
+      const ids = [...new Set(plugins.map(plugin => plugin.ghostId))];
+      const visible = new Set<string>();
+      for (let offset = 0; offset < ids.length; offset += 100) {
+        const snapshot = await market().lookup(ids.slice(offset, offset + 100));
+        for (const item of snapshot.items) visible.add(item.pluginId);
+      }
       const wanted = plugins.filter(
         (plugin) => plugin.pluginId && visible.has(plugin.pluginId) && !findGhost(plugin.ghostId, plugin.namespace),
       );

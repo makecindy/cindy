@@ -1,5 +1,50 @@
 # 跨端协议兼容
 
+## 任务汇总与 ActivityKit Push（2026-11-10，未发布）
+
+官方 Device Link 新增同账号、设备绑定 Bearer 路由：`PUT /api/device-link/task-activity`
+接受本机完整执行摘要，`GET` 返回 `{schemaVersion:1, accountId, version, waitingCount,
+unreadCount, runningCount, badgeCount, complete}`。`accountId` 来自已验签 membership，
+`version` 为数据库持久单调十进制字符串，`badgeCount=waitingCount+unreadCount`。
+`complete=false` 代表部分电脑缺失／离线／摘要过期，不得作为全局角标绝对值；不按通知次数加减。
+PUT 的 selected 只含任务 ID、截断标题和状态，优先等待操作→未读结果→运行中，不上传消息或工具参数。
+
+`PUT /api/device-link/live-activity` 接收原生 ActivityKit 的 start/update token、activityId、
+系统启用／移除状态、本地化状态文字、构建线、APNs 环境和「服务端地址＋账号」scope。
+`supportsInputPushToken` 表示 iOS 18+ 支持；`DELETE` 只注销本账号本设备的活动，不触碰普通推送。
+APNs 采用 `CindyAgentActivityAttributes`，`attributes.accountId` 存 scope，ContentState 的既有
+JSON 字段保持不变。手机不再以不完整 Home 列表覆盖已接管的服务端活动。
+
+服务端先执行追加 migration，再启动兼容旧客户端的接口，随后更新 Desktop 与原生手机包。
+旧服务端 404/405 或无新原生方法时保留既有本地活动；普通 push-token 可选能力
+`taskBadgeVersion:1` 缺省不支持，只有支持的安装收到无弹窗角标推送。iOS 用 `aps.badge`；
+Android 保持 FCM data-only，`data.badge` 与 `data.notification_count` 是字符串，不能增加
+notification 对象绕过账号过滤。角标分支独立挂载，不放进 iOS ActivityKit 条件中。
+
+自建中转不配置官方 APNs 凭证，也不接收上述云端请求；两端在自建模式跳过上报／注册，继续
+透传既有任务活动。既有 WS 协议和 allowlist 不变，无需升级已部署的自建中转。手机 token 同步
+测试覆盖不向自建地址发送账号凭证，原有连接与本地展示保持回归覆盖。
+服务端改动在独立 server 仓维护；上线和真实系统 Push 验收分别记录，不以本地测试代替已部署。
+
+## 远程模型显式窗口（#9501）
+
+`maker:provider:list` 的模型行可选增加 `contextWindowOverride`，仅表示来源电脑的显式工作预算。
+原 `contextWindow` 与 `contextWindowMax` 的默认／容量含义不变；远程 Agent 选择共用投影合入
+有效窗口，设置页保留默认及恢复默认语义。旧提供端缺字段时沿用原值，旧使用端忽略字段；
+提供端和使用端均升级后生效。分享备用执行目录在发布时将有效预算写进原 `contextWindow`，
+不增加服务端字段。运行时仍在实际执行电脑读取本机窗口与压缩比例。
+
+无新帧、channel、allowlist、权限、订阅或请求；官方及自建中转透传原 invoke JSON，无需升级。
+回归通过供应商服务、隧道序列化、远程选择与备用目录发布生产入口验证；不改变连接恢复机制。
+
+## 当前错误的历史行关联（2026-11-09）
+
+`AgentInputProjection` 可选返回 `errorPersistId`，指向当前错误横幅承接的持久化错误行。
+新 Desktop 在重载、重连仅收到状态快照时恢复该 ID，沿用现有精确 ID 去重，不按文案合并
+不同失败。旧 Host 缺字段时保留同一错误已知的事件关联；错误替换或清除时不继承旧 ID。
+旧客户端忽略此可选字段；Mobile 原有终态事件关联保持兼容。沿用既有 invoke／push 与
+授权，官方和自建中转均只透传既有 payload，无需服务端或 relay 升级。
+
 ## 供应商内多订阅账号（2026-11-07，未发布）
 
 同账号远控新增 `maker:subscription-accounts`（查看、添加、重连、取消、移出、策略）及
@@ -51,6 +96,19 @@ OpenAI 池快照增加可选 `nativeAccountPool` 标记，当前控制端让三�
 仅复用既有远程 Agent 的目录、open/send/poll/stop 通道，任务和历史仍归插件电脑，
 不添加 device-link allowlist、帧、relay 能力或服务端请求。官方与自建中转继续透传既有协议，无需升级。
 同账号与跨账号授权仍由原通道及执行电脑核验，来源不可用不回落本机、不重放付费输入。
+## 群内等待领取超时原因（2026-11-09，未发布）
+
+Chat Server 的 `/executions` 与 `/execution-failures` 保留 `failure_code: RUNTIME_TIMEOUT`，
+仅对服务端确认的当前尝试等待领取超时追加可选 `failure_reason: unclaimed_timeout`。
+这只说明请求在就绪等待期限内未被领取，不证明所属电脑离线、关机或模型服务异常。
+细分原因随当前执行代次收尾，显式重试后不沿用旧原因；不改变原排队、租约或断线取消语义。
+
+客户端共享解析仅接受与 `RUNTIME_TIMEOUT` 匹配的已知原因，派生消息视图可选携带
+`runtimeFailureReason`；桌面、手机直连与手机经电脑读取的群视图使用同一判据。
+字段缺失、未知或不匹配时保持原通用错误展示，不读取或显示私有 detail。
+旧客户端忽略新增字段；新客户端连接旧服务端／旧电脑时使用通用提示。
+服务端可先发布，客户端随后发布。Device Link、IPC channel、allowlist、权限、数据库 Schema
+与 Mobile 原生配置均不变。
 
 ## 插件详细介绍 `manifest.readme`（2026-11-06，未发布）
 
@@ -164,7 +222,10 @@ Desktop 与 Mobile 明确标注估算和排除项。旧端忽略可选字段，�
 - `query.request` 新增可选 `recipient = { scopeId, principalId }`：多个组织共用的服务（官方飞书）发出的查询
   代表哪个应用的哪个账号；带上时两项都须是非空字符串。其它服务不发，旧桌面端忽略。
 - 客户端端点清单新增 `feishuHookWsUrl`（`wss:`），登记为跨区域端点：服务只在海外部署一套，
-  两份区域清单都指向 `cindy.app`。服务部署前正式清单不写该字段，入口不显示。
+  两份区域清单都指向 `cindy.app`。服务部署并核验后，在两份正式清单同时填写并发布该字段；
+  缺省或清空后，重启读取新清单会停止连接；未开启的用户不显示入口，已开启的用户保留卡片并提示
+  地址未配置，以便关闭，可用于回滚。dev 使用独立开发服务，配置与发布步骤见
+  [端点清单说明](../../config/README.md)。
 
 飞书群上下文由服务端组装进 `task.dispatch.prompt`（含 `<thread_context>`、引用与当前发言人）；`source.threadContext` 同时供来源卡展示，客户端继续保留服务端完整 prompt，不再从展示元数据重复注入。X 的客户端 prompt 组装只作用于 X，不能据此推断其它渠道丢失上下文。
 
@@ -640,6 +701,18 @@ Desktop 新增本机 `update-harness-prepare` IPC（Claude Code/Codex、用户�
 下次启动只消费缓存，避免确认期间清单变化又触发启动下载。省略参数的旧设置入口仍写
 原 scoped 修复标记，回复保持兼容。应用更新 IPC、手机与设备间 wire protocol 不变；后台归档只放新缓存目录，旧客户端
 忽略它，不改变原安装目录、凭证、数据库或持久偏好。
+
+## 日志上传编号的区域前缀
+
+Desktop 和 Mobile 的新 `uploadCode` 使用 `CN-XXXX-XXXX` / `GLOBAL-XXXX-XXXX`，
+内部 Dev 构建使用 `DEV-XXXX-XXXX`；随机部分仍保留 8 位。SLS 的 tags、逐条记录和
+客户端返回值都传完整编号，字段名、字符串类型、IPC 和 SLS web-tracking 结构不变。
+格式校验继续接受历史无前缀 `XXXX-XXXX` 编号，历史日志不改写；新旧客户端的显示和
+复制均按不透明字符串处理。回滚后恢复生成无前缀编号，不迁移数据。
+外部检索工具若自行限制了编号长度或正则，需要接受带前缀格式；已有编号按原值查询。
+前缀只隔离不同区域的新编号，不承诺同一区域随机编号唯一。不改变服务端、授权范围
+或 Mobile 原生依赖与配置。实现与回归见 Desktop `log-upload/uploadCode.ts` /
+`__tests__/crashTriggersAndCode.test.ts`、Mobile `debug/diagnosticUpload.ts` / 同名测试。
 
 ## 任务链接保留所属电脑
 
@@ -3152,8 +3225,32 @@ B 上的 Worker 是一条普通任务，`sessions.orca_remote_lead`(migration 01
 - **成员状态可选 `fiveHourTight: true`（2026-10-21）**：只在带 `quota` 时出现，表示这台的 5 小时配额已用 85% 以上、离重置还有
   1 小时以上（provider-groups.md §5 第 0 条）。同账号电脑据此不把它当作任务进行中换号的目标。旧组所在电脑不回，查看端按不紧张处理
   （最坏是提议后组所在电脑按自己的排序选不中它，照常留在原处）；旧查看端忽略。`parseProviderGroupRemoteView` 只认 `true`。
+- **成员状态可选 `usageLimit: { resetAtMs: number | null }`（2026-10-22）**：仅当可信快照确认该成员配额耗尽且状态为 `cooling` 时携带，
+  供本机管理与同账号远程列表显示「配额已用完」、配额重置倒计时及警示圆点。时刻来自配额窗口，与可能更晚结束的其他冷却分开；未知为 `null`。
+  `parseProviderGroupRemoteView` 只接收冷却中的非分享成员，时刻须为正安全整数或 `null`；不从普通冷却推断配额原因。
+  旧组所在电脑不带该字段，查看端保留「冷却中」；旧查看端忽略该字段。受邀者匿名状态白名单不带此信息，分享来的成员不读取配额。
+  不新增通道、请求参数、权限、持久状态或服务端变更，不改变分配与恢复策略。
 
 ## 供应商组任务进行中换号
+
+2026-11-03 新增独立动作 `rebalance-preference { sessionId, enabled: boolean }` → `{ ok: boolean }`，
+发给**任务所在电脑**，与下面两种动作复用本机 IPC 和同账号 `provider-group:remote` 入口及原有准入。
+`enabled: false` 显式关闭本任务的配额均衡换号（含同账号自动接续），不关闭故障恢复或手动换电脑；
+`true` 删除该 override，恢复原默认/自动偏好。`sessionId` 沿用已有 id 校验，非布尔值回 `[INVALID_PARAMS]`。
+任务尚未归组或服务未装配回 `ok: false`；落盘失败不能回成功。关闭后清理未消费决定，发送前再次核对关闭状态，
+拒绝旧控制端的缓存 `rebalance-decision`。
+保存前读取当前组和任务实际位置核验归属，不能仅凭尚未清理的旧绑定写入。控制端 5 秒等待到期只释放发送，
+继续处理迟到的保存回包；不能把界面超时当作明确失败，连接错误提示保存结果未确认。
+成功保存后经已有 `local-db:sessions:patched` 广播可选布尔字段 `providerGroupRebalanceEnabled`，本机窗口与同账号
+控制端据此按任务电脑 + 任务 id 清理已缓存及在途提议；广播沿用写入前捕获的 owner scope。旧端忽略新字段。
+旧端不认识新动作时明确拒绝，控制端提示保存失败并在原位置发送，
+不得降级成换号确认。旧动作和旧客户端不变。
+
+持久文件新增可选 `disabledRebalance: { [sessionId]: at }`（每类偏好最多 4000 条），旧 `autoRebalance` 保留；
+新端读取旧文件按未关闭处理。降级旧版本无法执行关闭语义，可能恢复旧版配额均衡行为，旧版写入也可能丢弃新字段。
+本次只扩展端到端 invoke 的业务 payload，不改变 envelope、channel、allowlist、relay 握手/路由或重连；
+官方及自建中转均按现有通用通道透传，无需更改服务器。协议与业务回归由 `remoteHandler.test.ts`、
+`ipc.test.ts`、`service.test.ts` 及两端提示测试覆盖。
 
 产品规则见 [`provider-groups.md`](../product-rules/provider-groups.md) §6.2（2026-10-21 用户裁决：上一轮结束、用户发下一条消息
 前弹窗问要不要换号，可为这个任务选「以后自动换」，手机与电脑一致）。
@@ -3180,8 +3277,10 @@ B 上的 Worker 是一条普通任务，`sessions.orca_remote_lead`(migration 01
   分配，但不能作为主动换号结果；旧调用端不传该字段，行为不变。
 - **分隔条内容可选 `switchReason: 'quota-rebalance'`**：`agent_switch` 边界行（`AgentSwitchBoundaryContent`）只在供应商组为此换了
   电脑时带上，桌面与手机在位置后写「· 这个账号的配额更该先用」。旧端忽略，照常只显示位置。
-- **本机持久数据**：「以后自动换」存在按账号隔离的 `provider-group-session-prefs.json`（`{ autoRebalance: { [sessionId]: at } }`，
-  最多 4000 条、超出丢最早的；读不出时保留原文件、按都没选过处理）。不同步、不外发；降级旧版忽略这个文件，相当于每次都不提议。
+- **本机持久数据**：自动偏好与显式关闭状态存在按账号隔离的 `provider-group-session-prefs.json`
+  （`{ autoRebalance: { [sessionId]: at }, disabledRebalance?: { [sessionId]: at } }`），每类最多 4000 条、超出丢最早的；
+  读不出时保留原文件、按都没选过处理。文件不同步、不外发；手机与其他控制端通过上述动作读取建议、保存选择。
+  不支持新动作的旧版本会忽略关闭状态，降级风险见本节开头。
 - 实现：`provider-group/service.ts`、`usage.ts`(`providerGroupRebalanceTarget`)、`router.ts`(`rebalanceCandidates`)、`runtime.ts`、
   `ipc.ts`、`remoteHandler.ts`、`remoteRegistration.ts`、`sessionPrefs.ts`、`maker-ipc/sessionAgentSwitchHandler.ts`；客户端
   `renderer/features/provider-group/sessionRebalancePrompt.ts` 与 `apps/mobile/src/session/sessionRebalancePrompt.ts`。回归见
@@ -4110,6 +4209,14 @@ PC 同源 ghostPermissionItems 声明摘要投影并排除 tool，以请求 loca
 现有 `plugins` 远程资源以可选 action `management:snapshot` 声明 version 1 管理能力。
 新增 `management:market-detail/begin/operation/answer/cancel`，沿既有 resource invoke、
 同账号设备授权和 owner 边界执行，不新增通用 IPC allowlist 或服务端协议。
+新版插件页复用 `management:snapshot` 的可选只读参数：`{read:'capabilities'}` 只返回
+`catalogPaging: true`；`{read:'installed'}` 只返回已装管理及维护投影；
+`{read:'catalog',query}` 返回目标 Host 的一页市场项、游标、首批完整数量及本地来源统计；
+`{read:'recommendations'}` 返回本次最多 12 个公开官方候选。查询、版本、来源和已装判定均在
+目标 Host 执行，本地自定义来源不上传市场服务器。新控制端先探测能力，只有旧 Host 明确
+拒绝非空输入（`INVALID_PARAMS`）才进入既有 v1 快照路径；普通读取失败不得回退全量。
+旧控制端的空输入仍返回原有 v1 全量快照，旧 Host 的历史网络限制保留。推荐池由页面持有，
+切换列表、搜索及详情返回不重新请求；没有新增远程 channel、授权或 relay 配置。
 `management:snapshot` 的可选 `projects` 字段投影目标 Host 的最近项目 ID、显示名及可选只读
 `path`，用于复用本机 Project Scope 的目录展示（含暂时不存在的最近目录，不按任务归档过滤）；
 控制端以 Host 生成的项目 ID 请求 `management:project-state`，返回该项目的禁用实例和

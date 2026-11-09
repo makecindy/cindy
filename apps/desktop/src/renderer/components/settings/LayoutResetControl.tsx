@@ -40,7 +40,7 @@ export function LayoutResetControl() {
         <Button
           {...setting.controlProps}
           variant="secondary"
-          size="md"
+          size="sm"
           compact
           loading={resetting}
           type="button"
