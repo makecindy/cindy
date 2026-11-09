@@ -16,6 +16,7 @@ import type { ImportSnapshot } from '../types.js';
 import { CompanionImportError } from '../types.js';
 import { previewImportRedactions } from '../environmentSelection.js';
 import { redactEnvironmentValues } from '../process.js';
+import { readStreamedSecret, writeStreamedSecret } from '../../secrets/streamedSecretFile.js';
 import { DEFAULT_MEMORY_CONFIG, MemoryStorage, type MakerMemoryStore } from '@cindy/maker-core';
 import { BOT_MEMORY_BODY_MAX_BYTES } from '../../../shared/botMemory.js';
 import { createBotMemoryService } from '../../maker-ipc/botMemoryService.js';
@@ -48,6 +49,8 @@ vi.mock('../runtime.js', () => ({ recoverCompanionEnvironmentRemovals: vi.fn(asy
   readCompanionSessionScope: async () => ({ owner: h.root, botId: h.botId, userData: h.root, assertOwner() { if (h.boundary) throw new Error('OWNER_CHANGED'); } }),
   readCompanionSessionEnvironment: async () => ({ identity: h.root, botId: h.botId, userData: h.root, assertOwner() {}, environment: await h.store.read(h.root, h.botId, () => {}) }),
   companionEnvironmentStore: {
+  writeResource: (...args: Parameters<typeof h.store.writeResource>) => h.store.writeResource(...args),
+  readResource: (...args: Parameters<typeof h.store.readResource>) => h.store.readResource(...args),
   read: (...args: Parameters<typeof h.store.read>) => h.store.read(...args),
   readImportRequestId: (...args: Parameters<typeof h.store.readImportRequestId>) => h.store.readImportRequestId(...args),
   write: (...args: Parameters<typeof h.store.write>) => h.store.write(...args),
@@ -109,7 +112,12 @@ beforeEach(async () => {
   h.store = createCompanionEnvironmentStore({ read: key => values.get(key) ?? null, write: (key, value) => {
     if (h.failReadyWrite && Object.values<{ handover?: string }>(JSON.parse(value).automations ?? {}).some(binding => binding.handover === 'ready')) { h.failReadyWrite = false; return false; }
     values.set(key, value); return true;
-  }, remove: key => { values.delete(key); return true; } });
+  }, remove: key => { values.delete(key); return true; },
+    writeResource: (key, id, chunks, assertOwner) => writeStreamedSecret(path.join(h.root, 'archive', key, id), `${key}:${id}`, chunks,
+      { encrypt: text => Buffer.from(text), decrypt: bytes => bytes.toString() }, assertOwner),
+    readResource: (key, id, digest, assertOwner) => readStreamedSecret(path.join(h.root, 'archive', key, id), `${key}:${id}`, digest,
+      { encrypt: text => Buffer.from(text), decrypt: bytes => bytes.toString() }, assertOwner),
+  });
   h.snapshot = { source: { kind: 'hermes', agentId: 'default', name: 'Ada', root: h.root, workspace: h.root, configFile: path.join(h.root, 'config.yaml') }, fingerprint: 'fixture', items: [{
     view: { id: 'task', category: 'automations', name: 'Report', enabled: true, selected: true },
     automation: { sourceId: 'task', fingerprint: 'fixture', original: { enabled: true }, input: { name: 'Report', prompt: 'Read data', enabled: false, triggers: [{ id: 'tick', kind: 'interval', intervalMs: 60000 }] } },
@@ -1098,7 +1106,10 @@ it('keeps the source paused and execution deferred when the ready marker write f
 }, 10000);
 
 
-it.each(['count', 'entrypoint', 'projected-entrypoint', 'captured-entrypoint'])('imports skill %s beyond the old authoring and count quotas', async mode => {
+// Unit: exercise start/status and the real Skill writer. The resource case
+// covers the reported 16 MiB rejection through checkpointing and final save,
+// beyond the reader-only coverage in files.test.ts.
+it.each(['count', 'entrypoint', 'projected-entrypoint', 'captured-entrypoint', 'captured-resource'])('imports skill %s beyond the old authoring and count quotas', async mode => {
   const count = mode === 'count' ? 142 : 1;
   h.snapshot.items = Array.from({ length: count }, (_, index) => ({
     view: { id: `skill-${index}`, category: 'skills' as const, name: `skill-${index}`, selected: true }, filesComplete: true,
@@ -1108,10 +1119,14 @@ it.each(['count', 'entrypoint', 'projected-entrypoint', 'captured-entrypoint'])(
     h.snapshot.items[0]!.files!.push({ name: 'resource.txt', bytes: Buffer.from('fixture-private-key'), executable: false });
     h.snapshot.items.push({ view: { id: 'key', name: 'Key', category: 'connections', selected: true }, env: { API_KEY: 'fixture-private-key' } });
   }
-  if (mode === 'captured-entrypoint') {
+  if (mode === 'captured-entrypoint' || mode === 'captured-resource') {
     const directory = path.join(h.root, 'source-skill');
     await fs.mkdir(directory); await fs.writeFile(path.join(directory, 'SKILL.md'), Buffer.alloc(65537, 'a'));
     Object.assign(h.snapshot.items[0]!, { sourceDirectory: directory, files: [], filesComplete: false });
+    if (mode === 'captured-resource') {
+      const file = await fs.open(path.join(directory, 'resource.bin'), 'w');
+      try { await file.write(Buffer.from([7]), 0, 1, 16 * 1024 * 1024); } finally { await file.close(); }
+    }
   }
   const [source] = await listCompanionImportSources('fixture');
   const preview = await previewCompanionImport(source!.id, 'fixture');
@@ -1123,15 +1138,29 @@ it.each(['count', 'entrypoint', 'projected-entrypoint', 'captured-entrypoint'])(
   expect(result?.status).toBe('complete');
   expect(result?.savedEntryIds).toEqual(expect.arrayContaining(selection.entryIds));
   expect(await fs.readdir(path.join(h.root, 'bots', accepted.botId, 'skills'))).toHaveLength(count);
+  if (mode === 'captured-resource') {
+    const root = path.join(h.root, 'bots', accepted.botId, 'skills');
+    const [slug] = await fs.readdir(root);
+    const bytes = await fs.readFile(path.join(root, slug!, 'resource.bin'));
+    expect(bytes.length).toBe(16 * 1024 * 1024 + 1);
+    expect(bytes[0]).toBe(0);
+    expect(bytes.at(-1)).toBe(7);
+  }
   expect(createBotProfile).toHaveBeenCalledOnce();
 });
 
-it.each(['oversized', 'symlink'])('retains a failed %s skill for retry while saving the companion and healthy content', async mode => {
+it.each(['unreadable', 'symlink'])('retains a failed %s skill for retry while saving the companion and healthy content', async mode => {
   const directory = path.join(h.root, 'source-skill');
   await fs.mkdir(directory);
-  if (mode === 'oversized') {
-    const file = await fs.open(path.join(directory, 'resource.bin'), 'w');
-    try { await file.truncate(16 * 1024 * 1024 + 1); } finally { await file.close(); }
+  let deny = true;
+  if (mode === 'unreadable') {
+    const file = path.join(directory, 'resource.bin');
+    await fs.writeFile(file, 'fixture');
+    const open = fs.open.bind(fs);
+    vi.spyOn(fs, 'open').mockImplementation(async (...args) => {
+      if (deny && args[0] === await fs.realpath(file)) throw Object.assign(new Error('fixture unreadable'), { code: 'EACCES' });
+      return open(...args);
+    });
   } else {
     const outside = path.join(h.root, 'outside');
     await fs.mkdir(outside); await fs.writeFile(path.join(outside, 'resource.txt'), 'fixture');
@@ -1145,10 +1174,11 @@ it.each(['oversized', 'symlink'])('retains a failed %s skill for retry while sav
   await startCompanionImport(selection, 'fixture');
   await vi.waitFor(async () => expect((await getCompanionImportResult(selection.requestId))?.saved).toBe(true));
   expect(createBotProfile).toHaveBeenCalled();
-  expect((await getCompanionImportResult(selection.requestId))?.checks).toContainEqual({ entryId: 'skill', status: 'needs-attention', message: mode === 'oversized' ? 'SOURCE_FILE_TOO_LARGE' : 'SOURCE_LINK_OUTSIDE_FOLDER' });
+  expect((await getCompanionImportResult(selection.requestId))?.checks).toContainEqual({ entryId: 'skill', status: 'needs-attention', message: mode === 'unreadable' ? 'IMPORT_PERMISSION_DENIED' : 'SOURCE_LINK_OUTSIDE_FOLDER' });
   expect(h.secretValues.size).toBeGreaterThan(0);
   // A corrected resource can finish under the same request; no second companion is needed.
-  await fs.rm(path.join(directory, mode === 'oversized' ? 'resource.bin' : 'linked'), { recursive: true });
+  deny = false;
+  if (mode === 'symlink') await fs.rm(path.join(directory, 'linked'), { recursive: true });
   await startCompanionImport(selection, 'fixture');
   await vi.waitFor(async () => expect((await getCompanionImportResult(selection.requestId))?.status).toBe('complete'));
 });
@@ -1269,8 +1299,11 @@ it('refreshes masks and encrypted originals when a previously failed credential-
   expect(await fs.readFile(path.join(h.root, 'bots', result.botId, 'skills/report/read.txt'), 'utf8')).not.toContain(secret);
   const environment = (await h.store.read(h.root, result.botId, () => {}))!;
   expect(environment.env).toEqual({});
-  const original = environment.skillFiles?.report?.find(file => file.name === 'read.txt');
-  expect(Buffer.from(original!.bytes, 'base64').toString()).toContain(secret);
+  const { materializeSkillArchive } = await import('../skillArchive.js');
+  const originalDirectory = path.join(h.root, 'restored-private');
+  await fs.mkdir(originalDirectory);
+  await materializeSkillArchive(environment.skillArchives!.report!, originalDirectory, h.store, {}, () => {}, false);
+  expect(await fs.readFile(path.join(originalDirectory, 'read.txt'), 'utf8')).toContain(secret);
   expect(Object.values(environment.contentRedactions ?? {})).toContain(secret);
 });
 
@@ -1429,8 +1462,7 @@ it.each(['hermes', 'openclaw'] as const)('restores disabled %s skill metadata an
   const directory = path.join(h.root, 'skills', 'folder-name');
   await fs.mkdir(directory, { recursive: true });
   const manifest = path.join(directory, 'SKILL.md');
-  await fs.writeFile(manifest, '');
-  await fs.truncate(manifest, 16 * 1024 * 1024 + 1);
+  await fs.writeFile(manifest, '---\ndescription: ' + 'x'.repeat(16 * 1024 * 1024));
   const { discoverImportSkills } = await import('../skills.js');
   const { createImportBudget } = await import('../files.js');
   h.snapshot.items = await discoverImportSkills(h.snapshot.source, config, h.root, {}, createImportBudget());
@@ -2065,4 +2097,37 @@ it('bounds legacy source lists and saved results while preserving the chunk-capa
   expect((await api.sources())[0]?.name).toBe('漢'.repeat(600_000));
   expect(await api.status(requestId)).toEqual(result);
   expect(h.created).toBe(false);
+});
+
+// Unit #9583 review: failed captures must not become executable references, and
+// ordinary unredacted Skills need no private copy on every command. Previous
+// tests checked files but not the environment after a second failed capture.
+it('keeps failed recaptures and ordinary skills out of executable archives', async () => {
+  const bad = path.join(h.root, 'bad-skill'), good = path.join(h.root, 'good-skill');
+  for (const directory of [bad, good]) { await fs.mkdir(directory); await fs.writeFile(path.join(directory, 'SKILL.md'), '# Report'); }
+  const badId = `skill-${fingerprint(bad).slice(0, 20)}`;
+  h.snapshot.items = [
+    { view: { id: badId, name: 'bad', category: 'skills', selected: true }, sourceDirectory: bad, filesComplete: false, captureIssue: 'SOURCE_CONFIG_INVALID' },
+    { view: { id: 'good', name: 'good', category: 'skills', selected: true }, sourceDirectory: good, filesComplete: false },
+  ];
+  vi.mocked(createImportSourceReader).mockImplementation(() => ({ readName: h.readName, readRedactions: async () => ({}), readConfig: async () => { throw new Error('broken config'); } }) as never);
+  const [source] = await listCompanionImportSources('fixture');
+  const preview = await previewCompanionImport(source!.id, 'fixture');
+  const selection = { requestId: 'fixture-failed-recapture', previewId: preview.id, name: 'Ada', entryIds: [badId, 'good'], takeover: false, deferSetup: true };
+  await startCompanionImport(selection, 'fixture');
+  await withBotProfileLocks([h.botId], async () => {});
+  const first = (await getCompanionImportResult(selection.requestId))!;
+  const firstEnv = (await h.store.read(h.root, first.botId, () => {}))!;
+  const originalRef = (await deserializeImportSnapshotAsync(firstEnv.pendingImport!.snapshotJson, () => {})).items.find(item => item.view.id === badId)!.skillArchive!;
+  expect(originalRef).toBeDefined();
+  expect(firstEnv.skillArchives ?? {}).toEqual({});
+  await fs.writeFile(path.join(bad, 'SKILL.md'), '# Changed but config still broken');
+  await startCompanionImport(selection, 'fixture');
+  await withBotProfileLocks([first.botId], async () => {});
+  const env = (await h.store.read(h.root, first.botId, () => {}))!;
+  const retryRef = (await deserializeImportSnapshotAsync(env.pendingImport!.snapshotJson, () => {})).items.find(item => item.view.id === badId)!.skillArchive!;
+  expect(retryRef.digest).not.toBe(originalRef.digest);
+  expect(env.skillArchives ?? {}).toEqual({});
+  const { withImportedSkillResources } = await import('../skillResources.js');
+  await expect(withImportedSkillResources(env, () => {}, async variables => variables.CINDY_IMPORTED_SKILLS ?? 'ordinary command')).resolves.toBe('ordinary command');
 });

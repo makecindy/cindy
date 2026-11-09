@@ -46,7 +46,7 @@ export function indexAutomationDependencies(items: readonly ImportItem[]) {
   return { skills, scripts, scriptNames, connections, environment, order, toolPolicy, model,
     text(item: ImportItem): string {
       if (!text.has(item)) text.set(item, item.asset ? item.asset.bytes.toString('utf8')
-        : (item.files ?? []).filter(file => /\.(md|py|js|mjs|sh|ts|json|yaml|yml|toml)$/i.test(file.name)).map(file => file.bytes.toString('utf8')).join('\n'));
+        : item.resourceReferences ?? (item.files ?? []).filter(file => /\.(md|py|js|mjs|sh|ts|json|yaml|yml|toml)$/i.test(file.name)).map(file => file.bytes.toString('utf8')).join('\n'));
       return text.get(item)!;
     },
   };
