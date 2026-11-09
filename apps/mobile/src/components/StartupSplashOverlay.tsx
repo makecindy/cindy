@@ -72,7 +72,15 @@ export function StartupSplashOverlay({
   // Android JS 首帧复刻原生红底 + hero。首启门决议后只淡出这一层，
   // 露出已选定正确主题的 MobileLoginHandoffStage；iOS 不挂该层，行为不变。
   useEffect(() => {
-    if (!nativeBridgeMounted || handoff.showNativeBridge) return;
+    if (!nativeBridgeMounted) return;
+    // 阻断屏隐藏时动画 View 会卸载，取消回调不会 finished。此时已不再
+    // 展示原生首帧，直接收尾；重试恢复只展示正常 JS splash，不重放红底。
+    if (hidden) {
+      nativeBridgeOpacity.setValue(0);
+      setNativeBridgeMounted(false);
+      return;
+    }
+    if (handoff.showNativeBridge) return;
     if (handoffContext?.state.reducedMotion) {
       nativeBridgeOpacity.setValue(0);
       setNativeBridgeMounted(false);
@@ -88,6 +96,7 @@ export function StartupSplashOverlay({
     });
     return () => animation.stop();
   }, [
+    hidden,
     handoff.showNativeBridge,
     handoffContext?.state.reducedMotion,
     nativeBridgeMounted,
@@ -101,6 +110,12 @@ export function StartupSplashOverlay({
 
   useEffect(() => {
     if (!released) return;
+    // 已获准释放的覆盖层若在淡出中被隐藏，同样不能再等取消的动画回调。
+    if (hidden) {
+      opacity.setValue(0);
+      setMounted(false);
+      return;
+    }
     const animation = Animated.timing(opacity, {
       duration: SPLASH_FADE_OUT_MS,
       toValue: 0,
@@ -110,7 +125,7 @@ export function StartupSplashOverlay({
       if (finished) setMounted(false);
     });
     return () => animation.stop();
-  }, [opacity, released]);
+  }, [hidden, opacity, released]);
 
   const value = useMemo(
     () => ({ releaseSplash, splashActive: mounted && !released && !hidden }),
