@@ -42,10 +42,8 @@ function visit(node: ts.Node) {
     routeDeclarations.push(`const ${node.getText(source)};`);
   }
   if (ts.isVariableDeclaration(node) && node.initializer && ts.isCallExpression(node.initializer)) {
-    const name = ts.isIdentifier(node.name) ? node.name.text
-      : ts.isObjectBindingPattern(node.name) && node.name.elements.some(e => e.name.getText(source) === 'draftInitialEffort')
-        ? 'draftInitialSelection' : '';
-    if (['createSession', 'handleSend', 'handleCreateGoal', 'localDraftEffort', 'draftInitialSelection'].includes(name)) {
+    const name = ts.isIdentifier(node.name) ? node.name.text : '';
+    if (['createSession', 'handleSend', 'handleCreateGoal', 'localDraftEffort', 'draftSeedSelection', 'draftInitialEffort'].includes(name)) {
       callbacks[name] = node.initializer.arguments[0];
     }
   }
@@ -295,7 +293,15 @@ async function submit(options: {
     });
   }
   const localDraftEffort = runInNewContext(executable('localDraftEffort'), environment)();
-  const selection = runInNewContext(executable('draftInitialSelection'), { ...environment, localDraftEffort })();
+  // The route resolves the seeded pair and the effort of the final provider/model
+  // in two steps; compose them the way the route does.
+  const seeded = runInNewContext(executable('draftSeedSelection'), environment)();
+  const selection = {
+    model: seeded?.model ?? environment.calibratedDraftModel,
+    effort: runInNewContext(executable('draftInitialEffort'), {
+      ...environment, localDraftEffort, draftSeedSelection: seeded,
+    })(),
+  };
   Object.assign(environment, { draftInitialModel: selection.model, draftInitialEffort: selection.effort });
   const callback = runInNewContext(executable(options.entry === 'goal' ? 'handleCreateGoal' : 'handleSend'), environment);
   try {

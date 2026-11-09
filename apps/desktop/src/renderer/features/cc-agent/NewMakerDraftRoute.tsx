@@ -2159,63 +2159,36 @@ export function NewMakerDraftRoute() {
   // 选中模型 + effort:device-link 用镜像 holder(deviceLinkInitial,被控端草稿值已按 capabilities
   // 校准);本地草稿用 chatPrefs(逐字节不变)。device-link 在 holder seed 完成前(等隧道 / 能力)
   // 极早期暂用 chatPrefs,随后被 deviceLinkInitial 取代。
-  const { model: draftInitialModel, effort: draftInitialEffort } = useMemo(() => {
+  // 播种出来的模型与档位:被控端给的原样用(目录还在读 / 老被控端只有拍平 capabilities 时)。
+  const draftSeedSelection = useMemo(() => {
     // 播种出来的模型可能是空串(那份目录没给出可用型号,见 resolveDeviceLinkDraftDefaults 的
     // 「models.length === 0」分支)。空串会让输入框的模型胶囊整个空着、来源也解析不出来 ——
     // 与其把空串一路传下去,不如用校准出来的模型(那份目录里真实存在的型号)。
-    if (usesDeviceCatalog && deviceLinkInitial?.model) {
-      // 播种模型来自被控端**全量** capabilities(跨来源并集),而目标目录只开放了其中一部分
-      // 来源 —— 那个型号在目标目录里路由不出去时,选择器里一行都命中不了、胶囊整个空着
-      // (Codex review #9369)。目录还在读 / 老被控端只有拍平 capabilities 时,不知道目标开放
-      // 了哪些来源,先按播种值显示,不闪本机模型。
-      const seedRoutable = chatEligibleSourcesForModel(
-        agentCatalogProviders,
-        deviceLinkInitial.model,
-        capabilityAgentKind,
-      ).length > 0;
-      if (deviceProvidersLoading || deviceProvidersUnsupported || seedRoutable) {
-        return { model: deviceLinkInitial.model, effort: deviceLinkInitial.effort };
-      }
+    if (!(usesDeviceCatalog && deviceLinkInitial?.model)) return null;
+    // 播种模型来自被控端**全量** capabilities(跨来源并集),而目标目录只开放了其中一部分
+    // 来源 —— 那个型号在目标目录里路由不出去时,选择器里一行都命中不了、胶囊整个空着
+    // (Codex review #9369)。目录还在读 / 老被控端只有拍平 capabilities 时,不知道目标开放
+    // 了哪些来源,先按播种值显示,不闪本机模型。
+    const seedRoutable = chatEligibleSourcesForModel(
+      agentCatalogProviders,
+      deviceLinkInitial.model,
+      capabilityAgentKind,
+    ).length > 0;
+    if (deviceProvidersLoading || deviceProvidersUnsupported || seedRoutable) {
+      return { model: deviceLinkInitial.model, effort: deviceLinkInitial.effort };
     }
-    if (usesDeviceCatalog) {
-      // 播种模型为空 → 换用校准模型时,effort 不能拿本机档位直接凑:localDraftEffort 是
-      // 本机 chatPrefs.effort,没按目标模型验证过(本机 high 可能不在目标模型的档位表里,
-      // pill 会先显示一个发送时才被 reconcile 掉的值,Codex review #9369)。按目标目录里
-      // 该模型的档位表解析:用户上次在这台设备选的档 > 本机偏好(该模型支持才保留)>
-      // 模型默认档。闸门条件与 resolveDeviceLinkSubmission 的发送侧 reconcile 同口径。
-      const targetModel = agentCatalogProviders
-        .map((provider) => getModel(provider, calibratedDraftModel, capabilityAgentKind))
-        .find((model) => model);
-      if (targetModel) {
-        const rememberedEffort = effectiveAgentDeviceId
-          ? recallAgentDeviceSelection(effectiveAgentDeviceId, capabilityAgentKind)?.effort
-          : undefined;
-        const effort =
-          targetModel.effortsUnknown === true ||
-            (targetModel.efforts.length === 0 && targetModel.effortsUnknown !== false)
-            ? (rememberedEffort ?? localDraftEffort)
-            : reconcileInvocationEffort({
-                requested: rememberedEffort ?? localDraftEffort,
-                model: targetModel,
-                noEffortFallback: null,
-              });
-        return { model: calibratedDraftModel, effort };
-      }
-    }
-    // 校准在 calibratedDraftModel 一处完成,effort / fast / 来源都已按它推导 —— 这里
-    // 直接用,不再单独算一次(否则又会出现模型与能力参数不同源的分叉)。
-    return { model: calibratedDraftModel, effort: localDraftEffort };
+    return null;
   }, [
     usesDeviceCatalog,
     deviceLinkInitial,
-    calibratedDraftModel,
-    localDraftEffort,
     agentCatalogProviders,
     capabilityAgentKind,
-    effectiveAgentDeviceId,
     deviceProvidersLoading,
     deviceProvidersUnsupported,
   ]);
+
+  // 播种分支之外的型号:一律用校准后的那个(校准在 calibratedDraftModel 一处完成)。
+  const draftInitialModel = draftSeedSelection?.model ?? calibratedDraftModel;
 
   // 远程草稿的权限档 / 来源同样取镜像 holder;本地走 chatPrefs。
   // Agent 在另一台电脑运行时权限仍在被控电脑上生效:那台的能力清单里没有这一档(被夹掉)时,回落到
@@ -2306,6 +2279,70 @@ export function NewMakerDraftRoute() {
     draftInitialProviderId,
     draftInitialModel,
     capabilityAgentKind,
+  ]);
+
+  // 选中来源与型号之后的**档位**:按目标目录里该型号的档位表解析 —— 用户上次在这台设备
+  // 为**这个型号**选的档 > 该型号自己记住的档 > 本机偏好(该模型支持才保留)> 模型默认档。
+  // 闸门条件与 resolveDeviceLinkSubmission 的发送侧 reconcile 同口径。
+  const draftInitialEffort = useMemo(() => {
+    // 播种分支:档位是被控端给的,原样用。
+    if (draftSeedSelection) return draftSeedSelection.effort;
+    if (usesDeviceCatalog) {
+      // 播种模型为空 → 换用校准模型时,effort 不能拿本机档位直接凑:localDraftEffort 是
+      // 本机 chatPrefs.effort,没按目标模型验证过(本机 high 可能不在目标模型的档位表里,
+      // pill 会先显示一个发送时才被 reconcile 掉的值,Codex review #9369)。
+      //
+      // 档位表按**最终来源 + 最终型号**这一对取,不能按目录顺序取第一份:同一个型号在多个
+      // 来源上都有条目时,各家的档位表可以不一样(第一份明确没有档位、选中的却是后面那份
+      // 订阅)—— 按目录顺序取会把档位算到另一个账号上(Codex review #9369)。
+      const finalProvider = chatInitialProviderId
+        ? agentCatalogProviders.find((provider) => provider.id === chatInitialProviderId)
+        : undefined;
+      const targetModel =
+        (finalProvider
+          ? getModel(finalProvider, calibratedDraftModel, capabilityAgentKind)
+          : undefined) ??
+        agentCatalogProviders
+          .map((provider) => getModel(provider, calibratedDraftModel, capabilityAgentKind))
+          .find((model) => model);
+      if (targetModel) {
+        // 档位记忆是**按模型**的:上一次选的是别的型号时,那个档位不能带过来 —— 旧型号与新型号
+        // 都接受 low 时,reconcileInvocationEffort 会把旧值保留下来,会话就在 low 上建起来,
+        // 而不是这个型号记住的 / 默认的那一档(Codex review #9369)。
+        const recalled = effectiveAgentDeviceId
+          ? recallAgentDeviceSelection(effectiveAgentDeviceId, capabilityAgentKind)
+          : null;
+        const rememberedEffort =
+          recalled?.model === calibratedDraftModel ? recalled.effort : undefined;
+        const perModelEffort = chatInitialProviderId
+          ? recalled?.providerModelMemory?.[`${capabilityAgentKind}:${chatInitialProviderId}`]
+              ?.effortByModel?.[calibratedDraftModel]
+          : undefined;
+        const requested = rememberedEffort ?? perModelEffort ?? localDraftEffort;
+        const effort =
+          targetModel.effortsUnknown === true ||
+            (targetModel.efforts.length === 0 && targetModel.effortsUnknown !== false)
+            ? requested
+            : reconcileInvocationEffort({
+                requested,
+                model: targetModel,
+                noEffortFallback: null,
+              });
+        return effort;
+      }
+    }
+    // 校准在 calibratedDraftModel 一处完成,effort / fast / 来源都已按它推导 —— 这里
+    // 直接用,不再单独算一次(否则又会出现模型与能力参数不同源的分叉)。
+    return localDraftEffort;
+  }, [
+    draftSeedSelection,
+    usesDeviceCatalog,
+    calibratedDraftModel,
+    localDraftEffort,
+    agentCatalogProviders,
+    capabilityAgentKind,
+    effectiveAgentDeviceId,
+    chatInitialProviderId,
   ]);
 
   // Fast 可用判定:本地 + device-link 统一走 resolveFastSupported(共享 per-provider 逻辑,

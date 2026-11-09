@@ -501,12 +501,19 @@ describe('new task model falls back when the seeded model is empty', () => {
     localEffort?: Effort | null;
     rememberedEffort?: Effort;
   }): { model: string; effort: Effort | null } {
-    const initial = compile<() => { model: string; effort: Effort | null }>(
-      'draftInitialModel',
+    const agentCatalogProviders = [
+      providerWithEfforts(
+        'shared-source',
+        ['shared-model', 'seeded-model'],
+        options.targetEfforts ?? ['medium'],
+      ),
+    ];
+    // 播种分支:被控端给的型号与档位原样用。
+    const seeded = compile<() => { model: string; effort: Effort | null } | null>(
+      'draftSeedSelection',
       (node) =>
         ts.isVariableDeclaration(node) &&
-        ts.isObjectBindingPattern(node.name) &&
-        node.name.elements.some((element) => element.name.getText(source) === 'draftInitialModel') &&
+        node.name.getText(source) === 'draftSeedSelection' &&
         node.initializer &&
         ts.isCallExpression(node.initializer)
           ? node.initializer.arguments[0]
@@ -514,27 +521,39 @@ describe('new task model falls back when the seeded model is empty', () => {
       {
         usesDeviceCatalog: true,
         deviceLinkInitial: options.deviceLinkInitial,
-        calibratedDraftModel: 'shared-model',
-        localDraftEffort: options.localEffort ?? 'medium',
-        agentCatalogProviders: [
-          providerWithEfforts(
-            'shared-source',
-            ['shared-model', 'seeded-model'],
-            options.targetEfforts ?? ['medium'],
-          ),
-        ],
+        agentCatalogProviders,
         capabilityAgentKind: 'pi',
-        effectiveAgentDeviceId: 'share:abc',
-        recallAgentDeviceSelection: () =>
-          options.rememberedEffort ? { model: 'shared-model', effort: options.rememberedEffort } : null,
-        getModel,
-        reconcileInvocationEffort,
         chatEligibleSourcesForModel,
         deviceProvidersLoading: false,
         deviceProvidersUnsupported: false,
       },
-    );
-    return initial();
+    )();
+    const effort = compile<() => Effort | null>(
+      'draftInitialEffort',
+      (node) =>
+        ts.isVariableDeclaration(node) &&
+        node.name.getText(source) === 'draftInitialEffort' &&
+        node.initializer &&
+        ts.isCallExpression(node.initializer)
+          ? node.initializer.arguments[0]
+          : undefined,
+      {
+        draftSeedSelection: seeded,
+        usesDeviceCatalog: true,
+        calibratedDraftModel: 'shared-model',
+        localDraftEffort: options.localEffort ?? 'medium',
+        agentCatalogProviders,
+        capabilityAgentKind: 'pi',
+        effectiveAgentDeviceId: 'share:abc',
+        // 目录里只有这一家来源,最终来源就是它。
+        chatInitialProviderId: 'shared-source',
+        recallAgentDeviceSelection: () =>
+          options.rememberedEffort ? { model: 'shared-model', effort: options.rememberedEffort } : null,
+        getModel,
+        reconcileInvocationEffort,
+      },
+    )();
+    return { model: seeded?.model ?? 'shared-model', effort };
   }
 
   function providerWithEfforts(id: string, modelIds: string[], efforts: Effort[]): ProviderView {
@@ -680,5 +699,62 @@ describe('the source follows the final model', () => {
     expect(resolveFastSupported).toHaveBeenCalledWith(
       expect.objectContaining({ providerId: 'good', modelId: 'shared-model' }),
     );
+  });
+});
+
+/**
+ * 档位要按**最终来源 + 最终型号**这一对来解析(Codex review #9369)。
+ *
+ * 同一个型号在多个来源上都有条目时,各家的档位表可以不一样;档位记忆也是**按模型**的:
+ * 上一次选的是别的型号时,那个档位不能带过来。
+ */
+describe('the effort follows the final provider and model', () => {
+  function effortOf(bindings: {
+    agentCatalogProviders: ProviderView[];
+    chatInitialProviderId: string | null;
+    calibratedDraftModel?: string;
+    localDraftEffort?: Effort | null;
+    recallAgentDeviceSelection?: () => unknown;
+  }): Effort | null {
+    return callback<() => Effort | null>('draftInitialEffort', {
+      draftSeedSelection: null,
+      usesDeviceCatalog: true,
+      calibratedDraftModel: bindings.calibratedDraftModel ?? 'shared-model',
+      localDraftEffort: bindings.localDraftEffort ?? 'medium',
+      agentCatalogProviders: bindings.agentCatalogProviders,
+      capabilityAgentKind: 'pi',
+      effectiveAgentDeviceId: 'share:abc',
+      chatInitialProviderId: bindings.chatInitialProviderId,
+      recallAgentDeviceSelection: bindings.recallAgentDeviceSelection ?? (() => null),
+      getModel,
+      reconcileInvocationEffort,
+    })();
+  }
+
+  it('resolves the effort from the selected provider, not the first catalog copy', () => {
+    // 第一份目录条目明确没有档位,选中的却是后面那份订阅:按目录顺序取会把档位算到
+    // 另一个账号上,会话就在那个账号的默认档(这里是 null)上建起来(Codex review #9369)。
+    const providers = [provider('first', []), provider('chosen', ['low', 'high'])];
+    expect(effortOf({
+      agentCatalogProviders: providers,
+      chatInitialProviderId: 'chosen',
+      localDraftEffort: 'low',
+    })).toBe('low');
+  });
+
+  it('does not carry the effort of another model into the fallback model', () => {
+    // 上一次选的是别的型号(那个型号的档位是 low):旧型号与新型号都接受 low 时,
+    // reconcile 会把旧值保留下来,会话就在 low 上建起来 —— 新型号自己记住的是 high。
+    const providers = [provider('chosen', ['low', 'high'])];
+    const effort = effortOf({
+      agentCatalogProviders: providers,
+      chatInitialProviderId: 'chosen',
+      recallAgentDeviceSelection: () => ({
+        model: 'other-model',
+        effort: 'low',
+        providerModelMemory: { 'pi:chosen': { effortByModel: { 'shared-model': 'high' } } },
+      }),
+    });
+    expect(effort).toBe('high');
   });
 });
