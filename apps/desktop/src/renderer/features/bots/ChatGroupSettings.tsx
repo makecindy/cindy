@@ -246,9 +246,9 @@ export function ChatGroupSettings({ group }: { group: BotGroupSummary }) {
       <SettingsSection title={t(key('replies'))}>
         <SettingsCard>
           <SettingsRow wrap title={t(shared('replyMode'))} hint={t(replyMode === 'all' ? shared('replyModeNote') : key('replyModeMentionedNote'))}
-            trailing={<SegmentedControl<BotGroupSummary['replyMode']> aria-label={t(shared('replyMode'))} value={replyMode} disabled={busy}
-              options={(['all', 'mentioned'] as const).map(value => ({ value, label: t(REPLY_MODE_LABELS[value]) }))}
-              onValueChange={value => { if (value !== replyMode) void saveRules({ replyMode: value }); }} />} />
+            trailing={<Select label={t(shared('replyMode'))} value={replyMode} disabled={busy} size="compact" className="max-w-[220px]"
+              options={(['mentioned', 'all'] as const).map(value => ({ value, label: t(REPLY_MODE_LABELS[value]) }))}
+              onValueChange={value => void saveRules({ replyMode: value as typeof replyMode })} />} />
           {group.supportsMentionAudiences && owner && <SettingsRow wrap title={t(shared('allowMentionAllBots'))} hint={t(shared('allowMentionAllBotsHint'))}
             trailing={<Switch aria-label={t(shared('allowMentionAllBots'))} checked={group.allowMentionAllBots === true}
               disabled={busy || group.revision === undefined} onCheckedChange={allowMentionAllBots => {
@@ -257,9 +257,9 @@ export function ChatGroupSettings({ group }: { group: BotGroupSummary }) {
           {/* Single-speaker servers always answer one teammate at a time, so there is no speaking mode. */}
           {!group.singleSpeaker && <SettingsRow wrap title={t(shared('speakingMode'))}
             hint={t(shared(speakingMode === 'auto' ? 'speakingModeAutoNote' : 'speakingModeSequentialNote'))}
-            trailing={<SegmentedControl<BotGroupSummary['speakingMode']> aria-label={t(shared('speakingMode'))} value={speakingMode} disabled={busy}
+            trailing={<Select label={t(shared('speakingMode'))} value={speakingMode} disabled={busy} size="compact" className="max-w-[220px]"
               options={(['auto', 'sequential'] as const).map(value => ({ value, label: t(SPEAKING_MODE_LABELS[value]) }))}
-              onValueChange={value => { if (value !== speakingMode) void saveRules({ speakingMode: value }); }} />} />}
+              onValueChange={value => void saveRules({ speakingMode: value as typeof speakingMode })} />} />}
         </SettingsCard>
       </SettingsSection>
       {/* The organizer arranges a 分工 whose steps are not written out; a 分工 works in the project folder. */}

@@ -390,7 +390,7 @@ Owner decisions, 2026-11-08. They apply to every Settings page, drawer and setti
 - **Select size.** Single-value fields use the shared `Select`; menus are for actions only, and a DropdownMenu radio group is not a field. Trigger height is 36px by default (`size` default) or 32px (`size="compact"`) in narrow drawers and dense lists; widths are 220px (`width="sm"`), 320px (`width="md"`) or full width for stacked fields (`width="full"`). No other trigger heights or ad-hoc widths.
 - **Restore default.** A single setting shows the "customized" badge and a 28px pill icon button with a `Tip` (`DefaultOverrideControls`), always to the left of its control and only while the value differs from the default. A page or group reset is a `Button` `variant="secondary"` `size="sm"` with an icon and text, on the right of the page or section title.
 - **Destructive actions.** Irreversible actions (clear memories or caches, delete, remove an account, dissolve a group) use the danger treatment: `Button` `tone="danger"`, with `danger-solid` reserved for the ConfirmDialog confirm button. Reversible actions such as Disconnect stay secondary. Destructive rows in a menu always use `variant="danger"`.
-- **Same setting, same control.** When one setting appears in two places (for example the group reply mode or the provider account strategy), both use the same control with the same option order.
+- **Same setting, same control.** When one setting appears in two places (for example the provider account strategy), both use the same control with the same option order. Known exception (owner decision, 2026-11-09): the group reply and speaking modes stay a segmented control in local groups and a Select in server-backed groups for now.
 
 ### Device access pills
 

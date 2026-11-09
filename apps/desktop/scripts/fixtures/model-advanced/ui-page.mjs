@@ -38,16 +38,17 @@ export default {
       await ui.capture('pricing-reset', { locator: price });
       return;
     }
-    // Default effort is a shared Select (DESIGN §4 Desktop settings controls): options live in its listbox.
-    const effort=page.getByRole('combobox',{name:await ui.t('settings.providers.models.advanced.defaultEffort'),exact:true}).first();
-    await effort.waitFor();
-    await ui.capture('initial');
-    await effort.click();
-    const ultra=page.getByRole('option',{name:await ui.t('effortLevels.ultra'),exact:true});
+    const ultra=page.getByRole('radio',{name:await ui.t('effortLevels.ultra'),exact:true});
     await ultra.waitFor();
-    await ui.capture('effort-options');
+    const clipped=await ultra.evaluate(el=>{
+      const group=el.closest('[role=radiogroup]');
+      const box=el.getBoundingClientRect(), bounds=group.getBoundingClientRect();
+      return box.left<bounds.left || box.right>bounds.right || group.scrollWidth>group.clientWidth+1;
+    });
+    await ui.capture('initial');
+    if(clipped) throw Error('Reasoning options are clipped or require horizontal scrolling');
     await ultra.click();
-    await page.waitForFunction(([label,text])=>[...document.querySelectorAll('[role=combobox]')].some(el=>el.getAttribute('aria-label')===label&&el.textContent?.includes(text)),[await ui.t('settings.providers.models.advanced.defaultEffort'),await ui.t('effortLevels.ultra')]);
+    if(await ultra.getAttribute('aria-checked')!=='true') throw Error('Ultra default was not saved');
     const speed = page.getByText(await ui.t('newChat.modelSelector.speed.ultrafast'), {exact:true});
     const capability = await speed.locator('..').textContent();
     const expected = ['unavailable', 'legacy-sol'].includes(ui.case) ? 'unsupported' : 'supported';

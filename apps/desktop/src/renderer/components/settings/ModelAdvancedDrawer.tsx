@@ -27,6 +27,7 @@ import * as Dialog from '@radix-ui/react-dialog';
 import { AlertTriangle, Check, CircleHelp, Minus, Trash2, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
+import { SegmentedControl } from '@/components/ui/segmented-control';
 import { cn } from '@/lib/utils';
 import { providerViewToCustomProviderConfig, updateCustomProvider } from '@/lib/customProviders';
 import { Select, type SelectOption } from '@/components/ui/select';
@@ -935,33 +936,29 @@ export function ModelAdvancedDrawer({
                       title={t('settings.providers.models.advanced.defaultEffort')}
                       hint={t('settings.providers.models.advanced.defaultEffortHint')}
                     >
-                      {(() => {
-                        // A Select keeps every level (up to six) on one line in a details column;
-                        // closed Gateway tiers remain listed but disabled. A mixed selection is the
-                        // current row (primary engine's level · varies), so every level — the
-                        // primary's too — can still be applied to all engines.
-                        const options = shownEfforts.map((effort) => ({
+                      <SegmentedControl
+                        className="mt-1"
+                        fullWidth
+                        // Six translated labels exceed a details column. Keep every
+                        // level visible instead of hiding Ultra in horizontal overflow.
+                        style={shownEfforts.length > 4 ? {
+                          display: 'grid',
+                          gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
+                          borderRadius: 'var(--radius-xl)',
+                        } : undefined}
+                        optionClassName={shownEfforts.length > 4 ? '!min-w-0 px-1' : undefined}
+                        height={32}
+                        optionHeight={24}
+                        aria-label={t('settings.providers.models.advanced.defaultEffort')}
+                        value={shownEfforts.find((effort) => effort === currentEffort) ?? null}
+                        onValueChange={applyEffort}
+                        disabled={paymentRequired}
+                        options={shownEfforts.map((effort) => ({
                           value: effort,
                           label: t(`effortLevels.${effort}`),
                           disabled: !efforts.includes(effort),
-                        }));
-                        const field = effortMixed
-                          ? withCurrentOption(null, options, [currentEffort && t(`effortLevels.${currentEffort}`),
-                            t('settings.providers.models.advanced.imageInputMixed')].filter(Boolean).join(' · '))
-                          : { value: shownEfforts.find((effort) => effort === currentEffort) ?? '', options };
-                        return (
-                          <Select data-settings-search-action="Choose the default reasoning effort for this model"
-                            className="mt-1"
-                            size="compact"
-                            width="sm"
-                            label={t('settings.providers.models.advanced.defaultEffort')}
-                            value={field.value}
-                            options={field.options}
-                            onValueChange={(effort) => applyEffort(effort as Effort)}
-                            disabled={paymentRequired}
-                          />
-                        );
-                      })()}
+                        }))}
+                      />
                       {effortMixed && (
                         <p className="mt-1.5 text-12 text-[var(--text-tertiary)]">
                           {t('settings.providers.models.advanced.effortMixed')}

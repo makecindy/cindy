@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { MemoryRouter, RouterProvider, createMemoryRouter, useLocation } from 'react-router-dom';
 import { transferableAbortController } from 'node:util';
@@ -298,11 +298,8 @@ it('offers ownership transfer only to human members', async () => {
 });
 it('labels reply and speaking modes with the same words as the local group settings', () => {
   renderAt({ ...group(true), replyMode: 'all', speakingMode: 'auto' }, 'manage');
-  // Same segmented control and option order as the local group settings.
-  expect(within(screen.getByRole('radiogroup', { name: 'bots.groupChat.settings.replyMode' })).getAllByRole('radio').map(radio => radio.textContent))
-    .toEqual(['bots.groupChat.settings.replyModeAll', 'bots.groupChat.settings.replyModeMentioned']);
-  expect(within(screen.getByRole('radiogroup', { name: 'bots.groupChat.settings.replyMode' })).getByRole('radio', { name: 'bots.groupChat.settings.replyModeAll' }).getAttribute('aria-checked')).toBe('true');
-  expect(within(screen.getByRole('radiogroup', { name: 'bots.groupChat.settings.speakingMode' })).getByRole('radio', { name: 'bots.groupChat.settings.speakingModeAuto' }).getAttribute('aria-checked')).toBe('true');
+  expect(screen.getByRole('combobox', { name: 'bots.groupChat.settings.replyMode' }).textContent).toContain('bots.groupChat.settings.replyModeAll');
+  expect(screen.getByRole('combobox', { name: 'bots.groupChat.settings.speakingMode' }).textContent).toContain('bots.groupChat.settings.speakingModeAuto');
   expect(screen.queryByText(key('replyMode'))).toBeNull();
 });
 
@@ -311,15 +308,16 @@ it('labels reply and speaking modes with the same words as the local group setti
 // 群管理 applies a new reply mode at once with the live name and revision, not a separate save.
 it('keeps reply mode and 分工 settings for single-speaker groups and saves mention-only replies', async () => {
   renderAt({ ...group(true), singleSpeaker: true, replyMode: 'all', speakingMode: 'auto', topic: 'Topic' }, 'manage');
-  expect(screen.queryByRole('radiogroup', { name: 'bots.groupChat.settings.speakingMode' })).toBeNull();
+  expect(screen.queryByRole('combobox', { name: 'bots.groupChat.settings.speakingMode' })).toBeNull();
   expect(screen.getByRole('combobox', { name: 'bots.groupChat.organizer' })).toBeTruthy();
   expect(screen.getByText('bots.groupChat.settings.projectDir')).toBeTruthy();
-  fireEvent.click(screen.getByRole('radio', { name: 'bots.groupChat.settings.replyModeMentioned' }));
+  fireEvent.click(screen.getByRole('combobox', { name: 'bots.groupChat.settings.replyMode' }));
+  fireEvent.click(screen.getByRole('option', { name: 'bots.groupChat.settings.replyModeMentioned' }));
   await waitFor(() => expect(mocks.manage).toHaveBeenCalledWith({ groupId: 'room', action: {
     type: 'update', name: 'Team', topic: 'Topic', description: '', responseMode: 'mentioned', speakingMode: 'auto', expectedRevision: 1,
   } }));
   expect(mocks.refresh).toHaveBeenCalledOnce();
-  expect(screen.getByRole('radio', { name: 'bots.groupChat.settings.replyModeMentioned' }).getAttribute('aria-checked')).toBe('true');
+  expect(screen.getByRole('combobox', { name: 'bots.groupChat.settings.replyMode' }).textContent).toContain('bots.groupChat.settings.replyModeMentioned');
 });
 
 it('does not offer leaving when this account owns every group owner, including its companion', () => {
