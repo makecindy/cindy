@@ -21,7 +21,7 @@ import path from 'node:path';
 
 import { shouldPruneSkillScanDirectory } from './skill-scan-limits.js';
 
-export type ClaudePluginSkillScope = 'user' | 'project' | 'local';
+export type ClaudePluginSkillScope = 'user' | 'project' | 'local' | 'managed';
 
 export interface ClaudeSkillScanContext {
   /** Absolute path to the config directory the session's runtime uses. */
@@ -51,8 +51,10 @@ interface PluginManifest {
   skills?: unknown;
 }
 
-const USER_SCOPES: readonly ClaudePluginSkillScope[] = ['user'];
-const PROJECT_SCOPES: readonly ClaudePluginSkillScope[] = ['user', 'project', 'local'];
+// `managed` is an org-deployed plugin: the user cannot install or remove it,
+// but it applies everywhere, so it travels with the user-level passes.
+const USER_SCOPES: readonly ClaudePluginSkillScope[] = ['user', 'managed'];
+const PROJECT_SCOPES: readonly ClaudePluginSkillScope[] = ['user', 'managed', 'project', 'local'];
 
 function readJson(file: string): unknown {
   try {
@@ -270,6 +272,8 @@ function projectOverriddenPlugins(context: ClaudeSkillScanContext): Set<string> 
 function installScope(record: Record<string, unknown> | null): ClaudePluginSkillScope {
   const scope = record?.scope;
   if (scope === 'project' || scope === 'local') return scope;
+  // Org-deployed plugins behave globally; keep the distinction for callers.
+  if (scope === 'managed') return 'managed';
   // Records without a scope predate the field and are user-level.
   return 'user';
 }
@@ -287,7 +291,7 @@ function installMatchesContext(
   if (!record) return false;
   const scope = installScope(record);
   if (!allowedScopes.includes(scope)) return false;
-  if (scope === 'user') return true;
+  if (scope === 'user' || scope === 'managed') return true;
   if (!context.projectRoot) return false;
   const projectPath = record.projectPath;
   if (typeof projectPath !== 'string' || !projectPath) return false;
@@ -342,7 +346,9 @@ export function scanClaudePluginSkills(
       const scope = installedScope === 'user' && projectOverrides.has(pluginKey)
         ? 'project'
         : installedScope;
-      const projectRoot = scope === 'user' ? undefined : context.projectRoot;
+      const projectRoot = scope === 'user' || scope === 'managed'
+        ? undefined
+        : context.projectRoot;
       const installPath = directoryDir ?? record?.installPath;
       if (typeof installPath !== 'string' || !installPath) continue;
 

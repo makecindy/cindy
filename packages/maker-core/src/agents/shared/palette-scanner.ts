@@ -390,7 +390,8 @@ export async function scanClaudeSlashCommands(
         description: await readMarkdownDescription(skill.mdPath),
         source: 'skill',
         path: skill.mdPath,
-        scope: skill.scope === 'user' ? 'global' : 'project',
+        // managed 与 user 同为全局生效，区别只在来源。
+        scope: skill.scope === 'project' || skill.scope === 'local' ? 'project' : 'global',
       });
     }
   }

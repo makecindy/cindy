@@ -147,7 +147,8 @@ function scanClaudeCustomizationsAtConfig(
             {
               engine: 'claude-code',
               kind: 'skill',
-              scope: skill.scope === 'user' ? 'global' : 'project',
+              // managed 与 user 同为全局生效，区别只在来源。
+              scope: skill.scope === 'project' || skill.scope === 'local' ? 'project' : 'global',
               dir: skill.folder,
               namePrefix: skill.pluginName,
               ...(ownerRoot ? { workingDir: ownerRoot } : {}),

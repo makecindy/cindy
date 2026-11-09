@@ -291,6 +291,22 @@ describe('scanClaudePluginSkills', () => {
     }))).toEqual([{ name: 'alpha:one', scope: 'project', projectRoot: project }]);
   });
 
+  it('treats an org-deployed managed plugin as global', () => {
+    const configDir = tempRoot();
+    const plugin = path.join(configDir, 'plugins', 'cache', 'alpha');
+    writeSkill(path.join(plugin, 'skills', 'one'), 'one');
+    writeJson(path.join(plugin, '.claude-plugin', 'plugin.json'), { name: 'alpha' });
+    writeJson(path.join(configDir, 'plugins', 'installed_plugins.json'), {
+      plugins: { 'alpha@market': [{ scope: 'managed', installPath: plugin }] },
+    });
+
+    // managed 由组织下发，用户不能增删，但对所有会话生效。
+    expect(scanClaudePluginSkills({ configDir }).map((skill) => ({
+      name: skill.name,
+      scope: skill.scope,
+    }))).toEqual([{ name: 'alpha:one', scope: 'managed' }]);
+  });
+
   it('prefers a project-scoped install over a user install of the same Skill', () => {
     const configDir = tempRoot();
     const project = path.join(configDir, 'work', 'a');
