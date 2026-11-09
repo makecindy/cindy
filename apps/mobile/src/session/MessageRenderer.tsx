@@ -9122,7 +9122,8 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   bubbleRich: {
     gap: spacing.sm,
   },
-  companionAnswer: companionMessageBubble(colors),
+  // iOS pins Markdown text width after onLayout; size this column independently of the first streaming fragment.
+  companionAnswer: { ...companionMessageBubble(colors), alignSelf: 'stretch' },
   companionUserBubble: { borderWidth: 0 },
   companionQuote: { alignSelf: 'stretch', marginBottom: spacing.xs },
   // Desktop BotAvatar sm (28) + gap-2.5; the task card reuses the same inset.
