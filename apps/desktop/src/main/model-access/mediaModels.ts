@@ -17,6 +17,7 @@ import {
 } from '../../shared/mediaInvocation.js';
 import { getClientEndpoint } from '../clientEndpointsService.js';
 import { supportsMediaCapability } from '../cindy-media/mediaCapabilities.js';
+import { supportsLegacyMediaInput } from '../cindy-media/legacyMediaInvocation.js';
 import { listProviderMediaModels } from '../cindy-media/providerMediaRuntime.js';
 import { isCatalogMediaModelVisible } from '../cindy-brain/mediaDisplayVisibility.js';
 import { readModelDisableOverrides } from '../maker-host/model-disable-store.js';
@@ -78,7 +79,7 @@ type GatewayMediaCatalogEntry = ModelCatalogEntry & {
 interface ExecutableMediaSnapshot {
   models: ModelCatalogEntry[];
   capabilitiesByModel: Map<string, ReadonlySet<MediaCapability>>;
-  guideIdsByModel: Map<string, string>;
+  legacyCapabilitiesByModel: Map<string, ReadonlySet<MediaCapability>>;
   unavailableByModel: Map<string, UnavailableMediaModel>;
 }
 
@@ -108,13 +109,12 @@ export function isMediaModelExecutable(
   return executableMediaSnapshot?.capabilitiesByModel.get(modelId)?.has(capability) === true;
 }
 
-export function isMediaModelExecutableForGuide(
+export function isMediaModelExecutableForLegacyInput(
   modelId: string,
-  guideId: string,
   capability: MediaCapability,
 ): boolean {
   return (
-    executableMediaSnapshot?.guideIdsByModel.get(modelId) === guideId &&
+    executableMediaSnapshot?.legacyCapabilitiesByModel.get(modelId)?.has(capability) === true &&
     isMediaModelExecutable(modelId, capability)
   );
 }
@@ -254,24 +254,22 @@ export async function listAvailableMediaModels(
 
 export async function fetchMediaInvocationGuide(
   modelId: string,
+  protocol = 'gateway',
   timeoutMs = MEDIA_MODEL_REQUEST_TIMEOUT_MS,
 ): Promise<ResolvedMediaInvocationGuide> {
-  const guideModelId = mediaInvocationGuideModelId(modelId);
-  const query = new URLSearchParams({ modelId: guideModelId });
+  const query = new URLSearchParams({ modelId, protocol });
   const payload = await serverApiFetch<unknown>(
     `${MODEL_ACCESS_INVOCATION_GUIDE_PATH}?${query.toString()}`,
     {
       baseUrl: () => getClientEndpoint('modelAccessApiBaseUrl'),
       timeoutMs,
       logLabel: MODEL_ACCESS_INVOCATION_GUIDE_PATH,
+      token: null,
+      skipAutoRefresh: true,
+      skipSessionInvalidation: true,
     },
   );
-  return parseResolvedGuidePayload(payload, guideModelId);
-}
-
-/** Guide 只按模型协议名查询；provider/routing namespace 仍保留在真实调用身份中。 */
-export function mediaInvocationGuideModelId(modelId: string): string {
-  return modelId.slice(modelId.lastIndexOf('/') + 1);
+  return parseResolvedGuidePayload(payload, modelId);
 }
 
 function parseResolvedGuidePayload(
@@ -390,7 +388,7 @@ async function buildExecutableMediaSnapshot(): Promise<ExecutableMediaSnapshot> 
   );
   const batch = await fetchMediaInvocationGuideBatch();
   const capabilitiesByModel = new Map<string, ReadonlySet<MediaCapability>>();
-  const guideIdsByModel = new Map<string, string>();
+  const legacyCapabilitiesByModel = new Map<string, ReadonlySet<MediaCapability>>();
   const unavailableByModel = new Map<string, UnavailableMediaModel>();
 
   for (const model of models) {
@@ -430,13 +428,15 @@ async function buildExecutableMediaSnapshot(): Promise<ExecutableMediaSnapshot> 
         continue;
       }
       capabilitiesByModel.set(model.id, operations);
-      guideIdsByModel.set(model.id, resolvedGuide.guide.guideId);
+      legacyCapabilitiesByModel.set(model.id, new Set(resolvedGuide.guide.operations
+        .filter((operation) => operations.has(operation.capability) && supportsLegacyMediaInput(operation.inputSchema))
+        .map((operation) => operation.capability)));
     } catch (error) {
       unavailableByModel.set(model.id, unavailableFromGuideError(model.id, error));
     }
   }
 
-  return { models, capabilitiesByModel, guideIdsByModel, unavailableByModel };
+  return { models, capabilitiesByModel, legacyCapabilitiesByModel, unavailableByModel };
 }
 
 async function getExecutableMediaSnapshot(forceRefresh = false): Promise<ExecutableMediaSnapshot> {

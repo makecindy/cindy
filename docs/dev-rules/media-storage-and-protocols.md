@@ -238,6 +238,28 @@ Windows 使用 CF_HDROP，macOS 使用文件 URL 剪贴板，视频／GIF 均按
 - 删除或清理历史目录必须走已有的显式名单、复验和用户确认流程；不得新增任意
   `cc-agent` 子目录删除能力。
 
+## 媒体调用说明与执行绑定
+
+- 图片、视频的新调用说明统一从 Server 读取。Guide 只描述请求、参数、响应与轮询协议；
+  provider、实际地址、Key、连接摘要、模型可见性和额度归连接与执行上下文。
+- 客户端按完整 `modelId` 及连接已有的接口格式读取公开资料，不发送账号 token、Key、
+  base URL 或连接摘要。协议说明不可用时不在本地生成 Guide，也不发出付费请求。
+  客户端根据本地来源绑定现有图片适配器、视频执行器或网关，不按 Server 的 `guideId` 分派。
+- `prepare` 在既有 `guide_json` 中保存选定 operation 及独立的 `binding`；`revision` 表示
+  Server 协议版本，视频 `binding.connectionRevision` 表示本地连接摘要。地址、Key 或来源
+  变化继续按原摘要校验，已付费任务的查询与下载不要求重新读取 Server Guide。
+- 升级时只解码旧快照的 `connection` 和旧视频 revision，不请求时重写历史记录，不改数据库
+  物理 schema。旧 Guide ID 仅用于解码既有记录，不参与新调用选择。Server 须先支持公开协议读取，
+  已发布客户端继续使用旧接口投影。
+- 存量插件的 `cindy-request` 图片、视频接口保留原参数与返回格式。Host 完成原有权限、配额、
+  参考图归属与账号校验后，把旧参数转换为 Server operation 的输入，直接调用已有
+  `callCindyMedia` 的 `prepare/request/poll`，不另起 Agent 或媒体执行链，也不按 Guide ID 筛选。
+  Core 统一生成并入仓，兼容入口只给同一媒体挂插件引用；旧 `jobId/query_job` 只投影调用结果。
+
+实现与回归证据见 [`invocationService.ts`](../../apps/desktop/src/main/cindy-media/invocationService.ts)、
+[`mediaInvocation.ts`](../../apps/desktop/src/shared/mediaInvocation.ts) 和
+[`mediaInvocationStore.test.ts`](../../apps/desktop/src/main/cindy-media/__tests__/mediaInvocationStore.test.ts)。
+
 ## 已授权生成任务的结果下载
 
 - 下载是生成流程内部的一步，不新增“领取”状态、列表或用户操作。上游返回后，客户端

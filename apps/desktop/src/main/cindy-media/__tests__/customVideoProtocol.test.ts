@@ -1,17 +1,32 @@
 import { describe, expect, it } from 'vitest';
 import { buildUserProvider } from '@cindy/model-providers';
 import { resolveCustomMediaConnection } from '../../cindy-brain/customMediaConnection.js';
-import { customVideoGuide, validateCustomVideoBody, videoConnectionRevision } from '../customVideoProtocol.js';
+import { validateCustomVideoBody, videoConnectionRevision } from '../customVideoProtocol.js';
 import { parsePreparedMediaInvocationGuide } from '../../../shared/mediaInvocation.js';
 
 const model = { id: 'private-video', name: 'Video', providerId: 'relay', mode: 'video_generation' as const, modalities: { input: ['text', 'image'], output: ['video'] } };
 
 describe('custom xAI Videos protocol', () => {
-  it.each(['video.generate', 'video.image_to_video'] as const)('persists and restores %s without a credential', capability => {
-    const guide = customVideoGuide(model, capability, '1:opaque-binding');
-    expect(parsePreparedMediaInvocationGuide(JSON.parse(JSON.stringify(guide)))).toMatchObject({ ok: true });
-    expect(guide.inputSchema.required).toEqual(capability === 'video.generate' ? ['prompt'] : ['prompt', 'image']);
-    expect(guide.response.mode).toBe('async');
+  it('restores a legacy paid task and its original connection digest without a credential', () => {
+    const legacySnapshot = {
+      schemaVersion: 1, guideId: 'cindy-provider-xai-video-v1', revision: '1:opaque-binding',
+      modelId: model.id, connection: { providerId: 'relay' }, capability: 'video.generate',
+      request: { method: 'POST', path: '/videos/generations', bodyModelPath: ['model'], timeoutMs: 120_000, maxRequestBytes: 70 * 1024 * 1024, maxResponseBytes: 1024 * 1024 },
+      response: { mode: 'async', taskIdPath: ['request_id'], poll: {
+        method: 'GET', path: '/videos/{taskId}', statusPath: ['status'],
+        successValues: ['done'], failureValues: ['failed', 'expired'],
+        recommendedIntervalMs: 5_000, timeoutMs: 30_000, maxResponseBytes: 1024 * 1024,
+        media: [{ path: ['video', 'url'], encoding: 'url', kind: 'video', allowedUrlHosts: ['vidgen.x.ai'] }],
+      } },
+      instructions: '轮询原任务', exampleBody: { prompt: 'cat' }, inputSchema: { type: 'object' },
+      officialDocs: 'https://docs.x.ai/developers/model-capabilities/video/generation',
+    };
+    expect(parsePreparedMediaInvocationGuide(JSON.parse(JSON.stringify(legacySnapshot)))).toMatchObject({
+      ok: true, value: {
+        revision: '1:opaque-binding',
+        binding: { providerId: 'relay', executor: 'provider-video', connectionRevision: '1:opaque-binding' },
+      },
+    });
   });
 
   it.each(['https://video.example/v1', 'https://router.requesty.ai/v1'])
