@@ -5,7 +5,7 @@ import { scrollRangeIntoView } from '@/lib/scrollRangeIntoView';
 import { historyAfter } from './historyAfter';
 import { readGhostCardSupersededBy, readMailCard } from '@cindy/maker-shared/ghost-card-form';
 import { animateFocusScroll } from './animateFocusScroll';
-import { botProcessItems } from '@/features/bots/botConversationPresentation';
+import { botProcessItems, latestSettledAssistantMs, tailReplyClientIds } from '@/features/bots/botConversationPresentation';
 import { isVisibleVoiceCallMessage } from '@/features/bots/voice/voiceCallPresentation';
 import { MessageViewport, type MessageViewportApi } from './MessageViewport';
 import { PAGE_TEXT_NAVIGATION_EVENT } from '@/lib/pageTextAccess';
@@ -3346,6 +3346,12 @@ export function MessageStream({
   // isSessionStreaming 翻转(每 turn 一次)与 items 变化时重算,O(n) 单扫描。
   const { visibleGeneratedFileKeys, onGeneratedFilesVisibilityChange } =
     useBotGeneratedFileDeliveries(ungroupedRenderItems, sessionFileValue);
+  // 「哪些未封口正文是收尾回复」看消息层,不只看看得到的渲染项:展示层会整条删掉
+  // AskUserQuestion / ExitPlanMode 与单步计划工具,同一轮还会按历史空洞切成多个窗口。
+  const botTailReplyIds = useMemo(
+    () => (simplifiedBotConversation ? tailReplyClientIds(displayMessages) : undefined),
+    [displayMessages, simplifiedBotConversation],
+  );
   const allRenderItems = useMemo(() => {
     const grouped = insertForkOriginItem(
       workGroupProjection(
@@ -3356,7 +3362,7 @@ export function MessageStream({
       forkOrigin,
     );
     return simplifiedBotConversation
-      ? botProcessItems(grouped, isSessionStreaming)
+      ? botProcessItems(grouped, isSessionStreaming, botTailReplyIds)
       : grouped;
   }, [
     ungroupedRenderItems,
@@ -3366,6 +3372,7 @@ export function MessageStream({
     historySnapshot?.ready,
     visibleGeneratedFileKeys,
     workGroupProjection,
+    botTailReplyIds,
   ]);
   const renderMetadataItems = renderMetadataProjection(allRenderItems);
   const botMessageTimeGroups = useMemo(() => {
@@ -4589,15 +4596,13 @@ export function MessageStream({
   const unreadCount = unreadKeys.size;
   // Only the rendered tail of a canonical Bot chat acknowledges replies. History
   // navigation, background windows and streaming work never move its read position.
+  // Folded work-group content is not mounted while collapsed, so only visible
+  // top-level prose counts (see latestSettledAssistantMs).
   useEffect(() => {
     if (!onBotReadThrough || !historyLoaded || !isNearBottom || isSessionStreaming) return;
     const acknowledge = () => {
       if (restoringRef.current || document.visibilityState !== 'visible' || !document.hasFocus() || !isNearBottomRef.current) return;
-      const at = allRenderItems.reduce((latest, item) => {
-        if (item.type !== 'message' || item.message.role !== 'assistant' || item.message.isStreaming) return latest;
-        const stamp = new Date(item.message.createdAt ?? '').getTime();
-        return Number.isFinite(stamp) ? Math.max(latest, stamp) : latest;
-      }, 0);
+      const at = latestSettledAssistantMs(allRenderItems);
       if (at > 0) onBotReadThrough(at);
     };
     const frame = requestAnimationFrame(acknowledge);
