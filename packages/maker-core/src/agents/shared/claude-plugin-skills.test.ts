@@ -264,6 +264,33 @@ describe('scanClaudePluginSkills', () => {
       .map((skill) => skill.name)).toEqual(['alpha:one']);
   });
 
+  it('attributes a project-enabled user install to that project', () => {
+    const configDir = tempRoot();
+    const project = path.join(configDir, 'work', 'a');
+    const plugin = path.join(configDir, 'plugins', 'cache', 'alpha');
+    writeSkill(path.join(plugin, 'skills', 'one'), 'one');
+    writeJson(path.join(plugin, '.claude-plugin', 'plugin.json'), { name: 'alpha' });
+    writeJson(path.join(configDir, 'plugins', 'installed_plugins.json'), {
+      plugins: { 'alpha@market': [{ scope: 'user', installPath: plugin }] },
+    });
+    // 用户层禁用，项目层启用。
+    writeJson(path.join(configDir, 'settings.json'), {
+      enabledPlugins: { 'alpha@market': false },
+    });
+    writeJson(path.join(project, '.claude', 'settings.json'), {
+      enabledPlugins: { 'alpha@market': true },
+    });
+
+    // 无项目上下文 → 用户层禁用 → 不出现。
+    expect(scanClaudePluginSkills({ configDir })).toEqual([]);
+    // 该项目 → 可用，但归属项目而不是 global。
+    expect(scanClaudePluginSkills({ configDir, projectRoot: project }).map((skill) => ({
+      name: skill.name,
+      scope: skill.scope,
+      projectRoot: skill.projectRoot,
+    }))).toEqual([{ name: 'alpha:one', scope: 'project', projectRoot: project }]);
+  });
+
   it('prefers a project-scoped install over a user install of the same Skill', () => {
     const configDir = tempRoot();
     const project = path.join(configDir, 'work', 'a');

@@ -245,6 +245,28 @@ function readEnabledPlugins(context: ClaudeSkillScanContext): Record<string, unk
   return merged;
 }
 
+/**
+ * A user-scoped install can be enabled by a project's settings alone. Its
+ * availability is then project-specific even though the install record says
+ * `user`, so the entry must keep the project context — otherwise SkillHub
+ * reports the Skill as globally available to sessions that never load it.
+ */
+function projectOverriddenPlugins(context: ClaudeSkillScanContext): Set<string> {
+  const keys = new Set<string>();
+  if (!context.projectRoot) return keys;
+  for (const file of [
+    path.join(context.projectRoot, '.claude', 'settings.json'),
+    path.join(context.projectRoot, '.claude', 'settings.local.json'),
+  ]) {
+    for (const key of Object.keys(
+      asRecord(asRecord(readJson(file))?.enabledPlugins) ?? {},
+    )) {
+      keys.add(key);
+    }
+  }
+  return keys;
+}
+
 function installScope(record: Record<string, unknown> | null): ClaudePluginSkillScope {
   const scope = record?.scope;
   if (scope === 'project' || scope === 'local') return scope;
@@ -292,6 +314,7 @@ export function scanClaudePluginSkills(
   if (!plugins) return [];
 
   const enabledPlugins = readEnabledPlugins(context);
+  const projectOverrides = projectOverriddenPlugins(context);
   const marketplaces = asRecord(
     readJson(path.join(context.configDir, 'plugins', 'known_marketplaces.json')),
   );
@@ -313,7 +336,12 @@ export function scanClaudePluginSkills(
     matching.sort((a, b) => Number(installScope(a) !== 'user') - Number(installScope(b) !== 'user'));
 
     for (const record of matching) {
-      const scope = installScope(record);
+      const installedScope = installScope(record);
+      // A user install that only this project's settings enable is
+      // project-specific in practice — keep it attributed to the project.
+      const scope = installedScope === 'user' && projectOverrides.has(pluginKey)
+        ? 'project'
+        : installedScope;
       const projectRoot = scope === 'user' ? undefined : context.projectRoot;
       const installPath = directoryDir ?? record?.installPath;
       if (typeof installPath !== 'string' || !installPath) continue;
