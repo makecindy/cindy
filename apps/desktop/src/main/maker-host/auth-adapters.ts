@@ -1279,7 +1279,7 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
       this.suppressSystemCodexReconcile = false;
       this.oauthInvalidatedReason = null;
       this.oauthInvalidatedCredentialScope = undefined;
-      this.oauthRecoveryRequiredReason = marker?.reason;
+      this.oauthRecoveryRequiredReason = marker?.reason ?? null;
       this.oauthRecoveryCredentialScope = marker?.credentialScope ?? 'unknown';
     }
 
