@@ -19,6 +19,7 @@ const mocks = vi.hoisted(() => ({
   officialBase: 'https://device-link.official.invalid',
   relay: null as null | import('../selfHostedRelayRouting').ActiveSelfHostedRelay,
   hasV2: false,
+  v2Active: false, onlyEncrypted: false, selection: 'route-a',
   scope: 'owner-a',
   v2Directory: vi.fn(), v2Request: vi.fn(),
   readV2Secrets: vi.fn(),
@@ -42,7 +43,8 @@ vi.mock('../../remote-agent/controller/deviceCatalog.js', () => ({ readDevicePro
 vi.mock('../selfHostedRelayConfig.js', () => ({ readRelaySecrets: mocks.readV2Secrets }));
 vi.mock('../agentNetRuntime.js', () => ({ agentNetClientForRelay: () => ({
   rootPublicKey: 'A'.repeat(43), directory: mocks.v2Directory, request: mocks.v2Request,
-}) }));
+}), currentAgentNetClient: () => mocks.v2Active ? { certificate: { deviceId: 'pc' }, directory: mocks.v2Directory } : null,
+agentNetRequiresEncryption: () => mocks.onlyEncrypted, agentNetSelectionKey: () => mocks.selection }));
 vi.mock('../../appSessionState.js', () => ({ activeOwnerScopeKey: () => mocks.scope, isAppSessionBoundaryPending: () => false }));
 
 import { deviceLinkApiFetch, officialDeviceLinkApiFetch } from '../deviceLinkApi';
@@ -62,6 +64,7 @@ describe('deviceLinkApiFetch', () => {
     mocks.relay = null;
     mocks.officialBase = 'https://device-link.official.invalid';
     mocks.hasV2 = false; mocks.scope = 'owner-a';
+    mocks.v2Active = false; mocks.onlyEncrypted = false; mocks.selection = 'route-a';
     mocks.readV2Secrets.mockReset().mockImplementation(() => mocks.hasV2 ? { agentNet: {} } : null);
     mocks.v2Directory.mockReset(); mocks.v2Request.mockReset().mockResolvedValue({});
   });
@@ -186,5 +189,80 @@ describe('deviceLinkApiFetch', () => {
       url: 'https://device-link.official.invalid/api/device-link/devices',
       authorization: 'Bearer account-access-token',
     });
+  });
+
+  // Regression from the 2026-11-09 strict-V2 native run: schedule reads called a
+  // working Mac offline because the adapter queried only its disconnected V1
+  // presence. Unit tier, real API entry; existing routing tests had no active V2
+  // directory. A V2-online/V1-offline row is the minimal failing input.
+  const v2Peer = (deviceId: string, online = true, enabled = true) => ({
+    certificate: { deviceId }, name: deviceId, platform: 'darwin', online,
+    remoteControlEnabled: enabled,
+  });
+  const legacyPeer = (deviceId: string, online = false) => ({
+    deviceId, name: deviceId, platform: 'darwin', online, remoteControlEnabled: online, isSelf: false,
+  });
+
+  it.each(['official', 'private'])('merges %s V2 presence with V1-only peers and preserves explicit control-off', async route => {
+    mocks.v2Active = true;
+    if (route === 'private') mocks.relay = {
+      baseUrl: 'http://192.168.1.20:47820', credential: 'relay-credential', role: 'member',
+      relayId: 'r', name: 'Home', deviceId: 'pc', signingSeed: 'A'.repeat(43), ownerPublicKey: 'A'.repeat(43),
+    };
+    mocks.v2Directory.mockResolvedValue([v2Peer('v2'), v2Peer('off', true, false), v2Peer('legacy', false)]);
+    mocks.netFetch.mockResolvedValue(new Response(JSON.stringify({ devices: [
+      legacyPeer('v2'), legacyPeer('off', true), legacyPeer('legacy', true), legacyPeer('neighbour'),
+    ] }), { status: 200 }));
+    const result = await deviceLinkApiFetch<{ devices: Array<{ deviceId: string; online: boolean; remoteControlEnabled: boolean }> }>('/api/device-link/devices');
+    expect(result.devices.map(({ deviceId, online, remoteControlEnabled }) => ({ deviceId, online, remoteControlEnabled }))).toEqual([
+      { deviceId: 'v2', online: true, remoteControlEnabled: true },
+      { deviceId: 'off', online: true, remoteControlEnabled: false },
+      { deviceId: 'legacy', online: true, remoteControlEnabled: true },
+      { deviceId: 'neighbour', online: false, remoteControlEnabled: false },
+    ]);
+    expect(lastRequest().authorization).toBe(route === 'private' ? 'CindyRelay relay-credential' : 'Bearer account-access-token');
+    if (route === 'private') expect(mocks.getAccessToken).not.toHaveBeenCalled();
+  });
+
+  it('reads encrypted-only presence without depending on a legacy directory', async () => {
+    mocks.v2Active = true; mocks.onlyEncrypted = true;
+    mocks.v2Directory.mockResolvedValue([v2Peer('v2'), v2Peer('off', false, false)]);
+    await expect(deviceLinkApiFetch('/api/device-link/devices')).resolves.toMatchObject({ devices: [
+      { deviceId: 'v2', online: true }, { deviceId: 'off', online: false, remoteControlEnabled: false },
+    ] });
+    expect(mocks.netFetch).not.toHaveBeenCalled();
+    mocks.v2Active = false;
+    await expect(deviceLinkApiFetch('/api/device-link/devices')).rejects.toThrow('AGENT_NET_ENCRYPTED_IDENTITY_REQUIRED');
+    expect(mocks.netFetch).not.toHaveBeenCalled();
+  });
+
+  it.each(['owner', 'route', 'selection'])('discards an in-flight V2 directory after %s changes', async change => {
+    mocks.v2Active = true;
+    mocks.netFetch.mockResolvedValue(new Response(JSON.stringify({ devices: [] }), { status: 200 }));
+    mocks.v2Directory.mockImplementation(async () => {
+      if (change === 'owner') mocks.scope = 'owner-b';
+      if (change === 'selection') mocks.selection = 'route-b';
+      if (change === 'route') mocks.relay = { relayId: 'other' } as NonNullable<typeof mocks.relay>;
+      return [v2Peer('old-owner-only')];
+    });
+    await expect(deviceLinkApiFetch('/api/device-link/devices')).rejects.toThrow('DEVICE_LINK_SCOPE_CHANGED');
+  });
+
+  it('keeps V2 discovery working through a transient V1 failure but does not mask a denial', async () => {
+    mocks.v2Active = true;
+    mocks.v2Directory.mockResolvedValue([v2Peer('v2')]);
+    mocks.netFetch.mockResolvedValue(new Response(JSON.stringify({ error: { code: 'SERVICE_UNAVAILABLE' } }), { status: 503 }));
+    await expect(deviceLinkApiFetch('/api/device-link/devices')).resolves.toMatchObject({ devices: [{ deviceId: 'v2', online: true }] });
+    mocks.netFetch.mockResolvedValue(new Response(JSON.stringify({ error: { code: 'FORBIDDEN' } }), { status: 403 }));
+    await expect(deviceLinkApiFetch('/api/device-link/devices')).rejects.toMatchObject({ statusCode: 403 });
+  });
+
+  it('retains legacy discovery during a transient V2 outage but never ignores an untrusted directory', async () => {
+    mocks.v2Active = true;
+    mocks.netFetch.mockImplementation(async () => new Response(JSON.stringify({ devices: [legacyPeer('legacy', true)] }), { status: 200 }));
+    mocks.v2Directory.mockRejectedValue(Object.assign(new Error('unavailable'), { status: 503 }));
+    await expect(deviceLinkApiFetch('/api/device-link/devices')).resolves.toMatchObject({ devices: [{ deviceId: 'legacy', online: true }] });
+    mocks.v2Directory.mockRejectedValue(new Error('UNTRUSTED_DIRECTORY'));
+    await expect(deviceLinkApiFetch('/api/device-link/devices')).rejects.toThrow('UNTRUSTED_DIRECTORY');
   });
 });

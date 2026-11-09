@@ -8,6 +8,7 @@
 import { getClientEndpoint } from '../clientEndpointsService.js';
 import { serverApiFetch, type ApiFetchOptions } from '../serverApiClient.js';
 import { activeSelfHostedRelay } from './selfHostedRelayRouting.js';
+import { readCurrentDeviceDirectory } from './agentNetDeviceDirectory.js';
 
 /** 当前中转的 REST 基础地址(WebSocket 地址由它推出)。 */
 export function resolveDeviceLinkApiBase(): string {
@@ -36,10 +37,24 @@ export async function deviceLinkApiFetch<T>(
   opts: Omit<ApiFetchOptions, 'baseUrl' | 'token' | 'authorization'> = {},
 ): Promise<T> {
   const relay = activeSelfHostedRelay();
-  if (!relay) return officialDeviceLinkApiFetch<T>(apiPath, opts);
+  if (!relay) {
+    if (apiPath === '/api/device-link/devices' && (opts.method ?? 'GET') === 'GET') {
+      const base = officialDeviceLinkApiBase();
+      return readCurrentDeviceDirectory(() => officialDeviceLinkApiFetch(apiPath, opts), () => {
+        if (activeSelfHostedRelay() || officialDeviceLinkApiBase() !== base) throw new Error('DEVICE_LINK_SCOPE_CHANGED');
+      }) as Promise<T>;
+    }
+    return officialDeviceLinkApiFetch<T>(apiPath, opts);
+  }
   const routeKey = (value: typeof relay | null) => value && JSON.stringify([value.relayId, value.baseUrl, value.deviceId, value.credential, value.scopeKey]);
   const selected = routeKey(relay);
   const assertRoute = () => { if (selected !== routeKey(activeSelfHostedRelay())) throw new Error('DEVICE_LINK_SCOPE_CHANGED'); };
+  if (apiPath === '/api/device-link/devices' && (opts.method ?? 'GET') === 'GET') {
+    return readCurrentDeviceDirectory(() => serverApiFetch(apiPath, {
+      ...opts, baseUrl: relay.baseUrl, authorization: `CindyRelay ${relay.credential}`,
+      skipAutoRefresh: true, skipSessionInvalidation: true,
+    }), assertRoute) as Promise<T>;
+  }
   const device = /^\/api\/device-link\/devices\/([^/?#]+)$/.exec(apiPath);
   if (device && ['DELETE', 'PATCH'].includes(opts.method ?? 'GET')) {
     const { readRelaySecrets } = await import('./selfHostedRelayConfig.js');
