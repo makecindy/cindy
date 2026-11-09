@@ -27,9 +27,48 @@ beforeEach(() => {
   vi.clearAllMocks(); state.current = true; state.enabled = true; state.permission = 'granted'; state.background = true;
   state.me.mockResolvedValue('actor');
 });
-afterEach(cleanup);
+afterEach(() => { cleanup(); vi.useRealTimers(); });
 
 describe('background notification lifecycle', () => {
+  // Unit regression for PR #9349 / r4512525743: the production hook must bind the
+  // native FCM recipient when /me resolves at 9s, beyond the task path's 8s deadline.
+  // Existing cases only covered immediate success/failure and sign-out before timeout.
+  // Standalone file wall time: 1.42s; fake timers cover the 8s/9s boundary without real waits.
+  it.each([true, false])('binds a late chat identity without delaying tasks or enabling a disabled service (background=%s)', async background => {
+    vi.useFakeTimers();
+    state.background = background;
+    let resolve!: (actor: string) => void;
+    state.me.mockReturnValue(new Promise<string>(done => { resolve = done; }));
+    renderHook(() => ChatBackgroundBridge());
+    await act(async () => {});
+    await act(async () => { await vi.advanceTimersByTimeAsync(8_000); });
+    if (background) expect(native.configureNotifications).toHaveBeenCalledWith(expect.objectContaining({ actor: '', taskBase: 'https://relay.example' }));
+    else expect(native.stop).toHaveBeenCalled();
+    native.configureNotifications.mockClear();
+    await act(async () => { await vi.advanceTimersByTimeAsync(1_000); resolve('late-actor'); });
+    expect(native.setIdentity).toHaveBeenCalledWith('late-actor');
+    expect(native.configureNotifications).not.toHaveBeenCalled();
+    expect(state.me).toHaveBeenCalledTimes(1);
+  });
+  it.each(['sign-out', 'disabled', 'permission', 'unmounted', 'new-refresh'])('ignores a late chat identity after %s', async change => {
+    vi.useFakeTimers(); state.background = false;
+    let resolve!: (actor: string) => void;
+    state.me.mockReturnValueOnce(new Promise<string>(done => { resolve = done; }));
+    const hook = renderHook(() => ChatBackgroundBridge());
+    await act(async () => {});
+    await act(async () => { await vi.advanceTimersByTimeAsync(8_000); });
+    await act(async () => {
+      if (change === 'sign-out') { state.current = false; state.signedOut?.(true); }
+      else if (change === 'disabled') { state.enabled = false; state.signedOut?.(); }
+      else if (change === 'permission') state.permission = 'denied';
+      else if (change === 'unmounted') hook.unmount();
+      else state.signedOut?.();
+    });
+    await act(async () => { resolve('stale-actor'); });
+    expect(native.setIdentity).not.toHaveBeenCalledWith('stale-actor');
+    expect(native.configureNotifications).not.toHaveBeenCalled();
+    if (change === 'new-refresh') expect(native.setIdentity).toHaveBeenLastCalledWith('actor');
+  });
   it('starts task delivery even when chat is unavailable, with the correct account and preview preference', async () => {
     state.me.mockRejectedValue(new Error('chat offline'));
     renderHook(() => ChatBackgroundBridge());

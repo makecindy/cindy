@@ -26,10 +26,13 @@ export function ChatBackgroundBridge() {
     let refreshing = false;
     let requested = false;
     let identityBound = false;
+    let refreshGeneration = 0;
     const update = async () => {
       if (cancelled) return;
+      const generation = ++refreshGeneration;
       if (refreshing) { requested = true; return; }
       refreshing = true;
+      let lateChat: Promise<{ actor: string; base: string }> | undefined;
       try {
         if (!api.enabled) { await native.setIdentity(''); await native.setTaskIdentity?.(''); await native.stop(); return; }
         const [enabled, preview] = await Promise.all([readPushEnabled(), readPushPreviewEnabled()]);
@@ -51,10 +54,14 @@ export function ChatBackgroundBridge() {
         // Task notifications must still work when the chat service is unavailable.
         let actor = knownChat.current.actor; let chatBase = knownChat.current.base;
         let chatTimeout: ReturnType<typeof setTimeout> | undefined;
+        const chatRequest = (async () => ({ actor: await api.client.me(), base: await api.endpoint() }))();
         try {
           const chat = await Promise.race([
-            (async () => ({ actor: await api.client.me(), base: await api.endpoint() }))(),
-            new Promise<never>((_, reject) => { chatTimeout = setTimeout(() => reject(new Error('CHAT_TIMEOUT')), 8_000); }),
+            chatRequest,
+            new Promise<never>((_, reject) => { chatTimeout = setTimeout(() => {
+              lateChat = chatRequest;
+              reject(new Error('CHAT_TIMEOUT'));
+            }, 8_000); }),
           ]);
           if (cancelled || !api.current()) return;
           actor = chat.actor; chatBase = chat.base;
@@ -80,6 +87,17 @@ export function ChatBackgroundBridge() {
         }
       } catch { /* Foreground and the service's next token refresh retry transient failures. */ }
       finally {
+        // Finish task/service configuration first so it cannot overwrite a late FCM identity.
+        // Off/FCM-only modes have no service refresh loop to recover this successful lookup.
+        if (lateChat) void lateChat.then(async chat => {
+          const current = () => !cancelled && api.current() && generation === refreshGeneration;
+          if (!current()) return;
+          const enabled = await readPushEnabled();
+          const permission = await Notifications.getPermissionsAsync();
+          if (!current() || !enabled || permission.status !== 'granted') return;
+          knownChat.current = { owner: api.owner, actor: chat.actor, base: chat.base };
+          await native.setIdentity(chat.actor);
+        }).catch(() => { /* A failed lookup leaves the last verified identity intact. */ });
         refreshing = false;
         if (requested) { requested = false; void update(); }
       }
