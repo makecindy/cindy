@@ -237,6 +237,9 @@ export function MorphPopover({
   const chipRectRef = useRef<DOMRect | null>(null);
   // 初始形变是否已完成(ResizeObserver 只在其后接管,避免和开场动画打架)
   const settledRef = useRef(false);
+  // 开场动画期间到达的显式重测不能当场改几何（会把过渡中的宽高跳到终态）。
+  // 只登记一次，settle 完成后补跑。
+  const pendingResyncRef = useRef(false);
   // stickyWidth 的本次打开宽度水位(见 prop 注释);开场重置。
   const stickyWidthRef = useRef(0);
   // stickyWidthKey 换代 → 水位清零(render 期 ref 比对:重置必须发生在切换引发的
@@ -342,6 +345,23 @@ export function MorphPopover({
     panel.style.height = `${m.h}px`;
   }, [measure]);
 
+  const cancelPendingResync = useCallback(() => {
+    pendingResyncRef.current = false;
+  }, []);
+
+  /**
+   * 显式重测。开场未 settle 时只登记，不改面板几何：扫描结果 / 模型列表可能在 220ms
+   * 开场动画内到达，当场改宽高会和形变抢。settle 时补量一次兑现登记；settle 之后的请求当场量，
+   * 切页 / 搜索的滚动归属仍会更新。同一次打开里重复登记合并成 settle 那一次补跑。
+   */
+  const requestContentResync = useCallback(() => {
+    if (!settledRef.current) {
+      pendingResyncRef.current = true;
+      return;
+    }
+    syncPanelToContent();
+  }, [syncPanelToContent]);
+
   // 重量请求由内容的 useLayoutEffect 发出，早于任何 useEffect。监听挂在渲染期的 ref 回调上：
   // 子节点先提交，回调再跑，因此请求到达时监听已经在。开场布局 effect 每次重跑都会拆 effect
   // 监听，切页请求正好落在空窗里，所以不能挂在那里。
@@ -349,14 +369,14 @@ export function MorphPopover({
     (node: HTMLDivElement | null) => {
       const previous = contentRef.current;
       if (previous && previous !== node) {
-        previous.removeEventListener(MORPH_CONTENT_RESIZE_EVENT, syncPanelToContent);
+        previous.removeEventListener(MORPH_CONTENT_RESIZE_EVENT, requestContentResync);
       }
       contentRef.current = node;
       if (node && node !== previous) {
-        node.addEventListener(MORPH_CONTENT_RESIZE_EVENT, syncPanelToContent);
+        node.addEventListener(MORPH_CONTENT_RESIZE_EVENT, requestContentResync);
       }
     },
-    [syncPanelToContent],
+    [requestContentResync],
   );
 
   /** 面板锚到 chip 的形变起点几何(closed 视觉态:与 chip 重合的胶囊) */
@@ -396,6 +416,7 @@ export function MorphPopover({
 
     if (open) {
       settledRef.current = false;
+      cancelPendingResync();
       pointerInteractionRef.current = false;
       stickyWidthRef.current = 0; // stickyWidth 水位按「一次打开」起算
       const rect = wrap.getBoundingClientRect();
@@ -448,6 +469,8 @@ export function MorphPopover({
         setContentOverflowY(contentRef.current, 'auto');
         // RO 在 opening 期间收到的尺寸变化不会在 settled 后自动重发,这里补量一次
         // (异步 capability / provider 列表在开场动画内返回时防面板卡旧尺寸)。
+        // 开场期间的显式重测只登记、不改几何；这次补量读的是此刻的内容，等于把登记兑现。
+        pendingResyncRef.current = false;
         syncPanelToContent();
         const target =
           autoFocusTarget?.() ??
@@ -466,6 +489,7 @@ export function MorphPopover({
       if (openRafRef.current !== null) cancelAnimationFrame(openRafRef.current);
       openRafRef.current = null;
       settledRef.current = false;
+      cancelPendingResync();
       // 收合目标几何 = trigger chip 的**当前**位置/尺寸(脱身上浮下 chip 全程可见,可实测)。
       // 不能复用打开瞬间的 chipRectRef:开着期间 trigger 可能变(换模型/权限、±引用目录改 ×N
       // chip 宽),复用旧 rect 会让面板往错位置/旧尺寸缩(codex P2)。0 宽兜底回旧 rect。
@@ -528,6 +552,7 @@ export function MorphPopover({
     endBg,
     endBorderColor,
     syncPanelToContent,
+    cancelPendingResync,
     autoFocusTarget,
     restoreFocusTarget,
   ]);

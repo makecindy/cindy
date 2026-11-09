@@ -749,4 +749,48 @@ describe('MorphPopover interaction contract', () => {
     content.dispatchEvent(new CustomEvent(MORPH_CONTENT_RESIZE_EVENT, { bubbles: true }));
     expect(panel.style.height).toBe('80px');
   });
+
+  // #9573 复审：普通动效下，扫描结果 / 模型列表会在 220ms 开场动画内派发重测。
+  // 旧监听当场改宽高，会把正在过渡的面板拽到终态。生产入口：MorphPopover 打开后、settle 前派发重测。
+  // 现有收缩用例走 reduced-motion，settle 已完成，盖不住这条时序。
+  // 最小输入：开场量到 120，动画中途内容变成 400 并派发重测；flush 开场帧后高度仍是 120，
+  // 推进 220ms 后补跑并写成 400。Tier: unit。
+  it('开场期间派发重测不改变面板高度，settle 后补跑一次并应用新高度', () => {
+    setReducedMotion(false);
+    vi.useFakeTimers();
+    const flushFrame = captureFrames();
+    const contentHeight = { current: 120 };
+    vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockReturnValue(480);
+    vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockImplementation(function (this: HTMLElement) {
+      return this.getAttribute('role') === 'group' ? contentHeight.current : 0;
+    });
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue(new DOMRect(20, 800, 120, 30));
+    class ResizeObserverStub {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    }
+    vi.stubGlobal('ResizeObserver', ResizeObserverStub);
+
+    render(
+      <Harness>
+        <div>rows</div>
+      </Harness>,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Toggle' }));
+    const panel = screen.getByRole('group', { name: 'Morph panel' });
+    flushFrame();
+    expect(panel.style.height).toBe('120px');
+
+    contentHeight.current = 400;
+    const content = panel.firstElementChild as HTMLElement;
+    content.dispatchEvent(new CustomEvent(MORPH_CONTENT_RESIZE_EVENT, { bubbles: true }));
+    expect(panel.style.height).toBe('120px');
+
+    act(() => {
+      vi.advanceTimersByTime(220);
+    });
+    expect(panel.style.height).toBe('400px');
+    vi.useRealTimers();
+  });
 });
