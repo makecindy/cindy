@@ -15903,6 +15903,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     withSendToSessionLock,
     prepareUnhealthySession: (sessionId) =>
       contextOverflowRolloverHolder?.prepareUnhealthySession(sessionId) ?? Promise.resolve(false),
+    hydrateOrcaSessionIfNeeded: async (sessionId, meta) => {
+      // 目标必是 Orca Lead/Worker；已装载时不读库、不建 createOpts。
+      if (isOrcaMcpHydrated(sessionId) || !maker.getSession(sessionId)) return;
+      const createOpts = await buildCreateOptsForQueuedSession(sessionId, meta);
+      await hydrateActiveOrcaSession(sessionId, createOpts as CreateOpts);
+    },
     buildCreateOptsForQueuedSession,
     enqueueQueuedMessage: (sessionId, item) => {
       // 先 await 恢复再 enqueue:确保恢复的排队 prompt 在新消息之前,且恢复后
@@ -18766,6 +18772,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   const {
     sendToAgentAccepted: sendToAgentAcceptedUnlocked,
     prewarmSession: prewarmSessionRuntime,
+    hydrateActiveOrcaSession,
   } = createMakerSendTransaction({
     prepareExternalInput: (sessionId) => takeOverLocalAgentVisibleSession(sessionId, true),
     restoreArchivedSessionForSend,
