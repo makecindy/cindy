@@ -14,6 +14,7 @@ function fingerprint(value) {
 export function computeSimulatorNativeFingerprint(
   projectDir,
   env = process.env,
+  platform = 'ios',
 ) {
   const projectRequire = createRequire(
     join(resolve(projectDir), "package.json"),
@@ -24,7 +25,7 @@ export function computeSimulatorNativeFingerprint(
   try {
     const output = execFileSync(
       process.execPath,
-      [bin, "fingerprint:generate", "--platform", "ios"],
+      [bin, "fingerprint:generate", "--platform", platform],
       {
         cwd: projectDir,
         env,
@@ -48,7 +49,8 @@ export function computeSimulatorNativeFingerprint(
 /**
  * @param {{ appPath?: string, projectDir?: string, env?: Record<string, string | undefined>,
  * expectedFingerprint?: string, compute?: typeof computeSimulatorNativeFingerprint,
- * read?: (path: string) => string }} options
+ * read?: (path: string) => string, platform?: 'ios' | 'android',
+ * readInstalledFingerprint?: () => string }} options
  */
 export function inspectSimulatorNativeIdentity({
   appPath,
@@ -57,6 +59,8 @@ export function inspectSimulatorNativeIdentity({
   expectedFingerprint,
   compute = computeSimulatorNativeFingerprint,
   read = (path) => readFileSync(path, "utf8"),
+  platform = 'ios',
+  readInstalledFingerprint = () => read(join(appPath, "EXUpdates.bundle", "fingerprint")),
 }) {
   const result = {
     healthy: false,
@@ -67,15 +71,20 @@ export function inspectSimulatorNativeIdentity({
   if (!appPath) return { ...result, code: "native-missing" };
   try {
     result.installedFingerprint = fingerprint(
-      read(join(appPath, "EXUpdates.bundle", "fingerprint")),
+      readInstalledFingerprint(),
     );
-  } catch {
-    return { ...result, reason: "installed-fingerprint-unreadable" };
+  } catch (error) {
+    // A failed read is not evidence of an incompatible build. Keep a bounded
+    // reason, never the child output; a genuinely missing file can be rebuilt.
+    const reason = error?.code === 'ENOENT' ? 'installed-fingerprint-missing'
+      : error?.code === 'ANDROID_PROBE_TIMEOUT' || error?.code === 'ETIMEDOUT'
+        ? 'installed-fingerprint-timeout' : 'installed-fingerprint-unreadable';
+    return { ...result, reason };
   }
   if (!result.installedFingerprint) return { ...result, reason: "installed-fingerprint-missing" };
   try {
     result.expectedFingerprint = fingerprint(
-      expectedFingerprint ?? compute(projectDir, env),
+      expectedFingerprint ?? compute(projectDir, env, platform),
     );
     if (!result.expectedFingerprint)
       return { ...result, reason: "native-fingerprint-unavailable" };

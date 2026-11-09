@@ -165,7 +165,7 @@ export function Sidebar({
               // 触发钮保持可点(点击 = pin)。阴影复用 --shadow-menu(中型悬浮卡,
               // 同色 Surface 上的辅助分离),1px hairline 仍是主分隔手段(docs/design-rules/cindy-design-system.md)。
               'fixed inset-y-0 left-0 z-[15]',
-              'border-r border-sidebar-border shadow-[shadow:var(--shadow-menu)]',
+              'pr-px shadow-[shadow:var(--shadow-menu)]',
               peekState === 'peeking' &&
                 'animate-[sidebar-peek-in_200ms_cubic-bezier(0.22,1,0.36,1)] motion-reduce:animate-none',
               peekState === 'peekClosing' &&
@@ -174,8 +174,8 @@ export function Sidebar({
             )
           : cn(
               'relative shrink-0',
-              // 折叠态 width=0,border-r 1px 仍会渲染贴在窗口左缘,看着像残留阴影/线 — 仅非折叠态画分隔线。
-              !isCollapsed && 'border-r border-sidebar-border',
+              // 保留分隔线的布局空间；完全隐藏时不留 1px 残线。
+              !isCollapsed && 'pr-px',
               !isDragging &&
                 !justLeftPeek &&
                 'transition-[width] duration-[250ms] ease-[cubic-bezier(0.4,0,0.2,1)] motion-reduce:duration-0',
@@ -183,7 +183,15 @@ export function Sidebar({
       )}
       style={{ width: visualWidth }}
     >
-      <div aria-hidden="true" className="sidebar-frost pointer-events-none absolute inset-0" />
+      {/* 底色与边框由同一层绘制，background 默认铺到 border-box。
+          边框放在透明 aside 上会漏出 1px 未染色的原生材质，即使主区不透明也会发亮。 */}
+      <div
+        aria-hidden="true"
+        className={cn(
+          'sidebar-frost pointer-events-none absolute inset-0',
+          (!isCollapsed || isPeek) && 'border-r border-sidebar-border',
+        )}
+      />
       {/* 定宽内容层(见 contentWidth 注释):收起/展开动画期间内容不随 aside 宽度
           reflow,只被右侧裁切 + 整层渐隐/渐显。 */}
       <div
@@ -281,7 +289,7 @@ export function Sidebar({
           onPointerDown={onDragStart}
           onDoubleClick={onResetWidth}
         >
-          {/* Visual highlight line — default transparent so the aside's existing
+          {/* Visual highlight line — default transparent so the frosted layer's
               border-r provides the 1px divider (docs/design-rules/cindy-design-system.md: Board hairline).
               Only becomes visible on hover to indicate the draggable handle. */}
           <div className="absolute right-0 top-0 h-full w-px bg-transparent transition-colors group-hover/handle:bg-sidebar-action-icon" />

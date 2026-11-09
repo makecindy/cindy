@@ -274,12 +274,15 @@ describe("mobile:sim:up flow", () => {
     expect(deps.launch).toHaveBeenCalledTimes(1);
   });
 
-  it("rebuilds a mismatched app and judges the result by the installed identity", async () => {
+  it.each([
+    { healthy: false, code: 'native-mismatch' },
+    { healthy: false, code: 'native-unknown', reason: 'installed-fingerprint-missing' },
+  ])("rebuilds an incompatible or fingerprint-less app and checks its installed identity: %j", async (native) => {
     const whoami = vi
       .fn()
       .mockReturnValueOnce({
         healthy: false,
-        native: { healthy: false, code: "native-mismatch" },
+        native,
       })
       .mockReturnValue(matched);
     // With a parallel port rebuild installs, then exits nonzero with "launch blocked".
@@ -316,11 +319,16 @@ describe("mobile:sim:up flow", () => {
     });
   });
 
+  // #9422 review: whoami's installed-read failures must also stop the default
+  // up workflow before rebuilding. Existing probe cases missed these reasons
+  // (unit: runSimUp with injected process boundaries, no devices or waits).
   it.each([
     "probe-timeout",
     "target-not-unique",
     "native-fingerprint-timeout",
     "native-fingerprint-unavailable",
+    "installed-fingerprint-timeout",
+    "installed-fingerprint-unreadable",
   ])(
     "does not treat a failed native check as a missing app: %s",
     async (reason) => {

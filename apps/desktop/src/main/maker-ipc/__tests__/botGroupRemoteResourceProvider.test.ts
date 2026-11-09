@@ -308,12 +308,14 @@ describe('bot group remote resources', () => {
     expect(plain.blocks?.[0]?.fallbackMarkdown).toContain('**阿布**: 写好了');
   });
 
-  it('projects current failures for existing phones without putting notices into the message cache', () => {
+  it.each(['AUTH_REQUIRED', 'RUNTIME_TIMEOUT'] as const)('projects current failures for existing phones without putting notices into the message cache (%s)', code => {
     const group = detail();
     const source = group.messages[0]!;
     group.executionFailures = [{ executionId: 'run', epoch: 1, sourceMessageId: source.id,
-      botId: 'abu', botName: '阿布', code: 'AUTH_REQUIRED', planId: null }];
-    expect(botGroupRemoteChatData(group).messages).toContainEqual(expect.objectContaining({ id: 'execution-failure:run:1', runtimeFailureCode: 'AUTH_REQUIRED' }));
+      botId: 'abu', botName: '阿布', code, reason: 'unclaimed_timeout', planId: null }];
+    const notice = botGroupRemoteChatData(group).messages.find(message => message.id === 'execution-failure:run:1')!;
+    expect(notice.runtimeFailureCode).toBe(code);
+    expect(notice.runtimeFailureReason).toBe(code === 'RUNTIME_TIMEOUT' ? 'unclaimed_timeout' : undefined);
     expect(group.messages).not.toContainEqual(expect.objectContaining({ kind: 'notice' }));
     expect(botGroupRemoteChatData({ ...group, executionFailures: [] }).messages).toEqual(group.messages);
   });

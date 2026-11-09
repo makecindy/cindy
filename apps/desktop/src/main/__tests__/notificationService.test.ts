@@ -674,13 +674,21 @@ describe('notificationService — channels 分发', () => {
       title: 'Fix login',
       kind: 'needs-reply',
       markAttention: false,
+      remoteDeviceId: 'execution-host',
       channels: { desktop: false, feishu: false, mobile: true },
     });
 
     expect(markSessionNeedsAttention).not.toHaveBeenCalled();
-    expect(sendMobileSessionNotify).toHaveBeenCalled();
+    await flushAsync();
+    expect(sendMobileSessionNotify).toHaveBeenCalledWith(expect.objectContaining({
+      sessionId: 'remote-1', remoteDeviceId: 'execution-host', muteExempt: true,
+    }));
     await expect(invokeHandler({ sessionId: 'remote-1', title: 'x', kind: 'done', markAttention: 'no' }))
       .rejects.toThrow('invalid session event payload');
+    for (const remoteDeviceId of ['', 42, 'x'.repeat(257)]) {
+      await expect(invokeHandler({ sessionId: 'remote-1', title: 'x', kind: 'error', remoteDeviceId }))
+        .rejects.toThrow('invalid session event payload');
+    }
   });
 
   it('rejects a caller that is not the Cindy renderer before any channel or badge work', async () => {

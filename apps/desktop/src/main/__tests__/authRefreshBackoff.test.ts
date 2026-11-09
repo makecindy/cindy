@@ -32,6 +32,7 @@ function recoveryHarness() {
     'refresh',
     `
     let refreshPromise = null;
+    const authRefreshOverride = null;
     const coldStartAuthInFlight = null;
     let authStateEpoch = 1;
     const refreshBackoff = new AuthRefreshBackoff(() => 1_000_000, () => 0);

@@ -891,6 +891,7 @@
         "pausedLocal": "No aceptar nuevas tareas de otras computadoras",
         "cooling": "Enfriándose",
         "coolingUntil": "En espera · Disponible aproximadamente a las {{time}}",
+        "quotaExhausted": "Cuota agotada",
         "offline": "Sin conexión",
         "unreachableHere": "No puedo acceder desde esta computadora",
         "unavailable": {
@@ -937,9 +938,13 @@
       "description": "Para utilizar la cuota de cada cuenta de manera uniforme, envíe este mensaje desde {{label}} ({{quota}}). Los últimos mensajes y un resumen se conservan; Es posible que se pierdan detalles más antiguos.",
       "quota": "{{left}}% restante",
       "quotaReset": "{{left}}% restante · {{reset}}",
-      "confirm": "Cambiar",
-      "cancel": "Cancelar",
-      "remember": "Cambiar automáticamente a partir de ahora (solo esta tarea)"
+      "confirm": "Cambiar solo esta vez",
+      "cancel": "Ahora no",
+      "remember": "Cambiar automáticamente sin volver a preguntar",
+      "disable": "No cambiar automáticamente ni volver a preguntar",
+      "disableFailed": "No se pudo confirmar si se guardó tu elección. Comprueba la conexión y que Cindy esté actualizado en el ordenador donde está la tarea, e inténtalo de nuevo. Este mensaje se enviará con normalidad.",
+      "choiceLabel": "Cambio de ordenador (solo esta tarea)",
+      "send": "Enviar mensaje"
     },
     "deleteConfirm": {
       "title": "¿Eliminar el grupo de proveedores {{provider}}?",
@@ -7503,6 +7508,11 @@
         "installedExpand": "Mostrar los {{count}} complementos instalados",
         "installedCollapse": "Ocultar complementos instalados adicionales",
         "recommendedSection": "Recomendado",
+        "todayRecommendations": "Recomendados de hoy",
+        "marketSection": "Mercado de complementos",
+        "browseMarket": "Explorar el mercado de complementos",
+        "searching": "Buscando…",
+        "allLoaded": "Se muestran los {{count}} complementos",
         "updatesAvailable": "{{count}} actualizaciones de complementos disponibles",
         "updateAll": "Actualizar todos",
         "ignoreRound": "Ignorar esta vez",
@@ -7532,7 +7542,15 @@
       },
       "market": {
         "publisherKind": {
-          "official": "Oficial"
+          "official": "Oficial",
+          "community": "Comunidad"
+        },
+        "publisherDescription": {
+          "official": "Publicado y mantenido por Cindy",
+          "community": "Publicado y mantenido por desarrolladores de la comunidad",
+          "team": "Compartido por tu organización con los miembros autorizados",
+          "custom": "De un mercado Git o de una carpeta local que añadiste",
+          "local": "Instalado desde un archivo local o desarrollado en este equipo"
         },
         "scopeAria": "Filtrar orígenes de complementos",
         "scope": {
@@ -10882,6 +10900,9 @@
         "stepFailed": "{{name}} tuvo un problema y no completó este paso",
         "stepTimeout": "{{name}} tardó demasiado, por lo que se detuvo este paso.",
         "stepUnavailable": "{{name}} no está disponible y no puede realizar este paso",
+        "runtimeFailureReason": {
+          "unclaimed_timeout": "{{name}} no empezó a procesar dentro del plazo de espera. Esta solicitud ha finalizado.\nPide al propietario del compañero que compruebe que Cindy está funcionando y que su ordenador tiene conexión de red."
+        },
         "runtimeFailure": {
           "REMOTE_DEVICE_LIMIT": "{{name}} no puede responder: el dispositivo del compañero alcanzó su límite de sesiones remotas.\nPídele al propietario del compañero que archive las sesiones sin usar o al propietario de la computadora remota que aumente el límite en Acceso remoto y uso compartido.",
           "REMOTE_TOTAL_LIMIT": "{{name}} no puede responder: la computadora remota alcanzó su límite total de sesiones remotas.\nPídele al propietario de esa computadora que libere las sesiones sin usar o aumente el límite en Acceso remoto y uso compartido.",
@@ -12654,6 +12675,12 @@
       "missingDir": "Carpeta no encontrada"
     },
     "pendingQueue": {
+      "stopping": "Parando",
+      "queued": "En cola",
+      "editingInComposer": "Editando en el cuadro de entrada a continuación…",
+      "moveUp": "Mover antes",
+      "moveDown": "Mover más tarde",
+      "cancelSend": "Cancelar envío",
       "regionAria": "Cola de mensajes pendientes",
       "listAria": "Mensajes en cola",
       "pausedFooter": "Tarea detenida, cola en pausa",
@@ -19993,7 +20020,8 @@
     "removeTitle": "¿Quitar {{name}}?",
     "removeDescription": "Cindy dejará de asignar tareas a esta cuenta. La sesión de la CLI y el historial de conversaciones permanecerán en este equipo.",
     "failed": "No se pudo leer o actualizar la cuenta. Comprueba el inicio de sesión de la CLI y la conexión, e inténtalo de nuevo.",
-    "directory": "Carpeta de la cuenta",
+    "openDirectory": "Abrir carpeta de la cuenta",
+    "openDirectoryFailed": "No se pudo abrir la carpeta de la cuenta. Puede que se haya movido o eliminado.",
     "loginAgain": "Iniciar sesión nuevamente",
     "login": "Iniciar sesión"
   },
@@ -20005,5 +20033,17 @@
     "logExcerpt": "Registros relevantes (extracto, puede estar incompleto)",
     "logsUnavailable": "No hay registros relevantes disponibles. La causa aún se desconoce.",
     "failed": "No se pudo preparar el diagnóstico. Inténtalo de nuevo."
+  },
+  "githubStar": {
+    "title": "¿Te gusta Cindy?",
+    "description": "Dale una estrella a Cindy en GitHub para apoyar el proyecto.",
+    "dismiss": "No volver a mostrar",
+    "action": "Apoyar a Cindy",
+    "starring": "Encendiendo una estrella…",
+    "thanks": "¡Gracias por la estrella!",
+    "thanksDescription": "Tu apoyo ayuda a Cindy a crecer.",
+    "browserFallback": "Abre GitHub para darle una estrella a Cindy.",
+    "openGithub": "Abrir GitHub",
+    "openFailed": "No se pudo abrir GitHub."
   }
 }

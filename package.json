@@ -75,6 +75,9 @@
   },
   "scripts": {
     "h": "node scripts/help.mjs",
+    "host:open": "node apps/host/src/open-client.mjs",
+    "preview:host": "node scripts/preview-host.mjs",
+    "start-host": "node --import tsx --import ./apps/host/src/loaders/register-raw.mjs apps/host/src/main.ts",
     "mobile:xcode": "node apps/mobile/scripts/open-ios-xcode.mjs",
     "mobile:sim:rebuild": "node scripts/ensure-deps.mjs --workspace-only && node apps/mobile/scripts/sim-rebuild.mjs",
     "mobile:sim:up": "node scripts/ensure-deps.mjs --workspace-only && node apps/mobile/scripts/sim-up.mjs",
@@ -157,6 +160,7 @@
     "pctx:build": "pnpm --filter project-context build",
     "check:live-compact-source": "node packages/maker-core/scripts/generate-live-compact-source.mjs --check",
     "generate:live-compact-source": "node packages/maker-core/scripts/generate-live-compact-source.mjs",
+    "dev:host": "node scripts/dev-with-host.mjs",
     "personal:build": "node scripts/personal-build.mjs"
   },
   "dependencies": {

@@ -494,6 +494,14 @@ FormField → Select forwards descriptions, required/error semantics, and the se
 
 DS-11: short notifications keep their pill frame. When the rendered message or action wraps, the outer frame is a 12px content container (`rounded-xl`, §5), using the same background, border, status icon colors and padding. The whole notification fits within the viewport with 16px gutters; long URLs wrap, source identity stays visible, and action text remains complete. Hover and keyboard focus independently pause auto-dismiss until both have left. This classification follows the user’s 2026-09-15 instruction to prioritize the actual Cindy UI; final visual acceptance is recorded separately.
 
+The GitHub Star invitation uses the same Toast store and container with an optional heading,
+star icon, close control and wrapping end-aligned action row. Persistent invitations use the
+12px content-container shape. The invitation stays at the top right, below window controls,
+with the shared `--shadow-menu` elevation; loading and success retain that corner and avoid
+the centered toast stack's movement animation. The action uses the standard contrasting CTA
+Button (user decision, 2026-11-09), and dismissal uses its quiet tone. Eligibility and dismissal semantics are documented in
+[GitHub Star prompt](../product-rules/github-star-prompt.md).
+
 ### Error notices
 
 错误提示统一使用中性浮层底色、默认细边框、12px 圆角和小尺寸红色状态图标；正文使用正常文字颜色，不铺大面积红底。先说明发生了什么，再给出恢复操作，技术错误详情默认折叠。桌面复用 `ErrorNotice`，移动端复用同名组件并保持至少 44pt 的操作热区。表单校验、危险操作与状态徽章保留各自语义色。
@@ -976,6 +984,15 @@ cue, not an error or CTA; the mobile white text contrast is 4.98:1.
 
 Never freestyle these semantic colors as hardcoded hex — always go through the corresponding token.
 
+**Plugin provenance (user-approved 2026-11-09):** one compact identity mark beside the name:
+official blue, community purple, organization teal, custom-market orange and local neutral.
+Use `plugin-identity-{official,community,team,custom}-{text,bg}` through the existing DTCG
+generation chain; local uses `text-secondary` / `surface-chip`. These colors express source
+identity, never package verification, runtime permission or the connected service's endorsement.
+The owner-approved mark is a registered §5 shape exception: 20px high, 5px corners, no border,
+11px medium text and a 12px icon; it is not an ordinary action frame. Keep its text and icon
+so identity does not depend on color. Do not reuse these roles for status or other categories.
+
 **Search matches (2026-09-18, user-approved direction):** global find, file previews and
 file editors share `search-match-bg` / `search-match-fg` for ordinary matches and
 `search-match-active-bg` / `search-match-active-fg` for the current match. Both modes
@@ -1224,9 +1241,10 @@ Only the two registered chart members inside Usage History may enlarge their non
 
 - **Quota-reset confetti** — the third sanctioned motion class (approved 2026-07-23), **only** for the status-bar usage chip’s full-quota reveal (updated by user decision, 2026-09-12):
   - **Definition**: the first observation of 100% remaining quota throws confetti once from the full window segment, including the first visit. Deduplicate by provider across task switches and component remounts. After that first burst, the quota must drop below 100% and return to 100% before another burst. Remaining at 100% never replays, even across scheduled cycles. Reset deadlines do not participate in this decision; official extra resets follow the same rule. Snapshot update timestamps only reject stale task data. The percentage roll keeps its own reset detection.
-  - **Form** (finalized over four/five review rounds, 2026-07-23): **true parabolic toss + vanish on landing** — all particles launch simultaneously from the segment center in a ~**100° fan** (±50° of straight up) at equal speed, **constant horizontal velocity + constant vertical gravity** (decelerating up, accelerating down past the apex), so perceived speed is consistent from burst to fall; wider-angle particles fly lower arcs, travel farther, land earlier — the scatter comes from physics, not scripting. The final stretch before the ground line ends in a **short fade**: landing is fine, but lingering after landing ("corpsing") or vanishing without a fade is forbidden; the ground line jitters randomly so landing points don't queue up.
-  - **Parameter red lines**: a one-shot celebration — simultaneous launch, no stagger delay; per-particle duration follows arc physics clamped to 0.9s–1.6s, total ≈1.6s (the number roll settles at 1.2s, then the last confetti falls a few tenths more; arc scale and rhythm are user-tuned, finalized 2026-07-23); ≤18 particles, 3–5px, torn down when done, never looping or persistent; particles are HTML elements animating only `transform` / `opacity` (compositor-only, engineering conventions §7; x/y split across two nested spans keeps horizontal velocity constant); colors come only from the four status-dot hue exemptions (done green / awaiting teal / thinking orange / error red), same values in both modes; must skip entirely under `prefers-reduced-motion`.
-  - **Scope boundary**: this one spot only. Confetti must not leak into task completion, send success, or anywhere else — those stay on the §14.4 baseline (a new exemption requires a new entry here). Implementation: `apps/desktop/src/renderer/components/status/QuotaResetConfetti.tsx`.
+  - **Form** (shared celebration component, approved 2026-11-09): one small upward fan from the full segment center. Use the same `canvas-confetti` engine as Star, adding paper wobble, tilt and continuous fading while keeping the effect local to the footer. No stagger, loop or persistent particles.
+  - **Small preset**: 18 particles, angle 90, spread 80, startVelocity 5.5, decay 0.92, gravity 0.35, ticks 105 (about 1.75s), scalar 0.45. Resolve the original four status tokens (done, awaiting, warning-accent, error) from the active theme to hex for the canvas library. The quota preset supersedes the earlier DOM-only, constant-horizontal-speed and end-only-fade implementation constraints; it keeps the modest scale and original palette. Skip reduced motion, lazy-load, clean up after completion or unmount, and retain the quota layer at 9999.
+  - **Scope boundary**: quota reset and the explicitly approved GitHub Star confirmation below only. Task completion and send success stay on the §14.4 baseline. Both use `components/ui/ConfettiBurst.tsx`; `QuotaResetConfetti.tsx` remains the anchor adapter. Existing full-quota detection and provider deduplication remain unchanged.
+- **GitHub Star confirmation (user-approved 2026-11-09)** — after the GitHub API confirms the user's Star, use `canvas-confetti` 1.9.4 through the shared celebration component with the Star preset: 160 particles, spread 360, startVelocity 30, gravity 1.6, ticks 140. Capture the Star activation point in viewport CSS pixels and use it as the burst origin after success; keyboard activation uses the button center. Normalize against the actual canvas when firing, clamping if the window has resized; cursor movement or the success layout change must not move the origin. Keep the library's default colors, size, wobble, tilt, velocity decay and continuous fade; this explicit celebration is exempt from the quota-specific particle/color/DOM-animation limits. Render once on a full-window, pointer-transparent canvas above the Toast; load lazily, skip under reduced motion, remove on completion or dismissal. Use a dedicated main-thread instance without adding a blob-worker CSP exception. Quota reset shares the engine with its separate small preset above. Ordinary success notifications, failed writes and opening GitHub in the browser do not celebrate.
 - **Plugin selection annotation (2026-11-07)** — `GhostSummonCard` records only the user's explicit plugin choice, with a static identity ring and “selected” label. Historical mention directives remain quiet pills. Autonomous plugin calls never add or upgrade a label on the user's message, on either Desktop or Mobile. Mobile keeps its existing companion work-log header; its activity is gated by actual pending calls. Execution progress belongs to the existing work-log tool row and settles when its result arrives, independently of the assistant's remaining turn. The former whole-turn seal spin/closing/success choreography is retired; no context rules or new settings are introduced.
 
 - **Stream-word fade(流式正文分段淡入)** — the fifth sanctioned motion class (approved 2026-08-07, ordinary-chat timing aligned 2026-08-25), **only** for streaming assistant prose in the chat message flow:
