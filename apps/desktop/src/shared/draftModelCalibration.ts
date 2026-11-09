@@ -12,8 +12,8 @@
  */
 
 import {
-  chatEligibleSourcesForModel,
   connectedProvidersForAgent,
+  getModel,
   isCindyAutoModelId,
   effectiveSourceIdForModel,
   isCindyDistributedProvider,
@@ -172,12 +172,19 @@ export function pickDraftProviderForModel(
 /**
  * 某个来源在**最终型号**上还能不能路由;不能就返回 null。
  *
- * 播种来源(以及实时选择里的来源)只有在最终型号上确实可路由时才保留:播种型号
- * 不可路由、被换成目标目录里的别的型号之后,那个来源可能根本不提供新型号。显式
- * 带上它,发送侧(resolveDeviceLinkSubmission 会保留显式来源)就会对着一个路由不出
- * 该型号的来源建任务,首条消息必然失败。
+ * 播种来源(以及实时选择里的来源)只有在目录能证明它**不提供**最终型号时才丢弃:
+ * 播种型号被换成目标目录里的别的型号之后,那个来源可能根本不提供新型号。显式带上它,
+ * 发送侧(resolveDeviceLinkSubmission 会保留显式来源)就会对着一个路由不出该型号的
+ * 来源建任务,首条消息必然失败。
  *
- * 口径与发送侧一致:已连接 / 未停用 / runtime 可用 / 该型号条目没停用 / 是聊天模型。
+ * 但「路由不出去」不等于「不提供」:
+ *   · 来源暂时断连 / runtime 未开 —— 那是连接状态,目录里仍然留着这个型号。丢掉它就会
+ *     静默换成另一家账号 / 计费路径(provider-sharing §5.3:界面不能静默替换用户明确
+ *     选择的来源),执行端按选定来源报不可用才对。
+ *   · 目录里查不到这个来源(旧被控端不支持 maker:provider:list,目录为空;或来源已从
+ *     目录里消失)—— 无法证明它不提供,保留显式身份,让执行端按选定来源报不可用。
+ *
+ * 目录能证明「不提供」的两种:该 agent 下没有这个型号的条目,或条目本身被停用。
  */
 export function resolveDraftProviderForModel(
   providerId: string | null | undefined,
@@ -186,8 +193,16 @@ export function resolveDraftProviderForModel(
   agent: AgentKind,
 ): string | null {
   if (!providerId || !model) return null;
-  const eligible = chatEligibleSourcesForModel([...providers], model, agent);
-  return eligible.some((provider) => provider.id === providerId) ? providerId : null;
+  const source = providers.find((provider) => provider.id === providerId);
+  // 目录里查不到这个来源(旧被控端不支持 maker:provider:list,目录为空;或来源已从
+  // 目录里消失):无法证明它不提供这个型号 —— 保留用户明确选定的身份。
+  if (!source) return providerId;
+  // 来源在目录里:只有目录能证明它**不提供**这个型号时才丢弃(该 agent 下没有这个
+  // id 的条目,或条目本身被停用)。仅仅断连 / runtime 未开是状态问题 —— 丢掉它就会
+  // 静默换成另一家账号 / 计费路径,执行端按选定来源报不可用才对。
+  const entry = getModel(source, model, agent);
+  if (!entry || entry.disabled === true) return null;
+  return providerId;
 }
 
 /**

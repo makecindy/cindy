@@ -1350,6 +1350,10 @@ describe('resolveDraftEffectiveProviderId', () => {
  * 目标目录(远程 / 共享)上的来源与型号必须**成对**:播种来源不提供最终型号时,它就是
  * 一条路由不出去的来源 —— 发送侧(resolveDeviceLinkSubmission)会原样保留显式来源,
  * 首条消息必然失败(Codex review #9369)。
+ *
+ * 但只有目录能证明「不提供」才丢弃它:来源断连、目录缺失(旧被控端)都保留用户明确
+ * 选定的来源 —— 静默换成另一家账号 / 计费路径比「按选定来源报不可用」更糟
+ * (provider-sharing §5.3)。
  */
 describe('resolveDraftProviderForModel', () => {
   const healthySource = provider('healthy', true, { 'claude-code': [model('claude-sonnet-5')] });
@@ -1375,10 +1379,13 @@ describe('resolveDraftProviderForModel', () => {
     ).toBe('other');
   });
 
-  it('来源断连或型号条目被停用时同样不保留', () => {
+  it('来源断连时保留它:连接状态不是「不提供」,丢掉就会静默换成另一家账号', () => {
     expect(
       resolveDraftProviderForModel('offline', 'claude-sonnet-5', [offlineSource], 'claude-code'),
-    ).toBeNull();
+    ).toBe('offline');
+  });
+
+  it('该型号条目被停用时不保留它(目录明确说这家不提供这个型号)', () => {
     expect(
       resolveDraftProviderForModel(
         'disabled-model',
@@ -1387,6 +1394,17 @@ describe('resolveDraftProviderForModel', () => {
         'claude-code',
       ),
     ).toBeNull();
+  });
+
+  it('目录里查不到这个来源时保留它(旧被控端没有目录,无法证明它不提供)', () => {
+    // 目录为空(旧被控端不支持 maker:provider:list)
+    expect(
+      resolveDraftProviderForModel('healthy', 'claude-sonnet-5', [], 'claude-code'),
+    ).toBe('healthy');
+    // 来源已从目录里消失
+    expect(
+      resolveDraftProviderForModel('gone', 'claude-sonnet-5', [healthySource], 'claude-code'),
+    ).toBe('gone');
   });
 
   it('型号或来源为空时返回 null', () => {

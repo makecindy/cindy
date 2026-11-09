@@ -624,6 +624,38 @@ describe('the source follows the final model', () => {
     expect(pick()).toBe('good');
   });
 
+  it('keeps an explicitly chosen source the catalog cannot vouch against', () => {
+    // 旧被控端没有供应商目录(providers 为空):无法证明用户选的那家不提供最终型号 ——
+    // 保留显式来源,不静默换成默认来源(Codex review #9369,provider-sharing §5.3)。
+    const pickFromEmptyCatalog = callback<() => string | null>('chatInitialProviderId', {
+      usesDeviceCatalog: true,
+      localProviderIdForDraft: null,
+      deviceLinkInitial: { providerId: 'chosen' },
+      draftInitialModel: 'shared-model',
+      agentCatalogProviders: [],
+      capabilityAgentKind: 'pi',
+      draftInitialProviderId: 'other',
+      resolveDraftProviderForModel,
+      effectiveSourceIdForModel,
+    });
+    expect(pickFromEmptyCatalog()).toBe('chosen');
+
+    // 目录里有这家、型号也在,只是暂时断连:同样是状态问题,不是「不提供」。
+    const offline = { ...sourceProvider('chosen', 'shared-model'), connected: false };
+    const pickFromOfflineCatalog = callback<() => string | null>('chatInitialProviderId', {
+      usesDeviceCatalog: true,
+      localProviderIdForDraft: null,
+      deviceLinkInitial: { providerId: 'chosen' },
+      draftInitialModel: 'shared-model',
+      agentCatalogProviders: [offline, sourceProvider('other', 'shared-model')],
+      capabilityAgentKind: 'pi',
+      draftInitialProviderId: 'other',
+      resolveDraftProviderForModel,
+      effectiveSourceIdForModel,
+    });
+    expect(pickFromOfflineCatalog()).toBe('chosen');
+  });
+
   it('derives Fast from the final model and source', () => {
     const providers = [sourceProvider('good', 'shared-model'), sourceProvider('stale', 'other-model')];
     const resolveFastSupported = vi.fn(() => true);
