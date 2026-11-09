@@ -3965,6 +3965,9 @@ describe('thread previews and posting to the main chat', () => {
     if (context === 'topic') fireEvent.click((await screen.findAllByRole('button', { name: 'bots.groupChat.server.startTopic' }))[0]!);
     const surface = context === 'topic' ? screen.getByRole('complementary') : await screen.findByTestId('bot-group-timeline');
     await within(surface).findByText('Process result');
+    // #8979 Windows CI: reply prose can render before the asynchronous history
+    // read settles. Exercise scrolling only once its real disclosure is ready.
+    await waitFor(() => expect(surface.querySelector('button[data-scroll-disclosure-header]')).toBeTruthy());
     return (context === 'topic' ? surface.querySelector('div.overflow-y-auto') : surface) as HTMLDivElement;
   }
 
