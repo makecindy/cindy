@@ -782,7 +782,7 @@ it('keeps the App connection visible when baseline reads fail, and excludes unav
   server.github = { available: true, login: 'example-user', endpointId: 'whk-github', repositories: [] };
   const baseUrl = await server.listen();
   const url = 'https://github.com/example/project/pull/12';
-  const onGithubPrs = vi.fn(async () => { throw new Error('PR_VERIFICATION_FAILED'); });
+  const onGithubPrs = vi.fn<() => Promise<void>>(async () => { throw new Error('PR_VERIFICATION_FAILED'); });
   const remote = new ScheduleWebhookRemote({ baseUrl: () => baseUrl, getAccessToken: async () => 'token-1',
     refreshAccessToken: async () => false, fetch, socketOptions: async () => ({}), logger: {}, onBatch: async () => {}, onGithubPrs });
   try {
