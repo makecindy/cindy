@@ -5,6 +5,10 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 const fixture = vi.hoisted(() => ({
   realm: "global",
   relay: null as { baseUrl: string } | null,
+  application: {
+    getPushNotificationServiceEnvironmentAsync: vi.fn(),
+    getApplicationReleaseTypeAsync: vi.fn(),
+  },
   native: {
     getPushRegistration: vi.fn(),
     configureAccount: vi.fn(async () => {}),
@@ -15,7 +19,7 @@ const fixture = vi.hoisted(() => ({
 }));
 vi.mock("react-native", () => ({ Platform: { OS: "ios" } }));
 vi.mock("expo-modules-core", () => ({
-  requireOptionalNativeModule: () => fixture.native,
+  requireOptionalNativeModule: (name: string) => name === "ExpoApplication" ? fixture.application : fixture.native,
 }));
 vi.mock("@/config/env", () => ({
   AUTH_REGION: "global",
@@ -63,6 +67,8 @@ beforeEach(() => {
   vi.stubGlobal("fetch", fetchMock);
   fixture.realm = "global";
   fixture.relay = null;
+  fixture.application.getPushNotificationServiceEnvironmentAsync.mockResolvedValue("development");
+  fixture.application.getApplicationReleaseTypeAsync.mockResolvedValue(0);
   setMobileAuthOwner("a", "global");
   fixture.native.getPushRegistration.mockResolvedValue(registration());
 });
@@ -108,6 +114,32 @@ it("unregisters on system disable without ending auth or enabling ordinary notif
   await sync.sync();
   expect(fetchMock.mock.calls.at(-1)![1]).toMatchObject({ method: "DELETE" });
   expect(fetchMock.mock.calls.at(-1)![1]!.body).toBeUndefined();
+  sync.dispose();
+});
+// Unit, discussion_r4515865303: Release does not imply production signing.
+// Exercise the real native environment reader through the activity transport.
+it.each([
+  [false, "development", 0, "sandbox"],
+  [true, "production", 0, "prod"],
+  [false, null, 5, "prod"],
+] as const)("uses signed APNs environment (JS dev=%s, profile=%s, release=%s)", async (dev, environment, release, expected) => {
+  vi.stubGlobal("__DEV__", dev);
+  fixture.application.getPushNotificationServiceEnvironmentAsync.mockResolvedValue(environment);
+  fixture.application.getApplicationReleaseTypeAsync.mockResolvedValue(release);
+  const sync = startActivityPushSync(options());
+  await sync.sync();
+  expect(JSON.parse(fetchMock.mock.calls[0][1]!.body as string).apnsEnv).toBe(expected);
+  sync.dispose();
+});
+it("keeps local sync for an unknown signing environment but still permits unregister", async () => {
+  fixture.application.getPushNotificationServiceEnvironmentAsync.mockResolvedValue(null);
+  const opts = options(), sync = startActivityPushSync(opts);
+  await sync.sync();
+  expect(fetchMock).not.toHaveBeenCalled();
+  expect(opts.onRegistered).toHaveBeenLastCalledWith(false);
+  fixture.native.getPushRegistration.mockResolvedValue({ ...registration(), enabled: false });
+  await sync.sync();
+  expect(fetchMock.mock.calls.at(-1)![1]?.method).toBe("DELETE");
   sync.dispose();
 });
 // Unit, discussion_r4514700790: merely obtaining an update token previously

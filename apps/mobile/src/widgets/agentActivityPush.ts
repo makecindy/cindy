@@ -12,6 +12,7 @@ import {
   isMobileAuthOwnerCurrent,
 } from "@/auth/authOwnerGeneration";
 import { resolvePushAppVariant } from "@/notifications/pushRegistrationModel";
+import { readIosPushEnvironment } from "@/notifications/nativePushEnvironment";
 import type { AgentActivitySink } from "./agentActivitySync";
 
 export interface ActivityPushRegistration {
@@ -125,6 +126,16 @@ export function startActivityPushSync(options: {
         const registration = await native.getPushRegistration!();
         assertCurrent();
         if (registration.accountScope !== options.accountScope) return;
+        // Release builds can carry development provisioning. Read the signed
+        // native environment, as ordinary APNs registration already does.
+        const environment = registration.enabled
+          ? await readIosPushEnvironment()
+          : null;
+        assertCurrent();
+        if (registration.enabled &&
+            environment !== "development" && environment !== "production") {
+          throw new Error("Unknown ActivityKit APNs signing environment");
+        }
         // A native token is not evidence that the service received it. The
         // bridge keeps its initial discovery pending until this attempt settles.
         const body = {
@@ -133,7 +144,7 @@ export function startActivityPushSync(options: {
           labels: options.labels,
           urlScheme: options.urlScheme,
           appVariant: resolvePushAppVariant(AUTH_REGION),
-          apnsEnv: __DEV__ ? "sandbox" : "prod",
+          apnsEnv: environment === "development" ? "sandbox" : "prod",
         };
         const key = JSON.stringify(body);
         if (key === last) return;

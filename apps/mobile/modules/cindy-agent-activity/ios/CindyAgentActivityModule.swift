@@ -12,9 +12,12 @@ private final class AgentActivityController {
   static let shared = AgentActivityController()
   private var tail: Task<Void, Never>?
   private var observed: Activity<CindyAgentActivityAttributes>?
-  private var dismissedAccount: String?
+  private var dismissedAccount: String? {
+    didSet { UserDefaults.standard.set(dismissedAccount, forKey: dismissedOwnerKey) }
+  }
   var registrationChanged: (() -> Void)?
   private let ownerKey = "cindy.liveActivity.accountScope"
+  private let dismissedOwnerKey = "cindy.liveActivity.dismissedAccountScope"
   private var account: String?
   private var startToken: Data?
   private var watches: [String: [Task<Void, Never>]] = [:]
@@ -22,6 +25,7 @@ private final class AgentActivityController {
 
   private init() {
     account = UserDefaults.standard.string(forKey: ownerKey)
+    dismissedAccount = UserDefaults.standard.string(forKey: dismissedOwnerKey)
     for activity in Activity<CindyAgentActivityAttributes>.activities { observe(activity) }
     observers.append(Task {
       for await activity in Activity<CindyAgentActivityAttributes>.activityUpdates { observe(activity) }
@@ -90,7 +94,9 @@ private final class AgentActivityController {
     }, Task {
       for await state in activity.activityStateUpdates {
         if state == .dismissed || state == .ended {
-          if state == .dismissed { dismissedAccount = activity.attributes.accountId }
+          if state == .dismissed && activity.attributes.accountId == account {
+            dismissedAccount = activity.attributes.accountId
+          }
           if observed?.id == activity.id { observed = nil }
           for watcher in watches.removeValue(forKey: activity.id) ?? [] { watcher.cancel() }
         }

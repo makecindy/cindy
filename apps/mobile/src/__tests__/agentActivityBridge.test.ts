@@ -24,7 +24,8 @@ vi.mock('react-native', () => ({
   Platform: { OS: 'ios' },
   AppState: { currentState: 'active', addEventListener: () => ({ remove() {} }) },
 }));
-vi.mock('expo-modules-core', () => ({ requireOptionalNativeModule: () => mock.native }));
+vi.mock('expo-modules-core', () => ({ requireOptionalNativeModule: (name: string) => name === 'ExpoApplication'
+  ? { getPushNotificationServiceEnvironmentAsync: async () => 'development' } : mock.native }));
 vi.mock('expo-linking', () => ({ createURL: (path: string, options?: { queryParams: { deviceId: string } }) =>
   `cindy://${path}${options ? `?deviceId=${options.queryParams.deviceId}` : ''}` }));
 vi.mock('@/config/env', () => ({ AUTH_REGION: 'global', getActiveMobileSessionRealm: () => 'global',
