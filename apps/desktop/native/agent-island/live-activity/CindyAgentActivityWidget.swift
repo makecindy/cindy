@@ -137,7 +137,7 @@ private struct Identity: View {
   }
 }
 
-/// `attention · running` counts in Agent Island colors; a check for unread results.
+/// Agent Notch's `attention · running` counts, including unread finished work.
 private struct CountRuns: View {
   let state: CindyAgentActivityAttributes.ContentState
   let size: CGFloat
@@ -145,16 +145,17 @@ private struct CountRuns: View {
 
   var body: some View {
     HStack(spacing: size * 0.25) {
-      if state.attentionCount > 0 {
-        Text("\(state.attentionCount)").foregroundStyle(Palette.attention)
+      if state.badgeAttentionCount > 0 {
+        Text("\(state.badgeAttentionCount)")
+          .foregroundStyle(state.attentionCount > 0 ? Palette.attention : Palette.completed)
       }
-      if state.attentionCount > 0 && state.runningCount > 0 {
+      if state.badgeAttentionCount > 0 && state.runningCount > 0 {
         Text("·").foregroundStyle(separator)
       }
       if state.runningCount > 0 {
         Text("\(state.runningCount)").foregroundStyle(Palette.running)
       }
-      if state.attentionCount == 0 && state.runningCount == 0 {
+      if state.badgeAttentionCount == 0 && state.runningCount == 0 {
         Image(systemName: "checkmark").foregroundStyle(Palette.completed)
       }
     }

@@ -28,7 +28,10 @@ const MAX_COMPANION_JPEG_LENGTH = 2048;
 export interface AgentIslandLiveActivityState {
   status: 'running' | 'attention' | 'completed';
   runningCount: number;
+  /** Tasks blocked on the user; kept separate for new-question alerts. */
   attentionCount: number;
+  /** Agent Notch's full badge count, including unread results and companion chats. */
+  attentionTotal: number;
   title: string;
   /** Destination of the displayed task; absent for older payloads. */
   taskUrl?: string;
@@ -65,8 +68,8 @@ export interface AgentIslandLiveActivityStrings {
 }
 
 /**
- * Projects the island's pill snapshot onto the Live Activity: what waits on the user
- * first, then running work, then unread results; nothing left means no activity.
+ * Projects the island's pill snapshot onto the Live Activity, preserving its badge
+ * counts and surfaced task's phase; nothing left means no activity.
  * `companion` is the identity of the task the pill surfaces (its title already names
  * the companion); it replaces the mascot once that task needs the user or has replied.
  */
@@ -101,28 +104,30 @@ function liveActivityStatusFromPill(
 ): AgentIslandLiveActivityState | null {
   const running = pill.runningSessionCount;
   const waiting = pill.pendingInteractionCount;
+  if (running === 0 && pill.attentionCount === 0) return null;
   const completedLabel = pill.priorityStatus === 'error' ? strings.error : strings.completed;
   const base = {
     runningCount: running,
     attentionCount: waiting,
+    attentionTotal: pill.attentionCount,
     title: pill.priorityCompactTitle,
     mascot,
     completedCount: pill.unreadCompletedCount,
     completedLabel,
   };
-  if (waiting > 0) {
+  if (pill.priorityStatus === 'needs-interaction') {
     const summary = running > 0
       ? strings.alsoRunningCount(running)
       : waiting > 1 ? strings.waitingCount(waiting) : '';
     return { ...base, status: 'attention', detail: strings.needsInput, summary };
   }
-  if (running > 0) {
+  if (pill.priorityStatus === 'running') {
     return { ...base, status: 'running', detail: strings.running, summary: running > 1 ? strings.runningCount(running) : '' };
   }
-  if (pill.unreadCompletedCount > 0) {
+  if (pill.priorityStatus === 'completed' || pill.priorityStatus === 'error') {
     // Unread results include failures; say so rather than "completed".
     const detail = pill.priorityStatus === 'error' ? strings.error : strings.completed;
-    return { ...base, status: 'completed', detail, summary: '' };
+    return { ...base, status: 'completed', detail, summary: running > 0 ? strings.alsoRunningCount(running) : '' };
   }
   return null;
 }
@@ -136,10 +141,10 @@ function alertFor(
   next: AgentIslandLiveActivityState,
 ): { title: string; body: string } | undefined {
   const asksMore = next.attentionCount > (previous?.attentionCount ?? 0);
-  const finished = next.status === 'completed' && previous !== null && previous.status !== 'completed';
-  // Another task finishing while others still run keeps the summary status unchanged.
+  // The surfaced task can change without any new work finishing (e.g. reading a
+  // result). Only count increases represent a new completion, not status changes.
   const finishedMore = previous !== null && next.completedCount > previous.completedCount;
-  if (!asksMore && !finished && !finishedMore) return undefined;
+  if (!asksMore && !finishedMore) return undefined;
   if (finishedMore && next.status !== 'completed' && next.status !== 'attention') {
     return { title: next.title, body: next.completedLabel };
   }
@@ -185,6 +190,7 @@ function sameState(a: AgentIslandLiveActivityState | null, b: AgentIslandLiveAct
   return a.status === b.status
     && a.runningCount === b.runningCount
     && a.attentionCount === b.attentionCount
+    && a.attentionTotal === b.attentionTotal
     && a.taskUrl === b.taskUrl
     && a.title === b.title
     && a.detail === b.detail
