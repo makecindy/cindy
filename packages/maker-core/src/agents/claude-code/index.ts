@@ -208,11 +208,7 @@ import type {
 } from '../../types/memory.js';
 import type { McpProviderContext } from '../../interfaces/mcp-provider.js';
 import { claudeDisabledSkillOverrides, snapshotDisabledSkillLaunch, currentDisabledSkillLaunchPaths } from '../shared/skill-activation.js';
-import {
-  resolveGitRoot,
-  scanClaudeCustomizations,
-  scanClaudeRuntimeSkills,
-} from './customization-scanner.js';
+import { scanClaudeCustomizations, scanClaudeRuntimeSkills } from './customization-scanner.js';
 import { prepareManagedSkillPlugins } from './managed-skill-plugins.js';
 import { resolveAllowedManagedSkills, snapshotManagedSkillGrants } from '../shared/managed-skill-policy.js';
 import {
@@ -1180,25 +1176,15 @@ export class ClaudeCodeAgent extends BaseAgent {
         excludePluginSkills: opts.excludePluginSkills,
       });
     }
-    // Project-scoped installs record the directory Claude was started in, which
-    // may be a subdirectory rather than the Git root. Try the working directory
-    // first, then its Git root, so both placements are discovered.
-    const workingRoot = opts.workingDir ? path.resolve(opts.workingDir) : undefined;
-    const gitRoot = workingRoot ? resolveGitRoot(workingRoot) : undefined;
-    const projectRoots = workingRoot
-      ? [...new Set([workingRoot, ...(gitRoot ? [gitRoot] : [])])]
-      : [];
-    const raw = projectRoots.length > 0
-      ? await scanClaudeSlashCommands({
-        ...(opts.workingDir ? { workingDir: opts.workingDir } : {}),
-        configDir,
-        projectRoots,
-        ...(opts.excludePluginSkills ? { excludePluginSkills: true } : {}),
-      })
-      : await scanClaudeSlashCommands({
-        configDir,
-        ...(opts.excludePluginSkills ? { excludePluginSkills: true } : {}),
-      });
+    // Project-scoped installs record the cwd at install time, and Claude Code
+    // resolves project settings by walking up from the cwd — so the working
+    // directory itself is the correct match target, not a derived Git root.
+    const raw = await scanClaudeSlashCommands({
+      ...(opts.workingDir ? { workingDir: opts.workingDir } : {}),
+      configDir,
+      ...(opts.workingDir ? { projectRoots: [path.resolve(opts.workingDir)] } : {}),
+      ...(opts.excludePluginSkills ? { excludePluginSkills: true } : {}),
+    });
     return {
       skills: [...await this.managedSkillCommands(raw.map((item) => item.name)), ...raw.map((c) => ({
         kind: 'agent-skill' as const,
