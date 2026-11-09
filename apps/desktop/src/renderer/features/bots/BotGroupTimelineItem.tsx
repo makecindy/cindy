@@ -422,7 +422,7 @@ function BotGroupTimelineItemImpl(props: BotGroupTimelineItemProps) {
     if (isBotGroupRuntimeFailureCode(message.runtimeFailureCode)) {
       return (
         <Row {...rowProps} block="system">
-          <BotGroupRuntimeFailureNotice name={name} code={message.runtimeFailureCode} />
+          <BotGroupRuntimeFailureNotice name={name} code={message.runtimeFailureCode} reason={message.runtimeFailureReason} />
         </Row>
       );
     }

@@ -10854,6 +10854,9 @@
         "stepFailed": "{{name}} encontrou um problema e não concluiu esta etapa",
         "stepTimeout": "{{name}} demorou demais, então esta etapa foi interrompida",
         "stepUnavailable": "{{name}} está indisponível e não pode executar esta etapa",
+        "runtimeFailureReason": {
+          "unclaimed_timeout": "{{name}} não começou a processar dentro do prazo de espera. Esta solicitação foi encerrada.\nPeça ao proprietário do parceiro para verificar se a Cindy está funcionando e se o computador está conectado à rede."
+        },
         "runtimeFailure": {
           "REMOTE_DEVICE_LIMIT": "{{name}} não pode responder: o dispositivo do colega atingiu o limite de sessões remotas.\nPeça ao proprietário do colega para arquivar as sessões não utilizadas ou ao proprietário do computador remoto para aumentar o limite em Acesso remoto e compartilhamento.",
           "REMOTE_TOTAL_LIMIT": "{{name}} não pode responder: o computador remoto atingiu o limite total de sessões remotas.\nPeça ao proprietário desse computador para liberar as sessões não utilizadas ou aumentar o limite em Acesso remoto e compartilhamento.",

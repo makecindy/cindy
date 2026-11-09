@@ -7,6 +7,7 @@ import { RichAnswerStream, splitRichAnswer, richMarkdown, richString, richLabel,
 import {
   isBotGroupPlanOpen,
   isBotGroupCapabilityNoticeCode,
+  readBotGroupRuntimeFailureReason,
   type BotGroupDetail,
   type BotGroupErrorCode,
   type BotGroupExecutionFailureView,
@@ -149,6 +150,7 @@ export function projectBotGroupExecutionFailures(
     kind: 'notice', authorKind: 'system', authorBotId: failure.botId, authorName: failure.botName,
     content: '', noticeCode: failure.code === 'RUNTIME_TIMEOUT' ? 'member-timeout' : 'member-failed',
     runtimeFailureCode: failure.code, mentions: { all: false, botIds: [] }, planId: failure.planId,
+    ...(readBotGroupRuntimeFailureReason(failure.code, failure.reason) ? { runtimeFailureReason: failure.reason } : {}),
     threadRootId: source.threadRootId ?? null, files: [], attachments: [], createdAt: failure.updatedAt ?? source.createdAt,
   }))]);
 }

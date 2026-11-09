@@ -1179,7 +1179,7 @@ function BotGroupTimelineItem({
     const name = message.authorName.trim() || member?.name || '';
     if (isBotGroupCapabilityNoticeCode(message.capabilityNoticeCode)) return <Text style={styles.capabilityNotice} testID="botGroup.notice">{t(`groupChat.notice.capability.${message.capabilityNoticeCode}`, { name })}</Text>;
     if (isBotGroupRuntimeFailureCode(message.runtimeFailureCode)) {
-      return <BotGroupRuntimeFailureNotice key={message.id} code={message.runtimeFailureCode} name={name} />;
+      return <BotGroupRuntimeFailureNotice key={message.id} code={message.runtimeFailureCode} reason={message.runtimeFailureReason} name={name} />;
     }
     const variant = botGroupNoticeVariant(message.noticeCode, message.planId !== null);
     return <Text style={styles.notice} testID="botGroup.notice">{variant ? t(`groupChat.notice.${variant}`, { name }) : message.content}</Text>;
