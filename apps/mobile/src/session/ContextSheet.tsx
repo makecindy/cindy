@@ -91,7 +91,9 @@ export function ContextSheet({
       <SheetModal
         backdropTestID={testID ? `${testID}.backdrop` : undefined}
         keyboardAvoiding
-        keyboardAvoidingBehavior={keyboardAvoidingBehavior}
+        // Android edge-to-edge: the Modal window is not resized, so 'height' left the goal
+        // input hidden behind the keyboard. Use 'padding' (SheetModal enables it on Android).
+        keyboardAvoidingBehavior={keyboardAvoidingBehavior === 'height' ? 'padding' : keyboardAvoidingBehavior}
         onBackdropPress={onClose}
         onClosed={() => {
           const action = pendingAfterClose.current;
