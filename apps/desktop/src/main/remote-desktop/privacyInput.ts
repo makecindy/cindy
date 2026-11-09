@@ -92,3 +92,115 @@ export async function watchPrivacyInput(
     throw error;
   }
 }
+
+export interface AwayGuardInputMonitor extends PrivacyInputMonitor {
+  /** Ask the helper to lock now. Resolves true only once the OS reported the lock. */
+  lock(): Promise<boolean>;
+  /** Best-effort synchronous lock request for app shutdown; the helper also locks on EOF. */
+  lockOnExit(): void;
+}
+
+/** `--away-guard`: the helper itself turns physical input, a missed heartbeat or a
+ * dead Main into the system lock. `stop()` releases it without a lock (the screen is
+ * already locked, or remote desktop takes over the display). `ended` runs once: on the
+ * confirmed lock, or when the helper is gone. The helper stops reading input as soon
+ * as the lock is up and then exits.
+ */
+export async function watchAwayGuardInput(
+  ended: (locked: boolean) => void,
+  /** Fixed word naming what made the helper lock (key, click, heartbeat, …), for logs. */
+  lockingBecause: (reason: string) => void = () => {},
+  runtime = {
+    resolveBinary: resolveDesktopInputBinary,
+    spawn: (binary: string): ChildProcessWithoutNullStreams =>
+      spawn(binary, ['--away-guard'], { stdio: 'pipe', windowsHide: true }),
+  },
+): Promise<AwayGuardInputMonitor> {
+  const child = runtime.spawn(await runtime.resolveBinary());
+  const closed = new Promise<void>((resolve) => child.once('close', () => resolve()));
+  let locked = false;
+  let ready = false;
+  let reported = false;
+  let lockedNow: (() => void) | undefined;
+  const lockConfirmed = new Promise<void>((resolve) => {
+    lockedNow = resolve;
+  });
+  const report = () => {
+    if (reported || !ready) return;
+    reported = true;
+    clearInterval(heartbeat);
+    ended(locked);
+  };
+  let buffer = '';
+  let settleReady: ((error?: Error) => void) | undefined;
+  const readyPromise = new Promise<void>((resolve, reject) => {
+    settleReady = (error) => {
+      settleReady = undefined;
+      if (error) reject(error);
+      else resolve();
+    };
+  });
+  const readyTimer = setTimeout(
+    () => settleReady?.(new Error('DESKTOP_PRIVACY_UNAVAILABLE')),
+    5000,
+  );
+  const write = (command: string) => {
+    if (child.stdin.writable) child.stdin.write(`${command}\n`);
+  };
+  const heartbeat = setInterval(() => write('ping'), 1000);
+  child.stderr.resume();
+  child.stdin.on('error', () => {});
+  child.on('error', () => settleReady?.(new Error('DESKTOP_PRIVACY_UNAVAILABLE')));
+  child.stdout.on('data', (data: Buffer) => {
+    buffer += data.toString();
+    if (buffer.length > 1024) buffer = '';
+    let end: number;
+    while ((end = buffer.indexOf('\n')) >= 0) {
+      const line = buffer.slice(0, end).trim();
+      buffer = buffer.slice(end + 1);
+      if (line === 'ready') {
+        ready = true;
+        settleReady?.();
+      } else if (/^reason [a-z-]{1,16}$/.test(line)) {
+        lockingBecause(line.slice('reason '.length));
+      } else if (line === 'locked') {
+        locked = true;
+        lockedNow?.();
+        report();
+      }
+      // `permission`, `error`, `released` and `lock-failed` all end with process exit.
+    }
+  });
+  void closed.then(() => {
+    clearTimeout(readyTimer);
+    clearInterval(heartbeat);
+    settleReady?.(new Error('DESKTOP_PRIVACY_UNAVAILABLE'));
+    report();
+  });
+  const finish = (command: 'lock' | 'release', timeoutMs: number): Promise<void> => {
+    // Once locked, the helper has stopped reading input and is exiting by itself.
+    if (locked) return Promise.resolve();
+    write(command);
+    const timer = setTimeout(() => child.kill(), timeoutMs);
+    timer.unref();
+    return Promise.race([closed, lockConfirmed]).finally(() => clearTimeout(timer));
+  };
+  try {
+    await readyPromise;
+  } catch (error) {
+    child.kill();
+    await closed;
+    throw error;
+  }
+  return {
+    confirm: () => Promise.reject(new Error('DESKTOP_PRIVACY_UNAVAILABLE')),
+    resume: () => Promise.reject(new Error('DESKTOP_PRIVACY_UNAVAILABLE')),
+    stop: () => finish('release', 2000),
+    lock: async () => {
+      // The helper waits up to 3 s for the OS to report the lock before giving up.
+      await finish('lock', 6000);
+      return locked;
+    },
+    lockOnExit: () => write('lock'),
+  };
+}

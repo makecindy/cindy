@@ -15,7 +15,7 @@ function MailAvatarsFixture() {
     bodyHtml: `<p>大家好，</p><p>新版邮件阅读界面已准备好，请查看设计预览。</p><img src="${new URL(previewImage, location.href).href}" alt="Preview image" width="120" height="120"><p><a href="https://example.test/details">查看设计说明</a></p>`, attachments: [],
     participantPhotos: [{ email: 'cindy@example.test', url: 'https://lh3.googleusercontent.com/fixture-contact' }] };
   return opened ? <MailConversationView mail={message} read={async () => ({ message })} retry={() => {}} openMailbox={null} />
-    : <button onClick={() => setOpened(true)}>Open preview</button>;
+    : <button onClick={() => setOpened(true)} data-ui-page-control>Open preview</button>;
 }
 
 function MailTwoViewsFixture() {
@@ -38,7 +38,7 @@ function MailReadFixture() {
 function MailRefreshFixture() {
   const [version, setVersion] = useState(0);
   return <>
-    <button onClick={() => setVersion(version + 1)}>Refresh source</button>
+    <button onClick={() => setVersion(version + 1)} data-ui-page-control>Refresh source</button>
     <MailHtmlPreview value={`<p>First paragraph</p><p>Last paragraph</p><!--${version}-->`} onChange={() => {}} />
   </>;
 }

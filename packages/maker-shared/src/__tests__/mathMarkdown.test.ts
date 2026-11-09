@@ -217,11 +217,14 @@ describe('latexToUnicodeApproximation', () => {
   });
 
   it('handles incomplete streaming fragments and bounded nesting without throwing', () => {
-    const source = String.raw`\frac{\sqrt[3]{x}}{y}`;
-    for (let end = 0; end <= source.length; end += 1) {
-      expect(() => latexToUnicodeApproximation(source.slice(0, end))).not.toThrow();
+    for (const source of [String.raw`\frac{\sqrt[3]{x}}{y}`, String.raw`e\in\mathcal{\mathbf E}_\mathrm i`]) {
+      for (let end = 0; end <= source.length; end += 1) {
+        expect(() => latexToUnicodeApproximation(source.slice(0, end))).not.toThrow();
+      }
     }
-    expect(() => latexToUnicodeApproximation('\\sqrt{'.repeat(2000) + 'x' + '}'.repeat(2000))).not.toThrow();
+    for (const command of ['\\sqrt{', '\\mathbf{']) {
+      expect(() => latexToUnicodeApproximation(command.repeat(2000) + 'x' + '}'.repeat(2000))).not.toThrow();
+    }
   });
 
   // PR #7560 / Greptile 4391615793: the numerator must not be rendered
@@ -235,6 +238,26 @@ describe('latexToUnicodeApproximation', () => {
   it('样式包装剥壳保内容,函数名保字面', () => {
     expect(latexToUnicodeApproximation('\\text{速度} v')).toBe('速度 v');
     expect(latexToUnicodeApproximation('\\mathbf{A} \\sin x')).toBe('A sin x');
+  });
+
+  // #9422: the mobile Text/share fallback must preserve symbols and argument
+  // scope. Existing style coverage only tested an isolated, braced wrapper;
+  // stripping it before command mapping merged \in + E into unknown \inE.
+  // Unit: exercise the production converter's visible text, including single
+  // tokens, nested wrappers and wrappers used as structural/script arguments.
+  it.each([
+    [String.raw`e\in\mathcal E`, 'e∈E'],
+    [String.raw`e\in\mathcal{E}`, 'e∈E'],
+    [String.raw`\mathrm{\alpha}x`, 'αx'],
+    [String.raw`\mathbf{\mathcal{E}}`, 'E'],
+    [String.raw`\mathbf\alpha+x`, 'α+x'],
+    [String.raw`\frac\mathrm{12}2`, '(12)/2'],
+    [String.raw`\sqrt\mathrm{2}`, '√2'],
+    [String.raw`x^{\mathrm{12}}+y_\mathrm i`, 'x¹²+yᵢ'],
+    [String.raw`e\in\mathrm{\{E\}}`, 'e∈{E}'],
+    [String.raw`\mathcal{}x`, 'x'],
+  ])('preserves styled inline math argument boundaries: %s', (source, expected) => {
+    expect(latexToUnicodeApproximation(source)).toBe(expected);
   });
 
   it('\\left \\right 修饰被丢弃', () => {

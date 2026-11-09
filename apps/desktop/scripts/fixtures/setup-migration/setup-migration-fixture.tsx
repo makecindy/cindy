@@ -2,7 +2,7 @@ import { useEffect } from 'react';
 
 import { ctx, forbid, mountPage } from '../../ui-page/harness';
 import { SetupMigrationSection } from '../../../src/renderer/components/settings/SetupMigrationSection';
-import { SetupMigrationDialog } from '../../../src/renderer/features/setup-migration/SetupMigrationDialog';
+import { SetupMigrationHost } from '../../../src/renderer/features/setup-migration/SetupMigrationHost';
 import { SetupMigrationWalkthroughBar } from '../../../src/renderer/features/setup-migration/SetupMigrationWalkthroughBar';
 import {
   openSetupMigration,
@@ -22,7 +22,7 @@ function StartWalkthrough() {
 
 function OpenDialog() {
   useEffect(() => {
-    openSetupMigration((data.deviceId as string | undefined) ?? null);
+    openSetupMigration();
   }, []);
   return null;
 }
@@ -60,6 +60,7 @@ mountPage({
       createCustomProvider: async () => ({ ok: true }),
     },
     deviceLink: {
+      listDevices: async () => ({ devices: [{ deviceId: 'receiver', name: 'New Mac', isSelf: true }, ...((data.sources as object[]) ?? [])] }),
       setEnabled: async () => ({ remoteControlEnabled: true }),
       setKeepAwake: async () => ({ keepAwake: true }),
     },
@@ -68,13 +69,14 @@ mountPage({
     data.surface === 'settings' ? (
       <div className="mx-auto max-w-[720px] p-6">
         <SetupMigrationSection />
+        <SetupMigrationHost />
       </div>
     ) : data.surface === 'walkthrough' ? (
       <StartWalkthrough />
     ) : (
       <>
         <OpenDialog />
-        <SetupMigrationDialog />
+        <SetupMigrationHost />
       </>
     ),
 });

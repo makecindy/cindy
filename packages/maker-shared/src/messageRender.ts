@@ -63,19 +63,6 @@ export interface MessageRenderSourceMessageLike {
   delivery?: string | null;
 }
 
-/** Presentation anchors only. Missing loaded user boundaries stay unavailable;
- * continuation/steer rows never create a second persisted turn identity. */
-export function collectPluginUiTurnAnchors(messages: readonly MessageRenderSourceMessageLike[]): Map<string, string> {
-  const result = new Map<string, string>();
-  let anchor: string | undefined;
-  for (const message of messages) {
-    if (message.role === 'user' && message.delivery !== 'steer') {
-      if (!message.isSyntheticTrigger && !isContinuationMessage(message)) anchor = message.clientId || undefined;
-    } else if (message.role === 'assistant' && message.clientId && anchor) result.set(message.clientId, anchor);
-  }
-  return result;
-}
-
 export type MessageRenderNormalizedMessageKind =
   | 'user'
   | 'assistant'
@@ -607,8 +594,8 @@ function hasSubagentParent(message: MessageRenderSourceMessageLike): boolean {
   return false;
 }
 
-/** Live Claude/Codex SDK tool-use ids;裸 uuid 形态的 legacy transcript 链边不算。 */
-const SUBAGENT_PARENT_ID_RE = /^(?:toolu|call)[_-]/iu;
+/** SDK tool-use ids，含 HY4 的 chatcmpl-tool-*；裸 legacy transcript uuid 不算。 */
+const SUBAGENT_PARENT_ID_RE = /^(?:(?:toolu|call)[_-]|chatcmpl-tool-)/iu;
 /**
  * 兼容模型(kimi 系等)的 tool-use id 形态:`${ToolName}_${序号}`。resume 前的
  * 转录归一化(maker-core 的 jsonl-tool-id-normalize)还会把它改写成 `Task_x1`

@@ -93,6 +93,15 @@ describe('dingtalk turn permission boundary', () => {
     expect(adapter.turnPermissionPolicyFor?.(baseEvent)).toBeUndefined();
   });
 
+  it('directs unsupported permission modes to Cindy, not an unsupported chat command', () => {
+    const copy = adapter.ui.error!.permissionModeUnsupported;
+    const message = typeof copy === 'function' ? copy('bypassPermissions') : copy;
+    expect(message).toContain('尚未执行');
+    expect(message).toContain('Cindy');
+    expect(message).toContain('自动审批');
+    expect(message).not.toContain('/permission');
+  });
+
   it('群聊保留逐轮危险操作强确认', () => {
     const policy = adapter.turnPermissionPolicyFor?.({
       ...baseEvent,

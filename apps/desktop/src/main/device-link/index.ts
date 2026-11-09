@@ -1,3 +1,4 @@
+import { PROVIDER_SHARE_AVAILABILITY_CAPABILITY, readShareAvailabilityCatalog } from './providerShareAvailability.js';
 import { pluginDeviceSync } from '../cindy-brain/index.js';
 import { PLUGIN_SYNC_CHANNEL } from '../cindy-brain/deviceSyncSlot.js';
 import { PluginSyncAccess } from './pluginSyncAccess.js';
@@ -14,6 +15,9 @@ import { PluginSyncAccess } from './pluginSyncAccess.js';
  */
 
 import os from 'node:os';
+import type { AgentIslandSessionSnapshot } from '../../shared/agentIsland.js';
+import { createTaskActivityPublisher, projectHostTaskActivity } from './taskActivity.js';
+import { serverApiFetch, ServerApiError } from '../serverApiClient.js';
 import { tryPeerInvoke, stopFilePeers } from './filePeer';
 import { desktopDirectRuntime } from './directLink';
 import { assertBackgroundLinkAccepted, linkOpenCapabilities } from './backgroundLink';
@@ -801,6 +805,10 @@ function wsUrl(): string {
 
 /** Host integrations that consume device-link lifecycle state. */
 export interface DeviceLinkServiceOptions {
+  taskActivity?: {
+    getLocalTaskActivitySnapshots(): AgentIslandSessionSnapshot[];
+    subscribeTaskOverview(listener: () => void): () => void;
+  };
   onUpdateRelaunchBusyChanged?: (busy: boolean) => void;
   /** Host chrome follows the same controller set as CONTROLLED_STATE. */
   onControlledStateChanged?: () => void;
@@ -820,6 +828,30 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
   }
 
   const deviceNameReady = initializeDeviceName();
+  let activityEndpointUnsupported = false;
+  let lastActivityUpload: { key: string; at: number } | undefined;
+  const taskActivityPublisher = createTaskActivityPublisher(async signal => {
+    if (activityEndpointUnsupported || activeSelfHostedRelay() || isAppSessionBoundaryPending()) return;
+    const island = options.taskActivity;
+    const token = authManager.getAccessToken();
+    if (!island || !token || !authManager.getCurrentUserId()) return;
+    // Capture both the endpoint and credential: a later account/realm switch
+    // must never re-label an old host snapshot with the new account's token.
+    const baseUrl = officialDeviceLinkApiBase();
+    const body = projectHostTaskActivity(island.getLocalTaskActivitySnapshots());
+    const key = JSON.stringify([baseUrl, authManager.getCurrentUserId(), body]);
+    if (lastActivityUpload?.key === key && Date.now() - lastActivityUpload.at < 55_000) return;
+    try {
+      await serverApiFetch('/api/device-link/task-activity', { baseUrl, token, body, method: 'PUT', signal,
+        timeoutMs: 8_000, skipAutoRefresh: true, skipSessionInvalidation: true, redactErrorDetails: true,
+        expectedErrors: [{ status: 404 }, { status: 405 }] });
+      if (!signal.aborted) lastActivityUpload = { key, at: Date.now() };
+    } catch (error) {
+      if (!signal.aborted && error instanceof ServerApiError && [404, 405].includes(error.statusCode)) activityEndpointUnsupported = true;
+    }
+  });
+  const unsubscribeTaskActivity = options.taskActivity?.subscribeTaskOverview(taskActivityPublisher.changed);
+  onQuit('task-activity-push', () => { unsubscribeTaskActivity?.(); taskActivityPublisher.dispose(); });
   remoteCredentialHost.currentToken = () => {
     const membership = authManager.getCurrentUserId(), token = authManager.getAccessToken();
     return membership && token ? { realm: authManager.getActiveAuthRealm(), membership, authDevice: authManager.getDeviceId(), token } : null;
@@ -832,7 +864,7 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
     return ok ? authManager.getAccessToken() : null;
   };
   const hello = (busy: boolean): HelloPayload => ({
-    capabilities: [SHARED_TASK_CAPABILITY, PROVIDER_SHARE_RELAY_CAPABILITY],
+    capabilities: [SHARED_TASK_CAPABILITY, PROVIDER_SHARE_RELAY_CAPABILITY, PROVIDER_SHARE_AVAILABILITY_CAPABILITY],
     deviceName: deviceName(),
     platform: process.platform,
     appVersion: app.getVersion(),
@@ -1021,6 +1053,9 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
   });
 
   client.onStatusChange((status) => {
+    activityEndpointUnsupported = false;
+    lastActivityUpload = undefined;
+    taskActivityPublisher.setOnline(status === 'online');
     if (status !== 'online') {
       stopFilePeers();
       invalidatePluginOauth();
@@ -2116,7 +2151,7 @@ export async function remoteInvoke(
   deviceId: string,
   channel: string,
   args: unknown[],
-  options?: { preSend?: () => void; background?: boolean; liveProviderMetadata?: true },
+  options?: { preSend?: () => void; background?: boolean; diagnosticSource?: 'renderer' | 'main'; liveProviderMetadata?: true },
 ): Promise<InvokeResultPayload> {
   if (options?.liveProviderMetadata) return remoteInvokeLive(deviceId, channel, args, options);
   const closeEpoch = getRemoteLinkCloseEpoch(deviceId);
@@ -2130,7 +2165,7 @@ export async function remoteInvoke(
 
 async function remoteInvokeLive(
   deviceId: string, channel: string, args: unknown[],
-  options?: { preSend?: () => void; background?: boolean },
+  options?: { preSend?: () => void; background?: boolean; diagnosticSource?: 'renderer' | 'main' },
 ): Promise<InvokeResultPayload> {
   options?.preSend?.();
   assertNotStandby();
@@ -2156,7 +2191,7 @@ async function remoteInvokeLive(
     preSend();
     if (!client?.isLinkReady(deviceId))
       throw new DeviceLinkError('LINK_NOT_OPEN', 'file cleanup requires an existing link');
-    return client.invoke(deviceId, { channel, args }, resolveRemoteInvokeTimeoutMs(channel, args, 'desktop'), { ...options, preSend });
+    return client.invoke(deviceId, { channel, args }, resolveRemoteInvokeTimeoutMs(channel, args, 'desktop'), { ...options, diagnosticSource: options?.diagnosticSource ?? 'main', preSend });
   }
   const invoke = async (): Promise<InvokeResultPayload> => {
     // 熔断门禁(外层 guardInvoke)在连接等待之前:open 态快速失败,不消耗 1.5s 等待。
@@ -2171,7 +2206,7 @@ async function remoteInvokeLive(
       // 必须是 async：失效时返回 rejected promise，不能同步抛出绕过调用方的 .catch。
       const accelerated = await tryPeerInvoke(deviceId, channel, args, async (peer, nextChannel, nextArgs) => {
         preSend();
-        return remoteInvoke(peer, nextChannel, nextArgs, { ...options, preSend });
+        return remoteInvoke(peer, nextChannel, nextArgs, { ...options, diagnosticSource: options?.diagnosticSource ?? 'main', preSend });
       });
       preSend();
       if (accelerated) return accelerated;
@@ -2182,7 +2217,7 @@ async function remoteInvokeLive(
       () => openRemoteLink(deviceId, { observed: false }),
       preSend,
     );
-    return invokeClient.invoke(deviceId, { channel, args }, resolveRemoteInvokeTimeoutMs(channel, args, 'desktop'), { ...options, preSend });
+    return invokeClient.invoke(deviceId, { channel, args }, resolveRemoteInvokeTimeoutMs(channel, args, 'desktop'), { ...options, diagnosticSource: options?.diagnosticSource ?? 'main', preSend });
   };
   const run = (): Promise<InvokeResultPayload> =>
     invokeWithClosedLinkRecovery(
@@ -2241,6 +2276,24 @@ export async function remoteBackgroundInvoke(
   const peer = parseProviderSharePeer(deviceId);
   // A delegated M losing a task lease (e.g. after restart) is not proof that
   // O revoked the whole share. Only the actual owner's denial invalidates G's share generation.
+  if (channel === 'maker:provider:list' && peer?.role === 'host') {
+    const share = getReceivedShares().find(row => row.shareId === peer.shareId && row.hostDeviceId === peer.deviceId);
+    if (share?.status === 'active' && share.standbyOnline !== undefined && !(share.hostDeviceOnline ?? share.hostOnline)) {
+      options?.preSend?.();
+      try {
+        assertNotStandby();
+        assertRemoteControlTargetEnabled(deviceId);
+        const result = await readShareAvailabilityCatalog(peer.shareId);
+        assertCurrent();
+        options?.preSend?.();
+        return { ok: true, result };
+      } catch (error) {
+        assertCurrent();
+        return { ok: false, error: { code: 'IPC_ERROR', message: PROVIDER_SHARE_UNAVAILABLE_MESSAGE } };
+      }
+    }
+  }
+
   const refusedOwnerShare = peer?.role === 'host' && getReceivedShares().some(share =>
     share.shareId === peer.shareId && share.hostDeviceId === peer.deviceId) ? peer.shareId : undefined;
   try {
@@ -2271,7 +2324,7 @@ export async function remoteBackgroundInvoke(
  * 分享同一条路：先建后台链路，再请求。
  */
 export function providerShareHostInvoke(target: string, channel: string, args: unknown[]): Promise<InvokeResultPayload> {
-  return backgroundInvokeDevice(target, channel, args);
+  return remoteBackgroundInvoke(target, channel, args);
 }
 
 async function backgroundInvokeDevice(deviceId: string, channel: string, args: unknown[], options?: { preSend?: () => void; liveProviderMetadata?: true }): Promise<InvokeResultPayload> {
@@ -2409,6 +2462,8 @@ export function sendMobileSessionNotify(payload: {
    * 那一行的静音标记管不到这条远端事件,不参与手机通道的免打扰判定。
    */
   muteExempt?: boolean;
+  /** Execution host for a remotely mirrored session. */
+  remoteDeviceId?: string;
 }): boolean {
   if (!client) return false;
   // 「消息免打扰」任务不推手机。放在这里而不是各调用方:代输入等旁路不经过
@@ -2436,6 +2491,7 @@ export function sendMobileSessionNotify(payload: {
       title: payload.title,
       kind: payload.kind,
       selfDeviceId,
+      ...(payload.remoteDeviceId ? { targetDeviceId: payload.remoteDeviceId } : {}),
       fallbackBody: payload.fallbackBody ?? getSessionNotificationBody(payload.kind),
       detail: payload.detail,
       imageFallback: getNotificationImageLabel(),

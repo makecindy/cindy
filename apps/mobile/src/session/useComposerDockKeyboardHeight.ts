@@ -32,10 +32,11 @@ export function useComposerDockKeyboardHeight() {
     // Same judgement as the composer card, including iOS's impossible frames after PiP.
     const overlap = (frame: KeyboardMetrics | undefined) =>
       !frame || frame.screenY === 0 ? 0 : iosKeyboardOverlap(frame, viewport);
-    let lastFrame: KeyboardMetrics | undefined = Keyboard.isVisible()
-      ? Keyboard.metrics()
+    let shown = Keyboard.isVisible();
+    let lastFrame: KeyboardMetrics | undefined = shown
+      ? Keyboard.metrics() ?? undefined
       : undefined;
-    settledHeight.value = Keyboard.isVisible() ? overlap(lastFrame) : -1;
+    settledHeight.value = shown ? overlap(lastFrame) : 0;
     const settle = (event: KeyboardEvent) => {
       lastFrame = event.endCoordinates;
       settledHeight.value = overlap(lastFrame);
@@ -44,11 +45,25 @@ export function useComposerDockKeyboardHeight() {
       settledHeight.value = -1;
     };
     const subscriptions = [
-      Keyboard.addListener("keyboardWillShow", invalidate),
-      Keyboard.addListener("keyboardWillHide", invalidate),
-      Keyboard.addListener("keyboardDidShow", settle),
-      Keyboard.addListener("keyboardDidChangeFrame", settle),
+      Keyboard.addListener("keyboardWillShow", () => {
+        shown = true;
+        invalidate();
+      }),
+      Keyboard.addListener("keyboardWillHide", () => {
+        shown = false;
+        invalidate();
+      }),
+      Keyboard.addListener("keyboardDidShow", (event) => {
+        shown = true;
+        settle(event);
+      }),
+      Keyboard.addListener("keyboardDidChangeFrame", (event) => {
+        // iOS may finish hiding with a zero-sized/foreign frame. It must not
+        // enter the PiP fallback and lift a composer whose keyboard is hidden.
+        if (shown) settle(event);
+      }),
       Keyboard.addListener("keyboardDidHide", () => {
+        shown = false;
         lastFrame = undefined;
         settledHeight.value = 0;
       }),

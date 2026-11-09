@@ -131,6 +131,7 @@ import { describeInteractionSource } from '../im/shared/interactionSource';
 import { hookAutoReviewReferences } from '../im/shared/autoReviewReferences.js';
 import { isQuotaExhaustionFailure, terminalErrorText } from '../im/shared/turnRetryNotice.js';
 import { resolveSessionErrorContext } from '../im/shared/sessionProviderLabel.js';
+import { unlinkLocalFileLinks } from '../im/shared/localFileLinks.js';
 import { fingerprintImDefaultSettings } from '../im/shared/channelDefaultRoute.js';
 import { createDefaultRouteFollower } from '../im/shared/channelDefaultRouteSync.js';
 import { isHookDefaultRouteRow, writeHookDefaultRouteRecord } from './defaultRouteFollow.js';
@@ -161,11 +162,12 @@ type MainOwnedImChannel = Extract<TurnPermissionOrigin, { kind: 'im' }>['channel
 function mainOwnedChannelOrigin(value: string | undefined): TurnPermissionOrigin | null {
   switch (value) {
     case 'telegram':
-      // `source.im=telegram` identifies the official server-backed hook here,
-      // not the authenticated personal-bot adapter. Keep managed package
-      // mutations on the Desktop confirmation path.
-      return { kind: 'hook', source: value };
     case 'feishu':
+      // `source.im=telegram|feishu` identifies the official server-backed hook
+      // here, not the authenticated personal-bot adapter that shares the same
+      // channel id. Keep managed package mutations on the Desktop confirmation
+      // path: a personal-bot `im` origin would let an official relay turn skip it.
+      return { kind: 'hook', source: value };
     case 'discord':
     case 'slack':
     case 'wechat':
@@ -199,7 +201,9 @@ function hookDefaultInputs(
   workspaceCtx: HookWorkspaceCtx | undefined,
 ) {
   const prefsChannel: HookPrefsChannel | null =
-    sourceIm === 'telegram' || sourceIm === 'x' || sourceIm === 'slack' ? sourceIm : null;
+    sourceIm === 'telegram' || sourceIm === 'x' || sourceIm === 'slack' || sourceIm === 'feishu'
+      ? sourceIm
+      : null;
   const workspaceAlias = workspaceCtx?.alias;
   const localPref =
     prefsChannel !== null && workspaceAlias
@@ -609,8 +613,9 @@ async function collectOutboundForFinalText(
     ? await materializeTaskImageTextResult(sessionId, scanText, log)
     : { text: scanText, replacements: new Map<string, string>() };
   const wholeTurn = materialized.text;
-  const publicText = texts.wholeTurn === texts.publicText ? wholeTurn
-    : rewriteTaskImageReferences(stripInternalWebCitations(texts.publicText), materialized.replacements);
+  // Recipients cannot open this computer's files: links to local paths keep only their label.
+  const publicText = unlinkLocalFileLinks(texts.wholeTurn === texts.publicText ? wholeTurn
+    : rewriteTaskImageReferences(stripInternalWebCitations(texts.publicText), materialized.replacements));
   if (!hasOutboundRefs(wholeTurn) && extraImageAbsPaths.length === 0) {
     return { finalText: publicText };
   }
@@ -698,7 +703,7 @@ export function createMakerHookSessionRunner(deps: {
           )
         : null;
       const recordNewTaskDefaultRoute = async (sessionId: string): Promise<void> => {
-        if (!resolved || !['telegram', 'slack', 'x'].includes(req.source?.im ?? '')) return;
+        if (!resolved || !['telegram', 'slack', 'x', 'feishu'].includes(req.source?.im ?? '')) return;
         assertAccount?.();
         await writeHookDefaultRouteRecord(sessionId, resolved.fingerprint).catch((err) => {
           log.warn(`hook default route record failed: ${String(err)}`);
@@ -772,7 +777,9 @@ export function createMakerHookSessionRunner(deps: {
        * 上一版把它跟临时降档一起删了, 而两者本来无关 —— 原注释就写着“即使复用
        * 会话已是安全档、不需要切档, 也要持住这段独占”)。
        */
-      const isTelegramGroupTurn = req.source?.im === 'telegram' && req.laneKind === 'group';
+      // 官方飞书 / Lark 的话题轮次同属多人可见的群轮次(deriveLaneKind), 同样持有 lease。
+      const isOfficialGroupTurn =
+        (req.source?.im === 'telegram' || req.source?.im === 'feishu') && req.laneKind === 'group';
       let releaseTelegramGroupTurnLease: (() => void) | null = null;
       let releaseGroupHistoryAccess: (() => void) | null = null;
       const releaseGroupHistory = (): void => {
@@ -842,12 +849,16 @@ export function createMakerHookSessionRunner(deps: {
         ...((req.isNew || req.companionBotId)
           ? {
               vendorOptions: {
+                // 官方飞书刻意不用 'feishu': 那是个人飞书 bot 会话的来源值, 会让
+                // cindy_feishu_bot 把本会话当成个人 bot 渠道。
                 source:
                   req.source?.im === 'telegram'
                     ? 'telegram'
                     : req.source?.im === 'x'
                       ? 'x'
-                      : 'slack-hook',
+                      : req.source?.im === 'feishu'
+                        ? 'feishu-hook'
+                        : 'slack-hook',
               },
             }
           : {}),
@@ -903,7 +914,11 @@ export function createMakerHookSessionRunner(deps: {
             setSessionProvider(req.sessionId, admittedProviderId);
             await setSessionProviderIdInDb(req.sessionId, admittedProviderId);
           }
-          if (req.source?.im === 'telegram' || req.source?.im === 'x') {
+          if (
+            req.source?.im === 'telegram' ||
+            req.source?.im === 'x' ||
+            req.source?.im === 'feishu'
+          ) {
             assertAccount?.();
             await setSessionSourceInDb(req.sessionId, req.source.im);
           }
@@ -1132,7 +1147,10 @@ export function createMakerHookSessionRunner(deps: {
         if (sessionProviderId && accountStillCurrent()) {
           await setSessionProviderIdInDb(session.id, sessionProviderId);
         }
-        if ((req.source?.im === 'telegram' || req.source?.im === 'x') && accountStillCurrent()) {
+        if (
+          (req.source?.im === 'telegram' || req.source?.im === 'x' || req.source?.im === 'feishu') &&
+          accountStillCurrent()
+        ) {
           await setSessionSourceInDb(session.id, req.source.im);
         }
         if (accountStillCurrent()) await recordNewTaskDefaultRoute(session.id);
@@ -1467,7 +1485,7 @@ export function createMakerHookSessionRunner(deps: {
           afterTurnReserved: () => {
             // 只取 lease, 不动权限档(用户配的就是最终档)。取在预约之后:
             // 忙的 Desktop 轮次已在 send 预约阶段被拒, 轮到这里就是本轮的世界。
-            if (isTelegramGroupTurn) {
+            if (isOfficialGroupTurn) {
               releaseTelegramGroupTurnLease ??= session.acquireTurnLease();
             }
           },

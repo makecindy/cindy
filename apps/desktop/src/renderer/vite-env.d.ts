@@ -862,6 +862,7 @@ interface CCAgentAskUserQuestionOption {
 }
 
 interface CCAgentAskUserQuestionItem {
+  id?: string;
   question: string;
   header?: string;
   options?: CCAgentAskUserQuestionOption[];
@@ -1173,6 +1174,8 @@ interface ElectronAPI {
   ) => () => void;
   osRelease: string;
   appVersion: string;
+  /** 当前进程是否经 ARM64 转译运行(Apple 芯片上的 Intel 包)。 */
+  getArm64Translation?: () => Promise<boolean>;
   /** 运行期端点清单(main 启动时远程 → 缓存 → 烘焙解析;重启生效)。 */
   clientEndpoints: { websiteUrl: string };
   appDisplayVersion: string;
@@ -1184,6 +1187,8 @@ interface ElectronAPI {
   getDeviceId: () => Promise<string>;
   windowMinimize: () => void;
   windowMaximize: () => void;
+  windowSidebarExpansion?: (width: number, shrink?: number, adopt?: boolean) => Promise<number | void>;
+  onSidebarWindowUserResize?: (callback: () => void) => () => void;
   windowExitFullscreen: () => void;
   windowClose: () => void;
   /**
@@ -1208,16 +1213,7 @@ interface ElectronAPI {
   pageZoomReset: () => Promise<{ ok: true; zoomFactor: number }>;
   accessibilitySupport: import('../shared/accessibilitySupport').AccessibilitySupportBridge;
   appPreferenceControl?: import('../shared/appPreferenceControl').AppPreferenceControlBridge;
-  pluginUiVisibility?: {
-    get: () => Promise<import('@cindy/maker-shared/plugin-ui').PluginUiVisibilityValues>;
-    release: () => Promise<void>;
-    onApply: (callback: (request: import('../shared/pluginUiVisibility').PluginUiVisibilityApplication) => void) => () => void;
-    applied: (requestId: string) => Promise<void>;
-  };
   appearanceSettings: {
-    loadPluginFont?: (role: 'uiFont' | 'codeFont' | 'bodyFont') => Promise<{ family: string; base64: string }>;
-    onPluginApply?: (callback: (request: import('../shared/pluginAppearance').PluginAppearanceApplication) => void) => () => void;
-    pluginApplied?: (requestId: string, status: 'applied' | 'saved' | 'failed') => Promise<void>;
     importWallpaper: () => Promise<import('../shared/appearanceSettings').AppearanceSettings | null>;
     ensureWallpaperVideo?: (id: import('../shared/appearanceSettings').WallpaperId) => Promise<string | null>;
     ensureWallpaperImage?: (id: import('../shared/appearanceSettings').WallpaperId) => Promise<string | null>;
@@ -1261,6 +1257,7 @@ interface ElectronAPI {
     openDir: () => Promise<LocalThemeOpenDirResult>;
     /** 导入 VSCode / Obsidian 主题文件；对话框与读文件都在 main 侧。 */
     importExternal: () => Promise<import('../shared/theme-import/types').LocalThemeImportResult>;
+    onChanged: (cb: (payload: LocalThemesResult) => void) => () => void;
   };
 
   /** RSB terminal tab —— PTY 后端 + xterm.js,详见 shared/terminal-bridge.ts 注释。 */
@@ -1273,14 +1270,13 @@ interface ElectronAPI {
       platform: string;
       /** 运行态: 注册失败 (多为被其它应用占用) 的全局快捷键 id。 */
       globalFailures?: unknown;
-      pluginShortcuts?: import('../shared/appShortcuts').PluginShortcutDefinition[];
     };
     setOverride: (
-      id: import('../shared/appShortcuts').ShortcutId,
+      id: import('../shared/appShortcuts').AppShortcutId,
       combo: import('../shared/appShortcuts').AppShortcutCombo | null,
     ) => Promise<{ overrides: import('../shared/appShortcuts').AppShortcutOverrides }>;
     clearOverride: (
-      id: import('../shared/appShortcuts').ShortcutId,
+      id: import('../shared/appShortcuts').AppShortcutId,
     ) => Promise<{ overrides: import('../shared/appShortcuts').AppShortcutOverrides }>;
     resetAll: () => Promise<{ overrides: import('../shared/appShortcuts').AppShortcutOverrides }>;
     setRecording: (active: boolean) => void;
@@ -1288,7 +1284,6 @@ interface ElectronAPI {
       callback: (payload: {
         overrides: import('../shared/appShortcuts').AppShortcutOverrides;
         globalFailures?: unknown;
-        pluginShortcuts?: import('../shared/appShortcuts').PluginShortcutDefinition[];
       }) => void,
     ) => () => void;
   };
@@ -1312,25 +1307,6 @@ interface ElectronAPI {
   /** 意识仓库 —— 数据模型与校验见 shared/ghost.ts,main 端见 main/cindy-brain/。 */
   ghosts: {
     activateBrowser: (id: string) => Promise<{ ok: boolean }>;
-    ui: {
-      tabViews: {
-        ready(): Promise<void>;
-        navigate(requestId: string): Promise<import('@cindy/maker-shared').PluginUiNavigationResult>;
-        onRequest(callback: (input: unknown) => void): () => void;
-        opened(requestId: string, tabId: string | null): Promise<void>;
-        mount(input: import('../shared/pluginUi').PluginTabViewMountRequest): Promise<import('../shared/pluginUi').PluginTabViewMountResult>;
-        update(input: { token: string; params: import('@cindy/maker-shared').PluginUiValues; sequence: number; visible: boolean }): Promise<void>;
-        release(token: string, moving: boolean): Promise<void>;
-      };
-      read: (request: import('../shared/pluginUi').PluginUiReadRequest) => Promise<import('../shared/pluginUi').PluginUiReadResult>;
-      invoke: (request: import('../shared/pluginUi').PluginUiInvokeRequest) => Promise<import('../shared/pluginUi').PluginUiInvokeResult>;
-      chooseRenderer: (request: import('../shared/pluginUi').PluginUiChooseRendererRequest) => Promise<void>;
-      openPage: (request: import('../shared/pluginUi').PluginUiPageOpenRequest) => Promise<string>;
-      closePage: (request: { pageId: string }) => Promise<void>;
-      release: (request: { subscriptionId: string }) => Promise<void>;
-      onChanged: (callback: (value: import('../shared/pluginUi').PluginUiChanged) => void) => () => void;
-      inspect: () => Promise<unknown>;
-    };
     mailPreview: (sessionId: string, url: string, read: boolean, opened?: boolean, providerId?: string) => Promise<import('@cindy/maker-shared/mail-message').MailPreviewResult>;
     openRemoteSettings: (target: import('../shared/remotePluginSettings').RemotePluginSettingsTarget) => Promise<import('../shared/remotePluginSettings').RemotePluginSettingsView>;
     closeRemoteSettings: (id: string) => Promise<void>;
@@ -1729,6 +1705,9 @@ interface ElectronAPI {
 
   /** Plugin Protocol v2 市场；网络、下载与安装全部在 main 进程完成。 */
   pluginMarket: {
+    query: (input: import('../shared/pluginMarket').PluginMarketQuery) => Promise<import('../shared/pluginMarket').PluginMarketPage>;
+    lookup: (ghostIds: string[]) => Promise<import('../shared/pluginMarket').PluginMarketSnapshot>;
+    recommendations: () => Promise<import('../shared/pluginMarket').PluginMarketItem[]>;
     snapshot: () => Promise<import('../shared/pluginMarket').PluginMarketSnapshot>;
     detail: (pluginId: string) => Promise<import('../shared/pluginMarket').PluginMarketDetail>;
     prepareShare: (pluginId: string, options?: import('../shared/share').ShareOptions) => Promise<import('../shared/share').ShareContent>;
@@ -1988,6 +1967,12 @@ interface ElectronAPI {
     setLoginItem: (enabled: boolean) => Promise<import('../shared/loginItem').LoginItemState>;
     getMenubarState: () => Promise<import('../shared/menubarQuota').MenubarState>;
     setMenubarEnabled: (enabled: boolean) => Promise<import('../shared/menubarQuota').MenubarState>;
+    getAwayGuardState: () => Promise<import('../shared/awayGuard').AwayGuardState>;
+    setAwayGuardEnabled: (enabled: boolean) => Promise<import('../shared/awayGuard').AwayGuardState>;
+    setAwayGuardDelay: (
+      delaySeconds: import('../shared/awayGuard').AwayGuardDelaySeconds | null,
+    ) => Promise<import('../shared/awayGuard').AwayGuardState>;
+    previewAwayGuard: () => Promise<import('../shared/awayGuard').AwayGuardPreviewResult>;
     setSwallowActivationClick: (enabled: boolean) => Promise<{ ok: true }>;
     getWindowsCloseBehavior: () => Promise<'quit' | 'tray' | null>;
     setWindowsCloseBehavior: (behavior: 'quit' | 'tray') => Promise<'quit' | 'tray'>;
@@ -2201,6 +2186,8 @@ interface ElectronAPI {
     setSoundSettings: (settings: AgentIslandSoundSettings) => Promise<{ ok: true }>;
     setMascotSkin: (skin: AgentIslandMascotSkin) => Promise<{ ok: true }>;
     setSubtleReminders: (enabled: boolean) => Promise<{ ok: true }>;
+    setLiveActivity?: (enabled: boolean) => Promise<{ ok: true }>;
+    getLiveActivitySupport?: () => Promise<{ ok: true; supported: boolean }>;
     setDisplayTarget: (target: AgentIslandDisplayTarget) => Promise<{ ok: true }>;
     getDisplayOptions: () => Promise<{
       ok: true;
@@ -2304,6 +2291,9 @@ interface ElectronAPI {
   // ── 客户端日志上报(设置 → 关于)──
   // 只上报 App 自身的运行记录 + 设备环境信息;对话内容、文件内容、提示词、工作目录路径
   // 永不上报,凭证与邮箱在上传前被自动抹除(实现见 main/log-upload/)。
+  getCrashDiagnosis: () => Promise<import('../shared/crashDiagnosis').CrashDiagnosisSummary | null>;
+  prepareCrashDiagnosis: () => Promise<import('../shared/crashDiagnosis').CrashDiagnosisEvidence | null>;
+  dismissCrashDiagnosis: () => Promise<void>;
   getLogUploadSettings: () => Promise<LogUploadSettingsPayload>;
   setLogUploadCrashAuto: (enabled: boolean) => Promise<LogUploadSettingsPayload>;
   /** 恢复默认:删掉 override,重新跟随当前版本默认的“已有 Git 项目”模式。 */
@@ -3027,6 +3017,7 @@ interface ElectronAPI {
     title: string;
     kind: 'done' | 'error' | 'needs-reply';
     inputHandoffRequestId?: string;
+    remoteDeviceId?: string;
     /**
      * 选择性走哪些通知通道; 缺省 / 未传 → 兼容旧行为(仅桌面)。
      * renderer 侧 gate(localStorage notifications.enabled /
@@ -3156,7 +3147,7 @@ interface ElectronAPI {
         | { type: 'plugin'; pluginId: string }
         | { type: 'local-plugin-share'; snapshotId: string }
         | { type: 'installed-plugin'; ghostId?: string }
-        | { type: 'settings'; tab: 'voice-input' | 'providers' | 'billing' | 'remote-control' | 'builtin-tools'; connect?: string; intent?: 'topup' },
+        | { type: 'settings'; tab: 'voice-input' | 'providers' | 'billing' | 'remote-control' | 'builtin-tools' | 'im-bot'; connect?: string; intent?: 'topup'; imGroup?: 'cindy' | 'personal' },
     ) => void,
   ) => () => void;
 
@@ -3180,7 +3171,7 @@ interface ElectronAPI {
     | { type: 'plugin'; pluginId: string }
     | { type: 'local-plugin-share'; snapshotId: string }
     | { type: 'installed-plugin'; ghostId?: string }
-    | { type: 'settings'; tab: 'voice-input' | 'providers' | 'billing' | 'remote-control' | 'builtin-tools'; connect?: string; intent?: 'topup' }
+    | { type: 'settings'; tab: 'voice-input' | 'providers' | 'billing' | 'remote-control' | 'builtin-tools' | 'im-bot'; connect?: string; intent?: 'topup'; imGroup?: 'cindy' | 'personal' }
     | null
   >;
 
@@ -4122,12 +4113,14 @@ interface ElectronAPI {
   setUpdateRelaunchTheme: (theme: 'light' | 'dark') => void;
   // E4D 毛玻璃:family 切换/启动通知 main 开关 vibrancy(仅 CINDY 透壁纸)
   theme: {
+    setSidebarWidth: (width: number) => void;
     applyVibrancy: (
       familyId: string,
       isDark: boolean,
       mode: 'system' | 'light' | 'dark',
       systemModeFollowsSystem: boolean,
       wallpaperCovered?: boolean,
+      desktopBlur?: number | null,
     ) => void;
   };
   /**
@@ -4219,6 +4212,10 @@ interface ElectronAPI {
     onOpenManage(cb: (event: { providerId: string }) => void): () => void;
     /** 有人请求把这里分享的供应商经他的供应商组转给别人用(转分享)。 */
     onReshareRequested(cb: () => void): () => void;
+  };
+  subscriptionAccounts: {
+    onChanged(cb: (event: { providerId: import('../shared/subscriptionAccounts').SubscriptionProvider }) => void): () => void;
+    command(command: import('../shared/subscriptionAccounts').SubscriptionAccountCommand): Promise<import('../shared/subscriptionAccounts').SubscriptionPoolView>;
   };
   providerGroup: {
     command<C extends import('../shared/providerGroup').ProviderGroupCommand>(
@@ -4569,7 +4566,7 @@ interface ElectronAPI {
       enabled: boolean,
     ) => Promise<{ hook: import('../shared/hookControlIpc').SlackHookView }>;
     setProviderEnabled: (
-      provider: 'telegram' | 'x',
+      provider: 'telegram' | 'x' | 'feishu',
       enabled: boolean,
     ) => Promise<{ hook: import('../shared/hookControlIpc').SlackHookView }>;
     setWorkspaces: (
@@ -4579,7 +4576,7 @@ interface ElectronAPI {
     setXCompanion: (botId: string | null, expectedBotId: string | null) =>
       Promise<{ hook: import('../shared/hookControlIpc').SlackHookView }>;
     setProviderDefaultWorkspace: (
-      provider: 'telegram' | 'x',
+      provider: 'telegram' | 'x' | 'feishu',
       alias: string | null,
     ) => Promise<{ hook: import('../shared/hookControlIpc').SlackHookView }>;
     bindStart: () => Promise<{ ok: true }>;
@@ -4598,16 +4595,19 @@ interface ElectronAPI {
     ) => Promise<{ hook: import('../shared/hookControlIpc').SlackHookView }>;
     cancelPendingBind: () => Promise<{ hook: import('../shared/hookControlIpc').SlackHookView }>;
     providerBindStart: (
-      provider: 'telegram' | 'x',
+      provider: 'telegram' | 'x' | 'feishu',
     ) => Promise<{ hook: import('../shared/hookControlIpc').SlackHookView }>;
     providerBindCancel: (
-      provider: 'telegram' | 'x',
+      provider: 'telegram' | 'x' | 'feishu',
+    ) => Promise<{ hook: import('../shared/hookControlIpc').SlackHookView }>;
+    providerBindSelect: (
+      provider: 'telegram' | 'x' | 'feishu',
     ) => Promise<{ hook: import('../shared/hookControlIpc').SlackHookView }>;
     providerBindRevoke: (
-      provider: 'telegram' | 'x',
+      provider: 'telegram' | 'x' | 'feishu',
     ) => Promise<{ hook: import('../shared/hookControlIpc').SlackHookView }>;
     openProviderAction: (
-      provider: 'telegram' | 'x',
+      provider: 'telegram' | 'x' | 'feishu',
       action: import('../shared/hookControlIpc').ProviderOpenAction,
     ) => Promise<{ ok: true }>;
     getWorkspacePrefs: () => Promise<{
@@ -4618,11 +4618,11 @@ interface ElectronAPI {
       patch: import('../shared/hookControlIpc').HookPrefsPatch,
       teamId?: string | null,
     ) => Promise<{ prefs: import('../shared/hookControlIpc').HookPrefsView }>;
-    getProviderWorkspacePrefs: (provider: 'telegram' | 'x') => Promise<{
+    getProviderWorkspacePrefs: (provider: 'telegram' | 'x' | 'feishu') => Promise<{
       prefs: import('../shared/hookControlIpc').ProviderPrefsView;
     }>;
     setProviderWorkspacePrefs: (
-      provider: 'telegram' | 'x',
+      provider: 'telegram' | 'x' | 'feishu',
       workspace: string,
       patch: import('../shared/hookControlIpc').HookPrefsPatch,
     ) => Promise<{ prefs: import('../shared/hookControlIpc').ProviderPrefsView }>;
@@ -4650,7 +4650,7 @@ interface ElectronAPI {
     }>;
     setWorkspaceProviderSource: (payload: {
       agentDeviceId?: string | null;
-      channel: 'slack' | 'telegram' | 'x';
+      channel: 'slack' | 'telegram' | 'x' | 'feishu';
       teamId: string | null;
       workspace: string;
       providerId: string | null;
@@ -4680,6 +4680,8 @@ interface ElectronAPI {
   gitContext: {
     readGithub: (method: import('@cindy/maker-shared').GithubReadMethod, args: unknown) => Promise<Record<string, unknown>>;
     githubSetupStatus: () => Promise<import('../shared/githubSetup').GithubSetupState>;
+    checkCindyStar: () => Promise<boolean | null>;
+    starCindy: () => Promise<boolean | null>;
     githubConnection: () => Promise<import('../shared/githubSetup').GithubConnectionState>;
     startGithubSetup: () => Promise<import('../shared/githubSetup').GithubSetupState>;
     cancelGithubSetup: () => Promise<import('../shared/githubSetup').GithubSetupState>;
@@ -5096,13 +5098,13 @@ interface ElectronAPI {
       }) => Promise<unknown[]>;
       /** Host-side companion read positions shared with the phone and other Macs. */
       readState?: {
-        get: () => Promise<{ ownerId: string | null; positions: Record<string, number> }>;
+        get: () => Promise<{ ownerId: string | null; positions: Record<string, number>; acknowledgedPositions?: Record<string, number> }>;
         update: (body: {
           ownerId: string;
           mark?: Record<string, number>;
           seed?: Record<string, number>;
           prune?: { botIds?: string[]; groupIds?: string[] };
-        }) => Promise<{ ownerId: string | null; positions: Record<string, number> }>;
+        }) => Promise<{ ownerId: string | null; positions: Record<string, number>; acknowledgedPositions?: Record<string, number> }>;
         onChanged: (
           callback: (payload: unknown, ownerStamp?: unknown) => void,
         ) => () => void;
@@ -5697,9 +5699,14 @@ interface ElectronAPI {
     deleteBotGroup: (groupId: string) => Promise<import('../shared/botGroupChat').BotGroupMutationResult>;
     sendBotGroupMessage: (
       input: import('../shared/botGroupChat').BotGroupSendInput,
+      execution?: import('../shared/botGroupOutboxStorage').BotGroupOutboxExecution,
     ) => Promise<import('../shared/botGroupChat').BotGroupSendResult>;
     chatDisplayCache: (request: import('../shared/chatDisplayCache').ChatDisplayCacheRequest) => Promise<unknown>;
     botGroupOutbox: (input: import('../shared/botGroupOutboxStorage').BotGroupOutboxStorageRequest) => Promise<import('../shared/botGroupOutboxStorage').BotGroupOutboxStoredEntry[]>;
+    botGroupOutboxCommand: (input: import('../shared/botGroupOutboxStorage').BotGroupOutboxCommandRequest) => Promise<import('../shared/botGroupOutboxStorage').BotGroupOutboxCommandResult>;
+    onBotGroupOutboxChanged: (callback: (event: import('../shared/botGroupOutboxStorage').BotGroupOutboxChanged) => void) => (() => void);
+    botReadState: (input: import('../shared/botReadStateStorage').BotReadStateRequest) => Promise<import('../shared/botReadStateStorage').BotReadStateResult>;
+    onBotReadStateChanged: (callback: (event: import('../shared/botReadStateStorage').BotReadStateChanged) => void) => (() => void);
     continueBotGroupRound: (groupId: string) => Promise<import('../shared/botGroupChat').BotGroupMutationResult>;
     stopBotGroupRound: (groupId: string, scope?: 'all') => Promise<import('../shared/botGroupChat').BotGroupMutationResult>;
     startBotGroupPlan: (
@@ -7344,6 +7351,27 @@ interface ElectronAPI {
       pause: (id: string) => Promise<unknown>;
       resume: (id: string) => Promise<unknown>;
       runNow: (id: string) => Promise<{ runId: string }>;
+      /** Webhook 触发的接收地址与最近投递情况;未开启时返回 null。 */
+      webhookReceiver: () => Promise<'cloud' | 'local' | 'signed-out' | 'unavailable'>;
+      webhookStatus: (id: string) => Promise<{
+        receiver: 'cloud' | 'local' | 'signed-out' | 'unavailable';
+        url?: string;
+        hasSecret: boolean;
+        lastReceivedAt?: number;
+        received: number;
+        ignored: number;
+        connected?: boolean;
+        problem?: 'limit' | 'failed' | 'suspended' | 'quota' | 'released';
+        quotaLimit?: number;
+        quotaResetAt?: number;
+      } | null>;
+      /** 设置签名密钥:传入时保存从发送方复制的密钥;不传时生成新密钥,明文只在这次返回。仅任务所在电脑可用。 */
+      setWebhookSecret: (id: string, secret?: string) => Promise<{ secret?: string }>;
+      /** 换一个新的接收地址,旧地址立即失效。仅任务所在电脑可用。 */
+      rotateWebhookUrl: (id: string) => Promise<{ url: string }>;
+      webhookAccount: () => Promise<import('../shared/webhookAccount').WebhookAccountOverview>;
+      releaseWebhookEndpoint: (id: string) => Promise<void>;
+      restoreWebhookEndpoint: (id: string) => Promise<void>;
       /** script 任务能力选择器:各能力的运行时可用性(依赖意识的装入/唤醒态)。 */
       scriptCapabilityStatus: () => Promise<{
         statuses: Array<{

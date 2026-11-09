@@ -61,7 +61,10 @@ is usually redundant.
 - `USER_INPUT_ACTIVE`: foreground delivery is refused while system input newer
   than the Agent's own last dispatch is under three seconds old
   (`powerMonitor.getSystemIdleTime`, whole seconds). Background delivery and
-  `set_value` are unaffected.
+  `set_value` are unaffected. The refusal covers that foreground input only: the
+  error and the workflow steer the Agent to background routes (window-local
+  coordinates, `double_click`, menu bar items, `set_value`, files or CLI) and to
+  waiting or asking only when none works.
 - `HOTKEY_BLOCKED`: lock-screen, log-out and sleep chords never reach the driver.
 - `CUA_UNAVAILABLE` carries `reason`: `screen_locked` (host power monitor),
   `window_gone` / `window_not_on_screen` (from recovery discovery) or
@@ -70,6 +73,26 @@ is usually redundant.
   hint that synthetic input is not delivered there, and a `set_value` hint for
   Electron / browser targets. `set_value` was verified on Cindy's own composer:
   the field updates and its send button enables, without focus.
+
+## Background pointer advice (2026-11-06)
+
+On macOS 27, cua-driver 0.37 stamped screen points on window-routed clicks and
+every background coordinate click or element `double_click` missed by the
+window origin (fixed upstream in trycua/cua#5492, first in 0.39 and the
+2026-11-05 nightly). Its delivery note then said to retry with
+`delivery_mode:"foreground"` if nothing changed, which `USER_INPUT_ACTIVE`
+refuses while the person is working. `normalizePointerAdvice` in
+[result.ts](result.ts) replaces that advice on delivered `click`,
+`double_click`, `right_click` and `drag` results with a background-first hint;
+refusals keep the driver's prose, because there only the foreground reaches the
+target.
+
+A `click` on a row label without `AXPress` is answered by an `AXSelected` write
+reported as confirmed. That proves the selection, not the app's click action:
+Xcode's project navigator stays on "No Selection". Cindy reports it as
+`unknown` with a hint to click the row's coordinates or `double_click` it. The
+variant where the driver delivered a coordinate click and read the selection
+back stays confirmed.
 
 ## Input failure advice
 

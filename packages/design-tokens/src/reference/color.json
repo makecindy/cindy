@@ -1,6 +1,326 @@
 {
   "reference": {
     "defaults": {
+      "plugin-identity-official-text": {
+        "light": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "srgb",
+            "components": [
+              0.156863,
+              0.407843,
+              0.784314
+            ]
+          },
+          "$extensions": {
+            "com.cindy.desktop": {
+              "format": "hex",
+              "uppercase": false,
+              "alpha": false
+            }
+          }
+        },
+        "dark": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "srgb",
+            "components": [
+              0.513725,
+              0.709804,
+              1
+            ]
+          },
+          "$extensions": {
+            "com.cindy.desktop": {
+              "format": "hex",
+              "uppercase": false,
+              "alpha": false
+            }
+          }
+        }
+      },
+      "plugin-identity-official-bg": {
+        "light": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "srgb",
+            "components": [
+              0.254902,
+              0.486275,
+              0.866667
+            ],
+            "alpha": 0.11
+          },
+          "$extensions": {
+            "com.cindy.desktop": {
+              "format": "rgb",
+              "uppercase": false,
+              "alpha": true,
+              "precision": 2
+            }
+          }
+        },
+        "dark": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "srgb",
+            "components": [
+              0.254902,
+              0.486275,
+              0.866667
+            ],
+            "alpha": 0.18
+          },
+          "$extensions": {
+            "com.cindy.desktop": {
+              "format": "rgb",
+              "uppercase": false,
+              "alpha": true,
+              "precision": 2
+            }
+          }
+        }
+      },
+      "plugin-identity-community-text": {
+        "light": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "srgb",
+            "components": [
+              0.501961,
+              0.313725,
+              0.733333
+            ]
+          },
+          "$extensions": {
+            "com.cindy.desktop": {
+              "format": "hex",
+              "uppercase": false,
+              "alpha": false
+            }
+          }
+        },
+        "dark": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "srgb",
+            "components": [
+              0.768627,
+              0.631373,
+              0.937255
+            ]
+          },
+          "$extensions": {
+            "com.cindy.desktop": {
+              "format": "hex",
+              "uppercase": false,
+              "alpha": false
+            }
+          }
+        }
+      },
+      "plugin-identity-community-bg": {
+        "light": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "srgb",
+            "components": [
+              0.501961,
+              0.313725,
+              0.733333
+            ],
+            "alpha": 0.1
+          },
+          "$extensions": {
+            "com.cindy.desktop": {
+              "format": "rgb",
+              "uppercase": false,
+              "alpha": true,
+              "precision": 2
+            }
+          }
+        },
+        "dark": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "srgb",
+            "components": [
+              0.607843,
+              0.411765,
+              0.843137
+            ],
+            "alpha": 0.16
+          },
+          "$extensions": {
+            "com.cindy.desktop": {
+              "format": "rgb",
+              "uppercase": false,
+              "alpha": true,
+              "precision": 2
+            }
+          }
+        }
+      },
+      "plugin-identity-team-text": {
+        "light": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "srgb",
+            "components": [
+              0.035294,
+              0.486275,
+              0.470588
+            ]
+          },
+          "$extensions": {
+            "com.cindy.desktop": {
+              "format": "hex",
+              "uppercase": false,
+              "alpha": false
+            }
+          }
+        },
+        "dark": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "srgb",
+            "components": [
+              0.427451,
+              0.843137,
+              0.803922
+            ]
+          },
+          "$extensions": {
+            "com.cindy.desktop": {
+              "format": "hex",
+              "uppercase": false,
+              "alpha": false
+            }
+          }
+        }
+      },
+      "plugin-identity-team-bg": {
+        "light": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "srgb",
+            "components": [
+              0.086275,
+              0.568627,
+              0.517647
+            ],
+            "alpha": 0.1
+          },
+          "$extensions": {
+            "com.cindy.desktop": {
+              "format": "rgb",
+              "uppercase": false,
+              "alpha": true,
+              "precision": 2
+            }
+          }
+        },
+        "dark": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "srgb",
+            "components": [
+              0.086275,
+              0.568627,
+              0.517647
+            ],
+            "alpha": 0.16
+          },
+          "$extensions": {
+            "com.cindy.desktop": {
+              "format": "rgb",
+              "uppercase": false,
+              "alpha": true,
+              "precision": 2
+            }
+          }
+        }
+      },
+      "plugin-identity-custom-text": {
+        "light": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "srgb",
+            "components": [
+              0.701961,
+              0.396078,
+              0.094118
+            ]
+          },
+          "$extensions": {
+            "com.cindy.desktop": {
+              "format": "hex",
+              "uppercase": false,
+              "alpha": false
+            }
+          }
+        },
+        "dark": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "srgb",
+            "components": [
+              0.933333,
+              0.729412,
+              0.439216
+            ]
+          },
+          "$extensions": {
+            "com.cindy.desktop": {
+              "format": "hex",
+              "uppercase": false,
+              "alpha": false
+            }
+          }
+        }
+      },
+      "plugin-identity-custom-bg": {
+        "light": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "srgb",
+            "components": [
+              0.745098,
+              0.443137,
+              0.113725
+            ],
+            "alpha": 0.1
+          },
+          "$extensions": {
+            "com.cindy.desktop": {
+              "format": "rgb",
+              "uppercase": false,
+              "alpha": true,
+              "precision": 2
+            }
+          }
+        },
+        "dark": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "srgb",
+            "components": [
+              0.745098,
+              0.443137,
+              0.113725
+            ],
+            "alpha": 0.16
+          },
+          "$extensions": {
+            "com.cindy.desktop": {
+              "format": "rgb",
+              "uppercase": false,
+              "alpha": true,
+              "precision": 2
+            }
+          }
+        }
+      },
       "surface": {
         "light": {
           "$type": "color",

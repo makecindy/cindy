@@ -61,7 +61,9 @@ describe('OpenAI subscription group routing', () => {
     for (const [short, week] of [[100, 10], [10, 100]]) {
       h.usage.set('local', quota(short, week));
       expect(await h.pick()).toMatchObject({ member: { key: h.remote } });
-      expect((await h.router.view('openai')).members[0].state).toBe('cooling');
+      expect((await h.router.view('openai')).members[0]).toMatchObject({
+        state: 'cooling', usageLimit: { resetAtMs: short === 100 ? NOW + 2 * 3_600_000 : NOW + 3 * 86_400_000 },
+      });
     }
     h.usage.set('local', quota(10, 20));
     h.usage.set(h.remote, quota(40, 70, NOW + 3 * 3_600_000));
@@ -81,6 +83,7 @@ describe('OpenAI subscription group routing', () => {
     expect(await h.pick()).toMatchObject({ member: { key: 'local' } });
     expect(await h.pick(SPARK)).toMatchObject({ member: { key: h.remote } });
     expect(await h.pick(GPT, 'pi')).toMatchObject({ member: { key: h.remote } });
+    expect((await h.router.view('openai')).members[0]).not.toHaveProperty('usageLimit');
     expect((await h.router.view('openai')).members[0].state).toBe('available');
     expect((await h.router.view('openai', SPARK)).members[0].state).toBe('cooling');
     expect((await h.router.view('openai', { model: GPT, agentKind: 'pi' })).members[0].state).toBe('cooling');
@@ -154,6 +157,9 @@ describe('provider-group quota routing', () => {
     h.usage.set('local', { ...snapshot(100, 20), fiveHour: { utilization: 100, resetsAt: (NOW + 300_000) / 1000 } });
     h.usage.set(remote, { ...snapshot(100, 20), fiveHour: { utilization: 100, resetsAt: (NOW + 600_000) / 1000 } });
     h.router.markCooling('anthropic', 'local', NOW + 1_800_000, scope);
+    // The row describes the quota reset, even when a separate cooldown lasts longer.
+    expect((await h.router.view('anthropic', OPUS)).members[0])
+      .toMatchObject({ coolingUntil: NOW + 1_800_000, usageLimit: { resetAtMs: NOW + 300_000 } });
     expect(await h.pick()).toMatchObject({ kind: 'unavailable', usageLimit: { resetAtMs: NOW + 600_000 } });
     h.config.members[1].paused = true;
     expect(await h.pick()).toMatchObject({ kind: 'unavailable', usageLimit: { resetAtMs: NOW + 1_800_000 } });
@@ -170,6 +176,7 @@ describe('provider-group quota routing', () => {
     expect(await h.pick(SONNET)).toMatchObject({ member: { key: 'local' } });
     expect((await h.router.view('anthropic')).members[0].state).toBe('available');
     expect((await h.router.view('anthropic', OPUS)).members[0].state).toBe('cooling');
+    expect((await h.router.view('anthropic', OPUS)).members[0]).not.toHaveProperty('usageLimit');
     h.usage.set('local', snapshot(0, 100));
     expect(await h.pick(SONNET)).toMatchObject({ member: { key: remote } });
     expect((await h.router.view('anthropic')).members[0].state).toBe('cooling');
@@ -298,7 +305,9 @@ describe('provider-group quota routing', () => {
     h.usage.set('local', snapshot(100, 5));
     h.usage.set(remote, snapshot(40, 60));
     expect(await h.pick()).toMatchObject({ kind: 'member', member: { key: remote } });
-    expect((await h.router.view('anthropic')).members[0]).toMatchObject({ state: 'cooling', coolingUntil: 3_000_000 });
+    expect((await h.router.view('anthropic')).members[0]).toMatchObject({
+      state: 'cooling', coolingUntil: 3_000_000, usageLimit: { resetAtMs: 3_000_000 },
+    });
     // Quota snapshots never overwrite error-derived cooldowns or turn a scoped limit into a persistent global one.
     expect(h.writeCooling).not.toHaveBeenCalled();
     h.usage.set('local', snapshot(5, 100));
@@ -339,6 +348,7 @@ describe('provider-group quota routing', () => {
     const status = (await h.router.view('anthropic')).members[0];
     expect(status.state).toBe('cooling');
     expect(status.coolingUntil).toBeUndefined();
+    expect(status.usageLimit).toEqual({ resetAtMs: null });
   });
 
   it('falls back for missing/failed data and releases old quota blocks after reset', async () => {

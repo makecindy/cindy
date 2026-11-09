@@ -17,6 +17,7 @@ import {
   resolveVibrancyConfig,
   resolveWindowVibrancyConfig,
   setWindowWallpaperCovered,
+  setWindowDesktopBlur,
 } from '../vibrancyConfig';
 
 const MATERIAL_VALUES = [
@@ -238,4 +239,28 @@ describe('E4D resolveVibrancyConfig(familyId→vibrancy/backgroundColor 映射)'
       backgroundColor: '#f8f8f6',
     });
   });
+});
+
+// User decision 2026-11-08: None exposes the desktop for every theme. Existing
+// coverage tests only exercise theme defaults. Unit: clear -> blur -> artwork -> clear.
+it('keeps desktop blur per window and restores it after removing artwork', () => {
+  const win = {} as BrowserWindow;
+  const other = {} as BrowserWindow;
+  setWindowDesktopBlur(win, 0);
+  expect(resolveWindowVibrancyConfig(win, 'default', false, 'darwin')).toMatchObject({
+    vibrancy: null, backgroundColor: '#00000000',
+  });
+  setWindowDesktopBlur(win, 7);
+  expect(resolveWindowVibrancyConfig(win, 'default', true, 'darwin').desktopBlurRadius).toBe(7);
+  expect(resolveWindowVibrancyConfig(win, 'default', true, 'darwin').vibrancy).toBe('under-window');
+  expect(resolveWindowVibrancyConfig(other, 'default', true, 'darwin').vibrancy).toBeNull();
+  setWindowWallpaperCovered(win, true);
+  expect(resolveWindowVibrancyConfig(win, 'default', true, 'darwin').backgroundColor).toBe('#1f1f1e');
+  setWindowWallpaperCovered(win, false);
+  expect(resolveWindowVibrancyConfig(win, 'default', true, 'darwin').vibrancy).toBe('under-window');
+  expect(resolveWindowVibrancyConfig(win, 'default', false, 'win32', {
+    getSystemVersion: () => '10.0.22631',
+  }).backgroundMaterial).toBe('acrylic');
+  setWindowDesktopBlur(win, null);
+  expect(resolveWindowVibrancyConfig(win, 'default', true, 'darwin').backgroundColor).toBe('#1f1f1e');
 });

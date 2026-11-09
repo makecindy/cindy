@@ -14,6 +14,8 @@ const SOURCES = [
   'UsageWidgetViews.swift',
   'SingleSourceViews.swift',
   'ComputerIntent.swift',
+  'CindyAgentActivityWidget.swift',
+  'CindyAgentActivityAttributes.swift',
 ];
 // The edit sheet's strings ("Data source", "Accounts first", "Hidden accounts") (App Intents metadata reads the Localizable table).
 const LOCALIZATIONS = ['en.lproj', 'zh-Hans.lproj', 'zh-Hant.lproj', 'ja.lproj', 'ko.lproj', 'de.lproj', 'es.lproj', 'fr.lproj', 'pt-BR.lproj', 'pt-PT.lproj'];
@@ -57,7 +59,12 @@ function configureProject(project, config, platformRoot, projectRoot) {
   const directory = path.join(platformRoot, TARGET);
   const assets = path.join(__dirname, 'usage-widgets');
   fs.mkdirSync(directory, { recursive: true });
-  for (const file of SOURCES) fs.copyFileSync(path.join(assets, file), path.join(directory, file));
+  for (const file of SOURCES) {
+    const source = file === 'CindyAgentActivityAttributes.swift'
+      ? path.join(projectRoot, 'modules/cindy-agent-activity/ios', file)
+      : path.join(assets, file);
+    fs.copyFileSync(source, path.join(directory, file));
+  }
   for (const folder of ['Assets.xcassets', ...LOCALIZATIONS]) {
     fs.rmSync(path.join(directory, folder), { recursive: true, force: true });
     copyDirectory(path.join(assets, folder), path.join(directory, folder));
@@ -85,6 +92,11 @@ function configureProject(project, config, platformRoot, projectRoot) {
     }
   }
   const [, nativeTarget] = target;
+  // Prebuild also runs on an existing project: register newly introduced sources there.
+  for (const file of SOURCES) {
+    const sourcePath = `${TARGET}/${file}`;
+    if (!project.hasFile(sourcePath)) project.addSourceFile(sourcePath, { target: target[0] });
+  }
   const configurations = project.pbxXCConfigurationList()[nativeTarget.buildConfigurationList].buildConfigurations;
   for (const item of configurations) {
     const settings = project.pbxXCBuildConfigurationSection()[item.value].buildSettings;
@@ -109,6 +121,7 @@ function configureProject(project, config, platformRoot, projectRoot) {
 }
 
 module.exports = function withUsageWidgets(config) {
+  config.ios = { ...config.ios, infoPlist: { ...config.ios?.infoPlist, NSSupportsLiveActivities: true } };
   // EAS needs extension credentials before prebuild creates the native target.
   const experimental = config.extra?.eas?.build?.experimental ?? {};
   config.extra = { ...config.extra, eas: { ...config.extra?.eas, build: {

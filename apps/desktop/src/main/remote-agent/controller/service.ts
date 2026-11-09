@@ -1,3 +1,4 @@
+import { lookupShareAvailability, allocateShareAvailability, reportShareAvailabilityStatus } from '../../device-link/providerShareAvailability.js';
 /**
  * 远程 Agent 的控制端接线：Maker 遇到「Agent 在另一台电脑上运行」的任务时调用这里。
  *
@@ -203,7 +204,7 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
   // 闲置多久可以让出按那台主人设置的闲置收回时长(打开前与主动让出前从 caps 读)。
   const pools = new Map<string, RemoteConnectionPool>();
   const directTasks = new Map<string, { target: string; agentKind: AgentKind; model: string; reused?: boolean;
-    until: number; authorizedUntil: number; leaseDeadline: number; wallDeadline: number; renewAt: number; accessEpoch: number; generation?: string }>();
+    availability?: boolean; until: number; authorizedUntil: number; leaseDeadline: number; wallDeadline: number; renewAt: number; accessEpoch: number; generation?: string }>();
   const poolFor = (deviceId: string): RemoteConnectionPool => {
     let pool = pools.get(deviceId);
     if (!pool) {
@@ -269,10 +270,15 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
     let target = input.deviceId;
     let grantRenewable = true;
     let selectedDirectRoute: ReturnType<typeof directTasks.get>;
+    let cloudAllocation = false;
     const releaseFailedDirectAllocation = async (generation: string | undefined): Promise<void> => {
       if (!sessionId || !generation) return;
       forgetSharedTaskAuthorization(input.deviceId, sessionId, generation);
       // A late failure from an old open must never revoke a newer allocation.
+      if (shareId && (selectedDirectRoute?.availability || cloudAllocation)) {
+        await reportShareAvailabilityStatus(shareId, sessionId, generation, false).catch(() => undefined);
+        return;
+      }
       try {
         await remoteAgentInvoker(input.deviceId, deps.remoteInvoke)([{
           op: 'direct-release', sessionId, generation,
@@ -293,7 +299,7 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
       target = authorization.target;
       const taskKey = `${shareId}:${sessionId}`;
       directTasks.delete(taskKey);
-      if (authorization.direct) directTasks.set(taskKey, { target, agentKind: input.agentKind, model: opts.model,
+      if (authorization.direct) directTasks.set(taskKey, { target, availability: authorization.availability, agentKind: input.agentKind, model: opts.model,
         ...(authorization.reused ? { reused: true } : {}),
         accessEpoch: providerShareAccessEpoch(shareId),
         until: Math.min(allocationStartedAt + 25 * 60_000, authorization.authorizedUntil ?? Infinity),
@@ -324,17 +330,25 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
       }
       if (target === input.deviceId) {
         directTasks.delete(taskKey);
+        // An unavailable lookup cannot prove that this task has no pinned executor.
+        // Keep it outside the legacy owner fallback, including owner-link failures.
+        const pinned = await lookupShareAvailability(shareId, sessionId);
+        requireCurrent();
+        cloudAllocation = !!pinned || (findReceivedShare(shareId)?.hostDeviceOnline ?? findReceivedShare(shareId)?.hostOnline) === false;
         try {
           const owner = findReceivedShare(shareId);
-          if (owner?.hostDeviceId) {
+          if (owner?.hostDeviceId && (owner.hostDeviceOnline ?? owner.hostOnline)) {
             await deps.renewSharedProviderLink?.(providerShareHostPeer(shareId, owner.hostDeviceId));
           }
           requireCurrent();
           const allocationStartedAt = Date.now();
           const allocationStartedMonotonic = performance.now();
-          const allocation = await remoteAgentInvoker(input.deviceId, deps.remoteInvoke)([{
-            op: 'allocate', agentKind: input.agentKind, model: opts.model, sessionId,
-          }]);
+          const availability = cloudAllocation;
+          const allocation = availability
+            ? await allocateShareAvailability(shareId, sessionId, input.agentKind, opts.model)
+            : await remoteAgentInvoker(input.deviceId, deps.remoteInvoke)([{
+              op: 'allocate', agentKind: input.agentKind, model: opts.model, sessionId,
+            }]);
           const row = allocation && typeof allocation === 'object'
             ? allocation as { deviceId?: unknown; generation?: unknown } : null;
           if (attempt.signal.aborted) {
@@ -370,7 +384,7 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
             target = proposed;
             for (const [key, route] of directTasks) if (route.until <= Date.now()) directTasks.delete(key);
             if (directTasks.size >= 512) directTasks.delete(directTasks.keys().next().value!);
-            directTasks.set(taskKey, { target, agentKind: input.agentKind, model: opts.model,
+            directTasks.set(taskKey, { target, agentKind: input.agentKind, model: opts.model, availability,
               accessEpoch: providerShareAccessEpoch(shareId),
               until: allocationStartedAt + 25 * 60_000,
               authorizedUntil: allocationStartedAt + 29 * 60_000,
@@ -382,6 +396,7 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
           }
         } catch (error) {
           requireCurrent();
+          if (cloudAllocation) throw error;
           log.warn('shared provider direct executor unavailable; using group owner', { error: String(error) });
         }
       }
@@ -589,6 +604,7 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
         // M can disappear after caps succeeds. O's established relay path may
         // still reach another group member, so retry that same share route once.
         requireCurrent();
+        if (selectedDirectRoute?.availability || cloudAllocation) throw error;
         const fallback = await startAttempt(input, true, attempt);
         target = input.deviceId;
         return fallback;
@@ -614,6 +630,10 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
       const taskKey = `${shareId}:${sessionId}`;
       const targetDeviceId = parseProviderSharePeer(target)?.deviceId;
       const report = (running: boolean) => {
+        if (openingDirectRoute?.availability && openingDirectGeneration) {
+          void reportShareAvailabilityStatus(shareId, sessionId, openingDirectGeneration, running).catch(() => undefined);
+          return;
+        }
         void remoteAgentInvoker(input.deviceId, deps.remoteInvoke)([{
           op: 'direct-status', sessionId, running,
         }]).catch(() => undefined);
@@ -649,10 +669,12 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
         const allocationStartedAt = Date.now();
         const allocationStartedMonotonic = performance.now();
         const allocationAccessEpoch = providerShareAccessEpoch(shareId);
-        const value = await remoteAgentInvoker(input.deviceId, deps.remoteInvoke)([{
-          op: 'allocate', agentKind: input.agentKind, model, sessionId,
-          preferredExecutorDeviceId: targetDeviceId,
-        }]);
+        const value = selectedDirectRoute?.availability
+          ? await allocateShareAvailability(shareId, sessionId, input.agentKind, model)
+          : await remoteAgentInvoker(input.deviceId, deps.remoteInvoke)([{
+            op: 'allocate', agentKind: input.agentKind, model, sessionId,
+            preferredExecutorDeviceId: targetDeviceId,
+          }]);
         const row = value && typeof value === 'object'
           ? value as { deviceId?: unknown; generation?: unknown } : null;
         if (row?.deviceId !== targetDeviceId) {
@@ -674,7 +696,7 @@ export function createDeviceAgentStarter(deps: DeviceAgentServiceDeps) {
         if (stopped || !isCurrent() || performance.now() >= leaseDeadline
           || providerShareAccessEpoch(shareId) !== allocationAccessEpoch) return releaseStoppedGrant();
         const nextLeaseDeadline = sharedTaskLeaseDeadline(value, allocationStartedMonotonic) ?? allocationStartedMonotonic + 30 * 60_000;
-        directTasks.set(taskKey, { target, agentKind: input.agentKind, model,
+        directTasks.set(taskKey, { target, agentKind: input.agentKind, model, availability: selectedDirectRoute?.availability,
           accessEpoch: allocationAccessEpoch,
           until: allocationStartedAt + 25 * 60_000,
           authorizedUntil: allocationStartedAt + 29 * 60_000,

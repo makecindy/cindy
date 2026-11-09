@@ -1,3 +1,4 @@
+import { configureOwnerContext } from '../../ownerContext.js';
 /**
  * dev 沙箱凭证隔离(XDT_ISOLATED_AUTH=1)回归锁。
  *
@@ -27,6 +28,13 @@ const h = vi.hoisted(() => ({
   isPackaged: false,
   dataOwnerId: null as string | null,
 }));
+
+// Mirror this fixture's changing profile/owner through the Host-neutral ports.
+vi.mock('../../userDataPath.js', () => ({ getUserDataDir: () => h.userDataDir, userDataPath: (...parts: string[]) => path.join(h.userDataDir, ...parts) }));
+configureOwnerContext({
+  read: () => ({ dataOwnerId: h.dataOwnerId, generation: 1, boundaryPending: false }),
+  fallbackBaseDir: () => h.userDataDir,
+});
 
 vi.mock('electron', () => ({
   app: {
@@ -63,6 +71,7 @@ vi.mock('../../appSessionState.js', async (importOriginal) => {
 
 // Load the adapter once during collection; keep cold transforms outside isolation deadlines.
 import { DesktopCodexAuthAdapter, readCodexOneShotCreds } from '../auth-adapters.js';
+import { readPool, updatePool } from '../../subscription-accounts/store.js';
 
 function fixture(): {
   codexHome: string;
@@ -720,6 +729,8 @@ describe('dev 沙箱凭证隔离(XDT_ISOLATED_AUTH)', () => {
     h.dataOwnerId = 'owner-a';
     const adapter = new DesktopCodexAuthAdapter();
     await adapter.getState();
+    // An explicit disconnect must also retire the pool when it upgrades an in-flight invalidation.
+    await updatePool('openai', pool => ({ ...pool, disconnected: false }));
     const before = fs.readFileSync(systemAuth);
     let release!: () => void;
     const gate = new Promise<void>((resolve) => { release = resolve; });
@@ -730,6 +741,7 @@ describe('dev 沙箱凭证隔离(XDT_ISOLATED_AUTH)', () => {
     const disconnect = adapter.logout();
     release();
     await Promise.all([invalidation, disconnect]);
+    expect(readPool('openai')?.disconnected).toBe(true);
     await expect(new DesktopCodexAuthAdapter().getAccessToken()).resolves.toBeNull();
     expect(fs.readFileSync(systemAuth)).toEqual(before);
   });

@@ -120,9 +120,20 @@ describe('settings discoverability regressions', () => {
         ...AGENT_ISLAND_SOUND_OPTIONS.map((option) => `soundOptions.${option}`),
       ]) {
         const query = searchI18n.t(`settings.agentIsland.${key}`, { lng });
-        expect(searchSettings(documents, query).some(({ entry }) => entry.id === 'settings.agentIsland.soundLabel'), query).toBe(visible);
+        // The row's hint is indexed whenever the row exists and may contain a short label such as "Follow system".
+        const inHint = agentIsland.supported && agentIsland.enabled && searchI18n.t('settings.agentIsland.soundHint', { lng }).toLowerCase().includes(query.toLowerCase());
+        expect(searchSettings(documents, query).some(({ entry }) => entry.id === 'settings.agentIsland.soundLabel'), query).toBe(visible || inHint);
       }
     }
+  });
+  // Character and sounds also serve the Live Activity, so they stay findable when it is the
+  // only surface on; display and subtle reminders belong to Agent Notch alone. Unit tier.
+  it('keeps shared island settings searchable with only the Live Activity on', () => {
+    const agentIsland = { supported: true, enabled: false, soundEnabled: true, liveActivitySupported: true, liveActivity: true };
+    const ids = new Set(buildSettingsSearchDocuments(searchI18n.t, TAB_IDS, { ...searchContext, platform: 'darwin', agentIsland })
+      .map(({ entry }) => entry.id));
+    expect(['settings.agentIsland.skinLabel', 'settings.agentIsland.soundLabel'].every((id) => ids.has(id))).toBe(true);
+    expect(['settings.agentIsland.displayLabel', 'settings.agentIsland.subtleRemindersLabel'].some((id) => ids.has(id))).toBe(false);
   });
   // Unit regression (#8481): hidden motion selectors must not advertise options.
   it.each([false, true])('filters wallpaper motion labels with selector visible=%s', (wallpaperMotionAvailable) => {
@@ -521,6 +532,7 @@ describe('settings search catalog', () => {
       expect(visible).toContain('imBot.cindy');
       expect(visible).toContain('imBot.cindy.telegram');
       expect(visible).toContain('imBot.cindy.x');
+      expect(visible).toContain('imBot.cindy.feishu');
       expect(visible).toContain('imBot.discord');
       expect(visible).toContain('imBot.telegram');
       expect(visible).toContain('imBot.feishu');

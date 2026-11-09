@@ -173,6 +173,7 @@ const desktopGuardInclude = [
   'src/renderer/__tests__/promptRecommendationBadge.test.ts',
   'src/renderer/__tests__/sessionHeaderMenuParity.test.ts',
   'src/renderer/__tests__/typographyDiscipline.test.ts',
+  'src/renderer/__tests__/designEffectsDiscipline.test.ts',
   'src/renderer/__tests__/windowBackdropAcrylic.test.ts',
   // Existing credential/permission/protocol contracts, separated from runtime units.
   'src/main/__tests__/analyticsConsentMigrationGuards.test.ts',
@@ -338,6 +339,8 @@ const requiredUnitWorkspace = (name, cwd, { workers = 1, execution, pool, exclud
 export default {
   workspaces: [
     requiredUnitWorkspace('cindy-headless', 'apps/cindy-headless'),
+    noCollectableWorkspace('@cindy/host', 'apps/host',
+      'Uses node:test and runs in the dedicated Host regressions CI job on macOS, Windows and Linux (pnpm --dir apps/host test).'),
     {
       name: 'desktop',
       cwd: 'apps/desktop',

@@ -60,7 +60,7 @@ export function PrevMessageJumpChip({
         // 圆底浮起(用户要求这两个 chip 保留原来的圆底,与裸图标的
         // RightSidebarToggle 区分)。
         'bg-popover text-popover-foreground',
-        'border border-border shadow-sm',
+        'border border-border shadow-[shadow:var(--shadow-menu)]',
         'transition-colors',
         // hover:项目通用 list-item hover token(与 SlashCommandPalette /
         // ModelSelector 等同源)

@@ -1,4 +1,5 @@
 import { isTeammateTask } from './teammateTaskSource';
+import { applyMobileSessionRebalancePreferencePatch } from './sessionRebalanceCache';
 import { readTokenSpeedSnapshot, type TokenSpeedSnapshot } from '@cindy/maker-shared/usage-format';
 import { historyTurnEnded, nextHistoryCacheReceipt } from '@cindy/maker-shared/message-window';
 import { normalizeTaskTags, reconcileTaskTags } from '@cindy/maker-shared';
@@ -1785,9 +1786,14 @@ function sameElementRefs<T>(a: readonly T[], b: readonly T[]): boolean {
   return true;
 }
 
+// Ordinary task-list snapshots do not describe these detail-only conversations.
+// Share the omission rule with reconciliation: absence from Home is not deletion.
+function isDetailOnlySession(session: RemoteSession): boolean {
+  return session.source === 'side-chat' || (session.source === 'bot' && !isTeammateTask(session));
+}
+
 function reconcileVisibleSessions(): void {
-  const next = mergedSessions.filter((session) => session.source !== 'side-chat'
-    && (session.source !== 'bot' || isTeammateTask(session))
+  const next = mergedSessions.filter((session) => !isDetailOnlySession(session)
     && sessionListRemovalPreviews.pendingFields(session.id).length === 0
     && (CINDY_MAKE_ENABLED || !isCindyMakeSource(session.source)));
   if (!sameElementRefs(visibleSessions, next)) visibleSessions = next;
@@ -3594,7 +3600,7 @@ export const remoteSessionStore = {
       const pendingStatusRows = (existing?.sessions ?? []).filter((row) =>
         !snapshotIds.has(row.id) && (sessionPendingWrites.pendingFields(row.id).includes('status')
           // These details are deliberately omitted from the host's ordinary task list.
-          || (row.source === 'side-chat' && (row.status === 'active' || row.status === 'archived'))));
+          || (isDetailOnlySession(row) && (row.status === 'active' || row.status === 'archived'))));
       if (pendingStatusRows.length > 0) nextSessions = [...pendingStatusRows, ...nextSessions];
     }
     if (
@@ -4788,6 +4794,7 @@ export const remoteSessionStore = {
       const sessionId = readString(payload, 'sessionId');
       const patch = isRecord(payload.patch) ? payload.patch : null;
       if (sessionId && patch) {
+        applyMobileSessionRebalancePreferencePatch(deviceId, sessionId, patch);
         bumpDeviceSessionListMutationEpoch(deviceId);
         // 遮蔽本机在途写的字段:旧写的无差别 push 回流不得滚回更新的乐观意图,
         // 被遮字段的终态由对应写的对账 / 后续 push 收敛;全部被遮时跳过应用。
