@@ -71,7 +71,6 @@ export function BotRoutines({
   const primaryRoute = inheritedRoute ?? (settingsTarget.kind === 'local'
     ? localBots.find((bot) => bot.id === botId)?.capabilities.modelChain[0] : undefined);
   const routinesApi = settingsTarget.routines;
-  // Follow-up and the daily todo check belong to system Skills; off, the host skips them.
   const skillOffFor = (routine: Routine): 'follow' | 'todo' | null =>
     routine.builtin === 'follow-up' && systemSkillsOff.includes('follow') ? 'follow'
       : routine.id.startsWith(TODO_CHECK_ROUTINE_PREFIX) && systemSkillsOff.includes('todo') ? 'todo' : null;
@@ -260,7 +259,7 @@ export function BotRoutines({
     field.focus();
     return true;
   };
-  const act = async (action: () => Promise<unknown>) => {
+  const act = async (action: () => Promise<unknown>, onError?: () => void) => {
     if (inFlight.current) return;
     inFlight.current = true;
     setBusy(true);
@@ -269,10 +268,36 @@ export function BotRoutines({
       await action();
       await refresh();
     } catch {
+      onError?.();
       setError(true);
     } finally {
       inFlight.current = false;
       setBusy(false);
+    }
+  };
+  // Saving an editor draft is optimistic. If the host rejects it (for example,
+  // an already-consumed one-shot routine cannot be re-enabled), keep the other
+  // edits available for retry but restore the persisted enabled state.
+  const restoreSavedEnabledState = () => {
+    if (!selected || selected === 'new') return;
+    const persisted = routines.find((routine) => routine.id === selected);
+    if (!persisted) return;
+    setDraft((current) => current ? { ...current, enabled: persisted.enabled } : current);
+  };
+  const saveDraft = async (): Promise<Routine> => {
+    try {
+      if (!draft) throw new Error('routine draft is not loaded');
+      const saved = await routinesApi.save(
+        botId,
+        draftForSave(draft),
+        selected === 'new' ? undefined : selected!,
+      );
+      if (!saved) throw new Error('routine save returned no record');
+      return saved;
+    } catch (error) {
+      // Only a rejected save means the persisted enabled state is still authoritative.
+      restoreSavedEnabledState();
+      throw error;
     }
   };
   const add = (trigger: RoutineTrigger) =>
@@ -439,7 +464,7 @@ export function BotRoutines({
                 onClick={() => {
                   if (revealInvalidField()) return;
                   void act(async () => {
-                    const saved = await routinesApi.save(botId, draftForSave(draft), selected!);
+                    const saved = await saveDraft();
                     setDraft(structuredClone(saved));
                     await routinesApi.runNow(botId, saved.id);
                   });
@@ -700,11 +725,7 @@ export function BotRoutines({
               onClick={() => {
                 if (revealInvalidField()) return;
                 void act(async () => {
-                  const saved = await routinesApi.save(
-                    botId,
-                    draftForSave(draft),
-                    selected === 'new' ? undefined : selected!,
-                  );
+                  const saved = await saveDraft();
                   setSelected(saved.id);
                   setDraft(saved);
                   toast.success(t('routines.saved'));
