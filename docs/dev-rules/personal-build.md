@@ -12,6 +12,21 @@ Mac、Windows 和 Linux 共用 Node 入口；运行应用仍取决于各平台�
 
 ## Quick start
 
+### Choose the scope before setup
+
+| Scope | Prerequisites and behaviour |
+| --- | --- |
+| Compose and check source | Your own GitHub login, repository checkout and the repository's Node/pnpm toolchain. App-only is supported; neither a plugin repository nor a phone is required. |
+| Isolated Desktop preview | The platform's existing Desktop development prerequisites. Uses separate app data; it does not adopt a running official installation. |
+| Stable signed Cindy identity | Currently Apple-silicon macOS 27.3+ with a compatible SDK and your own usable developer signing certificate. Older/other platforms record native capabilities as unsupported; they do not receive this fixed signed app path. |
+| Shared-profile supervised upgrades | Explicit macOS runtime configuration, an independently installed Node toolchain and a live Terminal. Uses the existing regional profile only after an observed first setup; automatic switching stays disabled by default. |
+| Personal iPhone delivery | Optional macOS/Xcode/CocoaPods setup, an authorized physical device and an Apple team able to provision the app and its required capabilities. Signing or entitlement failures must be resolved with that team's provisioning; the builder does not remove capabilities. |
+
+Start with the app-only isolated preview below. Add plugins, a shared profile and a phone independently
+after that works. The script can be operated by a Cindy task, but machine permissions, Apple sign-in
+and signing authorization still belong to the user. This does not require another contributor's local
+launcher, account, certificate, receipt, database or private endpoint file.
+
 Run from the Cindy source checkout. Put config and generated builds outside tracked source files.
 Paths below are examples; paths containing spaces are supported.
 
@@ -28,6 +43,39 @@ review the generated owner/repo when working from forks (set the upstream reposi
 if its PRs, rather than your fork's PRs, are intended). Run `gh auth login` in your own terminal if
 needed. Config is JSON, never executable shell. `init` refuses to overwrite an existing config.
 The CLI can also be invoked with `node scripts/personal-build.mjs`.
+
+### Keep personal configuration local
+
+Before adopting shared-profile upgrades, fill in the existing [runtime configuration](#macos-managed-launcher-one-lifecycle)
+and check the values on the target computer:
+
+- Choose the repository whose PRs you intend to include and your GitHub author. `init` captures the
+  current author; omit `author` only if following the active CLI account on each preparation is intended.
+- Leave `localRefs`, `exclude` and `localPlugins` empty unless explicitly needed. They are local choices,
+  not a list of branches or plugins every contributor must reproduce.
+- Select the regional profile using the repository's startup path resolver. Do not copy another
+  machine's `dataDir`; shared mode uses existing login/data, while isolated mode has its own profile.
+- Choose a stable `name`, region and `runtime.personalApp`. Changing name/region changes the bundle
+  identity; changing the signing certificate requires an explicit identity migration.
+- Obtain your public certificate fingerprint with `security find-identity -v -p codesigning`.
+  Set `CINDY_REMOTE_CREDENTIALS_SIGNING_IDENTITY` in the launcher environment when multiple certificates
+  exist. Private keys/passwords stay in Keychain/Xcode, never in JSON or the repository.
+- `runtime.node` and optional `toolPaths` refer to your installed tools, outside generated application
+  checkouts. Homebrew, a particular home directory and a particular Xcode installation name are not
+  requirements; `DEVELOPER_DIR` can select a compatible Xcode for this process.
+- Keep config, generated reports, signed apps, mobile provisioning files and deployed tool bundles
+  outside tracked source. Only generic scripts/tests/documentation belong in a PR.
+
+For repeated upgrades, deploy `bundle-tools` to a new external directory and invoke that immutable
+tool entry. Use a new build directory for each `upgrade-check`. A local shortcut or `current` link is
+optional operator setup, not a prerequisite or an automatically installed background service. Do not
+replace a running tool bundle; switch your shortcut only after the new version passes acceptance.
+
+The supervised workflow starts with an already prepared client and an explicit normal stop of any
+instance using its profile; `auto-launch` establishes its first known-good journal. Later upgrades use
+`manual-check` and `manual-restart` as described below. Legacy mutable commands are retained for existing
+setups; new immutable candidates do not need a personal SQL repair script or an old manifest copied
+from another installation.
 
 ## Configuration
 
