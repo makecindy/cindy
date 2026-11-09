@@ -86,6 +86,9 @@ export function ModelPriceOverrideDialog({ provider, row, open, onOpenChange, pr
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const pendingRef = useRef(false);
+  // The currency list renders in a portal outside the editor; while it is open, focus moving into
+  // it is not leaving the editor, so blur must not save with the previous currency.
+  const currencyOpenRef = useRef(false);
   const setPending = (pending: boolean) => {
     pendingRef.current = pending;
     setSaving(pending);
@@ -242,6 +245,7 @@ export function ModelPriceOverrideDialog({ provider, row, open, onOpenChange, pr
         aria-label={t('settings.providers.models.advanced.pricing')}
         onBlur={(event) => {
           if (event.relatedTarget instanceof Node && event.currentTarget.contains(event.relatedTarget)) return;
+          if (currencyOpenRef.current) return;
           if (dirty) void save();
         }}
         onKeyDown={(event) => {
@@ -273,6 +277,7 @@ export function ModelPriceOverrideDialog({ provider, row, open, onOpenChange, pr
           {/* Changes are ignored while a save is pending (the trigger keeps focus). */}
           <Select {...pricingSetting.controlProps} label={t('settings.providers.models.priceOverride.currency')}
             size="compact" value={form.currency} disabled={unavailable}
+            onOpenChange={(open) => { currencyOpenRef.current = open; }}
             onValueChange={(value) => { if (!pendingRef.current) setForm(current => ({ ...current, currency: value as FormState['currency'] })); }}
             options={(view?.allowedCurrencies ?? []).map(currency => ({ value: currency, label: currency }))} />
         </div>}

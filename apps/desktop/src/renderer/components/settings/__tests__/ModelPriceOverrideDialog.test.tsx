@@ -365,6 +365,27 @@ describe('ModelPriceOverrideDialog', () => {
     await waitFor(() => expect(onOpenChange.mock.calls.length).toBe(presentation === 'inline' ? 0 : 1));
   });
 
+  // PR #9457 review: the shared currency Select opens in a portal; focus moving into it must not save
+  // the amount with the old currency, and the chosen currency must be the one saved on exit.
+  it('keeps editing while the currency list is open and saves the chosen currency on exit', async () => {
+    Element.prototype.scrollIntoView ??= () => {};
+    const view = { ...priceView('model-a'), allowedCurrencies: ['USD', 'CNY'] as ModelPriceOverrideView['allowedCurrencies'] };
+    const result = await renderInline(view);
+    setModelPriceOverride.mockResolvedValue(view);
+    fireEvent.change(priceInput(result), { target: { value: '7' } });
+    const currency = result.getByRole('combobox', { name: 'settings.providers.models.priceOverride.currency' });
+    fireEvent.keyDown(currency, { key: 'ArrowDown' });
+    const option = await screen.findByRole('option', { name: 'CNY' });
+    fireEvent.blur(priceInput(result), { relatedTarget: option });
+    expect(setModelPriceOverride).not.toHaveBeenCalled();
+    fireEvent.click(option);
+    await waitFor(() => expect(screen.queryByRole('listbox')).toBeNull());
+    fireEvent.blur(currency);
+    await waitFor(() => expect(setModelPriceOverride).toHaveBeenCalledExactlyOnceWith(view.target, {
+      currency: 'CNY', inputPerMtok: 7, outputPerMtok: 4, cacheReadPerMtok: null, cacheCreatePerMtok: null,
+    }));
+  });
+
   it('does not write on load, unchanged blur or equivalent numeric formatting', async () => {
     const result = await renderInline();
     fireEvent.blur(priceInput(result));
