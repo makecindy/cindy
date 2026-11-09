@@ -9,7 +9,39 @@ const host = vi.hoisted(() => {
   };
   const previousPort = Object.getOwnPropertyDescriptor(process, 'parentPort');
   Object.defineProperty(process, 'parentPort', { value: port, configurable: true });
-  return { port, previousPort, sdk: {} as Record<string, unknown> };
+  return {
+    port,
+    previousPort,
+    sdk: {} as Record<string, unknown>,
+    // In-memory keymap backup directory; the host only needs these fs calls.
+    files: new Map<string, string>(),
+  };
+});
+
+vi.mock('node:fs/promises', () => {
+  const missing = (): Error => Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+  const memoryFs = {
+    mkdir: async () => undefined,
+    access: async (file: string) => {
+      if (!host.files.has(file)) throw missing();
+    },
+    readFile: async (file: string) => {
+      const text = host.files.get(file);
+      if (text === undefined) throw missing();
+      return text;
+    },
+    writeFile: async (file: string, text: string) => {
+      host.files.set(file, text);
+    },
+    rename: async (from: string, to: string) => {
+      host.files.set(to, host.files.get(from)!);
+      host.files.delete(from);
+    },
+    rm: async (file: string) => {
+      host.files.delete(file);
+    },
+  };
+  return { default: memoryFs, ...memoryFs };
 });
 
 vi.mock('node:module', async (importOriginal) => {
@@ -80,6 +112,8 @@ describe('Work Louder connection error classification', () => {
 // Regression: 2026-11-10 denied opens were classified as contention; existing tests
 // only called the classifier or injected an already-classified state into the client.
 // Minimum input: connect logs and throws 0xE00002E2 with a lighting request queued.
+// The file-RPC leg checks denial skips the keymap restore write and keeps its snapshot,
+// then the next authorized stop writes the original layout back.
 // Tier: unit; in-memory SDK/parent port and fake timers, no native HID or user files.
 // Standalone vitest run: 0.866s (2026-11-10); tests take 9ms.
 describe('Work Louder host lifecycle', () => {
@@ -98,6 +132,24 @@ describe('Work Louder host lifecycle', () => {
     const hidListeners: Array<(event: unknown) => void> = [];
     const joystickListeners: Array<(event: unknown) => void> = [];
     const unsubscribe = vi.fn();
+    let fileApi = false;
+    const factoryKeymap = JSON.stringify({
+      profiles: [
+        {
+          layers: [
+            { id: 0, name: 'Layer 1', layout: { keymap: [['KV_1', 'KV_2']], encoders: [] } },
+          ],
+        },
+      ],
+    });
+    let deviceKeymap = factoryKeymap;
+    const deviceFs = {
+      readFile: vi.fn(async () => ({ ok: true, value: deviceKeymap })),
+      writeFile: vi.fn(async (_name: string, text: string) => {
+        deviceKeymap = text;
+        return { ok: true };
+      }),
+    };
     const getDeviceStatus = vi.fn(async () => ({ firmwareVersion: 'test' }));
     const sendLightingConfig = vi.fn(async (): Promise<unknown> => true);
     const sendThreadsLighting = vi.fn(async () => true);
@@ -130,6 +182,7 @@ describe('Work Louder host lifecycle', () => {
         });
       },
       RPCApiOAI: class {
+        api = fileApi ? deviceFs : undefined;
         getDeviceStatus = getDeviceStatus;
         sendLightingConfig = sendLightingConfig;
         sendThreadsLighting = sendThreadsLighting;
@@ -147,7 +200,8 @@ describe('Work Louder host lifecycle', () => {
     const send = (data: unknown) => onMessage({ data });
     const settle = () => vi.advanceTimersByTimeAsync(0);
     const frame = createWorkLouderCodexWindowRevealFrame();
-    const init = () => send({ kind: 'init', sdkEntry: '/fake-sdk' });
+    const init = () =>
+      send({ kind: 'init', sdkEntry: '/fake-sdk', keymapBackupDir: '/keymap-backups' });
     const expectPaused = async () => {
       expect(host.port.postMessage).toHaveBeenCalledWith({
         kind: 'state',
@@ -224,28 +278,46 @@ describe('Work Louder host lifecycle', () => {
       await vi.advanceTimersByTimeAsync(3_000);
       expect(transports.at(-1)!.disconnect).toHaveBeenCalledOnce();
       expect(host.port.postMessage).toHaveBeenCalledWith({ kind: 'state', status: 'not-detected' });
+      fileApi = true;
       connectResult = 'ok';
-      await vi.advanceTimersByTimeAsync(3_000);
+      // Retry delay plus the keymap reload wait after the layout is written.
+      await vi.advanceTimersByTimeAsync(6_000);
       expect(transports.at(-1)!.disconnect).not.toHaveBeenCalled();
+      expect(deviceFs.writeFile).toHaveBeenCalledTimes(1);
+      expect(deviceKeymap).not.toBe(factoryKeymap);
       present = false;
       getDeviceStatus.mockRejectedValueOnce(new Error('device disconnected'));
       send({ kind: 'probe' });
-      await settle();
+      // The restore chain awaits several in-memory fs calls before closing.
+      await vi.advanceTimersByTimeAsync(100);
       expect(transports.at(-1)!.disconnect).toHaveBeenCalledOnce();
       expect(host.port.postMessage).toHaveBeenCalledWith({ kind: 'state', status: 'not-detected' });
+      // An ordinary release hands the original layout back and drops its snapshot.
+      expect(deviceKeymap).toBe(factoryKeymap);
       present = true;
-      await vi.advanceTimersByTimeAsync(3_000);
+      await vi.advanceTimersByTimeAsync(6_000);
       expect(transports.at(-1)!.disconnect).not.toHaveBeenCalled();
+      expect(deviceKeymap).not.toBe(factoryKeymap);
+      const occupiedKeymap = deviceKeymap;
+      const keymapWrites = deviceFs.writeFile.mock.calls.length;
+      const snapshots = [...host.files.keys()].filter((file) => file.includes('keymap-session'));
+      expect(snapshots).toHaveLength(1);
 
       // Native SDK errors can be logger-only, with no rejected RPC to catch.
       sdkLogger!.error(denied);
       await settle();
       expect(transports.at(-1)!.disconnect).toHaveBeenCalledOnce();
       await expectPaused();
+      // Denial must not write the restore to the device and must keep the snapshot.
+      expect(deviceFs.writeFile).toHaveBeenCalledTimes(keymapWrites);
+      expect(deviceKeymap).toBe(occupiedKeymap);
+      expect(host.files.has(snapshots[0])).toBe(true);
 
+      // After reauthorization the leftover snapshot is adopted instead of overwritten.
       init();
       send({ kind: 'listen' });
       await settle();
+      expect(deviceFs.writeFile).toHaveBeenCalledTimes(keymapWrites);
       // Dispose must not allow a pending status response to resurrect the device.
       let resolveStatus!: (status: { firmwareVersion: string }) => void;
       getDeviceStatus.mockImplementationOnce(
@@ -262,6 +334,9 @@ describe('Work Louder host lifecycle', () => {
         true,
       );
       expect(unsubscribe).toHaveBeenCalledTimes(hidListeners.length + joystickListeners.length);
+      // Normal release after reauthorization restores the original layout.
+      expect(deviceKeymap).toBe(factoryKeymap);
+      expect(host.files.has(snapshots[0])).toBe(false);
       const calls = access.mock.calls.length;
       host.port.postMessage.mockClear();
       resolveStatus({ firmwareVersion: 'late' });
