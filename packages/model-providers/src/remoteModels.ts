@@ -3,6 +3,18 @@ import { PROVIDER_MEDIA_FIELDS } from './providerMediaModels.js';
 
 /** Remote Agent selection only. A remote-control view of the computer itself retains its full catalog. */
 export function remoteInvocationModels(provider: ProviderView): ProviderView {
+  // Settings/remote-control keep the catalog default. Only Remote Agent selection
+  // consumes the supplying host's explicit budget; never use the controller's prefs.
+  let changed = false;
+  const models = Object.fromEntries(Object.entries(provider.models ?? {}).map(([agent, rows]) => [
+    agent, rows?.map((model) => {
+      const limit = model.contextWindowOverride;
+      if (typeof limit !== 'number' || !Number.isFinite(limit) || limit <= 0 || limit === model.contextWindow) return model;
+      changed = true;
+      return { ...model, contextWindow: limit };
+    }),
+  ]));
+  if (changed) provider = { ...provider, models };
   if (provider.remoteModelIds === undefined) return provider;
   const ids = provider.remoteModelIds;
   const allowed = new Set(Array.isArray(ids) && ids.every((id) => typeof id === 'string') ? ids : []);

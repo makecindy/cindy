@@ -42,6 +42,18 @@ const shell: Provider = {
 // omit denied media, which existing metadata projection tests do not exercise.
 // Minimal input: one allowed and one denied media model in a restricted ProviderView.
 describe('remote media authorization projection', () => {
+  // #9501 unit: old directories and malformed optional budgets must retain their
+  // original window. Existing authorization cases had no source-host override.
+  it.each([undefined, 0, -1, NaN, Infinity, '1000000', 1_000_000])('handles optional source budget %s without changing defaults or grants', (limit) => {
+    const model = { id: 'allowed', name: 'Model', contextWindow: 200_000, contextWindowOverride: limit as number,
+      efforts: [], defaultEffort: null };
+    const original: ProviderView = { ...shell, connected: true, remoteModelIds: ['allowed'],
+      models: { 'claude-code': [model, { ...model, id: 'denied' }] } };
+    const projected = remoteInvocationModels(original);
+    expect(projected.models['claude-code']).toEqual([{ ...model, contextWindow: limit === 1_000_000 ? 1_000_000 : 200_000 }]);
+    expect(model.contextWindow).toBe(200_000);
+    expect(original.models['claude-code']).toHaveLength(2);
+  });
   const fields = ['imageModels', 'videoModels', 'audioModels', 'embeddingModels'] as const;
   const defaultsFields = ['imageDefaults', 'videoDefaults', 'embeddingDefaults'] as const;
   const media = [{ id: 'allowed', name: 'Allowed' }, { id: 'denied', name: 'Denied' }];
