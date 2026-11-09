@@ -202,7 +202,14 @@ function readQuoteText(selection: Selection, range: Range): string {
     if (style.display === 'table-row') tableRow = { separator: '', inCell: false };
     if (style.display === 'table-cell' && tableRow) tableRow.inCell = true;
     pendingBreaks = Math.max(pendingBreaks, breaks);
-    node.childNodes.forEach(visit);
+    if (node.tagName === 'DETAILS' && !node.hasAttribute('open')) {
+      // Closed disclosures render only their first direct summary. Their other
+      // descendants can still report normal display/visibility in computed style.
+      const summary = Array.from(node.children).find(child => child.tagName === 'SUMMARY');
+      if (summary) visit(summary);
+    } else {
+      node.childNodes.forEach(visit);
+    }
     pendingBreaks = Math.max(pendingBreaks, breaks);
     if (style.display === 'table-cell' && tableRow) {
       if (canSelect(node)) tableRow.separator += '\t';

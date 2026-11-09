@@ -290,8 +290,11 @@ describe('SelectionQuoteButton — message body selection actions', () => {
     await renderMessages(vi.fn(async () => true));
     const target = source === 'time'
       ? document.querySelector<HTMLElement>('time[datetime="2026-11-09T10:00:00.000Z"]')!
-      : screen.getByText({ user: 'Message author', assistant: 'chat.ghostHook.processing',
-          source: 'chat.userMessage.groupSentNamed', unread: 'bots.chat.newMessagesBoundary' }[source]!);
+      : source === 'unread'
+        ? screen.getByRole('separator', { name: 'bots.chat.newMessagesBoundary' })
+        : screen.getByText({ user: 'Message author', assistant: 'chat.ghostHook.processing',
+            source: 'chat.userMessage.groupSentNamed' }[source]!);
+    if (source === 'unread') expect(target.textContent).toBe('bots.chat.newMessagesBoundary');
     const selection = selectText(target);
     expect(screen.queryByRole('button', { name: 'chat.quote.addToChat' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'chat.sideChat.title' })).toBeNull();
@@ -383,6 +386,29 @@ describe('SelectionQuoteButton — message body selection actions', () => {
       await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'chat.sideChat.title' })); });
       expect(onAskInSideChat).toHaveBeenCalledExactlyOnceWith(expected);
       expect(getDraft(sessionId)).toBeUndefined();
+    }
+  });
+
+  // PR #9503 discussion_r4514983426: closed native details keep normal computed
+  // styles on their hidden descendants. Use actual rich-answer disclosures in
+  // both states to check only rendered text reaches the selection actions.
+  it.each([false, true])('quotes only visible disclosure content when open=%s', async (open) => {
+    const onAskInSideChat = vi.fn(async (_quote: string) => true);
+    const nextUser = 'Please continue';
+    const operations = [
+      { version: 1, seq: 1, op: 'create', id: 'details', kind: 'details', props: { label: 'Visible summary', default: open } },
+      { seq: 2, op: 'create', id: 'inside', kind: 'text', parent: 'details', props: { text: 'Disclosure body' } },
+    ];
+    await renderMessages(onAskInSideChat, `\`\`\`cindy-ui\n${operations.map(op => JSON.stringify(op)).join('\n')}\n\`\`\``, nextUser);
+    expect(document.querySelector('details')!.open).toBe(open);
+    selectText(screen.getByText(userText), screen.getByText(nextUser));
+    const expected = `${userText}\nVisible summary${open ? '\n\nDisclosure body\n\n' : '\n'}${nextUser}`;
+    if (open) {
+      await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'chat.sideChat.title' })); });
+      expect(onAskInSideChat).toHaveBeenCalledExactlyOnceWith(expected);
+    } else {
+      fireEvent.click(screen.getByRole('button', { name: 'chat.quote.addToChat' }));
+      expect(getDraft(sessionId)?.text?.content?.[0]?.content?.[0]?.attrs?.text).toBe(expected);
     }
   });
 
