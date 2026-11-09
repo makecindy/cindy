@@ -117,8 +117,11 @@ export function buildUiLanguageErrorNote(
   const name = INTERFACE_LANGUAGE_NAME[locale];
   // Interfaces that offer a literary style say explicitly that none is active: a
   // silent ordinary note would otherwise leave an earlier style note in effect,
-  // because that note stays binding until a later note names another style.
-  const styleInactive = family
+  // because that note stays binding until a later note names another style. IM
+  // turns never manage the style, so their note must not cancel it either: IM's
+  // session.send bypasses wireNoteMemory, and a cancellation there would leave the
+  // desktop's unchanged style note deduplicated away after the channel hands back.
+  const styleInactive = family && opts.replyStyle !== false
     ? ' The literary reply style is not active in this note: if an earlier turn applied one, treat it as superseded, and write ordinary replies in the user\'s message language unless the user explicitly requests a literary form.'
     : '';
   return (

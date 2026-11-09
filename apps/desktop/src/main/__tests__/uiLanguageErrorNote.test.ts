@@ -54,9 +54,13 @@ describe('ui language error note', () => {
     // A non-Chinese interface language never carries the style or its cancellation.
     expect(buildUiLanguageErrorNote('ja', { classicalStyle: 'tang-poetry' })).not.toContain('Classical Chinese');
     expect(buildUiLanguageErrorNote('ja')).not.toContain('literary reply style is not active');
+    // IM turns never manage the style: their note neither names a style nor cancels
+    // one, and differs from the desktop's explicit cancellation note.
     const im = buildUiLanguageErrorNote('zh-Hant-x-lzh', { replyStyle: false, classicalStyle: 'song-ci' });
     expect(im).toContain('write that report in 文言（繁體）');
     expect(im).not.toContain('Song lyrics');
+    expect(im).not.toContain('The literary reply style is not active in this note');
+    expect(im).not.toBe(plain);
   });
 
   it('takes the output style from the client that named the language, accepting only catalog ids', () => {
@@ -74,16 +78,24 @@ describe('ui language error note', () => {
     expect(turnClassicalStyleFromSendOpts({ classicalStyle: 'nope' }, 'prose')).toBe('prose');
   });
 
-  // The stronger literary requirement must remain scoped to an active classical
-  // choice. Exercise the actual outbound note, including every ordinary locale,
-  // retained style selection, and IM opt-out; do not infer model behavior from text.
-  it('keeps inactive literary styles byte-identical to the ordinary or IM note', () => {
+  // The stronger literary requirement must remain scoped to an active style choice.
+  // Exercise the actual outbound note, including every ordinary locale, retained
+  // style selection, and IM opt-out; do not infer model behavior from text.
+  it('keeps inactive literary styles scoped to the desktop note and the IM note plain', () => {
+    const familyLocales = ['zh-Hans-x-lzh', 'zh-Hant-x-lzh', 'zh-CN', 'zh-TW'];
     for (const locale of SUPPORTED_LOCALES) {
       for (const { id } of CLASSICAL_REPLY_STYLES.lzh) {
         const im = buildUiLanguageErrorNote(locale, { replyStyle: false, classicalStyle: id });
-        expect(im).toBe(buildUiLanguageErrorNote(locale, { classicalStyle: 'plain' }));
-        if (locale !== 'zh-Hans-x-lzh' && locale !== 'zh-Hant-x-lzh' && locale !== 'zh-CN' && locale !== 'zh-TW') {
-          expect(buildUiLanguageErrorNote(locale, { classicalStyle: id })).toBe(buildUiLanguageErrorNote(locale));
+        // IM turns share one style-free note regardless of the client's style choice.
+        expect(im).toBe(buildUiLanguageErrorNote(locale, { replyStyle: false }));
+        expect(im).not.toContain('literary reply style is not active');
+        // Only family locales carry the cancellation; only when the style is off.
+        const ordinary = buildUiLanguageErrorNote(locale, { classicalStyle: id });
+        expect(ordinary.includes('literary reply style is not active')).toBe(
+          familyLocales.includes(locale) && id === 'plain',
+        );
+        if (!familyLocales.includes(locale)) {
+          expect(ordinary).toBe(buildUiLanguageErrorNote(locale));
         }
       }
     }
