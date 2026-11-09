@@ -233,7 +233,12 @@ Registry 尚未登记的新版本照样显示（资料用未知模型默认值�
 相邻旧版本**；说明里读不出版本时才跳过。SDK 的 displayName 只有系列名（如 “Fable”）时不作为
 型号名称，改用 Registry 名称，Registry 未登记则按 ID 推导（`claude-fable-5-2` → “Fable 5.2”）。
 排查新型号缺失时，先核对 Cindy 实际使用的内置 CLI 版本，而不是 PATH 上的 `claude`；
-例如 Fable 5.2 从 Claude Code 2.1.321 起进入清单。`configure_model_provider` 的
+例如 Fable 5.2 从 Claude Code 2.1.321 起进入清单。还要核对实际子进程环境：
+`DISABLE_TELEMETRY` 不只关闭遥测，也关闭上游 feature-flag 获取，可能令同一内核返回旧清单。
+原生订阅会话及发现探针不默认注入该变量，保留 Claude 官方默认行为；用户显式设置仍原样传递，
+网关及远端路径继续默认禁用。错误上报和 OTEL 导出仍独立默认禁用。
+参见 [Claude Code 环境变量说明](https://code.claude.com/docs/en/env-vars)。
+`configure_model_provider` 的
 `rediscover` 与设置页手动刷新共用 `refreshBuiltinModels`，等待真实发现完成后再返回目录，
 不能走已无发现实现的旧 hook 并报告成功。CLI 清单可见、选择器可见和真实推理成功须分别验证。
 xAI 保留 Registry 声明顺序，XD 以 Gateway `/models` 为准，均不受此规则影响。
