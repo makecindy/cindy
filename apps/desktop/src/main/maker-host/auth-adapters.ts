@@ -1246,35 +1246,43 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
       return;
     }
     this.ensureInvalidationMarkerLoaded();
-    if (this.suppressSystemCodexReconcile) {
-      const marker = readInvalidatedSystemCodexAuthMarker(this.codexHome);
-      // marker 丢失时保持本进程 fail-closed；磁盘写失败不能变成下一次调用立刻回灌坏 token。
-      if (!marker) return;
-      if (
-        getActiveInvalidatedSystemCodexAuthMarker(
-          this.codexHome,
-          getSystemCodexAuthPath(),
-          path.join(this.codexHome, 'auth.json'),
-        )
-      ) {
-        return;
-      }
-      this.suppressSystemCodexReconcile = false;
-      this.oauthInvalidatedReason = null;
-      this.oauthInvalidatedCredentialScope = undefined;
-      this.oauthRecoveryRequiredReason = marker.reason;
-      this.oauthRecoveryCredentialScope = marker.credentialScope ?? 'unknown';
-    }
-
     const systemAuth = getSystemCodexAuthPath();
     const myAuth = path.join(this.codexHome, 'auth.json');
 
-    if (!existsSync(systemAuth)) {
-      // 上一次替换崩在「旧目标已挪走、新凭证还没发布」的窗口里: 系统路径缺失, 而备份
-      // (`<auth.json>.*.swapbak`)还在。先按备份把它恢复回来, 再走下面的正常对账 ——
-      // 否则这里直接返回, 用户看到的是 Codex 凭空掉登录(#9316 review)。
-      if (!(await recoverInterruptedCodexAuthSwap(systemAuth))) return;
+    // 作废闸门的判定用**恢复前**的文件状态: 恢复只是把崩在窗口里的那次替换补完, 不该
+    // 因为文件回来了就把「用户已断开」的抑制解除。
+    const marker = this.suppressSystemCodexReconcile
+      ? readInvalidatedSystemCodexAuthMarker(this.codexHome)
+      : null;
+    const markerActive = this.suppressSystemCodexReconcile
+      ? !marker ||
+        !!getActiveInvalidatedSystemCodexAuthMarker(this.codexHome, systemAuth, myAuth)
+      : false;
+
+    // 上一次替换崩在「旧目标已挪走、新凭证还没发布」的窗口里: 系统路径缺失, 而备份
+    // (`<auth.json>.*.swapbak`)与同一次调用的 sidecar 还在。按备份把它恢复回来。
+    //
+    // 这一步必须在**作废闸门之前**: 标记还在时本地登录会先拆系统路径上的残余硬链, 崩在
+    // 发布之前就留下一个缺失的系统凭证; 重启后闸门直接返回, 恢复的那一步永远走不到 ——
+    // 用户看到的是「本地登录一直失败」(Codex review #9316)。
+    //
+    // 目标还在时也调它: 上一轮恢复因瞬时原因失败而留下的配对备份必须在这里清掉 ——
+    // 留着它, 本机 Codex 之后登出(自己删掉 auth.json)时会被下一次对账当成崩过的替换,
+    // 把旧账号凭证倒回来(#9316 review)。
+    const recovered = await recoverInterruptedCodexAuthSwap(systemAuth);
+    if (!recovered && !existsSync(systemAuth)) return;
+
+    if (markerActive) return;
+    if (this.suppressSystemCodexReconcile) {
+      // marker 丢失时保持本进程 fail-closed; 磁盘写失败不能变成下一次调用立刻回灌坏 token。
+      // 走到这里说明 marker 已经失效(本机 Codex 换了凭证): 解除抑制, 继续正常对账。
+      this.suppressSystemCodexReconcile = false;
+      this.oauthInvalidatedReason = null;
+      this.oauthInvalidatedCredentialScope = undefined;
+      this.oauthRecoveryRequiredReason = marker?.reason;
+      this.oauthRecoveryCredentialScope = marker?.credentialScope ?? 'unknown';
     }
+
     if (path.resolve(systemAuth) === path.resolve(myAuth)) {
       this.lastKnownCodexCredentialScope = 'system-shared';
       return;

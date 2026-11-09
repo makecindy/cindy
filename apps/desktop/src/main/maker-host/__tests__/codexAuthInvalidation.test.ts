@@ -621,6 +621,81 @@ describe('Codex system credential suppression marker', () => {
     });
   });
 
+  // 上一次替换崩在发布之前时, 系统凭证缺失、备份与 sidecar 还在。这对残留必须在
+  // **作废闸门之前**恢复: 标记还在时本地登录会先拆系统路径上的残余硬链, 崩在发布
+  // 之前就留下一个缺失的系统凭证; 重启后闸门直接返回, 恢复的那一步永远走不到 ——
+  // 用户看到的是「本地登录一直失败」(Codex review #9316)。
+  it('restores an interrupted swap before the reconcile-suppression gate', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'xdt-codex-swap-before-gate-'));
+    dirs.push(root);
+    h.userDataDir = path.join(root, 'user-data');
+    h.dataOwnerId = 'owner-a';
+    const home = path.join(root, 'home');
+    const systemAuth = path.join(home, '.codex', 'auth.json');
+    const codexHome = path.join(h.userDataDir, 'codex-home');
+    const localAuth = path.join(codexHome, 'auth.json');
+    vi.spyOn(os, 'homedir').mockReturnValue(home);
+    fs.mkdirSync(path.dirname(systemAuth), { recursive: true });
+    fs.mkdirSync(codexHome, { recursive: true });
+    const credential = JSON.stringify({
+      account: { email: 'user@example.test' },
+      tokens: { access_token: 'system-token', account_id: 'acct-1' },
+    });
+    fs.writeFileSync(systemAuth, credential);
+    // 用户主动断开留下的 durable marker: 对账被抑制。
+    expect(
+      writeInvalidatedSystemCodexAuthMarker(
+        codexHome,
+        systemAuth,
+        CODEX_USER_DISCONNECT_REASON,
+        localAuth,
+      ),
+    ).toBe(true);
+    // 崩在发布之前: 目标被挪到备份名, 同一次调用的 sidecar 还在。
+    fs.renameSync(systemAuth, `${systemAuth}.4242.0.swapbak`);
+    fs.writeFileSync(`${systemAuth}.4242.0.copytmp`, credential);
+
+    const { DesktopCodexAuthAdapter } = await import('../auth-adapters.js');
+    const adapter = new DesktopCodexAuthAdapter();
+    await adapter.getState({ credentialMode: 'oauth-bearer' });
+
+    // 恢复发生在闸门之前: 系统凭证回来了, 本地登录不再卡在「读不到系统凭证」。
+    expect(fs.readFileSync(systemAuth, 'utf8')).toBe(credential);
+    expect(fs.existsSync(`${systemAuth}.4242.0.swapbak`)).toBe(false);
+    expect(fs.existsSync(`${systemAuth}.4242.0.copytmp`)).toBe(false);
+  });
+
+  // 上一轮恢复因瞬时原因失败而留下的配对备份, 在目标被本机 Codex 重建出来之后就是
+  // 纯残留: 留着它, 本机 Codex 之后登出(自己删掉 auth.json)时会被下一次对账当成
+  // 崩过的替换, 把旧账号凭证倒回来(#9316 review)。
+  it('retires a retained swap pair once the target is back', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'xdt-codex-swap-pair-retire-'));
+    dirs.push(root);
+    h.userDataDir = path.join(root, 'user-data');
+    h.dataOwnerId = 'owner-a';
+    const home = path.join(root, 'home');
+    const systemAuth = path.join(home, '.codex', 'auth.json');
+    const codexHome = path.join(h.userDataDir, 'codex-home');
+    vi.spyOn(os, 'homedir').mockReturnValue(home);
+    fs.mkdirSync(path.dirname(systemAuth), { recursive: true });
+    fs.mkdirSync(codexHome, { recursive: true });
+    const credential = JSON.stringify({
+      account: { email: 'user@example.test' },
+      tokens: { access_token: 'system-token', account_id: 'acct-1' },
+    });
+    fs.writeFileSync(systemAuth, credential);
+    fs.writeFileSync(`${systemAuth}.4242.0.swapbak`, credential);
+    fs.writeFileSync(`${systemAuth}.4242.0.copytmp`, credential);
+
+    const { DesktopCodexAuthAdapter } = await import('../auth-adapters.js');
+    const adapter = new DesktopCodexAuthAdapter();
+    await adapter.getState({ credentialMode: 'oauth-bearer' });
+
+    expect(fs.readFileSync(systemAuth, 'utf8')).toBe(credential);
+    expect(fs.existsSync(`${systemAuth}.4242.0.swapbak`)).toBe(false);
+    expect(fs.existsSync(`${systemAuth}.4242.0.copytmp`)).toBe(false);
+  });
+
   it('persists first explicit login provenance before reconciling a different system account', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'xdt-codex-first-explicit-login-'));
     dirs.push(root);
