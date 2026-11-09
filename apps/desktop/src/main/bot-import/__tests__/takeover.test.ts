@@ -77,7 +77,9 @@ setTimeout(() => {
   const pending = changeSourceAutomationState(source!, item, false, readers, () => { if (!owns) throw new Error('OWNER_CHANGED'); });
   const result = pending.catch(error => error);
   try {
-    await vi.waitFor(async () => { pids = JSON.parse(await fs.readFile(started, 'utf8')); expect(pids).toHaveLength(2); });
+    // Real process startup can exceed vi.waitFor's 1s default on macOS. Still
+    // require both PIDs before the fixture's 10s state mutation can run.
+    await vi.waitFor(async () => { pids = JSON.parse(await fs.readFile(started, 'utf8')); expect(pids).toHaveLength(2); }, { timeout: 5_000 });
     owns = false;
     expect(await result).toMatchObject({ message: 'OWNER_CHANGED' });
     await vi.waitFor(() => { for (const pid of pids) expect(() => process.kill(pid, 0)).toThrow(); });
