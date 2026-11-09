@@ -20,7 +20,6 @@ type Received = {
   kind: string;
   saved?: boolean;
   accepted?: boolean;
-  failure?: string;
   id?: string;
   body?: string;
   success?: boolean;
@@ -222,12 +221,7 @@ export class RemoteDesktopCredentialSession {
       throw new Error("CREDENTIAL_INVALID_MESSAGE");
     if (!result.accepted) {
       this.close();
-      const failure = result.failure;
-      throw new Error(
-        typeof failure === "string" && /^CREDENTIAL_[A-Z_]+$/.test(failure)
-          ? failure
-          : "CREDENTIAL_PASSWORD_REJECTED",
-      );
+      throw new Error("CREDENTIAL_PASSWORD_REJECTED");
     }
     state.authenticated = true;
   }
