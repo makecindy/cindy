@@ -875,6 +875,7 @@ function DatabaseSlimmingSection({
           <Select data-setting-id={storageManagementCardSettings.aboutStorageDbSlimmingLabel.id}
             id="db-slimming-archive-age"
             size="compact"
+            width="sm"
             value={String(archiveAge)}
             onValueChange={handleArchiveAgeChange}
             disabled={scanLoading}

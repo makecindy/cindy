@@ -713,6 +713,7 @@ export function ModelAdvancedDrawer({
                   <Select data-settings-search-action="Choose which member model of this alias group the drawer shows"
                     label={t('settings.providers.models.advanced.modelId')}
                     size="compact"
+                    width="sm"
                     className="mb-2"
                     truncateOptions
                     value={row.id}
@@ -839,6 +840,7 @@ export function ModelAdvancedDrawer({
                                         <Select data-settings-search-action="Choose the wire protocol this engine uses for the model"
                                           label={`${AGENT_LABEL[agent]} · ${t('settings.providers.custom.fields.wireProtocol')}`}
                                           size="compact"
+                                          width="sm"
                                           className="mt-1"
                                           value={field.value}
                                           options={field.options}
@@ -1133,6 +1135,7 @@ export function ModelAdvancedDrawer({
                           <Select data-settings-search-action="Declare the image capability of the Images connection model"
                             label={t('settings.providers.models.advanced.imageCapability.label')}
                             size="compact"
+                            width="sm"
                             value={imageCapability}
                             disabled={imageCapabilitySaving || !selectionAvailable || paymentRequired}
                             onValueChange={value => void setImageCapability(value)}
@@ -1152,6 +1155,7 @@ export function ModelAdvancedDrawer({
                           <Select data-settings-search-action="Declare the video capability of the video connection model"
                             label={t('settings.providers.models.advanced.videoCapability.label')}
                             size="compact"
+                            width="sm"
                             value={videoCapability}
                             disabled={imageCapabilitySaving || !selectionAvailable || paymentRequired}
                             onValueChange={value => void setImageCapability(value, 'video')}
@@ -1195,6 +1199,7 @@ export function ModelAdvancedDrawer({
                             <Select data-settings-search-action="Override whether this model accepts image input"
                               label={t('settings.providers.models.advanced.imageInput')}
                               size="compact"
+                              width="sm"
                               value={field.value}
                               options={field.options}
                               disabled={imageInputOverride.loading || localConfigurationBlocked}

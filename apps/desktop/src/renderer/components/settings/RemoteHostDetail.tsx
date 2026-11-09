@@ -714,6 +714,7 @@ function QuickTestPanel({ hostId, availableKinds }: QuickTestPanelProps) {
         <div className="flex items-center gap-2">
           <Select data-settings-search-action="Choose the agent for the one-shot quick test"
             size="compact"
+            width="sm"
             value={pickedKind}
             onValueChange={(value) => setPickedKind(value as AgentKind)}
             disabled={running}
