@@ -4,6 +4,9 @@ apps/desktop/resources/system-skills/cindy-plugin-creator/references/*.md text e
 # The page generation manual is published by version and content hash (mcp-apps/manual/<version>/<sha256>.md);
 # clients hash their bundled copy, so Windows checkouts must package the same LF bytes.
 apps/desktop/resources/system-skills/cindy-plugin-creator/references/examples/interactive-pages/PAGE-GENERATION.md text eol=lf
+# All built-in Skill bytes share one immutable version across platforms. Do not
+# let autocrlf give Windows a different bundle under the same version number.
+apps/desktop/resources/system-skills/** -text
 # Published teammate compatibility fixtures retain the exact source bytes for SHA-256 verification.
 apps/desktop/src/main/maker-ipc/__tests__/fixtures/released-teammate-host/*.ts.txt text eol=lf
 # Bundled teammate packages retain the exact source bytes (text and webp alike) for SHA-256 integrity verification;

@@ -52,6 +52,11 @@ jobs:
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
 
+      - name: Check built-in Skill bundle versions
+        env:
+          SKILLS_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before || 'HEAD' }}
+        run: node scripts/check-built-in-skills.mjs --base-ref "$SKILLS_BASE_REF"
+
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
