@@ -11,6 +11,7 @@ import { ConfirmDialogProvider } from '@/components/ui/confirm-dialog-provider';
 import { UserMessage } from '../components/chat/UserMessage';
 import { AssistantMessage } from '../components/chat/AssistantMessage';
 import { clearDraft, getDraft } from '@/lib/composerDraftStore';
+import { formatQuoteForSend } from '@/lib/chatQuotes';
 
 import { SelectionQuoteButton } from '../components/chat/SelectionQuoteButton';
 
@@ -139,7 +140,8 @@ describe('SelectionQuoteButton — message body selection actions', () => {
     vi.useRealTimers();
   });
 
-  async function renderMessages(onAskInSideChat?: (quote: string) => Promise<boolean>, reply = assistantText, nextUser?: string) {
+  async function renderMessages(onAskInSideChat?: (quote: string) => Promise<boolean>, reply = assistantText, nextUser?: string,
+    userProps?: { content: string; quotesEncoded: boolean }) {
     const containerRef = createRef<HTMLDivElement>();
     await act(async () => {
       render(createElement(MemoryRouter, null,
@@ -149,6 +151,7 @@ describe('SelectionQuoteButton — message body selection actions', () => {
               createElement(UserMessage, {
                 workingDir: '', content: userText,
                 createdAt: '2026-11-09T10:00:00Z', sharedAuthorName: 'Message author',
+                ...userProps,
               }),
               createElement(AssistantMessage, {
                 workingDir: '', content: reply,
@@ -163,6 +166,7 @@ describe('SelectionQuoteButton — message body selection actions', () => {
         ),
       ));
     });
+    return containerRef.current!;
   }
 
   function selectText(start: HTMLElement, end = start, startOffset = 0, endOffset?: number) {
@@ -270,6 +274,41 @@ describe('SelectionQuoteButton — message body selection actions', () => {
     expect(getDraft(sessionId)?.text?.content?.[0]?.content).toEqual([
       { type: 'composerQuote', attrs: { text: 'check this requirement\n\nFirst paragraph\n\nSecond', sourcePath: null, startLine: null, endLine: null } },
     ]);
+  });
+
+  // PR #9503 discussion_r4512060775: real QuoteChip summaries and diff gutters
+  // are intentionally non-selectable, but the cross-message walker read them.
+  // Unit/DOM: supply the CSS utilities missing in jsdom, then assert both output
+  // paths exclude that text while retaining bodies that restore select-text.
+  it.each(['quote', 'side chat'])('omits non-selectable quote chips and diff gutters from a cross-message %s', async (action) => {
+    const style = document.createElement('style');
+    // Match the global descendant rule followed by Tailwind utility overrides.
+    style.textContent = '.select-text, .select-text * { user-select: text; } .select-none { user-select: none; }';
+    document.head.appendChild(style);
+    try {
+      const onAskInSideChat = vi.fn(async (_quote: string) => true);
+      const nextUser = 'Please continue';
+      const content = `${userText}\n\n${formatQuoteForSend({ text: 'Original quote\nsecond line' })}`;
+      const stream = await renderMessages(onAskInSideChat, '```diff\n- before\n+ after\n```', nextUser,
+        { content, quotesEncoded: true });
+      // A non-selectable outer container must not suppress descendants whose
+      // production message bodies explicitly restore text selection.
+      stream.style.userSelect = 'none';
+      selectText(screen.getByText(userText), screen.getByText(nextUser));
+      if (action === 'quote') {
+        fireEvent.click(screen.getByRole('button', { name: 'chat.quote.addToChat' }));
+      } else {
+        await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'chat.sideChat.title' })); });
+      }
+      const quote = action === 'quote'
+        ? getDraft(sessionId)?.text?.content?.[0]?.content?.[0]?.attrs?.text
+        : onAskInSideChat.mock.calls[0]?.[0];
+      expect(quote).not.toContain('Original quote');
+      expect(quote).not.toMatch(/[12+\-]/);
+      expect(quote).toBe(`${userText}\nbefore\nafter\n${nextUser}`);
+    } finally {
+      style.remove();
+    }
   });
 
   it('does not claim a selection extending beyond its message stream', async () => {

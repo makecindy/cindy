@@ -149,6 +149,18 @@ function readQuoteText(selection: Selection, range: Range): string {
 
   let text = '';
   let pendingBreaks = 0;
+  const selectability = new WeakMap<Element, boolean>();
+  const canSelect = (el: Element): boolean => {
+    const cached = selectability.get(el);
+    if (cached !== undefined) return cached;
+    const value = getComputedStyle(el).userSelect;
+    // auto follows the parent's used value; an explicit text/all descendant
+    // can restore selection inside a non-selectable ancestor.
+    const selectable = value === 'none' ? false
+      : value === 'text' || value === 'all' || !el.parentElement ? true : canSelect(el.parentElement);
+    selectability.set(el, selectable);
+    return selectable;
+  };
   const append = (value: string) => {
     if (!value) return;
     if (text && pendingBreaks) {
@@ -165,6 +177,7 @@ function readQuoteText(selection: Selection, range: Range): string {
     if (!el) return;
     if (el.closest(scopeSelector) && !el.closest(bodySelector) && !el.querySelector(bodySelector)) return;
     if (node.nodeType === Node.TEXT_NODE) {
+      if (!canSelect(el)) return;
       const value = node.textContent ?? '';
       append(value.slice(node === range.startContainer ? range.startOffset : 0,
         node === range.endContainer ? range.endOffset : value.length));
@@ -173,7 +186,7 @@ function readQuoteText(selection: Selection, range: Range): string {
     if (!(node instanceof Element)) return;
     const style = getComputedStyle(node);
     if (style.display === 'none' || style.visibility === 'hidden') return;
-    if (node.tagName === 'BR') { append('\n'); return; }
+    if (node.tagName === 'BR') { if (canSelect(node)) append('\n'); return; }
     // Keep paragraph/list/table boundaries and preformatted whitespace when a
     // cross-message selection is rebuilt. Range.toString() alone joins blocks.
     const breaks = node.tagName === 'P' ? 2
@@ -181,7 +194,7 @@ function readQuoteText(selection: Selection, range: Range): string {
     pendingBreaks = Math.max(pendingBreaks, breaks);
     node.childNodes.forEach(visit);
     pendingBreaks = Math.max(pendingBreaks, breaks);
-    if (style.display === 'table-cell') append('\t');
+    if (style.display === 'table-cell' && canSelect(node)) append('\t');
   };
   visit(common);
   return text;
