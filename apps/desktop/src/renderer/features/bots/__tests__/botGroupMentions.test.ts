@@ -277,6 +277,20 @@ describe('splitBotGroupRelaySteps', () => {
   ])('leaves %s to the organizer', (_label, text) => {
     expect(split(text)).toBeNull();
   });
+
+  // #9427, unit: a picked short name can overlap a newer longer name; the host
+  // has only the set of target IDs, not the position of each picked token.
+  it('leaves overlapping different targets to the organizer but accepts aliases of one target', () => {
+    const helper = { botId: 'alex', name: 'Helper', ownerName: 'Alex', ownerNameHidden: true, shortOwnerNamesEnabled: true };
+    const other = { botId: 'sam', name: 'Helper (Sam)', shortOwnerNamesEnabled: true };
+    expect(splitBotGroupRelaySteps('@Helper (Sam) design', { members: [helper, other], allLabels: [] })).toBeNull();
+    expect(splitBotGroupRelaySteps('@Helper (Alex) design', { members: [helper], allLabels: [] }))
+      .toEqual([{ botId: 'alex', task: 'design' }]);
+    // Older servers retain their name-only longest-match behavior.
+    expect(splitBotGroupRelaySteps('@Helper (Sam) design', {
+      members: [{ botId: 'alex', name: 'Helper' }, { botId: 'sam', name: 'Helper (Sam)' }], allLabels: [],
+    })).toEqual([{ botId: 'sam', task: 'design' }]);
+  });
 });
 
 function message(overrides: Partial<BotGroupMessageView>): BotGroupMessageView {

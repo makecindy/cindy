@@ -3077,12 +3077,7 @@ describe('Chat Server result delivery and refresh', () => {
         expect(posts().some(([route]) => route === `/conversations/${roomId}/plans/${planId}`)).toBe(false);
       });
 
-      // #9427 review, unit: parsing a longer label must not auto-start work for a bot
-      // that was not among the identities resolved by the composer.
-      it.each([
-        ['an unpicked namesake', [botId], false],
-        ['all resolved namesakes', [foreignBot, botId], true],
-      ] as const)('only auto-starts written steps with %s when targets match', async (_scenario, picked, starts) => {
+      function namesakeDivisionServer() {
         const namesakes = members().map(m => m.id === selfId ? { ...m, name: 'Alex' }
           : m.id === otherHuman ? { ...m, name: 'Sam' }
           : m.id === botId || m.id === foreignBot ? { ...m, name: 'Helper' } : m);
@@ -3095,11 +3090,38 @@ describe('Chat Server result delivery and refresh', () => {
           return undefined;
         });
         deps.decidePlan = vi.fn(async () => null);
+      }
+
+      // #9427 review, unit: parsing a longer label must not auto-start work for a bot
+      // that was not among the identities resolved by the composer.
+      it('does not auto-start a written step for an unpicked namesake', async () => {
+        namesakeDivisionServer();
         expect(await service.sendMessage({ groupId: roomId, text: '@Helper (Sam) design; @Helper (Alex) build', clientId: 'division-unpicked',
-          mentions: { all: false, botIds: [...picked] }, division: true })).toMatchObject({ ok: true });
+          mentions: { all: false, botIds: [botId] }, division: true })).toMatchObject({ ok: true });
         await vi.advanceTimersByTimeAsync(0);
-        expect(vi.mocked(deps.decidePlan).mock.calls.length > 0).toBe(!starts);
-        expect(posts().some(([route]) => route === `/conversations/${roomId}/plans/${planId}`)).toBe(starts);
+        expect(deps.decidePlan).toHaveBeenCalled();
+        expect(posts().some(([route]) => route === `/conversations/${roomId}/plans/${planId}`)).toBe(false);
+      });
+
+      // A set of picked IDs is not enough to prove which name owns each step: both
+      // IDs can appear even when an earlier picked short name is read as a longer one.
+      it('does not auto-start overlapping steps even when both namesakes were picked', async () => {
+        namesakeDivisionServer();
+        expect(await service.sendMessage({ groupId: roomId, text: '@Helper (Alex) brief; @Helper (Sam) design; @Helper (Sam) build', clientId: 'division-overlapping-picks',
+          mentions: { all: false, botIds: [botId, foreignBot] }, division: true })).toMatchObject({ ok: true });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(deps.decidePlan).toHaveBeenCalled();
+        expect(posts().some(([route]) => route === `/conversations/${roomId}/plans/${planId}`)).toBe(false);
+      });
+
+      it('still auto-starts unambiguous steps matching the resolved targets', async () => {
+        divisionServer();
+        deps.decidePlan = vi.fn() as typeof deps.decidePlan;
+        expect(await service.sendMessage({ groupId: roomId, text: '@Bot (Peer) design; @Nova (Peer) build', clientId: 'division-matching-picks',
+          mentions: { all: false, botIds: [botId, otherBot] }, division: true })).toMatchObject({ ok: true });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(deps.decidePlan).not.toHaveBeenCalled();
+        expect(posts().some(([route]) => route === `/conversations/${roomId}/plans/${planId}`)).toBe(true);
       });
 
       it('answers the request when nobody can arrange it, and later messages still go out', async () => {

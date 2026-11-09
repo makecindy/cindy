@@ -236,8 +236,17 @@ export function splitBotGroupRelaySteps(
   text: string,
   input: { members: readonly BotGroupMentionMember[]; allLabels: readonly string[]; allBotLabels?: readonly string[] },
 ): BotGroupRelayStep[] | null {
-  const tokens = scanMentionTokens(text, buildLabelEntries(input.members, input.allLabels, [], input.allBotLabels));
+  const entries = buildLabelEntries(input.members, input.allLabels, [], input.allBotLabels);
+  const tokens = scanMentionTokens(text, entries);
   if (!tokens.length) return null;
+  // The send carries target IDs, not each picked token's span. When a newly introduced
+  // longer label overlaps a former short label, even the same set of IDs cannot prove
+  // which teammate owns each step. Let the organizer propose the plan instead.
+  if (input.members.some(member => member.shortOwnerNamesEnabled !== undefined) && tokens.some(token =>
+    entries.some(candidate => candidate.label.length < token.entry.label.length
+      && token.entry.label.startsWith(candidate.label)
+      && endsAtBoundary(candidate.label, token.entry.label[candidate.label.length])
+      && (candidate.all || candidate.allBots || candidate.botIds.length !== 1 || candidate.botIds[0] !== token.entry.botIds[0])))) return null;
   // An @ that is not a teammate (renamed since it was picked) would drop or garble a step.
   if (/@\S/.test(text.slice(0, tokens[0]!.start))) return null;
   const steps: BotGroupRelayStep[] = [];
