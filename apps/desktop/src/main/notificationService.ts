@@ -135,6 +135,12 @@ interface ShowSessionEventPayload {
   markAttention?: boolean;
   /** Execution host for a device-link session; absent for local tasks. */
   remoteDeviceId?: string;
+  /**
+   * Stable identity for a repeated needs-reply or error. Absent on older clients
+   * and on completions, which keep using the turn signal. Same id twice is one
+   * desktop toast; a different id is a new request and must still notify.
+   */
+  alertEventId?: string;
 }
 
 /**
@@ -370,6 +376,10 @@ export function initNotificationService(deps: NotificationServiceDeps): void {
         const teammate = !!preview?.teammateName;
         const notificationTitle = preview?.teammateName ?? safeTitle;
         const eventId = signal?.id ?? preview?.eventId;
+        // needs-reply / error have no turn signal. Their alert id is the only
+        // identity that can collapse a duplicate IPC without swallowing the next
+        // question or a later failure of the same task.
+        const alertEventId = kind === 'done' ? undefined : payload.alertEventId;
         const mobileEventId = preview?.eventId ?? signal?.fallbackEventId;
         // A device-link handoff advances only the mobile send generation. It
         // must not make an already accepted desktop/Feishu reply eligible again.
@@ -382,15 +392,19 @@ export function initNotificationService(deps: NotificationServiceDeps): void {
         if (markAttention && isSessionNotificationsMutedSync(sessionId)) return;
         const fallbackBody = teammate && kind === 'done' ? getTeammateNotificationFallback() : undefined;
         const mobileTeammateBotId = preview?.teammateBotId ?? teammateBotId;
-        if (wantDesktop && (kind !== 'done' || !wasReplyNotified(desktopKey, eventId))) {
+        if (wantDesktop && (kind !== 'done'
+          ? !wasReplyNotified(desktopKey, alertEventId)
+          : !wasReplyNotified(desktopKey, eventId))) {
           try {
             const accepted = showDesktopSessionEvent(getWindow, {
               sessionId, title: notificationTitle, kind, teammate, markAttention, avatarJpeg,
               messageClientId: preview?.reply?.clientId,
               body: teammate ? notificationPreview(detail ?? '', 240, getNotificationImageLabel()) || fallbackBody : undefined,
             });
-            if (kind === 'done' && accepted) {
-              notifiedReplies.set(desktopKey, eventId ? { eventId } : { fallbackSentAt: Date.now() });
+            if (accepted && (kind === 'done' ? eventId : alertEventId)) {
+              notifiedReplies.set(desktopKey, { eventId: (kind === 'done' ? eventId : alertEventId)! });
+            } else if (kind === 'done' && accepted) {
+              notifiedReplies.set(desktopKey, { fallbackSentAt: Date.now() });
             }
           } catch (err) {
             log.warn('[notification] desktop reply notification failed (non-fatal)', err);
@@ -476,6 +490,10 @@ function assertValidSessionEventPayload(
     (p.inputHandoffRequestId !== undefined && (
       p.kind !== 'needs-reply' || typeof p.inputHandoffRequestId !== 'string'
       || p.inputHandoffRequestId.length === 0 || p.inputHandoffRequestId.length > 256
+    )) ||
+    (p.alertEventId !== undefined && (
+      p.kind === 'done' || typeof p.alertEventId !== 'string'
+      || p.alertEventId.length === 0 || p.alertEventId.length > 256
     ))
   ) {
     throw new TypeError('invalid session event payload');

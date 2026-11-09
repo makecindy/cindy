@@ -1175,6 +1175,26 @@ describe('notificationService — channels 分发', () => {
     expect(warn).toHaveBeenCalledTimes(1);
     expect(warn.mock.calls[0]![0]).toContain('feishu send failed');
   });
+
+  // Bug: same needs-reply / error payload notified twice because the desktop
+  // ledger only recorded kind === 'done'. A repeated alert id is one toast; a
+  // different id is a new request and must still notify. Completions keep their
+  // own turn identity and are not part of this ledger key.
+  it('shows one desktop toast for a repeated needs-reply or error, and another for a new id', async () => {
+    const { initNotificationService } = await freshService();
+    initNotificationService(baseDeps(makeFeishuIm(null)));
+    const channels = { desktop: true, feishu: false, mobile: false };
+    const ask = { sessionId: 's1', title: 'Ask', kind: 'needs-reply', alertEventId: 'ask-1', channels };
+    await invokeHandler(ask);
+    await invokeHandler(ask);
+    expect(notificationCtor).toHaveBeenCalledTimes(1);
+    await invokeHandler({ ...ask, alertEventId: 'ask-2' });
+    expect(notificationCtor).toHaveBeenCalledTimes(2);
+    const failed = { sessionId: 's1', title: 'Ask', kind: 'error', alertEventId: 'err-1', channels };
+    await invokeHandler(failed);
+    await invokeHandler(failed);
+    expect(notificationCtor).toHaveBeenCalledTimes(3);
+  });
 });
 
 
