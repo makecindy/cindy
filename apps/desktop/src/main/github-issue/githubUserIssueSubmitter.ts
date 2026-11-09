@@ -21,6 +21,12 @@ type GhostToolCallResult =
   { ok: true; result: unknown } | { ok: false; errorCode: string; message: string };
 
 export interface GithubUserIssueSubmitterDeps {
+  /**
+   * 本次要使用的 cindy-github 实例的 instanceKey(installedGhostStoragePart)。
+   * 无实例或同名多实例歧义时返回 null,调用方必须 fail-closed,不得退回裸 ghostId。
+   * enabled / credential / workdir / dispatch 四处都必须由同一个实例解析结果派生。
+   */
+  resolveInstanceId: () => string | null;
   isGithubGhostEnabled: () => boolean;
   isGithubCredentialSaved: () => boolean;
   isGithubGhostDisabledForWorkdir: (workdir: string | null | undefined) => boolean;
@@ -52,6 +58,7 @@ export function isCindyGithubGhostUsable(
   workdir?: string | null,
 ): boolean {
   return (
+    deps.resolveInstanceId() !== null &&
     !deps.isGithubGhostDisabledForWorkdir(workdir) &&
     deps.isGithubGhostEnabled() &&
     deps.isGithubCredentialSaved()
@@ -201,9 +208,17 @@ async function callGithubOperation(
   args: Record<string, unknown>,
   options: { timeoutMs?: number } = {},
 ): Promise<{ ok: true; data: unknown } | GithubOperationFailure> {
+  const instanceId = deps.resolveInstanceId();
+  if (!instanceId) {
+    return {
+      ok: false as const,
+      errorCode: 'GHOST_NOT_FOUND',
+      message: 'Cindy GitHub 实例不可用或存在歧义',
+    };
+  }
   const result = await withOptionalTimeout(
     deps.callGhostTool({
-      ghostId: CINDY_GITHUB_GHOST_ID,
+      ghostId: instanceId,
       tool: 'call_tool',
       args: { name, args },
     }),
