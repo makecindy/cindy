@@ -731,6 +731,20 @@ function DetailHeader({
       : null;
 
   const subscriptionPool = provider && isSubscriptionProvider(provider.id) ? provider.id : null;
+  const dashboard =
+    provider?.id === 'anthropic' || provider?.auth.native === 'claude'
+      ? {
+          label: t('settings.providers.usage.openClaudeUsage'),
+          onOpen: () => void window.electronAPI.openExternal('https://claude.ai/settings/usage'),
+        }
+      : provider?.id === 'xai' || provider?.auth.native === 'xai'
+        ? {
+            label: t('settings.providers.xai.asset.openUsage'),
+            onOpen: () => void window.electronAPI.openExternal('https://grok.com'),
+          }
+        : null;
+  // The usage page is the provider's, not the default account's: pooled accounts show it once in their header.
+  const cardDashboard = subscriptionPool ? null : dashboard;
   const usageCard = subscription ? (
     <QuotaHoverCard
       key={JSON.stringify([
@@ -744,20 +758,8 @@ function DetailHeader({
       variant="embedded"
       hideIdentity={Boolean(subscriptionProduct)}
       account={subscription}
-      dashboardLabel={
-        provider?.id === 'anthropic' || provider?.auth.native === 'claude'
-          ? t('settings.providers.usage.openClaudeUsage')
-          : provider?.id === 'xai' || provider?.auth.native === 'xai'
-            ? t('settings.providers.xai.asset.openUsage')
-            : undefined
-      }
-      onOpenDashboard={
-        provider?.id === 'anthropic' || provider?.auth.native === 'claude'
-          ? () => void window.electronAPI.openExternal('https://claude.ai/settings/usage')
-          : provider?.id === 'xai' || provider?.auth.native === 'xai'
-            ? () => void window.electronAPI.openExternal('https://grok.com')
-            : undefined
-      }
+      dashboardLabel={cardDashboard?.label}
+      onOpenDashboard={cardDashboard?.onOpen}
     >
       {resetEnabled ? (
         <CodexResetCredits providerId={provider?.id} onChanged={refreshResets} key={provider?.id} variant="embedded" snapshot={resetSnapshot} busy={manualReset.busy} canReset={manualReset.canReset} canRetry={manualReset.canRetry} onReset={(credit) => void manualReset.reset(credit)} />
@@ -921,6 +923,7 @@ function DetailHeader({
             key={subscriptionPool}
             providerId={subscriptionPool}
             defaultUsage={usageCard}
+            dashboard={dashboard ?? undefined}
           />
         )}
         {assetModule ??
