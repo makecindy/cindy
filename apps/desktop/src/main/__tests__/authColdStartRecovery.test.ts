@@ -3,7 +3,7 @@ import ts from 'typescript';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AuthRefreshBackoff } from '../authRefreshBackoff';
 import { AuthApiError, retryAfterDeadline } from '@cindy/auth-client';
-import { runRefreshWithReplacementRetry } from '../authRefreshFailure';
+import { runRefreshWithReplacementRetry, resolveSessionExpiredReason } from '../authRefreshFailure';
 import {
   awaitWithStartupTimeout,
   resolveColdStartTimeoutRecovery,
@@ -35,6 +35,9 @@ const names = new Set([
   'getRefreshErrorCode',
   'runColdStartRefreshFlow',
   'runAuthRefreshWithReplacementRetry',
+  'recoverActiveResourceSession',
+  'bindResourcePairToSavedAccount',
+  'isDefinitiveRefreshError',
   'waitForColdStartRetry',
   'stopColdStartRecovery',
   'runLoginAction',
@@ -48,6 +51,8 @@ let coldStartRecoveryStopped = false, coldStartRetryState = null;
 let lastAcceptedRefreshToken = null, persistedRefreshTokenNeedsIdentityCheck = false;
 let foreignDeviceLocalSignOut = false;
 let refreshPromise = null;
+const uncertainResourceRefreshTokens = new Map();
+const pendingResourceRefreshResults = new Map();
 const refreshBackoff = new AuthRefreshBackoff();
 const passiveLocalSignOut = false, settledLoginCommitCount = 0;
 const API_FETCH_TIMEOUT_MS = 15000;
@@ -79,6 +84,7 @@ ${source.statements
   .join('\n')}
 return {
   fetch: apiFetch, start: initialize, runtimeRefresh: refresh, reset: () => runLoginAction({ type: 'reset' }),
+  runtimePending: () => refreshPromise,
   manualLogin: () => runLoginAction({ type: 'discover', identifier: 'test@example.invalid' }),
   state: snapshotAuthState,
   activateRuntime: () => { accessToken = 'test-expired'; currentUser = { id: 'original' }; },
@@ -92,6 +98,7 @@ return {
   },
   stop: stopColdStartRecovery,
   logoutForTest: () => { stopColdStartRecovery(); authStateEpoch++; saved.session = null;
+    pendingResourceRefreshResults.clear(); uncertainResourceRefreshTokens.clear();
     vault.resources = {}; vault.activeAccountKey = null; vault.signedOutAt = Date.now(); },
 };`,
   { compilerOptions: { target: ts.ScriptTarget.ES2022 } },
@@ -105,6 +112,7 @@ function setup(random = 0) {
   const vault: any = {
     activeAccountKey: 'global:original',
     resources: { 'global:original': { realm: 'global', refreshToken: 'test-refresh' } },
+    passports: {},
   };
   const ok = {
     ok: true,
@@ -123,6 +131,7 @@ function setup(random = 0) {
   const clear = vi.fn(async () => {
     saved.session.refreshToken = '';
   });
+  const exchangeAccountMembership = vi.fn(async () => ok.data);
   const deps = {
     saved,
     vault,
@@ -130,6 +139,10 @@ function setup(random = 0) {
     transactAuthAccountVault: transaction,
     accountVaultKey: (realm: string, id: string) => `${realm}:${id}`,
     loggedOutAccountKeySet: () => new Set(),
+    passportVaultKey: (realm: string, id: string) => realm + ':' + id,
+    readAuthAccountVault: () => vault,
+    isLoggedOutVaultAccount: (value: { loggedOutAccountKeys?: string[] }, key: string) =>
+      value.loggedOutAccountKeys?.includes(key) ?? false,
     readSafe: () => null,
     writePersistedAuthSessionOrThrow: (refreshToken: string, realm: string) => {
       saved.session = { version: 1, realm, refreshToken };
@@ -158,16 +171,23 @@ function setup(random = 0) {
     ownerChangeShellGate: { isPending: () => false },
     sealedLoginFlowCommitDepths: new Set(),
     runRefreshWithReplacementRetry,
+    resolveSessionExpiredReason,
     loginPreparingErrorState,
     requestAuthRefresh: request,
     loadClientEndpointsForRealm: vi.fn(async () => {}),
     loadLoginProviders: loadProviders,
-    createAuthClient: () => ({ discover: vi.fn() }),
+    refreshPassportSessionSingleFlight: vi.fn(async () => ({ accountToken: 'test-account-access' })),
+    exchangeAccountMembership,
+    createAuthClient: () => ({
+      discover: vi.fn(),
+      exchangeAccountMembership,
+    }),
+    expireRuntimeAuth: vi.fn(async () => {}),
     log: { debug: vi.fn(), warn: vi.fn(), info: vi.fn(), error: vi.fn() },
     readActiveVaultRefreshCandidate: () => null,
     clearConfirmedDeadRefreshTokens: clear,
     resetActiveAuthRealmToBuild: vi.fn(),
-    isPassiveSharedUserDataInstance: () => false,
+    isPassiveSharedUserDataInstance: vi.fn(() => false),
     canRestoreAuthSessionForMembership: () => true,
     getActiveAppSession: () => ({ mode: 'signed-out', dataOwnerId: null }),
     withCloudOwnerCommit: async (options: any) => {
@@ -598,5 +618,223 @@ describe('runtime token rejection after an offline backoff', () => {
     expect(h.request).toHaveBeenCalledTimes(3);
     await vi.advanceTimersByTimeAsync(1);
     expect(h.request).toHaveBeenCalledTimes(4);
+  });
+});
+
+// Test value (unit): real initialize/refresh entrypoints must recover a consumed
+// Resource token through the already-saved Passport, without changing identity.
+// 2026-11-08: transport failure followed by INVALID_REFRESH_TOKEN deleted a login;
+// existing retries only covered a replacement already present on disk. Minimal
+// input: one saved account/Passport, lost refresh response, then rejected old token.
+describe('lost Resource rotation response', () => {
+  beforeEach(() => { vi.useFakeTimers(); });
+  afterEach(() => { vi.clearAllTimers(); vi.useRealTimers(); });
+
+  function setupSavedPassport() {
+    const h = setup();
+    h.vault.resources['global:original'].metadata = {
+      membershipId: 'original', passportId: 'passport-original',
+    };
+    h.vault.passports['global:passport-original'] = {
+      realm: 'global', passportId: 'passport-original', accountRefreshToken: 'test-passport-refresh',
+    };
+    h.request.mockResolvedValue({
+      ok: false, status: 401, data: { error: { code: 'INVALID_REFRESH_TOKEN' } },
+    });
+    return h;
+  }
+
+  async function beginRuntimeRecovery(h: ReturnType<typeof setup>, uncertainStatus = 0) {
+    h.activateRuntime();
+    h.request.mockResolvedValueOnce({ ok: false, status: uncertainStatus, data: null });
+    await h.runtimeRefresh();
+    await vi.advanceTimersByTimeAsync(60_000);
+    return { pending: h.runtimePending() ?? Promise.resolve(false) };
+  }
+
+  it.each([['runtime', 0], ['runtime', 200], ['cold-start', 0]] as const)(
+    'recovers the same saved account during %s after uncertain status %s', async (phase, status) => {
+    const h = setupSavedPassport();
+    let pending: Promise<unknown>;
+    if (phase === 'runtime') {
+      ({ pending } = await beginRuntimeRecovery(h, status));
+    } else {
+      h.request.mockResolvedValueOnce({ ok: false, status: 0, data: null });
+      pending = h.start();
+      await vi.advanceTimersByTimeAsync(60_000);
+    }
+    await vi.advanceTimersByTimeAsync(2_000);
+    await pending;
+    expect(h.saved.session.refreshToken).toBe('test-rotated');
+    expect(h.state()).toMatchObject({ isAuthenticated: true, user: { id: 'original' } });
+    expect(h.deps.exchangeAccountMembership).toHaveBeenCalledWith('test-account-access', 'original');
+    expect(h.deps.expireRuntimeAuth).not.toHaveBeenCalled();
+    expect(h.clear).not.toHaveBeenCalled();
+    },
+  );
+
+  it('preserves credentials and Retry-After when Passport recovery is rate limited', async () => {
+    const h = setupSavedPassport();
+    h.activateRuntime();
+    const retryAt = Date.now() + 600_000;
+    h.deps.refreshPassportSessionSingleFlight.mockRejectedValue(
+      new AuthApiError('RATE_LIMITED', 429, 'Test rate limit', retryAt),
+    );
+    const { pending } = await beginRuntimeRecovery(h);
+    await vi.advanceTimersByTimeAsync(2_000);
+    await pending;
+    expect(h.deps.refreshPassportSessionSingleFlight).toHaveBeenCalledOnce();
+    expect(h.deps.exchangeAccountMembership).not.toHaveBeenCalled();
+    expect(h.deps.expireRuntimeAuth).not.toHaveBeenCalled();
+    expect(h.saved.session.refreshToken).toBe('test-refresh');
+    expect(Date.now() + h.backoff.remaining(0)).toBeGreaterThanOrEqual(retryAt);
+  });
+
+  it.each(['missing-passport', 'logged-out', 'passive', 'unambiguous-invalid', 'DEVICE_MISMATCH', 'MEMBERSHIP_DISABLED'])(
+    'does not attempt Passport recovery for %s', async reason => {
+      const h = setupSavedPassport();
+      h.activateRuntime();
+      if (reason === 'missing-passport') h.vault.passports = {};
+      else if (reason === 'logged-out') h.vault.loggedOutAccountKeys = ['global:original'];
+      else if (reason === 'passive') h.deps.isPassiveSharedUserDataInstance.mockReturnValue(true);
+      else if (reason !== 'unambiguous-invalid')
+        h.request.mockResolvedValue({ ok: false, status: 401, data: { error: { code: reason } } });
+      const { pending } = reason === 'unambiguous-invalid'
+        ? { pending: h.runtimeRefresh() }
+        : await beginRuntimeRecovery(h);
+      await vi.advanceTimersByTimeAsync(2_000);
+      await pending;
+      expect(h.deps.refreshPassportSessionSingleFlight).not.toHaveBeenCalled();
+      expect(h.deps.exchangeAccountMembership).not.toHaveBeenCalled();
+      expect(h.deps.expireRuntimeAuth).toHaveBeenCalledOnce();
+    },
+  );
+
+  it('stops recovery if the owner changes while the Passport request is in flight', async () => {
+    const h = setupSavedPassport();
+    h.activateRuntime();
+    let finish!: (value: { accountToken: string }) => void;
+    h.deps.refreshPassportSessionSingleFlight.mockImplementationOnce(
+      () => new Promise(resolve => { finish = resolve; }),
+    );
+    const { pending } = await beginRuntimeRecovery(h);
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(h.deps.refreshPassportSessionSingleFlight).toHaveBeenCalledOnce();
+    h.changeOwner();
+    finish({ accountToken: 'test-account-access' });
+    await pending;
+    expect(h.deps.exchangeAccountMembership).not.toHaveBeenCalled();
+    expect(h.saved.session.refreshToken).toBe('other-refresh');
+    expect(h.deps.expireRuntimeAuth).not.toHaveBeenCalled();
+  });
+
+  it('rejects a recovered membership belonging to another account', async () => {
+    const h = setupSavedPassport();
+    h.activateRuntime();
+    h.deps.exchangeAccountMembership.mockResolvedValue({
+      ...h.ok.data, membership: { ...h.ok.data.membership, id: 'unexpected' },
+    });
+    const { pending } = await beginRuntimeRecovery(h);
+    await vi.advanceTimersByTimeAsync(2_000);
+    await pending;
+    expect(h.saved.session.refreshToken).toBe('test-refresh');
+    expect(h.state()).toMatchObject({ user: { id: 'original' } });
+    expect(h.deps.expireRuntimeAuth).not.toHaveBeenCalled();
+  });
+
+  it('retries saving a received rotation without consuming the rejected predecessor again', async () => {
+    const h = setup();
+    h.activateRuntime();
+    h.request.mockResolvedValueOnce(h.ok);
+    h.transaction.mockRejectedValueOnce(
+      new AuthApiError('CREDENTIAL_STORE_UNAVAILABLE', 503, 'Test vault write failed'),
+    );
+    await expect(h.runtimeRefresh()).resolves.toBe(false);
+    expect(h.saved.session.refreshToken).toBe('test-refresh');
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(h.saved.session.refreshToken).toBe('test-rotated');
+    expect(h.request).toHaveBeenCalledOnce();
+    expect(h.deps.expireRuntimeAuth).not.toHaveBeenCalled();
+  });
+
+  it('retries saving a recovered Resource without rotating the Passport again', async () => {
+    const h = setupSavedPassport();
+    h.transaction.mockRejectedValueOnce(
+      new AuthApiError('CREDENTIAL_STORE_UNAVAILABLE', 503, 'Test vault write failed'),
+    );
+    const { pending } = await beginRuntimeRecovery(h);
+    await vi.advanceTimersByTimeAsync(2_000);
+    await pending;
+    expect(h.saved.session.refreshToken).toBe('test-refresh');
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(h.saved.session.refreshToken).toBe('test-rotated');
+    expect(h.request).toHaveBeenCalledTimes(2);
+    expect(h.deps.refreshPassportSessionSingleFlight).toHaveBeenCalledOnce();
+    expect(h.deps.exchangeAccountMembership).toHaveBeenCalledOnce();
+    expect(h.deps.expireRuntimeAuth).not.toHaveBeenCalled();
+  });
+
+  it.each(['owner-change', 'logout'])(
+    'keeps successful late runtime rotations within their account after %s', async change => {
+    const h = setup();
+    h.activateRuntime();
+    let finish!: (value: unknown) => void;
+    h.request.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    const pending = h.runtimeRefresh();
+    if (change === 'owner-change') h.changeOwner();
+    else h.logoutForTest();
+    finish(h.ok);
+    await pending;
+    expect(h.vault.resources['global:original']?.refreshToken).toBe(
+      change === 'owner-change' ? 'test-rotated' : undefined,
+    );
+    expect(h.saved.session?.refreshToken).toBe(change === 'owner-change' ? 'other-refresh' : undefined);
+    expect(h.deps.notifyAuthListeners).not.toHaveBeenCalled();
+    },
+  );
+});
+
+// Test value (unit): execute the real credential transaction against in-memory
+// encrypted-record substitutes. Unlike account switching, a successful server
+// rotation cannot be rolled back when writing the compatibility projection fails.
+// Existing cold-start tests replaced the transaction and missed this data loss.
+const makeVaultTransaction = new Function('deps', ts.transpileModule(
+  'const { withCrossProcessLock, authAccountVaultLockPath, readAtomicSafe, ' +
+  'isAtomicPersistedSecretAbsent, readAtomicSafeCiphertext, readAuthAccountVault, ' +
+  'writeAuthAccountVaultOrThrow, removeAtomicSafeOrThrow, writeAtomicSafe, ' +
+  'writeAtomicSafeCiphertext, accountVaultLockError, AuthApiError, log } = deps; ' +
+  'const AUTH_ACCOUNT_VAULT_KEY = "vault", AUTH_ACCOUNT_LOGOUT_TOMBSTONES_KEY = "logout"; ' +
+  source.statements.find(node => ts.isFunctionDeclaration(node) &&
+    node.name?.text === 'transactAuthAccountVault')!.getText(source) +
+  '; return transactAuthAccountVault;',
+  { compilerOptions: { target: ts.ScriptTarget.ES2022 } },
+).outputText);
+
+describe('durable rotation versus account-switch rollback', () => {
+  it.each([false, true])('preserves a rotated vault only when requested (%s)', async preserveRotatedCredentials => {
+    const records = new Map([['vault', JSON.stringify({ token: 'test-old' })]]);
+    const run = makeVaultTransaction({
+      withCrossProcessLock: async (...args: [unknown, unknown, (status: { held: boolean }) => Promise<unknown>]) =>
+        args[2]({ held: true }),
+      authAccountVaultLockPath: () => 'test-lock',
+      readAtomicSafe: (key: string) => records.get(key) ?? null,
+      isAtomicPersistedSecretAbsent: (key: string) => !records.has(key),
+      readAuthAccountVault: () => JSON.parse(records.get('vault')!),
+      writeAuthAccountVaultOrThrow: (vault: unknown) => records.set('vault', JSON.stringify(vault)),
+      removeAtomicSafeOrThrow: (key: string) => records.delete(key),
+      writeAtomicSafe: (key: string, value: string) => { records.set(key, value); return true; },
+      readAtomicSafeCiphertext: vi.fn(), writeAtomicSafeCiphertext: vi.fn(),
+      accountVaultLockError: vi.fn(), AuthApiError,
+      log: { warn: vi.fn() },
+    });
+    const projectionFailure = new Error('Test projection write failed');
+    await expect(run(
+      (vault: { token: string }) => { vault.token = 'test-rotated'; },
+      () => { throw projectionFailure; },
+      { preserveRotatedCredentials },
+    )).rejects.toBe(projectionFailure);
+    expect(JSON.parse(records.get('vault')!).token).toBe(
+      preserveRotatedCredentials ? 'test-rotated' : 'test-old',
+    );
   });
 });
