@@ -18,6 +18,13 @@ let useGatewayModelPricing: typeof import('../useModelPricing').useGatewayModelP
 let useReferenceModelPricing: typeof import('../useModelPricing').useReferenceModelPricing;
 let setDataOwnerGeneration: typeof import('../../contexts/dataOwnerGeneration').setDataOwnerGeneration;
 
+function deepseekPricing(inputPerMtok: number): ModelPricingCatalog {
+  return { deepseek: { pro: {
+    providerId: 'deepseek', modelId: 'pro', currency: 'USD', source: 'provider-reference',
+    approximate: true, inputPerMtok, outputPerMtok: inputPerMtok * 3,
+  } } };
+}
+
 describe('useModelPricing', () => {
   beforeEach(async () => {
     vi.resetModules();
@@ -27,6 +34,60 @@ describe('useModelPricing', () => {
     setDataOwnerGeneration = ownerModule.setDataOwnerGeneration;
     setDataOwnerGeneration('account-a');
     ({ useGatewayModelPricing, useReferenceModelPricing } = await import('../useModelPricing'));
+  });
+
+  it('reloads reference prices after all consumers unmount and miss a time-band push', async () => {
+    const listeners = new Set<PricingListener>();
+    const peak = deepseekPricing(1.32);
+    const offPeak = deepseekPricing(0.66);
+    const usage = {
+      getReferenceModelPricing: vi.fn().mockResolvedValueOnce(peak).mockResolvedValueOnce(offPeak),
+      onReferenceModelPricingChanged: vi.fn((listener: PricingListener) => {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      }),
+    };
+    (window as unknown as { electronAPI: { maker: { usage: typeof usage } } }).electronAPI = { maker: { usage } };
+    const first = renderHook(() => useReferenceModelPricing());
+    const second = renderHook(() => useReferenceModelPricing());
+    await waitFor(() => expect(first.result.current).toEqual(peak));
+    await waitFor(() => expect(second.result.current).toEqual(peak));
+    expect(usage.getReferenceModelPricing).toHaveBeenCalledOnce();
+    first.unmount();
+    expect(listeners.size).toBe(1);
+    second.unmount();
+    expect(listeners.size).toBe(0);
+    // The boundary push has no listeners, just like the preload fan-out.
+    for (const listener of listeners) listener(offPeak);
+    const reopened = renderHook(() => useReferenceModelPricing());
+    await waitFor(() => expect(reopened.result.current).toEqual(offPeak));
+    expect(usage.getReferenceModelPricing).toHaveBeenCalledTimes(2);
+  });
+
+  it('ignores a pre-unmount reference read and preserves a newer push during reload', async () => {
+    const staleRead = deferred<ModelPricingCatalog>();
+    const reload = deferred<ModelPricingCatalog>();
+    const listeners = new Set<PricingListener>();
+    const offPeak = deepseekPricing(0.66);
+    const usage = {
+      getReferenceModelPricing: vi.fn().mockImplementationOnce(() => staleRead.promise).mockImplementationOnce(() => reload.promise),
+      onReferenceModelPricingChanged: vi.fn((listener: PricingListener) => {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      }),
+    };
+    (window as unknown as { electronAPI: { maker: { usage: typeof usage } } }).electronAPI = { maker: { usage } };
+    const first = renderHook(() => useReferenceModelPricing());
+    first.unmount();
+    const reopened = renderHook(() => useReferenceModelPricing());
+    expect(usage.getReferenceModelPricing).toHaveBeenCalledTimes(2);
+    act(() => { for (const listener of listeners) listener(offPeak); });
+    await act(async () => {
+      staleRead.resolve(deepseekPricing(1.32));
+      reload.resolve(deepseekPricing(1.32));
+      await Promise.all([staleRead.promise, reload.promise]);
+    });
+    expect(reopened.result.current).toEqual(offPeak);
   });
 
   it('does not let a stale initial IPC result overwrite a newer XD pricing push', async () => {

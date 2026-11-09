@@ -12,6 +12,7 @@ import type { AgentKind } from '@cindy/model-providers';
 
 import {
   getModelPriceQuote,
+  providerReferencePriceQuote as catalogReferencePriceQuote,
   modelPricingKey,
   registryPricingCatalog,
   subscriptionDirectPriceQuote,
@@ -53,13 +54,27 @@ export function getReferenceModelPricing(
           const cost = model.cost;
           if (cost?.input === undefined || cost.output === undefined) continue;
           if (![cost.input, cost.output].every(value => Number.isFinite(value) && value >= 0)) continue;
-          (pricing[provider.id] ??= {})[modelPricingKey(model.id, agent as AgentKind)] = {
+          let quote: ModelPriceQuote = {
             providerId: provider.id, modelId: model.id, currency: 'USD',
             source: 'provider-reference', approximate: true,
             inputPerMtok: cost.input, outputPerMtok: cost.output,
             ...(cost.cacheRead !== undefined ? { cacheReadPerMtok: cost.cacheRead } : {}),
             ...(cost.cacheWrite !== undefined ? { cacheCreatePerMtok: cost.cacheWrite } : {}),
           };
+          // Ordinary API accounts import the official static cost too. Apply the
+          // same policy only to the actual direct route, never discovery/relay prices.
+          const routing = provider.routing[agent as AgentKind];
+          const route = model.selectedInterface?.route ?? model.route;
+          const api = model.selectedInterface?.api ?? model.api ?? model.piApi ?? route?.wireProtocol ?? routing?.wireProtocol;
+          if (/^https:\/\/api\.deepseek\.com(?:\/v1)?\/?$/.test(route?.baseUrl ?? routing?.upstream ?? '') &&
+              !(route?.requestPath ?? routing?.requestPath) &&
+              (api === 'openai-chat' || api === 'openai-completions') &&
+              (!model.selectedInterface || model.selectedInterface.wireModelId === model.id) &&
+              !model.discoveredCost && !model.userModelConfig?.discoveredCost) {
+            const tariff = catalogReferencePriceQuote('deepseek', model.id, registry, { agent: agent as AgentKind, at });
+            if (tariff) quote = { ...tariff, providerId: provider.id, modelId: model.id };
+          }
+          (pricing[provider.id] ??= {})[modelPricingKey(model.id, agent as AgentKind)] = quote;
         }
       }
     }

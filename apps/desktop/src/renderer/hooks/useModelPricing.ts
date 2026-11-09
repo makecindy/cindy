@@ -17,6 +17,7 @@ interface PricingState {
   loaded: boolean;
   inflight: Promise<ModelPricingCatalog | null> | null;
   revision: number;
+  subscribers: number;
 }
 
 interface PricingSnapshot {
@@ -30,6 +31,7 @@ const gatewayState: PricingState = {
   loaded: false,
   inflight: null,
   revision: 0,
+  subscribers: 0,
 };
 const referenceState: PricingState = {
   owner: null,
@@ -37,6 +39,7 @@ const referenceState: PricingState = {
   loaded: false,
   inflight: null,
   revision: 0,
+  subscribers: 0,
 };
 
 function stateBelongsToOwner(state: PricingState, owner: DataOwnerGeneration): boolean {
@@ -53,6 +56,7 @@ function stateFor(kind: PricingKind, owner: DataOwnerGeneration): PricingState {
     state.loaded = false;
     state.inflight = null;
     state.revision += 1;
+    state.subscribers = 0;
   }
   return state;
 }
@@ -205,6 +209,7 @@ function usePricing(kind: PricingKind): ModelPricingCatalog | null {
 
   useEffect(() => {
     let active = true;
+    if (kind === 'reference') source.subscribers += 1;
     setSnapshot({ ownerGeneration: owner.generation, pricing: source.cache });
     const unsubscribe = subscribePricing(kind, (next) => {
       if (!stateBelongsToOwner(source, owner) || !isDataOwnerGenerationCurrent(owner)) return;
@@ -223,6 +228,16 @@ function usePricing(kind: PricingKind): ModelPricingCatalog | null {
     return () => {
       active = false;
       unsubscribe();
+      if (kind === 'reference' && stateBelongsToOwner(source, owner)) {
+        source.subscribers -= 1;
+        if (source.subscribers === 0) {
+          // No listener remains for time-band pushes. Re-read on the next mount,
+          // and prevent an earlier IPC read from repopulating that stale cache.
+          source.loaded = false;
+          source.inflight = null;
+          source.revision += 1;
+        }
+      }
     };
   }, [kind, owner, source]);
 

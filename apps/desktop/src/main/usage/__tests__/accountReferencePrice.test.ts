@@ -30,6 +30,13 @@ const accountCatalog = { ...BUNDLED_CATALOG, providers: [buildUserProvider({
     runtimes: { pi: { baseUrl: 'https://openrouter.ai/api/v1', wireProtocol: 'openai-chat', models: [
       { id: 'oauth/new', name: 'OAuth New', discoveredCost: { input: 0.1, output: 0.2 } },
     ] } },
+  }), buildUserProvider({
+    id: 'deepseek-account', name: 'DeepSeek', runtimes: Object.fromEntries(
+      (['claude-code', 'codex', 'pi'] as const).map(agent => [agent, {
+        baseUrl: 'https://api.deepseek.com', wireProtocol: 'openai-chat',
+        models: [{ id: 'deepseek-v4-pro', name: 'Pro' }, { id: 'deepseek-flash', name: 'Flash' }],
+      }]),
+    ),
   }), ...['mimo-account', 'mimo-second'].map(id => buildUserProvider({
     id, name: 'MiMo', runtimes: Object.fromEntries(
       (['claude-code', 'codex', 'pi'] as const).map(agent => [agent, {
@@ -67,7 +74,7 @@ describe('independent subscription account reference prices', () => {
     try {
       vi.setSystemTime(new Date('2026-11-09T03:59:59Z'));
       const input = () => getModelPriceQuote(clock.send.mock.calls.at(-1)?.[1],
-        'deepseek', 'deepseek-v4-pro')?.inputPerMtok;
+        'deepseek-account', 'deepseek-v4-pro', 'pi')?.inputPerMtok;
       broadcastReferenceModelPricing();
       expect(input()).toBe(1.32);
       expect(vi.getTimerCount()).toBe(1);
@@ -83,6 +90,36 @@ describe('independent subscription account reference prices', () => {
     } finally {
       vi.clearAllTimers();
       vi.useRealTimers();
+    }
+  });
+  it.each(['claude-code', 'codex', 'pi'] as const)('switches imported direct DeepSeek %s account prices', agent => {
+    const quote = (model: string, at: string) => getModelPriceQuote(getReferenceModelPricing({ at }),
+      'deepseek-account', model, agent);
+    expect(quote('deepseek-v4-pro', '2026-11-09T03:59:59Z'))
+      .toMatchObject({ inputPerMtok: 1.32, outputPerMtok: 3.96, cacheReadPerMtok: 0.044 });
+    expect(quote('deepseek-v4-pro', '2026-11-09T04:00:00Z'))
+      .toMatchObject({ providerId: 'deepseek-account', inputPerMtok: 0.66, outputPerMtok: 1.98, cacheReadPerMtok: 0.022 });
+    expect(quote('deepseek-flash', '2026-11-09T04:00:00Z'))
+      .toMatchObject({ inputPerMtok: 0.15, outputPerMtok: 0.6, cacheReadPerMtok: 0.003 });
+    expect(quote('deepseek-v4-pro', '2026-11-09')?.inputPerMtok).toBe(1.32);
+  });
+  it('preserves discovery prices, relay routes and custom request paths even with matching peak rates', () => {
+    const direct = accountCatalog.providers.find(provider => provider.id === 'deepseek-account')!;
+    for (const variant of ['discovery', 'relay', 'model-route', 'custom-path'] as const) {
+      const provider = structuredClone(direct);
+      provider.id = variant;
+      const model = provider.models.pi![0];
+      if (variant === 'discovery') model.userModelConfig!.discoveredCost = { ...model.cost };
+      if (variant === 'relay') provider.routing.pi!.upstream = 'https://relay.example/v1';
+      if (variant === 'model-route') model.route = { baseUrl: 'https://relay.example/v1', wireProtocol: 'openai-chat' };
+      if (variant === 'custom-path') provider.routing.pi!.requestPath = '/custom/chat';
+      accountCatalog.providers.push(provider);
+      try {
+        expect(getModelPriceQuote(getReferenceModelPricing({ at: '2026-11-09T04:00:00Z' }),
+          variant, model.id, 'pi')?.inputPerMtok).toBe(1.32);
+      } finally {
+        accountCatalog.providers.pop();
+      }
     }
   });
   it.each(['claude-code', 'codex', 'pi'] as const)(
