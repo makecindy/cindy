@@ -14109,6 +14109,7 @@
       "taskAutoArchived": "「{{title}}」已封存",
       "taskAutoArchivedUndo": "撤",
       "taskAutoArchivePending": "離此任務後自封存",
+      "taskAutoArchiveBlockedDirty": "「{{title}}」工作區尚有未提交之改，未自封存",
       "taskAutoArchiveCancel": "取消",
       "taskAutoArchiveCancelled": "此番不自封存",
       "taskArchiveNow": "即封存"

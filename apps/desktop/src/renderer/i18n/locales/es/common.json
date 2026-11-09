@@ -14278,6 +14278,7 @@
       "taskAutoArchived": "Se archivó «{{title}}»",
       "taskAutoArchivedUndo": "Deshacer",
       "taskAutoArchivePending": "Se archivará al salir de esta tarea",
+      "taskAutoArchiveBlockedDirty": "No se archivó «{{title}}» automáticamente: hay cambios sin confirmar en su espacio de trabajo",
       "taskAutoArchiveCancel": "Cancelar",
       "taskAutoArchiveCancelled": "No se archivará automáticamente esta vez",
       "taskArchiveNow": "Archivar ahora"
