@@ -186,6 +186,15 @@ describe('HY4 inline reasoning through Pi production adapters', () => {
     '- 一级\n  - 二级\n\n    ```js\n    const fence = "```";\n    const token = "</think:6124c78e>";\n    ```',
     '    <think>literal</think:6124c78e>',
     '\t<think:6124c78e>literal</think:6124c78e>',
+    '- > ```js\n  > const fence = "```";\n  > const token = "</think:6124c78e>";\n  > ```',
+    '> - > ```js\n>   > const fence = "```";\n>   > const token = "</think:6124c78e>";\n>   > ```',
+    '- > - ```js\n  >   const fence = "```";\n  >   const token = "</think:6124c78e>";\n  >   ```',
+    '1. > 1. ```js\n   >    const fence = "```";\n   >    const token = "</think:6124c78e>";\n   >    ```',
+    '-\t```js\n\tconst fence = "```";\n\tconst token = "</think:6124c78e>";\n\t```',
+    '  ```xml\n    ```\n</think:6124c78e>\n  ```',
+    '\\```literal </think:6124c78e>``',
+    'unmatched `\n```js\nconst fence = "`";\nconst token = "</think:6124c78e>";\n```',
+    'unmatched `\n\n    const token = "</think:6124c78e>";',
   ])('keeps literal tags inside Markdown code in live, final and history projection: %s', text => {
     const h = harness();
     h.start();
@@ -220,6 +229,65 @@ describe('HY4 inline reasoning through Pi production adapters', () => {
     h.start();
     for (const char of reasoning + marker + answer) h.delta(char);
     h.end(reasoning + marker + answer);
+    expect(h.texts().at(-1)?.text).toBe(answer);
+    expect(h.thoughts().filter(e => e.stage === 'final').map(e => e.text)).toEqual([reasoning]);
+    disposePiTranslateContext(h.ctx);
+  });
+
+  describe.each([
+    ['<think>', '</think>'],
+    ['<think:6124c78e>', marker],
+  ])('explicit opener %s protects the same code boundaries as implicit reasoning', (opener, closer) => {
+    it.each([
+      '```xml\nTOKEN\n```',
+      '    const token = "TOKEN";',
+      '`TOKEN`',
+      '- > ```xml\n  > TOKEN\n  > ```',
+      '> - > ```xml\n>   > TOKEN\n>   > ```',
+      '-\t```xml\n\tTOKEN\n\t```',
+    ])('does not release private analysis at a code-contained closer: %s', code => {
+      const reasoning = '检查示例：\n\n' + code.replace('TOKEN', closer) + '\n\n这里仍是私有分析。\n';
+      const h = harness();
+      h.start();
+      for (const char of opener + reasoning) h.delta(char);
+      expect(h.texts()).toEqual([]);
+      h.delta(closer + answer);
+      h.end(opener + reasoning + closer + answer);
+      h.send({ type: 'agent_settled' });
+      expect(h.texts().at(-1)?.text).toBe(answer);
+      expect(h.thoughts().filter(e => e.stage === 'final').map(e => e.text)).toEqual([reasoning]);
+      expect(h.events.find(e => e.type === 'done')?.data).toMatchObject({ result: answer });
+      const rows = activePiHistoryFromTree({ leafId: 'explicit', tree: [{ entry: {
+        type: 'message', id: 'explicit', message: {
+          role: 'assistant', model: 'tencent/hy4', content: [{ type: 'text', text: opener + reasoning + closer + answer }],
+        },
+      }, children: [] }] });
+      expect(rows.map(row => row.role)).toEqual(['thinking', 'assistant']);
+      expect(rows[0].content).toMatchObject({ text: reasoning });
+      expect(rows[1].content).toBe(answer);
+      disposePiTranslateContext(h.ctx);
+    });
+
+    it.each(['aborted', 'length', 'error'])('keeps analysis private when only a code-contained closer arrived (%s)', stopReason => {
+      const reasoning = '检查示例：\n```xml\n' + closer + '\n```\n这里仍是私有分析。';
+      const h = harness();
+      h.start();
+      h.delta(opener + reasoning);
+      h.end(opener + reasoning, stopReason);
+      expect(h.texts()).toEqual([]);
+      expect(h.thoughts().filter(e => e.stage === 'final').map(e => e.text)).toEqual([reasoning]);
+      disposePiTranslateContext(h.ctx);
+    });
+  });
+
+  it.each(['', '<think>', '<think:6124c78e>'])('does not let an unmatched inline run hide a real final boundary (%s)', opener => {
+    const closer = opener === '<think>' ? '</think>' : marker;
+    const reasoning = '这里仍是私有的 `unfinished draft';
+    const h = harness();
+    h.start();
+    h.delta(opener + reasoning + closer + answer);
+    expect(h.texts()).toEqual([]);
+    h.end(opener + reasoning + closer + answer);
     expect(h.texts().at(-1)?.text).toBe(answer);
     expect(h.thoughts().filter(e => e.stage === 'final').map(e => e.text)).toEqual([reasoning]);
     disposePiTranslateContext(h.ctx);

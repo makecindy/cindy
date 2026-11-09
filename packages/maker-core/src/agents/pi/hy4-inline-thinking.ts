@@ -12,70 +12,113 @@ export interface Hy4InlineThinking {
 export function splitHy4InlineThinking(text: string, final = false): Hy4InlineThinking | null {
   // Four spaces or a tab introduce literal indented code, not a protocol opener.
   const open = /^(?:[\t ]*\r?\n)* {0,3}<think(?::([a-f0-9]{8}))?>/i.exec(text);
-  if (open) {
-    const close = open[1] ? `</think:${open[1]}>` : '</think>';
-    const end = text.toLowerCase().indexOf(close.toLowerCase(), open[0].length);
-    if (end < 0) return final ? { thinking: text.slice(open[0].length), text: '' } : null;
-    return { thinking: text.slice(open[0].length, end), text: text.slice(end + close.length) };
+  const start = open?.[0].length ?? 0;
+  const expectedClose = open ? (open[1] ? `</think:${open[1]}>` : '</think>').toLowerCase() : null;
+  const boundary = findThinkingBoundary(text.slice(start), expectedClose, final);
+  if (!boundary) return open && final ? { thinking: text.slice(start), text: '' } : null;
+  const end = start + boundary.index;
+  return { thinking: text.slice(start, end), text: text.slice(end + boundary.length) };
+}
+
+/** Expand tabs only for Markdown structure; returned offsets always use the raw text. */
+function expandTabs(line: string): string {
+  if (!line.includes('\t')) return line;
+  let column = 0;
+  let expanded = '';
+  for (const char of line) {
+    const width = char === '\t' ? 4 - column % 4 : 1;
+    expanded += char === '\t' ? ' '.repeat(width) : char;
+    column += width;
   }
+  return expanded;
+}
+
+/** Quote and list containers may alternate in either order. */
+function codeStructure(line: string): { content: string; quoteDepth: number; listIndent: number } {
+  let content = line;
+  let quoteDepth = 0;
+  let listIndent = 0;
+  while (true) {
+    const quote = /^ {0,3}> ?/.exec(content);
+    if (quote) {
+      content = content.slice(quote[0].length);
+      quoteDepth++;
+      // Quote continuation consumes preceding list indentation as well.
+      listIndent = 0;
+      continue;
+    }
+    const list = /^( {0,3})([-+*]|\d{1,9}[.)])( +)/.exec(content);
+    if (!list) break;
+    // Five or more padding spaces leave indented code after one padding space.
+    const width = list[1].length + list[2].length + (list[3].length <= 4 ? list[3].length : 1);
+    content = content.slice(width);
+    listIndent += width;
+  }
+  return { content, quoteDepth, listIndent };
+}
+
+/** Both explicit and implicit openers use exactly the same literal-code protection. */
+function findThinkingBoundary(text: string, expectedClose: string | null, final: boolean): { index: number; length: number } | null {
   // The observed gateway dialect omits the opening tag. A bare </think> alone
   // is not enough evidence; only the salted HY4 control token enables this path.
   // Fenced code closes only on a delimiter-only line, never on a run inside a
   // string/comment. Inline code instead closes on an exactly matching run.
-  let fence = '';
-  let fenceQuoteDepth = 0;
-  let fenceIndent = 0;
+  let fence: { run: string; quoteDepth: number; listIndent: number } | null = null;
   let inlineWidth = 0;
+  let pendingInlineBoundary: { index: number; length: number } | null = null;
   let offset = 0;
   for (const line of text.split('\n')) {
-    let fenceLine: string | null = line;
-    for (let depth = 0; fence && depth < fenceQuoteDepth; depth++) {
-      const quote = /^ {0,3}>[\t ]?/.exec(fenceLine!);
-      if (!quote) { fenceLine = null; fence = ''; break; }
-      fenceLine = fenceLine!.slice(quote[0].length);
+    const structuralLine = expandTabs(line);
+    let fenceLine = structuralLine;
+    for (let depth = 0; fence && depth < fence.quoteDepth; depth++) {
+      const quote = /^ *> ?/.exec(fenceLine);
+      if (!quote) { fence = null; break; }
+      fenceLine = fenceLine.slice(quote[0].length);
     }
     if (fence) {
-      const close = /^( *)(`+|~+)[\t ]*\r?$/.exec(fenceLine!);
-      if (close && close[1].length <= fenceIndent + 3
-          && close[2][0] === fence[0] && close[2].length >= fence.length) fence = '';
+      const close = /^( *)(`+|~+) *\r?$/.exec(fenceLine);
+      if (close && close[1].length <= fence.listIndent + 3
+          && close[2][0] === fence.run[0] && close[2].length >= fence.run.length) fence = null;
     } else {
       // Strip quote/list containers before checking code indentation. Protect
       // nested-list fences too: their absolute indentation can exceed three.
-      let codeLine = line;
-      while (true) {
-        const container = /^ {0,3}(?:>[\t ]?|(?:[-+*]|\d+[.)])[\t ])/.exec(codeLine);
-        if (!container) break;
-        codeLine = codeLine.slice(container[0].length);
+      const structure = codeStructure(structuralLine);
+      const open = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(structure.content);
+      const opensFence = open && (open[1][0] === '~' || !open[2].includes('`'));
+      // Inline spans cannot cross paragraph or fenced-block boundaries. An
+      // unmatched opening run is literal text once that block has ended.
+      if (inlineWidth && (structure.content.trim().length === 0 || opensFence)) {
+        if (pendingInlineBoundary) return pendingInlineBoundary;
+        inlineWidth = 0;
       }
-      if (!inlineWidth && /^(?: {4}| {0,3}\t)/.test(codeLine)) {
+      if (!inlineWidth && /^ {4}/.test(structure.content)) {
         offset += line.length + 1;
         continue;
       }
-      const open = inlineWidth === 0
-        ? /^((?: {0,3}>[\t ]?)*)( {0,3})((?:(?:[-+*]|\d+[.)])[\t ]+)*)(`{3,}|~{3,})(.*)$/.exec(line)
-        : null;
-      if (open && (open[4][0] === '~' || !open[5].includes('`'))) {
-        fence = open[4];
-        fenceQuoteDepth = (open[1].match(/>/g) ?? []).length;
-        fenceIndent = open[2].length + open[3].length;
-      } else for (const match of line.matchAll(/`+|<\/think:[a-f0-9]{8}>/gi)) {
+      if (open && opensFence) {
+        fence = { run: open[1], quoteDepth: structure.quoteDepth, listIndent: structure.listIndent };
+      } else for (const match of line.matchAll(/`+|<\/think(?::[a-f0-9]{8})?>/gi)) {
         const token = match[0];
         if (token[0] === '`') {
           // Escapes apply outside code spans; inside, backslashes are literal.
           let backslashes = 0;
           for (let i = match.index - 1; i >= 0 && line[i] === '\\'; i--) backslashes++;
-          if (!inlineWidth && backslashes % 2) continue;
-          if (!inlineWidth) inlineWidth = token.length;
-          else if (inlineWidth === token.length) inlineWidth = 0;
-        } else if (!inlineWidth) {
-          const end = offset + match.index;
-          return { thinking: text.slice(0, end), text: text.slice(end + token.length) };
+          const width = token.length - (!inlineWidth && backslashes % 2 ? 1 : 0);
+          if (!width) continue;
+          if (!inlineWidth) inlineWidth = width;
+          else if (inlineWidth === width) { inlineWidth = 0; pendingInlineBoundary = null; }
+        } else if (expectedClose
+          ? token.toLowerCase() === expectedClose
+          : token.toLowerCase().startsWith('</think:')) {
+          const boundary = { index: offset + match.index, length: token.length };
+          if (!inlineWidth) return boundary;
+          pendingInlineBoundary ??= boundary;
         }
       }
     }
     offset += line.length + 1;
   }
-  return null;
+  return final ? pendingInlineBoundary : null;
 }
 
 /** Shared by final RPC projection and Pi tree rehydration; raw native history is untouched. */
