@@ -668,7 +668,6 @@ import {
   getGrokOAuthCredentialGeneration,
   hasGrokOAuthLogin,
 } from '../maker-host/grok-oauth-login.js';
-import { captureNativeProviderAuthorizationGeneration } from '../maker-host/nativeProviderAuthBinding.js';
 import { invalidateXaiBridgeAuth } from '../maker-host/xai-auth-invalidation-host.js';
 import {
   isModelDisabled,
@@ -5682,8 +5681,6 @@ async function resolveNativeVideoConnection(providerId: string, modelId: string)
   if (providerId !== 'xai' || !registry?.hasAlias(modelId, providerId) || !isVideoCatalogProviderReady(providerId)) return null;
   const owner = activeOwnerScopeKey();
   const generation = getGrokOAuthCredentialGeneration();
-  const authorizationGeneration = captureNativeProviderAuthorizationGeneration('xai');
-  if (!authorizationGeneration) return null;
   const assertCurrent = () => {
     if (isGhostBoundaryPending() || activeOwnerScopeKey() !== owner ||
         getGrokOAuthCredentialGeneration() !== generation || !hasGrokOAuthLogin()) {
@@ -5695,8 +5692,7 @@ async function resolveNativeVideoConnection(providerId: string, modelId: string)
   const headers = { Authorization: `Bearer ${token}` };
   return {
     baseUrl: 'https://api.x.ai/v1', headers,
-    // Persist the existing authorization identity, not process-local counters.
-    revision: createHash('sha256').update(JSON.stringify([providerId, modelId, authorizationGeneration])).digest('hex'),
+    revision: createHash('sha256').update(JSON.stringify([providerId, modelId, owner, generation])).digest('hex'),
     requestModelId: registry.resolveByAlias(modelId).internalModel,
     assertCurrent,
     onAuthRejected: async failure => {
