@@ -1,3 +1,4 @@
+import { resolveCodexSubscriptionUtilityModel } from '@cindy/model-providers/subscription-utility';
 import { app } from 'electron';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -193,7 +194,8 @@ export function resolveVoiceInputModelSelectionValues(
       serviceModeConfigured: serviceMode.configured,
       asrProvider: asrProvider.value,
       refinerProvider: refinerProvider.value,
-      refinerModel,
+      refinerModel: refinerModel && refinerProvider.value === DEFAULT_VOICE_INPUT_REFINER_PROVIDER_KIND
+        ? resolveCodexSubscriptionUtilityModel(refinerModel) : refinerModel,
       asrProviderChain: asrChain.value,
       asrProviderChainSource: asrChain.source,
       ...(customAsr.value ? { customAsr: customAsr.value } : {}),

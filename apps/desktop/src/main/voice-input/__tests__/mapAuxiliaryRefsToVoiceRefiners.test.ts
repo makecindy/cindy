@@ -8,7 +8,7 @@ const activeCatalog = {
       agents: ['codex'],
       models: {
         codex: [
-          { id: 'gpt-5.4-mini', name: 'GPT-5.4 mini', contextWindow: 272_000 },
+          { id: 'gpt-6-luna', name: 'GPT-6 Luna', contextWindow: 272_000 },
         ],
       },
       routing: { codex: { disabled: false } },
@@ -49,8 +49,8 @@ describe('mapAuxiliaryRefsToVoiceRefiners', () => {
   });
 
   it('maps OpenAI and Cindy gateway catalog pins onto matching refiner transports', () => {
-    expect(mapAuxiliaryRefToVoiceRefiner('cat:openai:codex:gpt-5.4-mini')).toBe(
-      'cat:openai:codex:gpt-5.4-mini',
+    expect(mapAuxiliaryRefToVoiceRefiner('cat:openai:codex:gpt-6-luna')).toBe(
+      'cat:openai:codex:gpt-6-luna',
     );
     expect(mapAuxiliaryRefToVoiceRefiner('cat:xd:codex:deepseek/deepseek-v4-flash')).toBe(
       'cat:xd:codex:deepseek/deepseek-v4-flash',
@@ -64,8 +64,8 @@ describe('mapAuxiliaryRefsToVoiceRefiners', () => {
   });
 
   it('skips catalog pins that are no longer active or selectable', () => {
-    expect(mapAuxiliaryRefToVoiceRefiner('cat:openai:codex:gpt-5.4-mini')).toBe(
-      'cat:openai:codex:gpt-5.4-mini',
+    expect(mapAuxiliaryRefToVoiceRefiner('cat:openai:codex:gpt-6-luna')).toBe(
+      'cat:openai:codex:gpt-6-luna',
     );
     expect(mapAuxiliaryRefToVoiceRefiner('cat:xd:codex:missing-model')).toBeNull();
     expect(mapAuxiliaryRefToVoiceRefiner('cat:xd:codex:disabled-model')).toBeNull();
@@ -114,7 +114,7 @@ describe('mapAuxiliaryRefsToVoiceRefiners', () => {
       mapAuxiliaryRefsToVoiceRefiners([
         'cat:anthropic:claude-code:claude-haiku-4-5',
         'codex-gpt-5.4-mini',
-        'cat:openai:codex:gpt-5.4-mini',
+        'cat:openai:codex:gpt-6-luna',
         'litellm-kimi-k2.6',
       ]),
     ).toEqual(['codex-gpt-5.4-mini', 'litellm-kimi-k2.6']);

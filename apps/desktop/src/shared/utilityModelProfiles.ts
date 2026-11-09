@@ -1,3 +1,4 @@
+import { CODEX_SUBSCRIPTION_UTILITY_MODEL } from '@cindy/model-providers/subscription-utility';
 export type UtilityModelTransport =
   | 'codex-responses'
   | 'litellm-chat-completions';
@@ -22,8 +23,9 @@ export type UtilityModelProfile = {
   missingCredentialMessage: string;
 };
 
+// The slot id is persisted by older plugins and voice settings; the wire model is separate.
 export const DEFAULT_UTILITY_MODEL_PROVIDER_KIND = 'codex-gpt-5.4-mini';
-export const DEFAULT_UTILITY_MODEL = 'gpt-5.4-mini';
+export const DEFAULT_UTILITY_MODEL = CODEX_SUBSCRIPTION_UTILITY_MODEL;
 
 // Default lightweight-model candidate pool, highest priority first when no
 // runtime-specific policy is applied. Voice input refinement may reorder this
@@ -38,14 +40,14 @@ export const DEFAULT_UTILITY_MODEL_PROVIDER_CHAIN = [
 export const UTILITY_MODEL_PROFILES = {
   'codex-gpt-5.4-mini': {
     id: 'codex-gpt-5.4-mini',
-    model: 'gpt-5.4-mini',
+    model: CODEX_SUBSCRIPTION_UTILITY_MODEL,
     transport: 'codex-responses',
     auth: 'codex',
     settingsTab: 'providers',
     pricing: {
-      inputUsdPerMillionTokens: 0.6,
-      cachedInputUsdPerMillionTokens: 0.06,
-      outputUsdPerMillionTokens: 2.4,
+      inputUsdPerMillionTokens: 0.1,
+      cachedInputUsdPerMillionTokens: 0.01,
+      outputUsdPerMillionTokens: 0.5,
     },
     missingCredentialMessage: 'Codex ChatGPT login is required for lightweight model tasks.',
   },
@@ -140,6 +142,7 @@ export function isUtilityModelProviderKind(value: string): value is UtilityModel
 const UTILITY_MODEL_PROVIDER_ALIASES: Record<string, UtilityModelProviderKind> = {
   '': DEFAULT_UTILITY_MODEL_PROVIDER_KIND,
   codex: DEFAULT_UTILITY_MODEL_PROVIDER_KIND,
+  'gpt-6-luna': DEFAULT_UTILITY_MODEL_PROVIDER_KIND,
   'codex-gpt-5.4-mini': 'codex-gpt-5.4-mini',
   'codex-gpt-5.4-nano': 'codex-gpt-5.4-nano',
   litellm: 'litellm-gpt-5.4-mini',

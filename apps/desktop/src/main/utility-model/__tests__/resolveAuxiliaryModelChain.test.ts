@@ -92,6 +92,14 @@ describe('getEffectiveAuxiliaryModelChain', () => {
     });
   });
 
+  it('moves the retired Codex mini override to Luna but keeps the API-key route on mini', () => {
+    vi.stubEnv('XDT_UTILITY_MODEL_PROVIDER', 'codex');
+    vi.stubEnv('XDT_UTILITY_MODEL', 'gpt-5.4-mini');
+    expect(getEffectiveAuxiliaryModelChain().refs).toEqual(['codex-gpt-5.4-mini']);
+    vi.stubEnv('XDT_UTILITY_MODEL_PROVIDER', 'litellm');
+    expect(getEffectiveAuxiliaryModelChain().refs).toEqual(['litellm-gpt-5.4-mini']);
+  });
+
   it('preserves an unknown legacy model override as an exact catalog pin', () => {
     vi.stubEnv('XDT_UTILITY_MODEL_PROVIDER', 'litellm');
     vi.stubEnv('XDT_UTILITY_MODEL', 'qwen/qwen3.8-flash-local');

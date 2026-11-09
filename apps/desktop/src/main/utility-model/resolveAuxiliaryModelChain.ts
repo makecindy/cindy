@@ -10,6 +10,7 @@ import {
   parseAuxiliaryModelRef,
   type ParsedAuxiliaryModelRef,
 } from '../../shared/auxiliaryModelChain.js';
+import { resolveCodexSubscriptionUtilityModel } from '@cindy/model-providers/subscription-utility';
 import { encodeCatalogModelPin } from '../../shared/catalogModelPin.js';
 import {
   DEFAULT_UTILITY_MODEL_PROVIDER_KIND,
@@ -39,7 +40,8 @@ function resolveEnvHeadRef(providerRaw: string | undefined, modelRaw: string | u
     ?? resolveUtilityModelProviderKindAlias('');
   if (!provider) return null;
   const profile = getUtilityModelProfile(provider);
-  const model = modelRaw?.trim();
+  const explicit = modelRaw?.trim();
+  const model = explicit && profile.transport === 'codex-responses' ? resolveCodexSubscriptionUtilityModel(explicit) : explicit;
   if (!model || model === profile.model) return provider;
   const modelAlias = resolveUtilityModelProviderKindAlias(model);
   if (

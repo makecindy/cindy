@@ -8,6 +8,7 @@
   "types": "./src/index.ts",
   "exports": {
     ".": "./src/index.ts",
+    "./subscription-utility": "./src/subscriptionUtility.ts",
     "./catalog": "./catalog/providers.json",
     "./provider-model-catalog": "./catalog/provider-models.json",
     "./pi-thinking-levels": "./src/piThinkingLevels.mjs",

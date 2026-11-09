@@ -1,3 +1,4 @@
+import { CODEX_SUBSCRIPTION_UTILITY_MODEL } from './subscriptionUtility.js';
 /**
  * builtin.ts —— 内置供应商身份卡(TS 常量)+ bundled 目录组装。
  *
@@ -160,7 +161,7 @@ const OPENAI_PROVIDER: Provider = {
   agents: ['codex', 'claude-code', 'pi'],
   auth: { method: 'oauth' },
   access: { kind: 'subscription', product: 'ChatGPT' },
-  titleModel: 'gpt-5.4-mini',
+  titleModel: CODEX_SUBSCRIPTION_UTILITY_MODEL,
   // 图像通道:已登录 ChatGPT/Codex 时走 Codex Responses 的 hosted
   // image_generation tool;用户另配 `openai-images` Platform key 时优先走 public
   // Images API。id 带 openai/ 前缀(跨供应商数据契约,防 first-wins 归属漂移);
