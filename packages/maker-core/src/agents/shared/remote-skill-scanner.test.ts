@@ -65,7 +65,7 @@ function fakeRemoteFiles(files: Record<string, string>): RemoteAgentFileOps {
 describe('remote Skill scanners', () => {
   it('discovers Claude global and project resources with project precedence', async () => {
     const fileOps = fakeRemoteFiles({
-      '$HOME/.claude/skills/release/SKILL.md': '---\ndescription: Global release\n---',
+      '$HOME/.xdt-server/v1/claude-home/skills/release/SKILL.md': '---\ndescription: Global release\n---',
       '/srv/repo/.claude/skills/release/SKILL.md': '---\ndescription: Project release\n---',
       '/srv/repo/.claude/commands/check.md': 'Check the project.',
     });
@@ -86,7 +86,7 @@ describe('remote Skill scanners', () => {
     const fileOps = fakeRemoteFiles({
       '$HOME/.agents/skills/@scope/nested/SKILL.md': '---\ndescription: Nested\n---',
       '$HOME/.agents/skills/@scope/group/too-deep/SKILL.md': '---\ndescription: Too deep\n---',
-      '$HOME/.claude/skills/@scope/claude-nested/SKILL.md': '---\ndescription: Claude nested\n---',
+      '$HOME/.xdt-server/v1/claude-home/skills/@scope/claude-nested/SKILL.md': '---\ndescription: Claude nested\n---',
     });
 
     const pi = await scanRemotePiSkills({ fileOps });
@@ -99,10 +99,10 @@ describe('remote Skill scanners', () => {
   it('does not walk a symlinked namespace when the host exposes lstat', async () => {
     const fileOps: RemoteAgentFileOps = {
       ...fakeRemoteFiles({
-        '$HOME/.claude/skills/@scope/nested/SKILL.md': '---\ndescription: Nested\n---',
+        '$HOME/.xdt-server/v1/claude-home/skills/@scope/nested/SKILL.md': '---\ndescription: Nested\n---',
       }),
       async lstat(candidate) {
-        return { isSymbolicLink: candidate === '$HOME/.claude/skills/@scope' };
+        return { isSymbolicLink: candidate === '$HOME/.xdt-server/v1/claude-home/skills/@scope' };
       },
     };
 
@@ -113,7 +113,7 @@ describe('remote Skill scanners', () => {
 
   it('does not walk namespaces when the host cannot report symlinks', async () => {
     const fileOps = fakeRemoteFiles({
-      '$HOME/.claude/skills/@scope/nested/SKILL.md': '---\ndescription: Nested\n---',
+      '$HOME/.xdt-server/v1/claude-home/skills/@scope/nested/SKILL.md': '---\ndescription: Nested\n---',
     });
     delete fileOps.lstat;
 
@@ -124,8 +124,8 @@ describe('remote Skill scanners', () => {
 
   it('prefers a direct remote Skill over a same-named nested Skill', async () => {
     const fileOps = fakeRemoteFiles({
-      '$HOME/.claude/skills/same-name/SKILL.md': '---\ndescription: Direct\n---',
-      '$HOME/.claude/skills/@scope/same-name/SKILL.md': '---\ndescription: Nested\n---',
+      '$HOME/.xdt-server/v1/claude-home/skills/same-name/SKILL.md': '---\ndescription: Direct\n---',
+      '$HOME/.xdt-server/v1/claude-home/skills/@scope/same-name/SKILL.md': '---\ndescription: Nested\n---',
       '$HOME/.agents/skills/late-name/SKILL.md': '---\ndescription: Direct\n---',
       '$HOME/.agents/skills/@scope/late-name/SKILL.md': '---\ndescription: Nested\n---',
     });
@@ -166,14 +166,14 @@ describe('remote Skill scanners', () => {
 
   it('discovers enabled user-scoped Claude plugin Skills on the remote host', async () => {
     const fileOps = fakeRemoteFiles({
-      '$HOME/.claude/plugins/installed_plugins.json': JSON.stringify({
+      '$HOME/.xdt-server/v1/claude-home/plugins/installed_plugins.json': JSON.stringify({
         plugins: {
-          'alpha@market': [{ scope: 'user', installPath: '$HOME/.claude/plugins/cache/alpha/1.0.0' }],
+          'alpha@market': [{ scope: 'user', installPath: '$HOME/.xdt-server/v1/claude-home/plugins/cache/alpha/1.0.0' }],
           'beta@market': [{ scope: 'project', installPath: '$HOME/work/repo/.claude/plugins/beta' }],
         },
       }),
-      '$HOME/.claude/plugins/cache/alpha/1.0.0/.claude-plugin/plugin.json': JSON.stringify({ name: 'alpha' }),
-      '$HOME/.claude/plugins/cache/alpha/1.0.0/skills/browser/SKILL.md': '---\ndescription: Browser skill\n---',
+      '$HOME/.xdt-server/v1/claude-home/plugins/cache/alpha/1.0.0/.claude-plugin/plugin.json': JSON.stringify({ name: 'alpha' }),
+      '$HOME/.xdt-server/v1/claude-home/plugins/cache/alpha/1.0.0/skills/browser/SKILL.md': '---\ndescription: Browser skill\n---',
       '$HOME/work/repo/.claude/plugins/beta/.claude-plugin/plugin.json': JSON.stringify({ name: 'beta' }),
       '$HOME/work/repo/.claude/plugins/beta/skills/hidden/SKILL.md': '---\ndescription: Project plugin\n---',
     });
@@ -194,7 +194,7 @@ describe('remote Skill scanners', () => {
 
   it('keeps the conventional skills/ root when a remote manifest declares extra paths', async () => {
     const fileOps = fakeRemoteFiles({
-      '$HOME/.claude/plugins/installed_plugins.json': JSON.stringify({
+      '$HOME/.xdt-server/v1/claude-home/plugins/installed_plugins.json': JSON.stringify({
         plugins: { 'delta@market': [{ scope: 'user', installPath: '$HOME/plugins/delta' }] },
       }),
       '$HOME/plugins/delta/.claude-plugin/plugin.json': JSON.stringify({
@@ -212,7 +212,7 @@ describe('remote Skill scanners', () => {
 
   it('recognizes a remote manifest root that is itself a Skill', async () => {
     const fileOps = fakeRemoteFiles({
-      '$HOME/.claude/plugins/installed_plugins.json': JSON.stringify({
+      '$HOME/.xdt-server/v1/claude-home/plugins/installed_plugins.json': JSON.stringify({
         plugins: { 'solo@market': [{ scope: 'user', installPath: '$HOME/plugins/solo' }] },
       }),
       '$HOME/plugins/solo/.claude-plugin/plugin.json': JSON.stringify({
@@ -231,7 +231,7 @@ describe('remote Skill scanners', () => {
 
   it('keeps a remote direct Skill whose folder name looks like a build output', async () => {
     const fileOps = fakeRemoteFiles({
-      '$HOME/.claude/plugins/installed_plugins.json': JSON.stringify({
+      '$HOME/.xdt-server/v1/claude-home/plugins/installed_plugins.json': JSON.stringify({
         plugins: { 'buildy@market': [{ scope: 'user', installPath: '$HOME/plugins/buildy' }] },
       }),
       '$HOME/plugins/buildy/.claude-plugin/plugin.json': JSON.stringify({ name: 'buildy' }),
@@ -245,7 +245,7 @@ describe('remote Skill scanners', () => {
 
   it('probes a multi-Skill plugin without dropping or reordering entries', async () => {
     const files: Record<string, string> = {
-      '$HOME/.claude/plugins/installed_plugins.json': JSON.stringify({
+      '$HOME/.xdt-server/v1/claude-home/plugins/installed_plugins.json': JSON.stringify({
         plugins: { 'bulk@market': [{ scope: 'user', installPath: '$HOME/plugins/bulk' }] },
       }),
       '$HOME/plugins/bulk/.claude-plugin/plugin.json': JSON.stringify({ name: 'bulk' }),

@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { scanClaudeRuntimeSkills } from './customization-scanner.js';
+import { scanClaudeCustomizations, scanClaudeRuntimeSkills } from './customization-scanner.js';
 
 const roots: string[] = [];
 
@@ -139,5 +139,48 @@ describe('scanClaudeRuntimeSkills', () => {
       kind: 'skill',
       scope: 'global',
     }));
+  });
+
+  it('merges plugin Skills from every project supplied to the SkillHub scan', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-multi-project-'));
+    roots.push(root);
+    const home = path.join(root, 'home');
+    const projectA = path.join(root, 'project-a');
+    const projectB = path.join(root, 'project-b');
+    fs.mkdirSync(path.join(projectA, '.git'), { recursive: true });
+    fs.mkdirSync(path.join(projectB, '.git'), { recursive: true });
+    vi.spyOn(os, 'homedir').mockReturnValue(home);
+
+    const pluginA = path.join(projectA, '.claude', 'plugins', 'alpha');
+    const pluginB = path.join(projectB, '.claude', 'plugins', 'beta');
+    for (const [plugin, pluginName, skillName] of [
+      [pluginA, 'alpha', 'one'],
+      [pluginB, 'beta', 'two'],
+    ] as const) {
+      writeSkill(plugin, skillName);
+      fs.mkdirSync(path.join(plugin, '.claude-plugin'), { recursive: true });
+      fs.writeFileSync(
+        path.join(plugin, '.claude-plugin', 'plugin.json'),
+        JSON.stringify({ name: pluginName }),
+      );
+    }
+    fs.mkdirSync(path.join(home, '.claude', 'plugins'), { recursive: true });
+    fs.writeFileSync(
+      path.join(home, '.claude', 'plugins', 'installed_plugins.json'),
+      JSON.stringify({
+        plugins: {
+          'alpha@market': [{ scope: 'project', projectPath: projectA, installPath: pluginA }],
+          'beta@market': [{ scope: 'project', projectPath: projectB, installPath: pluginB }],
+        },
+      }),
+    );
+
+    const result = await scanClaudeCustomizations({ workingDirs: [projectA, projectB] });
+
+    // 两个项目的插件都要出现；只取第一个根会让 beta 整体缺失，且结果随
+    // 最近项目排序变化。
+    expect(result.items.map((item) => item.name)).toEqual(
+      expect.arrayContaining(['alpha:one', 'beta:two']),
+    );
   });
 });

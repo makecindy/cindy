@@ -1,21 +1,36 @@
 /**
  * Claude Code plugin Skill discovery.
  *
- * Reads `<configDir>/plugins/installed_plugins.json`,
- * `<configDir>/plugins/known_marketplaces.json` and `<configDir>/settings.json`
- * (`enabledPlugins`), resolves every enabled plugin's declared `skills` roots,
- * and returns flat Skill folders named `<plugin>:<skill>` — the same namespace
- * Claude Code uses for plugin Skills.
+ * Reads `<configDir>/plugins/installed_plugins.json`, the marketplace metadata
+ * under `<configDir>/plugins/known_marketplaces.json`, and `enabledPlugins`
+ * from the settings layers that apply to the session, then returns flat Skill
+ * folders named `<plugin>:<skill>` — the same namespace Claude Code uses.
+ *
+ * Every input the scan needs is passed in: the config directory the session's
+ * runtime actually uses, and (optionally) its Git root. The scanner never
+ * infers either. Showing a Skill the running session does not load is worse
+ * than showing nothing, so an unknown context yields no entries rather than a
+ * `~/.claude` guess.
  *
  * All failures are best-effort: an unreadable file or malformed entry yields
  * no Skills instead of breaking the palette / customization scan.
  */
 
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 
 import { shouldPruneSkillScanDirectory } from './skill-scan-limits.js';
+
+export type ClaudePluginSkillScope = 'user' | 'project' | 'local';
+
+export interface ClaudeSkillScanContext {
+  /** Absolute path to the config directory the session's runtime uses. */
+  configDir: string;
+  /** Git root of the session's project, when it has one. */
+  projectRoot?: string;
+  /** Scopes this scan may surface. Defaults to user-only. */
+  scopes?: readonly ClaudePluginSkillScope[];
+}
 
 export interface ClaudePluginSkill {
   pluginName: string;
@@ -26,12 +41,18 @@ export interface ClaudePluginSkill {
   folder: string;
   /** Absolute path to SKILL.md. */
   mdPath: string;
+  scope: ClaudePluginSkillScope;
+  /** Set for project / local scoped installs. */
+  projectRoot?: string;
 }
 
 interface PluginManifest {
   name?: unknown;
   skills?: unknown;
 }
+
+const USER_SCOPES: readonly ClaudePluginSkillScope[] = ['user'];
+const PROJECT_SCOPES: readonly ClaudePluginSkillScope[] = ['user', 'project', 'local'];
 
 function readJson(file: string): unknown {
   try {
@@ -45,6 +66,20 @@ function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : null;
+}
+
+/**
+ * Compare project paths the way the platform does: resolve symlinks and, on
+ * Windows, fold case — `C:\Repo` and `c:\repo` are the same project.
+ */
+function canonicalPath(value: string): string {
+  let resolved = path.resolve(value);
+  try {
+    resolved = fs.realpathSync.native(resolved);
+  } catch {
+    // A missing path keeps its lexical form; comparison still needs to work.
+  }
+  return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
 }
 
 function findSkillFile(folder: string): string | null {
@@ -73,24 +108,36 @@ function addSkill(
   out: Map<string, ClaudePluginSkill>,
   pluginName: string,
   folder: string,
+  scope: ClaudePluginSkillScope,
+  projectRoot: string | undefined,
 ): void {
   const mdPath = findSkillFile(folder);
   if (!mdPath) return;
   const skillName = path.basename(folder);
   const name = `${pluginName}:${skillName}`;
-  if (!out.has(name)) {
-    out.set(name, { pluginName, skillName, name, folder, mdPath });
-  }
+  // Project-scoped entries win over user entries with the same name, matching
+  // the order the collector runs in (user first, project/local after).
+  out.set(name, {
+    pluginName,
+    skillName,
+    name,
+    folder,
+    mdPath,
+    scope,
+    ...(projectRoot ? { projectRoot } : {}),
+  });
 }
 
 function collectSkillsFromRoot(
   root: string,
   pluginName: string,
+  scope: ClaudePluginSkillScope,
+  projectRoot: string | undefined,
   out: Map<string, ClaudePluginSkill>,
 ): void {
   // A declared root may itself be a single Skill folder.
   if (findSkillFile(root)) {
-    addSkill(out, pluginName, root);
+    addSkill(out, pluginName, root, scope, projectRoot);
     return;
   }
 
@@ -110,7 +157,7 @@ function collectSkillsFromRoot(
     // is a namespace to walk into. A directory that is itself a Skill keeps its
     // name: Claude still resolves `/plugin:build` for it.
     if (shouldPruneSkillScanDirectory(entry.name) && !findSkillFile(folder)) continue;
-    addSkill(out, pluginName, folder);
+    addSkill(out, pluginName, folder, scope, projectRoot);
   }
 }
 
@@ -179,26 +226,74 @@ function resolveDirectoryPluginDir(
 }
 
 /**
- * List enabled Claude Code plugin Skills at `configDir`.
+ * Claude merges `enabledPlugins` across settings layers, with the project's
+ * own files winning over the user file. Reading only the user layer would
+ * advertise plugins a project explicitly disabled (and hide ones it enabled).
+ */
+function readEnabledPlugins(context: ClaudeSkillScanContext): Record<string, unknown> {
+  const layers = [path.join(context.configDir, 'settings.json')];
+  if (context.projectRoot) {
+    layers.push(
+      path.join(context.projectRoot, '.claude', 'settings.json'),
+      path.join(context.projectRoot, '.claude', 'settings.local.json'),
+    );
+  }
+  const merged: Record<string, unknown> = {};
+  for (const file of layers) {
+    Object.assign(merged, asRecord(asRecord(readJson(file))?.enabledPlugins) ?? {});
+  }
+  return merged;
+}
+
+function installScope(record: Record<string, unknown> | null): ClaudePluginSkillScope {
+  const scope = record?.scope;
+  if (scope === 'project' || scope === 'local') return scope;
+  // Records without a scope predate the field and are user-level.
+  return 'user';
+}
+
+/**
+ * A user-scoped install applies everywhere; project / local ones only inside
+ * the project they were installed for. An install that cannot be placed is
+ * skipped rather than advertised in every project.
+ */
+function installMatchesContext(
+  record: Record<string, unknown> | null,
+  context: ClaudeSkillScanContext,
+  allowedScopes: readonly ClaudePluginSkillScope[],
+): boolean {
+  if (!record) return false;
+  const scope = installScope(record);
+  if (!allowedScopes.includes(scope)) return false;
+  if (scope === 'user') return true;
+  if (!context.projectRoot) return false;
+  const projectPath = record.projectPath;
+  if (typeof projectPath !== 'string' || !projectPath) return false;
+  return canonicalPath(projectPath) === canonicalPath(context.projectRoot);
+}
+
+/**
+ * List enabled Claude Code plugin Skills for one scan context.
  * Deterministic order: plugin name, then Skill name.
- *
- * Only user-scoped installs are listed. Project / local scoped plugins load
- * exclusively inside their own project, and placing them correctly needs the
- * project root, every candidate project, and per-project settings layers —
- * tracked separately. Until that lands they are excluded rather than shown as
- * global entries the running session may not load.
  */
 export function scanClaudePluginSkills(
-  configDir = path.join(os.homedir(), '.claude'),
+  context: ClaudeSkillScanContext,
 ): ClaudePluginSkill[] {
-  const installed = asRecord(readJson(path.join(configDir, 'plugins', 'installed_plugins.json')));
+  if (!context.configDir) return [];
+  // A project context widens the default: project / local installs are only
+  // reachable once we know which project they belong to.
+  const allowedScopes = context.scopes
+    ?? (context.projectRoot ? PROJECT_SCOPES : USER_SCOPES);
+
+  const installed = asRecord(
+    readJson(path.join(context.configDir, 'plugins', 'installed_plugins.json')),
+  );
   const plugins = asRecord(installed?.plugins);
   if (!plugins) return [];
 
-  const settings = asRecord(readJson(path.join(configDir, 'settings.json')));
-  const enabledPlugins = asRecord(settings?.enabledPlugins) ?? {};
+  const enabledPlugins = readEnabledPlugins(context);
   const marketplaces = asRecord(
-    readJson(path.join(configDir, 'plugins', 'known_marketplaces.json')),
+    readJson(path.join(context.configDir, 'plugins', 'known_marketplaces.json')),
   );
 
   const out = new Map<string, ClaudePluginSkill>();
@@ -207,23 +302,22 @@ export function scanClaudePluginSkills(
     if (enabledPlugins[pluginKey] === false) continue;
     if (!Array.isArray(installs)) continue;
 
-    // Project / local scoped installs are excluded: they only load inside their
-    // own project, and advertising them everywhere would offer commands the
-    // running session cannot resolve. Records without a scope predate the field
-    // and are user-level.
-    const userInstalls = installs
+    const matching = installs
       .map((install) => asRecord(install))
-      .filter((record) => record && (typeof record.scope !== 'string' || record.scope === 'user'));
-    if (userInstalls.length === 0) continue;
+      .filter((record) => installMatchesContext(record, context, allowedScopes));
+    if (matching.length === 0) continue;
 
     const directoryDir = resolveDirectoryPluginDir(pluginKey, marketplaces);
-    const pluginDirs = directoryDir
-      ? [directoryDir]
-      : userInstalls
-          .map((record) => record?.installPath)
-          .filter((value): value is string => typeof value === 'string' && value.length > 0);
 
-    for (const installPath of pluginDirs) {
+    // User installs first so project / local entries override them by name.
+    matching.sort((a, b) => Number(installScope(a) !== 'user') - Number(installScope(b) !== 'user'));
+
+    for (const record of matching) {
+      const scope = installScope(record);
+      const projectRoot = scope === 'user' ? undefined : context.projectRoot;
+      const installPath = directoryDir ?? record?.installPath;
+      if (typeof installPath !== 'string' || !installPath) continue;
+
       const manifest = asRecord(
         readJson(path.join(installPath, '.claude-plugin', 'plugin.json')),
       ) as PluginManifest | null;
@@ -236,7 +330,7 @@ export function scanClaudePluginSkills(
 
       for (const root of manifestSkillRoots(manifest)) {
         const absolute = path.isAbsolute(root) ? root : path.resolve(installPath, root);
-        collectSkillsFromRoot(absolute, pluginName, out);
+        collectSkillsFromRoot(absolute, pluginName, scope, projectRoot, out);
       }
     }
   }

@@ -102,13 +102,20 @@ export interface ListAgentSkillsOptions {
    * that silently do nothing. Normal `/` palette discovery keeps them.
    */
   excludePluginSkills?: boolean;
+  /**
+   * Exact config directory the session's Claude runtime uses, when it differs
+   * from the default `~/.claude` — a non-default subscription account, or an SSH
+   * host whose cc-manager keeps state under its own `claude-home`.
+   *
+   * Host-owned: renderer input must not set this directly. Discovery never
+   * falls back to `~/.claude` when a session's directory is known, because
+   * showing a Skill the runtime does not load is worse than showing nothing.
+   */
+  runtimeConfigDir?: string;
 }
 
 /** Host-only runtime discovery inputs used for security decisions about the live task. */
-export interface ListRuntimeSkillsOptions extends ListAgentSkillsOptions {
-  /** Exact config directory passed to the local runtime process, when it differs from its default. */
-  runtimeConfigDir?: string;
-}
+export type ListRuntimeSkillsOptions = ListAgentSkillsOptions;
 
 export interface ListAgentSkillsResult {
   skills: AgentSkillCommand[];

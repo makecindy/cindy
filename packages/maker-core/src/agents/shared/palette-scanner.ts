@@ -1,5 +1,4 @@
 import { promises as fs } from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 
 import type {
@@ -346,15 +345,29 @@ async function scanClaudeSkillDirs(
   return results;
 }
 
+export interface ClaudePaletteScanContext {
+  /** Omit to list only agent-global skills without a project scope. */
+  workingDir?: string;
+  /** Config directory the session's Claude runtime actually uses. */
+  configDir: string;
+  /** Git root of `workingDir`, when the session has a project context. */
+  projectRoot?: string;
+  /**
+   * Partner (bot) sessions start Claude with `settingSources: []` and mount only
+   * their own plugin roots, so they never load the user's plugins. Offering
+   * those Skills in a partner catalog would be a choice that does nothing.
+   */
+  excludePluginSkills?: boolean;
+}
+
 export async function scanClaudeSlashCommands(
-  workingDir?: string,
-  opts?: { excludePluginSkills?: boolean },
+  context: ClaudePaletteScanContext,
 ): Promise<AgentSlashCommand[]> {
-  const home = os.homedir();
+  const { configDir, workingDir } = context;
   const merged = new Map<string, AgentSlashCommand>();
   const discovered = [
-    ...(await scanClaudeCommandFiles(path.join(home, '.claude', 'commands'), 'global')),
-    ...(await scanClaudeSkillDirs(path.join(home, '.claude', 'skills'), 'global')),
+    ...(await scanClaudeCommandFiles(path.join(configDir, 'commands'), 'global')),
+    ...(await scanClaudeSkillDirs(path.join(configDir, 'skills'), 'global')),
   ];
   if (workingDir && path.isAbsolute(workingDir) && await isDirectory(workingDir)) {
     discovered.push(
@@ -366,19 +379,18 @@ export async function scanClaudeSlashCommands(
   // Enabled Claude Code plugins expose their Skills with a `plugin:skill`
   // namespace. Claude Code's own runtime loads them; the Desktop palette used
   // to scan only user/project folders, so plugin Skills never showed up here.
-  //
-  // Partner (bot) sessions are the exception: they run Claude with
-  // `settingSources: []` and mount only their own plugin roots, so these Skills
-  // would never load. Offering them in a partner catalog would be a choice that
-  // silently does nothing, so the host excludes them there.
-  if (!opts?.excludePluginSkills) {
-    for (const skill of scanClaudePluginSkills(path.join(home, '.claude'))) {
+  if (!context.excludePluginSkills) {
+    for (const skill of scanClaudePluginSkills({
+      configDir,
+      ...(context.projectRoot ? { projectRoot: context.projectRoot } : {}),
+      scopes: context.projectRoot ? ['user', 'project', 'local'] : ['user'],
+    })) {
       discovered.push({
         name: skill.name,
         description: await readMarkdownDescription(skill.mdPath),
         source: 'skill',
         path: skill.mdPath,
-        scope: 'global',
+        scope: skill.scope === 'user' ? 'global' : 'project',
       });
     }
   }

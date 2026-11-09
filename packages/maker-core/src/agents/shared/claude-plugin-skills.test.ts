@@ -51,7 +51,7 @@ describe('scanClaudePluginSkills', () => {
       enabledPlugins: { 'alpha@market': true, 'beta@market': false },
     });
 
-    const skills = scanClaudePluginSkills(configDir);
+    const skills = scanClaudePluginSkills({ configDir });
 
     expect(skills.map((skill) => skill.name)).toEqual(['alpha:one', 'alpha:two']);
     expect(skills[0]?.mdPath).toBe(path.join(alpha, 'skills', 'one', 'SKILL.md'));
@@ -69,19 +69,19 @@ describe('scanClaudePluginSkills', () => {
       plugins: { 'gamma@market': [{ installPath: plugin }] },
     });
 
-    expect(scanClaudePluginSkills(configDir).map((skill) => skill.name)).toEqual([
+    expect(scanClaudePluginSkills({ configDir }).map((skill) => skill.name)).toEqual([
       'gamma:deep',
     ]);
   });
 
   it('returns an empty list when plugin metadata is missing or malformed', () => {
     const configDir = tempRoot();
-    expect(scanClaudePluginSkills(configDir)).toEqual([]);
+    expect(scanClaudePluginSkills({ configDir })).toEqual([]);
 
     writeJson(path.join(configDir, 'plugins', 'installed_plugins.json'), {
       plugins: 'nope',
     });
-    expect(scanClaudePluginSkills(configDir)).toEqual([]);
+    expect(scanClaudePluginSkills({ configDir })).toEqual([]);
   });
 
   it('prefers the directory marketplace checkout over a stale cached installPath', () => {
@@ -107,7 +107,7 @@ describe('scanClaudePluginSkills', () => {
       plugins: { 'nocode@nocode-market': [{ installPath: staleCache }] },
     });
 
-    expect(scanClaudePluginSkills(configDir).map((skill) => skill.name)).toEqual([
+    expect(scanClaudePluginSkills({ configDir }).map((skill) => skill.name)).toEqual([
       'nocode:current',
     ]);
   });
@@ -127,7 +127,7 @@ describe('scanClaudePluginSkills', () => {
       plugins: { 'alpha@alpha-market': [{ installPath: cached }] },
     });
 
-    expect(scanClaudePluginSkills(configDir).map((skill) => skill.name)).toEqual([
+    expect(scanClaudePluginSkills({ configDir }).map((skill) => skill.name)).toEqual([
       'alpha:one',
     ]);
   });
@@ -153,7 +153,7 @@ describe('scanClaudePluginSkills', () => {
       plugins: { 'alpha@alpha-market': [{ installPath: cached }] },
     });
 
-    expect(scanClaudePluginSkills(configDir).map((skill) => skill.name)).toEqual([
+    expect(scanClaudePluginSkills({ configDir }).map((skill) => skill.name)).toEqual([
       'alpha:one',
     ]);
   });
@@ -171,7 +171,7 @@ describe('scanClaudePluginSkills', () => {
 
     // Claude only loads project-scoped plugins inside that project; a global
     // Skill list must not advertise commands the session cannot resolve.
-    expect(scanClaudePluginSkills(configDir)).toEqual([]);
+    expect(scanClaudePluginSkills({ configDir })).toEqual([]);
   });
 
   it('keeps the conventional skills/ root when the manifest declares extra paths', () => {
@@ -189,7 +189,7 @@ describe('scanClaudePluginSkills', () => {
 
     // Claude treats a declared skills path as a supplement, not a replacement;
     // omitting skills/ here would hide Skills the running session still loads.
-    expect(scanClaudePluginSkills(configDir).map((skill) => skill.name)).toEqual([
+    expect(scanClaudePluginSkills({ configDir }).map((skill) => skill.name)).toEqual([
       'delta:conventional',
       'delta:declared',
     ]);
@@ -206,14 +206,15 @@ describe('scanClaudePluginSkills', () => {
 
     // `build` 只在作为 namespace 下钻时才裁剪；目录本身是 Skill 时必须保留，
     // 否则 Claude 能调用的 `/buildy:build` 不会出现在菜单里。
-    expect(scanClaudePluginSkills(configDir).map((skill) => skill.name)).toEqual([
+    expect(scanClaudePluginSkills({ configDir }).map((skill) => skill.name)).toEqual([
       'buildy:build',
     ]);
   });
 
-  it('lists project-scoped installs nowhere while project support is pending', () => {
+  it('includes a project-scoped install only for its own project root', () => {
     const configDir = tempRoot();
     const projectA = path.join(configDir, 'work', 'a');
+    const projectB = path.join(configDir, 'work', 'b');
     const plugin = path.join(configDir, 'plugins', 'cache', 'alpha');
     writeSkill(path.join(plugin, 'skills', 'one'), 'one');
     writeJson(path.join(plugin, '.claude-plugin', 'plugin.json'), { name: 'alpha' });
@@ -223,8 +224,65 @@ describe('scanClaudePluginSkills', () => {
       },
     });
 
-    // 项目级插件需要项目根、全部候选项目与逐项目 settings 才能定位正确，
-    // 在补齐之前一律不展示，避免把只在某个项目生效的条目标成全局。
-    expect(scanClaudePluginSkills(configDir)).toEqual([]);
+    expect(scanClaudePluginSkills({ configDir, projectRoot: projectA }).map((skill) => ({
+      name: skill.name,
+      scope: skill.scope,
+      projectRoot: skill.projectRoot,
+    }))).toEqual([{ name: 'alpha:one', scope: 'project', projectRoot: projectA }]);
+
+    // 无关项目与无项目上下文的扫描都不应看到它。
+    expect(scanClaudePluginSkills({ configDir, projectRoot: projectB })).toEqual([]);
+    expect(scanClaudePluginSkills({ configDir })).toEqual([]);
+  });
+
+  it('lets project settings layers override the user enabledPlugins', () => {
+    const configDir = tempRoot();
+    const project = path.join(configDir, 'work', 'a');
+    const plugin = path.join(configDir, 'plugins', 'cache', 'alpha');
+    writeSkill(path.join(plugin, 'skills', 'one'), 'one');
+    writeJson(path.join(plugin, '.claude-plugin', 'plugin.json'), { name: 'alpha' });
+    writeJson(path.join(configDir, 'plugins', 'installed_plugins.json'), {
+      plugins: { 'alpha@market': [{ scope: 'user', installPath: plugin }] },
+    });
+    writeJson(path.join(configDir, 'settings.json'), {
+      enabledPlugins: { 'alpha@market': true },
+    });
+    writeJson(path.join(project, '.claude', 'settings.json'), {
+      enabledPlugins: { 'alpha@market': false },
+    });
+
+    // 无项目上下文时只看用户层 → 启用。
+    expect(scanClaudePluginSkills({ configDir })).toHaveLength(1);
+    // 项目层禁用 → 该项目的菜单里不该出现。
+    expect(scanClaudePluginSkills({ configDir, projectRoot: project })).toEqual([]);
+
+    // local 层优先级最高，重新启用。
+    writeJson(path.join(project, '.claude', 'settings.local.json'), {
+      enabledPlugins: { 'alpha@market': true },
+    });
+    expect(scanClaudePluginSkills({ configDir, projectRoot: project })
+      .map((skill) => skill.name)).toEqual(['alpha:one']);
+  });
+
+  it('prefers a project-scoped install over a user install of the same Skill', () => {
+    const configDir = tempRoot();
+    const project = path.join(configDir, 'work', 'a');
+    const userPlugin = path.join(configDir, 'plugins', 'cache', 'alpha');
+    const projectPlugin = path.join(project, '.claude', 'plugins', 'alpha');
+    writeSkill(path.join(userPlugin, 'skills', 'one'), 'one');
+    writeSkill(path.join(projectPlugin, 'skills', 'one'), 'one');
+    writeJson(path.join(userPlugin, '.claude-plugin', 'plugin.json'), { name: 'alpha' });
+    writeJson(path.join(projectPlugin, '.claude-plugin', 'plugin.json'), { name: 'alpha' });
+    writeJson(path.join(configDir, 'plugins', 'installed_plugins.json'), {
+      plugins: {
+        'alpha@market': [
+          { scope: 'user', installPath: userPlugin },
+          { scope: 'local', projectPath: project, installPath: projectPlugin },
+        ],
+      },
+    });
+
+    const [skill] = scanClaudePluginSkills({ configDir, projectRoot: project });
+    expect(skill).toMatchObject({ name: 'alpha:one', scope: 'local', projectRoot: project });
   });
 });

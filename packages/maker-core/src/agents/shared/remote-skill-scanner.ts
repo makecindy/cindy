@@ -1,5 +1,7 @@
 import path from 'node:path';
 
+import { remoteClaudeConfigDir } from '@cindy/maker-shared';
+
 import type { RemoteAgentFileOps } from '../base-agent.js';
 import type { AgentSkillCommand, ListAgentSkillsResult } from '../../types/palette.js';
 import { shouldPruneSkillScanDirectory } from './skill-scan-limits.js';
@@ -318,11 +320,16 @@ async function scanRemotePluginSkillRoot(
   return probed.filter((skill): skill is AgentSkillCommand => skill !== null);
 }
 
-/** Enabled, user-scoped Claude Code plugin Skills on the remote host. */
+/**
+ * Enabled, user-scoped Claude Code plugin Skills on the remote host.
+ *
+ * Reads the directory the remote daemon actually uses — `claude-home`, not
+ * `~/.claude`; cc-manager keeps Cindy state out of the host's global config.
+ */
 export async function scanRemoteClaudePluginSkills(
   fileOps: RemoteAgentFileOps,
 ): Promise<AgentSkillCommand[]> {
-  const configDir = '$HOME/.claude';
+  const configDir = remoteClaudeConfigDir('$HOME');
   const installed = asRecord(
     await readRemoteJson(fileOps, `${configDir}/plugins/installed_plugins.json`),
   );
@@ -382,11 +389,17 @@ export async function scanRemoteClaudeSkills(input: {
   excludePluginSkills?: boolean;
 }): Promise<ListAgentSkillsResult> {
   const merged = new Map<string, AgentSkillCommand>();
+  // Same directory the remote daemon runs with; see remoteClaudeConfigDir.
+  const remoteConfigDir = remoteClaudeConfigDir('$HOME');
   const sources = [
-    ...(await scanClaudeCommands(input.fileOps, '$HOME/.claude/commands', 'global')),
+    ...(await scanClaudeCommands(
+      input.fileOps,
+      path.posix.join(remoteConfigDir, 'commands'),
+      'global',
+    )),
     ...(await scanSkillDirectories({
       fileOps: input.fileOps,
-      root: '$HOME/.claude/skills',
+      root: path.posix.join(remoteConfigDir, 'skills'),
       scope: 'global',
     })),
     ...(input.excludePluginSkills ? [] : await scanRemoteClaudePluginSkills(input.fileOps)),

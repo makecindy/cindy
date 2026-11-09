@@ -66,12 +66,20 @@ const KIND_ORDER: Record<Kind, number> = { skill: 0, command: 1, agent: 2 };
 export async function scanClaudeCustomizations(
   opts: ListCustomizationsOptions,
 ): Promise<ListCustomizationsResult> {
-  return scanClaudeCustomizationsAtConfig(opts, path.join(os.homedir(), '.claude'));
+  // Each working dir contributes its own Git root; SkillHub passes the whole
+  // project catalogue, not just the active one.
+  const roots = (opts.workingDirs ?? []).map((dir) => resolveGitRoot(dir));
+  return scanClaudeCustomizationsAtConfig(
+    opts,
+    path.join(os.homedir(), '.claude'),
+    roots.length > 0 ? roots : [undefined],
+  );
 }
 
 function scanClaudeCustomizationsAtConfig(
   opts: ListCustomizationsOptions,
   configDir: string,
+  projectRoots?: readonly (string | undefined)[],
 ): ListCustomizationsResult {
   const workingDirs = opts.workingDirs ?? [];
   const kindFilter = opts.kinds && opts.kinds.length > 0 ? new Set(opts.kinds) : null;
@@ -81,16 +89,33 @@ function scanClaudeCustomizationsAtConfig(
 
   // Enabled Claude Code plugins contribute Skills with a `plugin:skill`
   // namespace. They are not part of the user/project folder sources above.
+  //
+  // SkillHub can ask about several projects at once, and each project may have
+  // its own installs and settings overrides. Scan every project root and keep
+  // the most specific entry per Skill name, so reordering recent projects never
+  // changes what the page shows.
   if (!kindFilter || kindFilter.has('skill')) {
-    for (const skill of scanClaudePluginSkills(configDir)) {
+    const roots = projectRoots && projectRoots.length > 0 ? projectRoots : [undefined];
+    const byName = new Map<string, ReturnType<typeof scanClaudePluginSkills>[number]>();
+    for (const root of new Set(roots)) {
+      for (const skill of scanClaudePluginSkills({
+        configDir,
+        ...(root ? { projectRoot: root } : {}),
+      })) {
+        const existing = byName.get(skill.name);
+        if (!existing || existing.scope === 'user') byName.set(skill.name, skill);
+      }
+    }
+    for (const skill of byName.values()) {
       result.items.push(
         readFolderSkill(
           {
             engine: 'claude-code',
             kind: 'skill',
-            scope: 'global',
+            scope: skill.scope === 'user' ? 'global' : 'project',
             dir: skill.folder,
             namePrefix: skill.pluginName,
+            ...(skill.projectRoot ? { workingDir: skill.projectRoot } : {}),
           },
           skill.folder,
           skill.mdPath,
@@ -112,6 +137,27 @@ function scanClaudeCustomizationsAtConfig(
   return result;
 }
 
+/**
+ * Nearest Git root at or above `workingDir`, or undefined when the path is not
+ * inside a repository. Project-scoped plugin installs and project settings are
+ * keyed by this root — a session started in `/repo/packages/app` still uses
+ * `/repo/.claude`, so callers must not pass the raw cwd.
+ */
+export function resolveGitRoot(workingDir: string): string | undefined {
+  let current: string;
+  try {
+    current = fs.realpathSync(workingDir);
+  } catch {
+    current = path.resolve(workingDir);
+  }
+  while (true) {
+    if (fs.existsSync(path.join(current, '.git'))) return current;
+    const parent = path.dirname(current);
+    if (parent === current) return undefined;
+    current = parent;
+  }
+}
+
 /** Native slash-command discovery walks to the nearest Git root (or filesystem root).
  * Keep this runtime view separate from SkillHub's explicitly owned project list.
  * Legacy commands and Skills share Claude's slash-command namespace, so callers
@@ -131,8 +177,14 @@ export async function scanClaudeRuntimeSkills(
     if (parent === current) break;
     current = parent;
   }
+  // The walk stops at the nearest Git root (or filesystem root), so the first
+  // entry is the project root iff a `.git` was actually found there. Plugin
+  // installs and project settings are keyed by that root, not by the cwd.
+  const root = workingDirs[0];
+  const projectRoot = root && fs.existsSync(path.join(root, '.git')) ? root : undefined;
   return scanClaudeCustomizationsAtConfig(
     { workingDirs, kinds: ['skill', 'command'] },
     configDir,
+    [projectRoot],
   );
 }

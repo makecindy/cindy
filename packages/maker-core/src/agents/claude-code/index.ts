@@ -208,7 +208,11 @@ import type {
 } from '../../types/memory.js';
 import type { McpProviderContext } from '../../interfaces/mcp-provider.js';
 import { claudeDisabledSkillOverrides, snapshotDisabledSkillLaunch, currentDisabledSkillLaunchPaths } from '../shared/skill-activation.js';
-import { scanClaudeCustomizations, scanClaudeRuntimeSkills } from './customization-scanner.js';
+import {
+  resolveGitRoot,
+  scanClaudeCustomizations,
+  scanClaudeRuntimeSkills,
+} from './customization-scanner.js';
 import { prepareManagedSkillPlugins } from './managed-skill-plugins.js';
 import { resolveAllowedManagedSkills, snapshotManagedSkillGrants } from '../shared/managed-skill-policy.js';
 import {
@@ -1163,6 +1167,10 @@ export class ClaudeCodeAgent extends BaseAgent {
   }
 
   override async listAgentSkills(opts: ListAgentSkillsOptions): Promise<ListAgentSkillsResult> {
+    // The session's own config directory. `runtimeConfigDir` is host-resolved
+    // and already accounts for non-default subscription accounts; the default
+    // below only covers sessions running on the default account.
+    const configDir = opts.runtimeConfigDir ?? path.join(os.homedir(), '.claude');
     if (opts.remoteHostId) {
       const fileOps = this.deps.getRemoteAgentFileOps?.(opts.remoteHostId);
       if (!fileOps) throw new Error('Claude Code remote Skill discovery requires remote file operations');
@@ -1172,8 +1180,12 @@ export class ClaudeCodeAgent extends BaseAgent {
         excludePluginSkills: opts.excludePluginSkills,
       });
     }
-    const raw = await scanClaudeSlashCommands(opts.workingDir, {
-      excludePluginSkills: opts.excludePluginSkills,
+    const projectRoot = opts.workingDir ? resolveGitRoot(opts.workingDir) : undefined;
+    const raw = await scanClaudeSlashCommands({
+      ...(opts.workingDir ? { workingDir: opts.workingDir } : {}),
+      configDir,
+      ...(projectRoot ? { projectRoot } : {}),
+      ...(opts.excludePluginSkills ? { excludePluginSkills: true } : {}),
     });
     return {
       skills: [...await this.managedSkillCommands(raw.map((item) => item.name)), ...raw.map((c) => ({

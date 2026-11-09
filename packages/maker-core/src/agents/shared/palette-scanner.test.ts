@@ -48,7 +48,7 @@ describe('scanClaudeSlashCommands', () => {
         'utf8',
       );
 
-      const commands = await scanClaudeSlashCommands();
+      const commands = await scanClaudeSlashCommands({ configDir: path.join(home, '.claude') });
 
       expect(commands).toEqual(expect.arrayContaining([
         expect.objectContaining({
@@ -88,7 +88,7 @@ describe('scanClaudeSlashCommands', () => {
         );
       }
 
-      const commands = await scanClaudeSlashCommands();
+      const commands = await scanClaudeSlashCommands({ configDir: path.join(home, '.claude') });
 
       expect(commands.map((command) => command.name)).toContain('nested');
       expect(commands.map((command) => command.name)).not.toContain('too-deep');
@@ -118,7 +118,7 @@ describe('scanClaudeSlashCommands', () => {
       );
       await symlink(targetSkill, linkedSkill, process.platform === 'win32' ? 'junction' : 'dir');
 
-      const commands = await scanClaudeSlashCommands(workingDir);
+      const commands = await scanClaudeSlashCommands({ workingDir, configDir: path.join(home, '.claude') });
 
       expect(commands).toContainEqual(expect.objectContaining({
         name: 'shared-global',
@@ -155,7 +155,7 @@ describe('scanClaudeSlashCommands', () => {
         'utf8',
       );
 
-      const commands = await scanClaudeSlashCommands(workingDir);
+      const commands = await scanClaudeSlashCommands({ workingDir, configDir: path.join(home, '.claude') });
 
       expect(commands).toContainEqual(expect.objectContaining({
         name: 'folded',
@@ -203,7 +203,7 @@ describe('scanClaudeSlashCommands', () => {
         'utf8',
       );
 
-      const commands = await scanClaudeSlashCommands();
+      const commands = await scanClaudeSlashCommands({ configDir: path.join(home, '.claude') });
 
       expect(commands).toContainEqual(expect.objectContaining({
         name: 'alpha:browser',
@@ -214,7 +214,8 @@ describe('scanClaudeSlashCommands', () => {
 
       // 伙伴会话不加载用户安装的插件，catalog 必须排除这些条目，
       // 否则用户勾选后只会得到「显示已启用但并不生效」。
-      const partnerCommands = await scanClaudeSlashCommands(undefined, {
+      const partnerCommands = await scanClaudeSlashCommands({
+        configDir: path.join(home, '.claude'),
         excludePluginSkills: true,
       });
       expect(partnerCommands.some((cmd) => cmd.name === 'alpha:browser')).toBe(false);
