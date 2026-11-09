@@ -188,6 +188,9 @@ function recoveryDesktop(relay: RecoveryRelay, id: string) {
     client, subscriptions: registry, isProviderSharePeer, isSharedTaskPeer,
     cancelLinkAcceptRetry: noOp, readDeviceLinkSettings: () => ({ remoteControlEnabled: true }),
     isControllerRevoked: () => false, resolveControllerName: (_peer: string, name: string) => name,
+    // This recovery-only harness fixes permissions to allowed; bind the new
+    // admission observer so the actual handleLinkOpen can reach its replay callback.
+    noteControllerAccessAllowed: noOp,
     MAX_CONTROLLER_CAPABILITIES: 32, MAX_CONTROLLER_CAPABILITY_LEN: 80,
     topicSubscriptionControllers: new Set(), acceptedLinkControllers: new Set(),
     DEVICE_LINK_CAPABILITY_BACKGROUND_LINK_V1, DEVICE_LINK_CAPABILITY_GITHUB_READ_V1,

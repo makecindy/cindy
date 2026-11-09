@@ -1,6 +1,6 @@
 import { modelWithInterface } from '@cindy/model-providers';
 import { sessionModelInterface } from './session-model-interface.js';
-import { ANSWER_DELIVERY_PROMPT } from '@cindy/maker-shared/rich-answer-guide';
+import { PI_ANSWER_DELIVERY_PROMPT } from '@cindy/maker-shared/rich-answer-guide';
 import { listCindyManagedSkills } from './managed-skills.js';
 import { scanLocalCustomizations } from '../skillhub/customizationScanHost';
 import { resolveCompanionRuntimeEnvironment } from '../bot-import/runtime.js';
@@ -777,6 +777,8 @@ export function resolvePiBinaryPath(): string | null {
 
 class DesktopPiAuthAdapter implements AuthAdapter {
   async getState(options?: AuthAdapterOptions): Promise<AuthState> {
+    if (options?.nativeSubscriptionAccount && options.providerId === 'openai')
+      return options.nativeSubscriptionAccount.readState();
     const providerId = options?.providerId?.trim() || null;
     if (providerId && subscriptionAccountKind(providerId)) return subscriptionAccountState(providerId);
     // Claude 订阅只供内置 Claude Code CLI 使用,Pi 会话不能选它(旧会话在此明确拒绝)。
@@ -844,6 +846,7 @@ class DesktopPiAuthAdapter implements AuthAdapter {
   }
 
   async getAuthEnv(options?: AuthAdapterOptions): Promise<Record<string, string>> {
+    options?.nativeSubscriptionAccount?.assertCurrent();
     // 共用 cindy provider 的订阅 OAuth 路由用占位符(真凭证由 compat proxy 注入)。
     if (options?.providerId && (PI_OAUTH_SUBSCRIPTION_PROVIDERS.has(options.providerId)
       || isOpenAiSubscriptionProviderId(options.providerId))) {
@@ -876,7 +879,7 @@ function buildDesktopPiRuntimeConfig(): AgentRuntimeConfig {
     taskShellEnv: inputHandoffTaskShellEnv,
     // 保留 host 共用身份段,再追加 Pi 专属行为段；maker-core 会整体追加到 Pi 原生 prompt。
     systemPrompt: composePiSystemPrompt(`${hostSystemPrompt.trim()}\n\n${businessOwnershipPrompt.trim()}`, piSystemPrompt),
-    answerDeliveryPrompt: ANSWER_DELIVERY_PROMPT,
+    answerDeliveryPrompt: PI_ANSWER_DELIVERY_PROMPT,
     // Pi 的 grep 以及 Cindy 覆盖的 find 都固定复用随 Desktop 校验、打包的 rg。
     // 下发绝对路径而非 PATH，避免 Windows 从不受信工作目录优先命中同名 rg.exe。
     managedExecutablePaths: { ripgrep: ripgrepPath },

@@ -1,3 +1,4 @@
+import { parseOutputLimitDetails, type OutputLimitDetails } from '@cindy/maker-shared';
 /**
  * Session — 单次 agent 会话的上层包装。
  *
@@ -215,6 +216,12 @@ export interface SessionOptions {
   turnStallMs?: number;
   /** `holdEventStream` 的最长等待(ms)。省略 = EVENT_STREAM_HOLD_MS；主要供测试注入。 */
   eventStreamHoldMs?: number;
+  /**
+   * 宿主整机拆除(Maker.shutdown / 应用退出 / 账号边界切换)是否已开始。
+   * 注入后,Session 用它识别「空闲会话的进程死亡终态错误」并抑制派发;
+   * 缺省 = 永不抑制,与旧行为一致。
+   */
+  isHostShuttingDown?: () => boolean;
   /**
    * 可选：视觉桥钩子（层 B）。host 注入后，session.send 在组装 UserMessage、交给
    * handle 前调用一次，把用户贴图替换为视觉描述。host 不注入 = 完全跳过，字节级零干扰
@@ -514,6 +521,8 @@ export class Session {
   private closePromise: Promise<void> | null = null;
   /** close/detach 一进入同步入口就置位，早于底层 handle 的异步关闭完成。 */
   private terminationStarted = false;
+  /** 见 SessionOptions.isHostShuttingDown。 */
+  private readonly isHostShuttingDown: () => boolean;
   /**
    * The runtime itself began this teardown (dead handle, crashed loop, failed
    * dispatch, abort / terminal-error recovery). External close()/closeIfIdle()/
@@ -535,6 +544,7 @@ export class Session {
     sdkError?: string;
     errorStatus?: number;
     toolLoop?: import('./types/events.js').ToolLoopErrorDetails;
+    outputLimit?: OutputLimitDetails;
     /** Codex app-server 的结构化错误 tag(如 badRequest / cyberPolicy)。 */
     codexErrorInfo?: string;
   } | null = null;
@@ -660,6 +670,7 @@ export class Session {
     this.turnStallMs =
       opts.turnStallMs ?? parseTurnStallMs(process.env.XDT_SESSION_TURN_STALL_MS);
     this.eventStreamHoldMs = opts.eventStreamHoldMs ?? EVENT_STREAM_HOLD_MS;
+    this.isHostShuttingDown = opts.isHostShuttingDown ?? (() => false);
     this.visionBridge = opts.visionBridge;
     this.toolLoopReviewer = opts.toolLoopReviewer;
     this.asyncUserQuestions = new AsyncUserQuestions({
@@ -712,6 +723,7 @@ export class Session {
     sdkError?: string;
     errorStatus?: number;
     toolLoop?: import('./types/events.js').ToolLoopErrorDetails;
+    outputLimit?: OutputLimitDetails;
     codexErrorInfo?: string;
   } {
     if (
@@ -740,6 +752,9 @@ export class Session {
         ...(this.terminalEventObservedErrorSignals?.toolLoop
           ? { toolLoop: this.terminalEventObservedErrorSignals.toolLoop }
           : {}),
+        ...(this.terminalEventObservedErrorSignals?.outputLimit
+          ? { outputLimit: this.terminalEventObservedErrorSignals.outputLimit }
+          : {}),
         ...(this.terminalEventObservedErrorSignals?.codexErrorInfo
           ? { codexErrorInfo: this.terminalEventObservedErrorSignals.codexErrorInfo }
           : {}),
@@ -755,6 +770,7 @@ export class Session {
       sdkError?: string;
       errorStatus?: number;
       toolLoop?: import('./types/events.js').ToolLoopErrorDetails;
+      outputLimit?: OutputLimitDetails;
       codexErrorInfo?: string;
     } | null;
   } {
@@ -764,6 +780,7 @@ export class Session {
       sdkError?: unknown;
       errorStatus?: unknown;
       toolLoop?: unknown;
+      outputLimit?: unknown;
       codexErrorInfo?: unknown;
     } | null;
     const errorMessage = errorData?.message;
@@ -772,6 +789,7 @@ export class Session {
       sdkError?: string;
       errorStatus?: number;
       toolLoop?: import('./types/events.js').ToolLoopErrorDetails;
+      outputLimit?: OutputLimitDetails;
       codexErrorInfo?: string;
     } = {};
     if (typeof errorData?.reason === 'string' && errorData.reason.length > 0) {
@@ -785,6 +803,8 @@ export class Session {
     }
     const toolLoop = parseToolLoopErrorDetails(errorData?.toolLoop);
     if (toolLoop) signals.toolLoop = toolLoop;
+    const outputLimit = parseOutputLimitDetails(errorData?.outputLimit);
+    if (outputLimit) signals.outputLimit = outputLimit;
     // Codex 的结构化 tag 是有界枚举名(translator 只取 tag,不带原文),不需要脱敏。
     if (typeof errorData?.codexErrorInfo === 'string' && /^[A-Za-z][A-Za-z0-9_]{0,63}$/u.test(errorData.codexErrorInfo)) {
       signals.codexErrorInfo = errorData.codexErrorInfo;
@@ -796,6 +816,7 @@ export class Session {
         signals.sdkError ||
         signals.errorStatus !== undefined ||
         signals.toolLoop ||
+        signals.outputLimit ||
         signals.codexErrorInfo
           ? signals
           : null,
@@ -832,6 +853,7 @@ export class Session {
       sdkError?: string;
       errorStatus?: number;
       toolLoop?: import('./types/events.js').ToolLoopErrorDetails;
+      outputLimit?: OutputLimitDetails;
     } | null;
   } | null {
     const snapshot = this.terminalObservedDuringReservation;
@@ -1705,11 +1727,13 @@ export class Session {
 
   private settleUnfinishedTurn(message: string): void {
     if (!this.hasUnsettledTurn()) return;
+    const usage = this.handle.getPendingTurnUsage?.();
     if (this.abortRecoveryScheduledFor === this.turnGeneration) {
-      this.fanOutEvent({ type: 'done', data: { status: 'cancelled' }, source: this.agentKind });
+      this.fanOutEvent({ type: 'done', data: { status: 'cancelled', ...(usage ? { usage } : {}) }, source: this.agentKind });
     } else {
       this.fanOutEvent({ type: 'error', data: {
         message, isTerminal: true, reason: 'session_event_loop_crashed',
+        ...(usage ? { usage } : {}),
       }, source: this.agentKind });
     }
   }
@@ -1737,6 +1761,7 @@ export class Session {
       if (this.handle.detach) {
         await this.handle.detach(teardown);
       } else {
+        if (this.handle.getPendingTurnUsage) this.settleUnfinishedTurn(SESSION_CLOSED_MID_TURN_MESSAGE);
         await this.handle.close(teardown);
       }
       detachSucceeded = true;
@@ -3603,6 +3628,17 @@ export class Session {
           observedGeneration = this.turnGeneration;
         }
         if (this.terminationStarted) continue;
+        // 宿主整机拆除已开始时,空闲会话收到的子进程死亡终态错误不属于任何轮次;
+        // 照常派发会落一条伪造的「上轮失败」记录(#8831)。有在跑/未收口轮次时
+        // 仍照常派发,不吞真实失败。
+        if (
+          this.isHostShuttingDown() &&
+          isTerminalAgentErrorEvent(event) &&
+          !this.isTurnRunning() &&
+          !this.hasUnsettledTurn()
+        ) {
+          continue;
+        }
         // origin 打标与终态清理都收在 fanOutEvent 里（看门狗合成的事件共用同一语义，
         // 见那里的注释）。关闭门一旦占住，旧 handle 的迟到事件不得再改写业务状态。
         this.fanOutEvent(event, observedGeneration, awaitingGeneration, true);

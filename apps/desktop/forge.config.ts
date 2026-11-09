@@ -725,6 +725,30 @@ function applyMacPackagedDisplayName(buildPath: string, platform: string): void 
   }
 }
 
+/**
+ * macOS Live Activity (Agent Island in the system Dynamic Island). `build.mjs` skips
+ * every step unless the macOS 27.3 SDK and Apple silicon are available, so older
+ * toolchains still package the app without it. The widget extension needs its own
+ * App Sandbox entitlements: release signing must sign
+ * `Contents/PlugIns/CindyAgentActivity.appex` with
+ * `native/agent-island/live-activity/extension.entitlements` before the app.
+ */
+function runAgentActivityBuild(args: string[]): void {
+  const result = spawnSync(
+    process.execPath,
+    [path.join(__dirname, 'native/agent-island/live-activity/build.mjs'), ...args],
+    { stdio: 'inherit' },
+  );
+  if (result.error || result.status !== 0) throw new Error('macOS Live Activity build failed');
+}
+
+function installMacAgentActivityExtension(buildPath: string, platform: string, arch: string): void {
+  if (platform !== 'darwin' || process.platform !== 'darwin') return;
+  for (const appDir of fs.readdirSync(buildPath).filter((n) => n.endsWith('.app'))) {
+    runAgentActivityBuild(['extension', path.join(buildPath, appDir), arch]);
+  }
+}
+
 function targetPlatformKey(targetPlatform: string, targetArch: string): string {
   return `${targetPlatform}-${targetArch}`;
 }
@@ -831,6 +855,8 @@ function extraResourcesForTarget(targetPlatform: string): string[] {
   // 仅 darwin 有此功能,其它平台不打进包。exec 位由 git 跟踪,extraResource 拷贝时保留。
   if (targetPlatform === 'darwin') {
     base.push('resources/cli');
+    // 「设置 → 外观 → Dock 图标」运行期交给 app.dock.setIcon 的圆角 PNG。
+    base.push('resources/icon-dock.png', 'resources/app-icons');
   }
   if (targetPlatform === 'linux') base.push('resources/linux');
 
@@ -1908,8 +1934,8 @@ const config: ForgeConfig = {
     //
     //   Windows / Linux 完全忽略此字段。
     extendInfo: {
-      NSMicrophoneUsageDescription: 'This app needs access to the microphone for voice input.',
-      NSAudioCaptureUsageDescription: 'Share computer audio with your connected remote desktop.',
+      NSMicrophoneUsageDescription: 'Cindy uses the microphone for voice input and screen recordings.',
+      NSAudioCaptureUsageDescription: 'Cindy captures computer audio for screen recordings and your connected remote desktop.',
       // agent 会话中访问受 TCC 保护的目录(桌面/文稿/下载)时，macOS 需要这些声明才能向
       // 用户展示授权弹窗；缺失时系统直接静默拒绝，不弹窗。
       NSDesktopFolderUsageDescription:
@@ -1978,8 +2004,8 @@ const config: ForgeConfig = {
     // helper bundles also need the usage description for macOS TCC to register
     // the packaged app correctly in Privacy & Security > Microphone.
     extendHelperInfo: {
-      NSMicrophoneUsageDescription: 'This app needs access to the microphone for voice input.',
-      NSAudioCaptureUsageDescription: 'Share computer audio with your connected remote desktop.',
+      NSMicrophoneUsageDescription: 'Cindy uses the microphone for voice input and screen recordings.',
+      NSAudioCaptureUsageDescription: 'Cindy captures computer audio for screen recordings and your connected remote desktop.',
       NSDesktopFolderUsageDescription:
         "Cindy's AI agent needs access to read and write files on your Desktop.",
       NSDocumentsFolderUsageDescription:
@@ -2062,6 +2088,14 @@ const config: ForgeConfig = {
       buildWindowsAtomicRenameHelper(platform, arch);
       buildWindowsTaskbarAddon(platform, arch);
       if (platform === 'darwin') {
+        const desktopBlurBuild = spawnSync(
+          process.execPath,
+          [path.join(__dirname, 'native/desktop-blur/build.mjs'),
+            path.join(__dirname, 'resources/tools/desktop-blur/cindy-desktop-blur.node'), arch],
+          { stdio: 'inherit' },
+        );
+        if (desktopBlurBuild.error || desktopBlurBuild.status !== 0)
+          throw new Error('Native desktop blur build failed');
         const trackpadBuild = spawnSync(
           process.execPath,
           [
@@ -2073,6 +2107,11 @@ const config: ForgeConfig = {
         );
         if (trackpadBuild.error || trackpadBuild.status !== 0)
           throw new Error('Native trackpad build failed');
+        runAgentActivityBuild([
+          'addon',
+          path.join(__dirname, 'resources/tools/agent-island/cindy-agent-activity.node'),
+          arch,
+        ]);
       }
       buildMacVoiceInputModifierShortcutListener(platform, arch);
       buildMacAgentIslandHelper(platform, arch);
@@ -2099,6 +2138,7 @@ const config: ForgeConfig = {
           console.log(`[forge:postPackage] staged ${noticeName} + restricted component disclosure`);
           signPackagedExes(buildPath);
           applyMacPackagedDisplayName(buildPath, opts.platform);
+          installMacAgentActivityExtension(buildPath, opts.platform, opts.arch);
         }
       } finally {
         removeCindySourceMetadata();
@@ -2309,8 +2349,12 @@ const config: ForgeConfig = {
           target: 'preload',
         },
         {
-          // 意识电子脑管子桥(离屏沙箱逻辑页专用;面板 webview 无 preload,
-          // hardener 亦强制 delete。见 brain/runtime/electronSandboxAdapter)。
+          entry: 'src/preload/ghostPagePreload.ts',
+          config: 'vite.ghost-preload.config.ts',
+          target: 'preload',
+        },
+        {
+          // 意识电子脑管子桥，独立于插件可见页面的最小选模桥。
           entry: 'src/preload/ghostPreload.ts',
           config: 'vite.ghost-preload.config.ts',
           target: 'preload',

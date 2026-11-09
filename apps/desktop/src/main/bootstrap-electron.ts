@@ -1,7 +1,13 @@
+import { applyMacWindowBackdrop, setMacSidebarWidth } from './macosDesktopBlur';
+import { createPersonalBuildMonitor } from './personalBuildMonitor.js';
+import { updatePersonalLocalPlugins } from './cindy-brain/index.js';
+import { observeDesktopStartupResult } from './devStartupStatus.js';
 import { registerRuntimeSettingsSection } from './app-settings/runtime.js';
 import { z as settingsSchema } from 'zod';
 import { deliverRoutineResult, listRoutineDeliveryTargets } from './routines/delivery.js';
 import { flushPluginUsageLifecycle } from './plugin-usage/current.js';
+import { flushSessionPiTurnUsage, retryPendingPiUsageReceipts } from './maker-ipc/piUsageReceipts.js';
+import { onUsagePricingChanged } from './usage/pricingChanges.js';
 import { registerAccessibilitySupportIpc } from './accessibility-support-ipc.js';
 import { mcpAppSchemePrivilege, registerMcpAppProtocol } from './mcp-apps/sandboxProtocol.js';
 import { prepareImportedAutomation, finishImportedAutomation } from './bot-import/automationRuntime.js';
@@ -9,6 +15,7 @@ import { ensureImportedAutomationReady, recoverCompanionImports } from './bot-im
 import { listWorktreeRecycleStatus, controlWorktreeRecycle } from './worktree/recycleControls';
 import { registerFilePeerIpc } from './device-link/filePeer';
 import { registerTaskMigrationIpc } from './task-migration/service';
+import { registerSetupMigration } from './setup-migration/register';
 import { registerLoginItemIpc } from './login-item-ipc.js';
 import { registerMenubarIpc } from './menubar/ipc.js';
 import { initMenubarService, stopMenubarService } from './menubar/service.js';
@@ -84,6 +91,7 @@ import {
 import {
   resolveVibrancyConfig,
   resolveWindowVibrancyConfig,
+  setWindowDesktopBlur,
   setWindowWallpaperCovered,
 } from './vibrancyConfig';
 import { getSessionThinkingSnapshots, getHistoryToolName, drainPersistQueue } from './messagePersistBroadcaster';
@@ -349,6 +357,7 @@ import {
 } from './rsb-browser-bridge/native-popup-surfaces.js';
 import { disposeAndroidAdb } from './mcp-integrations/android.js';
 import { shutdownCodexEnvironment } from './mcp-integrations/codexEnvironment.js';
+import { countLiveBridgeMcpSessions } from './mcp-integrations/codexHttpBridge.js';
 import { shutdownPiEnvironment } from './mcp-integrations/piEnvironment.js';
 import { fetchRemoteMediaImageBytes } from './device-link/remoteMediaProtocol';
 import * as imageCacheStore from './imageCacheStore';
@@ -455,6 +464,7 @@ import {
 import { readFileThumbnail } from './fileThumbnail';
 import { createOpenWithHandlers, decodeRegOutput, parseChcpCodepage } from './openWithApps';
 import { resolveShellOpenPathTarget } from './shellOpenPath';
+import { posixDrivePathToWin32 } from '../shared/pathText';
 import { handleOpenFileInBrowser } from './openFileInBrowser';
 import { createWindowsFileUrlOpener } from './windowsFileUrlOpener';
 import { cindyGhostSchemePrivilege } from './cindy-brain/runtime/electronSandboxAdapter';
@@ -551,6 +561,7 @@ import {
 
 import { onQuit, installQuitHandler } from './lifecycle';
 import { initStartupDiagnostics } from './startup-diagnostics';
+import { isRunningUnderArm64Translation } from './arm64Translation';
 import { createStartupGateStallReporter } from './startupGateStallReport';
 import { STARTUP_GATE_STALL_CHANNEL } from '../shared/startupGateStall';
 import {
@@ -561,10 +572,12 @@ import {
   broadcastVoiceInputPowerState,
   installVoiceInputPowerRelease,
 } from './voice-input/powerReleaseNotifier';
-import { reapClaudeOrphansSync } from './claude-orphan-reaper';
+import { reapClaudeOrphansSync, reapHistoricalClaudeOrphans } from './claude-orphan-reaper';
 import { reapCodexToolTreesSync } from './codex-tool-tree-reaper';
 import { startAgentProcessPriorityWatcher } from './agent-process-priority';
 import { registerProcessMonitorIpc } from './process-monitor/ipc.js';
+import { readMainHeapSamplingFlag, startMainHeapSampling } from './process-monitor/heap-sampling.js';
+import { startMemoryLog } from './process-monitor/memory-log.js';
 import { disposeWindowsProcessScanWorkers } from './process-monitor/windowsProcessScanWorkerClient.js';
 import {
   initAppBadgeService,
@@ -574,6 +587,7 @@ import {
 import { initNotificationService, showDeviceSessionDesktopEvent } from './notificationService';
 import { initWecomGroupNotificationIpc } from './wecomGroupNotification';
 import { getAgentIslandService, initAgentIslandService } from './agent-island/service.js';
+import { startAgentIslandQuota } from './agent-island/quota.js';
 import { setCompanionAvatarResolver } from './agent-island/companionIdentity.js';
 import { companionAvatarCache } from './companion-cloud/avatarCacheHost.js';
 import { attachWorkLouderCodexWindowReveal } from './worklouder-codex/index.js';
@@ -594,6 +608,7 @@ import {
   assertTrustedAppRendererEvent,
   isTrustedAppRendererEvent,
   isTrustedCindyRendererWindow,
+  isTrustedTopLevelCindyRendererEvent,
 } from './security/trustedAppRenderer.js';
 
 import { isIpcError } from '../shared/ipc-errors';
@@ -611,10 +626,19 @@ import {
 import { initHeartbeatService } from './heartbeatService';
 import { markStartupMilestone } from './startupTimeline';
 import { registerRemoteDesktopIpc } from './remote-desktop';
+import { isAwayCoverUp, registerAwayGuardIpc, startAwayGuard } from './remote-desktop/awayGuardService';
+import {
+  isDesktopScreenLocked,
+  seedDesktopScreenLocked,
+  msSinceForeignDesktopInput,
+  setPhysicalInputShielded,
+} from './mcp-integrations/computer.js';
 import { initAnalyticsSettingsService, noteAuthColdStartState } from './analyticsSettingsService';
+import { initCrashDiagnosisService } from './crash-diagnosis';
 import { initLogUploadService, scheduleStartupBackfill } from './log-upload';
 import { initPerformanceTraceService } from './performance-trace';
 import { createOpenLogsMenuItem, openLogsDirectory } from './logSupport';
+import { registerSidebarWindowExpansionIpc } from './sidebarWindowExpansionIpc';
 import { WindowManualDragController } from './windowManualDrag';
 import { loadWindowsTaskbarNative } from './windowsTaskbarNative';
 import {
@@ -640,6 +664,8 @@ import { registerSharedTaskIpc } from './device-link/sharedTaskIpc.js';
 import { registerProviderShareIpc } from './device-link/providerShareRuntime.js';
 import { registerSelfHostedRelayIpc } from './device-link/selfHostedRelayRuntime.js';
 import { registerProviderGroupIpc } from './provider-group/ipc.js';
+import { registerSubscriptionAccountsIpc } from './subscription-accounts/ipc.js';
+import { attachDefaultSubscriptionPool, disconnectSubscriptionPool } from './subscription-accounts/runtime.js';
 import { registerProviderGroupRemoteHandler } from './provider-group/remoteRegistration.js';
 import { providerGroupReshare, registerProviderGroupReshare } from './provider-group/reshareRuntime.js';
 import {
@@ -1059,6 +1085,8 @@ import { CURRENT_APP_ID, CURRENT_CINDY_REGION } from '../shared/brandRegion.js';
 import {
   readWindowBehaviorSettings,
   writeLinuxCloseBehavior,
+  writeAwayGuard,
+  writeAwayGuardDelay,
   writeSwallowActivationClick,
   writeWindowsCloseBehavior,
 } from './window-behavior-settings-store.js';
@@ -1117,9 +1145,11 @@ import {
   applyAppearanceToWindow,
   applyAppearanceToWindows,
   getPersistedWindowZoom,
+  installWindowZoomRestoration,
   registerAppearanceSettingsIpc,
   updatePersistedWindowZoom,
 } from './appearance-settings-ipc.js';
+import { applyDockIcon } from './app-icon.js';
 import { registerBillingIpc } from './billing/index.js';
 import {
   initModelAccess,
@@ -1128,7 +1158,7 @@ import {
   refreshXdGatewayModels,
 } from './model-access/index.js';
 import { effectiveXdGatewayBaseUrl } from './model-access/effectiveEndpoint.js';
-import { withCindyGatewayKeyRejectionReport } from './model-access/gatewayKeyRejection.js';
+import { withCindyGatewayKeyRejectionReport, noteCindyGatewayKeyReplaced } from './model-access/gatewayKeyRejection.js';
 import { isLocalDbOwnerCurrent } from './appSessionPolicy.js';
 import { getAppCapabilities, requireAppCapability } from './appCapabilities.js';
 import {
@@ -1174,6 +1204,7 @@ import {
   getGhostBrowserExtensionSlot,
   screenGhostControlPoint,
   resolveGhostControlPointPlugin,
+  diagnoseScheduleHookPluginForActiveOwner,
   getLiveScreenHost,
 } from './cindy-brain/index.js';
 import { setCodexImageAuthBinding } from './cindy-brain/codexImageAuthBinding.js';
@@ -1379,6 +1410,9 @@ async function attemptStartSchedulerOnce(): Promise<void> {
       ...automationGitBaselineHooks,
       screenControlPoint: screenGhostControlPoint,
       resolvePreRunPlugin: (pluginId) => resolveGhostControlPointPlugin('will-schedule-run', pluginId),
+      diagnosePreRunHookFailure: (command) =>
+        diagnoseScheduleHookPluginForActiveOwner(command, async (pluginId) =>
+          (await getPluginMarketService().detail(pluginId)).name || undefined),
     });
     // startScheduler fences resets while its async startup is in flight. Keep
     // the boundary check immediately before listener publication as a second
@@ -1682,6 +1716,7 @@ import {
   keepRecentSync,
   keepRecentSessionCcDebugSync,
   createLogger,
+  getLogDir,
   setCcDebugTailingEnabled,
   type LogLevel,
 } from './logger.js';
@@ -2208,6 +2243,7 @@ async function teardownAuthAccountBoundary(reason: string): Promise<void> {
       });
       await flushPluginTaskLifecycle();
       await flushPluginUsageLifecycle();
+      await flushSessionPiTurnUsage();
       await lifecycleDbClientManager.dispose(reason);
     } finally {
       releaseEndedSuppression();
@@ -2235,6 +2271,7 @@ async function teardownAuthAccountBoundary(reason: string): Promise<void> {
   try {
     await flushPluginTaskLifecycle();
     await flushPluginUsageLifecycle();
+    await flushSessionPiTurnUsage();
     await lifecycleDbClientManager.dispose(reason);
   } finally {
     try {
@@ -2273,14 +2310,14 @@ void clearStalePiSubagentLaunchFence(path.join(app.getPath('userData'), 'pi-agen
   },
 );
 
-try {
-  reapClaudeOrphansSync();
-} catch (err) {
-  // Defensive: reapClaudeOrphansSync already catches its own scan/kill errors
-  // and logs to debug. This only fires on truly unexpected throws (e.g. module
-  // load failure) and must never abort bootstrap.
+// Off the startup critical path: the Windows scan spawns PowerShell (~0.4 s,
+// up to 5 s). The startup variant only reaps dead-parent historical orphans,
+// so a task this instance launches before the scan returns is never killed.
+void reapHistoricalClaudeOrphans().catch((err: unknown) => {
+  // Defensive: the reaper already catches its own scan/kill errors and logs to
+  // debug. This only fires on truly unexpected throws and never aborts bootstrap.
   createLogger('claude-orphan-reaper').warn('initial reap threw', { error: String(err) });
-}
+});
 
 // ── agent 进程优先级降档 watcher(agent 资源占用治理)─────────────────────
 // 设置(processPriority)为 normal 且无欠恢复进程时,每 tick 零成本(不扫进程表);
@@ -2550,7 +2587,10 @@ setEnsureHostForBackend((sessionId) => rsbWindowController.ensureOpenForAutomati
 setIsDetachedForBackend(() => readRsbWindowSettings().detached);
 // 「我的浏览器」后端经 browserExtension 插件槽拿页面控制桥接;槽归 cindy-brain,
 // 这里倒置依赖,browser.ts 不反向 import 插件基座。
-setUserBrowserPageControlProvider(() => getGhostBrowserExtensionSlot().getPageControl());
+setUserBrowserPageControlProvider(
+  () => getGhostBrowserExtensionSlot().getPageControl(),
+  () => getGhostBrowserExtensionSlot().getPageControlUnavailableReason(),
+);
 // The plugin providing "My browser" hides its own page tools from agents: one way to drive the user's browser.
 setPageControlGhostProvider(() => getGhostBrowserExtensionSlot().getPageControl()?.instanceId ?? null);
 setBrowserSessionUploadRootResolver(async (sessionId) => {
@@ -2572,6 +2612,14 @@ registerAppearanceSettingsIpc();
 registerAccessibilitySupportIpc();
 registerLoginItemIpc();
 registerMenubarIpc();
+registerAwayGuardIpc({
+  read: () => {
+    const settings = readWindowBehaviorSettings();
+    return { enabled: settings.awayGuard, delaySeconds: settings.awayGuardDelaySeconds };
+  },
+  writeEnabled: writeAwayGuard,
+  writeDelay: writeAwayGuardDelay,
+});
 
 // ── 资源用量面板 IPC ─────────────────────────────────────────────────
 // 订阅驱动采样(面板不开不采样),interval 已 unref 不拖退出;terminate 只认
@@ -3234,14 +3282,12 @@ ipcMain.handle('app-menu:set-locale', (_event, locale: unknown): { ok: true } =>
  * paths natively and `fs` can read them as-is. On Windows the SDK frequently
  * emits `/x/...` style paths in tool args (Read/Write/Edit `file_path`); the
  * Node `fs` API on Windows treats those as ENOENT, surfacing in the
- * TextLightbox as "File not found".
+ * TextLightbox as "File not found". The `/D:/x` URI-pathname spelling of a
+ * drive path (#8726) is converted by the same helper.
  */
 function posixToWin32(p: string): string {
   if (process.platform !== 'win32' || !p) return p;
-  // `/x/rest` → `X:\rest`. Single drive letter only; deeper segments preserved.
-  const m = /^\/([a-zA-Z])\/(.*)$/.exec(p);
-  if (m) return `${m[1].toUpperCase()}:\\${m[2].replace(/\//g, '\\')}`;
-  return p;
+  return posixDrivePathToWin32(p);
 }
 
 function isPathAllowed(filePath: string): boolean {
@@ -3480,6 +3526,7 @@ const linuxTray = createLinuxTrayController<Menu>({
     return new Tray(icon);
   },
   buildMenu: buildDesktopTrayMenu,
+  tooltip: BRAND_NAME,
   showWindow: () => focusMainWindow(),
   onError: (error) => {
     linuxTrayLog.error('Linux tray operation failed', {
@@ -4099,6 +4146,7 @@ const createWindow = () => {
     autoHideMenuBar: true,
     show: false,
     backgroundColor: bgColor,
+    transparent: true,
     ...(process.platform === 'win32' && winBackdropConfig.backgroundMaterial
       ? {
           backgroundMaterial: winBackdropConfig.backgroundMaterial,
@@ -4139,6 +4187,10 @@ const createWindow = () => {
     if (mainWindow.isDestroyed()) return;
     applyPageZoomLevel(mainWindow, getPersistedWindowZoom());
   });
+  // Conversation switching is an in-page hash navigation, so `did-finish-load`
+  // never fires. Chromium would otherwise restore that URL's stale per-URL zoom
+  // instead of the saved preference, making the window look smaller (#7486).
+  installWindowZoomRestoration(mainWindow);
   // Deep link 模块持有同一个 mainWindow 引用 — 解析出的 URL 通过 webContents.send
   // 推给 renderer (channel 'deep-link:navigate')。关窗时同步清空, 避免给已销毁
   // 的 BrowserWindow 发 IPC 触发 'Object has been destroyed'。
@@ -4654,6 +4706,8 @@ const registerIpcHandlers = () => {
   initNotificationService({
     isCompletionHandledByTeammate: (sessionId) => getAgentIslandService()?.waitForCompletionNotification(sessionId)
       ?? isCompletionHandledByTeammate(sessionId),
+    isTaskAlertShownElsewhere: (kind) => getAgentIslandService()?.ownsTaskAlert(kind) === true,
+    shouldSilenceTaskNotification: (kind) => getAgentIslandService()?.shouldSilenceTaskNotification(kind) === true,
     getWindow: () => getWindow() ?? null,
     feishuIm,
   });
@@ -4690,6 +4744,21 @@ const registerIpcHandlers = () => {
     },
   });
   app.once('will-quit', stopMenubarService);
+  // macOS「离开时继续工作」(默认关):开着时本机不因空闲熄屏锁屏;主人离开后盖黑色遮罩,
+  // 本机有人按键/点击即转系统真锁屏。共享 userData 的被动实例不接管本机屏幕。
+  if (!authManager.isPassiveSharedUserDataInstance()) {
+    startAwayGuard({
+      enabled: () => readWindowBehaviorSettings().awayGuard,
+      delaySeconds: () => readWindowBehaviorSettings().awayGuardDelaySeconds,
+      screenLocked: isDesktopScreenLocked,
+      seedScreenLocked: seedDesktopScreenLocked,
+      msSinceOwnerInput: () => msSinceForeignDesktopInput(),
+    });
+    setPhysicalInputShielded(isAwayCoverUp);
+  }
+  // 灵动岛余量:与菜单栏同一份余量概览(顺序、显示与隐私设置都跟菜单栏),岛开着时才读取。
+  const agentIsland = getAgentIslandService();
+  if (agentIsland) app.once('will-quit', startAgentIslandQuota(agentIsland, getQuotaOverviewService()));
 
   // 全局框选截图快捷键 (键盘快捷键设置里可改)，支持复制、保存、贴图与新任务。
   initRegionScreenshot();
@@ -4819,16 +4888,23 @@ const registerIpcHandlers = () => {
     const win = mainWindowRef;
     if (!win || win.isDestroyed()) return;
     const config = resolveWindowVibrancyConfig(win, familyId, isDark, process.platform);
-    if (process.platform === 'darwin') {
-      win.setVibrancy(config.vibrancy as 'under-window' | null);
-    }
+
     if (process.platform === 'win32' && config.backgroundMaterial) {
       win.setBackgroundMaterial(config.backgroundMaterial);
       win.webContents.send(WINDOW_BACKDROP_MATERIAL_CHANGED_CHANNEL, config.backgroundMaterial);
     }
-    win.setBackgroundColor(config.backgroundColor);
+    if (process.platform === 'darwin') applyMacWindowBackdrop(win, config);
+    else win.setBackgroundColor(config.backgroundColor);
     applyVibrancyToSecondaryWindows(familyId, isDark);
   }
+
+  // Ephemeral local geometry, scoped to the trusted top-level sender's own window.
+  // No persistence, remote channel, window identifier or native handle crosses IPC.
+  ipcMain.on('theme:set-sidebar-width', (event, width: unknown) => {
+    if (process.platform !== 'darwin' || !isTrustedTopLevelCindyRendererEvent(event)) return;
+    const win = BrowserWindow.fromWebContents(event.sender);
+    if (win) setMacSidebarWidth(win, width);
+  });
 
   ipcMain.on('theme:apply-vibrancy', (event, rawPayload: unknown) => {
     assertTrustedAppRendererEvent(event);
@@ -4839,6 +4915,7 @@ const registerIpcHandlers = () => {
       const senderWindow = BrowserWindow.fromWebContents(event.sender);
       if (senderWindow && !senderWindow.isDestroyed()) {
         setWindowWallpaperCovered(senderWindow, payload.wallpaperCovered);
+        setWindowDesktopBlur(senderWindow, payload.desktopBlur ?? null);
       }
     }
     if (process.platform === 'win32') {
@@ -4850,6 +4927,7 @@ const registerIpcHandlers = () => {
       );
     }
     rememberResolvedAppTheme(payload.isDark);
+    applyDockIcon(undefined, payload.isDark);
     applyWindowVibrancy(payload.familyId, payload.isDark);
   });
 
@@ -4860,6 +4938,10 @@ const registerIpcHandlers = () => {
   ipcMain.on('get-os-release', (event) => {
     event.returnValue = os.release();
   });
+
+  // 只读布尔值，但仍只回答 Cindy 自有顶层页面；其它来源一律视为未转译。
+  ipcMain.handle('app:get-arm64-translation', (event) =>
+    isTrustedTopLevelCindyRendererEvent(event) && isRunningUnderArm64Translation());
 
   // 首启亮色门的同步会话线索(见 authSessionHint.ts):renderer bootstrap 在
   // 任何渲染前判定「真首启」,localStorage 为空但主进程持有存量会话(持久化
@@ -5451,6 +5533,7 @@ const registerIpcHandlers = () => {
     resetProviderModelAutoRefreshCooldowns('anthropic');
     // Binding is the commit point; auxiliary refresh must not prolong the cancellable login.
     connectClaudeNativeLogin();
+    await attachDefaultSubscriptionPool('anthropic');
     // CLI 登录态变化的监听先于绑定触发,那次探测会因尚未绑定而跳过;绑定后再请求一次。
     requestAnthropicModelProbe();
     void broadcastClaudeAuthStateChanged();
@@ -5474,6 +5557,7 @@ const registerIpcHandlers = () => {
       // Cancel a pending CLI login before revoking the binding; keep the CLI's own login.
       try {
         cancelClaudeCliLogin();
+        await disconnectSubscriptionPool('anthropic');
         await disconnectClaudeNativeLogin();
         if (owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending())
           return { authorized: false };
@@ -5646,6 +5730,7 @@ const registerIpcHandlers = () => {
   // 窗口控件按 event.sender 解析目标窗口 —— 「在新窗口打开」会有多个完整窗口,
   // min/max 必须操作"点按钮的那个窗口"而非全局主窗。fallback 到 mainWindowRef 兜底
   // 极端情况(sender 已销毁等)。
+  registerSidebarWindowExpansionIpc();
   ipcMain.on('window-minimize', (event) => {
     const window = BrowserWindow.fromWebContents(event.sender) ?? mainWindowRef;
     if (window) minimizeWindow(window);
@@ -6008,11 +6093,13 @@ const registerIpcHandlers = () => {
         if (!filepath) return false;
         if (!safeStorage.isEncryptionAvailable()) return false;
         const encrypted = safeStorage.encryptString(value);
+        const keyOwnerScope = key === 'api_key' ? activeOwnerScopeKey() : null;
         const prepareResult = await prepareApiKeyChangeMaybeRestartCodex(key);
         if (!prepareResult.ok) return false;
         const dir = path.dirname(filepath);
         const hadPrevious = fs.existsSync(filepath);
         const previousContent = hadPrevious ? fs.readFileSync(filepath, 'utf-8') : null;
+        const previousXdKey = key === 'api_key' ? getProviderSecretStore().get('xd') : null;
         let mutated = false;
         let finalized = false;
         fs.mkdirSync(dir, { recursive: true });
@@ -6025,6 +6112,9 @@ const registerIpcHandlers = () => {
             // 手填 XD key 保存成功:来源标记翻 manual(endpoint 回落编译期常量,
             // 与 model-access 自动下发的 endpoint 解耦,见 credentialsStore 注释)。
             if (key === 'api_key') {
+              if (activeOwnerScopeKey() === keyOwnerScope) {
+                noteCindyGatewayKeyReplaced(previousXdKey, value);
+              }
               noteManualXdKeySaved();
               notifyProviderKeyChanged('xd');
             }
@@ -6520,6 +6610,32 @@ const registerIpcHandlers = () => {
       //
       // 不进 device-link allowlist:updater 类 channel 按 allowlist 顶部注释属「永不放行」,
       // 且远程控制端不会代替用户点被控端的更新重启。
+      // Only the explicitly configured developer supervisor receives this handshake.
+      // Packaged apps and ordinary dev launches retain their existing lifecycle.
+      if (process.platform === 'darwin' && !app.isPackaged && process.env.CINDY_PERSONAL_MONITOR_DIR && process.env.CINDY_PERSONAL_GENERATION) {
+        let personalReady = false;
+        const stopObserving = observeDesktopStartupResult((ready) => { personalReady = ready; });
+        const tick = createPersonalBuildMonitor({
+          directory: process.env.CINDY_PERSONAL_MONITOR_DIR,
+          generation: process.env.CINDY_PERSONAL_GENERATION,
+          pid: process.pid, now: Date.now,
+          ready: () => personalReady && !!mainWindowRef && !mainWindowRef.isDestroyed()
+            && !mainWindowRef.webContents.isDestroyed() && !mainWindowRef.webContents.isCrashed(),
+          remoteReady: () => getDeviceLinkStatus() === 'online',
+          idle: () => powerMonitor.getSystemIdleTime() >= 120,
+          busy: () => hasUpdateRelaunchBusyActivity({
+            readSynchronousBusy: () => isAppSessionBoundaryPending() || authManager.isAuthFlowBusy()
+              || getUpdateRelaunchControllers().length > 0 || hasInFlightRemoteInvokes(),
+            readScheduleBusy: async () => (await evaluateRelaunchBusyActivity(readRelaunchActivitySources())).busy,
+          }),
+          quitting: () => isQuitting,
+          quit: () => app.quit(),
+          updateLocalPlugins: updatePersonalLocalPlugins,
+        });
+        const monitorTimer = setInterval(() => { void tick().catch(() => {}); }, 2_000);
+        monitorTimer.unref();
+        app.once('will-quit', () => { clearInterval(monitorTimer); stopObserving(); });
+      }
       registerRelaunchBusyActivityIpc(readRelaunchActivitySources, {
         describeTurns: () => describeRelaunchTurns(() => listInTurnSessionIds(getMakerIfReady())),
       });
@@ -7283,6 +7399,17 @@ const registerIpcHandlers = () => {
       app.getPath('appData'),
     ),
     getAllowedProjectRoots: listAllowedSkillhubProjectRoots,
+  });
+  // 新电脑设置(docs/product-rules/new-device-setup-migration.md)：从同账号另一台电脑读取非秘密配置，
+  // 经本机原有安装器与设置存储重建；同时应答另一台电脑的只读快照请求。
+  registerSetupMigration({
+    getMaker: getMakerCore,
+    getManagedSkillRoots: () => getGhostManager().managedRootDirs(),
+    getBuiltInSkills: () => builtInSkillDescriptors(
+      app.getPath('userData'),
+      app.getPath('appData'),
+    ),
+    getMainWindow: () => mainWindowRef,
   });
   disposeSkillhubAutoSyncAuthListener = authManager.onAuthStateChange((state) => {
     if (!state.isAuthenticated) return;
@@ -9306,6 +9433,7 @@ const WINDOWS_APP_USER_MODEL_ID = CURRENT_APP_ID;
  *      `node_modules\electron\dist\electron.exe` 且 Arguments 为空的一律删除
  *
  * 静默 try/catch：用户手动删过 / 没装过 / 权限问题 / PowerShell 异常都不影响主流程。
+ * 快路径在调用时同步执行；返回的 Promise 在防御扫描结束后 resolve，启动流程不等待它。
  */
 function cleanupLegacyDevShortcut(): Promise<void> {
   if (process.platform !== 'win32') return Promise.resolve();
@@ -9403,20 +9531,9 @@ app.on('ready', async () => {
 
   initializeUpdatePresentationRecovery();
 
-  // mac dev 下 Dock 显示的是 Electron 默认图标——macOS 忽略 BrowserWindow.icon,
-  // Dock 图标取自可执行 bundle 的 icns,而 dev 跑的是 node_modules 里的官方
-  // Electron 二进制。这里 dev-only 手动设成 Cindy 图标;packaged 版由
-  // resources/icon.icns 自然生效,不需要也不该动。
-  // 使用 icon-dock.png（generate-mac-icns.mjs 产出，已套 Apple 圆角网格）；
-  // setIcon 会原样显示资源，不会替应用图标自动加圆角。
-  if (!app.isPackaged && process.platform === 'darwin') {
-    try {
-      app.dock?.setIcon(path.join(__dirname, '../../resources/icon-dock.png'));
-    } catch (err) {
-      // 仅影响 dev Dock 观感,失败不挡启动
-      createLogger('dock-icon').warn('setIcon failed', { error: String(err) });
-    }
-  }
+  // dev 跑的是 node_modules 里的官方 Electron 二进制，Dock 默认显示 Electron 图标；
+  // packaged 版由 icon.icns 生效。这里同时恢复用户在「外观」里选的 Dock 图标。
+  applyDockIcon();
 
   await ensureMainAppPresence('app-ready');
 
@@ -9471,7 +9588,13 @@ app.on('ready', async () => {
   //
   // 必须在创建任何 Notification 之前调用。macOS / Linux 不需要。
   if (process.platform === 'win32') {
-    await cleanupLegacyDevShortcut();
+    // 旧快捷方式清理不阻塞建窗：已知文件名的快路径在调用时同步完成；防御扫描要冷启
+    // PowerShell（约 0.4–0.5 秒），放到后台。扫描只删目标为 dev electron.exe 且无参数的
+    // .lnk（已知来源注册的是 XdtMaker.Dev 等旧 AUMID），打包版自己的快捷方式指向安装目录，
+    // 不会被匹配；下面设置 AUMID 也不依赖它们，晚一点删掉不影响本次启动的通知。
+    void cleanupLegacyDevShortcut().catch((err: unknown) => {
+      console.warn('[AUMID] legacy dev shortcut cleanup failed: %s', err);
+    });
     app.setAppUserModelId(WINDOWS_APP_USER_MODEL_ID);
     console.log('[AUMID] runtime=%s', WINDOWS_APP_USER_MODEL_ID);
   }
@@ -9814,7 +9937,8 @@ app.on('ready', async () => {
         dbClientLog.warn('legacy profile override cleanup threw (non-fatal)', err);
       });
       // 价格表作用域依赖当前 localDb 用户与 provider-secret owner;必须等用户 DB ready 后再预热。
-      void prewarmModelPricing();
+      void prewarmModelPricing().then(() => retryPendingPiUsageReceipts())
+        .catch(error => dbClientLog.warn('Pi usage startup recovery failed', { message: String(error) }));
       // DB 可读与 Agent 可启动是两个不同的 readiness：现有任务列表只依赖前者，不能
       // 被网络模型发现阻塞；新建 / 发送则经 registerMakerIpc 的中心入口等待下方 barrier，
       // 保留 issue #1196 的路由正确性（Anthropic 清单回来前不能先按 XD 默认建 Opus）。
@@ -10116,6 +10240,7 @@ app.on('ready', async () => {
   // log-upload:settings-get 决定入口可用性;更重要的是崩溃即时路径要在
   // onFatalShutdown 上就位,否则 createWindow 之后立刻崩的那一次拿不到标记。
   initLogUploadService();
+  initCrashDiagnosisService();
   initPerformanceTraceService(() => mainWindowRef);
   // Local profiles bypass authManager's cloud claim path. Await the same
   // asynchronous PID provenance scan before the first BrowserWindow exists so
@@ -10171,6 +10296,7 @@ app.on('ready', async () => {
   // 自建中转服务(docs/self-hosted-relay-plan.md):本机中转与加入别的中转。
   registerSelfHostedRelayIpc();
   registerProviderGroupIpc({ reshare: providerGroupReshare });
+  registerSubscriptionAccountsIpc();
   registerProviderGroupRemoteHandler({ onGroupChanged: () => providerGroupReshare.kick('group') });
   registerProviderGroupReshare();
   registerFilePeerIpc();
@@ -10234,17 +10360,23 @@ app.on('ready', async () => {
   );
   authCredentialRecovery.request();
 
-  // Memory diagnostics — dev only, log per-process memory every 30s
-  if (!app.isPackaged) {
-    setInterval(() => {
-      const parts = app
-        .getAppMetrics()
-        .map(
-          (m) =>
-            `${m.type}:${(m.memory.workingSetSize / 1024).toFixed(0)}MB/${m.cpu.percentCPUUsage.toFixed(1)}%`,
-        );
-      console.log(`[mem] ${parts.join(' | ')}`);
-    }, 30_000);
+  // 各进程内存采样进 main 日志(scope memory-usage):正式版 10 分钟一次,dev 保持 30s。
+  const stopMemoryLog = startMemoryLog({
+    getMetrics: () => app.getAppMetrics(),
+    memoryUsage: () => process.memoryUsage(),
+    counters: () => ({ mcpBridgeSessions: countLiveBridgeMcpSessions() }),
+    log: createLogger('memory-usage'),
+    intervalMs: app.isPackaged ? 10 * 60_000 : 30_000,
+  });
+  onQuit('memory-usage-log', stopMemoryLog, 'sync');
+  // 主进程堆采样:只在开发版、日志目录 log-config.json 写了 mainHeapSampling 时运行。
+  if (!app.isPackaged && readMainHeapSamplingFlag(getLogDir())) {
+    const stopHeapSampling = startMainHeapSampling({
+      dir: path.join(getLogDir(), 'heap-sampling'),
+      intervalMs: 30 * 60_000,
+      log: createLogger('heap-sampling'),
+    });
+    onQuit('main-heap-sampling', stopHeapSampling, 'sync');
   }
 });
 
@@ -10659,9 +10791,12 @@ onQuit('hook-control', () => disposeHookControl(), 'sync');
 onQuit('git-context', () => disposeGitContext(), 'async');
 
 // Post-async 阶段: 串行跑, 确保依赖 async 阶段产物的清理 (WAL checkpoint by close)。
+const stopPiUsageRecovery = onUsagePricingChanged(() => { void retryPendingPiUsageReceipts(); });
+onQuit('pi-usage-recovery', stopPiUsageRecovery, 'sync');
 onQuit('db-client', async () => {
   await flushPluginTaskLifecycle();
   await flushPluginUsageLifecycle();
+  await flushSessionPiTurnUsage();
   await lifecycleDbClientManager.dispose('quit');
 }, 'post-async');
 onQuit('local-db-close', () => localDbCloseDb(), 'post-async');

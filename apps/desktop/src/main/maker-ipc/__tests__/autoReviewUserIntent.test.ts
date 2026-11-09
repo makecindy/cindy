@@ -100,6 +100,7 @@ function user(text: string, clientId = text): AutoReviewHistoryMessage {
   };
 }
 const current = { clientId: 'latest', content: { text: '修吧，改完跑相关测试。' } };
+const MAX_INTENT = createAutoReviewIntentProjection().maxIntentChars;
 
 describe('steer authorization restoration', () => {
   it.each([undefined, { clientId: 'new', content: { text: 'Continue.' } },
@@ -356,7 +357,7 @@ describe('restored Auto authorization', () => {
 
   it('does not retain an approval while discarding an oversized intervening revocation', () => {
     const intent = restoreAutoReviewUserIntent(
-      [user('Send the report.'), user('x'.repeat(1000) + 'DO NOT SEND' + 'x'.repeat(1000))],
+      [user('Send the report.'), user('x'.repeat(MAX_INTENT / 2) + 'DO NOT SEND' + 'x'.repeat(MAX_INTENT / 2))],
       current,
     );
     expect(intentText(intent)).not.toContain('Send the report');

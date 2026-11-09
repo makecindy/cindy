@@ -708,7 +708,17 @@
       "unread": "No leído"
     },
     "artifactCount_many": "{{count}} archivos",
-    "prCount_many": "{{count}} PRs"
+    "prCount_many": "{{count}} PRs",
+    "viewMr": "Ver MR",
+    "viewPrMr": "Ver PR",
+    "mrCount": "{{count}} MRs",
+    "prMrCount": "{{count}} PRs",
+    "mrCount_one": "{{count}} MR",
+    "prMrCount_one": "{{count}} PR",
+    "mrCount_other": "{{count}} MRs",
+    "prMrCount_other": "{{count}} PRs",
+    "mrCount_many": "{{count}} MRs",
+    "prMrCount_many": "{{count}} PRs"
   },
   "companionProfile": {
     "avatar": "avatar",

@@ -13,7 +13,7 @@ import {
 } from '../../shared/providerOrder.js';
 import { ownerScopedUserDataPath } from '../appSessionState.js';
 import { desktopMakerLogger } from './logger-adapter.js';
-import { createOverrideSettingsFile } from './override-settings-file.js';
+import { createOverrideSettingsFile, portableOverrideSettings } from './override-settings-file.js';
 
 const log = desktopMakerLogger.child('provider-order-store');
 const CINDY_AI_PROVIDER_ID = 'xd';
@@ -58,3 +58,6 @@ export function setProviderOrder(visibleProviderIds: readonly string[]): boolean
 }
 
 export const __testing = { normalize, reset: () => store.reset() };
+
+/** New-computer setup: values the user changed here (docs/product-rules/new-device-setup-migration.md). */
+export const providerOrderPortableSettings = portableOverrideSettings(store);

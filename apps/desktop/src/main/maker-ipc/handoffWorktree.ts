@@ -1,5 +1,7 @@
 import path from 'node:path';
 
+import { isReviewSessionSource } from '../../shared/sessionSource.js';
+
 import type {
   CreateWorktreeReq,
   CreateWorktreeResp,
@@ -159,4 +161,44 @@ export async function prepareHandoffWorktree(
     return { ok: false, message: resp.error.message || resp.error.kind };
   }
   return { ok: true, sessionId, meta: resp.meta };
+}
+
+export type PrepareTaskWorktreeResult =
+  | { ok: true; meta: WorktreeMeta; created: boolean }
+  | { ok: false; errorCode: 'PRECONDITION_FAILED' | 'INVALID_ARGS' | 'WORKTREE_UNAVAILABLE'; message: string };
+
+/**
+ * create_task_worktree:给**已有任务自己**绑定一个托管 worktree(不搬任务、不重启 Agent)。
+ *
+ * 任务的 workingDir 与 Agent 进程保持不变:徽标与归档回收都以 worktreeStore 绑定为准,
+ * Agent 在返回的路径里干活即可。已有绑定时原样返回(created=false),不会建第二个。
+ * 没有 dispatcher 语义:调用方此刻没有 worktree,按「新任务」从刚 fetch 的远端默认分支切出。
+ */
+export async function prepareTaskWorktree(
+  deps: Omit<HandoffWorktreeDeps, 'createId'>,
+  input: {
+    sessionId: string;
+    caller: { workingDir: string | null; status: string; source: string | null };
+    repoDir?: string;
+  },
+): Promise<PrepareTaskWorktreeResult> {
+  const { sessionId, caller, repoDir } = input;
+  if (caller.status !== 'active') {
+    return { ok: false, errorCode: 'PRECONDITION_FAILED', message: 'Only an active task can create a worktree.' };
+  }
+  if (isReviewSessionSource(caller.source)) {
+    return { ok: false, errorCode: 'PRECONDITION_FAILED', message: 'Review tasks are read-only.' };
+  }
+  const existing = deps.getForSession(sessionId);
+  if (existing) return { ok: true, meta: existing, created: false };
+  if (repoDir !== undefined && !path.isAbsolute(repoDir)) {
+    return { ok: false, errorCode: 'INVALID_ARGS', message: 'repo_dir must be an absolute path.' };
+  }
+  const directory = repoDir ?? caller.workingDir;
+  if (!directory) {
+    return { ok: false, errorCode: 'INVALID_ARGS', message: 'This task has no working directory; pass repo_dir.' };
+  }
+  const prepared = await prepareHandoffWorktree({ ...deps, createId: () => sessionId }, undefined, directory);
+  if (!prepared.ok) return { ok: false, errorCode: 'WORKTREE_UNAVAILABLE', message: prepared.message };
+  return { ok: true, meta: prepared.meta, created: true };
 }

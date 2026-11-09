@@ -6,8 +6,13 @@ import { Pressable, ScrollView, StyleSheet, Linking, View } from 'react-native';
 import { Check, ChevronDown, ChevronUp, Monitor, ScanSearch, MessageCircle, X } from 'lucide-react-native';
 import { useTranslation } from 'react-i18next';
 import type { BotDelegationListResult } from '@cindy/maker-shared/botDelegation';
-import { todoDateLabel, todoDue, todoDueSoon, type TeammateTodo } from '@cindy/maker-shared/teammate-todo';
-import { prStatusKey, sessionPrUrl } from '@cindy/maker-shared';
+import {
+  todoDateLabel,
+  todoDue,
+  todoDueSoon,
+  type TeammateTodo,
+} from '@cindy/maker-shared/teammate-todo';
+import { prNumberLabel, prStatusKey, sessionPrUrl } from '@cindy/maker-shared';
 import { isAccessRevokedRemoteError } from '@cindy/maker-shared/device-link-contract';
 import { getSessionListActivityAt } from '@cindy/maker-shared/session-activity';
 import type { RemoteResource } from '@cindy/device-link';
@@ -430,11 +435,35 @@ function PrOutput({ pr }: { pr: HomeSessionPrInfo }) {
   const { t } = useTranslation();
   const styles = useThemedStyles(makeStyles);
   const [failed, setFailed] = useState(false);
-  const visual = prStatusVisual(pr.status?.ok ? pr.status.status : null, colors);
-  return <><Row icon={<visual.Icon size={ICON_GLYPH} color={visual.color} strokeWidth={iconStroke.regular} />}
-    title={(pr.status?.ok ? pr.status.title?.trim() : undefined) || `${pr.ref.owner}/${pr.ref.repo}`} inlineMeta
-    onPress={() => { setFailed(false); void Linking.openURL(sessionPrUrl(pr.ref)).catch(() => setFailed(true)); }} testID="companion.glance.pr" />
-    {failed ? <Text accessibilityRole="alert" style={styles.error}>{t('devices.glance.openFailed')}</Text> : null}</>;
+  const visual = prStatusVisual(
+    pr.status?.ok ? pr.status.status : null,
+    colors,
+    pr.status?.ok ? pr.status.conflicts : null,
+  );
+  return (
+    <>
+      <Row
+        icon={
+          <visual.Icon size={ICON_GLYPH} color={visual.color} strokeWidth={iconStroke.regular} />
+        }
+        title={
+          (pr.status?.ok ? pr.status.title?.trim() : undefined) ||
+          `${pr.ref.owner}/${pr.ref.repo} ${prNumberLabel(pr.ref)}`
+        }
+        inlineMeta
+        onPress={() => {
+          setFailed(false);
+          void Linking.openURL(sessionPrUrl(pr.ref)).catch(() => setFailed(true));
+        }}
+        testID="companion.glance.pr"
+      />
+      {failed ? (
+        <Text accessibilityRole="alert" style={styles.error}>
+          {t('devices.glance.openFailed')}
+        </Text>
+      ) : null}
+    </>
+  );
 }
 
 const makeStyles = (colors: ThemeColors) => StyleSheet.create({

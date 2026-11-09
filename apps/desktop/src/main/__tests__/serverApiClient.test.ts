@@ -190,6 +190,7 @@ describe('serverApiFetch', () => {
     ).resolves.toEqual({ ok: true });
 
     expect(mocks.refresh).toHaveBeenCalledTimes(1);
+    expect(mocks.refresh).toHaveBeenCalledWith({ serverRejectedToken: true });
     expect(bodyFactory).toHaveBeenCalledTimes(2);
     expect(mocks.netFetch).toHaveBeenNthCalledWith(
       1,
@@ -317,6 +318,7 @@ describe('serverApiFetch', () => {
       }),
     ).resolves.toEqual({ ok: true });
     expect(mocks.refresh).toHaveBeenCalledTimes(1);
+    expect(mocks.refresh).toHaveBeenCalledWith({ serverRejectedToken: true });
     expect(mocks.invalidateSession).not.toHaveBeenCalled();
   });
 

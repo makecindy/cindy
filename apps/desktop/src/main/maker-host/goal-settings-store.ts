@@ -21,6 +21,7 @@ import path from 'node:path';
 import { desktopMakerLogger } from './logger-adapter.js';
 import {
   createOverrideSettingsFile,
+  portableOverrideSettings,
   type OverrideSettingsState,
 } from './override-settings-file.js';
 
@@ -92,3 +93,6 @@ export function resetGoalSettings(): GoalSettings {
 }
 
 export const __testing = { normalize, DEFAULTS };
+
+/** New-computer setup: values the user changed here (docs/product-rules/new-device-setup-migration.md). */
+export const goalPortableSettings = portableOverrideSettings(store);

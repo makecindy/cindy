@@ -1,3 +1,4 @@
+import { usageHistorySettings } from './UsageHistorySection.settings-search';
 import { ErrorNotice } from '@/components/ui/error-notice';
 /**
  * UsageHistorySection — 设置 → 用量历史 (issue #2785)。
@@ -55,6 +56,7 @@ import {
   usageRangeDay,
   type UsageHistoryRange,
 } from './usageHistoryStats';
+import { SettingsPageHeader } from '@/components/ui/settings-rows';
 
 /** 与 useUsageHistory 的拉取窗口一致 (20 周)。 */
 const HEATMAP_WINDOW_DAYS = 140;
@@ -185,12 +187,12 @@ export function UsageHistorySection(): React.JSX.Element {
 
   return (
     <div className="usage-history-charts pb-2">
-      <h2 className="mb-1.5 text-16 font-medium text-[var(--text-primary)]">
-        {t('settings.tabs.usage')}
-      </h2>
-      <p className="mb-4 max-w-[640px] text-13 leading-[1.5] text-[var(--settings-section-desc)]">
-        {t('usageHistory.description')}
-      </p>
+      <div className="mb-6 max-w-[640px]">
+        <SettingsPageHeader
+          title={t(usageHistorySettings.usage.titleKey)}
+          description={t('usageHistory.description')}
+        />
+      </div>
 
       <div className="mb-4 flex flex-wrap items-center gap-3">
         <span className="text-13 font-medium text-[var(--text-secondary)]">
@@ -201,7 +203,7 @@ export function UsageHistorySection(): React.JSX.Element {
           <UsageDeviceSelect value={device} devices={devices ?? []} onValueChange={setDevice} />
         ) : null}
         <Select.Root value={range} onValueChange={handleRangeChange}>
-          <Select.Trigger
+          <Select.Trigger data-setting-id={usageHistorySettings.usage.id}
             aria-label={t('usageHistory.range.ariaLabel')}
             className="flex h-9 w-[190px] items-center justify-between gap-2 rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3 text-13 text-[var(--text-primary)] outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]"
           >
@@ -248,7 +250,7 @@ export function UsageHistorySection(): React.JSX.Element {
         </Select.Root>
         <label className="flex min-w-0 items-center gap-2 text-13 text-[var(--text-secondary-mid)]">
           {t('usageHistory.range.date')}
-          <Input
+          <Input data-setting-id={usageHistorySettings.usage.id}
             type="date"
             size="md"
             className="w-[180px] max-w-full"
