@@ -129,16 +129,27 @@ function hasLaunchRunner(c, release, dataDir = c.runtime.dataDir) {
 // Keep credential identity resolution inside the launched terminal, before the
 // restart wrapper snapshots its environment. Legacy and supervised starts share it.
 export const personalLaunchCommand = 'source "$PERSONAL_TOOLS_DIR/credential-signing.zsh" || exit 1; resolve_signing_identity || exit 1; exec "$@"';
+/** ps comm is the executable path, not argv: a grep/shell mentioning the app is not an owner. */
+export function fixedAppProcesses(table, app) {
+  const executable = path.join(app, 'Contents/MacOS/Electron');
+  return table.split('\n').flatMap(line => {
+    const match = /^\s*(\d+)\s+(.+?)\s*$/.exec(line);
+    return match && match[2] === executable ? [Number(match[1])] : [];
+  });
+}
+function assertFixedAppStopped(app) {
+  const ps = spawnSync('ps', ['-axo', 'pid=,comm='], {encoding:'utf8',maxBuffer:64*1024*1024});
+  check(ps.status === 0, 'Cannot check runtime ownership');
+  const pids = fixedAppProcesses(ps.stdout, app);
+  check(pids.length === 0, `Personal app is still running (PID ${pids.join(', ')}); no replacement`);
+  return false;
+}
 function start(c, release, { mock = false } = {}) {
   check(process.stdin.isTTY, 'Run the personal developer launcher in Terminal; a live TTY is required for the repository startup wrapper');
   verifyRelease(release);
   const nativeFile = path.join(release.directory, 'apps/desktop/resources/personal-native.json');
   const runtime = fs.existsSync(nativeFile) ? read(nativeFile).runtime : null;
-  const fixedApp = runtime && !mock && c.runtime.mode === 'shared' ? installFixedRuntime(runtime, c.runtime.personalApp, {verifySignature:verifyDeveloperSignature, isRunning:app => {
-    const ps = spawnSync('ps', ['-axo','command='], {encoding:'utf8',maxBuffer:64*1024*1024});
-    check(ps.status === 0, 'Cannot check runtime ownership');
-    return ps.stdout.includes(app + '/Contents/MacOS/Electron');
-  }}) : null;
+  const fixedApp = runtime && !mock && c.runtime.mode === 'shared' ? installFixedRuntime(runtime, c.runtime.personalApp, {verifySignature:verifyDeveloperSignature, isRunning:assertFixedAppStopped}) : null;
   const generation = randomUUID(), dir = path.join(root(c), 'launches', generation);
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 }); fs.chmodSync(dir, 0o700);
   const env = runtimeEnv(c, cli);
@@ -191,15 +202,26 @@ async function stopOwned(c, release, dataDir = c.runtime.dataDir, expectedPid) {
   if (expectedPid !== undefined) check(s.pid === expectedPid && s.ready, 'Confirmed instance changed; no signal sent');
   if (!s.pid) { check(!hasLaunchRunner(c, release, dataDir), 'A launch runner is still active; recovery deferred'); return; }
   process.kill(s.pid, 'SIGTERM');
-  const deadline = Date.now() + 60000;
-  while (Date.now() < deadline) {
-    const now = snapshot(c, release, dataDir);
-    check(!now.unknown, 'Process state unknown during shutdown');
-    if (!now.pid && !hasLaunchRunner(c, release, dataDir)) return;
-    await sleep(1000);
-  }
-  throw new Error('Application did not exit normally; no forced kill or version switch');
+  await waitForOwnedShutdown(s.pid, {
+    inspect: () => snapshot(c, release, dataDir),
+    runnerActive: () => hasLaunchRunner(c, release, dataDir),
+  });
 }
+/** Instance records disappear during will-quit, before the OS process necessarily exits.
+ * Retain the original PID across every observation; absence from whoami alone is not shutdown. */
+export async function waitForOwnedShutdown(pid, {
+  inspect, runnerActive, isAlive = alive, wait = sleep, now = Date.now, timeoutMs = 60000,
+}) {
+  const deadline = now() + timeoutMs;
+  while (now() < deadline) {
+    const observed = inspect();
+    check(!observed.unknown, 'Process state unknown during shutdown');
+    if (!isAlive(pid) && !observed.pid && !runnerActive()) return;
+    await wait(1000);
+  }
+  throw new Error(`Application PID ${pid} did not exit normally; no forced kill or version switch`);
+}
+
 async function smoke(c, release) {
   const launched = start(c, release, { mock: true });
   const startup = await import(pathToFileURL(path.join(c.app.checkout, 'scripts/restart-desktop-remote.mjs')));

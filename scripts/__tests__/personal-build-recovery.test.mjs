@@ -6,7 +6,7 @@ import os from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { main } from '../personal-build.mjs';
 import { RecoveryJournal, compatibility, durableWrite } from '../personal-build/recovery.mjs';
-import { readHeartbeat, acquire, validateBootstrap, validateManualUpgrade, restartWithSupervisorLock } from '../personal-build/automatic.mjs';
+import { readHeartbeat, acquire, validateBootstrap, validateManualUpgrade, restartWithSupervisorLock, waitForOwnedShutdown, fixedAppProcesses } from '../personal-build/automatic.mjs';
 
 // Script integration: the old launcher forgot its fallback at first ready and had no durable trial
 // recovery. Real on-disk journal, separate terminating writer process, injected time (no sleeps).
@@ -259,4 +259,25 @@ test('manual-restart CLI records lock refusal and refuses reuse of an attempt re
     if (tty) Object.defineProperty(process.stdin, 'isTTY', tty); else delete process.stdin.isTTY;
     unlock();
   }
+});
+
+// Regression: will-quit removes identity metadata before the original main PID is gone.
+// Integration seam used by stopOwned; virtual clock makes the real timeout/order observable.
+test('shutdown waits for the original PID even after instance metadata disappears', async () => {
+  let tick = 0;
+  await waitForOwnedShutdown(42, { inspect: () => ({}), runnerActive: () => tick < 3,
+    isAlive: pid => { assert.equal(pid, 42); return tick < 2; },
+    now: () => tick, wait: async () => { tick++; }, timeoutMs: 5 });
+  assert.equal(tick, 3);
+  tick = 0;
+  await assert.rejects(waitForOwnedShutdown(42, { inspect: () => ({}), runnerActive: () => false,
+    isAlive: () => true, now: () => tick, wait: async () => { tick++; }, timeoutMs: 3 }), /PID 42 did not exit normally/);
+  await assert.rejects(waitForOwnedShutdown(42, { inspect: () => ({unknown:true}),
+    runnerActive: () => false, isAlive: () => false }), /Process state unknown/);
+});
+
+test('fixed app ownership matches executable paths, not mentions or nested helper apps', () => {
+  const app = '/Users/fixture/Applications/Cindy Personal.app', exe = app + '/Contents/MacOS/Electron';
+  assert.deepEqual(fixedAppProcesses(` 42 ${exe}\n43 /bin/zsh\n44 /usr/bin/grep\n45 ${exe}-other\n46 ${app}/Contents/PlugIns/Widget.appex/Contents/MacOS/Widget\n`, app), [42]);
+  assert.deepEqual(fixedAppProcesses(`43 /bin/zsh -c echo ${exe}\n44 /usr/bin/grep ${exe}\n`, app), []);
 });

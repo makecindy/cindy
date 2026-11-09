@@ -669,3 +669,13 @@ with the wrapper's own output going to a regular file. Do not wrap this again in
 white window. A nonzero wrapper exit immediately fails acceptance even if a main PID remains.
 A successful wrapper exit means readiness only, not the end of the running app. The interface
 still uses the development server; prebuilt static UI delivery is not part of this change.
+
+
+Manual shutdown retains the observed original PID until the OS reports it gone, in addition to
+waiting for the instance record and launch runner to disappear. `will-quit` can remove the record
+before the process ends; that gap must not authorize installation. The wait is bounded at 60 seconds;
+unknown observations or timeout stop the switch without a forced kill. Fixed-app installation checks
+`ps` executable paths (`comm`), not text anywhere in command arguments, and reports blocking PIDs.
+A diagnostic shell/grep mentioning the app therefore cannot masquerade as its running main process.
+Regression coverage: `personal-build-recovery.test.mjs` (original PID outlives metadata, timeout,
+unknown observations, and executable-path ownership).
