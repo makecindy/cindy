@@ -265,6 +265,7 @@ import {
 } from './anthropic-compat-proxy-host.js';
 import { resolveRemoteClaudeRoute } from './remote-claude-route.js';
 import { resolveDesktopClaudeSubagentModelAccess } from './subagent-model-access.js';
+import { resolveDesktopPiSubagentModelExecutionPolicy } from './subagent-model-execution-policy-host.js';
 import { claudeSubagentUsageBridge } from './claude-subagent-usage-bridge.js';
 import { createAutoPermissionReviewer } from './auto-permission-reviewer.js';
 import { createToolLoopReviewer } from './tool-loop-reviewer.js';
@@ -2576,6 +2577,7 @@ export function getMaker(): Maker {
         availableModels: deriveAvailableModels(getDesktopSelectableCatalog(), 'pi'),
       },
       resolvePiRuntimeModels: () => deriveAvailableModels(getDesktopSelectableCatalog(), 'pi'),
+      resolvePiSubagentModelExecutionPolicy: resolveDesktopPiSubagentModelExecutionPolicy,
       resolvePiRuntimeModelDescriptor: (providerId, modelId) =>
         resolvePiRuntimeModelDescriptor(getDesktopSelectableCatalog(), providerId, modelId, {
           localOverrides: getLocalCatalogOverridesSnapshot(),

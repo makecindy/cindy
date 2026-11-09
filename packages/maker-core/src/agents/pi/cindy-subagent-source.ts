@@ -123,7 +123,7 @@ const CINDY_SUBAGENT_EXTENSION_BODY = String.raw`/**
 import { spawnSync } from 'node:child_process';
 import { createHmac } from 'node:crypto';
 import { randomUUID } from 'node:crypto';
-import { chmodSync, copyFileSync, lstatSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, closeSync, copyFileSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync, writeSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 const TOOL_NAME = 'subagent';
 const MARKER = '__cindySubagent';
@@ -259,7 +259,14 @@ function readRuntimeSnapshot() {
     }
     // pending = host 已写入这份路由但 pi 侧还没确认(set_model RPC 在飞)。这段窗口里派发是
     // 不安全的:用它就是用未确认的 provider,RPC 若被拒,子进程已经起来了、撤不回。
-    return { model: model, provider: provider, modelRoutes: modelRoutes, pending: parsed.pending === true };
+    //
+    // executionPolicy:Host 写入的模型执行授权快照(见 model-execution-policy.ts)。
+    // **可用路由(modelRoutes)只代表"存在",不代表"被授权"** —— 授权只认这份快照里的
+    // allow-list / approvals。缺失或非法时 resolveTaskModelRoutes 一律拒绝(fail-closed)。
+    return {
+      model: model, provider: provider, modelRoutes: modelRoutes,
+      pending: parsed.pending === true, executionPolicy: parsed.executionPolicy,
+    };
   } catch (err) {
     console.error('[cindy-subagent] runtime snapshot unreadable: ' + String(err));
     return {};
@@ -417,6 +424,7 @@ function resolveTaskModelRoutes(tasks, runtime) {
       task.routeModel = currentRoute ? currentRoute.model : runtime.model;
       task.routeSourceProviderId = currentRoute && currentRoute.sourceProviderId;
       task.routeProxySessionAuth = !!(currentRoute && currentRoute.proxySessionAuth === true);
+      authorizeTaskRoute(task, runtime);
       continue;
     }
     const modelId = task.model || runtime.model;
@@ -457,6 +465,7 @@ function resolveTaskModelRoutes(tasks, runtime) {
       task.routeModel = route.model;
       task.routeSourceProviderId = route.sourceProviderId;
       task.routeProxySessionAuth = route.proxySessionAuth === true;
+      authorizeTaskRoute(task, runtime);
       continue;
     }
     const explicitSource = task.model.startsWith('xai/')
@@ -501,9 +510,214 @@ function resolveTaskModelRoutes(tasks, runtime) {
   }
 }
 
+/**
+ * 模型执行授权 —— 本函数与 Host 侧 model-execution-policy.ts 的 decideModelExecution
+ * 逐字同义(扩展不能 import Host 模块,只能镜像;改一处必须改另一处,测试会守住关键字符串)。
+ *
+ * 规则(2026-11-07 取证结论的执行层固化):
+ *  - 模型出现在 modelRoutes 里(available)**不等于被授权**;只有 Host 快照里显式
+ *    allow-list 的 (provider, model) 或带时限的 user approval 才能执行。
+ *  - 快照缺失/非法一律拒绝(fail-closed),绝不退回 pi 默认解析。
+ *  - "免费"不是授权:free 路由在 local-only 模式下同样被拒(是否可执行只看 allow-list,
+ *    tier 只用于让用户在事后审计里区分成本档)。
+ *  - approval 只能由 Host 的用户设置入口写入;Agent 不能创建,模型自称的批准不作数。
+ */
+function policyNonEmptyString(value) {
+  return typeof value === 'string' && value.trim().length > 0;
+}
+
+function policyNormalizeRoute(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  if (!policyNonEmptyString(raw.provider) || !policyNonEmptyString(raw.model)) return null;
+  if (raw.tier !== 'local' && raw.tier !== 'free' && raw.tier !== 'paid') return null;
+  return {
+    provider: raw.provider.trim(),
+    model: raw.model.trim(),
+    ...(policyNonEmptyString(raw.sourceProviderId) ? { sourceProviderId: raw.sourceProviderId.trim() } : {}),
+    tier: raw.tier,
+  };
+}
+
+function policyNormalizeApproval(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  if (!policyNonEmptyString(raw.id)) return null;
+  if (!policyNonEmptyString(raw.provider) || !policyNonEmptyString(raw.model)) return null;
+  if (raw.grantedBy !== 'user') return null;
+  if (raw.scope !== 'session' && raw.scope !== 'project') return null;
+  if (raw.scope === 'session' && !policyNonEmptyString(raw.sessionId)) return null;
+  if (raw.scope === 'project' && !policyNonEmptyString(raw.projectRoot)) return null;
+  if (typeof raw.grantedAt !== 'number' || !Number.isFinite(raw.grantedAt)) return null;
+  if (typeof raw.expiresAt !== 'number' || !Number.isFinite(raw.expiresAt)) return null;
+  if (raw.expiresAt <= raw.grantedAt) return null;
+  if (raw.maxCostUsd !== undefined
+    && (typeof raw.maxCostUsd !== 'number' || !Number.isFinite(raw.maxCostUsd) || raw.maxCostUsd < 0)) return null;
+  return {
+    id: raw.id.trim(), provider: raw.provider.trim(), model: raw.model.trim(),
+    ...(policyNonEmptyString(raw.sourceProviderId) ? { sourceProviderId: raw.sourceProviderId.trim() } : {}),
+    scope: raw.scope,
+    ...(policyNonEmptyString(raw.sessionId) ? { sessionId: raw.sessionId.trim() } : {}),
+    ...(policyNonEmptyString(raw.projectRoot) ? { projectRoot: raw.projectRoot.trim() } : {}),
+    grantedBy: 'user',
+    grantedAt: raw.grantedAt,
+    expiresAt: raw.expiresAt,
+    ...(typeof raw.maxCostUsd === 'number' ? { maxCostUsd: raw.maxCostUsd } : {}),
+  };
+}
+
+function parseExecutionPolicy(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  if (raw.version !== 1) return null;
+  if (!policyNonEmptyString(raw.sessionId)) return null;
+  if (raw.mode !== 'local-only' && raw.mode !== 'development' && raw.mode !== 'approved-paid') return null;
+  if (!Array.isArray(raw.allowedRoutes) || !Array.isArray(raw.approvals)) return null;
+  const allowedRoutes = [];
+  for (const entry of raw.allowedRoutes) {
+    const route = policyNormalizeRoute(entry);
+    if (!route) return null;
+    allowedRoutes.push(route);
+  }
+  const approvals = [];
+  for (const entry of raw.approvals) {
+    const approval = policyNormalizeApproval(entry);
+    if (!approval) return null;
+    approvals.push(approval);
+  }
+  return {
+    version: 1,
+    sessionId: raw.sessionId.trim(),
+    ...(policyNonEmptyString(raw.projectRoot) ? { projectRoot: raw.projectRoot.trim() } : {}),
+    mode: raw.mode,
+    allowedRoutes: allowedRoutes,
+    approvals: approvals,
+    issuedAt: typeof raw.issuedAt === 'number' && Number.isFinite(raw.issuedAt) ? raw.issuedAt : 0,
+  };
+}
+
+function policyRouteMatches(route, requested) {
+  if (route.provider !== requested.provider || route.model !== requested.model) return false;
+  if (route.sourceProviderId && requested.sourceProviderId) return route.sourceProviderId === requested.sourceProviderId;
+  return true;
+}
+
+function policyWithinProject(projectRoot, approvalRoot) {
+  const normalize = function (input) { return String(input).replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase(); };
+  const project = normalize(projectRoot);
+  const approval = normalize(approvalRoot);
+  if (!project || !approval) return false;
+  return project === approval || project.startsWith(approval + '/');
+}
+
+/** 返回 { allowed, approvalId?, reason };与 model-execution-policy.ts 同语义。 */
+function decideModelExecution(snapshot, requested, now) {
+  const at = typeof now === 'number' && Number.isFinite(now) ? now : Date.now();
+  if (!snapshot) {
+    return { allowed: false, reason: 'model execution policy snapshot is missing or invalid; refusing to dispatch' };
+  }
+  const provider = typeof requested.provider === 'string' ? requested.provider.trim() : '';
+  const model = typeof requested.model === 'string' ? requested.model.trim() : '';
+  if (!provider || !model) {
+    return { allowed: false, reason: 'requested provider/model is empty; refusing to dispatch' };
+  }
+  const requestedNorm = {
+    provider: provider,
+    model: model,
+    sourceProviderId: typeof requested.sourceProviderId === 'string' && requested.sourceProviderId.trim()
+      ? requested.sourceProviderId.trim()
+      : undefined,
+  };
+  for (const route of snapshot.allowedRoutes) {
+    if (!policyRouteMatches(route, requestedNorm)) continue;
+    if (route.tier === 'local') return { allowed: true, reason: 'local route is allowed in every mode' };
+    if (route.tier === 'free') {
+      if (snapshot.mode === 'local-only') {
+        return {
+          allowed: false,
+          reason: 'cloud route "' + provider + '/' + model + '" requires development mode; free is not authorization (session mode is local-only)',
+        };
+      }
+      return { allowed: true, reason: 'explicitly allow-listed free route' };
+    }
+    if (snapshot.mode !== 'approved-paid') {
+      return {
+        allowed: false,
+        reason: 'paid route "' + provider + '/' + model + '" is not approved for this session; a time-boxed user approval is required',
+      };
+    }
+    return { allowed: true, reason: 'explicitly allow-listed paid route under approved-paid mode' };
+  }
+  for (const approval of snapshot.approvals) {
+    if (!policyRouteMatches(approval, requestedNorm)) continue;
+    if (approval.scope === 'session' && approval.sessionId !== snapshot.sessionId) continue;
+    if (approval.scope === 'project'
+      && (!snapshot.projectRoot || !approval.projectRoot || !policyWithinProject(snapshot.projectRoot, approval.projectRoot))) {
+      continue;
+    }
+    if (at < approval.grantedAt || at > approval.expiresAt) continue;
+    return { allowed: true, approvalId: approval.id, reason: 'time-boxed approval ' + approval.id + ' covers this route' };
+  }
+  return { allowed: false, reason: 'route "' + provider + '/' + model + '" is not in this session\'s model execution allow-list' };
+}
+
+/**
+ * 拒绝审计:策略拒绝必须留下可追溯记录(谁、哪个 provider/model、裁决、时间),
+ * 但绝不写 API Key、提示词全文或用户隐私。policy-denials.jsonl 放在 runRoot 下,
+ * Host 侧可按 session 聚合。best-effort:写失败不影响拒绝本身(fail-closed 优先)。
+ */
+function recordPolicyDenial(task, runtime, decision) {
+  try {
+    const runRoot = process.env[RUN_ROOT_ENV];
+    if (typeof runRoot !== 'string' || runRoot.length === 0) return;
+    const file = join(runRoot, 'policy-denials.jsonl');
+    try {
+      if (statSync(file).size > 256 * 1024) return;
+    } catch (error) {
+      if (!error || error.code !== 'ENOENT') return;
+    }
+    const line = JSON.stringify({
+      at: Date.now(),
+      parentSessionId: typeof process.env[PARENT_SESSION_ENV] === 'string' ? process.env[PARENT_SESSION_ENV] : undefined,
+      provider: task.routeProvider || undefined,
+      model: task.model || task.routeModel || undefined,
+      sourceProviderId: task.routeSourceProviderId || undefined,
+      decision: 'denied',
+      reason: decision.reason,
+    }) + '\n';
+    const fd = openSync(file, 'a', 0o600);
+    try { writeSync(fd, line); } finally { closeSync(fd); }
+  } catch (error) {
+    /* 审计是尽力而为;拒绝本身已经发生,不得因此放行或抛错。 */
+  }
+}
+
+/**
+ * 每条任务解析出路由后必须过这一道执行授权。deny 时 throw —— 调用方在
+ * report('failed') 之后重新抛出(与既有两道失败关闭闸同样的顺序,见 execute 里的注释)。
+ */
+function authorizeTaskRoute(task, runtime) {
+  const snapshot = parseExecutionPolicy(runtime.executionPolicy);
+  const decision = decideModelExecution(snapshot, {
+    provider: task.routeProvider || '',
+    model: task.routeModel || task.model || runtime.model || '',
+    sourceProviderId: task.routeSourceProviderId,
+  });
+  if (decision.allowed) {
+    task.authorizationDecision = 'allowed';
+    if (decision.approvalId) task.approvalId = decision.approvalId;
+    return;
+  }
+  task.authorizationDecision = 'denied';
+  recordPolicyDenial(task, runtime, decision);
+  throw new Error(
+    'subagent: model execution policy denied route "'
+    + (task.routeProvider || '') + '/' + (task.routeModel || task.model || '') + '": '
+    + decision.reason + '. '
+    + 'Being listed as an available model is not authorization. Do this step yourself, '
+    + 'or ask the user to approve this route in Settings (Host-issued, time-boxed approval).',
+  );
+}
+
 function deriveRouteProxySessionToken(task) {
-  if (task.routeProxySessionAuth !== true) return '';
-  const parentToken = process.env[SESSION_TOKEN_ENV];
+  if (task.routeProxySessionAuth !== true) return '';  const parentToken = process.env[SESSION_TOKEN_ENV];
   const sourceProviderId = task.routeSourceProviderId;
   if (
     typeof parentToken !== 'string'
@@ -1050,6 +1264,9 @@ async function launchDurableRun(binary, tasks, runtime, taskId, mode, context, d
         }).join('\n\n'),
     concurrency: MAX_CONCURRENCY,
     timeoutMs: timeoutMs,
+    // Host 写入的执行授权快照(已校验的规范形)。Runner 在 spawn 前用它做第二道检查:
+    // 扩展被绕过/配置被篡改时,子进程也起不来(检查后、请求前)。
+    executionPolicy: parseExecutionPolicy(runtime.executionPolicy) || undefined,
     tasks: tasks.map(function (task, index) {
       const childId = runId + '-' + String(index + 1);
       return {
@@ -1068,6 +1285,9 @@ async function launchDurableRun(binary, tasks, runtime, taskId, mode, context, d
         displayModel: taskDisplayModel(task, runtime),
         sourceProviderId: task.routeSourceProviderId,
         proxySessionAuth: task.routeProxySessionAuth === true,
+        // 执行授权结论(审计用,第一道检查已写入;runner 据此做第二道检查)。
+        authorizationDecision: task.authorizationDecision || 'denied',
+        approvalId: task.approvalId || undefined,
         thinking: task.thinking || undefined,
         cwd: process.cwd(),
       };
@@ -1645,6 +1865,14 @@ export default async function cindySubagent(pi: any) {
         // 报 runtime.model 会让指定了别的模型的子代理在卡片上显示成父会话模型。
         const cardModel = singleTaskDisplayModel(tasks, runtime);
         if (cardModel) details.model = cardModel;
+        // 审计:真实 provider(而非泛泛的 'pi')+ 授权结论 + 命中的 approval id。
+        // 仅单任务卡片能对应到具体子任务;多任务时不编造聚合值。
+        if (tasks.length === 1) {
+          const only = tasks[0];
+          if (only.routeProvider) details.provider = only.routeProvider;
+          if (only.authorizationDecision) details.authorizationDecision = only.authorizationDecision;
+          if (only.approvalId) details.approvalId = only.approvalId;
+        }
         try {
           onUpdate({ content: [{ type: 'text', text: status === 'running' ? 'Running subagent…' : status }], details: details });
         } catch (err) {
@@ -1786,12 +2014,18 @@ export default async function cindySubagent(pi: any) {
         content: [{ type: 'text', text: text }],
         details: {
           tasks: tasks.map(function (t, index) {
+            const statusTask = durableStatus.tasks[index] || {};
             return {
               agent: t.agent,
               task: t.originalTask || t.task,
               isError: results[index] ? results[index].isError === true : true,
               toolUses: perTask[index].toolUses,
               tokens: perTask[index].tokens,
+              // 审计:实际执行的 provider/model + 授权结论(runner status 是权威来源)。
+              ...(statusTask.provider ? { provider: statusTask.provider } : {}),
+              ...(statusTask.model ? { model: statusTask.model } : {}),
+              ...(statusTask.authorizationDecision ? { authorizationDecision: statusTask.authorizationDecision } : {}),
+              ...(statusTask.approvalId ? { approvalId: statusTask.approvalId } : {}),
             };
           }),
         },

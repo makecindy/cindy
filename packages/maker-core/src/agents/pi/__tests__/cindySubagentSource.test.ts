@@ -620,4 +620,47 @@ describe('cindy-subagent extension source', () => {
     expect(writeBack).toBeGreaterThan(-1);
     expect(spawnCall).toBeGreaterThan(writeBack);
   });
+
+  describe('model execution policy gate (2026-11-07 unauthorized DeepSeek)', () => {
+    it('authorizes every dispatch before launch and fails closed without a snapshot', () => {
+      const src = CINDY_SUBAGENT_EXTENSION_SOURCE;
+      expect(src).toContain('authorizeTaskRoute(task, runtime)');
+      expect(src).toContain('model execution policy snapshot is missing or invalid; refusing to dispatch');
+      expect(src).toContain('free is not authorization');
+      expect(src).toContain('is not in this session');
+    });
+
+    it('rejects agent-granted approvals in the extension mirror', () => {
+      const src = CINDY_SUBAGENT_EXTENSION_SOURCE;
+      expect(src).toContain("if (raw.grantedBy !== 'user') return null;");
+    });
+
+    it('writes denial audit records without sensitive content', () => {
+      const src = CINDY_SUBAGENT_EXTENSION_SOURCE;
+      expect(src).toContain('policy-denials.jsonl');
+      expect(src).toContain("decision: 'denied'");
+      expect(src).toContain('0o600');
+    });
+
+    it('embeds the validated execution policy into the durable runner config', () => {
+      const src = CINDY_SUBAGENT_EXTENSION_SOURCE;
+      expect(src).toContain('executionPolicy: parseExecutionPolicy(runtime.executionPolicy)');
+    });
+
+    it('runner re-checks authorization before spawn (second gate)', () => {
+      const src = CINDY_SUBAGENT_RUNNER_SOURCE;
+      expect(src).toContain('decideRunnerModelExecution');
+      expect(src).toContain('Model execution policy denied spawn');
+      const check = src.indexOf('const policyDecision = decideRunnerModelExecution');
+      const spawnCall = src.indexOf('spawn(config.binary, childArgs');
+      expect(check).toBeGreaterThan(-1);
+      expect(spawnCall).toBeGreaterThan(check);
+    });
+
+    it('runner status carries the real provider and decision for audit', () => {
+      const src = CINDY_SUBAGENT_RUNNER_SOURCE;
+      expect(src).toContain('provider: task.provider,');
+      expect(src).toContain('authorizationDecision: task.authorizationDecision');
+    });
+  });
 });

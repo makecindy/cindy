@@ -3715,10 +3715,36 @@ export class PiAgent extends BaseAgent {
     const writeSubagentRuntimeFile = async (
       next: { model?: string; provider?: string; pending?: boolean }): Promise<boolean> => {
       const gen = ++subagentRuntimeWriteGen;
+      // 模型执行授权快照:Host 按当前会话生成(allow-list + approvals)。可用(modelRoutes)
+      // 不会生成授权 —— 授权只认这份快照。Host 未接 resolver 时**不写**(fail-closed,
+      // 扩展拒绝新派发;已运行 run 不受影响),并打 warn 便于排障。
+      let executionPolicy: unknown;
+      const resolvePolicy = this.deps.resolvePiSubagentModelExecutionPolicy;
+      if (typeof resolvePolicy === 'function') {
+        try {
+          executionPolicy = await resolvePolicy({
+            sessionId: opts.sessionId ?? '',
+            ...(opts.workingDir ? { projectRoot: opts.workingDir } : {}),
+            model: next.model ?? initialWireModel ?? '',
+            provider: next.provider ?? initialProvider ?? '',
+          });
+        } catch (error) {
+          this.deps.logger.warn('pi subagent model execution policy resolve failed; snapshot will omit authorization', {
+            sessionId: opts.sessionId,
+            message: error instanceof Error ? error.message : String(error),
+          });
+          executionPolicy = undefined;
+        }
+      } else {
+        this.deps.logger.warn('pi subagent execution policy resolver not registered; new dispatches will fail closed', {
+          sessionId: opts.sessionId,
+        });
+      }
       const snapshot = {
         ...(next.model ? { model: next.model } : {}),
         ...(next.provider ? { provider: next.provider } : {}),
         modelRoutes: subagentModelRoutes,
+        ...(executionPolicy ? { executionPolicy } : {}),
         // `pending: true` = 这条路由**尚未**被 pi 确认。扩展见到它就拒绝派发(fail-closed),
         // 于是模型切换的等待窗口里一个子进程都起不来 —— 详见 setModel 的注释。
         ...(next.pending ? { pending: true } : {}),

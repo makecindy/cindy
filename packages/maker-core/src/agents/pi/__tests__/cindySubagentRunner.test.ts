@@ -530,6 +530,16 @@ process.stdin.on('end', () => {
     description: 'runner fixture',
     concurrency: options.concurrency ?? 4,
     timeoutMs: options.timeoutMs ?? 10_000,
+    // 测试夹具授权快照:fixture/fixture-model 显式列入 allow-list ——
+    // runner 在 spawn 前复核,与生产 config.executionPolicy 注入一致。
+    executionPolicy: {
+      version: 1,
+      sessionId: path.basename(root),
+      mode: 'development',
+      allowedRoutes: [{ provider: 'fixture', model: 'fixture-model', tier: 'local' }],
+      approvals: [],
+      issuedAt: Date.now(),
+    },
     tasks: Array.from({ length: count }, (_, index) => ({
       childId: `${runId}-${index + 1}`,
       stepId: `step-${index + 1}`,

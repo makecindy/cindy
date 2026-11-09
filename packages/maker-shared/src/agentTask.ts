@@ -152,6 +152,12 @@ export interface AgentTaskUpdate {
   workflowName?: string;
   /** `null` is an explicit live-update instruction to clear a stale model badge. */
   model?: string | null;
+  /** 子任务实际执行的 provider(真实路由,如 openrouter-a3fe858b)。 */
+  modelProviderId?: string;
+  /** 模型执行授权结论:'allowed'|'denied'(审计用;denied 不执行)。 */
+  authorizationDecision?: string;
+  /** 命中的 user approval id(有才落库;Agent 不能自行创建)。 */
+  approvalId?: string;
   reasoningEffort?: string;
   receiverThreadIds?: string[];
   /**
@@ -381,6 +387,15 @@ export function normalizeAgentTaskUpdate(
       : typeof raw.model === 'string' && raw.model
         ? { model: raw.model }
         : {}),
+    ...(typeof raw.modelProviderId === 'string' && raw.modelProviderId
+      ? { modelProviderId: raw.modelProviderId }
+      : {}),
+    ...(typeof raw.authorizationDecision === 'string' && raw.authorizationDecision
+      ? { authorizationDecision: raw.authorizationDecision }
+      : {}),
+    ...(typeof raw.approvalId === 'string' && raw.approvalId
+      ? { approvalId: raw.approvalId }
+      : {}),
     ...(typeof raw.reasoningEffort === 'string' && raw.reasoningEffort ? { reasoningEffort: raw.reasoningEffort } : {}),
     ...(Array.isArray(raw.receiverThreadIds)
       ? { receiverThreadIds: raw.receiverThreadIds.filter((id): id is string => typeof id === 'string') }
@@ -407,6 +422,9 @@ export function mergeAgentTaskUpdate(prev: AgentTaskUpdate | undefined, next: Ag
     workflowProgress: next.workflowProgress ?? prev.workflowProgress,
     createdAt: prev.createdAt ?? next.createdAt,
     model: next.model === null ? null : next.model ?? prev.model,
+    modelProviderId: next.modelProviderId ?? prev.modelProviderId,
+    authorizationDecision: next.authorizationDecision ?? prev.authorizationDecision,
+    approvalId: next.approvalId ?? prev.approvalId,
     updatedAt: next.updatedAt ?? prev.updatedAt,
   };
 }

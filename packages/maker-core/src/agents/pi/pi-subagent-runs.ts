@@ -151,6 +151,12 @@ export interface PiSubagentTaskStatus {
   task?: string;
   status: PiSubagentRunState;
   model?: string;
+  /** 子任务实际执行的 provider(真实路由,如 openrouter-a3fe858b;而非泛泛的 'pi')。 */
+  provider?: string;
+  /** 模型执行授权结论:'allowed'|'denied';denied 时任务不会 spawn。 */
+  authorizationDecision?: string;
+  /** 命中的 user approval id(有才落库;Agent 不能自行创建)。 */
+  approvalId?: string;
   thinking?: string;
   toolUses?: number;
   usage?: {

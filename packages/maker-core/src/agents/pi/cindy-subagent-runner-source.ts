@@ -274,6 +274,8 @@ function main() {
       model: typeof task.model === 'string' ? task.model : undefined,
       displayModel: typeof task.displayModel === 'string' ? task.displayModel : undefined,
       sourceProviderId: typeof task.sourceProviderId === 'string' ? task.sourceProviderId : undefined,
+      authorizationDecision: typeof task.authorizationDecision === 'string' ? task.authorizationDecision : undefined,
+      approvalId: typeof task.approvalId === 'string' ? task.approvalId : undefined,
       proxySessionAuth: task.proxySessionAuth === true,
       thinking: typeof task.thinking === 'string' ? task.thinking : undefined,
       sessionId: String(task.sessionId),
@@ -374,6 +376,9 @@ function main() {
           task: task.originalTask || task.task,
           status: task.status,
           model: task.displayModel || task.model,
+          provider: task.provider,
+          authorizationDecision: task.authorizationDecision,
+          approvalId: task.approvalId,
           thinking: task.thinking,
           toolUses: task.toolUses,
           usage: task.usage,
@@ -758,6 +763,84 @@ function main() {
     pruneControlReceipts(false);
   }
 
+  // 执行授权第二道检查(检查后、spawn 前)。扩展的第一道检查写进 config.executionPolicy;
+  // 这里在真正 spawn 子进程之前逐任务复核 —— 手改 config、绕过扩展直接写 run 目录、
+  // 或扩展被篡改时,子进程也不起来。语义与 Host model-execution-policy.ts 保持一致
+  // (此文件不能 import,判定逻辑在此内联镜像;改一处必须改另一处)。
+  function policyNonEmptyString(value) {
+    return typeof value === 'string' && value.trim().length > 0;
+  }
+  function policyRouteMatches(route, requested) {
+    if (route.provider !== requested.provider || route.model !== requested.model) return false;
+    if (route.sourceProviderId && requested.sourceProviderId) return route.sourceProviderId === requested.sourceProviderId;
+    return true;
+  }
+  function policyWithinProject(projectRoot, approvalRoot) {
+    const normalize = function (input) { return String(input).replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase(); };
+    const project = normalize(projectRoot);
+    const approval = normalize(approvalRoot);
+    if (!project || !approval) return false;
+    return project === approval || project.startsWith(approval + '/');
+  }
+  function parseRunnerExecutionPolicy(raw) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+    if (raw.version !== 1) return null;
+    if (!policyNonEmptyString(raw.sessionId)) return null;
+    if (raw.mode !== 'local-only' && raw.mode !== 'development' && raw.mode !== 'approved-paid') return null;
+    if (!Array.isArray(raw.allowedRoutes) || !Array.isArray(raw.approvals)) return null;
+    const allowedRoutes = [];
+    for (const entry of raw.allowedRoutes) {
+      if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return null;
+      if (!policyNonEmptyString(entry.provider) || !policyNonEmptyString(entry.model)) return null;
+      if (entry.tier !== 'local' && entry.tier !== 'free' && entry.tier !== 'paid') return null;
+      allowedRoutes.push(entry);
+    }
+    const approvals = [];
+    for (const entry of raw.approvals) {
+      if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return null;
+      if (!policyNonEmptyString(entry.id) || !policyNonEmptyString(entry.provider) || !policyNonEmptyString(entry.model)) return null;
+      if (entry.grantedBy !== 'user') return null;
+      if (entry.scope !== 'session' && entry.scope !== 'project') return null;
+      if (entry.scope === 'session' && !policyNonEmptyString(entry.sessionId)) return null;
+      if (entry.scope === 'project' && !policyNonEmptyString(entry.projectRoot)) return null;
+      if (typeof entry.grantedAt !== 'number' || !Number.isFinite(entry.grantedAt)) return null;
+      if (typeof entry.expiresAt !== 'number' || !Number.isFinite(entry.expiresAt)) return null;
+      if (entry.expiresAt <= entry.grantedAt) return null;
+      approvals.push(entry);
+    }
+    return { sessionId: raw.sessionId.trim(), projectRoot: raw.projectRoot, mode: raw.mode, allowedRoutes, approvals };
+  }
+  function decideRunnerModelExecution(snapshot, requested, now) {
+    const at = typeof now === 'number' && Number.isFinite(now) ? now : Date.now();
+    if (!snapshot) return { allowed: false, reason: 'model execution policy snapshot is missing or invalid; refusing to spawn' };
+    const provider = typeof requested.provider === 'string' ? requested.provider.trim() : '';
+    const model = typeof requested.model === 'string' ? requested.model.trim() : '';
+    if (!provider || !model) return { allowed: false, reason: 'requested provider/model is empty; refusing to spawn' };
+    const requestedNorm = {
+      provider,
+      model,
+      sourceProviderId: typeof requested.sourceProviderId === 'string' && requested.sourceProviderId.trim() ? requested.sourceProviderId.trim() : undefined,
+    };
+    for (const route of snapshot.allowedRoutes) {
+      if (!policyRouteMatches(route, requestedNorm)) continue;
+      if (route.tier === 'local') return { allowed: true, reason: 'local route is allowed in every mode' };
+      if (route.tier === 'free') {
+        if (snapshot.mode === 'local-only') return { allowed: false, reason: 'cloud route is not authorized in local-only mode; free is not authorization' };
+        return { allowed: true, reason: 'explicitly allow-listed free route' };
+      }
+      if (snapshot.mode !== 'approved-paid') return { allowed: false, reason: 'paid route is not approved for this session' };
+      return { allowed: true, reason: 'explicitly allow-listed paid route under approved-paid mode' };
+    }
+    for (const approval of snapshot.approvals) {
+      if (!policyRouteMatches(approval, requestedNorm)) continue;
+      if (approval.scope === 'session' && approval.sessionId !== snapshot.sessionId) continue;
+      if (approval.scope === 'project' && (!snapshot.projectRoot || !approval.projectRoot || !policyWithinProject(snapshot.projectRoot, approval.projectRoot))) continue;
+      if (at < approval.grantedAt || at > approval.expiresAt) continue;
+      return { allowed: true, approvalId: approval.id, reason: 'time-boxed approval covers this route' };
+    }
+    return { allowed: false, reason: 'route is not in this session model execution allow-list' };
+  }
+
   function launchTask(task) {
     return new Promise(function (resolve) {
       if (state.stopRequested || task.stopRequested || state.timedOut) {
@@ -767,6 +850,24 @@ function main() {
         resolve();
         return;
       }
+      // 第二道执行授权检查:deny 直接把任务置 failed,不发任何模型请求。
+      const policySnapshot = parseRunnerExecutionPolicy(config.executionPolicy);
+      const policyDecision = decideRunnerModelExecution(policySnapshot, {
+        provider: task.provider,
+        model: task.model || task.displayModel,
+        sourceProviderId: task.sourceProviderId,
+      });
+      if (!policyDecision.allowed) {
+        task.status = 'failed';
+        task.error = 'Model execution policy denied spawn for ' + task.provider + '/' + (task.model || task.displayModel) + ': ' + policyDecision.reason;
+        task.authorizationDecision = 'denied';
+        task.endedAt = Date.now();
+        scheduleStatus();
+        resolve();
+        return;
+      }
+      task.authorizationDecision = 'allowed';
+      if (policyDecision.approvalId) task.approvalId = policyDecision.approvalId;
       fs.mkdirSync(task.sessionDir, { recursive: true, mode: 0o700 });
       const args = [
         '--mode', 'rpc',

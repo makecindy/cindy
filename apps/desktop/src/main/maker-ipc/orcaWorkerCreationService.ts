@@ -188,6 +188,8 @@ export type OrcaWorkerCreationErrorCode =
   | 'REMOTE_WORKDIR_NOT_DIRECTORY'
   | 'REMOTE_WORKDIR_INVALID'
   | 'REMOTE_WORKDIR_UNAVAILABLE'
+  /** Worker 路由未通过模型执行授权(执行层 deny;可用 ≠ 授权)。 */
+  | 'MODEL_EXECUTION_DENIED'
   | 'INTERNAL';
 
 /** worker 创建结果保留首条派活 outcome，让调用方区分 created-but-not-dispatched。 */
@@ -316,6 +318,16 @@ export interface OrcaWorkerCreationDeps {
   createWorkerWorktree?(sessionId: string, directory: string, sourceBranch: string): Promise<string>;
   discardWorkerWorktree?(sessionId: string): Promise<void>;
   getAvailableModels(agent: AgentKind): OrcaWorkerModelCapabilities[];
+  /**
+   * 模型执行授权(decideModelExecution 同口径;Host 注入后失败关闭)。返回 null/undefined
+   * = 不做授权检查(测试/旧宿主);返回 { allowed: false } = 创建拒绝。
+   */
+  resolveModelExecutionPolicy?: (input: {
+    sessionId: string;
+    projectRoot?: string;
+    provider: string;
+    model: string;
+  }) => Promise<{ allowed: boolean; reason?: string } | null | undefined>;
   /**
    * 从同一次 provider registry 读取构造 Worker 路由上下文。
    * availability 只保留已连接 provider 的最小视图；显式 model 的默认来源解析复用
@@ -1355,6 +1367,26 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
     });
     if (!resolvedConfig.ok) {
       return { ok: false, errorCode: 'INVALID_PARAMS', message: resolvedConfig.message };
+    }
+    // 模型执行授权(失败关闭;Host 注入 resolveModelExecutionPolicy 时生效):
+    // Worker 的 (provider, model) 必须在当前会话的执行 allow-list 内或命中有效的
+    // user approval。"出现在可用模型目录里"不等于授权 —— 与 pi subagent 同口径。
+    // 未注入时跳过(保持既有行为,供测试/旧宿主)。
+    if (deps.resolveModelExecutionPolicy) {
+      const policyProviderId = inheritedProviderId ?? providerRouting.resolveDefaultProviderIdForModel(params.agent, resolvedConfig.model);
+      const policyDecision = await deps.resolveModelExecutionPolicy({
+        sessionId: params.leadSessionId,
+        ...(lead.workingDir ? { projectRoot: lead.workingDir } : {}),
+        provider: policyProviderId ?? '',
+        model: resolvedConfig.model,
+      });
+      if (policyDecision && policyDecision.allowed === false) {
+        return {
+          ok: false,
+          errorCode: 'MODEL_EXECUTION_DENIED',
+          message: `Worker model execution policy denied route "${policyProviderId ?? ''}/${resolvedConfig.model}": ${policyDecision.reason ?? 'not in this session model execution allow-list'}. Being listed as an available model is not authorization.`,
+        };
+      }
     }
     const defaultProviderId = providerRouting.resolveDefaultProviderIdForModel(
       params.agent,

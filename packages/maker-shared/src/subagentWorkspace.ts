@@ -103,6 +103,12 @@ export interface SubagentRun {
   description?: string;
   summary?: string;
   model?: string;
+  /** 子任务实际执行的 provider(真实路由,如 openrouter-a3fe858b)。 */
+  modelProviderId?: string;
+  /** 模型执行授权结论:'allowed'|'denied'(审计用;denied 不执行)。 */
+  authorizationDecision?: string;
+  /** 命中的 user approval id(有才落库;Agent 不能自行创建)。 */
+  approvalId?: string;
   reasoningEffort?: string;
   usage?: SubagentRunUsage;
   capabilities: SubagentCapabilities;

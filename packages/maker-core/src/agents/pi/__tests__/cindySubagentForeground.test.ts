@@ -40,6 +40,21 @@ async function fixture() {
   await writeFile(runtimeFile, JSON.stringify({
     provider: 'fixture',
     model: 'fixture-model',
+    // 测试快照:fixture/fixture-model 在开发 mode 下授权执行。
+    executionPolicy: {
+      version: 1,
+      sessionId: 'foreground-fixture',
+      mode: 'development',
+      // proxySessionAuth 路由走本机代理会话到用户自有订阅 —— tier 'local'(本地
+      // 基础设施),授权以快照为准。
+      allowedRoutes: [
+        { provider: 'fixture', model: 'fixture-model', tier: 'local' },
+        { provider: 'anthropic', model: 'claude-fable-5', sourceProviderId: 'anthropic', tier: 'local' },
+        { provider: 'xai', model: 'grok-4.6', sourceProviderId: 'xai', tier: 'local' },
+      ],
+      approvals: [],
+      issuedAt: Date.now(),
+    },
     modelRoutes: {
       'fixture-model': [{ provider: 'fixture', model: 'fixture-model' }],
       'xai/grok-4.6': [

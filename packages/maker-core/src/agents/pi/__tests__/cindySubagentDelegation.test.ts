@@ -309,6 +309,26 @@ describe('Pi subagent provider selection', () => {
   const runtime = {
     model: 'parent-model',
     provider: 'parent',
+    // 测试快照:把路由用到的组合都列进 allow-list(亚军执行策略的"路由存在"与"授权"
+    // 是两回事,路由解析本身仍需快照在场 —— 与生产 pi/index.ts 注入一致)。
+    executionPolicy: {
+      version: 1,
+      sessionId: 'sess-test',
+      mode: 'development',
+      allowedRoutes: [
+        { provider: 'parent', model: 'parent-model', tier: 'local' },
+        { provider: 'opencode-go', model: 'glm-5.3-flash', tier: 'local' },
+        { provider: 'glm-coding-plan', model: 'glm-5.3-flash', tier: 'local' },
+        { provider: 'cindy', model: 'gateway-model', tier: 'local' },
+        { provider: 'commandcode', model: 'gateway-model', tier: 'local' },
+        { provider: 'openai-codex', model: 'gpt-5.4', tier: 'local' },
+        { provider: 'cindy-byom-openai-codex', model: 'chatgpt/gpt-5.4', tier: 'local' },
+        { provider: 'anthropic', model: 'claude-5-sonnet', tier: 'local' },
+        { provider: 'parent', model: 'claude-5-sonnet', tier: 'local' },
+      ],
+      approvals: [],
+      issuedAt: 1_700_000_000_000,
+    },
     modelRoutes: {
       'parent-model': [{ provider: 'parent', model: 'parent-model' }],
       'glm-5.3-flash': [
@@ -442,9 +462,27 @@ describe('Pi subagent provider selection', () => {
     });
     expect(perTask.tasks.map((task: { provider: string }) => task.provider))
       .toEqual(['call-level', 'task-level']);
-    expect(extension.normalizeInvocation({ agent: 'worker', task: 'x' }).tasks[0].provider).toBe('');
-    const f = await fixture();
-    expect(f.tool.parameters.properties.provider.type).toBe('string');
-    expect(f.tool.parameters.properties.tasks.items.properties.provider.type).toBe('string');
+  });
+
+  it('denies dispatch when the execution policy snapshot is missing (fail-closed)', () => {
+    const noPolicy = { ...runtime, executionPolicy: undefined };
+    expect(() => extension.resolveTaskModelRoutes([{ model: 'glm-5.3-flash', provider: 'glm-coding-plan' }], noPolicy))
+      .toThrow(/model execution policy snapshot is missing/);
+  });
+
+  it('denies a route the policy does not list even though the model catalog knows it', () => {
+    const narrowPolicy = {
+      ...runtime,
+      executionPolicy: {
+        version: 1,
+        sessionId: 'sess-test',
+        mode: 'development',
+        allowedRoutes: [{ provider: 'parent', model: 'parent-model', tier: 'local' }],
+        approvals: [],
+        issuedAt: 1_700_000_000_000,
+      },
+    };
+    expect(() => extension.resolveTaskModelRoutes([{ model: 'glm-5.3-flash', provider: 'glm-coding-plan' }], narrowPolicy))
+      .toThrow(/is not in this session/);
   });
 });

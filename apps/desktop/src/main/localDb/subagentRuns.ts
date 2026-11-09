@@ -447,6 +447,9 @@ function rowToRun(row: SubagentRunRow, localArtifacts = true): SubagentRun {
     ...(row.description ? { description: row.description } : {}),
     ...(row.summary ? { summary: row.summary } : {}),
     ...(row.model ? { model: row.model } : {}),
+    ...(row.modelProviderId ? { modelProviderId: row.modelProviderId } : {}),
+    ...(row.authorizationDecision ? { authorizationDecision: row.authorizationDecision } : {}),
+    ...(row.approvalId ? { approvalId: row.approvalId } : {}),
     ...(row.reasoningEffort ? { reasoningEffort: row.reasoningEffort } : {}),
     ...(Object.keys(usage).length > 0 ? { usage } : {}),
     capabilities: localArtifacts
@@ -720,6 +723,15 @@ export async function persistSubagentTaskUpdate(
       update.model === null
         ? null
         : (boundedText(update.model, TEXT_LIMITS.model) ?? existing?.model ?? null),
+    // 审计:子任务实际执行的 provider(真实路由)+ 授权结论 + 命中的 approval id。
+    // 这里的 provider 是 harness 内路由 id(如 openrouter-a3fe858b),不是 DB 行的
+    // provider 枚举('pi');后者是 Agent 类型,前者是执行通道,两者不能混。
+    modelProviderId:
+      boundedText(update.modelProviderId, TEXT_LIMITS.model) ?? existing?.modelProviderId ?? null,
+    authorizationDecision:
+      boundedText(update.authorizationDecision, TEXT_LIMITS.model) ?? existing?.authorizationDecision ?? null,
+    approvalId:
+      boundedText(update.approvalId, TEXT_LIMITS.id) ?? existing?.approvalId ?? null,
     reasoningEffort:
       boundedText(update.reasoningEffort, TEXT_LIMITS.reasoningEffort) ??
       existing?.reasoningEffort ??
