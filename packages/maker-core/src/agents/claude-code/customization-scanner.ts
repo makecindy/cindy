@@ -82,7 +82,7 @@ export async function scanClaudeCustomizations(
     const ownerRoot = path.resolve(dir);
     if (seen.has(ownerRoot)) continue;
     seen.add(ownerRoot);
-    targets.push({ scanRoot: resolveGitRoot(dir) ?? ownerRoot, ownerRoot });
+    targets.push({ scanRoot: ownerRoot, ownerRoot });
   }
   return scanClaudeCustomizationsAtConfig(
     opts,
@@ -174,27 +174,6 @@ function scanClaudeCustomizationsAtConfig(
   return result;
 }
 
-/**
- * Nearest Git root at or above `workingDir`, or undefined when the path is not
- * inside a repository. Project-scoped plugin installs and project settings are
- * keyed by this root — a session started in `/repo/packages/app` still uses
- * `/repo/.claude`, so callers must not pass the raw cwd.
- */
-export function resolveGitRoot(workingDir: string): string | undefined {
-  let current: string;
-  try {
-    current = fs.realpathSync(workingDir);
-  } catch {
-    current = path.resolve(workingDir);
-  }
-  while (true) {
-    if (fs.existsSync(path.join(current, '.git'))) return current;
-    const parent = path.dirname(current);
-    if (parent === current) return undefined;
-    current = parent;
-  }
-}
-
 /** Native slash-command discovery walks to the nearest Git root (or filesystem root).
  * Keep this runtime view separate from SkillHub's explicitly owned project list.
  * Legacy commands and Skills share Claude's slash-command namespace, so callers
@@ -219,12 +198,10 @@ export async function scanClaudeRuntimeSkills(
   // projects do not require a repository, so without one the working directory
   // itself is the project context.
   const ownerRoot = path.resolve(workingDir);
-  const root = workingDirs[0];
-  const scanRoot = root && fs.existsSync(path.join(root, '.git')) ? root : ownerRoot;
   return scanClaudeCustomizationsAtConfig(
     { workingDirs, kinds: ['skill', 'command'] },
     configDir,
-    [{ scanRoot, ownerRoot }],
+    [{ scanRoot: ownerRoot, ownerRoot }],
     // Runtime view: only what this project actually loads.
     { includeUserPass: false },
   );
