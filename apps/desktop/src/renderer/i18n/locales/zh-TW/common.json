@@ -19721,10 +19721,10 @@
       "useCodex": "使用 Codex 登入"
     },
     "title": "訂閱帳號",
-    "note": "首個帳號沿用 CLI 預設目錄，新增帳號獨立登入。新任務按策略分配，已有任務保留原帳號。",
     "strategy": "負載平衡",
     "add": "新增帳號",
     "default": "預設目錄",
+    "defaultTag": "預設",
     "ready": "已連線",
     "signedOut": "需要登入",
     "unavailable": "暫時讀不到狀態",

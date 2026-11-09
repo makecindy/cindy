@@ -19980,10 +19980,10 @@
       "useCodex": "Iniciar sessão com o Codex"
     },
     "title": "Contas de subscrição",
-    "note": "A primeira conta usa a pasta predefinida da CLI. As contas adicionais iniciam sessão separadamente. As novas tarefas são distribuídas; as existentes mantêm a sua conta.",
     "strategy": "Distribuição de carga",
     "add": "Adicionar conta",
     "default": "Pasta predefinida",
+    "defaultTag": "Predefinida",
     "ready": "Ligada",
     "signedOut": "É necessário iniciar sessão",
     "unavailable": "Estado indisponível",
