@@ -1124,8 +1124,13 @@ export function isUsingCachedClientEndpoints(): boolean {
  * 炸出来(随包兜底也必须先经过启动解析;--smoke-test 旁路不消费端点)。
  */
 function runtimeEndpoint(endpoints: ClientEndpointMap, key: ClientEndpointKey, region: ClientEndpointRegion): string {
+  // Internal PR build: the native personal launcher does not inherit shell exports.
+  // Packaged releases never consume this test profile. Explicit overrides still win.
+  const personalWebhook = process.env.CINDY_PERSONAL_FIXED_APP?.trim()
+    ? (region === 'cn' ? 'http://127.0.0.1:8794' : 'http://127.0.0.1:8793')
+    : undefined;
   const local = app.isPackaged ? undefined : key === 'webhookApiBaseUrl'
-    ? (region === 'cn' ? process.env.XDT_WEBHOOK_CN_LOCAL_URL : process.env.XDT_WEBHOOK_GLOBAL_LOCAL_URL)?.trim()
+    ? ((region === 'cn' ? process.env.XDT_WEBHOOK_CN_LOCAL_URL : process.env.XDT_WEBHOOK_GLOBAL_LOCAL_URL)?.trim() || personalWebhook)
     : key === 'deviceLinkApiBaseUrl'
       ? (region === 'cn'
         ? process.env.XDT_DEVICE_LINK_CN_LOCAL_URL ?? process.env.XDT_DEVICE_LINK_LOCAL_URL

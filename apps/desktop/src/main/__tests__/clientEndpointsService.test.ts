@@ -1588,6 +1588,29 @@ describe('getter / IPC', () => {
     }
   });
 
+  it('个人版无需 shell 导出即可选择两区测试服务，正式包不使用测试地址', () => {
+    resetClientEndpointsForTest(TEST_CLIENT_ENDPOINTS);
+    vi.stubEnv('CINDY_PERSONAL_FIXED_APP', '/Applications/Example Personal.app');
+    vi.stubEnv('XDT_WEBHOOK_CN_LOCAL_URL', '');
+    vi.stubEnv('XDT_WEBHOOK_GLOBAL_LOCAL_URL', '');
+    try {
+      expect(getClientEndpointForRealm('cn', 'webhookApiBaseUrl')).toBe('http://127.0.0.1:8794');
+      expect(getClientEndpointForRealm('global', 'webhookApiBaseUrl')).toBe('http://127.0.0.1:8793');
+      expect(getClientEndpoint('authApiBaseUrl')).toBe(TEST_CLIENT_ENDPOINTS.authApiBaseUrl);
+      vi.stubEnv('XDT_WEBHOOK_GLOBAL_LOCAL_URL', 'http://127.0.0.1:33356');
+      expect(getClientEndpointForRealm('global', 'webhookApiBaseUrl')).toBe('http://127.0.0.1:33356');
+      Object.defineProperty(app, 'isPackaged', { configurable: true, value: true });
+      expect(getClientEndpoint('webhookApiBaseUrl')).toBe(TEST_CLIENT_ENDPOINTS.webhookApiBaseUrl);
+      Object.defineProperty(app, 'isPackaged', { configurable: true, value: false });
+      vi.stubEnv('CINDY_PERSONAL_FIXED_APP', '');
+      vi.stubEnv('XDT_WEBHOOK_GLOBAL_LOCAL_URL', '');
+      expect(getClientEndpoint('webhookApiBaseUrl')).toBe(TEST_CLIENT_ENDPOINTS.webhookApiBaseUrl);
+    } finally {
+      Object.defineProperty(app, 'isPackaged', { configurable: true, value: false });
+      vi.unstubAllEnvs();
+    }
+  });
+
   it('开发版只覆盖回环Webhook地址，两个区域的认证与模型端点保持独立', () => {
     const cn = { ...TEST_CLIENT_ENDPOINTS, authApiBaseUrl: 'https://auth.cn.example.com' };
     const global = { ...TEST_CLIENT_ENDPOINTS, authApiBaseUrl: 'https://auth.global.example.com' };

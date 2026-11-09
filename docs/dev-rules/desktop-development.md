@@ -96,6 +96,9 @@ checkout 占用而中止，不要换命令绕过，应把 verdict 交给用户�
 
 只调试本机 Webhook/GitHub App 时，使用相同的 remote 隔离启动方式，并设置 `XDT_WEBHOOK_GLOBAL_LOCAL_URL=http://127.0.0.1:8793`（中国大陆账号用 `XDT_WEBHOOK_CN_LOCAL_URL`）。只替换本区 Webhook API，保留真实认证；只接受带端口的回环地址，正式版忽略此覆盖。
 
+内部 GitHub App 草稿 PR 的个人版测试配置：未打包且由原生个人版入口设置 `CINDY_PERSONAL_FIXED_APP` 时，Webhook 默认使用 Global `http://127.0.0.1:8793`、CN `http://127.0.0.1:8794`，显式 `XDT_WEBHOOK_*_LOCAL_URL` 优先。不需要从终端继承配置；普通开发启动和正式包保持原端点。此配置要求同机测试服务已经运行，服务停止时不能视为已接通。正式推广前应撤下此本机测试默认值。
+
+
 两个 restart 命令都支持下列参数。不加任何模式旗标时默认走固定的 `--isolated=dev`
 命名沙箱；要回到旧的共库行为必须显式加 `--shared`。这些参数只对 dev 生效，不影响
 用户机器上的正式版。
