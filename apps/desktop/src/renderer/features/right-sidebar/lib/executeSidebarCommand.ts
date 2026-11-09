@@ -32,6 +32,8 @@ export async function executeSidebarCommand(command: RsbWindowCommand): Promise<
   if (command.type === 'open-plugin-task') {
     await openPluginTaskTab(command.sessionId, command.instanceId, {
       userInitiated: command.userInitiated === true,
+      ...(command.resourceViewId ? { resourceViewId: command.resourceViewId } : {}),
+      ...(command.resourceInput ? { resourceInput: command.resourceInput } : {}),
     });
     return;
   }

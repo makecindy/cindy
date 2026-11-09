@@ -74,6 +74,15 @@ beforeEach(() => {
 });
 
 describe('right-sidebar-window IPC', () => {
+  // 具名视图必须进入已有分离侧栏路由，不能在 Main 校验时丢失目标或启动参数。
+  it('preserves a named plugin resource in the original window command', async () => {
+    const controller = makeController();
+    const { handler, mainWebContents } = registerController(controller);
+    const command = { type: 'open-plugin-task', sessionId: 's1', instanceId: 'planner', resourceViewId: 'board', resourceInput: { filter: 'open' } };
+    await handler({ sender: mainWebContents }, { command, allowOpen: true });
+    expect(controller.routeCommand).toHaveBeenCalledWith({ command, allowOpen: true });
+    await expect(handler({ sender: mainWebContents }, { command: { ...command, resourceInput: [] }, allowOpen: true })).rejects.toThrow();
+  });
   it('allows only the visible detached Bot owner to approve its own permission', async () => {
     const controller = makeController();
     const sender = { id: 2 };

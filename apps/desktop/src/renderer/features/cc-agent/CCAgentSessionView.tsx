@@ -90,6 +90,7 @@ import { Spinner } from '@/components/ui/spinner';
 import { setRemoteReceiptDisplayReady } from '@/lib/sessionAttentionStore';
 import { shortSessionId } from '@/lib/sessionId';
 import { ChatInput } from '@/components/new-chat/ChatInput';
+import { PluginUiSlot } from '@/cindy-brain/PluginUiContributions';
 import { CindyMakeComposerMask } from '@/components/cindy-make/CindyMakeComposerMask';
 import {
   getCindyMakeTestRecovery,
@@ -5492,6 +5493,7 @@ function CCAgentSessionContent({
       )}
       <section
         className="relative flex h-full w-full flex-col bg-content-area"
+        data-plugin-ui-task={!session?.remoteHostId && !session?.deviceLinkDeviceId ? sessionId : undefined}
         aria-label={t('ccAgent.layout.chatDropAreaAria')}
         onDragEnter={(e) => {
           if (hasSplitGroupSessionType(e.dataTransfer.types)) return;
@@ -5669,6 +5671,7 @@ function CCAgentSessionContent({
 
           {/* Solid background zone */}
           <div className="wallpaper-composer-zone pointer-events-auto flex w-full flex-col items-center bg-[hsl(var(--content-area))] pb-5">
+            <PluginUiSlot position="statusbar" sessionId={sessionId} disabled={!!session?.remoteHostId || !!session?.deviceLinkDeviceId} />
             {/* 单行 composer 状态层：RunningStatusBar 与中央胶囊组合叠在同一个 grid row。
               展开态由「计划 + 完整被控提示」组成真实 flex 组合共同居中,被控提示会把计划
               向左挤且不会互相覆盖；折叠态计划恢复单独居中,呼吸灯移到 token 统计左侧。 */}

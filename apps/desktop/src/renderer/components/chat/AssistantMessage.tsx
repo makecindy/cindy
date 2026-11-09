@@ -69,6 +69,7 @@ import { insertSessionLinkIntoComposer } from '@/lib/composerActionsBus';
 import { MarkdownRenderer } from './MarkdownRenderer';
 import { handleAssistantCopy } from '@/lib/assistantSelectionCopy';
 import { MessageActionBar } from './MessageActionBar';
+import { PluginUiBody, PluginUiSlot } from '@/cindy-brain/PluginUiContributions';
 import { shareSelectionStore } from './shareSelectionStore';
 import { useForkAtMessage } from './useForkAtMessage';
 import { useDeleteMessage } from './useDeleteMessage';
@@ -405,6 +406,8 @@ export const AssistantMessage = memo(function AssistantMessage({
             {t('chat.failedSamplingAttempt')}
           </div>
         )}
+        <PluginUiBody position="message.body" role="assistant" sessionId={currentSessionId} disabled={!!ghostRenderCard || !!remoteHostId}
+          context={() => ({ message: { clientId: messageClientId, role: 'assistant', content, isStreaming } })}>
         {ghostRenderCard && messageClientId && !showOriginal ? (
           // 出口钩子自绘:意识卡片替换气泡(净化后的静态 HTML,沙箱 iframe)。
           // 复用 GhostToolCard(自带主机身份头 + 主题注入 + 沙箱),turn 级无
@@ -445,6 +448,8 @@ export const AssistantMessage = memo(function AssistantMessage({
             allowPrivilegedLinks={allowPrivilegedLinks}
           />
         )}
+        </PluginUiBody>
+        {!isStreaming && showActionBar && <PluginUiSlot position="turn.footer" sessionId={currentSessionId} clientId={messageClientId} role="assistant" />}
         {/* 自绘卡在场:提供原文 ↔ 意识卡片切换(信任边界,主机绘制,始终可切回原文)。 */}
         {ghostRenderCard && (
           <button

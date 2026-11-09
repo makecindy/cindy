@@ -130,6 +130,7 @@ import {
   takeComposerSubmitRequest,
 } from '@/lib/composerActionsBus';
 import { resolveComposerModelSelection } from './composerModelSelection';
+import { PluginUiSlot, usePluginUiHas } from '@/cindy-brain/PluginUiContributions';
 import type { SessionRuntimeProfileProjection, SessionRuntimePendingProjection } from '@/lib/ccAgent.types';
 import {
   ModelSelector,
@@ -1525,6 +1526,7 @@ export function ChatInput({
   // call sites keep working unchanged; NewMakerDraftRoute passes an explicit
   // sentinel to keep the transient draft alive across sidebar switches.
   const storageKey = draftKey ?? sessionId;
+  const hasPluginToolbar = usePluginUiHas('composer.toolbar');
   // perf/session-switch 探针(见文件头 perfLog 注释):按 storageKey 换代计一次
   // render 起点,layout effect 里量到 commit 完成;覆盖"remount"与"复用组件仅换
   // key"两种切换形态。纯诊断:所有测量走 import.meta.env.DEV,生产构建里 body
@@ -10545,9 +10547,10 @@ export function ChatInput({
           showFolderPicker=false + leftOfFolderPicker 提供独立 toolbar 时，本行只渲染 toolbar（不显示 folder chip）
           delayed-create:sessionId=undefined 也要显示(NewMakerDraftRoute 走 transient 模式),
           handleFolderSelect 的 sessionService.update 内部已用 sessionId guard。 */}
-      {(showFolderPicker || leftOfFolderPicker) && (
+      {(showFolderPicker || leftOfFolderPicker || hasPluginToolbar) && (
         <div className="flex w-full items-end justify-end gap-2">
           {leftOfFolderPicker}
+          <PluginUiSlot position="composer.toolbar" sessionId={sessionId} />
           {showFolderPicker && (
             <FolderPickerPopover
               open={folderOpen}

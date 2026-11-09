@@ -173,7 +173,7 @@ export function createTaskInstallConsentPrompt(
   task: { sessionId: string; sessionInstanceId: string } | null,
   requestHostPermission: HostPermissionRequester | undefined,
 ): GhostInstallConsentPrompt {
-  return async (request) => {
+  const prompt: GhostInstallConsentPrompt = async (request) => {
     if (!task || !requestHostPermission) {
       throw new Error('Plugin install confirmation requires the calling task');
     }
@@ -198,4 +198,6 @@ export function createTaskInstallConsentPrompt(
       untrack();
     }
   };
+  prompt.hostUiCapabilityApproval = true;
+  return prompt;
 }

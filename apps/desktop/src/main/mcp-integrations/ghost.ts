@@ -2338,7 +2338,7 @@ export function getCindyGhostsMcpDeps(
       const target = { ...initialVisibility.ghost };
       if (pageCall && (pageCall.instance !== installedGhostStoragePart(target) || pageCall.tool !== tool ||
           target.approval.state !== 'approved' || target.approval.revision !== pageCall.revision ||
-          pageCall.sessionId !== sessionContext?.sessionId)) return { ok: false, errorCode: 'PERMISSION_DENIED', message: 'Page call authorization changed' };
+          pageCall.sessionId !== (sessionContext?.sessionId ?? null))) return { ok: false, errorCode: 'PERMISSION_DENIED', message: 'Page call authorization changed' };
       const instanceId = installedGhostStoragePart(target);
       // Capture result privacy from this approved revision before any async work.
       // Missing historical HTML disables pages, not the original view-only data boundary.

@@ -49,6 +49,7 @@ import { cn } from '@/lib/utils';
 import { MENU_ITEM_CLASS } from '@/features/cc-agent/sidebar/menuStyles';
 import { CHAT_COLOR_TRANSITION_CLASS, CHAT_ICON_BUTTON_CLASS } from './chatChrome';
 import { MessageReadAloudContext } from './MessageReadAloudContext';
+import { PluginUiSlot, PluginUiMessageMenuItem, usePluginUiMessageMenuEntries, runPluginUiEntry, type PluginUiEntry } from '@/cindy-brain/PluginUiContributions';
 import { ChatReplyIcon } from './ChatReplyIcon';
 import { Spinner } from '@/components/ui/spinner';
 import type { ForkAtMessageRunOptions } from './useForkAtMessage';
@@ -199,13 +200,14 @@ export function MessageActionBar({
 }: MessageActionBarProps) {
   const { t } = useTranslation();
   const readAloud = useContext(MessageReadAloudContext);
+  const pluginMenuEntries = usePluginUiMessageMenuEntries({ sessionId, role: align === 'right' ? 'user' : 'assistant' });
   const [copied, setCopied] = useState(false);
   const [forking, setForking] = useState(false);
   // 用户确认开启新任务后，到创建结束前提示与操作栏常驻，不随鼠标移开消失；
   // 确认框打开期间仍按普通 hover 驱动，避免提示压在确认框背后。
   const [forkConfirmed, setForkConfirmed] = useState(false);
   const [forkTipHovered, setForkTipHovered] = useState(false);
-  const [deleting, setDeleting] = useState(false);
+  const [menuActionPending, setMenuActionPending] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   // Radix restores focus to the trigger when a menu closes. Programmatic
   // focus restoration is treated as `:focus-visible` by Chromium even when
@@ -215,8 +217,8 @@ export function MessageActionBar({
   const menuInteractionFromPointerRef = useRef(false);
   // Fork has its own visible button. Menu-owned actions still dim and block
   // the whole bar; Fork keeps the More trigger available while it runs.
-  const inFlight = forking || deleting || rewindInFlight;
-  const moreInFlight = deleting || rewindInFlight;
+  const inFlight = forking || menuActionPending || rewindInFlight;
+  const moreInFlight = menuActionPending || rewindInFlight;
   // `visible` is the actual opacity driver. It tracks `hovered` with a
   // trailing debounce so the bar fades out smoothly (CSS handles the
   // opacity interpolation from current value, not from 1).
@@ -318,16 +320,24 @@ export function MessageActionBar({
   }, [copyText, t]);
 
   const handleDelete = useCallback(async () => {
-    if (!onDelete || deleting) return;
-    setDeleting(true);
+    if (!onDelete || menuActionPending) return;
+    setMenuActionPending(true);
     try {
       await onDelete();
     } catch {
       // useDeleteMessage already maps persistence failures to a user-facing toast.
     } finally {
-      setDeleting(false);
+      setMenuActionPending(false);
     }
-  }, [deleting, onDelete]);
+  }, [menuActionPending, onDelete]);
+
+  const handlePluginMenuAction = async (entry: PluginUiEntry) => {
+    if (inFlight) return;
+    setMenuActionPending(true);
+    try { await runPluginUiEntry(entry, sessionId ?? null); }
+    catch { toast.error(t('pluginUi.actionFailed')); }
+    finally { setMenuActionPending(false); }
+  };
 
   const relText = useRelativeTime(createdAt, { hovered });
   const absText = formatAbsolute(createdAt);
@@ -637,7 +647,7 @@ export function MessageActionBar({
   const addToChatInMenu = simplifiedBotConversation ? undefined : onAddToChat;
   const moreTriggerRef = useRef<HTMLButtonElement>(null);
   const pendingTopicRef = useRef(false);
-  const moreMenu = (compact || companionFooter || addToChatInMenu || menuActions?.length || copyLinkText || onEditInMenu || canRewind || onDelete) && (
+  const moreMenu = (compact || companionFooter || addToChatInMenu || menuActions?.length || copyLinkText || onEditInMenu || canRewind || onDelete || pluginMenuEntries.length > 0) && (
     <DropdownMenu key="more" open={menuOpen} onOpenChange={setMenuOpen}>
       <DropdownMenuTrigger asChild>
         <Tip text={t('chat.messageActionBar.moreActions')}>
@@ -786,13 +796,21 @@ export function MessageActionBar({
             {t('chat.messageActionBar.rewind')}
           </DropdownMenuItem>
         )}
+        {pluginMenuEntries.length > 0 && (
+          <>
+            {(compact || companionFooter && (onShareAsImage || replyAction) || addToChatInMenu || menuActions?.length || copyLinkText || onEditInMenu || canRewind) && <DropdownMenuSeparator />}
+            {pluginMenuEntries.map(entry => <PluginUiMessageMenuItem key={`${entry.instanceId}:${entry.contribution.id}`}
+              entry={entry} sessionId={sessionId ?? null} clientId={clientId} disabled={inFlight} className={MENU_ITEM_CLASS}
+              onSelect={() => void handlePluginMenuAction(entry)} />)}
+          </>
+        )}
         {onDelete && (
           <>
-            {(addToChatInMenu || menuActions?.length || copyLinkText || onEditInMenu || canRewind) && (
+            {(addToChatInMenu || menuActions?.length || copyLinkText || onEditInMenu || canRewind || pluginMenuEntries.length > 0) && (
               <DropdownMenuSeparator />
             )}
             <DropdownMenuItem
-              disabled={deleting}
+              disabled={menuActionPending}
               onSelect={(event) => {
                 event.stopPropagation();
                 void handleDelete();
@@ -898,6 +916,7 @@ export function MessageActionBar({
       )}
     >
       {items}
+      <PluginUiSlot position="message.actions" sessionId={sessionId} clientId={clientId} role={align === 'right' ? 'user' : 'assistant'} />
     </div>
   );
 }

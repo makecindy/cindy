@@ -45,6 +45,18 @@ const taskTabs = (sessionId: string) =>
   getBucket(sessionId).tabs.filter((tab) => tab.kind === 'plugin-task').map((tab) => tab.state);
 
 describe('openPluginTaskTab', () => {
+  // 同一实例的不同资源有独立身份；重复打开沿原任务桶更新参数，不产生新页。
+  it('opens named task resources through the original owner and updates their input in place', async () => {
+    await openPluginTaskTab('task-1', 'sim', { resourceViewId: 'one', resourceInput: { selected: 'a' } });
+    await openPluginTaskTab('task-1', 'sim', { resourceViewId: 'two' });
+    await openPluginTaskTab('task-1', 'sim', { resourceViewId: 'one', resourceInput: { selected: 'b' } });
+    expect(taskTabs('task-1')).toEqual([
+      { instanceId: 'sim', resourceViewId: 'one', resourceInput: { selected: 'b' } },
+      { instanceId: 'sim', resourceViewId: 'two' },
+    ]);
+    expect(routeSidebarCommand).toHaveBeenLastCalledWith({ type: 'open-plugin-task', sessionId: 'task-1',
+      instanceId: 'sim', resourceViewId: 'one', resourceInput: { selected: 'b' } }, { userInitiated: true });
+  });
   // PR #6939 discussion_r4357791816：先开页、后挂载目标任务时不能丢失选中。
   // unit：无 Shell 订阅，验证真实任务桶与全局/组激活位；保留其他组与弹出窗口选择。
   it.each(['same-group', 'other-group', 'popped-out', 'passive'] as const)(

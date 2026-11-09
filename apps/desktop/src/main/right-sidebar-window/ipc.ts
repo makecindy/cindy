@@ -156,7 +156,13 @@ function parseCommand(raw: unknown): RsbWindowCommand {
     if (typeof r.instanceId !== 'string' || !r.instanceId || r.instanceId.length > 256) {
       throwIpcError('INVALID_PARAMS', 'Invalid plugin instance');
     }
-    return { type: 'open-plugin-task', sessionId: r.sessionId, instanceId: r.instanceId };
+    if (r.resourceViewId !== undefined && (typeof r.resourceViewId !== 'string' || !/^[a-z][a-z0-9_-]{0,63}$/.test(r.resourceViewId)))
+      throwIpcError('INVALID_PARAMS', 'Invalid plugin resource view');
+    if (r.resourceInput !== undefined && (!r.resourceInput || typeof r.resourceInput !== 'object' || Array.isArray(r.resourceInput) ||
+      Buffer.byteLength(JSON.stringify(r.resourceInput), 'utf8') > MAX_STATE_JSON_BYTES)) throwIpcError('INVALID_PARAMS', 'Invalid plugin resource input');
+    return { type: 'open-plugin-task', sessionId: r.sessionId, instanceId: r.instanceId,
+      ...(r.resourceViewId === undefined ? {} : { resourceViewId: r.resourceViewId as string }),
+      ...(r.resourceInput === undefined ? {} : { resourceInput: r.resourceInput as Record<string, unknown> }) };
   }
   if (r.type === 'open-routines-tab') {
     if (typeof r.botId !== 'string' || !r.botId || r.botId.length > 128) throwIpcError('INVALID_PARAMS', 'Invalid teammate');

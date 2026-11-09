@@ -31,7 +31,7 @@ const appFailureCodes = new Set([
   'MCP_PLUGIN_UNAVAILABLE', 'MCP_PLUGIN_CSP_DOMAIN_NOT_DECLARED',
   'CHANNEL_NOT_ALLOWED', 'CHANNEL_NOT_FOUND', 'UNKNOWN_CHANNEL', 'NOT_FOUND',
 ]);
-function logAppFailure(error: unknown, phase: 'open' | 'sandbox' | 'initialize' | 'active', sessionId: string, clientId: string): void {
+function logAppFailure(error: unknown, phase: 'open' | 'sandbox' | 'initialize' | 'active', sessionId: string | null, clientId: string): void {
   const message = error instanceof Error ? error.message : typeof error === 'string' ? error : '';
   const code = message.match(/\b[A-Z][A-Z_]+\b/g)?.find(value => appFailureCodes.has(value)) ?? 'UNKNOWN';
   const stage = code.endsWith('_TIMEOUT') ? 'timeout' : code === 'MCP_APP_SANDBOX_FAILED' ? 'sandbox' : phase;
@@ -80,18 +80,21 @@ function hostContext(locale: string, element: HTMLElement): Record<string, unkno
 }
 
 interface McpAppCardProps {
-  sessionId: string;
+  sessionId: string | null;
   clientId: string;
   title: string;
   fallbackText?: string;
   plugin?: unknown;
+  source?: { instanceId: string; viewId: string };
+  contextSource?: { read(): Record<string, unknown>; subscribe(changed: () => void): () => void };
+  onUnavailable?(): void;
 }
 
 export function McpAppCard(props: McpAppCardProps) {
   const { t } = useTranslation();
   const deviceId = useSyncExternalStore(
     remoteProjectsStore.subscribe,
-    () => getStickySessionDeviceId(props.sessionId),
+    () => props.sessionId === null ? undefined : getStickySessionDeviceId(props.sessionId),
     () => undefined,
   );
   // Shared-task peers can read history, but must not create an interactive View.
@@ -113,7 +116,7 @@ export function McpAppCard(props: McpAppCardProps) {
 }
 
 /** Untrusted HTML always sits across an origin boundary, without Cindy's preload. */
-function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, deviceId, plugin }: McpAppCardProps & { deviceId?: string }) {
+function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, deviceId, plugin, source, contextSource, onUnavailable }: McpAppCardProps & { deviceId?: string }) {
   const { t, i18n } = useTranslation();
   const pluginTrust = plugin && typeof plugin === 'object' && 'trust' in plugin ? String(plugin.trust) : undefined;
   const appTitle = title || t('mcpApps.appName');
@@ -130,6 +133,9 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
   const locale = i18n.resolvedLanguage ?? i18n.language;
   const localeRef = useRef(locale);
   localeRef.current = locale;
+  const contextSourceRef = useRef(contextSource);
+  contextSourceRef.current = contextSource;
+  const unavailableRef = useRef(onUnavailable); unavailableRef.current = onUnavailable;
 
   useEffect(() => {
     // A failed View collapses; observe the card so its retry stays visible.
@@ -168,6 +174,7 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
         setError(/MCP_APP_FILES_LOCAL_ONLY/.test(String(error)) ? 'mcpApps.filesOnExecutionComputer' : /MCP_PLUGIN_CSP_DOMAIN_NOT_DECLARED/.test(String(error)) ? 'mcpApps.pluginCspRejected' : plugin && /MCP_PLUGIN_UNAVAILABLE|MCP_APP_SERVER_CHANGED|MCP_APP_VIEW_UNAVAILABLE/.test(String(error)) ? 'mcpApps.pluginRevoked' : mcpAppFailureKey(error));
         setMode('inline');
         dispose();
+        unavailableRef.current?.();
       }
     };
     const controller = new McpAppController(
@@ -189,6 +196,8 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
         }
       },
       fail,
+      undefined,
+      source,
     );
     controllerRef.current = controller;
     setLoading(true);
@@ -202,10 +211,49 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
       } else controller.receive(message);
     };
     window.addEventListener('message', receive);
+    const readContext = () => ({ ...hostContext(localeRef.current, element),
+      ...(contextSourceRef.current ? { cindy: contextSourceRef.current.read() } : {}) });
+    let lastContext = '';
+    let queued = false;
+    let sending = false;
+    let pendingContext: Record<string, unknown> | undefined;
+    const flush = async () => {
+      if (sending || disposed || !opened) return;
+      sending = true;
+      try {
+        while (!disposed && pendingContext) {
+          const latest = pendingContext;
+          pendingContext = undefined;
+          await controller.context(latest);
+        }
+      } catch { /* Optional state cannot break the original content. */ }
+      finally { sending = false; }
+    };
+    const update = () => {
+      if (queued || disposed) return;
+      queued = true;
+      queueMicrotask(() => {
+        queued = false;
+        if (disposed) return;
+        const context = readContext();
+        const serialized = JSON.stringify(context);
+        if (serialized === lastContext) return;
+        lastContext = serialized;
+        heightGuard.resize(element.clientWidth);
+        pendingContext = context;
+        void flush();
+      });
+    };
+    const unsubscribeContext = contextSourceRef.current?.subscribe(update);
+    const initialContext = readContext();
+    lastContext = JSON.stringify(initialContext);
+    let opened = false;
     void controller
-      .open(hostContext(localeRef.current, element))
+      .open(initialContext)
       .then(async (document) => {
         if (!document || disposed) return;
+        opened = true;
+        void flush();
         phase = 'sandbox';
         localViewId = document.viewId;
         setBorder(document.prefersBorder);
@@ -224,15 +272,6 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
       .catch((error) => {
         fail(error);
       });
-    let lastContext = JSON.stringify(hostContext(localeRef.current, element));
-    const update = () => {
-      const context = hostContext(localeRef.current, element);
-      const serialized = JSON.stringify(context);
-      if (serialized === lastContext) return;
-      lastContext = serialized;
-      heightGuard.resize(element.clientWidth);
-      void controller.context(context).catch(() => {});
-    };
     const themeObserver = new MutationObserver(update);
     themeObserver.observe(document.documentElement, {
       attributes: true,
@@ -247,6 +286,8 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
       // Notify before hiding the frame; close() retains the View until the
       // teardown response arrives or the bounded wait expires.
       controller.prepareNativeClose();
+      unsubscribeContext?.();
+      pendingContext = undefined;
       themeObserver.disconnect();
       sizeObserver.disconnect();
       // Layout cleanup runs before React removes the ancestor message tree.
@@ -276,7 +317,7 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
         });
     }
     return dispose;
-  }, [sessionId, clientId, attempt, appTitle, visible, deviceId]);
+  }, [sessionId, clientId, attempt, appTitle, visible, deviceId, source?.instanceId, source?.viewId]);
 
   useEffect(() => {
     if (root.current)
@@ -339,7 +380,7 @@ function InteractiveMcpAppCard({ sessionId, clientId, title, fallbackText, devic
           </Button>
         )}
       </div>
-      <McpAppPermissionPrompt sessionId={sessionId} clientId={clientId} />
+      {sessionId !== null && <McpAppPermissionPrompt sessionId={sessionId} clientId={clientId} />}
       {error && (
         <p role="alert" className="px-3 pb-3 text-13 text-[var(--text-secondary)]">
           {t(error)}

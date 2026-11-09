@@ -877,6 +877,12 @@ Host receipt 的 `simulatorPreviousRelId` 只允许这对 ID 和 root 路径，�
 
 ## 6. 作者契约与编写手册同步
 
+插件界面扩展的作者入口为随包 `references/plugin-host-ui.md`，具名视图和原生入口仍共用
+MCP Apps，不能另建页面 SDK 或逐历史消息 render/query。`mcpApps.host` 新能力由 receipt 的
+可选 `approvedHostUi` 记录实际展示并批准的精确主体；页面原有批准不扩张为草稿/上下文等宿主权限。
+未知声明保留为数据，新增已知能力仍需批准；存量原工具与页面不要求重新确认。
+同一 Host 组件在主窗、分离侧栏使用同一组受限 preload 操作，不能因无插件也挂载 Host 而调用缺失桥。
+
 内置 `cindy-plugin-creator` Skill 是 Agent 替用户编写插件的**统一手册与流程入口**，正本位于
 `apps/desktop/resources/system-skills/cindy-plugin-creator/`。`SKILL.md` 负责流程与按需阅读索引，
 `references/` 负责各章作者契约。创作流程以 §0a 的宿主版本与源码核验开头：先确认插件

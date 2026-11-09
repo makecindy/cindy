@@ -3,6 +3,11 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { ghostHostUiApprovalTokens, type InstalledGhost } from '../../../../shared/ghost';
+import { pluginUiInterestKey, type PluginUiStateChange } from '../../../../shared/pluginUi';
+
+const installed = vi.hoisted(() => ({ ghosts: [] as InstalledGhost[] }));
+vi.mock('@/cindy-brain/useInstalledGhosts', () => ({ useInstalledGhosts: () => installed.ghosts }));
 
 vi.mock('react-i18next', async () => {
   const { default: en } = await import('@/i18n/locales/en/common.json');
@@ -42,11 +47,97 @@ vi.mock('@/hooks/useRelativeTime', () => ({
 }));
 
 vi.mock('@/lib/toast', () => ({
-  toast: { success: vi.fn(), warning: vi.fn() },
+  toast: { success: vi.fn(), warning: vi.fn(), error: vi.fn() },
 }));
 
 import { MessageActionBar } from '../MessageActionBar';
+import { PluginUiProvider } from '@/cindy-brain/PluginUiContributions';
 import { MessageReadAloudContext, type MessageReadAloud } from '../MessageReadAloudContext';
+
+// 真实菜单消费入口：只替换已装插件投影与 IPC，保留声明批准、菜单和按需订阅实现。
+// 验收：关闭菜单不订阅，打开只消费当前消息，点击沿原动作执行一次，关闭释放。tier: unit。
+describe('plugin entries in the message More menu', () => {
+  let receive: ((update: { epoch: string; updates: PluginUiStateChange[] }) => void) | undefined;
+  const invoke = vi.fn(async (_session: unknown, _input: Record<string, unknown>) => ({ updates: [] }));
+  const stop = vi.fn();
+  const listen = vi.fn((listener: NonNullable<typeof receive>) => {
+    receive = listener;
+    return () => { receive = undefined; stop(); };
+  });
+  const ghost = (role: 'user' | 'assistant' = 'assistant'): InstalledGhost => {
+    const value: InstalledGhost = { enabled: true, dir: '/fixture', uiCapabilityApproved: true,
+      approval: { state: 'approved', revision: 'one' }, manifest: { schemaVersion: 3, id: 'planner', name: 'Planner',
+        kind: 'chip', entry: 'main.js', version: '1', tools: [{ name: 'help', description: 'Help' }], mcpApps: {
+          ui: { resources: [], tools: { help: { visibility: ['app'] } } },
+          host: { contributions: [{ id: 'message-menu', title: 'Analyze message', position: 'message.menu',
+            tool: 'help', match: { roles: [role] } }] },
+        } } };
+    value.approvedHostUi = ghostHostUiApprovalTokens(value.manifest);
+    return value;
+  };
+  const renderBar = () => render(<PluginUiProvider>
+    <MessageActionBar copyText="body" align="left" hovered sessionId="task-a" clientId="message-a" />
+  </PluginUiProvider>);
+  const openMenu = () => fireEvent.pointerDown(screen.getByRole('button', { name: 'chat.messageActionBar.moreActions' }), { button: 0, ctrlKey: false });
+
+  beforeEach(() => {
+    installed.ghosts = [];
+    receive = undefined;
+    invoke.mockReset(); invoke.mockResolvedValue({ updates: [] });
+    listen.mockClear(); stop.mockClear();
+    window.electronAPI = { maker: { mcpApps: invoke, onPluginUiState: listen } } as unknown as typeof window.electronAPI;
+  });
+
+  it.each(['none', 'disabled', 'unapproved', 'other-role'])('adds no menu or subscription for %s consumers', mode => {
+    const value = ghost(mode === 'other-role' ? 'user' : 'assistant');
+    if (mode === 'disabled') value.enabled = false;
+    if (mode === 'unapproved') value.approvedHostUi = [];
+    installed.ghosts = mode === 'none' ? [] : [value];
+    renderBar();
+    expect(screen.queryByRole('button', { name: 'chat.messageActionBar.moreActions' })).toBeNull();
+    expect(invoke).not.toHaveBeenCalled(); expect(listen).not.toHaveBeenCalled();
+  });
+
+  it('opens an approved plugin-only menu and runs its original action once while preserving the pending guard', async () => {
+    installed.ghosts = [ghost()];
+    let finish!: (value: { updates: never[] }) => void;
+    const pending = new Promise<{ updates: never[] }>(resolve => { finish = resolve; });
+    invoke.mockImplementation(async (_session, input) => input.op === 'plugin-action' ? pending : { updates: [] });
+    renderBar();
+    const trigger = screen.getByRole('button', { name: 'chat.messageActionBar.moreActions' });
+    expect(invoke).not.toHaveBeenCalled(); expect(listen).not.toHaveBeenCalled();
+    openMenu();
+    const item = screen.getByRole('menuitem', { name: /Analyze message/ });
+    await waitFor(() => expect(listen).toHaveBeenCalledTimes(1));
+    fireEvent.click(item);
+    await waitFor(() => expect(invoke.mock.calls.filter(([, input]) => input.op === 'plugin-action')).toHaveLength(1));
+    expect(invoke).toHaveBeenCalledWith('task-a', { op: 'plugin-action', instanceId: 'planner', id: 'message-menu', value: undefined });
+    expect(trigger.hasAttribute('disabled')).toBe(true);
+    fireEvent.click(trigger);
+    expect(invoke.mock.calls.filter(([, input]) => input.op === 'plugin-action')).toHaveLength(1);
+    await act(async () => { finish({ updates: [] }); });
+    await waitFor(() => expect(trigger.hasAttribute('disabled')).toBe(false));
+    await waitFor(() => expect(stop).toHaveBeenCalledTimes(1));
+    expect(invoke.mock.calls.filter(([, input]) => input.op === 'native-interest').at(-1)?.[1].entries).toEqual([]);
+  });
+
+  it('consumes state only while open and honors the original contribution disabled state', async () => {
+    installed.ghosts = [ghost()];
+    renderBar(); openMenu();
+    await waitFor(() => expect(invoke.mock.calls.some(([, input]) => input.op === 'native-interest')).toBe(true));
+    const subscription = invoke.mock.calls.find(([, input]) => input.op === 'native-interest')![1];
+    act(() => receive?.({ epoch: String(subscription.epoch), updates: [{
+      key: pluginUiInterestKey({ instanceId: 'planner', id: 'message-menu', sessionId: 'task-a', clientId: 'message-a' }),
+      revision: 1, state: { title: 'Unavailable', disabled: true },
+    }] }));
+    const item = screen.getByRole('menuitem', { name: /Unavailable/ });
+    expect(item.getAttribute('aria-disabled')).toBe('true');
+    fireEvent.click(item);
+    expect(invoke.mock.calls.some(([, input]) => input.op === 'plugin-action')).toBe(false);
+    fireEvent.keyDown(item, { key: 'Escape' });
+    await waitFor(() => expect(stop).toHaveBeenCalledTimes(1));
+  });
+});
 
 describe('companion message read-aloud', () => {
   const identity = { sessionId: 'companion-task', messageId: 'reply' };

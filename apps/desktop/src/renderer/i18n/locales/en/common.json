@@ -7851,7 +7851,9 @@
         "mcpUi": "Display interactive pages in the conversation",
         "mcpUiDomains": "Page network domains: {{domains}}",
         "mcpAppOnly": "Page only",
-        "uiPageAccess": "Pages: {{pages}}; domains: {{domains}}; tools available to pages: {{tools}}"
+        "uiPageAccess": "Pages: {{pages}}; domains: {{domains}}; tools available to pages: {{tools}}",
+        "uiHost": "Provide interfaces and Host actions in Cindy",
+        "uiHostAccess": "{{subject}}: {{access}}"
       },
       "connections": {
         "confirmTitle": "Add connection address",
@@ -19294,6 +19296,12 @@
       "failed": "Could not save. Try again.",
       "restore": "Restore defaults"
     }
+  },
+  "pluginUi": {
+    "display": "Display",
+    "original": "Original",
+    "menu": "Plugin views and commands",
+    "actionFailed": "This plugin action could not be completed. Try again."
   },
   "mcpApps": {
     "sharedTaskReadOnly": "Only the session owner can interact with this card.",

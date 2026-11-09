@@ -7921,7 +7921,9 @@
         "mcpUi": "Exibir páginas interativas na conversa",
         "mcpUiDomains": "Domínios de rede da página: {{domains}}",
         "mcpAppOnly": "Somente página",
-        "uiPageAccess": "Páginas: {{pages}}; domínios: {{domains}}; ferramentas disponíveis para as páginas: {{tools}}"
+        "uiPageAccess": "Páginas: {{pages}}; domínios: {{domains}}; ferramentas disponíveis para as páginas: {{tools}}",
+        "uiHost": "Fornecer interfaces e ações do host no Cindy",
+        "uiHostAccess": "{{subject}}: {{access}}"
       },
       "connections": {
         "confirmTitle": "Adicionar endereço de conexão",
@@ -19468,6 +19470,12 @@
       "failed": "Não foi possível salvar. Tente novamente.",
       "restore": "Restaurar padrões"
     }
+  },
+  "pluginUi": {
+    "display": "Exibição",
+    "original": "Original",
+    "menu": "Visualizações e comandos do plugin",
+    "actionFailed": "Não foi possível concluir a ação do plugin. Tente novamente."
   },
   "mcpApps": {
     "sharedTaskReadOnly": "Apenas o proprietário da sessão pode interagir com este cartão.",

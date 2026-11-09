@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import type { PluginModelPickerOptions, PluginModelPickerResult } from '../shared/pluginModelPicker';
+import type { PluginUiControlState, PluginUiInterest, PluginUiTarget } from '../shared/pluginUi';
 
 /**
  * 意识电子脑的最小管子桥(脑机接口;docs/dev-rules/plugin-security-and-authoring.md)。
@@ -46,12 +47,82 @@ import type { PluginModelPickerOptions, PluginModelPickerResult } from '../share
 
 type HostMessageListener = (payload: unknown) => void;
 const listeners = new Set<HostMessageListener>();
+let consumerRevision = 0;
+const uiConsumers = new Map<string, Set<string>>();
+const targetKey = (target: PluginUiTarget) => JSON.stringify([target.sessionId ?? null, target.clientId ?? null]);
+function replaceUiConsumers(consumers: PluginUiInterest[]) {
+  consumerRevision++;
+  uiConsumers.clear();
+  for (const consumer of consumers) {
+    let targets = uiConsumers.get(consumer.id);
+    if (!targets) { targets = new Set(); uiConsumers.set(consumer.id, targets); }
+    targets.add(targetKey(consumer));
+  }
+}
+const hasUiConsumers = (id: string, target?: PluginUiTarget) => {
+  const targets = uiConsumers.get(id);
+  return target ? targets?.has(targetKey(target)) === true : !!targets?.size;
+};
+type UiUpdate = { id: string; target?: PluginUiTarget; build(): PluginUiControlState;
+  pending: Promise<{ ok: true; observed: boolean }>;
+  resolve(result: { ok: true; observed: boolean }): void; reject(error: unknown): void };
+let uiUpdates = new Map<string, UiUpdate>();
+let uiSending = false, uiScheduled = false;
+function scheduleUiUpdates() {
+  if (uiSending || uiScheduled) return;
+  uiScheduled = true;
+  queueMicrotask(() => { uiScheduled = false; void flushUiUpdates(); });
+}
+async function flushUiUpdates() {
+  if (uiSending || !uiUpdates.size) return;
+  const pending = uiUpdates; uiUpdates = new Map();
+  const active: UiUpdate[] = [];
+  const updates: Array<{ id: string; target?: PluginUiTarget; state: PluginUiControlState }> = [];
+  for (const update of pending.values()) {
+    if (!hasUiConsumers(update.id, update.target)) {
+      update.resolve({ ok: true, observed: false });
+      continue;
+    }
+    try { updates.push({ id: update.id, ...(update.target ? { target: update.target } : {}), state: update.build() }); active.push(update); }
+    catch (error) { update.reject(error); }
+  }
+  if (!active.length) return;
+  uiSending = true;
+  try {
+    const result = await ipcRenderer.invoke('ghost-pipe:send', { type: 'ui-state-update', updates });
+    active.forEach((update, index) => update.resolve({ ok: true, observed: result?.observed?.[index] === true }));
+  } catch (error) { active.forEach(update => update.reject(error)); }
+  finally { uiSending = false; if (uiUpdates.size) scheduleUiUpdates(); }
+}
 ipcRenderer.on('ghost-pipe:message', (_event, payload: unknown) => {
+  if (payload && typeof payload === 'object' && 'type' in payload && payload.type === 'ui-consumers' && 'consumers' in payload && Array.isArray(payload.consumers))
+    replaceUiConsumers(payload.consumers);
   listeners.forEach((listener) => listener(payload));
 });
 
 contextBridge.exposeInMainWorld('cindy', {
-  ping: (): Promise<{ ok: true; id: string }> => ipcRenderer.invoke('ghost-pipe:ping'),
+  ping: async (): Promise<{ ok: true; id: string }> => {
+    const revision = consumerRevision;
+    const result = await ipcRenderer.invoke('ghost-pipe:ping');
+    if (revision === consumerRevision) replaceUiConsumers(result.nativeUiConsumers ?? []);
+    return result;
+  },
+  ui: {
+    hasConsumers: hasUiConsumers,
+    updateContribution: (id: string, build: () => PluginUiControlState, target?: PluginUiTarget): Promise<{ ok: true; observed: boolean }> => {
+      if (!hasUiConsumers(id, target)) return Promise.resolve({ ok: true, observed: false });
+      const key = JSON.stringify([id, target ? targetKey(target) : null]);
+      let update = uiUpdates.get(key);
+      if (!update) {
+        let resolve!: UiUpdate['resolve'], reject!: UiUpdate['reject'];
+        const pending = new Promise<{ ok: true; observed: boolean }>((done, fail) => { resolve = done; reject = fail; });
+        update = { id, target, build, pending, resolve, reject }; uiUpdates.set(key, update);
+      }
+      update.build = build;
+      scheduleUiUpdates();
+      return update.pending;
+    },
+  },
   onHostMessage: (cb: HostMessageListener): (() => void) => {
     listeners.add(cb);
     return () => listeners.delete(cb);

@@ -98,6 +98,8 @@ import { toRemoteMediaOrigin } from '@/lib/sessionFileOrigin';
 import { rewriteToRemoteMediaOrigin } from '../../../shared/remoteMediaUrl';
 import { useInstalledGhosts } from '@/cindy-brain/useInstalledGhosts';
 import { useChatSessionFile } from './ChatSessionFileContext';
+import { PluginUiBody } from '@/cindy-brain/PluginUiContributions';
+import { isRemoteFileOrigin } from '@/lib/sessionFileOrigin';
 import {
   ACTIVITY_ROW_CHEVRON_SLOT_CLASS,
   ACTIVITY_ROW_COLOR_TRANSITION_CLASS,
@@ -1195,6 +1197,9 @@ export function AgentActionRow({
           v11 (2026-04-20):背景色 + 边框对齐"用户输入气泡"
           (`--msg-user-bg` + `--msg-user-border`),与 hover 嵌入式 inline-code
           灰区分开,把就地展开视觉上提升为一个独立"卡片"。 */}
+      <PluginUiBody position="tool.body" sessionId={fileCtx.sessionId} tool={toolName}
+        disabled={isRemoteFileOrigin(fileCtx.origin)} plugin={message.sourcePlugin?.pluginId}
+        context={() => ({ tool: { clientId: message.clientId, name: toolName, input: message.toolInput, result: toolResult, status } })}>
       {isInlineExpand && expanded && (
         <div
           // 行按钮本身是 select-none,这里必须显式 select-text,让用户能复制
@@ -1229,6 +1234,7 @@ export function AgentActionRow({
         </div>
       )}
 
+      </PluginUiBody>
       {/*
         tool 返回 JSON 里若带 xdt_image_url(单张) / xdt_image_urls(多张)的图片,
         不在这里渲染——MessageStream Pass 2 会把它们提取出来作为独立的

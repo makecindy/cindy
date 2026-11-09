@@ -43,6 +43,12 @@ function exposedNestedKeys(src: string, parent: string): string[] {
   return body === null ? [] : objectKeys(body);
 }
 
+// Electron 边界 §4/5：同一个 App/Host 组件也挂在分离侧栏，须提供同一组用途受限的桥。
+// 纯跨窗口协议契约（guard）；缺口是无插件时 Host 订阅也会调用缺失方法，具名页面无法打开。
+it('exposes the same bound plugin App operations to the detached renderer', () => {
+  expect(exposedNestedKeys(source, 'maker')).toEqual(expect.arrayContaining(['mcpApps', 'onPluginUiAction', 'onPluginUiState']));
+});
+
 function extractBlock(src: string, key: string): string | null {
   const re = new RegExp(`(?:^|\\n)[ \\t]*${key}[ \\t]*:[ \\t]*\\{`, 'm');
   const match = re.exec(src);

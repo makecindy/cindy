@@ -87,6 +87,7 @@ import { ChatImageView } from './ChatImageView';
 import { TextLightbox } from './lazyPreviewLightboxes';
 import { ToolPayloadLightbox } from './ToolPayloadLightbox';
 import { MessageActionBar } from './MessageActionBar';
+import { PluginUiBody } from '@/cindy-brain/PluginUiContributions';
 import { shareSelectionStore } from './shareSelectionStore';
 import { ErrorMessageCard } from './ErrorMessageCard';
 import { useForkAtMessage, textToTiptapDoc } from './useForkAtMessage';
@@ -1638,6 +1639,8 @@ export function UserMessage({
                         )}
                       </div>
                     ) : displayBubbleBody.trim() ? (
+                      <PluginUiBody position="message.body" role="user" sessionId={sessionId} disabled={isRemoteFileOrigin(sessionFileCtx.origin)}
+                        plugin={sourcePlugin?.pluginId} context={() => ({ message: { clientId: messageClientId, role: 'user', content } })}>
                       <div
                         className={cn(
                           'whitespace-pre-wrap [overflow-wrap:anywhere]',
@@ -1698,6 +1701,7 @@ export function UserMessage({
                               bubbleAgentReferences,
                             )}
                       </div>
+                      </PluginUiBody>
                     ) : null}
                     {shouldCollapseLongMessage && (
                       <button

@@ -7808,7 +7808,9 @@
         "mcpUi": "会話にインタラクティブなページを表示",
         "mcpUiDomains": "ページが接続できるドメイン：{{domains}}",
         "mcpAppOnly": "ページ専用",
-        "uiPageAccess": "ページ：{{pages}}、ドメイン：{{domains}}、ページから呼び出せるツール：{{tools}}"
+        "uiPageAccess": "ページ：{{pages}}、ドメイン：{{domains}}、ページから呼び出せるツール：{{tools}}",
+        "uiHost": "Cindy に画面とホスト操作を追加",
+        "uiHostAccess": "{{subject}}: {{access}}"
       },
       "connections": {
         "confirmTitle": "接続先の追加",
@@ -19222,6 +19224,12 @@
       "failed": "保存できませんでした。再試行してください。",
       "restore": "既定に戻す"
     }
+  },
+  "pluginUi": {
+    "display": "表示方法",
+    "original": "元の表示",
+    "menu": "プラグインのビューとコマンド",
+    "actionFailed": "プラグインの操作を完了できませんでした。もう一度お試しください。"
   },
   "mcpApps": {
     "sharedTaskReadOnly": "このカードを操作できるのはセッションのオーナーだけです。",

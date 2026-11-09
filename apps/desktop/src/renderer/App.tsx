@@ -40,6 +40,8 @@ import { PluginModelPickerHost } from '@/cindy-brain/PluginModelPickerHost';
 import { LocalAgentConfirmationHost } from '@/components/LocalAgentConfirmationHost';
 import { ForgeOidcInstallConfirmHost } from '@/cindy-brain/ForgeOidcInstallConfirmHost';
 import { GhostInstallConsentHost } from '@/cindy-brain/GhostInstallConsentHost';
+import { PluginUiHost } from '@/cindy-brain/PluginUiHost';
+import { PluginUiProvider } from '@/cindy-brain/PluginUiContributions';
 import { SetupMigrationHost } from '@/features/setup-migration/SetupMigrationHost';
 import { PluginPublisherConfirmHost } from '@/features/plugin/PluginPublisherConfirmHost';
 import { GithubSetupRequestHost } from '@/features/cc-agent/GithubSetupRequestHost';
@@ -487,7 +489,7 @@ export function App() {
                               {!isSecondaryWindow() && !isSidebarWindow() && <SetupMigrationHost />}
                               <PluginPublisherConfirmHost />
                               <GithubSetupRequestHost />
-                              <OwnerScopedRouter />
+                              <PluginUiProvider><PluginUiHost /><OwnerScopedRouter /></PluginUiProvider>
                             </EnvCheckGuard>
                             {!isSecondaryWindow() && !isSidebarWindow() && <StartupLogSupport />}
                           </LoginHandoffHost>
