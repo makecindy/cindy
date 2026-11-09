@@ -2413,6 +2413,30 @@
           "wireProtocol": "openai-chat"
         }
       }
+    },
+    {
+      "id": "atlascloud",
+      "name": "Atlas Cloud",
+      "docsUrl": "https://www.atlascloud.ai/docs",
+      "regionHint": "global",
+      "models": [],
+      "runtimes": {
+        "claude-code": {
+          "baseUrl": "https://api.atlascloud.ai",
+          "modelsUrl": "https://api.atlascloud.ai/v1/models",
+          "wireProtocol": "anthropic-messages"
+        },
+        "codex": {
+          "baseUrl": "https://api.atlascloud.ai/v1",
+          "modelsUrl": "https://api.atlascloud.ai/v1/models",
+          "wireProtocol": "openai-chat"
+        },
+        "pi": {
+          "baseUrl": "https://api.atlascloud.ai/v1",
+          "modelsUrl": "https://api.atlascloud.ai/v1/models",
+          "wireProtocol": "openai-chat"
+        }
+      }
     }
   ]
 }

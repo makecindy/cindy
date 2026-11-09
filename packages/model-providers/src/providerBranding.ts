@@ -13,6 +13,8 @@ export { CINDY_MARK_TRANSFORM, CINDY_MARK_PATH, CINDY_MARK_EARRING_PATH, CINDY_M
 
 // Additional supplier marks: Lobe Icons 5.14.0 (MIT; included in THIRD-PARTY-NOTICES).
 export const PROVIDER_LOGO_PATHS = {
+  // Atlas Cloud mark, the leading glyph of https://www.atlascloud.ai/logo.svg, rescaled to the 24px grid (2026-11-09).
+  atlascloud: 'M12 0.402L0 23.598C5.558 21.397 10.04 21.075 14.07 21.266L12.231 17.196C11.427 17.116 9.095 17.116 7.99 17.407L12 8.492C12 8.492 18.03 21.588 18.04 21.588C19.206 21.769 22.311 22.814 24 23.598L12 0.402Z',
   // Official https://hinoki.security/assets/beta/logomark.svg, scaled to 24px (2026-11-06).
   hinoki: 'M7.41177 0C3.3182 0 0 3.31837 0 7.41174V24H16.58827C20.68173 24 24 20.68156 24 16.58818V0H7.41177Z',
   // Official Magpie mark, scaled from its 44px viewBox to this package's 24px grid.
@@ -99,6 +101,7 @@ export type ProviderLogoRouting = Readonly<
 
 /** Bundled regional presets share a brand and never infer it from display names. */
 const PROVIDER_LOGO_KIND_BY_ID: Readonly<Record<string, ProviderLogoKind>> = {
+  atlascloud: 'atlascloud',
   hinoki: 'hinoki',
   agnes: 'agnes',
   openhubs: 'openhubs',
@@ -183,6 +186,7 @@ const PROVIDER_LOGO_KIND_BY_ID: Readonly<Record<string, ProviderLogoKind>> = {
 
 /** Renamed providers retain stable upstream hosts, matched only on DNS boundaries. */
 const PROVIDER_LOGO_KIND_BY_HOST: readonly (readonly [string, ProviderLogoKind])[] = [
+  ['api.atlascloud.ai', 'atlascloud'],
   ['inference.hinoki.security', 'hinoki'],
   ['apihub.agnes-ai.com', 'agnes'],
   ['openhubs.zhidemai.com', 'openhubs'],

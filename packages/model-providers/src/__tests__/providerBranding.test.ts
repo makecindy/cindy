@@ -44,6 +44,10 @@ describe('provider branding', () => {
     expect(resolveProviderLogoKind('xai')).toBe('xai');
     expect(PROVIDER_LOGO_PATHS.xai).not.toBe(PROVIDER_LOGO_PATHS.openrouter);
   });
+  it('keeps the Atlas Cloud mark on renamed official connections without matching lookalike domains', () => {
+    expect(resolveProviderLogoKind('my-account', { pi: { upstream: 'https://api.atlascloud.ai/v1' } })).toBe('atlascloud');
+    expect(resolveProviderLogoKind('my-account', { pi: { upstream: 'https://api.atlascloud.ai.evil.example/v1' } })).toBeNull();
+  });
   it('keeps the OpenHubs mark on renamed official connections without matching lookalike domains', () => {
     expect(resolveProviderLogoKind('openhubs')).toBe('openhubs');
     expect(resolveProviderLogoKind('my-account', { pi: { upstream: 'https://openhubs.zhidemai.com/v1' } })).toBe('openhubs');
@@ -58,6 +62,7 @@ describe('provider branding', () => {
     ['llamacpp', 'llamacpp'],
     ['vllm', 'vllm'],
     ['magpie', 'magpie'],
+    ['atlascloud', 'atlascloud'],
   ] as const)('maps provider id %s to %s', (providerId, logoKind) => {
     expect(resolveProviderLogoKind(providerId)).toBe(logoKind);
     expect(hasProviderLogo(providerId)).toBe(true);
