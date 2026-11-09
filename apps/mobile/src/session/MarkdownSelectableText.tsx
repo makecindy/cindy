@@ -1,5 +1,6 @@
+import { useWindowFontScale } from '@/platform/windowDimension';
 import { useContext, useRef, type ComponentProps } from 'react';
-import { Platform, StyleSheet, useWindowDimensions, type GestureResponderEvent, type StyleProp, type TextStyle } from 'react-native';
+import { Platform, StyleSheet, type GestureResponderEvent, type StyleProp, type TextStyle } from 'react-native';
 import { UITextView } from 'react-native-uitextview';
 import { MAX_FONT_SIZE_MULTIPLIER, Text } from '@/components/AppText';
 import { i18n } from '@/i18n';
@@ -38,7 +39,7 @@ export function MarkdownSelectableText({
   // 文本提交)。context 为 null(宿主未启用 / 非会话场景)时零开销走原路径。
   const quoteCtx = useContext(SelectionQuoteContext);
   const renderedLinesRef = useRef<readonly string[]>([]);
-  const { fontScale } = useWindowDimensions();
+  const fontScale = useWindowFontScale();
   if (selectable && allowIosUITextView && Platform.OS === 'ios') {
     const typography = [rest.style, ...(alignmentTextStyles ?? [])]
       .map((style) => StyleSheet.flatten(style) ?? {});

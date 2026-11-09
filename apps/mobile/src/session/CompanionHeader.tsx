@@ -14,7 +14,7 @@ import { CompanionProfileSheet } from './CompanionProfileSheet';
 import { useTeammateNavigation } from './useTeammateNavigation';
 import { CloudHomeSwitchSheet } from './CloudHomeSwitchSheet';
 import { useCloudCompanionHome } from '@/chat/useCloudCompanion';
-import { useRouter } from 'expo-router';
+import { useIsFocused, useRouter } from 'expo-router';
 
 /** Presence dot before the computer name (the list's dot, sized for a 12pt line). */
 const PRESENCE_DOT = 6;
@@ -28,7 +28,7 @@ const DUE_DOT = 7;
  */
 export function CompanionHeader(props: {
   nativeHeader?: boolean;
-  resource: RemoteResource; deviceId: string; deviceName: string; online: boolean; controlsReady?: boolean;
+  resource: RemoteResource; deviceId: string; deviceName: string; online: boolean;
   /** The companion is working on a reply (the avatar breathes). */
   working?: boolean;
   settingsRequest?: { page: 'memory' | 'capabilities'; sequence: number };
@@ -46,11 +46,12 @@ export function CompanionHeader(props: {
   return <CompanionHeaderContent key={accountGeneration} {...props} />;
 }
 
-function CompanionHeaderContent({ nativeHeader, resource, deviceId, deviceName, online, controlsReady = true, working = false, sessionId, onQuoteTodo, onAskCompanion, askCompanionReady = true, onSearch, onBack, settingsRequest }: Parameters<typeof CompanionHeader>[0]) {
+function CompanionHeaderContent({ nativeHeader, resource, deviceId, deviceName, online, working = false, sessionId, onQuoteTodo, onAskCompanion, askCompanionReady = true, onSearch, onBack, settingsRequest }: Parameters<typeof CompanionHeader>[0]) {
   const { t, i18n } = useTranslation();
   const styles = useThemedStyles(makeStyles);
   const navigation = useTeammateNavigation();
   const router = useRouter();
+  const focused = useIsFocused();
   // A cloud companion is one teammate wherever it runs: name its main computer and offer to change it.
   const cloud = useCloudCompanionHome(true);
   const homed = cloud.supported && cloud.actors.some(actor => actor.kind === 'bot' && actor.externalId === resource.ref.id && actor.homeDeviceId === deviceId);
@@ -59,7 +60,7 @@ function CompanionHeaderContent({ nativeHeader, resource, deviceId, deviceName, 
   const [glance, setGlance] = useState(false);
   // Older hosts do not advertise todos; their 近况 simply has no todo section.
   const todosOffered = !!resource.links?.some(link => link.target.kind === 'resource' && link.target.ref.id === 'todos:' + resource.ref.id);
-  const todos = useCompanionGlanceTodos({ deviceId, deviceName, botId: resource.ref.id, enabled: todosOffered && online });
+  const todos = useCompanionGlanceTodos({ deviceId, deviceName, botId: resource.ref.id, enabled: todosOffered && online, active: focused });
   const due = dueTodos(todos.todos);
   const dueSeen = useGlanceDueSeen({ deviceId, botId: resource.ref.id }, due);
   const [initialPage, setInitialPage] = useState<'home' | 'memory' | 'capabilities'>('home');
@@ -84,7 +85,6 @@ function CompanionHeaderContent({ nativeHeader, resource, deviceId, deviceName, 
       </View>}
       identityLabel={[name, deviceName, connection, dueSeen.unseen ? t('devices.glance.dueUnseen') : ''].filter(Boolean).join(', ')}
       identityHint={t('devices.glance.open', { name })}
-      controlsReady={controlsReady}
       onBack={onBack}
       onOpenIdentity={() => { setGlance(true); dueSeen.markSeen(); void todos.refresh(); }}
       onOpenSettings={() => { setInitialPage('home'); setProfile(true); }}

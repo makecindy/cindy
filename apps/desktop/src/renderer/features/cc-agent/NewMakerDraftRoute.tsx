@@ -220,11 +220,13 @@ import {
 import { useInstalledGhosts } from '@/cindy-brain/useInstalledGhosts';
 import { installedGhostStoragePart } from '../../../shared/pluginIdentity.js';
 import {
+  getPendingPluginSuggestion,
   startPendingPluginSuggestion,
   takePendingPluginSuggestion,
   type PluginSuggestionRequest,
 } from './pendingPluginSuggestion';
-import { filterGhostsForWorkdir } from '@/cindy-brain/ghostWorkdirFilter';
+import { pluginSetupRoute, usePluginSkillSetup } from './pluginSkillSetup';
+import { filterGhostsForWorkdir, useWorkdirDisabledGhostIds } from '@/cindy-brain/ghostWorkdirFilter';
 import type { Effort, PermissionMode } from '@/lib/userPreferences.types';
 import {
   type AttachedFile,
@@ -3007,9 +3009,9 @@ export function NewMakerDraftRoute() {
       // 这次显式选择就是目标目录里的种子:seed key 按播种 effect 的构造逐字前置,并标记控制端
       // 已触碰 —— 目标电脑的 capabilities 到达时只做合法性夹紧,不会换成那台的默认模型(与下方
       // 跨引擎选择同一条修法)。
-      const seedSwitchedCatalog = (catalogOwnerDeviceId: string) => {
+      const seedSwitchedCatalog = (targetCatalogDeviceId: string) => {
         dlRuntimeTouchedRef.current = true;
-        dlSeedKeyRef.current = `${catalogOwnerDeviceId}:${dbToMakerAgentKind(
+        dlSeedKeyRef.current = `${targetCatalogDeviceId}:${dbToMakerAgentKind(
           normalizeDbAgentKind(selection.vendor),
         )}`;
         dlSeedCapabilitiesRef.current = null;
@@ -3023,7 +3025,9 @@ export function NewMakerDraftRoute() {
         });
       };
       if (switchesAgentDevice && targetAgentDevice) {
-        seedSwitchedCatalog(targetAgentDevice.deviceId);
+        seedSwitchedCatalog(
+          modelCatalogKey(targetAgentDevice.deviceId, controlledModelRoute.catalogHostDeviceId)!,
+        );
         patchDraft({
           agentDeviceId: targetAgentDevice.deviceId,
           agentDeviceName: targetAgentDevice.name,
@@ -3171,6 +3175,7 @@ export function NewMakerDraftRoute() {
       draft.vendor,
       usesDeviceCatalog,
       catalogDeviceId,
+      controlledModelRoute.catalogHostDeviceId,
       effectiveRemoteHostId,
       patchSshDraftSelection,
       isDeviceLinkDraft,
@@ -3294,14 +3299,16 @@ export function NewMakerDraftRoute() {
   // 分享来的供应商(`share:<id>`)不在设备列表里，也不自动回落：已收到的分享由同区域与跨区域
   // 两路分别加载，任一路还没到或暂时失败时列表并不完整，不能据此判定分享已不在。草稿保留原
   // 选择，发送时由主进程给出「已暂停 / 已不可用」的原因，用户可换模型。
+  // 任务建到被控电脑时同理：来源名单由被控电脑给出，可以包含控制端自己，本机的设备列表不是依据。
   useEffect(() => {
     if (!effectiveAgentDeviceId) return;
     if (isProviderShareAgentDeviceId(effectiveAgentDeviceId)) return;
+    if (controlledModelRoute.catalogHostDeviceId) return;
     if (!selectableDevicesLoaded) return;
     if (selectableDevices.some((d) => d.deviceId === effectiveAgentDeviceId)) return;
     log.warn('[new-maker] selected agent computer is no longer selectable, running the agent here');
     patchDraft({ agentDeviceId: null, agentDeviceName: null });
-  }, [effectiveAgentDeviceId, selectableDevices, selectableDevicesLoaded]);
+  }, [effectiveAgentDeviceId, controlledModelRoute.catalogHostDeviceId, selectableDevices, selectableDevicesLoaded]);
 
   // 创建目标正在异步提交时，发送、建目标以及设备／工作区切换必须共用同一把锁。
   // ref 负责同步 guard，state 只负责驱动 UI 禁用；所有写入都经 markSendInFlight，
@@ -5705,17 +5712,18 @@ export function NewMakerDraftRoute() {
   // 一条建议的预览与读屏描述:内容与点击填入的 pluginSuggestionComposerText 一致,
   // 只是同名限定符按输入框胶囊的规则收起。插件可用时带 $指令(或插件调用说明);需要
   // 先安装的插件点击后走安装引导、不会立即填入,只显示建议本身。插件清单变化时随之重算。
-  // 可用插件表按插件清单与工作目录缓存:filterGhostsForWorkdir 会同步查询目录禁用表,
-  // 不能在每次渲染 / 每条建议上重复调用。
   const installedGhosts = useInstalledGhosts(!isDeviceLinkDraft);
+  const suggestionDisabledIds = useWorkdirDisabledGhostIds(effectiveWorkingDir, installedGhosts, !isDeviceLinkDraft);
   const usableSuggestionGhosts = useMemo(
     () =>
       new Map(
-        (isDeviceLinkDraft ? [] : filterGhostsForWorkdir(installedGhosts, effectiveWorkingDir))
+        (isDeviceLinkDraft || !suggestionDisabledIds ? [] : installedGhosts.filter(
+          (ghost) => !suggestionDisabledIds.has(installedGhostStoragePart(ghost)),
+        ))
           .filter((g) => g.enabled)
           .map((g) => [installedGhostStoragePart(g), g]),
       ),
-    [isDeviceLinkDraft, effectiveWorkingDir, installedGhosts],
+    [isDeviceLinkDraft, suggestionDisabledIds, installedGhosts],
   );
   const suggestionSourceLabels = useMemo(
     () => ({ team: t('settings.ghosts.commandPaletteSource.team') }),
@@ -5816,24 +5824,14 @@ export function NewMakerDraftRoute() {
         const usable =
           ghost && usableGhosts.includes(ghost);
         if (!usable) {
-          let route: string;
-          if (ghost) {
-            route = `/plugins?ghost=${encodeURIComponent(installedGhostStoragePart(ghost))}`;
-          } else {
-            const market = await window.electronAPI.pluginMarket.snapshot();
-            if (!stillCurrent() || readPluginRecommendationSnapshot().ownerId !== request.ownerId)
-              return;
-            const matches = market.items.filter(
-              (item) => item.ghostId === suggestion.pluginId && item.installState !== 'conflict',
-            );
-            // Do not silently choose between competing publishers/sources with the same id.
-            if (matches.length !== 1) {
-              toast.info(t('newChat.pluginSuggestions.unavailable'));
-              return;
-            }
-            route = `/plugins?market=${encodeURIComponent(matches[0].pluginId)}`;
+          const route = await pluginSetupRoute(ghost, suggestion.pluginId ?? '');
+          if (!stillCurrent() || readPluginRecommendationSnapshot().ownerId !== request.ownerId)
+            return;
+          // Do not silently choose between competing publishers/sources with the same id.
+          if (!route) {
+            toast.info(t('newChat.pluginSuggestions.unavailable'));
+            return;
           }
-          if (!stillCurrent()) return;
           const nonce = startPendingPluginSuggestion(request);
           navigate(`${route}&recommendation=${encodeURIComponent(nonce)}`);
           return;
@@ -5883,10 +5881,24 @@ export function NewMakerDraftRoute() {
   useEffect(() => {
     const nonce = (location.state as { pluginSuggestionNonce?: unknown } | null)
       ?.pluginSuggestionNonce;
-    if (typeof nonce !== 'string') return;
+    // `/` palette Skill setups resume through usePluginSkillSetup below.
+    if (typeof nonce !== 'string' || getPendingPluginSuggestion()?.skillName) return;
     const request = takePendingPluginSuggestion(nonce, dataOwnerId, pluginSuggestionTargetKey);
     if (request) void runPluginSuggestion(request);
   }, [dataOwnerId, location.state, pluginSuggestionTargetKey, runPluginSuggestion]);
+
+  const canFillComposer = useCallback(
+    () => !sendInFlightRef.current && !composerMutationLockedRef.current,
+    [],
+  );
+  const pluginSkillSetup = usePluginSkillSetup({
+    enabled: !isRemoteProjectDraft && !isDeviceLinkDraft,
+    ownerId: dataOwnerId,
+    workingDir: effectiveWorkingDir,
+    targetKey: pluginSuggestionTargetKey,
+    draftKey: NEW_MAKER_DRAFT_KEY,
+    canFill: canFillComposer,
+  });
 
   // 注意:不要给 ChatInput 加 key 强制 remount。ChatInput 内部 activeModel /
   // activeEffort / activePermissionMode 都是每次 render 直接从 props 派生
@@ -6143,6 +6155,7 @@ export function NewMakerDraftRoute() {
                     initialProviderId={chatInitialProviderId}
                     planModeEnabled={effectivePlanMode}
                     onPlanModeChange={handlePlanModeChange}
+                    pluginSkillSetup={pluginSkillSetup}
                     fastMode={effectiveFastMode}
                     onFastModeChange={handleFastModeChange}
                     onWorkingDirChange={handleWorkingDirChange}

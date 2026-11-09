@@ -315,7 +315,7 @@ describe('BotGlanceButton', () => {
     h.scopes = [{ sessionId: a.id }, { sessionId: b.id, deviceId: 'mini' }];
     h.attention.set(a.id, 'done'); h.attention.set(b.id, 'error');
     h.refs = [a,b].map((task, i) => ({ id: String(i), sessionId: task.id, owner: 'makecindy', repo: 'cindy', prNumber: 123, lastSeenAt: 2-i }));
-    h.statuses.set('makecindy/cindy#123', { ok: true, status: 'merged', title: 'Actual PR title' });
+    h.statuses.set('github:github.com/makecindy/cindy#123', { ok: true, status: 'merged', title: 'Actual PR title' });
     await openGlance();
     expect(screen.getAllByTestId('bot-glance-task')).toHaveLength(2);
     expect(screen.queryByText('Unrelated')).toBeNull();
@@ -409,7 +409,7 @@ describe('BotGlanceButton', () => {
     h.sessions = [{ id: 'task', title: 'Task', status: 'active' }];
     h.scopes = [{ sessionId: 'task' }];
     h.refs = [4, 2].map(at => ({ sessionId: 'task', owner: 'example', repo: 'app', prNumber: at, lastSeenAt: at }));
-    for (const at of [4, 2]) h.statuses.set(`example/app#${at}`, { ok: true, status: 'merged', title: `PR title ${at}` });
+    for (const at of [4, 2]) h.statuses.set(`github:github.com/example/app#${at}`, { ok: true, status: 'merged', title: `PR title ${at}` });
     h.delegations = [3, 1].map(at => ({ id: `d${at}`, requestingBotId: 'bot-1', status: 'completed',
       title: 'Task', childSessionId: 'task', completedAt: at, updatedAt: at,
       artifacts: [{ path: `file-${at}.pdf`, absolutePath: `/w/file-${at}.pdf`, status: 'added' }] }));

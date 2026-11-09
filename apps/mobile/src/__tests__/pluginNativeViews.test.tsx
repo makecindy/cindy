@@ -205,6 +205,7 @@ vi.mock("lucide-react-native", () =>
       "Radio",
       "ShieldCheck",
       "Shield",
+      "Smartphone",
       "Sparkles",
       "Terminal",
       "Wrench",

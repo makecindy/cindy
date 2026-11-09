@@ -86,6 +86,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  manager.disposeNotificationIndex();
   await fs.promises.rm(workDir, { recursive: true, force: true });
 });
 
@@ -102,6 +103,23 @@ function goodManifest(id = 'hello'): Record<string, unknown> {
     tools: [{ name: 'do_thing', description: '做点事' }],
   };
 }
+
+// Unit integration: the index must follow real install/enable/uninstall mutations
+// without another full-list broadcast; gateway-only fixtures cannot cover this.
+it('updates notification candidates through actual installation mutations', async () => {
+  const manifest = { ...goodManifest('listener'), slots: ['tool', 'subscribe'], subscribe: { topics: ['session'] } };
+  const installed = await manager.install(await makeCindy('listener.cindy', manifest), { namespace: null });
+  expect(installed).toMatchObject({ ghost: { manifest: { id: 'listener' } } });
+  const candidates = await manager.listNotificationCandidatesAsync();
+  expect(candidates.map(g => g.manifest.id)).toEqual(['listener']);
+  const id = installedGhostPhysicalRelId(candidates[0]!);
+  await expect(manager.setEnabled(id, false)).resolves.toEqual({ ok: true });
+  await expect(manager.listNotificationCandidatesAsync()).resolves.toEqual([]);
+  await expect(manager.setEnabled(id, true)).resolves.toEqual({ ok: true });
+  expect((await manager.listNotificationCandidatesAsync()).map(g => g.manifest.id)).toEqual(['listener']);
+  await manager.uninstall(id);
+  await expect(manager.listNotificationCandidatesAsync()).resolves.toEqual([]);
+});
 
 describe('official simulator identity migration', () => {
   it.each(['prepared', 'backed-up', 'placed', 'committed'] as const)(
@@ -608,6 +626,27 @@ describe('GhostManager · 存量插件一次性迁移(§5 升级无感)', () => 
     const removed = await makeCindy('observe-removed.cindy', { ...manifest, version: '1.0.2', agent: { errand: true } }, { 'main.js': '// update' });
     const result = await manager.update(removed, { expectedInstalledApproval: ghostInstallApprovalToken(updated.ghost.approval) });
     expect(result).not.toHaveProperty('ghost.observeCapabilityApproved');
+  });
+
+  it('approves companions on its own and keeps it only while the same instance still declares it', async () => {
+    const manifest = { ...goodManifest(), slots: ['tool', 'agent'], agent: { companions: true } };
+    const pkg = await makeCindy('companions.cindy', manifest, { 'main.js': '// plugin' });
+    await manager.install(pkg, { observeCapabilityApproved: true });
+    const selected = manager.list()[0]!;
+    if (selected.approval.state !== 'approved') throw new Error('fixture not approved');
+    const id = installedGhostStoragePart(selected);
+    expect(selected).not.toHaveProperty('companionsCapabilityApproved');
+    expect(await manager.approveTaskCapability(id, selected.approval.revision, () => true, 'observe')).toBe(false);
+    expect(await manager.approveTaskCapability(id, selected.approval.revision, () => false, 'companions')).toBe(false);
+    expect(await manager.approveTaskCapability(id, selected.approval.revision, () => true, 'companions')).toBe(true);
+    expect(manager.list()[0]).toHaveProperty('companionsCapabilityApproved', true);
+    const update = await makeCindy('companions-update.cindy', { ...manifest, version: '1.0.1' }, { 'main.js': '// update' });
+    const updated = await manager.update(update, { expectedInstalledApproval: ghostInstallApprovalToken(manager.list()[0]!.approval) });
+    expect(updated).toHaveProperty('ghost.companionsCapabilityApproved', true);
+    if (!('ghost' in updated)) throw new Error('fixture update failed');
+    const removed = await makeCindy('companions-removed.cindy', { ...manifest, version: '1.0.2', agent: { errand: true } }, { 'main.js': '// update' });
+    const result = await manager.update(removed, { expectedInstalledApproval: ghostInstallApprovalToken(updated.ghost.approval) });
+    expect(result).not.toHaveProperty('ghost.companionsCapabilityApproved');
   });
 
   it.each(['future', { future: true }, ['future'], null, false])('keeps historical unknown tasks %j enabled without task approval', async (tasks) => {
@@ -4186,11 +4225,19 @@ describe('GhostManager · list', () => {
   // and retry after a Host removal. Sync list coverage cannot exercise these
   // await windows (plugin-security-and-authoring §5; unit, one installed plugin).
   it('async scan reads fresh receipts without using the synchronous receipt reader', async () => {
+    // BWG3: production source projection consumes receipt facts. Without that
+    // callback the old test missed instanceProjection's second synchronous read.
+    const sourceFacts: unknown[] = [];
+    manager = new GhostManager({ getRootDir: () => rootDir,
+      sourcesForInstance: (_record, fact) => { sourceFacts.push(fact); return {}; },
+    });
     await manager.install(await makeCindy('async.cindy', goodManifest()));
+    sourceFacts.length = 0;
     const syncRead = vi.spyOn(GhostInstallReceiptStore.prototype, 'readForRecovery');
     try {
       const first = await manager.listAsync();
       expect(first[0]).toMatchObject({ enabled: true, approval: { state: 'approved' } });
+      expect(sourceFacts).toContainEqual(expect.objectContaining({ ghostId: 'hello', revision: first[0].approval.state === 'approved' ? first[0].approval.revision : '' }));
       expect(syncRead).not.toHaveBeenCalled();
       const receiptPath = path.join(workDir, 'ghosts-install-state', '_ns', '_root', 'hello.json');
       await fs.promises.writeFile(receiptPath, '{invalid');

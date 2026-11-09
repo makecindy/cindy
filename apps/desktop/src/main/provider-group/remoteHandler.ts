@@ -10,7 +10,7 @@
  *
  * 另有一个只读查询发给任务所在的电脑(不论它有没有组)：手机与远程控制问这台电脑上的某个任务此刻归哪个组(§10)。
  */
-import { PROVIDER_RUNNING_TURNS_FIELD } from '@cindy/device-link';
+import { PROVIDER_METADATA_TRUST_MS, PROVIDER_RUNNING_TURNS_FIELD, readProviderMetadataContinuity } from '@cindy/device-link';
 
 import {
   parseProviderGroupRemoteRequest,
@@ -34,6 +34,8 @@ import { throwIpcError } from '../utils/ipcValidate.js';
 export const PROVIDER_GROUP_MAX_REMOTE_COOLDOWN_MS = 8 * 24 * 60 * 60_000;
 
 export interface ProviderGroupRemoteHandlerDeps {
+  prepareContinuity?(controller: string, request: Extract<ReturnType<typeof parseProviderGroupRemoteRequest>, { action: 'pick' }>,
+    member: import('../../shared/providerGroup.js').ProviderGroupMember): Promise<Extract<ProviderGroupRemotePick, { kind: 'member' }>['continuity']>;
   bindFastPolicy?(input: { group: string; deviceId?: string | null; sessionId: string; controllerDeviceId?: string }): Promise<void>;
   /** 当前账号的分配器与负载(每个请求开头取一次，整个请求都用这一份)。 */
   scope(): ProviderGroupOwnerScope;
@@ -49,6 +51,7 @@ export interface ProviderGroupRemoteHandlerDeps {
   rebalanceSuggestion?(sessionId: string): Promise<ProviderGroupRebalanceSuggestion>;
   /** 记下用户确认的换号。 */
   rebalanceDecision?(sessionId: string, memberKey: string, remember: boolean, clientId?: string): Promise<boolean>;
+  rebalancePreference?(sessionId: string, enabled: boolean): Promise<boolean>;
 }
 
 /** 每个账号、每台报告来的电脑最近收下的用量报告序号(乱序到达的旧份丢弃)。按账号的负载对象区分账号。 */
@@ -128,6 +131,9 @@ export async function handleProviderGroupRemote(
   if (request.action === 'rebalance-suggestion') {
     return deps.rebalanceSuggestion ? await deps.rebalanceSuggestion(request.sessionId) : null;
   }
+  if (request.action === 'rebalance-preference') {
+    return { ok: await deps.rebalancePreference?.(request.sessionId, request.enabled) ?? false };
+  }
   if (request.action === 'rebalance-decision') {
     return {
       ok: deps.rebalanceDecision
@@ -142,6 +148,7 @@ export async function handleProviderGroupRemote(
       if (!deps.isRemoteAllowed(providerId) || !deps.readGroup(providerId)) return { kind: 'none' };
       const excluded = new Set(request.exclude);
       while (true) {
+        const configuration = JSON.stringify(deps.readGroup(providerId));
         const pick = await scope.router.pick({
           providerId,
           agentKind: request.agentKind,
@@ -181,10 +188,16 @@ export async function handleProviderGroupRemote(
           continue;
         }
         if (!scope.isCurrent()) return { kind: 'none' };
+        // Optional new endpoints prepare M before returning an offline-capable route.
+        // A legacy/temporarily unreachable M does not change the normal online pick.
+        const continuity = await deps.prepareContinuity?.(controller, request, pick.member).catch(() => undefined);
+        if (!scope.isCurrent()) return { kind: 'none' };
+        if (!deps.isRemoteAllowed(providerId) || configuration !== JSON.stringify(deps.readGroup(providerId))) return { kind: 'unavailable' };
         return {
           kind: 'member',
           member: { key, kind, agentDeviceId, providerId: memberProviderId },
           label: pick.label,
+          ...(continuity ? { continuity } : {}),
           ...(request.quotaRebalance ? { quotaRebalance: true as const } : {}),
         };
       }
@@ -219,8 +232,13 @@ export async function handleProviderGroupRemote(
           : request.model
         : { includeGuestSupport: request.includeGuestSupport === true };
       const view = await scope.router.view(request.providerId, options);
-      return scope.isCurrent() && deps.isRemoteAllowed(request.providerId)
-        ? view : { providerId: request.providerId, config: null, members: [] };
+      if (!scope.isCurrent() || !deps.isRemoteAllowed(request.providerId)) {
+        return { providerId: request.providerId, config: null, members: [] };
+      }
+      // The view is an allowed object-form read. The host, not the caller,
+      // owns the first-hop budget; an existing shorter stamp wins.
+      return { ...view, providerContinuity: readProviderMetadataContinuity(view)
+        ?? { stale: false, remainingMs: PROVIDER_METADATA_TRUST_MS } };
     }
     case 'usage':
     case 'usage-part': {

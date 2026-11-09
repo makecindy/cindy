@@ -8,7 +8,10 @@ import { atomicWriteFileSync, readAtomicFileSync } from '../utils/atomicWriteFil
 const workspace = z.object({ workDir: z.string(), branch: z.string().nullable(), ownerSessionId: z.string().nullable() });
 // autoContinue: 分工 started here (startedHere, the latest 50) go on to the next step by themselves (bot-group-chat.md §7.4).
 const record = z.object({ projectDir: z.string().nullable(), plans: z.record(z.string(), workspace), autoContinue: z.boolean().optional(),
-  startedHere: z.array(z.string()).max(50).optional() });
+  startedHere: z.array(z.string()).max(50).optional(),
+  // Successful attachment progress belongs to the exact authorization/Thread Session.
+  // Optional for existing files; sequence strings must remain precise beyond Number.MAX_SAFE_INTEGER.
+  attachmentAfter: z.record(z.string(), z.string().regex(/^\d+$/)).optional() });
 export function chatServerWorkspaces(endpoint: string, actorId: string, current: () => boolean) {
   const root = ownerScopedUserDataPath('chat-workspace-settings', createHash('sha256').update(`${endpoint}\n${actorId}`).digest('hex'));
   const file = (room: string) => path.join(root, `${z.string().uuid().parse(room)}.json`);

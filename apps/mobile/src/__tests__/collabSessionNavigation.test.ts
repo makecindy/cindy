@@ -144,18 +144,18 @@ describe("collaboration navigation against the real StackRouter", () => {
   interface TestState {
     index: number;
     key: string;
+    routeKeySeq: number;
     routeNames: string[];
     routes: TestRoute[];
-    preloadedRoutes: TestRoute[];
     stale: boolean;
     type: "stack";
   }
   const startState = (): TestState => ({
     index: 0,
     key: "Stack-root",
+    routeKeySeq: 1,
     routeNames: [SESSION_ROUTE_NAME],
     routes: [{ ...(route(deviceList, "DEVICES") as TestRoute) }],
-    preloadedRoutes: [],
     stale: false,
     type: "stack",
   });
@@ -177,7 +177,7 @@ describe("collaboration navigation against the real StackRouter", () => {
         action as never,
         routerConfig as never,
       );
-      if (next) state = next as TestState;
+      if (next && typeof next === "object") state = next.state as TestState;
     };
     return {
       get state() {

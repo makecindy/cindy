@@ -36,6 +36,8 @@ const h = vi.hoisted(() => ({
   catalogIo: null as Parameters<typeof import('@cindy/model-providers').loadCatalog>[1] | null,
 }));
 
+vi.mock('../../userDataPath.js', () => ({ getUserDataDir: () => os.tmpdir(), userDataPath: (...parts: string[]) => path.join(os.tmpdir(), ...parts) }));
+
 vi.mock('electron', () => ({
   app: { getPath: () => os.tmpdir() },
   BrowserWindow: { getAllWindows: () => [] },
@@ -1295,7 +1297,7 @@ describe('provider catalog realm reload', () => {
     const images = () => getActiveCatalog().providers.find((provider) => provider.id === 'openai')!.imageModels!;
     const expectMode = (hasKey: boolean) => {
       expect(images().map((model) => model.id)).toEqual(hasKey
-        ? ['openai/gpt-image-2.5-sunburst', 'openai/gpt-image-2.5-flare', 'openai/gpt-image-2']
+        ? ['openai/gpt-image-2.6-sunburst', 'openai/gpt-image-2.6-flare', 'openai/gpt-image-2.5-sunburst', 'openai/gpt-image-2.5-flare', 'openai/gpt-image-2']
         : ['openai/gpt-image-2']);
       expect(images().find((model) => model.id === 'openai/gpt-image-2')?.name)
         .toBe(hasKey ? 'GPT Image 2' : 'GPT Image Gen');
@@ -1361,3 +1363,12 @@ describe('provider catalog realm reload', () => {
     expect(request.abort).toHaveBeenCalledTimes(1);
   });
 });
+
+// Preserve the existing test owner/path contract after storage ports were extracted.
+vi.mock('../../ownerContext.js', () => ({
+  activeDataOwnerId: () => h.owner,
+  ownerGeneration: () => 0,
+  isOwnerBoundaryPending: () => false,
+  hasCommittedOwner: () => Boolean(h.owner),
+  ownerScopedPath: (...parts: string[]) => path.join(os.tmpdir(), 'provider-catalog-realm-reload', h.owner, ...parts),
+}));

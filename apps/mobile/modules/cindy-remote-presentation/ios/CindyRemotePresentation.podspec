@@ -26,4 +26,5 @@ Pod::Spec.new do |s|
   }
 
   s.source_files = '**/*.{h,m,swift}'
+  s.resource_bundles = { 'CindyRemoteFeedback' => ['Resources/*.wav', 'Resources/CREDITS.txt'] }
 end

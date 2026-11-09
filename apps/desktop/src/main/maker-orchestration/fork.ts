@@ -32,6 +32,7 @@ import { inferProviderIdForModel } from '../maker-host/provider-route.js';
 import { createBusinessSessionId } from '../sessionIds.js';
 import { dbToMakerAgentKind, normalizeDbAgentKind } from '../../shared/agentKindConversion.js';
 import { copySessionContextWindowBudget, pruneSessionContextWindowBudget } from '../maker-host/session-context-budget-store.js';
+import { readBoundClaudeConfigDir } from '../subscription-accounts/store.js';
 import type { AgentMeta, Session } from '../../renderer/lib/ccAgent.types';
 import { buildHandoffText, type HandoffSourceMessage } from '../maker-ipc/agentHandoff.js';
 import {
@@ -961,6 +962,7 @@ export async function forkSessionAtMessage(
     claudeAnchorIndex = forkSource.agentDeviceId ? null : await loadClaudeTranscriptAnchorIndex({
       sdkSessionId: forkSource.sdkSessionId,
       workingDir: source.workingDir,
+      claudeConfigDir: readBoundClaudeConfigDir(forkSource.sdkSessionId),
     }).catch(() => null);
     assistantUuid = resolveClaudeAssistantAnchor(
       sourceMessages,
@@ -1006,7 +1008,8 @@ export async function forkSessionAtMessage(
     const sourceSdkSessionId = forkSource.sdkSessionId;
     const forkOptions = {
       sourceSdkSessionId,
-      ...(isCodex ? { model: forkSource.model, providerId: forkSource.providerId } : {}),
+      model: forkSource.model,
+      providerId: forkSource.providerId,
       upToMessageId: assistantUuid,
       ...(lastTurnId ? { lastTurnId } : {}),
       ...(forkAtTimestampMs !== undefined ? { forkAtTimestampMs } : {}),

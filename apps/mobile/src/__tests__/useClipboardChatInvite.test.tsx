@@ -17,9 +17,9 @@ vi.mock('expo-clipboard', () => ({ getStringAsync: h.read, hasStringAsync: h.has
 vi.mock('../../modules/cindy-remote-presentation/src', () => ({ remotePresentation: { clipboardVersion: h.readVersion } }));
 import { useClipboardChatInvite } from '@/chat/useClipboardChatInvite';
 import { getMobileAuthOwner, setMobileAuthOwner } from '@/auth/authOwnerGeneration';
-import { getChatInviteIntent, closeChatInvite, openManualChatInvite, receiveChatInviteLink } from '@/chat/chatInviteIntent';
-const link = `https://invite.example.test/chat-invite/join#${'A'.repeat(43)}`;
-const canonical = `cindy://chat-invite/${'A'.repeat(43)}`;
+import { getChatInviteIntent, closeChatInvite, openManualChatInvite, receiveChatInviteLink, setManualChatInviteLink } from '@/chat/chatInviteIntent';
+const link = `https://invite.example.test/chat-invite/${'s'.repeat(32)}`;
+const canonical = link;
 const other = `cindy://chat-invite/${'B'.repeat(43)}`;
 let root: Root;
 function Harness({ enabled }: { enabled: boolean }) { useClipboardChatInvite(enabled, getMobileAuthOwner()); return null; }
@@ -122,4 +122,13 @@ it('removes foreground listeners and ignores reads after unmounting', async () =
   const reading = deferred<string>(); h.read.mockReturnValue(reading.promise); await render();
   await act(async () => root.render(null)); await act(async () => reading.resolve(link));
   expect(h.listeners.size).toBe(0); expect(getChatInviteIntent()).toBeNull();
+});
+
+// The real intent subscription must remember both the original share ID and the
+// resolved native target, without changing the existing clipboard hook.
+it('does not revive a manually resolved share after closing its preview', async () => {
+  openManualChatInvite(); const id = getChatInviteIntent()!.id; await render();
+  await act(async () => { setManualChatInviteLink(id, link); setManualChatInviteLink(id, `cindy://chat-invite/${'A'.repeat(43)}`); });
+  close(); await state('background'); await state('active');
+  expect(getChatInviteIntent()).toBeNull();
 });

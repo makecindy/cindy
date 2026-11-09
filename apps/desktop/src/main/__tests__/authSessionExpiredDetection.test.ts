@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import ts from 'typescript';
+import { describe, expect, it, vi } from 'vitest';
 
 /**
  * 会话失效感知链路的回归守卫(authManager / device-link 依赖 Electron,无法在 node
@@ -20,6 +21,64 @@ describe('desktop auth session-expiry detection', () => {
     resolve(process.cwd(), 'src/main/device-link/index.ts'),
     'utf8',
   ).replace(/\r\n/g, '\n');
+
+  // Recovery safety contract (guard harness): execute the real synchronous
+  // callback, not a copied implementation. Before this change timer refresh did
+  // not notify device-link; online/self-hosted/demoted connections must stay intact.
+  const linkSource = ts.createSourceFile(
+    'index.ts',
+    deviceLinkSource,
+    ts.ScriptTarget.Latest,
+    true,
+  );
+  const reconnectDeclaration = linkSource.statements.find(
+    (node) =>
+      ts.isFunctionDeclaration(node) && node.name?.text === 'reconnectAfterAccessTokenRefresh',
+  )!;
+  const reconnectCode = ts.transpileModule(reconnectDeclaration.getText(linkSource), {
+    compilerOptions: { target: ts.ScriptTarget.ES2022 },
+  }).outputText;
+
+  it.each([
+    ['official', false],
+    ['official', true],
+    ['self-hosted', false],
+    ['self-hosted', true],
+    ['demoted', true],
+    ['torn-down', true],
+    ['boundary', true],
+    ['online', true],
+  ] as const)(
+    'token refresh reconnects only current rejected official connections (%s, separate=%s)',
+    (mode, separate) => {
+      const issue = mode === 'online' ? null : { kind: 'auth-failed' };
+      const crossAccount = { getConnectionIssue: () => issue, connectNow: vi.fn() };
+      const client = {
+        getConnectionIssue: () => issue,
+        connectNow: vi.fn(),
+        crossAccountConnection: (): unknown => (separate ? crossAccount : client),
+      };
+      const run = new Function(
+        'client',
+        'linkTornDown',
+        'isAppSessionBoundaryPending',
+        'arbiter',
+        'activeSelfHostedRelay',
+        reconnectCode + '\nreturn reconnectAfterAccessTokenRefresh;',
+      )(
+        client,
+        mode === 'torn-down',
+        () => mode === 'boundary',
+        { isOwner: () => mode !== 'demoted' },
+        () => mode === 'self-hosted',
+      );
+      run();
+      expect(client.connectNow).toHaveBeenCalledTimes(mode === 'official' ? 1 : 0);
+      expect(crossAccount.connectNow).toHaveBeenCalledTimes(
+        separate && ['official', 'self-hosted'].includes(mode) ? 1 : 0,
+      );
+    },
+  );
 
   it('runtime refresh 发现磁盘 token 消失但会话活着时,按确定性失效走会话过期出口', () => {
     const start = authSource.indexOf('export async function refresh(');
@@ -141,7 +200,9 @@ describe('desktop auth session-expiry detection', () => {
     );
 
     // 自救函数:节流(token-rotating 端点不能每次重连都打)+ refresh 成功后立即重连。
-    const recoverStart = deviceLinkSource.indexOf('function recoverFromRelayAuthFailure(crossAccount = false): void {');
+    const recoverStart = deviceLinkSource.indexOf(
+      'function recoverFromRelayAuthFailure(crossAccount = false, freshRejection = true): void {',
+    );
     const recoverEnd = deviceLinkSource.indexOf('\n}\n', recoverStart);
     const recoverBody = deviceLinkSource.slice(recoverStart, recoverEnd);
     expect(recoverBody).toContain('elapsed < RELAY_AUTH_RECOVERY_MIN_INTERVAL_MS');
@@ -151,13 +212,15 @@ describe('desktop auth session-expiry detection', () => {
     expect(recoverBody).toContain('relayAuthRecoveryRetryTimer = setTimeout(');
     expect(recoverBody).toContain("connection()?.getConnectionIssue()?.kind !== 'auth-failed'");
     expect(recoverBody).toContain('authManager');
-    expect(recoverBody).toContain('.refresh({ networkRecovered: true })');
-    expect(recoverBody).toContain("connection()?.connectNow('relay-auth-recovered');");
-    // refresh 在途期间持有权可能已被别的实例夺走(teardown 已停 client):connectNow
-    // 会把已停的 client 拉活绕过仲裁,重连前必须重新确认 isOwner。
-    expect(recoverBody).toContain('arbiter?.isOwner()');
-    expect(recoverBody).toContain('client === recoveryClient');
-    expect(recoverBody).toContain('activeOwnerScopeKey() === recoveryScope');
+    // 只有刚转为 auth-failed 的通知算新 401 证据;延迟自救复用的是旧 401,不能提前快速续期。
+    expect(recoverBody).toContain('recoverFromRelayAuthFailure(crossAccount, false);');
+    expect(recoverBody).toContain('.refresh({ serverRejectedToken: freshRejection })');
+    // Token-rotation notification also covers timer-initiated refresh. Identity
+    // notifications intentionally remain separate from ordinary token rotation.
+    expect(deviceLinkSource).toContain(
+      'authManager.onAccessTokenRefreshed(reconnectAfterAccessTokenRefresh)',
+    );
+    expect(authSource).toContain('notifyAccessTokenRefreshed();');
 
     // teardown 必须清掉延迟自救 timer,避免登出/掉持有权后迟到触发。
     const teardownStart = deviceLinkSource.indexOf('function teardownActiveLink(): void {');

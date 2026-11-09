@@ -17,6 +17,12 @@ describe('writable directory grant wiring', () => {
     expect(dialog).toContain('assertTrustedAppRendererEvent(event)');
     expect(dialog).toContain('issueWritableDirectoryPickerGrant({');
     expect(dialog).toContain('senderId: event.sender.id');
+    // 最近列表是第二个发放入口：同样只给可信窗口，且只认最近项目里的路径。
+    const recentStart = bootstrap.indexOf("'dialog:authorize-recent-writable-directory'");
+    const recent = bootstrap.slice(recentStart, bootstrap.indexOf('ipcMain.handle(', recentStart));
+    expect(recent).toContain('assertTrustedAppRendererEvent(event)');
+    expect(recent).toContain('isRecentProject: (candidate) => hasRecentWorkdir(candidate)');
+    expect(recent).toContain('senderId: event.sender.id');
     expect(register).toContain('consumeWritableDirectoryPickerGrants({');
     expect(register).toContain('scopeId: sessionId');
     expect(register).toContain('senderId: options.senderId');

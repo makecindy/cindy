@@ -143,10 +143,15 @@ export function stopSharedTaskRuntime(): Promise<void> {
   return binding?.stop() ?? Promise.resolve();
 }
 
-export function requireSharedTaskHost(): SharedTaskHost {
+export function tryGetSharedTaskHost(): SharedTaskHost | null {
   binding?.rebindIfStable();
-  if (!binding?.current()) throwIpcError('PRECONDITION_FAILED', 'SharedTask host is unavailable');
-  return binding.host;
+  return binding?.current() ? binding.host : null;
+}
+
+export function requireSharedTaskHost(): SharedTaskHost {
+  const host = tryGetSharedTaskHost();
+  if (!host) throwIpcError('PRECONDITION_FAILED', 'SharedTask host is unavailable');
+  return host;
 }
 
 /** Must be awaited before disposing the outgoing profile; disk failure aborts handover. */

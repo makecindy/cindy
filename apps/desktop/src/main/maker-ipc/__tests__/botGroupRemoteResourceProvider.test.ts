@@ -308,12 +308,14 @@ describe('bot group remote resources', () => {
     expect(plain.blocks?.[0]?.fallbackMarkdown).toContain('**阿布**: 写好了');
   });
 
-  it('projects current failures for existing phones without putting notices into the message cache', () => {
+  it.each(['AUTH_REQUIRED', 'RUNTIME_TIMEOUT'] as const)('projects current failures for existing phones without putting notices into the message cache (%s)', code => {
     const group = detail();
     const source = group.messages[0]!;
     group.executionFailures = [{ executionId: 'run', epoch: 1, sourceMessageId: source.id,
-      botId: 'abu', botName: '阿布', code: 'AUTH_REQUIRED', planId: null }];
-    expect(botGroupRemoteChatData(group).messages).toContainEqual(expect.objectContaining({ id: 'execution-failure:run:1', runtimeFailureCode: 'AUTH_REQUIRED' }));
+      botId: 'abu', botName: '阿布', code, reason: 'unclaimed_timeout', planId: null }];
+    const notice = botGroupRemoteChatData(group).messages.find(message => message.id === 'execution-failure:run:1')!;
+    expect(notice.runtimeFailureCode).toBe(code);
+    expect(notice.runtimeFailureReason).toBe(code === 'RUNTIME_TIMEOUT' ? 'unclaimed_timeout' : undefined);
     expect(group.messages).not.toContainEqual(expect.objectContaining({ kind: 'notice' }));
     expect(botGroupRemoteChatData({ ...group, executionFailures: [] }).messages).toEqual(group.messages);
   });
@@ -388,6 +390,14 @@ describe('bot group remote resources', () => {
       input: { planId: 'p1' },
     });
     expect(service.continuePlan).toHaveBeenCalledWith({ groupId: 'g1', planId: 'p1' });
+    // The phone must forward the displayed attempt, not only the current position.
+    await remoteResourceRegistry.invoke(context, {
+      client: client(), collectionId: BOT_GROUP_REMOTE_COLLECTION_ID, actionId: 'plan-edit', resourceRef: ref('g1'),
+      input: { planId: 'p1', position: 0, action: 'skip', executionId: 'displayed-attempt' },
+    });
+    expect(service.editPlanStep).toHaveBeenCalledWith({ groupId: 'g1', planId: 'p1', position: 0,
+      action: 'skip', executionId: 'displayed-attempt', botId: undefined });
+
 
     service.startPlan.mockResolvedValue({ ok: false, errorCode: 'PLAN_CLOSED', message: '已经开始了' });
     await expect(remoteResourceRegistry.invoke(context, {

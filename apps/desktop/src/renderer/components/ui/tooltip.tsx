@@ -92,7 +92,7 @@ const TooltipContent = React.forwardRef<
         // F-PJ-7 视觉规格：12px 圆角 / 13px 文本 / 8px×10px 内边距
         // select-none:tooltip 是 hover 提示 chrome,role="tooltip" 不在
         // globals.css 的全局禁选名单里,不加会让全 app 提示文字可被划选。
-        'z-[60] select-none rounded-xl px-2.5 py-1.5 text-13 leading-snug shadow-lg',
+        'z-[60] select-none rounded-xl px-2.5 py-1.5 text-13 leading-snug shadow-[shadow:var(--shadow-menu)]',
         // Cindy tooltip 两模式都是深底白字；Board 浅描边叠在深底上会看成一圈白边。
         'border border-transparent bg-[var(--tooltip-bg)] text-[var(--tooltip-text)]',
         'max-w-[420px] break-all', // 长路径允许任意位置截断换行
@@ -117,6 +117,32 @@ export const Tooltip = {
   Trigger: TooltipTrigger,
   Content: TooltipContent,
 };
+
+// Radix 不只在 hover 时打开提示，trigger 获得焦点也会打开。菜单 / 弹层关闭会把焦点
+// 还给触发按钮——用鼠标点空白关掉也一样——指针早已不在按钮上，提示却冒出来，而且没有
+// pointerleave / blur 能再把它收掉（会话标题栏「更多操作」就是这么复现的）。
+// 用最近一次输入模态判断这次焦点是不是键盘来的：指针交互之后的焦点不弹，键盘焦点照旧。
+// 初值保持原有行为：应用启动后还没有任何输入时，程序化焦点仍然可以弹提示。
+let focusOpenWanted = true;
+let inputModalityTracked = false;
+function trackInputModality() {
+  if (inputModalityTracked || typeof document === 'undefined') return;
+  inputModalityTracked = true;
+  document.addEventListener(
+    'pointerdown',
+    () => {
+      focusOpenWanted = false;
+    },
+    true,
+  );
+  document.addEventListener(
+    'keydown',
+    () => {
+      focusOpenWanted = true;
+    },
+    true,
+  );
+}
 
 // ── <Tip> ───────────────────────────────────────────────────────────────────
 // 一行包装,替代浏览器原生 title 属性。内部自带 Provider,任何位置都能直接用。
@@ -181,6 +207,7 @@ export const Tip = React.forwardRef<unknown, TipProps>(function Tip(props, forwa
     contentClassName,
     ...rest
   } = props;
+  const { onFocus: callerOnFocus, ...triggerProps } = rest as React.HTMLAttributes<HTMLElement>;
   const isEmpty =
     disabled ||
     text === null ||
@@ -202,6 +229,7 @@ export const Tip = React.forwardRef<unknown, TipProps>(function Tip(props, forwa
   React.useLayoutEffect(() => {
     if (resetHoverOnControlChange && requestedOpen !== undefined) setHoverOpen(false);
   }, [resetHoverOnControlChange, requestedOpen]);
+  React.useEffect(trackInputModality, []);
 
   // 没有 tooltip 内容时,Tip 仍要保持"透明传递":把外层 props/ref 直接合并到 children,
   // 避免在复合 trigger 里成为 ref/事件断点。React 18 的 cloneElement 类型签名不接受 ref
@@ -226,7 +254,12 @@ export const Tip = React.forwardRef<unknown, TipProps>(function Tip(props, forwa
         <TooltipTrigger
           asChild
           ref={forwardedRef as React.Ref<HTMLButtonElement>}
-          {...rest}
+          {...triggerProps}
+          // 指针交互带来的焦点（含菜单关闭后的焦点回收）不弹提示；键盘焦点照旧。
+          onFocus={(event) => {
+            callerOnFocus?.(event);
+            if (!event.defaultPrevented && !focusOpenWanted) event.preventDefault();
+          }}
         >
           {children}
         </TooltipTrigger>

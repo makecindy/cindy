@@ -54,6 +54,8 @@ export interface HistoryViewReaderDependencies<T extends HistoryMessageSource> {
   anchor(sessionId: string, id: string, outline?: boolean): Promise<T>;
   running(sessionId: string): boolean;
   live?(sessionId: string): T[];
+  /** Caller context that changes what `list` does (e.g. import side effects). Read per call. */
+  shareScope?(): string;
 }
 
 function compareRows(a: HistoryMessageSource, b: HistoryMessageSource): number {
@@ -143,19 +145,23 @@ export function createHistoryViewReader<T extends HistoryMessageSource>(deps: Hi
   const detailRanges = new Map<string, { rows: T[]; bytes: number }>();
   let detailRevision: string | undefined;
   let detailCacheBytes = 0;
-  return {
-    async page(sessionId: string, before?: string, lazyDetails = false, options: HistoryPageOptions = {}): Promise<HistoryViewPage<T>> {
+  const reader = {
+    async page(
+      sessionId: string, before?: string, lazyDetails = false, options: HistoryPageOptions = {}, knownRevision?: string,
+    ): Promise<HistoryViewPage<T>> {
       const outlined = lazyDetails && !!deps.outline && !!deps.hydrate;
       const batchSize = outlined ? 1000 : 100;
       const rowBudget = outlined ? 100000 : MAX_HISTORY_SCAN_ROWS;
       const read = outlined ? deps.outline! : deps.list;
-      const outlineRevision = outlined ? `${readerEpoch}:${await deps.revision?.() ?? ++readRevision}` : undefined;
+      const outlineRevision = outlined ? `${readerEpoch}:${knownRevision ?? await deps.revision?.() ?? ++readRevision}` : undefined;
       const beforeAnchor = before ? await deps.anchor(sessionId, before, outlined) : undefined;
       let cursor = beforeAnchor?.id.startsWith('history-live:') ? undefined : beforeAnchor?.id;
       const chunks: T[][] = [];
       let raw: T[] = [];
       let exhausted = false;
       let items: HistoryViewItem<T>[] = [];
+      let live: T[] = [];
+      let projected = false;
       let scannedRows = 0;
       let scannedBytes = 0;
       const project = (live: T[]) => {
@@ -198,6 +204,7 @@ export function createHistoryViewReader<T extends HistoryMessageSource>(deps: Hi
         // uses the existing raw window path; one DB batch may transiently exceed it.
         if (scannedRows >= rowBudget) unavailable();
         const rows = await read(sessionId, { limit: batchSize, ...(cursor ? { before: cursor } : {}) }, scan > 0);
+        projected = false;
         for (const row of rows) {
           scannedRows++;
           scannedBytes += Buffer.byteLength(JSON.stringify(row), 'utf8');
@@ -211,16 +218,21 @@ export function createHistoryViewReader<T extends HistoryMessageSource>(deps: Hi
         exhausted = rows.length < batchSize;
         if (!exhausted && !rows.some(isHistoryPageBoundary)) continue;
         raw = chunks.slice().reverse().flat();
-        const live = liveRows(raw);
+        live = liveRows(raw);
         items = project(live);
+        projected = true;
         // Large completed groups can fill the byte-limited page well before
         // twenty items. Continuing to scan then only spends the scan budget.
         if (exhausted || items.length >= HISTORY_VIEW_PAGE_ITEMS
           || Buffer.byteLength(JSON.stringify(items), 'utf8') + 1024 >= HISTORY_VIEW_PAGE_BYTES) break;
       }
-      raw = chunks.slice().reverse().flat();
-      const live = liveRows(raw);
-      items = project(live);
+      // No await separates a successful final projection from this point. Reuse
+      // that exact snapshot; an empty final batch still needs the exhausted cut.
+      if (!projected) {
+        raw = chunks.slice().reverse().flat();
+        live = liveRows(raw);
+        items = project(live);
+      }
       const safeStarts = historyPageSafeStarts([...raw, ...live]);
       if (outlined) {
         // Select by visible objects before reading any hidden payloads. Every
@@ -435,6 +447,37 @@ export function createHistoryViewReader<T extends HistoryMessageSource>(deps: Hi
           if (Date.parse(row.createdAt) > Date.parse(last.createdAt)) throwIpcError('NOT_FOUND', 'History range changed');
         }
       }
+    },
+  };
+  // A task switch can request the same closed page from several surfaces at
+  // once. Share only work that is still in flight, keyed by the DB revision
+  // (client epoch + write counters), so no settled page acts as a cache. A
+  // running task keeps independent reads: its live rows change without writes.
+  const pendingPages = new Map<string, Promise<{ page: HistoryViewPage<T>; shape?: HistoryPageShape }>>();
+  return {
+    ...reader,
+    async page(sessionId: string, before?: string, lazyDetails = false, options: HistoryPageOptions = {}): Promise<HistoryViewPage<T>> {
+      const outlined = lazyDetails && !!deps.outline && !!deps.hydrate;
+      if (!outlined || !deps.revision || deps.running(sessionId)) return reader.page(sessionId, before, lazyDetails, options);
+      const scope = deps.shareScope?.() ?? '';
+      const revision = await deps.revision();
+      if (deps.running(sessionId)) return reader.page(sessionId, before, lazyDetails, options, revision);
+      const key = JSON.stringify([scope, sessionId, before ?? null, !!options.workLines, !!options.onShape, revision]);
+      let shared = pendingPages.get(key);
+      if (!shared) {
+        let shape: HistoryPageShape | undefined;
+        const promise = reader.page(sessionId, before, lazyDetails, {
+          workLines: options.workLines,
+          ...(options.onShape ? { onShape: (value: HistoryPageShape) => { shape = value; } } : {}),
+        }, revision).then((page) => ({ page, shape })).finally(() => {
+          if (pendingPages.get(key) === promise) pendingPages.delete(key);
+        });
+        pendingPages.set(key, promise);
+        shared = promise;
+      }
+      const result = await shared;
+      if (result.shape) options.onShape?.(result.shape);
+      return result.page;
     },
   };
 }

@@ -866,16 +866,26 @@ describe("ChatInput 的入口门控与调用路由", () => {
     const relocationGuard = remoteOptions.match(/if \(([\s\S]*?)\) return undefined;/)?.[1];
     if (!relocationGuard) throw new Error('Remote-agent relocation guard was not found');
     const hidden = new Function('sessionOrcaRole', 'sessionOrcaRemoteWorker', 'deviceLinkDeviceId',
-      `const sessionId = 's1', agentLocationAware = true, remoteHostId = null, sessionEngineFilter = {};
+      'hostSupportsOrcaAgentRelocation = false', 'remoteHostId = null', 'agentLocationAware = true',
+      `const sessionId = 's1', sessionEngineFilter = {};
        return !!(${relocationGuard});`);
     // 本机的 Lead / Worker 与普通任务一样可换 Agent 所在电脑。
     for (const role of [null, 'lead', 'worker']) {
       expect(hidden(role, false, null)).toBe(false);
     }
-    // 被控电脑上的协同任务先不开放(旧版被控端会拒绝);普通被控任务不受影响。
+    // 被控端没声明 supportsOrcaAgentRelocation:被控电脑上的协同任务不开放(旧版被控端会拒绝);
+    // 普通被控任务不受影响。
     expect(hidden('lead', false, 'host')).toBe(true);
     expect(hidden('worker', false, 'host')).toBe(true);
     expect(hidden(null, false, 'host')).toBe(false);
+    // 被控端声明后，被控电脑上的 Lead / 本机 Worker 与普通任务一样开放。
+    expect(hidden('lead', false, 'host', true)).toBe(false);
+    expect(hidden('worker', false, 'host', true)).toBe(false);
+    // 声明后仍不开放：运行设备 Worker、角色未加载、SSH 任务、位置不由本机呈现(共享任务访客等)。
+    expect(hidden('worker', true, 'host', true)).toBe(true);
+    expect(hidden(undefined, false, 'host', true)).toBe(true);
+    expect(hidden('lead', false, 'host', true, 'ssh-host')).toBe(true);
+    expect(hidden('lead', false, 'host', true, null, false)).toBe(true);
     for (const role of [null, 'lead', 'worker', undefined]) {
       expect(hidden(role, true, null)).toBe(true);
     }

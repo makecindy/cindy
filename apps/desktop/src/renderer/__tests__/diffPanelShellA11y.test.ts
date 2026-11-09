@@ -50,10 +50,7 @@ describe('DiffPanelShell — drawer accessibility contract', () => {
     expect(source).toContain("propertyName !== 'transform'");
     expect(source).toContain('if (!open) setRetainShadow(false)');
     expect(source).toContain('onTransitionEnd={onShadowTransitionEnd}');
-    expect(source).toContain(
-      "showShadow && (isFloating ? 'shadow-[var(--shadow-menu)]' : 'shadow-xl')",
-    );
-    expect(source).not.toContain('text-popover-foreground shadow-xl');
+    expect(source).toContain("showShadow && 'shadow-[shadow:var(--shadow-menu)]'");
   });
 
   it('resizeHandleAria remains translated in all supported locales while drawer references it', () => {

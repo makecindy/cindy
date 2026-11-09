@@ -7,13 +7,18 @@ import { isSharedTaskPeer } from '@cindy/device-link';
  * relay 恢复 online，或当前目标设备从离线恢复 online 时自增；其它设备的
  * presence 与目标设备在线期间的 busy/name 变化不会制造额外重拉。
  */
-export function useDeviceLinkReconnectEpoch(deviceId: string | undefined): number {
+export function useDeviceLinkReconnectEpoch(
+  deviceId: string | undefined,
+  initialOnline?: boolean,
+): number {
   const [epoch, setEpoch] = useState(0);
   const targetOnlineRef = useRef<boolean | null>(null);
   const relayStatusRef = useRef<'stopped' | 'connecting' | 'online' | null>(null);
 
   useEffect(() => {
-    targetOnlineRef.current = null;
+    // Expanded quota cards already observed an online/controllable directory
+    // row. Their first routine online snapshot is not another connection.
+    targetOnlineRef.current = initialOnline ?? null;
     relayStatusRef.current = null;
     if (!deviceId) return;
 
@@ -31,7 +36,10 @@ export function useDeviceLinkReconnectEpoch(deviceId: string | undefined): numbe
       // Presence from a previous relay connection cannot establish that the
       // target is already online in this generation. It may recover later.
       if (status !== 'online') targetOnlineRef.current = null;
-      if (status === 'online' && previous !== 'online') bump();
+      if (status === 'online' && previous !== 'online') {
+        if (initialOnline === true) targetOnlineRef.current = true;
+        bump();
+      }
     });
 
     const offPeerReset = window.electronAPI.deviceLink.onPeerLinkReset?.((event) => {
@@ -48,7 +56,7 @@ export function useDeviceLinkReconnectEpoch(deviceId: string | undefined): numbe
       offPeerReset?.();
       offReopened?.();
     };
-  }, [deviceId]);
+  }, [deviceId, initialOnline]);
 
   return epoch;
 }

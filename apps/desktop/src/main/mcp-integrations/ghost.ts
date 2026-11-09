@@ -52,6 +52,7 @@ import type {
 import { toolAutoReviewAction, type PermissionMode, type ReviewableAction, type AutoReviewDecision } from '@cindy/maker-core';
 import {
   getLiziMcpSessionContext,
+  resolveLiziMcpSessionContext,
   type LiziMcpSessionContext,
   type SessionPathAuthorization,
   type SessionPathAuthorizationRequest,
@@ -117,6 +118,7 @@ import { drainGhostCallMedia } from '../cindy-brain/ghostMediaLedger.js';
 import {
   getGhostCardService,
   getGhostManager,
+  listInstalledGhostsAsync,
   getGhostPipeDispatcher,
   getGhostSetupAssessment,
   ghostForgeForbiddenRootDirs,
@@ -129,7 +131,7 @@ import {
 import { writeForgeScaffoldWithStableParent } from '../cindy-brain/forgeScaffoldCapability.js';
 import { GhostInstallTargetRequiredError } from '../cindy-brain/ghostInstallTarget.js';
 import { getGhostSetupCoordinator } from '../cindy-brain/ghostSetupCoordinator.js';
-import { classifyGhostVisibility, classifyInstalledGhostVisibility } from '../cindy-brain/ghostVisibility.js';
+import { classifyGhostVisibility, classifyInstalledGhostVisibility, preferLatestLocalOrPublicGhosts } from '../cindy-brain/ghostVisibility.js';
 import { readInstalledGhostManual } from '../cindy-brain/ghostManual.js';
 import { isGhostDisabledForWorkdir } from '../cindy-brain/ghostWorkdirPrefs.js';
 import { FORGE_GUIDE, FORGE_PAGE_MANUAL, packGhostDir, scaffoldGhostDir } from '../cindy-brain/forge.js';
@@ -159,6 +161,8 @@ import {
   readAllowedBuiltinPluginIds,
 } from './codexBuiltinToolPolicy.js';
 import { t } from '../i18n.js';
+import { connectGithubSignInResult } from '../git-context/githubConnection.js';
+import { openGithubSignIn, readGithubConnection } from '../git-context/githubSetupIpc.js';
 import { createLogger } from '../logger.js';
 import { isIpcError } from '../../shared/ipc-errors.js';
 
@@ -506,7 +510,7 @@ export interface ToolResultImageDescription {
 }
 
 export interface CindyGhostsHostDeps {
-  pluginMarket?: Pick<PluginMarketService, 'snapshot' | 'detail' | 'install'>;
+  pluginMarket?: Pick<PluginMarketService, 'query' | 'detail' | 'install'>;
   createMediaDownloadContext?: (sessionId: string, sessionInstanceId: string) => MediaDownloadContext | undefined;
   /** 当前 Desktop 版本；Forge scaffold 用它生成具体插件包的默认最低版本。 */
   getAppVersion?: () => string;
@@ -1802,25 +1806,33 @@ export function collectCindyMediaUrls(
   }
 }
 
+/** The Agent-facing discovery surface: chips that expose tools or a manual. */
+function isGhostDiscoverable(ghost: InstalledGhost): boolean {
+  return ghost.manifest.kind === 'chip' && (ghostHasTools(ghost) || ghostHasManual(ghost));
+}
+
 function visibleChipGhosts(
   workdir: string | null,
+  installed = getGhostManager().list(),
+  preferLatest = true,
 ): InstalledGhost[] {
-  return getGhostManager()
-    .list()
-    .filter(
+  const visible = installed.filter(
       (ghost) =>
         ghost.enabled &&
-        isGhostAvailableForActiveSession(ghost.manifest.id) &&
-        ghost.manifest.kind === 'chip' &&
-        (ghostHasTools(ghost) || ghostHasManual(ghost)) &&
+        !ghost.retirement &&
+        isGhostAvailableForActiveSession(installedGhostStoragePart(ghost)) &&
+        isGhostDiscoverable(ghost) &&
         !isGhostDisabledForWorkdir(installedGhostStoragePart(ghost), workdir),
     );
+  return preferLatest ? preferLatestLocalOrPublicGhosts(visible) : visible;
 }
 
 const ghostVisibilityDeps = {
   listGhosts: () => getGhostManager().list(),
+  findInstalledInstance: (id: string) => getGhostManager().findInstalledInstance(id),
   isAvailableForActiveSession: isGhostAvailableForActiveSession,
   isDisabledForWorkdir: isGhostDisabledForWorkdir,
+  isDiscoverable: isGhostDiscoverable,
 };
 
 /**
@@ -1913,8 +1925,10 @@ function toCindyGhostInfo(ghost: InstalledGhost): CindyGhostInfo {
  * sessionCtx:Claude in-process SDK 路径的会话语境(toClaudeSdkConfig(ctx)
  * 时按 session 闭包进来;每次 startSession 都重建 provider,语境不串号)。
  * Codex HTTP bridge 路径下建线期语境是全局空值,tool-call 期经
- * AsyncLocalStorage(getLiziMcpSessionContext)恢复——因此运行时取语境一律
- * "ALS 优先、闭包兜底"(见 resolveSessionContext)。
+ * AsyncLocalStorage(getLiziMcpSessionContext)恢复。运行时取语境按
+ * resolveLiziMcpSessionContext 的口径:有具体闭包语境(Claude)就用它,只有空占位
+ * (Codex / Pi bridge)才读 ALS。反过来 "ALS 优先" 会被串号:任务 A 的工具调用里
+ * 唤醒任务 B 时,B 新建的 Claude 进程继承 A 的 ALS,B 的插件卡片就记到了 A 名下。
  * 页面调用例外：Main 消费一次性票据后显式传 pageCall 和卡片任务语境；
  * 不建立页面 ALS，避免冷恢复时创建的 Agent/MCP 长期对象继承页面权限。
  */
@@ -1923,8 +1937,10 @@ export function getCindyGhostsMcpDeps(
   hostDeps: CindyGhostsHostDeps = {},
   pageCall?: PluginPageCall,
 ): CindyGhostsMcpDeps {
-  const resolveSessionContext = (): LiziMcpSessionContext | undefined =>
-    pageCall ? sessionCtx : getLiziMcpSessionContext() ?? sessionCtx;
+  const resolveSessionContext = (): LiziMcpSessionContext | undefined => {
+    if (pageCall) return sessionCtx;
+    return sessionCtx ? resolveLiziMcpSessionContext(sessionCtx) : getLiziMcpSessionContext();
+  };
   const installConsentPrompt = (): GhostInstallConsentPrompt => {
     const context = resolveSessionContext();
     return createTaskInstallConsentPrompt(
@@ -2069,13 +2085,17 @@ export function getCindyGhostsMcpDeps(
     },
     connectAccount: async (target, signal) => {
       const context = resolveSessionContext();
-      const sessionId = ghostSetupInteractionSessionId(context);
+      // Persistent owner-chat cards outlive this turn and render on Desktop.
+      // Only the verified teammate owner session may bypass the headless waiter
+      // guard; ordinary/guest sessions still need an interactive turn surface.
+      const botAuthorizationSession = !!context?.sessionId && await isBotAuthorizationSession(context.sessionId);
+      const sessionId = botAuthorizationSession ? context!.sessionId : ghostSetupInteractionSessionId(context);
       if (!sessionId) return { ok: false, errorCode: 'NO_SESSION_CONTEXT' };
       if (signal?.aborted) return { ok: false, errorCode: 'SETUP_CANCELLED' };
       // The persistent teammate service retains its own session/policy checks.
       // Ordinary tasks use the same setup gate as ghost_call, without dispatching
       // a business tool or granting files merely to obtain a connection card.
-      if (target.kind === 'host' || await isBotAuthorizationSession(sessionId)) {
+      if (target.kind === 'host' || botAuthorizationSession) {
         if (signal?.aborted) return { ok: false, errorCode: 'SETUP_CANCELLED' };
         const service = getBotAuthorizationService();
         if (!service) return { ok: false, errorCode: 'HOST_NOT_READY' };
@@ -2097,6 +2117,15 @@ export function getCindyGhostsMcpDeps(
       if (!visible.ok) return visible;
       const instanceId = installedGhostStoragePart(visible.ghost);
       const assessment = getGhostSetupAssessment(instanceId);
+      const ghCliSecret = visible.ghost.manifest.network?.secrets?.find((secret) => secret.source === 'gh-cli');
+      if (assessment.state === 'ready' && assessment.groups.length === 0 && ghCliSecret) {
+        // gh-cli plugins sign in through this computer's GitHub login, which Cindy owns; the fallback
+        // token checked is the one this plugin's own requests would use.
+        return connectGithubSignInResult(target.id, target.reauthorize === true, {
+          readConnection: () => readGithubConnection({ instanceId, key: ghCliSecret.key }),
+          openSignIn: openGithubSignIn,
+        });
+      }
       if (assessment.state === 'ready' && assessment.groups.length === 0) {
         // gh-cli and other Host-derived sources deliberately have no synchronous
         // setup requirement. An empty assessment is not proof of platform login.
@@ -2229,14 +2258,17 @@ export function getCindyGhostsMcpDeps(
       // 优先)——模型主动 ghost_list 也看不到被禁用的条目,清单层面干净。
       const context = resolveSessionContext();
       const workdir = context?.workingDir ?? null;
-      return visibleChipGhosts(workdir)
+      return visibleChipGhosts(workdir, await listInstalledGhostsAsync())
         .map(toCindyGhostInfo);
     },
     async getAwakeGhost(ghostId, namespace) {
       const workdir = resolveSessionContext()?.workingDir ?? null;
-      const visibility = classifyGhostVisibility(ghostId, workdir, ghostVisibilityDeps, namespace);
+      const installed = await listInstalledGhostsAsync();
+      const visibility = classifyGhostVisibility(ghostId, workdir, { ...ghostVisibilityDeps, listGhosts: () => installed }, namespace);
       if (!visibility.ok) return visibility;
-      const visible = visibleChipGhosts(workdir).some(
+      // classifyGhostVisibility already picked the version among discoverable
+      // copies; here only check the winner (or an exact instance) is listed.
+      const visible = visibleChipGhosts(workdir, installed, false).some(
         (ghost) => ghost === visibility.ghost || ghost.dir === visibility.ghost.dir,
       );
       if (visible) {
@@ -2250,7 +2282,8 @@ export function getCindyGhostsMcpDeps(
     },
     async readGhostManual({ ghostId, namespace, path: manualPath }) {
       const workdir = resolveSessionContext()?.workingDir ?? null;
-      const visibility = classifyGhostVisibility(ghostId, workdir, ghostVisibilityDeps, namespace);
+      const installed = await listInstalledGhostsAsync();
+      const visibility = classifyGhostVisibility(ghostId, workdir, { ...ghostVisibilityDeps, listGhosts: () => installed }, namespace);
       if (!visibility.ok) {
         return {
           ok: false,
@@ -2294,10 +2327,11 @@ export function getCindyGhostsMcpDeps(
       const sessionIdForConfirm = sessionContext?.sessionId ?? null;
       const sessionInstanceIdForGrant = sessionContext?.sessionInstanceId ?? null;
       const sessionWorkdir = sessionContext?.workingDir ?? null;
+      const installed = await listInstalledGhostsAsync();
       const initialVisibility = classifyGhostVisibility(
         ghostId,
         sessionWorkdir,
-        ghostVisibilityDeps,
+        { ...ghostVisibilityDeps, listGhosts: () => installed },
         namespace,
       );
       if (!initialVisibility.ok) return initialVisibility;
@@ -2344,7 +2378,7 @@ export function getCindyGhostsMcpDeps(
         return {
           ok: false,
           errorCode: 'TOOL_NOT_FOUND',
-          message: toolNotFoundMessage(ghostId, tool, target.manifest.tools?.filter(t => pluginToolVisible(target.manifest, t.name, audience))),
+          message: toolNotFoundMessage(ghostId, tool, target.manifest, audience),
         };
       }
       if (grantOnly && (!attachments || attachments.length === 0)) {
@@ -2394,7 +2428,7 @@ export function getCindyGhostsMcpDeps(
         return {
           ok: false,
           errorCode: 'TOOL_NOT_FOUND',
-          message: toolNotFoundMessage(ghostId, tool, refreshed.manifest.tools?.filter(t => pluginToolVisible(refreshed.manifest, t.name, audience))),
+          message: toolNotFoundMessage(ghostId, tool, refreshed.manifest, audience),
         };
       }
       let finalAssessment;
@@ -2636,7 +2670,7 @@ export function getCindyGhostsMcpDeps(
         return {
           ok: false,
           errorCode: 'TOOL_NOT_FOUND',
-          message: toolNotFoundMessage(ghostId, tool, preDispatch.manifest.tools?.filter(t => pluginToolVisible(preDispatch.manifest, t.name, audience))),
+          message: toolNotFoundMessage(ghostId, tool, preDispatch.manifest, audience),
         };
       }
       try {
@@ -2681,7 +2715,7 @@ export function getCindyGhostsMcpDeps(
         return {
           ok: false,
           errorCode: 'TOOL_NOT_FOUND',
-          message: toolNotFoundMessage(ghostId, tool, postCtx.manifest.tools?.filter(t => pluginToolVisible(postCtx.manifest, t.name, audience))),
+          message: toolNotFoundMessage(ghostId, tool, postCtx.manifest, audience),
         };
       }
       let postCtxAssessment: GhostSetupAssessment;
@@ -2809,7 +2843,7 @@ export function getCindyGhostsMcpDeps(
       }
       const requestedImages = result.ok ? result.images : undefined;
       const plainResult: GhostToolCallResult = result.ok && result.images ? { ok: true, result: result.result } : result;
-      const finalized = withCardToken(plainResult, cardService.finalizeCall(callId), callId);
+      const finalized = withCardToken(plainResult, cardService.finalizeCall(callId), callId, cardService.isTurnEnd(callId));
       if (!finalized.ok) return finalized;
       const fitted = requestedImages?.length ? await fitGhostModelImages(requestedImages, compressInlineImage) : null;
       const modelImages = {
