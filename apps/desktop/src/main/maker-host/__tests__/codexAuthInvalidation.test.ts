@@ -60,6 +60,13 @@ vi.mock('electron', () => ({
 
 vi.mock('@cindy/maker-core', () => ({}));
 
+vi.mock('../codex-auth-file-move', () => ({
+  moveCodexAuthFile: async (from: string, to: string) => {
+    if (fs.existsSync(to)) throw Object.assign(new Error('exists'), { code: 'EEXIST' });
+    fs.renameSync(from, to);
+  },
+}));
+
 vi.mock('../../appSessionState.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../appSessionState.js')>();
   return {

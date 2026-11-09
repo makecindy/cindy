@@ -14,6 +14,16 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import * as authMove from '../maker-host/codex-auth-file-move';
+
+// Unit boundary for the Windows syscall. The real PowerShell/File.Move path is
+// exercised separately by check-windows-codex-auth-move.mjs in Windows CI.
+vi.mock('../maker-host/codex-auth-file-move', () => ({
+  moveCodexAuthFile: async (from: string, to: string) => {
+    if (fs.existsSync(to)) throw Object.assign(new Error('exists'), { code: 'EEXIST' });
+    fs.renameSync(from, to);
+  },
+}));
 
 import {
   copyCodexAuthSnapshot,
@@ -808,9 +818,9 @@ describe('syncIndependentCodexAuth (#9277)', () => {
     fs.writeFileSync(myAuth, MY_CONTENT);
     const newer = new Date(Date.now() + 60_000);
     fs.utimesSync(myAuth, newer, newer);
-    const originalLink = fs.promises.link.bind(fs.promises);
+    const originalLink = authMove.moveCodexAuthFile;
     let renameCalls = 0;
-    vi.spyOn(fs.promises, 'link').mockImplementation(async (from, to) => {
+    vi.spyOn(authMove, 'moveCodexAuthFile').mockImplementation(async (from, to) => {
       // 第一次写回系统：目标已移入备份，发布失败后保留原目标，不宣称同步成功。
       if (String(to) === systemAuth && renameCalls === 0) {
         renameCalls += 1;
@@ -897,14 +907,126 @@ describe('syncIndependentCodexAuth (#9277)', () => {
 });
 
 describe('系统凭证的发布与崩溃窗口 (#9316 review 第二轮)', () => {
+  // #9316：真实复制/拆链入口；旧覆盖只在发布前中断，没有验证发布已完成但清理未完成。
+  // unit：暂停备份清理，观察磁盘，再模拟原生登出和下次启动；不启动外部进程。
+  it.each(['copy', 'detach'] as const)(
+    '发布 %s 后未清备份也没有额外硬链，登出不复活',
+    async (operation) => {
+      fs.writeFileSync(systemAuth, SYSTEM_CONTENT);
+      if (operation === 'detach') fs.linkSync(systemAuth, myAuth);
+      else fs.writeFileSync(myAuth, MY_CONTENT);
+      let release!: () => void;
+      let reached!: () => void;
+      const paused = new Promise<void>((resolve) => {
+        reached = resolve;
+      });
+      const resume = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const rm = fs.promises.rm.bind(fs.promises);
+      let firstBackup = true;
+      vi.spyOn(fs.promises, 'rm').mockImplementation(async (target, options) => {
+        if (firstBackup && String(target).endsWith('.swapbak')) {
+          firstBackup = false;
+          reached();
+          await resume;
+        }
+        return rm(target, options);
+      });
+      const pending =
+        operation === 'copy'
+          ? copyCodexAuthSnapshot(myAuth, systemAuth, 'win32', undefined, { backupTarget: true })
+          : breakResidualSystemCodexHardlinks(systemAuth, 'win32');
+      await paused;
+      const publishedLinks = fs.statSync(systemAuth).nlink;
+      const stagedNames = fs.readdirSync(path.dirname(systemAuth));
+      fs.unlinkSync(systemAuth);
+      await recoverInterruptedCodexAuthSwap(systemAuth);
+      const revived = fs.existsSync(systemAuth);
+      release();
+      await pending;
+      expect(publishedLinks).toBe(1);
+      expect(stagedNames.some((name) => name.endsWith('.copytmp'))).toBe(false);
+      expect(revived).toBe(false);
+    },
+  );
+
+  it('文件系统拒绝硬链接时仍能发布系统凭证', async () => {
+    fs.writeFileSync(systemAuth, SYSTEM_CONTENT);
+    fs.writeFileSync(myAuth, MY_CONTENT);
+    vi.spyOn(fs.promises, 'link').mockRejectedValue(
+      Object.assign(new Error('unsupported'), { code: 'ENOTSUP' }),
+    );
+    const result = await copyCodexAuthSnapshot(myAuth, systemAuth, 'win32', undefined, {
+      backupTarget: true,
+    });
+    expect(result.kind).toBe('copied');
+    expect(fs.readFileSync(systemAuth, 'utf8')).toBe(MY_CONTENT);
+    expect(fs.statSync(systemAuth).nlink).toBe(1);
+  });
+
+  it('文件系统拒绝硬链接时仍能恢复配对备份', async () => {
+    fs.writeFileSync(`${systemAuth}.4242.0.swapbak`, SYSTEM_CONTENT);
+    fs.writeFileSync(`${systemAuth}.4242.0.copytmp`, MY_CONTENT);
+    vi.spyOn(fs.promises, 'link').mockRejectedValue(
+      Object.assign(new Error('unsupported'), { code: 'ENOTSUP' }),
+    );
+    expect(await recoverInterruptedCodexAuthSwap(systemAuth)).toBe(true);
+    expect(fs.readFileSync(systemAuth, 'utf8')).toBe(SYSTEM_CONTENT);
+    expect(fs.statSync(systemAuth).nlink).toBe(1);
+  });
+
+  it('独占移动不可用时不挪走系统凭证', async () => {
+    fs.writeFileSync(systemAuth, SYSTEM_CONTENT);
+    fs.writeFileSync(myAuth, MY_CONTENT);
+    vi.spyOn(authMove, 'moveCodexAuthFile').mockRejectedValue(
+      Object.assign(new Error('unavailable'), { code: 'EIO' }),
+    );
+    const result = await copyCodexAuthSnapshot(myAuth, systemAuth, 'win32', undefined, {
+      backupTarget: true,
+    });
+    expect(result.kind).toBe('swap-failed-intact');
+    expect(fs.readFileSync(systemAuth, 'utf8')).toBe(SYSTEM_CONTENT);
+    expect(fs.readdirSync(path.dirname(systemAuth))).toEqual(['auth.json']);
+  });
+
+  // 同一事务边界：子进程的失败回执不代表文件操作未提交，覆盖两个捕获入口。
+  it.each(['copy', 'detach'] as const)(
+    '%s 取得备份后移动器报错也恢复实际目标',
+    async (operation) => {
+      fs.writeFileSync(systemAuth, SYSTEM_CONTENT);
+      if (operation === 'detach') fs.linkSync(systemAuth, myAuth);
+      else fs.writeFileSync(myAuth, MY_CONTENT);
+      const move = authMove.moveCodexAuthFile;
+      vi.spyOn(authMove, 'moveCodexAuthFile').mockImplementation(async (from, to) => {
+        await move(from, to);
+        if (to.endsWith('.swapbak'))
+          throw Object.assign(new Error('lost acknowledgement'), { code: 'EIO' });
+      });
+      if (operation === 'copy') {
+        expect(
+          (
+            await copyCodexAuthSnapshot(myAuth, systemAuth, 'win32', undefined, {
+              backupTarget: true,
+            })
+          ).kind,
+        ).toBe('swap-failed-intact');
+      } else {
+        expect(await breakResidualSystemCodexHardlinks(systemAuth, 'win32')).toBe(false);
+      }
+      expect(fs.readFileSync(systemAuth, 'utf8')).toBe(SYSTEM_CONTENT);
+      expect(fs.readdirSync(path.dirname(systemAuth))).toEqual(['auth.json']);
+    },
+  );
+
   // #9316 最新审查，unit：现有用例只在 stat 前换代，没有覆盖取得备份时的竞态。
   // 通过生产复制入口观察系统凭证，最小输入为最后一次 stat 后刷新或登出。
   it.each(['refresh', 'logout'] as const)('备份取得时发生 %s 不发布旧凭证', async (event) => {
     fs.writeFileSync(systemAuth, SYSTEM_CONTENT);
     fs.writeFileSync(myAuth, MY_CONTENT);
     const generation = codexAuthFileGenerationOf(fs.statSync(systemAuth, { bigint: true }));
-    const rename = fs.promises.rename.bind(fs.promises);
-    vi.spyOn(fs.promises, 'rename').mockImplementation(async (from, to) => {
+    const rename = authMove.moveCodexAuthFile;
+    vi.spyOn(authMove, 'moveCodexAuthFile').mockImplementation(async (from, to) => {
       if (String(from) === systemAuth && String(to).endsWith('.swapbak')) {
         fs.unlinkSync(systemAuth);
         if (event === 'refresh') fs.writeFileSync(systemAuth, 'new-login');
@@ -926,8 +1048,8 @@ describe('系统凭证的发布与崩溃窗口 (#9316 review 第二轮)', () => 
     async (event) => {
       fs.writeFileSync(systemAuth, SYSTEM_CONTENT);
       fs.linkSync(systemAuth, myAuth);
-      const rename = fs.promises.rename.bind(fs.promises);
-      vi.spyOn(fs.promises, 'rename').mockImplementation(async (from, to) => {
+      const rename = authMove.moveCodexAuthFile;
+      vi.spyOn(authMove, 'moveCodexAuthFile').mockImplementation(async (from, to) => {
         if (String(from) === systemAuth && String(to).endsWith('.swapbak')) {
           fs.unlinkSync(systemAuth);
           if (event === 'refresh') fs.writeFileSync(systemAuth, 'new-login');
@@ -944,8 +1066,8 @@ describe('系统凭证的发布与崩溃窗口 (#9316 review 第二轮)', () => 
     fs.writeFileSync(systemAuth, SYSTEM_CONTENT);
     fs.writeFileSync(myAuth, MY_CONTENT);
     const generation = codexAuthFileGenerationOf(fs.statSync(systemAuth, { bigint: true }));
-    const link = fs.promises.link.bind(fs.promises);
-    vi.spyOn(fs.promises, 'link').mockImplementation(async (from, to) => {
+    const link = authMove.moveCodexAuthFile;
+    vi.spyOn(authMove, 'moveCodexAuthFile').mockImplementation(async (from, to) => {
       if (String(from).endsWith('.copytmp')) fs.writeFileSync(systemAuth, 'new-login');
       return link(from, to);
     });
@@ -977,14 +1099,11 @@ describe('系统凭证的发布与崩溃窗口 (#9316 review 第二轮)', () => 
     fs.writeFileSync(systemAuth, SYSTEM_CONTENT);
     fs.writeFileSync(myAuth, MY_CONTENT);
     const generation = codexAuthFileGenerationOf(fs.statSync(systemAuth, { bigint: true }));
-    const rename = fs.promises.rename.bind(fs.promises);
-    vi.spyOn(fs.promises, 'rename').mockImplementation(async (from, to) => {
+    const rename = authMove.moveCodexAuthFile;
+    vi.spyOn(authMove, 'moveCodexAuthFile').mockImplementation(async (from, to) => {
       if (String(to) === systemAuth) throw Object.assign(new Error('busy'), { code: 'EBUSY' });
       return rename(from, to);
     });
-    vi.spyOn(fs.promises, 'link').mockRejectedValue(
-      Object.assign(new Error('busy'), { code: 'EBUSY' }),
-    );
     const out = await copyCodexAuthSnapshot(myAuth, systemAuth, 'win32', undefined, {
       expectTargetGeneration: generation,
       backupTarget: true,
@@ -1072,11 +1191,11 @@ describe('系统凭证的发布与崩溃窗口 (#9316 review 第二轮)', () => 
     fs.writeFileSync(myAuth, MY_CONTENT);
     const newer = new Date(Date.now() + 60_000);
     fs.utimesSync(myAuth, newer, newer);
-    const realLink = fs.promises.link.bind(fs.promises);
+    const realLink = authMove.moveCodexAuthFile;
     let backupAtPublish: string | null = null;
     let backupContentAtPublish: string | null = null;
     let targetGoneAtPublish = false;
-    vi.spyOn(fs.promises, 'link').mockImplementation(async (from, to) => {
+    vi.spyOn(authMove, 'moveCodexAuthFile').mockImplementation(async (from, to) => {
       // 发布那一刻:旧目标应该已经被挪进备份, 而不是被删掉。
       if (String(from).endsWith('.copytmp') && String(to) === systemAuth) {
         const backup = backupsIn(path.dirname(systemAuth))[0] ?? null;
@@ -1271,10 +1390,10 @@ describe('Windows 系统凭证替换的崩溃窗口 (#9316 review)', () => {
 
   it('新凭证发布之前旧目标仍在可恢复的备份里(崩在窗口里也不丢凭证)', async () => {
     hardlinkedSystemAuth();
-    const realLink = fs.promises.link.bind(fs.promises);
+    const realLink = authMove.moveCodexAuthFile;
     let backupSeenAtPublish: string | null = null;
     let backupContentAtPublish: string | null = null;
-    vi.spyOn(fs.promises, 'link').mockImplementation(async (from, to) => {
+    vi.spyOn(authMove, 'moveCodexAuthFile').mockImplementation(async (from, to) => {
       // 发布新凭证的那一刻:旧目标应该还在备份里(旧实现此刻已经把它删了)。
       if (String(from).endsWith('.copytmp')) {
         const backup = fs
@@ -1303,8 +1422,8 @@ describe('Windows 系统凭证替换的崩溃窗口 (#9316 review)', () => {
 
   it('发布失败时把旧目标从备份挪回原位,凭证不丢', async () => {
     hardlinkedSystemAuth();
-    const realLink = fs.promises.link.bind(fs.promises);
-    vi.spyOn(fs.promises, 'link').mockImplementation(async (from, to) => {
+    const realLink = authMove.moveCodexAuthFile;
+    vi.spyOn(authMove, 'moveCodexAuthFile').mockImplementation(async (from, to) => {
       if (String(from).endsWith('.copytmp')) {
         const err = new Error('EIO: i/o error') as NodeJS.ErrnoException;
         err.code = 'EIO';
@@ -1323,8 +1442,8 @@ describe('Windows 系统凭证替换的崩溃窗口 (#9316 review)', () => {
   it('发布失败时若目标已被本机 Codex 重建,不拿备份里的旧字节盖掉它', async () => {
     hardlinkedSystemAuth();
     const refreshed = JSON.stringify({ tokens: { access_token: 'refreshed-token' } });
-    const realLink = fs.promises.link.bind(fs.promises);
-    vi.spyOn(fs.promises, 'link').mockImplementation(async (from, to) => {
+    const realLink = authMove.moveCodexAuthFile;
+    vi.spyOn(authMove, 'moveCodexAuthFile').mockImplementation(async (from, to) => {
       if (String(from).endsWith('.copytmp')) {
         // 本机 Codex 原子重建出了新的系统凭证。
         fs.writeFileSync(systemAuth, refreshed);
@@ -1400,8 +1519,8 @@ describe('Windows 系统凭证替换的崩溃窗口 (#9316 review)', () => {
   it('恢复期间本机 Codex 重建了凭证时,备份不盖掉它', async () => {
     const refreshed = JSON.stringify({ tokens: { access_token: 'refreshed-token' } });
     const { backup } = seedInterruptedSwap();
-    const realLink = fs.promises.link.bind(fs.promises);
-    vi.spyOn(fs.promises, 'link').mockImplementation(async (from, to) => {
+    const realLink = authMove.moveCodexAuthFile;
+    vi.spyOn(authMove, 'moveCodexAuthFile').mockImplementation(async (from, to) => {
       // 模拟「检查缺失」与「发布」之间本机 Codex 重建了目标。
       fs.writeFileSync(systemAuth, refreshed);
       return realLink(from as never, to as never);

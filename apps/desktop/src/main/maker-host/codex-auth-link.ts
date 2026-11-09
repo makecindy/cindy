@@ -23,11 +23,13 @@
  * 那些仍由 auth-adapters 的 reconcile 主流程负责。
  */
 import { execFile } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { promises as fsp } from 'node:fs';
 import type { BigIntStats } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
+import { moveCodexAuthFile } from './codex-auth-file-move';
 
 const execFileP = promisify(execFile);
 
@@ -288,7 +290,7 @@ export async function copyCodexAuthSnapshot(
     backupTarget?: boolean;
   } = {},
 ): Promise<CodexAuthSnapshotOutcome> {
-  const token = `${process.pid}.${sidecarCounter++}`;
+  const token = `${process.pid}.${randomUUID()}`;
   const sidecar = `${myAuth}.${token}.copytmp`;
   let sourceStat: BigIntStats;
   try {
@@ -358,8 +360,13 @@ export async function copyCodexAuthSnapshot(
         // ~/.codex/auth.json 就此消失, 本机 Codex 凭空掉登录(#9316 review)。
         const backup = `${myAuth}.${token}.swapbak`;
         try {
-          await fsp.rename(myAuth, backup);
+          await moveCodexAuthFile(myAuth, backup);
         } catch (renameError) {
+          // 子进程可能在完成移动后退出，保住本次唯一备份，不把缺少回执当作没移动。
+          if (await pathEntryExists(backup)) {
+            backupPath = backup;
+            throw renameError;
+          }
           if ((renameError as NodeJS.ErrnoException).code === 'ENOENT') {
             await fsp.rm(sidecar, { force: true }).catch(() => undefined);
             return { kind: 'target-changed' };
@@ -370,7 +377,7 @@ export async function copyCodexAuthSnapshot(
           ) {
             throw renameError;
           }
-          await fsp.rename(myAuth, backup);
+          await moveCodexAuthFile(myAuth, backup);
         }
         backupPath = backup;
         if (
@@ -378,7 +385,7 @@ export async function copyCodexAuthSnapshot(
           !(await sameCodexAuthGeneration(backup, opts.expectTargetGeneration))
         ) {
           // 校验实际取得的文件，而不只是 rename 之前的路径快照。
-          // 恢复使用独占 link，不能覆盖在缺口里新建的登录凭证。
+          // 恢复使用不覆盖目标的移动，保留在缺口里新建的登录凭证。
           if (await restoreCodexAuthBackup(backup, myAuth)) {
             await fsp.rm(sidecar, { force: true }).catch(() => undefined);
           }
@@ -396,8 +403,8 @@ export async function copyCodexAuthSnapshot(
       }
     }
     if (backupPath) {
-      // 备份挪走后本机 Codex 仍可能重新登录。独占发布不覆盖这个新目标。
-      await fsp.link(sidecar, myAuth);
+      // 独占移动同时消费配对标记：发布后崩溃也不留下硬链或可恢复的旧配对。
+      await moveCodexAuthFile(sidecar, myAuth);
       await fsp.rm(backupPath, { force: true });
     } else {
       await fsp.rename(sidecar, myAuth);
@@ -406,6 +413,11 @@ export async function copyCodexAuthSnapshot(
     return { kind: 'copied' };
   } catch (error) {
     if (backupPath) {
+      if (!(await pathEntryExists(sidecar))) {
+        // 发布已经提交；之后的退出登录不能被失败清理撤销。
+        await fsp.rm(backupPath, { force: true }).catch(() => undefined);
+        return { kind: 'target-changed', error: error as Error };
+      }
       // 不递归生成另一份副本。恢复失败时原配对仍在，下次启动可恢复。
       const restored = await restoreCodexAuthBackup(backupPath, myAuth);
       if (restored) await fsp.rm(sidecar, { force: true }).catch(() => undefined);
@@ -551,7 +563,7 @@ export async function breakResidualSystemCodexHardlinks(
 /** 恢复实际取得的目标；目标被另一写者重建时保留它，不做覆盖式 rename。 */
 async function restoreCodexAuthBackup(backup: string, target: string): Promise<boolean> {
   try {
-    await fsp.link(backup, target);
+    await moveCodexAuthFile(backup, target);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'EEXIST') return false;
   }
@@ -619,7 +631,7 @@ async function breakResidualCodexHardlinksDetailed(
   // sidecar 与备份共用同一个 token:恢复时只有「备份 + 同一次调用留下的 sidecar」
   // 同时在才算崩在发布之前 —— 发布成功后 sidecar 已经被 rename 成目标,备份即使
   // 没删掉也不再可恢复(#9316 review)。
-  const token = `${process.pid}.${sidecarCounter++}`;
+  const token = `${process.pid}.${randomUUID()}`;
   const sidecar = `${file}.${token}.copytmp`;
   // 旧目标在替换发布之前不能被销毁。Windows 上原来走「删掉目标 → rename 发布」两步:
   // 两步之间有一个「目标不存在」的窗口, 进程在这个窗口里崩掉, 系统凭证就彻底没了 ——
@@ -644,9 +656,13 @@ async function breakResidualCodexHardlinksDetailed(
     await fsp.utimes(sidecar, mtime, mtime).catch(() => undefined);
     if (platform === 'win32') {
       try {
-        await fsp.rename(file, backup);
+        await moveCodexAuthFile(file, backup);
         backupPath = backup;
       } catch (renameError) {
+        if (await pathEntryExists(backup)) {
+          backupPath = backup;
+          throw renameError;
+        }
         if ((renameError as NodeJS.ErrnoException).code === 'ENOENT') {
           await fsp.rm(sidecar, { force: true }).catch(() => undefined);
           return { broke: false, generationChanged: true };
@@ -654,7 +670,7 @@ async function breakResidualCodexHardlinksDetailed(
         if (!isWindowsAclDenied(renameError) || !(await healWindowsAuthAcl(file, execFileImpl))) {
           throw renameError;
         }
-        await fsp.rename(file, backup);
+        await moveCodexAuthFile(file, backup);
         backupPath = backup;
       }
       if (!(await sameCodexAuthGeneration(backup, stat))) {
@@ -666,7 +682,7 @@ async function breakResidualCodexHardlinksDetailed(
     }
     // 换 inode 不应让凭证看起来更新: 保留原修改时间, 对账仍按同一代次判断。
     if (backupPath) {
-      await fsp.link(sidecar, file);
+      await moveCodexAuthFile(sidecar, file);
       await fsp.rm(backupPath, { force: true });
       await fsp.rm(sidecar, { force: true });
     } else {
@@ -675,6 +691,10 @@ async function breakResidualCodexHardlinksDetailed(
     return { broke: true, generationChanged: false };
   } catch {
     if (backupPath) {
+      if (!(await pathEntryExists(sidecar))) {
+        await fsp.rm(backupPath, { force: true }).catch(() => undefined);
+        return { broke: false, generationChanged: true };
+      }
       if (await restoreCodexAuthBackup(backupPath, file)) {
         await fsp.rm(sidecar, { force: true }).catch(() => undefined);
       }
@@ -694,7 +714,7 @@ async function breakResidualCodexHardlinksDetailed(
  *   · 只认**配对**的备份(同 token 的 `.copytmp` 还在 = 崩在发布之前)。发布成功后
  *     sidecar 已经被 rename 成目标, 备份即使删除失败也只是孤儿 —— 恢复它, 会在本机
  *     Codex 之后登出时把旧账号凭证倒回来, 等于撤销登出。
- *   · 目标可能在我们检查之后被本机 Codex 重建出来:用 link 做原子占位, 目标已存在时
+ *   · 目标可能在我们检查之后被本机 Codex 重建出来:用独占移动发布, 目标已存在时
  *     报 EEXIST 直接放弃, 绝不拿备份盖掉刚轮换的 refresh token。
  */
 export async function recoverInterruptedCodexAuthSwap(file: string): Promise<boolean> {
@@ -738,7 +758,10 @@ export async function recoverInterruptedCodexAuthSwap(file: string): Promise<boo
     let published = false;
     let conflict = false;
     try {
-      await fsp.link(recovery, file);
+      // 用实际备份的快照替换配对标记，再以一次移动发布；移动消费该标记，
+      // 即使发布后进程退出，下次启动也不会拿旧备份撤销原生登出。
+      await fsp.rename(recovery, sidecar);
+      await moveCodexAuthFile(sidecar, file);
       published = true;
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === 'EEXIST') {
