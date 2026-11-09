@@ -2,7 +2,7 @@
   "defaultMascot": "cindy",
   "sources": {
     "../desktop/native/agent-island/macos-agent-island-helper.swift": "5d8f1c55ce01f1efe34d909b9a3f808dabf3c244a2b7d6fa66a1713d4085d1d7",
-    "../desktop/native/agent-island/live-activity/CindyAgentActivityWidget.swift": "acfbd1603178a9e7c597a1c1a3149e13c1609a1518aa2486b003a036e8683c84",
+    "../desktop/native/agent-island/live-activity/CindyAgentActivityWidget.swift": "402557cefd01aa0ee60f9580ac36f467130bb534ad5edb459a3daefeb1b1b9bc",
     "../desktop/native/agent-island/mascots/annie.png": "923c64827c4ae04e16fa5e44b84b139c3a3ba67c079ba9e00d338330693f5fb4",
     "../desktop/native/agent-island/mascots/blackcat.png": "5d0d2378d2bc3d55f6ee6fc40ad22670fe8c83ccc346db60dbaa8cc0f6f1530c",
     "../desktop/native/agent-island/mascots/boli.png": "3fd1e43d60be800b224bc4f600ba8a3379497afa86c57dd0404b003d1f22fa9d",
