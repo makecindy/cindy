@@ -173,13 +173,16 @@ describe('Bot compact runtime refresh coordinator', () => {
 
     const retry = vi.fn()
       .mockRejectedValueOnce(new Error('offline'))
+      .mockResolvedValueOnce('failed')
       .mockResolvedValueOnce('refreshed');
     const retryCoordinator = createBotCompactRuntimeRefreshCoordinator({
       hasPendingInteraction: () => false,
       refresh: retry,
     });
     retryCoordinator.noteBoundary(h.session);
-    await expect(retryCoordinator.attempt(h.session)).resolves.toBe('deferred');
+    await expect(retryCoordinator.attempt(h.session)).resolves.toBe('failed');
+    expect(retryCoordinator.hasPending(h.session.id)).toBe(true);
+    await expect(retryCoordinator.attempt(h.session)).resolves.toBe('failed');
     expect(retryCoordinator.hasPending(h.session.id)).toBe(true);
     await expect(retryCoordinator.attempt(h.session)).resolves.toBe('refreshed');
     expect(retryCoordinator.hasPending(h.session.id)).toBe(false);
@@ -266,6 +269,23 @@ describe('capability refresh input admission', () => {
     await expect(admit()).resolves.toBe('deferred');
     expect(coordinator.hasPending(h.session.id)).toBe(true);
     await expect(admit()).resolves.toBe('refreshed');
+    expect(coordinator.hasPending(h.session.id)).toBe(false);
+  });
+
+  // #9433 P2, standard tier: a failed bootstrap may have already closed the old
+  // handle and cleared its pending marker. Send admission must still reject it.
+  it('does not admit a send when failed replacement cleared the old instance', async () => {
+    const h = createSession();
+    const coordinator = createBotCompactRuntimeRefreshCoordinator({
+      hasPendingInteraction: () => false,
+      refresh: async () => {
+        coordinator.clearForClosedSession(h.session);
+        throw new Error('bootstrap failed after close');
+      },
+    });
+    await expect(prepareBotCapabilityEpochBeforeSend(h.session, {
+      readSession: async () => botChat, preflight: async () => true, coordinator,
+    })).resolves.toBe('deferred');
     expect(coordinator.hasPending(h.session.id)).toBe(false);
   });
 

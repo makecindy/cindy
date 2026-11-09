@@ -75,7 +75,7 @@ import {
   writeBotProfileFolder,
 } from '../../maker-ipc/botProfileFolder.js';
 import { syncBotProfileFromFolder } from '../../maker-ipc/botProfileFolderSync.js';
-import { requestBotRuntimeEpochRefresh } from '../../maker-ipc/botRuntimeEpochRefreshSignal.js';
+import { requestBotRuntimeEpochRefresh, requestBotRuntimeEpochRefreshOutcome } from '../../maker-ipc/botRuntimeEpochRefreshSignal.js';
 import { createLogger } from '../../logger.js';
 import { collectTaskResponsibilityScopes } from '../../maker-ipc/botTaskResponsibility.js';
 import {
@@ -2339,6 +2339,7 @@ export async function updateBotProfile(raw: unknown, expectedVersion?: number,
     if (!projected && guard) throwIpcError('PRECONDITION_FAILED', '配置已保存，但身份文件同步失败');
     owner.assertCurrent();
   }
+  let runtimeRefreshUnconfirmed = false;
   if (profileContentChanged || acceptsSavedModel) {
     const [canonical] = await db
       .select({ sessionId: botSessionLinks.sessionId })
@@ -2352,12 +2353,21 @@ export async function updateBotProfile(raw: unknown, expectedVersion?: number,
       )
     .limit(1);
     owner.assertCurrent();
-    if (canonical) requestBotRuntimeEpochRefresh(canonical.sessionId,
-      acceptsModelSelection ? 'model' : 'profile');
+    if (canonical) {
+      const reason = acceptsModelSelection ? 'model' : 'profile';
+      if (guard) {
+        // Persistence already committed. Busy/cold runtimes may adopt on the next
+        // turn, but a failed rebuild must reach the target tool's saved receipt.
+        const outcome = await requestBotRuntimeEpochRefreshOutcome(canonical.sessionId, reason);
+        owner.assertCurrent();
+        runtimeRefreshUnconfirmed = outcome === 'failed' || outcome === 'unavailable';
+      } else void requestBotRuntimeEpochRefresh(canonical.sessionId, reason);
+    }
   }
   const profile = await readProfile(client, id);
   owner.assertCurrent();
   broadcastBotProfileChanged({ botId: id, change: 'updated' });
+  if (runtimeRefreshUnconfirmed) throwIpcError('PRECONDITION_FAILED', '配置已保存，但运行刷新未确认');
   return profile;
 }
 

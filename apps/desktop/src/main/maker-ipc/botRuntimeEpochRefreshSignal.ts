@@ -17,15 +17,24 @@ export function configureBotRuntimeEpochRefreshRequest(
   requestRefresh = handler;
 }
 
+/** Keep the boolean receipt used by existing memory/Skill callers. */
 export async function requestBotRuntimeEpochRefresh(
   sessionId: string,
   reason: BotRuntimeEpochRefreshReason,
 ): Promise<boolean> {
-  if (!requestRefresh) return false;
+  return await requestBotRuntimeEpochRefreshOutcome(sessionId, reason) === 'refreshed';
+}
+
+/** Target configuration needs failure evidence, not just whether a rebuild ran. */
+export async function requestBotRuntimeEpochRefreshOutcome(
+  sessionId: string,
+  reason: BotRuntimeEpochRefreshReason,
+): Promise<BotCompactRuntimeRefreshOutcome | 'unavailable'> {
+  if (!requestRefresh) return 'unavailable';
   try {
-    return await requestRefresh(sessionId, reason) === 'refreshed';
+    return await requestRefresh(sessionId, reason);
   } catch {
     // The resource write succeeded even if rebuilding its runtime failed.
-    return false;
+    return 'failed';
   }
 }

@@ -9881,7 +9881,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           profileVersion: row.profileVersion,
           reason: 'working-dir-missing',
         });
-        return 'not-bot';
+        return 'failed';
       }
 
       // Only a canonical Bot may eagerly settle a settings switch. The ordinary
@@ -9934,7 +9934,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           profileVersion: row.profileVersion,
           reason: 'working-dir-unavailable',
         });
-        return 'not-bot';
+        return 'failed';
       }
 
       await recordBotCompactRuntimeLifecycle({
@@ -17716,7 +17716,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         reason,
         error: error instanceof Error ? error.message : String(error),
       });
-      return 'deferred' as const;
+      return 'failed' as const;
     });
   });
 

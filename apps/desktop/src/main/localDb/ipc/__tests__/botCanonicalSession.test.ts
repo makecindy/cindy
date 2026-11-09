@@ -1,4 +1,6 @@
 import sharp from 'sharp';
+import { configureBotRuntimeEpochRefreshRequest } from '../../../maker-ipc/botRuntimeEpochRefreshSignal';
+import { createBotCompactRuntimeRefreshCoordinator, replaceBotRuntimeAfterPreflight } from '../../../maker-ipc/botCompactRuntimeRefresh';
 import { createBotDesignerHost } from '../../../maker-ipc/botDesignerHost';
 import { companionHomes } from '../../../companion-cloud/homes';
 import { writeBlob } from '../../../cindy-media/blobStore';
@@ -244,9 +246,6 @@ vi.mock('../../../maker-ipc/botRemoteWorkspaceService.js', () => ({
 }));
 vi.mock('../../conversationSearch.js', () => ({
   searchConversations: h.searchConversations,
-}));
-vi.mock('../../../maker-ipc/botRuntimeEpochRefreshSignal.js', () => ({
-  requestBotRuntimeEpochRefresh: h.requestRuntimeRefresh,
 }));
 vi.mock('../../../appSessionState.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../../appSessionState.js')>();
@@ -560,6 +559,8 @@ beforeEach(async () => {
   resetCustomMcpRegistry();
   registerCustomMcpArrays(h.mcpProviders);
   vi.clearAllMocks();
+  h.requestRuntimeRefresh.mockReset().mockResolvedValue('not-bot');
+  configureBotRuntimeEpochRefreshRequest(h.requestRuntimeRefresh);
   h.listProviders.mockReset().mockImplementation(async () => h.providers);
   vi.mocked(provisionDefaultBot).mockReset();
   h.remove.mockImplementation(async (...args) => {
@@ -10789,6 +10790,7 @@ describe('Bot Session task end-to-end runtime', () => {
 });
 
 afterAll(() => {
+  configureBotRuntimeEpochRefreshRequest(null);
   resetCustomMcpRegistry();
   h.sqlite?.close();
   rmSync(h.userDataDir, { recursive: true, force: true });
@@ -11397,14 +11399,52 @@ describe('Target teammate configuration', () => {
     expect(h.sqlite!.prepare("SELECT id FROM bot_profiles WHERE display_name = 'Must not create'").all()).toEqual([]);
   });
 
-  it('preserves the committed version when runtime refresh fails after saving', async () => {
-    const { callerSessionId, service } = await pair();
-    h.requestRuntimeRefresh.mockImplementationOnce(() => { throw new Error('refresh unavailable'); });
+  // #9433 P2, standard tier: the old synchronous signal mock bypassed the real
+  // async failure containment. Exercise profile persistence -> signal -> coordinator
+  // -> safe replacement; retain the saved version and retry without another write.
+  it.each(['preflight', 'bootstrap'] as const)('reports a saved version when async %s fails', async phase => {
+    const { callerSessionId, target, service } = await pair();
+    const runtime = { id: target.session.id, instanceId: 'target-runtime',
+      isTurnRunning: () => false, listBackgroundTasks: () => [] };
+    let fail = true;
+    const close = vi.fn(async () => undefined);
+    const coordinator = createBotCompactRuntimeRefreshCoordinator({
+      hasPendingInteraction: () => false,
+      refresh: () => replaceBotRuntimeAfterPreflight({
+        preflight: async () => { if (fail && phase === 'preflight') throw new Error('preflight failed'); },
+        isCurrentOwner: () => true,
+        close,
+        bootstrap: async () => {
+          if (fail && phase === 'bootstrap') throw new Error('bootstrap failed');
+          return 'refreshed' as const;
+        },
+      }),
+    });
+    h.requestRuntimeRefresh.mockImplementation(async () => {
+      coordinator.noteBoundary(runtime);
+      return coordinator.attempt(runtime);
+    });
     expect(await service.updateConfiguration({ callerSessionId, botId: 'design-target', expectedVersion: 1,
       patch: { description: 'Persisted before refresh failed' } })).toMatchObject({ ok: true, savedVersion: 2, effective: 'unconfirmed' });
     expect(await service.inspectConfiguration({ callerSessionId, botId: 'design-target' })).toMatchObject({
       ok: true, configuration: { profile: { version: 2, description: 'Persisted before refresh failed' } },
     });
+    expect(close).toHaveBeenCalledTimes(phase === 'preflight' ? 0 : 1);
+    expect(coordinator.hasPending(runtime.id)).toBe(true);
+    fail = false;
+    expect(await coordinator.attempt(runtime)).toBe('refreshed');
+    expect(coordinator.hasPending(runtime.id)).toBe(false);
+    expect(h.sqlite!.prepare('SELECT current_version AS version FROM bot_profiles WHERE id = ?').get('design-target'))
+      .toEqual({ version: 2 });
+  });
+
+  it.each(['refreshed', 'deferred', 'not-bot', 'unavailable'] as const)('distinguishes %s from a failed refresh receipt', async outcome => {
+    const { callerSessionId, service } = await pair();
+    if (outcome === 'unavailable') configureBotRuntimeEpochRefreshRequest(null);
+    else h.requestRuntimeRefresh.mockResolvedValue(outcome);
+    expect(await service.updateConfiguration({ callerSessionId, botId: 'design-target', expectedVersion: 1,
+      patch: { description: 'Saved configuration' } })).toMatchObject({ ok: true, savedVersion: 2,
+      effective: outcome === 'unavailable' ? 'unconfirmed' : 'next-turn' });
   });
 
   it('reports a saved version without claiming adoption when the identity file cannot be replaced', async () => {
