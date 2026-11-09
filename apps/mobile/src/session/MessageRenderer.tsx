@@ -28,6 +28,7 @@ import { AgentErrorDetails } from './AgentErrorDetails';
 import { ErrorNotice } from '@/components/ErrorNotice';
 import { FileTypeIcon } from '@/components/FileTypeIcon';
 import { CompanionThreadSummary, type CompanionThreads } from './CompanionThreads';
+import { companionTurnContinuations } from './companionConversationPresentation';
 import { CompanionMessageActions } from './CompanionMessageActions';
 import { compactMessageBubble, messageBubbleBase, userMessageBubble } from './messageBubbleStyles';
 import { MarkdownCodeCopyButton } from './MarkdownCodeCopyButton';
@@ -598,6 +599,8 @@ interface MessageActions {
   companionAttentionLabel?: string;
   /** Teammate portrait beside its replies (Desktop withAssistantAvatar). */
   companionAvatar?: ReactNode;
+  /** Top-level rows continuing the same teammate turn retain only the avatar inset. */
+  companionTurnContinuation?: boolean;
   /** First visible message of each five-minute teammate time group → its timestamp. */
   companionTimeGroups?: ReadonlyMap<string, number>;
   companionPluginWork?: ReturnType<typeof companionPluginWorkEntries>;
@@ -1612,6 +1615,10 @@ export function MessageRenderer({
   // LegendList 虚拟化/回收。不能用业务尾窗代替完整数据，否则短尾窗未撑满首屏时
   // Android 无法产生有效滚动，运行中任务会重现“上半屏空白且历史不可拖动”。
   const listData = items;
+  const companionContinuationKeys = useStableValue(
+    useMemo(() => companion ? companionTurnContinuations(items) : new Set<string>(), [companion, items]),
+    (previous, next) => previous.size === next.size && [...previous].every(key => next.has(key)),
+  );
   const listDataRef = useRef(listData);
   listDataRef.current = listData;
   const prevListLengthRef = useRef(listData.length);
@@ -2857,11 +2864,12 @@ export function MessageRenderer({
     return (
       <RenderListItemView
         actions={actions}
+        companionTurnContinuation={companionContinuationKeys.has(item.key)}
         focused={item.key === focusedItemKey}
         item={item}
       />
     );
-  }, [actions, focusedItemKey]);
+  }, [actions, focusedItemKey, companionContinuationKeys]);
   // pending_send 的展开态不改变 listData；LegendList 会复用现有行，单靠 renderItem
   // 闭包更新不足以保证可见行重绘。把选中项显式纳入 extraData，确保轻点气泡后
   // 「取消 / 编辑 / 插话」操作行立即出现，不依赖滚动触发回收重渲染。
@@ -2882,9 +2890,10 @@ export function MessageRenderer({
       // and the five-minute stamps. Both keep their identity until they really change.
       lastCompanionReplyKey,
       companionTimeGroups,
+      companionContinuationKeys,
     }),
     [pendingSend?.selectedClientId, shareSelectionActive, companion, companionWorkingLabel, companionPluginWork, companionThreads,
-      lastCompanionReplyKey, companionTimeGroups],
+      lastCompanionReplyKey, companionTimeGroups, companionContinuationKeys],
   );
   // Keep production and regular DEV screens on keyed remounts. With Fabric,
   // recycling an Android container across heterogeneous message trees can race
@@ -3230,12 +3239,14 @@ const RenderItemView = memo(function RenderItemView({
   }
   const groupTimestamp = actions.companion && (item.type === 'message' || item.type === 'pending_send')
     ? actions.companionTimeGroups?.get(item.key) : undefined;
-  // Each outer process group owns a portrait, just like the final reply.
-  // Nested details clear companionAvatar, so expanding them cannot repeat it.
-  const processAvatar = actions.companion && item.type === 'work_group' ? actions.companionAvatar : undefined;
+  // Only the first top-level row owns the turn's portrait. Nested details clear
+  // companionAvatar, so expanding them cannot repeat it.
+  const processAvatar = actions.companion && item.type === 'work_group' && !actions.companionTurnContinuation
+    ? actions.companionAvatar : undefined;
   // Cards still share the reply text column without repeating the portrait.
   const alignWithReplies = !!actions.companionAvatar && actions.companion
-    && item.type === 'message' && !!item.message.companion;
+    && ((item.type === 'message' && !!item.message.companion)
+      || (item.type === 'work_group' && actions.companionTurnContinuation));
   const aligned = processAvatar ? (
     <View style={styles.companionAvatarRow} testID="companion.processRow">
       <View style={styles.companionAvatarSlot}>{processAvatar}</View>
@@ -3275,20 +3286,23 @@ const RenderListItemView = memo(function RenderListItemView({
   item,
   actions,
   focused,
+  companionTurnContinuation,
 }: {
   item: MobileMessageRenderItem;
   actions: MessageActions & { firstUserMessageClientId?: string };
   focused: boolean;
+  companionTurnContinuation: boolean;
 }) {
   const isViewable = useMessageListItemVisible(item.key);
   const heavyContentVisible = focused || isViewable;
   // 本项(含 work_group / subagent 内层)点开的 payload 都带上顶层 key 作来源:
   // 看图器按它取「同一条消息」的图集,不靠 url 反查(同一 url 会再出现在后面的消息里)。
   const openPayloadFromItem = actions.onOpenPayloadFromItem;
-  const itemActions = useMemo(() =>
-      openPayloadFromItem
-    ? { ...actions, onOpenPayload: (next: MessagePayload) => openPayloadFromItem(next, item.key) }
-    : actions, [actions, item.key, openPayloadFromItem]);
+  const itemActions = useMemo(() => ({
+    ...actions,
+    companionTurnContinuation,
+    ...(openPayloadFromItem ? { onOpenPayload: (next: MessagePayload) => openPayloadFromItem(next, item.key) } : {}),
+  }), [actions, companionTurnContinuation, item.key, openPayloadFromItem]);
   return (
     <MessageListItemViewableContext.Provider value={isViewable}>
     <MessageHeavyContentVisibilityContext.Provider value={heavyContentVisible}>
@@ -4324,7 +4338,9 @@ function MessageBubble({
     && !item.message.systemCardType ? actions.companionAvatar : undefined;
   const rowNode = companionAvatar ? (
     <View style={styles.companionAvatarRow} testID="companion.replyRow">
-      <View style={styles.companionAvatarSlot}>{companionAvatar}</View>
+      <View style={styles.companionAvatarSlot}>
+        {actions.companionTurnContinuation ? <View style={styles.companionAvatarPlaceholder} /> : companionAvatar}
+      </View>
       <View style={styles.companionAvatarContent}>{messageNode}</View>
     </View>
   ) : (
@@ -9128,6 +9144,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   // Desktop BotAvatar sm (28) + gap-2.5; the task card reuses the same inset.
   companionAvatarRow: { flexDirection: 'row', alignItems: 'flex-start', gap: COMPANION_AVATAR_GAP },
   companionAvatarSlot: { flexShrink: 0, marginTop: 2 },
+  companionAvatarPlaceholder: { width: COMPANION_AVATAR_SIZE },
   companionAvatarContent: { flex: 1, minWidth: 0 },
   companionAvatarInset: { paddingLeft: COMPANION_AVATAR_SIZE + COMPANION_AVATAR_GAP },
   companionTimeGroup: {

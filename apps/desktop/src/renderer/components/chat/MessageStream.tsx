@@ -5,7 +5,7 @@ import { scrollRangeIntoView } from '@/lib/scrollRangeIntoView';
 import { historyAfter } from './historyAfter';
 import { readGhostCardSupersededBy, readMailCard } from '@cindy/maker-shared/ghost-card-form';
 import { animateFocusScroll } from './animateFocusScroll';
-import { botProcessItems, latestSettledAssistantMs, tailReplyClientIds } from '@/features/bots/botConversationPresentation';
+import { botProcessItems, botTurnContinuations, latestSettledAssistantMs, tailReplyClientIds } from '@/features/bots/botConversationPresentation';
 import { isVisibleVoiceCallMessage } from '@/features/bots/voice/voiceCallPresentation';
 import { MessageViewport, type MessageViewportApi } from './MessageViewport';
 import { PAGE_TEXT_NAVIGATION_EVENT } from '@/lib/pageTextAccess';
@@ -2876,7 +2876,7 @@ export const WorkGroupRenderItemView = memo(function WorkGroupRenderItemView({
   item: Extract<RenderItem, { type: 'work_group' }>;
   context: WorkGroupRenderContext;
   compact: boolean;
-  /** 伙伴聊天：过程区与最终回复各显示一个头像，正文保持同列。 */
+  /** 伙伴聊天：同一轮开头显示头像，后续行仅保留正文列缩进。 */
   companionAvatar?: ReactNode;
 }) {
   // 完成态外层时间线可包含内层 work_group。递归只负责形状映射,
@@ -3375,6 +3375,10 @@ export function MessageStream({
     botTailReplyIds,
   ]);
   const renderMetadataItems = renderMetadataProjection(allRenderItems);
+  const botContinuationKeys = useMemo(
+    () => simplifiedBotConversation ? botTurnContinuations(allRenderItems) : new Set<string>(),
+    [allRenderItems, simplifiedBotConversation],
+  );
   const botMessageTimeGroups = useMemo(() => {
     if (!simplifiedBotConversation) return new Map<string, number>();
     return collectBotMessageTimeGroups(
@@ -6313,13 +6317,11 @@ export function MessageStream({
     previousLocalFileRefsRef.current = localFileRefs;
   }, [localFileRefs]);
 
-  // 成果与回复正文同列，只占头像宽度；过程区单独显示伙伴头像。
+  // 后续正文及成果沿用头像列宽，不再挂载一个隐藏头像。
   const botReplyColumnSpacer = useMemo(
     () =>
       simplifiedBotConversation && assistantAvatar ? (
-        <span aria-hidden="true" className="invisible">
-          {assistantAvatar}
-        </span>
+        <span aria-hidden="true" className="block w-7" />
       ) : undefined,
     [assistantAvatar, simplifiedBotConversation],
   );
@@ -6650,7 +6652,9 @@ export function MessageStream({
                           // 伙伴聊天与普通任务同一套工作过程：运行中露最近 5 条活动与计时，
                           // 组头按内容宽；最终答复后保留折叠过程，按需展开。
                           compact={false}
-                          companionAvatar={simplifiedBotConversation ? assistantAvatar : undefined}
+                          companionAvatar={simplifiedBotConversation
+                            ? botContinuationKeys.has(item.key) ? botReplyColumnSpacer : assistantAvatar
+                            : undefined}
                         />
                       );
                     }
@@ -6770,7 +6774,7 @@ export function MessageStream({
                         isLastMessage={msg.clientId === lastMessageClientId}
                         isActiveError={msg.role === 'error' && msg.clientId === activeErrorClientId}
                         localFileRefs={localFileRefs}
-                        assistantAvatar={assistantAvatar}
+                        assistantAvatar={botContinuationKeys.has(item.key) ? botReplyColumnSpacer : assistantAvatar}
                         simplifiedBotConversation={simplifiedBotConversation}
                         starterOptionsLocked={Boolean(lastUserMessageClientId)}
                         sessionSource={sessionSource}
