@@ -4824,7 +4824,14 @@ let pendingAgentSwitchApplyHolder:
   ) => Promise<{ release: () => void; selection?: ScheduledModelSelection }>) | null = null;
 let cancelPendingAgentSwitchHolder: ((sessionId: string) => void) | null = null;
 let prepareScheduledModelPreferencesHolder: ((sessionId: string, override: boolean) => Promise<void>) | null = null;
+let scheduledSessionBootstrapHolder: ((options: Parameters<Maker['createSession']>[0], signal?: AbortSignal) => ReturnType<Maker['createSession']>) | null = null;
 let recordDispatchedModelHolder: ((sessionId: string, clientId: string) => void) | null = null;
+
+/** Automations use the same startup/allocation boundary as ordinary tasks. */
+export function bootstrapScheduledSession(options: Parameters<Maker['createSession']>[0], signal?: AbortSignal): ReturnType<Maker['createSession']> {
+  if (!scheduledSessionBootstrapHolder) throw new Error('Scheduled session startup is not initialized');
+  return scheduledSessionBootstrapHolder(options, signal);
+}
 
 export function recordDispatchedModel(sessionId: string, clientId: string): void {
   recordDispatchedModelHolder?.(sessionId, clientId);
@@ -12239,6 +12246,20 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   prepareScheduledModelPreferencesHolder = async (sessionId, override) => {
     if (override) await scheduledModelScope.begin(sessionId);
     else await scheduledModelScope.restore(sessionId);
+  };
+  const scheduledSessionOwnerScope = captureDataOwnerBroadcastScope();
+  scheduledSessionBootstrapHolder = async (createOpts, signal) => {
+    const assertCurrent = () => {
+      signal?.throwIfAborted();
+      if (!isDataOwnerBroadcastScopeCurrent(scheduledSessionOwnerScope)) throw new Error('Scheduled session owner changed');
+    };
+    assertCurrent();
+    const prepared: MakerSessionCreateOpts = { ...createOpts };
+    const { session } = await bootstrapSession(prepared, assertCurrent);
+    // Keep the caller's routing metadata aligned with the group-selected member.
+    createOpts.agentDeviceId = prepared.agentDeviceId;
+    createOpts.providerId = prepared.providerId;
+    return session;
   };
   let recoverRenamedSessionModelOnSend: (sessionId: string) => Promise<void> = async () => {
     throw new Error('session model recovery is not ready');

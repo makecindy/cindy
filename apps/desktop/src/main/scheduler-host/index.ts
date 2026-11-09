@@ -46,6 +46,7 @@ import {
   prepareScheduledModelPreferencesUnderLock,
   recordDispatchedModel,
   broadcastSessionCreated,
+  bootstrapScheduledSession,
   cancelSchedulerAutoResume,
   enqueueSchedulerPrompt,
   ensureSchedulerQueueRestored,
@@ -139,6 +140,7 @@ async function startSchedulerInternal(deps: StartSchedulerDeps): Promise<Schedul
   });
   const promptRunner = new MakerScheduleRunner({
     maker: deps.maker,
+    bootstrapSession: bootstrapScheduledSession,
     getDb: deps.getDb,
     notifier,
     logger: deps.logger,

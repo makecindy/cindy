@@ -274,6 +274,9 @@ export interface SchedulerQueueDeps {
 
 export interface MakerScheduleRunnerDeps {
   maker: Maker;
+  /** Use the ordinary task startup funnel, including provider-group allocation.
+   * The funnel may update the options to the member it actually selected. */
+  bootstrapSession?: (options: Parameters<Maker['createSession']>[0], signal?: AbortSignal) => ReturnType<Maker['createSession']>;
   getDb: () => SchedulerDrizzleDb;
   notifier: Notifier;
   logger: Logger;
@@ -502,6 +505,13 @@ export class MakerScheduleRunner implements ScheduleRunner {
   >();
 
   constructor(private readonly deps: MakerScheduleRunnerDeps) {}
+
+  private createSession(options: Parameters<Maker['createSession']>[0], signal?: AbortSignal): ReturnType<Maker['createSession']> {
+    signal?.throwIfAborted();
+    return this.deps.bootstrapSession
+      ? this.deps.bootstrapSession(options, signal)
+      : this.deps.maker.createSession(options);
+  }
 
   /** Keep the normal completion/cancellation path while enqueueing the user's
    * already prepared Continue input (same clientId and device provenance). */
@@ -1358,7 +1368,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
       dynamicDefaultRoute?.providerId ??
       null;
     // Remote Agent routes use that device's authorized catalog, never local credentials.
-    const agentDeviceId = resolvedSelection?.agentDeviceId !== undefined
+    let agentDeviceId = resolvedSelection?.agentDeviceId !== undefined
       ? resolvedSelection.agentDeviceId
       : (isHeartbeat ? heartbeatAgentDeviceId : freshAgentDeviceId) || null;
     // 停用轴准入(PR #744 review):每次 fire 都是新的付费调用,不属于「运行中的会话
@@ -1623,7 +1633,11 @@ export class MakerScheduleRunner implements ScheduleRunner {
     };
     let session: Awaited<ReturnType<Maker['createSession']>>;
     try {
-      session = await this.deps.maker.createSession(createSessionOpts);
+      session = await this.createSession(createSessionOpts, ctx.signal);
+      if (this.deps.bootstrapSession) {
+        agentDeviceId = createSessionOpts.agentDeviceId ?? null;
+        createProviderId = createSessionOpts.providerId ?? null;
+      }
     } catch (err) {
       if (err instanceof CredentialModeSwitchBusyError) {
         // fresh Codex 也共用本地 credential mode，撞上其它本地 Codex turn 时按撞忙处理。
@@ -1676,12 +1690,12 @@ export class MakerScheduleRunner implements ScheduleRunner {
           // the transaction's persisted native checkpoint before this fire sends.
           if (this.deps.maker.getSession(session.id) !== session) {
             const latest = await this.deps.maker.getSessionMeta(session.id);
-            session = await this.deps.maker.createSession({
+            session = await this.createSession({
               ...createSessionOpts,
               model,
               providerId: reusedPiRouteProviderId,
               resumeSessionId: latest?.sdkSessionId ?? undefined,
-            });
+            }, ctx.signal);
           }
         } else {
           await session.setModel(model);
@@ -1840,12 +1854,14 @@ export class MakerScheduleRunner implements ScheduleRunner {
         // heartbeat / 冷 resume 与本轮真实凭证/endpoint 才不会漂移。心跳只在默认模型
         // 同轮落库成功时写(模型与来源成对);其余心跳留空不写,保留绑定会话自己的 provider_id。
         providerId:
-          resolvedSelection?.providerId ??
-          explicitProviderId ??
-          (!isHeartbeat || (heartbeatModelChanged && modelSwitchApplied)
-            ? materializedDefaultProviderId
-            : null) ??
-          undefined,
+          this.deps.bootstrapSession && !isHeartbeat
+            ? createProviderId ?? undefined
+            : resolvedSelection?.providerId ??
+              explicitProviderId ??
+              (!isHeartbeat || (heartbeatModelChanged && modelSwitchApplied)
+                ? materializedDefaultProviderId
+                : null) ??
+              undefined,
         // 回退分配了对话工作区的会话按 'dialogue' 落库 —— 侧边栏才会归入
         // "对话"分组(覆盖存量 workspaceKind='project' 但无目录的旧任务)。
         workspaceKind: !isHeartbeat
@@ -1937,12 +1953,12 @@ export class MakerScheduleRunner implements ScheduleRunner {
         if (applied.status !== 'applied') throw new Error('Scheduled Pi model selection was deferred');
         if (this.deps.maker.getSession(session.id) !== session) {
           const latest = await this.deps.maker.getSessionMeta(session.id);
-          session = await this.deps.maker.createSession({
+          session = await this.createSession({
             ...createSessionOpts,
             model: runtimeModel,
             providerId: verdict.providerId,
             resumeSessionId: latest?.sdkSessionId ?? undefined,
-          });
+          }, ctx.signal);
         }
         setSessionProvider(session.id, verdict.providerId);
       }
