@@ -195,6 +195,11 @@ describe('HY4 inline reasoning through Pi production adapters', () => {
     '\\```literal </think:6124c78e>``',
     'unmatched `\n```js\nconst fence = "`";\nconst token = "</think:6124c78e>";\n```',
     'unmatched `\n\n    const token = "</think:6124c78e>";',
+    '- 未闭合的反引号：`\n- 示例：`</think:6124c78e>`',
+    '1. 未闭合的反引号：`\n2. 示例：`</think:6124c78e>`',
+    '> - 未闭合的反引号：`\n> - 示例：`</think:6124c78e>`',
+    '- > 未闭合的反引号：`\n- > 示例：`</think:6124c78e>`',
+    '| 标题 |\n| --- |\n| 未闭合：` |\n| 示例：`</think:6124c78e>` |',
   ])('keeps literal tags inside Markdown code in live, final and history projection: %s', text => {
     const h = harness();
     h.start();
@@ -245,6 +250,8 @@ describe('HY4 inline reasoning through Pi production adapters', () => {
       '- > ```xml\n  > TOKEN\n  > ```',
       '> - > ```xml\n>   > TOKEN\n>   > ```',
       '-\t```xml\n\tTOKEN\n\t```',
+      '- 草稿：`\n- 示例：`TOKEN` 后面仍是私有分析。',
+      '| 标题 |\n| --- |\n| 草稿：` |\n| 示例：`TOKEN` |',
     ])('does not release private analysis at a code-contained closer: %s', code => {
       const reasoning = '检查示例：\n\n' + code.replace('TOKEN', closer) + '\n\n这里仍是私有分析。\n';
       const h = harness();
@@ -268,8 +275,10 @@ describe('HY4 inline reasoning through Pi production adapters', () => {
       disposePiTranslateContext(h.ctx);
     });
 
-    it.each(['aborted', 'length', 'error'])('keeps analysis private when only a code-contained closer arrived (%s)', stopReason => {
-      const reasoning = '检查示例：\n```xml\n' + closer + '\n```\n这里仍是私有分析。';
+    it.each(['aborted', 'length', 'error'].flatMap(stopReason => ['fence', 'list'].map(form => [stopReason, form])))('keeps analysis private when only a code-contained closer arrived (%s / %s)', (stopReason, form) => {
+      const reasoning = form === 'fence'
+        ? '检查示例：\n```xml\n' + closer + '\n```\n这里仍是私有分析。'
+        : '- 草稿：`\n- 示例：`' + closer + '` 后面仍是私有分析。';
       const h = harness();
       h.start();
       h.delta(opener + reasoning);
@@ -288,6 +297,15 @@ describe('HY4 inline reasoning through Pi production adapters', () => {
     h.delta(opener + reasoning + closer + answer);
     expect(h.texts()).toEqual([]);
     h.end(opener + reasoning + closer + answer);
+    expect(h.texts().at(-1)?.text).toBe(answer);
+    expect(h.thoughts().filter(e => e.stage === 'final').map(e => e.text)).toEqual([reasoning]);
+    disposePiTranslateContext(h.ctx);
+  });
+
+  it('keeps raw UTF-16 offsets when tabs and non-BMP characters precede a boundary', () => {
+    const reasoning = '😀检查\t文件后给出结论。';
+    const h = harness();
+    h.start(); h.delta(reasoning + marker + answer); h.end(reasoning + marker + answer);
     expect(h.texts().at(-1)?.text).toBe(answer);
     expect(h.thoughts().filter(e => e.stage === 'final').map(e => e.text)).toEqual([reasoning]);
     disposePiTranslateContext(h.ctx);

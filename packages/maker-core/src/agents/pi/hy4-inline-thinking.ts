@@ -1,3 +1,7 @@
+import { fromMarkdown } from 'mdast-util-from-markdown';
+import { gfmFromMarkdown } from 'mdast-util-gfm';
+import { gfm } from 'micromark-extension-gfm';
+
 /** HY4 Chat may put reasoning in content, with an implicit opener and salted closer. */
 export function isHy4Model(model: unknown): boolean {
   return typeof model === 'string' && /^(?:tencent\/)?hy4(?:-preview)?$/i.test(model);
@@ -20,105 +24,62 @@ export function splitHy4InlineThinking(text: string, final = false): Hy4InlineTh
   return { thinking: text.slice(start, end), text: text.slice(end + boundary.length) };
 }
 
-/** Expand tabs only for Markdown structure; returned offsets always use the raw text. */
-function expandTabs(line: string): string {
-  if (!line.includes('\t')) return line;
-  let column = 0;
-  let expanded = '';
-  for (const char of line) {
-    const width = char === '\t' ? 4 - column % 4 : 1;
-    expanded += char === '\t' ? ' '.repeat(width) : char;
-    column += width;
-  }
-  return expanded;
+interface MarkdownNode {
+  type: string;
+  position?: { start: { offset?: number }; end: { offset?: number } };
+  children?: MarkdownNode[];
 }
+interface TextRange { start: number; end: number }
 
-/** Quote and list containers may alternate in either order. */
-function codeStructure(line: string): { content: string; quoteDepth: number; listIndent: number } {
-  let content = line;
-  let quoteDepth = 0;
-  let listIndent = 0;
-  while (true) {
-    const quote = /^ {0,3}> ?/.exec(content);
-    if (quote) {
-      content = content.slice(quote[0].length);
-      quoteDepth++;
-      // Quote continuation consumes preceding list indentation as well.
-      listIndent = 0;
-      continue;
-    }
-    const list = /^( {0,3})([-+*]|\d{1,9}[.)])( +)/.exec(content);
-    if (!list) break;
-    // Five or more padding spaces leave indented code after one padding space.
-    const width = list[1].length + list[2].length + (list[3].length <= 4 ? list[3].length : 1);
-    content = content.slice(width);
-    listIndent += width;
-  }
-  return { content, quoteDepth, listIndent };
-}
-
-/** Both explicit and implicit openers use exactly the same literal-code protection. */
+/** Both opener dialects use the renderer's CommonMark/GFM code boundaries. */
 function findThinkingBoundary(text: string, expectedClose: string | null, final: boolean): { index: number; length: number } | null {
-  // The observed gateway dialect omits the opening tag. A bare </think> alone
-  // is not enough evidence; only the salted HY4 control token enables this path.
-  // Fenced code closes only on a delimiter-only line, never on a run inside a
-  // string/comment. Inline code instead closes on an exactly matching run.
-  let fence: { run: string; quoteDepth: number; listIndent: number } | null = null;
-  let inlineWidth = 0;
-  let pendingInlineBoundary: { index: number; length: number } | null = null;
-  let offset = 0;
-  for (const line of text.split('\n')) {
-    const structuralLine = expandTabs(line);
-    let fenceLine = structuralLine;
-    for (let depth = 0; fence && depth < fence.quoteDepth; depth++) {
-      const quote = /^ *> ?/.exec(fenceLine);
-      if (!quote) { fence = null; break; }
-      fenceLine = fenceLine.slice(quote[0].length);
+  const candidates = [...text.matchAll(/<\/think(?::([a-f0-9]{8}))?>/gi)]
+    .filter(match => expectedClose ? match[0].toLowerCase() === expectedClose : Boolean(match[1]));
+  if (candidates.length === 0) return null;
+  // Parse only after a complete potential boundary arrives, not on ordinary
+  // deltas. These are the same CommonMark/GFM extensions used by remark-gfm.
+  const root = fromMarkdown(text, {
+    extensions: [gfm({ singleTilde: false })],
+    mdastExtensions: [gfmFromMarkdown()],
+  });
+  const code: TextRange[] = [];
+  const scopes: TextRange[] = [];
+  const visit = (node: MarkdownNode): void => {
+    const start = node.position?.start.offset;
+    const end = node.position?.end.offset;
+    if (typeof start === 'number' && typeof end === 'number') {
+      if (node.type === 'code' || node.type === 'inlineCode') code.push({ start, end });
+      if (node.type === 'paragraph' || node.type === 'heading' || node.type === 'tableCell') scopes.push({ start, end });
     }
-    if (fence) {
-      const close = /^( *)(`+|~+) *\r?$/.exec(fenceLine);
-      if (close && close[1].length <= fence.listIndent + 3
-          && close[2][0] === fence.run[0] && close[2].length >= fence.run.length) fence = null;
-    } else {
-      // Strip quote/list containers before checking code indentation. Protect
-      // nested-list fences too: their absolute indentation can exceed three.
-      const structure = codeStructure(structuralLine);
-      const open = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(structure.content);
-      const opensFence = open && (open[1][0] === '~' || !open[2].includes('`'));
-      // Inline spans cannot cross paragraph or fenced-block boundaries. An
-      // unmatched opening run is literal text once that block has ended.
-      if (inlineWidth && (structure.content.trim().length === 0 || opensFence)) {
-        if (pendingInlineBoundary) return pendingInlineBoundary;
-        inlineWidth = 0;
-      }
-      if (!inlineWidth && /^ {4}/.test(structure.content)) {
-        offset += line.length + 1;
-        continue;
-      }
-      if (open && opensFence) {
-        fence = { run: open[1], quoteDepth: structure.quoteDepth, listIndent: structure.listIndent };
-      } else for (const match of line.matchAll(/`+|<\/think(?::[a-f0-9]{8})?>/gi)) {
-        const token = match[0];
-        if (token[0] === '`') {
-          // Escapes apply outside code spans; inside, backslashes are literal.
-          let backslashes = 0;
-          for (let i = match.index - 1; i >= 0 && line[i] === '\\'; i--) backslashes++;
-          const width = token.length - (!inlineWidth && backslashes % 2 ? 1 : 0);
-          if (!width) continue;
-          if (!inlineWidth) inlineWidth = width;
-          else if (inlineWidth === width) { inlineWidth = 0; pendingInlineBoundary = null; }
-        } else if (expectedClose
-          ? token.toLowerCase() === expectedClose
-          : token.toLowerCase().startsWith('</think:')) {
-          const boundary = { index: offset + match.index, length: token.length };
-          if (!inlineWidth) return boundary;
-          pendingInlineBoundary ??= boundary;
+    node.children?.forEach(visit);
+  };
+  visit(root);
+  code.sort((a, b) => a.start - b.start);
+  for (const candidate of candidates) {
+    const index = candidate.index;
+    const end = index + candidate[0].length;
+    if (code.some(range => range.start <= index && end <= range.end)) continue;
+    if (!final) {
+      const scope = scopes.filter(range => range.start <= index && end <= range.end)
+        .sort((a, b) => (a.end - a.start) - (b.end - b.start))[0];
+      if (scope) {
+        // A partial inline opener is still literal in the current AST but may
+        // become code when a later chunk closes it. Hold that message until
+        // closure or final authority. Never carry this state across AST scopes
+        // (e.g. another list item/table cell), or choose a later candidate first.
+        let cursor = scope.start;
+        for (const range of code) {
+          if (range.end <= cursor) continue;
+          if (range.start >= index) break;
+          if (text.slice(cursor, Math.min(range.start, index)).includes('`')) return null;
+          cursor = Math.max(cursor, range.end);
         }
+        if (text.slice(cursor, index).includes('`')) return null;
       }
     }
-    offset += line.length + 1;
+    return { index, length: candidate[0].length };
   }
-  return final ? pendingInlineBoundary : null;
+  return null;
 }
 
 /** Shared by final RPC projection and Pi tree rehydration; raw native history is untouched. */

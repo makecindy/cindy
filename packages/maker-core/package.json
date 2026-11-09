@@ -29,7 +29,10 @@
     "@cindy/maker-shared": "workspace:*",
     "@cindy/model-providers": "workspace:*",
     "diff": "^8.0.4",
-    "gray-matter": "^4.0.3"
+    "gray-matter": "^4.0.3",
+    "mdast-util-from-markdown": "2.0.3",
+    "mdast-util-gfm": "3.1.0",
+    "micromark-extension-gfm": "3.0.0"
   },
   "peerDependencies": {
     "better-sqlite3": "*",
