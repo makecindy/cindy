@@ -294,6 +294,12 @@ export function MorphPopover({
       // 定宽后再量高（上面已把 height 设成 auto）。scrollHeight 是内容自然高度：搜索过滤后
       // 列表变矮，这里跟着变小，外壳才能从打开时的高度收缩。offsetHeight 在 height:auto 时
       // 本应一样，但内容包装若被百分比高度拉满，它会停在外壳旧高度，收缩就测不出来。
+      // scrollHeight 不含上下边框，而写入的 height 是 border-box：少这 2px 时内容区被 max-h-full
+      // 压短，没有内滚标记的面板（权限 / Agent）就会多出一条竖向滚动条。
+      const border = getComputedStyle(panel);
+      const borderY =
+        (Number.parseFloat(border.borderTopWidth) || 0) +
+        (Number.parseFloat(border.borderBottomWidth) || 0);
       // 可视高度钳制:停靠位到视口边缘的可用空间(内容区自滚)。avail 夹到 ≥0——
       // chip 极靠近视口边(如 side='top' 且距顶 <14px)时 avail 会为负,负 height
       // 被浏览器静默忽略→面板停在 chip 高度"打不开"(greptile P1)。
@@ -306,7 +312,7 @@ export function MorphPopover({
         maxContentHeight !== undefined && Number.isFinite(maxContentHeight)
           ? Math.max(0, maxContentHeight)
           : Number.POSITIVE_INFINITY;
-      const targetH = Math.min(panel.scrollHeight, Math.max(0, avail), contentCap);
+      const targetH = Math.min(panel.scrollHeight + borderY, Math.max(0, avail), contentCap);
       panel.style.width = prevW;
       panel.style.height = prevH;
       return { w: targetW, h: targetH };

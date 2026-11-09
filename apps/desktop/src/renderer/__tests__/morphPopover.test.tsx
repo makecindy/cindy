@@ -793,4 +793,43 @@ describe('MorphPopover interaction contract', () => {
     expect(panel.style.height).toBe('400px');
     vi.useRealTimers();
   });
+
+  // #9573 复审：scrollHeight 不含上下边框，写入的 height 是 border-box。少这 2px 时
+  // max-h-full 的内容区被压短，没有内滚标记的面板（权限 / Agent）会多出一条竖向滚动条。
+  // 生产入口：MorphPopover 打开后按内容量高。现有收缩用例的 scrollHeight 是 mock，边框为 0，
+  // 看不出差额。最小输入：内容高 100，外壳上下边框各 1px，视口放得下。写入高度必须是 102，
+  // 外壳 settle 后仍是 auto（内容放得下，不需要滚）。Tier: unit。
+  it('内容能完整放下时，写入的高度包含上下边框，外壳不自滚', async () => {
+    vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockReturnValue(480);
+    vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockImplementation(function (this: HTMLElement) {
+      return this.getAttribute('role') === 'group' ? 100 : 0;
+    });
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue(new DOMRect(20, 800, 120, 30));
+    class ResizeObserverStub {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    }
+    vi.stubGlobal('ResizeObserver', ResizeObserverStub);
+
+    render(
+      <Harness>
+        <div>one row</div>
+      </Harness>,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Toggle' }));
+    const panel = await screen.findByRole('group', { name: 'Morph panel' });
+    await waitFor(() => {
+      expect(panel.style.height).toBe('100px');
+    });
+    // jsdom 不计算样式表边框。写到元素上之后重测一次，getComputedStyle 才能读到 1px。
+    panel.style.borderTopWidth = '1px';
+    panel.style.borderBottomWidth = '1px';
+    panel.style.borderStyle = 'solid';
+    const content = panel.firstElementChild as HTMLElement;
+    content.dispatchEvent(new CustomEvent(MORPH_CONTENT_RESIZE_EVENT, { bubbles: true }));
+    expect(panel.style.height).toBe('102px');
+    expect(content.style.overflowY).toBe('auto');
+    expect(content.querySelector('[data-morph-scroll="inner"]')).toBeNull();
+  });
 });
