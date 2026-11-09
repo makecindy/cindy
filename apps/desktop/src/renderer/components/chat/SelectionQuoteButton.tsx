@@ -43,7 +43,6 @@ const BUTTON_MIN_TOP_PX = 44;
 // untransformed `left` edge. Keep a full pill-width clearance on both sides:
 // the visual centering transform does not participate in that calculation.
 const BUTTON_EDGE_MARGIN_PX = 8;
-const FLOATING_QUOTE_DISABLED_SELECTOR = '[data-selection-floating-quote-disabled]';
 
 interface RectBounds {
   left: number;
@@ -56,21 +55,6 @@ interface RectBounds {
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max);
-}
-
-/**
- * 用户消息不显示主动浮出的“添加到对话”按钮，但右键菜单仍可添加。
- * 用 Range 相交判断而非只看选区端点，避免跨消息拖选时夹带 user 消息时
- * 浮动按钮重新出现。
- */
-export function selectionIntersectsFloatingQuoteDisabledArea(
-  range: Pick<Range, 'intersectsNode'>,
-  container: Pick<HTMLElement, 'querySelectorAll'>,
-): boolean {
-  for (const element of container.querySelectorAll(FLOATING_QUOTE_DISABLED_SELECTOR)) {
-    if (range.intersectsNode(element)) return true;
-  }
-  return false;
 }
 
 function getSelectionDirection(selection: Selection): 'forward' | 'backward' {
@@ -203,7 +187,7 @@ export function SelectionQuoteButton({
   useEffect(() => {
     // Position follows the actual selected text edge, not the mouse-up point. This keeps
     // the button attached to the selection even if the pointer is released outside it.
-    const readSelectionInStream = (allowQuoteDisabled = false): SelectionAnchor | null => {
+    const readSelectionInStream = (): SelectionAnchor | null => {
       const sel = window.getSelection();
       if (!sel || sel.isCollapsed || sel.rangeCount === 0) return null;
       const raw = getQuoteText?.() ?? sel.toString();
@@ -224,7 +208,6 @@ export function SelectionQuoteButton({
       ) {
         return null;
       }
-      if (!allowQuoteDisabled && selectionIntersectsFloatingQuoteDisabledArea(range, container)) return null;
       const floatingAnchor = getFloatingAnchor(sel, range);
       if (!floatingAnchor) return null;
 
@@ -246,7 +229,7 @@ export function SelectionQuoteButton({
     const container = containerRef.current;
     if (container) container.dataset.selectionQuoteContext = '';
     const unsubscribeAddToChat = window.electronAPI.onSelectionContextMenuAddToChat(() => {
-      const currentSelection = readSelectionInStream(true);
+      const currentSelection = readSelectionInStream();
       if (currentSelection) commitQuote(currentSelection);
     });
     document.addEventListener('mouseup', onMouseUp);
