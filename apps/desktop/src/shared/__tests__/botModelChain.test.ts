@@ -5,6 +5,7 @@ import {
   BOT_MODEL_CHAIN_MAX,
   nextBotModelRoute,
   normalizeBotModelChain,
+  normalizeBotProfileModelChain,
   primaryBotModelRoute,
 } from '../botModelChain';
 
@@ -157,6 +158,17 @@ it('preserves locations through persistence and ordered fallback', () => {
   expect(nextBotModelRoute(chain, shared)).toEqual(local);
   expect(nextBotModelRoute(chain, local)).toEqual(other);
   expect(nextBotModelRoute(chain, other)).toBeNull();
+});
+
+// Unit regression: chain-only coverage missed a stale top-level location after returning home.
+it('mirrors the primary location on save and clears it when only the fallback is remote', () => {
+  const local = { harness: 'codex' as const, model: 'same-model', providerId: 'openai', effort: '', fastMode: false };
+  const remote = { ...local, agentDeviceId: 'share:one' };
+  const saved = normalizeBotProfileModelChain({ modelChain: [remote, local] });
+  expect(saved.agentDeviceId).toBe('share:one');
+  const restored = normalizeBotProfileModelChain({ ...saved, modelChain: [local, remote] });
+  expect(restored.agentDeviceId).toBeNull();
+  expect(normalizeBotModelChain(JSON.parse(JSON.stringify(restored)).modelChain)).toEqual([local, remote]);
 });
 
 it('round trips remote forms without exposing a same-named local source to older peers', () => {

@@ -280,8 +280,8 @@
     },
     "compact": {
       "savedTokens": "tokens {{tokens}} guardados",
-      "manual": "compacto manual",
-      "auto": "Auto compacto",
+      "manual": "Compactación manual",
+      "auto": "Compactación automática",
       "aria": "Chat compactado"
     },
     "goalComplete": "Objetivo alcanzado · {{turns}} turnos · {{duration}}",
@@ -451,5 +451,29 @@
       "provider": "Proveedor de API",
       "unknown": "Canal no registrado"
     }
+  },
+  "attachmentPreview": {
+    "more": "Más acciones",
+    "retry": "Reintentar",
+    "image": "Imagen",
+    "video": "Vídeo",
+    "file": "Archivo",
+    "close": "Cerrar",
+    "reset": "Restablecer vista",
+    "open": "Abrir vista previa",
+    "actualSize": "Tamaño real (1:1)",
+    "save": "Guardar original",
+    "share": "Compartir",
+    "previous": "Adjunto anterior",
+    "next": "Adjunto siguiente",
+    "password": "Introduce la contraseña del PDF",
+    "find": "Buscar en el documento",
+    "matches": "{{count}} páginas coincidentes",
+    "previousPage": "Página anterior",
+    "nextPage": "Página siguiente",
+    "redo": "Rehacer",
+    "wrap": "Ajustar líneas",
+    "lineNumbers": "Números de línea",
+    "rendered": "Ver documento"
   }
 }

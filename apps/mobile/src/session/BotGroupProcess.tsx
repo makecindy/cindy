@@ -26,8 +26,8 @@ function BotGroupProcessHistory({ process, deviceId }: { process: BotGroupProces
   const [result, setResult] = useState<{ messages: BotGroupProcessMessage[]; failed: boolean }>();
   const [attempt, retry] = useState(0);
   const [opened, setOpened] = useState(false);
-  const duration = useMemo(() => projectBotGroupProcess(result?.messages ?? [], false).durationMs, [result]);
-  const title = useTeammateElapsedTitle(false, undefined, process.durationMs ?? duration);
+  const projection = useMemo(() => projectBotGroupProcess(result?.messages ?? [], false), [result]);
+  const title = useTeammateElapsedTitle(false, undefined, process.durationMs ?? projection.durationMs);
   useEffect(() => {
     if (!opened) return;
     let cancelled = false;
@@ -41,8 +41,13 @@ function BotGroupProcessHistory({ process, deviceId }: { process: BotGroupProces
   return <TeammateProcess id={`group-process:${process.executionId}`} title={title}>
     <MarkProcessVisible onVisible={() => setOpened(true)} />
     {!result && <ActivityIndicator color={colors.textSecondary} />}
-    {result?.failed && <MainWindowActionButton action={{ label: t('message.renderer.retryPreview'), onPress: () => retry(v => v + 1) }} />}
-    {result && <BotGroupProcessEntries messages={result.messages} id={process.executionId} />}
+    {result && (result.failed || !result.messages.length) && <>
+      <Text style={{ color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption }}>{t('chat.teammateProcess.unavailable')}</Text>
+      <MainWindowActionButton action={{ label: t('chat.teammateProcess.retry'), onPress: () => retry(v => v + 1) }} />
+    </>}
+    {result && !result.failed && result.messages.length > 0 && (projection.segments.length
+      ? <BotGroupProcessEntries messages={result.messages} id={process.executionId} />
+      : <Text style={{ color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption }}>{t('chat.teammateProcess.empty')}</Text>)}
   </TeammateProcess>;
 }
 function MarkProcessVisible({ onVisible }: { onVisible(): void }) {
@@ -70,6 +75,5 @@ export function BotGroupProcessEntries({ messages, id, running = false }: { mess
         </View> : null)}
       </TeammateWorkSegment>;
     })}
-    {running && (!projection.segments.length || projection.segments.at(-1)?.kind === 'content') && <TeammateWorkSegment id={`${id}:pending`} title={t(projection.segments.length ? 'chat.teammateProcess.thinking' : 'chat.teammateProcess.processing')} running hasTools={false} />}
   </View>;
 }

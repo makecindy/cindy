@@ -47,9 +47,10 @@ describe('chatFileChipMenuModel', () => {
     ]);
   });
 
-  it('Android 的 PDF 不给「快速预览」(WebView 不渲染 PDF),仍可分享', () => {
+  it('Android 的 PDF 提供应用内预览和分享', () => {
     const pdf: ChatFilePathTarget = { kind: 'file', relPath: 'documents/报告.PDF', absPath: '/w/documents/报告.PDF' };
     expect(chatFileChipMenuRows(pdf, 'android').map((r) => r.key)).toEqual([
+      'open',
       'revealInBrowser',
       'sendToSession',
       'copyPath',

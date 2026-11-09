@@ -1,3 +1,4 @@
+import { appearanceSettings, UI_FONT_PRESETS, CODE_FONT_PRESETS, TERMINAL_FONT_PRESETS } from './AppearanceSection.settings-search';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { SelectParts as Select } from '@/components/ui/select';
@@ -36,16 +37,10 @@ import { Button } from '@/components/ui/button';
 import { Tip } from '@/components/ui/tooltip';
 import { Slider } from '@/components/ui/slider';
 import { extractIpcError } from '@/utils/ipcError';
-import { FontFamilyPicker, type FontPreset } from './FontFamilyPicker';
+import { DockIconPicker } from './DockIconPicker';
+import { FontFamilyPicker, FontFamilyResetButton } from './FontFamilyPicker';
 import { LayoutResetControl } from './LayoutResetControl';
-import {
-  SETTINGS_CARD_CLASS,
-  SETTINGS_ROW_CLASS,
-  SETTINGS_ROW_DIVIDER_CLASS,
-  SETTINGS_ROW_HINT_CLASS,
-  SETTINGS_ROW_LABEL_CLASS,
-  SETTINGS_SECTION_TITLE_CLASS,
-} from './settingsRowClasses';
+import { SETTINGS_PAGE_TITLE_CLASS, SettingsCard, SettingsField, SettingsRow, SettingsSection } from '@/components/ui/settings-rows';
 import { WallpaperSection } from './WallpaperSection';
 import {
   APPEARANCE_LIMITS,
@@ -68,51 +63,13 @@ const IMPORT_ERROR_KEYS: Record<string, string> = {
 
 type ThemeOption = 'light' | 'dark' | 'system';
 
-const THEME_OPTIONS: ThemeOption[] = ['light', 'dark', 'system'];
+const THEME_OPTIONS = appearanceSettings.modeLabel.options.map(({ value }) => value);
 
-const UI_FONT_PRESETS: FontPreset[] = [
-  {
-    id: 'default',
-    labelKey: 'settings.appearance.font.presetsUi.default',
-    family: '',
-  },
-  {
-    id: 'codexStyle',
-    labelKey: 'settings.appearance.font.presetsUi.codexStyle',
-    family: '-apple-system, BlinkMacSystemFont, "Segoe UI"',
-  },
-  {
-    id: 'harmonyOS',
-    labelKey: 'settings.appearance.font.presetsUi.harmonyOS',
-    family: '"HarmonyOS Sans SC"',
-  },
-];
 
-const CODE_FONT_PRESETS: FontPreset[] = [
-  {
-    id: 'default',
-    labelKey: 'settings.appearance.font.presetsCode.default',
-    family: '',
-  },
-  {
-    id: 'jetbrainsMono',
-    labelKey: 'settings.appearance.font.presetsCode.jetbrainsMono',
-    family: '"JetBrains Mono Variable", "JetBrains Mono"',
-  },
-];
 
-const TERMINAL_FONT_PRESETS: FontPreset[] = [
-  {
-    id: 'default',
-    labelKey: 'settings.appearance.font.presetsTerminal.default',
-    family: '',
-  },
-  {
-    id: 'jetbrainsMono',
-    labelKey: 'settings.appearance.font.presetsCode.jetbrainsMono',
-    family: '"JetBrains Mono Variable", "JetBrains Mono"',
-  },
-];
+
+
+
 
 const CODE_FONT_PREVIEW_SAMPLE =
   '// preview 0O 1lI\n' +
@@ -223,7 +180,7 @@ function ThemeCard({
   disabled = false,
 }: ThemeCardProps) {
   return (
-    <button
+    <button data-setting-id={appearanceSettings.modeLabel.id}
       type="button"
       role="radio"
       aria-checked={isSelected}
@@ -287,7 +244,7 @@ function LocalThemeIconButton({
 }) {
   return (
     <Tip text={label}>
-      <Button
+      <Button data-settings-search-action="Copy, reveal or refresh local theme files"
         variant="secondary"
         size="lg"
         className="w-9 px-0"
@@ -343,13 +300,12 @@ function FamilyDropdown({
   const selected = families.find((f) => f.id === selectedId) ?? families[0];
 
   return (
-    <div className={cn(SETTINGS_ROW_CLASS, 'gap-6')}>
-      <p className={cn(SETTINGS_ROW_LABEL_CLASS, 'min-w-0')} style={{ letterSpacing: '0.12px' }}>
-        {label}
-      </p>
-
+    <SettingsRow
+      className="gap-6"
+      title={label}
+      trailing={
       <Select.Root value={selected.id} onValueChange={onSelect}>
-        <Select.Trigger
+        <Select.Trigger data-setting-id={appearanceSettings.themeLabel.id}
           aria-label={ariaLabel}
           className={cn(
             'flex h-9 w-[320px] max-w-full shrink-0 items-center justify-between gap-3 rounded-full border px-3.5 text-13 outline-none transition-colors',
@@ -411,7 +367,8 @@ function FamilyDropdown({
           </Select.Content>
         </Select.Portal>
       </Select.Root>
-    </div>
+      }
+    />
   );
 }
 
@@ -631,24 +588,23 @@ export function AppearanceSection() {
   };
 
   // 「外观」已是独立分区,页内不再重复页名;按主题 / 壁纸 / 字体 / 侧边栏与面板分节,
-  // 每节标题在卡片外,卡片内是带分割线的设置行(settingsRowClasses)。
+  // 每节标题在卡片外,卡片内是带分割线的设置行(settings-rows)。
   return (
     <div className="flex flex-col gap-6">
       {/* 页面标题:比各节标题(16px)高一级,标题段 20px / 1.3 */}
-      <h2 className="text-20 font-medium leading-[1.3] text-[var(--settings-section-title)]">
+      <h2 className={SETTINGS_PAGE_TITLE_CLASS}>
         {t('settings.appearance.title')}
       </h2>
 
       <div className="flex flex-col gap-[36px]">
-        <section
+        <SettingsSection
           id="settings-search-target-appearance-theme"
-          className="flex flex-col gap-[14px]"
-          aria-label={t('settings.appearance.themeLabel')}
+          aria-label={t(appearanceSettings.themeLabel.titleKey)}
         >
           {/* 主题卡片紧接页面标题,不再另设节标题 */}
-          <div id="settings-search-settings-appearance-themeLabel" className={SETTINGS_CARD_CLASS}>
+          <SettingsCard id={appearanceSettings.themeLabel.targetId}>
             <FamilyDropdown
-              label={t('settings.appearance.themeLabel')}
+              label={t(appearanceSettings.themeLabel.titleKey)}
               ariaLabel={t('settings.appearance.themeAriaLabel')}
               families={families}
               selectedId={familyId}
@@ -657,36 +613,23 @@ export function AppearanceSection() {
               getVariantBadge={getVariantBadge}
             />
 
-            <div className={SETTINGS_ROW_DIVIDER_CLASS} />
-
             {/* Appearance mode — 主题决定可用方案,故排在主题之后;左名称、右缩略图 */}
-            <div className="cindy-segmented-row px-4 py-4">
-              <div className="flex min-w-0 flex-col gap-1">
-                <p
-                  id="settings-search-settings-appearance-modeLabel"
-                  className={SETTINGS_ROW_LABEL_CLASS}
-                  style={{ letterSpacing: '0.12px' }}
-                >
-                  {t('settings.appearance.modeLabel')}
-                </p>
-                {lockedType ? (
-                  <p className={SETTINGS_ROW_HINT_CLASS}>
-                    {t(`settings.appearance.singleVariant.${lockedType}Notice`, {
-                      name: selectedFamily.name,
-                    })}
-                  </p>
-                ) : null}
-              </div>
-
+            <SettingsRow
+              className="cindy-segmented-row"
+              title={<span id={appearanceSettings.modeLabel.targetId}>{t(appearanceSettings.modeLabel.titleKey)}</span>}
+              hint={lockedType
+                ? t(`settings.appearance.singleVariant.${lockedType}Notice`, { name: selectedFamily.name })
+                : undefined}
+              trailing={
               <div
                 className="flex shrink-0 gap-3"
                 role="radiogroup"
-                aria-label={t('settings.appearance.modeLabel')}
+                aria-label={t(appearanceSettings.modeLabel.titleKey)}
                 aria-disabled={lockedType ? true : undefined}
               >
                 <ThemeCard
                   value="light"
-                  label={t('settings.appearance.theme.light')}
+                  label={t(appearanceSettings.modeLabel.options[0].labelKey)}
                   ariaLabel={t('settings.appearance.themeAria.light')}
                   light={lightPalette}
                   dark={darkPalette}
@@ -698,7 +641,7 @@ export function AppearanceSection() {
 
                 <ThemeCard
                   value="dark"
-                  label={t('settings.appearance.theme.dark')}
+                  label={t(appearanceSettings.modeLabel.options[1].labelKey)}
                   ariaLabel={t('settings.appearance.themeAria.dark')}
                   light={lightPalette}
                   dark={darkPalette}
@@ -710,7 +653,7 @@ export function AppearanceSection() {
 
                 <ThemeCard
                   value="system"
-                  label={t('settings.appearance.theme.system')}
+                  label={t(appearanceSettings.modeLabel.options[2].labelKey)}
                   ariaLabel={t('settings.appearance.themeAria.system')}
                   light={lightPalette}
                   dark={darkPalette}
@@ -720,20 +663,22 @@ export function AppearanceSection() {
                   onKeyDown={handleKeyDown}
                 />
               </div>
-            </div>
+              }
+            />
 
-            <div className={SETTINGS_ROW_DIVIDER_CLASS} />
+            {window.electronAPI?.platform === 'darwin' ? (
+              <SettingsRow
+                className="cindy-segmented-row"
+                title={<span id={appearanceSettings.appIcon.targetId}>{t(appearanceSettings.appIcon.titleKey)}</span>}
+                hint={t(appearanceSettings.appIcon.descriptionKey)}
+                trailing={<DockIconPicker />}
+              />
+            ) : null}
 
-            <div className={cn(SETTINGS_ROW_CLASS, 'flex-wrap')}>
-              <div className="flex min-w-0 flex-col gap-1">
-                <p
-                  id="settings-search-settings-appearance-localThemes-title"
-                  className={SETTINGS_ROW_LABEL_CLASS}
-                  style={{ letterSpacing: '0.12px' }}
-                >
-                  {t('settings.appearance.localThemes.title')}
-                </p>
-              </div>
+            <SettingsRow
+              wrap
+              title={<span id={appearanceSettings.localThemesTitle.targetId}>{t(appearanceSettings.localThemesTitle.titleKey)}</span>}
+              trailing={
               <div className="flex flex-wrap gap-2">
                 <LocalThemeIconButton
                   icon={Copy}
@@ -764,52 +709,42 @@ export function AppearanceSection() {
                   }}
                 />
               </div>
-            </div>
-          </div>
-        </section>
+              }
+            />
+          </SettingsCard>
+        </SettingsSection>
 
         <WallpaperSection />
 
-        <section
-          id="settings-search-target-appearance-fonts"
-          className="flex flex-col gap-[14px]"
-          aria-label={t('settings.appearance.font.title')}
+        <SettingsSection
+          id={appearanceSettings.fonts.targetId}
+          headingLevel={3}
+          title={t(appearanceSettings.fonts.titleKey)}
+          aria-label={t(appearanceSettings.fonts.titleKey)}
         >
-          <h3 className={SETTINGS_SECTION_TITLE_CLASS}>{t('settings.appearance.font.title')}</h3>
-
-          <div className={SETTINGS_CARD_CLASS}>
-            <div id="settings-search-settings-appearance-font-uiFamily-label" className="px-4 py-4">
-              <FontFamilyPicker
-                label={t('settings.appearance.font.uiFamily.label')}
-                description={t('settings.appearance.font.uiFamily.description')}
+          <SettingsCard>
+            <SettingsField
+              id={appearanceSettings.fontUiFamilyLabel.targetId}
+              title={t(appearanceSettings.fontUiFamilyLabel.titleKey)}
+              hint={t(appearanceSettings.fontUiFamilyLabel.descriptionKey)}
+              action={<FontFamilyResetButton value={uiFamily} onReset={resetUiFamily} />}
+            >
+              <FontFamilyPicker data-setting-id={appearanceSettings.fontUiFamilyLabel.id}
                 ariaLabel={t('settings.appearance.font.uiFamily.aria')}
                 value={uiFamily}
                 presets={UI_FONT_PRESETS}
                 previewSample={t('settings.appearance.font.previewSamples.ui')}
                 previewFallbackFamily="var(--app-font-ui-default)"
                 onChange={setUiFamily}
-                onReset={resetUiFamily}
               />
-            </div>
+            </SettingsField>
 
-            <div className={SETTINGS_ROW_DIVIDER_CLASS} />
-
-            <div className="flex flex-col gap-3 px-4 py-4">
-              <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <p
-                    id="settings-search-settings-appearance-font-uiSize-label"
-                    className="text-13 font-medium text-[var(--settings-section-sublabel)]"
-                    style={{ letterSpacing: '0.12px' }}
-                  >
-                    {t('settings.appearance.font.uiSize.label')}
-                  </p>
-                  <p className="mt-1 text-12 leading-[1.4] text-[var(--text-secondary)]">
-                    {t('settings.appearance.font.uiSize.description')}
-                  </p>
-                </div>
+            <SettingsField
+              title={<span id={appearanceSettings.fontUiSizeLabel.targetId}>{t(appearanceSettings.fontUiSizeLabel.titleKey)}</span>}
+              hint={t(appearanceSettings.fontUiSizeLabel.descriptionKey)}
+              action={(
                 <Tip text={t('settings.appearance.font.reset')}>
-                  <Button
+                  <Button data-setting-id={appearanceSettings.fontUiSizeLabel.id}
                     variant="secondary"
                     className="w-8 px-0"
                     type="button"
@@ -820,10 +755,10 @@ export function AppearanceSection() {
                     <RotateCcw size={14} />
                   </Button>
                 </Tip>
-              </div>
-
+              )}
+            >
               <div className="flex items-center gap-3">
-                <Slider
+                <Slider data-setting-id={appearanceSettings.fontUiSizeLabel.id}
                   min={12}
                   max={24}
                   step={1}
@@ -833,9 +768,9 @@ export function AppearanceSection() {
                   }}
                   aria-label={t('settings.appearance.font.uiSize.aria')}
                 />
-                <input
+                <input data-setting-id={appearanceSettings.fontUiSizeLabel.id}
                   type="number"
-                  aria-label={t('settings.appearance.font.uiSize.label')}
+                  aria-label={t(appearanceSettings.fontUiSizeLabel.titleKey)}
                   min={12}
                   max={24}
                   step={1}
@@ -856,17 +791,15 @@ export function AppearanceSection() {
                   )}
                 />
               </div>
-            </div>
+            </SettingsField>
 
-            <div className={SETTINGS_ROW_DIVIDER_CLASS} />
-
-            <div
-              id="settings-search-settings-appearance-font-codeFamily-label"
-              className="px-4 py-4"
+            <SettingsField
+              id={appearanceSettings.fontCodeFamilyLabel.targetId}
+              title={t(appearanceSettings.fontCodeFamilyLabel.titleKey)}
+              hint={t(appearanceSettings.fontCodeFamilyLabel.descriptionKey)}
+              action={<FontFamilyResetButton value={codeFamily} onReset={resetCodeFamily} />}
             >
-              <FontFamilyPicker
-                label={t('settings.appearance.font.codeFamily.label')}
-                description={t('settings.appearance.font.codeFamily.description')}
+              <FontFamilyPicker data-setting-id={appearanceSettings.fontCodeFamilyLabel.id}
                 ariaLabel={t('settings.appearance.font.codeFamily.aria')}
                 value={codeFamily}
                 presets={CODE_FONT_PRESETS}
@@ -874,28 +807,15 @@ export function AppearanceSection() {
                 previewLanguage="typescript"
                 previewFallbackFamily="var(--app-font-code-default)"
                 onChange={setCodeFamily}
-                onReset={resetCodeFamily}
               />
-            </div>
+            </SettingsField>
 
-            <div className={SETTINGS_ROW_DIVIDER_CLASS} />
-
-            <div className="flex flex-col gap-3 px-4 py-4">
-              <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <p
-                    id="settings-search-settings-appearance-font-codeSize-label"
-                    className="text-13 font-medium text-[var(--settings-section-sublabel)]"
-                    style={{ letterSpacing: '0.12px' }}
-                  >
-                    {t('settings.appearance.font.codeSize.label')}
-                  </p>
-                  <p className="mt-1 text-12 leading-[1.4] text-[var(--text-secondary)]">
-                    {t('settings.appearance.font.codeSize.description')}
-                  </p>
-                </div>
+            <SettingsField
+              title={<span id={appearanceSettings.fontCodeSizeLabel.targetId}>{t(appearanceSettings.fontCodeSizeLabel.titleKey)}</span>}
+              hint={t(appearanceSettings.fontCodeSizeLabel.descriptionKey)}
+              action={(
                 <Tip text={t('settings.appearance.font.reset')}>
-                  <Button
+                  <Button data-setting-id={appearanceSettings.fontCodeSizeLabel.id}
                     variant="secondary"
                     className="w-8 px-0"
                     type="button"
@@ -906,10 +826,10 @@ export function AppearanceSection() {
                     <RotateCcw size={14} />
                   </Button>
                 </Tip>
-              </div>
-
+              )}
+            >
               <div className="flex items-center gap-3">
-                <Slider
+                <Slider data-setting-id={appearanceSettings.fontCodeSizeLabel.id}
                   min={10}
                   max={24}
                   step={1}
@@ -919,9 +839,9 @@ export function AppearanceSection() {
                   }}
                   aria-label={t('settings.appearance.font.codeSize.aria')}
                 />
-                <input
+                <input data-setting-id={appearanceSettings.fontCodeSizeLabel.id}
                   type="number"
-                  aria-label={t('settings.appearance.font.codeSize.label')}
+                  aria-label={t(appearanceSettings.fontCodeSizeLabel.titleKey)}
                   min={10}
                   max={24}
                   step={1}
@@ -942,45 +862,30 @@ export function AppearanceSection() {
                   )}
                 />
               </div>
-            </div>
+            </SettingsField>
 
-            <div className={SETTINGS_ROW_DIVIDER_CLASS} />
-
-            <div
-              id="settings-search-settings-appearance-font-terminalFamily-label"
-              className="px-4 py-4"
+            <SettingsField
+              id={appearanceSettings.fontTerminalFamilyLabel.targetId}
+              title={t(appearanceSettings.fontTerminalFamilyLabel.titleKey)}
+              hint={t(appearanceSettings.fontTerminalFamilyLabel.descriptionKey)}
+              action={<FontFamilyResetButton value={terminalFamily} onReset={resetTerminalFamily} />}
             >
-              <FontFamilyPicker
-                label={t('settings.appearance.font.terminalFamily.label')}
-                description={t('settings.appearance.font.terminalFamily.description')}
+              <FontFamilyPicker data-setting-id={appearanceSettings.fontTerminalFamilyLabel.id}
                 ariaLabel={t('settings.appearance.font.terminalFamily.aria')}
                 value={terminalFamily}
                 presets={TERMINAL_FONT_PRESETS}
                 previewSample={t('settings.appearance.font.previewSamples.terminal')}
                 previewFallbackFamily={DEFAULT_TERMINAL_FONT_FAMILY}
                 onChange={setTerminalFamily}
-                onReset={resetTerminalFamily}
               />
-            </div>
+            </SettingsField>
 
-            <div className={SETTINGS_ROW_DIVIDER_CLASS} />
-
-            <div className="flex flex-col gap-3 px-4 py-4">
-              <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <p
-                    id="settings-search-settings-appearance-font-terminalSize-label"
-                    className="text-13 font-medium text-[var(--settings-section-sublabel)]"
-                    style={{ letterSpacing: '0.12px' }}
-                  >
-                    {t('settings.appearance.font.terminalSize.label')}
-                  </p>
-                  <p className="mt-1 text-12 leading-[1.4] text-[var(--text-secondary)]">
-                    {t('settings.appearance.font.terminalSize.description')}
-                  </p>
-                </div>
+            <SettingsField
+              title={<span id={appearanceSettings.fontTerminalSizeLabel.targetId}>{t(appearanceSettings.fontTerminalSizeLabel.titleKey)}</span>}
+              hint={t(appearanceSettings.fontTerminalSizeLabel.descriptionKey)}
+              action={(
                 <Tip text={t('settings.appearance.font.reset')}>
-                  <Button
+                  <Button data-setting-id={appearanceSettings.fontTerminalSizeLabel.id}
                     variant="secondary"
                     className="w-8 px-0"
                     type="button"
@@ -991,10 +896,10 @@ export function AppearanceSection() {
                     <RotateCcw size={14} />
                   </Button>
                 </Tip>
-              </div>
-
+              )}
+            >
               <div className="flex items-center gap-3">
-                <Slider
+                <Slider data-setting-id={appearanceSettings.fontTerminalSizeLabel.id}
                   min={APPEARANCE_LIMITS.terminalSize.min}
                   max={APPEARANCE_LIMITS.terminalSize.max}
                   step={1}
@@ -1004,9 +909,9 @@ export function AppearanceSection() {
                   }}
                   aria-label={t('settings.appearance.font.terminalSize.aria')}
                 />
-                <input
+                <input data-setting-id={appearanceSettings.fontTerminalSizeLabel.id}
                   type="number"
-                  aria-label={t('settings.appearance.font.terminalSize.label')}
+                  aria-label={t(appearanceSettings.fontTerminalSizeLabel.titleKey)}
                   min={APPEARANCE_LIMITS.terminalSize.min}
                   max={APPEARANCE_LIMITS.terminalSize.max}
                   step={1}
@@ -1027,81 +932,50 @@ export function AppearanceSection() {
                   )}
                 />
               </div>
-            </div>
-          </div>
-        </section>
+            </SettingsField>
+          </SettingsCard>
+        </SettingsSection>
 
         {/* Sidebar view modes — 置顶段(三态) / 主列表(两态)分离(sidebar-redesign B 期)。
           独立卡片，沿用 NotificationSection 的 label+hint+Switch 行模式。 */}
-        <section
-          id="settings-search-target-appearance-sidebar"
-          className="flex flex-col gap-[14px]"
-          aria-label={t('settings.appearance.sidebarAndPanels')}
+        <SettingsSection
+          id={appearanceSettings.sidebar.targetId}
+          headingLevel={3}
+          title={t(appearanceSettings.sidebar.titleKey)}
+          aria-label={t(appearanceSettings.sidebar.titleKey)}
         >
-          <h3 className={SETTINGS_SECTION_TITLE_CLASS}>
-            {t('settings.appearance.sidebarAndPanels')}
-          </h3>
+          <SettingsCard>
+            <SettingsRow
+              className="cindy-segmented-row"
+              title={<span id={appearanceSettings.sidebarCardModeLabel.targetId}>{t(appearanceSettings.sidebarCardModeLabel.titleKey)}</span>}
+              hint={t(appearanceSettings.sidebarCardModeLabel.descriptionKey)}
+              trailing={
+                <SegmentedControl data-setting-id={appearanceSettings.sidebarCardModeLabel.id}
+                  aria-label={t('settings.appearance.sidebarCardMode.aria')}
+                  value={sidebarViewMode}
+                  onValueChange={setSidebarViewMode}
+                  options={appearanceSettings.sidebarCardModeLabel.options.map(({ value, labelKey }) => ({ value, label: t(labelKey) }))}
+                />
+              }
+            />
 
-          <div className={SETTINGS_CARD_CLASS}>
-            <div className="cindy-segmented-row px-4 py-4">
-              <div className="flex min-w-0 flex-col gap-1">
-                <p
-                  id="settings-search-settings-appearance-sidebarCardMode-label"
-                  className="text-13 font-medium text-[var(--settings-section-sublabel)]"
-                  style={{ letterSpacing: '0.12px' }}
-                >
-                  {t('settings.appearance.sidebarCardMode.label')}
-                </p>
-                <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
-                  {t('settings.appearance.sidebarCardMode.hint')}
-                </p>
-              </div>
-
-              <SegmentedControl
-                aria-label={t('settings.appearance.sidebarCardMode.aria')}
-                value={sidebarViewMode}
-                onValueChange={setSidebarViewMode}
-                options={[
-                  { value: 'text', label: t('ccAgent.sidebar.viewStyleList') },
-                  { value: 'card', label: t('ccAgent.sidebar.viewStyleCard') },
-                  { value: 'list', label: t('ccAgent.sidebar.viewStyleListWide') },
-                ]}
-              />
-            </div>
-
-            <div className={SETTINGS_ROW_DIVIDER_CLASS} />
-
-            <div className="cindy-segmented-row px-4 py-4">
-              <div className="flex min-w-0 flex-col gap-1">
-                <p
-                  id="settings-search-settings-appearance-sidebarMainListMode-label"
-                  className="text-13 font-medium text-[var(--settings-section-sublabel)]"
-                  style={{ letterSpacing: '0.12px' }}
-                >
-                  {t('settings.appearance.sidebarMainListMode.label')}
-                </p>
-                <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
-                  {t('settings.appearance.sidebarMainListMode.hint')}
-                </p>
-              </div>
-
-              <SegmentedControl
-                aria-label={t('settings.appearance.sidebarMainListMode.aria')}
-                value={sidebarMainViewMode}
-                onValueChange={setSidebarMainViewMode}
-                options={[
-                  { value: 'text', label: t('ccAgent.sidebar.viewStyleList') },
-                  { value: 'list', label: t('ccAgent.sidebar.viewStyleListWide') },
-                ]}
-              />
-            </div>
-
-
-            <div className={SETTINGS_ROW_DIVIDER_CLASS} />
+            <SettingsRow
+              className="cindy-segmented-row"
+              title={<span id={appearanceSettings.sidebarMainListModeLabel.targetId}>{t(appearanceSettings.sidebarMainListModeLabel.titleKey)}</span>}
+              hint={t(appearanceSettings.sidebarMainListModeLabel.descriptionKey)}
+              trailing={
+                <SegmentedControl data-setting-id={appearanceSettings.sidebarMainListModeLabel.id}
+                  aria-label={t('settings.appearance.sidebarMainListMode.aria')}
+                  value={sidebarMainViewMode}
+                  onValueChange={setSidebarMainViewMode}
+                  options={appearanceSettings.sidebarMainListModeLabel.options.map(({ value, labelKey }) => ({ value, label: t(labelKey) }))}
+                />
+              }
+            />
 
             <LayoutResetControl />
-          </div>
-        </section>
+          </SettingsCard>
+        </SettingsSection>
       </div>
     </div>
   );

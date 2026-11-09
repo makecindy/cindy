@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 import { act } from 'react';
 import { createRoot } from 'react-dom/client';
-import { afterEach, expect, it, vi } from 'vitest';
+import { webcrypto } from 'node:crypto';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { sharedTaskHostPeer } from '@cindy/device-link';
 const state = vi.hoisted(() => ({
   deviceId: undefined as string | undefined,
@@ -61,7 +62,21 @@ vi.mock('@cindy/maker-shared/mcp-app-controller', async importOriginal => ({
   },
 }));
 import { McpAppCard } from '../McpAppCard';
-afterEach(() => {
+const digest = webcrypto.subtle.digest.bind(webcrypto.subtle);
+const pendingDigests: Promise<ArrayBuffer>[] = [];
+beforeEach(() => {
+  vi.stubGlobal('crypto', webcrypto);
+  vi.spyOn(webcrypto.subtle, 'digest').mockImplementation((...args) => {
+    const pending = digest(...args);
+    pendingDigests.push(pending);
+    return pending;
+  });
+});
+afterEach(async () => {
+  // CI 41649027355: a prior card's asynchronous failure log can otherwise reach
+  // the next test's electronAPI spy. Drain real hashing before replacing globals.
+  await Promise.all(pendingDigests);
+  pendingDigests.length = 0;
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
   state.controllers = [];
@@ -437,8 +452,6 @@ it.each([
   ['timeout', 'MCP_APP_INITIALIZATION_TIMEOUT'],
   ['open', 'UNKNOWN'],
 ] as const)('logs a content-free %s failure (%s) through the renderer logger', async (stage, code) => {
-  const { webcrypto } = await import('node:crypto');
-  vi.stubGlobal('crypto', webcrypto);
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
   vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible');
   vi.stubGlobal('matchMedia', () => ({ matches: false }));

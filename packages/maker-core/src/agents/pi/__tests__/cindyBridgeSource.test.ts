@@ -2385,6 +2385,47 @@ it('re-surfaces the disclosure set once after compaction instead of editing ever
   expect(handlers.get('before_agent_start')!({ systemPrompt: 'base' })).toBeUndefined();
 });
 
+// Regression: optional questions need the same direct discoverability as sync questions.
+// Unit: execute the production gateway and verify real MCP routing and permission identity.
+it.each(['list_machines', 'ask_user_question_async'])('registers %s directly without MCP discovery', async (name) => {
+  const source = CINDY_BRIDGE_EXTENSION_SOURCE;
+  const compiled = ts.transpileModule(
+    source.slice(source.indexOf('const CINDY_MCP_LIST_TOOLS'), source.indexOf('async function connectServer'))
+      + '\n(globalThis as any).Gateway = CindyMcpGateway;',
+    { compilerOptions: { module: ts.ModuleKind.None, target: ts.ScriptTarget.ES2022 } },
+  ).outputText;
+  const context: Record<string, any> = {
+    // 沙箱没有模块系统：bridge 顶部的 node:crypto import 在切片后丢失，
+    // 指纹计算用的 createHash 必须由宿主注入。
+    createHash,
+    recordInput: (value: unknown) => value && typeof value === 'object' ? value : {},
+    mcpContentToPi: (content: unknown) => content,
+  };
+  runInNewContext(compiled, context);
+  const calls: unknown[] = [];
+  const client = { request: async (method: string, params: unknown, signal?: AbortSignal) => {
+    calls.push({ method, params, signal });
+    return { content: [{ type: 'text', text: 'ok' }] };
+  } };
+  const gateway = new context.Gateway();
+  const withoutHost: any[] = [];
+  gateway.add('cindy_helper', client, [{ name: 'list_tools', inputSchema: { type: 'object' } }, { name: 'call_tool', inputSchema: { type: 'object' } }]);
+  gateway.register({ registerTool: (tool: unknown) => withoutHost.push(tool) });
+  expect(withoutHost.map((tool) => tool.name)).not.toContain(name);
+
+  const direct = new context.Gateway();
+  direct.add('cindy_helper', client, [{ name, inputSchema: { type: 'object' } }]);
+  const tools: any[] = [];
+  direct.register({ registerTool: (tool: unknown) => tools.push(tool) });
+  const tool = tools.find((item) => item.name === name);
+  const args = name === 'ask_user_question_async' ? { questions: [{ question: 'Which scope?' }] } : {};
+  await tool.execute('call-1', args, new AbortController().signal);
+  expect(calls.at(-1)).toMatchObject({ method: 'tools/call', params: { name, arguments: args } });
+  // Ask and Auto judge the real MCP identity, so this auto-approves like the same tool over MCP.
+  expect(direct.resolveHookedCall(name, {}).qualifiedName).toBe('mcp__cindy_helper__' + name);
+  expect(direct.resolveHookedCall('read', {})).toBeNull();
+});
+
 it('routes Bot shortcuts through the scoped helper entry without exposing them to ordinary Pi tasks', async () => {
   const source = CINDY_BRIDGE_EXTENSION_SOURCE;
   const compiled = ts.transpileModule(

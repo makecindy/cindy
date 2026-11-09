@@ -1,5 +1,6 @@
+import type { TextInputInstance } from 'react-native';
 import { useRef } from "react";
-import { View, type TextInput as NativeTextInput } from "react-native";
+import { View } from "react-native";
 import { useTranslation } from "react-i18next";
 import type { InputHandoffSnapshot, InputHandoffValues } from "@cindy/device-link";
 import { Text, TextInput } from "@/components/AppText";
@@ -29,7 +30,7 @@ export function InputHandoffStepFields({
   const { t } = useTranslation();
   const styles = useThemedStyles(makeInputHandoffStyles);
   const { colors } = useTheme();
-  const inputs = useRef(new Map<string, NativeTextInput>());
+  const inputs = useRef(new Map<string, TextInputInstance>());
   const fields = inputHandoffTextFields(snapshot);
   const nextField = (id: string) => fields[fields.findIndex((f) => f.id === id) + 1];
 

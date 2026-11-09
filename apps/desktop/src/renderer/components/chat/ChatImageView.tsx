@@ -249,7 +249,6 @@ export function ChatImageView({
             // 打 image lightbox 前,在被点的这张图上做个临时标记,让 lightbox
             // 精确定位到用户点的这张(而不是按 src 搜到的第一张)。model 路径
             // 不进 gallery,不标记。
-            if (next === 'image') e.currentTarget.dataset.galleryActive = '1';
             setLightboxOpen(next);
           }}
           onContextMenu={(e) => {
@@ -353,13 +352,16 @@ export function ChatImageView({
           // 单张展示:gallery 按烧录图 src 定位,换成原图后无法匹配。
           // 原图若已被清理,lightbox 退回烧录图(annotationFallbackSrc)供查看 / 叠加新标。
           <ImageLightbox
+            filename={filename}
             src={annotationSourceUrl}
             initialStrokes={annotationStrokes}
             annotationFallbackSrc={displaySrc}
             onClose={closePreview}
           />
         ) : (
-          <ImageLightbox src={displaySrc} enableGallery onClose={closePreview} />
+          <ImageLightbox
+            filename={filename}
+            src={displaySrc} enableGallery onClose={closePreview} />
         ))}
       {lightboxOpen === 'model' && modelFile && (
         <ModelLightbox

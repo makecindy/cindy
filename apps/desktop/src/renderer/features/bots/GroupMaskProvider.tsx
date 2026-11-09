@@ -57,7 +57,7 @@ function ServerMaskProvider({ groupId, children }: { groupId: string; children: 
     const stop=window.electronAPI.maker.onBotGroupChanged((event,stamp)=>{
       if(isDataOwnerPushCurrent(stamp) && (event.groupId===groupId || !event.groupId)) void reload();
     });
-    // Time windows and absence expiry still change when no message is arriving.
+    // Scheduled windows still change when no message is arriving.
     const timer=setInterval(()=>void reload(),15000);
     return ()=>{alive.current=false; version.current++; clearInterval(timer); stop();};
   },[groupId,reload]);
@@ -70,6 +70,11 @@ function ServerMaskProvider({ groupId, children }: { groupId: string; children: 
       action ??= makeAction(stateRef.current);
       version.current++; setSaving(true); setError(failed.current.size > 0);
       try {
+        // Recheck at dispatch too: a queued/retried keystroke can outlive a
+        // switch to permanent delegation, which only an explicit disable stops.
+        if (action.type === 'participate' && (!stateRef.current.settings.enabled || stateRef.current.settings.trigger === 'always')) {
+          failed.current.delete(retryKey); setError(failed.current.size > 0); return;
+        }
         const response=await window.electronAPI.maker.chatServer.mask!({groupId,action,operationId});
         if(!alive.current || !isDataOwnerGenerationCurrent(owner) || generation!==authority.current) return;
         if(!response.ok) {
@@ -116,7 +121,7 @@ function ServerMaskProvider({ groupId, children }: { groupId: string; children: 
   return {groupId,self:maskIdentity(state.self),companions:state.companions.map(maskIdentity),
     toolAccessSupported:state.toolAccessSupported,settings:{...state.settings,companionId:state.settings.companionId ?? state.defaultCompanionId ?? null},status:connectionLost && state.status==='enabled' ? 'offline' : state.status,saving,error,loading:false,manualRunning:state.manualRunning,
     update,retry:()=>{if(failed.current.size) for(const send of failed.current.values()) queue.current=queue.current.then(send,send);else void reload();},
-    participate:()=>{if(Date.now()-lastParticipation.current<2000)return;lastParticipation.current=Date.now();act('participate',()=>({type:'participate'}));},
+    participate:()=>{if(!stateRef.current?.settings.enabled || stateRef.current.settings.trigger==='always' || Date.now()-lastParticipation.current<2000)return;lastParticipation.current=Date.now();act('participate',()=>({type:'participate'}));},
     resume:()=>{lastParticipation.current=0;act('resume',()=>({type:'resume'}));},stopManual:()=>act('stop',()=>({type:'stop'})),
     requestDigest:()=>act('digest',()=>({type:'digest'})),digestStatus:state.digestStatus,
     attributions:{},unreadMentions:mentions.map(m=>({...m,...(m.reply?{reply:{...m.reply,companion:maskIdentity(m.reply.companion)}}:{})})),markMentionsRead:markRead,

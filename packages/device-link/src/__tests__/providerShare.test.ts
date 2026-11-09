@@ -107,6 +107,15 @@ describe('provider share api', () => {
     expect(shares[0].owner).toEqual({ displayName: 'Magi', avatarUrl: 'https://cdn.example/a.png', region: 'global' });
   });
 
+  it('keeps original host presence distinct from an authorized standby and accepts legacy servers', async () => {
+    const row = { shareId: 's1', memberId: 'm1', providerId: 'p', providerLabel: 'Fake', hostDeviceId: 'primary', deviceName: 'Fake',
+      owner: { displayName: 'Fake', avatarUrl: null, region: 'global' }, status: 'active', hostOnline: false, hostCapable: true };
+    expect((await api({ shares: [{ ...row, standbyOnline: true }] }).listReceived())[0]).toMatchObject({ hostOnline: true, hostDeviceOnline: false, standbyOnline: true });
+    const legacy = (await api({ shares: [row] }).listReceived())[0];
+    expect(legacy.hostOnline).toBe(false);
+    expect(legacy).not.toHaveProperty('hostDeviceOnline');
+  });
+
   it('rejects malformed pairing codes and sends invitations only in the body', async () => {
     await expect(api({ requestId: 'r1', status: 'pending', pairingCode: '12a4', expiresAt: new Date().toISOString() })
       .sendRequest(TOKEN, 'card')).rejects.toThrow();
@@ -201,6 +210,19 @@ describe('provider share identity scrubbing', () => {
     expect(readProviderShareGroupSize({ groupSize: 4 })).toBe(4);
     expect(readProviderShareGroupSize({ groupSize: '4' })).toBeNull();
     expect(readProviderShareGroupSize(null)).toBeNull();
+  });
+
+  // provider-groups.md §6 / provider-sharing.md §5.1 (2026-11-02): the sharer's group still places tasks on
+  // other members when its own login is down, so guests (desktop, phone, scheduled checks) must not drop the
+  // whole shared group from the model list because the group computer's own copy reports connected: false.
+  it.each([
+    ['a shared group whose own login is down stays selectable', { groupSize: 3, connected: false }, true],
+    ['a plain share keeps its own connection state', { connected: false }, false],
+    ['an invalid group size is not treated as a group', { groupSize: 0, connected: false }, false],
+  ])('%s', async (_name, fields, connected) => {
+    const { scrubSharedProviderCatalog } = await import('../providerShareCatalog.js');
+    const [provider] = scrubSharedProviderCatalog({ providers: [{ id: 'anthropic', ...fields }] }).providers;
+    expect(provider).toMatchObject({ id: 'anthropic', connected });
   });
 
   it('keeps only anonymous status enums and preserves positions for unknown or malicious entries', async () => {

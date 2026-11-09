@@ -1,6 +1,7 @@
+import type { TextInputInstance } from 'react-native';
 /** 在所选电脑创建群聊，可选最多 6 位同账号伙伴。 */
 import { useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, Pressable, StyleSheet, View, type TextInput as NativeTextInput } from 'react-native';
+import { ActivityIndicator, Alert, Pressable, StyleSheet, View } from 'react-native';
 import { Check } from 'lucide-react-native';
 import { useTranslation } from 'react-i18next';
 import { resolveRemoteText } from '@cindy/device-link';
@@ -53,7 +54,7 @@ function CreateSheetContent({ visible, host, online, onClose, onClosed, onCreate
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const busyRef = useRef(false);
-  const nameInput = useRef<NativeTextInput>(null);
+  const nameInput = useRef<TextInputInstance>(null);
   const mounted = useRef(true);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   useEffect(() => {

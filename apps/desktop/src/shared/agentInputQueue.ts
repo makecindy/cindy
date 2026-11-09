@@ -10,6 +10,8 @@ import { coordinationModelPrefix, type BotTaskCoordination } from './botTaskCoor
  * sides from quietly inventing different meanings for the same queued row.
  */
 
+import type { OutputLimitDetails } from '@cindy/maker-shared';
+
 import { stripChatQuoteMarkerLines } from '@cindy/maker-shared/chat-quotes';
 import type { SharedTaskAuthor } from '@cindy/maker-shared';
 import type { MessageSourceDevice, MessageSourcePlugin } from '@cindy/maker-shared/message-source';
@@ -532,6 +534,8 @@ export interface AgentInputProjection {
   errorReason?: string | null;
   /** Bounded details for tool-loop errors; never carries the raw provider message. */
   toolLoop?: AgentInputToolLoopDetails | null;
+  /** Final-request output usage; optional for older controlled hosts. */
+  outputLimit?: OutputLimitDetails | null;
   recovery: AgentInputRecovery;
   /**
    * Compatibility display value for the existing ErrorBanner. It is no longer

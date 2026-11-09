@@ -5,7 +5,7 @@
  * 与 chatVideoView.test.ts 对位,覆盖 review 指出的"image/model 路径同样
  * 没有把焦点移进 lightbox"的一半:不 mock ImageLightbox / ModelLightbox,
  * 用真实组件断言键盘打开后焦点进入弹窗(FocusScope 挂载焦点)、Esc 延迟
- * 关闭后回到预览触发器。图片路径同时保留 gallery 定位标记的既有断言。
+ * 关闭后回到预览触发器。图片路径同时保留集合入口的键盘断言。
  */
 import React from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -20,29 +20,73 @@ vi.mock('@/hooks/useRemoteMediaUrl', () => ({
 }));
 vi.mock('@/lib/toast', () => ({ toast: { error: vi.fn() } }));
 
+// ModelLightbox 首次打开时才动态加载 @google/model-viewer。替身只注册一个空的同名
+// 自定义元素;fail=true 时模拟分包加载失败。
+const modelViewerPackage = vi.hoisted(() => ({ fail: false }));
+vi.mock('@google/model-viewer', () => {
+  if (modelViewerPackage.fail) throw new Error('model-viewer chunk failed to load');
+  if (!customElements.get('model-viewer')) {
+    customElements.define('model-viewer', class extends HTMLElement {});
+  }
+  return {};
+});
+
 import { ChatImageView } from '../components/chat/ChatImageView';
 import { ModelLightbox } from '../components/chat/ModelLightbox';
 import { toast } from '@/lib/toast';
 
 afterEach(() => { cleanup(); vi.useRealTimers(); vi.clearAllMocks(); });
 
+function waitForModelViewer(): Promise<Element> {
+  return vi.waitFor(() => {
+    const viewer = document.body.querySelector('model-viewer');
+    if (!viewer) throw new Error('model-viewer not rendered yet');
+    return viewer;
+  });
+}
+
 describe('ChatImageView 键盘交互(真实 ImageLightbox / ModelLightbox)', () => {
+  // 查看器代码改为首次打开时加载;加载失败必须出现可重试的提示,不能一直转圈。
+  // 须在任何一次成功加载之前运行(成功后元素已注册,不再走加载路径)。
+  it('shows the inline error when the 3D viewer code fails to load, and retry recovers', async () => {
+    modelViewerPackage.fail = true;
+    const url = 'cindy-media://blobs/' + 'f'.repeat(64) + '.glb';
+    await act(async () => {
+      render(React.createElement(ModelLightbox, { source: { kind: 'blob', url }, onClose: vi.fn() }));
+      await vi.dynamicImportSettled();
+    });
+
+    expect(screen.getByText('chat.media.modelLoadFailed')).toBeTruthy();
+    expect(screen.queryByText('正在加载 3D 模型…')).toBeNull();
+    expect(document.body.querySelector('model-viewer')).toBeNull();
+
+    modelViewerPackage.fail = false;
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'attachmentPreview.retry' }));
+      await vi.dynamicImportSettled();
+    });
+    const viewer = await waitForModelViewer();
+    expect(viewer.getAttribute('src')).toBe(url);
+    expect(screen.queryByText('chat.media.modelLoadFailed')).toBeNull();
+  });
+
   // ModelLightbox's 2026-06 scheme regression: the custom element reports a
-  // parse/load error, but its poster must stay usable and the user gets a
-  // toast. Existing focus tests never dispatch that event. Reuse the real
+  // parse/load error, but its poster must stay usable and the user gets an
+  // inline error with retry. Existing focus tests never dispatch that event. Reuse the real
   // lightbox unit harness, with fake time to detect delayed unwanted closure.
   it('reports a model load error and keeps the preview open', async () => {
-    vi.useFakeTimers();
     const onClose = vi.fn();
     const url = 'cindy-media://blobs/' + 'f'.repeat(64) + '.glb';
     render(React.createElement(ModelLightbox, { source: { kind: 'blob', url }, onClose }));
-    const viewer = document.body.querySelector('model-viewer')!;
-    expect(viewer).not.toBeNull();
+    const viewer = await waitForModelViewer();
+    vi.useFakeTimers();
     await act(async () => {
       fireEvent.error(viewer);
       await vi.advanceTimersByTimeAsync(300);
     });
-    expect(toast.error).toHaveBeenCalledExactlyOnceWith('Failed to load 3D model');
+    expect(screen.getByText('chat.media.modelLoadFailed')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'attachmentPreview.retry' })).toBeTruthy();
+    expect(toast.error).not.toHaveBeenCalled();
     expect(onClose).not.toHaveBeenCalled();
     expect(viewer.isConnected).toBe(true);
     expect(viewer.getAttribute('src')).toBe(url);
@@ -61,9 +105,6 @@ describe('ChatImageView 键盘交互(真实 ImageLightbox / ModelLightbox)', () 
     trigger.focus();
 
     fireEvent.keyDown(trigger, { key: 'Enter' });
-    // 注:gallery 定位标记(data-gallery-active)是瞬时信号——真实
-    // ImageLightbox 挂载后立即清掉(见其 mount effect),这里断不到;它的
-    // 设置路径由 chatImageView.test.ts 的 mock 用例覆盖。
     // 真实 ImageLightbox:portal 内出现 alt="" 的大图(触发器缩略图 alt 是
     // 文件名,不会撞)。
     const lightboxImg = document.body.querySelector('img[alt=""]');
@@ -102,10 +143,8 @@ describe('ChatImageView 键盘交互(真实 ImageLightbox / ModelLightbox)', () 
     trigger.focus();
 
     fireEvent.keyDown(trigger, { key: 'Enter' });
-    // 真实 ModelLightbox:portal 内出现 <model-viewer>(jsdom 不升级自定义
-    // 元素,但节点在场)。
-    const modelViewer = document.body.querySelector('model-viewer');
-    expect(modelViewer).not.toBeNull();
+    // 真实 ModelLightbox:查看器代码就绪后 portal 内出现 <model-viewer>。
+    const modelViewer = await waitForModelViewer();
 
     // 焦点进入 lightbox(FocusScope 挂载焦点落在 overlay 根)。
     expect(document.activeElement?.contains(modelViewer as Element)).toBe(true);

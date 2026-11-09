@@ -1,9 +1,17 @@
 import { buildSharedTaskInvitationLink, createSharedTaskApi, parseSharedTaskInvitation, sharedTaskAccountName, SharedTaskScopeChangedError, type SharedTaskListItem } from '@cindy/device-link';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState.js';
 import { getAccessToken, getActiveAuthRealm, getAuthState, getCurrentUserId } from '../authManager.js';
 import { getClientEndpoint } from '../clientEndpointsService.js';
 import { serverApiFetch } from '../serverApiClient.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
+
+// Agent management must keep the input/permission boundary through queued work
+// and auth refresh retries. Native UI and background reconciliation have no caller guard.
+const callerGuard = new AsyncLocalStorage<() => void>();
+export function runWithSharedTaskCallerGuard<T>(assertCurrent: () => void, work: () => Promise<T>): Promise<T> {
+  return callerGuard.run(assertCurrent, work);
+}
 
 // The host runtime and the guest directory both read the same account list.
 // Concurrent and closely spaced reads share one request; any write, including
@@ -27,8 +35,12 @@ const accountApi = createSharedTaskApi({
   captureScope() {
     const key = activeOwnerScopeKey();
     const endpoint = getClientEndpoint('deviceLinkApiBaseUrl');
-    return { isCurrent: () => getAuthState().isAuthenticated && !isAppSessionBoundaryPending() &&
-      activeOwnerScopeKey() === key && getClientEndpoint('deviceLinkApiBaseUrl') === endpoint };
+    const assertCallerCurrent = callerGuard.getStore();
+    return { isCurrent: () => {
+      assertCallerCurrent?.();
+      return getAuthState().isAuthenticated && !isAppSessionBoundaryPending() &&
+        activeOwnerScopeKey() === key && getClientEndpoint('deviceLinkApiBaseUrl') === endpoint;
+    } };
   },
   async request(path, options) {
     try {
@@ -67,6 +79,8 @@ const accountApi = createSharedTaskApi({
 export const sharedTaskApi = {
   ...accountApi,
   list(): Promise<SharedTaskListItem[]> {
+    // A tool's recovery query needs fresh authority and must not share its input guard with UI/background reads.
+    if (callerGuard.getStore()) return accountApi.list();
     // Signed-out or boundary callers fail inside the adapter, never from cache.
     if (!getAuthState().isAuthenticated || isAppSessionBoundaryPending()) return accountApi.list();
     const key = [activeOwnerScopeKey(), getActiveAuthRealm(), getClientEndpoint('deviceLinkApiBaseUrl')].join('\n');

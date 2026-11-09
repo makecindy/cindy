@@ -83,7 +83,7 @@ export function createCodexImageChannel(opts: CreateCodexImageChannelOptions): I
     if (operation === 'edits' && !params.imagePaths?.length) {
       throw new Error('Codex image edit requires at least one reference image');
     }
-    const options = normalizeImageParameters('openai', params.model, params);
+    const { nativeParameters, ...options } = normalizeImageParameters('openai', params.model, params);
     const modelPrefix = `${opts.providerId ?? 'openai'}/`;
     if (!params.model.startsWith(modelPrefix) || !params.model.slice(modelPrefix.length).trim()) {
       throw new Error(`Codex 图像通道不支持模型:${params.model}`);
@@ -103,10 +103,11 @@ export function createCodexImageChannel(opts: CreateCodexImageChannelOptions): I
     params.signal?.throwIfAborted();
     const url = CODEX_IMAGES_URL + '/' + operation;
     const body = {
+      background: 'opaque',
+      ...options,
+      ...nativeParameters,
       model: IMAGE_MODEL,
       prompt: params.prompt,
-      ...options,
-      background: 'opaque',
       ...(operation === 'edits' ? { images } : {}),
     };
     const requestId = randomUUID();

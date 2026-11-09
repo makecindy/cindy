@@ -134,6 +134,42 @@ it('writes only the fields the settings pages edit, and never a permission chang
   expect(deps.updateProfile).toHaveBeenCalledTimes(1);
 });
 
+it('accepts the unchanged model through the versioned selection operation, leaving ordinary updates unchanged', async () => {
+  const { deps, call } = setup();
+  expect(await call('profile.acceptModelSelection', { patch: {}, expectedVersion: 3 })).toMatchObject({ ok: true });
+  expect(deps.updateProfile).toHaveBeenCalledWith({ id: 'bot-1', acceptSavedModelSelectionVersion: 3 });
+  for (const expectedVersion of [undefined, 0, -1, 1.5, '3']) {
+    expect(await call('profile.acceptModelSelection', { patch: {}, expectedVersion })).toMatchObject({ ok: false, code: 'INVALID_PARAMS' });
+  }
+  expect(await call('profile.acceptModelSelection', { patch: { capabilities: { permissions: 'trusted' } }, expectedVersion: 3 }))
+    .toMatchObject({ ok: false, code: 'INVALID_PARAMS' });
+  expect(deps.updateProfile).toHaveBeenCalledTimes(1);
+});
+
+// Unit regression: the primary picker mirrors agentDeviceId at the top level;
+// the fallback picker changes only the chain. Both must reach the same service.
+it.each(['profile.update', 'profile.acceptModelSelection'])('preserves remote primary/fallback locations through %s', async (op) => {
+  const { deps, call } = setup();
+  const local = { harness: 'codex', providerId: 'openai', model: 'same-model', effort: '', fastMode: false };
+  const remote = { ...local, agentDeviceId: 'share:one' };
+  for (const [agentDeviceId, modelChain] of [['share:one', [remote, local]], [null, [local, remote]]] as const) {
+    const capabilities = { agentDeviceId, modelChain, modelChainOverride: modelChain };
+    expect(await call(op, { patch: { capabilities }, expectedVersion: 3 })).toMatchObject({ ok: true });
+    expect(deps.updateProfile).toHaveBeenLastCalledWith(expect.objectContaining({ id: 'bot-1', capabilities }));
+  }
+});
+
+it('rejects malformed execution locations and still requires separate permission confirmation', async () => {
+  const { deps, call } = setup();
+  for (const agentDeviceId of [true, {}, '', '../other', 'x'.repeat(129)]) {
+    expect(await call('profile.update', { patch: { capabilities: { agentDeviceId } } }))
+      .toMatchObject({ ok: false, code: 'INVALID_PARAMS' });
+  }
+  expect(await call('profile.update', { patch: { capabilities: { agentDeviceId: 'device-two', permissions: 'trusted' } } }))
+    .toMatchObject({ ok: false, code: 'INVALID_PARAMS' });
+  expect(deps.updateProfile).not.toHaveBeenCalled();
+});
+
 it('lets the page see a memory revision conflict and hides unexpected failures', async () => {
   const conflict = setup({ deps: { memory: { update: vi.fn(async () => { throw createIpcError('PRECONDITION_FAILED', BOT_MEMORY_CHANGED); }) } as never } });
   expect(await conflict.call('memory.update', { filename: 'user_a.md', title: 't', body: 'b', expectedUpdatedAt: '2026-01-01T00:00:00Z' }))
@@ -206,4 +242,18 @@ it('holds the teammate a host-wide autonomy change names to the same visibility 
   const visible = setup();
   expect(await visible.call('autonomy.set', { schedulerBotId: 'bot-2' }, null)).toMatchObject({ ok: true });
   expect(visible.deps.autonomy.set).toHaveBeenCalledWith('bot-2');
+});
+
+// Protocol regression: an old renderer indexes channel icons without an unknown fallback.
+// Advertise new channels explicitly so a newer host cannot crash an older settings page.
+it('projects iMessage connections only to controllers that advertise the channel', async () => {
+  const { deps, call } = setup();
+  deps.channels.im.list.mockResolvedValue({ connections: [
+    { id: 'legacy', botId: 'bot-1', channel: 'telegram' },
+    { id: 'local-bridge', botId: 'bot-1', channel: 'imessage' },
+  ] } as never);
+  expect(await call('channels.im.list')).toMatchObject({ ok: true, value: { connections: [{ id: 'legacy' }] } });
+  expect(await call('channels.im.list', { supportedChannels: ['telegram', 'imessage'] })).toMatchObject({
+    ok: true, value: { connections: [{ id: 'legacy' }, { id: 'local-bridge' }] },
+  });
 });

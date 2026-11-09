@@ -87,12 +87,12 @@ export async function prepareMcpAppNativeDocument(
     if (sdkSource !== undefined) {
       const sdk = new File(directory, "3");
       sdk.create();
-      sdk.write(sdkSource);
+      sdk.writeSync(sdkSource);
       entries.push([HOST_APP_SDK_PATH.slice(1), "3", "text/javascript"]);
     }
     const bootstrap = new File(directory, "2");
     bootstrap.create();
-    bootstrap.write(MCP_APP_STORAGE_BOOTSTRAP);
+    bootstrap.writeSync(MCP_APP_STORAGE_BOOTSTRAP);
     started.push(resourceToken);
     const resourceUrl = await start(
       root,
@@ -104,11 +104,11 @@ export async function prepareMcpAppNativeDocument(
     const html = (await import("@cindy/maker-shared/mcp-app-sdk")).withHostAppSdk(
       document.html, new URL(HOST_APP_SDK_PATH, resourceUrl).href,
     );
-    resource.write(html);
+    resource.writeSync(html);
     const resourceOrigin = new URL(resourceUrl).origin;
     const proxy = new File(directory, "1");
     proxy.create();
-    proxy.write(mcpAppSandboxDocument(bridgeKey, resourceUrl));
+    proxy.writeSync(mcpAppSandboxDocument(bridgeKey, resourceUrl));
     const csp = `default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; frame-src ${resourceOrigin}; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'`;
     started.push(proxyToken);
     const proxyUrl = await start(root, "proxy.html", proxyToken, csp, [

@@ -8,7 +8,7 @@ import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { cn } from '@/lib/utils';
 import { GroupMaskAvatar, GroupMaskStatusText } from './GroupMaskControls';
 import { useGroupMask, type GroupMaskTrigger } from './groupMaskPresentation';
-import { SETTINGS_DIVIDER, SETTINGS_HINT, SettingsCard, SettingsNotice, SettingsRow, SettingsRowIcon } from './ChatGroupSettingsRows';
+import { SETTINGS_DIVIDER, SETTINGS_HINT, SettingsCard, SettingsNotice, SettingsRow, SettingsRowIcon } from '@/components/ui/settings-rows';
 import { Reply } from 'lucide-react';
 
 /** A setting row whose choice sits on the right, in the group settings' row look. */
@@ -59,9 +59,6 @@ export function GroupMaskSettings({ groupId }: { groupId: string }) {
         <SelectRow label={t(key('triggerLabel'))} value={config.trigger} disabled={saving}
           options={(['scheduled', 'manual', 'always'] as const).map(value => ({ value, label: t(key(`trigger.${value}`)) }))}
           onValueChange={trigger => update({ trigger: trigger as GroupMaskTrigger })} />
-        {config.trigger === 'always' && <SelectRow label={t(key('resumeAfter'))} value={String(config.resumeMinutes)} disabled={saving}
-          options={[5, 15, 30, 60].map(value => ({ value: String(value), label: t(key('minutes'), { count: value }) }))}
-          onValueChange={value => update({ resumeMinutes: Number(value) })} />}
         {config.trigger === 'scheduled' && <SettingsRow wrap title={t(key('hours'))} trailing={<span className="flex items-center gap-2">
           {(['start', 'end'] as const).map((field, index) => <span key={field} className="contents">
             {index > 0 && <span aria-hidden className="text-[var(--text-tertiary)]">–</span>}

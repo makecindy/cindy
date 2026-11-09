@@ -10,7 +10,7 @@ import { outboundFetch } from '../../maker-host/outbound-fetch.js';
 import { readGhostSecret } from '../../secrets/providerSecretStore.js';
 import { createGithubAuthRecovery } from './githubRecovery.js';
 
-/** Reuse the official plugin's gh-cli -> same-instance PAT credential precedence. */
+/** Reuse each approved plugin's gh-cli -> same-instance PAT credential precedence. */
 export const resolveGithubAuthRecovery = createGithubAuthRecovery({
   ownerKey: () => {
     const owner = getActiveAppSession();

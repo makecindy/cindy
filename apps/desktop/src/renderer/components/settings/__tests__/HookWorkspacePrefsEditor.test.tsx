@@ -49,6 +49,16 @@ const BASE_HOOK: SlackHookView = {
     defaultWorkspace: null,
     binding: null,
   },
+  feishu: {
+    enabled: false,
+    url: '',
+    status: 'disabled',
+    lastError: null,
+    available: false,
+    capabilityPending: false,
+    defaultWorkspace: null,
+    binding: null,
+  },
 };
 
 const TELEGRAM_CONFIRMED: SlackHookView = {
@@ -71,6 +81,7 @@ const TELEGRAM_CONFIRMED: SlackHookView = {
       scopeId: 'bot-1',
       scopeName: 'cindy_example_bot',
       connectUrl: null,
+      bindCode: null,
       expiresAt: null,
       reason: null,
       remediationUrl: 'https://t.me/cindy_example_bot',
@@ -99,6 +110,7 @@ const X_CONFIRMED: SlackHookView = {
       scopeId: 'bot-x',
       scopeName: 'CindyBot',
       connectUrl: null,
+      bindCode: null,
       expiresAt: null,
       reason: null,
       remediationUrl: 'https://x.com/CindyBot',

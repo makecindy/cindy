@@ -277,7 +277,7 @@ export function SelectionQuoteButton({
       ref={pillRef}
       // mousedown 先于 click 触发浏览器清选区;preventDefault 保住选区与按钮。
       onMouseDown={(e) => e.preventDefault()}
-      className="fixed z-[60] flex w-max max-w-[calc(100vw-16px)] flex-wrap justify-center gap-1 rounded-full bg-popover p-1 shadow-[var(--shadow-menu)]"
+      className="fixed z-[60] flex w-max max-w-[calc(100vw-16px)] flex-wrap justify-center gap-1 rounded-full bg-popover p-1 shadow-[shadow:var(--shadow-menu)]"
       style={{
         left: clamp(anchor.x, pillWidth / 2 + BUTTON_EDGE_MARGIN_PX, window.innerWidth - pillWidth / 2 - BUTTON_EDGE_MARGIN_PX),
         top:

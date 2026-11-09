@@ -443,7 +443,9 @@ export function createCardActionHandler(
           try {
             // The Pi host transaction reads the old DB route to protect native
             // history and register a correct rollback snapshot while busy.
-            await updateModelEffort(sessionId, modelId, effort ?? 'high',
+            await updateModelEffort(sessionId,
+              'effectiveModelId' in runtimeChange ? runtimeChange.effectiveModelId ?? modelId : modelId,
+              effort ?? 'high',
               'effectiveProviderId' in runtimeChange ? runtimeChange.effectiveProviderId : providerId);
           } catch (err) {
             const msg = err instanceof Error ? err.message : String(err);

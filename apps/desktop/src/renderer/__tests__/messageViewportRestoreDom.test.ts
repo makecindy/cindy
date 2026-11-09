@@ -7,7 +7,7 @@ import { createRoot } from 'react-dom/client';
 import { flushSync } from 'react-dom';
 import { describe, expect, it } from 'vitest';
 import { findRestorableViewportItemIdx, pickIntersectingChildAnchor, readViewportChildAnchorClientId, viewportRestoreNeedsMoreContent } from '../components/chat/MessageStream';
-import { findRenderItemElement, viewportAnchorCorrection } from '../components/chat/messageViewportCompensation';
+import { findRenderItemElement, measureRestoredScrollGeometry, viewportAnchorCorrection } from '../components/chat/messageViewportCompensation';
 
 // Run the actual capture and positioning callbacks with a deterministic layout.
 // jsdom cannot lay out, so rectangles model a message moving into a work group.
@@ -151,6 +151,7 @@ it('bounds synchronous expansion rounds through thousands of non-rendering rows'
     findRestorableViewportItemIdx, findRenderItemElement, viewportAnchorCorrection,
     viewportRestoreNeedsMoreContent, windowCoversEndRef: coversEnd,
     restoreLoadRef: { current: 'idle' }, anchoredForwardItemsRef: count,
+    restoredScrollGeometryRef: { current: null }, measureRestoredScrollGeometry,
     RENDER_WINDOW_GROWTH_ITEMS: 80,
     setAnchoredForwardItems: (update: (previous: number) => number) => { count.current = update(count.current); },
     beginProgrammaticScroll: () => 1, finishProgrammaticScroll: () => false,

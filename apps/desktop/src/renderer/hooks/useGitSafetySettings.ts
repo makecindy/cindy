@@ -1,3 +1,4 @@
+import { useAppSettingsRevision } from './useAppSettingsRevision';
 import { useCallback, useEffect, useState } from 'react';
 
 import {
@@ -88,6 +89,7 @@ export function useGitSafetySettings(): {
   setAutoSnapshotEnabled: (next: boolean) => Promise<void>;
   reset: () => Promise<void>;
 } {
+  const settingsRevision = useAppSettingsRevision('git-safety');
   const [mode, setModeState] = useState<GitSafetyMode>(getGitSafetyMode);
   const [autoSnapshotEnabled, setEnabledState] = useState<boolean>(getGitSafetyAutoSnapshotEnabled);
   const [isCustomized, setIsCustomized] = useState(false);
@@ -156,7 +158,7 @@ export function useGitSafetySettings(): {
       unsubscribe();
       unsubscribeMode();
     };
-  }, [refresh]);
+  }, [refresh, settingsRevision]);
 
   return { mode, autoSnapshotEnabled, isCustomized, setMode, setAutoSnapshotEnabled, reset };
 }

@@ -76,6 +76,25 @@ export function installNativeTrackpad(
   let pointer: Point = { x: 0, y: 0 };
   const frames = new Map<string, string>();
   let surface: { objectId: string; session?: string; offset: Point } | null = null;
+  // Electron emits target detach during WebContents destruction, before
+  // isDestroyed() changes. Even Promise continuations can reenter that native
+  // stack. Wait for a new task before touching CDP, then recheck its lifetime.
+  let targetTeardown = false;
+  const sendCommand = (
+    ...args: Parameters<WebContents['debugger']['sendCommand']>
+  ): ReturnType<WebContents['debugger']['sendCommand']> => {
+    if (targetTeardown)
+      return new Promise<void>((resolve) => setImmediate(resolve)).then(() => sendCommand(...args));
+    const session = args[2];
+    if (
+      !attached ||
+      guest.isDestroyed() ||
+      host.isDestroyed() ||
+      (session && ![...frames.values()].includes(session))
+    )
+      return Promise.reject(new Error('Native trackpad target is no longer attached'));
+    return guest.debugger.sendCommand(...args);
+  };
   let pointerRead = 0;
   let gesture: {
     centre: Point;
@@ -97,9 +116,9 @@ export function installNativeTrackpad(
       gesture && attached && !guest.isDestroyed()
         ? surface
           ? dispatchContacts('cancel', [])
-          : guest.debugger
-              .sendCommand('Input.dispatchTouchEvent', { type: 'touchCancel', touchPoints: [] })
-              .catch(() => {})
+          : sendCommand('Input.dispatchTouchEvent', { type: 'touchCancel', touchPoints: [] }).catch(
+              () => {},
+            )
         : Promise.resolve();
     gesture = null;
     return pending;
@@ -116,11 +135,7 @@ export function installNativeTrackpad(
     if (previous && attached && !guest.isDestroyed())
       return cancelled
         .then(() =>
-          guest.debugger.sendCommand(
-            'Runtime.releaseObject',
-            { objectId: previous.objectId },
-            previous.session,
-          ),
+          sendCommand('Runtime.releaseObject', { objectId: previous.objectId }, previous.session),
         )
         .then(() => {})
         .catch(() => {});
@@ -128,29 +143,28 @@ export function installNativeTrackpad(
   };
   const dispatchContacts = (phase: string, points: Contact[]) => {
     const target = surface!;
-    return guest.debugger
-      .sendCommand(
-        'Runtime.callFunctionOn',
-        {
-          objectId: target.objectId,
-          functionDeclaration: deliverContacts,
-          returnByValue: true,
-          arguments: [
-            {
-              value: {
-                phase,
-                touches: points.map((p) => ({
-                  id: p.id,
-                  x: p.x - target.offset.x,
-                  y: p.y - target.offset.y,
-                })),
-              },
+    return sendCommand(
+      'Runtime.callFunctionOn',
+      {
+        objectId: target.objectId,
+        functionDeclaration: deliverContacts,
+        returnByValue: true,
+        arguments: [
+          {
+            value: {
+              phase,
+              touches: points.map((p) => ({
+                id: p.id,
+                x: p.x - target.offset.x,
+                y: p.y - target.offset.y,
+              })),
             },
-            { value: { x: pointer.x - target.offset.x, y: pointer.y - target.offset.y } },
-          ],
-        },
-        target.session,
-      )
+          },
+          { value: { x: pointer.x - target.offset.x, y: pointer.y - target.offset.y } },
+        ],
+      },
+      target.session,
+    )
       .then((reply) => {
         if (reply.exceptionDetails) throw new Error('Native trackpad target execution failed');
         if (reply.result?.value !== true && surface === target) {
@@ -173,7 +187,8 @@ export function installNativeTrackpad(
     const cancelled = stop(),
       stamp = epoch;
     // Deliver the release before closing CDP. A new capture supersedes teardown.
-    void cancelled.then(() => {
+    void cancelled.then(async () => {
+      if (targetTeardown) await new Promise<void>((resolve) => setImmediate(resolve));
       if (stamp !== epoch) return;
       frames.clear();
       if (attached && !guest.isDestroyed()) {
@@ -244,14 +259,12 @@ export function installNativeTrackpad(
       void dispatchContacts(packet.phase, touchPoints);
       return;
     }
-    void guest.debugger
-      .sendCommand('Input.dispatchTouchEvent', {
-        type,
-        touchPoints: type === 'touchEnd' && touchPoints.length ? released : touchPoints,
-      })
-      .catch(() => {
-        if (stamp === epoch) detach();
-      });
+    void sendCommand('Input.dispatchTouchEvent', {
+      type,
+      touchPoints: type === 'touchEnd' && touchPoints.length ? released : touchPoints,
+    }).catch(() => {
+      if (stamp === epoch) detach();
+    });
   };
   const locate = async () => {
     if (!enabled || locating || !current()) return;
@@ -276,7 +289,7 @@ export function installNativeTrackpad(
       point = { ...pointer };
     const objects: { objectId: string; session?: string }[] = [];
     try {
-      await guest.debugger.sendCommand('Target.setAutoAttach', {
+      await sendCommand('Target.setAutoAttach', {
         autoAttach: true,
         waitForDebuggerOnStart: false,
         flatten: true,
@@ -287,7 +300,7 @@ export function installNativeTrackpad(
       // An out-of-process iframe is a separate CDP target. Hit-test down the
       // visible frame chain, retaining offsets in the guest's viewport space.
       for (let depth = 0; depth < 8; depth++) {
-        const hit = await guest.debugger.sendCommand(
+        const hit = await sendCommand(
           'DOM.getNodeForLocation',
           {
             x: Math.round(point.x - offset.x),
@@ -296,7 +309,7 @@ export function installNativeTrackpad(
           },
           session,
         );
-        const resolved = await guest.debugger.sendCommand(
+        const resolved = await sendCommand(
           'DOM.resolveNode',
           { backendNodeId: hit.backendNodeId },
           session,
@@ -304,7 +317,7 @@ export function installNativeTrackpad(
         const objectId = resolved.object?.objectId;
         if (!objectId) return;
         objects.push({ objectId, session });
-        const surface = await guest.debugger.sendCommand(
+        const surface = await sendCommand(
           'Runtime.callFunctionOn',
           {
             objectId,
@@ -318,34 +331,26 @@ export function installNativeTrackpad(
           objects.push({ objectId: surfaceId, session });
           break;
         }
-        const { node } = await guest.debugger.sendCommand(
+        const { node } = await sendCommand(
           'DOM.describeNode',
           { backendNodeId: hit.backendNodeId },
           session,
         );
         if (node?.nodeName !== 'IFRAME' || !node.frameId) return;
-        const { model } = await guest.debugger.sendCommand(
-          'DOM.getBoxModel',
-          { objectId },
-          session,
-        );
+        const { model } = await sendCommand('DOM.getBoxModel', { objectId }, session);
         if (!model?.content) return;
         offset = { x: offset.x + model.content[0], y: offset.y + model.content[1] };
         const child = frames.get(node.frameId);
         if (!child) return;
         session = child;
-        await guest.debugger.sendCommand(
+        await sendCommand(
           'Target.setAutoAttach',
           { autoAttach: true, waitForDebuggerOnStart: false, flatten: true },
           session,
         );
       }
       if (!surfaceId) return;
-      const { model } = await guest.debugger.sendCommand(
-        'DOM.getBoxModel',
-        { objectId: surfaceId },
-        session,
-      );
+      const { model } = await sendCommand('DOM.getBoxModel', { objectId: surfaceId }, session);
       const q = model?.content;
       if (!Array.isArray(q) || q.length !== 8 || q.some((v) => !Number.isFinite(v))) return;
       const xs = [q[0], q[2], q[4], q[6]],
@@ -365,7 +370,7 @@ export function installNativeTrackpad(
       )
         return;
       rect = candidate;
-      const mode = await guest.debugger.sendCommand(
+      const mode = await sendCommand(
         'Runtime.callFunctionOn',
         {
           objectId: surfaceId,
@@ -378,7 +383,7 @@ export function installNativeTrackpad(
       if (mode.result?.value === 'contacts') {
         // DOM event coordinates are relative to the element's own frame, not
         // its OOPIF target (which can itself contain same-origin frames).
-        const bounds = await guest.debugger.sendCommand(
+        const bounds = await sendCommand(
           'Runtime.callFunctionOn',
           {
             objectId: surfaceId,
@@ -418,9 +423,7 @@ export function installNativeTrackpad(
     } finally {
       for (const { objectId, session } of objects)
         if (objectId !== surface?.objectId && attached && !guest.isDestroyed())
-          void guest.debugger
-            .sendCommand('Runtime.releaseObject', { objectId }, session)
-            .catch(() => {});
+          void sendCommand('Runtime.releaseObject', { objectId }, session).catch(() => {});
       locating = false;
     }
   };
@@ -499,12 +502,17 @@ export function installNativeTrackpad(
     if (!attached) return;
     if (method === 'Target.attachedToTarget' && params.targetInfo?.type === 'iframe')
       frames.set(params.targetInfo.targetId, params.sessionId);
-    if (method === 'Target.detachedFromTarget')
+    if (method === 'Target.detachedFromTarget') {
+      targetTeardown = true;
+      setImmediate(() => {
+        targetTeardown = false;
+      });
       for (const [id, session] of frames)
         if (session === params.sessionId) {
           frames.delete(id);
           stop();
         }
+    }
   });
   guest.debugger.on('detach', () => {
     attached = false;

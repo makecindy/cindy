@@ -802,7 +802,8 @@ describe('report boundary', () => {
         credentials: { token: 'test-only-secret' },
         email: 'fixture@example.invalid',
         nested: { 'x-api-key': 'another-test-only-secret' },
-        payload: randomBytes(100_000).toString('base64'),
+        // Hex keeps high-entropy chunking data without accidental key-shaped prefixes.
+        payload: randomBytes(100_000).toString('hex'),
       };
       for (const name of TRACE_ARTIFACT_NAMES)
         await writeFile(
@@ -912,9 +913,16 @@ describe('report boundary', () => {
     await expect(
       measureTraceOperation('maker:list-agent-skills', () => Promise.reject(error)),
     ).rejects.toBe(error);
+    // Skill subphases distinguish preparation from scan time without recording
+    // workdirs, skill contents or results in the diagnostic report.
+    await expect(measureTraceOperation('maker:list-agent-skills:identity',
+      () => Promise.resolve('private-skill-result'))).resolves.toBe('private-skill-result');
     measureTraceOperation('private-channel-name', () => 0);
-    expect(events).toHaveLength(2);
-    expect(JSON.stringify(events)).not.toMatch(/original|private-channel/);
+    expect(events).toHaveLength(3);
+    expect(projectTraceEvent(events[2], 0, Date.now())).toMatchObject({
+      label: 'maker:list-agent-skills:identity', kind: 'ipc',
+    });
+    expect(JSON.stringify(events)).not.toMatch(/original|private-channel|private-skill-result/);
   });
 });
 

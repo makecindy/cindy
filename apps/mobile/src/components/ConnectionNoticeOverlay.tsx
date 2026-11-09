@@ -1,3 +1,4 @@
+import type { ViewInstance } from 'react-native';
 import { createContext, useCallback, useContext, useEffect, useId, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { StyleSheet, View, useWindowDimensions } from 'react-native';
 import { useFocusEffect } from 'expo-router';
@@ -15,11 +16,11 @@ export function useDelayedConnectionNotice(active: boolean, immediate = false): 
 
 type NoticeFrame = { top: number; left: number; width: number };
 type Notice = NoticeFrame & { children: ReactNode };
-const NoticeContext = createContext<{ publish: (id: string, notice: Notice | null) => void; host: RefObject<View | null> } | null>(null);
+const NoticeContext = createContext<{ publish: (id: string, notice: Notice | null) => void; host: RefObject<ViewInstance | null> } | null>(null);
 
 /** Render outside clipped headers, with real touch bounds and no modal input capture. */
 export function ConnectionNoticeProvider({ children }: { children: ReactNode }) {
-  const host = useRef<View>(null);
+  const host = useRef<ViewInstance>(null);
   const [notices, setNotices] = useState(new Map<string, Notice>());
   const publish = useCallback((id: string, notice: Notice | null) => {
     setNotices((current) => {
@@ -44,7 +45,7 @@ export function ConnectionNoticeProvider({ children }: { children: ReactNode }) 
 export function ConnectionNoticeOverlay({ children }: { children: ReactNode }) {
   const context = useContext(NoticeContext);
   const id = useId();
-  const anchor = useRef<View>(null);
+  const anchor = useRef<ViewInstance>(null);
   const [frame, setFrame] = useState<NoticeFrame | null>(null);
   const [focused, setFocused] = useState(false);
   useFocusEffect(useCallback(() => {

@@ -100,7 +100,7 @@ export function HtmlSnapshotReader({ preview, onError, webViewRef, viewportInset
       mobileDebugLog('debug', 'files', 'html page load end', { ms: Date.now() - mountedAt, loading: event?.nativeEvent?.loading });
       if (script) readerRef.current?.injectJavaScript(script);
     }}
-    onScroll={({ nativeEvent: { contentOffset } }) => {
+    onScroll={({ nativeEvent: { contentOffset } }: { nativeEvent: { contentOffset: { x: number; y: number } } }) => {
       if (currentPreview.current === preview) readerRef.current?.injectJavaScript(browserViewportScrollScript(contentOffset.x, contentOffset.y));
     }}
     onNavigationStateChange={(state) => {

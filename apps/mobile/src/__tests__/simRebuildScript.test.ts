@@ -200,7 +200,7 @@ describe('sim-rebuild workflow', () => {
   it('refuses to pick a system device while Cindy is idle', async () => {
     const result = await rebuild();
     expect(result.error).toMatchObject({ message: 'exit:1' });
-    expect(result.log).toHaveBeenCalledWith(expect.stringContaining('baguette-simulator'));
+    expect(result.log).toHaveBeenCalledWith(expect.stringContaining('cindy-simulator'));
     expect(result.execFileSync.mock.calls.some(([command]) => command === 'xcodebuild')).toBe(false);
   });
 
