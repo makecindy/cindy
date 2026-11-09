@@ -36,6 +36,7 @@ import {
   ScrollView,
   StyleSheet,
   View,
+  type LayoutChangeEvent,
   type NativeScrollEvent,
   type NativeSyntheticEvent,
 } from 'react-native';
@@ -1152,6 +1153,10 @@ function BotGroupTimelineItem({
   const visible = useMessageListItemVisible(message.id);
   const visibility = useContext(MessageListVisibilityContext);
   const richContentActive = active && (!visibility || visible);
+  const [columnWidth, setColumnWidth] = useState(0);
+  const measureColumn = useCallback((event: LayoutChangeEvent) => {
+    setColumnWidth(Math.round(event.nativeEvent.layout.width));
+  }, []);
   const styles = useThemedStyles(makeStyles);
   const { colors: userBubbleColors } = useUserBubbleAppearance();
   if (message.kind === 'round-end') {
@@ -1225,7 +1230,7 @@ function BotGroupTimelineItem({
     {continued ? <View style={styles.avatarSpacer} /> : <View style={styles.avatarSlot}>
       {message.maskAttribution ? <GroupMaskAvatar {...message.maskAttribution} deviceId={deviceId} /> : <BotGroupAvatar deviceId={deviceId} identity={author} size={BOT_GROUP_MESSAGE_AVATAR_SIZE} online={online} />}
     </View>}
-    <View style={styles.botColumn}>
+    <View style={styles.botColumn} onLayout={measureColumn}>
       {continued ? null : <View style={[styles.authorRow, topic && styles.topicAuthorRow]}>
         <Text numberOfLines={1} style={styles.authorName}>{author.name}</Text>
         {topic ? <Text style={styles.threadCaption}>{new Date(message.createdAt).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}</Text> : null}
@@ -1248,10 +1253,12 @@ function BotGroupTimelineItem({
               the computer the group was opened through. */}
           {message.task ? <BotGroupTaskCard task={message.task} owned={member !== undefined && member.isOwned !== false}
             deviceId={member?.homeDeviceId || deviceId || ''} /> : null}
+          {/* Deferred rich blocks have no intrinsic width before their native view mounts.
+              Measure the stretched column, not the content-hugging bubble. */}
           <View style={styles.botMessageContent}>
             {renderAttachments('left')}
             {message.threadShare && !authoredShare ? <BotGroupThreadShare active={richContentActive} interactive={interactive} onOpenDiagram={onOpenDiagram} onRetry={onRetrySource} share={message.threadShare} mentionContext={contentMentionContext} resolveMedia={resolveMedia} resolveServerMedia={resolveServerMedia} />
-              : content.trim() ? <BotGroupMarkdownText richContent active={richContentActive} interactive={interactive} onOpenDiagram={onOpenDiagram} content={content} authorKind={message.authorKind} mentionContext={contentMentionContext} /> : null}
+              : content.trim() ? <BotGroupMarkdownText availableWidth={Math.max(0, columnWidth - 2 * styles.botBubble.paddingHorizontal)} richContent active={richContentActive} interactive={interactive} onOpenDiagram={onOpenDiagram} content={content} authorKind={message.authorKind} mentionContext={contentMentionContext} /> : null}
           </View>
           <BotGroupHandoffFiles files={message.files} />
         </View>

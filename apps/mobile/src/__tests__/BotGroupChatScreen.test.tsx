@@ -26,7 +26,7 @@ const h = vi.hoisted(() => ({
   confirm: vi.fn(),
   leave: vi.fn(),
   focused: true, themeMode: 'light',
-  nativeMenus: true,
+  nativeMenus: true, observeRichViews: false,
   appState: 'active',
   appStateListeners: new Set<(state: string) => void>(),
   closeSettings: null as null | (() => void),
@@ -59,7 +59,7 @@ const h = vi.hoisted(() => ({
 }));
 
 // Keep production message components; adapt native surfaces for jsdom.
-vi.mock('react-native-webview', () => ({ WebView: () => null }));
+vi.mock('react-native-webview', () => ({ WebView: () => h.observeRichViews ? el('div', { 'data-testid': 'native.webview' }) : null }));
 vi.mock('@/session/ConversationShareSvg', () => ({ ConversationShareSvg: ({ ref, messages }: any) => {
   h.exported.push(messages); useImperativeHandle(ref, () => ({ exportPng: h.pngExport })); return null;
 } }));
@@ -82,7 +82,7 @@ vi.mock('react-native', () => {
   const box = (tag: string) => ({ children, testID, accessibilityLabel, style, onLayout, onTouchStart, ref }: any) =>
     el(tag, { 'data-testid': testID, 'aria-label': accessibilityLabel,
       onTouchStart, ref: (node: any) => {
-        if (node) { node.nativeLayout = onLayout; node.measureInWindow = (callback: any) => callback(0, 62, 402, 812); }
+        if (node) { node.nativeLayout = onLayout; node.nativeStyle = Object.assign({}, ...[style].flat(Infinity).filter(Boolean)); node.measureInWindow = (callback: any) => callback(0, 62, 402, 812); }
         if (typeof ref === 'function') ref(node); else if (ref) ref.current = node;
       },
       style: { paddingBottom: [style].flat().filter(Boolean).findLast((item: any) => item.paddingBottom !== undefined)?.paddingBottom,
@@ -441,7 +441,7 @@ async function render(data: BotGroupRemoteChatData | null = group(), kind: 'read
 }
 
 beforeEach(() => {
-  h.translate = null; h.themeMode = 'light';
+  h.translate = null; h.themeMode = 'light'; h.observeRichViews = false;
   h.scrolls = {}; h.speakerDisclosure = false;
   h.nativeMenus = true;
   shareSelectionStore.exit();
@@ -468,6 +468,44 @@ beforeEach(() => {
 afterEach(async () => { await act(async () => root.unmount()); vi.useRealTimers(); });
 
 describe('group timeline', () => {
+  // Unit / P2 #7840: a pure formula has no intrinsic child until Android's deferred WebView
+  // is admitted. Exercise the production screen/body/runtime; only deliver native layout events.
+  it.each(['light', 'dark'])('admits a formula-only Android group reply from column width (%s)', async mode => {
+    vi.useFakeTimers();
+    h.platform.OS = 'android'; h.themeMode = mode; h.observeRichViews = true;
+    await render(group({ openPlan: null, plans: [], messages: [
+      message('formula', 1, { authorBotId: 'mimi', content: '$$\nx^2\n$$' }),
+    ] }));
+    await act(async () => {
+      (byId('botGroup.row.formula') as any).nativeLayout({ nativeEvent: { layout: { y: 0, height: 100 } } });
+      h.scroll.onLayout({ nativeEvent: { layout: { height: 600 } } });
+    });
+    const formula = byId('botGroup.mathFormula') as any;
+    const column = byId('botGroup.message.botBubble')!.parentElement as any;
+    expect(formula).not.toBeNull();
+    await act(async () => { await vi.advanceTimersByTimeAsync(100); });
+    expect(byId('native.webview')).toBeNull();
+    for (const width of [300, 260]) {
+      await act(async () => column.nativeLayout?.({ nativeEvent: { layout: { width } } }));
+      // jsdom does not run Yoga: forward the positive production body width to native onLayout.
+      // This verifies the deferred-mount contract, not Android pixel geometry.
+      let parent = formula.parentElement as any;
+      while (parent && !(typeof parent.nativeStyle?.width === 'number' && parent.nativeStyle.width > 0)) parent = parent.parentElement;
+      await act(async () => formula.nativeLayout({ nativeEvent: { layout: { width: parent?.nativeStyle.width ?? 0 } } }));
+      await act(async () => { await vi.advanceTimersByTimeAsync(200); });
+      expect(byId('native.webview')).not.toBeNull();
+      expect(parent.nativeStyle.width).toBeLessThan(width);
+    }
+    await render(group({ openPlan: null, plans: [], messages: [
+      message('formula', 1, { authorBotId: 'mimi', content: '好' }),
+    ] }));
+    expect(byId('botGroup.mathFormula')).toBeNull();
+    const body = Array.from(byId('botGroup.message.botBubble')!.querySelectorAll('div'))
+      .find(element => element.textContent === '好' && (element as any).nativeStyle?.minWidth === 0) as any;
+    expect(body).toBeDefined();
+    expect(body.nativeStyle.width).toBeUndefined();
+  });
+
   // Unit / A04：从生产群页面打开图表，关闭或离开群后不应保留查看器；仅替换原生弹层边界。
   it('opens the group diagram source and dismisses its viewer on close or blur', async () => {
     const source = 'flowchart LR\nA --> B';
@@ -2351,8 +2389,7 @@ describe('direct server group presentation', () => {
       await act(async () => {
         h.scroll.onLayout({ nativeEvent: { layout: { height: 500 } } });
         for (const strip of node.querySelectorAll('[data-testid="attachmentStrip"]')) {
-          let row = strip as HTMLElement & { nativeLayout?: (event: unknown) => void };
-          while (!row.nativeLayout) row = row.parentElement as typeof row;
+          const row = strip.closest('[data-testid^="botGroup.row."]') as HTMLElement & { nativeLayout?: (event: unknown) => void };
           row.nativeLayout!({ nativeEvent: { layout: { y: 0, height: 100 } } });
         }
       });
@@ -2374,8 +2411,7 @@ describe('direct server group presentation', () => {
     h.chat = { pending: [], ...h.chat, server: true, media: vi.fn(async () => attachment) };
     await render(group({ messages: [message('picture', 1, { threadRootId, authorKind: 'user', isSelf: false, attachments: [{ ...attachment, url: null, category: 'file' }] })], plans: [], openPlan: null }), 'ready', threadRootId, threadRootId ? '' : 'mac');
     expect(h.chat.media).not.toHaveBeenCalled();
-    let row = byId('attachmentStrip') as HTMLElement & { nativeLayout?: (event: unknown) => void };
-    while (!row.nativeLayout) row = row.parentElement as typeof row;
+    const row = byId('attachmentStrip')!.closest('[data-testid^="botGroup.row."]') as HTMLElement & { nativeLayout?: (event: unknown) => void };
     await act(async () => {
       row.nativeLayout!({ nativeEvent: { layout: { y: 800, height: 200 } } });
       h.scroll.onLayout({ nativeEvent: { layout: { height: 500 } } });

@@ -214,8 +214,8 @@ const BotGroupMarkdownBlock = memo(function BotGroupMarkdownBlock({ block, style
   return renderBlock(block, styles, options, diagramLabel, context);
 });
 
-export function BotGroupMarkdownText({ content, authorKind, mentionContext, richContent = false, interactive = true, active = true, onOpenDiagram }: {
-  content: string; authorKind?: BotGroupAuthorKind; mentionContext?: BotGroupMentionContext;
+export function BotGroupMarkdownText({ content, authorKind, mentionContext, availableWidth = 0, richContent = false, interactive = true, active = true, onOpenDiagram }: {
+  content: string; authorKind?: BotGroupAuthorKind; mentionContext?: BotGroupMentionContext; availableWidth?: number;
 } & BodyOptions) {
   const { t } = useTranslation();
   const styles = useThemedStyles(makeStyles);
@@ -223,8 +223,9 @@ export function BotGroupMarkdownText({ content, authorKind, mentionContext, rich
   const blocks = useMemo(() => botGroupBodyParts(content, authorKind).flatMap((part, index): MobileMarkdownBlock[] => part.kind === 'markdown'
     ? parseMobileMarkdown(part.content).map(block => ({ ...block, key: `${index}:${block.key}` }))
     : [{ type: 'paragraph', key: String(index), inlines: [{ type: 'text', text: part.content }] }]), [content, authorKind]);
+  const measuredBody = richContent && availableWidth > 0 && blocks.some(block => block.type === 'math' || block.type === 'mermaid');
   const diagramLabel = t('message.renderer.openDiagramDetail');
-  return <View ref={touch.ref} collapsable={false} style={styles.body} onTouchStart={touch.onTouchStart}>{blocks.map(block =>
+  return <View ref={touch.ref} collapsable={false} style={[styles.body, measuredBody && { width: availableWidth }]} onTouchStart={touch.onTouchStart}>{blocks.map(block =>
     <BotGroupMarkdownBlock key={block.key} block={block} styles={styles} diagramLabel={diagramLabel}
       context={touch.context} richContent={richContent} interactive={interactive}
       active={block.type === 'mermaid' || block.type === 'math' ? active : undefined}
