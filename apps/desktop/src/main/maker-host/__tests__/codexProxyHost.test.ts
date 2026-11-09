@@ -1961,7 +1961,7 @@ describe('chatBridgeCapabilitiesForRoute', () => {
           authStrategy: 'api-key-header',
         },
       },
-      models: { codex: [{ id: 'smart/model-cheap', name: 'Smart Cheap Model' }] },
+      models: { codex: [{ id: 'smart/model-cheap', name: 'Smart Cheap Model', efforts: ['low'] }] },
     } as never]);
     setCustomProviderKeyReader(() => 'smart-subagent-key');
     mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
@@ -2006,6 +2006,16 @@ describe('chatBridgeCapabilitiesForRoute', () => {
         reasoning: { effort: 'low' },
         input: [],
       });
+      // 身份记在整条出站链之后，单跑路由那一步还读不到。
+      let observed: unknown = {
+        model: 'smart/model-cheap',
+        reasoning: { effort: 'low' },
+        input: [],
+      };
+      for (const transform of transforms) {
+        const next = transform(observed, ctx);
+        if (next !== null && next !== undefined) observed = next;
+      }
       expect(host.getObservedCodexSubagentIdentity('thread-smart-child')).toEqual({
         model: 'smart/model-cheap',
         reasoningEffort: 'low',
@@ -2099,17 +2109,24 @@ describe('chatBridgeCapabilitiesForRoute', () => {
         reasoning: { effort: 'xhigh', summary: 'auto' },
         input: [],
       });
+      const bareCtx = {
+        ...ctx,
+        headers: { ...headers, 'thread-id': 'thread-smart-child-effort-bare' },
+      };
       expect(forcedRouteTransform({
         model: 'smart/model-cheap',
         input: [],
-      }, {
-        ...ctx,
-        headers: { ...headers, 'thread-id': 'thread-smart-child-effort-bare' },
-      })).toEqual({
+      }, bareCtx)).toEqual({
         model: 'smart/model-cheap',
         reasoning: { effort: 'xhigh' },
         input: [],
       });
+      // 该模型声明支持 xhigh，整条链收敛后观察值仍是发出去的 xhigh。
+      let bare: unknown = { model: 'smart/model-cheap', input: [] };
+      for (const transform of transforms) {
+        const next = transform(bare, bareCtx);
+        if (next !== null && next !== undefined) bare = next;
+      }
       expect(host.getObservedCodexSubagentIdentity('thread-smart-child-effort-bare')).toEqual({
         model: 'smart/model-cheap',
         reasoningEffort: 'xhigh',
@@ -2117,6 +2134,86 @@ describe('chatBridgeCapabilitiesForRoute', () => {
     } finally {
       host.unregister('session-smart-parent-effort');
       clearSessionProvider('session-smart-parent-effort');
+      setCustomProviderKeyReader(() => null);
+      setCustomProviders([]);
+    }
+  });
+
+  it('records the clamped effort, not the parent xhigh the model never runs', async () => {
+    const host = await freshCodexProxyHost();
+    const { setCustomProviders } = await import('../active-catalog.js');
+    const { setCustomProviderKeyReader } = await import('../provider-route.js');
+    const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+    setCustomProviders([{
+      id: 'smart-subagent-provider',
+      name: 'Smart Subagent Provider',
+      source: 'user',
+      agents: ['codex'],
+      auth: { method: 'apiKey' },
+      routing: {
+        codex: {
+          wireProtocol: 'openai-responses',
+          upstream: 'https://smart-subagent.invalid/v1',
+          authStrategy: 'api-key-header',
+        },
+      },
+      models: { codex: [{ id: 'smart/model-limited', name: 'Smart Limited Model', efforts: ['low', 'high'] }] },
+    } as never]);
+    setCustomProviderKeyReader(() => 'smart-subagent-key');
+    mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
+      url: 'http://127.0.0.1:43213',
+      dispose: vi.fn(async () => undefined),
+    });
+    await host.ensureCodexProxyReady();
+    host.setCodexProxyAuthInjection('oauth-bearer');
+    host.registerComposed(
+      'session-smart-parent-clamp',
+      'thread-smart-parent-clamp',
+      'PRODUCT_PROMPT',
+      {
+        smartSubagentRoutes: [{
+          providerId: 'smart-subagent-provider',
+          catalogModel: 'smart/model-limited',
+          reasoningEffort: 'xhigh',
+        }],
+      },
+    );
+    setSessionProvider('session-smart-parent-clamp', 'openai');
+
+    try {
+      const transforms = mockState.createAnthropicCompatProxy.mock.calls.at(-1)?.[0]?.transformRequest ?? [];
+      const ctx = {
+        reqId: 1,
+        method: 'POST',
+        url: '/responses',
+        headers: {
+          'thread-id': 'thread-smart-child-clamp',
+          'x-openai-subagent': 'collab_spawn',
+          'x-codex-parent-thread-id': 'thread-smart-parent-clamp',
+        },
+      };
+      // 路由步先盖上父任务的 xhigh；模型改写步才按能力收敛成 high。
+      // 卡片读的是链尾记下的身份，必须是真正发出去的 high。
+      let current: unknown = {
+        model: 'smart/model-limited',
+        reasoning: { effort: 'low', summary: 'auto' },
+        input: [],
+      };
+      for (const transform of transforms) {
+        const next = transform(current, ctx);
+        if (next !== null && next !== undefined) current = next;
+      }
+      expect(current).toMatchObject({
+        model: 'smart/model-limited',
+        reasoning: { effort: 'high', summary: 'auto' },
+      });
+      expect(host.getObservedCodexSubagentIdentity('thread-smart-child-clamp')).toEqual({
+        model: 'smart/model-limited',
+        reasoningEffort: 'high',
+      });
+    } finally {
+      host.unregister('session-smart-parent-clamp');
+      clearSessionProvider('session-smart-parent-clamp');
       setCustomProviderKeyReader(() => null);
       setCustomProviders([]);
     }
@@ -3102,14 +3199,14 @@ describe('codex proxy host', () => {
         // upstream 是函数形态(每请求现取,model-access 下发可运行期换 endpoint);
         // 断言其当前求值 = 网关 base + /v1
         upstream: expect.any(Function),
-        // [armed HTTP recovery strip(WS 错误后落回 HTTP 即激活对应 strip), encrypted activeStrip, image generation activeStrip, provider-aware Guardian reviewer, locked Subagent route, instructions 注入, locked Subagent exec guard, Gateway 原生 web_search, 跨来源压缩块兼容, xAI ModelInput activeStrip, responses item id activeStrip(#4738), responses item id length activeStrip(#4227), exec function adapter, strict gateway history 兼容, xAI ModelInput sanitize, DeepSeek V4 custom tool 兼容, xAI Responses 兼容, XD Gateway Grok 兼容, ByteDance Seed tool 兼容, MiniMax effort 兼容, provider model rewrite, provider 参数归一, routed-model armed HTTP recovery strip, raw reasoning activeStrip, 视觉桥(controller 未注入 → 短路透传), 工具 ID 校正, Responses 重复工具调用清理 activeStrip(#7906), stripNonAnthropicFields]
+        // [armed HTTP recovery strip(WS 错误后落回 HTTP 即激活对应 strip), encrypted activeStrip, image generation activeStrip, provider-aware Guardian reviewer, locked Subagent route, instructions 注入, locked Subagent exec guard, Gateway 原生 web_search, 跨来源压缩块兼容, xAI ModelInput activeStrip, responses item id activeStrip(#4738), responses item id length activeStrip(#4227), exec function adapter, strict gateway history 兼容, xAI ModelInput sanitize, DeepSeek V4 custom tool 兼容, xAI Responses 兼容, XD Gateway Grok 兼容, ByteDance Seed tool 兼容, MiniMax effort 兼容, provider model rewrite, provider 参数归一, routed-model armed HTTP recovery strip, raw reasoning activeStrip, 视觉桥(controller 未注入 → 短路透传), 工具 ID 校正, Responses 重复工具调用清理 activeStrip(#7906), stripNonAnthropicFields, 子代理身份观察]
         transformRequest: [
           expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function),
           expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function),
           expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function),
           expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function),
           expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function),
-          expect.any(Function), expect.any(Function), expect.any(Function), // frozen custom-provider effort
+          expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), // frozen custom-provider effort
           expect.any(Function), expect.any(Function), expect.any(Function),
         ],
         transformResponse: expect.any(Function),
@@ -3140,7 +3237,7 @@ describe('codex proxy host', () => {
     );
     expect(requestScopedTransforms).toHaveLength(2);
     expect(requestScopedTransforms[0]?.errorMode).toBe('reject-request');
-    const strip = mockState.createAnthropicCompatProxy.mock.calls[0][0].transformRequest.at(-2);
+    const strip = mockState.createAnthropicCompatProxy.mock.calls[0][0].transformRequest.at(-3);
     const body = { model: 'gpt-5', input: [] };
     strip(body, { url: '/responses' });
     expect(mockState.stripNonAnthropicFields).toHaveBeenCalledWith(body, { url: '/responses' });
@@ -7542,7 +7639,7 @@ describe('codex proxy host', () => {
     await host.ensureCodexProxyReady();
 
     const transforms = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0]?.transformRequest ?? [];
-    expect(transforms).toHaveLength(30); // ordinary transforms + dump + frozen custom-provider effort
+    expect(transforms).toHaveLength(31); // ordinary transforms + dump + frozen custom-provider effort
     const ctx = {
       method: 'POST',
       url: '/v1/responses',
