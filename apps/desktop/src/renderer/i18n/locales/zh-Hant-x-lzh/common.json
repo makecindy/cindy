@@ -3586,6 +3586,36 @@
           "invalid": "此設不能先覽，請察其設或重擇卷",
           "skipped": "已略；再納須重擇卷",
           "authorizationPending": "連線已增，請於供方之設中完成授權"
+        },
+        "local": {
+          "title": "自本機應用程式匯入",
+          "note": "讀取本機所存 API 設定，不改來源應用程式。",
+          "review": "審閱並匯入（{{count}}）",
+          "scanning": "正讀取所存設定…",
+          "empty": "未見所存 API 設定。",
+          "failed": "讀取未竟，請重試。",
+          "edit": "補全或編輯",
+          "editFailed": "請核網址、協定與金鑰，再試。",
+          "editNote": "金鑰留空則沿用已讀憑證；改網址或協定，須另填金鑰。",
+          "name": "顯示名稱",
+          "baseUrl": "基礎 URL",
+          "protocol": "API 協定",
+          "chooseProtocol": "請選擇協定",
+          "apiKey": "API 金鑰",
+          "keepKey": "留空則沿用已讀金鑰",
+          "missingUrl": "須填網址",
+          "status": {
+            "missing": "未見設定",
+            "readFailed": "讀取不成，請核權限或重試",
+            "invalid": "格式未識，請核驗或編輯設定",
+            "limit": "已逾讀取上限，此來源未讀全",
+            "unsupported": "此設定暫不可匯入",
+            "needsInput": "設定尚待補全",
+            "changed": "來源已變，請重新掃描",
+            "duplicate": "相同連線已存"
+          },
+          "rescan": "重新掃描",
+          "sourceDisabled": "來源應用程式中已關閉"
         }
       },
       "order": {

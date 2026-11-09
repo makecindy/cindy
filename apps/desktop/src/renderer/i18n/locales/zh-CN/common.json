@@ -3586,6 +3586,36 @@
           "invalid": "无法预览此配置，请检查配置或重新选择文件",
           "skipped": "已跳过；再次导入需重新选择文件",
           "authorizationPending": "连接已添加，请在供应商设置中完成授权"
+        },
+        "local": {
+          "title": "从本地应用导入",
+          "note": "读取这台电脑上已保存的 API 配置，不会修改来源应用。",
+          "review": "查看并导入（{{count}}）",
+          "scanning": "正在读取已保存的配置…",
+          "empty": "没有找到已保存的 API 配置。",
+          "failed": "读取未完成，请重试。",
+          "edit": "补全或编辑",
+          "editFailed": "请检查地址、协议和密钥后重试。",
+          "editNote": "密钥留空会保留已读取的凭据。更改地址或协议后，需填写新密钥。",
+          "name": "显示名称",
+          "baseUrl": "基础 URL",
+          "protocol": "接口协议",
+          "chooseProtocol": "请选择协议",
+          "apiKey": "API 密钥",
+          "keepKey": "留空保留已读取的密钥",
+          "missingUrl": "需要填写地址",
+          "status": {
+            "missing": "未找到配置",
+            "readFailed": "无法读取，请检查权限或重试",
+            "invalid": "格式无法识别，请检查或编辑配置",
+            "limit": "超过读取上限，本来源未完整读取",
+            "unsupported": "此配置暂不支持导入",
+            "needsInput": "需要补全配置",
+            "changed": "来源已变化，请重新扫描",
+            "duplicate": "已存在相同连接"
+          },
+          "rescan": "重新扫描",
+          "sourceDisabled": "在来源应用中已关闭"
         }
       },
       "order": {

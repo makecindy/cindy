@@ -3586,6 +3586,36 @@
           "invalid": "無法預覽此設定，請檢查設定或重新選擇檔案",
           "skipped": "已略過；再次匯入需重新選擇檔案",
           "authorizationPending": "連線已新增，請在供應商設定中完成授權"
+        },
+        "local": {
+          "title": "從本機應用程式匯入",
+          "note": "讀取這台電腦上已儲存的 API 設定，不會修改來源應用程式。",
+          "review": "檢視並匯入（{{count}}）",
+          "scanning": "正在讀取已儲存的設定…",
+          "empty": "找不到已儲存的 API 設定。",
+          "failed": "讀取未完成，請重試。",
+          "edit": "補齊或編輯",
+          "editFailed": "請檢查網址、協定與金鑰後重試。",
+          "editNote": "金鑰留空會保留已讀取的憑證。變更網址或協定後，需填寫新金鑰。",
+          "name": "顯示名稱",
+          "baseUrl": "基礎 URL",
+          "protocol": "API 協定",
+          "chooseProtocol": "請選擇協定",
+          "apiKey": "API 金鑰",
+          "keepKey": "留空保留已讀取的金鑰",
+          "missingUrl": "需要填寫網址",
+          "status": {
+            "missing": "找不到設定",
+            "readFailed": "無法讀取，請檢查權限或重試",
+            "invalid": "無法辨識格式，請檢查或編輯設定",
+            "limit": "超過讀取上限，未完整讀取此來源",
+            "unsupported": "此設定暫不支援匯入",
+            "needsInput": "需要補齊設定",
+            "changed": "來源已變更，請重新掃描",
+            "duplicate": "已存在相同連線"
+          },
+          "rescan": "重新掃描",
+          "sourceDisabled": "在來源應用程式中已關閉"
         }
       },
       "order": {

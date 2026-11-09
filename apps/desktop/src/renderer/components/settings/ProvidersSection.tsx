@@ -150,6 +150,7 @@ import {
 import { localCliDisplayName, type LocalCliDetection } from '../../../shared/localCliDetect';
 import { isBuiltinRefreshableProviderId } from '../../../shared/providerModelRefresh';
 import { SettingsPageHeader } from '@/components/ui/settings-rows';
+import { LocalProviderImportButton } from './LocalProviderImportButton';
 import { providerGroupDeviceCount } from '../../../shared/providerGroup';
 import { applyProviderOrder } from '../../../shared/providerOrder';
 import type { AgentKind, CustomProviderConfig, ProviderView } from '@cindy/model-providers';
@@ -3385,6 +3386,7 @@ export function ProvidersSection() {
                 key={`${dataOwnerId}:${ownerGeneration}`}
                 onImported={setProviderImportId}
               />
+              <LocalProviderImportButton key={`local:${dataOwnerId}:${ownerGeneration}`} onImported={setProviderImportId} />
             </div>
           </div>
 

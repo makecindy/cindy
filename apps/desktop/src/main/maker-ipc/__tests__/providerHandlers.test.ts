@@ -3,7 +3,7 @@ import { configureModelSettingsActions, manageAppModels } from '../../app-settin
 import Database from 'better-sqlite3';
 import { readFileSync } from 'node:fs';
 import ts from 'typescript';
-import { mkdtemp, writeFile, rm, truncate } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, rm, truncate } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
@@ -315,6 +315,81 @@ describe('provider file import IPC', () => {
     finish(join(tmpdir(), 'must-not-be-read.json'));
     await expect(pending).rejects.toThrow(/active account changed/);
     expect(deps.storeCustomProviderKey).not.toHaveBeenCalled();
+  });
+});
+
+describe('local API configuration import IPC', () => {
+  async function setup(source = { env: { ANTHROPIC_BASE_URL: 'https://relay.test/prefix', ANTHROPIC_API_KEY: 'FAKE-LOCAL-KEY' } }) {
+    mountDb();
+    importDirectory = await mkdtemp(join(tmpdir(), 'cindy-local-provider-ipc-'));
+    await mkdir(join(importDirectory, '.claude'));
+    const path = join(importDirectory, '.claude', 'settings.json');
+    await writeFile(path, JSON.stringify(source));
+    const keys = new Map<string, string>();
+    const deps = makeDeps({
+      localProviderSourceContext: () => ({ home: importDirectory!, platform: 'linux', env: {} }),
+      readCustomProviderKeyForMutation: vi.fn((id, agent) => keys.get(`${id}:${agent}`) ?? null),
+      storeCustomProviderKey: vi.fn((id, agent, key) => { keys.set(`${id}:${agent}`, key); return true; }),
+      removeCustomProviderKey: vi.fn((id, agent) => { keys.delete(`${id}:${agent}`); return { success: true }; }),
+    });
+    const harness = new IpcHarness(); registerProviderHandlers(harness, deps);
+    return { harness, deps, path, keys };
+  }
+  async function scan(harness: IpcHarness) {
+    return harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_LOCAL_SCAN) as Promise<import('../../../shared/localProviderImport.js').LocalProviderImportScan>;
+  }
+  it('scans fake source configs and saves through the ordinary provider CRUD and model discovery', async () => {
+    const { harness, deps } = await setup();
+    const result = await scan(harness);
+    expect(result.items).toHaveLength(1);
+    expect(JSON.stringify(result)).not.toContain('FAKE-LOCAL-KEY');
+    expect(deps.fetchModels).not.toHaveBeenCalled();
+    const item = result.items[0];
+    const preview = await harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_PREVIEW, item.importId) as ProviderImportPreview;
+    expect(preview.updateTargets).toEqual([]);
+    const saved = await harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_CONFIRM, item.importId);
+    expect(saved).toMatchObject({ ok: true, providerId: preview.providerId });
+    expect(deps.fetchModels).toHaveBeenCalledWith(expect.objectContaining({ agent: 'claude-code', apiKey: 'FAKE-LOCAL-KEY', redirect: 'error' }));
+    const stored = await getCustomProvider(preview.providerId);
+    expect(stored?.runtimes['claude-code']?.baseUrl).toBe('https://relay.test/prefix');
+    expect(stored?.runtimes.codex).toBeUndefined();
+    expect(deps.broadcastChanged).toHaveBeenCalled();
+    await expect(harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_CONFIRM, item.importId)).resolves.toEqual(saved);
+    expect(await listCustomProviders()).toHaveLength(1);
+  });
+  it('repeated scans/parallel confirmations do not create equivalent accounts twice', async () => {
+    const { harness } = await setup();
+    const a = (await scan(harness)).items[0], b = (await scan(harness)).items[0];
+    await harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_PREVIEW, a.importId);
+    await harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_PREVIEW, b.importId);
+    const [one, two] = await Promise.all([harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_CONFIRM, a.importId), harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_CONFIRM, b.importId)]);
+    expect(one).toMatchObject({ ok: true }); expect(two).toEqual(one);
+    expect(await listCustomProviders()).toHaveLength(1);
+    expect((await scan(harness)).items[0].issue).toBe('duplicate');
+  });
+  it('source key rotation requires a fresh scan instead of saving an unseen credential', async () => {
+    const { harness, path, deps } = await setup();
+    const item = (await scan(harness)).items[0];
+    await harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_PREVIEW, item.importId);
+    await writeFile(path, JSON.stringify({ env: { ANTHROPIC_BASE_URL: 'https://relay.test/prefix', ANTHROPIC_API_KEY: 'FAKE-ROTATED' } }));
+    await expect(harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_CONFIRM, item.importId)).rejects.toThrow(/PRECONDITION_FAILED/);
+    expect(deps.storeCustomProviderKey).not.toHaveBeenCalled();
+    expect(await listCustomProviders()).toHaveLength(0);
+  });
+  it('trusted local sender is required and paths cannot be supplied by renderer', async () => {
+    const { harness, deps } = await setup();
+    await expect(harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_LOCAL_SCAN, '/fake/path')).rejects.toThrow(/INVALID_PARAMS/);
+    vi.mocked(deps.assertTrustedSender!).mockImplementation(() => { throwIpcError('PERMISSION_DENIED', 'untrusted'); });
+    await expect(scan(harness)).rejects.toThrow(/PERMISSION_DENIED/);
+  });
+  it('keeps a saved connection if post-commit refresh fails, and retries remain idempotent', async () => {
+    const { harness, deps } = await setup();
+    vi.mocked(deps.broadcastChanged).mockImplementationOnce(() => { throw new Error('broadcast failed'); });
+    const item = (await scan(harness)).items[0];
+    await harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_PREVIEW, item.importId);
+    await expect(harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_CONFIRM, item.importId)).rejects.toThrow();
+    await expect(harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_CONFIRM, item.importId)).resolves.toMatchObject({ ok: true });
+    expect(await listCustomProviders()).toHaveLength(1);
   });
 });
 

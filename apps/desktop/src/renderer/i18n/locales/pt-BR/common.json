@@ -3676,6 +3676,36 @@
           "invalid": "Prévia indisponível; verifique a configuração ou selecione o arquivo novamente",
           "skipped": "Ignorado; selecione o arquivo novamente para importar esta entrada",
           "authorizationPending": "Conexão adicionada; conclua a autorização nas configurações do provedor"
+        },
+        "local": {
+          "title": "Importar de aplicativos locais",
+          "note": "Lê as configurações de API salvas neste computador sem alterar os aplicativos de origem.",
+          "review": "Revisar e importar ({{count}})",
+          "scanning": "Lendo configurações salvas…",
+          "empty": "Nenhuma configuração de API salva foi encontrada.",
+          "failed": "Não foi possível concluir a leitura. Tente novamente.",
+          "edit": "Completar ou editar",
+          "editFailed": "Confira a URL, o protocolo e a chave e tente novamente.",
+          "editNote": "Deixe a chave em branco para manter a credencial lida. Alterar a URL ou o protocolo exige uma nova chave.",
+          "name": "Nome de exibição",
+          "baseUrl": "URL base",
+          "protocol": "Protocolo da API",
+          "chooseProtocol": "Escolha um protocolo",
+          "apiKey": "Chave de API",
+          "keepKey": "Deixe em branco para manter a chave lida",
+          "missingUrl": "URL necessária",
+          "status": {
+            "missing": "Configuração não encontrada",
+            "readFailed": "Não foi possível ler; confira as permissões ou tente novamente",
+            "invalid": "Formato desconhecido; confira ou edite a configuração",
+            "limit": "Limite atingido; esta origem não foi lida por completo",
+            "unsupported": "Esta configuração ainda não pode ser importada",
+            "needsInput": "É necessário completar a configuração",
+            "changed": "A origem mudou; faça uma nova busca",
+            "duplicate": "Já existe uma conexão idêntica"
+          },
+          "rescan": "Buscar novamente",
+          "sourceDisabled": "Desativado no aplicativo de origem"
         }
       },
       "order": {
