@@ -79,6 +79,31 @@ describe("native credential session coordination", () => {
       "exchange",
     ]);
   });
+  // 回归：Host 已把锁屏/权限等固定 failure 放进认证结果；旧 ensure 全部误报为密码错误。
+  // 生产入口 ensure；最小输入 accepted:false + failure；unit，不访问真实锁屏。
+  it.each([
+    ["CREDENTIAL_UNLOCK_UNAVAILABLE", "CREDENTIAL_UNLOCK_UNAVAILABLE"],
+    ["CREDENTIAL_ACCESSIBILITY_REQUIRED", "CREDENTIAL_ACCESSIBILITY_REQUIRED"],
+    ["CREDENTIAL_CANCELLED", "CREDENTIAL_CANCELLED"],
+    [undefined, "CREDENTIAL_PASSWORD_REJECTED"],
+    ["private OS detail", "CREDENTIAL_PASSWORD_REJECTED"],
+  ])(
+    "preserves fixed host failure %s instead of inventing a password error",
+    async (failure, expected) => {
+      fixture.native.receive
+        .mockReset()
+        .mockResolvedValueOnce(JSON.stringify({ kind: "ready", saved: true }))
+        .mockResolvedValueOnce(
+          JSON.stringify({ kind: "authenticated", accepted: false, failure }),
+        );
+      const session = new RemoteDesktopCredentialSession();
+      await expect(
+        session.ensure("computer", invoke, "en", "light"),
+      ).rejects.toThrow(expected);
+      expect(session.matches("local")).toBe(false);
+      expect(fixture.native.password).toHaveBeenCalledTimes(1);
+    },
+  );
   it.each(["frame", "cancel", "close", "owner"])(
     "prepares the channel before the first-frame gate and handles %s",
     async (outcome) => {
