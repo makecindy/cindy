@@ -215,3 +215,17 @@ test('registry repair never unregisters an alias of the fixed application',async
  assert.deepEqual(removed,[]);assert.equal(result.ok,false);
  assert.match(result.results[0].reason,/Alias/);
 });
+
+test('registry repair retires managed ad-hoc copies and missing entries without touching foreign apps',async()=>{
+ const {reconcileRegistrations}=await import('../personal-build/app-registry.mjs');
+ const removed=[];
+ const result=reconcileRegistrations('/fixed.app',{
+  paths:['/state/old.bundle','/state/foreign.bundle','/external/ad-hoc.app','/missing.app','/state/running.bundle'],
+  canonical:copy=>{if(copy==='/missing.app')throw Object.assign(Error('missing'),{code:'ENOENT'});return copy;},
+  managed:copy=>copy.startsWith('/state/'),sameBundle:copy=>copy!=='/state/foreign.bundle',
+  isRunning:copy=>copy==='/state/running.bundle',verify:copy=>{if(copy!=='/fixed.app')throw Error('certificate differs');},
+  registry:{unregister:copy=>removed.push(copy),register:()=>{}}});
+ assert.deepEqual(removed,['/state/old.bundle','/missing.app']);
+ assert.equal(result.results.filter(r=>r.state==='retained').length,3);
+ assert.equal(result.ok,false);
+});

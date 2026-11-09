@@ -153,10 +153,12 @@ function start(c, release, { mock = false, beforeSpawn = () => {} } = {}) {
   verifyRelease(release);
   const isolated = mock || c.runtime.mode !== 'shared';
   if (isolated) {
-    // Run the candidate's actual process partitioner, not a profile-only approximation.
+    const needsCandidateGuard = mock || c.automatic.mock === true;
+    // Smoke requires the candidate's guard; normal recovery can inspect legacy releases
+    // with the same classifier bundled with this tool. Never use profile-only ownership.
     const preflight = spawnSync(c.runtime.node, ['--input-type=module','-e',
       'const m=await import(process.argv[1]); if(m.PERSONAL_SAFE_ISOLATED_START!==1)throw Error("Candidate lacks safe isolated startup; rebuild with the startup guard"); const root=process.argv[2]; m.assertNoRestartTargets(m.scanRestartProcessTable().filter(p=>m.isRepositoryDesktopDevProcess(p,[root])),root,[root]);',
-      pathToFileURL(path.join(release.directory,'scripts/restart-desktop-remote.mjs')).href, release.directory],
+      (needsCandidateGuard ? pathToFileURL(path.join(release.directory,'scripts/restart-desktop-remote.mjs')) : new URL('../restart-desktop-remote.mjs',import.meta.url)).href, release.directory],
       {encoding:'utf8',timeout:15000,maxBuffer:1024*1024});
     check(preflight.status === 0, preflight.stderr || 'Cannot verify isolated checkout is unused');
   }
@@ -669,14 +671,18 @@ export async function automaticCommand(command, options) {
     const app=c.runtime.personalApp, installed=read(app+'.personal-install.json'), id=installed.inputs?.bundleId;
     check(/^app\.cindy\.personal\.[a-f0-9]{16}$/.test(id),'Not a managed personal Bundle ID');
     check(treeIdentity(app)===installed.digest,'Installed app changed; inspect before registry repair');
+    const stateRoot=fs.realpathSync(c.runtime.stateDir), appParent=fs.realpathSync(path.dirname(app));
+    const retiredPrefix='.'+path.basename(app)+'.previous-';
     const result=reconcileRegistrations(app,{paths:registeredApps(id),
+      managed:copy=>copy.startsWith(stateRoot+path.sep) || (path.dirname(copy)===appParent && path.basename(copy).startsWith(retiredPrefix)),
       verify:copy=>verifyDeveloperSignature(copy,installed.signingIdentity),
       isRunning:copy=>{try{return assertFixedAppStopped(copy);}catch{return true;}},
       sameBundle:copy=>{
         const p=spawnSync('/usr/libexec/PlistBuddy',['-c','Print :CFBundleIdentifier',path.join(copy,'Contents/Info.plist')],{encoding:'utf8'});
         return p.status===0&&p.stdout.trim()===id;
       }});
-    result.remaining=registeredApps(id);
+    try { result.remaining=registeredApps(id); }
+    catch(error) { result.remaining=[];result.verificationError=error.message;result.ok=false; }
     result.ok=result.ok&&result.remaining.length===1&&result.remaining[0]===app;
     if(result.ok && installed.registrationPending) { delete installed.registrationPending; durableWrite(app+'.personal-install.json',installed); }
     console.log(JSON.stringify(result,null,2));if(!result.ok)process.exitCode=1;return;

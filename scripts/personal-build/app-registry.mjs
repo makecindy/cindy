@@ -2,7 +2,7 @@
 import {execFileSync} from 'node:child_process';
 import fs from 'node:fs';
 const tool='/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister';
-const execute=args=>execFileSync(tool,args,{encoding:'utf8',maxBuffer:64*1024*1024,timeout:15000,killSignal:'SIGKILL'});
+const execute=args=>execFileSync(tool,args,{encoding:'utf8',maxBuffer:64*1024*1024,timeout:args[0]==='-dump'?60000:15000,killSignal:'SIGKILL'});
 export function parseRegisteredApps(dump, bundleId) {
   const paths=[];
   for(const block of dump.split(/^-{10,}\s*$/m)) {
@@ -21,20 +21,30 @@ export function appRegistry(run=execute) {
   };
 }
 /** Explicit repair only: inspect every duplicate before removing its registration. Never delete
- * bundles, unregister a running copy, or touch another identifier/certificate. */
-export function reconcileRegistrations(app, {paths, verify, isRunning, sameBundle, registry=appRegistry(), canonical=fs.realpathSync}) {
+ * bundles or unregister a running copy. paths must come from the exact-ID registry query.
+ * Managed retired copies may have old/ad-hoc signatures: unregistering does not execute them. */
+export function reconcileRegistrations(app, {paths, verify, isRunning, sameBundle, managed=()=>false, registry=appRegistry(), canonical=fs.realpathSync}) {
   verify(app);
   const fixed=canonical(app);
   const results=[];
   for(const copy of paths) {
     if(copy===app)continue;
     try {
-      if(canonical(copy)===fixed)throw Error('Alias of the fixed installation; preserve registration');
-      if(!sameBundle(copy))throw Error('Different application identity');
       if(isRunning(copy))throw Error('Application is running');
-      verify(copy);registry.unregister(copy);results.push({path:copy,state:'unregistered'});
+      let resolved;
+      try { resolved=canonical(copy); }
+      catch(error) {
+        if(error.code!=='ENOENT')throw error;
+        registry.unregister(copy);results.push({path:copy,state:'unregistered',reason:'missing registered path'});continue;
+      }
+      if(resolved===fixed)throw Error('Alias of the fixed installation; preserve registration');
+      if(!sameBundle(copy))throw Error('Different application identity');
+      if(isRunning(resolved))throw Error('Application is running through another path');
+      if(!managed(resolved))verify(copy);
+      registry.unregister(copy);results.push({path:copy,state:'unregistered'});
     } catch(error) { results.push({path:copy,state:'retained',reason:error.message}); }
   }
-  registry.register(app);
-  return {results,ok:results.every(r=>r.state==='unregistered')};
+  let registrationError;
+  try { registry.register(app); } catch(error) { registrationError=error.message; }
+  return {results,registrationError,ok:!registrationError&&results.every(r=>r.state==='unregistered')};
 }

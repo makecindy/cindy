@@ -249,7 +249,13 @@ export function toolBundle(dest) {
     check(fs.lstatSync(path.join(here, name)).isFile(), 'Unexpected tool bundle entry');
     fs.copyFileSync(path.join(here, name), path.join(dest, 'personal-build', name));
   }
-  for (const file of ['personal-build.mjs', ...fs.readdirSync(here).map(n => `personal-build/${n}`)]) hashes[file] = createHash('sha256').update(fs.readFileSync(path.join(dest, file))).digest('hex');
+  // Keep the process classifier with the tool, so recovery can inspect older releases too.
+  const guards=['restart-desktop-remote.mjs','desktop-whoami.mjs','desktop-dev-verdict.mjs','shared/desktop-dev-region.mjs'];
+  for(const file of guards) {
+    const target=path.join(dest,file);fs.mkdirSync(path.dirname(target),{recursive:true});
+    fs.copyFileSync(path.join(path.dirname(cli),file),target);
+  }
+  for (const file of ['personal-build.mjs', ...guards, ...fs.readdirSync(here).map(n => `personal-build/${n}`)]) hashes[file] = createHash('sha256').update(fs.readFileSync(path.join(dest, file))).digest('hex');
   save(path.join(dest, 'bundle.json'), { version: 1, files: hashes }); return hashes;
 }
 
