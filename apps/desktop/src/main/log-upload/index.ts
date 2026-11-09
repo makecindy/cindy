@@ -180,7 +180,7 @@ function runnerDeps() {
     send: (target: LogUploadTarget, meta: LogUploadMeta, records: Parameters<typeof sendLogs>[3]) =>
       sendLogs({ fetchImpl: outboundFetch }, target, meta, records),
     buildMeta,
-    generateUploadCode: () => generateUploadCode((size) => crypto.randomBytes(size)),
+    generateUploadCode: () => generateUploadCode((size) => crypto.randomBytes(size), CURRENT_CINDY_REGION),
     markers: ensureMarkerStore(),
     now: () => Date.now(),
     log: {

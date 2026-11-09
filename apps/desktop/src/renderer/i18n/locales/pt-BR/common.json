@@ -891,6 +891,7 @@
         "pausedLocal": "Não está aceitando novas tarefas de outros computadores",
         "cooling": "Em espera",
         "coolingUntil": "Em espera · volta por volta de {{time}}",
+        "quotaExhausted": "Cota esgotada",
         "offline": "Offline",
         "unreachableHere": "Não é possível acessá-lo deste computador",
         "unavailable": {
@@ -7475,6 +7476,11 @@
         "installedExpand": "Mostrar todos os {{count}} plugins instalados",
         "installedCollapse": "Ocultar plugins instalados adicionais",
         "recommendedSection": "Recomendado",
+        "todayRecommendations": "Recomendações de hoje",
+        "marketSection": "Mercado de plugins",
+        "browseMarket": "Explorar o mercado de plugins",
+        "searching": "Pesquisando…",
+        "allLoaded": "Todos os {{count}} plugins exibidos",
         "updatesAvailable": "{{count}} atualizações de plugins disponíveis",
         "updateAll": "Atualizar todos",
         "ignoreRound": "Ignorar desta vez",
@@ -7504,7 +7510,15 @@
       },
       "market": {
         "publisherKind": {
-          "official": "Oficial"
+          "official": "Oficial",
+          "community": "Comunidade"
+        },
+        "publisherDescription": {
+          "official": "Publicado e mantido pela Cindy",
+          "community": "Publicado e mantido por desenvolvedores da comunidade",
+          "team": "Compartilhado pela sua organização com membros autorizados",
+          "custom": "De um mercado Git ou de uma pasta local que você adicionou",
+          "local": "Instalado de um arquivo local ou desenvolvido neste computador"
         },
         "scopeAria": "Filtrar origens de plugins",
         "scope": {
@@ -12629,6 +12643,12 @@
       "missingDir": "Pasta não encontrada"
     },
     "pendingQueue": {
+      "stopping": "Parando",
+      "queued": "Na fila",
+      "editingInComposer": "Editando na caixa de entrada abaixo…",
+      "moveUp": "Mover para antes",
+      "moveDown": "Mover para depois",
+      "cancelSend": "Cancelar envio",
       "regionAria": "Fila de mensagens pendentes",
       "listAria": "Mensagens na fila",
       "pausedFooter": "Tarefa interrompida, fila pausada",

@@ -399,8 +399,16 @@ test("client CI runs Linux checks and complete unit shards in parallel behind st
 	assert.match(gate, /^    if: \$\{\{ always\(\) \}\}$/m);
 	assert.match(gate, /^      - verify-checks$/m);
 	assert.match(gate, /^      - linux-unit-shards$/m);
+	assert.match(gate, /^      - host-regressions$/m);
 	assert.match(gate, /^          VERIFY_CHECKS_RESULT: \$\{\{ needs\.verify-checks\.result \}\}$/m);
 	assert.match(gate, /^          LINUX_UNIT_SHARDS_RESULT: \$\{\{ needs\.linux-unit-shards\.result \}\}$/m);
 	assert.match(gate, /^          test "\$VERIFY_CHECKS_RESULT" = "success"$/m);
 	assert.match(gate, /^          test "\$LINUX_UNIT_SHARDS_RESULT" = "success"$/m);
+	assert.match(gate, /^          HOST_REGRESSIONS_RESULT: \$\{\{ needs\.host-regressions\.result \}\}$/m);
+	assert.match(gate, /^      - host-changes$/m);
+	assert.match(gate, /^          test "\$HOST_CHANGES_RESULT" = "success"$/m);
+	assert.match(gate, /true:success\|false:skipped/);
+	const host = workflowJob(workflow, "host-regressions");
+	assert.match(host, /^    needs: host-changes$/m);
+	assert.match(host, /^    if: needs\.host-changes\.outputs\.required == 'true'$/m);
 });

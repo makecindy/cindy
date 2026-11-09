@@ -59,7 +59,7 @@ vi.mock('../GhostPluginPage', () => ({
   GhostPluginCard: ({ item, onManage }: { item: { name: string }; onManage(): void }) => (
     <button onClick={onManage}>{item.name}</button>
   ),
-  MarketPluginCard: () => null,
+  MarketPluginCard: ({ item }: { item: { name: string } }) => <output>{item.name}</output>,
 }));
 vi.mock('../GhostPluginDetailView', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../GhostPluginDetailView')>()),
@@ -165,6 +165,7 @@ const configurationResource = (state = 'configured', id = 'weather') => ({
   ],
 });
 beforeEach(() => {
+  vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
   vi.clearAllMocks();
   directoryMode.real = false;
   setDataOwnerGeneration('test-owner');
@@ -201,6 +202,30 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 describe('selected plugin host', () => {
+  // Unit, #9487: reconnect previously refreshed the snapshot but retained stale market pages.
+  // The same installed set with a changed market release must display the new card.
+  it('refreshes cached market cards after reconnect when installed versions are unchanged', async () => {
+    let marketName = 'Old market release';
+    const normal = invoke.getMockImplementation()!;
+    invoke.mockImplementation(async (device, channel, args) => args[0]?.actionId === 'management:snapshot'
+      ? { effects: [], result: { ...snapshot(device), market: { ...snapshot(device).market, items: [{
+        pluginId: `c${'p'.repeat(24)}`, ghostId: 'market-plugin', name: marketName, description: null,
+        author: null, scope: 'public', organizationId: null, defaultInstall: false,
+        releaseId: `c${'r'.repeat(24)}`, version: '1.0.0', publishedAt: '2026-11-01T00:00:00.000Z',
+        icon: null, installState: 'not-installed', enabled: null, sourceType: 'server', sourceMarketName: null,
+      }] } } } : normal(device, channel, args));
+    const view = (online: boolean) => <RemotePluginPage device={{ deviceId: 'computer-a', name: 'A' }} online={online} />;
+    const mounted = render(view(true));
+    await screen.findByText('computer-a');
+    fireEvent.click(screen.getByRole('tab', { name: /^settings.ghosts.page.marketSection/ }));
+    await screen.findByText('Old market release');
+    mounted.rerender(view(false));
+    marketName = 'New market release';
+    mounted.rerender(view(true));
+    await screen.findByText('New market release');
+    expect(screen.queryByText('Old market release')).toBeNull();
+  });
+
   it.each(['cancelled', 'changed'] as const)('presents the %s receipt with the existing notice', async outcome => {
     const normal = invoke.getMockImplementation()!;
     invoke.mockImplementation(async (device, channel, args) =>
@@ -753,6 +778,7 @@ describe('selected plugin host', () => {
       'ResizeObserver',
       class {
         observe() {}
+        unobserve() {}
         disconnect() {}
       },
     );

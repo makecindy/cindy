@@ -891,6 +891,7 @@
         "pausedLocal": "N'accepte pas de nouvelles tâches provenant d'autres ordinateurs",
         "cooling": "En refroidissement",
         "coolingUntil": "En refroidissement · de retour vers {{time}}",
+        "quotaExhausted": "Quota épuisé",
         "offline": "Hors ligne",
         "unreachableHere": "Injoignable depuis cet ordinateur",
         "unavailable": {
@@ -7475,6 +7476,11 @@
         "installedExpand": "Afficher les {{count}} plugins installés",
         "installedCollapse": "Masquer les autres plugins installés",
         "recommendedSection": "Recommandés",
+        "todayRecommendations": "La sélection du jour",
+        "marketSection": "Marché des plugins",
+        "browseMarket": "Parcourir le marché des plugins",
+        "searching": "Recherche…",
+        "allLoaded": "Les {{count}} plugins sont affichés",
         "updatesAvailable": "Mises à jour de plugins disponibles : {{count}}",
         "updateAll": "Tout mettre à jour",
         "ignoreRound": "Ignorer cette fois",
@@ -7504,7 +7510,15 @@
       },
       "market": {
         "publisherKind": {
-          "official": "Officiel"
+          "official": "Officiel",
+          "community": "Communauté"
+        },
+        "publisherDescription": {
+          "official": "Publié et maintenu par Cindy",
+          "community": "Publié et maintenu par des développeurs de la communauté",
+          "team": "Partagé par votre organisation avec les membres autorisés",
+          "custom": "Provenant d’un marché Git ou d’un dossier local que vous avez ajouté",
+          "local": "Installé depuis un fichier local ou développé sur cet ordinateur"
         },
         "scopeAria": "Filtrer les sources de plugins",
         "scope": {
@@ -12629,6 +12643,12 @@
       "missingDir": "Dossier introuvable"
     },
     "pendingQueue": {
+      "stopping": "Arrêt en cours",
+      "queued": "En file d'attente",
+      "editingInComposer": "Modification dans la zone de saisie ci-dessous…",
+      "moveUp": "Avancer",
+      "moveDown": "Reculer",
+      "cancelSend": "Annuler l'envoi",
       "regionAria": "File d'attente des messages",
       "listAria": "Messages en file d'attente",
       "pausedFooter": "Tâche arrêtée, file d'attente en pause",

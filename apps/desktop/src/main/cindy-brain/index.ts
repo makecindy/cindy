@@ -9178,7 +9178,9 @@ export function registerGhostIpc(): void {
       return () => { const settings = readDeviceLinkSettings(); return !isSharedTaskPeer(peer) && !isProviderSharePeer(peer) && settings.remoteControlEnabled && !settings.revokedControllers.includes(peer) && isDataOwnerBroadcastScopeCurrent(scope); };
     },
     market: {
-      snapshot: () => requireRemotePluginManagementServices().market.snapshot(),
+      snapshot: legacy => requireRemotePluginManagementServices().market.snapshot(legacy),
+      query: input => requireRemotePluginManagementServices().market.query!(input),
+      recommendations: () => requireRemotePluginManagementServices().market.recommendations!(),
       detail: id => requireRemotePluginManagementServices().market.detail(id),
       install: async (id, options, prompt, assertCurrent, assertScope) => {
         await requireRemotePluginManagementServices().market.install(id, options, prompt, assertCurrent, assertScope);
