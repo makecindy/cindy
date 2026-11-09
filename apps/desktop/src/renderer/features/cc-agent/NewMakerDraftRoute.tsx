@@ -165,7 +165,10 @@ import type { JSONContent } from '@tiptap/core';
 import { base64ToUint8Array } from '@/lib/fileTypeInference';
 import {
   calibrateDraftModel,
+  filterHealthyDraftProviders,
   pickDraftProviderForModel,
+  resolveDraftFastProviderId,
+  resolveDraftProviderForModel,
   resolveDraftSessionProviderId,
   type DraftModelCalibrationResult,
 } from '@/lib/draftModelCalibration';
@@ -1544,12 +1547,19 @@ export function NewMakerDraftRoute() {
       ? recallAgentDeviceSelection(effectiveAgentDeviceId, capabilityAgentKind)
       : null;
     const wantedModel = remembered?.model || chatPrefs.model;
+    // 目标目录里「清单发现失败」的来源(unauthorized / regionBlocked 这类确定性失败)
+    // 同样不能当默认值:首条消息必然失败。本机自动路径已经剔掉这类来源,目标目录这条路
+    // 同一口径 —— 用户为这个目标记下的来源保留,全失败时退回完整候选。
+    const healthyCatalogProviders = filterHealthyDraftProviders(
+      agentCatalogProviders,
+      remembered?.providerId ?? null,
+    );
     // 目标目录里这个型号**能不能路由**:目录里有这个型号 ≠ 能路由 —— 来源可能没连上、
     // 被停用、runtime 被关、或该型号条目被停用。只看「有没有」会让草稿停在一个路由不出去
     // 的型号上:选择器里一行都命中不了,Send 也放行不了,而那份目录里明明有能用的型号
     // (Codex review #9369)。
     const wantedSources = chatEligibleSourcesForModel(
-      agentCatalogProviders,
+      healthyCatalogProviders,
       wantedModel,
       capabilityAgentKind,
     );
@@ -1563,7 +1573,7 @@ export function NewMakerDraftRoute() {
       };
     }
     const picked = calibrateDraftModel({
-      providers: agentCatalogProviders,
+      providers: healthyCatalogProviders,
       // 远端目录已是可选清单(remoteInvocationModels 已按开放模型收窄),本机可见性偏好不适用。
       agent: capabilityAgentKind,
       model: wantedModel,
@@ -1576,7 +1586,7 @@ export function NewMakerDraftRoute() {
     });
     // 目标目录里没有可用模型(空 / 全不可用)→ null,让调用方退回本机默认。
     return chatEligibleSourcesForModel(
-      agentCatalogProviders,
+      healthyCatalogProviders,
       picked.model,
       capabilityAgentKind,
     ).length > 0 ? picked : null;
@@ -2139,54 +2149,6 @@ export function NewMakerDraftRoute() {
     ],
   );
 
-  // Fast 可用判定:本地 + device-link 统一走 resolveFastSupported(共享 per-provider 逻辑,
-  // 控制端不另写远程判断;旧被控端回退拍平 caps 见 helper)。device-link 的来源/模型取被控端镜像
-  // (dlSel live > deviceLinkInitial seed),本地取**校准后的生效来源** —— 即会话实际会路由
-  // 到的那个来源。
-  const supportsFastMode = useMemo(() => {
-    // 本地不能用 chatPrefs.providerId:它常是 null,而 fast 是 per-provider 能力。默认来源
-    // 被隐藏 / SSH 排除、模型由另一个来源提供时,这里会去查那个被排除的来源 —— 要么藏掉本
-    // 该有的 Fast 开关,要么把 Fast 开在不支持它的来源上。effort / fast 记忆 / 写回都已按
-    // effectiveSourceId 推导,只剩这处没跟上(PR #548 review)。
-    const providerId = usesDeviceCatalog
-      ? (dlSel?.providerId ?? deviceLinkInitial?.providerId ?? null)
-      : effectiveSourceId;
-    // 本地取**校准后**的模型:fast 能力必须按最终提交的那个模型判定。
-    const modelId = usesDeviceCatalog
-      ? (dlSel?.model ?? deviceLinkInitial?.model ?? chatPrefs.model)
-      : calibratedDraftModel;
-    return resolveFastSupported({
-      deviceId: catalogDeviceId,
-      deviceProviders,
-      localProviders: draftLocalProviders,
-      capabilities,
-      providerId,
-      modelId,
-      agentKind: capabilityAgentKind,
-    });
-  }, [
-    usesDeviceCatalog,
-    dlSel,
-    deviceLinkInitial,
-    effectiveSourceId,
-    chatPrefs.model,
-    calibratedDraftModel,
-    catalogDeviceId,
-    deviceProviders,
-    draftLocalProviders,
-    capabilities,
-    capabilityAgentKind,
-  ]);
-  // device-link:fast 取镜像值(deviceLinkInitial.fastMode,seed 时已按被控端拍平能力校准),但再叠
-  // 一道 per-provider 的 supportsFastMode gate —— 让 per-provider 判定对"显示+发送"都权威,堵住 seed
-  // 拍平值在未来分叉下泄漏(seed 函数 deviceLinkDraftDefaults 保持纯/不依赖 ProviderView)。本地走原逻辑。
-  const effectiveFastMode = usesDeviceCatalog
-    ? supportsFastMode
-      ? (deviceLinkInitial?.fastMode ?? false)
-      : false
-    : supportsFastMode
-      ? sshCodexDraftHostId ? (sshDraftSelection?.fastMode ?? false) : resolveDraftFast(calibratedDraftModel)
-      : false;
   // 远程开关仅属于这台设备的当前引擎，不读写控制端的本机偏好。
   const remotePlanKey = `${effectiveDeviceLinkDeviceId ?? ''}:${capabilityAgentKind}`;
   const [remoteDraftPlan, setRemoteDraftPlan] = useState<{ key: string; enabled: boolean } | null>(null);
@@ -2321,7 +2283,16 @@ export function NewMakerDraftRoute() {
   // 防止控制端暂时缺少目录时把账号 A 变成默认账号 B。
   const chatInitialProviderId = useMemo<string | null>(() => {
     if (!usesDeviceCatalog) return localProviderIdForDraft;
-    return deviceLinkInitial?.providerId || effectiveSourceIdForModel(
+    // 播种来源只有在**最终型号**上确实可路由时才保留:播种型号不可路由、被换成目录
+    // 里的别的型号之后,那个来源可能根本不提供新型号 —— 显式带上它,发送侧会对着一个
+    // 路由不出该型号的来源建任务,首条消息必然失败(Codex review #9369)。
+    const seedProviderId = resolveDraftProviderForModel(
+      deviceLinkInitial?.providerId,
+      draftInitialModel,
+      agentCatalogProviders,
+      capabilityAgentKind,
+    );
+    return seedProviderId || effectiveSourceIdForModel(
       agentCatalogProviders,
       draftInitialProviderId,
       draftInitialModel,
@@ -2336,6 +2307,61 @@ export function NewMakerDraftRoute() {
     draftInitialModel,
     capabilityAgentKind,
   ]);
+
+  // Fast 可用判定:本地 + device-link 统一走 resolveFastSupported(共享 per-provider 逻辑,
+  // 控制端不另写远程判断;旧被控端回退拍平 caps 见 helper)。判定按**最终**的
+  // (型号, 来源)来 —— Fast 是 per-provider 能力,同一个型号 id 在不同来源下结论可能相反;
+  // 播种型号不可路由而被换成目录里的别的型号后,按播种那一代算出来的结论就是错的
+  // (把目标上有的 Fast 藏掉,或把别家的 true 带过来)(Codex review #9369)。
+  const supportsFastMode = useMemo(() => {
+    // 本地不能用 chatPrefs.providerId:它常是 null,而 fast 是 per-provider 能力。默认来源
+    // 被隐藏 / SSH 排除、模型由另一个来源提供时,这里会去查那个被排除的来源 —— 要么藏掉本
+    // 该有的 Fast 开关,要么把 Fast 开在不支持它的来源上。effort / fast 记忆 / 写回都已按
+    // effectiveSourceId 推导,只剩这处没跟上(PR #548 review)。
+    const providerId = usesDeviceCatalog
+      ? resolveDraftFastProviderId(
+          dlSel?.providerId,
+          draftInitialModel,
+          agentCatalogProviders,
+          capabilityAgentKind,
+          draftInitialProviderId,
+        )
+      : effectiveSourceId;
+    // 本地取**校准后**的模型:fast 能力必须按最终提交的那个模型判定。
+    const modelId = usesDeviceCatalog ? draftInitialModel : calibratedDraftModel;
+    return resolveFastSupported({
+      deviceId: catalogDeviceId,
+      deviceProviders,
+      localProviders: draftLocalProviders,
+      capabilities,
+      providerId,
+      modelId,
+      agentKind: capabilityAgentKind,
+    });
+  }, [
+    usesDeviceCatalog,
+    dlSel,
+    agentCatalogProviders,
+    draftInitialModel,
+    draftInitialProviderId,
+    effectiveSourceId,
+    calibratedDraftModel,
+    catalogDeviceId,
+    deviceProviders,
+    draftLocalProviders,
+    capabilities,
+    capabilityAgentKind,
+  ]);
+  // device-link:fast 取镜像值(deviceLinkInitial.fastMode,seed 时已按被控端拍平能力校准),但再叠
+  // 一道 per-provider 的 supportsFastMode gate —— 让 per-provider 判定对"显示+发送"都权威,堵住 seed
+  // 拍平值在未来分叉下泄漏(seed 函数 deviceLinkDraftDefaults 保持纯/不依赖 ProviderView)。本地走原逻辑。
+  const effectiveFastMode = usesDeviceCatalog
+    ? supportsFastMode
+      ? (deviceLinkInitial?.fastMode ?? false)
+      : false
+    : supportsFastMode
+      ? sshCodexDraftHostId ? (sshDraftSelection?.fastMode ?? false) : resolveDraftFast(calibratedDraftModel)
+      : false;
 
   // ─── 未发送任务(见 provisionalDraftTask.ts):开始输入就先在本机建出任务并预热 Agent,
   // 清空输入就删掉,发送时直接接着用。只覆盖本机普通项目 / 对话草稿。

@@ -12,6 +12,7 @@
  */
 
 import {
+  chatEligibleSourcesForModel,
   connectedProvidersForAgent,
   isCindyAutoModelId,
   effectiveSourceIdForModel,
@@ -166,6 +167,72 @@ export function pickDraftProviderForModel(
   // 订阅优先:用户已经付过钱的额度先用,网关(折扣路由)排后面。
   const subscription = sources.find((provider) => provider.access?.kind === 'subscription');
   return subscription?.id ?? sources[0]?.id ?? null;
+}
+
+/**
+ * 某个来源在**最终型号**上还能不能路由;不能就返回 null。
+ *
+ * 播种来源(以及实时选择里的来源)只有在最终型号上确实可路由时才保留:播种型号
+ * 不可路由、被换成目标目录里的别的型号之后,那个来源可能根本不提供新型号。显式
+ * 带上它,发送侧(resolveDeviceLinkSubmission 会保留显式来源)就会对着一个路由不出
+ * 该型号的来源建任务,首条消息必然失败。
+ *
+ * 口径与发送侧一致:已连接 / 未停用 / runtime 可用 / 该型号条目没停用 / 是聊天模型。
+ */
+export function resolveDraftProviderForModel(
+  providerId: string | null | undefined,
+  model: string | null | undefined,
+  providers: readonly ProviderView[],
+  agent: AgentKind,
+): string | null {
+  if (!providerId || !model) return null;
+  const eligible = chatEligibleSourcesForModel([...providers], model, agent);
+  return eligible.some((provider) => provider.id === providerId) ? providerId : null;
+}
+
+/**
+ * 目标目录里「清单发现失败」的来源要剔掉,再谈默认:unauthorized / regionBlocked
+ * 这类确定性失败下,把从没选过模型的用户自动落到这个来源,首条消息必然失败。
+ *
+ * 失败时我们刻意保留上次成功的清单(设置页也已改口径),但那份清单只适合「用户自己
+ * 点进去选」,不适合当成默认值送人 —— 与本机自动路径同一口径。
+ *
+ * 两种例外:
+ *   · 用户为这个目标记下的来源就是它 —— 他选的就该生效;
+ *   · 全部来源都在失败态 —— 那时没有更好的选择,给个陈旧清单也好过一个都挑不出来。
+ */
+export function filterHealthyDraftProviders(
+  providers: readonly ProviderView[],
+  pinnedProviderId?: string | null,
+): ProviderView[] {
+  const kept = providers.filter(
+    (provider) => !provider.modelDiscoveryFailure || provider.id === pinnedProviderId,
+  );
+  return kept.length > 0 ? [...kept] : [...providers];
+}
+
+/**
+ * Fast 能力判定用的来源:必须落在**最终那一对**上。
+ *
+ * Fast 是 per-provider 能力 —— 同一个型号 id,不同来源下结论可能相反。播种来源
+ * (dlSel / deviceLinkInitial)只有在它确实提供**最终型号**时才能拿去判定;播种型号
+ * 被换成目标目录里别的型号之后,按播种那一代算出来的结论是错的:目标上有的 Fast 被
+ * 藏掉,或者别家的 true 被带到一个不支持它的来源上。
+ *
+ * 播种来源作数不了时退回最终算出来的那家(draftInitialProviderId)。
+ */
+export function resolveDraftFastProviderId(
+  seedProviderId: string | null | undefined,
+  model: string | null | undefined,
+  providers: readonly ProviderView[],
+  agent: AgentKind,
+  fallbackProviderId: string | null | undefined,
+): string | null {
+  return (
+    resolveDraftProviderForModel(seedProviderId, model, providers, agent) ??
+    fallbackProviderId ??
+    null
+  );
 }
 
 /**
