@@ -155,7 +155,12 @@
         "details": "Mesajınızı tekrar gönderin. Hâlâ başarısız olursa günlükleri kontrol edin ve sorunu bildirin."
       }
     },
-    "runtimeFailureSetupHint": "Modeli veya ayarları değiştirmek için bu yol arkadaşının çalıştığı bilgisayarı kullanın."
+    "runtimeFailureSetupHint": "Modeli veya ayarları değiştirmek için bu yol arkadaşının çalıştığı bilgisayarı kullanın.",
+    "capability": {
+      "GROUP_AUTHORIZATION_REQUIRED": "{{name}} bu aracı çalıştıramadı: grup yetkilendirmesinin süresi dolmuş veya bu eyleme izin vermiyor. Takım arkadaşının sahibi bu grupta isteği tekrar gönderebilir.",
+      "GROUP_AUTHORIZATION_UNAVAILABLE": "{{name}} için grup yetkilendirmesi doğrulanamadı, bu nedenle araç çalıştırılamadı. Bağlantı düzeldikten sonra tekrar deneyin.",
+      "ATTACHMENTS_UNAVAILABLE": "İndirme hatası veya ek boyutu sınırı nedeniyle bazı ekler {{name}} kullanıcısına teslim edilemedi. Bu istek için gerekli ekleri tekrar gönderin."
+    }
   },
   "plan": {
     "intro_one": "Bu {{count}} adım sürecek. İşte kimin yapacağı:",
@@ -186,7 +191,21 @@
     "awaitingStart": "Sizi bekliyor",
     "progressRunning": "Çalışıyor {{current}} / {{total}}",
     "progressDone": "Bitti {{done}} / {{total}}",
-    "allDone": "Tümü bitti"
+    "allDone": "Tümü bitti",
+    "stepQueued": "Başlamayı Bekliyor",
+    "stepExecuting": "Çalışıyor",
+    "stepSkipped": "Atlandı",
+    "skippingTurn": "Atlanıyor…",
+    "queueWaiting": "Devam etmeniz bekleniyor",
+    "skipTurnLabel": "{{name}} Atla",
+    "stepSpoken": "Tamamlandı",
+    "allTurns_one": "Tüm {{count}} takım arkadaşı",
+    "allTurns_other": "Tüm {{count}} takım arkadaşı",
+    "foldTurns": "Daha az göster",
+    "talkTitle": "Herkesin sırayla konuşmasını dinleyin",
+    "talkPending": "Başlamadı",
+    "skipTurn": "Atla",
+    "queueEnded": "Tur bitti"
   },
   "speaking": {
     "queued": "Kuyrukta",
@@ -304,7 +323,8 @@
     "lifecycleUnavailable": "Geçerli sunucu veya bilgisayar henüz bu eylemi desteklemiyor.",
     "groupDissolved": "Bu grup feshedildi. Mevcut geçmişi yine de okuyabilirsiniz.",
     "lastOwner": "Ayrılmadan önce sahipliği devredin veya bu grubu feshedin.",
-    "allBotsMentionDisabled": "Grup sahibi @tüm yol arkadaşlarını etkinleştirmedi."
+    "allBotsMentionDisabled": "Grup sahibi @tüm yol arkadaşlarını etkinleştirmedi.",
+    "turnAlreadyStarted": "Bu takım arkadaşı zaten başladı ve atlanamaz"
   },
   "followUp": {
     "next": "Plan · Sonraki adım",
@@ -561,7 +581,8 @@
     "saveFailed": "Kaydedilemedi. Tekrar deneyin.",
     "authorizeTitle": "Bu grubun {{name}} araçlarını ve bilgilerini kullanmasına izin verilsin mi?",
     "toolsHint": "Üyeler bu yol arkadaşının mevcut araçlarını ve özel bilgilerini kullanabilir. Sonuçlar herkes tarafından görülebilir. Mevcut onay kuralları yine de geçerlidir. Erişimi iptal etmek aktif istekleri durdurur ancak tamamlanan eylemleri geri alamaz.",
-    "yourTeammate": "Yol arkadaşınız"
+    "yourTeammate": "Yol arkadaşınız",
+    "companionOf": "{{name}} adlı kullanıcının arkadaşı"
   },
   "invitation": {
     "join": "Gruba katıl",

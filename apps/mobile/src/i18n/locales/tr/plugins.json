@@ -158,7 +158,10 @@
     "version": "Sürüm",
     "showAll": "Tümünü göster",
     "showLess": "Daha az göster",
-    "identifier": "Tanımlayıcı"
+    "identifier": "Tanımlayıcı",
+    "readme": "Hakkında",
+    "readmeLoadFailed": "Tanıtım yüklenemedi. Tekrar deneyin.",
+    "readmeUnavailable": "Tanıtım bilgisi bulunmuyor."
   },
   "demo": {
     "hint": "Demo verisi · Gerçek bir yapılandırma değiştirilmez"
@@ -293,7 +296,9 @@
       "routineEvents": "Rutin Olaylar",
       "mcpUi": "Diyaloglarda etkileşimli sayfalar görüntüleyebilir",
       "mcpUiDomains": "Sayfaların bağlanabileceği etki alanları: {{domains}}",
-      "uiPageAccess": "Sayfalar: {{pages}}\nSayfaların bağlanabileceği etki alanları: {{domains}}\nSayfaların çağırabileceği araçlar: {{tools}}"
+      "uiPageAccess": "Sayfalar: {{pages}}\nSayfaların bağlanabileceği etki alanları: {{domains}}\nSayfaların çağırabileceği araçlar: {{tools}}",
+      "liveScreen": "Cihaz ekranlarını telefonunuzda görüntüleyin ve kontrol edin",
+      "liveScreenDetail": "Uzak masaüstü üzerinden telefonunuz, sağladığı cihaz ekranlarını (örneğin simülatörler) gösterebilir ve bunlara dokunma, düğme ve metin gönderebilir. Yalnızca telefonunuzdan açtığınızda bağlanır ve bu bilgisayarda başka hiçbir şey göstermez."
     },
     "releaseChanged": "Kullanılabilir sürüm değişti. Yüklemeden önce yenilenen sürümü inceleyin.",
     "settingsUnavailable": "Eklenti ayarları yüklenemedi. Tekrar denemek için ayarları yeniden yükleyin.",

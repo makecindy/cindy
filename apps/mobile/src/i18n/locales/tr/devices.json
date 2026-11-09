@@ -703,7 +703,13 @@
       "running": "Çalışıyor",
       "done": "Tamamlandı",
       "unread": "Okunmamış"
-    }
+    },
+    "viewMr": "MR'yi Görüntüle",
+    "viewPrMr": "PR'yi Görüntüle",
+    "mrCount_one": "{{count}} MR",
+    "mrCount_other": "{{count}} MR",
+    "prMrCount_one": "{{count}} PR",
+    "prMrCount_other": "{{count}} PR"
   },
   "companionProfile": {
     "avatar": "Avatar",

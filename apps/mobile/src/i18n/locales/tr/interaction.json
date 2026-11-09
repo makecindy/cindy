@@ -27,7 +27,9 @@
       "description": "Tam erişim, çalışma alanı korumalı alanını (sandbox) devre dışı bırakır ve rutin onayları atlar. {{appName}}, sormadan çalışma alanı dışındaki dosyaları değiştirebilir ve ağ komutları çalıştırabilir; yerleşik yüksek riskli işlemler yine de onay gerektirecektir.",
       "confirm": "Tam erişimi etkinleştir",
       "cancel": "Mevcut izinleri koru"
-    }
+    },
+    "mcpComplete": "Tamamlandı",
+    "mcpCancel": "İptal"
   },
   "planMode": {
     "label": "Plan modu",
@@ -98,7 +100,14 @@
     "planFeedbackPlaceholder": "Claude'a ne yapması gerektiğini söyleyin",
     "planFeedbackRequired": "Göndermeden önce geri bildirim girin.",
     "planFeedbackSubmit": "Plan geri bildirimini gönder",
-    "planFeedbackAccessibility": "Planı değiştirmek için geri bildirim verin"
+    "planFeedbackAccessibility": "Planı değiştirmek için geri bildirim verin",
+    "validation": {
+      "required": "Bu zorunlu alanı doldurun.",
+      "choice": "Listelenen seçeneklerden birini belirleyin.",
+      "tooShort": "En az {{count}} karakter girin.",
+      "tooLong": "En fazla {{count}} karakter girin."
+    },
+    "askRestrictedMetaCaption": "{{options}} · {{mode}}"
   },
   "kinds": {
     "permission": {
@@ -396,7 +405,9 @@
       "titleFileRead": "Dosyaların okunmasına izin verilsin mi?",
       "titleFileWrite": "Dosyaların değiştirilmesine izin verilsin mi?",
       "titleBrowser": "Bu tarayıcı adımına izin verilsin mi?",
-      "titlePlugin": "{{plugin}} eklentisine izin verilsin mi?"
+      "titlePlugin": "{{plugin}} eklentisine izin verilsin mi?",
+      "titleStdin": "Bu terminale giriş izni verilsin mi?",
+      "titleMcpUrl": "{{server}} üzerinden gelen isteği tamamla"
     },
     "ask": {
       "progress": "Soru {{current}} / {{total}}",

@@ -24,7 +24,8 @@
       "unsupported": "Bu bilgisayarın sürümü PR bağlantılarını yönetmeyi desteklemiyor",
       "failed": "PR bağlantıları güncellenemedi"
     },
-    "moveUp": "Yukarı taşı"
+    "moveUp": "Yukarı taşı",
+    "urlPlaceholder": "GitHub PR veya GitLab MR URL'si"
   },
   "paneResize": {
     "label": "Sütun genişliği",
@@ -72,7 +73,11 @@
     "text": "Otomatik bir çalışma başarısız oldu.",
     "precheck": "Otomatik kontroller geçici olarak engellendi.",
     "rateLimited": "Otomatik kontroller bir istek hızı sınırı nedeniyle geçici olarak engellendi.",
-    "dismissTitle": "Geçmiş arıza bildirimini kapat"
+    "dismissTitle": "Geçmiş arıza bildirimini kapat",
+    "pluginMissing": "Otomatik kontroller engellendi: {{name}} eklentisi yüklü değil. Bilgisayarınıza yüklendiğinde devam eder.",
+    "pluginMissingUnnamed": "Otomatik kontroller engellendi: gerekli bir eklenti yüklü değil. Bilgisayarınıza yüklendiğinde devam eder.",
+    "pluginDisabled": "Otomatik kontroller engellendi: {{name}} eklentisi devre dışı. Bilgisayarınızda etkinleştirildiğinde devam eder.",
+    "pluginDisabledUnnamed": "Otomatik kontroller engellendi: gerekli bir eklenti devre dışı. Bilgisayarınızda etkinleştirildiğinde devam eder."
   },
   "common": {
     "modelHiddenReselect": "{{model}} kapalı. Göndermeden önce etkinleştirilmiş bir model seçin.",
@@ -105,7 +110,8 @@
     "pluginsChooseDevice": "Bir Cihaz Seçin",
     "pluginsLoading": "Eklentiler yükleniyor…",
     "pluginsEmpty": "Yüklü Eklenti Yok",
-    "pluginsReload": "Eklentileri Yeniden Yükle"
+    "pluginsReload": "Eklentileri Yeniden Yükle",
+    "photosAndVideos": "Fotoğraflar ve videolar"
   },
   "presentation": {
     "collaboration": {
@@ -239,7 +245,25 @@
       },
       "context": {
         "title": "Bağlam kullanımı",
-        "unavailable": "Bağlam verisi yok"
+        "unavailable": "Bağlam verisi yok",
+        "estimate": {
+          "title": "Metin tahminleri",
+          "delivery": "Cevap iletimi",
+          "host": "Cindy yönergeleri",
+          "plugins": "Eklenti kataloğu",
+          "memoryRules": "Bellek kuralları",
+          "memoryIndex": "Bellek dizini",
+          "profile": "Takım arkadaşı profili",
+          "user": "Kullanıcı yönergeleri",
+          "directories": "Ek dizinler",
+          "native": "Pi yönergeleri",
+          "skills": "Beceri kataloğu",
+          "project": "Proje yönergeleri",
+          "tools": "Araç tanımları",
+          "messages": "Konuşma metni",
+          "other": "Diğer yönergeler",
+          "note": "Model tokenlaştırmasından değil, mevcut metinden tahmin edilmiştir. Görselleri ve sağlayıcı biçimlendirmesini hariç tutar; yerel toplama tam olarak eşitlenmez."
+        }
       },
       "rateLimit": {
         "plan": "Plan",
@@ -574,7 +598,8 @@
     "renameSubmit": "Kaydet",
     "confirm": "Onayla",
     "cancelRename": "İptal",
-    "backToMenu": "Menüye geri dön"
+    "backToMenu": "Menüye geri dön",
+    "openSection": "Aç"
   },
   "messageMenu": {
     "addToChat": "Sohbete ekle",
@@ -606,7 +631,10 @@
     "toolUseLoopDetectedRotationWithCount": "{{count}} kez dönüşümlü araç döngüsü algılandı",
     "codexThreadLost": "Codex iş parçacığı kayboldu",
     "remoteCompactEncryptedContent": "Uzak şifreli içerik sıkıştırıldı",
-    "encryptedContentInvalid": "Şifreli içerik geçersiz"
+    "encryptedContentInvalid": "Şifreli içerik geçersiz",
+    "outputLimitReasoning": "Akıl yürütme bu isteğin çıktı bütçesinin çoğunu tüketti, bu nedenle yanıt eksik olabilir. Devam etmeden önce akıl yürütme çabasını azaltın veya konuşma geçmişini sıkıştırın.",
+    "outputLimitUsage": "Bu model isteğinde {{reasoningTokens}} akıl yürütme tokenı dahil olmak üzere {{outputTokens}} çıktı tokenı kullanıldı.",
+    "outputLimitOutputUsage": "Bu model isteğinde {{outputTokens}} çıktı tokenı kullanıldı."
   },
   "row": {
     "markRead": "Okundu olarak işaretle",
