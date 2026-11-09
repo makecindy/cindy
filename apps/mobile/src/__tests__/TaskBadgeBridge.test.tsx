@@ -12,6 +12,7 @@ const h = vi.hoisted(() => ({
   preferenceListeners: new Set<() => void>(),
   stateListeners: new Set<(state: string) => void>(),
   enabled: true,
+  snapshotReady: false,
   phases: new Map([['waiting', 'needs-interaction'], ['done', 'completed'], ['running', 'running']]),
 }));
 vi.mock('react-native', () => ({ Platform: { OS: 'android' }, AppState: {
@@ -35,6 +36,7 @@ vi.mock('@/session/remoteSessionStore', () => ({ remoteSessionStore: {
   getHomeSessions: () => [...h.phases.keys()].map(id => ({ id, userId: '', title: id,
     status: 'active', deviceLinkDeviceId: 'computer' })),
   getSessionSnapshotDeviceIds: () => ['computer'],
+  isDeviceHomeSnapshotReady: () => h.snapshotReady,
   getSessionLiveActivity: (id: string) => ({ phase: h.phases.get(id), attention: true }),
   subscribeHomeStatus: (fn: () => void) => { h.storeListeners.add(fn); return () => h.storeListeners.delete(fn); },
 } }));
@@ -45,6 +47,8 @@ it('updates Android with the shared count and reacts to read, preferences and fo
   const root = createRoot(document.createElement('div'));
   try {
     await act(async () => root.render(createElement(TaskBadgeBridge)));
+    expect(h.badge).not.toHaveBeenCalled();
+    await act(async () => { h.snapshotReady = true; h.storeListeners.forEach(fn => fn()); });
     expect(h.badge).toHaveBeenLastCalledWith(2);
     await act(async () => { h.phases.delete('done'); h.storeListeners.forEach(fn => fn()); });
     expect(h.badge).toHaveBeenLastCalledWith(1);

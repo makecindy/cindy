@@ -75,15 +75,60 @@ describe('mobile Home live activity', () => {
 
   it('distinguishes cold state from a received empty snapshot and notifies badge subscribers', async () => {
     const count = () => readTaskBadgeCount(remoteSessionStore.getHomeSessions(), 'user-1',
-      remoteSessionStore.getSessionSnapshotDeviceIds(), () => true, () => null);
+      remoteSessionStore.getSessionSnapshotDeviceIds(), remoteSessionStore.isDeviceHomeSnapshotReady, () => null);
     expect(count()).toBeUndefined();
     const seen: Array<number | undefined> = [];
     const unsubscribe = remoteSessionStore.subscribeHomeStatus(() => { seen.push(count()); });
     remoteSessionStore.setDeviceSessions('dev-1', 'Mac', []);
     await Promise.resolve();
+    expect(count()).toBeUndefined();
+    remoteSessionStore.setDeviceHomeSnapshot('dev-1', 'Mac', [],
+      { format: 'active-sessions-v2', sessions: [] }, remoteSessionStore.captureActiveSessionSnapshotEpoch());
+    await Promise.resolve();
     expect(count()).toBe(0);
     expect(seen).toContain(0);
     unsubscribe();
+  });
+
+  // Unit regression #9547: publishInitial can precede teammate enrichment and
+  // maker:list-active. List-only coverage cannot prove that a zero is complete.
+  it('preserves the badge until the complete Home list and activity snapshot arrive', () => {
+    const count = () => readTaskBadgeCount(remoteSessionStore.getHomeSessions(), 'user-1',
+      remoteSessionStore.getSessionSnapshotDeviceIds(), remoteSessionStore.isDeviceHomeSnapshotReady,
+      row => remoteSessionStore.getSessionLiveActivity(row.id, row.deviceLinkDeviceId));
+    const rows = [session('ordinary'), session('teammate')];
+    const activity = { format: 'active-sessions-v2', sessions: [
+      { sessionId: 'teammate', isTurnRunning: false, activityPhase: 'needs-interaction', activityAttention: true },
+    ] };
+    const publish = (response: unknown = activity) => remoteSessionStore.setDeviceHomeSnapshot(
+      'dev-1', 'Mac', rows, response, remoteSessionStore.captureActiveSessionSnapshotEpoch());
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('ordinary')]);
+    expect(count()).toBeUndefined();
+    // A detail-page activity read cannot declare Home's teammate enrichment done.
+    remoteSessionStore.setActiveSessionSnapshots('dev-1', activity);
+    expect(count()).toBeUndefined();
+    publish();
+    expect(count()).toBe(1);
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', rows);
+    expect(count()).toBeUndefined();
+    publish();
+    expect(count()).toBe(1);
+    remoteSessionStore.markDeviceOffline('dev-1');
+    expect(count()).toBeUndefined();
+    // Unsupported, legacy and malformed responses cannot certify missing activity.
+    for (const response of [null, [], { format: 'active-sessions-v2' }]) {
+      publish(response);
+      expect(count()).toBeUndefined();
+    }
+    publish();
+    expect(count()).toBe(1);
+    publish({ format: 'active-sessions-v2', sessions: [] });
+    expect(count()).toBe(0);
+    remoteSessionStore.removeDevice('dev-1');
+    expect(count()).toBeUndefined();
+    publish();
+    remoteSessionStore.clear();
+    expect(count()).toBeUndefined();
   });
 
   it('keeps unread completed/error live activity for the right-slot dots and clears once read', () => {

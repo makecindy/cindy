@@ -1117,20 +1117,13 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
         };
       }
       const nextSessions = Array.isArray(list) ? list : [];
-      remoteSessionStore.batch(() => {
-        remoteSessionStore.setDeviceSessions(
-          device.deviceId,
-          device.name,
-          nextSessions,
-        );
-        if (activeSessions !== null) {
-          remoteSessionStore.setActiveSessionSnapshots(
-            device.deviceId,
-            activeSessions,
-            activeSessionSnapshotEpoch,
-          );
-        }
-      });
+      remoteSessionStore.setDeviceHomeSnapshot(
+        device.deviceId,
+        device.name,
+        nextSessions,
+        activeSessions,
+        activeSessionSnapshotEpoch,
+      );
       // schedule-index(1+N 个 listRuns)是次要徽标数据,延后发,避开"开 app→立刻点会话"时和会话关键读
       // 抢同一条 WS 管道(见 scheduleIndexDefer / issue #324)。home 自动化分组与名称已由 fallbackScheduleInfo
       // 兜底,徽标晚半拍出现即可。

@@ -24,6 +24,7 @@ export function TaskBadgeBridge() {
         remoteSessionStore.getSessionSnapshotDeviceIds(),
         deviceId => (getConnectionState?.(deviceId).status ?? status) === 'online'
           && getPresenceAvailability(deviceId) !== false
+          && remoteSessionStore.isDeviceHomeSnapshotReady(deviceId)
           && !!getSubscriptionIdentity && getSubscriptionIdentity(deviceId, ['sessions']) !== null,
         session => remoteSessionStore.getSessionLiveActivity(session.id, session.deviceLinkDeviceId));
     }, () => !disposed && AppState.currentState === 'active');
