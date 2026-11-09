@@ -984,6 +984,15 @@ cue, not an error or CTA; the mobile white text contrast is 4.98:1.
 
 Never freestyle these semantic colors as hardcoded hex — always go through the corresponding token.
 
+**Plugin provenance (user-approved 2026-11-09):** one compact identity mark beside the name:
+official blue, community purple, organization teal, custom-market orange and local neutral.
+Use `plugin-identity-{official,community,team,custom}-{text,bg}` through the existing DTCG
+generation chain; local uses `text-secondary` / `surface-chip`. These colors express source
+identity, never package verification, runtime permission or the connected service's endorsement.
+The owner-approved mark is a registered §5 shape exception: 20px high, 5px corners, no border,
+11px medium text and a 12px icon; it is not an ordinary action frame. Keep its text and icon
+so identity does not depend on color. Do not reuse these roles for status or other categories.
+
 **Search matches (2026-09-18, user-approved direction):** global find, file previews and
 file editors share `search-match-bg` / `search-match-fg` for ordinary matches and
 `search-match-active-bg` / `search-match-active-fg` for the current match. Both modes

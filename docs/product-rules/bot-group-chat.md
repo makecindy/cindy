@@ -81,6 +81,9 @@
 - 每位伙伴在每个群里有隐藏的**群专线 Session**：`source = 'bot'`，`bot_session_links.role = 'group'`。
   早期本地群的 `route_key = 'group:<groupId>'`；服务器群还按执行授权隔离，话题另外隔离上下文。
   Session 按需创建，复用伙伴 Profile 与 Bot Home 的规则，并遵守服务器群的权限档；它不替代共享群消息记录。
+- 外部跨任务投递不能把隐藏群专线当作群聊收件地址：`send_to_session` 在排队、恢复或写入目标之前返回
+  `UNSUPPORTED_CAPABILITY`，说明消息未送达、不会显示在群界面，并指引用户在群内发送。
+  本地群、服务器群与话题仍由宿主群聊调度器派发和结算；消息来源标签或 clientId 前缀不构成受管派发证明。
 - **话题是独立对话（2026-10-21，Chris：「话题要真的能把独立事件隔离到独立 session，像 Slack 一样」）**：服务器群里，
   伙伴在某个话题（Thread）里第一次被叫到时，宿主为「这个话题 × 这次授权 × 这位伙伴」另开一条隐藏 Session，
   `role = 'group'`，`route_key = '<群专线 route_key>:thread:<根消息 id>'`；之后这个话题里的消息都进它，主群仍用群专线。

@@ -7476,6 +7476,11 @@
         "installedExpand": "Mostrar os {{count}} plugins instalados",
         "installedCollapse": "Ocultar plugins instalados adicionais",
         "recommendedSection": "Recomendado",
+        "todayRecommendations": "Recomendações de hoje",
+        "marketSection": "Mercado de plugins",
+        "browseMarket": "Explorar o mercado de plugins",
+        "searching": "A pesquisar…",
+        "allLoaded": "Todos os {{count}} plugins apresentados",
         "updatesAvailable": "{{count}} atualizações de plugins disponíveis",
         "updateAll": "Atualizar todos",
         "ignoreRound": "Ignorar desta vez",
@@ -7505,7 +7510,15 @@
       },
       "market": {
         "publisherKind": {
-          "official": "Oficial"
+          "official": "Oficial",
+          "community": "Comunidade"
+        },
+        "publisherDescription": {
+          "official": "Publicado e mantido pela Cindy",
+          "community": "Publicado e mantido por programadores da comunidade",
+          "team": "Partilhado pela sua organização com membros autorizados",
+          "custom": "De um mercado Git ou de uma pasta local que adicionou",
+          "local": "Instalado a partir de um ficheiro local ou desenvolvido neste computador"
         },
         "scopeAria": "Filtrar origens dos plugins",
         "scope": {

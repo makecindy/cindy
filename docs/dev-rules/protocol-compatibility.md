@@ -4143,6 +4143,14 @@ PC 同源 ghostPermissionItems 声明摘要投影并排除 tool，以请求 loca
 现有 `plugins` 远程资源以可选 action `management:snapshot` 声明 version 1 管理能力。
 新增 `management:market-detail/begin/operation/answer/cancel`，沿既有 resource invoke、
 同账号设备授权和 owner 边界执行，不新增通用 IPC allowlist 或服务端协议。
+新版插件页复用 `management:snapshot` 的可选只读参数：`{read:'capabilities'}` 只返回
+`catalogPaging: true`；`{read:'installed'}` 只返回已装管理及维护投影；
+`{read:'catalog',query}` 返回目标 Host 的一页市场项、游标、首批完整数量及本地来源统计；
+`{read:'recommendations'}` 返回本次最多 12 个公开官方候选。查询、版本、来源和已装判定均在
+目标 Host 执行，本地自定义来源不上传市场服务器。新控制端先探测能力，只有旧 Host 明确
+拒绝非空输入（`INVALID_PARAMS`）才进入既有 v1 快照路径；普通读取失败不得回退全量。
+旧控制端的空输入仍返回原有 v1 全量快照，旧 Host 的历史网络限制保留。推荐池由页面持有，
+切换列表、搜索及详情返回不重新请求；没有新增远程 channel、授权或 relay 配置。
 `management:snapshot` 的可选 `projects` 字段投影目标 Host 的最近项目 ID、显示名及可选只读
 `path`，用于复用本机 Project Scope 的目录展示（含暂时不存在的最近目录，不按任务归档过滤）；
 控制端以 Host 生成的项目 ID 请求 `management:project-state`，返回该项目的禁用实例和
