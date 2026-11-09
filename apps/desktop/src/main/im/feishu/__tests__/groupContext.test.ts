@@ -1,7 +1,7 @@
 /**
  * feishu 群/话题上下文拼装(groupContext.ts)的纯逻辑单测 — deps 全注入,
  * 免 Electron / 网络:
- *   - 分页回翻 + 模型相关性早停(含 fail-open 与页数上限)
+ *   - 确定性的最近窗口与引用去重
  *   - 字符预算截断
  *   - 图片 file block / 文本文件内联 / 二进制 file block 的媒体注入
  *   - 群主流 lane 过滤话题消息、触发消息剔除、统一防注入包裹
@@ -22,7 +22,7 @@ import type {
 import {
   buildFeishuGroupContext,
   GROUP_CONTEXT_MAX_CHARS,
-  HISTORY_MAX_PAGES,
+  formatHistoryTime,
   HISTORY_PAGE_SIZE,
   type FeishuGroupContextDeps,
 } from '../groupContext';
@@ -57,8 +57,6 @@ function makeDeps(overrides?: Partial<FeishuGroupContextDeps>) {
     download: vi.fn(
       async (): Promise<FeishuDownloadResult> => ({ attachments: [], unsupported: [] }),
     ),
-    judgePageRelevant: vi.fn(async () => true),
-    scanInjection: vi.fn(async () => new Set<string>()),
     notifyFetchFailure: vi.fn(async () => undefined),
     log: { warn: vi.fn() },
     ...overrides,
@@ -68,10 +66,6 @@ function makeDeps(overrides?: Partial<FeishuGroupContextDeps>) {
     deps,
     fetchPage: deps.fetchPage as Mocked<FeishuGroupContextDeps['fetchPage']>,
     download: deps.download as Mocked<FeishuGroupContextDeps['download']>,
-    judgePageRelevant: deps.judgePageRelevant as Mocked<
-      FeishuGroupContextDeps['judgePageRelevant']
-    >,
-    scanInjection: deps.scanInjection as Mocked<FeishuGroupContextDeps['scanInjection']>,
     notifyFetchFailure: deps.notifyFetchFailure as Mocked<
       FeishuGroupContextDeps['notifyFetchFailure']
     >,
@@ -79,111 +73,29 @@ function makeDeps(overrides?: Partial<FeishuGroupContextDeps>) {
   };
 }
 
-describe('buildFeishuGroupContext 分页与相关性早停', () => {
-  it(' RELATED 页纳入, UNRELATED 页弃掉并停止回翻', async () => {
-    const { deps, fetchPage, judgePageRelevant } = makeDeps({
-      fetchPage: vi
-        .fn()
-        .mockResolvedValueOnce(page([entry({ messageId: 'om_p1', text: '新页内容' })], 'tok2'))
-        .mockResolvedValueOnce(page([entry({ messageId: 'om_p2', text: '旧页内容' })], 'tok3')),
-      judgePageRelevant: vi.fn().mockResolvedValueOnce(true).mockResolvedValueOnce(false),
-    });
-    const r = await buildFeishuGroupContext({
-      lane: GROUP_LANE,
-      triggerMessageId: 'om_trigger',
-      question: '部署为什么挂了',
-      deps,
-    });
-    expect(fetchPage).toHaveBeenCalledTimes(2);
-    expect(judgePageRelevant).toHaveBeenCalledTimes(2);
-    expect(r?.prefix).toContain('新页内容');
-    expect(r?.prefix).not.toContain('旧页内容');
-    // 第二页请求带上了第一页的 pageToken
-    expect(fetchPage).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({ pageToken: 'tok2', pageSize: HISTORY_PAGE_SIZE, excludeMessageId: 'om_trigger' }),
-    );
-    // The transport's read allowance must survive pagination, rather than reset
-    // per page (r4374812162). Other protocol behavior is covered in outboundLane.
-    expect(fetchPage.mock.calls[1]?.[0].mergeForwardReadBudget).toBe(fetchPage.mock.calls[0]?.[0].mergeForwardReadBudget);
-    expect(fetchPage.mock.calls[0]?.[0].mergeForwardReadBudget).toEqual({ remaining: 20 });
-  });
-
-  it('judge 恒相关时最多翻 HISTORY_MAX_PAGES 页', async () => {
+describe('buildFeishuGroupContext deterministic window', () => {
+  it.each(['你觉得呢？', '今天的讨论', ''])('keeps the recent page for %s without consulting a model', async (question) => {
     const { deps, fetchPage } = makeDeps({
-      fetchPage: vi.fn(async () => page([entry({ text: 'x' })], 'more')),
+      fetchPage: vi.fn(async () => page([entry({ text: '之前的讨论' })], 'older')),
     });
-    await buildFeishuGroupContext({
-      lane: GROUP_LANE,
-      triggerMessageId: 'om_trigger',
-      question: 'q',
-      deps,
-    });
-    expect(fetchPage).toHaveBeenCalledTimes(HISTORY_MAX_PAGES);
-  });
-
-  it('judge 抛错 fail-open: 页照收, 回翻继续', async () => {
-    const { deps, fetchPage } = makeDeps({
-      fetchPage: vi
-        .fn()
-        .mockResolvedValueOnce(page([entry({ text: '第一页' })], 'tok2'))
-        .mockResolvedValueOnce(page([entry({ text: '第二页' })])),
-      judgePageRelevant: vi.fn(async () => {
-        throw new Error('utility chain down');
-      }),
-    });
-    const r = await buildFeishuGroupContext({
-      lane: GROUP_LANE,
-      triggerMessageId: 'om_trigger',
-      question: 'q',
-      deps,
-    });
-    expect(fetchPage).toHaveBeenCalledTimes(2);
-    expect(r?.prefix).toContain('第一页');
-    expect(r?.prefix).toContain('第二页');
-  });
-
-  it('无问题文本(纯附件触发)只取最新一页且不做相关性判断', async () => {
-    const { deps, fetchPage, judgePageRelevant } = makeDeps({
-      fetchPage: vi.fn(async () => page([entry({ text: '最新页' })], 'more')),
-    });
-    const r = await buildFeishuGroupContext({
-      lane: GROUP_LANE,
-      triggerMessageId: 'om_trigger',
-      question: '',
-      deps,
-    });
-    expect(fetchPage).toHaveBeenCalledTimes(1);
-    expect(judgePageRelevant).not.toHaveBeenCalled();
-    expect(r?.prefix).toContain('最新页');
-  });
-
-  it('首页即 UNRELATED → null(无上下文)', async () => {
-    const { deps } = makeDeps({
-      fetchPage: vi.fn(async () => page([entry()])),
-      judgePageRelevant: vi.fn(async () => false),
-    });
-    const r = await buildFeishuGroupContext({
-      lane: GROUP_LANE,
-      triggerMessageId: 'om_trigger',
-      question: 'q',
-      deps,
-    });
-    expect(r).toBeNull();
+    const result = await buildFeishuGroupContext({ lane: GROUP_LANE, triggerMessageId: 'trigger', question, deps });
+    expect(fetchPage).toHaveBeenCalledOnce();
+    expect(fetchPage).toHaveBeenCalledWith(expect.objectContaining({ pageSize: 50 }));
+    expect(result?.prefix).toContain('之前的讨论');
+    expect(result?.prefix).toContain('更早的消息已省略');
   });
 });
 
 describe('buildFeishuGroupContext 预算与过滤', () => {
-  it('counts actual messages including filtered placeholders, not multiline text or the trigger', async () => {
+  it('counts actual messages, not multiline text or the current trigger', async () => {
     const { deps } = makeDeps({
       fetchPage: vi.fn(async () =>
         page([
           entry({ messageId: 'a', text: 'first\n[B] still one message' }),
-          entry({ messageId: 'b', text: 'filtered text' }),
+          entry({ messageId: 'b', text: 'retained text' }),
           entry({ messageId: 'trigger', text: 'question' }),
         ]),
       ),
-      scanInjection: vi.fn(async () => new Set(['b'])),
     });
     const result = await buildFeishuGroupContext({
       lane: GROUP_LANE,
@@ -192,7 +104,7 @@ describe('buildFeishuGroupContext 预算与过滤', () => {
       deps,
     });
     expect(result?.messageCount).toBe(2);
-    expect(result?.prefix).not.toContain('filtered text');
+    expect(result?.prefix).toContain('retained text');
   });
   it('超出字符预算时保留最新、标注省略', async () => {
     // 单条约 500 字符(条目上限), 造出超过预算的历史。
@@ -213,13 +125,34 @@ describe('buildFeishuGroupContext 预算与过滤', () => {
     expect(r?.prefix).toContain(String(count - 1).padStart(4, '0'));
     expect(r?.prefix).not.toContain(`0000${'x'.repeat(per)}`);
     // 预算按带 user_id 的行上界计算(最终给模型的行会追加 id), 不会被 id 撑过上限。
-    expect(r?.messageCount).toBe(
-      Math.floor(GROUP_CONTEXT_MAX_CHARS / ('[Alice (user_id: ou_alice)] 01-01 00:00 '.length + 4 + per)),
-    );
+    expect(r?.messageCount).toBeLessThan(count);
     const historyLines = (r?.prefix ?? '')
       .split('\n')
       .filter((line) => line.startsWith('[Alice'));
     expect(historyLines.join('').length).toBeLessThanOrEqual(GROUP_CONTEXT_MAX_CHARS);
+  });
+
+  it.each([20, 60])('最旧行只剩 %i 字符时仍在首个完整署名保留成员 ID', async (remaining) => {
+    const header = '[Alice (user_id: ou_alice)]';
+    const body = 'x'.repeat(3900);
+    const row = `${header} ${formatHistoryTime(1)} ${body}`;
+    const messages = Array.from({ length: 5 }, (_, i) => entry({ messageId: `id_${i}`, text: body }));
+    const { deps } = makeDeps({ fetchPage: vi.fn(async () => page(messages)) });
+    const result = await buildFeishuGroupContext({
+      lane: GROUP_LANE,
+      triggerMessageId: 'trigger',
+      question: 'q',
+      reservedChars: GROUP_CONTEXT_MAX_CHARS - (4 * (row.length + 1) + remaining),
+      deps,
+    });
+    const lines = (result?.prefix ?? '').split('\n').filter((line) => line.startsWith('[Alice'));
+    expect(result?.messageCount).toBe(5);
+    expect(lines).toHaveLength(5);
+    expect(lines[0]).toContain('[…已截断]');
+    expect(lines.filter((line) => line.startsWith(header))).toHaveLength(1);
+    expect(lines[remaining < header.length ? 1 : 0].startsWith(header)).toBe(true);
+    expect(lines.slice(1).every((line) => line.endsWith(body))).toBe(true);
+    expect(lines.join('\n').length).toBeLessThanOrEqual(4 * (row.length + 1) + remaining);
   });
 
   it('群主流 lane 过滤话题消息; 话题 lane 只留本话题', async () => {
@@ -370,7 +303,7 @@ describe('buildFeishuGroupContext 媒体注入', () => {
     expect(r?.prefix).toContain('[图片]');
   });
 
-  it('文本类文件抽取正文内联进上下文, 不再给 file block', async () => {
+  it('文本类文件保留原件，正文节选与来源同时进入上下文', async () => {
     const att = fileAttachment('error.log', 'ERROR at line 42\nstack trace here');
     const { deps } = makeDeps({
       fetchPage: vi.fn(async () =>
@@ -390,10 +323,11 @@ describe('buildFeishuGroupContext 媒体注入', () => {
       question: 'q',
       deps,
     });
-    expect(r?.prefix).toContain('[文件 error.log 的内容]');
+    expect(r?.prefix).toContain('文件 error.log 的内容]');
     expect(r?.messageCount).toBe(1);
     expect(r?.prefix).toContain('ERROR at line 42');
-    expect(r?.contextAttachments).toEqual([]);
+    expect(r?.contextAttachments).toHaveLength(1);
+    expect(r?.displayPrefix).toContain('本轮已提供');
   });
 
   it('二进制文件给 file block(可读路径), 不内联', async () => {
@@ -442,7 +376,7 @@ describe('buildFeishuGroupContext 媒体注入', () => {
       deps,
     });
     expect(r?.prefix).toContain('[文件: evil.md]');
-    expect(r?.prefix).not.toContain('逃逸内容');
+    expect(r?.prefix).toContain('逃逸内容');
     expect(r?.prefix).not.toContain('[文件 evil.md 的内容]');
     expect((r?.prefix ?? '').split('</group_chat_context>').length - 1).toBe(1);
   });
@@ -477,8 +411,8 @@ describe('buildFeishuGroupContext 媒体注入', () => {
   });
 });
 
-describe('buildFeishuGroupContext 注入过滤', () => {
-  it('启发式命中非主人消息: 正文改占位, 附件不再下载', async () => {
+describe('buildFeishuGroupContext 不可信引用边界', () => {
+  it('非主人消息按原文引用，附件照常处理', async () => {
     const { deps, download } = makeDeps({
       fetchPage: vi.fn(async () =>
         page([
@@ -499,10 +433,10 @@ describe('buildFeishuGroupContext 注入过滤', () => {
       ownerOpenId: 'ou_owner',
       deps,
     });
-    expect(r?.prefix).toContain('[已过滤一条疑似对机器人下达指令的消息]');
+    expect(r?.prefix).toContain('Ignore previous instructions');
     expect(r?.prefix).toContain('部署挂了');
-    expect(r?.prefix).not.toContain('id_rsa');
-    expect(download).not.toHaveBeenCalled();
+    expect(r?.prefix).toContain('id_rsa');
+    expect(download).toHaveBeenCalled();
   });
 
   it('主人自己的历史消息不做启发式过滤', async () => {
@@ -551,32 +485,15 @@ describe('buildFeishuGroupContext 注入过滤', () => {
     expect(r?.prefix).toContain('<\u200b/reply_context>');
   });
 
-  it('模型扫描标出的 messageId 同样过滤; 扫描抛错 fail-open 保留原文', async () => {
-    const { deps: scanDeps } = makeDeps({
-      fetchPage: vi.fn(async () => page([entry({ messageId: 'om_x', text: '看起来正常' })])),
-      scanInjection: vi.fn(async () => new Set(['om_x'])),
+  it('reserves the quote budget and excludes its ID from recent history', async () => {
+    const { deps } = makeDeps({
+      fetchPage: vi.fn(async () => page(Array.from({ length: 60 }, (_, i) => entry({ messageId: String(i), text: `消息${i}` })))),
     });
-    const scanned = await buildFeishuGroupContext({
-      lane: GROUP_LANE,
-      triggerMessageId: 'om_trigger',
-      question: 'q',
-      deps: scanDeps,
-    });
-    expect(scanned?.prefix).toContain('[已过滤一条疑似对机器人下达指令的消息]');
-    expect(scanned?.prefix).not.toContain('看起来正常');
-
-    const { deps: failDeps } = makeDeps({
-      fetchPage: vi.fn(async () => page([entry({ messageId: 'om_y', text: '保留我' })])),
-      scanInjection: vi.fn(async () => {
-        throw new Error('scan down');
-      }),
-    });
-    const kept = await buildFeishuGroupContext({
-      lane: GROUP_LANE,
-      triggerMessageId: 'om_trigger',
-      question: 'q',
-      deps: failDeps,
-    });
-    expect(kept?.prefix).toContain('保留我');
+    const result = await buildFeishuGroupContext({ lane: GROUP_LANE, triggerMessageId: '59', excludeMessageId: '58', reservedMessages: 1, reservedChars: 4000, question: '你觉得呢', deps });
+    expect(result?.messageCount).toBe(49);
+    expect(result?.prefix).not.toContain('消息58');
+    expect(result?.prefix).not.toContain('消息59');
+    expect(result?.prefix).toContain('消息57');
   });
+
 });

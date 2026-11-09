@@ -25,8 +25,8 @@ import { claudeUpstreamEndpoint } from './runtime-configs.js';
 export const CODEX_GATEWAY_PROVIDER_ID = 'cindy_gateway';
 
 /**
- * OpenAI 身份 provider id(仅 oauth-bearer spawn 定义)。base_url 同样指向本地
- * loopback proxy,但 `name` 必须逐字等于 "OpenAI" —— codex 的
+ * OpenAI 身份 provider id(全部 spawn 都声明,仅 oauth-bearer 会选中)。base_url 同样
+ * 指向本地 loopback proxy,但 `name` 必须逐字等于 "OpenAI" —— codex 的
  * `ModelProviderInfo::supports_remote_compaction()` 按 name 判定,命中后订阅会话
  * 才走 OpenAI 远端压缩(remote compaction v2,经普通 /responses 由服务端压缩),
  * 否则只有低保真的本地 summarization fallback。
@@ -34,6 +34,9 @@ export const CODEX_GATEWAY_PROVIDER_ID = 'cindy_gateway';
  * 只允许「ChatGPT 订阅直连路由」的 thread 用它(thread/start|resume 的
  * modelProvider 覆盖):网关 / xAI / 自定义供应商的上游不实现远端压缩语义,
  * 远端压缩失败在 codex 侧是硬失败(无本地回退),错配会打断长会话。
+ * 非 oauth spawn 里它只是一个不被选中的占位(见 buildCodexProxySpawnArgs 的
+ * else 分支,#8670):老 thread 元数据引用它时让原生校验通过,交给
+ * modelProviderMismatch 分叉(#8171)保留历史。
  */
 export const CODEX_OPENAI_COMPACT_PROVIDER_ID = 'cindy_openai';
 
@@ -80,7 +83,8 @@ export function buildCodexGatewayBaseUrl(upstream = claudeUpstreamEndpoint()): s
  *     proxy 直转 gateway(不破坏现有纯 key 用户)。
  *   - provider-oauth (如 xAI): env_key=XDT_CODEX_API_KEY → codex 带占位 key,
  *     proxy 按会话用供应商 OAuth token 覆盖 Authorization。
- * cindy_gateway 显式冻成 false；oauth-bearer 额外定义的 cindy_openai 始终打开 WS。
+ * cindy_gateway 显式冻成 false；oauth-bearer 定义的 cindy_openai 始终打开 WS,
+ * 非 oauth spawn 的 cindy_openai 占位(#8670)不发 upgrade。
  * 独立子代理 Provider 路由由 loopback proxy 根据 upgrade 携带的 thread / subagent 血缘
  * 单独回 426，使对应子 thread 降到 HTTP；父 thread 继续保留原生 WS。
  */
@@ -130,8 +134,7 @@ export function buildCodexProxySpawnArgs(
   if (authMode === 'oauth-bearer') {
     // OpenAI 身份 provider(见 CODEX_OPENAI_COMPACT_PROVIDER_ID):默认 model_provider
     // 仍是 cindy_gateway(本地压缩,安全缺省),订阅直连 thread 由 maker-core 在
-    // thread/start|resume 用 modelProvider 显式选它。仅 oauth spawn 定义 —— env-key
-    // 进程没有 OAuth token,误选时宁可 thread/start 报 unknown provider 也不能静默降级。
+    // thread/start|resume 用 modelProvider 显式选它。
     const o = CODEX_OPENAI_COMPACT_PROVIDER_ID;
     args.push(
       '-c', `model_providers.${o}.name="OpenAI"`,
@@ -167,6 +170,27 @@ export function buildCodexProxySpawnArgs(
       // is_openai + codex-backend OAuth 命中时 codex 默认对 /responses 请求体做 zstd
       // 压缩(enable_request_compression 默认开);loopback proxy 要整段 JSON.parse
       // 改写请求体,无法解 zstd,必须显式关掉(仅少传输优化,无功能损失)。
+    );
+  } else {
+    // #8670: 订阅期创建的老 thread 元数据保存的 modelProvider 就是 cindy_openai;
+    // 供应商切走后重建的 app-server 若完全不声明它,原生 Codex 在 thread/resume 的
+    // 配置校验阶段直接拒绝(裸 -32600 "no longer configured",无结构化 data),
+    // maker-core 的 modelProviderMismatch 历史分叉(#8171)永远等不到触发。
+    // 占位让校验通过、拿到结构化 mismatch,由既有分叉保留历史开出新 thread。
+    //
+    // 占位不会被选中:非 oauth 路线的默认/远端压缩选择只落在 cindy_gateway /
+    // cindy_codex(maker-core threadModelProvider),误选仍是显式报错而非静默降级;
+    // env_key 指向网关变量(env-key 带真 key,provider-oauth 由 auth-adapters 落
+    // 占位 key),代理按会话覆盖 Authorization,不会把订阅身份带给其他上游。
+    // supports_websockets=false:订阅 WS 语义只属于 oauth spawn,这里连 upgrade 都
+    // 不发起,proxy 侧 null→426 的兜底(见 codex-proxy-host)保持不变。
+    const o = CODEX_OPENAI_COMPACT_PROVIDER_ID;
+    args.push(
+      '-c', `model_providers.${o}.name="OpenAI"`,
+      '-c', `model_providers.${o}.base_url="${baseUrl}"`,
+      '-c', `model_providers.${o}.wire_api="responses"`,
+      '-c', `model_providers.${o}.env_key="${CODEX_GATEWAY_ENV_KEY}"`,
+      '-c', `model_providers.${o}.supports_websockets=false`,
     );
   }
   // OpenAI identity 可能启用 zstd；loopback proxy 需要解析 JSON 做路由和 prompt 注入。

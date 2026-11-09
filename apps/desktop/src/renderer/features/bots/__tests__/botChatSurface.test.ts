@@ -53,15 +53,25 @@ describe('消息流的头像挂载', () => {
     expect(helper).toContain('if (!avatar) return bubble;');
   });
 
-  it('只有 assistant 分支挂头像', () => {
+  it('回复和过程区挂头像，卡片保留占位', () => {
     expect(messageStream).toContain('return withAssistantAvatar(\n        assistantAvatar,');
-    // Assistant text shows the avatar; task and teammate-message cards plus the
-    // work fold and generated artifacts reserve the same space invisibly.
+    // Assistant text and work folds show avatars; task and teammate-message
+    // cards and generated artifacts reserve the same space invisibly.
     // User messages bypass it; fixture geometry covers pending/empty artifacts.
-    expect(messageStream.match(/withAssistantAvatar\(/g)?.length).toBe(5);
+    // Assistant text, work folds and plugin result cards each reserve the same
+    // reply column in companion conversations.
+    expect(messageStream.match(/withAssistantAvatar\(/g)?.length).toBe(6);
     expect(messageStream).toMatch(/simplifiedBotConversation\s*&&\s*\(message\.systemCardType === 'bot-session-task'\s*\|\|\s*message\.systemCardType === 'bot-session-task-result'\s*\|\|\s*message\.systemCardType === 'bot-session-task-message'\s*\|\|\s*message\.systemCardType === 'bot-direct-message'\)\s*\? withAssistantAvatar\(/);
     expect(messageStream).toMatch(/<span aria-hidden="true" className="invisible">\s*\{assistantAvatar\}\s*<\/span>/);
-    expect(messageStream).toContain('{replyColumnSpacer ? withAssistantAvatar(replyColumnSpacer, block) : block}');
+    expect(messageStream).toContain('{companionAvatar ? withAssistantAvatar(companionAvatar, block) : block}');
+  });
+
+  it('插件卡的头像行承接渲染项标识', () => {
+    // 视口补偿只扫消息列的直接子元素，所以伙伴会话里被头像行包住的插件卡
+    // 必须把 data-render-item-key 交给头像行，而不是留在内层卡片上。
+    // 卡片自身只在不套头像行时留标识，套了就必须把标识交给外层行。
+    expect(messageStream).toContain("...(botReplyColumnSpacer ? {} : { 'data-render-item-key': item.key })");
+    expect(messageStream).toContain('withAssistantAvatar(botReplyColumnSpacer, card, item.key)');
   });
 });
 
@@ -111,7 +121,7 @@ describe('伙伴消息流复用工作组件并保留独立过程分组', () => {
     expect(messageStream).toContain("from '@/features/bots/botConversationPresentation'");
     expect(messageStream).toContain('compact={false}');
     expect(messageStream).not.toContain('compact={simplifiedBotConversation}');
-    expect(messageStream).toContain('replyColumnSpacer={botReplyColumnSpacer}');
+    expect(messageStream).toContain('companionAvatar={simplifiedBotConversation ? assistantAvatar : undefined}');
     expect(messageStream).not.toContain('data-testid="bot-thinking-indicator"');
     expect(sessionView).not.toContain('<BotWorkingStatus');
     expect(sessionView).toContain('<RunningStatusBar');

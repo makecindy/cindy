@@ -16,6 +16,7 @@ import {
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { loadJsonFile } from "../../../../shim/json-store.js";
 import { prepareOomScoreAdjustedSpawn } from "../../../../shim/process-runtime.js";
 import { normalizeOptionalString } from "../../../../shim/string-coerce-runtime.js";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
@@ -830,6 +831,18 @@ export function buildOpenClawChromeLaunchArgs(params: {
   if (headlessMode.headless) {
     args.push("--headless=new");
     args.push("--disable-gpu");
+  } else if ((params.platform ?? process.platform) === "darwin") {
+    // macOS already keeps a windowless app alive. --no-startup-window with CDP
+    // adds a REMOTE_DEBUGGING keep-alive that survives normal application Quit.
+    // Explicitly select the existing profile too: otherwise Chrome defers its
+    // startup profile activation until the first background tab is created.
+    const localState = loadJsonFile<{ profile?: { last_used?: unknown } }>(
+      path.join(userDataDir, "Local State"),
+    );
+    const lastUsed = localState?.profile?.last_used;
+    const profileDirectory =
+      typeof lastUsed === "string" && lastUsed.trim() ? lastUsed.trim() : "Default";
+    args.push("--silent-launch", "--profile-directory=" + profileDirectory);
   } else {
     args.push("--no-startup-window");
   }

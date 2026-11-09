@@ -4,7 +4,7 @@ import { Select } from '@/components/ui/select';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
 import type { ChatGroupNotificationMode } from '../../../shared/botGroupChat';
 import { refreshBotGroups } from './botGroupStore';
-import { SettingsRow } from './ChatGroupSettingsRows';
+import { SettingsRow } from '@/components/ui/settings-rows';
 
 const key = (name: string) => `bots.groupChat.server.settings.notifications.${name}`;
 const modes = ['all', 'mentions', 'none'] as const;

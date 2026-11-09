@@ -197,7 +197,21 @@
     "awaitingStart": "Wartet auf dich",
     "progressRunning": "In Arbeit {{current}} / {{total}}",
     "progressDone": "Erledigt {{done}} / {{total}}",
-    "allDone": "Alles erledigt"
+    "allDone": "Alles erledigt",
+    "stepQueued": "Wartet auf Start",
+    "stepExecuting": "Wird ausgeführt",
+    "stepSkipped": "Übersprungen",
+    "skippingTurn": "Wird übersprungen…",
+    "queueWaiting": "Wartet auf Fortsetzen",
+    "skipTurnLabel": "Überspringen {{name}}",
+    "stepSpoken": "Fertig",
+    "allTurns_one": "Alle {{count}} Teammitglied",
+    "allTurns_other": "Alle {{count}} Teammitglieder",
+    "foldTurns": "Weniger anzeigen",
+    "talkTitle": "Nacheinander zu Wort kommen",
+    "talkPending": "Nicht gestartet",
+    "skipTurn": "Überspringen",
+    "queueEnded": "Runde beendet"
   },
   "speaking": {
     "queued": "In der Warteschlange",
@@ -309,7 +323,8 @@
     "lifecycleUnavailable": "Der aktuelle Server oder Computer unterstützt diese Aktion noch nicht.",
     "groupDissolved": "Diese Gruppe wurde aufgelöst. Du kannst den verfügbaren Verlauf weiterhin lesen.",
     "lastOwner": "Übertrage die Inhaberschaft oder löse diese Gruppe auf, bevor du sie verlässt.",
-    "allBotsMentionDisabled": "Der Gruppeninhaber hat @Alle Teammitglieder noch nicht aktiviert."
+    "allBotsMentionDisabled": "Der Gruppeninhaber hat @Alle Teammitglieder noch nicht aktiviert.",
+    "turnAlreadyStarted": "Dieser Teamkollege hat bereits begonnen und kann nicht übersprungen werden"
   },
   "followUp": {
     "next": "Plan · Nächster Schritt",
@@ -505,6 +520,7 @@
     "searchMembers": "Mitglieder suchen",
     "membersNoMatch": "Keine Mitglieder passen zu „{{query}}“",
     "you": "Du",
+    "companionOf": "Teammitglied von {{name}}",
     "teammateTag": "Teammitglied",
     "paused": "Pausiert",
     "accessNone": "Nur Inhaber",

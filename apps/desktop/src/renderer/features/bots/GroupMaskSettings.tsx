@@ -8,7 +8,7 @@ import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { cn } from '@/lib/utils';
 import { GroupMaskAvatar, GroupMaskStatusText } from './GroupMaskControls';
 import { useGroupMask, type GroupMaskTrigger } from './groupMaskPresentation';
-import { SETTINGS_DIVIDER, SETTINGS_HINT, SettingsCard, SettingsNotice, SettingsRow, SettingsRowIcon } from './ChatGroupSettingsRows';
+import { SETTINGS_DIVIDER, SETTINGS_HINT, SettingsCard, SettingsNotice, SettingsRow, SettingsRowIcon } from '@/components/ui/settings-rows';
 import { Reply } from 'lucide-react';
 
 /** A setting row whose choice sits on the right, in the group settings' row look. */

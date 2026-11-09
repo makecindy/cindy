@@ -66,7 +66,7 @@ export const CAPABILITIES: readonly CapabilityEntry[] = [
       `【怎么判断没开】cindy_computer 这个 MCP 只在 Computer Use 开启时注册;当前工具列表里找不到 mcp__cindy_computer__* 时,说明用户没开,不是 ${BRAND_NAME} 没有这个能力。不要改用 osascript 按键、cliclick、CGEvent 脚本或 cua-driver CLI 代替,这些会被拒绝。`,
       '【怎么引导】告诉用户这一步需要操作桌面,请在「设置 → 内置工具 → Computer Use」打开开关;macOS 还会要求授予「辅助功能」和「屏幕录制」权限,设置页里有逐步引导。给用户这条链接可直接跳到那一页:cindy://settings/builtin-tools(桌面端点击即打开;手机或 IM 里收到时回到电脑上点)。开关和权限都要用户本人操作,agent 不能代为开启。',
       '【开启之后】Codex 任务的工具桥会自动刷新;Claude Code 任务的 MCP 列表在任务启动时固定,开启后让用户再发一条消息或新建任务,然后用 cindy_computer 的 list_tools 确认它已出现,再继续。',
-      '【能做什么】list_windows / get_window_state 读窗口与无障碍树和截图,click / set_value / type_text / press_key / hotkey / scroll 操作目标窗口。Electron 与网页里的文本用 set_value;iOS 模拟器窗口不接受合成输入,用 xcrun simctl 或 AXe;有人正在用电脑时前台输入会被拒(USER_INPUT_ACTIVE),锁屏类快捷键被拒(HOTKEY_BLOCKED)。',
+      '【能做什么】list_windows / get_window_state 读窗口与无障碍树和截图,click / set_value / type_text / press_key / hotkey / scroll 操作目标窗口。Electron 与网页里的文本用 set_value;iOS 模拟器窗口不接受合成输入,用 xcrun simctl 或 AXe;有人正在用电脑时前台输入会被拒(USER_INPUT_ACTIVE),此时先改走后台(后台点击、菜单、set_value、文件或命令行),都不行才等待或询问;锁屏类快捷键被拒(HOTKEY_BLOCKED)。',
     ].join(' '),
   },
   {
@@ -77,6 +77,7 @@ export const CAPABILITIES: readonly CapabilityEntry[] = [
       '先用 cindy_helper.list_tools({category:"settings"})。普通任务和伙伴共用入口，Claude Code、Codex、Pi 走相同宿主服务。工具是否可见取决于实时宿主接线；请以 list_tools 为准。',
       'list_app_settings 列出当前已接通的分类和操作；get_app_settings 返回当前值与严格 schema；update_app_settings 只提交要改的字段；reset_app_settings 只对声明支持恢复默认的分类可用。结果说明仅本机及生效时点，不把保存成功说成所有在途任务都已切换。',
       'get_app_default_model / set_app_default_model 管新任务默认；list_model_providers 包含关闭的型号和完整供应商；get_model_configuration / set_model_configuration 管单模型高级参数；configure_model_provider 管名称、顺序、开关和重新发现。当前任务换模型继续使用 control 类的 set_session_runtime。',
+      'configure_model_connection 直接添加 API 供应商、通过加密代输入填写密钥、获取与设置型号及测试已保存连接，无需 Computer Use。保存和实际推理验证分别返回；凭证只交给宿主，不进对话。',
       'SSH 使用 cindy_ssh 的 ssh_list_hosts / ssh_update_host / ssh_remove_host；改显示名只传 id 和 displayName，不用桌面点击，也不改系统 hostname。',
       '没有一个额外的“AI 全开”设置。已提供的操作沿用任务权限、账号归属及群成员/共享访客规则；缺接口不能靠提高权限获得。此入口不提供任意 IPC、文件键值写入、密钥回读或当前任务自行提权。需要账号登录、密钥或原生系统授权时，仍使用 Cindy 的安全输入和授权流程。',
     ].join(' '),
@@ -88,6 +89,7 @@ export const CAPABILITIES: readonly CapabilityEntry[] = [
       '用户本人能对自己的任务、定时任务、项目、伙伴做的操作，Agent 有哪些对应工具、哪些能管到另一台电脑。',
     detail: [
       '【任务链接】已知任务 id 时调用 history/get_task_digest，返回的 sessionUrl 可直接写成 [任务标题](sessionUrl)。list_sessions、search_chat_history、get_chat_history 的任务元数据也附带 sessionUrl，含所属电脑，支持桌面与手机打开。',
+      '【邀请协助当前任务】control 类 create_shared_task_invitation / get_shared_task_state 生成原生共享邀请或查询状态；只针对调用工具的原任务，在任务宿主执行，手机或同账号另一台电脑控制该任务时也适用。访客能读完整历史、附件与工具结果，使用同一 Agent 和既有任务权限；链接可转发，不绑定收件人。工具不发通知、不另建任务，不能指定其他任务。将回执中的 invitationLink 原样交给发送流程；通知插件负责收件人、预览与发送确认。结果未知时先查询状态再决定是否重试，不自动重复。',
       '【机器】cindy_helper 的顶层工具 list_machines（不经 list_tools）：看账号下所有电脑的实时 CPU、可用内存、磁盘、空闲时长和在跑任务，以及这台电脑配置的 SSH 主机；只报事实，放哪台由你决定。',
       '【原则】用户本人能做的操作(含跨电脑)，Agent 也应有对应工具；是否执行由权限档与自动审核决定。数据保存在各自的电脑上：下结论「没有 / 没人在跟」之前，先确认查的是不是只有本机。',
       '【任务】cindy_helper history 类：list_sessions / search_chat_history(device=local|all|<deviceId>)、get_chat_history(deviceId::sessionId)、get_task_digest(一件任务的 ≤2KB 摘要：状态、已持续分钟、最后的要求与回答、待答问题、错误、模型路线与建议换到的下一条、PR、排队数；deviceId::sessionId 只读)、list_history_devices 可跨电脑；list_workdirs、list_session_queue 仅本机。handoff 类 send_to_session：发给既有任务可跨电脑(deviceId::sessionId)，新建任务仅本机。control 类 archive_sessions / unarchive_sessions 可跨电脑(deviceId::sessionId，单次限定一台电脑)；改名、移动、标签、排队消息、插话、停止、运行设置、list_projects 与项目增删改仅本机。',
@@ -95,7 +97,7 @@ export const CAPABILITIES: readonly CapabilityEntry[] = [
       '【伙伴】cindy_helper bots 类(仅伙伴任务可见)：list_agents / send_to_agent 可跨电脑(deviceId::botId)；get_teammate_home / move_teammate_home 查看与更换任一伙伴的主力电脑(跨电脑，更换按权限档)；资料、能力、待办、后台任务仅本机。list_teammate_projects / set_teammate_project 读取与修改自身关联项目，资料按需读取，关联不授予任务责任或执行权限。',
       '【自动跟进】宿主在任务卡住、等主人、出错、撞用量上限、做完时叫醒负责跟进的伙伴(内置例行任务)。伙伴先 get_task_digest 读摘要，再用 continue_workbench_task 让任务继续、send_to_session 代答低风险问题、set_session_runtime 换到 suggested_route(仅本机)、update_teammate_todo 记下要主人处理的事。get_workbench 是工作台「一眼」(等你 / 在做，仅本机投影)；负责「自动跟进所有任务」的伙伴可读取与继续另一台在线电脑上的任务(read_workbench_task / continue_workbench_task 传 deviceId::sessionId)，别的伙伴开的任务默认只读不继续(TASK_FOLLOWED_BY_OTHER_BOT，主人可在那位伙伴的设置里交出来)；其它伙伴只碰自己开的或接手的任务。',
       '【跨电脑的前提】对方电脑在线、同一账号、已开启远程控制。离线、未开启、版本不支持或超时会按电脑写明原因，结果里的 partial=true 表示有电脑没查到。主力电脑在别处的伙伴是例外：它和主人的对话存在云端，那台电脑离线时 search_chat_history 也能查到（cloud_hits，关键词子串匹配）。',
-      '【尚无工具】在另一台电脑上新建任务、管理另一台电脑上的任务(改名 / 停止 / 队列)与项目；这些用户可在远程控制里手动完成。定时任务可以 schedule_create(device=) 新建到另一台电脑。',
+      '【尚无工具】在另一台电脑上新建任务、管理另一台电脑上的任务(改名 / 停止 / 队列)与项目；这些用户可在远程控制里手动完成。定时任务可以 schedule_create(device=) 新建到另一台电脑。新任务的 Agent 可用 send_to_session create 的 agent_device_id 选另一台电脑的远程或分享供应商，任务与文件仍在本机。',
     ].join(' '),
   },
   {
@@ -141,7 +143,7 @@ export const CAPABILITIES: readonly CapabilityEntry[] = [
       `【是什么】get_current_session_id(cindy_helper 自省类)+ send_to_worker(cindy_orca team 工具)/ send_to_session(cindy_helper handoff 类, 走 call_tool)配合使用。前者返回当前 ${BRAND_NAME} session 的 business id / agent_kind / project_path / working_dir, 后两者把一条控制层消息投递到指定 session;目标不在内存时会自动 resume, 投递成功即返回。`,
       '【典型场景】自动化 skill 首次处理某个外部业务对象(issue / jira / pr / 任意自定义 key)时, 先调 get_current_session_id 拿 session_id 并把它和外部 key 做持久化绑定;后续二次处理同一对象时, 调 send_to_worker(team 内 worker)或 send_to_session(任意已知 session)把增量信息 handoff 回那个 session, 保留原始上下文、决策链和历史工具调用。',
       '【skill 端伪代码】first_seen -> sid = get_current_session_id(); store(key, sid.session_id); later -> sid = load(key); if sid then send_to_worker / send_to_session({ target_session_id: sid, message: "...增量..." }) else fallback normal flow。',
-      '【跨电脑】target_session_id 传 deviceId::sessionId(list_sessions 用 device 参数查到的 id)可发给另一台电脑上的既有任务,对方电脑需在线并开启远程控制;不能在另一台电脑新建任务。',
+      '【跨电脑】target_session_id 传 deviceId::sessionId(list_sessions 用 device 参数查到的 id)可发给另一台电脑上的既有任务,对方电脑需在线并开启远程控制;不能在另一台电脑新建任务。新建的任务与文件在本机,create 时可用 agent_device_id 选另一台电脑的远程或分享供应商作为 Agent 位置(取 list_available_models 的 locations[].agent_device_id;SSH 任务不支持,那台没有所需模型或连不上返回 PROVIDER_ROUTE_UNAVAILABLE,不会自动换电脑)。',
       '【硬规则】send_to_session 发给已有任务时 target_session_id 必传；不知道 id 先用 history/list_sessions 查。新建任务省略 project_path 继承来源归属，传已有项目路径切换项目，传 null 创建不绑项目的任务；可用 title 指定标题。get_current_session_id 可查询归属，control/list_projects 可选择其他项目。working_dir 只决定执行位置，不登记项目；新增或恢复项目单独用 create_project。无法确定来源归属时返回 INVALID_ARGS；成功创建返回 wake_kind=created 和 note，不等于投给既有任务。',
       '【失败码】NOT_FOUND / DELETED 通常表示绑定失效,skill 应清掉绑定并回退; ARCHIVED 表示 session 已归档，在已有恢复授权时可先用 control/unarchive_sessions 恢复，再发送新消息，不能自行推翻用户归档意图; 传了 id 但目标不存在只会返 NOT_FOUND,绝不自动新建。jump 撞上目标正在跑 turn 时不再返 BUSY,而是入队并成功返回 wake_kind=queued(可用 update/cancel_session_queued_message 管理);BUSY 仅是 create 模式的罕见兜底。',
       '【边界】它不是普通聊天入口,而是 session 间 handoff 的控制层能力;不会自动关闭当前 dispatcher session,也不会替 skill 管理绑定键的存储语义。',
@@ -352,7 +354,7 @@ export const CAPABILITIES: readonly CapabilityEntry[] = [
     title: '远程连接(手机 / 其他电脑控制,SSH 远端主机)',
     oneLiner: '同账号的手机与其他电脑可远程操控这台桌面上的任务;也可经 SSH 让 agent 在远端主机上运行。',
     detail: [
-      '入口:设置 →「远程连接」。同一 Cindy 账号登录的设备自动出现,无需手动配对;每台设备有「我控制它」与「允许它控制本机」两个独立开关,本机另有允许被控制的总开关。手机 App 只做控制端,任务与数据都在被控电脑上。',
+      '入口:设置 →「远程连接」。同一 Cindy 账号登录的设备自动出现,无需手动配对;每台设备卡上按方向分两行:「我可以:控制它」与「它可以:控制本机」,两项各自独立开关,本机另有允许被控制的总开关。手机 App 只做控制端,任务与数据都在被控电脑上。',
       '控制端可查看与推进被控电脑上的任务(发消息、审批、切模型等),账号密钥与全局设置等不开放给控制端。主列表标题「全部任务 ▾」可切换只看本机或某台远程电脑。',
       'SSH 远端主机:在同一页添加主机(也读取 ~/.ssh/config),可在远端安装 Claude Code / Codex / Pi(未安装时首条消息自动安装)并新建远端任务,agent 进程与文件都在远端。',
       'agent 侧跨电脑能力(查任务、给另一台电脑的任务发消息、管定时任务等)见 self-management。',

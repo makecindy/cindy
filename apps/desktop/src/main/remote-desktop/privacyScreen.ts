@@ -3,6 +3,15 @@ import { createLogger } from '../logger';
 import { t } from '../i18n';
 import { privacyScreenHtml } from './privacyScreenHtml';
 import { watchPrivacyInput, type PrivacyInputMonitor } from './privacyInput';
+import { scheduleMainAppPresenceRestore } from '../appPresence';
+
+/** Below 1 so windows behind stay "visible" to macOS; high enough to hide them from people. */
+const AWAY_MASK_OPACITY = 0.99;
+
+export type PrivacyInputWatcher = (
+  localInput: () => void,
+  failed: () => void,
+) => Promise<PrivacyInputMonitor>;
 
 const log = createLogger('remote-desktop:privacy');
 
@@ -21,25 +30,38 @@ export class PrivacyScreen {
   }
   constructor(
     private readonly excluded: (ids: number[]) => void,
-    private readonly stopped: () => void | Promise<void>,
+    /** Returns false to keep the masks up (the away guard could not lock). */
+    private readonly stopped: () => void | false | Promise<void | false>,
     private readonly suspendInput: () => Promise<() => Promise<void>>,
-    private readonly watchInput = watchPrivacyInput,
+    private readonly watchInput: PrivacyInputWatcher = watchPrivacyInput,
+    private readonly options: {
+      /** Page shown on the masks; the away guard uses its own black cover. */
+      html?: () => string;
+      /**
+       * macOS non-activating panels that join full-screen Spaces without Electron's
+       * dock hide. The away guard needs this: the owner keeps using Cindy afterwards,
+       * and the dock hide left the whole app as a background-only process. Remote
+       * desktop keeps its dialog-capable windows and only restores Dock presence.
+       */
+      nonActivating?: boolean;
+    } = {},
   ) {}
   private async disconnect(generation: number): Promise<void> {
     if (generation !== this.generation) return;
     // Invalidate callbacks immediately, but retain masks and capture exclusions
     // until the controller has finished locking and ended the viewing lease.
     const ending = ++this.generation;
+    let keep = false;
     try {
       // The confirming hook rejects injected input, including our lock shortcut.
       // Keep the masks, but wait for hook teardown before asking the OS to lock.
       await this.monitor?.stop();
       if (ending !== this.generation) return;
-      await this.stopped();
+      keep = (await this.stopped()) === false;
     } catch {
       log.warn('privacy disconnect failed');
     } finally {
-      if (ending === this.generation) this.stop();
+      if (ending === this.generation && !keep) this.stop();
     }
   }
   private async confirmExit(window: BrowserWindow, generation: number): Promise<void> {
@@ -120,6 +142,9 @@ export class PrivacyScreen {
       this.partitionConfigured = true;
     }
     const displays = screen.getAllDisplays();
+    const html =
+      this.options.html?.() ?? privacyScreenHtml(t('privacyExit.status'), t('privacyExit.hint'));
+    const nonActivating = this.options.nonActivating === true && process.platform === 'darwin';
     try {
       for (const display of displays) {
         const window = new BrowserWindow({
@@ -142,6 +167,12 @@ export class PrivacyScreen {
           hasShadow: false,
           // Functional blackout pixels, independent of the application's theme.
           backgroundColor: '#000000',
+          // Away masks are very slightly translucent: a fully opaque full-screen window
+          // makes macOS report every window behind it as occluded, and Chromium/Electron
+          // apps then stop drawing, so Agents behind the cover read a frozen screen
+          // (2026-11-06: a click behind the mask changed the page, its pixels did not).
+          // A transparent window whose page is opaque is still treated as occluding.
+          ...(nonActivating ? { type: 'panel', opacity: AWAY_MASK_OPACITY } : {}),
           webPreferences: {
             session: partition,
             sandbox: true,
@@ -175,7 +206,7 @@ export class PrivacyScreen {
         });
         window.setMenuBarVisibility(false);
         await window.loadURL(
-          `data:text/html;charset=utf-8,${encodeURIComponent(privacyScreenHtml(t('privacyExit.status'), t('privacyExit.hint')))}`,
+          `data:text/html;charset=utf-8,${encodeURIComponent(html)}`,
         );
         window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
         window.webContents.on('will-navigate', (event) => event.preventDefault());
@@ -183,7 +214,10 @@ export class PrivacyScreen {
         // Remote system injection must reach the app behind this passive mask.
         // Physical input is identified and consumed by the native hook instead.
         window.setIgnoreMouseEvents(true);
-        window.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+        window.setVisibleOnAllWorkspaces(true, {
+          visibleOnFullScreen: true,
+          ...(nonActivating ? { skipTransformProcessType: true } : {}),
+        });
         window.setAlwaysOnTop(true, 'screen-saver', 1);
         window.webContents.on('render-process-gone', () => {
           void this.disconnect(generation);
@@ -231,6 +265,14 @@ export class PrivacyScreen {
       throw error;
     }
   }
+  /** Swaps the page on every mask, keeping the masks in place. */
+  async replacePage(html: string): Promise<void> {
+    const url = `data:text/html;charset=utf-8,${encodeURIComponent(html)}`;
+    await Promise.all(
+      this.windows.filter((window) => !window.isDestroyed()).map((window) => window.loadURL(url)),
+    );
+  }
+
   stop(): void {
     this.generation++;
     this.confirming = false;
@@ -240,5 +282,8 @@ export class PrivacyScreen {
     this.windows = [];
     for (const window of windows) if (!window.isDestroyed()) window.destroy();
     this.excluded([]);
+    // visibleOnFullScreen hides the Dock tile and never brings it back by itself.
+    if (windows.length && process.platform === 'darwin')
+      scheduleMainAppPresenceRestore('privacy-screen-stopped');
   }
 }

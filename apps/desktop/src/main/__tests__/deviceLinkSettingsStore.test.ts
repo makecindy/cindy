@@ -1,3 +1,9 @@
+// Keep authenticated HTTP and cross-process I/O outside this in-memory filesystem fixture.
+// The production policy queue remains active; its real lock ordering is covered by providerHandlers.
+vi.mock('../device-link/crossProcessLock.js', () => ({
+  withCrossProcessLock: async (_file: string, _options: unknown, work: (status: { held: true }) => unknown) => work({ held: true }),
+}));
+vi.mock('../device-link/providerShareAvailabilityTransport.js', () => ({ disableShareAvailability: vi.fn() }));
 /**
  * deviceLinkSettingsStore.test.ts —— 被控开关持久化的读/写健壮性。
  * 覆盖:文件缺失 → 默认;合法 JSON → normalize;**损坏 JSON → unlink + 回落默认(不崩)**;
@@ -73,6 +79,7 @@ const DEFAULT_SETTINGS = {
 vi.mock('electron', () => ({ app: { getPath: () => '/tmp/userdata' } }));
 vi.mock('node:fs', () => ({
   default: {
+    mkdirSync: vi.fn(),
     existsSync: h.existsSync,
     readFileSync: h.readFileSync,
     unlinkSync: h.unlinkSync,

@@ -1,8 +1,13 @@
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 
 import { GHOST_OFFICIAL_ID_PREFIX } from '../../../shared/ghost';
-import i18n from '../../i18n';
+import i18n, { SUPPORTED_LOCALES } from '../../i18n';
 import { ghostInstallErrorKey } from '../installErrorKey';
+
+// 非英文语言包按需加载；getFixedT(locale) 只读已加载的语言。
+beforeAll(async () => {
+  await i18n.loadLanguages([...SUPPORTED_LOCALES]);
+});
 
 describe('ghostInstallErrorKey', () => {
   it('distinguishes a valid plugin that needs a newer Host from an invalid package', () => {

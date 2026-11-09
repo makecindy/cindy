@@ -1,3 +1,4 @@
+import { stackState, reduceStack } from './navigationFixture';
 // @vitest-environment jsdom
 import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
@@ -8,15 +9,15 @@ const h = vi.hoisted(() => ({
   user: { id: 'account', passportId: 'passport', membershipKind: 'personal', orgId: null } as MobileUser,
   sessions: [] as import('@/session/types').RemoteSession[], upsert: vi.fn(), get: vi.fn(), set: vi.fn(), routes: [] as Array<{ name: string; params?: unknown }>,
 }));
-vi.mock('expo-router', () => ({ useRouter: () => ({ dismissTo: h.dismissTo, dismiss: h.dismiss, replace: h.replace }), useNavigation: () => ({ reset: h.reset, getState: () => ({ routes: h.routes, index: h.routes.length - 1 }) }) }));
+vi.mock('expo-router', () => ({ useRouter: () => ({ dismissTo: h.dismissTo, dismiss: h.dismiss, replace: h.replace }), useNavigation: () => ({ reset: h.reset, getState: () => ({ key: 'test-stack', routeKeySeq: 10, stale: false, type: 'stack', routeNames: ['resources/[collectionId]', 'sessions/[sessionId]', 'devices/index'], routes: h.routes, index: h.routes.length - 1 }) }) }));
 vi.mock('react-native', () => ({ Keyboard: { dismiss() {} } }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ i18n: { language: 'en' } }) }));
-vi.mock('@/auth/AuthContext', () => ({ useAuth: () => ({ user: h.user, accountGeneration: h.accountGeneration }) }));
+vi.mock('@/auth/AuthContext', () => ({ useAuth: () => ({ user: h.user, accountGeneration: h.accountGeneration, initialized: true, isAuthenticated: true }) }));
 vi.mock('@/utils/useGuardedPush', () => ({ useGuardedPush: () => h.push }));
 vi.mock('@react-native-async-storage/async-storage', () => ({ default: { getItem: h.get, setItem: h.set } }));
 vi.mock('@/session/remoteSessionStore', () => ({ remoteSessionStore: { getSessions: () => h.sessions, getSessionDeviceId: () => undefined, upsertDeviceSession: h.upsert } }));
 import { useTeammateNavigation } from '@/session/useTeammateNavigation';
-import { homeNavigationOwner } from '@/session/useHomeMode';
+import { homeNavigationOwner, useHomeStartupSplashRelease } from '@/session/useHomeMode';
 import { readHomeNavigationPreferences, saveHomeNavigationPreferences } from '@/session/homeViewPreferenceStore';
 import { teammateIdentity } from '@/session/teammateNavigation';
 import { StackRouter, StackActions } from 'expo-router/build/react-navigation/routers/StackRouter';
@@ -37,6 +38,50 @@ beforeEach(() => {
 });
 afterEach(() => { act(() => root?.unmount()); root = undefined; vi.useRealTimers(); });
 describe('header/home shared navigation', () => {
+  // Behavior tier: selecting a teammate updates shared preferences, but must not render the
+  // root navigator again just because its startup gate subscribed to unrelated preferences.
+  it('keeps the startup gate idle while teammate navigation and home preferences change', async () => {
+    const releaseSplash = vi.fn();
+    let gateRenders = 0;
+    function StartupGate() {
+      gateRenders += 1;
+      useHomeStartupSplashRelease(releaseSplash);
+      return createElement(Probe, {});
+    }
+    root = createRoot(document.createElement('div'));
+    await act(async () => root!.render(createElement(StartupGate)));
+    expect(releaseSplash).toHaveBeenCalledTimes(1);
+    const hydratedRenders = gateRenders;
+    await act(async () => result.openTeammate(teammate));
+    expect(h.push).toHaveBeenCalledTimes(1);
+    expect(result.lastTeammate).toEqual(teammateIdentity(teammate));
+    expect(gateRenders - hydratedRenders).toBe(0);
+    await act(async () => result.setTeammatesCollapsed(true));
+    await act(async () => result.setShowCollapsedTeammateAvatars(false));
+    expect(result.teammatesCollapsed).toBe(true);
+    expect(result.showCollapsedTeammateAvatars).toBe(false);
+    expect(gateRenders - hydratedRenders).toBe(0);
+    expect(releaseSplash).toHaveBeenCalledTimes(1);
+  });
+  // Behavior tier: narrowing the startup subscription must still start the read itself and
+  // wait for each account's stored state, without relying on a mounted home/navigation hook.
+  it('releases the splash only after the current account preferences finish loading', async () => {
+    const releaseSplash = vi.fn();
+    const reads: Array<(raw: string | null) => void> = [];
+    h.get.mockImplementation(() => new Promise<string | null>(resolve => reads.push(resolve)));
+    function StartupGate() { useHomeStartupSplashRelease(releaseSplash); return null; }
+    root = createRoot(document.createElement('div'));
+    await act(async () => root!.render(createElement(StartupGate)));
+    expect(reads).toHaveLength(1);
+    expect(releaseSplash).not.toHaveBeenCalled();
+    h.user = { ...h.user, id: 'startup-new-account' };
+    await act(async () => root!.render(createElement(StartupGate)));
+    expect(reads).toHaveLength(2);
+    await act(async () => reads[0](null));
+    expect(releaseSplash).not.toHaveBeenCalled();
+    await act(async () => reads[1](JSON.stringify({ teammatesCollapsed: true })));
+    expect(releaseSplash).toHaveBeenCalledTimes(1);
+  });
   // PR #7079: the drawer must unmount before routing. Existing tests only covered immediate home
   // pushes; one teammate or creation receipt with a deferred host push reproduces the regression.
   // Unit tier, real navigation hook; the queued route must survive the source hook's unmount.
@@ -109,7 +154,7 @@ describe('header/home shared navigation', () => {
     const list = { name: 'devices/index', key: 'list' }; const cloud = { name: 'companions/cloud/[actorId]', key: 'cloud' };
     h.routes = [list, old, cloud];
     await render(); await act(async () => result.openTeammate(moved, { replace: true, leaving: { botId: 'writer', deviceId: 'mac' } }));
-    expect(h.reset).toHaveBeenCalledExactlyOnceWith({ index: 1, routes: [list, { name: 'resources/[collectionId]/[resourceId]', params: {
+    expect(h.reset).toHaveBeenCalledExactlyOnceWith({ key: 'test-stack', routeKeySeq: 10, stale: false, type: 'stack', routeNames: ['resources/[collectionId]', 'sessions/[sessionId]', 'devices/index'], index: 1, routes: [list, { name: 'resources/[collectionId]/[resourceId]', params: {
       collectionId: 'teammates', resourceId: 'writer', resourceKind: 'bot', deviceId: 'win', deviceName: 'Studio', title: 'Writer',
     } }] });
     expect(h.replace).not.toHaveBeenCalled();
@@ -219,16 +264,16 @@ it('removes the retired teammate list from the stack before returning home', asy
   const router = StackRouter({ initialRouteName: 'resources/[collectionId]' });
   const options = { routeNames: ['resources/[collectionId]', 'sessions/[sessionId]', 'devices/index'],
     routeParamList: { 'resources/[collectionId]': { collectionId: 'teammates' } }, routeGetIdList: {}, routeKeyChanges: [] };
-  let state = router.getInitialState(options);
-  state = router.getStateForAction(state, StackActions.push('sessions/[sessionId]'), options)! as typeof state;
+  let state = stackState(options, 'resources/[collectionId]');
+  state = reduceStack(router, state, StackActions.push('sessions/[sessionId]'), options);
   h.routes = state.routes;
-  h.reset.mockImplementationOnce(next => { state = router.getRehydratedState({ ...next, stale: true }, options) as typeof state; });
+  h.reset.mockImplementationOnce(next => { state = reduceStack(router, state, { type: 'RESET', payload: next }, options); });
   await render();
   await act(async () => result.returnHome());
   expect(h.dismiss).not.toHaveBeenCalled();
   expect(h.dismissTo).not.toHaveBeenCalled();
   expect(state.routes.map(route => route.name)).toEqual(['devices/index']);
-  expect(router.getStateForAction(state, StackActions.pop(), options)).toBeNull();
+  expect(router.getStateForAction(state, StackActions.pop(), options)).toBe('UNHANDLED');
 });
 it('preserves earlier unrelated routes when removing multiple retired entries', async () => {
   const prior = { name: 'resources/[collectionId]', params: { collectionId: 'tools', targets: 'hosts' } };
@@ -240,7 +285,7 @@ it('preserves earlier unrelated routes when removing multiple retired entries', 
   ];
   await render();
   await act(async () => result.returnHome());
-  expect(h.reset).toHaveBeenCalledExactlyOnceWith({ index: 1, routes: [prior, { name: 'devices/index' }] });
+  expect(h.reset).toHaveBeenCalledExactlyOnceWith({ key: 'test-stack', routeKeySeq: 10, stale: false, type: 'stack', routeNames: ['resources/[collectionId]', 'sessions/[sessionId]', 'devices/index'], index: 1, routes: [prior, { name: 'devices/index' }] });
   expect(h.dismissTo).not.toHaveBeenCalled();
 });
 it('opens a known conversation directly and seeds its first-frame identity', async () => {

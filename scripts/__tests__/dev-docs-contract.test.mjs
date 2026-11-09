@@ -343,6 +343,18 @@ test("client CI keeps the complete sharded unit gate on Windows", () => {
 	assert.doesNotMatch(runnerChecks, /^    strategy:/m);
 	assert.equal([...runnerChecks.matchAll(/^        run: pnpm test:runner$/gm)].length, 1);
 	assert.match(runnerChecks, /botCanonicalSession\.test\.ts/);
+	// Database safety gate: Linux skips the bundled sqlite-vec replay. Keep the
+	// conditional real-upgrade job on a supported runner behind the required check.
+	assert.match(runnerChecks, /^          lfs: true$/m);
+	assert.match(runnerChecks, /^          fetch-depth: 0$/m);
+	assert.match(runnerChecks, /^        id: database-changes\n        run: node scripts\/ci-database-tests\.mjs detect$/m);
+	assert.match(runnerChecks, /^        if: steps\.database-changes\.outputs\.required == 'true'\n        run: node scripts\/ci-database-tests\.mjs run$/m);
+	assert.doesNotMatch(runnerChecks, /continue-on-error:/);
+	const events = workflow.slice(workflow.indexOf('\non:'), workflow.indexOf('\npermissions:'));
+	for (const event of ['pull_request', 'merge_group', 'push', 'workflow_dispatch']) {
+		assert.match(events, new RegExp(`^  ${event}:`, 'm'));
+	}
+	assert.doesNotMatch(events, /paths(?:-ignore)?:/);
 
 	const gate = workflowJob(workflow, "windows-unit");
 	assert.ok(gate, "client CI must preserve the stable Windows unit check");

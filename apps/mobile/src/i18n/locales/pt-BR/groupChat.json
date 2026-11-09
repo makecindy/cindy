@@ -202,7 +202,22 @@
     "progressDone": "Concluídas {{done}} / {{total}}",
     "allDone": "Tudo concluído",
     "intro_many": "Isso leva {{count}} etapas. Veja quem faz o quê:",
-    "eyebrow_many": "Plano · {{count}} etapas"
+    "eyebrow_many": "Plano · {{count}} etapas",
+    "stepQueued": "Aguardando início",
+    "stepExecuting": "Em execução",
+    "stepSkipped": "Ignorado",
+    "skippingTurn": "Pulando…",
+    "queueWaiting": "Aguardando você continuar",
+    "skipTurnLabel": "Pular {{name}}",
+    "stepSpoken": "Concluído",
+    "allTurns_one": "Todos os {{count}} colega",
+    "allTurns_other": "Todos os {{count}} colegas",
+    "foldTurns": "Mostrar menos",
+    "allTurns_many": "Todos os {{count}} colegas",
+    "talkTitle": "Ouvir todos em sequência",
+    "talkPending": "Não iniciado",
+    "skipTurn": "Pular",
+    "queueEnded": "Rodada encerrada"
   },
   "speaking": {
     "queued": "Na fila",
@@ -314,7 +329,8 @@
     "lifecycleUnavailable": "O servidor ou computador atual ainda não oferece suporte a esta ação.",
     "groupDissolved": "Este grupo foi dissolvido. Você ainda pode ler o histórico disponível.",
     "lastOwner": "Transfira a propriedade ou dissolva este grupo antes de sair.",
-    "allBotsMentionDisabled": "O proprietário do grupo ainda não ativou @Todos os colegas."
+    "allBotsMentionDisabled": "O proprietário do grupo ainda não ativou @Todos os colegas.",
+    "turnAlreadyStarted": "Este colega já começou e não pode ser pulado"
   },
   "followUp": {
     "next": "Plano · Próxima etapa",
@@ -512,6 +528,7 @@
     "searchMembers": "Buscar membros",
     "membersNoMatch": "Nenhum membro corresponde a “{{query}}”",
     "you": "Você",
+    "companionOf": "Companheiro de {{name}}",
     "teammateTag": "Colega",
     "paused": "Pausado",
     "accessNone": "Somente o proprietário",

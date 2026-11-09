@@ -51,6 +51,8 @@ export default {
     'work-queued-step-mixed': { about: '#8064 review: queued plan step does not override a running reply', data: { ...base, messages: 2, workState: 'queued', workParallel: true, workQueuedStep: true } },
     'work-queued': { about: '#8047: queued execution is busy without speaking or elapsed work', data: { ...base, messages: 2, workState: 'queued' } },
     'process-history': { about: 'Owned teammate historical process, final reply outside', data: { ...base, sidebar: false, processRecord: true, workRemote: true } },
+    'process-empty': { about: 'Final-only reply explains the empty process', data: { ...base, sidebar: false, processRecord: true, processEmpty: true, workRemote: true } },
+    'process-unavailable': { about: 'Unavailable process shows a retry action', data: { ...base, sidebar: false, processRecord: true, processUnavailable: true, workRemote: true } },
     'process-other-owner': { about: 'Other members never receive a private process entry', data: { ...base, sidebar: false, processRecord: true, processOtherOwner: true, workRemote: true } },
     'work-thinking': { about: 'Actual group work status, scenario data: thinking', data: { ...base, messages: 2, workState: 'thinking' } },
     'work-tools': { about: 'Actual group work status, scenario data: command execution', data: { ...base, messages: 2, workState: 'testing' } },
@@ -144,6 +146,12 @@ export default {
       data: { ...base, sidebar: false, readReceipts: true, readReceiptsMask: true,
         members: [['a', 'Aster'], ['g', 'Ada'], ['h', 'Kai'], ['c', 'Leo'], ['d', 'Mira'], ['e', 'Orin'], ['f', 'Quill']].map(([id, name]) => ({ botId: id, actorId: id, name })) },
     },
+    'read-receipts-teammates': {
+      about: 'Bot group 消息已读 in a group of only teammates: a teammate reads a message when its computer takes the execution up, so the check turns double and the list names the teammates (no times)',
+      viewport: { width: 900, height: 520 },
+      data: { ...base, sidebar: false, readReceipts: true, readReceiptsTeammates: true,
+        members: [['a', 'Aster', 'bot'], ['b', 'Nova', 'bot'], ['g', 'Ada', 'human']].map(([id, name, actorKind]) => ({ botId: id, actorId: id, actorKind, name })) },
+    },
     'read-receipts-fill': {
       about: 'Bot group 消息已读: messages of growing length, so one has a last line just full: the check moves onto a row of its own instead of covering text',
       viewport: { width: 700, height: 1200 },
@@ -175,6 +183,15 @@ export default {
       const heading = journal.locator(':scope > button');
       assert.equal(await heading.getAttribute('aria-expanded'), 'false');
       await heading.click();
+      if (definition.data.processEmpty || definition.data.processUnavailable) {
+        await journal.getByText(await ui.t(definition.data.processEmpty ? 'chat.teammateProcess.empty' : 'chat.teammateProcess.unavailable')).waitFor();
+        assert.equal(await journal.getByRole('button', { name: await ui.t('chat.errorBanner.retry'), exact: true }).count(), definition.data.processUnavailable ? 1 : 0);
+        await ui.capture('process-expanded');
+        await heading.click();
+        assert.equal(await heading.getAttribute('aria-expanded'), 'false');
+        await ui.capture('process-collapsed');
+        return;
+      }
       await journal.getByText('我先核对任务的最近进展，再看未完成 PR 的阻塞点。').waitFor();
       await ui.capture('history-expanded');
       const endError = await journal.evaluate(root => {
@@ -426,6 +443,28 @@ export default {
       await page.getByRole('dialog').getByText(await ui.t('bots.groupChat.server.readersNone'), { exact: true }).waitFor();
       await ui.capture('no-readers');
       await page.keyboard.press('Escape');
+      return;
+    }
+    if (ui.case === 'read-receipts-teammates') {
+      const marks = page.getByTestId('read-receipt');
+      assert.deepEqual(await marks.evaluateAll(nodes => nodes.map(node => node.getAttribute('data-read'))), ['true', 'false', 'true']);
+      await ui.capture('checks');
+      await marks.first().click();
+      const popover = page.getByRole('dialog');
+      await popover.getByText('Aster', { exact: true }).waitFor();
+      assert.deepEqual(await popover.getByRole('listitem').allInnerTexts().then(items => items.map(item => item.replace(/\s+/g, ' ').trim().replace(/^[A-Z] /, ''))), ['Aster', 'Nova'], 'both teammates are listed, in the server\'s order');
+      assert.equal(await popover.locator('time').count(), 0, 'a teammate\'s read has no time');
+      await ui.capture('read-list');
+      await page.keyboard.press('Escape');
+      await popover.waitFor({ state: 'detached' });
+      // A person and a teammate in one list.
+      await page.mouse.move(0, 0);
+      await marks.nth(2).click();
+      await popover.getByText('Ada', { exact: true }).waitFor();
+      assert.deepEqual(await popover.getByRole('listitem').allInnerTexts().then(items => items.map(item => item.replace(/\s+/g, ' ').trim().replace(/^[A-Z] /, ''))), ['Ada', 'Aster'], 'a person and a teammate are listed together');
+      await ui.capture('read-list-mixed');
+      await page.keyboard.press('Escape');
+      await popover.waitFor({ state: 'detached' });
       return;
     }
     if (ui.case === 'read-receipts-fill') {

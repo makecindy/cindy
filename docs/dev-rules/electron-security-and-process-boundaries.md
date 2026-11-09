@@ -205,7 +205,15 @@ Windows helper 的 `frame` 请求可显式指定 `encoding: "bgra"`，响应为�
 完整收到后才交给截图／录制；不将像素转成文本，不把共用管道缓冲的其它字节带过 IPC。
 长度不符、截断或超时结束本次 helper 并沿用原降级路径；不落盘，也不延长辅助进程生命周期。
 无后台持续采集，不改变截图授权、IPC 来源检查或远程桌面采集行为。
-macOS 复用本地 ScreenCaptureKit helper，main 裁剪后才跨 IPC。没有录制临时文件或音频采集。
+macOS 复用本地 ScreenCaptureKit helper，main 裁剪后才跨 IPC。没有录制临时文件。
+视频录制可分别选择扬声器和麦克风，默认均关闭；GIF 不采集声音。音源由独立的
+`DesktopCaptureWindow` recording 模式持有，媒体权限只授予该次录制的顶层页面和所选音源。
+系统声音所需的屏幕流只进入隔离进程，其视频轨道立即停止；截图界面只接收最多 100 ms
+的立体声 PCM，不获得未裁剪画面或通用媒体权限。混音不回放到本机扬声器，声音与画面
+通过同一个 MediaRecorder 暂停、恢复和封装。暂停时销毁音源采集窗口、停止 PCM 轮询并挂起
+接收端 AudioContext，仅保留封装所需的同一条输出音轨；恢复时重新获取所选音源，丢弃旧读取结果，
+音频就绪后才恢复录制计时。音源失败会明确提示；取消、结束或会话关闭
+均销毁采集窗口及音轨，不在后台继续收音。这些接口仅供本机截图窗口使用，不加入远程 IPC allowlist。
 本地区域 GIF／视频录制通过同包 helper 的 `cursor-overlay-demand` 模式按请求编码：
 系统仍按原来的 30fps 配置提供画面，仅保留最新一张尚未编码的 IOSurface，使用 CF retain 与
 IOSurface use count 阻止缓冲复用；替换、编码完成、空白画面和销毁均释放它。无请求时不做 JPEG

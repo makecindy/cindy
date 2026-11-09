@@ -63,21 +63,21 @@ describe('network recovery during an in-flight refresh', () => {
   it('shares a late network failure without launching a synchronized recovery request', async () => {
     const h = recoveryHarness();
     const ordinary = h.call();
-    const first = h.call({ networkRecovered: true });
-    const second = h.call({ networkRecovered: true });
-    h.backoff.defer(1);
+    const first = h.call({ serverRejectedToken: true });
+    const second = h.call({ serverRejectedToken: true });
+    h.backoff.defer(1, undefined, true);
     h.finish();
     await expect(Promise.all([ordinary, first, second])).resolves.toEqual([false, false, false]);
     expect(h.retry).not.toHaveBeenCalled();
     expect(h.backoff.remaining(1)).toBe(60_000);
   });
 
-  it('does not bypass or reset backoff when recovery hints arrive after failure', async () => {
+  it('keeps server/local-failure backoff when 401 evidence arrives after failure', async () => {
     const h = recoveryHarness();
     h.finish();
     h.backoff.defer(1);
     for (let attempt = 0; attempt < 5; attempt++) {
-      await expect(h.call({ networkRecovered: true })).resolves.toBe(false);
+      await expect(h.call({ serverRejectedToken: true })).resolves.toBe(false);
     }
     expect(h.retry).not.toHaveBeenCalled();
     expect(h.backoff.remaining(1)).toBe(60_000);
@@ -88,7 +88,7 @@ describe('network recovery during an in-flight refresh', () => {
     'does not retry or clear the deadline when the in-flight refresh %s',
     async (outcome) => {
       const h = recoveryHarness();
-      const recovery = h.call({ networkRecovered: true });
+      const recovery = h.call({ serverRejectedToken: true });
       const epoch = outcome === 'owner changed' ? 2 : 1;
       h.setEpoch(epoch);
       const delay = h.backoff.defer(epoch, outcome === 'Retry-After' ? 1_120_000 : undefined);
@@ -192,5 +192,53 @@ describe('runtime auth refresh backoff', () => {
     backoff.defer(1);
     backoff.clear();
     expect(backoff.remaining(1)).toBe(0);
+  });
+});
+
+// Unit: the 401 exception requires new evidence for each quick attempt, remains
+// jittered/capped, and retains its tier when the ordinary offline retry takes over.
+describe('401 quick retry deadlines', () => {
+  it.each([0, 0.5, 0.999])('caps evidence-driven retries without automatically rearming them (random=%s)', fraction => {
+    let now = 1_000_000;
+    const backoff = new AuthRefreshBackoff(() => now, () => fraction);
+    for (let i = 0; i < 3; i++) backoff.defer(1, undefined, true);
+    expect(backoff.serverRejectedToken(1)).toBe(true);
+    expect(backoff.runtimeRemaining(1)).toBeLessThan(3_000);
+    const longDeadline = now + backoff.remaining(1);
+    for (let i = 0; i < 8; i++) {
+      now += backoff.runtimeRemaining(1);
+      backoff.startRuntimeAttempt(1);
+      backoff.defer(1, undefined, true);
+      expect(backoff.runtimeRemaining(1)).toBe(backoff.remaining(1));
+      expect(now + backoff.remaining(1)).toBe(longDeadline);
+      expect(backoff.serverRejectedToken(1)).toBe(true);
+      const delay = backoff.runtimeRemaining(1);
+      expect(delay).toBeGreaterThanOrEqual(1_500);
+      expect(delay).toBeLessThanOrEqual(60_000);
+      expect(backoff.serverRejectedToken(1)).toBe(false);
+      expect(backoff.runtimeRemaining(1)).toBe(delay);
+    }
+    // Let the last quick attempt fail, then the ordinary long retry fail. Its
+    // backoff advances normally, while the quick tier remains at the 60s cap.
+    now += backoff.runtimeRemaining(1);
+    backoff.startRuntimeAttempt(1);
+    backoff.defer(1, undefined, true);
+    now = longDeadline;
+    backoff.startRuntimeAttempt(1);
+    expect(backoff.defer(1, undefined, true)).toBeGreaterThanOrEqual(300_000);
+    expect(backoff.serverRejectedToken(1)).toBe(true);
+    now += backoff.runtimeRemaining(1);
+    backoff.startRuntimeAttempt(1);
+    backoff.defer(1, undefined, true);
+    expect(backoff.serverRejectedToken(1)).toBe(true);
+    expect(backoff.runtimeRemaining(1)).toBeGreaterThanOrEqual(30_000);
+    expect(backoff.runtimeRemaining(1)).toBeLessThanOrEqual(60_000);
+
+    expect(backoff.runtimeRemaining(2)).toBe(0);
+    expect(backoff.defer(2, undefined, true)).toBeGreaterThanOrEqual(60_000);
+    expect(backoff.runtimeRemaining(2)).toBe(backoff.remaining(2));
+    backoff.clear();
+    expect(backoff.runtimeRemaining(2)).toBe(0);
+    expect(backoff.serverRejectedToken(2)).toBe(false);
   });
 });

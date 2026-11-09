@@ -15,13 +15,27 @@ for (const engine of ['claude-code', 'codex', 'pi']) {
  let persistencePending = false;
  const directoryPermissionsPendingPersistence = () => persistencePending;
  ${closure}
- return {run:()=>reviewAutoAction({kind:'exec',command:'npm test'},['/work'],['/work'],'linux'),
+ return {review:(purpose,subagent)=>${JSON.stringify(engine)}==='claude-code'?reviewAutoAction({kind:'exec',command:'npm test'},['/work'],['/work'],'linux',false,false,purpose??{}):reviewAutoAction({kind:'exec',command:'npm test'},false,false,subagent),
+ run:()=>reviewAutoAction({kind:'exec',command:'npm test'},['/work'],['/work'],'linux'),
  invalidate:(kind)=>{if(kind==='intent') currentAutoReviewIntent='Do not publish';
  if(kind==='cache') autoReviewDecisionCache.clear();
  if(kind==='directory') autoReviewDirectoryGeneration++;
  if(kind==='persistence') persistencePending=true;}};
  `, {compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText;
  describe(`${engine} final Auto runtime fence`,()=>{
+  it('keeps the main agent\'s explanation away from a subagent call',async()=>{
+   const snapshot=vi.fn(()=>undefined);
+   const delegate:AutoReviewDelegate=async()=>({verdict:'allow'});
+   const deps={withAutoReviewContext,opts:{sessionId:'s',workingDir:'/work'},mutableProviderId:undefined,mutableModel:'m',mutableCatalogModel:'m',
+    autoReviewActionContext:{precedingBlockedActions:[],record:vi.fn()},autoReviewAgentText:{snapshot},autoReviewDecisionCache:new Map(),
+    resolveAutoReviewDecision:vi.fn(async()=>({verdict:'allow'})),runtimeWorkspaceRoots:()=>['/work'],runtimeWritableRoots:()=>['/work'],
+    sessionReviewPlatform:'linux',mutableExtraDirs:[],mutableWritableDirs:[]};
+   const runtime=new Function(...Object.keys(deps),script).call({deps:{reviewAutoPermissionAction:delegate}},...Object.values(deps));
+   await runtime.review(engine==='claude-code'?{toolDescription:'Run tests',mainScope:false}:undefined,true);
+   expect(snapshot).toHaveBeenLastCalledWith(engine==='claude-code'?'Run tests':undefined,false);
+   await runtime.review(undefined,false);
+   expect(snapshot).toHaveBeenLastCalledWith(undefined,true);
+  });
   it.each(['unchanged','intent','cache','directory',...(engine==='pi'?['persistence']:[])])('checks %s after the last Host await',async kind=>{
    let calls=0, release!:()=>void, entered!:()=>void;
    const waiting=new Promise<void>(resolve=>{entered=resolve;});
@@ -30,7 +44,7 @@ for (const engine of ['claude-code', 'codex', 'pi']) {
    delegate.prepareRequest=async request=>{if(++calls===2){entered();await barrier;}return request;};
    const record=vi.fn();
    const deps={withAutoReviewContext,opts:{sessionId:'s',workingDir:'/work'},mutableProviderId:undefined,mutableModel:'m',mutableCatalogModel:'m',
-    autoReviewActionContext:{precedingBlockedActions:[],record},autoReviewDecisionCache:new Map(),
+    autoReviewActionContext:{precedingBlockedActions:[],record},autoReviewAgentText:{snapshot:()=>undefined},autoReviewDecisionCache:new Map(),
     resolveAutoReviewDecision:vi.fn(async()=>({verdict:'allow'})),runtimeWorkspaceRoots:()=>['/work'],runtimeWritableRoots:()=>['/work'],
     sessionReviewPlatform:'linux',mutableExtraDirs:[],mutableWritableDirs:[]};
    const runtime=new Function(...Object.keys(deps),script).call({deps:{reviewAutoPermissionAction:delegate}},...Object.values(deps));

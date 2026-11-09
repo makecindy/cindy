@@ -1,30 +1,36 @@
 // @vitest-environment jsdom
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { BUNDLED_CATALOG, buildUserProvider, resolveModelMetadata } from '@cindy/model-providers';
 import type { CatalogModel, ProviderView } from '@cindy/model-providers';
 
 const mocks = vi.hoisted(() => ({
+  priceProps: vi.fn(),
+  realPricing: false,
   setLimit: vi.fn(async () => {}),
   reset: vi.fn(async () => {}),
   target: vi.fn(),
   imageTarget: vi.fn(),
   imageSet: vi.fn(async () => {}),
+  imageValue: null as boolean | null,
+  imageMixed: false,
+  imageError: false,
   limit: null as number | null,
+  mixed: false,
 }));
-vi.mock('react-i18next', () => ({
-  useTranslation: () => ({
-    t: (key: string, values?: Record<string, unknown>) =>
-      values?.tokens ? `${key} ${values.tokens}` : key,
-    i18n: { resolvedLanguage: 'en' },
-  }),
-}));
+vi.mock('react-i18next', () => {
+  const t = (key: string, values?: Record<string, unknown>) =>
+    values?.tokens ? `${key} ${values.tokens}` : values?.value ? `${key} ${values.value}` : key;
+  return { useTranslation: () => ({ t, i18n: { resolvedLanguage: 'en' } }) };
+});
 vi.mock('@/hooks/useModelContextLimit', () => ({
   useModelContextLimit: (target: unknown) => {
     mocks.target(target);
     return {
       limit: mocks.limit,
       isCustomized: mocks.limit !== null,
+      mixed: mocks.mixed,
       loading: false,
       error: false,
       setLimit: mocks.setLimit,
@@ -35,7 +41,7 @@ vi.mock('@/hooks/useModelContextLimit', () => ({
 vi.mock('@/hooks/useModelImageInputOverride', () => ({
   useModelImageInputOverride: (target: unknown) => {
     mocks.imageTarget(target);
-    return { value: null, mixed: false, loading: false, error: false, setValue: mocks.imageSet };
+    return { value: mocks.imageValue, mixed: mocks.imageMixed, loading: false, error: mocks.imageError, setValue: mocks.imageSet };
   },
 }));
 vi.mock('@/state/modelVisibilityPrefs', () => ({
@@ -51,7 +57,18 @@ vi.mock('@/state/providerModelMemory', () => ({
   setProviderModelEffort: vi.fn(),
   clearProviderModelEffort: vi.fn(),
 }));
-vi.mock('../ModelPriceOverrideDialog', () => ({ ModelPriceOverrideDialog: () => null }));
+vi.mock('../ModelPriceOverrideDialog', async (importOriginal) => {
+  const { ModelPriceOverrideDialog: RealPricing } = await importOriginal<typeof import('../ModelPriceOverrideDialog')>();
+  return {
+    ModelPriceOverrideDialog: (props: Parameters<typeof import('../ModelPriceOverrideDialog').ModelPriceOverrideDialog>[0]) => {
+      mocks.priceProps(props);
+      if (mocks.realPricing) return <RealPricing {...props} />;
+      const details = typeof props.referenceDetails === 'function' ? props.referenceDetails(props.row.avail[0]) : props.referenceDetails;
+      return <div data-testid="inline-pricing">{details}</div>;
+    },
+  };
+});
+import type { ModelImageInputCatalogModel } from '../../../../shared/modelImageInputOverride';
 import { ModelAdvancedDrawer } from '../ModelAdvancedDrawer';
 import { setModelVisibility } from '@/state/modelVisibilityPrefs';
 import { setProviderModelEffort, getProviderModelEffort, clearProviderModelEffort } from '@/state/providerModelMemory';
@@ -75,7 +92,7 @@ const provider = {
   agents: ['codex', 'claude-code'],
   models: {},
 } as ProviderView;
-function drawer(primary = model, bridgeDefault = primary.defaultEffort, bridgeEfforts = primary.efforts, source = provider) {
+function drawer(primary: ModelImageInputCatalogModel = model, bridgeDefault = primary.defaultEffort, bridgeEfforts = primary.efforts, source = provider) {
   const row = {
     id: primary.id,
     name: primary.name,
@@ -98,14 +115,19 @@ function drawer(primary = model, bridgeDefault = primary.defaultEffort, bridgeEf
     />
   );
 }
-function draw(primary = model, bridgeDefault = primary.defaultEffort) {
+function draw(primary: ModelImageInputCatalogModel = model, bridgeDefault = primary.defaultEffort) {
   return render(drawer(primary, bridgeDefault));
 }
 const AGENT_NAMES = { 'claude-code': 'Claude Code', codex: 'Codex', pi: 'Pi' } as const;
 afterEach(cleanup);
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.realPricing = false;
   mocks.limit = null;
+  mocks.mixed = false;
+  mocks.imageValue = null;
+  mocks.imageMixed = false;
+  mocks.imageError = false;
   vi.mocked(getProviderModelEffort).mockReset();
 });
 
@@ -816,6 +838,80 @@ describe('model advanced editor', () => {
     ).toBe('true');
   });
 
+  it('removes stale engine windows after saving a shared budget and restores them on reset', () => {
+    const unverified = { ...model, contextWindow: 200_000, contextWindowVerified: false };
+    const { rerender } = draw(unverified);
+    expect(screen.getAllByTitle('200K')).toHaveLength(2);
+    const input = screen.getByRole('textbox');
+    fireEvent.change(input, { target: { value: '700K' } });
+    fireEvent.blur(input);
+    expect(mocks.setLimit).toHaveBeenLastCalledWith(700_000);
+
+    // Reflect the committed hook result, including reopening with an existing override.
+    mocks.limit = 700_000;
+    rerender(drawer(unverified));
+    expect((input as HTMLInputElement).value).toBe('700000');
+    expect(screen.queryByTitle('200K')).toBeNull();
+    cleanup();
+    const reopened = draw(unverified);
+    expect((screen.getByRole('textbox') as HTMLInputElement).value).toBe('700000');
+    expect(screen.queryByTitle('200K')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'settings.providers.models.advanced.restoreDefault' }));
+    expect(mocks.reset).toHaveBeenCalledOnce();
+    mocks.limit = null;
+    reopened.rerender(drawer(unverified));
+    expect((screen.getByRole('textbox') as HTMLInputElement).value).toBe('200000');
+    expect(screen.getAllByTitle('200K')).toHaveLength(2);
+  });
+
+  it.each([null, 700_000])('does not label an unknown route capacity as an engine difference (budget %s)', (limit) => {
+    mocks.limit = limit;
+    draw({ ...model, contextWindow: 200_000, contextWindowMax: 0, contextWindowVerified: false });
+    expect(screen.queryByTitle('200K')).toBeNull();
+  });
+
+  it.each([undefined, 0])('preserves a verified secondary window when primary capacity is %s', (contextWindowMax) => {
+    const primary = { ...model, contextWindow: 200_000, contextWindowMax, contextWindowVerified: false };
+    const secondary = { ...model, contextWindow: 1_000_000, contextWindowMax: 1_000_000, contextWindowVerified: true };
+    const source = { ...provider, id: 'custom-unknown-primary', source: 'user' } as ProviderView;
+    const row = { id: model.id, name: model.name, avail: provider.agents,
+      byAgent: { codex: primary, 'claude-code': secondary } };
+    const view = () => <ModelAdvancedDrawer provider={source} row={row} open onOpenChange={vi.fn()}
+      pricePresentationOf={() => null} onDisable={vi.fn()} disabled={false} paymentRequired={false} />;
+    const { rerender } = render(view());
+    expect(screen.queryByTitle('200K')).toBeNull();
+    expect(screen.getByTitle('1M')).toBeTruthy();
+    expect(screen.getByText('settings.providers.models.advanced.catalogMissing')).toBeTruthy();
+
+    mocks.limit = 700_000;
+    rerender(view());
+    expect(screen.queryByTitle('1M')).toBeNull();
+    expect((screen.getByRole('textbox') as HTMLInputElement).value).toBe('700000');
+    mocks.limit = null;
+    rerender(view());
+    expect(screen.getByTitle('1M')).toBeTruthy();
+  });
+
+  it('preserves native per-engine window differences without a shared override', () => {
+    const row = {
+      id: model.id, name: model.name, avail: provider.agents,
+      byAgent: { codex: { ...model, contextWindowMax: 1_000_000 },
+        'claude-code': { ...model, contextWindow: 1_000_000 } },
+    };
+    render(<ModelAdvancedDrawer provider={provider} row={row} open onOpenChange={vi.fn()}
+      pricePresentationOf={() => null} onDisable={vi.fn()} disabled={false} paymentRequired={false} />);
+    expect(screen.getByTitle('272K')).toBeTruthy();
+    expect(screen.queryByTitle('1M')).toBeNull();
+  });
+
+  it('does not treat differing legacy overrides as a shared budget', () => {
+    mocks.limit = 700_000;
+    mocks.mixed = true;
+    draw();
+    expect(screen.getAllByTitle('272K')).toHaveLength(2);
+    expect(screen.getByText('settings.providers.models.advanced.contextMixed')).toBeTruthy();
+  });
+
   it('allows an intentional override above the maximum and rejects invalid input', () => {
     draw();
     const input = screen.getByRole('textbox', {
@@ -862,10 +958,75 @@ describe('model advanced editor', () => {
     expect(setProviderModelEffort).toHaveBeenCalledWith('claude-code', 'openai', 'chatgpt/gpt-6', 'low');
   });
 
+  // The default option removes the override; it must remain selectable even when
+  // an older explicit override already equals the current catalog value.
+  it.each([true, false])('offers only two image-input choices with catalog default %s', async (catalogDefault) => {
+    mocks.imageValue = !catalogDefault;
+    draw({ ...model, supportsImageInput: !catalogDefault, imageInputDefault: { supportsImageInput: catalogDefault } });
+    const trigger = screen.getByRole('button', { name: 'settings.providers.models.advanced.imageInput' });
+    expect(trigger.textContent).toBe(`settings.providers.models.advanced.${catalogDefault ? 'unsupported' : 'supported'}`);
+    fireEvent.keyDown(trigger, { key: 'ArrowDown' });
+    const items = await screen.findAllByRole('menuitemradio');
+    expect(items).toHaveLength(2);
+    const defaultLabel = `settings.providers.models.advanced.imageInputDefault settings.providers.models.advanced.${catalogDefault ? 'supported' : 'unsupported'}`;
+    const defaultItem = screen.getByRole('menuitemradio', { name: defaultLabel });
+    expect(defaultItem.getAttribute('aria-checked')).toBe('false');
+    fireEvent.click(defaultItem);
+    expect(mocks.imageSet).toHaveBeenLastCalledWith(null);
+  });
+
+  it.each([true, false])('saves the non-default image-input choice when the catalog says %s', async (catalogDefault) => {
+    draw({ ...model, supportsImageInput: catalogDefault });
+    const trigger = screen.getByRole('button', { name: 'settings.providers.models.advanced.imageInput' });
+    expect(trigger.textContent).toBe(`settings.providers.models.advanced.${catalogDefault ? 'supported' : 'unsupported'}`);
+    fireEvent.keyDown(trigger, { key: 'ArrowDown' });
+    const name = `settings.providers.models.advanced.${catalogDefault ? 'unsupported' : 'supported'}`;
+    fireEvent.click(await screen.findByRole('menuitemradio', { name }));
+    expect(mocks.imageSet).toHaveBeenLastCalledWith(!catalogDefault);
+  });
+
+  it.each([null, true, false])('leaves both image-input options without a default for an undeclared model with override %s', async (override) => {
+    mocks.imageValue = override;
+    draw({ ...model, id: 'private-undeclared-model', modalities: undefined,
+      supportsImageInput: override ?? undefined,
+      imageInputDefault: override === null ? undefined : {} });
+    const trigger = screen.getByRole('button', { name: 'settings.providers.models.advanced.imageInput' });
+    expect(trigger.textContent).toBe(`settings.providers.models.advanced.${override === null ? 'undeclared' : override ? 'supported' : 'unsupported'}`);
+    for (const supported of [true, false]) {
+      fireEvent.keyDown(trigger, { key: 'ArrowDown' });
+      const items = await screen.findAllByRole('menuitemradio');
+      expect(items.map(item => item.textContent)).toEqual([
+        'settings.providers.models.advanced.supported',
+        'settings.providers.models.advanced.unsupported',
+      ]);
+      fireEvent.click(items[supported ? 0 : 1]);
+      expect(mocks.imageSet).toHaveBeenLastCalledWith(supported);
+    }
+    expect(mocks.imageSet).not.toHaveBeenCalledWith(null);
+  });
+
+  it('clears an older explicit override that already matches the catalog default', async () => {
+    mocks.imageValue = true;
+    draw({ ...model, supportsImageInput: true, imageInputDefault: { supportsImageInput: true } });
+    fireEvent.keyDown(screen.getByRole('button', { name: 'settings.providers.models.advanced.imageInput' }), { key: 'ArrowDown' });
+    const item = await screen.findByRole('menuitemradio', { name: 'settings.providers.models.advanced.imageInputDefault settings.providers.models.advanced.supported' });
+    expect(item.getAttribute('aria-checked')).toBe('true');
+    fireEvent.click(item);
+    expect(mocks.imageSet).toHaveBeenCalledWith(null);
+  });
+
   it('uses provider-declared image capability ahead of family-name heuristics', () => {
     draw({ ...model, id: 'deepseek-v4', name: 'DeepSeek', supportsImageInput: true });
-    expect(screen.getByText('settings.providers.models.advanced.vision.vision')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'settings.providers.models.advanced.imageInput' }).textContent).toBe('settings.providers.models.advanced.supported');
     expect(screen.getByText('settings.providers.models.advanced.inputModalities')).toBeTruthy();
+  });
+
+  it.each([true, false])('keeps the loaded image capability %s when the override read fails', (supported) => {
+    mocks.imageError = true;
+    draw({ ...model, supportsImageInput: supported, imageInputDefault: { supportsImageInput: !supported } });
+    expect(screen.getByRole('button', { name: 'settings.providers.models.advanced.imageInput' }).textContent)
+      .toBe(`settings.providers.models.advanced.${supported ? 'supported' : 'unsupported'}`);
+    expect(screen.getByRole('alert').textContent).toBe('settings.providers.custom.toast.saveFailed');
   });
 });
 
@@ -938,9 +1099,8 @@ it('keeps enterprise reference prices read-only in the model drawer', () => {
       source: 'organization',
     }),
   );
-  expect(
-    screen.queryByRole('button', { name: 'settings.providers.models.priceOverride.menu' }),
-  ).toBeNull();
+  expect(screen.queryByTestId('inline-pricing')).toBeNull();
+  expect(screen.queryByRole('button', { name: 'settings.providers.models.priceOverride.menu' })).toBeNull();
 });
 
 // Component contract (unit): the real drawer names the charge, independently of its token unit.
@@ -1088,4 +1248,154 @@ it('does not label an unverified working default as the upstream capacity', () =
   expect(screen.getByText('settings.providers.models.advanced.catalogMissing')).toBeTruthy();
   fireEvent.blur(input);
   expect(mocks.setLimit).toHaveBeenLastCalledWith(1_000_000);
+});
+
+it.each([true, false].flatMap(supported => [false, true].map(mixed => ({ supported, mixed }))))(
+  'uses an explicit common image choice $supported when engine defaults differ (mixed overrides: $mixed)', async ({ supported, mixed }) => {
+  mocks.imageMixed = mixed;
+  const first = { ...model, supportsImageInput: true, imageInputDefault: { supportsImageInput: true } };
+  const second = { ...model, id: 'chatgpt/gpt-6', supportsImageInput: false, imageInputDefault: { supportsImageInput: false } };
+  render(<ModelAdvancedDrawer provider={provider}
+    row={{ id: model.id, name: model.name, avail: ['codex', 'claude-code'], byAgent: { codex: first, 'claude-code': second } }}
+    open onOpenChange={vi.fn()} pricePresentationOf={() => null} onDisable={vi.fn()} disabled={false} paymentRequired={false} />);
+  const trigger = screen.getByRole('button', { name: 'settings.providers.models.advanced.imageInput' });
+  expect(trigger.textContent).toBe('settings.providers.models.advanced.imageInputMixed');
+  fireEvent.keyDown(trigger, { key: 'ArrowDown' });
+  const items = await screen.findAllByRole('menuitemradio');
+  expect(items).toHaveLength(2);
+  expect(items.some(item => item.textContent?.includes('imageInputDefault'))).toBe(false);
+  fireEvent.click(items[supported ? 0 : 1]);
+  expect(mocks.imageSet).toHaveBeenLastCalledWith(supported);
+  expect(mocks.imageSet).not.toHaveBeenCalledWith(null);
+});
+
+// A saved override and an inherited value can agree despite different provenance.
+it.each([true, false].flatMap(supported => [false, true].map(firstOverridden => ({ supported, firstOverridden }))))(
+  'shows effective capability $supported when mixed overrides agree (first overridden: $firstOverridden)', async ({ supported, firstOverridden }) => {
+  mocks.imageMixed = true;
+  // The IPC returns the first stored override even when the target values differ.
+  mocks.imageValue = firstOverridden ? supported : null;
+  const primary = { ...model, supportsImageInput: supported, imageInputDefault: { supportsImageInput: firstOverridden ? !supported : supported } };
+  const other = { ...model, id: 'chatgpt/gpt-6', supportsImageInput: supported, imageInputDefault: { supportsImageInput: firstOverridden ? supported : !supported } };
+  render(<ModelAdvancedDrawer provider={provider}
+    row={{ id: model.id, name: model.name, avail: ['codex', 'claude-code'], byAgent: { codex: primary, 'claude-code': other } }}
+    open onOpenChange={vi.fn()} pricePresentationOf={() => null} onDisable={vi.fn()} disabled={false} paymentRequired={false} />);
+  const trigger = screen.getByRole('button', { name: 'settings.providers.models.advanced.imageInput' });
+  expect(trigger.textContent).toBe(`settings.providers.models.advanced.${supported ? 'supported' : 'unsupported'}`);
+  fireEvent.keyDown(trigger, { key: 'ArrowDown' });
+  const items = await screen.findAllByRole('menuitemradio');
+  expect(items).toHaveLength(2);
+  expect(items.some(item => item.textContent?.includes('imageInputDefault'))).toBe(false);
+  const selected = items[supported ? 0 : 1];
+  expect(selected.getAttribute('aria-checked')).toBe('true');
+  fireEvent.click(selected);
+  expect(mocks.imageSet).toHaveBeenLastCalledWith(supported);
+});
+
+it.each([true, false, undefined].flatMap(supported => [false, true].map(readFailed => ({ supported, readFailed }))))(
+  'uses chat default $supported independently of a same-ID Images connection (read failed: $readFailed)', async ({ supported, readFailed }) => {
+  mocks.imageError = readFailed;
+  const source = { ...buildUserProvider({ id: 'relay', name: 'Relay', auth: { method: 'apiKey' }, runtimes: {
+    pi: { baseUrl: 'https://chat.example.invalid/v1', models: [{
+      id: 'private-image', name: 'Image', supportsImageInput: supported,
+    }] },
+    codex: { baseUrl: 'https://images.example.invalid/v1', imageApi: 'openai-images', models: [{
+      id: 'private-image', name: 'Image', mode: 'image_generation',
+      modalities: { input: supported ? ['text'] : ['text', 'image'], output: ['image'] },
+    }] },
+  } }), connected: true } as ProviderView;
+  render(<ModelAdvancedDrawer provider={source} row={{ id: 'private-image', name: 'Image', avail: ['pi', 'codex'],
+    byAgent: { pi: source.models.pi![0], codex: source.models.codex![0] } }} open
+    onOpenChange={vi.fn()} pricePresentationOf={() => null} onDisable={vi.fn()} disabled={false} paymentRequired={false} />);
+  const trigger = screen.getByRole('button', { name: 'settings.providers.models.advanced.imageInput' });
+  expect(trigger.textContent).toBe('settings.providers.models.advanced.' +
+    (supported === undefined ? 'undeclared' : supported ? 'supported' : 'unsupported'));
+  fireEvent.keyDown(trigger, { key: 'ArrowDown' });
+  const items = await screen.findAllByRole('menuitemradio');
+  expect(items).toHaveLength(2);
+  if (supported === undefined) {
+    expect(items.every(item => !item.textContent?.includes('imageInputDefault'))).toBe(true);
+    fireEvent.click(screen.getByRole('menuitemradio', { name: 'settings.providers.models.advanced.supported' }));
+    expect(mocks.imageSet).toHaveBeenLastCalledWith(true);
+    return;
+  }
+  const defaultName = 'settings.providers.models.advanced.imageInputDefault settings.providers.models.advanced.' +
+    (supported ? 'supported' : 'unsupported');
+  fireEvent.click(screen.getByRole('menuitemradio', { name: defaultName }));
+  expect(mocks.imageSet).toHaveBeenLastCalledWith(null);
+  fireEvent.keyDown(trigger, { key: 'ArrowDown' });
+  fireEvent.click(await screen.findByRole('menuitemradio', { name: 'settings.providers.models.advanced.' +
+    (supported ? 'unsupported' : 'supported') }));
+  expect(mocks.imageSet).toHaveBeenLastCalledWith(!supported);
+});
+
+// Unit regression: bridge names must not make identical inferred defaults look mixed.
+// Exercise the real drawer and its outgoing clear-override action for the union row.
+it('uses the union row identity to infer an undeclared bridge image default', async () => {
+  const primary = { ...model, id: 'gpt-5.6-sol', modalities: undefined, supportsImageInput: undefined };
+  draw(primary);
+  const trigger = screen.getByRole('button', { name: 'settings.providers.models.advanced.imageInput' });
+  expect(trigger.textContent).toBe('settings.providers.models.advanced.supported');
+  fireEvent.keyDown(trigger, { key: 'ArrowDown' });
+  const items = await screen.findAllByRole('menuitemradio');
+  expect(items).toHaveLength(2);
+  fireEvent.click(screen.getByRole('menuitemradio', { name: 'settings.providers.models.advanced.imageInputDefault settings.providers.models.advanced.supported' }));
+  expect(mocks.imageSet).toHaveBeenCalledWith(null);
+});
+
+// UI entry regression: replace the old launcher while retaining the existing pricing body.
+// Dialog API/payload behavior is exercised by ModelPriceOverrideDialog.test.tsx (unit).
+it('replaces the API-price launcher with the existing form in inline mode', () => {
+  draw();
+  expect(screen.getByTestId('inline-pricing')).toBeTruthy();
+  expect(mocks.priceProps).toHaveBeenLastCalledWith(expect.objectContaining({ presentation: 'inline' }));
+  expect(screen.queryByRole('button', { name: 'settings.providers.models.priceOverride.menu' })).toBeNull();
+});
+
+// Real drawer + pricing form: Radix handles Escape in document capture before
+// the form's bubbling key handler, including when Shift+Tab reaches Reset.
+it('saves a dirty quote on Escape from Reset before allowing the drawer to close', async () => {
+  mocks.realPricing = true;
+  const user = userEvent.setup();
+  const previous = window.electronAPI;
+  const quote = { currency: 'USD' as const, inputPerMtok: 1, outputPerMtok: 4 };
+  const view = { target: { providerId: provider.id, agent: 'codex' as const, modelId: model.id },
+    editable: true, effective: quote, reference: quote, override: null, conflict: false,
+    allowedCurrencies: ['USD' as const], registryUpdatedAt: null };
+  let finishSave!: (next: unknown) => void;
+  const save = vi.fn(() => new Promise(resolve => { finishSave = resolve; }));
+  Object.defineProperty(window, 'electronAPI', { configurable: true, value: { maker: {
+    getModelPriceOverride: vi.fn(async () => view), setModelPriceOverride: save,
+    resetModelPriceOverride: vi.fn(),
+  } } });
+  const onOpenChange = vi.fn();
+  try {
+    render(<ModelAdvancedDrawer provider={provider}
+      row={{ id: model.id, name: model.name, avail: ['codex'], byAgent: { codex: model } }}
+      open onOpenChange={onOpenChange} pricePresentationOf={() => null}
+      onDisable={vi.fn()} disabled={false} paymentRequired={false} />);
+    const input = screen.getByLabelText('settings.providers.models.priceOverride.input') as HTMLInputElement;
+    await waitFor(() => expect(input.disabled).toBe(false));
+    await user.click(input);
+    await user.clear(input);
+    await user.type(input, '7');
+    await user.tab({ shift: true });
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'settings.providers.models.priceOverride.resetShort' }));
+    expect(save).not.toHaveBeenCalled();
+    await user.keyboard('{Escape}');
+    await waitFor(() => expect(save).toHaveBeenCalledExactlyOnceWith(view.target, {
+      currency: 'USD', inputPerMtok: 7, outputPerMtok: 4, cacheReadPerMtok: null, cacheCreatePerMtok: null,
+    }));
+    expect(onOpenChange).not.toHaveBeenCalled();
+    await user.keyboard('{Escape}');
+    expect(onOpenChange).not.toHaveBeenCalled();
+    finishSave({ ...view, effective: { ...quote, inputPerMtok: 7 }, override: { ...quote, inputPerMtok: 7 } });
+    await waitFor(() => expect(input.readOnly).toBe(false));
+    expect(input.value).toBe('7');
+    await user.keyboard('{Escape}');
+    expect(onOpenChange).toHaveBeenCalledExactlyOnceWith(false);
+  } finally {
+    cleanup();
+    Object.defineProperty(window, 'electronAPI', { configurable: true, value: previous });
+  }
 });

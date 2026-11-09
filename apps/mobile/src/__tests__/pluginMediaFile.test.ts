@@ -13,7 +13,7 @@ vi.mock('expo-file-system', () => ({
     uri: string;
     constructor(directory: { uri: string }, name: string) { this.uri = `${directory.uri}/${name}`; }
     create() {}
-    open() { return { writeBytes: (bytes: Uint8Array) => disk.chunks.push(bytes), close: () => { disk.closes++; } }; }
+    open() { return { writeBytesSync: (bytes: Uint8Array) => disk.chunks.push(bytes), close: () => { disk.closes++; } }; }
   },
 }));
 import { readPluginMediaFile } from '../plugins/pluginMediaFile';

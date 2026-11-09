@@ -1,3 +1,4 @@
+import { withAvailabilityPolicyMutation } from '../device-link/providerShareAvailabilityPolicy.js';
 /**
  * 远程 Agent 的供应商级授权。
  *
@@ -15,6 +16,17 @@ interface RemoteProviderAccessPrefs {
 
 const DEFAULTS: RemoteProviderAccessPrefs = { allowedProviders: {} };
 const MAX_ENTRIES = 4096;
+let permissionGeneration = 0;
+const permissionEpochs = new Map<string, number>();
+const accessListeners = new Set<(providerId: string) => void>();
+export function onRemoteProviderAccessChanged(listener: (providerId: string) => void): () => void {
+  accessListeners.add(listener);
+  return () => { accessListeners.delete(listener); };
+}
+/** Process-local fences: restarting also discards all retained group routing contexts. */
+export function remoteProviderAccessEpoch(providerId: string): string {
+  return `${permissionGeneration}:${permissionEpochs.get(providerId) ?? 0}`;
+}
 const log = desktopMakerLogger.child('remote-provider-access-store');
 
 function normalize(raw: unknown): RemoteProviderAccessPrefs {
@@ -47,7 +59,8 @@ export function isRemoteProviderInvocationAllowed(providerId: string): boolean {
   return store.read().allowedProviders[providerId] === true;
 }
 
-export function setRemoteProviderInvocationEnabled(providerId: string, enabled: boolean): void {
+export async function setRemoteProviderInvocationEnabled(providerId: string, enabled: boolean): Promise<void> {
+  return withAvailabilityPolicyMutation(providerId, async () => {
   if (!providerId) return;
   store.invalidateIfChanged();
   const allowedProviders = { ...store.read().allowedProviders };
@@ -62,7 +75,15 @@ export function setRemoteProviderInvocationEnabled(providerId: string, enabled: 
     delete allowedProviders[providerId];
   }
   store.writePatch({ allowedProviders });
+  if (!permissionEpochs.has(providerId) && permissionEpochs.size >= MAX_ENTRIES) {
+    permissionGeneration++; permissionEpochs.clear();
+  }
+  permissionEpochs.set(providerId, (permissionEpochs.get(providerId) ?? 0) + 1);
+  for (const listener of accessListeners) {
+    try { listener(providerId); } catch { log.warn('remote provider access listener failed'); }
+  }
   log.info('remote provider access updated', { providerId, enabled });
+  });
 }
 
 export const __testing = { normalize };

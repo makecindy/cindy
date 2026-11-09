@@ -258,7 +258,9 @@ describe('mobile composer rich input HTML', () => {
         detach(node);
         return node;
       },
+      clientHeight: 264,
       scrollHeight: 0,
+      scrollTop: 0,
       setAttribute() {},
       style: {
         paddingBottom: '',
@@ -389,14 +391,37 @@ describe('mobile composer rich input HTML', () => {
     root.scrollHeight = 500;
     const beforeResize = messages.length;
     for (let frame = 0; frame < 100; frame += 1) onResize();
-    expect(messages.slice(beforeResize)).toEqual([{ type: 'height', height: 264 }]);
+    expect(messages.slice(beforeResize)).toEqual([
+      { type: 'height', height: 264 },
+      // Native decides from these edges whether a drag on the text scrolls or resizes.
+      { type: 'scroll-edge', atTop: true, atBottom: false },
+    ]);
+    const beforeScroll = messages.length;
+    root.scrollTop = 120;
+    listeners.get('scroll')?.();
+    root.scrollTop = 236;
+    listeners.get('scroll')?.();
+    listeners.get('scroll')?.();
+    expect(messages.slice(beforeScroll)).toEqual([
+      { type: 'scroll-edge', atTop: false, atBottom: false },
+      { type: 'scroll-edge', atTop: false, atBottom: true },
+    ]);
+    // Replacing the draft can reset scrollTop without a scroll event or a resize.
+    const beforeReplace = messages.length;
+    root.scrollTop = 0;
+    windowStub.cindyComposer?.applyDocument({ version: 1, nodes: [{ type: 'text', text: 'replaced' }] }, false);
+    expect(messages.slice(beforeReplace)).toContainEqual({ type: 'scroll-edge', atTop: true, atBottom: false });
     windowStub.cindyComposer?.setConfig({ maxHeight: 400 });
     expect(messages.at(-1)).toEqual({ type: 'height', height: 400 });
     root.scrollHeight = 80;
+    root.scrollTop = 0;
     const beforeContentShrink = messages.length;
     onResize();
     onResize();
-    expect(messages.slice(beforeContentShrink)).toEqual([{ type: 'height', height: 80 }]);
+    expect(messages.slice(beforeContentShrink)).toEqual([
+      { type: 'height', height: 80 },
+      { type: 'scroll-edge', atTop: true, atBottom: true },
+    ]);
     children[0].nodeValue = 'hello world';
     listeners.get('input')?.();
     expect(messages).toContainEqual({
@@ -672,6 +697,9 @@ describe('mobile composer rich input HTML', () => {
 
   it('rejects malformed image messages at the WebView boundary', () => {
     expect(parseComposerWebMessage(JSON.stringify({ type: 'paste-images-start', count: '2' }))).toBeNull();
+    expect(parseComposerWebMessage(JSON.stringify({ type: 'scroll-edge', atTop: true, atBottom: false })))
+      .toEqual({ type: 'scroll-edge', atTop: true, atBottom: false });
+    expect(parseComposerWebMessage(JSON.stringify({ type: 'scroll-edge', atTop: 'yes', atBottom: false }))).toBeNull();
     expect(parseComposerWebMessage(JSON.stringify({
       type: 'paste-images-start',
       requestId: 'images-1',

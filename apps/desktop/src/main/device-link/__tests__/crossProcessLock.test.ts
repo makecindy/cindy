@@ -128,6 +128,60 @@ describe('advisory lock cancellation', () => {
 });
 
 describe('接管陈旧锁', () => {
+  // #9247: releasing the previous gate directory can race the next owner's
+  // publication. Both public lock tiers must absorb that transient ENOENT and
+  // remove their canonical owner record before returning.
+  it.each([
+    ['advisory', 'directory', withAdvisoryCrossProcessLock],
+    ['advisory', 'record', withAdvisoryCrossProcessLock],
+    ['strict', 'directory', withCrossProcessLock],
+    ['strict', 'record', withCrossProcessLock],
+  ] as const)('retries a transient reclaim %s %s failure', async (_tier, phase, withLock) => {
+    const lock = path.join(dir, 'lock');
+    const gateDir = `${lock}.reclaim.d`;
+    const originalMkdir = fsp.mkdir;
+    const originalOpen = fsp.open;
+    let gatePublicationAttempts = 0;
+    const mkdirSpy = vi.spyOn(fsp, 'mkdir').mockImplementation((async (
+      target: unknown,
+      options?: unknown,
+    ) => {
+      if (phase === 'directory' && target === gateDir) {
+        gatePublicationAttempts += 1;
+        if (gatePublicationAttempts === 1) {
+          throw Object.assign(new Error('reclaim directory disappeared'), { code: 'ENOENT' });
+        }
+      }
+      return (originalMkdir as (...args: unknown[]) => Promise<unknown>)(target, options);
+    }) as typeof fsp.mkdir);
+    const openSpy = vi.spyOn(fsp, 'open').mockImplementation((async (...args: Parameters<typeof fsp.open>) => {
+      const target = args[0];
+      if (
+        phase === 'record'
+        && typeof target === 'string'
+        && path.dirname(target) === gateDir
+        && args[1] === 'wx'
+      ) {
+        gatePublicationAttempts += 1;
+        if (gatePublicationAttempts === 1) {
+          throw Object.assign(new Error('reclaim directory disappeared'), { code: 'ENOENT' });
+        }
+      }
+      return originalOpen(...args);
+    }) as typeof fsp.open);
+
+    try {
+      await expect(
+        withLock(lock, { label: 'transient-reclaim-dir' }, async (status) => status),
+      ).resolves.toEqual({ held: true });
+      expect(gatePublicationAttempts).toBe(2);
+      expect(fs.existsSync(lock)).toBe(false);
+    } finally {
+      mkdirSpy.mockRestore();
+      openSpy.mockRestore();
+    }
+  });
+
   it('删得掉 → 接管成功,task 拿到 held=true', async () => {
     const lock = path.join(dir, 'lock');
     await writeStaleLock(lock);
