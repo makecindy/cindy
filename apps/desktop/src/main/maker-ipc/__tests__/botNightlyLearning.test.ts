@@ -142,10 +142,19 @@ it('observes a one-off approach first and only turns it into a skill when it rec
     expect(h.skills.size).toBe(0);
     expect((await readNightlyLearningState(h.root, 'bot'))!.candidates[0]?.id).toBe(candidate.id);
 
-    const recurrence = 'Start by searching our Telegram history for that earlier discussion.';
     clock.mockReturnValue(next + 1);
     await recordNightlyLearningTurn(h.root, 'bot', 'main', next + 1);
-    h.rows = [turn(3, recurrence, next + 1)];
+    h.rows = [turn(4, unrelated + 'x'.repeat(60_000), next + 1)];
+    reply({ promote: [{ ...promote, candidateId: candidate.id, evidence: { messageId: 'user4', quote: unrelated } }] });
+    const beforeOversized = h.model.mock.calls.length;
+    await runNightlyLearning('bot', { manual: false });
+    expect(h.model.mock.calls.length - beforeOversized).toBe(1);
+    expect((await readNightlyLearningState(h.root, 'bot'))!.candidates[0]?.id).toBe(candidate.id);
+
+    const recurrence = 'Start by searching our Telegram history for that earlier discussion.';
+    clock.mockReturnValue(next + 2);
+    await recordNightlyLearningTurn(h.root, 'bot', 'main', next + 2);
+    h.rows = [turn(3, recurrence, next + 2)];
     reply({ promote: [{ ...promote, candidateId: candidate.id, evidence: { messageId: 'user3', quote: recurrence } }] });
     reply({ supported: [{ id: 0, source: 'user3', quote: recurrence }] });
     await runNightlyLearning('bot', { manual: false });
@@ -176,6 +185,10 @@ it('backs a legacy candidate with its first source and never counts a retried in
     await recordNightlyLearningTurn(h.root, 'bot', 'main', 1000);
     h.rows = [turn(1, quote, 1000)];
     reply({ promote: [promote] });
+    h.model.mockResolvedValueOnce({ ok: false, reason: 'timeout' });
+    await expect(runNightlyLearning('bot', { manual: false })).resolves.toHaveProperty('error');
+    expect((await readNightlyLearningState(h.root, 'bot'))!.pending.turns).toBe(1);
+    reply({ promote: [promote] });
     reply({ supported: [{ id: 0, source: 'user1', quote }] });
     await runNightlyLearning('bot', { manual: false });
     expect((await readNightlyLearningState(h.root, 'bot'))!.candidates[0]?.firstEvidence?.messageId).toBe('user1');
@@ -186,7 +199,7 @@ it('backs a legacy candidate with its first source and never counts a retried in
     h.rows = [{ ...turn(2, quote, 1001), inputId: 'user1' }];
     reply({ promote: [promote] });
     await runNightlyLearning('bot', { manual: false });
-    expect(h.model).toHaveBeenCalledTimes(3);
+    expect(h.model).toHaveBeenCalledTimes(5);
     expect(h.skills.size).toBe(0);
   } finally { clock.mockRestore(); }
 });

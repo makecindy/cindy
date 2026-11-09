@@ -469,6 +469,32 @@ async function runLocked(
     appliedUpdates.get(filename) ?? memories.find((m) => m.filename === filename)?.frontmatter.title ?? filename;
   const memoryOps = [...plan.memories.filter((op) => op.op !== 'delete'), ...plan.memories.filter((op) => op.op === 'delete')];
 
+  const promotionItems = plan.promote.flatMap((op, id) => {
+    const candidate = candidates.find((c) => c.id === op.candidateId);
+    if (!candidate || !hasLearningEvidence(op, messages, true)) return [];
+    const first = candidate.firstEvidence;
+    if (first && first.userMessageId === op.evidence.messageId) return [];
+    const text = scan.ownerTexts.get(op.evidence.messageId);
+    if (!text) return [];
+    return [{ id, proposal: {
+      candidate: { title: candidate.title, summary: candidate.summary, draft: candidate.draft },
+      first: first ?? null,
+      skill: { title: op.title, description: op.description, body: op.body },
+      citedText: op.evidence.quote,
+    }, sources: [{ source: op.evidence.messageId, text }] }];
+  });
+  const recurrences = await reviewNightlyEvidence(ask,
+    'Does the current user request actually call for this candidate approach a second time? Judge the cited text in the context of the whole current message. ' +
+    'Compare the proposed skill with the saved candidate, its first evidence and the current request. Accept equivalent wording. Reject incidental topic overlap, negation, unrelated requests, or a skill with a different purpose. ' +
+    'For a legacy candidate with no first evidence, check only whether the current request demonstrates the approach; it will be saved as its first occurrence.',
+    promotionItems,
+  );
+  if (!current()) return { skipped: true, resultText: 'Owner changed' };
+  if (!recurrences) {
+    await recordRun({ id: runId, at: startedAt, manual: manual || undefined, outcome: 'failed', turns: selected.length, items: [], errorCode: 'MODEL_UNAVAILABLE' }, undefined, false);
+    return { error: 'Could not verify nightly skill promotions' };
+  }
+
   for (const op of store ? memoryOps : []) {
     if (!current()) break;
     try {
@@ -535,27 +561,6 @@ async function runLocked(
   // 只从上次已经在观察的做法转正（candidates 读自运行前的状态）：这一轮新加的观察项不能当场转正。
   const promoted = new Set<string>();
   const firstSeen = new Map<string, LearningCitation>();
-  const promotionItems = plan.promote.flatMap((op, id) => {
-    const candidate = candidates.find((c) => c.id === op.candidateId);
-    if (!candidate || !hasLearningEvidence(op, messages, true)) return [];
-    const first = candidate.firstEvidence;
-    if (first && first.userMessageId === op.evidence.messageId) return [];
-    const text = scan.ownerTexts.get(op.evidence.messageId);
-    if (!text) return [];
-    return [{ id, proposal: {
-      candidate: { title: candidate.title, summary: candidate.summary, draft: candidate.draft },
-      first: first ?? null,
-      skill: { title: op.title, description: op.description, body: op.body },
-      citedText: op.evidence.quote,
-    }, sources: [{ source: op.evidence.messageId, text }] }];
-  });
-  const recurrences = await reviewNightlyEvidence(ask,
-    'Does the current user request actually call for this candidate approach a second time? Judge the cited text in the context of the whole current message. ' +
-    'Compare the proposed skill with the saved candidate, its first evidence and the current request. Accept equivalent wording. Reject incidental topic overlap, negation, unrelated requests, or a skill with a different purpose. ' +
-    'For a legacy candidate with no first evidence, check only whether the current request demonstrates the approach; it will be saved as its first occurrence.',
-    promotionItems,
-  );
-  if (!current()) return { skipped: true, resultText: 'Owner changed' };
   for (const [id, op] of plan.promote.entries()) {
     if (!current()) break;
     const supported = recurrences.get(id);
