@@ -339,6 +339,9 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
   }, () => {
     setProcessLeadingSpace(null);
   });
+  // Live executions now share this viewport; release their reserved range when
+  // the round ends instead of carrying it into the next execution.
+  useEffect(processViewport.resume, [group?.round.status, processViewport.resume]);
   if (viewport.current.owner !== viewportOwner) {
     processViewport.resume();
     viewport.current = { owner: viewportOwner, group, measuredGroup: null, contentHeight: 0, viewportHeight: 0, offsetY: 0 };

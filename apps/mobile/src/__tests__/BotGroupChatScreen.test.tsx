@@ -2448,26 +2448,24 @@ it('renders component body as readable text without changing the message', async
   expect(reply.content).toBe(content);
 });
 
-// Unit regression for PR #9249 r4500548321: existing fold tests release a single
-// viewport only. Keep the real group page + WorkArea mounted in the same running
-// round; the native process boundary reports a 300pt collapse in its inner list.
-// Explicit outer navigation must remove the rendered inner footer, not just follow.
-it.each(['jump', 'send'])('releases nested work-area space on outer %s without collapsing the work area', async action => {
+// Unit / #9249 r4500548321: executions now use the outer timeline instead of
+// a 220pt nested list. Jump/send must release the same collapse reserve while
+// retaining the execution and its subscriptions in the current round.
+it.each(['jump', 'send'])('releases execution process space on outer %s without unmounting work', async action => {
   h.speakerDisclosure = true;
   const active = group({ round: { status: 'running', canContinue: false, speakers: [
     { botId: 'abu', sessionId: 's-abu', activity: 'reply', executionStatus: 'running' },
   ] } });
   await render(active);
-  await click('botGroup.work.toggle');
   await act(async () => {
-    h.scrolls['botGroup.work.details'].onLayout({ nativeEvent: { layout: { height: 220 } } });
-    h.scrolls['botGroup.work.details'].onContentSizeChange(390, 500);
-    h.scrolls['botGroup.work.details'].onScroll({ nativeEvent: {
-      contentOffset: { y: 280 }, contentSize: { height: 500 }, layoutMeasurement: { height: 220 },
+    h.scrolls['botGroup.timeline'].onLayout({ nativeEvent: { layout: { height: 700 } } });
+    h.scrolls['botGroup.timeline'].onContentSizeChange(390, 1000);
+    h.scrolls['botGroup.timeline'].onScroll({ nativeEvent: {
+      contentOffset: { y: 300 }, contentSize: { height: 1000 }, layoutMeasurement: { height: 700 },
     } });
   });
   await click('fixture.processCollapse');
-  const footer = () => byId('botGroup.work.details')!.querySelector('[style*="height: 300px"]');
+  const footer = () => byId('botGroup.timeline')!.querySelector('[style*="height: 300px"]');
   expect(footer()).not.toBeNull();
   if (action === 'jump') {
     await act(async () => h.scrolls['botGroup.timeline'].onContentSizeChange(390, 1000));
@@ -2478,8 +2476,8 @@ it.each(['jump', 'send'])('releases nested work-area space on outer %s without c
     expect(h.chat.act).toHaveBeenCalledWith('send', expect.objectContaining({ text: 'Continue this round' }));
   }
   expect(footer()).toBeNull();
-  expect(byId('botGroup.work.details')).not.toBeNull();
-  expect(byId('botGroup.work.toggle')!.getAttribute('aria-label')).toContain('groupChat.work.collapse');
+  expect(byId('speaker.abu.reply')).not.toBeNull();
+  expect(byId('botGroup.work.details')).toBeNull();
 });
 
 // Unit / keyboard-dismiss scroll interruption: mounted timeline callbacks must
@@ -2512,70 +2510,66 @@ it.each(['drag', 'momentum'])('keeps keyboard resize from interrupting %s', asyn
   expect(h.scrollToEnd).toHaveBeenCalledWith({ animated: false });
 });
 
-// Unit / #9249 r4501133784: the final native position can arrive first in an
-// end event. Real screen+WorkArea must resume before losing gesture ownership.
-// Older coverage only sends positions via onScroll, so it misses end-before-scroll.
-it.each(['timeline', 'work.details'].flatMap(target => ['onScrollEndDrag', 'onMomentumScrollEnd'].map(end => ({ target, end }))))(
-  'consumes final $target metrics from $end before ending process navigation', async ({ target, end }) => {
+// Unit / #9249 r4501133784: an end event may carry the final native position
+// before onScroll. The shared timeline must release its reserve before losing
+// gesture ownership; work no longer has a separate scroll surface.
+it.each(['onScrollEndDrag', 'onMomentumScrollEnd'] as const)(
+  'consumes final timeline metrics from %s before ending process navigation', async end => {
     h.speakerDisclosure = true;
     await render(group({ round: { status: 'running', canContinue: false, speakers: [
       { botId: 'abu', sessionId: 's-abu', activity: 'reply', executionStatus: 'running' },
     ] } }));
-    await click('botGroup.work.toggle');
-    const nested = target === 'work.details';
-    const height = nested ? 500 : 2000, viewport = nested ? 220 : 800;
-    const tail = height - viewport;
+    const height = 2000, viewport = 800, tail = height - viewport;
     const event = (y: number) => ({ nativeEvent: { contentOffset: { y }, contentSize: { height }, layoutMeasurement: { height: viewport } } });
     await act(async () => {
-      h.scrolls[`botGroup.${target}`].onLayout({ nativeEvent: { layout: { height: viewport } } });
-      h.scrolls[`botGroup.${target}`].onContentSizeChange(390, height);
-      h.scrolls[`botGroup.${target}`].onScroll(event(tail - 10));
+      h.scrolls['botGroup.timeline'].onLayout({ nativeEvent: { layout: { height: viewport } } });
+      h.scrolls['botGroup.timeline'].onContentSizeChange(390, height);
+      h.scrolls['botGroup.timeline'].onScroll(event(tail - 10));
     });
     await click('fixture.processCollapse');
-    const footer = () => byId('botGroup.work.details')!.querySelector(`[style*="height: ${nested ? 290 : 300}px"]`);
+    const footer = () => byId('botGroup.timeline')!.querySelector('[style*="height: 290px"]');
     expect(footer()).not.toBeNull();
     await act(async () => {
-      const callbacks = h.scrolls[`botGroup.${target}`];
+      const callbacks = h.scrolls['botGroup.timeline'];
       callbacks[end === 'onScrollEndDrag' ? 'onScrollBeginDrag' : 'onMomentumScrollBegin']();
       callbacks.onScroll(event(tail - 10));
       callbacks[end](event(tail));
-      callbacks.onScroll(event(tail)); // matching notice arrives after ownership ends
+      callbacks.onScroll(event(tail));
     });
-    if (nested) expect(footer()).toBeNull();
-    else {
-      expect(byId('botGroup.jumpToLatest')).toBeNull();
-      h.scrollToEnd.mockClear();
-      await act(async () => h.scrolls['botGroup.timeline'].onContentSizeChange(390, height + 500));
-      expect(h.scrollToEnd).toHaveBeenCalledWith({ animated: false });
-    }
+    expect(footer()).toBeNull();
+    expect(byId('botGroup.jumpToLatest')).toBeNull();
+    h.scrollToEnd.mockClear();
+    await act(async () => h.scrolls['botGroup.timeline'].onContentSizeChange(390, height + 500));
+    expect(h.scrollToEnd).toHaveBeenCalledWith({ animated: false });
   },
 );
 
-// Unit / #9249 r4500619904: a null-rendered WorkArea stays mounted across idle.
-// The next member's round must not inherit the previous process's reserved footer.
-it('releases nested process space across idle and the next round without outer navigation', async () => {
+// Unit / #9249 r4500619904: the next execution must not inherit the process
+// reserve from a finished round, now that both use the shared timeline.
+it('releases execution process space across idle and the next round without outer navigation', async () => {
   h.speakerDisclosure = true;
   const active = group({ round: { status: 'running', canContinue: false, speakers: [
     { botId: 'abu', sessionId: 's-abu', activity: 'reply', executionStatus: 'running' },
   ] } });
   await render(active);
-  await click('botGroup.work.toggle');
   await act(async () => {
-    h.scrolls['botGroup.work.details'].onLayout({ nativeEvent: { layout: { height: 220 } } });
-    h.scrolls['botGroup.work.details'].onContentSizeChange(390, 500);
-    h.scrolls['botGroup.work.details'].onScroll({ nativeEvent: {
-      contentOffset: { y: 280 }, contentSize: { height: 500 }, layoutMeasurement: { height: 220 },
+    h.scrolls['botGroup.timeline'].onLayout({ nativeEvent: { layout: { height: 700 } } });
+    h.scrolls['botGroup.timeline'].onContentSizeChange(390, 1000);
+    h.scrolls['botGroup.timeline'].onScroll({ nativeEvent: {
+      contentOffset: { y: 300 }, contentSize: { height: 1000 }, layoutMeasurement: { height: 700 },
     } });
   });
   await click('fixture.processCollapse');
-  expect(byId('botGroup.work.details')!.querySelector('[style*="height: 300px"]')).not.toBeNull();
+  const footer = () => byId('botGroup.timeline')!.querySelector('[style*="height: 300px"]');
+  expect(footer()).not.toBeNull();
   await render(group());
   expect(byId('botGroup.work')).toBeNull();
+  expect(footer()).toBeNull();
   await render({ ...active, round: { ...active.round, speakers: [
     { botId: 'mimi', sessionId: 's-next', activity: 'reply', executionStatus: 'running' },
   ] } });
-  expect(byId('botGroup.work.details')!.querySelector('[style*="height: 300px"]')).toBeNull();
-  expect(byId('botGroup.work.toggle')!.getAttribute('aria-label')).toContain('groupChat.work.expand');
+  expect(footer()).toBeNull();
+  expect(byId('speaker.mimi.reply')).not.toBeNull();
   expect(h.chat.act).not.toHaveBeenCalled();
 });
 
@@ -3289,15 +3283,16 @@ it('shows the real step start and handoff time and keeps missing timing absent',
   expect(card.textContent).toContain(new Date(25_000).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }));
   await act(async () => vi.advanceTimersByTime(1000));
   expect(card.textContent).toContain('6 秒');
-  data.plans[0]!.steps[1]!.executionId = 'current-execution';
-  data.round.speakers.unshift({ botId: 'abu', sessionId: null, activity: 'step', executionId: 'old-execution', startedAt: 1_000 });
-  data.round.speakers[1].executionId = 'current-execution';
-  await render(data);
+  const identified = { ...data,
+    plans: data.plans.map(plan => ({ ...plan, steps: plan.steps.map(step => step.position === 1 ? { ...step, executionId: 'current-execution' } : step) })),
+    round: { ...data.round, speakers: [{ botId: 'abu', sessionId: null, activity: 'step' as const, executionId: 'old-execution', startedAt: 1_000 },
+      { ...data.round.speakers[0], executionId: 'current-execution' }] } };
+  await render(identified);
   expect(card.textContent).toContain('6 秒');
   expect(card.textContent).not.toContain('40 秒');
-  data.round.speakers[1].startedAt = undefined;
-  data.plans[0]!.updatedAt = 35_000;
-  await render(data);
+  await render({ ...identified,
+    round: { ...identified.round, speakers: identified.round.speakers.map((speaker, index) => index === 1 ? { ...speaker, startedAt: undefined } : speaker) },
+    plans: identified.plans.map(plan => ({ ...plan, updatedAt: 35_000 })) });
   expect(card.textContent).not.toContain('6 秒');
   vi.useRealTimers();
 });
