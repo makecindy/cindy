@@ -82,6 +82,8 @@ export interface EmbedRequest {
   model: EmbeddingModelId;
   /** Skip both LRU reads and writes when the consumer owns vector freshness/persistence. */
   bypassCache?: boolean;
+  /** Consumer lifecycle assertion before each HTTP attempt and retry wait. Exceptions stop retries. */
+  assertActive?: () => void;
   /**
    * 检索用途档 (可选)。缺省 = 不发该参数 = 上游不加任何检索前缀。
    *

@@ -649,7 +649,7 @@ export class EmbeddingClient {
     model: string,
     // string[][] = 上下文化的按文档分组输入(见 embedDocuments);wire 上原样发。
     inputs: string[] | string[][],
-    opts: Pick<EmbedRequest, 'inputType' | 'dimensions' | 'timeoutMs'>,
+    opts: Pick<EmbedRequest, 'inputType' | 'dimensions' | 'timeoutMs' | 'assertActive'>,
   ): Promise<OpenAiEmbeddingsResponse> {
     let attempt = 0;
     // initial + retries
@@ -658,6 +658,8 @@ export class EmbeddingClient {
     const deadline = opts.timeoutMs !== undefined ? Date.now() + opts.timeoutMs : null;
 
     while (attempt < maxAttempts) {
+      // Consumer cancellation is not a transport failure and must bypass retry classification.
+      opts.assertActive?.();
       try {
         let remaining: number | undefined;
         if (deadline !== null) {
@@ -671,6 +673,7 @@ export class EmbeddingClient {
         }
         return await this.callOnce(apiKey, model, inputs, opts, remaining);
       } catch (err) {
+        opts.assertActive?.();
         if (!(err instanceof EmbeddingError)) {
           // 防御性: 任何非 EmbeddingError 都视作 SERVER_ERROR 走重试
           lastErr = new EmbeddingError(

@@ -37,7 +37,8 @@ function fixture() {
       data: input.map((text, index) => ({ index, embedding: [text.length, state.model === 'backend-v1' ? 1 : 2] })),
     }), { status: 200 });
   });
-  const client = new EmbeddingClient({ baseUrl: 'https://embedding.invalid', getApiKey: () => 'invalid-test-key', fetchImpl });
+  const retryWarning = vi.fn();
+  const client = new EmbeddingClient({ baseUrl: 'https://embedding.invalid', getApiKey: () => 'invalid-test-key', fetchImpl, logger: { warn: retryWarning } });
   const service = new EmbeddingService({
     getClient: () => client,
     getDbClient: () => { throw new Error('Synchronous embeddings must not read the database'); },
@@ -45,10 +46,52 @@ function fixture() {
     log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } as never,
   });
   const adapter = createLocalSkillEmbeddingAdapter('text-embedding-3-small', () => service, () => {});
-  return { state, batches, fetchImpl, client, service, adapter };
+  return { state, batches, fetchImpl, client, service, adapter, retryWarning };
 }
 
 describe('native local Skill embeddings', () => {
+  // Review 4508517151: cancellation must stop retries inside the current HTTP batch.
+  // Unit: real adapter/service/client, three retriable failures, virtual retry time.
+  it.each([503, 429, 'network'].flatMap(failure => ['failure', 'backoff'].map(when => ({ failure, when }))))
+    ('stops an internal $failure retry when cancelled during $when', async ({ failure, when }) => {
+      const f = fixture();
+      let active = true;
+      const cancelled = new Error('No current library participants');
+      const adapter = createLocalSkillEmbeddingAdapter('text-embedding-3-small', () => f.service, () => {
+        if (!active) throw cancelled;
+      });
+      f.fetchImpl.mockImplementationOnce(async () => {
+        if (when === 'failure') active = false;
+        if (failure === 'network') throw new Error('Connection reset');
+        return new Response('Please retry', { status: Number(failure) });
+      });
+      let entered!: () => void;
+      const waiting = new Promise<void>(resolve => { entered = resolve; });
+      f.retryWarning.mockImplementation(() => entered());
+      vi.useFakeTimers();
+      try {
+        const result = expect(adapter.embed(Array.from({ length: 32 }, (_, i) => `method-${i}`), 'document')).rejects.toBe(cancelled);
+        if (when === 'backoff') { await waiting; active = false; }
+        await vi.advanceTimersByTimeAsync(1_000);
+        await result;
+        expect(f.fetchImpl).toHaveBeenCalledTimes(1);
+        expect(vi.getTimerCount()).toBe(0);
+      } finally { vi.useRealTimers(); }
+    });
+
+  it('keeps ordinary service consumers on the existing retry policy', async () => {
+    const f = fixture();
+    f.fetchImpl.mockResolvedValueOnce(new Response('Please retry', { status: 503 }));
+    vi.useFakeTimers();
+    try {
+      const result = f.service.embedSync(['method'], { modelId: 'text-embedding-3-small', timeoutMs: 30_000 });
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(await result).toMatchObject({ embeddings: [[6, 1]], modelUsed: 'backend-v1' });
+      expect(f.fetchImpl).toHaveBeenCalledTimes(2);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally { vi.useRealTimers(); }
+  });
+
   // Review 4507777247: request cancellation does not dispose its task instance.
   // Real registry/handler -> host -> adapter/service/client; only HTTP is injected.
   it.each([false, true])('honors request cancellation with the task still active (other waiter=%s)', async otherWaiter => {

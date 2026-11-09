@@ -185,6 +185,8 @@ export class EmbeddingService {
       modelId: EmbeddingModelId;
       /** Consumer-owned vector indexes can request current upstream results without LRU reuse. */
       bypassCache?: boolean;
+      /** Check the consumer's current participants before HTTP attempts and retry waits. */
+      assertActive?: () => void;
       /** 检索用途档(client 按 model 的 provider 翻成上游 wire 值)。 */
       inputType?: EmbeddingInputType;
       /** 期望维度(缺省 = 上游默认;client 会按返回长度自检)。 */
@@ -203,6 +205,7 @@ export class EmbeddingService {
       texts,
       model: opts.modelId,
       ...(opts.bypassCache !== undefined ? { bypassCache: opts.bypassCache } : {}),
+      ...(opts.assertActive !== undefined ? { assertActive: opts.assertActive } : {}),
       ...(opts.inputType !== undefined ? { inputType: opts.inputType } : {}),
       ...(opts.dimensions !== undefined ? { dimensions: opts.dimensions } : {}),
       ...(opts.timeoutMs !== undefined ? { timeoutMs: opts.timeoutMs } : {}),

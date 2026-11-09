@@ -17,7 +17,7 @@ export function createLocalSkillEmbeddingAdapter(
       for (let offset = 0; offset < texts.length; offset += 32) {
         checkCurrent();
         const result = await getService().embedSync(texts.slice(offset, offset + 32), {
-          modelId: model, inputType, timeoutMs: 30_000, bypassCache: true,
+          modelId: model, inputType, timeoutMs: 30_000, bypassCache: true, assertActive: checkCurrent,
         });
         checkCurrent();
         if (offset > 0 && result.modelUsed !== modelUsed) {
