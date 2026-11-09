@@ -363,6 +363,7 @@ export function RemotePluginPage({
           operationId: id,
           kind,
           ...(snapshot?.uiCapabilityApproval === true ? { uiConsentVersion: 1 } : {}),
+          ...(snapshot?.backgroundSearchCapabilityApproval === true ? { backgroundSearchConsentVersion: 1 } : {}),
           ...(ghost
             ? { expectedInstalledApproval: ghostInstallApprovalToken(ghost.approval) }
             : {}),
@@ -413,6 +414,7 @@ export function RemotePluginPage({
       projectState,
       projectReadStatus,
       snapshot?.uiCapabilityApproval,
+      snapshot?.backgroundSearchCapabilityApproval,
     ],
   );
   const selectMarket = async (item: PluginMarketItem) => {

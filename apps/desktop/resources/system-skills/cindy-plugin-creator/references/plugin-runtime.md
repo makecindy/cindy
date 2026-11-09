@@ -118,12 +118,17 @@ const search = await cindy.send({
   query: 'Cindy 最新版本',
   limit: 10,                      // 可选,正安全整数,缺省 10;实际条数由上游决定
   provider: 'cindy',
+  includeNativeResults: true,     // 可选;显式请求完整原生结果和元数据
   callId: msg.callId,             // 搜索只由 tool-call 触发,必须透传
   callerTool: msg.tool,            // 与 callId 配对验身,必须逐字透传
 });
-// search = { ok:true, provider:'cindy', results:[{ title, url, snippet, ...nativeFields }], metadata }
-// 上游实际返回的结果不按 limit 再裁掉;metadata 保留原始内容块和用量,不含内部模型路由。
-// 大结果应完整写入当前任务文件,工具仅返回预算内预览;不要为读取同次结果重新搜索。
+// search = { ok:true, provider:'cindy', results:[{ title, url, snippet }], nativeResults, metadata }
+// results 保持旧协议:最多 limit 条且摘要最多 500 字符;旧插件无需修改。
+// includeNativeResults:true 才追加未按 limit/摘要预算裁剪的 nativeResults 及 metadata;
+// metadata 保留原始内容块和用量,不含内部模型路由。插件应使用 nativeResults 保存完整结果。
+// 大结果可经已有 fs:true 权限保存到 root:data,通过插件工具分页读取,避免依赖任务工作目录。
+// 旧 Host 可能忽略新字段且不返回 nativeResults;原 results 仍可用,更大 limit 可能被明确拒绝。
+// 不把旧结果当成完整原生数据,不静默缩小条数或自动重搜。
 //
 // 后台搜索（新增能力，尚未发布）：另声明并获准 cindy.search:["background_web"]。
 // 可从插件定时器/后台代码调用，不启动 Agent；不传 callId/callerTool，也不需要 tools。
@@ -131,7 +136,7 @@ const backgroundSearch = await cindy.send({
   type: 'cindy-request', kind: 'search_web', background: true,
   provider: 'cindy', query: 'Cindy 最新动态', limit: 50,
 });
-// 返回同形的完整 results/metadata，不经过 Agent 预览预算。
+// 返回完整 results/metadata，无需 includeNativeResults，不经过 Agent 预览预算。
 // Host 生成每次请求的插件归因号，沿用当前账号、Cindy AI 用量与已有并发设置；
 // 账号切换、插件停用或批准变更后丢弃在途结果。额度不足原样返回，不自动重试。
 // 未获准或旧 Host 不支持时明确报错；不能伪造 Agent callId，也不静默降级到 Agent。

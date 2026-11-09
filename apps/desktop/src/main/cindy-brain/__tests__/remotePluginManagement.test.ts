@@ -899,4 +899,16 @@ describe('interactive page consent transactions', () => {
     await f.invoke('begin', { operationId: 'install-page', kind: 'install', pluginId: 'weather', expectedReleaseId: 'r1', ...(negotiated ? { uiConsentVersion: 1 } : {}) });
     await flush(); expect(f.deps.market.install).toHaveBeenCalledOnce();
   });
+  // unit: page-consent v1 alone does not prove support for the new background fee disclosure.
+  it.each([false, true])('ordinary install negotiates background disclosure separately (%s)', async negotiated => {
+    const f = pages();
+    f.deps.market.install = vi.fn(async (_id, _options, prompt) => {
+      expect(prompt.backgroundSearchCapabilityApproval).toBe(negotiated);
+    });
+    expect(await f.invoke('snapshot', {})).toMatchObject({ backgroundSearchCapabilityApproval: true });
+    await f.invoke('begin', { operationId: 'install-background', kind: 'install', pluginId: 'weather',
+      expectedReleaseId: 'r1', uiConsentVersion: 1,
+      ...(negotiated ? { backgroundSearchConsentVersion: 1 } : {}) });
+    await flush(); expect(f.deps.market.install).toHaveBeenCalledOnce();
+  });
 });

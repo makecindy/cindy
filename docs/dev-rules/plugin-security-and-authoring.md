@@ -296,6 +296,10 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
   复用当前账号、搜索接口与并发设置，返回完整结构化数据。响应前复核同一 owner、启用态和批准
   revision。旧 receipt 缺字段保持有效且普通工具照常使用，提前声明未知动作的旧安装在申请更新时
   单独确认新增项，不因 Host 升级自动获得权限；不 bump schema、不要求存量插件重装或重新配置。
+  远程安装继续使用既有确认流程：Host 在 snapshot 声明 `backgroundSearchCapabilityApproval`，
+  支持后台执行及用量说明的控制端才发送 `backgroundSearchConsentVersion: 1`。缺标记的旧控制端
+  仍可安装和使用普通工具，但不能批准新增后台能力；新控制端不向旧 Host 发送该字段。
+  此协商独立于既有 `uiConsentVersion`，不新增通道或修改官方／自建中转。
 - **控制节点（2026-10-31）**：Host 预埋的 `will-` 拦截点目录在 `shared/ghost.ts`
   `GHOST_CONTROL_POINTS`，新增节点 = 加目录项 + 在对应流程按任务配置调用 `screenGhostControlPoint`，
   插件不需要 Host 再发版。四条不变量：只问用户在该任务里选定的插件（定时任务 / 例行任务的

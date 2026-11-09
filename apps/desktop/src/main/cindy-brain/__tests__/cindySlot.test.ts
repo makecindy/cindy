@@ -538,13 +538,35 @@ describe('Cindy Web Search', () => {
       searchWeb,
     });
 
-    await expect(slot.handleModelRequest('art', { ...SEARCH_REQ, limit: 50 })).resolves.toEqual({
+    await expect(slot.handleModelRequest('art', { ...SEARCH_REQ, limit: 50, includeNativeResults: true })).resolves.toEqual({
       ok: true,
       provider: 'cindy',
-      results,
+      results: results.map(({ title, url, snippet }) => ({ title, url, snippet: snippet.slice(0, 500) })),
+      nativeResults: results,
       metadata,
     });
     expect(searchWeb).toHaveBeenCalledExactlyOnceWith({ query: 'Cindy Web Search', limit: 50 });
+  });
+
+  // unit: the same production slot must keep old plugins' complete reply small.
+  // Previously the full native spread exposed large opaque fields without opting in.
+  it('旧调用维持精简结果和请求条数，不泄入原生大字段或metadata', async () => {
+    const results = Array.from({ length: 12 }, (_, index) => ({
+      title: String(index), url: 'https://example.test/' + index,
+      snippet: 'Summary'.repeat(1000), encrypted_content: 'opaque'.repeat(10000),
+    }));
+    const { slot } = makeSlot({ getGhost: searchGhost,
+      searchWeb: vi.fn(async () => ({ ok: true as const, results, metadata: { content: results } })),
+    });
+    const reply = await slot.handleModelRequest('art', { ...SEARCH_REQ, limit: 5 });
+    expect(reply.ok && 'results' in reply).toBe(true);
+    if (!reply.ok || !('results' in reply)) return;
+    expect(Object.keys(reply).sort()).toEqual(['ok', 'provider', 'results']);
+    expect(reply.results).toHaveLength(5);
+    expect(reply.results.map(item => Object.keys(item).sort()))
+      .toEqual(Array.from({ length: 5 }, () => ['snippet', 'title', 'url']));
+    expect(reply.results.map(item => item.snippet.length)).toEqual([500, 500, 500, 500, 500]);
+    expect(JSON.stringify(reply).length).toBeLessThan(4000);
   });
 
   it('权限不足返回 PERMISSION_DENIED；非法参数返回 INVALID_PARAMS，且不出网', async () => {

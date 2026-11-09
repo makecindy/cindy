@@ -16,7 +16,7 @@ export interface PluginManagementClientOptions {
   /** Target/view/connection fence, in addition to the built-in account-owner fence. */
   isCurrent?: () => boolean;
 }
-export type PluginManagementBegin = { operationId: string; uiConsentVersion?: 1 } & (
+export type PluginManagementBegin = { operationId: string; uiConsentVersion?: 1; backgroundSearchConsentVersion?: 1 } & (
   | { kind: 'install'; detail: ManagedMarketDetail; installed?: ManagedPlugin }
   | { kind: 'uninstall' | 'enable' | 'disable' | 'approve-ui' | 'defer-ui'; installed: ManagedPlugin }
 );
@@ -39,6 +39,7 @@ function utf8Bytes(value: string): number {
 export function createPluginManagementClient(options: PluginManagementClientOptions) {
   const owner = getMobileAuthOwner();
   let uiCapabilityApproval = false;
+  let backgroundSearchCapabilityApproval = false;
   const isOwnerCurrent = () => !owner.switching && isMobileAuthOwnerCurrent(owner);
   const isCurrent = () => isOwnerCurrent() && (options.isCurrent?.() ?? true);
   async function call<T>(channel: string, payload: unknown, parse: (value: unknown) => T, mutation = false, guard?: () => boolean, cleanup = false): Promise<T> {
@@ -92,6 +93,7 @@ export function createPluginManagementClient(options: PluginManagementClientOpti
     snapshot: () => action('snapshot', {}, (value) => {
       const snapshot = parsePluginManagementSnapshot(value);
       uiCapabilityApproval = snapshot.uiCapabilityApproval === true;
+      backgroundSearchCapabilityApproval = snapshot.backgroundSearchCapabilityApproval === true;
       return snapshot;
     }),
     async detail(pluginId: string) {
@@ -106,10 +108,13 @@ export function createPluginManagementClient(options: PluginManagementClientOpti
       if (!validId(request.operationId)) return localError('INVALID_INPUT');
       if ((request.kind === 'approve-ui' || request.kind === 'defer-ui' || request.uiConsentVersion !== undefined)
         && (!uiCapabilityApproval || request.uiConsentVersion !== 1)) return localError('PLUGIN_UI_APPROVAL_UNSUPPORTED');
+      if (request.backgroundSearchConsentVersion !== undefined
+        && (!backgroundSearchCapabilityApproval || request.backgroundSearchConsentVersion !== 1)) return localError('PLUGIN_SEARCH_APPROVAL_UNSUPPORTED');
       const installed = request.installed;
       if (installed && !validId(installed.instanceKey, 1024)) return localError('INVALID_INPUT');
       const input: Record<string, unknown> = { operationId: request.operationId, kind: request.kind,
         ...(request.uiConsentVersion === 1 ? { uiConsentVersion: 1 } : {}),
+        ...(request.backgroundSearchConsentVersion === 1 ? { backgroundSearchConsentVersion: 1 } : {}),
         ...(installed ? { expectedInstalledApproval: pluginApprovalToken(installed) } : {}) };
       if (request.kind === 'install') {
         const detail = parsePluginManagementDetail(request.detail);

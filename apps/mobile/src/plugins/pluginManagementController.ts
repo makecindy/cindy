@@ -124,7 +124,8 @@ export function createPluginManagementController(client: PluginManagementClient,
       publish({ operationId, outcome: 'running' });
       began = true;
       await acceptReceipt(await client.begin({ ...request, operationId,
-        ...(snapshot.uiCapabilityApproval ? { uiConsentVersion: 1 } : {}) }, () => current(token)
+        ...(snapshot.uiCapabilityApproval ? { uiConsentVersion: 1 } : {}),
+        ...(snapshot.backgroundSearchCapabilityApproval ? { backgroundSearchConsentVersion: 1 } : {}) }, () => current(token)
         && state.online && !!state.snapshot && receiverCurrent(state.snapshot)), token);
     } catch (error) {
       if (!current(token)) return;

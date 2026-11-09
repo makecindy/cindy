@@ -60,6 +60,7 @@ export interface PluginManagementSnapshot {
   };
   settingsPage?: true;
   uiCapabilityApproval?: true;
+  backgroundSearchCapabilityApproval?: true;
 }
 export interface PluginPermissionItem {
   key: string;
@@ -157,11 +158,13 @@ export function parsePluginManagementSnapshot(value: unknown): PluginManagementS
     || !strings(value.market.customSourceNames) || !strings(value.market.unavailableCustomSourceNames)
     || (value.market.organizationAccessError !== undefined && !nullableString(value.market.organizationAccessError))
     || (value.uiCapabilityApproval !== undefined && value.uiCapabilityApproval !== true)
+    || (value.backgroundSearchCapabilityApproval !== undefined && value.backgroundSearchCapabilityApproval !== true)
     || (value.settingsPage !== undefined && value.settingsPage !== true)
     || new Set(value.ghosts.map((g) => g.instanceKey)).size !== value.ghosts.length) return invalid();
   const data = value as unknown as PluginManagementSnapshot;
   return { version: 1, ghosts: data.ghosts.map((g) => ({ ...g })), market: { ...data.market, items: data.market.items.map(safeMarketItem) },
     ...(data.uiCapabilityApproval ? { uiCapabilityApproval: true } : {}),
+    ...(data.backgroundSearchCapabilityApproval ? { backgroundSearchCapabilityApproval: true } : {}),
     ...(data.settingsPage ? { settingsPage: true } : {}) };
 }
 export function parsePluginManagementDetail(value: unknown): ManagedMarketDetail {

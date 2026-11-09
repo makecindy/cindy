@@ -37,6 +37,8 @@ export type GhostInstallConsentPrompt = ((
 ) => Promise<boolean>) & {
   /** Main-owned negotiation: legacy remote controllers cannot approve page capabilities. */
   uiCapabilityApproval?: boolean;
+  /** Remote controllers must support the background execution and quota disclosure. */
+  backgroundSearchCapabilityApproval?: boolean;
 };
 
 export type GhostInstallConsentPolicy =
@@ -57,7 +59,7 @@ export type GhostInstallConsentPolicy =
 
 /** 求得的确认结论；随安装请求一路交到安装锁内复核。 */
 export type GhostInstallConsentDecision =
-  | { mode: 'confirmed'; key: string; forced?: true; uiCapabilityUnsupported?: true }
+  | { mode: 'confirmed'; key: string; forced?: true; uiCapabilityUnsupported?: true; backgroundSearchCapabilityUnsupported?: true }
   /** 求确认时判定无需确认；落位前必须仍然无需确认。 */
   | { mode: 'unprompted' }
   | { mode: 'exempt'; reason: 'server-default-install' };
@@ -86,7 +88,7 @@ export function confirmedBackgroundSearchCapability(
   if (!next.cindy?.search?.includes('background_web')) return undefined;
   // 服务端默认安装沿用既有发行方批准策略，不增加另一套确认流程。
   if (decision.mode === 'exempt') return true;
-  if (decision.mode !== 'confirmed') return undefined;
+  if (decision.mode !== 'confirmed' || decision.backgroundSearchCapabilityUnsupported === true) return undefined;
   const facts = evaluateGhostInstallConsent(installed, next);
   const shown = facts?.kind === 'install' ? facts.permissions : facts?.added;
   return shown?.some(item => item.key === 'cindy:search.background_web') ? true : undefined;
@@ -201,6 +203,7 @@ export async function obtainGhostInstallConsent(
   return {
     mode: 'confirmed',
     ...(policy.prompt.uiCapabilityApproval === false ? { uiCapabilityUnsupported: true as const } : {}),
+    ...(policy.prompt.backgroundSearchCapabilityApproval === false ? { backgroundSearchCapabilityUnsupported: true as const } : {}),
     ...(forced ? { forced: true as const } : {}),
     key: ghostInstallConsentKey(
       facts,

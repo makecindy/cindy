@@ -212,6 +212,8 @@
       "cindyEmbedTextDetail": "El texto se envía al modelo de integración del sistema y se convierte en números, hasta elementos {{max}} por llamada. Se pueden aplicar cargos por modelo. Los vectores van sólo al complemento; no se escribe nada en su propia biblioteca.",
       "cindySearchWeb": "Puede buscar en la web pública con Cindy AI",
       "cindySearchWebDetail": "Las solicitudes de búsqueda acceden a la web pública y pueden consumir la cuota de Cindy AI.",
+      "cindySearchBackgroundWeb": "Puede buscar automáticamente con Cindy AI en segundo plano",
+      "cindySearchBackgroundWebDetail": "Puede buscar en la web pública sin iniciar un Agent ni pedir confirmación cada vez. Las búsquedas cuentan para tu uso de Cindy AI.",
       "cindyTextOneshotModelDetail": "Utiliza la cadena de modelos de utilidad liviana del sistema (el mismo carril que los títulos de automóviles). No hay Agent involucrado y no hay acceso a archivos. Se pueden aplicar cargos por modelo. El complemento declara un modelo preferido: {{model}} (efectivo cuando esté disponible en el catálogo actual; su pin tiene prioridad).",
       "agentUserAction": "Puede iniciar un nuevo turno Agent después de hacer clic en una tarjeta de complemento",
       "agentUserActionDetail": "Cada clic permite sólo un turno, y sólo en la sesión propietaria de la tarjeta.",

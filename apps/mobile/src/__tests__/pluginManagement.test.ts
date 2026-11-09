@@ -4,6 +4,9 @@ import { getMobileAuthOwner, setMobileAuthOwner } from '@/auth/authOwnerGenerati
 import { createPluginManagementClient, type PluginManagementInvoke } from '@/plugins/pluginManagementClient';
 import { createPluginPromptReads } from '@/plugins/pluginPromptReads';
 import { createPluginManagementController } from '@/plugins/pluginManagementController';
+import { pluginConsentPresentation } from '@/plugins/pluginConsentPresentation';
+import enPlugins from '@/i18n/locales/en/plugins.json';
+import zhPlugins from '@/i18n/locales/zh-CN/plugins.json';
 import { isBoundedPluginResponse, parsePluginManagementDetail, parsePluginManagementReceipt,
   parsePluginManagementSnapshot, marketItemMatchesPlugin, pluginNeedsUiApproval, type ManagedPlugin,
   type ManagedMarketDetail, type PluginManagementReceipt, type PluginManagementSnapshot } from '@/plugins/pluginManagementTypes';
@@ -280,6 +283,31 @@ describe('mobile management transactions', () => {
 /* 新增依据：页面批准是增量能力；旧 Host 不接新写入，丢失回执不能重放。
  * 缺口/最小输入：v1 snapshot 缺 capability 或批准 answer 超时；tier: unit，真实 client/controller。 */
 describe('interactive page capability approval', () => {
+  // unit: a new controller opts in only when the Host understands this disclosure version.
+  it.each([false, true])('negotiates background search disclosure with new Hosts only (%s)', async supported => {
+    const h = host(() => receipt('succeeded'));
+    h.setFacts({ ...snapshot(), ...(supported ? { backgroundSearchCapabilityApproval: true as const } : {}) });
+    const c = controller(h.client); await c.refresh(); await c.install(detail, plugin);
+    expect(h.requests.find(r => r.actionId === 'management:begin')!.input.backgroundSearchConsentVersion)
+      .toBe(supported ? 1 : undefined);
+  });
+  // The actual locale resources previously fell back to a bare "cindy" and an empty detail.
+  it.each([['en', enPlugins, /background/i, /Cindy AI usage/i], ['zh-CN', zhPlugins, /后台/, /用量/]] as const)(
+    'shows background execution and quota disclosure in %s', (_locale, resource, background, quota) => {
+      const consent = confirmation().consent!;
+      consent.facts = { kind: 'install', ghostId: 'demo', name: 'Demo', version: '2', permissions: [{
+        key: 'cindy:search.background_web', kind: 'cindy', labelKey: 'cindySearchBackgroundWeb',
+        detailKey: 'cindySearchBackgroundWebDetail',
+      }] };
+      const display = pluginConsentPresentation(consent, (key, args) => {
+        const value = key.split('.').slice(1).reduce<unknown>((node, part) =>
+          node && typeof node === 'object' ? (node as Record<string, unknown>)[part] : undefined, resource);
+        return typeof value === 'string' ? value : String(args?.defaultValue ?? key);
+      });
+      expect(display.permissions[0].title).toMatch(background);
+      expect(display.permissions[0].detail).toMatch(quota);
+    },
+  );
   it.each(['approve-ui', 'defer-ui'] as const)('requires advertised support before %s and binds the revision and consent version', async (kind) => {
     const h = host(() => receipt('succeeded'));
     const c = controller(h.client);

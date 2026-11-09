@@ -8461,6 +8461,8 @@ export type GhostPipeCindyRequest =
       query: string;
       /** 所需条数提示，正安全整数，缺省 10；实际返回数量由上游决定。 */
       limit?: number;
+      /** 显式取得 nativeResults 和完整 metadata；不传保持旧精简 results 契约。 */
+      includeNativeResults?: boolean;
       /** 固定为 cindy；其它值明拒。 */
       provider: 'cindy';
     } & ({
@@ -8787,6 +8789,13 @@ export type GhostPipeModelResult =
       ok: true;
       provider: 'cindy';
       results: Array<{
+        [field: string]: unknown;
+        title: string;
+        url: string;
+        snippet: string;
+      }>;
+      /** includeNativeResults=true 时保留原生条目；旧调用不增加大字段。 */
+      nativeResults?: Array<{
         [field: string]: unknown;
         title: string;
         url: string;

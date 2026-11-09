@@ -21,7 +21,7 @@ import { loadGhostFirstPartyFactsLoader } from '../ghostFirstPartyFacts.js';
 import { authorizeGhostTokenBroker } from '../ghostFirstPartyPrivilege.js';
 import { createGhostInstallReceipt, type GhostInstallReceipt } from '../ghostInstallReceipt.js';
 import { classifyGhostLocalUpdateSource } from '../ghostLocalUpdateSource.js';
-import { confirmedControlPoints, confirmedUiCapability, confirmedTaskCapability } from '../ghostInstallConsent.js';
+import { confirmedBackgroundSearchCapability, confirmedControlPoints, confirmedUiCapability, confirmedTaskCapability } from '../ghostInstallConsent.js';
 
 type Handler = (event: unknown, ...args: unknown[]) => Promise<unknown>;
 
@@ -271,6 +271,7 @@ function harness(
     obtainGhostInstallConsent: vi.fn(async () => ({ action: 'install' })),
     createWindowGhostInstallConsentPrompt: vi.fn(),
     assertGhostInstallConsent: vi.fn(),
+    confirmedBackgroundSearchCapability,
     confirmedUiCapability,
     confirmedTaskCapability,
     confirmedControlPoints,

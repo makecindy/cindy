@@ -222,6 +222,7 @@ export class RemotePluginManagement {
           ...(this.deps.ui?.suppressed(ghost) ? { uiPromptSuppressed: true } : {}),
         })),
         ...(this.deps.ui ? { uiCapabilityApproval: true } : {}),
+        backgroundSearchCapabilityApproval: true,
         market,
         ...(this.deps.preferences ? { hostPreferences: true } : {}),
         ...(this.deps.settingsPage ? { settingsPage: true } : {}),
@@ -330,6 +331,7 @@ export class RemotePluginManagement {
           ![
             'operationId',
             'uiConsentVersion',
+            'backgroundSearchConsentVersion',
             'kind',
             'pluginId',
             'expectedReleaseId',
@@ -348,6 +350,7 @@ export class RemotePluginManagement {
     if (!['install', 'enable', 'disable', 'uninstall', 'install-file', 'install-share', 'approve-ui', 'defer-ui'].includes(kind))
       return invalid();
     if (input.uiConsentVersion !== undefined && input.uiConsentVersion !== 1) return invalid();
+    if (input.backgroundSearchConsentVersion !== undefined && input.backgroundSearchConsentVersion !== 1) return invalid();
     if (['approve-ui', 'defer-ui'].includes(kind) && (!this.deps.ui || input.uiConsentVersion !== 1)) return invalid();
     const projectId = input.projectId === undefined ? undefined : str(input.projectId);
     const projectRevision =
@@ -434,6 +437,7 @@ export class RemotePluginManagement {
       });
     };
     prompt.uiCapabilityApproval = input.uiConsentVersion === 1;
+    prompt.backgroundSearchCapabilityApproval = input.backgroundSearchConsentVersion === 1;
     void (async () => {
       try {
         assertCurrent();

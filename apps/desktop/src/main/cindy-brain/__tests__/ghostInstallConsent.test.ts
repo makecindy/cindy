@@ -59,6 +59,31 @@ const userPrompt = (answer: boolean | Error) =>
 
 const reviewedDigest = 'a'.repeat(64);
 
+// Existing manifest consent owns fs approval; no search-specific file grant is needed.
+it('私有文件权限沿用现有fs安装及更新确认，自动更新不能扩权', async () => {
+  const base = manifest(['api.weather.test']);
+  const next: GhostManifest = { ...base, fs: true };
+  for (const old of [null, installed(base)]) {
+    const prompt = userPrompt(true);
+    const decision = await obtainGhostInstallConsent({ mode: 'prompt', prompt, initiator: 'user', origin: 'market' }, old, next, reviewedDigest);
+    assertGhostInstallConsent(decision, old, next, reviewedDigest);
+    expect(prompt).toHaveBeenCalledWith(expect.objectContaining({ facts: expect.objectContaining({
+      [old ? 'added' : 'permissions']: expect.arrayContaining([
+        expect.objectContaining({ key: 'fs', labelKey: 'fsWrite' }),
+      ]),
+    }) }));
+  }
+  await expect(obtainGhostInstallConsent({ mode: 'automatic' }, installed(base), next, reviewedDigest)).rejects.toThrow();
+});
+
+// unit: a legacy remote controller can confirm installation without displaying the new fee disclosure.
+it.each([false, true])('后台搜索批准要求控制端支持完整说明（%s）', async supported => {
+  const next = { ...manifest(['api.weather.test']), cindy: { search: ['background_web'] } } as GhostManifest;
+  const prompt = Object.assign(userPrompt(true), { backgroundSearchCapabilityApproval: supported });
+  const decision = await obtainGhostInstallConsent({ mode: 'prompt', prompt, initiator: 'user', origin: 'market' }, null, next, reviewedDigest);
+  expect(confirmedBackgroundSearchCapability(decision, null, next)).toBe(supported ? true : undefined);
+});
+
 // 后台搜索契约：批准来自实际显示的新权限，旧 Host 保留的未知动作不授予能力。
 // 现有控制节点/auto-tools 用例不覆盖搜索。最小输入：同清单、无新批准字段（unit）。
 it('后台搜索单独确认一次，旧声明不静默扩权，拒绝及自动更新保留旧安装', async () => {

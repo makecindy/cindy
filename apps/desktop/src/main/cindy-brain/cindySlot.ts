@@ -1312,11 +1312,15 @@ export class GhostCindySlot {
       limit?: unknown;
       provider?: unknown;
       background?: unknown;
+      includeNativeResults?: unknown;
       callId?: unknown;
       callerTool?: unknown;
     };
     if (p.background !== undefined && typeof p.background !== 'boolean') {
       return { ok: false, message: 'background 必须是布尔值', errorCode: 'INVALID_PARAMS' };
+    }
+    if (p.includeNativeResults !== undefined && typeof p.includeNativeResults !== 'boolean') {
+      return { ok: false, message: 'includeNativeResults 必须是布尔值', errorCode: 'INVALID_PARAMS' };
     }
     const background = p.background === true;
     const declared: readonly string[] = ghost.manifest.cindy.search ?? [];
@@ -1504,8 +1508,12 @@ export class GhostCindySlot {
         return {
           ok: true,
           provider: 'cindy',
-          results: outcome.results,
-          ...(outcome.metadata !== undefined ? { metadata: outcome.metadata } : {}),
+          results: background ? outcome.results : outcome.results.slice(0, limit).map(({ title, url, snippet }) => ({
+            title, url, snippet: snippet.slice(0, 500),
+          })),
+          ...(p.includeNativeResults === true && !background ? { nativeResults: outcome.results } : {}),
+          ...((background || p.includeNativeResults === true) && outcome.metadata !== undefined
+            ? { metadata: outcome.metadata } : {}),
         };
       } finally {
         if (invocation) this.deps.settlePipeCallClaim?.(

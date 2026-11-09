@@ -98,6 +98,7 @@ export function parsePluginManagementSnapshot(value: unknown): PluginManagementS
     (data.projectBrowse !== undefined && data.projectBrowse !== true) ||
     (data.localShares !== undefined && data.localShares !== true) ||
     (data.uiCapabilityApproval !== undefined && data.uiCapabilityApproval !== true) ||
+    (data.backgroundSearchCapabilityApproval !== undefined && data.backgroundSearchCapabilityApproval !== true) ||
     !data.ghosts.every(
       (g) =>
         typeof g.instanceKey === 'string' &&
