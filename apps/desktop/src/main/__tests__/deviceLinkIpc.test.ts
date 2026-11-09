@@ -491,6 +491,61 @@ describe('device-link IPC handlers', () => {
     }
   });
 
+  // 每个中转桶的期限要**各自留着**:中转 A → B → A 来回切时,只留最后一个桶的话,A 的
+  // 期限会被 B 覆盖,切回 A 之后就在 A 仍然有效的限流窗口里又发了一次物理读
+  // (Codex review #9360)。
+  it('listDevices:中转来回切后回到原中转,原中转的限流期限仍然有效', async () => {
+    __resetDeviceListCoalescingForTests();
+    relayScope.baseUrl = 'https://relay-a.test.invalid';
+    const retryAtA = Date.now() + 60_000;
+    const retryAtB = Date.now() + 90_000;
+    const apiFetch = vi.fn()
+      .mockRejectedValueOnce(new ServerApiError('UNAVAILABLE', 429, 'rate limited', retryAtA))
+      .mockRejectedValueOnce(new ServerApiError('UNAVAILABLE', 429, 'rate limited', retryAtB))
+      .mockResolvedValue({ devices: [] });
+    const deps = makeDeps({ apiFetch });
+    try {
+      await expect(handleListDevices(deps)).rejects.toThrow(/rate limited/);
+      expect(apiFetch).toHaveBeenCalledTimes(1);
+      // 换到中转 B:B 是另一个限流桶,立刻发物理读,并记下 B 自己的期限。
+      relayScope.baseUrl = 'https://relay-b.test.invalid';
+      await expect(handleListDevices(deps)).rejects.toThrow(/rate limited/);
+      expect(apiFetch).toHaveBeenCalledTimes(2);
+      // 切回中转 A:A 的限流窗口还在(期限按桶各自保留),不该再发物理读。
+      relayScope.baseUrl = 'https://relay-a.test.invalid';
+      await expect(handleListDevices(deps)).rejects.toThrow(/限流退避中/);
+      expect(apiFetch).toHaveBeenCalledTimes(2);
+    } finally {
+      relayScope.baseUrl = 'https://relay-a.test.invalid';
+      __resetDeviceListCoalescingForTests();
+    }
+  });
+
+  // 限流期限要记在**真正服务了这次响应**的身份上:401 之后的共享刷新可能把会话换到
+  // 另一个区域 / 中转,那条重试是往新的端点发的。记在进请求时的身份上,新端点那个桶里
+  // 就没有冷却,下一次读直接撞进同一个限流窗口(Codex review #9360)。
+  it('listDevices:限流期限记在真正服务了这次响应的那个中转上', async () => {
+    __resetDeviceListCoalescingForTests();
+    relayScope.baseUrl = 'https://relay-a.test.invalid';
+    const retryAt = Date.now() + 60_000;
+    const apiFetch = vi.fn(async () => {
+      // 401 之后的共享刷新把这次重试送到了另一个中转:服务这次响应的是新中转。
+      relayScope.baseUrl = 'https://relay-b.test.invalid';
+      throw new ServerApiError('UNAVAILABLE', 429, 'rate limited', retryAt);
+    });
+    const deps = makeDeps({ apiFetch });
+    try {
+      await expect(handleListDevices(deps)).rejects.toThrow(/rate limited/);
+      expect(apiFetch).toHaveBeenCalledTimes(1);
+      // 期限记在新中转上:下一次读(还在新中转)不该发物理读。
+      await expect(handleListDevices(deps)).rejects.toThrow();
+      expect(apiFetch).toHaveBeenCalledTimes(1);
+    } finally {
+      relayScope.baseUrl = 'https://relay-a.test.invalid';
+      __resetDeviceListCoalescingForTests();
+    }
+  });
+
   // 目录读要有**总期限**:timeoutMs 只管单次 fetch,401 之后的共享登录刷新不在它里面
   // (官方端点的刷新端点是轮换的,timeoutMs: 0 = 不超时)—— 一次目录读可以无限期挂着,
   // 渲染侧的退避每轮都再开一条等待,越挂越多。调用方的期限信号把整条链路框住。

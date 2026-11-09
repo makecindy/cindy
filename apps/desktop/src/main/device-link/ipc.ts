@@ -457,13 +457,56 @@ const DEVICE_LIST_COALESCE_WINDOW_MS = 300;
 const DIRECTORY_READ_TIMEOUT_MS = 8_000;
 
 /**
- * 服务端限流(429)给出的目录重试期限(墙钟 ms),按 owner + 中转身份记。
+ * 服务端限流(429)给出的目录重试期限(墙钟 ms),按 owner + 中转身份**分桶**记。
  *
  * 中转身份也要算进去:官方中转与自建中转是**各自独立**的限流桶,同一账号从官方切到
  * 自建(或反过来)之后,上一个中转给的期限不该拦住新中转上的第一次读 —— 否则换中转后
  * 目录一直读不出去,恢复被一个已经无关的期限拖住(Codex review #9360)。
+ *
+ * 每个桶的期限要**各自留着**:只留最后一个桶的话,中转 A → B → A 来回切时,A 的期限
+ * 会被 B 覆盖,切回 A 之后就在 A 仍然有效的限流窗口里又发了一次物理读
+ * (Codex review #9360)。
  */
-let directoryRetryAt: { owner: string; relay: string; retryAtMs: number } | null = null;
+const directoryRetryAtByScope = new Map<string, number>();
+
+/** 限流桶的键:owner + 中转身份。 */
+function directoryScopeKey(owner: string, relay: string): string {
+  return `${owner}\u0000${relay}`;
+}
+
+/** 取某个桶当前有效的期限(过期的顺手丢掉)。 */
+function directoryRetryDeadline(owner: string, relay: string): number {
+  const key = directoryScopeKey(owner, relay);
+  const retryAtMs = directoryRetryAtByScope.get(key);
+  if (retryAtMs === undefined) return 0;
+  if (retryAtMs <= Date.now()) {
+    directoryRetryAtByScope.delete(key);
+    return 0;
+  }
+  return retryAtMs;
+}
+
+/** 记下某个桶的期限(同一个桶里取更晚的那个)。 */
+function recordDirectoryRetryDeadline(owner: string, relay: string, retryAtMs: number): void {
+  const key = directoryScopeKey(owner, relay);
+  const known = directoryRetryAtByScope.get(key) ?? 0;
+  directoryRetryAtByScope.set(key, Math.max(known, retryAtMs));
+  pruneExpiredDirectoryRetryDeadlines();
+}
+
+/** 桶的期限作废:拿到权威目录 = 服务端没有在限流。 */
+function clearDirectoryRetryDeadline(owner: string, relay: string): void {
+  directoryRetryAtByScope.delete(directoryScopeKey(owner, relay));
+}
+
+/** 桶会随账号 / 中转增多,过期的那几个顺手清掉,别让它一直长。 */
+function pruneExpiredDirectoryRetryDeadlines(): void {
+  if (directoryRetryAtByScope.size <= 16) return;
+  const now = Date.now();
+  for (const [key, retryAtMs] of directoryRetryAtByScope) {
+    if (retryAtMs <= now) directoryRetryAtByScope.delete(key);
+  }
+}
 
 /** 当前中转身份(官方端点或自建中转地址):限流期限按它分桶。 */
 function directoryRelayScope(): string {
@@ -483,7 +526,7 @@ function isAbortError(error: unknown): boolean {
 /** 仅测试:重置合并窗口状态,避免跨用例共用在途 promise。 */
 export function __resetDeviceListCoalescingForTests(): void {
   latestDeviceListRequest = null;
-  directoryRetryAt = null;
+  directoryRetryAtByScope.clear();
   invalidateProviderDirectoryContinuity();
 }
 
@@ -506,10 +549,7 @@ export function handleListDevices(
       // 冷启动(没有旧快照可沿用)时尤其明显:本地退避是 5 秒起,一路追问到窗口之后。
       // 这里按 owner + 中转记住的期限直接回一个暂时性失败(429),让调用方按自己的节奏
       // 重试;换账号不该继承上一个账号的限流期限,换中转也不该继承上一个中转的。
-      const throttledUntil =
-        directoryRetryAt?.owner === owner && directoryRetryAt.relay === relay
-          ? directoryRetryAt.retryAtMs
-          : 0;
+      const throttledUntil = directoryRetryDeadline(owner, relay);
       if (throttledUntil !== 0 && throttledUntil > Date.now()) {
         throw Object.assign(new Error('设备目录限流退避中'), { statusCode: 429 });
       }
@@ -531,11 +571,10 @@ export function handleListDevices(
         // (两个中转是各自独立的限流桶)也不该继承。
         const retryAt = (error as { retryAt?: unknown } | null | undefined)?.retryAt;
         if (typeof retryAt === 'number' && Number.isFinite(retryAt)) {
-          const known =
-            directoryRetryAt?.owner === owner && directoryRetryAt.relay === relay
-              ? directoryRetryAt.retryAtMs
-              : 0;
-          directoryRetryAt = { owner, relay, retryAtMs: Math.max(known, retryAt) };
+          // 期限要记在**真正服务了这次响应**的身份上:401 之后的共享刷新可能把会话换到
+          // 另一个区域 / 中转,那条重试是往新的端点发的。记在进请求时的身份上,新端点
+          // 那个桶里就没有任何冷却,下一次读直接撞进同一个限流窗口(Codex review #9360)。
+          recordDirectoryRetryDeadline(activeOwnerScopeKey(), directoryRelayScope(), retryAt);
         }
         // 读取超时是**暂时性**失败:让 continuity reader 沿用有界旧快照,而不是把快照一起
         // 丢掉(丢掉的话渲染进程连旧设备都看不到)。statusCode 0 = 连不上,不是权威拒绝。
@@ -564,10 +603,15 @@ export function handleListDevices(
         latest = latestDeviceListRequest;
         if (latest && latest.sequence > sequence) return latest.promise;
       }
-      // 拿到权威目录 = 服务端没有在限流:上一轮的限流期限作废。
-      if (!stale && directoryRetryAt?.owner === owner && directoryRetryAt.relay === relay) {
-        directoryRetryAt = null;
+      // 拿到权威目录 = 服务端没有在限流:这一轮那个桶的限流期限作废。按**当前**中转算:
+      // 这次响应可能是 401 刷新之后由另一个中转服务的(见上面的 catch 分支)。
+      const currentRelay = directoryRelayScope();
+      if (!stale) {
+        clearDirectoryRetryDeadline(owner, currentRelay);
       }
+      // 服务端限流给出的重试期限:调用方的退避要让过它(见 handleListDevices)。按当前
+      // 中转取 —— 下一次读用的就是这个身份。
+      const retryDeadlineMs = directoryRetryDeadline(owner, currentRelay);
       const reconciled = reconcileDeviceNames(
         result,
         deps,
@@ -620,9 +664,7 @@ export function handleListDevices(
         // stamp, while zero means this read is already outside its source window.
         displayBudget: { remainingMs: Math.max(0, remainingMs) },
         // 服务端限流给出的重试期限:调用方的退避要让过它(见 handleListDevices)。
-        ...(directoryRetryAt?.owner === owner && directoryRetryAt.relay === relay
-          ? { retryAtMs: directoryRetryAt.retryAtMs }
-          : {}),
+        ...(retryDeadlineMs > 0 ? { retryAtMs: retryDeadlineMs } : {}),
       };
     },
     (err: unknown) => {
