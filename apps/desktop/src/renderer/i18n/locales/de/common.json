@@ -10824,12 +10824,15 @@
         "projectDirNote": "Hier arbeiten Teammitglieder bei der Arbeitsaufteilung. Du kannst das Feld leer lassen, dann nutzen sie den eigenen Ordner dieses Gruppenchats. Wenn du ein Git-Projekt auswählst, erhält jede Arbeitsaufteilung einen neuen Worktree und Branch, damit dein eigener Code unverändert bleibt.",
         "autoContinueSaveFailed": "Die Schrittübergabe konnte nicht gespeichert werden. Versuch es erneut.",
         "projectDirSaveFailed": "Der Projektordner konnte nicht gespeichert werden. Prüfe, ob der Ordner noch vorhanden ist, und versuch es erneut.",
+        "shortCompanionNames": "Kurze Partnernamen",
+        "shortCompanionNamesHint": "Bei eindeutigen Namen wird der Name des Besitzers ausgeblendet. Bei gleichen Namen bleibt er zur Unterscheidung sichtbar.",
         "allowMentionAllBots": "@Alle Teammitglieder erlauben",
         "allowMentionAllBotsHint": "Nur der Gruppeninhaber kann dies ändern. Alle könnten antworten: Vorsicht in großen Gruppen. KI-Antworten in deinem Namen sind unabhängig."
       },
       "errors": {
         "memberLimit": "Ein Gruppenchat braucht 2–6 Teammitglieder",
         "memberUnavailable": "Eines dieser Teammitglieder ist nicht verfügbar. Wähle ein anderes und versuch es erneut.",
+        "ambiguousMention": "Mehrere Mitglieder haben diesen Namen. Wähle vor dem Senden eine Person aus der @-Liste aus.",
         "mentionUnavailable": "Ein erwähntes Mitglied ist nicht mehr verfügbar. Wähle vor dem erneuten Senden, wen du erwähnen möchtest.",
         "notFound": "Dieser Gruppenchat existiert nicht mehr",
         "hostNotReady": "Cindy wird noch vorbereitet. Versuch es gleich noch einmal.",

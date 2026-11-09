@@ -292,6 +292,8 @@
       "loading": "Cargando configuración…",
       "unavailable": "No se pudo cargar la configuración del grupo. Intentar otra vez."
     },
+    "shortCompanionNames": "Nombres cortos de compañeros",
+    "shortCompanionNamesHint": "Si el nombre es único en el grupo, se oculta el del propietario. Si hay nombres iguales, se muestra para distinguirlos.",
     "allowMentionAllBots": "Permitir @todos los compañeros",
     "allowMentionAllBotsHint": "Solo el dueño del grupo puede cambiarlo. Todos los compañeros podrían responder; cuidado en grupos grandes. No afecta a la IA que responde por ti.",
     "notifications": {
@@ -309,6 +311,7 @@
   "errors": {
     "memberLimit": "Un chat grupal necesita de 2 a 6 compañeros de equipo",
     "memberUnavailable": "Uno de estos compañeros de equipo no está disponible. Elige otro y vuelve a intentarlo.",
+    "ambiguousMention": "Varios miembros tienen este nombre. Elige a quién mencionar en la lista @ antes de enviar.",
     "mentionUnavailable": "Un miembro mencionado ya no está disponible. Elige a quién mencionar antes de volver a enviar.",
     "notFound": "Este chat grupal ya no existe",
     "hostNotReady": "Cindy todavía se está preparando. Inténtalo de nuevo en un momento.",

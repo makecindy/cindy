@@ -292,6 +292,8 @@
       "loading": "A carregar definições…",
       "unavailable": "Não foi possível carregar as definições do grupo. Tente novamente."
     },
+    "shortCompanionNames": "Nomes curtos dos colegas",
+    "shortCompanionNamesHint": "Quando o nome for único no grupo, o nome do proprietário fica oculto. Se houver nomes iguais, aparece para os distinguir.",
     "allowMentionAllBots": "Permitir @todos os colegas",
     "allowMentionAllBotsHint": "Só o proprietário do grupo pode alterar. Todos os colegas podem responder; cuidado em grupos grandes. Não afeta a IA que responde em seu nome.",
     "notifications": {
@@ -309,6 +311,7 @@
   "errors": {
     "memberLimit": "Uma conversa de grupo precisa de 2–6 colegas",
     "memberUnavailable": "Um destes colegas está indisponível. Escolha outro e tente novamente.",
+    "ambiguousMention": "Há vários membros com este nome. Escolhe quem mencionar na lista @ antes de enviar.",
     "mentionUnavailable": "Um membro mencionado já não está disponível. Escolha quem mencionar antes de enviar novamente.",
     "notFound": "Esta conversa de grupo já não existe",
     "hostNotReady": "Cindy ainda está a preparar-se. Tente novamente dentro de momentos.",

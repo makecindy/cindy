@@ -84,7 +84,7 @@ interface Message {
 }
 interface Room {
   id: string; name: string; topic: string; description: string; response_mode: 'all' | 'mentioned'; speaking_mode: 'auto' | 'sequential';
-  allow_mention_all_bots?: boolean; created_at: string; updated_at: string; revision: number; archived: boolean; dissolved_at?: string | null; organizer_id?: string | null; kind?: string;
+  allow_mention_all_bots?: boolean; hide_companion_owner_names?: boolean; created_at: string; updated_at: string; revision: number; archived: boolean; dissolved_at?: string | null; organizer_id?: string | null; kind?: string;
 }
 /**
  * `reads`: this reader's read position per Thread (`thread_key` = root ID, `main` for the main timeline); older servers omit it.
@@ -409,6 +409,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
   let supportsMemberAvatar = false;
   let supportsNotificationSettings = false;
   let supportsMentionAudiences = false;
+  let supportsCompanionOwnerNames = false;
   const personalList = createConversationListState();
   const attentionGroups = new Set<string>();
   const clearGroupAttention = (roomId: string) => {
@@ -624,7 +625,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     present: async (groupId, message) => {
       const snapshot = await recentSnapshot(groupId);
       const member = snapshot.members.find(member => member.id === message.authorId);
-      const view = messageView(message, snapshot.members, snapshot.room.kind === 'direct' ? [] : snapshot.members);
+      const view = messageView(message, snapshot.members, snapshot.room.kind === 'direct' ? [] : snapshot.members, snapshot.room.kind !== 'direct' && snapshot.room.hide_companion_owner_names === true);
       const words = (key: string) => t(`settings.notifications.chat.${key}`);
       const name = notificationPreview(view.authorName) || words('sender');
       const senderName = message.author.kind === 'bot' ? `${name} (${words('teammate')})` : name;
@@ -991,7 +992,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       const profileRevision = localProfilesRevision;
       profiles = await getDbClient().drizzle.select().from(botProfiles).where(undefined);
       localProfilesRead = profileRevision;
-      const me = await request<{ actor: Actor; deviceId?: string | null; capabilities?: { messageReaders?: number; groupDiscussionParity?: number; groupSingleSpeaker?: number; companionHome?: boolean; directRoomClaim?: boolean; groupLifecycleVersion?: number; conversationListStateVersion?: number; groupMemberAvatar?: number; groupMentionAudiences?: number; groupNotificationSettings?: number; workAvailabilityVersion?: number; workNotificationsVersion?: number } }>('/me'); selfId = me.actor.id;
+      const me = await request<{ actor: Actor; deviceId?: string | null; capabilities?: { messageReaders?: number; groupDiscussionParity?: number; groupSingleSpeaker?: number; companionHome?: boolean; directRoomClaim?: boolean; groupLifecycleVersion?: number; conversationListStateVersion?: number; groupMemberAvatar?: number; groupMentionAudiences?: number; groupNotificationSettings?: number; groupCompanionOwnerNames?: number; workAvailabilityVersion?: number; workNotificationsVersion?: number } }>('/me'); selfId = me.actor.id;
       supportsMessageReaders = me.capabilities?.messageReaders === 1;
       personalMaskTools = (me.capabilities as { personalMaskTools?: number } | undefined)?.personalMaskTools === 1;
       personalMask = (me.capabilities as { personalMask?: number } | undefined)?.personalMask === 1;
@@ -1000,6 +1001,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       supportsMemberAvatar = me.capabilities?.groupMemberAvatar === 1;
       supportsNotificationSettings = me.capabilities?.groupNotificationSettings === 1;
       supportsMentionAudiences = me.capabilities?.groupMentionAudiences === 1;
+      supportsCompanionOwnerNames = me.capabilities?.groupCompanionOwnerNames === 1;
       groupDiscussionParity = me.capabilities?.groupDiscussionParity === 1;
       singleSpeaker = me.capabilities?.groupSingleSpeaker === 1;
       // The read-only probe covers ordinary and member-joined queues only. AI reply work and
@@ -1366,7 +1368,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     const unavailable = personalList.hidden(s.room.id) || s.members.some(m => m.id === selfId && m.state !== 'joined');
     const selected = unavailable ? null : selectChatAttentionMessage(s, selfId);
     if (!selected) { clearGroupAttention(s.room.id); return; }
-    const view = messageView(selected, s.members, s.members);
+    const view = messageView(selected, s.members, s.members, s.room.hide_companion_owner_names === true);
     const preview = notificationPreview(botGroupMessageSummaryText(view) || mediaNames(selected), 240)
       || t('settings.notifications.chat.message');
     const context = selected.threadRootId ? `${t('settings.notifications.chat.thread')} · ` : '';
@@ -1378,7 +1380,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       preview: `${context}${notificationPreview(view.authorName)}: ${preview}`,
       lastMessageAt: Date.parse(selected.createdAt),
       members: s.members.filter(m => m.state === 'joined').slice(0, 5).map(m => ({
-        name: memberName(m, s.members), avatar: m.groupAvatar ?? m.avatar ?? m.defaultAvatarUrl ?? localBot(m.id)?.avatar ?? '',
+        name: memberName(m, s.members, s.room.hide_companion_owner_names === true), avatar: m.groupAvatar ?? m.avatar ?? m.defaultAvatarUrl ?? localBot(m.id)?.avatar ?? '',
         avatarColor: localBot(m.id)?.avatarColor ?? '',
       })),
     }, current);
@@ -1450,7 +1452,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     if (actor.homeDeviceId && actor.homeDeviceId !== selfDeviceId) return true;
     return !local || local.status === 'active';
   }
-  function messageView(m: Message, members: Member[], ownerMembers: readonly Member[] = members): BotGroupMessageView {
+  function messageView(m: Message, members: Member[], ownerMembers: readonly Member[] = members, hideOwnerNames = false): BotGroupMessageView {
     // Only the server-owned origin establishes a system event. A user-supplied
     // card with the same namespace must remain an ordinary chat message.
     if (m.origin === 'system') {
@@ -1485,7 +1487,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     const process = !m.deleted && m.author.kind === 'bot' ? m.content.map(readBotGroupProcessCard).find(Boolean) : null;
     return { id: m.id, maskAttribution: m.maskAttribution, sequence: Number(m.seq), serverSequence: m.seq, deleted: m.deleted, kind: capabilityNoticeCode ? 'notice' : planCard ? 'plan' : 'message', ...(capabilityNoticeCode ? { capabilityNoticeCode } : {}), authorKind: legacy?.authorKind === 'system' ? 'system' : m.author.kind === 'human' ? 'user' : 'bot',
       isSelf: m.authorId === selfId, threadRootId: m.threadRootId, replyCount: m.replyCount ?? 0, reactions: m.reactions ?? [], ...(quote ? { quote } : {}), ...(task ? { task } : {}), ...(process ? { process } : {}),
-      authorBotId: localBot(m.authorId)?.id ?? m.authorId, authorName: legacy?.authorKind === 'system' && typeof legacy.authorName === 'string' ? legacy.authorName : member ? memberName(member, ownerMembers) : m.author.name, content: displayText(m),
+      authorBotId: localBot(m.authorId)?.id ?? m.authorId, authorName: legacy?.authorKind === 'system' && typeof legacy.authorName === 'string' ? legacy.authorName : member ? memberName(member, ownerMembers, hideOwnerNames) : m.author.name, content: displayText(m),
       mentions: { all: m.mentionAudience === 'humans' || m.mentionAudience === 'everyone', ...(m.mentionAudience === 'bots' || m.mentionAudience === 'everyone' ? { allBots: true } : {}), botIds: (m.mentions ?? []).map(actorId => localBot(actorId)?.id ?? actorId) }, noticeCode: null, planId: typeof planCard?.data?.planId === 'string' ? planCard.data.planId : null, files: [], attachments: [], createdAt: Date.parse(m.createdAt) };
   }
   /**
@@ -1536,10 +1538,10 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     const followed = new Set(s.reads?.filter(read => read.following).map(read => read.thread_key));
     return [...rootIds].map((rootId): BotGroupThreadSummary => {
       const root = roots.get(rootId) ?? undefined;
-      const rootView = root ? messageView(root, s.members) : null;
+      const rootView = root ? messageView(root, s.members, s.members, s.room.hide_companion_owner_names === true) : null;
       // The snapshot is newest first.
       const last = s.messages.find(m => m.threadRootId === rootId && !m.deleted && m.origin !== 'system');
-      const lastView = last ? messageView(last, s.members) : null;
+      const lastView = last ? messageView(last, s.members, s.members, s.room.hide_companion_owner_names === true) : null;
       return { rootId, rootAuthorName: rootView?.authorName ?? '', rootAuthorBotId: rootView?.authorBotId ?? null,
         rootText: root && !root.deleted ? threadPreviewText(root) || mediaNames(root) : '',
         replyCount: root?.replyCount ?? s.messages.filter(m => m.threadRootId === rootId).length,
@@ -1554,7 +1556,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
    * message can be quoted; the snapshot never comes from the controller's input. A thread
    * share's own text is only its card's fallback, so a share is not quotable either.
    */
-  async function quoteSnapshot(roomId: string, messageId: string, members: Promise<Member[]>, direct: boolean): Promise<BotGroupQuoteView & { recipientActorId?: string }> {
+  async function quoteSnapshot(roomId: string, messageId: string, members: Promise<Member[]>, direct: boolean, hideOwnerNames: Promise<boolean>): Promise<BotGroupQuoteView & { recipientActorId?: string }> {
     let quoted: Message;
     try {
       quoted = await api<Message>(`/conversations/${roomId}/messages/${messageId}`);
@@ -1563,7 +1565,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       throw error;
     }
     const resolvedMembers = await members;
-    const view = messageView(quoted, resolvedMembers, direct ? [] : resolvedMembers);
+    const view = messageView(quoted, resolvedMembers, direct ? [] : resolvedMembers, await hideOwnerNames);
     if (quoted.id !== messageId || quoted.deleted || quoted.threadRootId !== null || quoted.origin === 'system'
       || view.kind !== 'message' || view.authorKind === 'system' || readBotGroupThreadShareCard(quoted)) throw new Error('QUOTE_UNAVAILABLE');
     return { ...botGroupQuoteFromMessage({ ...view, content: quotedText(quoted),
@@ -1604,9 +1606,9 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     for (const view of views) if (view.isSelf && view.kind !== 'notice' && !view.deleted && view.serverSequence)
       view.readByOthers = isReadByOthers(view.serverSequence, view.threadRootId, positions);
   }
-  async function messageViews(roomId: string, messages: Message[], members: Member[], ownerMembers: readonly Member[] = members) {
+  async function messageViews(roomId: string, messages: Message[], members: Member[], ownerMembers: readonly Member[] = members, hideOwnerNames = false) {
     return messages.map(message => {
-      const view = messageView(message, members, ownerMembers);
+      const view = messageView(message, members, ownerMembers, hideOwnerNames);
       for (const block of message.content) if (!message.deleted && block.type === 'media' && block.mediaId) {
         const placeholder = (state: 'loading' | 'unavailable'): BotGroupAttachment => ({ id: block.mediaId!, name: attachmentName(block),
           category: 'file', mimeType: '', size: 0, url: null, path: null, state });
@@ -1643,14 +1645,14 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
    * still being read is marked `loading`: the card's own fallback text is never shown here.
    */
   async function decorateThreads(roomId: string, views: BotGroupMessageView[], page: Message[], snapshot: Message[], members: Member[], withPreviews: boolean,
-    shownShares: Array<{ id: string; messageId: string; threadRootId: string; sharerId?: string }> = []) {
+    shownShares: Array<{ id: string; messageId: string; threadRootId: string; sharerId?: string }> = [], hideOwnerNames = false) {
     // Taken before reading, so a change while this read is in progress marks it stale.
     const version = threads.version(roomId);
     const previews = withPreviews ? threads.previews(roomId, page, snapshot) : new Map<string, { replies: Message[]; responders: Message[] }>();
     const sources = threads.sources(roomId, [...page.flatMap(m => readBotGroupThreadShareCard(m)?.messageId ?? []),
       ...shownShares.map(share => share.messageId)], [...snapshot, ...page]);
     const shareable = [...sources.values()].filter((m): m is Message => !!m && isShareableThreadReply(m));
-    const sourceViews = new Map((await messageViews(roomId, shareable, members)).map(view => [view.id, view]));
+    const sourceViews = new Map((await messageViews(roomId, shareable, members, members, hideOwnerNames)).map(view => [view.id, view]));
     const shareView = (card: { messageId: string; threadRootId: string }, sharerId?: string): BotGroupThreadShareView => {
       const source = sources.get(card.messageId);
       const resolved = source && source.threadRootId === card.threadRootId ? sourceViews.get(source.id) : undefined;
@@ -1667,13 +1669,13 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       if (!message) continue;
       const preview = previews.get(message.id);
       const replies = preview?.replies.flatMap(reply => {
-        const replyView = messageView(reply, members);
+        const replyView = messageView(reply, members, members, hideOwnerNames);
         return replyView.kind === 'message' ? [{ id: reply.id, authorKind: replyView.authorKind, authorBotId: replyView.authorBotId,
           authorName: replyView.authorName, isSelf: replyView.isSelf, text: threadPreviewText(reply),
           attachments: threadPreviewAttachments(reply, attachmentName), createdAt: replyView.createdAt }] : [];
       });
       if (replies?.length) view.threadPreview = { replies, responders: preview!.responders.flatMap(reply => {
-        const author = messageView(reply, members);
+        const author = messageView(reply, members, members, hideOwnerNames);
         return author.kind === 'message' ? [{ id: reply.id, authorKind: author.authorKind,
           authorBotId: author.authorBotId, authorName: author.authorName }] : [];
       }) };
@@ -1696,10 +1698,10 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     });
     if (!messages.length) return;
     const threadVersion = threads.version(roomId);
-    const views = await messageViews(roomId, messages, snapshot.members);
+    const views = await messageViews(roomId, messages, snapshot.members, snapshot.members, snapshot.room.hide_companion_owner_names === true);
     // The check belongs to the message as it is pushed, not to a later full read of the room.
     markReadByOthers(views, readPositions(roomId, snapshot, messages));
-    await decorateThreads(roomId, views, messages, [...known, ...snapshot.messages], snapshot.members, false);
+    await decorateThreads(roomId, views, messages, [...known, ...snapshot.messages], snapshot.members, false, [], snapshot.room.hide_companion_owner_names === true);
     if (!current() || cache?.generation(roomId) !== snapshot.cacheGeneration || threads.version(roomId) !== threadVersion) return;
     deps.onChanged?.({ groupId: roomId, change: 'messages', messages: views, historyRevision: snapshot.cacheGeneration }, scope);
   }
@@ -1776,12 +1778,13 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       const members = await membersRead;
       const root = await rootRead;
       const page = await pageRead;
-      const executionFailures = await failureSnapshot(i.groupId, members, [...(i.sourceMessageIds ?? []), root.id, ...page.map(m => m.id)]);
+      const hideOwnerNames = s.room.hide_companion_owner_names === true;
+      const executionFailures = await failureSnapshot(i.groupId, members, [...(i.sourceMessageIds ?? []), root.id, ...page.map(m => m.id)], undefined, hideOwnerNames);
       const projection = await cache?.projection<Message>(i.groupId, i.sourceMessageIds ?? []);
-      const rootViews = await messageViews(i.groupId, [root], members);
-      await decorateThreads(i.groupId, rootViews, [root], page, members, false);
-      const replies = await messageViews(i.groupId, [...page].reverse(), members);
-      const messageUpdates = projection ? await messageViews(i.groupId, projection.messages.filter(m => m.threadRootId === i.rootId), members) : undefined;
+      const rootViews = await messageViews(i.groupId, [root], members, members, hideOwnerNames);
+      await decorateThreads(i.groupId, rootViews, [root], page, members, false, [], hideOwnerNames);
+      const replies = await messageViews(i.groupId, [...page].reverse(), members, members, hideOwnerNames);
+      const messageUpdates = projection ? await messageViews(i.groupId, projection.messages.filter(m => m.threadRootId === i.rootId), members, members, hideOwnerNames) : undefined;
       const positions = readPositions(i.groupId, s, [root, ...page, ...(projection?.messages ?? [])]);
       for (const views of [rootViews, replies, messageUpdates ?? []]) markReadByOthers(views, positions);
       const retry = () => {
@@ -1848,11 +1851,13 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     fenceReceipts(s);
     const page = (await messagesRead) ?? s.messages;
     const ownerMembers = direct ? [] : s.members;
+    const hideOwnerNames = !direct && s.room.hide_companion_owner_names === true;
+    const ownerNamePreferenceAvailable = !direct && typeof s.room.hide_companion_owner_names === 'boolean';
     const executions = await executionsRead;
     const ids = page.flatMap(m => m.content.flatMap(b => b.namespace === 'cindy.plan' && typeof b.data?.planId === 'string' ? [id.parse(b.data.planId)] : []));
     const plansRead = direct ? Promise.resolve([] as ServerPlan[]) : api<ServerPlan[]>(`/conversations/${roomId}/plans${ids.length ? `?ids=${ids.join(',')}` : ''}`);
     plansRead.catch(() => undefined);
-    const executionFailures = summaryOnly || direct ? undefined : await failureSnapshot(roomId, s.members, [...(o.sourceMessageIds ?? []), ...page.map(m => m.id)], executions);
+    const executionFailures = summaryOnly || direct ? undefined : await failureSnapshot(roomId, s.members, [...(o.sourceMessageIds ?? []), ...page.map(m => m.id)], executions, hideOwnerNames);
     const serverPlans = await plansRead;
     const workspace = workspaces().read(roomId);
     const plans = serverPlans.map(plan => planView(plan, s.members, workspace, Boolean(s.room.archived || s.room.dissolved_at)));
@@ -1876,14 +1881,14 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     const deciding = planning.get(roomId);
     if (deciding) speakers.push({ botId: deciding.botId, sessionId: null, activity: 'planning' });
     // Sidebar refresh must not download every attachment in every group's history.
-    const messages = summaryOnly ? [] : await messageViews(roomId, page, s.members, ownerMembers);
+    const messages = summaryOnly ? [] : await messageViews(roomId, page, s.members, ownerMembers, hideOwnerNames);
     const projection = !summaryOnly ? await history()?.projection<Message>(roomId, o.sourceMessageIds ?? []) : undefined;
-    const messageUpdates = projection ? await messageViews(roomId, projection.messages, s.members, ownerMembers) : undefined;
+    const messageUpdates = projection ? await messageViews(roomId, projection.messages, s.members, ownerMembers, hideOwnerNames) : undefined;
     // The messages on screen, not only the snapshot's newest 100, so a receipt for an older one still refreshes it.
     const positions = readPositions(roomId, s, [...page, ...(projection?.messages ?? [])]);
     for (const views of [messages, messageUpdates ?? []]) markReadByOthers(views, positions);
     const shares = summaryOnly || direct ? undefined : await decorateThreads(roomId, [...messages, ...(messageUpdates ?? [])],
-      [...page, ...(projection?.messages ?? [])], s.messages, s.members, true, o.shownShares);
+      [...page, ...(projection?.messages ?? [])], s.messages, s.members, true, o.shownShares, hideOwnerNames);
     if (cacheGeneration && history()?.generation(roomId) !== cacheGeneration) {
       if (attempt >= 2) throw new Error('CHAT_HISTORY_CHANGED');
       return detail(roomId, options, summaryOnly, attempt + 1);
@@ -1898,15 +1903,17 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     const threadList = reads && !direct ? threadSummaries(roomId, s, page, reads) : undefined;
     messages.sort((a, b) => a.sequence - b.sequence);
     const last = latestBotGroupMessage(s.messages);
-    const lastView = last ? messageView(last, s.members, ownerMembers) : null;
+    const lastView = last ? messageView(last, s.members, ownerMembers, hideOwnerNames) : null;
     // The sidebar never resolves shares: it names the sharer and never quotes the card's text.
     const lastIsShare = !!last && !!readBotGroupThreadShareCard(last);
     const mainRead = s.reads?.find(read => read.thread_key === 'main');
     return { conversationKind: direct ? 'direct' : 'group', serverBacked: true, reactionRevision: reactionRevisions.get(roomId)?.room ?? runtimeReactionRevision, reactionRevisions: { ...reactionRevisions.get(roomId)?.messages }, supportsGroupLeave: !direct, supportsDissolve: !direct && supportsDissolve, supportsListRemoval, supportsMemberAvatar: !direct && supportsMemberAvatar, ...(!direct && supportsMessageReaders ? { supportsMessageReaders: true } : {}), supportsNotificationSettings: !direct && supportsNotificationSettings, ...(!direct && supportsNotificationSettings && s.reads ? { notificationMode: mainRead?.muted ? 'none' as const : mainRead?.notification_scope ?? 'all' as const } : {}), supportsMentionAudiences: !direct && supportsMentionAudiences, allowMentionAllBots: !direct && s.room.allow_mention_all_bots === true, dissolvedAt: s.room.dissolved_at ?? null, migrationPending: [...upgradeErrors.keys()].some(source => upgradedGroups.get(source) === roomId), archived: s.room.archived, selfActorId: selfId, topic: s.room.topic, description: s.room.description, revision: s.room.revision, canInvite: !direct && !s.room.dissolved_at && s.members.some(m => m.ownerActorId === selfId && m.state === 'joined' && ['owner', 'admin'].includes(m.role)), canStopAll: !direct && singleSpeaker && !!managementActor(s), ...(!direct && singleSpeaker ? { singleSpeaker: true, supportsDivision: true } : {}), id: s.room.id, name: direct ? s.members.filter(m => m.state === 'joined' && m.id !== selfId).map(member => memberName(member, [])).join(', ') || s.room.name : s.room.name, replyMode: s.room.response_mode, speakingMode: s.room.speaking_mode,
+      supportsCompanionOwnerNames: !direct && supportsCompanionOwnerNames, hideCompanionOwnerNames: hideOwnerNames,
       teammateActivity: teammateChatActivity({ executions, plans: serverPlans, planning: !!deciding,
         archived: s.room.archived, lastMessageAt: last ? Date.parse(last.createdAt) : 0 }),
       members: s.members.filter(m => m.state === 'joined').map(m => {
         const p = localBot(m.id);
+        const name = memberName(m, ownerMembers, hideOwnerNames);
         return { botId: p?.id ?? m.id, actorId: m.id, actorKind: m.kind, isSelf: m.id === selfId,
           role: m.role, nickname: m.nickname, groupAvatar: m.groupAvatar ?? null, defaultAvatarUrl: m.defaultAvatarUrl ?? null, displayName: m.displayName, ownerActorId: m.ownerActorId, ownerName: m.kind === 'bot' && !direct ? chatGroupOwnerName(m, ownerMembers) : m.ownerName,
           isOwned: m.ownerActorId === selfId, guestAccess: m.guestAccess, accessRevision: m.accessRevision,
@@ -1914,7 +1921,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
           // reads the companion's tasks there, not here (bot-group-chat.md §10).
           ...(m.ownerActorId === selfId && m.kind === 'bot' ? { homeDeviceId: actors.find(a => a.id === m.id)?.homeDeviceId ?? null } : {}),
           avatarUrl: m.avatar?.startsWith('https://') ? m.avatar : null,
-          name: memberName(m, ownerMembers), avatar: m.groupAvatar ? '' : p?.avatar ?? (m.avatar?.startsWith('https://') ? '' : m.avatar) ?? '', avatarColor: p?.avatarColor ?? 'violet', status: p?.status ?? 'active' };
+          name, ...(ownerNamePreferenceAvailable && m.kind === 'bot' ? { ownerNameHidden: hideOwnerNames && name === m.name, shortOwnerNamesEnabled: hideOwnerNames } : {}), avatar: m.groupAvatar ? '' : p?.avatar ?? (m.avatar?.startsWith('https://') ? '' : m.avatar) ?? '', avatarColor: p?.avatarColor ?? 'violet', status: p?.status ?? 'active' };
       }), organizerBotId: direct ? null : ((id?: string) => id ? localBot(id)?.id ?? id : null)(s.room.organizer_id ?? s.members.find(m => m.kind === 'bot' && m.state === 'joined')?.id), projectDir: workspace?.projectDir ?? null,
       // Only servers that tell a 分工 from a queue (kind) can hand one on by itself.
       ...(singleSpeaker ? { autoContinue: workspace?.autoContinue === true } : {}), lastMessage: last && lastView ? {
@@ -2081,7 +2088,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
   function writtenPlanSteps(s: Snapshot, text: string, picked: string[]): PlanStepDraft[] | null {
     const bots = s.members.filter(m => m.kind === 'bot' && m.state === 'joined');
     const written = splitBotGroupRelaySteps(text, { allLabels: [],
-      members: bots.map(m => ({ botId: m.id, name: memberName(m, s.members), displayName: m.name, nickname: m.nickname })) });
+      members: bots.map(m => ({ botId: m.id, name: memberName(m, s.members, s.room.hide_companion_owner_names === true), displayName: m.name, nickname: m.nickname })) });
     // A picked teammate whose name no longer reads in the text (renamed meanwhile) would silently
     // drop its step: let the organizer arrange it instead.
     if (written && !picked.every(target => written.some(step => step.botId === target || localBot(step.botId)?.id === target))) return null;
@@ -2196,7 +2203,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
   // Compatibility cache for servers which do not yet return failure_code.
   // The server execution status still owns whether a notice is displayed.
   const failureCodes = new Map<string, BotGroupRuntimeFailureCode>();
-  async function failureSnapshot(roomId: string, members: Member[], sourceIds: string[], recent?: Execution[]): Promise<BotGroupExecutionFailureView[]> {
+  async function failureSnapshot(roomId: string, members: Member[], sourceIds: string[], recent?: Execution[], hideOwnerNames = false): Promise<BotGroupExecutionFailureView[]> {
     const sources = new Set(sourceIds);
     let rows: unknown[] = [];
     try {
@@ -2221,7 +2228,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       const member = members.find(value => value.id === failure.botId);
       const cachedCode = failureCodes.get(`${failure.executionId}:${failure.epoch}`);
       return [{ ...failure, botId: localBot(failure.botId)?.id ?? failure.botId,
-        botName: member ? memberName(member, members) : actors.find(actor => actor.id === failure.botId)?.name ?? '',
+        botName: member ? memberName(member, members, hideOwnerNames) : actors.find(actor => actor.id === failure.botId)?.name ?? '',
         // Older servers may normalize a newly introduced category to RUNTIME_ERROR.
         code: failure.code === 'RUNTIME_ERROR' && cachedCode ? cachedCode : failure.code }];
     });
@@ -3265,7 +3272,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       const action = z.discriminatedUnion('type', [
         z.object({ type: z.literal('read'), messageId: id, conversationKind: z.literal('direct').optional() }).strict(),
         z.object({ type: z.literal('notifications'), mode: z.enum(['all', 'mentions', 'none']) }).strict(),
-        z.object({ type: z.literal('update'), name: z.string().trim().min(1).max(40), topic: z.string().max(250), description: z.string().max(2000), responseMode: z.enum(['all', 'mentioned']).optional(), speakingMode: z.enum(['auto', 'sequential']).optional(), allowMentionAllBots: z.boolean().optional(), expectedRevision: z.number().int().positive() }).strict(),
+        z.object({ type: z.literal('update'), name: z.string().trim().min(1).max(40), topic: z.string().max(250), description: z.string().max(2000), responseMode: z.enum(['all', 'mentioned']).optional(), speakingMode: z.enum(['auto', 'sequential']).optional(), allowMentionAllBots: z.boolean().optional(), hideCompanionOwnerNames: z.boolean().optional(), expectedRevision: z.number().int().positive() }).strict(),
         actorAction.extend({ type: z.literal('avatar'), avatar: z.discriminatedUnion('type', [
           z.object({ type: z.literal('keep') }).strict(), z.object({ type: z.literal('reset') }).strict(),
           z.object({ type: z.literal('set'), data: z.instanceof(Uint8Array), mimeType: z.string() }).strict(),
@@ -3341,6 +3348,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       const { type, ...payload } = action;
       const route = type === 'update' || type === 'archive' ? '' : type === 'member' ? '/members' : type === 'botAccess' ? '/bot-access' : `/${type}`;
       if (action.type === 'update' && action.allowMentionAllBots !== undefined && !supportsMentionAudiences) throw new Error('CHAT_UNAVAILABLE');
+      if (action.type === 'update' && action.hideCompanionOwnerNames !== undefined && !supportsCompanionOwnerNames) throw new Error('CHAT_UNAVAILABLE');
       const asManager = type === 'update' || type === 'archive' || type === 'transfer' || (type === 'member' && !['leave', 'invite'].includes(action.action));
       const s = await groupSnapshot(target);
       if (action.type === 'transfer') {
@@ -3371,16 +3379,19 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       // A socket's ready frame precedes catch-up; reconnect clears freshness so
       // that window (and expired/missing sources) still gets an authorized read.
       const known = history()?.committedSnapshot<Snapshot>(room);
-      const membersRead = known ? Promise.resolve(known.members) : api<Member[]>(`/conversations/${room}/members`);
+      // Only a server offering this setting needs a room snapshot to project the author label.
+      const labelSnapshot = known ? Promise.resolve(known) : supportsCompanionOwnerNames ? recentSnapshot(room, true) : Promise.resolve(undefined);
+      const membersRead = labelSnapshot.then(value => value?.members ?? api<Member[]>(`/conversations/${room}/members`));
       membersRead.catch(() => undefined);
       const reusable = history()?.hasFreshMessages(room);
       const liveSource = reusable ? known?.messages.find(message => message.id === i.messageId) : undefined;
       const source = liveSource ?? await readMessage(room, i.messageId);
       if (!source || !isShareableThreadReply(source)) throw new Error('SHARE_UNAVAILABLE');
       const members = await membersRead;
+      const hideOwnerNames = (await labelSnapshot)?.room.hide_companion_owner_names === true;
       const author = members.find(member => member.id === source.authorId);
       const card = buildBotGroupThreadShareCard({ messageId: source.id, threadRootId: source.threadRootId!,
-        authorName: author ? memberName(author, members) : source.author.name,
+        authorName: author ? memberName(author, members, hideOwnerNames) : source.author.name,
         text: threadPreviewText(source) || threadPreviewAttachments(source, attachmentName).map(file => file.name).join(', ') });
       try {
         const posted = await api<{ id: string }>(`/conversations/${room}/messages`, 'POST', {
@@ -3481,7 +3492,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       }
       return { reactors: [...actorIds].map(actorId => {
         const member = members.find(m => m.id === actorId);
-        return { actorId, name: member ? memberName(member, members) : null, isSelf: actorId === self, formerMember: !!member && member.state !== 'joined' };
+        return { actorId, name: member ? memberName(member, members, s.room.hide_companion_owner_names === true) : null, isSelf: actorId === self, formerMember: !!member && member.state !== 'joined' };
       }) };
     }),
     readers: input => result(async () => {
@@ -3491,7 +3502,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       const key = `${room}:${i.messageId}`;
       const known = messageReaders.get(key);
       if (known && Date.now() - known.at < MESSAGE_READERS_TTL_MS) return { readers: known.value };
-      await recentSnapshot(room, true);
+      const snapshot = await recentSnapshot(room, true);
       const epoch = messageReadersEpoch;
       const reply = inviteResponse(z.object({
         messageId: id, eligibleCount: z.number().int().min(0),
@@ -3500,7 +3511,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       }), await api(`/conversations/${room}/messages/${i.messageId}/readers`));
       // Former members stay on the list under their group name; a teammate is a reader like anyone once its computer took the execution up.
       const members = await api<Member[]>(`/conversations/${room}/members`);
-      const nameOf = (actorId: string) => { const member = members.find(m => m.id === actorId); return member ? memberName(member, members) : null; };
+      const nameOf = (actorId: string) => { const member = members.find(m => m.id === actorId); return member ? memberName(member, members, snapshot.room.hide_companion_owner_names === true) : null; };
       const value = projectMessageReaders(reply, members, nameOf);
       if (epoch === messageReadersEpoch) messageReaders.set(key, { at: Date.now(), value });
       // Bounded: drop the oldest lists first.
@@ -3596,7 +3607,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     const quoteKey = i.quote ? JSON.stringify([i.groupId, i.clientId, i.quote.messageId, i.text, i.mentions, i.division]) : '';
     const knownQuote = i.quote ? postedQuotes.get(quoteKey) : undefined;
     const snapshotMembers = snapshotRead.then(value => value.members);
-    const quoteRead = i.quote && !knownQuote && !recovered ? quoteSnapshot(i.groupId, i.quote.messageId, snapshotMembers, direct) : undefined;
+    const quoteRead = i.quote && !knownQuote && !recovered ? quoteSnapshot(i.groupId, i.quote.messageId, snapshotMembers, direct, snapshotRead.then(value => !direct && value.room.hide_companion_owner_names === true)) : undefined;
     const plansRead = recovered ? Promise.resolve(recovered.plans) : direct ? Promise.resolve([] as ServerPlan[]) : api<ServerPlan[]>(`/conversations/${i.groupId}/plans`);
     const membersRead = recovered ? Promise.resolve(recovered.members) : namesNobody(i.mentions) && !i.quote ? undefined : api<Member[]>(`/conversations/${i.groupId}/members`);
     for (const read of [snapshotMembers, quoteRead, plansRead, membersRead]) read?.catch(() => undefined);
@@ -3778,7 +3789,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     },
     updateGroup: input => safe(async () => {
       const i = z.object({ groupId: id, name: z.string().min(1).max(40).optional(), replyMode: z.enum(['all', 'mentioned']).optional(),
-        speakingMode: z.enum(['auto', 'sequential']).optional(), allowMentionAllBots: z.boolean().optional(), organizerBotId: z.string().nullable().optional(), projectDir: z.string().max(4096).nullable().optional(), autoContinue: z.boolean().optional(), expectedRevision: z.number().int().positive().optional() }).parse(input);
+        speakingMode: z.enum(['auto', 'sequential']).optional(), allowMentionAllBots: z.boolean().optional(), hideCompanionOwnerNames: z.boolean().optional(), organizerBotId: z.string().nullable().optional(), projectDir: z.string().max(4096).nullable().optional(), autoContinue: z.boolean().optional(), expectedRevision: z.number().int().positive().optional() }).parse(input);
       i.groupId = await resolveGroup(i.groupId);
       // Local only, so saved before any server read: a handoff deciding meanwhile must already see it.
       if (i.autoContinue !== undefined) workspaces().save(i.groupId, { projectDir: null, plans: {}, ...workspaces().read(i.groupId), autoContinue: i.autoContinue });
@@ -3788,8 +3799,9 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       if (projectDir) { const checked = await deps.validateProjectDir?.(projectDir); if (!checked?.ok) throw new Error('INVALID_DIRECTORY'); projectDir = checked.dir; }
       const organizerId = i.organizerBotId ? actors.find(a => a.externalId === i.organizerBotId)?.id ?? id.parse(i.organizerBotId) : i.organizerBotId;
       if (i.allowMentionAllBots !== undefined && !supportsMentionAudiences) throw new Error('CHAT_UNAVAILABLE');
-      if (i.allowMentionAllBots !== undefined || i.name !== undefined || i.replyMode !== undefined || i.speakingMode !== undefined || organizerId !== undefined) await api(`/conversations/${i.groupId}`, 'PATCH', { operationId: randomUUID(), expectedRevision: i.expectedRevision ?? s.room.revision,
-        name: i.name, responseMode: i.replyMode, speakingMode: i.speakingMode, organizerId, allowMentionAllBots: i.allowMentionAllBots }, managementActor(s));
+      if (i.hideCompanionOwnerNames !== undefined && !supportsCompanionOwnerNames) throw new Error('CHAT_UNAVAILABLE');
+      if (i.allowMentionAllBots !== undefined || i.hideCompanionOwnerNames !== undefined || i.name !== undefined || i.replyMode !== undefined || i.speakingMode !== undefined || organizerId !== undefined) await api(`/conversations/${i.groupId}`, 'PATCH', { operationId: randomUUID(), expectedRevision: i.expectedRevision ?? s.room.revision,
+        name: i.name, responseMode: i.replyMode, speakingMode: i.speakingMode, organizerId, allowMentionAllBots: i.allowMentionAllBots, hideCompanionOwnerNames: i.hideCompanionOwnerNames }, managementActor(s));
       if (projectDir !== undefined) workspaces().save(i.groupId, { ...workspaces().read(i.groupId) ?? { plans: {} }, projectDir });
       changed(i.groupId);
       // Turned on while a step waits for 继续: go on now rather than at the next change.

@@ -17,6 +17,27 @@ const snapshot = (): ChatSnapshot => ({ room: room(), cursor: '9007199254741099'
   { id: id(10), kind: 'human', name: 'Other member', state: 'joined', ownerActorId: id(10), ownerName: '', avatar: null, role: 'member' },
 ] });
 
+// #9419, unit: the real Mobile client must never send the proposed group setting to an old
+// server; a supporting server receives the revision and manager identity with the write.
+describe('group companion owner-name setting', () => {
+  it.each([false, true])('gates the write on server support (%s)', async supported => {
+    const request = vi.fn(async (path: string) => path === '/me'
+      ? { actor: { id: id(10), kind: 'human' }, capabilities: supported ? { groupCompanionOwnerNames: 1 } : {} }
+      : { ok: true });
+    const client = createChatServerClient(request as any);
+    const write = client.manageGroup(id(1), id(10), { type: 'update', expectedRevision: 4, hideCompanionOwnerNames: true }, 'operation-1');
+    if (supported) {
+      await expect(write).resolves.toEqual({ ok: true });
+      expect(request).toHaveBeenCalledWith(`/conversations/${id(1)}`, 'PATCH',
+        { operationId: 'operation-1', expectedRevision: 4, hideCompanionOwnerNames: true }, id(10));
+      expect(client.lifecycleCapabilities().supportsCompanionOwnerNames).toBe(true);
+    } else {
+      await expect(write).rejects.toThrow('CHAT_UNAVAILABLE');
+      expect(request).not.toHaveBeenCalledWith(`/conversations/${id(1)}`, expect.anything(), expect.anything(), expect.anything());
+    }
+  });
+});
+
 // #5759, unit: the real direct client must retain human-authored plan cards, refresh
 // their server state and use revision/actor authorization. Existing tests only covered
 // ordinary messages and stop-all; the minimal regression is one cindy.plan message.
@@ -272,6 +293,23 @@ describe('direct Chat Server client', () => {
     ]));
   });
   // #6907: existing fixtures never pair a human's group name A with account ownerName B (unit tier).
+  // #9419: a server group may opt in for every reader; verify the real mobile projection,
+  // including the transition back to an attributed name when another joined member collides.
+  it('projects an opted-in short name across messages and the room list, but disambiguates namesakes', () => {
+    const human = { ...snapshot().members[0], name: 'Alex' };
+    const family = { ...human, id: id(13), name: 'Sam', ownerActorId: id(13) };
+    const bot = { ...human, id: id(12), kind: 'bot' as const, name: 'Helper', ownerName: 'Alex' };
+    const messages = [{ ...message(20), authorId: bot.id, author: { kind: 'bot', name: bot.name } }];
+    const source = { ...snapshot(), room: { ...room(), hide_companion_owner_names: true }, members: [human, family, bot], messages };
+    const view = chatGroupView({ snapshot: source, messages, before: null }, family.id);
+    expect(view.members.find(member => member.actorId === bot.id)).toMatchObject({ name: 'Helper', ownerName: 'Alex', ownerNameHidden: true });
+    expect(view.messages[0].authorName).toBe('Helper');
+    expect(chatRoomRow(source.room, source).item.display.subtitle).toBe('Alex · Sam · Helper');
+    const collision = { ...family, name: 'helper' };
+    const collided = { ...source, members: [human, collision, bot] };
+    expect(chatGroupView({ snapshot: collided, messages, before: null }, family.id).messages[0].authorName).toBe('Helper (Alex)');
+  });
+
   it('keeps owner labels scoped to each group and follows refreshed names without changing identities', () => {
     const human = { ...snapshot().members[0], name: 'Nickname A' };
     const bot = { ...human, id: id(12), kind: 'bot' as const, name: 'Companion X', ownerName: 'Account B' };

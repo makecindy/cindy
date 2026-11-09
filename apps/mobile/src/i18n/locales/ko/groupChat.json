@@ -297,12 +297,15 @@
       "loading": "설정 불러오는 중…",
       "unavailable": "그룹 설정을 불러오지 못했습니다. 다시 시도하세요."
     },
+    "shortCompanionNames": "동료 이름 간단히 표시",
+    "shortCompanionNamesHint": "그룹에서 이름이 겹치지 않으면 소유자 이름을 숨깁니다. 이름이 같으면 구분을 위해 표시합니다.",
     "allowMentionAllBots": "모든 동료 멘션 허용",
     "allowMentionAllBotsHint": "그룹 소유자만 변경할 수 있습니다. 모든 동료가 답할 수 있으므로 큰 그룹에서는 신중하게 켜세요. 본인을 대신하는 AI 답변에는 영향을 주지 않습니다."
   },
   "errors": {
     "memberLimit": "그룹 채팅에는 동료가 2~6명 필요합니다",
     "memberUnavailable": "사용할 수 없는 동료가 있습니다. 다른 동료를 골라 다시 시도하세요",
+    "ambiguousMention": "같은 이름의 멤버가 여러 명입니다. 보내기 전에 @ 목록에서 선택해 주세요.",
     "mentionUnavailable": "멘션한 멤버를 더 이상 사용할 수 없습니다. 다시 선택한 후 보내세요.",
     "notFound": "이 그룹 채팅은 더 이상 존재하지 않습니다",
     "hostNotReady": "Cindy가 아직 준비 중입니다. 잠시 후 다시 시도하세요",

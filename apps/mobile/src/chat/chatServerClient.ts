@@ -50,7 +50,7 @@ function invitationPreview(value: MobileChatInvitePreview): MobileChatInvitePrev
 
 export interface ChatRoom {
   id: string; name: string; state?: string; kind: string; archived: boolean; dissolved_at?: string | null;
-  topic?: string; description?: string; allow_mention_all_bots?: boolean;
+  topic?: string; description?: string; allow_mention_all_bots?: boolean; hide_companion_owner_names?: boolean;
   created_at: string; updated_at: string; revision: number; head?: string;
   response_mode: 'all' | 'mentioned'; speaking_mode: 'auto' | 'sequential'; organizer_id?: string | null;
 }
@@ -103,7 +103,7 @@ export type ChatSetHomeResult = { ok: true; homeDeviceId: string } | { ok: false
 export interface ChatHistoryPage { messages: ChatMessage[]; before: string | null; historyRevision?: string; messageUpdates?: ChatMessage[] }
 export type ChatGroupSettingsAction =
   | { type: 'notifications'; mode: ChatGroupNotificationMode }
-  | { type: 'update'; expectedRevision: number; name?: string; topic?: string; description?: string; responseMode?: 'all' | 'mentioned'; speakingMode?: 'auto' | 'sequential'; organizerId?: string | null; archived?: boolean; allowMentionAllBots?: boolean }
+  | { type: 'update'; expectedRevision: number; name?: string; topic?: string; description?: string; responseMode?: 'all' | 'mentioned'; speakingMode?: 'auto' | 'sequential'; organizerId?: string | null; archived?: boolean; allowMentionAllBots?: boolean; hideCompanionOwnerNames?: boolean }
   | { type: 'member'; actorId: string; action: 'invite' | 'remove' | 'role'; role?: 'admin' | 'member' }
   /** Your own group identity: a nickname, or a public avatar URL (null resets it). */
   | { type: 'nickname'; actorId: string; nickname: string | null }
@@ -214,11 +214,11 @@ function joinedMemberName(message: ChatMessage): string | undefined {
   return joined && typeof joined.data?.displayName === 'string' && joined.data.displayName.trim() ? joined.data.displayName : undefined;
 }
 
-function sharedReplyPreview(message: ChatMessage, members: ChatMember[], selfId?: string): string | undefined {
+function sharedReplyPreview(message: ChatMessage, members: ChatMember[], selfId?: string, hideOwnerNames = false): string | undefined {
   if (!readBotGroupThreadShareCard(message)) return;
   const member = members.find(member => member.id === message.authorId);
   return i18next.t(message.authorId === selfId ? 'groupChat.thread.sidebarOwn' : 'groupChat.thread.sidebarOther',
-    { name: member ? memberName(member, members) : message.author.name });
+    { name: member ? memberName(member, members, hideOwnerNames) : message.author.name });
 }
 
 /** Empty device identity means a server-owned conversation, never a fictitious computer. */
@@ -233,14 +233,16 @@ export function chatRoomRow(room: ChatRoom, snapshot?: ChatSnapshot, selfId?: st
       i18next.t('groupChat.notice.memberJoined', { name: joinedName, lng })])),
   } : undefined;
   const ownerMembers = room.kind === 'direct' ? [] : members;
-  const subtitle = members.map(member => memberName(member, ownerMembers)).join(' · ');
+  const hideOwnerNames = room.kind !== 'direct' && room.hide_companion_owner_names === true;
+  const ownerNamePreferenceAvailable = room.kind !== 'direct' && typeof room.hide_companion_owner_names === 'boolean';
+  const subtitle = members.map(member => memberName(member, ownerMembers, hideOwnerNames)).join(' · ');
   const preview = joinedPreview ?? (last
-    ? mobileMarkdownPreviewText(sharedReplyPreview(last, members, selfId) || botGroupMessageSummaryText({ content: contentText(last), task: taskCardOf(last) ?? undefined, deleted: last.deleted }) || mediaNames(last)).slice(0, 160) || subtitle
+    ? mobileMarkdownPreviewText(sharedReplyPreview(last, members, selfId, hideOwnerNames) || botGroupMessageSummaryText({ content: contentText(last), task: taskCardOf(last) ?? undefined, deleted: last.deleted }) || mediaNames(last)).slice(0, 160) || subtitle
     : '');
   return { key: `chat:${room.id}`, host: { deviceId: '', deviceName: '' },
     lastReplySequence: snapshot && selfId ? chatLastReplySequence(snapshot.messages, selfId) : undefined,
     chatUnread: snapshot?.reads && selfId ? chatUnread(snapshot, selfId) : undefined,
-    groupMembers: snapshot ? members.map(member => chatMemberIdentity(member, ownerMembers)) : undefined, item: {
+    groupMembers: snapshot ? members.map(member => chatMemberIdentity(member, ownerMembers, hideOwnerNames, ownerNamePreferenceAvailable)) : undefined, item: {
     ref: { collectionId: 'bot-groups', kind: 'bot-group', id: room.id },
     revision: String(room.head ?? room.revision), display: { title: room.name,
       subtitle,
@@ -248,7 +250,7 @@ export function chatRoomRow(room: ChatRoom, snapshot?: ChatSnapshot, selfId?: st
       ...(snapshot ? { preview } : {}),
       timestamp: botGroupActivityAt({ createdAt: Date.parse(room.created_at), lastMessage: last ? { createdAt: Date.parse(last.createdAt) } : null }),
       lastReplyAt: snapshot && selfId ? chatLastReplyAt(snapshot.messages, selfId) : undefined },
-    links: members.map(member => ({ rel: 'member', label: memberName(member, ownerMembers),
+    links: members.map(member => ({ rel: 'member', label: memberName(member, ownerMembers, hideOwnerNames),
       target: { kind: 'resource', ref: { collectionId: 'teammates', kind: 'bot', id: member.id } } })),
   } };
 }
@@ -315,9 +317,10 @@ export function chatMemberAvatar(value: string | null): Pick<BotGroupMemberView,
   return { avatar, avatarUrl: null };
 }
 
-function chatMemberIdentity(member: ChatMember, members: readonly ChatMember[]) {
+function chatMemberIdentity(member: ChatMember, members: readonly ChatMember[], hideOwnerNames = false, ownerNamePreferenceAvailable = false) {
   // The group avatar wins in its group, as on Desktop.
-  return { botId: member.id, name: memberName(member, members), ...chatMemberAvatar(member.groupAvatar ?? member.avatar ?? member.defaultAvatarUrl ?? null), avatarColor: '' };
+  const name = memberName(member, members, hideOwnerNames);
+  return { botId: member.id, name, ...(ownerNamePreferenceAvailable && member.kind === 'bot' ? { ownerNameHidden: hideOwnerNames && name === member.name, shortOwnerNamesEnabled: hideOwnerNames } : {}), ...chatMemberAvatar(member.groupAvatar ?? member.avatar ?? member.defaultAvatarUrl ?? null), avatarColor: '' };
 }
 
 function chatMessageMentions(message: ChatMessage): BotGroupMention {
@@ -333,9 +336,11 @@ function chatMessageMentions(message: ChatMessage): BotGroupMention {
 export function chatGroupView(page: ChatPage, selfId: string, actors: readonly ChatActor[] = []): BotGroupRemoteChatData {
   const { room, members } = page.snapshot;
   const ownerMembers = room.kind === 'direct' ? [] : members;
+  const hideOwnerNames = room.kind !== 'direct' && room.hide_companion_owner_names === true;
+  const ownerNamePreferenceAvailable = room.kind !== 'direct' && typeof room.hide_companion_owner_names === 'boolean';
   const active = members.filter(member => member.state === 'joined');
   const memberViews: BotGroupMemberView[] = active.map(member => ({
-    ...chatMemberIdentity(member, ownerMembers), actorId: member.id, actorKind: member.kind, isSelf: member.id === selfId,
+    ...chatMemberIdentity(member, ownerMembers, hideOwnerNames, ownerNamePreferenceAvailable), actorId: member.id, actorKind: member.kind, isSelf: member.id === selfId,
     isOwned: member.ownerActorId === selfId, role: member.role, ownerActorId: member.ownerActorId,
     ...(member.displayName !== undefined ? { displayName: member.displayName } : {}),
     ...(member.nickname !== undefined ? { nickname: member.nickname } : {}),
@@ -369,7 +374,7 @@ export function chatGroupView(page: ChatPage, selfId: string, actors: readonly C
       ...(task ? { task } : {}), ...(process ? { process } : {}), threadRootId: message.threadRootId, replyCount: message.replyCount, reactions: message.reactions,
       authorKind: message.origin === 'system' ? 'system' : message.author.kind === 'human' ? 'user' : 'bot',
       authorBotId: message.authorId, authorName: joinedName !== undefined ? joinedName
-        : member ? memberName(member, ownerMembers) : message.author.name,
+        : member ? memberName(member, ownerMembers, hideOwnerNames) : message.author.name,
       isSelf: message.authorId === selfId, content: contentText(message), mentions: chatMessageMentions(message),
       ...(quote ? { quote: deletedIds.has(quote.messageId) ? { ...quote, originalDeleted: true } : quote } : {}),
       noticeCode: joinedName !== undefined ? 'member-joined' : null, planId: messagePlanId(message), files: [],
@@ -378,7 +383,7 @@ export function chatGroupView(page: ChatPage, selfId: string, actors: readonly C
   const known = new Map([...page.snapshot.messages, ...(page.previewMessages ?? []), ...page.messages].map(message => [message.id, message]));
   const authorName = (message: ChatMessage) => {
     const member = members.find(member => member.id === message.authorId);
-    return member ? memberName(member, ownerMembers) : message.author.name;
+    return member ? memberName(member, ownerMembers, hideOwnerNames) : message.author.name;
   };
   const preview = (message: ChatMessage) => ({ id: message.id, authorKind: message.author.kind === 'human' ? 'user' as const : 'bot' as const,
     authorBotId: message.authorId, authorName: authorName(message), isSelf: message.authorId === selfId,
@@ -434,7 +439,7 @@ export function chatGroupView(page: ChatPage, selfId: string, actors: readonly C
     const failure = readBotGroupExecutionFailure(row, room.id);
     if (!failure) return [];
     const member = members.find(candidate => candidate.id === failure.botId);
-    return [{ ...failure, botName: member ? memberName(member, ownerMembers) : '' }];
+    return [{ ...failure, botName: member ? memberName(member, ownerMembers, hideOwnerNames) : '' }];
   });
   const executions = (page.executions ?? []).filter(row => ['queued', 'running', 'needs_input', 'stopping'].includes(row.status));
   // No server-provided start time here: created_at is the enqueue time, so omit startedAt
@@ -453,7 +458,7 @@ export function chatGroupView(page: ChatPage, selfId: string, actors: readonly C
     canInvite: room.kind !== 'direct' && !room.dissolved_at && active.some(member => member.ownerActorId === selfId && ['owner', 'admin'].includes(member.role)),
     topic: room.topic, description: room.description,
     supportsSettingsManagement: room.kind === 'group', supportsMemberRemoval: room.kind === 'group',
-    revision: room.revision, members: memberViews, allowMentionAllBots: room.allow_mention_all_bots === true, replyMode: room.response_mode, speakingMode: room.speaking_mode,
+    revision: room.revision, members: memberViews, allowMentionAllBots: room.allow_mention_all_bots === true, hideCompanionOwnerNames: hideOwnerNames, replyMode: room.response_mode, speakingMode: room.speaking_mode,
     organizerBotId: room.organizer_id ?? null, projectDir: null, projectDirName: null,
     createdAt: Date.parse(room.created_at), updatedAt: Date.parse(room.updated_at),
     lastMessage: last ? { authorKind: last.authorKind, authorName: last.authorName, preview: mobileMarkdownPreviewText(last.threadShare ? i18next.t(last.isSelf ? 'groupChat.thread.sidebarOwn' : 'groupChat.thread.sidebarOther', { name: last.authorName }) : botGroupMessageSummaryText(last)).slice(0, 80), createdAt: last.createdAt } : null,
@@ -547,12 +552,13 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
   let supportsMemberAvatar = false;
   let supportsNotificationSettings = false;
   let supportsMentionAudiences = false;
+  let supportsCompanionOwnerNames = false;
   let lastIdentity: { id: string; at: number } | undefined;
   let readingIdentity: Promise<string> | undefined;
   async function identity() {
     if (openHistory && lastIdentity && Date.now() - lastIdentity.at < 60_000) return lastIdentity.id;
     return readingIdentity ??= (async () => {
-      const me = await request<{ actor: { id: string; kind: string }; capabilities?: { groupLifecycleVersion?: number; conversationListStateVersion?: number; groupSingleSpeaker?: number; personalMask?: number; groupMemberAvatar?: number; groupMentionAudiences?: number; groupNotificationSettings?: number } }>('/me');
+      const me = await request<{ actor: { id: string; kind: string }; capabilities?: { groupLifecycleVersion?: number; conversationListStateVersion?: number; groupSingleSpeaker?: number; personalMask?: number; groupMemberAvatar?: number; groupMentionAudiences?: number; groupNotificationSettings?: number; groupCompanionOwnerNames?: number } }>('/me');
       if (me.actor.kind !== 'human') throw new Error('INVALID_CHAT_IDENTITY');
       supportsDissolve = me.capabilities?.groupLifecycleVersion === 1;
       supportsListRemoval = me.capabilities?.conversationListStateVersion === 1;
@@ -561,6 +567,7 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
       supportsMemberAvatar = me.capabilities?.groupMemberAvatar === 1;
       supportsNotificationSettings = me.capabilities?.groupNotificationSettings === 1;
       supportsMentionAudiences = me.capabilities?.groupMentionAudiences === 1;
+      supportsCompanionOwnerNames = me.capabilities?.groupCompanionOwnerNames === 1;
       const id = chatId(me.actor.id); lastIdentity = { id, at: Date.now() };
       return id;
     })().finally(() => { readingIdentity = undefined; });
@@ -601,7 +608,7 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
           text: message.reply.content.map(block => block.text ?? block.fallback ?? block.caption ?? '').join('\n') } } : {}),
       })) };
     },
-    lifecycleCapabilities: () => ({ supportsDissolve, supportsListRemoval, singleSpeaker, supportsMemberAvatar, supportsMentionAudiences, supportsNotificationSettings }),
+    lifecycleCapabilities: () => ({ supportsDissolve, supportsListRemoval, singleSpeaker, supportsMemberAvatar, supportsMentionAudiences, supportsNotificationSettings, supportsCompanionOwnerNames }),
     async groupSettings(roomId: string) {
       const [snapshot, self] = await Promise.all([
         request<ChatSnapshot>(`/conversations/${chatId(roomId)}/snapshot`), identity(),
@@ -614,6 +621,10 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
      * identity, grants and teammates are written as yourself (no `managerId`).
      */
     async manageGroup(roomId: string, managerId: string | undefined, action: ChatGroupSettingsAction, operationId: string) {
+      if (action.type === 'update' && action.hideCompanionOwnerNames !== undefined) {
+        await identity();
+        if (!supportsCompanionOwnerNames) throw new Error('CHAT_UNAVAILABLE');
+      }
       if (action.type === 'notifications') {
         await identity();
         if (!supportsNotificationSettings) throw new Error('CHAT_UNAVAILABLE');
@@ -1034,11 +1045,13 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
           throw error;
         }
         if (source.id !== messageId || source.threadRootId !== chatId(threadRootId) || source.deleted || source.origin === 'system') throw new Error('SHARE_UNAVAILABLE');
-        const [members, self] = await Promise.all([request<ChatMember[]>(`/conversations/${room}/members`), identity()]);
+        const self = await identity();
+        const labelSnapshot = supportsCompanionOwnerNames ? await this.snapshot(room, true) : undefined;
+        const members = labelSnapshot?.members ?? await request<ChatMember[]>(`/conversations/${room}/members`);
         const author = members.find(member => member.id === source.authorId);
         body = { operationId: botGroupThreadShareOperationId(source.id), mentions: [self], content: [buildBotGroupThreadShareCard({
           messageId: source.id, threadRootId: source.threadRootId,
-          authorName: author ? memberName(author, members) : source.author.name,
+          authorName: author ? memberName(author, members, labelSnapshot?.room.hide_companion_owner_names === true) : source.author.name,
           text: mobileMarkdownPreviewText(contentText(source)) || mediaNames(source),
         })] };
         await durable?.save(body);
@@ -1088,14 +1101,16 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
       ];
       const mentions = new Set(known?.mentions ?? input.mentions.botIds.map(chatId));
       if (input.quote && !known) {
-        const [original, members] = await Promise.all([
+        const [original, members, labelSnapshot] = await Promise.all([
           request<ChatMessage>(`/conversations/${chatId(roomId)}/messages/${chatId(input.quote.messageId)}`),
           request<ChatMember[]>(`/conversations/${chatId(roomId)}/members`),
+          supportsCompanionOwnerNames && input.conversationKind !== 'direct' ? this.snapshot(roomId, true) : Promise.resolve(undefined),
         ]);
         if (original.deleted || (original.threadRootId && original.threadRootId !== input.threadRootId) || original.origin === 'system') throw new Error('QUOTE_UNAVAILABLE');
-        const member = members.find(member => member.id === original.authorId);
+        const projectedMembers = labelSnapshot?.members ?? members;
+        const member = projectedMembers.find(member => member.id === original.authorId);
         const quote = botGroupQuoteFromMessage({ id: original.id, sequence: Number(original.seq), authorKind: original.author.kind === 'human' ? 'user' : 'bot',
-          authorName: member ? memberName(member, input.conversationKind === 'direct' ? [] : members) : original.author.name, content: contentText(original), task: taskCardOf(original) ?? undefined,
+          authorName: member ? memberName(member, input.conversationKind === 'direct' ? [] : projectedMembers, labelSnapshot?.room.hide_companion_owner_names === true) : original.author.name, content: contentText(original), task: taskCardOf(original) ?? undefined,
           attachments: original.content.filter(block => block.type === 'media').map(block => ({ name: attachmentName(block) })) });
         // Quote positions are only an optional UI hint; never round a server cursor into it.
         if (!Number.isSafeInteger(quote.sequence)) quote.sequence = null;

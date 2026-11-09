@@ -25,6 +25,7 @@ export default {
     archived: { about: 'Archived group seen by its owner', data: { role: 'owner', archived: true } },
     dissolved: { about: 'Dissolved group: no invite, no personal sections', data: { role: 'member', dissolved: true } },
     'many-teammates': { about: '邀请伙伴 with 30 spare teammates: search and scrolling', data: { role: 'owner', spare: 30 } },
+    'short-names': { about: 'Group manager can choose short companion names when the server supports them', data: { role: 'owner', shortNames: true } },
   },
   async ready(page) { await page.getByRole('dialog').waitFor(); },
   async check(page, ui) {
@@ -32,6 +33,12 @@ export default {
     const dialog = page.getByRole('dialog');
     const invite = page.getByTestId('chat-group-invite');
     const manage = await row(page, await t('manage'));
+    if (ui.case === 'short-names') {
+      await manage.click();
+      await dialog.getByRole('switch', { name: await ui.t('bots.groupChat.settings.shortCompanionNames') }).waitFor();
+      await ui.capture('short-names');
+      return;
+    }
     if (ui.case === 'dismissal') {
       const scrimPoint = { x: 80, y: 340 }; // Directly over the background action: detect click-through.
       const clickScrim = () => page.mouse.click(scrimPoint.x, scrimPoint.y);

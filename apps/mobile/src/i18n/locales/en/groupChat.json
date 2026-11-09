@@ -297,12 +297,15 @@
       "loading": "Loading settings…",
       "unavailable": "Couldn’t load group settings. Try again."
     },
+    "shortCompanionNames": "Short companion names",
+    "shortCompanionNamesHint": "Hide the owner’s name when a companion’s name is unique in this group. Namesakes keep the owner’s name to tell them apart.",
     "allowMentionAllBots": "Allow @all teammates",
     "allowMentionAllBotsHint": "Only the group owner can change this. Teammates may all reply; use with care in large groups. AI replies on your behalf are independent."
   },
   "errors": {
     "memberLimit": "A group chat needs 2–6 teammates",
     "memberUnavailable": "One of these teammates is unavailable. Choose another and try again.",
+    "ambiguousMention": "Multiple members match this name. Choose the person or companion from the @ list before sending.",
     "mentionUnavailable": "A mentioned member is no longer available. Choose who to mention before sending again.",
     "notFound": "This group chat no longer exists",
     "hostNotReady": "Cindy is still getting ready. Try again in a moment.",

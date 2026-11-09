@@ -1,4 +1,5 @@
 import { ComposerPullThroughScrollView, useComposerPullThroughBridge } from './composerPullThrough';
+import { botGroupFormerOwnerLabel, botGroupFormerShortLabel } from '@cindy/maker-shared/botGroupMentions';
 import { DockKeyboardBottomSpacer } from './ComposerDockKeyboardFollow';
 import type { ScrollViewInstance } from 'react-native';
 import { ProcessDisclosureViewport, useProcessDisclosureViewport } from './useProcessDisclosureViewport';
@@ -997,7 +998,7 @@ export const BotGroupTimeline = memo(function BotGroupTimeline({
     bots: [allBotsLabel, ...SUPPORTED_LOCALES.map(lng => appI18n.t('groupChat.mention.allBots', { lng }))],
   }), [allLabel, allBotsLabel]);
   const mentionLabels = useMemo(() => [...broadcastLabels.all, ...broadcastLabels.bots, ...group.members.flatMap(member =>
-    [member.name, botGroupMentionDisplayName(member), member.nickname || member.displayName || member.name])], [broadcastLabels, group.members]);
+    [member.name, botGroupMentionDisplayName(member), member.nickname || member.displayName || member.name, botGroupFormerOwnerLabel(member) || '', botGroupFormerShortLabel(member) || ''])], [broadcastLabels, group.members]);
   const [mentioned, setMentioned] = useState<{ groupId: string; botId: string; anchor: BotGroupMentionPoint } | null>(null);
   const onMentionPress = useCallback<BotGroupMentionContext['onPress']>((member, anchor) => {
     if (anchor) setMentioned({ groupId: group.id, botId: member.botId, anchor });

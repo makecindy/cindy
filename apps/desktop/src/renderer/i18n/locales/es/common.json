@@ -10911,12 +10911,15 @@
         "projectDirNote": "Los compañeros trabajan aquí cuando se reparten el trabajo. Si lo dejas vacío, usarán la carpeta de esta conversación grupal. Si eliges un proyecto de Git, cada encargo tendrá un worktree y una rama nuevos para no modificar tu código.",
         "autoContinueSaveFailed": "No se pudieron guardar las transiciones entre pasos. Inténtalo de nuevo.",
         "projectDirSaveFailed": "No se pudo guardar la carpeta del proyecto. Asegúrate de que la carpeta aún exista e inténtalo de nuevo.",
+        "shortCompanionNames": "Nombres cortos de compañeros",
+        "shortCompanionNamesHint": "Si el nombre es único en el grupo, se oculta el del propietario. Si hay nombres iguales, se muestra para distinguirlos.",
         "allowMentionAllBots": "Permitir @todos los compañeros",
         "allowMentionAllBotsHint": "Solo el dueño del grupo puede cambiarlo. Todos los compañeros podrían responder; cuidado en grupos grandes. No afecta a la IA que responde por ti."
       },
       "errors": {
         "memberLimit": "Un chat grupal necesita de 2 a 6 compañeros de equipo",
         "memberUnavailable": "Uno de estos compañeros de equipo no está disponible. Elige otro y vuelve a intentarlo.",
+        "ambiguousMention": "Varios miembros tienen este nombre. Elige a quién mencionar en la lista @ antes de enviar.",
         "mentionUnavailable": "Un miembro mencionado ya no está disponible. Elige a quién mencionar antes de volver a enviar.",
         "notFound": "Este chat grupal ya no existe",
         "hostNotReady": "Cindy todavía se está preparando. Inténtalo de nuevo en un momento.",

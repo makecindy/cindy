@@ -1,8 +1,10 @@
 import type { BotGroupMemberView, BotGroupMention } from '@cindy/maker-shared/botGroupChat';
+import { botGroupFormerOwnerLabel, botGroupFormerShortLabel } from '@cindy/maker-shared/botGroupMentions';
 
 // Same display and identity rules as Desktop BotGroupMentionCard / TimelineModel.
 export function botGroupMentionDisplayName(member: BotGroupMemberView): string {
   const name = member.name.trim();
+  if (member.ownerNameHidden) return name;
   const owner = member.ownerName?.trim();
   const suffix = owner ? ` (${owner})` : '';
   return suffix && member.isOwned === false && member.actorKind !== 'human' && !name.endsWith(suffix) ? `${name}${suffix}` : name;
@@ -29,7 +31,7 @@ export function botGroupMentionMember(label: string, context: BotGroupMentionCon
   const botBroadcast = [...allBotsLabels, '所有伙伴', '所有夥伴', 'すべての仲間', '모든 동료', 'all teammates', 'bots'].some(label => label.toLowerCase() === name.toLowerCase());
   if ((mentions.allBots || fallback) && botBroadcast) return undefined;
   const matches = members.filter(member => (fallback || mentions.botIds.includes(member.botId))
-    && [member.name, botGroupMentionDisplayName(member), member.nickname || member.displayName || member.name]
+    && [member.name, botGroupMentionDisplayName(member), member.nickname || member.displayName || member.name, botGroupFormerOwnerLabel(member), botGroupFormerShortLabel(member)]
       .some(candidate => candidate?.trim() === name));
   return matches.length === 1 ? matches[0] : undefined;
 }

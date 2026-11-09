@@ -16,8 +16,39 @@ import {
   botGroupNewMessageCount,
   botGroupActivityAt,
   latestBotGroupMessage,
+  chatGroupMemberName,
 } from '../botGroupPresentation.js';
 import { chatGroupTalkRouteKey, groupLaneOfRouteKey, isChatOnlyGroupLane, BOT_GROUP_RUNTIME_FAILURE_CODES, readBotGroupExecutionFailure, type BotGroupErrorCode, type BotGroupExecutionFailureView, type BotGroupMemberView, type BotGroupMessageView, type BotGroupNoticeCode, type BotGroupOpenPlanSummary, type BotGroupPlanStepStatus, type BotGroupPlanView, type BotGroupSummary } from '../botGroupChat.js';
+
+// #9419, unit: exercise the shared production label used by Desktop and direct Mobile. Existing
+// coverage has no opt-in group with several humans, nor a later same-name participant.
+describe('optional group companion owner labels', () => {
+  const owner = { id: 'h1', kind: 'human', state: 'joined', name: 'Alex' };
+  const family = { id: 'h2', kind: 'human', state: 'joined', name: 'Sam' };
+  const bot = { id: 'b1', kind: 'bot', state: 'joined', name: 'Helper', ownerActorId: owner.id, ownerName: 'Alex' };
+
+  it('keeps the existing label by default and hides it only when opted in', () => {
+    const members = [owner, family, bot];
+    expect(chatGroupMemberName(bot, members)).toBe('Helper (Alex)');
+    expect(chatGroupMemberName(bot, members, true)).toBe('Helper');
+    expect(chatGroupMemberName(family, members, true)).toBe('Sam');
+  });
+
+  it('keeps a disambiguating owner label when any joined member has the same name', () => {
+    const members = [owner, family, bot];
+    for (const kind of ['human', 'bot', 'integration']) {
+      const namesake = { id: 'other', kind, state: 'joined', name: 'helper' };
+      expect(chatGroupMemberName(bot, [...members, namesake], true)).toBe('Helper (Alex)');
+      expect(chatGroupMemberName(bot, [...members, { ...namesake, state: 'left' }], true)).toBe('Helper');
+    }
+  });
+
+  it('fails back to the existing label for a direct room or an incomplete roster', () => {
+    expect(chatGroupMemberName(bot, [], true)).toBe('Helper (Alex)');
+    expect(chatGroupMemberName(bot, [family, bot], true)).toBe('Helper (Alex)');
+    expect(chatGroupMemberName(bot, [owner, family], true)).toBe('Helper (Alex)');
+  });
+});
 
 describe('group list activity', () => {
   it('keeps creation as a floor without treating settings edits as activity', () => {

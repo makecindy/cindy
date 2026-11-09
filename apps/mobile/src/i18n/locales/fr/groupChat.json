@@ -292,6 +292,8 @@
       "loading": "Chargement des paramètres…",
       "unavailable": "Impossible de charger les paramètres du groupe. Réessayez."
     },
+    "shortCompanionNames": "Noms courts des coéquipiers",
+    "shortCompanionNamesHint": "Si le nom est unique dans le groupe, le propriétaire est masqué. En cas de doublon, il reste affiché pour les distinguer.",
     "allowMentionAllBots": "Autoriser @tous les coéquipiers",
     "allowMentionAllBotsHint": "Seul le propriétaire du groupe peut le modifier. Tous les coéquipiers peuvent répondre : prudence en grand groupe. Sans effet sur l’IA qui répond pour vous.",
     "notifications": {
@@ -309,6 +311,7 @@
   "errors": {
     "memberLimit": "Une conversation de groupe nécessite de 2 à 6 coéquipiers",
     "memberUnavailable": "L'un de ces coéquipiers est indisponible. Choisissez-en un autre et réessayez.",
+    "ambiguousMention": "Plusieurs membres portent ce nom. Choisissez la personne à mentionner dans la liste @ avant l’envoi.",
     "mentionUnavailable": "Un membre mentionné n'est plus disponible. Choisissez qui mentionner avant de renvoyer.",
     "notFound": "Cette conversation de groupe n'existe plus",
     "hostNotReady": "Cindy est encore en cours de préparation. Réessayez dans un instant.",

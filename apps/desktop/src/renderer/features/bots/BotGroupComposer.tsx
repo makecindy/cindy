@@ -357,6 +357,7 @@ export function BotGroupComposer({
    */
   const sendThreadReply = async () => {
     if (!canSend || sendingRef.current || getBotGroupThreadReplyAttempt(draftKey)?.sending || !sendReply) return;
+    if (mention.ambiguous(text)) { setError(t('bots.groupChat.errors.ambiguousMention')); return; }
     groupMask?.participate();
     const files = attachmentState.attachments;
     const attachmentSignature = botGroupAttachmentSignature(files);
@@ -479,6 +480,7 @@ export function BotGroupComposer({
     if (thread) { void sendThreadReply(); return; }
     // A second Enter before the cleared input has rendered must not send the same draft twice.
     if (!canSend || sendingRef.current || textRef.current !== text || attachmentsRef.current !== attachmentState.attachments) return;
+    if (mention.ambiguous(text)) { toast.error(t('bots.groupChat.errors.ambiguousMention')); return; }
     if (!botGroupApi()) {
       toast.error(t('bots.groupChat.composer.sendFailed'));
       return;

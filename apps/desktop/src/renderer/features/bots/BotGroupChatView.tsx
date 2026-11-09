@@ -1,4 +1,5 @@
 import { useProcessDisclosureScroll } from './useProcessDisclosureScroll';
+import { botGroupFormerOwnerLabel, botGroupFormerShortLabel } from '@cindy/maker-shared/botGroupMentions';
 import { RemoveChatFromListButton } from './RemoveChatFromListButton';
 import { ChatInviteDialog } from './ChatInviteDialog';
 import { useThreadPanelResize } from './useThreadPanelResize';
@@ -583,7 +584,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
   const allLabel = t('bots.groupChat.mention.all');
   const allBotsLabel = t('bots.groupChat.mention.allBots');
   const mentionLabels = useMemo(
-    () => [allLabel, allBotsLabel, ...members.flatMap((member) => [member.name, botGroupMemberDisplayName(member), member.nickname || member.displayName || member.name])],
+    () => [allLabel, allBotsLabel, ...members.flatMap((member) => [member.name, botGroupMemberDisplayName(member), member.nickname || member.displayName || member.name, botGroupFormerOwnerLabel(member) || '', botGroupFormerShortLabel(member) || ''])],
     [allLabel, allBotsLabel, members],
   );
 

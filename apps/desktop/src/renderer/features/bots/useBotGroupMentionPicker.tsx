@@ -36,6 +36,7 @@ import { BotAvatar } from './BotAvatar';
 import {
   filterBotGroupMentionCandidates,
   findBotGroupMentionQuery,
+  hasAmbiguousBotGroupMentions,
   insertBotGroupMention,
   resolveBotGroupMentions,
   retainBotGroupTrackedMentions,
@@ -288,5 +289,6 @@ export function useBotGroupMentionPicker({
     /** Resolve who the text addresses, using the picks; `roster` defaults to the current members. */
     resolve: (value: string, roster: readonly BotGroupMemberView[] = members) =>
       resolveBotGroupMentions(value, { members: withoutSelf(roster), allLabels: resolveLabels, allBotLabels, tracked }),
+    ambiguous: (value: string) => hasAmbiguousBotGroupMentions(value, { members: withoutSelf(members), allLabels: resolveLabels, allBotLabels, tracked }),
   };
 }

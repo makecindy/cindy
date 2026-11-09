@@ -262,6 +262,13 @@ export function ChatGroupSettings({ group }: { group: BotGroupSummary }) {
               onValueChange={value => void saveRules({ speakingMode: value as typeof speakingMode })} />} />}
         </SettingsCard>
       </SettingsSection>
+      {group.supportsCompanionOwnerNames && <SettingsSection>
+        <SettingsCard><SettingsRow wrap title={t(shared('shortCompanionNames'))} hint={t(shared('shortCompanionNamesHint'))}
+          trailing={<Switch aria-label={t(shared('shortCompanionNames'))} checked={group.hideCompanionOwnerNames === true}
+            disabled={busy || group.revision === undefined} onCheckedChange={hideCompanionOwnerNames => {
+              if (group.revision !== undefined) void mutate({ type: 'update', name: group.name, topic: group.topic ?? '', description: group.description ?? '', expectedRevision: group.revision, hideCompanionOwnerNames });
+            }} />} /></SettingsCard>
+      </SettingsSection>}
       {/* The organizer arranges a 分工 whose steps are not written out; a 分工 works in the project folder. */}
       <SettingsSection title={t(key('work'))} caption={t(key('workCaption'))}>
         <SettingsCard>

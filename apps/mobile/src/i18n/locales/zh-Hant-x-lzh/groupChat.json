@@ -286,6 +286,8 @@
       "loading": "方讀群之設定…",
       "unavailable": "群之設定讀取未成，請再試"
     },
+    "shortCompanionNames": "簡示同僚之名",
+    "shortCompanionNamesHint": "啟之則不重名者省主人名；同名者仍顯示以別之。",
     "allowMentionAllBots": "許 @所有夥伴",
     "allowMentionAllBotsHint": "唯群主可改。同僚或皆作覆，大群慎啟之。此開關不涉 AI 代答。",
     "notifications": {
@@ -303,6 +305,7 @@
   "errors": {
     "memberLimit": "一群議須同僚 2–6 位",
     "memberUnavailable": "有同僚今不可用，易一位再試",
+    "ambiguousMention": "數人同名，請於 @ 名單擇之。",
     "mentionUnavailable": "所點名之成員已不可用，請重擇後再遣",
     "notFound": "此群議已不存",
     "hostNotReady": "Cindy 尚在籌備，請稍後再試",

@@ -19,6 +19,27 @@ export interface BotGroupMentionMember {
   /** Chat Server's undecorated name, so an existing @name still resolves. */
   displayName?: string;
   nickname?: string | null;
+  ownerName?: string;
+  /** Present on companions when the server supports short names, whether enabled or not. */
+  ownerNameHidden?: boolean;
+  shortOwnerNamesEnabled?: boolean;
+  actorKind?: 'human' | 'bot' | 'integration';
+}
+
+/** A historical full label remains recognizable when a group's new display label is short. */
+export function botGroupFormerOwnerLabel(member: Pick<BotGroupMentionMember, 'name' | 'ownerName' | 'ownerNameHidden'>): string | undefined {
+  const owner = member.ownerName?.trim();
+  const name = member.name.trim();
+  return member.ownerNameHidden === true && owner && name ? `${name} (${owner})` : undefined;
+}
+
+/** A short label written before a preference or roster change remains recognizable afterwards. */
+export function botGroupFormerShortLabel(member: Pick<BotGroupMentionMember, 'name' | 'ownerName' | 'ownerNameHidden' | 'shortOwnerNamesEnabled'>): string | undefined {
+  const owner = member.ownerName?.trim();
+  const name = member.name.trim();
+  const suffix = owner ? ` (${owner})` : '';
+  return member.shortOwnerNamesEnabled === true && member.ownerNameHidden === false && suffix && name.endsWith(suffix) && name.length > suffix.length
+    ? name.slice(0, -suffix.length) : undefined;
 }
 
 /** A mention picked from the candidate list; `label` is the text after `@`. */
@@ -71,6 +92,17 @@ function buildLabelEntries(
   allBotLabels: readonly string[] = [],
 ): LabelEntry[] {
   const byLabel = new Map<string, LabelEntry>();
+  const strictAliases = members.some(member => member.shortOwnerNamesEnabled === true);
+  const allClaims = new Map<string, Set<string>>();
+  const claim = (map: Map<string, Set<string>>, label: string | undefined, id: string) => {
+    const key = label?.trim();
+    if (!key) return;
+    const ids = map.get(key) ?? new Set<string>();
+    ids.add(id); map.set(key, ids);
+  };
+  if (strictAliases) for (const member of members) {
+    for (const label of [member.name, member.nickname || member.displayName || '', botGroupFormerOwnerLabel(member), botGroupFormerShortLabel(member)]) claim(allClaims, label, member.botId);
+  }
   for (const raw of allLabels) {
     const label = raw.trim();
     if (label) byLabel.set(label, { label, all: true, botIds: [] });
@@ -80,9 +112,16 @@ function buildLabelEntries(
     if (label) byLabel.set(label, { label, all: false, allBots: true, botIds: [] });
   }
   for (const member of members) {
-    for (const raw of [member.name, member.nickname || member.displayName || '']) {
-      const label = raw.trim();
+    for (const raw of [member.name, member.nickname || member.displayName || '', botGroupFormerOwnerLabel(member), botGroupFormerShortLabel(member)]) {
+      const label = raw?.trim() ?? '';
       if (!label || byLabel.get(label)?.all || byLabel.get(label)?.allBots) continue;
+      // A newly ambiguous short draft must not wake multiple companions, and a
+      // reconstructed old label must never steal someone else's actual name.
+      if (strictAliases && (allClaims.get(label)?.size ?? 0) > 1) {
+        // Keep the whole token so a shorter unambiguous prefix cannot be mistaken for it.
+        if (!byLabel.has(label)) byLabel.set(label, { label, all: false, botIds: [] });
+        continue;
+      }
       const entry = byLabel.get(label) ?? { label, all: false, botIds: [] };
       if (!entry.botIds.includes(member.botId)) entry.botIds.push(member.botId);
       byLabel.set(label, entry);
@@ -124,6 +163,20 @@ function scanMentionTokens(text: string, entries: readonly LabelEntry[]): Mentio
     index = text.indexOf('@', next);
   }
   return tokens;
+}
+
+/** An ambiguous typed label must be resolved before sending, rather than becoming an unaddressed message. */
+export function hasAmbiguousBotGroupMentions(text: string, input: {
+  members: readonly BotGroupMentionMember[];
+  allLabels: readonly string[];
+  allBotLabels?: readonly string[];
+  tracked?: readonly BotGroupTrackedMention[];
+}): boolean {
+  const tracked = input.tracked ?? [];
+  const entries = buildLabelEntries(input.members, input.allLabels, tracked, input.allBotLabels);
+  return scanMentionTokens(text, entries).some(token => !token.entry.all && !token.entry.allBots
+    && token.entry.botIds.length === 0
+    && !tracked.some(pick => pick.start === token.start && pick.label.trim() === token.entry.label));
 }
 
 /**

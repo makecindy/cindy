@@ -175,7 +175,8 @@ vi.mock('@/utils/useTaskListBack', () => ({ useTaskListBack: () => h.leave }));
 vi.mock('@/platform/chrome/AnchoredPullDownMenu', () => ({ AnchoredPullDownMenu: ({ children }: any) => children }));
 vi.mock('@/device-link/remoteResourceCache', () => ({ markRemoteResourceRead: h.markRead }));
 vi.mock('@/device-link/remoteResourceAvailability', () => ({ readRemoteCollectionCache: () => [] }));
-vi.mock('@/platform/chrome', () => ({ showConfirm: h.confirm }));
+vi.mock('@/platform/chrome', () => ({ showConfirm: h.confirm,
+  NativeSwitch: ({ testID, disabled, value, onValueChange }: any) => el('button', { 'data-testid': testID, disabled, onClick: () => onValueChange(!value) }) }));
 vi.mock('@/platform/chrome/NativePullDownMenu', () => ({
   usesNativePullDownMenu: () => h.nativeMenus,
   NativePullDownMenu: ({ actions, onAction, children, testID, disabled, longPress }: any) => {
@@ -1531,6 +1532,21 @@ describe('group composer', () => {
     expect(h.chat.act).toHaveBeenLastCalledWith('send', expect.objectContaining({ mentions: { all: false, botIds: ['abu'] } }));
   });
 
+  // #9419: an ambiguous short draft must not become an unaddressed message that wakes all bots.
+  it('keeps an ambiguous short mention in the draft until a member is picked', async () => {
+    const data = group({ openPlan: null });
+    const namesakes = [
+      { ...data.members[0]!, name: 'Ann (Alex)', displayName: 'Ann', ownerName: 'Alex', ownerNameHidden: false, shortOwnerNamesEnabled: true },
+      { ...data.members[1]!, name: 'Ann (Sam)', displayName: 'Ann', ownerName: 'Sam', ownerNameHidden: false, shortOwnerNamesEnabled: true },
+    ];
+    await render(group({ openPlan: null, members: namesakes }));
+    await type('@Ann hello');
+    await click('botGroup.composer.send');
+    expect(h.chat.act).not.toHaveBeenCalled();
+    expect(h.row.value).toBe('@Ann hello');
+    expect(h.alert).toHaveBeenCalledWith('groupChat.errors.ambiguousMention');
+  });
+
   it('keeps the current human in the group but excludes it from mention choices and typed mentions', async () => {
     h.chat.server = true;
     const data = group({ openPlan: null });
@@ -1891,6 +1907,29 @@ describe('group settings', () => {
     await click('botGroup.settingsButton');
     expect(byId('botGroup.settings')).not.toBeNull();
   }
+
+  // #9419, UI unit: the manager's direct phone must offer the switch only after the
+  // server advertises support and send the room setting through the existing management path.
+  it('offers the short-name switch only on a supporting server', async () => {
+    const data = group({ serverBacked: true, supportsSettingsManagement: true, supportsCompanionOwnerNames: true, revision: 5 });
+    data.members[0] = { ...data.members[0], actorId: 'human', isSelf: true, isOwned: true, role: 'owner' };
+    h.chat.server = true;
+    h.management = { group: data, editable: true, ready: true, loading: false, reason: null, act: vi.fn(async () => ({})), refresh: vi.fn() };
+    await openSettings(data);
+    await click('botGroup.settings.manage');
+    await click('botGroup.settings.shortCompanionNames');
+    expect(h.management.act).toHaveBeenCalledWith('update', { hideCompanionOwnerNames: true });
+  });
+
+  it('keeps the short-name switch out of an older server group', async () => {
+    const data = group({ serverBacked: true, supportsSettingsManagement: true, revision: 5 });
+    data.members[0] = { ...data.members[0], actorId: 'human', isSelf: true, isOwned: true, role: 'owner' };
+    h.chat.server = true;
+    h.management = { group: data, editable: true, ready: true, loading: false, reason: null, act: vi.fn(async () => ({})), refresh: vi.fn() };
+    await openSettings(data);
+    await click('botGroup.settings.manage');
+    expect(byId('botGroup.settings.shortCompanionNames')).toBeNull();
+  });
 
   it('allows personal removal from an archived read-only group without management rights', async () => {
     h.chat.server = true;

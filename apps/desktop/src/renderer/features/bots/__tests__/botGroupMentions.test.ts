@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   filterBotGroupMentionCandidates,
   findBotGroupMentionQuery,
+  hasAmbiguousBotGroupMentions,
   insertBotGroupMention,
   resolveBotGroupMentions,
   retainBotGroupTrackedMentions,
@@ -23,6 +24,31 @@ const members = [
 ];
 
 describe('resolveBotGroupMentions', () => {
+  // #9419, unit: the production resolver must retain old drafted labels when the opt-in changes,
+  // without sending to a namesake who joined while the draft was open.
+  it('resolves old owner labels but never claims a label belonging to another member', () => {
+    const helper = { botId: 'helper', name: 'Helper', ownerName: 'Alex', ownerNameHidden: true, shortOwnerNamesEnabled: true, actorKind: 'bot' as const };
+    expect(resolveBotGroupMentions('@Helper (Alex) hello', { members: [helper], allLabels: [] }).botIds).toEqual(['helper']);
+    const actual = { botId: 'person', name: 'Helper (Alex)', actorKind: 'human' as const };
+    expect(resolveBotGroupMentions('@Helper (Alex) hello', { members: [helper, actual], allLabels: [] }).botIds).toEqual([]);
+    expect(hasAmbiguousBotGroupMentions('@Helper (Alex) hello', { members: [helper, actual], allLabels: [] })).toBe(true);
+    expect(resolveBotGroupMentions('@Helper (Alex) hello', { members: [helper, actual], allLabels: [],
+      tracked: [{ botId: 'person', label: 'Helper (Alex)', start: 0 }] }).botIds).toEqual(['person']);
+  });
+
+  it('does not fan an unpicked short draft out to same-name companions after the labels change', () => {
+    const roster = [
+      { botId: 'one', name: 'Helper (Alex)', displayName: 'Helper', ownerName: 'Alex', ownerNameHidden: false, shortOwnerNamesEnabled: true, actorKind: 'bot' as const },
+      { botId: 'two', name: 'Helper (Sam)', displayName: 'Helper', ownerName: 'Sam', ownerNameHidden: false, shortOwnerNamesEnabled: true, actorKind: 'bot' as const },
+    ];
+    expect(resolveBotGroupMentions('@Helper please', { members: roster, allLabels: [] }).botIds).toEqual([]);
+    expect(hasAmbiguousBotGroupMentions('@Helper please', { members: roster, allLabels: [] })).toBe(true);
+    expect(resolveBotGroupMentions('@Helper please', { members: roster, allLabels: [], tracked: [{ botId: 'one', label: 'Helper', start: 0 }] }).botIds).toEqual(['one']);
+    expect(hasAmbiguousBotGroupMentions('@Helper please', { members: roster, allLabels: [], tracked: [{ botId: 'one', label: 'Helper', start: 0 }] })).toBe(false);
+    expect(resolveBotGroupMentions('@Helper (Sam) please', { members: roster, allLabels: [] }).botIds).toEqual(['two']);
+    expect(resolveBotGroupMentions('@Helper please', { members: [{ botId: 'one', name: 'Helper (Alex)', ownerName: 'Alex', ownerNameHidden: false, shortOwnerNamesEnabled: true }], allLabels: [] }).botIds).toEqual(['one']);
+  });
+
   // User decision: Everyone addresses humans; All Teammates is an independent
   // broadcast. Existing tests cover only one broadcast kind (unit regression).
   it('keeps human and companion broadcasts separate, including a picked namesake', () => {

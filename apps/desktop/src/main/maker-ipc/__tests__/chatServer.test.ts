@@ -372,6 +372,39 @@ describe('Chat Server result delivery and refresh', () => {
     await vi.advanceTimersByTimeAsync(150);
     expect(attention.mock.calls.at(-1)?.[1]).toBeNull();
   });
+  // #9419: getGroup feeds both Desktop and remote phones. Existing fixtures never enable
+  // the group choice with multiple humans (unit tier).
+  it('projects an opt-in short companion name to group members and messages', async () => {
+    const owner = { id: selfId, kind: 'human', name: 'Alex', state: 'joined', role: 'owner', ownerActorId: selfId };
+    const family = { ...owner, id: '30000000-0000-4000-8000-000000000002', name: 'Sam', role: 'member' };
+    const bot = { id: botId, kind: 'bot', name: 'Helper', state: 'joined', role: 'member', ownerActorId: selfId, ownerName: 'Alex' };
+    const members = [owner, family, bot];
+    const messages = [{ id: execution.source_message_id, seq: '1', authorId: botId, author: { kind: 'bot', name: 'Helper' },
+      content: [{ type: 'text', text: 'Example reply' }], createdAt: '2026-10-03T00:00:00Z', deleted: false, threadRootId: null }];
+    fixture.handle.mockImplementation(route => route.endsWith('/snapshot') ? { body: { room: { ...room(roomId), hide_companion_owner_names: true }, members, messages, cursor: '1' } }
+      : route.includes('/messages?') ? { body: messages } : response(route));
+    const result = await service.getGroup(roomId);
+    if (!result.ok) throw new Error(result.errorCode);
+    expect(result.group.members.find(member => member.actorId === botId)).toMatchObject({ name: 'Helper', ownerName: 'Alex', ownerNameHidden: true });
+    expect(result.group.messages[0].authorName).toBe('Helper');
+  });
+
+  // #9419, unit: an unsupported server must never receive the new room field; a supporting
+  // server receives it with the revision through the real Desktop management adapter.
+  it.each([false, true])('gates a group owner-name update on server support (%s)', async supported => {
+    const owner = { id: selfId, kind: 'human', name: 'Alex', state: 'joined', role: 'owner', ownerActorId: selfId };
+    fixture.handle.mockImplementation(route => {
+      if (route === '/me') return { body: { actor: { id: selfId }, capabilities: supported ? { groupCompanionOwnerNames: 1 } : {} } };
+      if (route.endsWith('/snapshot')) return { body: { room: room(roomId), members: [owner], messages: [], cursor: '1' } };
+      return response(route);
+    });
+    const result = await service.updateGroup({ groupId: roomId, expectedRevision: 1, hideCompanionOwnerNames: true });
+    expect(result.ok).toBe(supported);
+    const updates = fixture.handle.mock.calls.filter(([route, method]) => route === `/conversations/${roomId}` && method === 'PATCH');
+    expect(updates).toHaveLength(supported ? 1 : 0);
+    if (supported) expect(updates[0]![2]).toMatchObject({ expectedRevision: 1, hideCompanionOwnerNames: true });
+  });
+
   // #6907: getGroup feeds Desktop and remote phones. Existing fixtures never pair group name A
   // with the bot's account ownerName B; exercise the production projection (unit tier).
   it.each(['Nickname A', 'Account B', '   ', null] as const)('uses the current room owner name %s with safe account fallback', async name => {

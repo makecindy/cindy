@@ -10779,12 +10779,15 @@
         "projectDirNote": "分工行事時，同僚於此勞作。不擇亦可，將用此群議自有之卷匣；若擇 git 專案，每次分工將新開一 worktree 與分支，不動君手中之程式碼。",
         "autoContinueSaveFailed": "分工交接未能存，請再試",
         "projectDirSaveFailed": "案之卷匣未能存，確其尚存後再試",
+        "shortCompanionNames": "簡示同僚之名",
+        "shortCompanionNamesHint": "啟之則不重名者省主人名；同名者仍顯示以別之。",
         "allowMentionAllBots": "許 @諸同僚",
         "allowMentionAllBotsHint": "唯群主可改。諸同僚或皆回覆，大群宜慎啟之。此開關不涉 AI 代答。"
       },
       "errors": {
         "memberLimit": "群議須 2–6 位同僚",
         "memberUnavailable": "有同僚今不可用，易一位再試",
+        "ambiguousMention": "數人同名，請於 @ 名單擇之。",
         "mentionUnavailable": "所點名之成員已不可用，請重擇後再遣",
         "notFound": "此群議已不存",
         "hostNotReady": "Cindy 尚在準備，請稍後再試",

@@ -153,8 +153,8 @@ describe('bot group remote resources', () => {
   it('passes the edited revision to the server and adds just one visible companion', async () => {
     service.getGroup.mockResolvedValue({ ok: true, group: detail({ serverBacked: true, revision: 5 }) });
     await remoteResourceRegistry.invoke(context, { client: client(), collectionId: BOT_GROUP_REMOTE_COLLECTION_ID,
-      actionId: 'update', resourceRef: ref('g1'), input: { name: 'New', expectedRevision: 5, allowMentionAllBots: false } });
-    expect(service.updateGroup).toHaveBeenCalledWith({ groupId: 'g1', name: 'New', expectedRevision: 5, allowMentionAllBots: false });
+      actionId: 'update', resourceRef: ref('g1'), input: { name: 'New', expectedRevision: 5, allowMentionAllBots: false, hideCompanionOwnerNames: true } });
+    expect(service.updateGroup).toHaveBeenCalledWith({ groupId: 'g1', name: 'New', expectedRevision: 5, allowMentionAllBots: false, hideCompanionOwnerNames: true });
     await remoteResourceRegistry.invoke(context, { client: client(), collectionId: BOT_GROUP_REMOTE_COLLECTION_ID,
       actionId: 'add-member', resourceRef: ref('g1'), input: { botId: 'abu', expectedRevision: 5 } });
     expect(service.setMembers).toHaveBeenCalledWith({ groupId: 'g1', botIds: ['abu'], addOnly: true });

@@ -32,8 +32,18 @@ export function chatGroupOwnerName(member: ChatGroupNamedMember, members: readon
 }
 
 /** Group-scoped labels shared by Desktop and the direct phone client; raw member records stay unchanged. */
-export function chatGroupMemberName(member: ChatGroupNamedMember, members: readonly ChatGroupNamedMember[]): string {
+export function chatGroupMemberName(member: ChatGroupNamedMember, members: readonly ChatGroupNamedMember[], hideOwnerName = false): string {
   const owner = chatGroupOwnerName(member, members);
+  if (hideOwnerName && member.kind === 'bot' && owner && member.ownerActorId) {
+    const joined = members.filter(candidate => candidate.state === 'joined');
+    // Only use a complete group roster. Direct chats pass an empty roster; a departed
+    // owner or an absent member keeps the established attribution as a safe fallback.
+    const memberPresent = joined.some(candidate => candidate.id === member.id && candidate.kind === 'bot');
+    const ownerPresent = joined.some(candidate => candidate.id === member.ownerActorId && candidate.kind === 'human');
+    const key = member.name.trim().normalize('NFKC').toLowerCase();
+    const namesake = joined.some(candidate => candidate.id !== member.id && candidate.name.trim().normalize('NFKC').toLowerCase() === key);
+    if (memberPresent && ownerPresent && key && !namesake) return member.name;
+  }
   return member.kind === 'bot' && owner ? `${member.name} (${owner})` : member.name;
 }
 

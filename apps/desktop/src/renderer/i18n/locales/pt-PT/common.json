@@ -10911,12 +10911,15 @@
         "projectDirNote": "Os colegas trabalham aqui quando dividem o trabalho. Pode deixar este campo vazio para usarem a pasta da própria conversa de grupo. Se escolher um projeto git, cada divisão de trabalho recebe um novo worktree e uma nova branch, para que o seu código permaneça intacto.",
         "autoContinueSaveFailed": "Não foi possível guardar as transições entre passos. Tente novamente.",
         "projectDirSaveFailed": "Não foi possível guardar a pasta do projeto. Certifique-se de que a pasta ainda existe e tente novamente.",
+        "shortCompanionNames": "Nomes curtos dos colegas",
+        "shortCompanionNamesHint": "Quando o nome for único no grupo, o nome do proprietário fica oculto. Se houver nomes iguais, aparece para os distinguir.",
         "allowMentionAllBots": "Permitir @todos os colegas",
         "allowMentionAllBotsHint": "Só o proprietário do grupo pode alterar. Todos os colegas podem responder; cuidado em grupos grandes. Não afeta a IA que responde em seu nome."
       },
       "errors": {
         "memberLimit": "Uma conversa de grupo precisa de 2–6 colegas",
         "memberUnavailable": "Um destes colegas está indisponível. Escolha outro e tente novamente.",
+        "ambiguousMention": "Há vários membros com este nome. Escolhe quem mencionar na lista @ antes de enviar.",
         "mentionUnavailable": "Um membro mencionado já não está disponível. Escolha quem mencionar antes de enviar novamente.",
         "notFound": "Esta conversa de grupo já não existe",
         "hostNotReady": "Cindy ainda está a preparar-se. Tente novamente dentro de momentos.",

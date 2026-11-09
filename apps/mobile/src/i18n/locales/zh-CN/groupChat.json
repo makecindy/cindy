@@ -297,12 +297,15 @@
       "loading": "正在读取群设置…",
       "unavailable": "群设置读取失败，请重试"
     },
+    "shortCompanionNames": "简洁显示伙伴名",
+    "shortCompanionNamesHint": "开启后，群内不重名的伙伴不显示主人名；重名时仍显示主人名以区分。",
     "allowMentionAllBots": "允许 @所有伙伴",
     "allowMentionAllBotsHint": "仅群主可更改。伙伴可能都会回复，大群请谨慎开启。此开关不影响 AI 代答。"
   },
   "errors": {
     "memberLimit": "一个群需要 2–6 位伙伴",
     "memberUnavailable": "有伙伴现在不可用，换一位再试",
+    "ambiguousMention": "有多个成员使用这个名字，请从 @ 列表中选择要点名的成员。",
     "mentionUnavailable": "点名的成员已不可用，请重新选择后发送",
     "notFound": "这个群聊已不存在",
     "hostNotReady": "Cindy 还在准备中，请稍后重试",

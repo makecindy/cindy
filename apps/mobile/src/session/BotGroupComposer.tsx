@@ -40,6 +40,7 @@ import {
   findBotGroupMentionQuery,
   insertBotGroupMention,
   resolveBotGroupMentions,
+  hasAmbiguousBotGroupMentions,
   retainBotGroupTrackedMentions,
   type BotGroupTrackedMention,
 } from '@cindy/maker-shared/botGroupMentions';
@@ -162,6 +163,9 @@ export function BotGroupComposer({
 
   const activeMembers = useMemo(() => members.filter(isActiveBotGroupMember), [members]);
   const mentionMembers = useMemo(() => members.filter(member => member.isSelf !== true), [members]);
+  // Older groups keep the phone's original name-only resolver; the opt-in adds only the
+  // metadata needed to preserve previous labels and reject ambiguous drafts.
+  const resolveMember = (member: BotGroupMemberView) => member.shortOwnerNamesEnabled === true ? member : { botId: member.botId, name: member.name };
   const mentionCandidates = useMemo(() => mentionMembers.filter(isActiveBotGroupMember), [mentionMembers]);
   const allLabel = t('groupChat.mention.all');
   const allBotsLabel = t('groupChat.mention.allBots');
@@ -231,7 +235,7 @@ export function BotGroupComposer({
     setForcedSelection({ start: next.caret, end: next.caret });
     setTracked(current => {
       const remaining = retainBotGroupTrackedMentions(text, next.text, {
-        members: members.map(member => ({ botId: member.botId, name: member.name })),
+        members: members.map(resolveMember),
         allLabels: [allLabel], allBotLabels, tracked: current, editStart: query.start, editEnd: caret,
       });
       return option.kind === 'member' ? [...remaining, { botId: option.member.botId, label: option.label, start: query.start }] : remaining;
@@ -241,6 +245,10 @@ export function BotGroupComposer({
 
   const send = async () => {
     if (!canSend || sendingRef.current) return;
+    if (hasAmbiguousBotGroupMentions(text, { members: mentionMembers.map(resolveMember), allLabels: [allLabel], allBotLabels, tracked })) {
+      Alert.alert(t('groupChat.errors.ambiguousMention'));
+      return;
+    }
     const draft = text;
     const draftText = trimmed;
     const draftTracked = tracked;
@@ -276,7 +284,7 @@ export function BotGroupComposer({
       }
       const attachmentIds = attachments.map((attachment) => attachment.id);
       const mentions = resolveBotGroupMentions(draft, {
-        members: mentionMembers.map((member) => ({ botId: member.botId, name: member.name })),
+        members: mentionMembers.map(resolveMember),
         allLabels: [allLabel], allBotLabels,
         tracked: draftTracked,
       });
@@ -419,7 +427,7 @@ export function BotGroupComposer({
         const { start: editStart, end: editEnd } = selectionRef.current;
         setText(value);
         setTracked(current => retainBotGroupTrackedMentions(text, value, {
-          members: members.map(member => ({ botId: member.botId, name: member.name })),
+          members: members.map(resolveMember),
           allLabels: [allLabel], allBotLabels,
           tracked: current,
           editStart,

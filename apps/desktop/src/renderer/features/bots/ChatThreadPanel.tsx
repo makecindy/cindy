@@ -1,4 +1,5 @@
 import { useProcessDisclosureScroll } from './useProcessDisclosureScroll';
+import { botGroupFormerOwnerLabel, botGroupFormerShortLabel } from '@cindy/maker-shared/botGroupMentions';
 /**
  * 话题（Thread）面板：与主时间线同一套消息行（BotGroupTimelineItem）与密度规则——根消息、
  * 「N 条回复」分隔、回复按作者五分钟合并；有新回复且读者在底部时跟到底。
@@ -444,7 +445,7 @@ export function ChatThreadPanel({ group, rootId, quoteSources = group.messages, 
 
   const members = group.members;
   const mentionLabels = useMemo(
-    () => [t('bots.groupChat.mention.all'), t('bots.groupChat.mention.allBots'), ...members.flatMap((member) => [member.name, botGroupMemberDisplayName(member), member.nickname || member.displayName || member.name])],
+    () => [t('bots.groupChat.mention.all'), t('bots.groupChat.mention.allBots'), ...members.flatMap((member) => [member.name, botGroupMemberDisplayName(member), member.nickname || member.displayName || member.name, botGroupFormerOwnerLabel(member) || '', botGroupFormerShortLabel(member) || ''])],
     [members, t],
   );
   const memberById = useMemo(() => new Map(members.map((member) => [member.botId, member])), [members]);

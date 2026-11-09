@@ -10911,12 +10911,15 @@
         "projectDirNote": "Les coéquipiers travaillent ici lorsqu'ils se répartissent le travail. Vous pouvez laisser ce champ vide : ils utiliseront alors le dossier propre à cette conversation de groupe. Si vous choisissez un projet git, chaque répartition du travail obtient un nouveau worktree et une nouvelle branche, afin que votre propre code reste intact.",
         "autoContinueSaveFailed": "Impossible d'enregistrer le passage entre étapes. Réessayez.",
         "projectDirSaveFailed": "Impossible d'enregistrer le dossier du projet. Vérifiez que le dossier existe toujours, puis réessayez.",
+        "shortCompanionNames": "Noms courts des coéquipiers",
+        "shortCompanionNamesHint": "Si le nom est unique dans le groupe, le propriétaire est masqué. En cas de doublon, il reste affiché pour les distinguer.",
         "allowMentionAllBots": "Autoriser @tous les coéquipiers",
         "allowMentionAllBotsHint": "Seul le propriétaire du groupe peut le modifier. Tous les coéquipiers peuvent répondre : prudence en grand groupe. Sans effet sur l’IA qui répond pour vous."
       },
       "errors": {
         "memberLimit": "Une conversation de groupe nécessite de 2 à 6 coéquipiers",
         "memberUnavailable": "L'un de ces coéquipiers est indisponible. Choisissez-en un autre et réessayez.",
+        "ambiguousMention": "Plusieurs membres portent ce nom. Choisissez la personne à mentionner dans la liste @ avant l’envoi.",
         "mentionUnavailable": "Un membre mentionné n'est plus disponible. Choisissez qui mentionner avant de renvoyer.",
         "notFound": "Cette conversation de groupe n'existe plus",
         "hostNotReady": "Cindy est encore en cours de préparation. Réessayez dans un instant.",
