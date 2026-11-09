@@ -3,6 +3,7 @@ import { retainInvalidatedProviderPresentation, retainProviderPresentationAfterA
 import { subscriptionAccountKind, subscriptionAccountState } from './subscription-account-auth.js';
 import { attachDefaultSubscriptionPool, disconnectSubscriptionPool } from '../subscription-accounts/runtime.js';
 import { readPool as readSubscriptionPoolConfig } from '../subscription-accounts/store.js';
+import { prepareSharedPluginLinks } from './shared-plugin-links.js';
 import { getCodexHome } from './codex-home-path.js';
 export { getCodexHome } from './codex-home-path.js';
 /**
@@ -590,6 +591,10 @@ export class DesktopClaudeAuthAdapter implements AuthAdapter {
     const key = JSON.stringify([scope.key, await sharedGlobalSkillLinksFingerprint()]);
     await this.sharedSkillsPreparation.ensure(key, async () => {
       const success = await this.runEnsureSharedGlobalSkills(scope.ownerId);
+      // Plugins are a machine-level capability; extra subscription accounts
+      // would otherwise start with an empty list. Idempotent, and a failure
+      // here only costs plugin visibility.
+      await prepareSharedPluginLinks().catch(() => undefined);
       return success && scope.current();
     });
   }
