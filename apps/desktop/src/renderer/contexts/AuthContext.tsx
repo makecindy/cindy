@@ -451,7 +451,6 @@ export function AuthProvider({
 
     return () => {
       unsubscribe();
-      service.dispose();
     };
   }, [applyIncomingState]);
 
