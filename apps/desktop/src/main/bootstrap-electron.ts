@@ -137,6 +137,7 @@ import {
   type MainWindowMaximizeRecoveryController,
 } from './mainWindowMaximizeRecovery';
 import {
+  commitReplacedNormalBounds,
   manageWindowStatePreservingNormalBounds,
   planWindowRestore,
 } from './mainWindowWorkAreaBounds';
@@ -4365,11 +4366,17 @@ const createWindow = () => {
   );
   const shouldRestoreMaximized = restorePlan.restoreMaximized;
   // A snapped rectangle is not a legal restore size. Create from the same
-  // defaults the keeper uses on a first launch; leave x/y unset so Electron
-  // centers it. State fields are readonly, so this stays on the constructor.
+  // defaults the keeper uses on a first launch, but keep the saved x/y: that is
+  // the display the work-area fill was on. Omitting them centers on the primary
+  // display and the keeper would then remember the wrong monitor.
   const mainWindow = new BrowserWindow({
     ...(restorePlan.replaceWithDefaultSize
-      ? { width: defaultWindowWidth, height: defaultWindowHeight }
+      ? {
+          x: mainWindowState.x,
+          y: mainWindowState.y,
+          width: defaultWindowWidth,
+          height: defaultWindowHeight,
+        }
       : {
           x: mainWindowState.x,
           y: mainWindowState.y,
@@ -4528,6 +4535,12 @@ const createWindow = () => {
   // work-area fill, so that fill cannot become the next restore size (#9461).
   // The real getBounds is restored as soon as the listeners are bound.
   manageWindowStatePreservingNormalBounds(mainWindowState, mainWindow, screen);
+  // The constructor size is not the rectangle the keeper will save. `saveState`
+  // copies the live normal bounds into its closure; `maximize()` after that only
+  // flips the flag, so quit no longer writes the old work-area rectangle back.
+  if (restorePlan.replaceWithDefaultSize) {
+    commitReplacedNormalBounds(mainWindowState, mainWindow);
+  }
   if (shouldRestoreMaximized && !mainWindow.isMaximized()) mainWindow.maximize();
   // Windows can transiently unmaximize during display/DPI re-layout. macOS
   // owns its native Zoom behavior, so do not install the Windows recovery

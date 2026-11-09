@@ -162,6 +162,22 @@ export function normalBoundsForPersistence(
   return persistedBoundsDecision(win, previousNormalBounds, screenApi, platform).bounds;
 }
 
+/**
+ * `electron-window-state` keeps the rectangle it will write in a closure. Its public
+ * fields are getters, so assigning them throws, and it has no setter. `saveState`
+ * is the write it does publish: while the window is normal it copies `getBounds()`
+ * into that closure; once the window is maximized it leaves the rectangle alone and
+ * only updates the flag. Call it after the window exists at the replacement size and
+ * before `maximize()`, or quit persists the loaded work-area rectangle.
+ */
+export function commitReplacedNormalBounds<T extends PersistableWindow>(
+  windowState: { saveState(win: T): void },
+  win: T,
+): void {
+  if (win.isMaximized() || win.isMinimized() || win.isFullScreen()) return;
+  windowState.saveState(win);
+}
+
 export interface ManagedWindowState {
   manage(win: PersistableWindow): void;
 }
