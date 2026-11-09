@@ -97,13 +97,19 @@ describe('mobile Home live activity', () => {
     } finally { vi.useRealTimers(); }
   });
 
-  // Unit: new ActivityKit projection has no prior coverage. The minimum competing
-  // inputs are running + waiting + unread result; Mac ordering must surface waiting.
-  // Also protect read acknowledgement, archive and cached-list exclusion on lock screen.
-  it('projects the island priority and task route from real host activity, then clears read results', () => {
-    const rows = ['running', 'waiting', 'done'].map(id => session(id));
+  // Unit: real store -> ActivityKit projection. The previous test incorrectly
+  // preferred running over an unread result. Regress the reported 1 unread + 5
+  // running case, both result phases, waiting priority, and read acknowledgement.
+  it.each(['completed', 'error'] as const)('prioritizes an unread %s result over running tasks, then clears it once read', (resultPhase) => {
+    const runningIds = Array.from({ length: 5 }, (_, i) => `running-${i}`);
+    const rows = [...runningIds, 'waiting', 'done'].map(id => session(id, { title: id }));
     remoteSessionStore.setDeviceSessions('dev-1', 'Mac', rows);
-    for (const [id, phase] of [['running', 'running'], ['waiting', 'needs-interaction'], ['done', 'completed']] as const) {
+    for (const id of runningIds) {
+      remoteSessionStore.applyRemotePush('dev-1', SESSION_ACTIVITY_CHANNEL, {
+        sessionId: id, phase: 'running', compactDetail: 'private tool arguments',
+      });
+    }
+    for (const [id, phase] of [['waiting', 'needs-interaction'], ['done', resultPhase]] as const) {
       remoteSessionStore.applyRemotePush('dev-1', SESSION_ACTIVITY_CHANNEL, {
         sessionId: id, phase, compactDetail: 'private tool arguments', attention: true,
       });
@@ -113,18 +119,23 @@ describe('mobile Home live activity', () => {
       row => remoteSessionStore.getSessionLiveActivity(row.id, row.deviceLinkDeviceId), labels,
       row => `cindy://sessions/${row.id}?deviceId=${row.deviceLinkDeviceId}`, 'Outdated');
     const current = remoteSessionStore.getSessions();
-    expect(project(current)).toMatchObject({ status: 'attention', detail: 'Waiting', count: 3,
-      attentionCount: 1, runningCount: 1,
+    expect(project(current)).toMatchObject({ status: 'attention', detail: 'Waiting', count: 7,
+      attentionCount: 1, runningCount: 5,
       url: 'cindy://sessions/waiting?deviceId=dev-1' });
-    expect(project(current.filter(row => row.id !== 'waiting'))?.status).toBe('running');
+    const withoutWaiting = current.filter(row => row.id !== 'waiting');
+    expect(project(withoutWaiting)).toMatchObject({ status: resultPhase, title: 'done',
+      detail: labels[resultPhase], count: 6, attentionCount: 0, runningCount: 5,
+      url: 'cindy://sessions/done?deviceId=dev-1' });
     const done = current.filter(row => row.id === 'done');
-    expect(project(done)?.status).toBe('completed');
+    expect(project(done)).toMatchObject({ status: resultPhase, count: 1, runningCount: 0 });
     expect(project(done.map(row => ({ ...row, cacheSeeded: true })))).toBeNull();
     expect(project(done.map(row => ({ ...row, status: 'archived' })))).toBeNull();
     remoteSessionStore.applyRemotePush('dev-1', SESSION_ACTIVITY_CHANNEL, {
       sessionId: 'done', phase: 'completed', compactDetail: '', attention: false,
     });
     expect(project(done)).toBeNull();
+    expect(project(withoutWaiting)).toMatchObject({ status: 'running', count: 5,
+      attentionCount: 0, runningCount: 5 });
   });
 
   it('keeps unread completed/error live activity for the right-slot dots and clears once read', () => {

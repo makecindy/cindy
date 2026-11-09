@@ -28,7 +28,7 @@ export function projectAgentActivity(
     if ((status === 'completed' || status === 'error') && !activity.attention) return [];
     return [{ session, status }];
   });
-  const rank = { attention: 0, running: 1, error: 2, completed: 2 };
+  const rank = { attention: 0, error: 1, completed: 1, running: 2 };
   candidates.sort((a, b) => rank[a.status] - rank[b.status]);
   const selected = candidates[0];
   if (!selected) return null;

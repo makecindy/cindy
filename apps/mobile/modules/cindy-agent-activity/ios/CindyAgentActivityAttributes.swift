@@ -11,6 +11,10 @@ struct CindyAgentActivityAttributes: ActivityAttributes {
     var attentionCount: Int
     var url: String
     var staleDetail: String
+
+    // count already includes waiting and unread results. Derive the left-hand
+    // number from existing fields so activities encoded by older JS still work.
+    var noticeCount: Int { max(0, count - runningCount) }
   }
   var accountId: String
 }

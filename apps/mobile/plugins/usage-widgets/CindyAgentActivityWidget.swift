@@ -54,25 +54,22 @@ private struct AgentActivityMascot: View {
   }
 }
 
-/// Same counts and ordering as the desktop island: waiting · running. Finished
-/// unread tasks use the desktop checkmark, rather than being added to running.
+/// Same counts as the desktop task capsule: waiting + unread results · running.
 private struct AgentActivityCounts: View {
   let state: CindyAgentActivityAttributes.ContentState
   let size: CGFloat
 
   var body: some View {
     HStack(spacing: size * 0.25) {
-      if state.attentionCount > 0 {
-        Text(state.attentionCount, format: .number).foregroundStyle(AgentActivityPalette.attention)
+      if state.noticeCount > 0 {
+        Text(state.noticeCount, format: .number)
+          .foregroundStyle(state.attentionCount > 0 ? AgentActivityPalette.attention : AgentActivityPalette.completed)
       }
-      if state.attentionCount > 0 && state.runningCount > 0 {
+      if state.noticeCount > 0 && state.runningCount > 0 {
         Text("·").foregroundStyle(.secondary)
       }
       if state.runningCount > 0 {
         Text(state.runningCount, format: .number).foregroundStyle(AgentActivityPalette.running)
-      }
-      if state.attentionCount == 0 && state.runningCount == 0 {
-        Image(systemName: "checkmark").foregroundStyle(AgentActivityPalette.completed)
       }
     }
     .font(.system(size: size, weight: .semibold, design: .rounded)).monospacedDigit()
