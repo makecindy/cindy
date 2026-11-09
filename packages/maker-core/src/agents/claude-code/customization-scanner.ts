@@ -63,23 +63,39 @@ const KIND_ORDER: Record<Kind, number> = { skill: 0, command: 1, agent: 2 };
  *
  * 排序: scope (global 先) → kind (skill, command, agent) → name 字母序。
  */
+interface PluginScanTarget {
+  /** Directory matched against `installed_plugins.json#projectPath` and settings. */
+  scanRoot: string;
+  /** Project identity SkillHub groups by. Defaults to `scanRoot`. */
+  ownerRoot?: string;
+}
+
 export async function scanClaudeCustomizations(
   opts: ListCustomizationsOptions,
 ): Promise<ListCustomizationsResult> {
-  // Each working dir contributes its own Git root; SkillHub passes the whole
-  // project catalogue, not just the active one.
-  const roots = (opts.workingDirs ?? []).map((dir) => resolveGitRoot(dir));
+  // Each working dir contributes its own project; SkillHub passes the whole
+  // catalogue, not just the active one. Two dirs inside the same repository
+  // resolve to the same scan root, so the first one owns the entry.
+  const seen = new Set<string>();
+  const targets: PluginScanTarget[] = [];
+  for (const dir of opts.workingDirs ?? []) {
+    const ownerRoot = path.resolve(dir);
+    const scanRoot = resolveGitRoot(dir) ?? ownerRoot;
+    if (seen.has(scanRoot)) continue;
+    seen.add(scanRoot);
+    targets.push({ scanRoot, ownerRoot });
+  }
   return scanClaudeCustomizationsAtConfig(
     opts,
     path.join(os.homedir(), '.claude'),
-    roots.length > 0 ? roots : [undefined],
+    targets,
   );
 }
 
 function scanClaudeCustomizationsAtConfig(
   opts: ListCustomizationsOptions,
   configDir: string,
-  projectRoots?: readonly (string | undefined)[],
+  targets?: readonly PluginScanTarget[],
 ): ListCustomizationsResult {
   const workingDirs = opts.workingDirs ?? [];
   const kindFilter = opts.kinds && opts.kinds.length > 0 ? new Set(opts.kinds) : null;
@@ -95,32 +111,39 @@ function scanClaudeCustomizationsAtConfig(
   // the most specific entry per Skill name, so reordering recent projects never
   // changes what the page shows.
   if (!kindFilter || kindFilter.has('skill')) {
-    const roots = projectRoots && projectRoots.length > 0 ? projectRoots : [undefined];
-    const byName = new Map<string, ReturnType<typeof scanClaudePluginSkills>[number]>();
-    for (const root of new Set(roots)) {
+    // Always run a user-only pass first: a plugin enabled globally but disabled
+    // by every listed project must still appear in the global list.
+    const passes: (PluginScanTarget | undefined)[] = [undefined, ...(targets ?? [])];
+    const seen = new Set<string>();
+    for (const target of passes) {
+      const scanRoot = target?.scanRoot;
       for (const skill of scanClaudePluginSkills({
         configDir,
-        ...(root ? { projectRoot: root } : {}),
+        ...(scanRoot ? { projectRoot: scanRoot } : {}),
       })) {
-        const existing = byName.get(skill.name);
-        if (!existing || existing.scope === 'user') byName.set(skill.name, skill);
+        const ownerRoot = skill.scope === 'user'
+          ? undefined
+          : (target?.ownerRoot ?? scanRoot);
+        // Project-scoped entries stay distinct per project; user entries from
+        // different passes collapse into one.
+        const key = `${skill.name}\u0000${ownerRoot ?? ''}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        result.items.push(
+          readFolderSkill(
+            {
+              engine: 'claude-code',
+              kind: 'skill',
+              scope: skill.scope === 'user' ? 'global' : 'project',
+              dir: skill.folder,
+              namePrefix: skill.pluginName,
+              ...(ownerRoot ? { workingDir: ownerRoot } : {}),
+            },
+            skill.folder,
+            skill.mdPath,
+          ),
+        );
       }
-    }
-    for (const skill of byName.values()) {
-      result.items.push(
-        readFolderSkill(
-          {
-            engine: 'claude-code',
-            kind: 'skill',
-            scope: skill.scope === 'user' ? 'global' : 'project',
-            dir: skill.folder,
-            namePrefix: skill.pluginName,
-            ...(skill.projectRoot ? { workingDir: skill.projectRoot } : {}),
-          },
-          skill.folder,
-          skill.mdPath,
-        ),
-      );
     }
   }
 
@@ -178,13 +201,15 @@ export async function scanClaudeRuntimeSkills(
     current = parent;
   }
   // The walk stops at the nearest Git root (or filesystem root), so the first
-  // entry is the project root iff a `.git` was actually found there. Plugin
-  // installs and project settings are keyed by that root, not by the cwd.
+  // entry is the project root iff a `.git` was actually found there. Claude
+  // projects do not require a repository, so without one the working directory
+  // itself is the project context.
+  const ownerRoot = path.resolve(workingDir);
   const root = workingDirs[0];
-  const projectRoot = root && fs.existsSync(path.join(root, '.git')) ? root : undefined;
+  const scanRoot = root && fs.existsSync(path.join(root, '.git')) ? root : ownerRoot;
   return scanClaudeCustomizationsAtConfig(
     { workingDirs, kinds: ['skill', 'command'] },
     configDir,
-    [projectRoot],
+    [{ scanRoot, ownerRoot }],
   );
 }
