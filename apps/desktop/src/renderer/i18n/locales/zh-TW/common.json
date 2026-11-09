@@ -873,6 +873,7 @@
         "pausedLocal": "已暫停接收外部新任務",
         "cooling": "冷卻中",
         "coolingUntil": "冷卻中 · 約 {{time}} 恢復",
+        "quotaExhausted": "配額已用完",
         "offline": "離線",
         "unreachableHere": "從這台電腦連不上",
         "unavailable": {
@@ -7367,6 +7368,11 @@
         "installedExpand": "展開全部 {{count}} 個已安裝插件",
         "installedCollapse": "收起更多已安裝插件",
         "recommendedSection": "推薦",
+        "todayRecommendations": "今日推薦",
+        "marketSection": "插件市場",
+        "browseMarket": "瀏覽插件市場",
+        "searching": "正在搜尋…",
+        "allLoaded": "已顯示全部 {{count}} 個插件",
         "updatesAvailable": "{{count}} 個插件有可用更新",
         "updateAll": "全部更新",
         "ignoreRound": "忽略本輪",
@@ -7396,7 +7402,15 @@
       },
       "market": {
         "publisherKind": {
-          "official": "官方"
+          "official": "官方",
+          "community": "社群"
+        },
+        "publisherDescription": {
+          "official": "由 Cindy 官方發布及維護",
+          "community": "由社群開發者發布及維護",
+          "team": "由目前組織分享給有權限的成員",
+          "custom": "來自你新增的 Git 或本機資料夾市集",
+          "local": "從本機檔案安裝，或在本機開發"
         },
         "scopeAria": "篩選插件來源",
         "scope": {
@@ -12485,6 +12499,12 @@
       "missingDir": "目錄不存在"
     },
     "pendingQueue": {
+      "stopping": "停止處理中",
+      "queued": "排隊中",
+      "editingInComposer": "正在下方輸入框編輯…",
+      "moveUp": "提前一位",
+      "moveDown": "延後一位",
+      "cancelSend": "取消傳送",
       "regionAria": "待傳送訊息佇列",
       "listAria": "佇列訊息",
       "pausedFooter": "任務已停止，佇列暫停",

@@ -1,6 +1,6 @@
 {
   "source": "apps/desktop/src/renderer/themes/colors.ts",
-  "count": 576,
+  "count": 584,
   "colors": [
     {
       "id": "surface",
@@ -2881,6 +2881,46 @@
       "id": "task-tag-white-check",
       "light": "#525252",
       "dark": "#525252"
+    },
+    {
+      "id": "plugin-identity-official-text",
+      "light": "#2868c8",
+      "dark": "#83b5ff"
+    },
+    {
+      "id": "plugin-identity-official-bg",
+      "light": "rgba(65, 124, 221, 0.11)",
+      "dark": "rgba(65, 124, 221, 0.18)"
+    },
+    {
+      "id": "plugin-identity-community-text",
+      "light": "#8050bb",
+      "dark": "#c4a1ef"
+    },
+    {
+      "id": "plugin-identity-community-bg",
+      "light": "rgba(128, 80, 187, 0.10)",
+      "dark": "rgba(155, 105, 215, 0.16)"
+    },
+    {
+      "id": "plugin-identity-team-text",
+      "light": "#097c78",
+      "dark": "#6dd7cd"
+    },
+    {
+      "id": "plugin-identity-team-bg",
+      "light": "rgba(22, 145, 132, 0.10)",
+      "dark": "rgba(22, 145, 132, 0.16)"
+    },
+    {
+      "id": "plugin-identity-custom-text",
+      "light": "#b36518",
+      "dark": "#eeba70"
+    },
+    {
+      "id": "plugin-identity-custom-bg",
+      "light": "rgba(190, 113, 29, 0.10)",
+      "dark": "rgba(190, 113, 29, 0.16)"
     }
   ]
 }

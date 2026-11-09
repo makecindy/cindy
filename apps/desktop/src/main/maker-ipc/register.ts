@@ -12675,7 +12675,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
      * reconcileCreateOptsAgainstDb 再读当前落库档位,不使用入队时的旧快照。
      */
     resumeWithStoredPermissionMode?: boolean;
-  }): Promise<SendToSessionInternalResult> {
+  }, hostBotDispatch = false): Promise<SendToSessionInternalResult> {
     await assertTaskActionCurrent();
     if (hasTaskActionAuthorization()) params = { ...params, forceQueue: true };
     const {
@@ -12727,11 +12727,23 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     // Check before route/capability reconciliation, then again after waiting for
     // the send lock: a rejected old primary must not bootstrap or consume a restore.
     let dispatchCompanionLink: { role?: string | null; botId?: string | null } | undefined;
-    const rejectShadowedCompanion = async (sessionId: string) => {
+    const rejectUnsupportedTarget = async (sessionId: string) => {
       const [link] = await getDbClient().drizzle
         .select({ role: botSessionLinks.role, botId: botSessionLinks.botId })
         .from(botSessionLinks).where(eq(botSessionLinks.sessionId, sessionId)).limit(1);
       dispatchCompanionLink = link;
+      // A hidden lane is execution context, not a group delivery destination.
+      // Only host-managed group turns associate their output with the timeline;
+      // clientId prefixes and message source labels do not prove that ownership.
+      if (link?.role === 'group' && !hostBotDispatch) {
+        return {
+          ok: false as const,
+          errorCode: 'UNSUPPORTED_CAPABILITY' as const,
+          message: 'This is an internal group session and does not accept external cross-task messages. '
+            + 'The message was not delivered and would not appear in the group chat. '
+            + 'Ask the user to send it in the group chat instead.',
+        };
+      }
       return isShadowedCompanionSession(link, isCompanionShadowed)
         ? { ok: false as const, errorCode: 'AGENT_NOT_READY' as const, message: SHADOWED_COMPANION_INPUT_MESSAGE }
         : null;
@@ -12759,8 +12771,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           message: error instanceof Error ? error.message : String(error),
         };
       }
-      const shadowed = await rejectShadowedCompanion(targetSessionId);
-      if (shadowed) return shadowed;
+      const rejected = await rejectUnsupportedTarget(targetSessionId);
+      if (rejected) return rejected;
       await syncBotLanePermission(targetSessionId);
       await reconcileBotModelRoute(targetSessionId);
       const compactedRuntime = maker.getSession(targetSessionId);
@@ -13094,8 +13106,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     let lockStage = 'resolve-session-meta+row';
     const run = waitPrev.then(async () => {
       await assertTaskActionCurrent();
-      const shadowed = await rejectShadowedCompanion(targetSessionId);
-      if (shadowed) return shadowed;
+      const rejected = await rejectUnsupportedTarget(targetSessionId);
+      if (rejected) return rejected;
       // Internal idle deliveries (including companion cloud-room input) bypass
       // the ordinary send transaction. Restore under this send lock before
       // reading metadata or dispatching; busy inputs defer to the queued path.
@@ -13134,8 +13146,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       await inputCoordinator.ensureQueueRestored(targetSessionId).catch(() => undefined);
       // Hand-over can finish while restoration/reconciliation awaits, before any
       // turn is running. Recheck before either queue admission or idle dispatch.
-      const shadowedAfterRestore = await rejectShadowedCompanion(targetSessionId);
-      if (shadowedAfterRestore) return shadowedAfterRestore;
+      const rejectedAfterRestore = await rejectUnsupportedTarget(targetSessionId);
+      if (rejectedAfterRestore) return rejectedAfterRestore;
       // Private messages and authorization continuations use the durable coordinator, including an idle
       // recipient. This preserves input provenance and one recovery/dispatch path.
       // Pending selections also need the canonical send transaction: it consumes the intent,
@@ -13672,7 +13684,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         queuedMessageId: clientId,
       };
     }
-    return sendToSessionInternal({ ...params, onAccepted: () => params.onAccepted?.() });
+    // This private dispatcher owns Bot/group inputs and their host continuations.
+    // Keep the host marker separate from message params so handoff payloads
+    // cannot supply it. External cross-task delivery uses the default false.
+    return sendToSessionInternal({ ...params, onAccepted: () => params.onAccepted?.() }, true);
   };
 
   setBotInvitationWelcomeDispatch(dispatchBotSessionMessage);

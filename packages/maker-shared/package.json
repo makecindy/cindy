@@ -122,7 +122,8 @@
     "./remote-desktop-mobile": "./src/remote-desktop/mobileHtml.ts",
     "./remote-desktop-scripts": "./src/remote-desktop/viewerScripts.ts",
     "./teammate-todo": "./src/teammateTodo.ts",
-    "./teammate-status": "./src/teammateStatus.ts"
+    "./teammate-status": "./src/teammateStatus.ts",
+    "./host-channel-contract": "./src/hostChannelContract.ts"
   },
   "scripts": {
     "build": "tsc --noEmit",

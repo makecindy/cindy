@@ -29,12 +29,12 @@ import { createPiKernelManager, type PiKernelManager } from './pi-kernel-manager
  */
 
 import path from 'node:path';
-import fs from 'node:fs';
 import { app, BrowserWindow } from 'electron';
 
 import { createBinaryProvisioner } from './factory.js';
 import { isBinaryVersionNotOlder, normalizeBinaryVersion, probeBinaryVersion } from './binary-version-probe.js';
 import { findDevBinary } from './dev-fallback.js';
+import { readCachedBinaryStatus } from './binaryStatus.js';
 import {
   findCachedLinuxRuntimeFallbackBinary,
   findUsableLinuxRuntimeFallbackBinary,
@@ -315,52 +315,29 @@ function formatBytes(bytes: number): string {
 export function getCachedBinaryStatus(kind: AgentBinaryKind): CachedBinaryStatus {
   const cfg = CONFIG[kind];
   const cachedReadyPath = lastReadyPath.get(kind);
-  if (cachedReadyPath) {
-    try {
-      fs.accessSync(cachedReadyPath, fs.constants.X_OK);
-      return { binaryReady: true, binaryPath: cachedReadyPath };
-    } catch {
-      lastReadyPath.delete(kind);
-    }
-  }
-
   // dev:优先查仓库本地 runtime(apps/<devBinDir>/<platform>/<devBinaryName>)。
-  if (!app.isPackaged) {
-    const devPath = findDevBinary({
-      vendorBinDir: cfg.devBinDir,
-      binaryName: cfg.devBinaryName ?? cfg.binaryName,
-    });
-    if (devPath) return { binaryReady: true, binaryPath: devPath };
-  }
-
+  const devPath = app.isPackaged
+    ? null
+    : findDevBinary({
+        vendorBinDir: cfg.devBinDir,
+        binaryName: cfg.devBinaryName ?? cfg.binaryName,
+      });
   // packaged Linux 同步快查只看已知私有路径；不能在 renderer-facing 路径
   // 里执行 CLI --version 或 PATH shell lookup。系统 CLI 由 async prepare 发现。
   // pi 不走 Linux runtime fallback(那条链是 cc/codex 官方 CLI 专用),Linux 上的
   // pi 与其它平台一致:只使用 manifest 管理的 CDN 资产。
-  if (kind !== 'pi') {
-    const linuxFallbackPath = findCachedLinuxRuntimeFallbackBinary(kind);
-    if (linuxFallbackPath) return { binaryReady: true, binaryPath: linuxFallbackPath };
-  }
-
-  // prod / dev fallback miss: 扫 userData/<installSubdir>/<version>/<binary> + .verified
-  try {
-    const installRoot = path.join(app.getPath('userData'), cfg.installSubdir);
-    const versions = fs
-      .readdirSync(installRoot, { withFileTypes: true })
-      .filter((e) => e.isDirectory())
-      .map((e) => e.name);
-    for (const v of versions) {
-      const p = path.join(installRoot, v, cfg.binaryName);
-      const verified = path.join(installRoot, v, '.verified');
-      if (fs.existsSync(p) && fs.existsSync(verified)) {
-        return { binaryReady: true, binaryPath: p };
-      }
-    }
-  } catch {
-    // fs 错 (目录不存在等) → 降级 false
-  }
-
-  return { binaryReady: false };
+  const status = readCachedBinaryStatus({
+    kind,
+    isPackaged: app.isPackaged,
+    userDataDir: app.getPath('userData'),
+    devCandidates: devPath ? [devPath] : [],
+    cachedPath: cachedReadyPath,
+    extraCandidate: kind === 'pi'
+      ? undefined
+      : () => findCachedLinuxRuntimeFallbackBinary(kind),
+  });
+  if (!status.binaryReady && cachedReadyPath) lastReadyPath.delete(kind);
+  return status;
 }
 
 // ── 主入口: prepare ──────────────────────────────────────────────────────────

@@ -873,6 +873,7 @@
         "pausedLocal": "已暫停接外來之新差事",
         "cooling": "方歇",
         "coolingUntil": "冷卻中 · 約 {{time}} 復",
+        "quotaExhausted": "限額已盡",
         "offline": "失聯",
         "unreachableHere": "自此機連不上",
         "unavailable": {
@@ -7367,6 +7368,11 @@
         "installedExpand": "展全部已納法器 {{count}} 件",
         "installedCollapse": "收餘下已納法器",
         "recommendedSection": "所薦",
+        "todayRecommendations": "今日所薦",
+        "marketSection": "法器市集",
+        "browseMarket": "覽法器市集",
+        "searching": "檢索中…",
+        "allLoaded": "諸法器已盡示，共 {{count}} 件",
         "updatesAvailable": "法器 {{count}} 件可更新",
         "updateAll": "盡更新",
         "ignoreRound": "此輪略之",
@@ -7396,7 +7402,15 @@
       },
       "market": {
         "publisherKind": {
-          "official": "官設"
+          "official": "官設",
+          "community": "社群"
+        },
+        "publisherDescription": {
+          "official": "Cindy 官方所製，發布維護",
+          "community": "社群開發者所製，發布維護",
+          "team": "本組織共享於獲准成員",
+          "custom": "取自所添 Git 或本機目錄市集",
+          "local": "由本機檔案安裝，或於本機開發"
         },
         "scopeAria": "篩法器之來源",
         "scope": {
@@ -12485,6 +12499,12 @@
       "missingDir": "目錄不存"
     },
     "pendingQueue": {
+      "stopping": "方止",
+      "queued": "方候",
+      "editingInComposer": "方於下方輸入框修之…",
+      "moveUp": "前移一位",
+      "moveDown": "後移一位",
+      "cancelSend": "罷遣",
       "regionAria": "待遣之訊佇列",
       "listAria": "佇列之訊",
       "pausedFooter": "差事已止，佇列暫停",
