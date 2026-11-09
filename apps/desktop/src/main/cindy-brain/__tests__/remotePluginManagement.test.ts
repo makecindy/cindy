@@ -1,7 +1,8 @@
 import { sharedTaskGuestPeer, providerShareGuestPeer } from '@cindy/device-link';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { RemotePluginManagement, type RemotePluginManagementDeps } from '../remotePluginManagement';
-import { ghostInstallApprovalToken, type InstalledGhost } from '../../../shared/ghost';
+import { confirmedBackgroundSearchCapability, obtainGhostInstallConsent } from '../ghostInstallConsent';
+import { ghostInstallApprovalToken, type GhostManifest, type InstalledGhost } from '../../../shared/ghost';
 import { installedGhostStoragePart } from '../../../shared/pluginIdentity';
 import type { PluginManagementReceipt } from '../../../shared/pluginManagement';
 
@@ -754,6 +755,28 @@ describe('remote local share installation', () => {
     expect(await f.invoke('snapshot', {})).not.toHaveProperty('localShares');
     f.deps.installShare = vi.fn();
     expect(await f.invoke('snapshot', {})).toHaveProperty('localShares', true);
+  });
+  // unit: share installs missed the background-disclosure negotiation added in
+  // 3ed58ec. Exercise the real consent result, not just the prompt property.
+  // Minimal input: one background-search package, with/without controller support.
+  it.each([false, true])('only grants shared background search after negotiated disclosure (%s)', async negotiated => {
+    const f = fixture();
+    const next: GhostManifest = { ...f.ghosts[0].manifest, cindy: { search: ['background_web'] } };
+    let approved: true | undefined;
+    f.deps.installShare = vi.fn(async (_snapshot, prompt, current) => {
+      const decision = await obtainGhostInstallConsent({ mode: 'prompt', prompt,
+        initiator: 'user', origin: 'local-file' }, null, next, snapshot.sha256);
+      current();
+      approved = confirmedBackgroundSearchCapability(decision, null, next);
+    });
+    await f.invoke('begin', { ...input, ...(negotiated ? { backgroundSearchConsentVersion: 1 } : {}) });
+    const receipt = await f.invoke('operation', { operationId: input.operationId });
+    expect(receipt.phase).toBe('confirmation');
+    await f.invoke('answer', { operationId: input.operationId,
+      requestId: receipt.consent!.requestId, confirmed: true });
+    await flush();
+    expect(await f.invoke('operation', { operationId: input.operationId })).toMatchObject({ phase: 'succeeded' });
+    expect(approved).toBe(negotiated ? true : undefined);
   });
   it('installs the clicked fixed package after original consent and replays only its receipt', async () => {
     const f = fixture();

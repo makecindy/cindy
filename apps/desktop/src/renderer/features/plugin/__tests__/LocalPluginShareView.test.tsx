@@ -90,12 +90,13 @@ it.each([false, true])('installs on this computer without requiring a device cho
   expect(io.invoke).not.toHaveBeenCalled();
 });
 
-function remoteHost(supported = true, replacing = false) {
+function remoteHost(supported = true, replacing = false, backgroundSearchSupported = false) {
   let outcome: 'succeeded' | 'cancelled' = 'succeeded';
   io.invoke.mockImplementation(async (_device, channel, [request]) => {
     if (String(channel).includes('manifest')) return { collections: [{ id: 'plugins', actions: [{ id: 'management:snapshot' }] }] };
     if (request.actionId === 'management:snapshot') return { effects: [], result: { version: 1, ghosts: [],
-      market: { items: [], customSourceNames: [], unavailableCustomSourceNames: [] }, ...(supported ? { localShares: true } : {}) } };
+      market: { items: [], customSourceNames: [], unavailableCustomSourceNames: [] }, ...(supported ? { localShares: true } : {}),
+      ...(backgroundSearchSupported ? { backgroundSearchCapabilityApproval: true } : {}) } };
     const operationId = request.input.operationId;
     if (request.actionId === 'management:begin') return { effects: [], result: { operationId, phase: 'confirmation', consent: {
       requestId: 'consent-request', initiator: 'user', origin: 'local-file',
@@ -122,6 +123,25 @@ it('installs on the chosen device with its consent receipt and never invokes loc
   expect(io.invoke.mock.calls.every(([id]) => id === target.deviceId)).toBe(true);
   expect(io.invoke.mock.calls.find(([, , [r]]) => r.actionId === 'management:begin')?.[2][0].input)
     .toMatchObject({ kind: 'install-share', expectedSnapshot: snapshot });
+  expect(io.confirm).toHaveBeenCalledOnce();
+});
+
+// unit: this real share view previously never sent the disclosure version, so
+// a new Host could not approve background search. An old Host must still receive
+// its original request. The ordinary-install tests do not cover this caller.
+it.each([false, true])('negotiates shared background disclosure only with a supporting Host (%s)', async supported => {
+  remoteHost(true, false, supported);
+  const installed = vi.fn(); render(view(installed, control()));
+  const button = await screen.findByRole<HTMLButtonElement>('button', { name: 'sharing.localInstallButton' });
+  await waitFor(() => expect(button.disabled).toBe(false));
+  vi.useFakeTimers();
+  try {
+    await act(async () => { fireEvent.click(button); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(650); });
+    expect(installed).toHaveBeenCalledOnce();
+  } finally { vi.useRealTimers(); }
+  const request = io.invoke.mock.calls.find(([, , [r]]) => r.actionId === 'management:begin')![2][0];
+  expect(request.input.backgroundSearchConsentVersion).toBe(supported ? 1 : undefined);
   expect(io.confirm).toHaveBeenCalledOnce();
 });
 

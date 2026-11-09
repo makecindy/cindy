@@ -105,7 +105,7 @@ function RemoteShareInstall({ snapshot, device, online, onBusy, onError, onInsta
 }) {
   const { t } = useTranslation();
   const { confirm } = useConfirmDialog();
-  const [supported, setSupported] = useState<boolean | null>(null);
+  const [support, setSupport] = useState<{ shares: boolean; backgroundSearch: boolean } | null>(null);
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<'readFailed' | 'unknown' | null>(null);
   const scope = useRef({ owner: getDataOwnerGeneration(), alive: true, online });
@@ -129,16 +129,19 @@ function RemoteShareInstall({ snapshot, device, online, onBusy, onError, onInsta
   const refresh = useCallback(async () => {
     if (!writable()) return;
     const revision = ++readRevision.current;
-    setSupported(null); setStatus(null);
+    setSupport(null); setStatus(null);
     try {
-      const supported = await hasPluginManagement(device.deviceId) &&
-        parsePluginManagementSnapshot(await invoke('snapshot')).localShares === true;
-      if (writable() && revision === readRevision.current) setSupported(supported);
+      const snapshot = await hasPluginManagement(device.deviceId)
+        ? parsePluginManagementSnapshot(await invoke('snapshot')) : null;
+      if (writable() && revision === readRevision.current) setSupport({
+        shares: snapshot?.localShares === true,
+        backgroundSearch: snapshot?.backgroundSearchCapabilityApproval === true,
+      });
     } catch { if (writable() && revision === readRevision.current) setStatus('readFailed'); }
   }, [device.deviceId, invoke, writable]);
   useEffect(() => {
     if (online) void refresh();
-    else { readRevision.current++; setSupported(null); dialog.current?.abort(); }
+    else { readRevision.current++; setSupport(null); dialog.current?.abort(); }
   }, [online, refresh]);
   const acceptReceipt = useCallback(async (next: PluginManagementReceipt) => {
     if (!writable() || next.operationId !== operation.current) return;
@@ -187,13 +190,14 @@ function RemoteShareInstall({ snapshot, device, online, onBusy, onError, onInsta
     return () => { alive = false; clearTimeout(timer); };
   }, [online, busy, poll]);
   const install = async () => {
-    if (!writable() || !supported || operation.current) return;
+    if (!writable() || !support?.shares || operation.current) return;
     const id = crypto.randomUUID(); operation.current = id;
     setBusy(true); onBusy(true); onError(null); setStatus(null);
     try {
       await acceptReceipt(parsePluginManagementReceipt(await invoke('begin', {
         // Icons are presentation only; keep the action within device-link's size bound.
         operationId: id, kind: 'install-share', expectedSnapshot: { ...snapshot, icon: null },
+        ...(support.backgroundSearch ? { backgroundSearchConsentVersion: 1 } : {}),
       }), id));
     } catch (cause) {
       if (!current() || id !== operation.current) return;
@@ -205,11 +209,11 @@ function RemoteShareInstall({ snapshot, device, online, onBusy, onError, onInsta
     }
   };
   return <div className="space-y-3">
-    <Button variant="cta" loading={busy} disabled={busy || !online || supported !== true} onClick={() => void install()}>
+    <Button variant="cta" loading={busy} disabled={busy || !online || !support?.shares} onClick={() => void install()}>
       <Download size={15} aria-hidden />{t(busy ? 'sharing.localInstalling' : 'sharing.localInstallButton', { version: snapshot.version })}
     </Button>
     {!online ? <p className="text-13 text-[var(--text-secondary)]">{t('settings.ghosts.remote.offlineNotice', { device: device.name })}</p>
-      : supported === false ? <p className="text-13 text-[var(--text-secondary)]">{t('sharing.localTargetUnsupported', { device: device.name })}</p> : null}
+      : support?.shares === false ? <p className="text-13 text-[var(--text-secondary)]">{t('sharing.localTargetUnsupported', { device: device.name })}</p> : null}
     {status ? <div role="status" className="space-y-2 text-13 text-[var(--text-secondary)]">
       <p>{t(`settings.ghosts.remote.${status}`)}</p>
       <Button variant="secondary" onClick={() => void (operation.current ? poll() : refresh())}>{t('sharing.retry')}</Button>

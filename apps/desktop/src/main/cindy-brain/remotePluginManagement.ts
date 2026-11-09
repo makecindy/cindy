@@ -365,7 +365,7 @@ export class RemotePluginManagement {
     let sharedSnapshot: LocalPluginShareSnapshot | undefined;
     if (kind === 'install-share') {
       if (!this.deps.installShare || target || Object.keys(input).some(key =>
-        !['operationId', 'kind', 'expectedSnapshot'].includes(key))) return invalid();
+        !['operationId', 'kind', 'expectedSnapshot', 'backgroundSearchConsentVersion'].includes(key))) return invalid();
       try { sharedSnapshot = parseLocalPluginShareSnapshot(input.expectedSnapshot); }
       catch { return invalid(); }
     } else if (input.expectedSnapshot !== undefined) return invalid();
