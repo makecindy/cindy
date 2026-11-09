@@ -70,7 +70,11 @@ vi.mock('electron', () => ({
   shell: {},
   systemPreferences: {},
 }));
-vi.mock('../index.js', () => ({ prewarmVoiceInputProvider: vi.fn() }));
+vi.mock('../index.js', () => ({
+  prewarmVoiceInputProvider: vi.fn(),
+  canGlobalVoiceInputOverlayStartDictation: vi.fn(async () => true),
+  onVoiceInputReady: vi.fn(),
+}));
 vi.mock('../MacModifierShortcutListener.js', () => ({ MacModifierShortcutListener: class {} }));
 vi.mock('../WindowsFunctionKeyShortcutListener.js', () => ({
   WindowsFunctionKeyShortcutListener: class {},
