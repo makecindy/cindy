@@ -657,6 +657,18 @@ Desktop 新增本机 `update-harness-prepare` IPC（Claude Code/Codex、用户�
 原 scoped 修复标记，回复保持兼容。应用更新 IPC、手机与设备间 wire protocol 不变；后台归档只放新缓存目录，旧客户端
 忽略它，不改变原安装目录、凭证、数据库或持久偏好。
 
+## 日志上传编号的区域前缀
+
+Desktop 和 Mobile 的新 `uploadCode` 使用 `CN-XXXX-XXXX` / `GLOBAL-XXXX-XXXX`，
+内部 Dev 构建使用 `DEV-XXXX-XXXX`；随机部分仍保留 8 位。SLS 的 tags、逐条记录和
+客户端返回值都传完整编号，字段名、字符串类型、IPC 和 SLS web-tracking 结构不变。
+格式校验继续接受历史无前缀 `XXXX-XXXX` 编号，历史日志不改写；新旧客户端的显示和
+复制均按不透明字符串处理。回滚后恢复生成无前缀编号，不迁移数据。
+外部检索工具若自行限制了编号长度或正则，需要接受带前缀格式；已有编号按原值查询。
+前缀只隔离不同区域的新编号，不承诺同一区域随机编号唯一。不改变服务端、授权范围
+或 Mobile 原生依赖与配置。实现与回归见 Desktop `log-upload/uploadCode.ts` /
+`__tests__/crashTriggersAndCode.test.ts`、Mobile `debug/diagnosticUpload.ts` / 同名测试。
+
 ## 任务链接保留所属电脑
 
 任务查询返回可选 `sessionUrl`，沿用 `cindy://session/<id>?device=<deviceId>`。
@@ -3168,6 +3180,11 @@ B 上的 Worker 是一条普通任务，`sessions.orca_remote_lead`(migration 01
 - **成员状态可选 `fiveHourTight: true`（2026-10-21）**：只在带 `quota` 时出现，表示这台的 5 小时配额已用 85% 以上、离重置还有
   1 小时以上（provider-groups.md §5 第 0 条）。同账号电脑据此不把它当作任务进行中换号的目标。旧组所在电脑不回，查看端按不紧张处理
   （最坏是提议后组所在电脑按自己的排序选不中它，照常留在原处）；旧查看端忽略。`parseProviderGroupRemoteView` 只认 `true`。
+- **成员状态可选 `usageLimit: { resetAtMs: number | null }`（2026-10-22）**：仅当可信快照确认该成员配额耗尽且状态为 `cooling` 时携带，
+  供本机管理与同账号远程列表显示「配额已用完」、配额重置倒计时及警示圆点。时刻来自配额窗口，与可能更晚结束的其他冷却分开；未知为 `null`。
+  `parseProviderGroupRemoteView` 只接收冷却中的非分享成员，时刻须为正安全整数或 `null`；不从普通冷却推断配额原因。
+  旧组所在电脑不带该字段，查看端保留「冷却中」；旧查看端忽略该字段。受邀者匿名状态白名单不带此信息，分享来的成员不读取配额。
+  不新增通道、请求参数、权限、持久状态或服务端变更，不改变分配与恢复策略。
 
 ## 供应商组任务进行中换号
 
@@ -4126,6 +4143,14 @@ PC 同源 ghostPermissionItems 声明摘要投影并排除 tool，以请求 loca
 现有 `plugins` 远程资源以可选 action `management:snapshot` 声明 version 1 管理能力。
 新增 `management:market-detail/begin/operation/answer/cancel`，沿既有 resource invoke、
 同账号设备授权和 owner 边界执行，不新增通用 IPC allowlist 或服务端协议。
+新版插件页复用 `management:snapshot` 的可选只读参数：`{read:'capabilities'}` 只返回
+`catalogPaging: true`；`{read:'installed'}` 只返回已装管理及维护投影；
+`{read:'catalog',query}` 返回目标 Host 的一页市场项、游标、首批完整数量及本地来源统计；
+`{read:'recommendations'}` 返回本次最多 12 个公开官方候选。查询、版本、来源和已装判定均在
+目标 Host 执行，本地自定义来源不上传市场服务器。新控制端先探测能力，只有旧 Host 明确
+拒绝非空输入（`INVALID_PARAMS`）才进入既有 v1 快照路径；普通读取失败不得回退全量。
+旧控制端的空输入仍返回原有 v1 全量快照，旧 Host 的历史网络限制保留。推荐池由页面持有，
+切换列表、搜索及详情返回不重新请求；没有新增远程 channel、授权或 relay 配置。
 `management:snapshot` 的可选 `projects` 字段投影目标 Host 的最近项目 ID、显示名及可选只读
 `path`，用于复用本机 Project Scope 的目录展示（含暂时不存在的最近目录，不按任务归档过滤）；
 控制端以 Host 生成的项目 ID 请求 `management:project-state`，返回该项目的禁用实例和

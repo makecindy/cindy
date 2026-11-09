@@ -96,19 +96,13 @@ import type { Effort } from '@/lib/userPreferences.types';
 import { router } from './router';
 
 /**
- * LoginHandoffProvider 的 auth 接线壳:LoginHandoffContext 模块本身不 import
- * AuthContext(避免传递性引入重依赖),推进锚里的「auth 初始化完成」由本壳从
- * useAuth 取值下传(Step 3b WHAT2 宿主契约)。
+ * 动画消费 AppShellCover 派生的当前目标；AuthContext 仍拥有认证和账号边界。
  */
 function LoginHandoffHost({ children }: { children: React.ReactNode }) {
-  const { isInitializing, isAuthenticated, canEnterApp } = useAuth();
-  const { coverHeld } = useAppShellCover();
+  const { isInitializing, canEnterApp } = useAuth();
+  const { startupTarget } = useAppShellCover();
   return (
-    <LoginHandoffProvider
-      authResolved={!isInitializing}
-      authenticated={isAuthenticated || canEnterApp}
-      coverHeld={coverHeld}
-    >
+    <LoginHandoffProvider target={startupTarget}>
       {/* 认证恢复后已登录(直进受保护路由、LoginPage 不挂载)时结束首启亮色门,
           避免 renderer localStorage 被清空但主进程仍持有会话时整个已登录会话
           被永久锁亮色;未登录场景仍由 LoginPage 卸载结束门(见组件头注释)。 */}

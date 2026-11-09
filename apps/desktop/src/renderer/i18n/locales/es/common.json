@@ -891,6 +891,7 @@
         "pausedLocal": "No aceptar nuevas tareas de otras computadoras",
         "cooling": "Enfriándose",
         "coolingUntil": "En espera · Disponible aproximadamente a las {{time}}",
+        "quotaExhausted": "Cuota agotada",
         "offline": "Sin conexión",
         "unreachableHere": "No puedo acceder desde esta computadora",
         "unavailable": {
@@ -7475,6 +7476,11 @@
         "installedExpand": "Mostrar los {{count}} complementos instalados",
         "installedCollapse": "Ocultar complementos instalados adicionales",
         "recommendedSection": "Recomendado",
+        "todayRecommendations": "Recomendados de hoy",
+        "marketSection": "Mercado de complementos",
+        "browseMarket": "Explorar el mercado de complementos",
+        "searching": "Buscando…",
+        "allLoaded": "Se muestran los {{count}} complementos",
         "updatesAvailable": "{{count}} actualizaciones de complementos disponibles",
         "updateAll": "Actualizar todos",
         "ignoreRound": "Ignorar esta vez",
@@ -7504,7 +7510,15 @@
       },
       "market": {
         "publisherKind": {
-          "official": "Oficial"
+          "official": "Oficial",
+          "community": "Comunidad"
+        },
+        "publisherDescription": {
+          "official": "Publicado y mantenido por Cindy",
+          "community": "Publicado y mantenido por desarrolladores de la comunidad",
+          "team": "Compartido por tu organización con los miembros autorizados",
+          "custom": "De un mercado Git o de una carpeta local que añadiste",
+          "local": "Instalado desde un archivo local o desarrollado en este equipo"
         },
         "scopeAria": "Filtrar orígenes de complementos",
         "scope": {
@@ -12629,6 +12643,12 @@
       "missingDir": "Carpeta no encontrada"
     },
     "pendingQueue": {
+      "stopping": "Parando",
+      "queued": "En cola",
+      "editingInComposer": "Editando en el cuadro de entrada a continuación…",
+      "moveUp": "Mover antes",
+      "moveDown": "Mover más tarde",
+      "cancelSend": "Cancelar envío",
       "regionAria": "Cola de mensajes pendientes",
       "listAria": "Mensajes en cola",
       "pausedFooter": "Tarea detenida, cola en pausa",

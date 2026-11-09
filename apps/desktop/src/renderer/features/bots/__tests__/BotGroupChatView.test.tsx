@@ -1177,10 +1177,11 @@ describe('BotGroupChatView', () => {
     await user.type(within(panel).getByRole('textbox'), 'Unsent thread reply');
     if (kind === 'image') fireEvent.load(screen.getByAltText('photo.png'));
     await user.click(screen.getByRole('button', { name: kind === 'image' ? 'photo.png' : 'note.md' }));
-    // Unit / PR #9497 CI: cold TextLightbox imports can exceed waitFor's 1s
-    // deadline on Windows. Await the real lazy module before checking the UI;
-    // keep the focus, Escape-order and draft assertions below unchanged.
+    // PR #9499 CI: the first text preview imports the real editor bundle. Wait
+    // for that import inside act before starting the DOM wait; cold Windows
+    // transforms can exceed its 1s budget. Keep the Escape/draft assertions below.
     if (kind !== 'image') await act(async () => { await vi.dynamicImportSettled(); });
+    // 文本预览弹窗按需加载：首次打开要等分包挂载后才有遮罩层。
     const preview = kind === 'image'
       ? document.activeElement!
       : await waitFor(() => {
