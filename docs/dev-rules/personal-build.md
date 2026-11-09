@@ -122,6 +122,26 @@ use the current GitHub CLI identity on each prepare. `base` defaults to the repo
   and add this separate registry: older tooling ignores the new property instead of failing to parse
   object-valued sources. The updated supervisor/build tooling is required to consume the registry.
 
+### macOS input permission identity
+
+Signed personal runtimes also embed `cindy-macos-desktop-input` under
+`Contents/Resources/tools/remote-desktop`, signed with the shell's developer certificate.
+The native receipt declares `capabilities.desktopInput`; source-mode Main then uses that
+sealed executable instead of compiling an ad-hoc copy in the profile cache. A declared but
+missing helper fails permission detection rather than silently changing identities. Both Swift
+sources participate in the runtime cache key so native changes rebuild the shell.
+
+The personal helper's compile-time caller mode accepts only its enclosing signed personal app,
+matching its team, exact Main executable, sealed helper bytes and kernel-audited stdio peer.
+It does not claim the hardened security boundary of official builds: personal source apps still
+run writable JavaScript. Official helpers retain their existing bundle allowlist and hardened
+runtime requirement; ordinary development checkouts retain their existing development binding.
+
+The system's app switch is not acceptance evidence. After an authorized switch, check screen
+recording and the actual input helper separately. Existing macOS grants may need user renewal;
+never edit the TCC database, substitute Main's grant for the helper probe, or report a grant merely
+because the app is signed. Building and isolated probing must not restart the active instance.
+
 ## Preparation and updates
 
 Each `prepare` uses a **new output directory**, preserving existing builds and dirty source worktrees.

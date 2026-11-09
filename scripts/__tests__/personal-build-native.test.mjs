@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {createHash} from 'node:crypto';
-import {sdkSupported,nativeIdentity,detachRuntime,personalBundleId} from '../personal-build/native-capabilities.mjs';
+import {sdkSupported,nativeIdentity,detachRuntime,personalBundleId,preparePersonalInput} from '../personal-build/native-capabilities.mjs';
 test('Live Activity SDK gate rejects old/invalid SDKs and accepts newer SDKs',()=>{
  for(const v of ['27.0','27.2','26.9','','invalid']) assert.equal(sdkSupported(v),false,v);
  for(const v of ['27.3','27.3.1','28.0']) assert.equal(sdkSupported(v),true,v);
@@ -137,4 +137,29 @@ test('personal shell accepts task URLs, folders and cartridges without claiming 
   assert.ok(!p.CFBundleDocumentTypes.some(t=>t.CFBundleTypeExtensions?.includes('cshare')));
  }
  assert.throws(()=>personalOpenTypes('unknown'),/Invalid/);
+});
+
+// Regression: native preparation omitted the input executable, forcing a profile
+// cache build with an unrelated ad-hoc identity. Filesystem integration with a
+// fake compiler checks the production build entry and cleanup on compiler failure.
+test('personal preparation embeds the input helper and propagates build failure',()=>{
+ const root=fs.mkdtempSync(path.join(os.tmpdir(),'personal-input-build-'));
+ try {
+  for(const [file,text] of [
+   ['packages/remote-credentials-native/Sources/DesktopNativeCaller/DesktopNativeCaller.swift','caller fixture'],
+   ['apps/desktop/native/remote-desktop/macos-input.swift','input fixture'],
+  ]) {const p=path.join(root,file);fs.mkdirSync(path.dirname(p),{recursive:true});fs.writeFileSync(p,text);}
+  const app=path.join(root,'Cindy.app');let temporary;
+  preparePersonalInput(root,app,(cmd,args)=>{
+   assert.equal(cmd,'xcrun');assert.deepEqual(args.slice(0,4),['swiftc','-D','DESKTOP_INPUT_PERSONAL','-O']);
+   temporary=path.dirname(args[4]);assert.equal(fs.readFileSync(args[4],'utf8'),'caller fixture\ninput fixture');
+   fs.writeFileSync(args.at(-1),'compiled fixture');
+  });
+  assert.equal(fs.readFileSync(path.join(app,'Contents/Resources/tools/remote-desktop/cindy-macos-desktop-input'),'utf8'),'compiled fixture');
+  assert.equal(fs.existsSync(temporary),false);
+  assert.throws(()=>preparePersonalInput(root,app,(_cmd,args)=>{
+   temporary=path.dirname(args[4]);throw Error('compiler failed');
+  }),/compiler failed/);
+  assert.equal(fs.existsSync(temporary),false);
+ }finally{fs.rmSync(root,{recursive:true,force:true});}
 });
