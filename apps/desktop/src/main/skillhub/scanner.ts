@@ -49,6 +49,12 @@ export interface Skill {
   cindyEnabled?: boolean;
   canUninstall?: boolean;
   managedByPlugin?: boolean;
+  /**
+   * Claude Code plugin-provided Skill. Its content lives outside the user-skill
+   * roots (the plugin cache or a marketplace checkout), so the scan attests the
+   * path instead of relying on the lexical whitelist.
+   */
+  pluginSkill?: boolean;
   builtIn?: boolean;
   uninstallLinkOnly?: boolean;
   /** All lexical discovery aliases; Main owns their validation. */

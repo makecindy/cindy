@@ -286,6 +286,9 @@ export function buildSkillList(input: SkillListProjectionInput): ScanResult {
           // 不归 Cindy 管，不能当普通 Skill 卸载。两种情况都归入 managedByPlugin，
           // 由 UI 禁用开关并提示到所属插件页管理。
           managedByPlugin: pluginManaged || isPluginManagedSkillPath(realPath, managedSkillRoots),
+          // 只有 Claude Code 插件的 Skill 需要「扫描已确认」的读取授权：
+          // 内容在插件缓存或 marketplace checkout 下，词法白名单不覆盖。
+          ...(pluginManaged ? { pluginSkill: true } : {}),
           canUninstall: !builtIn && !pluginManaged && target !== null, uninstallLinkOnly: target?.linkOnly ?? false };
       })() : {}),
       ...(project ? { projectRoot: project.projectRoot } : {}),

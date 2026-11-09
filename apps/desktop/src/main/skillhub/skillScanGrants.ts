@@ -15,7 +15,13 @@ export interface SkillScanGrantInput {
 /** Private Main/worker snapshot; never sent to Renderer. Operations revalidate it. */
 export interface SkillScanGrants {
   error?: string;
-  entries: Array<{ root: string; projectRootKey?: string; builtIn?: boolean }>;
+  entries: Array<{
+    root: string;
+    projectRootKey?: string;
+    builtIn?: boolean;
+    /** Scan-attested Claude Code plugin Skill root; bypasses the lexical whitelist. */
+    pluginSkill?: boolean;
+  }>;
   records: Array<{ skill: Skill; physicalIdentity: string; target: LocalSkillTarget | null }>;
 }
 
@@ -72,6 +78,27 @@ export function prepareSkillScanGrants(
       if (root && entryKey && !seenEntries.has(entryKey)) {
         seenEntries.add(entryKey);
         entries.push({ root, builtIn: true });
+      }
+      continue;
+    }
+    // Claude Code plugin Skills live under the plugin cache or a marketplace
+    // checkout — neither matches the user-skill lexical whitelist. The scan
+    // already confirmed the folder holds SKILL.md, so attest that exact
+    // physical path instead of widening the whitelist.
+    if (skill.pluginSkill === true) {
+      try {
+        const root = fs.realpathSync.native(skill.absolutePath);
+        const entryKey = `${root}\0${skillProjectRootKey ?? ''}`;
+        if (!seenEntries.has(entryKey)) {
+          seenEntries.add(entryKey);
+          entries.push({
+            root,
+            pluginSkill: true,
+            ...(skillProjectRootKey ? { projectRootKey: skillProjectRootKey } : {}),
+          });
+        }
+      } catch {
+        // Folder disappeared between scan and grant; nothing to authorize.
       }
       continue;
     }

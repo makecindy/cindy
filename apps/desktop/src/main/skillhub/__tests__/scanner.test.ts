@@ -28,6 +28,7 @@ import {
   writeSkillFile,
 } from '../scanner';
 import type { Maker } from '@cindy/maker-core';
+import { prepareSkillScanGrants } from '../skillScanGrants';
 import { registryService, type StoredInstall } from '../registry';
 
 const tempRoots: string[] = [];
@@ -1237,5 +1238,47 @@ describe('skill file access', () => {
       success: true,
       entries: [{ name: 'settings.json', kind: 'file' }],
     });
+  });
+});
+
+describe('plugin Skill grants', () => {
+  it('attests the plugin root so its content is readable outside the user whitelist', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'skillhub-plugin-grant-'));
+    tempRoots.push(root);
+    const skillDir = path.join(root, 'plugins', 'cache', 'alpha', '1.0.0', 'skills', 'browser');
+    fs.mkdirSync(skillDir, { recursive: true });
+    const mdPath = path.join(skillDir, 'SKILL.md');
+    fs.writeFileSync(mdPath, '---\nname: browser\ndescription: Plugin skill\n---\nBody\n', 'utf-8');
+
+    const grants = prepareSkillScanGrants({
+      skills: [{
+        id: 'claude-code:skill:global:alpha:browser',
+        urlKey: 'skill:global:alpha:browser',
+        engine: 'claude-code' as const,
+        linkedEngines: [],
+        kind: 'skill' as const,
+        scope: 'global' as const,
+        name: 'alpha:browser',
+        absolutePath: skillDir,
+        discoveredPath: skillDir,
+        mdPath,
+        files: [],
+        registryEntry: null,
+        pluginSkill: true,
+      }],
+      managedSkillRoots: [],
+      builtInSkills: [],
+    });
+
+    expect(grants.entries).toEqual([
+      expect.objectContaining({ root: fs.realpathSync.native(skillDir), pluginSkill: true }),
+    ]);
+
+    // 词法白名单不认 plugins/cache 布局；只有扫描确认的根能读到内容。
+    await expect(readSkillContent({ mdPath })).resolves.toMatchObject({ success: false });
+    await expect(readSkillContent({
+      mdPath,
+      attestedRoot: grants.entries[0]!.root,
+    })).resolves.toMatchObject({ success: true });
   });
 });
