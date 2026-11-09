@@ -307,6 +307,9 @@ async function submit(options: {
     model: seeded?.model ?? environment.calibratedDraftModel,
     effort: runInNewContext(executable('draftInitialEffort'), {
       ...environment, localDraftEffort, draftSeedSelection: seeded, targetSelectableProviders,
+      // 这份 harness 不演「被控端快照里记着档位」的场景;档位相关场景在
+      // newMakerDraftTargetCatalog.test.ts 的 effortOf 里。
+      deviceDraftDefaults: null,
     })(),
   };
   Object.assign(environment, { draftInitialModel: selection.model, draftInitialEffort: selection.effort });

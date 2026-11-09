@@ -2356,9 +2356,14 @@ export function NewMakerDraftRoute() {
         // 档位记忆是**按模型**的:上一次选的是别的型号时,那个档位不能带过来 —— 旧型号与新型号
         // 都接受 low 时,reconcileInvocationEffort 会把旧值保留下来,会话就在 low 上建起来,
         // 而不是这个型号记住的 / 默认的那一档(Codex review #9369)。
+        //
+        // 普通 device-link 草稿(没有 agent-device 绑定)同样要查**被控端**的快照:
+        // deviceDraftDefaults 带着被控端的草稿值与 providerModelMemory,为 N 记过的档位就在
+        // 里面;强制落空会让 requested 一路掉到**控制端**的 localDraftEffort, reconcile 一保留,
+        // 被控端为 N 记着 high 的目标就被建成了控制端的 low(Codex review #9369)。
         const recalled = effectiveAgentDeviceId
           ? recallAgentDeviceSelection(effectiveAgentDeviceId, capabilityAgentKind)
-          : null;
+          : deviceDraftDefaults;
         const rememberedEffort =
           recalled?.model === calibratedDraftModel ? recalled.effort : undefined;
         const perModelEffort = chatInitialProviderId
@@ -2389,6 +2394,7 @@ export function NewMakerDraftRoute() {
     targetSelectableProviders,
     capabilityAgentKind,
     effectiveAgentDeviceId,
+    deviceDraftDefaults,
     chatInitialProviderId,
   ]);
 
@@ -2399,9 +2405,11 @@ export function NewMakerDraftRoute() {
   useEffect(() => {
     // holder 同步到显示的那一对(Codex review #9369)
     if (!usesDeviceCatalog || !dlSel) return;
-    // 播种值可用时 holder 就是对的(它就是显示的那一个),不动它。
-    if (draftSeedSelection) return;
-    if (dlSel.model === draftInitialModel) return;
+    // 型号和来源都要对上才算「holder 就是显示的那一个」:播种型号还能路由、但只剩**另一个
+    // 来源**提供它时(播种来源不再提供该型号),显示与提交都落在那个来源上 —— holder 留在
+    // 播种来源会让 effort / Fast 写穿打到不提供该型号的来源上,agent-device 记忆也会留住
+    // 旧来源(Codex review #9369)。
+    if (dlSel.model === draftInitialModel && dlSel.providerId === chatInitialProviderId) return;
     setDlSel({
       ...dlSel,
       model: draftInitialModel,
@@ -2411,7 +2419,6 @@ export function NewMakerDraftRoute() {
   }, [
     usesDeviceCatalog,
     dlSel,
-    draftSeedSelection,
     draftInitialModel,
     chatInitialProviderId,
     draftInitialEffort,

@@ -612,6 +612,7 @@ describe('new task model falls back when the seeded model is empty', () => {
         targetSelectableProviders,
         capabilityAgentKind: 'pi',
         effectiveAgentDeviceId: 'share:abc',
+        deviceDraftDefaults: null,
         // 目录里只有这一家来源,最终来源就是它。
         chatInitialProviderId: 'shared-source',
         recallAgentDeviceSelection: () =>
@@ -786,6 +787,8 @@ describe('the effort follows the final provider and model', () => {
     calibratedDraftModel?: string;
     localDraftEffort?: Effort | null;
     recallAgentDeviceSelection?: () => unknown;
+    deviceDraftDefaults?: unknown;
+    effectiveAgentDeviceId?: string | null;
   }): Effort | null {
     return callback<() => Effort | null>('draftInitialEffort', {
       draftSeedSelection: null,
@@ -795,7 +798,8 @@ describe('the effort follows the final provider and model', () => {
       agentCatalogProviders: bindings.agentCatalogProviders,
       targetSelectableProviders: selectableProviders(bindings.agentCatalogProviders),
       capabilityAgentKind: 'pi',
-      effectiveAgentDeviceId: 'share:abc',
+      effectiveAgentDeviceId: bindings.effectiveAgentDeviceId === undefined ? 'share:abc' : bindings.effectiveAgentDeviceId,
+      deviceDraftDefaults: bindings.deviceDraftDefaults ?? null,
       chatInitialProviderId: bindings.chatInitialProviderId,
       recallAgentDeviceSelection: bindings.recallAgentDeviceSelection ?? (() => null),
       getModel,
@@ -826,6 +830,26 @@ describe('the effort follows the final provider and model', () => {
         effort: 'low',
         providerModelMemory: { 'pi:chosen': { effortByModel: { 'shared-model': 'high' } } },
       }),
+    });
+    expect(effort).toBe('high');
+  });
+
+  it('resolves the fallback effort from the controlled-device snapshot for an ordinary draft', () => {
+    // 普通 device-link 草稿(没有 agent-device 绑定,effectiveAgentDeviceId 为空):被控端
+    // 快照(deviceDraftDefaults)的 providerModelMemory 为 N 记着 high。强制落空会让 requested
+    // 一路掉到**控制端**的 localDraftEffort(low),reconcile 一保留,被控端为 N 记着 high 的
+    // 目标就被建成了 low(Codex review #9369)。
+    const providers = [provider('chosen', ['low', 'high'])];
+    const effort = effortOf({
+      agentCatalogProviders: providers,
+      chatInitialProviderId: 'chosen',
+      effectiveAgentDeviceId: null,
+      deviceDraftDefaults: {
+        model: 'other-model',
+        effort: 'low',
+        providerModelMemory: { 'pi:chosen': { effortByModel: { 'shared-model': 'high' } } },
+      },
+      localDraftEffort: 'low',
     });
     expect(effort).toBe('high');
   });
@@ -885,7 +909,6 @@ describe('the remote draft holder follows the displayed model', () => {
     effect('holder 同步到显示的那一对', {
       usesDeviceCatalog: true,
       dlSel: staleHolder,
-      draftSeedSelection: null,
       draftInitialModel: 'other-model',
       chatInitialProviderId: 'other',
       draftInitialEffort: 'medium',
@@ -904,12 +927,32 @@ describe('the remote draft holder follows the displayed model', () => {
     effect('holder 同步到显示的那一对', {
       usesDeviceCatalog: true,
       dlSel: staleHolder,
-      draftSeedSelection: { model: 'shared-model', effort: 'high' },
       draftInitialModel: 'shared-model',
       chatInitialProviderId: 'source',
       draftInitialEffort: 'high',
       setDlSel,
     })();
     expect(setDlSel).not.toHaveBeenCalled();
+  });
+
+  it('synchronizes the holder when only the seed provider lost the model', () => {
+    // 播种型号还能路由,但只剩**另一个来源**提供它(播种来源不再提供该型号):显示与提交
+    // 都落在那个来源上,holder 留在播种来源会让 effort / Fast 写穿打到不提供该型号的来源上,
+    // agent-device 记忆也会留住旧来源(Codex review #9369)。
+    const setDlSel = vi.fn();
+    effect('holder 同步到显示的那一对', {
+      usesDeviceCatalog: true,
+      dlSel: staleHolder,
+      draftInitialModel: 'shared-model',
+      chatInitialProviderId: 'other',
+      draftInitialEffort: 'high',
+      setDlSel,
+    })();
+    expect(setDlSel).toHaveBeenCalledWith({
+      ...staleHolder,
+      model: 'shared-model',
+      providerId: 'other',
+      effort: 'high',
+    });
   });
 });
