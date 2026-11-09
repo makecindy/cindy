@@ -163,6 +163,18 @@ describe('normalBoundsForPersistence', () => {
     ).toEqual(current);
     expect(boundsFillWorkArea({ x: 0, y: 19, width: 1400, height: 845 }, workArea)).toBe(false);
   });
+
+  it('leaves a half-screen snap at its own size instead of marking it maximized', () => {
+    const half = { x: 0, y: 19, width: 768, height: 845 };
+    const win = {
+      isMaximized: () => false,
+      isMinimized: () => false,
+      isFullScreen: () => false,
+      isSnapped: () => true,
+      getBounds: () => half,
+    };
+    expect(normalBoundsForPersistence(win, previous, screenApi, 'win32')).toBeNull();
+  });
 });
 
 describe('manageWindowStatePreservingNormalBounds', () => {
@@ -354,5 +366,72 @@ describe('manageWindowStatePreservingNormalBounds', () => {
       { platform: 'win32' },
     );
     expect(relaunch).toEqual({ restoreMaximized: true, replaceWithDefaultSize: false });
+  });
+
+  it('keeps the maximize intent when a filled window is minimized and then quit', () => {
+    const window = createWindow({ x: 128, y: 41, width: 1280, height: 800 });
+    const saved: { width?: number; isMaximized?: boolean } = {};
+    manageWindowStatePreservingNormalBounds(
+      {
+        manage: (win) => {
+          const read = win.getBounds.bind(win);
+          const write = () => {
+            const normal = !win.isMaximized() && !win.isMinimized() && !win.isFullScreen();
+            if (normal) saved.width = read().width;
+            saved.isMaximized = win.isMaximized();
+          };
+          win.on?.('resize', write);
+          win.on?.('close', write);
+        },
+      },
+      window.win,
+      screenApi,
+      'win32',
+    );
+
+    window.emit('resize');
+    window.win.isSnapped = () => true;
+    window.setBounds({ x: 0, y: 19, width: 1536, height: 845 });
+    window.emit('resize');
+    // Minimizing reports the pre-snap rectangle. Without a remembered intent the
+    // close below would persist that small size with isMaximized false.
+    window.win.isMinimized = () => true;
+    window.setBounds({ x: 128, y: 41, width: 1280, height: 800 });
+    window.emit('close');
+
+    expect(saved).toEqual({ width: 1280, isMaximized: true });
+    expect(
+      planWindowRestore(
+        { x: 128, y: 41, width: 1280, height: 800, isMaximized: saved.isMaximized },
+        screenApi,
+        { platform: 'win32' },
+      ).restoreMaximized,
+    ).toBe(true);
+  });
+
+  it('does not mark a normal window maximized just because it was minimized', () => {
+    const window = createWindow({ x: 128, y: 41, width: 1280, height: 800 });
+    const saved: { width?: number; isMaximized?: boolean } = {};
+    manageWindowStatePreservingNormalBounds(
+      {
+        manage: (win) => {
+          const read = win.getBounds.bind(win);
+          const write = () => {
+            if (!win.isMaximized() && !win.isMinimized() && !win.isFullScreen()) {
+              saved.width = read().width;
+            }
+            saved.isMaximized = win.isMaximized();
+          };
+          win.on?.('close', write);
+        },
+      },
+      window.win,
+      screenApi,
+      'win32',
+    );
+
+    window.win.isMinimized = () => true;
+    window.emit('close');
+    expect(saved).toEqual({ isMaximized: false });
   });
 });

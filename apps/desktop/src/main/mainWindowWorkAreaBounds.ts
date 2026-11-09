@@ -143,13 +143,22 @@ export function persistedBoundsDecision(
   screenApi: Pick<WorkAreaScreen, 'getDisplayMatching'>,
   platform: NodeJS.Platform = process.platform,
 ): PersistedBoundsDecision {
-  if (platform !== 'win32' || win.isMaximized() || win.isMinimized() || win.isFullScreen()) {
+  if (platform !== 'win32' || win.isMaximized() || win.isFullScreen()) {
+    return { bounds: null, reportMaximized: false };
+  }
+  if (win.isMinimized()) {
+    // The live rectangle is the pre-minimize size and is not a new decision.
+    // Whether the synthetic maximize survives is decided by the caller, which
+    // remembers the last non-minimized state. A merely minimized normal window
+    // must not gain a maximize flag here.
     return { bounds: null, reportMaximized: false };
   }
   const bounds = win.getBounds();
-  const snapped = win.isSnapped?.() === true;
   const fillsWorkArea = boundsFillWorkArea(bounds, screenApi.getDisplayMatching(bounds).workArea);
-  if (!snapped && !fillsWorkArea) return { bounds: null, reportMaximized: false };
+  // Half and quarter Snap Layouts also set isSnapped, but their rectangle is a
+  // legal restore size. Only a work-area fill is remembered as maximized; any
+  // other snap keeps the live bounds and leaves the maximize flag alone.
+  if (!fillsWorkArea) return { bounds: null, reportMaximized: false };
   return { bounds: previousNormalBounds ?? bounds, reportMaximized: true };
 }
 
@@ -229,6 +238,8 @@ export function manageWindowStatePreservingNormalBounds(
     windowState.manage(windowStateView(win, () => win.getBounds()));
     return;
   }
+  // A window that is already filling the work area when tracking starts has no
+  // earlier size to return to. Otherwise the live rectangle is the restore size.
   let previousNormalBounds: WorkAreaRect | null = persistedBoundsDecision(
     win,
     null,
@@ -237,9 +248,19 @@ export function manageWindowStatePreservingNormalBounds(
   ).reportMaximized
     ? null
     : { ...win.getBounds() };
+  // Survives a minimize. The minimized rectangle is the pre-snap size, so the
+  // decision cannot be re-derived from it; clearing this only happens when the
+  // window is back at a genuinely normal size.
+  let syntheticMaximized = persistedBoundsDecision(
+    win,
+    null,
+    screenApi,
+    platform,
+  ).reportMaximized;
   const originalGetBounds = win.getBounds.bind(win);
   const boundsForKeeper = () => {
     const live = originalGetBounds();
+    if (win.isMinimized()) return previousNormalBounds ?? live;
     const decision = persistedBoundsDecision(
       windowStateView(win, () => live),
       previousNormalBounds,
@@ -251,21 +272,25 @@ export function manageWindowStatePreservingNormalBounds(
   const remember = () => {
     if (win.isMaximized() || win.isMinimized() || win.isFullScreen()) return;
     const live = originalGetBounds();
-    if (
-      persistedBoundsDecision(windowStateView(win, () => live), null, screenApi, platform)
-        .reportMaximized
-    ) {
-      return;
-    }
+    const filling = persistedBoundsDecision(
+      windowStateView(win, () => live),
+      null,
+      screenApi,
+      platform,
+    ).reportMaximized;
+    syntheticMaximized = filling;
+    if (filling) return;
     previousNormalBounds = live;
   };
-  const reportMaximized = () =>
-    persistedBoundsDecision(
+  const reportMaximized = () => {
+    if (win.isMinimized()) return syntheticMaximized;
+    return persistedBoundsDecision(
       windowStateView(win, originalGetBounds),
       previousNormalBounds,
       screenApi,
       platform,
     ).reportMaximized;
+  };
   const view = windowStateView(win, boundsForKeeper, reportMaximized);
   windowState.manage(view);
   view.on?.('resize', remember);
