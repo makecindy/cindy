@@ -326,7 +326,15 @@ async function runLocked(
   const snapshotTurns = state?.pending.turns ?? 0;
   const after = state?.throughAt ?? (state?.pending.firstAt ? state.pending.firstAt - 1 : startedAt);
   const scan = await readTurns(botId, after, startedAt, state?.learned ?? {});
-  const selected = learningSnapshotPrefix(scan.turns, MESSAGE_BUDGET);
+  const selected: Turn[] = [];
+  let ownerChars = 0;
+  for (const turn of learningSnapshotPrefix(scan.turns, MESSAGE_BUDGET)) {
+    const chars = scan.ownerTexts.get(turn.messages[0]!.id)?.length ?? Infinity;
+    if (selected.length && ownerChars + chars > MESSAGE_BUDGET) break;
+    // A single over-budget request is processed on its own without authorizing memory updates.
+    selected.push(turn);
+    ownerChars += chars;
+  }
   const messages = selected.flatMap((turn) => turn.messages);
   const allSelected = selected.length === scan.turns.length;
   const readAll = scan.complete && allSelected;
@@ -455,23 +463,16 @@ async function runLocked(
     }));
     return [{ id, proposal: { filename: op.filename, title: op.title, description: op.description, body: op.body }, sources }];
   });
-  const ownerSources: { source: string; text: string }[] = [];
-  let remaining = MESSAGE_BUDGET;
-  for (const message of messages) {
-    if (message.role !== 'user') continue;
-    const text = scan.ownerTexts.get(message.id);
-    if (text === undefined || text.length > remaining) {
-      remaining = -1;
-      break;
-    }
-    ownerSources.push({ source: `user:${message.id}`, text });
-    remaining -= text.length;
-  }
+  const ownerSources = selected.flatMap((turn) => {
+    const id = turn.messages[0]!.id;
+    const text = scan.ownerTexts.get(id);
+    return text === undefined ? [] : [{ source: `user:${id}`, text }];
+  });
   const memorySupport = await reviewNightlyEvidence(ask,
     'Check each proposed replacement of a saved memory against the original record, any merge sources, and the user statements. ' +
     'For housekeeping, all claims in the title, description and body must follow from the records, preserving conditions, exceptions and still-valid preferences. ' +
     'A new or changed preference (including broader scope) requires an explicit user statement supporting the change; cite that statement. A reason given by the planner is not evidence.',
-    remaining < 0 ? [] : memoryChanges, ownerSources,
+    ownerChars > MESSAGE_BUDGET ? [] : memoryChanges, ownerSources,
   );
   if (!current()) return { skipped: true, resultText: 'Owner changed' };
   if (!memorySupport) {

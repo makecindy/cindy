@@ -282,3 +282,20 @@ it('retains both merge records if the reviewer cannot support the replacement', 
   expect(h.memories.get(kept).body).toBe('给负责人写周报时先写风险。');
   expect(h.memories.has(duplicate)).toBe(true);
 });
+
+it('leaves unreviewed long turns pending until their full user input fits in the next run', async () => {
+  const filename = memory('report', '汇报', '先写事实。');
+  const messages = ['这次请先写进度。', '改一下，以后汇报先写风险。'];
+  for (const [i, message] of messages.entries()) {
+    await recordNightlyLearningTurn(h.root, 'bot', 'main', 1000 + i);
+    h.rows.push(turn(i + 1, message + '附'.repeat(35_000), 1000 + i));
+  }
+  for (const [i, body] of messages.entries()) {
+    reply({ memories: [{ op: 'update', filename, title: '汇报', description: 'd', body, reason: '更新' }] });
+    reply({ supported: [{ id: 0, source: `user:user${i + 1}`, quote: body }] });
+    await runNightlyLearning('bot', { manual: false });
+    expect(sentIds(i * 2)).toEqual([`user${i + 1}`, `reply${i + 1}`]);
+    expect(h.memories.get(filename).body).toBe(body);
+    expect((await readNightlyLearningState(h.root, 'bot'))!.pending.turns).toBe(1 - i);
+  }
+});
