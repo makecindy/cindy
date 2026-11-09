@@ -13,7 +13,7 @@ import { createRoot } from 'react-dom/client';
 
 import '@fontsource-variable/inter';
 import '@fontsource-variable/jetbrains-mono';
-import 'harmonyos-sans-sc-webfont-splitted';
+import './styles/cjk-webfont.css';
 
 import '@/i18n';
 import './themes/colors';
@@ -50,7 +50,7 @@ createRoot(rootElement).render(
     <LocaleProvider>
       <ConfirmDialogProvider>
         <AuthProvider enableSessionExpiredPrompt={false}>
-          <WallpaperSettingsProvider>
+          <WallpaperSettingsProvider desktopBackground={false}>
             {isSidebarTabWindow() ? <SidebarTabWindowLayout /> : <SidebarWindowLayout />}
             <PluginModelPickerHost bootstrapCatalog />
           </WallpaperSettingsProvider>

@@ -16,7 +16,7 @@ import { useTranslation } from 'react-i18next';
 import * as Dialog from '@radix-ui/react-dialog';
 import { SelectParts as Select } from '@/components/ui/select';
 
-import { SETTINGS_ROW_LABEL_CLASS, SettingsCard, SettingsRow } from '@/components/ui/settings-rows';
+import { SETTINGS_ROW_LABEL_CLASS, SettingsCard, SettingsPageHeader, SettingsRow } from '@/components/ui/settings-rows';
 import { Switch } from '@/components/ui/switch';
 import { useXboxGamepad } from '@/hooks/useXboxGamepad';
 import { useSkillhub } from '@/features/skillhub/hooks/useSkillhub';
@@ -161,36 +161,27 @@ export function XboxGamepadEntry({
 }) {
   const { t } = useTranslation();
   const ns = gamepadCopyNs(family);
-  return (
-    <button
-      type="button"
+  // 单独出现时自成一张卡片；配件列表里由外层卡片包住
+  const row = (
+    <SettingsRow
       onClick={onOpen}
-      className={cn(
-        'flex w-full items-center gap-3 text-left outline-none transition-colors',
-        grouped
-          ? 'rounded-none border-0 bg-transparent px-4 py-[14px]'
-          : 'rounded-xl border p-4 border-[var(--settings-theme-card-border)] bg-[var(--settings-theme-card-bg)]',
-        'hover:bg-[var(--settings-menu-bg-hover)] focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]',
-      )}
       aria-label={t(`settings.shortcuts.${ns}.openAria`)}
-    >
-      <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-[var(--surface-chip)] text-[var(--text-secondary)]">
-        <Gamepad2 size={18} aria-hidden="true" />
-      </span>
-      <span className="flex min-w-0 flex-1 flex-col gap-1">
-        <span className="truncate text-13 font-medium text-[var(--text-primary)]">
-          {t(`settings.shortcuts.${ns}.title`)}
+      lead={
+        <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-[var(--surface-chip)] text-[var(--text-secondary)]">
+          <Gamepad2 size={18} aria-hidden="true" />
         </span>
-        <span className="text-12 leading-[1.4] text-[var(--text-secondary)]">
-          {t(`settings.shortcuts.${ns}.entryDescription`)}
+      }
+      title={t(`settings.shortcuts.${ns}.title`)}
+      hint={t(`settings.shortcuts.${ns}.entryDescription`)}
+      trailing={
+        <span className="flex shrink-0 items-center gap-2">
+          <ConnectionBadge state={state} loading={loading} compact />
+          <ChevronRight size={16} className="text-[var(--text-tertiary)]" aria-hidden="true" />
         </span>
-      </span>
-      <span className="flex shrink-0 items-center gap-2">
-        <ConnectionBadge state={state} loading={loading} compact />
-        <ChevronRight size={16} className="text-[var(--text-tertiary)]" aria-hidden="true" />
-      </span>
-    </button>
+      }
+    />
   );
+  return grouped ? row : <SettingsCard>{row}</SettingsCard>;
 }
 
 export function XboxGamepadEntryContainer({
@@ -299,240 +290,233 @@ export function XboxGamepadSettings({ family, onBack }: { family: GamepadFamily;
   };
 
   return (
-    <div className="flex flex-col gap-[14px]">
-      <div className="flex items-center justify-between gap-3">
-        <div className="flex items-center gap-2">
+    <div className="flex flex-col gap-6">
+      <SettingsPageHeader
+        title={t(`settings.shortcuts.${ns}.title`)}
+        onBack={onBack}
+        backLabel={t('settings.shortcuts.xboxGamepad.back')}
+        action={
           <button
             type="button"
-            onClick={onBack}
-            className="flex size-8 items-center justify-center rounded-md text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-chip)] hover:text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]"
-            aria-label={t('settings.shortcuts.xboxGamepad.back')}
+            disabled={!state || saving || isDefault}
+            onClick={() => void resetSettings()}
+            className="shrink-0 text-12 text-[var(--text-secondary)] transition-colors hover:text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)] disabled:cursor-not-allowed disabled:opacity-50"
           >
-            <ArrowLeft size={17} />
+            {t('settings.shortcuts.reset')}
           </button>
-          <h2 className="text-16 font-medium leading-[1.2] text-[var(--settings-section-title)]">
-            {t(`settings.shortcuts.${ns}.title`)}
-          </h2>
-        </div>
-        <button
-          type="button"
-          disabled={!state || saving || isDefault}
-          onClick={() => void resetSettings()}
-          className="shrink-0 text-12 text-[var(--text-secondary)] transition-colors hover:text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)] disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          {t('settings.shortcuts.reset')}
-        </button>
-      </div>
-
-      {error && (
-        <div className="flex items-center justify-between gap-3 text-12 text-[var(--error-fg)]">
-          <span>{t(`settings.shortcuts.xboxGamepad.errors.${error}`)}</span>
-          <button type="button" onClick={() => void reload()} className="underline">
-            {t('settings.shortcuts.xboxGamepad.retry')}
-          </button>
-        </div>
-      )}
-
-      <SettingsCard className="flex items-center p-4 gap-4">
-        <div className="flex min-w-0 flex-1 flex-col gap-2">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <p className={SETTINGS_ROW_LABEL_CLASS}>
-              {t('settings.shortcuts.xboxGamepad.connection.toggle.label')}
-            </p>
-            <div className="flex items-center gap-2">
-              <Switch
-                checked={enabled}
-                disabled={loading || saving || !state}
-                onCheckedChange={(next) => {
-                  void setSettings({ deviceEnabled: next });
-                }}
-                aria-label={t(`settings.shortcuts.${ns}.connection.toggle.aria`)}
-              />
-              <ConnectionBadge state={state} loading={loading} />
-            </div>
-          </div>
-          <p className="text-12 leading-[1.45] text-[var(--text-secondary)]">
-            {t(`settings.shortcuts.${ns}.connection.descriptions.${key}`)}
-          </p>
-          {state?.devicePresent && <XboxDeviceChips device={state.device} />}
-        </div>
-      </SettingsCard>
-
-      <SettingsCard className="flex flex-col gap-3 p-4">
-        <div className="flex flex-col gap-1">
-          <h3 className={SETTINGS_ROW_LABEL_CLASS}>
-            {t('settings.shortcuts.xboxGamepad.layout.title')}
-          </h3>
-          <p className="text-12 leading-[1.45] text-[var(--text-secondary)]">
-            {t('settings.shortcuts.xboxGamepad.layout.description')}
-          </p>
-        </div>
-        <div className="flex justify-center">
-          {family === 'playstation' ? (
-            <PlayStationGamepadLayout {...layoutProps} />
-          ) : family === 'nintendo' ? (
-            isNintendoJoyConDevice(state?.device) ? (
-              <JoyConGamepadLayout {...layoutProps} />
-            ) : (
-              <SwitchProGamepadLayout {...layoutProps} />
-            )
-          ) : family === 'generic' ? (
-            <GenericGamepadLayout {...layoutProps} />
-          ) : (
-            <XboxGamepadLayout {...layoutProps} />
-          )}
-        </div>
-      </SettingsCard>
-
-      <XboxGamepadPartEditor
-        open={editing !== null && !isStickPart(editing)}
-        onOpenChange={(open) => {
-          if (!open) setEditing(null);
-        }}
-        title={
-          editing && !isStickPart(editing)
-            ? t(familyControlKey(family, editing))
-            : t('settings.shortcuts.xboxGamepad.layout.editor.title')
         }
-        description={t('settings.shortcuts.xboxGamepad.layout.editor.description')}
-        closeLabel={t('settings.shortcuts.xboxGamepad.layout.editor.done')}
-      >
-        {editing && !isStickPart(editing) && settings && (
+      />
+      <div className="flex flex-col gap-[14px]">
+
+        {error && (
+          <div className="flex items-center justify-between gap-3 text-12 text-[var(--error-fg)]">
+            <span>{t(`settings.shortcuts.xboxGamepad.errors.${error}`)}</span>
+            <button type="button" onClick={() => void reload()} className="underline">
+              {t('settings.shortcuts.xboxGamepad.retry')}
+            </button>
+          </div>
+        )}
+
+        <SettingsCard>
           <SettingsRow
             wrap
-            flush
-            title={t('settings.shortcuts.xboxGamepad.layout.editor.assigned')}
-            hint={t('settings.shortcuts.xboxGamepad.layout.editor.assignedDescription')}
+            title={t('settings.shortcuts.xboxGamepad.connection.toggle.label')}
+            hint={
+              <span className="flex flex-col gap-2">
+                <span>{t(`settings.shortcuts.${ns}.connection.descriptions.${key}`)}</span>
+                {state?.devicePresent && <XboxDeviceChips device={state.device} />}
+              </span>
+            }
             trailing={
-              <BindingSelect
-                binding={settings.layout.buttons[editing]}
-                skills={enabledSkills}
-                disabled={!state || saving}
-                allowVoice
-                onChange={(binding) =>
-                  patchLayout((layout) => {
-                    layout.buttons[editing] = binding;
-                  })
-                }
-              />
+              <div className="flex items-center gap-2">
+                <Switch
+                  checked={enabled}
+                  disabled={loading || saving || !state}
+                  onCheckedChange={(next) => {
+                    void setSettings({ deviceEnabled: next });
+                  }}
+                  aria-label={t(`settings.shortcuts.${ns}.connection.toggle.aria`)}
+                />
+                <ConnectionBadge state={state} loading={loading} />
+              </div>
             }
           />
-        )}
-      </XboxGamepadPartEditor>
+        </SettingsCard>
 
-      <XboxGamepadPartEditor
-        open={editing !== null && isStickPart(editing)}
-        onOpenChange={(open) => {
-          if (!open) setEditing(null);
-        }}
-        title={
-          editing && isStickPart(editing)
-            ? t(familyControlKey(family, `${editing}Stick`))
-            : t('settings.shortcuts.xboxGamepad.layout.editor.title')
-        }
-        description={t('settings.shortcuts.xboxGamepad.stick.description')}
-        closeLabel={t('settings.shortcuts.xboxGamepad.layout.editor.done')}
-      >
-        {editing && isStickPart(editing) && settings && (
-          <div className="flex flex-col">
+        <SettingsCard className="flex flex-col gap-3 p-4">
+          <div className="flex flex-col gap-1">
+            <h3 className={SETTINGS_ROW_LABEL_CLASS}>
+              {t('settings.shortcuts.xboxGamepad.layout.title')}
+            </h3>
+            <p className="text-12 leading-[1.45] text-[var(--text-secondary)]">
+              {t('settings.shortcuts.xboxGamepad.layout.description')}
+            </p>
+          </div>
+          <div className="flex justify-center">
+            {family === 'playstation' ? (
+              <PlayStationGamepadLayout {...layoutProps} />
+            ) : family === 'nintendo' ? (
+              isNintendoJoyConDevice(state?.device) ? (
+                <JoyConGamepadLayout {...layoutProps} />
+              ) : (
+                <SwitchProGamepadLayout {...layoutProps} />
+              )
+            ) : family === 'generic' ? (
+              <GenericGamepadLayout {...layoutProps} />
+            ) : (
+              <XboxGamepadLayout {...layoutProps} />
+            )}
+          </div>
+        </SettingsCard>
+
+        <XboxGamepadPartEditor
+          open={editing !== null && !isStickPart(editing)}
+          onOpenChange={(open) => {
+            if (!open) setEditing(null);
+          }}
+          title={
+            editing && !isStickPart(editing)
+              ? t(familyControlKey(family, editing))
+              : t('settings.shortcuts.xboxGamepad.layout.editor.title')
+          }
+          description={t('settings.shortcuts.xboxGamepad.layout.editor.description')}
+          closeLabel={t('settings.shortcuts.xboxGamepad.layout.editor.done')}
+        >
+          {editing && !isStickPart(editing) && settings && (
             <SettingsRow
               wrap
               flush
-              title={t('settings.shortcuts.xboxGamepad.stick.mode.label')}
-              hint={t('settings.shortcuts.xboxGamepad.stick.mode.description')}
-              trailing={
-                <SelectControl
-                  value={settings.layout.sticks[editing].mode}
-                  disabled={!state || saving}
-                  ariaLabel={t('settings.shortcuts.xboxGamepad.stick.mode.label')}
-                  onChange={(value) =>
-                    patchLayout((layout) => {
-                      layout.sticks[editing].mode = value as XboxGamepadStickMode;
-                    })
-                  }
-                  options={[
-                    {
-                      value: 'conversation-scroll',
-                      label: t(
-                        'settings.shortcuts.xboxGamepad.stick.mode.options.conversation-scroll',
-                      ),
-                    },
-                    {
-                      value: 'custom',
-                      label: t('settings.shortcuts.xboxGamepad.stick.mode.options.custom'),
-                    },
-                  ]}
-                />
-              }
-            />
-            {settings.layout.sticks[editing].mode === 'custom' &&
-              XBOX_GAMEPAD_STICK_DIRECTIONS.map((direction) => (
-                <SettingsRow
-                  key={direction}
-                  wrap
-                  flush
-                  title={t(`settings.shortcuts.xboxGamepad.directions.${direction}`)}
-                  hint={t('settings.shortcuts.xboxGamepad.stick.customDescription')}
-                  trailing={
-                    <BindingSelect
-                      binding={settings.layout.sticks[editing].directions[direction]}
-                      skills={enabledSkills}
-                      disabled={!state || saving}
-                      onChange={(binding) =>
-                        patchLayout((layout) => {
-                          layout.sticks[editing].directions[direction] = binding;
-                        })
-                      }
-                    />
-                  }
-                />
-              ))}
-            <SettingsRow
-              wrap
-              flush
-              title={t(familyControlKey(family, stickClickButton(editing)))}
+              title={t('settings.shortcuts.xboxGamepad.layout.editor.assigned')}
               hint={t('settings.shortcuts.xboxGamepad.layout.editor.assignedDescription')}
               trailing={
                 <BindingSelect
-                  binding={settings.layout.buttons[stickClickButton(editing)]}
+                  binding={settings.layout.buttons[editing]}
                   skills={enabledSkills}
                   disabled={!state || saving}
                   allowVoice
                   onChange={(binding) =>
                     patchLayout((layout) => {
-                      layout.buttons[stickClickButton(editing)] = binding;
+                      layout.buttons[editing] = binding;
                     })
                   }
                 />
               }
             />
-          </div>
-        )}
-      </XboxGamepadPartEditor>
+          )}
+        </XboxGamepadPartEditor>
 
-      <SettingsCard className="flex items-center p-4 justify-between gap-4">
-        <div className="flex min-w-0 flex-col gap-1">
-          <p className={SETTINGS_ROW_LABEL_CLASS}>
-            {t('settings.shortcuts.xboxGamepad.layout.reset.title')}
-          </p>
-          <p className="text-12 leading-[1.45] text-[var(--text-secondary)]">
-            {t('settings.shortcuts.xboxGamepad.layout.reset.description')}
-          </p>
-        </div>
-        <Button
-          variant="secondary"
-          size="md"
-          compact
-          loading={saving}
-          type="button"
-          disabled={!state || saving}
-          onClick={() => void resetSettings()}
-          className="shrink-0"
+        <XboxGamepadPartEditor
+          open={editing !== null && isStickPart(editing)}
+          onOpenChange={(open) => {
+            if (!open) setEditing(null);
+          }}
+          title={
+            editing && isStickPart(editing)
+              ? t(familyControlKey(family, `${editing}Stick`))
+              : t('settings.shortcuts.xboxGamepad.layout.editor.title')
+          }
+          description={t('settings.shortcuts.xboxGamepad.stick.description')}
+          closeLabel={t('settings.shortcuts.xboxGamepad.layout.editor.done')}
         >
-          <RotateCcw size={13} />
-          {t('settings.shortcuts.xboxGamepad.layout.reset.button')}
-        </Button>
-      </SettingsCard>
+          {editing && isStickPart(editing) && settings && (
+            <div className="flex flex-col">
+              <SettingsRow
+                wrap
+                flush
+                title={t('settings.shortcuts.xboxGamepad.stick.mode.label')}
+                hint={t('settings.shortcuts.xboxGamepad.stick.mode.description')}
+                trailing={
+                  <SelectControl
+                    value={settings.layout.sticks[editing].mode}
+                    disabled={!state || saving}
+                    ariaLabel={t('settings.shortcuts.xboxGamepad.stick.mode.label')}
+                    onChange={(value) =>
+                      patchLayout((layout) => {
+                        layout.sticks[editing].mode = value as XboxGamepadStickMode;
+                      })
+                    }
+                    options={[
+                      {
+                        value: 'conversation-scroll',
+                        label: t(
+                          'settings.shortcuts.xboxGamepad.stick.mode.options.conversation-scroll',
+                        ),
+                      },
+                      {
+                        value: 'custom',
+                        label: t('settings.shortcuts.xboxGamepad.stick.mode.options.custom'),
+                      },
+                    ]}
+                  />
+                }
+              />
+              {settings.layout.sticks[editing].mode === 'custom' &&
+                XBOX_GAMEPAD_STICK_DIRECTIONS.map((direction) => (
+                  <SettingsRow
+                    key={direction}
+                    wrap
+                    flush
+                    title={t(`settings.shortcuts.xboxGamepad.directions.${direction}`)}
+                    hint={t('settings.shortcuts.xboxGamepad.stick.customDescription')}
+                    trailing={
+                      <BindingSelect
+                        binding={settings.layout.sticks[editing].directions[direction]}
+                        skills={enabledSkills}
+                        disabled={!state || saving}
+                        onChange={(binding) =>
+                          patchLayout((layout) => {
+                            layout.sticks[editing].directions[direction] = binding;
+                          })
+                        }
+                      />
+                    }
+                  />
+                ))}
+              <SettingsRow
+                wrap
+                flush
+                title={t(familyControlKey(family, stickClickButton(editing)))}
+                hint={t('settings.shortcuts.xboxGamepad.layout.editor.assignedDescription')}
+                trailing={
+                  <BindingSelect
+                    binding={settings.layout.buttons[stickClickButton(editing)]}
+                    skills={enabledSkills}
+                    disabled={!state || saving}
+                    allowVoice
+                    onChange={(binding) =>
+                      patchLayout((layout) => {
+                        layout.buttons[stickClickButton(editing)] = binding;
+                      })
+                    }
+                  />
+                }
+              />
+            </div>
+          )}
+        </XboxGamepadPartEditor>
+
+        <SettingsCard>
+          <SettingsRow
+            title={t('settings.shortcuts.xboxGamepad.layout.reset.title')}
+            hint={t('settings.shortcuts.xboxGamepad.layout.reset.description')}
+            trailing={
+              <Button
+                variant="secondary"
+                size="md"
+                compact
+                loading={saving}
+                type="button"
+                disabled={!state || saving}
+                onClick={() => void resetSettings()}
+                className="shrink-0"
+              >
+                <RotateCcw size={13} />
+                {t('settings.shortcuts.xboxGamepad.layout.reset.button')}
+              </Button>
+            }
+          />
+        </SettingsCard>
+      </div>
     </div>
   );
 }

@@ -3,13 +3,7 @@ import { Fragment, useState, type ReactNode } from 'react';
 import { ArrowDown, ArrowUp, Plus, Trash2 } from 'lucide-react';
 
 import { DefaultOverrideControls } from '@/components/settings/DefaultOverrideControls';
-import {
-  SETTINGS_ROW_CLASS,
-  SETTINGS_ROW_DIVIDER_CLASS,
-  SETTINGS_ROW_HINT_CLASS,
-  SETTINGS_ROW_LABEL_CLASS,
-} from '@/components/settings/settingsRowClasses';
-import { cn } from '@/lib/utils';
+import { SettingsRow } from '@/components/ui/settings-rows';
 import type { AgentKind } from '@/hooks/useAgentCapabilities';
 import { useDeviceProviders } from '@/hooks/useDeviceProviders';
 import { providerAccountLabel, providerDisplayName } from '@/lib/providerDisplayName';
@@ -237,49 +231,45 @@ export function BotModelChainEditor({
     const listItems = [...fallbackRows, ...(pendingRow ? [pendingRow] : [])];
     return (
       <div className="min-w-0" data-testid="bot-model-chain-editor" data-setting-id={settingId}>
-        <div className={cn(SETTINGS_ROW_CLASS, 'cindy-segmented-row flex-wrap')}>
-          <div className="flex min-w-0 flex-col gap-1">
-            <p className={SETTINGS_ROW_LABEL_CLASS} style={{ letterSpacing: '0.12px' }}>
-              {settingsRows.primaryLabel}
-            </p>
-            <p className={SETTINGS_ROW_HINT_CLASS}>{settingsRows.primaryHint}</p>
-          </div>
-          <div className="flex min-w-0 max-w-full items-start gap-2">
-            {onRestoreDefault ? (
-              <DefaultOverrideControls
-                isCustomized
-                disabled={disabled}
-                onReset={() => {
-                  if (!disabled) onRestoreDefault();
-                }}
-              />
-            ) : null}
-            {picker(primaryRoute, 0, 'min-w-0')}
-          </div>
-        </div>
+        <SettingsRow
+          className="cindy-segmented-row"
+          title={settingsRows.primaryLabel}
+          hint={settingsRows.primaryHint}
+          trailing={
+            <div className="flex min-w-0 max-w-full items-start gap-2">
+              {onRestoreDefault ? (
+                <DefaultOverrideControls
+                  isCustomized
+                  disabled={disabled}
+                  onReset={() => {
+                    if (!disabled) onRestoreDefault();
+                  }}
+                />
+              ) : null}
+              {picker(primaryRoute, 0, 'min-w-0')}
+            </div>
+          }
+        />
         {allowFallbacks ? (
           <>
-            <div className={SETTINGS_ROW_DIVIDER_CLASS} />
-            <div className={SETTINGS_ROW_CLASS}>
-              <div className="flex min-w-0 flex-col gap-1">
-                <p className={SETTINGS_ROW_LABEL_CLASS} style={{ letterSpacing: '0.12px' }}>
-                  {t('bots.modelChain.options', { count: Math.max(0, routes.length - 1) })}
-                </p>
-                <p className={SETTINGS_ROW_HINT_CLASS}>{t('bots.modelChain.description')}</p>
-              </div>
-              <Button
-                variant="secondary"
-                size="md"
-                compact
-                type="button"
-                className="shrink-0"
-                disabled={addDisabled}
-                onClick={add}
-              >
-                <Plus size={14} />
-                {t('bots.modelChain.add')}
-              </Button>
-            </div>
+            <SettingsRow
+              title={t('bots.modelChain.options', { count: Math.max(0, routes.length - 1) })}
+              hint={t('bots.modelChain.description')}
+              trailing={
+                <Button
+                  variant="secondary"
+                  size="md"
+                  compact
+                  type="button"
+                  className="shrink-0"
+                  disabled={addDisabled}
+                  onClick={add}
+                >
+                  <Plus size={14} />
+                  {t('bots.modelChain.add')}
+                </Button>
+              }
+            />
             {listItems.length > 0 ? (
               <div className="space-y-2 px-4 pb-4 text-12 text-[var(--text-tertiary)]">
                 {listItems.map((item, at) => (

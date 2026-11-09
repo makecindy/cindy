@@ -3,7 +3,10 @@ import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/button';
 import { Check } from 'lucide-react';
 import { groupMcpDuplicateConnections, type McpDuplicateChoice, type McpDuplicateConnection, type McpDuplicateReport } from '@/../shared/customMcp';
-import { SETTINGS_CARD_CLASS, SETTINGS_ROW_CLASS, SETTINGS_ROW_DIVIDER_CLASS, SETTINGS_ROW_HINT_CLASS } from './settingsRowClasses';
+import { SETTINGS_HINT, SettingsBlock, SettingsCard } from '@/components/ui/settings-rows';
+
+/** 来源行与操作行是自定义多项内容，不套 SettingsRow；分割线跟随卡片内的可见行。 */
+const ROW_CLASS = 'flex flex-wrap items-center justify-between gap-3';
 
 /** Advisory only: dismissing Settings never changes which connections are loaded. */
 export function McpDuplicateNotice() {
@@ -56,44 +59,40 @@ export function McpDuplicateNotice() {
         const title = [...new Set(cindy.map(item => item.name))].join(' / ');
         const choice = group.every(item => item.choice === pair.choice) ? pair.choice : undefined;
         return (
-          <div key={pair.id} role="group" aria-label={`${title} · ${pair.origin}`} className={SETTINGS_CARD_CLASS}>
+          <SettingsCard key={pair.id} role="group" aria-label={`${title} · ${pair.origin}`}>
             <div className="px-4 pt-4 pb-3">
               <h4 className="break-words font-medium">{title}</h4>
-              <p className={`${SETTINGS_ROW_HINT_CLASS} mt-1 break-all`}>{pair.origin} · {t(`settings.mcp.duplicates.${group.some(item => item.reason === 'similar') ? 'similar' : 'endpoint'}`)}</p>
+              <p className={`${SETTINGS_HINT} mt-1 break-all`}>{pair.origin} · {t(`settings.mcp.duplicates.${group.some(item => item.reason === 'similar') ? 'similar' : 'endpoint'}`)}</p>
             </div>
             {([['cindy', 'Cindy', cindy], ['claude', 'Claude Code', claude]] as const).map(([source, label, connections]) => (
-              <div key={source}>
-                <div className={SETTINGS_ROW_DIVIDER_CLASS} />
-                <div className={`${SETTINGS_ROW_CLASS} flex-wrap`}>
-                  <div className="min-w-0 flex-1 basis-40">
-                    <p className={SETTINGS_ROW_HINT_CLASS}>{label}</p>
-                    {connections.map(connection => (
-                      <div key={connection.id} className="mt-1">
-                        <p className="break-words font-medium">{connection.name}</p>
-                        {connection.id !== connection.name && <p className={`${SETTINGS_ROW_HINT_CLASS} break-all`}>{connection.id}</p>}
-                      </div>
-                    ))}
-                  </div>
-                  {choice ? (choice === source || choice === 'both' ? <Check size={16} aria-hidden="true" className="shrink-0" /> : null) : (
-                    <Button variant="secondary" size="sm" disabled={busy}
-                      data-settings-search-action="Choose the retained source for this detected MCP connection group"
-                      aria-label={`${t(`settings.mcp.duplicates.${connections.length === 1 ? 'keepThis' : 'keepThese'}`)} · ${label} · ${connections.map(item => item.name).join(' / ')}`}
-                      onClick={() => void choose(group, source)}>
-                      {t(`settings.mcp.duplicates.${connections.length === 1 ? 'keepThis' : 'keepThese'}`)}
-                    </Button>
-                  )}
+              <SettingsBlock key={source} className={ROW_CLASS}>
+                <div className="min-w-0 flex-1 basis-40">
+                  <p className={SETTINGS_HINT}>{label}</p>
+                  {connections.map(connection => (
+                    <div key={connection.id} className="mt-1">
+                      <p className="break-words font-medium">{connection.name}</p>
+                      {connection.id !== connection.name && <p className={`${SETTINGS_HINT} break-all`}>{connection.id}</p>}
+                    </div>
+                  ))}
                 </div>
-              </div>
+                {choice ? (choice === source || choice === 'both' ? <Check size={16} aria-hidden="true" className="shrink-0" /> : null) : (
+                  <Button variant="secondary" size="sm" disabled={busy}
+                    data-settings-search-action="Choose the retained source for this detected MCP connection group"
+                    aria-label={`${t(`settings.mcp.duplicates.${connections.length === 1 ? 'keepThis' : 'keepThese'}`)} · ${label} · ${connections.map(item => item.name).join(' / ')}`}
+                    onClick={() => void choose(group, source)}>
+                    {t(`settings.mcp.duplicates.${connections.length === 1 ? 'keepThis' : 'keepThese'}`)}
+                  </Button>
+                )}
+              </SettingsBlock>
             ))}
-            <div className={SETTINGS_ROW_DIVIDER_CLASS} />
-            <div className={`${SETTINGS_ROW_CLASS} flex-wrap`}>
+            <SettingsBlock className={ROW_CLASS}>
               {choice ? <>
                 <span role="status">{t(`settings.mcp.duplicates.selected.${choice}`)}</span>
                 <Button variant="secondary" size="sm" disabled={busy} data-settings-search-action="Reset the retained source for this detected MCP connection group" onClick={() => void choose(group, null)}>{t('settings.mcp.duplicates.reset')}</Button>
               </> : <Button variant="secondary" size="sm" disabled={busy} data-settings-search-action="Keep both sources for this detected MCP connection group" onClick={() => void choose(group, 'both')}>{t('settings.mcp.duplicates.keep.both')}</Button>}
-            </div>
+            </SettingsBlock>
             {hasError(group) && <p role="alert" className="px-4 pb-4 text-[var(--text-danger)]">{t('settings.mcp.duplicates.saveFailed')}</p>}
-          </div>
+          </SettingsCard>
         );
       })}
     </section>

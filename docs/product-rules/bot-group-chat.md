@@ -100,6 +100,9 @@
 
 - 入口与普通聊天一致：电脑上「+」→「添加文件、图片或视频…」、粘贴、拖入；手机上「+」里的「照片与视频」（支持混选）、拍照、
   文件（iOS 有最近照片），以及粘贴图片。一条消息最多 20 个附件；有附件时可以不写字。
+- 手机直连话题的「+」与「同时发到群聊」并列，复用主群的附件托盘、上传和失败重试；话题不提供「安排分工」。
+  回复携带当前 `threadRootId` 与附件进入既有发件箱，同时发群仍先确认回复、再贴回；经电脑的话题入口继续保持不支持。
+  实现与回归见 `apps/mobile/src/session/BotGroupComposer.tsx`、`BotGroupChatScreen.test.tsx`、`chatServerMobileEntry.test.tsx`。
 - 附件属于用户那条消息：早期本地群使用 `bot_group_messages.attachments_json`，正式服务器群使用消息 content 中的 media 块。
   时间线里显示图片缩略图和文件名。
   - 主群时间线、Thread 根消息与 Thread 回复共用同一套附件呈现（`BotGroupMessageAttachments`）：图片点开看图器，

@@ -26,6 +26,7 @@ vi.mock('@/hooks/useWallpaperSettings', () => ({
     retryDownload: state.retry,
     setWallpaper: state.select,
     setVisibility: vi.fn(),
+    previewVisibility: vi.fn(),
     setBlur: vi.fn(),
     previewBlur: vi.fn(),
     setMotion: vi.fn(),

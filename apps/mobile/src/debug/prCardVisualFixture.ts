@@ -3,7 +3,7 @@ import { UI_MOCK_PR_CARD_IDS } from "@cindy/maker-shared/ui-mock";
 
 /**
  * Card resources for the shared "PR 卡片各状态" mock task. The blocks are what a rich desktop host
- * sends for the GitHub plugin's PR card (asking with settings open, draft, following, merged),
+ * sends for the GitHub plugin's PR card (asking with settings open, draft, following, merged with the archive button),
  * generated from the plugin's HTML through the desktop projection, so the phone renders real data.
  */
 const BLOCKS: Record<keyof typeof UI_MOCK_PR_CARD_IDS, unknown[]> = {
@@ -250,7 +250,8 @@ const BLOCKS: Record<keyof typeof UI_MOCK_PR_CARD_IDS, unknown[]> = {
             "label": "更换模型（当前：Sonnet 5.5 · Anthropic）",
             "disabled": false
           }
-        ]
+        ],
+        "taskArchive": { "auto": true }
       }
     }
   ]

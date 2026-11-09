@@ -56,6 +56,7 @@ import {
   usageRangeDay,
   type UsageHistoryRange,
 } from './usageHistoryStats';
+import { SettingsPageHeader } from '@/components/ui/settings-rows';
 
 /** 与 useUsageHistory 的拉取窗口一致 (20 周)。 */
 const HEATMAP_WINDOW_DAYS = 140;
@@ -186,12 +187,12 @@ export function UsageHistorySection(): React.JSX.Element {
 
   return (
     <div className="usage-history-charts pb-2">
-      <h2 className="mb-1.5 text-16 font-medium text-[var(--text-primary)]">
-        {t(usageHistorySettings.usage.titleKey)}
-      </h2>
-      <p className="mb-4 max-w-[640px] text-13 leading-[1.5] text-[var(--settings-section-desc)]">
-        {t('usageHistory.description')}
-      </p>
+      <div className="mb-6 max-w-[640px]">
+        <SettingsPageHeader
+          title={t(usageHistorySettings.usage.titleKey)}
+          description={t('usageHistory.description')}
+        />
+      </div>
 
       <div className="mb-4 flex flex-wrap items-center gap-3">
         <span className="text-13 font-medium text-[var(--text-secondary)]">

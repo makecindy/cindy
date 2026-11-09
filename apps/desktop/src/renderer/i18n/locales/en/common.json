@@ -2285,6 +2285,10 @@
         },
         "visibilityLabel": "Wallpaper Visibility",
         "visibilityHint": "0% hides the wallpaper; 100% shows it without an overlay.",
+        "desktopVisibilityLabel": "Desktop Transparency",
+        "desktopVisibilityHint": "Reveal the desktop and windows behind Cindy. Text and controls stay clear.",
+        "desktopBlurLabel": "Desktop Blur",
+        "desktopBlurHint": "Blur the desktop behind the window. 0 turns it off; higher values increase blur. Systems without adjustable blur use their default effect.",
         "blurLabel": "Wallpaper Blur",
         "blurHint": "Blur only the wallpaper. Set to 0 to turn off. Blurring animated wallpaper increases GPU usage.",
         "motionLabel": "Display",
@@ -2451,7 +2455,7 @@
       "skinLabel": "Character",
       "skinHint": "The character shown in Agent Notch and the Dynamic Island.",
       "soundLabel": "Event sounds",
-      "soundHint": "Choose an 8-bit sound for each alert, shared by Agent Notch and the Dynamic Island. The tap sound plays only when you tap Agent Notch.",
+      "soundHint": "When an event sound is set, only that sound plays. Unset or disabled event sounds follow system notification settings.",
       "soundAria": "Toggle Agent Notch sounds",
       "soundSelectAria": "Sound for {{event}}",
       "soundPreviewAria": "Preview {{event}} sound",
@@ -2506,7 +2510,7 @@
         "select": "Click action"
       },
       "soundOptions": {
-        "none": "None",
+        "none": "Follow system",
         "startup-chime": "Startup chime",
         "ring-chime": "Ring chime",
         "item-found": "Item found",
@@ -11551,7 +11555,8 @@
         "lark": "Lark",
         "wecom": "WeCom",
         "dingtalk": "DingTalk",
-        "discord": "Discord"
+        "discord": "Discord",
+        "imessage": "iMessage"
       },
       "status": {
         "connected": "Connected",
@@ -11683,6 +11688,22 @@
           "existing": "Use the bot already set up in Cindy",
           "manual": "Enter new credentials",
           "moveNote": "The bot moves out of Settings → IM bots, which will be left empty. Its chats continue with {{name}}."
+        },
+        "imessage": {
+          "serverUrlLabel": "BlueBubbles server",
+          "serverUrlPlaceholder": "http://192.168.1.20:1234",
+          "passwordLabel": "API password",
+          "passwordPlaceholder": "••••••••",
+          "ownerAddressLabel": "Your iMessage address",
+          "ownerAddressPlaceholder": "owner@example.com",
+          "chatGuidsLabel": "Chat GUIDs (comma separated)",
+          "chatGuidsPlaceholder": "any;-;owner@example.com",
+          "listenHostLabel": "Local listening address",
+          "listenHostPlaceholder": "192.168.1.10",
+          "listenPortLabel": "Local listening port",
+          "listenPortPlaceholder": "18747",
+          "hint": "Connect to your BlueBubbles server on the local network. Only selected chats are handled. Stop any other automatic responder for these chats before connecting.",
+          "uncertain": "{{count}} deliveries need checking. Review the chat history before retrying to avoid duplicates."
         }
       },
       "removeConfirm": {

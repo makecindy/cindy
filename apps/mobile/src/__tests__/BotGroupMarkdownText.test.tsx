@@ -1,12 +1,14 @@
 // @vitest-environment jsdom
-import { act, createElement } from 'react';
+import { act, createElement, useMemo } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { palettes, type ThemeMode } from '@/theme/tokens';
 
+const viewport = vi.hoisted(() => ({ size: { width: 360, height: 800, fontScale: 1, scale: 3 }, listeners: new Set<() => void>() }));
+
 const theme = vi.hoisted(() => ({ mode: 'light' as 'light' | 'dark' }));
 
-const actions = vi.hoisted(() => ({ open: vi.fn(async (_url: string) => undefined), copy: vi.fn(async (_text: string) => undefined) }));
+const actions = vi.hoisted(() => ({ textRenders: 0, open: vi.fn(async (_url: string) => undefined), copy: vi.fn(async (_text: string) => undefined) }));
 
 // 把 style 展平进 data-style,断言每个 Text 实际叠了哪些样式。
 vi.mock('react-native', async () => {
@@ -25,7 +27,8 @@ vi.mock('react-native', async () => {
     Pressable: host('button'),
     ActivityIndicator: () => null,
     Linking: { openURL: actions.open },
-    useWindowDimensions: () => ({ width: 360, height: 800, fontScale: 1, scale: 3 }),
+    Dimensions: { get: () => viewport.size, addEventListener: (_: string, listener: () => void) => { viewport.listeners.add(listener); return { remove: () => viewport.listeners.delete(listener) }; } },
+    useWindowDimensions: () => React.useSyncExternalStore(listener => { viewport.listeners.add(listener); return () => viewport.listeners.delete(listener); }, () => viewport.size),
     StyleSheet: { create: (s: any) => s, flatten: flat, hairlineWidth: 1 },
     Platform: { OS: 'ios', select: (s: any) => s.ios ?? s.default },
   };
@@ -34,17 +37,17 @@ vi.mock('@/components/AppText', async () => ({ Text: (await import('react-native
 vi.mock('react-native-uitextview', async () => {
   const React = await import('react');
   const { StyleSheet } = await import('react-native');
-  return { UITextView: ({ children, uiTextView, selectable, style, onPress, onTouchStart, accessibilityRole }: any) => React.createElement('span', {
+  return { UITextView: ({ children, uiTextView, selectable, style, onPress, onTouchStart, accessibilityRole }: any) => { actions.textRenders++; return React.createElement('span', {
     'data-uitextview': uiTextView ? 'root' : 'span', 'data-selectable': selectable,
     'data-style': JSON.stringify(StyleSheet.flatten(style) ?? {}), 'data-role': accessibilityRole, onClick: onPress, onTouchStart,
-  }, children) };
+  }, children); } };
 });
 vi.mock('@/session/SelectionMenuText', async () => ({ SelectionMenuText: (await import('react-native')).Text }));
 vi.mock('@/session/ShareMessageCheckbox', () => ({ useCancelShareSelectionRowTap: () => null }));
 vi.mock('@/i18n', () => ({ i18n: { t: (key: string) => key } }));
 vi.mock('@/theme', async () => ({
   ...await import('@/theme/tokens'), monoFont: 'Menlo',
-  useThemedStyles: (make: (colors: any) => any) => make(palettes[theme.mode]),
+  useThemedStyles: (make: (colors: any) => any) => useMemo(() => make(palettes[theme.mode]), [make, theme.mode]),
   useTheme: () => ({ colors: palettes[theme.mode], mode: theme.mode }),
 }));
 
@@ -65,6 +68,8 @@ import { BotGroupMarkdownText, BotGroupUserText } from '@/session/BotGroupMessag
 let root: Root;
 let node: HTMLDivElement;
 beforeEach(() => {
+  viewport.size = { width: 360, height: 800, fontScale: 1, scale: 3 };
+  actions.textRenders = 0;
   theme.mode = 'light';
   actions.open.mockClear();
   actions.copy.mockClear();
@@ -158,6 +163,7 @@ it('expands a short table to the measured message width without changing code bl
 afterEach(() => {
   act(() => root.unmount());
   node.remove();
+  expect(viewport.listeners.size).toBe(0);
 });
 
 const styleOf = (text: string): Record<string, unknown> => {
@@ -344,4 +350,45 @@ it.each(['ios', 'android'])('matches complete rendered words across formatting o
     await act(async () => [...node.querySelectorAll('span')].find(span => span.textContent === '网页')!.click());
     expect(actions.open).toHaveBeenCalledWith('https://example.com');
   } finally { Platform.OS = 'ios'; }
+});
+
+// Unit regression: switching focus rebuilt unchanged native selectable text.
+// Keep the body stable on focus changes, while edits still replace its content.
+it('retains static native text through focus changes and invalidates it on edits', async () => {
+  const render = (active: boolean, content = 'A **stable** message\n\n~~~js\nconst a = 1;\n~~~') =>
+    act(async () => root.render(createElement(BotGroupMarkdownText, {
+      content, richContent: true, active, onOpenDiagram: () => undefined,
+    })));
+  await render(true);
+  const count = actions.textRenders;
+  await render(false);
+  await render(true);
+  expect(actions.textRenders).toBe(count);
+  await render(true, 'Edited **message**');
+  expect(node.textContent).toContain('Edited message');
+  expect(actions.textRenders).toBeGreaterThan(count);
+});
+
+// Regression: a keyboard height change used to re-render every selectable block,
+// even when neither its width nor font scale changed. Exercise real group text,
+// preserving native text sizing and links while removing unrelated layout work.
+it('keeps rendered group text untouched for height-only changes and follows live font scaling', async () => {
+  await act(async () => root.render(createElement(BotGroupMarkdownText, {
+    richContent: true, authorKind: 'bot', content: '## Title\n\nText with **bold** and [link](https://example.com).\n\n- List item\n\n| One | Two |\n|---|---|\n| cell | value |',
+  })));
+  const before = actions.textRenders;
+  const text = node.textContent;
+  const resize = (next: Partial<typeof viewport.size>) => act(() => {
+    viewport.size = { ...viewport.size, ...next };
+    viewport.listeners.forEach(listener => listener());
+  });
+  resize({ height: 480 });
+  expect(node.textContent).toBe(text);
+  expect(actions.textRenders - before).toBe(0);
+  const originalStyle = node.querySelector('[data-uitextview="root"]')?.getAttribute('data-style');
+  resize({ fontScale: 1.15 });
+  expect(node.querySelector('[data-uitextview="root"]')?.getAttribute('data-style')).not.toBe(originalStyle);
+  expect(node.textContent).toBe(text);
+  resize({ width: 640 });
+  expect(node.textContent).toBe(text);
 });

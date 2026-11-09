@@ -1,4 +1,6 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
+import { useJsonSnapshotState } from '@/utils/useStableValue';
+import { reuseJsonSnapshot } from '@/utils/reuseJsonSnapshot';
 import { AppState } from 'react-native';
 import { useFocusEffect } from 'expo-router';
 import * as Crypto from 'expo-crypto';
@@ -22,7 +24,7 @@ export function useCloudCompanionRoom(actorId: string, name: string, enabled: bo
   const identity = `${api.owner}:${actorId}`;
   const active = useRef(identity); active.current = identity;
   const initial = (): RoomState => ({ identity, roomId: null, messages: [], before: null, status: 'loading', loadingOlder: false });
-  const [state, setState] = useState<RoomState>(() => { const saved = enabled ? peekCloudConversation(actorId) : null;
+  const [state, setState] = useJsonSnapshotState<RoomState>(() => { const saved = enabled ? peekCloudConversation(actorId) : null;
     return saved ? { ...initial(), ...saved, status: 'ready' } : initial(); });
   const latest = useRef(state); latest.current = state;
   const generation = useRef(0);
@@ -56,8 +58,10 @@ export function useCloudCompanionRoom(actorId: string, name: string, enabled: bo
       const sameHistory = !page.historyRevision || page.historyRevision === previous?.historyRevision;
       const kept = sameHistory && previous?.roomId === roomId
         ? previous.messages.filter(message => !fresh.has(message.id)).map(message => updates.get(message.id) ?? message) : [];
-      const next = { identity, roomId, messages: [...page.messages, ...kept], before: kept.length ? previous!.before : page.before,
-        historyRevision: page.historyRevision, status: 'ready' as const, loadingOlder: false };
+      // Share before both caching and publishing, so the memory cache does not
+      // retain a second equal copy of messages that the visible state reused.
+      const next = reuseJsonSnapshot(previous, { identity, roomId, messages: [...page.messages, ...kept], before: kept.length ? previous!.before : page.before,
+        historyRevision: page.historyRevision, status: 'ready' as const, loadingOlder: false });
       void cacheCloudConversation(actorId, next); setState(next);
     } catch (error) {
       if (run !== generation.current || !valid()) return;

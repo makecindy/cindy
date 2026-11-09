@@ -1156,7 +1156,14 @@ describe('BotGroupChatView', () => {
     await user.type(within(panel).getByRole('textbox'), 'Unsent thread reply');
     if (kind === 'image') fireEvent.load(screen.getByAltText('photo.png'));
     await user.click(screen.getByRole('button', { name: kind === 'image' ? 'photo.png' : 'note.md' }));
-    const preview = kind === 'image' ? document.activeElement! : document.querySelector('[data-text-lightbox-overlay]')!;
+    // 文本预览弹窗按需加载：首次打开要等分包挂载后才有遮罩层。
+    const preview = kind === 'image'
+      ? document.activeElement!
+      : await waitFor(() => {
+        const overlay = document.querySelector('[data-text-lightbox-overlay]');
+        if (!overlay) throw new Error('text lightbox not mounted yet');
+        return overlay;
+      });
     if (kind !== 'image') {
       await screen.findByText('Preview note content');
       if (kind === 'text-control') within(preview as HTMLElement).getAllByRole('button', { name: 'chat.lightbox.close' })[0]!.focus();

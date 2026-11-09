@@ -1,5 +1,5 @@
 import { ghostCardSessionLinkId } from '@cindy/maker-shared/ghost-card-form';
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useContext, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { prStatusItemKeys, type PrStatusKind, type PrStatusResult } from "@cindy/maker-shared";
 import {
   parseGhostCardForm,
@@ -31,7 +31,9 @@ import {
   Pressable,
   StyleSheet,
   Switch,
+  useWindowDimensions,
   View,
+  type ViewInstance,
 } from "react-native";
 import { useIsFocused } from "expo-router";
 import { useTranslation } from "react-i18next";
@@ -66,6 +68,8 @@ import { invokePlugin } from "./pluginClient";
 import { FileTypeIcon } from '@/components/FileTypeIcon';
 import { Check, CircleMinus, CircleX, Clock, ExternalLink, Settings, ChevronDown } from 'lucide-react-native';
 import { prStatusVisual } from '@/session/prStatusVisual';
+import { MessageListItemViewableContext } from '@/session/messageListVisibility';
+import { taskAutoArchive } from './taskAutoArchive';
 import { formatByteSize } from '@cindy/maker-shared/file-preview';
 
 interface Action {
@@ -83,6 +87,8 @@ interface Action {
 }
 const PR_STATES: readonly PrStatusKind[] = ["open", "draft", "merged", "closed"];
 interface PrStatusSlot { key: string; fallback: string[]; status?: Extract<PrStatusResult, { ok: true }> }
+/** The host's word that every PR of the task is merged (the card's archive button); `auto`: archive on leaving. */
+interface TaskArchive { auto: boolean }
 
 function isCount(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
@@ -124,6 +130,7 @@ function parse(value: unknown): {
   mailUpload?: boolean;
   live?: string;
   prStatus: PrStatusSlot[];
+  taskArchive?: TaskArchive;
 } | null {
   if (!value || typeof value !== "object") return null;
   const data = value as Record<string, unknown>;
@@ -163,7 +170,11 @@ function parse(value: unknown): {
       typeof data.changeAction === "string" ? data.changeAction : undefined,
     live: typeof data.live === "string" && data.live.length <= 64 ? data.live : undefined,
     prStatus: parsePrStatusSlots(data.prStatus),
+    ...(isTaskArchive(data.taskArchive) ? { taskArchive: { auto: data.taskArchive.auto } } : {}),
   };
+}
+function isTaskArchive(value: unknown): value is TaskArchive {
+  return !!value && typeof value === "object" && typeof (value as { auto?: unknown }).auto === "boolean";
 }
 export function PluginCardActions({
   data,
@@ -208,6 +219,7 @@ function CardControls({
   items,
   live,
   prStatus,
+  taskArchive,
   deviceId,
   sessionId,
   callId,
@@ -218,6 +230,7 @@ function CardControls({
   text?: string;
   live?: string;
   prStatus: PrStatusSlot[];
+  taskArchive?: TaskArchive;
   form: GhostCardFormField[] | null;
   changeAction?: string;
   mail?: MailCardData | null;
@@ -289,6 +302,40 @@ function CardControls({
   const [foreground, setForeground] = useState(
     AppState.currentState === "active",
   );
+  // Archive button and auto-archive (desktop's card rule): this card arms auto-archive while the host says its PR and the
+  // task's other PRs are merged and the plugin asked for it. Unmounting does not disarm: leaving the task unmounts cards,
+  // which is exactly when the task page archives.
+  const autoArchive = !history && !!taskArchive?.auto;
+  // undefined: nothing reported yet. Every mount reports once, even `false`, so a cancellation kept from an earlier visit
+  // is forgotten when the host no longer allows auto-archive.
+  const armedRef = useRef<boolean | undefined>(undefined);
+  useEffect(() => {
+    if (armedRef.current === autoArchive) return;
+    armedRef.current = autoArchive;
+    taskAutoArchive.setArmed(sessionId, callId, autoArchive);
+  }, [sessionId, callId, autoArchive]);
+  const autoArchiveState = useSyncExternalStore(
+    taskAutoArchive.onChange,
+    () => taskAutoArchive.getState(sessionId),
+  );
+  // "Seen": this armed card was on screen in the focused task page with the app in front, not merely mounted.
+  // The message row is only the first gate (a row can hold several cards and passes at 5%): the notice itself must be
+  // inside the window. A frame that cannot be measured does not count, and neither does one that scrolled into view later
+  // inside a tall row (no event reports it); both only mean no auto-archive, never an archive nobody saw.
+  const viewable = useContext(MessageListItemViewableContext) ?? true;
+  const { height: windowHeight } = useWindowDimensions();
+  const noticeRef = useRef<ViewInstance>(null);
+  const seenGate = useRef({ pending: false, viewable, focused, foreground });
+  seenGate.current = { pending: autoArchive && autoArchiveState === "pending", viewable, focused, foreground };
+  const checkNoticeSeen = useCallback(() => {
+    const gate = seenGate.current;
+    if (!gate.pending || !gate.viewable || !gate.focused || !gate.foreground) return;
+    noticeRef.current?.measureInWindow((_x, y, _width, height) => {
+      if (Number.isFinite(y) && height > 0 && y + height > 0 && y < windowHeight) taskAutoArchive.markSeen(sessionId);
+    });
+  }, [sessionId, windowHeight]);
+  useEffect(checkNoticeSeen, [checkNoticeSeen, autoArchive, autoArchiveState, viewable, focused, foreground]);
+  const archiveHint = autoArchive && autoArchiveState !== "inactive" ? autoArchiveState : undefined;
   const [prompt, setPrompt] = useState<Action>();
   const [draft, setDraft] = useState("");
   const formKey = changeAction ?? JSON.stringify(form);
@@ -734,7 +781,7 @@ function CardControls({
           );
         })}
       </View> : null}
-      {(mail && !history) || prStatus.length || buttons.length || live || items.some((action) => action.toggle) ? <View style={mail && !history ? styles.mailFooter : compact ? styles.compactFooter : undefined}>
+      {(mail && !history) || prStatus.length || buttons.length || live || taskArchive || items.some((action) => action.toggle) ? <View style={mail && !history ? styles.mailFooter : compact ? styles.compactFooter : undefined}>
         {mail && !history ? (
           <View style={styles.mailInfo}>
             <Text style={styles.note}>{mail.fromLabel}: {mail.from}</Text>
@@ -785,7 +832,16 @@ function CardControls({
           </Pressable> : null}
         </View> : null}
         </View> : null}
-        {buttons.length || live ? <View style={[styles.actions, compact && styles.compactActions]}>
+        {archiveHint ? <View ref={noticeRef} onLayout={checkNoticeSeen} style={styles.archiveHint} accessibilityLiveRegion="polite">
+          <Text style={styles.note}>{t(archiveHint === "pending" ? "plugins.taskArchive.pending" : "plugins.taskArchive.cancelled")}</Text>
+          {archiveHint === "pending" ? <Pressable accessibilityRole="button" accessibilityLabel={t("plugins.taskArchive.cancel")}
+            hitSlop={{ top: spacing.xs, bottom: spacing.xs }}
+            style={({ pressed }) => [styles.button, styles.compactButton, pressed && styles.pressed]}
+            onPress={() => taskAutoArchive.cancel(sessionId)}>
+            <Text style={[styles.label, styles.compactLabel]}>{t("plugins.taskArchive.cancel")}</Text>
+          </Pressable> : null}
+        </View> : null}
+        {buttons.length || live || (taskArchive && !history) ? <View style={[styles.actions, compact && styles.compactActions]}>
           {buttons.map((action) => {
             const sendNow = !!mail?.pendingSend && action.id === `mail:now:${mail.key}`;
             const primary = action.primary || (!!mail && action.id === `mail:send:${mail.key}`);
@@ -810,6 +866,13 @@ function CardControls({
               </Pressable>
             );
           })}
+          {taskArchive && !history ? <Pressable accessibilityRole="button" accessibilityLabel={t("plugins.taskArchive.now")}
+            disabled={status !== "online"}
+            hitSlop={compact ? { top: spacing.xs, bottom: spacing.xs } : undefined}
+            style={({ pressed }) => [styles.button, compact && styles.compactButton, pressed && styles.pressed]}
+            onPress={() => taskAutoArchive.requestArchive(sessionId)}>
+            <Text style={[styles.label, compact && styles.compactLabel]}>{t("plugins.taskArchive.now")}</Text>
+          </Pressable> : null}
           {live ? <View style={compact && styles.liveEnd}><LiveStatus label={live} /></View> : null}
         </View> : null}
       </View> : null}
@@ -1019,6 +1082,7 @@ const makeStyles = (c: ThemeColors) =>
     compactButton: { minHeight: 36, paddingVertical: 0, paddingHorizontal: spacing.md },
     compactLabel: { fontSize: typeScale.bodySmall, lineHeight: lineHeight.bodySmall },
     liveEnd: { marginLeft: "auto" },
+    archiveHint: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", columnGap: spacing.sm, rowGap: spacing.xs },
     compactFooter: { gap: spacing.xs },
     headerRow: { flexDirection: 'row', alignItems: 'flex-start', gap: spacing.sm },
     headerContent: { flex: 1, minWidth: 0 },

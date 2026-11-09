@@ -23,20 +23,14 @@ import { lazy, Suspense, useTransition, useCallback, useEffect, useMemo, useRef,
 import { Navigate, useNavigate, useOutletContext, useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useSyncExternalStore } from 'react';
-import { ArrowLeft, ChevronRight } from 'lucide-react';
+import { ArrowLeft } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Tip } from '@/components/ui/tooltip';
 import { TAB_IDS, isSettingsTab } from '@/lib/tabLabels';
 import type { SettingsTab } from '@/lib/tabLabels';
 import { SettingsSidebarNav } from './SettingsSidebarNav';
 import { isLegacyAppearanceDeepLink, resolveSettingsSearchEntry } from './settingsSearchCatalog';
-import {
-  SETTINGS_CARD_CLASS,
-  SETTINGS_ROW_CLASS,
-  SETTINGS_ROW_HINT_CLASS,
-  SETTINGS_ROW_LABEL_CLASS,
-  SETTINGS_SECTION_TITLE_CLASS,
-} from './settingsRowClasses';
+import { SettingsCard, SettingsPageScope, SettingsRow, SettingsSection } from '@/components/ui/settings-rows';
 import { SettingsSearchNavigationContext } from './SettingsSearchNavigation';
 import type { SettingsSearchContext } from './settingsSearchTypes';
 import { useSettingsSectionTarget } from './useSettingsSectionTarget';
@@ -537,29 +531,16 @@ function SettingsViewContent() {
 
                     {/* Pi 扩展只在通用页提供一行入口，不占用设置一级菜单；与 Agent 相关设置放在一起。 */}
                     <section id={generalSettings.piExtensions.targetId} className="py-[18px]" aria-label={t('settings.piPackages.title')}>
-                      <div className="flex flex-col gap-[14px]">
-                        <h2 className={SETTINGS_SECTION_TITLE_CLASS}>{t('settings.piPackages.title')}</h2>
-                        <div className={SETTINGS_CARD_CLASS}>
-                          <button data-setting-id={generalSettings.piExtensions.id}
-                            type="button"
+                      <SettingsSection title={t('settings.piPackages.title')}>
+                        <SettingsCard>
+                          <SettingsRow data-setting-id={generalSettings.piExtensions.id}
+                            title={t('settings.piPackages.manageLabel')}
+                            hint={t('settings.piPackages.entryDescription')}
+                            chevron
                             onClick={handleOpenPiExtensions}
-                            className={cn(
-                              SETTINGS_ROW_CLASS,
-                              'w-full rounded-xl text-left transition-colors hover:bg-[var(--settings-menu-bg-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
-                            )}
-                          >
-                            <span className="flex min-w-0 flex-col gap-1">
-                              <span className={SETTINGS_ROW_LABEL_CLASS} style={{ letterSpacing: '0.12px' }}>
-                                {t('settings.piPackages.manageLabel')}
-                              </span>
-                              <span className={SETTINGS_ROW_HINT_CLASS}>
-                                {t('settings.piPackages.entryDescription')}
-                              </span>
-                            </span>
-                            <ChevronRight size={16} aria-hidden="true" className="shrink-0 text-[var(--text-tertiary)]" />
-                          </button>
-                        </div>
-                      </div>
+                          />
+                        </SettingsCard>
+                      </SettingsSection>
                     </section>
 
                     {/* Section — Experimental (py 18). */}
@@ -621,37 +602,39 @@ function SettingsViewContent() {
                 id={personalizationSettings.personalization.targetId}
                 aria-labelledby="settings-tab-personalization"
               >
-                <section id={personalizationSettings.userPrompt.targetId} className="pb-[18px]" aria-label={t(personalizationSettings.userPrompt.titleKey)}>
-                  <UserPromptSection />
-                </section>
-                <section id={personalizationDetailsSettings.memoryMakerLabel.targetId} className="pb-[18px]" aria-label={t(personalizationSettings.memory.titleKey)}>
-                  <MemorySection />
-                </section>
-                <section id={personalizationSettings.subagents.targetId} className="pb-[18px]" aria-label={t(personalizationSettings.subagents.titleKey)}>
-                  <SubagentModelSection key={`subagent-models:${mode}:${dataOwnerId ?? 'none'}`} />
-                </section>
-                <section id={personalizationDetailsSettings.auxiliaryModelsTitle.targetId} className="pb-[18px]" aria-label={t(personalizationSettings.auxiliaryModels.titleKey)}>
-                  <AuxiliaryModelSection
-                    key={`auxiliary-models:${mode}:${dataOwnerId ?? 'none'}`}
-                  />
-                </section>
-                <section id={personalizationSettings.visionBridge.targetId} className="pb-[18px]" aria-label={t(personalizationSettings.visionBridge.titleKey)}>
-                  <VisionBridgeSection key={`vision-bridge:${mode}:${dataOwnerId ?? 'none'}`} />
-                </section>
-                {/* RSB 默认终端 shell —— 改默认只影响新建 tab,已有 tab 不动 */}
-                <section id={personalizationDetailsSettings.terminalShellCardLabel.targetId} className="pb-[18px]" aria-label={t(personalizationSettings.terminalShell.titleKey)}>
-                  <TerminalShellSection />
-                </section>
-                {/* 消息流链接/HTML 文件左键的默认打开位置(内置侧边栏 / 系统浏览器) */}
-                <section id={personalizationSettings.linkOpen.targetId} className="pb-[18px]" aria-label={t(personalizationSettings.linkOpen.titleKey)}>
-                  <LinkOpenSection />
-                </section>
-                {/* "小技巧" section —— TipsSection 内部把多个功能性 cell
-                    (SilentEncryptedRetryCell / ChatEmbeddingCell) 装在一个共享灰底 container,
-                    形态跟 MemorySection 对齐 (单标题 + 多 cell + divider)。 */}
-                <section id={personalizationDetailsSettings.compatModeTitle.targetId} className="pb-[18px]" aria-label={t(personalizationSettings.tips.titleKey)}>
-                  <TipsSection />
-                </section>
+                <SettingsSection variant="page" title={t('settings.personalization.title')}>
+                  <section id={personalizationSettings.userPrompt.targetId} aria-label={t(personalizationSettings.userPrompt.titleKey)}>
+                    <UserPromptSection />
+                  </section>
+                  <section id={personalizationDetailsSettings.memoryMakerLabel.targetId} aria-label={t(personalizationSettings.memory.titleKey)}>
+                    <MemorySection />
+                  </section>
+                  <section id={personalizationSettings.subagents.targetId} aria-label={t(personalizationSettings.subagents.titleKey)}>
+                    <SubagentModelSection key={`subagent-models:${mode}:${dataOwnerId ?? 'none'}`} />
+                  </section>
+                  <section id={personalizationDetailsSettings.auxiliaryModelsTitle.targetId} aria-label={t(personalizationSettings.auxiliaryModels.titleKey)}>
+                    <AuxiliaryModelSection
+                      key={`auxiliary-models:${mode}:${dataOwnerId ?? 'none'}`}
+                    />
+                  </section>
+                  <section id={personalizationSettings.visionBridge.targetId} aria-label={t(personalizationSettings.visionBridge.titleKey)}>
+                    <VisionBridgeSection key={`vision-bridge:${mode}:${dataOwnerId ?? 'none'}`} />
+                  </section>
+                  {/* RSB 默认终端 shell —— 改默认只影响新建 tab,已有 tab 不动 */}
+                  <section id={personalizationDetailsSettings.terminalShellCardLabel.targetId} aria-label={t(personalizationSettings.terminalShell.titleKey)}>
+                    <TerminalShellSection />
+                  </section>
+                  {/* 消息流链接/HTML 文件左键的默认打开位置(内置侧边栏 / 系统浏览器) */}
+                  <section id={personalizationSettings.linkOpen.targetId} aria-label={t(personalizationSettings.linkOpen.titleKey)}>
+                    <LinkOpenSection />
+                  </section>
+                  {/* "小技巧" section —— TipsSection 内部把多个功能性 cell
+                      (SilentEncryptedRetryCell / ChatEmbeddingCell) 装在一个共享灰底 container,
+                      形态跟 MemorySection 对齐 (单标题 + 多 cell + divider)。 */}
+                  <section id={personalizationDetailsSettings.compatModeTitle.targetId} aria-label={t(personalizationSettings.tips.titleKey)}>
+                    <TipsSection />
+                  </section>
+                </SettingsSection>
               </div>
             )}
 
@@ -703,8 +686,11 @@ function SettingsViewContent() {
                 aria-labelledby="settings-tab-remote-control"
               >
                 <section aria-label={t(localAgentSettings.connections.sectionKey)}>
-                  <RemoteControlSection />
-                  <LocalAgentSection />
+                  {/* 远程连接的页面标题在 RemoteControlSection 里，本机应用连接是它下面的分区。 */}
+                  <SettingsPageScope>
+                    <RemoteControlSection />
+                    <LocalAgentSection />
+                  </SettingsPageScope>
                 </section>
               </div>
             )}
@@ -731,13 +717,15 @@ function SettingsViewContent() {
                 id={builtinToolsSettings.builtinTools.targetId}
                 aria-labelledby="settings-tab-builtin-tools"
               >
-                <section className="pb-[18px]" aria-label={t(builtinToolsSettings.title.titleKey)}>
-                  <BuiltinToolsSection workingDir={workingDir ?? undefined} />
-                </section>
                 {/* 外部(自定义)MCP 与内置工具同页管理:内置在上、外部在下,组成「工具」页。 */}
-                <section className="pb-[18px]" aria-label={t(builtinToolsSettings.builtinTools.sectionKey)}>
-                  <McpServersSection />
-                </section>
+                <SettingsSection variant="page" title={t('settings.tabs.builtinTools')}>
+                  <section aria-label={t(builtinToolsSettings.title.titleKey)}>
+                    <BuiltinToolsSection workingDir={workingDir ?? undefined} />
+                  </section>
+                  <section aria-label={t(builtinToolsSettings.builtinTools.sectionKey)}>
+                    <McpServersSection />
+                  </section>
+                </SettingsSection>
               </div>
             )}
 

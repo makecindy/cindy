@@ -20,10 +20,12 @@ type FontOption = { id: string; label: string; family: string };
 
 hljs.registerLanguage('typescript', typescript);
 
+/**
+ * 字体选择器只画整宽的选择按钮和弹层；名称、说明由外层 SettingsField 负责，
+ * 「恢复默认」按钮用 FontFamilyResetButton 放在 SettingsField 的 action 里。
+ */
 interface FontFamilyPickerProps {
   'data-setting-id'?: string;
-  label: string;
-  description: string;
   ariaLabel: string;
   value: string;
   presets: FontPreset[];
@@ -31,13 +33,34 @@ interface FontFamilyPickerProps {
   previewLanguage?: string;
   previewFallbackFamily: string;
   onChange: (family: string) => void;
-  onReset: () => void;
+}
+
+/** 字体选择的「恢复默认」：没有自定义字体时禁用。 */
+export function FontFamilyResetButton({ value, onReset }: { value: string; onReset: () => void }) {
+  const { t } = useTranslation();
+  return (
+    <Tip text={t('settings.appearance.font.reset')}>
+      <button
+        type="button"
+        aria-label={t('settings.appearance.font.reset')}
+        onClick={onReset}
+        disabled={!value.trim()}
+        className={cn(
+          'flex h-8 w-8 shrink-0 items-center justify-center rounded-xl',
+          'border border-[var(--settings-input-border)]',
+          'bg-[var(--settings-input-bg)] text-[var(--settings-input-text)]',
+          'transition-colors hover:bg-[var(--settings-menu-bg-hover)]',
+          'disabled:cursor-default disabled:opacity-40 disabled:hover:bg-[var(--settings-input-bg)]',
+        )}
+      >
+        <RotateCcw size={14} />
+      </button>
+    </Tip>
+  );
 }
 
 export function FontFamilyPicker({
   'data-setting-id': settingId,
-  label,
-  description,
   ariaLabel,
   value,
   presets,
@@ -45,7 +68,6 @@ export function FontFamilyPicker({
   previewLanguage,
   previewFallbackFamily,
   onChange,
-  onReset,
 }: FontFamilyPickerProps) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
@@ -104,163 +126,130 @@ export function FontFamilyPicker({
   }, [previewLanguage, previewSample]);
 
   return (
-    <div className="flex flex-col gap-2">
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <p
-            className="text-13 font-medium text-[var(--settings-section-sublabel)]"
-            style={{ letterSpacing: '0.12px' }}
-          >
-            {label}
-          </p>
-          <p className="mt-1 text-12 leading-[1.4] text-[var(--text-secondary)]">
-            {description}
-          </p>
-        </div>
-        <Tip text={t('settings.appearance.font.reset')}>
-          <button
-            type="button"
-            aria-label={t('settings.appearance.font.reset')}
-            onClick={onReset}
-            disabled={!value.trim()}
-            className={cn(
-              'flex h-8 w-8 shrink-0 items-center justify-center rounded-xl',
-              'border border-[var(--settings-input-border)]',
-              'bg-[var(--settings-input-bg)] text-[var(--settings-input-text)]',
-              'transition-colors hover:bg-[var(--settings-menu-bg-hover)]',
-              'disabled:cursor-default disabled:opacity-40 disabled:hover:bg-[var(--settings-input-bg)]',
-            )}
-          >
-            <RotateCcw size={14} />
-          </button>
-        </Tip>
-      </div>
-
-      <Popover open={open} onOpenChange={setOpen}>
-        <PopoverTrigger asChild>
-          <button
-            type="button"
-            aria-label={ariaLabel}
-            data-setting-id={settingId}
-            className={cn(
-              'flex h-10 w-full items-center justify-between rounded-xl px-3',
-              'border border-[var(--settings-input-border)]',
-              'bg-[var(--settings-input-bg)] text-left',
-              'transition-colors hover:bg-[var(--settings-menu-bg-hover)]',
-            )}
-          >
-            <span className="truncate text-13 text-[var(--settings-input-text)]">
-              {selectedLabel}
-            </span>
-            <ChevronDown size={14} className="shrink-0 text-[var(--settings-eye-icon)]" />
-          </button>
-        </PopoverTrigger>
-        <PopoverContent
-          side="bottom"
-          align="start"
-          sideOffset={6}
-          collisionPadding={8}
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          aria-label={ariaLabel}
+          data-setting-id={settingId}
           className={cn(
-            'w-[min(var(--radix-popover-trigger-width),560px)] rounded-xl p-2',
+            'flex h-10 w-full items-center justify-between rounded-xl px-3',
             'border border-[var(--settings-input-border)]',
-            'bg-[var(--settings-theme-card-bg)] shadow-[shadow:var(--shadow-menu)]',
+            'bg-[var(--settings-input-bg)] text-left',
+            'transition-colors hover:bg-[var(--settings-menu-bg-hover)]',
           )}
-          onMouseLeave={() => setPreviewFamily(null)}
         >
-          <div className="flex flex-col gap-2">
-            <div
-              className={cn(
-                'rounded-xl border px-3 py-2',
-                'border-[var(--settings-input-border)] bg-[var(--settings-input-bg)]',
-                'text-13 leading-[1.45] text-[var(--settings-input-text)]',
-                'whitespace-pre-wrap break-words',
-              )}
-              style={{ fontFamily: activePreviewFamily }}
-            >
-              {highlightedPreviewHtml ? (
-                <code
-                  className="block whitespace-pre-wrap break-words"
-                  style={{ fontFamily: 'inherit' }}
-                  dangerouslySetInnerHTML={{ __html: highlightedPreviewHtml }}
-                />
-              ) : (
-                previewSample
-              )}
-            </div>
+          <span className="truncate text-13 text-[var(--settings-input-text)]">
+            {selectedLabel}
+          </span>
+          <ChevronDown size={14} className="shrink-0 text-[var(--settings-eye-icon)]" />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent
+        side="bottom"
+        align="start"
+        sideOffset={6}
+        collisionPadding={8}
+        className={cn(
+          'w-[min(var(--radix-popover-trigger-width),560px)] rounded-xl p-2',
+          'border border-[var(--settings-input-border)]',
+          'bg-[var(--settings-theme-card-bg)] shadow-[shadow:var(--shadow-menu)]',
+        )}
+        onMouseLeave={() => setPreviewFamily(null)}
+      >
+        <div className="flex flex-col gap-2">
+          <div
+            className={cn(
+              'rounded-xl border px-3 py-2',
+              'border-[var(--settings-input-border)] bg-[var(--settings-input-bg)]',
+              'text-13 leading-[1.45] text-[var(--settings-input-text)]',
+              'whitespace-pre-wrap break-words',
+            )}
+            style={{ fontFamily: activePreviewFamily }}
+          >
+            {highlightedPreviewHtml ? (
+              <code
+                className="block whitespace-pre-wrap break-words"
+                style={{ fontFamily: 'inherit' }}
+                dangerouslySetInnerHTML={{ __html: highlightedPreviewHtml }}
+              />
+            ) : (
+              previewSample
+            )}
+          </div>
 
-            <div>
-              <div className="px-2 pb-1 text-11 font-medium uppercase tracking-[0.08em] text-[var(--text-secondary)]">
-                {t('settings.appearance.font.presets')}
-              </div>
-              <div className="flex flex-col gap-[2px]" role="listbox" aria-label={ariaLabel}>
-                {presetOptions.map((option) => {
-                  const isSelected = option.family === value.trim();
-                  return (
-                    <button
-                      key={option.id}
-                      type="button"
-                      role="option"
-                      aria-selected={isSelected}
-                      onClick={() => handleSelect(option.family)}
-                      onFocus={() => setPreviewFamily(option.family)}
-                      onBlur={() => setPreviewFamily(null)}
-                      onMouseEnter={() => setPreviewFamily(option.family)}
-                      onMouseLeave={() => setPreviewFamily(null)}
-                      className={cn(
-                        'flex h-[34px] w-full items-center justify-between rounded-[8px] px-3',
-                        'transition-colors hover:bg-[var(--settings-menu-bg-hover)]',
-                        isSelected && 'bg-[var(--settings-menu-bg-hover)]',
-                      )}
+          <div>
+            <div className="px-2 pb-1 text-11 font-medium uppercase tracking-[0.08em] text-[var(--text-secondary)]">
+              {t('settings.appearance.font.presets')}
+            </div>
+            <div className="flex flex-col gap-[2px]" role="listbox" aria-label={ariaLabel}>
+              {presetOptions.map((option) => {
+                const isSelected = option.family === value.trim();
+                return (
+                  <button
+                    key={option.id}
+                    type="button"
+                    role="option"
+                    aria-selected={isSelected}
+                    onClick={() => handleSelect(option.family)}
+                    onFocus={() => setPreviewFamily(option.family)}
+                    onBlur={() => setPreviewFamily(null)}
+                    onMouseEnter={() => setPreviewFamily(option.family)}
+                    onMouseLeave={() => setPreviewFamily(null)}
+                    className={cn(
+                      'flex h-[34px] w-full items-center justify-between rounded-[8px] px-3',
+                      'transition-colors hover:bg-[var(--settings-menu-bg-hover)]',
+                      isSelected && 'bg-[var(--settings-menu-bg-hover)]',
+                    )}
+                  >
+                    <span
+                      className="truncate text-13 text-[var(--settings-input-text)]"
+                      style={{ fontFamily: buildPreviewFamily(option.family) }}
                     >
-                      <span
-                        className="truncate text-13 text-[var(--settings-input-text)]"
-                        style={{ fontFamily: buildPreviewFamily(option.family) }}
-                      >
-                        {option.label}
-                      </span>
-                      {isSelected ? (
-                        <Check
-                          size={16}
-                          className="shrink-0 text-[var(--settings-theme-icon-active)]"
-                        />
-                      ) : null}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-
-            <div className="border-t border-[var(--settings-input-border)] pt-2">
-              <div className="px-2 pb-1 text-11 font-medium uppercase tracking-[0.08em] text-[var(--text-secondary)]">
-                {t('settings.appearance.font.custom')}
-              </div>
-              <div className="flex gap-2">
-                <input
-                  value={customValue}
-                  onChange={(e) => setCustomValue(e.target.value)}
-                  placeholder={t('settings.appearance.font.customPlaceholder')}
-                  className={cn(
-                    'h-9 min-w-0 flex-1 rounded-xl border px-3 text-13 outline-none',
-                    'border-[var(--settings-input-border)] bg-[var(--settings-input-bg)]',
-                    'font-mono text-[var(--settings-input-text)] placeholder:text-[var(--settings-input-placeholder)]',
-                    'focus:border-[var(--settings-input-border-focus)]',
-                  )}
-                />
-                <Button
-                  variant="secondary"
-                  size="lg"
-                  compact
-                  type="button"
-                  onClick={() => handleSelect(customPreview)}
-                  disabled={!customPreview}
-                >
-                  {t('settings.appearance.font.applyCustom')}
-                </Button>
-              </div>
+                      {option.label}
+                    </span>
+                    {isSelected ? (
+                      <Check
+                        size={16}
+                        className="shrink-0 text-[var(--settings-theme-icon-active)]"
+                      />
+                    ) : null}
+                  </button>
+                );
+              })}
             </div>
           </div>
-        </PopoverContent>
-      </Popover>
-    </div>
+
+          <div className="border-t border-[var(--settings-input-border)] pt-2">
+            <div className="px-2 pb-1 text-11 font-medium uppercase tracking-[0.08em] text-[var(--text-secondary)]">
+              {t('settings.appearance.font.custom')}
+            </div>
+            <div className="flex gap-2">
+              <input
+                value={customValue}
+                onChange={(e) => setCustomValue(e.target.value)}
+                placeholder={t('settings.appearance.font.customPlaceholder')}
+                className={cn(
+                  'h-9 min-w-0 flex-1 rounded-xl border px-3 text-13 outline-none',
+                  'border-[var(--settings-input-border)] bg-[var(--settings-input-bg)]',
+                  'font-mono text-[var(--settings-input-text)] placeholder:text-[var(--settings-input-placeholder)]',
+                  'focus:border-[var(--settings-input-border-focus)]',
+                )}
+              />
+              <Button
+                variant="secondary"
+                size="lg"
+                compact
+                type="button"
+                onClick={() => handleSelect(customPreview)}
+                disabled={!customPreview}
+              >
+                {t('settings.appearance.font.applyCustom')}
+              </Button>
+            </div>
+          </div>
+        </div>
+      </PopoverContent>
+    </Popover>
   );
 }

@@ -6,24 +6,32 @@ import { createRoot, type Root } from 'react-dom/client';
 import { beforeEach, afterEach, expect, it, vi } from 'vitest';
 // Unit: a completed turn must not hide records the reader opened, including after
 // virtualized remount. Exercise the production shell and its shared disclosure memory.
+const h = vi.hoisted(() => ({ reduceMotion: true, heightMotions: [] as number[] }));
 vi.mock('react-native', () => ({
-  View: ({ children }: { children: ReactNode }) => el('div', null, children),
+  View: ({ children, onLayout }: { children: ReactNode; onLayout?: (event: any) => void }) => {
+    useLayoutEffect(() => { onLayout?.({ nativeEvent: { layout: { height: 300 } } }); }, []);
+    return el('div', null, children);
+  },
   Pressable: ({ children, onPress, accessibilityState, accessibilityLabel }: any) => el('button', {
     onClick: onPress, 'aria-label': accessibilityLabel, 'aria-expanded': accessibilityState?.expanded,
   }, children),
   ActivityIndicator: () => null,
   useWindowDimensions: () => ({ width: 390, height: 844 }),
   StyleSheet: { create: (v: unknown) => v },
-  Animated: { View: ({ children, onLayout }: any) => {
+  Animated: { View: ({ children, onLayout, style }: any) => {
     useLayoutEffect(() => { onLayout?.({ nativeEvent: { layout: { height: 300 } } }); }, []);
-    return el('span', null, children);
+    return el('span', { 'data-body-height': onLayout ? style.height?.current ?? 'auto' : undefined }, children);
   },
-    Value: class { interpolate() { return '0deg'; } }, timing: () => ({ start(done?: (result: { finished: boolean }) => void) { done?.({ finished: true }); }, stop() {} }) },
+    Value: class { constructor(public current: number) {} setValue(value: number) { this.current = value; } interpolate() { return '0deg'; } },
+    timing: (value: any, options: any) => ({ start(done?: (result: { finished: boolean }) => void) {
+      if (!options.useNativeDriver && options.duration > 0) h.heightMotions.push(options.toValue);
+      value.setValue(options.toValue); done?.({ finished: true });
+    }, stop() {} }) },
 }));
 vi.mock('lucide-react-native', () => ({ ChevronRight: () => null, Layers: () => null, Sparkles: () => null, Terminal: () => null }));
 vi.mock('@/components/AppText', () => ({ Text: ({ children }: any) => el('span', null, children) }));
 vi.mock('@/theme', () => ({ useTheme: () => ({ colors: {} }), useThemedStyles: () => ({}) }));
-vi.mock('@/hooks/useReduceMotion', () => ({ useReduceMotionEnabled: () => true }));
+vi.mock('@/hooks/useReduceMotion', () => ({ useReduceMotionEnabled: () => h.reduceMotion }));
 const history = vi.hoisted(() => ({ invoke: vi.fn(), generation: 1, getSubscriptionIdentity: vi.fn((_deviceId: string, _topics: readonly Topic[]) => null as number | null), subscribe: vi.fn(async () => undefined), unsubscribe: vi.fn(async () => undefined), toolActions: undefined as any, resolveMedia: vi.fn(async (media: any) => ({ url: 'https://media.invalid/resolved', mimeType: media.kind === 'video' ? 'video/mp4' : 'image/png' })), mediaDevice: '' }));
 vi.mock('expo-router', () => ({ useFocusEffect: (effect: () => void) => useEffect(effect, [effect]) }));
 vi.mock('@/auth/AuthContext', () => ({ useAuth: () => ({ accountGeneration: history.generation }) }));
@@ -70,7 +78,7 @@ import { ProcessDisclosureViewport, useProcessDisclosureViewport } from '@/sessi
 import { __test_internals as memory } from '@/session/expandedBlockMemory';
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 let root: Root, node: HTMLDivElement;
-beforeEach(() => { history.invoke.mockReset(); history.getSubscriptionIdentity.mockReset().mockReturnValue(null); history.resolveMedia.mockClear(); history.toolActions = undefined; history.generation = 1; remoteSessionStore.clear(); memory.reset(); node = document.createElement('div'); root = createRoot(node); });
+beforeEach(() => { history.invoke.mockReset(); history.getSubscriptionIdentity.mockReset().mockReturnValue(null); history.resolveMedia.mockClear(); history.toolActions = undefined; history.generation = 1; remoteSessionStore.clear(); memory.reset(); h.reduceMotion = true; h.heightMotions = []; node = document.createElement('div'); root = createRoot(node); });
 afterEach(async () => { await act(async () => root.unmount()); vi.useRealTimers(); });
 const header = () => node.querySelector('button')!;
 async function show(running: boolean) {
@@ -517,6 +525,26 @@ it('reconciles a hidden group history after its original execution host re-ACKs'
   expect(remoteSessionStore.getHistoryInvalidationToken(process.sessionId)).toBe(dirty);
   await act(async () => header().click());
   expect(node.textContent).toContain(note);
+});
+
+// Unit regression: switching tasks replayed a 0→30pt disclosure, moving all earlier
+// messages. Existing cases only checked which text survived, with motion disabled.
+// Mount a live turn, then remount remembered expansion through the production shell.
+it('lays out initially and remembered expanded work immediately while preserving disclosure motion', async () => {
+  h.reduceMotion = false;
+  await show(true);
+  expect(node.querySelector('[data-body-height]')?.getAttribute('data-body-height')).toBe('auto');
+  expect(h.heightMotions).toEqual([]);
+  await act(async () => header().click());
+  expect(h.heightMotions).toContain(0);
+  await act(async () => header().click());
+  expect(h.heightMotions).toContain(300);
+  await act(async () => root.render(null));
+  h.heightMotions = [];
+  await show(false);
+  expect(node.textContent).toContain('Found the cause');
+  expect(node.querySelector('[data-body-height]')?.getAttribute('data-body-height')).toBe('auto');
+  expect(h.heightMotions).toEqual([]);
 });
 
 // Unit regression: the native iOS group header moved 336pt on manual disclosure (2026-11-07).
