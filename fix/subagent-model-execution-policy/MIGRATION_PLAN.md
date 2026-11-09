@@ -14,13 +14,20 @@
 
 ## 第二阶段(后续,需产品决策)
 
-- [ ] 设置 UI:模式选择(local-only / development / approved-paid)+ approvals
-      创建/撤销入口(目前只有 JSON 存储与内部读写)。
-- [ ] Claude Code 原生 subagent 与 Codex `spawn_agent` 纳入同一策略
-      (目前只有可用性层 deny,见 SECURITY_DESIGN.md 残留路径)。—— 正式
-      生产发布前必须关闭(本轮用户要求)。
+- [x] 本轮 Phase A(已实现,待 CI 与独立复核):
+      - P0-0 Host/Runner 账本读错严格化(ENOENT 仅可建新账,EACCES/ENOTDIR/EIO/损坏失败关闭,结算不可读不写入);
+      - Claude Task/Agent 逐调用 Host 授权叠加(可用性保留,跨模型硬拒,固定执行保留);
+      - Codex `expose_spawn_agent_model_overrides: false` 默认固定继承(动态跨模型禁用);
+      - `trusted-lan` 三级分级(显式登记 Provider+Endpoint+模型,缺省空表,local-only 仍拒);
+      - Host `parseModelExecutionPolicy` 缺失 import 补上(原 HEAD 构建即 fail-closed 全拒,已修)。
+- [ ] 设置 UI:模式选择(local-only / development / approved-paid)+ trustedLan 登记/撤销入口
+      + approvals 创建/撤销入口(目前只有 JSON 存储与内部读写)。
+- [ ] Claude `subagent_type` frontmatter 声明模型的逐次核验:当前仅显式 `model` 参数在 hook 覆盖;
+      frontmatter 路径为 BLOCKED 残留,本轮演示与发布文档不得宣称严格隔离。
 - [ ] fallback/alias 显式回归:provider 轮换、模型别名、跨设备同名 provider
       的端到端测试(mock provider 断言无网络请求)。
+- [ ] 真实 macOS 签名构建 safeStorage Keychain ACL 验证:当前仅 mock 覆盖,BLOCKED(见下方)。
+- [ ] 上游 Actions 审批后合入 main 的 CI 全绿;Release Gate 通过前不得合并/部署。
 
 ## 验证矩阵(回归)
 
@@ -40,6 +47,11 @@
 | pricedRow 存在但 amount=0 | 走参考估算路径记账(不再漏) |
 | 两个 Worker 竞争最后一笔额度 | 第二个预留拒(锁内裁决),总预留不穿透 cap |
 | 账本损坏(非空 JSON)/首个付费任务账本缺失 | 损坏拒(不覆盖);缺失视为可建新账并预留 |
+| 账本读错 EACCES / ENOTDIR / EIO | Host+Runner 均拒放行,结算不写入,账本字节不变 |
+| Claude 跨模型未在 allow-list(即使目录已列出) | Host 授权硬拒,固定模型不受影响 |
+| Codex `spawn_agent` 带 model override | flag 关 → 子 thread 继承父模型,无跨模型执行 |
+| Trusted LAN 未登记 endpoint 模型 | 按 paid(或 deny)处理,不当 local 放行 |
+| Trusted LAN 已登记 + local-only | 仍拒(trusted-lan 非 local) |
 | 崩溃遗留的过期预留 | TTL 读清(SW<=10min),新预留不被堵死 |
 | Orca `create_worker` 显式指定未授权路由 | Host 侧 `MODEL_EXECUTION_DENIED`,不建会话 |
 

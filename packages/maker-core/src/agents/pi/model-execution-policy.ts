@@ -34,7 +34,7 @@ export const MODEL_EXECUTION_POLICY_VERSION = 1;
 
 export type ModelExecutionMode = 'local-only' | 'development' | 'approved-paid';
 
-export type ModelRouteTier = 'local' | 'free' | 'paid';
+export type ModelRouteTier = 'local' | 'free' | 'paid' | 'trusted-lan';
 
 export interface AllowedModelRoute {
   /** pi 内部 provider id(路由解析后真正执行的 provider)。 */
@@ -92,7 +92,7 @@ export function normalizeAllowedRoute(raw: unknown): AllowedModelRoute | null {
   const record = raw as Record<string, unknown>;
   if (!nonEmptyString(record.provider) || !nonEmptyString(record.model)) return null;
   const tier = record.tier;
-  if (tier !== 'local' && tier !== 'free' && tier !== 'paid') return null;
+  if (tier !== 'local' && tier !== 'free' && tier !== 'paid' && tier !== 'trusted-lan') return null;
   return {
     provider: record.provider.trim(),
     model: record.model.trim(),
@@ -294,6 +294,8 @@ function routeMatches(
  *  1. 快照无效 → deny(fail-closed)。
  *  2. 请求路由命中 allowedRoutes:
  *     - local → 任何 mode 放行。
+ *     - trusted-lan → development / approved-paid 放行;local-only 拒绝
+ *       (显式登记的局域网端点不是本地,strict local-only 语义不变)。
  *     - free → development / approved-paid 放行;local-only 拒绝。
  *     - paid → approved-paid 放行;其余不立即拒绝,继续走 approval 检查
  *       (development 下的付费路由可用一次已签发 approval 合法执行)。
@@ -338,6 +340,15 @@ export function decideModelExecution(
         };
       }
       return { allowed: true, reason: 'explicitly allow-listed free route' };
+    }
+    if (route.tier === 'trusted-lan') {
+      if (snapshot.mode === 'local-only') {
+        return {
+          allowed: false,
+          reason: `route "${provider}/${model}" is not executable in local-only mode; trusted LAN is not local (session mode is local-only)`,
+        };
+      }
+      return { allowed: true, reason: 'explicitly allow-listed trusted LAN route' };
     }
     if (snapshot.mode !== 'approved-paid') {
       // paid 仅被 allow-list 列入但 mode 不允许时不立即拒绝:继续走

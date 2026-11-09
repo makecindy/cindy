@@ -6,7 +6,7 @@ import type { ProviderView } from '@cindy/model-providers';
 
 const CLAUDE_ALIASES = ['sonnet', 'opus', 'haiku', 'fable'] as const;
 
-function normalizeModel(model: string): string {
+export function normalizeClaudeModelForPolicy(model: string): string {
   const normalized = model.trim().toLowerCase();
   return normalized.endsWith('[1m]')
     ? normalized.slice(0, -'[1m]'.length)
@@ -14,7 +14,7 @@ function normalizeModel(model: string): string {
 }
 
 function modelMatches(requested: string, candidate: string): boolean {
-  const normalizedCandidate = normalizeModel(candidate);
+  const normalizedCandidate = normalizeClaudeModelForPolicy(candidate);
   if (requested === normalizedCandidate) return true;
   return CLAUDE_ALIASES.some(
     (alias) => requested === alias && normalizedCandidate.includes(`claude-${alias}-`),
@@ -51,7 +51,7 @@ export function classifyClaudeSubagentModelAccess(input: {
   xdSnapshot: XdAccessSnapshot;
   providers: readonly Pick<ProviderView, 'id' | 'connected' | 'suspended' | 'models'>[];
 }): ClaudeSubagentModelAccessResult {
-  const requested = normalizeModel(input.model);
+  const requested = normalizeClaudeModelForPolicy(input.model);
   if (!requested) return { status: 'unknown' };
 
   const providerId = input.providerId?.trim() || null;
@@ -87,4 +87,27 @@ export function classifyClaudeSubagentModelAccess(input: {
     ),
   );
   return positivelyAvailable ? { status: 'allowed' } : { status: 'unknown' };
+}
+
+/**
+ * 把 Host 执行授权裁决叠加到可用性分类上(policy 是额外的 deny,不是
+ * 替代):模型与父模型归一化后相等 → 固定执行,直接返回可用性结论;
+ * 否则只有 policy 允许时才保留可用性结论(available=denied 仍拒,
+ * unknown 仍为 unknown —— hook 侧以 unknown=放行,故 policy 允许下
+ * 保留 unknown 不改行为;policy 拒绝一律 denied)。
+ */
+export function applyExecutionPolicyToClaudeAccess(input: {
+  availability: ClaudeSubagentModelAccessResult;
+  policyAllowed: boolean;
+  policyReason?: string;
+  model: string;
+  parentModel: string;
+}): ClaudeSubagentModelAccessResult {
+  const requested = normalizeClaudeModelForPolicy(input.model);
+  const parent = normalizeClaudeModelForPolicy(input.parentModel);
+  if (requested === parent) return input.availability;
+  if (!input.policyAllowed) {
+    return { status: 'denied', reason: input.policyReason ?? 'model execution policy denied this cross-model route' };
+  }
+  return input.availability;
 }

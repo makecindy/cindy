@@ -43,11 +43,12 @@ interface SpendFile {
 }
 
 /**
- * 读取账本(宽容模式):供结算/展示使用,损坏时返回空账本(best-effort)。
- * 预留的裁决面用 readSpendFileForLock(失败关闭),二者不可互换。
+ * 读取账本(严格模式):失败即返回 null,调用方必须失败关闭,不静默清零
+ * 历史费用。仅 ENOENT 视为账本缺失(首个付费任务可建新账);EACCES /
+ * ENOTDIR / EIO / 其他读失败一律返回 null —— 不得当作空账本继续记账。
  */
-function readSpendFile(): SpendFile {
-  return readSpendFileForLock() ?? { version: 3, byScope: {} };
+function readSpendFile(): SpendFile | null {
+  return readSpendFileForLock();
 }
 
 /**
@@ -59,8 +60,12 @@ function readSpendFileForLock(): SpendFile | null {
   let raw: string;
   try {
     raw = fs.readFileSync(filePath, 'utf8');
-  } catch {
-    return { version: 3, byScope: {} }; // ENOENT / EACCES / ENOTDIR:首个付费任务视为可建账
+  } catch (error) {
+    // P0-0:仅 ENOENT 视为可建新账。权限/路径/I/O 失败必须失败关闭,
+    // 不能把 EACCES / ENOTDIR / EIO 当空账本放行未授权付费请求。
+    const code = (error as NodeJS.ErrnoException | undefined)?.code;
+    if (code === 'ENOENT') return { version: 3, byScope: {} };
+    return null;
   }
   let parsed: Partial<SpendFile>;
   try {
@@ -173,6 +178,12 @@ export function addSubagentModelSpend(
   if (!scopeKey || !Number.isFinite(amountUsd) || amountUsd <= 0) return;
   withSpendLock(() => {
     const state = readSpendFile();
+    // P0-0:账本不可读(含 EACCES / ENOTDIR / EIO / 损坏)时不写入,
+    // 不把历史费用清零。结算丢弃仅记 warn,预留侧已失败关闭。
+    if (!state) {
+      log.warn('subagent model spend settlement skipped: ledger unreadable (history preserved)');
+      return;
+    }
     const existing = state.byScope[scopeKey] ?? emptyScope();
     if (estimated) existing.estimatedUsd += amountUsd;
     else existing.actualUsd += amountUsd;
@@ -248,6 +259,8 @@ export function releaseSubagentModelSpend(scopeKey: string, reservationId: strin
   if (!scopeKey || !reservationId) return;
   withSpendLock(() => {
     const state = readSpendFile();
+    // P0-0:不可读时不写入,保留账本字节不变。
+    if (!state) return;
     const existing = state.byScope[scopeKey];
     if (!existing) return;
     if (!(reservationId in existing.reservedUsdById)) return;
@@ -261,7 +274,9 @@ export function releaseSubagentModelSpend(scopeKey: string, reservationId: strin
 
 /** 供 Host 侧在决议时核对(扩展/runner 自己的实现读同一文件)。 */
 export function readSubagentModelSpend(scopeKey: string): number | undefined {
-  const totals = readSpendFile().byScope[scopeKey];
+  const state = readSpendFile();
+  if (!state) return undefined;
+  const totals = state.byScope[scopeKey];
   if (!totals) return undefined;
   pruneExpiredReservations(totals);
   const reserved = Object.values(totals.reservedUsdById).reduce((acc, v) => acc + v, 0);

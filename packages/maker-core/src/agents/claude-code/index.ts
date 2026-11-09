@@ -1646,6 +1646,8 @@ export class ClaudeCodeAgent extends BaseAgent {
           parentModel: opts.model,
           credentialMode: effectiveCredentialMode,
           model,
+          sessionId: opts.sessionId,
+          projectRoot: opts.remoteHostId ? undefined : opts.workingDir,
         })
       : undefined;
     const resolveSubagentModelContextWindow = (model: string): number | undefined => {

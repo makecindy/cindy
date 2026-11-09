@@ -719,6 +719,8 @@ export interface AgentDeps {
     parentModel: string;
     credentialMode?: AgentCredentialMode;
     model: string;
+    sessionId?: string;
+    projectRoot?: string;
   }) => ClaudeSubagentModelAccessResult | Promise<ClaudeSubagentModelAccessResult>;
 
   /**

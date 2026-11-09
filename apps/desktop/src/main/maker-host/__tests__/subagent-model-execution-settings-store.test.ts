@@ -59,6 +59,23 @@ describe('subagent model execution settings', () => {
     expect(settings.mode).toBe('development');
   });
 
+  it('normalizes trusted LAN only when provider, endpoint and models are all explicit', async () => {
+    const { readSubagentModelExecutionSettings } = await freshStore();
+    fs.writeFileSync(file, JSON.stringify({
+      version: 1,
+      trustedLan: [
+        { provider: 'omlx-studio', endpoint: 'http://192.168.50.4:8000/', models: ['Qwen'] },
+        { provider: 'missing-models', endpoint: 'http://192.168.50.5:8000', models: [] },
+        { provider: 'bad-endpoint', endpoint: 'not-a-url', models: ['Qwen'] },
+        { provider: 'bad-scheme', endpoint: 'ftp://192.168.50.6:8000', models: ['Qwen'] },
+      ],
+    }));
+    const settings = await readSubagentModelExecutionSettings({ rootPath: dir });
+    expect(settings.trustedLan).toEqual([
+      { provider: 'omlx-studio', endpoint: 'http://192.168.50.4:8000', models: ['Qwen'] },
+    ]);
+  });
+
   it('forces local-only for private-data sessions/projects', async () => {
     const { isSessionForcedLocalOnly, readSubagentModelExecutionSettings } = await freshStore();
     fs.writeFileSync(file, JSON.stringify({

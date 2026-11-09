@@ -34,6 +34,9 @@
    同一把 O_EXCL 锁临界区内完成；预留失败、账本不可读(含账本缺失首个付费
    任务时视作可建新账;账本已写入但内容损坏则拒)、锁超时、持久化失败一律
    拒绝付费任务启动 —— 绝不静默当账已清零。
+   **P0-0 严格化(本轮)**:预留与结算仅在 `ENOENT` 时视为可建新账;
+   `EACCES` / `ENOTDIR` / `EIO` / 损坏一律失败关闭 —— Host `readSpendFileForLock`
+   与 Runner `policyReserve` 同口径;结算/释放不可读时跳过写入,不覆盖历史费用.
    ⚠️ 上限度量的是已结算费用 + 在途预留,**不是「对单次请求的硬天花板」**：
    运行中单请求的 token 消费无法实时拦截,文档与 PR 文案不作此宣称。
    记账文件本身是控制面:spend 路径名在 bash/model 工具的 spawn 边界剥离。
@@ -66,6 +69,9 @@ approvals,version=1)     + policy-denials.jsonl                            ↓
 - **分级规则**(仅审计展示)：
   - `local` = 经验证的本地端点(loopback 或本机网卡地址)；私网 IP 不等于本机；
     provider id 不能靠字符串匹配猜本地(P0-2)。
+  - `trusted-lan` = 用户显式登记的受信局域网端点三元组(provider+endpoint
+    origin+模型精确匹配)；不是整段子网信任。`development` 可执行、
+    `local-only` 仍拒 —— strict local-only 语义不变。缺省空表 = 永不信任 LAN。
   - `free` = provider 声明零价格(至少一项有限成本且四项全 0)；`:free` 后缀
     和 catalog 展示价**不**作依据(P0-1)；未知价格按 paid 处理。
   - `paid` = 其余。
@@ -115,11 +121,25 @@ writeSubagentRuntimeFile)预先作出。本方案把判断点做在可信边界�
 派发都问一次可信 Host」:判断永远由可信边界做出,不可被 Agent 伪造、重放或
 篡改。Agent 即使拿到凭据,也只能做已授权的事。
 
-## 残留路径(未覆盖,见 MIGRATION_PLAN.md)
+## Claude / Codex 通道(本轮 Phase A 已收敛)
 
-- Claude Code 原生 subagent(`resolveClaudeSubagentModelAccess`):
-  现状是可用性策略(xd 网关 paid tombstone 会 deny,未知不硬阻断)。
-- Codex `spawn_agent`、Claude Task/Agent 工具:native 通道,本次未动。
+- **Claude Code Task/Agent(逐调用 PreToolUse)**:可用性分类仍在,
+  上面叠加 Host 执行授权(签名快照 + `decideModelExecution`)。检查点在
+  真实工具调用的 `tool_input.model` 与最终生效模型(平台强制模型优先,
+  见 `effectiveClaudeSubagentModel`),不是仅创建参数。固定模型(归一化后
+  等于父模型)保留;跨模型必须命中 allow-list 或有效 approval,否则硬拒;
+  alias 跨模型按精确匹配拒(允许名单是全名,alias 不靠猜 generation)。
+  网关按模型名路由时,同模型在另一来源 allow-list 可执行则不跨越名单。
+  可用性 `unknown` 保留 hook 既有「unknown=可路由」语义,policy 只加 deny。
+- **Codex `spawn_agent`**:无逐调用 Host 闸门可可靠执行跨模型授权,
+  本轮默认关闭动态跨模型 —— `features.multi_agent_v2.expose_spawn_agent_model_overrides: false`,
+  子 thread 固定继承父模型(固定执行保留)。如需跨模型协作请走 Pi/Orca
+  或 Claude 的 Host 授权通道。动态跨模型不是用别名/换 provider 绕过:
+  flag 关即关,不读取 Agent 参数。
+- **残留**:Claude `subagent_type` frontmatter 声明的模型不在
+  `tool_input.model` 内,host 扫描仅决定 env 默认值;绕过面见
+  MIGRATION_PLAN 的 BLOCKED 项,本轮不作严格隔离宣称。
+- Pi/Orca 两道闸保持 Host 权威;Codex 远端会话固定继承同样适用。
 
 ## 审计与隐私
 

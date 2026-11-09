@@ -448,4 +448,24 @@ describe('regression: 2026-11-07 unauthorized DeepSeek incident', () => {
     }), { provider: 'openrouter-a3fe858b', model: 'stealth/crouton-alpha' }, NOW);
     expect(decision.allowed).toBe(false);
   });
+
+  it('trusted LAN executes in development but never in local-only (strict local-only unchanged)', () => {
+    const lan = { provider: 'omlx-studio', model: 'Qwen', tier: 'trusted-lan' as const };
+    expect(decideModelExecution(snapshot({ allowedRoutes: [lan] }), { provider: 'omlx-studio', model: 'Qwen' }, NOW).allowed).toBe(true);
+    const denied = decideModelExecution(snapshot({ mode: 'local-only', allowedRoutes: [lan] }), { provider: 'omlx-studio', model: 'Qwen' }, NOW);
+    expect(denied.allowed).toBe(false);
+    expect(denied.reason).toContain('trusted LAN is not local');
+  });
+
+  it('approval cannot override local-only for a trusted LAN route', () => {
+    const withApproval = snapshot({
+      mode: 'local-only',
+      allowedRoutes: [{ provider: 'omlx-studio', model: 'Qwen', tier: 'trusted-lan' }],
+      approvals: [{
+        id: 'appr-lan', provider: 'omlx-studio', model: 'Qwen', scope: 'session', sessionId: 'sess-parent',
+        grantedBy: 'user', grantedAt: NOW - 1_000, expiresAt: NOW + 60_000,
+      }],
+    });
+    expect(decideModelExecution(withApproval, { provider: 'omlx-studio', model: 'Qwen' }, NOW).allowed).toBe(false);
+  });
 });

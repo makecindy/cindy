@@ -24,10 +24,11 @@ import type {
   ModelExecutionPolicySnapshot,
   ModelRouteTier,
 } from '@cindy/maker-core';
-import { signExecutionPolicySnapshot } from '@cindy/maker-core';
+import { signExecutionPolicySnapshot, parseModelExecutionPolicy } from '@cindy/maker-core';
 import { readBotModelChainSettings } from './bot-model-chain-settings-store.js';
 import { readSubagentModelApprovals } from './subagent-model-approvals-store.js';
 import { readSubagentModelExecutionSettings, isSessionForcedLocalOnly } from './subagent-model-execution-settings-store.js';
+import type { TrustedLanEntry } from './subagent-model-execution-settings-store.js';
 import { getOrCreateSubagentModelSigningKey } from './subagent-model-signing-key-store.js';
 import { getDesktopProviderService } from './createDesktopProviderService.js';
 import { desktopMakerLogger } from './logger-adapter.js';
@@ -84,13 +85,40 @@ function isProviderDeclaredFree(cost: ModelCostLike | undefined): boolean {
   return parts.length > 0 && parts.every((part) => part === 0);
 }
 
+function endpointOrigin(upstream: string | undefined): string | null {
+  if (!upstream) return null;
+  try {
+    const url = new URL(upstream);
+    return url.origin;
+  } catch {
+    return null;
+  }
+}
+
+function isTrustedLanRoute(
+  providerId: string,
+  modelId: string,
+  upstream: string | undefined,
+  trustedLan: ReadonlyArray<TrustedLanEntry>,
+): boolean {
+  if (trustedLan.length === 0) return false;
+  const origin = endpointOrigin(upstream);
+  if (!origin) return false;
+  return trustedLan.some((entry) =>
+    entry.provider === providerId && entry.endpoint === origin && entry.models.includes(modelId),
+  );
+}
+
 function classifyTier(
   providerId: string,
   modelId: string,
   localProviderIds: ReadonlySet<string>,
   modelCosts: ReadonlyMap<string, ModelCostLike | undefined>,
+  upstream?: string,
+  trustedLan?: ReadonlyArray<TrustedLanEntry>,
 ): ModelRouteTier {
   if (localProviderIds.has(providerId)) return 'local';
+  if (trustedLan && isTrustedLanRoute(providerId, modelId, upstream, trustedLan)) return 'trusted-lan';
   return isProviderDeclaredFree(modelCosts.get(`${providerId}\u0000${modelId}`)) ? 'free' : 'paid';
 }
 
@@ -110,6 +138,7 @@ interface ProviderContext {
   chain: ReadonlyArray<ChainRoute>;
   localProviderIds: Set<string>;
   modelCosts: Map<string, ModelCostLike | undefined>;
+  upstreamByProvider: Map<string, string>;
 }
 
 let chainRequest: { key: string; promise: Promise<ProviderContext> } | undefined;
@@ -126,8 +155,10 @@ function readChainProviderContext(): Promise<ProviderContext> {
     const providers = await getDesktopProviderService().listProviders({ allowSideEffects: false });
     const localProviderIds = new Set<string>();
     const modelCosts = new Map<string, ModelCostLike | undefined>();
+    const upstreamByProvider = new Map<string, string>();
     for (const provider of providers) {
       const upstream = provider.routing?.pi?.upstream ?? provider.routing?.['claude-code']?.upstream;
+      if (upstream) upstreamByProvider.set(provider.id, upstream);
       if (isVerifiedLocalEndpoint(upstream)) localProviderIds.add(provider.id);
       for (const agent of Object.keys(provider.models ?? {}) as Array<'pi' | 'claude' | 'codex'>) {
         for (const model of provider.models[agent] ?? []) {
@@ -135,7 +166,7 @@ function readChainProviderContext(): Promise<ProviderContext> {
         }
       }
     }
-    return { chain: settings.modelChain, localProviderIds, modelCosts };
+    return { chain: settings.modelChain, localProviderIds, modelCosts, upstreamByProvider };
   })();
   chainRequest = { key, promise };
   promise.finally(() => {
@@ -150,6 +181,8 @@ function assembleAllowedRoutes(
   harness: 'pi' | 'claude' | 'codex' | 'any',
   localProviderIds: ReadonlySet<string>,
   modelCosts: ReadonlyMap<string, ModelCostLike | undefined>,
+  upstreamByProvider?: ReadonlyMap<string, string>,
+  trustedLan?: ReadonlyArray<TrustedLanEntry>,
 ): AllowedModelRoute[] {
   const allowedRoutes = new Map<string, AllowedModelRoute>();
   for (const route of chain) {
@@ -162,7 +195,7 @@ function assembleAllowedRoutes(
       provider: providerId.trim(),
       model: modelId.trim(),
       sourceProviderId: providerId.trim(),
-      tier: classifyTier(providerId.trim(), modelId.trim(), localProviderIds, modelCosts),
+      tier: classifyTier(providerId.trim(), modelId.trim(), localProviderIds, modelCosts, upstreamByProvider?.get(providerId.trim()), trustedLan),
     });
   }
   // 当前父路由:这个 session 自己正在用的模型,子代理/Worker 继承它必须能跑。
@@ -170,7 +203,7 @@ function assembleAllowedRoutes(
   // 表示 provider):pi 子代理用 runtime 名,Orca Worker 用来源 id。
   const parentSource = parent.sourceProviderId?.trim() || parent.provider.trim();
   if (parent.provider.trim() && parent.model.trim()) {
-    const tier = classifyTier(parent.provider.trim(), parent.model.trim(), localProviderIds, modelCosts);
+    const tier = classifyTier(parent.provider.trim(), parent.model.trim(), localProviderIds, modelCosts, upstreamByProvider?.get(parent.provider.trim()), trustedLan);
     allowedRoutes.set(`${parent.provider}\u0000${parent.model}`, {
       provider: parent.provider.trim(),
       model: parent.model.trim(),
@@ -191,11 +224,11 @@ function assembleAllowedRoutes(
 
 async function buildSnapshot(
   context: ExecutionPolicyContext,
-  harness: 'pi' | 'any',
+  harness: 'pi' | 'claude' | 'codex' | 'any',
   label: string,
 ): Promise<ModelExecutionPolicySnapshot | undefined> {
   try {
-    const [{ chain, localProviderIds, modelCosts }, approvals, settings] = await Promise.all([
+    const [{ chain, localProviderIds, modelCosts, upstreamByProvider }, approvals, settings] = await Promise.all([
       readChainProviderContext(),
       readSubagentModelApprovals(),
       readSubagentModelExecutionSettings(),
@@ -204,7 +237,7 @@ async function buildSnapshot(
     // 私人数据强制 local-only:设置里的 mode 对这类会话不生效。
     const forcedLocalOnly = isSessionForcedLocalOnly(settings, context);
     const mode = forcedLocalOnly ? 'local-only' : settings.mode;
-    const allowedRoutes = assembleAllowedRoutes(chain, context, harness, localProviderIds, modelCosts);
+    const allowedRoutes = assembleAllowedRoutes(chain, context, harness, localProviderIds, modelCosts, upstreamByProvider, settings.trustedLan ?? []);
     // 只下发仍有效的 approval(过期不进快照,避免快照里躺着过期授权)。
     const liveApprovals = approvals.filter((approval) => approval.expiresAt > now && approval.grantedAt <= now);
     const unsigned: ModelExecutionPolicySnapshot = {
@@ -244,4 +277,18 @@ export async function resolveDesktopOrcaWorkerModelExecutionPolicy(
   context: ExecutionPolicyContext,
 ): Promise<ModelExecutionPolicySnapshot | undefined> {
   return buildSnapshot(context, 'any', 'orca worker');
+}
+
+/** Claude Code 逐调用授权:同口径快照,claude 链上路由 + 当前父路由。 */
+export async function resolveDesktopClaudeSubagentModelExecutionPolicy(
+  context: ExecutionPolicyContext,
+): Promise<ModelExecutionPolicySnapshot | undefined> {
+  return buildSnapshot(context, 'claude', 'claude subagent');
+}
+
+/** Codex 授权快照(当前 Codex 默认固定继承,不做跨模型派发):同口径,codex 链上路由。 */
+export async function resolveDesktopCodexSubagentModelExecutionPolicy(
+  context: ExecutionPolicyContext,
+): Promise<ModelExecutionPolicySnapshot | undefined> {
+  return buildSnapshot(context, 'codex', 'codex subagent');
 }

@@ -28,17 +28,30 @@ export type { ModelExecutionMode };
  */
 export const DEFAULT_EXECUTION_MODE: ModelExecutionMode = 'development';
 
+/**
+ * 显式登记的受信局域网端点:Provider + Endpoint + 模型三元组必须全部
+ * 精确匹配才按 trusted-lan 放行。缺省空表 = 永不信任任何 LAN 端点。
+ * 这不是「整段子网信任」,也不是「数据不出设备」声明。
+ */
+export interface TrustedLanEntry {
+  provider: string;
+  endpoint: string;
+  models: string[];
+}
+
 export interface ExecutionSettings {
   mode: ModelExecutionMode;
   privateData: {
     sessionIds: string[];
     projectRoots: string[];
   };
+  trustedLan: TrustedLanEntry[];
 }
 
 const DEFAULTS: ExecutionSettings = {
   mode: DEFAULT_EXECUTION_MODE,
   privateData: { sessionIds: [], projectRoots: [] },
+  trustedLan: [],
 };
 
 function cleanStringList(value: unknown, limit: number): string[] {
@@ -50,6 +63,29 @@ function cleanStringList(value: unknown, limit: number): string[] {
     if (trimmed && out.length < limit) out.push(trimmed);
   }
   return out;
+}
+
+function normalizeTrustedLan(value: unknown): TrustedLanEntry[] {
+  if (!Array.isArray(value)) return [];
+  const out: TrustedLanEntry[] = [];
+  for (const item of value) {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) continue;
+    const record = item as Record<string, unknown>;
+    if (typeof record.provider !== 'string' || !record.provider.trim()) continue;
+    if (typeof record.endpoint !== 'string' || !record.endpoint.trim()) continue;
+    let endpoint: string;
+    try {
+      const url = new URL(record.endpoint.trim());
+      if (url.protocol !== 'http:' && url.protocol !== 'https:') continue;
+      endpoint = url.origin;
+    } catch {
+      continue;
+    }
+    const models = cleanStringList(record.models, 256);
+    if (models.length === 0) continue;
+    out.push({ provider: record.provider.trim(), endpoint, models: [...new Set(models)] });
+  }
+  return out.slice(0, 32);
 }
 
 function normalize(raw: unknown): ExecutionSettings {
@@ -66,6 +102,7 @@ function normalize(raw: unknown): ExecutionSettings {
       sessionIds: cleanStringList(privateData.sessionIds, 512),
       projectRoots: cleanStringList(privateData.projectRoots, 512),
     },
+    trustedLan: normalizeTrustedLan((record as Record<string, unknown>).trustedLan),
   };
 }
 

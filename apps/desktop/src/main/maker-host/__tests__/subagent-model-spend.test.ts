@@ -124,4 +124,42 @@ describe('subagent model spend', () => {
     expect(reserveSubagentModelSpend('session:sess-x', 'child-1', 1, 5)).toBe(0);
     expect(readSubagentModelSpend('session:sess-x')).toBeCloseTo(5);
   });
+
+  // P0-0:仅 ENOENT 视为账本缺失;EACCES / ENOTDIR / EIO 均失败关闭。
+  describe('P0-0 ledger read-error classification', () => {
+    it.each(['EACCES', 'ENOTDIR', 'EIO'] as const)('reserve denies and settlement does not overwrite on %s', (code) => {
+      const ledgerPath = subagentModelSpendFilePath();
+      const original = JSON.stringify({
+        version: 3,
+        byScope: { 'session:sess-eacc': { actualUsd: 3, estimatedUsd: 0, reservedUsdById: {}, reservedAtById: {}, updatedAt: 1 } },
+      });
+      fs.writeFileSync(ledgerPath, original, { mode: 0o600 });
+      const origRead = fs.readFileSync.bind(fs);
+      const spy = vi.spyOn(fs, 'readFileSync').mockImplementation(((p: string, o: never) => {
+        if (p === ledgerPath) {
+          throw Object.assign(new Error(`${code}: permission denied`), { code });
+        }
+        return origRead(p, o as BufferEncoding);
+      }) as typeof fs.readFileSync);
+      try {
+        expect(reserveSubagentModelSpend('session:sess-eacc', 'child-1', 1, 5)).toBe(0);
+        // 结算异常:不可读时不写入,不把历史费用清零。
+        addSubagentModelSpend('session:sess-eacc', 1, false);
+        releaseSubagentModelSpend('session:sess-eacc', 'child-1');
+        expect(readSubagentModelSpend('session:sess-eacc')).toBeUndefined();
+      } finally {
+        spy.mockRestore();
+      }
+      // 账本字节不变(预留/结算均未覆写)。
+      expect(fs.readFileSync(ledgerPath, 'utf8')).toBe(original);
+    });
+
+    it('settlement never overwrites a corrupt ledger', () => {
+      const ledgerPath = subagentModelSpendFilePath();
+      fs.writeFileSync(ledgerPath, '{ this is not json', { mode: 0o600 });
+      addSubagentModelSpend('session:sess-corrupt', 1, false);
+      releaseSubagentModelSpend('session:sess-corrupt', 'child-1');
+      expect(fs.readFileSync(ledgerPath, 'utf8')).toBe('{ this is not json');
+    });
+  });
 });

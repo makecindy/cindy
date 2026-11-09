@@ -290,6 +290,10 @@ async function makeFixture(options: {
   corruptSpendLedger?: boolean;
   /** P0-2:写入自定义账本内容(可选 fixture 直落)。 */
   spendFileContent?: string;
+  /** P0-0:把账本放到普通文件之下,读账本得 ENOTDIR,必须失败关闭。 */
+  spendFileUnderFile?: boolean;
+  /** P0-0:把账本 chmod 0,读账本得 EACCES,必须失败关闭(锁文件仍可建)。 */
+  spendFileUnreadable?: boolean;
 } = {}) {
   const root = await tempRoot();
   const runId = randomUUID();
@@ -592,7 +596,10 @@ process.stdin.on('end', () => {
   // P0-B:公钥以 env 字面量注入(不是文件路径);恢复 run 时进程继承同一 env。
   const policyPublicKey = POLICY_KEYPAIR.publicKey;
   let spendFilePath = path.join(runDir, 'spend-ledger.json');
-  if (options.preExhaustedLedger) {
+  if (options.spendFileUnderFile) {
+    await writeFile(path.join(runDir, 'not-a-dir'), 'I am a file', { mode: 0o600 });
+    spendFilePath = path.join(runDir, 'not-a-dir', 'spend-ledger.json');
+  } else if (options.preExhaustedLedger) {
     // P0-2:已耗尽的 cap。实际记账 1 USD = maxCostUsd。
     const scopeKey = 'session:' + path.basename(root);
     await writeFile(spendFilePath, JSON.stringify({
@@ -604,6 +611,13 @@ process.stdin.on('end', () => {
     await writeFile(spendFilePath, '{ this ledger is corrupted', { mode: 0o600 });
   } else if (options.spendFileContent !== undefined) {
     await writeFile(spendFilePath, options.spendFileContent, { mode: 0o600 });
+  }
+  if (options.spendFileUnreadable) {
+    await writeFile(spendFilePath, JSON.stringify({
+      version: 3,
+      byScope: { ['session:' + path.basename(root)]: { actualUsd: 0, estimatedUsd: 0, reservedUsdById: {}, reservedAtById: {}, updatedAt: Date.now() } },
+    }), { mode: 0o600 });
+    await chmod(spendFilePath, 0o000);
   }
   // resume 重新拉起 runner 时要继承 key 文件 env(与生产 Host 注入一致)。
   process.env.CINDY_PI_SUBAGENT_POLICY_PUBLIC_KEY = policyPublicKey;
@@ -756,6 +770,42 @@ describe('Cindy durable PI Subagent runner', () => {
       });
       expect(failed.tasks[0]?.status).toBe('failed');
       expect(failed.tasks[0]?.error).toMatch(/unreadable/i);
+      expect(await readCommandsIfPresent(fixture.commandsFile)).toBeNull();
+      await waitForClose(fixture.child, fixture.stderr);
+    });
+
+    it('denies launch when the ledger path is under a file (ENOTDIR, P0-0)', async () => {
+      const fixture = await makeFixture({
+        modeOverride: 'development',
+        allowedRoutesOverride: [{ provider: 'fixture', model: 'fixture-model', tier: 'paid', sourceProviderId: 'fixture' }],
+        approvalsOverride: cappedApproval(10),
+        spendFileUnderFile: true,
+      });
+      const failed = await waitFor(async () => {
+        const [run] = await listPiSubagentRuns(fixture.root);
+        return run?.state === 'failed' ? run : null;
+      });
+      expect(failed.tasks[0]?.status).toBe('failed');
+      // ENOTDIR 下账本与锁文件同父目录,锁也失败 —— 仍是 fail-closed。
+      expect(failed.tasks[0]?.error).toMatch(/unreadable|lock timeout/i);
+      expect(await readCommandsIfPresent(fixture.commandsFile)).toBeNull();
+      await waitForClose(fixture.child, fixture.stderr);
+    });
+
+    it.skipIf(process.platform === 'win32')('denies launch when the ledger is unreadable (EACCES, P0-0)', async () => {
+      const fixture = await makeFixture({
+        modeOverride: 'development',
+        allowedRoutesOverride: [{ provider: 'fixture', model: 'fixture-model', tier: 'paid', sourceProviderId: 'fixture' }],
+        approvalsOverride: cappedApproval(10),
+        spendFileUnreadable: true,
+      });
+      const failed = await waitFor(async () => {
+        const [run] = await listPiSubagentRuns(fixture.root);
+        return run?.state === 'failed' ? run : null;
+      });
+      expect(failed.tasks[0]?.status).toBe('failed');
+      expect(failed.tasks[0]?.error).toMatch(/unreadable/i);
+      // 读面 EACCES 已 fail-closed,fake pi 从未启动。
       expect(await readCommandsIfPresent(fixture.commandsFile)).toBeNull();
       await waitForClose(fixture.child, fixture.stderr);
     });

@@ -531,7 +531,7 @@ function policyNonEmptyString(value) {
 function policyNormalizeRoute(raw) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
   if (!policyNonEmptyString(raw.provider) || !policyNonEmptyString(raw.model)) return null;
-  if (raw.tier !== 'local' && raw.tier !== 'free' && raw.tier !== 'paid') return null;
+  if (raw.tier !== 'local' && raw.tier !== 'free' && raw.tier !== 'paid' && raw.tier !== 'trusted-lan') return null;
   return {
     provider: raw.provider.trim(),
     model: raw.model.trim(),
@@ -768,6 +768,15 @@ function decideModelExecution(snapshot, requested, now, spendByApproval) {
         };
       }
       return { allowed: true, reason: 'explicitly allow-listed free route' };
+    }
+    if (route.tier === 'trusted-lan') {
+      if (snapshot.mode === 'local-only') {
+        return {
+          allowed: false,
+          reason: 'route "' + provider + '/' + model + '" is not executable in local-only mode; trusted LAN is not local (session mode is local-only)',
+        };
+      }
+      return { allowed: true, reason: 'explicitly allow-listed trusted LAN route' };
     }
     if (snapshot.mode !== 'approved-paid') break; // paid 继续走 approval 检查(P1-4)
     return { allowed: true, reason: 'explicitly allow-listed paid route under approved-paid mode' };

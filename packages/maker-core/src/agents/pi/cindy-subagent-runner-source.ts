@@ -773,7 +773,7 @@ function main() {
   function policyNormalizeRouteEntry(raw) {
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
     if (!policyNonEmptyString(raw.provider) || !policyNonEmptyString(raw.model)) return null;
-    if (raw.tier !== 'local' && raw.tier !== 'free' && raw.tier !== 'paid') return null;
+    if (raw.tier !== 'local' && raw.tier !== 'free' && raw.tier !== 'paid' && raw.tier !== 'trusted-lan') return null;
     return {
       provider: raw.provider.trim(),
       model: raw.model.trim(),
@@ -1025,8 +1025,9 @@ function main() {
       let raw = null;
       let missing = false;
       try { raw = fs.readFileSync(file, 'utf8'); } catch (readError) {
+        // P0-0:仅 ENOENT 视为可建新账。EACCES / ENOTDIR / EIO 等一律
+        // 失败关闭,不把历史费用清零后放行未授权付费任务。
         if (readError && readError.code === 'ENOENT') missing = true;
-        else if (readError && (readError.code === 'ENOTDIR' || readError.code === 'EACCES')) missing = true;
         else return { ok: false, reserved: 0, reason: 'spend ledger unreadable; refusing to spawn' };
       }
       let parsed;
@@ -1140,6 +1141,10 @@ function main() {
       if (route.tier === 'free') {
         if (snapshot.mode === 'local-only') return { allowed: false, reason: 'cloud route is not authorized in local-only mode; free is not authorization' };
         return { allowed: true, reason: 'explicitly allow-listed free route' };
+      }
+      if (route.tier === 'trusted-lan') {
+        if (snapshot.mode === 'local-only') return { allowed: false, reason: 'route "' + provider + '/' + model + '" is not executable in local-only mode; trusted LAN is not local (session mode is local-only)' };
+        return { allowed: true, reason: 'explicitly allow-listed trusted LAN route' };
       }
       if (snapshot.mode !== 'approved-paid') break; // paid 继续走 approval 检查(P1-4)
       return { allowed: true, reason: 'explicitly allow-listed paid route under approved-paid mode' };
