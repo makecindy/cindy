@@ -1,5 +1,24 @@
 # Remote desktop
 
+## Hidden capture/data host diagnostics
+
+`Desktop capture` is the hidden host used by desktop capture, files, direct peers,
+and recording. Its presence does not by itself mean a screen is being captured.
+App activation must target the registered main window, never the first entry from
+`BrowserWindow.getAllWindows()`. Provider-share receipt only queues the approval
+UI/notification; clicking the notification or opening an invitation activates main.
+
+For an unexpectedly visible host, local `main-*.log` entries under
+`desktop-capture:window` identify its mode, window ID/native handle and bounds.
+`js-call` entries include sanitized source positions for visibility/focus calls;
+`native-event` entries report Electron events and do **not** claim an originating
+call stack. A per-window budget caps these records at 32 plus a limit notice.
+Correlate them with `provider-share` approval receipt and notification lifecycle
+records (local sequence, `show` versus `click`) to investigate no-click reports.
+These diagnostics omit notification text, share links, credentials and absolute
+stack paths, and do not expand the log-upload allowlist. They observe visibility
+without hiding or destroying a host that may carry an active connection.
+
 ## Idle protection
 
 Desktop and Mobile expose **Disconnect and lock when idle** in the remote desktop

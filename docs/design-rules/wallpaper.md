@@ -101,6 +101,9 @@ native material beneath an opaque body. The sidebar retains its original tint.
 With artwork, compensate for the existing canvas veil rather than stacking two full coats.
 Windows/Linux retain the readable tint; native regional desktop sampling has only
 been implemented on macOS. Existing Windows whole-window Acrylic fallback remains.
+Without that native sidebar material (Windows/Linux), 0% desktop transparency does not
+enter desktop-background mode: the window keeps its original backdrop (Windows 11
+Acrylic, otherwise opaque) until transparency is raised (#9424).
 The controls reuse the visibility and blur overrides. On macOS, the own-window
 native addon applies `CGSSetWindowBackgroundBlurRadius` (0–20), with fixed vibrancy
 removed so it cannot obscure radius changes. Artwork clears this native radius.

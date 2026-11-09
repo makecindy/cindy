@@ -452,7 +452,7 @@ const MESSAGE_LIST_VIEWABILITY_CONFIG_ID = 'message-heavy-content';
 
 // Heavy Markdown blocks inherit the visibility of their outer list cell. Nested
 // work/sub-agent cards should not create a second visibility window of their own.
-const MessageHeavyContentVisibilityContext = createContext(true);
+export const MessageHeavyContentVisibilityContext = createContext(true);
 const MarkdownRemoteMediaContext = createContext<ResolveRemoteMediaFn | undefined>(undefined);
 
 /** 分享模式吸顶 check 与行内 check 共用 44px 触达高度。 */
@@ -6066,6 +6066,7 @@ function MarkdownBodyBase({
   allowIosUITextView = true,
   codeCopyEnabled = true,
   boundTextRuns = false,
+  publicMediaOnly = false,
   markdownImageCacheKey,
   layout,
   onOpenPayload,
@@ -6076,6 +6077,8 @@ function MarkdownBodyBase({
   text,
 }: {
   renderRichAnswers?: boolean;
+  /** Shared room bodies cannot resolve task-local media from model-authored paths. */
+  publicMediaOnly?: boolean;
   /** Persisted row ids may replace stream ids; clientId stays stable across that handoff. */
   richStateKey?: string;
   /** 普通任务的超长展开正文可禁用 UITextView，伙伴改用有界文本分组。 */
@@ -6146,11 +6149,11 @@ function MarkdownBodyBase({
     });
   }, [markdownParse]);
   const blocks = markdownParse.result.blocks;
-  const managedImagePreviewUrl = useCallback((url: string) => resolveMarkdownMedia
+  const managedImagePreviewUrl = useCallback((url: string) => !publicMediaOnly && resolveMarkdownMedia
     ? mobileMarkdownManagedImagePreviewUrl(
       url, chatFilePathContext?.workdir, markdownImageCacheKey,
       chatFilePathContext?.remoteHostId, chatFilePathContext?.sessionId,
-    ) : null, [chatFilePathContext, markdownImageCacheKey, resolveMarkdownMedia]);
+    ) : null, [chatFilePathContext, markdownImageCacheKey, publicMediaOnly, resolveMarkdownMedia]);
   const imageRendersPreview = useCallback((inline: Extract<MobileMarkdownInline, { type: 'image' }>) =>
       isMobileMarkdownImageDirectUrl(inline.url) || managedImagePreviewUrl(inline.url) !== null, [managedImagePreviewUrl]);
   // 图片预览内嵌 View，不能放进 Android selectable Text 或 iOS UITextView。
@@ -10256,12 +10259,16 @@ export function MarkdownBody(props: Parameters<typeof MarkdownBodyBase>[0]) {
 /** Each composed column supplies its actual width; media never assumes a full message row. */
 function RichAnswerMedia({ node, body }: { node: RichNode; body: Parameters<typeof MarkdownBodyBase>[0];
 }) {
+  const styles = useThemedStyles(makeStyles);
   const origin = useContext(ChatFilePathContext);
   const resolver = useContext(MarkdownRemoteMediaContext);
   const visible = useContext(MessageHeavyContentVisibilityContext);
   const [width, setWidth] = useState(0);
   const raw = richMediaSource(node);
   if (!raw || (node.kind !== 'image' && node.kind !== 'video' && node.kind !== 'audio')) return null;
+  if (body.publicMediaOnly && !/^https?:\/\//i.test(raw)) {
+    return <Text style={styles.messageText}>{richString(node, 'alt') || richString(node, 'label') || '◇'}</Text>;
+  }
   if (node.kind === 'video' && youtubeVideo(raw)) return (
       <VideoSitePreview src={raw} title={richString(node, 'alt', 'YouTube')} />
     );

@@ -1,6 +1,6 @@
 {
   "schemaVersion": 6,
-  "updatedAt": "2026-11-06T21:22:03.000Z",
+  "updatedAt": "2026-11-09T03:15:49.561Z",
   "models": [
     {
       "id": "openai/gpt-6.1-sol",
@@ -8069,6 +8069,21 @@
               },
               "cacheWritePerMtok": 20,
               "cacheWrite1hPerMtok": 40
+            },
+            {
+              "currency": "CNY",
+              "variant": "batch",
+              "inputPerMtok": 12,
+              "outputPerMtok": 60,
+              "cacheReadPerMtok": 1.2,
+              "cacheWritePerMtok": 12,
+              "cacheWrite1hPerMtok": 24,
+              "effectiveFrom": "2026-11-07",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://platform.kimi.com/docs/pricing/batch",
+                "verifiedAt": "2026-11-07"
+              }
             }
           ]
         },
@@ -8118,6 +8133,21 @@
               },
               "cacheWritePerMtok": 3,
               "cacheWrite1hPerMtok": 6
+            },
+            {
+              "currency": "USD",
+              "variant": "batch",
+              "inputPerMtok": 1.8,
+              "outputPerMtok": 9,
+              "cacheReadPerMtok": 0.18,
+              "cacheWritePerMtok": 1.8,
+              "cacheWrite1hPerMtok": 3.6,
+              "effectiveFrom": "2026-11-07",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://platform.kimi.ai/docs/pricing/batch",
+                "verifiedAt": "2026-11-07"
+              }
             }
           ]
         }
@@ -8362,6 +8392,21 @@
               },
               "cacheWritePerMtok": 3,
               "cacheWrite1hPerMtok": 6
+            },
+            {
+              "currency": "USD",
+              "variant": "batch",
+              "inputPerMtok": 1.8,
+              "outputPerMtok": 9,
+              "cacheReadPerMtok": 0.18,
+              "cacheWritePerMtok": 1.8,
+              "cacheWrite1hPerMtok": 3.6,
+              "effectiveFrom": "2026-11-07",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://platform.kimi.ai/docs/pricing/batch",
+                "verifiedAt": "2026-11-07"
+              }
             }
           ]
         }
