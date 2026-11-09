@@ -276,7 +276,8 @@ test('shutdown waits for the original PID even after instance metadata disappear
     runnerActive: () => false, isAlive: () => false }), /Process state unknown/);
 });
 
-test('fixed app ownership matches executable paths, not mentions or nested helper apps', () => {
+// The fixed signed app is a macOS bundle; its ownership check only runs on darwin with POSIX paths.
+test('fixed app ownership matches executable paths, not mentions or nested helper apps', { skip: process.platform !== 'darwin' && 'macOS-only fixed app runtime' }, () => {
   const app = '/Users/fixture/Applications/Cindy Personal.app', exe = app + '/Contents/MacOS/Electron';
   assert.deepEqual(fixedAppProcesses(` 42 ${exe}\n43 /bin/zsh\n44 /usr/bin/grep\n45 ${exe}-other\n46 ${app}/Contents/PlugIns/Widget.appex/Contents/MacOS/Widget\n`, app), [42]);
   assert.deepEqual(fixedAppProcesses(`43 /bin/zsh -c echo ${exe}\n44 /usr/bin/grep ${exe}\n`, app), []);

@@ -1781,7 +1781,7 @@ test("readDesktopDevLogTail strips terminal control sequences and keeps the last
 // Shared signed runtimes must still identify each release/profile independently;
 // otherwise an upgrade can overlook a running instance or claim another release ready.
 // Minimal input: two releases sharing one binary; only one has a live renderer. Tier: unit + temp receipt.
-test('whoami attributes a shared personal shell to its business checkout', () => {
+test('whoami attributes a shared personal shell to its business checkout', { skip: process.platform !== 'darwin' && 'macOS-only fixed app runtime' }, () => {
  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'shared-shell-whoami-'));
  try {
   const roots=['first','second'].map(n=>path.join(dir,n)), runtime=path.join(dir,'runtime');
