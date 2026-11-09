@@ -6456,7 +6456,10 @@ export class PiAgent extends BaseAgent {
     };
     const awaitRuntimeCapabilitiesForSlashCommand = async (text: string): Promise<void> => {
       const trimmed = text.trimStart();
-      if (!trimmed.startsWith('/') || trimmed.startsWith('/skill:') || runtimeCapabilityManifest) return;
+      // 只有已确认 loaded 的清单才能放行派发;非 loaded(unknown/failed)清单是
+      // 过渡快照:若重试链仍在跑,等它(重试成功会升级为 loaded);重试已耗尽时
+      // runtimeCapabilityRefreshPromise 为 undefined,race 立即返回,按原样逃逸。
+      if (!trimmed.startsWith('/') || trimmed.startsWith('/skill:') || runtimeCapabilityManifest?.status === 'loaded') return;
       // get_commands starts asynchronously after Pi's ready boundary. A prompt
       // template selected on a brand-new task must wait for that exact runtime
       // catalog instead of being escaped into ordinary model text.

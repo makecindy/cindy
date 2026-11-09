@@ -365,7 +365,7 @@ export async function capturePiRuntimeCapabilityManifest(
  * Skill 永远灰)。所以在非 loaded 结果上带退避重试,覆盖 bridge 的预算上界。
  * 每个 attempt 的结果都经 onAttemptFailed 即时上报(调用方应即时发布,
  * 让面板先看到 failed/unknown 而不是长时间 undefined);isFinalAttempt=true
- * 表示重试已耗尽(此后不会再采),调用方应升级为 warn。
+ * 表示重试已耗尽且不会再有下一次采集,调用方应升级为 warn。
  */
 export const PI_RUNTIME_CAPABILITY_RETRY_DELAYS_MS = [4_000, 10_000, 20_000] as const;
 
@@ -391,10 +391,14 @@ export async function capturePiRuntimeCapabilitiesWithRetry(
     }));
   let manifest = await capturePiRuntimeCapabilityManifest(requester, identity, generation, stage);
   let attempt = 0;
-  while (manifest.status !== 'loaded' && attempt < retryDelaysMs.length) {
+  while (manifest.status !== 'loaded') {
     attempt += 1;
-    opts.onAttemptFailed?.(manifest, attempt, attempt === retryDelaysMs.length);
-    if (opts.isCurrent && !opts.isCurrent()) return manifest;
+    // 每次失败的采集都要上报(含最后一次);isFinalAttempt 只在不会再有
+    // 下一次采集时为 true —— 否则「放弃」日志先于真正的末次尝试出现,
+    // 末次成功留下错误的放弃记录、末次失败反而无日志(Greptile/Codex P2)。
+    const isFinalAttempt = attempt > retryDelaysMs.length;
+    opts.onAttemptFailed?.(manifest, attempt, isFinalAttempt);
+    if (isFinalAttempt || (opts.isCurrent && !opts.isCurrent())) return manifest;
     await sleep(retryDelaysMs[attempt - 1]!);
     if (opts.isCurrent && !opts.isCurrent()) return manifest;
     manifest = await capturePiRuntimeCapabilityManifest(requester, identity, generation, stage);

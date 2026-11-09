@@ -475,7 +475,12 @@ describe('capturePiRuntimeCapabilitiesWithRetry', () => {
     expect(manifest.status).toBe('unknown');
     expect(manifest.error?.code).toBe('timeout');
     expect(requests).toBe(3);
-    expect(failures).toEqual([{ attempt: 1, isFinal: false }, { attempt: 2, isFinal: true }]);
+    // 每次(含末次)失败都上报;只有末次(不会再有下一采)标 final。
+    expect(failures).toEqual([
+      { attempt: 1, isFinal: false },
+      { attempt: 2, isFinal: false },
+      { attempt: 3, isFinal: true },
+    ]);
   });
 
   it('stops retrying once the session is closed or a newer generation superseded the refresh', async () => {
