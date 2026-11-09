@@ -264,7 +264,7 @@ export function AddDirectoryPanel({
               onClick={() => activate(index)}
               {...menuRowAttrs({ current: index === focusedIndex, disabled: pending })}
               // 与「+」主面板动作行同高的单行：新建任务页面板高度只有 240px，两行行高放不下几个目录。
-              className={cn(rowClass(pending), 'py-2')}
+              className={cn(rowClass(pending), 'shrink-0 py-2')}
             >
               <FolderIcon size={14} className="shrink-0 text-[var(--cmd-palette-item-icon)]" />
               {withMenuLabels(<span className="min-w-0 shrink truncate">{option.name}</span>)}
@@ -302,7 +302,7 @@ export function AddDirectoryPanel({
           {...{ [ROW_ATTR]: '' }}
           onClick={() => activate(rowCount - 1)}
           {...menuRowAttrs({ current: focusedIndex === rowCount - 1, disabled: pending })}
-          className={cn(rowClass(pending), 'py-2')}
+          className={cn(rowClass(pending), 'shrink-0 py-2')}
         >
           <FolderPlus size={14} className="shrink-0 text-[var(--cmd-palette-item-icon)]" />
           {withMenuLabels(

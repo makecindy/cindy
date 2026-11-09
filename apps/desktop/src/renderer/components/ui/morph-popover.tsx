@@ -106,6 +106,12 @@ interface MorphPopoverProps {
    */
   panelWidth?: number;
   /**
+   * 内容高度上限(px)。量高时与视口可用高度取较小值：内容比它矮就贴内容，比它高就停在这里，
+   * 多出的部分由内层自己滚。新建任务页的「+」要 240，避免建议框盖住 logo 和 worktree chips；
+   * 不传则只受视口限制。
+   */
+  maxContentHeight?: number;
+  /**
    * 'trigger' = 面板宽度**严格等于** trigger 的实测宽度(忽略 panelWidth
    * 与内容宽)。设置页的字段形态必须用它 —— DESIGN.md §4 Select & Dropdown:
    * 「Panel width must bind to the trigger width — never narrower or wider than the
@@ -201,6 +207,7 @@ export function MorphPopover({
   side = 'top',
   align = 'start',
   panelWidth,
+  maxContentHeight,
   panelWidthMode = 'content',
   stickyWidth = false,
   stickyWidthKey,
@@ -281,6 +288,9 @@ export function MorphPopover({
       );
       if (stickyWidth && targetW > stickyWidthRef.current) stickyWidthRef.current = targetW;
       panel.style.width = `${targetW}px`;
+      // 定宽后再量高（上面已把 height 设成 auto）。scrollHeight 是内容自然高度：搜索过滤后
+      // 列表变矮，这里跟着变小，外壳才能从打开时的高度收缩。offsetHeight 在 height:auto 时
+      // 本应一样，但内容包装若被百分比高度拉满，它会停在外壳旧高度，收缩就测不出来。
       // 可视高度钳制:停靠位到视口边缘的可用空间(内容区自滚)。avail 夹到 ≥0——
       // chip 极靠近视口边(如 side='top' 且距顶 <14px)时 avail 会为负,负 height
       // 被浏览器静默忽略→面板停在 chip 高度"打不开"(greptile P1)。
@@ -288,12 +298,17 @@ export function MorphPopover({
         side === 'top'
           ? chipRect.top - SIDE_GAP - VIEWPORT_PADDING
           : window.innerHeight - chipRect.bottom - SIDE_GAP - VIEWPORT_PADDING;
-      const targetH = Math.min(panel.offsetHeight, Math.max(0, avail));
+      // 调用方上限（如新建任务页 240）与视口可用高度取较小值。内容更矮时仍贴内容。
+      const contentCap =
+        maxContentHeight !== undefined && Number.isFinite(maxContentHeight)
+          ? Math.max(0, maxContentHeight)
+          : Number.POSITIVE_INFINITY;
+      const targetH = Math.min(panel.scrollHeight, Math.max(0, avail), contentCap);
       panel.style.width = prevW;
       panel.style.height = prevH;
       return { w: targetW, h: targetH };
     },
-    [align, panelWidth, panelWidthMode, side, stickyWidth],
+    [align, maxContentHeight, panelWidth, panelWidthMode, side, stickyWidth],
   );
 
   /**
@@ -314,14 +329,15 @@ export function MorphPopover({
     const prevT = panel.style.transition;
     panel.style.transition = 'none';
     const m = measure(panel, rect);
-    const curW = panel.offsetWidth;
-    const curH = panel.offsetHeight;
+    const curW = Number.parseFloat(panel.style.width);
+    const curH = Number.parseFloat(panel.style.height);
+    const unchanged = Math.abs(m.w - curW) <= 1 && Math.abs(m.h - curH) <= 1;
     panel.style.width = `${curW}px`;
     panel.style.height = `${curH}px`;
     void panel.offsetHeight;
     panel.style.transition = prevT;
-    // 差 1px 内不动,防 ResizeObserver 观察回环
-    if (Math.abs(m.w - curW) <= 1 && Math.abs(m.h - curH) <= 1) return;
+    // 差 1px 内不动,防 ResizeObserver 观察回环。style 还没写上（NaN）时不算匹配，继续写目标尺寸。
+    if (unchanged) return;
     panel.style.width = `${m.w}px`;
     panel.style.height = `${m.h}px`;
   }, [measure]);
@@ -649,9 +665,10 @@ export function MorphPopover({
                 // overflow-x must stay hidden: overflow-y:auto/hidden otherwise
                 // computes overflow-x to auto (CSS overflow pairing), and a 1px
                 // border-box mismatch flashes a 2s horizontal scrollbar thumb.
-                // h-full + flex column 把面板的确定高度传给内层：只有 max-h-full 时高度仍是 auto，
-                // 内层 overflow-y-auto 没有边界，会按全部内容撑高，而不是独立滚动。
-                'flex h-full min-h-0 max-h-full flex-col overflow-x-hidden overflow-y-hidden',
+                // max-h-full 把外壳的确定高度传给内层作为上限：条目多时内层自己滚，不会把整页撑出视口。
+                // 不用 h-full：高度 100% 会让这一层恒等于外壳，ResizeObserver 看不到搜索后列表变矮，
+                // 弹层会留下打开时的高度和大块空白。自然高度（h-auto + max-h-full）变矮时外壳跟着收缩。
+                'flex h-auto min-h-0 max-h-full flex-col overflow-x-hidden overflow-y-hidden',
                 side === 'top' ? 'translate-y-[5px]' : 'translate-y-[-5px]',
                 'opacity-0 transition-[opacity,transform] delay-[50ms] duration-[140ms] ease-out',
                 'group-data-[state=open]:translate-y-0 group-data-[state=open]:opacity-100',

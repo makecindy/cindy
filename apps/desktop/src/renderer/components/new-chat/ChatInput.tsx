@@ -9939,6 +9939,7 @@ export function ChatInput({
                       />
                     )
                   }
+                  maxContentHeight={paletteMaxHeight}
                   disabled={composerMutationLocked}
                   dense={effectiveDenseToolbar}
                   visualVariant={isCreateAgentVariant ? 'create-agent' : 'default'}

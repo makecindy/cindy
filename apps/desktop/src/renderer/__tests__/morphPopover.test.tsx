@@ -683,4 +683,70 @@ describe('MorphPopover interaction contract', () => {
     expect(content.querySelector('[data-morph-scroll="inner"]')).toBeTruthy();
     expect(content.style.overflowY).toBe('hidden');
   });
+
+  // #9573 复审：内容包装若是 h-full，ResizeObserver 量到的高度恒等于外壳，搜索过滤后列表变短
+  // 不会触发 syncPanelToContent，弹层保留打开时的高度留下大块空白。
+  // 生产入口：MorphPopover 打开后内容变矮，外壳高度必须跟着收缩，且不超过 maxContentHeight。
+  // 现有用例只断言 overflow，没有覆盖高度跟随。最小输入：打开时内容高 400，随后缩到 80，上限 240。
+  // Tier: unit。
+  it('搜索后结果变少时外壳高度跟着收缩，且不超过内容高度上限', async () => {
+    const contentHeight = { current: 400 };
+    vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockReturnValue(480);
+    vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockImplementation(function (this: HTMLElement) {
+      return this.getAttribute('role') === 'group' ? contentHeight.current : 0;
+    });
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue(new DOMRect(20, 800, 120, 30));
+    class ResizeObserverStub {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    }
+    vi.stubGlobal('ResizeObserver', ResizeObserverStub);
+
+    function Host() {
+      const [open, setOpen] = useState(false);
+      const [lines, setLines] = useState(8);
+      return (
+        <>
+          <button type="button" onClick={() => setOpen(true)}>
+            Toggle
+          </button>
+          <button type="button" onClick={() => setLines(1)}>
+            Filter
+          </button>
+          <MorphPopover
+            open={open}
+            onOpenChange={setOpen}
+            panelWidth={480}
+            maxContentHeight={240}
+            panelAriaLabel="Morph panel"
+            trigger={<span />}
+          >
+            <div>
+              {Array.from({ length: lines }, (_, index) => (
+                <div key={index}>row {index}</div>
+              ))}
+            </div>
+          </MorphPopover>
+        </>
+      );
+    }
+
+    render(<Host />);
+    fireEvent.click(screen.getByRole('button', { name: 'Toggle' }));
+    const panel = await screen.findByRole('group', { name: 'Morph panel' });
+    await waitFor(() => {
+      expect(panel.style.height).toBe('240px');
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Filter' }));
+    await waitFor(() => {
+      expect(screen.getAllByText(/^row /)).toHaveLength(1);
+    });
+    // 搜索后列表变矮。内容包装不再用 h-full，自然高度能被量到；面板显式请求重测，外壳跟着收缩。
+    contentHeight.current = 80;
+    const content = panel.firstElementChild as HTMLElement;
+    content.dispatchEvent(new CustomEvent(MORPH_CONTENT_RESIZE_EVENT, { bubbles: true }));
+    expect(panel.style.height).toBe('80px');
+  });
 });
