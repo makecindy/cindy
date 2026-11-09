@@ -65,6 +65,7 @@ import { toast } from '@/lib/toast';
 import {
   appendDiscoveredCustomProviderModels,
   deleteCustomProvider,
+  fetchCustomProviderModelsForRefresh,
   providerViewToCustomProviderConfig,
   readCustomProviderKey,
   updateCustomProvider,
@@ -148,6 +149,7 @@ import {
 
 import { localCliDisplayName, type LocalCliDetection } from '../../../shared/localCliDetect';
 import { isBuiltinRefreshableProviderId } from '../../../shared/providerModelRefresh';
+import { SettingsPageHeader } from '@/components/ui/settings-rows';
 import { providerGroupDeviceCount } from '../../../shared/providerGroup';
 import { applyProviderOrder } from '../../../shared/providerOrder';
 import type { AgentKind, CustomProviderConfig, ProviderView } from '@cindy/model-providers';
@@ -729,6 +731,20 @@ function DetailHeader({
       : null;
 
   const subscriptionPool = provider && isSubscriptionProvider(provider.id) ? provider.id : null;
+  const dashboard =
+    provider?.id === 'anthropic' || provider?.auth.native === 'claude'
+      ? {
+          label: t('settings.providers.usage.openClaudeUsage'),
+          onOpen: () => void window.electronAPI.openExternal('https://claude.ai/settings/usage'),
+        }
+      : provider?.id === 'xai' || provider?.auth.native === 'xai'
+        ? {
+            label: t('settings.providers.xai.asset.openUsage'),
+            onOpen: () => void window.electronAPI.openExternal('https://grok.com'),
+          }
+        : null;
+  // The usage page is the provider's, not the default account's: pooled accounts show it once in their header.
+  const cardDashboard = subscriptionPool ? null : dashboard;
   const usageCard = subscription ? (
     <QuotaHoverCard
       key={JSON.stringify([
@@ -742,20 +758,8 @@ function DetailHeader({
       variant="embedded"
       hideIdentity={Boolean(subscriptionProduct)}
       account={subscription}
-      dashboardLabel={
-        provider?.id === 'anthropic' || provider?.auth.native === 'claude'
-          ? t('settings.providers.usage.openClaudeUsage')
-          : provider?.id === 'xai' || provider?.auth.native === 'xai'
-            ? t('settings.providers.xai.asset.openUsage')
-            : undefined
-      }
-      onOpenDashboard={
-        provider?.id === 'anthropic' || provider?.auth.native === 'claude'
-          ? () => void window.electronAPI.openExternal('https://claude.ai/settings/usage')
-          : provider?.id === 'xai' || provider?.auth.native === 'xai'
-            ? () => void window.electronAPI.openExternal('https://grok.com')
-            : undefined
-      }
+      dashboardLabel={cardDashboard?.label}
+      onOpenDashboard={cardDashboard?.onOpen}
     >
       {resetEnabled ? (
         <CodexResetCredits providerId={provider?.id} onChanged={refreshResets} key={provider?.id} variant="embedded" snapshot={resetSnapshot} busy={manualReset.busy} canReset={manualReset.canReset} canRetry={manualReset.canRetry} onReset={(credit) => void manualReset.reset(credit)} />
@@ -919,6 +923,7 @@ function DetailHeader({
             key={subscriptionPool}
             providerId={subscriptionPool}
             defaultUsage={usageCard}
+            dashboard={dashboard ?? undefined}
           />
         )}
         {assetModule ??
@@ -3024,15 +3029,16 @@ export function ProvidersSection() {
         const config = providerViewToCustomProviderConfig(p);
         let added = 0;
         const refreshedAgents = new Set<AgentKind>();
+        const batch = await fetchCustomProviderModelsForRefresh(p, config);
         for (const agent of p.agents) {
           const rt = config.runtimes[agent];
           if (!rt?.baseUrl) continue;
           const authMethod =
             p.auth.method === 'none' ? 'none' : p.auth.method === 'oauth' ? 'oauth' : 'apiKey';
-          const apiKey = authMethod === 'apiKey' ? await readCustomProviderKey(p.id, agent) : null;
+          const apiKey = !batch && authMethod === 'apiKey' ? await readCustomProviderKey(p.id, agent) : null;
           // 鉴权请求头是 main-only 密文,renderer 不回读;交由 main 按 savedProviderId
           // 注入已存请求头(否则仅靠请求头鉴权的端点刷新会因缺头 401,codex review)。
-          const r = await window.electronAPI.maker.fetchProviderModels({
+          const r = batch?.find(entry => entry.agent === agent)?.result ?? await window.electronAPI.maker.fetchProviderModels({
             agent,
             baseUrl: rt.baseUrl,
             authMethod,
@@ -3267,22 +3273,15 @@ export function ProvidersSection() {
   );
 
   return (
-    <div className="flex h-full min-h-0 flex-col gap-[14px]">
+    <div className="flex h-full min-h-0 flex-col gap-6">
       {shareManagePage ?? (<>
-      <div className="flex shrink-0 items-start justify-between gap-3">
-        <div className="flex min-w-0 flex-col gap-1">
-          <h2
-            className="text-16 font-medium leading-[1.2]"
-            style={{ color: 'var(--settings-section-title)' }}
-          >
-            {t('settings.providers.title')}
-          </h2>
-          <p className="text-13 leading-[1.5]" style={{ color: 'var(--settings-section-desc)' }}>
-            {t('settings.providers.subtitle')}
-          </p>
-        </div>
-        {/* 收到别人的供应商分享链接时从这里输入(加入网页唤起 Cindy 失败时也指引到这里)。 */}
-        <ProviderSharePasteButton />
+      <div className="shrink-0">
+        <SettingsPageHeader
+          title={t('settings.providers.title')}
+          description={t('settings.providers.subtitle')}
+          // 收到别人的供应商分享链接时从这里输入(加入网页唤起 Cindy 失败时也指引到这里)。
+          action={<ProviderSharePasteButton />}
+        />
       </div>
 
       {/* 先取数据再渲染卡片(规则 7:首帧即终态高度,不出现连接态翻转的跳变帧)。

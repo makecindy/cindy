@@ -476,7 +476,9 @@ Worker turn 被 vendor 报终止型 error，但 interrupted-turn auto-resume 仍
    区间含停点返回 `QUEUE_HAS_HELD`（整次零修改）；合并还会在同步替换回调里按最新条目
    再判一次，避免异步权限复核期间刚设的停点被合并删除。`move_queued_message` 拒绝把
    其它条目**跨过**停点（`QUEUE_HELD_BOUNDARY`，前后两侧各自区间内的排序仍可用），
-   停点条目自身可以移动。转插话在 `isControlSteerBlocked`（预检与 provider 前复核共用）
+   停点条目自身可以移动。桌面队列行以消息气泡渲染（`PendingQueueBubble`），停点入口在行内队列菜单：
+「停在这里 / 恢复自动发送」，停点行显示常驻标签且不可上下移、不提供插话，它和它之后的气泡弱化；
+`clampReorderAcrossStop` 在发起侧把停点之前条目的重排目标钳在停点之前。转插话在 `isControlSteerBlocked`（预检与 provider 前复核共用）
    里读最新 `held`，而 `hold` 拒绝已在投递中的条目，两侧互斥封住「挂起条目被送进当前轮」。实现指针：
    `agent-input-coordinator.ts` 的 `hold`／`releaseHold` 与 `explainDrainBlockGate`、
    `sessionQueueControl.ts` 的 steer/move 校验、`orcaTeamService.ts` 的

@@ -352,6 +352,22 @@ export interface ComposerTextScrollEdge {
   atBottom: boolean;
 }
 
+/**
+ * 由 TextInput 的 onScroll 事件算出文字滚动端点。Android 的事件不带 contentSize / layoutMeasurement，
+ * 缺字段时返回 null，交给 resolveComposerBodyDrag 回落到 measuredOverflow。
+ */
+export function textScrollEdgeFromEvent(metrics: {
+  contentOffset?: { y?: number };
+  contentSize?: { height?: number };
+  layoutMeasurement?: { height?: number };
+}): ComposerTextScrollEdge | null {
+  const offset = metrics.contentOffset?.y;
+  const content = metrics.contentSize?.height;
+  const viewport = metrics.layoutMeasurement?.height;
+  if (offset == null || content == null || viewport == null) return null;
+  return { atTop: offset <= 1, atBottom: offset + viewport >= content - 1 };
+}
+
 /** 按在卡片任意处拖动调高：手指移出这段距离才判定，之内仍可能是点按。 */
 export const COMPOSER_BODY_DRAG_SLOP = 8;
 /** 按住超过这么久才开始移动视为长按（选字 / 拖光标），交给编辑器。 */

@@ -948,7 +948,7 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
    * 2026-07-03 曾因测试把 userData mock 成 cwd,构造期预热把 codex-home 整套骨架
    * (含真实 ~/.codex/auth.json 的硬链)生成进了仓库 apps/desktop/ 下(PR #438)。
    * 原构造函数的逻辑拆成: marker 读取 → ensureInvalidationMarkerLoaded(懒加载),
-   * 目录/凭证预热 → warmUp()(由 maker-host 装配时显式调用)。
+   * 凭证协调 → warmUp();运行资源仅在登录或 getAuthEnv 时准备。
    * import 纯度由 __tests__/authAdaptersImportPurity.test.ts 回归保护。
    */
 
@@ -1029,20 +1029,13 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
   }
 
   /**
-   * 生产启动预热 —— 等价旧构造函数里的 fire-and-forget:提前建好 codex-home 骨架、
-   * 和本机 codex CLI (~/.codex/auth.json) 协调凭证(防止两份 refresh_token 互相
-   * rotate 导致服务端 invalidate 对方),让首次 getState / spawn 走热路径。
-   * 由 maker-host 装配 codex agent 时显式调用;失败静默,后续 getAuthEnv / getState
-   * 的按需 ensure / reconcile 会兜底。
+   * 启动只协调已有的本机登录，保留账号发现；没有凭证时 reconcile 不创建 home。
+   * Skills、规则和插件等运行资源延迟到显式登录或 getAuthEnv，避免只用 Pi 的
+   * 用户也初始化 Codex。失败由后续 getAuthEnv / getState 的按需 reconcile 兜底。
    */
-  warmUp(): void {
+  warmUp(): Promise<void> {
     this.ensureInvalidationMarkerLoaded();
-    // 串行:先建 codex-home 骨架、再 reconcile。并行时首启(目录尚不存在)的 reconcile
-    // 会在建目录前尝试硬链,白跑一次注定 ENOENT 的 IO(目录兜底见 runReconcile 内 mkdir)。
-    void this.ensureGlobalCodexAssets()
-      .catch(() => undefined)
-      .then(() => this.reconcileWithSystemCodex())
-      .catch(() => undefined);
+    return this.reconcileWithSystemCodex().catch(() => undefined);
   }
 
   /**

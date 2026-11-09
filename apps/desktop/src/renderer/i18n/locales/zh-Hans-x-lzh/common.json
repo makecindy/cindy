@@ -873,6 +873,7 @@
         "pausedLocal": "已暂停接外来之新差事",
         "cooling": "方歇",
         "coolingUntil": "冷却中 · 约 {{time}} 复",
+        "quotaExhausted": "限额已尽",
         "offline": "失联",
         "unreachableHere": "自此机连不上",
         "unavailable": {
@@ -912,9 +913,13 @@
       "description": "为均用各名籍之限额，宜将此讯易至 {{label}} 遣之（{{quota}}）。易后携近数轮言谈与摘要，更早之细节或记不全。",
       "quota": "尚余 {{left}}%",
       "quotaReset": "尚余 {{left}}%，{{reset}}",
-      "confirm": "易之",
-      "cancel": "罢",
-      "remember": "此后自动易之，不复询问（仅此差事）"
+      "confirm": "惟此次换之",
+      "cancel": "暂不换",
+      "remember": "此后自动切换，不复问",
+      "disable": "勿自动切换，亦不复问",
+      "disableFailed": "未能确认此选择已存。请查连线，并确认任务所在电脑之 Cindy 已更新，再试。此讯仍照常送出。",
+      "choiceLabel": "切换之法（仅此任务）",
+      "send": "续发此讯"
     },
     "deleteConfirm": {
       "title": "删 {{provider}} 之供方组乎？",
@@ -2255,6 +2260,10 @@
         },
         "visibilityLabel": "壁纸显度",
         "visibilityHint": "0% 隐壁纸，100% 尽显壁纸。",
+        "desktopVisibilityLabel": "桌面透明度",
+        "desktopVisibilityHint": "透见 Cindy 后之桌面与窗口，文字控件仍清晰。",
+        "desktopBlurLabel": "桌面模糊",
+        "desktopBlurHint": "模糊窗后桌面；0 则关闭，值愈大则愈朦胧。系统若不可调，仍用预设之效。",
         "blurLabel": "壁纸朦胧",
         "blurHint": "仅朦胧壁纸，0 为阖。动态壁纸启朦胧则增显卡之负。",
         "motionLabel": "展示之式",
@@ -2421,7 +2430,7 @@
       "skinLabel": "角色",
       "skinHint": "任务胶囊与灵动岛中所显之角色。",
       "soundLabel": "事之音",
-      "soundHint": "为诸类提醒择 8-bit 之音，任务胶囊与灵动岛共之；点按之音唯触任务胶囊时鸣。",
+      "soundHint": "事件设音，则独奏所择之声；未设或关之，则从系统通知之设。",
       "soundAria": "切换任务胶囊之音",
       "soundSelectAria": "{{event}}之音",
       "soundPreviewAria": "先听{{event}}之音",
@@ -2476,7 +2485,7 @@
         "select": "点击"
       },
       "soundOptions": {
-        "none": "无",
+        "none": "从系统",
         "startup-chime": "启动之音",
         "ring-chime": "圆环之音",
         "item-found": "得宝",
@@ -7363,6 +7372,11 @@
         "installedExpand": "展全部已纳法器 {{count}} 件",
         "installedCollapse": "收余下已纳法器",
         "recommendedSection": "所荐",
+        "todayRecommendations": "今日所荐",
+        "marketSection": "法器市集",
+        "browseMarket": "览法器市集",
+        "searching": "检索中…",
+        "allLoaded": "诸法器已尽示，共 {{count}} 件",
         "updatesAvailable": "法器 {{count}} 件可更新",
         "updateAll": "尽更新",
         "ignoreRound": "此轮略之",
@@ -7392,7 +7406,15 @@
       },
       "market": {
         "publisherKind": {
-          "official": "官设"
+          "official": "官设",
+          "community": "社区"
+        },
+        "publisherDescription": {
+          "official": "Cindy 官方所制，发布维护",
+          "community": "社区开发者所制，发布维护",
+          "team": "本组织共享于获准成员",
+          "custom": "取自所添 Git 或本机目录市场",
+          "local": "由本机文件安装，或于本机开发"
         },
         "scopeAria": "筛法器之来源",
         "scope": {
@@ -9908,6 +9930,8 @@
     "banner": {
       "title": "已更至 {{version}}",
       "subtitle": "重启以焕新",
+      "nativeBuildTitle": "Apple 芯片版已备",
+      "nativeBuildSubtitle": "重启即换，诸务与设置皆存",
       "viewNotes": "览更新之告",
       "viewNotesAria": "览 {{version}} 之更新公告",
       "button": "即重启",
@@ -10037,6 +10061,12 @@
       "description": "数据库约占 {{size}}，已逾 {{threshold}} G。宜往保存空间清理之。",
       "openSettings": "启保存空间",
       "disable": "勿再提醒"
+    },
+    "nativeBuild": {
+      "title": "今用 Intel 版 Cindy",
+      "description": "此 Mac 用 Apple 芯片，Intel 版须转译而行，迟缓甚矣。改装 Apple 芯片版即可，资料皆存。",
+      "dismiss": "此番勿再提",
+      "download": "取之"
     },
     "horizontalTabbarAria": "主区视图切换",
     "tabs": {
@@ -10710,6 +10740,9 @@
         "stepFailed": "{{name}}此步生谬，未竟",
         "stepTimeout": "{{name}}久未竟，此步暂止",
         "stepUnavailable": "{{name}}今不可用，此步无从行",
+        "runtimeFailureReason": {
+          "unclaimed_timeout": "{{name}}逾候未始处理，此请已终。\n请伙伴之主查其电脑之 Cindy 运行与网络连接。"
+        },
         "runtimeFailure": {
           "REMOTE_DEVICE_LIMIT": "{{name}}不能回复：同僚所在设备所留之远程差事数已达上限。\n请同僚之主封存暂不用之差事，或请远方之机之主于「远程与分享」中提高上限。",
           "REMOTE_TOTAL_LIMIT": "{{name}}不能回复：远方之机所留差事总数已达上限。\n请彼机之主释暂不用之差事，或于「远程与分享」中提高上限。",
@@ -11498,7 +11531,8 @@
         "lark": "Lark",
         "wecom": "企业微信",
         "dingtalk": "钉钉",
-        "discord": "Discord"
+        "discord": "Discord",
+        "imessage": "iMessage"
       },
       "status": {
         "connected": "已连",
@@ -11629,6 +11663,22 @@
           "existing": "用已于 Cindy 设置之机器人",
           "manual": "填新凭证",
           "moveNote": "此机器人将自 规制 → IM 机器人 移来，彼处将空；原有私讯与群组改由 {{name}} 接续回复。"
+        },
+        "imessage": {
+          "serverUrlLabel": "BlueBubbles 服务端",
+          "serverUrlPlaceholder": "http://192.168.1.20:1234",
+          "passwordLabel": "API 密钥",
+          "passwordPlaceholder": "••••••••",
+          "ownerAddressLabel": "君之 iMessage 地址",
+          "ownerAddressPlaceholder": "owner@example.com",
+          "chatGuidsLabel": "言谈 GUID（逗号相隔）",
+          "chatGuidsPlaceholder": "any;-;owner@example.com",
+          "listenHostLabel": "本机侦听地址",
+          "listenHostPlaceholder": "192.168.1.10",
+          "listenPortLabel": "本机侦听端口",
+          "listenPortPlaceholder": "18747",
+          "hint": "于本地网络接 BlueBubbles，仅理所选言谈。接入前，须先停其余自动应答程序，以免重答。",
+          "uncertain": "{{count}} 条消息尚待核验。先查往来记录，再议重试，勿重答。"
         }
       },
       "removeConfirm": {
@@ -12453,6 +12503,12 @@
       "missingDir": "目录不存"
     },
     "pendingQueue": {
+      "stopping": "方止",
+      "queued": "方候",
+      "editingInComposer": "方于下方输入框修之…",
+      "moveUp": "前移一位",
+      "moveDown": "后移一位",
+      "cancelSend": "罢遣",
       "regionAria": "待遣之讯队列",
       "listAria": "队列之讯",
       "pausedFooter": "差事已止，队列暂停",
@@ -12488,7 +12544,10 @@
       "holdTip": "止此则及其后之排队讯",
       "heldRowAria": "停点：此则及其后之排队讯不自动发；当下之务照常毕",
       "releaseHoldTip": "止于此矣，复则续发",
-      "releaseHoldAria": "复此则之自发"
+      "releaseHoldAria": "复此则之自发",
+      "holdAction": "止于此",
+      "releaseHoldAction": "复自发",
+      "heldRowLabel": "队列止于此"
     },
     "newChatView": {
       "missing": {
@@ -12901,6 +12960,8 @@
   },
   "chat": {
     "teammateProcess": {
+      "empty": "此番无可示之处理记录",
+      "unavailable": "未能读取处理记录",
       "record": "理事录",
       "operations": "行事录",
       "elapsed": "已理 {{duration}}",
@@ -19376,6 +19437,7 @@
       "apply": "迁移"
     },
     "source": {
+      "receivingOn": "受端：{{name}}",
       "description": "选一台登录了同一帐号的电脑。它的法器、技艺、设置和连接会照原样装到这台电脑；密钥只在你在那台电脑上点「允许」后拷贝，登录状态不会离开那台电脑。",
       "loading": "方寻其余之机…",
       "empty": "没有找到这个账号的其他电脑。在另一台电脑上登录 Cindy 后再打开这里",
@@ -19679,8 +19741,30 @@
     "removeTitle": "移出 {{name}}？",
     "removeDescription": "Cindy 将不再给这个账号分配任务。CLI 登录和对话历史仍保留在本机。",
     "failed": "无法读取或更新账号。请检查 CLI 登录和网络连接后重试。",
-    "directory": "账号目录",
+    "openDirectory": "启账号目录",
+    "openDirectoryFailed": "账号目录未能启，或已移或已删。",
     "loginAgain": "重登",
     "login": "登录"
+  },
+  "crashDiagnosis": {
+    "title": "Cindy 前次异常而止",
+    "description": "欲究其因乎？将取退出之记与已隐敏文之日志，备为差事草稿，阅定乃发。强止或断电，亦可致此。",
+    "diagnose": "诊断其因",
+    "later": "暂置",
+    "logExcerpt": "相关日志（节录，或有未全）",
+    "logsUnavailable": "未得相关日志，其因未明。",
+    "failed": "诊断资料未备，请重试。"
+  },
+  "githubStar": {
+    "title": "喜用 Cindy 乎？",
+    "description": "愿于 GitHub 点 Star，以助 Cindy",
+    "dismiss": "毋再提醒",
+    "action": "为 Cindy 喝彩",
+    "starring": "点亮此星…",
+    "thanks": "承蒙赐 Star！",
+    "thanksDescription": "得君相助，Cindy 日进",
+    "browserFallback": "请至 GitHub 为 Cindy 点 Star",
+    "openGithub": "开启 GitHub",
+    "openFailed": "未能开启 GitHub"
   }
 }

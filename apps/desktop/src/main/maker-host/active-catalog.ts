@@ -408,6 +408,15 @@ function resolveXdPiGatewayServerModelApi(
   )
     return null;
   const nativeApi = nativeApiForRoute('xd', model.id);
+  // Global Gemini Gateway exposes Responses even though Gemini's native API is Google.
+  // Honor that explicit execution route before native metadata selects an unavailable /v1beta
+  // entry point (#9288). Keep the native identity for presentation, and retain CN/dev, direct
+  // Google providers, and Gateway routes without this declaration on their existing policy.
+  if (
+    CURRENT_CINDY_REGION === 'global' &&
+    nativeApi === 'google-generative-ai' &&
+    model.perAgent?.pi?.wireProtocol === 'openai-responses'
+  ) return 'openai-responses';
   if (nativeApi) return nativeApi;
   const declared = piGatewayAuthorityCatalog
     ? resolveCatalogPiGatewayModelApi(piGatewayAuthorityCatalog, model.id)
@@ -450,7 +459,7 @@ function resolveXdPiGatewayHintModelApi(model: XdGatewayModelInfo): PiModelApi |
 }
 
 function resolveXdPiGatewayModelApi(model: XdGatewayModelInfo): PiModelApi | null {
-  // Source authority is deliberate and must not be inverted:
+  // Except for the explicit Global Gemini Responses route handled above, retain source authority:
   // Cindy Server downloaded Catalog > version-matched local Pi table > Cindy AI Gateway hint.
   const catalogApi = resolveXdPiGatewayServerModelApi(model);
   if (catalogApi !== undefined) return catalogApi;
@@ -470,7 +479,7 @@ function xdGatewayTargetAgents(model: XdGatewayModelInfo): AgentKind[] {
   return (model.agents ?? []).filter((agent) => agent !== 'pi' || !serverRetired);
 }
 
-/** Resolve Cindy's canonical policy for Pi, including local metadata for Server omissions.
+/** Resolve Pi's execution policy, including local metadata for Server omissions.
  * An explicit unknown keeps only an independently declared execution route.
  */
 export function resolveXdPiGatewayServerApi(modelId: string): PiModelApi | null | undefined {

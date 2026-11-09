@@ -1,5 +1,7 @@
+import { recordGithubStarPromptSend, recordGithubStarPromptCompletion } from './githubStarPrompt';
 import { parseOutputLimitDetails, type OutputLimitDetails } from '@cindy/maker-shared';
 import { pendingGhostCardFormDelivery } from '@cindy/maker-shared/ghost-card-form';
+import { applySessionRebalancePreferencePatch } from '@/features/provider-group/sessionRebalanceCache';
 import { isVoiceCallTaskMessage } from '../../shared/voiceConversation';
 import { remoteAgentLimitErrorKey } from '../../shared/remoteAgentLimits';
 import { sharedTaskRecoveryReason } from '../../shared/sharedTaskRecovery';
@@ -47,6 +49,7 @@ import { parsePluginConnectionInput, type InputHandoffSnapshot } from '@cindy/de
 import { HISTORY_WORK_PATCH_CHANNEL, HistoryViewController, isHistoryViewUnavailable, mapHistoryViewMessages, historyViewLeaves, historyWorkSummaries, historyPrefetchVersion, historySnapshotCovers, historySnapshotForCache, selectHistoryPrefetchSessions, type HistoryViewPage, type HistoryDetailPage, type HistoryWorkPatch } from '@cindy/maker-shared/message-window';
 import type { CindyRegion } from '@cindy/maker-shared/brand-identity';
 import { nextHistoryCacheReceipt, isHistoryCacheReceipt, historyCacheReceiptFollows, mergeHistoryPrefetchRequest, readContinuousHistoryPage, type HistoryCacheReceipt, type HistoryPrefetchRequest } from '@cindy/maker-shared/message-window';
+import { isHistoryDetailTool, hasVisibleHistoryResult, historyViewEndMs } from '@cindy/maker-shared/message-window';
 import { SESSION_SYNC_CHANNEL } from '@cindy/device-link';
 import { isRemoteTextDelta, readRemoteTextSnapshot, reconcileRemoteText, consumeRemoteSessionSync } from '@cindy/maker-shared/message-window';
 import { parseMessageToolUse } from '@cindy/maker-shared/message-normalize';
@@ -570,6 +573,16 @@ export interface ChatMessage {
   /** Provider phase survives live deltas and durable history projection. */
   assistantPhase?: string;
   failedSamplingAttempt?: boolean;
+  /** 采样尚未确认(运行时关闭时遗留的未封口输出):属于工作过程,不是正式回复(#8655 review)。 */
+  samplingAttemptPending?: boolean;
+  /**
+   * 历史恢复时被过滤掉的隐藏 thinking 行(redacted / omitted 占位)留下的活动边界。
+   * 它已不在渲染序列里，但主进程 `canonicalReplyVisibility` 仍把 thinking 行算作
+   * 「后续活动」，所以边界挂在时间线上相邻的可见消息上：`hiddenThinkingBefore` 表示
+   * 本行之前有一段隐藏思考，`hiddenThinkingAfter` 表示本行之后还有(#8655 review)。
+   */
+  hiddenThinkingBefore?: boolean;
+  hiddenThinkingAfter?: boolean;
   /** user 消息投递方式:普通新 turn 或运行中 steer。 */
   delivery?: 'turn' | 'steer';
   /** Hook 来源元数据(IM 平台 + 用户干净原文 + thread 上下文),UserMessage 据此渲染 Cindy 任务卡片。 */
@@ -3015,6 +3028,9 @@ export type SessionChatLightState = Pick<
   | 'pendingQueue'
   | 'steeringQueueClientIds'
   | 'queuePaused'
+  | 'queueEditLocks'
+  | 'queueInteractionLocks'
+  | 'queueAbortPending'
   | 'queueExpanded'
   | 'fastMode'
   | 'planModeEnabled'
@@ -4387,6 +4403,8 @@ function _needsRemoteTaskSelfHeal(sessionId: string, state: SessionChatState, no
 // keep the full input (a whole file for Write) in toolInput, plan_review rows
 // keep the plan in planReviewPlan, and new payload fields must not escape.
 const _messageCharacterEstimates = new WeakMap<ChatMessage, number>();
+// Exact immutable DB echoes only; a subsequent live replacement loses this proof.
+const durableToolRows = new WeakSet<ChatMessage>();
 
 // Walk with an explicit stack and a visited set: tool inputs are arbitrary
 // nested objects, so neither a depth cut-off nor recursion is safe here.
@@ -4414,7 +4432,41 @@ function _messageCharacters(message: ChatMessage): number {
   return size;
 }
 
+function isRetirableHistoryTool(name: string): boolean {
+  // Folding is not proof that other consumers no longer need a tool record.
+  // Only known read/search bodies are reclaimable. Commands, edits and unknown
+  // tools retain both call and result for task lists, review and other consumers.
+  return isHistoryDetailTool(name) && ['Read', 'read', 'Grep', 'grep', 'Glob', 'glob'].includes(name);
+}
+
+function retiredDurableToolPairs(messages: ChatMessage[], eligible: (row: ChatMessage, index: number) => boolean) {
+  const candidates = messages.filter((row, index) => eligible(row, index) && durableToolRows.has(row)
+    && !row.isStreaming && !row.isPendingPersist && !row.parentToolUseId && !row.systemCardType);
+  const calls = new Map(candidates.filter(row => row.role === 'tool_use' && row.toolUseId
+    && isRetirableHistoryTool(row.toolName ?? '')).map(row => [row.toolUseId, row]));
+  const retired = new Set<ChatMessage>();
+  for (const row of candidates) {
+    const call = row.toolUseId && calls.get(row.toolUseId);
+    if (row.role !== 'tool_result' || !call || hasVisibleHistoryResult(row.content)) continue;
+    retired.add(call); retired.add(row);
+  }
+  return retired;
+}
+
 function _softEvictIdleSessions(): void {
+  for (const [sessionId, state] of sessions) {
+    // Legacy raw-only readers require their contiguous window. A history view
+    // refreshes on return; never-opened sessions will read history on first open.
+    const view = getRemoteHistoryView(sessionId);
+    const deviceId = remoteProjectsStore.getSessionDeviceId(sessionId);
+    if (_activeViewSessions.has(sessionId)
+      || (deviceId && isRemoteDeviceMarkedDisconnected(deviceId))
+      || (view ? !view.canReloadDetails() : state.historyLoaded || !!deviceId)) continue;
+    const retired = retiredDurableToolPairs(state.messages, () => true);
+    if (retired.size) setState(sessionId, current => ({ ...current,
+      messages: current.messages.filter(row => !retired.has(row)),
+    }));
+  }
   const now = Date.now();
   let messageCount = 0;
   let characters = 0;
@@ -6853,14 +6905,15 @@ export function handleStreamEvent(
         const answers = resolved?.answers as Record<string, string> | undefined;
         const dismissed = resolved?.dismissed === true;
         const askUserReply = answers && !dismissed ? formatAskUserReply(answers) : '';
+        const releasesProtectedAsk = data.reason === 'resolved' && !dismissed &&
+          state.protectedAskUser?.pending.requestId === data.requestId;
         return {
           ...state,
-          protectedAskUser: data.reason === 'resolved' && !dismissed && state.protectedAskUser?.pending.requestId === data.requestId
-            ? undefined : state.protectedAskUser,
+          protectedAskUser: releasesProtectedAsk ? undefined : state.protectedAskUser,
           pendingAskUser:
             state.pendingAskUser?.requestId === data.requestId ? null : state.pendingAskUser,
           askUserViewerState:
-            state.pendingAskUser?.requestId === data.requestId ? 'expanded' : state.askUserViewerState,
+            state.pendingAskUser?.requestId === data.requestId || releasesProtectedAsk ? 'expanded' : state.askUserViewerState,
           askUserDraft:
             state.pendingAskUser?.requestId === data.requestId ? null : state.askUserDraft,
           messages: state.messages.map((m) =>
@@ -6998,9 +7051,11 @@ export function handleStreamEvent(
           isBlocking: data.isBlocking,
           persistId: event.persistId,
         },
-        // Optional questions start minimized so the original message stays readable.
-        // Replayed requests preserve the user's existing viewing state.
-        askUserViewerState: keepAskProgress ? state.askUserViewerState : data.delivery === 'async' ? 'minimized' : 'expanded',
+        // Async delivery lets the agent continue; every new question still starts expanded.
+        // Replayed requests preserve the user's existing viewing state, and so does a new
+        // request queued behind a draft-protected one: the visible card is still the old one.
+        // It opens expanded once the protected question is released.
+        askUserViewerState: keepAskProgress || state.protectedAskUser ? state.askUserViewerState : 'expanded',
         // Only an unchanged pending request may retain its draft. A new batch
         // or changed question content starts clean, even with the same requestId.
         askUserDraft: keepAskProgress ? state.askUserDraft : null,
@@ -8484,6 +8539,20 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
       );
     }
 
+    if ((isProductTurnDoneEvent(event) || event.type === 'error') && event.turnScope !== 'background') {
+      const state = sessions.get(sessionId);
+      const successful = isProductTurnDoneEvent(event) && event.turnOrigin?.kind === 'user'
+        && event.turnOrigin.surface !== 'im' && state
+        && !state.turnStoppedByUser && !state.lastStopWasSideTask
+        && !state.lastStopWasPrivateReply && !state.lastStopWasGroupLane
+        && !hasGithubStarBlockingWork();
+      // Main stamps the accepted input before releasing the turn/draining the queue.
+      // Never infer ownership from the last bubble: it may be a newer queued/steered input.
+      const completedClientId = successful && typeof event.agentMeta?.replyToClientId === 'string'
+        ? event.agentMeta.replyToClientId : null;
+      recordGithubStarPromptCompletion(sessionId, completedClientId, dataOwnerAtIngress);
+    }
+
     // done / error 副作用 (从老 stream listener 搬过来)
     if (isProductTurnDoneEvent(event)) {
       notifyGatewayProxyTokenTurnSettled(sessionId);
@@ -8977,6 +9046,7 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
     if (isBeforeOrAtRendererClearBoundary(sessionId, message.createdAt)) return;
     const [mapped] = mapServerMessages([message]);
     if (!mapped) return;
+    if (mapped.role === 'tool_use' || mapped.role === 'tool_result') durableToolRows.add(mapped);
     traceRemoteSendEcho(mapped.clientId, mapped.role);
     clearRemoteOptimisticSend(sessionId, mapped.clientId);
     const current = getOrCreateState(sessionId);
@@ -9029,6 +9099,7 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
           // 仅限 tool 行：thinking 的 persisted createdAt 会回填块开始时间，必须让
           // mergeMessages 重排；assistant 等其它角色也保留原有权威时间线语义。
           const hydrated = hydratePersistedMessage(existing, mapped, hydrateOptions);
+          if (hydrated.content === mapped.content && hydrated.toolInput === mapped.toolInput) durableToolRows.add(hydrated);
           if (hydrated === existing) return s;
           const nextMessages = s.messages.slice();
           nextMessages[existingIdx] = hydrated;
@@ -9411,6 +9482,7 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
           // 被控端会话元数据 / 设置变更 → 就地镜像到远程项目分片(取代乐观覆盖)。
           const p = push.payload as { sessionId?: string; patch?: Record<string, unknown> } | null;
           if (push.deviceId && p?.sessionId && p.patch) {
+            applySessionRebalancePreferencePatch(p.sessionId, p.patch, push.deviceId);
             const terminal = p.patch.status === 'deleted' || p.patch.status === 'archived';
             if (!terminal && isRemoteTerminalSessionTombstoned(p.sessionId, push.deviceId)) {
               if (p.patch.status === 'active') requestRemoteReseed(push.deviceId);
@@ -10057,6 +10129,9 @@ function selectLightState(state: SessionChatState): SessionChatLightState {
     pendingQueue: state.pendingQueue,
     steeringQueueClientIds: state.steeringQueueClientIds,
     queuePaused: state.queuePaused,
+    queueEditLocks: state.queueEditLocks,
+    queueInteractionLocks: state.queueInteractionLocks,
+    queueAbortPending: state.queueAbortPending,
     queueExpanded: state.queueExpanded,
     fastMode: state.fastMode,
     planModeEnabled: state.planModeEnabled,
@@ -10110,6 +10185,9 @@ function lightStateEquals(a: SessionChatLightState, b: SessionChatLightState): b
     a.pendingQueue === b.pendingQueue &&
     a.steeringQueueClientIds === b.steeringQueueClientIds &&
     a.queuePaused === b.queuePaused &&
+    a.queueEditLocks === b.queueEditLocks &&
+    a.queueInteractionLocks === b.queueInteractionLocks &&
+    a.queueAbortPending === b.queueAbortPending &&
     a.queueExpanded === b.queueExpanded &&
     a.fastMode === b.fastMode &&
     a.planModeEnabled === b.planModeEnabled &&
@@ -10184,6 +10262,16 @@ function getPromptRecommendationCompletionStatus(
     // 自动续跑队列则等最终一轮结束后再生成。
     hasAutoDrainingQueue: state.pendingQueue.length > 0 && !state.queuePaused,
   };
+}
+
+/** Non-creating read: optional invitations yield to all known work and unresolved errors. */
+function hasGithubStarBlockingWork(): boolean {
+  for (const [sessionId, state] of sessions) {
+    if (_isSessionBusy(sessionId, state) || state.error || state.recoverableError
+      || state.pendingQueue.length > 0 || state.steeringQueueClientIds.length > 0 || state.pendingAppPermissions?.length
+      || state.credentialSwitchWait || state._authRetryInFlight || state.queueAbortPending) return true;
+  }
+  return false;
 }
 
 /**
@@ -11945,6 +12033,11 @@ function createRemoteHistoryView(sessionId: string) {
   const cached = deviceId ? readRemoteHistoryCache<HistoryChatMessage>(deviceId, sessionId) : Promise.resolve(null);
   let writeCache: ReturnType<typeof remoteHistoryCacheWriter> | undefined;
   let persistTimer: ReturnType<typeof setTimeout> | undefined;
+  // Only exact durable rows present before the latest read can retire. Summary
+  // endpoints/counts alone cannot prove that a newer live body has persisted.
+  const borrowedDetailRows = new WeakSet<ChatMessage>();
+  let latestReadRows = new WeakSet<ChatMessage>();
+  let latestReadEndMs = 0;
   const isCurrent = (): boolean => isDataOwnerGenerationCurrent(owner)
     && remoteProjectsStore.getSessionDeviceId(sessionId) === deviceId
     && remoteHistoryViews.get(sessionId)?.view === view;
@@ -11968,17 +12061,24 @@ function createRemoteHistoryView(sessionId: string) {
     }),
     page: async (before) => {
       const writer = deviceId ? remoteHistoryCacheWriter(deviceId, sessionId) : undefined;
+      const readRows = new WeakSet(sessions.get(sessionId)?.messages ?? []);
       // Remote reads ask for Host-projected running lines; a local view already holds live rows.
       const page = await call<HistoryViewPage<Message>>('local-db:messages:view', [sessionId, { before, lazyDetails: true, ...(deviceId ? { workLines: true } : {}) }]);
       if (page == null) throw new Error('[CHANNEL_NOT_ALLOWED] History view is unavailable');
       writeCache = writer;
+      if (!before) {
+        latestReadRows = readRows;
+        latestReadEndMs = historyViewEndMs(page);
+      }
       return { ...page, items: mapHistoryViewMessages(page.items, mapRows) };
     },
     details: async (ref, after) => {
       const writer = deviceId ? remoteHistoryCacheWriter(deviceId, sessionId) : undefined;
       const page = await call<HistoryDetailPage<Message>>('local-db:messages:work-details', [sessionId, ref, { after }]);
       writeCache = writer;
-      return { ...page, messages: mapRows(page.messages) };
+      const messages = mapRows(page.messages);
+      for (const row of messages) borrowedDetailRows.add(row);
+      return { ...page, messages };
     },
     expanded: async (refs) => {
       // Releasing an old view must still clear its original Host's interest.
@@ -12023,10 +12123,32 @@ function createRemoteHistoryView(sessionId: string) {
         ? state.messages.filter((message) => !message.cacheHydrated
           || historyCacheReceiptFollows(message.cacheReceipt, snapshot.readReceipt, snapshot.stale))
         : state.messages;
-      const messages = confirmRemoteUsers(
+      let messages = confirmRemoteUsers(
         mergeMessages(borrowed, rawMessages, { addOnly: true }),
         new Set(available.filter((message) => message.role === 'user').map((message) => message.clientId)),
       );
+      if (!snapshot.stale && !snapshot.error) {
+        const availableIds = new Set(available.map(row => row.clientId));
+        // A long turn need not finish before its completed tools can retire.
+        // Preserve the recent running tail and any body owned by visible details;
+        // old pairs are independently proven by DB echoes and a later page read.
+        const running = historyWorkSummaries(snapshot.items).some(summary => summary.isStreaming);
+        const retired = retiredDurableToolPairs(messages, (row, index) =>
+          latestReadRows.has(row) && !availableIds.has(row.clientId)
+          && Date.parse(row.createdAt ?? '') <= latestReadEndMs
+          && (!running || index < messages.length - 10));
+        const reclaimableToolIds = new Set(messages.filter(row => row.role === 'tool_use'
+          && row.toolUseId && isRetirableHistoryTool(row.toolName ?? '')).map(row => row.toolUseId));
+        for (const row of messages) {
+          if (borrowedDetailRows.has(row) && !availableIds.has(row.clientId)
+            && (row.role === 'thinking' || ((row.role === 'tool_use' || row.role === 'tool_result')
+              && !!row.toolUseId && reclaimableToolIds.has(row.toolUseId)))
+            && !row.isStreaming && !row.isPendingPersist) retired.add(row);
+        }
+        // History owns these folded bodies and can load them through workDetails.
+        // Leave prose, artifacts, live rows and all runtime/interaction state intact.
+        if (retired.size) messages = messages.filter(row => !retired.has(row));
+      }
       const isLoadingMore = view.isLoadingOlder();
       return state.historyLoaded && state.messages === messages
         && state.hasMoreMessages === snapshot.hasMore
@@ -15505,6 +15627,7 @@ async function sendMessageCore(
   ) {
     return false;
   }
+  const starPromptOwner = getDataOwnerGeneration();
   const current = getOrCreateState(sessionId);
   const wasFirst = current.isFirstMessage;
 
@@ -15649,6 +15772,7 @@ async function sendMessageCore(
     // preflight/invoke so a weak link never holds the composer dispatch lock.
     remoteRecord.composerResolvedOptimistically = true;
     void pumpRemoteOptimisticSends(sessionId);
+    if (!opts?.authRetryPersistOnProjectionError) recordGithubStarPromptSend(sessionId, queued.clientId, starPromptOwner);
     return true;
   }
 
@@ -15677,6 +15801,7 @@ async function sendMessageCore(
       ) {
         clearSessionStarting(sessionId);
       }
+      if (!opts?.authRetryPersistOnProjectionError) recordGithubStarPromptSend(sessionId, queued.clientId, starPromptOwner);
       return true;
     })
     .catch((err) => {
@@ -15942,6 +16067,7 @@ async function steerMessageCore(
   ) {
     return false;
   }
+  const starPromptOwner = getDataOwnerGeneration();
   const queued = buildQueuedMessage(
     sessionId,
     text,
@@ -16027,6 +16153,7 @@ async function steerMessageCore(
     remoteRecord.composerResolvedOptimistically = true;
     _disposedLiveErrorIntents.delete(sessionId);
     void pumpRemoteOptimisticSends(sessionId);
+    recordGithubStarPromptSend(sessionId, queued.clientId, starPromptOwner);
     return true;
   }
 
@@ -16038,6 +16165,7 @@ async function steerMessageCore(
         _disposedLiveErrorIntents.delete(sessionId);
         commitAutoTitle();
         requestInputProjection(sessionId);
+        recordGithubStarPromptSend(sessionId, queued.clientId, starPromptOwner);
         return true;
       }
       // steer 失败后拉一次权威 projection:投递结果不确定时 coordinator 会把这条
@@ -16058,6 +16186,7 @@ async function steerMessageCore(
           // (review P1)。是否真该改名仍由 main 权威判定。
           _disposedLiveErrorIntents.delete(sessionId);
           commitAutoTitle();
+          recordGithubStarPromptSend(sessionId, queued.clientId, starPromptOwner);
           return true;
         }
       } catch (err) {
@@ -17272,7 +17401,7 @@ async function sendProtectedQuestionSupplement(sessionId: string, requestId: str
   if (protectedQuestion?.pending.requestId !== requestId) return;
   const text = formatAsyncQuestionSupplement(protectedQuestion.pending.questions, answers);
   const clear = () => setState(sessionId, (s) => s.protectedAskUser?.pending.requestId === requestId
-    ? { ...s, protectedAskUser: undefined } : s);
+    ? { ...s, protectedAskUser: undefined, askUserViewerState: 'expanded' } : s);
   const key = `${sessionId}:${requestId}:supplement`;
   if (questionDecisionsInFlight.has(key)) return;
   questionDecisionsInFlight.add(key);
@@ -17300,7 +17429,7 @@ async function sendProtectedQuestionSupplement(sessionId: string, requestId: str
     );
     if (!current()) return;
     if (!needsSupplement) {
-      setState(sessionId, (s) => ({ ...s, protectedAskUser: undefined,
+      setState(sessionId, (s) => ({ ...s, protectedAskUser: undefined, askUserViewerState: 'expanded',
         pendingAskUser: s.pendingAskUser?.requestId === requestId ? null : s.pendingAskUser,
         askUserDraft: s.askUserDraft?.requestId === requestId ? null : s.askUserDraft,
       }));
@@ -18564,6 +18693,7 @@ export const makerChatStore = {
   getPromptRecommendationRunStartedAt,
   /** 输入框推荐后台完成资格的 non-creating 终态快照。 */
   getPromptRecommendationCompletionStatus,
+  hasGithubStarBlockingWork,
   ensureInitialMessages,
   prefetchRemoteHistories,
   reloadMessages,
@@ -19366,6 +19496,25 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
   );
   const filtered = serverMsgs.filter((m) => !isHiddenThinkingRow(m));
   const ordered = filtered.sort(compareMessageTimeline);
+  // 被隐藏的 thinking 行(redacted / omitted 占位)仍是活动边界:主进程
+  // `canonicalReplyVisibility` 把 thinking 行算作「后续活动」,而这里它已经不在渲染
+  // 序列里。把边界挂到时间线上相邻的可见消息,供收尾回复判定使用(#8655 P2)。
+  const hiddenThinkingBefore = new Set<string>();
+  const hiddenThinkingAfter = new Set<string>();
+  {
+    const timeline = [...serverMsgs].sort(compareMessageTimeline);
+    timeline.forEach((row, index) => {
+      if (!isHiddenThinkingRow(row)) return;
+      const next = timeline.slice(index + 1).find((candidate) => !isHiddenThinkingRow(candidate));
+      if (next) {
+        hiddenThinkingBefore.add(next.clientId);
+        return;
+      }
+      const previous = [...timeline.slice(0, index)].reverse()
+        .find((candidate) => !isHiddenThinkingRow(candidate));
+      if (previous) hiddenThinkingAfter.add(previous.clientId);
+    });
+  }
   const legacyUserTurnCosts = projectLegacyUserTurnCosts(ordered);
   const mapped = ordered.map((m) => {
     if (m.role === 'assistant' && m.agentMeta?.voiceCall?.version === 1) return {
@@ -19948,6 +20097,14 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
       ...(m.role === 'assistant' ? { sourceGroup: readMessageSourceGroup(m.agentMeta) } : {}),
       ...(m.role === 'assistant' && typeof m.agentMeta?.assistantPhase === 'string' ? { assistantPhase: m.agentMeta.assistantPhase } : {}),
       ...(m.role === 'assistant' && m.agentMeta?.failedSamplingAttempt ? { failedSamplingAttempt: true } : {}),
+      // 与主进程 canonicalReplyVisibility 同源的 pending 判据:运行时关闭后遗留的
+      // 未确认输出不能当成正式回复(#8655 review)。
+      // `false` 必须显式映射出来:确认广播只带 `samplingAttemptPending: false`,
+      // 若这里省略,`hydratePersistedMessage` 的 `{ ...existing, ...persisted }`
+      // 会让内存里旧的 `true` 永远残留,已接受的收尾回复一直藏在折叠里。
+      ...(m.role === 'assistant' && typeof m.agentMeta?.samplingAttemptPending !== 'undefined'
+        ? { samplingAttemptPending: m.agentMeta.samplingAttemptPending !== false }
+        : {}),
       ...(m.role === 'assistant' && m.agentMeta?.explicitDelivery === true ? { explicitDelivery: true } : {}),
       ...(botStarterOptions.length ? { botStarterOptions } : {}),
       ...(m.role === 'assistant' ? { botLearning: m.agentMeta?.botLearning } : {}),
@@ -20011,18 +20168,24 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
     const remoteContentTruncated = remoteContentTruncatedById.get(cm.clientId) === true;
     const remoteRowsTrimmed = remoteRowsTrimmedById.get(cm.clientId) === true;
     const legacyUserTurnCost = legacyUserTurnCosts.get(cm.clientId);
+    const hiddenBefore = hiddenThinkingBefore.has(cm.clientId);
+    const hiddenAfter = hiddenThinkingAfter.has(cm.clientId);
     if (
       !iso &&
       rowid === undefined &&
       !remoteContentTruncated &&
       !remoteRowsTrimmed &&
       !legacyUserTurnCost &&
-      !serverId
+      !serverId &&
+      !hiddenBefore &&
+      !hiddenAfter
     ) {
       return cm;
     }
     return {
       ...cm,
+      ...(hiddenBefore ? { hiddenThinkingBefore: true } : {}),
+      ...(hiddenAfter ? { hiddenThinkingAfter: true } : {}),
       ...(legacyUserTurnCost ?? {}),
       ...(iso ? { createdAt: iso } : {}),
       ...(typeof serverId === 'string' && serverId.length > 0 ? { id: serverId } : {}),

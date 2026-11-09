@@ -285,6 +285,9 @@ export interface RemoteAgentHostDeps {
     ownerScope(): string;
     locate?(controller: string, request: Extract<RemoteAgentRequest, { op: 'direct-locate' }>): Promise<{ deviceId: string } | null>;
     /** O accepts fresh relay history; native history must stay on its recorded M. */
+    acceptDelegated?(controller: string, sessionId: string): Promise<void>;
+    beginDelegatedTurn?(controller: string, sessionId: string, executionId: string,
+      captureCompletion: (complete: () => Promise<void>) => void): Promise<void>;
     acceptRelay?(controller: string, sessionId: string, hasNativeHistory: boolean): Promise<void>;
     allocate(controller: string, request: Extract<RemoteAgentRequest, { op: 'allocate' }>): Promise<{ deviceId: string; generation: string; leaseDurationMs?: number } | null>;
     status(controller: string, request: Extract<RemoteAgentRequest, { op: 'direct-status' }>): void;
@@ -479,6 +482,8 @@ interface Run {
   ownerRoute?: OwnerProviderRouteBinding;
   /** 换模型/来源串行，避免失败回滚覆盖后一次选择。 */
   modelChange?: Promise<void>;
+  /** Executor-owned receipt; retained after revocation until this turn has stopped. */
+  standbyTurn?: { complete(): Promise<void>; pending: boolean; stopped?: boolean; completing?: Promise<void> };
   usageMeter?: ReturnType<typeof createGuestUsageMeter>;
   lastState?: string;
   stateTimer?: ReturnType<typeof setInterval>;
@@ -640,6 +645,7 @@ function describeHandle(handle: AgentSessionHandle, shadowDir: string, mirrorRoo
     extraDirs,
     writableDirs,
     virtualWorkspace,
+    imessageSendContext: true,
     ...(previousMirrorRoots.length ? { previousMirrorRoots } : {}),
     methods,
     ...(handle.requestSessionId ? { requestSessionId: handle.requestSessionId } : {}),
@@ -656,6 +662,8 @@ function describeHandle(handle: AgentSessionHandle, shadowDir: string, mirrorRoo
 export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
   const now = deps.now ?? Date.now;
   const runs = new Map<string, Run>();
+  // Completion receipts outlive a closed/purged run until the original owner can acknowledge them.
+  const pendingStandbyCompletions = new Set<Run>();
   const uploads = new Map<string, Upload>();
   /** 发给受邀者的「需要换一台」凭证 → 发给了谁的哪个任务、重新打开时要避开哪些台。一次性，过期作废。 */
   const groupSwitchTokens = new Map<string, { controller: string; hostSessionId: string; exclude: string[]; expiresAt: number }>();
@@ -1031,7 +1039,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
   }
 
   function stopSweepIfIdle(): void {
-    if (sweepTimer && runs.size === 0 && uploads.size === 0) {
+    if (sweepTimer && runs.size === 0 && uploads.size === 0 && pendingStandbyCompletions.size === 0) {
       clearInterval(sweepTimer);
       sweepTimer = null;
     }
@@ -1056,6 +1064,15 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
 
   function sweep(): void {
     const t = now();
+    for (const run of pendingStandbyCompletions) {
+      if (!deps.isOwnerCurrent(run.owner)) {
+        pendingStandbyCompletions.delete(run);
+        continue;
+      }
+      void completeStandbyTurn(run).catch(error => {
+        deps.log?.warn('standby completion retry deferred', { runId: run.id, error: String(error) });
+      });
+    }
     for (const [uploadKey, upload] of uploads) {
       if (t - upload.touchedAt > UPLOAD_IDLE_MS) uploads.delete(uploadKey);
     }
@@ -1179,6 +1196,9 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
   function emitState(run: Run): void {
     if (!run.handle || run.closing) return;
     const state = snapshotHandleState(run.handle);
+    void completeStandbyTurn(run).catch(error => {
+      deps.log?.warn('standby completion deferred', { runId: run.id, error: String(error) });
+    });
     if (typeof state.turnRunning === 'boolean') {
       run.turnRunning = state.turnRunning;
       run.groupLoad?.setRunning(state.turnRunning);
@@ -2505,14 +2525,19 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
     if (run.stateTimer) clearInterval(run.stateTimer);
     for (const pending of run.pending.values()) pending.reject(new Error('[REMOTE_AGENT_EXPIRED] task has ended'));
     run.pending.clear();
+    let stopped = false;
     if (closeHandle && run.handle) {
       try {
         if (mode === 'detach' && run.handle.detach) await run.handle.detach({ reason: teardown });
         else await run.handle.close({ reason: teardown });
+        stopped = mode === 'close';
       } catch (error) {
         deps.log?.warn('remote agent close failed', { runId: run.id, error: String(error) });
       }
     }
+    await completeStandbyTurn(run, stopped).catch(error => {
+      deps.log?.warn('standby completion deferred after close', { runId: run.id, error: String(error) });
+    });
     // 中转任务：结束组内电脑上的那个任务(撤权、受邀者离开、关闭都走这里)，并放掉它占的负载。
     const relay = run.relay;
     if (relay) {
@@ -2613,10 +2638,32 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
     await change;
   }
 
+  async function completeStandbyTurn(run: Run, stopped = false): Promise<void> {
+    const turn = run.standbyTurn;
+    if (!turn) return;
+    if (stopped) turn.stopped = true;
+    if (!turn.stopped && (turn.pending || (run.handle && activityBusy(handleActivity(run.handle))))) return;
+    if (!turn.completing) {
+      turn.completing = turn.complete().then(() => {
+        if (run.standbyTurn === turn) run.standbyTurn = undefined;
+        pendingStandbyCompletions.delete(run);
+        stopSweepIfIdle();
+      }).catch(error => {
+        if (!disposed && deps.isOwnerCurrent(run.owner)) {
+          pendingStandbyCompletions.add(run);
+          ensureSweep();
+        }
+        throw error;
+      }).finally(() => { turn.completing = undefined; });
+    }
+    await turn.completing;
+  }
+
   async function callOnHandle(run: Run, callId: string, method: RemoteAgentMethod, payload: RemoteAgentPayload): Promise<void> {
     if (run.relay?.started) return relayCall(run, run.relay, callId, method, payload);
     const handle = run.handle;
     let rollbackProvider: (() => void) | undefined;
+    let standbyTurn: Run['standbyTurn'];
     try {
       if (run.closing) fail('REMOTE_AGENT_EXPIRED', 'task has ended');
       if (!delegatedRunAllowed(run)) fail('REMOTE_AGENT_UNAVAILABLE', 'this shared task is no longer authorized');
@@ -2691,6 +2738,16 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
         rollbackProvider = () => binding.setProvider(previousProviderId);
       }
       let value: unknown;
+      if (method === 'send' && run.trust === 'guest' && run.sessionId
+        && deps.directGuestExecution?.sessionDelegated(run.controller, run.sessionId)) {
+        await completeStandbyTurn(run);
+        if (run.standbyTurn) fail('REMOTE_AGENT_UNAVAILABLE', 'previous shared turn is still running');
+        await deps.directGuestExecution.beginDelegatedTurn?.(run.controller, run.sessionId, `${run.id}:${callId}`, complete => {
+          run.standbyTurn = standbyTurn = { complete, pending: true };
+        });
+        if (run.closing) fail('REMOTE_AGENT_EXPIRED', 'task has ended');
+        if (!delegatedRunAllowed(run)) fail('REMOTE_AGENT_UNAVAILABLE', 'this shared task is no longer authorized');
+      }
       try {
         value = await (target as (...a: unknown[]) => unknown).apply(handle, callArgs);
       } catch (error) {
@@ -2711,6 +2768,12 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
       }
       append(run, { t: 'result', callId, ok: false, error: info });
     } finally {
+      if (standbyTurn) {
+        standbyTurn.pending = false;
+        await completeStandbyTurn(run).catch(error => {
+          deps.log?.warn('standby completion deferred', { runId: run.id, error: String(error) });
+        });
+      }
       run.calls.set(callId, 'done');
       if (run.calls.size > MAX_REMEMBERED_CALLS) {
         for (const [id, status] of run.calls) {
@@ -2800,7 +2863,9 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
     wholeController: boolean,
     directForgetId?: string,
     directCleanupEpoch?: number,
+    requireComplete = false,
   ): Promise<void> {
+    const strict = requireComplete || directForgetId !== undefined;
     const owned = [...runs.values()].filter(runMatch);
     await Promise.all(owned.map((run) => finishRun(run, 'access-revoked', 'navigation')));
     await Promise.all(owned.map((run) => disposeRun(run)));
@@ -2853,7 +2918,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
     ];
     await Promise.all(targets.map((target) => {
       const removal = fsp.rm(target, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
-      return directForgetId ? removal : removal.catch(() => undefined);
+      return strict ? removal : removal.catch(() => undefined);
     }));
     if (!records.length) return;
     // 接过这些受邀者任务的组内电脑(含启动失败、还没有原生会话 id 的)：先记成待通知再逐台通知，通知到才划掉，
@@ -2869,7 +2934,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
       record.forgetPending = [...devices];
       forgets = true;
     }
-    if (directForgetId && !deps.purgeHostedTranscripts) {
+    if (strict && !deps.purgeHostedTranscripts) {
       fail('REMOTE_AGENT_INVALID', 'direct guest transcript cleanup is unavailable');
     }
     try {
@@ -2880,7 +2945,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
     } catch (error) {
       // 留着登记，下次清理重试。
       deps.log?.warn('remote agent transcript purge failed', { error: String(error) });
-      if (directForgetId) throw error;
+      if (strict) throw error;
       if (forgets) {
         await persistGuestIndex(map);
         void retryPendingForgets();
@@ -2908,10 +2973,14 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
         updates.set(digest, undefined);
       }
     }
-    // Legacy relay cleanup retains its existing best-effort publication. Direct
-    // cleanup keeps the old retryable record until the tombstone is on disk.
-    if (!directForgetId) applyGuestIndexUpdates(map, updates);
-    await persistGuestIndex(map, directForgetId !== undefined, directForgetId ? updates : undefined);
+    // Legacy relay cleanup retains its existing best-effort publication. Strict
+    // direct/standby cleanup keeps the retryable record until the update is on disk.
+    if (!strict) applyGuestIndexUpdates(map, updates);
+    await persistGuestIndex(map, strict, strict ? updates : undefined);
+    if (requireComplete && forgets) {
+      void retryPendingForgets();
+      throw new Error('Provider share relay cleanup is still pending');
+    }
     if (forgets) void retryPendingForgets();
   }
 
@@ -3439,6 +3508,10 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
           reserved?.release();
           fail('REMOTE_AGENT_UNSUPPORTED', `${request.agentKind} is not available on this computer`);
         }
+        if (controllerTrust === 'guest' && deps.directGuestExecution?.sessionDelegated(controller, payload.sessionId)) {
+          try { await deps.directGuestExecution.acceptDelegated?.(controller, payload.sessionId); }
+          catch (error) { reserved?.release(); throw error; }
+        }
         if (controllerTrust === 'guest' && !relayKey
           && !deps.directGuestExecution?.sessionDelegated(controller, payload.sessionId)) {
           try {
@@ -3705,8 +3778,9 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
      * 受邀者的分享删除后：结束匹配控制端(同一成员的每台设备)的任务，删除它们的影子工作区与
      * 附件，以及本机 Agent 目录里它们的会话记录。
      */
-    async purgeControllers(match: (controller: string) => boolean): Promise<void> {
-      await purgeGuests((run) => match(run.controller), (record) => match(record.controller), true);
+    async purgeControllers(match: (controller: string) => boolean, requireComplete = false): Promise<void> {
+      await purgeGuests((run) => match(run.controller), (record) => match(record.controller), true,
+        undefined, undefined, requireComplete);
     },
     /** 有进行中任务的控制端(分享管理页显示「几个任务运行中」)。 */
     activeControllers(): string[] {
@@ -3743,6 +3817,7 @@ export function createRemoteAgentHost(deps: RemoteAgentHostDeps) {
       if (sweepTimer) clearInterval(sweepTimer);
       sweepTimer = null;
       disposed = true;
+      pendingStandbyCompletions.clear();
       if (forgetRetryTimer) clearTimeout(forgetRetryTimer);
       forgetRetryTimer = null;
       // 退出前尽力收尾：影子工作目录含同步过去的项目与个人说明，不能留到下次启动。

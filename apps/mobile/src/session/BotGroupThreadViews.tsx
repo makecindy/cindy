@@ -1,14 +1,13 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, View } from 'react-native';
-import { Copy, CornerDownRight, Ellipsis } from 'lucide-react-native';
+import { Check, Copy, CornerDownRight, Ellipsis } from 'lucide-react-native';
 import { Stack } from 'expo-router';
 import { useTranslation } from 'react-i18next';
-import * as Clipboard from 'expo-clipboard';
 import type { BotGroupAttachment, BotGroupMessageView, BotGroupThreadShareView } from '@cindy/maker-shared/botGroupChat';
 import { Text } from '@/components/AppText';
 import { ChatReplyIcon } from '@/components/ChatReplyIcon';
 import { MainWindowActionButton } from '@/components/MobilePrimitives';
-import { fontWeight, iconSize, lineHeight, spacing, typeScale, useTheme, useThemedStyles, type ThemeColors } from '@/theme';
+import { fontWeight, iconSize, lineHeight, radius, spacing, typeScale, useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 import { ChatThreadSummary } from './ChatThreadSummary';
 import { BotGroupAvatar } from './BotGroupAvatars';
 import type { BotGroupIdentityLookup } from './BotGroupPlan';
@@ -17,6 +16,7 @@ import { BotGroupMessageAttachments } from './BotGroupMessageAttachments';
 import { BotGroupMarkdownText } from './BotGroupMessageText';
 import type { BotGroupMentionContext } from './botGroupMentions';
 import type { ResolveRemoteMediaFn } from './remoteMedia';
+import { copyMessageText, type CopyMessageStatus } from './messageActions';
 
 type BotGroupThreadSummary = Pick<BotGroupMessageView, 'replyCount' | 'threadPreview' | 'threadUnread'>;
 
@@ -54,7 +54,8 @@ export function BotGroupThreadFollow({ nativeHeader = false, following, online, 
     disabled, busy, testID: 'botGroup.thread.follow', onPress: toggle }} />;
 }
 
-export function BotGroupThreadShare({ share, mentionContext, resolveMedia, resolveServerMedia, onRetry, onOpenDiagram, interactive = true, active = true }: {
+export function BotGroupThreadShare({ share, mentionContext, resolveMedia, resolveServerMedia, onRetry, messageKey, messageId, onOpenDiagram, interactive = true, active = true }: {
+  messageKey?: string; messageId?: string;
   share: BotGroupThreadShareView; resolveMedia: ResolveRemoteMediaFn;
   onOpenDiagram?: (source: string) => void; interactive?: boolean; active?: boolean;
   mentionContext?: BotGroupMentionContext;
@@ -68,7 +69,7 @@ export function BotGroupThreadShare({ share, mentionContext, resolveMedia, resol
       : <>
         <Text style={styles.count}>{share.authorName}{share.edited ? ` · ${t('groupChat.thread.edited')}` : ''}</Text>
         {share.attachments.length ? <BotGroupMessageAttachments messageId={share.messageId} attachments={share.attachments} align="left" onResolveRemoteMedia={resolveMedia} resolveServerMedia={resolveServerMedia} /> : null}
-        <BotGroupMarkdownText richContent active={active} interactive={interactive} onOpenDiagram={onOpenDiagram} content={share.content} authorKind={share.authorKind} mentionContext={mentionContext} />
+        <BotGroupMarkdownText readOnly messageKey={messageKey} messageId={messageId} richContent active={active} interactive={interactive} onOpenDiagram={onOpenDiagram} content={share.content} authorKind={share.authorKind} mentionContext={mentionContext} />
       </>}
   </View>;
 }
@@ -81,7 +82,30 @@ export function BotGroupMessageActions({ message, align = 'left', onQuote, onThr
 }) {
   const { t } = useTranslation(); const styles = useThemedStyles(makeStyles); const { colors } = useTheme();
   const copyDisabled = message.threadShare ? message.threadShare.status !== 'available' : !message.content;
-  const copy = () => { void Clipboard.setStringAsync(message.threadShare?.status === 'available' ? message.threadShare.content : message.content); };
+  const copyText = message.threadShare?.status === 'available' ? message.threadShare.content : message.content;
+  const [copyState, setCopyState] = useState<CopyMessageStatus | 'idle' | 'copying'>('idle');
+  const copyOperation = useRef(0);
+  useEffect(() => {
+    setCopyState('idle');
+    return () => { copyOperation.current += 1; };
+  }, [message.id, copyText]);
+  useEffect(() => {
+    if (copyState === 'idle' || copyState === 'copying') return;
+    const timer = setTimeout(() => setCopyState('idle'), 1500);
+    return () => clearTimeout(timer);
+  }, [copyState]);
+  const copy = () => {
+    if (copyDisabled || copyState === 'copying') return;
+    const operation = ++copyOperation.current;
+    setCopyState('copying');
+    void copyMessageText(copyText).then(status => {
+      if (copyOperation.current === operation) setCopyState(status);
+    });
+  };
+  const copying = copyState === 'copying';
+  const copyLabel = copyState === 'copied' ? 'message.renderer.copyStateCopied'
+    : copyState === 'failed' ? 'message.renderer.copyStateFailed'
+      : copying ? 'message.renderer.copyStateCopying' : 'groupChat.thread.copy';
   const actionId = `botGroup.thread.context.${message.id}.action`;
   const buttonStyle = [styles.actionButton, align === 'right' ? styles.actionRight : styles.actionLeft];
   const options = [
@@ -97,9 +121,11 @@ export function BotGroupMessageActions({ message, align = 'left', onQuote, onThr
   const sections = [{ id: 'time', options: [{ id: 'timestamp', title: new Date(message.createdAt).toLocaleString(), disabled: true }] },
     { id: 'message', options }];
   return <View style={styles.messageActions} testID={`botGroup.messageActions.${message.id}`}>
-    <Pressable accessibilityRole="button" accessibilityLabel={t('groupChat.thread.copy')} disabled={copyDisabled}
-      accessibilityState={{ disabled: copyDisabled }} onPress={copy} style={buttonStyle} testID={`${actionId}.copy`}>
-      <Copy size={iconSize.sm} color={copyDisabled ? colors.textTertiary : colors.textSecondary} />
+    <Pressable accessibilityRole="button" accessibilityLabel={t(copyLabel)} accessibilityLiveRegion="polite" disabled={copyDisabled || copying}
+      accessibilityState={{ disabled: copyDisabled || copying }} onPress={copy}
+      style={({ pressed }) => [buttonStyle, { borderRadius: radius.pill, backgroundColor: pressed ? colors.surfaceChip : 'transparent' }]} testID={`${actionId}.copy`}>
+      {copyState === 'copied' ? <Check size={iconSize.sm} color={colors.textSecondary} />
+        : <Copy size={iconSize.sm} color={copyDisabled ? colors.textTertiary : colors.textSecondary} />}
     </Pressable>
     {onQuote ? <Pressable accessibilityRole="button" accessibilityLabel={t('message.renderer.reply')} disabled={readOnly}
       accessibilityState={{ disabled: readOnly }} onPress={onQuote} style={buttonStyle} testID={`${actionId}.quote`}>

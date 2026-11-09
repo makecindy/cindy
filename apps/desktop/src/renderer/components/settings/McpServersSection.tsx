@@ -18,6 +18,7 @@ import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { deleteCustomMcpServer, listCustomMcpServers } from '@/lib/customMcpServers';
+import { SettingsCard, SettingsSection } from '@/components/ui/settings-rows';
 import { McpServerDialog } from './McpServerDialog';
 import { McpDuplicateNotice } from './McpDuplicateNotice';
 
@@ -174,24 +175,11 @@ export function McpServersSection() {
   );
 
   return (
-    <div className="flex flex-col gap-[14px]">
-      <div className="flex flex-col gap-1">
-        <h2
-          className="text-16 font-medium leading-[1.2]"
-          style={{ color: 'var(--settings-section-title)' }}
-        >
-          {t('settings.mcp.title')}
-        </h2>
-        <p className="text-13 leading-[1.5]" style={{ color: 'var(--settings-section-desc)' }}>
-          {t('settings.mcp.subtitle')}
-        </p>
-      </div>
-
+    <SettingsSection title={t('settings.mcp.title')} description={t('settings.mcp.subtitle')}>
       <McpDuplicateNotice />
+      {/* MCP 列表自带传输类型图标与行尾操作，行样式保留 */}
       {!loading && (
-        <div
-          className="flex flex-col rounded-xl border border-[var(--settings-theme-card-border)] bg-[var(--settings-theme-card-bg)]"
-        >
+        <SettingsCard className="flex flex-col">
           {servers.map((s, i) => (
             <Fragment key={s.id}>
               {i > 0 && <Divider />}
@@ -204,7 +192,7 @@ export function McpServersSection() {
           ))}
           {servers.length > 0 && <Divider />}
           <AddRow onClick={() => setDialog({ mode: 'create' })} />
-        </div>
+        </SettingsCard>
       )}
 
       {dialog && (
@@ -218,6 +206,6 @@ export function McpServersSection() {
           }}
         />
       )}
-    </div>
+    </SettingsSection>
   );
 }

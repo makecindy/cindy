@@ -92,6 +92,34 @@ export async function loadActiveBoundScheduleNames({
   }
 }
 
+/**
+ * 不弹确认的静默归档(卡片「离开后自动归档」)用:读取失败或超过等待上限返回 null(不确认),
+ * 调用方据此保留任务。索引已确认无绑定的任务不请求,直接返回空列表。
+ */
+export async function loadConfirmedActiveBoundScheduleNames({
+  deviceId,
+  invoke,
+  sessionId,
+  source,
+}: {
+  deviceId: string;
+  invoke: RemoteInvoke;
+  sessionId: string;
+  source?: string | null;
+}): Promise<string[] | null> {
+  if (!sessionMayHaveScheduleRuns(deviceId, sessionId, source)) return [];
+  const failed = Symbol('failed');
+  try {
+    const raw = await withLookupDeadline<unknown>(listBindingSchedules(deviceId, invoke), failed);
+    if (raw === failed) return null;
+    return normalizeScheduleList(raw)
+      .filter((schedule) => schedule.targetSessionId === sessionId && hasActiveTarget(schedule))
+      .map((schedule) => schedule.name || schedule.id);
+  } catch {
+    return null;
+  }
+}
+
 /** 有 active 自动化时提示后续会恢复任务;没有直接返回 true。 */
 export function confirmArchiveWithSchedules(t: TFunction, names: readonly string[]): Promise<boolean> {
   if (names.length === 0) return Promise.resolve(true);
