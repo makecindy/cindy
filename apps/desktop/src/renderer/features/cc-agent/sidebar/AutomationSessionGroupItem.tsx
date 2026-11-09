@@ -492,7 +492,7 @@ export const AutomationSessionGroupItem = withSidebarNavigation<AutomationSessio
     return (
       <div className="flex w-full flex-col gap-0.5">
         {/* 行 hover 浮层视觉与 SessionTooltip(PR 引用)对齐:右侧 align=start 弹出、
-          浅色 surface(--surface-elevated + --border-default + shadow-sm)、立即出现,
+          浅色 surface(--surface-elevated + --border-default + --shadow-menu)、立即出现,
           和侧栏其它 hover 卡片在同一套调色板下(规则 16)。行内动作有自己的 Tip,
           进入这些按钮时由受控 open 关闭行级浮层，避免两层提示重叠。 */}
         <Tip
@@ -503,7 +503,7 @@ export const AutomationSessionGroupItem = withSidebarNavigation<AutomationSessio
           onOpenChange={setRowTooltipOpen}
           contentClassName={cn(
             'bg-[var(--surface-elevated)] text-[var(--text-primary)]',
-            'border-[var(--border-default)] dark:border-[var(--border-default)] shadow-sm',
+            'border-[var(--border-default)] dark:border-[var(--border-default)] shadow-[shadow:var(--shadow-menu)]',
           )}
         >
           {/* 行 onClick 只承担鼠标点击空白 = 点击标题的转发;不加 role="button" / tabIndex /

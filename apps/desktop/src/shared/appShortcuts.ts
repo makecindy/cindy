@@ -15,8 +15,6 @@
  * 本 registry 随版本演进; getEffectiveAppShortcuts 负责合并。
  */
 
-import { isSystemReservedShortcut } from './keyboardReserved.js';
-
 /** 规范化组合键: code 为 W3C KeyboardEvent.code, key 仅供显示兜底不参与匹配。 */
 export interface AppShortcutCombo {
   code: string;
@@ -70,20 +68,6 @@ export const APP_SHORTCUT_IDS = [
 ] as const;
 
 export type AppShortcutId = (typeof APP_SHORTCUT_IDS)[number];
-export type PluginShortcutId = `plugin:${string}`;
-export type ShortcutId = AppShortcutId | PluginShortcutId;
-export interface PluginShortcutDefinition {
-  id: PluginShortcutId;
-  label: string;
-  pluginName: string;
-  instanceId?: string;
-  scope: 'session' | 'message';
-  points?: string[];
-  defaultCombo?: AppShortcutCombo;
-}
-export function isPluginShortcutId(value: unknown): value is PluginShortcutId {
-  return typeof value === 'string' && /^plugin:[a-f0-9]{64}$/.test(value);
-}
 
 /**
  * 侧边栏对话切换槽位: mod+1..9 跳转到侧边栏第 N 个可见对话(含置顶区, 按渲染
@@ -426,7 +410,7 @@ export function isAppShortcutAvailableOnPlatform(id: AppShortcutId, platform: st
  * 生效组合为空列表, 所有消费端自然不匹配)。
  */
 export type AppShortcutOverrideValue = AppShortcutCombo | null;
-export type AppShortcutOverrides = Partial<Record<ShortcutId, AppShortcutOverrideValue>>;
+export type AppShortcutOverrides = Partial<Record<AppShortcutId, AppShortcutOverrideValue>>;
 
 /** 校验并规整单个 combo; 结构非法返回 null。 */
 export function normalizeAppShortcutCombo(raw: unknown): AppShortcutCombo | null {
@@ -475,14 +459,6 @@ export function normalizeAppShortcutOverrides(raw: unknown, platform: string): A
   if (!raw || typeof raw !== 'object') return {};
   const result: AppShortcutOverrides = {};
   for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
-    // A plugin may be disabled when preferences load. Retain its binding while
-    // requiring an active declaration before it can be changed or executed.
-    if (isPluginShortcutId(key)) {
-      const normalized = value === null ? null : normalizeAppShortcutCombo(value);
-      if (normalized === null && value !== null) continue;
-      result[key] = normalized;
-      continue;
-    }
     if (!isAppShortcutId(key)) continue;
     const def = DEFINITION_MAP.get(key);
     if (!def || !def.rebindable) continue;
@@ -868,50 +844,6 @@ export function findAppShortcutConflict(
     if (def.yieldsToUserBindings && overrides[def.id] === undefined) continue;
     const combos = effective.get(def.id);
     if (combos?.some((c) => appShortcutCombosEqual(c, comboValue))) return def.id;
-  }
-  return null;
-}
-
-/** Plugin shortcuts use the existing user overrides and yield to Cindy bindings. */
-export function getEffectivePluginShortcuts(
-  definitions: readonly PluginShortcutDefinition[],
-  overrides: AppShortcutOverrides,
-  platform: string,
-  yieldToCombos: readonly AppShortcutCombo[] = [],
-): Map<PluginShortcutId, AppShortcutCombo[]> {
-  const used = [...getEffectiveAppShortcuts(overrides, platform, yieldToCombos).values()].flat().concat(yieldToCombos);
-  const result = new Map<PluginShortcutId, AppShortcutCombo[]>();
-  const sorted = [...definitions].sort((a, b) => a.id.localeCompare(b.id));
-  const family = platform === 'darwin' ? 'mac' : platform === 'win32' ? 'windows' : 'other';
-  // Explicit user bindings win over plugin defaults; a collision leaves the
-  // losing preference saved so it can become effective again later.
-  for (const explicit of [true, false]) for (const def of sorted) {
-    const override = overrides[def.id];
-    if ((override !== undefined) !== explicit) continue;
-    const candidate = override === undefined ? def.defaultCombo : override;
-    if (!candidate || !isAppShortcutComboBindable(candidate) || isSystemReservedShortcut(candidate, family) ||
-        used.some(other => appShortcutCombosEqual(other, candidate))) { result.set(def.id, []); continue; }
-    result.set(def.id, [candidate]); used.push(candidate);
-  }
-  return result;
-}
-
-/** Only active plugin user overrides block a new Cindy binding. Defaults yield. */
-export function findPluginShortcutConflict(
-  id: ShortcutId,
-  candidate: AppShortcutCombo,
-  definitions: readonly PluginShortcutDefinition[],
-  overrides: AppShortcutOverrides,
-  platform: string,
-): ShortcutId | null {
-  if (isPluginShortcutId(id)) {
-    for (const [builtin, combos] of getEffectiveAppShortcuts(overrides, platform))
-      if (combos.some(combo => appShortcutCombosEqual(combo, candidate))) return builtin;
-  }
-  for (const def of definitions) {
-    if (def.id === id) continue;
-    const override = overrides[def.id];
-    if (override && appShortcutCombosEqual(override, candidate)) return def.id;
   }
   return null;
 }

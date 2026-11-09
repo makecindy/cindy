@@ -18,8 +18,6 @@ function routing() {
   const ghosts = [{ manifest: { id: 'plugin-a' }, enabled: true }] as InstalledGhost[];
   const installation = {
     apps: vi.fn(), manifest: vi.fn(), unread: vi.fn(), browser: vi.fn(), skills: vi.fn(), index: vi.fn(),
-    appearance: vi.fn().mockResolvedValue(undefined), nativeUi: vi.fn(), tabs: vi.fn(),
-    visibility: vi.fn(), shortcuts: vi.fn(),
   };
   const push = vi.fn(), remote = vi.fn(), setupChanged = vi.fn(), contextChanged = vi.fn();
   const list = vi.fn(() => ghosts);
@@ -32,11 +30,6 @@ function routing() {
     refreshPluginApps: installation.apps, getGhostSetupManifestTracker: () => ({ note: installation.manifest }),
     sweepRevokedGhostUnread: installation.unread, getGhostBrowserExtensionSlot: () => ({ reconcile: installation.browser }),
     scheduleGhostSkillReconcile: installation.skills,
-    getPluginAppearanceService: () => ({ reconcile: installation.appearance }),
-    nativeUiInstances: () => [], pluginUiServiceSingleton: { reconcile: installation.nativeUi },
-    pluginTabViewHostSingleton: { reconcile: installation.tabs },
-    pluginUiVisibilityServiceSingleton: { reconcile: installation.visibility },
-    pluginCommandShortcuts: () => [], getAppShortcutStore: () => ({ setPluginShortcuts: installation.shortcuts }),
     isGhostAvailableForActiveSession: () => true, projectGhostForRenderer: (ghost: InstalledGhost) => ghost,
     findGhostForInstanceId: () => ghosts[0], isGhostBoundaryPending: () => false,
     broadcastGhostWindowPush: push, notifyMobilePluginsChanged: remote, ghostsChangedObserver: null,

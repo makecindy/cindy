@@ -41,8 +41,8 @@ vi.mock('@/components/ui/confirm-dialog-provider', () => ({
   useConfirmDialog: () => ({ confirm: mocks.confirm }),
 }));
 vi.mock('@/contexts/dataOwnerGeneration', () => ({
-  getDataOwnerGeneration: () => mocks.ownerGeneration,
-  isDataOwnerGenerationCurrent: (generation: number) => generation === mocks.ownerGeneration,
+  getDataOwnerGeneration: () => ({ dataOwnerId: 'owner', generation: mocks.ownerGeneration }),
+  isDataOwnerGenerationCurrent: (owner: { generation: number }) => owner.generation === mocks.ownerGeneration,
 }));
 
 vi.mock('../useRemoteBots', () => ({ useRemoteBots: () => [] }));

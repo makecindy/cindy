@@ -1,4 +1,5 @@
 import { AppPreferenceControl } from './components/AppPreferenceControl';
+import { AppWindowSync } from './components/layout/AppWindowSync';
 import { readLocalWorkerCreationSelection } from './state/workerCreationPrefs';
 import { useModelFavoritesHost } from './state/useModelFavoritesHost';
 import { getDataOwnerGeneration } from './contexts/dataOwnerGeneration';
@@ -43,6 +44,7 @@ import { SetupMigrationHost } from '@/features/setup-migration/SetupMigrationHos
 import { PluginPublisherConfirmHost } from '@/features/plugin/PluginPublisherConfirmHost';
 import { GithubSetupRequestHost } from '@/features/cc-agent/GithubSetupRequestHost';
 import { makerChatStore } from '@/lib/makerChatStore';
+import { schedulePreviewLightboxPreload } from '@/components/chat/lazyPreviewLightboxes';
 import {
   initializePromptRecommendationStore,
   setPromptRecommendationOwner,
@@ -265,6 +267,9 @@ export function App() {
     return subscribeDraft(syncNewMakerPrefs);
   }, []);
 
+  // 文本／Mermaid 预览弹窗不进首屏;窗口可见、首帧稳定后空闲预取,首次点开不必等加载。
+  useEffect(() => schedulePreviewLightboxPreload(), []);
+
   useModelFavoritesHost();
 
   // Worker 创建偏好的真源是 renderer localStorage；main 缓存权限与当前账号本机路线供
@@ -467,6 +472,7 @@ export function App() {
                             {!isSecondaryWindow() && !isSidebarWindow() && <SplashScreen />}
                             <EnvCheckGuard>
                               <MakerBootstrap />
+                              <AppWindowSync />
                               {!isSecondaryWindow() && !isSidebarWindow() && <RemoteDesktopHost />}
                               <ProjectAutomationNotifyBridge />
                               {/* confirm 槽:插件请主机弹确认框。必须在 ConfirmDialogProvider

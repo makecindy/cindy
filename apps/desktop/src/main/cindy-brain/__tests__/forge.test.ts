@@ -47,7 +47,6 @@ import { sameForgeScaffoldParentIdentity } from '../forgeScaffoldIdentity';
 import { GHOST_SIGNATURE_FILE, signGhostPackage } from '../ghostSignature';
 import { GHOST_INSTALL_MANIFEST_MAX_BYTES } from '../../../shared/ghost';
 import { PLUGIN_PAGE_MANUAL_SKILL_PATH } from '../../../shared/pluginPageManual.mjs';
-import { MCP_APPS_MAX_BYTES } from '../../mcp-apps/protocol';
 
 const canSymlink = (() => {
   const probeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-forge-symlink-probe-'));
@@ -198,79 +197,6 @@ describe('packGhostDir', () => {
       const zip = await JSZip.loadAsync(packed.buf);
       expect(zip.file('README.md')).not.toBeNull();
       expect(zip.file('assets/search.png')).not.toBeNull();
-    }
-  });
-  // 4.1: a named-tab declaration must not package successfully with a missing
-  // page. Contribution-page coverage does not exercise this entry list. Tier: unit.
-  it('requires named tab pages before producing an installable package', async () => {
-    const dir = await makeSrcDir({ 'ghost.json': JSON.stringify({ schemaVersion: 3, minCindyVersion: '0.1.64',
-      id: 'native-tab-view', name: 'Named tab', version: '1', entry: 'main.js',
-      ui: { version: 1, tabViews: [{ id: 'log', title: 'Log', scope: 'session', page: 'log.html' }] } }),
-      'main.js': '' });
-    expect(await packGhostDir(dir)).toMatchObject({ ok: false, errorCode: 'ENTRY_MISSING' });
-    await fs.promises.writeFile(path.join(dir, 'log.html'), '<p>Log</p>');
-    const result = await packGhostDir(dir);
-    expect(result.ok).toBe(true);
-    if (result.ok) expect((await JSZip.loadAsync(result.buf)).file('log.html')).not.toBeNull();
-  });
-  // C11/C9: declared resource entries must survive packaging as actual files.
-  it('rejects a missing native UI appearance resource before producing an installable package', async () => {
-    const dir = await makeSrcDir({ 'ghost.json': JSON.stringify({ schemaVersion: 3, minCindyVersion: '0.1.64',
-      id: 'native-ui-resource', name: 'Native UI Resource', version: '1', entry: 'main.js',
-      ui: { version: 1, appearance: { fields: ['wallpaper'], resources: [{ id: 'background', kind: 'image', path: 'assets/background.webp' }] } } }),
-      'main.js': 'throw new Error("pack must not execute this file");' });
-    expect(await packGhostDir(dir)).toMatchObject({ ok: false, errorCode: 'ENTRY_MISSING' });
-  });
-  it('requires declared native UI pages to be included in the package', async () => {
-    const dir = await makeSrcDir({ 'ghost.json': JSON.stringify({ schemaVersion: 3, minCindyVersion: '0.1.64',
-      id: 'native-ui-page', name: 'Native UI Page', version: '1', entry: 'main.js',
-      ui: { version: 1, contributions: [{ id: 'view', point: 'message.body', scope: 'message', page: 'ui/view.html' }] } }),
-      'main.js': '' });
-    expect(await packGhostDir(dir)).toMatchObject({ ok: false, errorCode: 'ENTRY_MISSING' });
-    await fs.promises.mkdir(path.join(dir, 'ui'));
-    await fs.promises.writeFile(path.join(dir, 'ui/view.html'), '<p>plugin view</p>');
-    const packed = await packGhostDir(dir);
-    expect(packed).toMatchObject({ ok: true });
-    if (packed.ok) expect((await JSZip.loadAsync(packed.buf)).file('ui/view.html')).not.toBeNull();
-  });
-  it('rejects an oversized native UI page before packaging', async () => {
-    const dir = await makeSrcDir({ 'ghost.json': JSON.stringify({ schemaVersion: 3, minCindyVersion: '0.1.64',
-      id: 'native-ui-page', name: 'Native UI Page', version: '1', entry: 'main.js',
-      ui: { version: 1, contributions: [{ id: 'view', point: 'message.body', scope: 'message', page: 'view.html' }] } }),
-      'main.js': '', 'view.html': Buffer.alloc(MCP_APPS_MAX_BYTES + 1) });
-    expect(await packGhostDir(dir)).toMatchObject({ ok: false, errorCode: 'MANIFEST_INVALID' });
-  });
-  // C1/C9: static UI hints must not reject future declarations or run plugin JS.
-  it('returns native UI warnings with declaration locations while preserving the package', async () => {
-    const dir = await makeSrcDir({ 'ghost.json': JSON.stringify({ schemaVersion: 3, minCindyVersion: '0.1.64',
-      id: 'native-ui-demo', name: 'Native UI', version: '1', entry: 'main.js',
-      ui: { version: 1, contributions: [{ id: 'future', point: 'future.point', scope: 'session' }] } }),
-      'main.js': 'throw new Error("pack must not execute this file");' });
-    const result = await packGhostDir(dir);
-    expect(result).toMatchObject({ ok: true });
-    if (result.ok) {
-      expect(result.warnings?.some(w => w.includes('ui.contributions[0].point') && w.includes('future.point'))).toBe(true);
-      expect(result.manifest.ui).toMatchObject({ contributions: [{ id: 'future', point: 'future.point' }] });
-    }
-  });
-  it('reports unsupported command locations without rejecting the plugin package', async () => {
-    const dir = await makeSrcDir({ 'ghost.json': JSON.stringify({ schemaVersion: 3, minCindyVersion: '0.1.64',
-      id: 'native-ui-command', name: 'Native UI command', version: '1', entry: 'main.js',
-      ui: { version: 1, commands: [{ id: 'run', title: 'Run', scope: 'session', points: ['future.point'] }] } }),
-      'main.js': '' });
-    const result = await packGhostDir(dir);
-    expect(result).toMatchObject({ ok: true });
-    if (result.ok) expect(result.warnings?.some(w => w.includes('ui.commands[0].points') && w.includes('future.point'))).toBe(true);
-  });
-  it('packs the native UI author example through the ordinary package validator', async () => {
-    const dir = path.join(workDir, 'reference');
-    await fs.promises.cp(fileURLToPath(new URL('../../../../resources/system-skills/cindy-plugin-creator/examples/native-ui-reference/', import.meta.url)), dir, { recursive: true });
-    const packed = await packGhostDir(dir);
-    expect(packed).toMatchObject({ ok: true, manifest: { schemaVersion: 3, id: 'native-ui-reference' } });
-    if (packed.ok) {
-      const zip = await JSZip.loadAsync(packed.buf);
-      expect(JSON.parse(await zip.file('ghost.json')!.async('string'))).toMatchObject({ ui: { version: 1 } });
-      expect(zip.file('main.js')).not.toBeNull();
     }
   });
   it.each([null, 'xd'])('rejects author-declared namespace %s before v2 normalization', async (namespace) => {

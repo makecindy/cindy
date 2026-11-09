@@ -97,7 +97,6 @@ import { shouldOpenTextLightboxForOrigin } from '@/lib/filePreview';
 import { toRemoteMediaOrigin } from '@/lib/sessionFileOrigin';
 import { rewriteToRemoteMediaOrigin } from '../../../shared/remoteMediaUrl';
 import { useInstalledGhosts } from '@/cindy-brain/useInstalledGhosts';
-import { PluginUiRendererView } from '@/cindy-brain/PluginUiRendererView';
 import { useChatSessionFile } from './ChatSessionFileContext';
 import {
   ACTIVITY_ROW_CHEVRON_SLOT_CLASS,
@@ -106,7 +105,7 @@ import {
   ACTIVITY_ROW_RADIUS_CLASS,
 } from './activityRowChrome';
 import { ImageLightbox } from './ImageLightbox';
-import { TextLightbox } from './TextLightbox';
+import { TextLightbox } from './lazyPreviewLightboxes';
 import { ToolPayloadLightbox, type ToolPayloadMode } from './ToolPayloadLightbox';
 import { useFileChipContextMenu } from './useFileChipContextMenu';
 import { activateInlineLinkFromKeyboard } from './linkInteraction';
@@ -1205,13 +1204,10 @@ export function AgentActionRow({
             'bg-[var(--msg-user-bg)]',
             'border border-[var(--msg-user-border)]',
             'font-mono text-[length:calc(var(--app-code-font-size)_-_1px)] leading-[calc(var(--app-code-font-size)_+_4px)]',
-            'text-[var(--foreground)]',
+            'text-foreground',
             'select-text cursor-text',
           )}
         >
-          <PluginUiRendererView sessionId={fileCtx.sessionId ?? ''} point="tool.body"
-            target={{ kind: 'tool', id: message.toolUseId ?? '' }}
-            active={Boolean(fileCtx.localConfirmed && fileCtx.sessionId && message.toolUseId && !onActivateOverride)}>
           {inlineInputText && (
             <pre className="whitespace-pre-wrap break-words m-0">{inlineInputText}</pre>
           )}
@@ -1230,7 +1226,6 @@ export function AgentActionRow({
               {t('chat.agentActionRow.noContent')}
             </span>
           )}
-          </PluginUiRendererView>
         </div>
       )}
 
@@ -1254,8 +1249,6 @@ export function AgentActionRow({
       {lightbox.kind === 'payload' && (
         <ToolPayloadLightbox
           payload={lightbox.payload}
-          renderer={fileCtx.localConfirmed && fileCtx.sessionId && message.toolUseId && !onActivateOverride
-            ? { sessionId: fileCtx.sessionId, toolUseId: message.toolUseId } : undefined}
           triggerRef={triggerRef}
           onClose={closeLightbox}
         />

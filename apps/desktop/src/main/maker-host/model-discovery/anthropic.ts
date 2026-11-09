@@ -57,8 +57,10 @@ import {
   setAnthropicDiscoveredModels,
 } from '../active-catalog.js';
 import { hasClaudeNativeLogin } from '../claude-native-auth.js';
+import { hasConnectedSubscriptionPool } from '../../subscription-accounts/runtime.js';
 
 const log = createLogger('model-discovery:anthropic');
+const hasConnectedClaudeAccount = () => hasClaudeNativeLogin() || hasConnectedSubscriptionPool('anthropic');
 
 const VALID_EFFORTS: ReadonlySet<string> = new Set([
   'minimal',
@@ -98,7 +100,7 @@ function enqueueCacheMutation(task: () => Promise<void>): Promise<void> {
 }
 
 function generationCanApply(generation: number, models: CatalogModel[]): boolean {
-  return generation === authGeneration && (models.length === 0 || hasClaudeNativeLogin());
+  return generation === authGeneration && (models.length === 0 || hasConnectedClaudeAccount());
 }
 
 /**
@@ -478,11 +480,11 @@ async function applyModels(
  * 残留缓存也不能代表可用性);缓存缺失 / 坏 JSON 静默跳过(等 SDK 通道)。
  */
 export async function loadAnthropicModelsFromDiskCache(): Promise<void> {
-  if (!hasClaudeNativeLogin()) return;
+  if (!hasConnectedClaudeAccount()) return;
   const generation = authGeneration;
   try {
     const raw: unknown = JSON.parse(await fsp.readFile(cacheFilePath(), 'utf-8'));
-    if (generation !== authGeneration || !hasClaudeNativeLogin()) return;
+    if (generation !== authGeneration || !hasConnectedClaudeAccount()) return;
     const models = (raw as { models?: unknown } | null)?.models;
     if (!Array.isArray(models) || models.length === 0) return;
     // 恢复「窗口来自 HTTP 明说」的记账,否则重启后首个 SDK 捕获会把精确窗口打回猜测值。
@@ -606,7 +608,7 @@ export function noteAnthropicSdkSupportedModels(
   raw: unknown,
   generation: number = authGeneration,
 ): void {
-  if (!hasClaudeNativeLogin() || generation !== authGeneration) return;
+  if (!hasConnectedClaudeAccount() || generation !== authGeneration) return;
   const mapped = mapAnthropicSdkModels(raw);
   if (mapped.length === 0) return;
   const mappedWithWindows = mapped.map(({ model, hasEffortInfo, hasFastModeInfo }) => {
@@ -724,7 +726,7 @@ export function setAnthropicModelProbe(probe: AnthropicModelProbe | null): void 
  */
 export function refreshAnthropicModelsFromProbe(): Promise<boolean> {
   const probe = modelProbe;
-  if (!probe || !hasClaudeNativeLogin()) return Promise.resolve(false);
+  if (!probe || !hasConnectedClaudeAccount()) return Promise.resolve(false);
   const generation = authGeneration;
   if (probeInflight?.generation === generation) return probeInflight.promise;
   const isCurrent = () => modelProbe === probe && generation === authGeneration;
@@ -759,6 +761,7 @@ export function syncAnthropicModelsWithClaudeLogin(status: {
   email?: string;
 }): void {
   if (!status.loggedIn) {
+    if (hasConnectedSubscriptionPool('anthropic')) { requestAnthropicModelProbe(); return; }
     lastClaudeLoginEmail = undefined;
     void clearAnthropicDiscoveredModels().catch(() => undefined);
     return;

@@ -17,15 +17,18 @@ import type {
   PreRunHookRunResult,
   PreRunPluginConfig,
   ScheduleMutationGuard,
+  ScheduleWebhookTrigger,
+  ScheduleWebhookTriggerInput,
   ScheduleRunTrigger,
 } from '../types.js';
 import { normalizePreRunPlugin, SCRIPT_CAPABILITIES } from '../types.js';
 import { isLegalPhaseTransition } from './attemptLifecycle.js';
 import type { ScheduleStorage } from '../interfaces/schedule-storage.js';
-import type { ChildRunInput, ScheduleRunner } from '../interfaces/schedule-runner.js';
+import type { ChildRunInput, FireContext, ScheduleRunner } from '../interfaces/schedule-runner.js';
 import type { Clock } from '../interfaces/clock.js';
 import type { Logger } from '../interfaces/logger.js';
 import { nextCronOrMonthlyFire } from './monthlyClamp.js';
+import { normalizeScheduleWebhookSource } from '../webhook-formats.js';
 
 /**
  * Interval-mode 下次触发时间。`baseMs` 是上次完成（或 createdAt）。
@@ -56,6 +59,42 @@ function assertScheduleMutationGuard(expected: ScheduleMutationGuard | undefined
 
 const SCRIPT_CAPABILITY_SET: ReadonlySet<ScriptCapability> = new Set(SCRIPT_CAPABILITIES);
 
+export interface RunNowOptions {
+  deferToCaller?: boolean;
+  internalRoutine?: true;
+  canDispatch?: () => boolean;
+  expectedSchedule?: ScheduleMutationGuard;
+  webhook?: FireContext['webhook'];
+  trigger?: ScheduleRunTrigger;
+  /** Internal durable-queue handoff. Awaited after insertRun, before any runner side effects. */
+  onRunCreated?: () => Promise<void>;
+}
+
+/** Colons allow resource:action names such as Bitbucket's pullrequest:created. */
+const WEBHOOK_EVENT_NAME = /^[A-Za-z0-9_.:-]{1,100}$/;
+
+/**
+ * Callers choose the event filter and the sender; the route is host-generated and survives edits.
+ * An omitted source keeps the current one, so clients that predate sources cannot reset it.
+ */
+function normalizeWebhookTrigger(
+  input: ScheduleWebhookTriggerInput | null | undefined,
+  existing: ScheduleWebhookTrigger | undefined,
+  generateId: () => string,
+): ScheduleWebhookTrigger | undefined {
+  if (!input) return undefined;
+  const events = Array.from(new Set((input.events ?? []).map((name) => name.trim()).filter(Boolean)));
+  if (events.length > 32 || events.some((name) => !WEBHOOK_EVENT_NAME.test(name))) {
+    throw new Error('invalid webhook event filter');
+  }
+  const source = input.source === undefined ? existing?.source : normalizeScheduleWebhookSource(input.source);
+  return {
+    endpointId: existing?.endpointId ?? generateId(),
+    ...(events.length ? { events } : {}),
+    ...(source ? { source } : {}),
+  };
+}
+
 function normalizeScriptConfig(
   config: ScriptExecutionConfig | null | undefined,
 ): ScriptExecutionConfig | undefined {
@@ -76,9 +115,13 @@ function normalizeScriptConfig(
 }
 
 function validateScheduleExecutionShape(
-  schedule: Pick<Schedule, 'executionMode' | 'scriptConfig' | 'workspaceKind' | 'workingDir' | 'useWorktree' | 'targetSessionId' | 'persistentSession' | 'prompt' | 'silentWhenIdle' | 'modelAgentKind' | 'modelAgentDeviceId' | 'agentDeviceId' | 'model' | 'providerId'>,
+  schedule: Pick<Schedule, 'executionMode' | 'scriptConfig' | 'workspaceKind' | 'workingDir' | 'useWorktree' | 'targetSessionId' | 'persistentSession' | 'prompt' | 'silentWhenIdle' | 'modelAgentKind' | 'modelAgentDeviceId' | 'agentDeviceId' | 'model' | 'providerId' | 'webhookTrigger' | 'recurring' | 'manual'>,
   opts: { checkAgentPrompt: boolean } = { checkAgentPrompt: true },
 ): void {
+  // 一次事件就会把定时的一次性任务用完。手动任务的 recurring 不参与调度，不受此限。
+  if (schedule.webhookTrigger && !schedule.recurring && !schedule.manual) {
+    throw new Error('webhook trigger requires a recurring schedule');
+  }
   // A bound agent run only overrides its task's location with an explicit model
   // selection. Reject a local-only patch instead of silently inheriting remote.
   if (schedule.modelAgentDeviceId === '' && (schedule.targetSessionId || schedule.persistentSession) &&
@@ -1194,10 +1237,14 @@ export class Scheduler extends EventEmitter {
   //   这反而更贴合"Once"语义：用户手动跑过一次就视作用完。
   // Internal callers with their own durable queue may own the deferred retry.
   // This option is not exposed through schedule CRUD or public MCP arguments.
-  async runNow(id: string, options?: { deferToCaller?: boolean; internalRoutine?: true; canDispatch?: () => boolean; expectedSchedule?: ScheduleMutationGuard; trigger?: ScheduleRunTrigger }): Promise<{ runId: string; deferred?: boolean; silenced?: boolean }> {
+  async runNow(id: string, options?: RunNowOptions): Promise<{ runId: string; deferred?: boolean; silenced?: boolean }> {
     // 手动触发不受并发闸门拦截(用户显式动作要即时响应),但计入 in-flight 占用,
     // 会挤压后续自动触发的槽位。
     const runId = this.generateId();
+    // Webhook is automatic work, even though it shares the run-now execution path.
+    // Check and reserve synchronously: simultaneous arrivals cannot all pass one slot.
+    if (options?.webhook && (this.inflightByschedule.has(id)
+      || this.countSlotsInUse() >= this.maxConcurrentRuns)) return { runId, deferred: true };
     this.beginInflightAttempt({
       scheduleId: id,
       runId,
@@ -1247,7 +1294,7 @@ export class Scheduler extends EventEmitter {
     }
   }
 
-  private async runNowInner(id: string, runId: string, options?: { deferToCaller?: boolean; internalRoutine?: true; canDispatch?: () => boolean; expectedSchedule?: ScheduleMutationGuard; trigger?: ScheduleRunTrigger }, recovery?: ScheduleRun, runner: ScheduleRunner = this.runner): Promise<{ runId: string; deferred?: boolean; silenced?: boolean }> {
+  private async runNowInner(id: string, runId: string, options?: RunNowOptions, recovery?: ScheduleRun, runner: ScheduleRunner = this.runner): Promise<{ runId: string; deferred?: boolean; silenced?: boolean }> {
     // The original turn's restored mapping is not acceptance of this Continue.
     // One owner covers both engine setup and host/queue preparation failures.
     let continuationAccepted = false;
@@ -1269,8 +1316,18 @@ export class Scheduler extends EventEmitter {
       status: 'running',
       costAttribution: schedule.executionMode === 'script' ? 'zero' : 'unavailable',
       heartbeatAt: firedAt,
+      ...(options?.webhook ? { triggerSource: 'webhook' as const } : {}),
     };
     if (!recovery) await this.storage.insertRun(initialRun);
+    if (!recovery && options?.onRunCreated) {
+      try {
+        await options.onRunCreated();
+      } catch (error) {
+        // Nothing has reached the runner. The durable caller still owns this batch.
+        await this.storage.deleteRun(runId).catch(() => undefined);
+        throw error;
+      }
+    }
     // 立刻把 lastFiredAt 落到 schedule row —— 不等 finished，让 UI 列表立刻反映
     // "刚跑了一次"。同时若 activeSchedules 里有这条，同步内存副本。
     if (!recovery) await this.storage.update(schedule.id, { lastFiredAt: firedAt });
@@ -1325,6 +1382,7 @@ export class Scheduler extends EventEmitter {
         runId,
         firedAt,
         deferToCaller: options?.deferToCaller,
+        webhook: options?.webhook,
         resumeSessionId: recovery?.sessionId,
         canDispatch: options?.canDispatch,
         ...(options?.trigger ? { trigger: options.trigger } : {}),
@@ -1569,6 +1627,7 @@ export class Scheduler extends EventEmitter {
     const schedule: Schedule = {
       id,
       ...input,
+      webhookTrigger: normalizeWebhookTrigger(input.webhookTrigger, undefined, this.generateId),
       workspaceKind: inferredWorkspaceKind,
       // null(JSON 边界的"清空"表达)归一成 undefined,Schedule 内存形态只有两态
       preRunHook: input.preRunHook ?? undefined,
@@ -1652,6 +1711,9 @@ export class Scheduler extends EventEmitter {
     }
     const existing = await this.get(id);
     if (!existing) throw new Error(`Schedule not found: ${id}`);
+    if (Object.prototype.hasOwnProperty.call(patch, 'webhookTrigger')) {
+      updates.webhookTrigger = normalizeWebhookTrigger(patch.webhookTrigger, existing.webhookTrigger, this.generateId);
+    }
     if (Object.prototype.hasOwnProperty.call(patch, 'preRunPlugin')) {
       const next = normalizePreRunPlugin(patch.preRunPlugin) ?? undefined;
       // 只在换了插件时校验:插件后来被停用,用户仍能改出错处理或别的字段。
@@ -1857,8 +1919,10 @@ export class Scheduler extends EventEmitter {
     // resume 视作冷启动：interval 模式起新一轮 N 倒计时（从 now 起算，与 update() 一致）；
     // cron 模式找下一个壁钟槽位。不要复用 nextIntervalFire —— 它按 lastFinishedAt+N 尊重原
     // 节奏（restart 语义），会让「上次完成不到一个 N 就 resume」比冷启动更早触发。
-    const next =
-      existing.intervalMs !== undefined
+    // 手动任务的 cron 只是占位，恢复后不能开始按它自动触发。
+    const next = existing.manual
+      ? undefined
+      : existing.intervalMs !== undefined
         ? now + existing.intervalMs
         : nextCronOrMonthlyFire(existing.cronExpr, now, existing.timezone);
     const updated = await this.storage.update(id, {

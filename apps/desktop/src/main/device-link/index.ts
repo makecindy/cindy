@@ -1,3 +1,4 @@
+import { PROVIDER_SHARE_AVAILABILITY_CAPABILITY, readShareAvailabilityCatalog } from './providerShareAvailability.js';
 import { pluginDeviceSync } from '../cindy-brain/index.js';
 import { PLUGIN_SYNC_CHANNEL } from '../cindy-brain/deviceSyncSlot.js';
 import { PluginSyncAccess } from './pluginSyncAccess.js';
@@ -833,7 +834,7 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
     return ok ? authManager.getAccessToken() : null;
   };
   const hello = (busy: boolean): HelloPayload => ({
-    capabilities: [SHARED_TASK_CAPABILITY, PROVIDER_SHARE_RELAY_CAPABILITY],
+    capabilities: [SHARED_TASK_CAPABILITY, PROVIDER_SHARE_RELAY_CAPABILITY, PROVIDER_SHARE_AVAILABILITY_CAPABILITY],
     deviceName: deviceName(),
     platform: process.platform,
     appVersion: app.getVersion(),
@@ -2196,7 +2197,7 @@ export async function remoteInvoke(
   deviceId: string,
   channel: string,
   args: unknown[],
-  options?: { preSend?: () => void; background?: boolean; passiveLink?: boolean; liveProviderMetadata?: true },
+  options?: { preSend?: () => void; background?: boolean; passiveLink?: boolean; diagnosticSource?: 'renderer' | 'main'; liveProviderMetadata?: true },
 ): Promise<InvokeResultPayload> {
   if (options?.liveProviderMetadata) return remoteInvokeLive(deviceId, channel, args, options);
   const closeEpoch = getRemoteLinkCloseEpoch(deviceId);
@@ -2210,7 +2211,7 @@ export async function remoteInvoke(
 
 async function remoteInvokeLive(
   deviceId: string, channel: string, args: unknown[],
-  options?: { preSend?: () => void; background?: boolean; passiveLink?: boolean },
+  options?: { preSend?: () => void; background?: boolean; passiveLink?: boolean; diagnosticSource?: 'renderer' | 'main' },
 ): Promise<InvokeResultPayload> {
   options?.preSend?.();
   const { passiveLink, ...invokeOptions } = options ?? {};
@@ -2237,7 +2238,7 @@ async function remoteInvokeLive(
     preSend();
     if (!client?.isLinkReady(deviceId))
       throw new DeviceLinkError('LINK_NOT_OPEN', 'file cleanup requires an existing link');
-    return client.invoke(deviceId, { channel, args }, resolveRemoteInvokeTimeoutMs(channel, args, 'desktop'), { ...invokeOptions, preSend });
+    return client.invoke(deviceId, { channel, args }, resolveRemoteInvokeTimeoutMs(channel, args, 'desktop'), { ...invokeOptions, diagnosticSource: options?.diagnosticSource ?? 'main', preSend });
   }
   const invoke = async (): Promise<InvokeResultPayload> => {
     // 熔断门禁(外层 guardInvoke)在连接等待之前:open 态快速失败,不消耗 1.5s 等待。
@@ -2252,7 +2253,7 @@ async function remoteInvokeLive(
       // 必须是 async：失效时返回 rejected promise，不能同步抛出绕过调用方的 .catch。
       const accelerated = await tryPeerInvoke(deviceId, channel, args, async (peer, nextChannel, nextArgs) => {
         preSend();
-        return remoteInvoke(peer, nextChannel, nextArgs, { ...options, preSend });
+        return remoteInvoke(peer, nextChannel, nextArgs, { ...options, diagnosticSource: options?.diagnosticSource ?? 'main', preSend });
       });
       preSend();
       if (accelerated) return accelerated;
@@ -2263,7 +2264,7 @@ async function remoteInvokeLive(
       () => openRemoteLink(deviceId, { observed: false }),
       preSend,
     );
-    return invokeClient.invoke(deviceId, { channel, args }, resolveRemoteInvokeTimeoutMs(channel, args, 'desktop'), { ...invokeOptions, preSend });
+    return invokeClient.invoke(deviceId, { channel, args }, resolveRemoteInvokeTimeoutMs(channel, args, 'desktop'), { ...invokeOptions, diagnosticSource: options?.diagnosticSource ?? 'main', preSend });
   };
   const run = (): Promise<InvokeResultPayload> =>
     invokeWithClosedLinkRecovery(
@@ -2334,6 +2335,24 @@ export async function remoteBackgroundInvoke(
   const peer = parseProviderSharePeer(deviceId);
   // A delegated M losing a task lease (e.g. after restart) is not proof that
   // O revoked the whole share. Only the actual owner's denial invalidates G's share generation.
+  if (channel === 'maker:provider:list' && peer?.role === 'host') {
+    const share = getReceivedShares().find(row => row.shareId === peer.shareId && row.hostDeviceId === peer.deviceId);
+    if (share?.status === 'active' && share.standbyOnline !== undefined && !(share.hostDeviceOnline ?? share.hostOnline)) {
+      options?.preSend?.();
+      try {
+        assertNotStandby();
+        assertRemoteControlTargetEnabled(deviceId);
+        const result = await readShareAvailabilityCatalog(peer.shareId);
+        assertCurrent();
+        options?.preSend?.();
+        return { ok: true, result };
+      } catch (error) {
+        assertCurrent();
+        return { ok: false, error: { code: 'IPC_ERROR', message: PROVIDER_SHARE_UNAVAILABLE_MESSAGE } };
+      }
+    }
+  }
+
   const refusedOwnerShare = peer?.role === 'host' && getReceivedShares().some(share =>
     share.shareId === peer.shareId && share.hostDeviceId === peer.deviceId) ? peer.shareId : undefined;
   try {
@@ -2364,7 +2383,7 @@ export async function remoteBackgroundInvoke(
  * 分享同一条路：先建后台链路，再请求。
  */
 export function providerShareHostInvoke(target: string, channel: string, args: unknown[]): Promise<InvokeResultPayload> {
-  return backgroundInvokeDevice(target, channel, args);
+  return remoteBackgroundInvoke(target, channel, args);
 }
 
 async function backgroundInvokeDevice(deviceId: string, channel: string, args: unknown[], options?: { preSend?: () => void; liveProviderMetadata?: true }): Promise<InvokeResultPayload> {

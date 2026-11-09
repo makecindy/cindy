@@ -469,6 +469,15 @@ describe('parseDeepLink', () => {
     expect(parseDeepLink('cindy://settings/general')).toBeNull();
   });
 
+  it('parses settings/im-bot with an optional cindy/personal group and rejects anything else', () => {
+    // 官方 IM 机器人(飞书)的未关联引导卡点开后直达「设置 → IM 机器人」的官方分区。
+    expect(parseDeepLink('cindy://settings/im-bot')).toEqual({ type: 'settings', tab: 'im-bot' });
+    expect(parseDeepLink('cindy://settings/im-bot?group=cindy')).toEqual({ type: 'settings', tab: 'im-bot', imGroup: 'cindy' });
+    expect(parseDeepLink('xdt-maker://settings/im-bot/?group=personal')).toEqual({ type: 'settings', tab: 'im-bot', imGroup: 'personal' });
+    expect(parseDeepLink('cindy://settings/im-bot?group=admin')).toBeNull();
+    expect(parseDeepLink('cindy://settings/im-bot/feishu')).toBeNull();
+  });
+
   it('parses settings/providers payload with and without a connect target', () => {
     expect(parseDeepLink('cindy://settings/providers')).toEqual({
       type: 'settings',

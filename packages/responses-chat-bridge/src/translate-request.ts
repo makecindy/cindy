@@ -154,6 +154,30 @@ function mediaPart(
   return undefined;
 }
 
+/**
+ * 只含合法元数据且 content 为 null 的 assistant 历史项。
+ *
+ * Codex 在历史回放里会把「上一轮只有工具调用、没有正文」的产物写成
+ * `{ type: 'message', role: 'assistant', content: null }`。messageContent 对既非字符串
+ * 也非数组的 content 一律抛 unsupported_feature,于是这条无害的历史项会让后续每一轮
+ * 续聊都被拒(#9344)。Anthropic 桥接已在 #6676 对同一形状做跳过,这里对齐。
+ */
+function isEmptyAssistantMessageWithSupportedMetadata(item: Record<string, unknown>): boolean {
+  if (item.role !== 'assistant' || item.content !== null) return false;
+  if (item.type !== undefined && item.type !== 'message') return false;
+  if (['id', 'status', 'phase'].some((fieldName) => (
+    item[fieldName] !== undefined && typeof item[fieldName] !== 'string'
+  ))) return false;
+  return Object.keys(item).every((fieldName) => (
+    fieldName === 'type'
+    || fieldName === 'id'
+    || fieldName === 'role'
+    || fieldName === 'content'
+    || fieldName === 'status'
+    || fieldName === 'phase'
+  ));
+}
+
 function messageContent(
   item: Extract<ResponsesInputItem, { role: string }>,
   itemIndex: number,
@@ -368,6 +392,10 @@ function agentMessageText(item: Record<string, unknown>, itemIndex: number): str
       throw new UnsupportedResponsesFeatureError(`input[${itemIndex}].content.${part.type}`);
     }
     body = parts.join('\n');
+  } else if (item.content === null || item.content === undefined) {
+    // 无正文的协作消息没有可翻译的内容(Codex 回放里会出现 content: null),
+    // 按「空内容」降级,而不是把整单判成 unsupported_feature 让会话卡死(#9344)。
+    body = '';
   } else {
     throw new UnsupportedResponsesFeatureError(`input[${itemIndex}].content`);
   }
@@ -591,6 +619,8 @@ function translateInput(input: ResponsesRequest['input'], opts: TranslateInputOp
     const record = item as Record<string, unknown>;
 
     if ('role' in item && typeof item.role === 'string') {
+      // 只有工具调用、没有正文的 assistant 历史项整条跳过(#9344,与 Anthropic 桥接 #6676 对齐)。
+      if (isEmptyAssistantMessageWithSupportedMetadata(record)) continue;
       const content = messageContent(
         item as Extract<ResponsesInputItem, { role: string }>,
         index,

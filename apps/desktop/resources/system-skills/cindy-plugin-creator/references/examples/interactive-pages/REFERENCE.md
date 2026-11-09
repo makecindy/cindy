@@ -129,8 +129,9 @@ const attachments = app.getHostContext()?.toolInfo?.tool?._meta?.['cindy/attachm
 | as:library | 边下载边写入；成功后才提供完整文件，单件 8 GiB |
 | 页面拖放或 file input | 按不超过 2 MiB 原始字节分片，main.js 用 Library 写入；大文件优先 pick |
 
-页面消息包含 JSON 后不得超过 4 MiB，卡片持久结果应保持在 1 MiB 内；不要把 SDK
-或大文件字节重复塞进 HTML。远程传输还有额外开销，文件用引用传递。嵌入式下载
+页面消息包含 JSON 后不得超过 4 MiB，远程文档和消息批次不得超过 4 MiB − 64 KiB。
+整张持久卡片（含参数、工具元数据、结果）预算为 1 MiB；超限先把结果换成 `MCP_APP_RESULT_TOO_LARGE`，
+仍超限则报 `MCP_APP_CARD_TOO_LARGE`。不要把 SDK 或大文件字节重复塞进 HTML，文件用引用传递。嵌入式下载
 也受消息大小限制；一次下载最多 16 个文件，每个都由用户选择保存位置。
 
 文件选择在取消时返回 CANCELLED，系统对话框尚未关闭时可能返回 BUSY；不要
