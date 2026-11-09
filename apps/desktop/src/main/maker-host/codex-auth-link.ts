@@ -508,6 +508,13 @@ async function breakResidualCodexHardlinksDetailed(
   const mode = Number(stat.mode & 0o777n);
   const mtime = codexAuthTimestampSeconds(stat.mtimeNs);
   const sidecar = `${file}.${process.pid}.${sidecarCounter++}.copytmp`;
+  // 旧目标在替换发布之前不能被销毁。Windows 上原来走「删掉目标 → rename 发布」两步:
+  // 两步之间有一个「目标不存在」的窗口, 进程在这个窗口里崩掉, 系统凭证就彻底没了 ——
+  // 下次启动看到系统路径缺失就直接返回, 既不回灌本机副本也不看 sidecar, 用户看到的是
+  // Codex 凭空掉登录(#9316 review)。改成先把旧目标挪到可恢复的备份名, 新凭证发布成功
+  // 之后再删备份; 崩在窗口里时备份还在, 启动对账按它恢复。
+  const backup = `${file}.${process.pid}.${sidecarCounter++}.swapbak`;
+  let backupPath: string | null = null;
   try {
     await fsp.writeFile(sidecar, content, { mode });
     // 读到内容之后、替换之前, 本机 Codex 可能刚原子刷新过凭证(Cindy 与本机
@@ -519,12 +526,16 @@ async function breakResidualCodexHardlinksDetailed(
     }
     if (platform === 'win32') {
       try {
-        await fsp.rm(file, { force: true });
-      } catch (rmError) {
-        if (!isWindowsAclDenied(rmError) || !(await healWindowsAuthAcl(file, execFileImpl))) {
-          throw rmError;
+        await fsp.rename(file, backup);
+        backupPath = backup;
+      } catch (renameError) {
+        // 挪不动(ACL 拒绝 / 被占用)就照旧走删除路径, 行为不变。
+        if (!isWindowsAclDenied(renameError) || !(await healWindowsAuthAcl(file, execFileImpl))) {
+          await fsp.rm(file, { force: true });
+        } else {
+          await fsp.rename(file, backup);
+          backupPath = backup;
         }
-        await fsp.rm(file, { force: true });
       }
     }
     // 换 inode 不应让凭证看起来更新: 保留原修改时间, 对账仍按同一代次判断。
@@ -532,16 +543,71 @@ async function breakResidualCodexHardlinksDetailed(
     // 本机 Codex 在 rename 之后刷新的凭证会被盖上旧代次的时间戳(#9316 review)。
     await fsp.utimes(sidecar, mtime, mtime).catch(() => undefined);
     await fsp.rename(sidecar, file);
+    if (backupPath) await fsp.rm(backupPath, { force: true }).catch(() => undefined);
     return { broke: true, generationChanged: false };
   } catch {
     // 换失败: 只有目标真的没了才把内存里的内容写回去 —— 目标若已被本机
     // Codex 原子重建, 覆盖它会截断新 token(#9316 review)。
-    if (!(await pathEntryExists(file))) {
+    if (backupPath) {
+      if (await pathEntryExists(file)) {
+        // 目标已被本机 Codex 重建出来: 不拿旧字节盖掉它。备份是旧代次, 留着也没用。
+        await fsp.rm(backupPath, { force: true }).catch(() => undefined);
+      } else {
+        // 旧目标就在备份里, 原样挪回去(保住原来的 inode 与时间戳)。
+        await fsp.rename(backupPath, file).catch(async () => {
+          await fsp.writeFile(file, content, { mode }).catch(() => undefined);
+        });
+      }
+    } else if (!(await pathEntryExists(file))) {
       await fsp.writeFile(file, content, { mode }).catch(() => undefined);
     }
     await fsp.rm(sidecar, { force: true }).catch(() => undefined);
     return { broke: false, generationChanged: false };
   }
+}
+
+/**
+ * 上一次替换崩在「旧目标已挪走、新凭证还没发布」的窗口里时, 目标路径会缺失, 而备份
+ * (`<basename>.*.swapbak`)还在。启动对账时按备份把凭证放回原位 —— 否则这里直接返回,
+ * 用户看到的是 Codex 凭空掉登录。
+ *
+ * 只认我们自己的备份名: 本机 Codex 主动登出(它自己删掉 auth.json)不会留下备份, 不会被
+ * 误当成崩过的替换而把登录态倒回来。
+ */
+export async function recoverInterruptedCodexAuthSwap(file: string): Promise<boolean> {
+  // 目标已经在(比如本机 Codex 刚重建出来): 不动它, 免得用旧字节盖掉新凭证。
+  if (await pathEntryExists(file)) return false;
+  const dir = path.dirname(file);
+  const base = path.basename(file);
+  let names: string[];
+  try {
+    names = await fsp.readdir(dir);
+  } catch {
+    return false;
+  }
+  const backups = names
+    .filter((name) => name.startsWith(`${base}.`) && name.endsWith('.swapbak'))
+    .map((name) => path.join(dir, name));
+  if (backups.length === 0) return false;
+  // 最新的备份优先: 它是最后一次替换留下的。
+  const stamped = await Promise.all(
+    backups.map(async (candidate) => ({
+      candidate,
+      mtimeMs: await fsp.stat(candidate).then((s) => s.mtimeMs).catch(() => 0),
+    })),
+  );
+  stamped.sort((a, b) => b.mtimeMs - a.mtimeMs);
+  const chosen = stamped[0].candidate;
+  try {
+    await fsp.rename(chosen, file);
+  } catch {
+    return false;
+  }
+  // 其余残留清掉(只清同名的备份, 不动别的文件)。
+  for (const other of backups) {
+    if (other !== chosen) await fsp.rm(other, { force: true }).catch(() => undefined);
+  }
+  return true;
 }
 
 /**

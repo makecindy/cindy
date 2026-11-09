@@ -58,6 +58,7 @@ import {
   copyCodexAuthSnapshotWithRetry,
   breakResidualSystemCodexHardlinks,
   inspectCodexAuthLink,
+  recoverInterruptedCodexAuthSwap,
   relinkSharedCodexAuth,
   syncIndependentCodexAuth,
   resolveWindowsAclPrincipal,
@@ -1268,7 +1269,12 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
     const systemAuth = getSystemCodexAuthPath();
     const myAuth = path.join(this.codexHome, 'auth.json');
 
-    if (!existsSync(systemAuth)) return;
+    if (!existsSync(systemAuth)) {
+      // 上一次替换崩在「旧目标已挪走、新凭证还没发布」的窗口里: 系统路径缺失, 而备份
+      // (`<auth.json>.*.swapbak`)还在。先按备份把它恢复回来, 再走下面的正常对账 ——
+      // 否则这里直接返回, 用户看到的是 Codex 凭空掉登录(#9316 review)。
+      if (!(await recoverInterruptedCodexAuthSwap(systemAuth))) return;
+    }
     if (path.resolve(systemAuth) === path.resolve(myAuth)) {
       this.lastKnownCodexCredentialScope = 'system-shared';
       return;

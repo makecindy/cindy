@@ -3122,3 +3122,42 @@ describe('deferred Codex OAuth dispatch proof', () => {
     expect(adapter.captureOAuthDispatchProof('synthetic-b', 'account-b')).toBeNull();
   });
 });
+
+describe('Codex 系统凭证替换崩在窗口里的恢复 (#9316 review)', () => {
+  it('系统凭证缺失但留下替换备份时,下一次对账把凭证恢复回来', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'xdt-codex-swap-recovery-'));
+    dirs.push(root);
+    h.userDataDir = path.join(root, 'user-data');
+    const home = path.join(root, 'home');
+    vi.spyOn(os, 'homedir').mockReturnValue(home);
+    const systemAuth = path.join(home, '.codex', 'auth.json');
+    fs.mkdirSync(path.dirname(systemAuth), { recursive: true });
+    fs.writeFileSync(systemAuth, JSON.stringify({ tokens: { access_token: 'recovered-token' } }));
+    // 模拟上一次替换崩在窗口里:旧目标被挪到备份名,新凭证还没发布。
+    fs.renameSync(systemAuth, `${systemAuth}.4242.0.swapbak`);
+
+    const { DesktopCodexAuthAdapter } = await import('../auth-adapters.js');
+    const adapter = new DesktopCodexAuthAdapter();
+    // 对账后续步骤(读账号、建共享链接等)在本机环境可能走不通,不影响这里断言的恢复。
+    await adapter.getState({ credentialMode: 'oauth-bearer' }).catch(() => undefined);
+
+    expect(fs.existsSync(systemAuth)).toBe(true);
+    expect(JSON.parse(fs.readFileSync(systemAuth, 'utf8')).tokens.access_token).toBe('recovered-token');
+  });
+
+  it('系统凭证缺失且没有备份时不凭空造出登录态', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'xdt-codex-swap-recovery-none-'));
+    dirs.push(root);
+    h.userDataDir = path.join(root, 'user-data');
+    const home = path.join(root, 'home');
+    vi.spyOn(os, 'homedir').mockReturnValue(home);
+    const systemAuth = path.join(home, '.codex', 'auth.json');
+    fs.mkdirSync(path.dirname(systemAuth), { recursive: true });
+
+    const { DesktopCodexAuthAdapter } = await import('../auth-adapters.js');
+    const adapter = new DesktopCodexAuthAdapter();
+    await adapter.getState({ credentialMode: 'oauth-bearer' }).catch(() => undefined);
+
+    expect(fs.existsSync(systemAuth)).toBe(false);
+  });
+});

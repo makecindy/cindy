@@ -22,6 +22,8 @@ import {
   inspectCodexAuthLink,
   relinkSharedCodexAuth,
   recoverCodexAuth,
+  recoverInterruptedCodexAuthSwap,
+  breakResidualSystemCodexHardlinks,
   syncIndependentCodexAuth,
 } from '../maker-host/codex-auth-link';
 
@@ -1016,5 +1018,120 @@ describe('Windows 死 SID ACL 自愈 (#3469)', () => {
 
     expect(out.kind).toBe('swap-failed-intact');
     expect(execFileImpl).not.toHaveBeenCalled();
+  });
+});
+
+describe('Windows 系统凭证替换的崩溃窗口 (#9316 review)', () => {
+  /** 造一个 nlink>1 的系统凭证:另一条硬链模拟同机另一个 profile 的残留。 */
+  function hardlinkedSystemAuth(content = SYSTEM_CONTENT): string {
+    fs.writeFileSync(systemAuth, content);
+    const residual = path.join(path.dirname(systemAuth), 'residual-auth.json');
+    fs.linkSync(systemAuth, residual);
+    return residual;
+  }
+
+  function leftoverBackups(): string[] {
+    return fs.readdirSync(path.dirname(systemAuth)).filter((name) => name.includes('.swapbak'));
+  }
+
+  it('新凭证发布之前旧目标仍在可恢复的备份里(崩在窗口里也不丢凭证)', async () => {
+    hardlinkedSystemAuth();
+    const realRename = fs.promises.rename.bind(fs.promises);
+    let backupSeenAtPublish: string | null = null;
+    let backupContentAtPublish: string | null = null;
+    vi.spyOn(fs.promises, 'rename').mockImplementation(async (from, to) => {
+      // 发布新凭证的那一刻:旧目标应该还在备份里(旧实现此刻已经把它删了)。
+      if (String(from).endsWith('.copytmp')) {
+        const backup = fs
+          .readdirSync(path.dirname(systemAuth))
+          .find((name) => name.includes('.swapbak'));
+        backupSeenAtPublish = backup ?? null;
+        if (backup) {
+          backupContentAtPublish = fs.readFileSync(path.join(path.dirname(systemAuth), backup), 'utf8');
+        }
+      }
+      return realRename(from as never, to as never);
+    });
+
+    const broke = await breakResidualSystemCodexHardlinks(systemAuth, 'win32');
+
+    expect(broke).toBe(true);
+    expect(backupSeenAtPublish).toBeTruthy();
+    expect(backupContentAtPublish).toBe(SYSTEM_CONTENT);
+    // 发布成功后备份清掉,不留在磁盘上。
+    expect(leftoverBackups()).toEqual([]);
+    expect(fs.readFileSync(systemAuth, 'utf8')).toBe(SYSTEM_CONTENT);
+  });
+
+  it('发布失败时把旧目标从备份挪回原位,凭证不丢', async () => {
+    hardlinkedSystemAuth();
+    const realRename = fs.promises.rename.bind(fs.promises);
+    vi.spyOn(fs.promises, 'rename').mockImplementation(async (from, to) => {
+      if (String(from).endsWith('.copytmp')) {
+        const err = new Error('EIO: i/o error') as NodeJS.ErrnoException;
+        err.code = 'EIO';
+        throw err;
+      }
+      return realRename(from as never, to as never);
+    });
+
+    const broke = await breakResidualSystemCodexHardlinks(systemAuth, 'win32');
+
+    expect(broke).toBe(false);
+    expect(fs.readFileSync(systemAuth, 'utf8')).toBe(SYSTEM_CONTENT);
+    expect(leftoverBackups()).toEqual([]);
+  });
+
+  it('发布失败时若目标已被本机 Codex 重建,不拿备份里的旧字节盖掉它', async () => {
+    hardlinkedSystemAuth();
+    const refreshed = JSON.stringify({ tokens: { access_token: 'refreshed-token' } });
+    const realRename = fs.promises.rename.bind(fs.promises);
+    vi.spyOn(fs.promises, 'rename').mockImplementation(async (from, to) => {
+      if (String(from).endsWith('.copytmp')) {
+        // 本机 Codex 原子重建出了新的系统凭证。
+        fs.writeFileSync(systemAuth, refreshed);
+        const err = new Error('EIO: i/o error') as NodeJS.ErrnoException;
+        err.code = 'EIO';
+        throw err;
+      }
+      return realRename(from as never, to as never);
+    });
+
+    const broke = await breakResidualSystemCodexHardlinks(systemAuth, 'win32');
+
+    expect(broke).toBe(false);
+    expect(fs.readFileSync(systemAuth, 'utf8')).toBe(refreshed);
+    expect(leftoverBackups()).toEqual([]);
+  });
+
+  it('系统路径缺失时按备份恢复(崩在窗口里的下一次启动)', async () => {
+    fs.writeFileSync(systemAuth, SYSTEM_CONTENT);
+    // 模拟崩在窗口里:旧目标被挪到备份名,新凭证没发布。
+    fs.renameSync(systemAuth, `${systemAuth}.4242.0.swapbak`);
+
+    await expect(recoverInterruptedCodexAuthSwap(systemAuth)).resolves.toBe(true);
+    expect(fs.readFileSync(systemAuth, 'utf8')).toBe(SYSTEM_CONTENT);
+    expect(leftoverBackups()).toEqual([]);
+  });
+
+  it('多份备份时恢复最新的一份,其余清掉', async () => {
+    const older = `${systemAuth}.4242.0.swapbak`;
+    const newer = `${systemAuth}.4242.1.swapbak`;
+    fs.writeFileSync(older, SYSTEM_CONTENT);
+    fs.writeFileSync(newer, SYSTEM_CONTENT);
+    fs.utimesSync(older, new Date(1000), new Date(1000));
+    fs.utimesSync(newer, new Date(2000), new Date(2000));
+
+    await expect(recoverInterruptedCodexAuthSwap(systemAuth)).resolves.toBe(true);
+    expect(fs.readFileSync(systemAuth, 'utf8')).toBe(SYSTEM_CONTENT);
+    expect(fs.existsSync(older)).toBe(false);
+    expect(leftoverBackups()).toEqual([]);
+  });
+
+  it('没有备份时不恢复(本机 Codex 主动登出不该被当成崩过的替换)', async () => {
+    expect(fs.existsSync(systemAuth)).toBe(false);
+
+    await expect(recoverInterruptedCodexAuthSwap(systemAuth)).resolves.toBe(false);
+    expect(fs.existsSync(systemAuth)).toBe(false);
   });
 });
