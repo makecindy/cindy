@@ -64,20 +64,22 @@ async function readAll(readPage: (query: TodoListQuery) => Promise<Page>, view: 
  * `enabled` is false while the host has not advertised todos (older desktops) or is offline:
  * nothing is read and the section stays hidden.
  */
-export function useCompanionGlanceTodos({ deviceId, deviceName, botId, enabled }: {
-  deviceId: string; deviceName: string; botId: string; enabled: boolean;
+export function useCompanionGlanceTodos({ deviceId, deviceName, botId, enabled, active = true }: {
+  deviceId: string; deviceName: string; botId: string; enabled: boolean; active?: boolean;
 }) {
   const { i18n } = useTranslation();
   const { invoke, openLink, onRemoteResourceChanged } = useDeviceLink();
   const [state, setState] = useState<{ todos: GlanceTodos; loaded: boolean; failed: boolean }>({ todos: EMPTY, loaded: false, failed: false });
   const epoch = useRef(0);
+  const reading = useRef(false);
 
   const refresh = useCallback(async () => {
-    if (!enabled) return;
+    if (!enabled || !active || !reading.current) return;
     const mine = ++epoch.current;
     try {
       await openLink(deviceId);
       const readPage = async (query: TodoListQuery): Promise<Page> => {
+        if (mine !== epoch.current) throw new Error('STALE_READ');
         const resource = await getRemoteResource(invoke, { deviceId, deviceName }, todosResourceRef(botId), i18n.language,
           ['teammate-todos'], JSON.stringify(query));
         const data = resource.blocks?.find(block => block.primitive === 'teammate-todos')?.data as Page | undefined;
@@ -95,47 +97,55 @@ export function useCompanionGlanceTodos({ deviceId, deviceName, botId, enabled }
     } catch {
       if (mine === epoch.current) setState(previous => ({ ...previous, loaded: true, failed: true }));
     }
-  }, [botId, deviceId, deviceName, enabled, i18n.language, invoke, openLink]);
+  }, [active, botId, deviceId, deviceName, enabled, i18n.language, invoke, openLink]);
 
   /** Only the 「每天帮我查一次」 state, re-read when the routine is paused or resumed on the desktop. */
   const refreshDailyCheck = useCallback(async () => {
-    if (!enabled) return;
+    if (!enabled || !active || !reading.current) return;
+    const mine = epoch.current;
     try {
       await openLink(deviceId);
+      if (mine !== epoch.current) return;
       const resource = await getRemoteResource(invoke, { deviceId, deviceName }, todosResourceRef(botId), i18n.language,
         ['teammate-todos'], JSON.stringify({ view: 'open', order: 'due', offset: 0, limit: 1 }));
       const value = (resource.blocks?.find(block => block.primitive === 'teammate-todos')?.data as Page | undefined)?.dailyCheck;
-      if (typeof value === 'boolean') setState(previous => ({ ...previous, todos: { ...previous.todos, dailyCheck: value } }));
+      if (mine === epoch.current && typeof value === 'boolean') setState(previous => ({ ...previous, todos: { ...previous.todos, dailyCheck: value } }));
     } catch {
       // The next full read corrects it.
     }
-  }, [botId, deviceId, deviceName, enabled, i18n.language, invoke, openLink]);
+  }, [active, botId, deviceId, deviceName, enabled, i18n.language, invoke, openLink]);
 
   useEffect(() => {
     setState({ todos: EMPTY, loaded: false, failed: false });
-    if (!enabled) return;
+  }, [botId, deviceId, enabled]);
+
+  // Route blur pauses reads without discarding the cached glance. Focus always catches up.
+  useEffect(() => {
+    if (!enabled || !active) return;
+    reading.current = true;
+    let live = true;
     void refresh();
     const offChanged = onRemoteResourceChanged((id, payload) => {
-      if (id !== deviceId) return;
+      if (!live || id !== deviceId) return;
       if (payload.collectionId === 'routines') { void refreshDailyCheck(); return; }
       if (payload.collectionId !== 'teammates') return;
       if (payload.resourceRefs && !payload.resourceRefs.some(ref => ref.id === botId || ref.id === `todos:${botId}`)) return;
       void refresh();
     });
-    const appState = AppState.addEventListener('change', next => { if (next === 'active') void refresh(); });
-    return () => { epoch.current++; offChanged(); appState.remove(); };
-  }, [botId, deviceId, enabled, onRemoteResourceChanged, refresh, refreshDailyCheck]);
+    const appState = AppState.addEventListener('change', next => { if (live && next === 'active') void refresh(); });
+    return () => { live = false; reading.current = false; epoch.current++; offChanged(); appState.remove(); };
+  }, [active, botId, deviceId, enabled, onRemoteResourceChanged, refresh, refreshDailyCheck]);
 
   // Keep up with time while the chat is open: a deferred todo comes back, and past midnight
   // today's due dots are recomputed.
   const nextDeferredAt = state.todos.nextDeferredAt;
   useEffect(() => {
-    if (!enabled || !state.loaded) return;
+    if (!enabled || !active || !state.loaded) return;
     const now = new Date();
     const midnight = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1).toISOString();
     const next = nextDeferredAt && Date.parse(nextDeferredAt) < Date.parse(midnight) ? nextDeferredAt : midnight;
     return scheduleTodoDeferralRefresh(next, () => void refresh());
-  }, [enabled, nextDeferredAt, refresh, state.loaded, state.todos]);
+  }, [active, enabled, nextDeferredAt, refresh, state.loaded, state.todos]);
 
   /** One todo update on the teammate's computer; undoing a delete uses `restore` the same way. */
   const patch = useCallback(async (input: TodoPatch): Promise<TeammateTodo | null> => {

@@ -116,7 +116,7 @@ export function ScriptCapabilityMultiSelect({ value, onChange }: Props) {
         className={cn(
           // z-[10010]:宿主弹窗(ScheduleFormDialog)整体在 z-[10000],默认 z-50 会被盖住
           'z-[10010] w-[var(--radix-popover-trigger-width)] rounded-xl border border-[var(--cmd-palette-border)] bg-popover p-0 text-popover-foreground',
-          'shadow-[var(--shadow-menu)]',
+          'shadow-[shadow:var(--shadow-menu)]',
         )}
       >
         <div className="flex items-center gap-2 border-b border-[var(--cmd-palette-border)] px-3 py-2">

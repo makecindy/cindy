@@ -260,6 +260,7 @@ import {
   terminalRateLimitRetryDelayMs,
 } from './terminal-rate-limit-retry.js';
 import { createStdioTransport } from './app-server/stdioTransport.js';
+import { parseMcpElicitationForm, mcpElicitationFormContent, mcpElicitationUrl } from './mcp-elicitation.js';
 import { CodexInteractionBroker } from './interaction-broker.js';
 import { SYSTEM_PROMPT_APPEND as MAKER_CODEX_SYSTEM_PROMPT_APPEND } from './system-prompt-append.js';
 import { nativeAutoReviewContinuationConfig } from './native-auto-review-policy.js';
@@ -7830,6 +7831,8 @@ assertRouteCurrent();
     const seenGuardianReviewIds = new Set<string>();
     const userInputBroker = new CodexInteractionBroker<ToolRequestUserInputResponse>();
     const dynamicToolBroker = new CodexInteractionBroker<DynamicToolCallResponse>();
+    const elicitationBroker = new CodexInteractionBroker<McpServerElicitationRequestResponse>();
+    const cancelledElicitation = (): McpServerElicitationRequestResponse => ({ action: 'cancel', content: null, _meta: null });
     const activeToolContexts = new Map<string, ActiveToolContext>();
     const approvalDenials = new Map<string, { turnId: string; reason: string }>();
     const approvalDenialKey = (thread: string, turn: string, item: string) => JSON.stringify([thread, turn, item]);
@@ -8340,6 +8343,9 @@ assertRouteCurrent();
       predicate: (meta: { threadId?: string; turnId?: string | null }) => boolean,
     ): void {
       const dismissed = new Set<string>();
+      for (const meta of elicitationBroker.cancelWhere(predicate, cancelledElicitation())) {
+        dismissLiveAskUser(serverInteractionId(meta.requestId), reason);
+      }
       const cancelledUserInput = userInputBroker.cancelWhere(
         predicate,
         { answers: {} },
@@ -8367,6 +8373,9 @@ assertRouteCurrent();
     }
 
     function detachPendingAskUserForSuccessfulTurn(turnId: string): void {
+      for (const meta of elicitationBroker.cancelWhere((meta) => meta.turnId === turnId, cancelledElicitation())) {
+        dismissLiveAskUser(serverInteractionId(meta.requestId), 'turn_completed');
+      }
       const cancelledUserInput = userInputBroker.cancelWhere(
         (meta) => meta.turnId === turnId,
         { answers: {} },
@@ -9226,26 +9235,35 @@ assertRouteCurrent();
     // ── ServerRequest handlers (Phase 2 approval, Phase 5 dismiss-on-mode-change) ──
     const commandExecutionApproval = async (
       params: CommandExecutionRequestApprovalParams,
+      rpc?: { requestId: string | number },
     ): Promise<CommandExecutionRequestApprovalResponse> => {
       if (reviewMode) return { decision: 'decline' };
       // buffered/墓碑 turn 的审批请求不得上 UI (codex R12 P1) — 孤儿直接拒。
       const turnGate = gateServerRequestTurn(params.turnId, params.threadId);
       if (turnGate === false) return { decision: 'decline' };
       if (turnGate instanceof Promise && !(await turnGate)) return { decision: 'decline' };
-      // requestId: approvalId 优先 (zsh-exec-bridge 多 callback 场景); 否则用 itemId
-      const requestId = params.approvalId ?? params.itemId;
+      // RPC identity owns cancellation; itemId remains the execution identity.
+      const requestId = rpc ? serverInteractionId(rpc.requestId) : params.approvalId ?? params.itemId;
+      if (rpc && resolvedWhileBufferedRequestIds.delete(String(rpc.requestId))) return { decision: 'cancel' };
       const decision = await awaitApprovalDecision(params.threadId, params.turnId, requestId, 'commandExecution', {
         kind: 'permission',
         requestId,
         toolUseId: params.itemId,
-        toolName: 'exec',
-        input: commandExecutionDisplayInput(params.command ?? '', params.cwd ?? ''),
-        title: 'Allow Codex to run this command?',
+        toolName: params.kind === 'writeStdin' ? 'write_stdin' : 'exec',
+        input: {
+          ...commandExecutionDisplayInput(params.command ?? '', params.cwd ?? ''),
+          ...(params.kind ? { approvalKind: params.kind } : {}),
+          ...(params.environmentId ? { environmentId: params.environmentId } : {}),
+          ...(params.networkApprovalContext ? { networkApprovalContext: params.networkApprovalContext } : {}),
+        },
+        title: params.kind === 'writeStdin' ? 'Allow Codex to send input to this terminal?' : 'Allow Codex to run this command?',
         description: params.reason ?? undefined,
         suggestions: commandSupportsAcceptForSession(params) ? codexSessionApprovalSuggestions() : undefined,
         metadata: params.reason ? { reason: params.reason } : undefined,
       }, {
-        autoReviewAction: {
+        autoReviewAction: params.kind === 'writeStdin' || params.networkApprovalContext || params.environmentId
+          ? { kind: 'other', description: JSON.stringify({ kind: params.kind ?? 'command', command: params.command, cwd: params.cwd, environmentId: params.environmentId, networkApprovalContext: params.networkApprovalContext }) }
+          : {
           kind: 'exec',
           command: params.command ?? '',
           ...(opts.remoteHostId ? { destructivePathResolution: 'unavailable' as const } : {}),
@@ -9264,13 +9282,15 @@ assertRouteCurrent();
 
     const fileChangeApproval = async (
       params: FileChangeRequestApprovalParams,
+      rpc?: { requestId: string | number },
     ): Promise<FileChangeRequestApprovalResponse> => {
       if (reviewMode) return { decision: 'decline' };
       // buffered/墓碑 turn 的审批请求不得上 UI (codex R12 P1) — 孤儿直接拒。
       const turnGate = gateServerRequestTurn(params.turnId, params.threadId);
       if (turnGate === false) return { decision: 'decline' };
       if (turnGate instanceof Promise && !(await turnGate)) return { decision: 'decline' };
-      const requestId = params.itemId;
+      const requestId = rpc ? serverInteractionId(rpc.requestId) : params.itemId;
+      if (rpc && resolvedWhileBufferedRequestIds.delete(String(rpc.requestId))) return { decision: 'cancel' };
       const activeChange = activeToolContexts.get(params.itemId);
       const changes = params.changes ?? (activeChange?.type === 'fileChange' && activeChange.turnId === params.turnId
         ? activeChange.changes : undefined);
@@ -9451,6 +9471,7 @@ assertRouteCurrent();
 
     const mcpServerElicitation = async (
       params: McpServerElicitationRequestParams,
+      rpc?: { requestId: string | number },
     ): Promise<McpServerElicitationRequestResponse> => {
       if (reviewMode) return { action: 'decline', content: null, _meta: null };
       // buffered/墓碑 turn 的 elicitation 不得上 UI / auto-approve (codex R12 P1)。
@@ -9460,11 +9481,32 @@ assertRouteCurrent();
         return { action: 'decline', content: null, _meta: null };
       }
       if (!isMcpToolApprovalElicitation(params)) {
-        log.warn('unsupported MCP server elicitation -> decline', {
-          serverName: params.serverName,
-          mode: params.mode,
+        const rawId = rpc?.requestId ?? `mcp-elicitation:${++mcpElicitationSeq}`;
+        const requestId = serverInteractionId(rawId);
+        if (resolvedWhileBufferedRequestIds.delete(String(rawId))) return cancelledElicitation();
+        const form = params.mode === 'form' ? parseMcpElicitationForm(params.requestedSchema, params.message) : undefined;
+        const url = params.mode === 'url' ? mcpElicitationUrl(params.url) : undefined;
+        if (!form && !url) {
+          eventQueue.push({ type: 'error', data: {
+            message: `Cindy cannot display this MCP request from ${params.serverName} (${params.mode}). Ask the server to use an ordinary non-secret text, boolean or single-choice form, or an HTTP(S) link. Unsupported schema constraints (including pattern/format) cannot be accepted.`,
+            isTerminal: false,
+          }, source: 'codex' });
+          return cancelledElicitation();
+        }
+        // Elicitation asks for information/completion, never permission to run a
+        // tool: Full access, Auto review and mode changes must not answer it.
+        return elicitationBroker.track({ connectionId, requestId: rawId, kind: 'mcp_elicitation',
+          threadId: params.threadId, turnId: params.turnId }, async (settle) => {
+          const decision = await dispatchInteraction(form ? {
+            kind: 'ask_user_question', requestId, questions: form.questions,
+          } : {
+            kind: 'permission', requestId, toolName: 'mcp_url',
+            title: params.serverName, description: params.message, input: { url: url!, serverName: params.serverName },
+          });
+          const content = form ? mcpElicitationFormContent(form, decision) : null;
+          const accepted = form ? content !== undefined : decision.kind === 'permission' && decision.behavior === 'allow';
+          settle({ action: accepted ? 'accept' : 'cancel', content: content ?? null, _meta: null });
         });
-        return { action: 'decline', content: null, _meta: null };
       }
 
       const capabilityRoute = findCapabilityRouteOverride(
@@ -9539,7 +9581,8 @@ assertRouteCurrent();
       const toolTitle = stringFromMeta(meta, 'tool_title');
       const innerToolName = mcpInnerToolName(params);
       const toolUseId = activeMcpToolUseId(params);
-      const requestId = `mcp-elicitation:${params.serverName}:${params.turnId ?? params.threadId}:${++mcpElicitationSeq}`;
+      const requestId = rpc ? serverInteractionId(rpc.requestId) : `mcp-elicitation:${params.serverName}:${params.turnId ?? params.threadId}:${++mcpElicitationSeq}`;
+      if (rpc && resolvedWhileBufferedRequestIds.delete(String(rpc.requestId))) return { action: 'cancel', content: null, _meta: null };
       const decision = await awaitApprovalDecision(
         params.threadId,
         params.turnId,
@@ -9589,6 +9632,7 @@ assertRouteCurrent();
 
     const permissionsApproval = async (
       params: PermissionsRequestApprovalParams,
+      rpc?: { requestId: string | number },
     ): Promise<PermissionsRequestApprovalResponse> => {
       if (reviewMode) return { permissions: {}, scope: 'turn' };
       // buffered/墓碑 turn 的审批请求不得上 UI (codex R12 P1) — 孤儿直接拒
@@ -9596,7 +9640,8 @@ assertRouteCurrent();
       const turnGate = gateServerRequestTurn(params.turnId, params.threadId);
       if (turnGate === false) return { permissions: {}, scope: 'turn' };
       if (turnGate instanceof Promise && !(await turnGate)) return { permissions: {}, scope: 'turn' };
-      const requestId = params.itemId ?? params.turnId;
+      const requestId = rpc ? serverInteractionId(rpc.requestId) : params.itemId ?? params.turnId;
+      if (rpc && resolvedWhileBufferedRequestIds.delete(String(rpc.requestId))) return { permissions: {}, scope: 'turn' };
       // Capability changes share the same decision lifecycle as command approvals.
       // Auto reviews their complete permission payload rather than inventing a command.
       const decision = await awaitApprovalDecision(params.threadId, params.turnId, requestId, 'commandExecution', {
@@ -9764,6 +9809,7 @@ assertRouteCurrent();
       isRequestPending: () => boolean = () => true,
       toolUseId?: string,
       delivery?: 'async',
+      isBlocking?: boolean,
     ): Promise<ToolRequestUserInputResponse> {
       if (questions.some((q) => q.isSecret)) {
         log.warn('requestUserInput secret question refused', {
@@ -9819,7 +9865,7 @@ assertRouteCurrent();
             turnId,
           });
           return isRequestPending()
-            ? askUserViaInteraction(requestId, questions, turnId, isRequestPending, toolUseId, delivery)
+            ? askUserViaInteraction(requestId, questions, turnId, isRequestPending, toolUseId, delivery, isBlocking)
             : emptyUserInputResponse(questions);
         }
         return responseFromUserInputAnswersByPosition(questions, joined.answersByPosition);
@@ -9847,6 +9893,7 @@ assertRouteCurrent();
           ...(toolUseId ? { toolUseId } : {}),
           ...(delivery ? { delivery } : {}),
           questions: questionsToAskUserItems(questions),
+          ...(isBlocking === false ? { isBlocking: false } : {}),
         });
         if (decision.kind !== 'ask_user_question') {
           log.warn('requestUserInput got mismatched ask decision', { requestId, decKind: decision.kind });
@@ -9873,7 +9920,7 @@ assertRouteCurrent();
         // currentAutoReviewIntent；plan_review 已用 planRequestAutoReviewIntent 防漂。
         const continuationAutoReviewIntent = composeAutoReviewIntentWithClarification(
           live?.autoReviewIntent ?? currentAutoReviewIntent,
-          Object.entries(decision.answers ?? {}).map(([question, answer]) => ({ question, answer })),
+          questions.map((q) => ({ question: q.question, answer: decision.answers[q.id] ?? decision.answers[q.question] ?? '' })),
         );
         setAutoReviewIntent(continuationAutoReviewIntent);
         if (
@@ -9959,7 +10006,7 @@ assertRouteCurrent();
     ): boolean {
       const rawQuestions = asyncUserInputQuestions(params.item);
       if (!rawQuestions) return false;
-      // Do not render the fallback prose as a final answer or open child-agent cards.
+      // Only the completed root message opens the question editor. Its prose remains in history.
       if (phase !== 'completed' || reviewMode || params.threadId !== threadId) return true;
       let seen = asyncQuestionItemsByTurn.get(params.turnId);
       if (seen?.has(params.item.id)) return true;
@@ -9969,7 +10016,7 @@ assertRouteCurrent();
       void askUserViaInteraction(requestId, normalizeRequestUserInputQuestions(rawQuestions),
         params.turnId, () => !closed && !completedTurnIds.has(params.turnId), undefined, 'async')
         .catch((error: unknown) => log.warn('async user input interaction failed', { requestId, error: String(error) }));
-      return true;
+      return false;
     }
 
     async function requestUserInputAsPermission(
@@ -10074,6 +10121,8 @@ assertRouteCurrent();
                 params.turnId,
                 () => userInputBroker.has({ connectionId, requestId: meta.requestId }),
                 params.itemId,
+                undefined,
+                params.isBlocking,
               );
           settle(response);
         },
@@ -10190,17 +10239,20 @@ assertRouteCurrent();
     function handleServerRequestResolved(params: ServerRequestResolvedNotification['params']): void {
       const requestId = String(params.requestId);
       const uiRequestId = serverInteractionId(params.requestId);
-      const pendingApproval = pendingApprovals.get(requestId);
+      const approvalKey = pendingApprovals.has(uiRequestId) ? uiRequestId : requestId;
+      const pendingApproval = pendingApprovals.get(approvalKey);
       let approvalCancelled = false;
       if (pendingApproval && !pendingApproval.settled) {
         pendingApproval.settled = true;
-        pendingApprovals.delete(requestId);
+        pendingApprovals.delete(approvalKey);
         pendingApproval.resolve('decline');
         approvalCancelled = true;
       }
       const brokerKey = { connectionId, requestId: params.requestId };
       const userInputPending = userInputBroker.has(brokerKey);
       const dynamicPending = dynamicToolBroker.has(brokerKey);
+      const elicitationCancelled = elicitationBroker.cancel(brokerKey, cancelledElicitation());
+      if (elicitationCancelled) dismissLiveAskUser(uiRequestId, 'server_request_resolved');
       if (userInputPending || dynamicPending) {
         // Wake joined duplicates before settling the owner's outer broker
         // response. Also remove the live question synchronously: turn/completed
@@ -10222,11 +10274,11 @@ assertRouteCurrent();
       if (approvalCancelled) {
         eventQueue.push({
           type: 'interaction_dismissed',
-          data: { requestId, reason: 'server_request_resolved', resolvedAs: 'deny' },
+          data: { requestId: approvalKey, reason: 'server_request_resolved', resolvedAs: 'deny' },
           source: 'codex',
         });
       }
-      if (!approvalCancelled && !userInputCancelled && !dynamicCancelled && bufferedOrphanTurnIds.size > 0) {
+      if (!approvalCancelled && !userInputCancelled && !dynamicCancelled && !elicitationCancelled && bufferedOrphanTurnIds.size > 0) {
         // cancel 未命中且有 buffered turn: 可能是挂起中的请求 (尚未注册到
         // broker) 被服务端取消 (greptile R13 P1) — 记下 requestId, 对账放行
         // 后 handler 自查回空响应, 不上 UI。requestId 是一次性的 (消费即删),

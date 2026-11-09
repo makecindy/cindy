@@ -1,3 +1,4 @@
+import { runInNewContext } from 'node:vm';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import type { BrowserControlRuntime } from '@cindy/browser-control-runtime';
@@ -187,6 +188,66 @@ describe('browser experience cache', () => {
       expect(h.calls).toHaveLength(6);
       expect(h.calls.every(req => (req as { action: string }).action === 'navigate')).toBe(true);
       expect(h.calls[0]).not.toHaveProperty('intent');
+    } finally { await h.cleanup(); }
+  });
+
+  // Unit/MCP regression from the X screenshot incident: the shipped catalog
+  // hid x-tweet behind another host and alphabetical writes. Existing tests use
+  // a single custom recipe, so cannot catch real multi-host discovery/ranking.
+  it.each(['x.com', 'twitter.com', 'api.fxtwitter.com'])('lists the public reader in %s siteguide', async site => {
+    const h = await makeHarness();
+    try {
+      const result = await invoke(h, { action: 'siteguide', site });
+      expect(result.ok).toBe(true);
+      expect(result.recipes).toEqual(expect.arrayContaining([expect.objectContaining({ id: 'x-tweet' })]));
+    } finally { await h.cleanup(); }
+  });
+
+  it('recommends a public post reader after home navigation, without replaying or spamming posts', async () => {
+    const h = await makeHarness({}, req => ({ targetId: 'tab', url: req.url }));
+    try {
+      await invoke(h, { action: 'open', url: 'https://x.com/' });
+      const first = await invoke(h, { action: 'navigate', url: 'https://x.com/person/status/123/photo/1' });
+      expect(first.recipeSuggestions[0].id).toBe('x-tweet');
+      expect(first.recipeSuggestions.every((r: { access: string }) => r.access === 'read')).toBe(true);
+      expect((await invoke(h, { action: 'navigate', url: 'https://x.com/person/status/456' })).recipeSuggestions).toBeUndefined();
+      const write = await invoke(h, { action: 'navigate', url: 'https://x.com/person/status/456', intent: 'Like a specific tweet' });
+      expect(write.recipeSuggestions[0].id).toBe('opencli:twitter/like');
+      expect((await invoke(h, { action: 'navigate', url: 'https://x.com.evil/person/status/123' })).recipeSuggestions).toBeUndefined();
+      expect(h.calls.map(req => (req as { action: string }).action)).toEqual(['open', 'tabs', 'navigate', 'navigate', 'navigate', 'navigate']); // only navigation plus open's existing tab check
+    } finally { await h.cleanup(); }
+  });
+
+  // Existing-tab replay: agents may snapshot without navigation, so the
+  // navigation-only suggestions previously never reached this decision point.
+  it('suggests recipes when reading an existing post tab and deduplicates subsequent navigation', async () => {
+    const h = await makeHarness({}, () => ({ targetId: 'tab', url: 'https://x.com/person/status/123', snapshot: 'Public post' }));
+    try {
+      expect((await invoke(h, { action: 'snapshot', targetId: 'tab' })).recipeSuggestions[0].id).toBe('x-tweet');
+      expect((await invoke(h, { action: 'navigate', targetId: 'tab', url: 'https://x.com/person/status/123' })).recipeSuggestions).toBeUndefined();
+      expect(h.calls.filter(req => (req as { action: string }).action === 'navigate')).toHaveLength(1);
+    } finally { await h.cleanup(); }
+  });
+
+  // Unit/MCP: execute the shipped evaluate function on a synthetic API response,
+  // not a copied output object. Previously URL-only media had no reading handoff.
+  it.each([true, false])('hands off unviewed photos only when present: %s', async hasPhoto => {
+    const payload = { tweet: { id: '123', media: { photos: hasPhoto ? [{ url: 'https://images.example/photo.jpg' }] : [] } } };
+    const h = await makeHarness({}, req => {
+      const request = req.request as { kind?: string; fn?: string } | undefined;
+      if (request?.kind === 'evaluate') return { result: runInNewContext(`(${request.fn})()`, {
+        document: { body: { innerText: JSON.stringify(payload) } },
+      }, { timeout: 100 }) };
+      return { targetId: 'tab' };
+    });
+    try {
+      const result = await invoke(h, { action: 'recipe', recipeId: 'x-tweet', targetId: 'tab', inputs: { id: '123' } });
+      expect(result.ok).toBe(true);
+      if (hasPhoto) {
+        expect(result.output.imageReading).toMatchObject({ status: 'not_viewed' });
+        expect(result.output.media).toEqual([{ type: 'photo', url: 'https://images.example/photo.jpg' }]);
+      } else expect(result.output.imageReading).toBeUndefined();
+      expect(h.calls).toHaveLength(3); // the handoff does not silently fetch media
     } finally { await h.cleanup(); }
   });
 
@@ -1662,6 +1723,20 @@ describe('recipe on-use maintenance', () => {
     try {
       expect((await invoke(h, { action: 'recipe', recipeId: legacy.id })).ok).toBe(false);
       expect(saved).toEqual([{ site: 'example.com', recipe: { ...legacy, validation: { site: 'example.com', state: 'suspended' } } }]);
+    } finally { await h.cleanup(); }
+  });
+  it('persists failure of a legacy recipe listed in several guides under its first match host', async () => {
+    const saved: unknown[] = [];
+    const legacy = { id: 'multi-guide-flow', match: ['api.example.com', 'example.com'], steps: [{ action: 'extract' as const, extract: { fields: { title: 'h1' } } }] };
+    const h = await makeHarness({
+      getUserRecipes: async () => ({ version: 'multi-guide-flow-v1', recipes: new Map([[legacy.id, legacy]]),
+        siteGuides: new Map([['example.com', { site: 'example.com', recipes: [legacy.id] }],
+          ['api.example.com', { site: 'api.example.com', recipes: [legacy.id] }]]) }),
+      saveUserRecipe: async (x) => { saved.push(x); return { ok: true }; },
+    }, () => ({ result: { ok: false, error: 'invalid selector' } }));
+    try {
+      expect((await invoke(h, { action: 'recipe', recipeId: legacy.id })).ok).toBe(false);
+      expect(saved).toEqual([{ site: 'api.example.com', recipe: { ...legacy, validation: { site: 'api.example.com', state: 'suspended' } } }]);
     } finally { await h.cleanup(); }
   });
   it('reports a failed suspension write and still prevents this session from rerunning it', async () => {

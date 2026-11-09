@@ -595,3 +595,17 @@ it('preserves only navigation-only Cindy task links, never commands or ambiguous
     expect(ok(`<a href="${url}">open</a>`)).toBe('<a>open</a>');
   }
 });
+
+// Unit: older clients need the ordinary action; only safe, input-free buttons
+// may opt into native navigation. Existing href tests do not cover this fallback.
+it('retains the legacy action and validates the optional native task entry', () => {
+  expect(ok('<button data-ghost-action="open" data-ghost-session-link="cindy://session/task">Open</button>'))
+    .toBe('<button data-ghost-action="open" data-ghost-session-link="cindy://session/task" type="button">Open</button>');
+  for (const attrs of ['data-ghost-action="open" data-ghost-prompt=""', 'data-ghost-action="open" data-ghost-submit="true"', '', 'data-ghost-action="!bad"']) {
+    expect(ok(`<button ${attrs} data-ghost-session-link="cindy://session/task">Open</button>`)).not.toContain('data-ghost-session-link');
+  }
+  for (const url of ['cindy://settings', 'cindy://session/task?run=1', 'https://example.test']) {
+    expect(ok(`<button data-ghost-action="open" data-ghost-session-link="${url}">Open</button>`))
+      .toBe('<button data-ghost-action="open" type="button">Open</button>');
+  }
+});

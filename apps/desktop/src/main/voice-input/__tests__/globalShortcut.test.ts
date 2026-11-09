@@ -132,10 +132,42 @@ const mocks = vi.hoisted(() => {
     void accelerator;
     return true;
   });
+  // 浮窗预热的可观察结果就是「有没有 new BrowserWindow」。只建模 createOverlayWindow /
+  // setOverlayIdlePresentationState 会碰到的成员。
+  const createdOverlayWindows: unknown[] = [];
+  const createOverlayWindowMock = (): unknown => {
+    const window = {
+      id: 100 + createdOverlayWindows.length,
+      isDestroyed: vi.fn(() => false),
+      isVisible: vi.fn(() => false),
+      isMinimized: vi.fn(() => false),
+      on: vi.fn(),
+      once: vi.fn(),
+      setOpacity: vi.fn(),
+      hide: vi.fn(),
+      setBounds: vi.fn(),
+      setAlwaysOnTop: vi.fn(),
+      setSkipTaskbar: vi.fn(),
+      setVisibleOnAllWorkspaces: vi.fn(),
+      setHiddenInMissionControl: vi.fn(),
+      setFocusable: vi.fn(),
+      loadURL: vi.fn(),
+      loadFile: vi.fn(),
+      webContents: { id: 200, isDestroyed: vi.fn(() => false), send: vi.fn(), on: vi.fn(), once: vi.fn() },
+    };
+    createdOverlayWindows.push(window);
+    return window;
+  };
+  const canOverlayStartDictation = vi.fn(async () => true);
+  const voiceInputReadyListeners: Array<() => void> = [];
 
   return {
     handlers,
     registeredShortcuts,
+    createdOverlayWindows,
+    createOverlayWindowMock,
+    canOverlayStartDictation,
+    voiceInputReadyListeners,
     focusedWindow,
     recordingEvent,
     mainWindow,
@@ -188,18 +220,23 @@ vi.mock('electron', () => ({
       mocks.appListeners.set(event, callback);
     }),
   },
-  BrowserWindow: {
-    getAllWindows: vi.fn(() => [mocks.focusedWindow, mocks.mainWindow, mocks.ghostPanelWindow]),
-    getFocusedWindow: vi.fn(() => mocks.focusedWindow),
-    // 闸要从 sender 反查它所属的窗口,才能判断「是不是某个窗口自己的顶层 webContents」。
-    fromWebContents: vi.fn((contents: unknown) => {
-      if (contents === mocks.mainWindow.webContents) return mocks.mainWindow;
-      if (contents === mocks.secondaryAppWindowWebContents) return mocks.secondaryAppWindow;
-      if (contents === mocks.focusedWindow.webContents) return mocks.focusedWindow;
-      if (contents === mocks.ghostPanelWindow.webContents) return mocks.ghostPanelWindow;
-      return null;
+  BrowserWindow: Object.assign(
+    vi.fn(function BrowserWindowMock() {
+      return mocks.createOverlayWindowMock();
     }),
-  },
+    {
+      getAllWindows: vi.fn(() => [mocks.focusedWindow, mocks.mainWindow, mocks.ghostPanelWindow]),
+      getFocusedWindow: vi.fn(() => mocks.focusedWindow),
+      // 闸要从 sender 反查它所属的窗口,才能判断「是不是某个窗口自己的顶层 webContents」。
+      fromWebContents: vi.fn((contents: unknown) => {
+        if (contents === mocks.mainWindow.webContents) return mocks.mainWindow;
+        if (contents === mocks.secondaryAppWindowWebContents) return mocks.secondaryAppWindow;
+        if (contents === mocks.focusedWindow.webContents) return mocks.focusedWindow;
+        if (contents === mocks.ghostPanelWindow.webContents) return mocks.ghostPanelWindow;
+        return null;
+      }),
+    },
+  ),
   clipboard: {},
   globalShortcut: {
     register: vi.fn((accelerator: string, callback: () => void) => {
@@ -220,6 +257,7 @@ vi.mock('electron', () => ({
   screen: {
     getPrimaryDisplay: vi.fn(() => ({ workArea: { x: 0, y: 0, width: 1440, height: 900 } })),
     getDisplayNearestPoint: vi.fn(() => ({ workArea: { x: 0, y: 0, width: 1440, height: 900 } })),
+    getCursorScreenPoint: vi.fn(() => ({ x: 0, y: 0 })),
   },
   shell: {
     openExternal: vi.fn(),
@@ -231,6 +269,11 @@ vi.mock('electron', () => ({
 
 vi.mock('../index.js', () => ({
   prewarmVoiceInputProvider: vi.fn(() => Promise.resolve()),
+  canGlobalVoiceInputOverlayStartDictation: mocks.canOverlayStartDictation,
+  onVoiceInputReady: vi.fn((listener: () => void) => {
+    mocks.voiceInputReadyListeners.push(listener);
+    return () => undefined;
+  }),
 }));
 
 vi.mock('../MacModifierShortcutListener.js', () => ({
@@ -364,6 +407,10 @@ describe('voice input global shortcut registration', () => {
     mocks.registerShortcut.mockReturnValue(true);
     mocks.onQuit.mockClear();
     mocks.quitDisposers.length = 0;
+    mocks.createdOverlayWindows.length = 0;
+    mocks.canOverlayStartDictation.mockReset();
+    mocks.canOverlayStartDictation.mockResolvedValue(true);
+    mocks.voiceInputReadyListeners.length = 0;
   });
 
   afterEach(() => {
@@ -587,6 +634,69 @@ describe('voice input global shortcut registration', () => {
     expect(result).toMatchObject({ ok: false });
     expect(mocks.registeredShortcuts.has('F16')).toBe(true);
     expect(mocks.registeredShortcuts.has('F17')).toBe(false);
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：prewarmGlobalVoiceInputOverlay（快捷键注册后 1.5s 调用）是否
+  //   new 出常驻的隐藏浮窗；就绪通知后是否补建。
+  // - 规则依据：本地／未登录且没有可用听写通道时，浮窗只能显示配置错误，不应常驻一个隐藏
+  //   Renderer；变成可用后必须补建，否则可用用户首次按键退回冷启动（录音由浮窗 Renderer
+  //   发起，冷启动会晚开麦）。
+  // - 现有覆盖缺口：此前没有任何用例覆盖浮窗预热。
+  // - 最小失败输入：gate 返回 false；旧实现无条件建窗。
+  // - tier：unit。
+  describe('global overlay prewarm gate', () => {
+    const shortcut: VoiceInputShortcut = {
+      trigger: 'keyboard',
+      code: 'F16',
+      key: 'F16',
+      modifiers: { meta: false, ctrl: false, alt: false, shift: false, fn: false },
+    };
+
+    async function registerShortcutAndImport(): Promise<typeof import('../global.js')> {
+      setPlatform('darwin');
+      vi.stubGlobal('MAIN_WINDOW_VITE_DEV_SERVER_URL', 'http://localhost:5173');
+      const globalModule = await import('../global.js');
+      globalModule.registerGlobalVoiceInputIpc(mocks.ipcDeps);
+      mocks.setStoredShortcut(shortcut);
+      await mocks.handlers.get('voice-input:global-shortcut:set')?.({}, shortcut);
+      expect(mocks.registeredShortcuts.size).toBe(1);
+      return globalModule;
+    }
+
+    afterEach(() => {
+      vi.unstubAllGlobals();
+    });
+
+    it('keeps no hidden overlay without a dictation path and prewarms once one becomes ready', async () => {
+      const { prewarmGlobalVoiceInputOverlay } = await registerShortcutAndImport();
+      mocks.canOverlayStartDictation.mockResolvedValue(false);
+
+      prewarmGlobalVoiceInputOverlay();
+      await vi.waitFor(() => expect(mocks.canOverlayStartDictation).toHaveBeenCalledTimes(1));
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(mocks.createdOverlayWindows).toHaveLength(0);
+
+      mocks.canOverlayStartDictation.mockResolvedValue(true);
+      for (const listener of mocks.voiceInputReadyListeners) listener();
+      await vi.waitFor(() => expect(mocks.createdOverlayWindows).toHaveLength(1));
+
+      // 已补建过：后续就绪通知不再重复建窗。
+      for (const listener of mocks.voiceInputReadyListeners) listener();
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(mocks.createdOverlayWindows).toHaveLength(1);
+    });
+
+    it('prewarms immediately when dictation can start, and ready notifications do not add windows', async () => {
+      const { prewarmGlobalVoiceInputOverlay } = await registerShortcutAndImport();
+
+      prewarmGlobalVoiceInputOverlay();
+      await vi.waitFor(() => expect(mocks.createdOverlayWindows).toHaveLength(1));
+
+      for (const listener of mocks.voiceInputReadyListeners) listener();
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(mocks.createdOverlayWindows).toHaveLength(1);
+    });
   });
 
   // 未授权时用户是设不上裸修饰键的:注册失败 → 设置不落盘 → 权限徽章(显示条件依赖已保存的

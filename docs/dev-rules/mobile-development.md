@@ -74,11 +74,11 @@ Expo Updates 开发指纹。`native-mismatch` 或 `native-unknown` 不能作为�
 的真实指纹，避免跨 worktree 复用不兼容的原生包；不匹配的缓存会跳过。不要通过临时修改
 JS 参数协议来适配另一版本原生依赖。此检查不修改 App 配置或发布指纹。
 
-Xcode 27 构建的 App 在 iOS 27 上还必须采用 UIScene 生命周期。当前 SDK 57 使用
-Expo 官方回移支持（`expo >= 57.0.23`，`expo-build-properties` 的
-`ios.enableSceneSupport: true`），由 prebuild 生成主 App 的 Scene manifest 和工厂入口。
-不要只手改忽略目录里的 AppDelegate 或绕过原生指纹。启用该配置及升级原生依赖会改变
-runtime fingerprint，必须按下文冷更边界审核；链接唤起、前后台切换与页面显示须单独验证。
+Xcode 27 构建的 App 在 iOS 27 上必须采用 UIScene 生命周期。SDK 58 默认由 prebuild
+生成主 App 的 Scene manifest 和工厂入口，不再使用 SDK 57 的
+`expo-build-properties.ios.enableSceneSupport` 回移开关。不要只改忽略目录里的 AppDelegate。
+升级原生依赖会改变 runtime fingerprint，必须按下文冷更边界审核；链接唤起、前后台切换
+与页面显示须单独验证。
 
 ```bash
 pnpm mobile:sim:rebuild
@@ -148,9 +148,24 @@ pnpm --filter mobile test:smoke
   [Mobile 设计规范](../../apps/mobile/docs/mobile-design-guide.md)。
 - 记录实际执行和结果；未执行的高相关检查必须说明原因。
 
+消息与任务行的尺寸订阅、代码着色优化及测量边界见
+[手机消息渲染的共享优化](../../apps/mobile/docs/mobile-render-performance.md)。
+
 ## 专项入口
 
 ### Android 组字与发送快照
+
+普通任务与伙伴私聊点击发送时保持编辑器可编辑、保留焦点与软键盘；发送防重由提交锁和发送按钮负责，
+不通过 `editable=false` 锁住原生输入框（iOS 会因此收起键盘）。异步发送只清除与已捕获快照相同的草稿，
+后续输入不能被完成回调覆盖。排队消息保存成功后，将等待期间的新输入（含引用等结构化节点）
+接在编辑前暂存草稿之后再持久保存；保存失败则将已清空的提交快照与后续输入合并回编辑器并持久保存，
+同一次失败只恢复一次，未清空时保留当前完整编辑，已取消或切换编辑不回填。放弃编辑仍只恢复原草稿。附件调整与语音操作仍沿用发送期间的禁用规则。
+发送期间新发起的图片粘贴与附件按钮同样关闭，不能把后粘贴的图片交给已点击发送的消息；文字粘贴仍可用。
+WebView 图片批次在 start 事件记录是否接收与交付/失败回调：发送前已占位的批次继续交付；
+发送期间被拒绝的批次即使在发送结束后才完成也不接收、不触碰别批占位。
+iOS 原生的空图片事件（如超过剪贴板上限）与未接收批次也不能触发占位失败回调；
+只有已建立占位的批次才沿其原回调完成交付或失败清理。
+回归：`sessionComposerLayout.test.ts`、`composerRichInputLifecycle.test.tsx`、共享 `sessionOperation.test.ts`。
 
 WebView 输入框把屏幕可见的组字文本同步为草稿；React Native 接受本地编辑的回传时不重写
 DOM，保留输入法组字与光标。点击发送后，在发送防重锁内等待编辑器返回当前完整
@@ -185,6 +200,10 @@ iPhone Duo（iOS 27）在远程桌面返回并进入画中画后，系统发来�
 看 Debug 日志里 `frame received` 的 `frame` 是否整宽贴底。输入卡片（`useMobileKeyboardState`）与浮动输入框（新建任务页的 `useComposerDockKeyboardHeight`）必须共用这一判据，
 只修一条会出现「任务页正常、新建页仍被盖住」。RN 自带 `KeyboardAvoidingView`（群聊、共享任务、部分弹窗）
 在这种状态下会抬得过高，尚未处理。回归：`composerKeyboard.test.tsx`、`composerDockKeyboard.test.tsx`。
+
+浮动输入框仅在键盘显示期间采纳 `keyboardDidChangeFrame`：隐藏结束后仍可能收到零尺寸或异屏坐标，
+不能把它送入上述异常坐标补偿，否则会重新抬起输入框并压缩消息列表，留下没有键盘的大片空白。
+`willHide` 后的交互式收起继续跟随原生动画；`didHide` 将最终占位归零，下次 `willShow/didShow` 才重新启用。
 
 ### 相册选图与 iCloud 原图
 

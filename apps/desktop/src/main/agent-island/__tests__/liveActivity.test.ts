@@ -78,6 +78,20 @@ describe('AgentIslandLiveActivity', () => {
     ]);
   });
 
+  // Regression: the system island opened Cindy without selecting the displayed task.
+  // Unit tier: exercise native payload updates, including same-title task switches;
+  // the existing counter/alert tests never varied the navigation destination.
+  it('updates the click destination even when two tasks have the same title and counts', async () => {
+    const fake = fakeAddon();
+    const live = controller(fake.addon);
+    live.sync({ ...state(0, 'attention', 1), taskUrl: 'cindy://session/first' });
+    await vi.advanceTimersByTimeAsync(0);
+    live.sync({ ...state(0, 'attention', 1), taskUrl: 'cindy://session/second?device=remote' });
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(fake.calls.filter((call) => call.action === 'sync').map((call) => call.state?.taskUrl))
+      .toEqual(['cindy://session/first', 'cindy://session/second?device=remote']);
+  });
+
   it('retries a start ActivityKit refused for visibility once a window is visible', async () => {
     const fake = fakeAddon([{ ok: false, error: 'visibility' }, { ok: true, result: 'started' }]);
     const live = controller(fake.addon);

@@ -24,6 +24,7 @@ import { AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT, AUTO_REVIEW_DELEGA
 import { restoreAutoReviewUserIntent } from '../autoReviewUserIntent.js';
 import { verifiedOwnerRequestText } from '../../../shared/forwardedRequest.js';
 import { createWireNoteMemory } from '../wireNoteMemory.js';
+import { resolveSendToSessionCreateRoute } from '../sendToSessionExecutionConfig.js';
 
 const registerSource = readFileSync(resolve(__dirname, '..', 'register.ts'), 'utf8').replace(
   /\r\n?/g,
@@ -260,6 +261,9 @@ function botTaskDispatchHarness(
     isSessionRunningError: () => false,
     GroupToolAuthorizationError: class extends Error {},
     AcceptedCallbackDispatchCancelled: class extends Error {},
+    // create 分支的位置与执行配置走真实解析；不指定位置与配置时不读任何供应商。
+    resolveSendToSessionCreateRoute,
+    getSelfDeviceId: () => 'self-device',
   };
   Object.assign(stubs, overrides);
   const scope = new Proxy(stubs, {

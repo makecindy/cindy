@@ -1,3 +1,4 @@
+import { PROVIDER_SHARE_AVAILABILITY_CAPABILITY, readShareAvailabilityCatalog } from './providerShareAvailability.js';
 import { pluginDeviceSync } from '../cindy-brain/index.js';
 import { PLUGIN_SYNC_CHANNEL } from '../cindy-brain/deviceSyncSlot.js';
 import { PluginSyncAccess } from './pluginSyncAccess.js';
@@ -832,7 +833,7 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
     return ok ? authManager.getAccessToken() : null;
   };
   const hello = (busy: boolean): HelloPayload => ({
-    capabilities: [SHARED_TASK_CAPABILITY, PROVIDER_SHARE_RELAY_CAPABILITY],
+    capabilities: [SHARED_TASK_CAPABILITY, PROVIDER_SHARE_RELAY_CAPABILITY, PROVIDER_SHARE_AVAILABILITY_CAPABILITY],
     deviceName: deviceName(),
     platform: process.platform,
     appVersion: app.getVersion(),
@@ -2241,6 +2242,24 @@ export async function remoteBackgroundInvoke(
   const peer = parseProviderSharePeer(deviceId);
   // A delegated M losing a task lease (e.g. after restart) is not proof that
   // O revoked the whole share. Only the actual owner's denial invalidates G's share generation.
+  if (channel === 'maker:provider:list' && peer?.role === 'host') {
+    const share = getReceivedShares().find(row => row.shareId === peer.shareId && row.hostDeviceId === peer.deviceId);
+    if (share?.status === 'active' && share.standbyOnline !== undefined && !(share.hostDeviceOnline ?? share.hostOnline)) {
+      options?.preSend?.();
+      try {
+        assertNotStandby();
+        assertRemoteControlTargetEnabled(deviceId);
+        const result = await readShareAvailabilityCatalog(peer.shareId);
+        assertCurrent();
+        options?.preSend?.();
+        return { ok: true, result };
+      } catch (error) {
+        assertCurrent();
+        return { ok: false, error: { code: 'IPC_ERROR', message: PROVIDER_SHARE_UNAVAILABLE_MESSAGE } };
+      }
+    }
+  }
+
   const refusedOwnerShare = peer?.role === 'host' && getReceivedShares().some(share =>
     share.shareId === peer.shareId && share.hostDeviceId === peer.deviceId) ? peer.shareId : undefined;
   try {
@@ -2271,7 +2290,7 @@ export async function remoteBackgroundInvoke(
  * 分享同一条路：先建后台链路，再请求。
  */
 export function providerShareHostInvoke(target: string, channel: string, args: unknown[]): Promise<InvokeResultPayload> {
-  return backgroundInvokeDevice(target, channel, args);
+  return remoteBackgroundInvoke(target, channel, args);
 }
 
 async function backgroundInvokeDevice(deviceId: string, channel: string, args: unknown[], options?: { preSend?: () => void; liveProviderMetadata?: true }): Promise<InvokeResultPayload> {

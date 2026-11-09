@@ -30,6 +30,8 @@
    经已有 device-link 余量通道读执行电脑，独立账号必须核对回包的 providerId。
    Claude 查询等待既有 CLI `get_usage` 刷新完成，保留节流和失败退避，不新增登录或凭证读取。
    多个相关窗口同时受限时，等它们全部恢复；不拿其它模型或本机另一个账号的额度推断。
+   远程多订阅账号池的任务查询附带原生会话 id，由执行电脑按持久绑定读取该账号，不能使用池内
+   下一可分配账号的额度。旧提供端忽略附加参数仍走原单账号读取；绑定已移出或断开时保持未知。
 3. 报错原文里写明的时刻（ChatGPT 订阅 `resets_at` / `try again at 3:05 PM` / Pi 的
    `Try again in ~N min`，Claude 的 `resets 1:20am (TZ)`）。
    订阅家族由 provider 的 `auth.native` 决定，与跑在哪个 Harness 上无关。

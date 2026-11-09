@@ -10,7 +10,7 @@ export function asyncUserInputQuestions(item: ItemEnvelope): ToolRequestUserInpu
       || (raw.options != null && (!Array.isArray(raw.options)
         || raw.options.some((option: unknown) => typeof option !== 'string')))) return null;
     questions.push({
-      id: `${item.id}-question-${questions.length + 1}`,
+      id: JSON.stringify(['request_user_input_async', item.id, questions.length]),
       header: '',
       question: raw.title,
       isOther: true,

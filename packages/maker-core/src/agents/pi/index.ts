@@ -1664,20 +1664,23 @@ async function buildPiPrompt(message: UserMessage, opts?: { remote?: boolean }):
   return { text: textParts.join(' ').trim(), images };
 }
 
-function extraDirBasename(dir: string): string {
-  const trimmed = dir.replace(/[\\/]+$/, '');
-  const parts = trimmed.split(/[\\/]/);
-  return parts[parts.length - 1] || 'reference';
-}
-
-function piExtraDirsPrompt(readOnlyDirs: readonly string[], writableDirs: readonly string[]): string {
+export function piExtraDirsPrompt(
+  readOnlyDirs: readonly string[],
+  writableDirs: readonly string[],
+  libraryRoot?: string | null,
+): string {
   const sections: string[] = [];
   if (readOnlyDirs.length > 0) {
-    const labels = [...new Set(readOnlyDirs.map(extraDirBasename))];
+    // #8812:用户添加的目录恢复列出完整路径(hosted 为供应商端虚拟路径),模型才能定位。
+    // 插件 Library 根不进通用目录清单 —— 它的授权映射由每轮 <cindy-library-native-read>
+    // 单独下发,维持 #3745 起不把 Library 绝对路径写进本段的约定。
+    const userDirs = [...new Set(
+      typeof libraryRoot === 'string' ? readOnlyDirs.filter((dir) => dir !== libraryRoot) : readOnlyDirs,
+    )];
     sections.push(
       '<cindy-extra-reference-directories>',
       'This task can read extra references as read-only. If a plugin library root is authorized as a host-owned extraDir, resolve the latest library:assets/<2>/<hash>/blob.<ext> relative key against that root; do not cache roots across directory changes. Do not modify them.',
-      ...labels.map((label) => `- ${label}`),
+      ...userDirs.map((dir) => `- ${dir}`),
       '</cindy-extra-reference-directories>',
     );
   }
@@ -1685,6 +1688,7 @@ function piExtraDirsPrompt(readOnlyDirs: readonly string[], writableDirs: readon
     sections.push(
       '<cindy-extra-writable-directories>',
       'The user explicitly allowed additional writable locations for this task. Stay inside those grants; do not write the plugin library root.',
+      ...writableDirs.map((dir) => `- ${dir}`),
       '</cindy-extra-writable-directories>',
     );
   }
@@ -3898,7 +3902,7 @@ export class PiAgent extends BaseAgent {
       ['memoryIndex', makerMemoryIndex.trim()],
       ['user', reviewMode ? undefined : opts.botUserProfilePrompt?.trim()],
       ['user', reviewMode || opts.botRuntimeProfile ? undefined : opts.userPrompt?.trim()],
-      ['directories', piExtraDirsPrompt(mutableExtraDirs, mutableWritableDirs)],
+      ['directories', piExtraDirsPrompt(mutableExtraDirs, mutableWritableDirs, mutableLibraryRoot)],
     ];
     const promptSources: PiPromptSource[] = promptSourceEntries.flatMap(([source, text]) =>
       text ? [{ source, text }] : []);
@@ -7866,7 +7870,7 @@ export class PiAgent extends BaseAgent {
           // 后续 user turn 前附上短引用目录段(但 /skill: 起始时不前置,见 composePiPromptText)。
           const promptText = composePiPromptText(
             text,
-            [piExtraDirsPrompt(mutableExtraDirs, mutableWritableDirs), libraryNativeReadContext(mutableLibraryRoot, mutableExtraDirs, text)].filter(Boolean).join("\n\n"),
+            [piExtraDirsPrompt(mutableExtraDirs, mutableWritableDirs, mutableLibraryRoot), libraryNativeReadContext(mutableLibraryRoot, mutableExtraDirs, text)].filter(Boolean).join("\n\n"),
             runtimeCapabilityManifest,
           );
           const managedExtensionCommandName = managedExtensionSlashCommandName(
@@ -8211,7 +8215,7 @@ export class PiAgent extends BaseAgent {
         // /skill: 起始时不前置 Extra Dir 引用段(否则命令退化成文本),与 send 同口径。
         const promptText = composePiPromptText(
           text,
-          [piExtraDirsPrompt(mutableExtraDirs, mutableWritableDirs), libraryNativeReadContext(mutableLibraryRoot, mutableExtraDirs, text)].filter(Boolean).join("\n\n"),
+          [piExtraDirsPrompt(mutableExtraDirs, mutableWritableDirs, mutableLibraryRoot), libraryNativeReadContext(mutableLibraryRoot, mutableExtraDirs, text)].filter(Boolean).join("\n\n"),
           runtimeCapabilityManifest,
         );
         const managedExtensionCommandName = managedExtensionSlashCommandName(

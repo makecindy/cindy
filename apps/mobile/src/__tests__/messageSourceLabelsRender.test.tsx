@@ -3,7 +3,7 @@
  * 消息来源标签渲染:设备(查看者自己发的不标)、插件、共享任务作者(气泡上方)、
  * 脱敏自动化、本机 IM 卡片(保留普通用户操作)。沿用 pluginAttachmentBubble 的 RN 替身。
  */
-import { act, createElement, useImperativeHandle, useState } from "react";
+import { act, createElement, useImperativeHandle, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 vi.mock('@/platform/gestureHandler', () => {
@@ -26,17 +26,22 @@ const viewportHarness = vi.hoisted(() => ({
   list: null as any,
   finishReveal: null as any,
   renders: 0,
+  captureNativeOpacity: false,
+  memoizedCells: false,
+  opacityTargets: new Set<HTMLElement>(),
 }));
 
 // Keep the production list, bubble gate, invocation header, and message model.
 // Only native surfaces and unrelated heavy viewers are replaced for Node rendering.
 vi.mock("react-native", async () => {
   const React = await import("react");
+  const window = { width: 402, height: 874, scale: 3, fontScale: 1 };
   // onLongPress 映射到 contextmenu,便于测试长按显示来源 ID。
-  const view = ({ children, testID, accessibilityLabel, accessibilityHint, onLongPress, onPress, disabled, selectable, style }: any) =>
+  const view = ({ children, testID, accessibilityLabel, accessibilityHint, onLongPress, onPress, disabled, selectable, style, nativeRef }: any) =>
     React.createElement(
       "div",
       {
+        ref: nativeRef,
         "data-testid": testID,
         "data-min-height": Object.assign({}, ...[typeof style === 'function' ? style({ pressed: false }) : style].flat(Infinity).filter(Boolean)).minHeight,
         ...(selectable !== undefined ? { "data-selectable": String(selectable) } : {}),
@@ -56,6 +61,17 @@ vi.mock("react-native", async () => {
     setValue() {}
     stopAnimation() {}
   }
+  function AnimatedView(props: any) {
+    const nativeRef = React.useRef<HTMLElement>(null);
+    React.useLayoutEffect(() => {
+      const style = Object.assign({}, ...[props.style].flat(Infinity).filter(Boolean));
+      if (viewportHarness.captureNativeOpacity && nativeRef.current && style.opacity !== undefined) {
+        // Keep the native target after detachment to model a late native write.
+        viewportHarness.opacityTargets.add(nativeRef.current);
+      }
+    });
+    return view({ ...props, nativeRef });
+  }
   return {
     View: view,
     Text: view,
@@ -66,7 +82,7 @@ vi.mock("react-native", async () => {
     ActivityIndicator: view,
     Animated: {
       Value,
-      View: view,
+      View: AnimatedView,
       Text: view,
       createAnimatedComponent: (c: any) => c,
       timing: () => ({
@@ -96,6 +112,7 @@ vi.mock("react-native", async () => {
     Alert: {},
     Linking: {},
     StatusBar: {},
+    Dimensions: { get: () => window, addEventListener: () => ({ remove() {} }) },
     useWindowDimensions: () => ({
       width: 402,
       height: 874,
@@ -115,9 +132,10 @@ vi.mock("@legendapp/list/react-native", () => ({
         return undefined;
       },
     }));
-    return data.map((item: any, index: number) =>
+    // Model retained native cells: changing renderItem alone need not redraw them.
+    return useMemo(() => data.map((item: any, index: number) =>
       createElement("section", { key: item.key }, renderItem({ item, index })),
-    );
+    ), [data, props.extraData, viewportHarness.memoizedCells ? null : renderItem]);
   },
   useRecyclingState: (initial: any) => useState(initial),
   useViewability: () => {},
@@ -325,11 +343,68 @@ function mount(messages: RemoteMessage[], props: Record<string, unknown> = {}) {
   const host = document.createElement("div");
   const root = createRoot(host);
   act(() => root.render(<MessageRenderer items={items} {...props} />));
-  return { host, unmount: () => act(() => root.unmount()) };
+  return { host,
+    rerender: (nextProps: Record<string, unknown>) => act(() => root.render(<MessageRenderer items={items} {...props} {...nextProps} />)),
+    unmount: () => act(() => root.unmount()) };
 }
 
 beforeAll(async () => {
   await i18n.changeLanguage("zh-CN");
+});
+
+it('updates retained companion cells when topic replies change without new messages', () => {
+  viewportHarness.memoizedCells = true;
+  const open = vi.fn();
+  const topics = (replyCount: number) => ({
+    avatar: null, busy: false, open,
+    threads: new Map([['topic-root', { rootClientId: 'topic-root', replyCount }]]),
+  });
+  const h = mount([{ ...msg('topic-root', 'An existing answer', { turnCompleted: true }), role: 'assistant' }],
+    { companion: true, companionThreads: topics(1) });
+  try {
+    const row = () => h.host.querySelector('[data-testid="companion.thread.topic-root"]');
+    expect(row()?.textContent).toContain(i18n.t('groupChat.thread.replyCount', { count: 1 }));
+    const initial = row();
+    h.rerender({ companionThreads: topics(3) });
+    expect(row()).toBe(initial);
+    expect(row()?.textContent).toContain(i18n.t('groupChat.thread.replyCount', { count: 3 }));
+    act(() => row()!.dispatchEvent(new MouseEvent('click', { bubbles: true })));
+    expect(open).toHaveBeenCalledTimes(1);
+  } finally {
+    h.unmount();
+    viewportHarness.memoizedCells = false;
+  }
+});
+
+// Native replay: opening the keyboard restored opacity=0 on a revealed list.
+// Existing positioning tests checked JS state only. Unit tier: render the real
+// MessageRenderer, complete its reveal, resize, then deliver the stale native
+// opacity write. Messages must remain visible and retain their mounted rows.
+it('keeps revealed messages visible after a late native opacity write and keyboard resize', () => {
+  viewportHarness.captureNativeOpacity = true;
+  viewportHarness.opacityTargets.clear();
+  const h = mount([msg('opacity', 'Late reply remains visible', null)], { scrollResetKey: 'opacity-replay' });
+  try {
+    const row = h.host.querySelector('section')!;
+    expect(row).not.toBeNull();
+    expect(viewportHarness.opacityTargets.size).toBeGreaterThan(0);
+    const cover = h.host.querySelector('[data-testid="message.entryCover"]');
+    expect(cover).not.toBeNull();
+    act(() => viewportHarness.finishReveal({ finished: true }));
+    h.rerender({ bottomOverlayHeight: 320 });
+    // The cover is a sibling of the rows: it must be gone once the reveal ends.
+    expect(h.host.querySelector('[data-testid="message.entryCover"]')).toBeNull();
+    expect(h.host.contains(cover)).toBe(false);
+    for (const target of viewportHarness.opacityTargets) target.style.opacity = '0';
+    expect(h.host.querySelector('section')).toBe(row);
+    for (let parent = row.parentElement; parent && parent !== h.host; parent = parent.parentElement) {
+      expect(parent.style.opacity).not.toBe('0');
+    }
+  } finally {
+    h.unmount();
+    viewportHarness.captureNativeOpacity = false;
+    viewportHarness.opacityTargets.clear();
+  }
 });
 
 // PR #8082 discussion_r4427054221: exercise normalization and the real message

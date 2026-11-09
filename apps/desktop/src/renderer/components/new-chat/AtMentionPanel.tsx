@@ -613,7 +613,7 @@ export function AtMentionPanel({
         )}
         {showErrorState && (
           <div className="flex flex-col items-center justify-center py-[16px] gap-[10px]">
-            <div className="text-13 text-[var(--destructive)]">
+            <div className="text-13 text-[var(--error-fg)]">
               {t('newChat.atMention.scanFailed')}
             </div>
             <div className="text-12 text-[var(--cmd-palette-item-meta)] px-[12px] text-center">
@@ -747,7 +747,7 @@ export function AtMentionPanel({
                 className={cn(
                   COMPOSER_MENU_ROW,
                   'flex w-full items-center gap-2 px-[10px] py-[8px] text-left',
-                  'text-12 text-[var(--destructive)]',
+                  'text-12 text-[var(--error-fg)]',
                 )}
               >
                 {t('newChat.atMention.scanFailed')} · {t('newChat.atMention.retry')}

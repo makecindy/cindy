@@ -1473,6 +1473,13 @@
     }
   },
   "menubar": {
+    "shared": {
+      "label": "Shared",
+      "note": "This allowance is shared by the account, not reserved for you.",
+      "highestWeekly": "Shared · highest weekly",
+      "highestWeeklyNote": "Highest weekly allowance among readable accounts. Account-wide, not a combined or personal allowance.",
+      "from": "Shared by {{name}}"
+    },
     "balance": {
       "name": "Cindy balance",
       "quotaName": "Cindy quota",
@@ -2278,6 +2285,10 @@
         },
         "visibilityLabel": "Wallpaper Visibility",
         "visibilityHint": "0% hides the wallpaper; 100% shows it without an overlay.",
+        "desktopVisibilityLabel": "Desktop Transparency",
+        "desktopVisibilityHint": "Reveal the desktop and windows behind Cindy. Text and controls stay clear.",
+        "desktopBlurLabel": "Desktop Blur",
+        "desktopBlurHint": "Blur the desktop behind the window. 0 turns it off; higher values increase blur. Systems without adjustable blur use their default effect.",
         "blurLabel": "Wallpaper Blur",
         "blurHint": "Blur only the wallpaper. Set to 0 to turn off. Blurring animated wallpaper increases GPU usage.",
         "motionLabel": "Display",
@@ -2444,7 +2455,7 @@
       "skinLabel": "Character",
       "skinHint": "The character shown in Agent Notch and the Dynamic Island.",
       "soundLabel": "Event sounds",
-      "soundHint": "Choose an 8-bit sound for each alert, shared by Agent Notch and the Dynamic Island. The tap sound plays only when you tap Agent Notch.",
+      "soundHint": "When an event sound is set, only that sound plays. Unset or disabled event sounds follow system notification settings.",
       "soundAria": "Toggle Agent Notch sounds",
       "soundSelectAria": "Sound for {{event}}",
       "soundPreviewAria": "Preview {{event}} sound",
@@ -2499,7 +2510,7 @@
         "select": "Click action"
       },
       "soundOptions": {
-        "none": "None",
+        "none": "Follow system",
         "startup-chime": "Startup chime",
         "ring-chime": "Ring chime",
         "item-found": "Item found",
@@ -5593,12 +5604,17 @@
         "userBrowserSetup": {
           "installPluginTitle": "Install the Cindy Chrome plugin",
           "enablePluginTitle": "Enable the Cindy Chrome plugin",
-          "installExtensionTitle": "Add the Cindy extension to your browser",
+          "connectExtensionTitle": "Browser Extension Not Connected",
           "pluginBody": "My browser reaches your Chrome or Edge through the Cindy Chrome plugin and its browser extension. Install the plugin in Cindy first, then follow its prompt to add the extension.",
-          "extensionBody": "Add browser extension opens the Cindy extension’s store page in your browser; choose Add and this changes to connected on its own. Already added? Enable it in the browser’s extension settings.",
+          "connectionBody": "Keep Cindy and your browser open, and check that the Cindy extension is enabled. This does not mean it needs reinstalling. The status updates automatically when it reconnects.",
           "installPlugin": "Install plugin",
           "enablePlugin": "Enable",
-          "installExtension": "Add browser extension",
+          "openExtensionStore": "Open Extension Store",
+          "updatingTitle": "Updating browser connection",
+          "updatingBody": "The connection will recover automatically when the update finishes.",
+          "selectPluginTitle": "Select a browser extension",
+          "selectPluginBody": "Open the plugin details and choose “Use this browser extension” to confirm which extension Cindy should use.",
+          "selectPlugin": "Open plugin",
           "updatePluginTitle": "Update the Cindy Chrome plugin",
           "updatePluginBody": "The installed Cindy Chrome plugin is too old for My browser. Update it to the latest version, then follow its prompt to add the extension.",
           "updatePlugin": "Update",
@@ -9939,6 +9955,8 @@
     "banner": {
       "title": "Updated to {{version}}",
       "subtitle": "Relaunch to apply",
+      "nativeBuildTitle": "Apple silicon version ready",
+      "nativeBuildSubtitle": "Restart to switch; your tasks and settings stay",
       "viewNotes": "See What's New",
       "viewNotesAria": "See what's new in {{version}}",
       "button": "Relaunch",
@@ -10068,6 +10086,12 @@
       "description": "The database is about {{size}}, above {{threshold}} G. Consider cleaning it up in Storage.",
       "openSettings": "Open Storage",
       "disable": "Do not remind me"
+    },
+    "nativeBuild": {
+      "title": "You're using the Intel version",
+      "description": "This Mac has Apple silicon, so the Intel version runs much slower through translation. Install the Apple silicon version; your data stays.",
+      "dismiss": "Hide for now",
+      "download": "Download"
     },
     "horizontalTabbarAria": "Main view switcher",
     "tabs": {
@@ -11531,7 +11555,8 @@
         "lark": "Lark",
         "wecom": "WeCom",
         "dingtalk": "DingTalk",
-        "discord": "Discord"
+        "discord": "Discord",
+        "imessage": "iMessage"
       },
       "status": {
         "connected": "Connected",
@@ -11663,6 +11688,22 @@
           "existing": "Use the bot already set up in Cindy",
           "manual": "Enter new credentials",
           "moveNote": "The bot moves out of Settings → IM bots, which will be left empty. Its chats continue with {{name}}."
+        },
+        "imessage": {
+          "serverUrlLabel": "BlueBubbles server",
+          "serverUrlPlaceholder": "http://192.168.1.20:1234",
+          "passwordLabel": "API password",
+          "passwordPlaceholder": "••••••••",
+          "ownerAddressLabel": "Your iMessage address",
+          "ownerAddressPlaceholder": "owner@example.com",
+          "chatGuidsLabel": "Chat GUIDs (comma separated)",
+          "chatGuidsPlaceholder": "any;-;owner@example.com",
+          "listenHostLabel": "Local listening address",
+          "listenHostPlaceholder": "192.168.1.10",
+          "listenPortLabel": "Local listening port",
+          "listenPortPlaceholder": "18747",
+          "hint": "Connect to your BlueBubbles server on the local network. Only selected chats are handled. Stop any other automatic responder for these chats before connecting.",
+          "uncertain": "{{count}} deliveries need checking. Review the chat history before retrying to avoid duplicates."
         }
       },
       "removeConfirm": {
@@ -12734,6 +12775,10 @@
       "defer": "Not now"
     },
     "permissionPrompt": {
+      "titleStdin": "Allow input to this terminal?",
+      "titleMcpUrl": "Complete the request from {{server}}",
+      "mcpComplete": "Done",
+      "mcpCancel": "Cancel",
       "alwaysAllowScoped": "Always Allow {{scope}} in This Session",
       "alwaysAllowScopedHint": "Applies to the whole session, and only to what is listed here.",
       "alwaysAllowSessionHint": "Applies to the whole session, not just this one request.",
@@ -12940,6 +12985,8 @@
       }
     },
     "teammateProcess": {
+      "empty": "No process details to show for this reply",
+      "unavailable": "Could not load process details",
       "record": "Activity",
       "operations": "Activity log",
       "elapsed": "Working for {{duration}}",
@@ -13005,7 +13052,13 @@
       "sendAndContinue": "Send and continue",
       "close": "Close",
       "customAnswer": "Type something else…",
-      "answerPlaceholder": "Type your answer…"
+      "answerPlaceholder": "Type your answer…",
+      "validation": {
+        "required": "Complete this required field.",
+        "choice": "Choose one of the listed options.",
+        "tooShort": "Enter at least {{count}} characters.",
+        "tooLong": "Enter no more than {{count}} characters."
+      }
     },
     "planReviewBubble": {
       "title": "Plan review",
@@ -14103,8 +14156,10 @@
       "mailLegacy": "Draft history (read-only)",
       "taskAutoArchived": "Archived \"{{title}}\"",
       "taskAutoArchivedUndo": "Undo",
-      "taskAutoArchivePending": "Archives when you leave",
-      "taskAutoArchiveCancel": "Keep this time"
+      "taskAutoArchivePending": "Will archive when you leave this task",
+      "taskAutoArchiveCancel": "Cancel",
+      "taskAutoArchiveCancelled": "Will not auto-archive this time",
+      "taskArchiveNow": "Archive now"
     },
     "ghostHook": {
       "blockedFallback": "Message blocked by a plugin; not sent",
@@ -19287,6 +19342,7 @@
       "apply": "Move"
     },
     "source": {
+      "receivingOn": "Receiving on: {{name}}",
       "description": "Pick a computer signed in to this account. Its plugins, skills, settings and connections are set up the same way here; keys are copied only after you allow it there, and sign-ins never leave that computer.",
       "loading": "Looking for your other computers…",
       "empty": "No other computers found for this account. Sign in to Cindy on another computer, then open this again",
@@ -19699,6 +19755,16 @@
     "lineNumbers": "Line numbers"
   },
   "subscriptionAccounts": {
+    "signIn": {
+      "checking": "Checking local account…",
+      "detected": "Signed-in account found",
+      "useAccount": "Use this account",
+      "anotherAccount": "Sign in to another account",
+      "keepExisting": "The new account joins this provider. Existing sign-ins stay unchanged.",
+      "checkFailed": "Couldn't check the local account. Please retry.",
+      "retry": "Retry",
+      "useCodex": "Sign in with Codex"
+    },
     "title": "Subscription accounts",
     "note": "The first account uses the CLI’s default folder. Additional accounts sign in separately. New tasks are balanced across accounts; existing tasks keep their account.",
     "strategy": "Load balancing",
@@ -19712,8 +19778,17 @@
     "removeTitle": "Remove {{name}}?",
     "removeDescription": "Cindy will stop assigning tasks to this account. Its CLI login and conversation history remain on this computer.",
     "failed": "Could not read or update this account. Check the CLI login and connection, then try again.",
-    "used": "{{percent}}% used",
     "directory": "Account folder",
+    "loginAgain": "Sign in again",
     "login": "Sign in"
+  },
+  "crashDiagnosis": {
+    "title": "Cindy exited unexpectedly",
+    "description": "Would you like to diagnose what happened? We’ll prepare a task draft with exit details and redacted logs for you to review before sending. An unexpected exit can also result from a forced quit or power loss.",
+    "diagnose": "Diagnose problem",
+    "later": "Not now",
+    "logExcerpt": "Relevant logs (excerpt; may be incomplete)",
+    "logsUnavailable": "No relevant logs are available. The cause is not yet known.",
+    "failed": "Could not prepare the diagnosis. Please try again."
   }
 }
