@@ -141,6 +141,12 @@ export async function materializeSkillArchive(ref: ImportResourceRef, root: stri
   } finally { await current?.handle?.close().catch(() => {}); }
 }
 
+/** Dependencies remain in the archive, but must not crowd out Skill instructions. */
+export function isSkillContextFile(name: string): boolean {
+  return /\.(md|py|js|mjs|cjs|sh|ts|json|ya?ml|toml)$/i.test(name)
+    && !name.split('/').slice(0, -1).some(part => ['.venv', 'venv', 'node_modules'].includes(part));
+}
+
 /** Planning reads bounded, redacted excerpts, but exhausts the authenticated
  * stream before returning any text. It never materializes the resource tree. */
 export async function readSkillArchiveContext(ref: ImportResourceRef, io: Pick<SkillArchiveIo, 'readResource'>,
@@ -149,9 +155,13 @@ export async function readSkillArchiveContext(ref: ImportResourceRef, io: Pick<S
   let current: { header: Header; text: ReturnType<typeof codec>; redact: ReturnType<typeof createStreamingEnvironmentRedactor>;
     entry?: typeof files[number]; remaining: number } | undefined;
   let complete = false;
+  // Reserve the entry point's existing per-file allowance regardless of archive
+  // order. This is part of the caller's budget, not additional retained memory.
+  let manifestReserve = Math.min(budget.remaining, 32000 + redactEnvironmentValues(`${label}/SKILL.md`, secrets).length);
+  const available = () => Math.max(0, budget.remaining - manifestReserve);
   const append = (text: string) => {
     if (!current?.entry) return;
-    const count = Math.min(text.length, current.remaining, budget.remaining);
+    const count = Math.min(text.length, current.remaining, available());
     current.entry.source += text.slice(0, count);
     current.entry.complete &&= count === text.length;
     current.remaining -= count; budget.remaining -= count;
@@ -162,13 +172,14 @@ export async function readSkillArchiveContext(ref: ImportResourceRef, io: Pick<S
     const record = JSON.parse(encoded) as { file?: unknown; data?: unknown; end?: unknown; complete?: unknown };
     if (record.file && !current) {
       const header = validateHeader(record.file);
+      if (header.name === 'SKILL.md') manifestReserve = 0;
       const name = redactEnvironmentValues(`${label}/${header.name}`, secrets);
-      const eligible = header.encoding !== 'binary' && /\.(md|py|js|mjs|cjs|sh|ts|json|ya?ml|toml)$/i.test(header.name) && name.length < budget.remaining;
+      const eligible = header.encoding !== 'binary' && isSkillContextFile(header.name) && name.length < available();
       const entry = eligible ? { name, source: '', complete: true } : undefined;
       if (entry) budget.remaining -= name.length;
       current = { header, text: codec(header.encoding), redact: createStreamingEnvironmentRedactor(secrets), entry, remaining: 32000 };
     } else if (typeof record.data === 'string' && current) {
-      if (current.entry && current.remaining > 0 && budget.remaining > 0) append(current.redact(current.text.decode(Buffer.from(record.data, 'base64'))));
+      if (current.entry && current.remaining > 0 && available() > 0) append(current.redact(current.text.decode(Buffer.from(record.data, 'base64'))));
       else if (current.entry) current.entry.complete = false;
     } else if (record.end === true && current) {
       // Flush only a complete prefix; never expose a credential cut by a limit.

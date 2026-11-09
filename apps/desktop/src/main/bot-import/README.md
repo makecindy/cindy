@@ -126,6 +126,9 @@ omitting it retains normal companion defaults, and a rejected request can be cor
   Automation verification reads authenticated redacted excerpts directly from
   archives (32,000 characters per file, 96,000 total including names), without
   materializing the resource tree; incomplete excerpts are marked as such.
+  The entry point has a reserved allowance within that same budget regardless
+  of archive order. `.venv`, `venv`, and `node_modules` remain fully migrated but
+  are excluded from planning excerpts, including for legacy inline snapshots.
   UTF-8 and BOM-marked UTF-16 redaction preserves chunk boundaries;
   binary files keep exact bytes. Retry works without the source after capture,
   compares existing files incrementally, and refuses to overwrite user edits.

@@ -40,6 +40,22 @@ const io: SkillArchiveIo = {
 };
 beforeEach(async () => { root = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-skill-archive-')); maxCryptoInput = 0; });
 afterEach(async () => { await fs.rm(root, { recursive: true, force: true }); });
+// Unit #9583: directory order must not let dependencies or large sibling code
+// displace the entry point. Capture real encrypted records with SKILL.md last.
+it.each([96000, 4000])('preserves the manifest within a %i-character planning budget', async limit => {
+  const files = ['.venv/lib/dependency.py', 'nested/node_modules/package/index.js', 'venv/lib/library.py',
+    'scripts/query.py', 'scripts/extra.py', 'scripts/more.py', 'SKILL.md'].map(name => ({
+      name, executable: false, bytes: Buffer.from(name === 'SKILL.md' ? '# Entry: run scripts/query.py' : 'x'.repeat(33000)),
+    }));
+  const item: ImportItem = { view: { id: 'report', name: 'report', category: 'skills', selected: true }, files, filesComplete: true };
+  const { ref } = await captureSkillArchive('bot', item, io, {}, () => {});
+  const budget = { remaining: limit };
+  const context = await readSkillArchiveContext(ref, io, {}, () => {}, 'report', budget);
+  expect(context.find(file => file.name === 'report/SKILL.md')?.source).toBe('# Entry: run scripts/query.py');
+  expect(context.some(file => /dependency|package|library/.test(file.name))).toBe(false);
+  expect(context.reduce((size, file) => size + file.name.length + file.source.length, 0)).toBeLessThanOrEqual(limit);
+  expect(budget.remaining).toBeGreaterThanOrEqual(0);
+});
 async function source(name = 'report') {
   const directory = path.join(root, name);
   await fs.mkdir(directory);

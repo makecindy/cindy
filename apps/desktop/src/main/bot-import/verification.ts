@@ -13,7 +13,7 @@ import { fingerprint, writeImportFiles } from './files.js';
 import { importedProcessEnvironment, isPublicImportSetting, redactEnvironmentValues, redactEnvironmentData, runImportedProcess } from './process.js';
 import { importedHttpBases, publicImportHttpBases, resolveImportHttpPath } from './httpBindings.js';
 import { withAuthorizedImportProbe } from './probeAuthorization.js';
-import { readSkillArchiveContext } from './skillArchive.js';
+import { isSkillContextFile, readSkillArchiveContext } from './skillArchive.js';
 import { importedCommand } from './commandAutomation.js';
 
 interface ReadPlan {
@@ -112,8 +112,9 @@ export async function verifyImportedAutomation(root: string, botId: string, item
         skillFiles.push(...await readSkillArchiveContext(skill.skillArchive, companionEnvironmentStore, contentSecrets, assertOwner, skill.view.name, skillBudget));
         continue;
       }
-      for (const file of skill.files ?? []) {
-        if (!/\.(md|py|js|mjs|cjs|sh|ts|json|ya?ml|toml)$/i.test(file.name)) continue;
+      const files = [...skill.files ?? []].sort((a, b) => Number(b.name === 'SKILL.md') - Number(a.name === 'SKILL.md'));
+      for (const file of files) {
+        if (!isSkillContextFile(file.name)) continue;
         const name = redactEnvironmentValues(`${skill.view.name}/${file.name}`, contentSecrets);
         const limit = Math.max(0, Math.min(32000, skillBudget.remaining - name.length));
         if (!limit) continue;
