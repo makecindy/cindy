@@ -2024,7 +2024,10 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
         const identity = parseCodexAccountIdentity(raw);
         const tokens = JSON.parse(raw).tokens;
         if (typeof tokens?.access_token !== 'string' || !tokens.access_token) return { authenticated: false, errorReason: 'no_oauth' };
-        if (!existsSync(localAuth) || !pathsReferToSameFileSync(localAuth, systemAuth)) {
+        // 本地凭证已经共享系统凭证时不必再重建 —— 身份判定对共享链接按链接目标
+        // 路径来,本机 Codex 在核对期间原子替换系统凭证也不会误判成「不是同一份」
+        // (#9316 review)。
+        if (!(await codexAuthPathsShareIdentity(localAuth, systemAuth))) {
           fs.mkdirSync(this.codexHome, { recursive: true, mode: 0o700 });
           // Retain the existing read-only Dev exception; writable runtimes must share
           // the native credential rather than rotate an independent refresh-token copy.

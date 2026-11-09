@@ -26,6 +26,7 @@ import { execFile } from 'node:child_process';
 import { promises as fsp } from 'node:fs';
 import type { BigIntStats } from 'node:fs';
 import os from 'node:os';
+import path from 'node:path';
 import { promisify } from 'node:util';
 
 const execFileP = promisify(execFile);
@@ -362,22 +363,48 @@ export function codexAuthLinkAcceptanceFor(
 }
 
 /**
- * 两个路径是否确证指向同一个文件;读不到(路径刚被换掉)时按 false 处理 ——
- * 「无法确证」不能说成「已经共享」。
+ * 两个路径是否指向同一份凭证。
+ *
+ * 符号链接按「链接目标路径」判定:本机 Codex 原子替换系统凭证时,两次 stat
+ * 可能横跨替换窗口拿到不同代次(链接侧读到旧 inode,系统侧读到新 inode),
+ * 按 inode 比会把健康的共享链接误判成「不是同一份」—— 登录路径据此判失败、
+ * 写下断线标记(#9316 review)。链接指向系统凭证路径这件事与文件是否被替换无关。
+ *
+ * 不是符号链接时按 inode 判定,并先确认系统侧代次在读取期间没有变化:系统凭证
+ * 被换成另一个 inode 时,两份确实已经不是同一份了。
  */
 export async function codexAuthPathsShareIdentity(left: string, right: string): Promise<boolean> {
+  let linkedToRight = false;
   try {
-    const [leftStat, rightStat] = await Promise.all([
-      fsp.stat(left, { bigint: true }),
-      fsp.stat(right, { bigint: true }),
-    ]);
-    // ino=0 表示文件系统给不出稳定身份,不能据此断定两个路径是同一个文件。
-    return (
-      leftStat.ino !== 0n &&
-      rightStat.ino !== 0n &&
-      leftStat.dev === rightStat.dev &&
-      leftStat.ino === rightStat.ino
-    );
+    const link = await fsp.readlink(left);
+    linkedToRight = path.resolve(path.dirname(left), link) === path.resolve(right);
+  } catch {
+    // 不是符号链接(或读不到):走 inode 判定。
+  }
+  if (linkedToRight) {
+    // 悬空链接不算共享 —— 系统凭证真的不在,凭证本身不可用。
+    try {
+      await fsp.stat(right);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+  try {
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const before = await fsp.stat(right, { bigint: true });
+      const leftStat = await fsp.stat(left, { bigint: true });
+      const after = await fsp.stat(right, { bigint: true });
+      // 系统侧代次在读取期间变了 → 本机 Codex 正在原子替换凭证,再读一轮。
+      if (before.dev !== after.dev || before.ino !== after.ino) continue;
+      return (
+        leftStat.ino !== 0n &&
+        before.ino !== 0n &&
+        leftStat.dev === before.dev &&
+        leftStat.ino === before.ino
+      );
+    }
+    return false;
   } catch {
     return false;
   }

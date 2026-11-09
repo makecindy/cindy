@@ -572,6 +572,35 @@ describe('syncIndependentCodexAuth (#9277)', () => {
   // 测试价值(#9316 review): 内容一致 ≠ 本地路径干净。同机另一个升级前的 profile
   // 仍硬链着这份本地副本时,本地 auth.json 的 nlink 仍 > 1,Codex 0.165+ 照样
   // 拒绝写它 —— 只拆系统那一份不够,本地这份的硬链也要一并拆掉。
+  // 测试价值(#9316 review): 身份核对期间本机 Codex 原子替换了系统凭证时,两次
+  // stat 会横跨替换窗口(链接侧读到旧 inode,系统侧读到新 inode)。共享链接本身
+  // 是健康的 —— 链接指向系统凭证路径这件事与文件是否被替换无关,不能因此判成
+  // 「不是同一份」,否则登录会写下断线标记并报 local_auth_unavailable。
+  it.skipIf(!canLinkFile)('身份核对期间系统凭证被原子替换时,共享链接仍认账', async () => {
+    fs.writeFileSync(systemAuth, SYSTEM_CONTENT);
+    const originalStat = fs.promises.stat.bind(fs.promises);
+    const oldStat = await originalStat(systemAuth, { bigint: true });
+    // 本机 Codex 原子替换系统凭证 → 新 inode。
+    const replacement = `${systemAuth}.new`;
+    fs.writeFileSync(replacement, SYSTEM_CONTENT);
+    fs.renameSync(replacement, systemAuth);
+    fs.symlinkSync(systemAuth, myAuth);
+    let firstSystemStat = true;
+    vi.spyOn(fs.promises, 'stat').mockImplementation(async (target, opts) => {
+      // 第一次读到替换前的旧代次,之后读到新代次。
+      if (String(target) === systemAuth && firstSystemStat) {
+        firstSystemStat = false;
+        return oldStat as never;
+      }
+      return originalStat(target as never, opts as never);
+    });
+
+    const sharesIdentity = await codexAuthPathsShareIdentity(myAuth, systemAuth);
+
+    expect(sharesIdentity).toBe(true);
+    expect(codexAuthLinkAcceptanceFor('linked', sharesIdentity, 'linux')).toBe('accept-shared');
+  });
+
   it('内容一致时也拆掉本地副本上残留的硬链', async () => {
     fs.writeFileSync(systemAuth, SYSTEM_CONTENT);
     fs.writeFileSync(myAuth, SYSTEM_CONTENT);
