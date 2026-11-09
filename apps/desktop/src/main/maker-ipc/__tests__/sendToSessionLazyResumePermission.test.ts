@@ -25,6 +25,7 @@ import { restoreAutoReviewUserIntent } from '../autoReviewUserIntent.js';
 import { verifiedOwnerRequestText } from '../../../shared/forwardedRequest.js';
 import { createWireNoteMemory } from '../wireNoteMemory.js';
 import { resolveSendToSessionCreateRoute } from '../sendToSessionExecutionConfig.js';
+import { createGhostAgentTurnRunner, type GhostAgentTurnRunnerDeps } from '../ghostAgentTurnRunner.js';
 
 const registerSource = readFileSync(resolve(__dirname, '..', 'register.ts'), 'utf8').replace(
   /\r\n?/g,
@@ -129,7 +130,7 @@ const loadBotTaskDispatch = new Function(
   'scope',
   `with (scope) { return (function () { ${botTaskDispatchSlice()} })(); }`,
 ) as (scope: object) => {
-  sendToSessionInternal: (input: Record<string, unknown>) => Promise<{ ok: boolean; wakeKind?: string }>;
+  sendToSessionInternal: (input: Record<string, unknown>) => ReturnType<GhostAgentTurnRunnerDeps['send']>;
   dispatchBotSessionMessage: (input: Record<string, unknown>) => Promise<{ ok: boolean; wakeKind?: string }>;
   delegationDispatch: (
     input: Record<string, unknown>,
@@ -277,6 +278,45 @@ function botTaskDispatchHarness(
   });
   return { ...loadBotTaskDispatch(scope), scope: stubs, bootstrapped, sentTo, sendOptions, readAutoReviewHistory, activity, touchSessionActivityInDb };
 }
+
+// #9489 review: the runner admitted remote tasks but omitted the cold-resume
+// policy. Existing tests supplied that policy themselves, hiding the escalation.
+// Reuse this guard fixture's production send closure; assert the actual bootstrap
+// permissions for an idle remote task, including the newly persisted fork target.
+it.each(['continue', 'fork'] as const)('preserves stored permissions through plugin %s cold resume', async mode => {
+  for (const permissionMode of ['ask', 'auto']) {
+    const rows: Record<string, { permissionMode: string; planModeEnabled: boolean }> = {
+      source: { permissionMode, planModeEnabled: false },
+    };
+    const getSessionMeta = async (id: string) => ({ id, agentKind: 'codex' as const,
+      workDir: '/tmp/fixture/source', model: 'remote-model', providerId: 'remote-only-provider',
+      agentDeviceId: 'other-computer', sdkSessionId: `sdk-${id}` });
+    const h = botTaskDispatchHarness(rows, {}, {
+      maker: { getSession: () => undefined, getSessionMeta },
+    });
+    const admitLocalSession = vi.fn(async () => { throw new Error('Remote provider is not in the local catalog'); });
+    const runner = createGhostAgentTurnRunner({
+      readSessionMeta: getSessionMeta,
+      admitLocalSession,
+      readPluginName: () => 'GitHub',
+      send: h.sendToSessionInternal,
+      readLatestAssistant: async () => ({ clientId: 'latest-assistant' }),
+      forkSessionAtMessage: async () => {
+        rows.forked = { ...rows.source! };
+        return { id: 'forked' };
+      },
+      broadcastSessionCreated: () => {},
+    });
+    const target = mode === 'continue' ? 'source' : 'forked';
+    expect(await runner({ ghostId: 'github', ghostVersion: '1.5.5', sourceSessionId: 'source',
+      mode, prompt: 'Create a draft PR', persistedContent: 'Create a draft PR' }))
+      .toEqual({ ok: true, sessionId: target, disposition: mode === 'continue' ? 'resumed' : 'forked' });
+    expect(admitLocalSession).not.toHaveBeenCalled();
+    expect(h.bootstrapped).toHaveLength(1);
+    expect(h.bootstrapped[0]).toMatchObject({ id: target, permissionMode, planMode: false });
+    expect(h.sentTo).toEqual([{ sessionId: target, planMode: false }]);
+  }
+});
 
 it('advances an accepted send_to_session with a dispatcher without touching human-send time', async () => {
   const row = { permissionMode: 'auto', planModeEnabled: false, userSendAt: 123 };

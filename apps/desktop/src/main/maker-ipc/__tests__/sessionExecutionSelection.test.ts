@@ -161,6 +161,7 @@ describe('plugin runner execution location admission (#9489)', () => {
         expect(f.deps.send).toHaveBeenCalledExactlyOnceWith({
           sourcePlugin: { pluginId: 'github', name: 'GitHub' }, targetSessionId: 'original-task',
           message: f.request.prompt, persistedContent: f.request.persistedContent,
+          resumeWithStoredPermissionMode: true,
         });
         expect(f.source).toEqual(original);
         expect(f.deps.admitLocalSession).toHaveBeenCalledTimes(location === 'local' ? 1 : 0);
@@ -207,6 +208,7 @@ describe('plugin runner execution location admission (#9489)', () => {
     expect(await f.runner({ ...f.request, mode: 'fork' })).toEqual({ ok: true, sessionId: 'forked-task', disposition: 'forked' });
     expect(f.deps.forkSessionAtMessage).toHaveBeenCalledExactlyOnceWith('original-task', 'last-assistant');
     expect(f.deps.send).toHaveBeenLastCalledWith({ sourcePlugin: { pluginId: 'github', name: 'GitHub' },
-      targetSessionId: 'forked-task', message: f.request.prompt, persistedContent: f.request.persistedContent });
+      targetSessionId: 'forked-task', message: f.request.prompt, persistedContent: f.request.persistedContent,
+      resumeWithStoredPermissionMode: true });
   });
 });

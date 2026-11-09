@@ -17,6 +17,7 @@ export interface GhostAgentTurnRunnerDeps {
     message: string;
     persistedContent: string;
     inheritSourcePermissionMode?: boolean;
+    resumeWithStoredPermissionMode?: boolean;
     title?: string;
   }): Promise<GhostAgentSendResult>;
   readLatestAssistant(id: string): Promise<{ clientId: string | null } | undefined>;
@@ -83,6 +84,8 @@ export function createGhostAgentTurnRunner(deps: GhostAgentTurnRunnerDeps): Ghos
         targetSessionId: request.sourceSessionId,
         message: request.prompt,
         persistedContent: request.persistedContent,
+        // Cold tasks must keep their saved permissions, just like live tasks.
+        resumeWithStoredPermissionMode: true,
       });
       if (!result.ok) return result;
       return {
@@ -128,6 +131,7 @@ export function createGhostAgentTurnRunner(deps: GhostAgentTurnRunnerDeps): Ghos
       targetSessionId: forkedSessionId,
       message: request.prompt,
       persistedContent: request.persistedContent,
+      resumeWithStoredPermissionMode: true,
     });
     if (!sent.ok) return sent;
     return { ok: true, sessionId: forkedSessionId, disposition: 'forked' };
