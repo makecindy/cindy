@@ -6,6 +6,7 @@ import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { chatGroupView, createChatServerClient, type ChatSnapshot } from '@/chat/chatServerClient';
+import { createChatInviteShares } from '@/chat/chatInviteShare';
 const h = vi.hoisted(() => ({ api: null as any, enabled: true, uuid: 0 }));
 vi.mock('expo-crypto', () => ({ randomUUID: () => `operation-${++h.uuid}` }));
 vi.mock('@/chat/useChatServer', () => ({ useChatClient: () => h.api }));
@@ -17,15 +18,21 @@ let result: ReturnType<typeof useBotGroupSettingsManagement>;
 let candidates: ReturnType<typeof useCloudGroupCandidates>;
 let source: ReturnType<typeof chatGroupView>;
 const request = vi.fn();
+const shareFetch = vi.fn();
+const shareId = 'b'.repeat(32), shareBase = 'https://share.example.invalid';
 const writes = () => request.mock.calls.filter(call => call[1] === 'POST' || call[1] === 'PATCH');
 function Probe() { result = useBotGroupSettingsManagement(source, h.enabled); candidates = useCloudGroupCandidates(h.enabled); return null; }
 async function render() { root ??= createRoot(document.createElement('div')); await act(async () => root!.render(createElement(Probe))); }
 function api(owner = 'account-1') {
-  return { owner, enabled: true, current: () => h.api.owner === owner, client: createChatServerClient(request) };
+  const current = () => h.api.owner === owner;
+  const shares = createChatInviteShares({ baseUrl: () => shareBase, region: 'global', realm: 'global', current, apiFetch: shareFetch });
+  return { owner, enabled: true, current, client: createChatServerClient(request, undefined, undefined, shares) };
 }
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 beforeEach(() => {
   vi.clearAllMocks(); h.enabled = true; h.uuid = 0;
+  shareFetch.mockResolvedValue({ schemaVersion: 1, kind: 'chat-invite', includeAttribution: true,
+    shareId, url: `${shareBase}/chat-invite/${shareId}` });
   snapshot = { room: { id: id(1), name: 'Group', description: 'Original', kind: 'group', archived: false, revision: 4,
     response_mode: 'all', speaking_mode: 'auto', created_at: '2026-10-01', updated_at: '2026-10-01' }, cursor: '1', messages: [], members: [
     { id: id(2), kind: 'human', ownerActorId: id(2), ownerName: '', name: 'Me', avatar: null, state: 'joined', role: 'owner' },
@@ -187,16 +194,21 @@ it('discards account and closed-sheet read results and never revives their autho
   expect(writes()).toHaveLength(0);
 });
 
-// New on the phone: join links come from the manager you control and are checked before shown.
+// Unit regression for #8386: the real settings hook must publish the manager's invite
+// through the share service; the former deep-link expectation missed this contract.
 it('creates an invite link as the manager and rejects a malformed token', async () => {
   await render();
   const token = 'A'.repeat(43);
   request.mockImplementationOnce(async () => ({ token, expiresAt: null, reusable: true }));
   let link: Awaited<ReturnType<typeof result.invite>> = null;
   await act(async () => { link = await result.invite(); });
-  expect(link).toEqual({ link: `cindy://chat-invite/${token}`, expiresAt: null, reusable: true });
+  expect(link).toEqual({ link: `${shareBase}/chat-invite/${shareId}`, expiresAt: null, reusable: true });
+  expect(shareFetch).toHaveBeenCalledExactlyOnceWith('/api/shares', expect.objectContaining({
+    body: expect.objectContaining({ reference: id(1), token, actorId: id(2), authRealm: 'global' }),
+  }));
   expect(writes().at(-1)?.slice(0, 2)).toEqual([`/conversations/${id(1)}/invite-links`, 'POST']);
   expect(writes().at(-1)?.[3]).toBe(id(2));
   request.mockImplementationOnce(async () => ({ token: 'short', expiresAt: null, reusable: true }));
   await act(async () => { await expect(result.invite()).rejects.toThrow('CHAT_RESPONSE_INVALID'); });
+  expect(shareFetch).toHaveBeenCalledTimes(1);
 });

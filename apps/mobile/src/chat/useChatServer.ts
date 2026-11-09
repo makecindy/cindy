@@ -9,7 +9,8 @@ import { mobileDebugLog } from '@/debug/mobileDebugLog';
 import { getMobileAuthOwner, isMobileAuthOwnerCurrent } from '@/auth/authOwnerGeneration';
 import { mobileDurableOutbox } from '@/session/mobileDurableOutbox';
 import { enqueueChatMessage, enqueueChatShare, settleChatOutbox } from './chatOutbox';
-import { getActiveMobileSessionRealm, getMobileEndpointForRealm, loadMobileEndpointsForRealm } from '@/config/env';
+import { BUILD_AUTH_REGION, getActiveMobileSessionRealm, getMobileEndpointForRealm, loadMobileEndpointsForRealm } from '@/config/env';
+import { createChatInviteShares } from './chatInviteShare';
 import { cacheChatRoster, forgetRemoteResource, hideCachedChatRooms, markRemoteResourceRead, peekCachedChatRoster, readCachedChatRoster } from '@/device-link/remoteResourceCache';
 import { useRemoteSyncCoordinator } from '@/device-link/remoteSyncTask';
 import type { BotGroupChatState } from '@/session/useBotGroupChat';
@@ -78,7 +79,10 @@ export function useChatClient() {
       const { randomUUID } = await import('expo-crypto');
       return createChatHistory({ api: request, current, newGeneration: randomUUID,
         store: createMobileChatHistoryStore(auth.user!.id, realm, url, human, current) });
-    });
+    }, createChatInviteShares({
+      baseUrl: () => getMobileEndpointForRealm(BUILD_AUTH_REGION, 'shareBaseUrl'), region: BUILD_AUTH_REGION, realm, current,
+      apiFetch: (path, options) => deps.current.apiFetch(path, options),
+    }));
     const upload = createChatServerUpload({ request, current,
       operationId: () => `${Date.now()}-${Math.random().toString(36).slice(2)}`,
       put: async (url, uri, type, signal) => {
