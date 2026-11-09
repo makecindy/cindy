@@ -19718,5 +19718,17 @@
     "logExcerpt": "相关日志（节选，可能不完整）",
     "logsUnavailable": "没有可用的相关日志，暂时无法确定原因。",
     "failed": "诊断材料准备失败，请重试。"
+  },
+  "githubStar": {
+    "title": "喜欢 Cindy 吗？",
+    "description": "在 GitHub 点个 Star，支持 Cindy",
+    "dismiss": "不再提醒",
+    "action": "给 Cindy 点赞",
+    "starring": "点亮星星…",
+    "thanks": "感谢你的 Star！",
+    "thanksDescription": "你的支持让 Cindy 继续成长",
+    "browserFallback": "前往 GitHub 为 Cindy 点 Star",
+    "openGithub": "打开 GitHub",
+    "openFailed": "未能打开 GitHub"
   }
 }

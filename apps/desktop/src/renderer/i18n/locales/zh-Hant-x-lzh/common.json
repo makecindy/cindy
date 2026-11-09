@@ -19718,5 +19718,17 @@
     "logExcerpt": "相關日誌（節錄，或有未全）",
     "logsUnavailable": "未得相關日誌，其因未明。",
     "failed": "診斷資料未備，請重試。"
+  },
+  "githubStar": {
+    "title": "喜用 Cindy 乎？",
+    "description": "願於 GitHub 點 Star，以助 Cindy",
+    "dismiss": "毋再提醒",
+    "action": "為 Cindy 喝采",
+    "starring": "點亮此星…",
+    "thanks": "承蒙賜 Star！",
+    "thanksDescription": "得君相助，Cindy 日進",
+    "browserFallback": "請至 GitHub 為 Cindy 點 Star",
+    "openGithub": "開啟 GitHub",
+    "openFailed": "未能開啟 GitHub"
   }
 }

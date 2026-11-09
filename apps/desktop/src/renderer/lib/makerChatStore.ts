@@ -1,3 +1,4 @@
+import { recordGithubStarPromptSend, recordGithubStarPromptCompletion } from './githubStarPrompt';
 import { parseOutputLimitDetails, type OutputLimitDetails } from '@cindy/maker-shared';
 import { pendingGhostCardFormDelivery } from '@cindy/maker-shared/ghost-card-form';
 import { isVoiceCallTaskMessage } from '../../shared/voiceConversation';
@@ -8524,6 +8525,20 @@ function initGlobalListeners(options: GlobalListenerOptions = {}): void {
       );
     }
 
+    if ((isProductTurnDoneEvent(event) || event.type === 'error') && event.turnScope !== 'background') {
+      const state = sessions.get(sessionId);
+      const successful = isProductTurnDoneEvent(event) && event.turnOrigin?.kind === 'user'
+        && event.turnOrigin.surface !== 'im' && state
+        && !state.turnStoppedByUser && !state.lastStopWasSideTask
+        && !state.lastStopWasPrivateReply && !state.lastStopWasGroupLane
+        && !hasGithubStarBlockingWork();
+      // Main stamps the accepted input before releasing the turn/draining the queue.
+      // Never infer ownership from the last bubble: it may be a newer queued/steered input.
+      const completedClientId = successful && typeof event.agentMeta?.replyToClientId === 'string'
+        ? event.agentMeta.replyToClientId : null;
+      recordGithubStarPromptCompletion(sessionId, completedClientId, dataOwnerAtIngress);
+    }
+
     // done / error 副作用 (从老 stream listener 搬过来)
     if (isProductTurnDoneEvent(event)) {
       notifyGatewayProxyTokenTurnSettled(sessionId);
@@ -10226,6 +10241,16 @@ function getPromptRecommendationCompletionStatus(
     // 自动续跑队列则等最终一轮结束后再生成。
     hasAutoDrainingQueue: state.pendingQueue.length > 0 && !state.queuePaused,
   };
+}
+
+/** Non-creating read: optional invitations yield to all known work and unresolved errors. */
+function hasGithubStarBlockingWork(): boolean {
+  for (const [sessionId, state] of sessions) {
+    if (_isSessionBusy(sessionId, state) || state.error || state.recoverableError
+      || state.pendingQueue.length > 0 || state.steeringQueueClientIds.length > 0 || state.pendingAppPermissions?.length
+      || state.credentialSwitchWait || state._authRetryInFlight || state.queueAbortPending) return true;
+  }
+  return false;
 }
 
 /**
@@ -15567,6 +15592,7 @@ async function sendMessageCore(
   ) {
     return false;
   }
+  const starPromptOwner = getDataOwnerGeneration();
   const current = getOrCreateState(sessionId);
   const wasFirst = current.isFirstMessage;
 
@@ -15711,6 +15737,7 @@ async function sendMessageCore(
     // preflight/invoke so a weak link never holds the composer dispatch lock.
     remoteRecord.composerResolvedOptimistically = true;
     void pumpRemoteOptimisticSends(sessionId);
+    if (!opts?.authRetryPersistOnProjectionError) recordGithubStarPromptSend(sessionId, queued.clientId, starPromptOwner);
     return true;
   }
 
@@ -15739,6 +15766,7 @@ async function sendMessageCore(
       ) {
         clearSessionStarting(sessionId);
       }
+      if (!opts?.authRetryPersistOnProjectionError) recordGithubStarPromptSend(sessionId, queued.clientId, starPromptOwner);
       return true;
     })
     .catch((err) => {
@@ -16004,6 +16032,7 @@ async function steerMessageCore(
   ) {
     return false;
   }
+  const starPromptOwner = getDataOwnerGeneration();
   const queued = buildQueuedMessage(
     sessionId,
     text,
@@ -16089,6 +16118,7 @@ async function steerMessageCore(
     remoteRecord.composerResolvedOptimistically = true;
     _disposedLiveErrorIntents.delete(sessionId);
     void pumpRemoteOptimisticSends(sessionId);
+    recordGithubStarPromptSend(sessionId, queued.clientId, starPromptOwner);
     return true;
   }
 
@@ -16100,6 +16130,7 @@ async function steerMessageCore(
         _disposedLiveErrorIntents.delete(sessionId);
         commitAutoTitle();
         requestInputProjection(sessionId);
+        recordGithubStarPromptSend(sessionId, queued.clientId, starPromptOwner);
         return true;
       }
       // steer 失败后拉一次权威 projection:投递结果不确定时 coordinator 会把这条
@@ -16120,6 +16151,7 @@ async function steerMessageCore(
           // (review P1)。是否真该改名仍由 main 权威判定。
           _disposedLiveErrorIntents.delete(sessionId);
           commitAutoTitle();
+          recordGithubStarPromptSend(sessionId, queued.clientId, starPromptOwner);
           return true;
         }
       } catch (err) {
@@ -18626,6 +18658,7 @@ export const makerChatStore = {
   getPromptRecommendationRunStartedAt,
   /** 输入框推荐后台完成资格的 non-creating 终态快照。 */
   getPromptRecommendationCompletionStatus,
+  hasGithubStarBlockingWork,
   ensureInitialMessages,
   prefetchRemoteHistories,
   reloadMessages,

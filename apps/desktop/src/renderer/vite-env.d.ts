@@ -4676,6 +4676,8 @@ interface ElectronAPI {
   gitContext: {
     readGithub: (method: import('@cindy/maker-shared').GithubReadMethod, args: unknown) => Promise<Record<string, unknown>>;
     githubSetupStatus: () => Promise<import('../shared/githubSetup').GithubSetupState>;
+    checkCindyStar: () => Promise<boolean | null>;
+    starCindy: () => Promise<boolean | null>;
     githubConnection: () => Promise<import('../shared/githubSetup').GithubConnectionState>;
     startGithubSetup: () => Promise<import('../shared/githubSetup').GithubSetupState>;
     cancelGithubSetup: () => Promise<import('../shared/githubSetup').GithubSetupState>;
