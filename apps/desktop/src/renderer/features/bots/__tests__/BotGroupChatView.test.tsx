@@ -2087,7 +2087,14 @@ describe('BotGroupChatView', () => {
       // clear. Wait for the complete handoff; a second timeline image must still fail.
       await waitFor(() => {
         expect(outboxItems()).toHaveLength(0);
-        expect(screen.getAllByAltText('photo.png')).toHaveLength(1);
+        const photos = screen.getAllByAltText('photo.png');
+        const locations = photos.map((photo) => ({
+          src: photo.getAttribute('src'),
+          region: photo.closest('[data-testid="bot-group-outbox"]') ? 'outbox'
+            : photo.closest('[data-testid="bot-group-timeline"]') ? 'timeline' : 'composer-or-portal',
+          parent: photo.parentElement?.outerHTML,
+        }));
+        expect(photos, JSON.stringify(locations)).toHaveLength(1);
         expect(screen.getByAltText('photo.png').getAttribute('src')).toContain('photo.png');
       });
 
