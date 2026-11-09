@@ -280,6 +280,16 @@ async function makeFixture(options: {
   poisonResultPath?: boolean;
   /** Override the per-task profile prompt, e.g. to blow the spawn argv budget. */
   profilePrompt?: string;
+  /** P0-2:allow-list 付费路由 + 带 maxCostUsd 的短效 approval。 */
+  modeOverride?: 'local-only' | 'development' | 'approved-paid';
+  allowedRoutesOverride?: Array<{ provider: string; model: string; tier: 'local' | 'free' | 'paid'; sourceProviderId?: string }>;
+  approvalsOverride?: Array<Record<string, unknown>> | ((sessionId: string) => Array<Record<string, unknown>>);
+  /** P0-2:预置已耗尽 cap 的 spend 账本(实际记账 1 USD)。 */
+  preExhaustedLedger?: boolean;
+  /** P0-2:预置损坏 JSON 账本,断言付费任务 fail-closed。 */
+  corruptSpendLedger?: boolean;
+  /** P0-2:写入自定义账本内容(可选 fixture 直落)。 */
+  spendFileContent?: string;
 } = {}) {
   const root = await tempRoot();
   const runId = randomUUID();
@@ -545,9 +555,11 @@ process.stdin.on('end', () => {
     executionPolicy: signPolicy({
       version: 1,
       sessionId: path.basename(root),
-      mode: 'development',
-      allowedRoutes: [{ provider: 'fixture', model: 'fixture-model', tier: 'local' }],
-      approvals: [],
+      mode: options.modeOverride ?? 'development',
+      allowedRoutes: options.allowedRoutesOverride ?? [{ provider: 'fixture', model: 'fixture-model', tier: 'local' }],
+      approvals: typeof options.approvalsOverride === 'function'
+        ? options.approvalsOverride(path.basename(root))
+        : (options.approvalsOverride ?? []),
       issuedAt: Date.now(),
     }),
     tasks: Array.from({ length: count }, (_, index) => ({
@@ -577,15 +589,30 @@ process.stdin.on('end', () => {
   // Before the spawn, so the artifact is already unwritable on the run's very
   // first terminal write — no race with a fast child.
   if (options.poisonResultPath) await mkdir(path.join(runDir, 'result.json'), { recursive: true });
-  const policyKeyFile = path.join(runDir, 'policy-key.json');
-  await writeFile(policyKeyFile, JSON.stringify({ publicKey: POLICY_KEYPAIR.publicKey }), { mode: 0o600 });
+  // P0-B:公钥以 env 字面量注入(不是文件路径);恢复 run 时进程继承同一 env。
+  const policyPublicKey = POLICY_KEYPAIR.publicKey;
+  let spendFilePath = path.join(runDir, 'spend-ledger.json');
+  if (options.preExhaustedLedger) {
+    // P0-2:已耗尽的 cap。实际记账 1 USD = maxCostUsd。
+    const scopeKey = 'session:' + path.basename(root);
+    await writeFile(spendFilePath, JSON.stringify({
+      version: 3,
+      byScope: { [scopeKey]: { actualUsd: 1, estimatedUsd: 0, reservedUsdById: {}, reservedAtById: {}, updatedAt: Date.now() } },
+    }), { mode: 0o600 });
+  } else if (options.corruptSpendLedger) {
+    // P0-2:损坏的账本必须 fail-closed(拒绝付费任务启动),不能静默当清零。
+    await writeFile(spendFilePath, '{ this ledger is corrupted', { mode: 0o600 });
+  } else if (options.spendFileContent !== undefined) {
+    await writeFile(spendFilePath, options.spendFileContent, { mode: 0o600 });
+  }
   // resume 重新拉起 runner 时要继承 key 文件 env(与生产 Host 注入一致)。
-  process.env.CINDY_PI_SUBAGENT_POLICY_PUBLIC_KEY = policyKeyFile;
+  process.env.CINDY_PI_SUBAGENT_POLICY_PUBLIC_KEY = policyPublicKey;
   const child = spawn(process.execPath, [runnerFile, configPath], {
     cwd: root,
     env: {
       ...process.env,
-      CINDY_PI_SUBAGENT_POLICY_PUBLIC_KEY: policyKeyFile,
+      CINDY_PI_SUBAGENT_POLICY_PUBLIC_KEY: policyPublicKey,
+      CINDY_PI_SUBAGENT_SPEND_FILE: spendFilePath,
       CINDY_TEST_PI_PIDS: pidsFile,
       CINDY_TEST_PI_ARGS: argsFile,
       CINDY_TEST_PI_PROMPTS: promptsFile,
@@ -664,6 +691,72 @@ describe('Cindy durable PI Subagent runner', () => {
       expect(JSON.parse(await readFile(completed.resultPath!, 'utf8'))).toMatchObject({
         state: 'completed',
       });
+      await waitForClose(fixture.child, fixture.stderr);
+    });
+  });
+
+  // P0-2 并发原子裁决:带 maxCostUsd 的 approval 的预算预留必须在锁内完成;
+  // 预留失败、账本不可读一律拒绝付费任务启动,且不启动 fake pi(无真实请求)。
+  describe('budget reservation atomicity (P0-2)', () => {
+    const cappedApproval = (maxCostUsd: number) => (sessionId: string) => [{
+      id: 'approval-paid-1',
+      provider: 'fixture',
+      model: 'fixture-model',
+      scope: 'session',
+      sessionId,
+      grantedBy: 'user',
+      grantedAt: Date.now() - 1_000,
+      expiresAt: Date.now() + 60_000,
+      maxCostUsd,
+    }];
+
+    it('spawns the paid task when budget reservation succeeds (approval has headroom)', async () => {
+      const fixture = await makeFixture({
+        modeOverride: 'development',
+        allowedRoutesOverride: [{ provider: 'fixture', model: 'fixture-model', tier: 'paid', sourceProviderId: 'fixture' }],
+        approvalsOverride: cappedApproval(10),
+      });
+      const completed = await waitFor(async () => {
+        const [run] = await listPiSubagentRuns(fixture.root);
+        return run?.state === 'completed' ? run : null;
+      });
+      expect(completed.tasks[0]).toMatchObject({ status: 'completed' });
+      // 预算预留已内发生并在结算释放;fake pi 实际被启动(release 路径同在)。
+      expect(await readCommandsIfPresent(fixture.commandsFile)).not.toBeNull();
+      await waitForClose(fixture.child, fixture.stderr);
+    });
+
+    it('denies launch when the cap is exhausted (ledger already at cap)', async () => {
+      const fixture = await makeFixture({
+        modeOverride: 'development',
+        allowedRoutesOverride: [{ provider: 'fixture', model: 'fixture-model', tier: 'paid', sourceProviderId: 'fixture' }],
+        approvalsOverride: cappedApproval(1),
+        preExhaustedLedger: true,
+      });
+      const failed = await waitFor(async () => {
+        const [run] = await listPiSubagentRuns(fixture.root);
+        return run?.state === 'failed' ? run : null;
+      });
+      expect(failed.tasks[0]?.status).toBe('failed');
+      expect(failed.tasks[0]?.error).toMatch(/spend cap reached/i);
+      expect(await readCommandsIfPresent(fixture.commandsFile)).toBeNull();
+      await waitForClose(fixture.child, fixture.stderr);
+    });
+
+    it('denies launch when the ledger is corrupt (fail-closed, fake pi never starts)', async () => {
+      const fixture = await makeFixture({
+        modeOverride: 'development',
+        allowedRoutesOverride: [{ provider: 'fixture', model: 'fixture-model', tier: 'paid', sourceProviderId: 'fixture' }],
+        approvalsOverride: cappedApproval(10),
+        corruptSpendLedger: true,
+      });
+      const failed = await waitFor(async () => {
+        const [run] = await listPiSubagentRuns(fixture.root);
+        return run?.state === 'failed' ? run : null;
+      });
+      expect(failed.tasks[0]?.status).toBe('failed');
+      expect(failed.tasks[0]?.error).toMatch(/unreadable/i);
+      expect(await readCommandsIfPresent(fixture.commandsFile)).toBeNull();
       await waitForClose(fixture.child, fixture.stderr);
     });
   });

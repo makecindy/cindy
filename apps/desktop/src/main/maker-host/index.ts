@@ -2580,11 +2580,12 @@ export function getMaker(): Maker {
       },
       resolvePiRuntimeModels: () => deriveAvailableModels(getDesktopSelectableCatalog(), 'pi'),
       resolvePiSubagentModelExecutionPolicy: resolveDesktopPiSubagentModelExecutionPolicy,
-      // fail-closed:拿不到公钥文件时扩展/runner 没有校验材料,只会导致拒绝派发,
-      // 不会退化为不鉴权。公钥可公开;私钥不经任何 env 出 Desktop 主进程。
+      // P0-B:公钥以 env 字面量注入扩展/runner(CINDY_PI_SUBAGENT_POLICY_PUBLIC_KEY
+      // 是 SPKI DER base64 的**值**本身,不是文件路径)—— 这条 env 没有文件可替换;
+      // 私钥只留在 Desktop 主进程内存(或 safeStorage 密文),不下发。
       resolvePiSubagentModelExecutionFiles: () => {
-        const { publicFilePath: publicKeyFile } = getOrCreateSubagentModelSigningKey();
-        return { publicKeyFile, spendFile: subagentModelSpendFilePath() };
+        const { publicKey } = getOrCreateSubagentModelSigningKey();
+        return { publicKey, spendFile: subagentModelSpendFilePath() };
       },
       resolvePiRuntimeModelDescriptor: (providerId, modelId) =>
         resolvePiRuntimeModelDescriptor(getDesktopSelectableCatalog(), providerId, modelId, {

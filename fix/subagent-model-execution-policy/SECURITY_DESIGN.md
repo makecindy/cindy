@@ -21,15 +21,23 @@
    Host approval(P1-4)。
 7. **快照可复核(P0-B 非对称)。** 授权**判断**只在可信 Host 边界(Desktop 主
    进程)做出,并以 **Ed25519** 签名；扩展/runner 的 verifier 只凭**公钥**
-   验签。私钥永不进 Agent env;公钥文件公开值放行。Agent 即使有 shell 和
-   文件读写权限,也只能读到公钥,伪造授权必须私钥 —— 故无法自行生成有效
-   授权。签名 + 会话绑定 + 24 小时时效三重校验。HMAC 方案(P1-8)已退役:
-   0600 文件模式不等于同用户进程隔离。
+   验签,公钥以 **env 字面量**(SPKI DER base64)注入 —— 没有 public-key.json
+   文件可替换。私钥**永不以明文落盘**:只以 **safeStorage 密文**(version 2)
+   存入现有路径,Agent 同 UID 读到的文件最多是密文;或在 safeStorage 不可用
+   时只活在 Host 进程内存里。(旧版明文文件,存在即忽略 + 尝试删除。)
+   签名 + 会话绑定 + 24 小时时效三重校验。0600/0644 文件模式不等于同用户
+   进程隔离 —— 因此本方案从不把私钥写进任何 Agent 可读的文件系统路径。
 8. **费用上限(诚实口径)。** 带 `maxCostUsd` 的 approval 累计记账(Host 结算
-   钩子,paypal>0 实际 / BYOM 参考估算分开标注),派发前用同一 `approvalSpendKey`
-   口径读 **结算累计 + 在途预留**,上限到达即拒(P1-7/P0-C)。⚠️ 上限度量的是
-   已结算费用 + 预留,不是「单次请求的硬天花板」:运行中单请求的 token 消费
-   无法实时拦截,文档与 PR 文案不作此宣称。
+   钩子,实际 / BYOM 参考估算分开标注),派发前用同一 `approvalSpendKey`
+   口径读 **结算累计 + 在途预留**,上限到达即拒(P1-7/P0-C)。
+   **预留是并发原子裁决(P0-2)**:读账本 → 算剩余额度 → 预留 → 持久化全部在
+   同一把 O_EXCL 锁临界区内完成；预留失败、账本不可读(含账本缺失首个付费
+   任务时视作可建新账;账本已写入但内容损坏则拒)、锁超时、持久化失败一律
+   拒绝付费任务启动 —— 绝不静默当账已清零。
+   ⚠️ 上限度量的是已结算费用 + 在途预留,**不是「对单次请求的硬天花板」**：
+   运行中单请求的 token 消费无法实时拦截,文档与 PR 文案不作此宣称。
+   记账文件本身是控制面:spend 路径名在 bash/model 工具的 spawn 边界剥离。
+   残留:同 UID Agent 对账本文件的篡改是同一 UID 沙盒外的能力(见威胁模型)。
 
 ## 架构(四道闸)
 
@@ -50,9 +58,10 @@ approvals,version=1)     + policy-denials.jsonl                            ↓
   fail-closed 的 `parseModelExecutionPolicy`(任一 route/approval 非法即整页拒)；
   `decision.allowed === true` 之外的一切状态都是 deny。
 - **扩展不能 import Host 模块**(字符串模板注入)，`cindy-subagent-source.ts` 里
-  逐字镜像了判定逻辑并验签(读 `CINDY_PI_SUBAGENT_POLICY_PUBLIC_KEY`,只认
-  Host 公钥)；
-  runner 同样内联一份，在 `launchTask` 里 spawn 前复核验签。
+  逐字镜像了判定逻辑并验签(读 `CINDY_PI_SUBAGENT_POLICY_PUBLIC_KEY`
+  env **字面量**= SPKI DER base64,只认 Ed25519 公钥;**绝不读文件系统**,
+  旧文件路径 wiring 视为不可信直接返回 null);
+  runner 同样内联一份，在 `launchTask` 里 spawn 前复核验签+原子预留。
   三方同语义由测试守住关键字符串 + 决策单测。
 - **分级规则**(仅审计展示)：
   - `local` = 经验证的本地端点(loopback 或本机网卡地址)；私网 IP 不等于本机；
@@ -68,10 +77,11 @@ approvals,version=1)     + policy-denials.jsonl                            ↓
 - **本地模式**：默认 `development`(P1-D)；
   私人数据会话/项目强制 `local-only`，设置里的 mode 对其不生效(P1-6)。
 - **pi/index.ts** 每次写运行时快照时调用 Host resolver 注入签名后的
-  `executionPolicy`，并以文件路径 env 形式把**公钥文件 / 费用账本路径**(不再
-  是私钥文件)给扩展；私钥永不下发,费用账本路径名在 pi bash/model .spawn
-  边界处剥离(公钥文件公开可放行)。未注入/失败 → 快照里**不带**授权 →
-  扩展 fail-closed 拒绝新派发(已有会话的运行中任务不受影响)。
+  `executionPolicy`，并以 env **字面量**(公钥本身,非文件路径)形式把
+  `CINDY_PI_SUBAGENT_POLICY_PUBLIC_KEY` 给扩展；私钥永不下发,费用账本路径
+  名在 pi bash/model .spawn 边界处剥离(公钥字面量是公开值,不进剥离名单)。
+  未注入/失败 → 快照里**不带**授权 → 扩展 fail-closed 拒绝新派发(已有会话的
+  运行中任务不受影响)。
 
 ## Orca Worker
 
@@ -86,9 +96,17 @@ resolver 缺失、抛错、返回 null/undefined 都是 deny；只有显式
 | 攻击者能力 | 对本方案的影响 |
 |---|---|
 | Agent 可改写 runtime 快照 / runner config | 签名断裂 → fail-closed |
-| Agent 可读公钥文件、生成自己的 Ed25519 密钥对 | 伪造快照用攻击者密钥签;verifier 只认 Host 公钥 → 拒(回归测试覆盖) |
+| Agent 可读 signing-key 文件 | 只拿到 **safeStorage 密文**(Keychain 主密钥不对 Agent 进程开放)；或在 safeStorage 不可用时根本没有文件 |
+| Agent 替换公钥 | **不存在公钥文件** —— 公钥只活在 env 字面量里；改 env 顶多让 verifier 换一把验签键,自签快照依旧验不过(回归测试覆盖 self-signed 负向) |
 | Agent 可直接调 provider API(自有 Key) | 策略管的是 Cindy Host 的执行面;Agent 自持 Key 的场外调用由 API 返回面治理,**不在本策略内** |
-| Agent 进程崩溃留下过期预留 | 预留 TTL 10min 自清(Host/Runner) |
+| Agent 进程崩溃留下过期预留 | 预留 TTL 10min 自清(Host/Runner:读清 + 锁内回收) |
+| Agent 直接篡改费用账本 | 路径名在 spawn 边界剥离;同 UID 对文件本身的写是沙盒外能力 —— 账本被篡改为 0 只会在 TTL 清除后重扣(真实回执结算会持续累加 actual),不构成持续免费执行通道 |
+
+**残留声明(诚实)**:同 UID 恶意 Agent 对其他文件的篡改(例如在 session 中途重写
+已生成的 `runner.cjs` / 扩展源)超出本进程架构的隔离能力 —— Host 在每次
+session 启动时重新生成扩展,第二道闸在已加载的扩展模块内,跨 session 重启
+即恢复。完整 UID 隔离需要独立 UID 的常驻 Helper + 受控 IPC,对于 sandboxed
+桌面 App 属于过度设计,未在本 PR 实现;完整恶意-Agent 隔离声明**未**达。
 
 **设计说明(为什么不是 IPC/Proxy 实时问答)**:pi 扩展在子进程内运行,与
 Host 之间没有可同步调用的执行面 —— 授权判断必须在**会话级**(setModel/

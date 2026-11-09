@@ -32,43 +32,66 @@ export interface ScopeTotals {
   estimatedUsd: number;
   /** reservationId -> 保留金额(USD)。key 用子会话 id 或 runId:taskId。 */
   reservedUsdById: Record<string, number>;
+  /** reservationId -> 预留落盘时间戳(ms epoch),用于 TTL 回收崩溃遗留预留。 */
+  reservedAtById: Record<string, number>;
   updatedAt: number;
 }
 
 interface SpendFile {
-  version: 2;
+  version: 3;
   byScope: Record<string, ScopeTotals>;
+}
+
+/**
+ * 读取账本(宽容模式):供结算/展示使用,损坏时返回空账本(best-effort)。
+ * 预留的裁决面用 readSpendFileForLock(失败关闭),二者不可互换。
+ */
+function readSpendFile(): SpendFile {
+  return readSpendFileForLock() ?? { version: 3, byScope: {} };
+}
+
+/**
+ * 读账本(严格模式,供预留裁决):文件不存在视为可建新账;存在但 JSON 损坏或
+ * 结构不合法返回 null —— 调用方必须据此拒绝付费任务启动,而不是静默当账已清零。
+ */
+function readSpendFileForLock(): SpendFile | null {
+  const filePath = subagentModelSpendFilePath();
+  let raw: string;
+  try {
+    raw = fs.readFileSync(filePath, 'utf8');
+  } catch {
+    return { version: 3, byScope: {} }; // ENOENT / EACCES / ENOTDIR:首个付费任务视为可建账
+  }
+  let parsed: Partial<SpendFile>;
+  try {
+    parsed = JSON.parse(raw) as Partial<SpendFile>;
+  } catch {
+    return null;
+  }
+  if (!parsed || typeof parsed !== 'object' || (parsed.version !== 1 && parsed.version !== 2 && parsed.version !== 3)) {
+    return null;
+  }
+  const byScope: Record<string, ScopeTotals> = {};
+  const rawByScope = parsed.byScope as Record<string, unknown> | undefined;
+  if (rawByScope && typeof rawByScope === 'object') {
+    for (const [scopeKey, value] of Object.entries(rawByScope)) {
+      if (!value || typeof value !== 'object') continue;
+      const entry = value as Partial<ScopeTotals>;
+      byScope[scopeKey] = {
+        actualUsd: typeof entry.actualUsd === 'number' && Number.isFinite(entry.actualUsd) ? Math.max(0, entry.actualUsd) : 0,
+        estimatedUsd: typeof entry.estimatedUsd === 'number' && Number.isFinite(entry.estimatedUsd) ? Math.max(0, entry.estimatedUsd) : 0,
+        reservedUsdById: normalizeReserved(entry.reservedUsdById),
+        reservedAtById: normalizeReserved(entry.reservedAtById),
+        updatedAt: typeof entry.updatedAt === 'number' && Number.isFinite(entry.updatedAt) ? entry.updatedAt : 0,
+      };
+    }
+  }
+  return { version: 3, byScope };
 }
 
 export function subagentModelSpendFilePath(): string {
   const root = getActiveAppSession().dataOwnerId ? ownerScopedUserDataPath() : null;
-  return path.join(root ?? app.getPath('userData'), SPEND_FILE_NAME);
-}
-
-function readSpendFile(): SpendFile {
-  try {
-    const parsed = JSON.parse(fs.readFileSync(subagentModelSpendFilePath(), 'utf8')) as Partial<SpendFile>;
-    if (!parsed || typeof parsed !== 'object' || (parsed.version !== 1 && parsed.version !== 2)) {
-      return { version: 2, byScope: {} };
-    }
-    const byScope: Record<string, ScopeTotals> = {};
-    const raw = parsed.byScope as Record<string, unknown> | undefined;
-    if (raw && typeof raw === 'object') {
-      for (const [scopeKey, value] of Object.entries(raw)) {
-        if (!value || typeof value !== 'object') continue;
-        const entry = value as Partial<ScopeTotals>;
-        byScope[scopeKey] = {
-          actualUsd: typeof entry.actualUsd === 'number' && Number.isFinite(entry.actualUsd) ? Math.max(0, entry.actualUsd) : 0,
-          estimatedUsd: typeof entry.estimatedUsd === 'number' && Number.isFinite(entry.estimatedUsd) ? Math.max(0, entry.estimatedUsd) : 0,
-          reservedUsdById: normalizeReserved(entry.reservedUsdById),
-          updatedAt: typeof entry.updatedAt === 'number' && Number.isFinite(entry.updatedAt) ? entry.updatedAt : 0,
-        };
-      }
-    }
-    return { version: 2, byScope };
-  } catch {
-    return { version: 2, byScope: {} };
-  }
+  return path.join(root ?? app.getPath('userData'), 'subagent-model-spend.json');
 }
 
 function normalizeReserved(raw: unknown): Record<string, number> {
@@ -82,13 +105,22 @@ function normalizeReserved(raw: unknown): Record<string, number> {
 }
 
 function writeSpendFile(state: SpendFile): void {
+  if (!tryWriteSpendFile(state)) {
+    log.warn('subagent model spend accumulation failed');
+  }
+}
+
+/** 持久化;失败返回 false，供预留面据此拒绝付费任务启动。 */
+function tryWriteSpendFile(state: SpendFile): boolean {
   try {
     fs.mkdirSync(path.dirname(subagentModelSpendFilePath()), { recursive: true });
     const tmp = subagentModelSpendFilePath() + '.tmp';
     fs.writeFileSync(tmp, JSON.stringify(state), { mode: 0o600 });
     fs.renameSync(tmp, subagentModelSpendFilePath());
+    return true;
   } catch (error) {
-    log.warn('subagent model spend accumulation failed', { message: String(error) });
+    log.warn('subagent model spend write failed', { message: String(error) });
+    return false;
   }
 }
 
@@ -141,7 +173,7 @@ export function addSubagentModelSpend(
   if (!scopeKey || !Number.isFinite(amountUsd) || amountUsd <= 0) return;
   withSpendLock(() => {
     const state = readSpendFile();
-    const existing = state.byScope[scopeKey] ?? { actualUsd: 0, estimatedUsd: 0, reservedUsdById: {}, updatedAt: 0 };
+    const existing = state.byScope[scopeKey] ?? emptyScope();
     if (estimated) existing.estimatedUsd += amountUsd;
     else existing.actualUsd += amountUsd;
     existing.updatedAt = Date.now();
@@ -150,24 +182,59 @@ export function addSubagentModelSpend(
   });
 }
 
+function emptyScope(): ScopeTotals {
+  return { actualUsd: 0, estimatedUsd: 0, reservedUsdById: {}, reservedAtById: {}, updatedAt: 0 };
+}
+
+/** 崩溃回收:超过 TTL 的预留视为死亡 runner 的遗留,在锁内清掉。 */
+export function pruneExpiredReservations(totals: ScopeTotals, now: number = Date.now()): void {
+  for (const id of Object.keys(totals.reservedUsdById)) {
+    const at = totals.reservedAtById[id] ?? totals.updatedAt ?? 0;
+    if (at > 0 && now - at > RESERVATION_TTL_MS) {
+      delete totals.reservedUsdById[id];
+      delete totals.reservedAtById[id];
+    }
+  }
+}
+
 /**
- * 预算预留(P0-C 并发):在 Worker 启动前把预留额度(plausible upper bound)
- * 记入 reservedUsdById,返回实际预留到的金额(0 表示没有预留到)。
- * 同一 reservationId 幂等(重复 launch 不会重复加)。
+ * 预算预留(并发原子裁决,P0-C):读账本 → 计算余额 → 预留 → 持久化在同一把
+ * O_EXCL 锁临界区内完成。`capUsd` 给定时按剩余额度裁决：额度耗尽、账本损坏、
+ * 锁超时或持久化失败均返回 0（调用方据此拒绝付费任务启动）；不给 cap 时保留
+ * 旧语义（无条件预留）。同一 reservationId 幂等。
  */
 export function reserveSubagentModelSpend(
   scopeKey: string,
   reservationId: string,
   amountUsd: number,
+  capUsd?: number,
 ): number {
   if (!scopeKey || !reservationId || !Number.isFinite(amountUsd) || amountUsd <= 0) return 0;
+  if (capUsd !== undefined && !(capUsd > 0)) return 0;
   const result = withSpendLock(() => {
-    const state = readSpendFile();
-    const existing = state.byScope[scopeKey] ?? { actualUsd: 0, estimatedUsd: 0, reservedUsdById: {}, updatedAt: 0 };
+    const state = readSpendFileForLock();
+    // 账本存在但不可读(损坏 JSON / 结构错误)→ 失败关闭:不覆盖、不预留。
+    if (state === null) return 0;
+    const existing = state.byScope[scopeKey] ?? emptyScope();
+    pruneExpiredReservations(existing);
     if (existing.reservedUsdById[reservationId] !== undefined) {
       return existing.reservedUsdById[reservationId];
     }
+    if (capUsd !== undefined) {
+      const reserved = Object.values(existing.reservedUsdById).reduce((acc, v) => acc + v, 0);
+      const total = existing.actualUsd + existing.estimatedUsd + reserved;
+      const remaining = capUsd - total;
+      if (remaining <= 0) return 0;
+      const amount = Math.min(amountUsd, remaining);
+      existing.reservedUsdById[reservationId] = amount;
+      existing.reservedAtById[reservationId] = Date.now();
+      existing.updatedAt = Date.now();
+      state.byScope[scopeKey] = existing;
+      if (!tryWriteSpendFile(state)) return 0;
+      return amount;
+    }
     existing.reservedUsdById[reservationId] = amountUsd;
+    existing.reservedAtById[reservationId] = Date.now();
     existing.updatedAt = Date.now();
     state.byScope[scopeKey] = existing;
     writeSpendFile(state);
@@ -185,6 +252,7 @@ export function releaseSubagentModelSpend(scopeKey: string, reservationId: strin
     if (!existing) return;
     if (!(reservationId in existing.reservedUsdById)) return;
     delete existing.reservedUsdById[reservationId];
+    delete existing.reservedAtById[reservationId];
     existing.updatedAt = Date.now();
     state.byScope[scopeKey] = existing;
     writeSpendFile(state);
@@ -195,9 +263,8 @@ export function releaseSubagentModelSpend(scopeKey: string, reservationId: strin
 export function readSubagentModelSpend(scopeKey: string): number | undefined {
   const totals = readSpendFile().byScope[scopeKey];
   if (!totals) return undefined;
-  if (totals.actualUsd === 0 && totals.estimatedUsd === 0 && Object.keys(totals.reservedUsdById).length === 0) {
-    return undefined;
-  }
+  pruneExpiredReservations(totals);
   const reserved = Object.values(totals.reservedUsdById).reduce((acc, v) => acc + v, 0);
-  return totals.actualUsd + totals.estimatedUsd + reserved;
+  const total = totals.actualUsd + totals.estimatedUsd + reserved;
+  return total <= 0 && Object.keys(totals.reservedUsdById).length === 0 ? undefined : total;
 }

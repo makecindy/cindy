@@ -9,7 +9,8 @@
 2. pi `subagent` 两道闸(扩展派发前 + runner spawn 前),失败关闭。
 3. Orca `create_worker` 执行层同口径拒绝(`MODEL_EXECUTION_DENIED`),P0-3 fail-closed。
 4. 审计三列落库(drizzle 迁移 `0149_subagent_model_execution_audit.sql`)。
-5. Host 快照装配(Ed25519 签名,公钥下发,私钥永不进 Agent env)+ 用户审批存储 + 执行模式设置(默认 development)+ 费用记账 v2(结算累计 + 在途预留)。
+5. Host 快照装配(Ed25519 签名;私钥只存 safeStorage 密文/内存,公钥以 env 字面量注入)+ 用户审批存储 + 执行模式设置(默认 development)+ 费用记账 v3(结算累计 + 在途预留 + TTL + 原子裁决)。
+6. 并发预算原子裁决(P0-2):读账本→算剩余额度→预留→持久化在同一把锁内;预留失败/账本损坏/锁超时/持久化失败一律拒绝付费 spawn(不静默清零)。
 
 ## 第二阶段(后续,需产品决策)
 
@@ -34,8 +35,12 @@
 | 用户说“用其他模型协作”但快照无 approval | 拒绝,无 approvalId |
 | 伪造签名:Agent 自签 Ed25519 快照 | verifier 拒(公钥不匹配),无放行 |
 | local-only + 合法 paid approval | 仍拒(approval 不能覆盖 local-only) |
+| signing-key 文件被同 UID 读出 | 只有 safeStorage 密文,无可用私钥 |
+| 攻击者在 env 中替换公钥 + 自签策略 | 验签失败 → 拒绝派发(自签永不通过) |
 | pricedRow 存在但 amount=0 | 走参考估算路径记账(不再漏) |
-| 两个 Worker 同时预留 | 额度合并计入,超限拒 |
+| 两个 Worker 竞争最后一笔额度 | 第二个预留拒(锁内裁决),总预留不穿透 cap |
+| 账本损坏(非空 JSON)/首个付费任务账本缺失 | 损坏拒(不覆盖);缺失视为可建新账并预留 |
+| 崩溃遗留的过期预留 | TTL 读清(SW<=10min),新预留不被堵死 |
 | Orca `create_worker` 显式指定未授权路由 | Host 侧 `MODEL_EXECUTION_DENIED`,不建会话 |
 
 ## 发布建议

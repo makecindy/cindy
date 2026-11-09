@@ -69,9 +69,8 @@ async function fixture(fsOverrides: Record<string, unknown> = {}) {
   vi.stubEnv('CINDY_PI_SUBAGENT_BINARY', '/fixture/pi');
   vi.stubEnv('CINDY_PI_SUBAGENT_RUNTIME_FILE', path.join(root, 'runtime.json'));
   // P1-8：快照验签需要 key 文件与会话 id env，与生产 pi/index.ts 注入一致。
-  const policyKeyFile = path.join(root, 'policy-key.json');
-  await writeFile(policyKeyFile, JSON.stringify({ publicKey: POLICY_PUBLIC_KEY }), { mode: 0o600 });
-  vi.stubEnv('CINDY_PI_SUBAGENT_POLICY_PUBLIC_KEY', policyKeyFile);
+  // P0-B:公钥以 env 字面量注入(不是文件路径)——没有文件可替换。
+  vi.stubEnv('CINDY_PI_SUBAGENT_POLICY_PUBLIC_KEY', POLICY_PUBLIC_KEY);
   vi.stubEnv('CINDY_PI_SESSION_ID', 'sess-test');
   await writeFile(path.join(root, 'runtime.json'), JSON.stringify({ modelRoutes: { 'available-model': [] } }));
   const runId = randomUUID();
@@ -349,9 +348,7 @@ describe('Pi subagent provider selection', () => {
   beforeEach(async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), 'pi-policy-key-'));
     roots.push(dir);
-    const policyKeyFile = path.join(dir, 'policy-key.json');
-    await writeFile(policyKeyFile, JSON.stringify({ publicKey: POLICY_PUBLIC_KEY }), { mode: 0o600 });
-    vi.stubEnv('CINDY_PI_SUBAGENT_POLICY_PUBLIC_KEY', policyKeyFile);
+    vi.stubEnv('CINDY_PI_SUBAGENT_POLICY_PUBLIC_KEY', POLICY_PUBLIC_KEY);
     vi.stubEnv('CINDY_PI_SESSION_ID', 'sess-test');
   });
   // 同一裸模型 id 在两个真实连接下重名(ex: 智谱 Coding Plan 与 OpenCode Go 都有 glm-5.3-flash),
@@ -534,5 +531,42 @@ describe('Pi subagent provider selection', () => {
     };
     expect(() => extension.resolveTaskModelRoutes([{ model: 'glm-5.3-flash', provider: 'glm-coding-plan' }], narrowPolicy))
       .toThrow(/is not in this session/);
+  });
+
+  // P0-B 负向:env 里的公钥被 Agent 换成自己的 → 自签快照永远验不过(Host 签名
+  // 用的是另一把私钥),派发 fail-closed。公钥在 env 字面量里,没有文件可替换。
+  it('denies dispatch when the verifier env holds an attacker public key (self-signed policy fails)', () => {
+    const attackerKeyPair = generateKeyPairSync('ed25519');
+    const attackerPublicKey = attackerKeyPair.publicKey.export({ format: 'der', type: 'spki' }).toString('base64');
+    const signedByAttacker = {
+      ...runtime,
+      executionPolicy: signPolicy({
+        version: 1,
+        sessionId: 'sess-test',
+        mode: 'development',
+        allowedRoutes: [{ provider: 'glm-coding-plan', model: 'glm-5.3-flash', tier: 'paid', sourceProviderId: 'glm-coding-plan' }],
+        approvals: [],
+        issuedAt: Date.now(),
+      }),
+    };
+    vi.stubEnv('CINDY_PI_SUBAGENT_POLICY_PUBLIC_KEY', attackerPublicKey);
+    expect(() => extension.resolveTaskModelRoutes([{ model: 'glm-5.3-flash', provider: 'glm-coding-plan' }], signedByAttacker))
+      .toThrow(/snapshot is missing/);
+    // env 复原时 Host 签名快照正常派发。
+    vi.stubEnv('CINDY_PI_SUBAGENT_POLICY_PUBLIC_KEY', POLICY_PUBLIC_KEY);
+    const hostSigned = {
+      ...runtime,
+      executionPolicy: signPolicy({
+        version: 1,
+        sessionId: 'sess-test',
+        mode: 'development',
+        allowedRoutes: [{ provider: 'glm-coding-plan', model: 'glm-5.3-flash', tier: 'local' }],
+        approvals: [],
+        issuedAt: Date.now(),
+      }),
+    };
+    const tasks = [{ model: 'glm-5.3-flash', provider: 'glm-coding-plan' }];
+    extension.resolveTaskModelRoutes(tasks, hostSigned);
+    expect(tasks[0]).toMatchObject({ routeProvider: 'glm-coding-plan', routeModel: 'glm-5.3-flash' });
   });
 });

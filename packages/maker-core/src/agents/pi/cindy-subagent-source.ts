@@ -135,7 +135,7 @@ const RUNNER_FILE_ENV = 'CINDY_PI_SUBAGENT_RUNNER_FILE';
 const OWNER_ID_ENV = 'CINDY_PI_SUBAGENT_OWNER_ID';
 const PERMISSION_FILE_ENV = 'CINDY_PI_PERMISSION_FILE';
 const PARENT_SESSION_ENV = 'CINDY_PI_SESSION_ID';const SESSION_TOKEN_ENV = 'CINDY_PI_SESSION_TOKEN';
-const POLICY_PUBLIC_KEY_FILE_ENV = 'CINDY_PI_SUBAGENT_POLICY_PUBLIC_KEY';
+const POLICY_PUBLIC_KEY_FILE_ENV = 'CINDY_PI_SUBAGENT_POLICY_PUBLIC_KEY'; // 值=SPKI DER base64 公钥字面量(P0-B:不是文件路径,没有文件可替换),绝不读文件系统
 const POLICY_KEY_FILE_ENV = POLICY_PUBLIC_KEY_FILE_ENV;
 const SPEND_FILE_ENV = 'CINDY_PI_SUBAGENT_SPEND_FILE';
 const CONFIG_HOME_ENV = 'PI_CODING_AGENT_DIR';
@@ -634,21 +634,24 @@ function policyCanonical(snapshot) {
 
 /** 快照最大时效:24h。 */
 var POLICY_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+var POLICY_RESERVE_TTL_MS = 10 * 60 * 1000;
 var policyKeyCache = {};
 
 /** 读取 Host 公钥(SPKI DER base64;公开值,下发给 verifier 安全;读不到一律 null -> fail-closed)。 */
 function policyReadPublicKey() {
-  const file = process.env[POLICY_PUBLIC_KEY_FILE_ENV];
-  if (typeof file !== 'string' || file.length === 0) return null;
-  if (policyKeyCache.file === file) return policyKeyCache.key || null;
-  policyKeyCache.file = file;
+  // P0-B(env 字面量):Host 直接把 SPKI DER base64 公钥字面量放在 env 里 ——
+  // 没有 public-key.json 文件供 Agent 替换,Agent 只能改 env 字符串;
+  // 这正是 fail-closed 的边界:env 被改成攻击者公钥,自签快照会因不知 Host
+  // 私钥而永远验不过。绝不从文件系统读取(旧文件路径 wiring 视为不可信)。
+  const value = process.env[POLICY_PUBLIC_KEY_FILE_ENV];
+  if (typeof value !== 'string' || value.length === 0) return null;
+  if (policyKeyCache.file === value) return policyKeyCache.key || null;
+  policyKeyCache.file = value;
   policyKeyCache.key = null;
   try {
-    const parsed = JSON.parse(readFileSync(file, 'utf8'));
-    const raw = typeof parsed.publicKey === 'string' ? parsed.publicKey : null;
-    if (raw) {
-      policyKeyCache.key = createPublicKey({ key: Buffer.from(raw, 'base64'), format: 'der', type: 'spki' });
-    }
+    const key = createPublicKey({ key: Buffer.from(value, 'base64'), format: 'der', type: 'spki' });
+    if (key.asymmetricKeyType !== 'ed25519') throw new Error('not an Ed25519 public key');
+    policyKeyCache.key = key;
   } catch (error) {
     policyKeyCache.key = null;
   }
@@ -698,9 +701,20 @@ function policyReadSpendByScope() {
       if (!entry || typeof entry !== 'object') continue;
       const actual = typeof entry.actualUsd === 'number' && Number.isFinite(entry.actualUsd) ? Math.max(0, entry.actualUsd) : 0;
       const estimated = typeof entry.estimatedUsd === 'number' && Number.isFinite(entry.estimatedUsd) ? Math.max(0, entry.estimatedUsd) : 0;
-      const reserved = entry.reservedUsdById && typeof entry.reservedUsdById === 'object'
-        ? Object.values(entry.reservedUsdById).reduce(function (acc, v) { return acc + (typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : 0); }, 0)
-        : 0;
+      // 与 runner 同口径:TTL 内无结算/释放的预留视为死亡 runner 的遗留,不计入总额。
+      let reserved = 0;
+      if (entry.reservedUsdById && typeof entry.reservedUsdById === 'object') {
+        const atById = entry.reservedAtById && typeof entry.reservedAtById === 'object' ? entry.reservedAtById : {};
+        for (const id of Object.keys(entry.reservedUsdById)) {
+          const v = entry.reservedUsdById[id];
+          if (!(typeof v === 'number' && Number.isFinite(v) && v > 0)) continue;
+          const at = typeof atById[id] === 'number' && Number.isFinite(atById[id])
+            ? atById[id]
+            : (typeof entry.updatedAt === 'number' && Number.isFinite(entry.updatedAt) ? entry.updatedAt : 0);
+          if (at > 0 && Date.now() - at > POLICY_RESERVE_TTL_MS) continue;
+          reserved += v;
+        }
+      }
       out[scopeKey] = actual + estimated + reserved;
     }
     return out;

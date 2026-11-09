@@ -886,18 +886,18 @@ function main() {
   var policyKeyCache = {};
   /** 读取 Host 公钥(公开值;读不到一律 null -> fail-closed)。 */
   function policyReadPublicKey() {
-    const file = process.env.CINDY_PI_SUBAGENT_POLICY_PUBLIC_KEY;
-    if (typeof file !== 'string' || file.length === 0) return null;
-    if (policyKeyCache.file === file) return policyKeyCache.key || null;
-    policyKeyCache.file = file;
+    // P0-B(env 字面量):SPKI DER base64 公钥直接放在 env 里 —— 没有文件可替换。
+    // 绝不从文件系统读取(旧文件路径 wiring 视为不可信)。
+    const value = process.env.CINDY_PI_SUBAGENT_POLICY_PUBLIC_KEY;
+    if (typeof value !== 'string' || value.length === 0) return null;
+    if (policyKeyCache.file === value) return policyKeyCache.key || null;
+    policyKeyCache.file = value;
     policyKeyCache.key = null;
     try {
-      const parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
-      const raw = typeof parsed.publicKey === 'string' ? parsed.publicKey : null;
-      if (raw) {
-        const { createPublicKey } = require('node:crypto');
-        policyKeyCache.key = createPublicKey({ key: Buffer.from(raw, 'base64'), format: 'der', type: 'spki' });
-      }
+      const { createPublicKey } = require('node:crypto');
+      const key = createPublicKey({ key: Buffer.from(value, 'base64'), format: 'der', type: 'spki' });
+      if (key.asymmetricKeyType !== 'ed25519') throw new Error('not an Ed25519 public key');
+      policyKeyCache.key = key;
     } catch (error) {
       policyKeyCache.key = null;
     }
@@ -924,6 +924,30 @@ function main() {
     if (approval.scope === 'session') return 'session:' + (approval.sessionId || snapshot.sessionId);
     const root = String(approval.projectRoot || '').replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
     return 'project:' + root;
+  }
+  const POLICY_RESERVE_TTL_MS = 10 * 60 * 1000;
+  const POLICY_RESERVE_PER_TASK_CEILING = 1;
+  function policyComputeScopeTotal(scope) {
+    const actual = typeof scope.actualUsd === 'number' && Number.isFinite(scope.actualUsd) ? Math.max(0, scope.actualUsd) : 0;
+    const estimated = typeof scope.estimatedUsd === 'number' && Number.isFinite(scope.estimatedUsd) ? Math.max(0, scope.estimatedUsd) : 0;
+    const reserved = scope.reservedUsdById && typeof scope.reservedUsdById === 'object'
+      ? Object.values(scope.reservedUsdById).reduce(function (acc, v) { return acc + (typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : 0); }, 0)
+      : 0;
+    return actual + estimated + reserved;
+  }
+  // 崩溃回收:TTL 内无结算/释放的预留视为死亡 runner 遗留,在锁内删掉。
+  function policyPruneExpiredReservations(scope, now) {
+    if (!scope || typeof scope !== 'object') return;
+    if (!scope.reservedUsdById || typeof scope.reservedUsdById !== 'object') { scope.reservedUsdById = {}; }
+    const atById = scope.reservedAtById && typeof scope.reservedAtById === 'object' ? scope.reservedAtById : {};
+    for (const id of Object.keys(scope.reservedUsdById)) {
+      const at = typeof atById[id] === 'number' && Number.isFinite(atById[id]) ? atById[id] : (typeof scope.updatedAt === 'number' && Number.isFinite(scope.updatedAt) ? scope.updatedAt : 0);
+      if (at > 0 && now - at > POLICY_RESERVE_TTL_MS) {
+        delete scope.reservedUsdById[id];
+        delete atById[id];
+      }
+    }
+    scope.reservedAtById = atById;
   }
   function policyReleaseReservation(scopeKey, reservationId) {
     // 在 settle 时释放并发预留(P0-C);best-effort,失败不影响任务收尾。
@@ -957,6 +981,7 @@ function main() {
       if (scope && typeof scope === 'object' && scope.reservedUsdById && typeof scope.reservedUsdById === 'object') {
         if (reservationId in scope.reservedUsdById) {
           delete scope.reservedUsdById[reservationId];
+          if (scope.reservedAtById && typeof scope.reservedAtById === 'object') delete scope.reservedAtById[reservationId];
           scope.updatedAt = Date.now();
           atomicWriteJson(file, parsed);
         }
@@ -967,13 +992,15 @@ function main() {
     }
   }
   /**
-   * 预算预留(P0-C 并发):launch 时按剩余 cap 预留一笔(plausible upper bound),
-   * 并发 Worker 互相可见 reserved,避免 N 个 Worker 同时穿透 cap。
-   * reservationId = 子会话 id —— Host 结算时以同一 id 释放。
+   * 预算预留(P0-C 并发原子裁决):“读账本 → 计算余额 → 预留 → 持久化”全部在同一把
+   * O_EXCL 锁临界区内完成;预留失败、账本不可读、锁超时或持久化失败一律返回
+   * { ok: false },由 launchTask 拒绝付费任务启动(fail-closed)。
+   * 返回:{ ok: true, reserved } | { ok: false, reason }
    */
-  function policyReserve(amountUsd, scopeKey, reservationId) {
+  function policyReserve(capUsd, scopeKey, reservationId) {
     const file = process.env.CINDY_PI_SUBAGENT_SPEND_FILE;
-    if (typeof file !== 'string' || !file) return 0;
+    if (typeof file !== 'string' || !file) return { ok: false, reserved: 0, reason: 'spend file env is missing; refusing to spawn an unaccounted paid task' };
+    if (!(capUsd > 0)) return { ok: false, reserved: 0, reason: 'approval cap is not positive; refusing to spawn' };
     const lockPath = file + '.lock';
     let fd;
     const deadline = Date.now() + 2000;
@@ -988,45 +1015,77 @@ function main() {
           const stat = fs.statSync(lockPath);
           if (Date.now() - stat.mtimeMs > 30000) { fs.unlinkSync(lockPath); continue; }
         } catch (ignored) {}
-        if (Date.now() > deadline) return 0;
+        if (Date.now() > deadline) return { ok: false, reserved: 0, reason: 'spend lock timeout; refusing to spawn' };
         const end = Date.now() + 10;
         while (Date.now() < end) {}
       }
     }
     try {
-      const parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
-      if (!parsed || typeof parsed !== 'object' || !parsed.byScope || typeof parsed.byScope !== 'object') return 0;
-      const scope = parsed.byScope[scopeKey] || { actualUsd: 0, estimatedUsd: 0, reservedUsdById: {}, updatedAt: 0 };
+      // fail-closed 读取:文件不存在(首个付费任务)视为可建账;账本损坏/不可读则拒绝。
+      let raw = null;
+      let missing = false;
+      try { raw = fs.readFileSync(file, 'utf8'); } catch (readError) {
+        if (readError && readError.code === 'ENOENT') missing = true;
+        else if (readError && (readError.code === 'ENOTDIR' || readError.code === 'EACCES')) missing = true;
+        else return { ok: false, reserved: 0, reason: 'spend ledger unreadable; refusing to spawn' };
+      }
+      let parsed;
+      if (missing) {
+        parsed = { version: 2, byScope: {} };
+      } else {
+        try { parsed = JSON.parse(raw); } catch (parseError) {
+          return { ok: false, reserved: 0, reason: 'spend ledger unreadable; refusing to spawn' };
+        }
+        if (!parsed || typeof parsed !== 'object' || !parsed.byScope || typeof parsed.byScope !== 'object') {
+          return { ok: false, reserved: 0, reason: 'spend ledger unreadable; refusing to spawn' };
+        }
+      }
+      const now = Date.now();
+      const scope = parsed.byScope[scopeKey] && typeof parsed.byScope[scopeKey] === 'object'
+        ? parsed.byScope[scopeKey]
+        : { actualUsd: 0, estimatedUsd: 0, reservedUsdById: {}, reservedAtById: {}, updatedAt: 0 };
+      policyPruneExpiredReservations(scope, now);
+      // 幂等:同一 reservationId 已在途时不再叠加(可重入);
+      // 若这条是 TTL 刚被回收的旧预留,按新预留走。
       if (scope.reservedUsdById && typeof scope.reservedUsdById === 'object' && reservationId in scope.reservedUsdById) {
-        return scope.reservedUsdById[reservationId];
+        return { ok: true, reserved: scope.reservedUsdById[reservationId] };
+      }
+      const total = policyComputeScopeTotal(scope);
+      const remaining = capUsd - total;
+      if (remaining <= 0) {
+        return { ok: false, reserved: 0, reason: 'approval spend cap reached; request a new capped approval from the user' };
+      }
+      // 单任务预留上限:每子会话最多预留 POLICY_RESERVE_PER_TASK_CEILING —— 防止一个长
+      // 会话把 cap 的全部剩余额度占住。
+      const amount = Math.min(POLICY_RESERVE_PER_TASK_CEILING, remaining);
+      if (!(amount > 0)) {
+        return { ok: false, reserved: 0, reason: 'approval spend cap reached; request a new capped approval from the user' };
       }
       scope.reservedUsdById = scope.reservedUsdById && typeof scope.reservedUsdById === 'object' ? scope.reservedUsdById : {};
-      scope.reservedUsdById[reservationId] = amountUsd;
-      scope.updatedAt = Date.now();
+      scope.reservedUsdById[reservationId] = amount;
+      scope.reservedAtById = scope.reservedAtById && typeof scope.reservedAtById === 'object' ? scope.reservedAtById : {};
+      scope.reservedAtById[reservationId] = now;
+      scope.updatedAt = now;
       parsed.byScope[scopeKey] = scope;
-      // 一条写路径两种口径:spend 记账也走 atomicWriteJson(带 retry 的 tmp+rename)
-      atomicWriteJson(file, parsed);
-      return amountUsd;
-    } catch (ignored) {
-      return 0;
+      try {
+        atomicWriteJson(file, parsed);
+      } catch (writeError) {
+        return { ok: false, reserved: 0, reason: 'spend ledger persist failed; refusing to spawn' };
+      }
+      return { ok: true, reserved: amount };
     } finally {
       try { if (fd !== undefined) fs.closeSync(fd); } catch (ignored) {}
       try { fs.unlinkSync(lockPath); } catch (ignored) {}
     }
   }
   /**
-   * 预算预留(P0-C 并发):launch 时按剩余 cap 预留一笔(plausible upper bound),
+   * 预算预留(P0-C 并发原子裁决):launch 时按剩余 cap 预留一笔(plausible upper bound),
    * 并发 Worker 互相可见 reserved,避免 N 个 Worker 同时穿透 cap。
    * reservationId = 子会话 id —— Host 结算时以同一 id 释放。
    */
-  function policyReserveAmount(capUsd, spentUsd, scopeKey, reservationId) {
-    if (!(capUsd > 0) || !(spentUsd >= 0)) return 0;
-    const remaining = capUsd - spentUsd;
-    if (remaining <= 0) return 0;
-    // 单任务预留上限:每子会话最多预留 $1 —— 防止一个长会话把 cap 全部占住,
-    // 其余任务拿不到额度。(onset-real cost 结算后释放。)
-    const perTaskCeiling = 1;
-    return policyReserve(Math.min(perTaskCeiling, remaining), scopeKey, reservationId);
+  function policyReserveAmount(capUsd, scopeKey, reservationId) {
+    if (!(capUsd > 0)) return { ok: false, reserved: 0, reason: 'approval cap is not positive; refusing to spawn' };
+    return policyReserve(capUsd, scopeKey, reservationId);
   }
   function policyReadSpendByScope() {
     const file = process.env.CINDY_PI_SUBAGENT_SPEND_FILE;
@@ -1036,14 +1095,27 @@ function main() {
       const out = {};
       const byScope = parsed && typeof parsed === 'object' ? parsed.byScope : null;
       if (!byScope || typeof byScope !== 'object') return out;
+      const now = Date.now();
       for (const scopeKey of Object.keys(byScope)) {
         const entry = byScope[scopeKey];
         if (!entry || typeof entry !== 'object') continue;
         const actual = typeof entry.actualUsd === 'number' && Number.isFinite(entry.actualUsd) ? Math.max(0, entry.actualUsd) : 0;
         const estimated = typeof entry.estimatedUsd === 'number' && Number.isFinite(entry.estimatedUsd) ? Math.max(0, entry.estimatedUsd) : 0;
-        const reserved = entry.reservedUsdById && typeof entry.reservedUsdById === 'object'
-          ? Object.values(entry.reservedUsdById).reduce(function (acc, v) { return acc + (typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : 0); }, 0)
-          : 0;
+        // 过期预留下锁生效(死亡 runner 的遗留预留不计入 decider 总额);
+        // 权威清理在 policyReserve 锁内,读这里只算不改。
+        let reserved = 0;
+        if (entry.reservedUsdById && typeof entry.reservedUsdById === 'object') {
+          const atById = entry.reservedAtById && typeof entry.reservedAtById === 'object' ? entry.reservedAtById : {};
+          for (const id of Object.keys(entry.reservedUsdById)) {
+            const v = entry.reservedUsdById[id];
+            if (!(typeof v === 'number' && Number.isFinite(v) && v > 0)) continue;
+            const at = typeof atById[id] === 'number' && Number.isFinite(atById[id])
+              ? atById[id]
+              : (typeof entry.updatedAt === 'number' && Number.isFinite(entry.updatedAt) ? entry.updatedAt : 0);
+            if (at > 0 && now - at > POLICY_RESERVE_TTL_MS) continue;
+            reserved += v;
+          }
+        }
         out[scopeKey] = actual + estimated + reserved;
       }
       return out;
@@ -1130,27 +1202,23 @@ function main() {
       if (policyDecision.approvalId) task.approvalId = policyDecision.approvalId;
       // P0-C:带 maxCostUsd 的 approval 在 launch 时原子预留预算(并发可见),
       // 避免 N 个 Worker 同时穿透 cap。reservationId = 子会话 id(Host 结算释放)。
+      // 预留失败、账本不可读、锁超时或持久化失败一律拒绝付费任务启动(fail-closed)。
       if (policySnapshot && policyDecision.approvalId) {
         const approval = policySnapshot.approvals.find(a => a.id === policyDecision.approvalId);
         if (approval && approval.maxCostUsd !== undefined) {
           const scopeKeyForReserve = policyApprovalSpendKey(approval, policySnapshot);
-          const spentNow = Object.prototype.hasOwnProperty.call(policySpend, scopeKeyForReserve)
-            ? Number(policySpend[scopeKeyForReserve])
-            : 0;
-          const reserved = policyReserveAmount(approval.maxCostUsd, spentNow, scopeKeyForReserve, task.sessionId);
-          if (reserved > 0) {
-            task.policySpendScopeKey = scopeKeyForReserve;
-            task.policyReservationId = task.sessionId;
-          } else if (spentNow >= approval.maxCostUsd) {
-            // 预留不到且已到 cap —— 视为耗尽,拒绝 spawn(与 decide 的 spend 检查对齐)。
+          const result = policyReserveAmount(approval.maxCostUsd, scopeKeyForReserve, task.sessionId);
+          if (!result.ok || !(result.reserved > 0)) {
             task.status = 'failed';
-            task.error = 'Model execution policy denied spawn for ' + task.provider + '/' + (task.model || task.displayModel) + ': approval spend cap reached; request a new capped approval from the user';
+            task.error = 'Model execution policy denied spawn for ' + task.provider + '/' + (task.model || task.displayModel) + ': ' + (result.reason || 'budget reservation failed; request a capped approval from the user');
             task.authorizationDecision = 'denied';
             task.endedAt = Date.now();
             scheduleStatus();
             resolve();
             return;
           }
+          task.policySpendScopeKey = scopeKeyForReserve;
+          task.policyReservationId = task.sessionId;
         }
       }
       fs.mkdirSync(task.sessionDir, { recursive: true, mode: 0o700 });

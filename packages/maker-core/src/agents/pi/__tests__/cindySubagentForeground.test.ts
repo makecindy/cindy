@@ -47,8 +47,8 @@ async function fixture() {
   const fakePi = path.join(root, 'fake-pi.cjs');
   const extensionFile = path.join(root, 'extension.cjs');
   await writeFile(permissionFile, '{"mode":"ask"}\n');
-  const policyKeyFile = path.join(root, 'policy-key.json');
-  await writeFile(policyKeyFile, JSON.stringify({ publicKey: POLICY_KEYPAIR.publicKey }), { mode: 0o600 });
+  // P0-B:公钥以 env 字面量注入(不是文件路径)。
+  const policyPublicKey = POLICY_KEYPAIR.publicKey;
   await writeFile(runtimeFile, JSON.stringify({
     provider: 'fixture',
     model: 'fixture-model',
@@ -130,7 +130,7 @@ process.stdin.on('end', () => process.exit(0));
     },
   }).outputText;
   await writeFile(extensionFile, compiled);
-  return { root, configHome, runRoot, permissionFile, runtimeFile, runnerFile, fakePi, extensionFile, policyKeyFile };
+  return { root, configHome, runRoot, permissionFile, runtimeFile, runnerFile, fakePi, extensionFile, policyPublicKey };
 }
 
 function hostInput(f: Awaited<ReturnType<typeof fixture>>, permission = 'allow') {
@@ -193,9 +193,8 @@ describe('Cindy PI Subagent foreground durable path', () => {
       [CINDY_SUBAGENT_ENV.ownerId]: 'foreground-owner',
       CINDY_PI_PERMISSION_FILE: f.permissionFile,
       CINDY_PI_SESSION_ID: 'parent-session',
-        CINDY_PI_SUBAGENT_POLICY_PUBLIC_KEY: f.policyKeyFile,
+      CINDY_PI_SUBAGENT_POLICY_PUBLIC_KEY: f.policyPublicKey,
       CINDY_PI_SESSION_TOKEN: 'parent-session-token-1234567890abcdef',
-      CINDY_PI_SUBAGENT_POLICY_PUBLIC_KEY: f.policyKeyFile,
       PI_CODING_AGENT_DIR: f.configHome,
     });
     const registered: {
@@ -285,7 +284,7 @@ describe('Cindy PI Subagent foreground durable path', () => {
         [CINDY_SUBAGENT_ENV.ownerId]: 'foreground-owner',
         CINDY_PI_PERMISSION_FILE: f.permissionFile,
         CINDY_PI_SESSION_ID: 'parent-session',
-        CINDY_PI_SUBAGENT_POLICY_PUBLIC_KEY: f.policyKeyFile,
+        CINDY_PI_SUBAGENT_POLICY_PUBLIC_KEY: f.policyPublicKey,
         PI_CODING_AGENT_DIR: f.configHome,
       });
       const registered: { execute?: (...args: unknown[]) => Promise<unknown> } = {};
@@ -352,7 +351,7 @@ setTimeout(() => process.exit(0), 20000).unref();
         [CINDY_SUBAGENT_ENV.ownerId]: 'foreground-owner',
         CINDY_PI_PERMISSION_FILE: f.permissionFile,
         CINDY_PI_SESSION_ID: 'parent-session',
-        CINDY_PI_SUBAGENT_POLICY_PUBLIC_KEY: f.policyKeyFile,
+        CINDY_PI_SUBAGENT_POLICY_PUBLIC_KEY: f.policyPublicKey,
         PI_CODING_AGENT_DIR: f.configHome,
       });
       const registered: { execute?: (...args: unknown[]) => Promise<unknown> } = {};
@@ -468,7 +467,7 @@ setTimeout(() => process.exit(2), 5000).unref();
         [CINDY_SUBAGENT_ENV.ownerId]: 'foreground-owner',
         CINDY_PI_PERMISSION_FILE: f.permissionFile,
         CINDY_PI_SESSION_ID: 'parent-session',
-        CINDY_PI_SUBAGENT_POLICY_PUBLIC_KEY: f.policyKeyFile,
+        CINDY_PI_SUBAGENT_POLICY_PUBLIC_KEY: f.policyPublicKey,
         PI_CODING_AGENT_DIR: f.configHome,
       });
       const registered: { execute?: (...args: unknown[]) => Promise<unknown> } = {};

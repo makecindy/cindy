@@ -78,4 +78,50 @@ describe('subagent model spend', () => {
     reserveSubagentModelSpend('session:sess-b', 'only', 2);
     expect(readSubagentModelSpend('session:sess-b')).toBeCloseTo(2);
   });
+
+  it('first paid task with a missing ledger creates the ledger and reserves', () => {
+    const ledgerPath = subagentModelSpendFilePath();
+    fs.rmSync(ledgerPath, { force: true });
+    expect(reserveSubagentModelSpend('session:sess-first', 'child-1', 1, 5)).toBe(1);
+    expect(fs.existsSync(ledgerPath)).toBe(true);
+    expect(readSubagentModelSpend('session:sess-first')).toBeCloseTo(1);
+  });
+
+  it('two workers racing for the last balance: the second reservation is refused', () => {
+    addSubagentModelSpend('session:sess-race', 1.8, false);
+    const first = reserveSubagentModelSpend('session:sess-race', 'child-a', 1, 2);
+    expect(first).toBeCloseTo(0.2); // 只能预留到上限
+    const second = reserveSubagentModelSpend('session:sess-race', 'child-b', 1, 2);
+    expect(second).toBe(0); // 已耗尽 —— 不穿透
+    expect(readSubagentModelSpend('session:sess-race')).toBeCloseTo(2);
+  });
+
+  it('expired reservations are pruned so crashed runners do not leak budget forever', () => {
+    reserveSubagentModelSpend('session:sess-dead', 'child-dead', 1, 5);
+    expect(readSubagentModelSpend('session:sess-dead')).toBeCloseTo(1);
+    // 回写一个 11 分钟前的 TTL 时间戳,模拟 runner 崩溃留下的在途预留。
+    const ledgerPath = subagentModelSpendFilePath();
+    const raw = JSON.parse(fs.readFileSync(ledgerPath, 'utf8'));
+    const scope = raw.byScope['session:sess-dead'];
+    const backdated = Date.now() - 11 * 60 * 1000;
+    scope.reservedAtById['child-dead'] = backdated;
+    fs.writeFileSync(ledgerPath, JSON.stringify(raw), { mode: 0o600 });
+    expect(reserveSubagentModelSpend('session:sess-dead', 'child-new', 1, 5)).toBe(1);
+    expect(readSubagentModelSpend('session:sess-dead')).toBeCloseTo(1); // 旧预留已被回收
+  });
+
+  it('corrupt ledger fails closed: reservations are refused, never silently overwritten', () => {
+    const ledgerPath = subagentModelSpendFilePath();
+    fs.writeFileSync(ledgerPath, '{ this is not json', { mode: 0o600 });
+    expect(reserveSubagentModelSpend('session:sess-corrupt', 'child-1', 1, 5)).toBe(0);
+    // 损坏文件没有被覆盖成空账本 —— 后续结算/排查能看见它。
+    expect(fs.readFileSync(ledgerPath, 'utf8')).toBe('{ this is not json');
+  });
+
+  it('tolerant settlement-side read cannot resurrect an exhausted cap', () => {
+    addSubagentModelSpend('session:sess-x', 5, false); // 真实耗尽
+    // 结算的宽容读侧容忍损坏文件,但预留裁决始终按已耗尽状态拒绝追加。
+    expect(reserveSubagentModelSpend('session:sess-x', 'child-1', 1, 5)).toBe(0);
+    expect(readSubagentModelSpend('session:sess-x')).toBeCloseTo(5);
+  });
 });
