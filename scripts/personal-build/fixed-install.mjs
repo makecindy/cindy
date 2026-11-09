@@ -9,6 +9,17 @@ import {durableWrite} from './recovery.mjs';
 const read = file => JSON.parse(fs.readFileSync(file, 'utf8'));
 const exists = file => { try { fs.lstatSync(file); return true; } catch(e) { if(e.code === 'ENOENT') return false; throw e; } };
 const check = (ok, reason) => { if (!ok) throw Error(reason); };
+// OS indexing is repairable metadata, never a reason to strand an installed app.
+function registerInstallation(receipt, backup, app, registry) {
+  const next = {...receipt};
+  delete next.registrationPending;
+  if (!registry) return next;
+  const errors=[];
+  if (backup) { try { registry.unregister(backup); } catch(error) { errors.push(error.message); } }
+  try { registry.register(app); } catch(error) { errors.push(error.message); }
+  if(errors.length) next.registrationPending={app,backup,errors,at:Date.now()};
+  return next;
+}
 function verifyApp(app, receipt, verifySignature) {
   check(fs.lstatSync(app).isDirectory() && !fs.lstatSync(app).isSymbolicLink(), 'Personal installation must be a physical app directory');
   check(treeIdentity(app) === receipt.digest, 'Installed personal runtime changed; inspect before replacing it');
@@ -49,8 +60,7 @@ function finishTransition(app, file, {isRunning, verifySignature, rename, backup
     // New bundle was renamed before the process stopped: only finish its metadata.
     if (treeIdentity(app) === t.next.digest) {
       verifyApp(app,t.next,verifySignature);
-      if (t.previous && exists(t.backup)) registry?.retire(t.backup,app); else registry?.register(app);
-      durableWrite(app+'.personal-install.json',t.next); fs.unlinkSync(file); return;
+      durableWrite(app+'.personal-install.json',registerInstallation(t.next,t.previous && exists(t.backup)?t.backup:null,app,registry)); fs.unlinkSync(file); return;
     }
     check(t.previous, 'An unknown application occupies the installation path');
     verifyApp(app,t.previous,verifySignature);
@@ -63,8 +73,7 @@ function finishTransition(app, file, {isRunning, verifySignature, rename, backup
   verifyApp(t.stage,t.next,verifySignature);
   rename(t.stage,app);
   verifyApp(app,t.next,verifySignature);
-  if (t.previous) registry?.retire(t.backup,app); else registry?.register(app);
-  durableWrite(app+'.personal-install.json',t.next);
+  durableWrite(app+'.personal-install.json',registerInstallation(t.next,t.previous?t.backup:null,app,registry));
   fs.unlinkSync(file);
 }
 export function installFixedRuntime(runtime, app, {isRunning, verifySignature, rename = fs.renameSync, registry}) {

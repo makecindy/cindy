@@ -239,7 +239,7 @@ export async function waitForOwnedShutdown(pid, {
 async function smoke(c, release) {
   const launched = start(c, release, { mock: true });
   let profile, failure;
-  const cleanupErrors=[];
+  const cleanupErrors=[], registrationWarnings=[];
   try {
     const startup = await import(pathToFileURL(path.join(c.app.checkout, 'scripts/restart-desktop-remote.mjs')));
     profile = startup.defaultIsolatedUserDataDir(launched.mode[0].slice('--isolated='.length), c.region);
@@ -253,15 +253,15 @@ async function smoke(c, release) {
       const preview=runtime ? path.join(runtime.directory,'Cindy.app') : path.join(release.directory,'node_modules/electron/dist/Electron.app');
       assertFixedAppStopped(preview);
       appRegistry().unregister(preview);
-    } catch(error) { cleanupErrors.push(error); }
+    } catch(error) { registrationWarnings.push(error.message); }
     try {
       if(fs.existsSync(c.runtime.personalApp+'.personal-install.json')) appRegistry().register(c.runtime.personalApp);
-    } catch(error) { cleanupErrors.push(error); }
+    } catch(error) { registrationWarnings.push(error.message); }
   }
   if(cleanupErrors.length) throw new AggregateError([...(failure?[failure]:[]),...cleanupErrors],
     [failure?.message,...cleanupErrors.map(error=>error.message)].filter(Boolean).join('; '));
   if(failure) throw failure;
-  return { at: Date.now(), profile, log: launched.log };
+  return { at: Date.now(), profile, log: launched.log, registrationWarnings };
 }
 export async function automaticCheck(file) {
   const c = config(file), unlock = acquire(path.join(root(c), 'prepare.lock'));
@@ -291,10 +291,13 @@ export async function automaticCheck(file) {
   } catch (e) { status(c, 'preparation-failed', { error: e.message }); throw e; }
   finally { unlock(); }
 }
+export function blockedAutomaticCandidate(s, id) {
+  return s.launchFailure?.id === id || s.rejected.some(r => r.id === id);
+}
 function candidate(c, s) {
   try {
     const v = read(path.join(root(c), 'candidate.json'));
-    if (v.monitorProtocol !== 1 || !v.prepared || !v.smoke || v.id === s.good.id || s.rejected.some(r => r.id === v.id) || !compatibility(s.good, v).compatible) return null;
+    if (v.monitorProtocol !== 1 || !v.prepared || !v.smoke || v.id === s.good.id || blockedAutomaticCandidate(s, v.id) || !compatibility(s.good, v).compatible) return null;
     verifyRelease(v); return v;
   } catch { return null; }
 }
@@ -567,7 +570,8 @@ async function superviseLocked(file, c, store, bootstrapFile, manualFile, onVeri
     if(!background && c.automatic.enabled!==true && s.phase==='stable' && present.ready && present.pid===current.pid
       && shouldYieldSupervisor(path.join(root(c),'supervisor.lock'),control)) {
       status(c,'supervision-released',{id:s.good.id,pid:current.pid});
-      current.launched.child.unref();
+      // Keep the child referenced: this terminal still carries its PTY until the runner exits.
+      console.error('Supervision released. Keep this terminal open until the Cindy runner exits.');
       return; // The caller's finally releases the lock; the app and its runner remain running.
     }
     if (c.automatic.enabled === true && Date.now() >= nextCheck && !background) {
@@ -674,6 +678,7 @@ export async function automaticCommand(command, options) {
       }});
     result.remaining=registeredApps(id);
     result.ok=result.ok&&result.remaining.length===1&&result.remaining[0]===app;
+    if(result.ok && installed.registrationPending) { delete installed.registrationPending; durableWrite(app+'.personal-install.json',installed); }
     console.log(JSON.stringify(result,null,2));if(!result.ok)process.exitCode=1;return;
   }
   if(command==='supervisor-release') {

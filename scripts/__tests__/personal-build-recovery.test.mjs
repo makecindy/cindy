@@ -6,7 +6,7 @@ import os from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { main } from '../personal-build.mjs';
 import { RecoveryJournal, compatibility, durableWrite } from '../personal-build/recovery.mjs';
-import { launchSelected, trial, startTrial, readHeartbeat, acquire, validateBootstrap, validateManualUpgrade, restartWithSupervisorLock, waitForOwnedShutdown, fixedAppProcesses } from '../personal-build/automatic.mjs';
+import { blockedAutomaticCandidate, launchSelected, trial, startTrial, readHeartbeat, acquire, validateBootstrap, validateManualUpgrade, restartWithSupervisorLock, waitForOwnedShutdown, fixedAppProcesses } from '../personal-build/automatic.mjs';
 
 // Script integration: the old launcher forgot its fallback at first ready and had no durable trial
 // recovery. Real on-disk journal, separate terminating writer process, injected time (no sleeps).
@@ -420,6 +420,8 @@ test('pre-spawn failure can be checked and retried, and recovered supervision fa
  const f=fixture(t),proof={prepared:true,stopped:true,manualRequested:true,smokeVerified:true,profileVerified:true};
  f.j.beginManual(f.candidate,proof);f.j.rejectBeforeLaunch('TTY unavailable');f.j.finishRecovery(true);
  assert.equal(f.j.read().rejected.length,0);
+  assert.equal(blockedAutomaticCandidate(f.j.read(),f.candidate.id),true);
+  assert.equal(blockedAutomaticCandidate(f.j.read(),'different-checked-candidate'),false);
  f.j.beginManual(f.candidate,proof); // same candidate bytes, fresh explicit acceptance
  let receipt;
  await assert.rejects(restartWithSupervisorLock(path.join(f.dir,'lock'),42,{

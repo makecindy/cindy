@@ -132,7 +132,8 @@ export function doctor(c, exec = run) {
   result.legacyAppBackups=fs.existsSync(appParent) ? fs.readdirSync(appParent).filter(name=>name.startsWith(legacyPrefix)).map(name=>path.join(appParent,name)) : [];
   if(process.platform==='darwin' && fs.existsSync(r.personalApp+'.personal-install.json')) {
     try {
-      const id=read(r.personalApp+'.personal-install.json').inputs.bundleId;
+      const installed=read(r.personalApp+'.personal-install.json'), id=installed.inputs.bundleId;
+      if(installed.registrationPending)result.issues.push('LaunchServices registration needs repair; run registry-clean after inspecting retired paths');
       result.registeredApps=registeredApps(id);
       if(result.registeredApps.length!==1 || result.registeredApps[0]!==r.personalApp)result.issues.push('Personal Bundle ID has stale or missing LaunchServices registrations; inspect paths before unregistering retired copies');
     } catch(e) { result.issues.push(`Cannot inspect personal app registrations: ${e.message}`); }

@@ -831,13 +831,18 @@ and the target phone before calling delivery successful.
   和版本），旧程序只退出监督循环，保持应用运行。新程序取得锁并复核身份后才正常退出
   应用。也可显式用 `supervisor-release --config FILE --expected-pid PID` 单独交出监督。
   旧版监督程序不支持此协议时明确阻断，不通过 kill/删锁兼容；升级工具自身仍需独立验收。
+  交出锁后旧进程仍持有 runner 子进程引用，终端在 runner 退出前不可关闭或复用；
+  释放监督权不等于释放界面服务所在的终端。
 - 签名要求变化在退出旧版前阻断。证书续期/身份迁移尚无自动命令，须单独准备和审核，
   不接受静默换证或放宽校验。遗留安装事务可显式 `install-recover --config FILE --report
   CHECKED_BUILD_REPORT`，要求监督锁可取得、应用与 runner 均已停止、报告和事务的 runtime
   key/digest 一致；只完成文件事务，不启动应用、不更改业务 journal。候选开始尝试执行后，
   数据兼容性未知仍禁止自动退回旧版。
 - 换壳后注销退役包的 LaunchServices 登记并重新登记固定安装路径；隔离 smoke 正常停止
-  后注销预览包，仍被别的实例使用则保留并报错。改名为 `.bundle` 本身不保证系统注销。
+  后注销预览包，仍被别的实例使用则保留并警告。改名为 `.bundle` 本身不保证系统注销。
+  系统登记失败不得阻断文件安装或旧版恢复：完成文件事务，在安装元数据记录
+  `registrationPending`，由 doctor 提示、registry-clean 成功后清除；smoke 的登记错误
+  写入 `registrationWarnings`，不改变候选启动结果。停止进程失败仍使 smoke 失败。
   `doctor` 列出同 Bundle ID 的登记路径；显式 `registry-clean --config FILE` 只注销
   同 ID、同证书、签名有效且未运行的副本，重新登记固定路径，不删除文件、不重置 TCC。
   无法识别/核验的条目保留，命令报告未完成，不能据此宣称授权已经生效。
@@ -845,7 +850,8 @@ and the target phone before calling delivery successful.
   同样清除继承值。读取方继续验证 PID、代次与新鲜度，未知活动仍视为忙。
 - 只有当前调用栈确认**尚未尝试 spawn**，才允许恢复旧版；没有 ready、超时或监督程序
   被中断都不构成这一证据。恢复结果标为 `recovered`、`verified:false`，不是新版升级成功。启动前的瞬时失败
-  不写入内容拒绝名单，修复环境并重新检查后可以重试同一候选；恢复后监督异常仍保留 recovered 标志。
+  不写入内容拒绝名单，修复环境并显式重新检查后可以手动重试同一候选；自动候选选择
+  排除 `launchFailure.id`，防止同一坏候选不断退出并恢复应用；恢复后监督异常仍保留 recovered 标志。
   候选一旦尝试启动且无法确认兼容性，保持 blocked。使用 `doctor` / `auto-status`
   检查及受保护的 `auto-recover`，不得手改 journal 或删除拒绝记录绕过检查。
 - 每次实际切换后分别核对屏幕录制与辅助功能的当前进程检查结果。系统设置里的开关、

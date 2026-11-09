@@ -121,16 +121,18 @@ test('fixed installation reuses its path and resumes a failed switch with old ru
   installFixedRuntime(third,app,{...options,isRunning:()=>true});
   assert.equal(fs.statSync(app).ino,inode);
   verifyInstalledRuntime(third,app,()=>{});
-  // Registration failure after promotion preserves the transition for explicit recovery.
+  // OS registration failures must never strand the installation or its recovery.
   const fourth=prepare('four');const registrations=[];
-  assert.throws(()=>installFixedRuntime(fourth,app,{...options,registry:{retire:()=>{throw Error('registry unavailable');}}}),/registry unavailable/);
-  assert.equal(fs.existsSync(app+'.personal-transition.json'),true);
-  const promoted=fs.statSync(app).ino;
-  installFixedRuntime(fourth,app,{...options,registry:{retire:(backup,fixed)=>registrations.push([backup,fixed])}});
-  assert.equal(fs.statSync(app).ino,promoted);
-  assert.equal(registrations.length,1);assert.equal(registrations[0][1],app);
+  installFixedRuntime(fourth,app,{...options,registry:{unregister:()=>{throw Error('registry unavailable');},register:fixed=>registrations.push(fixed)}});
   assert.equal(fs.existsSync(app+'.personal-transition.json'),false);
+  assert.deepEqual(registrations,[app]);
+  const metadata=JSON.parse(fs.readFileSync(app+'.personal-install.json'));
+  assert.deepEqual(metadata.registrationPending.errors,['registry unavailable']);
   verifyInstalledRuntime(fourth,app,()=>{});
+  // Recovery to the old runtime also completes even if indexing remains unavailable.
+  installFixedRuntime(third,app,{...options,registry:{unregister:()=>{throw Error('registry unavailable');},register:()=>{throw Error('index offline');}}});
+  verifyInstalledRuntime(third,app,()=>{});
+  assert.equal(fs.existsSync(app+'.personal-transition.json'),false);
   const foreign=path.join(dir,'Other.app');fs.mkdirSync(foreign);fs.writeFileSync(path.join(foreign,'keep'),'mine');
   assert.throws(()=>installFixedRuntime(first,foreign,options),/unmanaged/);
   assert.equal(fs.readFileSync(path.join(foreign,'keep'),'utf8'),'mine');
