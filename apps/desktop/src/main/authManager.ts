@@ -389,7 +389,7 @@ const uncertainResourceRefreshTokens = new Map<AuthRegion, string>();
 // failed write must not send the already-consumed predecessor to the server.
 const pendingResourceRefreshResults = new Map<
   AuthRegion,
-  { requestedToken: string; pair: AuthTokenPair }
+  { requestedToken: string; pair: AuthTokenPair; expectedVaultRefreshToken: string | null }
 >();
 const refreshBackoff = new AuthRefreshBackoff();
 let sessionInvalidationPromise: Promise<void> | null = null;
@@ -1707,6 +1707,7 @@ async function commitDesktopRefreshCredentials(
   requestedRefreshToken: string,
   options: {
     allowUnclaimedVault?: boolean;
+    expectedVaultRefreshToken?: string | null;
     validateBeforeWrite?: () => void;
   } = {},
 ): Promise<ActiveRefreshCredentialCommit> {
@@ -1714,6 +1715,17 @@ async function commitDesktopRefreshCredentials(
     (vault) => {
       options.validateBeforeWrite?.();
       const key = accountVaultKey(realm, pair.membership.id);
+      const currentVaultToken = vault.resources[key]?.refreshToken ?? null;
+      // The compatibility projection can remain stale after a failed write.
+      // Under the vault lock, accept only the generation observed before the
+      // request, or our own saved result whose projection still needs repair.
+      if (
+        options.expectedVaultRefreshToken !== undefined &&
+        currentVaultToken !== options.expectedVaultRefreshToken &&
+        currentVaultToken !== pair.refreshToken
+      ) {
+        return vault.resources[key] ? 'inactive' : 'discarded';
+      }
       const latestSession = readPersistedAuthSession();
       const requestedTokenStillStored =
         (latestSession?.realm === realm && latestSession.refreshToken === requestedRefreshToken) ||
@@ -3607,21 +3619,35 @@ async function runAuthRefreshWithReplacementRetry(
   replacementRetryExhausted: boolean;
   failureAction?: RefreshFailureAction;
   rejectedTokens: readonly string[];
+  expectedVaultRefreshToken?: string | null;
 }> {
+  let expectedVaultRefreshToken: string | null | undefined;
   const run = await runRefreshWithReplacementRetry(initialRefreshToken, {
     readLatestStoredTokens: () => readStoredRefreshTokenCandidates(opts.realm),
     doRefresh: async (refreshToken) => {
       const pending = pendingResourceRefreshResults.get(opts.realm);
       if (pending?.requestedToken === refreshToken) {
+        expectedVaultRefreshToken = pending.expectedVaultRefreshToken;
         return { ok: true, status: 200, data: pending.pair };
       }
+      // Copy token values before sending: the response identifies the account,
+      // but another instance may have advanced its vault entry by then.
+      const vaultTokens = new Map(
+        Object.entries(readAuthAccountVault().resources).map(
+          ([key, resource]) => [key, resource.refreshToken] as const,
+        ),
+      );
       const result = await requestAuthRefresh(refreshToken, opts.realm);
       if (!result.ok && (result.status === 0 || (result.status >= 200 && result.status < 300))) {
         uncertainResourceRefreshTokens.set(opts.realm, refreshToken);
       } else if (result.ok) {
+        const pair = result.data as RefreshResponse;
+        expectedVaultRefreshToken =
+          vaultTokens.get(accountVaultKey(opts.realm, pair.membership.id)) ?? null;
         pendingResourceRefreshResults.set(opts.realm, {
           requestedToken: refreshToken,
-          pair: result.data as RefreshResponse,
+          pair,
+          expectedVaultRefreshToken,
         });
         if (uncertainResourceRefreshTokens.get(opts.realm) === refreshToken) {
           uncertainResourceRefreshTokens.delete(opts.realm);
@@ -3667,9 +3693,19 @@ async function runAuthRefreshWithReplacementRetry(
       const pair = await recoverActiveResourceSession(opts.realm, run.requestedToken);
       if (pair) {
         uncertainResourceRefreshTokens.delete(opts.realm);
-        pendingResourceRefreshResults.set(opts.realm, { requestedToken: run.requestedToken, pair });
+        expectedVaultRefreshToken = run.requestedToken;
+        pendingResourceRefreshResults.set(opts.realm, {
+          requestedToken: run.requestedToken,
+          pair,
+          expectedVaultRefreshToken,
+        });
         log.info('recovered the active Resource session using its saved Passport');
-        return { ...run, result: { ok: true, status: 200, data: pair }, failureAction: undefined };
+        return {
+          ...run,
+          result: { ok: true, status: 200, data: pair },
+          failureAction: undefined,
+          expectedVaultRefreshToken,
+        };
       }
     } catch (error) {
       if (!(error instanceof AuthApiError)) throw error;
@@ -3702,7 +3738,7 @@ async function runAuthRefreshWithReplacementRetry(
     }
   }
 
-  return run;
+  return { ...run, expectedVaultRefreshToken };
 }
 
 // ── Renderer notification ───────────────────────────────────────────────────
@@ -5192,6 +5228,7 @@ async function runColdStartRefreshFlow(
           requestedToken,
           {
             allowUnclaimedVault: true,
+            expectedVaultRefreshToken: run.expectedVaultRefreshToken,
           },
         )
       : undefined;
@@ -6315,7 +6352,7 @@ export async function refresh(options?: { serverRejectedToken?: boolean }): Prom
     }
 
     try {
-      const { result, failureAction, replacementRetries, requestedToken } =
+      const { result, failureAction, replacementRetries, requestedToken, expectedVaultRefreshToken } =
         await runAuthRefreshWithReplacementRetry(storedToken, {
           phase: 'runtime',
           realm: refreshRealm,
@@ -6328,6 +6365,7 @@ export async function refresh(options?: { serverRejectedToken?: boolean }): Prom
             result.data as RefreshResponse,
             refreshRealm,
             requestedToken,
+            { expectedVaultRefreshToken },
           )
         : undefined;
       if (refreshWasSuperseded('after-refresh')) return false;

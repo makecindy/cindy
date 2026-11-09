@@ -26,6 +26,8 @@ const source = ts.createSourceFile(
 const names = new Set([
   'apiFetch',
   'commitDesktopRefreshCredentials',
+  'readStoredRefreshTokenCandidates',
+  'readActiveVaultRefreshCandidate',
   'writeResourceSessionToVault',
   'initialize',
   'refresh',
@@ -68,7 +70,7 @@ const coldStartTimeoutFallbacks = new ColdStartAuthFallbackRegistry();
 const snapshotAuthState = () => ({ isAuthenticated: !!accessToken, user: currentUser });
 const snapshotLoggedOutAuthState = snapshotAuthState;
 const readPersistedAuthSession = () => saved.session;
-const readStoredRefreshTokenCandidates = () => [saved.session?.refreshToken];
+const readPersistedRefreshToken = (realm) => saved.session?.realm === realm ? saved.session.refreshToken : null;
 const hasPotentiallyPersistedAuthCredentials = () => !!saved.session;
 const assertLoginFlowCurrent = (epoch) => { if (epoch !== loginFlowEpoch) throw new Error('superseded'); };
 const finishColdStartSignedOut = async () => snapshotAuthState();
@@ -144,9 +146,9 @@ function setup(random = 0) {
     isLoggedOutVaultAccount: (value: { loggedOutAccountKeys?: string[] }, key: string) =>
       value.loggedOutAccountKeys?.includes(key) ?? false,
     readSafe: () => null,
-    writePersistedAuthSessionOrThrow: (refreshToken: string, realm: string) => {
+    writePersistedAuthSessionOrThrow: vi.fn((refreshToken: string, realm: string) => {
       saved.session = { version: 1, realm, refreshToken };
-    },
+    }),
     metadataFromMembership: (membership: unknown) => membership,
     AuthRefreshBackoff: class extends AuthRefreshBackoff {
       constructor() {
@@ -184,7 +186,6 @@ function setup(random = 0) {
     }),
     expireRuntimeAuth: vi.fn(async () => {}),
     log: { debug: vi.fn(), warn: vi.fn(), info: vi.fn(), error: vi.fn() },
-    readActiveVaultRefreshCandidate: () => null,
     clearConfirmedDeadRefreshTokens: clear,
     resetActiveAuthRealmToBuild: vi.fn(),
     isPassiveSharedUserDataInstance: vi.fn(() => false),
@@ -755,6 +756,134 @@ describe('lost Resource rotation response', () => {
     expect(h.saved.session.refreshToken).toBe('test-rotated');
     expect(h.request).toHaveBeenCalledOnce();
     expect(h.deps.expireRuntimeAuth).not.toHaveBeenCalled();
+  });
+
+  // PR #9429 P1: two processes can persist A -> B -> C while both projection
+  // writes fail. Execute refresh and the commit callback with C arriving before
+  // the retry or after it starts waiting for the vault lock; B must never win.
+  it.each(['before-retry', 'inside-vault-transaction'])(
+    'preserves a newer vault generation when it changes %s',
+    async (timing) => {
+      const h = setup();
+      h.activateRuntime();
+      h.request.mockResolvedValueOnce(h.ok);
+      h.deps.writePersistedAuthSessionOrThrow.mockImplementationOnce(() => {
+        throw new Error('Test projection write failed');
+      });
+      await expect(h.runtimeRefresh()).resolves.toBe(false);
+      expect(h.vault.resources['global:original'].refreshToken).toBe('test-rotated');
+      expect(h.saved.session.refreshToken).toBe('test-refresh');
+
+      const advanceVault = () => {
+        h.vault.resources['global:original'].refreshToken = 'test-newer';
+      };
+      if (timing === 'before-retry') advanceVault();
+      else h.transaction.mockImplementationOnce(async (
+        mutate: (vault: typeof h.vault) => unknown,
+        afterPersist: (result: unknown) => unknown,
+      ) => {
+        advanceVault();
+        const result = mutate(h.vault);
+        await afterPersist(result);
+        return result;
+      });
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(h.vault.resources['global:original'].refreshToken).toBe('test-newer');
+      expect(h.saved.session.refreshToken).toBe('test-refresh');
+      expect(h.request).toHaveBeenCalledOnce();
+      expect(h.deps.notifyAccessTokenRefreshed).not.toHaveBeenCalled();
+      expect(h.deps.expireRuntimeAuth).not.toHaveBeenCalled();
+
+      // Discard the stale cache and let the existing replacement reader catch
+      // up from C. A rejected projection must not strand or delete that login.
+      h.request.mockResolvedValueOnce({
+        ok: false, status: 401, data: { error: { code: 'INVALID_REFRESH_TOKEN' } },
+      }).mockResolvedValueOnce({
+        ...h.ok, data: { ...h.ok.data, refreshToken: 'test-newest' },
+      });
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(h.request.mock.calls.map((call: readonly unknown[]) => call[0])).toEqual([
+        'test-refresh', 'test-refresh', 'test-newer',
+      ]);
+      expect(h.saved.session.refreshToken).toBe('test-newest');
+      expect(h.vault.resources['global:original'].refreshToken).toBe('test-newest');
+      expect(h.deps.expireRuntimeAuth).not.toHaveBeenCalled();
+    },
+  );
+
+  it('repairs a failed projection when the vault still contains the cached result', async () => {
+    const h = setup();
+    h.activateRuntime();
+    h.request.mockResolvedValueOnce(h.ok);
+    h.deps.writePersistedAuthSessionOrThrow.mockImplementationOnce(() => {
+      throw new Error('Test projection write failed');
+    });
+    await h.runtimeRefresh();
+    expect(h.vault.resources['global:original'].refreshToken).toBe('test-rotated');
+    expect(h.saved.session.refreshToken).toBe('test-refresh');
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(h.saved.session.refreshToken).toBe('test-rotated');
+    expect(h.request).toHaveBeenCalledOnce();
+    expect(h.deps.notifyAccessTokenRefreshed).toHaveBeenCalledOnce();
+  });
+
+  it('keeps a newer vault generation written while the refresh request is in flight', async () => {
+    const h = setup();
+    h.activateRuntime();
+    h.request.mockImplementationOnce(async () => {
+      h.vault.resources['global:original'].refreshToken = 'test-newer';
+      return h.ok;
+    });
+    await expect(h.runtimeRefresh()).resolves.toBe(false);
+    expect(h.vault.resources['global:original'].refreshToken).toBe('test-newer');
+    expect(h.saved.session.refreshToken).toBe('test-refresh');
+    expect(h.deps.notifyAccessTokenRefreshed).not.toHaveBeenCalled();
+  });
+
+  it('accepts a fresh compatibility-token rotation when the divergent vault has not changed', async () => {
+    const h = setup();
+    h.activateRuntime();
+    h.vault.resources['global:original'].refreshToken = 'test-older-vault';
+    h.request.mockResolvedValueOnce(h.ok);
+    await expect(h.runtimeRefresh()).resolves.toBe(true);
+    expect(h.saved.session.refreshToken).toBe('test-rotated');
+    expect(h.vault.resources['global:original'].refreshToken).toBe('test-rotated');
+  });
+
+  it('preserves a newer vault generation written during Passport membership exchange', async () => {
+    const h = setupSavedPassport();
+    h.deps.exchangeAccountMembership.mockImplementationOnce(async () => {
+      h.vault.resources['global:original'].refreshToken = 'test-newer';
+      return h.ok.data;
+    });
+    const { pending } = await beginRuntimeRecovery(h);
+    await vi.advanceTimersByTimeAsync(2_000);
+    await expect(pending).resolves.toBe(false);
+    expect(h.deps.exchangeAccountMembership).toHaveBeenCalledOnce();
+    expect(h.vault.resources['global:original'].refreshToken).toBe('test-newer');
+    expect(h.saved.session.refreshToken).toBe('test-refresh');
+    expect(h.deps.notifyAccessTokenRefreshed).not.toHaveBeenCalled();
+    expect(h.deps.expireRuntimeAuth).not.toHaveBeenCalled();
+  });
+
+  it('continues cold-start recovery from the newer vault instead of replaying the stale cache', async () => {
+    const h = setup();
+    h.request.mockResolvedValueOnce(h.ok);
+    h.deps.writePersistedAuthSessionOrThrow.mockImplementationOnce(() => {
+      throw new Error('Test projection write failed');
+    });
+    await h.start();
+    expect(h.saved.session.refreshToken).toBe('test-refresh');
+    h.vault.resources['global:original'].refreshToken = 'test-newer';
+    h.request.mockResolvedValueOnce({
+      ...h.ok, data: { ...h.ok.data, refreshToken: 'test-newest' },
+    });
+    await h.start();
+    expect(h.request.mock.calls.map((call: readonly unknown[]) => call[0])).toEqual(['test-refresh', 'test-newer']);
+    expect(h.saved.session.refreshToken).toBe('test-newest');
+    expect(h.vault.resources['global:original'].refreshToken).toBe('test-newest');
+    expect(h.state()).toMatchObject({ isAuthenticated: true });
+    expect(h.clear).not.toHaveBeenCalled();
   });
 
   it('retries saving a recovered Resource without rotating the Passport again', async () => {
