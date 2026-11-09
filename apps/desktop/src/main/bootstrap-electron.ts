@@ -136,6 +136,10 @@ import {
   readPersistedWindowMaximized,
   type MainWindowMaximizeRecoveryController,
 } from './mainWindowMaximizeRecovery';
+import {
+  manageWindowStatePreservingNormalBounds,
+  shouldTreatPersistedBoundsAsMaximized,
+} from './mainWindowWorkAreaBounds';
 import { prewarmMacComputerPermissionGuideHelper } from './computer-permission-guide/MacComputerPermissionGuideNativeHost.js';
 import { handleOpenChatGPTApp } from './chatgpt-app.js';
 import { tapWindowBroadcast } from './device-link/broadcast-tap.js';
@@ -4340,8 +4344,29 @@ const createWindow = () => {
     fullScreen: process.platform !== 'darwin',
   });
   const shouldRestoreMacFullscreen = process.platform === 'darwin' && mainWindowState.isFullScreen;
+  // Windows Snap persists a work-area rectangle with isMaximized=false (#9461).
+  // That becomes the unmaximize target, so the maximize button looks dead and an
+  // auto-hidden taskbar stays visible. Come back maximized, and create from the
+  // library default size so the first unmaximize is not the work area again.
+  const snapFilledWorkArea =
+    !shouldRestoreMacFullscreen &&
+    !persistedMaximized &&
+    !mainWindowState.isMaximized &&
+    shouldTreatPersistedBoundsAsMaximized(
+      {
+        x: mainWindowState.x,
+        y: mainWindowState.y,
+        width: mainWindowState.width,
+        height: mainWindowState.height,
+        isMaximized: false,
+        isFullScreen: Boolean(mainWindowState.isFullScreen),
+      },
+      screen,
+    );
   const shouldRestoreMaximized =
-    !shouldRestoreMacFullscreen && (persistedMaximized || Boolean(mainWindowState.isMaximized));
+    !shouldRestoreMacFullscreen &&
+    (persistedMaximized || Boolean(mainWindowState.isMaximized) || snapFilledWorkArea);
+  if (snapFilledWorkArea) mainWindowState.resetStateToDefault();
 
   const mainWindow = new BrowserWindow({
     x: mainWindowState.x,
@@ -4496,7 +4521,10 @@ const createWindow = () => {
 
   // Wire resize / move / maximize / fullscreen listeners that persist the
   // state to disk on `close`. Must run before any user resize event fires.
-  mainWindowState.manage(mainWindow);
+  // On Windows the keeper sees the last normal rectangle instead of a snapped
+  // work-area fill, so that fill cannot become the next restore size (#9461).
+  // The real getBounds is restored as soon as the listeners are bound.
+  manageWindowStatePreservingNormalBounds(mainWindowState, mainWindow, screen);
   if (shouldRestoreMaximized && !mainWindow.isMaximized()) mainWindow.maximize();
   // Windows can transiently unmaximize during display/DPI re-layout. macOS
   // owns its native Zoom behavior, so do not install the Windows recovery
