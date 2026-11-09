@@ -1,4 +1,4 @@
-import { getDraft, subscribeDraftContent } from '@/lib/composerDraftStore';
+import { flushDraft, getDraft, subscribeDraftContent } from '@/lib/composerDraftStore';
 import { getDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 
 type Listener = () => void;
@@ -28,6 +28,7 @@ export function subscribePluginUiDraft(sessionId: string, listener: Listener): (
 }
 
 export function pluginUiDraftSnapshot(sessionId: string) {
+  flushDraft(sessionId);
   return { revision: String(sources.get(key(sessionId))?.revision ?? ++revision), text: getDraft(sessionId)?.text ?? null };
 }
 

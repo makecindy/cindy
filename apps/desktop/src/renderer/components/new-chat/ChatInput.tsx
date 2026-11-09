@@ -113,6 +113,7 @@ import {
   clearDraft as clearComposerDraft,
   restoreRemoteOptimisticDraft,
   subscribeDraft as subscribeComposerDraft,
+  registerDraftFlush,
   tiptapDocHasContent,
 } from '@/lib/composerDraftStore';
 import {
@@ -2439,6 +2440,9 @@ export function ChatInput({
     null,
   );
   draftSaveSchedulerRef.current ??= createComposerDraftSaveScheduler();
+  useEffect(() => storageKey ? registerDraftFlush(storageKey, () => {
+    if (storageKeyForDraftRef.current === storageKey) draftSaveSchedulerRef.current?.flush();
+  }) : undefined, [storageKey]);
   const caretScrollEditorRef = useRef<Editor | null>(null);
   const caretScrollSchedulerRef = useRef<ReturnType<typeof createComposerFrameScheduler> | null>(
     null,
