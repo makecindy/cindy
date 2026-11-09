@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { SESSION_ACTIVITY_CHANNEL } from '@cindy/device-link';
 import { i18n } from '@/i18n';
 import { buildMobileHomePresentation } from '@/session/mobileHome';
@@ -8,6 +8,8 @@ import {
   type RemoteSessionLiveActivity,
 } from '@/session/sessionList';
 import type { RemoteSession } from '@/session/types';
+import { projectAgentActivity } from '@/widgets/agentActivity';
+import { createAgentActivitySync } from '@/widgets/agentActivitySync';
 
 function session(id: string, patch: Partial<RemoteSession> = {}): RemoteSession {
   return {
@@ -40,6 +42,90 @@ function buildLiveActivityIndex(sessions: readonly RemoteSession[]): Map<string,
 
 describe('mobile Home live activity', () => {
   beforeEach(() => remoteSessionStore.clear());
+
+  // Unit: the bridge's production synchronizer must distinguish an unavailable
+  // connection from an empty task list. Projection-only tests cannot exercise
+  // expiry/recovery or queued callbacks after an account switch (dispose).
+  it('keeps disconnected activity stale, renews identical live state and ends only on an empty list', () => {
+    vi.useFakeTimers();
+    try {
+      let value: string | null | undefined = 'running';
+      const visible: Array<string | null> = [];
+      let expired = false;
+      const controller = createAgentActivitySync(() => value, {
+        setState: json => { visible.push(json); expired = false; },
+        markStale: () => { expired = true; },
+      });
+      controller.sync();
+      vi.advanceTimersByTime(60_000);
+      controller.sync();
+      expect(visible).toEqual(['running', 'running']);
+      value = undefined;
+      controller.sync();
+      expect(expired).toBe(true);
+      expect(visible.at(-1)).toBe('running');
+      value = 'running';
+      controller.sync();
+      expect(expired).toBe(false);
+      value = null;
+      controller.sync();
+      expect(visible.at(-1)).toBeNull();
+      controller.dispose();
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('coalesces burst updates to the latest task and cancels pending writes when disposed', () => {
+    vi.useFakeTimers();
+    try {
+      let value = 'running';
+      const visible: Array<string | null> = [];
+      const controller = createAgentActivitySync(() => value, {
+        setState: json => visible.push(json), markStale: () => {},
+      });
+      controller.sync();
+      value = 'waiting';
+      controller.sync();
+      value = 'completed';
+      controller.sync();
+      vi.advanceTimersByTime(1_000);
+      expect(visible).toEqual(['running', 'completed']);
+      value = 'another account';
+      controller.sync();
+      controller.dispose();
+      vi.advanceTimersByTime(1_000);
+      expect(visible).toEqual(['running', 'completed']);
+    } finally { vi.useRealTimers(); }
+  });
+
+  // Unit: new ActivityKit projection has no prior coverage. The minimum competing
+  // inputs are running + waiting + unread result; Mac ordering must surface waiting.
+  // Also protect read acknowledgement, archive and cached-list exclusion on lock screen.
+  it('projects the island priority and task route from real host activity, then clears read results', () => {
+    const rows = ['running', 'waiting', 'done'].map(id => session(id));
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', rows);
+    for (const [id, phase] of [['running', 'running'], ['waiting', 'needs-interaction'], ['done', 'completed']] as const) {
+      remoteSessionStore.applyRemotePush('dev-1', SESSION_ACTIVITY_CHANNEL, {
+        sessionId: id, phase, compactDetail: 'private tool arguments', attention: true,
+      });
+    }
+    const labels = { attention: 'Waiting', running: 'Working', completed: 'Done', error: 'Error' };
+    const project = (rows: RemoteSession[]) => projectAgentActivity(rows,
+      row => remoteSessionStore.getSessionLiveActivity(row.id, row.deviceLinkDeviceId), labels,
+      row => `cindy://sessions/${row.id}?deviceId=${row.deviceLinkDeviceId}`, 'Outdated');
+    const current = remoteSessionStore.getSessions();
+    expect(project(current)).toMatchObject({ status: 'attention', detail: 'Waiting', count: 3,
+      attentionCount: 1, runningCount: 1,
+      url: 'cindy://sessions/waiting?deviceId=dev-1' });
+    expect(project(current.filter(row => row.id !== 'waiting'))?.status).toBe('running');
+    const done = current.filter(row => row.id === 'done');
+    expect(project(done)?.status).toBe('completed');
+    expect(project(done.map(row => ({ ...row, cacheSeeded: true })))).toBeNull();
+    expect(project(done.map(row => ({ ...row, status: 'archived' })))).toBeNull();
+    remoteSessionStore.applyRemotePush('dev-1', SESSION_ACTIVITY_CHANNEL, {
+      sessionId: 'done', phase: 'completed', compactDetail: '', attention: false,
+    });
+    expect(project(done)).toBeNull();
+  });
 
   it('keeps unread completed/error live activity for the right-slot dots and clears once read', () => {
     remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1')]);

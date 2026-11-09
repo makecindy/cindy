@@ -127,6 +127,34 @@ Metro，那里没有 Metro 响应时才退回 `8081`。`8081` 属于其他任务
 
 ## 分层验证
 
+### iPhone 任务灵动岛
+
+`AgentActivityBridge` 复用 Home 的任务列表与 host live-activity 摘要，不新增服务器请求。
+`cindy-agent-activity` 用 ActivityKit 维护一个聚合活动；需要处理的任务优先，其次运行中，
+最后是未读完成／错误结果。排除缓存种子、未确认新建、归档和离线电脑的任务，结果已读后移除。
+内容只包含截断标题、本地化状态、任务数和带电脑 ID 的任务深链，不放工具参数或消息正文；
+锁屏标题使用系统 `privacySensitive()`。退出账号／切换账号会结束旧活动。
+
+WidgetKit 的收起、最小、展开与锁屏视图在 `plugins/usage-widgets/CindyAgentActivityWidget.swift`，
+复用已有扩展；ActivityAttributes 从原生模块复制到扩展编译，避免两份 schema 漂移。
+美术直接复用桌面默认角色：`node apps/mobile/scripts/export-agent-activity-artwork.mjs`
+调用桌面 helper 的 `--export-mascots`，导出含眼睛和姿态的三张静帧，并从桌面实时活动导出
+运行中橙／待处理青／完成绿的颜色目录；手机计数也使用「待处理 · 运行中」。生成物随原生
+Asset Catalog 编译，不另画手机角色。桌面角色或颜色更新后重跑导出并提交生成物；加 `--check`
+可在任意平台核验源文件与生成物的哈希。手机目前使用桌面默认角色，不同步电脑的个性化皮肤选择。
+Android 与没有此模块的旧安装包不调用 ActivityKit。
+
+本阶段仅在手机收到既有连接更新时同步；没有 ActivityKit APNs token 注册或服务端后台续更。
+两分钟未刷新会显示过期提示；连接中断立即标记过期，保留最后内容而不伪装为任务已结束。
+前台连接健康时每分钟仅刷新本地活动的有效期，不发网络请求；应用回前台时重新同步。
+普通状态变化按一秒合并，只写最新状态；账号清理与无任务结束不等待。用户手动移除活动后，
+本次进程内不会因状态刷新重新创建，直到这一批任务清空或切换账号。不承诺系统挂起或强杀后仍实时更新。
+新增原生模块与扩展源码需要新 iOS 安装包，不能只发 OTA。共享 config plugin 的变更也会
+改变 Android 指纹（虽然没有新增 Android 功能），应随计划内双端原生发版交付；两端存量
+安装均需升级对应原生包才能继续接收新指纹的 OTA，按冷更门单独确认。
+原生验收需检查紧凑／展开／锁屏、浅深模式、点击任务定位、账号切换、后台过期和关闭实时活动。
+TypeScript 测试不能替代这些原生验收。
+
 Release 构建必须使用 `NODE_ENV=production BABEL_ENV=production`，包括手动调用
 `xcodebuild`、Gradle 或 `expo export:embed --dev false`。Expo 会保留父进程的环境变量，
 因此 `__DEV__=false` 或 Xcode 的 Release 配置本身不能证明 Worklets 已按生产模式编译。
