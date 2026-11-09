@@ -766,7 +766,7 @@
       "resetModules": 1
     },
     "apps/desktop/src/renderer/__tests__/textLightbox.test.ts": {
-      "sourceReads": 2
+      "sourceReads": 1
     },
     "apps/desktop/src/renderer/__tests__/todaySpendChip.test.ts": {
       "sourceReads": 1
