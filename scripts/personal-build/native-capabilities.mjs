@@ -45,6 +45,22 @@ function resolveNativeToolchain() {
   if (!env) throw Error('Live Activity capability missing: install/select macOS SDK 27.3 or newer before personal upgrade');
   return {env, sdk};
 }
+/** Finder associations must be sealed before signing, just like the Forge package. */
+export function personalOpenTypes(region = 'global') {
+  if (!['global', 'cn'].includes(region)) throw Error('Invalid personal app region');
+  const prefix = region === 'cn' ? 'com.xd.cindycn' : 'com.xd.cindy';
+  return {
+    CFBundleURLTypes: [{CFBundleURLName:'Cindy Deep Link', CFBundleURLSchemes:['cindy','xdt-maker']}],
+    CFBundleDocumentTypes: [
+      {CFBundleTypeName:'Folder', CFBundleTypeRole:'Editor', LSHandlerRank:'Alternate', LSItemContentTypes:['public.folder']},
+      {CFBundleTypeName:'Cindy Cartridge', CFBundleTypeRole:'Viewer', LSHandlerRank:'Alternate',
+        LSItemContentTypes:[`${prefix}.cindy`], CFBundleTypeExtensions:['cindy']},
+    ],
+    UTImportedTypeDeclarations: [{UTTypeIdentifier:`${prefix}.cindy`, UTTypeDescription:'Cindy Cartridge',
+      UTTypeConformsTo:['public.data'], UTTypeTagSpecification:{'public.filename-extension':['cindy'],
+        'public.mime-type':['application/x-xd-cindy']}}],
+  };
+}
 export function prepareNativeCapabilities(root, {name = 'personal', region = 'global', runtimeApp, signingIdentity} = {}) {
   const file = receiptPath(root);
   if (fs.existsSync(file)) { nativeIdentity(root); return JSON.parse(fs.readFileSync(file)); }
@@ -69,6 +85,9 @@ export function prepareNativeCapabilities(root, {name = 'personal', region = 'gl
   // identities intact; branding must be sealed before signing the app.
   run('/usr/libexec/PlistBuddy',['-c','Set :CFBundleDisplayName Cindy',path.join(app,'Contents/Info.plist')]);
   run('/usr/libexec/PlistBuddy',['-c','Set :CFBundleIconFile cindy.icns',path.join(app,'Contents/Info.plist')]);
+  // Import structured fields without replacing Electron's existing plist or signing a live app.
+  execFileSync('python3', ['-c', 'import json,plistlib,sys; p=sys.argv[1]; d=plistlib.load(open(p,"rb")); d.update(json.load(sys.stdin)); plistlib.dump(d,open(p,"wb"))',
+    path.join(app,'Contents/Info.plist')], {input:JSON.stringify(personalOpenTypes(region))});
   fs.copyFileSync(path.join(desktop,'resources/icon.icns'),path.join(app,'Contents/Resources/cindy.icns'));
   // Some developer Electron distributions omit resource seals. Seal the base
   // runtime before adding the separately sandbox-signed WidgetKit extension.

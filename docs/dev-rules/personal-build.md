@@ -748,3 +748,18 @@ unknown observations or timeout stop the switch without a forced kill. Fixed-app
 A diagnostic shell/grep mentioning the app therefore cannot masquerade as its running main process.
 Regression coverage: `personal-build-recovery.test.mjs` (original PID outlives metadata, timeout,
 unknown observations, and executable-path ownership).
+
+### Personal app open events and push diagnostics
+
+The signed personal runtime declares the current and legacy Cindy URL schemes, folders and
+`.cindy` cartridges before signing. File types use Alternate rank: do not take over the official
+app's defaults. This repairs Finder eligibility for an already running personal client, not
+standalone cold startup: keep using the personal launcher when the runtime is stopped.
+Test cold-start routing separately before changing default handlers. Never edit the installed
+app's Info.plist in place: that breaks its signature and runtime receipt.
+
+Mobile debug recording includes non-secret push registration stages, realm, app variant, APNs
+environment and numeric HTTP failure status. It never records the native token or authorization
+headers. A registered event confirms only registration, and a desktop notify-sent log confirms
+only enqueueing; neither proves APNs acceptance or notification display. Verify provider logs
+and the target phone before calling delivery successful.

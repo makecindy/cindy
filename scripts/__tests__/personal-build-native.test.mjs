@@ -121,3 +121,20 @@ test('fixed installation reuses its path and resumes a failed switch with old ru
   assert.equal(fs.readFileSync(path.join(foreign,'keep'),'utf8'),'mine');
  }finally{fs.rmSync(dir,{recursive:true,force:true});}
 });
+
+// Regression: a renamed Electron shell omitted Finder associations entirely.
+// These are optional handlers, not a takeover of the official app's default.
+test('personal shell accepts task URLs, folders and cartridges without claiming session-share files', async()=>{
+ const {personalOpenTypes}=await import('../personal-build/native-capabilities.mjs');
+ for(const region of ['global','cn']) {
+  const p=personalOpenTypes(region);
+  assert.deepEqual(p.CFBundleURLTypes[0].CFBundleURLSchemes,['cindy','xdt-maker']);
+  assert.ok(p.CFBundleDocumentTypes.some(t=>t.LSItemContentTypes.includes('public.folder')));
+  const cartridge=p.CFBundleDocumentTypes.find(t=>t.CFBundleTypeExtensions?.includes('cindy'));
+  assert.ok(cartridge);
+  assert.equal(cartridge.LSHandlerRank,'Alternate');
+  assert.equal(cartridge.LSItemContentTypes[0],p.UTImportedTypeDeclarations[0].UTTypeIdentifier);
+  assert.ok(!p.CFBundleDocumentTypes.some(t=>t.CFBundleTypeExtensions?.includes('cshare')));
+ }
+ assert.throws(()=>personalOpenTypes('unknown'),/Invalid/);
+});
