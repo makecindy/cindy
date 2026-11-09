@@ -1,5 +1,11 @@
 /* Private topics keep controls in flow below the content. Group topics retain
    the main timeline toolbar and its side gutter, clear of the read receipt. */
+/* A group topic has reaction + more, rather than the main chat's four actions.
+   Keep that outer rail without sacrificing another 56px of narrow-panel text. */
+.thread-panel:not(.thread-panel-inline-actions) {
+  --chat-bubble-gutter: 64px;
+}
+
 .thread-panel-inline-actions {
   --chat-bubble-gutter: 0px;
 }

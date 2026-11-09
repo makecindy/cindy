@@ -12,6 +12,7 @@ export default {
     'src/renderer/voice-input/workletUrl': 'export const getVoiceInputWorkletUrl = () => { throw new Error("Voice is outside this layout fixture"); };',
   },
   cases: {
+    'group-actions': { about: 'PR #9182: topic toolbars sit outside both bubble sides without overlapping read receipts' },
     group: { about: 'Group topic with a long source message and working follow switch, with and without wallpaper' },
     'group-attachments': { about: 'Thread + menu, image-only send and tray reset at narrow panel width' },
     'group-cache-pending': { about: 'Reopen a thread before its delayed image cache finishes; retain the image and newer text' },
@@ -40,6 +41,32 @@ export default {
       return;
     }
     const panel = page.locator('aside');
+    if (ui.case === 'group-actions') {
+      // UI tier: old in-flow topic CSS put actions inside the bubble over the read mark.
+      // Existing long-root/table cases had no own-message receipt. No source-string assertions.
+      await panel.getByTestId('read-receipt').first().waitFor();
+      for (const id of ['root', 'reply-bot', 'reply-self']) {
+        const message = panel.locator(`[data-bot-group-message-id="${id}"]`);
+        await message.hover();
+        const toolbar = message.locator('[data-bot-group-message-actions]');
+        await toolbar.waitFor({ state: 'visible' });
+        const geometry = await message.evaluate(el => {
+          const bubble = el.querySelector('[data-testid="bot-group-self-bubble"], [data-testid="bot-group-bubble"]').getBoundingClientRect();
+          const actions = el.querySelector('[data-bot-group-message-actions]').getBoundingClientRect();
+          const receipt = el.querySelector('[data-testid="read-receipt"]')?.getBoundingClientRect();
+          const panel = el.closest('aside').getBoundingClientRect();
+          const self = !!el.querySelector('[data-testid="bot-group-self-bubble"]');
+          return { outside: self ? actions.right <= bubble.left : actions.left >= bubble.right,
+            top: Math.abs(actions.top - bubble.top), insidePanel: actions.left >= panel.left && actions.right <= panel.right,
+            separate: !receipt || actions.right <= receipt.left || actions.left >= receipt.right || actions.bottom <= receipt.top || actions.top >= receipt.bottom };
+        });
+        assert.ok(geometry.outside && geometry.top < 2, 'toolbar uses main-chat outer top alignment');
+        assert.ok(geometry.insidePanel && geometry.separate, 'toolbar fits the topic and does not overlap the read receipt');
+        await ui.capture(id);
+      }
+      return;
+    }
+
     if (ui.case === 'group-cache-pending') {
       await panel.locator('input[type="file"]').setInputFiles({
         name: 'late.png', mimeType: 'image/png', buffer: Buffer.from('fixture-image-bytes'),
@@ -92,16 +119,17 @@ export default {
         const files = [...el.querySelectorAll('[data-testid="bot-group-message-attachments"] button, [data-testid="bot-group-message-attachments"] [role="status"]')];
         const table = el.querySelector('table'), cell = table.querySelector('tbody td');
         const toolbar = el.querySelector('[data-bot-group-message-actions]').getBoundingClientRect();
-        return { unused: column.width - box.width,
+        return { unused: column.width - box.width, toolbarWidth: toolbar.width,
           filesInside: files.length === 2 && files.every(file => file.getBoundingClientRect().right <= box.right - 10),
           cellWidth: cell.getBoundingClientRect().width,
           tableScrolls: table.parentElement.scrollWidth > table.parentElement.clientWidth,
-          actionsInside: toolbar.left >= box.left && toolbar.right <= box.right };
+          actionsOutside: toolbar.left >= box.right && toolbar.right <= el.closest('aside').getBoundingClientRect().right };
       });
-      assert.ok(layout.unused < 10, 'topic does not reserve a side toolbar rail');
+      // PR #9182 restores the main-chat side rail; table/file readability remains required.
+      assert.ok(layout.unused >= layout.toolbarWidth + 6, 'topic reserves room for the outer toolbar');
       assert.ok(layout.filesInside, 'loaded and pending file chips stay inside the bubble');
       assert.ok(layout.cellWidth > 50 && layout.tableScrolls, 'table keeps readable columns and scrolls inside the bubble');
-      assert.ok(layout.actionsInside, 'message actions remain inside the panel');
+      assert.ok(layout.actionsOutside, 'message actions stay outside the bubble and inside the panel');
       assert.ok(await panel.locator('table').evaluate(table => {
         const scroller = table.parentElement;
         scroller.scrollLeft = scroller.scrollWidth;
@@ -109,6 +137,7 @@ export default {
       }), 'the last table column can be reached without scrolling the panel sideways');
       await ui.capture('table-end');
       await panel.locator('table').evaluate(table => { table.parentElement.scrollLeft = 0; });
+      await bubble.hover();
       await panel.getByRole('button', { name: await ui.t('chat.messageActionBar.moreActions'), exact: true }).click();
       await page.getByRole('menuitem', { name: await ui.t('chat.messageActionBar.copy'), exact: true }).waitFor();
       await page.keyboard.press('Escape');
