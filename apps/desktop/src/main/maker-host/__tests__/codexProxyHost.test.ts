@@ -2238,7 +2238,7 @@ describe('chatBridgeCapabilitiesForRoute', () => {
           supportsImageGeneration: true,
         },
       },
-      models: { codex: [{ id: 'gpt-6.1-sol', name: 'GPT-6.1 Sol', efforts: ['low', 'xhigh', 'ultra'] }] },
+      models: { codex: [{ id: 'gpt-6.1-sol', name: 'GPT-6.1 Sol', efforts: ['low', 'medium', 'high', 'xhigh', 'max'] }] },
     } as never]);
     setCustomProviderKeyReader(() => 'openai-api-key');
     mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
@@ -2274,14 +2274,15 @@ describe('chatBridgeCapabilitiesForRoute', () => {
         'x-openai-subagent': 'collab_spawn',
         'x-codex-parent-thread-id': 'thread-same-connection',
       };
-      // Codex already resolved native ultra to this model's HTTP effort.
+      // 父档位 ultra 不在目录声明里，按目标模型能力收敛成最高兼容档 max。
+      // 字面 ultra 不得写回请求。
       expect(forcedRouteTransform({
         model: 'gpt-6.1-sol',
         reasoning: { effort: 'xhigh', summary: 'auto' },
         input: [],
       }, { reqId: 1, method: 'POST', url: '/responses', headers })).toEqual({
         model: 'gpt-6.1-sol',
-        reasoning: { effort: 'xhigh', summary: 'auto' },
+        reasoning: { effort: 'max', summary: 'auto' },
         input: [],
       });
       // A different provider does not get that conversion, so the parent level still stamps.
@@ -2302,6 +2303,85 @@ describe('chatBridgeCapabilitiesForRoute', () => {
     } finally {
       host.unregister('session-same-connection');
       clearSessionProvider('session-same-connection');
+      setCustomProviderKeyReader(() => null);
+      setCustomProviders([]);
+    }
+  });
+
+  it('stamps the parent high onto a same-provider child that spawn_agent picked as low', async () => {
+    const host = await freshCodexProxyHost();
+    const { setCustomProviders } = await import('../active-catalog.js');
+    const { setCustomProviderKeyReader } = await import('../provider-route.js');
+    const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+    setCustomProviders([{
+      id: 'openai-api',
+      name: 'OpenAI API',
+      source: 'user',
+      agents: ['codex'],
+      auth: { method: 'apiKey' },
+      routing: {
+        codex: {
+          wireProtocol: 'openai-responses',
+          upstream: 'https://api.openai.com/v1',
+          authStrategy: 'api-key-header',
+        },
+      },
+      models: { codex: [{ id: 'gpt-6.1-sol', name: 'GPT-6.1 Sol', efforts: ['low', 'high', 'xhigh'] }] },
+    } as never]);
+    setCustomProviderKeyReader(() => 'openai-api-key');
+    mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
+      url: 'http://127.0.0.1:43214',
+      dispose: vi.fn(async () => undefined),
+    });
+    await host.ensureCodexProxyReady();
+    host.setCodexProxyAuthInjection('env-key');
+    host.registerComposed(
+      'session-same-provider-high',
+      'thread-same-provider-high',
+      'PRODUCT_PROMPT',
+      {
+        smartSubagentRoutes: [{
+          providerId: 'openai-api',
+          catalogModel: 'gpt-6.1-sol',
+          reasoningEffort: 'high',
+        }],
+      },
+    );
+    setSessionProvider('session-same-provider-high', 'openai-api');
+
+    try {
+      const transforms = mockState.createAnthropicCompatProxy.mock.calls.at(-1)?.[0]?.transformRequest ?? [];
+      const ctx = {
+        reqId: 1,
+        method: 'POST',
+        url: '/responses',
+        headers: {
+          'thread-id': 'thread-same-provider-high-child',
+          'x-openai-subagent': 'collab_spawn',
+          'x-codex-parent-thread-id': 'thread-same-provider-high',
+        },
+      };
+      // spawn_agent 选了 low，父任务存的是 high。同供应商也要盖上父档位。
+      let current: unknown = {
+        model: 'gpt-6.1-sol',
+        reasoning: { effort: 'low', summary: 'auto' },
+        input: [],
+      };
+      for (const transform of transforms) {
+        const next = transform(current, ctx);
+        if (next !== null && next !== undefined) current = next;
+      }
+      expect(current).toMatchObject({
+        model: 'gpt-6.1-sol',
+        reasoning: { effort: 'high', summary: 'auto' },
+      });
+      expect(host.getObservedCodexSubagentIdentity('thread-same-provider-high-child')).toEqual({
+        model: 'gpt-6.1-sol',
+        reasoningEffort: 'high',
+      });
+    } finally {
+      host.unregister('session-same-provider-high');
+      clearSessionProvider('session-same-provider-high');
       setCustomProviderKeyReader(() => null);
       setCustomProviders([]);
     }

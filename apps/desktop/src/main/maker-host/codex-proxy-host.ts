@@ -655,6 +655,24 @@ function reconcileResponsesReasoningEffort(
   return effort === body.reasoning.effort ? body : applyReasoningEffortOverride(body, effort ?? null);
 }
 
+/**
+ * 父任务存的是原生档位，出站前要先换成目标模型真正会发出的 HTTP 档。
+ * 收敛口径与 createProviderModelRewriteTransform 用的 reconcileOutboundReasoningEffort 相同：
+ * 目录声明了能力就按能力收敛（xhigh 落到只支持 low/high 的模型上是 high，
+ * ultra 不在声明里就落到最高兼容档）。目录没声明能力时原样保留，不猜。
+ */
+function httpEffortForRoute(
+  route: CodexSubagentRouteSnapshot,
+): CodexSubagentRouteSnapshot['reasoningEffort'] | undefined {
+  if (route.reasoningEffort === undefined) return undefined;
+  const model = getActiveCatalog().providers.find(provider => provider.id === route.providerId)
+    ?.models.codex?.find(candidate => candidate.id === route.catalogModel);
+  const efforts = model?.efforts ?? [];
+  if (efforts.length === 0) return route.reasoningEffort;
+  const resolved = reconcileOutboundReasoningEffort(route.reasoningEffort, efforts);
+  return resolved ?? null;
+}
+
 function observedReasoningEffort(body: Record<string, unknown>): string | undefined {
   if (!isPlainObject(body.reasoning) || typeof body.reasoning.effort !== 'string') {
     return undefined;
@@ -717,16 +735,10 @@ function createForcedSubagentRequestTransform(): RequestTransform {
       ...body,
       model: route.catalogModel,
     };
-    // Codex 出站前会把原生档位换成 HTTP 档（GPT-6.1 Sol 的 ultra →
-    // multi_agent_reasoning_effort，xhigh；见 api-capabilities integration）。
-    // 智能路由跟父任务走同一条自定义 Responses 连接时，这个请求
-    // 已经是转换后的值；再把存档里的字面 ultra 盖上去会覆盖它。
-    // 换了供应商的路由不走这条转换，仍要盖父档位。
-    const parentProviderId = getSessionProvider(sessionIdFromHeaders(ctx.headers) ?? '');
-    const reasoningEffort = route.providerId === parentProviderId
-      ? undefined
-      : route.reasoningEffort;
-    return applyReasoningEffortOverride(next, reasoningEffort);
+    // 父档位先按目标模型能力收敛成真正会发出的 HTTP 档，再盖到子请求上。
+    // 同供应商也要盖：spawn_agent 选的 low 不是父任务存的 high。
+    // ultra 在这里已经变成最高兼容档，不会再被字面写回。
+    return applyReasoningEffortOverride(next, httpEffortForRoute(route));
   };
 }
 
