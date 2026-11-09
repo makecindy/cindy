@@ -170,4 +170,39 @@ describe('HY4 inline reasoning through Pi production adapters', () => {
     expect(rows[2].toolUseId).toBe('chatcmpl-tool-example');
     disposePiTranslateContext(h.ctx);
   });
+
+  it.each([
+    '示例：\n```js\nconst fence = "```";\nconst token = "</think:6124c78e>";\n```',
+    '示例：\n~~~js\nconst fence = "~~~";\nconst token = "</think:6124c78e>";\n~~~~',
+    '示例：\n```js\nconst fence = "```";\nconst token = "</think:6124c78e>";',
+    '示例：\n```xml\n</think:6124c78e>\n````\n结束。',
+    '> ```js\n> const fence = "```";\n> const token = "</think:6124c78e>";\n> ```',
+    '- ```js\n  const fence = "```";\n  const token = "</think:6124c78e>";\n  ```',
+  ])('keeps literal tags inside real fenced code in live, final and history projection: %s', text => {
+    const h = harness();
+    h.start();
+    for (const char of text) h.delta(char);
+    h.end(text);
+    expect(h.texts().at(-1)?.text).toBe(text);
+    expect(h.thoughts()).toEqual([]);
+    const rows = activePiHistoryFromTree({ leafId: 'code', tree: [{ entry: {
+      type: 'message', id: 'code', message: {
+        role: 'assistant', model: 'tencent/hy4', content: [{ type: 'text', text }],
+      },
+    }, children: [] }] });
+    expect(rows.map(row => row.role)).toEqual(['assistant']);
+    expect(rows[0].content).toBe(text);
+    disposePiTranslateContext(h.ctx);
+  });
+
+  it('recognizes a real boundary after a fenced example containing a literal boundary', () => {
+    const reasoning = '检查代码：\n```js\nconst fence = "```";\nconst token = "</think:6124c78e>";\n```\n';
+    const h = harness();
+    h.start();
+    for (const char of reasoning + marker + answer) h.delta(char);
+    h.end(reasoning + marker + answer);
+    expect(h.texts().at(-1)?.text).toBe(answer);
+    expect(h.thoughts().filter(e => e.stage === 'final').map(e => e.text)).toEqual([reasoning]);
+    disposePiTranslateContext(h.ctx);
+  });
 });

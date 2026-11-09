@@ -19,17 +19,48 @@ export function splitHy4InlineThinking(text: string, final = false): Hy4InlineTh
   }
   // The observed gateway dialect omits the opening tag. A bare </think> alone
   // is not enough evidence; only the salted HY4 control token enables this path.
-  // Ignore control-token examples inside inline/fenced Markdown code, including
-  // unfinished fences while streaming. Opening and closing runs must match.
-  let code = '';
-  for (const match of text.matchAll(/`+|~{3,}|<\/think:[a-f0-9]{8}>/gi)) {
-    const token = match[0];
-    if (!token.startsWith('<')) {
-      if (!code) code = token;
-      else if (token === code) code = '';
-    } else if (!code) {
-      return { thinking: text.slice(0, match.index), text: text.slice(match.index + token.length) };
+  // Fenced code closes only on a delimiter-only line, never on a run inside a
+  // string/comment. Inline code instead closes on an exactly matching run.
+  let fence = '';
+  let fenceQuoteDepth = 0;
+  let fenceIndent = 0;
+  let inlineWidth = 0;
+  let offset = 0;
+  for (const line of text.split('\n')) {
+    let fenceLine: string | null = line;
+    for (let depth = 0; fence && depth < fenceQuoteDepth; depth++) {
+      const quote = /^ {0,3}>[\t ]?/.exec(fenceLine!);
+      if (!quote) { fenceLine = null; fence = ''; break; }
+      fenceLine = fenceLine!.slice(quote[0].length);
     }
+    if (fence) {
+      const close = /^( *)(`+|~+)[\t ]*\r?$/.exec(fenceLine!);
+      if (close && close[1].length <= fenceIndent + 3
+          && close[2][0] === fence[0] && close[2].length >= fence.length) fence = '';
+    } else {
+      const open = inlineWidth === 0
+        ? /^((?: {0,3}>[\t ]?)*)( {0,3})((?:(?:[-+*]|\d+[.)])[\t ]+)*)(`{3,}|~{3,})(.*)$/.exec(line)
+        : null;
+      if (open && (open[4][0] === '~' || !open[5].includes('`'))) {
+        fence = open[4];
+        fenceQuoteDepth = (open[1].match(/>/g) ?? []).length;
+        fenceIndent = open[2].length + open[3].length;
+      } else for (const match of line.matchAll(/`+|<\/think:[a-f0-9]{8}>/gi)) {
+        const token = match[0];
+        if (token[0] === '`') {
+          // Escapes apply outside code spans; inside, backslashes are literal.
+          let backslashes = 0;
+          for (let i = match.index - 1; i >= 0 && line[i] === '\\'; i--) backslashes++;
+          if (!inlineWidth && backslashes % 2) continue;
+          if (!inlineWidth) inlineWidth = token.length;
+          else if (inlineWidth === token.length) inlineWidth = 0;
+        } else if (!inlineWidth) {
+          const end = offset + match.index;
+          return { thinking: text.slice(0, end), text: text.slice(end + token.length) };
+        }
+      }
+    }
+    offset += line.length + 1;
   }
   return null;
 }
