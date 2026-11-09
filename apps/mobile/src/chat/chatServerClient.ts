@@ -1101,16 +1101,17 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
       ];
       const mentions = new Set(known?.mentions ?? input.mentions.botIds.map(chatId));
       if (input.quote && !known) {
-        const [original, members, labelSnapshot] = await Promise.all([
+        const labels = supportsCompanionOwnerNames && input.conversationKind !== 'direct'
+          ? this.snapshot(roomId, true).then(snapshot => ({ members: snapshot.members, hideOwnerNames: snapshot.room.hide_companion_owner_names === true }))
+          : request<ChatMember[]>(`/conversations/${chatId(roomId)}/members`).then(members => ({ members, hideOwnerNames: false }));
+        const [original, { members: projectedMembers, hideOwnerNames }] = await Promise.all([
           request<ChatMessage>(`/conversations/${chatId(roomId)}/messages/${chatId(input.quote.messageId)}`),
-          request<ChatMember[]>(`/conversations/${chatId(roomId)}/members`),
-          supportsCompanionOwnerNames && input.conversationKind !== 'direct' ? this.snapshot(roomId, true) : Promise.resolve(undefined),
+          labels,
         ]);
         if (original.deleted || (original.threadRootId && original.threadRootId !== input.threadRootId) || original.origin === 'system') throw new Error('QUOTE_UNAVAILABLE');
-        const projectedMembers = labelSnapshot?.members ?? members;
         const member = projectedMembers.find(member => member.id === original.authorId);
         const quote = botGroupQuoteFromMessage({ id: original.id, sequence: Number(original.seq), authorKind: original.author.kind === 'human' ? 'user' : 'bot',
-          authorName: member ? memberName(member, input.conversationKind === 'direct' ? [] : projectedMembers, labelSnapshot?.room.hide_companion_owner_names === true) : original.author.name, content: contentText(original), task: taskCardOf(original) ?? undefined,
+          authorName: member ? memberName(member, input.conversationKind === 'direct' ? [] : projectedMembers, hideOwnerNames) : original.author.name, content: contentText(original), task: taskCardOf(original) ?? undefined,
           attachments: original.content.filter(block => block.type === 'media').map(block => ({ name: attachmentName(block) })) });
         // Quote positions are only an optional UI hint; never round a server cursor into it.
         if (!Number.isSafeInteger(quote.sequence)) quote.sequence = null;

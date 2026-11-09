@@ -640,6 +640,36 @@ describe('direct Chat Server client', () => {
     await expect(client.send(id(1), input)).rejects.toThrow('QUOTE_UNAVAILABLE');
     expect(request.mock.calls.some(([, method]) => method === 'POST')).toBe(false);
   });
+  // #9427 / server-channel-review: quote sends must not fetch /members when the
+  // fresh snapshot already contains the roster. Direct/old servers need /members.
+  it.each([
+    ['supporting group', true, 'group', 1, 0],
+    ['older group', false, 'group', 0, 1],
+    ['supporting direct chat', true, 'direct', 0, 1],
+  ] as const)('uses only one roster source for a quote in a %s', async (_label, supported, conversationKind, snapshots, rosters) => {
+    const owner = { ...snapshot().members[0], name: 'Alex' };
+    const member = { ...owner, id: id(12), kind: 'bot' as const, name: 'Helper', ownerName: 'Alex' };
+    const original = { ...message(20), authorId: member.id, author: { kind: 'bot', name: 'Helper' } };
+    const group = { ...snapshot(), room: { ...room(), hide_companion_owner_names: true }, members: [owner, member] };
+    const request = vi.fn(async (path: string, method?: string, _body?: unknown) => {
+      if (path === '/me') return { actor: { id: id(10), kind: 'human' }, capabilities: supported ? { groupCompanionOwnerNames: 1 } : {} };
+      if (method === 'POST') return message(21);
+      if (path.endsWith('/snapshot')) return group;
+      if (path.endsWith('/members')) return group.members;
+      return original;
+    });
+    const client = createChatServerClient(request as any);
+    await client.groupSettings(id(1)); // establish the advertised capability
+    request.mockClear();
+    await client.send(id(1), { clientId: `quote-${conversationKind}`, text: 'Agreed', mentions: { all: false, botIds: [] },
+      quote: { messageId: id(20) }, conversationKind: conversationKind === 'direct' ? 'direct' : undefined });
+    expect(request.mock.calls.filter(([path]) => path.endsWith('/snapshot'))).toHaveLength(snapshots);
+    expect(request.mock.calls.filter(([path]) => path.endsWith('/members'))).toHaveLength(rosters);
+    const posted = request.mock.calls.find(([, method]) => method === 'POST');
+    expect(posted?.[2]).toMatchObject({ mentions: [member.id], content: [expect.objectContaining({
+      data: expect.objectContaining({ authorName: supported && conversationKind === 'group' ? 'Helper' : 'Helper (Alex)' }),
+    }), { type: 'text', text: 'Agreed' }] });
+  });
   it('retries a lost quoted-send response with the identical posted content', async () => {
     const original = message(20);
     let lost = true;

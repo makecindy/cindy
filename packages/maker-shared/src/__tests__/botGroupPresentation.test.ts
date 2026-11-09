@@ -43,6 +43,24 @@ describe('optional group companion owner labels', () => {
     }
   });
 
+  // #9427 review: a shortened name must not collide with another companion's
+  // forced full label, including when fallback propagates through several names.
+  it('avoids collisions with forced owner labels, including cascading fallbacks', () => {
+    const duplicate = { ...bot, id: 'b2', ownerActorId: family.id, ownerName: 'Sam' };
+    const nested = { ...bot, id: 'b3', name: 'Helper (Alex)', ownerActorId: family.id, ownerName: 'Sam' };
+    const chained = { ...bot, id: 'b4', name: 'Helper (Alex) (Sam)', ownerActorId: family.id, ownerName: 'Sam' };
+    const members = [owner, family, bot, duplicate, nested, chained];
+    expect(chatGroupMemberName(bot, members, true)).toBe('Helper (Alex)');
+    expect(chatGroupMemberName(nested, members, true)).toBe('Helper (Alex) (Sam)');
+    expect(chatGroupMemberName(chained, members, true)).toBe('Helper (Alex) (Sam) (Sam)');
+    // A potential full label is harmless when its owner is itself shortened.
+    const unique = [owner, family, bot, nested];
+    expect(chatGroupMemberName(bot, unique, true)).toBe('Helper');
+    expect(chatGroupMemberName(nested, unique, true)).toBe('Helper (Alex)');
+    const departedOwner = { ...bot, ownerActorId: undefined, ownerName: 'Alex' };
+    expect(chatGroupMemberName(nested, [owner, family, departedOwner, nested], true)).toBe('Helper (Alex) (Sam)');
+  });
+
   it('fails back to the existing label for a direct room or an incomplete roster', () => {
     expect(chatGroupMemberName(bot, [], true)).toBe('Helper (Alex)');
     expect(chatGroupMemberName(bot, [family, bot], true)).toBe('Helper (Alex)');

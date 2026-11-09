@@ -36,13 +36,35 @@ export function chatGroupMemberName(member: ChatGroupNamedMember, members: reado
   const owner = chatGroupOwnerName(member, members);
   if (hideOwnerName && member.kind === 'bot' && owner && member.ownerActorId) {
     const joined = members.filter(candidate => candidate.state === 'joined');
-    // Only use a complete group roster. Direct chats pass an empty roster; a departed
-    // owner or an absent member keeps the established attribution as a safe fallback.
-    const memberPresent = joined.some(candidate => candidate.id === member.id && candidate.kind === 'bot');
-    const ownerPresent = joined.some(candidate => candidate.id === member.ownerActorId && candidate.kind === 'human');
-    const key = member.name.trim().normalize('NFKC').toLowerCase();
-    const namesake = joined.some(candidate => candidate.id !== member.id && candidate.name.trim().normalize('NFKC').toLowerCase() === key);
-    if (memberPresent && ownerPresent && key && !namesake) return member.name;
+    const keyOf = (name: string) => name.trim().normalize('NFKC').toLowerCase();
+    const humans = new Map(joined.filter(candidate => candidate.kind === 'human').map(candidate => [candidate.id, candidate]));
+    const counts = new Map<string, number>();
+    for (const candidate of joined) {
+      const key = keyOf(candidate.name);
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+    }
+    const short = new Map<string, { id: string; full: string }>();
+    const fullLabels: string[] = [];
+    for (const candidate of joined) {
+      const candidateOwner = candidate.kind === 'bot'
+        ? (candidate.ownerActorId ? humans.get(candidate.ownerActorId)?.name.trim() : '') || candidate.ownerName?.trim() || '' : '';
+      const key = keyOf(candidate.name);
+      const full = keyOf(candidate.kind === 'bot' && candidateOwner ? `${candidate.name} (${candidateOwner})` : candidate.name);
+      // Direct chats and absent owners retain the existing attribution. Other raw
+      // names are counted before deciding which labels may safely be shortened.
+      if (candidate.kind === 'bot' && candidate.ownerActorId && humans.has(candidate.ownerActorId) && candidateOwner && key && counts.get(key) === 1) {
+        short.set(key, { id: candidate.id, full });
+      } else {
+        fullLabels.push(full);
+      }
+    }
+    // A forced full label may itself collide with a short label. Promote each
+    // such candidate to full and propagate its label until there are no new collisions.
+    for (let index = 0; index < fullLabels.length; index++) {
+      const collision = short.get(fullLabels[index]);
+      if (collision) { short.delete(fullLabels[index]); fullLabels.push(collision.full); }
+    }
+    if (short.get(keyOf(member.name))?.id === member.id) return member.name;
   }
   return member.kind === 'bot' && owner ? `${member.name} (${owner})` : member.name;
 }
