@@ -5075,6 +5075,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     enable: (enabled) => ipcRenderer.invoke(DESKTOP_LOCAL.ENABLE, enabled),
     windowsSupport: (enabled) => ipcRenderer.invoke(DESKTOP_LOCAL.WINDOWS_SUPPORT, enabled),
     stop: () => ipcRenderer.invoke(DESKTOP_LOCAL.STOP),
+    systemSharing: () => ipcRenderer.invoke(REMOTE_VIEWER.SYSTEM_SHARING),
+    setSystemSharing: (enabled) => ipcRenderer.invoke(REMOTE_VIEWER.SET_SYSTEM_SHARING, enabled),
+    setSystemSharingMode: (mode) => ipcRenderer.invoke(REMOTE_VIEWER.SET_SYSTEM_SHARING, undefined, mode),
   } satisfies RemoteDesktopApi,
   // 自建中转服务:本机中转与加入别的中转(只接受本机应用窗口)。
   selfHostedRelay: {

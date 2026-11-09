@@ -21,6 +21,8 @@ const relayState = {
 };
 const emptyDirectory = { bytes: 0, fileCount: 0 };
 const visibilityWrites: unknown[] = [];
+let systemSharingEnabled = false;
+let systemSharingMode = 'high';
 Object.assign(window, { visibilityWrites });
 
 void mountPage({
@@ -82,7 +84,18 @@ void mountPage({
     ghosts: { listSync: () => ({ ghosts: [] }), recentUsageSync: () => ({ ids: [] }), onChanged: subscription('ghosts'), onRecentUsageChanged: subscription('ghost-usage') },
     pluginMarket: { snapshot: read({ items: [], unavailableReason: null, customSourceNames: [], unavailableCustomSourceNames: [] }), onUpdateConsentHoldsChanged: subscription('plugin-consent') },
     deviceLink: { getState: read({ remoteControlEnabled: Boolean(ctx.data.cloud), linkStatus: ctx.data.cloud ? 'online' : 'disconnected', controlledBy: [] }), onControlTargetChanged: subscription('control-target'), onOwnershipChanged: subscription('ownership'), onControlledState: subscription('controlled'), onConnectionIssue: subscription('connection-issue'), getSettings: read({}), getStatus: read({ connected: false }), listDevices: read({ devices: ctx.data.cloud ? [{ deviceId: 'fixture-pc', name: 'Preview PC', isSelf: true, online: true, platform: 'win32', remoteControlEnabled: true, controlEnabled: true }] : [] }), onPresenceChanged: subscription('presence'), onStatusChanged: subscription('device-status') },
-    remoteDesktop: { state: read({ enabled: false }) },
+    remoteDesktop: {
+      state: read({ enabled: false }),
+      systemSharing: async () => ({ enabled: systemSharingEnabled, mode: systemSharingMode }),
+      setSystemSharing: async (enabled: boolean) => {
+        systemSharingEnabled = enabled;
+        return { enabled, mode: systemSharingMode };
+      },
+      setSystemSharingMode: async (mode: string) => {
+        systemSharingMode = mode;
+        return { enabled: systemSharingEnabled, mode };
+      },
+    },
     remoteSsh: { list: read({ hosts: [] }), onStatusChanged: subscription('ssh') },
     sidebarSettings: { loadSnapshot: () => ({ hiddenMainViewGhostIds: [], dataOwnerId: null, ownerGeneration: 0 }), onHiddenMainViewGhostIdsChanged: subscription('sidebar') },
     selfHostedRelay: { command: read({ state: relayState }), getState: read(relayState), onChanged: subscription('relay') },

@@ -59,6 +59,13 @@ import {
 import { encodeDesktopFrame, encodeNativeRelayFrame } from './frame';
 import { transferDesktopClipboard, transferDesktopClipboardContent } from './clipboard';
 import { NativeDesktopCapture } from './nativeCapture';
+import { readSystemScreenSharing } from './systemScreenSharing';
+import { SystemScreenSharingProbeHost } from './systemScreenSharingProbe';
+import {
+  activeOwnerScopeKey,
+  isAppSessionBoundaryPending,
+  onAppSessionInvalidated,
+} from '../appSessionState';
 import { HyprlandCapture, supportsHyprlandCapture } from './hyprlandCapture';
 import { readLinuxDesktopInputSupport, isX11Desktop } from './linuxInput';
 import { LinuxDesktopAudio, supportsLinuxAudio } from './linuxAudio';
@@ -806,7 +813,22 @@ async function setPrivacyScreen(enabled: boolean, current: () => boolean): Promi
   }
 }
 
+const systemSharingProbes = new SystemScreenSharingProbeHost();
 export const remoteDesktop: RemoteDesktopController = new RemoteDesktopController({
+  systemSharingProbe: async (peer, action, id, current) => {
+    if (action === 'end') {
+      systemSharingProbes.stop(peer, id);
+      return null;
+    }
+    if (process.platform !== 'darwin') return null;
+    const owner = activeOwnerScopeKey();
+    return systemSharingProbes.begin(
+      peer,
+      id,
+      () => current() && owner === activeOwnerScopeKey() && !isAppSessionBoundaryPending(),
+    );
+  },
+  stopSystemSharingProbes: (peer, id) => systemSharingProbes.stop(peer, id),
   prepare: async (current) => {
     if (nativeWayland() && (await supportsLinuxPrivacy())) {
       // Optional privacy support cannot make ordinary viewing unavailable.
@@ -881,6 +903,9 @@ export const remoteDesktop: RemoteDesktopController = new RemoteDesktopControlle
         (enabled && (await readLinuxDesktopInputSupport())),
       platform: process.platform,
       ...(enabled ? { permissions: await permissions.read() } : {}),
+      ...(enabled && process.platform === 'darwin'
+        ? { systemScreenSharing: await readSystemScreenSharing() }
+        : {}),
       displays:
         linuxDisplays ??
         (enabled && wayland()
@@ -1111,6 +1136,11 @@ export function registerRemoteDesktopIpc(
   }, 1000);
   timer.unref();
   onQuit('remote-desktop-clipboard', stopLinuxClipboardWriter);
+  const removeProbeBoundaryListener = onAppSessionInvalidated(() => systemSharingProbes.stop());
+  onQuit('remote-desktop-system-sharing-probes', () => {
+    removeProbeBoundaryListener();
+    systemSharingProbes.stop();
+  });
   onQuit('remote-desktop-stop', () => {
     clearInterval(timer);
     permissions.dismiss();

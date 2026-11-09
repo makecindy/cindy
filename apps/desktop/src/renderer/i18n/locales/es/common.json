@@ -6544,6 +6544,17 @@
         "title": "¿Revocar el acceso?",
         "description": "Una vez revocado el acceso, este dispositivo se desconectará de inmediato y ya no podrá controlar esta computadora de forma remota. Deberás restablecer su acceso en Configuración → Conexión remota para que pueda volver a conectarse.",
         "confirm": "Revocar acceso"
+      },
+      "systemSharing": {
+        "title": "Usar Compartir pantalla entre Macs",
+        "description": "Al abrir el escritorio remoto de otro Mac desde este Mac, usa la app integrada Compartir pantalla para una imagen más fluida. El otro Mac debe tener activado Ajustes del Sistema → General → Compartir → Compartir pantalla, y ambos ordenadores deben ser accesibles por una red local o VPN. Si no, se abre el escritorio remoto de Cindy.",
+        "toggleAria": "Usar Compartir pantalla entre Macs",
+        "saveFailed": "No se pudo guardar el ajuste. Inténtalo de nuevo.",
+        "modeTitle": "Modo de conexión",
+        "modeDescription": "Se usa al conectar desde este Mac. Alto rendimiento de forma predeterminada; Estándar si alguno de los Mac no lo admite.",
+        "modeHigh": "Alto rendimiento",
+        "modeStandard": "Estándar",
+        "limits": "Las conexiones abiertas en Compartir pantalla no usan Pantalla de privacidad de la computadora, Bloquear la computadora al salir ni Desconectar y bloquear cuando esté inactivo. En Alto rendimiento, la pantalla del otro Mac puede quedarse en negro. Mientras haya una conexión de Compartir pantalla activa, es posible que Desbloquear computadora automáticamente no funcione."
       }
     },
     "tina": {

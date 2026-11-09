@@ -24,7 +24,21 @@ export const REMOTE_VIEWER = {
   RESOLUTION: 'remote-desktop-viewer:resolution',
   CHANNEL_REQUEST: 'remote-desktop-viewer:channel-request',
   CHANNEL_REPLY: 'remote-desktop-viewer:channel-reply',
+  SYSTEM_SHARING: 'remote-desktop-viewer:system-sharing',
+  SET_SYSTEM_SHARING: 'remote-desktop-viewer:set-system-sharing',
 } as const;
+
+/** macOS controller: open other Macs in the system Screen Sharing app when reachable. */
+export type SystemScreenSharingMode = 'standard' | 'high';
+export interface SystemScreenSharingSettings {
+  enabled: boolean;
+  /** Defaults to High Performance; an explicit Standard override is preserved. */
+  mode: SystemScreenSharingMode;
+}
+export const DEFAULT_SYSTEM_SCREEN_SHARING: SystemScreenSharingSettings = {
+  enabled: false,
+  mode: 'high',
+};
 
 export interface RemoteViewerTarget {
   deviceId: string;

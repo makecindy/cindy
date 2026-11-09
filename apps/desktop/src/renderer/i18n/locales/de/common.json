@@ -6479,6 +6479,17 @@
         "title": "Zugriff widerrufen?",
         "description": "Nach dem Widerruf wird dieses Gerät sofort getrennt und kann diesen Computer nicht mehr fernsteuern. Du musst den Zugriff unter Einstellungen → Remote-Verbindung wiederherstellen, bevor es sich erneut verbinden kann.",
         "confirm": "Zugriff widerrufen"
+      },
+      "systemSharing": {
+        "title": "Zwischen Macs die Bildschirmfreigabe verwenden",
+        "description": "Wenn du von diesem Mac aus den Remote-Desktop eines anderen Mac öffnest, wird die integrierte App „Bildschirmfreigabe“ für ein flüssigeres Bild verwendet. Auf dem anderen Mac muss „Systemeinstellungen → Allgemein → Teilen → Bildschirmfreigabe“ aktiviert sein, und beide Computer müssen über ein lokales Netzwerk oder VPN erreichbar sein. Andernfalls öffnet sich der Cindy-Remote-Desktop.",
+        "toggleAria": "Zwischen Macs die Bildschirmfreigabe verwenden",
+        "saveFailed": "Die Einstellung konnte nicht gespeichert werden. Versuche es erneut.",
+        "modeTitle": "Verbindungsmodus",
+        "modeDescription": "Gilt für Verbindungen von diesem Mac. Standardmäßig wird „Hohe Leistung“ verwendet; unterstützt einer der Macs dies nicht, wird „Standard“ verwendet.",
+        "modeHigh": "Hohe Leistung",
+        "modeStandard": "Standard",
+        "limits": "Verbindungen, die in „Bildschirmfreigabe“ geöffnet werden, nutzen weder „Sichtschutz am Computer“ noch „Computer beim Beenden sperren“ oder „Bei Inaktivität trennen und sperren“. Bei „Hohe Leistung“ kann der Bildschirm des anderen Mac schwarz werden. Solange eine Bildschirmfreigabe-Verbindung besteht, funktioniert „Computer automatisch entsperren“ möglicherweise nicht."
       }
     },
     "tina": {

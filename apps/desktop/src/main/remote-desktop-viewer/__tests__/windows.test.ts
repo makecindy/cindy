@@ -117,6 +117,7 @@ vi.mock('../../resource-usage-window/window', () => ({
 import { RemoteDesktopViewerWindows } from '../windows';
 import { REMOTE_VIEWER } from '../../../shared/remoteDesktopViewer';
 import { remoteInvoke } from '../../device-link/index';
+import * as systemSharing from '../systemScreenSharing';
 let manager: RemoteDesktopViewerWindows;
 afterEach(() => {
   manager?.reset();
@@ -133,6 +134,24 @@ afterEach(() => {
 const event = (win: any) => ({ sender: win.webContents, senderFrame: win.webContents.mainFrame });
 const call = (channel: string, win: any, ...args: unknown[]) =>
   fixture.handlers.get(channel)!(event(win), ...args);
+
+// Unit: a mode change must persist independently without turning sharing on/off;
+// old boolean callers remain compatible and unrecognized modes never reach storage.
+it('saves the controller mode without changing enabled and validates the IPC input', async () => {
+  manager = new RemoteDesktopViewerWindows(() => true);
+  manager.register();
+  const write = vi.spyOn(systemSharing, 'writeSystemScreenSharingSettings')
+    .mockResolvedValue({ enabled: true, mode: 'standard' });
+  const handler = fixture.handlers.get(REMOTE_VIEWER.SET_SYSTEM_SHARING)!;
+  await handler({}, undefined, 'standard');
+  expect(write).toHaveBeenLastCalledWith({ mode: 'standard' });
+  await handler({}, false);
+  expect(write).toHaveBeenLastCalledWith({ enabled: false });
+  for (const args of [[undefined, 'ultra'], [true, 'high'], [undefined, {}], [undefined]]) {
+    expect(() => handler({}, ...args)).toThrow();
+  }
+  expect(write).toHaveBeenCalledTimes(2);
+});
 it.each([
   ['DESKTOP_LEASE_EXPIRED', 'DESKTOP_LEASE_EXPIRED', 'DESKTOP_LEASE_EXPIRED'],
   ['DESKTOP_VIDEO_TIMEOUT', 'DESKTOP_VIDEO_TIMEOUT', 'DESKTOP_VIDEO_TIMEOUT'],

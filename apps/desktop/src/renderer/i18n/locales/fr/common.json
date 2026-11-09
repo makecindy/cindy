@@ -6544,6 +6544,17 @@
         "title": "Révoquer l'accès ?",
         "description": "Une fois l'accès révoqué, cet appareil est immédiatement déconnecté et ne peut plus contrôler cette machine à distance. Vous devrez rétablir son accès dans Paramètres → Connexion à distance avant qu'il puisse se reconnecter.",
         "confirm": "Révoquer l'accès"
+      },
+      "systemSharing": {
+        "title": "Utiliser le Partage d’écran entre Mac",
+        "description": "Lorsque vous ouvrez le bureau à distance d’un autre Mac depuis ce Mac, l’app intégrée Partage d’écran est utilisée pour une image plus fluide. L’autre Mac doit avoir activé Réglages Système → Général → Partage → Partage d’écran, et les deux ordinateurs doivent être accessibles via un réseau local ou un VPN. Sinon, le bureau à distance Cindy s’ouvre.",
+        "toggleAria": "Utiliser le Partage d’écran entre Mac",
+        "saveFailed": "Impossible d’enregistrer ce réglage. Réessayez.",
+        "modeTitle": "Mode de connexion",
+        "modeDescription": "Utilisé pour les connexions depuis ce Mac. Haute performance par défaut ; Standard si l’un des Mac ne le prend pas en charge.",
+        "modeHigh": "Hautes performances",
+        "modeStandard": "Standard",
+        "limits": "Les connexions ouvertes dans Partage d’écran n’utilisent pas Écran de confidentialité, Verrouiller à la sortie ni Déconnecter et verrouiller en cas d'inactivité. En mode Hautes performances, l’écran de l’autre Mac peut devenir noir. Pendant une connexion Partage d’écran, Déverrouiller automatiquement l'ordinateur peut ne pas fonctionner."
       }
     },
     "tina": {

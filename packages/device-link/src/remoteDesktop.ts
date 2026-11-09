@@ -212,6 +212,29 @@ export interface RemoteDesktopWindow {
   title: string;
   app: string;
 }
+/**
+ * macOS host: how a Mac controller can reach the system Screen Sharing service
+ * (`vnc://`) directly. Only informs the controller's choice; Cindy never relays it.
+ */
+export interface RemoteDesktopSystemScreenSharing {
+  /** The host's Screen Sharing service accepts connections on port 5900. */
+  listening: boolean;
+  /** Addresses to try in order: the Bonjour `.local` name, then IPv4 addresses. */
+  hosts: string[];
+  /** Login name prefilled in the Screen Sharing sign-in prompt. */
+  user: string;
+  /** Apple silicon on macOS 14 or later, as High Performance requires. */
+  highPerformance: boolean;
+  /** Supports short-lived address verification before direct IP connections. */
+  addressVerification?: 1;
+}
+/** Ephemeral public key delivered over the authenticated device channel, never an OS password. */
+export interface SystemScreenSharingProbe {
+  version: 1;
+  id: string;
+  port: number;
+  publicKey: string;
+}
 export interface RemoteDesktopCapabilities {
   version: 1;
   enabled: boolean;
@@ -282,6 +305,8 @@ export interface RemoteDesktopCapabilities {
    * new input kinds, so viewers send neither without this flag.
    */
   liveScreens?: boolean;
+  /** macOS hosts with remote desktop allowed; absent on older hosts. */
+  systemScreenSharing?: RemoteDesktopSystemScreenSharing;
 }
 export type LiveScreenPlatform =
   "ios" | "ipados" | "tvos" | "visionos" | "android";
@@ -395,6 +420,8 @@ export type RemoteDesktopRequest =
   | RemoteDesktopIceRequest
   | ClipboardContentRequest
   | { op: "capabilities" }
+  /** Only to hosts advertising systemScreenSharing.addressVerification = 1. */
+  | { op: "systemSharingProbe"; action: "begin" | "end"; id: string }
   /** Only to hosts advertising `liveScreens`. */
   | { op: "screens" }
   | { op: "permissions"; action: "check" | "guide" }
@@ -491,6 +518,11 @@ export function parseRemoteDesktopRequest(
     return v.control === true ? { control: true as const } : {};
   };
   if (v.op === "capabilities" || v.op === "screens") return { op: v.op };
+  if (v.op === "systemSharingProbe") {
+    if ((v.action !== "begin" && v.action !== "end") || typeof v.id !== "string" || !/^[a-f0-9]{32}$/.test(v.id))
+      throw new Error("INVALID_REQUEST");
+    return { op: v.op, action: v.action, id: v.id };
+  }
   if (v.op === "permissions" && (v.action === "check" || v.action === "guide"))
     return { op: v.op, action: v.action };
   if (
