@@ -1,7 +1,15 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+
+const mockAccountDirectory = vi.fn<(provider: string, id: string) => string>();
+const mockReadPool = vi.fn<() => unknown>();
+
+vi.mock('../../subscription-accounts/store.js', () => ({
+  accountDirectory: (...args: unknown[]) => mockAccountDirectory(...(args as [string, string])),
+  readPool: () => mockReadPool(),
+}));
 
 import { prepareSharedPluginLinks } from '../shared-plugin-links';
 
@@ -13,7 +21,19 @@ function tempHome(): string {
   return root;
 }
 
+function setupPool(home: string, accountIds: string[]): void {
+  mockAccountDirectory.mockImplementation(
+    (provider: string, id: string) =>
+      path.join(home, `.${provider === 'anthropic' ? 'claude' : 'codex'}-${id === 'default' ? '' : id}`),
+  );
+  mockReadPool.mockReturnValue({
+    strategy: 'least',
+    accounts: accountIds.map((id) => ({ id, paused: false, limit: 0, weight: 1 })),
+  });
+}
+
 afterEach(() => {
+  vi.clearAllMocks();
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
 });
 
@@ -22,12 +42,11 @@ describe('prepareSharedPluginLinks', () => {
     const home = tempHome();
     const defaultPlugins = path.join(home, '.claude', 'plugins');
     fs.mkdirSync(path.join(defaultPlugins, 'cache'), { recursive: true });
-    const accountHome = path.join(home, '.claude-cindy-owner-abc');
-    fs.mkdirSync(accountHome, { recursive: true });
+    setupPool(home, ['default', 'cindy-abcdef123456-uuid-here']);
 
     await prepareSharedPluginLinks(home);
 
-    const linked = path.join(accountHome, 'plugins');
+    const linked = path.join(home, '.claude-cindy-abcdef123456-uuid-here', 'plugins');
     expect(fs.lstatSync(linked).isSymbolicLink()).toBe(true);
     expect(fs.realpathSync(linked)).toBe(fs.realpathSync(defaultPlugins));
   });
@@ -35,25 +54,36 @@ describe('prepareSharedPluginLinks', () => {
   it('leaves an account home that already owns plugins untouched', async () => {
     const home = tempHome();
     fs.mkdirSync(path.join(home, '.claude', 'plugins'), { recursive: true });
-    const accountHome = path.join(home, '.claude-cindy-owner-abc');
-    const accountPlugins = path.join(accountHome, 'plugins');
+    const accountPlugins = path.join(home, '.claude-cindy-abcdef123456-uuid-here', 'plugins');
     fs.mkdirSync(accountPlugins, { recursive: true });
     fs.writeFileSync(path.join(accountPlugins, 'installed_plugins.json'), '{"plugins":{}}');
+    setupPool(home, ['default', 'cindy-abcdef123456-uuid-here']);
 
     await prepareSharedPluginLinks(home);
 
-    // 账号自己的插件集合优先，不能被默认账号覆盖。
     expect(fs.lstatSync(accountPlugins).isSymbolicLink()).toBe(false);
     expect(fs.readdirSync(accountPlugins)).toEqual(['installed_plugins.json']);
   });
 
   it('does nothing when the default account has no plugins', async () => {
     const home = tempHome();
-    const accountHome = path.join(home, '.claude-cindy-owner-abc');
-    fs.mkdirSync(accountHome, { recursive: true });
+    setupPool(home, ['default', 'cindy-abcdef123456-uuid-here']);
 
     await prepareSharedPluginLinks(home);
 
-    expect(fs.existsSync(path.join(accountHome, 'plugins'))).toBe(false);
+    expect(fs.existsSync(path.join(home, '.claude-cindy-abcdef123456-uuid-here', 'plugins'))).toBe(false);
+  });
+
+  it('does nothing when there is no subscription pool', async () => {
+    const home = tempHome();
+    fs.mkdirSync(path.join(home, '.claude', 'plugins'), { recursive: true });
+    mockAccountDirectory.mockImplementation(
+      (provider: string, id: string) => path.join(home, `.${provider}-${id}`),
+    );
+    mockReadPool.mockReturnValue(null);
+
+    await prepareSharedPluginLinks(home);
+
+    expect(fs.existsSync(path.join(home, '.claude-cindy-abcdef123456-uuid-here', 'plugins'))).toBe(false);
   });
 });

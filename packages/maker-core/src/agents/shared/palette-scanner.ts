@@ -350,8 +350,12 @@ export interface ClaudePaletteScanContext {
   workingDir?: string;
   /** Config directory the session's Claude runtime actually uses. */
   configDir: string;
-  /** Git root of `workingDir`, when the session has a project context. */
-  projectRoot?: string;
+  /**
+   * Project directories to match project-scoped plugin installs against. A
+   * session started in a subdirectory should try both the working directory
+   * and its Git root; callers pass every applicable root.
+   */
+  projectRoots?: readonly string[];
   /**
    * Partner (bot) sessions start Claude with `settingSources: []` and mount only
    * their own plugin roots, so they never load the user's plugins. Offering
@@ -380,19 +384,26 @@ export async function scanClaudeSlashCommands(
   // namespace. Claude Code's own runtime loads them; the Desktop palette used
   // to scan only user/project folders, so plugin Skills never showed up here.
   if (!context.excludePluginSkills) {
-    for (const skill of scanClaudePluginSkills({
-      configDir,
-      ...(context.projectRoot ? { projectRoot: context.projectRoot } : {}),
-      scopes: context.projectRoot ? ['user', 'project', 'local'] : ['user'],
-    })) {
-      discovered.push({
-        name: skill.name,
-        description: await readMarkdownDescription(skill.mdPath),
-        source: 'skill',
-        path: skill.mdPath,
-        // managed 与 user 同为全局生效，区别只在来源。
-        scope: skill.scope === 'project' || skill.scope === 'local' ? 'project' : 'global',
-      });
+    // Project-scoped installs may live under the working directory or its Git
+    // root; run one pass per root plus a user-only pass, then let the merged
+    // map keep the first (most specific) entry per name.
+    const roots = context.projectRoots && context.projectRoots.length > 0
+      ? context.projectRoots
+      : [undefined];
+    for (const root of roots) {
+      for (const skill of scanClaudePluginSkills({
+        configDir,
+        ...(root ? { projectRoot: root } : {}),
+      })) {
+        discovered.push({
+          name: skill.name,
+          description: await readMarkdownDescription(skill.mdPath),
+          source: 'skill',
+          path: skill.mdPath,
+          // managed 与 user 同为全局生效，区别只在来源。
+          scope: skill.scope === 'project' || skill.scope === 'local' ? 'project' : 'global',
+        });
+      }
     }
   }
 

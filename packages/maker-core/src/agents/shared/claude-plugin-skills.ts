@@ -96,6 +96,16 @@ function findSkillFile(folder: string): string | null {
   return null;
 }
 
+/** Lexical containment; symlink resolution is done at grant time, not here. */
+function isPathWithin(root: string, candidate: string): boolean {
+  const relative = path.relative(path.resolve(root), path.resolve(candidate));
+  return relative === '' || (
+    relative !== '..'
+    && !relative.startsWith(`..${path.sep}`)
+    && !path.isAbsolute(relative)
+  );
+}
+
 function isDirectoryEntry(parent: string, entry: fs.Dirent): boolean {
   if (entry.isDirectory()) return true;
   if (!entry.isSymbolicLink()) return false;
@@ -364,6 +374,10 @@ export function scanClaudePluginSkills(
 
       for (const root of manifestSkillRoots(manifest)) {
         const absolute = path.isAbsolute(root) ? root : path.resolve(installPath, root);
+        // A manifest can declare arbitrary paths; a Skill folder that escapes
+        // the plugin installation (via ../ or an absolute path) is not a
+        // plugin Skill and must not be exposed through SkillHub's read grant.
+        if (!isPathWithin(installPath, absolute)) continue;
         collectSkillsFromRoot(absolute, pluginName, scope, projectRoot, out);
       }
     }

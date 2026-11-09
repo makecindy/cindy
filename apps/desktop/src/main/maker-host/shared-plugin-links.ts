@@ -2,11 +2,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
-/**
- * Account home prefix produced by `accountDirectory()` for non-default
- * subscription accounts: `.claude-cindy-<owner digest>-<uuid>`.
- */
-const ACCOUNT_HOME_PREFIX = '.claude-cindy-';
+import { accountDirectory, readPool } from '../subscription-accounts/store.js';
 
 async function isDirectory(target: string): Promise<boolean> {
   try {
@@ -37,29 +33,40 @@ async function exists(target: string): Promise<boolean> {
  * An account home that already owns a `plugins` entry is left untouched — it
  * may hold a different plugin set, and silently replacing it would drop what
  * that account installed.
+ *
+ * Only the active owner's accounts are touched. Account directories are
+ * owner-scoped (`.claude-cindy-<owner digest>-<uuid>`); blindly walking
+ * `~/.claude-cindy-*` would also modify accounts that belong to a different
+ * Cindy owner on the same OS user.
  */
 export async function prepareSharedPluginLinks(homeDir = os.homedir()): Promise<void> {
+  const pool = readPool('anthropic');
+  if (!pool) return;
+
   const defaultPlugins = path.join(homeDir, '.claude', 'plugins');
   // Nothing installed on the default account: no source to share.
   if (!(await isDirectory(defaultPlugins))) return;
 
-  let names: string[];
-  try {
-    names = await fs.readdir(homeDir);
-  } catch {
-    return;
-  }
-
-  for (const name of names) {
-    if (!name.startsWith(ACCOUNT_HOME_PREFIX)) continue;
-    const accountPlugins = path.join(homeDir, name, 'plugins');
+  for (const account of pool.accounts) {
+    if (account.id === 'default') continue;
+    // accountDirectory() validates the id shape and scopes the path to the
+    // current owner, so this never yields another owner's directory.
+    const accountHome = accountDirectory('anthropic', account.id);
+    const accountPlugins = path.join(accountHome, 'plugins');
     if (await exists(accountPlugins)) continue;
     try {
+      await fs.mkdir(accountHome, { recursive: true });
       await fs.symlink(
         defaultPlugins,
         accountPlugins,
         process.platform === 'win32' ? 'junction' : 'dir',
       );
+      // Claude treats a missing `enabledPlugins` entry as enabled, but the
+      // account's own settings.json may explicitly disable plugins the default
+      // account uses. Without the account-level entry, `claude plugin list`
+      // reports them as enabled here too — the shared link alone is enough.
+      // If the account already wrote its own settings.json with overrides,
+      // it takes precedence; this step does not touch it.
     } catch {
       // Concurrent creation or a permissions problem: the next preparation
       // retries, and a missing link only costs plugin visibility.

@@ -1180,17 +1180,25 @@ export class ClaudeCodeAgent extends BaseAgent {
         excludePluginSkills: opts.excludePluginSkills,
       });
     }
-    // Claude projects do not require a Git repository, so a non-Git working
-    // directory is its own project context.
-    const projectRoot = opts.workingDir
-      ? (resolveGitRoot(opts.workingDir) ?? path.resolve(opts.workingDir))
-      : undefined;
-    const raw = await scanClaudeSlashCommands({
-      ...(opts.workingDir ? { workingDir: opts.workingDir } : {}),
-      configDir,
-      ...(projectRoot ? { projectRoot } : {}),
-      ...(opts.excludePluginSkills ? { excludePluginSkills: true } : {}),
-    });
+    // Project-scoped installs record the directory Claude was started in, which
+    // may be a subdirectory rather than the Git root. Try the working directory
+    // first, then its Git root, so both placements are discovered.
+    const workingRoot = opts.workingDir ? path.resolve(opts.workingDir) : undefined;
+    const gitRoot = workingRoot ? resolveGitRoot(workingRoot) : undefined;
+    const projectRoots = workingRoot
+      ? [...new Set([workingRoot, ...(gitRoot ? [gitRoot] : [])])]
+      : [];
+    const raw = projectRoots.length > 0
+      ? await scanClaudeSlashCommands({
+        ...(opts.workingDir ? { workingDir: opts.workingDir } : {}),
+        configDir,
+        projectRoots,
+        ...(opts.excludePluginSkills ? { excludePluginSkills: true } : {}),
+      })
+      : await scanClaudeSlashCommands({
+        configDir,
+        ...(opts.excludePluginSkills ? { excludePluginSkills: true } : {}),
+      });
     return {
       skills: [...await this.managedSkillCommands(raw.map((item) => item.name)), ...raw.map((c) => ({
         kind: 'agent-skill' as const,
