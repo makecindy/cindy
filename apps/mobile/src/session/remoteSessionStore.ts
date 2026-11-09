@@ -1,4 +1,5 @@
 import { isTeammateTask } from './teammateTaskSource';
+import { applyMobileSessionRebalancePreferencePatch } from './sessionRebalanceCache';
 import { readTokenSpeedSnapshot, type TokenSpeedSnapshot } from '@cindy/maker-shared/usage-format';
 import { historyTurnEnded, nextHistoryCacheReceipt } from '@cindy/maker-shared/message-window';
 import { normalizeTaskTags, reconcileTaskTags } from '@cindy/maker-shared';
@@ -4793,6 +4794,7 @@ export const remoteSessionStore = {
       const sessionId = readString(payload, 'sessionId');
       const patch = isRecord(payload.patch) ? payload.patch : null;
       if (sessionId && patch) {
+        applyMobileSessionRebalancePreferencePatch(deviceId, sessionId, patch);
         bumpDeviceSessionListMutationEpoch(deviceId);
         // 遮蔽本机在途写的字段:旧写的无差别 push 回流不得滚回更新的乐观意图,
         // 被遮字段的终态由对应写的对账 / 后续 push 收敛;全部被遮时跳过应用。

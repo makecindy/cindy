@@ -45,11 +45,13 @@ export type RemoteCodexAccountUsagePayload = RateLimitSnapshot & {
 
 const codexAccountMirror = createRemoteDeviceUsageMirror<RemoteCodexAccountUsagePayload>({
   invokeChannel: 'maker:usage:account',
-  read: (deviceId, providerId = 'openai', scheduling) => window.electronAPI.deviceLink.invoke(
-    deviceId, 'maker:usage:account', providerId === 'openai'
-      ? ['codex', providerId, DEFAULT_ACCOUNT_USAGE_SCOPE] : ['codex', providerId],
-    ...(scheduling ? [scheduling] as const : []),
-  ),
+  read: (deviceId, providerId = 'openai', scheduling) => {
+    const args = providerId === 'openai'
+      ? ['codex', providerId, DEFAULT_ACCOUNT_USAGE_SCOPE] : ['codex', providerId];
+    return scheduling
+      ? window.electronAPI.deviceLink.invoke(deviceId, 'maker:usage:account', args, scheduling)
+      : window.electronAPI.deviceLink.invoke(deviceId, 'maker:usage:account', args);
+  },
   pushChannel: 'usage:codex-account-changed',
   defaultProviderId: 'openai',
   providerPushChannel: 'usage:codex-provider-account-changed',
