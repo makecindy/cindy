@@ -11,6 +11,7 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/button';
 import { Select } from '@/components/ui/select';
+import { SegmentedControl } from '@/components/ui/segmented-control';
 import { Switch } from '@/components/ui/switch';
 import { Spinner } from '@/components/ui/spinner';
 import { Tip } from '@/components/ui/tooltip';
@@ -212,23 +213,25 @@ export function SubscriptionAccountsSection({
             <span className="text-13 font-medium text-[var(--text-secondary)]">
               {t('subscriptionAccounts.strategy')}
             </span>
-            <Select
+            {/* Same control and option order as the provider group strategy (ProviderGroupSection). */}
+            <SegmentedControl
               {...accountSetting.controlProps}
-              label={t('subscriptionAccounts.strategy')}
+              aria-label={t('subscriptionAccounts.strategy')}
               value={view.strategy === 'usage' ? 'least' : view.strategy}
               disabled={busy}
-              className="h-8"
               options={strategies.map((value) => ({
                 value,
                 label: t(`providerGroup.strategy.${value}`),
               }))}
-              onValueChange={(value) =>
+              onValueChange={(value) => {
+                // Only a changed strategy is saved, as with the previous picker.
+                if (value === (view.strategy === 'usage' ? 'least' : view.strategy)) return;
                 void run({
                   action: 'configure',
                   providerId,
-                  strategy: value as ProviderGroupStrategy,
-                })
-              }
+                  strategy: value,
+                });
+              }}
             />
           </div>
           {/* One grid for every account: each usage card joins it as a subgrid, so the bars of all

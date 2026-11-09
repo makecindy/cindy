@@ -8,7 +8,7 @@ const mirror = createRemoteDeviceUsageMirror<ClaudeSubscriptionUsageSnapshot>({
   read: (deviceId, providerId = 'anthropic', scheduling) => window.electronAPI.deviceLink.invoke(
     deviceId, 'maker:usage:claude-subscription', providerId === 'anthropic'
       ? [providerId, false, DEFAULT_ACCOUNT_USAGE_SCOPE] : [providerId],
-    ...(scheduling ? [scheduling] as const : []),
+    ...(scheduling ? [scheduling] : []),
   ),
   pushChannel: 'usage:claude-subscription-changed',
   defaultProviderId: 'anthropic',

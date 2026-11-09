@@ -888,8 +888,8 @@ describe('useDeviceProviderSubscriptionCard', () => {
   // immediately without waiting for any of those reads to finish.
   // r4421913789 adds Kimi's separate reader: twelve slow accounts would fill
   // foreground capacity. Keep the same visible-result/admission regression.
-  // Custom scoped readers must preserve background priority too; twelve Claude
-  // accounts otherwise occupy every foreground slot and block the next card.
+  // Custom account-scoped readers must also preserve background scheduling;
+  // Claude has one read per account and previously escaped this coverage.
   it.each(['codex', 'claude', 'kimi', 'opencode-go'] as const)('keeps periodic quota reads in background slots for %s so another account opens', async source => {
     mocks.realRemoteSubscription = true;
     const scheduler = new InvokeScheduler();
@@ -911,7 +911,9 @@ describe('useDeviceProviderSubscriptionCard', () => {
           started++;
           await new Promise<void>(resolve => releases.push(resolve));
         }
-        if (channel === 'maker:usage:claude-subscription') return { providerId, ...snapshot(91) };
+        if (channel === 'maker:usage:claude-subscription') return {
+          providerId, fiveHour: { utilization: 91, resetsAt: null }, updatedAt: Date.now(),
+        };
         if ((channel === 'maker:usage:kimi-coding' || channel === 'maker:usage:opencode-go')) return {
           status: 'ready', stale: false, snapshot: {
             kind: source === 'kimi' ? 'kimi-coding-quota' : 'opencode-go-quota', fetchedAt: Date.now(),
@@ -932,9 +934,7 @@ describe('useDeviceProviderSubscriptionCard', () => {
     const opened = renderHook(() => useDeviceProviderSubscriptionCard(
       makeProvider('account-opened'), 'mini', { live: true }));
     await act(async () => {});
-    expect(remaining(opened.result.current)).toEqual(source === 'claude'
-      ? [['five-hour', 91], ['seven-day', 26]]
-      : [[source === 'codex' ? 'primary' : source === 'kimi' ? 'limit_7d' : 'weekly', 91]]);
+    expect(remaining(opened.result.current)).toEqual([[source === 'codex' ? 'primary' : source === 'claude' ? 'five-hour' : source === 'kimi' ? 'limit_7d' : 'weekly', 91]]);
     polling = false;
     await act(async () => { releases.forEach(resolve => resolve()); });
   });
