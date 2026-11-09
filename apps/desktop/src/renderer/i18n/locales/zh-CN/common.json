@@ -10372,11 +10372,10 @@
       "showReplyTargetHint": "伙伴回复上方标出它回的是你哪条消息。较早的回复不显示。"
     },
     "session": {
-      "ownedByBot": "{{name}} 的后台任务",
+      "ownedByBot": "{{name}} 开的",
       "backToBot": "回到 {{name}}"
     },
     "collab": {
-      "deliveryFailed": "结果未能送达原对话，已保存在本任务中",
       "backgroundTask": "后台任务",
       "trackedTask": "独立运行并自动回传结果",
       "stopTask": "停止任务",

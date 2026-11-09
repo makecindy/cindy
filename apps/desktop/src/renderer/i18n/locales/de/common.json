@@ -10417,11 +10417,10 @@
       "showReplyTargetHint": "Zeige über der Antwort eines Teammitglieds, auf welche deiner Nachrichten sie sich bezieht. Bei älteren Antworten wird das nicht angezeigt."
     },
     "session": {
-      "ownedByBot": "Hintergrundaufgabe von {{name}}",
+      "ownedByBot": "Von {{name}} geöffnet",
       "backToBot": "Zurück zu {{name}}"
     },
     "collab": {
-      "deliveryFailed": "Das Ergebnis konnte nicht an den ursprünglichen Chat übermittelt werden. Es ist in dieser Sitzung gespeichert.",
       "backgroundTask": "Hintergrundaufgabe",
       "trackedTask": "Läuft unabhängig und liefert das Ergebnis zurück",
       "stopTask": "Aufgabe stoppen",

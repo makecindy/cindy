@@ -31,7 +31,7 @@
 | --- | --- |
 | 来源与授权：谁的话算主人请求，结构化记录、不靠正文文字（[伙伴授权](teammate-authority.md)） | 转达时怎么措辞、要不要引用原话 |
 | 权限档（2026-11-08 起 V2 不再适用：自主轮风险确认已删除，见 [伙伴授权](teammate-authority.md)） | 哪些事先问主人、哪些自己办 |
-| 防循环上限：伙伴对话条数、同类事件每天次数、每条任务一个跟进者（2026-11-08 起 V2 不再适用：伙伴私信与跟进事件已移除；`notify_when_done` 每条消息只回传一次） | 怎么拆活、派给谁 |
+| 防循环上限：伙伴对话条数、同类事件每天次数、每条任务一个跟进者（2026-11-08 起 V2 不再适用：伙伴私信与跟进事件已移除；结果回传是对方任务自己发的一条普通消息） | 怎么拆活、派给谁 |
 | 任务状态机；「等你、出错、卡住、撞上限」必须让伙伴或主人知道 | 普通「完成」要不要叫醒自己、多久汇报一次、推送还是主动拉 |
 | 主力电脑：同一时间只有一处运行 | 续用老任务还是开新任务 |
 | 记忆与技能的版本、可撤销；主人写的规则不被自动改写 | 记什么、学什么 |
@@ -54,7 +54,7 @@
 | 类别 | 伙伴专属工具或机制 | 普通任务或项目的对应 | 方向 |
 | --- | --- | --- | --- |
 | 例行任务 | `routine_list/save/delete/run_now/history/sources/delivery_targets`；内置「跟进」「夜间学习」 | 定时任务 `schedule_*`（`cindy_scheduler`）；项目仓库里的 `.cindy/automations/schedules.json`（改动只是预览，主人确认快照才生效） | **并入定时任务**。两者已共用调度执行器，`Schedule.source` 已有 `'bot'`。例行任务多出的只有：事件触发（插件事件、`host:sessions`）、多条件并列、送达方式（伙伴 / IM / 静默）——先补给定时任务，普通项目也能用。插件前置检查（`preRunPlugin`）已由 `schedule_create` / `schedule_update` / `routine_save` 共用，不是缺口；限制只在跨电脑不能设置、项目自动化配置文件不支持（[Agent 与用户同权](agent-user-parity.md)）。**V2：已移除**例行任务引擎、`routine_*` 工具与 `routine` 系统 Skill；伙伴的定时工作是它项目的自动化（`.cindy/automations/schedules.json`，伙伴项目免导入确认），含每晚的 `teammate-memory-review`；升级时 V1 例行任务转成同节奏的项目自动化，搬不动的保留为暂停并记进 `CARRYOVER.md` |
-| 后台任务 | `start_session_task`、`check_session_task`、`message_session_task`、`stop_session_task`、路线检查与推进；完成回执与唤醒 | `send_to_session`、`get_task_digest`、插话、停止、队列工具（伙伴主任务已有，[伙伴运行时](cindy-bots-runtime.md) §6.4） | **已并入**（2026-11-08）：伙伴用 `send_to_session` 开普通任务，`notify_when_done` 回传一次；委派工具与服务已移除，旧任务卡、产出与「由谁开的」只读保留（[伙伴运行时](cindy-bots-runtime.md) §6.1） |
+| 后台任务 | `start_session_task`、`check_session_task`、`message_session_task`、`stop_session_task`、路线检查与推进；完成回执与唤醒 | `send_to_session`、`get_task_digest`、插话、停止、队列工具（伙伴主任务已有，[伙伴运行时](cindy-bots-runtime.md) §6.4） | **已并入**（2026-11-08）：伙伴用 `send_to_session` 开普通任务，需要结果时请对方做完用 `send_to_session` 发回；委派工具与服务已移除，旧任务卡、产出与「由谁开的」只读保留（[伙伴运行时](cindy-bots-runtime.md) §6.1） |
 | 工作台 | `get_workbench`、`read_workbench_task`、`continue_workbench_task`、`set_workbench_task_responsibility` | `list_sessions`、`get_chat_history`、`get_task_digest`、`send_to_session`（跨电脑发消息已支持） | 读和继续并入通用工具；「谁负责」保留为通用的任务关系（也是「按项目跟进」的基础）。**V2：已移除**四个工作台工具、`follow` Skill、跟进观察与「自动跟进所有任务」设置；只保留「由这位伙伴开的」记录（`botTaskCreation.ts`），供行头像、伙伴筛选和归属小标使用 |
 | 记忆 | 伙伴记忆独立服务（`botMemoryService.ts`） | Cindy 记忆（`cindy_memory`），按工作目录隔离 | 伙伴即项目后合成一套；保留「全局记忆开关不影响伙伴记忆」。**V2：已合并**为项目记忆，放在 `<workspace>/.cindy/memory/` 随 Git 记版本，仍按伙伴自己的记忆开关（[伙伴运行时](cindy-bots-runtime.md) §4）；夜间学习、每轮学习复盘与工作记忆已移除 |
 | 技能 | `save/list/read_teammate_skill`；核心 / 系统 / 用户三层 | 引擎原生项目技能、SkillHub | 用户技能并入项目技能；核心与系统技能由宿主提供。**V2：**技能就是项目的 `.agents/skills`（`save/list_teammate_skill` 写这里）；系统 Skill 机制已整体移除，伙伴不再挂核心指南 |
@@ -67,9 +67,8 @@
 
 结构上做不到、需要补的通用能力（不是伙伴专属）：
 
-- **按项目跟进**：V1 的两档跟进（「跟自己开的或接手的任务」「跟本机全部任务」）已于 2026-11-08 移除；通用的「跟项目 B 里的任务」仍是缺口，现由 `notify_when_done` 与主动拉取 `get_task_digest` 覆盖单任务。
-- **跨电脑**：跨电脑新建任务、列出与登记项目目前没有 Agent 工具（[Agent 与用户同权](agent-user-parity.md)）；
-  `notify_when_done` 只对本机任务有效。
+- **按项目跟进**：V1 的两档跟进（「跟自己开的或接手的任务」「跟本机全部任务」）已于 2026-11-08 移除；通用的「跟项目 B 里的任务」仍是缺口，现由请对方回传与主动拉取 `get_task_digest` 覆盖单任务。
+- **跨电脑**：跨电脑新建任务、列出与登记项目目前没有 Agent 工具（[Agent 与用户同权](agent-user-parity.md)）。
 - **按项目汇总进度**：管理多个项目时以拉取为主，只有「等你、出错、卡住」推送。
 - **事件触发的定时任务、项目级模型设置**。
 
@@ -101,4 +100,4 @@ AGENTS.md、记忆和技能；关于被管项目的事实写进那个项目；�
   伙伴的定时任务仍只在主力电脑运行；两套确认语义（授予常驻指令、新建完全访问 Agent）合并时都要保留。
 
 待核实：插件事件源能否直接接到普通定时任务（V2 下插件 `routineEvents` 照常解析但不再触发）。
-已核实（2026-11-08）：来自 IM 或群聊的任务，结果只在原渠道投递依赖它时经 `report_task_delivery` 送回原处。
+2026-11-09：宿主不再替任务回传结果（`notify_when_done`、`report_task_delivery` 与群结果代发已删除），回传由派活方在消息里约定。

@@ -313,9 +313,6 @@
     "apps/desktop/src/main/maker-ipc/__tests__/botInvitation.test.ts": {
       "resetModules": 1
     },
-    "apps/desktop/src/main/maker-ipc/__tests__/botTaskCoordination.test.ts": {
-      "sourceReads": 1
-    },
     "apps/desktop/src/main/maker-ipc/__tests__/deferredRestartQueueDrain.test.ts": {
       "sourceReads": 1
     },

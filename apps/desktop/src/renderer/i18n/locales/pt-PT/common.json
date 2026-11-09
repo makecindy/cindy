@@ -10499,11 +10499,10 @@
       "showReplyTargetHint": "Mostrar, acima da resposta de um colega, a qual das suas mensagens responde. Não se aplica a respostas antigas."
     },
     "session": {
-      "ownedByBot": "Tarefa em segundo plano de {{name}}",
+      "ownedByBot": "Aberta por {{name}}",
       "backToBot": "Voltar a {{name}}"
     },
     "collab": {
-      "deliveryFailed": "Não foi possível entregar o resultado na conversa original. Está guardado nesta sessão.",
       "backgroundTask": "Tarefa em segundo plano",
       "trackedTask": "É executada de forma independente e devolve o resultado",
       "stopTask": "Parar tarefa",

@@ -10372,11 +10372,10 @@
       "showReplyTargetHint": "夥伴回覆上方標出它回的是你哪則訊息。較早的回覆不顯示。"
     },
     "session": {
-      "ownedByBot": "{{name}} 的背景任務",
+      "ownedByBot": "{{name}} 開的",
       "backToBot": "回到 {{name}}"
     },
     "collab": {
-      "deliveryFailed": "結果未能送達原對話，已保存在本任務中",
       "backgroundTask": "背景任務",
       "trackedTask": "獨立執行並自動回傳結果",
       "stopTask": "停止任務",

@@ -118,7 +118,7 @@ describe('稳定层:能力必须写进提示词', () => {
     expect(all).not.toContain('第一次验证完就');
     expect(all).toContain('你可以开任务，也可以给伙伴发消息');
     expect(all).not.toContain('session_task');
-    expect(all).toContain('notify_when_done');
+    expect(all).not.toContain('notify_when_done');
     expect(all).toContain('send_to_session');
     expect(all).not.toContain('send_to_agent');
     expect(all).toContain('不启动任务');

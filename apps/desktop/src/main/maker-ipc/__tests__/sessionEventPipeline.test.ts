@@ -295,7 +295,6 @@ function harness() {
     botCompactRuntimeRefreshCoordinator: { noteBoundary: vi.fn() },
     wireNoteMemory: { reset: vi.fn() },
     attemptBotCompactRuntimeRefresh: vi.fn(),
-    taskCompletionDeliveryHolder: { settleTerminal: vi.fn(async () => {}) },
     isFencedStaleSessionTerminal: vi.fn(() => false),
     redactEventForRenderer: vi.fn((value: AgentEvent): AgentEvent => ({ ...value, data: { redacted: true } })),
     interruptedTurnAutoResumeGuard: {
@@ -2481,23 +2480,6 @@ describe('usage through the production event pipeline', () => {
 
 
 describe('Bot adapters in the shared event pipeline', () => {
-  it.each(['a long but incomplete answer', ''])('settles output-limit with its available result (%j) before the paired done', async (result) => {
-    const h = harness();
-    h.emit(event('error', {
-      reason: 'output-limit', message: 'Pi reached the model output limit.',
-      isTerminal: true, result,
-    }, { source: 'pi', sessionTurnGeneration: 4 }));
-    await microtasks();
-    expect(h.deps.taskCompletionDeliveryHolder.settleTerminal).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
-      sessionId: 'task', successful: false, text: result,
-    }));
-    h.deps.autoResumeBookkeeping.consumeFailedTurnCompletionTail.mockReturnValue(true);
-    h.emit(event('done', { status: 'failed', result }, { source: 'pi', sessionTurnGeneration: 4 }));
-    await microtasks();
-    expect(h.deps.taskCompletionDeliveryHolder.settleTerminal).toHaveBeenCalledOnce();
-    await h.dispose();
-  });
-
   it('keeps peer replies private in persistence and broadcast before done clears the input', () => {
     const h = harness();
     h.deps.agentInputCoordinatorHolder.getActiveInputClientId.mockReturnValue('bot-dm:thread:delivery');

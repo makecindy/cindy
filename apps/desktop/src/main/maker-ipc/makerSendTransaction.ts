@@ -595,7 +595,6 @@ export interface MakerSendTransactionDeps {
    * 与 `[客户端说明]` 同层,只进 wire 消息。
    */
   readBotThreadNote?(sessionId: string): Promise<string | null>;
-  readTaskDeliveryNote?(sessionId: string): Promise<string | null>;
   /** The owner's message closed a waiting 代输入 card: the agent hears it here, with no turn of its own. */
   readInputHandoffOwnerNote?(sessionId: string): string | null;
   inputHandoffOwnerNoteDelivered?(sessionId: string): void;
@@ -1600,7 +1599,6 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
         'side-chat': allowsEnvironmentNotes && taskSource === 'side-chat'
           ? SIDE_CHAT_CONTEXT : null,
         'bot-thread': botThreadNote,
-        'task-delivery': allowsEnvironmentNotes ? await deps.readTaskDeliveryNote?.(sessionId) ?? null : null,
         'client-environment': mobileClientNote,
         'cindy-make': cindyMakeNote,
         'ui-language': uiLanguageNote,
@@ -1620,9 +1618,6 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
         : withCindyMakeNote;
       if (plannedNotes['side-chat']) {
         outgoing = prependNoteToWireUserMessage(outgoing as HandoffWireMessage, plannedNotes['side-chat']);
-      }
-      if (plannedNotes['task-delivery']) {
-        outgoing = prependNoteToWireUserMessage(outgoing as HandoffWireMessage, plannedNotes['task-delivery']);
       }
       if (plannedNotes['bot-thread']) {
         outgoing = prependNoteToWireUserMessage(outgoing as HandoffWireMessage, plannedNotes['bot-thread']);

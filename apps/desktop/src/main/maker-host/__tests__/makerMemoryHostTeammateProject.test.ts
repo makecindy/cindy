@@ -73,13 +73,14 @@ it('keeps a teammate project\'s memory inside the project, an ordinary project\'
   await expect(manager.getStore(ordinary)).rejects.toThrow(/disabled/);
 });
 
-it.skipIf(process.platform === 'win32')('refuses a teammate memory folder that is a link', async () => {
+it('refuses a teammate memory folder that is a link', async () => {
   const ownerRoot = path.join(h.userData, 'owners', 'owner-a');
   const teammate = teammateWorkspaceDir(ownerRoot, 'bot_mia');
   const elsewhere = path.join(h.userData, 'elsewhere');
   await mkdir(path.join(teammate, '.cindy'), { recursive: true });
   await mkdir(elsewhere, { recursive: true });
-  await symlink(elsewhere, path.join(teammate, '.cindy', 'memory'));
+  // A junction needs no privilege on Windows; elsewhere it is an ordinary directory link.
+  await symlink(elsewhere, path.join(teammate, '.cindy', 'memory'), 'junction');
   manager = createDesktopMakerMemoryManager();
 
   await expect(manager.getStore(teammate)).rejects.toThrow(/link/);

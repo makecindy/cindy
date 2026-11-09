@@ -830,7 +830,6 @@ import {
   createAutomationUserTurnGitBaselineHooks,
   registerModelVisibilitySyncIpc,
   registerMakerIpc as registerMakerCoreIpc,
-  restoreTaskResultDeliveryForCurrentOwner,
   restoreOrcaRemoteWorkersForCurrentOwner,
   stopOrcaRemoteWorkersForOwnerBoundary,
   isSessionTurnPendingCompletion,
@@ -9766,10 +9765,6 @@ app.on('ready', async () => {
         });
       }
       checkDatabaseSizeWarningAtStartup();
-      // Task-result delivery is owner-scoped and must start only after DbClient
-      // takeover. registerMakerIpc also invokes this once its services exist,
-      // covering both possible splash/login orderings without duplicate runs.
-      restoreTaskResultDeliveryForCurrentOwner();
       void restoreOrcaRemoteWorkersForCurrentOwner();
       startReadyWorktreeMaintenance();
       // An Agent-approved update restarted the app: write its outcome back to the task.

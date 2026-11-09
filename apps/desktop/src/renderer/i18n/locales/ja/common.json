@@ -10372,11 +10372,10 @@
       "showReplyTargetHint": "チームメイトの返信の上に、どのメッセージへの返信かを表示します。以前の返信には表示されません。"
     },
     "session": {
-      "ownedByBot": "{{name}} のバックグラウンドタスク",
+      "ownedByBot": "{{name}} が開いたタスク",
       "backToBot": "{{name}} に戻る"
     },
     "collab": {
-      "deliveryFailed": "元のチャットに結果を送信できませんでした。結果はこのセッションに保存されています。",
       "backgroundTask": "バックグラウンドタスク",
       "trackedTask": "独立して実行し、結果を自動で返します",
       "stopTask": "タスクを停止",

@@ -10499,11 +10499,10 @@
       "showReplyTargetHint": "Au-dessus de la réponse d'un coéquipier, affiche celui de vos messages auquel elle répond. Les réponses plus anciennes ne l'affichent pas."
     },
     "session": {
-      "ownedByBot": "Tâche en arrière-plan de {{name}}",
+      "ownedByBot": "Ouverte par {{name}}",
       "backToBot": "Retour à {{name}}"
     },
     "collab": {
-      "deliveryFailed": "Le résultat n’a pas pu être envoyé dans la conversation d’origine. Il est enregistré dans cette session.",
       "backgroundTask": "Tâche en arrière-plan",
       "trackedTask": "S'exécute de manière autonome et renvoie son résultat",
       "stopTask": "Arrêter la tâche",

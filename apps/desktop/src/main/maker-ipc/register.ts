@@ -2,12 +2,6 @@ import { registerRuntimeSettingsSection } from '../app-settings/runtime.js';
 import { z as settingsSchema } from 'zod';
 import { registerPreferenceControlIpc } from '../app-settings/preferences.js';
 import { configureModelSettingsActions } from '../app-settings/models.js';
-import {
-  createTaskCompletionDeliveryHost,
-  type TaskCompletionDeliveryHost,
-  type TaskResultDelivery,
-  type TaskResultDeliveryOutcome,
-} from './taskCompletionDeliveryHost.js';
 import { McpSetupBridge } from './mcpSetupBridge.js';
 import type { McpSetupProposal, McpSetupRequest } from '../../shared/mcpSetup.js';
 import { outboundFetch } from '../maker-host/outbound-fetch.js';
@@ -19,7 +13,6 @@ import { getCindyGhostsMcpDeps } from '../mcp-integrations/ghost.js';
 import { pluginAppResult } from '../mcp-apps/pluginCards.js';
 import { restorePluginPageSession } from '../mcp-apps/pluginPageCall.js';
 import { resumeInterruptedScheduleRun } from '../scheduler-host/index.js';
-import { configureTaskDeliveryReport, readTaskDeliveryNote } from './taskDeliveryReport.js';
 import { setVoiceTaskDispatch, setVoiceCallMemoryReader } from '../voice-conversation/taskBridge.js';
 import { buildBotMemoryScopeKey, SessionCreationCleanupPendingError } from '@cindy/maker-core';
 import { createOrcaWorkerProjectHandlers } from './orcaWorkerProjectHandlers';
@@ -30,8 +23,8 @@ import { captureAgentRequest as captureRequest, ownerChannelInputEvidence, type 
 import { readChannelToolScope } from '../im/shared/channelToolScope.js';
 import { FORWARDED_REQUEST_RECEIPT, verifiedOwnerRequestText, type AgentRequestReceipt } from '../../shared/forwardedRequest.js';
 import { scheduleBotRemoteResourceChangedForFollowedSession } from './botRemoteResourceInvalidation.js';
-import { assertBotTaskCoordination, classifySessionMessagePurpose, coordinationInput } from './botTaskCoordination.js';
-import type { BotTaskCoordination, SessionMessagePurpose } from '../../shared/botTaskCoordination.js';
+import { assertBotTaskCoordination } from './botTaskCoordination.js';
+import type { BotTaskCoordination } from '../../shared/botTaskCoordination.js';
 import { openSession, setSessionOpeningModelAdmission } from '../localDb/sessionOpening.js';
 import { createPluginTaskReviewResolver } from './pluginTaskReviewContext.js';
 import { createPluginTargetReviewLoader } from '../cindy-brain/pluginTargetReview.js';
@@ -2787,9 +2780,6 @@ interface OrcaCollabService {
     readonly [AUTO_REVIEW_DELEGATED_CONTINUATION]?: true;
     /** Host-generated stable delivery ID for a script retry, not model-supplied metadata. */
     deliveryClientId?: string;
-    messagePurpose?: SessionMessagePurpose;
-    /** The handling turn's final answer comes back to the dispatcher once. */
-    notifyWhenDone?: boolean;
     /** 省略 → create 新 session;提供 → jump 到该既有 session。 */
     targetSessionId?: string;
     message: string;
@@ -3110,44 +3100,6 @@ interface EnableOrcaOptions {
 }
 
 let orcaCollabServiceHolder: OrcaCollabService | null = null;
-let taskCompletionDeliveryHolder: TaskCompletionDeliveryHost | null = null;
-/** Bound once the session handoff exists: delivers a finished turn back to the task that asked. */
-let taskResultDeliverer: ((input: TaskResultDelivery) => Promise<TaskResultDeliveryOutcome>) | null = null;
-let taskCompletionDeliveryScope: string | null = null;
-function taskCompletionDeliveryForOwner(): TaskCompletionDeliveryHost | null {
-  if (isAppSessionBoundaryPending()) return null;
-  const scope = activeOwnerScopeKey();
-  if (!taskCompletionDeliveryHolder || taskCompletionDeliveryScope !== scope) {
-    taskCompletionDeliveryHolder?.dispose();
-    taskCompletionDeliveryScope = scope;
-    taskCompletionDeliveryHolder = createTaskCompletionDeliveryHost(input => botGroupChatServiceHolder
-      ? botGroupChatServiceHolder.postCompanionTaskMessage(input)
-      : Promise.resolve({ ok: false, errorCode: 'GROUP_CHANNEL_UNAVAILABLE', retryable: true }),
-    input => taskResultDeliverer
-      ? taskResultDeliverer(input)
-      : Promise.resolve({ ok: false, errorCode: 'HOST_NOT_READY', retryable: true }),
-    // A result posted to a group carries the files that turn wrote, as the group task cards did.
-    async (sessionId, inputClientIds) => {
-      await waitForTurnChangeSetSeal(sessionId);
-      const handled = new Set(inputClientIds);
-      const files = new Map<string, string>();
-      for (const changeSet of (await listTurnChangeSets(sessionId)).filter(set => handled.has(set.anchorClientId))) {
-        for (const file of changeSet.files) {
-          if (file.status === 'deleted') files.delete(file.path);
-          else files.set(file.path, path.resolve(changeSet.cwd, file.path));
-        }
-      }
-      return [...files.values()];
-    });
-    const holder = taskCompletionDeliveryHolder;
-    const restore = () => void holder.restore().catch(() => {
-      log.warn('Task delivery restore deferred');
-      if (taskCompletionDeliveryHolder === holder) setTimeout(restore, 15_000).unref?.();
-    });
-    restore();
-  }
-  return taskCompletionDeliveryHolder;
-}
 let botDirectMessageServiceHolder: BotDirectMessageService | null = null;
 let botGroupChatServiceHolder: BotGroupChatService | null = null;
 /**
@@ -3195,11 +3147,6 @@ function companionSwitchOptions(value: unknown): CompanionSwitchOptions | undefi
 /** A failure code answered by another computer; unknown codes (newer versions) are plain failures. */
 function companionFailureCode(code: string): CompanionCloudFailureCode {
   return COMPANION_FAILURE_CODES.has(code as CompanionCloudFailureCode) ? code as CompanionCloudFailureCode : 'FAILED';
-}
-
-/** Resume pending task-result deliveries after a restart or an account switch (owner-scoped). */
-export function restoreTaskResultDeliveryForCurrentOwner(): void {
-  taskCompletionDeliveryForOwner();
 }
 
 /** 按当前账号恢复协同远端 Worker 的轮询；数据库未就绪时跳过，由接管后的调用补上。 */
@@ -3824,17 +3771,6 @@ function getPendingInteractionsForSession(sessionId: string): PendingInteraction
   );
   return out;
 }
-
-// report_task_delivery: tasks with a recorded origin hear back in their original conversation.
-configureTaskDeliveryReport({
-  readSessionExecution: (id) => {
-    const session = getMakerIfReady()?.getSession(id);
-    return session ? { instanceId: session.instanceId, generation: session.getTurnGeneration() } : null;
-  },
-  wantsReport: id => taskCompletionDeliveryForOwner()?.wantsReport(id) ?? Promise.resolve(false),
-  report: (id, execution, final) => getMakerIfReady()?.getSession(id)?.isTurnRunning() === true
-    && (taskCompletionDeliveryForOwner()?.report(id, execution, final) ?? false),
-});
 
 /**
  * Agent-owned interactions are queue/zombie boundaries. Desktop-only confirms
@@ -6334,7 +6270,6 @@ const sessionEventDependencies: SessionEventDependencies = {
   get botCompactRuntimeRefreshCoordinator() { return botCompactRuntimeRefreshCoordinator; },
   get wireNoteMemory() { return wireNoteMemory; },
   get attemptBotCompactRuntimeRefresh() { return attemptBotCompactRuntimeRefresh; },
-  get taskCompletionDeliveryHolder() { return taskCompletionDeliveryForOwner(); },
   get botGroupChatServiceHolder() { return botGroupChatServiceHolder; },
   get isFencedStaleSessionTerminal() {
     return isFencedStaleSessionTerminal;
@@ -6987,7 +6922,6 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     });
   });
   setSessionRuntimeCleanup((sessionId) => {
-    void taskCompletionDeliveryForOwner()?.pruneDeleted(sessionId).catch(() => log.warn('Task delivery cleanup deferred'));
     // 任务在另一台电脑上还没启动完：让那台停下，不再迟到地启动、跑完这一轮。
     cancelPendingRemoteStart(sessionId);
     workingDirectoryRecovery.discard(sessionId);
@@ -12344,15 +12278,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             { visibleText: source.persistedText ?? message },
           )
         : null;
-      const sourcedMessage: UserMessage = sourceNote
+      const outgoingMessage: UserMessage = sourceNote
         ? (prependNoteToWireUserMessage(withHandoff as HandoffWireMessage, sourceNote) as UserMessage)
         : withHandoff;
-      const deliveryNote = shouldPrependMobileClientPromptNote(message, session.agentKind)
-        ? await readTaskDeliveryNote(session.id) : null;
-      const deliveryPlan = wireNoteMemory.plan(session.id, { 'task-delivery': deliveryNote }, { force: !!pendingHandoff, partial: true });
-      const outgoingMessage = deliveryPlan.notes['task-delivery']
-        ? prependNoteToWireUserMessage(sourcedMessage as HandoffWireMessage, deliveryPlan.notes['task-delivery']) as UserMessage
-        : sourcedMessage;
       // Idle direct sends never carry internal coordination (that is force-queued).
       const releaseTurnSource = noteChannelTurnSource(session.id, channelTurnSourceFor(source?.origin, false));
       try {
@@ -12386,7 +12314,6 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           agentHandoffPending.consume(session.id);
         }
         if (sendResult.accepted) {
-          deliveryPlan.commit();
           void touchSessionActivityInDb(session.id);
         }
         return sendResult;
@@ -12481,8 +12408,6 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
      * reconcileCreateOptsAgainstDb 再读当前落库档位,不使用入队时的旧快照。
      */
     resumeWithStoredPermissionMode?: boolean;
-    /** create: the new task's first turn end is delivered back to the dispatcher once. */
-    notifyWhenDone?: boolean;
   }): Promise<SendToSessionInternalResult> {
     await assertTaskActionCurrent();
     if (hasTaskActionAuthorization()) params = { ...params, forceQueue: true };
@@ -12588,17 +12513,6 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             'create requires a dispatcher session context to inherit config; ' +
             'current MCP call has none (typical: Codex global ctx)',
         };
-      }
-      const taskDeliveryHost = taskCompletionDeliveryForOwner();
-      let taskDeliveryOrigin: Awaited<ReturnType<NonNullable<typeof taskDeliveryHost>['capture']>> | undefined = null;
-      try {
-        taskDeliveryOrigin = params.notifyWhenDone
-          ? await taskDeliveryHost?.capture(dispatcherSessionId, { anyTask: true }) : null;
-      } catch (error) {
-        if (error instanceof Error && error.message === 'TASK_DELIVERY_PRIVATE_LANE') {
-          return { ok: false, errorCode: 'INVALID_ARGS', message: '代答或私人汇总里不能用 notify_when_done：结果只能以伙伴本人身份发到群里。请在伙伴的主聊天里开这个任务。' };
-        }
-        throw error;
       }
       let createdPreviewSessionId: string | null = null;
       let createdPreviewClientId: string | null = null;
@@ -12796,8 +12710,6 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             });
           }
         }
-        // Before the first input can run, so even a quick first turn is delivered.
-        if (taskDeliveryOrigin) await taskDeliveryHost!.arm(session.id, taskDeliveryOrigin);
         const clientId = createId();
         createdPreviewSessionId = session.id;
         createdPreviewClientId = clientId;
@@ -13360,26 +13272,6 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     return trackSendToSessionLockRun(targetSessionId, run, () => lockStage);
   }
 
-  // notify_when_done: a finished turn reaches the asking task as an ordinary, labelled message.
-  taskResultDeliverer = async ({ targetSessionId, fromSessionId, text, clientId }) => {
-    const [delivered] = await getDbClient().drizzle.select({ id: messages.id }).from(messages)
-      .where(and(eq(messages.sessionId, targetSessionId), eq(messages.clientId, clientId))).limit(1);
-    if (delivered) return { ok: true };
-    // A host delivery carries no agent consent to re-check when a busy requester dequeues it
-    // (its teammate origin would otherwise demand one and drop the result); only the account must still match.
-    const ownerScope = captureDataOwnerBroadcastScope();
-    const taskActionDeliveryGuard: TaskActionDeliveryGuard = async () => {
-      if (!isDataOwnerBroadcastScopeCurrent(ownerScope)) throw new Error('OWNER_SCOPE_CHANGED');
-    };
-    // Host delivery, not part of whichever tool call happened to settle the turn.
-    const result = await runTaskActionRequest(() => sendToSessionInternal({
-      targetSessionId, message: text, clientId, dispatcherSessionId: fromSessionId, forceQueue: true, taskActionDeliveryGuard,
-    }));
-    if (result.ok) return { ok: true };
-    return { ok: false, errorCode: result.errorCode,
-      retryable: !['NOT_FOUND', 'DELETED', 'ARCHIVED', 'INVALID_ARGS', 'UNSUPPORTED_CAPABILITY'].includes(result.errorCode) };
-  };
-
   const welcomeDispatchReceipts = createQueuedDispatchReceipts();
   const dispatchBotSessionMessage = async (params: {
     autoReviewUserText?: AgentInputQueuedMessage['autoReviewUserText'];
@@ -13806,7 +13698,6 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   });
   // Phones reach groups through the Remote Resource protocol (bot-group-chat.md §8).
   registerBotGroupRemoteResourceProvider(() => botGroupChatServiceHolder);
-  taskCompletionDeliveryForOwner();
   // Archive / restore changes the open tasks a teammate's roster row links as followed.
   setSessionStatusPatchedListener(scheduleBotRemoteResourceChangedForFollowedSession);
   registerBotLifecycleHandlers({
@@ -13838,7 +13729,6 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       await finishCompanionEnvironmentRemoval(ownerRoot, botId, assertOwner);
     },
   });
-  restoreTaskResultDeliveryForCurrentOwner();
 
   ipcMain.handle(
     MAKER_INVOKE.BOT_DELEGATIONS_LIST,
@@ -17974,61 +17864,21 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         : await captureSessionAgentRequest(params.dispatcherSessionId ?? '', params.message,
           { sessionId: params.targetSessionId });
       params = { ...params, message: request.message };
-      let classification: Awaited<ReturnType<typeof classifySessionMessagePurpose>>;
-      try {
-        classification = await classifySessionMessagePurpose({
-          senderSessionId: params.dispatcherSessionId,
-          targetSessionId: params.targetSessionId,
-          purpose: params.messagePurpose,
-        });
-      } catch (error) {
-        return { ok: false, errorCode: 'INVALID_ARGS', message: error instanceof Error ? error.message : String(error) };
-      }
       if (!isDataOwnerBroadcastScopeCurrent(ownerScope)) {
         return { ok: false, errorCode: 'AGENT_NOT_READY', message: 'Data owner changed before delivery.' };
       }
-      const internal = {
+      return sendToSessionInternal({
         ...params,
-        notifyWhenDone: params.notifyWhenDone === true && !params.targetSessionId,
         ...(params.deliveryClientId ? { clientId: params.deliveryClientId } : {}),
         autoReviewUserText: request.autoReviewUserText,
-        ...(classification.delegatedContinuation || (params.targetSessionId && params[AUTO_REVIEW_DELEGATED_CONTINUATION])
-          ? { autoReviewUserText: { ...request.autoReviewUserText, kind: 'delegated-continuation' as const } } : {}),
         ...(params.targetSessionId && params[AUTO_REVIEW_DELEGATED_CONTINUATION] ? {
+          autoReviewUserText: { ...request.autoReviewUserText, kind: 'delegated-continuation' as const },
           // Use the durable path for idle and busy targets alike. It restores the
           // target's user intent and current permission mode at dispatch time.
           forceQueue: true,
           resumeWithStoredPermissionMode: true,
         } : {}),
-        ...(classification.coordination ? {
-          ...coordinationInput(params.message, classification.coordination),
-          forceQueue: true,
-        } : {}),
-      };
-      // notify_when_done on an existing task: armed before delivery, for the turn that handles it.
-      const notifyTarget = params.notifyWhenDone && params.targetSessionId ? params.targetSessionId : null;
-      if (!notifyTarget) return sendToSessionInternal(internal);
-      const host = taskCompletionDeliveryForOwner();
-      const origin = await host?.capture(params.dispatcherSessionId, { anyTask: true }).catch((error: unknown) => {
-        if (error instanceof Error && error.message === 'TASK_DELIVERY_PRIVATE_LANE') return 'private' as const;
-        throw error;
       });
-      if (origin === 'private') return { ok: false, errorCode: 'INVALID_ARGS', message: '代答或私人汇总里不能用 notify_when_done：结果只能以伙伴本人身份发到群里。请在伙伴的主聊天里开这个任务。' };
-      if (!host || !origin) {
-        return { ok: false, errorCode: 'INVALID_ARGS', message: 'notify_when_done 需要从一个任务里调用。' };
-      }
-      // Bound to this message, not to "the next turn": earlier queued messages are answered first.
-      const notifyClientId = params.deliveryClientId ?? `task-notify:${randomUUID()}`;
-      try {
-        await host.request(notifyTarget, origin, notifyClientId);
-      } catch (error) {
-        const missing = error instanceof Error && error.message === 'TASK_UNAVAILABLE';
-        return { ok: false, errorCode: missing ? 'NOT_FOUND' as const : 'AGENT_NOT_READY' as const,
-          message: missing ? '目标任务不存在。' : '暂时无法登记做完通知，请稍后重试。' };
-      }
-      const sent = await sendToSessionInternal({ ...internal, clientId: notifyClientId });
-      if (!sent.ok) await host.disarm(notifyTarget, notifyClientId).catch(() => log.warn('notify_when_done disarm deferred'));
-      return sent;
     },
     enableOrca: enableOrcaInternal,
     disableOrca: disableOrcaInternal,
@@ -18694,7 +18544,6 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     readReplyQuoteNote,
     // 私聊话题的 [话题说明]:按持久化的话题链接现读,不是话题时为 null。
     readBotThreadNote: readBotDmThreadContextNote,
-    readTaskDeliveryNote,
     readInputHandoffOwnerNote: (sessionId) =>
       getDeviceLinkInvokeContext()?.sharedTask ? null : (getInputHandoffService()?.ownerMessageNote(sessionId) ?? null),
     inputHandoffOwnerNoteDelivered: (sessionId) => getInputHandoffService()?.ownerMessageNoteDelivered(sessionId),

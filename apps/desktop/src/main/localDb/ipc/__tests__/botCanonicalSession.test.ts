@@ -1,5 +1,4 @@
 import { seedBotReadPositions, markBotReadPositions, pruneBotReadState as pruneHostBotReads } from '../../../maker-ipc/botReadStateStore';
-import { createTaskCompletionDeliveryHost } from '../../../maker-ipc/taskCompletionDeliveryHost';
 import { listBotDelegationHistory } from '../../../maker-ipc/botDelegationHistory';
 import { readBotResponsibilityScope } from '../../../maker-ipc/botTaskCreation';
 import { emitSessionCreated } from '../sessionCreatedBroadcast.js';
@@ -4787,101 +4786,6 @@ describe('Teammate task delivery and group lane messages', () => {
     expect(await readBotResponsibilityScope(h.userDataDir, 'bot-a')).toEqual({
       sessionIds: ['child-done', 'child-running'], delegatedSessionIds: ['child-done', 'child-running'],
     });
-  });
-
-  // Integration: generic send_to_session previously kept only follower ownership. Real SQLite +
-  // filesystem outbox cover capture, Markdown persistence, restart and exact Thread delivery.
-  it('persists a generic task origin before execution and restores its original Thread after a lost acknowledgement', async () => {
-    await seedPair(); seedGroupLane('generic-origin', 'group:fixture:access:owner:1:thread:root');
-    h.sqlite!.prepare("INSERT INTO sessions (id, source, status, created_at, updated_at) VALUES ('session-2', 'desktop', 'active', 1, 1)").run();
-    const post = vi.fn(async () => ({ ok: false as const, errorCode: 'OFFLINE', retryable: true }));
-    let host = createTaskCompletionDeliveryHost(post, vi.fn());
-    const savedFile = join(h.userDataDir, createHash('sha256').update(h.ownerScopeKey).digest('hex'),
-      'task-completion-delivery', createHash('sha256').update('session-2').digest('hex') + '.json');
-    try {
-      const origin = await host.capture('generic-origin');
-      expect(origin).toMatchObject({ botId: 'bot-a', groupId: 'fixture', threadRootId: 'root' });
-      await host.saveOrigin('session-2', origin!);
-      await host.saveOrigin('session-2', { botId: 'bot-b', sessionId: 'session-1' });
-      await createMessage('session-2', { clientId: 'generic-result', role: 'assistant', content: 'Done.\n\n- First\n- Second' });
-      expect(host.report('session-2', { instanceId: 'native', generation: 1 }, true)).toBe(true);
-      await host.settleTerminal({ sessionId: 'session-2', execution: { instanceId: 'native', generation: 1 }, successful: true,
-        text: 'fallback', messageClientId: 'generic-result' });
-      expect(post).toHaveBeenLastCalledWith(expect.objectContaining({ groupId: 'fixture', threadRootId: 'root', text: 'Done.\n\n- First\n- Second' }));
-      host.dispose();
-      const restoredPost = vi.fn(async () => ({ ok: true as const, messageId: 'posted' }));
-      host = createTaskCompletionDeliveryHost(restoredPost, vi.fn());
-      await host.restore();
-      expect(restoredPost).toHaveBeenCalledTimes(1);
-      expect(restoredPost).toHaveBeenCalledWith(expect.objectContaining({ groupId: 'fixture', threadRootId: 'root', botId: 'bot-a' }));
-      await host.restore();
-      expect(restoredPost).toHaveBeenCalledTimes(1);
-      expect(h.sqlite!.prepare("SELECT count(*) FROM messages WHERE session_id='session-1'").pluck().get()).toBe(0);
-    } finally { host.dispose(); await fsPromises.rm(savedFile, { force: true }); }
-  });
-
-  // PR #9314 review: a group task's result lost the files its turn wrote (the V1 group task card
-  // uploaded them), and an AI stand-in or private digest lane would have had its result posted to
-  // the group as the teammate itself. Real SQLite + outbox; the file listing is the injected seam.
-  it('posts a group task result with the files its turn wrote, and refuses private lanes', async () => {
-    await seedPair();
-    seedGroupLane('group-origin', 'group:fixture:access:owner:1');
-    seedGroupLane('mask-origin', 'group:fixture:access:tools:1:mask:owner-2');
-    seedGroupLane('digest-origin', 'group:fixture:access:tools:1:personal-digest');
-    h.sqlite!.prepare("INSERT INTO sessions (id, source, status, created_at, updated_at) VALUES ('session-3', 'desktop', 'active', 1, 1)").run();
-    const post = vi.fn(async () => ({ ok: true as const, messageId: 'posted' }));
-    const turnFiles = vi.fn(async () => ['/work/report.pdf']);
-    const host = createTaskCompletionDeliveryHost(post, vi.fn(), turnFiles);
-    const savedFile = join(h.userDataDir, createHash('sha256').update(h.ownerScopeKey).digest('hex'),
-      'task-completion-delivery', createHash('sha256').update('session-3').digest('hex') + '.json');
-    try {
-      await expect(host.capture('mask-origin', { anyTask: true })).rejects.toThrow('TASK_DELIVERY_PRIVATE_LANE');
-      await expect(host.capture('digest-origin', { anyTask: true })).rejects.toThrow('TASK_DELIVERY_PRIVATE_LANE');
-      await host.arm('session-3', (await host.capture('group-origin'))!);
-      await host.settleTerminal({ sessionId: 'session-3', execution: { instanceId: 'native', generation: 1 }, successful: true,
-        text: 'Here is the report', inputClientIds: ['task-input'] });
-      expect(turnFiles).toHaveBeenCalledWith('session-3', ['task-input']);
-      expect(post).toHaveBeenCalledWith(expect.objectContaining({ groupId: 'fixture', files: [{ absolutePath: '/work/report.pdf' }] }));
-    } finally { host.dispose(); await fsPromises.rm(savedFile, { force: true }); }
-  });
-
-  // notify_when_done (2026-11-07): any task can ask to hear back once. Bug guarded: the reply
-  // arrived only for teammate callers, needed a report tool, never woke the asker, and a busy
-  // target's already-running turn would have been reported instead of the turn handling the message.
-  it('delivers the handling turn of an armed task back to the asking task once, finished or not', async () => {
-    await seedPair();
-    h.sqlite!.prepare("INSERT INTO sessions (id, source, status, created_at, updated_at) VALUES ('notify-child', 'desktop', 'active', 1, 1)").run();
-    const deliver = vi.fn(async () => ({ ok: true as const }));
-    const host = createTaskCompletionDeliveryHost(vi.fn(), deliver);
-    const savedFile = join(h.userDataDir, createHash('sha256').update(h.ownerScopeKey).digest('hex'),
-      'task-completion-delivery', createHash('sha256').update('notify-child').digest('hex') + '.json');
-    try {
-      expect(await host.capture('session-1', { anyTask: true })).toMatchObject({ sessionId: 'session-1' });
-      // Armed while generation 4 was running: that turn is not the one handling the message.
-      await host.arm('notify-child', { sessionId: 'session-1' }, { instanceId: 'native', generation: 4 });
-      await host.settleTerminal({ sessionId: 'notify-child', execution: { instanceId: 'native', generation: 4 },
-        successful: true, text: 'Earlier work' });
-      expect(deliver).not.toHaveBeenCalled();
-      await host.settleTerminal({ sessionId: 'notify-child', execution: { instanceId: 'native', generation: 5 },
-        successful: false, text: 'Stopped halfway' });
-      expect(deliver).toHaveBeenCalledTimes(1);
-      expect(deliver).toHaveBeenCalledWith(expect.objectContaining({ targetSessionId: 'session-1', fromSessionId: 'notify-child',
-        text: expect.stringContaining('Stopped halfway') }));
-      // One-shot: later turns stay quiet until asked again, even if the task reports a final result itself.
-      expect(host.report('notify-child', { instanceId: 'native', generation: 6 }, true)).toBe(false);
-      await host.settleTerminal({ sessionId: 'notify-child', execution: { instanceId: 'native', generation: 6 },
-        successful: true, text: 'Later work' });
-      expect(deliver).toHaveBeenCalledTimes(1);
-      // A result still waiting to be delivered keeps its requester when another task asks next.
-      deliver.mockResolvedValueOnce({ ok: false, errorCode: 'AGENT_NOT_READY', retryable: true } as never);
-      await host.arm('notify-child', { sessionId: 'session-1' });
-      await host.settleTerminal({ sessionId: 'notify-child', execution: { instanceId: 'native', generation: 7 },
-        successful: true, text: 'For session one' });
-      await host.arm('notify-child', { sessionId: 'session-2' });
-      await host.restore();
-      expect(deliver).toHaveBeenLastCalledWith(expect.objectContaining({ targetSessionId: 'session-1',
-        text: expect.stringContaining('For session one') }));
-    } finally { host.dispose(); await fsPromises.rm(savedFile, { force: true }); }
   });
 
   it.each([true, false])('counts an explicit group private send with subsequent tools (canonical running=%s)', async running => {

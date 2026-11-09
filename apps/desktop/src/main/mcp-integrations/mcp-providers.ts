@@ -11,7 +11,6 @@ import { readLocalMachineStatus } from '../machines/localStatus.js';
 import { SSH_STATUS_COMMAND } from '../machines/sshStatus.js';
 import { readGithub, manageGithubPrs } from '../git-context/githubReadRuntime';
 import type { GithubReadMethod } from '@cindy/maker-shared';
-import { reportTaskDelivery } from '../maker-ipc/taskDeliveryReport.js';
 import { getDeviceId } from '../authManager.js';
 import { buildHistorySessionDeepLink } from '../deepLink.js';
 import { activeCompanionCloud } from '../companion-cloud/runtime.js';
@@ -910,7 +909,6 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
         getSessionRuntime: wrap((service, params) => service.getSessionRuntime(params)),
         setSessionRuntime: wrap((service, params) => service.setSessionRuntime(params)),
       },
-      taskDelivery: { report: reportTaskDelivery },
       setCurrentSessionTitle: async ({ sessionId, title }) => {
         if (!tryGetDbClient()) {
           return { ok: false, errorCode: 'HOST_NOT_READY', message: 'localDb not ready' };
@@ -982,7 +980,6 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
         targetSessionId,
         message,
         dispatcherSessionId,
-        messagePurpose,
         title,
         useWorktree,
         workingDir,
@@ -992,7 +989,6 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
         effort,
         fast,
         agentDeviceId,
-        notifyWhenDone,
       }) => {
         // deviceId::sessionId → 目标在另一台电脑:交给那台电脑按它本机的同一条通路投递。
         const svc = tryGetOrcaCollabService();
@@ -1010,12 +1006,10 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
             targetSessionId,
             message,
             dispatcherSessionId,
-            messagePurpose,
             title,
             useWorktree,
             workingDir,
             projectDir,
-            ...(notifyWhenDone ? { notifyWhenDone: true } : {}),
             ...(hasExecutionOverrides
               ? {
                   execution: {

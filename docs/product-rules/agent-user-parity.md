@@ -77,7 +77,6 @@ Agent 新建普通独立任务（`send_to_session` create；伙伴专用的 `sta
 | GitHub | 查询明确 PR 的 CI、评审和变化；明确关联、移除、恢复、固定、排序 | 有（桌面与手机关联管理） | 有：helper `github` 类目，同账号跨电脑；脚本 `github.read` |
 | 机器     | 看账号下的电脑与 SSH 主机及实时资源（`list_machines`，[规则](cindy-machines.md)） | 有（含 SSH 普通任务） | 有（2026-11-02） |
 | 任务     | 给既有任务发消息                                           | 有   | 有（2026-10-14） |
-| 任务     | 发消息或新建任务时要求结果回来一次（`send_to_session` 的 `notify_when_done`：该任务处理这条消息的那一轮结束后，答复作为带来源标签的普通消息送回发起任务） | 有（2026-11-08） | 无（发给另一台电脑上的任务时返回 `INVALID_ARGS`，需省略） |
 | 任务     | 新建任务（继承项目、选择已有项目或不绑项目，执行目录独立）   | 有   | 无               |
 | 任务     | 新建任务时选择 Agent 所在电脑（`send_to_session` create 的 `agent_device_id`，取 `list_available_models` 的 `locations[]`；只换 Agent 用的远程或分享供应商，任务与文件仍在本机） | 有 | 有（2026-11-07；SSH 任务不支持；那台没有所需模型或连不上返回 `PROVIDER_ROUTE_UNAVAILABLE`，不自动换电脑） |
 | 任务     | 归档 / 取消归档                                             | 有   | 有（2026-10-16） |
@@ -148,8 +147,7 @@ Worker 工具省略 working_dir 时保持继承 Lead 任务记录目录，不跟
   长回复保留首尾片段，总预算进一步收紧时仍保留首尾，避免丢掉末尾结果或阻塞说明。
   不用内部回报替代用户要求，也不只取助手回复最后一行。`finished` 只表示所查任务本轮结束，
   不证明委派工作或用户目标完成；不参与输入放行判定，下一条消息仍按实时运行状态和队列派发。
-- 结果回传（`notify_when_done`）：`packages/lizi-mcps/src/xdt-helper/send_to_session.ts`；「由这位伙伴开的」
-  记录见 `apps/desktop/src/main/maker-ipc/botTaskCreation.ts`。V1 伙伴跟进（`botWorkbenchAccess.ts`）已移除。
+- 「由这位伙伴开的」记录见 `apps/desktop/src/main/maker-ipc/botTaskCreation.ts`。V1 伙伴跟进（`botWorkbenchAccess.ts`）已移除。
 - 协议与兼容见 [`../dev-rules/protocol-compatibility.md`](../dev-rules/protocol-compatibility.md)
   「Agent 跨电脑管理定时任务与发消息」。
 
@@ -215,7 +213,7 @@ Host 不因当前输入缺少主人标记再追加行动同意判定。只认运
 
 伙伴例行任务（2026-10-26；2026-11-08 起 V2 不再适用：例行任务引擎与 `routine_*` 工具已移除，伙伴的定时工作是项目自动化，模型、`persistentSession` 等沿用 `schedule_*`）：桌面与 `routine_save` 共用每条规则的 `modelOverride`，可选引擎、来源、型号、执行位置、推理强度与 Fast；null 恢复跟随伙伴，省略保留选择。执行记录返回独立 `sessionId`。内置跟进也可选模型，指令与触发条件仍由宿主维护；每天查待办已是普通例行任务，指令与触发条件可改（2026-10-31）。`sessionMode`（`persistent` 复用同一任务／`fresh` 每次触发新建任务）同样经桌面与 `routine_save` 设置，省略保留原值。跨电脑桌面设置通过 `routines.saveWithModel` 与 `routines.saveWithSessionMode` 能力声明协商；手机仍按现有合同不提供例行任务管理。
 
-执行任务的模型可用 `cindy_helper` 的 cindy 类 `report_task_delivery` 报告本轮是否新交付最终结果；只限当前任务执行者，子 Agent 不可代报。三个 Harness 共用此入口；它不结束任务或授予操作权限，回执被记录即确认。伙伴从 IM 或群聊创建任务时，宿主同时固定原私聊／群聊／话题，只在原处投递依赖这份报告时才要求报告；最终结果由宿主投递至该位置。投递失败在原任务中可见，不改投私聊。`notify_when_done` 的目标不要求报告，它的一次回传由宿主在那一轮结束时完成（2026-11-08）。
+结果回传不做成工具（2026-11-09）：`notify_when_done` 与 `report_task_delivery` 已删除，派活方在消息里请对方做完用 `send_to_session` 发回，或自己用 `get_task_digest` 查；用户本人也是这样跟进任务的。
 
 ## 历史查询的大结果分页
 

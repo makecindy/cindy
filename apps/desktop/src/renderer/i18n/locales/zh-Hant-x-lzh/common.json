@@ -10372,11 +10372,10 @@
       "showReplyTargetHint": "同僚回覆之上，標其所回乃君何訊。較早之回覆不顯。"
     },
     "session": {
-      "ownedByBot": "{{name}} 之背景差事",
+      "ownedByBot": "{{name}} 所開",
       "backToBot": "歸 {{name}}"
     },
     "collab": {
-      "deliveryFailed": "結果未達原言談，已存於此差事中",
       "backgroundTask": "背景差事",
       "trackedTask": "獨行而自回其果",
       "stopTask": "止差事",

@@ -127,6 +127,7 @@ describe('conditional memory mutations', () => {
  * - 最小失败输入：一条记录与 MEMORY.md 被换成指向文件夹外文件的链接后再写一次。
  * - tier：unit（临时目录真实文件 I/O）。
  */
+// symlink-platform-skip: Windows creates file symbolic links only with Developer Mode or administrator rights.
 describe.skipIf(process.platform === 'win32')('links in the memory folder', () => {
   it('never writes through a link and never reads one as a memory', async () => {
     const outside = path.join(dir, '..', `${path.basename(dir)}-outside.txt`);

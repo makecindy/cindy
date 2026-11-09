@@ -10417,11 +10417,10 @@
       "showReplyTargetHint": "Above a teammate’s reply, show which of your messages it answers. Older replies don’t show this."
     },
     "session": {
-      "ownedByBot": "{{name}}'s background task",
+      "ownedByBot": "Opened by {{name}}",
       "backToBot": "Back to {{name}}"
     },
     "collab": {
-      "deliveryFailed": "The result could not be delivered to the original chat. It is saved in this session.",
       "backgroundTask": "Background task",
       "trackedTask": "Runs independently and returns its result",
       "stopTask": "Stop task",

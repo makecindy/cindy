@@ -83,7 +83,7 @@ describe('Bot Profile runtime prompt', () => {
       expect(prompt).toContain(tool);
     for (const topic of Object.keys(TEAMMATE_CORE_TOPICS)) expect(prompt).toContain(`\`${topic}\``);
     // Moved, not dropped: the task and teammate boundaries live in their topics.
-    expect(TEAMMATE_CORE_TOPICS.tasks.body).toContain('notify_when_done=true');
+    expect(TEAMMATE_CORE_TOPICS.tasks.body).not.toContain('notify_when_done');
     expect(TEAMMATE_CORE_TOPICS.tasks.body).toContain('the user asks for an independent task');
     expect(TEAMMATE_CORE_TOPICS.tasks.body).not.toContain('session_task');
     expect(TEAMMATE_CORE_TOPICS.teammates.body).toContain('not work you track');
