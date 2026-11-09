@@ -9,7 +9,8 @@
  *
  * 安装目标：
  *   - 未传 installPath → 默认 `~/.agents/skills/<name>/`（双引擎共享）
- *     + 额外创建 `~/.claude/skills/<name>` symlink
+ *     + 额外创建 `~/.claude/skills/<name>` symlink（#9282：仅当允许 Claude 投影，
+ *       即 opt-in 或本地已有 `~/.claude`）
  *   - 传入项目级 `.agents/skills/<name>` → 直接使用，并创建 Claude 兼容链接
  *   - 其它自定义 installPath（完整路径）→ 直接使用，main 不做语义拼接
  *
@@ -68,6 +69,7 @@ import {
   prepareSharedGlobalSkillLinks,
   prepareSharedProjectSkillLinks,
   projectWorkingDirFromSkillPath,
+  shouldProjectToClaudeSkills,
 } from '../maker-host/shared-global-skills.js';
 import {
   clearIgnoredAutoSyncSkill,
@@ -945,7 +947,8 @@ export async function install(p: InstallParams, onProgress: ProgressCb, remoteGu
     }
 
     // best-effort:让同一份 Skill 同时出现在两个 Agent 的 discovery root。
-    if (!p.installPath) {
+    // #9282:未 opt-in 且本地没有 ~/.claude 时不主动创建 Claude 侧链接。
+    if (!p.installPath && await shouldProjectToClaudeSkills()) {
       const claudeLink = path.join(os.homedir(), '.claude', 'skills', p.name);
       try {
         await ensureSymlinkToShared(claudeLink, finalDir);
