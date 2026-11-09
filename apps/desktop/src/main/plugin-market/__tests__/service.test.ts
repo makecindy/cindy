@@ -1,4 +1,4 @@
-import { compareCindyVersions, getPluginToolUi, pluginHasToolUi, pluginToolVisible } from '@cindy/plugin-protocol';
+import { compareCindyVersions, getPluginToolUi, parsePluginResolveRequest, pluginHasToolUi, pluginToolVisible } from '@cindy/plugin-protocol';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -28,6 +28,7 @@ const runtime = vi.hoisted(() => ({
   listScans: 0,
   installationScanComplete: true,
   onList: undefined as (() => void) | undefined,
+  readBackgroundGhosts: undefined as (() => Promise<InstalledGhost[]>) | undefined,
   confirmLegacyLibraryReattach: vi.fn<(plugin: unknown) => Promise<boolean>>(async () => false),
   ghosts: [] as Array<{
     manifest: Record<string, unknown>;
@@ -67,6 +68,7 @@ const runtime = vi.hoisted(() => ({
   currentOrganization: null as {
     organizationId: string;
     pluginPrefix: string | null;
+    orgSlug?: string;
   } | null,
   boundaryPending: false,
   approvedInstallEvidence: vi.fn(
@@ -125,7 +127,8 @@ vi.mock('../../cindy-brain/index.js', () => ({
     isInstallationScanComplete: () => runtime.installationScanComplete,
     createBackgroundRefresh() {
       const state = () => ({ owner: JSON.stringify(runtime.session), mutation: runtime, identity: JSON.stringify(runtime.ghosts) });
-      return createGhostBackgroundRefresh({ state, scan: async () => ({ ghosts: this.list() as unknown as InstalledGhost[], registry: emptyPluginInstanceRegistry(), state: state() }) });
+      return createGhostBackgroundRefresh({ state, scan: async () => ({ ghosts: runtime.readBackgroundGhosts
+        ? await runtime.readBackgroundGhosts() : this.list() as unknown as InstalledGhost[], registry: emptyPluginInstanceRegistry(), state: state() }) });
     },
     async listAsync() { return this.list(); },
     resumePendingResidentsOffline: runtime.resumeOfflineResidents,
@@ -309,6 +312,7 @@ afterEach(() => {
   runtime.installOriginError = false;
   runtime.authIdentity = { membershipKind: 'org', orgId: 'org-1', orgSlug: 'acme' };
   runtime.authStateOverrides = {};
+  runtime.readBackgroundGhosts = undefined;
   runtime.resumeOfflineResidents.mockClear();
   runtime.reconcilePendingRootNamespaces.mockReset();
   runtime.currentOrganization = null;
@@ -794,6 +798,65 @@ describe('same-release legacy organization source recovery', () => {
 });
 
 describe('PluginMarketService migration and defaultInstall', () => {
+  // Unit: the three new read paths must not invoke the synchronous disk scanner.
+  // A held worker snapshot also proves simultaneous readers share one pending scan.
+  it('shares background installation reads across catalog, lookup and recommendations without synchronous scans', async () => {
+    const item = summary({ namespace: null });
+    const h = harness([item]);
+    Object.assign(h.api, { recommendations: vi.fn(async () => ({ plugins: [item] })) });
+    const gate = deferred();
+    runtime.readBackgroundGhosts = vi.fn(async () => { await gate.promise; return []; });
+    runtime.onList = () => { throw new Error('synchronous installation scan blocked the main process'); };
+    const reads = [h.service.query(), h.service.lookup([item.ghostId]), h.service.recommendations()] as const;
+    gate.resolve();
+    const [catalog, lookup, recommendations] = await Promise.all(reads);
+    expect(catalog.items.map(item => item.ghostId)).toEqual([item.ghostId]);
+    expect(lookup.items.map(item => item.ghostId)).toEqual([item.ghostId]);
+    expect(recommendations.map(item => item.ghostId)).toEqual([item.ghostId]);
+    expect(runtime.readBackgroundGhosts).toHaveBeenCalledTimes(1);
+  });
+
+  // Unit regressions for #9487: existing paging fixtures did not cover a namespace
+  // learned mid-batch, protocol-length keys, or a page containing only installed matches.
+  it('looks up an organization plugin when the first response supplies its namespace', async () => {
+    runtime.authIdentity!.orgSlug = null;
+    runtime.currentOrganization = { organizationId: 'org-1', pluginPrefix: null, orgSlug: 'acme' };
+    const h = harness([summary({ scope: 'organization', organizationId: 'org-1', namespace: 'acme' })]);
+    const result = await h.service.lookup(['cindy-test']);
+    expect(result.items.map(item => item.namespace)).toEqual(['acme']);
+  });
+
+  it.each(['lookup', 'maintenance'] as const)('uses protocol-safe keys for long logical identities during %s', async operation => {
+    const namespace = 'n'.repeat(100);
+    const ghostId = 'g'.repeat(32);
+    runtime.authIdentity!.orgSlug = namespace;
+    runtime.currentOrganization = { organizationId: 'org-1', pluginPrefix: null, orgSlug: namespace };
+    runtime.ghosts = [{ ...ghostEntry(ghostId), namespace }];
+    const h = harness([summary({ ghostId, scope: 'organization', organizationId: 'org-1', namespace })]);
+    const resolve = h.api.resolve.getMockImplementation()!;
+    h.api.resolve.mockImplementation(async (targets, query) => {
+      parsePluginResolveRequest({ targets });
+      return resolve(targets, query);
+    });
+    const result = operation === 'lookup' ? await h.service.lookup([ghostId]) : await h.service.snapshot();
+    expect(result.unavailableReason).toBeNull();
+    expect(result.items.some(item => item.ghostId === ghostId && item.namespace === namespace)).toBe(true);
+    expect(h.api.resolve).toHaveBeenCalled();
+  });
+
+  it('returns a continuation without scanning later pages of installed search matches', async () => {
+    const items = Array.from({ length: 30 }, (_, index) => summary({
+      id: `c${String(index).padStart(24, '0')}`, ghostId: `tool-${index}`, name: `Tool ${index}`, namespace: null,
+    }));
+    const h = harness(items);
+    runtime.ghosts = items.map(item => ({ ...ghostEntry(item.ghostId), namespace: null }));
+    for (const item of items) h.ledger.upsertInstallation(recordForTest(item, { installed: true }));
+    const first = await h.service.query({ query: 'Tool', limit: 10, excludeInstalled: true, counts: false });
+    expect(first.items).toEqual([]);
+    expect(first.nextCursor).not.toBeNull();
+    expect(h.api.catalog).toHaveBeenCalledTimes(1);
+  });
+
   // unit：v7.5 首屏只读一页，搜索覆盖未加载项；原 snapshot 用例不能证明不追全量目录。
   it('pages the complete market without a full catalog and searches entries beyond the first page', async () => {
     const items = Array.from({ length: 30 }, (_, index) => summary({

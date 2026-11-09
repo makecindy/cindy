@@ -59,6 +59,7 @@ vi.mock('electron', () => ({
   dialog: pickerDialog,
 }));
 vi.mock('../../authManager.js', () => ({
+  getAuthState: () => ({ user: { orgSlug: 'acme' } }),
   getCurrentUserId: vi.fn(() =>
     runtime.session.mode === 'cloud' ? runtime.session.dataOwnerId : null,
   ),
@@ -387,6 +388,35 @@ function harness(items: VisiblePluginSummary[], marketDirs: Array<{ name: string
 }
 
 describe('PluginMarketService 自定义市场聚合', () => {
+  // Unit: source filters reuse counts; neither an unrelated local scan nor a server
+  // catalog request is needed just to read the selected source with counts=false.
+  it('reads only the selected source when search-wide counts are already known', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-custom-source-filter-'));
+    roots.push(root);
+    const dir = writeLocalMarket(root, 'team-lib', [{ rel: 'plugins/alpha', id: 'alpha' }]);
+    const h = harness([serverSummary()], [{ name: 'team-lib', dir }]);
+    const discovery = vi.spyOn(MarketSourceManager.prototype, 'forEachDiscoveredSource');
+    const server = await h.service.query({ scope: 'public', counts: false });
+    expect(server.items).toHaveLength(1);
+    expect(discovery).not.toHaveBeenCalled();
+    const custom = await h.service.query({ scope: 'custom', counts: false });
+    expect(custom.items).toMatchObject([{ ghostId: 'alpha', sourceType: 'local-market' }]);
+    expect(h.api.catalog).toHaveBeenCalledTimes(1);
+  });
+
+  // Unit, #9487: lookup replaced a snapshot that preserved local items on server failure.
+  // One readable local source plus a rejected server target read must still return the plugin.
+  it('looks up a local market plugin when the server target read fails', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-custom-offline-'));
+    roots.push(root);
+    const dir = writeLocalMarket(root, 'team-lib', [{ rel: 'plugins/alpha', id: 'alpha' }]);
+    const h = harness([], [{ name: 'team-lib', dir }]);
+    Object.assign(h.api, { resolve: vi.fn().mockRejectedValue(new Error('server offline')) });
+    const result = await h.service.lookup(['alpha']);
+    expect(result.items).toMatchObject([{ ghostId: 'alpha', sourceType: 'local-market', sourceMarketName: 'team-lib' }]);
+    expect(result.unavailableReason).toBe('server offline');
+  });
+
   // Unit regression: Agent/background readers consume items and cursors, not complete counts.
   // Existing pagination coverage always requested counts; a first page with counts=false still scanned the catalog.
   it('skips complete counts without losing the requested page or its continuation', async () => {

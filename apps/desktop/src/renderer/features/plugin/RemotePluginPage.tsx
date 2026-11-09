@@ -90,6 +90,7 @@ export function RemotePluginPage({
   const { t, i18n } = useTranslation();
   const { confirm } = useConfirmDialog();
   const [snapshot, setSnapshot] = useState<PluginManagementSnapshot | null>(null);
+  const [catalogRevision, setCatalogRevision] = useState(0);
   const [project, setProject] = useState<PluginManagementProject | null>(null);
   const projectRef = useRef(project);
   projectRef.current = project;
@@ -170,6 +171,7 @@ export function RemotePluginPage({
       const next = parsePluginManagementSnapshot(await invoke('snapshot', paging ? { read: 'installed' } : {}));
       if (writable() && revision === readRevision.current) {
         setSnapshot(next);
+        setCatalogRevision(revision);
         setCatalogPaging(paging);
         setLegacySelected(null);
         setLegacyDetail(null);
@@ -963,7 +965,7 @@ export function RemotePluginPage({
                 {!unsupported ? <PluginCatalogBrowser cacheRef={browserCache}
                   filterHost={marketFiltersHost}
                   ownerKey={JSON.stringify([device.deviceId, scope.current.owner])}
-                  revision={JSON.stringify([snapshot?.ghosts.map(ghost => [installedGhostStoragePart(ghost), ghost.manifest.version]), snapshot?.market.customSourceNames, i18n.language])}
+                  revision={JSON.stringify([catalogRevision, snapshot?.ghosts.map(ghost => [installedGhostStoragePart(ghost), ghost.manifest.version]), snapshot?.market.customSourceNames, i18n.language])}
                   query={query} scope={originFilter === 'public' || originFilter === 'organization' || originFilter === 'custom' ? originFilter : 'all'}
                   onScope={setOriginFilter} showOrganization={true}
                   visible={!!query.trim() || catalogTab === 'market'} scrollRef={catalogScroller}

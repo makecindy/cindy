@@ -2241,16 +2241,6 @@ export const PRICE_TIER_COLORS = {
 } as const;
 // END GENERATED DS-8: defaults
 
-// Plugin provenance colors express source identity, never package trust or runtime permission.
-registerColor('plugin-identity-official-text', GENERATED_DEFAULTS["plugin-identity-official-text"], 'Plugin provenance identity; owner-approved 2026-11-09');
-registerColor('plugin-identity-official-bg', GENERATED_DEFAULTS["plugin-identity-official-bg"], 'Plugin provenance identity; owner-approved 2026-11-09');
-registerColor('plugin-identity-community-text', GENERATED_DEFAULTS["plugin-identity-community-text"], 'Plugin provenance identity; owner-approved 2026-11-09');
-registerColor('plugin-identity-community-bg', GENERATED_DEFAULTS["plugin-identity-community-bg"], 'Plugin provenance identity; owner-approved 2026-11-09');
-registerColor('plugin-identity-team-text', GENERATED_DEFAULTS["plugin-identity-team-text"], 'Plugin provenance identity; owner-approved 2026-11-09');
-registerColor('plugin-identity-team-bg', GENERATED_DEFAULTS["plugin-identity-team-bg"], 'Plugin provenance identity; owner-approved 2026-11-09');
-registerColor('plugin-identity-custom-text', GENERATED_DEFAULTS["plugin-identity-custom-text"], 'Plugin provenance identity; owner-approved 2026-11-09');
-registerColor('plugin-identity-custom-bg', GENERATED_DEFAULTS["plugin-identity-custom-bg"], 'Plugin provenance identity; owner-approved 2026-11-09');
-
 /* === P3.2: Semantic slot tokens === */
 registerColor('surface', GENERATED_DEFAULTS["surface"], 'Surface 页面背景 (hex 形式)');
 registerColor('surface-hsl', GENERATED_DEFAULTS["surface-hsl"], 'Surface 页面背景 (HSL 形式)');
@@ -3294,3 +3284,13 @@ registerColor(
   GENERATED_DEFAULTS["task-tag-white-check"],
   'Task label identity color',
 );
+
+// Append new provenance roles so existing registration order remains stable.
+registerColor('plugin-identity-official-text', GENERATED_DEFAULTS["plugin-identity-official-text"], 'Plugin provenance identity; owner-approved 2026-11-09');
+registerColor('plugin-identity-official-bg', GENERATED_DEFAULTS["plugin-identity-official-bg"], 'Plugin provenance identity; owner-approved 2026-11-09');
+registerColor('plugin-identity-community-text', GENERATED_DEFAULTS["plugin-identity-community-text"], 'Plugin provenance identity; owner-approved 2026-11-09');
+registerColor('plugin-identity-community-bg', GENERATED_DEFAULTS["plugin-identity-community-bg"], 'Plugin provenance identity; owner-approved 2026-11-09');
+registerColor('plugin-identity-team-text', GENERATED_DEFAULTS["plugin-identity-team-text"], 'Plugin provenance identity; owner-approved 2026-11-09');
+registerColor('plugin-identity-team-bg', GENERATED_DEFAULTS["plugin-identity-team-bg"], 'Plugin provenance identity; owner-approved 2026-11-09');
+registerColor('plugin-identity-custom-text', GENERATED_DEFAULTS["plugin-identity-custom-text"], 'Plugin provenance identity; owner-approved 2026-11-09');
+registerColor('plugin-identity-custom-bg', GENERATED_DEFAULTS["plugin-identity-custom-bg"], 'Plugin provenance identity; owner-approved 2026-11-09');

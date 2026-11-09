@@ -471,9 +471,9 @@ describe('plugin page return navigation', () => {
   );
 
   it.each([
-    { state: 'installed', author: 'Published nickname', installedAuthor: undefined, expected: 'Published nickname' },
+    { state: 'installed', author: 'Published nickname', installedAuthor: undefined, expected: null },
     { state: 'installed', author: null, installedAuthor: undefined, expected: null },
-    { state: 'update-available', author: 'New release nickname', installedAuthor: 'Installed release nickname', expected: 'Installed release nickname' },
+    { state: 'update-available', author: 'New release nickname', installedAuthor: 'Installed release nickname', expected: null },
     { state: 'update-available', author: 'New release nickname', installedAuthor: null, expected: null },
   ] as const)('preserves installed attribution and anonymity ($state, $expected)', async ({ state, author, installedAuthor, expected }) => {
     const installed: InstalledGhost = {

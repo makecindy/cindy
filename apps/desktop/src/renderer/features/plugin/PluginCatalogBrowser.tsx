@@ -13,6 +13,7 @@ export const PLUGIN_PAGE_SIZE = 10;
 
 export interface PluginBrowserCache {
   key: string;
+  countsKey: string;
   pages: Map<number, PluginMarketItem[]>;
   cursors: Map<number, string | null>;
   sizes: Map<number, number>;
@@ -25,8 +26,8 @@ export interface PluginBrowserCache {
   groups: Map<number, string>;
   lastSource: Map<number, string | null>;
 }
-export function emptyPluginBrowserCache(key = ''): PluginBrowserCache {
-  return { key, pages: new Map(), cursors: new Map([[0, null]]), sizes: new Map(), last: 0,
+export function emptyPluginBrowserCache(key = '', countsKey = ''): PluginBrowserCache {
+  return { key, countsKey, pages: new Map(), cursors: new Map([[0, null]]), sizes: new Map(), last: 0,
     hasNext: false, counts: null, metadata: null, error: null, grid: emptyPluginGridCache(), groups: new Map(), lastSource: new Map() };
 }
 
@@ -49,8 +50,12 @@ export function PluginCatalogBrowser({ cacheRef, ownerKey, revision, query, scop
 }) {
   const { t } = useTranslation();
   const [, rerender] = useReducer(n => n + 1, 0);
+  const countsKey = JSON.stringify([ownerKey, revision, query.trim()]);
   const key = JSON.stringify([PLUGIN_PAGE_SIZE, ownerKey, revision, query.trim(), scope]);
-  if (cacheRef.current.key !== key) cacheRef.current = emptyPluginBrowserCache(key);
+  if (cacheRef.current.key !== key) {
+    const counts = cacheRef.current.countsKey === countsKey ? cacheRef.current.counts : null;
+    cacheRef.current = { ...emptyPluginBrowserCache(key, countsKey), counts };
+  }
   const cache = cacheRef.current;
   const inFlight = useRef(new Map<string, { cache: PluginBrowserCache; promise: Promise<void> }>());
   const readQueue = useRef<Promise<void>>(Promise.resolve());
@@ -79,8 +84,10 @@ export function PluginCatalogBrowser({ cacheRef, ownerKey, revision, query, scop
         current.pages.set(index, page.items);
         if (scope === 'custom') {
           let previous = current.lastSource.get(index - 1) ?? null;
+          let start = 0;
+          for (let page = 0; page < index; page++) start += current.sizes.get(page) ?? 0;
           page.items.forEach((item, offset) => {
-            if (item.sourceMarketName && item.sourceMarketName !== previous) current.groups.set(index * PLUGIN_PAGE_SIZE + offset, item.sourceMarketName);
+            if (item.sourceMarketName && item.sourceMarketName !== previous) current.groups.set(start + offset, item.sourceMarketName);
             previous = item.sourceMarketName;
           });
           current.lastSource.set(index, previous);
@@ -97,7 +104,7 @@ export function PluginCatalogBrowser({ cacheRef, ownerKey, revision, query, scop
       } catch (error) {
         if (!alive.current || cacheRef.current !== current) return;
         if (index > 0 && extractIpcError(error)?.code === 'PLUGIN_LIST_CHANGED') {
-          cacheRef.current = emptyPluginBrowserCache(current.key);
+          cacheRef.current = emptyPluginBrowserCache(current.key, current.countsKey);
           void read(0);
         } else current.error = index;
       } finally {
@@ -111,14 +118,15 @@ export function PluginCatalogBrowser({ cacheRef, ownerKey, revision, query, scop
   }, [cacheRef, query, scope]);
   useEffect(() => {
     alive.current = true;
+    if (!visible) return () => { alive.current = false; };
     if (!cacheRef.current.metadata) {
-      countListener.current?.(null);
+      countListener.current?.(cacheRef.current.counts);
       const timer = setTimeout(() => { void read(0); rerender(); }, query.trim() ? 250 : 0);
       return () => { clearTimeout(timer); alive.current = false; };
     }
     countListener.current?.(cacheRef.current.counts);
     return () => { alive.current = false; };
-  }, [key, cacheRef, read]);
+  }, [key, cacheRef, read, visible]);
   const sentinel = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!visible || !cache.hasNext || cache.error !== null || !sentinel.current || !scrollRef.current) return;
@@ -129,7 +137,19 @@ export function PluginCatalogBrowser({ cacheRef, ownerKey, revision, query, scop
     return () => observer.disconnect();
   }, [visible, cache.hasNext, cache.last, cache.error, scrollRef, read]);
   if (!visible) return null;
-  const count = cache.last * PLUGIN_PAGE_SIZE + (cache.sizes.get(cache.last) ?? 0);
+  // Filtering installed matches can leave short or empty cursor pages.
+  const offsets = [0];
+  for (let page = 0; page <= cache.last; page++) offsets.push(offsets[page] + (cache.sizes.get(page) ?? 0));
+  const count = offsets[cache.last + 1];
+  const pageAt = (index: number) => {
+    let low = 0, high = cache.last;
+    while (low < high) {
+      const middle = Math.ceil((low + high) / 2);
+      if (offsets[middle] <= index) low = middle;
+      else high = middle - 1;
+    }
+    return low;
+  };
   const pending = [...inFlight.current.keys()].some(value => value.startsWith(`${key}:`));
   const filters = (['all', 'public', ...(showOrganization ? ['organization'] : []),
     ...(cache.metadata?.customSourceNames.length ? ['custom'] : [])] as NonNullable<PluginMarketQuery['scope']>[]);
@@ -156,11 +176,12 @@ export function PluginCatalogBrowser({ cacheRef, ownerKey, revision, query, scop
         <span className="text-12 tabular-nums text-[var(--text-tertiary)]">{cache.metadata?.customSourceCounts?.find(item => item.name === cache.groups.get(index))?.count}</span>
       </header>}
       onRange={(first, last) => {
-        for (let page = Math.floor(first / PLUGIN_PAGE_SIZE); page <= Math.floor(last / PLUGIN_PAGE_SIZE); page++) {
+        for (let page = pageAt(first); page <= pageAt(last); page++) {
           if (!cache.pages.has(page) && cache.error !== page) void read(page);
         }
       }} renderItem={index => {
-        const item = cache.pages.get(Math.floor(index / PLUGIN_PAGE_SIZE))?.[index % PLUGIN_PAGE_SIZE];
+        const page = pageAt(index);
+        const item = cache.pages.get(page)?.[index - offsets[page]];
         return item ? renderItem(item) : <div className="flex h-40 items-center justify-center"><Spinner /></div>;
       }} />
     <div ref={sentinel} className="flex min-h-12 items-center justify-center gap-3 text-12 text-[var(--text-tertiary)]" aria-live="polite">

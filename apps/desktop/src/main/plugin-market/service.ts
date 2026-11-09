@@ -16,7 +16,6 @@ import {
   type VisiblePluginDetail,
   type VisiblePluginSummary,
   type PluginResolveTarget,
-  type PluginCatalogPage,
 } from '@cindy/plugin-protocol';
 import { getResolvedMainLocale } from '../i18n.js';
 import { readGhostReadmeFromDir } from '../cindy-brain/ghostReadme.js';
@@ -995,6 +994,7 @@ function removalNoticeKey(owner: ActiveAppSession): string {
 export class PluginMarketService {
   private readonly snapshotFlights = new Map<string, MarketSnapshotFlight>();
   private readonly catalogFlights = new Map<string, Promise<MarketCatalog>>();
+  private readonly localReadFlights = new Map<string, Promise<LocalInstallSnapshot>>();
   private lastMaintenanceCatalog: { owner: string; fingerprint: string } | null = null;
   private readonly mutations = new Map<string, Promise<unknown>>();
   private ledgerMutation: Promise<void> = Promise.resolve();
@@ -1224,7 +1224,7 @@ export class PluginMarketService {
         }
       }
     }
-    const entries = [...targets.values()];
+    const entries = [...targets.values()].map((target, index) => ({ ...target, key: String(index) }));
     for (let offset = 0; offset < entries.length; offset += 100) {
       const result = await this.api.resolve(entries.slice(offset, offset + 100));
       requireSameMarketOwner(owner);
@@ -1275,18 +1275,21 @@ export class PluginMarketService {
         const value = JSON.parse(Buffer.from(input.cursor, 'base64url').toString('utf8'));
         if (value.signature !== signature || typeof value.serverDone !== 'boolean'
           || (value.serverCursor !== null && (typeof value.serverCursor !== 'string' || value.serverCursor.length > 128))
-          || !Number.isSafeInteger(value.customOffset) || value.customOffset < 0) throw new Error('cursor');
+          || !Number.isSafeInteger(value.customOffset) || value.customOffset < 0)
+          throwIpcError('INVALID_PARAMS', 'Invalid Plugin market cursor');
         state = value;
       } catch { throwIpcError('INVALID_PARAMS', 'Invalid Plugin market cursor'); }
     }
-    const local = owner ? this.localInstallSnapshot(this.ledgerForOwner(owner)) : EMPTY_LOCAL_INSTALL_SNAPSHOT;
+    const local = owner ? await this.readLocalInstallSnapshot(owner) : EMPTY_LOCAL_INSTALL_SNAPSHOT;
+    assertCurrent();
     const customSourceNames = owner ? this.customSourceNamesSafe(owner) : [];
     const includeCounts = !input.cursor && input.counts !== false;
+    if (scope === 'custom' && !includeCounts) state.serverDone = true;
     // Start the independent server read before bounded local-source discovery.
-    let firstServerPage = state.serverDone ? null : this.api.catalog({ scope: scope === 'custom' ? 'all' : scope,
+    const serverPage = state.serverDone ? null : this.api.catalog({ scope: scope === 'custom' ? 'all' : scope,
       query: query || undefined, limit: scope === 'custom' ? 1 : limit, cursor: state.serverCursor, counts: includeCounts })
       .then(page => ({ page }), error => ({ error }));
-    let discovered = !!owner && customSourceNames.length > 0 && (!input.cursor || scope === 'custom' || (scope === 'all' && state.serverDone));
+    let discovered = !!owner && customSourceNames.length > 0 && (includeCounts || scope === 'custom' || (scope === 'all' && state.serverDone));
     let discovery = discovered ? await this.discoverCustomEntriesBounded(owner!, this.nextCustomIconProjectionGeneration(), customSourceNames)
       : { entries: [], unavailableSourceNames: [] };
     assertCurrent();
@@ -1298,13 +1301,10 @@ export class PluginMarketService {
     let organizationAccessError: string | null = null;
     let unavailableReason: string | null = null;
     try {
-    while (!state.serverDone && items.length < limit) {
-      const first = firstServerPage ? await firstServerPage : null;
-      firstServerPage = null;
-      if (first && 'error' in first) throw first.error;
-      const page: PluginCatalogPage = first?.page ?? await this.api.catalog({ scope: scope === 'custom' ? 'all' : scope,
-        query: query || undefined, limit: scope === 'custom' ? 1 : limit - items.length,
-        cursor: state.serverCursor, counts: includeCounts && counts === null });
+    if (!state.serverDone) {
+      const result = (await serverPage)!;
+      if ('error' in result) throw result.error;
+      const page = result.page;
       assertCurrent();
       if (owner) this.rememberCurrentOrganization(page.currentOrganization);
       organizationAccessError = organizationAccessErrorCode(page.organizationAccessError);
@@ -1380,7 +1380,10 @@ export class PluginMarketService {
       if (owner) requireSameMarketOwner(owner);
       else if (canCaptureMarketOwner() || isAppSessionBoundaryPending()) return [];
       if (key !== (owner ? marketOwnerKey(owner) : getClientEndpoint('pluginApiBaseUrl'))) return [];
-      const local = owner ? this.localInstallSnapshot(this.ledgerForOwner(owner)) : EMPTY_LOCAL_INSTALL_SNAPSHOT;
+      const local = owner ? await this.readLocalInstallSnapshot(owner) : EMPTY_LOCAL_INSTALL_SNAPSHOT;
+      if (owner) requireSameMarketOwner(owner);
+      else if (canCaptureMarketOwner() || isAppSessionBoundaryPending()) return [];
+      if (key !== (owner ? marketOwnerKey(owner) : getClientEndpoint('pluginApiBaseUrl'))) return [];
       return response.plugins.map(plugin => this.toItem(plugin, local));
     } catch { return []; }
   }
@@ -1391,23 +1394,29 @@ export class PluginMarketService {
     const owner = canCaptureMarketOwner() ? captureMarketOwner() : null;
     const check = () => { if (owner) requireSameMarketOwner(owner); else if (canCaptureMarketOwner()) throwIpcError('PRECONDITION_FAILED', 'Plugin owner changed'); };
     const namespaces: Array<string | null> = [null];
+    let nextTargetKey = 0;
     const orgSlug = getAuthState().user?.orgSlug;
     if (owner?.mode === 'cloud' && isValidPluginNamespace(orgSlug)) namespaces.push(orgSlug);
     const targets = [...new Set(ghostIds)].flatMap(ghostId => namespaces.map(namespace => ({
-      key: JSON.stringify([ghostId, namespace]), ghostId, namespace,
+      key: String(nextTargetKey++), ghostId, namespace,
     })));
-    const local = owner ? this.localInstallSnapshot(this.ledgerForOwner(owner)) : EMPTY_LOCAL_INSTALL_SNAPSHOT;
+    const local = owner ? await this.readLocalInstallSnapshot(owner) : EMPTY_LOCAL_INSTALL_SNAPSHOT;
+    check();
     const items: PluginMarketItem[] = [];
     let organizationAccessError: string | null = null;
+    let unavailableReason: string | null = null;
     if (getClientEndpoint('pluginApiBaseUrl')) {
-      for (let offset = 0; offset < targets.length; offset += 100) {
-        const response = await this.api.resolve(targets.slice(offset, offset + 100));
+      try {
+      for (let offset = 0; offset < targets.length;) {
+        const batch = targets.slice(offset, offset + 100);
+        const response = await this.api.resolve(batch);
+        offset += batch.length;
         check();
         organizationAccessError = organizationAccessErrorCode(response.organizationAccessError);
         const resolvedNamespace = response.currentOrganization?.orgSlug;
         if (owner?.mode === 'cloud' && isValidPluginNamespace(resolvedNamespace) && !namespaces.includes(resolvedNamespace)) {
           namespaces.push(resolvedNamespace);
-          for (const ghostId of new Set(ghostIds)) targets.push({ key: JSON.stringify([ghostId, resolvedNamespace]), ghostId, namespace: resolvedNamespace });
+          for (const ghostId of new Set(ghostIds)) targets.push({ key: String(nextTargetKey++), ghostId, namespace: resolvedNamespace });
         }
         for (const row of response.results) if (row.status === 'available') {
           if (owner) requirePluginVisibleForOwner(owner, row.plugin);
@@ -1415,13 +1424,17 @@ export class PluginMarketService {
           items.push(this.toItem(row.plugin, local));
         }
       }
+      } catch (error) {
+        check();
+        unavailableReason = error instanceof Error ? error.message : String(error);
+      }
     }
     const customSourceNames = owner ? this.customSourceNamesSafe(owner) : [];
     const custom = owner ? await this.discoverCustomEntriesBounded(owner, this.nextCustomIconProjectionGeneration(), customSourceNames)
       : { entries: [], unavailableSourceNames: [] };
     check();
     items.push(...this.projectCustomItems(custom.entries, local).filter(item => ghostIds.includes(item.ghostId)));
-    return { items, unavailableReason: null, organizationAccessError, customSourceNames, unavailableCustomSourceNames: custom.unavailableSourceNames };
+    return { items, unavailableReason, organizationAccessError, customSourceNames, unavailableCustomSourceNames: custom.unavailableSourceNames };
   }
 
   /** Focus checks remote changes without scanning installations when unchanged.
@@ -4298,6 +4311,20 @@ export class PluginMarketService {
       }
     }
     return reconciled;
+  }
+
+  /** Coalesce pending read-only scans; completed approval/installation facts are never cached. */
+  private readLocalInstallSnapshot(owner: ActiveAppSession): Promise<LocalInstallSnapshot> {
+    const key = marketOwnerKey(owner);
+    const pending = this.localReadFlights.get(key);
+    if (pending) return pending;
+    const flight = this.localInstallSnapshotAsync(owner, this.ledgerForOwner(owner), {
+      installed: createMarketBackgroundRefresh(),
+    }).finally(() => {
+      if (this.localReadFlights.get(key) === flight) this.localReadFlights.delete(key);
+    });
+    this.localReadFlights.set(key, flight);
+    return flight;
   }
 
   private localInstallSnapshot(
