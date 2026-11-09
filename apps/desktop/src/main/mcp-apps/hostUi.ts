@@ -7,6 +7,7 @@ import type { McpAppResourceBinding } from './host.js';
 import { activeOwnerScopeKey } from '../appSessionState.js';
 import { getSafeDataOwnerPushStamp } from '../device-link/broadcast-tap.js';
 import { getDeepLinkMainWindow } from '../deepLink.js';
+import { isRsbWindowWebContentsId } from '../right-sidebar-window/registry.js';
 
 type Reply = { caller: string; finish(value: unknown, error?: string): void };
 const replies = new Map<string, Reply>();
@@ -30,9 +31,11 @@ async function rendererAction(caller: string, input: Record<string, unknown>, si
   assertCurrent: () => void | Promise<void>, observe?: (value: unknown) => void): Promise<unknown> {
   await assertCurrent();
   signal.throwIfAborted();
-  callerWindow(caller);
-  // Detached pages still operate on the original editor and layout owners.
-  const window = getDeepLinkMainWindow();
+  const source = callerWindow(caller);
+  // Layout commands use the existing main-window sidebar controller. Full App
+  // windows own their drafts; only sidebar-only windows need the main editor.
+  const window = input.kind === 'open' || isRsbWindowWebContentsId(source.webContents.id)
+    ? getDeepLinkMainWindow() : source;
   if (!window || window.isDestroyed()) throw new Error('MCP_APP_ACTION_UNAVAILABLE');
   const requestId = randomUUID();
   const ownerStamp = getSafeDataOwnerPushStamp();
