@@ -5433,7 +5433,10 @@ export function ChatInput({
     (selectedItem: AtResourceItem) => {
       if (!editor || !effectiveAt) return;
       const directoryQuery = getAtDirectoryCompletionQuery(selectedItem);
-      const range = resolveEffectiveAtRange(selectedItem.type === 'plugin-command' ? [] : [
+      // An exact-length candidate stops the scan, so the slash-terminated directory
+      // query goes first: re-selecting `@dir|/` must also replace the existing `/`.
+      const range = resolveEffectiveAtRange([
+        ...(directoryQuery ? [directoryQuery] : []),
         selectedItem.name,
         selectedItem.name.replace(/\.md$/, ''),
         selectedItem.relPath,

@@ -8,6 +8,8 @@ import { PluginUiProvider } from '@/cindy-brain/PluginUiContributions';
 import type { ComposerSuggestionEntry } from '@/lib/composerSuggestion';
 import type { UnifiedCommand } from '@/lib/slashCommands';
 import type { ProviderView } from '@cindy/model-providers';
+import type { GhostComposerEntry } from '../../../../shared/ghostComposer';
+import { installedGhostStoragePart } from '../../../../shared/pluginIdentity';
 import { sharedTaskHostPeer } from '@cindy/device-link';
 import { sshNativeCodexProvider, sshModel } from '@/features/cc-agent/__tests__/sshModelFixtures';
 import { useSshCodexDraftSelection } from '@/features/cc-agent/useSshCodexDraftSelection';
@@ -38,6 +40,7 @@ const h = vi.hoisted(() => ({ t: (key: string) => key, confirm: vi.fn(), editor:
   showPluginChoices: false,
   providerCall: vi.fn(async (..._args: unknown[]): Promise<unknown> => ({ updates: [] })),
   mentionEntry: null as ComposerSuggestionEntry | null,
+  composerGhosts: null as GhostComposerEntry[] | null,
 }));
 vi.mock('@/cindy-brain/useInstalledGhosts', () => ({ useInstalledGhosts: () => h.ghosts, readInstalledGhostsSnapshot: () => h.ghosts }));
 vi.mock('react-i18next', async (original) => ({ ...await original<typeof import('react-i18next')>(), useTranslation: () => ({ t: h.t }) }));
@@ -85,6 +88,13 @@ vi.mock('../AtMentionPanel', () => ({ AtMentionPanel: ({ entries, onSelect }: { 
     <button key={entry.kind === 'action' ? entry.action.id : ''} onClick={() => onSelect(entry)}>Reference</button>)}</> : null }));
 vi.mock('../SlashCommandPalette', () => ({ SlashCommandPalette: ({ additionalCommands, onSelect }: { additionalCommands?: UnifiedCommand[]; onSelect(command: UnifiedCommand): void }) => h.showPluginChoices
   ? <>{additionalCommands?.map(command => <button key={command.name} onClick={() => onSelect(command)}>Reference</button>)}</> : null }));
+vi.mock('@/cindy-brain/useRemoteComposerGhosts', async (original) => {
+  const actual = await original<typeof import('@/cindy-brain/useRemoteComposerGhosts')>();
+  return { ...actual, useRemoteComposerGhosts: (...args: Parameters<typeof actual.useRemoteComposerGhosts>) => {
+    const result = actual.useRemoteComposerGhosts(...args);
+    return h.composerGhosts ? { ...result, ghosts: h.composerGhosts } : result;
+  } };
+});
 vi.mock('@/voice-input/VoiceInputPointerHintLayer', () => ({ VoiceInputPointerHintLayer: ({ children }: { children: import('react').ReactNode }) => <>{children}</> }));
 vi.mock('@/voice-input/VoiceInputStatusNotice', () => ({ VoiceInputStatusNotice: () => null }));
 vi.mock('@/voice-input/useVoiceInput', () => ({ useVoiceInput: (editor: Editor | null) => {
@@ -168,12 +178,21 @@ it.each([
   { input: '@fo|obarbaz rest', name: 'foobar', remaining: ' obarbaz rest' },
   { input: '@fo|', name: 'folder', remaining: ' ' },
   { input: '@fo|obar rest', name: 'foobar', remaining: '@foobar/ rest', directory: true },
+  // Re-selecting a directory whose `/` is already in the draft must not repeat the path.
+  { input: '@fo|obar/ rest', name: 'foobar', remaining: '@foobar/ rest', directory: true },
+  { input: '@foobar|/ rest', name: 'foobar', remaining: '@foobar/ rest', directory: true },
+  // A plugin command placed at the start must not leave the typed name suffix behind.
+  { input: '@issu|es rest', name: 'issues', remaining: '$issues rest', plugin: true },
   { input: '@|word rest', name: null, remaining: 'word rest' },
-])('preserves unrelated draft text when selecting @ completion in $input ($name)', async ({ input, name, remaining, directory }) => {
+])('preserves unrelated draft text when selecting @ completion in $input ($name)', async ({ input, name, remaining, directory, plugin }) => {
   const run = vi.fn();
+  const ghost: GhostComposerEntry = { manifest: { id: 'issues', name: 'Issues', command: 'issues' }, enabled: true };
+  if (plugin) h.composerGhosts = [ghost];
   h.mentionEntry = name === null
     ? { kind: 'action', action: { id: 'attach-files', label: 'Attach files', run } }
-    : { kind: 'resource', item: { type: directory ? 'dir' : 'file', name, relPath: name } };
+    : plugin
+      ? { kind: 'resource', item: { type: 'plugin-command', name: ghost.manifest.name, relPath: name, pluginId: installedGhostStoragePart(ghost) } }
+      : { kind: 'resource', item: { type: directory ? 'dir' : 'file', name, relPath: name } };
   try {
     render(<ChatInput {...props} sessionId={undefined} onSend={vi.fn()} />);
     await waitFor(() => expect(h.editor).not.toBeNull());
@@ -187,10 +206,11 @@ it.each([
     const nodes = h.editor!.getJSON().content![0].content ?? [];
     const doc = h.editor!.state.doc;
     expect(doc.textBetween(0, doc.content.size, '', '')).toBe(remaining);
-    expect(nodes.filter(node => node.type === 'mentionChip')).toHaveLength(name === null || directory ? 0 : 1);
+    expect(nodes.filter(node => node.type === 'mentionChip')).toHaveLength(name === null || directory || plugin ? 0 : 1);
     expect(run).toHaveBeenCalledTimes(name === null ? 1 : 0);
   } finally {
     h.mentionEntry = null;
+    h.composerGhosts = null;
   }
 });
 
