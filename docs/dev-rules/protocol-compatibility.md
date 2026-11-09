@@ -1,5 +1,16 @@
 # 跨端协议兼容
 
+## GitHub App 精确订阅与免计次（2026-11-10，测试）
+
+Webhook 服务的 `GET /api/v1/github` 可选返回 `prSubscriptions: true`、`dailyQuotaExempt: true`。
+前者允许 `PUT /api/v1/github/repositories` 在原 `repositories` 后追加
+`pullRequests: [{repository, number}]`（最多 1,000 条，每个仓库至少一条）。字段缺省保持仓库订阅；
+新客户端只向声明能力的服务器发新字段，超出数量上限也回退仓库订阅。原设备事件和 ACK 帧不变。
+后者仅让内置 GitHub 通知忽略普通 Webhook 次数状态；普通地址仍保留原计数和提示。
+新服务兼容旧客户端，先执行追加 migration 再更新服务，最后更新客户端；回滚服务代码保留新增表和列。
+回滚客户端只会扩大为原仓库订阅，不丢弃连接。官方／自建 Device Link 协议和手机原生层均无变更。
+本地回归覆盖新旧能力组合、同仓库换 PR、跨区域过滤、旧 ACK 与新变化、部分接收失败后的独立重试。
+
 ## 任务汇总与 ActivityKit Push（2026-11-10，未发布）
 
 官方 Device Link 新增同账号、设备绑定 Bearer 路由：`PUT /api/device-link/task-activity`

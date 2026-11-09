@@ -63,7 +63,9 @@ interface FakeEndpoint {
 
 /** 与 webhook-server 合同相同的最小实现。 */
 class FakeServer {
-  github: { available: boolean; login: string; endpointId: string; repositories: string[]; unavailable?: string[] } | null = null;
+  github: { available: boolean; login: string; endpointId: string; repositories: string[]; unavailable?: string[];
+    prSubscriptions?: boolean; dailyQuotaExempt?: boolean } | null = null;
+  githubSubscriptionBodies: Record<string, unknown>[] = [];
   readonly releases = new Map<string, string>();
   accountManagement = false;
   readonly requests: string[] = [];
@@ -153,7 +155,9 @@ class FakeServer {
         }
       }
       if (this.github && route === 'GET /api/v1/github') return reply(200, this.github);
-      if (this.github && route === 'PUT /api/v1/github/repositories') { this.github.repositories = body().repositories as string[]; return reply(200, this.github); }
+      if (this.github && route === 'PUT /api/v1/github/repositories') {
+        this.githubSubscriptionBodies.push(body()); this.github.repositories = body().repositories as string[]; return reply(200, this.github);
+      }
       if (route === 'GET /api/v1/endpoints') return reply(200, { endpoints: [...this.endpoints.values()] });
       if (upsert?.[1]) {
         const scheduleId = upsert[1];
@@ -796,5 +800,37 @@ it('keeps the App connection visible when baseline reads fail, and excludes unav
     server.github.unavailable = ['example/project'];
     await remote.refresh();
     expect(remote.githubEventsHealthy(url)).toBe(false);
+  } finally { remote.stop(); await server.close(); }
+});
+
+// Real HTTP wire: narrowing/changing PRs in the same repository must reach the
+// server; legacy servers must receive the original body and keep quota behavior.
+it('negotiates precise PR subscriptions and separates custom Webhook quota from built-in GitHub delivery', async () => {
+  const onQuotaExhausted = vi.fn();
+  const server = new FakeServer();
+  server.github = { available: true, login: 'example-user', endpointId: 'whk-github', repositories: [],
+    prSubscriptions: true, dailyQuotaExempt: true };
+  const baseUrl = await server.listen();
+  const follow = (number: number) => ({ id: String(number), name: 'Follow', status: 'active', recurring: true,
+    preRunHook: { command: `node gate https://github.com/example/project/pull/${number}` } }) as Schedule;
+  const remote = new ScheduleWebhookRemote({ baseUrl: () => baseUrl, getAccessToken: async () => 'token-1',
+    refreshAccessToken: async () => false, fetch, socketOptions: async () => ({}), logger: {},
+    onBatch: async () => {}, onGithubPrs: async () => {}, onQuotaExhausted });
+  try {
+    await remote.sync([follow(12)]);
+    await vi.waitFor(() => expect(remote.githubEventsHealthy('https://github.com/example/project/pull/12')).toBe(true));
+    expect(server.githubSubscriptionBodies.at(-1)).toEqual({ repositories: ['example/project'],
+      pullRequests: [{ repository: 'example/project', number: 12 }] });
+    await remote.sync([follow(13)]);
+    expect(server.githubSubscriptionBodies.at(-1)?.pullRequests).toEqual([{ repository: 'example/project', number: 13 }]);
+    server.sockets.at(-1)!.send(JSON.stringify({ type: 'quota', limit: 3000, resetAt: Date.now() + 60_000 }));
+    await vi.waitFor(() => expect(remote.quota()).not.toBeNull());
+    expect(onQuotaExhausted).not.toHaveBeenCalled();
+    expect(remote.githubEventsHealthy('https://github.com/example/project/pull/13')).toBe(true);
+    delete server.github.prSubscriptions;
+    delete server.github.dailyQuotaExempt;
+    await remote.refresh();
+    expect(server.githubSubscriptionBodies.at(-1)).toEqual({ repositories: ['example/project'] });
+    expect(remote.githubEventsHealthy('https://github.com/example/project/pull/13')).toBe(false);
   } finally { remote.stop(); await server.close(); }
 });

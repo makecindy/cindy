@@ -14,6 +14,9 @@ export interface GithubAppStatus {
   installUrl?: string;
   repositories?: string[];
   unavailable?: string[];
+  /** Optional capabilities; absent on older servers. */
+  prSubscriptions?: boolean;
+  dailyQuotaExempt?: boolean;
 }
 
 /** Subscribe only to repositories named by existing active PR follow-up checks. */

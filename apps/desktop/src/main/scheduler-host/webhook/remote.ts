@@ -229,7 +229,7 @@ export class ScheduleWebhookRemote {
 
   githubEventsHealthy(url: string): boolean {
     return this.running && this.loaded && this.connected && !this.suspended && !this.replaced
-      && !this.githubError && !this.githubBatchFailed && !this.quota()
+      && !this.githubError && !this.githubBatchFailed && (!this.quota() || this.github.dailyQuotaExempt === true)
       && Date.now() - this.lastSocketActivity < SOCKET_HEALTH_MS
       && this.githubVerified.has(url.toLowerCase())
       && this.coveredGithubPrs().some(pr => pr.toLowerCase() === url.toLowerCase());
@@ -300,11 +300,17 @@ export class ScheduleWebhookRemote {
     this.github = state;
     this.githubError = null;
     if (!state.available || !state.login) { this.githubSynced = ''; return; }
-    const repositories = [...new Set(this.githubPrs.map(url => url.split('/').slice(3, 5).join('/')))].sort();
-    const key = JSON.stringify([state.login, state.endpointId, repositories]);
+    const prs = [...new Set(this.githubPrs.map(url => url.toLowerCase()))].sort().map(url => ({
+      repository: url.split('/').slice(3, 5).join('/'), number: Number(url.split('/')[6]),
+    }));
+    const repositories = [...new Set(prs.map(pr => pr.repository))];
+    // Capability negotiation keeps old servers working. Above the precise-list
+    // bound retain repository delivery, rather than silently omitting follows.
+    const subscription = { repositories, ...(state.prSubscriptions && prs.length <= 1_000 ? { pullRequests: prs } : {}) };
+    const key = JSON.stringify([state.login, state.endpointId, subscription]);
     if (key !== this.githubSynced) {
-      this.github = await this.request<GithubAppStatus>('PUT', '/github/repositories', { repositories });
-      this.githubSynced = JSON.stringify([this.github.login, this.github.endpointId, repositories]);
+      this.github = await this.request<GithubAppStatus>('PUT', '/github/repositories', subscription);
+      this.githubSynced = JSON.stringify([this.github.login, this.github.endpointId, subscription]);
     }
     // A connection/subscription is not considered reliable until its missed facts
     // are re-read. Retry through the existing reconciliation timer on failure.
@@ -714,7 +720,9 @@ export class ScheduleWebhookRemote {
     if (this.exhausted?.resetAt === resetAt) return;
     this.exhausted = { limit, resetAt };
     this.deps.onChanged?.();
-    this.deps.onQuotaExhausted?.(this.exhausted);
+    // The generic allowance is still visible to ordinary Webhook tasks. A
+    // GitHub-only device must not show an unrelated "notifications stopped" alert.
+    if (this.wanted.size || !this.github.dailyQuotaExempt) this.deps.onQuotaExhausted?.(this.exhausted);
   }
 
   private clearTimers(): void {
