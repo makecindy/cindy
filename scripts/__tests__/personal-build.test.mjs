@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import { execFileSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import {mobileBuildNumber, mobileConfig, mobileFollowup, mobileNext, mobileReceipt} from '../personal-build/mobile.mjs';
 import { localPluginsIdentity } from '../personal-build/automatic.mjs';
 import { exportBuild, parseManifest, syncPlugins } from '../personal-build/managed.mjs';
@@ -17,6 +19,27 @@ import { auditPlugins, configFrom, copyPlugin, discover, packageHash, prepare, p
 const tmp = t => { const p = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-personal-test-')); t.after(() => fs.rmSync(p, { recursive: true, force: true })); return p; };
 const put = (file, value) => { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, typeof value === 'string' ? value : JSON.stringify(value)); };
 const repoId = { full_name: 'example/app' };
+
+test('personal iOS artifact check requires matching signed and provisioned APNs environments', () => {
+  const script = fileURLToPath(new URL('../personal-build/mobile-ios.py', import.meta.url));
+  const result = execFileSync(process.platform === 'win32' ? 'python' : 'python3', ['-c', `
+import json, runpy, sys
+verify = runpy.run_path(sys.argv[1])['verify_push_environment']
+results = []
+for value, expected in [('development', 'sandbox'), ('production', 'prod')]:
+    proof = verify({'aps-environment': value}, {'aps-environment': value})
+    assert proof['registrationEnvironment'] == expected
+    results.append(proof)
+for signed, provisioned in [(None, None), ('invalid', 'invalid'), ('development', 'production'), ('production', None)]:
+    try:
+        verify({'aps-environment': signed}, {'aps-environment': provisioned})
+    except RuntimeError:
+        continue
+    raise AssertionError('accepted invalid push signing')
+print(json.dumps(results))
+`, script], {encoding:'utf8'});
+  assert.deepEqual(JSON.parse(result).map(p => p.registrationEnvironment), ['sandbox', 'prod']);
+});
 
 // Delivery integration contract: earlier one-off scripts could reuse old signing profiles,
 // install into the other app/device, or reinstall after an interrupted tool call. Existing

@@ -189,7 +189,19 @@ The source report must describe a composed, disposable checkout; generated ignor
 regenerated there. Tracked native sources are refused before `prebuild --clean`.
 
 Build uses Release mode, the existing endpoint/region loader and CocoaPods setup, and Xcode's exact
-physical-device destination (not `generic/platform=iOS`). All three shared-container readers and
+physical-device destination (not `generic/platform=iOS`).
+
+APNs registration uses the installed native provisioning environment, never JavaScript `__DEV__`:
+a Release build signed for development registers with sandbox APNs. Artifact verification requires
+`aps-environment` to be `development` or `production` and to agree between the code signature and
+the embedded provisioning profile; `verification.json.pushEnvironment` records the signed and
+registration environments. Missing or mismatched values stop delivery. The existing ExpoApplication
+reader is reused without adding native dependencies; App Store re-signing without an embedded profile
+uses its native App Store release type. Unknown signing environments do not upload a token.
+This check does not prove server APNs credentials, notification permission or physical delivery;
+those require a separately authorized real-device push test.
+
+All three shared-container readers and
 entitlements use the configured App Group. Every extension is checked independently: a main-app deep
 signature check alone can miss a provisioning file replaced by incremental Xcode signing. Verification
 checks profile expiry, certificate, team, App ID, device authorization, App Groups, embedded JavaScript,

@@ -61,6 +61,17 @@ def allows(value, permitted):
     return value == permitted
 
 
+def verify_push_environment(entitlements, profile_entitlements):
+    environment = entitlements.get('aps-environment')
+    require(environment in ['development', 'production'], 'Missing or invalid APNs signing environment')
+    # ExpoApplication reads this profile at runtime, so it must agree with the
+    # actual code signature, including Release builds signed for development.
+    require(profile_entitlements.get('aps-environment') == environment,
+            'APNs signature and provisioning environment mismatch')
+    return {'signedEnvironment': environment,
+            'registrationEnvironment': 'sandbox' if environment == 'development' else 'prod'}
+
+
 def verify(request, app):
     identity = request['identity']
     main_id, team = identity['bundleId'], identity['teamId']
@@ -99,6 +110,7 @@ def verify(request, app):
         else:
             require('com.apple.developer.usernotifications.communication' not in ent, 'Communication capability belongs on the main app')
         if entry == app:
+            push_environment = verify_push_environment(ent, profile['Entitlements'])
             require(ent.get('com.apple.developer.usernotifications.communication') is True, 'Main app communication capability missing')
             require(info.get('CFBundleSupportedPlatforms') == ['iPhoneOS'], 'Not a physical iPhone build')
         results.append({'bundleId': bundle, 'build': info['CFBundleVersion'], 'deviceAuthorized': True,
@@ -114,7 +126,8 @@ def verify(request, app):
             digest.update(str(file.relative_to(app)).encode() + b'\0')
             digest.update(hashlib.sha256(file.read_bytes()).digest())
     return {'verifiedAt': datetime.datetime.now(datetime.timezone.utc).isoformat(), 'bundles': results,
-            'artifactHash': digest.hexdigest(), 'otaEnabled': False, 'fullInstalledByteMatchVerified': False}
+            'artifactHash': digest.hexdigest(), 'pushEnvironment': push_environment,
+            'otaEnabled': False, 'fullInstalledByteMatchVerified': False}
 
 
 if __name__ == '__main__':

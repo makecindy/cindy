@@ -16,6 +16,7 @@ import {
 } from '@/config/devServerEnvironment';
 import { getActiveSelfHostedRelay } from '@/device-link/selfHostedRelayRouting';
 import Notifications from './nativeNotifications';
+import { readIosPushEnvironment } from './nativePushEnvironment';
 import { buildPushTokenRegistrationBody, parseNotificationResponseDeepLink } from './pushRegistrationModel';
 
 /** APNs / FCM registration, scoped to the current account realm and lifecycle. */
@@ -367,10 +368,12 @@ async function syncPushRegistrationInternal(
     throw error;
   }
   if (lifecycleGeneration !== pushLifecycleGeneration) return 'skipped';
+  const apnsEnvironment = Platform.OS === 'ios' ? await readIosPushEnvironment() : undefined;
+  if (lifecycleGeneration !== pushLifecycleGeneration) return 'skipped';
   const body = buildPushTokenRegistrationBody({
     token: typeof deviceToken.data === 'string' ? deviceToken.data : '',
     region: AUTH_REGION,
-    isDevBuild: __DEV__,
+    apnsEnvironment,
     platform: Platform.OS === 'android' ? 'android' : 'ios',
   });
   if (!body) return 'skipped';
