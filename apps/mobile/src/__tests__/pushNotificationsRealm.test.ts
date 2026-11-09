@@ -75,6 +75,7 @@ import {
 } from '@/notifications/pushNotifications';
 import { setActiveSelfHostedRelay } from '@/device-link/selfHostedRelayRouting';
 import { clearNotificationBadge, isNotificationRouteVisible, createTaskBadgeSync } from '@/notifications/notificationBadge';
+import { createServerTaskBadgeSync, type TaskBadgeSnapshot } from '@/notifications/taskBadgeSync';
 
 const REGISTERED_KEY = 'cindy.push.registered';
 const PENDING_KEY = 'cindy.push.pendingUnregister';
@@ -95,6 +96,56 @@ function readStoredRealms(key: string): string[] {
 }
 
 describe('push notification realm routing', () => {
+  const snapshot = (version: string, badgeCount: number): TaskBadgeSnapshot => ({ schemaVersion: 1,
+    accountId: 'account', version, waitingCount: badgeCount, unreadCount: 0, runningCount: 3, badgeCount, complete: true });
+  // Unit: a delayed REST/local refresh must not overwrite a newer account-wide
+  // push. Existing native-writer tests do not exercise revision reconciliation.
+  it('keeps a newer push while a shared foreground fetch returns an older count', async () => {
+    let resolve!: (value: TaskBadgeSnapshot) => void;
+    const fetch = vi.fn(() => new Promise<TaskBadgeSnapshot>(done => { resolve = done; }));
+    const sync = createServerTaskBadgeSync(fetch, () => true, 'account');
+    const first = sync.refresh();
+    const second = sync.refresh();
+    expect(fetch).toHaveBeenCalledOnce();
+    await sync.accept(snapshot('9007199254740993', 8));
+    resolve(snapshot('9007199254740992', 3));
+    await Promise.all([first, second]);
+    await sync.accept(snapshot('9007199254740993', 3));
+    expect(mocks.setBadgeCountAsync.mock.calls).toEqual([[8]]);
+    await sync.accept(snapshot('9007199254740994', 0));
+    expect(mocks.setBadgeCountAsync.mock.calls).toEqual([[8], [0]]);
+    sync.dispose();
+  });
+
+  it('preserves the native badge on unavailable data and discards late account responses', async () => {
+    let resolve!: (value: TaskBadgeSnapshot) => void;
+    const fetch = vi.fn<() => Promise<TaskBadgeSnapshot | undefined>>()
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error('offline'))
+      .mockImplementationOnce(() => new Promise(done => { resolve = done; }));
+    const sync = createServerTaskBadgeSync(fetch, () => true, 'account');
+    await sync.refresh();
+    await expect(sync.refresh()).rejects.toThrow('offline');
+    const pending = sync.refresh();
+    sync.dispose();
+    resolve(snapshot('22', 7));
+    await pending;
+    expect(mocks.setBadgeCountAsync).not.toHaveBeenCalled();
+  });
+
+  it('rejects other accounts and incomplete totals, including older complete responses', async () => {
+    const sync = createServerTaskBadgeSync(async () => undefined, () => true, 'account');
+    await sync.accept(snapshot('8', 6));
+    await sync.accept({ ...snapshot('9', 0), complete: false });
+    await sync.accept(snapshot('8', 0));
+    await sync.accept({ ...snapshot('10', 0), accountId: 'other' });
+    await sync.accept({ ...snapshot('10', 0), badgeCount: -1 });
+    expect(mocks.setBadgeCountAsync.mock.calls).toEqual([[6]]);
+    await sync.accept(snapshot('10', 0));
+    expect(mocks.setBadgeCountAsync.mock.calls).toEqual([[6], [0]]);
+    sync.dispose();
+  });
+
   // Unit: fixed-1/notification counting could not represent real task counts.
   // Registration tests do not cover native ordering, unknown state or read clears.
   it('writes exact task counts, keeps unknown state and clears only a confirmed zero', async () => {
@@ -206,7 +257,8 @@ describe('push notification realm routing', () => {
     vi.stubGlobal('__DEV__', false);
     const apiFetch = vi.fn().mockResolvedValue({ registered: true });
     await expect(syncPushRegistration({ enabled: true, apiFetch })).resolves.toBe('registered');
-    expect(apiFetch.mock.calls[0][1].body).toMatchObject({ apnsEnv: 'sandbox' });
+    expect(apiFetch.mock.calls.find(([path]) => path === '/api/device-link/push-token')?.[1].body).toMatchObject({ apnsEnv: 'sandbox', taskBadgeVersion: 1 });
+    expect(apiFetch.mock.calls.find(([path]) => path === '/v1/push-token')?.[1].body).not.toHaveProperty('taskBadgeVersion');
   });
 
   it('never uploads a token with an unknown signing environment', async () => {

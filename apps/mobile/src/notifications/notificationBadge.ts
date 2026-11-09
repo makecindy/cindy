@@ -14,14 +14,15 @@ export function isNotificationRouteVisible(route: string, visible: VisibleNotifi
 // Native writes are ordered across account changes; a slow previous write cannot
 // land after the sign-out clear. Unknown counts never clear a known badge.
 let tail: Promise<unknown> = Promise.resolve();
-function update(operation: () => Promise<void>): Promise<void> {
+export function queueNotificationBadgeUpdate(operation: () => Promise<void>): Promise<void> {
   const next = tail.then(operation, operation);
   tail = next.catch(() => undefined);
   return next;
 }
 
 /** Coalesce store bursts and read the latest count only when its native turn starts. */
-export function createTaskBadgeSync(read: () => number | undefined, current: () => boolean) {
+export function createTaskBadgeSync(read: () => number | undefined, current: () => boolean,
+  write: (count: number) => Promise<unknown> = count => Notifications.setBadgeCountAsync(count)) {
   let disposed = false;
   let pending = false;
   let dirty = false;
@@ -35,11 +36,11 @@ export function createTaskBadgeSync(read: () => number | undefined, current: () 
     try {
       while (dirty && !disposed) {
         dirty = false;
-        await update(async () => {
+        await queueNotificationBadgeUpdate(async () => {
           if (disposed || !current()) return;
           const count = read();
           if (count === undefined || count === last || !Number.isSafeInteger(count) || count < 0) return;
-          await Notifications.setBadgeCountAsync(count);
+          await write(count);
           // Unsupported launchers/denied badge permission return false. Do not
           // hammer the same count; foreground/settings changes force a fresh try.
           if (!disposed) last = count;
@@ -51,7 +52,7 @@ export function createTaskBadgeSync(read: () => number | undefined, current: () 
 }
 
 export function clearNotificationBadge(): Promise<void> {
-  return update(async () => {
+  return queueNotificationBadgeUpdate(async () => {
     try { await Notifications.dismissAllNotificationsAsync(); }
     finally { await Notifications.setBadgeCountAsync(0); }
   });

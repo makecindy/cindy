@@ -86,8 +86,6 @@ interface DeviceShard {
   deviceId: string;
   deviceName: string;
   sessions: RemoteSession[];
-  /** The Home list (including teammates) and a complete activity snapshot arrived together. */
-  activitySnapshotReady?: boolean;
 }
 
 export interface RemoteNewMakerWorktreePreference {
@@ -3287,14 +3285,6 @@ function sweepDevicesOffline(deviceIds: readonly string[]): boolean {
   let changed = false;
   const idSet = new Set(deviceIds);
   if (idSet.size === 0) return false;
-  for (const deviceId of idSet) {
-    const shard = shards.get(deviceId);
-    if (shard?.activitySnapshotReady) {
-      shard.activitySnapshotReady = false;
-      bumpHomeStatusVersion();
-      changed = true;
-    }
-  }
   // A first text delta can still be waiting in the 32ms batch before any session
   // metadata/index exists. Flush batches from this transport first so they create a
   // device-owned host anchor, then freeze that identity before reconnect metadata can
@@ -3548,7 +3538,6 @@ export const remoteSessionStore = {
   },
 
   setDeviceSessions(deviceId: string, deviceName: string, rawSessions: readonly RemoteSession[]): void {
-    const firstSnapshot = !sessionListRefreshSeen.has(deviceId);
     if (!sessionListRefreshSeen.has(deviceId) || sessionListRefreshArmed.has(deviceId)) {
       sessionListRefreshSeen.add(deviceId);
       sessionListRefreshArmed.delete(deviceId);
@@ -3556,13 +3545,6 @@ export const remoteSessionStore = {
     }
     let nextSessions = rawSessions.map((s) => stamp(s, deviceId, deviceName));
     const existing = shards.get(deviceId);
-    // A list alone (including publishInitial) cannot assert that absent activity
-    // means idle. Even an identical list needs a matching activity refresh.
-    const invalidatedActivity = existing?.activitySnapshotReady === true;
-    if (invalidatedActivity) {
-      existing.activitySnapshotReady = false;
-      bumpHomeStatusVersion();
-    }
     if (existing) {
       const localById = new Map(existing.sessions.map((session) => [session.id, session]));
       nextSessions = nextSessions.map((session) => preserveSessionRuntimeFields(
@@ -3621,45 +3603,15 @@ export const remoteSessionStore = {
           || (isDetailOnlySession(row) && (row.status === 'active' || row.status === 'archived'))));
       if (pendingStatusRows.length > 0) nextSessions = [...pendingStatusRows, ...nextSessions];
     }
-    if (firstSnapshot) bumpHomeStatusVersion();
     if (
       existing
       && existing.deviceName === deviceName
       && remoteSessionListsEqual(existing.sessions, nextSessions)
     ) {
-      if (firstSnapshot || invalidatedActivity) emit();
       return;
     }
     shards.set(deviceId, { deviceId, deviceName, sessions: nextSessions });
     recomputeSessions();
-  },
-
-  /** Called only after Home's existing scope/epoch checks and teammate enrichment. */
-  setDeviceHomeSnapshot(
-    deviceId: string,
-    deviceName: string,
-    sessions: readonly RemoteSession[],
-    activeSessions: unknown,
-    activityEpochAtFetchStart: number,
-  ): void {
-    this.batch(() => {
-      this.setDeviceSessions(deviceId, deviceName, sessions);
-      if (activeSessions !== null) {
-        this.setActiveSessionSnapshots(deviceId, activeSessions, activityEpochAtFetchStart);
-      }
-      // Old/unsupported hosts cannot certify absent activities: preserve their
-      // system badge instead of treating an incomplete response as zero.
-      if (isRecord(activeSessions) && activeSessions.format === 'active-sessions-v2'
-        && Array.isArray(activeSessions.sessions)) {
-        shards.get(deviceId)!.activitySnapshotReady = true;
-        bumpHomeStatusVersion();
-        emit();
-      }
-    });
-  },
-
-  isDeviceHomeSnapshotReady(deviceId: string): boolean {
-    return shards.get(deviceId)?.activitySnapshotReady === true;
   },
 
   // 单条详情/发件箱恢复不代表整份首页列表已经加载。首轮列表尚未到达时，缓存可以
@@ -5705,11 +5657,6 @@ export const remoteSessionStore = {
 
   getHomeSessions(): RemoteSession[] {
     return homeSessions;
-  },
-
-  /** A cold/cleared store has no snapshots; distinguish it from a received empty list. */
-  getSessionSnapshotDeviceIds(): string[] {
-    return [...shards.keys()].filter(id => sessionListRefreshSeen.has(id));
   },
 
   getMessages(sessionId: string): RemoteMessage[] {

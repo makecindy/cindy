@@ -210,7 +210,14 @@ function pushTargets(realm: ClientEndpointRegion, method: 'PUT' | 'DELETE' = 'DE
 }
 async function mutatePushTokens(apiFetch: AuthedApiFetch, realm: ClientEndpointRegion, method: 'PUT' | 'DELETE', body?: unknown) {
   const results = await Promise.allSettled(pushTargets(realm, method).map(async target => {
-    try { await apiFetch(target.path, { baseUrl: target.baseUrl, method, headers: { 'Accept-Language': i18n.language || 'en' }, ...(body ? { body } : {}) }); }
+    try {
+      let registration = body;
+      if (method === 'PUT' && target.path === PUSH_TOKEN_PATH && body) {
+        const supported = Platform.OS === 'ios' || (await import('./nativeTaskBadge')).supportsTaskBadgePush();
+        registration = { ...body, ...(supported ? { taskBadgeVersion: 1 } : {}) };
+      }
+      await apiFetch(target.path, { baseUrl: target.baseUrl, method, headers: { 'Accept-Language': i18n.language || 'en' }, ...(registration ? { body: registration } : {}) });
+    }
     catch (error) {
       // An older chat server can roll forward independently of existing task pushes.
       if (target.optional && [404, 405].includes((error as { status?: number }).status ?? 0)) return;
