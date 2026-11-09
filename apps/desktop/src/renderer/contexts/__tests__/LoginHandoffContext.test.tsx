@@ -361,7 +361,7 @@ describe('LoginHandoff 时序(fake-timer)', () => {
     expect(screen.getByTestId('login-brand-canvas').style.transition).toBe('');
   });
 
-  it('已登录分支没有登录面板,始终保持 Splash 构图且不使用 footer 预留', () => {
+  it('已登录启动保持 Splash 构图，进入添加账号时为已挂载面板恢复品牌层', () => {
     render(
       <LoginHandoffProvider target="app">
         <LoginBrandStage />
@@ -384,6 +384,14 @@ describe('LoginHandoff 时序(fake-timer)', () => {
     act(() => vi.advanceTimersByTime(LOGIN_HANDOFF_TIMINGS.brandExitMs));
     expect(probe.current!.phase).toBe('done');
     expect(probe.current!.brandLayout).toBe('splash');
+    expect(screen.queryByTestId('login-brand-canvas')).toBeNull();
+    // /add-account retains the authenticated app target but mounts a LoginPage.
+    act(() => probe.current!.reportLoginPanelMounted());
+    expect(screen.getByTestId('login-brand-canvas')).toBeTruthy();
+    expect(probe.current!.brandLayout).toBe('login');
+    expect(probe.current!.sloganRevealed).toBe(true);
+    expect(probe.current!.phase).toBe('done');
+    act(() => probe.current!.reportLoginPanelUnmounted());
     expect(screen.queryByTestId('login-brand-canvas')).toBeNull();
   });
 

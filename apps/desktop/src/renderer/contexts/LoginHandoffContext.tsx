@@ -325,7 +325,7 @@ export function LoginHandoffProvider({
       // 由 LoginPage 上报面板挂载重挂(phase 恒 done = 终态,不重播)。
       // 判定刻意不绑 branch:绑死会让 authenticated 冷启动后登出的 /login 永久
       // 丢失品牌层(登录页只剩悬空白面板,2026-07-20 对抗 review P1)。
-      brandStageMounted: target === 'splash' || phase !== 'done' || (target === 'login' && panelMounted),
+      brandStageMounted: target === 'splash' || phase !== 'done' || panelMounted,
       brandExiting: target !== 'splash' && phase === 'brand-exit',
       panelRevealed: phase === 'panel' || phase === 'slogan' || phase === 'done',
       sloganRevealed: phase === 'slogan' || phase === 'done',
