@@ -126,6 +126,23 @@ function readMakerMemoryEnabled(): boolean {
   return readMemorySettings().maker;
 }
 
+// 用户是否在 ~/.claude/settings.json 的 env 里显式配过 ENABLE_TOOL_SEARCH(issue #7524)。
+// 进程 env 优先级高于该文件,host 若不识趣就会把用户的显式选择盖掉;显式配置时
+// behaviorFlags 不注入该键,让 settings 说话。读失败按「未配置」处理 —— host 默认值
+// 与 CLI 默认值一致,不会让用户掉进高 token 路径。
+export function readClaudeToolSearchOverridden(): boolean {
+  try {
+    const settingsPath = path.join(app.getPath('home'), '.claude', 'settings.json');
+    if (!fs.existsSync(settingsPath)) return false;
+    const parsed = JSON.parse(fs.readFileSync(settingsPath, 'utf-8')) as {
+      env?: Record<string, unknown>;
+    };
+    return typeof parsed.env?.ENABLE_TOOL_SEARCH === 'string';
+  } catch {
+    return false;
+  }
+}
+
 // behaviorFlags 拆到 claude-behavior-flags.ts(零依赖,可单测)。attribution 归因块
 // 按 spawn 形态决定 —— oauth-spawn 禁用 '0' 会让订阅直连的 Auto 分类器子请求被上游
 // 429,auto 模式所有写操作 fail-closed(issue #758),详见该模块头注释。
@@ -180,6 +197,8 @@ export function buildDesktopClaudeRuntimeConfig(endpointFn: () => string): Agent
         // 独立 Claude 账号已停用,只有本机 Claude Code 登录算「连了订阅」。
         oauthConnected: () => getActiveCatalog().providers.find(p => p.id === ctx.sessionProviderId)?.auth.native === 'claude'
           ? false : hasClaudeNativeLogin(),
+        // 用户在 ~/.claude/settings.json 显式配过 Tool Search 时让位(issue #7524)。
+        toolSearchOverridden: readClaudeToolSearchOverridden(),
       }),
       // 工具链限核 env(agent 资源占用治理):只对本机 spawn 注入 —— 值按本机
       // 核数算,远端机器的资源不归本设置管。设置关闭时为空对象,零影响。

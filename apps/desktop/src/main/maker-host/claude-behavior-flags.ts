@@ -22,16 +22,23 @@
  * `oauthConnected` 回调惰性注入 —— 只在非 gateway-key 分支才求值。本模块保持零依赖,
  * 便于单测。
  *
- * ## ENABLE_TOOL_SEARCH 不再由 host 注入(issue #7524)
+ * ## ENABLE_TOOL_SEARCH 尊重用户 settings override(issue #7524)
  *
- * 这个键曾经在这里按来源白名单求值后写进子进程 env(`claudeToolSearchMode`),但进程 env
- * 在 cc 的设置体系里优先级高于用户级 ~/.claude/settings.json,于是用户在 settings 里
- * 显式打开的 Tool Search 被静默盖掉 —— 约 280 个 MCP 工具的完整 schema 每轮全量进
- * prompt,单会话固定开销约 86k tokens,且用户无从改起。
+ * 这个键按来源白名单求值(`claudeToolSearchMode`)。最初的做法是 host 无条件把它写进
+ * 子进程 env,而进程 env 在 cc 的设置体系里优先级高于用户级 ~/.claude/settings.json,
+ * 于是用户在 settings 里显式打开 Tool Search 会被静默盖掉 —— 约 280 个 MCP 工具的完整
+ * schema 每轮全量进 prompt,单会话固定开销约 86k tokens,且用户无从改起。
  *
- * 现在 host 完全不注入这个键(并把它加入 SENSITIVE_ANTHROPIC_ENV_KEYS,避免继承残留
- * 从 cleanProcessEnv 漏进来),由用户的 settings / CLI 默认值决定。`claudeToolSearchMode`
- * 保留给 codex-credential-switch 判断「换来源是否需要重建会话」使用。
+ * 现在改成「默认值 + 用户 override 分离」(docs/dev-rules/configuration-and-overrides.md):
+ * 用户没配过时 host 仍注入按来源算出的默认值 —— 直接不注入会让未配置的网关用户掉进
+ * 每轮全量工具定义的高 token 路径(remote-ssh/claude-env.ts 有同样的默认值);用户显式
+ * 配过时由调用方经 `toolSearchOverridden` 代入,host 让位。
+ *
+ * 仅靠 behaviorFlags 让位还不够:local spawn 的 env 起自 cleanProcessEnv(),shell 里
+ * export 的残留会漏进来继续盖掉 settings。所以该键同时加入 maker-core 的
+ * SENSITIVE_ANTHROPIC_ENV_KEYS(boot strip + cleanProcessEnv 双保险),子进程 env 里
+ * 不会残留继承值。`claudeToolSearchMode` 保留给 codex-credential-switch 判断
+ * 「换来源是否需要重建会话」使用。
  */
 
 const STATIC_CLAUDE_BEHAVIOR_FLAGS: Readonly<Record<string, string>> = {
@@ -60,6 +67,12 @@ export interface ClaudeSpawnFlagsContext {
   nativeAuth?: string;
   /** 是否连了 Claude.ai 订阅。惰性回调:gateway-key 分支不调用、不产生钥匙串读。 */
   oauthConnected: () => boolean;
+  /**
+   * 用户是否已在 ~/.claude/settings.json 的 env 里显式配过 ENABLE_TOOL_SEARCH。
+   * 显式配置时 host 不再注入,让用户的 settings 说话;未配置时保留 host 默认值
+   * (见 docs/dev-rules/configuration-and-overrides.md「默认值与用户 override 分离」)。
+   */
+  toolSearchOverridden?: boolean;
 }
 
 export function claudeBehaviorFlagsForSpawn(ctx: ClaudeSpawnFlagsContext): Record<string, string> {
@@ -74,6 +87,17 @@ export function claudeBehaviorFlagsForSpawn(ctx: ClaudeSpawnFlagsContext): Recor
   // '0'/'false'/'no'/'off' 视为禁用,'1' = 保留归因,与未设置同义。
   return {
     ...STATIC_CLAUDE_BEHAVIOR_FLAGS,
+    ...(ctx.toolSearchOverridden
+      ? {}
+      : {
+          // ToolSearch 默认值:仅对已知支持 deferred tools 的来源开启(issue #7524)。
+          // 用户在 settings.json 里显式配过时由 toolSearchOverridden 代入,host 让位。
+          ENABLE_TOOL_SEARCH: claudeToolSearchMode(
+            ctx.providerId,
+            ctx.credentialMode,
+            ctx.nativeAuth,
+          ),
+        }),
     CLAUDE_CODE_ATTRIBUTION_HEADER: keepAttribution ? '1' : '0',
   };
 }

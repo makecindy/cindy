@@ -12,9 +12,17 @@ vi.mock('electron', () => ({
     isPackaged: false,
     getAppPath: () => '/tmp/xdt-maker-test-app',
     getPath: (name: string) => {
-      if (name !== 'userData') throw new Error(`unexpected path: ${name}`);
-      return '/tmp/xdt-maker-test-user-data';
+      if (name === 'userData') return '/tmp/xdt-maker-test-user-data';
+      if (name === 'home') return '/tmp/xdt-maker-test-home';
+      throw new Error(`unexpected path: ${name}`);
     },
+  },
+}));
+
+const { fsMocks } = vi.hoisted(() => ({
+  fsMocks: {
+    existsSync: vi.fn(() => true),
+    readFileSync: vi.fn(() => '{}'),
   },
 }));
 
@@ -22,11 +30,13 @@ vi.mock('node:fs', async () => {
   const actual = await vi.importActual<typeof import('node:fs')>('node:fs');
   return {
     ...actual,
-    existsSync: vi.fn(() => true),
+    existsSync: fsMocks.existsSync,
+    readFileSync: fsMocks.readFileSync,
     chmodSync: vi.fn(),
     default: {
       ...actual,
-      existsSync: vi.fn(() => true),
+      existsSync: fsMocks.existsSync,
+      readFileSync: fsMocks.readFileSync,
       chmodSync: vi.fn(),
     },
   };
@@ -37,6 +47,43 @@ vi.mock('node:fs', async () => {
 vi.mock('../../model-access/effectiveEndpoint.js', async () => {
   const { TEST_XD_GATEWAY_BASE_URL } = await import('../../../test/vitest/clientEndpointsFixture');
   return { effectiveXdGatewayBaseUrl: () => TEST_XD_GATEWAY_BASE_URL };
+});
+
+describe('readClaudeToolSearchOverridden', () => {
+  beforeEach(() => {
+    fsMocks.existsSync.mockReset().mockReturnValue(true);
+    fsMocks.readFileSync.mockReset().mockReturnValue('{}');
+  });
+
+  it('detects an explicit ENABLE_TOOL_SEARCH in the user settings env', async () => {
+    fsMocks.readFileSync.mockReturnValue(
+      JSON.stringify({ env: { ENABLE_TOOL_SEARCH: 'true' } }),
+    );
+    const { readClaudeToolSearchOverridden } = await import('../runtime-configs.js');
+
+    expect(readClaudeToolSearchOverridden()).toBe(true);
+  });
+
+  it('reports no override when settings.json has no env entry', async () => {
+    fsMocks.readFileSync.mockReturnValue(JSON.stringify({ env: { OTHER: '1' } }));
+    const { readClaudeToolSearchOverridden } = await import('../runtime-configs.js');
+
+    expect(readClaudeToolSearchOverridden()).toBe(false);
+  });
+
+  it('reports no override when settings.json is absent or unreadable', async () => {
+    fsMocks.existsSync.mockReturnValue(false);
+    const { readClaudeToolSearchOverridden } = await import('../runtime-configs.js');
+    expect(readClaudeToolSearchOverridden()).toBe(false);
+
+    fsMocks.existsSync.mockReturnValue(true);
+    fsMocks.readFileSync.mockImplementation(() => {
+      throw new Error('EACCES');
+    });
+    // vi.resetModules() above means the module registry is fresh per import.
+    const fresh = await import('../runtime-configs.js');
+    expect(fresh.readClaudeToolSearchOverridden()).toBe(false);
+  });
 });
 
 describe('runtime-configs', () => {
@@ -162,13 +209,13 @@ it('never treats a retired independent Claude account as a connected subscriptio
     // 每次调用只求值一次:下面的 in 断言复用同一个对象,不多打一次 spawn。
     const providerOauthFlags = flags({ credentialMode: 'provider-oauth', sessionProviderId: 'claude-work' } as never);
     expect(providerOauthFlags).toMatchObject({ CLAUDE_CODE_ATTRIBUTION_HEADER: '0' });
-    // ENABLE_TOOL_SEARCH 不再注入:用户 settings.json 决定(#7524)。
-    expect('ENABLE_TOOL_SEARCH' in providerOauthFlags).toBe(false);
+    // 未配置的用户仍拿到 host 默认值(issue #7524):anthropic 来源支持 deferred tools。
+    expect(providerOauthFlags.ENABLE_TOOL_SEARCH).toBe('auto');
     // 独立账号不借用本机 Claude Code 登录的连接态。
     expect(readBuiltin).not.toHaveBeenCalled();
     const bearerFlags = flags({ credentialMode: 'oauth-bearer', sessionProviderId: 'anthropic' } as never);
     expect(bearerFlags).toMatchObject({ CLAUDE_CODE_ATTRIBUTION_HEADER: '1' });
-    expect('ENABLE_TOOL_SEARCH' in bearerFlags).toBe(false);
+    expect(bearerFlags.ENABLE_TOOL_SEARCH).toBe('auto');
     expect(readBuiltin).toHaveBeenCalledTimes(1);
   } finally {
     vi.doUnmock('../active-catalog.js');

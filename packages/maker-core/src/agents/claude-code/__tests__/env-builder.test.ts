@@ -42,6 +42,7 @@ describe('buildClaudeEnv', () => {
   const originalCompactWindow = process.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW;
   const originalCompactPctOverride = process.env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE;
   const originalExploreInheritCap = process.env[EXPLORE_INHERIT_CAP_DISABLE_ENV];
+  const originalToolSearch = process.env.ENABLE_TOOL_SEARCH;
 
   afterEach(() => {
     if (originalDisableCron === undefined) {
@@ -59,6 +60,7 @@ describe('buildClaudeEnv', () => {
     restore('TERM', originalTerm);
     restore('PSStyle__OutputRendering', originalPsOutputRendering);
     restore('CLAUDE_CODE_SUBAGENT_MODEL', originalSubagentModel);
+    restore('ENABLE_TOOL_SEARCH', originalToolSearch);
     restore('CLAUDE_CODE_MAX_CONTEXT_TOKENS', originalMaxContextTokens);
     restore('CLAUDE_CODE_AUTO_COMPACT_WINDOW', originalCompactWindow);
     restore('CLAUDE_AUTOCOMPACT_PCT_OVERRIDE', originalCompactPctOverride);

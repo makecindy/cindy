@@ -27,6 +27,10 @@ const SENSITIVE_ANTHROPIC_ENV_KEYS = [
   'ANTHROPIC_FOUNDRY_RESOURCE',
   'CLAUDE_CONFIG_DIR',
   'CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST',
+  // Keep in sync with maker-core's env-builder (issue #7524): the host stopped
+  // sending a controller value, so an inherited daemon value would otherwise
+  // reach Claude and shadow the remote user's settings.json.
+  'ENABLE_TOOL_SEARCH',
 ] as const;
 
 /** Clean daemon boot state as well as each explicit SDK environment merge. */

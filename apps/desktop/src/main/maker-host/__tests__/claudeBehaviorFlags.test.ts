@@ -4,7 +4,7 @@ import { claudeBehaviorFlagsForSpawn, claudeToolSearchMode } from '../claude-beh
 import { shouldCloseSessionForCredentialSwitch } from '../codex-credential-switch.js';
 
 describe('claudeBehaviorFlagsForSpawn', () => {
-  it('keeps Tool Search for retired independent Claude accounts; provider-oauth never keeps attribution', () => {
+  it('provider-oauth never keeps attribution', () => {
     const flags = claudeBehaviorFlagsForSpawn({ providerId: 'anthropic-work',
       nativeAuth: 'claude', credentialMode: 'provider-oauth', oauthConnected: () => true });
     expect(flags.CLAUDE_CODE_ATTRIBUTION_HEADER).toBe('0');
@@ -52,6 +52,38 @@ describe('claudeBehaviorFlagsForSpawn', () => {
     }
   });
 
+  // 默认值仍由 host 注入(issue #7524): 直接不注入会让未配置的网关用户掉进每轮全量
+  // 工具定义的高 token 路径(remote-ssh/claude-env.ts 有同样的默认值)。
+  it('keeps the source-aware Tool Search default when the user has no override', () => {
+    const cases = [
+      { credentialMode: 'gateway-key', providerId: 'xd', expected: 'auto' },
+      { credentialMode: 'oauth-bearer', providerId: 'anthropic', expected: 'auto' },
+      { credentialMode: 'provider-oauth', providerId: 'openrouter-custom', expected: 'false' },
+    ] as const;
+    for (const { credentialMode, providerId, expected } of cases) {
+      const flags = claudeBehaviorFlagsForSpawn({
+        credentialMode,
+        providerId,
+        oauthConnected: () => false,
+      });
+      expect(flags.ENABLE_TOOL_SEARCH).toBe(expected);
+    }
+  });
+
+  // 用户在 ~/.claude/settings.json 显式配过时 host 让位 —— 进程 env 优先级高于该文件,
+  // 注入即静默盖掉用户选择(约 86k tokens/会话的固定开销,报告人无从改起)。
+  it('yields Tool Search to an explicit user settings override', () => {
+    for (const credentialMode of ['gateway-key', 'oauth-bearer', 'provider-oauth'] as const) {
+      const flags = claudeBehaviorFlagsForSpawn({
+        credentialMode,
+        providerId: 'xd',
+        oauthConnected: () => false,
+        toolSearchOverridden: true,
+      });
+      expect('ENABLE_TOOL_SEARCH' in flags).toBe(false);
+    }
+  });
+
   it('disables attribution when no Claude.ai subscription is connected', () => {
     // 未连订阅 = 不存在订阅直连路径,保留网关 body 缓存优化。
     const flags = claudeBehaviorFlagsForSpawn({ oauthConnected: () => false });
@@ -75,19 +107,6 @@ describe('claudeBehaviorFlagsForSpawn', () => {
     expect(claudeToolSearchMode('openrouter-custom', 'provider-oauth')).toBe('false');
     expect(claudeToolSearchMode('xai', 'provider-oauth')).toBe('false');
     expect(claudeToolSearchMode(null, 'provider-oauth')).toBe('false');
-  });
-
-  it("never injects ENABLE_TOOL_SEARCH - the user settings.json decides (issue #7524)", () => {
-    // 进程 env 在 cc 设置体系里优先级高于用户级 settings.json,注入即静默盖掉用户配置。
-    // 键必须**缺席**(不是 'auto' 也不是 'false'),否则用户的 env 块仍然说不成话。
-    for (const ctx of [
-      { credentialMode: 'provider-oauth', providerId: 'openrouter-custom', oauthConnected: () => false },
-      { credentialMode: 'oauth-bearer', providerId: 'anthropic', oauthConnected: () => true },
-      { credentialMode: 'gateway-key', providerId: 'xd', oauthConnected: () => true },
-      { credentialMode: undefined, providerId: undefined, oauthConnected: () => false },
-    ]) {
-      expect('ENABLE_TOOL_SEARCH' in claudeBehaviorFlagsForSpawn(ctx)).toBe(false);
-    }
   });
 
   it('recreates local Claude sessions when Tool Search support changes', () => {

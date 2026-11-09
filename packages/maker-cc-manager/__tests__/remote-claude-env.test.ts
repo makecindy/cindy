@@ -79,4 +79,14 @@ describe('remote Claude environment', () => {
     ]);
     expect(daemonEnv).toEqual({ HOME: '/home/remote', PATH: '/usr/bin' });
   });
+
+  it('strips an inherited ENABLE_TOOL_SEARCH so remote settings decide (issue #7524)', () => {
+    // The host no longer sends a controller value, so without this strip the
+    // daemon's own shell value would reach Claude and shadow the remote user's
+    // ~/.claude/settings.json.
+    const daemonEnv = { HOME: '/home/remote', ENABLE_TOOL_SEARCH: 'false' };
+
+    expect(stripSensitiveAnthropicEnv(daemonEnv)).toEqual(['ENABLE_TOOL_SEARCH']);
+    expect(daemonEnv).toEqual({ HOME: '/home/remote' });
+  });
 });
