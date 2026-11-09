@@ -7401,7 +7401,15 @@
       },
       "market": {
         "publisherKind": {
-          "official": "官方"
+          "official": "官方",
+          "community": "社群"
+        },
+        "publisherDescription": {
+          "official": "由 Cindy 官方發布及維護",
+          "community": "由社群開發者發布及維護",
+          "team": "由目前組織分享給有權限的成員",
+          "custom": "來自你新增的 Git 或本機資料夾市集",
+          "local": "從本機檔案安裝，或在本機開發"
         },
         "scopeAria": "篩選插件來源",
         "scope": {

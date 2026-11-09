@@ -7401,7 +7401,15 @@
       },
       "market": {
         "publisherKind": {
-          "official": "官設"
+          "official": "官設",
+          "community": "社群"
+        },
+        "publisherDescription": {
+          "official": "Cindy 官方所製，發布維護",
+          "community": "社群開發者所製，發布維護",
+          "team": "本組織共享於獲准成員",
+          "custom": "取自所添 Git 或本機目錄市集",
+          "local": "由本機檔案安裝，或於本機開發"
         },
         "scopeAria": "篩法器之來源",
         "scope": {

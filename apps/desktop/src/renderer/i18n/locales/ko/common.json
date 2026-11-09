@@ -7401,7 +7401,15 @@
       },
       "market": {
         "publisherKind": {
-          "official": "공식"
+          "official": "공식",
+          "community": "커뮤니티"
+        },
+        "publisherDescription": {
+          "official": "Cindy 공식 배포 및 유지 관리",
+          "community": "커뮤니티 개발자가 배포 및 유지 관리",
+          "team": "조직에서 권한이 있는 구성원에게 공유",
+          "custom": "추가한 Git 또는 로컬 폴더 마켓에서 제공",
+          "local": "로컬 파일에서 설치하거나 이 컴퓨터에서 개발"
         },
         "scopeAria": "플러그인 출처 필터",
         "scope": {

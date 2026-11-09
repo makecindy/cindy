@@ -140,6 +140,7 @@ import { GhostPagePanelHost } from './GhostPagePanelHost';
 import { GhostPluginActions } from './GhostPluginActions';
 import { GhostPluginDetailView } from './GhostPluginDetailView';
 import { PluginSharedUsage } from './PluginSharedUsage';
+import { PluginPublisherBadge } from './PluginPublisherBadge';
 import {
   currentMainViewVisibilityOwner,
   readMainViewSidebarVisible,
@@ -156,6 +157,7 @@ import {
   marketItemForInstalledGhost,
   marketItemMatchesInstalledGhost,
   marketReviewTargetsInstalledGhost,
+  pluginPresentationAuthor,
   pluginPresentationOrigin,
   pluginUpdateForInstalledVersion,
   type PluginPresentationOrigin,
@@ -176,7 +178,6 @@ const PLUGIN_CATALOG_TOOLBAR_CLASS =
 type PluginPresentationFilter = 'all' | PluginPresentationOrigin;
 
 type PresentedGhostPluginItem = GhostPluginListItem & {
-  origin: PluginPresentationOrigin;
   marketItem: PluginMarketItem | null;
   author: string | null;
   /** 市场存在更新时的市场记录;列表卡片据此显示更新徽标与直达入口。 */
@@ -868,9 +869,10 @@ function LocalGhostPluginPage({
         .map((ghost) => {
           const marketItem = marketItemForInstalledGhost(marketItems, ghost);
           const presentation = marketPresentationForInstalledGhost(ghost, marketItem);
+          const listItem = toGhostPluginListItem(ghost, presentation);
           return {
-            ...toGhostPluginListItem(ghost, presentation),
-            origin: pluginPresentationOrigin(marketItem),
+            ...listItem,
+            origin: marketItem ? pluginPresentationOrigin(marketItem) : listItem.origin,
             marketItem,
             // 服务端的空署名代表匿名；公域来源缺少可信投影时也不回退包内作者。
             author: presentation
@@ -2159,7 +2161,7 @@ function LocalGhostPluginPage({
                       <GhostPluginCard
                         key={item.id}
                         item={item}
-                        sourceLabel={t(`settings.ghosts.page.origin.${item.origin}`)}
+                        sourceLabel={item.origin ? t(`settings.ghosts.page.origin.${item.origin}`) : undefined}
                         marketItem={item.marketItem}
                         author={item.author}
                         updateVersion={item.marketUpdate?.version}
@@ -2303,6 +2305,8 @@ export function MarketPluginCard({
   const { t } = useTranslation();
   const metadataId = useId();
   const marketIcon = usePluginMarketIcon(item, { deferUntilVisible: true });
+  const origin = pluginPresentationOrigin(item);
+  const author = pluginPresentationAuthor(item);
   const unavailable = busy;
   const replacementDescriptionId = useId();
   const replacementDescription =
@@ -2315,8 +2319,15 @@ export function MarketPluginCard({
         iconId={item.ghostId} iconName={item.name} onIconLoad={marketIcon.onIconLoad}
         onIconLoadError={() => marketIcon.onIconLoadError(onIconLoadError)} />
       <div className="min-w-0 flex-1">
-        <p className="truncate text-14 font-medium text-[var(--text-primary)]" title={item.name}>{item.name}</p>
-        <p className="truncate text-11 text-[var(--text-tertiary)]">{t(`settings.ghosts.page.origin.${pluginPresentationOrigin(item)}`)}{item.author ? ` · ${item.author}` : ''}</p>
+        <div className="flex min-w-0 items-center gap-1.5">
+          <p className="truncate text-14 font-medium text-[var(--text-primary)]" title={item.name}>{item.name}</p>
+          <PluginPublisherBadge origin={origin} kind={item.publisherKind} />
+        </div>
+        <div className="mt-1 flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1 text-11 text-[var(--text-tertiary)]">
+          <span>{t(`settings.ghosts.page.origin.${origin}`)}</span>
+          {author ? <><span aria-hidden="true">·</span><span className="min-w-0 max-w-[120px] truncate">{author}</span></> : null}
+          <PluginSharedUsage detail={item} variant="list" />
+        </div>
       </div>
       {onInstall ? <Button className="pointer-events-auto relative z-[1] shrink-0" size="sm" compact
         loading={pending} disabled={unavailable} onClick={onInstall}
@@ -2354,17 +2365,18 @@ export function MarketPluginCard({
           onIconLoadError={() => marketIcon.onIconLoadError(onIconLoadError)}
         />
         <span className="flex min-w-0 flex-1 flex-col self-stretch pt-0.5">
-          <span className="truncate text-15 font-medium text-[var(--text-primary)]">
-            {item.name}
+          <span className="flex min-w-0 items-center gap-1.5">
+            <span className="truncate text-15 font-medium text-[var(--text-primary)]" title={item.name}>{item.name}</span>
+            <PluginPublisherBadge origin={origin} kind={item.publisherKind} />
           </span>
           <span id={metadataId} className="mt-1 flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1 text-11 text-[var(--text-tertiary)]">
             <span className="shrink-0">
               {t(`settings.ghosts.page.origin.${pluginPresentationOrigin(item)}`)}
             </span>
-            {item.author ? (
+            {author ? (
               <>
                 <span aria-hidden="true">·</span>
-                <span className="min-w-0 max-w-[120px] truncate">{item.author}</span>
+                <span className="min-w-0 max-w-[120px] truncate">{author}</span>
               </>
             ) : null}
             <PluginSharedUsage detail={item} variant="list" />
@@ -2479,6 +2491,10 @@ export function GhostPluginCard({
   const metadataId = useId();
   const installationLabel = item.installationLabelKey
     ? t(`settings.ghosts.detail.${item.installationLabelKey}`, { name: item.installationNamespace }) : sourceLabel;
+  const origin = marketItem ? pluginPresentationOrigin(marketItem) : item.origin;
+  const publisherKind = marketItem?.sourceType === 'server' && marketItem.scope === 'public'
+    ? marketItem.publisherKind : item.publisherKind;
+  const visibleAuthor = origin === 'public' && publisherKind !== 'official' ? null : author;
   const enabled = effectiveEnabled ?? item.enabled;
   // 远程列表不投影本机同名插件的未读状态。
   const localUnread = useGhostUnread(item.id);
@@ -2559,9 +2575,10 @@ export function GhostPluginCard({
       />
       <span className="flex min-w-0 flex-1 flex-col self-stretch pt-0.5">
         <span className="flex min-w-0 items-center gap-1.5">
-          <span className="truncate text-15 font-medium text-[var(--text-primary)]">
+          <span className="truncate text-15 font-medium text-[var(--text-primary)]" title={item.name}>
             {item.name}
           </span>
+          <PluginPublisherBadge origin={origin} kind={publisherKind} />
           {item.retirement?.unread ? (
             <AttentionDot tone="awaiting" size={6} className="mt-px" />
           ) : unread ? (
@@ -2573,10 +2590,10 @@ export function GhostPluginCard({
           className="mt-1 flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1 text-11 text-[var(--text-tertiary)]"
         >
           {installationLabel ? <span className="min-w-0 break-words">{installationLabel}</span> : null}
-          {author ? (
+          {visibleAuthor ? (
             <>
               {installationLabel ? <span aria-hidden="true">·</span> : null}
-              <span className="min-w-0 max-w-[120px] truncate">{author}</span>
+              <span className="min-w-0 max-w-[120px] truncate">{visibleAuthor}</span>
             </>
           ) : null}
           {marketItem ? <PluginSharedUsage detail={marketItem} variant="list" /> : null}

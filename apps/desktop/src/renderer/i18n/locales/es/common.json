@@ -7509,7 +7509,15 @@
       },
       "market": {
         "publisherKind": {
-          "official": "Oficial"
+          "official": "Oficial",
+          "community": "Comunidad"
+        },
+        "publisherDescription": {
+          "official": "Publicado y mantenido por Cindy",
+          "community": "Publicado y mantenido por desarrolladores de la comunidad",
+          "team": "Compartido por tu organización con los miembros autorizados",
+          "custom": "De un mercado Git o de una carpeta local que añadiste",
+          "local": "Instalado desde un archivo local o desarrollado en este equipo"
         },
         "scopeAria": "Filtrar orígenes de complementos",
         "scope": {

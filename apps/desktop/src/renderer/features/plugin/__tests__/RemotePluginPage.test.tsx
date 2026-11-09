@@ -165,6 +165,7 @@ const configurationResource = (state = 'configured', id = 'weather') => ({
   ],
 });
 beforeEach(() => {
+  vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
   vi.clearAllMocks();
   directoryMode.real = false;
   setDataOwnerGeneration('test-owner');
@@ -753,6 +754,7 @@ describe('selected plugin host', () => {
       'ResizeObserver',
       class {
         observe() {}
+        unobserve() {}
         disconnect() {}
       },
     );

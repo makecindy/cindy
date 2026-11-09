@@ -7509,7 +7509,15 @@
       },
       "market": {
         "publisherKind": {
-          "official": "Officiel"
+          "official": "Officiel",
+          "community": "Communauté"
+        },
+        "publisherDescription": {
+          "official": "Publié et maintenu par Cindy",
+          "community": "Publié et maintenu par des développeurs de la communauté",
+          "team": "Partagé par votre organisation avec les membres autorisés",
+          "custom": "Provenant d’un marché Git ou d’un dossier local que vous avez ajouté",
+          "local": "Installé depuis un fichier local ou développé sur cet ordinateur"
         },
         "scopeAria": "Filtrer les sources de plugins",
         "scope": {

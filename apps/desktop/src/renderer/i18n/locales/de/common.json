@@ -7444,7 +7444,15 @@
       },
       "market": {
         "publisherKind": {
-          "official": "Offiziell"
+          "official": "Offiziell",
+          "community": "Community"
+        },
+        "publisherDescription": {
+          "official": "Von Cindy veröffentlicht und gepflegt",
+          "community": "Von Community-Entwicklern veröffentlicht und gepflegt",
+          "team": "Von deiner Organisation mit berechtigten Mitgliedern geteilt",
+          "custom": "Aus einem hinzugefügten Git- oder lokalen Ordner-Marktplatz",
+          "local": "Aus einer lokalen Datei installiert oder auf diesem Computer entwickelt"
         },
         "scopeAria": "Plugin-Quellen filtern",
         "scope": {

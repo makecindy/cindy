@@ -7401,7 +7401,15 @@
       },
       "market": {
         "publisherKind": {
-          "official": "官方"
+          "official": "官方",
+          "community": "社区"
+        },
+        "publisherDescription": {
+          "official": "由 Cindy 官方发布和维护",
+          "community": "由社区开发者发布和维护",
+          "team": "由当前组织共享给有权限的成员",
+          "custom": "来自你添加的 Git 或本地文件夹市场",
+          "local": "从本机文件安装，或在本机开发"
         },
         "scopeAria": "筛选插件来源",
         "scope": {

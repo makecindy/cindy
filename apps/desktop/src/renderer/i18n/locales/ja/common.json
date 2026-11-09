@@ -7401,7 +7401,15 @@
       },
       "market": {
         "publisherKind": {
-          "official": "公式"
+          "official": "公式",
+          "community": "コミュニティ"
+        },
+        "publisherDescription": {
+          "official": "Cindy が公式に公開・保守しています",
+          "community": "コミュニティ開発者が公開・保守しています",
+          "team": "組織内の権限を持つメンバーに共有されています",
+          "custom": "追加した Git またはローカルフォルダーのマーケットから取得",
+          "local": "このコンピューター上で開発、またはローカルファイルからインストール"
         },
         "scopeAria": "プラグインの提供元を絞り込む",
         "scope": {
