@@ -7411,6 +7411,11 @@
         "installedExpand": "Show all {{count}} installed plugins",
         "installedCollapse": "Hide additional installed plugins",
         "recommendedSection": "Recommended",
+        "todayRecommendations": "Today's picks",
+        "marketSection": "Plugin marketplace",
+        "browseMarket": "Browse plugin marketplace",
+        "searching": "Searching…",
+        "allLoaded": "All {{count}} plugins shown",
         "updatesAvailable": "{{count}} plugin updates available",
         "updateAll": "Update all",
         "ignoreRound": "Ignore this round",
@@ -7440,7 +7445,15 @@
       },
       "market": {
         "publisherKind": {
-          "official": "Official"
+          "official": "Official",
+          "community": "Community"
+        },
+        "publisherDescription": {
+          "official": "Published and maintained by Cindy",
+          "community": "Published and maintained by community developers",
+          "team": "Shared by your organization with authorized members",
+          "custom": "From a Git or local folder marketplace you added",
+          "local": "Installed from a local file or developed on this computer"
         },
         "scopeAria": "Filter plugin sources",
         "scope": {

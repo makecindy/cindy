@@ -7368,6 +7368,11 @@
         "installedExpand": "展开全部 {{count}} 个已安装插件",
         "installedCollapse": "收起更多已安装插件",
         "recommendedSection": "推荐",
+        "todayRecommendations": "今日推荐",
+        "marketSection": "插件市场",
+        "browseMarket": "浏览插件市场",
+        "searching": "正在搜索…",
+        "allLoaded": "已显示全部 {{count}} 个插件",
         "updatesAvailable": "{{count}} 个插件有可用更新",
         "updateAll": "全部更新",
         "ignoreRound": "忽略本轮",
@@ -7397,7 +7402,15 @@
       },
       "market": {
         "publisherKind": {
-          "official": "官方"
+          "official": "官方",
+          "community": "社区"
+        },
+        "publisherDescription": {
+          "official": "由 Cindy 官方发布和维护",
+          "community": "由社区开发者发布和维护",
+          "team": "由当前组织共享给有权限的成员",
+          "custom": "来自你添加的 Git 或本地文件夹市场",
+          "local": "从本机文件安装，或在本机开发"
         },
         "scopeAria": "筛选插件来源",
         "scope": {

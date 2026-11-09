@@ -7476,6 +7476,11 @@
         "installedExpand": "Mostrar los {{count}} complementos instalados",
         "installedCollapse": "Ocultar complementos instalados adicionales",
         "recommendedSection": "Recomendado",
+        "todayRecommendations": "Recomendados de hoy",
+        "marketSection": "Mercado de complementos",
+        "browseMarket": "Explorar el mercado de complementos",
+        "searching": "Buscando…",
+        "allLoaded": "Se muestran los {{count}} complementos",
         "updatesAvailable": "{{count}} actualizaciones de complementos disponibles",
         "updateAll": "Actualizar todos",
         "ignoreRound": "Ignorar esta vez",
@@ -7505,7 +7510,15 @@
       },
       "market": {
         "publisherKind": {
-          "official": "Oficial"
+          "official": "Oficial",
+          "community": "Comunidad"
+        },
+        "publisherDescription": {
+          "official": "Publicado y mantenido por Cindy",
+          "community": "Publicado y mantenido por desarrolladores de la comunidad",
+          "team": "Compartido por tu organización con los miembros autorizados",
+          "custom": "De un mercado Git o de una carpeta local que añadiste",
+          "local": "Instalado desde un archivo local o desarrollado en este equipo"
         },
         "scopeAria": "Filtrar orígenes de complementos",
         "scope": {
