@@ -1,0 +1,21 @@
+/* HarmonyOS Sans SC webfont, loaded per weight instead of the package's
+   all-weights index.css. Each weight is 82 unicode-range @font-face rules
+   (~130 KiB of render-blocking CSS); the woff2 slices themselves only download
+   when matching glyphs render.
+
+   Kept: 400 / 500 / 600 / 700 (the DESIGN.md §3 weight ladder) and 900, which
+   model-authored rich answers may still request (their fontWeight accepts
+   100–900). Dropped: Thin 100 and Light 300 — no Cindy UI uses them, and a
+   request below 400 now renders CJK glyphs at Regular (CSS font matching picks
+   the nearest heavier face) instead of a lighter face.
+
+   The package only exports "." (index.css), so the per-weight files are
+   referenced by path, like the punctuation faces in globals.css. The per-weight
+   files carry the same @font-face rules as index.css and no :lang() rule, so
+   dependency-patches/harmonyos-sans-sc-webfont-splitted.patch is not needed
+   here. Keep the package version exact-pinned. */
+@import '../../../../../node_modules/harmonyos-sans-sc-webfont-splitted/dist/Regular.css';
+@import '../../../../../node_modules/harmonyos-sans-sc-webfont-splitted/dist/Medium.css';
+@import '../../../../../node_modules/harmonyos-sans-sc-webfont-splitted/dist/Semibold.css';
+@import '../../../../../node_modules/harmonyos-sans-sc-webfont-splitted/dist/Bold.css';
+@import '../../../../../node_modules/harmonyos-sans-sc-webfont-splitted/dist/Black.css';

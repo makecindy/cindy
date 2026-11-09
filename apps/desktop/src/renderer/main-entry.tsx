@@ -2,7 +2,7 @@ import { createRoot } from 'react-dom/client';
 
 import '@fontsource-variable/inter';
 import '@fontsource-variable/jetbrains-mono';
-import 'harmonyos-sans-sc-webfont-splitted';
+import './styles/cjk-webfont.css';
 
 // i18next 在此之前已 init：分发入口 index.tsx 等当前语言包加载完才加载本模块，
 // 首屏 useTranslation 直接拿到目标语言，不会先显示英文再切换。
