@@ -2690,6 +2690,10 @@ export function selectNewestChunk(
     }
     if (floorCard >= 0 && end <= floorCard) return warn(`cut end ${end} below checkpoint floor=${floorCard}`);
   }
+  // 长 read 轮只在自己这一轮里切一刀,且必须在卡片右侧(`newestLong.start > floorCard` 是硬条件)。
+  // 切点落到卡片上时直接返回是有意为之,不是 bug:宁可少切一刀也不跨卡片(跨卡片等于在摘要与
+  // 新内容之间插刀,前缀缓存直接报废)。卡片右边那一轮长 read 这一轮切不到也不要紧 —— 保留区窗口
+  // 跟着尾巴走,下一轮这个长 read 落到窗口左侧,它就成了卡片右侧的可切候选:延后一轮,不是丢失。
   const longSpan = newestLong && newestLong.start > floorCard ? { start: newestLong.start, end: newestLong.end } : null;
   if (!longSpan && (end < first || isCheckpoint(entries[end]))) {
     return warn(`end<first or checkpoint (tail all shortTail/checkpoint)`);
