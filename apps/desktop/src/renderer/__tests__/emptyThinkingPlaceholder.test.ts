@@ -314,8 +314,19 @@ describe('mapServerMessages — 未确认采样透传', () => {
     expect(mapped[0]).toMatchObject({ samplingAttemptPending: true });
   });
 
-  it('leaves settled sampling attempts unflagged', () => {
+  it('maps a settled sampling attempt as an explicit false', () => {
     const mapped = mapServer([assistantRow('settled', { samplingAttemptPending: false })]);
-    expect(mapped[0]?.samplingAttemptPending).toBeUndefined();
+    // 必须是显式 false(而不是省略):确认广播靠它覆盖内存里旧的 true。
+    expect(mapped[0]).toMatchObject({ samplingAttemptPending: false });
+    expect(Object.hasOwn(mapped[0] as object, 'samplingAttemptPending')).toBe(true);
+  });
+
+  it('clears a stale pending flag when the accepted snapshot is merged', () => {
+    const merge = makerChatStore.__mergeMessagesForTest;
+    const accepted = mapServer([assistantRow('reply', { samplingAttemptPending: false })]);
+    const inMemory = mapServer([assistantRow('reply', { samplingAttemptPending: { runtimeId: 'rt-1' } })]);
+    expect(inMemory[0]?.samplingAttemptPending).toBe(true);
+    const merged = merge(accepted, inMemory);
+    expect(merged.find((m) => m.clientId === 'reply')?.samplingAttemptPending).toBe(false);
   });
 });

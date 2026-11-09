@@ -625,6 +625,10 @@ describe('companion closing reply and read position', () => {
     const settled = messages.map(m => m.clientId === 'unconfirmed'
       ? { ...m, samplingAttemptPending: undefined } : m);
     expect(proseIds(projectBot(rows, settled))).toEqual(['wake', 'unconfirmed']);
+    // 采样被确认后的显式 `false` 同样视为已接受,不能被旧的 pending 状态挡住。
+    const accepted = messages.map(m => m.clientId === 'unconfirmed'
+      ? { ...m, samplingAttemptPending: false } : m);
+    expect(proseIds(projectBot(rows, accepted))).toEqual(['wake', 'unconfirmed']);
   });
 
   // 续跑（recovery）开启的是新一次尝试:它之前的正文已被 groupWorkRuns 的 resumed 分支
