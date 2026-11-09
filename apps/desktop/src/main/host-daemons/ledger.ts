@@ -86,8 +86,6 @@ export interface HostDaemonLedger {
   clearOwner(id: string): void;
   getMissMtime(id: string): number | null;
   setMissMtime(id: string, mtimeMs: number): void;
-  /** 丢弃未落盘的内存改动（切号时防止旧账号的结论写进新账号的台账）。 */
-  discard(): void;
   save(): void;
 }
 
@@ -140,13 +138,6 @@ export function createHostDaemonLedger(filePath: string | (() => string)): HostD
     setMissMtime(id, mtimeMs) {
       ensure().misses[id] = mtimeMs;
       dirty = true;
-    },
-    discard() {
-      if (!dirty) return;
-      // 下次 ensure() 重新从磁盘读：等于回滚到上一次成功落盘的状态。
-      state = null;
-      loadedPath = null;
-      dirty = false;
     },
     save() {
       if (!dirty) return;

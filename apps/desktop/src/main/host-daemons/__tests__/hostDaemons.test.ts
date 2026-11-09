@@ -19,33 +19,17 @@ import type { HostDaemonLedger, HostDaemonOwnerRecord } from '../ledger.js';
 import { parseScheduledTaskScan, type RawScheduledTask } from '../scheduledTasks.js';
 import { HostDaemonActionError, createHostDaemonsService } from '../service.js';
 
-type MemoryLedger = HostDaemonLedger & {
-  owners: Map<string, HostDaemonOwnerRecord>;
-  /** 只包含真正落盘过的记录（save 之前不算）。 */
-  saved: Map<string, HostDaemonOwnerRecord>;
-};
-
-/** 双层台账：工作区 + 已落盘快照，discard() 回滚到快照，与真实文件的语义一致。 */
-function memoryLedger(): MemoryLedger {
+function memoryLedger(): HostDaemonLedger & { owners: Map<string, HostDaemonOwnerRecord> } {
   const owners = new Map<string, HostDaemonOwnerRecord>();
-  const saved = new Map<string, HostDaemonOwnerRecord>();
   const misses = new Map<string, number>();
   return {
     owners,
-    saved,
     getOwner: (id) => owners.get(id) ?? null,
     setOwner: (id, record) => void owners.set(id, record),
     clearOwner: (id) => void owners.delete(id),
     getMissMtime: (id) => misses.get(id) ?? null,
     setMissMtime: (id, mtimeMs) => void misses.set(id, mtimeMs),
-    discard: () => {
-      owners.clear();
-      for (const [id, record] of saved) owners.set(id, record);
-    },
-    save: () => {
-      saved.clear();
-      for (const [id, record] of owners) saved.set(id, record);
-    },
+    save: () => {},
   };
 }
 
@@ -421,7 +405,6 @@ describe('hostDaemons service', () => {
 
     await service.list();
     expect(ledger.owners.size).toBe(0);
-    expect(ledger.saved.size).toBe(0);
 
     // 切到新账号再扫一次（这次查不到归属），旧账号的标题绝不能冒出来。
     scope = 'account-c';
@@ -456,6 +439,39 @@ describe('hostDaemons service', () => {
     expect(snapshot.entries).toEqual([]);
     expect(ledger.owners.size).toBe(0);
     expect(ledger.getMissMtime('\\airlink-autopm')).toBeNull();
+  });
+
+  // 切号发生在两条任务之间：第一条已经算出归属、只在内存里等着提交，也绝不能
+  // 写进任何账号的台账（提交是整轮一次性的）。
+  it('commits nothing when the account switches between two tasks', async () => {
+    let scope = 'account-a';
+    let reads = 0;
+    const ledger = memoryLedger();
+    const setOwner = vi.spyOn(ledger, 'setOwner');
+    const service = createHostDaemonsService({
+      scanTasks: async () => [
+        task({ id: '\\first', name: 'first-task' }),
+        task({ id: '\\second', name: 'second-task' }),
+      ],
+      readToolMessages: async () => {
+        reads += 1;
+        // 第一条任务照常归属；第二条任务的查询期间切号。
+        if (reads === 2) scope = 'account-b';
+        return [{ sessionId: 'session-a', title: '账号A的标题', content: 'schtasks /create /tn first-task' }];
+      },
+      ledger,
+      stopTask: async () => {},
+      runTask: async () => {},
+      deleteTask: async () => {},
+      platform: 'win32',
+      now: () => 1_800_000_000_000,
+      ownerScopeKey: () => scope,
+    });
+
+    const snapshot = await service.list();
+    expect(snapshot.entries).toEqual([]);
+    expect(setOwner).not.toHaveBeenCalled();
+    expect(ledger.owners.size).toBe(0);
   });
 
   it('refuses to act on a task when the account changed after the rescan', async () => {

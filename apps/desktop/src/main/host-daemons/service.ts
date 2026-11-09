@@ -192,15 +192,25 @@ export function createHostDaemonsService(deps: HostDaemonsServiceDeps): HostDaem
       const scopeBefore = scopeStamp();
       const tasks = await deps.scanTasks();
       const entries: HostDaemonEntry[] = [];
+      // 扫描期间的归属结论先攒在这里，整轮结束后一次性提交：只要中途切号（或边界
+      // 进行中）就整批丢掉。这样「旧账号的标题写进新账号台账」在结构上不可能发生，
+      // 而不是靠每一处写入点各自记得核对。
+      const pendingOwners: Array<{ id: string; record: HostDaemonOwnerRecord }> = [];
+      const pendingMisses: Array<{ id: string; mtimeMs: number }> = [];
+      const pendingClears: string[] = [];
       let unrelatedCount = 0;
       let traces = 0;
       let scopeLost = scopeBefore !== scopeStamp();
 
       for (const task of tasks) {
-        // 每一轮都重新核对：上一轮的 setOwner / setMissMtime 已经改了内存台账，
-        // 一旦切号就不能再写，也不能落盘到新账号的台账文件里。
-        if (scopeLost) break;
-        let owner = currentOwner(task);
+        if (scopeBefore !== scopeStamp()) {
+          scopeLost = true;
+          break;
+        }
+        const existing = deps.ledger.getOwner(task.id);
+        const definitionChanged = existing !== null && !ownerMatchesTask(existing, task);
+        if (definitionChanged) pendingClears.push(task.id);
+        let owner = definitionChanged ? null : existing;
 
         if (!owner) {
           const mtime = task.definitionMtimeMs;
@@ -230,21 +240,17 @@ export function createHostDaemonsService(deps: HostDaemonsServiceDeps): HostDaem
             unrelatedCount += 1;
             continue;
           }
-          // 查询返回后到写台账之间没有 await，这里的核对就是写入前的最后一道闸。
-          if (scopeBefore !== scopeStamp()) {
-            scopeLost = true;
-            break;
-          }
           if (traced) {
-            deps.ledger.setOwner(task.id, {
+            const record: HostDaemonOwnerRecord = {
               ...traced,
               atMs: capturedAtMs,
               definitionMtimeMs: task.definitionMtimeMs ?? 0,
               command: toCommand(task),
-            });
-            owner = deps.ledger.getOwner(task.id);
+            };
+            pendingOwners.push({ id: task.id, record });
+            owner = record;
           } else {
-            deps.ledger.setMissMtime(task.id, mtime);
+            pendingMisses.push({ id: task.id, mtimeMs: mtime });
             unrelatedCount += 1;
             continue;
           }
@@ -258,13 +264,15 @@ export function createHostDaemonsService(deps: HostDaemonsServiceDeps): HostDaem
       }
 
       if (scopeLost || scopeBefore !== scopeStamp()) {
-        // 作废本次扫描：把已经写进内存台账的结论一并丢弃，绝不落盘到当前账号。
-        deps.ledger.discard();
+        // 整轮作废：一条都还没提交，直接丢弃即可。
         return { capturedAtMs, supported: true, entries: [], unrelatedCount };
       }
 
+      for (const id of pendingClears) deps.ledger.clearOwner(id);
+      for (const entry of pendingOwners) deps.ledger.setOwner(entry.id, entry.record);
+      for (const entry of pendingMisses) deps.ledger.setMissMtime(entry.id, entry.mtimeMs);
       try {
-        // save() 自身只在有改动时落盘；撤销授权也走这里。
+        // save() 自身只在有改动时落盘。
         deps.ledger.save();
       } catch {
         // 台账写失败只影响下次是否重算，不影响本次清单。
