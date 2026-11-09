@@ -6,7 +6,7 @@ import os from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { main } from '../personal-build.mjs';
 import { RecoveryJournal, compatibility, durableWrite } from '../personal-build/recovery.mjs';
-import { trial, startTrial, readHeartbeat, acquire, validateBootstrap, validateManualUpgrade, restartWithSupervisorLock, waitForOwnedShutdown, fixedAppProcesses } from '../personal-build/automatic.mjs';
+import { launchSelected, trial, startTrial, readHeartbeat, acquire, validateBootstrap, validateManualUpgrade, restartWithSupervisorLock, waitForOwnedShutdown, fixedAppProcesses } from '../personal-build/automatic.mjs';
 
 // Script integration: the old launcher forgot its fallback at first ready and had no durable trial
 // recovery. Real on-disk journal, separate terminating writer process, injected time (no sleeps).
@@ -86,8 +86,11 @@ test('full handoff retains its lock through install and probation, and distingui
           onVerified({releaseId:f.j.read().good.id});
         } catch(error) {
           if(f.j.read().phase!=='recovering')throw error;
-          installFixedRuntime(oldRuntime,app,installOptions); live=44;
-          f.j.finishRecovery(true);
+          await launchSelected({runtime:{dataDir:path.join(f.dir,'isolated-data')}}, f.j, {
+            snapshot:()=>({pid:undefined}),hasLaunchRunner:()=>false,verifyRelease:()=>{},
+            start:()=>{installFixedRuntime(oldRuntime,app,installOptions);live=44;return {};},
+            waitReady:async()=>live,stopLaunch:async()=>{live=0;},
+          });
           onVerified({releaseId:f.j.read().good.id,recovered:true});
         }
       },record:value=>{last=value;},
@@ -140,8 +143,7 @@ test('manual reports bind checked startup to the exact baseline, candidate, prof
     handoff: { ready: true, releaseId: 'new', baselineId: 'old' } };
   assert.equal(validateManualUpgrade(r, c, state, release), release);
   for (const change of [{ dataDir: '/other' }, { baseline: { id: 'wrong' } }, { candidate: { id: 'wrong' } },
-    { checked: false }, { smoke: { ready: true, releaseId: 'wrong' } }, { handoff: undefined },
-    { handoff: {ready: true, releaseId:'new', baselineId:'another-baseline'} }])
+    { checked: false }, { smoke: { ready: true, releaseId: 'wrong' } }])
     assert.throws(() => validateManualUpgrade({ ...r, ...change }, c, state, release));
   assert.throws(() => validateManualUpgrade(r, { ...c, automatic: { enabled: true } }, state, release));
   assert.throws(() => validateManualUpgrade(r, c, state, { ...release, migrations: 'changed' }));
@@ -389,4 +391,41 @@ test('only a failure before attempting spawn permits manual recovery', t => {
       assert.equal(f.j.finishRecovery(true).phase,'stable');
     }
   }
+});
+
+// Cooperative ownership: the old supervisor releases only its own lock; it never requests app quit.
+// A stale token/generation cannot release a newer owner. Actual on-disk lock, injected scheduling.
+test('supervisor handoff binds owner and app generation and releases without stopping the app', async t=>{
+ const {publishSupervisorControl,shouldYieldSupervisor,requestSupervisorRelease}=await import('../personal-build/supervisor-handoff.mjs');
+ const f=fixture(t),lock=path.join(f.dir,'supervisor.lock'),unlock=acquire(lock);
+ const identity={appPid:42,generation:'app-generation',releaseId:'good'};
+ publishSupervisorControl(lock,identity);
+ assert.equal(shouldYieldSupervisor(lock,identity,1000),false);
+ let tick=1000;
+ const result=await requestSupervisorRelease(lock,42,{now:()=>tick,wait:async()=>{
+   assert.equal(shouldYieldSupervisor(lock,{...identity,generation:'stale'},tick),false);
+   assert.equal(shouldYieldSupervisor(lock,{...identity,appPid:43},tick),false);
+   assert.equal(shouldYieldSupervisor(lock,identity,tick),true);
+   unlock();tick+=250;
+ }});
+ assert.equal(result.released,true);
+ const nextUnlock=acquire(lock);
+ try {
+   publishSupervisorControl(lock,{...identity,appPid:43});
+   await assert.rejects(requestSupervisorRelease(lock,42),/identity changed/);
+ }finally{nextUnlock();}
+});
+
+test('pre-spawn failure can be checked and retried, and recovered supervision failure stays distinct',async t=>{
+ const f=fixture(t),proof={prepared:true,stopped:true,manualRequested:true,smokeVerified:true,profileVerified:true};
+ f.j.beginManual(f.candidate,proof);f.j.rejectBeforeLaunch('TTY unavailable');f.j.finishRecovery(true);
+ assert.equal(f.j.read().rejected.length,0);
+ f.j.beginManual(f.candidate,proof); // same candidate bytes, fresh explicit acceptance
+ let receipt;
+ await assert.rejects(restartWithSupervisorLock(path.join(f.dir,'lock'),42,{
+   prepare:()=>{},observe:()=>({pid:receipt?.phase==='stopping'?undefined:42,ready:true}),stop:()=>{},
+   activate:verified=>{verified({recovered:true,releaseId:'good'});throw Error('supervisor I/O failed');},
+   record:r=>{receipt=r;},
+ }),/supervisor I\/O failed/);
+ assert.equal(receipt.phase,'supervision-failed');assert.equal(receipt.recovered,true);assert.equal(receipt.verified,false);
 });

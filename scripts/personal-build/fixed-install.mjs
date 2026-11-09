@@ -40,7 +40,7 @@ export function preflightFixedRuntime(runtime, app, {verifySignature, requiremen
   return { installed: true, sameRequirement: true };
 }
 /** Finish a recorded filesystem transition, not a business/data rollback. Never overwrite unknown files. */
-function finishTransition(app, file, {isRunning, verifySignature, rename, backupRoot}) {
+function finishTransition(app, file, {isRunning, verifySignature, rename, backupRoot, registry}) {
   const t = read(file), parent = path.dirname(app), prefix = '.' + path.basename(app) + '.';
   const legacy = t.version === 1 && path.dirname(t.backup) === parent && path.basename(t.backup).startsWith(prefix);
   const archived = t.version === 2 && path.dirname(t.backup) === backupRoot && /^previous-[a-f0-9-]{36}\.bundle$/.test(path.basename(t.backup));
@@ -49,6 +49,7 @@ function finishTransition(app, file, {isRunning, verifySignature, rename, backup
     // New bundle was renamed before the process stopped: only finish its metadata.
     if (treeIdentity(app) === t.next.digest) {
       verifyApp(app,t.next,verifySignature);
+      if (t.previous && exists(t.backup)) registry?.retire(t.backup,app); else registry?.register(app);
       durableWrite(app+'.personal-install.json',t.next); fs.unlinkSync(file); return;
     }
     check(t.previous, 'An unknown application occupies the installation path');
@@ -62,10 +63,11 @@ function finishTransition(app, file, {isRunning, verifySignature, rename, backup
   verifyApp(t.stage,t.next,verifySignature);
   rename(t.stage,app);
   verifyApp(app,t.next,verifySignature);
+  if (t.previous) registry?.retire(t.backup,app); else registry?.register(app);
   durableWrite(app+'.personal-install.json',t.next);
   fs.unlinkSync(file);
 }
-export function installFixedRuntime(runtime, app, {isRunning, verifySignature, rename = fs.renameSync}) {
+export function installFixedRuntime(runtime, app, {isRunning, verifySignature, rename = fs.renameSync, registry}) {
   check(path.isAbsolute(app) && app.endsWith('.app'), 'An absolute personal .app path is required');
   const receipt = verifyRuntime(runtime,verifySignature);
   check(!app.startsWith(runtime.directory + path.sep) && !runtime.directory.startsWith(app + path.sep), 'Installation must be outside the immutable runtime store');
@@ -80,7 +82,7 @@ export function installFixedRuntime(runtime, app, {isRunning, verifySignature, r
   // Serializes separate profiles targeting the same destination too. No stale lock is silently removed.
   const unlock=acquire(app+'.personal-install.lock');
   try {
-    if(exists(transition)) finishTransition(app,transition,{isRunning,verifySignature,rename,backupRoot});
+    if(exists(transition)) finishTransition(app,transition,{isRunning,verifySignature,rename,backupRoot,registry});
     let previous = null;
     if(exists(app)) {
       check(exists(metadata),'Refusing to replace an unmanaged application');
@@ -97,7 +99,7 @@ export function installFixedRuntime(runtime, app, {isRunning, verifySignature, r
       verifyApp(stage,receipt,verifySignature);
     } catch(e) { fs.rmSync(stage,{recursive:true,force:true}); throw e; }
     durableWrite(transition,{version:2,app,stage,backup,previous,next:receipt});
-    finishTransition(app,transition,{isRunning,verifySignature,rename,backupRoot});
+    finishTransition(app,transition,{isRunning,verifySignature,rename,backupRoot,registry});
     return app;
   } finally { unlock(); }
 }

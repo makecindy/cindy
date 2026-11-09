@@ -593,7 +593,7 @@ When the user requests an immediate upgrade that changes backend/runtime/plugin 
 instance exits normally, by `manual-activate --config FILE --report NEW_MANUAL_REPORT`. These commands
 do not enable automatic updates and do not pretend that the automatic compatibility gate passed.
 The checked build, exact baseline/candidate/profile, unchanged migration fingerprint and isolated
-handoff proof are required. A failed/rejected candidate cannot be silently retried. The existing
+startup proof are required. A failed/rejected candidate cannot be silently retried. The existing
 restart wrapper still enforces profile exclusivity and runtime startup checks.
 
 Manual activation journals an explicit manual rollback policy before starting the candidate. It
@@ -620,8 +620,8 @@ wins the lock. `manual-activate` remains available after an independently reques
 
 A live supervisor owner causes `manual-restart` to fail before touching the app. Do not delete its lock,
 kill an unverified PID, or stop the app to get around it. With an older already-running supervisor,
-inspect its process identity and exit **only that supervisor** normally before retrying; the app must
-remain running. Automatic takeover of a live supervisor is not implemented. A competing launcher can
+use the explicit `supervisor-release` command when supported. An older supervisor without the
+control protocol needs an independently verified normal exit; the app must remain running. Compatible supervisors accept a generation-bound cooperative release request; older supervisors fail closed. A competing launcher can
 still win the lock, but then this command leaves the current app running. Dead owners are reclaimed by
 the existing lock implementation, never by the handover script.
 
@@ -822,17 +822,30 @@ and the target phone before calling delivery successful.
   与本地补丁。用户等待确认期间不暗中改候选。确认前可运行 `freshness --config FILE
   --report BUILD_REPORT` 查询是否有变化；失败表示需展示差异并选择重建或明确接受冻结版，
   不能宣称它仍是最新。合成冲突留在候选目录供检查；优先更新冲突 PR，不重复维护私有解法。
-- `manual-check` 现在先在独立 mock 数据目录、临时安装位置启动旧版，再复用正式的
-  `restartWithSupervisorLock`、退出等待、固定包安装及 `trial` 观察流程切换候选。
-  只有完整演练通过才生成含 `handoff` 的手动升级报告；旧的仅 smoke 报告需要重新验收。
-  演练安装位置和日志保留在 `automatic/rehearsals/<uuid>`，不复用真实账号。
-- 演练检查签名要求与安装交接，mock 不证明真实账号、远程连接、推送或系统授权有效。
-  真正切换仍需本次用户授权；线上仍运行完整健康观察。签名要求变化在退出旧版前阻断，
-  需要明确身份迁移与重新授权流程。不得通过重置 TCC 或修改权限库“修复”检查。
+- `manual-check` 当前只对候选目录做隔离 smoke。禁止在当前运行基线的源码目录启动
+  第二个所谓隔离实例：仓库 restart 的终止范围按 checkout，不按数据目录。
+  所有个人版隔离启动先用候选自己的进程分区器检查整个 checkout，并要求启动器支持
+  `--refuse-running`，在实际停止/清缓存前再次拒绝占用；不支持此保护的旧候选必须重建。
+  完整真实交接演练暂未交付，不能把单版 smoke 或注入时钟的测试称为双实例验收。
+- `manual-restart` 先请求旧监督程序交出锁（绑定监督 PID、锁 token、应用 PID、启动代次
+  和版本），旧程序只退出监督循环，保持应用运行。新程序取得锁并复核身份后才正常退出
+  应用。也可显式用 `supervisor-release --config FILE --expected-pid PID` 单独交出监督。
+  旧版监督程序不支持此协议时明确阻断，不通过 kill/删锁兼容；升级工具自身仍需独立验收。
+- 签名要求变化在退出旧版前阻断。证书续期/身份迁移尚无自动命令，须单独准备和审核，
+  不接受静默换证或放宽校验。遗留安装事务可显式 `install-recover --config FILE --report
+  CHECKED_BUILD_REPORT`，要求监督锁可取得、应用与 runner 均已停止、报告和事务的 runtime
+  key/digest 一致；只完成文件事务，不启动应用、不更改业务 journal。候选开始尝试执行后，
+  数据兼容性未知仍禁止自动退回旧版。
+- 换壳后注销退役包的 LaunchServices 登记并重新登记固定安装路径；隔离 smoke 正常停止
+  后注销预览包，仍被别的实例使用则保留并报错。改名为 `.bundle` 本身不保证系统注销。
+  `doctor` 列出同 Bundle ID 的登记路径；显式 `registry-clean --config FILE` 只注销
+  同 ID、同证书、签名有效且未运行的副本，重新登记固定路径，不删除文件、不重置 TCC。
+  无法识别/核验的条目保留，命令报告未完成，不能据此宣称授权已经生效。
 - 主进程启动时消费并清除监控环境变量，生成目录只允许一个主进程写心跳；准备子进程
   同样清除继承值。读取方继续验证 PID、代次与新鲜度，未知活动仍视为忙。
 - 只有当前调用栈确认**尚未尝试 spawn**，才允许恢复旧版；没有 ready、超时或监督程序
-  被中断都不构成这一证据。恢复结果标为 `recovered`、`verified:false`，不是新版升级成功。
+  被中断都不构成这一证据。恢复结果标为 `recovered`、`verified:false`，不是新版升级成功。启动前的瞬时失败
+  不写入内容拒绝名单，修复环境并重新检查后可以重试同一候选；恢复后监督异常仍保留 recovered 标志。
   候选一旦尝试启动且无法确认兼容性，保持 blocked。使用 `doctor` / `auto-status`
   检查及受保护的 `auto-recover`，不得手改 journal 或删除拒绝记录绕过检查。
 - 每次实际切换后分别核对屏幕录制与辅助功能的当前进程检查结果。系统设置里的开关、
@@ -845,8 +858,9 @@ and the target phone before calling delivery successful.
 
 验收分层：`personal-build-recovery.test.mjs` 在临时目录通过生产交接、安装器和 journal
 覆盖正常晋升、启动前恢复、启动后阻断，进程与时间为注入模型；它不冒充真实 GUI 演练。
-真实演练由上述 `manual-check` 执行。自动升级仍默认关闭，不能仅凭若干次通过就打开。
+真实双版本演练仍未验收，尤其需要独立 checkout 和独立应用身份；不得启动当前基线来伪造演练。
+自动升级仍默认关闭，不能仅凭若干次通过就打开。
 
-后续独立阶段：迁移到正式打包产物、可执行且会重新验证占用的清理流程、监督程序自身交接。
+后续独立阶段：正式打包产物、完整真实交接演练、执行文件删除的清理流程、证书身份迁移。
 这些需要独立验收；本轮没有改变当前运行实例或安装手机包。Push 注册缺陷独立于个人版工具
 交付，注册成功不是 APNs 送达证据；应分别核对签名环境、注册回执与目标真机收到通知。

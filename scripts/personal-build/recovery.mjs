@@ -88,7 +88,7 @@ export class RecoveryJournal {
     assert(s.phase === 'trial' && s.readyAt === null, 'Candidate may already have run');
     const next = { ...s, phase: 'recovering', failed: s.selected, selected: s.good,
       generation: this.nonce(), recoveryReason: 'candidate-not-launched',
-      rejected: [...s.rejected, { id: s.selected.id, reason, at: this.now() }] };
+      launchFailure: { id: s.selected.id, reason, at: this.now(), retryable: true } };
     delete next.error;
     durableWrite(this.file, next);
     durableWrite(path.join(path.dirname(this.file), 'known-good.json'), s.good);

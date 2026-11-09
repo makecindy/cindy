@@ -7,6 +7,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { resumableCompose } from './composition.mjs';
 import { readJournal } from './recovery.mjs';
+import {registeredApps} from './app-registry.mjs';
 import { configFrom, discover, copyPlugin, packageHash, auditPlugins, run, verifyReport, verifyUpgradeSnapshot } from '../personal-build.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -129,6 +130,13 @@ export function doctor(c, exec = run) {
   if (fs.existsSync(r.personalApp + '.personal-transition.json')) result.issues.push('Unfinished fixed app installation; retain the transition and inspect it before switching');
   const appParent=path.dirname(r.personalApp), legacyPrefix='.'+path.basename(r.personalApp)+'.previous-';
   result.legacyAppBackups=fs.existsSync(appParent) ? fs.readdirSync(appParent).filter(name=>name.startsWith(legacyPrefix)).map(name=>path.join(appParent,name)) : [];
+  if(process.platform==='darwin' && fs.existsSync(r.personalApp+'.personal-install.json')) {
+    try {
+      const id=read(r.personalApp+'.personal-install.json').inputs.bundleId;
+      result.registeredApps=registeredApps(id);
+      if(result.registeredApps.length!==1 || result.registeredApps[0]!==r.personalApp)result.issues.push('Personal Bundle ID has stale or missing LaunchServices registrations; inspect paths before unregistering retired copies');
+    } catch(e) { result.issues.push(`Cannot inspect personal app registrations: ${e.message}`); }
+  }
   result.recoveryAdvice = result.supervised?.phase === 'blocked'
     ? 'Inspect the failed launch and data compatibility; do not edit the journal or clear rejected versions.'
     : 'Use auto-status to inspect supervision; auto-recover checks its independent known-good receipt before recovery.';

@@ -121,6 +121,16 @@ test('fixed installation reuses its path and resumes a failed switch with old ru
   installFixedRuntime(third,app,{...options,isRunning:()=>true});
   assert.equal(fs.statSync(app).ino,inode);
   verifyInstalledRuntime(third,app,()=>{});
+  // Registration failure after promotion preserves the transition for explicit recovery.
+  const fourth=prepare('four');const registrations=[];
+  assert.throws(()=>installFixedRuntime(fourth,app,{...options,registry:{retire:()=>{throw Error('registry unavailable');}}}),/registry unavailable/);
+  assert.equal(fs.existsSync(app+'.personal-transition.json'),true);
+  const promoted=fs.statSync(app).ino;
+  installFixedRuntime(fourth,app,{...options,registry:{retire:(backup,fixed)=>registrations.push([backup,fixed])}});
+  assert.equal(fs.statSync(app).ino,promoted);
+  assert.equal(registrations.length,1);assert.equal(registrations[0][1],app);
+  assert.equal(fs.existsSync(app+'.personal-transition.json'),false);
+  verifyInstalledRuntime(fourth,app,()=>{});
   const foreign=path.join(dir,'Other.app');fs.mkdirSync(foreign);fs.writeFileSync(path.join(foreign,'keep'),'mine');
   assert.throws(()=>installFixedRuntime(first,foreign,options),/unmanaged/);
   assert.equal(fs.readFileSync(path.join(foreign,'keep'),'utf8'),'mine');
@@ -167,4 +177,39 @@ test('personal preparation embeds the input helper and propagates build failure'
   }),/compiler failed/);
   assert.equal(fs.existsSync(temporary),false);
  }finally{fs.rmSync(root,{recursive:true,force:true});}
+});
+
+// Registration is not filesystem retention: even a renamed .bundle can remain registered.
+// Exercise exact bundle-ID selection and the production unregister/register order without system writes.
+test('LaunchServices retirement removes the old path then re-registers the stable installation',async()=>{
+ const {parseRegisteredApps,appRegistry}=await import('../personal-build/app-registry.mjs');
+ const dump='--------------------\npath: /tmp/old.bundle (0x123)\nidentifier: app.cindy.personal.fixture\n--------------------\npath: /tmp/official.app (0x456)\nidentifier: com.xd.cindy\n';
+ assert.deepEqual(parseRegisteredApps(dump,'app.cindy.personal.fixture'),['/tmp/old.bundle']);
+ const calls=[];appRegistry(args=>calls.push(args)).retire('/tmp/old.bundle','/tmp/Personal.app');
+ assert.deepEqual(calls,[['-u','/tmp/old.bundle'],['-f','/tmp/Personal.app']]);
+});
+
+test('registry repair preserves running, foreign and unverifiable copies',async()=>{
+ const {reconcileRegistrations}=await import('../personal-build/app-registry.mjs');
+ const removed=[],registered=[];
+ const result=reconcileRegistrations('/fixed.app',{paths:['/fixed.app','/old.bundle','/running.app','/foreign.app','/tampered.app'],
+  canonical:copy=>copy,
+  verify:copy=>{if(copy==='/tampered.app')throw Error('invalid signature');},
+  isRunning:copy=>copy==='/running.app',sameBundle:copy=>copy!=='/foreign.app',
+  registry:{unregister:copy=>removed.push(copy),register:copy=>registered.push(copy)}});
+ assert.deepEqual(removed,['/old.bundle']);assert.deepEqual(registered,['/fixed.app']);
+ assert.equal(result.ok,false);assert.equal(result.results.filter(r=>r.state==='retained').length,3);
+});
+
+test('registry repair never unregisters an alias of the fixed application',async t=>{
+ const {reconcileRegistrations}=await import('../personal-build/app-registry.mjs');
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'registry-alias-'));
+ t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));
+ const app=path.join(dir,'Fixed.app'),alias=path.join(dir,'Alias.app');
+ fs.mkdirSync(app);fs.symlinkSync(app,alias);
+ const removed=[];
+ const result=reconcileRegistrations(app,{paths:[alias],verify:()=>{},isRunning:()=>false,sameBundle:()=>true,
+  registry:{unregister:copy=>removed.push(copy),register:()=>{}}});
+ assert.deepEqual(removed,[]);assert.equal(result.ok,false);
+ assert.match(result.results[0].reason,/Alias/);
 });
