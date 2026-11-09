@@ -1,5 +1,5 @@
 // Integration tier: execute the production Windows move against fake credentials.
-// #9316 needs an actual no-overwrite rename, not a mocked link/unlink sequence.
+// #9316 publishes symlinks and read-only Dev snapshots with a no-overwrite move.
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -28,6 +28,24 @@ try {
   assert.equal(fs.statSync(target).nlink, 1, 'publication must not create a hardlink');
   await assert.rejects(moveCodexAuthFile(source, target), { code: 'ENOENT' });
   assert.equal(fs.readFileSync(target, 'utf8'), 'fake-local-token');
+  const linked = path.join(root, 'auth.json.linktmp');
+  const published = path.join(root, 'shared-auth.json');
+  let canSymlink = true;
+  try {
+    fs.symlinkSync(target, linked, 'file');
+  } catch (error) {
+    if (error.code !== 'EPERM' && error.code !== 'EACCES') throw error;
+    canSymlink = false;
+  }
+  if (canSymlink) {
+    await moveCodexAuthFile(linked, published);
+    assert.equal(fs.lstatSync(published).isSymbolicLink(), true);
+    assert.equal(fs.existsSync(linked), false);
+    assert.equal(fs.readFileSync(published, 'utf8'), 'fake-local-token');
+    assert.equal(fs.statSync(target).nlink, 1);
+  } else {
+    console.log('File symlink publication skipped: runner lacks symlink privilege.');
+  }
   console.log('Windows Codex auth no-overwrite move integration passed.');
 } finally {
   fs.rmSync(root, { recursive: true, force: true });

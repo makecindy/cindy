@@ -56,14 +56,10 @@ import {
 } from './built-in-skills.js';
 import {
   copyCodexAuthSnapshotWithRetry,
-  breakResidualSystemCodexHardlinks,
   inspectCodexAuthLink,
-  recoverInterruptedCodexAuthSwap,
   relinkSharedCodexAuth,
-  syncIndependentCodexAuth,
   resolveWindowsAclPrincipal,
   codexAuthLinkAcceptanceFor,
-  codexAuthLinkCount,
   codexAuthPathsShareIdentity,
 } from './codex-auth-link.js';
 import { getCodexCliAuthPath, getPreferredSharedCodexAuthPath, getReleaseCodexAuthPath } from './codex-shared-auth.js';
@@ -1191,36 +1187,6 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
     await this.reconcileWithSystemCodex();
   }
 
-  /**
-   * 清掉系统凭证上残留的硬链(同机另一个升级前的 profile 也建过硬链),并核对结果。
-   *
-   * Codex 0.165+ 拒绝写 nlink>1 的 auth.json:残留没清掉,用户就再也存不住登录态。
-   * 清理可能因 ACL/EBUSY 之类的瞬时失败而没成 —— 这时不能记「共享登录已就绪」,
-   * 也不当成完成:返回 false,让下一次对账再试(#9316 review)。
-   */
-  private async clearResidualSystemCodexHardlinks(systemAuth: string): Promise<boolean> {
-    await breakResidualSystemCodexHardlinks(systemAuth, process.platform);
-    const nlink = await codexAuthLinkCount(systemAuth);
-    if (nlink !== undefined && nlink > 1) {
-      credPathLog.warn('codex auth.json still has residual hardlinks; Codex cannot persist credentials until cleaned', {
-        nlink,
-      });
-      return false;
-    }
-    return true;
-  }
-
-  /**
-   * 写回系统凭证前重新核对两侧账号。先前读到的账号结论可能已经过期 ——
-   * 本机 Codex 若在这期间把系统凭证换成另一个账号,过期的结论会授权旧账号
-   * 覆盖新登录(#9316 review)。
-   */
-  private async confirmSameCodexAccount(systemAuth: string, myAuth: string): Promise<boolean> {
-    const sysAccountId = await readCodexAccountId(systemAuth);
-    const localAccountId = await readCodexAccountId(myAuth);
-    return !!sysAccountId && !!localAccountId && sysAccountId === localAccountId;
-  }
-
   /** reconcile 真正的执行体 —— 只经由 reconcileWithSystemCodex(AfterLogin) 调用, 不直接对外。 */
   private async runReconcileWithSystemCodex(): Promise<void> {
     if (!app.isPackaged && process.env.XDT_ISOLATED_AUTH === '1') {
@@ -1249,8 +1215,7 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
     const systemAuth = getSystemCodexAuthPath();
     const myAuth = path.join(this.codexHome, 'auth.json');
 
-    // 作废闸门的判定用**恢复前**的文件状态: 恢复只是把崩在窗口里的那次替换补完, 不该
-    // 因为文件回来了就把「用户已断开」的抑制解除。
+    // 用户主动断开的抑制仍以当前凭证和持久标记为准。
     const marker = this.suppressSystemCodexReconcile
       ? readInvalidatedSystemCodexAuthMarker(this.codexHome)
       : null;
@@ -1259,18 +1224,9 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
         !!getActiveInvalidatedSystemCodexAuthMarker(this.codexHome, systemAuth, myAuth)
       : false;
 
-    // 上一次替换崩在「旧目标已挪走、新凭证还没发布」的窗口里: 系统路径缺失, 而备份
-    // (`<auth.json>.*.swapbak`)与同一次调用的 sidecar 还在。按备份把它恢复回来。
-    //
-    // 这一步必须在**作废闸门之前**: 标记还在时本地登录会先拆系统路径上的残余硬链, 崩在
-    // 发布之前就留下一个缺失的系统凭证; 重启后闸门直接返回, 恢复的那一步永远走不到 ——
-    // 用户看到的是「本地登录一直失败」(Codex review #9316)。
-    //
-    // 目标还在时也调它: 上一轮恢复因瞬时原因失败而留下的配对备份必须在这里清掉 ——
-    // 留着它, 本机 Codex 之后登出(自己删掉 auth.json)时会被下一次对账当成崩过的替换,
-    // 把旧账号凭证倒回来(#9316 review)。
-    const recovered = await recoverInterruptedCodexAuthSwap(systemAuth);
-    if (!recovered && !existsSync(systemAuth)) return;
+    // No automatic recovery of *.swapbak: it cannot distinguish an interrupted
+    // writer from another live profile or a native logout. Leave any old backup intact.
+    if (!existsSync(systemAuth)) return;
 
     if (markerActive) return;
     if (this.suppressSystemCodexReconcile) {
@@ -1293,7 +1249,7 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
       markNativeProviderAuthSharedSystemCredential('openai');
     }
     // 健康的 Windows hardlink 不能再短路:Codex 0.165+ 拒绝 nlink>1。落到下面的
-    // relink,换成文件 symlink;建不了就拆成独立副本(#9277)。
+    // relink,换成文件 symlink;建不了则移除本实例的旧别名,系统凭证保留,改走独立登录。
     if (topology.healthy && topology.linkType === 'symlink') {
       if (this.shouldSnapshotReleaseCodexAuth(systemAuth, myAuth)) {
         const snapshot = await copyCodexAuthSnapshotWithRetry(systemAuth, myAuth);
@@ -1313,10 +1269,6 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
         // Release 那份的 nlink 与这个进程无关。
         return;
       }
-      // 同机另一个升级前的 profile 可能还硬链着系统 auth.json:系统路径 nlink 仍 > 1
-      // 时 Codex 0.165+ 拒绝写它。这里一并清掉;清不掉就不记「共享已就绪」,
-      // 留给下一次对账重试(#9316 review)。
-      if (!(await this.clearResidualSystemCodexHardlinks(systemAuth))) return;
       this.lastKnownCodexCredentialScope = 'system-shared';
       return;
     }
@@ -1341,7 +1293,9 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
     }
 
     const sysAccount = await readCodexAccountId(systemAuth);
-    if (!sysAccount) return; // 本机 auth.json 解析不出 account, 保守不动
+    // A proven hardlink can be migrated even when the expired/broken credential
+    // has no readable account: both paths already reference the same file.
+    if (!sysAccount && topology.linkType !== 'hardlink') return;
 
     const myAccount = hasLocalEntry ? await readCodexAccountId(myAuth) : null;
     if (legacyExplicitOwner && myAccount && myAccount !== sysAccount) {
@@ -1353,6 +1307,18 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
         provenanceMigrated: migrated,
         ownerMatchesActive: legacyExplicitOwner === getActiveAppSession().dataOwnerId,
       });
+      return;
+    }
+
+    // Windows without symlink privilege uses an independent native login. Keep
+    // existing standalone credentials, regardless of timestamps or account equality.
+    if (
+      process.platform === 'win32' && topology.linkType === 'file' &&
+      !this.shouldSnapshotReleaseCodexAuth(systemAuth, myAuth)
+    ) {
+      if (legacyExplicitOwner) {
+        migrateLegacyExplicitNativeProviderAuthToInstanceIsolated('openai', legacyExplicitOwner);
+      }
       return;
     }
 
@@ -1369,7 +1335,7 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
     if (this.pendingLogin || this.loginCancellationOpen) return;
 
     // 无显式隔离 provenance 时使用本机凭证：文件 symlink。Windows 建不了 symlink
-    // 时不退回 hardlink,改为独立副本按 mtime 同步(#9277)。
+    // 时不退回 hardlink 或复制 token,改走独立登录。
     // 安全替换 (唯一 sidecar + 失败重建) 见 codex-auth-link.ts —— 避免并发撞临时文件、
     // 以及"myAuth 删了又建不回去导致用户被迫重登"的空窗。
     // 建共享链接前幂等确保 codexHome 目录存在: 首启时 assets 预热可能尚未建好目录, ENOENT
@@ -1397,53 +1363,12 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
       this.lastOrphanRepair = kind === 'linked' ? 'relinked' : 'failed';
     }
     switch (kind) {
-      case 'linked': {
-        // 同机另一个升级前的 profile 可能还留着指向系统 auth.json 的旧硬链:
-        // 系统路径 nlink 仍 > 1 时 Codex 0.165+ 拒绝写它, 换到新 inode(#9316 review)。
-        // 清不掉时不记成功态, 留给下一次对账重试(#9316 review)。
-        const cleaned = await this.clearResidualSystemCodexHardlinks(systemAuth);
-        if (cleaned) {
-          this.lastKnownCodexCredentialScope = 'system-shared';
-          log.info('codex auth.json linked with shared OpenAI login', { linkType });
-        }
+      case 'linked':
+        this.lastKnownCodexCredentialScope = 'system-shared';
+        log.info('codex auth.json linked with shared OpenAI login', { linkType });
         break;
-      }
       case 'link-unsupported':
-        if (process.platform === 'win32') {
-          // 账号未证明一致时绝不把本地副本写回 ~/.codex(旧账号不能覆盖系统登录)。
-          const accountsMatch = !!myAccount && !!sysAccount && myAccount === sysAccount;
-          const synced = await syncIndependentCodexAuth(systemAuth, myAuth, process.platform, undefined, {
-            allowLocalToSystem: accountsMatch,
-            // 写回前重新核对两侧账号:先前的结论可能已过期(本机 Codex 换号)。
-            confirmLocalToSystem: () => this.confirmSameCodexAccount(systemAuth, myAuth),
-          });
-          const syncedOk =
-            synced.kind === 'copied-from-system' ||
-            synced.kind === 'copied-from-local' ||
-            synced.kind === 'unchanged';
-          if (syncedOk) {
-            if (hasLocalEntry && !topology.healthy) this.lastOrphanRepair = 'relinked';
-            // 两侧还挂着别处的硬链时,Codex 0.165+ 拒绝写它们 —— 凭证在,但
-            // 存不住新 token。清不掉就不记「共享已就绪」,留给下一次对账重试
-            // (和共享链接路径的处置一致,#9316 review)。
-            if (synced.residualSystemHardlinks !== undefined || synced.residualLocalHardlinks !== undefined) {
-              credPathLog.warn('codex auth.json still has residual hardlinks; Codex cannot persist credentials until cleaned', {
-                systemHardlinks: synced.residualSystemHardlinks,
-                localHardlinks: synced.residualLocalHardlinks,
-              });
-              break;
-            }
-            this.lastKnownCodexCredentialScope = 'system-shared';
-            credPathLog.warn('Windows file symlink unavailable; synced an independent Codex auth copy', {
-              direction: synced.kind,
-              accountsMatch,
-              error: error?.message,
-            });
-            break;
-          }
-        }
-        // 共享链接不支持且无法同步时 myAuth 一字未动。
-        credPathLog.warn('shared OpenAI auth link failed, auth.json left intact', {
+        credPathLog.warn('shared OpenAI auth link unavailable; use independent login', {
           error: error?.message,
         });
         break;
@@ -2021,7 +1946,7 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
         return { authenticated: false, errorReason: 'isolated_auth_cleanup_failed' };
       }
     }
-    if (opts?.mode === 'local') {
+    localLogin: if (opts?.mode === 'local') {
       const owner = getActiveAppSession();
       const systemAuth = getSystemCodexAuthPath();
       const localAuth = path.join(this.codexHome, 'auth.json');
@@ -2044,21 +1969,11 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
         const identity = parseCodexAccountIdentity(raw);
         const tokens = JSON.parse(raw).tokens;
         if (typeof tokens?.access_token !== 'string' || !tokens.access_token) return { authenticated: false, errorReason: 'no_oauth' };
-        // 存量硬链(升级前的 profile 把本地这份硬链到系统凭证)即使两侧身份相同也要先拆:
-        // Codex 0.165+ 拒绝写 nlink>1 的文件,只凭身份相同就短路会跳过清理, 登录照旧
-        // 报 system-shared,凭证却存不住新 token(#9316 review)。nlink<=1 时这里是
-        // no-op, symlink / 独立副本的快路径不受影响。
-        //
-        // 例外:只读 Dev 消费的是 Release 凭证的**快照副本**(见下方 snapshot 分支) ——
-        // 这个进程对 Release 文件是只读的,清残留硬链等于换掉 Release 的 inode(写操作),
-        // 本地 Codex 写的又不是它,没有资格也没有必要动它(#9316 review)。
-        if (!this.shouldSnapshotReleaseCodexAuth(systemAuth, localAuth)) {
-          await this.clearResidualSystemCodexHardlinks(systemAuth);
-        }
-        // 本地凭证已经共享系统凭证时不必再重建 —— 身份判定对共享链接按链接目标
-        // 路径来,本机 Codex 在核对期间原子替换系统凭证也不会误判成「不是同一份」
-        // (#9316 review)。
-        if (!(await codexAuthPathsShareIdentity(localAuth, systemAuth))) {
+        const topology = await inspectCodexAuthLink(systemAuth, localAuth);
+        if (
+          path.resolve(localAuth) !== path.resolve(systemAuth) &&
+          !(topology.linkType === 'symlink' && await codexAuthPathsShareIdentity(localAuth, systemAuth))
+        ) {
           fs.mkdirSync(this.codexHome, { recursive: true, mode: 0o700 });
           // Retain the existing read-only Dev exception; writable runtimes must share
           // the native credential rather than rotate an independent refresh-token copy.
@@ -2070,7 +1985,9 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
             // relink 可能以 recovered / swap-failed-intact 收口:此时本地凭证其实
             // 已经共享了系统凭证(重建成功,或并发的另一次已抢先放好)。看最终的
             // 文件身份,别把健康的结果当成失败(#9316 review)。
-            const sharesSystemCredential = await codexAuthPathsShareIdentity(localAuth, systemAuth);
+            const finalTopology = await inspectCodexAuthLink(systemAuth, localAuth);
+            const sharesSystemCredential = finalTopology.linkType === 'symlink' &&
+              await codexAuthPathsShareIdentity(localAuth, systemAuth);
             const acceptance = codexAuthLinkAcceptanceFor(relink.kind, sharesSystemCredential, process.platform);
             if (acceptance === 'accept-shared' && relink.kind !== 'linked') {
               credPathLog.warn('codex auth.json link recovered with the shared system credential', {
@@ -2081,39 +1998,12 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
             if (acceptance === 'reject') {
               throw new Error('Local auth link failed');
             }
-            if (acceptance === 'fallback-copy') {
-              // Windows 无 symlink 权限时接受独立副本降级(#9277),不再要求同 inode。
-              // 登录读的是系统凭证,但本地残留副本可能属于另一个账号(旧账号之后
-              // 又被刷新过)。只有账号证明一致才允许把本地写回 ~/.codex。
-              const sysAccountId = await readCodexAccountId(systemAuth);
-              const localAccountId = existsSync(localAuth)
-                ? await readCodexAccountId(localAuth)
-                : null;
-              const accountsMatch =
-                !!sysAccountId && !!localAccountId && sysAccountId === localAccountId;
-              const synced = await syncIndependentCodexAuth(systemAuth, localAuth, process.platform, undefined, {
-                allowLocalToSystem: accountsMatch,
-                // 写回前重新核对两侧账号:先前的结论可能已过期(本机 Codex 换号)。
-                confirmLocalToSystem: () => this.confirmSameCodexAccount(systemAuth, localAuth),
-              });
-              const syncedOk =
-                synced.kind === 'copied-from-system' ||
-                synced.kind === 'copied-from-local' ||
-                synced.kind === 'unchanged';
-              if (!syncedOk) throw new Error('Local auth link failed');
-              // 两侧还挂着别处的硬链时,Codex 0.165+ 拒绝写它们 —— 凭证在,但
-              // 存不住新 token。不拦登录(凭证本身可用),留下警告;下一次对账
-              // 会再试一次(#9316 review)。
-              if (synced.residualSystemHardlinks !== undefined || synced.residualLocalHardlinks !== undefined) {
-                credPathLog.warn('codex auth.json still has residual hardlinks; Codex cannot persist credentials until cleaned', {
-                  systemHardlinks: synced.residualSystemHardlinks,
-                  localHardlinks: synced.residualLocalHardlinks,
-                });
-              }
+            if (acceptance === 'independent-login') {
+              if (!stillCurrent()) return { authenticated: false, errorReason: 'login_cancelled' };
+              // Continue through the existing browser OAuth flow in this Cindy home.
+              // It persists instance-isolated provenance after a successful login.
+              break localLogin;
             }
-            // 系统路径上还挂着别的 profile 的旧硬链时 nlink 仍 > 1,Codex 拒绝写它。
-            // 清不掉不拦登录(凭证本身可用),但要留下警告;下一次对账会再试一次。
-            await this.clearResidualSystemCodexHardlinks(systemAuth);
           }
         }
         if (!stillCurrent()) {

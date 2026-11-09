@@ -1,9 +1,14 @@
 import fs from 'node:fs';
+import { EventEmitter } from 'node:events';
+import * as childProcess from 'node:child_process';
+import * as binaries from '../../agent-binaries/index.js';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+
+vi.mock('node:child_process', { spy: true });
 
 // Load the adapter graph during collection, not inside the first assertion
 // (cold transforms under the Windows CI pool are unrelated to file identity).
@@ -628,11 +633,9 @@ describe('Codex system credential suppression marker', () => {
     });
   });
 
-  // 上一次替换崩在发布之前时, 系统凭证缺失、备份与 sidecar 还在。这对残留必须在
-  // **作废闸门之前**恢复: 标记还在时本地登录会先拆系统路径上的残余硬链, 崩在发布
-  // 之前就留下一个缺失的系统凭证; 重启后闸门直接返回, 恢复的那一步永远走不到 ——
-  // 用户看到的是「本地登录一直失败」(Codex review #9316)。
-  it('restores an interrupted swap before the reconcile-suppression gate', async () => {
+  // #9316: 旧开发实现的备份不能区分崩溃和原生登出。保留字节供人工恢复,
+  // 不凭配对文件自动恢复授权,更不能越过用户断开闸门。
+  it('preserves old backup bytes without reviving a suppressed native login', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'xdt-codex-swap-before-gate-'));
     dirs.push(root);
     h.userDataDir = path.join(root, 'user-data');
@@ -666,16 +669,15 @@ describe('Codex system credential suppression marker', () => {
     const adapter = new DesktopCodexAuthAdapter();
     await adapter.getState({ credentialMode: 'oauth-bearer' });
 
-    // 恢复发生在闸门之前: 系统凭证回来了, 本地登录不再卡在「读不到系统凭证」。
-    expect(fs.readFileSync(systemAuth, 'utf8')).toBe(credential);
-    expect(fs.existsSync(`${systemAuth}.4242.0.swapbak`)).toBe(false);
-    expect(fs.existsSync(`${systemAuth}.4242.0.copytmp`)).toBe(false);
+    expect(fs.existsSync(systemAuth)).toBe(false);
+    expect(fs.readFileSync(`${systemAuth}.4242.0.swapbak`, 'utf8')).toBe(credential);
+    expect(fs.readFileSync(`${systemAuth}.4242.0.copytmp`, 'utf8')).toBe(credential);
   });
 
   // 上一轮恢复因瞬时原因失败而留下的配对备份, 在目标被本机 Codex 重建出来之后就是
   // 纯残留: 留着它, 本机 Codex 之后登出(自己删掉 auth.json)时会被下一次对账当成
   // 崩过的替换, 把旧账号凭证倒回来(#9316 review)。
-  it('retires a retained swap pair once the target is back', async () => {
+  it('does not consume another profile backup pair or restore it after native logout', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'xdt-codex-swap-pair-retire-'));
     dirs.push(root);
     h.userDataDir = path.join(root, 'user-data');
@@ -699,8 +701,11 @@ describe('Codex system credential suppression marker', () => {
     await adapter.getState({ credentialMode: 'oauth-bearer' });
 
     expect(fs.readFileSync(systemAuth, 'utf8')).toBe(credential);
-    expect(fs.existsSync(`${systemAuth}.4242.0.swapbak`)).toBe(false);
-    expect(fs.existsSync(`${systemAuth}.4242.0.copytmp`)).toBe(false);
+    expect(fs.readFileSync(`${systemAuth}.4242.0.swapbak`, 'utf8')).toBe(credential);
+    expect(fs.readFileSync(`${systemAuth}.4242.0.copytmp`, 'utf8')).toBe(credential);
+    fs.unlinkSync(systemAuth);
+    await adapter.getState({ credentialMode: 'oauth-bearer' });
+    expect(fs.existsSync(systemAuth)).toBe(false);
   });
 
   it('persists first explicit login provenance before reconciling a different system account', async () => {
@@ -1935,10 +1940,7 @@ describe('Codex system credential suppression marker', () => {
     });
   });
 
-  it('repairs a pre-upgrade Windows hardlink rotated before provenance migration', async ({ skip }) => {
-    // Windows 未启用 Developer Mode 时 symlink 返回 EPERM,生产代码降级为独立副本,
-    // 断言口径不同(降级路径由 codexAuthLink 用例覆盖)。与 POSIX 同款用例一致跳过。
-    if (!canLinkFile) skip();
+  it('preserves a detached Windows credential without copying either direction', async () => {
     const originalPlatform = process.platform;
     Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
     try {
@@ -1987,21 +1989,21 @@ describe('Codex system credential suppression marker', () => {
         new DesktopCodexAuthAdapter().getState({ credentialMode: 'oauth-bearer' }),
       ).resolves.toMatchObject({
         authenticated: true,
-        credentialScope: 'system-shared',
+        credentialScope: 'instance-isolated',
         credentialDiagnostics: {
-          linkType: 'symlink',
+          linkType: 'file',
           healthy: true,
-          orphanRepair: 'relinked',
+          orphanRepair: 'none',
         },
       });
 
-      expect(fs.lstatSync(localAuth).isSymbolicLink()).toBe(true);
+      expect(fs.lstatSync(localAuth).isSymbolicLink()).toBe(false);
       expect(fs.statSync(systemAuth).nlink).toBe(1);
-      expect(fs.readFileSync(localAuth, 'utf8')).toContain('system-f2-token');
-      expect(fs.readFileSync(localAuth, 'utf8')).not.toContain('system-f1-token');
+      expect(fs.readFileSync(localAuth, 'utf8')).toContain('system-f1-token');
+      expect(fs.readFileSync(localAuth, 'utf8')).not.toContain('system-f2-token');
       const localStat = fs.statSync(localAuth);
       const systemStatAfterReconcile = fs.statSync(systemAuth);
-      expect({ dev: localStat.dev, ino: localStat.ino }).toEqual({
+      expect({ dev: localStat.dev, ino: localStat.ino }).not.toEqual({
         dev: systemStatAfterReconcile.dev,
         ino: systemStatAfterReconcile.ino,
       });
@@ -2858,11 +2860,9 @@ describe('Codex system credential suppression marker', () => {
     });
   });
 
-  // 测试价值(#9316 review): 同机另一个升级前的 profile 仍硬链着系统 auth.json 时,
-  // 系统路径 nlink > 1,Codex 0.165+ 拒绝写它 —— 用户再也存不住登录态。共享已经是
-  // symlink(健康)时对账同样要清掉残留硬链;清理因瞬时失败没成时不记成功态,
-  // 下一次对账再试。
-  it('共享已是 symlink 时也清掉系统凭证上残留的硬链,失败则下一次对账重试', async ({ skip }) => {
+  // #9316: 其它 profile 的硬链接由该 profile 自己迁移。当前实例不能通过替换
+  // 系统 inode 拆链,否则可能覆盖原生刷新或撤销登出。
+  it('共享已是 symlink 时不替换系统文件或改动另一个 profile 的旧硬链接', async ({ skip }) => {
     if (!canLinkFile) skip();
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'xdt-codex-residual-hardlink-'));
     dirs.push(root);
@@ -2894,32 +2894,19 @@ describe('Codex system credential suppression marker', () => {
     );
     expect(fs.statSync(systemAuth).nlink).toBe(2);
 
-    // 拆硬链一直失败(瞬时 EBUSY):系统路径仍是 nlink=2,Codex 存不住凭证。
-    // 失败点选在写 sidecar 上:它在任何平台专属步骤(Windows 先删系统路径再
-    // rename)之前 —— 失败点在 rename 上时,Windows 已经把系统路径删掉又用
-    // 内存里的内容写回了一份新文件,nlink 已经是 1,两种平台的失败形态不一致。
-    const originalWriteFile = fs.promises.writeFile.bind(fs.promises);
-    let breakFails = true;
-    vi.spyOn(fs.promises, 'writeFile').mockImplementation(async (file, data, options) => {
-      if (String(file).includes('.copytmp') && breakFails) {
-        const err = new Error('EBUSY: resource busy') as NodeJS.ErrnoException;
-        err.code = 'EBUSY';
-        throw err;
-      }
-      return originalWriteFile(file as never, data as never, options as never);
-    });
-
+    const originalSystem = fs.statSync(systemAuth, { bigint: true });
     const { DesktopCodexAuthAdapter } = await import('../auth-adapters.js');
     const adapter = new DesktopCodexAuthAdapter();
     const first = await adapter.getState({ credentialMode: 'oauth-bearer' });
-    // 清不掉就不记成功态:诊断里仍看得到残留的硬链数。
+    // 诊断如实保留其它 profile 的链接数。
     expect(first.credentialDiagnostics?.systemAuthLinkCount).toBe(2);
 
-    breakFails = false;
     const second = await adapter.getState({ credentialMode: 'oauth-bearer' });
-    // 下一次对账重试成功:系统路径 nlink 回到 1,Codex 才能原子写入凭证。
-    expect(second.credentialDiagnostics?.systemAuthLinkCount).toBe(1);
-    expect(fs.statSync(systemAuth).nlink).toBe(1);
+    // 重复对账也不改写系统文件或另一个 profile。
+    expect(second.credentialDiagnostics?.systemAuthLinkCount).toBe(2);
+    expect(fs.statSync(systemAuth).nlink).toBe(2);
+    expect(fs.statSync(systemAuth, { bigint: true }).ino).toBe(originalSystem.ino);
+    expect(fs.readFileSync(otherProfile)).toEqual(fs.readFileSync(systemAuth));
     expect(fs.readFileSync(systemAuth, 'utf8')).toContain('system-f1-token');
   });
 });
@@ -3205,8 +3192,101 @@ describe('deferred Codex OAuth dispatch proof', () => {
   });
 });
 
-describe('Codex 系统凭证替换崩在窗口里的恢复 (#9316 review)', () => {
-  it('系统凭证缺失但留下替换备份时,下一次对账把凭证恢复回来', async () => {
+// #9316: real adapter entry, fake CLI/OS boundaries. A denied symlink must start
+// independent OAuth, not copy or restore a refresh token. Unit tier, no real waits.
+it.each(['missing', 'hardlink', 'hardlink-without-account', 'file'] as const)(
+  'Windows without symlink privilege uses independent OAuth (local=%s)',
+  async (initial) => {
+    const originalPlatform = process.platform;
+    Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+    try {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-independent-oauth-'));
+      dirs.push(root);
+      h.userDataDir = path.join(root, 'data');
+      h.dataOwnerId = 'owner-a';
+      const home = path.join(root, 'home');
+      vi.spyOn(os, 'homedir').mockReturnValue(home);
+      const systemAuth = path.join(home, '.codex', 'auth.json');
+      const localAuth = path.join(h.userDataDir, 'codex-home', 'auth.json');
+      fs.mkdirSync(path.dirname(systemAuth), { recursive: true });
+      fs.mkdirSync(path.dirname(localAuth), { recursive: true });
+      const credential = JSON.stringify({
+        tokens: {
+          access_token: 'fake-native',
+          account_id: initial === 'hardlink-without-account' ? undefined : 'native',
+        },
+      });
+      fs.writeFileSync(systemAuth, credential);
+      const before = fs.statSync(systemAuth, { bigint: true });
+      if (initial.startsWith('hardlink')) fs.linkSync(systemAuth, localAuth);
+      if (initial === 'file') fs.writeFileSync(localAuth, 'existing-independent-credential');
+      vi.spyOn(fs.promises, 'symlink').mockRejectedValue(
+        Object.assign(new Error('denied'), { code: 'EPERM' }),
+      );
+      const copy = vi.spyOn(fs.promises, 'copyFile');
+      const { DesktopCodexAuthAdapter } = await import('../auth-adapters.js');
+      const adapter = new DesktopCodexAuthAdapter();
+      await adapter.getState({ credentialMode: 'oauth-bearer' });
+      if (initial === 'file')
+        expect(fs.readFileSync(localAuth, 'utf8')).toBe('existing-independent-credential');
+      else expect(fs.existsSync(localAuth)).toBe(false);
+      expect(fs.statSync(systemAuth).nlink).toBe(1);
+      vi.spyOn(adapter, 'ensureGlobalCodexAssets').mockResolvedValue(undefined);
+      const binaryPath = path.join(root, 'fake-codex.exe');
+      vi.spyOn(binaries, 'getCachedBinaryStatus').mockReturnValue({
+        binaryReady: true,
+        binaryPath,
+      } as ReturnType<typeof binaries.getCachedBinaryStatus>);
+      vi.spyOn(binaries, 'isVettedAgentBinaryPath').mockReturnValue(true);
+      const spawn = vi.spyOn(childProcess, 'spawn').mockImplementation(() => {
+        const child = Object.assign(new EventEmitter(), {
+          stdout: new EventEmitter(),
+          stderr: new EventEmitter(),
+        });
+        queueMicrotask(() => {
+          fs.writeFileSync(
+            localAuth,
+            JSON.stringify({
+              tokens: { access_token: 'fake-independent', account_id: 'independent' },
+            }),
+          );
+          child.emit('exit', 0);
+        });
+        return child as childProcess.ChildProcess;
+      });
+      await expect(adapter.triggerLogin({ mode: 'local' })).resolves.toMatchObject({
+        authenticated: true,
+        credentialScope: 'instance-isolated',
+      });
+      expect(spawn).toHaveBeenCalledWith(
+        binaryPath,
+        ['login'],
+        expect.objectContaining({
+          env: expect.objectContaining({ CODEX_HOME: path.dirname(localAuth) }),
+        }),
+      );
+      expect(copy).not.toHaveBeenCalled();
+      expect(fs.readFileSync(systemAuth, 'utf8')).toBe(credential);
+      expect(fs.statSync(systemAuth, { bigint: true }).ino).toBe(before.ino);
+      // A later native refresh/logout must neither overwrite the independent login
+      // nor be undone by a subsequent background reconcile.
+      fs.writeFileSync(
+        systemAuth,
+        JSON.stringify({ tokens: { access_token: 'fake-native-new', account_id: 'native' } }),
+      );
+      await adapter.getState({ credentialMode: 'oauth-bearer' });
+      fs.unlinkSync(systemAuth);
+      await adapter.getState({ credentialMode: 'oauth-bearer' });
+      expect(fs.existsSync(systemAuth)).toBe(false);
+      expect(fs.readFileSync(localAuth, 'utf8')).toContain('fake-independent');
+    } finally {
+      Object.defineProperty(process, 'platform', { value: originalPlatform, configurable: true });
+    }
+  },
+);
+
+describe('Codex 系统凭证备份与旧硬链接 (#9316 review)', () => {
+  it('系统凭证缺失时保留旧备份,但不自动恢复登录', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'xdt-codex-swap-recovery-'));
     dirs.push(root);
     h.userDataDir = path.join(root, 'user-data');
@@ -3227,10 +3307,10 @@ describe('Codex 系统凭证替换崩在窗口里的恢复 (#9316 review)', () =
     // 对账后续步骤(读账号、建共享链接等)在本机环境可能走不通,不影响这里断言的恢复。
     await adapter.getState({ credentialMode: 'oauth-bearer' }).catch(() => undefined);
 
-    expect(fs.existsSync(systemAuth)).toBe(true);
-    expect(JSON.parse(fs.readFileSync(systemAuth, 'utf8')).tokens.access_token).toBe('recovered-token');
-    expect(fs.existsSync(backup)).toBe(false);
-    expect(fs.existsSync(sidecar)).toBe(false);
+    expect(fs.existsSync(systemAuth)).toBe(false);
+    expect(JSON.parse(fs.readFileSync(backup, 'utf8')).tokens.access_token).toBe('recovered-token');
+    expect(fs.existsSync(backup)).toBe(true);
+    expect(fs.existsSync(sidecar)).toBe(true);
   });
 
   it('系统凭证缺失且没有备份时不凭空造出登录态', async () => {
