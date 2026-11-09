@@ -1532,6 +1532,18 @@ describe('group composer', () => {
     expect(h.chat.act).toHaveBeenLastCalledWith('send', expect.objectContaining({ mentions: { all: false, botIds: ['abu'] } }));
   });
 
+  // #9419, unit: a manually typed short mention must survive the room setting changing while
+  // the draft is open; the prior fixture only exercised a still-enabled preference.
+  it('keeps a typed short mention addressed when the preference is turned off', async () => {
+    const data = group({ openPlan: null });
+    const helper = { ...data.members[0]!, name: 'Ann', ownerName: 'Alex', ownerNameHidden: true, shortOwnerNamesEnabled: true };
+    await render(group({ openPlan: null, members: [helper] }));
+    await type('@Ann hello');
+    await render(group({ openPlan: null, members: [{ ...helper, name: 'Ann (Alex)', ownerNameHidden: false, shortOwnerNamesEnabled: false }] }));
+    await click('botGroup.composer.send');
+    expect(h.chat.act).toHaveBeenLastCalledWith('send', expect.objectContaining({ mentions: { all: false, botIds: [helper.botId] } }));
+  });
+
   // #9419: an ambiguous short draft must not become an unaddressed message that wakes all bots.
   it('keeps an ambiguous short mention in the draft until a member is picked', async () => {
     const data = group({ openPlan: null });

@@ -38,7 +38,7 @@ export function botGroupFormerShortLabel(member: Pick<BotGroupMentionMember, 'na
   const owner = member.ownerName?.trim();
   const name = member.name.trim();
   const suffix = owner ? ` (${owner})` : '';
-  return member.shortOwnerNamesEnabled === true && member.ownerNameHidden === false && suffix && name.endsWith(suffix) && name.length > suffix.length
+  return member.shortOwnerNamesEnabled !== undefined && member.ownerNameHidden === false && suffix && name.endsWith(suffix) && name.length > suffix.length
     ? name.slice(0, -suffix.length) : undefined;
 }
 
@@ -92,7 +92,9 @@ function buildLabelEntries(
   allBotLabels: readonly string[] = [],
 ): LabelEntry[] {
   const byLabel = new Map<string, LabelEntry>();
-  const strictAliases = members.some(member => member.shortOwnerNamesEnabled === true);
+  // Once a server supports the preference, drafts may contain labels from either
+  // setting even after it is switched off. Older servers retain their old behavior.
+  const strictAliases = members.some(member => member.shortOwnerNamesEnabled !== undefined);
   const allClaims = new Map<string, Set<string>>();
   const claim = (map: Map<string, Set<string>>, label: string | undefined, id: string) => {
     const key = label?.trim();

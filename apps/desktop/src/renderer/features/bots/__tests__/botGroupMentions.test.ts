@@ -49,6 +49,17 @@ describe('resolveBotGroupMentions', () => {
     expect(resolveBotGroupMentions('@Helper please', { members: [{ botId: 'one', name: 'Helper (Alex)', ownerName: 'Alex', ownerNameHidden: false, shortOwnerNamesEnabled: true }], allLabels: [] }).botIds).toEqual(['one']);
   });
 
+  // #9419, unit: after the preference is turned off, a short name already typed in a draft
+  // must still resolve; when that name is shared, it must require an explicit pick.
+  it('keeps short drafts safe when the group preference is turned off', () => {
+    const helper = { botId: 'one', name: 'Helper (Alex)', ownerName: 'Alex', ownerNameHidden: false, shortOwnerNamesEnabled: false };
+    expect(resolveBotGroupMentions('@Helper please', { members: [helper], allLabels: [] }).botIds).toEqual(['one']);
+    const human = { botId: 'human', name: 'Helper', actorKind: 'human' as const };
+    expect(hasAmbiguousBotGroupMentions('@Helper please', { members: [helper, human], allLabels: [] })).toBe(true);
+    expect(resolveBotGroupMentions('@Helper please', { members: [helper, human], allLabels: [] }).botIds).toEqual([]);
+    expect(resolveBotGroupMentions('@Helper please', { members: [{ botId: 'one', name: 'Helper (Alex)' }], allLabels: [] }).botIds).toEqual([]);
+  });
+
   // User decision: Everyone addresses humans; All Teammates is an independent
   // broadcast. Existing tests cover only one broadcast kind (unit regression).
   it('keeps human and companion broadcasts separate, including a picked namesake', () => {

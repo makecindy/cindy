@@ -163,9 +163,9 @@ export function BotGroupComposer({
 
   const activeMembers = useMemo(() => members.filter(isActiveBotGroupMember), [members]);
   const mentionMembers = useMemo(() => members.filter(member => member.isSelf !== true), [members]);
-  // Older groups keep the phone's original name-only resolver; the opt-in adds only the
-  // metadata needed to preserve previous labels and reject ambiguous drafts.
-  const resolveMember = (member: BotGroupMemberView) => member.shortOwnerNamesEnabled === true ? member : { botId: member.botId, name: member.name };
+  // Older servers keep the phone's original name-only resolver; a capable server
+  // must also preserve short drafts when the group preference is switched off.
+  const resolveMember = (member: BotGroupMemberView) => member.shortOwnerNamesEnabled !== undefined ? member : { botId: member.botId, name: member.name };
   const mentionCandidates = useMemo(() => mentionMembers.filter(isActiveBotGroupMember), [mentionMembers]);
   const allLabel = t('groupChat.mention.all');
   const allBotsLabel = t('groupChat.mention.allBots');
