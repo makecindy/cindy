@@ -56,6 +56,7 @@ import {
 import { isNetworkishErrorMessage, PI_GATEWAY_DROP_REASON } from '../shared/network-error.js';
 import { isContextModeDoctorToolName } from './context-mode-doctor-path.js';
 import type { PiRpcEvent } from './rpc-client.js';
+import { hy4ContentBlocks, isHy4Model, splitHy4InlineThinking } from './hy4-inline-thinking.js';
 import {
   parsePiSubagentProgress,
   type PiSubagentUsage,
@@ -194,6 +195,9 @@ export interface PiTranslateContext {
    * 必须按本块判定，不能和别的 text block 共用。
    */
   streamStopTokenByIndex: Map<number, StandaloneStopTokenHold>;
+  /** HY4 may omit its opener: hold text until a confirmed boundary or message end. */
+  inlineThinkingModel: string | undefined;
+  inlineThinkingByIndex: Map<number, { pending: string; released: boolean; thinkingEmitted: boolean }>;
   /**
    * 本 turn 最后一条 assistant 回复全文（正常 stop 即使无文字也覆盖；agent_start 重置）。
    * 用于 agent_settled 的 done.data.result —— 与 CC/Codex 对齐:register.ts 的
@@ -291,6 +295,8 @@ export function createPiTranslateContext(logger: Logger): PiTranslateContext {
     thinkingSeq: 0,
     thinkingBlocks: new Map(),
     streamStopTokenByIndex: new Map(),
+    inlineThinkingModel: undefined,
+    inlineThinkingByIndex: new Map(),
     finalAssistantText: '',
     finalAssistantStopReason: null,
     turnWallClockStartedAt: 0,
@@ -688,7 +694,7 @@ function applyDelegatedUsage(
 
 function assistantTextOf(message: PiAssistantMessage): string {
   const parts: string[] = [];
-  for (const block of message.content ?? []) {
+  for (const block of hy4ContentBlocks(message.model, message.content)) {
     if (block.type === 'text' && typeof block.text === 'string') {
       const visible = stripInternalWebCitations(block.text);
       if (visible.length > 0) parts.push(visible);
@@ -858,6 +864,8 @@ export function translatePiEvent(
       ctx.subagentToolCalls.clear();
       ctx.toolNamesByCallId.clear();
       ctx.streamStopTokenByIndex.clear();
+      ctx.inlineThinkingModel = undefined;
+      ctx.inlineThinkingByIndex.clear();
       pushStatus(queue, ctx, 'Working…', true);
       return;
     }
@@ -872,7 +880,9 @@ export function translatePiEvent(
       if (role && role !== 'assistant') return;
       ctx.thinkingBlocks.clear();
       ctx.streamStopTokenByIndex.clear();
-      const message = event.message as { usage?: PiUsage; timestamp?: number } | undefined;
+      ctx.inlineThinkingByIndex.clear();
+      const message = event.message as { usage?: PiUsage; timestamp?: number; model?: string } | undefined;
+      ctx.inlineThinkingModel = message?.model;
       const bridgedPriceVariant = priceVariantFromServiceTier(message?.usage?.service_tier);
       ctx.pendingPriceVariants.push(bridgedPriceVariant ?? ctx.getPriceVariant?.() ?? 'standard');
       startPiGenerationHeartbeat(ctx);
@@ -934,6 +944,16 @@ export function translatePiEvent(
       ctx.finalAssistantUsage = parseOutputLimitDetails({
         outputTokens: message.usage?.output, reasoningTokens: message.usage?.reasoning,
       });
+      // Final-only events and retries use the same split as the live stream.
+      if (isHy4Model(message.model)) {
+        for (const [index, block] of (message.content ?? []).entries()) {
+          if (block.type !== 'text' || typeof block.text !== 'string') continue;
+          const split = splitHy4InlineThinking(block.text, true);
+          if (split && !ctx.inlineThinkingByIndex.get(index)?.thinkingEmitted) {
+            emitHy4Thinking(index, split.thinking, queue, ctx);
+          }
+        }
+      }
       const fullText = assistantTextOf(message);
       if (fullText.length > 0 || message.content?.some((block) => block.type === 'thinking' || block.type === 'toolCall')) ctx.cacheRecoveryHasOutput = true;
       ctx.finalAssistantStopReason = typeof message.stopReason === 'string'
@@ -973,6 +993,8 @@ export function translatePiEvent(
           },
         });
       }
+      ctx.inlineThinkingByIndex.clear();
+      ctx.inlineThinkingModel = undefined;
       ctx.tokenSpeed.pause();
       // Only the parent's own reported output calibrates the meter; delegated
       // subagent tokens belong to the tool window, not to parent generation.
@@ -1463,9 +1485,26 @@ function handleAssistantDelta(
   switch (delta.type) {
     case 'text_delta': {
       if (typeof delta.delta === 'string' && delta.delta.length > 0) {
+        let text = delta.delta;
+        const partial = delta.partial as { model?: string } | undefined;
+        if (isHy4Model(partial?.model ?? ctx.inlineThinkingModel)) {
+          const state = ctx.inlineThinkingByIndex.get(contentIndex)
+            ?? { pending: '', released: false, thinkingEmitted: false };
+          ctx.inlineThinkingByIndex.set(contentIndex, state);
+          if (!state.released) {
+            state.pending += text;
+            const split = splitHy4InlineThinking(state.pending);
+            if (!split) return;
+            emitHy4Thinking(contentIndex, split.thinking, queue, ctx);
+            state.thinkingEmitted = true;
+            state.released = true;
+            state.pending = '';
+            text = split.text;
+          }
+        }
         const buffer = ctx.streamStopTokenByIndex.get(contentIndex)
           ?? { pending: '', emitted: false };
-        const visible = holdStandaloneStopTokenDelta(buffer, delta.delta);
+        const visible = holdStandaloneStopTokenDelta(buffer, text);
         ctx.streamStopTokenByIndex.set(contentIndex, buffer);
         if (visible && visible.length > 0) {
           queue.push({ type: 'text', data: { text: visible, isFinal: false }, source: 'pi' });
@@ -1570,4 +1609,21 @@ function ensureThinkingBlock(
     });
   }
   return block;
+}
+
+/** Negative indexes keep inline blocks distinct from Pi's native thinking indexes. */
+function emitHy4Thinking(
+  index: number,
+  text: string,
+  queue: AsyncQueue<AgentEvent>,
+  ctx: PiTranslateContext,
+): void {
+  if (!text) return;
+  const block = ensureThinkingBlock(-index - 1, queue, ctx, false);
+  queue.push({
+    type: 'thinking',
+    data: { stage: 'final', blockId: block.blockId, text, durationMs: Date.now() - block.startedAt },
+    source: 'pi',
+  });
+  ctx.thinkingBlocks.delete(-index - 1);
 }

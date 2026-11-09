@@ -1,3 +1,4 @@
+import { hy4ContentBlocks } from './hy4-inline-thinking.js';
 import { parseMessageToolUse } from '@cindy/maker-shared/message-normalize';
 import type {
   SessionTreeEntryKind,
@@ -272,7 +273,7 @@ export function activePiHistoryFromTree(
         ...(typeof message.stopReason === 'string' ? { stopReason: message.stopReason } : {}),
         ...(recordOf(message.usage) ? { usage: message.usage as Record<string, unknown> } : {}),
       };
-      const blocks = Array.isArray(message.content) ? message.content : [];
+      const blocks = hy4ContentBlocks(message.model, message.content);
       for (let index = 0; index < blocks.length; index += 1) {
         const block = recordOf(blocks[index]);
         if (!block) continue;

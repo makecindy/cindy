@@ -1,5 +1,6 @@
 import { PI_CACHE_RECOVERY_SOURCE } from './cache-recovery-source.js';
 import { PI_NATIVE_PROVIDER_ADAPTER_SOURCE } from './native-provider-adapter-source.js';
+import { HY4_RESPONSE_POLICY_INSTALL_SOURCE } from './hy4-response-policy.js';
 /**
  * cindy-bridge —— 写进 pi agentHome/extensions/ 的扩展源码(字符串常量)。
  *
@@ -4736,6 +4737,7 @@ export default async function cindyBridge(piApi: any) {
     });
   }
   installTextOnlyTurnPolicy(pi);
+  ${HY4_RESPONSE_POLICY_INSTALL_SOURCE}
   const cacheRecovery = installCindyCacheRecovery(pi);
   const nativeProviderAdapters = await registerCindyNativeProviderAdapters(pi, cacheRecovery);
   const initialNativeSettings = typeof pi.getSettings === 'function' ? undefined
