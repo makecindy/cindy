@@ -88,6 +88,20 @@ it('keeps device-qualified read positions and treats only later host replies as 
   expect(isRemoteResourceUnread('alice', 'home', 'writer', 200)).toBe(false);
   expect((await readRemoteResourceSnapshot('bob')).items).toEqual({});
 });
+// Reading the companion on the computer (or another device) advances the computer's position;
+// the phone's badge must clear from that alone, and an older host position never rewinds it.
+it('clears a reply read on the computer from the host read position, never rewinding', async () => {
+  const withHostRead = (lastReplyAt: number, lastReadAt: number) => rows('home', lastReplyAt)
+    .map(row => ({ ...row, item: { ...row.item, display: { ...row.item.display, lastReadAt } } }));
+  await cacheRemoteResourceItems('alice', 'teammates', rows('home', 100));
+  await cacheRemoteResourceItems('alice', 'teammates', withHostRead(200, 100));
+  expect(isRemoteResourceUnread('alice', 'home', 'writer', 200)).toBe(true);
+  await cacheRemoteResourceItems('alice', 'teammates', withHostRead(200, 200));
+  expect(isRemoteResourceUnread('alice', 'home', 'writer', 200)).toBe(false);
+  await markRemoteResourceRead('alice', 'home', 'writer', 300);
+  await cacheRemoteResourceItems('alice', 'teammates', withHostRead(300, 200));
+  expect(isRemoteResourceUnread('alice', 'home', 'writer', 300)).toBe(false);
+});
 it('preserves unread replies in the same millisecond using exact server sequences', async () => {
   const first = '9007199254740992', second = '9007199254740993';
   const data: ChatSnapshot = { room: { id: 'group', name: 'Discussion', kind: 'group', archived: false, revision: 1,

@@ -3,6 +3,18 @@ import { ModelAdvancedDrawer } from '../../../src/renderer/components/settings/M
 import { buildUnionRows } from '../../../src/renderer/components/settings/UnifiedModelList';
 import { BUNDLED_CATALOG, resolveModelMetadata, type CatalogModel, type ProviderView } from '@cindy/model-providers';
 import { setDataOwnerGeneration } from '../../../src/renderer/contexts/dataOwnerGeneration';
+import type { ModelPriceOverrideDesiredQuote, ModelPriceOverrideTarget } from '../../../src/shared/modelPriceOverride';
+
+let priceOverride: ModelPriceOverrideDesiredQuote | null = null;
+const priceView = (target: ModelPriceOverrideTarget) => {
+  const reference = { providerId: target.providerId, modelId: target.modelId, source: 'provider-reference' as const,
+    currency: 'USD' as const, approximate: true, inputPerMtok: 1.2, outputPerMtok: 4.8 };
+  return { target, editable: true, reference, effective: priceOverride ? {
+    ...reference, ...priceOverride, source: 'user-override' as const,
+    cacheReadPerMtok: priceOverride.cacheReadPerMtok ?? undefined,
+    cacheCreatePerMtok: priceOverride.cacheCreatePerMtok ?? undefined,
+  } : reference, override: priceOverride, conflict: false, allowedCurrencies: ['USD'], registryUpdatedAt: null };
+};
 
 let imageInput: boolean | null = null;
 let finishOldImageSave: (() => void) | null = null;
@@ -26,7 +38,19 @@ void mountPage({
         queueMicrotask(() => finishOldImageSave?.());
       }),
       maker: {
-    getModelImageInputOverride: async () => ({ value: imageInput, mixed: false }),
+    getModelPriceOverride: async (target: ModelPriceOverrideTarget) => priceView(target),
+    setModelPriceOverride: async (target: ModelPriceOverrideTarget, desired: ModelPriceOverrideDesiredQuote) => {
+      priceOverride = desired;
+      return priceView(target);
+    },
+    resetModelPriceOverride: async (target: ModelPriceOverrideTarget) => {
+      priceOverride = null;
+      return priceView(target);
+    },
+    getModelImageInputOverride: async () => ({
+      value: imageInput ?? (ctx.case === 'image-inherited' ? true : null),
+      mixed: ctx.case === 'image-inherited' && imageInput === null,
+    }),
     setModelImageInputOverride: async (_target: unknown, value: boolean | null) => {
       imageInput = value;
       if (ctx.case === 'owner-repair' && value === false) {
@@ -49,11 +73,14 @@ void mountPage({
     const models = Object.fromEntries((['codex', 'claude-code', 'pi'] as const).map(agent => {
       const meta = resolveModelMetadata(BUNDLED_CATALOG.modelRegistry, 'openai', id, undefined, undefined, agent);
       const model: CatalogModel = {
-        id: agent === 'claude-code' ? `chatgpt/${id}` : id,
+        id: ctx.case === 'image-unknown' ? 'private-undeclared-model' : agent === 'claude-code' ? `chatgpt/${id}` : id,
         name:meta.name ?? id, group:'gpt', nativeApi:'openai-responses',
         contextWindow:meta.contextWindow ?? 272000, contextWindowMax:1050000, maxOutput:128000,
         efforts:meta.efforts ?? [], defaultEffort:meta.defaultEffort ?? 'medium',
-        supportsImageInput:true, supportsFastMode:true,
+        supportsImageInput:ctx.case === 'image-unknown' ? undefined
+          : ctx.case === 'image-unsupported' || (ctx.case === 'image-mixed' && agent === 'claude-code') ? false : true,
+        ...(ctx.case === 'image-inherited' ? { imageInputDefault: { supportsImageInput: agent !== 'codex' } } : {}),
+        supportsFastMode:true,
         supportsUltrafastMode:agent === 'codex' && ctx.case !== 'unavailable' && ctx.case !== 'legacy-sol',
       };
       return [agent, [model]];

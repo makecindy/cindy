@@ -47,6 +47,37 @@ const oidcManifest = {
 } as const;
 
 describe('plugin delivery contract', () => {
+  // #7408 P1: published schemas can exceed UTF-8 16KB while satisfying the old
+  // UTF-16 limit. Unit: read through the real release parser, retaining old bounds.
+  it('reads historical parameter sizes without accepting invalid release manifests', () => {
+    const schema = (description: string) => ({ type: 'object', description });
+    const overhead = JSON.stringify(schema('')).length;
+    const parameters = schema('汉'.repeat(6_000));
+    expect(JSON.stringify(parameters).length).toBeLessThan(16_384);
+    expect(new TextEncoder().encode(JSON.stringify(parameters)).length).toBeGreaterThan(16_384);
+    const read = (manifest: unknown) => parseGetPluginResponse({
+      schemaVersion: 2,
+      plugin: {
+        id: pluginId, ghostId: validManifest.id, name: validManifest.name,
+        description: null, author: null, scope: 'public', organizationId: null,
+        defaultInstall: false,
+        currentRelease: {
+          id: 'release-1', version: validManifest.version, sha256: 'a'.repeat(64),
+          sizeBytes: 60_000, publishedAt: '2026-07-19T00:00:00.000Z', icon: null, manifest,
+        },
+      },
+    }).plugin.currentRelease.manifest;
+    const withParameters = (value: unknown) => ({
+      ...validManifest, tools: [{ name: 'help', description: 'Help', parameters: value }],
+    });
+    for (const accepted of [parameters, schema('汉'.repeat(16_384 - overhead))]) {
+      expect(read(withParameters(accepted)).tools?.[0]?.parameters).toEqual(accepted);
+    }
+    expect(() => read(withParameters(schema('a'.repeat(16_385 - overhead))))).toThrow('16KB');
+    expect(() => read(withParameters([]))).toThrow('JSON Schema');
+    expect(() => read({ ...withParameters(parameters), entry: '../main.js' })).toThrow();
+  });
+
   it('preserves optional cumulative download statistics in list and detail without conflating installs', () => {
     const plugin = {
       id: pluginId, ghostId: validManifest.id, name: validManifest.name,
@@ -853,3 +884,45 @@ it.each([null, 'legacy', [], { ui: { resources: [{ uri: 'ui://help', file: '../p
       currentRelease: { ...plugin.currentRelease, manifest: { ...plugin.currentRelease.manifest, entry: '../main.js' } } } })).toThrow();
   },
 );
+
+describe('Plugin detail readme', () => {
+  // 协议(PluginReadmeDelivery):详细介绍只用于展示,格式不合法时整体丢弃,详情其余部分照常可用;
+  // 若改成抛错,一个作者写坏的介绍会让整个插件详情打不开。
+  const manifest = { ...validManifest, readme: { en: 'README.md' } };
+  const detail = (readme: unknown) =>
+    parseGetPluginResponse({
+      schemaVersion: PLUGIN_API_SCHEMA_VERSION,
+      plugin: {
+        id: pluginId,
+        ghostId: manifest.id,
+        name: manifest.name,
+        description: null,
+        author: null,
+        scope: 'public',
+        organizationId: null,
+        defaultInstall: false,
+        currentRelease: {
+          id: 'release-1',
+          version: manifest.version,
+          sha256: 'a'.repeat(64),
+          sizeBytes: 1024,
+          publishedAt: '2026-07-19T00:00:00.000Z',
+          manifest,
+        },
+        readme,
+      },
+    }).plugin;
+
+  it('parses a declared readme and drops a malformed one without failing the detail', () => {
+    const image = { ...validIcon, path: 'assets/shot.png' };
+    expect(detail({ path: 'README.md', markdown: '# Hi', images: [image] }).readme).toEqual({
+      path: 'README.md',
+      markdown: '# Hi',
+      images: [image],
+    });
+    const undeclared = detail({ path: 'OTHER.md', markdown: '# Hi', images: [] });
+    expect(undeclared.currentRelease.manifest.id).toBe(manifest.id);
+    expect(undeclared).not.toHaveProperty('readme');
+    expect(detail(undefined)).not.toHaveProperty('readme');
+  });
+});

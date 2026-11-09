@@ -947,8 +947,7 @@ export function RightSidebarShell({
             pillVariant="chip"
             addButtonWrapperClassName="h-[30px]"
           />
-          {/* 面板自属控件始终跟随面板：detach → maximize → 收起。固定唤起入口只在
-              面板收起或分离时存在；展开态不渲染无效的 show 按钮，也不预留空位。 */}
+          {/* 面板自属控件：分离 → 最大化 → 关闭；显示入口留在聊天区。 */}
           <div
             data-testid="right-sidebar-topbar-actions"
             className="flex h-full shrink-0 items-center gap-0.5"
@@ -965,6 +964,7 @@ export function RightSidebarShell({
             )}
             {onCloseSidebar && (
               <RightSidebarToggle
+                action="close"
                 collapsed={false}
                 onToggle={onCloseSidebar}
                 side={panelSide}

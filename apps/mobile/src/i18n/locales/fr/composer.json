@@ -66,7 +66,7 @@
     "pasteTimeout": "Le collage de l'image a expiré. Réessayez.",
     "clipboardReadFailed": "Impossible de lire l'image du presse-papiers. Copiez-la à nouveau et collez-la.",
     "maxAttachments": "Ajoutez jusqu'à {{count}} pièces jointes.",
-    "simulatorNoCamera": "Le simulateur n'a pas d'appareil photo. Utilisez « Photos » pour choisir dans la photothèque.",
+    "simulatorNoCamera": "Le simulateur n’a pas d’appareil photo. Utilisez « Photos et vidéos » pour choisir dans la photothèque.",
     "cameraPermission": "L'accès à l'appareil photo est désactivé. Autorisez {{appName}} à utiliser l'appareil photo dans les réglages du système.",
     "photoPermission": "L'accès aux photos est désactivé. Autorisez {{appName}} à accéder aux photos dans les réglages du système.",
     "noFileRead": "Aucun fichier envoyable n'a été lu."

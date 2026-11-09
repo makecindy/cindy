@@ -19,6 +19,7 @@ const code = ts.transpileModule(`return (${callback.getText(source)});`, {
 function fixture(windowAtTop: boolean) {
   const bindings = {
     scrollRef: { current: { scrollTop: 0, scrollHeight: 10000, clientHeight: 600 } },
+    contentRef: { current: null },
     scrollbarDragStartTopRef: { current: null }, restoringRef: { current: false },
     prevScrollTopRef: { current: 0 }, programmaticScrollRef: { current: true },
     focusJumpRef: { current: {} as object | null }, chipJumpGenerationRef: { current: null },

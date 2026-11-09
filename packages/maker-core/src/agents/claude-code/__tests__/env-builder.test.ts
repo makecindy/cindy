@@ -31,6 +31,16 @@ function createAuthAdapter(env: Record<string, string> = {}): AuthAdapter {
 }
 
 describe('buildClaudeEnv', () => {
+  it('uses an explicit subscription profile only for local native authentication', async () => {
+    const nativeSubscriptionAccount = { id: 'fixture', configDir: '/fixture/.claude-second', assertCurrent() {}, readState: async () => ({ authenticated: true }) };
+    const getAuthEnv = vi.fn(async (options?: AuthAdapterOptions): Promise<Record<string, string>> => options?.nativeSubscriptionAccount ? { CLAUDE_CONFIG_DIR: options.nativeSubscriptionAccount.configDir } : {});
+    const auth = { ...createAuthAdapter(), getAuthEnv };
+    const env = await buildClaudeEnv(auth, {}, { nativeCliAuth: true, nativeSubscriptionAccount });
+    expect(env.CLAUDE_CONFIG_DIR).toBe(nativeSubscriptionAccount.configDir);
+    const remote = await buildClaudeEnv(auth, {}, { mode: 'remote', nativeCliAuth: true, nativeSubscriptionAccount });
+    expect(remote.CLAUDE_CONFIG_DIR).toBeUndefined();
+    expect(getAuthEnv.mock.calls[1][0]?.nativeSubscriptionAccount).toBeUndefined();
+  });
   const originalDisableCron = process.env.CLAUDE_CODE_DISABLE_CRON;
   const originalNoColor = process.env.NO_COLOR;
   const originalCliColor = process.env.CLICOLOR;

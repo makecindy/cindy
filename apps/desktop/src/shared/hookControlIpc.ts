@@ -58,17 +58,18 @@ export const HOOK_CONTROL_INVOKE = {
   CANCEL_PENDING_BIND: 'maker:hook-control:cancel-pending-bind',
   /** 独立开关一个 Cindy IM provider；不会改动其它 provider。 */
   SET_PROVIDER_ENABLED: 'maker:hook-control:set-provider-enabled',
-  /** 发起 provider-neutral(Telegram / X)一次性绑定。 */
+  /** 发起 provider-neutral(Telegram / X / 飞书)一次性绑定。 */
   PROVIDER_BIND_START: 'maker:hook-control:provider-bind-start',
   /** 取消当前 provider-neutral 绑定尝试。 */
   PROVIDER_BIND_CANCEL: 'maker:hook-control:provider-bind-cancel',
   /** 解除当前 provider-neutral principal 与本设备的绑定。 */
   PROVIDER_BIND_REVOKE: 'maker:hook-control:provider-bind-revoke',
+  PROVIDER_BIND_SELECT: 'maker:hook-control:provider-bind-select',
   /** 在本机安全打开 provider 的绑定链接 / bot 主页 / 加群链接。 */
   PROVIDER_OPEN_ACTION: 'maker:hook-control:provider-open-action',
-  /** 读取 provider-neutral(Telegram / X)独立的 workspace 偏好。 */
+  /** 读取 provider-neutral(Telegram / X / 飞书)独立的 workspace 偏好。 */
   PROVIDER_PREFS_GET: 'maker:hook-control:provider-prefs-get',
-  /** 更新 provider-neutral(Telegram / X)独立的 workspace 偏好。 */
+  /** 更新 provider-neutral(Telegram / X / 飞书)独立的 workspace 偏好。 */
   PROVIDER_PREFS_SET: 'maker:hook-control:provider-prefs-set',
   /** 读取官方 Telegram bot 的回应、引用与群激活设置。 */
   TELEGRAM_BEHAVIOR_GET: 'maker:hook-control:telegram-behavior-get',
@@ -89,7 +90,7 @@ export const HOOK_CONTROL_EVENT = {
   STATUS_CHANGED: 'maker:hook-control:status-changed',
   /** 目录偏好快照推送(prefs.state; 含 Slack /model 卡改动的实时同步)。 */
   PREFS_CHANGED: 'maker:hook-control:prefs-changed',
-  /** provider-neutral 偏好快照推送（Telegram / X 消费）。 */
+  /** provider-neutral 偏好快照推送（Telegram / X / 飞书消费）。 */
   PROVIDER_PREFS_CHANGED: 'maker:hook-control:provider-prefs-changed',
   /** 官方 Telegram 行为配置快照推送（含其它客户端写入）。 */
   TELEGRAM_BEHAVIOR_CHANGED: 'maker:hook-control:telegram-behavior-changed',
@@ -105,7 +106,7 @@ export const HOOK_WORKSPACE_PROVIDER_SOURCE_MAX_ENTRIES = 256;
  * Cindy relay 当前支持的客户端 provider。协议包 HOOK_PROVIDERS 的手抄副本
  * (shared 层刻意不引协议包)——协议 bump 新增 provider 时必须手动同步。
  */
-export type HookProvider = 'slack' | 'telegram' | 'x';
+export type HookProvider = 'slack' | 'telegram' | 'x' | 'feishu';
 
 /** provider-neutral 状态机(非 slack legacy 线)覆盖的 provider。 */
 export type NeutralHookProvider = Exclude<HookProvider, 'slack'>;
@@ -133,13 +134,18 @@ export interface ProviderBindingView {
   scopeId: string | null;
   scopeName: string | null;
   connectUrl: string | null;
+  /**
+   * 一次性短关联码(飞书 / Lark: 网页授权不可用时发给机器人的兜底)。只在
+   * pending 时非空; 其它 provider 与旧 server 恒为 null。
+   */
+  bindCode: string | null;
   expiresAt: number | null;
   reason: string | null;
   remediationUrl: string | null;
   actions: string[];
 }
 
-/** provider-neutral(Telegram / X)的独立设置与绑定视图。 */
+/** provider-neutral(Telegram / X / 飞书)的独立设置与绑定视图。 */
 export interface ProviderHookView {
   /** Local companion assignment, currently only used by the official X provider. */
   companionBotId?: string | null;
@@ -158,8 +164,9 @@ export interface ProviderHookView {
   /**
    * 派发任务时使用的默认工作目录别名(null = 内置「对话」伪目录)。
    *
-   * **目前只有 X 会给出非 null 值**: Slack / Telegram 能在会话里当场选目录,
-   * X 一次交互只有一条公开推文, 没有承载选择面板的位置, 只能靠这个预设。
+   * Telegram / X / 飞书各自一份(Slack 走自己那张卡)。X 一次交互只有一条公开
+   * 推文, 没有承载选择面板的位置, 只能靠这个预设; 飞书第一期没有当场选目录的卡片,
+   * 同样以设置页的默认目录为准。
    */
   defaultWorkspace: string | null;
 }
@@ -222,6 +229,12 @@ export const HOOK_BIND_REASON_NOT_INSTALLED = 'not-installed';
 
 /** binding.reason 已知值(multi-team): 该 team 被同用户在另一台设备顶掉。 */
 export const HOOK_BIND_REASON_SUPERSEDED = 'superseded';
+
+/**
+ * provider binding.reason 已知值(飞书 / Lark, state=superseded): 账号生效的飞书应用
+ * 换了(组织换了自建应用, 或 Cindy 全局应用更换), 绑定随旧应用失效 —— 不是换了电脑。
+ */
+export const HOOK_BIND_REASON_APP_CHANGED = 'app_changed';
 
 /**
  * (multi-team)本地合成的终止态 reason: 「添加 workspace」授权落在已绑定的
@@ -317,6 +330,8 @@ export interface SlackHookView {
   telegram: ProviderHookView;
   /** 平级 X (Twitter) hook 服务状态。 */
   x: ProviderHookView;
+  /** 平级官方飞书 / Lark hook 服务状态。 */
+  feishu: ProviderHookView;
 }
 
 /** 工作区别名的合法格式(与 hook server 侧约定一致)。 */
@@ -344,8 +359,8 @@ export const HOOK_CHAT_WORKSPACE_ALIAS = 'chat';
  */
 export interface HookWorkspaceProviderSourceEntry {
   agentDeviceId?: string | null;
-  channel: 'slack' | 'telegram' | 'x';
-  /** Slack multi-team 归属; Telegram / X / 单绑定为 null。 */
+  channel: 'slack' | 'telegram' | 'x' | 'feishu';
+  /** Slack multi-team 归属; Telegram / X / 飞书 / 单绑定为 null。 */
   teamId: string | null;
   workspace: string;
   providerId: string;

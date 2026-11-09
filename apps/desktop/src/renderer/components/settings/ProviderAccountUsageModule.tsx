@@ -8,6 +8,7 @@
  */
 
 import { isKimiCodingProviderView } from '../../../shared/kimiCodingUsage';
+import { isOpenCodeGoProviderView } from '../../../shared/opencodeGoUsage';
 import { useTranslation } from 'react-i18next';
 
 import type { ProviderView } from '@cindy/model-providers';
@@ -20,7 +21,7 @@ import {
 import { useProviderAccountUsage } from '../../hooks/useProviderAccountUsage';
 import { Button } from '../ui/button';
 import { QuotaHoverCard } from '../status/QuotaHoverCard';
-import { buildDeepSeekUsageCard, buildZhipuUsageCard, buildKimiUsageCard } from '../status/usageCardModel';
+import { buildDeepSeekUsageCard, buildZhipuUsageCard, buildKimiUsageCard, buildOpenCodeGoUsageCard } from '../status/usageCardModel';
 
 export function ProviderAccountUsageModule({ provider }: { provider?: ProviderView }) {
   const { t, i18n } = useTranslation();
@@ -28,9 +29,10 @@ export function ProviderAccountUsageModule({ provider }: { provider?: ProviderVi
   const deepSeek = hasDeepSeekOfficialRouteView(provider);
   const zhipu = isZhipuCodingPlanProviderView(provider);
   const kimi = isKimiCodingProviderView(provider);
-  const usage = useProviderAccountUsage(deepSeek || zhipu || kimi ? provider : undefined);
+  const opencodeGo = isOpenCodeGoProviderView(provider);
+  const usage = useProviderAccountUsage(deepSeek || zhipu || kimi || opencodeGo ? provider : undefined);
   const dashboardUrl = usage.result?.dashboardUrl ?? getProviderAccountUsageDashboardUrlView(provider);
-  if (!deepSeek && !zhipu && !kimi) return null;
+  if (!deepSeek && !zhipu && !kimi && !opencodeGo) return null;
   const snapshot = usage.result?.status === 'ready' ? usage.result.snapshot : null;
   const errorText =
     usage.result?.status === 'unavailable'
@@ -38,6 +40,8 @@ export function ProviderAccountUsageModule({ provider }: { provider?: ProviderVi
       : null;
   const account = kimi
     ? buildKimiUsageCard(snapshot?.kind === 'kimi-coding-quota' ? snapshot : null, t)
+    : opencodeGo
+    ? buildOpenCodeGoUsageCard(snapshot?.kind === 'opencode-go-quota' ? snapshot : null, t)
     : deepSeek
     ? buildDeepSeekUsageCard(snapshot?.kind === 'deepseek-balance' ? snapshot : null, t, locale)
     : buildZhipuUsageCard(snapshot?.kind === 'zhipu-coding-plan-quota' ? snapshot : null, t);
@@ -52,7 +56,7 @@ export function ProviderAccountUsageModule({ provider }: { provider?: ProviderVi
           : 'Pi';
   }
 
-  if (kimi && usage.result?.status === 'ready' && usage.result.stale) {
+  if ((kimi || opencodeGo) && usage.result?.status === 'ready' && usage.result.stale) {
     account.notices = [{ text: t('providerAccountUsage.kimi.stale'), tone: 'warn' }];
   }
 
@@ -65,10 +69,10 @@ export function ProviderAccountUsageModule({ provider }: { provider?: ProviderVi
       <QuotaHoverCard
         variant="embedded"
         account={account}
-        dashboardLabel={kimi ? t('providerAccountUsage.kimi.usage') : deepSeek ? t('providerAccountUsage.openDashboard') : t('providerAccountUsage.zhipuCodingPlan.usage')}
-        onOpenDashboard={dashboardUrl ? () => void window.electronAPI.openExternal(dashboardUrl) : undefined}
+        dashboardLabel={opencodeGo ? undefined : kimi ? t('providerAccountUsage.kimi.usage') : deepSeek ? t('providerAccountUsage.openDashboard') : t('providerAccountUsage.zhipuCodingPlan.usage')}
+        onOpenDashboard={!opencodeGo && dashboardUrl ? () => void window.electronAPI.openExternal(dashboardUrl) : undefined}
       >
-        {kimi && <div className="px-4 pb-2"><Button variant="secondary" tone="quiet" size="sm" disabled={usage.busy} onClick={usage.refresh}>{t('providerAccountUsage.kimi.refresh')}</Button></div>}
+        {(kimi || opencodeGo) && <div className="px-4 pb-2"><Button variant="secondary" tone="quiet" size="sm" disabled={usage.busy} onClick={usage.refresh}>{t('providerAccountUsage.kimi.refresh')}</Button></div>}
       </QuotaHoverCard>
     </div>
   );
