@@ -178,7 +178,8 @@ describe('AppearanceSection terminal fonts', () => {
     expect(size.value).toBe('11');
 
     fireEvent.click(
-      within(size.parentElement!.parentElement!).getByRole('button', { name: '恢复默认' }),
+      // SettingsTextInput wrapper → slider row → the terminal-size SettingsField.
+      within(size.parentElement!.parentElement!.parentElement!).getByRole('button', { name: '恢复默认' }),
     );
     expect(size.value).toBe('13');
     expect((screen.getByRole('spinbutton', { name: '代码字号' }) as HTMLInputElement).value).toBe(
