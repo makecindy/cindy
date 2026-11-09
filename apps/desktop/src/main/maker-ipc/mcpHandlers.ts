@@ -15,7 +15,9 @@ import { z } from 'zod';
 import { extractIpcError } from '../../shared/ipcError.js';
 import type { IpcErrorCode } from '../../shared/ipc-errors.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
+import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import type { CustomMcpListContext } from '../../shared/customMcp.js';
+import type { McpDuplicateChoice, McpDuplicateReport } from '../../shared/customMcp.js';
 import { BOT_MODEL_CHAIN_MAX, type BotModelRoute } from '../../shared/botModelChain.js';
 import type { BotProfileRuntimeDeps } from './botProfileRuntime.js';
 import {
@@ -31,6 +33,8 @@ import { MAKER_INVOKE } from './channels.js';
 import type { IpcHandlerRegistry } from './ipcHandlerRegistry.js';
 
 export interface McpHandlerDeps {
+  listDuplicates?(): Promise<McpDuplicateReport>;
+  chooseDuplicate?(id: string, choice: McpDuplicateChoice | null): Promise<boolean>;
   /** Same registered runtime catalog used by Bot capability tools and hydration. */
   listMcpServers(context: { agentKind: CustomMcpListContext['agentKind']; remoteHostId?: string }): ReturnType<NonNullable<BotProfileRuntimeDeps['listMcpServers']>>;
   resolveBotContext(sessionId: string, chain?: BotModelRoute[]): Promise<{
@@ -99,6 +103,21 @@ export function createCustomMcpServerFromMain(input: unknown, token: string | nu
 }
 
 export function registerMcpHandlers(registry: IpcHandlerRegistry, deps: McpHandlerDeps): void {
+  registry.handle(MAKER_INVOKE.MCP_DUPLICATES_LIST, async (event) => {
+    assertTrustedAppRendererEvent(event as Parameters<typeof assertTrustedAppRendererEvent>[0]);
+    return deps.listDuplicates?.() ?? { connections: [], complete: false };
+  });
+  registry.handle(MAKER_INVOKE.MCP_DUPLICATES_CHOOSE, async (event, input: unknown) => {
+    assertTrustedAppRendererEvent(event as Parameters<typeof assertTrustedAppRendererEvent>[0]);
+    const parsed = z.object({ id: z.string().regex(/^[a-f0-9]{64}$/),
+      choice: z.enum(['cindy', 'claude', 'both']).nullable() }).strict().safeParse(input);
+    if (!parsed.success) throwIpcError('INVALID_PARAMS', 'Invalid MCP duplicate choice');
+    if (!await deps.chooseDuplicate?.(parsed.data.id, parsed.data.choice)) {
+      throwIpcError('NOT_FOUND', 'MCP connections changed; check the current connections');
+    }
+    deps.broadcastChanged();
+    return { ok: true };
+  });
   registry.handle(MAKER_INVOKE.MCP_CUSTOM_LIST, async (_event, context: unknown) => {
     const parsed = context === undefined ? undefined : listContextSchema.safeParse(context);
     if (parsed && !parsed.success) throwIpcError('INVALID_PARAMS', 'Invalid MCP catalog context');

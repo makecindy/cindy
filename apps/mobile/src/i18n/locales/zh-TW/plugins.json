@@ -130,6 +130,9 @@
   "detail": {
     "useItIn": "使用方式",
     "openPlugin": "開啟插件",
+    "readme": "介紹",
+    "readmeLoadFailed": "無法載入介紹，請重試。",
+    "readmeUnavailable": "暫無介紹。",
     "computerSettings": "請在電腦端 Cindy 的「插件」中開啟此插件詳情，完成配置。",
     "runtimeIssue": "插件上次執行異常，可重新開啟或在任務中重試。",
     "runtimeFused": "插件多次停止。關閉後重新啟用，再試一次。",
@@ -361,5 +364,13 @@
     "merged": "已合併",
     "closed": "已關閉",
     "draft": "草稿"
+  },
+  "taskArchive": {
+    "now": "立即封存",
+    "pending": "離開此任務後將自動封存",
+    "cancel": "取消",
+    "cancelled": "本次不會自動封存",
+    "archived": "已歸檔「{{title}}」",
+    "undo": "撤銷"
   }
 }

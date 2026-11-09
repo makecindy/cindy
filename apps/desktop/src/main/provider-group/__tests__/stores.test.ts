@@ -13,6 +13,7 @@ const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'provider-group-store-test-
 let activeOwner = 'owner-test';
 
 vi.mock('electron', () => ({ app: { getPath: () => tmpDir } }));
+vi.mock('../../device-link/providerShareAvailabilityTransport.js', () => ({ disableShareAvailability: vi.fn() }));
 vi.mock('../../maker-host/logger-adapter.js', () => ({
   desktopMakerLogger: { child: () => ({ info: () => {}, warn: () => {}, error: () => {} }) },
 }));

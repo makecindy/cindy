@@ -336,11 +336,29 @@ describe('资格审(结构化错误分类)', () => {
 });
 
 describe('toolNotFoundMessage(纯函数直测)', () => {
+  // Validate opener selection independently of the ghost_call setup mocks.
+  // The old formatter only knew a filtered tool list. Unit; minimal visibility map.
+  it.each([true, false])('页面工具优先提示开页面入口，无入口时只列模型工具（opener=%s）', opener => {
+    const manifest = { tools: ['read_page', 'open_view', 'call_tool', 'list_tools'].map(name => ({ name, description: name })),
+      mcpApps: { ui: { resources: [{ uri: 'ui://records', file: 'ui/page.html' }], tools: {
+        read_page: { visibility: ['app' as const], resourceUri: 'ui://records' },
+        open_view: { visibility: [opener ? 'model' as const : 'app' as const], resourceUri: 'ui://records' },
+        call_tool: { visibility: ['app' as const] },
+      } } } };
+    const message = toolNotFoundMessage('records', 'read_page', manifest, 'model');
+    expect(message).toContain('只供插件页面调用');
+    expect(message).toContain(opener ? '开页面工具: open_view' : '模型可见的工具: list_tools');
+    expect(message).not.toContain('二级分派');
+    expect(message).not.toContain('没有工具');
+    expect(toolNotFoundMessage('records', 'missing', manifest, 'model')).not.toContain('call_tool');
+    // A page calling a model-only tool must not get the opposite audience's hint.
+    expect(toolNotFoundMessage('records', 'list_tools', manifest, 'app')).not.toContain('只供插件页面调用');
+  });
   it('分派型插件:回填 agent 想调的名字并给出 call_tool 形态', () => {
-    const msg = toolNotFoundMessage('cindy-github', 'create_pull_request', [
+    const msg = toolNotFoundMessage('cindy-github', 'create_pull_request', { tools: [
       { name: 'list_tools', description: '' },
       { name: 'call_tool', description: '' },
-    ]);
+    ] });
     expect(msg).toContain('cindy-github');
     expect(msg).toContain('create_pull_request');
     expect(msg).toContain('tool:"call_tool"');
@@ -349,14 +367,14 @@ describe('toolNotFoundMessage(纯函数直测)', () => {
   });
 
   it('普通插件:列出可用工具名', () => {
-    const msg = toolNotFoundMessage('art', 'nope', [{ name: 'gen_image', description: '' }]);
+    const msg = toolNotFoundMessage('art', 'nope', { tools: [{ name: 'gen_image', description: '' }] });
     expect(msg).toContain('gen_image');
     expect(msg).not.toContain('call_tool');
   });
 
   it('tools 缺省/空:不崩,提示未声明任何工具', () => {
-    expect(toolNotFoundMessage('art', 'nope', undefined)).toContain('(未声明任何工具)');
-    expect(toolNotFoundMessage('art', 'nope', [])).toContain('(未声明任何工具)');
+    expect(toolNotFoundMessage('art', 'nope', {})).toContain('(未声明任何工具)');
+    expect(toolNotFoundMessage('art', 'nope', { tools: [] })).toContain('(未声明任何工具)');
   });
 });
 

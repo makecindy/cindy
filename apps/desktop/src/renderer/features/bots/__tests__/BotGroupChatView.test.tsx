@@ -11,9 +11,10 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 import { captureDraftDiscardToken, clearDraft, getAllDraftAttachmentUrls, getDraft, isDraftDiscardTokenCurrent, saveDraft } from '@/lib/composerDraftStore';
 import { FeatureSidebarSlotProvider, useFeatureContentHeader } from '../../feature-context';
 import { markBotRead, getBotLastReadAt, botGroupReadKey, resetBotReadStateForTests } from '../botReadState';
-import { botGroupAttachmentScope, botGroupThreadDraftKey } from '../botGroupAttachments';
+import { botGroupAttachmentScope, botGroupDraftDoc, botGroupThreadDraftKey } from '../botGroupAttachments';
 import { getBotGroupListSnapshot, refreshBotGroups, resetBotGroupStoreForTests } from '../botGroupStore';
-import { getBotGroupOutbox, getBotGroupOutboxPreviews, resetBotGroupOutboxForTests } from '../botGroupOutbox';
+import { botGroupSendSignature, enqueueBotGroupSend, getBotGroupOutbox, getBotGroupOutboxPreviews, resetBotGroupOutboxForTests } from '../botGroupOutbox';
+import type { BotGroupOutboxCommandRequest, BotGroupOutboxCommandResult, BotGroupOutboxStoredEntry } from '../../../../shared/botGroupOutboxStorage';
 import { resetCompanionCloudStoreForTests } from '../companionCloudStore';
 import { botGroupWorkPreview } from '../BotGroupLivePreview';
 import { BotGroupChatView } from '../BotGroupChatView';
@@ -123,6 +124,37 @@ vi.mock('@/state/agentIslandActivity', () => ({ useAgentIslandActivity: () => mo
 beforeAll(() => {
   // jsdom has no layout; scrolling is a no-op here.
   Object.defineProperty(HTMLElement.prototype, 'scrollHeight', { configurable: true, get: () => 0 });
+});
+
+// Unit / PR #9249 r4500563150: real group input handlers and resize observer.
+// Existing view tests use fixed sizes, missing a user move to 200 while content
+// grows 1400 -> 1410. The observer must leave the reading position at 200.
+it.each(['PageUp', 'Home', 'scrollbar'])('keeps explicit %s browsing while content grows', async action => {
+  const observed = new Map<Element, ResizeObserverCallback>();
+  vi.stubGlobal('ResizeObserver', class {
+    constructor(private callback: ResizeObserverCallback) {}
+    observe(element: Element) { observed.set(element, this.callback); }
+    disconnect() {}
+  });
+  renderView();
+  const scroller = await screen.findByTestId('bot-group-timeline');
+  let height = 1400;
+  Object.defineProperties(scroller, {
+    scrollHeight: { configurable: true, get: () => height },
+    clientHeight: { configurable: true, value: 600 },
+  });
+  scroller.scrollTop = 800; fireEvent.scroll(scroller);
+  if (action === 'scrollbar') fireEvent.pointerDown(scroller);
+  else fireEvent.keyDown(scroller, { key: action });
+  height = 1410; scroller.scrollTop = 200; fireEvent.scroll(scroller);
+  act(() => observed.get(scroller)!([], {} as ResizeObserver));
+  expect(scroller.scrollTop).toBe(200);
+  if (action === 'scrollbar') {
+    fireEvent.pointerUp(scroller);
+    height = 1420;
+    act(() => observed.get(scroller)!([], {} as ResizeObserver));
+    expect(scroller.scrollTop).toBe(200);
+  }
 });
 
 function msg(overrides: Partial<BotGroupMessageView>): BotGroupMessageView {
@@ -369,6 +401,144 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
 describe('BotGroupChatView', () => {
+  function localResult(request: BotGroupOutboxCommandRequest, entries: BotGroupOutboxStoredEntry[] = []): BotGroupOutboxCommandResult {
+    return { ok: true, owner: request.owner, instanceId: 'main-test', revision: 1, entries };
+  }
+
+  it('keeps text and files after durable enqueue rejection, and retries the same immutable operation', async () => {
+    const attempts: Extract<BotGroupOutboxCommandRequest, { action: 'enqueue' }>[] = [];
+    window.electronAPI.maker.botGroupOutbox = async () => [];
+    window.electronAPI.maker.botGroupOutboxCommand = async request => {
+      if (request.action !== 'enqueue') return localResult(request);
+      attempts.push(request);
+      throw new Error('OUTBOX_SOURCE_CONSUMED');
+    };
+    renderView();
+    const input = await screen.findByRole('textbox') as HTMLTextAreaElement;
+    fireEvent.change(input, { target: { value: '不能丢掉的正文' } });
+    pickFiles([diskFile('kept.png', 'image/png')]);
+    await screen.findByAltText('kept.png');
+    fireEvent.click(screen.getByRole('button', { name: 'bots.send' }));
+    await waitFor(() => expect(mocks.toastError).toHaveBeenCalledWith('bots.groupChat.composer.sendFailed'));
+    expect(input.value).toBe('不能丢掉的正文');
+    expect(screen.getAllByAltText('kept.png')).toHaveLength(1);
+    fireEvent.click(screen.getByRole('button', { name: 'bots.send' }));
+    await waitFor(() => expect(attempts).toHaveLength(2));
+    expect(attempts[1]!.enqueueOperationId).toBe(attempts[0]!.enqueueOperationId);
+    expect(attempts[1]!.entry.input.clientId).toBe(attempts[0]!.entry.input.clientId);
+    expect(attempts[1]!.entry.files).toEqual(attempts[0]!.entry.files);
+    expect(mocks.sendBotGroupMessage).not.toHaveBeenCalled();
+  });
+
+  it.each(['unchanged', 'changed', 'attachment', 'lost-reply', 'late-reply'])('keeps the failed edit source across composer remount (%s)', async mode => {
+    const enqueues: Extract<BotGroupOutboxCommandRequest, { action: 'enqueue' }>[] = [];
+    let stored: BotGroupOutboxStoredEntry[] = [];
+    let revision = 0;
+    let releaseReply!: () => void;
+    window.electronAPI.maker.botGroupOutbox = async () => [];
+    window.electronAPI.maker.botGroupOutboxCommand = async request => {
+      if (request.action === 'enqueue') {
+        enqueues.push(request);
+        if (mode === 'lost-reply' && enqueues.length === 3) {
+          return { ...localResult(request, stored), revision, accepted: true };
+        }
+        const source = request.editSource;
+        if (source) stored = stored.filter(row => row.input.clientId !== source.clientId);
+        stored = [...stored, { ...request.entry, entryRevision: ++revision, queueOrdinal: revision,
+          status: 'failed', retryable: false }];
+        if (mode === 'lost-reply' && enqueues.length === 2) throw new Error('committed reply lost');
+        if (mode === 'late-reply' && enqueues.length === 2) await new Promise<void>(resolve => { releaseReply = resolve; });
+        return { ...localResult(request, stored), revision, accepted: true };
+      }
+      if (request.action === 'edit') {
+        stored = [{ ...stored[0]!, entryRevision: ++revision,
+          editHold: { operationId: request.operationId, revision } }];
+      }
+      return { ...localResult(request, stored), revision };
+    };
+    const input = { groupId: 'g1', clientId: 'edited-original', text: 'original failed draft',
+      mentions: { all: false, botIds: [] } };
+    await enqueueBotGroupSend({ input, signature: botGroupSendSignature(input, '[]'), draft: input.text,
+      tracked: [], files: [], attachmentScope: botGroupAttachmentScope('g1'), enqueueOperationId: 'original-edit' });
+    const first = renderView();
+    await screen.findByRole('textbox');
+    fireEvent.click(screen.getByRole('button', { name: 'bots.groupChat.outbox.edit' }));
+    await waitFor(() => expect((screen.getByRole('textbox') as HTMLTextAreaElement).value).toBe(input.text));
+    const text = mode === 'changed' || mode === 'lost-reply' || mode === 'late-reply' ? 'edited draft after navigation' : input.text;
+    if (text !== input.text) fireEvent.change(screen.getByRole('textbox'), { target: { value: text } });
+    if (mode === 'attachment') {
+      pickFiles([diskFile('edited-note.txt', 'text/plain')]);
+      await waitFor(() => expect(getDraft(botGroupAttachmentScope('g1'))?.attachments).toHaveLength(1));
+    }
+    first.unmount();
+    const second = renderView();
+    const restored = await screen.findByRole('textbox') as HTMLTextAreaElement;
+    expect(restored.value).toBe(text);
+    fireEvent.keyDown(restored, { key: 'Enter' });
+    await waitFor(() => expect(enqueues).toHaveLength(2));
+    expect(enqueues[1]!.editSource).toEqual({ groupId: 'g1', clientId: input.clientId, revision: 2 });
+    expect(enqueues[1]!.entry.input.clientId === input.clientId).toBe(mode === 'unchanged');
+    expect(stored.filter(row => row.editHold)).toHaveLength(0);
+    if (mode === 'late-reply') {
+      second.unmount();
+      renderView();
+      fireEvent.change(await screen.findByRole('textbox'), { target: { value: 'newer draft while saving' } });
+      await waitFor(() => expect(getDraft(botGroupAttachmentScope('g1'))?.text).toEqual(botGroupDraftDoc('newer draft while saving')));
+      releaseReply();
+      await waitFor(() => expect(getDraft(botGroupAttachmentScope('g1'))?.botGroupEdit).toBeUndefined());
+      expect(getDraft(botGroupAttachmentScope('g1'))?.text).toEqual(botGroupDraftDoc('newer draft while saving'));
+      fireEvent.keyDown(screen.getByRole('textbox'), { key: 'Enter' });
+      await waitFor(() => expect(enqueues).toHaveLength(3));
+      expect(enqueues[2]!.editSource).toBeUndefined();
+    }
+    if (mode === 'lost-reply') {
+      await waitFor(() => expect(mocks.toastError).toHaveBeenCalled());
+      second.unmount();
+      renderView();
+      const retry = await screen.findByRole('textbox') as HTMLTextAreaElement;
+      expect(retry.value).toBe(text);
+      fireEvent.keyDown(retry, { key: 'Enter' });
+      await waitFor(() => expect(enqueues).toHaveLength(3));
+      expect(enqueues[2]!.entry.input.clientId).toBe(enqueues[1]!.entry.input.clientId);
+      expect(enqueues[2]!.enqueueOperationId).toBe(enqueues[1]!.enqueueOperationId);
+      expect(enqueues[2]!.editSource).toEqual(enqueues[1]!.editSource);
+    }
+  });
+
+  it('does not overwrite newer input after an edit hold commits asynchronously', async () => {
+    let commit!: () => void;
+    let saving!: () => void;
+    const begun = new Promise<void>(resolve => { saving = resolve; });
+    const gate = new Promise<void>(resolve => { commit = resolve; });
+    let stored: BotGroupOutboxStoredEntry[] = [];
+    window.electronAPI.maker.botGroupOutbox = async () => [];
+    window.electronAPI.maker.botGroupOutboxCommand = async request => {
+      if (request.action === 'enqueue') {
+        stored = [{ ...request.entry, entryRevision: 1, queueOrdinal: 1, status: 'failed', retryable: false }];
+        return { ...localResult(request, stored), accepted: true };
+      }
+      if (request.action === 'edit') {
+        saving(); await gate;
+        stored = [{ ...stored[0]!, entryRevision: 2, editHold: { operationId: request.operationId, revision: 2 } }];
+        return { ...localResult(request, stored), revision: 2 };
+      }
+      return localResult(request, stored);
+    };
+    const input = { groupId: 'g1', clientId: 'original', text: '等待恢复的原文', mentions: { all: false, allBots: false, botIds: [] } };
+    await enqueueBotGroupSend({ input, signature: botGroupSendSignature(input, '[]'), draft: input.text,
+      tracked: [], files: [], attachmentScope: 'bot-group:g1', enqueueOperationId: 'initial' });
+    renderView();
+    const textbox = await screen.findByRole('textbox') as HTMLTextAreaElement;
+    fireEvent.click(screen.getByRole('button', { name: 'bots.groupChat.outbox.edit' }));
+    await begun;
+    fireEvent.change(textbox, { target: { value: '等待期间写的新内容' } });
+    await act(async () => { commit(); await gate; });
+    await waitFor(() => expect(mocks.toastWarning).toHaveBeenCalledWith('bots.groupChat.outbox.editBlocked'));
+    expect(textbox.value).toBe('等待期间写的新内容');
+    expect(getBotGroupOutbox('g1')[0]).toMatchObject({ draft: '等待恢复的原文', editHold: { revision: 2 } });
+    expect(mocks.sendBotGroupMessage).not.toHaveBeenCalled();
+  });
+
   it('offers jump to bottom while scrolling down through read history', async () => {
     mocks.getControlledState.mockResolvedValue({ controlledBy: [{ deviceId: 'studio', name: 'Mac Studio' }] });
     mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ threads: ['t1', 't2'].map(rootId => ({
@@ -980,7 +1150,14 @@ describe('BotGroupChatView', () => {
     await user.type(within(panel).getByRole('textbox'), 'Unsent thread reply');
     if (kind === 'image') fireEvent.load(screen.getByAltText('photo.png'));
     await user.click(screen.getByRole('button', { name: kind === 'image' ? 'photo.png' : 'note.md' }));
-    const preview = kind === 'image' ? document.activeElement! : document.querySelector('[data-text-lightbox-overlay]')!;
+    // 文本预览弹窗按需加载：首次打开要等分包挂载后才有遮罩层。
+    const preview = kind === 'image'
+      ? document.activeElement!
+      : await waitFor(() => {
+        const overlay = document.querySelector('[data-text-lightbox-overlay]');
+        if (!overlay) throw new Error('text lightbox not mounted yet');
+        return overlay;
+      });
     if (kind !== 'image') {
       await screen.findByText('Preview note content');
       if (kind === 'text-control') within(preview as HTMLElement).getAllByRole('button', { name: 'chat.lightbox.close' })[0]!.focus();
@@ -988,6 +1165,21 @@ describe('BotGroupChatView', () => {
         await user.click(screen.getByText('Preview note content'));
         expect(preview.contains(document.activeElement)).toBe(true);
       } else expect(preview.contains(document.activeElement)).toBe(true);
+    }
+    // CI regression: FocusScope's programmatic entry focus does not guarantee
+    // an open tooltip after the preview finishes loading. Establish keyboard
+    // focus explicitly; still require tooltip -> preview -> thread Escape order.
+    if (kind === 'text-trigger' || kind === 'text-control') {
+      const focusedControl = document.activeElement;
+      await user.tab();
+      await user.tab({ shift: true });
+      expect(document.activeElement).toBe(focusedControl);
+      await screen.findByRole('tooltip');
+      await user.keyboard('{Escape}');
+      await waitFor(() => expect(screen.queryByRole('tooltip')).toBeNull());
+      expect(document.contains(preview)).toBe(true);
+      expect(screen.getByRole('complementary')).toBe(panel);
+      expect((within(panel).getByRole('textbox') as HTMLTextAreaElement).value).toBe('Unsent thread reply');
     }
     await user.keyboard('{Escape}');
     expect(screen.getByRole('complementary')).toBe(panel);
@@ -2013,7 +2205,7 @@ describe('BotGroupChatView', () => {
       expect(mocks.sendBotGroupMessage).toHaveBeenCalledTimes(1);
 
       fireEvent.click(within(failed).getByRole('button', { name: 'bots.groupChat.outbox.edit' }));
-      expect(mocks.toastWarning).toHaveBeenCalledWith('bots.groupChat.outbox.editBlocked');
+      await waitFor(() => expect(mocks.toastWarning).toHaveBeenCalledWith('bots.groupChat.outbox.editBlocked'));
       expect(input.value).toBe('正在写的');
 
       mocks.sendBotGroupMessage.mockResolvedValueOnce({ ok: false, errorCode: 'INTERNAL', message: '' });
@@ -3409,6 +3601,51 @@ it('keeps copy/share in each author row\'s more menu and shares only message con
   } finally { focus.mockRestore(); resetBotReadStateForTests(); }
 });
 
+// Unit / PR #9249 r4500734691: actual main-group disclosure + one incoming
+// reply that still fits the viewport. Existing main read tests require onScroll;
+// End/wheel here must advance local and server read positions without displacement.
+it.each(['End', 'wheel'])('acknowledges short main-group replies on explicit %s return without scrolling', async action => {
+  const focus = vi.spyOn(document, 'hasFocus').mockReturnValue(true);
+  const manage = vi.fn().mockResolvedValue({ ok: true });
+  window.electronAPI.maker.chatServer.manage = manage;
+  const answer = msg({ id: 'process-answer', authorKind: 'bot', authorBotId: 'mimi', content: 'Short process answer', createdAt: 200,
+    process: { groupId: 'g1', executionId: 'short-process', sessionId: 'work', clientId: 'note', deviceId: 'home' } });
+  const data = detail({ serverBacked: true, messages: [answer] });
+  data.members[0] = { ...data.members[0]!, isOwned: true, homeDeviceId: 'home' };
+  mocks.getBotGroup.mockResolvedValue({ ok: true, group: data });
+  mocks.remoteInvoke.mockResolvedValue([]);
+  const view = renderView();
+  try {
+    await screen.findByText('Short process answer');
+    const scroller = screen.getByTestId('bot-group-timeline');
+    Object.defineProperties(scroller, {
+      scrollHeight: { configurable: true, value: 600 }, clientHeight: { configurable: true, value: 600 },
+      // jsdom has no scroll-range clamping; model the browser's zero-range result.
+      scrollTop: { configurable: true, get: () => 0, set: () => {} },
+    });
+    act(() => window.dispatchEvent(new Event('focus')));
+    expect(getBotLastReadAt(botGroupReadKey('g1'))).toBe(200);
+    await act(async () => fireEvent.click(scroller.querySelector('button[data-scroll-disclosure-header]')!));
+    mocks.getBotGroup.mockResolvedValue({ ok: true, group: { ...data, serverUnread: { count: 1, mentioned: false }, messages: [answer,
+      msg({ id: 'short-new-reply', sequence: 2, authorKind: 'bot', content: 'New short reply', createdAt: 1200 }),
+    ] } });
+    await act(async () => mocks.pushes.forEach(push => push({ groupId: 'g1', change: 'messages' })));
+    await screen.findByText('New short reply');
+    act(() => window.dispatchEvent(new Event('focus')));
+    expect(getBotLastReadAt(botGroupReadKey('g1'))).toBe(200);
+    expect(manage).not.toHaveBeenCalled();
+    act(() => {
+      if (action === 'End') fireEvent.keyDown(scroller, { key: 'End' });
+      else fireEvent.wheel(scroller, { deltaY: 80 });
+    });
+    expect(scroller.scrollTop).toBe(0);
+    expect(getBotLastReadAt(botGroupReadKey('g1'))).toBe(1200);
+    expect(manage).toHaveBeenCalledExactlyOnceWith({ groupId: 'g1', action: { type: 'read', messageId: 'short-new-reply' } });
+    act(() => { fireEvent.keyDown(scroller, { key: 'End' }); fireEvent.wheel(scroller, { deltaY: 80 }); });
+    expect(manage).toHaveBeenCalledTimes(1);
+  } finally { view.unmount(); focus.mockRestore(); resetBotReadStateForTests(); }
+});
+
 it('acknowledges a Bot’s plan card at the tail, the same range the unread badge counts', async () => {
   resetBotReadStateForTests();
   const focus = vi.spyOn(document, 'hasFocus').mockReturnValue(true);
@@ -3701,6 +3938,281 @@ describe('thread previews and posting to the main chat', () => {
     return detail({ serverBacked: true, messages });
   }
   beforeEach(() => { vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} }); });
+
+  async function renderProcessScroller(context: string) {
+    const root = msg({ id: 'root', content: 'Root' });
+    const answer = msg({ id: 'process-answer', sequence: 2, authorKind: 'bot', authorBotId: 'mimi', content: 'Process result',
+      process: { groupId: 'g1', executionId: 'scroll-work', sessionId: 'work', clientId: 'note', deviceId: 'home' } });
+    const data = detail({ serverBacked: true, messages: context === 'topic' ? [root] : [answer] });
+    data.members[0] = { ...data.members[0]!, isOwned: true, homeDeviceId: 'home' };
+    mocks.getBotGroup.mockResolvedValue({ ok: true, group: data });
+    mocks.remoteInvoke.mockResolvedValue([]);
+    mocks.thread.mockResolvedValue({ ok: true, root, replies: [answer], hasMore: false });
+    renderView();
+    if (context === 'topic') fireEvent.click((await screen.findAllByRole('button', { name: 'bots.groupChat.server.startTopic' }))[0]!);
+    const surface = context === 'topic' ? screen.getByRole('complementary') : await screen.findByTestId('bot-group-timeline');
+    await within(surface).findByText('Process result');
+    return (context === 'topic' ? surface.querySelector('div.overflow-y-auto') : surface) as HTMLDivElement;
+  }
+
+  // Unit / #9249 r4500848903: an upward input without any scroll range
+  // must not suppress following once content grows. Prior cases start scrollable.
+  it.each(['main', 'topic'].flatMap(context => ['wheel', 'PageUp'].map(action => ({ context, action }))))(
+    'keeps $context following after a zero-range $action input', async ({ context, action }) => {
+      const observed = new Map<Element, ResizeObserverCallback>();
+      vi.stubGlobal('ResizeObserver', class {
+        constructor(private callback: ResizeObserverCallback) {}
+        observe(element: Element) { observed.set(element, this.callback); }
+        disconnect() {}
+      });
+      const scroller = await renderProcessScroller(context);
+      let height = 600, top = 0;
+      Object.defineProperties(scroller, {
+        scrollHeight: { configurable: true, get: () => height }, clientHeight: { configurable: true, value: 600 },
+        scrollTop: { configurable: true, get: () => top, set: (value: number) => { top = Math.max(0, Math.min(value, height - 600)); } },
+      });
+      if (action === 'wheel') fireEvent.wheel(scroller, { deltaY: -80 });
+      else fireEvent.keyDown(scroller, { key: action });
+      expect(scroller.scrollTop).toBe(0);
+      height = 1000;
+      act(() => observed.get(scroller)!([], {} as ResizeObserver));
+      expect(scroller.scrollTop).toBe(400);
+      // Explicit inspection remains meaningful even when the list fits.
+      height = 600; scroller.scrollTop = 0; fireEvent.scroll(scroller);
+      await act(async () => fireEvent.click(scroller.querySelector('button[data-scroll-disclosure-header]')!));
+      height = 1000;
+      act(() => observed.get(scroller)!([], {} as ResizeObserver));
+      expect(scroller.scrollTop).toBe(0);
+    },
+  );
+
+  // Unit / #9249 r4500670651: a root-padding/scrollbar press temporarily pauses
+  // resize following, but releasing without upward movement must not unpin it.
+  it.each(['main', 'topic'])('restores %s follow after a stationary pointer press', async context => {
+    const observed = new Map<Element, ResizeObserverCallback>();
+    vi.stubGlobal('ResizeObserver', class {
+      constructor(private callback: ResizeObserverCallback) {}
+      observe(element: Element) { observed.set(element, this.callback); }
+      disconnect() {}
+    });
+    const scroller = await renderProcessScroller(context);
+    let height = 1400;
+    Object.defineProperties(scroller, {
+      scrollHeight: { configurable: true, get: () => height }, clientHeight: { configurable: true, value: 600 },
+    });
+    scroller.scrollTop = 800; fireEvent.scroll(scroller);
+    fireEvent.pointerDown(scroller);
+    height = 1500;
+    act(() => observed.get(scroller)!([], {} as ResizeObserver));
+    expect(scroller.scrollTop).toBe(800);
+    fireEvent.pointerUp(scroller);
+    height = 1600;
+    act(() => observed.get(scroller)!([], {} as ResizeObserver));
+    expect(scroller.scrollTop).toBe(1600);
+  });
+
+  // Unit / #9249 r4501133787: descendant message wheel input with a small
+  // vertical component is horizontal navigation, not an explicit return to tail.
+  // Prior wheel cases only covered vertical input and portals.
+  it.each(['main', 'topic'])('keeps %s inspection during horizontal message wheel input', async context => {
+    const scroller = await renderProcessScroller(context);
+    Object.defineProperties(scroller, {
+      scrollHeight: { configurable: true, value: 1400 }, clientHeight: { configurable: true, value: 600 },
+    });
+    const content = scroller.firstElementChild as HTMLElement;
+    vi.spyOn(content, 'getBoundingClientRect').mockReturnValue({ height: 1400 } as DOMRect);
+    scroller.scrollTop = 800; fireEvent.scroll(scroller);
+    await act(async () => fireEvent.click(scroller.querySelector('button[data-scroll-disclosure-header]')!));
+    fireEvent.wheel(scroller.querySelector('[data-markdown]')!, { deltaX: 80, deltaY: 1 });
+    expect(content.style.minHeight).toBe('1400px');
+    expect(scroller.scrollTop).toBe(800);
+    fireEvent.wheel(scroller, { deltaX: 1, deltaY: 80 });
+    expect(content.style.minHeight).toBe('');
+  });
+
+  // Unit / #9249 r4501261274: Chromium pinch/modified wheel must not navigate
+  // the list. Existing cases cover direction/portals, not zoom modifiers. Verify
+  // the real main/topic callbacks preserve both inspection and following.
+  it.each(['main', 'topic'])('ignores %s zoom wheel input in inspection and following', async context => {
+    const observed = new Map<Element, ResizeObserverCallback>();
+    vi.stubGlobal('ResizeObserver', class {
+      constructor(private callback: ResizeObserverCallback) {}
+      observe(element: Element) { observed.set(element, this.callback); }
+      disconnect() {}
+    });
+    const scroller = await renderProcessScroller(context);
+    let height = 1400;
+    Object.defineProperties(scroller, {
+      scrollHeight: { configurable: true, get: () => height }, clientHeight: { configurable: true, value: 600 },
+    });
+    const content = scroller.firstElementChild as HTMLElement;
+    vi.spyOn(content, 'getBoundingClientRect').mockReturnValue({ height: 1400 } as DOMRect);
+    scroller.scrollTop = 800; fireEvent.scroll(scroller);
+    await act(async () => fireEvent.click(scroller.querySelector('button[data-scroll-disclosure-header]')!));
+    for (const modifier of ['ctrlKey', 'metaKey']) {
+      fireEvent.wheel(scroller, { [modifier]: true, deltaY: 80 });
+      expect(content.style.minHeight).toBe('1400px');
+      expect(scroller.scrollTop).toBe(800);
+    }
+    fireEvent.wheel(scroller, { deltaY: 80 });
+    expect(content.style.minHeight).toBe('');
+    for (const modifier of ['ctrlKey', 'metaKey']) {
+      fireEvent.wheel(scroller, { [modifier]: true, deltaY: -80 });
+      height += 100;
+      act(() => observed.get(scroller)!([], {} as ResizeObserver));
+      expect(scroller.scrollTop).toBe(height);
+    }
+  });
+
+  // Unit / #9249 r4501133788: prior stationary presses ended inside the list.
+  // Release over the real sibling composer must end only the temporary pause;
+  // a genuine upward move must remain browsing through the next resize.
+  it.each(['main', 'topic'])('ends %s temporary pause when the pointer is released over the composer', async context => {
+    const observed = new Map<Element, ResizeObserverCallback>();
+    vi.stubGlobal('ResizeObserver', class {
+      constructor(private callback: ResizeObserverCallback) {}
+      observe(element: Element) { observed.set(element, this.callback); }
+      disconnect() {}
+    });
+    const scroller = await renderProcessScroller(context);
+    let height = 1400;
+    Object.defineProperties(scroller, {
+      scrollHeight: { configurable: true, get: () => height }, clientHeight: { configurable: true, value: 600 },
+    });
+    const composer = screen.getAllByRole('textbox').find(input => !scroller.contains(input))!;
+    scroller.scrollTop = 800; fireEvent.scroll(scroller);
+    fireEvent.pointerDown(scroller);
+    height = 1500;
+    act(() => observed.get(scroller)!([], {} as ResizeObserver));
+    expect(scroller.scrollTop).toBe(800);
+    fireEvent.pointerUp(composer);
+    height = 1600;
+    act(() => observed.get(scroller)!([], {} as ResizeObserver));
+    expect(scroller.scrollTop).toBe(1600);
+    fireEvent.pointerDown(scroller);
+    scroller.scrollTop = 200; fireEvent.scroll(scroller);
+    fireEvent.pointerUp(composer);
+    height = 1700;
+    act(() => observed.get(scroller)!([], {} as ResizeObserver));
+    expect(scroller.scrollTop).toBe(200);
+  });
+
+  // Unit / #9249 r4500670656: layout already followed 800 -> 810 before the
+  // reader clicks, but its native scroll notification is delivered afterwards.
+  it.each(['main', 'topic'])('keeps %s inspection through a queued auto-follow notification', async context => {
+    const observed = new Map<Element, ResizeObserverCallback>();
+    vi.stubGlobal('ResizeObserver', class {
+      constructor(private callback: ResizeObserverCallback) {}
+      observe(element: Element) { observed.set(element, this.callback); }
+      disconnect() {}
+    });
+    const scroller = await renderProcessScroller(context);
+    let height = 1400;
+    Object.defineProperties(scroller, {
+      scrollHeight: { configurable: true, get: () => height }, clientHeight: { configurable: true, value: 600 },
+    });
+    const content = scroller.firstElementChild as HTMLElement;
+    vi.spyOn(content, 'getBoundingClientRect').mockImplementation(() => ({ height }) as DOMRect);
+    scroller.scrollTop = 800; fireEvent.scroll(scroller);
+    height = 1410; scroller.scrollTop = 810;
+    await act(async () => fireEvent.click(scroller.querySelector('button[data-scroll-disclosure-header]')!));
+    expect(content.style.minHeight).toBe('1410px');
+    fireEvent.scroll(scroller);
+    expect(content.style.minHeight).toBe('1410px');
+    height = 1600;
+    act(() => observed.get(scroller)!([], {} as ResizeObserver));
+    expect(scroller.scrollTop).toBe(810);
+  });
+
+  // Unit / #9249 r4500619897: actual portalled previews bubble React wheel
+  // events through the real main/topic scroller. r4500848906 adds End from the
+  // real portal and a consumed list key; previous coverage only excluded wheel.
+  it.each(['main', 'topic'])(
+    'keeps %s process inspection while navigating its image preview', async context => {
+      const process = { groupId: 'g1', executionId: 'preview-work', sessionId: 'work', clientId: 'note', deviceId: 'home' };
+      const answer = msg({ id: 'answer', sequence: 2, authorKind: 'bot', authorBotId: 'mimi',
+        content: 'Process result', process,
+      });
+      const attachment = msg({ id: 'attachment-message', sequence: 3, content: 'Preview image',
+        attachments: [{ id: 'image', name: 'photo.png', category: 'image', mimeType: 'image/png',
+          size: 10, url: 'cindy-media://blobs/photo.png', path: null }],
+      });
+      const root = msg({ id: 'root', content: 'Root' });
+      const data = detail({ serverBacked: true, messages: context === 'topic' ? [root] : [answer, attachment] });
+      data.members[0] = { ...data.members[0]!, isOwned: true, homeDeviceId: 'home' };
+      mocks.getBotGroup.mockResolvedValue({ ok: true, group: data });
+      mocks.remoteInvoke.mockResolvedValue([]);
+      mocks.thread.mockResolvedValue({ ok: true, root, replies: [answer, attachment], hasMore: false });
+      renderView();
+      if (context === 'topic') fireEvent.click((await screen.findAllByRole('button', { name: 'bots.groupChat.server.startTopic' }))[0]!);
+      const surface = context === 'topic' ? screen.getByRole('complementary') : await screen.findByTestId('bot-group-timeline');
+      const scroller = (context === 'topic' ? surface.querySelector('div.overflow-y-auto') : surface) as HTMLDivElement;
+      fireEvent.load(await within(surface).findByAltText('photo.png'));
+      Object.defineProperties(scroller, {
+        scrollHeight: { configurable: true, value: 1400 }, clientHeight: { configurable: true, value: 600 },
+      });
+      const content = scroller.firstElementChild as HTMLElement;
+      vi.spyOn(content, 'getBoundingClientRect').mockReturnValue({ height: 1400 } as DOMRect);
+      scroller.scrollTop = 800; fireEvent.scroll(scroller);
+      await act(async () => fireEvent.click(surface.querySelector('button[data-scroll-disclosure-header]')!));
+      expect(content.style.minHeight).toBe('1400px');
+      fireEvent.click(within(surface).getByRole('button', { name: 'photo.png' }));
+      await screen.findByRole('button', { name: 'chat.lightbox.close' });
+      const preview = document.querySelector('[data-lightbox-layer]') as HTMLElement;
+      expect(scroller.contains(preview)).toBe(false);
+      // The actual lightbox consumes the native event; React still bubbles it to the list.
+      fireEvent.wheel(preview, { deltaY: 80, bubbles: true, cancelable: true });
+      expect(content.style.minHeight).toBe('1400px');
+      expect(scroller.scrollTop).toBe(800);
+      fireEvent.keyDown(preview, { key: 'End' });
+      expect(content.style.minHeight).toBe('1400px');
+      expect(scroller.scrollTop).toBe(800);
+      fireEvent.click(screen.getByRole('button', { name: 'chat.lightbox.close' }));
+      const consumed = createEvent.keyDown(scroller, { key: 'End', bubbles: true, cancelable: true });
+      consumed.preventDefault();
+      fireEvent(scroller, consumed);
+      expect(content.style.minHeight).toBe('1400px');
+      fireEvent.wheel(scroller, { deltaY: 80 });
+      expect(content.style.minHeight).toBe('');
+    },
+  );
+
+  // Unit / PR #9249 r4500563155: enter inspection through the real process
+  // heading, receive a reply without reading it, then return with no scroll
+  // displacement. Existing topic tests only acknowledge through onScroll.
+  it.each(['End', 'wheel'])('marks inspected topic replies read on explicit %s return without a scroll event', async action => {
+    const focus = vi.spyOn(document, 'hasFocus').mockReturnValue(true);
+    try {
+      const root = msg({ id: 'u1', content: 'Root' });
+      const reply = msg({ id: 'r1', sequence: 2, authorKind: 'bot', authorBotId: 'mimi', content: 'Visible reply',
+        process: { groupId: 'g1', executionId: 'thread-process', sessionId: 'work', clientId: 'work-note', deviceId: 'home' } });
+      const data = detail({ serverBacked: true, messages: [root] });
+      data.members[0] = { ...data.members[0]!, isOwned: true, homeDeviceId: 'home' };
+      mocks.getBotGroup.mockResolvedValue({ ok: true, group: data });
+      mocks.remoteInvoke.mockResolvedValue([]);
+      mocks.thread.mockResolvedValue({ ok: true, root, replies: [reply], hasMore: false });
+      renderView();
+      fireEvent.click((await screen.findAllByRole('button', { name: 'bots.groupChat.server.startTopic' }))[0]!);
+      const panel = screen.getByRole('complementary');
+      await within(panel).findByText('Visible reply');
+      const scroller = panel.querySelector('div.overflow-y-auto') as HTMLDivElement;
+      Object.defineProperties(scroller, {
+        scrollHeight: { configurable: true, value: 1400 }, clientHeight: { configurable: true, value: 600 },
+      });
+      scroller.scrollTop = 800; fireEvent.scroll(scroller);
+      await act(async () => fireEvent.click(panel.querySelector('button[data-scroll-disclosure-header]')!));
+      mocks.thread.mockClear();
+      await act(async () => mocks.pushes.forEach(push => push({ groupId: 'g1', change: 'messages' })));
+      expect(mocks.thread.mock.calls.at(-1)?.[0].markRead).toBe(false);
+      const reads = mocks.thread.mock.calls.length;
+      await act(async () => {
+        if (action === 'End') fireEvent.keyDown(scroller, { key: 'End' });
+        else fireEvent.wheel(scroller, { deltaY: 80 });
+      });
+      expect(mocks.thread.mock.calls).toHaveLength(reads + 1);
+      expect(mocks.thread.mock.calls.at(-1)?.[0].markRead).toBe(true);
+    } finally { focus.mockRestore(); }
+  });
 
   // Unit: opening a downloaded topic must show it before IPC completes; a permission
   // failure must erase that preview. Existing tests never reopened with a pending read.
@@ -4676,4 +5188,24 @@ it('reads historical group process from the execution computer after a home chan
   await screen.findByText('Original computer progress');
   expect(mocks.remoteInvoke).toHaveBeenCalledWith('original-mac', 'local-db:messages:around-client-id', ['old-lane', 'source', { radius: 80 }]);
   expect(mocks.remoteInvoke.mock.calls.every(([device]) => device === 'original-mac')).toBe(true);
+});
+
+// Unit regression: the reported weather reply has a valid anchor and only a
+// final answer. Existing historical coverage only exercised nonempty notes.
+// Verify the real disclosure distinguishes empty content from a failed read.
+it('explains a final-only group process and retries an unavailable record', async () => {
+  const process = { groupId: 'g1', executionId: 'empty-record', sessionId: 'lane', clientId: 'source', deviceId: 'original-mac', durationMs: 250137 };
+  const rows = [{ clientId: 'source', role: 'user', content: 'Weather request' },
+    { clientId: 'seal', role: 'assistant', content: 'Which city?', agentMeta: { assistantPhase: 'final_answer', turnCompleted: true } }];
+  mocks.remoteInvoke.mockRejectedValueOnce(new Error('Record unavailable')).mockResolvedValue(rows);
+  const view = render(<Tooltip.Provider><BotGroupProcess process={process}
+    member={{ ...detail().members[0]!, isOwned: true }} /></Tooltip.Provider>);
+  fireEvent.click(view.container.querySelector('[data-teammate-process] button')!);
+  await screen.findByText('chat.teammateProcess.unavailable');
+  expect(screen.queryByText('chat.teammateProcess.empty')).toBeNull();
+  fireEvent.click(screen.getByText('chat.errorBanner.retry'));
+  await screen.findByText('chat.teammateProcess.empty');
+  expect(screen.queryByText('chat.teammateProcess.unavailable')).toBeNull();
+  expect(screen.queryByText('chat.errorBanner.retry')).toBeNull();
+  expect(screen.queryByText('Which city?')).toBeNull();
 });

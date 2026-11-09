@@ -1,3 +1,4 @@
+import * as customProviderStore from '../../maker-host/custom-provider-store.js';
 import { configureModelSettingsActions, manageAppModels } from '../../app-settings/models';
 import Database from 'better-sqlite3';
 import { readFileSync } from 'node:fs';
@@ -3516,6 +3517,34 @@ describe('provider:custom:* CRUD handlers', () => {
     },
   );
 
+  it('serializes deletion before model disable without reversing the availability lock order', async () => {
+    mountDb();
+    await createCustomProvider(validConfig);
+    const harness = new IpcHarness();
+    const deps = makeDeps({ listProviders: async () => [catalogView('openrouter', { codex: ['meta/llama-4'] })] });
+    registerProviderHandlers(harness, deps);
+    let release!: () => void;
+    let entered!: () => void;
+    const reached = new Promise<void>(resolve => { entered = resolve; });
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const original = customProviderStore.getCustomProvider;
+    vi.spyOn(customProviderStore, 'getCustomProvider').mockImplementationOnce(async id => {
+      entered(); await gate; return original(id);
+    });
+    const deletion = harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_DELETE, 'openrouter');
+    await reached;
+    const disable = harness.invoke(MAKER_INVOKE.MODEL_DISABLE_SET, {
+      kind: 'model', providerId: 'openrouter', modelIds: ['meta/llama-4'], disabled: true,
+    });
+    // Let the disable request enter its queues while deletion holds the policy lock.
+    for (let i = 0; i < 20; i++) await Promise.resolve();
+    release();
+    await expect(deletion).resolves.toEqual({ ok: true });
+    await expect(disable).resolves.toEqual({ ok: true });
+    expect(await getCustomProvider('openrouter')).toBeNull();
+    expect(deps.setModelsDisabled).toHaveBeenCalled();
+  });
+
   it('deletes (idempotent) + broadcasts; bad providerId → INVALID_PARAMS', async () => {
     mountDb();
     const harness = new IpcHarness();
@@ -4928,11 +4957,33 @@ describe('model context limit IPC', () => {
     const target = { ...primary, relatedTargets: [related] };
     await expect(harness.invoke(MAKER_INVOKE.MODEL_CONTEXT_LIMIT_SET, target, 500_000, stamp)).resolves.toMatchObject({ limit: 500_000, isCustomized: true, mixed: false });
     expect(deps.writeModelContextLimit).toHaveBeenCalledExactlyOnceWith([primary, related], 500_000);
+    expect(deps.broadcastChanged).toHaveBeenCalledTimes(1);
     await expect(harness.invoke(MAKER_INVOKE.MODEL_CONTEXT_LIMIT_SET, target, 400_000, { ...stamp, ownerGeneration: 0 })).rejects.toThrow();
     await expect(harness.invoke(MAKER_INVOKE.MODEL_CONTEXT_LIMIT_SET, { ...primary, relatedTargets: [primary] }, 400_000, stamp)).rejects.toThrow();
     await expect(harness.invoke(MAKER_INVOKE.MODEL_CONTEXT_LIMIT_SET, { ...primary, relatedTargets: [{ ...related, providerId: 'other' }] }, 400_000, stamp)).rejects.toThrow();
     expect(deps.writeModelContextLimit).toHaveBeenCalledTimes(1);
+    expect(deps.broadcastChanged).toHaveBeenCalledTimes(1);
+    await harness.invoke(MAKER_INVOKE.MODEL_CONTEXT_LIMIT_RESET, target, stamp);
+    expect(deps.writeModelContextLimit).toHaveBeenLastCalledWith([primary, related], null);
+    expect(deps.broadcastChanged).toHaveBeenCalledTimes(2);
   });
+
+  it.each([MAKER_INVOKE.MODEL_CONTEXT_LIMIT_SET, MAKER_INVOKE.MODEL_CONTEXT_LIMIT_RESET])(
+    'does not publish a changed projection after a failed context write: %s', async (channel) => {
+      const harness = new IpcHarness();
+      const deps = makeDeps({
+        currentOwnerSession: () => ({ dataOwnerId: 'owner-a', generation: 1 }),
+        listProviders: async () => [catalogView('openai', { codex: ['gpt-6'] })],
+        readModelContextLimit: () => ({ limit: null, isCustomized: false }),
+        writeModelContextLimit: vi.fn().mockRejectedValue(new Error('write failed')),
+      });
+      registerProviderHandlers(harness, deps);
+      const args = channel === MAKER_INVOKE.MODEL_CONTEXT_LIMIT_SET
+        ? [primary, 500_000, stamp] : [primary, stamp];
+      await expect(harness.invoke(channel, ...args)).rejects.toThrow();
+      expect(deps.broadcastChanged).not.toHaveBeenCalled();
+    },
+  );
 
   it('does not save a window when native catalog preparation fails', async () => {
     const harness = new IpcHarness();
@@ -5729,4 +5780,208 @@ it('shares model actions with AI without making untrusted renderer writes valid'
   expect(contextLimit).toBe(16000);
   await actions.resetContext(target, owner);
   expect(contextLimit).toBe(null);
+});
+
+// Unit, production manageAppModels -> Settings mutation -> isolated SQLite.
+// agent-user-parity/input-handoff: prior tests only covered UI/import creation.
+// Minimal input: one API runtime; exercise stored configuration, secret isolation,
+// cancelled/revoked input, stale endpoint, and discovery preserving user overrides.
+describe('Agent API connection configuration', () => {
+  const runtime = { baseUrl: 'https://example.test/v1', wireProtocol: 'openai-chat' as const,
+    models: [{ id: 'm1', name: 'My model' }] };
+  const create = { operation: 'connection' as const, change: { action: 'create' as const,
+    name: 'Example', authMethod: 'apiKey' as const, runtimes: { pi: runtime } } };
+  function setup(overrides: Partial<ProviderHandlerDeps> = {}) {
+    mountDb();
+    const deps = makeDeps({ currentOwnerSession: () => ({ dataOwnerId: 'test-user', generation: 1 }), ...overrides });
+    configureModelSettingsActions(registerProviderHandlers(new IpcHarness(), deps));
+    return deps;
+  }
+  it('creates, discovers, edits and tests through Settings without returning credentials or upstream bodies', async () => {
+    const deps = setup({ testConnection: vi.fn(async () => ({ ok: false, code: 'AUTH_INVALID' as const, latencyMs: 1, detail: 'synthetic-key' })) });
+    const ask = vi.fn(async () => 'synthetic-key');
+    const result = await manageAppModels(create, async () => {}, ask);
+    expect(result).toMatchObject({ saved: true, verified: false });
+    const [saved] = await listCustomProviders();
+    expect(saved.name).toBe('Example');
+    expect(deps.storeCustomProviderKey).toHaveBeenCalledWith(saved.id, 'pi', 'synthetic-key');
+    expect(JSON.stringify([saved, result])).not.toContain('synthetic-key');
+    expect(ask).toHaveBeenCalledWith('Example', ['https://example.test/v1'], expect.objectContaining({ deadline: expect.any(Number) }));
+    const providerId = saved.id;
+    await manageAppModels({ operation: 'connection', change: { action: 'refreshModels', providerId, agent: 'pi' } }, async () => {});
+    expect((await getCustomProvider(saved.id))?.runtimes.pi?.models[0].name).toBe('My model');
+    await manageAppModels({ operation: 'connection', change: { action: 'setModels', providerId, agent: 'pi', models: [{ id: 'manual' }] } }, async () => {});
+    expect((await getCustomProvider(saved.id))?.runtimes.pi?.models.map(model => model.id)).toEqual(['manual']);
+    const tested = await manageAppModels({ operation: 'connection', change: { action: 'test', providerId, agent: 'pi' } }, async () => {});
+    expect(tested).toMatchObject({ verification: { ok: false, code: 'AUTH_INVALID' } });
+    expect(JSON.stringify(tested)).not.toContain('synthetic-key');
+    const changedRuntime = { ...runtime, baseUrl: 'https://replacement.test/v1' };
+    const edit = { operation: 'connection' as const, change: { action: 'setRuntime' as const, providerId, agent: 'pi' as const, runtime: changedRuntime } };
+    expect(await manageAppModels(edit, async () => {}, async () => null)).toMatchObject({ saved: false });
+    expect((await getCustomProvider(providerId))?.runtimes.pi?.baseUrl).toBe(runtime.baseUrl);
+    expect(await manageAppModels(edit, async () => {}, ask)).toMatchObject({ saved: true });
+    expect(ask).toHaveBeenLastCalledWith('Example', [changedRuntime.baseUrl], expect.objectContaining({ deadline: expect.any(Number) }));
+    expect(await manageAppModels({ operation: 'connection', change: { action: 'read', providerId } }, async () => {}))
+      .toMatchObject({ runtimes: { pi: { baseUrl: changedRuntime.baseUrl } } });
+    expect(await manageAppModels({ operation: 'connection', change: { action: 'remove', providerId } }, async () => {}))
+      .toMatchObject({ removed: true });
+    expect(await getCustomProvider(providerId)).toBeNull();
+    expect(deps.removeCustomProviderKey).toHaveBeenCalledWith(providerId, 'pi');
+  });
+  it('uses a preset and one secure answer for runtimes with identical endpoints', async () => {
+    const deps = setup({ listPresets: () => [{ id: 'example', name: 'Example', runtimes: { pi: runtime, 'claude-code': { ...runtime, wireProtocol: 'anthropic-messages' } } }] });
+    const ask = vi.fn(async () => 'synthetic-key');
+    expect(await manageAppModels({ operation: 'connection', change: { action: 'create', name: 'Preset', authMethod: 'apiKey', presetId: 'example' } }, async () => {}, ask)).toMatchObject({ saved: true });
+    expect(ask).toHaveBeenCalledTimes(1);
+    expect(deps.storeCustomProviderKey).toHaveBeenCalledTimes(2);
+    expect((await listCustomProviders())[0].runtimes.pi?.catalogPresetId).toBe('example');
+  });
+  it('reports a busy Codex host before requesting credentials and only interrupts with an explicit policy', async () => {
+    const deps = setup({ listBusyLocalCodexSessionIds: () => ['busy-task'] });
+    const ask = vi.fn(async () => 'synthetic-key');
+    const input = { ...create, change: { ...create.change, runtimes: { codex: { ...runtime, wireProtocol: 'openai-responses' as const, supportsImageGeneration: true } } } };
+    expect(await manageAppModels(input, async () => {}, ask)).toMatchObject({ saved: false, errorCode: 'CODEX_RELOAD_CONFIRMATION_REQUIRED', busyCount: 1 });
+    expect(ask).not.toHaveBeenCalled();
+    expect(deps.prepareCodexCustomProviderHostChange).not.toHaveBeenCalled();
+    expect(await manageAppModels({ ...input, change: { ...input.change, interruptCodex: true } }, async () => {}, ask)).toMatchObject({ saved: true });
+    expect(deps.prepareCodexCustomProviderHostChange).toHaveBeenCalledTimes(1);
+  });
+  it('rechecks queued Agent permission before retiring Codex or writing credentials', async () => {
+    mountDb();
+    const harness = new IpcHarness();
+    const config = imageProviderConfig('queued');
+    await createCustomProvider(config);
+    let release!: () => void;
+    let entered!: () => void;
+    const blocked = new Promise<void>(resolve => { release = resolve; });
+    const waiting = new Promise<void>(resolve => { entered = resolve; });
+    const deps = makeDeps({
+      currentOwnerSession: () => ({ dataOwnerId: 'test-user', generation: 1 }),
+      refreshCatalog: vi.fn(async () => { entered(); await blocked; }),
+    });
+    const actions = registerProviderHandlers(harness, deps);
+    const first = harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, { ...config, name: 'Renamed' });
+    await waiting;
+    let current = true;
+    const second = actions.connections.update(config, { codex: 'synthetic-key' },
+      async () => { if (!current) throw new Error('revoked'); }, previous => previous, true);
+    const rejected = expect(second).rejects.toThrow('revoked');
+    current = false;
+    release();
+    await first;
+    await rejected;
+    expect(deps.prepareCodexCustomProviderHostChange).not.toHaveBeenCalled();
+    expect(deps.storeCustomProviderKey).not.toHaveBeenCalled();
+  });
+  it.each(['cancel', 'revoke', 'abort'] as const)('does not create a connection after %s during secret entry', async mode => {
+    const deps = setup();
+    let current = true;
+    const controller = new AbortController();
+    const pending = manageAppModels(create, async () => { if (!current) throw new Error('revoked'); }, async () => {
+      if (mode === 'revoke') current = false;
+      if (mode === 'abort') controller.abort(new Error('caller cancelled'));
+      return mode === 'cancel' ? null : 'synthetic-key';
+    }, controller.signal);
+    if (mode === 'revoke') await expect(pending).rejects.toThrow('revoked');
+    else if (mode === 'abort') await expect(pending).rejects.toThrow('caller cancelled');
+    else expect(await pending).toMatchObject({ status: 'cancelled', saved: false });
+    expect(await listCustomProviders()).toEqual([]);
+    expect(deps.storeCustomProviderKey).not.toHaveBeenCalled();
+  });
+  it('adds an unauthenticated loopback connection without asking for a key and rejects public unauthenticated endpoints', async () => {
+    const deps = setup();
+    const ask = vi.fn(async () => null);
+    const local = { ...create, change: { ...create.change, authMethod: 'none' as const,
+      runtimes: { pi: { ...runtime, baseUrl: 'http://127.0.0.1:11434/v1' } } } };
+    expect(await manageAppModels(local, async () => {}, ask)).toMatchObject({ saved: true });
+    await expect(manageAppModels({ ...create, change: { ...create.change, authMethod: 'none' } }, async () => {}, ask)).rejects.toThrow();
+    expect(await listCustomProviders()).toHaveLength(1);
+    expect(ask).not.toHaveBeenCalled();
+    expect(deps.storeCustomProviderKey).not.toHaveBeenCalled();
+  });
+  it('rejects a key answer if the saved endpoint changed while the owner was typing', async () => {
+    const deps = setup();
+    await createCustomProvider({ id: 'example', name: 'Example', runtimes: { pi: runtime } });
+    await expect(manageAppModels({ operation: 'connection', change: { action: 'setKey', providerId: 'example', agent: 'pi' } }, async () => {}, async () => {
+      const previous = (await getCustomProvider('example'))!;
+      await updateCustomProviderIfUnchanged('example', previous, { ...previous, runtimes: { pi: { ...runtime, baseUrl: 'https://changed.test/v1' } } });
+      return 'synthetic-key';
+    })).rejects.toThrow('Connection changed');
+    expect(deps.storeCustomProviderKey).not.toHaveBeenCalled();
+  });
+  // #9276 review, unit: prior discovery coverage retained a manually named model,
+  // missing a newly discovered model's rename in the final selector projection.
+  it('keeps an explicit name over discovery metadata, including after another refresh', async () => {
+    setup({ fetchModels: vi.fn(async () => ({ ok: true, models: [{ id: 'm2', name: 'Discovered' }] })) });
+    await manageAppModels(create, async () => {}, async () => 'synthetic-key');
+    const providerId = (await listCustomProviders())[0].id;
+    const refresh = () => manageAppModels({ operation: 'connection', change: { action: 'refreshModels', providerId, agent: 'pi' } }, async () => {});
+    await refresh();
+    await manageAppModels({ operation: 'connection', change: { action: 'setModels', providerId, agent: 'pi',
+      models: [{ id: 'm1' }, { id: 'm2', name: 'My renamed model' }] } }, async () => {});
+    const names = async () => buildUserProvider((await getCustomProvider(providerId))!).models.pi?.map(model => model.name);
+    expect(await names()).toEqual(['My model', 'My renamed model']);
+    await refresh();
+    expect(await names()).toEqual(['My model', 'My renamed model']);
+  });
+  // #9276 review, unit: a second endpoint must not reset the tool's lifetime;
+  // a late host answer is rejected before SQLite or credential writes.
+  it('rejects multi-endpoint input that exceeds the original call budget', async () => {
+    const deps = setup();
+    const now = Date.now();
+    let elapsed = 0;
+    vi.spyOn(Date, 'now').mockImplementation(() => now + elapsed);
+    const deadlines: number[] = [];
+    const input = { ...create, change: { ...create.change, runtimes: { pi: runtime,
+      'claude-code': { ...runtime, baseUrl: 'https://other.test', wireProtocol: 'anthropic-messages' as const } } } };
+    await expect(manageAppModels(input, async () => {}, async (_name, _endpoints, lifetime) => {
+      deadlines.push(lifetime.deadline);
+      elapsed += 5 * 60_000;
+      return 'synthetic-key';
+    })).rejects.toThrow('MODEL_CONNECTION_EXPIRED');
+    expect(deadlines).toEqual([now + 9 * 60_000, now + 9 * 60_000]);
+    expect(await listCustomProviders()).toEqual([]);
+    expect(deps.storeCustomProviderKey).not.toHaveBeenCalled();
+  });
+  // #9276 security review, unit: existing route pinning tests lacked the interval
+  // after staging new secrets and before publishing the new catalog route.
+  it('blocks discovery and probes before credential reads during a Settings update', async () => {
+    mountDb();
+    const config = { id: 'example', name: 'Example', runtimes: { pi: runtime } };
+    await createCustomProvider(config);
+    let release!: () => void;
+    let entered!: () => void;
+    const blocked = new Promise<void>(resolve => { release = resolve; });
+    const waiting = new Promise<void>(resolve => { entered = resolve; });
+    let key = 'old-key';
+    let activeBaseUrl = runtime.baseUrl;
+    const deps = makeDeps({
+      readSavedProviderRoute: () => ({ baseUrl: activeBaseUrl, modelsUrl: null }),
+      readCustomProviderKeyForMutation: vi.fn(() => key),
+      storeCustomProviderKey: vi.fn((_id, _agent, next) => { key = next; return true; }),
+      refreshCatalog: async () => { entered(); await blocked; activeBaseUrl = 'https://new.test/v1'; },
+    });
+    const harness = new IpcHarness();
+    const actions = registerProviderHandlers(harness, deps);
+    const updating = harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, { ...config, runtimes: {
+      pi: { ...runtime, baseUrl: 'https://new.test/v1' },
+    } }, { pi: 'new-key' });
+    await waiting;
+    try {
+      expect(key).toBe('new-key');
+      vi.mocked(deps.readCustomProviderKeyForMutation).mockClear();
+      vi.mocked(deps.readCustomProviderHeadersForMutation).mockClear();
+      await expect(actions.connections.fetch(config, 'pi')).rejects.toThrow('Connection is changing');
+      await expect(harness.invoke(MAKER_INVOKE.PROVIDER_MODELS_FETCH, { ...runtime, authMethod: 'apiKey', agent: 'pi', savedProviderId: config.id })).rejects.toThrow('Connection is changing');
+      expect(() => actions.connections.test(config.id, 'pi')).toThrow('Connection is changing');
+      await expect(harness.invoke(MAKER_INVOKE.PROVIDER_TEST_CONNECTION, { kind: 'saved', providerId: config.id, agent: 'pi' })).rejects.toThrow('Connection is changing');
+      expect(deps.readCustomProviderKeyForMutation).not.toHaveBeenCalled();
+      expect(deps.readCustomProviderHeadersForMutation).not.toHaveBeenCalled();
+      expect(deps.fetchModels).not.toHaveBeenCalled();
+      expect(deps.testConnection).not.toHaveBeenCalled();
+    } finally { release(); await updating; }
+    await actions.connections.fetch(config, 'pi');
+    expect(deps.fetchModels).toHaveBeenCalledTimes(1);
+    expect(deps.fetchModels).toHaveBeenCalledWith(expect.objectContaining({ baseUrl: 'https://new.test/v1', apiKey: 'new-key' }));
+  });
 });

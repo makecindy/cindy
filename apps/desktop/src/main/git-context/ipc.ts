@@ -73,6 +73,8 @@ import {
 } from './prStatusService.js';
 
 import { fetchPrSummary } from './prSummary';
+import { PrFollowWatch } from './prFollowWatch';
+import { getSchedulerIfInitialized } from '../scheduler-host/index.js';
 
 const log = createLogger('git-context/ipc');
 
@@ -165,6 +167,20 @@ async function fetchPrRemote(token: string, q: PrStatusQuery): Promise<PrRemoteS
 let gitContextService: GitContextService | null = null;
 let prStatusService: PrStatusService | null = null;
 let githubReadService: GithubReadService | null = null;
+/** Runs the schedules that follow a PR as soon as a status refresh sees that PR change. */
+const prFollowWatch = new PrFollowWatch({
+  // A passive instance (dev beside a release build on the same data) never starts runs by itself.
+  autoRunAllowed: () => getSchedulerIfInitialized()?.isPassive() === false,
+  listActive: async () => (await getSchedulerIfInitialized()?.list({ status: 'active' })) ?? [],
+  inflight: (id) => getSchedulerIfInitialized()?.getInflightCount(id) ?? 0,
+  hasCapacity: () => getSchedulerIfInitialized()?.hasFreeSlot() ?? false,
+  runNow: async (id, trigger) => {
+    const scheduler = getSchedulerIfInitialized();
+    if (!scheduler) return null;
+    return scheduler.runNow(id, { trigger });
+  },
+  log,
+});
 export async function manageGithubPrs(
   sessionId: string,
   args: Record<string, unknown>,
@@ -204,6 +220,7 @@ export function registerGitContextIpc(): void {
     fetchPr: fetchPrRemote,
     // The renderer keeps its last value while awaiting fresh counts; no delayed second tick.
     staleTtlMs: 0,
+    onObserved: (query, result) => prFollowWatch.observe(query, result),
   });
   app.on('browser-window-focus', () => {
     prStatusService?.invalidateGitlabAuthFailures();
@@ -502,6 +519,30 @@ export async function readSessionPrStatus(
     return status;
   } catch {
     return undefined;
+  }
+}
+
+/** 与电脑端任务页 areAllTaskPrsMerged 同一上限:超过这么多关联 PR 的任务不算可归档。 */
+const MAX_TASK_ARCHIVE_PRS = 30;
+const PR_STATUS_BATCH = 10;
+
+/**
+ * 手机读插件卡片的归档按钮用：任务记录的每个 PR 都确认已合并才算完成(与电脑端任务页同一判据)。
+ * 没有关联 PR、超过上限、任一 PR 查不到或失败都返回 false,卡片上不露出归档。
+ */
+export async function readSessionPrsAllMerged(sessionId: string): Promise<boolean> {
+  if (!prStatusService) return false;
+  try {
+    const refs = await listPrRefs(sessionId);
+    if (refs.length === 0 || refs.length > MAX_TASK_ARCHIVE_PRS) return false;
+    for (let i = 0; i < refs.length; i += PR_STATUS_BATCH) {
+      const batch = refs.slice(i, i + PR_STATUS_BATCH);
+      const statuses = await prStatusService.getStatuses(batch, { remote: true });
+      if (statuses.length !== batch.length || !statuses.every((status) => status.ok && status.status === 'merged')) return false;
+    }
+    return true;
+  } catch {
+    return false;
   }
 }
 

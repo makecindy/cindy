@@ -1,3 +1,4 @@
+import { withAvailabilityPolicyMutation } from '../device-link/providerShareAvailabilityPolicy.js';
 /**
  * 远程 Agent 的供应商级授权。
  *
@@ -58,7 +59,8 @@ export function isRemoteProviderInvocationAllowed(providerId: string): boolean {
   return store.read().allowedProviders[providerId] === true;
 }
 
-export function setRemoteProviderInvocationEnabled(providerId: string, enabled: boolean): void {
+export async function setRemoteProviderInvocationEnabled(providerId: string, enabled: boolean): Promise<void> {
+  return withAvailabilityPolicyMutation(providerId, async () => {
   if (!providerId) return;
   store.invalidateIfChanged();
   const allowedProviders = { ...store.read().allowedProviders };
@@ -81,6 +83,7 @@ export function setRemoteProviderInvocationEnabled(providerId: string, enabled: 
     try { listener(providerId); } catch { log.warn('remote provider access listener failed'); }
   }
   log.info('remote provider access updated', { providerId, enabled });
+  });
 }
 
 export const __testing = { normalize };

@@ -1,3 +1,8 @@
+import { ComposerPullThroughScrollView, useComposerPullThroughBridge } from './composerPullThrough';
+import { DockKeyboardBottomSpacer } from './ComposerDockKeyboardFollow';
+import type { ScrollViewInstance } from 'react-native';
+import { ProcessDisclosureViewport, useProcessDisclosureViewport } from './useProcessDisclosureViewport';
+import { useTaskListBack } from '@/utils/useTaskListBack';
 import { BotGroupProcess } from './BotGroupProcess';
 import { useGroupPersonalMask } from './useGroupPersonalMask';
 import { GroupMaskAvatar, GroupMaskStatus, GroupMaskSettingsSheet, GroupMaskCatchupSheet } from './GroupMaskControls';
@@ -19,7 +24,7 @@ import type { DurableOutboxRecord } from './durableOutbox';
  * 每次电脑推送变化就重读，不在本地拼时间线。分工的安排卡、交接文件、「下一步 · 继续」
  * 「没做完 · 重试」见 BotGroupPlan.tsx；正在发言的伙伴与它待确认的操作见 BotGroupSpeakerRow。
  */
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { memo, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -42,7 +47,7 @@ import { Stack, useRouter, useNavigation, useFocusEffect } from 'expo-router';
 import { useHeaderHeight } from 'expo-router/react-navigation';
 import { useAdaptiveWindow } from '@/platform/AdaptiveWindowContext';
 import { sessionPaneLayout } from './sessionPaneLayout';
-import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
 import { resolveRemoteText } from '@cindy/device-link';
 import {
@@ -91,15 +96,19 @@ import {
   BotGroupDuoAvatar,
   useBotGroupIdentities,
 } from './BotGroupAvatars';
-import { CHAT_HEADER_MARK_SIZE, CHAT_HEADER_BLUR_FADE_INSIDE, ChatIdentityHeader } from './ChatIdentityHeader';
+import { CHAT_HEADER_MARK_SIZE, CHAT_HEADER_MIN_HEIGHT, CHAT_HEADER_BLUR_FADE_INSIDE, ChatIdentityHeader } from './ChatIdentityHeader';
 import { SessionHeaderNativeBlur } from './SessionHeaderNativeControls';
 import { CompanionEntering } from './CompanionEntering';
 import { BotGroupRuntimeFailureNotice } from './BotGroupRuntimeFailureNotice';
 import { BotGroupComposer, type BotGroupSendInput } from './BotGroupComposer';
 import { BotGroupMessageAttachments } from './BotGroupMessageAttachments';
-import { MessageListVisibilityContext, useScrollViewMessageVisibility } from './messageListVisibility';
+import { MessageListVisibilityContext, useMessageListItemVisible, useScrollViewMessageVisibility } from './messageListVisibility';
 import { BotGroupTaskCard } from './BotGroupTaskCard';
 import { BotGroupMarkdownText, BotGroupUserText } from './BotGroupMessageText';
+import { MessagePayloadModal } from './MessageRenderer';
+import { buildMermaidPayload, type MessagePayload } from './messagePayload';
+import { RichContentContext } from './richContentContext';
+import { RichContentRuntime } from './richContentRuntime';
 import { BotGroupMentionIdentity } from './BotGroupMentionIdentity';
 import { botGroupMentionDisplayName, type BotGroupMentionContext, type BotGroupMentionPoint } from './botGroupMentions';
 import { i18n as appI18n, SUPPORTED_LOCALES } from '@/i18n';
@@ -207,17 +216,21 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
   const [continuing, setContinuing] = useState(false);
   const [planPending, setPlanPending] = useState<PlanPending | null>(null);
   const planPendingRef = useRef<object | null>(null);
-  const scrollRef = useRef<ScrollView>(null);
+  const scrollRef = useRef<ScrollViewInstance>(null);
   // iOS: the header floats on the task header's feathered blur and the timeline scrolls beneath it.
   const floatingHeader = Platform.OS === 'ios';
-  const insets = useSafeAreaInsets();
+  const composerPullThrough = useComposerPullThroughBridge();
   const window = useAdaptiveWindow();
+  const insets = window.insets;
   // A horizontal system bar would span both panes; Duo's vertical bar stays native.
   const panePersistent = sessionPaneLayout(window).persistent;
   const systemBack = useSystemNavigationBack();
   const nativeHeader = floatingHeader && window.barEdge === 'none' && !panePersistent;
   const nativeHeaderHeight = useHeaderHeight();
-  const [headerHeight, setHeaderHeight] = useState(0);
+  const headerGeometry = `${window.width}:${window.height}:${insets.top}:${nativeHeader ? nativeHeaderHeight : 'in-page'}`;
+  const [measuredHeader, setMeasuredHeader] = useState<{ geometry: string; height: number } | null>(null);
+  const headerHeight = measuredHeader?.geometry === headerGeometry ? measuredHeader.height
+    : nativeHeader ? nativeHeaderHeight : insets.top + CHAT_HEADER_MIN_HEIGHT;
   const stickToBottom = useRef(!messageId && !threadRootId);
   const jumpingToBottom = useRef(false);
   const [jumpTarget, setJumpTarget] = useState(messageId ?? '');
@@ -238,6 +251,23 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
     focused && foreground,
   );
   const viewportOwner = `${user?.id ?? ''}:${accountGeneration}:${deviceId}:${groupId}:${threadRootId ?? 'main'}`;
+  const [diagram, setDiagram] = useState<{ owner: string; messageId: string; sourceMessageId: string; sourceContent: string; payload: MessagePayload } | null>(null);
+  const openDiagram = useCallback((source: string, message: BotGroupMessageView) => setDiagram({
+    owner: viewportOwner, messageId: message.id, sourceMessageId: message.threadShare?.messageId ?? message.id,
+    sourceContent: message.threadShare?.content ?? message.content, payload: buildMermaidPayload(source),
+  }), [viewportOwner]);
+  const closeDiagram = useCallback(() => setDiagram(null), []);
+  const diagramMessage = diagram ? group?.messages.find(message => message.id === diagram.messageId) : undefined;
+  const sourceResolved = !!diagramMessage && (!diagramMessage.threadShare || diagramMessage.threadShare.status === 'available');
+  const diagramInvalid = !!diagram && (chat.state.kind === 'missing' || !!diagramMessage && (diagramMessage.deleted
+    || diagramMessage.threadShare?.status === 'unavailable'
+    || (diagramMessage.threadShare?.messageId ?? diagramMessage.id) !== diagram.sourceMessageId
+    || sourceResolved && (diagramMessage.threadShare?.content ?? diagramMessage.content) !== diagram.sourceContent));
+  const diagramAvailable = sourceResolved && !diagramInvalid;
+  useEffect(() => { if (diagramInvalid) closeDiagram(); }, [diagramInvalid, closeDiagram]);
+  const richContent = useMemo(() => Platform.OS === 'android' ? new RichContentRuntime() : null, [viewportOwner]);
+  useEffect(() => () => richContent?.clear(), [richContent]);
+  useEffect(closeDiagram, [focused, foreground, viewportOwner, closeDiagram]);
   const [awayFromBottom, setAwayFromBottom] = useState<{ owner: string; value: boolean } | null>(null);
   const isAwayFromBottom = awayFromBottom?.owner === viewportOwner && awayFromBottom.value;
   const updateAwayFromBottom = (value: boolean) => setAwayFromBottom(previous =>
@@ -290,7 +320,20 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
   const newMessageCount = botGroupNewMessageCount(group?.messages ?? [], seen?.owner === viewportOwner ? seen.sequence : null, threadRootId);
   const viewport = useRef({ owner: viewportOwner, group, measuredGroup: null as typeof group,
     contentHeight: 0, viewportHeight: 0, offsetY: 0 });
+  const processUserScrolling = useRef(false);
+  const processLeading = useRef(0);
+  const [processLeadingSpace, setProcessLeadingSpace] = useState<number | null>(null);
+  const [processResumeRequest, setProcessResumeRequest] = useState(0);
+  const processViewport = useProcessDisclosureViewport(() => viewport.current, () => {
+    setProcessLeadingSpace(previous => previous ?? processLeading.current);
+    jumpingToBottom.current = false;
+    stickToBottom.current = false;
+  }, () => {
+    setProcessLeadingSpace(null);
+    setProcessResumeRequest(request => request + 1);
+  });
   if (viewport.current.owner !== viewportOwner) {
+    processViewport.resume();
     viewport.current = { owner: viewportOwner, group, measuredGroup: null, contentHeight: 0, viewportHeight: 0, offsetY: 0 };
     jumpingToBottom.current = false;
     stickToBottom.current = !messageId && !threadRootId;
@@ -346,13 +389,14 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
   const previousRoute = navigationState?.routes[navigationState.index - 1];
   const previousParams = previousRoute?.params as { groupId?: string; deviceId?: string; threadRootId?: string } | undefined;
   const previousIsGroup = !!navigationState && previousRoute?.name === navigationState.routes[navigationState.index]?.name && previousParams?.groupId === groupId && (previousParams.deviceId ?? '') === deviceId && !previousParams.threadRootId;
+  const backToTaskList = useTaskListBack();
   const leave = useCallback(() => {
-    if (!threadRootId) { goBackGuarded(router, '/devices'); return; }
+    if (!threadRootId) { backToTaskList(); return; }
     const route = botGroupRoute(host, groupId);
     const fallback = { ...route, params: { ...route.params, messageId: threadRootId } };
     if (previousIsGroup) { goBackGuarded(router, fallback); return; }
     router.replace(fallback);
-  }, [router, threadRootId, previousIsGroup, host, groupId]);
+  }, [router, threadRootId, previousIsGroup, host, groupId, backToTaskList]);
   useFocusEffect(useCallback(() => {
     if (!threadRootId) return;
     const subscription = BackHandler.addEventListener('hardwareBackPress', () => { leave(); return true; });
@@ -442,21 +486,21 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
     const route = botGroupRoute(host, groupId);
     router.push({ ...route, params: { ...route.params, threadRootId: message.id } });
   }, [deviceId, threadRootId, chat.server, rememberGroupPosition, host, groupId, router]);
-  const openTopic = (rootId: string, target?: string) => {
+  const openTopic = useCallback((rootId: string, target?: string) => {
     if (deviceId || !chat.server) return;
     const root = group?.messages.find(message => message.id === rootId);
     if (root && !target && !threadRootId) { openThread(root); return; }
     if (!threadRootId) rememberGroupPosition(rootId);
     const route = botGroupRoute(host, groupId);
     router.push({ ...route, params: { ...route.params, threadRootId: rootId, ...(target ? { messageId: target } : {}) } });
-  };
-  const revealShare = (target: string | null) => {
+  }, [deviceId, chat.server, group?.messages, threadRootId, openThread, rememberGroupPosition, host, groupId, router]);
+  const revealShare = useCallback((target: string | null) => {
     if (!target) return;
     if (!threadRootId) { locateMessage(target); return; }
     const route = botGroupRoute(host, groupId);
     router.replace({ ...route, params: { ...route.params, messageId: target } });
-  };
-  const loadOlderReplies = () => {
+  }, [threadRootId, locateMessage, host, groupId, router]);
+  const loadOlderReplies = useCallback(() => {
     if (!chat.loadOlder || autoPaging.current || chat.loadingOlder || !group?.hasMoreBefore) return;
     autoPaging.current = true; setOlderError(false); jumpingToBottom.current = false; stickToBottom.current = false;
     const visible = group.messages.filter(message => message.threadRootId === threadRootId)
@@ -466,7 +510,7 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
       offset: viewport.current.offsetY, ids: new Set(group.messages.map(message => message.id)), sequence: visible.serverSequence ?? String(visible.sequence) } : null;
     void chat.loadOlder().catch(() => { pagingAnchor.current = null; setOlderError(true); })
       .finally(() => { autoPaging.current = false; });
-  };
+  }, [chat.loadOlder, chat.loadingOlder, group, threadRootId]);
   useEffect(() => {
     if (!focused || !returnAnchor.current || threadRootId) return;
     const anchor = returnAnchor.current;
@@ -514,27 +558,29 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
     finally { hidePending.current = false; }
   };
 
-  const continueRound = async () => {
+  const continueRound = useCallback(async () => {
     if (continuing) return;
     setContinuing(true);
+    processViewport.resume();
     stickToBottom.current = true;
     try { await chat.act('continue'); } catch (error) { report(error, 'groupChat.timeline.continueFailed'); } finally { setContinuing(false); }
-  };
+  }, [continuing, processViewport.resume, chat.act, report]);
 
   /** 开始 / 不用了 / 继续 / 重试 / 结束分工; both transports re-read the authoritative state. */
-  const runPlanAction = async (action: BotGroupPlanAction, planId: string, expectedRevision?: number) => {
+  const runPlanAction = useCallback(async (action: BotGroupPlanAction, planId: string, expectedRevision?: number) => {
     if (planPendingRef.current) return;
     const pending = {}; planPendingRef.current = pending;
     setPlanPending({ planId, action });
+    processViewport.resume();
     stickToBottom.current = true;
     try { await chat.act(`plan-${action}`, { planId, ...(!deviceId ? { expectedRevision } : {}) }); } catch (error) {
       if (planPendingRef.current === pending) report(error, PLAN_ACTION_FAILED[action]);
     } finally {
       if (planPendingRef.current === pending) { planPendingRef.current = null; setPlanPending(null); }
     }
-  };
+  }, [processViewport.resume, chat.act, deviceId, report]);
 
-  const editPlanStep = async (planId: string, step: BotGroupPlanStepView, action: 'reassign' | 'remove' | 'skip', botId?: string, expectedRevision?: number) => {
+  const editPlanStep = useCallback(async (planId: string, step: BotGroupPlanStepView, action: 'reassign' | 'remove' | 'skip', botId?: string, expectedRevision?: number) => {
     if (planPendingRef.current) return;
     const pending = {}; planPendingRef.current = pending;
     setPlanPending({ planId, action: 'edit' });
@@ -546,10 +592,41 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
     } finally {
       if (planPendingRef.current === pending) { planPendingRef.current = null; setPlanPending(null); }
     }
-  };
+  }, [chat.act, deviceId, report]);
+
+  // Layout/read-position updates belong to the screen, not the message body.
+  // Stable handlers let the timeline retain its native text while those settle.
+  const shareToMain = useCallback((id: string) => {
+    void chat.shareToMain?.(id).catch(error => report(error, 'groupChat.thread.shareFailed'));
+  }, [chat.shareToMain, report]);
+  const shareImage = useCallback((id: string) => {
+    Keyboard.dismiss(); shareSelectionStore.enter(shareScope, id);
+  }, [shareScope]);
+  const pendingAction = useCallback((id: string, action: 'retry' | 'cancel' | 'dismiss-share') => {
+    void chat.pendingAction?.(id, action).catch(error => report(error, 'groupChat.composer.sendFailed'));
+  }, [chat.pendingAction, report]);
+  const reply = useCallback((message: BotGroupMessageView) => {
+    setReplyTo(botGroupQuoteFromMessage(message)); setReplyFocusRequest(request => request + 1);
+  }, []);
+  const messageLayout = useCallback((id: string, y: number, height: number) => {
+    previewVisibility.setLayout(id, { y, height });
+    messagePositions.current.set(id, y); messageHeights.current.set(id, height);
+    const anchor = pagingAnchor.current;
+    if (anchor?.id === id && group?.messages.some(message => message.threadRootId === threadRootId && !anchor.ids.has(message.id)
+      && BigInt(message.serverSequence ?? String(message.sequence)) < BigInt(anchor.sequence))) {
+      pagingAnchor.current = null;
+      scrollRef.current?.scrollTo({ y: Math.max(0, anchor.offset + y - anchor.y), animated: false });
+    }
+    if (jumpTarget === id) positionAtMessage(id, y);
+  }, [previewVisibility, group?.messages, threadRootId, jumpTarget, positionAtMessage]);
+  const loadOlderMessages = useCallback(() => {
+    jumpingToBottom.current = false; stickToBottom.current = false;
+    void chat.loadOlder?.().catch(error => report(error, 'groupChat.loadFailedTitle'));
+  }, [chat.loadOlder, report]);
 
   const send = async (input: BotGroupSendInput) => {
     pauseReadUntilInteraction.current = false;
+    processViewport.resume();
     stickToBottom.current = true;
     const quote = replyTo;
     try {
@@ -580,13 +657,15 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
 
   const onScroll = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
     const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
+    const atTail = contentSize.height - contentOffset.y - layoutMeasurement.height <= 1;
+    processViewport.scroll(contentOffset.y, viewport.current.offsetY, processUserScrolling.current, atTail);
     previewVisibility.setViewport(contentOffset.y, layoutMeasurement.height);
     Object.assign(viewport.current, { measuredGroup: group, contentHeight: contentSize.height,
       offsetY: contentOffset.y, viewportHeight: layoutMeasurement.height });
     const atBottom = contentSize.height - contentOffset.y - layoutMeasurement.height < STICK_TO_BOTTOM_PX;
     if (atBottom) jumpingToBottom.current = false;
-    stickToBottom.current = jumpingToBottom.current || atBottom;
-    updateAwayFromBottom(!atBottom);
+    stickToBottom.current = !processViewport.inspecting.current && (jumpingToBottom.current || atBottom);
+    updateAwayFromBottom(processViewport.inspecting.current || !atBottom);
     acknowledge();
     if (threadRootId && userScrolled.current && !jumpingToBottom.current && !olderError && contentOffset.y < (messageHeights.current.get(threadRootId) ?? 0) + 160) loadOlderReplies();
   };
@@ -615,7 +694,10 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
     {threadRootId ? threadFollow : direct ? null : <Stack.Toolbar placement="right">
       <Stack.Toolbar.Button icon="ellipsis" accessibilityLabel={t('groupChat.settings.open')} disabled={!group} onPress={() => setSettings(true)} />
     </Stack.Toolbar>}
-    <Stack.Screen options={{ headerTitle: threadRootId ? t('groupChat.thread.title') : title }} />
+    <ChatIdentityHeader testIDPrefix="botGroup" showBack={false} mark={null}
+      title={threadRootId ? t('groupChat.thread.title') : title} subtitle={threadRootId ? title : memberLine}
+      identityLabel={[title, memberLine].filter(Boolean).join(', ')} onBack={leave}
+      controlsReady={!!group} onOpenIdentity={direct || threadRootId ? undefined : () => setSettings(true)} />
   </> : <><ChatIdentityHeader testIDPrefix="botGroup" settingsTestID="botGroup.settingsButton" nativeHeader={nativeHeader}
     mark={threadRootId ? null : peer ? <BotGroupAvatar deviceId={deviceId} identity={identityFor(peer.botId, peer.name)} size={CHAT_HEADER_MARK_SIZE} online={chat.online} /> : <BotGroupDuoAvatar deviceId={deviceId} members={headerMembers} online={chat.online} variant="header"
       working={group?.round.status === 'running'} />}
@@ -663,7 +745,7 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
   } else {
     body = <KeyboardAvoidingView
       style={styles.flex}
-      enabled={Platform.OS === 'ios' || Platform.OS === 'android'}
+      enabled={Platform.OS === 'android'}
       behavior={keyboardAvoidingBehaviorForPlatform(
         Platform.OS === 'ios' ? 'ios' : Platform.OS === 'android' ? 'android' : 'web',
       )}
@@ -671,64 +753,71 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
       {floatingHeader ? null : offlineNote}
       {group.dissolvedAt || group.archived ? <Text style={styles.offline}>{t(group.dissolvedAt ? 'groupChat.lifecycle.dissolved' : 'groupChat.thread.archived')}</Text> : null}
       <View style={styles.flex}>
+      <ProcessDisclosureViewport.Provider value={processViewport.inspect}>
       <MessageListVisibilityContext.Provider value={previewVisibility}>
-      <ScrollView ref={scrollRef} style={styles.flex} contentContainerStyle={[styles.timeline, threadRootId && styles.threadTimeline, floatingHeader && { paddingTop: headerHeight + spacing.md }]}
+      <ComposerPullThroughScrollView bridge={composerPullThrough} ref={scrollRef} style={styles.flex} contentContainerStyle={[styles.timeline, threadRootId && styles.threadTimeline, floatingHeader && { paddingTop: headerHeight + spacing.md }, processLeadingSpace !== null && { justifyContent: 'flex-start' }]}
         scrollIndicatorInsets={floatingHeader ? { top: headerHeight } : undefined} keyboardShouldPersistTaps="handled"
         keyboardDismissMode="interactive"
-        maintainVisibleContentPosition={chat.server && !threadRootId ? { minIndexForVisible: group.hasMoreBefore ? 1 : 0 } : undefined}
-        onScroll={onScroll} scrollEventThrottle={64}
+        maintainVisibleContentPosition={chat.server && !threadRootId ? { minIndexForVisible: group.hasMoreBefore ? 2 : 1 } : undefined}
+        onScroll={event => { richContent?.onScroll(); onScroll(event); }} scrollEventThrottle={64}
+        onScrollEndDrag={event => { onScroll(event); processUserScrolling.current = false; }}
+        onMomentumScrollBegin={() => { processUserScrolling.current = true; }}
+        onMomentumScrollEnd={event => { onScroll(event); processUserScrolling.current = false; }}
         onScrollBeginDrag={() => {
+          processUserScrolling.current = true;
           jumpingToBottom.current = false;
-          stickToBottom.current = viewport.current.contentHeight - viewport.current.offsetY - viewport.current.viewportHeight < STICK_TO_BOTTOM_PX;
+          stickToBottom.current = !processViewport.inspecting.current && viewport.current.contentHeight - viewport.current.offsetY - viewport.current.viewportHeight < STICK_TO_BOTTOM_PX;
           pauseReadUntilInteraction.current = false;
           userScrolled.current = true;
         }}
         onLayout={event => {
           viewport.current.viewportHeight = event.nativeEvent.layout.height;
           previewVisibility.setHeight(event.nativeEvent.layout.height);
-          updateAwayFromBottom(!stickToBottom.current && viewport.current.contentHeight - viewport.current.offsetY - viewport.current.viewportHeight >= STICK_TO_BOTTOM_PX);
+          updateAwayFromBottom(processViewport.inspecting.current || !stickToBottom.current && viewport.current.contentHeight - viewport.current.offsetY - viewport.current.viewportHeight >= STICK_TO_BOTTOM_PX);
           acknowledge();
         }}
         onContentSizeChange={(_width, height) => {
           viewport.current.contentHeight = height;
           viewport.current.measuredGroup = group;
-          if (focused && stickToBottom.current) scrollRef.current?.scrollToEnd({ animated: false });
-          updateAwayFromBottom(!stickToBottom.current && height - viewport.current.offsetY - viewport.current.viewportHeight >= STICK_TO_BOTTOM_PX);
+          // Keyboard dismissal can resize the timeline before its first drag
+          // sample. An imperative scroll here cancels native drag/deceleration.
+          if (focused && stickToBottom.current && !processUserScrolling.current) scrollRef.current?.scrollToEnd({ animated: false });
+          updateAwayFromBottom(processViewport.inspecting.current || !stickToBottom.current && height - viewport.current.offsetY - viewport.current.viewportHeight >= STICK_TO_BOTTOM_PX);
           acknowledge();
         }}
         testID="botGroup.timeline">
-        <BotGroupTimeline threadRootId={threadRootId} onOpenThread={!threadRootId && !deviceId && chat.server && !direct ? openThread : undefined} group={group} deviceId={deviceId} online={chat.online} identityFor={identityFor}
+        {/* Cancel this zero-height marker's gap so it never changes the normal timeline.
+            Its Y measures the native flex-end space, including empty/live-only groups. */}
+        <View style={{ height: processLeadingSpace ?? 0, marginBottom: -spacing.sm }}
+          onLayout={event => {
+            if (!processViewport.inspecting.current) processLeading.current = Math.max(0,
+              event.nativeEvent.layout.y - (floatingHeader ? headerHeight + spacing.md : spacing.md));
+          }} />
+        <BotGroupTimeline onOpenDiagram={openDiagram} active={focused && foreground} threadRootId={threadRootId} onOpenThread={!threadRootId && !deviceId && chat.server && !direct ? openThread : undefined} group={group} deviceId={deviceId} online={chat.online} identityFor={identityFor}
           onRetrySource={chat.reload}
           onOpenTopic={!deviceId && chat.server ? openTopic : undefined} onRevealShare={revealShare}
-          onShare={chat.shareToMain ? id => { void chat.shareToMain!(id).catch(error => report(error, 'groupChat.thread.shareFailed')); } : undefined}
+          onShare={chat.shareToMain ? shareToMain : undefined}
           selectedImages={selectedImages} imageShareBusy={imageShareBusy}
-          onShareImage={!deviceId && chat.server ? id => { Keyboard.dismiss(); shareSelectionStore.enter(shareScope, id); } : undefined}
+          onShareImage={!deviceId && chat.server ? shareImage : undefined}
           sharedReplies={chat.threadMeta?.shares} readBefore={initialRead.current.sequence} olderError={olderError}
           highlightId={highlightId} onLocateMessage={locateMessage}
-          pending={chat.pending} onPendingAction={(id, action) => { void chat.pendingAction?.(id, action).catch(error => report(error, 'groupChat.composer.sendFailed')); }}
-          onReply={!threadRootId && (chat.server || group.serverBacked) && !group.archived && !group.dissolvedAt ? message => { setReplyTo(botGroupQuoteFromMessage(message)); setReplyFocusRequest(request => request + 1); } : undefined}
-          onMessageLayout={(id, y, height) => {
-            previewVisibility.setLayout(id, { y, height });
-            messagePositions.current.set(id, y); messageHeights.current.set(id, height);
-            const anchor = pagingAnchor.current;
-            if (anchor?.id === id && group.messages.some(message => message.threadRootId === threadRootId && !anchor.ids.has(message.id)
-              && BigInt(message.serverSequence ?? String(message.sequence)) < BigInt(anchor.sequence))) {
-              pagingAnchor.current = null;
-              scrollRef.current?.scrollTo({ y: Math.max(0, anchor.offset + y - anchor.y), animated: false });
-            }
-            if (jumpTarget === id) positionAtMessage(id, y);
-          }}
+          pending={chat.pending} onPendingAction={pendingAction}
+          onReply={!threadRootId && (chat.server || group.serverBacked) && !group.archived && !group.dissolvedAt ? reply : undefined}
+          onMessageLayout={messageLayout}
           resolveMedia={resolveMedia} resolveServerMedia={chat.media}
-          loadOlder={threadRootId ? loadOlderReplies : chat.loadOlder ? () => { jumpingToBottom.current = false; stickToBottom.current = false; void chat.loadOlder!().catch(error => report(error, 'groupChat.loadFailedTitle')); } : undefined}
+          loadOlder={threadRootId ? loadOlderReplies : chat.loadOlder ? loadOlderMessages : undefined}
           loadingOlder={chat.loadingOlder} continuing={continuing} planPending={planPending}
-          onContinue={() => void continueRound()}
-          onPlanAction={(action, planId, revision) => void runPlanAction(action, planId, revision)}
-          onEditStep={(planId, step, action, botId, revision) => void editPlanStep(planId, step, action, botId, revision)}
+          onContinue={continueRound}
+          onPlanAction={runPlanAction}
+          onEditStep={editPlanStep}
           />
       {!imageSelectionActive && !threadRootId ? <BotGroupWorkArea onStop={stop} stopping={stopping} group={group} deviceId={deviceId} online={chat.online} identityFor={identityFor}
+        resumeRequest={processResumeRequest}
         onError={message => { if (message) Alert.alert(message); }} /> : null}
-      </ScrollView>
+      {processViewport.footerHeight > 0 && <View style={{ height: processViewport.footerHeight, marginTop: -spacing.sm }} />}
+      </ComposerPullThroughScrollView>
       </MessageListVisibilityContext.Provider>
+      </ProcessDisclosureViewport.Provider>
       {!imageSelectionActive && (isAwayFromBottom || newMessageCount > 0 || mask.mentions.length > 0) ? <View
         style={styles.newMessages} pointerEvents="box-none" accessibilityLiveRegion="polite">
         {isAwayFromBottom || newMessageCount > 0 ? <MessageScrollToBottomButton
@@ -743,6 +832,7 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
             pagingAnchor.current = null;
             pauseReadUntilInteraction.current = false;
             jumpingToBottom.current = true;
+            processViewport.resume();
             stickToBottom.current = true;
             updateAwayFromBottom(false);
             scrollRef.current?.scrollToEnd({ animated: true });
@@ -773,28 +863,39 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
       <BotGroupTopicImageShare key={shareScope} selectionScope={shareScope} messages={selectedMessages} allIds={shareableIds}
         resolveMedia={chat.media} onBusyChange={setImageShareBusy} />
       <View style={selectedImages ? styles.hiddenComposer : undefined} testID="botGroup.composerContainer">
-        <BotGroupComposer allowMentionAllBots={group.supportsMentionAudiences === true && group.allowMentionAllBots === true} key={`${viewportOwner}:composer`} topic={!!threadRootId} onParticipate={mask.participate} maskIndicator={mask.state?.settings.companionId ? <GroupMaskStatus mask={mask} deviceId={deviceId} onPress={() => setMaskSettings(true)} /> : undefined} members={group.members} identityFor={identityFor} deviceId={deviceId} online={(chat.online || !!chat.canQueue) && !group.archived && !group.dissolvedAt && (!threadRootId || group.messages.some(message => message.id === threadRootId && !message.deleted))}
+        <BotGroupComposer pullThrough={composerPullThrough} allowMentionAllBots={group.supportsMentionAudiences === true && group.allowMentionAllBots === true} key={`${viewportOwner}:composer`} topic={!!threadRootId} onParticipate={mask.participate} maskIndicator={mask.state?.settings.companionId ? <GroupMaskStatus mask={mask} deviceId={deviceId} onPress={() => setMaskSettings(true)} /> : undefined} members={group.members} identityFor={identityFor} deviceId={deviceId} online={(chat.online || !!chat.canQueue) && !group.archived && !group.dissolvedAt && (!threadRootId || group.messages.some(message => message.id === threadRootId && !message.deleted))}
         quoteMessageId={replyTo?.messageId} focusRequest={replyFocusRequest}
         placeholder={threadRootId ? t('groupChat.thread.placeholder') : undefined}
         running={!threadRootId && group.round.status === 'running'} planState={threadRootId || chat.server ? null : botGroupComposerPlanState(openBotGroupPlan(group), group.replyMode)}
-        divisionSupported={!threadRootId && !chat.server && (!group.singleSpeaker || group.supportsDivision === true)} attachmentsSupported={!threadRootId && group.supportsAttachments === true} uploadAttachment={chat.uploadAttachment} onSend={send} onStop={stop} />
+        divisionSupported={!threadRootId && !chat.server && (!group.singleSpeaker || group.supportsDivision === true)} attachmentsSupported={group.supportsAttachments === true} uploadAttachment={chat.uploadAttachment} onSend={send} onStop={stop} />
       </View>
+      {Platform.OS === 'ios' ? <DockKeyboardBottomSpacer restingBottom={insets.bottom}
+        keyboardGap={0} /> : null}
     </KeyboardAvoidingView>;
   }
 
-  // The persistent pane already sits inside the window's safe area horizontally.
-  const sideEdges = panePersistent ? [] as const : ['left', 'right'] as const;
+  // Use the same window snapshot as the pane/header. A newly attached native
+  // SafeAreaView can start at zero and apply its bottom inset after cached
+  // messages are visible, shrinking the timeline and making it jump to the tail.
+  // The persistent pane already accounts for horizontal safe areas.
+  const screenInsets = {
+    paddingTop: floatingHeader ? 0 : insets.top,
+    paddingBottom: Platform.OS === 'ios' && group ? 0 : insets.bottom,
+    paddingLeft: panePersistent ? 0 : insets.left,
+    paddingRight: panePersistent ? 0 : insets.right,
+  };
   // A vertical system bar has no horizontal chrome to blur. Only cover actual
   // in-page content (offline notice or image selection), matching the timeline inset.
   const headerBlurHeight = systemBack ? headerHeight
     : Math.max(headerHeight, nativeHeader ? nativeHeaderHeight : insets.top + navigationChrome.target);
-  return <SafeAreaView style={styles.screen} edges={floatingHeader ? [...sideEdges, 'bottom'] : ['top', ...sideEdges, 'bottom']} testID="botGroup.screen">
+  return <RichContentContext.Provider value={richContent}><View style={[styles.screen, screenInsets]} testID="botGroup.screen">
     {threadRootId ? <Stack.Screen options={{ gestureEnabled: previousIsGroup }} /> : null}
     {nativeHeader || systemBack ? null : <Stack.Screen options={{ headerShown: false }} />}
     {floatingHeader ? <>
       <View style={[styles.flex, group ? null : { paddingTop: headerHeight }]}>{body}</View>
       {headerBlurHeight > 0 ? <SessionHeaderNativeBlur height={headerBlurHeight} fadeInside={CHAT_HEADER_BLUR_FADE_INSIDE} /> : null}
-      <View style={[styles.floatingHeader, { paddingTop: nativeHeader && !imageSelectionActive ? nativeHeaderHeight : insets.top }]} onLayout={(event) => setHeaderHeight(event.nativeEvent.layout.height)}>
+      <View style={[styles.floatingHeader, { paddingTop: nativeHeader && !imageSelectionActive ? nativeHeaderHeight : insets.top }]}
+        onLayout={(event) => setMeasuredHeader({ geometry: headerGeometry, height: event.nativeEvent.layout.height })}>
         {header}
         {offlineNote}
       </View>
@@ -817,7 +918,8 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
         else router.push({ pathname: '/companions/groups/[groupId]', params: { groupId, deviceId, deviceName,
           messageId: mention.messageId, ...(mention.threadRootId ? { threadRootId: mention.threadRootId } : {}) } } as never);
       }} />
-  </SafeAreaView>;
+      <MessagePayloadModal payload={diagramAvailable && focused && foreground && diagram?.owner === viewportOwner ? diagram.payload : null} onClose={closeDiagram} />
+  </View></RichContentContext.Provider>;
 }
 
 function planCardPending(action: PlanPending['action'] | null): BotGroupPlanCardAction | null {
@@ -828,9 +930,11 @@ function followUpPending(action: PlanPending['action'] | null): BotGroupFollowUp
   return action === 'continue' || action === 'retry' || action === 'dismiss' ? action : null;
 }
 
-export function BotGroupTimeline({
+const EMPTY_PENDING: readonly DurableOutboxRecord[] = [];
+
+export const BotGroupTimeline = memo(function BotGroupTimeline({
   group, deviceId, online, identityFor, resolveMedia, resolveServerMedia, loadOlder, loadingOlder, continuing, planPending, onContinue, onPlanAction, onEditStep,
-  onMessageLayout, onLocateMessage, highlightId, onReply, onOpenThread, threadRootId, pending = [], onPendingAction,
+  onMessageLayout, onLocateMessage, highlightId, onReply, onOpenThread, threadRootId, pending = EMPTY_PENDING, onPendingAction, onOpenDiagram, active = true,
   onOpenTopic, onRevealShare, onShare, sharedReplies, readBefore, olderError, onRetrySource, onShareImage, selectedImages, imageShareBusy,
 }: {
   group: BotGroupRemoteChatData;
@@ -854,6 +958,8 @@ export function BotGroupTimeline({
   highlightId?: string;
   onReply?: (message: BotGroupMessageView) => void;
   onOpenThread?: (message: BotGroupMessageView) => void;
+  onOpenDiagram?: (source: string, message: BotGroupMessageView) => void;
+  active?: boolean;
   threadRootId?: string;
   onOpenTopic?: (rootId: string, messageId?: string) => void;
   onRevealShare?: (messageId: string | null) => void;
@@ -866,23 +972,23 @@ export function BotGroupTimeline({
 }) {
   const { t, i18n } = useTranslation();
   const styles = useThemedStyles(makeStyles);
-  const canonicalIds = new Set(group.messages.map(message => message.id));
+  const canonicalIds = useMemo(() => new Set(group.messages.map(message => message.id)), [group.messages]);
   const rowIdentity = useRef({ groupId: group.id, ids: new Map<string, string>() });
   if (rowIdentity.current.groupId !== group.id) rowIdentity.current = { groupId: group.id, ids: new Map() };
   for (const row of pending) if (row.chat?.messageId) rowIdentity.current.ids.set(row.chat.messageId, `local:${row.item.clientId}`);
   const rowKey = (id: string) => rowIdentity.current.ids.get(id) ?? id;
-  const local = pending.filter(row => !row.chat?.messageId || !canonicalIds.has(row.chat.messageId));
-  const pendingById = new Map(local.map(row => [`local:${row.item.clientId}`, row]));
-  const root = threadRootId ? group.messages.find(message => message.id === threadRootId && !message.deleted) : undefined;
-  const messages = threadRootId
+  const local = useMemo(() => pending.length ? pending.filter(row => !row.chat?.messageId || !canonicalIds.has(row.chat.messageId)) : EMPTY_PENDING, [pending, canonicalIds]);
+  const pendingById = useMemo(() => new Map(local.map(row => [`local:${row.item.clientId}`, row])), [local]);
+  const root = useMemo(() => threadRootId ? group.messages.find(message => message.id === threadRootId && !message.deleted) : undefined, [group.messages, threadRootId]);
+  const messages = useMemo(() => threadRootId
     ? [...(root ? [root] : []), ...group.messages.filter(message => message.threadRootId === threadRootId && !message.deleted), ...local.map(pendingChatMessage)]
-    : [...group.messages, ...local.map(pendingChatMessage)];
+    : [...group.messages, ...local.map(pendingChatMessage)], [group.messages, local, root, threadRootId]);
   const [expandedRoot, setExpandedRoot] = useState(false);
-  const planById = new Map(group.plans.map((plan) => [plan.id, plan]));
+  const planById = useMemo(() => new Map(group.plans.map((plan) => [plan.id, plan])), [group.plans]);
   const openPlan = openBotGroupPlan(group);
   const followUp = botGroupPlanFollowUp(openPlan);
-  const continueId = continuableRoundEndId(messages, group.round);
-  const timeGroups = collectBotMessageTimeGroups(messages.map((message) => ({ clientId: message.id, createdAt: message.createdAt })));
+  const continueId = useMemo(() => continuableRoundEndId(messages, group.round), [messages, group.round]);
+  const timeGroups = useMemo(() => collectBotMessageTimeGroups(messages.map((message) => ({ clientId: message.id, createdAt: message.createdAt }))), [messages]);
   const allLabel = t('groupChat.mention.all');
   const allBotsLabel = t('groupChat.mention.allBots');
   // Message text retains the sender's language after another member changes UI locale.
@@ -893,10 +999,13 @@ export function BotGroupTimeline({
   const mentionLabels = useMemo(() => [...broadcastLabels.all, ...broadcastLabels.bots, ...group.members.flatMap(member =>
     [member.name, botGroupMentionDisplayName(member), member.nickname || member.displayName || member.name])], [broadcastLabels, group.members]);
   const [mentioned, setMentioned] = useState<{ groupId: string; botId: string; anchor: BotGroupMentionPoint } | null>(null);
+  const onMentionPress = useCallback<BotGroupMentionContext['onPress']>((member, anchor) => {
+    if (anchor) setMentioned({ groupId: group.id, botId: member.botId, anchor });
+  }, [group.id]);
   const mentionedMember = mentioned?.groupId === group.id ? group.members.find(member => member.botId === mentioned.botId) ?? null : null;
   useEffect(() => { if (mentioned && !mentionedMember) setMentioned(null); }, [mentioned, mentionedMember]);
   const running = !threadRootId && group.round.status === 'running';
-  const memberById = new Map(group.members.map((member) => [member.botId, member]));
+  const memberById = useMemo(() => new Map(group.members.map((member) => [member.botId, member])), [group.members]);
   const pendingFor = (planId: string | null) => planId && planPending?.planId === planId ? planPending.action : null;
   const firstNew = readBefore === undefined ? undefined : messages.findIndex(message => message.threadRootId === threadRootId && message.isSelf === false
     && message.kind === 'message' && BigInt(message.serverSequence ?? String(message.sequence)) > BigInt(readBefore));
@@ -957,13 +1066,13 @@ export function BotGroupTimeline({
           <BotGroupThreadPosted messageId={message.id} shared={shared} onPress={revealShare} />
         : null}
         {actions}
-        </View>} topic={!!threadRootId} isRoot={isRoot} onRetrySource={onRetrySource} message={displayMessage} continued={continued} member={message.authorBotId ? memberById.get(message.authorBotId) : undefined}
+        </View>} topic={!!threadRootId} isRoot={isRoot} active={active} interactive={!selectedImages && (!longRoot || expandedRoot)} onOpenDiagram={onOpenDiagram ? source => onOpenDiagram(source, message) : undefined} onRetrySource={onRetrySource} message={displayMessage} continued={continued} member={message.authorBotId ? memberById.get(message.authorBotId) : undefined}
           quoteDisplay={message.quote ? resolveBotGroupQuote(message.quote, messages) : undefined}
           onLocateQuote={message.quote && onLocateMessage ? () => onLocateMessage(message.quote!.messageId) : undefined}
           members={group.members} deviceId={deviceId} online={online} identityFor={identityFor} mentionLabels={mentionLabels}
           mentionContext={{ members: group.members, mentions: message.mentions, serverBacked: !!group.serverBacked,
             allLabels: broadcastLabels.all, allBotsLabels: broadcastLabels.bots, labels: mentionLabels,
-            onPress: (member, anchor) => { if (anchor) setMentioned({ groupId: group.id, botId: member.botId, anchor }); } }}
+            onPress: onMentionPress }}
           resolveMedia={resolveMedia} resolveServerMedia={resolveServerMedia}
           canContinue={message.id === continueId} continuing={continuing} onContinue={onContinue}
           plan={message.planId ? planById.get(message.planId) : undefined}
@@ -999,13 +1108,16 @@ export function BotGroupTimeline({
         onEnd={() => onPlanAction('dismiss', openPlan.id, openPlan.revision)} />
     </View> : null}
   </>;
-}
+});
 
 function BotGroupTimelineItem({
   groupId, message, footer, topic = false, isRoot = false, onRetrySource, continued = false, quoteDisplay, onLocateQuote, member, members, deviceId, online, identityFor, mentionLabels, mentionContext, resolveMedia, resolveServerMedia, canContinue, continuing, onContinue,
-  plan, planActionable, planReassignable, planPending, onPlanAction, onEditStep,
+  plan, planActionable, planReassignable, planPending, onPlanAction, onEditStep, onOpenDiagram, interactive = true, active = true,
 }: {
   groupId: string;
+  onOpenDiagram?: (source: string) => void;
+  interactive?: boolean;
+  active?: boolean;
   message: BotGroupMessageView;
   footer?: ReactNode;
   onRetrySource?: () => void;
@@ -1036,6 +1148,9 @@ function BotGroupTimelineItem({
   onEditStep(step: BotGroupPlanStepView, action: 'reassign' | 'remove' | 'skip', botId?: string): void;
 }) {
   const { t } = useTranslation();
+  const visible = useMessageListItemVisible(message.id);
+  const visibility = useContext(MessageListVisibilityContext);
+  const richContentActive = active && (!visibility || visible);
   const styles = useThemedStyles(makeStyles);
   const { colors: userBubbleColors } = useUserBubbleAppearance();
   if (message.kind === 'round-end') {
@@ -1134,8 +1249,8 @@ function BotGroupTimelineItem({
             deviceId={member?.homeDeviceId || deviceId || ''} /> : null}
           <View style={styles.botMessageContent}>
             {renderAttachments('left')}
-            {message.threadShare && !authoredShare ? <BotGroupThreadShare onRetry={onRetrySource} share={message.threadShare} mentionContext={contentMentionContext} resolveMedia={resolveMedia} resolveServerMedia={resolveServerMedia} />
-              : content.trim() ? <BotGroupMarkdownText content={content} authorKind={message.authorKind} mentionContext={contentMentionContext} /> : null}
+            {message.threadShare && !authoredShare ? <BotGroupThreadShare active={richContentActive} interactive={interactive} onOpenDiagram={onOpenDiagram} onRetry={onRetrySource} share={message.threadShare} mentionContext={contentMentionContext} resolveMedia={resolveMedia} resolveServerMedia={resolveServerMedia} />
+              : content.trim() ? <BotGroupMarkdownText richContent active={richContentActive} interactive={interactive} onOpenDiagram={onOpenDiagram} content={content} authorKind={message.authorKind} mentionContext={contentMentionContext} /> : null}
           </View>
           <BotGroupHandoffFiles files={message.files} />
           {shareFooter}

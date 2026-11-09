@@ -73,6 +73,8 @@ import { getGhostManager } from '../cindy-brain/index.js';
 import { throwIpcError, requireString, requireObject } from '../utils/ipcValidate.js';
 import { tapWindowBroadcast } from '../device-link/broadcast-tap.js';
 import { isDeviceLinkInvoke } from '../device-link/invoke-context.js';
+import { getScheduleWebhookHost, scheduleWebhookReceiver } from '../scheduler-host/webhook/runtime.js';
+import type { ScheduleWebhookHost } from '../scheduler-host/webhook/index.js';
 import { remoteCreateWorkingDirError } from './remoteScheduleWorkingDir.js';
 import { isTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import { getAgentIslandService } from '../agent-island/service.js';
@@ -737,6 +739,74 @@ export function registerScheduleHandlers(getMaker?: () => Maker | null): void {
       return scheduler.create(normalized);
     });
   });
+
+  ipcMain.handle(MAKER_INVOKE.SCHEDULE_WEBHOOK_STATUS, async (_e, id: unknown) => {
+    const scheduleId = requireString(id, 'id');
+    return withScheduler(async ({ scheduler }) => {
+      const schedule = await scheduler.get(scheduleId);
+      await getScheduleWebhookHost()?.refreshStatus();
+      return schedule ? getScheduleWebhookHost()?.status(schedule) ?? null : null;
+    });
+  });
+
+  ipcMain.handle(MAKER_INVOKE.SCHEDULE_WEBHOOK_RECEIVER, async () => scheduleWebhookReceiver());
+
+  const manageWebhooks = async <T>(run: (host: ScheduleWebhookHost) => Promise<T>): Promise<T> => {
+    const host = getScheduleWebhookHost();
+    if (!host) throwIpcError('INTERNAL', 'WEBHOOK_MANAGEMENT_UNAVAILABLE');
+    try {
+      return await run(host);
+    } catch (error) {
+      const code = error && typeof error === 'object' && 'code' in error ? error.code : undefined;
+      const message = error instanceof Error ? error.message : '';
+      const known = ['WEBHOOK_ENDPOINT_LIMIT', 'WEBHOOK_ENDPOINT_RELEASED', 'WEBHOOK_ACCOUNT_REQUIRED',
+        'WEBHOOK_MANAGEMENT_UNAVAILABLE', 'WEBHOOK_ACCOUNT_CHANGED'];
+      throwIpcError('INTERNAL', typeof code === 'string' && known.includes(code) ? code
+        : known.includes(message) ? message : 'WEBHOOK_MANAGEMENT_FAILED');
+    }
+  };
+  ipcMain.handle(MAKER_INVOKE.SCHEDULE_WEBHOOK_ACCOUNT, () => manageWebhooks((host) => host.accountOverview()));
+  ipcMain.handle(MAKER_INVOKE.SCHEDULE_WEBHOOK_RELEASE, (_e, id: unknown) => {
+    const endpointId = requireString(id, 'id');
+    if (!/^whk_[A-Za-z0-9_-]{1,128}$/.test(endpointId)) throwIpcError('INVALID_PARAMS', 'Invalid endpoint id');
+    return manageWebhooks((host) => host.releaseEndpoint(endpointId));
+  });
+  ipcMain.handle(MAKER_INVOKE.SCHEDULE_WEBHOOK_RESTORE, (_e, id: unknown) => {
+    const scheduleId = requireString(id, 'id');
+    return withScheduler(async ({ scheduler }) => {
+      const schedule = await scheduler.get(scheduleId);
+      if (!schedule) throwIpcError('NOT_FOUND', 'Schedule not found');
+      return manageWebhooks((host) => host.restoreEndpoint(schedule));
+    });
+  });
+
+  /** 地址和密钥只在任务所在电脑管理；两个通道都不在 Device Link 白名单内。 */
+  const withWebhookHost = <T>(id: unknown, run: (host: ScheduleWebhookHost, schedule: Schedule) => Promise<T>) => {
+    const scheduleId = requireString(id, 'id');
+    if (isDeviceLinkInvoke()) throwIpcError('INVALID_PARAMS', 'Webhook endpoints can only be managed on the computer running this schedule');
+    return withScheduler(async ({ scheduler }) => {
+      const schedule = await scheduler.get(scheduleId);
+      if (!schedule) throwIpcError('NOT_FOUND', `Schedule not found: ${scheduleId}`);
+      const host = getScheduleWebhookHost();
+      if (!host) throwIpcError('INTERNAL', 'Schedule webhooks are not running');
+      try {
+        return await run(host, schedule);
+      } catch (error) {
+        // 用户能修正的错误带上稳定的错误码，界面据此提示。
+        const message = error instanceof Error ? error.message : String(error);
+        if (message === 'WEBHOOK_SECRET_INVALID' || message === 'WEBHOOK_UNSIGNED') throwIpcError('INVALID_PARAMS', message);
+        throw error;
+      }
+    });
+  };
+
+  ipcMain.handle(MAKER_INVOKE.SCHEDULE_WEBHOOK_SET_SECRET, async (_e, id: unknown, secret: unknown) => {
+    if (secret !== undefined && typeof secret !== 'string') throwIpcError('INVALID_PARAMS', 'secret must be a string');
+    return withWebhookHost(id, (host, schedule) => host.setSecret(schedule, secret === undefined ? undefined : secret.trim()));
+  });
+
+  ipcMain.handle(MAKER_INVOKE.SCHEDULE_WEBHOOK_ROTATE_URL, async (_e, id: unknown) =>
+    withWebhookHost(id, (host, schedule) => host.rotateUrl(schedule)));
 
   ipcMain.handle(MAKER_INVOKE.SCHEDULE_SCRIPT_CAPABILITY_STATUS, async () => {
     // 查询型 handler(规则 13 例外):探测失败不该挡住表单——返回空列表,

@@ -127,7 +127,7 @@ function RemoteCollectionScreenContent() {
           data={items}
           keyExtractor={(item) => item.key}
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => void load(true)} tintColor={colors.textSecondary} />}
-          ListHeaderComponent={error && items.length > 0 ? (
+          ListHeaderComponent={(error && items.length > 0 ? (
             // 已有内容时加载失败:列表保持可读,顶部行内提示 + 重试(与伙伴列表同一呈现)。
             <View style={styles.noticeRow}>
               <Text accessibilityRole="alert" style={styles.noticeText} testID="remoteResources.error">
@@ -147,7 +147,7 @@ function RemoteCollectionScreenContent() {
                   : <RefreshCw color={colors.textSecondary} size={iconSize.sm} strokeWidth={iconStroke.regular} />}
               </Pressable>
             </View>
-          ) : null}
+          ) : null) ?? undefined}
           renderItem={({ item: hosted }) => {
             const display = hosted.item.display;
             const titleText = resolveRemoteText(display.title, i18n.language);

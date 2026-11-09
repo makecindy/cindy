@@ -7,7 +7,7 @@
 
 ## 1. 用户应该得到什么
 
-工具发现入口（2026-10-30 起）：`cindy_helper` 的顶层工具 `ask_owner`，一直在模型的工具列表里，不藏在 `list_tools` 类目后面。kind=fill 是本页的代输入，kind=scan 是扫码（窗口里的码，或 Agent 截图里的码，见 §4.1），另有 choose（选择）与 connect（连接账号）。工具说明与参数 schema 随列表下发，模型无需先发错误调用。Claude Code 与 Codex 直接看到它；Pi 通过原有 MCP 网关检索，不另外增加 system prompt。旧名 `request_input_handoff` 仍可经 `call_tool` 调用，但不再列出。
+工具发现入口（2026-10-30 起）：`cindy_helper` 的顶层工具 `ask_owner`，一直在模型的工具列表里，不藏在 `list_tools` 类目后面。kind=fill 是本页的代输入，kind=scan 是扫码（窗口里的码，或 Agent 截图里的码，见 §4.1），另有 connect（连接账号）。2026-11-08 起，普通异步提问恢复独立的 `ask_user_question_async`，不再使用 `ask_owner(kind=choose)`；登录交接与需求澄清保持独立。工具说明与参数 schema 随列表下发，模型无需先发错误调用。Claude Code 与 Codex 直接看到它；Pi 通过原有 MCP 网关检索，不另外增加 system prompt。旧名 `request_input_handoff` 仍可经 `call_tool` 调用，但不再列出。
 
 **什么时候用**（2026-11-02 裁决）：只有一定不能让模型知道的内容才用这个工具——登录，以及密码、密钥、令牌、验证码。邮箱、姓名、地址这类不敏感的信息，Agent 直接在对话里问，主人告诉模型，由模型去填，既不弹工具，也不让主人自己开窗口。
 
@@ -170,6 +170,16 @@ Windows 暂不支持 askpass。
   电脑仍只能处理执行电脑发出的原有代输入卡；没有卡时不产生推送。
 
 ## 6. 已知边界（如实标注，不算缺陷）
+
+供应商 API key 输入（2026-11-07）：`configure_model_connection` 的新增连接及更换密钥复用
+同一代输入卡、设备持有权与加密提交。Main 展示连接名称和实际端点的来源域，表单只有一个保密字段；
+不操作窗口，不依赖 macOS 辅助功能。填写值只交给等待中的供应商操作，Agent 只收到保存或取消
+结果；填写完成不代表保存或验证成功。取消、到期和任务清理不保存，保存前复核账号、任务权限
+及原连接配置，防止等待时换号或改端点。跨端 payload 与签名输入桥不变，旧控制端沿用已有表单。
+相同端点集合的引擎共用一次输入，不同端点分别填写；不从其他连接读取或复制密钥。
+一次工具调用中的所有输入与排队写入共用九分钟期限（短于 Codex 的十分钟工具上限），
+不会随下一张卡重置；MCP 调用取消会关闭等待中的输入卡，迟到提交不能保存。
+实现与回归见 `main/app-settings/connections.ts`、`providerHandlers.test.ts`、`terminalPrompt.test.ts`。
 
 - 读取与执行依赖 macOS 辅助功能；其它平台返回 `UNSUPPORTED`。
 - 按键只发给最前面的程序：打字前确认目标程序在最前。系统不许后台辅助程序切换前台时，点一下目标窗口自己的

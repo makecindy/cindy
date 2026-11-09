@@ -1,10 +1,36 @@
 // @vitest-environment jsdom
-import { act, createContext, useEffect, useImperativeHandle, useRef, useState, type ReactNode, type Ref } from 'react';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import ts from 'typescript';
+import { act, createContext, createElement, useEffect, useImperativeHandle, useRef, useState, type ReactNode, type Ref } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { setMobileAuthOwner } from '@/auth/authOwnerGeneration';
 const state = vi.hoisted(() => ({ focused: true, onTask: true, width: 390, height: 844, native: false, upgrade: false,
   sheetParams: {} as Record<string, string> }));
+const companionQueries = vi.hoisted(() => ({ pending: [] as Array<() => void>, push: vi.fn(), invoke: vi.fn() }));
+vi.mock('@/auth/AuthContext', () => ({ useAuth: () => ({ accountGeneration: 1 }) }));
+vi.mock('@/device-link/DeviceLinkContext', () => ({ useDeviceLink: () => ({ connectionEpoch: 1, invoke: companionQueries.invoke }) }));
+vi.mock('@/session/BotGroupMessageText', () => ({ BotGroupMarkdownText: () => null }));
+vi.mock('@/session/MessageRenderer', () => ({ MessageRenderer: ({ companionThreads }: any) =>
+  <div data-companion-summary={companionThreads?.threads.get('root')?.replyCount ?? 'missing'} data-thread-busy={companionThreads?.busy}
+    onClick={() => companionThreads?.open({ source: { id: 'root' }, body: 'Synthetic message' })} /> }));
+// Deferred transport results: local hook state survives a retained history, but not a new route.
+vi.mock('@/session/useRemoteCompanionQuery', () => ({ useRemoteCompanionQuery: (_device: string, channel: string, args: any[], options: any) => {
+  const [value, setValue] = useState<unknown>(null);
+  const identity = JSON.stringify([channel, args]);
+  useEffect(() => {
+    if (!options.enabled) return;
+    let current = true;
+    companionQueries.pending.push(() => {
+      if (current) setValue(channel === 'local-db:bots:get'
+        ? { dmThreadsSupported: true, canonicalSessionId: args[0] }
+        : [{ rootClientId: 'root', sessionId: 'topic', replyCount: 3 }]);
+    });
+    return () => { current = false; };
+  }, [identity, options.enabled]);
+  return { value, online: true };
+} }));
 vi.mock('@/session/NativeResidentHistory', () => {
   const Host = ({ children, surfaceId }: { children: ReactNode; surfaceId: string }) => <div data-host={surfaceId}>{children}</div>;
   const Slot = ({ surfaceId, selected }: { surfaceId: string; selected: boolean }) => <div data-slot={surfaceId} data-selected={selected} />;
@@ -12,7 +38,8 @@ vi.mock('@/session/NativeResidentHistory', () => {
     get NativeHistorySlot() { return state.native ? Slot : null; },
     get needsResidentHistoryUpgrade() { return state.upgrade; } };
 });
-vi.mock('expo-router', () => ({ useSegments: () => state.onTask ? ['sessions', '[sessionId]'] : ['index'],
+vi.mock('expo-router', () => ({ useIsFocused: () => state.focused, useRouter: () => ({ push: companionQueries.push }),
+  useSegments: () => state.onTask ? ['sessions', '[sessionId]'] : ['index'],
   useGlobalSearchParams: () => state.sheetParams }));
 vi.mock('expo-router/react-navigation', () => ({ useIsFocused: () => state.focused,
   NavigationContext: createContext(null), NavigationRouteContext: createContext(null) }));
@@ -24,6 +51,8 @@ vi.mock('@/platform/AdaptiveWindowContext', () => ({
 vi.mock('@/session/useHomeMode', () => ({ useHomeMode: () => ({ mode: 'tasks' }) }));
 vi.mock('@/hooks/useReduceMotion', () => ({ useReduceMotionEnabled: () => true }));
 vi.mock('@/session/sessionPaneLayout', () => ({ sessionPaneLayout: () => ({ persistent: true }) }));
+// Resize gestures have their own tests; this suite exercises the resident hosts.
+vi.mock('@/session/SessionPaneDivider', () => ({ SessionPaneDivider: () => null }));
 vi.mock('@/session/remoteSessionStore', () => ({
   RemoteSessionStoreSubscriptionGate: ({ children, enabled }: { children: ReactNode; enabled: boolean }) =>
     <div data-store-gate={String(enabled)}>{children}</div>,
@@ -54,8 +83,36 @@ vi.mock('react-native', () => ({
 import { RecentMessageHistories, RecentMessageHistoriesProvider, MessageHistoryOverlay, useMessageHistoryActive, useMessageHistoryPositioning } from '@/session/RecentMessageHistories';
 import { ResidentHomeList, ResidentHomeListProvider, useResidentHomeList } from '@/session/ResidentHomeList';
 import { recentTaskKey, rememberRecentTask } from '@/session/recentTasks';
+import { useCompanionThreads } from '@/session/CompanionThreads';
+import { MessageRenderer } from '@/session/MessageRenderer';
+import { SessionMessageHistory } from '@/session/SessionMessageHistory';
 const key = (id: string) => recentTaskKey({ deviceId: 'pc', sessionId: id });
 const remember = (id: string) => rememberRecentTask({ pathname: '/sessions/[sessionId]', params: { deviceId: 'pc', deviceName: 'PC', sessionId: id } });
+
+// Execute the production query ownership and its renderer prop. Keep unrelated page controls
+// outside this harness; the real resident provider must preserve the query with its message list.
+const pageSource = ts.createSourceFile('session.tsx', readFileSync(resolve(process.cwd(), 'app/sessions/[sessionId].tsx'), 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+const page = pageSource.statements.find((node): node is ts.FunctionDeclaration => ts.isFunctionDeclaration(node) && node.name?.text === 'SessionScreenContent')!;
+const threadDeclaration = page.body!.statements.find(node => ts.isVariableStatement(node)
+  && node.declarationList.declarations.some(declaration => ['companionThreads', 'companionThreadOptions'].includes(declaration.name.getText(pageSource))))!;
+let renderer = '';
+function findHistoryRenderer(node: ts.Node) {
+  if (ts.isJsxSelfClosingElement(node) && ['MessageRenderer', 'SessionMessageHistory'].includes(node.tagName.getText(pageSource))) {
+    const attribute = node.attributes.properties.find(attribute => ts.isJsxAttribute(attribute)
+      && ['companionThreads', 'companionThreadOptions'].includes(attribute.name.getText(pageSource)))!;
+    renderer = `<${node.tagName.getText(pageSource)} ${attribute.getText(pageSource)} />`;
+  }
+  ts.forEachChild(node, findHistoryRenderer);
+}
+findHistoryRenderer(page);
+const queryOwner = ts.transpileModule(`function CompanionRoute({ id, controlsReady }) {
+  const deviceId = 'pc', deviceName = 'PC', sessionId = id, companionChat = true, companionThreadAvatar = null;
+  const companionDisplay = { ref: { id } }, companionEntry = { ready: controlsReady, readOnly: false, threadRootSessionId: null };
+  ${threadDeclaration.getText(pageSource)}
+  return <RecentMessageHistories activeKey={key(id)}>${renderer}</RecentMessageHistories>;
+}`, { compilerOptions: { jsx: ts.JsxEmit.React, target: ts.ScriptTarget.ES2022 } }).outputText;
+const CompanionRoute = new Function('React', 'RecentMessageHistories', 'MessageRenderer', 'SessionMessageHistory', 'useCompanionThreads', 'key', `${queryOwner}; return CompanionRoute;`)(
+  { createElement }, RecentMessageHistories, MessageRenderer, SessionMessageHistory, useCompanionThreads, key);
 
 describe('resident five-task message lists outside route lifetimes', () => {
   let root: Root;
@@ -98,9 +155,31 @@ describe('resident five-task message lists outside route lifetimes', () => {
     state.native = false; state.upgrade = false;
     state.sheetParams = {};
     mounts.clear(); unmounts.length = 0;
+    companionQueries.pending = []; companionQueries.invoke.mockReset();
     container = document.createElement('div'); root = createRoot(container);
   });
   afterEach(async () => { await act(async () => root.unmount()); });
+  it('retains companion capabilities and thread summaries across route replacement without enabling unvalidated actions', async () => {
+    const showCompanion = async (id: string, controlsReady = true) => act(async () => {
+      remember(id);
+      root.render(<RecentMessageHistoriesProvider><CompanionRoute key={id} id={id} controlsReady={controlsReady} /></RecentMessageHistoriesProvider>);
+    });
+    const resolveQueries = async () => {
+      while (companionQueries.pending.length) await act(async () => { companionQueries.pending.splice(0).forEach(resolve => resolve()); });
+    };
+    await showCompanion('a'); await resolveQueries();
+    const original = container.querySelector<HTMLElement>('[data-companion-summary="3"]')!;
+    expect(original).not.toBeNull();
+    await showCompanion('b'); await resolveQueries();
+    await showCompanion('a', false);
+    expect(original.dataset.companionSummary).toBe('3');
+    expect(original.dataset.threadBusy).toBe('true');
+    await act(async () => original.click());
+    expect(companionQueries.invoke).not.toHaveBeenCalled();
+    await showCompanion('a');
+    expect(original.dataset.companionSummary).toBe('3');
+    expect(original.dataset.threadBusy).toBe('false');
+  });
   it('keeps the exact list instance after its route is destroyed, then publishes fresh props', async () => {
     await show('a');
     const original = container.querySelector<HTMLButtonElement>('[data-task="a"]')!;

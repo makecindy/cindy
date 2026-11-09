@@ -48,6 +48,7 @@ export default {
     'usage-only': { about: 'Only usage details shared' },
     closed: { about: 'Both permissions disabled without disabling model use' },
     group: { about: 'Two anonymous own accounts; borrowed accounts excluded' },
+    'subscription-pool': { about: 'Each account of a shared multi-account subscription lists all of its own windows' },
   },
   async ready(page) {
     await page
@@ -147,6 +148,12 @@ export default {
       if (ui.case === 'organization')
         assert.equal(await progress.first().getAttribute('aria-valuenow'), '65');
       if (ui.case === 'group') assert.equal(await progress.count(), 5);
+      if (ui.case === 'subscription-pool') {
+        assert.equal(await progress.count(), 5);
+        for (const number of [1, 2])
+          await page.getByText(await ui.t('providerShare.insights.account', { number }), { exact: true }).waitFor();
+        await page.getByText('Fable', { exact: false }).first().waitFor();
+      }
       if (ui.case === 'unknown') assert.equal(await progress.count(), 0);
       if (ui.case === 'zero')
         assert.equal(await progress.first().getAttribute('aria-valuenow'), '0');

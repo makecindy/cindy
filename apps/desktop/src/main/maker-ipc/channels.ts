@@ -564,6 +564,8 @@ export const MAKER_INVOKE = {
    * 成功后 main 刷新两个 agent 的 mcpProviders 数组并广播 MCP_CHANGED（见 MAKER_PUSH）。
    */
   MCP_CUSTOM_LIST: 'maker:mcp:custom:list',
+  MCP_DUPLICATES_LIST: 'maker:mcp:duplicates:list',
+  MCP_DUPLICATES_CHOOSE: 'maker:mcp:duplicates:choose',
   MCP_CUSTOM_CREATE: 'maker:mcp:custom:create',
   MCP_CUSTOM_UPDATE: 'maker:mcp:custom:update',
   MCP_CUSTOM_DELETE: 'maker:mcp:custom:delete',
@@ -665,6 +667,14 @@ export const MAKER_INVOKE = {
   SCHEDULE_CREATE_FROM_TEMPLATE: 'maker:schedule:create-from-template',
   /** script 任务能力选择器的运行时可用性探测(意识装入/唤醒态);只做提示,不过滤清单。 */
   SCHEDULE_SCRIPT_CAPABILITY_STATUS: 'maker:schedule:script-capability-status',
+  SCHEDULE_WEBHOOK_STATUS: 'maker:schedule:webhook-status',
+  /** 这台电脑现在能不能接收 Webhook：决定是否显示开关。 */
+  SCHEDULE_WEBHOOK_RECEIVER: 'maker:schedule:webhook-receiver',
+  SCHEDULE_WEBHOOK_SET_SECRET: 'maker:schedule:webhook-set-secret',
+  SCHEDULE_WEBHOOK_ROTATE_URL: 'maker:schedule:webhook-rotate-url',
+  SCHEDULE_WEBHOOK_ACCOUNT: 'maker:schedule:webhook-account',
+  SCHEDULE_WEBHOOK_RELEASE: 'maker:schedule:webhook-release',
+  SCHEDULE_WEBHOOK_RESTORE: 'maker:schedule:webhook-restore',
   PROJECT_AUTOMATION_RECONCILE: 'maker:project-automation:reconcile',
   PROJECT_AUTOMATION_PENDING_IMPORTS: 'maker:project-automation:pending-imports',
   PROJECT_AUTOMATION_LIST_CONSENTS: 'maker:project-automation:list-consents',
@@ -829,6 +839,8 @@ export const MAKER_INVOKE = {
   BOT_GROUP_SEND: 'maker:bot-group:send',
   CHAT_DISPLAY_CACHE: 'maker:chat:display-cache',
   BOT_GROUP_OUTBOX: 'maker:bot-group:outbox',
+  BOT_GROUP_OUTBOX_COMMAND: 'maker:bot-group:outbox-command',
+  BOT_READ_STATE: 'maker:bot-read-state',
   BOT_GROUP_CONTINUE: 'maker:bot-group:continue',
   BOT_GROUP_STOP: 'maker:bot-group:stop',
   BOT_GROUP_PLAN_START: 'maker:bot-group:plan-start',
@@ -1011,6 +1023,9 @@ export const MAKER_PUSH = {
   BOT_DIRECT_MESSAGE_CHANGED: 'maker:bot-direct-message:changed',
   /** A Bot group, its members, messages or running round changed. */
   BOT_GROUP_CHANGED: 'maker:bot-group:changed',
+  /** Local complete-app windows only; never forwarded to Device Link. */
+  BOT_GROUP_OUTBOX_CHANGED: 'maker:bot-group:outbox-changed',
+  BOT_READ_STATE_CHANGED: 'maker:bot-read-state:changed',
   /** Companion homes changed; payload is the full CompanionCloudSnapshot. */
   COMPANION_CLOUD_CHANGED: 'maker:companion-cloud:changed',
   /** Bot 档案经主进程创建或更新后变化；renderer 收到后重拉伙伴列表。 */
