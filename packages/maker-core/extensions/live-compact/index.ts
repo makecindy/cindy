@@ -181,10 +181,12 @@
  *     这一刀 —— 已经删成功的旧备份回不来,拒绝只会白删。
  *   - 被拒的一刀会撤掉本次刚落盘、无卡片引用的 `raw-*.txt` 与其 meta —— 原文写入不走容量轮换,
  *     不清理会一轮轮堆积突破单会话上限。
- * 脱敏规则与上游的分道:上游只枚举少数键名,本仓键名规则按「类」匹配(大写下划线标识符以
- * KEY/TOKEN/SECRET/PASSWORD/PASSWD/PASSPHRASE/CREDENTIAL(S)/AUTH 结尾即命中,MONKEY/TURKEY/HOCKEY/
- * WHISKEY/JOKEY 用 stoplist 挡;camel/小写保留小显式列表),并补齐认证头、npm_ 前缀等
- * blob 形态 —— 严格强于上游,是十多轮安全 review 逼出来的收敛(语料在 live-compact.test.mjs)。
+ * 不做运行时密钥打码(与上游一致):密钥在工具结果进入上下文的那一刻就已经发给当时所选的
+ * provider,客户端侧打码无法撤销首次暴露;同一 provider 下重复发送没有实质保密差别。影子备份
+ * 与原文快照是本机同账号磁盘上的恢复副本,与 pi 会话文件里的明文同级,不是新增暴露面 —— 打码
+ * 只会腐蚀备份(恢复时拿回 [REDACTED],「完整备份」名不副实)。磁盘侧保护走文件权限(0600)、
+ * 用户 profile ACL 与 7 天回收;模型需要原文时按指针从快照取回(用户可见、可审计)。此前各轮
+ * 打码修复在旧威胁模型下是对的,撤销它是威胁模型重新归位,不是回退。
  * Logging: stderr lines prefixed "[pi-live-compact]" (grep "spine cut"), plus an
  * append-only spine.log next to the shadow directory for test verification.
  */
@@ -1664,111 +1666,6 @@ function estimateTokens(message: any): number {
   return base + Math.ceil(cjk * (2 / 3 - 1 / 4));
 }
 
-// shadow 会落盘成 .txt,而 toolResult 里可能含 `export KEY=sk-...` 这类命令;
-// 写入前对常见凭证形态打码 —— 卡片里的路径是给模型 read 的,读到打码版比读到明文密钥安全。
-// 键名两类:大写下划线(env/配置的通用写法,只要以敏感后缀结尾就命中)与小写/驼峰/
-// 连字符显式列表(apiKey、refresh-token)。两类各一份定义、四种规则共用,免得两处漂。
-// 大写下划线键名只要以 KEY/TOKEN/SECRET/... 结尾就命中;MONKEY/TURKEY/HOCKEY/WHISKEY/
-// JOKEY 这类以 KEY 结尾的普通词用小 stoplist 挡掉;「MAX_TOKENS」「MODEL_TOKEN_LIMIT」
-// 这类不以后缀结尾的不受影响(后缀后必须紧跟引号?/=/:)。
-// 开头的 (?<![A-Z0-9_]) 是性能红线:没有它,连续大写/数字段会从每个位置重扫,
-// 128K 字符要 25 秒(实测);有它只从标识符起点尝试,同样输入 <1ms。redactSecrets
-// 跑在同步的 agent_before_settle 钩子里,卡住就是卡住整个 settle。
-const UPPER_SECRET_KEY =
-  "(?<![A-Z0-9_])[_A-Z0-9]*(?:KEY|TOKEN|SECRET|PASSWD|PASSWORD|PASSPHRASE|CREDENTIALS?|AUTH)(?<!MONKEY)(?<!TURKEY)(?<!HOCKEY)(?<!WHISKEY)(?<!JOKEY)";
-const LOWER_SECRET_KEY =
-  "(?:api[_-]?key|access[_-]?key|access[_-]?token|auth[_-]?token|session[_-]?token|refresh[_-]?token|id[_-]?token|client[_-]?secret|secret[_-]?key|private[_-]?key|password|passwd|passphrase|secret)";
-const REDACT_RULES: Array<[RegExp, string]> = [
-  // PEM 私钥整块必须**排在最前**:键名规则会把 `private_key="-----BEGIN` 先换成 `[REDACTED]`,
-  // 之后整块规则就认不出开始标记,密钥正文会原样留下。先按块整体吃掉,再让键名规则收尾。
-  // 段的长度不能设上界:8192 的封顶会让大体积块(如 RSA-16384 约 10.9K 正文)整块规则
-  // 认不到终结符,半块规则只吃掉前 8192 个字符,剩下的密钥正文和 END 原样落盘(实测:
-  // 10000 字正文残留 1861 字)。线性度靠的是正文类不收 `-`:无终结符的 BEGIN 后面紧跟
-  // 另一个 BEGIN 时,类在 `-` 处立刻断住,不会每个标记都重扫到文末。
-  // `\\` 必须在类里:工具调用参数是 JSON.stringify 后的字符串,多行私钥里的换行变成
-  // 了字面量 `\n` 两个字符 —— 不许反斜杠的话整块规则认不到终结符,下面那条半块规则
-  // 只能吃掉 BEGIN 标记,私钥正文和 END 会原样写进影子文件(实测)。
-  [/-----BEGIN [A-Z ]*PRIVATE KEY-----(?:\r?\n(?:Proc-Type|DEK-Info):[^\r\n]*)*\r?\n?[A-Za-z0-9+/=:,\s\\]*?-----END [A-Z ]*PRIVATE KEY-----/g, "[REDACTED PRIVATE KEY]"],
-  // 只留开始标记(输出被截断)的那半块同样是密钥正文:上一条只吃有终结符的块,这里把没等到
-  // 终结符的半块一并打掉 —— 否则截断得越巧,密钥越完整地留在备份里。贪心吃完整段
-  // base64/空白(无上界),所以超大块与截断块都不会只打一半。
-  [/-----BEGIN [A-Z ]*PRIVATE KEY-----(?:\r?\n(?:Proc-Type|DEK-Info):[^\r\n]*)*\r?\n?[A-Za-z0-9+/=:,\s\\]+/g, "[REDACTED PRIVATE KEY]"],
-  // PGP armor(gpg --armor --export-secret-keys):标记带 ` BLOCK` 后缀,块里还有
-  // `Version: GnuPG v2` 这类头行(不是 base64,但不含密钥材料)。正文类要比 PEM 宽一档
-  // (允许 `.` `(` `)`),否则头行会把 base64 正文挡在规则外 —— 密钥正文原样留在影子
-  // 文件里等于没打码。正文类同样不含 `-`:遇到下一个 armor 标记就断住,不会把后面的
-  // 内容一起吃掉(线性度同理)。截断的 armor(输出被砍断、没有 END 标记)按半块规则
-  // 吃到正文末尾。
-  [/-----BEGIN PGP [A-Z ]*KEY BLOCK-----[A-Za-z0-9+/=:,.()\s\\]*?-----END PGP [A-Z ]*KEY BLOCK-----/g, "[REDACTED PRIVATE KEY]"],
-  [/-----BEGIN PGP [A-Z ]*KEY BLOCK-----[A-Za-z0-9+/=:,.()\s\\]+/g, "[REDACTED PRIVATE KEY]"],
-  // HTTP 认证头要先单独处理:`Authorization: Basic dXNlcjpwYXNz` 的值不是"键名=值"形态,
-  // 键名规则只认到方案名(不足 8 字),base64 里的可复用凭证会原样留下。Bearer 仍由下面那条兜。
-  // 冒号后可能是引号(JSON `{"Authorization":"Basic …"}`),方案后面也可能是 Digest 那种
-  // `username="…", response="…"` 参数串 —— 两种形态各一条规则。
-  [/((?:proxy-)?authorization["'`]?\s*[=:]\s*["'`]?(?:digest|negotiate)\s+)(?!\[REDACTED)[^\r\n]*/gi, "$1[REDACTED]"],
-  [/((?:proxy-)?authorization["'`]?\s*[=:]\s*["'`]?(?:basic|token)\s+)(?!\[REDACTED)[A-Za-z0-9+/=._~-]{8,}/gi, "$1[REDACTED]"],
-  // 键名规则按「类」匹配,不再枚举厂商:十多轮 review 的漏点全是同一种形态 ——
-  // `AWS_SESSION_TOKEN=`、`NPM_TOKEN=`、`STRIPE_SECRET_KEY=` 这类「下划线大写 + 敏感后缀」。
-  // 引号里的值可能带空格(`password="correct horse battery staple"`):只认非空白的
-  // 值类只会吃到第一个词,剩下的口令尾巴原样落盘;第一个词不到 8 个字时整条一个都
-  // 不打。引号是明确边界,按整段打码;引号没闭合(输出被截断)时吃掉这一行剩下的部分。
-  // 引号那两条排在「不带引号」那两条前面:带空格的值若先被后者吃掉前半段,后半段就
-  // 成了没人管的口令尾巴(实测 `password="abcdefghij klm"` 会剩下 ` klm"`)。
-  [new RegExp(`((?:${UPPER_SECRET_KEY})["'\`]?\\s*[=:]\\s*)(["'\`])(?!\\[REDACTED)([^\\r\\n]*?)(\\2|$)`, "gm"), "$1$2[REDACTED]$4"],
-  [new RegExp(`((?:${LOWER_SECRET_KEY})["'\`]?\\s*[=:]\\s*)(["'\`])(?!\\[REDACTED)([^\\r\\n]*?)(\\2|$)`, "gim"), "$1$2[REDACTED]$4"],
-  // 不带引号的值:一条非空白串、至少 8 个字符(值里允许 `[`,密码可能含方括号);
-  // 只豁免「已经是替换标记」的情况,否则会把标记再啃一口。
-  [new RegExp(`((?:${UPPER_SECRET_KEY})["'\`]?\\s*[=:]\\s*)(["'\`]?)(?!\\[REDACTED)([^\\s"'\`]{1,})`, "g"), "$1$2[REDACTED]"],
-  [new RegExp(`((?:${LOWER_SECRET_KEY})["'\`]?\\s*[=:]\\s*)(["'\`]?)(?!\\[REDACTED)([^\\s"'\`]{1,})`, "gi"), "$1$2[REDACTED]"],
-  // RFC 6750 的 b64token 还允许 `~ + /` 和结尾的 `=`:只认 `._-` 时,以 `/` 或 `+` 开头的
-  // base64 凭证第一个字符就被排除,整条 token 原样留下。
-  [/(?<![A-Za-z0-9])Bearer\s+[A-Za-z0-9._~+/-]{16,}={0,2}/gi, "Bearer [REDACTED]"],
-  [/(?<![A-Za-z0-9])sk-[A-Za-z0-9_-]{16,}/g, "[REDACTED]"],
-  // Stripe 形态是 `sk_live_...` / `rk_test_...`:前缀分段,上一条的 `sk-` 匹配不到。
-  [/(?<![A-Za-z0-9])(?:sk|rk)_(?:live|test)_[0-9A-Za-z]{16,}/g, "[REDACTED]"],
-  // GitHub:传统 PAT 是 gh[pousr]_,细粒度 PAT 是 github_pat_ 前缀(长度不固定)。
-  // GitLab 的 PAT 是 glpat- 前缀,常挂在 `PRIVATE-TOKEN:` 或小写 token 字段上 ——
-  // 没有大写下划线键名可依,只能按前缀认。
-  [/(?<![A-Za-z0-9])(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{22,}|glpat-[A-Za-z0-9_-]{20,}|xox[abps]-[A-Za-z0-9-]{10,})/g, "[REDACTED]"],
-  // npm 的 registry 令牌是 `npm_` + 随机串;`.npmrc` 的 `_authToken=` 由上面的键名规则覆盖。
-  [/(?<![A-Za-z0-9])npm_[A-Za-z0-9]{16,}/g, "[REDACTED]"],
-  // 厂商固定前缀凭证:AWS AK/ASIA、Google AIza、Stripe 的 live 前缀。
-  [/(?<![A-Za-z0-9])(?:AKIA|ASIA)[A-Z0-9]{16}/g, "[REDACTED]"],
-  [/(?<![A-Za-z0-9])AIza[0-9A-Za-z_-]{35}/g, "[REDACTED]"],
-  // 厂商前缀表(按 gitleaks / secrets-patterns 的公开前缀补齐)。前缀是确定字符串,
-  // 与熵检测的区别就在这里:不靠「看着像随机串」判断,不会误伤 sha256 / base64 / 内容 ID,
-  // 也不会误伤本来就是公开值的东西(ssh 公钥 `ssh-ed25519 AAAA…`、Mapbox `pk.` 公钥)。
-  // 漏掉的都是具体厂商:靠一篇一篇 review 补一个前缀永远追不上,所以按表一次补齐。
-  [/(?<![A-Za-z0-9])gl(?:pat|rt|dt|soat|cbt|ptt|ft|imt|agent)-[A-Za-z0-9_-]{20,}/g, "[REDACTED]"],
-  [/(?<![A-Za-z0-9])hf_[A-Za-z0-9]{30,}/g, "[REDACTED]"],
-  [/(?<![A-Za-z0-9])dckr_pat_[A-Za-z0-9_-]{20,}/g, "[REDACTED]"],
-  [/(?<![A-Za-z0-9])pypi-AgEIcHlwa[A-Za-z0-9_-]{10,}/g, "[REDACTED]"],
-  [/(?<![A-Za-z0-9])(?:sbp|vercel|ddapi|ddapp|lin_api)_[A-Za-z0-9]{20,}/g, "[REDACTED]"],
-  [/(?<![A-Za-z0-9])(?:shpat|shpca|shppa|shpss)_[A-Za-z0-9]{20,}/g, "[REDACTED]"],
-  [/(?<![A-Za-z0-9])do[opr]_v1_[A-Za-z0-9]{20,}/g, "[REDACTED]"],
-  [/(?<![A-Za-z0-9])SG\.[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{30,}/g, "[REDACTED]"],
-  [/(?<![A-Za-z0-9])atlasv1\.[A-Za-z0-9_-]{20,}/g, "[REDACTED]"],
-  // Mailgun 的 `key-<32 位十六进制>`:限定长度,不误伤 `key-value` 这类普通标识。
-  [/(?<![A-Za-z0-9])key-[0-9a-f]{32}(?![0-9a-f])/g, "[REDACTED]"],
-  [/(?<![A-Za-z0-9])NRAK-[A-Z0-9]{27}/g, "[REDACTED]"],
-  [/(?<![A-Za-z0-9])xapp-[0-9]+-[A-Z0-9]+-[0-9]+-[a-z0-9]+/g, "[REDACTED]"],
-  [/(?<![A-Za-z0-9])whsec_[A-Za-z0-9]{20,}/g, "[REDACTED]"],
-  // JWT:三段都带固定头部形状,宽松的 base64 不会命中。
-  // 起始边界必须与正文字符类一致(`-`/`_` 也要排除):类里包含 `-` 时,`eyJabcdefghijk-`
-  // 这种重复前缀以前会让每个 `eyJ` 都把剩余全文吃完再回溯找 `.`(240K 实测 5.7 秒,
-  // 卡在同步的 settle 钩子里)。段长**不设上界** —— 上界会让长载荷 JWT 整条漏掉打码;
-  // 载荷下限也不能高:`{}` 的紧凑形式是 `e30`,只有 3 个字符。
-  [/(?<![A-Za-z0-9_-])eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{2,}\.[A-Za-z0-9_-]+/g, "[REDACTED]"],
-  // 连接串里内嵌的密码:postgres://user:pass@host → 只打码密码段。
-  // 起始边界同样是性能红线:没有它,/i 下连续 [a-z0-9+.-] 类字符段(含大写)会从每个
-  // 起点贪吃再逐位回溯,128K 要 17 秒(实测);有它每个 scheme 起点只试一次。
-  [/((?<![A-Za-z0-9+.-])[a-z][a-z0-9+.-]*:\/\/[^:/\s@]+:)([^@\s/]{4,})(@)/gi, "$1[REDACTED]$3"],
-];
-export function redactSecrets(text: string): string {
-  let out = text;
-  for (const [pattern, replacement] of REDACT_RULES) out = out.replace(pattern, replacement);
-  return out;
-}
 
 // shadow 是本地恢复用的完整副本,调用参数(命令、路径、写入内容)必须留下。
 function messageShadowText(message: any): string {
@@ -2404,7 +2301,7 @@ interface RawRecord {
   toolCallId: string;
   label?: string;
   reason?: string;
-  /** 已规划但还没落盘的正文(已脱敏);切割被接受后才写。 */
+  /** 已规划但还没落盘的正文;切割被接受后才写。 */
   body?: string;
   pending?: boolean;
 }
@@ -2484,7 +2381,7 @@ export function captureToolResult(options: {
 
 /**
  * 只算「要不要写、写什么」,不碰磁盘:卡片构期就能拿到指针,被拒的切割不留文件。
- * 写盘前统一脉敏(与卡片、汇总备份同一套规则),哈希算在真正落盘的字节上。
+ * 写的是工具结果原文(不做打码,理由见文件头),哈希算在真正落盘的字节上。
  */
 export function planRawEntry(options: {
   dir: string;
@@ -2500,7 +2397,7 @@ export function planRawEntry(options: {
   const file = join(dir, rawName(toolCallId));
   if (existsSync(file)) return readExistingRaw(file, toolCallId);
   if (surfaceText.includes(PRUNE_MARKER)) return { ok: false, reason: "already-pruned", toolCallId };
-  const body = redactSecrets(surfaceText);
+  const body = surfaceText;
   const bytes = Buffer.from(body, "utf8");
   return {
     ok: true,
@@ -3072,17 +2969,15 @@ function attemptCut(options: {
     const spanEntries = entries.slice(chunk.start, chunk.end + 1);
     const shadow = shadowDirectory(state.key);
     // 备份带角色标记与思考原文(1.0.3),工具调用参数也留着供本地恢复。
-    const body = redactSecrets(spanEntries.map((entry) => shadowSections(entry)).join("\n\n"));
+    const body = spanEntries.map((entry) => shadowSections(entry)).join("\n\n");
     const file = join(shadow, shadowName(state.key));
 
-    // 卡片正文会一直留在上下文里(小工具结果是整段原样进卡片),脱敏必须在这一侧也做。
     // 卡片只写调用名与命令(callCommand 拿不到 command 时退化成工具名),write/edit 这类
     // 带路径与正文的调用切走后参数就没了下文 —— 让这类 span 也给出备份指针,否则后续轮次
     // 看不到写入目标/内容,可能重复执行副作用。
     const hiddenCallArgs = spanHidesCallArgs(spanEntries);
-    const redacted = { ...chunk.card, needsBackup: chunk.card.needsBackup || hiddenCallArgs, text: redactSecrets(chunk.card.text) };
     // 1.0.6: 切范围内存在被修剪过的工具结果时,不宣称「有完整备份」。
-    const card = withBackupHint(redacted, file, backupClaimOk(spanEntries));
+    const card = withBackupHint({ ...chunk.card, needsBackup: chunk.card.needsBackup || hiddenCallArgs }, file, backupClaimOk(spanEntries));
     // 1.0.8: 卡片不再用官方摘要标记,改成自己的正文开头(原仓 SPINE_SOURCE_KIND 的对应物)。
     const content = [{ type: "text", text: `${CHECKPOINT_PREAMBLE}\n\n${MARK}` }, { type: "text", text: card.text }];
     const framedTokens = estimateTokens({ role: "user", content, timestamp: Date.now() });

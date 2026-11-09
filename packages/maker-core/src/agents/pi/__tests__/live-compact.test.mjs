@@ -9,56 +9,10 @@ vi.mock('@earendil-works/pi-coding-agent', () => ({
   generateSummaryWithUsage: vi.fn(),
 }));
 
-// 凭证扫描会把任何形似密钥的字面量当硬命中(哪怕只是测试夹具),所以夹具一律拼接构造:
-// 源码里不存在连续的密钥形态,运行时的值仍然满足 redactSecrets 的规则,用例照旧贴着真规则跑。
-const FAKE_OPENAI_KEY = ['sk', 'fixture-openai-key-0123456789'].join('-');
-const FAKE_BEARER = ['fixture', 'bearer-0123456789'].join('-');
-const FAKE_AWS_KEY = ['AKIA', 'FIXTUREPLACEHOLDER01'].join('');
-const FAKE_GOOGLE_KEY = ['AIza', 'FixturePlaceholderABCDEFGHIJKLMNOPQRST'].join('');
-const FAKE_PASSWORD = ['fixture', 'plain-password'].join('-');
-const FAKE_DB_PASSWORD = ['fixture', 'db-password'].join('-');
-const FAKE_PASSPHRASE = ['fixture', 'passphrase', '0123456789'].join('-');
-const FAKE_OPENAI_KEY_2 = ['sk', 'fixture-openai-key-0987654321'].join('-');
-const FAKE_REFRESH_TOKEN = ['fixture', 'refresh', 'token', '0123456789'].join('-');
-const FAKE_STRIPE_KEY = ['sk', 'live', 'fixturestripeplaceholder0123'].join('_');
-const FAKE_BASIC = ['dXNlcjpw', 'YXNzd29yZA=='].join('');
-const FAKE_AWS_SESSION_TOKEN = ['AWS_SESSION', 'TOKEN'].join('_') + '=fixture-session-' + '0123456789abcdef';
-const FAKE_AWS_SECRET = ['fixture', 'awssecret', '0123456789abcdef'].join('-');
-const FAKE_NPM_TOKEN = ['npm', 'fixture0123456789abcdef0123456789'].join('_');
-const FAKE_GH_PAT = ['github', 'pat', 'fixture0123456789abcdef0123'].join('_');
-const FAKE_GH_TOKEN = ['ghp', 'fixtureabcdefghijklmnopqrst'].join('_');
-const FAKE_GITLAB_PAT = ['glpat', 'fixture0123456789abcdef'].join('-');
-const FAKE_VENDOR_TOKENS = [
-  ['glrt', 'abcdefghij0123456789'].join('-'),
-  ['gldt', 'abcdefghij0123456789'].join('-'),
-  ['glsoat', 'abcdefghij0123456789'].join('-'),
-  ['hf', 'abcdefghijklmnopqrstuvwxyz012345'].join('_'),
-  ['dckr', 'pat', 'abcdefghijklmnopqrstuvwxyz0'].join('_'),
-  ['pypi', 'AgEIcHlwaS5vcmcCJGFiY2RlZmdoaWprbG1ub3A'].join('-'),
-  ['sbp', 'abcdefghijklmnopqrstuvwxyz0123456789'].join('_'),
-  ['lin', 'api', 'abcdefghijklmnopqrstuvwxyz0123'].join('_'),
-  ['shpat', 'abcdefghijklmnopqrstuvwxyz0123'].join('_'),
-  ['doo', 'v1', 'abcdefghijklmnopqrstuvwxyz0123'].join('_'),
-  ['dop', 'v1', 'abcdefghijklmnopqrstuvwxyz0123'].join('_'),
-  ['SG', 'abcdefghijklmnopqrstuv', 'abcdefghijklmnopqrstuvwxyz0123456789AB'].join('.'),
-  ['atlasv1', 'abcdefghijklmnopqrstuvwxyz0123456789'].join('.'),
-  ['key', '0123456789abcdef0123456789abcdef'].join('-'),
-  ['NRAK', 'ABCDEFGHIJKLMNOPQRSTUVWXYZ01234'].join('-'),
-  ['xapp', '1'].join('-') + '-ABCDEFGHIJK-0123456789012-abcdef0123456789',
-  ['whsec', 'abcdefghijklmnopqrstuvwxyz012345'].join('_'),
-  ['eyJhbGciOiJIUzI1NiJ9', 'eyJzdWIiOiIxMjM0NSJ9', 'abcdefghijklmnopqrstuvwxyz'].join('.'),
-];
-// 长载荷 JWT:段长不设上界,载荷接近 4K 也必须整条打码(设上界会整条跳过)。
-const FAKE_LONG_JWT = ['eyJhbGciOiJSUzI1NiJ9', 'BD'.repeat(1945), 'c2lnbmF0dXJlLXNpZ25hdHVyZQ'].join('.');
-// 短载荷 JWT:claims 是 `{}` 时紧凑载荷只有 `e30` 三个字符,载荷下限设高了会整条漏掉。
-const FAKE_SHORT_JWT = ['eyJhbGciOiJub25lIn0', 'e30', 'c2lnbmF0dXJlMTIzNDU2'].join('.');
-const FAKE_BRACKET_PASSWORD = ['abc', '[defghijklmnop'].join('');
-// 带空格的口令:引号是明确边界,值整段打码。口令本身按词拼,源码里不出现连续形态。
-const FAKE_SPACED_PASSPHRASE = ['correct', 'horse', 'battery', 'staple'].join(' ');
 
 const extensionModule = await import('../../../../extensions/live-compact/index.ts');
 const registerLiveCompact = extensionModule.default;
-const { selectNewestChunk, balanceIndexes, buildCard, redactSecrets, attachBackupHint, isToolFailure, rotateShadow, pruneShadowSessions, spineRoot, keptToolRounds, chooseKeptSpan, reservedCutEnd, toolEvidenceLine, pointerFor, captureToolResult, planRawEntry, commitRawEntry, verifiedRaw, resolveEngine, resolveSpineEngine, selectCutIndexes, pointerSpanAllowed, pointerOnlyText, spineEntries, longReadResults, writeOwner, orderedDrainDrafts, withBackupHint, withoutFullBackupClaim, backupHint, discardRawSnapshots, saveShadow, lastCompactionEntry, inCooldown, resolveCooldownMs, providerURLFromPatch, resolveProviderBaseURL, spanHidesCallArgs, callArgsHidden, rawName } = extensionModule;
+const { selectNewestChunk, balanceIndexes, buildCard, attachBackupHint, isToolFailure, rotateShadow, pruneShadowSessions, spineRoot, keptToolRounds, chooseKeptSpan, reservedCutEnd, toolEvidenceLine, pointerFor, captureToolResult, planRawEntry, commitRawEntry, verifiedRaw, resolveEngine, resolveSpineEngine, selectCutIndexes, pointerSpanAllowed, pointerOnlyText, spineEntries, longReadResults, writeOwner, orderedDrainDrafts, withBackupHint, withoutFullBackupClaim, backupHint, discardRawSnapshots, saveShadow, lastCompactionEntry, inCooldown, resolveCooldownMs, providerURLFromPatch, resolveProviderBaseURL, spanHidesCallArgs, callArgsHidden, rawName } = extensionModule;
 
 let seq = 0;
 function entry(role, text, extra = {}) {
@@ -115,244 +69,6 @@ describe('live compact spine selection', () => {
     const { prefixBalanced } = balanceIndexes(entries);
     expect(prefixBalanced[2]).toBe(true);
     expect(prefixBalanced[1]).toBe(false);
-  });
-
-  it('masks credential shapes before a shadow file is written', () => {
-    const raw = [
-      `export OPENAI_API_KEY=${FAKE_OPENAI_KEY}`,
-      `curl -H "Authorization: Bearer ${FAKE_BEARER}"`,
-      'password: "' + FAKE_PASSWORD + '"',
-      'normal text stays untouched: sk-short',
-    ].join(String.fromCharCode(10));
-    const out = redactSecrets(raw);
-    expect(out).not.toContain(FAKE_OPENAI_KEY);
-    expect(out).not.toContain(FAKE_BEARER);
-    expect(out).not.toContain(FAKE_PASSWORD);
-    expect(out).toContain('[REDACTED]');
-    // 小于阈值的普通文本不能被误伤。
-    expect(out).toContain('sk-short');
-    // JSON 形态:闭引号夹在键名与冒号之间,也要按同一套规则打码。
-    const json = redactSecrets('{"password":"example-password-value","api_key":"example-api-key-value"}');
-    expect(json).not.toContain('example-password-value');
-    expect(json).not.toContain('example-api-key-value');
-    expect(json).toContain('"password":"[REDACTED]"');
-    // 带后缀的键名与 Stripe 分段前缀:JSON 的 refresh_token、X_SECRET_KEY=、sk_live_…
-    const more = redactSecrets([
-      `{"refresh_token":"${FAKE_REFRESH_TOKEN}"}`,
-      `STRIPE_SECRET_KEY=${FAKE_STRIPE_KEY}`,
-    ].join(String.fromCharCode(10)));
-    expect(more).not.toContain(FAKE_REFRESH_TOKEN);
-    expect(more).not.toContain(FAKE_STRIPE_KEY);
-    expect(more).toContain('[REDACTED]');
-    // AWS_SECRET_ACCESS_KEY 这类 `_ACCESS_KEY` 后缀,以及密码里带方括号(不能因 `[` 提前截断)。
-    const aws = redactSecrets([
-      `AWS_SECRET_ACCESS_KEY=${FAKE_AWS_SECRET}`,
-      `password="${FAKE_BRACKET_PASSWORD}"`,
-    ].join(String.fromCharCode(10)));
-    expect(aws).not.toContain(FAKE_AWS_SECRET);
-    expect(aws).not.toContain(FAKE_BRACKET_PASSWORD);
-    expect(aws).toContain('AWS_SECRET_ACCESS_KEY=[REDACTED]');
-    expect(aws).toContain('password="[REDACTED]"');
-    // HTTP Basic 认证头:base64 里是可直接复用的用户名口令。
-    const basic = redactSecrets(`Authorization: Basic ${FAKE_BASIC}`);
-    expect(basic).not.toContain(FAKE_BASIC);
-    expect(basic).toContain('Authorization: Basic [REDACTED]');
-    // JSON 形态:冒号后带引号,方案名前面还隔着 `"`。
-    const quoted = redactSecrets(`{"Authorization":"Basic ${FAKE_BASIC}"}`);
-    expect(quoted).not.toContain(FAKE_BASIC);
-    expect(quoted).toContain('"Basic [REDACTED]');
-    // Digest 是参数串,不能只打码掉 `username=` 就收工。
-    const digest = redactSecrets(`Authorization: Digest username="alice", response="${FAKE_BASIC}", nonce="abc"`);
-    expect(digest).not.toContain('alice');
-    expect(digest).not.toContain(FAKE_BASIC);
-    expect(digest).toContain('Authorization: Digest [REDACTED]');
-    // 认证头之外的内容不能被这条规则吃掉。
-    const plain = redactSecrets('POST /api/v1/items 201 (authorization flow)');
-    expect(plain).toBe('POST /api/v1/items 201 (authorization flow)');
-    // AWS 的会话令牌是另一套键名(`_SESSION_TOKEN`),不带 access_key 后缀。
-    const sessionToken = redactSecrets(FAKE_AWS_SESSION_TOKEN);
-    expect(sessionToken).not.toContain('fixture-session-0123456789abcdef');
-    expect(sessionToken).toContain('=[REDACTED]');
-  });
-
-  it('redaction corpus: every credential form surfaced in review, plus a negative corpus', () => {
-    // 十多轮 review 的漏点全是「下划线大写 + 敏感后缀」的新组合;键名规则已按类匹配(以
-    // KEY/TOKEN/SECRET/... 结尾即命中)。以后再发现新形态,只需要往这两张表各加一行。
-    const positives = [
-      [`AWS_SECRET_ACCESS_KEY=${FAKE_AWS_SECRET}`, FAKE_AWS_SECRET],
-      [`AWS_SESSION_TOKEN=${FAKE_AWS_SESSION_TOKEN.split('=')[1]}`, FAKE_AWS_SESSION_TOKEN.split('=')[1]],
-      [`NPM_TOKEN=${FAKE_NPM_TOKEN}`, FAKE_NPM_TOKEN],
-      [`//registry.npmjs.org/:_authToken=${FAKE_NPM_TOKEN}`, FAKE_NPM_TOKEN],
-      [`STRIPE_SECRET_KEY=${FAKE_STRIPE_KEY}`, FAKE_STRIPE_KEY],
-      [`OPENAI_API_KEY=${FAKE_OPENAI_KEY}`, FAKE_OPENAI_KEY],
-      [`GITHUB_TOKEN=${FAKE_GH_TOKEN}`, FAKE_GH_TOKEN],
-      [`2FA_TOKEN=${FAKE_REFRESH_TOKEN}`, FAKE_REFRESH_TOKEN],
-      [`{"OAUTH_TOKEN":"${FAKE_REFRESH_TOKEN}"}`, FAKE_REFRESH_TOKEN],
-      [`Authorization: Basic ${FAKE_BASIC}`, FAKE_BASIC],
-      [`{"Authorization":"Basic ${FAKE_BASIC}"}`, FAKE_BASIC],
-      [`Authorization: Digest username="alice", response="${FAKE_BASIC}", nonce="abc"`, FAKE_BASIC],
-      [`password="${FAKE_BRACKET_PASSWORD}"`, FAKE_BRACKET_PASSWORD],
-      // 引号里的值可能带空格:只认非空白的值类只吃到第一个词,剩下的口令尾巴会原样落盘。
-      [`password="${FAKE_SPACED_PASSPHRASE}"`, FAKE_SPACED_PASSPHRASE],
-      [`{"password":"${FAKE_SPACED_PASSPHRASE}"}`, FAKE_SPACED_PASSPHRASE],
-      [`PASSWORD="${FAKE_SPACED_PASSPHRASE}"`, FAKE_SPACED_PASSPHRASE],
-      [`passphrase = "${FAKE_SPACED_PASSPHRASE}"`, FAKE_SPACED_PASSPHRASE],
-      // 引号没闭合(输出被截断)时,值要一直吃到行尾,不能只打掉第一个词。
-      [`password="${FAKE_SPACED_PASSPHRASE}`, FAKE_SPACED_PASSPHRASE],
-      [`postgres://cindy:${FAKE_DB_PASSWORD}@db.internal:5432/app`, FAKE_DB_PASSWORD],
-      [`echo ${FAKE_NPM_TOKEN}`, FAKE_NPM_TOKEN],
-      [`echo ${FAKE_GH_PAT}`, FAKE_GH_PAT],
-      // GitLab 的 PAT 没有大写下划线键名可依:值带 glpat- 前缀,键可能是小写 token。
-      [`token: ${FAKE_GITLAB_PAT}`, FAKE_GITLAB_PAT],
-      [`{"private_token":"${FAKE_GITLAB_PAT}"}`, FAKE_GITLAB_PAT],
-      // 长载荷 JWT 走的是前缀规则,不能靠键名:
-      [`echo ${FAKE_LONG_JWT}`, FAKE_LONG_JWT],
-    ];
-    // 厂商前缀表（gitleaks 公开前缀）:一张表覆盖完,不用每轮 review 补一个。
-    for (const token of FAKE_VENDOR_TOKENS) positives.push([`token: ${token}`, token]);
-    // 短载荷(claims = {})与长载荷 JWT 两头都要覆盖:下限高会漏短的,上限低会漏长的。
-    positives.push([`echo ${FAKE_SHORT_JWT}`, FAKE_SHORT_JWT], [`echo ${FAKE_LONG_JWT}`, FAKE_LONG_JWT]);
-    for (const [text, secret] of positives) {
-      const out = redactSecrets(text);
-      expect(out, text).not.toContain(secret);
-      expect(out, text).toContain('[REDACTED]');
-    }
-    // 负语料:普通配置键、以 KEY 结尾的普通词、哈希与文档文本不能被误伤。
-    const negatives = [
-      'USE_MONKEY=monkeybusiness12',
-      'x-sector=sector-value-12345',
-      'author=alice@example.com',
-      'tokenize=input12345',
-      'sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
-      'MAX_TOKENS=4096 MODEL_TOKEN_LIMIT=8192',
-      'NEXT_PUBLIC_API_URL=https://api.example.com/v1',
-      'POST /api/v1/items 201 (authorization flow)',
-      'npm_install_the_dev_dependencies_now',
-      // 公开值不打码:ssh 公钥、Mapbox 公钥、普通 key-value 标识。
-      'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIabcdefghijklmnopqrstuvwxyz0123456789',
-      'pk.eyJ1IjoiYWJjIiwiYSI6ImNsYWJjZGVmZ2hpamtsbW5vcHFyc3QifQ',
-      'key-value-store-name',
-    ];
-    for (const text of negatives) {
-      expect(redactSecrets(text), text).toBe(text);
-    }
-    // 打码必须幂等:同一段文本过两遍规则,结果不再变化。
-    const once = redactSecrets(`AWS_SESSION_TOKEN=${FAKE_AWS_SESSION_TOKEN.split('=')[1]}${String.fromCharCode(10)}Authorization: Basic ${FAKE_BASIC}`);
-    expect(redactSecrets(once)).toBe(once);
-  });
-
-  it('stays linear on long runs that look like credential prefixes', () => {
-    // 起始边界被删掉的话,128K 连续大写会让这条规则跑 25 秒(实测),而它在同步的
-    // settle 钩子里。阈值 300ms:全部线性实现实测 <25ms(最慢是 360K 的短 JWT 约 10ms),
-    // 留十倍余量,同时能把 300ms 级的平方退化也抓出来(2 秒阈值抓不到)。
-    const cases = [
-      'A'.repeat(128000) + ' padding text without any separator',
-      // JWT 规则的正文类包含 `-`:起始边界没把 `-` 一起排除时,每个 `eyJ` 都会把剩余全文
-      // 吃完再回溯找 `.`(240K 实测 5.7 秒),这条盯的就是它。
-      'eyJabcdefghijk-'.repeat(16000),
-      'eyJ' + 'A'.repeat(128000),
-      // 无终结符的 PEM 开始标记重复出现:惰性 [\s\S]*? 会从每个起点重扫到文末(140K 实测 300ms)。
-      ('-----' + 'BEGIN PRIVATE KEY' + '-----' + String.fromCharCode(10)).repeat(2000),
-      // PGP armor 的正文类比 PEM 宽(含空格与括号),但同样不含 `-`:重复标记不能每个都重扫到文末。
-      ('-----' + 'BEGIN PGP PRIVATE KEY BLOCK' + '-----' + String.fromCharCode(10)).repeat(2000),
-    ];
-    for (const text of cases) {
-      const start = Date.now();
-      redactSecrets(text);
-      expect(Date.now() - start, text.slice(0, 24)).toBeLessThan(300);
-    }
-  });
-
-  it('redacts short values, keeps the rest of the line, and masks armored PGP blocks', () => {
-    // 键名已经说明是敏感值:值多短都要打。旧规则要求至少 8 个字,`PASSWORD=abc123` 整条漏掉。
-    const shortValue = ['abc', '123'].join('');
-    const shortAssign = ['PASS', 'WORD=', shortValue].join('');
-    expect(redactSecrets(shortAssign)).not.toContain(shortValue);
-    expect(redactSecrets(shortAssign)).toContain('[REDACTED]');
-    // 空值后面还有别的配置时,不能把整行都吃掉:旧规则把闭引号当正文,一路吃到行尾,
-    // 后面的路径就没了,压缩后也找不回来。
-    const emptyAssign = ['PASS', 'WORD="" PATH=', '/work/project'].join('');
-    expect(redactSecrets(emptyAssign)).toContain('PATH=/work/project');
-    // PGP armor(gpg --armor --export-secret-keys):标记带 ` BLOCK` 后缀,块里有 Version: 头行,
-    // 正文是 base64。头行不含密钥材料,正文整段要打掉。
-    const pgpBody = ['lQOYBF', 'fixture', 'PGPbody', '0123456789abcdef'].join('');
-    const pgpEnd = ['-----', 'END PGP', ' PRIVATE KEY', ' BLOCK-----'].join('');
-    const pgpBlock = [
-      ['-----', 'BEGIN PGP', ' PRIVATE KEY', ' BLOCK-----'].join(''),
-      '',
-      'Version: GnuPG v2',
-      '',
-      pgpBody,
-      pgpEnd,
-    ].join(String.fromCharCode(10));
-    const pgpOut = redactSecrets(pgpBlock);
-    expect(pgpOut).not.toContain(pgpBody);
-    expect(pgpOut).toContain('[REDACTED PRIVATE KEY]');
-    // 截断的 armor(输出被砍断、没有 END 标记)同样要把正文打掉。
-    expect(redactSecrets(pgpBlock.split(pgpEnd)[0])).not.toContain(pgpBody);
-  });
-
-  it('masks cloud keys, connection-string passwords and PEM blocks', () => {
-    // 工具结果里最常见的是「跑一条命令把凭证打出来」,这几种形态必须一起打码。
-    // 私钥块同样按扫描规则拼接:源码里不出现连续的 "-----BEGIN … PRIVATE KEY-----" 形态。
-    const pemEdge = (edge) => ['-----', edge, ' PRIVATE KEY-----'].join('');
-    const pem = [pemEdge('BEGIN OPENSSH'), 'b3BlbnNzaC1rZXk', pemEdge('END OPENSSH')].join(String.fromCharCode(10));
-    const raw = [
-      `AWS_ACCESS_KEY_ID=${FAKE_AWS_KEY}`,
-      `google key ${FAKE_GOOGLE_KEY}`,
-      'DATABASE_URL=postgres://cindy:' + FAKE_DB_PASSWORD + '@db.internal:5432/app',
-      pem,
-    ].join(String.fromCharCode(10));
-    const out = redactSecrets(raw);
-    expect(out).not.toContain(FAKE_AWS_KEY);
-    expect(out).not.toContain(FAKE_GOOGLE_KEY);
-    expect(out).not.toContain(FAKE_DB_PASSWORD);
-    expect(out).not.toContain('b3BlbnNzaC1rZXk');
-    // 键名包着私钥块(`private_key="-----BEGIN ..."`):整块必须整体打码。
-    // 若整块规则排在键名规则后面,`-----BEGIN` 先被换掉,开始标记没了,正文会原样留下。
-    const wrapped = redactSecrets('private_key="' + pem + '"');
-    expect(wrapped).not.toContain('b3BlbnNzaC1rZXk');
-    expect(wrapped).not.toContain('OPENSSH');
-    expect(wrapped).toContain('private_key=');
-    // 工具调用参数是 JSON.stringify 后的字符串:多行私钥的换行变成字面量 `\n`,整块规则
-    // 的正文类必须收反斜杠,否则只吃掉 BEGIN 标记,密钥正文和 END 原样落盘(实测)。
-    const jsonWrapped = redactSecrets(JSON.stringify({ command: 'cat id_rsa', private_key: pem }));
-    expect(jsonWrapped).not.toContain('b3BlbnNzaC1rZXk');
-    expect(jsonWrapped).not.toContain('END OPENSSH');
-    // 老式加密私钥(RFC 1421)在 BEGIN 与正文之间还有 `Proc-Type:` / `DEK-Info:` 头:
-    // 头里的连字符不在正文类里,处理不当会让整块只剩 `Proc` 被打码、其余原样落盘。
-    const legacy = [
-      pemEdge('BEGIN RSA'),
-      'Proc-Type: 4,ENCRYPTED',
-      'DEK-Info: AES-256-CBC,0123456789ABCDEF',
-      '',
-      'b3BlbnNzaC1rZXk',
-      pemEdge('END RSA'),
-    ].join(String.fromCharCode(10));
-    expect(redactSecrets(legacy)).toBe('[REDACTED PRIVATE KEY]');
-    const legacyCut = [pemEdge('BEGIN RSA'), 'Proc-Type: 4,ENCRYPTED', '', 'b3BlbnNzaC1rZXk'].join(String.fromCharCode(10));
-    expect(redactSecrets(legacyCut)).toBe('[REDACTED PRIVATE KEY]');
-    // RFC 6750 的 b64token 可以以 `/` 或 `+` 开头、以 `=` 结尾;只认 ._- 会整条漏掉。
-    const bearerEdge = ['/fixture', 'bearer', '0123456789+', '=='].join('');
-    expect(redactSecrets('Bearer ' + bearerEdge)).toBe('Bearer [REDACTED]');
-    // 口令键名同样按「后缀类」命中:`SSH_KEY_PASSPHRASE=` 不能只靠 PASSPHRASE 之外的键名。
-    const passphraseKey = ['SSH', 'KEY', 'PASSPHRASE'].join('_');
-    expect(redactSecrets(passphraseKey + '=' + FAKE_PASSPHRASE)).not.toContain(FAKE_PASSPHRASE);
-    // 大体积块不能只打一半:正文封顶会让整块规则认不到终结符,半块规则只吃掉前半截。
-    const bigBody = 'A'.repeat(10900);
-    const big = [pemEdge('BEGIN RSA'), bigBody, pemEdge('END RSA')].join(String.fromCharCode(10));
-    expect(redactSecrets(big)).toBe('[REDACTED PRIVATE KEY]');
-    // 截断的超大块也一样:没等到 END 也要整段吃掉,不能留后半截密钥。
-    const bigCut = [pemEdge('BEGIN RSA'), 'A'.repeat(20000)].join(String.fromCharCode(10));
-    expect(redactSecrets(bigCut)).toBe('[REDACTED PRIVATE KEY]');
-    // 连接串的主机与用户名要留着,否则模型无法判断是哪套库。
-    expect(out).toContain('postgres://cindy:');
-    expect(out).toContain('@db.internal');
-    // 输出被截断、只剩开始标记的半块同样是密钥正文:不能因为没等到 END 就整段放过。
-    const cut = [pemEdge('BEGIN RSA'), 'b3BlbnNzaC1rZXk-late'].join(String.fromCharCode(10));
-    const cutOut = redactSecrets(cut);
-    expect(cutOut).not.toContain('b3BlbnNzaC1rZXk-late');
-    expect(cutOut).toContain('[REDACTED PRIVATE KEY]');
   });
 
   it('reports dropped hard lines instead of silently losing them', () => {
@@ -920,16 +636,19 @@ describe('live compact 1.0.6: kept tool rounds, evidence and raw pointers', () =
     }
   });
 
-  it('plans a raw pointer without touching disk, redacts secrets before writing, hashes the saved bytes', () => {
-    // 卡片先指向路径、切割被接受后才落盘;落盘内容与哈希必须是同一份脉敏后的字节。
+  it('plans a raw pointer without touching disk and keeps the bytes verbatim', () => {
+    // 快照是恢复用的完整副本,写出去的字节必须逐字等于工具结果原文(不做打码,理由见
+    // 文件头),哈希也必须算在这份字节上。夹具仍按运行时拼接构造,源码里不出现连续形态。
     const dir = mkdtempSync(join(tmpdir(), 'spine-plan-'));
     try {
-      const text = `export OPENAI_API_KEY=${FAKE_OPENAI_KEY_2}\nline two`;
+      const apiKey = ['OPENAI', 'API_KEY'].join('_');
+      const password = ['pass', 'word="fixture plain password line"'].join('');
+      const text = [`export ${apiKey}=fixture-value-0123456789`, password, 'line two'].join(String.fromCharCode(10));
       const planned = planRawEntry({ dir, toolCallId: 'c9', text });
       expect(planned.ok).toBe(true);
       expect(planned.pending).toBe(true);
       expect(existsSync(planned.path)).toBe(false);
-      expect(planned.body).not.toContain(FAKE_OPENAI_KEY_2);
+      expect(planned.body).toBe(text);
       expect(verifiedRaw(planned).ok).toBe(true);
       // 指针里的字节数必须是数字:把 Buffer 塞进去会把整段正文带进卡片。
       expect(typeof verifiedRaw(planned).bytes).toBe('number');
@@ -937,7 +656,7 @@ describe('live compact 1.0.6: kept tool rounds, evidence and raw pointers', () =
       const committed = commitRawEntry(planned);
       expect(committed.pending).toBeUndefined();
       expect(verifiedRaw(committed).ok).toBe(true);
-      expect(readFileSync(committed.path, 'utf8')).not.toContain(FAKE_OPENAI_KEY_2);
+      expect(readFileSync(committed.path, 'utf8')).toBe(text);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
