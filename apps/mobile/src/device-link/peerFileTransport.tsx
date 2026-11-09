@@ -670,7 +670,7 @@ export function PeerFileTransport() {
                 metadata,
                 async (offset, length) => {
                   handle!.offset = offset;
-                  const bytes = handle!.readBytes(length);
+                  const bytes = await handle!.readBytes(length);
                   if (bytes.length !== length)
                     throw new Error("FILE_PEER_CHANGED");
                   let binary = "";
@@ -863,7 +863,7 @@ export function PeerFileTransport() {
                   sink.offset + bytes.length > sink.size
                 )
                   throw new Error();
-                sink.handle.writeBytes(bytes);
+                sink.handle.writeBytesSync(bytes);
                 sink.offset += bytes.length;
                 try { sink.onProgress?.(sink.offset, sink.size); } catch { /* Observer only. */ }
                 for (const operation of pending.current.values())

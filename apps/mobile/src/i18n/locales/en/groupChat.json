@@ -98,6 +98,13 @@
     "stepFailed": "{{name}} ran into a problem and didn’t finish this step",
     "stepTimeout": "{{name}} took too long, so this step was stopped",
     "stepUnavailable": "{{name}} is unavailable and can’t do this step",
+    "runtimeFailureReason": {
+      "unclaimed_timeout": {
+        "summary": "{{name}} did not start processing within the waiting period. This request has ended.",
+        "advice": "Ask the teammate’s owner to check that Cindy is running and the network is connected on its computer.",
+        "details": "Once Cindy and the network are working again, send the message again."
+      }
+    },
     "runtimeFailure": {
       "REMOTE_DEVICE_LIMIT": {
         "summary": "{{name}} can’t reply: the teammate’s device has reached its remote session limit.",

@@ -68,6 +68,14 @@ describe('buildCodexEnv', () => {
     expect(env.CODEX_HOME).toBe('/tmp/codex-home');
   });
 
+  it('passes a selected native account even without a separate credentialMode flag', async () => {
+    const nativeSubscriptionAccount = { id: 'fixture', configDir: '/fixture/.codex-second', assertCurrent() {}, readState: async () => ({ authenticated: true }) };
+    const getAuthEnv = vi.fn(async () => ({ CODEX_HOME: nativeSubscriptionAccount.configDir }));
+    const env = await buildCodexEnv({ ...createAuthAdapter(), getAuthEnv }, {}, { nativeSubscriptionAccount });
+    expect(getAuthEnv).toHaveBeenCalledExactlyOnceWith({ nativeSubscriptionAccount });
+    expect(env.CODEX_HOME).toBe(nativeSubscriptionAccount.configDir);
+  });
+
   it('keeps explicit command color environment overrides', async () => {
     process.env.NO_COLOR = '0';
     process.env.CLICOLOR = '1';

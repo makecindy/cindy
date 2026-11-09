@@ -32,6 +32,7 @@ import {
 import type { ClaudeAccountUsageSnapshot } from '@/hooks/useClaudeAccountUsage';
 
 import { createRemoteDeviceUsageMirror } from './remoteDeviceUsageMirror';
+import { DEFAULT_ACCOUNT_USAGE_SCOPE } from '../../shared/subscriptionAccounts';
 
 import type { XaiRateLimitSnapshot } from '../../shared/xaiRateLimit';
 import type { XaiSubscriptionUsageSnapshot } from '../../shared/xaiSubscriptionUsage';
@@ -44,7 +45,10 @@ export type RemoteCodexAccountUsagePayload = RateLimitSnapshot & {
 
 const codexAccountMirror = createRemoteDeviceUsageMirror<RemoteCodexAccountUsagePayload>({
   invokeChannel: 'maker:usage:account',
-  invokeArgs: ['codex'],
+  read: (deviceId, providerId = 'openai') => window.electronAPI.deviceLink.invoke(
+    deviceId, 'maker:usage:account', providerId === 'openai'
+      ? ['codex', providerId, DEFAULT_ACCOUNT_USAGE_SCOPE] : ['codex', providerId],
+  ),
   pushChannel: 'usage:codex-account-changed',
   defaultProviderId: 'openai',
   providerPushChannel: 'usage:codex-provider-account-changed',
@@ -62,7 +66,8 @@ const codexRateLimitsMirror = createRemoteDeviceUsageMirror<RemoteCodexAccountUs
       value.providerId === providerId || (value.providerId === undefined && providerId === 'openai');
     try {
       const result = await window.electronAPI.deviceLink.invoke(
-        deviceId, 'maker:usage:codex-rate-limits', [providerId],
+        deviceId, 'maker:usage:codex-rate-limits', providerId === 'openai'
+          ? [providerId, DEFAULT_ACCOUNT_USAGE_SCOPE] : [providerId],
       ) as MobileCodexRateLimitsResult | null;
       if (result && matchesProvider(result) && result.rateLimits && result.account) {
         const updatedAt = Date.now();
@@ -86,7 +91,8 @@ const codexRateLimitsMirror = createRemoteDeviceUsageMirror<RemoteCodexAccountUs
     }
     if (!isDataOwnerGenerationCurrent(owner)) return undefined;
     const fallback = await window.electronAPI.deviceLink.invoke(
-      deviceId, 'maker:usage:account', providerId === 'openai' ? ['codex'] : ['codex', providerId],
+      deviceId, 'maker:usage:account', providerId === 'openai'
+        ? ['codex', providerId, DEFAULT_ACCOUNT_USAGE_SCOPE] : ['codex', providerId],
     ) as (RemoteCodexAccountUsagePayload & { providerId?: string }) | null;
     // A successful empty account read is authoritative (for example after logout).
     if (fallback === null) return null;

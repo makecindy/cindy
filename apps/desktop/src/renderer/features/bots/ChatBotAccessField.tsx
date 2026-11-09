@@ -6,7 +6,7 @@ import { cn } from '@/lib/utils';
 import type { BotGroupSummary, ChatGroupAction } from '../../../shared/botGroupChat';
 import { refreshBotGroups } from './botGroupStore';
 import { chatErrorKey } from './ChatServerControls';
-import { SETTINGS_DIVIDER, SETTINGS_HINT, SettingsCard, SettingsSection } from './ChatGroupSettingsRows';
+import { SETTINGS_DIVIDER, SETTINGS_HINT, SettingsCard, SettingsSection } from '@/components/ui/settings-rows';
 
 const key = (name: string) => `bots.groupChat.server.settings.${name}`;
 type Access = 'none' | 'chat' | 'tools';

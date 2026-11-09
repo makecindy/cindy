@@ -1060,7 +1060,7 @@ body.resizing-pane [data-ghost-webview] {
 
    Tailwind 的 animate-spin / animate-pulse 用 [class*=] 匹配,以覆盖
    motion-safe:animate-pulse 这类变体编译出的转义类名。任意值工具类
-   (animate-[spin_2.4s_linear_infinite] 之类,见 GhostSummonCard)不含 animate-spin
+   (animate-[spin_2.4s_linear_infinite] 之类)不含 animate-spin
    子串,靠 [class*='infinite'] 兜住:Tailwind 把 keyframes 简写原样编进类名,
    循环动画必然带 infinite 字面量,而一次性的 animate-[xxx_200ms_ease-out] 不会。 */
 [data-app-hidden='true'] [data-voice-spinner-arc],
@@ -1076,8 +1076,6 @@ body.resizing-pane [data-ghost-webview] {
 [data-app-hidden='true'] .brand-loading-mark-sheen::before,
 [data-app-hidden='true'] .ghost-bubble-face,
 [data-app-hidden='true'] .agent-island-mascot-character,
-[data-app-hidden='true'] .agent-island-mascot-keyboard,
-[data-app-hidden='true'] .agent-island-mascot-key,
 [data-app-hidden='true'] .agent-island-mascot-eyes,
 [data-app-hidden='true'] .agent-island-mascot-sparkle,
 [data-app-hidden='true'] [class*='animate-spinner'],
@@ -1271,56 +1269,6 @@ body.resizing-pane [data-ghost-webview] {
 @media (prefers-reduced-motion: reduce) {
   .ghost-card-sweep {
     animation: none;
-  }
-}
-
-/* 召唤法阵终态编舞(GhostSummonCard/SummonSeal,DESIGN.md §14.4 登记):
-   running 结束时两道弧在旋转中把缺口收拢至满圆(600ms 一次性 dasharray
-   过渡,一次性瞬态允许非合成器属性)→ 光晕从法阵荡开一圈 + ✓ 弹出
-   (✓ 复用 Done 语义的唯一批准 overshoot 曲线,同 status-done-pop)。
-   motion-reduce 下全部禁用,直接落终态帧。 */
-.summon-seal-arc {
-  transition:
-    stroke-dasharray 600ms var(--motion-ease-out),
-    opacity 600ms var(--motion-ease-out);
-}
-@keyframes summon-seal-halo {
-  0% {
-    transform: scale(1);
-    opacity: 0.85;
-  }
-  100% {
-    transform: scale(1.65);
-    opacity: 0;
-  }
-}
-.summon-seal-halo {
-  animation: summon-seal-halo 0.9s var(--motion-ease-out) forwards;
-}
-@keyframes summon-seal-tick-pop {
-  0% {
-    transform: scale(0);
-  }
-  60% {
-    transform: scale(1.12);
-  }
-  100% {
-    transform: scale(1);
-  }
-}
-.summon-seal-tick-pop {
-  animation: summon-seal-tick-pop 0.3s cubic-bezier(0.34, 1.56, 0.64, 1) both;
-}
-@media (prefers-reduced-motion: reduce) {
-  .summon-seal-arc {
-    transition: none;
-  }
-  .summon-seal-halo,
-  .summon-seal-tick-pop {
-    animation: none;
-  }
-  .summon-seal-halo {
-    opacity: 0;
   }
 }
 
@@ -1771,18 +1719,10 @@ body.resizing-pane [data-ghost-webview] {
   will-change: transform;
 }
 
-.agent-island-mascot-keyboard {
-  transform-origin: 50% 92%;
-  will-change: transform;
-}
-
 .agent-island-mascot-eyes {
   transform-origin: center;
   will-change: transform;
 }
-
-/* 键帽不设常驻 will-change:12 键 x 6 皮肤会造出 72 个常驻合成层,
-   而 opacity/transform keyframe 动画激活时 Chromium 会自动按需提层。 */
 
 .agent-island-mascot-sparkle {
   position: absolute;
@@ -1819,15 +1759,6 @@ body.resizing-pane [data-ghost-webview] {
   animation: agent-island-mascot-type 520ms ease-in-out infinite;
 }
 
-.agent-island-mascot-stage[data-motion='working'] .agent-island-mascot-keyboard {
-  animation: agent-island-mascot-keyboard-tap 520ms ease-in-out infinite;
-}
-
-.agent-island-mascot-stage[data-motion='working'] .agent-island-mascot-key {
-  animation: agent-island-mascot-key-flash 720ms ease-in-out infinite;
-  animation-delay: var(--agent-island-key-delay);
-}
-
 .agent-island-mascot-stage[data-motion='waitingApproval'] .agent-island-mascot-character {
   animation: agent-island-mascot-focus 1.15s ease-in-out infinite;
 }
@@ -1862,28 +1793,6 @@ body.resizing-pane [data-ghost-webview] {
   }
   50% {
     transform: translate3d(1px, 1px, 0) rotate(1deg) scale(var(--agent-island-mascot-scale));
-  }
-}
-
-@keyframes agent-island-mascot-keyboard-tap {
-  0%,
-  100% {
-    transform: translate3d(0, 0, 0);
-  }
-  50% {
-    transform: translate3d(0, 0.7px, 0);
-  }
-}
-
-@keyframes agent-island-mascot-key-flash {
-  0%,
-  100% {
-    opacity: 0.55;
-    transform: translate3d(0, 0, 0);
-  }
-  45% {
-    opacity: 1;
-    transform: translate3d(0, 0.35px, 0);
   }
 }
 
@@ -1937,8 +1846,6 @@ body.resizing-pane [data-ghost-webview] {
 
 @media (prefers-reduced-motion: reduce) {
   .agent-island-mascot-stage .agent-island-mascot-character,
-  .agent-island-mascot-stage .agent-island-mascot-keyboard,
-  .agent-island-mascot-stage .agent-island-mascot-key,
   .agent-island-mascot-stage .agent-island-mascot-eyes,
   .agent-island-mascot-stage .agent-island-mascot-sparkle {
     animation: none !important;
@@ -2140,7 +2047,7 @@ mark.doc-search-mark [class] {
 [data-theme='cindy-dark'] :is(.layout-divider-v, .layout-divider-h) {
   background: linear-gradient(var(--border-default), var(--border-default)), var(--surface);
 }
-html[data-wallpaper-active='true'] :is(.layout-divider-v, .layout-divider-h) {
+html:is([data-wallpaper-active='true'], [data-desktop-background='true']) :is(.layout-divider-v, .layout-divider-h) {
   background: var(--border-default);
 }
 /* CINDY 文字色是半透明墨水,图标经 currentColor 继承同一颜色;图标由多段描边拼成,
@@ -2195,26 +2102,31 @@ html[data-wallpaper-active='true'] :is(.layout-divider-v, .layout-divider-h) {
    与左侧主区(不透明 content-area)底色打架;移除后回落 CINDY 的 --panel-bg
    (2026-08 起 #F2F2ED/#181818),与主区同色,右侧面板整体与左边聊天区一致(模式2 口径)。 */
 [data-theme='cindy-light'] aside.bg-sidebar {
-  background: var(--surface-translucent-sidebar);
+  background: transparent;
 }
 [data-theme='cindy-dark'] aside.bg-sidebar {
-  background: var(--surface-translucent-sidebar);
+  background: transparent;
   /* backdrop-filter 移除:CSS blur 采样不到窗外壁纸,且已知会把透明窗背衬渲染成黑;壁纸模糊由原生 vibrancy 材质提供 */
+}
+[data-theme='cindy-light'] aside.bg-sidebar > .sidebar-frost,
+[data-theme='cindy-dark'] aside.bg-sidebar > .sidebar-frost {
+  background: var(--surface-translucent-sidebar);
 }
 /* Windows Acrylic 的 BrowserWindow backing 已在创建期铺同一份 85% 侧栏染色，确保快速
    扩窗时原生新区域先显示正确颜色。常规侧栏让 backing 直接透出，避免 CSS 再叠一遍导致
-   颜色变重；peek drawer 覆盖的是应用内容，仍保留下方独立的染色 + blur。 */
-[data-platform='win32'][data-window-backdrop-material='acrylic'][data-theme='cindy-light']
-  aside.bg-sidebar:not([data-sidebar-peek-drawer]),
-[data-platform='win32'][data-window-backdrop-material='acrylic'][data-theme='cindy-dark']
-  aside.bg-sidebar:not([data-sidebar-peek-drawer]) {
+   颜色变重；peek drawer 覆盖的是应用内容，仍保留下方独立的染色 + blur。
+   桌面背景模式的 backing 是全透明的（见 vibrancyConfig），侧栏自带语义染色，不在此清除。 */
+[data-platform='win32'][data-window-backdrop-material='acrylic'][data-theme='cindy-light']:not([data-desktop-background='true'])
+  aside.bg-sidebar:not([data-sidebar-peek-drawer]) > .sidebar-frost,
+[data-platform='win32'][data-window-backdrop-material='acrylic'][data-theme='cindy-dark']:not([data-desktop-background='true'])
+  aside.bg-sidebar:not([data-sidebar-peek-drawer]) > .sidebar-frost {
   background: transparent;
 }
 /* Sidebar peek 抽屉是 fixed overlay,它覆盖的是应用内容而不是窗外壁纸;这里需要
    单独 blur 被覆盖的应用 UI,避免 hover 预览时正文直接透出来。常规展开态仍交给
    原生 vibrancy,非 CINDY family 不命中。 */
-[data-theme='cindy-light'] aside.bg-sidebar[data-sidebar-peek-drawer],
-[data-theme='cindy-dark'] aside.bg-sidebar[data-sidebar-peek-drawer] {
+[data-theme='cindy-light'] aside.bg-sidebar[data-sidebar-peek-drawer] > .sidebar-frost,
+[data-theme='cindy-dark'] aside.bg-sidebar[data-sidebar-peek-drawer] > .sidebar-frost {
   background: var(--surface-translucent-sidebar);
   backdrop-filter: blur(28px);
   -webkit-backdrop-filter: blur(28px);
@@ -2368,7 +2280,7 @@ html[data-wallpaper-active='true'] body::before {
   background-position: center;
   background-repeat: no-repeat;
 }
-html[data-wallpaper-active='true'] :is(
+html:is([data-wallpaper-active='true'], [data-desktop-background='true']) :is(
   .bg-content-area,
   .app-wallpaper-surface,
   main[class~='bg-[var(--surface)]'],
@@ -2377,7 +2289,7 @@ html[data-wallpaper-active='true'] :is(
 ) {
   background-color: transparent;
 }
-html[data-wallpaper-active='true'] aside.bg-sidebar:not([data-sidebar-peek-drawer]) {
+html:is([data-wallpaper-active='true'], [data-desktop-background='true']) aside.bg-sidebar:not([data-sidebar-peek-drawer]) {
   background: transparent;
 }
 /* Fixed attachment uses the same viewport coordinates as the canvas. The
@@ -2399,7 +2311,7 @@ html[data-wallpaper-active='true'] .wallpaper-composer-fade {
   mask-image: linear-gradient(transparent, currentColor);
 }
 
-/* In-page raised surfaces tint the wallpaper with their own token instead of
+/* In-page raised surfaces tint artwork or the native desktop with their own token instead of
    covering it. CINDY themes only: their text is translucent ink, so the
    contrast floor below holds; other built-in themes use fixed text colors
    calibrated against solid surfaces and keep them. Scoped to page containers, so portaled popovers, menus and
@@ -2413,10 +2325,10 @@ html[data-wallpaper-active='true'] .wallpaper-composer-fade {
    already translucent (selected-row ink tints), and any surface holding
    syntax-highlighted code (code blocks, diffs), whose fixed palette needs a
    solid surface. */
-html[data-wallpaper-active='true'] {
+html:is([data-wallpaper-active='true'], [data-desktop-background='true']) {
   --wallpaper-glass-opacity: max(72%, var(--app-wallpaper-glass-floor, 0%));
 }
-html.dark[data-wallpaper-active='true'] {
+html.dark:is([data-wallpaper-active='true'], [data-desktop-background='true']) {
   --wallpaper-glass-opacity: max(64%, var(--app-wallpaper-glass-floor, 0%));
 }
 [class~='bg-[var(--chat-input-bg)]'] { --wallpaper-glass-fill: var(--chat-input-bg); }
@@ -2428,7 +2340,7 @@ html.dark[data-wallpaper-active='true'] {
 [class~='bg-[var(--settings-input-bg)]'] { --wallpaper-glass-fill: var(--settings-input-bg); }
 [class~='bg-[var(--settings-profile-card-bg)]'] { --wallpaper-glass-fill: var(--settings-profile-card-bg); }
 .bg-sidebar-item-active { --wallpaper-glass-fill: hsl(var(--sidebar-item-active)); }
-:where(html:is([data-theme='cindy-light'], [data-theme='cindy-dark'])[data-wallpaper-active='true'] :is(
+:where(html:is([data-theme='cindy-light'], [data-theme='cindy-dark']):is([data-wallpaper-active='true'], [data-desktop-background='true']) :is(
   .bg-content-area,
   .app-wallpaper-surface,
   aside.bg-sidebar:not([data-sidebar-peek-drawer]),
@@ -2538,11 +2450,43 @@ html[data-wallpaper-blur='true'] .app-wallpaper-video video {
   filter: blur(var(--app-wallpaper-blur));
 }
 
-/* Plugin visibility changes presentation only; critical interaction cards stay accessible. */
-html[data-plugin-ui-hidden~='workspace'] [data-plugin-ui-element='workspace'] { visibility: hidden; }
-html[data-plugin-ui-hidden~='workspace'] [data-plugin-ui-keep-visible] { visibility: visible; }
-html[data-plugin-ui-hidden~='sidebar'] [data-plugin-ui-element='sidebar'],
-html[data-plugin-ui-hidden~='header'] [data-plugin-ui-element='header'],
-html[data-plugin-ui-hidden~='messages'] [data-plugin-ui-element='messages'],
-html[data-plugin-ui-hidden~='composer'] [data-chat-input-root],
-html[data-plugin-ui-hidden~='windowControls'] [data-plugin-ui-element='windowControls'] { display: none !important; }
+/* No wallpaper: tint the desktop beneath content, leaving the independently
+   frosted sidebar unobscured even when the main content is fully opaque. */
+html[data-desktop-background='true'] body {
+  isolation: isolate;
+  background: transparent;
+}
+html[data-desktop-background='true'] body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: -3;
+  pointer-events: none;
+  background: color-mix(in srgb, var(--surface) var(--desktop-background-veil), transparent);
+}
+html:is([data-theme='cindy-light'], [data-theme='cindy-dark'])[data-desktop-background='true'] body::before {
+  left: var(--sidebar-visible-width, 0px);
+}
+html[data-desktop-background='true'] :is(.wallpaper-composer-zone, .wallpaper-composer-fade) {
+  background: transparent;
+}
+html[data-desktop-background='true'] .wallpaper-message-viewport [data-scroll-container] {
+  mask-image: linear-gradient(to bottom, black calc(100% - var(--wallpaper-composer-height)), transparent calc(100% - var(--wallpaper-composer-height) + 32px));
+}
+
+/* Sidebar chrome stays frosted independently of the adjustable background.
+   Put CSS blur on the paint-only child, never on aside: a filtered ancestor
+   changes the containing block of fixed menus. Native desktop sampling is done
+   by the macOS material beneath Chromium; CSS samples only in-app artwork/UI. */
+html:is([data-theme='cindy-light'], [data-theme='cindy-dark'])[data-wallpaper-active='true']
+  aside.bg-sidebar > .sidebar-frost {
+  /* Add only the tint missing from the background veil, keeping the original
+     sidebar opacity floor instead of stacking two full-strength coats. */
+  background: rgb(from var(--surface-translucent-sidebar) r g b /
+    clamp(0, calc(1 - (1 - alpha) / max(0.001, var(--background-visibility, 1))), 1));
+}
+html:is([data-theme='cindy-light'], [data-theme='cindy-dark'])[data-wallpaper-active='true']
+  aside.bg-sidebar > .sidebar-frost {
+  backdrop-filter: blur(28px);
+  -webkit-backdrop-filter: blur(28px);
+}

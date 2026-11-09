@@ -84,6 +84,8 @@ worktree 建成空目录或自动切到项目根继续修改代码。
 稳定必需检查 `verify`、`Windows unit tests` 始终回报结果：分类和静态检查成功，且
 被选择的 job 成功、未选择的 job 确实跳过才通过；失败、取消、意外跳过和缺失输出均阻断。
 分片数及 workspace 分组与上述选择独立，改变分组不能改变计划跳过的含义。
+Host 三平台回归继续由 `scripts/ci-host-tests.mjs` 独立选取并汇入 `verify`；
+上述文档／翻译分类不会覆盖 Host 的判断（例如 Desktop locale 仍可能触发 Host 回归）。
 
 ### 提交门禁
 

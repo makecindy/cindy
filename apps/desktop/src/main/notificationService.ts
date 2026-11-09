@@ -52,6 +52,7 @@ export type { SessionEventKind } from './sessionNotificationCopy';
 
 const log = createLogger('notificationService');
 let desktopNotificationsEnabled = true;
+let shouldSilenceTaskNotification: (kind: SessionEventKind) => boolean = () => false;
 
 /** Renderer owns persistence; main keeps the current value for scheduler-originated toasts. */
 export function getDesktopNotificationsEnabled(): boolean {
@@ -132,6 +133,8 @@ interface ShowSessionEventPayload {
   channels?: { desktop?: boolean; feishu?: boolean; mobile?: boolean };
   /** 其它设备的任务传 false:未读归属那台设备,不记本机 Dock 角标。 */
   markAttention?: boolean;
+  /** Execution host for a device-link session; absent for local tasks. */
+  remoteDeviceId?: string;
 }
 
 /**
@@ -211,7 +214,7 @@ export function showDesktopSessionEvent(
       ...(payload.deviceId ? { deviceId: payload.deviceId } : {}),
       ...(payload.messageClientId ? { messageClientId: payload.messageClientId } : {}),
     });
-  }, payload.body, payload.teammate, payload.avatarJpeg);
+  }, payload.body, payload.teammate, payload.avatarJpeg, !sessionId);
 }
 
 /**
@@ -233,7 +236,13 @@ export function showDeviceSessionDesktopEvent(
 }
 
 export interface NotificationServiceDeps {
+  shouldSilenceTaskNotification?: (kind: SessionEventKind) => boolean;
   isCompletionHandledByTeammate?: (sessionId: string) => Promise<boolean>;
+  /**
+   * The task surface already alerts for this event (Agent Notch, or the Live Activity
+   * while it can show), so the OS notification would repeat it.
+   */
+  isTaskAlertShownElsewhere?: (kind: 'done' | 'error' | 'needs-reply') => boolean;
   getWindow: () => BrowserWindow | null;
   /**
    * 飞书 IM 实例,用于飞书通道发消息。来源与 scheduler-host/notifier.ts 相同
@@ -244,6 +253,7 @@ export interface NotificationServiceDeps {
 
 export function initNotificationService(deps: NotificationServiceDeps): void {
   const { getWindow, feishuIm } = deps;
+  shouldSilenceTaskNotification = deps.shouldSilenceTaskNotification ?? (() => false);
 
   ipcMain.handle('notification:set-desktop-enabled', (_event, enabled: unknown) => {
     if (typeof enabled !== 'boolean') {
@@ -275,7 +285,7 @@ export function initNotificationService(deps: NotificationServiceDeps): void {
       if (signal && !signal.ended) return;
       const ownerScope = captureDataOwnerBroadcastScope();
       const safeTitle = title.trim() || sessionId.slice(0, 8);
-      const wantDesktop = channels?.desktop ?? true;
+      const wantDesktop = (channels?.desktop ?? true) && deps.isTaskAlertShownElsewhere?.(kind) !== true;
       const wantFeishu = channels?.feishu === true;
       if (markAttention) markSessionNeedsAttention(sessionId);
       // 「消息免打扰」任务不再走任何外向提醒通道（系统 toast / 灵动岛 / 手机 / 飞书）；
@@ -416,6 +426,7 @@ export function initNotificationService(deps: NotificationServiceDeps): void {
               ...(mobileTeammateBotId ? { teammateBotId: mobileTeammateBotId } : {}),
               ...(preview?.teammateAvatar ? { teammateAvatar: preview.teammateAvatar } : {}),
               ...(markAttention ? {} : { muteExempt: true }),
+              ...(payload.remoteDeviceId ? { remoteDeviceId: payload.remoteDeviceId } : {}),
             });
             if (kind === 'done' && accepted) {
               notifiedReplies.set(mobileKey, eventId ? { eventId } : { fallbackSentAt: Date.now() });
@@ -482,6 +493,8 @@ function assertValidSessionEventPayload(
     !SESSION_EVENT_KINDS.has(p.kind) ||
     (p.channels !== undefined && (typeof p.channels !== 'object' || p.channels === null)) ||
     (p.markAttention !== undefined && typeof p.markAttention !== 'boolean') ||
+    (p.remoteDeviceId !== undefined && (typeof p.remoteDeviceId !== 'string'
+      || p.remoteDeviceId.length === 0 || p.remoteDeviceId.length > SESSION_ID_MAX_LENGTH)) ||
     (p.inputHandoffRequestId !== undefined && (
       p.kind !== 'needs-reply' || typeof p.inputHandoffRequestId !== 'string'
       || p.inputHandoffRequestId.length === 0 || p.inputHandoffRequestId.length > 256
@@ -492,7 +505,7 @@ function assertValidSessionEventPayload(
 }
 
 /** 桌面 toast 分支 — 原实现保持不变,只是拆出来便于 channels 选择性执行。 */
-function showDesktopToast(safeTitle: string, kind: SessionEventKind, onClick: () => void, previewBody?: string, teammate = false, avatarJpeg?: string): boolean {
+function showDesktopToast(safeTitle: string, kind: SessionEventKind, onClick: () => void, previewBody?: string, teammate = false, avatarJpeg?: string, keepSystemSound = false): boolean {
   const body = previewBody ?? getSessionNotificationBody(kind);
 
   // Electron Notification 在某些 Linux 桌面环境下可能不可用——静默兜底。
@@ -506,7 +519,8 @@ function showDesktopToast(safeTitle: string, kind: SessionEventKind, onClick: ()
     title: teammate && safeTitle.trim().toLowerCase() === 'cindy'
       ? CLIENT_NOTIFICATION_NAME : `${CLIENT_NOTIFICATION_NAME} · ${safeTitle}`,
     body,
-    // silent 默认 false——发声音，与 Electron 默认一致。
+    // Without a session there is no island state change, so no Cindy sound will play.
+    silent: !keepSystemSound && shouldSilenceTaskNotification(kind),
     ...(avatar && !avatar.isEmpty() ? { icon: avatar } : devNotificationIcon ? { icon: devNotificationIcon } : {}),
   });
   liveNotifications.add(notif);

@@ -107,6 +107,13 @@
     "stepFailed": "{{name}} tuvo un problema y no completó este paso",
     "stepTimeout": "{{name}} tardó demasiado, por lo que se detuvo este paso.",
     "stepUnavailable": "{{name}} no está disponible y no puede realizar este paso",
+    "runtimeFailureReason": {
+      "unclaimed_timeout": {
+        "summary": "{{name}} no empezó a procesar dentro del plazo de espera. Esta solicitud ha finalizado.",
+        "advice": "Pide al propietario del compañero que compruebe que Cindy está funcionando y que su ordenador tiene conexión de red.",
+        "details": "Cuando Cindy y la conexión vuelvan a funcionar, envía el mensaje de nuevo."
+      }
+    },
     "runtimeFailure": {
       "REMOTE_DEVICE_LIMIT": {
         "summary": "{{name}} no puede responder: el dispositivo del compañero de equipo ha alcanzado su límite de sesión remota.",

@@ -309,6 +309,11 @@ test('worktree includes staged, unstaged and untracked source; commit mode exclu
   const summary = workflow.jobs.verify.steps[0];
   for (const checks of ['success','failure','cancelled','skipped']) {
     for (const shards of ['success','failure','cancelled','skipped']) {
+      // Host combinations only matter once the other gates pass.
+      const allGreen = checks === 'success' && shards === 'success';
+      for (const selection of allGreen ? ['success','failure','cancelled','skipped'] : ['success']) {
+      for (const required of allGreen ? ['true','false',''] : ['true']) {
+      for (const hosts of allGreen ? ['success','failure','cancelled','skipped'] : ['success']) {
       // Windows' bash.exe is a WSL shim and does not forward Node's ad-hoc
       // environment object. Set fixture values inside the shell script so
       // this contract test behaves the same on Windows and Linux.
@@ -316,17 +321,29 @@ test('worktree includes staged, unstaged and untracked source; commit mode exclu
         .replaceAll('$SCOPE_RESULT', 'success')
         .replaceAll('$LINUX_UNIT_REQUIRED', 'true')
         .replaceAll('$VERIFY_CHECKS_RESULT', checks)
-        .replaceAll('$LINUX_UNIT_SHARDS_RESULT', shards);
+        .replaceAll('$LINUX_UNIT_SHARDS_RESULT', shards)
+        .replaceAll('$HOST_CHANGES_RESULT', selection)
+        .replaceAll('$HOST_REQUIRED', required)
+        .replaceAll('$HOST_REGRESSIONS_RESULT', hosts);
       const aggregate = runBash(aggregateScript);
       if (!aggregate) return t.skip('Git Bash is unavailable on this host');
-      assert.equal(aggregate.status === 0, checks === 'success' && shards === 'success');
+      // Host regressions may be skipped only when selection succeeded and said they are not needed.
+      const hostOk = selection === 'success'
+        && ((required === 'true' && hosts === 'success') || (required === 'false' && hosts === 'skipped'));
+      assert.equal(aggregate.status === 0, checks === 'success' && shards === 'success' && hostOk);
+      }
+      }
+      }
     }
   }
   const propagatedScript = summary.run
     .replaceAll('$SCOPE_RESULT', 'success')
     .replaceAll('$LINUX_UNIT_REQUIRED', 'true')
     .replaceAll('$VERIFY_CHECKS_RESULT', failed.status ? 'failure' : 'success')
-    .replaceAll('$LINUX_UNIT_SHARDS_RESULT', 'success');
+    .replaceAll('$LINUX_UNIT_SHARDS_RESULT', 'success')
+    .replaceAll('$HOST_CHANGES_RESULT', 'success')
+    .replaceAll('$HOST_REQUIRED', 'true')
+    .replaceAll('$HOST_REGRESSIONS_RESULT', 'success');
   const propagated = runBash(propagatedScript);
   if (!propagated) return t.skip('Git Bash is unavailable on this host');
   assert.notEqual(propagated.status,0);
@@ -429,7 +446,12 @@ test('CI design commands feed the existing verify job and preserve Windows aggre
   assert.ok(pkg.scripts['test:runner'].includes('scripts/__tests__/hardcoded-color-audit.test.mjs'));
   assert.equal(workflow.jobs.verify.name,'verify');
   assert.match(workflow.jobs.verify.if,/always\(\)/);
-  assert.deepEqual(workflow.jobs.verify.needs,['changes','verify-checks','linux-unit-shards']);
+  assert.deepEqual(workflow.jobs.verify.needs,['changes','verify-checks','linux-unit-shards','host-changes','host-regressions']);
+  const host = workflow.jobs['host-regressions'];
+  assert.equal(host.needs, 'host-changes');
+  assert.deepEqual(host.strategy.matrix.os, ['ubuntu-latest', 'windows-latest', 'macos-latest']);
+  assert.equal(host['continue-on-error'], undefined);
+  assert.ok(host.steps.some(s => s.run === 'pnpm --filter @cindy/host test'));
   const windows=workflow.jobs['windows-unit'];
   assert.equal(windows.name,'Windows unit tests');
   assert.deepEqual(windows.needs,['changes','verify-checks','windows-unit-shards','windows-runner-checks']);
@@ -480,6 +502,7 @@ test('CI aggregates only accept planned skips and preserve failure propagation',
     const plan = classifyChanges(files);
     const values = {
       SCOPE_RESULT: 'success', VERIFY_CHECKS_RESULT: 'success',
+      HOST_CHANGES_RESULT: 'success', HOST_REQUIRED: 'false', HOST_REGRESSIONS_RESULT: 'skipped',
       LINUX_UNIT_REQUIRED: String(plan.linux_unit),
       WINDOWS_UNIT_REQUIRED: String(plan.windows_unit), WINDOWS_RUNNER_REQUIRED: String(plan.desktop),
       LINUX_UNIT_SHARDS_RESULT: plan.linux_unit ? 'success' : 'skipped',
@@ -494,6 +517,14 @@ test('CI aggregates only accept planned skips and preserve failure propagation',
       const passed = invoke(job, values);
       if (!passed) return t.skip('Git Bash is unavailable on this host');
       assert.equal(passed.status, 0, `${plan.mode} planned result`);
+      if (job === jobs.verify) {
+        // The scope's planned unit skip must never bypass Host's independent gate.
+        for (const [required, result, accepted] of [
+          ['true', 'success', true], ['true', 'failure', false],
+          ['true', 'skipped', false], ['', 'skipped', false],
+        ]) assert.equal(invoke(job, { ...values, HOST_REQUIRED: required,
+          HOST_REGRESSIONS_RESULT: result }).status === 0, accepted, `${plan.mode} Host ${required}:${result}`);
+      }
       for (const override of [
         { SCOPE_RESULT: 'failure' }, { SCOPE_RESULT: 'cancelled' }, { VERIFY_CHECKS_RESULT: 'failure' },
         { [required]: '' }, { [result]: 'failure' }, { [result]: 'cancelled' },

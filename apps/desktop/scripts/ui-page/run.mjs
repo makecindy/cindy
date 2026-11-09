@@ -158,20 +158,23 @@ function compareOverlay(ref) {
 
 function overviewHtml(rows) {
   const esc = (value) => String(value).replace(/[&<>"]/g, (char) => `&#${char.charCodeAt(0)};`);
+  const stages = [...new Set(rows.flatMap(row => row.pairs.flat().map(image => image.label)))];
   return `<!doctype html><meta charset="utf-8"><style>
     body{margin:0;padding:16px;font:12px -apple-system,system-ui,sans-serif;background:#f4f4f5;color:#18181b}
-    .row{display:flex;flex-wrap:wrap;gap:12px;align-items:flex-start;margin-bottom:20px}
-    .label{width:180px;flex-shrink:0;line-height:1.5}.failed{color:#b91c1c;font-weight:600}
+    .row{display:grid;grid-template-columns:repeat(${stages.length},minmax(0,1fr));gap:12px;align-items:start;margin-bottom:24px}
+    .label{grid-column:1/-1;line-height:1.5}.failed{color:#b91c1c;font-weight:600}
     figure{margin:0;background:#fff;border:1px solid #d4d4d8;border-radius:6px;padding:6px}
-    figcaption{margin-bottom:4px;color:#52525b}img{display:block;max-width:640px;max-height:440px}
+    figcaption{margin-bottom:4px;color:#52525b}img{display:block;width:100%;height:440px;object-fit:contain;object-position:top center}.empty{visibility:hidden}
   </style>${rows
     .map(
       (row) =>
-        `<div class="row"><div class="label"><b>${esc(row.title)}</b><br>${esc(row.subtitle)}<br><span class="${row.status === 'failed' ? 'failed' : ''}">${esc(row.status)}${row.warnings ? ` · ${row.warnings} warnings` : ''}</span></div>${row.images
-          .map(
-            (image) =>
-              `<figure><figcaption>${esc(image.label)}</figcaption><img src="/__evidence/${image.src}"></figure>`,
-          )
+        `<div class="row"><div class="label"><b>${esc(row.title)}</b><br>${esc(row.subtitle)}<br><span class="${row.status === 'failed' ? 'failed' : ''}">${esc(row.status)}${row.warnings ? ` · ${row.warnings} warnings` : ''}</span></div>${stages
+          .map((stage) => {
+            const image = row.pairs.flat().find(image => image.label === stage);
+            return image
+              ? `<figure><figcaption>${esc(image.label)}</figcaption><img src="/__evidence/${image.src}"></figure>`
+              : '<figure class="empty" aria-hidden="true"></figure>';
+          })
           .join('')}</div>`,
     )
     .join('')}`;
@@ -179,6 +182,9 @@ function overviewHtml(rows) {
 
 const KEEP_RUNS = 20;
 const OVERVIEW_ROWS = 6;
+// Scenario-only buttons (finish, remount…) stay clickable but are not part of the product UI,
+// so captures leave them out without moving the layout.
+const HIDE_CONTROLS = '[data-ui-page-control]{visibility:hidden!important}';
 
 /** The default evidence folder keeps the most recent runs only. */
 async function pruneEvidence(outputRoot, current) {
@@ -554,7 +560,12 @@ export async function runPlan(plan, options, externalSignal) {
           throw new Error(`variant stopped before capture ${name}`);
         const file = path.join(dir, `${name}.png`);
         const target = captureOptions.locator ?? opened.page;
-        await target.screenshot({ path: path.join(evidence, file), timeout: 5000, scale: 'css' });
+        await target.screenshot({
+          path: path.join(evidence, file),
+          timeout: 5000,
+          scale: 'css',
+          style: HIDE_CONTROLS,
+        });
         result.screenshots.push(file.split(path.sep).join('/'));
         if (options.focus && !captureOptions.locator) await captureFocus(name);
         if (audit) await auditPage();
@@ -582,6 +593,7 @@ export async function runPlan(plan, options, externalSignal) {
           clip,
           scale: 'device',
           timeout: 5000,
+          style: HIDE_CONTROLS,
         });
         const metrics = await element.evaluate((el) => {
           const style = getComputedStyle(el);
@@ -801,11 +813,11 @@ export async function runPlan(plan, options, externalSignal) {
             subtitle: `${variant.theme} · ${variant.locale} · ${variant.viewport.width}×${variant.viewport.height}`,
             status: after.status,
             warnings: after.warnings.length,
-            // Before/after of the same capture sit side by side.
-            images: (after.focus.length
+            // Before/after of the same capture sit side by side and wrap as one unit.
+            pairs: (after.focus.length
               ? after.focus.map((item) => item.file)
               : after.screenshots
-            ).flatMap((src) => {
+            ).map((src) => {
               const name = path.basename(src, '.png');
               const pair = (
                 before?.focus.length ? before.focus.map((item) => item.file) : before?.screenshots

@@ -28,9 +28,6 @@
  */
 
 import { useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
-import { PluginUiCommandMenuItems, PluginUiCommandMenuStatus, usePluginUiCommandMenu } from '@/cindy-brain/PluginUiCommandMenu';
-import { useSessionFileOrigin } from './ChatSessionFileContext';
-import { originDeviceId } from '@/lib/sessionFileOrigin';
 import {
   Check,
   Copy,
@@ -81,7 +78,6 @@ import {
 interface MessageActionBarProps {
   sessionId?: string;
   clientId?: string;
-  pluginUiTarget?: { sessionId: string; id: string };
   createdAt?: string;
   /** Plaintext that will hit the clipboard on copy click. */
   copyText: string;
@@ -131,6 +127,9 @@ interface MessageActionBarProps {
   /** When provided, render an Edit (Pencil) button (last user message only).
    *  Click is fire-and-forget — the parent owns the inline edit lifecycle. */
   onEdit?: () => void;
+  /** Move Edit from the bar into the More menu (the task is running: editing
+   *  does not stop it, and the visible button returns once it stops). */
+  editInMenu?: boolean;
   /** When provided, render a Rewind (Undo2) button (user messages only).
    *  Click is fire-and-forget — the parent owns the dialog lifecycle and
    *  signals the loading state via `rewindInFlight`. */
@@ -185,6 +184,7 @@ export function MessageActionBar({
   reactionAction,
   onDelete,
   onEdit,
+  editInMenu = false,
   onRewind,
   rewindInFlight = false,
   turnMoney,
@@ -196,15 +196,8 @@ export function MessageActionBar({
   turnUsageDetails,
   sessionId,
   clientId,
-  pluginUiTarget,
 }: MessageActionBarProps) {
   const { t } = useTranslation();
-  const deviceId = originDeviceId(useSessionFileOrigin());
-  const pluginMenu = usePluginUiCommandMenu({
-    sessionId: pluginUiTarget?.sessionId ?? '', point: 'message.actions', deviceId,
-    ...(pluginUiTarget ? { target: { kind: 'message', id: pluginUiTarget.id } } : {}),
-    active: !!pluginUiTarget,
-  });
   const readAloud = useContext(MessageReadAloudContext);
   const [copied, setCopied] = useState(false);
   const [forking, setForking] = useState(false);
@@ -612,7 +605,7 @@ export function MessageActionBar({
   // Edit (Pencil) button — last user message only. Enters the inline edit
   // state owned by UserMessage; keep it disabled while any message action is
   // in flight so editing cannot race with Fork's history read or a menu action.
-  const editBtn = onEdit && (
+  const editBtn = onEdit && !editInMenu && (
     <Tooltip.Root key="edit">
       <Tooltip.Trigger asChild>
         <button
@@ -640,10 +633,11 @@ export function MessageActionBar({
   // “添加到对话”，伙伴对话则将同一动作外显成“回复”。
   // 面板/行几何遵守 12px container + 8px inner-control 两档圆角。
   const canRewind = Boolean(onRewind);
+  const onEditInMenu = editInMenu ? onEdit : undefined;
   const addToChatInMenu = simplifiedBotConversation ? undefined : onAddToChat;
   const moreTriggerRef = useRef<HTMLButtonElement>(null);
   const pendingTopicRef = useRef(false);
-  const moreMenu = (compact || companionFooter || addToChatInMenu || menuActions?.length || pluginMenu.views.length || copyLinkText || canRewind || onDelete) && (
+  const moreMenu = (compact || companionFooter || addToChatInMenu || menuActions?.length || copyLinkText || onEditInMenu || canRewind || onDelete) && (
     <DropdownMenu key="more" open={menuOpen} onOpenChange={setMenuOpen}>
       <DropdownMenuTrigger asChild>
         <Tip text={t('chat.messageActionBar.moreActions')}>
@@ -754,7 +748,6 @@ export function MessageActionBar({
             {action.label}
           </DropdownMenuItem>
         ))}
-        <PluginUiCommandMenuItems menu={pluginMenu} />
         {copyLinkText && (
           <DropdownMenuItem
             onSelect={(event) => {
@@ -765,6 +758,19 @@ export function MessageActionBar({
           >
             <Link2 size={14} strokeWidth={2} className="shrink-0" />
             {t('chat.messageActionBar.copyLink')}
+          </DropdownMenuItem>
+        )}
+        {onEditInMenu && (
+          <DropdownMenuItem
+            disabled={inFlight}
+            onSelect={(event) => {
+              event.stopPropagation();
+              onEditInMenu();
+            }}
+            className={MENU_ITEM_CLASS}
+          >
+            <Pencil size={14} strokeWidth={2} className="shrink-0" />
+            {t('chat.messageActionBar.edit')}
           </DropdownMenuItem>
         )}
         {canRewind && (
@@ -782,7 +788,7 @@ export function MessageActionBar({
         )}
         {onDelete && (
           <>
-            {(addToChatInMenu || menuActions?.length || copyLinkText || canRewind) && (
+            {(addToChatInMenu || menuActions?.length || copyLinkText || onEditInMenu || canRewind) && (
               <DropdownMenuSeparator />
             )}
             <DropdownMenuItem
@@ -874,6 +880,7 @@ export function MessageActionBar({
     <div
       // 操作栏是纯交互件:分享图片的光栅化会按这个标记整条剔除,不进产物。
       {...{ [SHARE_EXCLUDE_ATTR]: '' }}
+      data-chat-copy-exclude
       className={cn(
         'flex flex-wrap items-center gap-0.5',
         companionFooter && 'gap-1 [&>button]:h-8 [&>button]:w-8',
@@ -892,7 +899,6 @@ export function MessageActionBar({
       )}
     >
       {items}
-      <PluginUiCommandMenuStatus menu={pluginMenu} />
     </div>
   );
 }
@@ -914,7 +920,7 @@ export function BubbleHoverToolbar({ side, open = false, besideReactions = false
 }) {
   const left = side === 'left';
   return (
-    <div {...{ [SHARE_EXCLUDE_ATTR]: '' }} {...(marker ? { [marker]: '' } : {})} data-open={open ? '' : undefined}
+    <div data-chat-copy-exclude {...{ [SHARE_EXCLUDE_ATTR]: '' }} {...(marker ? { [marker]: '' } : {})} data-open={open ? '' : undefined}
       className={cn('chat-bubble-toolbar pointer-events-none absolute top-0 z-10 w-max rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-0.5 opacity-0 transition-opacity duration-[var(--motion-fast)] ease-[var(--motion-ease-out)] focus-within:pointer-events-auto focus-within:opacity-100 group-hover/message:pointer-events-auto group-hover/message:opacity-100 data-[open]:pointer-events-auto data-[open]:opacity-100 motion-reduce:transition-none [@media(hover:none)]:pointer-events-auto [@media(hover:none)]:opacity-100',
         left ? 'right-full' : 'left-full', besideReactions ? (left ? 'mr-6' : 'ml-6') : (left ? 'mr-1.5' : 'ml-1.5'))}>
       {children}

@@ -66,7 +66,7 @@
     "pasteTimeout": "Se agotó el tiempo de pegado de la imagen. Intentar otra vez.",
     "clipboardReadFailed": "No se pudo leer la imagen del portapapeles. Cópialo nuevamente y pégalo.",
     "maxAttachments": "Agregue hasta archivos adjuntos {{count}}.",
-    "simulatorNoCamera": "El simulador no tiene cámara. Utilice \"Fotos\" para elegir de la biblioteca.",
+    "simulatorNoCamera": "El simulador no tiene cámara. Usa «Fotos y vídeos» para elegir contenido de la biblioteca.",
     "cameraPermission": "El acceso a la cámara está desactivado. Permita que {{appName}} use la cámara en la configuración del sistema.",
     "photoPermission": "El acceso a fotografías está desactivado. Permita que {{appName}} acceda a las fotos en la configuración del sistema.",
     "noFileRead": "No se leyó ningún archivo cargable."

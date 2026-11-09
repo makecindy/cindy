@@ -3009,9 +3009,9 @@ export function NewMakerDraftRoute() {
       // 这次显式选择就是目标目录里的种子:seed key 按播种 effect 的构造逐字前置,并标记控制端
       // 已触碰 —— 目标电脑的 capabilities 到达时只做合法性夹紧,不会换成那台的默认模型(与下方
       // 跨引擎选择同一条修法)。
-      const seedSwitchedCatalog = (catalogOwnerDeviceId: string) => {
+      const seedSwitchedCatalog = (targetCatalogDeviceId: string) => {
         dlRuntimeTouchedRef.current = true;
-        dlSeedKeyRef.current = `${catalogOwnerDeviceId}:${dbToMakerAgentKind(
+        dlSeedKeyRef.current = `${targetCatalogDeviceId}:${dbToMakerAgentKind(
           normalizeDbAgentKind(selection.vendor),
         )}`;
         dlSeedCapabilitiesRef.current = null;
@@ -3025,7 +3025,9 @@ export function NewMakerDraftRoute() {
         });
       };
       if (switchesAgentDevice && targetAgentDevice) {
-        seedSwitchedCatalog(targetAgentDevice.deviceId);
+        seedSwitchedCatalog(
+          modelCatalogKey(targetAgentDevice.deviceId, controlledModelRoute.catalogHostDeviceId)!,
+        );
         patchDraft({
           agentDeviceId: targetAgentDevice.deviceId,
           agentDeviceName: targetAgentDevice.name,
@@ -3173,6 +3175,7 @@ export function NewMakerDraftRoute() {
       draft.vendor,
       usesDeviceCatalog,
       catalogDeviceId,
+      controlledModelRoute.catalogHostDeviceId,
       effectiveRemoteHostId,
       patchSshDraftSelection,
       isDeviceLinkDraft,
@@ -3296,14 +3299,16 @@ export function NewMakerDraftRoute() {
   // 分享来的供应商(`share:<id>`)不在设备列表里，也不自动回落：已收到的分享由同区域与跨区域
   // 两路分别加载，任一路还没到或暂时失败时列表并不完整，不能据此判定分享已不在。草稿保留原
   // 选择，发送时由主进程给出「已暂停 / 已不可用」的原因，用户可换模型。
+  // 任务建到被控电脑时同理：来源名单由被控电脑给出，可以包含控制端自己，本机的设备列表不是依据。
   useEffect(() => {
     if (!effectiveAgentDeviceId) return;
     if (isProviderShareAgentDeviceId(effectiveAgentDeviceId)) return;
+    if (controlledModelRoute.catalogHostDeviceId) return;
     if (!selectableDevicesLoaded) return;
     if (selectableDevices.some((d) => d.deviceId === effectiveAgentDeviceId)) return;
     log.warn('[new-maker] selected agent computer is no longer selectable, running the agent here');
     patchDraft({ agentDeviceId: null, agentDeviceName: null });
-  }, [effectiveAgentDeviceId, selectableDevices, selectableDevicesLoaded]);
+  }, [effectiveAgentDeviceId, controlledModelRoute.catalogHostDeviceId, selectableDevices, selectableDevicesLoaded]);
 
   // 创建目标正在异步提交时，发送、建目标以及设备／工作区切换必须共用同一把锁。
   // ref 负责同步 guard，state 只负责驱动 UI 禁用；所有写入都经 markSendInFlight，

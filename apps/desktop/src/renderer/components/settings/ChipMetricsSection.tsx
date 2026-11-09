@@ -5,13 +5,13 @@
  * CHIP_METRIC_KEYS 为准)。未选中的进 tooltip, 始终可 hover 查看。
  * 详见 TodaySpendChip.tsx / useChipMetricPreferences.ts。
  *
- * 卡片样式与 NotificationSection 对齐 (rounded 12 / Card bg / 1px Board / padding 20)。
+ * 分区、卡片与行用 settings-rows (SettingsSection / SettingsCard / SettingsRow)。
  */
 
 import { useTranslation } from 'react-i18next';
 
 import { Switch } from '@/components/ui/switch';
-import { cn } from '@/lib/utils';
+import { SettingsCard, SettingsRow, SettingsSection } from '@/components/ui/settings-rows';
 import { useChipMetricPreferences, CHIP_METRIC_KEYS } from '@/hooks/useChipMetricPreferences';
 
 export function ChipMetricsSection() {
@@ -19,53 +19,23 @@ export function ChipMetricsSection() {
   const { isSelected, toggle } = useChipMetricPreferences();
 
   return (
-    <div className="flex flex-col gap-[14px]">
-      <h2 className="text-16 font-medium leading-[1.2] text-[var(--settings-section-title)]">
-        {t('settings.chipMetrics.title')}
-      </h2>
-
-      <div
-        className={cn(
-          'flex flex-col rounded-xl',
-          'bg-[var(--settings-theme-card-bg)]',
-          'border border-[var(--settings-theme-card-border)]',
-        )}
-      >
-        <p
-          className="px-5 pt-5 pb-2 text-12 leading-[1.4] text-[var(--text-secondary)]"
-        >
-          {t('settings.chipMetrics.description')}
-        </p>
-
-        {CHIP_METRIC_KEYS.map((key, i) => (
-          <div
+    <SettingsSection title={t('settings.chipMetrics.title')} description={t('settings.chipMetrics.description')}>
+      <SettingsCard>
+        {CHIP_METRIC_KEYS.map((key) => (
+          <SettingsRow
             key={key}
-            className={cn(
-              'flex items-center justify-between gap-3 px-5 py-4',
-              i < CHIP_METRIC_KEYS.length - 1 && 'border-b border-[var(--settings-theme-card-border)]',
-            )}
-          >
-            <div className="flex min-w-0 flex-col gap-1">
-              <p
-                className="text-13 font-medium text-[var(--settings-section-sublabel)]"
-                style={{ letterSpacing: '0.12px' }}
-              >
-                {t(`settings.chipMetrics.metrics.${key}.label`)}
-              </p>
-              <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
-                {t(`settings.chipMetrics.metrics.${key}.hint`)}
-              </p>
-            </div>
-
-            <Switch
-              checked={isSelected(key)}
-              onCheckedChange={() => toggle(key)}
-              aria-label={t('settings.chipMetrics.toggleAria', { metric: key })}
-            />
-          </div>
+            title={t(`settings.chipMetrics.metrics.${key}.label`)}
+            hint={t(`settings.chipMetrics.metrics.${key}.hint`)}
+            trailing={
+              <Switch
+                checked={isSelected(key)}
+                onCheckedChange={() => toggle(key)}
+                aria-label={t('settings.chipMetrics.toggleAria', { metric: key })}
+              />
+            }
+          />
         ))}
-      </div>
-    </div>
+      </SettingsCard>
+    </SettingsSection>
   );
 }
-

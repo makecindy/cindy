@@ -35,6 +35,7 @@ import {
 import { useTranslation } from 'react-i18next';
 
 import { PluginUsageCard } from './PluginUsageCard';
+import { PluginReadmeSection, usePluginReadme } from './PluginReadmeSection';
 import { PluginSharedUsage } from './PluginSharedUsage';
 import type { PluginMarketItem } from '../../../shared/pluginMarket';
 import { GhostLibrarySection } from './GhostLibrarySection';
@@ -171,7 +172,8 @@ export function GhostPluginDetailView({
   toggleDisabled,
   onIconLoadError,
 }: GhostPluginDetailViewProps) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
+  const uiLanguage = i18n.resolvedLanguage ?? i18n.language;
   const { scrolled, onScroll } = usePluginDetailScrolled();
   const enableSwitchId = useId();
   const publicationBlocked = publishingPreview?.preflight?.actions.canSubmit === false;
@@ -202,6 +204,11 @@ export function GhostPluginDetailView({
   // 远程文件更新按目标 Host 能力判断，不能使用控制端的 DEV 状态。
   const localUpdateAvailable = (!remote || remoteFileUpdate) && ghost?.publishingSource?.kind !== 'public-market';
   const hasAdditionalActions = localUpdateAvailable || onExport !== undefined;
+  // 远程设备的插件目录不在本机，详细介绍只在本机详情页读取。
+  const readme = usePluginReadme(
+    ghost ? `${detail.id}@${ghost.manifest.version}@${uiLanguage}` : null,
+    ghost?.manifest.readme && !remote ? () => window.electronAPI.ghosts.readme(detail.id, uiLanguage) : null,
+  );
   const localShareAvailable = !remote && ghost?.publishingSource?.kind === 'local' &&
     ghost.approval.state === 'approved' && ghost.namespaceState === 'confirmed' && (ghost.namespace === null || ghost.namespace === 'local') &&
     !ghost.builtin;
@@ -404,6 +411,8 @@ export function GhostPluginDetailView({
             confirmClear={confirmClearUsage}
           />
         ) : null}
+
+        <PluginReadmeSection readme={readme} />
 
         {remote ? remoteConfiguration : hasConfiguration ? (
           <section
@@ -888,7 +897,7 @@ export function ToolDescriptionChip({ tool }: { tool: Pick<GhostToolDecl, 'name'
         sideOffset={8}
         className={cn(
           DETAIL_SURFACE_CLASS,
-          'z-[10000] w-[320px] rounded-xl p-4 text-[var(--text-primary)] shadow-[var(--shadow-menu)] data-[state=open]:animate-none data-[state=closed]:animate-none',
+          'z-[10000] w-[320px] rounded-xl p-4 text-[var(--text-primary)] shadow-[shadow:var(--shadow-menu)] data-[state=open]:animate-none data-[state=closed]:animate-none',
         )}
       >
         <p className="text-13 leading-5 text-[var(--text-secondary)]">

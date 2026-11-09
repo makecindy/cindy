@@ -115,6 +115,16 @@ afterEach(() => {
 });
 
 describe('ComputerUseSection driver update completion', () => {
+  // Unit: replace the brittle JSX text scan with actual platform visibility.
+  // The settings-definition migration changes t() syntax, not the permission UI.
+  it.each([false, true])('shows macOS permission guidance only on macOS (%s)', async (macos) => {
+    installApi(macos);
+    render(<ComputerUseSection />);
+    await screen.findByText(`${updateKey}.available: ${newVersion}`);
+    expect(screen.queryByText('settings.computerUse.directControl.permissions.title') !== null).toBe(macos);
+    expect(screen.queryByText('settings.computerUse.directControl.permissions.accessibilityLabel') !== null).toBe(macos);
+    expect(screen.queryByText('settings.computerUse.directControl.permissions.screenRecordingLabel') !== null).toBe(macos);
+  });
   // PR #7584: independent loading makes driver updates available before opt-in
   // resolves. The switch must only become off after the backend confirms it;
   // earlier update tests always started with the opt-in already loaded (unit).

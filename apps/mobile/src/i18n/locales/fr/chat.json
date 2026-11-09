@@ -163,6 +163,9 @@
     "workDetails": "Détails du travail"
   },
   "teammateProcess": {
+    "retry": "Réessayer",
+    "empty": "Aucun détail du traitement à afficher pour cette réponse",
+    "unavailable": "Impossible de charger les détails du traitement",
     "record": "Activité",
     "operations": "Journal d’activité",
     "elapsed": "En cours depuis {{duration}}",
