@@ -118,13 +118,17 @@ describe('「+」面板的搜索框', () => {
     expect(onClose).toHaveBeenCalled();
   });
 
-  // #9536: 「+」内嵌面板不再自己 max-height + overflow-y-auto，否则和 MorphPopover
-  // 外壳并排两条竖向滚动条。独立 @ 浮层仍由自己滚动。Tier: unit。
-  it('内嵌形态不自滚，独立 @ 浮层仍自滚', () => {
+  // #9536: 内嵌形态自己是唯一滚动区（overflow-y-auto + w-full），并声明外壳不要再滚。
+  // 独立 @ 浮层仍自定 480 宽和 maxHeight。外壳不滚由 MorphPopover 认 data-morph-scroll。Tier: unit。
+  it('内嵌形态自己滚动并让外壳不滚，独立 @ 浮层仍自滚', () => {
     const { unmount } = render(<Harness />);
-    const embedded = document.querySelector('[data-composer-suggestion-panel] > div') as HTMLElement;
-    expect(embedded.className).toContain('overflow-hidden');
-    expect(embedded.className).not.toContain('overflow-y-auto');
+    const root = document.querySelector('[data-composer-suggestion-panel]') as HTMLElement;
+    const embedded = root.firstElementChild as HTMLElement;
+    expect(root.getAttribute('data-morph-scroll')).toBe('inner');
+    expect(embedded.className).toContain('overflow-y-auto');
+    expect(embedded.className).toContain('w-full');
+    expect(embedded.className).toContain('overflow-x-hidden');
+    expect(embedded.className).not.toContain('w-[480px]');
     expect(embedded.style.maxHeight).toBe('');
     unmount();
 
@@ -141,8 +145,11 @@ describe('「+」面板的搜索框', () => {
         maxHeight={240}
       />,
     );
-    const standalone = document.querySelector('[data-composer-suggestion-panel] > div') as HTMLElement;
+    const standaloneRoot = document.querySelector('[data-composer-suggestion-panel]') as HTMLElement;
+    const standalone = standaloneRoot.firstElementChild as HTMLElement;
+    expect(standaloneRoot.hasAttribute('data-morph-scroll')).toBe(false);
     expect(standalone.className).toContain('overflow-y-auto');
+    expect(standalone.className).toContain('w-[480px]');
     expect(standalone.style.maxHeight).toBe('240px');
   });
 });

@@ -179,15 +179,15 @@ export function AddDirectoryPanel({
       data-composer-suggestion-search=""
       onKeyDown={handleKeyDown}
       aria-busy={pending}
-      className="pointer-events-auto relative flex h-full min-h-0 flex-col outline-none"
+      className="pointer-events-auto relative flex min-h-0 flex-1 flex-col outline-none"
     >
       <div
         ref={highlightPanelRef}
         {...menuPanelAttrs}
         // 标题、搜索框与「选择其他文件夹」固定，只有目录列表滚动(与项目选择器一致)。
-        // 高度由外层 MorphPopover 按视口钳制；本层不再自定 maxHeight，也不再和外壳
-        // 各出一条滚动条 (#9536)。外壳内容区在本页打开时保持 overflow hidden。
-        className="relative flex h-full min-h-0 w-full min-w-0 flex-col overflow-hidden p-[6px]"
+        // 高度由外层 MorphPopover 的确定高度经 flex-1 传下来；不用 h-full，
+        // 否则父层只有 max-h-full 时高度仍是 auto，列表会按全部内容撑高 (#9536)。
+        className="relative flex min-h-0 w-full min-w-0 flex-1 flex-col overflow-hidden p-[6px]"
       >
         <MenuHighlightLayer />
         <div className="flex h-[32px] items-center gap-1 pb-[2px]">

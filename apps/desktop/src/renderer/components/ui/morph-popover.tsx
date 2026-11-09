@@ -174,6 +174,11 @@ function prefersReducedMotion(): boolean {
   );
 }
 
+/** 子面板声明自己滚（data-morph-scroll="inner"）时，外壳不再出第二条滚动条。 */
+function contentLocksShellScroll(content: HTMLElement): boolean {
+  return content.querySelector('[data-morph-scroll="inner"]') !== null;
+}
+
 /** overflow-y:auto/hidden 会把 visible 的 overflow-x 算成 auto;横轴必须显式 hidden。 */
 function setContentOverflowY(
   content: HTMLDivElement | null,
@@ -181,9 +186,9 @@ function setContentOverflowY(
 ): void {
   if (!content) return;
   // 子面板自己声明「外壳不要滚」(data-morph-scroll="inner")时，外壳始终 hidden。
-  // 「+」的添加目录页：标题固定、只滚目录列表；外壳再 auto 会并排两条滚动条 (#9536)。
-  const locked =
-    overflowY === 'auto' && content.querySelector('[data-morph-scroll="inner"]') !== null;
+  // 「+」的建议列表和添加目录页自己是唯一滚动区；外壳再 auto 会并排两条滚动条 (#9536)。
+  // 切页后标记会出现或消失，调用方必须在内容重新测量时再跑一次，不能只在打开后判一次。
+  const locked = overflowY === 'auto' && contentLocksShellScroll(content);
   content.style.overflowY = locked ? 'hidden' : overflowY;
   content.style.overflowX = 'hidden';
 }
@@ -303,6 +308,9 @@ export function MorphPopover({
     const panel = panelRef.current;
     const rect = chipRectRef.current;
     if (!panel || !rect) return;
+    // 内容换代（「+」↔添加目录）不会重跑开场 settle，滚动归属必须在这里重新判定。
+    // 量高之前先写：内滚页把外壳锁成 hidden，否则 offsetHeight 会把内层滚动区的内容一并量进去。
+    if (settledRef.current) setContentOverflowY(contentRef.current, 'auto');
     const prevT = panel.style.transition;
     panel.style.transition = 'none';
     const m = measure(panel, rect);
@@ -317,6 +325,23 @@ export function MorphPopover({
     panel.style.width = `${m.w}px`;
     panel.style.height = `${m.h}px`;
   }, [measure]);
+
+  // 重量请求由内容的 useLayoutEffect 发出，早于任何 useEffect。监听挂在渲染期的 ref 回调上：
+  // 子节点先提交，回调再跑，因此请求到达时监听已经在。开场布局 effect 每次重跑都会拆 effect
+  // 监听，切页请求正好落在空窗里，所以不能挂在那里。
+  const bindContent = useCallback(
+    (node: HTMLDivElement | null) => {
+      const previous = contentRef.current;
+      if (previous && previous !== node) {
+        previous.removeEventListener(MORPH_CONTENT_RESIZE_EVENT, syncPanelToContent);
+      }
+      contentRef.current = node;
+      if (node && node !== previous) {
+        node.addEventListener(MORPH_CONTENT_RESIZE_EVENT, syncPanelToContent);
+      }
+    },
+    [syncPanelToContent],
+  );
 
   /** 面板锚到 chip 的形变起点几何(closed 视觉态:与 chip 重合的胶囊) */
   const applyChipGeometry = useCallback(
@@ -497,21 +522,10 @@ export function MorphPopover({
     const content = contentRef.current;
     if (!mounted || !open || !panel || !content || typeof ResizeObserver === 'undefined') return;
     let roRaf = 0;
-    const ro = new ResizeObserver(() => {
+    const syncAfterFrame = () => {
       // RO 回调内直接写布局会触发 "ResizeObserver loop completed with
-      // undelivered notifications" 告警 —— 推迟到下一帧,合并同帧通知
-      if (roRaf) return;
-      roRaf = requestAnimationFrame(() => {
-        roRaf = 0;
-        // settle 前不跟随(和开场动画抢几何);settle 后走同一条补量逻辑
-        if (!settledRef.current) return;
-        syncPanelToContent();
-      });
-    });
-    ro.observe(content);
-    // 内容侧的显式重量请求(MORPH_CONTENT_RESIZE_EVENT):内容增长被钳制链挡住时
-    // RO 无事件,由内容自己吱声;与 RO 走同一条 settle 门 + rAF 合并。
-    const onResizeRequest = () => {
+      // undelivered notifications" 告警 —— 推迟到下一帧,合并同帧通知。
+      // settle 前不跟随(和开场动画抢几何);settle 后走同一条补量逻辑。
       if (roRaf) return;
       roRaf = requestAnimationFrame(() => {
         roRaf = 0;
@@ -519,11 +533,13 @@ export function MorphPopover({
         syncPanelToContent();
       });
     };
-    content.addEventListener(MORPH_CONTENT_RESIZE_EVENT, onResizeRequest);
+    const ro = new ResizeObserver(() => {
+      syncAfterFrame();
+    });
+    ro.observe(content);
     return () => {
       if (roRaf) cancelAnimationFrame(roRaf);
       ro.disconnect();
-      content.removeEventListener(MORPH_CONTENT_RESIZE_EVENT, onResizeRequest);
     };
   }, [mounted, open, syncPanelToContent]);
 
@@ -628,12 +644,14 @@ export function MorphPopover({
             {/* 面板内容: 随生长淡入(50ms 延迟 + 5px 浮入);形变期禁滚(防滚动条
                 闪现挤压行宽),settle 后由 JS 切回自滚 */}
             <div
-              ref={contentRef}
+              ref={bindContent}
               className={cn(
                 // overflow-x must stay hidden: overflow-y:auto/hidden otherwise
                 // computes overflow-x to auto (CSS overflow pairing), and a 1px
                 // border-box mismatch flashes a 2s horizontal scrollbar thumb.
-                'max-h-full overflow-x-hidden overflow-y-hidden',
+                // h-full + flex column 把面板的确定高度传给内层：只有 max-h-full 时高度仍是 auto，
+                // 内层 overflow-y-auto 没有边界，会按全部内容撑高，而不是独立滚动。
+                'flex h-full min-h-0 max-h-full flex-col overflow-x-hidden overflow-y-hidden',
                 side === 'top' ? 'translate-y-[5px]' : 'translate-y-[-5px]',
                 'opacity-0 transition-[opacity,transform] delay-[50ms] duration-[140ms] ease-out',
                 'group-data-[state=open]:translate-y-0 group-data-[state=open]:opacity-100',

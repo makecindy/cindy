@@ -15,10 +15,10 @@
  * jsdom 无布局引擎(rect 全 0),几何/丝滑度靠 DESIGN.md §14.4 实测兜底,不在此测。
  */
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { useRef, useState, type ReactNode } from 'react';
+import { useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { MorphPopover } from '../components/ui/morph-popover';
+import { MORPH_CONTENT_RESIZE_EVENT, MorphPopover } from '../components/ui/morph-popover';
 
 function setReducedMotion(reduced: boolean): void {
   Object.defineProperty(window, 'matchMedia', {
@@ -614,5 +614,73 @@ describe('MorphPopover interaction contract', () => {
     await waitFor(() => {
       expect(content.style.overflowY).toBe('auto');
     });
+  });
+
+  // #9536 复审：滚动归属只在打开后的 settle 里判一次。往返切页（「+」→添加目录→返回）
+  // 不会再跑那次判定，返回主面板后外壳停在 hidden，列表再也滚不动。
+  // 最小输入：打开后先是内滚页；切页时在新内容提交前派发重量事件（与面板的 useLayoutEffect 同序）。
+  // Tier: unit。
+  it('往返切页后按当前内容重新判定外壳是否滚动', async () => {
+    function Page({
+      kind,
+      onCommit,
+    }: {
+      kind: 'inner' | 'main';
+      onCommit: () => void;
+    }) {
+      useLayoutEffect(() => {
+        onCommit();
+      }, [onCommit]);
+      return kind === 'inner' ? (
+        <div data-morph-scroll="inner">directory list</div>
+      ) : (
+        <div>main list</div>
+      );
+    }
+    function Host() {
+      const [open, setOpen] = useState(false);
+      const [page, setPage] = useState<'inner' | 'main'>('inner');
+      const notify = () => {
+        document
+          .querySelector('[aria-label="Morph panel"] > div')
+          ?.dispatchEvent(new CustomEvent(MORPH_CONTENT_RESIZE_EVENT));
+      };
+      return (
+        <>
+          <button type="button" onClick={() => setOpen(true)}>
+            Toggle
+          </button>
+          <button type="button" onClick={() => setPage('main')}>
+            Show main
+          </button>
+          <button type="button" onClick={() => setPage('inner')}>
+            Show inner
+          </button>
+          <MorphPopover
+            open={open}
+            onOpenChange={setOpen}
+            panelAriaLabel="Morph panel"
+            trigger={<span />}
+          >
+            <Page kind={page} onCommit={notify} />
+          </MorphPopover>
+        </>
+      );
+    }
+    render(<Host />);
+    fireEvent.click(screen.getByRole('button', { name: 'Toggle' }));
+    const panel = await screen.findByRole('group', { name: 'Morph panel' });
+    const content = panel.firstElementChild as HTMLElement;
+    await waitFor(() => {
+      expect(content.style.overflowY).toBe('hidden');
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show main' }));
+    expect(content.querySelector('[data-morph-scroll="inner"]')).toBeNull();
+    expect(content.style.overflowY).toBe('auto');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show inner' }));
+    expect(content.querySelector('[data-morph-scroll="inner"]')).toBeTruthy();
+    expect(content.style.overflowY).toBe('hidden');
   });
 });
