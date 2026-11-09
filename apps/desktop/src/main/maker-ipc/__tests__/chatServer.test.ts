@@ -3077,6 +3077,31 @@ describe('Chat Server result delivery and refresh', () => {
         expect(posts().some(([route]) => route === `/conversations/${roomId}/plans/${planId}`)).toBe(false);
       });
 
+      // #9427 review, unit: parsing a longer label must not auto-start work for a bot
+      // that was not among the identities resolved by the composer.
+      it.each([
+        ['an unpicked namesake', [botId], false],
+        ['all resolved namesakes', [foreignBot, botId], true],
+      ] as const)('only auto-starts written steps with %s when targets match', async (_scenario, picked, starts) => {
+        const namesakes = members().map(m => m.id === selfId ? { ...m, name: 'Alex' }
+          : m.id === otherHuman ? { ...m, name: 'Sam' }
+          : m.id === botId || m.id === foreignBot ? { ...m, name: 'Helper' } : m);
+        singleSpeaker((route, method) => {
+          if (route.endsWith('/snapshot')) return { body: { room: { ...room(roomId), hide_companion_owner_names: true }, members: namesakes, messages: [], cursor: '1' } };
+          if (route.endsWith('/members')) return { body: namesakes };
+          if (route === `/conversations/${roomId}/messages` && method === 'POST') return { body: { id: sourceId } };
+          if (route === `/conversations/${roomId}/plans` && method === 'POST') return { body: { id: planId, revision: 1 } };
+          if (route === `/conversations/${roomId}/plans`) return { body: [] };
+          return undefined;
+        });
+        deps.decidePlan = vi.fn(async () => null);
+        expect(await service.sendMessage({ groupId: roomId, text: '@Helper (Sam) design; @Helper (Alex) build', clientId: 'division-unpicked',
+          mentions: { all: false, botIds: [...picked] }, division: true })).toMatchObject({ ok: true });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(vi.mocked(deps.decidePlan).mock.calls.length > 0).toBe(!starts);
+        expect(posts().some(([route]) => route === `/conversations/${roomId}/plans/${planId}`)).toBe(starts);
+      });
+
       it('answers the request when nobody can arrange it, and later messages still go out', async () => {
         divisionServer();
         deps.decidePlan = undefined;

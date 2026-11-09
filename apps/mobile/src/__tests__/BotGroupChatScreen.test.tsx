@@ -1576,6 +1576,34 @@ describe('group composer', () => {
     expect(h.alert).toHaveBeenCalledWith('groupChat.errors.ambiguousMention');
   });
 
+  // #9427 review, unit: a lost acknowledgement may have stored the original send.
+  it('retries the same short mention with its original identity after a namesake joins', async () => {
+    const data = group({ openPlan: null });
+    const helper = { ...data.members[0]!, name: 'Helper', ownerName: 'Alex', ownerNameHidden: true, shortOwnerNamesEnabled: true };
+    await render(group({ openPlan: null, members: [helper] }));
+    await type('@Helper hello');
+    h.chat.act.mockRejectedValueOnce(new Error('NETWORK_ERROR'));
+    await click('botGroup.composer.send');
+    expect(h.row.value).toBe('@Helper hello');
+    const first = h.chat.act.mock.calls[0]![1];
+    expect(first.mentions).toEqual({ all: false, botIds: [helper.botId] });
+    const members = [
+      { ...helper, name: 'Helper (Alex)', ownerNameHidden: false },
+      { ...data.members[1]!, name: 'Helper (Sam)', ownerName: 'Sam', ownerNameHidden: false, shortOwnerNamesEnabled: true },
+    ];
+    await render(group({ openPlan: null, members }));
+    // A changed draft is a new intent, even while the failed attempt is retained.
+    await type('@Helper a new message');
+    await click('botGroup.composer.send');
+    expect(h.chat.act).toHaveBeenCalledTimes(1);
+    expect(h.row.value).toBe('@Helper a new message');
+    expect(h.alert).toHaveBeenCalledWith('groupChat.errors.ambiguousMention');
+    await type('@Helper hello');
+    await click('botGroup.composer.send');
+    expect(h.chat.act).toHaveBeenCalledTimes(2);
+    expect(h.chat.act.mock.calls[1]![1]).toMatchObject({ clientId: first.clientId, mentions: first.mentions });
+  });
+
   it('keeps the current human in the group but excludes it from mention choices and typed mentions', async () => {
     h.chat.server = true;
     const data = group({ openPlan: null });

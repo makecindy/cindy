@@ -144,7 +144,7 @@ export function BotGroupComposer({
   const selectionRef = useRef({ start: 0, end: 0 });
   const sendingRef = useRef(false);
   const stoppingRef = useRef(false);
-  const attemptRef = useRef<BotGroupSendAttempt | null>(null);
+  const attemptRef = useRef<{ attempt: BotGroupSendAttempt; members: readonly BotGroupMemberView[] } | null>(null);
   const [sheetOpen, setSheetOpen] = useState(false);
   const [previewId, setPreviewId] = useState<string | null>(null);
   const focusInput = () => requestAnimationFrame(() => inputRef.current?.focus());
@@ -245,10 +245,6 @@ export function BotGroupComposer({
 
   const send = async () => {
     if (!canSend || sendingRef.current) return;
-    if (hasAmbiguousBotGroupMentions(text, { members: mentionMembers.map(resolveMember), allLabels: [allLabel], allBotLabels, tracked })) {
-      Alert.alert(t('groupChat.errors.ambiguousMention'));
-      return;
-    }
     const draft = text;
     const draftText = trimmed;
     const draftTracked = tracked;
@@ -283,14 +279,30 @@ export function BotGroupComposer({
         return;
       }
       const attachmentIds = attachments.map((attachment) => attachment.id);
-      const mentions = resolveBotGroupMentions(draft, {
-        members: mentionMembers.map(resolveMember),
-        allLabels: [allLabel], allBotLabels,
-        tracked: draftTracked,
+      const previous = attemptRef.current;
+      const previousMentions = previous && resolveBotGroupMentions(draft, {
+        members: previous.members.map(resolveMember), allLabels: [allLabel], allBotLabels, tracked: draftTracked,
       });
-      // Targets, tag and attachments are part of the same send intent.
-      const attempt = nextBotGroupSendAttempt(attemptRef.current, draftText, draftDivision, randomUUID, attachmentIds, mentions, quoteMessageId);
-      attemptRef.current = attempt;
+      // A lost acknowledgement may have stored the message. Retry its exact original intent
+      // against the original roster before checking whether today's names are ambiguous.
+      const retry = previous && previousMentions && nextBotGroupSendAttempt(previous.attempt, draftText, draftDivision,
+        () => '', attachmentIds, previousMentions, quoteMessageId) === previous.attempt;
+      let mentions;
+      let attempt: BotGroupSendAttempt;
+      if (retry && previous && previousMentions) {
+        mentions = previousMentions;
+        attempt = previous.attempt;
+      } else {
+        const currentMembers = mentionMembers.map(resolveMember);
+        if (hasAmbiguousBotGroupMentions(draft, { members: currentMembers, allLabels: [allLabel], allBotLabels, tracked: draftTracked })) {
+          restoreDraft();
+          Alert.alert(t('groupChat.errors.ambiguousMention'));
+          return;
+        }
+        mentions = resolveBotGroupMentions(draft, { members: currentMembers, allLabels: [allLabel], allBotLabels, tracked: draftTracked });
+        attempt = nextBotGroupSendAttempt(null, draftText, draftDivision, randomUUID, attachmentIds, mentions, quoteMessageId);
+        attemptRef.current = { attempt, members: mentionMembers.map(member => ({ ...member })) };
+      }
       release = tray.holdForSend(attachmentIds);
       await onSend({ text: attempt.text, mentions, clientId: attempt.clientId, division: attempt.division, attachments,
         ...(topic && alsoSendToMain ? { alsoSendToMain: true as const } : {}) });

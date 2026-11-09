@@ -2095,9 +2095,11 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
         return { botId: m.id, name, displayName: m.name, nickname: m.nickname,
           ...(ownerNamePreferenceAvailable ? { ownerName: chatGroupOwnerName(m, s.members), ownerNameHidden: hideOwnerNames && name === m.name, shortOwnerNamesEnabled: hideOwnerNames } : {}) };
       }) });
-    // A picked teammate whose name no longer reads in the text (renamed meanwhile) would silently
-    // drop its step: let the organizer arrange it instead.
-    if (written && !picked.every(target => written.some(step => step.botId === target || localBot(step.botId)?.id === target))) return null;
+    // Names can change or overlap between composing and parsing. An automatically started card
+    // must match any supplied resolved targets in both directions; otherwise let the organizer arrange it.
+    const matches = (step: { botId: string }, target: string) => step.botId === target || localBot(step.botId)?.id === target;
+    if (written && (!picked.every(target => written.some(step => matches(step, target)))
+      || (picked.length > 0 && written.some(step => !picked.some(target => matches(step, target)))))) return null;
     // A step for a teammate you may not give work to goes to the organizer, not into a neighbour's task.
     const assignable = (botId: string) => bots.some(m => m.id === botId && (m.ownerActorId === selfId || m.guestAccess !== 'none')
       && (!localBot(m.id) || localBot(m.id)?.status === 'active'));
