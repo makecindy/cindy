@@ -1819,7 +1819,8 @@ function rebindChatEmbeddingSettingsWatcher(): void {
   chatEmbeddingSettingsWatcher.rebind(ownerScopedUserDataPath('chat-embedding-settings.json'));
 }
 
-app.once('will-quit', () => chatEmbeddingSettingsWatcher.dispose());
+// The quit coordinator finishes with app.exit(), which bypasses will-quit.
+onQuit('chat-embedding-settings-watcher', () => chatEmbeddingSettingsWatcher.dispose());
 
 /**
  * 「聊天嵌入」关闭时的收尾: 总是让 chat 的 enqueue 守卫立即失效; 但只有在没有插件
@@ -4756,7 +4757,7 @@ const databaseSizeWarningSettingsWatcher = createDatabaseSizeWarningSettingsWatc
   broadcastDatabaseSizeWarningChanged();
 });
 
-app.once('will-quit', () => databaseSizeWarningSettingsWatcher.dispose());
+onQuit('database-size-warning-settings-watcher', () => databaseSizeWarningSettingsWatcher.dispose());
 
 function rebindDatabaseSizeWarningSettingsWatcher(): void {
   databaseSizeWarningSettingsWatcher.rebind(getDatabaseSizeWarningSettingsFilePath());
@@ -4949,7 +4950,7 @@ const registerIpcHandlers = () => {
       if (win) dispatchApplicationMenuCommand(win, resolveNewMakerMenuCommand(false));
     },
   });
-  app.once('will-quit', stopMenubarService);
+  onQuit('menubar-service', stopMenubarService);
   // macOS「离开时继续工作」(默认关):开着时本机不因空闲熄屏锁屏;主人离开后盖黑色遮罩,
   // 本机有人按键/点击即转系统真锁屏。共享 userData 的被动实例不接管本机屏幕。
   if (!authManager.isPassiveSharedUserDataInstance()) {
@@ -4964,11 +4965,11 @@ const registerIpcHandlers = () => {
   }
   // 灵动岛余量:与菜单栏同一份余量概览(顺序、显示与隐私设置都跟菜单栏),岛开着时才读取。
   const agentIsland = getAgentIslandService();
-  if (agentIsland) app.once('will-quit', startAgentIslandQuota(agentIsland, getQuotaOverviewService()));
+  if (agentIsland) onQuit('agent-island-quota', startAgentIslandQuota(agentIsland, getQuotaOverviewService()));
 
   // 全局框选截图快捷键 (键盘快捷键设置里可改)，支持复制、保存、贴图与新任务。
   initRegionScreenshot();
-  app.once('will-quit', stopRegionScreenshot);
+  onQuit('region-screenshot', stopRegionScreenshot);
 
   // 「在新窗口打开」会话多开 —— 新建一个完整窗口定位到该 session, 初始 bounds 取主窗。
   ipcMain.handle(
