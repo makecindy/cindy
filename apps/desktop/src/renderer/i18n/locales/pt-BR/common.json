@@ -2459,12 +2459,12 @@
         "previewStarting": "Solte o mouse e o teclado. A tela será coberta em 3 segundos; pressione qualquer tecla para bloqueá-la e depois desbloqueie.",
         "previewUnavailable": "Não foi possível cobrir a tela. Reinicie o Cindy e tente novamente.",
         "delay": {
-          "label": "Cobrir a tela após",
-          "hint": "Tempo sem tocar no teclado e no mouse até a camada aparecer. Por padrão, o mesmo do repouso da tela.",
           "30": "30 s",
           "60": "1 min",
           "120": "2 min",
           "300": "5 min",
+          "label": "Cobrir a tela após",
+          "hint": "Tempo sem tocar no teclado e no mouse até a camada aparecer. Por padrão, o mesmo do repouso da tela.",
           "system": "Sistema"
         }
       }
@@ -14748,7 +14748,11 @@
         "running": "Em execução",
         "needsAttention": "Aguardando sua resposta",
         "done": "Concluída — clique para ver",
-        "error": "Falhou — clique para ver"
+        "error": "Falhou — clique para ver",
+        "runningText": "Executando",
+        "awaitingText": "Aguardando",
+        "errorText": "Falha",
+        "doneText": "Concluído"
       },
       "scheduleBinding": {
         "label": "Vinculada à automação",
@@ -15027,6 +15031,14 @@
         "priority": "Prioridade",
         "activity": "Atividade recente",
         "created": "Data de criação"
+      },
+      "filterSessionStatusHeading": "Status da sessão",
+      "filterSessionStatus": {
+        "all": "Todos",
+        "running": "Em execução",
+        "awaiting": "Aguardando entrada",
+        "error": "Falha",
+        "done": "Concluído"
       }
     },
     "rename": {

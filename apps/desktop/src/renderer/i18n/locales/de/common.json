@@ -2421,12 +2421,12 @@
         "previewStarting": "Nimm die Hände von Maus und Tastatur. In 3 Sekunden wird der Bildschirm verdeckt; drücke eine Taste, um ihn zu sperren, und entsperre ihn dann.",
         "previewUnavailable": "Der Bildschirm konnte nicht verdeckt werden. Starte Cindy neu und versuche es erneut.",
         "delay": {
-          "label": "Bildschirm verdecken nach",
-          "hint": "So lange bleiben Tastatur und Maus unberührt, bevor die Abdeckung erscheint. Standardmäßig wie der Ruhezustand des Displays.",
           "30": "30 s",
           "60": "1 Min.",
           "120": "2 Min.",
           "300": "5 Min.",
+          "label": "Bildschirm verdecken nach",
+          "hint": "So lange bleiben Tastatur und Maus unberührt, bevor die Abdeckung erscheint. Standardmäßig wie der Ruhezustand des Displays.",
           "system": "System"
         }
       }
@@ -14611,7 +14611,11 @@
         "running": "Wird ausgeführt",
         "needsAttention": "Wartet auf deine Eingabe",
         "done": "Abgeschlossen — zum Anzeigen klicken",
-        "error": "Fehlgeschlagen — zum Anzeigen klicken"
+        "error": "Fehlgeschlagen — zum Anzeigen klicken",
+        "runningText": "Läuft",
+        "awaitingText": "Wartet",
+        "errorText": "Fehlgeschlagen",
+        "doneText": "Fertig"
       },
       "scheduleBinding": {
         "label": "Mit Automatisierung verknüpft",
@@ -14884,6 +14888,14 @@
         "priority": "Priorität",
         "activity": "Letzte Aktivität",
         "created": "Erstellungszeit"
+      },
+      "filterSessionStatusHeading": "Sitzungsstatus",
+      "filterSessionStatus": {
+        "all": "Alle",
+        "running": "Wird ausgeführt",
+        "awaiting": "Wartet auf Eingabe",
+        "error": "Fehlgeschlagen",
+        "done": "Abgeschlossen"
       }
     },
     "rename": {

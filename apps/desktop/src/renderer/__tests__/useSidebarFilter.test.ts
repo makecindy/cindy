@@ -46,6 +46,8 @@ import {
   loadPinnedSectionCollapsed,
   persistPinnedSectionCollapsed,
   persistStatus,
+  loadSessionStatus,
+  persistSessionStatus,
   persistProjects,
   persistGroupBy,
   persistLastActivity,
@@ -516,6 +518,20 @@ describe('persist round-trip', () => {
     expect(loadStatus()).toBe('all');
     persistStatus('active');
     expect(loadStatus()).toBe('active');
+  });
+
+  it('persistSessionStatus → loadSessionStatus returns the same value', () => {
+    expect(loadSessionStatus()).toBe('all');
+    persistSessionStatus('running');
+    expect(loadSessionStatus()).toBe('running');
+    persistSessionStatus('awaiting');
+    expect(loadSessionStatus()).toBe('awaiting');
+    persistSessionStatus('error');
+    expect(loadSessionStatus()).toBe('error');
+    persistSessionStatus('done');
+    expect(loadSessionStatus()).toBe('done');
+    persistSessionStatus('all');
+    expect(loadSessionStatus()).toBe('all');
   });
 
   it("persistProjects('all') → loadProjects() returns 'all'", () => {

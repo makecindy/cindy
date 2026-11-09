@@ -92,16 +92,21 @@ import {
   normalizeManualProjectOrder,
   normalizeManualPinnedOrder,
   type FilterStatus,
+  type FilterSessionStatus,
   type FilterProjects,
   type FilterVendor,
   type FilterGroupBy,
   type FilterLastActivity,
   type FilterSortBy,
   type FilterProjectOrder,
+  loadSessionStatus,
+  persistSessionStatus,
+  SESSION_STATUS_KEY,
 } from './helpers/sidebarFilterCore';
 
 export type {
   FilterStatus,
+  FilterSessionStatus,
   FilterProjects,
   FilterVendor,
   FilterGroupBy,
@@ -112,6 +117,7 @@ export type {
 // Re-export storage keys for any caller that needs to clear / migrate them.
 export {
   STATUS_KEY,
+  SESSION_STATUS_KEY,
   PROJECTS_KEY,
   VENDOR_KEY,
   GROUP_BY_KEY,
@@ -126,6 +132,8 @@ export {
 export interface UseSidebarFilterReturn {
   /** Status 维度（默认 'active'）。 */
   status: FilterStatus;
+  /** 按会话运行状态筛选（默认 'all'）。 */
+  sessionStatus: FilterSessionStatus;
   creators: FilterCreators;
   creatorOptions: readonly TaskBotIdentity[];
   toggleCreator: (key: string) => void;
@@ -159,6 +167,7 @@ export interface UseSidebarFilterReturn {
   manualPinnedOrder: readonly string[];
 
   setStatus: (s: FilterStatus) => void;
+  setSessionStatus: (status: FilterSessionStatus) => void;
   /** 含 0 选自动回退到 'all'。 */
   toggleProject: (workingDir: string) => void;
   /** Idempotently include a restored project without toggling an existing selection off. */
@@ -238,6 +247,9 @@ export function useSidebarFilter(
   );
   const [loadedPinned] = useState(() => loadManualPinnedOrder(initialSnapshot));
   const [status, setStatusState] = useState<FilterStatus>(() => loadStatus());
+  const [sessionStatus, setSessionStatusState] = useState<FilterSessionStatus>(() =>
+    loadSessionStatus(),
+  );
   const [projects, setProjectsState] = useState<FilterProjects>(() => loadProjects(ownerId));
   const [storedCreators, setCreators] = useState<FilterCreators>(() => loadCreators(ownerId));
   const normalizeCreators = useCallback((selected: FilterCreators): FilterCreators =>
@@ -459,6 +471,11 @@ export function useSidebarFilter(
     persistStatus(s);
   }, []);
 
+  const setSessionStatus = useCallback((s: FilterSessionStatus) => {
+    setSessionStatusState(s);
+    persistSessionStatus(s);
+  }, []);
+
   const toggleProject = useCallback(
     (workingDir: string) => {
       setProjectsState((prev) => {
@@ -567,6 +584,8 @@ export function useSidebarFilter(
     persistVendor('all');
     setLastActivityState('all');
     persistLastActivity('all');
+    setSessionStatusState('all');
+    persistSessionStatus('all');
   }, [ownerId]);
 
   const setManualProjectOrder = useCallback(
@@ -641,7 +660,12 @@ export function useSidebarFilter(
   );
 
   const isSessionContentFiltered =
-    status !== 'active' || projects !== 'all' || vendor !== 'all' || lastActivity !== 'all' || creators !== 'all';
+    status !== 'active' ||
+    projects !== 'all' ||
+    vendor !== 'all' ||
+    lastActivity !== 'all' ||
+    creators !== 'all' ||
+    sessionStatus !== 'all';
 
   const isFilterActive = isSessionContentFiltered || groupBy !== 'project' || sortBy !== 'recency';
 
@@ -652,6 +676,7 @@ export function useSidebarFilter(
     setCreatorsAll,
     setCreatorsNone,
     status,
+    sessionStatus,
     projects,
     projectsAsSet,
     isFilterActive,
@@ -666,6 +691,7 @@ export function useSidebarFilter(
     manualProjectOrder,
     manualPinnedOrder,
     setStatus,
+    setSessionStatus,
     toggleProject,
     ensureProjectIncluded,
     setProjectsAll,

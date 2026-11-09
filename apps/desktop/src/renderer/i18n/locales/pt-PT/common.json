@@ -2459,12 +2459,12 @@
         "previewStarting": "Largue o rato e o teclado. O ecrã fica tapado dentro de 3 segundos; prima qualquer tecla para o bloquear e, depois, desbloqueie-o.",
         "previewUnavailable": "Não foi possível tapar o ecrã. Reinicie o Cindy e tente novamente.",
         "delay": {
-          "label": "Tapar o ecrã após",
-          "hint": "Tempo sem tocar no teclado nem no rato até a camada aparecer. Por predefinição, igual ao repouso do ecrã.",
           "30": "30 s",
           "60": "1 min",
           "120": "2 min",
           "300": "5 min",
+          "label": "Tapar o ecrã após",
+          "hint": "Tempo sem tocar no teclado nem no rato até a camada aparecer. Por predefinição, igual ao repouso do ecrã.",
           "system": "Sistema"
         }
       }
@@ -14748,7 +14748,11 @@
         "running": "Em execução",
         "needsAttention": "A aguardar a sua resposta",
         "done": "Concluída — clicar para ver",
-        "error": "Falhou — clicar para ver"
+        "error": "Falhou — clicar para ver",
+        "runningText": "A executar",
+        "awaitingText": "A aguardar",
+        "errorText": "Falhou",
+        "doneText": "Concluído"
       },
       "scheduleBinding": {
         "label": "Associada a automatização",
@@ -15027,6 +15031,14 @@
         "priority": "Prioridade",
         "activity": "Atividade recente",
         "created": "Hora de criação"
+      },
+      "filterSessionStatusHeading": "Estado da sessão",
+      "filterSessionStatus": {
+        "all": "Todos",
+        "running": "Em execução",
+        "awaiting": "A aguardar entrada",
+        "error": "Falhou",
+        "done": "Concluído"
       }
     },
     "rename": {

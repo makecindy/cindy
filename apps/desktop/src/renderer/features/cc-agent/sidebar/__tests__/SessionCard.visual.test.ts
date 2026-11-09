@@ -1225,6 +1225,30 @@ describe('SessionCard visual cases', () => {
     expect((rightStatus?.firstElementChild as HTMLElement | null)?.style.backgroundColor).toBe(
       color,
     );
+    expect(rightStatus?.textContent).toBeTruthy();
+
+    // 验证选中态下依然保留语义背景色与文本展示
+    const { container: activeContainer } = render(
+      createElement(SessionCard, {
+        session: visualCase.session,
+        variant: 'list',
+        isActive: true,
+        isRunning: false,
+        isAttached: false,
+        hasAttentionNotification: true,
+        isSelected: false,
+        onClick: vi.fn(),
+        onAction: vi.fn(),
+        onRename: vi.fn(),
+        onTogglePin: vi.fn(),
+        projectOptions: [],
+      }),
+    );
+    const activeRightStatus = activeContainer.querySelector(`[data-sidebar-right-status="${kind}"]`);
+    expect((activeRightStatus?.firstElementChild as HTMLElement | null)?.style.backgroundColor).toBe(
+      color,
+    );
+    expect(activeRightStatus?.textContent).toBeTruthy();
 
     const title = Array.from(container.querySelectorAll('span')).find(
       (node) =>

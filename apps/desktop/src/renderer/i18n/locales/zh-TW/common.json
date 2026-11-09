@@ -2391,12 +2391,12 @@
         "previewStarting": "請放開滑鼠和鍵盤，3 秒後螢幕會被遮住；按任意鍵即可鎖定螢幕，再解鎖試試。",
         "previewUnavailable": "無法遮住螢幕，請重新啟動 Cindy 後再試。",
         "delay": {
-          "label": "離開多久後遮住螢幕",
-          "hint": "鍵盤滑鼠沒人碰這麼久後蓋上遮罩。預設與系統關閉螢幕的時間一致。",
           "30": "30 秒",
           "60": "1 分鐘",
           "120": "2 分鐘",
           "300": "5 分鐘",
+          "label": "離開多久後遮住螢幕",
+          "hint": "鍵盤滑鼠沒人碰這麼久後蓋上遮罩。預設與系統關閉螢幕的時間一致。",
           "system": "跟隨系統"
         }
       }
@@ -14545,7 +14545,11 @@
         "running": "執行中",
         "needsAttention": "等待你處理",
         "done": "已完成 — 點選檢視",
-        "error": "任務出錯 — 點選檢視"
+        "error": "任務出錯 — 點選檢視",
+        "runningText": "執行中",
+        "awaitingText": "等待輸入",
+        "errorText": "失敗",
+        "doneText": "已完成"
       },
       "scheduleBinding": {
         "label": "已繫結自動化",
@@ -14818,6 +14822,14 @@
         "priority": "優先級",
         "activity": "最近活動",
         "created": "建立時間"
+      },
+      "filterSessionStatusHeading": "會話狀態",
+      "filterSessionStatus": {
+        "all": "全部",
+        "running": "執行中",
+        "awaiting": "等待輸入",
+        "error": "執行失敗",
+        "done": "已完成"
       }
     },
     "rename": {

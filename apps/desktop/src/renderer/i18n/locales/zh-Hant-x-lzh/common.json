@@ -2391,12 +2391,12 @@
         "previewStarting": "請釋滑鼠與鍵盤，三秒後屏將覆；按任一鍵即鎖屏，再解之以試。",
         "previewUnavailable": "未能覆屏，請重啟 Cindy 再試。",
         "delay": {
-          "label": "離座幾時而覆屏",
-          "hint": "鍵盤滑鼠無人觸及逾此時，即覆以玄幕。預設同系統熄屏之時。",
           "30": "三十秒",
           "60": "一分",
           "120": "二分",
           "300": "五分",
+          "label": "離座幾時而覆屏",
+          "hint": "鍵盤滑鼠無人觸及逾此時，即覆以玄幕。預設同系統熄屏之時。",
           "system": "從系統"
         }
       }
@@ -14545,7 +14545,11 @@
         "running": "方行",
         "needsAttention": "候君處置",
         "done": "已畢 — 點而覽之",
-        "error": "差事有謬 — 點而覽之"
+        "error": "差事有謬 — 點而覽之",
+        "runningText": "方行",
+        "awaitingText": "待答",
+        "errorText": "未成",
+        "doneText": "已畢"
       },
       "scheduleBinding": {
         "label": "已繫自運",
@@ -14818,6 +14822,14 @@
         "priority": "緩急",
         "activity": "近動",
         "created": "立時"
+      },
+      "filterSessionStatusHeading": "言談狀態",
+      "filterSessionStatus": {
+        "all": "皆是",
+        "running": "方行",
+        "awaiting": "待答",
+        "error": "未成",
+        "done": "已畢"
       }
     },
     "rename": {

@@ -2459,12 +2459,12 @@
         "previewStarting": "Suelta el mouse y el teclado. La pantalla se cubrirá en 3 segundos; pulsa cualquier tecla para bloquearla y luego desbloquéala.",
         "previewUnavailable": "No se pudo cubrir la pantalla. Reinicia Cindy e inténtalo de nuevo.",
         "delay": {
-          "label": "Cubrir la pantalla tras",
-          "hint": "Tiempo sin tocar el teclado ni el mouse antes de que aparezca la capa. Por omisión, el mismo que el reposo de la pantalla.",
           "30": "30 s",
           "60": "1 min",
           "120": "2 min",
           "300": "5 min",
+          "label": "Cubrir la pantalla tras",
+          "hint": "Tiempo sin tocar el teclado ni el mouse antes de que aparezca la capa. Por omisión, el mismo que el reposo de la pantalla.",
           "system": "Sistema"
         }
       }
@@ -14748,7 +14748,11 @@
         "running": "En ejecución",
         "needsAttention": "Esperando tu respuesta",
         "done": "Completada: haz clic para ver",
-        "error": "Fallida: haz clic para ver"
+        "error": "Fallida: haz clic para ver",
+        "runningText": "En ejecución",
+        "awaitingText": "Esperando",
+        "errorText": "Error",
+        "doneText": "Listo"
       },
       "scheduleBinding": {
         "label": "Vinculada a una automatización",
@@ -15027,6 +15031,14 @@
         "priority": "Prioridad",
         "activity": "Actividad reciente",
         "created": "Fecha de creación"
+      },
+      "filterSessionStatusHeading": "Estado de la sesión",
+      "filterSessionStatus": {
+        "all": "Todos",
+        "running": "En ejecución",
+        "awaiting": "Esperando respuesta",
+        "error": "Error",
+        "done": "Completado"
       }
     },
     "rename": {

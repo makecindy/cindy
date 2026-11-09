@@ -43,12 +43,15 @@ export const PINNED_SECTION_COLLAPSED_KEY = 'cc-agent.sidebar.pinnedSectionColla
 export const DIALOGUE_GROUP_ALL_KEY = 'all';
 export const LAST_ACTIVITY_KEY = 'cc-agent.sidebar.filter.lastActivity';
 export const SORT_BY_KEY = 'cc-agent.sidebar.filter.sortBy';
+export const SESSION_STATUS_KEY = 'cc-agent.sidebar.filter.sessionStatus';
 export const PROJECT_ORDER_KEY = 'cc-agent.sidebar.filter.projectOrder';
 export const TASK_INFO_KEY = 'cc-agent.sidebar.filter.taskInfo';
 export const MANUAL_PROJECT_ORDER_KEY = 'cc-agent.sidebar.filter.manualProjectOrder';
 export const MANUAL_PINNED_ORDER_KEY = 'cc-agent.sidebar.pinnedSessionOrder';
 
 export type FilterStatus = 'active' | 'archived' | 'all';
+/** 按会话运行状态筛选（Session Activity Status）。 */
+export type FilterSessionStatus = 'all' | 'running' | 'awaiting' | 'error' | 'done';
 /**
  * 项目筛选里的「对话」哨兵 = 无项目归属的任务。不是真实 projectKey,
  * 不能走路径归一化,也不能被项目 GC 清掉。
@@ -83,6 +86,13 @@ export type TaskInfoField = 'time' | 'pr' | 'worktree' | 'tokens' | 'cost';
 export type ManualProjectDropPosition = 'before' | 'after';
 
 const STATUS_VALUES: ReadonlySet<string> = new Set<FilterStatus>(['active', 'archived', 'all']);
+const SESSION_STATUS_VALUES: ReadonlySet<string> = new Set<FilterSessionStatus>([
+  'all',
+  'running',
+  'awaiting',
+  'error',
+  'done',
+]);
 
 /**
  * Safely access localStorage. Some test / SSR environments may not have it
@@ -118,6 +128,25 @@ export function loadStatus(): FilterStatus {
     return raw as FilterStatus;
   }
   return 'active';
+}
+
+/**
+ * 读 localStorage 中的 sessionStatus；任何异常 / 非法值 → 'all'。
+ */
+export function loadSessionStatus(): FilterSessionStatus {
+  const storage = safeStorage();
+  if (!storage) return 'all';
+  let raw: string | null = null;
+  try {
+    raw = storage.getItem(SESSION_STATUS_KEY);
+  } catch (err) {
+    log.warn('[useSidebarFilter] failed to read sessionStatus:', err);
+    return 'all';
+  }
+  if (raw && SESSION_STATUS_VALUES.has(raw)) {
+    return raw as FilterSessionStatus;
+  }
+  return 'all';
 }
 
 /**
@@ -190,6 +219,20 @@ export function persistStatus(s: FilterStatus): void {
     storage.setItem(STATUS_KEY, s);
   } catch (err) {
     log.warn('[useSidebarFilter] failed to persist status:', err);
+  }
+}
+
+export function persistSessionStatus(s: FilterSessionStatus): void {
+  const storage = safeStorage();
+  if (!storage) return;
+  try {
+    if (s === 'all') {
+      storage.removeItem(SESSION_STATUS_KEY);
+    } else {
+      storage.setItem(SESSION_STATUS_KEY, s);
+    }
+  } catch (err) {
+    log.warn('[useSidebarFilter] failed to persist sessionStatus:', err);
   }
 }
 

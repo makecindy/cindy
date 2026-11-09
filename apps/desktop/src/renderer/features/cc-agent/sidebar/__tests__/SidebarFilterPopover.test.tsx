@@ -49,6 +49,7 @@ function makeFilter(overrides: Partial<UseSidebarFilterReturn> = {}): UseSidebar
     setCreatorsAll: vi.fn(),
     setCreatorsNone: vi.fn(),
     status: 'active',
+    sessionStatus: 'all',
     projects: 'all',
     projectsAsSet: null,
     vendor: 'all',
@@ -62,6 +63,7 @@ function makeFilter(overrides: Partial<UseSidebarFilterReturn> = {}): UseSidebar
     isFilterActive: true,
     setVendor: vi.fn(),
     setStatus: vi.fn(),
+    setSessionStatus: vi.fn(),
     setSortBy: vi.fn(),
     resetContentFilters: vi.fn(),
     ...overrides,
@@ -200,6 +202,20 @@ describe('sidebar display settings menu', () => {
         .map((row) => row.textContent),
     ).toEqual(['项目', '对话']);
     expect(filter.groupDevice).toBe(true);
+  });
+
+  it('supports session activity status filter in content filters', async () => {
+    const filter = makeFilter();
+    render(<Preview filter={filter} />);
+    const submenu = await openSubmenu(/^筛选/);
+    const sessionStatusMenu = await openSubmenu(/^会话状态/);
+    expect(
+      within(sessionStatusMenu)
+        .getAllByRole('menuitem')
+        .map((row) => row.textContent),
+    ).toEqual(['全部', '运行中', '等待输入', '执行失败', '已完成']);
+    fireEvent.click(within(sessionStatusMenu).getByRole('menuitem', { name: '运行中' }));
+    expect(filter.setSessionStatus).toHaveBeenCalledWith('running');
   });
 });
 

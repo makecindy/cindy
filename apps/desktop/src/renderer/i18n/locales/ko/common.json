@@ -2391,12 +2391,12 @@
         "previewStarting": "마우스와 키보드에서 손을 떼세요. 3초 후 화면이 가려지며, 아무 키나 누르면 잠깁니다. 그다음 잠금을 해제해 보세요.",
         "previewUnavailable": "화면을 가리지 못했습니다. Cindy를 다시 시작한 후 다시 시도하세요.",
         "delay": {
-          "label": "화면을 가리기까지",
-          "hint": "키보드와 마우스를 이 시간 동안 건드리지 않으면 가림 화면이 나타납니다. 기본값은 디스플레이 끄기 시간과 같습니다.",
           "30": "30초",
           "60": "1분",
           "120": "2분",
           "300": "5분",
+          "label": "화면을 가리기까지",
+          "hint": "키보드와 마우스를 이 시간 동안 건드리지 않으면 가림 화면이 나타납니다. 기본값은 디스플레이 끄기 시간과 같습니다.",
           "system": "시스템"
         }
       }
@@ -14545,7 +14545,11 @@
         "running": "실행 중",
         "needsAttention": "사용자 조작 대기",
         "done": "완료 — 클릭하여 확인",
-        "error": "오류 — 클릭하여 확인"
+        "error": "오류 — 클릭하여 확인",
+        "runningText": "실행 중",
+        "awaitingText": "입력 대기",
+        "errorText": "실패",
+        "doneText": "완료"
       },
       "scheduleBinding": {
         "label": "자동화 작업에 연결됨",
@@ -14818,6 +14822,14 @@
         "priority": "우선순위",
         "activity": "최근 활동",
         "created": "생성 시간"
+      },
+      "filterSessionStatusHeading": "세션 상태",
+      "filterSessionStatus": {
+        "all": "전체",
+        "running": "실행 중",
+        "awaiting": "입력 대기 중",
+        "error": "실패",
+        "done": "완료"
       }
     },
     "rename": {

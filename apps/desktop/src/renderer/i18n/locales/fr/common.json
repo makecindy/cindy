@@ -2459,12 +2459,12 @@
         "previewStarting": "Lâchez la souris et le clavier. L'écran est masqué dans 3 secondes ; appuyez sur une touche pour le verrouiller, puis déverrouillez-le.",
         "previewUnavailable": "Impossible de masquer l'écran. Redémarrez Cindy et réessayez.",
         "delay": {
-          "label": "Masquer l'écran après",
-          "hint": "Durée sans toucher le clavier ni la souris avant que le cache n'apparaisse. Par défaut, la même que la mise en veille de l'écran.",
           "30": "30 s",
           "60": "1 min",
           "120": "2 min",
           "300": "5 min",
+          "label": "Masquer l'écran après",
+          "hint": "Durée sans toucher le clavier ni la souris avant que le cache n'apparaisse. Par défaut, la même que la mise en veille de l'écran.",
           "system": "Système"
         }
       }
@@ -14748,7 +14748,11 @@
         "running": "En cours d'exécution",
         "needsAttention": "En attente de votre saisie",
         "done": "Terminée : cliquez pour voir",
-        "error": "Échec : cliquez pour voir"
+        "error": "Échec : cliquez pour voir",
+        "runningText": "En cours",
+        "awaitingText": "En attente",
+        "errorText": "Échec",
+        "doneText": "Terminé"
       },
       "scheduleBinding": {
         "label": "Liée à une automatisation",
@@ -15027,6 +15031,14 @@
         "priority": "Priorité",
         "activity": "Activité récente",
         "created": "Date de création"
+      },
+      "filterSessionStatusHeading": "Statut de la session",
+      "filterSessionStatus": {
+        "all": "Tout",
+        "running": "En cours",
+        "awaiting": "En attente de saisie",
+        "error": "Échec",
+        "done": "Terminé"
       }
     },
     "rename": {

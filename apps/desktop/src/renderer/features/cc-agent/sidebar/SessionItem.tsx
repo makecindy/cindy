@@ -1153,7 +1153,7 @@ export const SessionItem = withSidebarNavigation<SessionItemProps>(function Sess
                   {t('cindyMake.code.phases.' + cindyMakePreparing)}
                 </span>
               ) : showRightStatus ? (
-                <SidebarRightStatusIndicator kind={rightStatusKind} isActive={isActive} />
+                <SidebarRightStatusIndicator kind={rightStatusKind} isActive={isActive} showLabel />
               ) : (
                 // 任务信息复选:按用户勾选拼装 pr / worktree / tokens / cost / time;默认仅
                 // time,与旧时间槽渲染等价。全不选 → SessionInfoMeta 渲染 null,槽宽归零。
