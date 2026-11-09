@@ -275,6 +275,34 @@ maker-core 不能依赖 maker-cc-manager（依赖方向相反）。两种收敛�
 - 不把本地 `~/.agents/skills` 或 `~/.claude/plugins` 投递到远端
 - 不在扫描器里对远端做 `realpath`（`RemoteAgentFileOps` 不提供该能力，远端路径比较走字面值归一）
 
+### 远端技能投递现状（2026-11 核对）
+
+实现 C2 时核对加载链路，发现比「插件读错目录」更根本的事实：
+
+| 来源 | 本地 | SSH 远端 |
+|---|---|---|
+| 用户技能 `~/.agents/skills` | 通过链接进入 `~/.claude/skills` | ❌ 没有链接过去 |
+| Cindy 托管技能 | 临时目录 + SDK `plugins` 参数挂载 | ❌ 远端 `startParams` 不含 `plugins` |
+| 插件 skills | 扫描 `~/.claude/plugins` | ❌ `claude-home/plugins` 为空 |
+| 项目级技能 `<wd>/.claude/skills` | ✅ | ✅ 唯一可用 |
+
+`cc-mgr.ts` 对 `claude-home` 只执行 `mkdirSync`，不投递任何内容。
+
+因此 **SSH 会话目前只有项目级技能可用**，全局技能链路整体缺失。这不是本 PR 能修的：需要先决定「远端要不要继承本机技能」这一产品问题（即 C1），以及让 `plugins` 挂载参数能透传到 cc-manager。
+
+**决定：SSH 相关（C1、远端项目级插件）本轮全部搁置**，待有明确使用场景再排期。
+
+### 项目级插件在远端的可行性（已确认，未实现）
+
+链路本身具备：远端项目通过「添加远程项目」登记后，`session.workDir` 就是远端路径，`scanRemoteClaudeSkills` 已有 `workingDir` 分支。
+
+缺两个前提：
+
+1. 远端 `claude-home/plugins` 里没有插件，也没有安装入口
+2. `scanRemoteClaudePluginSkills` 只做 user scope，不读远端项目 settings
+
+结论：技术上可做，但做完菜单里不会多出任何条目，无法验收。
+
 ---
 
 ### 阶段 D：project / local scope 插件
