@@ -88,8 +88,8 @@ const controls = new PluginUiControls({
   listen: receive => window.electronAPI.maker.onPluginUiState(receive),
 });
 
-export function usePluginUiControl(interest: PluginUiInterest, authority: object) {
-  const subscribe = useCallback((changed: () => void) => controls.subscribe(interest, changed), [interest, authority]);
-  const snapshot = useCallback(() => controls.snapshot(interest), [interest, authority]);
+export function usePluginUiControl(interest: PluginUiInterest, authority: object, active = true) {
+  const subscribe = useCallback((changed: () => void) => active ? controls.subscribe(interest, changed) : () => {}, [interest, authority, active]);
+  const snapshot = useCallback(() => active ? controls.snapshot(interest) : undefined, [interest, authority, active]);
   return useSyncExternalStore(subscribe, snapshot, () => undefined);
 }

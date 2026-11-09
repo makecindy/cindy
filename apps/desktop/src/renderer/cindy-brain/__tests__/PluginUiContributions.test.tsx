@@ -28,7 +28,7 @@ beforeEach(() => {
     receive = listener; return () => { receive = undefined; };
   } } } as unknown as typeof window.electronAPI;
 });
-afterEach(async () => { cleanup(); await Promise.resolve(); await Promise.resolve(); });
+afterEach(async () => { cleanup(); await Promise.resolve(); await Promise.resolve(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 it.each([100, 1000])('keeps %i ordinary history rows free of additional payload construction and IPC', (count) => {
   const context = vi.fn(() => ({ message: 'Should not be built' }));
@@ -69,4 +69,54 @@ it('shares a visible control source, applies its update, and releases it when th
   expect(screen.getAllByText('Working')).toHaveLength(2);
   view.unmount(); await act(async () => {});
   expect(host.consumers('planner')).toBeUndefined();
+});
+
+it.each([100, 1000])('subscribes only visible native controls among %i mounted history rows', async count => {
+  let report!: IntersectionObserverCallback;
+  const elements = new Set<Element>();
+  const disconnect = vi.fn();
+  const observe = vi.fn((element: Element) => { elements.add(element); });
+  vi.stubGlobal('IntersectionObserver', class {
+    constructor(callback: IntersectionObserverCallback) { report = callback; }
+    observe = observe;
+    unobserve(element: Element) { elements.delete(element); }
+    disconnect = disconnect;
+  });
+  const ghost: InstalledGhost = { enabled: true, dir: '/fixture', uiCapabilityApproved: true,
+    approval: { state: 'approved', revision: 'one' }, manifest: { schemaVersion: 3, id: 'planner', name: 'Planner',
+      kind: 'chip', entry: 'main.js', version: '1', tools: [], mcpApps: {
+        ui: { resources: [{ uri: 'ui://view', file: 'view.html' }], tools: {} },
+        host: { contributions: [{ id: 'progress', title: 'Ready', position: 'turn.footer', kind: 'status' }] },
+      } } };
+  ghost.approvedHostUi = ghostHostUiApprovalTokens(ghost.manifest); installed.ghosts = [ghost];
+  const view = render(<PluginUiProvider>{Array.from({ length: count }, (_, index) =>
+    <div key={index} data-message-client-id={`message-${index}`}>
+      <PluginUiSlot position="turn.footer" sessionId="task-a" clientId={`message-${index}`} />
+    </div>)}
+  </PluginUiProvider>);
+  await act(async () => {});
+  expect(invoke).not.toHaveBeenCalled();
+  expect(observe).toHaveBeenCalledTimes(count);
+  const visible = [...elements].slice(0, 3);
+  const visibility = (intersecting: boolean) => report(visible.map(target => ({ target, isIntersecting: intersecting })) as IntersectionObserverEntry[], {} as IntersectionObserver);
+  await act(async () => { visibility(true); });
+  expect(host.consumers('planner')).toHaveLength(3);
+  expect(invoke).toHaveBeenCalledTimes(1);
+  expect(invoke.mock.calls[0][1].entries).toHaveLength(3);
+  const documentVisibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden');
+  await act(async () => { document.dispatchEvent(new Event('visibilitychange')); });
+  expect(host.consumers('planner')).toBeUndefined();
+  documentVisibility.mockReturnValue('visible');
+  await act(async () => { document.dispatchEvent(new Event('visibilitychange')); });
+  expect(host.consumers('planner')).toHaveLength(3);
+  await act(async () => { host.publish('planner', 'progress', { sessionId: 'task-a', clientId: 'message-0' }, () => ({ title: 'Changed' })); });
+  expect(screen.getAllByText('Changed')).toHaveLength(1);
+  await act(async () => { visibility(false); });
+  expect(host.consumers('planner')).toBeUndefined();
+  const build = vi.fn(() => ({ title: 'Offscreen' }));
+  host.publish('planner', 'progress', undefined, build);
+  expect(build).not.toHaveBeenCalled();
+  view.unmount();
+  expect(elements.size).toBe(0);
+  expect(disconnect).toHaveBeenCalledTimes(1);
 });

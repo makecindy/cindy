@@ -1,4 +1,4 @@
-import { createContext, useContext, useMemo, useState, lazy, Suspense, type ReactNode } from 'react';
+import { createContext, useContext, useEffect, useMemo, useRef, useState, lazy, Suspense, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { isHostUiPosition, type GhostHostUiContribution, type GhostHostUiPosition } from '@cindy/plugin-protocol';
 import { getApprovedGhostHostUi, type InstalledGhost } from '../../shared/ghost';
@@ -20,6 +20,38 @@ type Directory = ReadonlyMap<GhostHostUiPosition, readonly PluginUiEntry[]>;
 const EMPTY: Directory = new Map();
 const NO_ENTRIES: readonly PluginUiEntry[] = [];
 const DirectoryContext = createContext<Directory>(EMPTY);
+type SlotVisibility = { intersecting: boolean; listeners: Set<(visible: boolean) => void> };
+const observedSlots = new Map<Element, SlotVisibility>();
+let slotObserver: IntersectionObserver | undefined;
+const notifySlotVisibility = (slot: SlotVisibility) => {
+  for (const changed of slot.listeners) changed(slot.intersecting && document.visibilityState !== 'hidden');
+};
+const updateSlotVisibility = () => { for (const slot of observedSlots.values()) notifySlotVisibility(slot); };
+
+/** One browser observer per window; offscreen history does not hold native-state demand. */
+function observeSlotVisibility(element: Element, changed: (visible: boolean) => void): () => void {
+  if (typeof IntersectionObserver === 'undefined') { changed(true); return () => {}; }
+  if (!slotObserver) {
+    slotObserver = new IntersectionObserver(entries => {
+      for (const entry of entries) {
+        const slot = observedSlots.get(entry.target);
+        if (slot) { slot.intersecting = entry.isIntersecting; notifySlotVisibility(slot); }
+      }
+    }, { rootMargin: '80px 0px' });
+    document.addEventListener('visibilitychange', updateSlotVisibility);
+  }
+  let slot = observedSlots.get(element);
+  if (!slot) { slot = { intersecting: false, listeners: new Set() }; observedSlots.set(element, slot); slotObserver.observe(element); }
+  slot.listeners.add(changed); notifySlotVisibility(slot);
+  return () => {
+    slot.listeners.delete(changed);
+    if (!slot.listeners.size) { observedSlots.delete(element); slotObserver?.unobserve(element); }
+    if (!observedSlots.size) {
+      slotObserver?.disconnect(); slotObserver = undefined;
+      document.removeEventListener('visibilitychange', updateSlotVisibility);
+    }
+  };
+}
 export interface PluginUiLauncher {
   ghost: InstalledGhost; instanceId: string; id: string; title: string;
   kind: 'view' | 'command'; view?: string; scope?: string; shortcut?: string;
@@ -121,14 +153,14 @@ export function PluginUiMenu({ sessionId, ghostId }: { sessionId?: string | null
     </DropdownMenuItem>)}</DropdownMenuContent></DropdownMenu>;
 }
 
-function EntryControl({ entry, sessionId, clientId }: { entry: PluginUiEntry; sessionId: string | null; clientId?: string }) {
+function EntryControl({ entry, sessionId, clientId, active }: { entry: PluginUiEntry; sessionId: string | null; clientId?: string; active: boolean }) {
   const { t } = useTranslation();
   const [pending, setPending] = useState(false);
   const [value, setValue] = useState('');
   const action = entry.contribution;
   const interest = useMemo(() => ({ instanceId: entry.instanceId, id: action.id, sessionId,
     ...(clientId ? { clientId } : {}) }), [entry.instanceId, action.id, sessionId, clientId]);
-  const state = usePluginUiControl(interest, entry.ghost);
+  const state = usePluginUiControl(interest, entry.ghost, active);
   const run = async (next?: string) => {
     if (pending || state?.disabled) return;
     setPending(true);
@@ -149,9 +181,22 @@ function EntryControl({ entry, sessionId, clientId }: { entry: PluginUiEntry; se
 export function PluginUiSlot({ position, ...target }: Target & { position: GhostHostUiPosition }) {
   const entries = useEntries(position, target);
   if (!entries.length) return null;
-  return <span className="inline-flex min-w-0 flex-wrap items-center gap-1 [-webkit-app-region:no-drag]">
+  return <PluginUiSlotControls entries={entries} sessionId={target.sessionId ?? null} clientId={target.clientId} />;
+}
+
+function PluginUiSlotControls({ entries, sessionId, clientId }: {
+  entries: readonly PluginUiEntry[]; sessionId: string | null; clientId?: string;
+}) {
+  const root = useRef<HTMLSpanElement>(null);
+  const [active, setActive] = useState(false);
+  useEffect(() => {
+    const element = root.current;
+    // Observe the original message row, whose size is independent of a plugin hiding its control.
+    if (element) return observeSlotVisibility(element.closest('[data-message-client-id]') ?? element.parentElement ?? element, setActive);
+  }, []);
+  return <span ref={root} className="inline-flex min-w-0 flex-wrap items-center gap-1 [-webkit-app-region:no-drag]">
     {entries.map(entry => <EntryControl key={`${entry.instanceId}:${entry.contribution.id}`} entry={entry}
-      sessionId={target.sessionId ?? null} clientId={target.clientId} />)}
+      sessionId={sessionId} clientId={clientId} active={active} />)}
   </span>;
 }
 

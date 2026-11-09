@@ -112,6 +112,7 @@ await publish();
 字段限于 `title/value/disabled/visible`，省略字段恢复声明默认值，不能改变工具、参数、页面或权限。
 需求消息含本插件的 `{id,sessionId,clientId?}`。传 `target:{sessionId,clientId?}` 精确更新对象，
 省略 target 则更新该入口的实际消费者。需求不携带正文，不唤醒休眠插件，也不新增轮询或心跳。
+消息和回合插槽随原消息区域进入、离开视口登记和释放状态需求，窗口隐藏时也释放；更多菜单中的入口仅在菜单打开时登记。
 
 ### 完整示例
 
