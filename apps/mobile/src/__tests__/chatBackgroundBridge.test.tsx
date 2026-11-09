@@ -25,13 +25,35 @@ import { ChatBackgroundBridge } from '../notifications/ChatBackgroundBridge';
 
 beforeEach(() => {
   vi.clearAllMocks(); state.current = true; state.enabled = true; state.permission = 'granted'; state.background = true;
+  native.configureNotifications.mockReset();
   state.me.mockResolvedValue('actor');
 });
 afterEach(() => { cleanup(); vi.useRealTimers(); });
 
 describe('background notification lifecycle', () => {
+  // Unit regression r4512690973: a cold native service can only start while the
+  // Activity has focus. /me still pending when Home is pressed must not delay tasks.
+  // Earlier deadline tests only checked configuration after 8s, missing first startup.
+  it('starts tasks before a pending chat lookup, then adds chat after the Activity loses focus', async () => {
+    vi.useFakeTimers();
+    let resolve!: (actor: string) => void;
+    let focused = true; let running = false;
+    state.me.mockReturnValue(new Promise<string>(done => { resolve = done; }));
+    native.configureNotifications.mockImplementation(async () => {
+      if (!running && !focused) throw new Error('CHAT_OPEN_APP_REQUIRED');
+      running = true;
+    });
+    renderHook(() => ChatBackgroundBridge());
+    await act(async () => {});
+    expect(native.configureNotifications).toHaveBeenCalledWith(expect.objectContaining({ actor: '', taskBase: 'https://relay.example' }));
+    expect(running).toBe(true);
+    focused = false;
+    await act(async () => { await vi.advanceTimersByTimeAsync(1_000); resolve('actor'); });
+    expect(native.configureNotifications).toHaveBeenLastCalledWith(expect.objectContaining({ actor: 'actor', chatBase: 'https://chat.example' }));
+    expect(running).toBe(true);
+  });
   // Unit regression for PR #9349 / r4512525743: the production hook must bind the
-  // native FCM recipient when /me resolves at 9s, beyond the task path's 8s deadline.
+  // native FCM recipient when /me resolves at 9s, beyond the chat lookup's 8s deadline.
   // Existing cases only covered immediate success/failure and sign-out before timeout.
   // Standalone file wall time: 1.42s; fake timers cover the 8s/9s boundary without real waits.
   it.each([true, false])('binds a late chat identity without delaying tasks or enabling a disabled service (background=%s)', async background => {
@@ -47,7 +69,8 @@ describe('background notification lifecycle', () => {
     native.configureNotifications.mockClear();
     await act(async () => { await vi.advanceTimersByTimeAsync(1_000); resolve('late-actor'); });
     expect(native.setIdentity).toHaveBeenCalledWith('late-actor');
-    expect(native.configureNotifications).not.toHaveBeenCalled();
+    if (background) expect(native.configureNotifications).toHaveBeenLastCalledWith(expect.objectContaining({ actor: 'late-actor', chatBase: 'https://chat.example' }));
+    else expect(native.configureNotifications).not.toHaveBeenCalled();
     expect(state.me).toHaveBeenCalledTimes(1);
   });
   it.each(['sign-out', 'disabled', 'permission', 'unmounted', 'new-refresh'])('ignores a late chat identity after %s', async change => {
@@ -104,6 +127,8 @@ describe('background notification lifecycle', () => {
     state.me.mockReturnValue(new Promise<string>(done => { resolve = done; }));
     renderHook(() => ChatBackgroundBridge());
     await waitFor(() => expect(state.me).toHaveBeenCalled());
+    // Task delivery may already be running; sign-out must prevent any later restart.
+    native.configureNotifications.mockClear();
     await act(async () => { state.current = false; state.signedOut?.(true); resolve('old-actor'); });
     expect(native.stop).toHaveBeenCalled();
     expect(native.configureNotifications).not.toHaveBeenCalled();
