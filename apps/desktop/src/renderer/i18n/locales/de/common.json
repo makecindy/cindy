@@ -881,6 +881,7 @@
         "pausedLocal": "Nimmt keine neuen Aufgaben von anderen Computern an",
         "cooling": "In Abkühlphase",
         "coolingUntil": "In Abkühlphase · etwa {{time}} wieder verfügbar",
+        "quotaExhausted": "Kontingent aufgebraucht",
         "offline": "Offline",
         "unreachableHere": "Von diesem Computer aus nicht erreichbar",
         "unavailable": {
@@ -922,9 +923,13 @@
       "description": "Um das Kontingent aller Konten gleichmäßig zu nutzen, sende diese Nachricht über {{label}} ({{quota}}). Die letzten Nachrichten und eine Zusammenfassung werden übernommen; ältere Details können verloren gehen.",
       "quota": "{{left}} % übrig",
       "quotaReset": "{{left}} % übrig · {{reset}}",
-      "confirm": "Wechseln",
-      "cancel": "Abbrechen",
-      "remember": "Ab jetzt automatisch wechseln (nur für diese Aufgabe)"
+      "confirm": "Nur dieses Mal wechseln",
+      "cancel": "Jetzt nicht",
+      "remember": "Künftig ohne Nachfrage automatisch wechseln",
+      "disable": "Nicht automatisch wechseln und nicht erneut fragen",
+      "disableFailed": "Es konnte nicht bestätigt werden, ob deine Auswahl gespeichert wurde. Prüfe die Verbindung und ob Cindy auf dem Computer mit dieser Aufgabe aktuell ist, und versuche es erneut. Diese Nachricht wird wie gewohnt gesendet.",
+      "choiceLabel": "Wechselverhalten (nur diese Aufgabe)",
+      "send": "Nachricht senden"
     },
     "deleteConfirm": {
       "title": "Anbietergruppe {{provider}} löschen?",
@@ -7410,6 +7415,11 @@
         "installedExpand": "Alle {{count}} installierten Plugins anzeigen",
         "installedCollapse": "Weitere installierte Plugins ausblenden",
         "recommendedSection": "Empfohlen",
+        "todayRecommendations": "Heutige Empfehlungen",
+        "marketSection": "Plugin-Marktplatz",
+        "browseMarket": "Plugin-Marktplatz durchsuchen",
+        "searching": "Suche läuft…",
+        "allLoaded": "Alle {{count}} Plugins angezeigt",
         "updatesAvailable": "{{count}} Plugin-Updates verfügbar",
         "updateAll": "Alle aktualisieren",
         "ignoreRound": "Diese Runde überspringen",
@@ -7439,7 +7449,15 @@
       },
       "market": {
         "publisherKind": {
-          "official": "Offiziell"
+          "official": "Offiziell",
+          "community": "Community"
+        },
+        "publisherDescription": {
+          "official": "Von Cindy veröffentlicht und gepflegt",
+          "community": "Von Community-Entwicklern veröffentlicht und gepflegt",
+          "team": "Von deiner Organisation mit berechtigten Mitgliedern geteilt",
+          "custom": "Aus einem hinzugefügten Git- oder lokalen Ordner-Marktplatz",
+          "local": "Aus einer lokalen Datei installiert oder auf diesem Computer entwickelt"
         },
         "scopeAria": "Plugin-Quellen filtern",
         "scope": {
@@ -14129,6 +14147,7 @@
       "taskAutoArchived": "„{{title}}“ archiviert",
       "taskAutoArchivedUndo": "Rückgängig",
       "taskAutoArchivePending": "Wird beim Verlassen dieser Aufgabe archiviert",
+      "taskAutoArchiveBlockedDirty": "„{{title}}“ wurde nicht automatisch archiviert: Der Arbeitsbereich enthält nicht committete Änderungen",
       "taskAutoArchiveCancel": "Abbrechen",
       "taskAutoArchiveCancelled": "Diesmal keine automatische Archivierung",
       "taskArchiveNow": "Jetzt archivieren"
@@ -19775,10 +19794,10 @@
       "useCodex": "Mit Codex anmelden"
     },
     "title": "Abonnementkonten",
-    "note": "Das erste Konto verwendet den Standardordner der CLI. Weitere Konten melden sich separat an. Neue Aufgaben werden verteilt; bestehende Aufgaben behalten ihr Konto.",
     "strategy": "Lastverteilung",
     "add": "Konto hinzufügen",
     "default": "Standardordner",
+    "defaultTag": "Standard",
     "ready": "Verbunden",
     "signedOut": "Anmeldung erforderlich",
     "unavailable": "Status nicht verfügbar",

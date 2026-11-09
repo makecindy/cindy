@@ -26,8 +26,8 @@ import type {
   NightlyLearningView,
 } from '../../../shared/botNightlyLearning';
 
-const ACTION_BUTTON_CLASS =
-  'shrink-0 rounded-full px-2 min-h-6 text-12 text-[var(--text-secondary)] outline-none transition-colors duration-[var(--motion-instant)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)] focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] disabled:opacity-40';
+/** Undo / redo / promote / decline: quiet text actions on the shared Button (§4). */
+const ACTION_BUTTON_PROPS = { variant: 'secondary', tone: 'quiet', size: 'xs', compact: true } as const;
 
 /** `enabled: false` (a teammate on another computer) reads nothing: the review lives on that computer. */
 export function useNightlyLearningView(botId: string, enabled = true) {
@@ -180,14 +180,13 @@ export function BotNightlyLearning({ botId }: { botId: string }) {
                           {item.undone ? t('routines.nightly.undone') : item.reason}
                         </p>
                       </div>
-                      <button
-                        type="button"
-                        className={ACTION_BUTTON_CLASS}
+                      <Button
+                        {...ACTION_BUTTON_PROPS}
                         disabled={busy}
                         onClick={() => void act(() => api.revert(botId, run.id, item.id, !!item.undone))}
                       >
                         {t(item.undone ? 'routines.nightly.redo' : 'routines.nightly.undo')}
-                      </button>
+                      </Button>
                     </div>
                   ))}
                   <div className="h-2" />
@@ -232,14 +231,14 @@ export function BotNightlyLearning({ botId }: { botId: string }) {
                     <p className="mt-px text-12 leading-[1.5] text-[var(--text-secondary)]">{candidate.summary}</p>
                   </div>
                   <div className="flex shrink-0 flex-wrap justify-end gap-0.5">
-                    <button type="button" className={ACTION_BUTTON_CLASS} disabled={busy}
+                    <Button {...ACTION_BUTTON_PROPS} disabled={busy}
                       onClick={() => void act(() => api.candidate(botId, candidate.id, 'promote'))}>
                       {t('routines.nightly.promote')}
-                    </button>
-                    <button type="button" className={ACTION_BUTTON_CLASS} disabled={busy}
+                    </Button>
+                    <Button {...ACTION_BUTTON_PROPS} disabled={busy}
                       onClick={() => void act(() => api.candidate(botId, candidate.id, 'decline'))}>
                       {t('routines.nightly.decline')}
-                    </button>
+                    </Button>
                   </div>
                 </div>
               ))}
