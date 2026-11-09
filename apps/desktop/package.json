@@ -123,6 +123,7 @@
     "@radix-ui/react-switch": "^1.2.6",
     "@radix-ui/react-tooltip": "^1.2.8",
     "@replit/codemirror-lang-csharp": "^6.2.0",
+    "@replit/codemirror-lang-solidity": "^6.0.2",
     "@tanstack/react-virtual": "^3.13.12",
     "@tiptap/core": "^3.22.3",
     "@tiptap/extension-document": "^3.22.3",

@@ -1,13 +1,15 @@
 /**
- * Map highlight.js language aliases (used elsewhere in the app via
- * detectRenderable) to CodeMirror 6 language extensions.
+ * Map file preview language aliases (used with `detectRenderable`) to
+ * CodeMirror 6 language extensions.
  *
- * Two parser sources are wired up:
+ * Three parser sources are wired up:
  *   1. `@codemirror/lang-*` packages — first-class Lezer parsers with the
  *      richest highlighting + indent + folding support. Used for the major
  *      web stack (js/ts/json/css/html/...) and a few popular system langs
  *      (cpp/java/rust/go/python/php/sql/yaml).
- *   2. `@codemirror/legacy-modes` (CodeMirror 5 stream parsers, repackaged for
+ *   2. `@replit/codemirror-lang-solidity` — dedicated Solidity support backed
+ *      by a CodeMirror stream parser.
+ *   3. `@codemirror/legacy-modes` (CodeMirror 5 stream parsers, repackaged for
  *      CM6 via `StreamLanguage.define`) — used for everything else where a
  *      first-party Lezer parser doesn't exist (csharp/kotlin/swift/dart/ruby
  *      /lua/shell/powershell/toml/...). Highlighting quality is good enough
@@ -15,12 +17,13 @@
  *      monospace which looks broken (white text on dark — see why we added
  *      this in the first place).
  *
- * Adding a new language: pick a first-class lang-* if available, else find
- * the matching mode in legacy-modes and wrap with StreamLanguage.define().
- * Then add the alias case below.
+ * Adding a new language: pick a first-class lang-* if available, else use a
+ * compatible package or find the matching mode in legacy-modes and wrap with
+ * StreamLanguage.define(). Then add the alias case below.
  */
 
 import { type Extension } from '@codemirror/state';
+import { tags } from '@lezer/highlight';
 import { StreamLanguage } from '@codemirror/language';
 
 import { python } from '@codemirror/lang-python';
@@ -38,6 +41,7 @@ import { sql } from '@codemirror/lang-sql';
 import { xml } from '@codemirror/lang-xml';
 import { php } from '@codemirror/lang-php';
 import { csharp as csharpLezer } from '@replit/codemirror-lang-csharp';
+import { parser as solidityParser } from '@replit/codemirror-lang-solidity';
 
 import {
   kotlin as legacyKotlin,
@@ -78,6 +82,26 @@ const r = StreamLanguage.define(legacyR);
 const dockerfile = StreamLanguage.define(legacyDockerfile);
 const diff = StreamLanguage.define(legacyDiff);
 const protobuf = StreamLanguage.define(legacyProtobuf);
+
+// The Solidity package's custom tags have no standard parents, so existing
+// themes cannot style them. Keep its grammar and expose our usual semantic roles.
+const solidity = StreamLanguage.define({
+  ...solidityParser,
+  tokenTable: {
+    ...solidityParser.tokenTable,
+    functionName: tags.function(tags.variableName),
+    parameterValue: tags.variableName,
+    addressFunction: tags.function(tags.variableName),
+    errorHandling: tags.keyword,
+    contractRelated: tags.keyword,
+    version: tags.number,
+    etherUnit: tags.unit,
+    doc: tags.docComment,
+    docReserve: tags.docComment,
+    mathematicalAndCryptographic: tags.standard(tags.variableName),
+    abi: tags.standard(tags.variableName),
+  },
+});
 
 export function getCodeMirrorLanguage(alias: string | undefined): Extension | null {
   if (!alias) return null;
@@ -131,6 +155,9 @@ export function getCodeMirrorLanguage(alias: string | undefined): Extension | nu
     case 'cs':
     case 'c#':
       return csharpLezer();
+    case 'solidity':
+    case 'sol':
+      return solidity;
 
     // ── Stream parsers (legacy-modes) ────────────────────────────────────
     case 'kotlin':

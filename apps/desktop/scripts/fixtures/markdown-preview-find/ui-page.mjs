@@ -31,6 +31,8 @@ export default {
       }`,
   },
   cases: {
+    'solidity-preview': { about: '#9479: real TextLightbox renders Solidity syntax and keeps document search' },
+    'solidity-file-body': { about: '#9479: real file-browser editor renders Solidity syntax' },
     default: { about: 'Document-only matching, visible pointer targets, table navigation and Escape order' },
     'background-editor': { about: 'An existing file-editor search yields shortcuts to the foreground preview' },
     'source-find': { about: 'Markdown source search owns Find and Escape ahead of global search' },
@@ -49,6 +51,33 @@ export default {
   },
   async check(page, ui) {
     const findKey = ui.platform === 'darwin' ? 'Meta+f' : 'Control+f';
+    if (ui.case.startsWith('solidity-')) {
+      if (ui.case === 'solidity-preview') await page.getByTestId('open-preview').click();
+      const root = page.locator(ui.case === 'solidity-preview' ? '[data-text-lightbox-card]' : '[data-solidity-file-body]');
+      await root.locator('.cm-content').waitFor();
+      await page.waitForFunction(selector => {
+        const content = document.querySelector(`${selector} .cm-content`);
+        if (!content) return false;
+        const spans = [...content.querySelectorAll('span')];
+        const color = token => {
+          const span = spans.find(el => el.textContent === token);
+          return span ? getComputedStyle(span).color : null;
+        };
+        const keyword = color('contract'), string = color('"hello"');
+        return keyword && string && keyword !== string
+          && keyword !== getComputedStyle(content).color
+          && color('require') === keyword && color('revert') === keyword;
+      }, ui.case === 'solidity-preview' ? '[data-text-lightbox-card]' : '[data-solidity-file-body]');
+      assert.match(await root.locator('.cm-content').innerText(), /string public message = "hello";/);
+      await ui.capture('solidity-highlighted');
+      await page.keyboard.press(findKey);
+      const bar = root.locator('[data-doc-search-bar]');
+      await bar.waitFor();
+      await bar.getByRole('textbox').fill('message');
+      await bar.getByText('1/1', { exact: true }).waitFor();
+      await ui.capture('solidity-search');
+      return;
+    }
     if (ui.case === 'json-preview') {
       await page.getByTestId('open-preview').click();
       const card = page.locator('[data-text-lightbox-card]');

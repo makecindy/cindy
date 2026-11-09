@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { attachmentPreviewKind } from '../attachmentPreview.js';
 import {
   describeTextPreviewFailure,
   formatByteSize,
@@ -11,6 +12,20 @@ import {
 } from '../filePreview.js';
 
 describe('file preview shared model', () => {
+  // #9479 unit: the Desktop text allowlist alone did not reach the shared
+  // attachment/remote entry. A .sol path must use the existing text reader.
+  it('routes Solidity filenames through text preview without treating trailing formats as code', () => {
+    for (const file of ['contracts/Example.sol', 'C:\\contracts\\EXAMPLE.SOL']) {
+      expect(remoteFilePreviewKind(file)).toBe('text');
+      expect(attachmentPreviewKind(file)).toBe('text');
+      expect(isTextFilePreviewCandidate(file)).toBe(true);
+    }
+    for (const file of ['Example.sol.zip', 'Example.sol.png']) {
+      expect(attachmentPreviewKind(file)).not.toBe('text');
+      expect(isTextFilePreviewCandidate(file)).toBe(false);
+    }
+  });
+
   it('formats preview status without implying eager file reads', () => {
     expect(textPreviewStatusText({ status: 'idle' }, true)).toContain('按需读取远程文本预览');
     expect(textPreviewStatusText({ status: 'loading' }, true)).toBe('正在从远程电脑读取文本预览');
