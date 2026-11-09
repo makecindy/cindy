@@ -36,9 +36,6 @@ export function AgentActivityBridge() {
         && (getConnectionState?.(session.deviceLinkDeviceId).status ?? status) === 'online'
         && getPresenceAvailability(session.deviceLinkDeviceId) !== false
         && (!getSubscriptionIdentity || getSubscriptionIdentity(session.deviceLinkDeviceId, ['sessions']) !== null));
-      // Losing reachability is not evidence that the task has finished.
-      if (!online.length && (status !== 'online' || sessions.some(session => session.status === 'active'
-        && session.deviceLinkDeviceId && !session.cacheSeeded && !session.pendingLocalCreation))) return undefined;
       const state = projectAgentActivity(
         online,
         session => remoteSessionStore.getSessionLiveActivity(session.id, session.deviceLinkDeviceId),
@@ -53,6 +50,11 @@ export function AgentActivityBridge() {
         }),
         t('devices.companions.stale'),
       );
+      // An idle online peer cannot attest that an unreachable peer has finished.
+      // Prefer a displayable live activity; otherwise retain the last stale one.
+      if (!state && (status !== 'online' || sessions.some(session => !online.includes(session)
+        && session.status === 'active' && session.deviceLinkDeviceId
+        && !session.cacheSeeded && !session.pendingLocalCreation))) return undefined;
       return state ? JSON.stringify({ accountId, state }) : null;
     }, native);
     const unsubscribe = remoteSessionStore.subscribeHomeStatus(() => controller.sync());
