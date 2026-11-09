@@ -633,6 +633,9 @@ describe('custom-provider-store CRUD (per-runtime)', () => {
     const stored = await getCustomProvider(config.id);
     expect(stored?.runtimes.pi?.videoApi).toBe('xai-videos');
     expect(stored?.runtimes.pi?.supportsImageGeneration).toBeUndefined();
+    // Switching to the MiniMax protocol must survive validation, normalization and the stored read.
+    await updateCustomProvider(config.id, { ...config, runtimes: { pi: { ...config.runtimes.pi, videoApi: 'minimax-videos' } } });
+    expect((await getCustomProvider(config.id))?.runtimes.pi?.videoApi).toBe('minimax-videos');
     const { videoApi: _removed, ...runtime } = config.runtimes.pi;
     await updateCustomProvider(config.id, { ...config, runtimes: { pi: runtime } });
     expect((await getCustomProvider(config.id))?.runtimes.pi?.videoApi).toBeUndefined();

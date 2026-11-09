@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { buildUserProvider } from '@cindy/model-providers';
 import { resolveCustomMediaConnection } from '../../cindy-brain/customMediaConnection.js';
-import { customVideoGuide, validateCustomVideoBody, videoConnectionRevision } from '../customVideoProtocol.js';
+import { customVideoGuide, minimaxVideoGuide, openaiVideoGuide, validateCustomVideoBody, validateMinimaxVideoBody, validateOpenaiVideoBody, videoConnectionRevision } from '../customVideoProtocol.js';
 import { parsePreparedMediaInvocationGuide } from '../../../shared/mediaInvocation.js';
 
 const model = { id: 'private-video', name: 'Video', providerId: 'relay', mode: 'video_generation' as const, modalities: { input: ['text', 'image'], output: ['video'] } };
@@ -65,5 +65,82 @@ describe('custom xAI Videos protocol', () => {
     for (const image of [undefined, [], { url: 'file:///private/file' }, { url: 'data:video/mp4;base64,AA==' }, { url: 'https://example.com/p.png', last_frame: 'other' }]) {
       expect(() => validateCustomVideoBody({ prompt: 'cat', image }, true)).toThrow();
     }
+  });
+
+  // MiniMax V2 paths are /v2/... at the API root; keeping the chat route's /v1 would send /v1/v2/...
+  // The relay /v1/videos API stays under /v1.
+  it.each([
+    ['minimax-videos', 'https://api.tu-zi.com/v1', 'https://api.tu-zi.com'],
+    ['minimax-videos', 'https://api.minimax.io', 'https://api.minimax.io'],
+    ['minimax-videos', 'https://gw.example/minimax/v1', 'https://gw.example/minimax'],
+    ['openai-videos', 'https://api.tu-zi.com/v1', 'https://api.tu-zi.com/v1'],
+  ] as const)('roots the %s connection for %s at %s', (videoApi, baseUrl, expected) => {
+    const provider = buildUserProvider({ id: 'relay', name: 'Relay', runtimes: {
+      pi: { baseUrl, wireProtocol: 'openai-chat', videoApi, models: [{ ...model }] },
+    } });
+    const options = { getProvider: () => provider, readApiKey: () => 'test-video-key', isOwnerBoundaryPending: () => false };
+    expect(resolveCustomMediaConnection(options, model.id, 'video')).toMatchObject({ agent: 'pi', baseUrl: expected, videoApi });
+  });
+
+  it.each(['video.generate', 'video.image_to_video'] as const)('persists the MiniMax %s guide without a credential', capability => {
+    const guide = minimaxVideoGuide(model, capability, '1:opaque-binding');
+    expect(parsePreparedMediaInvocationGuide(JSON.parse(JSON.stringify(guide)))).toMatchObject({ ok: true });
+    expect(guide.request.path).toBe('/v2/video_generation');
+  });
+
+  const text = { type: 'text', text: 'cat' };
+  const frame = (role?: string) => ({ type: 'image_url', image_url: { url: `cindy-media://blobs/${'a'.repeat(64)}.png` }, ...(role ? { role } : {}) });
+  const t2v = { content: [text], resolution: '768P', duration: 6, ratio: '16:9' };
+  const i2v = { content: [text, frame()], resolution: '2K', duration: 4 };
+  it.each([
+    ['unknown field', { ...t2v, seed: 1 }, false],
+    ['missing resolution', { ...t2v, resolution: undefined }, false],
+    ['duration below 4', { ...t2v, duration: 3 }, false],
+    ['missing text-to-video ratio', { ...t2v, ratio: undefined }, false],
+    ['adaptive text-to-video ratio', { ...t2v, ratio: 'adaptive' }, false],
+    ['two prompts', { ...t2v, content: [text, text] }, false],
+    ['image in text-to-video', { ...t2v, content: [text, frame()] }, false],
+    ['no frame', { ...i2v, content: [text] }, true],
+    ['reference image', { ...i2v, content: [text, frame('reference_image')] }, true],
+    ['two first frames', { ...i2v, content: [text, frame(), frame('first_frame')] }, true],
+    ['local file reference', { ...i2v, content: [text, { type: 'image_url', image_url: { url: 'file:///private/file' } }] }, true],
+  ] as const)('rejects a MiniMax body with %s before payment', (_name, body, image) => {
+    expect(() => validateMinimaxVideoBody(JSON.parse(JSON.stringify(body)), image)).toThrow();
+  });
+  it('accepts MiniMax text-to-video and first plus last frame bodies', () => {
+    expect(() => validateMinimaxVideoBody(t2v, false)).not.toThrow();
+    expect(() => validateMinimaxVideoBody({ ...i2v, content: [text, frame('first_frame'), frame('last_frame')], ratio: 'adaptive' }, true)).not.toThrow();
+  });
+
+  // Relay /v1/videos (tu-zi style). Result hosts trust only the configured relay; an IP relay asks for every download.
+  it.each([
+    ['https://api.tu-zi.com/v1', ['api.tu-zi.com']],
+    ['http://127.0.0.1:3000/v1', ['example.invalid']],
+  ])('persists the relay /v1/videos guide for %s', (baseUrl, hosts) => {
+    for (const capability of ['video.generate', 'video.image_to_video'] as const) {
+      const guide = openaiVideoGuide(model, capability, '1:opaque-binding', baseUrl);
+      expect(parsePreparedMediaInvocationGuide(JSON.parse(JSON.stringify(guide)))).toMatchObject({ ok: true });
+      expect(guide.response.mode === 'async' && guide.response.poll.media.map(item => item.allowedUrlHosts)).toEqual([hosts, hosts]);
+    }
+  });
+
+  // The body tu-zi documents for MiniMax-H3 on /v1/videos (model is injected by Cindy).
+  const tuzi = { content: [{ text: '一个男孩在海边打篮球', type: 'text' }], duration: 5, ratio: '16:9', resolution: '768P', prompt: '一个男孩在海边打篮球', seconds: '8', size: '1280x720', watermark: false };
+  it.each([
+    ['unknown field', { ...tuzi, input_reference: 'https://example.com/a.png' }, false],
+    ['missing prompt', { ...tuzi, prompt: '' }, false],
+    ['numeric seconds', { ...tuzi, seconds: 8 }, false],
+    ['adaptive text-to-video ratio', { ...tuzi, ratio: 'adaptive' }, false],
+    ['string watermark', { ...tuzi, watermark: 'no' }, false],
+    ['image in text-to-video content', { ...tuzi, content: [text, frame()] }, false],
+    ['image-to-video without frames', { prompt: 'cat' }, true],
+    ['reference image', { prompt: 'cat', content: [text, frame('reference_image')] }, true],
+  ] as const)('rejects a relay /v1/videos body with %s before payment', (_name, body, image) => {
+    expect(() => validateOpenaiVideoBody(JSON.parse(JSON.stringify(body)), image)).toThrow();
+  });
+  it('accepts the tu-zi text-to-video body, a minimal prompt, and first-frame image-to-video', () => {
+    expect(() => validateOpenaiVideoBody(tuzi, false)).not.toThrow();
+    expect(() => validateOpenaiVideoBody({ prompt: 'cat' }, false)).not.toThrow();
+    expect(() => validateOpenaiVideoBody({ prompt: 'cat', content: [text, frame('first_frame')], ratio: 'adaptive' }, true)).not.toThrow();
   });
 });

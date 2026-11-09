@@ -44,7 +44,17 @@ import {
   type ProviderMediaRuntimeModel,
   type ProviderVideoConnection,
 } from './providerMediaRuntime.js';
-import { CLIENT_PROVIDER_VIDEO_GUIDE_ID, customVideoGuide, validateCustomVideoBody } from './customVideoProtocol.js';
+import {
+  CLIENT_PROVIDER_MINIMAX_VIDEO_GUIDE_ID,
+  CLIENT_PROVIDER_OPENAI_VIDEO_GUIDE_ID,
+  CLIENT_PROVIDER_VIDEO_GUIDE_ID,
+  customVideoGuide,
+  minimaxVideoGuide,
+  openaiVideoGuide,
+  validateCustomVideoBody,
+  validateMinimaxVideoBody,
+  validateOpenaiVideoBody,
+} from './customVideoProtocol.js';
 import { fetchVideoTaskContent, isVideoTaskContentRef } from './videoTaskContent.js';
 import { sniffMediaMime, additionalMp3BytesNeeded } from './sniffMediaMime.js';
 import {
@@ -268,7 +278,15 @@ function isClientProviderInvocation(invocation: StoredMediaInvocation): boolean 
 }
 
 function isClientVideoInvocation(invocation: StoredMediaInvocation): boolean {
-  return invocation.guide.guideId === CLIENT_PROVIDER_VIDEO_GUIDE_ID;
+  return [CLIENT_PROVIDER_VIDEO_GUIDE_ID, CLIENT_PROVIDER_MINIMAX_VIDEO_GUIDE_ID, CLIENT_PROVIDER_OPENAI_VIDEO_GUIDE_ID]
+    .includes(invocation.guide.guideId);
+}
+
+function validateClientVideoBody(invocation: StoredMediaInvocation, body: Record<string, unknown>): void {
+  const validate = invocation.guide.guideId === CLIENT_PROVIDER_MINIMAX_VIDEO_GUIDE_ID ? validateMinimaxVideoBody
+    : invocation.guide.guideId === CLIENT_PROVIDER_OPENAI_VIDEO_GUIDE_ID ? validateOpenaiVideoBody : validateCustomVideoBody;
+  try { validate(body, invocation.capability === 'video.image_to_video'); }
+  catch (error) { throw new MediaInvocationError('REQUEST_INVALID', (error as Error).message); }
 }
 
 function resolveInvocationConnection(invocation: StoredMediaInvocation): MediaConnection {
@@ -1284,10 +1302,12 @@ async function prepareInvocation(
     }
     if (capability === 'image.generate' || capability === 'image.edit') {
       preparedGuide = providerImageGuide(providerModel, capability);
-    } else if (providerModel.videoProtocol === 'xai-videos') {
+    } else if (providerModel.videoProtocol) {
       const connection = resolveProviderVideoConnection(model.providerId, resolvedModelId);
       if (!connection) return failure('CONNECTION_UNAVAILABLE', '视频来源的接口或凭证未就绪');
-      preparedGuide = customVideoGuide(providerModel, capability, connection.revision);
+      preparedGuide = providerModel.videoProtocol === 'openai-videos'
+        ? openaiVideoGuide(providerModel, capability, connection.revision, connection.baseUrl)
+        : (providerModel.videoProtocol === 'minimax-videos' ? minimaxVideoGuide : customVideoGuide)(providerModel, capability, connection.revision);
     } else {
       return failure('CAPABILITY_NOT_SUPPORTED', '该第三方 Provider 当前不支持请求的媒体能力');
     }
@@ -1463,17 +1483,13 @@ async function submitInvocation(
     return failure('MODEL_NOT_AVAILABLE', '该模型已下架或被停用，本次生成未发出');
   }
   let validatedBody = body;
-  if (isClientVideoInvocation(invocation)) {
-    try { validateCustomVideoBody(body, invocation.capability === 'video.image_to_video'); }
-    catch (error) { throw new MediaInvocationError('REQUEST_INVALID', (error as Error).message); }
-  }
+  if (isClientVideoInvocation(invocation)) validateClientVideoBody(invocation, body);
   const requestBody = await prepareRequestBody(validatedBody, invocation.guide);
   assertAuthScope(scope, invocation.owner);
   if (isClientVideoInvocation(invocation)) {
     // Managed refs have now become data URLs with their actual stored media MIME.
     const { model: _injectedModel, ...videoBody } = requestBody;
-    try { validateCustomVideoBody(videoBody, invocation.capability === 'video.image_to_video'); }
-    catch (error) { throw new MediaInvocationError('REQUEST_INVALID', (error as Error).message); }
+    validateClientVideoBody(invocation, videoBody);
   }
   let connection: MediaConnection;
   try {

@@ -1,4 +1,4 @@
-import type { MediaCapability } from '@cindy/model-providers';
+import type { MediaCapability, ProviderVideoApi } from '@cindy/model-providers';
 import type { ImageParameters, ImageProtocol } from './imageParameters.js';
 import { supportsMediaCapability } from './mediaCapabilities.js';
 
@@ -10,7 +10,7 @@ export interface ProviderMediaRuntimeModel {
   modalities: { input: string[]; output: string[] };
   officialDocs?: string;
   imageProtocol?: ImageProtocol;
-  videoProtocol?: 'xai-videos';
+  videoProtocol?: ProviderVideoApi;
 }
 
 export interface ProviderVideoConnection {
