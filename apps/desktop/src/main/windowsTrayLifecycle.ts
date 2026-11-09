@@ -7,13 +7,6 @@ export interface WindowsTrayWindow {
   setFullScreen(fullScreen: boolean): void;
 }
 
-/** Dependencies for applying the same active-turn protection to tray-menu quit. */
-export interface WindowsTrayQuitDependencies {
-  hasActiveTurn(): boolean;
-  confirmQuit(): boolean;
-  quit(): void;
-}
-
 /** Tray surface needed to confirm the JS-driven menu still has a live icon. */
 export interface WindowsTrayMenuHost {
   isDestroyed(): boolean;
@@ -96,10 +89,4 @@ export function hideWindowToWindowsTray(window: WindowsTrayWindow): void {
     if (!window.isDestroyed()) window.hide();
   });
   window.setFullScreen(false);
-}
-
-/** Quit directly while idle, but require explicit confirmation during an active turn. */
-export function requestWindowsTrayQuit(deps: WindowsTrayQuitDependencies): void {
-  if (deps.hasActiveTurn() && !deps.confirmQuit()) return;
-  deps.quit();
 }

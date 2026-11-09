@@ -26,7 +26,7 @@ function installWindowsApi(closeBehavior: 'quit' | 'tray' | null) {
     return vi.fn();
   });
   const notifyWindowsCloseBehaviorPromptShown = vi.fn();
-  const anySessionInTurn = vi.fn(async () => false);
+  const quitNeedsConfirmation = vi.fn(async () => false);
   const windowClose = vi.fn();
   Object.defineProperty(window, 'electronAPI', {
     configurable: true,
@@ -37,8 +37,8 @@ function installWindowsApi(closeBehavior: 'quit' | 'tray' | null) {
         setWindowsCloseBehavior,
         onWindowsCloseBehaviorRequested,
         notifyWindowsCloseBehaviorPromptShown,
+        quitNeedsConfirmation,
       },
-      anySessionInTurn,
       windowClose,
       windowMinimize: vi.fn(),
       windowMaximize: vi.fn(),
@@ -49,7 +49,7 @@ function installWindowsApi(closeBehavior: 'quit' | 'tray' | null) {
     setWindowsCloseBehavior,
     onWindowsCloseBehaviorRequested,
     notifyWindowsCloseBehaviorPromptShown,
-    anySessionInTurn,
+    quitNeedsConfirmation,
     windowClose,
     requestCloseBehavior: () => closeBehaviorRequested?.(),
   };
@@ -64,7 +64,7 @@ function installLinuxApi(closeBehavior: 'quit' | 'minimize' | null) {
     return vi.fn();
   });
   const notifyLinuxCloseBehaviorPromptShown = vi.fn();
-  const anySessionInTurn = vi.fn(async () => false);
+  const quitNeedsConfirmation = vi.fn(async () => false);
   const windowClose = vi.fn();
   const windowMinimize = vi.fn();
   Object.defineProperty(window, 'electronAPI', {
@@ -76,8 +76,8 @@ function installLinuxApi(closeBehavior: 'quit' | 'minimize' | null) {
         setLinuxCloseBehavior,
         onLinuxCloseBehaviorRequested,
         notifyLinuxCloseBehaviorPromptShown,
+        quitNeedsConfirmation,
       },
-      anySessionInTurn,
       windowClose,
       windowMinimize,
       windowMaximize: vi.fn(),
@@ -88,7 +88,7 @@ function installLinuxApi(closeBehavior: 'quit' | 'minimize' | null) {
     setLinuxCloseBehavior,
     onLinuxCloseBehaviorRequested,
     notifyLinuxCloseBehaviorPromptShown,
-    anySessionInTurn,
+    quitNeedsConfirmation,
     windowClose,
     windowMinimize,
     requestCloseBehavior: () => closeBehaviorRequested?.(),
@@ -120,7 +120,7 @@ describe.each(['win32', 'linux'] as const)('%s close prompt dismissal', (platfor
     expect(setBehavior).not.toHaveBeenCalled();
     expect(api.windowClose).not.toHaveBeenCalled();
     expect(window.electronAPI.windowMinimize).not.toHaveBeenCalled();
-    expect(api.anySessionInTurn).not.toHaveBeenCalled();
+    expect(api.quitNeedsConfirmation).not.toHaveBeenCalled();
     act(() => api.requestCloseBehavior());
     expect(await screen.findByRole('alertdialog')).toBeTruthy();
   });
@@ -191,7 +191,7 @@ describe('Windows close behavior', () => {
 
     await waitFor(() => expect(api.windowClose).toHaveBeenCalledTimes(1));
     expect(api.getWindowsCloseBehavior).toHaveBeenCalledTimes(1);
-    expect(api.anySessionInTurn).not.toHaveBeenCalled();
+    expect(api.quitNeedsConfirmation).not.toHaveBeenCalled();
   });
 
   it('keeps the existing quit protection flow when quit is selected', async () => {
@@ -202,7 +202,33 @@ describe('Windows close behavior', () => {
 
     await waitFor(() => expect(api.windowClose).toHaveBeenCalledTimes(1));
     expect(api.getWindowsCloseBehavior).toHaveBeenCalledTimes(1);
-    expect(api.anySessionInTurn).toHaveBeenCalledTimes(1);
+    expect(api.quitNeedsConfirmation).toHaveBeenCalledTimes(1);
+    // The renderer already ran the guard, so main must not show its native confirm too.
+    expect(api.windowClose).toHaveBeenCalledWith({ activeTurnChecked: true });
+  });
+
+  // The X used to treat a rejected busy probe as idle and quit without asking, while tray Quit
+  // treated the same failure as busy. Both now fail closed: the X shows its confirm dialog,
+  // and only the user's confirmation sends the already-checked quit to main.
+  it.each([
+    ['busy', async (): Promise<boolean> => true],
+    [
+      'probe failure',
+      async (): Promise<boolean> => {
+        throw new Error('No handler registered');
+      },
+    ],
+  ] as const)('confirms before quitting on %s', async (_label, probe) => {
+    const api = installWindowsApi('quit');
+    api.quitNeedsConfirmation.mockImplementation(probe);
+    render(<WindowControls />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'titleBar.close' }));
+
+    expect(await screen.findByText('titleBar.closeConfirm.title')).toBeTruthy();
+    expect(api.windowClose).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'titleBar.closeConfirm.confirm' }));
+    expect(api.windowClose).toHaveBeenCalledExactlyOnceWith({ activeTurnChecked: true });
   });
 
   it('uses the Cindy dialog for the first close and persists the safe tray choice', async () => {
@@ -218,7 +244,7 @@ describe('Windows close behavior', () => {
 
     await waitFor(() => expect(api.setWindowsCloseBehavior).toHaveBeenCalledWith('tray'));
     await waitFor(() => expect(api.windowClose).toHaveBeenCalledTimes(1));
-    expect(api.anySessionInTurn).not.toHaveBeenCalled();
+    expect(api.quitNeedsConfirmation).not.toHaveBeenCalled();
   });
 
   it('opens the same dialog for a native Windows close request', async () => {
@@ -234,7 +260,7 @@ describe('Windows close behavior', () => {
     );
 
     await waitFor(() => expect(api.setWindowsCloseBehavior).toHaveBeenCalledWith('quit'));
-    await waitFor(() => expect(api.anySessionInTurn).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(api.quitNeedsConfirmation).toHaveBeenCalledTimes(1));
     expect(api.windowClose).toHaveBeenCalledTimes(1);
   });
 
@@ -261,7 +287,7 @@ describe('Linux close behavior', () => {
 
     await waitFor(() => expect(api.windowMinimize).toHaveBeenCalledTimes(1));
     expect(api.getLinuxCloseBehavior).toHaveBeenCalledTimes(1);
-    expect(api.anySessionInTurn).not.toHaveBeenCalled();
+    expect(api.quitNeedsConfirmation).not.toHaveBeenCalled();
     expect(api.windowClose).not.toHaveBeenCalled();
   });
 
@@ -279,7 +305,7 @@ describe('Linux close behavior', () => {
 
     await waitFor(() => expect(api.setLinuxCloseBehavior).toHaveBeenCalledWith('minimize'));
     await waitFor(() => expect(api.windowMinimize).toHaveBeenCalledTimes(1));
-    expect(api.anySessionInTurn).not.toHaveBeenCalled();
+    expect(api.quitNeedsConfirmation).not.toHaveBeenCalled();
   });
 
   it('keeps the existing quit protection flow when quit is selected', async () => {
@@ -289,7 +315,7 @@ describe('Linux close behavior', () => {
     fireEvent.click(screen.getByRole('button', { name: 'titleBar.close' }));
 
     await waitFor(() => expect(api.windowClose).toHaveBeenCalledTimes(1));
-    expect(api.anySessionInTurn).toHaveBeenCalledTimes(1);
+    expect(api.quitNeedsConfirmation).toHaveBeenCalledTimes(1);
     expect(api.windowMinimize).not.toHaveBeenCalled();
   });
 

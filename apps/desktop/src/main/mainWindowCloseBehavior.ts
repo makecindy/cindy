@@ -1,5 +1,94 @@
-import type { LinuxCloseBehavior } from '../shared/windowBehavior.js';
+import type { LinuxCloseBehavior, WindowsCloseBehavior } from '../shared/windowBehavior.js';
 import type { WindowsTrayWindow } from './windowsTrayLifecycle.js';
+
+/**
+ * Read the "is a turn running?" probe for quit protection. A probe that throws is an unknown
+ * state, and every quit path treats unknown as busy: confirming once too often is recoverable,
+ * silently killing a running task is not.
+ */
+export function readActiveTurnForQuit(probe: () => boolean): boolean {
+  try {
+    return probe();
+  } catch {
+    return true;
+  }
+}
+
+/** Side effects for the single active-turn quit guard shared by every app-quit entry point. */
+export interface ActiveTurnQuitGuardDependencies {
+  /** Raw busy probe; a throw is handled by {@link readActiveTurnForQuit}. */
+  hasActiveTurn(): boolean;
+  confirmQuit(): boolean;
+  quit(): void;
+}
+
+export interface ActiveTurnQuitGuardOptions {
+  /**
+   * The main-window renderer already asked main for the busy state and, when busy, the user
+   * confirmed in its own dialog. Skips the native confirmation so one close never prompts twice.
+   */
+  activeTurnChecked?: boolean;
+}
+
+/** Quit directly while idle, but require explicit confirmation during an active turn. */
+export function requestActiveTurnGuardedQuit(
+  deps: ActiveTurnQuitGuardDependencies,
+  options: ActiveTurnQuitGuardOptions = {},
+): void {
+  if (
+    !options.activeTurnChecked &&
+    readActiveTurnForQuit(() => deps.hasActiveTurn()) &&
+    !deps.confirmQuit()
+  ) {
+    return;
+  }
+  deps.quit();
+}
+
+/** Platform policy inputs for a Windows / Linux main-window close request. */
+export interface MainWindowCloseRequestDependencies {
+  platform: NodeJS.Platform;
+  readWindowsCloseBehavior(): WindowsCloseBehavior | null;
+  readLinuxCloseBehavior(): LinuxCloseBehavior | null;
+  /** First close without a saved choice: ask, then the chooser applies the answer. */
+  requestWindowsCloseBehavior(): void;
+  requestLinuxCloseBehavior(): void;
+  hideToTray(): void;
+  minimize(): void;
+  quitGuard: ActiveTurnQuitGuardDependencies;
+}
+
+/**
+ * Apply the main window's close policy for native closes (Alt+F4, taskbar, window manager) and
+ * the custom title-bar X alike. macOS hide-on-close stays with the Electron adapter.
+ */
+export function handleMainWindowCloseRequest(
+  deps: MainWindowCloseRequestDependencies,
+  options: ActiveTurnQuitGuardOptions = {},
+): void {
+  const quit = (): void => requestActiveTurnGuardedQuit(deps.quitGuard, options);
+  if (deps.platform === 'win32') {
+    const behavior = deps.readWindowsCloseBehavior();
+    if (!behavior) {
+      deps.requestWindowsCloseBehavior();
+    } else if (behavior === 'tray') {
+      deps.hideToTray();
+    } else {
+      quit();
+    }
+    return;
+  }
+  if (deps.platform === 'linux') {
+    const behavior = deps.readLinuxCloseBehavior();
+    if (!behavior) {
+      deps.requestLinuxCloseBehavior();
+      return;
+    }
+    applyLinuxMainWindowCloseBehavior({ minimize: deps.minimize }, behavior, quit, deps.minimize);
+    return;
+  }
+  quit();
+}
 
 /** Only the latest pending fullscreen hide may change a window's visibility. */
 const pendingHides = new WeakMap<object, () => void>();

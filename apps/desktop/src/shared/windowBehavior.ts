@@ -33,6 +33,14 @@ export const WINDOW_BEHAVIOR_LINUX_CLOSE_BEHAVIOR_REQUESTED_CHANNEL =
 export const WINDOW_BEHAVIOR_LINUX_CLOSE_BEHAVIOR_SHOWN_CHANNEL =
   'window-behavior:linux-close-behavior-shown';
 
+/**
+ * Main-owned active-turn probe for the main window's quit confirmation. Registered with the
+ * window IPC at startup (not with the maker IPC after splash), so it answers during splash/login.
+ * A probe failure resolves to true: quitting is confirmed rather than allowed blindly.
+ */
+export const WINDOW_BEHAVIOR_QUIT_NEEDS_CONFIRMATION_CHANNEL =
+  'window-behavior:quit-needs-confirmation';
+
 export function isWindowsCloseBehavior(value: unknown): value is WindowsCloseBehavior {
   return value === 'quit' || value === 'tray';
 }

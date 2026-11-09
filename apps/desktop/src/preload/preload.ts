@@ -121,6 +121,7 @@ import type { AgentProxyTunnelState, SshHostAgentProxyPref } from '../shared/age
 import {
   WINDOW_BEHAVIOR_GET_LINUX_CLOSE_BEHAVIOR_CHANNEL,
   WINDOW_BEHAVIOR_GET_WINDOWS_CLOSE_BEHAVIOR_CHANNEL,
+  WINDOW_BEHAVIOR_QUIT_NEEDS_CONFIRMATION_CHANNEL,
   WINDOW_BEHAVIOR_LINUX_CLOSE_BEHAVIOR_REQUESTED_CHANNEL,
   WINDOW_BEHAVIOR_LINUX_CLOSE_BEHAVIOR_SHOWN_CHANNEL,
   WINDOW_BEHAVIOR_SET_LINUX_CLOSE_BEHAVIOR_CHANNEL,
@@ -1311,7 +1312,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   windowMinimize: () => ipcRenderer.send('window-minimize'),
   windowMaximize: () => ipcRenderer.send('window-maximize'),
   windowExitFullscreen: () => ipcRenderer.send('window-exit-fullscreen'),
-  windowClose: () => ipcRenderer.send('window-close'),
+  /**
+   * 自定义 X。主窗按关闭行为处理;`activeTurnChecked` 表示 renderer 已用
+   * windowBehavior.quitNeedsConfirmation 查过、忙时也已让用户确认,main 不再二次弹窗。
+   */
+  windowClose: (options?: { activeTurnChecked?: boolean }) =>
+    ipcRenderer.send('window-close', options),
   /**
    * 手动窗口拖拽(no-drag 元素上"按住拖动移动窗口"):start 后 main 用光标
    * 位置驱动本窗口跟随,直到 stop。见 main/windowManualDrag.ts。
@@ -1324,9 +1330,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
    */
   windowCloseSelf: () => ipcRenderer.send('window-close-self'),
   /**
-   * 查询当前是否有 session 在 turn 中。WindowControls 用它决定关闭按钮是否弹确认框。
-   * splash / login 阶段 maker-ipc handler 还没注册时,invoke 会 reject — 由调用方
-   * catch 后兜底当作 false (那个阶段本来就不可能有 in-flight)。
+   * 查询当前是否有 session 在 turn 中(maker IPC,splash 之后才注册,之前 invoke 会 reject)。
+   * 关闭 / 退出确认不要用它,用 windowBehavior.quitNeedsConfirmation(main 的统一判定)。
    */
   anySessionInTurn: (): Promise<boolean> => ipcRenderer.invoke('maker:any-session-in-turn'),
   pageZoomIn: (): Promise<{ ok: true; zoomFactor: number }> => ipcRenderer.invoke('page-zoom:in'),
@@ -2159,6 +2164,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     // swallow 的即时开关由 renderer 本地读 localStorage 完成。
     setSwallowActivationClick: (enabled: boolean): Promise<{ ok: true }> =>
       ipcRenderer.invoke(WINDOW_BEHAVIOR_SET_SWALLOW_ACTIVATION_CLICK_CHANNEL, enabled),
+    /** Main 侧的退出确认判定(有 turn 在跑或判定失败 → true),splash / login 阶段也可用。 */
+    quitNeedsConfirmation: (): Promise<boolean> =>
+      ipcRenderer.invoke(WINDOW_BEHAVIOR_QUIT_NEEDS_CONFIRMATION_CHANNEL),
     getWindowsCloseBehavior: (): Promise<WindowsCloseBehavior | null> =>
       ipcRenderer.invoke(WINDOW_BEHAVIOR_GET_WINDOWS_CLOSE_BEHAVIOR_CHANNEL),
     setWindowsCloseBehavior: (behavior: WindowsCloseBehavior): Promise<WindowsCloseBehavior> =>

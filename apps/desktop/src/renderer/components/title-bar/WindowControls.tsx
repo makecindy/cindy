@@ -118,11 +118,12 @@ export function WindowControls({
 
   // 进入 closing 态 + 调 main 端关闭。同时被"点 X 无 in-flight 直走"和 ConfirmDialog
   // 的 onConfirm 调用,共用一份语义。幂等: closingRef 守住重复调用。
+  // 两条路都已过了 turn 确认,带 activeTurnChecked 让 main 不再弹原生确认框。
   const beginClose = (): void => {
     if (closingRef.current) return;
     closingRef.current = true;
     setClosing(true);
-    window.electronAPI.windowClose();
+    window.electronAPI.windowClose({ activeTurnChecked: true });
   };
 
   const continueCloseWithBehavior = async (behavior: DesktopCloseBehavior): Promise<void> => {
@@ -135,11 +136,12 @@ export function WindowControls({
       return;
     }
 
-    let hasInFlight = false;
+    // 与托盘退出 / Alt+F4 用 main 同一个判定;判定失败按忙处理(宁可多确认一次)。
+    let hasInFlight = true;
     try {
-      hasInFlight = await window.electronAPI.anySessionInTurn();
+      hasInFlight = await window.electronAPI.windowBehavior.quitNeedsConfirmation();
     } catch {
-      hasInFlight = false;
+      hasInFlight = true;
     }
     if (hasInFlight) {
       setShowCloseDialog(true);
@@ -178,8 +180,8 @@ export function WindowControls({
   //   - 有 → 走 ConfirmDialog 确认 (防止误关丢未完成的 turn)
   //   - 无 → 直接 beginClose, 全屏 overlay 反馈 (跳过一次点击)
   //
-  // splash / login 阶段 maker-ipc handler 还没注册, invoke 会 reject ——
-  // catch 后当作 false 处理 (那个阶段本来就不可能有 in-flight)。
+  // 判定由 main 的窗口 IPC 提供(启动即注册), splash / login 阶段 Maker 未构造时
+  // 直接答"无", 不会弹多余的确认。
   const handleCloseClick = async (): Promise<void> => {
     if (onClose) {
       await onClose();

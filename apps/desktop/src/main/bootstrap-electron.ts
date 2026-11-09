@@ -1131,15 +1131,19 @@ import {
 import {
   hideWindowToWindowsTray,
   popUpWindowsTrayMenu,
-  requestWindowsTrayQuit,
 } from './windowsTrayLifecycle.js';
 import { createLinuxTrayController } from './linuxTrayLifecycle.js';
 import {
   applyLinuxMainWindowCloseBehavior,
   cancelPendingWindowHide,
   createCloseBehaviorPromptFallbackController,
+  handleMainWindowCloseRequest,
   minimizeDesktopWindow,
+  readActiveTurnForQuit,
+  requestActiveTurnGuardedQuit,
   requestMainWindowCloseBehavior,
+  type ActiveTurnQuitGuardDependencies,
+  type ActiveTurnQuitGuardOptions,
 } from './mainWindowCloseBehavior.js';
 import {
   isLinuxCloseBehavior,
@@ -1147,6 +1151,7 @@ import {
   WINDOW_BEHAVIOR_GET_LINUX_CLOSE_BEHAVIOR_CHANNEL,
   WINDOW_BEHAVIOR_GET_WINDOWS_CLOSE_BEHAVIOR_CHANNEL,
   WINDOW_BEHAVIOR_LINUX_CLOSE_BEHAVIOR_REQUESTED_CHANNEL,
+  WINDOW_BEHAVIOR_QUIT_NEEDS_CONFIRMATION_CHANNEL,
   WINDOW_BEHAVIOR_LINUX_CLOSE_BEHAVIOR_SHOWN_CHANNEL,
   WINDOW_BEHAVIOR_SET_LINUX_CLOSE_BEHAVIOR_CHANNEL,
   WINDOW_BEHAVIOR_SET_SWALLOW_ACTIVATION_CLICK_CHANNEL,
@@ -3857,29 +3862,33 @@ function openWindowsTrayMenu(): void {
   });
 }
 
+// One active-turn quit guard for tray Quit, native main-window close (Alt+F4, taskbar,
+// window manager), the first-close chooser and the custom title-bar X. The probe reads the
+// Maker without constructing it: before splash/login finishes there is no Maker and therefore
+// no turn, so closing there quits without a spurious prompt. A probe that throws counts as
+// busy (readActiveTurnForQuit).
+const activeTurnQuitGuard: ActiveTurnQuitGuardDependencies = {
+  hasActiveTurn: () => anySessionInTurn(getMakerIfReady()),
+  confirmQuit: () =>
+    dialog.showMessageBoxSync({
+      type: 'warning',
+      title: t('titleBar.closeConfirm.title'),
+      message: t('titleBar.closeConfirm.title'),
+      detail: t('titleBar.closeConfirm.description'),
+      buttons: [t('titleBar.closeConfirm.cancel'), t('titleBar.closeConfirm.confirm')],
+      defaultId: 0,
+      cancelId: 0,
+      noLink: true,
+    }) === 1,
+  quit: () => app.quit(),
+};
+
+function quitAppWithActiveTurnGuard(options?: ActiveTurnQuitGuardOptions): void {
+  requestActiveTurnGuardedQuit(activeTurnQuitGuard, options);
+}
+
 function quitFromDesktopTray(): void {
-  requestWindowsTrayQuit({
-    hasActiveTurn: () => {
-      try {
-        return anySessionInTurn(getMakerCore());
-      } catch {
-        // A failed busy probe must not turn the tray into an unguarded exit path.
-        return true;
-      }
-    },
-    confirmQuit: () =>
-      dialog.showMessageBoxSync({
-        type: 'warning',
-        title: t('titleBar.closeConfirm.title'),
-        message: t('titleBar.closeConfirm.title'),
-        detail: t('titleBar.closeConfirm.description'),
-        buttons: [t('titleBar.closeConfirm.cancel'), t('titleBar.closeConfirm.confirm')],
-        defaultId: 0,
-        cancelId: 0,
-        noLink: true,
-      }) === 1,
-    quit: () => app.quit(),
-  });
+  quitAppWithActiveTurnGuard();
 }
 
 function destroyWindowsTray(): void {
@@ -3962,8 +3971,28 @@ function applyWindowsCloseBehavior(
   if (behavior === 'tray') {
     hideMainWindowToWindowsTray(mainWindow);
   } else {
-    app.quit();
+    quitAppWithActiveTurnGuard();
   }
+}
+
+/** Windows / Linux main-window close policy shared by native closes and the title-bar X. */
+function closeMainWindowWithBehavior(
+  mainWindow: BrowserWindow,
+  options?: ActiveTurnQuitGuardOptions,
+): void {
+  handleMainWindowCloseRequest(
+    {
+      platform: process.platform,
+      readWindowsCloseBehavior: () => readWindowBehaviorSettings().windowsCloseBehavior,
+      readLinuxCloseBehavior: () => readWindowBehaviorSettings().linuxCloseBehavior,
+      requestWindowsCloseBehavior: () => windowsClosePromptFallback.request(),
+      requestLinuxCloseBehavior: () => linuxClosePromptFallback.request(),
+      hideToTray: () => hideMainWindowToWindowsTray(mainWindow),
+      minimize: () => minimizeWindow(mainWindow),
+      quitGuard: activeTurnQuitGuard,
+    },
+    options,
+  );
 }
 
 function showNativeWindowsCloseBehaviorPrompt(): WindowsCloseBehavior {
@@ -4044,7 +4073,7 @@ const windowsClosePromptFallback = createCloseBehaviorPromptFallbackController(
       if (mainWindow && !mainWindow.isDestroyed()) {
         applyWindowsCloseBehavior(mainWindow, behavior);
       } else {
-        app.quit();
+        quitAppWithActiveTurnGuard();
       }
     },
     schedule: (callback, delayMs) => setTimeout(callback, delayMs),
@@ -4072,11 +4101,11 @@ const linuxClosePromptFallback = createCloseBehaviorPromptFallbackController(
         applyLinuxMainWindowCloseBehavior(
           mainWindow,
           behavior,
-          () => app.quit(),
+          () => quitAppWithActiveTurnGuard(),
           () => minimizeWindow(mainWindow),
         );
       } else {
-        app.quit();
+        quitAppWithActiveTurnGuard();
       }
     },
     schedule: (callback, delayMs) => setTimeout(callback, delayMs),
@@ -4694,32 +4723,10 @@ const createWindow = () => {
       return;
     }
     // Windows and Linux ask once on first close, then reuse the persisted choice.
-    // Hyprland has no native minimize surface, so it uses the Linux tray.
+    // Hyprland has no native minimize surface, so it uses the Linux tray. A native close
+    // never passed the renderer's busy check, so "quit" goes through the active-turn guard.
     event.preventDefault();
-    if (process.platform === 'win32') {
-      const behavior = readWindowBehaviorSettings().windowsCloseBehavior;
-      if (!behavior) {
-        windowsClosePromptFallback.request();
-        return;
-      }
-      applyWindowsCloseBehavior(mainWindow, behavior);
-      return;
-    }
-    if (process.platform === 'linux') {
-      const behavior = readWindowBehaviorSettings().linuxCloseBehavior;
-      if (!behavior) {
-        linuxClosePromptFallback.request();
-        return;
-      }
-      applyLinuxMainWindowCloseBehavior(
-        mainWindow,
-        behavior,
-        () => app.quit(),
-        () => minimizeWindow(mainWindow),
-      );
-      return;
-    }
-    app.quit();
+    closeMainWindowWithBehavior(mainWindow);
   });
   void ensureMainAppPresence('main-window-created', mainWindow);
   // Keep diagnostics reachable from the tray even before login or if the renderer fails.
@@ -5811,6 +5818,12 @@ const registerIpcHandlers = () => {
       return { ok: true as const };
     },
   );
+  // Main owns the busy probe so the title-bar X gets the same answer as native closes and the
+  // tray, from splash onward (the maker IPC is only registered after splash).
+  ipcMain.handle(WINDOW_BEHAVIOR_QUIT_NEEDS_CONFIRMATION_CHANNEL, (event) => {
+    assertTrustedAppRendererEvent(event);
+    return readActiveTurnForQuit(activeTurnQuitGuard.hasActiveTurn);
+  });
   ipcMain.handle(WINDOW_BEHAVIOR_GET_WINDOWS_CLOSE_BEHAVIOR_CHANNEL, async () => {
     return readWindowBehaviorSettings().windowsCloseBehavior;
   });
@@ -6278,20 +6291,26 @@ const registerIpcHandlers = () => {
     windowManualDrag.stop(win);
   });
   // 关闭语义按窗口区分:
-  //  - 主窗(Windows): 走 win.close() 触发 close handler,由 handler 决定托盘隐藏或退出。
-  //  - 主窗(或解析不到 sender 的兜底,Windows 之外): 自定义 X 语义是"退出 app",
-  //    走 app.quit() 才能 trigger before-quit → disposer chain,把 codex 子进程 / im / db
+  //  - 主窗: 与原生关闭(Alt+F4 / 任务栏)走同一份关闭策略,由它决定托盘隐藏、最小化或退出。
+  //    退出走 app.quit() 才能 trigger before-quit → disposer chain,把 codex 子进程 / im / db
   //    等都收掉;否则 voice overlay 这种 hidden BrowserWindow 还活着,window-all-closed
-  //    不 fire,残留进程。
+  //    不 fire,残留进程。主窗 renderer 已向 main 查过 turn、忙时自绘确认过,会带
+  //    activeTurnChecked,main 不再二次弹窗;没带的请求照常经过 main 的确认。
+  //  - 解析不到 sender 的兜底: 走带确认的退出。
   //  - 「在新窗口打开」的副窗: 只关自己, 不退出 app(会话活在主进程, 不受影响)。
-  ipcMain.on('window-close', (event) => {
+  ipcMain.on('window-close', (event, rawOptions: unknown) => {
     const win = BrowserWindow.fromWebContents(event.sender);
     if (!win || win === mainWindowRef) {
-      if (process.platform === 'win32' && win) {
-        win.close();
-        return;
-      }
-      app.quit();
+      if (isQuitting) return;
+      const options: ActiveTurnQuitGuardOptions = {
+        activeTurnChecked:
+          win !== null &&
+          typeof rawOptions === 'object' &&
+          rawOptions !== null &&
+          (rawOptions as { activeTurnChecked?: unknown }).activeTurnChecked === true,
+      };
+      if (win) closeMainWindowWithBehavior(win, options);
+      else quitAppWithActiveTurnGuard(options);
       return;
     }
     win.close();

@@ -4,7 +4,9 @@ import {
   applyLinuxMainWindowCloseBehavior,
   cancelPendingWindowHide,
   createCloseBehaviorPromptFallbackController,
+  handleMainWindowCloseRequest,
   minimizeDesktopWindow,
+  requestActiveTurnGuardedQuit,
   requestMainWindowCloseBehavior,
   type MainWindowClosePromptWindow,
 } from '../mainWindowCloseBehavior';
@@ -301,5 +303,103 @@ describe('main window close behavior prompt', () => {
 
     expect(harness.deps.showRendererPrompt).toHaveBeenCalledTimes(2);
     expect(harness.deps.schedule).toHaveBeenCalledTimes(1);
+  });
+});
+
+// Native closes (Alt+F4, taskbar "Close window", Linux WM close) with behavior "quit" used to
+// call app.quit() straight from bootstrap's close handler, skipping the active-turn
+// confirmation that only the title-bar X (renderer) and tray Quit applied; the renderer and
+// tray also disagreed on a failed busy probe (idle vs busy). handleMainWindowCloseRequest is
+// what the Electron close handler and the 'window-close' IPC both call now, so this matrix
+// covers each distinct outcome of that one policy. Before the fix the busy/throws rows quit
+// without confirmQuit. Unit tier: all side effects are in-memory spies.
+type Busy = 'idle' | 'busy' | 'throws';
+
+function closeRequestHarness(options: {
+  platform: NodeJS.Platform;
+  windowsBehavior?: 'quit' | 'tray' | null;
+  linuxBehavior?: 'quit' | 'minimize' | null;
+  busy: Busy;
+  confirm: boolean;
+}) {
+  const deps = {
+    platform: options.platform,
+    readWindowsCloseBehavior: () => options.windowsBehavior ?? null,
+    readLinuxCloseBehavior: () => options.linuxBehavior ?? null,
+    requestWindowsCloseBehavior: vi.fn(),
+    requestLinuxCloseBehavior: vi.fn(),
+    hideToTray: vi.fn(),
+    minimize: vi.fn(),
+    quitGuard: {
+      hasActiveTurn: vi.fn(() => {
+        if (options.busy === 'throws') throw new Error('No handler registered');
+        return options.busy === 'busy';
+      }),
+      confirmQuit: vi.fn(() => options.confirm),
+      quit: vi.fn(),
+    },
+  };
+  return deps;
+}
+
+describe('main window close request quit guard', () => {
+  it.each([
+    // [platform, windows behavior, linux behavior, busy, user confirms, renderer checked, quits, prompted]
+    ['win32', 'quit', null, 'idle', false, false, true, false],
+    ['win32', 'quit', null, 'busy', false, false, false, true],
+    ['win32', 'quit', null, 'busy', true, false, true, true],
+    ['win32', 'quit', null, 'throws', false, false, false, true],
+    ['win32', 'quit', null, 'busy', false, true, true, false],
+    ['linux', null, 'quit', 'busy', false, false, false, true],
+    ['linux', null, 'quit', 'throws', true, false, true, true],
+    ['linux', null, 'quit', 'busy', false, true, true, false],
+    ['freebsd', null, null, 'busy', false, false, false, true],
+  ] as const)(
+    '%s windows=%s linux=%s busy=%s confirm=%s checked=%s -> quit=%s prompted=%s',
+    (platform, windowsBehavior, linuxBehavior, busy, confirm, activeTurnChecked, quits, prompted) => {
+      const deps = closeRequestHarness({ platform, windowsBehavior, linuxBehavior, busy, confirm });
+
+      handleMainWindowCloseRequest(deps, { activeTurnChecked });
+
+      expect(deps.quitGuard.quit).toHaveBeenCalledTimes(quits ? 1 : 0);
+      expect(deps.quitGuard.confirmQuit).toHaveBeenCalledTimes(prompted ? 1 : 0);
+      expect(deps.hideToTray).not.toHaveBeenCalled();
+      expect(deps.minimize).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    ['win32', 'tray', null, 'hideToTray'],
+    ['linux', null, 'minimize', 'minimize'],
+    ['win32', null, null, 'requestWindowsCloseBehavior'],
+    ['linux', null, null, 'requestLinuxCloseBehavior'],
+  ] as const)(
+    'keeps running without probing on %s windows=%s linux=%s',
+    (platform, windowsBehavior, linuxBehavior, action) => {
+      const deps = closeRequestHarness({
+        platform,
+        windowsBehavior,
+        linuxBehavior,
+        busy: 'busy',
+        confirm: true,
+      });
+
+      handleMainWindowCloseRequest(deps);
+
+      expect(deps[action]).toHaveBeenCalledTimes(1);
+      expect(deps.quitGuard.hasActiveTurn).not.toHaveBeenCalled();
+      expect(deps.quitGuard.quit).not.toHaveBeenCalled();
+    },
+  );
+
+  // Tray Quit and the first-close chooser fallback call the guard directly; a throwing probe
+  // there was already fail-closed and must stay so (it is now the shared readActiveTurnForQuit).
+  it('confirms instead of quitting when the probe throws on a direct quit request', () => {
+    const { quitGuard } = closeRequestHarness({ platform: 'win32', busy: 'throws', confirm: false });
+
+    requestActiveTurnGuardedQuit(quitGuard);
+
+    expect(quitGuard.confirmQuit).toHaveBeenCalledTimes(1);
+    expect(quitGuard.quit).not.toHaveBeenCalled();
   });
 });
