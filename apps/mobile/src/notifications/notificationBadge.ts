@@ -43,7 +43,9 @@ export function createTaskBadgeSync(read: () => number | undefined, current: () 
           await write(count);
           // Unsupported launchers/denied badge permission return false. Do not
           // hammer the same count; foreground/settings changes force a fresh try.
-          if (!disposed) last = count;
+          // A sync during the await may invalidate this count to carry a newer
+          // native revision. Do not let the old completion erase that request.
+          if (!disposed && !dirty) last = count;
         });
       }
     } finally { pending = false; }

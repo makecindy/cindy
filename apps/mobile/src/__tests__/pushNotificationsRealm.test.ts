@@ -117,6 +117,32 @@ describe('push notification realm routing', () => {
     sync.dispose();
   });
 
+  // Unit regression for #9547: existing reconciliation tests finish native writes
+  // before the next revision. A pending v1/count6 must not suppress v3/count6;
+  // native needs even an incomplete v3 watermark to reject delayed background v2.
+  it.each([true, false])('delivers a newer same-count native revision while a write awaits (complete=%s)', async complete => {
+    let release!: () => void;
+    let started!: () => void;
+    const entered = new Promise<void>(resolve => { started = resolve; });
+    const blocked = new Promise<void>(resolve => { release = resolve; });
+    const write = vi.fn(async (value: TaskBadgeSnapshot) => {
+      if (value.version === '1') {
+        started();
+        await blocked;
+      }
+    });
+    const sync = createServerTaskBadgeSync(async () => undefined, () => true, 'account', write);
+    const first = sync.accept(snapshot('1', 6));
+    await entered;
+    await sync.accept({ ...snapshot('3', 6), complete });
+    release();
+    await first;
+    await sync.accept(snapshot('2', 2));
+    expect(write.mock.calls.map(([value]) => [value.version, value.badgeCount, value.complete]))
+      .toEqual([['1', 6, true], ['3', 6, complete]]);
+    sync.dispose();
+  });
+
   it('preserves the native badge on unavailable data and discards late account responses', async () => {
     let resolve!: (value: TaskBadgeSnapshot) => void;
     const fetch = vi.fn<() => Promise<TaskBadgeSnapshot | undefined>>()
