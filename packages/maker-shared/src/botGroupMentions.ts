@@ -145,17 +145,18 @@ interface MentionToken {
   entry: LabelEntry;
 }
 
-function scanMentionTokens(text: string, entries: readonly LabelEntry[]): MentionToken[] {
+function scanMentionTokens(text: string, entries: readonly LabelEntry[], tracked: readonly BotGroupTrackedMention[] = []): MentionToken[] {
   const tokens: MentionToken[] = [];
   let index = text.indexOf('@');
   while (index >= 0) {
     let next = index + 1;
     if (isMentionStart(text, index)) {
-      const entry = entries.find(
-        (candidate) =>
-          text.startsWith(candidate.label, index + 1) &&
-          endsAtBoundary(candidate.label, text[index + 1 + candidate.label.length]),
-      );
+      const matches = (candidate: LabelEntry) => text.startsWith(candidate.label, index + 1)
+        && endsAtBoundary(candidate.label, text[index + 1 + candidate.label.length]);
+      // A pick records a specific token and ID. A roster refresh can introduce a
+      // longer label covering its following prose; it must not steal that identity.
+      const picked = tracked.find(mention => mention.start === index && entries.some(candidate => candidate.label === mention.label.trim() && matches(candidate)));
+      const entry = picked ? entries.find(candidate => candidate.label === picked.label.trim() && matches(candidate)) : entries.find(matches);
       if (entry) {
         const end = index + 1 + entry.label.length;
         tokens.push({ start: index, end, entry });
@@ -176,7 +177,7 @@ export function hasAmbiguousBotGroupMentions(text: string, input: {
 }): boolean {
   const tracked = input.tracked ?? [];
   const entries = buildLabelEntries(input.members, input.allLabels, tracked, input.allBotLabels);
-  return scanMentionTokens(text, entries).some(token => !token.entry.all && !token.entry.allBots
+  return scanMentionTokens(text, entries, tracked).some(token => !token.entry.all && !token.entry.allBots
     && token.entry.botIds.length === 0
     && !tracked.some(pick => pick.start === token.start && pick.label.trim() === token.entry.label));
 }
@@ -198,7 +199,7 @@ export function resolveBotGroupMentions(
   const botIds: string[] = [];
   let all = false;
   let allBots = false;
-  for (const token of scanMentionTokens(text, entries)) {
+  for (const token of scanMentionTokens(text, entries, input.tracked ?? [])) {
     // A pick names that companion even when its name is also a 「所有人」 label; only the
     // 「所有人」 option or a typed reserved word addresses everyone.
     const picked = (input.tracked ?? []).filter(mention =>
@@ -282,7 +283,7 @@ export function retainBotGroupTrackedMentions(
     return []; // This particular token was edited or deleted, even if a namesake remains.
   });
   const entries = buildLabelEntries(input.members, input.allLabels, tracked, input.allBotLabels);
-  const tokens = scanMentionTokens(text, entries);
+  const tokens = scanMentionTokens(text, entries, tracked);
   return tracked.filter(mention => tokens.some(token =>
     token.start === mention.start && token.entry.label === mention.label.trim()));
 }

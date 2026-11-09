@@ -1223,6 +1223,26 @@ describe('chat interaction controls', () => {
       expect(input.value).toHaveLength(8000);
     });
 
+    // #9427 review, unit: a newly joined namesake must not replace an already picked target.
+    it('keeps a picked short thread mention when a longer matching name appears', async () => {
+      mocks.reply.mockResolvedValue({ ok: true, messageId: 'reply' });
+      const helper = { botId: 'alex', name: 'Helper', status: 'active' as const, ownerName: 'Alex', ownerNameHidden: true, shortOwnerNamesEnabled: true };
+      const view = render(<ChatThreadPanel group={{ ...group, members: [helper] } as BotGroupDetail} rootId="root" onClose={vi.fn()} />);
+      const input = screen.getByRole('textbox', { name: k('replyPlaceholder') }) as HTMLTextAreaElement;
+      input.focus();
+      type(input, '@');
+      fireEvent.click(screen.getAllByRole('option').find(option => option.textContent === 'Helper')!);
+      type(input, '@Helper (Sam) check');
+      const members = [
+        { ...helper, name: 'Helper (Alex)', ownerNameHidden: false },
+        { ...helper, botId: 'sam', name: 'Helper (Sam)', ownerName: 'Sam', ownerNameHidden: false },
+      ];
+      view.rerender(<Tooltip.Provider><ChatThreadPanel group={{ ...group, members } as BotGroupDetail} rootId="root" onClose={vi.fn()} /></Tooltip.Provider>);
+      fireEvent.click(screen.getByRole('button', { name: k('sendReply') }));
+      await waitFor(() => expect(mocks.reply).toHaveBeenCalledOnce());
+      expect(mocks.reply.mock.calls[0]![0].mentions).toEqual({ all: false, botIds: ['alex'] });
+    });
+
     it('names only the picked companion whose name is a Thread 「所有人」 alias', async () => {
       mocks.reply.mockResolvedValue({ ok: true, messageId: 'reply' });
       const members = [{ botId: 'all-bot', name: 'all', status: 'active' }, { botId: 'bo', name: 'Bo', status: 'active' as const, avatar: '', avatarColor: '' }];

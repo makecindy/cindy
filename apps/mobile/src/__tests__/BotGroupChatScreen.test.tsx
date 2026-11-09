@@ -1532,6 +1532,23 @@ describe('group composer', () => {
     expect(h.chat.act).toHaveBeenLastCalledWith('send', expect.objectContaining({ mentions: { all: false, botIds: ['abu'] } }));
   });
 
+  // #9427 review, unit: a newly joined namesake must not steal an explicitly picked short mention.
+  it('keeps a picked short mention when a longer matching name appears', async () => {
+    const data = group({ openPlan: null });
+    const helper = { ...data.members[0]!, name: 'Helper', ownerName: 'Alex', ownerNameHidden: true, shortOwnerNamesEnabled: true };
+    await render(group({ openPlan: null, members: [helper] }));
+    await type('@');
+    await click('botGroup.mention.mimi');
+    await type('@Helper (Sam) check');
+    const members = [
+      { ...helper, name: 'Helper (Alex)', ownerNameHidden: false },
+      { ...data.members[1]!, name: 'Helper (Sam)', ownerName: 'Sam', ownerNameHidden: false, shortOwnerNamesEnabled: true },
+    ];
+    await render(group({ openPlan: null, members }));
+    await click('botGroup.composer.send');
+    expect(h.chat.act).toHaveBeenLastCalledWith('send', expect.objectContaining({ mentions: { all: false, botIds: [helper.botId] } }));
+  });
+
   // #9419, unit: a manually typed short mention must survive the room setting changing while
   // the draft is open; the prior fixture only exercised a still-enabled preference.
   it('keeps a typed short mention addressed when the preference is turned off', async () => {

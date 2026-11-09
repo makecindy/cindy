@@ -60,6 +60,23 @@ describe('resolveBotGroupMentions', () => {
     expect(resolveBotGroupMentions('@Helper please', { members: [{ botId: 'one', name: 'Helper (Alex)' }], allLabels: [] }).botIds).toEqual([]);
   });
 
+  // #9427 review, unit: a picked short mention must not be replaced by a longer
+  // label that appears when another companion joins while its draft is open.
+  it('keeps a picked short identity ahead of a newly matching longer label', () => {
+    const roster = [
+      { botId: 'alex', name: 'Helper (Alex)', ownerName: 'Alex', ownerNameHidden: false, shortOwnerNamesEnabled: true },
+      { botId: 'sam', name: 'Helper (Sam)', ownerName: 'Sam', ownerNameHidden: false, shortOwnerNamesEnabled: true },
+    ];
+    const draft = '@Helper (Sam) check';
+    const tracked = [{ botId: 'alex', label: 'Helper', start: 0 }];
+    const input = { members: roster, allLabels: [], tracked };
+    expect(resolveBotGroupMentions(draft, input).botIds).toEqual(['alex']);
+    expect(hasAmbiguousBotGroupMentions(draft, input)).toBe(false);
+    expect(retainBotGroupTrackedMentions(draft, `${draft}!`, { ...input, editStart: draft.length })).toEqual(tracked);
+    expect(resolveBotGroupMentions(draft, { members: roster, allLabels: [] }).botIds).toEqual(['sam']);
+    expect(retainBotGroupTrackedMentions(draft, draft, { ...input, editStart: 0, editEnd: 7 })).toEqual([]);
+  });
+
   // User decision: Everyone addresses humans; All Teammates is an independent
   // broadcast. Existing tests cover only one broadcast kind (unit regression).
   it('keeps human and companion broadcasts separate, including a picked namesake', () => {
