@@ -216,6 +216,191 @@ describe('LoginHandoff 时序(fake-timer)', () => {
     expect(probe.current!.phase).toBe('panel');
   });
 
+  it('未登录交接中途认证成功且面板卸载时，取消旧时序并释放品牌盖', () => {
+    const view = render(
+      <LoginHandoffProvider authResolved authenticated={false}>
+        <Probe />
+      </LoginHandoffProvider>,
+    );
+    act(() => probe.current!.reportLoginPanelMounted());
+    fireAnchors();
+    act(() => vi.advanceTimersByTime(250));
+
+    view.rerender(
+      <LoginHandoffProvider authResolved authenticated>
+        <Probe />
+      </LoginHandoffProvider>,
+    );
+    act(() => probe.current!.reportLoginPanelUnmounted());
+    expect(probe.current!.branch).toBe('authenticated');
+    expect(probe.current!.phase).toBe('brand-exit');
+    act(() => vi.advanceTimersByTime(T.brandExitMs));
+
+    expect(probe.current!.phase).toBe('done');
+    expect(probe.current!.brandStageMounted).toBe(false);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it.each([T.settleMs + 50, T.settleMs + T.shiftMs, T.settleMs + T.shiftMs + T.sloganDelayMs])(
+    '认证在未登录交接第 %ims 翻转后等待加载盖释放，不被旧计时器拉回',
+    (elapsedMs) => {
+      const view = render(
+        <LoginHandoffProvider authResolved authenticated={false} coverHeld>
+          <LoginBrandStage />
+          <Probe />
+        </LoginHandoffProvider>,
+      );
+      act(() => probe.current!.reportLoginPanelMounted());
+      fireAnchors();
+      act(() => vi.advanceTimersByTime(elapsedMs));
+
+      view.rerender(
+        <LoginHandoffProvider authResolved authenticated coverHeld>
+          <LoginBrandStage />
+          <Probe />
+        </LoginHandoffProvider>,
+      );
+      act(() => probe.current!.reportLoginPanelUnmounted());
+      expect(probe.current!.phase).toBe('awaiting-cover-release');
+      if (probe.current!.brandLayout === 'login') {
+        expect(screen.getByTestId('login-brand-canvas').style.transition).toBe(
+          `transform ${T.panelMs}ms ${T.panelEasing}`,
+        );
+      }
+      act(() => vi.advanceTimersByTime(T.brandExitMs * 2));
+      expect(probe.current!.phase).toBe('awaiting-cover-release');
+      expect(probe.current!.brandStageMounted).toBe(true);
+      expect(screen.getByTestId('login-brand-content').style.opacity).toBe('');
+      expect(vi.getTimerCount()).toBe(0);
+
+      view.rerender(
+        <LoginHandoffProvider authResolved authenticated coverHeld={false}>
+          <LoginBrandStage />
+          <Probe />
+        </LoginHandoffProvider>,
+      );
+      expect(probe.current!.phase).toBe('brand-exit');
+      expect(screen.getByTestId('login-brand-content').style.opacity).toBe('0');
+      act(() => vi.advanceTimersByTime(T.brandExitMs));
+      expect(probe.current!.phase).toBe('done');
+      expect(probe.current!.brandStageMounted).toBe(false);
+      expect(screen.queryByTestId('login-brand-content')).toBeNull();
+    },
+  );
+
+  it.each([T.settleMs + T.shiftMs, T.settleMs + T.shiftMs + T.sloganDelayMs])(
+    '认证在第 %ims 翻转时，品牌淡出保持此前布局和 slogan 可见状态',
+    (elapsedMs) => {
+      const view = render(
+        <LoginHandoffProvider authResolved authenticated={false}>
+          <LoginBrandStage />
+          <Probe />
+        </LoginHandoffProvider>,
+      );
+      act(() => probe.current!.reportLoginPanelMounted());
+      act(() => probe.current!.reportPanelBottomReserve(0));
+      fireAnchors();
+      act(() => vi.advanceTimersByTime(elapsedMs));
+      expect(probe.current!.brandLayout).toBe('login');
+      const canvas = screen.getByTestId('login-brand-canvas');
+      const transformBefore = canvas.style.transform;
+      const transitionBefore = window.getComputedStyle(canvas).transition;
+      expect(transitionBefore).toBe(`transform ${T.panelMs}ms ${T.panelEasing}`);
+      const sloganBefore = probe.current!.sloganRevealed;
+
+      view.rerender(
+        <LoginHandoffProvider authResolved authenticated>
+          <LoginBrandStage />
+          <Probe />
+        </LoginHandoffProvider>,
+      );
+      act(() => probe.current!.reportPanelBottomReserve(null));
+      expect(probe.current!.phase).toBe('brand-exit');
+      expect(probe.current!.brandLayout).toBe('login');
+      expect(probe.current!.panelBottomReserve).toBe(0);
+      expect(probe.current!.sloganRevealed).toBe(sloganBefore);
+      expect(canvas.style.transform).toBe(transformBefore);
+      expect(window.getComputedStyle(canvas).transition).toBe(transitionBefore);
+      expect(screen.getByTestId('login-brand-content').style.opacity).toBe('0');
+    },
+  );
+
+  it('认证与 panel 计时器同批次到达时不新建 slogan 计时器打断淡出', () => {
+    const view = render(
+      <LoginHandoffProvider authResolved authenticated={false}>
+        <Probe />
+      </LoginHandoffProvider>,
+    );
+    act(() => probe.current!.reportLoginPanelMounted());
+    fireAnchors();
+    act(() => {
+      vi.advanceTimersByTime(T.settleMs + T.shiftMs);
+      view.rerender(
+        <LoginHandoffProvider authResolved authenticated>
+          <Probe />
+        </LoginHandoffProvider>,
+      );
+    });
+    expect(probe.current!.phase).toBe('brand-exit');
+    act(() => vi.advanceTimersByTime(T.sloganDelayMs));
+    expect(probe.current!.phase).toBe('brand-exit');
+    act(() => vi.advanceTimersByTime(T.brandExitMs - T.sloganDelayMs));
+    expect(probe.current!.phase).toBe('done');
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('认证翻转与面板挂载同时到达 awaiting-panel 时不重入未登录动画', () => {
+    const view = render(
+      <LoginHandoffProvider authResolved authenticated={false}>
+        <Probe />
+      </LoginHandoffProvider>,
+    );
+    fireAnchors();
+    act(() => vi.advanceTimersByTime(T.settleMs + T.shiftMs));
+    expect(probe.current!.phase).toBe('awaiting-panel');
+
+    act(() => {
+      probe.current!.reportLoginPanelMounted();
+      view.rerender(
+        <LoginHandoffProvider authResolved authenticated>
+          <Probe />
+        </LoginHandoffProvider>,
+      );
+    });
+    expect(probe.current!.branch).toBe('authenticated');
+    expect(probe.current!.phase).toBe('brand-exit');
+    act(() => vi.advanceTimersByTime(T.brandExitMs));
+    expect(probe.current!.phase).toBe('done');
+  });
+
+  it.each([false, true])('认证翻转仍等待 Splash 实际卸载后收尾 (reduced motion=%s)', (reducedMotion) => {
+    setReducedMotion(reducedMotion);
+    const view = render(
+      <LoginHandoffProvider authResolved authenticated={false}>
+        <Probe />
+      </LoginHandoffProvider>,
+    );
+    fireAnchors({ splashComplete: false });
+    act(() => vi.advanceTimersByTime(250));
+
+    view.rerender(
+      <LoginHandoffProvider authResolved authenticated>
+        <Probe />
+      </LoginHandoffProvider>,
+    );
+    expect(probe.current!.branch).toBe('authenticated');
+    expect(probe.current!.phase).toBe('awaiting-splash-exit');
+    act(() => vi.advanceTimersByTime(T.settleMs + T.shiftMs + T.brandExitMs));
+    expect(probe.current!.phase).toBe('awaiting-splash-exit');
+
+    act(() => probe.current!.reportSplashExitCompleted());
+    expect(probe.current!.phase).toBe(reducedMotion ? 'done' : 'brand-exit');
+    act(() => vi.advanceTimersByTime(T.brandExitMs));
+    expect(probe.current!.phase).toBe('done');
+    expect(probe.current!.brandStageMounted).toBe(false);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it('冷启动每次播放但不重播:done 后重发锚/信号 phase 恒 done、无残留 timer', () => {
     render(
       <LoginHandoffProvider authResolved authenticated={false}>

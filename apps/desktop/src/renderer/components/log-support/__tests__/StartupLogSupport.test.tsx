@@ -281,6 +281,21 @@ describe('startup gate stall report', () => {
     });
   });
 
+  it('keeps the authenticated cover-release wait in the diagnostic snapshot', () => {
+    signedInWithBrandStageStuck();
+    mocks.db.coverHeld = true;
+    mocks.handoff.phase = 'awaiting-cover-release';
+    render(<StartupLogSupport />);
+
+    act(() => vi.advanceTimersByTime(20_000));
+
+    expect(mocks.reportStartupGateStall).toHaveBeenCalledOnce();
+    expect(mocks.reportStartupGateStall.mock.calls[0][0]).toMatchObject({
+      coverHeld: true,
+      handoffPhase: 'awaiting-cover-release',
+    });
+  });
+
   it.each([
     [
       'the login panel is waiting for the user',

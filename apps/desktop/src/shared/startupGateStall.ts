@@ -37,6 +37,7 @@ const HANDOFF_PHASES = [
   'awaiting-panel',
   'panel',
   'slogan',
+  'awaiting-cover-release',
   'brand-exit',
   'done',
 ] as const;
