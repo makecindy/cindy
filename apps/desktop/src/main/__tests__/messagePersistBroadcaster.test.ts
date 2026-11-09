@@ -291,7 +291,7 @@ import {
   saveTurnStartedAtForDeferred,
   preserveTurnPersistStateForBackground,
   redactToolInputForUntrustedBoundary,
-} from '../messagePersistBroadcaster.js';
+} from '../messagePersistBroadcaster.desktop.js';
 
 const SESSION = 'sess-tr';
 const FULL =

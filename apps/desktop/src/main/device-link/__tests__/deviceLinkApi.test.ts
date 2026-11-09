@@ -33,7 +33,7 @@ vi.mock('../../clientEndpointsService.js', () => ({
 }));
 vi.mock('../index.js', () => ({ deviceLinkApiBase: () => 'http://192.168.1.20:47820', remoteBackgroundInvoke: vi.fn() }));
 vi.mock('../providerShareGuest.js', () => ({ getReceivedShares: () => [] }));
-vi.mock('../settings-store.js', () => ({ readDeviceLinkSettings: () => ({ disabledControlDeviceIds: [], lastKnownDeviceNames: {} }) }));
+vi.mock('../settings-store.desktop.js', () => ({ readDeviceLinkSettings: () => ({ disabledControlDeviceIds: [], lastKnownDeviceNames: {} }) }));
 vi.mock('../../remote-agent/controller/deviceCatalog.js', () => ({ readDeviceProviderViews: vi.fn(async () => []) }));
 
 import { deviceLinkApiFetch, officialDeviceLinkApiFetch } from '../deviceLinkApi';

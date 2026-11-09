@@ -28,9 +28,9 @@ import {
   noteAgentMeta,
   noteTurnStarted,
   onStandaloneTextEvent,
-} from '../messagePersistBroadcaster.js';
+} from '../messagePersistBroadcaster.desktop.js';
 import { isCcMgrUpgradeInFlight } from '../remote-ssh/index.js';
-import { AgentInputCoordinator } from './agent-input-coordinator.js';
+import { AgentInputCoordinator } from './agent-input-coordinator.desktop.js';
 import { clearPromptPredictionSessionStopped } from './promptPredictionStopLedger.js';
 import { MAKER_PUSH } from './channels.js';
 import { finalizeTurnChangeSet } from '../turn-change-set/store.js';

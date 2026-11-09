@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 const mock = vi.hoisted(() => ({ devices: [] as unknown[], shares: [] as unknown[], invoke: vi.fn(), api: vi.fn() }));
 vi.mock('../../device-link/index.js', () => ({ deviceLinkApiBase: 'https://example.invalid', remoteBackgroundInvoke: mock.invoke }));
 vi.mock('../../device-link/providerShareGuest.js', () => ({ getReceivedShares: () => mock.shares }));
-vi.mock('../../device-link/settings-store.js', () => ({ readDeviceLinkSettings: () => ({ disabledControlDeviceIds: ['disabled'], lastKnownDeviceNames: {} }) }));
+vi.mock('../../device-link/settings-store.desktop.js', () => ({ readDeviceLinkSettings: () => ({ disabledControlDeviceIds: ['disabled'], lastKnownDeviceNames: {} }) }));
 vi.mock('../../device-link/deviceLinkApi.js', () => ({ deviceLinkApiFetch: mock.api }));
 vi.mock('../../i18n.js', () => ({ t: () => '来自 {{name}} 的分享' }));
 import { remoteLocalAgentModels } from '../remoteCatalog.js';

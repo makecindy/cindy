@@ -14,7 +14,7 @@ import {
   type NodeWorkerStartupObservation,
   type NodeWorkerStartupState,
   type NodeWorkerProcess,
-} from '../nodeRuntimeBroker';
+} from '../nodeRuntimeBroker.desktop';
 
 const TEST_APP_RUN_ID = 'a'.repeat(16);
 const TEST_ATTEMPT_ID = 'b'.repeat(16);

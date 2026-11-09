@@ -141,7 +141,7 @@ vi.mock('../index', () => ({
     authoritativeName: null,
   }),
 }));
-vi.mock('../dispatch', () => ({ getActiveControllers: () => [] }));
+vi.mock('../dispatch.desktop', () => ({ getActiveControllers: () => [] }));
 vi.mock('../filePeer', () => ({ tryUploadPeerAttachment: vi.fn(async () => null) }));
 vi.mock('../outboundMedia', () => ({
   rewriteOutboundMedia: vi.fn(async (_c, a) => a),
@@ -151,7 +151,7 @@ vi.mock('../outboundSessionReferences', () => ({
   outboundSessionReferencesRequested: () => false,
   rewriteOutboundSessionReferences: vi.fn(async (_c, a) => a),
 }));
-vi.mock('../settings-store', () => ({
+vi.mock('../settings-store.desktop', () => ({
   forgetLastKnownDeviceName: vi.fn(),
   isPlaceholderDeviceName: () => false,
   normalizeCachedDeviceName: (name: string) => name.trim() || null,
@@ -187,7 +187,7 @@ import {
   disconnectAllControllers,
   remoteInvoke,
 } from '../index';
-import { setDeviceControlEnabled } from '../settings-store';
+import { setDeviceControlEnabled } from '../settings-store.desktop';
 
 const senderEvents = new EventEmitter();
 const FRAME = { detached: false };

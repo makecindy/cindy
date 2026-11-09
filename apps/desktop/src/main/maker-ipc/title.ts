@@ -37,7 +37,7 @@ import {
   type RegenerateTitleMaterial,
 } from '../localDb/latestMessageText.js';
 import { createLogger } from '../logger.js';
-import { drainPersistQueue } from '../messagePersistBroadcaster.js';
+import { drainPersistQueue } from '../messagePersistBroadcaster.desktop.js';
 import { isDeviceLinkInvoke } from '../device-link/invoke-context.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import { isIpcError } from '../../shared/ipc-errors.js';

@@ -14,7 +14,7 @@
 import fs from 'node:fs';
 import { DownloadError, type DownloadOptions, type DownloadResult, type Logger } from './types';
 import { computeHash } from './integrity';
-import { assertDownloadUrl, executeOnce, type TransportContext } from './transport';
+import { assertDownloadUrl, executeOnce, type TransportContext } from './transportCore';
 import { withRetry } from './retry';
 import { deletePart, deleteMeta } from './resume';
 

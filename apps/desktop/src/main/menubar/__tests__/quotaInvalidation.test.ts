@@ -45,7 +45,7 @@ vi.mock('../../device-link/providerShareGuest.js', () => ({
 }));
 vi.mock('../../device-link/providerShareRuntime.js', () => ({ readReceivedProviderShareQuota: (...args: unknown[]) => mocks.sharedRead(...args) }));
 vi.mock('../../device-link/index.js', () => ({}));
-vi.mock('../../device-link/dispatch.js', () => ({ getActiveControllers: () => subscriptions.getControlControllers() }));
+vi.mock('../../device-link/dispatch.desktop.js', () => ({ getActiveControllers: () => subscriptions.getControlControllers() }));
 vi.mock('../../device-link/ipc.js', () => ({}));
 vi.mock('../../device-link/deviceName.js', () => ({ deviceName: () => 'Fixture' }));
 vi.mock('../../i18n.js', () => ({ getResolvedMainLocale: () => 'en', mainStringKeysUnder: () => [], rawMainString: (key: string) => key }));

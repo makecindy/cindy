@@ -45,7 +45,7 @@ import {
   listCustomMcpNamesForSetup,
   updateCustomMcpServer,
   validateCustomMcpConfig,
-} from '../custom-mcp-store.js';
+} from '../custom-mcp-store.desktop.js';
 import { confirmSetupTransfer } from '../../setup-migration/transferPrompt.js';
 import { createSetupTransferSource, SetupTransferBox } from '../../setup-migration/transfer.js';
 import { parseSetupSecretBundle, type SetupSecretBundle } from '@cindy/device-link';

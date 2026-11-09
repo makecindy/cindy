@@ -2,7 +2,7 @@ import { isModelVisible } from '@cindy/model-providers';
 import { getModelVisibilityOverride, waitForModelVisibilityMirror } from '../maker-host/model-visibility-mirror.js';
 import { getDesktopProviderService } from '../maker-host/createDesktopProviderService.js';
 import fs from 'node:fs/promises';
-import { resolveSafe } from '../cindy-media/blobStore.js';
+import { resolveSafe } from '../cindy-media/blobStore.desktop.js';
 import { getDbClient } from '../localDb/client/current.js';
 import { prepareBotInvitationAvatar, finishBotInvitationAvatar } from './botInvitationAvatar.js';
 import { randomUUID } from 'node:crypto';

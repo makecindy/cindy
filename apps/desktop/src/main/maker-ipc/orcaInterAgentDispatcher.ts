@@ -24,7 +24,7 @@ import type {
   AgentInputSendOpts,
   AgentInputSendResult,
   ControlSteerOutcome,
-} from './agent-input-coordinator.js';
+} from './agent-input-coordinator.desktop.js';
 import { runAcceptedCallback, runAcceptedRollback } from './acceptedCallbackRunner.js';
 import { prependHandoffToUserMessage } from './agentHandoff.js';
 

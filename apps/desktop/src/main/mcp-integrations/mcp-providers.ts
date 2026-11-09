@@ -58,7 +58,7 @@ import {
   type GhostGrantLiveSessionState,
   type CindyGhostsHostDeps,
   type ToolResultImageDescription,
-} from './ghost.js';
+} from './ghost.desktop.js';
 import { createGroupHistoryMcpServer } from './groupHistoryMcpServer.js';
 import { compressInlineImage } from './inlineImageCompressor.js';
 import { createTelegramBotMcpServer } from './telegramBotMcpServer.js';

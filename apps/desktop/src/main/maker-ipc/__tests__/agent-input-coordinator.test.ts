@@ -10,7 +10,7 @@ import { REPLY_QUOTE_SOURCE_CONTENT } from '../chatReplyQuoteNote';
 import { AUTO_REVIEW_DELEGATED_CONTINUATION, restoreAutoReviewUserIntent, type AutoReviewHistoryMessage } from '../autoReviewUserIntent.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { admitTaskAction, bindTaskActionInput, settleTaskActionInput, taskActionInputGuard } from '../taskActionAuthorization.js';
-import { AgentInputCoordinator } from '../agent-input-coordinator.js';
+import { AgentInputCoordinator } from '../agent-input-coordinator.desktop.js';
 import { ProviderGroupUsageLimitError, providerGroupSwitchCause } from '../../provider-group/failurePolicy.js';
 import type { Session } from '@cindy/maker-core';
 import { createSessionBindingLifecycle, createSessionCloseTeardown } from '../sessionBindingLifecycle.js';
@@ -50,7 +50,7 @@ import type {
   AgentInputCoordinatorDeps,
   AgentInputHostSendFailureCode,
   AgentInputSendResult,
-} from '../agent-input-coordinator.js';
+} from '../agent-input-coordinator.desktop.js';
 import type {
   AgentInputCreateOpts,
   AgentInputProjection,

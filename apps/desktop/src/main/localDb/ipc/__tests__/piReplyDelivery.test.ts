@@ -17,7 +17,7 @@ import { createPiTranslateContext, disposePiTranslateContext, translatePiEvent }
 import { piSuccessfulReplyFrames, piReplyText, piReplyThinking } from '../../../../test/fixtures/piSuccessfulReply';
 import { persistSessionStreamEvent } from '../../../maker-ipc/sessionEventStream';
 import type { PreparedSessionEvent } from '../../../maker-ipc/sessionEventPreparation';
-import { clearSessionPersistState, drainPersistQueue, flushAssistantBlock, noteSessionAgentKind } from '../../../messagePersistBroadcaster';
+import { clearSessionPersistState, drainPersistQueue, flushAssistantBlock, noteSessionAgentKind } from '../../../messagePersistBroadcaster.desktop';
 
 const h = vi.hoisted(() => ({
   sqlite: null as Database.Database | null,

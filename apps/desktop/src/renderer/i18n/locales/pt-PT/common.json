@@ -20013,5 +20013,15 @@
     "browserFallback": "Abre o GitHub para dar uma estrela ao Cindy.",
     "openGithub": "Abrir GitHub",
     "openFailed": "Não foi possível abrir o GitHub."
+  },
+  "hostConnection": {
+    "connecting": "A ligar ao Cindy…",
+    "restoring": "A restaurar o estado das tarefas…",
+    "retrying": "Tarefas ainda não sincronizadas. A tentar novamente…",
+    "pairing": "É necessário autorizar a ligação",
+    "pairingHelp": "Mantenha esta página aberta. No terminal usado para iniciar o Cindy Host, execute novamente o comando para abrir o cliente web. Faça o emparelhamento na nova página e volte aqui.",
+    "keepDraft": "O rascunho será mantido. As tarefas serão sincronizadas quando a ligação for restabelecida.",
+    "retry": "Voltar a ligar",
+    "desktopAuthHelp": "Atualize as definições de ligação no terminal de arranque e reabra este cliente experimental."
   }
 }

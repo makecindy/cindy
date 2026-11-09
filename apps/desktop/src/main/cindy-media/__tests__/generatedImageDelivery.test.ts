@@ -23,7 +23,7 @@ import {
   readGeneratedImageEpoch,
 } from '../generatedImageStorage';
 import { generatedImageId, initialGeneratedImageRecord } from '../generatedImageJournal';
-import { resolveSafe } from '../blobStore';
+import { resolveSafe } from '../blobStore.desktop';
 import * as ledger from '../ledger';
 
 const state = vi.hoisted(() => ({

@@ -1,6 +1,6 @@
 import type { AsrEvent, AsrProvider } from '@cindy/voice-input-core';
 
-import { outboundFetch } from '../maker-host/outbound-fetch.js';
+import { outboundFetch } from '../maker-host/outbound-fetch.desktop.js';
 import { reportCindyGatewayKeyRejected } from '../model-access/gatewayKeyRejection.js';
 import { elevenLabsLanguageCode } from './language.js';
 

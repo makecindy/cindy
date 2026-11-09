@@ -19,7 +19,7 @@ vi.mock('../anthropic-responses-bridge-host.js', () => ({
   invalidateChatgptBridgeAuth: vi.fn(),
 }));
 vi.mock('../codex-oauth-readiness.js', () => ({ hasCodexOAuthLoginReadOnly: () => false }));
-vi.mock('../outbound-fetch.js', () => ({ outboundFetch: vi.fn() }));
+vi.mock('../outbound-fetch.desktop.js', () => ({ outboundFetch: vi.fn() }));
 
 import {
   refreshOpenAiMediaModels,
@@ -32,7 +32,7 @@ import {
 } from '../model-discovery/openai-media.js';
 
 import { setOpenAiImagesApiKeyConfigured, setDiscoveredProviderMediaModels } from '../active-catalog.js';
-import { outboundFetch } from '../outbound-fetch.js';
+import { outboundFetch } from '../outbound-fetch.desktop.js';
 
 afterEach(() => { credentials.key = ''; vi.clearAllMocks(); });
 

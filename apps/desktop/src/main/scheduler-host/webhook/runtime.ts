@@ -54,7 +54,7 @@ export async function startScheduleWebhooks(scheduler: Scheduler, logger: Logger
       import('../../authManager.js'),
       import('../../appCapabilities.js'),
       import('../../clientEndpointsService.js'),
-      import('../../maker-host/outbound-fetch.js'),
+      import('../../maker-host/outbound-fetch.desktop.js'),
     ]);
   if (host || startingGeneration !== generation) return;
   const isSignedIn = (): boolean => getAppCapabilities().canUseCindyAccountServices;

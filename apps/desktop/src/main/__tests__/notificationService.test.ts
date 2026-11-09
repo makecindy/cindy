@@ -145,7 +145,7 @@ vi.mock('../device-link/broadcast-tap', () => ({
   isDataOwnerBroadcastScopeCurrent: () => ownerScopeCurrent,
 }));
 const drainPersistQueue = vi.fn((): Promise<void> => Promise.resolve());
-vi.mock('../messagePersistBroadcaster', () => ({
+vi.mock('../messagePersistBroadcaster.desktop', () => ({
   drainPersistQueue: () => drainPersistQueue(),
 }));
 const drainSessionActiveTurnWrites = vi.fn((_sessionId: string): Promise<void> => Promise.resolve());

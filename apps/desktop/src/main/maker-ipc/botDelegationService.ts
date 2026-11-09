@@ -6,7 +6,7 @@ import { approvedTaskDelegation, captureTaskActionDeliveryGuard, captureTaskActi
 import { authorizeGroupTool, GroupToolAuthorizationError } from './botGroupToolAuthorization.js';
 import { controlOwnedSessionExecution, isSameSessionExecution, withdrawOwnedSessionInputs } from './sessionExecutionOwnership.js';
 import { existsSync, statSync } from 'node:fs';
-import type { AgentInputCoordinator } from './agent-input-coordinator.js';
+import type { AgentInputCoordinator } from './agent-input-coordinator.desktop.js';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 

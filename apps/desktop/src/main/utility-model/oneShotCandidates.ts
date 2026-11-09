@@ -16,10 +16,10 @@ import { getAppCapabilities } from '../appCapabilities.js';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState.js';
 import { readClaudeApiKey } from '../maker-host/auth-adapters.js';
 import { getChatgptBridgeAuth, getChatgptBridgeAuthForDispatch } from '../maker-host/anthropic-responses-bridge-host.js';
-import { getGrokAccessToken, getGrokOAuthCredentialGeneration } from '../maker-host/grok-oauth-login.js';
-import { readCachedGenericOAuthAccessToken } from '../maker-host/generic-oauth.js';
+import { getGrokAccessToken, getGrokOAuthCredentialGeneration } from '../maker-host/grok-oauth-login.desktop.js';
+import { readCachedGenericOAuthAccessToken } from '../maker-host/generic-oauth.desktop.js';
 // undici 的 fetch,但 per-request 现取系统代理(裸 undici 不吃代理设置)。
-import { outboundUndiciFetch as undiciFetch } from '../maker-host/outbound-fetch.js';
+import { outboundUndiciFetch as undiciFetch } from '../maker-host/outbound-fetch.desktop.js';
 import { claudeUpstreamEndpoint } from '../maker-host/runtime-configs.js';
 import {
   getActiveCatalog,

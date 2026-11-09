@@ -11,7 +11,7 @@ import { uploadPublicAsset } from '../ossPublicUpload.js';
 import { getClientEndpoint } from '../clientEndpointsService.js';
 import { signalBotAutonomyBotsChanged, subscribeBotProfilesChanged } from '../bot-autonomy/botsChangedSignal.js';
 import { t } from '../i18n.js';
-import { readFile as readMedia } from '../cindy-media/blobStore.js';
+import { readFile as readMedia } from '../cindy-media/blobStore.desktop.js';
 import { getAccessToken, refresh } from '../authManager.js';
 import { retryAfterDeadline } from '@cindy/auth-client';
 import { parseChatInvitationShareId, parseChatInvitationToken } from '@cindy/device-link';

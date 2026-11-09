@@ -64,7 +64,7 @@ vi.mock('../../cindy-brain/ghostWorkdirPrefs.js', () => ({ isGhostDisabledForWor
 vi.mock('../../cindy-brain/ghostSetupChangeBus.js', () => ({
   getGhostSetupChangeBus: () => ({ subscribe: state.subscribe, currentRevision: () => 1 }),
 }));
-vi.mock('../../maker-host/grok-oauth-login.js', () => ({
+vi.mock('../../maker-host/grok-oauth-login.desktop.js', () => ({
   getGrokAccessToken: vi.fn(), hasGrokOAuthLogin: () => false, runGrokOAuthLogin: state.login,
   getGrokOAuthCredentialGeneration: () => 0, cancelGrokOAuthLogin: vi.fn(),
 }));

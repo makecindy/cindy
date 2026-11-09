@@ -10,11 +10,11 @@
  * `Last-Event-ID` or `?since=<seq>`) can replay missed events in order.
  */
 
+import { randomUUID } from 'node:crypto';
+
 export function createEventHub() {
   const subscribers = new Set();
-  /** Last event per session so a late page can catch a running turn's tail. */
-
-  const RECENT_LIMIT = 200;
+  const runtime = randomUUID();
   const MAX_HISTORY = 1000;
   let currentSeq = 0;
   const history = [];
@@ -47,12 +47,21 @@ export function createEventHub() {
       if (!Number.isFinite(seq)) return [];
       return history.filter((e) => e.seq > seq);
     },
+    replay(cursor) {
+      const raw = cursor.since;
+      const seq = typeof raw === 'string' && /^(0|[1-9]\d*)$/.test(raw) ? Number(raw) : NaN;
+      const first = history[0]?.seq ?? currentSeq + 1;
+      const reason = raw == null ? 'initial'
+        : cursor.runtime !== runtime ? 'restarted'
+          : !Number.isSafeInteger(seq) || seq > currentSeq ? 'invalid-cursor'
+            : seq < first - 1 ? 'history-lost' : null;
+      return { runtime, seq: currentSeq, reason, events: reason ? [] : history.filter(e => e.seq > seq) };
+    },
     currentSeq() {
       return currentSeq;
     },
     size() {
       return subscribers.size;
     },
-    RECENT_LIMIT,
   };
 }

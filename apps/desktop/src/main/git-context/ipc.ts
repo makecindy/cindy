@@ -1,6 +1,6 @@
 import { glabCliTokenSource } from './glabCliTokenSource';
 import { fetchGitlabMr } from './gitlabPrSummary';
-import { outboundFetch } from '../maker-host/outbound-fetch';
+import { outboundFetch } from '../maker-host/outbound-fetch.desktop';
 import { setGithubReadRuntime } from './githubReadRuntime';
 import { manageSessionPrs } from './manageSessionPrs';
 /**

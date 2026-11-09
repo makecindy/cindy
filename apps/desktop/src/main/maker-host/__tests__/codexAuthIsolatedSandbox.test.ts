@@ -50,6 +50,13 @@ vi.mock('../managed-skills.js', () => ({
   listCindyManagedSkills: async () => [],
   cindyManagedSkillRoots: async () => [],
 }));
+// Subscription discovery is outside this local auth-file ownership fixture.
+vi.mock('../model-discovery/xai.js', () => ({ discardXaiModelsDiskCache: vi.fn(async () => {}) }));
+// This file exercises local auth ownership, not remote share revocation. Do not
+// initialize the authenticated server transport (and the full app) to read files.
+vi.mock('../../device-link/providerShareAvailabilityTransport.js', () => ({
+  disableShareAvailability: vi.fn(async () => { throw new Error('Unexpected share revocation in auth fixture'); }),
+}));
 vi.mock('@cindy/maker-core', () => ({}));
 
 vi.mock('../../agent-binaries/index.js', () => ({

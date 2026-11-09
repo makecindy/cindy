@@ -135,7 +135,7 @@ vi.mock('../../../goal-host/inactiveNote', () => ({
   peekGoalInactiveNote: mocks.peekGoalInactiveNote,
 }));
 
-vi.mock('../../../imageCacheStore', () => ({
+vi.mock('../../../imageCacheStore.desktop', () => ({
   resolveSafe: mocks.resolveXdtImageUrl,
 }));
 

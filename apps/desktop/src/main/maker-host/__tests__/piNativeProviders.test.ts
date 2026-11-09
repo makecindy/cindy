@@ -19,7 +19,7 @@ vi.mock('../model-discovery/xai.js', () => ({
   discardXaiModelsDiskCache: vi.fn(async () => {}),
 }));
 
-vi.mock('../grok-oauth-login.js', () => ({
+vi.mock('../grok-oauth-login.desktop.js', () => ({
   hasGrokOAuthLogin: () => true,
 }));
 

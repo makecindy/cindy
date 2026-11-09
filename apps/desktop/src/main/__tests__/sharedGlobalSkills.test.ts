@@ -1,3 +1,4 @@
+import { configureAppDataDir } from '../userDataPath';
 import os from 'node:os';
 import path from 'node:path';
 import nodeFs, { promises as fs } from 'node:fs';
@@ -5,6 +6,7 @@ import { randomUUID } from 'node:crypto';
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 
 const lockRoot = nodeFs.mkdtempSync(path.join(os.tmpdir(), 'cindy-projection-locks-'));
+configureAppDataDir(lockRoot);
 vi.mock('electron', () => ({ app: { getPath: () => lockRoot } }));
 vi.mock('../logger', () => ({ createLogger: () => ({ warn: vi.fn(), info: vi.fn(), debug: vi.fn(), error: vi.fn() }) }));
 import { acquireSharedSkillMutationLease } from '../skillhub/sharedMutationLease';

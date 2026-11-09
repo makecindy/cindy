@@ -48,7 +48,7 @@ vi.mock('../runner', () => ({ MakerScheduleRunner: class {
   attachScheduler() {}
 } }));
 vi.mock('../../localDb/ipc/messages.js', () => ({ listMessagesForAgentHandoff: vi.fn() }));
-vi.mock('../../messagePersistBroadcaster.js', () => ({ drainPersistQueue: vi.fn() }));
+vi.mock('../../messagePersistBroadcaster.desktop.js', () => ({ drainPersistQueue: vi.fn() }));
 vi.mock('../script-runner', () => ({ ScriptScheduleRunner: class { attachScheduler() {} } }));
 vi.mock('../script-capability-broker', () => ({ SchedulerScriptCapabilityBroker: class {} }));
 vi.mock('../notifier', () => ({ DesktopNotifier: class {} }));

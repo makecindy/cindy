@@ -395,7 +395,7 @@ export function registerBuiltinDesktopCommands(
           }),
         allowInstallTest: () => !app.isPackaged,
         searchUpstream: async (request, signal) => {
-          const { outboundFetch } = await import('../maker-host/outbound-fetch.js');
+          const { outboundFetch } = await import('../maker-host/outbound-fetch.desktop.js');
           const runtime = await resolveMakeRuntime(
             { packaged: app.isPackaged, version: app.getVersion() },
             signal,

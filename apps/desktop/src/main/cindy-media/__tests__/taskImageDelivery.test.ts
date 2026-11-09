@@ -23,12 +23,12 @@ import {
   restoreTaskImageRows,
   taskImageRoots,
 } from '../taskImageDelivery';
-import { resolveSafe } from '../blobStore';
+import { resolveSafe } from '../blobStore.desktop';
 import * as ledger from '../ledger';
 import { commitMessageMediaRefs } from '../chatAttachments';
 import { createHash } from 'node:crypto';
 import { ingestMedia } from '../ingest';
-import { reconcileMediaRefCompensationsForOwner } from '../refCompensationJournal';
+import { reconcileMediaRefCompensationsForOwner } from '../refCompensationJournal.desktop';
 import { materializeLocalMarkdownImages } from '../../im/shared/localMarkdownImages';
 import { collectOutboundAttachments } from '../../hook-control/outbound';
 import {

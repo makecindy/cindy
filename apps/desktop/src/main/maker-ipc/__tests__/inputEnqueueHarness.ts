@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { ScriptTarget, transpileModule } from 'typescript';
 import { CONTINUE_AFTER_APP_EXIT_PROMPT } from '@cindy/maker-shared/synthetic-trigger';
-import { AgentInputCoordinator, markManualSchedulerContinuation } from '../agent-input-coordinator.js';
+import { AgentInputCoordinator, markManualSchedulerContinuation } from '../agent-input-coordinator.desktop.js';
 import { stampTrustedDesktopQueuedOrigin, stampTrustedDeviceLinkQueuedOrigin } from '../makerSendTransaction.js';
 import { stampMobileClientOrigin } from '../mobileClientPromptNote.js';
 import { isAutomaticInputOriginKind, type AgentInputProjection, type AgentInputQueuedMessage } from '../../../shared/agentInputQueue.js';

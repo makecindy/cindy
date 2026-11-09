@@ -35,8 +35,8 @@ import { TencentIlinkTransport } from '@cindy/wechat-ilink';
 import { inboundFileStaging } from './shared/inboundFileStaging';
 import { verifiedInboundMediaMime } from './shared/inboundMediaVerify';
 import { createLogger } from '../logger';
-import { resolveSafe as resolveXdtImageUrl } from '../imageCacheStore';
-import { resolveSafe as resolveCindyMediaUrl } from '../cindy-media/blobStore';
+import { resolveSafe as resolveXdtImageUrl } from '../imageCacheStore.desktop';
+import { resolveSafe as resolveCindyMediaUrl } from '../cindy-media/blobStore.desktop';
 import {
   integrationCacheGet,
   integrationCacheKey,

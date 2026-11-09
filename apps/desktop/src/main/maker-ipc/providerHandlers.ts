@@ -1,3 +1,4 @@
+import { withoutProviderHeaderCredentials } from '../maker-host/provider-public-view.js';
 import { withAvailabilityPolicyMutation } from '../device-link/providerShareAvailabilityPolicy.js';
 import { bindModelSourceSnapshot, acceptsModelSourceSnapshot, modelSourceRequestSignature, issueModelSourceSnapshot } from '../maker-host/model-source-snapshots.js';
 import { buildModelsFetchRequest } from '../maker-host/provider-model-fetch.js';
@@ -5,7 +6,7 @@ import { getProviderRouteCredentialRevision } from '../maker-host/provider-route
 import { appendSpeechModels, missingSpeechReference } from '../../shared/speechProviderSetup.js';
 import { setProviderPresentation, retainProviderPresentationAfterAuthChange } from '../maker-host/provider-presentation-store.js';
 import type { DeploymentDetectionResult } from '../../shared/providerDetection.js';
-import { pruneProviderGroupBindings } from '../provider-group/bindings.js';
+import { pruneProviderGroupBindings } from '../provider-group/bindings.desktop.js';
 import { writeProviderGroup } from '../provider-group/store.js';
 /**
  * provider:* IPC handlers。
@@ -272,19 +273,6 @@ function oauthRuntimeEndpointSignature(config: CustomProviderConfig | null): str
   }));
 }
 
-/** Never expose runtime header credentials to WebViews or synthetic remote events. */
-function withoutProviderHeaderCredentials(provider: ProviderView): ProviderView {
-  if (!provider.routing) return provider;
-  const routing = Object.fromEntries(
-    Object.entries(provider.routing).map(([agent, descriptor]) => {
-      if (!descriptor) return [agent, descriptor];
-      const safeDescriptor = { ...descriptor };
-      delete safeDescriptor.headerOverride;
-      return [agent, safeDescriptor];
-    }),
-  ) as ProviderView['routing'];
-  return { ...provider, routing };
-}
 
 export interface ProviderHandlerDeps {
   /**

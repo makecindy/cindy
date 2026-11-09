@@ -62,14 +62,20 @@ describe('Node runtime packaging contract', () => {
   });
 
   it('工作入口通过 parentPort 接收虚拟 stdin，不启动外部 node 命令', () => {
-    const worker = fs.readFileSync(
+    const entry = fs.readFileSync(
       path.join(desktopRoot, 'src/main/cindy-brain/nodeRuntimeWorkerProcess.ts'),
+      'utf8',
+    );
+    const worker = fs.readFileSync(
+      path.join(desktopRoot, 'src/main/cindy-brain/nodeRuntimeWorkerCore.ts'),
       'utf8',
     );
     const broker = fs.readFileSync(
       path.join(desktopRoot, 'src/main/cindy-brain/nodeRuntimeBroker.ts'),
       'utf8',
     );
+    expect(entry).toContain('}).parentPort');
+    expect(entry).toContain('runNodeRuntimeWorker');
     expect(worker).toContain("data.type === 'stdin'");
     expect(worker).toContain('requireFromWorker(entryPath)');
     expect(broker).toContain('utilityProcess.fork');
@@ -112,12 +118,15 @@ describe('Node runtime packaging contract', () => {
 
   it('代启子进程(childSpawn)仍走同一 utilityProcess 通道,worker 侧只暴露窄接口', () => {
     const worker = fs.readFileSync(
-      path.join(desktopRoot, 'src/main/cindy-brain/nodeRuntimeWorkerProcess.ts'),
+      path.join(desktopRoot, 'src/main/cindy-brain/nodeRuntimeWorkerCore.ts'),
       'utf8',
     );
     const broker = fs.readFileSync(
-      path.join(desktopRoot, 'src/main/cindy-brain/nodeRuntimeBroker.ts'),
+      path.join(desktopRoot, 'src/main/cindy-brain/nodeRuntimeBrokerCore.ts'),
       'utf8',
+    );
+    const adapter = fs.readFileSync(
+      path.join(desktopRoot, 'src/main/cindy-brain/nodeRuntimeBroker.ts'), 'utf8',
     );
     // 窄接口冻结挂载,原样模式伪装 argv,不引 child_process 自己生进程。
     expect(worker).toContain('__CINDY_NODE__');
@@ -131,6 +140,7 @@ describe('Node runtime packaging contract', () => {
     // broker 守门:形状校验 + 申报清单 + 数量顶 + 级联收尾。
     expect(broker).toContain('parseGhostNodeChildToHostMessage');
     expect(broker).toContain('GHOST_NODE_MAX_CHILDREN_PER_GHOST');
-    expect(broker).toContain('GHOST_NODE_CHILD_MODE_FLAG');
+    expect(adapter).toContain('GHOST_NODE_CHILD_MODE_FLAG');
+    expect(adapter).toContain('utilityProcess.fork');
   });
 });

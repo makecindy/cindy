@@ -19754,5 +19754,15 @@
     "browserFallback": "GitHub を開いて Cindy にスターを付けてください。",
     "openGithub": "GitHub を開く",
     "openFailed": "GitHub を開けませんでした。"
+  },
+  "hostConnection": {
+    "connecting": "Cindy に接続中…",
+    "restoring": "タスクの状態を復元中…",
+    "retrying": "タスクの状態を再同期しています…",
+    "pairing": "接続の再認証が必要です",
+    "pairingHelp": "このページを開いたまま、Cindy Host を起動したターミナルでウェブ画面を開くコマンドを再実行してください。新しいページでペアリングし、このページに戻ってください。",
+    "keepDraft": "入力中の下書きは保持されます。接続が回復すると、タスクの状態が同期されます。",
+    "retry": "再接続",
+    "desktopAuthHelp": "起動用ターミナルで接続設定を更新してから、この実験的なクライアントを開き直してください。"
   }
 }

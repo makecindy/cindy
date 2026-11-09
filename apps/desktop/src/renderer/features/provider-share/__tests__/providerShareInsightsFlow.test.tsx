@@ -74,8 +74,8 @@ vi.mock('../../../../main/logger.js', () => ({
 vi.mock('../../../../main/security/trustedAppRenderer.js', () => ({
   assertTrustedAppRendererEvent: vi.fn(),
 }));
-vi.mock('../../../../main/device-link/settings-store.js', async (original) => ({
-  ...(await original<typeof import('../../../../main/device-link/settings-store.js')>()),
+vi.mock('../../../../main/device-link/settings-store.desktop.js', async (original) => ({
+  ...(await original<typeof import('../../../../main/device-link/settings-store.desktop.js')>()),
   readDeviceLinkSettings: () => ({
     remoteControlEnabled: true,
     keepAwake: false,
@@ -215,7 +215,7 @@ import {
   __testing as dispatch,
   setProviderShareAccess,
   setRemoteAgentHandler,
-} from '../../../../main/device-link/dispatch';
+} from '../../../../main/device-link/dispatch.desktop';
 import { createProviderShareVisibilityStore } from '../../../../main/device-link/providerShareVisibility';
 import { ProviderShareInsightsSection } from '../ProviderShareInsightsSection';
 

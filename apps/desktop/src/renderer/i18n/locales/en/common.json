@@ -19826,5 +19826,15 @@
     "browserFallback": "Open GitHub to star Cindy.",
     "openGithub": "Open GitHub",
     "openFailed": "Could not open GitHub."
+  },
+  "hostConnection": {
+    "connecting": "Connecting to Cindy…",
+    "restoring": "Restoring task state…",
+    "retrying": "Task state is not yet synced. Retrying…",
+    "pairing": "Connect authorization required",
+    "pairingHelp": "Keep this page open. In the terminal used to start Cindy Host, run the command to open the web client again. Pair the new page, then return here.",
+    "keepDraft": "Your draft stays here. Task state will sync when the connection recovers.",
+    "retry": "Retry connection",
+    "desktopAuthHelp": "Update the Host connection settings in your launch terminal, then reopen this experimental client."
   }
 }

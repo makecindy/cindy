@@ -2,7 +2,7 @@ import { flushStandbyUsage, importStandbyUsage } from './providerShareAvailabili
 import { publishShareAvailability, refreshStandbyGuests } from './providerShareAvailability.js';
 import { onProviderGroupChanged } from '../provider-group/store.js';
 import { onRemoteProviderAccessChanged } from '../maker-host/remote-provider-access-store.js';
-import { onDeviceLinkSettingChanged } from './settings-store.js';
+import { onDeviceLinkSettingChanged } from './settings-store.desktop.js';
 import { isProviderShareMemberBudget } from '../../shared/providerShareBudget.js';
 import { CONTROLLED_MODEL_CATALOG_CHANGED } from '../../shared/controlledModelCatalog.js';
 import { readMemberBudgetStatus, supportsMemberBudget } from './providerShareBudgetRuntime.js';
@@ -10,10 +10,10 @@ import { isRemoteAgentLimitsPatch } from '../../shared/remoteAgentLimits.js';
 import { supportsSubscriptionFastPolicy, unifiedModelKeyId } from '@cindy/model-providers';
 import { providerFastPolicy } from '../maker-host/provider-fast-policy-store.js';
 import { notifySubscriptionFastPolicyChanged } from '../maker-host/subscription-fast-policy.js';
-import { notifyProviderShareCatalogChanged } from './dispatch.js';
+import { notifyProviderShareCatalogChanged } from './dispatch.desktop.js';
 import { DEVICE_LINK_PUSH } from '../../shared/deviceLinkIpc.js';
 import { readRemoteAgentLimitsState, saveRemoteAgentLimits } from '../remote-agent/host/limitsStore.js';
-import { remoteAgentLimitUsage, revalidateRemoteModelAccess } from './dispatch.js';
+import { remoteAgentLimitUsage, revalidateRemoteModelAccess } from './dispatch.desktop.js';
 /**
  * 供应商分享的本机接线：分享者与受邀者两侧运行时的起停、推送给 Renderer、系统通知，以及
  * Renderer 的命令通道。账号操作只接受本机应用窗口，不能经设备互联从别的电脑调用。
@@ -90,7 +90,7 @@ import {
   providerShareActiveControllers,
   revokeProviderShareControllers,
   setProviderShareAccess,
-} from './dispatch.js';
+} from './dispatch.desktop.js';
 import { getDeviceLinkInvokeContext } from './invoke-context.js';
 import { tapWindowBroadcast } from './broadcast-tap.js';
 import { MAKER_PUSH } from '../maker-ipc/channels.js';
@@ -147,7 +147,7 @@ import {
   type ProviderShareReshareRecord,
 } from './providerShareReshare.js';
 import { getProviderShareUsageStore, installProviderShareUsageStore, providerUsageLocalDay } from './providerShareUsageStore.js';
-import { readDeviceLinkSettings, readLastKnownDeviceNames } from './settings-store.js';
+import { readDeviceLinkSettings, readLastKnownDeviceNames } from './settings-store.desktop.js';
 import { currentProviderPartyUsageStore, type ProviderPartyUsage } from '../usage/providerPartyUsageStore.js';
 
 const log = createLogger('provider-share');

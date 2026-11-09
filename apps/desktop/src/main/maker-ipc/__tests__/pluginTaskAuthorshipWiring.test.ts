@@ -11,7 +11,7 @@ import { redactInputProjectionForSharedGuest } from '../../device-link/sharedTas
 import { MCP_APP_MESSAGE_GUARD } from '../../mcp-apps/message.js';
 import { captureAgentRequest } from '../forwardedRequest.js';
 import { restoreAutoReviewUserIntent, type AutoReviewHistoryMessage } from '../autoReviewUserIntent.js';
-import { AgentInputCoordinator } from '../agent-input-coordinator.js';
+import { AgentInputCoordinator } from '../agent-input-coordinator.desktop.js';
 import { createPluginTargetReviewLoader } from '../../cindy-brain/pluginTargetReview.js';
 import { createPluginTaskReviewResolver } from '../pluginTaskReviewContext.js';
 

@@ -26,7 +26,7 @@ vi.mock('../../provider-group/runtime.js', () => ({ getProviderGroupDirectory: (
 vi.mock('../../maker-host/remote-provider-access-store.js', () => ({ isRemoteProviderInvocationAllowed: () => true }));
 vi.mock('../../maker-host/createDesktopProviderService.js', () => ({ getDesktopProviderService: () => ({ listProviders: async () => [{ id: 'group', connected: f.connected, models: { codex: [{ id: 'allowed' }] } }] }) }));
 vi.mock('../remoteModelAccess.js', () => ({ remoteModelAccess: { allowsDelegatedExecution: (_p: string, model: string) => !f.budget && model === 'allowed' } }));
-vi.mock('../settings-store.js', () => ({ readDeviceLinkSettings: () => ({ remoteControlEnabled: f.remote, disabledControlDeviceIds: [], revokedControllers: [] }) }));
+vi.mock('../settings-store.desktop.js', () => ({ readDeviceLinkSettings: () => ({ remoteControlEnabled: f.remote, disabledControlDeviceIds: [], revokedControllers: [] }) }));
 vi.mock('../providerShareCrossRegion.js', () => ({ isCrossRegionShare: () => false }));
 vi.mock('../providerShareGuest.js', () => ({ findReceivedShare: () => ({ standbyOnline: true }) }));
 vi.mock('../providerShareDelegatedAccess.js', () => ({ applyProviderShareDelegation: (...args: any[]) => f.apply(...args), delegatedProviderShareLeases: () => f.leases,

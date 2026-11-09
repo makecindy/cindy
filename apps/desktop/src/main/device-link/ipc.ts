@@ -87,7 +87,7 @@ import {
   readControllerDisplayNameFreshnessSince,
   waitForNewerControllerDisplayNameDirectoryRefresh,
 } from './index';
-import { getActiveControllers } from './dispatch';
+import { getActiveControllers } from './dispatch.desktop';
 import { rewriteOutboundMedia, withPeerAttachmentUpload } from './outboundMedia';
 import { createSentImageRetainer } from './remoteMediaPersistentCache';
 import { withOutboundReviewConfirmation } from '../maker-ipc/reviewOutboundInput.js';
@@ -118,7 +118,7 @@ import {
   readLastKnownDeviceNames,
   rememberLastKnownDeviceName,
   setDeviceControlEnabled,
-} from './settings-store';
+} from './settings-store.desktop';
 import { activeOwnerScopeKey, ownerScopedUserDataPath } from '../appSessionState';
 import {
   coerceCachedSession,

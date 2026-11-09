@@ -24,7 +24,7 @@ import type { OpenDialogOptions } from 'electron';
 import { and, desc, eq, gt, inArray, isNull, ne, or, sql } from 'drizzle-orm';
 
 import { getDbClient, tryGetDbClient } from '../client/current';
-import { flushAssistantSamplingMetadata } from '../../messagePersistBroadcaster.js';
+import { flushAssistantSamplingMetadata } from '../../messagePersistBroadcaster.desktop.js';
 import { notifyAgentIslandCompanionChanged } from '../agentIslandSessionPatch.js';
 import type {
   BotsReparentDelegationsResult,

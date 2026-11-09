@@ -63,7 +63,7 @@ import { ProjectAutomationLoader } from './project-automation-loader';
 import { MakerScheduleRunner, type SchedulerQueueDeps } from './runner';
 import { setSilencedRunProbe } from './silent-output';
 import { listMessagesForAgentHandoff } from '../localDb/ipc/messages.js';
-import { drainPersistQueue } from '../messagePersistBroadcaster.js';
+import { drainPersistQueue } from '../messagePersistBroadcaster.desktop.js';
 import { buildForcedFailureRun } from './forcedFailureRun';
 import { ScriptScheduleRunner } from './script-runner';
 import { SchedulerScriptCapabilityBroker } from './script-capability-broker';

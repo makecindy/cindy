@@ -113,11 +113,11 @@ vi.mock('../device-link/index', () => ({
     authoritativeName: null,
   }),
 }));
-vi.mock('../device-link/dispatch', () => ({
+vi.mock('../device-link/dispatch.desktop', () => ({
   getActiveControllers: () => [],
 }));
-vi.mock('../device-link/settings-store', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../device-link/settings-store')>();
+vi.mock('../device-link/settings-store.desktop', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../device-link/settings-store.desktop')>();
   return {
     ...actual,
     readDeviceLinkSettings: () => ({
@@ -167,7 +167,7 @@ import { ReviewArtifactAuthorizationError } from '../reviewer/reviewArtifactAuth
 import {
   __testing as settingsTesting,
   normalizeCachedDeviceName,
-} from '../device-link/settings-store';
+} from '../device-link/settings-store.desktop';
 import { __testing as refcountTesting } from '../device-link/subscriptionRefcount';
 import {
   applyControllerDisplayNamePresence,

@@ -28,9 +28,9 @@ vi.mock('electron', async (importOriginal) => {
   } };
 });
 
-vi.mock('../../maker-host/custom-mcp-store.js', async () => {
-  const actual = await vi.importActual<typeof import('../../maker-host/custom-mcp-store.js')>(
-    '../../maker-host/custom-mcp-store.js',
+vi.mock('../../maker-host/custom-mcp-store.desktop.js', async () => {
+  const actual = await vi.importActual<typeof import('../../maker-host/custom-mcp-store.desktop.js')>(
+    '../../maker-host/custom-mcp-store.desktop.js',
   );
   return {
     ...actual,
@@ -49,7 +49,7 @@ import {
   refreshCustomMcpProviders,
   registerCustomMcpArrays,
   resetCustomMcpRegistry,
-} from '../custom-mcp-registry.js';
+} from '../custom-mcp-registry.desktop.js';
 
 function config(id: string): CustomMcpConfig {
   return {

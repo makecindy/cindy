@@ -6,12 +6,12 @@ import { createTaskCompletionDeliveryHost, type TaskCompletionDeliveryHost } fro
 import { setRoutineResultDispatch } from '../routines/deliveryDispatch.js';
 import { McpSetupBridge } from './mcpSetupBridge.js';
 import type { McpSetupProposal, McpSetupRequest } from '../../shared/mcpSetup.js';
-import { outboundFetch } from '../maker-host/outbound-fetch.js';
+import { outboundFetch } from '../maker-host/outbound-fetch.desktop.js';
 import { measureTraceOperation } from '../performance-trace/measure.js';
 import { assertSessionCreationCurrent, currentSessionCreationSignal } from '../localDb/sessionRuntimeCleanup.js';
 import { pagePermissionGrants } from '../mcp-apps/pagePermissions.js';
 import { setPluginPageToolRunner } from '../mcp-integrations/plugin-app-registry.js';
-import { getCindyGhostsMcpDeps } from '../mcp-integrations/ghost.js';
+import { getCindyGhostsMcpDeps } from '../mcp-integrations/ghost.desktop.js';
 import { pluginAppResult } from '../mcp-apps/pluginCards.js';
 import { restorePluginPageSession } from '../mcp-apps/pluginPageCall.js';
 import { resumeInterruptedScheduleRun } from '../scheduler-host/index.js';
@@ -106,7 +106,7 @@ import {
   markProviderGroupReleased,
   readProviderGroupBinding,
   writeProviderGroupBinding,
-} from '../provider-group/bindings.js';
+} from '../provider-group/bindings.desktop.js';
 import { getProviderGroupGuestSwitch } from '../provider-group/guestSwitch.js';
 import { liveDirectGuestSession } from '../remote-agent/controller/service.js';
 import { currentProviderPartyUsageStore } from '../usage/providerPartyUsageStore.js';
@@ -169,7 +169,7 @@ import { refreshSubscriptionAccountModels } from '../maker-host/subscription-acc
 import { syncSubscriptionAccountUsage } from '../usage/subscriptionAccountUsage.js';
 import { clearXaiRateLimitSnapshot } from '../usageBroadcaster.js';
 import { subscriptionAccountKind, subscriptionAccountState, loginSubscriptionAccount, logoutSubscriptionAccount, cancelSubscriptionAccountLogin, removeSubscriptionAccountCredentialsReversibly } from '../maker-host/subscription-account-auth.js';
-import { isCodexAccountProvider, codexAccountState, codexAccountLoginName, loginCodexAccount, logoutCodexAccount, cancelCodexAccountLogin, removeCodexAccountCredentialsReversibly, retireCodexAccount } from '../maker-host/codex-account-auth.js';
+import { isCodexAccountProvider, codexAccountState, codexAccountLoginName, loginCodexAccount, logoutCodexAccount, cancelCodexAccountLogin, removeCodexAccountCredentialsReversibly, retireCodexAccount } from '../maker-host/codex-account-auth.desktop.js';
 import { projectRemoteBotDelegations } from './remoteBotDelegations.js';
 /**
  * registerMakerIpc — 把 Maker Core 的能力暴露为 maker:* IPC channel。
@@ -278,7 +278,7 @@ import { resolveSessionProject } from '../mcp-integrations/projectManagement.js'
 import { isRetainableProjectSession } from '../../shared/sessionSource.js';
 import { initializePluginOauthCards } from '../plugin-oauth/cards.js';
 import { currentOauthIdentityScope, loadOauthSigningKey } from '../plugin-oauth/desktopIdentity.js';
-import { readDeviceLinkSettings, readLastKnownDeviceNames } from '../device-link/settings-store.js';
+import { readDeviceLinkSettings, readLastKnownDeviceNames } from '../device-link/settings-store.desktop.js';
 import { getDeviceLinkStatus, getMobileNotifyGeneration, sendMobileBotGroupNotify, sendMobileSessionNotify } from '../device-link/index.js';
 import type { AgentMeta, Session as RendererSession } from '../../renderer/lib/ccAgent.types';
 import {
@@ -330,7 +330,7 @@ import {
 } from '../cindy-brain/ghostSetupInteractionBridge.js';
 import { initGhostSetupCoordinator } from '../cindy-brain/ghostSetupCoordinator.js';
 import { classifyGhostVisibility } from '../cindy-brain/ghostVisibility.js';
-import { resolveSafe as resolveCindyMediaUrl } from '../cindy-media/blobStore.js';
+import { resolveSafe as resolveCindyMediaUrl } from '../cindy-media/blobStore.desktop.js';
 import { companionAvatarCache } from '../companion-cloud/avatarCacheHost.js';
 import { ingestMedia } from '../cindy-media/ingest.js';
 import { removeRefs as removeMediaRefs } from '../cindy-media/ledger.js';
@@ -375,9 +375,9 @@ import {
   getActiveCodexBridgeInstanceId,
   getActiveCodexBridgeServerNames,
   shutdownCodexEnvironment,
-} from '../mcp-integrations/codexEnvironment.js';
-import { invalidatePiEnvironment } from '../mcp-integrations/piEnvironment.js';
-import { REMOTE_MEMORY_SERVER_NAME, REMOTE_BOT_HELPER_SERVER_NAME } from '../mcp-integrations/codexHttpBridge.js';
+} from '../mcp-integrations/codexEnvironment.desktop.js';
+import { invalidatePiEnvironment } from '../mcp-integrations/piEnvironment.desktop.js';
+import { REMOTE_MEMORY_SERVER_NAME, REMOTE_BOT_HELPER_SERVER_NAME } from '../mcp-integrations/codexHttpBridge.desktop.js';
 import { getRemoteMcpBridgeToken } from '../mcp-integrations/remoteMcpBridgeToken.js';
 import {
   checkComputerDriverUpdate,
@@ -436,7 +436,7 @@ import {
   listAtProjectAgentResources,
   supportsAtProjectAgentResources,
 } from './atAgentCatalog.js';
-import * as imageCacheStore from '../imageCacheStore.js';
+import * as imageCacheStore from '../imageCacheStore.desktop.js';
 import * as cindyChatAttachments from '../cindy-media/chatAttachments.js';
 import { materializeSshRemoteMedia } from '../file-browser/ssh-media.js';
 import { readGeneratedImageFile, MAX_GENERATED_IMAGE_BYTES } from '../cindy-media/generatedMedia.js';
@@ -460,6 +460,7 @@ import { getMessagesForHistory } from '../localDb/chatHistoryReader.js';
 import {
   awaitAgentInputQueueSnapshotPersistence as awaitQueuedSnapshotWrite,
   loadAgentInputQueueSnapshot,
+  getPersistedInputClientIds,
   loadAgentInputQueueSnapshotCounts,
   saveAgentInputQueueSnapshot,
   saveCancelledInputDelivery,
@@ -655,7 +656,7 @@ import {
   getRemoteCcTurnSettledHandler,
   getRemoteCcStaleQuery,
 } from '../maker-host/remote-session-start-ensure.js';
-import { getCodexProxyAuthInjectionState } from '../maker-host/codex-proxy-host.js';
+import { getCodexProxyAuthInjectionState } from '../maker-host/codex-proxy-host.desktop.js';
 import {
   readCollaborationSettings,
   readCollaborationSettingsState,
@@ -854,7 +855,7 @@ import {
   resetTurnPersistState,
   saveTurnStartedAtForDeferred,
   type DeferredTurnErrorRow,
-} from '../messagePersistBroadcaster.js';
+} from '../messagePersistBroadcaster.desktop.js';
 import { ensureCcManagerInstalledOrInstall } from '../remote-ssh/cc-manager-install.js';
 import {
   ensureRemoteCodexMcpBridge,
@@ -932,7 +933,7 @@ import { dbToMakerAgentKind, makerToDbAgentKind } from '../../shared/agentKindCo
 import { normalizeSessionContextWindowBoundsRoute } from '../../shared/sessionContextWindowBounds.js';
 import { readWorkflowProgressForSession } from '../workflow-progress/reader.js';
 import { readSessionBackgroundTaskOutputTail } from '../background-task-output/reader.js';
-import { AgentInputCoordinator, markManualSchedulerContinuation } from './agent-input-coordinator.js';
+import { AgentInputCoordinator, markManualSchedulerContinuation } from './agent-input-coordinator.desktop.js';
 import { createAutomaticContinueEligibility, isActiveCompanionFailoverSession } from './automaticContinueEligibility.js';
 import { bindSilentStopContinuationGeneration } from './silentStopContinuationBinding.js';
 import { notePromptPredictionSessionStopped } from './promptPredictionStopLedger.js';
@@ -1240,7 +1241,7 @@ import { listMcpDuplicates, saveMcpDuplicateChoice } from '../maker-host/mcp-dup
 import {
   getBuiltinMcpServerNames,
   refreshCustomMcpProviders,
-} from '../mcp-integrations/custom-mcp-registry.js';
+} from '../mcp-integrations/custom-mcp-registry.desktop.js';
 import {
   getDesktopProviderService,
   getDesktopSelectableCatalog,
@@ -1316,7 +1317,7 @@ import {
   runGenericOAuthLogin,
   readCachedGenericOAuthAccessToken,
   refreshGenericOAuthIfNeeded,
-} from '../maker-host/generic-oauth.js';
+} from '../maker-host/generic-oauth.desktop.js';
 import {
   revokeCodexAccountUltrafast,
   getCustomProvider,
@@ -1483,7 +1484,7 @@ import {
   setRemoteSettingsPersist as setDeviceLinkRemoteSettingsPersist,
   setRemoteXaiSubscriptionUsageReader as setDeviceLinkRemoteXaiSubscriptionUsageReader,
   setRemoteClaudeSubscriptionUsageReader as setDeviceLinkRemoteClaudeSubscriptionUsageReader,
-} from '../device-link/dispatch.js';
+} from '../device-link/dispatch.desktop.js';
 import {
   deviceLinkInvokeControllerSupports,
   getDeviceLinkInvokeContext,
@@ -20423,18 +20424,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     );
   };
 
-  const getPersistedInputClientIds = async (
-    sessionId: string,
-    clientIds: string[],
-  ): Promise<Set<string>> => {
-    if (clientIds.length === 0) return new Set<string>();
-    const db = getDbClient().drizzle;
-    const rows = await db
-      .select({ clientId: messages.clientId })
-      .from(messages)
-      .where(and(eq(messages.sessionId, sessionId), inArray(messages.clientId, clientIds)));
-    return new Set(rows.map((row) => row.clientId));
-  };
+
 
   /**
    * Deferred queue materialisation creates local media before the coordinator

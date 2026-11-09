@@ -19754,5 +19754,15 @@
     "browserFallback": "GitHub를 열어 Cindy에 스타를 눌러 주세요.",
     "openGithub": "GitHub 열기",
     "openFailed": "GitHub를 열지 못했습니다."
+  },
+  "hostConnection": {
+    "connecting": "Cindy에 연결 중…",
+    "restoring": "작업 상태 복원 중…",
+    "retrying": "작업 상태를 다시 동기화하는 중…",
+    "pairing": "연결 인증이 필요합니다",
+    "pairingHelp": "이 페이지를 열어 두세요. Cindy Host를 시작한 터미널에서 웹 화면을 여는 명령을 다시 실행하고 새 페이지에서 페어링한 후 돌아오세요.",
+    "keepDraft": "작성 중인 초안은 유지됩니다. 연결이 복구되면 작업 상태가 동기화됩니다.",
+    "retry": "다시 연결",
+    "desktopAuthHelp": "시작 터미널에서 연결 설정을 업데이트한 후 이 실험용 클라이언트를 다시 여세요."
   }
 }

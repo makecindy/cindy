@@ -1,3 +1,5 @@
+import { managedWorktreeRoot } from './managedResourcePath.js';
+export { managedWorktreeRoot } from './managedResourcePath.js';
 import { createHash, randomUUID } from 'node:crypto';
 import fsSync from 'node:fs';
 import fs from 'node:fs/promises';
@@ -22,16 +24,6 @@ function sharedRuntimeRoot(): string {
   return path.join(app.getPath('appData'), 'Cindy', 'shared-worktree-runtime-leases');
 }
 
-/** Map a local cwd (including descendants) to its managed resource. SSH callers skip this helper. */
-export function managedWorktreeRoot(value: string): string | null {
-  let current = path.resolve(value);
-  for (;;) {
-    const parent = path.dirname(current);
-    if (isManagedWorktreeDirectoryName(path.basename(parent))) return current;
-    if (parent === current) return null;
-    current = parent;
-  }
-}
 
 function leaseFile(sessionId: string, directory: string): string {
   const key = createHash('sha256').update(`${sessionId}:${randomUUID()}`).digest('hex');

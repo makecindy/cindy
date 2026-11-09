@@ -1,3 +1,5 @@
+import { workdirProbeHostClient } from './workdir-probe-host/index.js';
+import type { HostConnectionState } from '@cindy/maker-shared/host-event-stream';
 import { applyMacWindowBackdrop, setMacSidebarWidth } from './macosDesktopBlur';
 import { createPersonalBuildMonitor } from './personalBuildMonitor.js';
 import { updatePersonalLocalPlugins } from './cindy-brain/index.js';
@@ -20,7 +22,7 @@ import { registerLoginItemIpc } from './login-item-ipc.js';
 import { registerMenubarIpc } from './menubar/ipc.js';
 import { initMenubarService, stopMenubarService } from './menubar/service.js';
 import { refreshQuotaPanelsControlState } from './quota-overview/panelController.js';
-import { getQuotaOverviewService } from './quota-overview/service.js';
+import { getQuotaOverviewService, readUsageWidgetSnapshot } from './quota-overview/service.js';
 import {
   createLatestSourceVersionReader,
   sourceChannel,
@@ -51,7 +53,7 @@ import {
   writeCindyMakeSyncLatestBeforeBuild,
 } from './cindy-make/settingsStore.js';
 import { retainProviderPresentationAfterAuthChange } from './maker-host/provider-presentation-store.js';
-import { codexAccountState } from './maker-host/codex-account-auth.js';
+import { codexAccountState } from './maker-host/codex-account-auth.desktop.js';
 import { syncSubscriptionAccountUsage } from './usage/subscriptionAccountUsage.js';
 import {
   clearSubscriptionAccountDiscoveredModels,
@@ -94,7 +96,7 @@ import {
   setWindowDesktopBlur,
   setWindowWallpaperCovered,
 } from './vibrancyConfig';
-import { getSessionThinkingSnapshots, getHistoryToolName, drainPersistQueue } from './messagePersistBroadcaster';
+import { getSessionThinkingSnapshots, getHistoryToolName, drainPersistQueue } from './messagePersistBroadcaster.desktop';
 import { applyVibrancyToSecondaryWindows } from './secondary-windows';
 import { rememberResolvedAppTheme, resolveAppThemeIsDark } from './resolved-app-theme';
 import {
@@ -357,11 +359,11 @@ import {
   registerRsbNativePopupSurfaceIpc,
 } from './rsb-browser-bridge/native-popup-surfaces.js';
 import { disposeAndroidAdb } from './mcp-integrations/android.js';
-import { shutdownCodexEnvironment } from './mcp-integrations/codexEnvironment.js';
-import { countLiveBridgeMcpSessions } from './mcp-integrations/codexHttpBridge.js';
-import { shutdownPiEnvironment } from './mcp-integrations/piEnvironment.js';
+import { shutdownCodexEnvironment } from './mcp-integrations/codexEnvironment.desktop.js';
+import { countLiveBridgeMcpSessions } from './mcp-integrations/codexHttpBridge.desktop.js';
+import { shutdownPiEnvironment } from './mcp-integrations/piEnvironment.desktop.js';
 import { fetchRemoteMediaImageBytes } from './device-link/remoteMediaProtocol';
-import * as imageCacheStore from './imageCacheStore';
+import * as imageCacheStore from './imageCacheStore.desktop';
 import { readCachedImage } from './cindy-media/readCachedImage';
 import {
   collectStreamWithLimit,
@@ -387,7 +389,7 @@ import {
   cindyMediaSchemePrivilege,
   registerCindyMediaProtocolHandler,
 } from './cindy-media/cindyMediaProtocol';
-import * as cindyMediaBlobStore from './cindy-media/blobStore';
+import * as cindyMediaBlobStore from './cindy-media/blobStore.desktop';
 import * as cindyChatAttachments from './cindy-media/chatAttachments';
 import { getFixedDirectoryStats, openOrCreateFixedDirectory } from './cindy-media/fixedDirectory';
 import { openMakeSourceDirectory, openMakeToolsDirectory } from './cindy-make/toolsDirectory';
@@ -571,7 +573,7 @@ import {
   type EmbeddingService,
 } from './embedding-host';
 import { readClaudeApiKey } from './maker-host/auth-adapters';
-import { outboundFetch } from './maker-host/outbound-fetch';
+import { outboundFetch } from './maker-host/outbound-fetch.desktop';
 import { registerDevEmbeddingIpc } from './ipc/dev/embedding';
 import {
   acquirePiSubagentLaunchFence,
@@ -693,9 +695,10 @@ import {
   getUpdateRelaunchControllers,
   hasInFlightRemoteInvokes,
   setHistoryToolNameReader,
+  setUsageWidgetSnapshotReader,
   pushSessionActivityToController,
   setSessionsSubscribedListener,
-} from './device-link/dispatch';
+} from './device-link/dispatch.desktop';
 import {
   registerDeviceLinkIpc,
   defaultDeps as deviceLinkIpcDeps,
@@ -801,7 +804,7 @@ import {
   refreshXaiModelsFromHttp,
 } from './maker-host/model-discovery/xai.js';
 import { notifyOpenAiMediaCredentialChanged } from './maker-host/model-discovery/openai-media.js';
-import { refreshCustomMcpProviders } from './mcp-integrations/custom-mcp-registry.js';
+import { refreshCustomMcpProviders } from './mcp-integrations/custom-mcp-registry.desktop.js';
 import {
   clearXaiRateLimitSnapshot,
   clearXaiSubscriptionUsageSnapshot,
@@ -817,7 +820,7 @@ import {
 import {
   disposeCodexProxy,
   getCodexProxyAuthInjectionState,
-} from './maker-host/codex-proxy-host.js';
+} from './maker-host/codex-proxy-host.desktop.js';
 import {
   disposeBrowserRuntime,
   registerBrowserBackendIpc,
@@ -827,7 +830,7 @@ import {
   setIsDetachedForBackend,
   setUserBrowserPageControlProvider,
 } from './mcp-integrations/browser.js';
-import { setPageControlGhostProvider } from './mcp-integrations/ghost.js';
+import { setPageControlGhostProvider } from './mcp-integrations/ghost.desktop.js';
 import { RsbWindowController } from './right-sidebar-window/controller.js';
 import { resolveRsbHostContextFromSession } from './right-sidebar-window/resolveHostContext.js';
 import { createRightSidebarWindow } from './right-sidebar-window/window.js';
@@ -940,7 +943,7 @@ import {
   onClaudeCliLoginStatusChange,
   readClaudeCliLoginStatus,
   runClaudeCliLogin,
-} from './maker-host/claude-native-cli.js';
+} from './maker-host/claude-native-cli.desktop.js';
 import { closeClaudeCliProxyBridge } from './maker-host/claude-cli-proxy-bridge.js';
 import { startLegacyClaudeConfigMigration } from './maker-host/claude-legacy-config-migration.js';
 import { isNativeProviderAuthBound, isNativeProviderAuthRevoked } from './maker-host/nativeProviderAuthBinding.js';
@@ -949,7 +952,7 @@ import {
   cancelGrokOAuthLogin,
   logoutGrok,
   hasGrokOAuthLogin,
-} from './maker-host/grok-oauth-login.js';
+} from './maker-host/grok-oauth-login.desktop.js';
 import { setGrokDeviceLoginConnectedHandler } from './maker-host/grok-device-login-service.js';
 import { setXaiAuthInvalidatedHandler } from './maker-host/xai-auth-invalidation-host.js';
 import { clearXaiMediaModels } from './maker-host/model-discovery/xai-media.js';
@@ -1350,9 +1353,18 @@ function installHostClientMode(): boolean {
       if (!win.isDestroyed()) win.webContents.send(channel, ...args);
     }
   };
-  startHostEventBridge({
+  let hostConnectionState: HostConnectionState | null = null;
+  const eventBridge = startHostEventBridge({
     baseUrl: delegation.baseUrl,
     token: delegation.token,
+    beforeEvents: async (signal) => {
+      const auth = await hostClient.request('/api/auth/state', null, signal) as authManager.AuthState;
+      if (!signal.aborted) authManager.receiveHostAuthState(auth);
+    },
+    onConnectionState: (state) => {
+      hostConnectionState = state;
+      sendToAllWindows('host-client:connection', state);
+    },
     onInputProjection: (payload) => sendToAllWindows('maker:input:projection', payload),
     onInteractionRequest: (payload) => sendToAllWindows('maker:interaction-request', payload),
     onInteractionDismissed: (payload) => sendToAllWindows('maker:interaction-dismissed', payload),
@@ -1389,6 +1401,9 @@ function installHostClientMode(): boolean {
     onMessageCreated: (event: any) => {
       sendToAllWindows('local-db:messages:created', { sessionId: event?.sessionId, message: event?.message });
     },
+    onMessageDeleted: event => sendToAllWindows('local-db:messages:deleted', event),
+    onErrorPersisted: event => sendToAllWindows('local-db:session:error-persisted', event),
+    onSubagentRunsChanged: event => sendToAllWindows('local-db:subagent-runs:changed', event),
     onProjectAliasesChanged: () => {
       sendToAllWindows('local-db:project-aliases:changed', {});
     },
@@ -1399,6 +1414,14 @@ function installHostClientMode(): boolean {
       );
     },
   });
+  ipcMain.on('host-client:observe', (event) => {
+    if (!isTrustedAppRendererEvent(event) || !hostConnectionState) return;
+    event.sender.send('host-client:connection', hostConnectionState);
+  });
+  ipcMain.on('host-client:retry', (event) => {
+    if (isTrustedAppRendererEvent(event)) eventBridge.reconnect();
+  });
+  app.once('before-quit', () => eventBridge());
   return true;
 }
 
@@ -1820,6 +1843,7 @@ function rebindChatEmbeddingSettingsWatcher(): void {
 }
 
 app.once('will-quit', () => chatEmbeddingSettingsWatcher.dispose());
+app.once('before-quit', () => workdirProbeHostClient.dispose());
 
 /**
  * 「聊天嵌入」关闭时的收尾: 总是让 chat 的 enqueue 守卫立即失效; 但只有在没有插件
@@ -10490,6 +10514,7 @@ app.on('ready', async () => {
   initHeartbeatService();
   // 设备互联(跨设备远程控制):登录后连 relay,登出即断;开关与设备列表 IPC 一并注册
   let updateRelaunchRemoteBusy = false;
+  setUsageWidgetSnapshotReader(readUsageWidgetSnapshot);
   initDeviceLinkService({
     onControlledStateChanged: refreshQuotaPanelsControlState,
     onUpdateRelaunchBusyChanged: (busy) => {
