@@ -25,6 +25,7 @@ import { restoreAutoReviewUserIntent } from '../autoReviewUserIntent.js';
 import { verifiedOwnerRequestText } from '../../../shared/forwardedRequest.js';
 import { createWireNoteMemory } from '../wireNoteMemory.js';
 import { resolveSendToSessionCreateRoute } from '../sendToSessionExecutionConfig.js';
+import { createGhostAgentTurnRunner, type GhostAgentTurnRunnerDeps } from '../ghostAgentTurnRunner.js';
 
 const registerSource = readFileSync(resolve(__dirname, '..', 'register.ts'), 'utf8').replace(
   /\r\n?/g,
@@ -135,7 +136,7 @@ const loadBotTaskDispatch = new Function(
   'scope',
   `with (scope) { return (function () { ${botTaskDispatchSlice()} })(); }`,
 ) as (scope: object) => {
-  sendToSessionInternal: (input: Record<string, unknown>) => Promise<{ ok: boolean; wakeKind?: string }>;
+  sendToSessionInternal: (input: Record<string, unknown>) => ReturnType<GhostAgentTurnRunnerDeps['send']>;
   groupDispatch: (input: Record<string, unknown>) => Promise<{ ok: boolean; wakeKind?: string }>;
   dispatchBotSessionMessage: (input: Record<string, unknown>) => Promise<{ ok: boolean; wakeKind?: string }>;
   delegationDispatch: (
@@ -284,6 +285,112 @@ function botTaskDispatchHarness(
   });
   return { ...loadBotTaskDispatch(scope), scope: stubs, bootstrapped, sentTo, sendOptions, readAutoReviewHistory, activity, touchSessionActivityInDb };
 }
+
+// #9489 review: the runner admitted remote tasks but omitted the cold-resume
+// policy. Existing tests supplied that policy themselves, hiding the escalation.
+// Reuse this guard fixture's production send closure; assert the actual bootstrap
+// permissions for an idle remote task, including the newly persisted fork target.
+it.each(['continue', 'fork'] as const)('preserves stored permissions through plugin %s cold resume', async mode => {
+  for (const { permissionMode, planModeEnabled } of [
+    { permissionMode: 'ask', planModeEnabled: false },
+    { permissionMode: 'auto', planModeEnabled: false },
+    { permissionMode: 'ask', planModeEnabled: true },
+  ]) {
+    const rows: Record<string, { permissionMode: string; planModeEnabled: boolean }> = {
+      source: { permissionMode, planModeEnabled },
+    };
+    const getSessionMeta = async (id: string) => ({ id, agentKind: 'codex' as const,
+      workDir: '/tmp/fixture/source', model: 'remote-model', providerId: 'remote-only-provider',
+      agentDeviceId: 'other-computer', sdkSessionId: `sdk-${id}` });
+    const h = botTaskDispatchHarness(rows, {}, {
+      maker: { getSession: () => undefined, getSessionMeta },
+    });
+    const admitLocalSession = vi.fn(async () => { throw new Error('Remote provider is not in the local catalog'); });
+    const runner = createGhostAgentTurnRunner({
+      readSessionMeta: getSessionMeta,
+      admitLocalSession,
+      readPluginName: () => 'GitHub',
+      send: h.sendToSessionInternal,
+      readLatestAssistant: async () => ({ clientId: 'latest-assistant' }),
+      forkSessionAtMessage: async () => {
+        // Production forks inherit permissions but create an unarmed Plan row.
+        rows.forked = { ...rows.source!, planModeEnabled: false };
+        return { id: 'forked' };
+      },
+      broadcastSessionCreated: () => {},
+    });
+    const target = mode === 'continue' ? 'source' : 'forked';
+    expect(await runner({ ghostId: 'github', ghostVersion: '1.5.5', sourceSessionId: 'source',
+      mode, prompt: 'Create a draft PR', persistedContent: 'Create a draft PR' }))
+      .toEqual({ ok: true, sessionId: target, disposition: mode === 'continue' ? 'resumed' : 'forked' });
+    expect(admitLocalSession).not.toHaveBeenCalled();
+    expect(h.bootstrapped).toHaveLength(1);
+    expect(h.bootstrapped[0]).toMatchObject({ id: target, permissionMode, planMode: rows[target]!.planModeEnabled });
+    expect(h.sentTo).toEqual([{ sessionId: target, planMode: false }]);
+  }
+});
+
+// #9489 acceptance gap (guard): a mocked runner send result cannot prove that
+// production queue admission avoids cold bootstrap, or that a startup failure
+// reaches the caller. Exercise both through the existing production send closure.
+describe('plugin continuation through production send admission', () => {
+  function fixture(live: Record<string, object> = {}, overrides: Record<string, unknown> = {}) {
+    const meta = { id: 'source', agentKind: 'codex' as const, workDir: '/tmp/fixture/source',
+      model: 'remote-model', providerId: 'remote-only-provider', agentDeviceId: 'other-computer' };
+    const row = { permissionMode: 'ask', planModeEnabled: true, providerId: meta.providerId };
+    const h = botTaskDispatchHarness({ source: row }, live, {
+      maker: { getSession: (id: string) => live[id], getSessionMeta: async () => meta }, ...overrides,
+    });
+    const admitLocalSession = vi.fn(async () => { throw new Error('Not in local catalog'); });
+    const runner = createGhostAgentTurnRunner({
+      readSessionMeta: async () => meta, admitLocalSession, readPluginName: () => 'GitHub',
+      send: h.sendToSessionInternal, readLatestAssistant: async () => undefined,
+      forkSessionAtMessage: async () => { throw new Error('Not a fork'); }, broadcastSessionCreated: () => {},
+    });
+    const request = { ghostId: 'github', ghostVersion: '1.5.5', sourceSessionId: 'source',
+      mode: 'continue' as const, prompt: 'Continue fixture', persistedContent: 'Visible fixture' };
+    return { ...h, meta, row, runner, request, admitLocalSession };
+  }
+
+  it.each(['restored-queue', 'live-turn'] as const)('queues behind %s without starting a second Agent', async state => {
+    const h = fixture(state === 'live-turn' ? { source: { id: 'source', isTurnRunning: () => true } } : {}, {
+      inputCoordinator: { ensureQueueRestored: async () => {}, shouldQueueNewTurn: () => state === 'restored-queue' },
+    });
+    expect(await h.runner(h.request)).toEqual({ ok: true, sessionId: 'source', disposition: 'queued' });
+    expect(h.scope.enqueueSendToSessionMessage).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      targetSessionId: 'source', message: h.request.prompt, persistedContent: h.request.persistedContent,
+      meta: expect.objectContaining({ providerId: 'remote-only-provider', agentDeviceId: 'other-computer' }),
+      dbRow: expect.objectContaining({ permissionMode: 'ask', planModeEnabled: true, providerId: 'remote-only-provider' }),
+      sourcePlugin: { pluginId: 'github', name: 'GitHub' },
+    }));
+    expect(h.bootstrapped).toEqual([]);
+    expect(h.sentTo).toEqual([]);
+    expect(h.admitLocalSession).not.toHaveBeenCalled();
+  });
+
+  it('keeps the live handle and its permission mode for an idle task', async () => {
+    const live = { id: 'source', permissionMode: 'ask', isTurnRunning: () => false };
+    const h = fixture({ source: live });
+    expect(await h.runner(h.request)).toEqual({ ok: true, sessionId: 'source', disposition: 'active' });
+    expect(h.bootstrapped).toEqual([]);
+    expect(h.sentTo).toEqual([{ sessionId: 'source', planMode: false }]);
+    expect(live.permissionMode).toBe('ask');
+    expect(h.scope.enqueueSendToSessionMessage).not.toHaveBeenCalled();
+  });
+
+  it('returns remote startup failure details without sending or silently rerouting', async () => {
+    const ensureRemoteReadyForSessionStart = vi.fn(async () => { throw new Error('Execution computer is offline'); });
+    const h = fixture({}, { ensureRemoteReadyForSessionStart });
+    expect(await h.runner(h.request)).toEqual({ ok: false, errorCode: 'AGENT_NOT_READY', message: 'Execution computer is offline' });
+    expect(ensureRemoteReadyForSessionStart).toHaveBeenCalledExactlyOnceWith({ createOpts: expect.objectContaining({
+      id: 'source', providerId: 'remote-only-provider', model: 'remote-model', permissionMode: 'ask', planMode: true,
+    }) });
+    expect(h.bootstrapped).toEqual([]);
+    expect(h.sentTo).toEqual([]);
+    expect(h.scope.enqueueSendToSessionMessage).not.toHaveBeenCalled();
+    expect(h.admitLocalSession).not.toHaveBeenCalled();
+  });
+});
 
 it('advances an accepted send_to_session with a dispatcher without touching human-send time', async () => {
   const row = { permissionMode: 'auto', planModeEnabled: false, userSendAt: 123 };
