@@ -3292,11 +3292,10 @@ function scheduleRefresh(token: string): void {
   try {
     const payload = JSON.parse(Buffer.from(token.split('.')[1], 'base64').toString('utf-8'));
     const delay = (payload.exp - 300) * 1000 - Date.now();
-    if (delay <= 0) {
-      refresh();
-    } else {
-      refreshTimer = setTimeout(() => refresh(), delay);
-    }
+    // A cached rotation may already be due after retrying a failed save. Use a
+    // timer even then: a synchronous refresh would only join the current flight
+    // and leave no request scheduled after its refreshPromise is cleared.
+    refreshTimer = setTimeout(() => refresh(), Math.max(0, delay));
   } catch {
     // Invalid JWT format — skip scheduling
   }

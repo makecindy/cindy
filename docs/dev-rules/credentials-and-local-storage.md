@@ -233,6 +233,8 @@ membership，复用 Passport 的在途请求及先保存再使用的轮换逻辑
 成功续期及主动清会话清除记录，不新增落盘状态。恢复遇到限流、断网或临时
 错误时保留会话，沿用共享退避和 Retry-After。该路径不能保证恢复已经丢失轮换响应的
 Passport；服务端安全重放能力仍需单独核实。
+共享 auth-client 对 429 和 503 均保留有效 Retry-After，包括非 JSON 的错误响应；
+Passport 刷新与 membership exchange 的恢复路径均遵守服务器冷却期限。
 
 成功轮换后的凭据提交不能按账号切换事务回滚：新 vault 已保存、但活动会话投影写入
 失败时保留新 vault 并如实报错；投影仍可读时由多来源续期追赶，投影损坏时由下次
@@ -247,6 +249,8 @@ Passport；服务端安全重放能力仍需单独核实。
 活动会话投影），才允许保存。vault 已前进或账号被删除时丢弃旧结果，不发布旧访问令牌，
 再由既有多来源恢复追赶。旧版只更新活动会话投影时，允许从原本就与 vault 不同的
 有效凭据刷新，但仍必须满足 vault 从请求前到提交时未变化；旧投影本身不能授权覆盖。
+补写缓存结果时，访问令牌若已到提前续期窗口或过期，必须通过异步定时器发起下一次
+刷新，等当前请求结束后使用刚保存的新凭据；不能同步调用并复用尚未结束的刷新请求。
 实现与回归见 authManager.ts 的 commitDesktopRefreshCredentials、
 recoverActiveResourceSession 及 authColdStartRecovery.test.ts。
 

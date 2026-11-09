@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import ts from 'typescript';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AuthRefreshBackoff } from '../authRefreshBackoff';
-import { AuthApiError, retryAfterDeadline } from '@cindy/auth-client';
+import { AuthApiError, CindyAuthClient, retryAfterDeadline } from '@cindy/auth-client';
 import { runRefreshWithReplacementRetry, resolveSessionExpiredReason } from '../authRefreshFailure';
 import {
   awaitWithStartupTimeout,
@@ -691,6 +691,52 @@ describe('lost Resource rotation response', () => {
     expect(Date.now() + h.backoff.remaining(0)).toBeGreaterThanOrEqual(retryAt);
   });
 
+  // P2: exercise the real HTTP adapter as well as the recovery scheduler; a
+  // synthetic AuthApiError with retryAt would hide the missing 503 header.
+  it.each([
+    ['runtime', 'refresh'], ['runtime', 'exchange'],
+    ['cold-start', 'refresh'], ['cold-start', 'exchange'],
+  ] as const)('honors a 503 cooldown during %s Passport %s', async (phase, stage) => {
+    const h = setupSavedPassport();
+    let retryAt = 0;
+    const fetch = vi.fn(async () => {
+      retryAt = Date.now() + 600_000;
+      return new Response('Temporarily unavailable', {
+        status: 503, headers: { 'Retry-After': '600' },
+      });
+    });
+    const client = new CindyAuthClient({
+      baseUrl: 'https://auth.example.invalid', region: 'global',
+      deviceId: 'test-device', clientType: 'desktop', fetch,
+    });
+    if (stage === 'refresh') {
+      h.deps.refreshPassportSessionSingleFlight.mockImplementation(
+        () => client.refreshAccount('test-passport-refresh'),
+      );
+    } else {
+      h.deps.exchangeAccountMembership.mockImplementation(
+        () => client.exchangeAccountMembership('test-account-access', 'original'),
+      );
+    }
+    h.request.mockResolvedValueOnce({ ok: false, status: 0, data: null });
+    let pending: Promise<unknown>;
+    if (phase === 'runtime') {
+      h.activateRuntime();
+      await h.runtimeRefresh();
+      pending = Promise.resolve();
+    } else pending = h.start();
+    await vi.advanceTimersByTimeAsync(62_000);
+    expect(fetch).toHaveBeenCalledOnce();
+    const requestCount = h.request.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(retryAt - Date.now() - 1);
+    expect(fetch).toHaveBeenCalledOnce();
+    expect(h.request).toHaveBeenCalledTimes(requestCount);
+    expect(h.saved.session.refreshToken).toBe('test-refresh');
+    expect(h.deps.expireRuntimeAuth).not.toHaveBeenCalled();
+    h.stop();
+    await pending;
+  });
+
   it.each(['missing-passport', 'logged-out', 'passive', 'unambiguous-invalid', 'DEVICE_MISMATCH', 'MEMBERSHIP_DISABLED'])(
     'does not attempt Passport recovery for %s', async reason => {
       const h = setupSavedPassport();
@@ -825,6 +871,34 @@ describe('lost Resource rotation response', () => {
     expect(h.saved.session.refreshToken).toBe('test-rotated');
     expect(h.request).toHaveBeenCalledOnce();
     expect(h.deps.notifyAccessTokenRefreshed).toHaveBeenCalledOnce();
+  });
+
+  // P2: a cached JWT can age while its credential write is failing. Saving it
+  // must leave a new timer, not join the refreshPromise that is still finishing.
+  it.each([30, 330])('renews after saving a cached JWT initially valid for %s seconds', async seconds => {
+    const h = setup();
+    h.activateRuntime();
+    const jwt = (expiresIn: number) =>
+      `test.${Buffer.from(JSON.stringify({ exp: Date.now() / 1000 + expiresIn })).toString('base64url')}.test`;
+    h.request.mockResolvedValueOnce({
+      ...h.ok, data: { ...h.ok.data, accessToken: jwt(seconds) },
+    }).mockImplementationOnce(async (token: unknown) => {
+      expect(token).toBe('test-rotated');
+      expect(h.saved.session.refreshToken).toBe('test-rotated');
+      return { ...h.ok, data: { ...h.ok.data, accessToken: jwt(3600), refreshToken: 'test-newest' } };
+    });
+    h.deps.writePersistedAuthSessionOrThrow.mockImplementationOnce(() => {
+      throw new Error('Test projection write failed');
+    });
+    await expect(h.runtimeRefresh()).resolves.toBe(false);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(h.saved.session.refreshToken).toBe('test-rotated');
+    await vi.advanceTimersByTimeAsync(1);
+    expect(h.request).toHaveBeenCalledTimes(2);
+    expect(h.saved.session.refreshToken).toBe('test-newest');
+    expect(h.deps.expireRuntimeAuth).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(h.request).toHaveBeenCalledTimes(2);
   });
 
   it('keeps a newer vault generation written while the refresh request is in flight', async () => {
