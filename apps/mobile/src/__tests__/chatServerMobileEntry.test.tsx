@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, createElement } from 'react';
+import { act, createElement, useEffect } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const h = vi.hoisted(() => ({
@@ -63,7 +63,8 @@ let roster: ReturnType<typeof useBotGroupRoster>;
 let chat: ReturnType<typeof useBotGroupChat>;
 let showChat = false;
 let threadRootId: string | undefined;
-function Probe() { roster = useBotGroupRoster(h.targets, !showChat); chat = useBotGroupChat(host, showChat ? id : '', threadRootId); return null; }
+const timelineChanges = vi.fn();
+function Probe() { roster = useBotGroupRoster(h.targets, !showChat); chat = useBotGroupChat(host, showChat ? id : '', threadRootId); useEffect(() => { timelineChanges(); }, [chat.state]); return null; }
 async function render() { root ??= createRoot(document.createElement('div')); await act(async () => root!.render(createElement(Probe))); }
 async function send(input: Record<string, unknown>) {
   await chat.act('send', input);
@@ -97,6 +98,21 @@ beforeEach(async () => {
   });
 });
 // Regression: entering a saved group must not depend on Chat Server latency.
+// Unit: exercise the direct Chat Server path too; the remote-computer hook alone
+// cannot protect against identical load + thread-hydration snapshots rebuilding rows.
+it('keeps an unchanged direct group timeline stable across refresh and thread hydration', async () => {
+  showChat = true; await render();
+  const first = chat.state;
+  timelineChanges.mockClear();
+  for (let i = 0; i < 10; i++) await act(async () => { chat.reload(); });
+  expect(timelineChanges).not.toHaveBeenCalled();
+  expect(chat.state).toBe(first);
+  expect(chat.state).toMatchObject({ kind: 'ready', group: { messages: [{ content: 'Fixture message' }] } });
+  h.auth.apiFetch.mockRejectedValue({ status: 403 });
+  await act(async () => { chat.reload(); });
+  expect(chat.state.kind).toBe('missing');
+});
+
 // Integration tier: real hook, real disk store, controlled native IO / HTTP.
 it('reopens saved history offline from memory and disk, and purges it after membership loss', async () => {
   setMobileAuthOwner('owner'); showChat = true; await render();

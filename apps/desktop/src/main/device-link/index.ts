@@ -2428,6 +2428,8 @@ export function sendMobileSessionNotify(payload: {
    * 那一行的静音标记管不到这条远端事件,不参与手机通道的免打扰判定。
    */
   muteExempt?: boolean;
+  /** Execution host for a remotely mirrored session. */
+  remoteDeviceId?: string;
 }): boolean {
   if (!client) return false;
   // 「消息免打扰」任务不推手机。放在这里而不是各调用方:代输入等旁路不经过
@@ -2455,6 +2457,7 @@ export function sendMobileSessionNotify(payload: {
       title: payload.title,
       kind: payload.kind,
       selfDeviceId,
+      ...(payload.remoteDeviceId ? { targetDeviceId: payload.remoteDeviceId } : {}),
       fallbackBody: payload.fallbackBody ?? getSessionNotificationBody(payload.kind),
       detail: payload.detail,
       imageFallback: getNotificationImageLabel(),

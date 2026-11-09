@@ -13,7 +13,7 @@ import { HomeDisplayMenu } from "../session/HomeDisplayMenu.ios";
 import { buildHomeDisplayPullDownActions, homeDisplayActionPatch, type HomeDisplayMenuState } from "../session/homeChromeMenus";
 import type { NewTaskSelectionSheetProps } from "../session/NewTaskSelectionSheet";
 
-const state = vi.hoisted(() => ({ glass: true, mode: "light" }));
+const state = vi.hoisted(() => ({ glass: true, mode: "light", toggleRenders: 0 }));
 vi.mock("@/theme", () => ({
   navigationChrome: {
     target: 44,
@@ -101,11 +101,14 @@ vi.mock("@expo/ui/swift-ui", () => {
     RNHostView: Container,
     Text: ({ children, modifiers }: any) => <span data-text-style={JSON.stringify(modifiers)}>{children}</span>,
     Picker: Container,
-    Toggle: ({ children, isOn, onIsOnChange, testID, modifiers = [] }: any) => (
+    Toggle: ({ children, isOn, onIsOnChange, testID, modifiers = [] }: any) => {
+      state.toggleRenders += 1;
+      return (
       <button data-testid={testID} aria-checked={isOn} data-button-style={JSON.stringify(modifiers)}
         disabled={modifiers.some((m: any) => m.name === "disabled" && m.value)}
         onClick={() => onIsOnChange(!isOn)}>{children}</button>
-    ),
+      );
+    },
     Menu: ({ children, label, testID }: any) => <div data-testid={testID}>{label}{children}</div>,
     Section: Container,
     Divider: () => null,
@@ -169,6 +172,7 @@ afterEach(() => {
   act(() => roots.splice(0).forEach((root) => root.unmount()));
   state.glass = true;
   state.mode = "light";
+  state.toggleRenders = 0;
 });
 function mount(children: ReactNode) {
   const host = document.createElement("div");
@@ -177,6 +181,39 @@ function mount(children: ReactNode) {
   act(() => root.render(children));
   return host;
 }
+
+// Sidebar scrolling and task selection update the trigger without changing its
+// choices. Those updates must not resend every Toggle through the native bridge.
+it("keeps native choices idle on trigger updates and refreshes changed choices and callbacks", () => {
+  const actions = [{ id: "status.active", title: "Active", state: "on" as const }];
+  const onAction = vi.fn();
+  const host = mount(<HomeDisplayMenu actions={actions} onAction={onAction} accessibilityLabel="Display">
+    <span>More</span>
+  </HomeDisplayMenu>);
+  const root = roots.at(-1)!;
+  const initialRenders = state.toggleRenders;
+  act(() => root.render(<HomeDisplayMenu actions={actions} onAction={onAction} accessibilityLabel="Updated display">
+    <span>Updated trigger</span>
+  </HomeDisplayMenu>));
+  expect(host.textContent).toContain("Updated trigger");
+  expect(state.toggleRenders).toBe(initialRenders);
+
+  const latestAction = vi.fn();
+  act(() => root.render(<HomeDisplayMenu actions={actions} onAction={latestAction} accessibilityLabel="Display">
+    <span>More</span>
+  </HomeDisplayMenu>));
+  act(() => (host.querySelector('[data-testid="home.displayMenu.status.active"]') as HTMLButtonElement).click());
+  expect(latestAction).toHaveBeenCalledWith("status.active");
+  expect(onAction).not.toHaveBeenCalled();
+
+  act(() => root.render(<HomeDisplayMenu actions={[{ ...actions[0], state: "off" }]}
+    onAction={latestAction} accessibilityLabel="Display"><span>More</span></HomeDisplayMenu>));
+  const option = host.querySelector('[data-testid="home.displayMenu.status.active"]') as HTMLButtonElement;
+  expect(option.getAttribute("aria-checked")).toBe("false");
+  act(() => option.click());
+  expect(latestAction).toHaveBeenCalledTimes(2);
+  expect(onAction).not.toHaveBeenCalled();
+});
 
 // Unit: Duo's sidebar display settings must deliver deep leaf IDs to the real
 // preference reducer. Existing menu-model tests never cross the native presenter.

@@ -47,6 +47,17 @@ function chatData(overrides: Record<string, unknown> = {}) {
 }
 
 describe('parseBotGroupChatData', () => {
+  it.each([
+    ['RUNTIME_TIMEOUT', 'unclaimed_timeout', 'unclaimed_timeout'],
+    ['RUNTIME_TIMEOUT', 'future-reason', undefined],
+    ['RUNTIME_TIMEOUT', undefined, undefined],
+    ['AUTH_REQUIRED', 'unclaimed_timeout', undefined],
+  ])('preserves only the public reason matching the error (%s, %s)', (code, reason, expected) => {
+    const parsed = parseBotGroupChatData(chatData({ messages: [{ id: 'failure', sequence: 1,
+      kind: 'notice', authorKind: 'system', authorName: 'Bot', content: '', createdAt: 1,
+      runtimeFailureCode: code, runtimeFailureReason: reason }] }))!;
+    expect(parsed.messages[0].runtimeFailureReason).toBe(expected);
+  });
   it('preserves skip permissions, pending-skip support, execution identity and skipped rows from the computer', () => {
     const base = chatData().plans[0];
     const parsed = parseBotGroupChatData(chatData({ plans: [{ ...base, kind: 'talk', canManage: true, supportsPendingSkip: true,

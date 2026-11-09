@@ -98,6 +98,13 @@
     "stepFailed": "{{name}}這一步出錯了，沒做完",
     "stepTimeout": "{{name}}太久沒做完，這一步先停下",
     "stepUnavailable": "{{name}}現在無法使用，這一步沒辦法做",
+    "runtimeFailureReason": {
+      "unclaimed_timeout": {
+        "summary": "{{name}}未能在等待期限內開始處理，本次請求已結束。",
+        "advice": "請夥伴的主人檢查所屬電腦上的 Cindy 是否正常執行、網路是否連線。",
+        "details": "確認 Cindy 和網路恢復正常後，請重新傳送訊息。"
+      }
+    },
     "runtimeFailure": {
       "REMOTE_DEVICE_LIMIT": {
         "summary": "{{name}}無法回覆：夥伴所在裝置保留的遠端任務數已達上限。",
