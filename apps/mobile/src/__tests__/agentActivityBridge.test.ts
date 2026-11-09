@@ -6,10 +6,12 @@ import { SESSION_ACTIVITY_CHANNEL } from '@cindy/device-link';
 import { AgentActivityBridge } from '@/widgets/AgentActivityBridge';
 import { remoteSessionStore } from '@/session/remoteSessionStore';
 import type { RemoteSession } from '@/session/types';
+import type { AgentActivityNative, ActivityPushRegistration } from '@/widgets/agentActivityPush';
+import { setMobileAuthOwner } from '@/auth/authOwnerGeneration';
 
 const mock = vi.hoisted(() => ({
-  auth: { initialized: true, isAuthenticated: true, user: { id: 'account-a' }, accountGeneration: 1 },
-  native: { setState: vi.fn(), markStale: vi.fn() },
+  auth: { initialized: true, isAuthenticated: true, user: { id: 'account-a' }, accountGeneration: 1, getAccessToken: async () => 'test-token' },
+  native: { setState: vi.fn(), markStale: vi.fn() } as AgentActivityNative & { setState: ReturnType<typeof vi.fn>; markStale: ReturnType<typeof vi.fn> },
   link: {
     status: 'online', presenceVersion: 0,
     getConnectionState: vi.fn((_deviceId: string) => ({ status: 'online' })),
@@ -23,8 +25,11 @@ vi.mock('react-native', () => ({
   AppState: { currentState: 'active', addEventListener: () => ({ remove() {} }) },
 }));
 vi.mock('expo-modules-core', () => ({ requireOptionalNativeModule: () => mock.native }));
-vi.mock('expo-linking', () => ({ createURL: (path: string, { queryParams }: { queryParams: { deviceId: string } }) =>
-  `cindy://${path}?deviceId=${queryParams.deviceId}` }));
+vi.mock('expo-linking', () => ({ createURL: (path: string, options?: { queryParams: { deviceId: string } }) =>
+  `cindy://${path}${options ? `?deviceId=${options.queryParams.deviceId}` : ''}` }));
+vi.mock('@/config/env', () => ({ AUTH_REGION: 'global', getActiveMobileSessionRealm: () => 'global',
+  getMobileEndpointForRealm: () => 'https://example.test' }));
+vi.mock('@/device-link/selfHostedRelayRouting', () => ({ getActiveSelfHostedRelay: () => null }));
 vi.mock('react-i18next', async (importOriginal) => ({
   ...await importOriginal<typeof import('react-i18next')>(),
   useTranslation: () => ({ t: mock.t }),
@@ -39,7 +44,8 @@ beforeEach(() => {
   vi.useFakeTimers();
   vi.clearAllMocks();
   remoteSessionStore.clear();
-  mock.auth = { initialized: true, isAuthenticated: true, user: { id: 'account-a' }, accountGeneration: 1 };
+  mock.auth = { initialized: true, isAuthenticated: true, user: { id: 'account-a' }, accountGeneration: 1, getAccessToken: async () => 'test-token' };
+  delete mock.native.configureAccount; delete mock.native.getPushRegistration;
   mock.link.presenceVersion = 0;
   mock.link.getConnectionState.mockImplementation(() => ({ status: 'online' }));
   mock.link.getPresenceAvailability.mockImplementation(() => true);
@@ -53,6 +59,26 @@ afterEach(async () => {
   remoteSessionStore.clear();
   container.remove();
   vi.useRealTimers();
+  vi.unstubAllGlobals();
+});
+
+// Unit: new native push branch. An empty Home during startup must not end an
+// existing background activity while its native token/HTTP response is pending.
+it('preserves a background activity while native discovery and registration settle', async () => {
+  setMobileAuthOwner('account-a', 'global');
+  vi.stubGlobal('__DEV__', true);
+  let finish!: (response: Response) => void;
+  vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>(resolve => { finish = resolve; })));
+  let reveal!: (value: Awaited<ReturnType<NonNullable<AgentActivityNative['getPushRegistration']>>>) => void;
+  mock.native.configureAccount = vi.fn(async () => {});
+  mock.native.getPushRegistration = vi.fn(() => new Promise<ActivityPushRegistration>(resolve => { reveal = resolve; }));
+  await act(() => root.render(createElement(AgentActivityBridge)));
+  expect(mock.native.setState).not.toHaveBeenCalled();
+  await act(async () => reveal({ accountScope: JSON.stringify(['https://example.test', 'account-a']),
+    enabled: true, startToken: 'start', updateToken: 'update', activityId: 'active', dismissed: false, supportsInputPushToken: true }));
+  expect(mock.native.setState).not.toHaveBeenCalled();
+  await act(async () => finish({ ok: true, status: 200 } as Response));
+  expect(mock.native.setState).not.toHaveBeenCalled();
 });
 
 // Unit, PR #9507 / discussion_r4511883168: the desktop mapper emits userId:''.
