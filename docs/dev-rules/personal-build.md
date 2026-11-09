@@ -165,7 +165,7 @@ Set `mobileConfig` to a JSON file outside the repository (relative to the person
   "bundleId": "com.example.personal",
   "appGroupId": "group.com.example.personal",
   "teamId": "ABCDEFGHIJ",
-  "signingCertificateSha1": "YOUR_40_HEX_CERTIFICATE_FINGERPRINT",
+  "signingCertificateSha256": "YOUR_64_HEX_CERTIFICATE_FINGERPRINT",
   "deviceId": "EXACT_DEVICE_ID_FROM_CINDY_SIMULATOR",
   "hardwareUdid": "HARDWARE_UDID_FOR_PROVISIONING",
   "stateDir": "./mobile-state",
@@ -194,6 +194,29 @@ Automatic provisioning uses the `Apple Development` certificate class: Xcode rej
 SHA-1 identity with automatic signing. Before delivery, every signed bundle must still match the
 configured certificate fingerprint and its provisioning profile; a different certificate blocks
 installation, even when Xcode reports a successful build.
+
+#### Migrating an existing SHA-1 certificate pin
+
+New configuration uses `signingCertificateSha256` (64 hex characters). SHA-1-only and mixed
+SHA-1/SHA-256 configurations are rejected with migration guidance, including direct artifact checks.
+There is no weak-hash fallback. Keep historical reports and requests unchanged; after migration,
+prepare a new build rather than rewriting a frozen report.
+
+Export the **previously trusted signing certificate** as DER from Keychain Access (public certificate
+only, no private key). Confirm its identity against the certificate selected for the existing setup;
+do not establish trust from an unverified new candidate. Compute its SHA-256 fingerprint:
+
+```sh
+openssl x509 -inform DER -in trusted-certificate.cer -noout -fingerprint -sha256
+```
+
+Remove colons from the fingerprint, set `signingCertificateSha256` in the source mobile configuration,
+and remove `signingCertificateSha1`. Back up that configuration first. A SHA-1 digest cannot be
+converted to SHA-256 without the certificate. If the original trusted certificate is unavailable,
+stop and explicitly select a replacement signing identity; never pin whichever certificate a new
+build happens to use. Xcode still selects the `Apple Development` class; all four signed bundles
+must match the exact SHA-256 pin and the profile's authorized certificate bytes before delivery.
+This configuration migration does not change the signing identity, install an app, or restart it.
 
 APNs registration uses the installed native provisioning environment, never JavaScript `__DEV__`:
 a Release build signed for development registers with sandbox APNs. Artifact verification requires

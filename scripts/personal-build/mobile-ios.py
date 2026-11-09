@@ -5,6 +5,7 @@ import hashlib
 import json
 import pathlib
 import plistlib
+import re
 import subprocess
 import sys
 import tempfile
@@ -72,8 +73,23 @@ def verify_push_environment(entitlements, profile_entitlements):
             'registrationEnvironment': 'sandbox' if environment == 'development' else 'prod'}
 
 
+def certificate_pin(identity):
+    require('signingCertificateSha1' not in identity,
+            'Legacy signingCertificateSha1: migrate the trusted certificate to signingCertificateSha256 and prepare a new build')
+    pin = identity.get('signingCertificateSha256')
+    require(isinstance(pin, str) and re.fullmatch(r'[A-Fa-f0-9]{64}', pin),
+            'Invalid signingCertificateSha256: expected 64 hex characters')
+    return pin.upper()
+
+
+def verify_certificate(cert, authorized_certificates, identity):
+    require(hashlib.sha256(cert).hexdigest().upper() == certificate_pin(identity), 'Certificate mismatch')
+    require(cert in authorized_certificates, 'Certificate not authorized by profile')
+
+
 def verify(request, app):
     identity = request['identity']
+    certificate_pin(identity)  # Reject legacy requests before inspecting any candidate.
     main_id, team = identity['bundleId'], identity['teamId']
     expected = {main_id, main_id + '.CindyHomeWidgets', main_id + '.CindyNotificationService',
                 main_id + '.expo-sharing-extension'}
@@ -98,10 +114,7 @@ def verify(request, app):
             prefix = str(pathlib.Path(temp) / 'cert')
             output('codesign', '-d', '--extract-certificates=' + prefix, str(entry))
             cert = pathlib.Path(prefix + '0').read_bytes()
-            # Apple's keychain and codesign name signing identities by SHA-1 fingerprint. This only matches
-            # the public certificate's identifier; it protects no secret and is not a security hash.
-            require(hashlib.sha1(cert, usedforsecurity=False).hexdigest().upper() == identity['signingCertificateSha1'], 'Certificate mismatch')
-            require(cert in profile['DeveloperCertificates'], 'Certificate not authorized by profile')
+            verify_certificate(cert, profile['DeveloperCertificates'], identity)
         if bundle != main_id + '.CindyNotificationService':
             group = identity['appGroupId']
             require(ent.get('com.apple.security.application-groups') == [group], 'App Group entitlement mismatch')

@@ -20,7 +20,8 @@ export function mobileConfig(value, base, region) {
   for (const key of ['bundleId', 'appGroupId']) check(typeof m[key] === 'string' && /^[a-zA-Z0-9-]+(?:\.[a-zA-Z0-9-]+)+$/.test(m[key]), `Invalid mobile.${key}`);
   check(m.appGroupId.startsWith('group.'), 'mobile.appGroupId must be an App Group');
   check(/^[A-Z0-9]{10}$/.test(m.teamId), 'Invalid mobile.teamId');
-  check(/^[A-Fa-f0-9]{40}$/.test(m.signingCertificateSha1), 'Invalid mobile signing certificate');
+  check(!Object.hasOwn(m, 'signingCertificateSha1'), 'Legacy mobile.signingCertificateSha1: migrate the trusted certificate to signingCertificateSha256 and prepare a new build (docs/dev-rules/personal-build.md)');
+  check(typeof m.signingCertificateSha256 === 'string' && /^[A-Fa-f0-9]{64}$/.test(m.signingCertificateSha256), 'Invalid mobile.signingCertificateSha256: expected 64 hex characters');
   check(typeof m.deviceId === 'string' && /^[A-Fa-f0-9-]{36}$/.test(m.deviceId), 'mobile.deviceId must identify the exact plugin device');
   check(typeof m.hardwareUdid === 'string' && /^[A-Fa-f0-9-]{20,40}$/.test(m.hardwareUdid), 'mobile.hardwareUdid required for provisioning');
   check(['global', 'cn'].includes(m.region) && m.region === region, 'Mobile and desktop regions must agree');
@@ -28,7 +29,7 @@ export function mobileConfig(value, base, region) {
   check(typeof m.stateDir === 'string' && m.stateDir.length > 0, 'mobile.stateDir required');
   m.stateDir = path.resolve(base, m.stateDir);
   if (m.regionConfigFile) m.regionConfigFile = fs.realpathSync(path.resolve(base, m.regionConfigFile));
-  m.signingCertificateSha1 = m.signingCertificateSha1.toUpperCase();
+  m.signingCertificateSha256 = m.signingCertificateSha256.toUpperCase();
   return m;
 }
 
@@ -105,7 +106,7 @@ export async function buildMobile(file) {
       exec('xcodebuild', ['-workspace', path.join(mobile, 'ios', workspaces[0]), '-scheme', scheme,
         '-configuration', 'Release', '-destination', `platform=iOS,id=${m.hardwareUdid}`, '-derivedDataPath', derived,
         '-allowProvisioningUpdates', `DEVELOPMENT_TEAM=${m.teamId}`, 'CODE_SIGN_STYLE=Automatic',
-        // Automatic provisioning requires a certificate class, not a SHA-1 identity.
+        // Automatic provisioning requires a certificate class, not a certificate fingerprint.
         // verifyMobileArtifact still requires the configured exact certificate on every bundle;
         // an Xcode-selected identity mismatch blocks delivery rather than weakening the pin.
         'CODE_SIGN_IDENTITY=Apple Development', 'SWIFT_ENABLE_EXPLICIT_MODULES=NO',

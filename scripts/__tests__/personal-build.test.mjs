@@ -47,7 +47,7 @@ print(json.dumps(results))
 // this runner tier exercises production transitions without contacting a phone or Apple.
 const mobileIdentity = {
   enabled:true, platform:'ios', bundleId:'com.example.personal', appGroupId:'group.com.example.personal',
-  teamId:'ABCDEFGHIJ', signingCertificateSha1:'A'.repeat(40), region:'global',
+  teamId:'ABCDEFGHIJ', signingCertificateSha256:'A'.repeat(64), region:'global',
   stateDir:'/personal/mobile', deviceId:'00000000-0000-0000-0000-000000000001',
   hardwareUdid:'00000000-0000000000000001', launchAfterInstall:false, verifyInstallationMetadataOnly:true,
 };
@@ -55,6 +55,40 @@ const delivery = phase => ({phase, identity:mobileIdentity, build:'2026110902', 
 const appInfo = build => ({ok:true, result:{ok:true, udid:mobileIdentity.deviceId,
   bundleId:mobileIdentity.bundleId, installed:true,
   app:{bundleIdentifier:mobileIdentity.bundleId, bundleVersion:build}, matchesLocal:null}});
+
+test('mobile certificate pin accepts SHA-256 and rejects legacy, mixed or malformed configuration', () => {
+  const validate = value => mobileConfig(value, '/personal', 'global');
+  assert.equal(validate({...mobileIdentity, signingCertificateSha256:'a'.repeat(64)}).signingCertificateSha256, 'A'.repeat(64));
+  for (const value of [undefined, null, 123, 'A'.repeat(40), 'G'.repeat(64)]) {
+    assert.throws(() => validate({...mobileIdentity, signingCertificateSha256:value}), /signingCertificateSha256/);
+  }
+  assert.throws(() => validate({...mobileIdentity, signingCertificateSha1:'A'.repeat(40)}), /Legacy/);
+  const {signingCertificateSha256, ...old} = mobileIdentity;
+  assert.throws(() => validate({...old, signingCertificateSha1:'A'.repeat(40)}), /migrate/);
+});
+
+test('artifact certificate pin rejects replacement certificates, unauthorized profiles and old requests', () => {
+  const script = fileURLToPath(new URL('../personal-build/mobile-ios.py', import.meta.url));
+  execFileSync(process.platform === 'win32' ? 'python' : 'python3', ['-c', `
+import hashlib, runpy, sys
+m = runpy.run_path(sys.argv[1])
+cert = b'public certificate fixture'
+identity = {'signingCertificateSha256': hashlib.sha256(cert).hexdigest()}
+m['verify_certificate'](cert, [cert], identity)
+for candidate, allowed, pin in [
+    (b'different certificate', [b'different certificate'], identity),
+    (cert, [], identity),
+    (cert, [cert], {'signingCertificateSha1': 'A' * 40}),
+    (cert, [cert], dict(identity, signingCertificateSha1='A' * 40)),
+    (cert, [cert], {'signingCertificateSha256': 'G' * 64}),
+]:
+    try:
+        m['verify_certificate'](candidate, allowed, pin)
+    except RuntimeError:
+        continue
+    raise AssertionError('accepted invalid certificate identity')
+`, script]);
+});
 
 test('personal mobile delivery selects one physical device, never downgrades or launches', () => {
   let d = delivery('awaiting-device');
