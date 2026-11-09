@@ -28,7 +28,10 @@ export function AgentActivityBridge() {
   useEffect(() => {
     if (!native || !initialized || !isAuthenticated || !accountId) return;
     const controller = createAgentActivitySync(() => {
-      const sessions = remoteSessionStore.getHomeSessions().filter(session => session.userId === accountId);
+      // DeviceLinkProvider clears this store and its subscription ACKs on account
+      // changes. Desktop rows carry userId: '' because their database is scoped
+      // to the account already; that compatibility field is not an owner ID.
+      const sessions = remoteSessionStore.getHomeSessions();
       const online = sessions.filter(session => !!session.deviceLinkDeviceId
         && (getConnectionState?.(session.deviceLinkDeviceId).status ?? status) === 'online'
         && getPresenceAvailability(session.deviceLinkDeviceId) !== false
