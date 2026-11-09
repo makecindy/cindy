@@ -364,5 +364,13 @@
     "merged": "병합됨",
     "closed": "닫힘",
     "draft": "초안"
+  },
+  "taskArchive": {
+    "now": "지금 보관",
+    "pending": "이 작업을 나가면 자동으로 보관됩니다",
+    "cancel": "취소",
+    "cancelled": "이번에는 자동으로 보관하지 않습니다",
+    "archived": "\"{{title}}\"을(를) 보관했습니다",
+    "undo": "실행 취소"
   }
 }

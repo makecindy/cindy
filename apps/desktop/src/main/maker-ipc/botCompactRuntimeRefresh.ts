@@ -106,19 +106,19 @@ export function createBotCompactRuntimeRefreshCoordinator(
     if (!entry || entry.session !== session || entry.boundary.sessionInstanceId !== session.instanceId) {
       return 'not-bot';
     }
-    if (
-      session.isTurnRunning()
-      || session.listBackgroundTasks().length > 0
-      || deps.hasPendingInteraction(session.id)
-    ) {
-      return 'deferred';
-    }
     const existing = inFlight.get(session.id);
     if (existing) {
       if (existing.entry === entry) return existing.operation;
       // A newer boundary/instance must not consume the old refresh's receipt.
       await existing.operation;
       return attempt(session);
+    }
+    if (
+      session.isTurnRunning()
+      || session.listBackgroundTasks().length > 0
+      || deps.hasPendingInteraction(session.id)
+    ) {
+      return 'deferred';
     }
 
     const operation = (async () => deps.refresh(session, entry.boundary))()

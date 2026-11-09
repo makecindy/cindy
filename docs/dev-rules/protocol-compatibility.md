@@ -51,6 +51,19 @@ OpenAI 池快照增加可选 `nativeAccountPool` 标记，当前控制端让三�
 仅复用既有远程 Agent 的目录、open/send/poll/stop 通道，任务和历史仍归插件电脑，
 不添加 device-link allowlist、帧、relay 能力或服务端请求。官方与自建中转继续透传既有协议，无需升级。
 同账号与跨账号授权仍由原通道及执行电脑核验，来源不可用不回落本机、不重放付费输入。
+## 群内等待领取超时原因（2026-11-09，未发布）
+
+Chat Server 的 `/executions` 与 `/execution-failures` 保留 `failure_code: RUNTIME_TIMEOUT`，
+仅对服务端确认的当前尝试等待领取超时追加可选 `failure_reason: unclaimed_timeout`。
+这只说明请求在就绪等待期限内未被领取，不证明所属电脑离线、关机或模型服务异常。
+细分原因随当前执行代次收尾，显式重试后不沿用旧原因；不改变原排队、租约或断线取消语义。
+
+客户端共享解析仅接受与 `RUNTIME_TIMEOUT` 匹配的已知原因，派生消息视图可选携带
+`runtimeFailureReason`；桌面、手机直连与手机经电脑读取的群视图使用同一判据。
+字段缺失、未知或不匹配时保持原通用错误展示，不读取或显示私有 detail。
+旧客户端忽略新增字段；新客户端连接旧服务端／旧电脑时使用通用提示。
+服务端可先发布，客户端随后发布。Device Link、IPC channel、allowlist、权限、数据库 Schema
+与 Mobile 原生配置均不变。
 
 ## 插件详细介绍 `manifest.readme`（2026-11-06，未发布）
 
@@ -164,7 +177,10 @@ Desktop 与 Mobile 明确标注估算和排除项。旧端忽略可选字段，�
 - `query.request` 新增可选 `recipient = { scopeId, principalId }`：多个组织共用的服务（官方飞书）发出的查询
   代表哪个应用的哪个账号；带上时两项都须是非空字符串。其它服务不发，旧桌面端忽略。
 - 客户端端点清单新增 `feishuHookWsUrl`（`wss:`），登记为跨区域端点：服务只在海外部署一套，
-  两份区域清单都指向 `cindy.app`。服务部署前正式清单不写该字段，入口不显示。
+  两份区域清单都指向 `cindy.app`。服务部署并核验后，在两份正式清单同时填写并发布该字段；
+  缺省或清空后，重启读取新清单会停止连接；未开启的用户不显示入口，已开启的用户保留卡片并提示
+  地址未配置，以便关闭，可用于回滚。dev 使用独立开发服务，配置与发布步骤见
+  [端点清单说明](../../config/README.md)。
 
 飞书群上下文由服务端组装进 `task.dispatch.prompt`（含 `<thread_context>`、引用与当前发言人）；`source.threadContext` 同时供来源卡展示，客户端继续保留服务端完整 prompt，不再从展示元数据重复注入。X 的客户端 prompt 组装只作用于 X，不能据此推断其它渠道丢失上下文。
 
@@ -640,6 +656,18 @@ Desktop 新增本机 `update-harness-prepare` IPC（Claude Code/Codex、用户�
 下次启动只消费缓存，避免确认期间清单变化又触发启动下载。省略参数的旧设置入口仍写
 原 scoped 修复标记，回复保持兼容。应用更新 IPC、手机与设备间 wire protocol 不变；后台归档只放新缓存目录，旧客户端
 忽略它，不改变原安装目录、凭证、数据库或持久偏好。
+
+## 日志上传编号的区域前缀
+
+Desktop 和 Mobile 的新 `uploadCode` 使用 `CN-XXXX-XXXX` / `GLOBAL-XXXX-XXXX`，
+内部 Dev 构建使用 `DEV-XXXX-XXXX`；随机部分仍保留 8 位。SLS 的 tags、逐条记录和
+客户端返回值都传完整编号，字段名、字符串类型、IPC 和 SLS web-tracking 结构不变。
+格式校验继续接受历史无前缀 `XXXX-XXXX` 编号，历史日志不改写；新旧客户端的显示和
+复制均按不透明字符串处理。回滚后恢复生成无前缀编号，不迁移数据。
+外部检索工具若自行限制了编号长度或正则，需要接受带前缀格式；已有编号按原值查询。
+前缀只隔离不同区域的新编号，不承诺同一区域随机编号唯一。不改变服务端、授权范围
+或 Mobile 原生依赖与配置。实现与回归见 Desktop `log-upload/uploadCode.ts` /
+`__tests__/crashTriggersAndCode.test.ts`、Mobile `debug/diagnosticUpload.ts` / 同名测试。
 
 ## 任务链接保留所属电脑
 
@@ -3152,6 +3180,11 @@ B 上的 Worker 是一条普通任务，`sessions.orca_remote_lead`(migration 01
 - **成员状态可选 `fiveHourTight: true`（2026-10-21）**：只在带 `quota` 时出现，表示这台的 5 小时配额已用 85% 以上、离重置还有
   1 小时以上（provider-groups.md §5 第 0 条）。同账号电脑据此不把它当作任务进行中换号的目标。旧组所在电脑不回，查看端按不紧张处理
   （最坏是提议后组所在电脑按自己的排序选不中它，照常留在原处）；旧查看端忽略。`parseProviderGroupRemoteView` 只认 `true`。
+- **成员状态可选 `usageLimit: { resetAtMs: number | null }`（2026-10-22）**：仅当可信快照确认该成员配额耗尽且状态为 `cooling` 时携带，
+  供本机管理与同账号远程列表显示「配额已用完」、配额重置倒计时及警示圆点。时刻来自配额窗口，与可能更晚结束的其他冷却分开；未知为 `null`。
+  `parseProviderGroupRemoteView` 只接收冷却中的非分享成员，时刻须为正安全整数或 `null`；不从普通冷却推断配额原因。
+  旧组所在电脑不带该字段，查看端保留「冷却中」；旧查看端忽略该字段。受邀者匿名状态白名单不带此信息，分享来的成员不读取配额。
+  不新增通道、请求参数、权限、持久状态或服务端变更，不改变分配与恢复策略。
 
 ## 供应商组任务进行中换号
 
@@ -5100,15 +5133,39 @@ Chat Server 请求复用既有消息 `content` 的 media 块及 `threadRootId`�
 提示只在静态资格成立时显示，离开时用同一个判断（IM 接管状态只能在任务所在电脑上查，远程任务没有确认框兜底就不静默收走，卡片上的归档按钮照旧可用），所以提示不会承诺一次不会发生的归档。
 离开普通任务页（包括直接切到另一个任务，按离开那个任务最后一次渲染的信息处理）时，看过、没取消、任务没在运行、没被接管、
 确认没有绑定活跃定时任务（读取失败、超时、上次刷新失败后留下的旧缓存，都算不确认，保留任务）、输入框没有草稿、worktree 确认干净且用户没有
-回到它，才静默归档并给可撤销提示，否则不归档也不弹确认。旧电脑端的净化器丢掉这些属性，按钮一直藏着；
-手机投影不含无动作的按钮且按钮内没有文字，新旧手机都不显示、也不计「看过」。不给插件新增运行期能力，不改 manifest、
-批准记录、握手、白名单、relay 或服务端，无数据库迁移。
-回归入口：`cardSanitizer.test.ts`、`ghostCardPrStatus.test.ts`、`useGhostCardTaskArchive.test.tsx`。
+回到它，才静默归档并给可撤销提示，否则不归档也不弹确认。旧电脑端的净化器丢掉这些属性，按钮一直藏着。
+状态机（登记、待生效、看过、取消、最后一条用户消息）在 `@cindy/maker-shared/ghost-card-task-archive`，电脑与手机各建一份内存实例。
+
+手机：按钮没有动作和文字，普通投影从不带它，旧手机照旧不显示。声明 `plugin-card-rich` 的手机读卡片时，宿主在
+`plugin-card-actions` 的 `data` 里可选附带 `taskArchive: { auto: boolean }`：只在这张卡片的 PR 与任务全部关联 PR 都按标题栏
+同源状态确认已合并（`readSessionPrsAllMerged`，与 `areAllTaskPrsMerged` 同一判据和 30 个上限）时才带；`auto` 为插件标了
+`-auto` 且任务没被 IM 接管（只有任务所在电脑能查，所以由宿主算好）。新手机据此画「立即归档」（走菜单同一归档流程）、
+待生效提示与「取消」；卡片在聚焦的任务页、App 在前台且消息行确实在视野内才记「看过」。离开任务页（页面卸载或原地换任务）时，
+手机再读一次符合条件的卡片确认 `auto` 仍为 true，并确认任务仍活跃、没在运行、`maker:schedule:list` 读到没有绑定活跃自动化
+（超时或失败算不确认）、手机输入框没有草稿、既有 `worktree:removal-preview` 确认干净（失败算不干净）、用户没回到这个任务，
+才用既有 `local-db:sessions:patch-meta` 归档，并在应用底部给 8 秒可撤销提示。新手机连旧电脑收不到 `taskArchive`，不显示按钮。
+不新增 channel、白名单、握手、relay、服务端或数据库迁移，也不改变 Mobile 原生 fingerprint。
+回归入口：`cardSanitizer.test.ts`、`cardRemoteResource.test.ts`、`ghostCardPrStatus.test.ts`、`useGhostCardTaskArchive.test.tsx`、
+Mobile `pluginCardActions.test.tsx`、`useTaskAutoArchive.test.tsx`、`archiveScheduleConfirm.test.ts`。
 
 ## 插件卡片的手机原生呈现（`plugin-card-rich`）
 
+### 任务导航的旧端降级（2026-11-08，未发布）
+
+卡片 button 可同时声明 `data-ghost-action` 和可选 `data-ghost-session-link`，后者只接受
+导航专用 `cindy://session/<id>`，不得与输入、提交或选模动作混用。Desktop 在插件获准
+`card.externalLinks` 时只接原生任务导航；旧宿主丢弃新属性，仍派发原动作。插件负责
+将降级动作处理为展示正文任务链接，不能据此启动、停止或移交任务。
+Mobile 读取 `plugin-results` 时追加 `plugin-card-session-links` primitive；新宿主只对
+声明了它的读者将该按钮投影成已有的 url action，其他手机保留普通 action。新版手机
+连接旧宿主时也走普通动作。没有新增消息类型、权限、握手、IPC 白名单或服务端接口；
+官方及自建中转仍透传既有 remote-resource 请求，不需要中转升级。
+回归入口：`cardSanitizer.test.ts`、`cardRemoteResource.test.ts`、`embeddedSessionNavigation.test.tsx`。
+
+### 原生状态与控件投影
+
 手机读取 `plugin-results` 卡片时在 `client.primitives` 里多声明 `plugin-card-rich`。只有声明了的手机，宿主才在
-`plugin-card-actions` 的 `data` 里附带：动作的 `primary` / `toggle`、`live` 状态名，以及 `prStatus`。`prStatus`
+`plugin-card-actions` 的 `data` 里附带：动作的 `primary` / `toggle`、`live` 状态名、`prStatus`，以及归档任务按钮的 `taskArchive`（见上节）。`prStatus`
 包含状态位、插件快照，并在能查到时附上与标题栏同源的 `PrStatusResult`。这些部分的文字同时移出文本块。
 指向本任务某个 GitHub PR 页面的链接动作，能查到状态时再带可选 `prState`（`open` / `draft` / `merged` / `closed`），
 手机据此在卡片标题前画 App 自己的 PR 状态图标；查不到就不带，手机按中性图标显示，旧手机忽略该字段。
@@ -5194,3 +5251,40 @@ Agent 的 GitHub 工具和脚本入口仍不支持 GitLab，不复用其 GitHub 
 透传，未增加 channel 或远端执行入口。权限请求仍由原权限路径校验来源与请求归属。
 
 MCP 表单的问题可选携带 `answerConstraints`（required、choices、minLength、maxLength）。新端保留 choices 的所有精确枚举值（包括 Other），提交前就地校验并保留草稿，取消使用独立动作；普通模型问题不携带该字段，原自由回答行为不变。旧端忽略新字段，执行端仍校验回传值；不得把旧端未校验的数据作为有效内容接受。无新通道/中转帧，官方与自建 relay 沿现有 interaction 透传。pattern、format 等暂不支持的验证约束在展示前明确报错并取消，不回传不符合 schema 的 accept。
+
+## iMessage 伙伴设置的可选投影（2026-11-07）
+
+伙伴设置 `channels.im.*` 调用参数新增可选 `supportedChannels`，连接列表与移除操作返回的
+`connections` 仅向声明 `imessage` 的新客户端投影该渠道。新宿主向未声明能力的旧客户端省略新增类型，旧客户端原有
+平台不受影响；新客户端调用旧宿主时新增参数被忽略，继续接收旧平台。连接状态新增可选 `health`
+字段，缺失即不显示恢复计数。没有新增 relay 消息类型、服务器端点或自建中转要求，仍走既有
+伙伴设置 RPC。旧参数、新能力声明与远程转发回归见 `botRemoteSettingsHost.test.ts` 与 `remoteBotSettingsTarget.test.ts`。
+
+## iMessage 远程轮次权限来源（2026-11-08）
+
+远程 Agent 的 `started.handle` 新增可选 `imessageSendContext: true`，由实际执行电脑声明支持
+`turnPolicy.origin` 与 `cindy.mainOwned.origin` 的 `imessage` 来源。控制端在每次 `send` / `steer`
+完成连接或重连后核对该声明；缺省、false 或非布尔值均视为不支持，带 iMessage 来源的输入在发送前
+以 `REMOTE_AGENT_PEER_TOO_OLD` 拒绝，不允许旧执行端丢掉权限后继续。Desktop 和其他既有来源照常互通。
+新执行端还会拒绝无法解码的显式权限或身份来源，不再静默省略；未携带这些可选上下文的旧请求不变。
+
+能力随实际执行端的启动描述刷新，不借用控制端或中转电脑的版本；供应商组的中转保持原样转发最终
+执行端的 `started.handle`。既有 device-link `started` 记录保留 handle 的可选字段，官方和自建中转
+只转发既有 invoke/poll envelope，无新增 channel、顶层帧、allowlist 或服务器接口，无需升级中转。
+兼容验证覆盖新控制端与旧执行端的拒绝、旧格式 Desktop 请求、新执行端的 iMessage 双上下文还原，
+以及重连到旧执行端后的再次拒绝；真实自建中转互通继续使用既有加入、签名与重连脚本。
+
+## 分享供应商备用执行（2026-11-08）
+
+`provider-share-availability-v1` 是设备能力声明。服务端 `/provider-shares/availability/:shareId/:action`
+新增注册、目录、分配、任务准入、状态与无内容用量接口；跨区域只开放 guest 目录/分配/查询/状态，
+沿用该分享的 guest credential，不接受本区域 Access Token 替代。服务端收到的身份全部来自认证上下文。
+`received` 增加可选 `standbyOnline`，原 `hostOnline` 继续表示 O 的物理在线状态；新版客户端另存
+`hostDeviceOnline` 并将有效可用状态投影到本地 `hostOnline`。旧客户端忽略新字段、保持旧行为。
+没有新能力的 M 不被选择；没有新接口的服务端不获得备用权限。既有 device-link 帧与协议版本不变。
+新增 PostgreSQL 表须先迁移再部署。发布顺序为服务端后 Desktop；新能力只在 O 在线成功登记后生效。
+备用 M 每轮发送前以独立 `executionId` 调用 `accept` 占用容量，完成后以原分配 generation 和本轮
+executionId 调用 `complete`；打开任务的无 executionId `accept` 只确认归属。G 的状态遥测不能释放
+已接受任务的容量。完成回执在准入请求发出前捕获，响应丢失时也会尝试释放原轮次，失败沿原任务收尾路径重试；
+撤权后仍可释放原轮次，旧回执不能释放后续轮次。服务端记录取消标识，先到的释放回执可阻止迟到准入。
+这是本次备用执行能力的配套接口，需使用包含上述接线的 Desktop；不改变既有在线 O 的委派路径。

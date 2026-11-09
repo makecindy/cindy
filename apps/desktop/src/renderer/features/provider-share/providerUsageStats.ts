@@ -2,7 +2,7 @@
  * 「远程与分享」页「用量」块的纯函数(供应商组 §7)：把按天明细摊成一张表，再按时间段、使用方与组内电脑
  * 筛选、汇总。与设置 → 用量同一种做法：数据一次读来，筛选都在界面上做。不读 window、不碰 i18n，便于单测。
  */
-import { isUsageDayInRange, type UsageHistoryRange } from '@/components/settings/usage/usageHistoryStats';
+import { isUsageDayInRange, modelTokenTotal, type UsageHistoryRange } from '@/components/settings/usage/usageHistoryStats';
 import { usageModelKey } from '@/components/new-chat/usagePalette';
 
 import type {
@@ -36,7 +36,7 @@ export interface ProviderUsageFilter {
 }
 
 export interface ProviderUsageTotals {
-  /** 输入 + 输出 token，与分享用量同口径。 */
+  /** 输入 + 输出 + 缓存读取 + 缓存写入，与设置 → 用量同口径。 */
   tokens: number;
   turns: number;
   inputTokens: number;
@@ -129,7 +129,7 @@ export function summarizeUsageRows(rows: readonly ProviderUsageRow[]): ProviderU
     else if (totals.amount.currency === row.amount.currency) totals.amount.amount += row.amount.amount;
     else mixedCurrency = true;
   }
-  totals.tokens = totals.inputTokens + totals.outputTokens;
+  totals.tokens = modelTokenTotal(totals);
   if (mixedCurrency) totals.amount = null;
   const prompt = totals.inputTokens + totals.cacheReadTokens + totals.cacheCreateTokens;
   totals.cacheHitRate = prompt > 0 ? totals.cacheReadTokens / prompt : null;
@@ -153,22 +153,25 @@ export const modelKeyOf = (row: Pick<ProviderUsageRow, 'kind' | 'model'>) => usa
 /** 按 token 从多到少排的键：配色按完整历史排一次，筛选与时间段变化不重新分配颜色。 */
 export function keysByTokens(rows: readonly ProviderUsageRow[], keyOf: (row: ProviderUsageRow) => string): string[] {
   const tokens = new Map<string, number>();
-  for (const row of rows) tokens.set(keyOf(row), (tokens.get(keyOf(row)) ?? 0) + row.inputTokens + row.outputTokens);
+  for (const row of rows) tokens.set(keyOf(row), (tokens.get(keyOf(row)) ?? 0) + modelTokenTotal(row));
   return [...tokens.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([key]) => key);
 }
 
+/** 当前组内电脑保留稳定键；已移出或当时未区分电脑的用量都归入「更早的记录」。 */
+export function currentComputerKey(memberKeys: readonly string[], computer: string | null): string | null {
+  return computer !== null && memberKeys.includes(computer) ? computer : null;
+}
+
 /**
- * 组内电脑的顺序：组里每台按组里的顺序(这段时间没用过的也列)，之后是已经移出组、用过的电脑(用量多的在前)，
- * 最后是当时没有区分电脑的更早记录(null)。
+ * 组内电脑的顺序：组里每台按组里的顺序(这段时间没用过的也列)。
+ * 已移出电脑与当时未区分电脑的用量合并为最后的「更早的记录」(null)，不再单列旧电脑。
  */
 export function computerOrder(
   memberKeys: readonly string[],
   rows: readonly ProviderUsageRow[],
 ): Array<string | null> {
-  const known = new Set(memberKeys);
-  const removed = keysByTokens(rows.filter((row) => row.computer !== null && !known.has(row.computer)), (row) => row.computer!);
-  const hasUnattributed = rows.some((row) => row.computer === null);
-  return [...memberKeys, ...removed, ...(hasUnattributed ? [null] : [])];
+  const hasEarlier = rows.some((row) => currentComputerKey(memberKeys, row.computer) === null);
+  return [...memberKeys, ...(hasEarlier ? [null] : [])];
 }
 
 /** 热力图：每天的 token 合计。 */
@@ -176,7 +179,7 @@ export function usageRowsByDay(rows: readonly ProviderUsageRow[]): Array<{ day: 
   const byDay = new Map<string, number>();
   for (const row of rows) {
     if (row.day === null) continue;
-    byDay.set(row.day, (byDay.get(row.day) ?? 0) + row.inputTokens + row.outputTokens);
+    byDay.set(row.day, (byDay.get(row.day) ?? 0) + modelTokenTotal(row));
   }
   return [...byDay.entries()].map(([day, tokens]) => ({ day, tokens }));
 }

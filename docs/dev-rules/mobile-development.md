@@ -148,6 +148,9 @@ pnpm --filter mobile test:smoke
   [Mobile 设计规范](../../apps/mobile/docs/mobile-design-guide.md)。
 - 记录实际执行和结果；未执行的高相关检查必须说明原因。
 
+消息与任务行的尺寸订阅、代码着色优化及测量边界见
+[手机消息渲染的共享优化](../../apps/mobile/docs/mobile-render-performance.md)。
+
 ## 专项入口
 
 ### Android 组字与发送快照
@@ -468,7 +471,9 @@ A、B、L1、R1 会占用其原有操作，设置页有明确提示。
 ### 伙伴通信通知
 
 `plugins/with-communication-notifications.js` 为当前 bundle identity 生成
-`CindyNotificationService` 扩展，启用 Communication Notifications，并向 EAS 登记扩展签名。
+`CindyNotificationService` 扩展，并向 EAS 登记扩展签名。Communication Notifications
+权限仅声明在主 App target 上；通知扩展负责处理通知内容，不重复声明该权限，否则
+Xcode 自动签名会以 entitlement 无法写入 profile 拒绝构建。
 扩展消费伙伴回复与群消息的可选 `sender` 数据；保留正文、深链和系统隐私设置，任何处理失败或
 系统超时都回退原通知，且只交付一次。头像不发起网络请求、不读取用户账号存储。
 Swift 源码和打包头像显式进入 fingerprint。首次发布需要原生新包和重新生成的签名配置；

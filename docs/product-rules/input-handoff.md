@@ -7,7 +7,7 @@
 
 ## 1. 用户应该得到什么
 
-工具发现入口（2026-10-30 起）：`cindy_helper` 的顶层工具 `ask_owner`，一直在模型的工具列表里，不藏在 `list_tools` 类目后面。kind=fill 是本页的代输入，kind=scan 是扫码（窗口里的码，或 Agent 截图里的码，见 §4.1），另有 choose（选择）与 connect（连接账号）。工具说明与参数 schema 随列表下发，模型无需先发错误调用。Claude Code 与 Codex 直接看到它；Pi 通过原有 MCP 网关检索，不另外增加 system prompt。旧名 `request_input_handoff` 仍可经 `call_tool` 调用，但不再列出。
+工具发现入口（2026-10-30 起）：`cindy_helper` 的顶层工具 `ask_owner`，一直在模型的工具列表里，不藏在 `list_tools` 类目后面。kind=fill 是本页的代输入，kind=scan 是扫码（窗口里的码，或 Agent 截图里的码，见 §4.1），另有 connect（连接账号）。2026-11-08 起，普通异步提问恢复独立的 `ask_user_question_async`，不再使用 `ask_owner(kind=choose)`；登录交接与需求澄清保持独立。工具说明与参数 schema 随列表下发，模型无需先发错误调用。Claude Code 与 Codex 直接看到它；Pi 通过原有 MCP 网关检索，不另外增加 system prompt。旧名 `request_input_handoff` 仍可经 `call_tool` 调用，但不再列出。
 
 **什么时候用**（2026-11-02 裁决）：只有一定不能让模型知道的内容才用这个工具——登录，以及密码、密钥、令牌、验证码。邮箱、姓名、地址这类不敏感的信息，Agent 直接在对话里问，主人告诉模型，由模型去填，既不弹工具，也不让主人自己开窗口。
 

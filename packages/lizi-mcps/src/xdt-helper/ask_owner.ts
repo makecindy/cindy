@@ -1,4 +1,3 @@
-import type { Session } from '@cindy/maker-core';
 import { z } from 'zod';
 import type { LiziMcpSessionContext } from '../types.js';
 import type { XdtHelperToolRegistry, XdtHelperToolResult } from '../lizi_xdtHelperToolRegistry.js';
@@ -16,42 +15,21 @@ import {
   type InputHandoffCallbacks,
 } from './input_handoff.js';
 
-/**
- * ask_owner: the one entry the model uses whenever the owner has to do something
- * before the agent can go on: pick an option, type what only they may, scan a
- * sign-in QR code, or connect an account. It replaces ask_user_question_async
- * (same choice cards, same lifecycle) and is the listed way to reach input
- * handoff and Grok sign-in; their old names stay callable but unlisted.
- *
- * It is a dedicated top-level tool, never an alias behind call_tool, so native
- * Claude can enforce root-only provenance before MCP dispatch.
+/** User-operated sign-in, secret input, QR scans and account connections.
+ * Ordinary questions use ask_user_question_async or the harness's synchronous tool.
  */
-
 export const ASK_OWNER_TOOL_NAME = 'ask_owner';
 
-export type AskUserQuestionAsyncCallback = (
-  context: LiziMcpSessionContext,
-  questions: Parameters<Session['askUserQuestionAsync']>[0],
-) => string;
-
-export type AskOwnerKind = 'choose' | 'fill' | 'scan' | 'connect';
-const ALL_KINDS: readonly AskOwnerKind[] = ['choose', 'fill', 'scan', 'connect'];
+export type AskOwnerKind = 'fill' | 'scan' | 'connect';
+const ALL_KINDS: readonly AskOwnerKind[] = ['fill', 'scan', 'connect'];
 
 export interface AskOwnerDeps {
-  ask?: AskUserQuestionAsyncCallback;
   inputHandoff?: InputHandoffCallbacks;
   grokLogin?: GrokLoginCallbacks;
 }
 
 /** Which helper categories the current task may use (null: all). */
 export type AskOwnerSurface = ReadonlySet<string> | null;
-
-// Codex owns choices through its native protocol (request_user_input and async
-// questions). Offering this second path there would give the same card two
-// independent lifecycle owners.
-export function supportsOwnerChoice(context: LiziMcpSessionContext): boolean {
-  return context.agentKind === 'claude-code' || context.agentKind === 'pi';
-}
 
 /** Kinds this task can use right now: by harness, by its helper surface, and by what the host wired. */
 export function askOwnerKinds(
@@ -61,33 +39,17 @@ export function askOwnerKinds(
 ): AskOwnerKind[] {
   const allowed = (category: string) => !surface || surface.has(category);
   return ALL_KINDS.filter((kind) => {
-    if (kind === 'choose') return !!deps.ask && supportsOwnerChoice(context) && allowed('cindy');
     if (kind === 'connect') return !!deps.grokLogin && allowed('auth');
     // Handoff reads a window on this computer; an SSH workspace has none here.
     return !!deps.inputHandoff && allowed('auth') && !context.remoteHostId;
   });
 }
 
-const QUESTIONS = z.array(z.object({
-  question: z.string().trim().min(1).max(2000),
-  options: z.array(z.object({
-    label: z.string().trim().min(1).max(256),
-    description: z.string().max(1000).optional(),
-  }).strict()).min(2).max(6).optional(),
-}).strict()).min(1).max(3).refine(
-  (questions) => new Set(questions.map((q) => q.question)).size === questions.length,
-  'Questions must be distinct',
-);
-
 /** The input shape for the given kinds. Calls are always validated against the full shape. */
 export function askOwnerInputShape(kinds: readonly AskOwnerKind[] = ALL_KINDS) {
-  const choose = kinds.includes('choose');
   const handoff = kinds.includes('fill') || kinds.includes('scan');
   return {
-    kind: z.enum(kinds as [AskOwnerKind, ...AskOwnerKind[]]).describe('What the owner should do.'),
-    ...(choose ? {
-      questions: QUESTIONS.optional().describe('choose: 1-3 questions, each with 2-6 options; put the recommended option first.'),
-    } : {}),
+    kind: z.enum(kinds as [AskOwnerKind, ...AskOwnerKind[]]).describe('What the user should do.'),
     ...(handoff ? {
       title: HANDOFF_PURPOSE.optional().describe('fill / scan: one short sentence for the owner, e.g. "Sign in to Feishu to continue testing".'),
       note: HANDOFF_NOTE.optional().describe('fill / scan: optional extra context for the owner, shown labelled as from you.'),
@@ -108,15 +70,13 @@ export function askOwnerInputShape(kinds: readonly AskOwnerKind[] = ALL_KINDS) {
 
 export function askOwnerDescription(kinds: readonly AskOwnerKind[], context: Pick<LiziMcpSessionContext, 'agentKind'>): string {
   const lines = [
-    'Ask the owner (the person you work for) to do something you cannot do yourself, instead of asking in chat. '
+    'Ask the user to complete a sign-in, enter a secret, scan a sign-in QR code or connect an account. Ordinary questions belong in your question tools. '
       + 'Returns a receipt at once; the answer or outcome arrives later as a message in this task.',
   ];
-  if (kinds.includes('choose')) {
-    lines.push('- choose: they pick between options in a card while you keep working. Unanswered questions expire when '
-      + 'your execution ends; never guess the choice. Use your synchronous question tool when work must wait for the answer. '
-      + 'For a free-form answer, just ask in your reply.');
-  } else if (context.agentKind === 'codex') {
-    lines.push('- For choices between options, use your own question tool (request_user_input).');
+  if (context.agentKind === 'codex') {
+    lines.push('- For questions, use your native question tools.');
+  } else {
+    lines.push('- For optional questions, use ask_user_question_async; use your synchronous question tool when work must wait.');
   }
   if (kinds.includes('fill')) {
     lines.push('- fill: only for what you must never see, in a window on this computer (`target`): a sign-in, or a password, API key, token or verification code. '
@@ -143,7 +103,6 @@ const missing = (kind: AskOwnerKind, field: string, hint: string) =>
 
 type AskOwnerArgs = {
   kind: AskOwnerKind;
-  questions?: z.infer<typeof QUESTIONS>;
   title?: string;
   note?: string;
   target?: z.infer<typeof HANDOFF_TARGET>;
@@ -164,24 +123,9 @@ export async function handleAskOwner(
   }
   const kinds = askOwnerKinds(context, deps, surface);
   if (!kinds.includes(args.kind)) {
-    if (args.kind === 'choose' && !supportsOwnerChoice(context))
-      return errorPayload('CAPABILITY_NOT_AVAILABLE', 'Use your native question tool for choices.');
     if ((args.kind === 'fill' || args.kind === 'scan') && context.remoteHostId)
       return errorPayload('CAPABILITY_NOT_AVAILABLE', 'Input handoff only works for windows on this computer. Tell the owner what is needed instead.');
     return errorPayload('CAPABILITY_NOT_AVAILABLE', `kind="${args.kind}" is not available in this task.`);
-  }
-
-  if (args.kind === 'choose') {
-    if (!args.questions) return missing('choose', 'questions', '1-3 questions with 2-6 options each.');
-    if (context.mcpCallerKind !== 'root' || context.mcpCallerAttested !== true) {
-      return errorPayload('ROOT_REQUIRED', 'Ask the parent agent to relay the question.');
-    }
-    try {
-      const requestId = deps.ask!(context, args.questions);
-      return okPayload({ request_id: requestId, status: 'pending' });
-    } catch {
-      return errorPayload('QUESTION_UNAVAILABLE', 'No active task with question UI and same-turn input support.');
-    }
   }
 
   if (args.kind === 'connect') {

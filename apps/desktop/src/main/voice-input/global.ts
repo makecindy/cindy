@@ -26,7 +26,11 @@ import { openMainWindowVoiceSettings } from '../deepLink.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import { onQuit } from '../lifecycle.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
-import { prewarmVoiceInputProvider } from './index.js';
+import {
+  canGlobalVoiceInputOverlayStartDictation,
+  onVoiceInputReady,
+  prewarmVoiceInputProvider,
+} from './index.js';
 import {
   VOICE_INPUT_DICTIONARY_LEARNING_TRACK_TIMEOUT_MS,
 } from '../../shared/voiceInputDictionaryLearning.js';
@@ -457,6 +461,11 @@ let pendingFocusedWindowShortcutClaim: {
   modifierEndQueued?: boolean;
   modifierTapQueued?: boolean;
 } | null = null;
+// Each prewarm attempt awaits the readiness gate; a newer attempt supersedes it.
+let overlayPrewarmAttempt = 0;
+// Set when a prewarm was skipped for lack of a dictation path; the next ready
+// readiness refresh retries once.
+let overlayPrewarmSkippedUntilReady = false;
 
 /**
  * Pre-create the overlay BrowserWindow + renderer at idle time so the first
@@ -464,17 +473,43 @@ let pendingFocusedWindowShortcutClaim: {
  * start cost. The hidden window is kept in an explicit idle presentation state;
  * otherwise macOS can restore it when the app is activated by unrelated menu
  * shortcuts such as Cmd+,.
+ *
+ * Local and signed-out profiles without a ready dictation path skip the warm
+ * renderer: the shortcut can only show a setup error there. The skip is
+ * remembered, and the next readiness refresh that finds a startable path
+ * (configuring user credentials, signing in) prewarms again, so a usable
+ * profile does not keep the cold first press. A press before that still opens
+ * the existing cold path.
  */
 export function prewarmGlobalVoiceInputOverlay(): void {
-  const shortcutLabel = registeredAccelerator ?? registeredNativeShortcutLabel;
-  if (!shortcutLabel) return;
+  if (!(registeredAccelerator ?? registeredNativeShortcutLabel)) return;
   if (getOverlayWindow()) return;
-  const window = createOverlayWindow(Date.now());
-  setOverlayIdlePresentationState(window);
-  log.info('global overlay prewarmed', {
-    shortcut: shortcutLabel,
-    windowId: window.id,
+  const attempt = ++overlayPrewarmAttempt;
+  void canGlobalVoiceInputOverlayStartDictation().then((canStart) => {
+    if (attempt !== overlayPrewarmAttempt) return;
+    const shortcutLabel = registeredAccelerator ?? registeredNativeShortcutLabel;
+    if (!shortcutLabel || getOverlayWindow()) return;
+    if (!canStart) {
+      overlayPrewarmSkippedUntilReady = true;
+      log.info('global overlay prewarm skipped: no ready dictation path', { shortcut: shortcutLabel });
+      return;
+    }
+    overlayPrewarmSkippedUntilReady = false;
+    const window = createOverlayWindow(Date.now());
+    setOverlayIdlePresentationState(window);
+    log.info('global overlay prewarmed', {
+      shortcut: shortcutLabel,
+      windowId: window.id,
+    });
   });
+}
+
+function prewarmGlobalVoiceInputOverlayAfterReady(): void {
+  if (!overlayPrewarmSkippedUntilReady) return;
+  // Consume the flag first: the prewarm below refreshes readiness again, and
+  // its own ready notification must not re-enter this path.
+  overlayPrewarmSkippedUntilReady = false;
+  setImmediate(() => prewarmGlobalVoiceInputOverlay());
 }
 
 export function isGlobalVoiceInputOverlayVisible(): boolean {
@@ -1040,6 +1075,8 @@ function registerModifierShortcutRecordingCleanup(sender: WebContents): void {
 export function registerGlobalVoiceInputIpc(deps: GlobalVoiceInputIpcDeps): void {
   if (registered) return;
   registered = true;
+
+  onVoiceInputReady(prewarmGlobalVoiceInputOverlayAfterReady);
 
   // 从系统设置切回 Cindy 就会走到这里 —— 这正是用户刚打开开关的那一刻，且与设置页开着
   // 没关系。设置页自己那条权限 effect 保留：它还负责录制期只补 Fn capture 那条路。

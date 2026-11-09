@@ -1,6 +1,7 @@
 import { personalizationDetailsSettings } from './PersonalizationDetails.settings-search';
 import { useSettingDefinition } from './useSettingDefinition';
 import { Button } from '@/components/ui/button';
+import { SettingsCard, SettingsField } from '@/components/ui/settings-rows';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
@@ -39,30 +40,9 @@ export function UserPromptSection() {
   );
 
   return (
-    <div className="flex flex-col gap-[14px]">
-      <h2 className="text-16 font-medium leading-[1.2] text-[var(--settings-section-title)]">
-        {t('settings.personalization.title')}
-      </h2>
-
-      <div
-        className={cn(
-          'flex flex-col gap-[14px] rounded-xl p-5',
-          'bg-[var(--settings-theme-card-bg)]',
-          'border border-[var(--settings-theme-card-border)]',
-        )}
-      >
-        <div className="flex flex-col gap-1">
-          <p
-            className="text-13 font-medium text-[var(--settings-section-sublabel)]"
-            style={{ letterSpacing: '0.12px' }}
-          >
-            {setting.title}
-          </p>
-          <p className="text-13 leading-[1.5] text-[var(--settings-section-desc)]">
-            {setting.description}
-          </p>
-        </div>
-
+    <SettingsCard>
+      {/* 名称/说明在输入框上方, 与输入框同属一项 */}
+      <SettingsField title={setting.title} hint={setting.description}>
         <textarea {...setting.anchorProps} {...setting.controlProps}
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
@@ -70,7 +50,7 @@ export function UserPromptSection() {
           aria-label={t('settings.personalization.ariaLabel')}
           rows={7}
           className={cn(
-            'min-h-[160px] w-full resize-y rounded-xl',
+            'min-h-[160px] w-full resize-y rounded-lg',
             'p-4',
             'bg-[var(--settings-input-bg)]',
             'border border-[var(--settings-input-border)]',
@@ -108,7 +88,7 @@ export function UserPromptSection() {
             {t('settings.personalization.save')}
           </Button>
         </div>
-      </div>
-    </div>
+      </SettingsField>
+    </SettingsCard>
   );
 }

@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { createGithubStar } from './githubStar.js';
 import { app, BrowserWindow, ipcMain } from 'electron';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
@@ -13,7 +14,7 @@ import {
   pluginNewInstallRelId,
 } from '../../shared/pluginIdentity.js';
 import { outboundFetch } from '../maker-host/outbound-fetch.js';
-import { activeOwnerScopeKey } from '../appSessionState.js';
+import { getActiveAppSession, activeOwnerScopeKey } from '../appSessionState.js';
 import { getGhostSetupChangeBus } from '../cindy-brain/ghostSetupChangeBus.js';
 import { getDeepLinkMainWindow } from '../deepLink.js';
 import { isSecondaryAppWindow } from '../secondary-windows.js';
@@ -79,6 +80,20 @@ export function registerGithubSetupIpc(invalidateStatuses: () => void): void {
     }
   };
   const setup = createGithubSetup(root, changed);
+  const star = createGithubStar({
+    owner: () => getActiveAppSession().dataOwnerId ? activeOwnerScopeKey() : null,
+    readToken: async () => {
+      const owner = activeOwnerScopeKey();
+      // `gh auth switch` happens outside Cindy: never act as a previously cached account.
+      const source = getSharedGhCliTokenSource();
+      source.invalidate();
+      const token = await source.readToken();
+      if (owner !== activeOwnerScopeKey()) return null;
+      return token ?? readGhostSecret(cindyGithubRootInstance(), 'github_pat')
+        ?? readGhostSecret('cindy-github', 'github_pat');
+    },
+    fetch: outboundFetch,
+  });
   const unsubscribes = ['cindy-github', cindyGithubRootInstance()].map(id => getGhostSetupChangeBus().subscribe(id, (event) => {
     if (event.source === 'secret') changed();
   }));
@@ -87,6 +102,8 @@ export function registerGithubSetupIpc(invalidateStatuses: () => void): void {
       'git-context:github-setup:connection',
       readGithubConnection,
     ],
+    ['git-context:github-star:check', star.check],
+    ['git-context:github-star:add', star.star],
     ['git-context:github-setup:status', () => setup.snapshot()],
     ['git-context:github-setup:start', () => setup.start()],
     ['git-context:github-setup:cancel', () => setup.cancel()],

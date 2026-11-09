@@ -464,12 +464,11 @@ sessionRunningRetry 就停。每次因 replacement 关闭而重新入队都计�
   只对**本账号的本机任务**调用：SSH 远程、Review、设备托管访客任务一律不注入。Claude Code 与 Pi 写进
   Agent 进程 env；Codex 的 app-server 共享，按线程经 `shell_environment_policy.set.<名>` 设置。
   返回值必须按 sessionId 确定，重启进程得到字节相同的 env（否则破坏缓存与重建一致性）。
-- 找主人统一走 `cindy_helper` 的顶层工具 `ask_owner`（`packages/lizi-mcps/src/xdt-helper/ask_owner.ts`，
-  2026-10-30）：kind = choose（选择）／fill（亲自输入，原 `request_input_handoff`）／scan（扫码，窗口或
+- 用户操作交接走 `cindy_helper` 的顶层工具 `ask_owner`（`packages/lizi-mcps/src/xdt-helper/ask_owner.ts`，
+  2026-10-30 引入，2026-11-08 拆出普通提问）：kind = fill（亲自输入，原 `request_input_handoff`）／scan（扫码，窗口或
   Agent 截图）／connect（连接账号，目前为 Grok）。它一直在模型的工具列表里（Pi 经网关检索），不藏在
-  `list_tools` 类目后面；列表按请求时的 harness 与能力面只给可用的 kind（Codex 无 choose，SSH 工作区
-  无 fill／scan）。旧名 `request_input_handoff`、`start_grok_device_login` 仍可经 `call_tool` 调用但不再
-  列出，`ask_user_question_async` 由 `ask_owner` kind=choose 原样接替。使用时机只写在工具说明里，
+  `list_tools` 类目后面；列表按请求时的 harness 与能力面只给可用的 kind（SSH 工作区无 fill／scan）。旧名 `request_input_handoff`、`start_grok_device_login` 仍可经 `call_tool` 调用但不再
+  列出。普通异步提问独立使用 `ask_user_question_async`，不再接受 `ask_owner(kind=choose)`。使用时机只写在工具说明里，
   **不改 system prompt**；子 Agent（`mcpCallerKind === 'descendant'`）与远程工作区任务直接拒绝。
   目标窗口不可用（Cindy 自身、找不到）在调用当下返回 `TARGET_IS_CINDY`／`TARGET_NOT_FOUND` 并说明
   下一步，不再先回 pending。何时该发起靠工具说明与工具返回提示（如 `cindy_computer` 拒绝直接操作
@@ -524,8 +523,9 @@ sessionRunningRetry 就停。每次因 replacement 关闭而重新入队都计�
   触发定时任务的成功收口。回归见 `agents/codex/index.test.ts` 的 pending confirmation
   与 human continuation 用例，以及 Desktop `sessionEventPipeline.test.ts`。
   Codex 异步提问使用 `agentMessage.delivery=async` 与结构化 `questions` 接入同一提问
-  流程；原生正文按消息顺序保留在历史，底部回答入口默认收起，展开/收起不改写正文，
-  收起时普通输入框可用，切换任务保留本端收起意图。未回答的异步问题不保留产品边界，原轮次结束时撤销
+  流程；原生正文按消息顺序保留在历史，桌面与手机的新问题卡片默认展开，展开/收起不改写正文，
+  异步只表示等待用户回答时不阻塞模型执行，不代表问题可选；不得因 `delivery=async` 默认隐藏问题。
+  用户手动收起时普通输入框可用，切换任务保留本端既有收起行为。未回答的异步问题不保留产品边界，原轮次结束时撤销
   原生请求；未操作的卡片自动收起、不代选答案，也不提供历史回答入口。原生请求的迟到
   回答不得续跑；已编辑草稿的显式补充发送见下文。结束前已提交的回答优先通过 `turn/steer`
   送入原轮次；发送与结束竞态导致原轮次明确拒绝接收时复用人工续跑，发送结果不确定时
@@ -542,9 +542,10 @@ sessionRunningRetry 就停。每次因 replacement 关闭而重新入队都计�
   返回 cancel，不冒充用户 decline，不把私密输入改接普通问答。
   协议与前缀稳定性实测见 `agents/codex/async-user-input.native.test.ts`，
   卡片、回传、去重及取消回归见 `agents/codex/index.test.ts`。
-  Claude Code／Pi 通过 `cindy_helper.ask_owner`（kind=choose，2026-10-30 起接替
-  `ask_user_question_async`）复用现有卡片；工具立即返回
-  pending 回执。Codex 只保留原生入口，MCP 按请求时的 harness 隐藏 choose 并拒绝这类调用；
+  Claude Code／Pi 通过独立的 `cindy_helper.ask_user_question_async` 复用现有卡片（2026-11-08 从
+  `ask_owner` 拆回）；Claude 直接看到 MCP 工具，Pi 直接注册同名工具并复用宿主 MCP schema、
+  调用与权限身份，不要求先搜索网关。工具立即返回
+  pending 回执。Codex 只保留原生入口，MCP 按请求时的 harness 隐藏共享异步提问并拒绝这类调用；
   `Session` 也按实际引擎拒绝 Codex 调用共享入口，防止陈旧上下文创建第二套待回答状态。
   Claude Code／Pi 的 `Session` 共用 `agents/shared/async-user-questions.ts` 管理问题寿命，
   不登记阻塞交互或人工续跑。回答只走原执行的 steer，结束／Stop／关闭／替换后作废，

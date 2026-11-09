@@ -201,7 +201,6 @@ import {
   planModeComposerDraftText,
   shouldPreservePlanModeComposerDraft,
 } from './planModeComposerCommand';
-import { PendingQueuePanel } from './PendingQueuePanel';
 import { resolveSoleSteerableQueuedMessage } from './pendingQueueRowPresentation';
 import { SendButton } from './SendButton';
 import { FolderPickerPopover, addRecentFolder, type FolderPickerOption } from './FolderPickerPopover';
@@ -684,20 +683,12 @@ interface ChatInputProps {
   voiceConversationDisabledReason?: string;
   voiceConversationActive?: boolean;
   /**
-   * F-QUEUE-DEFER: un-dispatched messages (rendered above the input by
-   * `PendingQueuePanel`). Empty array hides the panel entirely.
+   * Pending messages live in MessageStream. This snapshot supports the
+   * empty-composer steer shortcut.
    */
   pendingQueue?: QueuedMessage[];
-  /** F-QUEUE-DEFER: queue panel expanded state. */
-  queueExpanded?: boolean;
-  /** F-QUEUE-DEFER: toggle queue panel expanded/collapsed. */
-  onQueueExpandedChange?: (expanded: boolean) => void;
-  /** F-QUEUE-DEFER: remove a single un-dispatched queued message. */
-  onQueueRemove?: (clientId: string) => void;
   /** Queue row currently loaded into this shared composer. */
   queueEditingClientId?: string | null;
-  /** Load one queued row into the shared composer. */
-  onQueueEditBegin?: (entry: QueuedMessage) => void;
   /** Save the shared composer's complete text/reference/attachment snapshot. */
   onQueueEditSubmit?: (
     clientId: string,
@@ -714,16 +705,6 @@ interface ChatInputProps {
   onQueueSteer?: (clientId: string) => Promise<boolean>;
   /** Queue row ids currently being delivered through onQueueSteer. */
   steeringQueueClientIds?: string[];
-  /** Queue was paused by Stop; a Continue button appears in the queue panel. */
-  queuePaused?: boolean;
-  /** Resume a queue paused by Stop. */
-  onQueueResume?: () => void;
-  /** Move a queued row to a new insertion index. */
-  onQueueReorder?: (clientId: string, targetIndex: number) => void;
-  /** Lock the whole queue while drag-sort is in progress. */
-  onQueueInteractionLock?: (lockId: string, locked: boolean) => void;
-  /** Lock one queued row while its text is being edited. */
-  onQueueEditLock?: (clientId: string, locked: boolean) => void;
   /** Chat messages — used to derive user message history for ↑/↓ navigation. */
   messages?: Array<{ role: string; content: string; quotesEncoded?: boolean }>;
   /** Custom placeholder text. Defaults to "今天我们做点什么呢~" */
@@ -1361,20 +1342,11 @@ export function ChatInput({
   voiceConversationDisabledReason,
   voiceConversationActive = false,
   pendingQueue,
-  queueExpanded = false,
-  onQueueExpandedChange,
-  onQueueRemove,
   queueEditingClientId = null,
-  onQueueEditBegin,
   onQueueEditSubmit,
   onQueueEditCancel,
   onQueueSteer,
   steeringQueueClientIds = [],
-  queuePaused = false,
-  onQueueResume,
-  onQueueReorder,
-  onQueueInteractionLock,
-  onQueueEditLock,
   messages,
   placeholder,
   previewPrompt,
@@ -1638,43 +1610,14 @@ export function ChatInput({
   }, [recommendationEnabled, sessionId]);
 
   const hasPredictionMessages = (messages?.length ?? 0) > 0;
-  // F-QUEUE-DEFER: when the queue panel is expanded, esc collapses it
-  // BEFORE falling through to the existing stop / history shortcuts. That
-  // way the user's mental model stays consistent: esc = "back out of the
-  // current thing". For the queue this only collapses the tail after the first
-  // three rows; it does not affect dispatch.
-  const queueExpandedRef = useRef(queueExpanded);
-  queueExpandedRef.current = queueExpanded;
-  const onQueueExpandedChangeRef = useRef(onQueueExpandedChange);
-  onQueueExpandedChangeRef.current = onQueueExpandedChange;
   const queueEditingClientIdRef = useRef(queueEditingClientId);
   queueEditingClientIdRef.current = queueEditingClientId;
-  // 空输入框 + 队列仅一条时，输入框里的 Cmd/Ctrl+Enter 直接插话这条(稳定的 window
-  // capture 监听经 ref 读当前值;赋值在 handleQueueSteer 之后)。
   const steerSoleQueuedMessageRef = useRef<() => boolean>(() => false);
   const onQueueEditCancelRef = useRef(onQueueEditCancel);
   onQueueEditCancelRef.current = onQueueEditCancel;
   const queueEditCancelAllowedRef = useRef(true);
-  // F-QUEUE-DEFER: outside-click collapses the queue tail. Boundary = the
-  // palette anchor layer that holds the merged card (panel + input editor)
-  // AND the palette host (slash / at-mention popovers) — clicking into the
-  // editor or a palette row must NOT collapse rows under the user's cursor.
-  // (The palette host sits outside the merged card since the slash-menu
-  // overlap fix, so the boundary must be the anchor layer, not the card.)
   const mergedCardRef = useRef<HTMLDivElement | null>(null);
   const paletteAnchorRef = useRef<HTMLDivElement | null>(null);
-  useEffect(() => {
-    if (!queueExpanded || !onQueueExpandedChange) return;
-    const handler = (e: MouseEvent) => {
-      const root = paletteAnchorRef.current;
-      if (!root) return;
-      if (root.contains(e.target as Node)) return;
-      onQueueExpandedChange(false);
-    };
-    document.addEventListener('mousedown', handler, true);
-    return () => document.removeEventListener('mousedown', handler, true);
-  }, [queueExpanded, onQueueExpandedChange]);
-
   // ── 工具行宽度自适应 ────────────────────────────────────────────────
   // 测 input card（mergedCardRef）实际宽度，窄宽时自动收紧工具行。主会话被右栏
   // 拖宽压窄时据此折叠，行为对齐 doc rail（doc rail 仍按 denseToolbar 强制收紧，
@@ -2865,13 +2808,6 @@ export function ChatInput({
           ) {
             event.preventDefault();
             onQueueEditCancelRef.current();
-            return true;
-          }
-          // F-QUEUE-DEFER: if the queue tail is expanded, Esc collapses that
-          // visual tail before falling through to Stop.
-          if (queueExpandedRef.current && onQueueExpandedChangeRef.current) {
-            event.preventDefault();
-            onQueueExpandedChangeRef.current(false);
             return true;
           }
           // Existing behaviour: abort running task (same as clicking Stop).
@@ -6285,7 +6221,10 @@ export function ChatInput({
           if (sourceStorageKey) clearComposerDraft(sourceStorageKey);
         };
         let optimisticComposerRestored = false;
-        const immediateRestoreClientId = `local-restore:${crypto.randomUUID()}`;
+        const immediateRestoreClientId =
+          typeof crypto?.randomUUID === 'function'
+            ? `local-restore:${crypto.randomUUID()}`
+            : `local-restore:${Date.now()}-${Math.random().toString(36).slice(2)}`;
         const restoreOptimisticallyClearedComposer = (
           clientId = immediateRestoreClientId,
           {
@@ -9440,21 +9379,9 @@ export function ChatInput({
   );
   const folderBasename = workingDir ? workingDir.split(/[\\/]/).pop() : null;
 
-  // F-QUEUE-DEFER: panel + input fuse into a single visual card when the
-  // queue has entries. Two-step rendering would leave a 16px gap between
-  // them (the parent's `gap-4`), which reads as "two cards stacked" — the
-  // design exploration shows them as one continuous card with a hairline
-  // divider, so we wrap them in a gap-0 sub-flex and surgically drop the
-  // input's top-border + top-radius.
-  const queuePanelState =
-    pendingQueue && pendingQueue.length > 0 && onQueueExpandedChange && onQueueRemove
-      ? { queue: pendingQueue, onExpandedChange: onQueueExpandedChange, onRemove: onQueueRemove }
-      : null;
-  const showQueuePanel = queuePanelState !== null;
-  // Orca / topSlot 也走 fused-wrapper 模式:外层 wrapper 拿 border + rounded,
-  // 内部 topSlot 与 textarea 用 1px hairline 分隔但看起来是一张卡。
+  // Queue bubbles live in MessageStream; only composer-specific content is fused here.
   const showTopSlot = !!topSlot;
-  const showFusedWrapper = showQueuePanel || showTopSlot;
+  const showFusedWrapper = showTopSlot;
   const isCreateAgentVariant = visualVariant === 'create-agent';
   // split-pane 同时打开侧栏 / 会话 / 浏览器时，普通会话 composer 也会落到窄容器。
   // 这里必须按 card 实际宽度统一切 compact，而不是只照顾 create-agent；否则普通
@@ -9523,26 +9450,6 @@ export function ChatInput({
           framed={showFusedWrapper}
           className={cn('flex w-full flex-col gap-0', showFusedWrapper && 'overflow-hidden')}
         >
-          {queuePanelState && (
-            <PendingQueuePanel
-              queue={queuePanelState.queue}
-              expanded={queueExpanded}
-              onToggle={() => queuePanelState.onExpandedChange(!queueExpanded)}
-              onRemove={queuePanelState.onRemove}
-              editingClientId={queueEditingClientId}
-              onEditBegin={onQueueEditBegin}
-              onSteer={onQueueSteer ? handleQueueSteer : undefined}
-              steeringClientIds={steeringQueueClientIds}
-              paused={queuePaused}
-              turnRunning={showStopButton}
-              onResume={onQueueResume}
-              onReorder={onQueueReorder}
-              onInteractionLock={onQueueInteractionLock}
-              onEditLock={onQueueEditLock}
-              mergedWithBelow
-              steerShortcutLabel={steerShortcutLabel}
-            />
-          )}
           {showTopSlot && (
             <div className="border-b border-[var(--chat-input-border)] px-[11px] py-2">
               {topSlot}

@@ -43,6 +43,7 @@ vi.mock('@/hooks/useWallpaperSettings', () => ({
     visibility: 0.37,
     setWallpaper: vi.fn(),
     setVisibility: vi.fn(),
+    previewVisibility: vi.fn(),
     setBlur: vi.fn(),
     previewBlur: vi.fn(),
     setMotion: vi.fn(),
