@@ -111,7 +111,7 @@ import {
   openDeviceAuthorizationCard,
   openPluginAuthorizationCard,
 } from '../plugin-oauth/deviceCard.js';
-import { t as authorizationText } from '../i18n.js';
+import { t as authorizationText } from '../i18n.desktop.js';
 import { getBotAuthorizationService } from '../maker-ipc/botAuthorizationService.js';
 import { isResidentBrowserGhost, spawnResidentGhost } from './residentGhost.js';
 import { handleRoutineRequest } from './routineSlot.js';
@@ -341,7 +341,7 @@ import {
   type ProvisionIdentity,
 } from './builtinGhostProvisioner.js';
 import { getAccessToken, getAuthState, onAuthStateChange } from '../authManager.js';
-import { serverApiFetch } from '../serverApiClient.js';
+import { serverApiFetch } from '../serverApiClient.desktop.js';
 import { getClientEndpoint } from '../clientEndpointsService.js';
 import { resolveBundledSystemSkillsRoot } from '../maker-host/built-in-skills.js';
 import { PLUGIN_PAGE_MANUAL_SKILL_PATH } from '../../shared/pluginPageManual.mjs';
@@ -403,7 +403,7 @@ import { cancelActiveGhostOauthFlow } from './ghostOauthFlow.js';
 import { mapGhostOauthConnectError } from './ghostOauthSetupError.js';
 import { reclaimLoopbackPort } from './portReclaim.js';
 import { GhostConnectionManager } from './ghostConnections.js';
-import { getResolvedMainLocale, t } from '../i18n.js';
+import { getResolvedMainLocale, t } from '../i18n.desktop.js';
 import { refreshGhostLocalizationIfChanged } from './ghostLocalizationRefresh.js';
 import type { SupportedLocale } from '../../shared/locale.js';
 import { getDeepLinkMainWindow } from '../deepLink.js';

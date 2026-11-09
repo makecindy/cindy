@@ -1,26 +1,281 @@
+import { retryAfterDeadline } from '@cindy/auth-client';
+import { requestErrorMessage } from './requestErrorMessage.js';
+import type { createLogger } from './logger.js';
+
+export class ServerApiError extends Error {
+  constructor(
+    public readonly code: string,
+    public readonly statusCode: number,
+    message: string,
+    public readonly retryAt?: number,
+  ) {
+    super(message);
+    this.name = 'ServerApiError';
+  }
+}
+
+export interface ApiFetchOptions {
+  method?: string;
+  body?: unknown;
+  /** 每次实际请求前重建 body；401 refresh 重试时会再次调用，优先于静态 body。 */
+  bodyFactory?: () => unknown;
+  headers?: Record<string, string>;
+  cache?: RequestCache;
+  /** 显式传 token；不传则取 authManager.getAccessToken()。 */
+  token?: string | null;
+  /**
+   * 完整的 Authorization 头(如自建中转的 `CindyRelay <凭证>`)。提供时不注入 Cindy 账号
+   * token,调用方还应同时设置 skipAutoRefresh / skipSessionInvalidation,避免对方的 401
+   * 牵连官方登录态。
+   */
+  authorization?: string;
+  /** 跳过 401 自动 refresh（避免无限循环；refresh 自身调用时禁用）。 */
+  skipAutoRefresh?: boolean;
+  /** Fixed-identity teardown requests must not invalidate a newer active account. */
+  skipSessionInvalidation?: boolean;
+  /**
+   * 目标服务 base URL(必传;来自 clientEndpoints 的对应字段或注入方)。
+   * 区域相关服务必须传 resolver：401 refresh 可能切换登录区域，重试前要重新
+   * 读取端点，不能把新区域 token 发到首次请求的旧区域。
+   */
+  baseUrl: string | (() => string);
+  /** Abort the request after this many milliseconds; 0 disables the deadline. */
+  timeoutMs?: number;
+  /** Caller lifetime/deadline, including waiting for shared login refresh and retry. */
+  signal?: AbortSignal;
+  /** Keep upstream response/network details out of local logs for sensitive flows. */
+  redactErrorDetails?: boolean;
+  /**
+   * 日志里代替真实 path 的**路由模板**。`redactedLogPath` 只按前缀保留固定段数,对
+   * `/collection/<id>` 这类「ID 就在浅层」的路径挡不住(如 `/api/plugins/<pluginId>` 的 id
+   * 是第 3 段,会外泄用户装的第三方插件身份)。这类调用方**必须**传一个不含身份/入参的模板
+   * （如 `/api/plugins`），日志一律用它,不用真实 path（2026-08-06 review）。
+   */
+  logLabel?: string;
+  /**
+   * Upstream business codes that may cross a redacted boundary. Messages and
+   * response bodies remain hidden; every code must be explicitly allowlisted
+   * by the caller. These codes are also safe to include in redacted logs.
+   */
+  allowedRedactedErrorCodes?: readonly string[];
+  /** Expected compatibility responses still throw, but log at debug instead of warn. */
+  expectedErrors?: readonly { status: number; code?: string }[];
+}
+
+export interface ServerApiClientPorts {
+  fetch: typeof globalThis.fetch;
+  locale(): string;
+  auth: Pick<typeof import('./authManager.js'), 'getAccessToken' | 'refresh' | 'invalidateSession'>;
+  log: Pick<ReturnType<typeof createLogger>, 'debug' | 'warn' | 'error'>;
+}
+
+/** Common request, refresh, redaction and error contract for both launchers. */
+export function createServerApiClient(ports: ServerApiClientPorts) {
+const { log } = ports;
+function redactedLogPath(apiPath: string): string {
+  const pathname = apiPath.split(/[?#]/, 1)[0];
+  const segments = pathname.split('/').filter(Boolean).slice(0, 3);
+  return segments.length > 0 ? `/${segments.join('/')}` : '/';
+}
+
+interface RawResponse<T> {
+  ok: boolean;
+  status: number;
+  data: T | null;
+  retryAt?: number;
+}
+
+async function rawFetch<T>(apiPath: string, opts: ApiFetchOptions): Promise<RawResponse<T>> {
+  opts.signal?.throwIfAborted();
+  const baseUrl = typeof opts.baseUrl === 'function' ? opts.baseUrl() : opts.baseUrl;
+  const url = baseUrl + apiPath;
+  const method = opts.method ?? 'GET';
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    'Accept-Language': ports.locale(),
+    ...(opts.headers ?? {}),
+  };
+  if (opts.authorization !== undefined) {
+    headers['Authorization'] = opts.authorization;
+  } else {
+    const token = opts.token !== undefined ? opts.token : ports.auth.getAccessToken();
+    if (token) {
+      headers['Authorization'] = 'Bearer ' + token;
+    }
+  }
+  const timeoutMs = opts.timeoutMs ?? 0;
+  const controller = timeoutMs > 0 || opts.signal ? new AbortController() : null;
+  const abort = () => controller?.abort(opts.signal?.reason);
+  opts.signal?.addEventListener('abort', abort, { once: true });
+  const timeoutId = controller && timeoutMs > 0 ? setTimeout(() => controller.abort(), timeoutMs) : null;
+  try {
+    const body = opts.bodyFactory ? opts.bodyFactory() : opts.body;
+    const response = await ports.fetch(url, {
+      method,
+      headers,
+      cache: opts.cache,
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+      signal: controller?.signal,
+    });
+    let data: T | null = null;
+    try {
+      data = (await response.json()) as T;
+    } catch (error) {
+      opts.signal?.throwIfAborted();
+      log.warn('response read failed', opts.logLabel ?? redactedLogPath(apiPath),
+        { status: response.status },
+        opts.redactErrorDetails || opts.logLabel ? '[response details hidden]' : requestErrorMessage(error));
+      data = null;
+    }
+    return { ok: response.ok, status: response.status, data,
+      retryAt: response.status === 429 ? retryAfterDeadline(response) : undefined };
+  } catch (err) {
+    opts.signal?.throwIfAborted();
+    if (opts.redactErrorDetails) {
+      log.error(
+        'serverApiFetch.redacted_network_error',
+        'path=' + (opts.logLabel ?? redactedLogPath(apiPath)),
+        'method=' + method,
+      );
+    } else {
+      log.error('fetch failed', opts.logLabel ?? apiPath, requestErrorMessage(err));
+    }
+    return { ok: false, status: 0, data: null };
+  } finally {
+    if (timeoutId !== null) clearTimeout(timeoutId);
+    opts.signal?.removeEventListener('abort', abort);
+  }
+}
+
+/** Cancel only this waiter; another request may still need the shared refresh. */
+function waitForRefresh(refresh: Promise<boolean>, signal?: AbortSignal): Promise<boolean> {
+  if (!signal) return refresh;
+  return new Promise((resolve, reject) => {
+    const abort = () => { signal.removeEventListener('abort', abort); reject(signal.reason); };
+    signal.addEventListener('abort', abort, { once: true });
+    refresh.then(value => {
+      signal.removeEventListener('abort', abort);
+      if (signal.aborted) reject(signal.reason);
+      else resolve(value);
+    }, error => {
+      signal.removeEventListener('abort', abort);
+      reject(signal.aborted ? signal.reason : error);
+    });
+    if (signal.aborted) abort();
+  });
+}
+
 /**
- * main 进程统一的服务端 API 客户端。
- *
- * - 复用 `authManager.getAccessToken()` 自动注入 Bearer Authorization
- * - 可恢复的 401 自动 refresh 一次再重试
- * - `ACCOUNT_UNAVAILABLE` 或刷新后仍被 401 拒绝时执行完整本地退登
- * - `baseUrl` **必传**:老主 server(apiBaseUrl)2026-07-18 退役后没有"默认
- *   业务 server"了,每个调用方显式指向自己的独立服务(device-link relay /
- *   model-access / oauth-broker / github-server / skillhub-server ...)。
+ * 高层 API：成功 → 返回 data；失败 → throw ServerApiError。
+ * 可恢复的 401 自动 refresh 一次再重试（除非 `skipAutoRefresh`）。
  */
+async function serverApiFetch<T>(apiPath: string, opts: ApiFetchOptions): Promise<T> {
+  let result = await rawFetch<T>(apiPath, opts);
+  opts.signal?.throwIfAborted();
+  let refreshedAndRetried = false;
+  const firstCode = readErrorCode(result.data) ?? statusToCode(result.status);
 
-import { net } from 'electron';
-import * as authManager from './authManager.js';
-import { getResolvedMainLocale } from './i18n.js';
-import { createLogger } from './logger.js';
-import { createServerApiClient } from './serverApiClientCore.js';
+  if (
+    result.status === 401 &&
+    !opts.skipAutoRefresh &&
+    firstCode !== 'ACCOUNT_UNAVAILABLE' &&
+    isRefreshableUnauthorizedCode(firstCode)
+  ) {
+    opts.signal?.throwIfAborted();
+    const refreshed = await waitForRefresh(ports.auth.refresh({ serverRejectedToken: true }), opts.signal);
+    opts.signal?.throwIfAborted();
+    if (refreshed) {
+      refreshedAndRetried = true;
+      result = await rawFetch<T>(apiPath, opts);
+      opts.signal?.throwIfAborted();
+    }
+  }
 
-export { ServerApiError } from './serverApiClientCore.js';
-export type { ApiFetchOptions } from './serverApiClientCore.js';
+  if (!result.ok) {
+    const errCode = readErrorCode(result.data) ?? statusToCode(result.status);
+    const errMsg = readErrorMessage(result.data) ?? `请求失败 (${result.status})`;
+    const publicCode =
+      opts.redactErrorDetails && !opts.allowedRedactedErrorCodes?.includes(errCode)
+        ? statusToCode(result.status)
+        : errCode;
+    if (
+      !opts.skipSessionInvalidation && result.status === 401 &&
+      (errCode === 'ACCOUNT_UNAVAILABLE' ||
+        (refreshedAndRetried && isRefreshableUnauthorizedCode(errCode)))
+    ) {
+      void ports.auth.invalidateSession(
+        errCode === 'ACCOUNT_UNAVAILABLE'
+          ? 'account-unavailable'
+          : 'resource-unauthorized-after-refresh',
+      );
+    }
+    // 网络异常 rawFetch 已 log;这里补 not-ok 响应(401/5xx 等)的日志,
+    // 否则上层 catch 一吞,排查调用链时完全看不到原因。
+    const expected = opts.expectedErrors?.some(({ status, code }) =>
+      result.status === status && (code === undefined || code === errCode));
+    const logNotOk = expected ? log.debug.bind(log) : log.warn.bind(log);
+    if (opts.redactErrorDetails) {
+      logNotOk(
+        'serverApiFetch.redacted_not_ok',
+        'path=' + (opts.logLabel ?? redactedLogPath(apiPath)),
+        'method=' + (opts.method ?? 'GET'),
+        'status=' + result.status,
+        'code=' + publicCode,
+      );
+    } else {
+      // logLabel 表示 path 里带身份;上游 `msg` 同样可能回显身份(如「skill <name> not found」),
+      // 设了 logLabel 就一并不记 msg。注意这只影响**日志**;抛给调用方的 ServerApiError 仍带真实
+      // code/message(SkillHub 依赖 err.code 做 VERSION_RACE 等分支,不能动)。
+      const fields = [
+        'serverApiFetch.not_ok',
+        'path=' + (opts.logLabel ?? apiPath),
+        'method=' + (opts.method ?? 'GET'),
+        'status=' + result.status,
+        'code=' + errCode,
+      ];
+      if (!opts.logLabel) fields.push('msg=' + errMsg);
+      logNotOk(...fields);
+    }
+    throw new ServerApiError(
+      publicCode,
+      result.status,
+      opts.redactErrorDetails ? `请求失败 (${result.status})` : errMsg,
+      result.retryAt,
+    );
+  }
+  if (result.data === null) {
+    throw new ServerApiError('EMPTY_RESPONSE', result.status, '响应体为空');
+  }
+  return result.data;
+}
 
-export const serverApiFetch = createServerApiClient({
-  fetch: (url, init) => net.fetch(url instanceof URL ? url.href : url, init),
-  auth: authManager,
-  locale: () => getResolvedMainLocale(),
-  log: createLogger('serverApiClient'),
-});
+function isRefreshableUnauthorizedCode(code: string): boolean {
+  return code === 'TOKEN_EXPIRED' || code === 'INVALID_TOKEN' || code === 'UNAUTHORIZED';
+}
+
+function readErrorCode(data: unknown): string | null {
+  if (data && typeof data === 'object' && 'error' in data) {
+    const err = (data as { error?: { code?: string } }).error;
+    if (err && typeof err.code === 'string') return err.code;
+  }
+  return null;
+}
+
+function readErrorMessage(data: unknown): string | null {
+  if (data && typeof data === 'object' && 'error' in data) {
+    const err = (data as { error?: { message?: string } }).error;
+    if (err && typeof err.message === 'string') return err.message;
+  }
+  return null;
+}
+
+function statusToCode(status: number): string {
+  if (status === 0) return 'NETWORK_ERROR';
+  if (status === 401) return 'UNAUTHORIZED';
+  if (status === 429) return 'RATE_LIMITED';
+  if (status >= 500) return 'INTERNAL_ERROR';
+  return `HTTP_${status}`;
+}
+
+return serverApiFetch;
+}

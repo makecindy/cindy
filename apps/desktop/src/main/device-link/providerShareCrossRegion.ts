@@ -39,7 +39,7 @@ import { getActiveAuthRealm, getAuthState, getCurrentUserId, getDeviceId } from 
 import { getClientEndpointForRealm, loadClientEndpointsForRealm } from '../clientEndpointsService.js';
 import { createLogger } from '../logger.js';
 import { createOutboundHttpAgent } from '../maker-host/outbound-fetch.desktop.js';
-import { serverApiFetch } from '../serverApiClient.js';
+import { serverApiFetch } from '../serverApiClient.desktop.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import { deviceName } from './deviceName.js';
 import { desktopDirectRuntime } from './directLink.js';

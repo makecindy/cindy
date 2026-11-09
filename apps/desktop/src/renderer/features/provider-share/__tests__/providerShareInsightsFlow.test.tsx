@@ -41,7 +41,7 @@ vi.mock('../../../../main/maker-host/remote-provider-access-store.js', () => ({
   isRemoteProviderInvocationAllowed: () => true,
   onRemoteProviderAccessChanged: () => () => undefined,
 }));
-vi.mock('../../../../main/i18n.js', () => ({ t: (key: string) => key }));
+vi.mock('../../../../main/i18n.desktop.js', () => ({ t: (key: string) => key }));
 vi.mock('../../../../main/textClipboard.js', () => ({ rememberIssuedClipboardText: vi.fn() }));
 // 额度查询不经过 Agent 启动面，隔离其与调度器的全局装配。
 // 其它 IPC 服务不是本链路的依赖，不装配文件传输、桌面捕获、语音和插件宿主。

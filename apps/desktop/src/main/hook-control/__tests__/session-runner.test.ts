@@ -429,7 +429,7 @@ import { createMakerHookSessionRunner, extractToolResultMediaUrls } from '../ses
 import { MAIN_OWNED_SEND_CONTEXT, Session, type AgentSessionHandle, type Capabilities } from '@cindy/maker-core';
 import { observeHookTurn } from '../turnObserver.js';
 import { buildHookPromptNote, SLACK_HOOK_PROMPT_NOTE } from '../outbound.js';
-import { getResolvedMainLocale } from '../../i18n.js';
+import { getResolvedMainLocale } from '../../i18n.desktop.js';
 import { buildUiLanguageErrorNote } from '../../maker-ipc/uiLanguageErrorNote.js';
 import { resolveSafe as resolveXdtImage } from '../../imageCacheStore.desktop.js';
 import { isHeadlessGhostSetupTurn } from '../../mcp-integrations/ghostSetupInteractionSurface.js';

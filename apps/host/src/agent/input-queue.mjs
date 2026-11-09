@@ -5,6 +5,9 @@ import { createTurnExecutor } from './turn-executor.mjs';
 import { createAppMessageSender } from '../../../desktop/src/main/mcp-apps/messageSender.ts';
 import { MCP_APP_MESSAGE_GUARD } from '../../../desktop/src/main/mcp-apps/message.ts';
 import { randomUUID } from 'node:crypto';
+import { createSchedulerQueueBridge } from '../../../desktop/src/main/maker-ipc/schedulerQueueBridge.ts';
+import { createQueuedAcceptedCallbacks } from '../../../desktop/src/main/maker-ipc/queuedAcceptedCallbacks.ts';
+import { runSchedulerQueuedPreparation } from '../../../desktop/src/main/maker-ipc/schedulerQueuedPreparation.ts';
 
 function storedSessionOptions(stored) {
   return { agentKind: makerKind(stored.agentKind), model: stored.model || '',
@@ -66,6 +69,10 @@ export function createInputQueue(deps) {
 
   function createRuntime() {
     const states = new Map();
+    const schedulePreparations = new Map();
+    const scheduleDiscardWatchers = new Map();
+    const scheduleAdmissions = new Map();
+    const acceptedCallbacks = createQueuedAcceptedCallbacks();
     let closing = false;
     let owner;
     const isCurrent = () => !deps.getOwner || (owner !== undefined && owner != null && deps.getOwner() === owner);
@@ -116,7 +123,20 @@ export function createInputQueue(deps) {
       },
     });
     const coordinator = new AgentInputCoordinator({
-      sendToAgent: executor.send,
+      sendToAgent: async (id, message, createOpts, sendOpts) => {
+        const clientId = sendOpts.persistUserMessage?.clientId;
+        try {
+          await runSchedulerQueuedPreparation(clientId, schedulePreparations,
+            () => { scheduleDiscardWatchers.delete(clientId); acceptedCallbacks.discard(clientId); });
+          assertCurrent();
+          const result = await executor.send(id, message, createOpts, sendOpts);
+          await acceptedCallbacks.settle(id, sendOpts, result);
+          return result;
+        } catch (error) {
+          await acceptedCallbacks.rollback(id, clientId);
+          throw error;
+        }
+      },
       steerToAgent: async (id, message, opts) => {
         opts.signal?.throwIfAborted();
         await opts[MCP_APP_MESSAGE_GUARD]?.();
@@ -152,6 +172,60 @@ export function createInputQueue(deps) {
       loadQueueSnapshot: deps.loadQueueSnapshot,
       loadClearBoundary: deps.loadClearBoundary,
       getPersistedClientIds: deps.getPersistedClientIds,
+      onAcceptedQueuedMessage: async (id, item) => {
+        schedulePreparations.delete(item.clientId);
+        scheduleDiscardWatchers.delete(item.clientId);
+        await acceptedCallbacks.run(id, item);
+      },
+      onDiscardedQueuedMessage: (_id, item) => {
+        acceptedCallbacks.discard(item.clientId);
+        schedulePreparations.delete(item.clientId);
+        const discarded = scheduleDiscardWatchers.get(item.clientId);
+        scheduleDiscardWatchers.delete(item.clientId);
+        discarded?.();
+      },
+    });
+    const scheduleBridge = createSchedulerQueueBridge({
+      coordinator,
+      isSessionBusy: id => coordinator.shouldQueueNewTurn(id) ||
+        deps.getMaker().getSession(id)?.isTurnRunning?.() === true,
+      getSessionMeta: id => deps.getMaker().getSessionMeta(id),
+      getSessionRowSnapshot: id => deps.readSession(id),
+      createId: randomUUID,
+      preparations: schedulePreparations,
+      discardWatchers: scheduleDiscardWatchers,
+      enqueue: async req => {
+        const id = req.targetSessionId;
+        const state = stateFor(id);
+        const admission = scheduleAdmissions.get(id);
+        const stored = await deps.readSession(id);
+        assertCurrent();
+        if (admission === undefined || admission !== state.admission || closing || state.closed) {
+          throw new Error('input cancelled before acceptance');
+        }
+        const createOpts = { ...storedSessionOptions(stored),
+          planMode: req.inheritTargetPlanMode ? Boolean(stored.planModeEnabled) : false };
+        // This entry is only called by the local scheduler, never a wire request.
+        // In particular it must not go through composeInput's user-origin stamp.
+        const item = { clientId: req.clientId, text: req.message,
+          persistedContent: req.persistedContent, origin: req.origin, createOpts,
+          model: createOpts.model, workingDir: createOpts.workingDir,
+          effort: createOpts.effort ?? '', permissionMode: createOpts.permissionMode ?? 'ask',
+          chatMessage: { clientId: req.clientId, role: 'user', content: req.persistedContent } };
+        acceptedCallbacks.register(req.clientId, () => req.onAccepted({
+          permissionMode: createOpts.permissionMode, planMode: createOpts.planMode,
+        }), req.onAcceptedRollback);
+        coordinator.setExecutionPaused(id, true);
+        try {
+          coordinator.enqueue(id, item);
+          await flushed(id);
+        } catch (error) {
+          acceptedCallbacks.discard(req.clientId);
+          throw error;
+        } finally {
+          if (!stateFor(id).persistenceError) coordinator.setExecutionPaused(id, false);
+        }
+      },
     });
     function command(id, fn) {
       const state = stateFor(id);
@@ -189,6 +263,22 @@ export function createInputQueue(deps) {
       return project(coordinator.getProjection(id));
     }
     const api = {
+      schedulerQueue: () => ({ ...scheduleBridge,
+        ensureQueueRestored: id => command(id, () => coordinator.isQueueRestored(id)),
+        isSessionBusy: id => { assertCurrent(); return scheduleBridge.isSessionBusy(id); },
+        enqueuePrompt: req => command(req.sessionId, async (_state, admission) => {
+          // The bridge reads metadata and the stored row before enqueue. Keep
+          // the original command generation across every one of those reads.
+          scheduleAdmissions.set(req.sessionId, admission);
+          try { return await scheduleBridge.enqueuePrompt(req); }
+          finally { scheduleAdmissions.delete(req.sessionId); }
+        }),
+        removeQueuedPrompt: (id, clientId) => {
+          // Coordinator owns the immediate cancellation; persist() serializes its snapshot.
+          assertCurrent(); coordinator.remove(id, clientId);
+        },
+        getLastUserActionAt: id => states.get(id)?.lastUserActionAt ?? null,
+      }),
       isTurnRunning: executor.isRunning,
       wakeSession: (id, reason) => coordinator.wakeSession(id, reason),
       restoreSession: (id, check) => command(id, async () => {
@@ -220,6 +310,7 @@ export function createInputQueue(deps) {
           const composed = composeInput(item, await deps.readSession(id));
           assertCurrent();
           if (admission !== state.admission || closing) throw new Error('input cancelled before acceptance');
+          state.lastUserActionAt = Date.now();
           coordinator.setExecutionPaused(id, true);
           coordinator.enqueue(id, composed);
           await flushed(id);

@@ -480,7 +480,7 @@ describe('nodeRuntimeBroker · Electron utilityProcess 适配', () => {
     );
 
     expect(fork).toHaveBeenCalledWith(
-      expect.stringMatching(/nodeRuntimeWorkerProcess\.js$/),
+      expect.stringMatching(/nodeRuntimeWorkerProcess\.desktop\.js$/),
       ['/plugins/demo/node/worker.cjs'],
       expect.objectContaining({
         cwd: os.tmpdir(),

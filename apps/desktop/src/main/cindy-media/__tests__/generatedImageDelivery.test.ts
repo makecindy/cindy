@@ -14,7 +14,7 @@ import { providerShareHostPeer } from '@cindy/device-link';
 import type { DbClient } from '../../localDb/client/DbClient';
 import * as schema from '../../localDb/schema';
 import { clearCurrentDbClient, setCurrentDbClient } from '../../localDb/client/current';
-import { setMainLocale } from '../../i18n';
+import { setMainLocale } from '../../i18n.desktop';
 import { createGeneratedImageDelivery } from '../generatedImageDelivery';
 import {
   captureGeneratedImageStorage,

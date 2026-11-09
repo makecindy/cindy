@@ -20,7 +20,7 @@ const state = vi.hoisted(() => ({
   addImConnection: vi.fn<(input: unknown) => Promise<unknown>>(async () => ({})),
 }));
 vi.mock('electron', () => ({ shell: { openExternal: vi.fn() } }));
-vi.mock('../../i18n.js', () => ({ t: (key: string) => key }));
+vi.mock('../../i18n.desktop.js', () => ({ t: (key: string) => key }));
 vi.mock('../../logger.js', () => ({ createLogger: () => ({ warn: vi.fn() }) }));
 vi.mock('../botAuthorizationService.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../botAuthorizationService.js')>();
@@ -55,7 +55,7 @@ vi.mock('../../cindy-brain/index.js', () => ({
   isGhostAvailableForActiveSession: () => true,
   acquireGhostMutationLeaseForMcp: () => () => {}, captureGhostMutationOwnerForMcp: () => ({}),
 }));
-vi.mock('../../cindy-brain/ghostVisibility.js', () => ({
+vi.mock('../../cindy-brain/ghostVisibility.desktop.js', () => ({
   classifyGhostVisibility: () => state.visible
     ? { ok: true, ghost: state.ghost }
     : { ok: false, errorCode: 'GHOST_DISABLED_IN_WORKDIR' },

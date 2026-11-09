@@ -74,7 +74,7 @@ import {
 
 import { fetchPrSummary } from './prSummary';
 import { PrFollowWatch } from './prFollowWatch';
-import { getSchedulerIfInitialized } from '../scheduler-host/index.js';
+import { getSchedulerIfInitialized } from '../scheduler-host/index.desktop.js';
 
 const log = createLogger('git-context/ipc');
 

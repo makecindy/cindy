@@ -10,7 +10,7 @@ const serverApi = vi.hoisted(() => ({ serverApiFetch: vi.fn() }));
 vi.mock('../../logger.js', () => ({
   createLogger: () => ({ info: vi.fn(), warn: logger.warn, error: vi.fn() }),
 }));
-vi.mock('../../serverApiClient.js', () => ({ serverApiFetch: serverApi.serverApiFetch }));
+vi.mock('../../serverApiClient.desktop.js', () => ({ serverApiFetch: serverApi.serverApiFetch }));
 vi.mock('../../clientEndpointsService.js', () => ({
   getClientEndpoint: () => 'https://plugins.example.com',
 }));

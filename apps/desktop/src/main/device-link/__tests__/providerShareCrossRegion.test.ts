@@ -58,7 +58,7 @@ vi.mock('../../clientEndpointsService.js', () => ({
 }));
 vi.mock('../../maker-host/outbound-fetch.desktop.js', () => ({ createOutboundHttpAgent: async () => undefined }));
 vi.mock('../deviceName.js', () => ({ deviceName: () => 'Laptop' }));
-vi.mock('../../serverApiClient.js', () => ({
+vi.mock('../../serverApiClient.desktop.js', () => ({
   serverApiFetch: async (apiPath: string, opts: Record<string, unknown>) => {
     state.calls.push({ path: apiPath, opts });
     const key = apiPath.replace('/api/device-link/provider-shares/x', '');

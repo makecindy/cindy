@@ -207,8 +207,8 @@ export interface CodexProxyHostPorts {
   peekGrokAccessToken: typeof import('./grok-oauth-login.desktop.js').peekGrokAccessToken;
   isClaudeSubscriptionProviderId: typeof import('./subscription-account-auth.js').isClaudeSubscriptionProviderId;
   isXaiSubscriptionProviderId: typeof import('./subscription-account-auth.js').isXaiSubscriptionProviderId;
-  buildCodexGatewayBaseUrl: typeof import('./codex-gateway-config.js').buildCodexGatewayBaseUrl;
-  CODEX_OAUTH_UPSTREAM: typeof import('./codex-gateway-config.js').CODEX_OAUTH_UPSTREAM;
+  buildCodexGatewayBaseUrl: typeof import('./codex-gateway-config.desktop.js').buildCodexGatewayBaseUrl;
+  CODEX_OAUTH_UPSTREAM: typeof import('./codex-gateway-config.desktop.js').CODEX_OAUTH_UPSTREAM;
   claudeUpstreamEndpoint: typeof import('./runtime-configs.js').claudeUpstreamEndpoint;
   isOpenAiSubscriptionProviderId: typeof import('./codex-account-auth.desktop.js').isOpenAiSubscriptionProviderId;
   createXaiProxyAuthInvalidationObserver: typeof import('./xai-auth-invalidation-host.js').createXaiProxyAuthInvalidationObserver;

@@ -60,7 +60,7 @@ import { isRemoteModelSelection, type RemoteModelAccessView } from '../../shared
 import { createProviderShareInsightsReader } from './providerShareInsights.js';
 import { readProviderShareQuota, readProviderShareQuotaAccountResult } from './providerShareQuota.js';
 import { isDataOwnerPushStamp } from '../../shared/dataOwnerPush.js';
-import { t } from '../i18n.js';
+import { t } from '../i18n.desktop.js';
 import { createLogger } from '../logger.js';
 import { focusMainWindow } from '../deepLink.js';
 import { isFocusedAppContentWindow } from '../windowFocusClassifier.js';

@@ -27,7 +27,7 @@ import { getClientEndpoint } from '../clientEndpointsService';
 import { getSharedGhCliTokenSource } from '../git-context/ghCliTokenSource.js';
 import { createLogger } from '../logger.js';
 import { outboundFetch } from '../maker-host/outbound-fetch.desktop.js';
-import { serverApiFetch } from '../serverApiClient';
+import { serverApiFetch } from '../serverApiClient.desktop';
 import { getSharedGithubUserSubmitterDeps } from './cindyGithubGhostDeps.js';
 import { parseIssuePage } from './githubIssuePayload.js';
 import {

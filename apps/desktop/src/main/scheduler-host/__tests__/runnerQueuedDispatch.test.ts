@@ -117,7 +117,7 @@ import {
   QUEUED_DISPATCH_TRACK_POLL_MS,
   type MakerScheduleRunnerDeps,
   type SchedulerQueueDeps,
-} from '../runner';
+} from '../runner.desktop';
 import { isHeadlessGhostSetupTurn } from '../../mcp-integrations/ghostSetupInteractionSurface';
 import { withScheduleLock } from '../scheduleLock';
 import { AgentInputCoordinator } from '../../maker-ipc/agent-input-coordinator.desktop.js';

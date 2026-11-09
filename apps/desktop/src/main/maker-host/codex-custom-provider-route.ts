@@ -16,7 +16,7 @@ import {
   CODEX_GATEWAY_ENV_KEY,
   CODEX_PROVIDER_OAUTH_PLACEHOLDER_KEY,
   type CodexProxySpawnAuthMode,
-} from './codexGatewayConfigCore.js';
+} from './codex-gateway-config.js';
 import { getProviderRouteCredentialRevision } from './provider-route.js';
 
 export const CODEX_IMAGE_GENERATION_ACTOR_HEADER = 'x-openai-actor-authorization';

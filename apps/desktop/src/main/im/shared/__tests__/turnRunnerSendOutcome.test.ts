@@ -24,7 +24,7 @@ import type {
   TurnPermissionPolicy,
 } from '@cindy/maker-core';
 import type { ChannelIM } from '@cindy/im';
-import { setMainLocale } from '../../../i18n';
+import { setMainLocale } from '../../../i18n.desktop';
 import { createTelegramGuestTurnPermissionPolicy } from '../../telegram/permissionPolicy';
 import { createDingTalkTurnPermissionPolicy } from '../../dingtalk/permissionPolicy';
 import { createFeishuGroupTurnPermissionPolicy } from '../../feishu/permissionPolicy';

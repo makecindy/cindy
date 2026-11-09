@@ -12,6 +12,7 @@ import { markSessionTurnStarted, markSessionTurnEnded, drainSessionActiveTurnWri
 
 import { createInputQueue } from './input-queue.mjs';
 import { GhostGrantConfirmBridge } from '../../../desktop/src/main/cindy-brain/ghostGrantConfirmBridge.ts';
+import { AcceptedCallbackDispatchCancelled } from '../../../desktop/src/main/maker-ipc/acceptedCallbackRunner.ts';
 
 /** Minimal Maker stand-in: one live session per id, driven by the test. */
 function createFakeMaker() {
@@ -21,12 +22,16 @@ function createFakeMaker() {
     getSession(id) {
       return sessions.get(id) ?? null;
     },
+    async getSessionMeta(id) {
+      return { id, agentKind: 'claude-code', model: 'stored-model', workDir: '/tmp' };
+    },
     async createSession(opts) {
       const listeners = new Set();
       const session = {
         id: opts.id,
         options: opts,
         sent: [],
+        sendOptions: [],
         aborted: 0,
         async setModel(model, settings) { Object.assign(session.options, { model }, settings); },
         async setEffort(effort) { session.options.effort = effort; },
@@ -44,6 +49,7 @@ function createFakeMaker() {
           await opts.beforeProviderStart?.();
           await opts.onAccepted?.(opts.signal);
           session.sent.push(typeof text === 'string' ? text : text.content);
+          session.sendOptions.push(opts);
           return { accepted: true };
         },
         async abort() {
@@ -69,10 +75,13 @@ function createHarness(overrides = {}) {
     hub: { publish: (event) => events.push(event) },
     readSession: async (sessionId) => ({
       id: sessionId,
+      status: 'active',
       agentKind: 'claude-code',
       model: 'stored-model',
       workingDir: '/tmp',
       providerId: 'xd',
+      permissionMode: 'ask',
+      planModeEnabled: false,
     }),
     persistMessage: async (sessionId, input) => {
       persisted.push({ sessionId, ...input });
@@ -90,6 +99,113 @@ const waitFor = async (check) => {
   }
   throw new Error('condition not reached');
 };
+
+// Host lifecycle / integration: desktop runner tests inject the queue bridge;
+// these enter its real admission, persistence and accepted callback pipeline.
+const scheduledInput = (overrides = {}) => ({ sessionId: 'scheduled-task',
+  text: 'scheduled input', persistedContent: 'stored schedule prompt',
+  origin: { kind: 'scheduler', scheduleId: 'schedule', scheduleName: 'Fixture', runId: 'run' },
+  onAccepted() {}, ...overrides });
+
+test('scheduled input waits behind user input, deduplicates and retains its origin through dispatch', async t => {
+  const h = createHarness(); t.after(() => h.queue.dispose());
+  await enqueue(h, 'scheduled-task', { clientId: 'user', text: 'user input' });
+  const bridge = h.queue.schedulerQueue();
+  let accepted = 0;
+  const request = scheduledInput({ onAccepted: modes => {
+    assert.deepEqual(modes, { permissionMode: 'ask', planMode: false }); accepted++;
+  } });
+  const result = await bridge.enqueuePrompt(request);
+  assert.ok(result.clientId);
+  assert.equal(bridge.hasQueuedPrompt('scheduled-task', 'schedule'), true);
+  assert.deepEqual(await bridge.enqueuePrompt(request), { duplicate: true });
+  assert.equal(accepted, 0);
+  h.maker.getSession('scheduled-task').emit({ type: 'done' });
+  await waitFor(() => h.maker.getSession('scheduled-task').sent.length === 2);
+  assert.equal(accepted, 1);
+  assert.deepEqual(h.maker.getSession('scheduled-task').sendOptions[1].origin, request.origin);
+  assert.deepEqual(h.persisted.find(row => row.clientId === result.clientId)?.agentMeta?.origin, request.origin);
+});
+
+test('removing a scheduled queue row notifies the runner once and never starts that input', async t => {
+  const h = createHarness(); t.after(() => h.queue.dispose());
+  await enqueue(h, 'scheduled-task', { clientId: 'user', text: 'user input' });
+  let discarded = 0; let accepted = 0;
+  const bridge = h.queue.schedulerQueue();
+  const result = await bridge.enqueuePrompt(scheduledInput({
+    onDiscarded: () => discarded++, onAccepted: () => accepted++,
+  }));
+  bridge.removeQueuedPrompt('scheduled-task', result.clientId);
+  bridge.removeQueuedPrompt('scheduled-task', result.clientId);
+  h.maker.getSession('scheduled-task').emit({ type: 'done' });
+  await waitFor(() => !h.queue.isTurnRunning('scheduled-task'));
+  assert.equal(discarded, 1); assert.equal(accepted, 0);
+  assert.equal(h.maker.getSession('scheduled-task').sent.length, 1);
+  assert.equal(h.persisted.some(row => row.clientId === result.clientId), false);
+});
+
+test('scheduler preparation failure reaches the runner before any model or user-row write', async t => {
+  const h = createHarness(); t.after(() => h.queue.dispose());
+  let failure;
+  const result = await h.queue.schedulerQueue().enqueuePrompt(scheduledInput({
+    onPreparing: async () => { throw new Error('route changed'); },
+    onPreparationFailed: error => { failure = error; },
+  }));
+  await waitFor(() => failure && !h.queue.schedulerQueue().isPromptTracked('scheduled-task', result.clientId));
+  assert.equal(failure?.message, 'route changed');
+  assert.equal(h.persisted.some(row => row.clientId === result.clientId), false);
+  assert.equal(h.maker.getSession('scheduled-task'), null);
+});
+
+test('a cancelled scheduler acceptance rolls back before vendor dispatch', async t => {
+  const h = createHarness(); t.after(() => h.queue.dispose());
+  let rollback = 0;
+  const result = await h.queue.schedulerQueue().enqueuePrompt(scheduledInput({
+    onAccepted: () => { throw new AcceptedCallbackDispatchCancelled('schedule paused'); },
+    onAcceptedRollback: () => { rollback++; },
+  }));
+  await waitFor(() => rollback === 1);
+  assert.equal(h.persisted.some(row => row.clientId === result.clientId), true);
+  assert.equal(h.maker.getSession('scheduled-task').sent.length, 0);
+});
+
+test('an outgoing scheduler cannot restore queues after its input runtime is disposed', async t => {
+  let restored = 0;
+  const h = createHarness({ loadQueueSnapshot: async () => { restored++; return []; } });
+  t.after(() => h.queue.dispose());
+  const previous = h.queue.schedulerQueue();
+  await previous.ensureQueueRestored('old-owner-task');
+  await h.queue.dispose();
+  const before = restored;
+  await assert.rejects(previous.ensureQueueRestored('new-owner-task'), /session is closed/);
+  assert.equal(restored, before, 'closed scheduler must not read the next account database');
+});
+
+for (const blockedRead of [1, 2]) {
+  test(`stop during scheduler admission read ${blockedRead} prevents late enqueue`, async t => {
+    let release, entered;
+    const gate = new Promise(resolve => { release = resolve; });
+    const reading = new Promise(resolve => { entered = resolve; });
+    let reads = 0;
+    const h = createHarness({ readSession: async id => {
+      if (++reads === blockedRead) { entered(); await gate; }
+      return { id, status: 'active', agentKind: 'claude-code', model: 'stored-model', workingDir: '/tmp' };
+    } });
+    t.after(() => h.queue.dispose());
+    const pending = h.queue.schedulerQueue().enqueuePrompt(scheduledInput());
+    await reading;
+    const rejected = assert.rejects(pending, /input cancelled before acceptance/);
+    // A Stop that clears without keeping a paused queue still invalidates the
+    // admission already in progress; pause state alone cannot enforce this.
+    const stopping = h.queue.stop('scheduled-task', { keepQueue: false, pauseQueue: false });
+    release();
+    await rejected;
+    await stopping;
+    assert.equal(h.queue.projection('scheduled-task').pendingQueue.length, 0);
+    assert.equal(h.maker.getSession('scheduled-task'), null);
+    assert.equal(h.persisted.length, 0);
+  });
+}
 
 // Real shared sender -> Host durable queue -> execution boundary. Only the
 // external model is substituted; a plain JSON item cannot mint a live card grant.

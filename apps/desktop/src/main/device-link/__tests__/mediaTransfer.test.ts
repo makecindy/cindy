@@ -24,7 +24,7 @@ vi.mock('electron', () => ({ net: { fetch: netFetchMock } }));
 vi.stubGlobal('fetch', undiciFetchMock);
 
 const apiFetch = vi.hoisted(() => vi.fn());
-vi.mock('../../serverApiClient.js', () => ({
+vi.mock('../../serverApiClient.desktop.js', () => ({
   serverApiFetch: apiFetch,
   ServerApiError: class extends Error {},
 }));

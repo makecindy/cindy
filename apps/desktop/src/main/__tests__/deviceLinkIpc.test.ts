@@ -28,7 +28,7 @@ vi.mock('electron', () => ({
   ipcMain: { handle: vi.fn() },
   app: { getPath: () => '/tmp' },
 }));
-vi.mock('../serverApiClient', () => {
+vi.mock('../serverApiClient.desktop', () => {
   class ServerApiError extends Error {
     constructor(
       public readonly code: string,
@@ -161,7 +161,7 @@ import {
 import { DeviceLinkError, PLUGIN_OAUTH_CHANNEL, PLUGIN_SECRET_LOCAL_CHANNEL } from '@cindy/device-link';
 import { MCP_APPS_INVOKE } from '../../shared/mcpApps.js';
 import { invokeWithClosedLinkRecovery } from '../device-link/linkRecovery';
-import { ServerApiError } from '../serverApiClient';
+import { ServerApiError } from '../serverApiClient.desktop';
 import { createIpcError } from '../../shared/ipc-errors';
 import { ReviewArtifactAuthorizationError } from '../reviewer/reviewArtifactAuthorization';
 import {

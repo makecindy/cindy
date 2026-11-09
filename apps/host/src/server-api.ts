@@ -1,4 +1,4 @@
-import { createServerApiClient, type ApiFetchOptions } from '../../desktop/src/main/serverApiClientCore.js';
+import { createServerApiClient, type ApiFetchOptions } from '../../desktop/src/main/serverApiClient.js';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../../desktop/src/main/appSessionState.js';
 import { createLogger } from '../../desktop/src/main/logger.js';
 import { hostOutbound } from './outbound.mjs';

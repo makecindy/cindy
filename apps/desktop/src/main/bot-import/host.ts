@@ -1,7 +1,7 @@
 import { normalizeBotToolCapabilities } from '../../shared/botCapabilitySelection.js';
 import { companionImportReasonKey } from '@cindy/maker-shared/companion-import';
 import { createMessage } from '../localDb/ipc/messages.js';
-import { t } from '../i18n.js';
+import { t } from '../i18n.desktop.js';
 import { randomUUID } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';

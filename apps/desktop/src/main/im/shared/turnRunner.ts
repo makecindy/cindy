@@ -78,7 +78,7 @@ import { hydrateSessionProvider } from '../../maker-host/session-provider-store'
 import { setSessionEffort, setSessionFastMode } from '../../maker-host/session-effort-store';
 import { hasCustomProviderKey } from '../../maker-host/provider-route';
 import { createLogger } from '../../logger';
-import { t } from '../../i18n';
+import { t } from '../../i18n.desktop';
 import { resolveSafe as resolveXdtImageUrl } from '../../imageCacheStore.desktop';
 import { resolveSafe as resolveCindyMediaUrl } from '../../cindy-media/blobStore.desktop';
 import { beginHeadlessGhostSetupTurn } from '../../mcp-integrations/ghostSetupInteractionSurface.js';

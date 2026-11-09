@@ -134,7 +134,7 @@ import { GhostInstallTargetRequiredError } from '../cindy-brain/ghostInstallTarg
 
 import { getGhostSetupCoordinator as desktopSetupCoordinator } from '../cindy-brain/ghostSetupCoordinator.js';
 
-import { createGhostVisibility } from '../cindy-brain/ghostVisibilityCore.js';
+import { createGhostVisibility } from '../cindy-brain/ghostVisibility.js';
 
 import { readInstalledGhostManual } from '../cindy-brain/ghostManual.js';
 
@@ -283,7 +283,7 @@ export interface GhostGatewayPorts {
   callCindyMedia: typeof import('../cindy-media/invocationService.js').callCindyMedia;
   resolveGhostAttachmentUrl: typeof import('./ghostAttachmentResolve.js').resolveGhostAttachmentUrl;
   forkForgeIconConversionHost: typeof import('./forgeIconConversionHost.js').forkForgeIconConversionHost;
-  t: typeof import('../i18n.js').t;
+  t: typeof import('../i18n.desktop.js').t;
   openGithubSignIn: typeof import('../git-context/githubSetupIpc.js').openGithubSignIn;
   readGithubConnection: typeof import('../git-context/githubSetupIpc.js').readGithubConnection;
 }

@@ -124,7 +124,7 @@ import {
   withStableOwnerBoundaryMutation,
 } from './authBoundaryQuarantine.js';
 import { buildFocusDeepLink } from './deepLink';
-import { getResolvedMainLocale, t } from './i18n';
+import { getResolvedMainLocale, t } from './i18n.desktop';
 import { atomicWriteFileSync, readAtomicFileSync } from './utils/atomicWriteFile.js';
 import {
   activateClientEndpointRealm,

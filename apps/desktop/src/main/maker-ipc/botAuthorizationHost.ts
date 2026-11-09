@@ -1,6 +1,6 @@
 import { getSessionRewindGeneration, withSendToSessionLock } from './sendToSessionLock.js';
 import { shell } from 'electron';
-import { t } from '../i18n.js';
+import { t } from '../i18n.desktop.js';
 import { and, eq, inArray, isNull, ne, or, gt, like, desc } from 'drizzle-orm';
 import { getDbClient } from '../localDb/client/current.js';
 import { botSessionLinks, botProfiles, sessions, messages } from '../localDb/schema.js';
@@ -25,7 +25,7 @@ import {
 } from '../cindy-brain/index.js';
 import { getGhostSetupChangeBus } from '../cindy-brain/ghostSetupChangeBus.js';
 import { ghostInstallApprovalToken } from '../../shared/ghost.js';
-import { classifyGhostVisibility } from '../cindy-brain/ghostVisibility.js';
+import { classifyGhostVisibility } from '../cindy-brain/ghostVisibility.desktop.js';
 import { installedGhostStoragePart, installedGhostMutationTargetToken } from '../../shared/pluginIdentity.js';
 import { isGhostDisabledForWorkdir } from '../cindy-brain/ghostWorkdirPrefs.js';
 import {

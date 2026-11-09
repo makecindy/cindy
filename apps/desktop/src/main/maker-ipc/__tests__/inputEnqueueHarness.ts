@@ -22,7 +22,7 @@ const compiled = transpileModule(`return (${handler});`, {
 export function createInputEnqueueHarness(coordinator: AgentInputCoordinator, options: {
   remote?: boolean;
   mobile?: boolean;
-  resumeInterruptedScheduleRun?: typeof import('../../scheduler-host/index.js').resumeInterruptedScheduleRun;
+  resumeInterruptedScheduleRun?: typeof import('../../scheduler-host/index.desktop.js').resumeInterruptedScheduleRun;
   getSessionFsSnapshot?: () => Promise<{ planModeEnabled?: boolean } | null>;
 } = {}) {
   const { remote = true, mobile = false, resumeInterruptedScheduleRun = async () => null } = options;

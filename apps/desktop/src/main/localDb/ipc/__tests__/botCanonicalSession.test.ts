@@ -11,7 +11,7 @@ import { createDrizzleProxy } from '../../client/drizzleProxy';
 import type { DbTransport } from '../../client/DbTransport';
 import { getSelectedNewMakerRoute, setNewMakerDraftCache } from '../../../maker-host/newMakerDefaultsCache';
 import { setModelVisibilityMirror } from '../../../maker-host/model-visibility-mirror';
-import { setMainLocale } from '../../../i18n';
+import { setMainLocale } from '../../../i18n.desktop';
 import Database from 'better-sqlite3';
 import { AgentInputCoordinator } from '../../../maker-ipc/agent-input-coordinator.desktop';
 import { createSessionQueueControlService } from '../../../maker-ipc/sessionQueueControl';

@@ -5,7 +5,7 @@ import type {
 } from '../../shared/ghost.js';
 import { GHOST_SECRET_VALUE_MAX_CHARS } from '../../shared/ghost.js';
 import type { GhostSetupActionResult, GhostSetupInlineCommit } from './ghostSetupCoordinator.js';
-import type { t as Translate } from '../i18n.js';
+import type { t as Translate } from '../i18n.desktop.js';
 import { getRemoteOauthContext } from '../plugin-oauth/context.js';
 
 export interface GhostSetupInlineExecutorDeps {

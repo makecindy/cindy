@@ -18,7 +18,7 @@ import {
   isProviderSharePeer,
 } from '@cindy/device-link';
 import { confirmRemoteSkillMutation, isRemoteSkillApproval } from './remoteSkillConfirmation';
-import { t } from '../i18n';
+import { t } from '../i18n.desktop';
 import { createHash, randomBytes } from 'node:crypto';
 import { ipcMain, shell, clipboard, dialog, BrowserWindow } from 'electron';
 import { MCP_APPS_INVOKE } from '../../shared/mcpApps.js';
@@ -40,7 +40,7 @@ import {
   type LinkAcceptPayload,
 } from '@cindy/device-link';
 import { isMobilePlatform } from '@cindy/maker-shared/device-list';
-import { ServerApiError } from '../serverApiClient';
+import { ServerApiError } from '../serverApiClient.desktop';
 import { deviceLinkApiFetch } from './deviceLinkApi.js';
 import { requireString, throwIpcError } from '../utils/ipcValidate';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer';

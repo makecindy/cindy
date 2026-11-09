@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { DEFAULT_MENUBAR_SETTINGS, type MenubarSettings } from '../../../shared/menubarQuota';
 import type { SupportedLocale } from '../../../shared/locale';
-import { mainStringKeysUnder, rawMainString } from '../../i18n';
+import { mainStringKeysUnder, rawMainString } from '../../i18n.desktop';
 import { familyLogo, MENUBAR_CINDY_LOGO, MENUBAR_HARNESS_LOGOS } from '../logos';
 import {
   buildMenubarView,

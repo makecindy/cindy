@@ -25,7 +25,7 @@ import type {
   GhostSetupEnsureRequest,
   GhostSetupEnsureResult,
 } from '../../cindy-brain/ghostSetupCoordinator';
-import { t } from '../../i18n';
+import { t } from '../../i18n.desktop';
 import { Session } from '@cindy/maker-core';
 import { resolveGhostFsSessionSnapshot } from '../../maker-ipc/ghostFsSessionSnapshot';
 import { createIpcError } from '../../../shared/ipc-errors';

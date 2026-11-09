@@ -66,7 +66,7 @@ vi.mock('../../appSessionState', () => ({
   activeOwnerScopeKey: (): string => 'cloud:owner-x:1',
   ownerScopedUserDataPath: (...parts: string[]): string => ['/data/owners/x', ...parts].join('/'),
 }));
-vi.mock('../../i18n', () => ({ t: (key: string) => key }));
+vi.mock('../../i18n.desktop', () => ({ t: (key: string) => key }));
 // 读路径还会查 purge 队列是否有待清记录;边界测试只关心授权,给"干净"。
 vi.mock('../mirrorCachePurgeQueue', () => ({
   enqueuePurge: vi.fn(async () => undefined),
@@ -88,7 +88,7 @@ vi.mock('../../appCapabilities', () => ({
 vi.mock('../mirrorCacheStore', () => ({
   getMirrorCache: () => h.cache,
 }));
-vi.mock('../../serverApiClient', () => ({
+vi.mock('../../serverApiClient.desktop', () => ({
   serverApiFetch: vi.fn(),
   ServerApiError: class ServerApiError extends Error {},
 }));

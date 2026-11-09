@@ -18,7 +18,7 @@ import {
   CODEX_SUMMARY_COMPACT_PROVIDER_ID,
   CODEX_GATEWAY_PROVIDER_ID,
   CODEX_OPENAI_COMPACT_PROVIDER_ID,
-} from './codexGatewayConfigCore.js';
+} from './codex-gateway-config.js';
 import {
   crossesCodexAppliedCustomProviderIdentity,
   deriveCodexCustomProviderRoutes,

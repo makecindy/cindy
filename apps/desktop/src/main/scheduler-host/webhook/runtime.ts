@@ -22,7 +22,7 @@ function localIngressEnabled(): boolean {
 async function notifyQuotaExhausted({ limit, resetAt }: RemoteWebhookQuota): Promise<void> {
   const [{ getDesktopNotificationsEnabled }, { t }] = await Promise.all([
     import('../../notificationService.js'),
-    import('../../i18n.js'),
+    import('../../i18n.desktop.js'),
   ]);
   if (!getDesktopNotificationsEnabled() || !Notification.isSupported()) return;
   const body = t('scheduler.webhook.quotaExhausted')

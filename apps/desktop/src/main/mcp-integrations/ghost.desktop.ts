@@ -16,7 +16,7 @@ import { commitMessageMediaRefs } from '../cindy-media/chatAttachments.js';
 import { callCindyMedia } from '../cindy-media/invocationService.js';
 import { resolveGhostAttachmentUrl } from './ghostAttachmentResolve.js';
 import { forkForgeIconConversionHost } from './forgeIconConversionHost.js';
-import { t } from '../i18n.js';
+import { t } from '../i18n.desktop.js';
 import { openGithubSignIn, readGithubConnection } from '../git-context/githubSetupIpc.js';
 import { createGhostGateway } from './ghost.js';
 export type { GhostGrantLiveSessionState, ToolResultImageDescription, CindyGhostsHostDeps } from './ghost.js';

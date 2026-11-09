@@ -15,7 +15,7 @@ import { getMaker, listBotCreationCapabilities } from '../maker-host/index.js';
 import { requestUtilityText } from '../utility-model/oneShotCandidates.js';
 import { isIpcError } from '../../shared/ipc-errors.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
-import { getResolvedMainLocale } from '../i18n.js';
+import { getResolvedMainLocale } from '../i18n.desktop.js';
 import { botInvitationDraftSchema, botInvitationPrompt } from './botInvitationDraft.js';
 import { availableBotName, type BotCreationDraft } from '../../shared/botCreation.js';
 

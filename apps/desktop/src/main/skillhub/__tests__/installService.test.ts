@@ -74,7 +74,7 @@ vi.mock('../../clientEndpointsService', () => ({
   getClientEndpoint: vi.fn(() => 'https://skillhub.test.invalid'),
 }));
 
-vi.mock('../../serverApiClient', () => ({
+vi.mock('../../serverApiClient.desktop', () => ({
   serverApiFetch: vi.fn(),
 }));
 
@@ -127,7 +127,7 @@ function makeDirectoryLink(linkPath: string, targetPath: string) {
 async function setupInstallDownload(skillName: string, zipBuf: Uint8Array) {
   const { net } = await import('electron');
   const { getCurrentUserId } = await import('../../authManager');
-  const { serverApiFetch } = await import('../../serverApiClient');
+  const { serverApiFetch } = await import('../../serverApiClient.desktop');
 
   vi.mocked(getCurrentUserId).mockReturnValue('user-1');
   vi.mocked(serverApiFetch).mockImplementation(async (apiPath: string) => {
@@ -717,7 +717,7 @@ describe('skillhub/installService', () => {
       const zipBuf = await makeZip({ 'SKILL.md': 'new content' });
       await setupInstallDownload(name, zipBuf);
       const { registryService } = await import('../registry');
-      const { serverApiFetch } = await import('../../serverApiClient');
+      const { serverApiFetch } = await import('../../serverApiClient.desktop');
       const fetch = vi.mocked(serverApiFetch).getMockImplementation()!;
       vi.mocked(serverApiFetch).mockImplementation(async (url, options) =>
         url.includes('/batch-detail')
@@ -771,7 +771,7 @@ describe('skillhub/installService', () => {
     });
     const { net } = await import('electron');
     const { getCurrentUserId } = await import('../../authManager');
-    const { serverApiFetch } = await import('../../serverApiClient');
+    const { serverApiFetch } = await import('../../serverApiClient.desktop');
     const { install } = await import('../installService');
 
     vi.mocked(getCurrentUserId).mockReturnValue('user-1');
@@ -909,7 +909,7 @@ describe('skillhub/installService', () => {
     const zipBuf = new Uint8Array([1, 2, 3]);
     const { net } = await import('electron');
     const { getCurrentUserId } = await import('../../authManager');
-    const { serverApiFetch } = await import('../../serverApiClient');
+    const { serverApiFetch } = await import('../../serverApiClient.desktop');
     const { install } = await import('../installService');
 
     try {
@@ -999,7 +999,7 @@ describe('skillhub/installService', () => {
     const zipBuf = await makeZip({ 'SKILL.md': 'new content' });
     const { net } = await import('electron');
     const { getCurrentUserId } = await import('../../authManager');
-    const { serverApiFetch } = await import('../../serverApiClient');
+    const { serverApiFetch } = await import('../../serverApiClient.desktop');
     const { registryService } = await import('../registry');
     const { install } = await import('../installService');
 
@@ -1046,7 +1046,7 @@ describe('skillhub/installService', () => {
     const zipBuf = await makeZip({ 'SKILL.md': 'new content' });
     const { net } = await import('electron');
     const { getCurrentUserId } = await import('../../authManager');
-    const { serverApiFetch } = await import('../../serverApiClient');
+    const { serverApiFetch } = await import('../../serverApiClient.desktop');
     const { registryService } = await import('../registry');
     const { install } = await import('../installService');
 
@@ -1096,7 +1096,7 @@ describe('skillhub/installService', () => {
     const zipBuf = await makeZip({ 'SKILL.md': 'new content' });
     const { net } = await import('electron');
     const { getCurrentUserId } = await import('../../authManager');
-    const { serverApiFetch } = await import('../../serverApiClient');
+    const { serverApiFetch } = await import('../../serverApiClient.desktop');
     const { registryService } = await import('../registry');
     const { install } = await import('../installService');
 
@@ -1147,7 +1147,7 @@ describe('skillhub/installService', () => {
     const zipBuf = await makeZip({ 'SKILL.md': 'new content' });
     const { net } = await import('electron');
     const { getCurrentUserId } = await import('../../authManager');
-    const { serverApiFetch } = await import('../../serverApiClient');
+    const { serverApiFetch } = await import('../../serverApiClient.desktop');
     const { registryService } = await import('../registry');
     const { install } = await import('../installService');
 
@@ -1208,7 +1208,7 @@ describe('skillhub/installService', () => {
     const zipBuf = await makeZip({ 'SKILL.md': 'project content' });
     const { net } = await import('electron');
     const { getCurrentUserId } = await import('../../authManager');
-    const { serverApiFetch } = await import('../../serverApiClient');
+    const { serverApiFetch } = await import('../../serverApiClient.desktop');
     const { registryService } = await import('../registry');
     const sharedSkills = await import('../../maker-host/shared-global-skills.js');
     const { install } = await import('../installService');
@@ -1862,7 +1862,7 @@ describe('skillhub/installService', () => {
     const zipBuf = await makeZip({ 'SKILL.md': 'new content' });
     const { net } = await import('electron');
     const { getCurrentUserId } = await import('../../authManager');
-    const { serverApiFetch } = await import('../../serverApiClient');
+    const { serverApiFetch } = await import('../../serverApiClient.desktop');
     const { registryService } = await import('../registry');
     const { install } = await import('../installService');
 
@@ -1915,7 +1915,7 @@ describe('skillhub/installService', () => {
     const zipBuf = await makeZip({ 'SKILL.md': 'new content' });
     const { net } = await import('electron');
     const { getCurrentUserId } = await import('../../authManager');
-    const { serverApiFetch } = await import('../../serverApiClient');
+    const { serverApiFetch } = await import('../../serverApiClient.desktop');
     const { registryService } = await import('../registry');
     const { install } = await import('../installService');
 
@@ -1961,7 +1961,7 @@ describe('skillhub/installService', () => {
     const zipBuf = await makeZip({ 'SKILL.md': 'new content' });
     const { net } = await import('electron');
     const { getCurrentUserId } = await import('../../authManager');
-    const { serverApiFetch } = await import('../../serverApiClient');
+    const { serverApiFetch } = await import('../../serverApiClient.desktop');
     const { registryService } = await import('../registry');
     const { install } = await import('../installService');
 
@@ -2020,7 +2020,7 @@ describe('skillhub/installService', () => {
     const zipBuf = await makeZip({ 'SKILL.md': 'new content' });
     const { net } = await import('electron');
     const { getCurrentUserId } = await import('../../authManager');
-    const { serverApiFetch } = await import('../../serverApiClient');
+    const { serverApiFetch } = await import('../../serverApiClient.desktop');
     const { registryService } = await import('../registry');
     const { install } = await import('../installService');
 
@@ -2072,7 +2072,7 @@ describe('skillhub/installService', () => {
     const zipBuf = await makeZip({ 'SKILL.md': 'new content' });
     const { net } = await import('electron');
     const { getCurrentUserId } = await import('../../authManager');
-    const { serverApiFetch } = await import('../../serverApiClient');
+    const { serverApiFetch } = await import('../../serverApiClient.desktop');
     const { registryService } = await import('../registry');
     const { install } = await import('../installService');
 
@@ -2398,7 +2398,7 @@ describe('skillhub/installService', () => {
     const zipBuf = await makeZip({ 'SKILL.md': 'new content' });
     const { net } = await import('electron');
     const { getCurrentUserId } = await import('../../authManager');
-    const { serverApiFetch } = await import('../../serverApiClient');
+    const { serverApiFetch } = await import('../../serverApiClient.desktop');
     const { registryService } = await import('../registry');
     const { install } = await import('../installService');
     const previousEntry = {
@@ -2479,7 +2479,7 @@ describe('skillhub/installService', () => {
     const zipBuf = await makeZip({ 'SKILL.md': 'new content' });
     const { net } = await import('electron');
     const { getCurrentUserId } = await import('../../authManager');
-    const { serverApiFetch } = await import('../../serverApiClient');
+    const { serverApiFetch } = await import('../../serverApiClient.desktop');
     const { registryService } = await import('../registry');
     const { install } = await import('../installService');
     const previousEntry = {
@@ -2582,7 +2582,7 @@ describe('skillhub/installService', () => {
     const zipBuf = await makeZip({ 'SKILL.md': 'new content' });
     const { net } = await import('electron');
     const { getCurrentUserId } = await import('../../authManager');
-    const { serverApiFetch } = await import('../../serverApiClient');
+    const { serverApiFetch } = await import('../../serverApiClient.desktop');
     const { registryService } = await import('../registry');
     const { install } = await import('../installService');
     const previousEntry = {
@@ -2697,7 +2697,7 @@ describe('skillhub/installService', () => {
   it('rejects install while a learn apply holds the shared lock; other names unaffected', async () => {
     const { net } = await import('electron');
     const { getCurrentUserId } = await import('../../authManager');
-    const { serverApiFetch } = await import('../../serverApiClient');
+    const { serverApiFetch } = await import('../../serverApiClient.desktop');
     const { tryAcquireSkillInstallLock } = await import('../installLock');
     const { install } = await import('../installService');
 
@@ -2761,7 +2761,7 @@ describe('skillhub/installService', () => {
     const zipBuf = await makeZip({ 'SKILL.md': 'content' });
     const { net } = await import('electron');
     const { getCurrentUserId } = await import('../../authManager');
-    const { serverApiFetch } = await import('../../serverApiClient');
+    const { serverApiFetch } = await import('../../serverApiClient.desktop');
     const { getSkillInstallLockOwner, tryAcquireSkillInstallLock } = await import('../installLock');
     const { install } = await import('../installService');
 
@@ -2818,7 +2818,7 @@ describe('skillhub/installService', () => {
     const zipBuf = await makeZip({ 'SKILL.md': 'content' });
     const { net } = await import('electron');
     const { getCurrentDataOwnerId, getCurrentUserId } = await import('../../authManager');
-    const { serverApiFetch } = await import('../../serverApiClient');
+    const { serverApiFetch } = await import('../../serverApiClient.desktop');
     const { registryService } = await import('../registry');
     const { install } = await import('../installService');
 

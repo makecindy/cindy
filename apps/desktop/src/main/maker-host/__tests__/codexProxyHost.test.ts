@@ -414,7 +414,7 @@ describe('withCodexUpstreamRecording', () => {
 
 describe('codex gateway config', () => {
   it.each(['oauth-bearer', 'env-key', 'provider-oauth'] as const)('summary fallback preserves %s credentials and endpoint', async (mode) => {
-    const { buildCodexProxySpawnArgs } = await import('../codex-gateway-config.js');
+    const { buildCodexProxySpawnArgs } = await import('../codex-gateway-config.desktop.js');
     const args = buildCodexProxySpawnArgs('http://127.0.0.1:12345', mode);
     const provider = (id: string) => Object.fromEntries(args.filter(v => v.startsWith(`model_providers.${id}.`))
       .map(v => { const [key, ...value] = v.slice(`model_providers.${id}.`.length).split('='); return [key, value.join('=')]; }));
@@ -424,7 +424,7 @@ describe('codex gateway config', () => {
   });
 
   it('所有认证模式都让缺少 model metadata 的 Codex 模型使用 CodeModeOnly', async () => {
-    const { buildCodexProxySpawnArgs } = await import('../codex-gateway-config.js');
+    const { buildCodexProxySpawnArgs } = await import('../codex-gateway-config.desktop.js');
 
     for (const mode of ['oauth-bearer', 'env-key', 'provider-oauth'] as const) {
       const args = buildCodexProxySpawnArgs('http://127.0.0.1:12345', mode);
@@ -433,7 +433,7 @@ describe('codex gateway config', () => {
   });
 
   it('oauth-bearer 模式: requires_openai_auth, 不带 env_key', async () => {
-    const { buildCodexProxySpawnArgs } = await import('../codex-gateway-config.js');
+    const { buildCodexProxySpawnArgs } = await import('../codex-gateway-config.desktop.js');
 
     const args = buildCodexProxySpawnArgs('http://127.0.0.1:12345', 'oauth-bearer');
 
@@ -444,7 +444,7 @@ describe('codex gateway config', () => {
   });
 
   it('oauth-bearer 模式: 追加 OpenAI 身份 provider(远端压缩)并关掉请求 zstd 压缩', async () => {
-    const { buildCodexProxySpawnArgs } = await import('../codex-gateway-config.js');
+    const { buildCodexProxySpawnArgs } = await import('../codex-gateway-config.desktop.js');
 
     const args = buildCodexProxySpawnArgs('http://127.0.0.1:12345', 'oauth-bearer');
 
@@ -465,7 +465,7 @@ describe('codex gateway config', () => {
   });
 
   it('env-key / provider-oauth 声明不被选中的 cindy_openai 占位(#8670: 老 thread resume 校验)', async () => {
-    const { buildCodexProxySpawnArgs } = await import('../codex-gateway-config.js');
+    const { buildCodexProxySpawnArgs } = await import('../codex-gateway-config.desktop.js');
 
     for (const mode of ['env-key', 'provider-oauth'] as const) {
       const args = buildCodexProxySpawnArgs('http://127.0.0.1:12345', mode);
@@ -486,7 +486,7 @@ describe('codex gateway config', () => {
   });
 
   it('env-key 模式: env_key=XDT_CODEX_API_KEY, 不带 requires_openai_auth', async () => {
-    const { buildCodexProxySpawnArgs } = await import('../codex-gateway-config.js');
+    const { buildCodexProxySpawnArgs } = await import('../codex-gateway-config.desktop.js');
 
     const args = buildCodexProxySpawnArgs('http://127.0.0.1:12345', 'env-key');
 
@@ -496,7 +496,7 @@ describe('codex gateway config', () => {
   });
 
   it('provider-oauth 模式: 仍用 env_key 占位,由 proxy 覆盖供应商 OAuth token', async () => {
-    const { buildCodexProxySpawnArgs } = await import('../codex-gateway-config.js');
+    const { buildCodexProxySpawnArgs } = await import('../codex-gateway-config.desktop.js');
 
     const args = buildCodexProxySpawnArgs('http://127.0.0.1:12345', 'provider-oauth');
 

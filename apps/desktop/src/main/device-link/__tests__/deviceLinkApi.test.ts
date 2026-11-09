@@ -26,7 +26,7 @@ vi.mock('../../authManager', () => ({
   refresh: mocks.refresh,
   invalidateSession: mocks.invalidateSession,
 }));
-vi.mock('../../i18n.js', () => ({ getResolvedMainLocale: () => 'zh-CN' }));
+vi.mock('../../i18n.desktop.js', () => ({ getResolvedMainLocale: () => 'zh-CN' }));
 vi.mock('../../logger', () => ({ createLogger: () => ({ error: vi.fn(), warn: vi.fn(), info: vi.fn(), debug: vi.fn() }) }));
 vi.mock('../../clientEndpointsService.js', () => ({
   getClientEndpoint: () => mocks.officialBase,

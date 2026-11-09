@@ -1254,7 +1254,7 @@ import { handleIncomingCindyFile } from './cindy-brain/openFileInstall.js';
 import { registerCindyFileAssociation } from './cindy-brain/fileAssociation.js';
 import { runPluginStorageSmoke } from './smoke/pluginStorageSmoke.js';
 import { runComputerUseSmokeIfRequested } from './smoke/computerUseSmoke.js';
-import { getResolvedMainLocale, setMainClassicalStyle, setMainLocale, t } from './i18n.js';
+import { getResolvedMainLocale, setMainClassicalStyle, setMainLocale, t } from './i18n.desktop.js';
 import { isClassicalReplyStyle } from '@cindy/maker-shared/classical-reply';
 import { requireObject, requireString, throwIpcError } from './utils/ipcValidate.js';
 import { pickNativeAtResource } from './nativeAtResourcePicker.js';
@@ -1269,7 +1269,7 @@ import {
   getScheduleStorage,
   getScheduleStorageIfInitialized,
   getProjectAutomationLoader,
-} from './scheduler-host/index.js';
+} from './scheduler-host/index.desktop.js';
 import { configureRoutineHost } from './routines/service.js';
 import { configureBotAutonomyHost, initBotAutonomy } from './bot-autonomy/service.js';
 import { voiceCallCoordinator } from './voice-conversation/callCoordinator.js';

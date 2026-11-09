@@ -145,7 +145,7 @@ vi.mock('../../videoCacheStore.js', () => ({ resolveSafe: mocks.resolveLegacyVid
 vi.mock('../../logger.js', () => ({
   createLogger: () => ({ warn: vi.fn(), info: vi.fn(), debug: vi.fn(), error: vi.fn() }),
 }));
-vi.mock('../../serverApiClient.js', () => ({
+vi.mock('../../serverApiClient.desktop.js', () => ({
   ServerApiError: class ServerApiError extends Error {
     constructor(readonly code: string) {
       super(code);

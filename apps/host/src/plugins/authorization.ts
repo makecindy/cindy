@@ -12,7 +12,7 @@ import { mapGhostOauthConnectError } from '../../../desktop/src/main/cindy-brain
 import { executeGhostSetupInlineSubmission } from '../../../desktop/src/main/cindy-brain/ghostSetupInlineExecutorCore.js';
 import { executeGhostSetupConnectionSubmission } from '../../../desktop/src/main/cindy-brain/ghostSetupConnectionExecutor.js';
 import { assessPluginSetup, pluginSetupProbes, pluginOauthReauthSuggestion } from '../../../desktop/src/main/cindy-brain/pluginSetupService.js';
-import { createGhostVisibility } from '../../../desktop/src/main/cindy-brain/ghostVisibilityCore.js';
+import { createGhostVisibility } from '../../../desktop/src/main/cindy-brain/ghostVisibility.js';
 import { isGhostDisabledForWorkdir } from '../../../desktop/src/main/cindy-brain/ghostWorkdirPrefs.js';
 import { toolNotFoundMessage } from '../../../desktop/src/main/cindy-brain/pipeDispatcher.js';
 import { installedGhostMutationTargetToken, installedGhostStoragePart } from '../../../desktop/src/shared/pluginIdentity.js';
@@ -22,7 +22,7 @@ import type { createHostPluginSecrets } from './secrets.js';
 import type { createHostPluginIdentity } from './identity.js';
 import { getRemoteOauthContext } from '../../../desktop/src/main/plugin-oauth/context.js';
 import { ConnectionTokenProvider, type IssuedConnectionToken } from '../../../desktop/src/main/cindy-brain/connectionTokenProvider.js';
-import { createMainI18n } from '../../../desktop/src/main/i18nCore.js';
+import { createMainI18n } from '../../../desktop/src/main/i18n.js';
 import { createLogger } from '../../../desktop/src/main/logger.js';
 import { hostOutbound } from '../outbound.mjs';
 

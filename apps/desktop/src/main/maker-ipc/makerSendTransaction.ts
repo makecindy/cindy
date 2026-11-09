@@ -49,7 +49,7 @@ import {
 import { buildWireMessageSourceNote, readWireSourceDevice, readWireSourcePlugin } from './messageSourceNote.js';
 import { buildCindyMakeTaskNote } from '../cindy-make/taskNote.js';
 import { SIDE_CHAT_CONTEXT } from './sideChatContext.js';
-import { getMainClassicalStyle, getResolvedMainLocale } from '../i18n.js';
+import { getMainClassicalStyle, getResolvedMainLocale } from '../i18n.desktop.js';
 import {
   buildUiLanguageErrorNote,
   turnClassicalStyleFromSendOpts,

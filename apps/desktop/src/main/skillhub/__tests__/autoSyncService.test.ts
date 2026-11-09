@@ -59,7 +59,7 @@ vi.mock('../../clientEndpointsService', () => ({
   getClientEndpoint: vi.fn(() => 'https://skillhub.test.invalid'),
 }));
 
-vi.mock('../../serverApiClient', () => ({
+vi.mock('../../serverApiClient.desktop', () => ({
   serverApiFetch: vi.fn(),
 }));
 

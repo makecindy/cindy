@@ -1,6 +1,6 @@
 import { Socket } from 'node:net';
 import { createPluginControlPipe } from '../../../desktop/src/main/cindy-brain/nodeRuntimePipe.js';
-import { runNodeRuntimeWorker, type NodeWorkerParentPort } from '../../../desktop/src/main/cindy-brain/nodeRuntimeWorkerCore.js';
+import { runNodeRuntimeWorker, type NodeWorkerParentPort } from '../../../desktop/src/main/cindy-brain/nodeRuntimeWorkerProcess.js';
 
 const listeners = new Set<(event: { data: unknown }) => void>();
 // A separate inherited descriptor, not process.send or an exposed IPC emitter.

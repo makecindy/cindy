@@ -10,7 +10,7 @@ import type { PiUsageWrite } from '../../localDb/worker/opHandlers/piUsageTx.js'
 import * as broadcastTap from '../../device-link/broadcast-tap.js';
 import { createBotCompactRuntimeRefreshCoordinator } from '../botCompactRuntimeRefresh.js';
 import { createContextOverflowRollover } from '../contextOverflowRollover.js';
-import { setMainLocale } from '../../i18n.js';
+import { setMainLocale } from '../../i18n.desktop.js';
 import { installSessionTurnObserver } from '../sessionTurnObserver.js';
 import { onChannelTurn } from '../channelTurnSignal.js';
 import { createSessionBindingLifecycle } from '../sessionBindingLifecycle.js';

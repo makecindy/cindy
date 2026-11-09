@@ -30,7 +30,7 @@ export function createUtilityNodeWorkerProcess(
 ): NodeWorkerProcess {
   const isChild = childArgs !== undefined;
   const env = pluginNodeEnvironment(ghostId);
-  const workerEntry = path.join(__dirname, 'nodeRuntimeWorkerProcess.js');
+  const workerEntry = path.join(__dirname, 'nodeRuntimeWorkerProcess.desktop.js');
   const forkArgs = isChild
     ? [entryPath, GHOST_NODE_CHILD_MODE_FLAG, ...childArgs]
     : [entryPath];

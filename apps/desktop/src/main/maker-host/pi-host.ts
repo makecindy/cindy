@@ -75,7 +75,7 @@ import type {
 } from '@cindy/model-providers';
 
 import { getReadyBinaryPath } from '../agent-binaries/index.js';
-import { t } from '../i18n.js';
+import { t } from '../i18n.desktop.js';
 import { spawnPiSubagentRunner } from '../cindy-brain/piSubagentRunnerHost.js';
 import { getPiExtraSpawnConfig } from '../mcp-integrations/piEnvironment.desktop.js';
 import { listCustomProvidersWithSecureHeaders } from './custom-provider-header-secrets.js';

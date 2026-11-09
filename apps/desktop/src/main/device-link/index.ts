@@ -17,7 +17,7 @@ import { PluginSyncAccess } from './pluginSyncAccess.js';
 import os from 'node:os';
 import type { AgentIslandSessionSnapshot } from '../../shared/agentIsland.js';
 import { createTaskActivityPublisher, projectHostTaskActivity } from './taskActivity.js';
-import { serverApiFetch, ServerApiError } from '../serverApiClient.js';
+import { serverApiFetch, ServerApiError } from '../serverApiClient.desktop.js';
 import { tryPeerInvoke, stopFilePeers } from './filePeer';
 import { desktopDirectRuntime } from './directLink';
 import { assertBackgroundLinkAccepted, linkOpenCapabilities } from './backgroundLink';

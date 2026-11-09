@@ -17,7 +17,7 @@
 import { eq, desc, and, isNull, isNotNull, inArray, notInArray, or, sql } from 'drizzle-orm';
 import { runAsBackgroundDbRpc } from '../localDb/client/rpcAdmission.js';
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
-import { broadcastSessionPatched } from '../localDb/ipc/sessions.js';
+import type { broadcastSessionPatched as BroadcastSessionPatched } from '../localDb/ipc/sessions.js';
 
 import type { Schedule, ScheduleRun, ScheduleStorage, ListFilter } from '@cindy/maker-scheduler';
 
@@ -381,7 +381,10 @@ function publicScheduleRunWhere() {
 }
 
 export class DrizzleScheduleStorage implements ScheduleStorage {
-  constructor(private readonly getDb: () => SchedulerDrizzleDb) {}
+  constructor(
+    private readonly getDb: () => SchedulerDrizzleDb,
+    private readonly broadcastSessionPatched: typeof BroadcastSessionPatched,
+  ) {}
 
   private sidebarIndexGeneration = 0;
   private sidebarIndexCache: {
@@ -583,7 +586,7 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
         .where(eq(sessions.id, row.sessionId));
       // 双路广播（webContents.send + device-link tap）让本机和远端 renderer
       // sessionsStore.patchLocal 就地更新 updatedAt，侧栏时间立即跳到"刚跑完"。
-      broadcastSessionPatched(row.sessionId, {
+      this.broadcastSessionPatched(row.sessionId, {
         updatedAt: new Date(patch.finishedAt).toISOString(),
       });
     }

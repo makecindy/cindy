@@ -17,7 +17,7 @@ import { createSubscriptionFastRequestPolicy } from '../../../desktop/src/main/m
 import { createProviderGroupStore } from '../../../desktop/src/main/provider-group/storeCore.js';
 import { createProviderGroupBindings } from '../../../desktop/src/main/provider-group/bindings.js';
 import type { createAvailabilityPolicy } from '../../../desktop/src/main/device-link/providerShareAvailabilityPolicyCore.js';
-import { buildCodexGatewayBaseUrl, CODEX_OAUTH_UPSTREAM } from '../../../desktop/src/main/maker-host/codexGatewayConfigCore.js';
+import { buildCodexGatewayBaseUrl, CODEX_OAUTH_UPSTREAM } from '../../../desktop/src/main/maker-host/codex-gateway-config.js';
 import * as routes from '../../../desktop/src/main/maker-host/codex-custom-provider-route.js';
 import { isClaudeSubscriptionProviderId, isXaiSubscriptionProviderId } from '../../../desktop/src/main/maker-host/subscription-account-kind.js';
 import { getActiveCatalog } from '../../../desktop/src/main/maker-host/active-catalog.js';

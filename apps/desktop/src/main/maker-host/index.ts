@@ -156,7 +156,7 @@ import { isCrossRegionProviderShareTarget, renewCrossRegionProviderShareLink } f
 import { handleListDevices, defaultDeps as deviceDirectoryDeps } from '../device-link/ipc.js';
 import { parseProviderShareAgentDeviceId } from '../device-link/providerShareGuest.js';
 import { isProviderShareCredentialConsentSkipped } from '../device-link/providerShareGuestPrefs.js';
-import { t } from '../i18n.js';
+import { t } from '../i18n.desktop.js';
 import { MACHINE_STATUS_CHANNEL } from '@cindy/device-link';
 import { invokeDeviceValue } from '../maker-ipc/orcaRemoteWorkers.js';
 import { createHistoryRemoteDeps } from '../mcp-integrations/historyDevices.js';
@@ -367,7 +367,7 @@ import {
   CODEX_GATEWAY_PROVIDER_ID,
   CODEX_SUMMARY_COMPACT_PROVIDER_ID,
   CODEX_OPENAI_COMPACT_PROVIDER_ID,
-} from './codex-gateway-config.js';
+} from './codex-gateway-config.desktop.js';
 import {
   buildCodexCustomProviderArgs,
   deriveCodexCustomProviderRoutes,

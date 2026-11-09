@@ -60,7 +60,7 @@ vi.mock('../../appSessionState.js', () => ({
   getActiveDataOwnerPushStamp: () => ({ dataOwnerId: state.owner, ownerGeneration: 1 }),
 }));
 vi.mock('../../authManager.js', () => ({ getDeviceId: () => 'host-device' }));
-vi.mock('../../i18n.js', () => ({ t: (key: string) => key }));
+vi.mock('../../i18n.desktop.js', () => ({ t: (key: string) => key }));
 vi.mock('../../logger.js', () => ({ createLogger: () => ({ warn: vi.fn(), info: vi.fn() }) }));
 vi.mock('../../maker-host/createDesktopProviderService.js', () => ({
   getDesktopProviderService: () => ({ listProviders }),

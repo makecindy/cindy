@@ -526,7 +526,7 @@ describe('MCP App queued message grants', () => {
 describe('INPUT_ENQUEUE crash-restored remote Worker pause', () => {
   function hostInput(
     h: ReturnType<typeof createHarness>, remote = true, mobile = false,
-    resumeInterruptedScheduleRun: typeof import('../../scheduler-host/index.js').resumeInterruptedScheduleRun = async () => null,
+    resumeInterruptedScheduleRun: typeof import('../../scheduler-host/index.desktop.js').resumeInterruptedScheduleRun = async () => null,
   ) {
     return createInputEnqueueHarness(h.coordinator, { remote, mobile, resumeInterruptedScheduleRun }).enqueue;
   }
@@ -539,7 +539,7 @@ describe('INPUT_ENQUEUE crash-restored remote Worker pause', () => {
       const sid = 'interrupted-scheduled-task';
       h.setLoadQueueSnapshot(async () => [makeItem('later', 'queued later task')]);
       const done = deferred<void>();
-      const resume = vi.fn<typeof import('../../scheduler-host/index.js').resumeInterruptedScheduleRun>(async (sessionId, enqueue) => ({
+      const resume = vi.fn<typeof import('../../scheduler-host/index.desktop.js').resumeInterruptedScheduleRun>(async (sessionId, enqueue) => ({
         completion: Promise.resolve().then(async () => {
           await enqueue({ sessionId, text: CONTINUE_AFTER_APP_EXIT_PROMPT,
             persistedContent: CONTINUE_AFTER_APP_EXIT_PROMPT,
@@ -630,7 +630,7 @@ describe('INPUT_ENQUEUE crash-restored remote Worker pause', () => {
     const h = createHarness();
     const entered = deferred<void>();
     const prepare = deferred<void>();
-    const resume: typeof import('../../scheduler-host/index.js').resumeInterruptedScheduleRun = async (sessionId, enqueue) => ({
+    const resume: typeof import('../../scheduler-host/index.desktop.js').resumeInterruptedScheduleRun = async (sessionId, enqueue) => ({
       completion: Promise.resolve().then(async () => {
         entered.resolve();
         await prepare.promise;

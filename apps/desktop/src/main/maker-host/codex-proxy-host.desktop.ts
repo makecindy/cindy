@@ -8,7 +8,7 @@ import { isClaudeSubscriptionProviderId, isXaiSubscriptionProviderId } from './s
 import {
   buildCodexGatewayBaseUrl,
   CODEX_OAUTH_UPSTREAM,
-} from './codex-gateway-config.js';
+} from './codex-gateway-config.desktop.js';
 import { claudeUpstreamEndpoint } from './runtime-configs.js';
 import { isOpenAiSubscriptionProviderId } from './codex-account-auth.desktop.js';
 import { createXaiProxyAuthInvalidationObserver } from './xai-auth-invalidation-host.js';

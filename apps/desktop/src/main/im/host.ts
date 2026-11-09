@@ -43,7 +43,7 @@ import {
   integrationCachePut,
 } from '../cindy-media/integrationCache';
 import { pinBlob } from '../cindy-media/ledger';
-import { t } from '../i18n';
+import { t } from '../i18n.desktop';
 import { discordUiText } from './discord/uiText';
 import { telegramUiText } from './telegram/uiText';
 import {

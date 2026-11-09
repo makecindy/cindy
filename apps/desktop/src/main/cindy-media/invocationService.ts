@@ -18,7 +18,7 @@ import * as authManager from '../authManager.js';
 import * as imageCacheStore from '../imageCacheStore.desktop.js';
 import * as videoCacheStore from '../videoCacheStore.js';
 import { createLogger } from '../logger.js';
-import { ServerApiError } from '../serverApiClient.js';
+import { ServerApiError } from '../serverApiClient.desktop.js';
 import { getCurrentDbClientUserId, getDbClient } from '../localDb/client/current.js';
 import type { DbClient } from '../localDb/client/DbClient.js';
 import { effectiveXdGatewayBaseUrl } from '../model-access/effectiveEndpoint.js';

@@ -129,6 +129,7 @@ export function createTurnExecutor(deps) {
       const session = await turn.preparing;
       check();
       const result = await session.send(message, { messageUuid: sendOpts.messageUuid,
+        ...(sendOpts.origin ? { origin: sendOpts.origin } : {}),
         signal: sendOpts.signal, onTurnReserved: generation => {
           turn.generation = generation;
           sendOpts.onVendorTurnReserved?.(generation);
@@ -149,7 +150,9 @@ export function createTurnExecutor(deps) {
           persist.onPersisting?.();
           try {
             await deps.persistMessage(sessionId, { clientId: persist.clientId, role: 'user',
-              content: persist.content, agentKind: turn.dbKind }, {
+              content: persist.content, agentKind: turn.dbKind,
+              ...(persist.origin ? { agentMeta: { origin: persist.origin } } : {}),
+            }, {
               expectedClearBoundaryMs: persist.expectedClearBoundaryMs,
               shouldBroadcast: persist.shouldBroadcast,
             });

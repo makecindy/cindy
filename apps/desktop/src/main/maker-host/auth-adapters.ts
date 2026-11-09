@@ -96,7 +96,7 @@ import {
 import {
   CODEX_GATEWAY_ENV_KEY,
   CODEX_PROVIDER_OAUTH_PLACEHOLDER_KEY,
-} from './codex-gateway-config.js';
+} from './codex-gateway-config.desktop.js';
 import { CLAUDE_PROVIDER_AUTH_PLACEHOLDER_KEY, isAnthropicWireModel } from './claude-gateway-config.js';
 import { hasClaudeNativeLogin } from './claude-native-auth.js';
 import { disconnectClaudeNativeLogin, readClaudeNativeLogin } from './claude-native-connection.js';

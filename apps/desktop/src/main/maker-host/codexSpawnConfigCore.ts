@@ -3,7 +3,7 @@ import type { AgentDeps } from '@cindy/maker-core';
 import type { ProviderView, Catalog } from '@cindy/model-providers';
 import type { createCodexProxyHost } from './codex-proxy-host.js';
 import { desktopMakerLogger } from './logger-adapter.js';
-import { buildCodexProxySpawnArgs, CODEX_CINDY_COMPACT_PROVIDER_ID, CODEX_GATEWAY_PROVIDER_ID, CODEX_SUMMARY_COMPACT_PROVIDER_ID, CODEX_OPENAI_COMPACT_PROVIDER_ID } from './codexGatewayConfigCore.js';
+import { buildCodexProxySpawnArgs, CODEX_CINDY_COMPACT_PROVIDER_ID, CODEX_GATEWAY_PROVIDER_ID, CODEX_SUMMARY_COMPACT_PROVIDER_ID, CODEX_OPENAI_COMPACT_PROVIDER_ID } from './codex-gateway-config.js';
 import { buildCodexCustomProviderArgs, deriveCodexCustomProviderRoutes, registerCodexScopedCustomProviderRoutes, toCodexCustomProviderHostRoutes } from './codex-custom-provider-route.js';
 import { buildCodexSubagentSpawnArgs, codexHostUsesSmartSubagentRouting, resolveCodexSubagentRoutingProfile, type CodexSmartSubagentConfig } from './codex-subagent-config.js';
 import { restrictCodexRoutesToGuestProvider } from './guest-provider-route-store.js';

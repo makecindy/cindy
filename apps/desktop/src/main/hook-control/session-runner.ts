@@ -153,7 +153,7 @@ import {
   registerHookInteraction,
 } from './interactions.js';
 import { collectOutboundAttachments, buildHookPromptNote, hasOutboundRefs } from './outbound.js';
-import { getResolvedMainLocale, t } from '../i18n.js';
+import { getResolvedMainLocale, t } from '../i18n.desktop.js';
 import { modernLocaleOf } from '../../shared/locale.js';
 import { buildUiLanguageErrorNote } from '../maker-ipc/uiLanguageErrorNote.js';
 

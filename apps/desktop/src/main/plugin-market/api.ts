@@ -23,7 +23,7 @@ import {
 
 import { getClientEndpoint } from '../clientEndpointsService.js';
 import { createLogger } from '../logger.js';
-import { serverApiFetch, type ApiFetchOptions } from '../serverApiClient.js';
+import { serverApiFetch, type ApiFetchOptions } from '../serverApiClient.desktop.js';
 import { pluginObjectUrlOptions } from './objectUrlPolicy.js';
 
 const log = createLogger('plugin-market-api');

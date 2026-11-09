@@ -10,7 +10,7 @@ const desktopRoot = path.resolve(process.cwd());
 describe('Node runtime packaging contract', () => {
   it('使用独立 utilityProcess bundle，且不重新打开 RunAsNode / Node 参数开关', () => {
     const forge = fs.readFileSync(path.join(desktopRoot, 'forge.config.ts'), 'utf8');
-    expect(forge).toContain("entry: 'src/main/cindy-brain/nodeRuntimeWorkerProcess.ts'");
+    expect(forge).toContain("entry: 'src/main/cindy-brain/nodeRuntimeWorkerProcess.desktop.ts'");
     expect(forge).toContain("entry: 'src/main/cindy-brain/forgeScaffoldWorkerProcess.ts'");
     expect(forge).toContain("entry: 'src/main/cindy-brain/ghostSnapshotWorkerProcess.ts'");
     expect(forge).toContain("target: 'preload'");
@@ -63,11 +63,11 @@ describe('Node runtime packaging contract', () => {
 
   it('工作入口通过 parentPort 接收虚拟 stdin，不启动外部 node 命令', () => {
     const entry = fs.readFileSync(
-      path.join(desktopRoot, 'src/main/cindy-brain/nodeRuntimeWorkerProcess.ts'),
+      path.join(desktopRoot, 'src/main/cindy-brain/nodeRuntimeWorkerProcess.desktop.ts'),
       'utf8',
     );
     const worker = fs.readFileSync(
-      path.join(desktopRoot, 'src/main/cindy-brain/nodeRuntimeWorkerCore.ts'),
+      path.join(desktopRoot, 'src/main/cindy-brain/nodeRuntimeWorkerProcess.ts'),
       'utf8',
     );
     const broker = fs.readFileSync(
@@ -118,7 +118,7 @@ describe('Node runtime packaging contract', () => {
 
   it('代启子进程(childSpawn)仍走同一 utilityProcess 通道,worker 侧只暴露窄接口', () => {
     const worker = fs.readFileSync(
-      path.join(desktopRoot, 'src/main/cindy-brain/nodeRuntimeWorkerCore.ts'),
+      path.join(desktopRoot, 'src/main/cindy-brain/nodeRuntimeWorkerProcess.ts'),
       'utf8',
     );
     const broker = fs.readFileSync(
