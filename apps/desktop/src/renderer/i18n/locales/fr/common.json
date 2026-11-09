@@ -891,6 +891,7 @@
         "pausedLocal": "N'accepte pas de nouvelles tâches provenant d'autres ordinateurs",
         "cooling": "En refroidissement",
         "coolingUntil": "En refroidissement · de retour vers {{time}}",
+        "quotaExhausted": "Quota épuisé",
         "offline": "Hors ligne",
         "unreachableHere": "Injoignable depuis cet ordinateur",
         "unavailable": {
