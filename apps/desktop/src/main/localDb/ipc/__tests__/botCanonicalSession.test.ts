@@ -4820,6 +4820,31 @@ describe('Teammate task delivery and group lane messages', () => {
     } finally { host.dispose(); await fsPromises.rm(savedFile, { force: true }); }
   });
 
+  // PR #9314 review: a group task's result lost the files its turn wrote (the V1 group task card
+  // uploaded them), and an AI stand-in or private digest lane would have had its result posted to
+  // the group as the teammate itself. Real SQLite + outbox; the file listing is the injected seam.
+  it('posts a group task result with the files its turn wrote, and refuses private lanes', async () => {
+    await seedPair();
+    seedGroupLane('group-origin', 'group:fixture:access:owner:1');
+    seedGroupLane('mask-origin', 'group:fixture:access:tools:1:mask:owner-2');
+    seedGroupLane('digest-origin', 'group:fixture:access:tools:1:personal-digest');
+    h.sqlite!.prepare("INSERT INTO sessions (id, source, status, created_at, updated_at) VALUES ('session-3', 'desktop', 'active', 1, 1)").run();
+    const post = vi.fn(async () => ({ ok: true as const, messageId: 'posted' }));
+    const turnFiles = vi.fn(async () => ['/work/report.pdf']);
+    const host = createTaskCompletionDeliveryHost(post, vi.fn(), turnFiles);
+    const savedFile = join(h.userDataDir, createHash('sha256').update(h.ownerScopeKey).digest('hex'),
+      'task-completion-delivery', createHash('sha256').update('session-3').digest('hex') + '.json');
+    try {
+      await expect(host.capture('mask-origin', { anyTask: true })).rejects.toThrow('TASK_DELIVERY_PRIVATE_LANE');
+      await expect(host.capture('digest-origin', { anyTask: true })).rejects.toThrow('TASK_DELIVERY_PRIVATE_LANE');
+      await host.arm('session-3', (await host.capture('group-origin'))!);
+      await host.settleTerminal({ sessionId: 'session-3', execution: { instanceId: 'native', generation: 1 }, successful: true,
+        text: 'Here is the report', inputClientIds: ['task-input'] });
+      expect(turnFiles).toHaveBeenCalledWith('session-3', ['task-input']);
+      expect(post).toHaveBeenCalledWith(expect.objectContaining({ groupId: 'fixture', files: [{ absolutePath: '/work/report.pdf' }] }));
+    } finally { host.dispose(); await fsPromises.rm(savedFile, { force: true }); }
+  });
+
   // notify_when_done (2026-11-07): any task can ask to hear back once. Bug guarded: the reply
   // arrived only for teammate callers, needed a report tool, never woke the asker, and a busy
   // target's already-running turn would have been reported instead of the turn handling the message.

@@ -3125,7 +3125,20 @@ function taskCompletionDeliveryForOwner(): TaskCompletionDeliveryHost | null {
       : Promise.resolve({ ok: false, errorCode: 'GROUP_CHANNEL_UNAVAILABLE', retryable: true }),
     input => taskResultDeliverer
       ? taskResultDeliverer(input)
-      : Promise.resolve({ ok: false, errorCode: 'HOST_NOT_READY', retryable: true }));
+      : Promise.resolve({ ok: false, errorCode: 'HOST_NOT_READY', retryable: true }),
+    // A result posted to a group carries the files that turn wrote, as the group task cards did.
+    async (sessionId, inputClientIds) => {
+      await waitForTurnChangeSetSeal(sessionId);
+      const handled = new Set(inputClientIds);
+      const files = new Map<string, string>();
+      for (const changeSet of (await listTurnChangeSets(sessionId)).filter(set => handled.has(set.anchorClientId))) {
+        for (const file of changeSet.files) {
+          if (file.status === 'deleted') files.delete(file.path);
+          else files.set(file.path, path.resolve(changeSet.cwd, file.path));
+        }
+      }
+      return [...files.values()];
+    });
     const holder = taskCompletionDeliveryHolder;
     const restore = () => void holder.restore().catch(() => {
       log.warn('Task delivery restore deferred');
@@ -12577,8 +12590,16 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         };
       }
       const taskDeliveryHost = taskCompletionDeliveryForOwner();
-      const taskDeliveryOrigin = params.notifyWhenDone
-        ? await taskDeliveryHost?.capture(dispatcherSessionId, { anyTask: true }) : null;
+      let taskDeliveryOrigin: Awaited<ReturnType<NonNullable<typeof taskDeliveryHost>['capture']>> | undefined = null;
+      try {
+        taskDeliveryOrigin = params.notifyWhenDone
+          ? await taskDeliveryHost?.capture(dispatcherSessionId, { anyTask: true }) : null;
+      } catch (error) {
+        if (error instanceof Error && error.message === 'TASK_DELIVERY_PRIVATE_LANE') {
+          return { ok: false, errorCode: 'INVALID_ARGS', message: '代答或私人汇总里不能用 notify_when_done：结果只能以伙伴本人身份发到群里。请在伙伴的主聊天里开这个任务。' };
+        }
+        throw error;
+      }
       let createdPreviewSessionId: string | null = null;
       let createdPreviewClientId: string | null = null;
       let createdPreviewStarted = false;
@@ -17988,7 +18009,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       const notifyTarget = params.notifyWhenDone && params.targetSessionId ? params.targetSessionId : null;
       if (!notifyTarget) return sendToSessionInternal(internal);
       const host = taskCompletionDeliveryForOwner();
-      const origin = await host?.capture(params.dispatcherSessionId, { anyTask: true });
+      const origin = await host?.capture(params.dispatcherSessionId, { anyTask: true }).catch((error: unknown) => {
+        if (error instanceof Error && error.message === 'TASK_DELIVERY_PRIVATE_LANE') return 'private' as const;
+        throw error;
+      });
+      if (origin === 'private') return { ok: false, errorCode: 'INVALID_ARGS', message: '代答或私人汇总里不能用 notify_when_done：结果只能以伙伴本人身份发到群里。请在伙伴的主聊天里开这个任务。' };
       if (!host || !origin) {
         return { ok: false, errorCode: 'INVALID_ARGS', message: 'notify_when_done 需要从一个任务里调用。' };
       }

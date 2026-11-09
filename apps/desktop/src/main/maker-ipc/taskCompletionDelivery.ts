@@ -17,6 +17,8 @@ export interface TaskCompletionReceipt {
   origin?: TaskCompletionOrigin;
   /** false: the turn did not finish normally (error or stop); the requester still hears about it. */
   successful?: boolean;
+  /** Files the turn wrote or changed (absolute paths), uploaded with a result posted to a group. */
+  files?: string[];
   errorCode?: string;
   failureShown?: boolean;
   postSnapshot?: unknown;
@@ -54,6 +56,8 @@ export interface TaskCompletionDeliveryDeps {
   update(sessionId: string, change: (record: TaskCompletionRecord) => void): Promise<void>;
   pending(): Promise<string[]>;
   resolveText?(input: TaskCompletionTerminal): Promise<string>;
+  /** Files the turn wrote or changed, frozen with its result. */
+  resolveFiles?(input: TaskCompletionTerminal): Promise<string[]>;
   post(sessionId: string, origin: TaskCompletionOrigin, receipt: TaskCompletionReceipt,
     freeze: (prepare: () => Promise<unknown>) => Promise<unknown>): Promise<
       { ok: true } | { ok: false; errorCode: string; retryable: boolean }>;
@@ -173,9 +177,10 @@ export function createTaskCompletionDelivery(deps: TaskCompletionDeliveryDeps) {
         const owed = wanted && !saved.receipts.some(receipt => same(receipt.execution, input.execution) && receipt.id === baseId);
         if (owed || answered.some(request => missing(`${baseId}:${request.inputClientId}`))) {
           const text = deps.resolveText ? await deps.resolveText(input) : input.text;
+          const files = deps.resolveFiles ? await deps.resolveFiles(input) : [];
           if (!current()) return;
           const result = { execution: input.execution, text, status: 'pending' as const,
-            ...(input.successful ? {} : { successful: false }) };
+            ...(input.successful ? {} : { successful: false }), ...(files.length ? { files } : {}) };
           await deps.update(input.sessionId, record => {
             if (owed && !record.receipts.some(receipt => receipt.id === baseId)) {
               record.receipts.push({ id: baseId, ...result, origin: { ...record.origin } });

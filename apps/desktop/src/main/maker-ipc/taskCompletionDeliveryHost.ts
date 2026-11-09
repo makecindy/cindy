@@ -22,7 +22,8 @@ const recordSchema = z.object({
   origin: originSchema,
   receipts: z.array(z.object({ id: z.string(), execution: z.object({ instanceId: z.string(), generation: z.number().int() }),
     text: z.string(), status: z.enum(['pending', 'delivered', 'failed']), origin: originSchema.optional(), successful: z.boolean().optional(),
-    errorCode: z.string().optional(), failureShown: z.boolean().optional(), postSnapshot: z.unknown().optional() })),
+    errorCode: z.string().optional(), failureShown: z.boolean().optional(), postSnapshot: z.unknown().optional(),
+    files: z.array(z.string()).optional() })),
   armed: z.object({ after: z.object({ instanceId: z.string(), generation: z.number().int() }).optional() }).optional(),
   notify: z.boolean().optional(),
   requests: z.array(z.object({ inputClientId: z.string(), origin: originSchema })).optional(),
@@ -44,6 +45,8 @@ export type TaskResultDeliveryOutcome = { ok: true } | { ok: false; errorCode: s
 export function createTaskCompletionDeliveryHost(
   post: (input: BotGroupTaskPostInput) => Promise<BotGroupTaskPostResult>,
   deliverToSession: (input: TaskResultDelivery) => Promise<TaskResultDeliveryOutcome>,
+  /** Files a turn of the task wrote or changed (the messages it handled), as absolute paths. */
+  turnFiles?: (sessionId: string, inputClientIds: readonly string[]) => Promise<string[]>,
 ) {
   const origins = new Set<string>();
   const notifyOnly = new Set<string>();
@@ -114,6 +117,12 @@ export function createTaskCompletionDeliveryHost(
       assertCurrent();
       return (message && visibleMessageText('assistant', message.content)) || input.text;
     },
+    ...(turnFiles ? { resolveFiles: async (input: { sessionId: string; inputClientIds?: readonly string[] }) => {
+      if (!input.inputClientIds?.length) return [];
+      const files = await turnFiles(input.sessionId, input.inputClientIds).catch(() => []);
+      assertCurrent();
+      return files;
+    } } : {}),
     update: (id, change) => write(id, record => {
       if (!record) throw new Error('TASK_DELIVERY_ORIGIN_MISSING');
       change(record);
@@ -149,6 +158,7 @@ export function createTaskCompletionDeliveryHost(
       assertCurrent();
       if (origin.groupId && origin.botId) return post({ groupId: origin.groupId, botId: origin.botId,
         clientId: receipt.id, text: receipt.text, threadRootId: origin.threadRootId,
+        ...(receipt.files?.length ? { files: receipt.files.map(absolutePath => ({ absolutePath })) } : {}),
         preparePost: async (prepare, destination) => {
           const saved = await freeze(async () => ({ destination, payload: await prepare() })) as {
             destination: typeof destination; payload: Awaited<ReturnType<typeof prepare>>;
@@ -195,6 +205,11 @@ export function createTaskCompletionDeliveryHost(
       if (!link || !['canonical', 'thread', 'group'].includes(link.role)) {
         // Any task may ask to hear back; the result goes straight to it.
         return options.anyTask ? { sessionId: callerSessionId } : null;
+      }
+      // An AI stand-in (mask) or a private digest does not speak as the teammate in the group:
+      // a result can only be posted there as the teammate, so these lanes cannot ask to hear back.
+      if (link.role === 'group' && /:mask:[^:]+|:personal-digest$/.test(link.routeKey ?? '')) {
+        throw new Error('TASK_DELIVERY_PRIVATE_LANE');
       }
       const thread = parseBotGroupThreadRouteKey(link.routeKey);
       const groupId = link.role === 'group' ? /^group:([^:]+)/.exec(link.routeKey ?? '')?.[1] : undefined;
