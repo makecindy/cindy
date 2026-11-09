@@ -42,6 +42,8 @@ vi.mock('../serverApiClient', () => {
       public readonly statusCode: number,
       message: string,
       public readonly retryAt?: number,
+      // 与真身一致:真正服务了这次响应的 base URL(见 serverApiClient)。
+      public readonly servedBaseUrl?: string,
     ) {
       super(message);
     }
@@ -531,7 +533,7 @@ describe('device-link IPC handlers', () => {
     const apiFetch = vi.fn(async () => {
       // 401 之后的共享刷新把这次重试送到了另一个中转:服务这次响应的是新中转。
       relayScope.baseUrl = 'https://relay-b.test.invalid';
-      throw new ServerApiError('UNAVAILABLE', 429, 'rate limited', retryAt);
+      throw new ServerApiError('UNAVAILABLE', 429, 'rate limited', retryAt, 'https://relay-b.test.invalid');
     });
     const deps = makeDeps({ apiFetch });
     try {
@@ -546,6 +548,65 @@ describe('device-link IPC handlers', () => {
     }
   });
 
+  // 反过来:用户**换了中转**之后,在途的那条请求仍然是旧线路发出去的(自建中转的 baseUrl
+  // 在发起时就定住了)。它迟到的 429 期限属于旧线路 —— 读全局会把期限记到新线路上,把
+  // 没限流的新中转也限住;两个中转是各自独立的限流桶(Codex review #9360)。
+  it('listDevices:换中转后在途请求的限流期限仍记在发起它的那个中转上', async () => {
+    __resetDeviceListCoalescingForTests();
+    relayScope.baseUrl = 'https://relay-a.test.invalid';
+    const retryAt = Date.now() + 60_000;
+    const apiFetch = vi.fn()
+      .mockImplementationOnce(async () => {
+        // 请求发出去之后用户切了中转;在途请求的响应(错误没携带服务方身份时)只能
+        // 退回发起它时的线路,不能读全局。
+        relayScope.baseUrl = 'https://relay-b.test.invalid';
+        throw new ServerApiError('UNAVAILABLE', 429, 'rate limited', retryAt);
+      })
+      .mockResolvedValue({ devices: [] });
+    const deps = makeDeps({ apiFetch });
+    try {
+      await expect(handleListDevices(deps)).rejects.toThrow(/rate limited/);
+      expect(apiFetch).toHaveBeenCalledTimes(1);
+      // 期限记在旧中转 A 上:当前中转 B 的桶是干净的,立刻发物理读。
+      await expect(handleListDevices(deps)).resolves.toMatchObject({ devices: [] });
+      expect(apiFetch).toHaveBeenCalledTimes(2);
+      // 切回中转 A:A 的限流窗口还在(有旧快照可沿用,这轮回 stale),不该再发物理读。
+      relayScope.baseUrl = 'https://relay-a.test.invalid';
+      await handleListDevices(deps);
+      expect(apiFetch).toHaveBeenCalledTimes(2);
+    } finally {
+      relayScope.baseUrl = 'https://relay-a.test.invalid';
+      __resetDeviceListCoalescingForTests();
+    }
+  });
+
+  // 账号在请求在途时换过:那次响应已经不算数(then 分支也会拒),它的限流期限**整个丢弃**
+  // —— 记到新账号头上会让新账号的第一次目录读被一个它从没见过的期限拦住
+  // (Codex review #9360)。
+  it('listDevices:在途请求返回时账号已换,限流期限整个丢弃', async () => {
+    __resetDeviceListCoalescingForTests();
+    const retryAt = Date.now() + 60_000;
+    const apiFetch = vi.fn()
+      .mockImplementationOnce(async () => {
+        // 请求发出去之后换了账号。
+        metadataOwner.key = 'directory-owner-b';
+        throw new ServerApiError('UNAVAILABLE', 429, 'rate limited', retryAt);
+      })
+      .mockResolvedValue({ devices: [] });
+    const deps = makeDeps({ apiFetch });
+    try {
+      // 在途期间账号已换:这次响应不算数,读以「账号已换」收口。
+      await expect(handleListDevices(deps)).rejects.toThrow(/account changed/);
+      expect(apiFetch).toHaveBeenCalledTimes(1);
+      // 新账号的桶里不该有任何冷却:第一次读立刻发物理读。
+      await expect(handleListDevices(deps)).resolves.toMatchObject({ devices: [] });
+      expect(apiFetch).toHaveBeenCalledTimes(2);
+    } finally {
+      metadataOwner.key = 'directory-owner-a';
+      __resetDeviceListCoalescingForTests();
+    }
+  });
+
   // 目录读要有**总期限**:timeoutMs 只管单次 fetch,401 之后的共享登录刷新不在它里面
   // (官方端点的刷新端点是轮换的,timeoutMs: 0 = 不超时)—— 一次目录读可以无限期挂着,
   // 渲染侧的退避每轮都再开一条等待,越挂越多。调用方的期限信号把整条链路框住。
@@ -556,7 +617,7 @@ describe('device-link IPC handlers', () => {
       const apiFetch = vi.fn((_path: string, opts?: { signal?: AbortSignal }) => new Promise((_yes, no) => {
         opts?.signal?.addEventListener('abort', () => no(opts.signal?.reason), { once: true });
       }));
-      const deps = makeDeps({ apiFetch });
+      const deps = makeDeps({ apiFetch: apiFetch as unknown as DeviceLinkIpcDeps['apiFetch'] });
       const pending = handleListDevices(deps);
       expect(apiFetch).toHaveBeenCalledTimes(1);
       // 8 秒期限到点:整条读(含 401 之后的共享登录刷新等待)一起收口。

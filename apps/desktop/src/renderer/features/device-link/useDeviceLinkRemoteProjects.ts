@@ -476,6 +476,11 @@ export function useDeviceLinkRemoteProjects(
      */
     const DIRECTORY_RETRY_BASE_MS = 5_000;
     const DIRECTORY_RETRY_MAX_MS = 60_000;
+    /**
+     * setTimeout 的延时上限:32 位有符号毫秒。超过它的延时会被截断成「立刻触发」——
+     * 服务端给一个超大的 Retry-After 时,渲染进程会变成紧密的 listDevices 循环。
+     */
+    const MAX_TIMER_DELAY_MS = 2_147_483_647;
     let directoryRetryTimer: ReturnType<typeof setTimeout> | null = null;
     let directoryRetryDelayMs = DIRECTORY_RETRY_BASE_MS;
     /**
@@ -836,11 +841,24 @@ export function useDeviceLinkRemoteProjects(
       // 服务端明确说了多久之后再问(429 的 Retry-After):退避要让过那个期限。
       const deadline = Math.max(0, directoryRetryDeadlineMs - Date.now());
       const wait = Math.max(delay, deadline);
-      directoryRetryTimer = setTimeout(() => {
-        directoryRetryTimer = null;
-        if (disposed || linkOnline === false) return;
-        void reseed();
-      }, wait);
+      // setTimeout 的延时是 32 位有符号毫秒:超过 2^31-1 会被截断成「立刻触发」——
+      // 渲染进程里就是一个紧密的 listDevices 循环(main 还会同步返回旧快照)。
+      // 拆成最大块,每块结束后按**墙上时钟**重新算还差多久。
+      const armDirectoryRetry = (remainingMs: number): void => {
+        const chunk = Math.min(Math.max(0, remainingMs), MAX_TIMER_DELAY_MS);
+        directoryRetryTimer = setTimeout(() => {
+          directoryRetryTimer = null;
+          if (disposed || linkOnline === false) return;
+          const left = Math.max(0, directoryRetryDeadlineMs - Date.now());
+          // 还有整块没走完(只有超大的服务端期限才会走到这里):接着等剩下的。
+          if (left > 0 && chunk >= MAX_TIMER_DELAY_MS) {
+            armDirectoryRetry(left);
+            return;
+          }
+          void reseed();
+        }, chunk);
+      };
+      armDirectoryRetry(wait);
     };
 
     /** 全量重播(初始 + WS 重连):listDevices 带 isSelf,权威。 */

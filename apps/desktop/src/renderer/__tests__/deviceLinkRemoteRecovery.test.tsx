@@ -582,6 +582,37 @@ describe('stale device directory', () => {
     expect(listDevices.mock.calls.length).toBe(initial + 1);
   });
 
+  // Chromium 计时器的延时是 32 位有符号毫秒:服务端给的 Retry-After 超过 ~24.8 天时,单次
+  // setTimeout 溢出成「立刻触发」,退避变成对目录读的紧追循环。超过上限的等待必须按上限
+  // 分片,每片到点按墙上时钟重新核对(Codex review #9360)。
+  it('chunks a retry deadline beyond the 32-bit timer limit instead of tight-looping', async () => {
+    const setTimeoutSpy = vi.spyOn(globalThis, 'setTimeout');
+    const listDevices = window.electronAPI.deviceLink.listDevices as unknown as ReturnType<typeof vi.fn>;
+    const deadline = Date.now() + 3_000_000_000; // > 2^31 - 1(~24.8 天)
+    listDevices.mockImplementation(async () => ({
+      devices: stalePeers(), stale: true, retryAtMs: deadline,
+    }));
+    renderHook(() => useDeviceLinkRemoteProjects());
+    await settle();
+    // 任何一片的延时都不该越过 32 位上限(溢出 = 立刻触发 = 紧追循环)。
+    const delays = setTimeoutSpy.mock.calls
+      .map((call) => call[1])
+      .filter((value): value is number => typeof value === 'number');
+    expect(delays.length).toBeGreaterThan(0);
+    expect(Math.max(...delays)).toBeLessThanOrEqual(2_147_483_647);
+    const initial = listDevices.mock.calls.length;
+    // 上限之内的推进不触发重读。
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000_000);
+    });
+    expect(listDevices.mock.calls.length).toBe(initial);
+    // 分片走完、墙上期限到点之后,重读恢复(之后按自己的退避阶梯继续,这里不逐一数)。
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3_000_000_000);
+    });
+    expect(listDevices.mock.calls.length).toBeGreaterThan(initial);
+  });
+
   // 账号边界:main 侧按 owner 记限流期限,渲染侧也得跟着清 —— 否则新账号的目录读失败时,
   // 退避会一直等到上一个账号留下的期限。
   it('clears the server retry deadline when the relay stops', async () => {

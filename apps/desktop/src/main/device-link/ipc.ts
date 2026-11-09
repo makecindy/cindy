@@ -570,11 +570,22 @@ export function handleListDevices(
         // 目录压力。期限按 owner + 中转记:换账号不该继承上一个账号的限流期限,换中转
         // (两个中转是各自独立的限流桶)也不该继承。
         const retryAt = (error as { retryAt?: unknown } | null | undefined)?.retryAt;
+        const servedBaseUrl = (error as { servedBaseUrl?: unknown } | null | undefined)?.servedBaseUrl;
         if (typeof retryAt === 'number' && Number.isFinite(retryAt)) {
-          // 期限要记在**真正服务了这次响应**的身份上:401 之后的共享刷新可能把会话换到
-          // 另一个区域 / 中转,那条重试是往新的端点发的。记在进请求时的身份上,新端点
-          // 那个桶里就没有任何冷却,下一次读直接撞进同一个限流窗口(Codex review #9360)。
-          recordDirectoryRetryDeadline(activeOwnerScopeKey(), directoryRelayScope(), retryAt);
+          // 期限要记在**真正服务了这次响应**的线路的桶里 —— fetch 层把它带出来
+          // (servedBaseUrl), 不在这里读全局:
+          //  - 401 之后的共享刷新可能把请求换到另一个区域 / 中转,那条重试是往新端点
+          //    发的,期限必须记在新端点那个桶,否则下一次读直接撞进同一个限流窗口;
+          //  - 线路被换掉时(用户切了中转),在途请求仍然是**旧线路**发出去的(自建中转
+          //    的 baseUrl 在发起时就定住了):它的限流期限属于旧线路,记到新线路头上
+          //    会把新线路也限住 —— 两个中转是各自独立的限流桶(Codex review #9360)。
+          // 拿不到服务方(非本层的错误)时退回发起这条请求的线路。
+          // 账号换过就整个丢弃:那次的响应已经不算数了(下面 then 也会拒)。
+          if (activeOwnerScopeKey() === owner) {
+            const scope =
+              typeof servedBaseUrl === 'string' && servedBaseUrl !== '' ? servedBaseUrl : relay;
+            recordDirectoryRetryDeadline(owner, scope, retryAt);
+          }
         }
         // 读取超时是**暂时性**失败:让 continuity reader 沿用有界旧快照,而不是把快照一起
         // 丢掉(丢掉的话渲染进程连旧设备都看不到)。statusCode 0 = 连不上,不是权威拒绝。

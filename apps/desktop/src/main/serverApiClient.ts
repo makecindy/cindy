@@ -31,6 +31,12 @@ export class ServerApiError extends Error {
     public readonly statusCode: number,
     message: string,
     public readonly retryAt?: number,
+    /**
+     * 真正服务了这次响应的 base URL。调用方按它分桶记限流期限:401 之后的重试可能
+     * 落在另一个区域 / 中转上,而**在途**请求的线路也可能已经被换掉 —— 期限属于服务
+     * 这次响应的那条线路,不是「读全局时的那条」。
+     */
+    public readonly servedBaseUrl?: string,
   ) {
     super(message);
     this.name = 'ServerApiError';
@@ -90,6 +96,8 @@ interface RawResponse<T> {
   status: number;
   data: T | null;
   retryAt?: number;
+  /** 这一跳真正用的 base URL(每次尝试各自解析,重试可能落在另一个端点上)。 */
+  servedBaseUrl: string;
 }
 
 async function rawFetch<T>(apiPath: string, opts: ApiFetchOptions): Promise<RawResponse<T>> {
@@ -147,7 +155,7 @@ async function rawFetch<T>(apiPath: string, opts: ApiFetchOptions): Promise<RawR
         opts.redactErrorDetails || opts.logLabel ? '[response details hidden]' : requestErrorMessage(error));
       data = null;
     }
-    return { ok: response.ok, status: response.status, data, retryAt };
+    return { ok: response.ok, status: response.status, data, retryAt, servedBaseUrl: baseUrl };
   } catch (err) {
     opts.signal?.throwIfAborted();
     if (opts.redactErrorDetails) {
@@ -159,7 +167,7 @@ async function rawFetch<T>(apiPath: string, opts: ApiFetchOptions): Promise<RawR
     } else {
       log.error('fetch failed', opts.logLabel ?? apiPath, requestErrorMessage(err));
     }
-    return { ok: false, status: 0, data: null, retryAt: responseRetryAt };
+    return { ok: false, status: 0, data: null, retryAt: responseRetryAt, servedBaseUrl: baseUrl };
   } finally {
     if (timeoutId !== null) clearTimeout(timeoutId);
     opts.signal?.removeEventListener('abort', abort);
@@ -260,6 +268,7 @@ export async function serverApiFetch<T>(apiPath: string, opts: ApiFetchOptions):
       result.status,
       opts.redactErrorDetails ? `请求失败 (${result.status})` : errMsg,
       result.retryAt,
+      result.servedBaseUrl,
     );
   }
   if (result.data === null) {

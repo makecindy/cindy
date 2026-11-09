@@ -162,6 +162,38 @@ describe('serverApiFetch', () => {
     }
   });
 
+  // 限流期限要记在**真正服务了这次响应**的线路上:401 之后的共享刷新会把重试发到另一个
+  // 端点,抛出的 ServerApiError 必须带出那一跳实际用的 base URL(servedBaseUrl)——
+  // 调用方按它分桶记限流期限,记错桶会把没限流的端点也限住(Codex review #9360)。
+  it('carries the base URL that actually served the 429 (servedBaseUrl) after a region-switching refresh', async () => {
+    let baseUrl = 'https://resource.cn.example.com';
+    mocks.getAccessToken.mockReturnValueOnce('token-cn').mockReturnValueOnce('token-global');
+    mocks.refresh.mockImplementation(async () => {
+      baseUrl = 'https://resource.global.example.com';
+      return true;
+    });
+    mocks.netFetch
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 401,
+        json: async () => ({ error: { code: 'TOKEN_EXPIRED' } }),
+      } as unknown as Response)
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 429,
+        headers: new Headers({ 'Retry-After': '60' }),
+        json: async () => ({ error: { code: 'RATE_LIMITED', message: 'rate limited' } }),
+      } as unknown as Response);
+    const error = await serverApiFetch('/api/resource', {
+      baseUrl: () => baseUrl,
+    }).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(ServerApiError);
+    expect((error as ServerApiError).statusCode).toBe(429);
+    expect((error as ServerApiError).retryAt).toBeGreaterThan(Date.now());
+    // 服务这次响应的是刷新后的新端点:期限属于它,不是进请求时的旧端点。
+    expect((error as ServerApiError).servedBaseUrl).toBe('https://resource.global.example.com');
+  });
+
   // Unit: exercise the real quota reader through the HTTP client. Previously its
   // mocked client hid recurring warnings for a successful legacy fallback.
   it.each([
