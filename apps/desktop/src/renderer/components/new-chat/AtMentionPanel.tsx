@@ -546,7 +546,8 @@ export function AtMentionPanel({
       }}
       className={cn(
         'pointer-events-auto',
-        embedded ? 'relative' : 'absolute left-0 bottom-full mb-2 z-50',
+        // 内嵌时撑满外壳：外壳被视口钳高后，本层跟着变高，条目多时只滚外壳这一条 (#9536)。
+        embedded ? 'relative flex h-full min-h-0 flex-col' : 'absolute left-0 bottom-full mb-2 z-50',
       )}
     >
       <div
@@ -558,8 +559,11 @@ export function AtMentionPanel({
           // embedded: fill the Morph shell. A nested w-[480px] is 2px wider
           // than the border-box panel and paints a horizontal scrollbar thumb
           // for ~2s via the global .is-scrolling auto-hide.
-          embedded ? 'w-full min-w-0' : 'w-[480px]',
-          'overflow-x-hidden overflow-y-auto',
+          embedded ? 'flex h-full min-h-0 w-full min-w-0 flex-col' : 'w-[480px]',
+          // embedded 时外层 MorphPopover 已经按视口钳高，settle 后内容区 overflow-y:auto。
+          // 再给本层 max-height + overflow-y-auto 会在右侧并排两条竖向滚动条 (#9536)。
+          // 内嵌形态不自滚：条目多时只滚外层这一条。
+          embedded ? 'overflow-hidden' : 'overflow-x-hidden overflow-y-auto',
           'p-[6px]',
           !embedded && [
             'rounded-[12px] border',
@@ -568,7 +572,8 @@ export function AtMentionPanel({
           ],
         )}
         // Registered floating-layer shadow, as on the shared menus (DESIGN §4 / §6).
-        style={{ boxShadow: embedded ? undefined : 'var(--shadow-menu)', maxHeight }}
+        // embedded 不再自定 maxHeight：高度由 MorphPopover 钳制，避免内层再出一条滚动条。
+        style={{ boxShadow: embedded ? undefined : 'var(--shadow-menu)', maxHeight: embedded ? undefined : maxHeight }}
       >
         <MenuHighlightLayer />
         {hasSearchBox ? (

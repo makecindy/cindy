@@ -57,7 +57,6 @@ interface AddDirectoryPanelProps {
   onSelectRecent: (option: FolderPickerOption) => Promise<void>;
   /** 打开系统选择器；用户取消时面板留在本页。 */
   onBrowse: () => Promise<void>;
-  maxHeight?: number;
 }
 
 export function AddDirectoryPanel({
@@ -66,7 +65,6 @@ export function AddDirectoryPanel({
   onBack,
   onSelectRecent,
   onBrowse,
-  maxHeight = 400,
 }: AddDirectoryPanelProps) {
   const { t } = useTranslation();
   const projectOptions = useProjectPickerOptions();
@@ -176,18 +174,20 @@ export function AddDirectoryPanel({
       ref={rootRef}
       tabIndex={-1}
       data-composer-suggestion-panel=""
+      data-morph-scroll="inner"
       // 整页都是面板自己的输入面：焦点落在这里(含搜索框)时编辑器失焦不能把面板关掉。
       data-composer-suggestion-search=""
       onKeyDown={handleKeyDown}
       aria-busy={pending}
-      className="pointer-events-auto relative outline-none"
+      className="pointer-events-auto relative flex h-full min-h-0 flex-col outline-none"
     >
       <div
         ref={highlightPanelRef}
         {...menuPanelAttrs}
         // 标题、搜索框与「选择其他文件夹」固定，只有目录列表滚动(与项目选择器一致)。
-        className="relative flex w-full min-w-0 flex-col overflow-hidden p-[6px]"
-        style={{ maxHeight }}
+        // 高度由外层 MorphPopover 按视口钳制；本层不再自定 maxHeight，也不再和外壳
+        // 各出一条滚动条 (#9536)。外壳内容区在本页打开时保持 overflow hidden。
+        className="relative flex h-full min-h-0 w-full min-w-0 flex-col overflow-hidden p-[6px]"
       >
         <MenuHighlightLayer />
         <div className="flex h-[32px] items-center gap-1 pb-[2px]">

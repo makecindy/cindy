@@ -180,7 +180,11 @@ function setContentOverflowY(
   overflowY: 'auto' | 'hidden',
 ): void {
   if (!content) return;
-  content.style.overflowY = overflowY;
+  // 子面板自己声明「外壳不要滚」(data-morph-scroll="inner")时，外壳始终 hidden。
+  // 「+」的添加目录页：标题固定、只滚目录列表；外壳再 auto 会并排两条滚动条 (#9536)。
+  const locked =
+    overflowY === 'auto' && content.querySelector('[data-morph-scroll="inner"]') !== null;
+  content.style.overflowY = locked ? 'hidden' : overflowY;
   content.style.overflowX = 'hidden';
 }
 

@@ -589,4 +589,30 @@ describe('MorphPopover interaction contract', () => {
       expect(content.style.overflowX).toBe('hidden');
     });
   });
+
+  // #9536: 「+」添加目录页自己滚列表。外壳 settle 后再 auto，会和内层并排两条竖向滚动条。
+  // 最小输入：子树带 data-morph-scroll="inner"。没有该标记的菜单仍由外壳滚动。Tier: unit。
+  it('子面板声明内滚时，外壳 settle 后仍保持 overflow hidden', async () => {
+    render(
+      <Harness>
+        <div data-morph-scroll="inner">inner list</div>
+      </Harness>,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Toggle' }));
+    const panel = await screen.findByRole('group', { name: 'Morph panel' });
+    const content = panel.firstElementChild as HTMLElement;
+    await waitFor(() => {
+      expect(content.style.overflowY).toBe('hidden');
+    });
+  });
+
+  it('没有内滚标记时，外壳 settle 后恢复 overflow auto', async () => {
+    render(<Harness />);
+    fireEvent.click(screen.getByRole('button', { name: 'Toggle' }));
+    const panel = await screen.findByRole('group', { name: 'Morph panel' });
+    const content = panel.firstElementChild as HTMLElement;
+    await waitFor(() => {
+      expect(content.style.overflowY).toBe('auto');
+    });
+  });
 });

@@ -91,4 +91,16 @@ describe('AddDirectoryPanel', () => {
     expect(screen.getByText('ai-gateway')).toBeTruthy();
     expect(onBack).not.toHaveBeenCalled();
   });
+
+  // #9536: 添加目录页只滚目录列表。外壳看到 data-morph-scroll="inner" 后不再自滚，
+  // 标题和「选择其他文件夹」留在列表外面。Tier: unit。
+  it('只让目录列表滚动，并告诉外壳不要再出一条滚动条', () => {
+    h.options = [dir('ai-gateway')];
+    renderPanel();
+    const root = document.querySelector('[data-composer-suggestion-panel]') as HTMLElement;
+    expect(root.getAttribute('data-morph-scroll')).toBe('inner');
+    const list = screen.getByRole('list', { name: 'newChat.folderPicker.recent' });
+    expect(list.className).toContain('overflow-y-auto');
+    expect(root.querySelector('[style*="max-height"], [style*="maxHeight"]')).toBeNull();
+  });
 });

@@ -117,4 +117,32 @@ describe('「+」面板的搜索框', () => {
     fireEvent.keyDown(searchBox(), { key: 'Backspace' });
     expect(onClose).toHaveBeenCalled();
   });
+
+  // #9536: 「+」内嵌面板不再自己 max-height + overflow-y-auto，否则和 MorphPopover
+  // 外壳并排两条竖向滚动条。独立 @ 浮层仍由自己滚动。Tier: unit。
+  it('内嵌形态不自滚，独立 @ 浮层仍自滚', () => {
+    const { unmount } = render(<Harness />);
+    const embedded = document.querySelector('[data-composer-suggestion-panel] > div') as HTMLElement;
+    expect(embedded.className).toContain('overflow-hidden');
+    expect(embedded.className).not.toContain('overflow-y-auto');
+    expect(embedded.style.maxHeight).toBe('');
+    unmount();
+
+    render(
+      <AtMentionPanel
+        query=""
+        state={{ kind: 'ready', items: [], truncated: false }}
+        entries={ENTRIES}
+        focusedIndex={0}
+        onFocusedIndexChange={() => {}}
+        onSelect={() => {}}
+        onClose={() => {}}
+        onRetry={() => {}}
+        maxHeight={240}
+      />,
+    );
+    const standalone = document.querySelector('[data-composer-suggestion-panel] > div') as HTMLElement;
+    expect(standalone.className).toContain('overflow-y-auto');
+    expect(standalone.style.maxHeight).toBe('240px');
+  });
 });
