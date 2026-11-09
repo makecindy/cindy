@@ -132,6 +132,7 @@ import {
   dispatchInterAgentMessage,
   captureRemoteWorkerReportSettlement,
   captureLocalWorkerReport,
+  getOrcaWorkerReportQueue,
   getSessionActiveInputClientIds,
   getSessionInputProvenance,
   isActiveInputOwnerAuthored,
@@ -1351,6 +1352,13 @@ export function getMaker(): Maker {
       },
       dispatchInterAgentMessage,
       captureLocalWorkerReport,
+      // 宿主队列服务在 IPC 注册时创建(晚于本 deps 构造, 早于任何 bridge 回调), 调用时再取。
+      workerReportQueue: {
+        list: (identity) => getOrcaWorkerReportQueue().list(identity),
+        update: (params) => getOrcaWorkerReportQueue().update(params),
+        cancel: (params) => getOrcaWorkerReportQueue().cancel(params),
+        merge: (params) => getOrcaWorkerReportQueue().merge(params),
+      },
     } satisfies OrcaBridgeMcpDeps;
     const orcaWorkerBridgeProvider = createOrcaWorkerBridgeMcpProvider(orcaBridgeDeps);
     remoteWorkerBridge = createOrcaRemoteWorkerBridge({
