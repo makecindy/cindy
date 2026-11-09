@@ -9,6 +9,7 @@ const h = vi.hoisted(() => ({
   sessionRows: vi.fn(async (): Promise<Array<{ receiver: string; title: string }>> => []),
 }));
 vi.mock('../../localDb/ipc/messages.js', () => ({ createMessage: h.createMessage }));
+vi.mock('../../logger.js', () => ({ createLogger: () => ({ warn: vi.fn() }) }));
 vi.mock('../../localDb/client/current.js', () => ({ getDbClient: () => ({ drizzle: {
   select: () => ({ from: () => ({ where: h.sessionRows }) }),
 } }) }));
@@ -111,6 +112,23 @@ it('discovers and delivers to the bound WeChat owner without channel session row
   await deliverRoutineResult({ ...input(), routine: { ...routine, delivery: { kind: 'im', targetId: target!.id } } });
   expect(send).toHaveBeenCalledWith('wx-owner', 'Report\n\nFinished report');
   expect(await listRoutineDeliveryTargets('other-bot')).toEqual([]);
+});
+
+// Unit / PR #9497: a failed owner-context read must not break unrelated destinations.
+// Existing coverage only made the WeChat lookup succeed or return an unavailable owner.
+it('keeps Telegram available when the bound WeChat owner lookup fails', async () => {
+  const { send, resolve } = personalWechat();
+  const targets = await listRoutineDeliveryTargets('bot');
+  const wechat = targets.find(row => row.channel === 'wechat')!;
+  const telegram = targets.find(row => row.recipient === 'Reports')!;
+  resolve.mockRejectedValue(new Error('Cannot decrypt owner context'));
+
+  expect(await listRoutineDeliveryTargets('bot')).toEqual(targets.filter(row => row.channel !== 'wechat'));
+  await deliverRoutineResult({ ...input(), routine: { ...routine, delivery: { kind: 'im', targetId: telegram.id } } });
+  expect(h.send).toHaveBeenCalledWith('g/-100123/42', 'Report\n\nFinished report');
+  await expect(deliverRoutineResult({ ...input(), routine: { ...routine, delivery: { kind: 'im', targetId: wechat.id } } }))
+    .rejects.toThrow('unavailable');
+  expect(send).not.toHaveBeenCalled();
 });
 
 it('retains unbound personal WeChat targets but never borrows them from another companion', async () => {

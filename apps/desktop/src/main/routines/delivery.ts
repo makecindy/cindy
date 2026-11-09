@@ -4,6 +4,7 @@ import type { RoutineDeliveryTarget } from '@cindy/maker-scheduler';
 import { getDbClient } from '../localDb/client/current.js';
 import { sessions } from '../localDb/schema.js';
 import { createMessage } from '../localDb/ipc/messages.js';
+import { createLogger } from '../logger.js';
 import { getImOrchestrator, listImOrchestrators, type ImOrchestrator } from '../im/shared/orchestrator.js';
 import { buildBotImConnectionListPayload, getBotImConnectionOrchestrator } from '../im/shared/botImConnectionRuntime.js';
 import { listBotImConnectionLanes } from '../im/shared/botImLaneRuntime.js';
@@ -12,6 +13,8 @@ import type { WechatIM } from '../im/wechat/WechatIM.js';
 import type { RoutineHostDeps } from './service.js';
 import { getRoutineResultDispatch } from './deliveryDispatch.js';
 import { UI_ACTION_TRIGGER_PREFIX } from '../../shared/interruptedTurn.js';
+
+const log = createLogger('RoutineDelivery');
 
 type ResolvedTarget = RoutineDeliveryTarget & {
   orchestrator: ImOrchestrator; receiver: string; contextId: string; isCurrent?: () => boolean;
@@ -64,7 +67,12 @@ async function resolveTargets(botId: string): Promise<ResolvedTarget[]> {
       if (companionBotId) {
         // Bound WeChat chats live in source=bot sessions, not channel sessions.
         // Only expose the verified owner with a usable context in this binding.
-        const owner = await (orchestrator.adapter.im as WechatIM).getOwnerDeliveryTarget();
+        const owner = await (orchestrator.adapter.im as WechatIM).getOwnerDeliveryTarget().catch(() => {
+          // A broken local context makes only this destination unavailable.
+          // Do not log context/decryption errors, which may contain private data.
+          log.warn('WeChat routine destination lookup failed');
+          return null;
+        });
         const isCurrent = () => !!owner?.isCurrent() && bindingIsCurrent();
         if (owner && isCurrent()) add('wechat', contextId, orchestrator, owner.receiver, owner.receiver,
           { epoch: owner.bindingEpoch, isCurrent });
