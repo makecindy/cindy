@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mockAccountDirectory = vi.fn<(provider: string, id: string) => string>();
 const mockReadPool = vi.fn<() => unknown>();
@@ -34,10 +34,16 @@ function setupPool(home: string, accountIds: string[]): void {
 
 afterEach(() => {
   vi.clearAllMocks();
+  vi.unstubAllEnvs();
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
 });
 
 describe('prepareSharedPluginLinks', () => {
+  beforeEach(() => {
+    // 每条用例默认走 ~/.claude；需要自定义目录的用例再单独覆盖。
+    vi.stubEnv('CLAUDE_CONFIG_DIR', '');
+  });
+
   it('links the default account plugins into a second account home', async () => {
     const home = tempHome();
     const defaultPlugins = path.join(home, '.claude', 'plugins');
@@ -49,6 +55,21 @@ describe('prepareSharedPluginLinks', () => {
     const linked = path.join(home, '.claude-cindy-abcdef123456-uuid-here', 'plugins');
     expect(fs.lstatSync(linked).isSymbolicLink()).toBe(true);
     expect(fs.realpathSync(linked)).toBe(fs.realpathSync(defaultPlugins));
+  });
+
+  it('shares plugins from a CLAUDE_CONFIG_DIR override', async () => {
+    const home = tempHome();
+    const customConfig = path.join(home, 'custom-claude');
+    fs.mkdirSync(path.join(customConfig, 'plugins', 'cache'), { recursive: true });
+    setupPool(home, ['default', 'cindy-abcdef123456-uuid-here']);
+    vi.stubEnv('CLAUDE_CONFIG_DIR', customConfig);
+
+    await prepareSharedPluginLinks(home);
+
+    // 默认账号把配置目录移走后，共享源必须跟着走，而不是继续链 ~/.claude。
+    const linked = path.join(home, '.claude-cindy-abcdef123456-uuid-here', 'plugins');
+    expect(fs.lstatSync(linked).isSymbolicLink()).toBe(true);
+    expect(fs.realpathSync(linked)).toBe(fs.realpathSync(path.join(customConfig, 'plugins')));
   });
 
   it('leaves an account home that already owns plugins untouched', async () => {

@@ -243,6 +243,29 @@ describe('remote Skill scanners', () => {
     expect(skills.map((skill) => skill.name)).toEqual(['buildy:build']);
   });
 
+  it('ignores a remote manifest Skill root that escapes the plugin directory', async () => {
+    const fileOps = fakeRemoteFiles({
+      '$HOME/.xdt-server/v1/claude-home/plugins/installed_plugins.json': JSON.stringify({
+        plugins: {
+          'evil@market': [{ scope: 'user', installPath: '$HOME/plugins/evil' }],
+          'other@market': [{ scope: 'user', installPath: '$HOME/plugins/other' }],
+        },
+      }),
+      '$HOME/plugins/evil/.claude-plugin/plugin.json': JSON.stringify({
+        name: 'evil',
+        skills: '../other/skills',
+      }),
+      '$HOME/plugins/other/skills/stolen/SKILL.md': 'Stolen skill',
+    });
+
+    const skills = await scanRemoteClaudePluginSkills(fileOps);
+
+    // `../other/skills` 解析后落在 evil 安装目录之外，不能被当成本插件的 Skill；
+    // 它仍然由自己的插件以 other:stolen 暴露。
+    expect(skills.map((skill) => skill.name)).toContain('other:stolen');
+    expect(skills.map((skill) => skill.name)).not.toContain('evil:stolen');
+  });
+
   it('probes a multi-Skill plugin without dropping or reordering entries', async () => {
     const files: Record<string, string> = {
       '$HOME/.xdt-server/v1/claude-home/plugins/installed_plugins.json': JSON.stringify({

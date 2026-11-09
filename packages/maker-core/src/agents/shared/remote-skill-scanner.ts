@@ -272,6 +272,17 @@ async function resolveRemoteDirectoryPluginDir(
   return null;
 }
 
+/**
+ * POSIX lexical containment for remote paths. `$HOME` is just a literal
+ * segment to the remote file operations, so `path.posix.relative` decides
+ * containment without resolving anything on this machine.
+ */
+function isRemotePathWithin(root: string, candidate: string): boolean {
+  const relative = path.posix.relative(root, candidate);
+  return relative === ''
+    || (relative !== '..' && !relative.startsWith('../') && !path.posix.isAbsolute(relative));
+}
+
 async function scanRemotePluginSkillRoot(
   fileOps: RemoteAgentFileOps,
   root: string,
@@ -372,6 +383,10 @@ export async function scanRemoteClaudePluginSkills(
 
       for (const root of remoteManifestSkillRoots(manifest)) {
         const absolute = root.startsWith('/') ? root : path.posix.join(installPath, root);
+        // A manifest can declare arbitrary paths; a Skill folder that escapes
+        // the plugin installation belongs to another plugin or outside the
+        // install, and must not be advertised under this plugin's name.
+        if (!isRemotePathWithin(installPath, absolute)) continue;
         for (const skill of await scanRemotePluginSkillRoot(fileOps, absolute, pluginName)) {
           if (!out.has(skill.name)) out.set(skill.name, skill);
         }

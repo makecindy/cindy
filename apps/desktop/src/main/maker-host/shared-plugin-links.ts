@@ -2,6 +2,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
+import { claudeConfigDir } from '../remote-agent/controller/projectFiles.js';
 import { accountDirectory, readPool } from '../subscription-accounts/store.js';
 
 async function isDirectory(target: string): Promise<boolean> {
@@ -38,12 +39,19 @@ async function exists(target: string): Promise<boolean> {
  * owner-scoped (`.claude-cindy-<owner digest>-<uuid>`); blindly walking
  * `~/.claude-cindy-*` would also modify accounts that belong to a different
  * Cindy owner on the same OS user.
+ *
+ * The source follows `CLAUDE_CONFIG_DIR` the same way the default account's
+ * runtime does: a user who moved their Claude config elsewhere still installs
+ * plugins there, and linking `~/.claude/plugins` would share a stale set.
  */
-export async function prepareSharedPluginLinks(homeDir = os.homedir()): Promise<void> {
+export async function prepareSharedPluginLinks(
+  homeDir = os.homedir(),
+  configDir = claudeConfigDir(process.env, homeDir),
+): Promise<void> {
   const pool = readPool('anthropic');
   if (!pool) return;
 
-  const defaultPlugins = path.join(homeDir, '.claude', 'plugins');
+  const defaultPlugins = path.join(configDir, 'plugins');
   // Nothing installed on the default account: no source to share.
   if (!(await isDirectory(defaultPlugins))) return;
 
