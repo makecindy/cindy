@@ -10301,8 +10301,6 @@
       "open": "Abrir carpeta",
       "openFailed": "No se pudo abrir la carpeta del compañero.",
       "projectMode": {
-        "title": "Trabajar como proyecto (experimental)",
-        "description": "El espacio de trabajo del compañero se convierte en un proyecto de la barra lateral. Su AGENTS.md guarda sus propias reglas de trabajo, que puede editar; cada cambio queda como una versión que puedes deshacer.",
         "memoryReviewName": "{{name}} · Ordenar memoria",
         "carryover": {
           "title": "Pendiente de antes de la actualización",

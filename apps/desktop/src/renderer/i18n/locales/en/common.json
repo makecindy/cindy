@@ -10219,8 +10219,6 @@
       "open": "Open folder",
       "openFailed": "The teammate folder could not be opened.",
       "projectMode": {
-        "title": "Work as a project (experimental)",
-        "description": "The teammate's workspace becomes a project in your sidebar. Its AGENTS.md holds the teammate's own working rules, which it can edit; every change is kept as a version you can undo.",
         "memoryReviewName": "{{name}} · Review memory",
         "carryover": {
           "title": "Carried over from before the upgrade",

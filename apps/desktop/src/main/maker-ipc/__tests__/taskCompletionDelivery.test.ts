@@ -153,3 +153,31 @@ it('confirms a recorded report and asks for one only when the origin delivery de
     expect(notifying.report('task', execution, true)).toBe(false);
   } finally { notifying.dispose(); }
 });
+
+// PR #9314 review (reproduced with this controller): `notify_when_done` waited for "the next turn",
+// so with an earlier message already queued the requester got that unrelated reply and lost its own;
+// a second requester on the same task replaced the first. Each request now waits for its message.
+it('answers each notify request with the turn that handled its own message', async () => {
+  const f = fixture({ sessionId: 'unused' });
+  f.record.notify = true;
+  f.record.requests = [
+    { inputClientId: 'msg-a', origin: { sessionId: 'asker-a' } },
+    { inputClientId: 'msg-b', origin: { sessionId: 'asker-b' } },
+  ];
+  const service = f.start();
+  try {
+    // Turn 11 handles an earlier queued message: nobody asked about it.
+    await service.settle({ sessionId: 'task', execution: { instanceId: 'native', generation: 11 }, successful: true,
+      text: 'Unrelated', inputClientIds: ['older'] });
+    expect(f.post).not.toHaveBeenCalled();
+    expect(await service.handles('task')).toBe(true);
+    await service.settle({ sessionId: 'task', execution: { instanceId: 'native', generation: 12 }, successful: true,
+      text: 'Answer A', inputClientIds: ['msg-a'] });
+    await service.settle({ sessionId: 'task', execution: { instanceId: 'native', generation: 13 }, successful: true,
+      text: 'Answer B', inputClientIds: ['msg-b'] });
+    expect(f.post.mock.calls.map(([, origin, receipt]) => [origin.sessionId, receipt.text]))
+      .toEqual([['asker-a', 'Answer A'], ['asker-b', 'Answer B']]);
+    expect(f.record.requests).toBeUndefined();
+    expect(await service.handles('task')).toBe(false);
+  } finally { service.dispose(); }
+});

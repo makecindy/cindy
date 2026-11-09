@@ -697,6 +697,7 @@ export function finishSessionTerminalEvent(
           execution: { instanceId: event.sessionInstanceId ?? session.instanceId, generation: event.sessionTurnGeneration },
           successful: !unsuccessfulBoundary && !recoveryOwnsUnsuccessfulBoundary && !autoResumeSuppressesPersist,
           text: typeof doneData?.result === 'string' ? doneData.result : '', messageClientId: turnAssistantPersistId,
+          inputClientIds: prepared.turnInputClientIds,
         }).catch(() => deps.log.warn('Task completion delivery settlement deferred'));
       }
       if (

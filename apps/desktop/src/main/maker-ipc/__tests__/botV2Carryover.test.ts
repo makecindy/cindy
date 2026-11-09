@@ -47,6 +47,24 @@ describe('convertRoutine', () => {
     expect(convertRoutine(routine({ delivery: { kind: 'im', targetId: 'feishu:group' } }), route, { now: 0, timezone: 'UTC' }).note)
       .toContain('feishu:group');
   });
+
+  // PR #9314 review: a routine whose model ran on another computer (its own or the teammate's)
+  // came over without that location, so it would have run here on a provider this computer lacks.
+  it('keeps where a model on another computer runs, and pauses one it cannot keep', () => {
+    const remote = { agentKind: 'pi' as const, model: 'flash', providerId: 'xd', agentDeviceId: 'studio' };
+    const own = convertRoutine(routine({ enabled: true, modelOverride: remote }), route, { now: 0, timezone: 'UTC' });
+    expect(own.automations[0]).toMatchObject({ enabled: true, config: {
+      agentKind: 'pi', model: 'flash', providerId: 'xd', agentDeviceId: 'studio', modelAgentKind: 'pi', modelAgentDeviceId: 'studio',
+    } });
+    const inherited = convertRoutine(routine({ enabled: true }), { ...route, agentDeviceId: 'studio' }, { now: 0, timezone: 'UTC' });
+    expect(inherited.automations[0]?.config).toMatchObject({ model: 'm', providerId: 'p', agentDeviceId: 'studio' });
+    // Without its provider it cannot be named there: kept paused with a note, not run here.
+    const lost = convertRoutine(routine({ enabled: true, modelOverride: { ...remote, providerId: null } }), route,
+      { now: 0, timezone: 'UTC' });
+    expect(lost.automations[0]).toMatchObject({ enabled: false });
+    expect(lost.automations[0]?.config).not.toHaveProperty('agentDeviceId');
+    expect(lost.note).toContain('another computer');
+  });
 });
 
 describe('buildCarryover', () => {

@@ -83,19 +83,9 @@ it.each(['canonical', 'thread', 'channel', 'group'])(
       expect(f.broadcast).toHaveBeenCalledWith('hihi');
       // Phones re-read the roster's follow links, so the new task shows the teammate's mark there too.
       expect(f.remoteBroadcast).toHaveBeenCalledWith('hihi');
-      // Recognizing a creator must not let a channel/group conversation manage the teammate's settings.
-      if (role === 'channel' || role === 'group') {
-        // #6965: the real caller query must explain the recovery path. Minimum input: active group/channel link; unit.
-        const denied = await f.resolveTeammateMainCaller('caller');
-        expect(denied).toMatchObject({ ok: false, errorCode: 'BOT_MAIN_TASK_REQUIRED' });
-        if (denied.ok) throw new Error('Expected main-chat denial');
-        expect(denied.message).toContain('未读取或修改');
-        expect(denied.message).toContain('私聊主聊天');
-        expect(denied.message).toContain('私聊话题');
-        expect(denied.message).toContain('不要在当前入口重试');
-      } else {
-        expect(await f.resolveTeammateMainCaller('caller')).toEqual({ ok: true, botId: 'hihi' });
-      }
+      // Teammate V2 (2026-11-08, no teammate-only gates): any lane of the teammate is the teammate;
+      // changing its project links still needs the task's ordinary authorization.
+      expect(await f.resolveTeammateMainCaller('caller')).toEqual({ ok: true, botId: 'hihi' });
     } finally { f.sqlite.close(); }
   },
 );

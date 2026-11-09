@@ -6,7 +6,7 @@ import { errorPayload, okPayload } from './_payload.js';
 
 /**
  * A teammate's linked projects (context only). The host derives the teammate from the caller
- * session (only its own main chat on this computer) and never accepts a botId from the model.
+ * session (any of its lanes on this computer) and never accepts a botId from the model.
  */
 export type TeammateProjectsCallback = (params: {
   callerSessionId: string; projectId?: string; linked?: boolean; includeAvailable?: boolean;

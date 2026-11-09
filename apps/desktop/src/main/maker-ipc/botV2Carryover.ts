@@ -46,26 +46,42 @@ function onceCron(at: number, timezone: string): string | null {
   return minute && hour && day && month ? `${Number(minute)} ${Number(hour)} ${day} ${month} *` : null;
 }
 
-function modelFields(routine: Routine, route: BotModelRoute | null): Partial<ProjectScheduleConfig> {
-  const chosen = routine.modelOverride;
-  if (chosen?.model) {
-    return {
-      agentKind: chosen.agentKind,
-      model: chosen.model,
-      ...(chosen.providerId ? { providerId: chosen.providerId } : {}),
-      ...(chosen.effort ? { effort: chosen.effort } : {}),
-      ...(chosen.fastMode !== undefined ? { fastMode: chosen.fastMode } : {}),
-    };
-  }
-  // A routine without its own model ran on the teammate's model; the automation keeps that.
-  if (!route || route.agentDeviceId) return {};
-  return {
-    agentKind: route.harness === 'claude' ? 'claude-code' : route.harness,
-    model: route.model,
-    ...(route.providerId ? { providerId: route.providerId } : {}),
-    ...(route.effort ? { effort: route.effort } : {}),
-    fastMode: route.fastMode,
+/**
+ * The model an automation runs, including where it runs. A model on another computer needs its
+ * provider to be named there; without one it cannot be kept (null), never silently run here.
+ */
+export function automationModelFields(choice: {
+  agentKind: 'claude-code' | 'codex' | 'pi'; model: string; providerId?: string | null;
+  effort?: string | null; fastMode?: boolean | 'ultrafast'; agentDeviceId?: string | null;
+}): Partial<ProjectScheduleConfig> | null {
+  const fields: Partial<ProjectScheduleConfig> = {
+    agentKind: choice.agentKind,
+    model: choice.model,
+    ...(choice.providerId ? { providerId: choice.providerId } : {}),
+    ...(choice.effort ? { effort: choice.effort } : {}),
+    ...(choice.fastMode !== undefined ? { fastMode: choice.fastMode } : {}),
   };
+  if (!choice.agentDeviceId) return fields;
+  if (!choice.providerId) return null;
+  // New runs start there (agentDeviceId); the automation's own task keeps running there too.
+  return { ...fields, agentDeviceId: choice.agentDeviceId,
+    modelAgentKind: choice.agentKind, modelAgentDeviceId: choice.agentDeviceId };
+}
+
+/** The teammate's model route as an automation model (null: a remote route that cannot be kept). */
+export function routeModelFields(route: BotModelRoute): Partial<ProjectScheduleConfig> | null {
+  return automationModelFields({
+    agentKind: route.harness === 'claude' ? 'claude-code' : route.harness,
+    model: route.model, providerId: route.providerId, effort: route.effort,
+    fastMode: route.fastMode, agentDeviceId: route.agentDeviceId,
+  });
+}
+
+function modelFields(routine: Routine, route: BotModelRoute | null): Partial<ProjectScheduleConfig> | null {
+  const chosen = routine.modelOverride;
+  if (chosen?.model) return automationModelFields(chosen);
+  // A routine without its own model ran on the teammate's model; the automation keeps that.
+  return route ? routeModelFields(route) : {};
 }
 
 /** Project automation ids are kebab-case ASCII; keep them stable so a rerun updates, not duplicates. */
@@ -100,6 +116,8 @@ export function convertRoutine(
   // A plugin check decided when this ran; without it the automation would run more often, so it
   // waits paused for the owner instead of starting on its own.
   const lostCheck = !!routine.preRunPlugin;
+  const model = modelFields(routine, route);
+  const lostModel = model === null;
   const shared: Omit<ProjectScheduleConfig, 'id' | 'cronExpr' | 'timezone' | 'recurring'> = {
     name: routine.name,
     prompt: routine.prompt,
@@ -109,11 +127,11 @@ export function convertRoutine(
     ...(routine.preRunHook?.command
       ? { preRunHook: { command: routine.preRunHook.command, ...(routine.preRunHook.timeoutMs ? { timeoutMs: routine.preRunHook.timeoutMs } : {}) } }
       : {}),
-    ...modelFields(routine, route),
+    ...(model ?? {}),
   };
   const automations = schedules.map((schedule, index) => ({
     config: { id: migratedAutomationId(routine.id, index), ...shared, ...schedule },
-    enabled: routine.enabled && !lostCheck,
+    enabled: routine.enabled && !lostCheck && !lostModel,
   }));
   if (automations.length === 0 && skipped.length > 0) {
     // Nothing can trigger it on its own any more: keep it as a manual automation, paused.
@@ -128,6 +146,8 @@ export function convertRoutine(
   const reasons = [
     ...(skipped.length > 0 ? [`trigger not carried: ${skipped.join(', ')}`] : []),
     ...(lostCheck ? ['plugin check not carried, created paused'] : []),
+    // Running it here on another model would not be the same job: it waits for the owner.
+    ...(lostModel ? ['its model on another computer could not be carried, created paused'] : []),
     // Results now stay in the automation's own task; a chat destination needs setting up again.
     ...(routine.delivery?.kind === 'im' ? [`results were sent to a chat (${routine.delivery.targetId}); they now stay in the automation's task`] : []),
   ];

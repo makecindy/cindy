@@ -10174,8 +10174,6 @@
       "open": "폴더 열기",
       "openFailed": "동료 폴더를 열 수 없습니다.",
       "projectMode": {
-        "title": "프로젝트로 작업(실험)",
-        "description": "동료의 작업 공간이 사이드바의 프로젝트가 됩니다. 그 안의 AGENTS.md는 동료의 작업 규칙이며 동료가 직접 고칠 수 있습니다. 모든 변경은 버전으로 남아 되돌릴 수 있습니다.",
         "memoryReviewName": "{{name}} · 기억 정리",
         "carryover": {
           "title": "업그레이드 전 남은 일",

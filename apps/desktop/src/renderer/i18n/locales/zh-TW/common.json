@@ -10174,8 +10174,6 @@
       "open": "開啟資料夾",
       "openFailed": "無法開啟夥伴資料夾。",
       "projectMode": {
-        "title": "作為專案工作（實驗）",
-        "description": "夥伴的工作區會成為側欄中的一個專案。其中的 AGENTS.md 是夥伴自己的做事規則，夥伴可以修改；每次變更都會保留版本，可以復原。",
         "memoryReviewName": "{{name}} · 整理記憶",
         "carryover": {
           "title": "升級前沒做完的事",

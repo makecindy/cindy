@@ -10174,8 +10174,6 @@
       "open": "启卷匣",
       "openFailed": "不能启同僚之卷匣。",
       "projectMode": {
-        "title": "以项目行事（试行）",
-        "description": "同僚之工坊化为侧栏一项目。其中 AGENTS.md 乃同僚自守之规，可自修之；每一改皆存其版，可复。",
         "memoryReviewName": "{{name}} · 理记",
         "carryover": {
           "title": "升级前未竟之事",

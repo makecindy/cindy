@@ -7,6 +7,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 const h = vi.hoisted(() => ({
   root: '', routines: [] as Routine[], bindings: {} as Record<string, unknown>,
   write: vi.fn(), remove: vi.fn(), moveMemory: vi.fn(async () => 0),
+  projectMode: true, updateProfile: vi.fn(),
 }));
 vi.mock('electron', () => ({ app: { getPath: () => h.root } }));
 vi.mock('../../logger.js', () => ({ createLogger: () => ({ warn: vi.fn(), info: vi.fn() }) }));
@@ -15,8 +16,9 @@ vi.mock('../../appSessionState.js', () => ({ activeOwnerScopeKey: () => 'owner',
 vi.mock('../../companion-cloud/homes.js', () => ({ companionHomes: { snapshot: () => ({ demotedBotIds: [] }) } }));
 vi.mock('../../localDb/client/current.js', () => ({ getDbClient: vi.fn() }));
 vi.mock('../../localDb/ipc/bots.js', () => ({
-  readBotSettingsProfile: async () => ({ name: 'Ada', capabilities: { projectMode: true } }),
-  updateBotProfile: vi.fn(),
+  readBotSettingsProfile: async () => ({ name: 'Ada', capabilities: { projectMode: h.projectMode } }),
+  updateBotProfile: h.updateProfile,
+  setNewTeammateSetup: vi.fn(),
 }));
 vi.mock('../../maker-host/bot-model-chain-settings-store.js', () => ({ readEffectiveBotModelChain: async () => [] }));
 vi.mock('../botProfileFolder.js', () => ({
@@ -44,7 +46,7 @@ vi.mock('../../bot-import/runtime.js', () => ({
   companionEnvironmentStore: { read: async () => ({ automations: h.bindings }) },
 }));
 
-import { migrateTeammateToV2 } from '../botV2Migration.js';
+import { carryLegacyTodos, migrateTeammateToV2 } from '../botV2Migration.js';
 import { todoCheckRoutineId } from '../../bot-autonomy/todoCheckRoutine.js';
 
 const BOT = 'import_ada';
@@ -55,7 +57,8 @@ const routine = (id: string, patch: Partial<Routine> = {}): Routine => ({
 
 beforeEach(async () => {
   h.root = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-v2-migration-'));
-  h.write.mockReset(); h.remove.mockReset(); h.moveMemory.mockClear();
+  h.write.mockReset(); h.remove.mockReset(); h.moveMemory.mockClear(); h.updateProfile.mockReset();
+  h.projectMode = true;
 });
 afterEach(async () => { await fs.rm(h.root, { recursive: true, force: true }); });
 
@@ -88,4 +91,25 @@ it('carries the teammate\'s own routines, drops retired built-ins and holds impo
   await expect(migrateTeammateToV2(BOT, h.root)).resolves.toBe('already');
   expect(h.write).toHaveBeenCalledTimes(3);
   expect(h.moveMemory).toHaveBeenCalledWith({ botId: BOT, ownerRoot: h.root, workspace: path.join(home, 'workspace') });
+});
+
+// PR #9314 review: a build that still had the project-mode switch could turn an upgraded teammate
+// off, and the receipt then stopped every later start from correcting it, leaving it on removed V1 paths.
+it('turns project mode back on for an upgraded teammate whose switch was turned off', async () => {
+  await expect(migrateTeammateToV2(BOT, h.root)).resolves.toBe('migrated');
+  h.updateProfile.mockReset();
+  h.projectMode = false;
+  await expect(migrateTeammateToV2(BOT, h.root)).resolves.toBe('already');
+  expect(h.updateProfile).toHaveBeenCalledWith({ id: BOT, capabilities: { projectMode: true } });
+});
+
+// PR #9314 review: a teammate taken over from a computer still on V1 arrived with its open todos
+// in the cloud, and they were dropped: they now join the project's CARRYOVER.md, once.
+it('carries the open todos a V1 computer uploaded into the project, once', async () => {
+  const items = [{ title: 'Ship the fix', status: 'open', createdAt: '2026-11-01T00:00:00Z' }, { title: 'Done one', status: 'done' }];
+  await carryLegacyTodos(BOT, h.root, items);
+  await carryLegacyTodos(BOT, h.root, items);
+  const carryover = await fs.readFile(path.join(h.root, 'bots', BOT, 'workspace', 'CARRYOVER.md'), 'utf8');
+  expect(carryover.match(/Ship the fix/g)).toHaveLength(1);
+  expect(carryover).not.toContain('Done one');
 });

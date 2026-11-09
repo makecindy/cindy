@@ -36,9 +36,14 @@ export const COMPANION_PROJECT_RULES_KEY = 'companion.project-rules.v1';
  * `{ config, paused, originDeviceId? }` (project.ts). Older computers do not know the prefix.
  */
 export const COMPANION_AUTOMATION_PREFIX = 'companion.automation.v1:';
+/**
+ * The unfinished V1 work its upgrade wrote into the project (`CARRYOVER.md`, `{ content }`): its
+ * rules point to it, so it travels with them. Older computers do not know the key.
+ */
+export const COMPANION_PROJECT_CARRYOVER_KEY = 'companion.project-carryover.v1';
 const OWNED_PREFIXES = [COMPANION_PROFILE_KEY, COMPANION_MEMORY_PREFIX, COMPANION_SKILL_PREFIX, COMPANION_SKILL_FILES_PREFIX,
   COMPANION_TODO_PREFIX, COMPANION_ROUTINE_PREFIX, COMPANION_WORKBENCH_KEY, COMPANION_CAPABILITIES_KEY,
-  COMPANION_PROJECT_RULES_KEY, COMPANION_AUTOMATION_PREFIX];
+  COMPANION_PROJECT_RULES_KEY, COMPANION_AUTOMATION_PREFIX, COMPANION_PROJECT_CARRYOVER_KEY];
 const MAX_KEY_LENGTH = 160;
 export const COMPANION_VALUE_MAX_BYTES = 60 * 1024;
 /** A value over the size limit was not uploaded (thrown only when every value is required). */

@@ -1,6 +1,5 @@
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/input';
-import { Switch } from '@/components/ui/switch';
 import { shouldShowOpenPathError } from '../../../shared/openPathResult';
 import { ConnectProviderCard } from '@/components/onboarding/ConnectProviderCard';
 import { useProviderOnboarding } from '@/hooks/useProviderOnboarding';
@@ -703,24 +702,6 @@ export function BotSettings({
         ) : null}
         {page === 'advanced' ? (
           <div className="mt-4 flex flex-col gap-5 px-3">
-            {bot.homeDir ? (
-              <div className="flex items-start gap-3">
-                <div className="min-w-0 flex-1">
-                  <p className="text-13 font-medium leading-5 text-[var(--text-primary)]">
-                    {t('bots.homeFolder.projectMode.title')}
-                  </p>
-                  <p className="mt-1 text-12 leading-5 text-[var(--text-secondary)]">
-                    {t('bots.homeFolder.projectMode.description')}
-                  </p>
-                </div>
-                <Switch
-                  aria-label={t('bots.homeFolder.projectMode.title')}
-                  className="mt-0.5 shrink-0"
-                  checked={capabilities.projectMode === true}
-                  onCheckedChange={(value) => updateCapability('projectMode', value === true)}
-                />
-              </div>
-            ) : null}
             <div className="flex items-center gap-3">
               <FolderOpen size={16} className="shrink-0 text-[var(--text-tertiary)]" />
               <div className="min-w-0 flex-1">

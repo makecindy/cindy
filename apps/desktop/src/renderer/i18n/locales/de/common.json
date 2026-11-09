@@ -10219,8 +10219,6 @@
       "open": "Ordner öffnen",
       "openFailed": "Der Ordner des Teammitglieds konnte nicht geöffnet werden.",
       "projectMode": {
-        "title": "Als Projekt arbeiten (experimentell)",
-        "description": "Der Arbeitsbereich des Teammitglieds wird zu einem Projekt in der Seitenleiste. Seine AGENTS.md enthält die eigenen Arbeitsregeln, die es selbst bearbeiten kann; jede Änderung bleibt als Version erhalten und lässt sich rückgängig machen.",
         "memoryReviewName": "{{name}} · Erinnerungen ordnen",
         "carryover": {
           "title": "Aus der Zeit vor dem Upgrade übernommen",

@@ -17,9 +17,12 @@ import { companionSkillFileFetch, parseCompanionSkillFiles } from './skillFiles.
 import { isTransientAttachmentFailure, type CompanionApi, type CompanionLog } from './types.js';
 import { readCompanionRows, readCompanionValue, type CompanionStore } from './store.js';
 import {
-  COMPANION_MEMORY_PREFIX, COMPANION_PROFILE_KEY, COMPANION_ROUTINE_PREFIX, COMPANION_SKILL_FILES_PREFIX, COMPANION_SKILL_PREFIX,
-  COMPANION_WORKBENCH_KEY,
+  COMPANION_AUTOMATION_PREFIX, COMPANION_MEMORY_PREFIX, COMPANION_PROFILE_KEY, COMPANION_PROJECT_RULES_KEY, COMPANION_ROUTINE_PREFIX,
+  COMPANION_SKILL_FILES_PREFIX, COMPANION_SKILL_PREFIX, COMPANION_WORKBENCH_KEY,
 } from './uploader.js';
+
+/** Each teammate has its own memory review; a merged copy's is not added a second time. */
+const OWN_MEMORY_REVIEW_ID = 'teammate-memory-review';
 
 export interface CompanionMergeActor {
   id: string; externalId: string; name: string; homeDeviceId?: string | null;
@@ -95,11 +98,15 @@ function mergedEntryHash(keepBotId: string, sourceActorId: string, id: string): 
 export function mergedRoutineId(keepBotId: string, sourceActorId: string, routineId: string): string {
   return `m${mergedEntryHash(keepBotId, sourceActorId, routineId)}`;
 }
+/** A V2 automation joining another teammate's project (project config ids are kebab-case). */
+export function mergedAutomationId(keepBotId: string, sourceActorId: string, configId: string): string {
+  return `merged-${mergedEntryHash(keepBotId, sourceActorId, configId)}`;
+}
 
 export async function mergeCompanionsInto(input: {
   api: CompanionApi;
   store?: CompanionStore;
-  host: Pick<CompanionMaterializeHost, 'readMemory' | 'restoreMemory' | 'readSkill' | 'saveSkill' | 'readSkillFiles' | 'applySkillFiles' | 'applyRoutines' | 'applyWorkbench'>;
+  host: Pick<CompanionMaterializeHost, 'readMemory' | 'restoreMemory' | 'readSkill' | 'saveSkill' | 'readSkillFiles' | 'applySkillFiles' | 'applyRoutines' | 'applyWorkbench' | 'applyAutomations' | 'mergeProjectRules'>;
   keep: CompanionMergeActor;
   from: CompanionMergeActor[];
   humanActorId: string;
@@ -174,6 +181,23 @@ export async function mergeCompanionsInto(input: {
       return routine && typeof routine.id === 'string' ? [{ ...routine, id: mergedRoutineId(keep.externalId, source.id, routine.id) }] : [];
     });
     if (routines.length && host.applyRoutines) await host.applyRoutines(keep.externalId, routines, [], fence);
+    // A V2 copy's project: its automations join the kept teammate's project under ids of their own
+    // (paused ones stay paused), and its rules are added to the kept rules, never replacing them.
+    // A host that cannot take them stops the merge before any copy is retired.
+    const automations = prefs.filter(row => row.key.startsWith(COMPANION_AUTOMATION_PREFIX)).flatMap(row => {
+      const value = record(row.value);
+      const config = record(value?.config);
+      const id = row.key.slice(COMPANION_AUTOMATION_PREFIX.length);
+      if (!value || !config || config.id !== id || id === OWN_MEMORY_REVIEW_ID) return [];
+      const mergedId = mergedAutomationId(keep.externalId, source.id, id);
+      return [{ id: mergedId, value: { ...value, config: { ...config, id: mergedId } } }];
+    });
+    const rules = text(record(prefs.find(row => row.key === COMPANION_PROJECT_RULES_KEY)?.value)?.content);
+    if ((automations.length && !host.applyAutomations) || (rules?.trim() && !host.mergeProjectRules)) {
+      throw new Error('COMPANION_MERGE_UNSUPPORTED');
+    }
+    if (automations.length) await host.applyAutomations!(keep.externalId, automations, fence);
+    if (rules?.trim()) await host.mergeProjectRules!(keep.externalId, suffix, rules, fence);
     const workbench = prefs.find(row => row.key === COMPANION_WORKBENCH_KEY);
     if (workbench && host.applyWorkbench) await host.applyWorkbench(keep.externalId, workbench.value, fence);
 

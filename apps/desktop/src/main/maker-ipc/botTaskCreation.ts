@@ -21,7 +21,7 @@ import { createdSessionIds, readTaskResponsibilities, setTaskResponsibility } fr
 type Failure = { ok: false; errorCode: string; message: string };
 export type TeammateCallerResult = { ok: true; botId: string } | Failure;
 
-/** Only a teammate's own main chat (or its thread / routine lane) on this computer may manage its settings. */
+/** The teammate whose lane on this computer is calling (its project links are managed from any of them). */
 export async function resolveTeammateMainCaller(callerSessionId: string): Promise<TeammateCallerResult> {
   const db = getDbClient().drizzle;
   const [row] = await db
@@ -42,15 +42,8 @@ export async function resolveTeammateMainCaller(callerSessionId: string): Promis
   if (row.sessionStatus !== 'active' || row.profileStatus !== 'active' || row.linkArchivedAt !== null) {
     return { ok: false, errorCode: 'BOT_SESSION_INACTIVE', message: '伙伴或它的主任务已停用' };
   }
-  if (row.role !== 'canonical' && row.role !== 'thread' && row.role !== 'routine') {
-    return {
-      ok: false,
-      errorCode: 'BOT_MAIN_TASK_REQUIRED',
-      message: '当前入口不是伙伴的私聊主任务或私聊话题，不能使用项目关联工具。'
-        + '本次调用未读取或修改这些记录。请告知主人：在 Cindy 中打开这位伙伴的私聊主聊天（主任务），在那里提出本次请求；私聊话题也可用。'
-        + '不要在当前入口重试。',
-    };
-  }
+  // Any lane of the teammate (its chat, a topic, a channel or group lane) is the teammate: whether a
+  // change is allowed is the task's ordinary authorization, not which lane asked.
   if (row.remoteHostId) {
     // Stable code kept from the workbench era; older callers branch on it.
     return { ok: false, errorCode: 'REMOTE_WORKBENCH_UNAVAILABLE', message: '远端伙伴暂不支持项目关联' };

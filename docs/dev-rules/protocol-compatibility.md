@@ -4290,6 +4290,7 @@ V2 主力电脑只交给声明 ≥ 4 的目标，低于 4 返回 `TARGET_OUTDATE
 `maker:companion-cloud:targets` 的条目新增可选 `outdated: true`（版本 1–3 的电脑仍列出、不可选），旧发起方忽略。
 新增偏好键 `companion.project-rules.v1`（`{ content }`）与 `companion.automation.v1:<configId>`（`{ config, paused, originDeviceId? }`），
 只由新版主力电脑上传；旧客户端的上传器不拥有这些键（不墓碑、不播种），接管时只认识自己列出的前缀，未知键忽略。
+2026-11-09 追加 `companion.project-carryover.v1`（`{ content }`，项目的 `CARRYOVER.md`），同样只由新版主力电脑上传、旧客户端忽略。
 记忆仍用 `companion.memory.v1:<文件>`，值格式不变，内容改为读 V2 项目记忆。不新增 channel、帧或服务端接口，
 官方与自建中转透传既有回包；手机不改原生指纹。规则见 [云端伙伴](../product-rules/cloud-companions.md) §2.1。
 

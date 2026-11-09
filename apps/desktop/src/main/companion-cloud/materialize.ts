@@ -17,8 +17,8 @@ import type { CompanionBotState, CompanionCloudState } from './state.js';
 import { readCompanionRows, storedValueHash, type CompanionStore } from './store.js';
 import { errorCode, isTransientAttachmentFailure, type CompanionApi, type CompanionLog } from './types.js';
 import {
-  COMPANION_AUTOMATION_PREFIX, COMPANION_CAPABILITIES_KEY, COMPANION_MEMORY_PREFIX, COMPANION_PROFILE_KEY, COMPANION_PROJECT_RULES_KEY,
-  COMPANION_ROUTINE_PREFIX, COMPANION_SKILL_FILES_PREFIX, COMPANION_SKILL_PREFIX,
+  COMPANION_AUTOMATION_PREFIX, COMPANION_CAPABILITIES_KEY, COMPANION_MEMORY_PREFIX, COMPANION_PROFILE_KEY, COMPANION_PROJECT_CARRYOVER_KEY,
+  COMPANION_PROJECT_RULES_KEY, COMPANION_ROUTINE_PREFIX, COMPANION_SKILL_FILES_PREFIX, COMPANION_SKILL_PREFIX, COMPANION_TODO_PREFIX,
   COMPANION_WORKBENCH_KEY, TOMBSTONE_HASH, isCompanionProfileSnapshot, valueHash,
 } from './uploader.js';
 
@@ -89,6 +89,18 @@ export interface CompanionMaterializeHost {
    * config id with its paused state, a tombstone (`value: null`) removes it.
    */
   applyAutomations?: (botId: string, rows: Array<{ id: string; value: unknown }>, fence: CompanionWriteFence) => Promise<void>;
+  /**
+   * Merging a copy: its project rules are added to this teammate's own under a heading naming
+   * where they came from; rules already included write nothing.
+   */
+  mergeProjectRules?: (botId: string, from: string, content: string, fence: CompanionWriteFence) => Promise<void>;
+  /** The project's unfinished V1 work (`companion.project-carryover.v1`) becomes its `CARRYOVER.md`. */
+  applyProjectCarryover?: (botId: string, content: string, fence: CompanionWriteFence) => Promise<void>;
+  /**
+   * Todos a computer still on V1 uploaded: the open ones join the project's `CARRYOVER.md` (once),
+   * like a local upgrade carries them. Teammates no longer keep todos.
+   */
+  applyLegacyTodos?: (botId: string, todos: unknown[], fence: CompanionWriteFence) => Promise<void>;
   ensureCanonicalSession: (botId: string, fence: CompanionWriteFence) => Promise<string>;
   /**
    * Local rows created at or after `fromMs`, including rewound and deleted ones (`removed`):
@@ -299,9 +311,12 @@ export async function materializeCompanion(input: {
     });
   }
 
-  // Routines an older computer uploaded and the workbench move with the companion, applied in one
-  // batch each. Teammates no longer keep todos: an older computer's todo rows are not applied.
+  // Routines an older computer uploaded move with the companion, applied in one batch. Teammates no
+  // longer keep todos: an older computer's open ones become unfinished work in the project.
+  const applyTodos = host.applyLegacyTodos;
   const batches = [
+    { prefix: COMPANION_TODO_PREFIX, kind: 'todo', removes: false,
+      run: applyTodos ? (id: string, values: unknown[], _removed: string[], writeFence: CompanionWriteFence) => applyTodos(id, values, writeFence) : undefined },
     { prefix: COMPANION_ROUTINE_PREFIX, kind: 'routine', run: host.applyRoutines, removes: true },
   ] as const;
   for (const batch of batches) {
@@ -323,6 +338,15 @@ export async function materializeCompanion(input: {
       // Removed on the home is not removed here: a project always keeps its rules file.
       if (rules !== undefined) await step(() => host.applyProjectRules!(botId, rules, fence));
       applied.set(COMPANION_PROJECT_RULES_KEY, { hash: rulesRow.value === null ? TOMBSTONE_HASH : valueHash(rulesRow.value), revision: rulesRow.revision });
+    });
+  }
+  const carryoverRow = prefs.get(COMPANION_PROJECT_CARRYOVER_KEY);
+  const carryover = carryoverRow ? text(record(carryoverRow.value)?.content) : undefined;
+  if (carryoverRow && host.applyProjectCarryover && (carryover !== undefined || carryoverRow.value === null)) {
+    await apply('project-carryover', async () => {
+      // Removed on the home is not removed here: the owner may still need it.
+      if (carryover !== undefined) await step(() => host.applyProjectCarryover!(botId, carryover, fence));
+      applied.set(COMPANION_PROJECT_CARRYOVER_KEY, { hash: carryoverRow.value === null ? TOMBSTONE_HASH : valueHash(carryoverRow.value), revision: carryoverRow.revision });
     });
   }
   const automationRows = [...prefs].filter(([key]) => key.startsWith(COMPANION_AUTOMATION_PREFIX));

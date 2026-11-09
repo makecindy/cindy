@@ -97,9 +97,12 @@ describe('project automation import approval', () => {
   });
 
   // User decision (2026-11-08): a teammate's project is Cindy's own folder; its automations never ask for import.
-  it('syncs a teammate project without asking', async () => {
+  // PR #9314 review: only a real teammate project of this account; a repository whose path merely
+  // looks like one (…/owners/x/bots/y/workspace) still asks.
+  it('syncs a teammate project without asking, but asks for a folder that only looks like one', async () => {
     const root = await fs.mkdtemp(path.join(tmpdir(), 'cindy-teammate-project-'));
     const dir = path.join(root, 'owners', 'ab12', 'bots', 'bot-1', 'workspace');
+    const lookalike = path.join(root, 'repo', 'owners', 'fake', 'bots', 'fake', 'workspace');
     try {
       const stored: Schedule[] = [];
       const create = vi.fn(async (input: CreateScheduleInput) => {
@@ -115,13 +118,17 @@ describe('project automation import approval', () => {
           insert: () => ({ values: () => ({ onConflictDoUpdate: async () => {} }) }),
         }) as unknown as ReturnType<ConstructorParameters<typeof ProjectAutomationLoader>[0]['getDb']>,
         logger: { warn: vi.fn(), debug: vi.fn() },
+        isOwnTeammateProject: async (workingDir) => workingDir === dir,
       });
-      const file = path.join(dir, ...PROJECT_AUTOMATION_REL_SEGMENTS);
-      await fs.mkdir(path.dirname(file), { recursive: true });
-      await fs.writeFile(file, JSON.stringify({ version: 1, schedules: [projectConfig()] }));
+      for (const folder of [dir, lookalike]) {
+        const file = path.join(folder, ...PROJECT_AUTOMATION_REL_SEGMENTS);
+        await fs.mkdir(path.dirname(file), { recursive: true });
+        await fs.writeFile(file, JSON.stringify({ version: 1, schedules: [projectConfig()] }));
+      }
       const result = await loader.reconcile(dir);
       expect(result.pendingImport).toBeUndefined();
       expect(result).toMatchObject({ inserted: 1 });
+      expect((await loader.reconcile(lookalike)).pendingImport).toBeDefined();
       expect(create).toHaveBeenCalledTimes(1);
     } finally {
       await fs.rm(root, { recursive: true, force: true });

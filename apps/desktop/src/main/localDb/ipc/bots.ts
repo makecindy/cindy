@@ -72,7 +72,7 @@ import { syncBotProfileFromFolder } from '../../maker-ipc/botProfileFolderSync.j
 import { requestBotRuntimeEpochRefresh } from '../../maker-ipc/botRuntimeEpochRefreshSignal.js';
 import { createLogger } from '../../logger.js';
 import { collectTaskResponsibilityScopes } from '../../maker-ipc/botTaskResponsibility.js';
-import { ensureBotProjectAutomations, nameBotProject, prepareBotProjectWorkspace, removeBotProjectAutomations } from '../../maker-ipc/botProjectMode.js';
+import { ensureBotProjectAutomations, nameBotProject, prepareBotProjectWorkspace } from '../../maker-ipc/botProjectMode.js';
 import { normalizeRecentWorkdirPath } from './recentWorkdirs.js';
 import { setBotProjectSkillsDir } from '../../maker-ipc/botSkillStore.js';
 import { readBotProjectMode } from '../../../shared/botProjectMode.js';
@@ -1736,6 +1736,13 @@ async function fileExists(candidate: string): Promise<boolean> {
   }
 }
 
+type NewTeammateSetup = (botId: string, ownerRoot: string, assertCurrent: () => void) => Promise<unknown>;
+let newTeammateSetup: NewTeammateSetup | null = null;
+/** Registered by botV2Migration.ts: every new teammate is set up as a project (V2) right away. */
+export function setNewTeammateSetup(setup: NewTeammateSetup | null): void {
+  newTeammateSetup = setup;
+}
+
 async function defaultNewBotCapabilities(): Promise<Record<string, unknown>> {
   const modelChain = await readEffectiveBotModelChain({
     modelChainOverride: null,
@@ -1995,6 +2002,14 @@ export async function createBotProfile(raw: unknown, restored?: RestoredBotOrigi
     throw error;
   }
   assertCreationOwnerStillCurrent();
+  // Every teammate is a project (V2) from the start, before its first chat; a failure retries on
+  // the next start like the upgrade of an existing teammate.
+  try {
+    await newTeammateSetup?.(id, creationOwnerBoundary.userDataDir, assertCreationOwnerStillCurrent);
+  } catch (error) {
+    log.warn('new teammate V2 setup failed; retries on next start', { botId: id, error: String(error) });
+  }
+  assertCreationOwnerStillCurrent();
   if (prepareInvitation) {
     // Creation is already committed. A fallible presentation read must not
     // strand that durable invitation before it reaches the runtime queue.
@@ -2174,6 +2189,8 @@ export async function updateBotProfile(raw: unknown, expectedVersion?: number,
     if (nextGender) nextConfig.gender = nextGender;
     else delete nextConfig.gender;
   }
+  // A V2 teammate stays a project: V1's own engines are gone, so there is nothing to go back to.
+  if (readBotProjectMode(previous)) nextConfig.projectMode = true;
   const normalizedNextConfig = normalizeBotModelCapabilitiesOrThrow(nextConfig);
   // Legacy chain-only profiles gain mirrored fields during normalization.
   // Compare the same representation so unrelated edits do not validate stale routes.
@@ -2319,11 +2336,6 @@ export async function updateBotProfile(raw: unknown, expectedVersion?: number,
       await ensureBotWorkspaceDir(owner.userDataDir, id, app.getPath('userData')),
     );
     if (projectDir) await nameBotProject(id, projectDir, patch.displayName, current.displayName);
-    owner.assertCurrent();
-  } else if (!readBotProjectMode(normalizedNextConfig) && readBotProjectMode(previous)) {
-    const workingDir = await ensureBotWorkspaceDir(owner.userDataDir, id, app.getPath('userData'));
-    await removeBotProjectAutomations(workingDir)
-      .catch((error) => log.warn('teammate project automations removal failed', { botId: id, error: String(error) }));
     owner.assertCurrent();
   }
   if (profileContentChanged || acceptsSavedModel) {

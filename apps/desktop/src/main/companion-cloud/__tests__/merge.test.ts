@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { CINDY_DEFAULT_IDENTITY } from '../../../shared/botTemplatePreset.js';
-import { isCindyCompanion, mergeCompanionsInto, mergedRoutineId, renamedEntry } from '../merge.js';
+import { isCindyCompanion, mergeCompanionsInto, mergedAutomationId, mergedRoutineId, renamedEntry } from '../merge.js';
 import { fakeApi, fakeLocal } from './fakes.js';
 
 const KEEP_ROOM = '10000000-0000-4000-8000-00000000000a';
@@ -108,6 +108,36 @@ describe('merging copies of Cindy', () => {
     expect(id).not.toBe(mergedRoutineId('bot_other', 'actor-from', 'routine-1'));
     expect(t.local.host.applyRoutines).toHaveBeenCalledWith('cindy-default',
       [{ id, input: { triggers: [] }, originDeviceId: 'laptop' }], [], expect.anything());
+  });
+
+  // PR #9314 review (reproduced): a V2 copy's automations and rules were not merged, yet the merge
+  // reported success and retired the copy, so its automations ran nowhere.
+  it('brings a V2 copy\'s automations and rules into the kept teammate before retiring it', async () => {
+    const t = setup();
+    t.added.push(
+      { key: 'companion.automation.v1:daily', value: { config: { id: 'daily', name: 'Daily', prompt: 'p', cronExpr: '0 9 * * *' }, paused: true }, revision: 8 },
+      { key: 'companion.automation.v1:teammate-memory-review', value: { config: { id: 'teammate-memory-review', name: 'r', prompt: 'p', cronExpr: '30 3 * * *' }, paused: false }, revision: 9 },
+      { key: 'companion.project-rules.v1', value: { content: 'Answer in French.' }, revision: 10 },
+    );
+    const applyAutomations = vi.fn(async () => undefined);
+    const mergeProjectRules = vi.fn(async () => undefined);
+    const host = { ...t.local.host, applyAutomations, mergeProjectRules };
+    const run = () => mergeCompanionsInto({ api: t.api, host, keep, from: [from], humanActorId: 'human',
+      roomOf: async (actor) => (actor.id === keep.id ? KEEP_ROOM : FROM_ROOM), importHistory: async () => undefined,
+      fence: { assertCurrent: () => undefined } });
+    expect((await run()).merged).toBe(1);
+    const id = mergedAutomationId('cindy-default', 'actor-from', 'daily');
+    expect(id).toMatch(/^[a-z0-9][a-z0-9-]{0,127}$/);
+    // Its own memory review is not added a second time; a paused automation stays paused.
+    expect(applyAutomations).toHaveBeenCalledWith('cindy-default',
+      [{ id, value: { config: { id, name: 'Daily', prompt: 'p', cronExpr: '0 9 * * *' }, paused: true } }], expect.anything());
+    expect(mergeProjectRules).toHaveBeenCalledWith('cindy-default', expect.any(String), 'Answer in French.', expect.anything());
+    // A host that cannot take them leaves the copy active.
+    const patches = t.calls.filter(call => call.method === 'PATCH').length;
+    await expect(mergeCompanionsInto({ api: t.api, host: t.local.host, keep, from: [from], humanActorId: 'human',
+      roomOf: async (actor) => (actor.id === keep.id ? KEEP_ROOM : FROM_ROOM), importHistory: async () => undefined,
+      fence: { assertCurrent: () => undefined } })).rejects.toThrow('COMPANION_MERGE_UNSUPPORTED');
+    expect(t.calls.filter(call => call.method === 'PATCH').length).toBe(patches);
   });
 
   it('stops with the copies active when one added something after it was read', async () => {

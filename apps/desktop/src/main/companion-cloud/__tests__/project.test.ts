@@ -11,16 +11,21 @@
  */
 import { describe, expect, it, vi } from 'vitest';
 
-import { applyProjectAutomations, applyProjectRules, readProjectValues, type CompanionProjectIo, type ProjectAutomationEntry } from '../project.js';
+import {
+  applyProjectAutomations, applyProjectCarryover, applyProjectRules, readProjectValues, type CompanionProjectIo, type ProjectAutomationEntry,
+} from '../project.js';
 
-function fakeProject(input: { rules?: string | null; automations?: ProjectAutomationEntry[]; isProject?: boolean } = {}) {
+function fakeProject(input: { rules?: string | null; carryover?: string | null; automations?: ProjectAutomationEntry[]; isProject?: boolean } = {}) {
   let rules = input.rules ?? null;
+  let carryover = input.carryover ?? null;
   const automations = new Map((input.automations ?? []).map(entry => [entry.config.id, structuredClone(entry)]));
   const io = {
     projectDir: vi.fn(async () => (input.isProject === false ? null : '/project')),
     prepareProject: vi.fn(async () => '/project'),
     readRules: vi.fn(async () => rules),
     writeRules: vi.fn(async (_dir: string, content: string) => { rules = content; }),
+    readCarryover: vi.fn(async () => carryover),
+    writeCarryover: vi.fn(async (_dir: string, content: string) => { carryover = content; }),
     snapshot: vi.fn(async () => undefined),
     automations: vi.fn(async () => [...automations.values()].map(entry => structuredClone(entry))),
     upsertAutomation: vi.fn(async (_dir: string, config: Record<string, unknown>) => {
@@ -31,7 +36,7 @@ function fakeProject(input: { rules?: string | null; automations?: ProjectAutoma
     removeAutomation: vi.fn(async (_dir: string, id: string) => { automations.delete(id); }),
     setAutomationPaused: vi.fn(async (_dir: string, id: string, paused: boolean) => { automations.get(id)!.paused = paused; }),
   } satisfies CompanionProjectIo;
-  return { io, rules: () => rules, automations };
+  return { io, rules: () => rules, carryover: () => carryover, automations };
 }
 
 const daily = { id: 'daily-report', name: 'Daily report', prompt: 'Write it', cronExpr: '0 9 * * *', agentDeviceId: 'desk', model: 'm' };
@@ -99,5 +104,19 @@ describe('teammate project setup through the cloud', () => {
       { key: 'companion.automation.v1:', value: null, unread: true },
     ]);
     expect(await readProjectValues('bot_mia', fakeProject({ rules: 'rules', isProject: false }).io, 'laptop')).toEqual([]);
+  });
+
+  // PR #9314 review: the upgrade left unfinished V1 work in CARRYOVER.md and pointed the rules at it,
+  // but only the rules travelled: on the next main computer the rules pointed to a missing file.
+  it('takes the unfinished V1 work along with the rules', async () => {
+    const home = fakeProject({ rules: '# rules\nSee CARRYOVER.md\n', carryover: '# Carried over\n- [ ] Ship the fix\n' });
+    const sent = await readProjectValues('bot_mia', home.io, 'laptop');
+    const value = sent.find(v => v.key === 'companion.project-carryover.v1')?.value as { content: string } | undefined;
+    expect(value?.content).toBe('# Carried over\n- [ ] Ship the fix\n');
+    const here = fakeProject();
+    await applyProjectCarryover({ botId: 'bot_mia', content: value!.content, io: here.io, assertCurrent: vi.fn() });
+    expect(here.carryover()).toBe(value!.content);
+    await applyProjectCarryover({ botId: 'bot_mia', content: value!.content, io: here.io, assertCurrent: vi.fn() });
+    expect(here.io.writeCarryover).toHaveBeenCalledTimes(1);
   });
 });

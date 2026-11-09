@@ -31,7 +31,7 @@ import { applyBotSkillFilesForBot, deleteBotSkillForBot, listBotSkillFilesForBot
 import { mergeCompanionWorkbench, readCompanionWorkbench } from '../maker-ipc/botLinkedProjectStore.js';
 import type { CompanionMaterializeHost } from './materialize.js';
 import { applyCompanionRoutines } from './routines.js';
-import { applyProjectAutomations, applyProjectRules, readProjectValues } from './project.js';
+import { applyProjectAutomations, applyProjectCarryover, applyProjectRules, mergeProjectRules, readProjectValues } from './project.js';
 import { backupTeammateProject, companionProjectIo, teammateStoreMemoryDirs, upgradeArrivedTeammate } from './projectHost.js';
 import { readTeammateMemories, readTeammateMemory, teammateMemoryDirs } from '../maker-ipc/botProjectMemory.js';
 import { companionHomes } from './homes.js';
@@ -48,6 +48,7 @@ import {
   COMPANION_AUTOMATION_PREFIX,
   COMPANION_CAPABILITIES_KEY,
   COMPANION_MEMORY_PREFIX,
+  COMPANION_PROJECT_CARRYOVER_KEY,
   COMPANION_PROJECT_RULES_KEY,
   COMPANION_PROFILE_KEY,
   COMPANION_SKILL_PREFIX,
@@ -98,7 +99,7 @@ export async function readCompanionValues(botId: string, selfDeviceId: string | 
   } catch { values.push({ key: COMPANION_CAPABILITIES_KEY, value: null, unread: true }); }
   if (projectMode === null) {
     // Read from the wrong place they would look deleted: their cloud values stay until it is known.
-    for (const key of [COMPANION_MEMORY_PREFIX, COMPANION_SKILL_PREFIX, COMPANION_SKILL_FILES_PREFIX, COMPANION_PROJECT_RULES_KEY, COMPANION_AUTOMATION_PREFIX]) {
+    for (const key of [COMPANION_MEMORY_PREFIX, COMPANION_SKILL_PREFIX, COMPANION_SKILL_FILES_PREFIX, COMPANION_PROJECT_RULES_KEY, COMPANION_PROJECT_CARRYOVER_KEY, COMPANION_AUTOMATION_PREFIX]) {
       values.push({ key, value: null, unread: true });
     }
   } else await readMemoriesAndSkills(values, userDataDir, botId, projectMode);
@@ -163,6 +164,19 @@ function createMaterializer(input: {
     applyProjectRules: async (botId, content, fence) => {
       fence.assertCurrent();
       await applyProjectRules({ botId, content, io: companionProjectIo(), assertCurrent: fence.assertCurrent, ...(input.log ? { log: input.log } : {}) });
+    },
+    applyProjectCarryover: async (botId, content, fence) => {
+      fence.assertCurrent();
+      await applyProjectCarryover({ botId, content, io: companionProjectIo(), assertCurrent: fence.assertCurrent });
+    },
+    applyLegacyTodos: async (botId, todos, fence) => {
+      fence.assertCurrent();
+      const { carryLegacyTodos } = await import('../maker-ipc/botV2Migration.js');
+      await carryLegacyTodos(botId, ownerScopedUserDataPath(), todos, fence.assertCurrent);
+    },
+    mergeProjectRules: async (botId, from, content, fence) => {
+      fence.assertCurrent();
+      await mergeProjectRules({ botId, from, content, io: companionProjectIo(), assertCurrent: fence.assertCurrent, ...(input.log ? { log: input.log } : {}) });
     },
     applyAutomations: async (botId, rows, fence) => {
       fence.assertCurrent();

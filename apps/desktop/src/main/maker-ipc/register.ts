@@ -13805,7 +13805,16 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       void activeCompanionCloud()?.retire(botId).catch((error: unknown) => {
         log.warn('companion cloud retire failed', { error: error instanceof Error ? error.message.slice(0, 80) : 'UNKNOWN' });
       });
-      await finishCompanionEnvironmentRemoval(ownerScopedUserDataPath(), botId, assertOwner);
+      // Its project goes with it: its automations stop being scheduled (runs were already skipped).
+      const ownerRoot = ownerScopedUserDataPath();
+      await import('../scheduler-host/index.js')
+        .then(async ({ getProjectAutomationLoader }) => {
+          const { teammateWorkspaceDir } = await import('./botProjectMemory.js');
+          await getProjectAutomationLoader().deleteProjectSchedules(teammateWorkspaceDir(ownerRoot, botId));
+        })
+        .catch((error: unknown) => log.warn('teammate project automations not removed', { error: error instanceof Error ? error.message.slice(0, 80) : 'UNKNOWN' }));
+      assertOwner();
+      await finishCompanionEnvironmentRemoval(ownerRoot, botId, assertOwner);
     },
   });
   restoreTaskResultDeliveryForCurrentOwner();
@@ -17983,17 +17992,17 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       if (!host || !origin) {
         return { ok: false, errorCode: 'INVALID_ARGS', message: 'notify_when_done 需要从一个任务里调用。' };
       }
-      const live = getMakerIfReady()?.getSession(notifyTarget);
+      // Bound to this message, not to "the next turn": earlier queued messages are answered first.
+      const notifyClientId = params.deliveryClientId ?? `task-notify:${randomUUID()}`;
       try {
-        await host.arm(notifyTarget, origin,
-          live ? { instanceId: live.instanceId, generation: live.getTurnGeneration() } : undefined);
+        await host.request(notifyTarget, origin, notifyClientId);
       } catch (error) {
         const missing = error instanceof Error && error.message === 'TASK_UNAVAILABLE';
         return { ok: false, errorCode: missing ? 'NOT_FOUND' as const : 'AGENT_NOT_READY' as const,
           message: missing ? '目标任务不存在。' : '暂时无法登记做完通知，请稍后重试。' };
       }
-      const sent = await sendToSessionInternal(internal);
-      if (!sent.ok) await host.disarm(notifyTarget).catch(() => log.warn('notify_when_done disarm deferred'));
+      const sent = await sendToSessionInternal({ ...internal, clientId: notifyClientId });
+      if (!sent.ok) await host.disarm(notifyTarget, notifyClientId).catch(() => log.warn('notify_when_done disarm deferred'));
       return sent;
     },
     enableOrca: enableOrcaInternal,

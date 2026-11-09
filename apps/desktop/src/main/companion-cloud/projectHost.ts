@@ -16,6 +16,7 @@ import {
   teammateProjectMemoryDir,
   teammateWorkspaceDir as teammateWorkspace,
 } from '../maker-ipc/botProjectMemory.js';
+import { BOT_V2_CARRYOVER_FILE } from '../maker-ipc/botV2Carryover.js';
 import { readTeammateProjectMode } from '../maker-ipc/botWorkspaceRuntime.js';
 import type { ProjectScheduleConfig } from '../scheduler-host/project-automation-loader.js';
 import { PROJECT_AUTOMATION_REL_SEGMENTS } from '../../shared/projectAutomationPaths.js';
@@ -86,6 +87,9 @@ export function companionProjectIo(): CompanionProjectIo {
     readRules: (workingDir) => fs.readFile(path.join(workingDir, RULES_FILE), 'utf8')
       .catch((error: unknown) => { if (missing(error)) return null; throw error; }),
     writeRules: (workingDir, content) => writeAtomic(path.join(workingDir, RULES_FILE), content),
+    readCarryover: (workingDir) => fs.readFile(path.join(workingDir, BOT_V2_CARRYOVER_FILE), 'utf8')
+      .catch((error: unknown) => { if (missing(error)) return null; throw error; }),
+    writeCarryover: (workingDir, content) => writeAtomic(path.join(workingDir, BOT_V2_CARRYOVER_FILE), content),
     snapshot: async (workingDir, label) => {
       await createSnapshotDetailed(workingDir, { label, meta: { sessionId: 'bot-project', kind: 'manual' } });
     },

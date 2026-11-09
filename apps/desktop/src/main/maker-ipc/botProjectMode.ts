@@ -35,6 +35,7 @@ import {
   unlinkedTeammateProjectMemoryDir,
 } from './botProjectMemory.js';
 import { setBotProjectSkillsDir } from './botSkillStore.js';
+import { routeModelFields } from './botV2Carryover.js';
 import type { ProjectScheduleConfig } from '../scheduler-host/project-automation-loader.js';
 import type { BotModelRoute } from '../../shared/botModelChain.js';
 
@@ -224,7 +225,8 @@ export function botProjectMemoryReview(input: {
   title: string;
 }): ProjectScheduleConfig {
   const name = input.displayName.trim() || input.botId;
-  const route = input.route && !input.route.agentDeviceId ? input.route : null;
+  // The teammate's own model, also on another computer; one that cannot be kept uses the default.
+  const model = input.route ? routeModelFields(input.route) ?? {} : {};
   return {
     id: BOT_PROJECT_MEMORY_REVIEW_ID,
     name: input.title.replace('{{name}}', name),
@@ -235,12 +237,7 @@ export function botProjectMemoryReview(input: {
     recurring: true,
     persistentSession: true,
     silentWhenIdle: true,
-    ...(route ? {
-      agentKind: route.harness === 'claude' ? 'claude-code' as const : route.harness,
-      model: route.model,
-      ...(route.providerId ? { providerId: route.providerId } : {}),
-      ...(route.effort ? { effort: route.effort } : {}),
-    } : {}),
+    ...model,
   };
 }
 

@@ -29,6 +29,7 @@ import { sessions } from '../localDb/schema.js';
 import { getDbClient } from '../localDb/client/current';
 import { startRewoundSchedulerPromptCleanup, stopRewoundSchedulerPromptCleanup } from './rewoundSchedulerPromptCleanup.js';
 import { withTeammateHomeGuard } from './teammateHomeGuard.js';
+import { ownTeammateProjectState } from './ownTeammateProject.js';
 import { companionHomes } from '../companion-cloud/homes.js';
 import { isReviewSessionSource } from '../../shared/sessionSource.js';
 import { dbToMakerAgentKind } from '../../shared/agentKindConversion.js';
@@ -221,7 +222,7 @@ async function startSchedulerInternal(deps: StartSchedulerDeps): Promise<Schedul
           ? scriptRunner.fire(schedule, ctx)
           : promptRunner.fire(schedule, ctx);
       }),
-  }, () => companionHomes.snapshot().demotedBotIds);
+  }, () => companionHomes.snapshot().demotedBotIds, ownTeammateProjectState);
 
   // 双开让位开关:同一台机器同时跑 dev + release(共用同一 userData/DB)时,
   // 给其中一个实例(通常 dev)设 XDT_SCHEDULER_PASSIVE=1 → 本实例不参与自动触发
@@ -292,6 +293,7 @@ async function startSchedulerInternal(deps: StartSchedulerDeps): Promise<Schedul
     storage,
     getDb: deps.getDb,
     logger: deps.logger,
+    isOwnTeammateProject: async (workingDir) => (await ownTeammateProjectState(workingDir)) !== null,
   });
   // archived 兜底要 scheduler.pause/update，runner 反向持有 scheduler
   promptRunner.attachScheduler(scheduler);

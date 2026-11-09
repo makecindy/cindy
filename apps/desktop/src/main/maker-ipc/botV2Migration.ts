@@ -23,7 +23,7 @@ import { readBotProjectMode } from '../../shared/botProjectMode.js';
 import { companionHomes } from '../companion-cloud/homes.js';
 import { t } from '../i18n.js';
 import { getDbClient } from '../localDb/client/current.js';
-import { readBotSettingsProfile, updateBotProfile } from '../localDb/ipc/bots.js';
+import { readBotSettingsProfile, setNewTeammateSetup, updateBotProfile } from '../localDb/ipc/bots.js';
 import { botProfiles } from '../localDb/schema.js';
 import { createLogger } from '../logger.js';
 import { readEffectiveBotModelChain } from '../maker-host/bot-model-chain-settings-store.js';
@@ -123,6 +123,34 @@ async function migrateRoutines(botId: string, ownerRoot: string, workingDir: str
   return [...new Set([...savedNotes, ...notes])];
 }
 
+async function pointRulesToCarryover(workingDir: string): Promise<void> {
+  const rules = path.join(workingDir, 'AGENTS.md');
+  const current = await fs.readFile(rules, 'utf8').catch(() => null);
+  if (current !== null && !current.includes(BOT_V2_CARRYOVER_FILE)) {
+    await writeAtomic(rules, `${current.replace(/\s*$/, '')}\n${carryoverPointer()}\n`);
+  }
+}
+
+/**
+ * Todos a computer still on V1 uploaded, arriving here: the open ones join the project's
+ * `CARRYOVER.md` once (the teammate becomes a project first), as a local upgrade carries them.
+ */
+export async function carryLegacyTodos(botId: string, ownerRoot: string, items: unknown[],
+  assertCurrent: () => void = () => {}): Promise<void> {
+  const content = buildCarryover({ todos: { items } as never, routineNotes: [] },
+    (key: CarryoverLabel) => t(`bots.homeFolder.projectMode.carryover.${key}`));
+  if (!content) return;
+  await migrateTeammateToV2(botId, ownerRoot, assertCurrent);
+  assertCurrent();
+  const workingDir = await ensureBotWorkspaceDir(ownerRoot, botId, app.getPath('userData'));
+  const target = path.join(workingDir, BOT_V2_CARRYOVER_FILE);
+  const current = await fs.readFile(target, 'utf8').catch(() => null);
+  if (current?.includes(content.trim())) return;
+  assertCurrent();
+  await writeAtomic(target, current ? `${current.replace(/\s*$/, '')}\n\n${content}` : content);
+  await pointRulesToCarryover(workingDir);
+}
+
 async function writeCarryover(home: string, workingDir: string, routineNotes: string[]): Promise<boolean> {
   const target = path.join(workingDir, BOT_V2_CARRYOVER_FILE);
   if (await exists(target)) return true;
@@ -135,11 +163,7 @@ async function writeCarryover(home: string, workingDir: string, routineNotes: st
     (key: CarryoverLabel) => t(`bots.homeFolder.projectMode.carryover.${key}`));
   if (!content) return false;
   await writeAtomic(target, content);
-  const rules = path.join(workingDir, 'AGENTS.md');
-  const current = await fs.readFile(rules, 'utf8').catch(() => null);
-  if (current !== null && !current.includes(BOT_V2_CARRYOVER_FILE)) {
-    await writeAtomic(rules, `${current.replace(/\s*$/, '')}\n${carryoverPointer()}\n`);
-  }
+  await pointRulesToCarryover(workingDir);
   return true;
 }
 
@@ -179,6 +203,11 @@ async function migrateTeammateOnce(botId: string, ownerRoot: string,
     // Upgraded before its project memory moved into the project folder: move it once (idempotent).
     const workspace = teammateWorkspaceDir(ownerRoot, botId);
     if (await exists(workspace)) await moveTeammateMemoryIntoProject({ botId, ownerRoot, workspace });
+    // A build that still had the switch may have turned it off after the upgrade: V1 is gone.
+    const upgraded = await readBotSettingsProfile(botId);
+    if (!readBotProjectMode(upgraded.capabilities as unknown as Record<string, unknown>)) {
+      await updateBotProfile({ id: botId, capabilities: { projectMode: true } });
+    }
     return 'already';
   }
   const profile = await readBotSettingsProfile(botId);
@@ -206,6 +235,9 @@ async function migrateTeammateOnce(botId: string, ownerRoot: string,
   await writeAtomic(receiptPath, JSON.stringify({ version: 1, migratedAt: new Date().toISOString(), carried }, null, 2));
   return 'migrated';
 }
+
+// A teammate created from now on is a project from the start (bots.ts calls this once it is saved).
+setNewTeammateSetup(migrateTeammateToV2);
 
 let running: { scope: string; promise: Promise<void> } | null = null;
 

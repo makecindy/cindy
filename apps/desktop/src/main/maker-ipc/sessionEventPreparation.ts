@@ -215,6 +215,9 @@ export function prepareSessionEvent(
   const pluginTargetInputIds = event.turnScope !== 'background'
     ? (deps.agentInputCoordinatorHolder?.getActiveInputClientIds?.(session.id, event.sessionTurnGeneration) ?? [])
       .filter(id => id.startsWith('plugin-target:')) : [];
+  // Every message this turn handled: a `notify_when_done` request waits for its own message.
+  const turnInputClientIds = event.type === 'done' && event.turnScope !== 'background'
+    ? (deps.agentInputCoordinatorHolder?.getActiveInputClientIds?.(session.id, event.sessionTurnGeneration) ?? []) : [];
   const botTaskResultInputIds = event.type === 'done' && event.turnScope !== 'background'
     ? (deps.agentInputCoordinatorHolder?.getActiveInputClientIds?.(session.id, event.sessionTurnGeneration) ?? [])
       .filter(id => taskResultClientIdForInput(id) !== null) : [];
@@ -627,6 +630,7 @@ export function prepareSessionEvent(
     event,
     attributedEvent,
     botTaskResultInputIds,
+    turnInputClientIds,
     pluginTargetInputIds,
     groupLaneInputClientId,
     broadcastEvent,

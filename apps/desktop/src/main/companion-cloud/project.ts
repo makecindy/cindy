@@ -7,7 +7,9 @@
  * The file and scheduler side is injected (host.ts) so the rules here stay testable.
  */
 import { errorCode, type CompanionLog } from './types.js';
-import { COMPANION_AUTOMATION_PREFIX, COMPANION_PROJECT_RULES_KEY, canonicalJson, type CompanionPreferenceValue } from './uploader.js';
+import {
+  COMPANION_AUTOMATION_PREFIX, COMPANION_PROJECT_CARRYOVER_KEY, COMPANION_PROJECT_RULES_KEY, canonicalJson, type CompanionPreferenceValue,
+} from './uploader.js';
 
 /** Rules larger than this are not read (and so not uploaded or tombstoned). */
 export const PROJECT_RULES_MAX_BYTES = 256 * 1024;
@@ -34,6 +36,9 @@ export interface CompanionProjectIo {
   /** The rules file; null when the project has none. Other read errors throw. */
   readRules: (workingDir: string) => Promise<string | null>;
   writeRules: (workingDir: string, content: string) => Promise<void>;
+  /** The project's `CARRYOVER.md` (unfinished V1 work); null when it has none. */
+  readCarryover: (workingDir: string) => Promise<string | null>;
+  writeCarryover: (workingDir: string, content: string) => Promise<void>;
   /** Record a version of the project; a failure is logged, never fails the arrival. */
   snapshot: (workingDir: string, label: string) => Promise<void>;
   /** The project's automations; [] without an automations file; throws when it cannot be read. */
@@ -60,6 +65,12 @@ export async function readProjectValues(botId: string, io: CompanionProjectIo, s
     } else if (rules !== null) values.push({ key: COMPANION_PROJECT_RULES_KEY, value: { content: rules } });
   } catch { values.push({ key: COMPANION_PROJECT_RULES_KEY, value: null, unread: true }); }
   try {
+    const carryover = await io.readCarryover(workingDir);
+    if (carryover !== null && Buffer.byteLength(carryover, 'utf8') > PROJECT_RULES_MAX_BYTES) {
+      values.push({ key: COMPANION_PROJECT_CARRYOVER_KEY, value: null, unread: true });
+    } else if (carryover !== null) values.push({ key: COMPANION_PROJECT_CARRYOVER_KEY, value: { content: carryover } });
+  } catch { values.push({ key: COMPANION_PROJECT_CARRYOVER_KEY, value: null, unread: true }); }
+  try {
     for (const entry of await io.automations(workingDir)) {
       if (!CONFIG_ID.test(entry.config.id)) continue;
       const value: ProjectAutomationValue = { config: entry.config, paused: entry.paused, ...(selfDeviceId ? { originDeviceId: selfDeviceId } : {}) };
@@ -81,6 +92,34 @@ export async function applyProjectRules(input: {
   // Each computer keeps its own history: the arrival is one more version in it.
   await input.io.snapshot(workingDir, 'Rules from the teammate\'s main computer').catch(error => {
     input.log?.warn('Teammate rules arrived without a project version', { code: errorCode(error) });
+  });
+}
+
+/** The project's unfinished V1 work from the cloud: written only when it differs. */
+export async function applyProjectCarryover(input: {
+  botId: string; content: string; io: CompanionProjectIo; assertCurrent: () => void;
+}): Promise<void> {
+  const workingDir = await input.io.prepareProject(input.botId, input.assertCurrent);
+  input.assertCurrent();
+  if (await input.io.readCarryover(workingDir) === input.content) return;
+  input.assertCurrent();
+  await input.io.writeCarryover(workingDir, input.content);
+}
+
+/** Merging another copy of the teammate: its rules are added to these, once, never replacing them. */
+export async function mergeProjectRules(input: {
+  botId: string; from: string; content: string; io: CompanionProjectIo; assertCurrent: () => void; log?: CompanionLog;
+}): Promise<void> {
+  const added = input.content.trim();
+  if (!added) return;
+  const workingDir = await input.io.prepareProject(input.botId, input.assertCurrent);
+  input.assertCurrent();
+  const current = await input.io.readRules(workingDir) ?? '';
+  if (current.includes(added)) return;
+  input.assertCurrent();
+  await input.io.writeRules(workingDir, `${current.trimEnd()}\n\n## From ${input.from}\n\n${added}\n`);
+  await input.io.snapshot(workingDir, `Rules merged from ${input.from}`).catch(error => {
+    input.log?.warn('Merged teammate rules without a project version', { code: errorCode(error) });
   });
 }
 

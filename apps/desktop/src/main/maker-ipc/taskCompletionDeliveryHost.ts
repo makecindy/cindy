@@ -25,6 +25,7 @@ const recordSchema = z.object({
     errorCode: z.string().optional(), failureShown: z.boolean().optional(), postSnapshot: z.unknown().optional() })),
   armed: z.object({ after: z.object({ instanceId: z.string(), generation: z.number().int() }).optional() }).optional(),
   notify: z.boolean().optional(),
+  requests: z.array(z.object({ inputClientId: z.string(), origin: originSchema })).optional(),
 });
 
 export interface TaskResultDelivery {
@@ -207,14 +208,22 @@ export function createTaskCompletionDeliveryHost(
      * A later request replaces the requester for the next result; results already produced keep theirs.
      */
     arm: (id: string, origin: TaskCompletionOrigin, after?: { instanceId: string; generation: number }) =>
-      write(id, record => ({ origin, receipts: record?.receipts ?? [], armed: after ? { after } : {}, notify: true })),
-    disarm: (id: string) => write(id, record => {
+      write(id, record => ({ origin, receipts: record?.receipts ?? [], armed: after ? { after } : {}, notify: true,
+        ...(record?.requests ? { requests: record.requests } : {}) })),
+    /** `notify_when_done` on an existing task: the turn that handles message `inputClientId` goes to `origin`. */
+    request: (id: string, origin: TaskCompletionOrigin, inputClientId: string) =>
+      write(id, record => ({ ...(record ?? { origin, receipts: [], notify: true }),
+        requests: [...(record?.requests ?? []).filter(item => item.inputClientId !== inputClientId), { inputClientId, origin }] })),
+    disarm: (id: string, inputClientId?: string) => write(id, record => {
       if (!record) throw new Error('TASK_DELIVERY_ORIGIN_MISSING');
-      delete record.armed;
+      if (inputClientId) {
+        record.requests = record.requests?.filter(item => item.inputClientId !== inputClientId);
+        if (!record.requests?.length) delete record.requests;
+      } else delete record.armed;
       return record;
     }),
     settleTerminal(input: { sessionId: string; execution: { instanceId: string; generation: number };
-      successful: boolean; text: string; messageClientId?: string }) {
+      successful: boolean; text: string; messageClientId?: string; inputClientIds?: readonly string[] }) {
       return delivery.settle(input);
     },
   };

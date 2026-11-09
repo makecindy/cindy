@@ -32,6 +32,11 @@ export interface TaskCompletionRecord {
   armed?: { after?: BotAutonomyExecution };
   /** Created by `notify_when_done`: only an armed request delivers, never a later explicit report. */
   notify?: boolean;
+  /**
+   * `notify_when_done` on an existing task: each request waits for the turn that handles its own
+   * message (by the message's client id), however many messages are queued before it.
+   */
+  requests?: Array<{ inputClientId: string; origin: TaskCompletionOrigin }>;
 }
 
 interface TaskCompletionTerminal {
@@ -40,6 +45,8 @@ interface TaskCompletionTerminal {
   successful: boolean;
   text: string;
   messageClientId?: string;
+  /** Client ids of the messages this turn handled. */
+  inputClientIds?: readonly string[];
 }
 
 export interface TaskCompletionDeliveryDeps {
@@ -64,7 +71,8 @@ export function createTaskCompletionDelivery(deps: TaskCompletionDeliveryDeps) {
   let disposed = false;
   const current = () => !disposed && deps.isCurrent();
   // A finished notify_when_done request no longer makes the task "delivering" (no report prompt, no suppression).
-  const waiting = (record: TaskCompletionRecord | null) => !!record && (!record.notify || !!record.armed);
+  const waiting = (record: TaskCompletionRecord | null) => !!record
+    && (!record.notify || !!record.armed || !!record.requests?.length);
   const same = (a: BotAutonomyExecution, b: BotAutonomyExecution) =>
     a.instanceId === b.instanceId && a.generation === b.generation;
   const executionKey = (id: string, execution: BotAutonomyExecution) =>
@@ -154,18 +162,33 @@ export function createTaskCompletionDelivery(deps: TaskCompletionDeliveryDeps) {
         const armedFor = (armed: TaskCompletionRecord['armed']) => !!armed && (!armed.after
           || armed.after.instanceId !== input.execution.instanceId || input.execution.generation > armed.after.generation);
         const wanted = saved && (saved.notify ? armedFor(saved.armed) : !!report || armedFor(saved.armed));
-        if (!saved || !current() || !wanted) {
+        const handled = new Set(input.inputClientIds ?? []);
+        const answered = saved?.requests?.filter(request => handled.has(request.inputClientId)) ?? [];
+        if (!saved || !current() || (!wanted && answered.length === 0)) {
           unsettled.delete(key);
           return;
         }
-        if (!saved.receipts.some(receipt => same(receipt.execution, input.execution))) {
+        const baseId = `task-result:${input.sessionId}:${input.execution.instanceId}:${input.execution.generation}`;
+        const missing = (id: string) => !saved.receipts.some(receipt => receipt.id === id);
+        const owed = wanted && !saved.receipts.some(receipt => same(receipt.execution, input.execution) && receipt.id === baseId);
+        if (owed || answered.some(request => missing(`${baseId}:${request.inputClientId}`))) {
           const text = deps.resolveText ? await deps.resolveText(input) : input.text;
           if (!current()) return;
+          const result = { execution: input.execution, text, status: 'pending' as const,
+            ...(input.successful ? {} : { successful: false }) };
           await deps.update(input.sessionId, record => {
-            record.receipts.push({ id: `task-result:${input.sessionId}:${input.execution.instanceId}:${input.execution.generation}`,
-              execution: input.execution, text, status: 'pending', origin: { ...record.origin },
-              ...(input.successful ? {} : { successful: false }) });
-            delete record.armed;
+            if (owed && !record.receipts.some(receipt => receipt.id === baseId)) {
+              record.receipts.push({ id: baseId, ...result, origin: { ...record.origin } });
+              delete record.armed;
+            }
+            for (const request of answered) {
+              const id = `${baseId}:${request.inputClientId}`;
+              if (!record.receipts.some(receipt => receipt.id === id)) record.receipts.push({ id, ...result, origin: { ...request.origin } });
+            }
+            if (record.requests) {
+              record.requests = record.requests.filter(request => !handled.has(request.inputClientId));
+              if (record.requests.length === 0) delete record.requests;
+            }
           });
         }
         unsettled.delete(key);

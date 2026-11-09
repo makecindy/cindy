@@ -10301,8 +10301,6 @@
       "open": "Ouvrir le dossier",
       "openFailed": "Impossible d'ouvrir le dossier du coéquipier.",
       "projectMode": {
-        "title": "Travailler comme un projet (expérimental)",
-        "description": "L'espace de travail du coéquipier devient un projet dans la barre latérale. Son AGENTS.md contient ses propres règles de travail, qu'il peut modifier ; chaque modification est conservée comme une version que vous pouvez annuler.",
         "memoryReviewName": "{{name}} · Ranger la mémoire",
         "carryover": {
           "title": "Repris d'avant la mise à niveau",
