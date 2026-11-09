@@ -20,6 +20,50 @@ function model(
   };
 }
 
+// Regression: direct DeepSeek reference estimates previously used peak rates all day.
+// The existing static tariff tests do not exercise intraday boundaries (unit tier).
+describe('DeepSeek direct reference time bands', () => {
+  it.each([
+    ['2026-11-09T00:59:59.999Z', 0.66], ['2026-11-09T01:00:00Z', 1.32],
+    ['2026-11-09T03:59:59.999Z', 1.32], ['2026-11-09T04:00:00Z', 0.66],
+    ['2026-11-09T05:59:59.999Z', 0.66], ['2026-11-09T06:00:00Z', 1.32],
+    ['2026-11-09T09:59:59.999Z', 1.32], ['2026-11-09T10:00:00Z', 0.66],
+    ['2026-11-14T02:00:00Z', 0.66], ['2027-01-01T02:00:00Z', 0.66],
+    ['2027-02-05T02:00:00Z', 0.66], ['2027-02-14T02:00:00Z', 0.66],
+    ['2027-02-15T02:00:00Z', 1.32], ['2027-10-06T02:00:00Z', 0.66],
+    ['2026-11-09T12:00:00+08:00', 0.66],
+    ['2026-11-09', 1.32], ['2026-11-08T02:00:00Z', 1.32],
+    ['2028-01-01T02:00:00Z', 1.32], ['2027-13-01T04:00:00Z', 1.32],
+    ['2027-02-30T04:00:00Z', 1.32],
+  ])('selects the reference tariff at %s', (at, inputPerMtok) => {
+    const quote = providerReferencePriceQuote('deepseek', 'deepseek-v4-pro',
+      BUNDLED_CATALOG.modelRegistry, { at });
+    expect(quote).toMatchObject({ inputPerMtok, outputPerMtok: inputPerMtok === 1.32 ? 3.96 : 1.98,
+      cacheReadPerMtok: inputPerMtok === 1.32 ? 0.044 : 0.022, approximate: true });
+    expect(quote?.inputTokenPriceBands?.[0].inputPerMtok).toBe(inputPerMtok);
+  });
+
+  it.each(['deepseek-v4-flash', 'deepseek-flash'])('uses Flash off-peak rates for %s', modelId => {
+    expect(providerReferencePriceQuote('deepseek', modelId, BUNDLED_CATALOG.modelRegistry,
+      { at: '2026-11-09T04:00:00Z' })).toMatchObject({ inputPerMtok: 0.15,
+      outputPerMtok: 0.6, cacheReadPerMtok: 0.003 });
+  });
+
+  it('does not apply the policy to Gateway or an independently declared route quote', () => {
+    const registry = structuredClone(BUNDLED_CATALOG.modelRegistry!);
+    const entry = registry.models.find(model => model.modelRef === 'deepseek/deepseek-v4-pro' &&
+      model.routes.some(route => route.providerId === 'deepseek'))!;
+    const route = entry.routes.find(route => route.providerId === 'deepseek')!;
+    const base = registry.baseModels!.find(model => model.id === entry.modelRef)!;
+    route.referencePrices = structuredClone(base.referencePriceGroups![0].prices);
+    expect(providerReferencePriceQuote('deepseek', 'deepseek-v4-pro', registry,
+      { at: '2026-11-09T04:00:00Z' })?.inputPerMtok).toBe(1.32);
+    expect(gatewayPricingCatalog([model('deepseek/deepseek-v4-pro', { currency: 'USD',
+      inputCostPerToken: 0.00000132, outputCostPerToken: 0.00000396 })], 'USD')
+      .xd['deepseek/deepseek-v4-pro'].inputPerMtok).toBeCloseTo(1.32);
+  });
+});
+
 describe('gatewayPricingCatalog', () => {
   it('rejects the whole catalog when the Gateway declares mixed currencies', () => {
     // 混币目录已被 resolveGatewayAccountCurrency 判定不可信(账本随之回退构建币种)。

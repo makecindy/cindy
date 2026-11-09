@@ -2,6 +2,18 @@ import { describe, expect, it, vi } from 'vitest';
 import { BUNDLED_CATALOG, buildUserProvider } from '@cindy/model-providers';
 import { providerReferencePriceQuote, getModelPriceQuote, modelPricingKey } from '../../../shared/modelPriceQuote.js';
 
+const clock = vi.hoisted(() => ({
+  listeners: new Map<string, () => void>(), send: vi.fn(),
+}));
+vi.mock('electron', async importOriginal => {
+  const original = await importOriginal<typeof import('electron')>();
+  return { ...original,
+    app: { ...original.app, on: (event: string, listener: () => void) => clock.listeners.set(event, listener) },
+    powerMonitor: { ...original.powerMonitor, on: (event: string, listener: () => void) => clock.listeners.set(event, listener) },
+    BrowserWindow: { getAllWindows: () => [{ isDestroyed: () => false, webContents: { send: clock.send } }] },
+  };
+});
+
 // Match the production catalog's stable snapshot: rebuilding these providers on every
 // lookup makes each historical projection pay for the same account expansion repeatedly.
 const accountCatalog = { ...BUNDLED_CATALOG, providers: [buildUserProvider({
@@ -45,9 +57,34 @@ vi.mock('../modelPriceOverrideStore.js', () => ({
 }));
 
 import { accountReferencePriceQuote } from '../accountReferencePrice.js';
-import { getReferenceModelPricing, getCodexProviderSubscriptionValuePrice } from '../referenceModelPricing.js';
+import { broadcastReferenceModelPricing, getReferenceModelPricing, getCodexProviderSubscriptionValuePrice } from '../referenceModelPricing.js';
 
 describe('independent subscription account reference prices', () => {
+  // Regression: a cached display stayed on peak prices after 04:00 UTC. This
+  // exercises the real main broadcast, boundary timer and resume/focus recovery (unit).
+  it('refreshes the existing reference snapshot at a boundary and after sleep/clock changes', () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2026-11-09T03:59:59Z'));
+      const input = () => getModelPriceQuote(clock.send.mock.calls.at(-1)?.[1],
+        'deepseek', 'deepseek-v4-pro')?.inputPerMtok;
+      broadcastReferenceModelPricing();
+      expect(input()).toBe(1.32);
+      expect(vi.getTimerCount()).toBe(1);
+      vi.advanceTimersByTime(1000);
+      expect(input()).toBe(0.66);
+      vi.setSystemTime(new Date('2026-11-09T06:30:00Z'));
+      clock.listeners.get('resume')!();
+      expect(input()).toBe(1.32);
+      vi.setSystemTime(new Date('2026-11-09T10:05:00Z'));
+      clock.listeners.get('browser-window-focus')!();
+      expect(input()).toBe(0.66);
+      expect(vi.getTimerCount()).toBe(1);
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
   it.each(['claude-code', 'codex', 'pi'] as const)(
     'resolves MiMo %s prices through the preset while retaining account ownership', (agent) => {
       const model = 'mimo-v2.6-pro';

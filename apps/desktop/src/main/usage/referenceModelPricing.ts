@@ -5,7 +5,8 @@
  * Gateway 的模型与售价由 modelPricing.ts 独占维护，本模块显式拒绝 XD 数据。
  */
 
-import { BrowserWindow } from 'electron';
+import { app, BrowserWindow, powerMonitor } from 'electron';
+import { isDeepseekOffPeak, nextDeepseekPriceChange } from '../../shared/deepseekReferencePrice.js';
 import { notifyUsagePricingChanged } from './pricingChanges.js';
 import type { AgentKind } from '@cindy/model-providers';
 
@@ -39,7 +40,7 @@ export const REFERENCE_MODEL_PRICING_CHANGED_CHANNEL = 'usage:reference-model-pr
 export function getReferenceModelPricing(
   options: { at?: string | Date; overrides?: ModelPriceOverridesSnapshot } = {},
 ): ModelPricingCatalog {
-  const { at } = options;
+  const at = options.at ?? new Date();
   const catalog = getActiveCatalog();
   const registry = catalog.modelRegistry;
   const pricing = registryPricingCatalog(registry, at);
@@ -76,7 +77,33 @@ export function getReferenceModelPricing(
   };
 }
 
+let referencePriceTimer: ReturnType<typeof setTimeout> | undefined;
+let clockListenersInstalled = false;
+let clockBand = false;
+
+function scheduleReferencePriceChange(): void {
+  if (referencePriceTimer) clearTimeout(referencePriceTimer);
+  const now = new Date();
+  clockBand = isDeepseekOffPeak(now);
+  const next = nextDeepseekPriceChange(now);
+  referencePriceTimer = next === undefined ? undefined : setTimeout(
+    broadcastReferenceModelPricing, Math.max(1, next - now.getTime()),
+  );
+  referencePriceTimer?.unref();
+  if (!clockListenersInstalled) {
+    // Resume/focus also cover wall-clock corrections and sleeping past a boundary.
+    const refresh = () => {
+      if (isDeepseekOffPeak(new Date()) !== clockBand) broadcastReferenceModelPricing();
+      else scheduleReferencePriceChange();
+    };
+    powerMonitor.on('resume', refresh);
+    app.on('browser-window-focus', refresh);
+    clockListenersInstalled = true;
+  }
+}
+
 export function broadcastReferenceModelPricing(): void {
+  scheduleReferencePriceChange();
   notifyUsagePricingChanged();
   const pricing = getReferenceModelPricing();
   for (const win of BrowserWindow.getAllWindows()) {

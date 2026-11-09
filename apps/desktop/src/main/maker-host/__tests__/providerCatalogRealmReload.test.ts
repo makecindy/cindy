@@ -39,7 +39,8 @@ const h = vi.hoisted(() => ({
 vi.mock('../../userDataPath.js', () => ({ getUserDataDir: () => os.tmpdir(), userDataPath: (...parts: string[]) => path.join(os.tmpdir(), ...parts) }));
 
 vi.mock('electron', () => ({
-  app: { getPath: () => os.tmpdir() },
+  app: { getPath: () => os.tmpdir(), on: vi.fn() },
+  powerMonitor: { on: vi.fn() },
   BrowserWindow: { getAllWindows: () => [] },
   net: { request: h.request },
 }));

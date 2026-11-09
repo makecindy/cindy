@@ -46,6 +46,19 @@ const SUBSCRIPTION: TurnPricingContext = {
   region: 'global',
 };
 
+// Regression: the real reference quote and its token bands must both switch;
+// changing only the displayed flat rate left the calculator charging peak (unit).
+describe('DeepSeek reference estimate integration', () => {
+  it.each([
+    ['2026-11-09T03:59:59Z', 5.324], ['2026-11-09T04:00:00Z', 2.662],
+  ])('prices input/output/cache consistently at %s', (at, expected) => {
+    const quote = providerReferencePriceQuote('deepseek', 'deepseek-v4-pro',
+      BUNDLED_CATALOG.modelRegistry, { at });
+    expect(computeGatewayTurnCost({ inputTokens: 1_000_000, outputTokens: 1_000_000,
+      cacheReadTokens: 1_000_000, cacheCreateTokens: 0 }, quote)).toBeCloseTo(expected);
+  });
+});
+
 describe('Astra subscription reference estimates', () => {
   const astra = subscriptionDirectPriceQuote(
     'chatgpt/gpt-6-astra', BUNDLED_CATALOG.modelRegistry, 'codex', '2026-09-04',

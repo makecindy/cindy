@@ -5,6 +5,7 @@ import {
   type ModelRegistry,
 } from '@cindy/model-providers';
 
+import { deepseekReferencePriceAt } from './deepseekReferencePrice.js';
 import type { ModelAccessGatewayModel } from './modelAccess.js';
 import {
   type ModelPriceQuote,
@@ -342,11 +343,21 @@ function referencePriceQuoteForVariant(
 ): ModelPriceQuote | undefined {
   // 参考价 registry 的 agent 维度只有 claude-code / codex;Pi(动态 BYOM,按 provider/模型
   // 路由)在此按 agent 无关的参考价解析 —— pi 一律降级为 undefined 传给协议函数。
-  const resolved = resolveModelReferencePrice(registry, providerId, modelId, {
-    ...options,
+  const at = options.at ?? new Date();
+  const selected = resolveModelReferencePrice(registry, providerId, modelId, {
+    ...options, at,
     agent: options.agent === 'pi' ? undefined : options.agent,
   });
-  if (!resolved) return undefined;
+  if (!selected) return undefined;
+  // Only the manufacturer's direct route qualifies. Reseller quotes and Gateway
+  // prices remain untouched, including a route's own explicitly declared tariff.
+  const direct = selected.route.providerId === 'deepseek' &&
+    selected.route.referencePriceGroup === 'global' &&
+    (!selected.route.referencePrices || options.officialOnly);
+  const resolve = (price: typeof selected.price) =>
+    deepseekReferencePriceAt(price, selected.entry.modelRef, at);
+  const resolved = direct ? { ...selected, price: resolve(selected.price),
+    prices: selected.prices.map(resolve) } : selected;
   const day = referencePriceCalendarDate(options.at);
   const variant = options.variant ?? 'standard';
   const inputTokenPriceBands = resolved.prices
