@@ -6,7 +6,9 @@ import path from 'node:path';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { CINDY_SUBAGENT_RUNNER_SOURCE } from '../cindy-subagent-runner-source.js';
+import { subagentRunnerFixtureSource } from './subagent-runner-fixture.js';
+
+const RUNNER_FIXTURE_SOURCE = await subagentRunnerFixtureSource();
 
 /**
  * Every case here spawns a real runner process (and that runner spawns a fake
@@ -33,6 +35,7 @@ import {
   isPiSubagentTerminal,
   stopPiSubagentRunsForAccountBoundary as stopForAccountBoundary,
   listPiSubagentRuns,
+  readPiSubagentTranscriptPage,
   resumePiSubagentRun,
   stopAndRemovePiSubagentRuns,
 } from '../pi-subagent-runs.js';
@@ -72,7 +75,7 @@ function sharedRunnerFile(): Promise<string> {
   sharedRunnerFilePromise ??= (async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), 'cindy-pi-runner-shared-'));
     const file = path.join(dir, 'runner.cjs');
-    await writeFile(file, CINDY_SUBAGENT_RUNNER_SOURCE, { mode: 0o700 });
+    await writeFile(file, RUNNER_FIXTURE_SOURCE, { mode: 0o700 });
     await chmod(file, 0o700);
     return file;
   })();
@@ -216,6 +219,8 @@ async function makeFixture(options: {
   concurrency?: number;
   timeoutMs?: number;
   outputText?: string;
+  assistantMessage?: Record<string, unknown>;
+  model?: string;
   chain?: boolean;
   approval?: boolean;
   cacheQueries?: boolean;
@@ -311,7 +316,7 @@ process.kill = function (pid, signal) {
   if (pid < 0) throw Object.assign(new Error('injected EPERM'), { code: 'EPERM' });
   return originalKill(pid, signal);
 };
-` + CINDY_SUBAGENT_RUNNER_SOURCE, { mode: 0o700 });
+` + RUNNER_FIXTURE_SOURCE, { mode: 0o700 });
   }
   if (options.ignoreStopControl) {
     await writeFile(runnerFile, `
@@ -366,7 +371,7 @@ setTimeout(() => process.exit(0), 60000).unref();
       ${options.retryThenHang ? '' : `process.stdout.write(JSON.stringify({ type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text: ${fixtureOutput} }], usage: { input: 3, output: 2, cost: { total: 0.01 } } } }) + '\\n');
       process.stdout.write(JSON.stringify({ type: 'agent_end' }) + '\\n');
       process.stdout.write(JSON.stringify({ type: 'agent_settled' }) + '\\n');`}`
-        : `process.stdout.write(JSON.stringify({ type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text: ${fixtureOutput} }], usage: { input: 3, output: 2, cost: { total: 0.01 } } } }) + '\\n');
+        : `process.stdout.write(JSON.stringify({ type: 'message_end', message: { role: 'assistant', ...${JSON.stringify(options.assistantMessage ?? { content: [{ type: 'text', text: options.outputText ?? 'fixture result' }], usage: { input: 3, output: 2, cost: { total: 0.01 } } })} } }) + '\\n');
       process.stdout.write(JSON.stringify({ type: 'agent_end' }) + '\\n');
       process.stdout.write(JSON.stringify({ type: 'agent_settled' }) + '\\n');`;
   await writeFile(fakePiFile, `
@@ -542,7 +547,7 @@ process.stdin.on('end', () => {
       tools: 'read,grep,find,ls',
       profilePrompt: options.profilePrompt ?? 'fixture prompt',
       provider: 'fixture',
-      model: 'fixture-model',
+      model: options.model ?? 'fixture-model',
       thinking: 'high',
       cwd: root,
     })),
@@ -599,6 +604,42 @@ afterEach(async () => {
 });
 
 describe('Cindy durable PI Subagent runner', () => {
+  it('projects HY4 child results before publishing durable output, retaining raw transcript and usage', async () => {
+    const fixture = await makeFixture({ assistantMessage: {
+      model: 'hy4',
+      content: [{ type: 'text', text: 'private `</think:6124c78e>` reasoning</think:6124c78e>answer' }],
+      usage: { input: 3, output: 2, cost: { total: 0.01 } },
+    } });
+    await waitForClose(fixture.child, fixture.stderr);
+    const [run] = await listPiSubagentRuns(fixture.root);
+    expect(run.tasks[0].output).toBe('answer');
+    const receipt = JSON.parse(await readFile(path.join(fixture.runDir, 'result.json'), 'utf8'));
+    expect(receipt.tasks[0].output).toBe('answer');
+    expect(run.tasks[0].usage).toMatchObject({ input: 3, output: 2, cost: 0.01 });
+    const transcript = await readFile(path.join(fixture.runDir, 'transcript.jsonl'), 'utf8');
+    expect(transcript).toContain('reasoning</think:6124c78e>answer');
+    const page = await readPiSubagentTranscriptPage(fixture.root, fixture.runId);
+    expect(page.entries.filter(entry => entry.role === 'subagent').map(entry => entry.content)).toEqual(['answer']);
+  });
+
+  it.each([
+    { name: 'inherited HY4 model without response model metadata', model: 'hy4',
+      message: { content: [{ type: 'text', text: 'private</think:6124c78e>answer' }] }, expected: 'answer' },
+    { name: 'native Pi reasoning with literal answer tags', model: 'hy4',
+      message: { content: [{ type: 'thinking', thinking: 'private', thinkingSignature: 'reasoning_content' },
+        { type: 'text', text: 'literal</think:6124c78e>answer' }] }, expected: 'literal</think:6124c78e>answer' },
+    { name: 'actual non-HY4 response overriding an inherited HY4 model', model: 'hy4',
+      message: { model: 'other-model', content: [{ type: 'text', text: 'literal</think:6124c78e>answer' }] },
+      expected: 'literal</think:6124c78e>answer' },
+    { name: 'result budget applies after reasoning is removed', model: 'hy4',
+      message: { content: [{ type: 'text', text: 'private'.repeat(40_000) + '</think:6124c78e>answer' }] }, expected: 'answer' },
+  ])('preserves $name in durable child output', async ({ model, message, expected }) => {
+    const fixture = await makeFixture({ model, assistantMessage: message });
+    await waitForClose(fixture.child, fixture.stderr);
+    const [run] = await listPiSubagentRuns(fixture.root);
+    expect(run.tasks[0].output).toBe(expected);
+  });
+
   /**
    * result.json is a best-effort attachment; status.json is the primary record.
    * Account-boundary recovery may read a valid receipt, but a failure to write it
@@ -935,7 +976,7 @@ describe('Cindy durable PI Subagent runner', () => {
         runtimeSnapshot: {
           modelsJson: Buffer.from('{"providers":{}}\n'),
           bridgeSource: Buffer.from('export default function bridge() {}\n'),
-          runnerSource: Buffer.from(CINDY_SUBAGENT_RUNNER_SOURCE),
+          runnerSource: Buffer.from(RUNNER_FIXTURE_SOURCE),
         },
       };
     }
@@ -1248,7 +1289,7 @@ describe('Cindy durable PI Subagent runner', () => {
     await writeFile(priorConfigPath, `${JSON.stringify(priorConfig)}\n`, { mode: 0o600 });
     const currentModelsJson = Buffer.from('{"providers":{"current-parent":{}}}\n');
     const currentBridgeSource = Buffer.from('export default function currentParentBridge() {}\n');
-    const currentRunnerSource = Buffer.from(CINDY_SUBAGENT_RUNNER_SOURCE);
+    const currentRunnerSource = Buffer.from(RUNNER_FIXTURE_SOURCE);
     const resumedRunId = await resumePiSubagentRun(
       fixture.root,
       first.runId,

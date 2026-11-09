@@ -1,5 +1,6 @@
 import { createRequire } from 'node:module';
 import path from 'node:path';
+import { startPiSubagentRunner } from '@cindy/maker-core/pi-subagent-runner';
 
 interface ParentPortLike {
   postMessage(message: unknown): void;
@@ -33,4 +34,4 @@ try {
 }
 
 process.argv = [process.argv[0], runnerFile, configFile];
-createRequire(__filename)(runnerFile);
+startPiSubagentRunner(createRequire(__filename)(runnerFile));

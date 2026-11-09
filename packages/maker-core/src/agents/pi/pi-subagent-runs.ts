@@ -13,6 +13,7 @@ import * as fs from 'node:fs/promises';
 import path from 'node:path';
 import { createInterface } from 'node:readline';
 import { promisify } from 'node:util';
+import { hy4ContentBlocks } from './hy4-inline-thinking.js';
 
 import type {
   SubagentControlAction,
@@ -1604,7 +1605,10 @@ function clampTranscriptContent(value: string): string {
 
 function transcriptText(message: unknown): string {
   if (!message || typeof message !== 'object' || Array.isArray(message)) return '';
-  const content = (message as { content?: unknown }).content;
+  const record = message as { role?: unknown; model?: unknown; content?: unknown };
+  const content = record.role === 'assistant'
+    ? hy4ContentBlocks(record.model, record.content)
+    : record.content;
   if (!Array.isArray(content)) return '';
   return content
     .map((block) => {

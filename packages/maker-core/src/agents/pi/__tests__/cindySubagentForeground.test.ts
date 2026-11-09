@@ -8,7 +8,9 @@ import { createHmac } from 'node:crypto';
 import ts from 'typescript';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { CINDY_SUBAGENT_RUNNER_SOURCE } from '../cindy-subagent-runner-source.js';
+import { subagentRunnerFixtureSource } from './subagent-runner-fixture.js';
+
+const RUNNER_FIXTURE_SOURCE = await subagentRunnerFixtureSource();
 import { recordPiSubagentRunnerFailure } from '../pi-subagent-runs.js';
 import {
   CINDY_SUBAGENT_ENV,
@@ -58,7 +60,7 @@ async function fixture() {
       ],
     },
   }) + '\n');
-  await writeFile(runnerFile, CINDY_SUBAGENT_RUNNER_SOURCE, { mode: 0o700 });
+  await writeFile(runnerFile, RUNNER_FIXTURE_SOURCE, { mode: 0o700 });
   await writeFile(fakePi, `
 'use strict';
 let buffer = '';

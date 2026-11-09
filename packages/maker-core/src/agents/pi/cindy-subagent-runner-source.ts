@@ -27,6 +27,7 @@ import { createPiCacheInputTracker } from './cache-input.js';
 export const CINDY_SUBAGENT_RUNNER_FILENAME = 'cindy-subagent-runner.cjs';
 
 export const CINDY_SUBAGENT_RUNNER_SOURCE = String.raw`'use strict';
+module.exports = function run(projectContent) {
 
 const { spawn, spawnSync } = require('node:child_process');
 const { createHash, createHmac, randomUUID } = require('node:crypto');
@@ -127,10 +128,10 @@ function deriveRouteProxySessionToken(task) {
     .digest('base64url');
 }
 
-function textOf(message) {
+function textOf(message, model) {
   if (!message || typeof message !== 'object' || !Array.isArray(message.content)) return '';
   const out = [];
-  for (const block of message.content) {
+  for (const block of projectContent(message.model || model, message.content)) {
     if (block && block.type === 'text' && typeof block.text === 'string') out.push(block.text);
   }
   return out.join('');
@@ -957,7 +958,7 @@ function main() {
           return;
         }
         if (event.type === 'message_end' && event.message && event.message.role === 'assistant') {
-          const text = textOf(event.message);
+          const text = textOf(event.message, task.model);
           task.resultReady = event.message.stopReason !== 'toolUse'
             && !(Array.isArray(event.message.content) && event.message.content.some(function (block) {
               return block && block.type === 'toolCall';
@@ -1311,4 +1312,5 @@ function main() {
 }
 
 try { main(); } catch (error) { fail(error && error.stack ? error.stack : String(error)); }
+};
 `;

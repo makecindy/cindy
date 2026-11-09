@@ -11,6 +11,7 @@
     "./customization-scanner": "./src/agents/shared/customization-worker-api.ts",
     "./pi-extension-ui": "./src/agents/pi/extension-ui-capabilities.ts",
     "./pi-subagent-runs": "./src/agents/pi/pi-subagent-runs.ts",
+    "./pi-subagent-runner": "./src/agents/pi/pi-subagent-runner-entry.ts",
     "./skill-scan-limits": "./src/agents/shared/skill-scan-limits.ts"
   },
   "scripts": {

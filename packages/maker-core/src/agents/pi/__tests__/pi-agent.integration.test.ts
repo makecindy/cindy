@@ -28,6 +28,7 @@ import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { PiAgent } from '../index.js';
+import { subagentRunnerFixtureBootstrap } from './subagent-runner-fixture.js';
 import { ANSWER_DELIVERY_PROMPT, PI_ANSWER_DELIVERY_PROMPT } from '@cindy/maker-shared/rich-answer-guide';
 import { PiRpcProcess } from '../rpc-client.js';
 import * as sessionJsonlScan from '../session-jsonl-scan.js';
@@ -335,6 +336,8 @@ function anthropicToolUseBody(toolName: string, input: Record<string, unknown>):
   ]);
 }
 
+const runnerBootstrap = await subagentRunnerFixtureBootstrap();
+
 describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gateway)', () => {
   let server: Server;
   let endpoint = '';
@@ -427,7 +430,7 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
       },
       resolvePiAgentHome: () => agentHome,
       spawnPiSubagentRunner: (request) => {
-        const child = spawn(process.execPath, [request.runnerFile, request.configFile], {
+        const child = spawn(process.execPath, ['-e', runnerBootstrap, request.runnerFile, request.configFile], {
           cwd: request.cwd,
           env: request.env,
           detached: true,

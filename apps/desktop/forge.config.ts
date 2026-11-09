@@ -2266,7 +2266,7 @@ const config: ForgeConfig = {
         },
         {
           entry: 'src/main/cindy-brain/piSubagentRunnerProcess.ts',
-          config: 'vite.preload.config.ts',
+          config: 'vite.node-worker.config.ts',
           // 正式包关闭 RunAsNode；Pi Subagent 后台管理程序通过固定的
           // utility-process 入口执行，开发版和正式包保持同一进程边界。
           target: 'preload',
