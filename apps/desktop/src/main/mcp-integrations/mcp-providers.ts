@@ -160,7 +160,8 @@ import { startGrokDeviceLogin, grokDeviceLoginStatus, cancelGrokDeviceLogin } fr
 export interface DesktopMcpProvidersDeps {
   askUserQuestionAsync?: XdtHelperMcpDeps['askUserQuestionAsync'];
   runtimeCapabilities?: XdtHelperMcpDeps['runtimeCapabilities'];
-  botCapabilities: Pick<ReturnType<typeof createBotCapabilityService>, 'list' | 'select'> & Partial<Pick<ReturnType<typeof createBotCapabilityService>, 'models' | 'setDefaultModel'>>;
+  botCapabilities: Pick<ReturnType<typeof createBotCapabilityService>, 'list' | 'select'> & Partial<Pick<ReturnType<typeof createBotCapabilityService>, 'models' | 'setDefaultModel' | 'inspectConfiguration' | 'updateConfiguration'>>;
+  botAvatar?: import('@cindy/mcps').TeammateAvatarCallbacks;
   createMediaDownloadContext?: CindyGhostsHostDeps['createMediaDownloadContext'];
   /** 当前 Desktop 版本，供 Forge 为具体插件包生成默认 minCindyVersion。 */
   getAppVersion?: () => string;
@@ -1480,6 +1481,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
         }),
       },
       botCapabilities: deps.botCapabilities,
+      botAvatar: deps.botAvatar,
       botSkills: {
         save: async (params) => {
           const saved = botLearningTracker.capture(params.callerSessionId);

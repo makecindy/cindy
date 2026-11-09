@@ -226,11 +226,13 @@ async function syncBotProfileFolder(
   botId: string,
   patch: { identitySource?: string; userContextSource?: string },
   userDataDir = ownerScopedUserDataPath(),
-): Promise<void> {
+): Promise<boolean> {
   try {
     await writeBotProfileFolder(userDataDir, botId, patch);
+    return true;
   } catch (cause) {
     log.warn('write bot profile folder failed', { botId, error: String(cause) });
+    return false;
   }
 }
 import { buildDefaultBotIdentity } from '../../../shared/botProfileDefaults.js';
@@ -1825,7 +1827,8 @@ export async function recoverActiveTeammateInvitations(): Promise<void> {
 
 
 /** Shared image write; callers supply validated bytes, never a remote filesystem path. */
-export async function setBotProfileAvatar(botId: string, image: { buffer: Buffer; mimeType: string }, expectedVersion?: number, expectedAvatar?: string) {
+export async function setBotProfileAvatar(botId: string, image: { buffer: Buffer; mimeType: string }, expectedVersion?: number, expectedAvatar?: string,
+  guard?: { assertCurrent(): void; beforeCommit(): Promise<void>; onCommitted(receipt: { currentVersion: number }, avatar: string): void }) {
   const ownerBoundary = captureBotOperationOwner();
   const client = getDbClient();
   const db = client.drizzle;
@@ -1856,7 +1859,10 @@ export async function setBotProfileAvatar(botId: string, image: { buffer: Buffer
     const clearsFallback = capabilities.cloudAvatarFallback === true;
     delete capabilities.cloudAvatarFallback;
     const now = Date.now();
-    await client.tx('bots.updateProfile', {
+    await guard?.beforeCommit();
+    ownerBoundary.assertCurrent();
+    guard?.assertCurrent();
+    const committed = await client.tx('bots.updateProfile', {
       id: botId,
       avatar: written.url,
       identitySource: version.identitySource,
@@ -1868,6 +1874,7 @@ export async function setBotProfileAvatar(botId: string, image: { buffer: Buffer
       now,
     });
     ownerBoundary.assertCurrent();
+    guard?.onCommitted(committed, written.url);
     const profile = await readProfile(client, botId);
     ownerBoundary.assertCurrent();
     broadcastBotProfileChanged({ botId, change: 'updated' });
@@ -2066,7 +2073,8 @@ export async function prepareImportedBotInvitation(botId: string, requestId: str
 
 /** Shared profile mutation for trusted settings and owner-bound capability selection. */
 export async function updateBotProfile(raw: unknown, expectedVersion?: number,
-  validateAdditions?: (update: BotCapabilityUpdate) => Promise<void>, restored?: RestoredBotOrigin) {
+  validateAdditions?: (update: BotCapabilityUpdate) => Promise<void>, restored?: RestoredBotOrigin,
+  guard?: { assertCurrent(): void; beforeCommit(): Promise<void>; onCommitted(receipt: { currentVersion: number }): void }) {
   const body =
     raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
   const id = readText(body.id, 'botId', 128, true);
@@ -2242,7 +2250,10 @@ export async function updateBotProfile(raw: unknown, expectedVersion?: number,
       // Hold send locks only through persistence/invalidation, not runtime
       // permission refresh, which may wait for the current turn to finish.
       owner.assertCurrent();
-      await client.tx('bots.updateProfile', {
+      await guard?.beforeCommit();
+      owner.assertCurrent();
+      guard?.assertCurrent();
+      const committed = await client.tx('bots.updateProfile', {
         id,
         ...(acceptsModelSelection ? { clearScheduledModelBaseline: true } : {}),
         ...(changesPermissions ? { canonicalPermissionMode: botSessionPermissionMode(normalizedNextConfig) } : {}),
@@ -2264,6 +2275,7 @@ export async function updateBotProfile(raw: unknown, expectedVersion?: number,
           !isManagedBotAvatarUrl(patch.avatar),
         now,
       });
+      guard?.onCommitted(committed);
     });
     owner.assertCurrent();
     if (changesPermissions) {
@@ -2315,7 +2327,10 @@ export async function updateBotProfile(raw: unknown, expectedVersion?: number,
   await ensureBotProfileFolderSeeded(id, nextIdentitySource, normalizedNextConfig, owner.userDataDir);
   owner.assertCurrent();
   if (Object.keys(folderPatch).length > 0) {
-    await syncBotProfileFolder(id, folderPatch, owner.userDataDir);
+    const projected = await syncBotProfileFolder(id, folderPatch, owner.userDataDir);
+    // Target tools must retain the DB receipt and report this partial result.
+    // Do not claim next-turn adoption when the user's SOUL.md still contains old text.
+    if (!projected && guard) throwIpcError('PRECONDITION_FAILED', '配置已保存，但身份文件同步失败');
     owner.assertCurrent();
   }
   if (profileContentChanged || acceptsSavedModel) {

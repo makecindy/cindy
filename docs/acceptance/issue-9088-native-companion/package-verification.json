@@ -1,0 +1,79 @@
+{
+  "source": "Native pack/inspect/import services in isolated temporary data; account registry and global link projection are stubbed.",
+  "packages": [
+    {
+      "name": "companion-designer",
+      "sha256": "0879252a14f92ea51665e28af9cca8b490999ec6cb52030ac8c1f5b7ca819763",
+      "bytes": 8860,
+      "files": [
+        {
+          "relPath": "LICENSE",
+          "size": 11358,
+          "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+        },
+        {
+          "relPath": "references/host-adapters.md",
+          "size": 2144,
+          "sha256": "1334c9c4e37a7df6d75053111cf3097f2c68a4c8dfa1ecf397960b160cc61a0c"
+        },
+        {
+          "relPath": "SKILL.md",
+          "size": 5792,
+          "sha256": "35ce33062736b0f47a82bcfd9b9c8d16f847bf9fae66c92e53c96557cd795fbd"
+        }
+      ]
+    },
+    {
+      "name": "companion-fy",
+      "sha256": "66f78bb5a318da9a843f3d52ae5db3ec4e76b4dc6c6577625a0289e6d680cfe0",
+      "bytes": 515562,
+      "files": [
+        {
+          "relPath": "assets/cindy-reference.png",
+          "size": 119508,
+          "sha256": "12923c15beac4d20e2e12135e71cd2054e99c7aa3327645f0e042373e631dbcd"
+        },
+        {
+          "relPath": "assets/human-reference-01.png",
+          "size": 194728,
+          "sha256": "923fa17bc5ac9c5f4d8d9218a29f5570bd092bad26760d927010a8f862f6b9ad"
+        },
+        {
+          "relPath": "assets/human-reference-02.png",
+          "size": 187817,
+          "sha256": "cd80c47eefaabebe8e47e8b6fef29f48d306b294cd99c71f1502272f2f670a4c"
+        },
+        {
+          "relPath": "LICENSE",
+          "size": 11358,
+          "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+        },
+        {
+          "relPath": "NOTICE",
+          "size": 308,
+          "sha256": "a9d647ca4d86789f1aeab43adc460079e66f597957730344e61a0ae5627c64e0"
+        },
+        {
+          "relPath": "prompts/avatar.md",
+          "size": 3109,
+          "sha256": "c83ef8e7684a1552fcd2cd3a4ecf34f0441376060a697ebf5aa3e95b76a8bda3"
+        },
+        {
+          "relPath": "references/sources.md",
+          "size": 5489,
+          "sha256": "b6190baf67de01d4b9371c1cc2ee67b201581dd6ad46988240e845fa42e35e12"
+        },
+        {
+          "relPath": "scripts/prepare-avatar.mjs",
+          "size": 2479,
+          "sha256": "c6d7550a2e99dcb640610dc746dad26805c695c2e1f693fe8e559013abc016b7"
+        },
+        {
+          "relPath": "SKILL.md",
+          "size": 7652,
+          "sha256": "c64354f64f3c80b77af962b5e68d4620c82b33cc4076df28fe603fd7b802fc26"
+        }
+      ]
+    }
+  ]
+}

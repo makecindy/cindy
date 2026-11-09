@@ -3,7 +3,32 @@ import type { XdtHelperToolRegistry } from "../lizi_xdtHelperToolRegistry.js";
 import type { ControlResult, LiziMcpSessionContext } from "../types.js";
 import { errorPayload, okPayload } from "./_payload.js";
 
+export interface TeammateConfigurationPatch {
+  name?: string;
+  description?: string;
+  identitySource?: string;
+  modelChain?: { id: string; effort?: string; fastMode?: boolean | 'ultrafast' }[] | null;
+  references?: { skills?: string[]; mcpServers?: string[] | null; toolsets?: string[] | null };
+}
+
+export interface TeammateConfiguration {
+  scope: 'local';
+  profile: BotControlState['profile'] & { avatar: string; avatarColor: string };
+  model: { source: 'default' | 'override'; candidates: AppDefaultModelRoute[] | null };
+  references: {
+    skills: string[];
+    mcpServers: { mode: 'inherit' | 'allowlist'; ids: string[] };
+    toolsets: { mode: 'inherit' | 'allowlist'; ids: string[] };
+  };
+  catalog?: { kind: 'skill' | 'mcp' | 'toolset'; status: 'available' | 'unavailable'; message?: string; entries: { id: string; name: string; description: string; available: boolean; joined: boolean }[] };
+  runtime: { profileVersion: number | null; status: string | null; matchesSavedVersion: boolean };
+}
+
 export interface BotCapabilityCallbacks {
+  inspectConfiguration?(params: { callerSessionId: string; botId: string; catalog?: 'skill' | 'mcp' | 'toolset' }): Promise<ControlResult<{ configuration: TeammateConfiguration }, string>>;
+  updateConfiguration?(params: { callerSessionId: string; botId: string; expectedVersion: number; patch: TeammateConfigurationPatch }): Promise<ControlResult<{
+    savedVersion: number; effective: 'next-turn' | 'unconfirmed'; warning?: string;
+  }, string>>;
   models?(params: { callerSessionId: string }): Promise<ControlResult<{
     current: AppDefaultModelRoute | null;
     available: { id: string; route: AppDefaultModelRoute; efforts: string[]; supportsFastMode?: boolean; supportsUltrafastMode?: boolean }[];
@@ -123,6 +148,42 @@ export function registerBotCapabilityTools(
     cindyAvailable?: boolean;
   },
 ): void {
+  const botId = z.string().regex(/^[A-Za-z0-9_-]{1,128}$/).describe('Local stable botId from list_agents.');
+  if (deps.callbacks.inspectConfiguration) registry.register({
+    name: 'inspect_teammate_configuration', category: 'bots',
+    description: '读取本机指定伙伴已保存的资料、版本、模型偏好、能力引用与运行版本。先用 list_agents 获取稳定 id。默认不加载能力目录；需要时用 catalog 单独查询目标的 skill/mcp/toolset，目录失败不隐藏已保存的配置。model.candidates=null 表示跟随默认，可用型号另查 get_app_default_model。普通任务和伙伴均可用，不读取记忆、用户画像或连接凭证。',
+    inputShape: { botId, catalog: z.enum(['skill', 'mcp', 'toolset']).optional() },
+    handler: async (input) => {
+      const callerSessionId = deps.getSessionContext().sessionId;
+      if (!callerSessionId) return errorPayload('NOT_A_BOT_SESSION', '当前调用未绑定伙伴任务');
+      const result = await deps.callbacks.inspectConfiguration!({ ...input, callerSessionId });
+      return result.ok ? okPayload({ configuration: result.configuration }) : errorPayload(result.errorCode, result.message);
+    },
+  });
+  if (deps.callbacks.updateConfiguration) registry.register({
+    name: 'update_teammate_configuration', category: 'bots',
+    description: '按已确定的设计修改指定伙伴。先 inspect_teammate_configuration，提交读取时的 expectedVersion 和局部 patch；冲突后先重新读取，不覆盖新修改。modelChain 使用 get_app_default_model 的有效 id，null 恢复默认。references 只引用已有能力；mcpServers/toolsets 的 null 恢复继承，数组是完整显式名单，省略保持原选择。保存下一轮生效，回执不证明真实工具已装载。不修改权限、记忆、私有技能、例行任务。',
+    inputShape: {
+      botId, expectedVersion: z.number().int().positive(),
+      patch: z.strictObject({
+        name: z.string().trim().min(1).max(200).optional(),
+        description: z.string().max(12000).optional(),
+        identitySource: z.string().max(12000).optional(),
+        modelChain: z.array(z.strictObject({ id: z.string().min(1).max(2048), effort: z.string().max(64).optional(), fastMode: z.union([z.boolean(), z.literal('ultrafast')]).optional() })).min(1).max(5).nullable().optional(),
+        references: z.strictObject({
+          skills: z.array(z.string().min(1).max(512)).max(100).optional(),
+          mcpServers: z.array(z.string().min(1).max(512)).max(100).nullable().optional(),
+          toolsets: z.array(z.string().min(1).max(512)).max(100).nullable().optional(),
+        }).refine(value => Object.values(value).some(item => item !== undefined), '请选择要修改的能力').optional(),
+      }).refine(value => Object.values(value).some(item => item !== undefined), '请选择要修改的配置'),
+    },
+    handler: async (input) => {
+      const callerSessionId = deps.getSessionContext().sessionId;
+      if (!callerSessionId) return errorPayload('NOT_A_BOT_SESSION', '当前调用未绑定伙伴任务');
+      const result = await deps.callbacks.updateConfiguration!({ ...input, callerSessionId });
+      return result.ok ? okPayload({ savedVersion: result.savedVersion, effective: result.effective, ...(result.warning ? { warning: result.warning } : {}) }) : errorPayload(result.errorCode, result.message);
+    },
+  });
   registerAppDefaultModelTools(registry, deps);
   if (deps.callbacks.inspect) registry.register({
     name: "get_teammate_state",

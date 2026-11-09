@@ -116,6 +116,7 @@ import {
 } from '../maker-ipc/botProfileRuntime.js';
 import { collectBotOwnSkillMounts } from '../maker-ipc/botSkillService.js';
 import { buildBotMcpCatalog } from './botMcpCatalog.js';
+import { createBotDesignerHost } from '../maker-ipc/botDesignerHost.js';
 import { createBotCapabilityService, type BotCapabilityServiceDeps, type BotCapabilityUpdate } from '../maker-ipc/botCapabilityService.js';
 import {
   botProfileDir,
@@ -917,8 +918,8 @@ export async function listBotRuntimeMcpServers({ agentKind, remoteHostId }: { ag
   });
 }
 
-function createDesktopBotCapabilityService() {
-  return createBotCapabilityService({
+function desktopBotCapabilityDeps(): BotCapabilityServiceDeps {
+  return {
     getMaker, getPluginRegistry, isBotToolsetAvailable,
     listMcpServers: listBotRuntimeMcpServers,
     readConversationConnections: async (botId) => {
@@ -926,7 +927,11 @@ function createDesktopBotCapabilityService() {
       return _readBotConversationConnections(botId);
     },
     resolveBotAgentKind: async (sessionId, chain) => _resolveBotCapabilityAgentKind?.(sessionId, chain) ?? null,
-  });
+  };
+}
+
+function createDesktopBotCapabilityService() {
+  return createBotCapabilityService(desktopBotCapabilityDeps());
 }
 
 export function listBotCreationCapabilities(input: Parameters<ReturnType<typeof createBotCapabilityService>['forCreation']>[0]) {
@@ -1056,6 +1061,7 @@ export function getMaker(): Maker {
     // 和项目 .claude/settings.json, mtime-based 缓存, 只在 session start 时同步检查。
     const pluginRegistry = createPluginRegistry();
 
+    const designerHost = createBotDesignerHost(desktopBotCapabilityDeps());
     const makerMemoryProviderDeps = {
       runtimeCapabilities: async (context: import('@cindy/mcps').LiziMcpSessionContext, query: AgentCapabilityQuery) => {
         const session = context.sessionId ? _maker?.getSession(context.sessionId) : undefined;
@@ -1090,7 +1096,8 @@ export function getMaker(): Maker {
             .filter(([, value]) => value && typeof value === 'object' && 'supported' in value)),
           hostCapabilitiesNote: '宿主支持的交互能力，不等于有同名 Agent 工具。安装 Cindy 更新须调用 install_app_update，由宿主向用户确认后经内置更新器完成；check_app_update 仅检查更新。' };
       },
-      botCapabilities: createDesktopBotCapabilityService(),
+      botCapabilities: designerHost.capabilities,
+      botAvatar: designerHost.botAvatar,
       createMediaDownloadContext: (sessionId: string, sessionInstanceId: string) => {
         const session = _maker?.getSession(sessionId);
         if (!session || session.instanceId !== sessionInstanceId) return undefined;

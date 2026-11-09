@@ -339,6 +339,8 @@ const ownerWrites = [
   ['cindy_helper', 'continue_workbench_task'],
   ['cindy_helper', 'set_workbench_task_responsibility'],
   ['cindy_helper', 'set_session_runtime'],
+  ['cindy_helper', 'update_teammate_configuration'],
+  ['cindy_helper', 'set_target_teammate_avatar'],
   ['cindy_orca', 'create_worker'],
   ['cindy_orca', 'send_to_worker'],
   ['cindy_orca', 'switch_focus'],
@@ -518,6 +520,41 @@ describe('Owner-delegated scheduled task actions', () => {
 });
 
 describe('Desktop owner input task actions', () => {
+  // Target configuration is also available to ordinary tasks; their bare-allow
+  // shortcut must not discard the fence needed by the final persistence callback.
+  it('retains a final configuration guard for ordinary tasks and rejects a late Plan switch', async () => {
+    const h = desktopFixture('private');
+    h.caller.botId = null; h.caller.source = 'desktop';
+    h.activeInput.permission = { permissionMode: 'auto', planModeEnabled: false, isCurrent: () => true };
+    await withToolCallAuthority(h.authorize, call('update_teammate_configuration'), async () => {
+      const guard = captureTaskActionSyncGuard();
+      expect(guard).toBeTypeOf('function');
+      guard!();
+      h.runtime.stablePlanModeState.enabled = true;
+      expect(guard).toThrow('TASK_ACTION_AUTHORIZATION_EXPIRED');
+    });
+    expect(h.confirm).not.toHaveBeenCalled();
+  });
+
+  // Each tool must be admitted by the guard; the three plan-state sources share
+  // one predicate, so cover its alternate branches with one representative tool.
+  it.each([
+    ...['update_teammate_configuration', 'set_target_teammate_avatar']
+      .map(tool => ({ tool, state: 'plan-permission' })),
+    { tool: 'update_teammate_configuration', state: 'plan-enabled' },
+    { tool: 'update_teammate_configuration', state: 'runtime-plan' },
+  ])('prevents $tool in $state mode even for owner input', async ({tool,state}) => {
+    const h = desktopFixture('private');
+    h.activeInput.permission = { permissionMode: state === 'plan-permission' ? 'plan' : 'auto', planModeEnabled: state === 'plan-enabled', isCurrent: () => true };
+    h.runtime.stablePlanModeState.enabled = state === 'runtime-plan';
+    const effect = vi.fn(async () => 'changed');
+    const result = await withToolCallAuthority(h.authorize, call(tool), effect);
+    expect(result).toMatchObject({ isError: true });
+    expect(JSON.stringify(result)).toContain('TASK_ACTION_PLAN_MODE');
+    expect(effect).not.toHaveBeenCalled();
+    expect(h.confirm).not.toHaveBeenCalled();
+  });
+
   // Owner requests use the live permission flow once; exercise admission and the
   // downstream queue receipt, not only a mode predicate.
   it.each(['bypassPermissions', 'auto', 'ask', 'default', 'acceptEdits'])(

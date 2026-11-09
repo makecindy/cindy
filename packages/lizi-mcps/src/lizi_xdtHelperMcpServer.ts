@@ -1,3 +1,4 @@
+import { registerBotAvatarTools, type TeammateAvatarCallbacks } from './xdt-helper/bot_avatar.js';
 import { registerPiRuntimeTools, type PiRuntimeCallbacks } from './xdt-helper/pi_runtime.js';
 import { createControlReader } from './xdt-helper/control-catalog.js';
 import { registerAppModelsTools, type AppModelsCallbacks } from './xdt-helper/app_models.js';
@@ -189,7 +190,7 @@ export const HELPER_CATEGORY_DESCRIPTIONS: Record<(typeof CATEGORY_ENUM)[number]
   handoff: '给已有任务发消息或新建任务。新建可指定 title；省略 project_path 继承来源归属，传已有项目路径切换项目，传 null 创建不绑项目的任务。执行目录独立，不隐式创建项目。发给已有任务可跨电脑（deviceId::sessionId）；新建的任务与文件仍在本机，新建时可用 agent_device_id 选择 Agent 使用哪台电脑的远程或分享供应商（取 list_available_models 的 locations）。',
   skills: 'Skill 的搜索、发布与学习。本机与 SkillHub。',
   app_update: `检查与安装本机的 ${BRAND_NAME} 更新。本机。`,
-  bots: '伙伴：资料、能力、关联项目（list_teammate_projects / set_teammate_project，仅自身）、工作台、待办、后台任务、伙伴间消息与主力电脑。例行任务用 routine_list / routine_save；schedule_list_models 查可选模型、来源、档位与已知价格，modelOverride 与 sessionMode 设置每条例行任务的模型与运行方式。伙伴间消息（list_agents / send_to_agent）、主力电脑（get_teammate_home / move_teammate_home）、总调度伙伴读取与继续另一台电脑上的任务（read_workbench_task / continue_workbench_task 传 deviceId::sessionId）可跨电脑；其余本机。',
+  bots: '伙伴：本机目标配置（inspect_teammate_configuration / update_teammate_configuration）与头像（set_target_teammate_avatar）、资料、能力、关联项目（list_teammate_projects / set_teammate_project，仅自身）、工作台、待办、后台任务、伙伴间消息与主力电脑。例行任务用 routine_list / routine_save；schedule_list_models 查可选模型、来源、档位与已知价格，modelOverride 与 sessionMode 设置每条例行任务的模型与运行方式。伙伴间消息（list_agents / send_to_agent）、主力电脑（get_teammate_home / move_teammate_home）、总调度伙伴读取与继续另一台电脑上的任务（read_workbench_task / continue_workbench_task 传 deviceId::sessionId）可跨电脑；其余本机。',
 };
 
 interface SessionTaskCallbacks {
@@ -892,6 +893,7 @@ export interface XdtHelperMcpDeps {
   modelSettings?: AppModelsCallbacks;
   appModels?: Pick<BotCapabilityCallbacks, 'models' | 'setDefaultModel'>;
   botCapabilities?: BotCapabilityCallbacks;
+  botAvatar?: TeammateAvatarCallbacks;
   /** Which computer runs a teammate, and moving it to another (cloud companions). */
   teammateHome?: TeammateHomeCallbacks;
   /** What machines this account has and their live resources. */
@@ -1160,6 +1162,9 @@ export function createXdtHelperMcpServer(
   if (deps.appModels && !sessionCtx.remoteHostId) registerAppDefaultModelTools(registry, {
     getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx),
     callbacks: deps.appModels, category: 'settings',
+  });
+  if (deps.botAvatar) registerBotAvatarTools(registry, {
+    getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx), callbacks: deps.botAvatar,
   });
   if (deps.botCapabilities) {
     registerBotCapabilityTools(registry, {

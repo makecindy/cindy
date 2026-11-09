@@ -49,10 +49,12 @@ export * from './browser/index.js';
 export * from './computer/index.js';
 
 
-export { TEAMMATE_CONTROL_GUIDANCE, BOT_CONTROL_GUIDANCE, type BotControlState, type TeammateCapabilityKind } from './xdt-helper/bot_capabilities.js';
+export { TEAMMATE_CONTROL_GUIDANCE, BOT_CONTROL_GUIDANCE, type TeammateConfiguration, type TeammateConfigurationPatch, type BotControlState, type TeammateCapabilityKind } from './xdt-helper/bot_capabilities.js';
 export {
   TEAMMATE_SYSTEM_SKILL_IDS, TEAMMATE_SYSTEM_SKILLS, TEAMMATE_SYSTEM_SKILL_TOOLS, TEAMMATE_CORE_TOPICS,
   teammateDeniedTools, teammateSystemSkillsOff, type TeammateSystemSkillId,
 } from './xdt-helper/teammate_skills.js';
 
 export type { AppModelsRequest } from './xdt-helper/app_models.js';
+
+export { registerBotAvatarTools, type TeammateAvatarCallbacks, type TeammateAvatarInput } from './xdt-helper/bot_avatar.js';

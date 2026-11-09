@@ -1,9 +1,10 @@
-import { assertTaskActionCurrent } from './taskActionAuthorization.js';
+import { assertTaskActionCurrent, captureTaskActionSyncGuard } from './taskActionAuthorization.js';
 import { inspectAppDefaultModel, changeAppDefaultModel } from './appDefaultModelControl.js';
-import type { BotCapabilityCallbacks, BotControlState } from '@cindy/mcps';
-import { and, eq } from 'drizzle-orm';
-import { botProfiles, botProfileVersions, botSessionLinks, sessions } from '../localDb/schema.js';
-import { getDbClient } from '../localDb/client/current.js';
+import { extractIpcError } from '../../shared/ipcError.js';
+import type { BotCapabilityCallbacks, BotControlState, TeammateConfiguration } from '@cindy/mcps';
+import { and, desc, eq } from 'drizzle-orm';
+import { botProfiles, botProfileVersions, botSessionLinks, botRuntimeSnapshots, sessions } from '../localDb/schema.js';
+import { getDbClient, getCurrentDbClientSnapshot } from '../localDb/client/current.js';
 import { updateBotProfile } from '../localDb/ipc/bots.js';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState.js';
 import { listCustomMcpServers } from '../maker-host/custom-mcp-store.js';
@@ -20,6 +21,10 @@ import { authorizeGroupTool, GroupToolAuthorizationError } from './botGroupToolA
 import {
   isBotSystemSkillId, isBotSystemSkillOn, readBotSystemSkillsOff, withBotSystemSkill, type BotSystemSkillId,
 } from '../../shared/botSystemSkills.js';
+
+import { companionHomes } from '../companion-cloud/homes.js';
+import { isSessionSharedTaskActive } from '../device-link/sharedTaskDispatch.js';
+import { SESSION_SOURCES } from '../../shared/sessionSource.js';
 
 type Kind = 'skill' | 'mcp' | 'toolset';
 type Input = { callerSessionId: string; kind: Kind | 'feature' };
@@ -73,6 +78,8 @@ async function context(callerSessionId: string, opts?: { allowPaused?: boolean; 
     .select({
       botId: botProfiles.id,
       displayName: botProfiles.displayName,
+      avatar: botProfiles.avatar,
+      avatarColor: botProfiles.avatarColor,
       description: botProfiles.description,
       identitySource: botProfileVersions.identitySource,
       version: botProfiles.currentVersion,
@@ -291,9 +298,103 @@ async function selectBotCapability(input: Input & { id: string; joined: boolean 
   }
 }
 
+async function resolveModelSelection(selection: Parameters<NonNullable<BotCapabilityCallbacks['updateProfile']>>[0]['modelChain'], assertCurrent: () => void) {
+  let modelChain: BotModelRoute[] | null | undefined;
+  if (selection === null) modelChain = null;
+  else if (selection !== undefined) {
+    const { available } = await inspectAppDefaultModel();
+    assertCurrent();
+    if (!selection.length || selection.length > 5) throwIpcError('INVALID_PARAMS', '请选择一至五个有效模型');
+    const seen = new Set<string>();
+    modelChain = selection.map(selection => {
+      const choice = available.find(item => item.id === selection.id);
+      if (!choice || seen.has(selection.id)
+        || (selection.effort !== undefined && selection.effort !== '' && !choice.efforts.some(effort => effort === selection.effort))
+        || (selection.fastMode && (!choice.supportsFastMode || (selection.fastMode === 'ultrafast' && !choice.supportsUltrafastMode)))) {
+        throwIpcError('INVALID_PARAMS', '所选模型或档位不可用，请重新读取可用型号');
+      }
+      seen.add(selection.id);
+      return { ...choice.route,
+        ...(selection.effort !== undefined ? { effort: selection.effort } : {}),
+        ...(selection.fastMode !== undefined ? { fastMode: selection.fastMode } : {}),
+      };
+    });
+  }
+  return modelChain;
+}
+
+/** Configuration is an account tool, available to ordinary tasks as well as companions.
+ * Shared tasks and group guests cannot use a target id to cross their access boundary. */
+async function configurationCaller(callerSessionId: string) {
+  const owner = activeOwnerScopeKey();
+  const epoch = getCurrentDbClientSnapshot();
+  const assertOwner = () => {
+    if (!epoch || epoch !== getCurrentDbClientSnapshot() || isAppSessionBoundaryPending()
+      || owner !== activeOwnerScopeKey() || isSessionSharedTaskActive(callerSessionId))
+      throwIpcError('PRECONDITION_FAILED', '当前任务或账号的访问范围已变化');
+  };
+  assertOwner();
+  const [row] = await getDbClient().drizzle.select({ source: sessions.source, status: sessions.status, remoteHostId: sessions.remoteHostId })
+    .from(sessions).where(eq(sessions.id, callerSessionId)).limit(1);
+  assertOwner();
+  if (!row || row.status !== 'active' || row.source === 'shared' || row.remoteHostId
+    || !SESSION_SOURCES.includes(row.source)) throwIpcError('PRECONDITION_FAILED', '请在账号自己的本机任务中管理伙伴');
+  const bot = row.source === 'bot' ? await context(callerSessionId, { readScope: 'owner' }) : null;
+  const assertCurrent = () => { assertOwner(); bot?.assertOwner(); };
+  assertCurrent();
+  return { assertOwner: assertCurrent, refresh: async () => {
+    assertCurrent(); await configurationCaller(callerSessionId); assertCurrent();
+  } };
+}
+
+function assertConfigurationHome(botId: string) {
+  if (companionHomes.isShadowed(botId) || !companionHomes.isHomeHere(botId))
+    throwIpcError('PRECONDITION_FAILED', '请在伙伴的主力电脑上打开任务后修改配置');
+}
+
 /** Host callbacks are bound at initialization, without importing the host singleton. */
 export function createBotCapabilityService(deps: BotCapabilityServiceDeps) {
+  function configurationError(error: unknown) {
+    if (error instanceof GroupToolAuthorizationError)
+      return { ok: false as const, errorCode: error.code, message: error.message };
+    const ipc = extractIpcError(error);
+    if (ipc && ['INVALID_PARAMS', 'PRECONDITION_FAILED', 'NOT_FOUND', 'ALREADY_EXISTS'].includes(ipc.code))
+      return { ok: false as const, errorCode: ipc.code, message: ipc.message };
+    return { ok: false as const, errorCode: 'BOT_CONFIGURATION_UNAVAILABLE',
+      message: '无法访问该伙伴配置或目标运行条件不可用，请检查伙伴所在电脑、状态和调用范围' };
+  }
+
   return {
+    /** Capture the action guard before any await; it belongs to this invocation only. */
+    async admitConfiguration(callerSessionId: string, intent: 'read' | 'write' = 'write') {
+      const commitGuard = intent === 'write' ? captureTaskActionSyncGuard() : undefined;
+      const caller = await configurationCaller(callerSessionId);
+      if (intent === 'write') await assertTaskActionCurrent();
+      return { assertCurrent: caller.assertOwner, assertCommit: () => { caller.assertOwner(); commitGuard?.(); }, refresh: async () => {
+        await caller.refresh();
+        if (intent === 'write') await assertTaskActionCurrent();
+        caller.assertOwner();
+      } };
+    },
+    async inspectConfiguration(input: { callerSessionId: string; botId: string; catalog?: Kind }) {
+      try {
+        const caller = await configurationCaller(input.callerSessionId);
+        const configuration = await createBotConfigurationTargetService(deps).inspect({ ...input, assertCurrent: caller.assertOwner });
+        await caller.refresh();
+        return { ok: true as const, configuration };
+      } catch (error) { return configurationError(error); }
+    },
+    async updateConfiguration(input: Parameters<NonNullable<BotCapabilityCallbacks['updateConfiguration']>>[0]) {
+      const commitGuard = captureTaskActionSyncGuard();
+      try {
+        const caller = await configurationCaller(input.callerSessionId);
+        await caller.refresh(); await assertTaskActionCurrent();
+        const receipt = await createBotConfigurationTargetService(deps).update({ ...input, assertCurrent: caller.assertOwner,
+          assertCommit: () => { caller.assertOwner(); commitGuard?.(); },
+          beforeCommit: async () => { await caller.refresh(); await assertTaskActionCurrent(); } });
+        caller.assertOwner(); return { ok: true as const, ...receipt };
+      } catch (error) { return configurationError(error); }
+    },
     async models(input: { callerSessionId: string }) {
       try {
         const ctx = await context(input.callerSessionId, { readScope: 'owner' });
@@ -352,27 +453,7 @@ export function createBotCapabilityService(deps: BotCapabilityServiceDeps) {
       try {
         const ctx = await context(input.callerSessionId);
         if (ctx.version !== input.expectedVersion) throw new Error('Profile changed');
-        let modelChain: BotModelRoute[] | null | undefined;
-        if (input.modelChain === null) modelChain = null;
-        else if (input.modelChain !== undefined) {
-          const { available } = await inspectAppDefaultModel();
-          ctx.assertOwner();
-          if (!input.modelChain.length || input.modelChain.length > 5) throw new Error('Invalid model chain');
-          const seen = new Set<string>();
-          modelChain = input.modelChain.map(selection => {
-            const choice = available.find(item => item.id === selection.id);
-            if (!choice || seen.has(selection.id)
-              || (selection.effort !== undefined && selection.effort !== '' && !choice.efforts.some(effort => effort === selection.effort))
-              || (selection.fastMode && (!choice.supportsFastMode || (selection.fastMode === 'ultrafast' && !choice.supportsUltrafastMode)))) {
-              throw new Error('Model route or settings are unavailable');
-            }
-            seen.add(selection.id);
-            return { ...choice.route,
-              ...(selection.effort !== undefined ? { effort: selection.effort } : {}),
-              ...(selection.fastMode !== undefined ? { fastMode: selection.fastMode } : {}),
-            };
-          });
-        }
+        const modelChain = await resolveModelSelection(input.modelChain, ctx.assertOwner);
         ctx.assertOwner();
         await updateBotProfile({ id: ctx.botId,
           // Supplying a model selection explicitly accepts it even when its
@@ -408,31 +489,127 @@ export function createBotCapabilityService(deps: BotCapabilityServiceDeps) {
       return catalog(input, ctx, deps);
     },
     select: (input: Input & { id: string; joined: boolean }) => selectBotCapability(input, deps),
-    /** Renderer saves may contain stale selections; validate only new references before persistence. */
-    async validateAdditions(update: BotCapabilityUpdate): Promise<void> {
-      const additions = (Object.keys(fields) as Kind[]).map((kind) => {
-        const field = fields[kind].list;
-        const previous = new Set(strings(update.previous[field]));
-        return { kind, ids: strings(update.next[field]).filter((id) => !previous.has(id)) };
-      }).filter((entry) => entry.ids.length > 0);
-      if (additions.length === 0) return;
-      try {
-        if (!update.canonicalSessionId) throw new Error('Missing canonical task');
-        // Settings remain editable while paused; model-initiated list/select stay active-only.
-        const ctx = await context(update.canonicalSessionId, { allowPaused: true });
-        if (ctx.botId !== update.botId) throw new Error('Canonical task owner mismatch');
-        const modelChain = await readEffectiveBotModelChain(update.next);
-        for (const { kind, ids } of additions) {
-          const entries = await catalog({ callerSessionId: update.canonicalSessionId, kind }, ctx, deps,
-            { modelChain, forceReload: true });
-          if (ids.some((id) => !entries.some((entry) => entry.id === id && entry.available))) {
-            throw new Error('Capability unavailable');
-          }
-        }
-        ctx.assertOwner();
-      } catch {
-        throwIpcError('PRECONDITION_FAILED', '所选能力已不可用或伙伴状态已变化，请刷新后重试');
+    validateAdditions: (update: BotCapabilityUpdate) => validateBotCapabilityAdditions(update, deps),
+  };
+}
+
+/** Renderer saves may contain stale selections; validate only new references before persistence. */
+async function validateBotCapabilityAdditions(update: BotCapabilityUpdate, deps: BotCapabilityServiceDeps): Promise<void> {
+  const additions = (Object.keys(fields) as Kind[]).map((kind) => {
+    const field = fields[kind].list;
+    const previous = new Set(strings(update.previous[field]));
+    return { kind, ids: strings(update.next[field]).filter((id) => !previous.has(id)) };
+  }).filter((entry) => entry.ids.length > 0);
+  if (additions.length === 0) return;
+  try {
+    if (!update.canonicalSessionId) throw new Error('Missing canonical task');
+    // Settings remain editable while paused; model-initiated list/select stay active-only.
+    const ctx = await context(update.canonicalSessionId, { allowPaused: true });
+    if (ctx.botId !== update.botId) throw new Error('Canonical task owner mismatch');
+    const modelChain = await readEffectiveBotModelChain(update.next);
+    for (const { kind, ids } of additions) {
+      const entries = await catalog({ callerSessionId: update.canonicalSessionId, kind }, ctx, deps,
+        { modelChain, forceReload: true });
+      if (ids.some((id) => !entries.some((entry) => entry.id === id && entry.available))) {
+        throw new Error('Capability unavailable');
       }
+    }
+    ctx.assertOwner();
+  } catch {
+    throwIpcError('PRECONDITION_FAILED', '所选能力已不可用或伙伴状态已变化，请刷新后重试');
+  }
+}
+
+type TargetInput = { botId: string; assertCurrent(): void; assertCommit?: () => void; beforeCommit?: () => Promise<void> };
+
+/** Target admission uses the current account's canonical task and local execution route. */
+export async function readBotConfigurationContext(input: TargetInput) {
+  input.assertCurrent();
+  assertConfigurationHome(input.botId);
+  if (!/^[A-Za-z0-9_-]{1,128}$/.test(input.botId)) throwIpcError('INVALID_PARAMS', '请选择本机伙伴的 botId');
+  const [profile] = await getDbClient().drizzle.select({ canonicalSessionId: botProfiles.canonicalSessionId, status: botProfiles.status })
+    .from(botProfiles).where(eq(botProfiles.id, input.botId)).limit(1);
+  input.assertCurrent();
+  if (!profile || profile.status === 'archived') throwIpcError('NOT_FOUND', '找不到目标伙伴');
+  if (!profile.canonicalSessionId) throwIpcError('PRECONDITION_FAILED', '伙伴主任务尚未准备好');
+  const ctx = await context(profile.canonicalSessionId, { allowPaused: true });
+  input.assertCurrent();
+  if (ctx.botId !== input.botId || ctx.canonicalSessionId !== profile.canonicalSessionId || ctx.role !== 'canonical')
+    throwIpcError('PRECONDITION_FAILED', '伙伴主任务已变化，请重新读取');
+  if (ctx.remoteHostId) throwIpcError('INVALID_PARAMS', '目标伙伴不在本机运行');
+  return ctx;
+}
+
+export function createBotConfigurationTargetService(deps: BotCapabilityServiceDeps) {
+  return {
+    async inspect(input: TargetInput & { catalog?: Kind }): Promise<TeammateConfiguration> {
+      const ctx = await readBotConfigurationContext(input);
+      // Basic saved state never waits for model, skill or connection discovery. A single
+      // requested catalog may degrade independently, without hiding the repair surface.
+      let requestedCatalog: TeammateConfiguration['catalog'];
+      if (input.catalog) {
+        try {
+          const modelChain = await readEffectiveBotModelChain(ctx.config);
+          const entries = await catalog({ callerSessionId: ctx.canonicalSessionId!, kind: input.catalog }, ctx, deps, { modelChain });
+          requestedCatalog = { kind: input.catalog, status: 'available', entries };
+        } catch {
+          requestedCatalog = { kind: input.catalog, status: 'unavailable', entries: [], message: '能力目录暂不可用；已保存的引用仍保留，可先修复资料或模型选择。' };
+        }
+        input.assertCurrent();
+      }
+      const [snapshot] = await getDbClient().drizzle.select({ profileVersion: botRuntimeSnapshots.profileVersion, status: botRuntimeSnapshots.status })
+        .from(botRuntimeSnapshots).where(eq(botRuntimeSnapshots.sessionId, ctx.canonicalSessionId!))
+        .orderBy(desc(botRuntimeSnapshots.preparedAt), desc(botRuntimeSnapshots.appliedAt)).limit(1);
+      const current = await readBotConfigurationContext(input);
+      if (current.version !== ctx.version || current.avatar !== ctx.avatar)
+        throwIpcError('PRECONDITION_FAILED', '伙伴配置已变化，请重新读取');
+      const explicit = readExplicitBotModelChain(ctx.config);
+      return { scope: 'local',
+        profile: { id: ctx.botId, name: ctx.displayName, description: ctx.description, identitySource: ctx.identitySource,
+          version: ctx.version, avatar: ctx.avatar, avatarColor: ctx.avatarColor },
+        model: { source: explicit === null ? 'default' : 'override', candidates: explicit },
+        references: { skills: strings(ctx.config.skills),
+          mcpServers: { mode: ctx.config.mcpMode === 'inherit' ? 'inherit' : 'allowlist', ids: strings(ctx.config.mcpServers) },
+          toolsets: { mode: ctx.config.toolsetMode === 'inherit' ? 'inherit' : 'allowlist', ids: strings(ctx.config.toolsets) } },
+        ...(requestedCatalog ? { catalog: requestedCatalog } : {}),
+        runtime: { profileVersion: snapshot?.profileVersion ?? null, status: snapshot?.status ?? null,
+          matchesSavedVersion: snapshot?.status === 'applied' && snapshot.profileVersion === ctx.version } };
+    },
+    async update(input: TargetInput & { expectedVersion: number; patch: import('@cindy/mcps').TeammateConfigurationPatch }) {
+      const ctx = await readBotConfigurationContext(input);
+      if (!Number.isInteger(input.expectedVersion) || input.expectedVersion < 1) throwIpcError('INVALID_PARAMS', '请先读取目标版本');
+      if (input.expectedVersion !== ctx.version) throwIpcError('PRECONDITION_FAILED', '伙伴配置已变化，请重新读取');
+      const modelChain = await resolveModelSelection(input.patch.modelChain, input.assertCurrent);
+      const references = input.patch.references;
+      const capabilities: Record<string, unknown> = {};
+      if (modelChain !== undefined) Object.assign(capabilities, { modelChainOverride: modelChain, modelOverride: null });
+      for (const kind of ['mcp', 'toolset'] as const) {
+        const field = fields[kind];
+        const value = kind === 'mcp' ? references?.mcpServers : references?.toolsets;
+        if (value !== undefined) Object.assign(capabilities, { [field.mode]: value === null ? 'inherit' : 'allowlist', [field.list]: value ?? [] });
+      }
+      let savedVersion: number | undefined;
+      try { await updateBotProfile({ id: input.botId,
+        ...(input.patch.name !== undefined ? { name: input.patch.name } : {}),
+        ...(input.patch.description !== undefined ? { description: input.patch.description } : {}),
+        ...(input.patch.identitySource !== undefined ? { identitySource: input.patch.identitySource } : {}),
+        ...(references?.skills !== undefined ? { skills: references.skills } : {}),
+        ...(modelChain !== undefined ? { acceptSavedModelSelectionVersion: input.expectedVersion } : {}),
+        ...(Object.keys(capabilities).length ? { capabilities } : {}),
+      }, input.expectedVersion, async update => {
+        await validateBotCapabilityAdditions(update, deps); input.assertCurrent();
+      }, undefined, {
+        assertCurrent: () => { input.assertCurrent(); input.assertCommit?.(); assertConfigurationHome(input.botId); },
+        beforeCommit: async () => { await input.beforeCommit?.(); await readBotConfigurationContext(input); },
+        onCommitted: receipt => { savedVersion = receipt.currentVersion; },
+      }); } catch (error) {
+        input.assertCurrent();
+        if (savedVersion === undefined) throw error;
+        return { savedVersion, effective: 'unconfirmed' as const, warning: '配置已保存，但后续同步未完成。请重新读取并检查运行状态，不要重放写入。' };
+      }
+      input.assertCurrent();
+      if (savedVersion === undefined) throwIpcError('PRECONDITION_FAILED', '配置写入尚未确认，请重新读取');
+      return { savedVersion, effective: 'next-turn' as const };
     },
   };
 }

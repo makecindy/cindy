@@ -1,0 +1,2 @@
+# Skill source hashes and packaged bytes must survive Windows checkout unchanged.
+skills/** -text

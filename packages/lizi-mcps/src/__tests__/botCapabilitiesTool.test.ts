@@ -144,3 +144,51 @@ it('accepts scoped model chains and reset through the existing profile tool with
   expect((await registry.call('update_teammate_profile', { expectedVersion: 3, modelChain: null })).isError).not.toBe(true);
   expect(updateProfile).toHaveBeenLastCalledWith({ callerSessionId: 'self', expectedVersion: 3, modelChain: null });
 });
+
+describe('Target teammate configuration tools', () => {
+  it('binds the host caller, restricts patches and preserves target version conflicts', async () => {
+    const registry = new XdtHelperToolRegistry();
+    const inspectConfiguration = vi.fn(async () => ({ ok: false as const, errorCode: 'NOT_FOUND', message: 'missing' }));
+    const updateConfiguration = vi.fn(async () => ({ ok: false as const, errorCode: 'PRECONDITION_FAILED', message: 'changed' }));
+    registerBotCapabilityTools(registry, {
+      getSessionContext: () => ({ sessionId: 'designer', agentKind: 'pi', workingDir: '/w' }),
+      callbacks: { ...fixture().callbacks, inspectConfiguration, updateConfiguration },
+    });
+    expect(registry.list('bots').map(item => item.name)).toEqual(expect.arrayContaining(['inspect_teammate_configuration', 'update_teammate_configuration']));
+    await registry.call('inspect_teammate_configuration', { botId: 'target' });
+    expect(inspectConfiguration).toHaveBeenCalledWith({ botId: 'target', callerSessionId: 'designer' });
+    for (const input of [
+      { botId: 'target', patch: { name: 'Missing version' } },
+      { botId: 'target', expectedVersion: 1, patch: {} },
+      { botId: 'target', expectedVersion: 1, patch: { capabilities: { permissions: 'trusted' } } },
+      { botId: 'target', expectedVersion: 1, patch: { references: {} } },
+      { botId: 'target', expectedVersion: 1, patch: { name: 'New' }, callerSessionId: 'spoofed' },
+    ]) expect((await registry.call('update_teammate_configuration', input)).isError).toBe(true);
+    expect(updateConfiguration).not.toHaveBeenCalled();
+    expect((await registry.call('update_teammate_configuration', { botId: 'device::target', expectedVersion: 1, patch: { name: 'New' } })).isError).toBe(true);
+    expect(updateConfiguration).not.toHaveBeenCalled();
+    const patch = { description: '', references: { mcpServers: null } };
+    const result = await registry.call('update_teammate_configuration', { botId: 'target', expectedVersion: 2, patch });
+    expect(updateConfiguration).toHaveBeenCalledWith({ callerSessionId: 'designer', botId: 'target', expectedVersion: 2, patch });
+    expect(result).toMatchObject({ isError: true, content: [{ type: 'text', text: JSON.stringify({ ok: false, errorCode: 'PRECONDITION_FAILED', data: { hint: 'changed' } }) }] });
+  });
+});
+
+
+/** C4: real registry entry binds source identity, rejects URLs/forged callers and returns the saved avatar receipt (unit). */
+import { registerBotAvatarTools } from '../xdt-helper/bot_avatar.js';
+it('binds a task-owned candidate to a stable target with both configuration and avatar preconditions', async () => {
+  const registry = new XdtHelperToolRegistry();
+  const set = vi.fn(async () => ({ ok: true as const, target: 'bot', avatar: `cindy-media://blobs/${'b'.repeat(64)}.jpg`, profileVersion: 4, imageFormat: '256px-png' as const }));
+  registerBotAvatarTools(registry, { getSessionContext: () => ({ sessionId: 'designer', agentKind: 'codex', workingDir: '/w' }), callbacks: { set } });
+  const input = { target: 'bot', imageSource: `cindy-media://blobs/${'a'.repeat(64)}.png`, expectedVersion: 3, expectedAvatar: '🤖' };
+  const result = await registry.call('set_target_teammate_avatar', input);
+  expect(set).toHaveBeenCalledWith({ ...input, callerSessionId: 'designer' });
+  expect(result.isError).not.toBe(true);
+  expect(JSON.parse((result.content[0] as { text: string }).text)).toMatchObject({ ok: true, imageFormat: '256px-png', profileVersion: 4 });
+  set.mockClear();
+  for (const change of [{ imageSource: 'https://example.org/generated.png' }, { callerSessionId: 'forged' }]) {
+    expect((await registry.call('set_target_teammate_avatar', { ...input, ...change })).isError).toBe(true);
+  }
+  expect(set).not.toHaveBeenCalled();
+});
