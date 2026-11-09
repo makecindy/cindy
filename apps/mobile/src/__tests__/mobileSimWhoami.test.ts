@@ -33,12 +33,19 @@ const nativeWorkflowStart = whoamiSource.indexOf('const native =');
 if (nativeWorkflowStart < 0) throw new Error('Missing whoami native reporting workflow');
 const nativeWorkflow = `(async () => { ${whoamiSource.slice(nativeWorkflowStart)} })()`;
 
-async function reportNativeIdentity({ platform = 'android', readError, installedHash = 'a'.repeat(40), jsonOutput = false } = {}) {
+async function reportNativeIdentity({ platform = 'android', readError, installedHash = 'a'.repeat(40),
+  apkEntries = ['assets/fingerprint'], jsonOutput = false } = {}) {
   const lines = [];
   const log = (...args) => lines.push(args.join(' '));
   const processStub = { env: {}, exitCode: 0 };
-  const read = () => {
+  const read = (_path, args = []) => {
     if (readError) throw Object.assign(new Error('private adb output'), { code: readError });
+    if (args.includes('-l')) return 'Archive: /installed/app\n  Length      Date    Time    Name\n'
+      + apkEntries.map((entry) => `       40  2026-01-01 00:00   ${entry}`).join('\n')
+      + `\n---------                     -------\n       40                     ${apkEntries.length} files`;
+    if (platform === 'android' && !apkEntries.includes('assets/fingerprint')) {
+      throw Object.assign(new Error('private unzip output: filename not matched'), { status: 11 });
+    }
     return installedHash;
   };
   await runInNewContext(nativeWorkflow, {
@@ -90,11 +97,21 @@ describe('mobile:sim:whoami native recovery guidance', () => {
   it.each([
     { platform: 'android', installedHash: 'b'.repeat(40) },
     { platform: 'android', installedHash: '' },
+    // PR #9475: unlike an empty successful read, unzip may exit nonzero for a
+    // missing entry. Unit: real reader/reporting, injected process boundary;
+    // a similarly named archive member must not hide the missing fingerprint.
+    { platform: 'android', apkEntries: ['assets/fingerprint.backup'] },
     { platform: 'ios', readError: 'ENOENT' },
   ])('still recommends rebuilding an incompatible or fingerprint-less package: %j', async (options) => {
     const result = await reportNativeIdentity(options);
     expect(result.exitCode).toBe(1);
     expect(result.output).toContain('请运行 pnpm mobile:sim:rebuild');
+    if (options.apkEntries) {
+      const json = await reportNativeIdentity({ ...options, jsonOutput: true });
+      expect(json.exitCode).toBe(1);
+      expect(json.json.native.reason).toBe('installed-fingerprint-missing');
+      expect(result.output + json.output).not.toContain('private unzip output');
+    }
   });
 });
 

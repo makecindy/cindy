@@ -154,7 +154,19 @@ export function inspectAndroidInstalledApp({ adb, serial, packageName, run = run
 export function readAndroidInstalledFingerprint({ adb, serial, apk, run = runAndroidProbe }) {
   // adb shell joins its arguments into a shell command, so quote the package-manager path.
   const quotedApk = `'${apk.replaceAll("'", "'\\''")}'`;
-  return run(adb, ['-s', serial, 'shell', 'unzip', '-p', quotedApk, 'assets/fingerprint']);
+  const unzip = ['-s', serial, 'shell', 'unzip'];
+  try {
+    return run(adb, [...unzip, '-p', quotedApk, 'assets/fingerprint']);
+  } catch (error) {
+    if (error?.code !== 'ANDROID_PROBE_FAILED') throw error;
+    // Some unzip implementations fail for an unmatched entry instead of
+    // returning empty output. Only a successful APK listing proves absence;
+    // a corrupt/unreadable archive or a failed listing must remain a failure.
+    const entries = run(adb, [...unzip, '-l', quotedApk]).split(/\r?\n/)
+      .map((line) => line.match(/^\s*\d+\s+\S+\s+\S+\s+(.+)$/)?.[1].trim()).filter(Boolean);
+    if (entries.length > 0 && !entries.includes('assets/fingerprint')) return '';
+    throw error;
+  }
 }
 
 function runText(execFile, command, args) {

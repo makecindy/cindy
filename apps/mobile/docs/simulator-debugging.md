@@ -36,6 +36,9 @@ They read the resolved `android.package`, installed version/debug flag and the A
 the Metro worktree/source/environment checks. Failed adb reads remain failures;
 APK fingerprint timeouts/unreadable results keep a distinct `native.reason` and
 ask you to repair adb/fingerprint reads and retry, without recommending a rebuild.
+If extracting the fingerprint exits unsuccessfully, a successful archive listing
+that lacks the exact `assets/fingerprint` entry identifies a missing fingerprint
+and recommends rebuilding. Failed listings remain probe failures.
 Multiple online emulators require an explicit serial. Physical phones are not selected.
 `--viewer` remains iOS-only: Android window and page verification requires a real screenshot.
 `mobile:sim:up` is still iOS-only; Windows uses `start` and `rebuild` separately.

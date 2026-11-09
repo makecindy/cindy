@@ -67,6 +67,22 @@ describe('Android whoami read-only probes', () => {
       .toBe('a'.repeat(40));
     expect(run).toHaveBeenCalledWith('adb', ['-s', 'emulator-5556', 'shell', 'unzip', '-p', "'/data/app/pkg/base.apk'", 'assets/fingerprint']);
   });
+
+  // PR #9475: the failed-extraction fallback must prove absence, not turn a
+  // corrupt archive or a failed/empty listing into a rebuild recommendation.
+  // Unit: real reader/probe with only the child-process boundary injected.
+  it.each(['present', 'empty', 'failed'])('preserves read failure when the APK listing is %s', (listing) => {
+    const execFile = (_adb, args) => {
+      if (args.includes('-l') && listing !== 'failed') {
+        return listing === 'empty' ? '' : '       40  2026-01-01 00:00   assets/fingerprint\n';
+      }
+      throw Object.assign(new Error('private archive diagnostics'), { status: 1 });
+    };
+    expect(() => readAndroidInstalledFingerprint({
+      adb: 'adb', serial: 'emulator-5556', apk: '/data/app/pkg/base.apk',
+      run: (adb, args) => runAndroidProbe(adb, args, execFile),
+    })).toThrow(expect.objectContaining({ code: 'ANDROID_PROBE_FAILED' }));
+  });
 });
 
 describe('Windows Android 模拟器参数', () => {
