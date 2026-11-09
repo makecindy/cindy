@@ -266,6 +266,8 @@ import {
 import { resolveRemoteClaudeRoute } from './remote-claude-route.js';
 import { resolveDesktopClaudeSubagentModelAccess } from './subagent-model-access.js';
 import { resolveDesktopPiSubagentModelExecutionPolicy } from './subagent-model-execution-policy-host.js';
+import { getOrCreateSubagentModelSigningKey } from './subagent-model-signing-key-store.js';
+import { subagentModelSpendFilePath } from './subagent-model-spend.js';
 import { claudeSubagentUsageBridge } from './claude-subagent-usage-bridge.js';
 import { createAutoPermissionReviewer } from './auto-permission-reviewer.js';
 import { createToolLoopReviewer } from './tool-loop-reviewer.js';
@@ -2578,6 +2580,12 @@ export function getMaker(): Maker {
       },
       resolvePiRuntimeModels: () => deriveAvailableModels(getDesktopSelectableCatalog(), 'pi'),
       resolvePiSubagentModelExecutionPolicy: resolveDesktopPiSubagentModelExecutionPolicy,
+      // fail-closed:拿不到 key 路径时扩展/runner 没有校验材料,只会导致拒绝派发,
+      // 不会退化为不鉴权。
+      resolvePiSubagentModelExecutionFiles: () => {
+        const { filePath: keyFile } = getOrCreateSubagentModelSigningKey();
+        return { keyFile, spendFile: subagentModelSpendFilePath() };
+      },
       resolvePiRuntimeModelDescriptor: (providerId, modelId) =>
         resolvePiRuntimeModelDescriptor(getDesktopSelectableCatalog(), providerId, modelId, {
           localOverrides: getLocalCatalogOverridesSnapshot(),

@@ -14,6 +14,9 @@ import { addRegionalMoney, legacyUsdMoney, normalizeRegionalMoney } from '../../
 import { createLogger } from '../logger.js';
 import type { TurnUsageContext } from './turnUsageContext.js';
 import type { Session } from '@cindy/maker-core';
+import { approvalSpendKey, isWithinProject, type ModelExecutionPolicySnapshot } from '@cindy/maker-core';
+import { readSubagentModelApprovals } from '../maker-host/subagent-model-approvals-store.js';
+import { addSubagentModelSpend } from '../maker-host/subagent-model-spend.js';
 
 const log = createLogger('pi-usage');
 const pending = new Set<Promise<unknown>>();
@@ -141,9 +144,71 @@ async function persistPiUsageReceipts(owner: PiUsageOwner, sessionId: string, us
   const result = await db.tx('usage.recordPiUsage', priced);
   if (!result.changed) return;
   const hasCost = priced.some(row => row.actualCost && row.amount !== null && row.amount > 0);
+  // P1-7: maxCostUsd 记账 —— 只有本 session / 项目命中带成本上限的已签 approval 时才累计
+  // (无上限审批不入账,常见路径零开销)。BYOM 价格用参考定价估算并单独标记为估计口径。
+  await accrueCappedApprovalSpend(owner, sessionId, context, route, pricing, receipts, priced);
   if (recovery) { recovery.changed(hasCost); return; }
   if (hasCost) await broadcastPersistedPiSpend(owner, sessionId);
   void rebroadcastTodaySpend(scope);
+}
+
+/**
+ * 审批费用记账(P1-7)。结算后按命中的带上限 approval 累计 USD 金额,扩展/runner
+ * 派发前读取上限检查。币种非 USD 的行不入账(避免汇率猜测低估/高估)。
+ */
+async function accrueCappedApprovalSpend(
+  owner: PiUsageOwner,
+  sessionId: string,
+  context: TurnUsageContext,
+  route: 'provider-api' | 'subscription' | 'xd-gateway',
+  pricing: ReturnType<typeof getReferenceModelPricing>,
+  receipts: Array<{ row: PiUsageWrite; segment: { id: string; priceVariant?: string; costUsd?: number }; model: string; needsPricing: boolean }>,
+  priced: Array<PiUsageWrite & { amount: number | null }>,
+): Promise<void> {
+  let approvals: Awaited<ReturnType<typeof readSubagentModelApprovals>>;
+  try {
+    approvals = await readSubagentModelApprovals();
+  } catch {
+    return;
+  }
+  const now = Date.now();
+  const workingDir = (await owner.db.queryOne<{ workingDir: string | null }>(
+    'SELECT working_dir AS workingDir FROM sessions WHERE id = ?', [sessionId]))?.workingDir ?? undefined;
+  const relevant = approvals.filter((approval) => {
+    if (approval.maxCostUsd === undefined) return false;
+    if (now < approval.grantedAt || now > approval.expiresAt) return false;
+    if (approval.scope === 'session') return approval.sessionId === sessionId;
+    return Boolean(workingDir && approval.projectRoot && isWithinProject(workingDir, approval.projectRoot));
+  });
+  if (!relevant.length) return;
+  const snapshotLike: ModelExecutionPolicySnapshot = {
+    version: 1, sessionId, ...(workingDir ? { projectRoot: workingDir } : {}),
+    mode: 'development', allowedRoutes: [], approvals: [], issuedAt: now,
+  };
+  const scopeKeys = [...new Set(relevant.map((approval) => approvalSpendKey(approval, snapshotLike)))];
+  const pricedAmountByReceipt = new Map(priced.map((row) => [row.receiptId, row]));
+  for (const { row, segment, model } of receipts) {
+    const pricedRow = pricedAmountByReceipt.get(row.receiptId);
+    let amountUsd: number | null = null;
+    let estimated = true;
+    if (pricedRow && typeof pricedRow.amount === 'number' && pricedRow.amount > 0 && pricedRow.currency === 'USD') {
+      amountUsd = pricedRow.amount;
+      estimated = !pricedRow.actualCost;
+    } else if (!pricedRow) {
+      // provider-api 行台账 amount 为 0 —— 用参考定价估算(估计口径,上限文档中如实说明)。
+      const money = resolveTurnCost({ rawModel: model, agent: 'pi', tokens: row,
+        sdkCostDelta: route === 'provider-api' ? undefined : segment.costUsd,
+        pricing, context: { providerId: context.providerId, billingRoute: route,
+          region: CURRENT_CINDY_REGION, accessKind: context.accessKind },
+        segments: [{ ...segment, priceVariant: segment.priceVariant ?? (segment.id?.startsWith('pi:') && context.piFastMode ? 'priority' : 'standard') }] }).money;
+      if (money && money.currency === 'USD') {
+        amountUsd = money.amount;
+        estimated = true;
+      }
+    }
+    if (amountUsd === null || amountUsd <= 0) continue;
+    for (const scopeKey of scopeKeys) addSubagentModelSpend(scopeKey, amountUsd, estimated);
+  }
 }
 
 async function broadcastPersistedPiSpend(owner: PiUsageOwner, sessionId: string): Promise<void> {

@@ -770,10 +770,47 @@ function main() {
   function policyNonEmptyString(value) {
     return typeof value === 'string' && value.trim().length > 0;
   }
+  function policyNormalizeRouteEntry(raw) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+    if (!policyNonEmptyString(raw.provider) || !policyNonEmptyString(raw.model)) return null;
+    if (raw.tier !== 'local' && raw.tier !== 'free' && raw.tier !== 'paid') return null;
+    return {
+      provider: raw.provider.trim(),
+      model: raw.model.trim(),
+      ...(policyNonEmptyString(raw.sourceProviderId) ? { sourceProviderId: raw.sourceProviderId.trim() } : {}),
+      tier: raw.tier,
+    };
+  }
+  function policyNormalizeApprovalEntry(raw) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+    if (!policyNonEmptyString(raw.id)) return null;
+    if (!policyNonEmptyString(raw.provider) || !policyNonEmptyString(raw.model)) return null;
+    if (raw.grantedBy !== 'user') return null;
+    if (raw.scope !== 'session' && raw.scope !== 'project') return null;
+    if (raw.scope === 'session' && !policyNonEmptyString(raw.sessionId)) return null;
+    if (raw.scope === 'project' && !policyNonEmptyString(raw.projectRoot)) return null;
+    if (typeof raw.grantedAt !== 'number' || !Number.isFinite(raw.grantedAt)) return null;
+    if (typeof raw.expiresAt !== 'number' || !Number.isFinite(raw.expiresAt)) return null;
+    if (raw.expiresAt <= raw.grantedAt) return null;
+    if (raw.maxCostUsd !== undefined
+      && (typeof raw.maxCostUsd !== 'number' || !Number.isFinite(raw.maxCostUsd) || raw.maxCostUsd < 0)) return null;
+    return {
+      id: raw.id.trim(), provider: raw.provider.trim(), model: raw.model.trim(),
+      ...(policyNonEmptyString(raw.sourceProviderId) ? { sourceProviderId: raw.sourceProviderId.trim() } : {}),
+      scope: raw.scope,
+      ...(policyNonEmptyString(raw.sessionId) ? { sessionId: raw.sessionId.trim() } : {}),
+      ...(policyNonEmptyString(raw.projectRoot) ? { projectRoot: raw.projectRoot.trim() } : {}),
+      grantedBy: 'user',
+      grantedAt: raw.grantedAt,
+      expiresAt: raw.expiresAt,
+      ...(typeof raw.maxCostUsd === 'number' ? { maxCostUsd: raw.maxCostUsd } : {}),
+    };
+  }
   function policyRouteMatches(route, requested) {
     if (route.provider !== requested.provider || route.model !== requested.model) return false;
-    if (route.sourceProviderId && requested.sourceProviderId) return route.sourceProviderId === requested.sourceProviderId;
-    return true;
+    const routeSource = route.sourceProviderId ?? route.provider;
+    const requestedSource = requested.sourceProviderId ?? requested.provider;
+    return routeSource === requestedSource;
   }
   function policyWithinProject(projectRoot, approvalRoot) {
     const normalize = function (input) { return String(input).replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase(); };
@@ -790,27 +827,117 @@ function main() {
     if (!Array.isArray(raw.allowedRoutes) || !Array.isArray(raw.approvals)) return null;
     const allowedRoutes = [];
     for (const entry of raw.allowedRoutes) {
-      if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return null;
-      if (!policyNonEmptyString(entry.provider) || !policyNonEmptyString(entry.model)) return null;
-      if (entry.tier !== 'local' && entry.tier !== 'free' && entry.tier !== 'paid') return null;
-      allowedRoutes.push(entry);
+      const route = policyNormalizeRouteEntry(entry);
+      if (!route) return null;
+      allowedRoutes.push(route);
     }
     const approvals = [];
     for (const entry of raw.approvals) {
-      if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return null;
-      if (!policyNonEmptyString(entry.id) || !policyNonEmptyString(entry.provider) || !policyNonEmptyString(entry.model)) return null;
-      if (entry.grantedBy !== 'user') return null;
-      if (entry.scope !== 'session' && entry.scope !== 'project') return null;
-      if (entry.scope === 'session' && !policyNonEmptyString(entry.sessionId)) return null;
-      if (entry.scope === 'project' && !policyNonEmptyString(entry.projectRoot)) return null;
-      if (typeof entry.grantedAt !== 'number' || !Number.isFinite(entry.grantedAt)) return null;
-      if (typeof entry.expiresAt !== 'number' || !Number.isFinite(entry.expiresAt)) return null;
-      if (entry.expiresAt <= entry.grantedAt) return null;
-      approvals.push(entry);
+      const approval = policyNormalizeApprovalEntry(entry);
+      if (!approval) return null;
+      approvals.push(approval);
     }
-    return { sessionId: raw.sessionId.trim(), projectRoot: raw.projectRoot, mode: raw.mode, allowedRoutes, approvals };
+    if (typeof raw.issuedAt !== 'number' || !Number.isFinite(raw.issuedAt) || raw.issuedAt <= 0) return null;
+    if (raw.signature !== undefined && (typeof raw.signature !== 'string' || !/^[0-9a-f]{64}$/.test(raw.signature))) return null;
+    return {
+      version: 1,
+      sessionId: raw.sessionId.trim(),
+      ...(policyNonEmptyString(raw.projectRoot) ? { projectRoot: raw.projectRoot.trim() } : {}),
+      mode: raw.mode,
+      allowedRoutes,
+      approvals,
+      issuedAt: raw.issuedAt,
+      ...(typeof raw.signature === 'string' ? { signature: raw.signature } : {}),
+    };
   }
-  function decideRunnerModelExecution(snapshot, requested, now) {
+  function policyCanonical(snapshot) {
+    return JSON.stringify({
+      version: snapshot.version,
+      sessionId: snapshot.sessionId,
+      projectRoot: snapshot.projectRoot ?? null,
+      mode: snapshot.mode,
+      allowedRoutes: snapshot.allowedRoutes.map(function (route) {
+        return {
+          provider: route.provider,
+          model: route.model,
+          ...(route.sourceProviderId ? { sourceProviderId: route.sourceProviderId } : {}),
+          tier: route.tier,
+        };
+      }),
+      approvals: snapshot.approvals.map(function (approval) {
+        return {
+          id: approval.id,
+          provider: approval.provider,
+          model: approval.model,
+          ...(approval.sourceProviderId ? { sourceProviderId: approval.sourceProviderId } : {}),
+          scope: approval.scope,
+          ...(approval.sessionId ? { sessionId: approval.sessionId } : {}),
+          ...(approval.projectRoot ? { projectRoot: approval.projectRoot } : {}),
+          grantedBy: approval.grantedBy,
+          grantedAt: approval.grantedAt,
+          expiresAt: approval.expiresAt,
+          ...(approval.maxCostUsd !== undefined ? { maxCostUsd: approval.maxCostUsd } : {}),
+        };
+      }),
+      issuedAt: snapshot.issuedAt,
+    });
+  }
+  var POLICY_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+  var policyKeyCache = {};
+  function policyReadSigningKey() {
+    const file = process.env.CINDY_PI_SUBAGENT_POLICY_KEY_FILE;
+    if (typeof file !== 'string' || file.length === 0) return null;
+    if (policyKeyCache.file === file) return policyKeyCache.key || null;
+    policyKeyCache.file = file;
+    try {
+      const parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
+      const key = typeof parsed.key === 'string' ? Buffer.from(parsed.key, 'base64') : null;
+      policyKeyCache.key = key && key.length >= 16 ? key : null;
+    } catch (error) {
+      policyKeyCache.key = null;
+    }
+    return policyKeyCache.key;
+  }
+  function verifyRunnerExecutionPolicy(snapshot, expectedSessionId, now) {
+    if (!snapshot) return null;
+    const key = policyReadSigningKey();
+    if (!key) return null;
+    if (typeof snapshot.signature !== 'string') return null;
+    if (!expectedSessionId || snapshot.sessionId !== expectedSessionId) return null;
+    if ((now || Date.now()) - snapshot.issuedAt > POLICY_MAX_AGE_MS) return null;
+    const { createHmac, timingSafeEqual } = require('node:crypto');
+    const expected = createHmac('sha256', key).update(policyCanonical(snapshot), 'utf8').digest();
+    let actual;
+    try { actual = Buffer.from(snapshot.signature, 'hex'); } catch (error) { return null; }
+    if (actual.length !== expected.length || !timingSafeEqual(actual, expected)) return null;
+    return snapshot;
+  }
+  function policyApprovalSpendKey(approval, snapshot) {
+    if (approval.scope === 'session') return 'session:' + (approval.sessionId || snapshot.sessionId);
+    const root = String(approval.projectRoot || '').replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+    return 'project:' + root;
+  }
+  function policyReadSpendByScope() {
+    const file = process.env.CINDY_PI_SUBAGENT_SPEND_FILE;
+    if (typeof file !== 'string' || file.length === 0) return {};
+    try {
+      const parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
+      const out = {};
+      const byScope = parsed && typeof parsed === 'object' ? parsed.byScope : null;
+      if (!byScope || typeof byScope !== 'object') return out;
+      for (const scopeKey of Object.keys(byScope)) {
+        const entry = byScope[scopeKey];
+        if (!entry || typeof entry !== 'object') continue;
+        const actual = typeof entry.actualUsd === 'number' && Number.isFinite(entry.actualUsd) ? Math.max(0, entry.actualUsd) : 0;
+        const estimated = typeof entry.estimatedUsd === 'number' && Number.isFinite(entry.estimatedUsd) ? Math.max(0, entry.estimatedUsd) : 0;
+        out[scopeKey] = actual + estimated;
+      }
+      return out;
+    } catch (error) {
+      return {};
+    }
+  }
+  function decideRunnerModelExecution(snapshot, requested, now, spendByApproval) {
     const at = typeof now === 'number' && Number.isFinite(now) ? now : Date.now();
     if (!snapshot) return { allowed: false, reason: 'model execution policy snapshot is missing or invalid; refusing to spawn' };
     const provider = typeof requested.provider === 'string' ? requested.provider.trim() : '';
@@ -828,16 +955,25 @@ function main() {
         if (snapshot.mode === 'local-only') return { allowed: false, reason: 'cloud route is not authorized in local-only mode; free is not authorization' };
         return { allowed: true, reason: 'explicitly allow-listed free route' };
       }
-      if (snapshot.mode !== 'approved-paid') return { allowed: false, reason: 'paid route is not approved for this session' };
+      if (snapshot.mode !== 'approved-paid') break; // paid 继续走 approval 检查(P1-4)
       return { allowed: true, reason: 'explicitly allow-listed paid route under approved-paid mode' };
     }
+    let exhaustedByCap = false;
     for (const approval of snapshot.approvals) {
       if (!policyRouteMatches(approval, requestedNorm)) continue;
       if (approval.scope === 'session' && approval.sessionId !== snapshot.sessionId) continue;
       if (approval.scope === 'project' && (!snapshot.projectRoot || !approval.projectRoot || !policyWithinProject(snapshot.projectRoot, approval.projectRoot))) continue;
       if (at < approval.grantedAt || at > approval.expiresAt) continue;
+      if (approval.maxCostUsd !== undefined && spendByApproval) {
+        const spent = spendByApproval(approval);
+        if (typeof spent === 'number' && Number.isFinite(spent) && spent >= approval.maxCostUsd) {
+          exhaustedByCap = true;
+          continue;
+        }
+      }
       return { allowed: true, approvalId: approval.id, reason: 'time-boxed approval covers this route' };
     }
+    if (exhaustedByCap) return { allowed: false, reason: 'route approval spend cap reached; request a new capped approval from the user' };
     return { allowed: false, reason: 'route is not in this session model execution allow-list' };
   }
 
@@ -851,11 +987,17 @@ function main() {
         return;
       }
       // 第二道执行授权检查:deny 直接把任务置 failed,不发任何模型请求。
-      const policySnapshot = parseRunnerExecutionPolicy(config.executionPolicy);
+      // 先完整校验签名 + session 绑定 + 时效,再用费用上限(若有)裁决。
+      const parsedPolicy = parseRunnerExecutionPolicy(config.executionPolicy);
+      const policySnapshot = verifyRunnerExecutionPolicy(parsedPolicy, config.parentSessionId);
+      const policySpend = policyReadSpendByScope();
       const policyDecision = decideRunnerModelExecution(policySnapshot, {
         provider: task.provider,
         model: task.model || task.displayModel,
         sourceProviderId: task.sourceProviderId,
+      }, Date.now(), function (approval) {
+        const key = policyApprovalSpendKey(approval, policySnapshot);
+        return Object.prototype.hasOwnProperty.call(policySpend, key) ? policySpend[key] : undefined;
       });
       if (!policyDecision.allowed) {
         task.status = 'failed';

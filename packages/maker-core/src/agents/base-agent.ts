@@ -732,7 +732,15 @@ export interface AgentDeps {
     projectId?: string;
     model: string;
     provider: string;
+    sourceProviderId?: string;
   }) => unknown | Promise<unknown>;
+
+  /**
+   * 子代理执行策略校验文件的路径(P1-7/P1-8):Host signing key 文件与费用累计文件。
+   * pi 以 env(CINDY_PI_SUBAGENT_POLICY_KEY_FILE / CINDY_PI_SUBAGENT_SPEND_FILE)
+   * 交给扩展和 runner;扩展/runner 派发前用它做 HMAC 校验与费用上限检查。
+   */
+  resolvePiSubagentModelExecutionFiles?: () => { keyFile?: string; spendFile?: string } | Promise<{ keyFile?: string; spendFile?: string } | undefined>;
 
   /**
    * 解析某 session 的 cc-debug raw 文件落盘路径 (host 注入)。host 用 logger 的 logDir 拼

@@ -579,6 +579,7 @@ function createDeps(overrides: Partial<OrcaWorkerCreationDeps> = {}) {
       }],
     })),
     readClaudeApiKey: vi.fn((): string | null => 'sk-test'),
+    resolveModelExecutionPolicy: vi.fn(async () => ({ allowed: true as const })),
     reserveWorkerCreation: vi.fn(async ({ label }) => {
       const canonical = label.toLowerCase();
       if (reservations.has(canonical)) {
@@ -732,6 +733,49 @@ describe('Orca worker working directory', () => {
     expect(await service.createWorker({ ...params, workingDir: '/remote/project' })).toMatchObject({ ok: true });
     expect(deps.resolveWorkerWorkingDir).toHaveBeenCalledWith('/remote/project', expect.objectContaining({ remoteHostId: 'host-1' }));
     expect(deps.bootstrapSession).toHaveBeenCalledWith(expect.objectContaining({ workingDir: '/remote/real', remoteHostId: 'host-1' }));
+  });
+});
+
+describe('OrcaWorkerCreationService model execution policy (P0-3 fail-closed)', () => {
+  const workerStatus = (status: OrcaWorkerStatus): OrcaWorkerStatus => status;
+  void workerStatus;
+
+  it('denies worker creation when the policy resolver is missing', async () => {
+    const { deps, service } = createDeps({ resolveModelExecutionPolicy: undefined });
+    await expect(service.createWorker({
+      leadSessionId: 'lead-1', role: 'reviewer', agent: 'codex', label: 'reviewer',
+    })).resolves.toMatchObject({ ok: false, errorCode: 'MODEL_EXECUTION_DENIED' });
+    expect(deps.bootstrapSession).not.toHaveBeenCalled();
+  });
+
+  it('denies worker creation when the resolver throws', async () => {
+    const { deps, service } = createDeps({
+      resolveModelExecutionPolicy: vi.fn(async () => { throw new Error('policy store unavailable'); }),
+    });
+    await expect(service.createWorker({
+      leadSessionId: 'lead-1', role: 'reviewer', agent: 'codex', label: 'reviewer',
+    })).resolves.toMatchObject({ ok: false, errorCode: 'MODEL_EXECUTION_DENIED' });
+    expect(deps.bootstrapSession).not.toHaveBeenCalled();
+  });
+
+  it('denies worker creation when the resolver returns null', async () => {
+    const { deps, service } = createDeps({
+      resolveModelExecutionPolicy: vi.fn(async () => null),
+    });
+    await expect(service.createWorker({
+      leadSessionId: 'lead-1', role: 'reviewer', agent: 'codex', label: 'reviewer',
+    })).resolves.toMatchObject({ ok: false, errorCode: 'MODEL_EXECUTION_DENIED' });
+    expect(deps.bootstrapSession).not.toHaveBeenCalled();
+  });
+
+  it('denies worker creation when the resolver returns an explicit deny decision', async () => {
+    const { deps, service } = createDeps({
+      resolveModelExecutionPolicy: vi.fn(async () => ({ allowed: false as const, reason: 'route not allow-listed' })),
+    });
+    await expect(service.createWorker({
+      leadSessionId: 'lead-1', role: 'reviewer', agent: 'codex', label: 'reviewer',
+    })).resolves.toMatchObject({ ok: false, errorCode: 'MODEL_EXECUTION_DENIED' });
+    expect(deps.bootstrapSession).not.toHaveBeenCalled();
   });
 });
 

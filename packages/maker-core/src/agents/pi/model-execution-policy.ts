@@ -19,9 +19,16 @@
  *     逐字镜像本文件的判定逻辑(扩展不能 import 本模块,保持同步的约束见
  *     cindy-subagent-source.ts 文件头)。
  *   - Host 侧(pi/index.ts)在写运行期快照时生成 snapshot;desktop host 负责
- *     从 bot-model-chain + approvals store 组装 allowedRoutes。
+ *     从 bot-model-chain + approvals store 组装 allowedRoutes 并签名。
  *   - durable runner 在 spawn 前第二道检查(见 cindy-subagent-runner-source)。
+ *
+ * 快照签名(P1-8):Host 用只有 Desktop 主进程能读的 signing key 对快照做
+ * HMAC 签名;扩展/runner 派发前必须用 `parseAndVerifyExecutionPolicy`
+ * 校验签名 + session 绑定 + 时效。Agent 即使能改写运行期文件 / config,
+ * 也无法伪造 Host 授权(伪造需先读出 key 文件,属蓄意泄漏行为,见文档)。
  */
+
+import { createHmac, timingSafeEqual } from 'node:crypto';
 
 export const MODEL_EXECUTION_POLICY_VERSION = 1;
 
@@ -67,6 +74,8 @@ export interface ModelExecutionPolicySnapshot {
   approvals: ModelExecutionApproval[];
   /** 快照生成时间(审计用)。 */
   issuedAt: number;
+  /** Host HMAC(对 canonicalExecutionPolicy 编码后的签名);缺失即拒绝。 */
+  signature?: string;
 }
 
 export type ModelExecutionDecision =
@@ -153,6 +162,11 @@ export function parseModelExecutionPolicy(raw: unknown): ModelExecutionPolicySna
     approvals.push(approval);
   }
   const issuedAt = record.issuedAt;
+  if (typeof issuedAt !== 'number' || !Number.isFinite(issuedAt) || issuedAt <= 0) return null;
+  const signatureRaw = record.signature;
+  if (signatureRaw !== undefined && (typeof signatureRaw !== 'string' || !/^[0-9a-f]{64}$/.test(signatureRaw))) {
+    return null;
+  }
   return {
     version: MODEL_EXECUTION_POLICY_VERSION,
     sessionId: record.sessionId.trim(),
@@ -160,8 +174,78 @@ export function parseModelExecutionPolicy(raw: unknown): ModelExecutionPolicySna
     mode,
     allowedRoutes,
     approvals,
-    issuedAt: typeof issuedAt === 'number' && Number.isFinite(issuedAt) ? issuedAt : 0,
+    issuedAt,
+    ...(typeof signatureRaw === 'string' ? { signature: signatureRaw } : {}),
   };
+}
+
+/**
+ * 快照 canonical 编码:HMAC 的被签内容。字段顺序固定,数组顺序保留,
+ * 可选字段缺失时省略 —— Host 签名与扩展/runner 校验必须逐字一致。
+ */
+export function canonicalExecutionPolicy(snapshot: ModelExecutionPolicySnapshot): string {
+  return JSON.stringify({
+    version: snapshot.version,
+    sessionId: snapshot.sessionId,
+    projectRoot: snapshot.projectRoot ?? null,
+    mode: snapshot.mode,
+    allowedRoutes: snapshot.allowedRoutes.map((route) => ({
+      provider: route.provider,
+      model: route.model,
+      ...(route.sourceProviderId ? { sourceProviderId: route.sourceProviderId } : {}),
+      tier: route.tier,
+    })),
+    approvals: snapshot.approvals.map((approval) => ({
+      id: approval.id,
+      provider: approval.provider,
+      model: approval.model,
+      ...(approval.sourceProviderId ? { sourceProviderId: approval.sourceProviderId } : {}),
+      scope: approval.scope,
+      ...(approval.sessionId ? { sessionId: approval.sessionId } : {}),
+      ...(approval.projectRoot ? { projectRoot: approval.projectRoot } : {}),
+      grantedBy: approval.grantedBy,
+      grantedAt: approval.grantedAt,
+      expiresAt: approval.expiresAt,
+      ...(approval.maxCostUsd !== undefined ? { maxCostUsd: approval.maxCostUsd } : {}),
+    })),
+    issuedAt: snapshot.issuedAt,
+  });
+}
+
+/** Host 侧签名:调用方必须先 `parseModelExecutionPolicy` 校验结构。 */
+export function signExecutionPolicySnapshot(snapshot: ModelExecutionPolicySnapshot, key: Buffer): string {
+  return createHmac('sha256', key).update(canonicalExecutionPolicy(snapshot), 'utf8').digest('hex');
+}
+
+/**
+ * 完整校验:结构 + 签名 + session 绑定 + 时效。任一失败返回 null;
+ * 调用方据此 fail-closed。key 为 Host 的 signing key(32 字节随机)。
+ */
+export function parseAndVerifyExecutionPolicy(
+  raw: unknown,
+  key: Buffer | null | undefined,
+  expectedSessionId: string | null | undefined,
+  now = Date.now(),
+): ModelExecutionPolicySnapshot | null {
+  const snapshot = parseModelExecutionPolicy(raw);
+  if (!snapshot) return null;
+  if (!key || key.length === 0) return null;
+  if (typeof snapshot.signature !== 'string') return null;
+  if (!expectedSessionId || snapshot.sessionId !== expectedSessionId) return null;
+  if (now - snapshot.issuedAt > EXECUTION_POLICY_MAX_AGE_MS) return null;
+  const expected = signExecutionPolicySnapshot(snapshot, key);
+  if (!timingSafeEqual(Buffer.from(expected, 'hex'), Buffer.from(snapshot.signature, 'hex'))) return null;
+  return snapshot;
+}
+
+/** 快照最大时效:运行期快照随 setModel 周期性重签,24h 后视为不可信。 */
+export const EXECUTION_POLICY_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+
+/** approval 的记账 scopeKey —— Host 费用累计与扩展/runner 的上限检查共用。 */
+export function approvalSpendKey(approval: ModelExecutionApproval, snapshot: ModelExecutionPolicySnapshot): string {
+  if (approval.scope === 'session') return `session:${approval.sessionId ?? snapshot.sessionId}`;
+  const root = (approval.projectRoot ?? '').replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+  return `project:${root}`;
 }
 
 function routeMatches(
@@ -169,10 +253,11 @@ function routeMatches(
   requested: { provider: string; model: string; sourceProviderId?: string },
 ): boolean {
   if (route.provider !== requested.provider || route.model !== requested.model) return false;
-  // allow-list 条目不带 source 时覆盖该 provider 下任何来源(子代理继承父路由时
-  // 来源可能被网关改写);双方都带来源时必须一致(别名/跨设备同名不作数)。
-  if (route.sourceProviderId && requested.sourceProviderId) return route.sourceProviderId === requested.sourceProviderId;
-  return true;
+  // source 归属必须精确相等:缺省归属即 provider 自身。任一侧的网关改写只有在
+  // 两侧都声明一致来源时才作数 —— 不再以「策略侧未声明来源」为由越过归属。
+  const routeSource = route.sourceProviderId ?? route.provider;
+  const requestedSource = requested.sourceProviderId ?? requested.provider;
+  return routeSource === requestedSource;
 }
 
 /**
@@ -183,10 +268,12 @@ function routeMatches(
  *  2. 请求路由命中 allowedRoutes:
  *     - local → 任何 mode 放行。
  *     - free → development / approved-paid 放行;local-only 拒绝。
- *     - paid → approved-paid 放行;其余拒绝("免费不是授权,付费更需要审批")。
- *  3. 未命中 → 查 approvals:同 (provider, model[, source]),
- *     scope 匹配本 session/project、未过期、未超 maxCostUsd(由 Host 在记账时复核,
- *     此处只校验时限与 scope) → 放行并带回 approvalId。
+ *     - paid → approved-paid 放行;其余不立即拒绝,继续走 approval 检查
+ *       (development 下的付费路由可用一次已签发 approval 合法执行)。
+ *  3. 未命中(或 paid 未获 mode 放行)→ 查 approvals:同 (provider, model, source
+ *     精确归属)、scope 匹配本 session/project、未过期、maxCostUsd 未耗尽
+ *     (调用方用 spendUsdByApproval 传入已记账金额;未提供则跳过该项)→
+ *     放行并带回 approvalId。
  *  4. 其余 → deny。
  *
  * 注:模糊的用户文本(如"用其他模型协作")不进入本函数;授权只能来自
@@ -197,6 +284,7 @@ export function decideModelExecution(
   snapshot: ModelExecutionPolicySnapshot | null,
   requested: { provider: string; model: string; sourceProviderId?: string },
   now = Date.now(),
+  spendUsdByApproval?: (approval: ModelExecutionApproval) => number | undefined,
 ): ModelExecutionDecision {
   if (!snapshot) {
     return { allowed: false, reason: 'model execution policy snapshot is missing or invalid; refusing to dispatch' };
@@ -222,13 +310,14 @@ export function decideModelExecution(
       return { allowed: true, reason: 'explicitly allow-listed free route' };
     }
     if (snapshot.mode !== 'approved-paid') {
-      return {
-        allowed: false,
-        reason: `paid route "${provider}/${model}" is not approved for this session; a time-boxed user approval is required`,
-      };
+      // paid 仅被 allow-list 列入但 mode 不允许时不立即拒绝:继续走
+      // approval 检查 —— 用户的临时审批可以让 development 下的付费路由合法
+      // 执行;没有审批才在最后拒绝。
+      break;
     }
     return { allowed: true, reason: 'explicitly allow-listed paid route under approved-paid mode' };
   }
+  let exhaustedByCap = false;
   for (const approval of snapshot.approvals) {
     if (!routeMatches(approval, requestedNorm)) continue;
     if (approval.scope === 'session' && approval.sessionId !== snapshot.sessionId) continue;
@@ -237,10 +326,24 @@ export function decideModelExecution(
       continue;
     }
     if (now < approval.grantedAt || now > approval.expiresAt) continue;
+    if (approval.maxCostUsd !== undefined && spendUsdByApproval) {
+      const spent = spendUsdByApproval(approval);
+      if (spent !== undefined && !Number.isFinite(spent)) continue;
+      if (spent !== undefined && spent >= approval.maxCostUsd) {
+        exhaustedByCap = true;
+        continue;
+      }
+    }
     return {
       allowed: true,
       approvalId: approval.id,
       reason: `time-boxed approval ${approval.id} covers this route`,
+    };
+  }
+  if (exhaustedByCap) {
+    return {
+      allowed: false,
+      reason: `route "${provider}/${model}" approval spend cap reached; request a new capped approval from the user`,
     };
   }
   return {

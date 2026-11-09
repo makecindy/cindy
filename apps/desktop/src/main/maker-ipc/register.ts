@@ -17,7 +17,7 @@ import { restorePluginPageSession } from '../mcp-apps/pluginPageCall.js';
 import { resumeInterruptedScheduleRun } from '../scheduler-host/index.js';
 import { readTaskDeliveryNote } from '../bot-autonomy/hub.js';
 import { setVoiceTaskDispatch, setVoiceCallMemoryReader } from '../voice-conversation/taskBridge.js';
-import { buildBotMemoryScopeKey, decideModelExecution, SessionCreationCleanupPendingError } from '@cindy/maker-core';
+import { approvalSpendKey, buildBotMemoryScopeKey, decideModelExecution, SessionCreationCleanupPendingError } from '@cindy/maker-core';
 import { createOrcaWorkerProjectHandlers } from './orcaWorkerProjectHandlers';
 import { getTeamByWorkerSession } from '../localDb/orcaTeamStore';
 import { readWorkerProjectContext, createWorkerWorktree, rememberWorkerProject, probeWorkerProject, resolveWorkerWorktreeSourceSelection, getWorkerOwnedWorktree } from './orcaWorkerProject';
@@ -188,6 +188,7 @@ import { readSshCodexModelList, assertSshCodexModel, isVerifiedSshCodexResume } 
 import { prepareCodexCustomContextCatalog } from '../maker-host/codex-custom-context-catalog.js';
 import { inferProviderIdForModel } from '../maker-host/provider-route.js';
 import { resolveDesktopOrcaWorkerModelExecutionPolicy } from '../maker-host/subagent-model-execution-policy-host.js';
+import { readSubagentModelSpend } from '../maker-host/subagent-model-spend.js';
 import { bindGroupFastPolicy } from '../provider-group/fastPolicyRuntime.js';
 import { resolveConfiguredContextWindow, contextWindowBudgetChangesEffectiveWindow, resolveDesktopModelContextProviderId, resolveSessionContextWindowBounds, readStoredSessionContextWindowBudget, applySessionContextWindowBudgetToCreateOpts } from '../maker-host/model-context-settings.js';
 import { isSessionContextWindowBudgetCustomized, readSessionContextWindowBudget } from '../maker-host/session-context-budget-store.js';
@@ -16912,7 +16913,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         model: input.model,
       });
       if (!snapshot) return { allowed: false, reason: 'model execution policy snapshot unavailable' };
-      return decideModelExecution(snapshot, { provider: input.provider, model: input.model });
+      return decideModelExecution(snapshot, { provider: input.provider, model: input.model }, Date.now(),
+        (approval) => readSubagentModelSpend(approvalSpendKey(approval, snapshot)));
     },
     getCreationSelection: () => isAppSessionBoundaryPending() ? null : getWorkerCreationSelection(getActiveDataOwnerPushStamp()),
     getWorkerPermissionMode: getWorkerPermissionModeFromCreationPrefs,

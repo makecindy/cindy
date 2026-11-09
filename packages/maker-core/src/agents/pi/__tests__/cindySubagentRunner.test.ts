@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
+import { Buffer } from 'node:buffer';
 import { chmod, mkdtemp, mkdir, readFile, readdir, rename, rm, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -7,6 +8,15 @@ import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { CINDY_SUBAGENT_RUNNER_SOURCE } from '../cindy-subagent-runner-source.js';
+import { parseModelExecutionPolicy, signExecutionPolicySnapshot } from '../model-execution-policy.js';
+
+// 测试签发 key:与 maker-core canonicalExecutionPolicy 字节级一致(P1-8)。
+const POLICY_KEY = Buffer.alloc(32, 7);
+function signPolicy(policy: Record<string, unknown>) {
+  const parsed = parseModelExecutionPolicy(policy);
+  if (!parsed) throw new Error('invalid test execution policy');
+  return { ...parsed, signature: signExecutionPolicySnapshot(parsed, POLICY_KEY) };
+}
 
 /**
  * Every case here spawns a real runner process (and that runner spawns a fake
@@ -531,15 +541,15 @@ process.stdin.on('end', () => {
     concurrency: options.concurrency ?? 4,
     timeoutMs: options.timeoutMs ?? 10_000,
     // 测试夹具授权快照:fixture/fixture-model 显式列入 allow-list ——
-    // runner 在 spawn 前复核,与生产 config.executionPolicy 注入一致。
-    executionPolicy: {
+    // runner 在 spawn 前复核验签,与生产 config.executionPolicy 注入一致。
+    executionPolicy: signPolicy({
       version: 1,
       sessionId: path.basename(root),
       mode: 'development',
       allowedRoutes: [{ provider: 'fixture', model: 'fixture-model', tier: 'local' }],
       approvals: [],
       issuedAt: Date.now(),
-    },
+    }),
     tasks: Array.from({ length: count }, (_, index) => ({
       childId: `${runId}-${index + 1}`,
       stepId: `step-${index + 1}`,
@@ -567,10 +577,15 @@ process.stdin.on('end', () => {
   // Before the spawn, so the artifact is already unwritable on the run's very
   // first terminal write — no race with a fast child.
   if (options.poisonResultPath) await mkdir(path.join(runDir, 'result.json'), { recursive: true });
+  const policyKeyFile = path.join(runDir, 'policy-key.json');
+  await writeFile(policyKeyFile, JSON.stringify({ key: POLICY_KEY.toString('base64') }), { mode: 0o600 });
+  // resume 重新拉起 runner 时要继承 key 文件 env(与生产 Host 注入一致)。
+  process.env.CINDY_PI_SUBAGENT_POLICY_KEY_FILE = policyKeyFile;
   const child = spawn(process.execPath, [runnerFile, configPath], {
     cwd: root,
     env: {
       ...process.env,
+      CINDY_PI_SUBAGENT_POLICY_KEY_FILE: policyKeyFile,
       CINDY_TEST_PI_PIDS: pidsFile,
       CINDY_TEST_PI_ARGS: argsFile,
       CINDY_TEST_PI_PROMPTS: promptsFile,

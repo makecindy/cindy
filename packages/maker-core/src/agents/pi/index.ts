@@ -3477,6 +3477,15 @@ export class PiAgent extends BaseAgent {
       process.pid,
       opts.sessionInstanceId?.trim() || runtimeInstanceId,
     );
+    // 执行策略校验文件(P1-7/P1-8):Host 按当前会话的保护区生成 key/费用累计路径。
+    // 路径本身不含 key,但路径泄露即可读 key 伪造签名,因此只进 spawnEnv
+    // (随 spawnEnv 进扩展与 runner),其 env 名进入 piSecretEnvNames 剥离面。
+    let executionPolicyFiles: { keyFile?: string; spendFile?: string } | undefined;
+    try {
+      executionPolicyFiles = await this.deps.resolvePiSubagentModelExecutionFiles?.();
+    } catch {
+      executionPolicyFiles = undefined; // 缺失时扩展侧 fail-closed
+    }
     // 轮 20-V1 HIGH:远端路径必须 POSIX join —— path.join 在 Windows 本地会把
     // runtimeDir 与文件名拼成反斜杠(远端 shell 不认, 权限文件/子代理 runtime
     // 写不进删不掉, 破坏权限门与子代理路由)。runtimeDir 已是 posix(956 行)。
@@ -3722,11 +3731,13 @@ export class PiAgent extends BaseAgent {
       const resolvePolicy = this.deps.resolvePiSubagentModelExecutionPolicy;
       if (typeof resolvePolicy === 'function') {
         try {
+          const runtimeProviderForPolicy = next.provider ?? initialProvider ?? '';
           executionPolicy = await resolvePolicy({
             sessionId: opts.sessionId ?? '',
             ...(opts.workingDir ? { projectRoot: opts.workingDir } : {}),
             model: next.model ?? initialWireModel ?? '',
-            provider: next.provider ?? initialProvider ?? '',
+            provider: runtimeProviderForPolicy,
+            ...(runtimeProviderForPolicy ? { sourceProviderId: resolveSourceProvider(runtimeProviderForPolicy) } : {}),
           });
         } catch (error) {
           this.deps.logger.warn('pi subagent model execution policy resolve failed; snapshot will omit authorization', {
@@ -5693,6 +5704,10 @@ export class PiAgent extends BaseAgent {
         // 扩展照旧现读快照,能力不受影响。
         CINDY_SUBAGENT_ENV.runtimeFile,
         CINDY_SUBAGENT_ENV.ownerId,
+        // 执行策略的校验文件路径(签名 key + 费用累计)同样是控制面:
+        // 拿到路径可直接读出 signing key 伪造快照;只用于扩展/runner 的校验读取。
+        'CINDY_PI_SUBAGENT_POLICY_KEY_FILE',
+        'CINDY_PI_SUBAGENT_SPEND_FILE',
         'CINDY_PI_MODEL_REQUEST_PREFS_FILE',
         // 受管工具路径同属控制面：不得让获批 bash 改写/替换后影响后续自动放行的 grep/find。
         ...(managedRipgrepPath ? [PI_MANAGED_RG_PATH_ENV] : []),
@@ -5756,6 +5771,10 @@ export class PiAgent extends BaseAgent {
           [CINDY_SUBAGENT_ENV.runRoot]: subagentRunRoot,
           [CINDY_SUBAGENT_ENV.runnerFile]: subagentRunnerPath,
           [CINDY_SUBAGENT_ENV.ownerId]: subagentRuntimeOwnerId,
+          // 校验文件路径:扩展/runner 派发前读取 key 与累计费用(P1-7/P1-8)。
+          // 只存在时注入;缺省时扩展侧验证失败 -> fail-closed。
+          ...(executionPolicyFiles?.keyFile ? { CINDY_PI_SUBAGENT_POLICY_KEY_FILE: executionPolicyFiles.keyFile } : {}),
+          ...(executionPolicyFiles?.spendFile ? { CINDY_PI_SUBAGENT_SPEND_FILE: executionPolicyFiles.spendFile } : {}),
         } : {}),
         // 嵌入式 runtime 不做启动期联网:关掉 pi 的版本检查与安装遥测
         // (pi.dev/api/latest-version、report-install)。LLM 请求走 provider 通道不受影响。

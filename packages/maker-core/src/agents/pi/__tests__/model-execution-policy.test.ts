@@ -1,14 +1,19 @@
 import { describe, expect, it } from 'vitest';
+import { Buffer } from 'node:buffer';
 
 import {
+  approvalSpendKey,
   decideModelExecution,
   isWithinProject,
   normalizeApproval,
+  parseAndVerifyExecutionPolicy,
   parseModelExecutionPolicy,
+  signExecutionPolicySnapshot,
   type ModelExecutionPolicySnapshot,
 } from '../model-execution-policy.js';
 
 const NOW = 1_700_000_000_000;
+const KEY = Buffer.alloc(32, 7);
 
 function snapshot(overrides: Partial<ModelExecutionPolicySnapshot> = {}): ModelExecutionPolicySnapshot {
   return {
@@ -31,6 +36,14 @@ describe('parseModelExecutionPolicy', () => {
     expect(parseModelExecutionPolicy(null)).toBeNull();
     expect(parseModelExecutionPolicy('x')).toBeNull();
     expect(parseModelExecutionPolicy({ ...snapshot(), version: 99 })).toBeNull();
+  });
+
+  it('rejects a malformed signature', () => {
+    expect(parseModelExecutionPolicy({ ...snapshot(), signature: 'xyz' })).toBeNull();
+  });
+
+  it('rejects a snapshot with non-positive issuedAt', () => {
+    expect(parseModelExecutionPolicy({ ...snapshot(), issuedAt: 0 })).toBeNull();
   });
 
   it('rejects a snapshot with any malformed route or approval', () => {
@@ -169,11 +182,142 @@ describe('decideModelExecution', () => {
   });
 });
 
+describe('approval fallthrough for allow-listed paid routes (P1-4)', () => {
+  const approval = {
+    id: 'appr-paid', provider: 'openrouter-a3fe858b', model: 'stealth/crouton-alpha',
+    scope: 'session' as const, sessionId: 'sess-parent', grantedBy: 'user' as const,
+    grantedAt: NOW - 1000, expiresAt: NOW + 60_000,
+  };
+
+  it('lets a live approval run an allow-listed paid route in development mode', () => {
+    const decision = decideModelExecution(
+      snapshot({ mode: 'development', approvals: [approval] }),
+      { provider: 'openrouter-a3fe858b', model: 'stealth/crouton-alpha' },
+      NOW,
+    );
+    expect(decision.allowed).toBe(true);
+    expect(decision.allowed && decision.approvalId).toBe('appr-paid');
+  });
+
+  it('still denies the same route in local-only mode without an approval', () => {
+    const decision = decideModelExecution(
+      snapshot({ mode: 'local-only' }),
+      { provider: 'openrouter-a3fe858b', model: 'stealth/crouton-alpha' },
+      NOW,
+    );
+    expect(decision.allowed).toBe(false);
+  });
+});
+
+describe('approval spend cap (P1-7)', () => {
+  const approval = {
+    id: 'appr-capped', provider: 'openrouter-a3fe858b', model: 'deepseek/deepseek-v4-flash',
+    scope: 'session' as const, sessionId: 'sess-parent', grantedBy: 'user' as const,
+    grantedAt: NOW - 1000, expiresAt: NOW + 60_000, maxCostUsd: 5,
+  };
+
+  it('allows while accumulated spend is under the cap', () => {
+    const decision = decideModelExecution(
+      snapshot({ approvals: [approval] }),
+      { provider: 'openrouter-a3fe858b', model: 'deepseek/deepseek-v4-flash' },
+      NOW,
+      () => 4.99,
+    );
+    expect(decision.allowed).toBe(true);
+  });
+
+  it('denies once accumulated spend reaches the cap', () => {
+    const decision = decideModelExecution(
+      snapshot({ approvals: [approval] }),
+      { provider: 'openrouter-a3fe858b', model: 'deepseek/deepseek-v4-flash' },
+      NOW,
+      () => 5,
+    );
+    expect(decision.allowed).toBe(false);
+    expect(decision.reason).toContain('spend cap');
+  });
+
+  it('approvalSpendKey is stable across Host accumulation and checker lookup', () => {
+    const snap = snapshot({ approvals: [approval] });
+    expect(approvalSpendKey(approval, snap)).toBe('session:sess-parent');
+    const projectApproval = {
+      ...approval, scope: 'project' as const, sessionId: undefined, projectRoot: '/work/proj',
+    };
+    expect(approvalSpendKey(projectApproval, snap)).toBe('project:/work/proj');
+  });
+});
+
+describe('source attribution matching (P1-5)', () => {
+  it('requires both sides to agree on the source when the entry declares one', () => {
+    const snap = snapshot({
+      mode: 'approved-paid',
+      allowedRoutes: [{ provider: 'openai-codex', model: 'gpt-5.4', sourceProviderId: 'openai', tier: 'paid' }],
+    });
+    expect(decideModelExecution(snap, {
+      provider: 'openai-codex', model: 'gpt-5.4', sourceProviderId: 'openai',
+    }, NOW).allowed).toBe(true);
+    // 来源不匹配(网关伪造/自称其它供应商)一律拒绝。
+    expect(decideModelExecution(snap, {
+      provider: 'openai-codex', model: 'gpt-5.4', sourceProviderId: 'other',
+    }, NOW).allowed).toBe(false);
+  });
+
+  it('treats a missing requested source as the provider itself (no wildcard pass)', () => {
+    const snap = snapshot({
+      mode: 'approved-paid',
+      allowedRoutes: [{ provider: 'openai-codex', model: 'gpt-5.4', sourceProviderId: 'openai', tier: 'paid' }],
+    });
+    expect(decideModelExecution(snap, {
+      provider: 'openai-codex', model: 'gpt-5.4',
+    }, NOW).allowed).toBe(false);
+  });
+
+  it('matches when both sides omit the source (defaults to the provider id)', () => {
+    const snap = snapshot({
+      allowedRoutes: [{ provider: 'omlx', model: 'Qwen', tier: 'local' }],
+    });
+    expect(decideModelExecution(snap, { provider: 'omlx', model: 'Qwen' }, NOW).allowed).toBe(true);
+  });
+});
+
 describe('isWithinProject', () => {
   it('matches equal and child roots and rejects prefix-siblings', () => {
     expect(isWithinProject('/a/b', '/a/b')).toBe(true);
     expect(isWithinProject('/a/b/c', '/a/b')).toBe(true);
     expect(isWithinProject('/a/bc', '/a/b')).toBe(false);
+  });
+});
+
+describe('snapshot signature (P1-8)', () => {
+  function signed(overrides: Partial<ModelExecutionPolicySnapshot> = {}) {
+    const snap = snapshot(overrides);
+    return { ...snap, signature: signExecutionPolicySnapshot(snap, KEY) };
+  }
+
+  it('round-trips: signed snapshot verifies for the bound session', () => {
+    expect(parseAndVerifyExecutionPolicy(signed(), KEY, 'sess-parent', NOW)?.sessionId).toBe('sess-parent');
+  });
+
+  it('rejects a tampered snapshot even with a syntactically valid signature', () => {
+    const tampered = { ...signed(), mode: 'approved-paid' as const };
+    expect(parseAndVerifyExecutionPolicy(tampered, KEY, 'sess-parent', NOW)).toBeNull();
+  });
+
+  it('rejects an unsigned snapshot', () => {
+    expect(parseAndVerifyExecutionPolicy(snapshot(), KEY, 'sess-parent', NOW)).toBeNull();
+  });
+
+  it('rejects a snapshot replayed into a different session', () => {
+    expect(parseAndVerifyExecutionPolicy(signed(), KEY, 'sess-other', NOW)).toBeNull();
+  });
+
+  it('rejects a stale snapshot beyond 24h', () => {
+    const stale = signed({ issuedAt: NOW - 25 * 60 * 60 * 1000 });
+    expect(parseAndVerifyExecutionPolicy(stale, KEY, 'sess-parent', NOW)).toBeNull();
+  });
+
+  it('rejects verification with a different key', () => {
+    expect(parseAndVerifyExecutionPolicy(signed(), Buffer.alloc(32, 9), 'sess-parent', NOW)).toBeNull();
   });
 });
 
@@ -219,6 +363,33 @@ describe('regression: 2026-11-07 unauthorized DeepSeek incident', () => {
     }, NOW);
     expect(decision.allowed).toBe(false);
     expect(decision.approvalId).toBeUndefined();
+  });
+
+  it('free provider-declared Crouton Alpha executes in development (P0-1 regression)', () => {
+    // P0-1:旧 classifyTier 只认 :free 后缀,把免费 Crouton Alpha 误判 paid。
+    // Host 现在按 provider 声明的零价格分级(tier=free),免费 Crouton 在开发模式下
+    // 合法执行;local-only 下仍拒绝(免费≠授权)。
+    const croutonFree = snapshot({
+      allowedRoutes: [{ provider: 'openrouter-a3fe858b', model: 'stealth/crouton-alpha', tier: 'free' }],
+    });
+    expect(decideModelExecution(croutonFree, {
+      provider: 'openrouter-a3fe858b', model: 'stealth/crouton-alpha',
+    }, NOW).allowed).toBe(true);
+    expect(decideModelExecution(snapshot({
+      mode: 'local-only',
+      allowedRoutes: [{ provider: 'openrouter-a3fe858b', model: 'stealth/crouton-alpha', tier: 'free' }],
+    }), {
+      provider: 'openrouter-a3fe858b', model: 'stealth/crouton-alpha',
+    }, NOW).allowed).toBe(false);
+  });
+
+  it('lan local Qwen executes in local-only mode (P0-2 regression)', () => {
+    // P0-2:oMLX 在本机网卡地址上运行,Host 判定为 local(经验证的本地端点)。
+    const snapshotLocal = snapshot({
+      mode: 'local-only',
+      allowedRoutes: [{ provider: 'omlx', model: 'Qwen', tier: 'local' }],
+    });
+    expect(decideModelExecution(snapshotLocal, { provider: 'omlx', model: 'Qwen' }, NOW).allowed).toBe(true);
   });
 
   it('local Qwen route does not authorize reaching OpenRouter for the same task', () => {

@@ -319,8 +319,9 @@ export interface OrcaWorkerCreationDeps {
   discardWorkerWorktree?(sessionId: string): Promise<void>;
   getAvailableModels(agent: AgentKind): OrcaWorkerModelCapabilities[];
   /**
-   * 模型执行授权(decideModelExecution 同口径;Host 注入后失败关闭)。返回 null/undefined
-   * = 不做授权检查(测试/旧宿主);返回 { allowed: false } = 创建拒绝。
+   * 模型执行授权(decideModelExecution 同口径)。**失败关闭(P0-3)**:缺失/null/未注入、
+   * 抛错一律拒绝创建;{ allowed: false } = 创建拒绝。生产路径由 register.ts 注入;
+   * 测试需显式传桩(避免"未注入 resolver 时静默放行"正是本次复审的 P0-3)。
    */
   resolveModelExecutionPolicy?: (input: {
     sessionId: string;
@@ -1368,24 +1369,34 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
     if (!resolvedConfig.ok) {
       return { ok: false, errorCode: 'INVALID_PARAMS', message: resolvedConfig.message };
     }
-    // 模型执行授权(失败关闭;Host 注入 resolveModelExecutionPolicy 时生效):
+    // 模型执行授权(失败关闭,P0-3):
     // Worker 的 (provider, model) 必须在当前会话的执行 allow-list 内或命中有效的
     // user approval。"出现在可用模型目录里"不等于授权 —— 与 pi subagent 同口径。
-    // 未注入时跳过(保持既有行为,供测试/旧宿主)。
-    if (deps.resolveModelExecutionPolicy) {
+    // resolver 缺失、抛错、返回 null/undefined 一律拒绝(生产路径一律 fail-closed);
+    // 只有显式 { allowed: true } 才继续。
+    {
       const policyProviderId = inheritedProviderId ?? providerRouting.resolveDefaultProviderIdForModel(params.agent, resolvedConfig.model);
-      const policyDecision = await deps.resolveModelExecutionPolicy({
-        sessionId: params.leadSessionId,
-        ...(lead.workingDir ? { projectRoot: lead.workingDir } : {}),
-        provider: policyProviderId ?? '',
-        model: resolvedConfig.model,
+      const policyDenied = (reason: string) => ({
+        ok: false as const,
+        errorCode: 'MODEL_EXECUTION_DENIED' as const,
+        message: `Worker model execution policy denied route "${policyProviderId ?? ''}/${resolvedConfig.model}": ${reason}. Being listed as an available model is not authorization.`,
       });
-      if (policyDecision && policyDecision.allowed === false) {
-        return {
-          ok: false,
-          errorCode: 'MODEL_EXECUTION_DENIED',
-          message: `Worker model execution policy denied route "${policyProviderId ?? ''}/${resolvedConfig.model}": ${policyDecision.reason ?? 'not in this session model execution allow-list'}. Being listed as an available model is not authorization.`,
-        };
+      if (!deps.resolveModelExecutionPolicy) {
+        return policyDenied('model execution policy resolver is not available');
+      }
+      let policyDecision: Awaited<ReturnType<NonNullable<OrcaWorkerCreationDeps['resolveModelExecutionPolicy']>>>;
+      try {
+        policyDecision = await deps.resolveModelExecutionPolicy({
+          sessionId: params.leadSessionId,
+          ...(lead.workingDir ? { projectRoot: lead.workingDir } : {}),
+          provider: policyProviderId ?? '',
+          model: resolvedConfig.model,
+        });
+      } catch {
+        return policyDenied('model execution policy resolver failed');
+      }
+      if (!policyDecision || policyDecision.allowed !== true) {
+        return policyDenied(policyDecision?.reason ?? 'model execution policy returned no decision');
       }
     }
     const defaultProviderId = providerRouting.resolveDefaultProviderIdForModel(
