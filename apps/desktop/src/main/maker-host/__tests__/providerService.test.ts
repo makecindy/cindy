@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 
-import { BUNDLED_CATALOG, buildUserProvider, connectedProvidersForAgent, providerMediaField } from '@cindy/model-providers';
+import { BUNDLED_CATALOG, buildUserProvider, connectedProvidersForAgent, providerMediaField, remoteInvocationModels } from '@cindy/model-providers';
 
 import { checkModelRoute } from '../model-route-guard.js';
 import { createProviderService, type ConnectionReadOptions } from '../provider-service.js';
@@ -11,6 +11,37 @@ import type { XdOrgIdentity } from '../../../shared/xdOrg.js';
 const bundledCatalog = () => BUNDLED_CATALOG;
 
 describe('createProviderService', () => {
+  // #9501, unit: existing view tests never supply advanced-settings budgets.
+  // One exact route with a 1M override must retain the 200k settings default,
+  // expose 1M to Remote Agent selection, and follow defaults again after reset.
+  it('projects live owner budgets by exact route without replacing settings defaults', async () => {
+    const model = { id: 'claude-opus-5-5[1m]', name: 'Opus', contextWindow: 200_000, efforts: [], defaultEffort: null };
+    const provider = { id: 'custom', name: 'Custom', source: 'user' as const, auth: { method: 'none' as const },
+      agents: ['claude-code', 'codex'] as const, routing: {
+        'claude-code': { upstream: 'https://fake.invalid', authStrategy: 'none' as const },
+        codex: { upstream: 'https://fake.invalid', authStrategy: 'none' as const },
+      },
+      models: { 'claude-code': [model, { ...model, id: 'claude-opus-5-5' }], codex: [model] } };
+    const catalog = { version: 'test', providers: [
+      { ...provider, agents: [...provider.agents] }, { ...provider, id: 'other', agents: [...provider.agents] },
+    ] };
+    let limits: Record<string, number> = {};
+    const svc = createProviderService({ getCatalog: () => catalog, getModelContextLimits: () => limits,
+      connection: { xd: () => false, anthropic: () => false, openai: () => false, xai: () => false } });
+    const before = await svc.listProviders();
+    limits = { 'claude-code:custom:claude-opus-5-5[1m]': 1_000_000 };
+    const views = await svc.listProviders();
+    expect(views[0].models['claude-code']![0]).toMatchObject({ contextWindow: 200_000, contextWindowOverride: 1_000_000 });
+    expect(remoteInvocationModels(views[0]).models['claude-code']![0].contextWindow).toBe(1_000_000);
+    expect(views[0].models.codex).toEqual(before[0].models.codex);
+    expect(views[0].models['claude-code']![1]).toEqual(before[0].models['claude-code']![1]);
+    expect(views[1]).toEqual(before[1]);
+    expect(model.contextWindow).toBe(200_000);
+    limits = {};
+    expect(await svc.listProviders()).toEqual(before);
+    model.contextWindow = 300_000;
+    expect(remoteInvocationModels((await svc.listProviders())[0]).models['claude-code']![0].contextWindow).toBe(300_000);
+  });
   it('projects the live membership name without changing routes, models or custom names', async () => {
     let user: XdOrgIdentity | null = { membershipKind: 'personal', orgName: null, orgSlug: null };
     const labels: Record<string, string> = {
