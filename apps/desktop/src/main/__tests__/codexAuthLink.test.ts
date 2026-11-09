@@ -895,6 +895,104 @@ describe('syncIndependentCodexAuth (#9277)', () => {
   });
 });
 
+describe('系统凭证的发布与崩溃窗口 (#9316 review 第二轮)', () => {
+  /** 目录里残留的 .swapbak 备份(崩溃窗口里唯一可恢复的凭证)。 */
+  function backupsIn(dir: string): string[] {
+    return fs.readdirSync(dir).filter((name) => name.endsWith('.swapbak'));
+  }
+
+  // 本机 Codex 登出时会自己删掉 ~/.codex/auth.json。旧快照这时把它重建回来,
+  // 等于撤销那次登出 —— 系统凭证消失必须按冲突处理, 不能拿旧字节复活它。
+  it('本机 Codex 登出后不拿旧副本重建系统凭证', async () => {
+    fs.writeFileSync(systemAuth, SYSTEM_CONTENT);
+    fs.writeFileSync(myAuth, MY_CONTENT);
+    const newer = new Date(Date.now() + 60_000);
+    fs.utimesSync(myAuth, newer, newer);
+    const originalStat = fs.promises.stat.bind(fs.promises);
+    let systemStatCalls = 0;
+    vi.spyOn(fs.promises, 'stat').mockImplementation(async (target, opts) => {
+      // 第三次非 bigint 的系统凭证 stat 是发布前的目标复核 —— 就在那一刻,
+      // 本机 Codex 登出, 把系统凭证删了。
+      if (String(target) === systemAuth && opts === undefined) {
+        systemStatCalls += 1;
+        if (systemStatCalls === 3) fs.unlinkSync(systemAuth);
+      }
+      return originalStat(target as never, opts as never);
+    });
+
+    const out = await syncIndependentCodexAuth(systemAuth, myAuth, 'win32', undefined, {
+      allowLocalToSystem: true,
+      confirmLocalToSystem: async () => true,
+    });
+
+    // 登出必须站得住: 系统凭证不被复活, 对账按冲突收场。
+    expect(out.kind).toBe('failed');
+    expect(out.conflict).toBe(true);
+    expect(fs.existsSync(systemAuth)).toBe(false);
+  });
+
+  // 写回系统凭证时旧目标先挪到可恢复的备份里: 崩在「挪走之后、发布之前」,
+  // 凭证还在(下次启动对账按备份恢复), 而不是凭空消失。
+  it('写回系统凭证时旧目标先落在可恢复的备份里', async () => {
+    fs.writeFileSync(systemAuth, SYSTEM_CONTENT);
+    fs.writeFileSync(myAuth, MY_CONTENT);
+    const newer = new Date(Date.now() + 60_000);
+    fs.utimesSync(myAuth, newer, newer);
+    const realRename = fs.promises.rename.bind(fs.promises);
+    let backupAtPublish: string | null = null;
+    let backupContentAtPublish: string | null = null;
+    let targetGoneAtPublish = false;
+    vi.spyOn(fs.promises, 'rename').mockImplementation(async (from, to) => {
+      // 发布那一刻:旧目标应该已经被挪进备份, 而不是被删掉。
+      if (String(from).endsWith('.copytmp') && String(to) === systemAuth) {
+        const backup = backupsIn(path.dirname(systemAuth))[0] ?? null;
+        backupAtPublish = backup;
+        backupContentAtPublish = backup
+          ? fs.readFileSync(path.join(path.dirname(systemAuth), backup), 'utf8')
+          : null;
+        targetGoneAtPublish = !fs.existsSync(systemAuth);
+        return realRename(from as never, to as never);
+      }
+      return realRename(from as never, to as never);
+    });
+
+    await syncIndependentCodexAuth(systemAuth, myAuth, 'win32', undefined, {
+      allowLocalToSystem: true,
+      confirmLocalToSystem: async () => true,
+    });
+
+    expect(backupAtPublish).toBeTruthy();
+    expect(backupContentAtPublish).toBe(SYSTEM_CONTENT);
+    expect(targetGoneAtPublish).toBe(true);
+    // 发布完成后备份清掉, 系统凭证完好。
+    expect(backupsIn(path.dirname(systemAuth))).toEqual([]);
+    expect(fs.existsSync(systemAuth)).toBe(true);
+    expect(fs.readFileSync(systemAuth, 'utf8')).toBe(MY_CONTENT);
+  });
+
+  // 崩在窗口里之后启动对账按备份恢复: 恢复出来的必须是**独立**的一份
+  // (nlink 回到 1)。备份那个 inode 正是当初 nlink>1 才进清理流程的 ——
+  // 把它硬链回去等于把残余硬链原样恢复, Codex 0.165+ 照样写不进去。
+  it('崩溃窗口恢复出来的系统凭证是独立的一份(nlink 回到 1)', async () => {
+    fs.writeFileSync(systemAuth, SYSTEM_CONTENT);
+    // 另一条硬链: 同机另一个 profile 的残留(nlink=2)。
+    fs.linkSync(systemAuth, path.join(path.dirname(systemAuth), 'residual-auth.json'));
+    // 造一个「崩在发布之前」的现场: 目标被挪到备份名, 同一次调用的 sidecar 还在。
+    const backup = `${systemAuth}.4242.0.swapbak`;
+    const sidecar = `${systemAuth}.4242.0.copytmp`;
+    fs.renameSync(systemAuth, backup);
+    fs.writeFileSync(sidecar, SYSTEM_CONTENT);
+
+    await expect(recoverInterruptedCodexAuthSwap(systemAuth)).resolves.toBe(true);
+
+    expect(fs.readFileSync(systemAuth, 'utf8')).toBe(SYSTEM_CONTENT);
+    // 恢复出来的路径必须能被 Codex 写: nlink 回到 1。
+    expect(fs.statSync(systemAuth).nlink).toBe(1);
+    expect(fs.existsSync(backup)).toBe(false);
+    expect(fs.existsSync(sidecar)).toBe(false);
+  });
+});
+
 describe('inspectCodexAuthLink', () => {
   it('本地缺失时仍返回系统权威文件元数据', async () => {
     fs.writeFileSync(systemAuth, SYSTEM_CONTENT);

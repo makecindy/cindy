@@ -243,9 +243,21 @@ export async function copyCodexAuthSnapshot(
   myAuth: string,
   platform: NodeJS.Platform = process.platform,
   execFileImpl: typeof execFileP = execFileP,
-  opts: { expectTargetMtimeMs?: number; expectTargetAbsent?: boolean } = {},
+  opts: {
+    expectTargetMtimeMs?: number;
+    expectTargetAbsent?: boolean;
+    /**
+     * 目标是**系统凭证**(`~/.codex/auth.json`)时:发布前先把旧目标挪到可恢复的
+     * 备份名, 发布成功后再删备份。Windows 上「删目标 → rename 发布」两步之间有一个
+     * 「目标不存在」的窗口, 进程在这个窗口里崩掉, 系统凭证就彻底没了 —— 下次启动
+     * 看到系统路径缺失就直接返回, 用户看到的是 Codex 凭空掉登录(#9316 review)。
+     * 备份与 sidecar 共用同一个 token:崩在窗口里时两者都在, 启动对账认这对。
+     */
+    backupTarget?: boolean;
+  } = {},
 ): Promise<CodexAuthSnapshotOutcome> {
-  const sidecar = `${myAuth}.${process.pid}.${sidecarCounter++}.copytmp`;
+  const token = `${process.pid}.${sidecarCounter++}`;
+  const sidecar = `${myAuth}.${token}.copytmp`;
   let sourceStat: BigIntStats;
   try {
     // 身份比较必须用 bigint:NTFS 的 file id 可能超出安全整数范围,四舍五入后
@@ -285,33 +297,79 @@ export async function copyCodexAuthSnapshot(
         return { kind: 'target-changed' };
       }
     } catch {
-      // 目标已不存在 → 继续发布(重建)。
+      // 目标在复制途中消失: 本机 Codex 刚刚把它删了(登出)。拿旧快照把它重建回来
+      // 等于撤销那次登出 —— 按冲突处理, 不重建。「目标本来就不存在、就是要重建」
+      // 走 expectTargetAbsent 那条路(#9316 review)。
+      await fsp.rm(sidecar, { force: true }).catch(() => undefined);
+      return { kind: 'target-changed' };
     }
   }
 
+  // 备份与 sidecar 共用同一个 token:崩在窗口里时两者都在, 启动对账只认**配对**的
+  // 备份与 sidecar(发布成功后 sidecar 已被 rename 成目标, 备份即使没删掉也不再
+  // 可恢复 —— 恢复它会在本机 Codex 之后登出时把旧账号凭证倒回来,#9316 review)。
+  let backupPath: string | null = null;
   try {
-    if (platform === 'win32') {
-      try {
-        await fsp.rm(myAuth, { force: true });
-      } catch (rmError) {
-        if (!isWindowsAclDenied(rmError) || !(await healWindowsAuthAcl(myAuth, execFileImpl))) {
-          throw rmError;
-        }
-        await fsp.rm(myAuth, { force: true });
-      }
-    }
     // 时间戳打在 sidecar 上:随 rename 原子生效,发布后不再按路径改时间
     // (本机 Codex 在 rename 之后刷新的话,按路径改会把新凭证盖上旧代次时间戳)。
+    // 必须在**挪走旧目标之前**打好:崩在窗口里时 sidecar 会被启动对账按它恢复,
+    // 那时它必须已经带着源那一代的时间戳。
     await fsp.utimes(
       sidecar,
       codexAuthTimestampSeconds(sourceStat.atimeNs),
       codexAuthTimestampSeconds(sourceStat.mtimeNs),
     ).catch(() => undefined);
+    if (platform === 'win32') {
+      if (opts.backupTarget === true) {
+        // 目标是系统凭证: 先把旧目标挪到可恢复的备份名, 发布成功后再删备份。
+        // 崩在「挪走之后、发布之前」时备份还在, 下次启动对账按它恢复 —— 否则
+        // ~/.codex/auth.json 就此消失, 本机 Codex 凭空掉登录(#9316 review)。
+        backupPath = `${myAuth}.${token}.swapbak`;
+        try {
+          await fsp.rename(myAuth, backupPath);
+        } catch (renameError) {
+          if (!isWindowsAclDenied(renameError) || !(await healWindowsAuthAcl(myAuth, execFileImpl))) {
+            // 挪不动(ACL / 被占用) → 照旧走删除路径, 行为不变。
+            await fsp.rm(myAuth, { force: true });
+            backupPath = null;
+          } else {
+            await fsp.rename(myAuth, backupPath);
+          }
+        }
+      } else {
+        try {
+          await fsp.rm(myAuth, { force: true });
+        } catch (rmError) {
+          if (!isWindowsAclDenied(rmError) || !(await healWindowsAuthAcl(myAuth, execFileImpl))) {
+            throw rmError;
+          }
+          await fsp.rm(myAuth, { force: true });
+        }
+      }
+    }
     await fsp.rename(sidecar, myAuth);
+    if (backupPath) await fsp.rm(backupPath, { force: true }).catch(() => undefined);
     await fsp.rm(sidecar, { force: true }).catch(() => undefined);
     return { kind: 'copied' };
   } catch (error) {
     await fsp.rm(sidecar, { force: true }).catch(() => undefined);
+    if (backupPath) {
+      if (await pathEntryExists(myAuth)) {
+        // 目标已被本机 Codex 重建出来: 备份是旧代次, 留着也没用。
+        await fsp.rm(backupPath, { force: true }).catch(() => undefined);
+      } else {
+        // 目标此刻只在备份里(刚被我们挪走的)。源还在: 用源重建, 重建成功就把备份
+        // 清掉; 重建失败就把备份挪回原位 —— 旧凭证绝不凭空消失(#9316 review)。
+        const restored = await copyCodexAuthSnapshot(systemAuth, myAuth, platform, execFileImpl, {
+          expectTargetAbsent: true,
+        });
+        if (restored.kind === 'copied') {
+          await fsp.rm(backupPath, { force: true }).catch(() => undefined);
+          return { kind: 'copied' };
+        }
+        await fsp.rename(backupPath, myAuth).catch(() => undefined);
+      }
+    }
     if (await pathEntryExists(myAuth)) {
       return { kind: 'swap-failed-intact', error: error as Error };
     }
@@ -528,6 +586,11 @@ async function breakResidualCodexHardlinksDetailed(
       await fsp.rm(sidecar, { force: true }).catch(() => undefined);
       return { broke: false, generationChanged: true };
     }
+    // 时间戳打在 sidecar 上, 随 rename 原子生效 —— 发布后按路径 utimes 的话,
+    // 本机 Codex 在 rename 之后刷新的凭证会被盖上旧代次的时间戳(#9316 review)。
+    // 必须在**挪走旧目标之前**打好: 崩在窗口里时 sidecar 会被启动对账按它恢复,
+    // 那时它必须已经带着原来的代次时间戳。
+    await fsp.utimes(sidecar, mtime, mtime).catch(() => undefined);
     if (platform === 'win32') {
       try {
         await fsp.rename(file, backup);
@@ -543,9 +606,6 @@ async function breakResidualCodexHardlinksDetailed(
       }
     }
     // 换 inode 不应让凭证看起来更新: 保留原修改时间, 对账仍按同一代次判断。
-    // 时间戳打在 sidecar 上, 随 rename 原子生效 —— 发布后按路径 utimes 的话,
-    // 本机 Codex 在 rename 之后刷新的凭证会被盖上旧代次的时间戳(#9316 review)。
-    await fsp.utimes(sidecar, mtime, mtime).catch(() => undefined);
     await fsp.rename(sidecar, file);
     if (backupPath) await fsp.rm(backupPath, { force: true }).catch(() => undefined);
     return { broke: true, generationChanged: false };
@@ -611,12 +671,18 @@ export async function recoverInterruptedCodexAuthSwap(file: string): Promise<boo
     const chosenName = stamped[0].name;
     const chosen = path.join(dir, chosenName);
     const token = chosenName.slice(prefix.length, -'.swapbak'.length);
+    const sidecar = path.join(dir, `${prefix}${token}.copytmp`);
+    // 发布**配对的 sidecar**,不是备份那个 inode: 备份正是当初 nlink>1 才进清理
+    // 流程的那份 —— 把它硬链回去等于把残余硬链原样恢复, Codex 0.165+ 照样写不进去,
+    // 用户再也存不住登录态。sidecar 是清理时写出的独立副本(nlink=1), 恢复它才是
+    // 「一份干净的系统凭证」(#9316 review)。
+    //
     // 目标可能在上面那次 exists 检查之后被本机 Codex 重建:rename 会直接盖掉它。
     // link 是原子占位 —— 目标已存在时报 EEXIST, 换代的新凭证原样留下。
     let published = false;
     let conflict = false;
     try {
-      await fsp.link(chosen, file);
+      await fsp.link(sidecar, file);
       published = true;
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === 'EEXIST') {
@@ -624,7 +690,7 @@ export async function recoverInterruptedCodexAuthSwap(file: string): Promise<boo
       } else if (!(await pathEntryExists(file))) {
         // 不支持硬链等:退回 rename, 但先再确认一次目标仍然不在。
         try {
-          await fsp.rename(chosen, file);
+          await fsp.rename(sidecar, file);
           published = true;
         } catch {
           published = false;
@@ -634,10 +700,10 @@ export async function recoverInterruptedCodexAuthSwap(file: string): Promise<boo
       }
     }
     if (published) {
+      // sidecar 的名字去掉, 目标上只剩一个链接(nlink 回到 1); 备份那个旧 inode 只剩
+      // 别的 profile 的链接, 删掉这个名字即可。
+      await fsp.rm(sidecar, { force: true }).catch(() => undefined);
       await fsp.rm(chosen, { force: true }).catch(() => undefined);
-      await fsp.rm(path.join(dir, `${prefix}${token}.copytmp`), { force: true }).catch(() =>
-        undefined,
-      );
       await retireSwaps(dir, prefix, backups, chosenName);
       return true;
     }
@@ -789,9 +855,13 @@ export async function syncIndependentCodexAuth(
     from: string,
     to: string,
     successKind: CodexAuthCopySyncKind,
-    expectTargetMtimeMs?: number,
+    target: {
+      expectTargetMtimeMs?: number;
+      expectTargetAbsent?: boolean;
+      backupTarget?: boolean;
+    } = {},
   ): Promise<CodexAuthCopySyncOutcome> => {
-    const copied = await copyCodexAuthSnapshot(from, to, platform, execFileImpl, { expectTargetMtimeMs });
+    const copied = await copyCodexAuthSnapshot(from, to, platform, execFileImpl, target);
     if (copied.kind === 'copied') {
       // mtime 由 copyCodexAuthSnapshot 用「复制那一刻捕获的源代次」盖好:
       // 发布后再读源路径拿到的可能是新代次的 mtime, 旧字节会被贴上新时间戳,
@@ -897,7 +967,12 @@ export async function syncIndependentCodexAuth(
     if (!local || await sameCodexAuthInode(systemAuth, myAuth)) {
       // 存量 hardlink: 复制一份到 myAuth 会拆掉本沙箱这一端的链接。系统路径上还
       // 挂着别的 profile 的硬链时 nlink 仍 > 1,Codex 照样拒绝写 —— 一并换到新 inode。
-      const published = await publish(systemAuth, myAuth, 'copied-from-system', systemStat.mtimeMs);
+      //
+      // 本地副本整个不在时: 重建的前提是「目标仍然不存在」(本机 Codex 刚建出来的
+      // 那份是新的一代, 不能覆盖) —— 走 expectTargetAbsent, 不走代次比对。
+      const published = await publish(systemAuth, myAuth, 'copied-from-system', local
+        ? { expectTargetMtimeMs: systemStat.mtimeMs }
+        : { expectTargetAbsent: true });
       if (published.conflict) continue;
       const residual = await detachHardlinks(systemAuth);
       // 拆硬链时发现系统凭证刚换代: 这次不发布旧字节, 重新对账。
@@ -944,7 +1019,9 @@ export async function syncIndependentCodexAuth(
       const confirmed = opts.confirmLocalToSystem ? await opts.confirmLocalToSystem() : true;
       if (!confirmed) {
         // 账号不再一致 → 不写回系统,系统凭证单向获胜。
-        const published = await publish(systemAuth, myAuth, 'copied-from-system', localStat.mtimeMs);
+        const published = await publish(systemAuth, myAuth, 'copied-from-system', {
+          expectTargetMtimeMs: localStat.mtimeMs,
+        });
         if (published.conflict) continue;
         const residual = await detachHardlinks(systemAuth);
         if (residual.generationChanged) continue;
@@ -955,7 +1032,14 @@ export async function syncIndependentCodexAuth(
           ...residualFields({ system: residual.residual, local: localResidual.residual }),
         };
       }
-      const published = await publish(myAuth, systemAuth, 'copied-from-local', systemStat.mtimeMs);
+      // 目标是**系统凭证**: 用带备份的发布 —— Windows 上「删目标 → rename 发布」
+      // 之间有一个「目标不存在」的窗口, 进程在这个窗口里崩掉, ~/.codex/auth.json 就此
+      // 消失, 本机 Codex 凭空掉登录(本地那份还在, 用户却已经登出)。备份让崩溃窗口
+      // 里的凭证可恢复(#9316 review)。
+      const published = await publish(myAuth, systemAuth, 'copied-from-local', {
+        expectTargetMtimeMs: systemStat.mtimeMs,
+        backupTarget: true,
+      });
       if (published.conflict) continue;
       // 系统路径刚换到新 inode(nlink 回到 1);本地这份还可能和别的 profile
       // 的旧副本共用 inode —— 一并拆掉,否则 Codex 仍写不进本地凭证。
@@ -967,7 +1051,9 @@ export async function syncIndependentCodexAuth(
       };
     }
     // 账号未证明一致、或系统更新:系统凭证单向获胜,只把系统内容刷到本地。
-    const published = await publish(systemAuth, myAuth, 'copied-from-system', localStat.mtimeMs);
+    const published = await publish(systemAuth, myAuth, 'copied-from-system', {
+      expectTargetMtimeMs: localStat.mtimeMs,
+    });
     if (published.conflict) continue;
     const residual = await detachHardlinks(systemAuth);
     // 拆硬链时发现系统凭证刚换代: 这次不发布旧字节, 重新对账。
