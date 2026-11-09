@@ -29,7 +29,7 @@ export interface AppShellCoverContextValue {
   coverHeld: boolean;
   startupTarget: StartupTarget;
   localDbGateStatus: LocalDbGateStatus;
-  reportLocalDbGate: (status: LocalDbGateStatus, owner: LocalDbOwnerStamp) => void;
+  reportLocalDbGate: (status: LocalDbGateStatus) => void;
 }
 
 const AppShellCoverContext = createContext<AppShellCoverContextValue | null>(null);
@@ -52,13 +52,16 @@ export function AppShellCoverProvider({ children }: { children: ReactNode }) {
   const localDbGateStatus = dbResult && dbResult.owner.dataOwnerId === dataOwnerId
     && dbResult.owner.ownerGeneration === dataOwnerGeneration ? dbResult.status : 'pending';
 
-  const reportLocalDbGate = useCallback((status: LocalDbGateStatus, owner: LocalDbOwnerStamp) => {
+  // Capture the owner when the reporter is issued, so every consumer (including
+  // the add-account recovery route) reports into its own generation.
+  const reportLocalDbGate = useCallback((status: LocalDbGateStatus) => {
+    const owner = { dataOwnerId, ownerGeneration: dataOwnerGeneration };
     setDbResult((previous) => {
       // Main generations only advance. Late reports cannot replace a newer owner result.
       if (previous && previous.owner.ownerGeneration > owner.ownerGeneration) return previous;
       return { status, owner };
     });
-  }, []);
+  }, [dataOwnerId, dataOwnerGeneration]);
 
   const startupTarget: StartupTarget = envStatus !== 'passed' || isInitializing || ownerBoundaryPending
     ? 'splash'

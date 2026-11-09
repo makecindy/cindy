@@ -74,9 +74,7 @@ describe('AppShellCover', () => {
     function ReadyProbe() {
       const { reportLocalDbGate, coverHeld } = useAppShellCover();
       return (
-        <button type="button" onClick={() => reportLocalDbGate('ready', {
-          dataOwnerId: auth.dataOwnerId, ownerGeneration: auth.dataOwnerGeneration,
-        })}>
+        <button type="button" onClick={() => reportLocalDbGate('ready')}>
           {coverHeld ? 'held' : 'open'}
         </button>
       );
@@ -104,14 +102,15 @@ describe('AppShellCover', () => {
   it.each(['ready', 'fatal'] as const)('does not reuse or accept an old generation’s %s', (status) => {
     auth.canEnterApp = true;
     const hook = renderHook(() => useAppShellCover(), { wrapper: AppShellCoverProvider });
-    act(() => hook.result.current.reportLocalDbGate(status, { dataOwnerId: 'owner', ownerGeneration: 1 }));
+    const oldReport = hook.result.current.reportLocalDbGate;
+    act(() => oldReport(status));
     expect(hook.result.current.startupTarget).toBe(status === 'ready' ? 'app' : 'database-error');
     auth.dataOwnerGeneration = 2;
     hook.rerender();
     expect(hook.result.current.startupTarget).toBe('splash');
-    act(() => hook.result.current.reportLocalDbGate('ready', { dataOwnerId: 'owner', ownerGeneration: 2 }));
+    act(() => hook.result.current.reportLocalDbGate('ready'));
     expect(hook.result.current.startupTarget).toBe('app');
-    act(() => hook.result.current.reportLocalDbGate(status, { dataOwnerId: 'owner', ownerGeneration: 1 }));
+    act(() => oldReport(status));
     expect(hook.result.current.startupTarget).toBe('app');
   });
 
@@ -124,7 +123,7 @@ describe('AppShellCover', () => {
     auth.ownerBoundaryPending = false;
     auth.canEnterApp = true;
     hook.rerender();
-    act(() => hook.result.current.reportLocalDbGate('fatal', { dataOwnerId: 'owner', ownerGeneration: 1 }));
+    act(() => hook.result.current.reportLocalDbGate('fatal'));
     expect(hook.result.current.startupTarget).toBe('database-error');
     expect(hook.result.current.coverHeld).toBe(false);
     env.status = 'failed';

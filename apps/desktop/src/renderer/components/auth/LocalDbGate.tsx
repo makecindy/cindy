@@ -160,16 +160,15 @@ export function LocalDbGate() {
   }, [dataOwnerId, dataOwnerGeneration, retryNonce, t, setDecision]);
 
   useEffect(() => {
-    const owner = { dataOwnerId, ownerGeneration: dataOwnerGeneration };
     if (!dataOwnerId || decision.phase === 'checking') {
-      reportLocalDbGate('pending', owner);
+      reportLocalDbGate('pending');
     } else if (decision.phase === 'fatal') {
-      reportLocalDbGate('fatal', owner);
+      reportLocalDbGate('fatal');
     } else {
-      reportLocalDbGate('ready', owner);
+      reportLocalDbGate('ready');
     }
     return () => {
-      reportLocalDbGate('pending', owner);
+      reportLocalDbGate('pending');
     };
   }, [dataOwnerId, dataOwnerGeneration, decision, reportLocalDbGate]);
 
