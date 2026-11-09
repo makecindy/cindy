@@ -280,11 +280,13 @@ export function initTapdb(auth: AuthStateObserver): void {
   // 而那一刻用户可能还没同意协议(SDK 未 init)。这里无论如何都记录 userId,
   // 等 SDK 真正 init 时再补一次 setUser,避免漏绑。
   try {
-    auth.onAuthStateChange((state) => {
+    auth.onAuthStateChange((state, source) => {
       try {
         const nextUserId = state.isAuthenticated && state.user ? state.user.id : null;
         const previousUserId = currentUserId;
         currentUserId = nextUserId;
+        // 初始化和订阅回放只补种身份;真实登录与跨天活跃仍走推送/交互路径。
+        if (source !== 'push') return;
         if (!sdkInitialized || !reportingAllowed) return;
 
         if (nextUserId === null) {

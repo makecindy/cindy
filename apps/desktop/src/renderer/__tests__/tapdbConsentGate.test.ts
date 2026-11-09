@@ -12,7 +12,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { AuthState } from '../lib/authService';
+import type { AuthState, AuthStateSource } from '../lib/authService';
 
 const tapdb = vi.hoisted(() => ({
   init: vi.fn(),
@@ -73,9 +73,9 @@ let authListener: ((state: unknown) => void) | null = null;
 let authSeed: AuthState | null = null;
 const authObserver = {
   getSnapshot: () => authSeed,
-  onAuthStateChange: (listener: (state: AuthState) => void) => {
-    authListener = listener as (state: unknown) => void;
-    if (authSeed) listener(authSeed);
+  onAuthStateChange: (listener: (state: AuthState, source: AuthStateSource) => void) => {
+    authListener = (state) => listener(state as AuthState, 'push');
+    if (authSeed) listener(authSeed, 'snapshot');
     return () => { authListener = null; };
   },
 };
@@ -701,6 +701,33 @@ describe('engagement-driven activity reporting', () => {
 
     expect(tapdb.setUser).not.toHaveBeenCalled();
     expect(initialize).not.toHaveBeenCalled();
+  });
+
+  // 真实服务 + 统计入口：晚到的初始化只补种身份，不制造无交互的账号活跃。
+  it('does not report a late initialization as login when consent resolves first', async () => {
+    installElectronApi(ALLOWED);
+    let finish!: (state: AuthState) => void;
+    (window as unknown as { electronAPI: Record<string, unknown> }).electronAPI.authInitialize =
+      vi.fn(() => new Promise<AuthState>((resolve) => { finish = resolve; }));
+    const client = await importClient();
+    const { createAuthService } = await import('../lib/authService');
+    const service = createAuthService();
+    try {
+      const initializing = service.initialize();
+      client.initTapdb(service);
+      await flush();
+      tapdb.setUser.mockClear();
+      finish({ isAuthenticated: true, user: { id: 'user-1' }, mode: 'cloud' } as AuthState);
+      await initializing;
+      expect(tapdb.setUser).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(30 * 60 * 1_000);
+      fireWindowEvent('pointerdown');
+      expect(tapdb.setUser).toHaveBeenLastCalledWith('user-1');
+      authListener?.({ isAuthenticated: true, user: { id: 'user-2' }, mode: 'cloud' });
+      expect(tapdb.setUser).toHaveBeenLastCalledWith('user-2');
+    } finally {
+      service.dispose();
+    }
   });
 
   it('a token-refresh auth broadcast on a new day does not emit setUser (no interaction)', async () => {

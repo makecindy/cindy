@@ -52,9 +52,11 @@ export interface AuthState {
   credentialStoreUnavailable: boolean;
 }
 
+export type AuthStateSource = 'initialize' | 'push' | 'snapshot';
+
 export interface AuthStateObserver {
   getSnapshot(): AuthState | null;
-  onAuthStateChange(callback: (state: AuthState) => void): () => void;
+  onAuthStateChange(callback: (state: AuthState, source: AuthStateSource) => void): () => void;
 }
 
 export interface AuthService extends AuthStateObserver {
@@ -101,7 +103,7 @@ function normalizeAuthState(raw: Awaited<ReturnType<typeof window.electronAPI.au
 /** One Main projection per renderer. Components only own their subscriptions. */
 export function createAuthService(): AuthService {
   if (rendererService) return rendererService;
-  const listeners = new Set<(state: AuthState) => void>();
+  const listeners = new Set<(state: AuthState, source: AuthStateSource) => void>();
   let snapshot: AuthState | null = null;
   let initializeTask: Promise<AuthState> | null = null;
   let version = 0;
@@ -117,7 +119,7 @@ export function createAuthService(): AuthService {
       pending: state.ownerBoundaryPending,
       generation: state.ownerGeneration,
     });
-    listeners.forEach((listener) => listener(state));
+    listeners.forEach((listener) => listener(state, source));
     return state;
   };
   const unsubscribeIpc = window.electronAPI.onAuthStateChange((rawState) => {
@@ -213,9 +215,9 @@ export function createAuthService(): AuthService {
       return window.electronAPI.authConsumeAccountDeletionRestoredNotice();
     },
 
-    onAuthStateChange(callback: (state: AuthState) => void): () => void {
+    onAuthStateChange(callback: (state: AuthState, source: AuthStateSource) => void): () => void {
       listeners.add(callback);
-      if (snapshot) callback(snapshot);
+      if (snapshot) callback(snapshot, 'snapshot');
       return () => listeners.delete(callback);
     },
 

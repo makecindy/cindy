@@ -68,7 +68,7 @@ describe('renderer auth service', () => {
     await expect(second).resolves.toEqual(local);
     const listener = vi.fn();
     service.onAuthStateChange(listener);
-    expect(listener).toHaveBeenCalledWith(local);
+    expect(listener).toHaveBeenCalledWith(local, 'snapshot');
     expect(service.getSnapshot()).toEqual(local);
     await expect(service.initialize()).resolves.toEqual(local);
     expect(initialize).toHaveBeenCalledTimes(1);
@@ -108,7 +108,7 @@ describe('renderer auth service', () => {
     stop();
     push(local);
     expect(first).not.toHaveBeenCalled();
-    expect(second).toHaveBeenCalledWith(local);
+    expect(second).toHaveBeenCalledWith(local, 'push');
     expect(unsubscribe).not.toHaveBeenCalled();
     service.dispose();
     expect(unsubscribe).toHaveBeenCalledTimes(1);
