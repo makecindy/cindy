@@ -488,6 +488,11 @@ test('CI aggregates only accept planned skips and preserve failure propagation',
   const { jobs } = matter.engines.yaml.parse(fs.readFileSync(path.join(root, '.github/workflows/ci.yml'), 'utf8'));
   assert.equal(jobs.changes.outputs.linux_unit, '${{ steps.scope.outputs.linux_unit }}');
   assert.equal(jobs.changes.outputs.windows_unit, '${{ steps.scope.outputs.windows_unit }}');
+  assert.equal(jobs.changes.outputs.design_generated, '${{ steps.scope.outputs.design_generated }}');
+  const generated = jobs['verify-checks'].steps.find(step => step.name === 'Check generated design tokens');
+  assert.equal(generated.if, "needs.changes.outputs.design_generated == 'true'");
+  assert.equal(generated.run, 'pnpm --filter @cindy/design-tokens check:generated');
+  assert.equal(generated['continue-on-error'], undefined);
   assert.equal(jobs['linux-unit-shards'].if, "needs.changes.outputs.linux_unit == 'true'");
   assert.equal(jobs['windows-unit-shards'].if, "needs.changes.outputs.windows_unit == 'true'");
   assert.equal(jobs['windows-runner-checks'].if, "needs.changes.outputs.desktop == 'true'");

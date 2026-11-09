@@ -437,6 +437,20 @@ test("CI scope separates explanatory docs and translations from runtime changes"
 		"apps/desktop/resources/system-skills/guide/SKILL.md", "unknown.json"]) {
 		assert.equal(classifyChanges([file]).runtime, true, file);
 	}
+	// DS-8 generated tables are executable inputs even in an otherwise docs-only
+	// PR. Preserve the production generator's freshness/marker validation without
+	// starting complete OS suites; mixed code PRs already run the unit protection.
+	for (const doc of ["docs/design-rules/DESIGN.md", "docs/design-rules/login-flow.md"]) {
+		for (const other of [[], ["README.md"], ["apps/desktop/src/renderer/i18n/locales/de/common.json"]]) {
+			const plan = classifyChanges([doc, ...other]);
+			assert.equal(plan.design_generated, true);
+			assert.equal(plan.windows_unit, false);
+		}
+		const mixed = classifyChanges([doc, "packages/design-tokens/src/generate.ts"]);
+		assert.equal(mixed.design_generated, false);
+		assert.equal(mixed.windows_unit, true);
+	}
+	assert.equal(classifyChanges(["docs/dev-rules/README.md"]).design_generated, false);
 });
 
 test("CI scope uses the event comparison and falls back to full checks without a usable diff", () => {

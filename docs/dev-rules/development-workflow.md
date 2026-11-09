@@ -72,6 +72,9 @@ worktree 建成空目录或自动切到项目根继续修改代码。
 - 根级已列明的说明文档、`docs/{dev-rules,product-rules,design-rules}/*.md` 与指定
   Greptile 审查规则只跑现有静态／源码契约、文档合同及文案检查，不启动双平台 unit。
   运行时 Skill、法律产物、设计预览、未知文件不属于这个豁免。
+  `DESIGN.md`、`login-flow.md` 含 DS-8 生成区块，轻量路径还运行
+  `@cindy/design-tokens` 的 `check:generated`，验证生成内容与边界标记；普通代码路径
+  继续由完整 unit 中的生产生成回归覆盖。
 - 纯 locale JSON（可混合上述文档）保留 Linux 完整 unit、文案及静态契约检查，跳过
   Windows 重跑、类型检查和运行时集成。没有只挑几个翻译测试代替既有覆盖。
 - 纯 Mobile `app/`、`src/` 改动保留完整双平台 unit、双端类型检查、静态契约和

@@ -881,6 +881,7 @@
         "pausedLocal": "Nimmt keine neuen Aufgaben von anderen Computern an",
         "cooling": "In Abkühlphase",
         "coolingUntil": "In Abkühlphase · etwa {{time}} wieder verfügbar",
+        "quotaExhausted": "Kontingent aufgebraucht",
         "offline": "Offline",
         "unreachableHere": "Von diesem Computer aus nicht erreichbar",
         "unavailable": {

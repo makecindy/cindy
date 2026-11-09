@@ -19,6 +19,8 @@ import { createRemoteDeviceUsageMirror } from '../hooks/remoteDeviceUsageMirror'
 import {
   selectRemoteCodexAccountUsage,
   useRemoteCodexAccountUsage,
+  useRemoteCodexRateLimits,
+  requestRemoteCodexRateLimitsRefresh,
   useRemoteClaudeAccountUsage,
   useRemoteXaiRateLimit,
   resetRemoteDeviceUsageMirrorsForTest,
@@ -102,6 +104,26 @@ afterEach(() => {
   cleanup();
   vi.clearAllTimers();
   vi.useRealTimers();
+});
+
+// Unit r4389934308: a live card's owned recovery queue must be discarded by
+// identity clear or owner change even while another ordinary subscriber remains.
+// Previous owner/push tests did not contain a queued live observation-gap read.
+it.each(['clear', 'owner'] as const)('invalidates a queued live mirror reread after %s', async stop => {
+  const mirror = createRemoteDeviceUsageMirror<{ remaining: number }>({ invokeChannel: 'usage:test', pushChannel: 'usage:test-changed' });
+  let resolve!: (value: { remaining: number }) => void;
+  mocks.invoke.mockImplementation(() => new Promise(done => { resolve = done; }));
+  const other = renderHook(() => mirror.useMirror('mini'));
+  const live = renderHook(({ active }) => mirror.useMirror(active ? 'mini' : null, undefined, { live: true }),
+    { initialProps: { active: true } });
+  live.rerender({ active: false });
+  live.rerender({ active: true });
+  expect(mocks.invoke).toHaveBeenCalledTimes(1);
+  if (stop === 'clear') act(() => emitPush({ deviceId: 'mini', channel: 'usage:test-changed', payload: null }));
+  else act(() => setDataOwnerGeneration('owner-b'));
+  await act(async () => resolve({ remaining: 82 }));
+  expect(mocks.invoke).toHaveBeenCalledTimes(1);
+  expect(other.result.current).toBeNull();
 });
 
 describe('createRemoteDeviceUsageMirror', () => {
@@ -197,6 +219,59 @@ describe('createRemoteDeviceUsageMirror', () => {
     await flushMicrotasks();
     expect(mocks.invoke).toHaveBeenCalledTimes(2);
     expect(second.result.current).toMatchObject({ primary: { usedPercent: 3 } });
+  });
+});
+
+// Unit regression (provider-groups.md §10): native quota has a richer RPC result
+// than the account push. Existing mirror tests do not cover those different shapes.
+// Minimal inputs: two cards share one pending native read; a clear arrives before it settles.
+// Single-file command wall time: 2.54s (2026-10-22).
+describe('remote native Codex quota', () => {
+  it('shares native reads, ignores read-generated usage pushes, and fences late reads after a clear', async () => {
+    let resolve!: (value: unknown) => void;
+    mocks.invoke.mockImplementation(() => new Promise(done => { resolve = done; }));
+    const first = renderHook(() => useRemoteCodexRateLimits('device-1', 'openai-extra'));
+    const second = renderHook(() => useRemoteCodexRateLimits('device-1', 'openai-extra'));
+    expect(mocks.invoke).toHaveBeenCalledTimes(1);
+    expect(mocks.invoke).toHaveBeenCalledWith('device-1', 'maker:usage:codex-rate-limits', ['openai-extra']);
+    const native = { providerId: 'openai-extra', account: { planType: 'plus' }, rateLimits: { primary: { usedPercent: 73 } } };
+    await act(async () => resolve(native));
+    expect(first.result.current).toEqual(native);
+    expect(second.result.current).toEqual(native);
+    act(() => emitPush({ deviceId: 'device-1', channel: 'usage:codex-provider-account-changed',
+      payload: { providerId: 'openai-extra', snapshot: { primary: { usedPercent: 74 } } } }));
+    expect(first.result.current).toEqual(native);
+    expect(mocks.invoke).toHaveBeenCalledTimes(1);
+
+    act(() => requestRemoteCodexRateLimitsRefresh('device-1', 'openai-extra'));
+    act(() => emitPush({ deviceId: 'device-1', channel: 'usage:codex-provider-account-changed',
+      payload: { providerId: 'openai-extra', snapshot: null } }));
+    await act(async () => resolve(native));
+    expect(first.result.current).toBeNull();
+    expect(second.result.current).toBeNull();
+  });
+
+  it('invalidates cached native quota when a reread cannot establish the named account', async () => {
+    // PR #6752 r4344811616: a rejected/malformed/cleared native reread must not
+    // leave an earlier account cached. Existing coverage started from null.
+    const native = { providerId: 'openai-extra', account: { planType: 'plus' }, rateLimits: { primary: { usedPercent: 73 } } };
+    mocks.invoke.mockResolvedValue(native);
+    const hook = renderHook(() => useRemoteCodexRateLimits('device-1', 'openai-extra'));
+    await flushMicrotasks();
+    for (const invalid of [
+      { account: { planType: 'plus' }, rateLimits: { primary: { usedPercent: 9 } } },
+      { providerId: 'openai-extra', account: null, rateLimits: {} },
+      null,
+    ]) {
+      mocks.invoke.mockResolvedValue(native);
+      act(() => requestRemoteCodexRateLimitsRefresh('device-1', 'openai-extra'));
+      await flushMicrotasks();
+      expect(hook.result.current).toEqual(native);
+      mocks.invoke.mockResolvedValue(invalid);
+      act(() => requestRemoteCodexRateLimitsRefresh('device-1', 'openai-extra'));
+      await flushMicrotasks();
+      expect(hook.result.current).toBeNull();
+    }
   });
 });
 

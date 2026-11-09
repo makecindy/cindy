@@ -873,6 +873,7 @@
         "pausedLocal": "已暫停接外來之新差事",
         "cooling": "方歇",
         "coolingUntil": "冷卻中 · 約 {{time}} 復",
+        "quotaExhausted": "限額已盡",
         "offline": "失聯",
         "unreachableHere": "自此機連不上",
         "unavailable": {

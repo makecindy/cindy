@@ -7,6 +7,9 @@ import { fileURLToPath } from 'node:url';
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const DOCUMENTS = new Set(['AGENTS.md', 'REVIEW.md', 'README.md', 'README.en.md',
   'CONTRIBUTING.md', 'CONTRIBUTING.en.md', '.greptile/files.json', '.greptile/rules.md']);
+const GENERATED_DESIGN_DOCUMENTS = new Set([
+  'docs/design-rules/DESIGN.md', 'docs/design-rules/login-flow.md',
+]);
 
 function isDocument(file) {
   // Packaged prompts, legal notices, generated previews and arbitrary JSON are
@@ -32,6 +35,9 @@ export function classifyChanges(files) {
     windows_unit: runtime,
     desktop: runtime && mode !== 'mobile',
     runtime,
+    // Runtime changes retain the unit tier's DS-8 production regression. The
+    // lightweight route must separately validate generated tables and markers.
+    design_generated: !runtime && files.some(file => GENERATED_DESIGN_DOCUMENTS.has(file)),
   };
 }
 

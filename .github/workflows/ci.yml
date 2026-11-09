@@ -36,6 +36,7 @@ jobs:
       windows_unit: ${{ steps.scope.outputs.windows_unit }}
       desktop: ${{ steps.scope.outputs.desktop }}
       runtime: ${{ steps.scope.outputs.runtime }}
+      design_generated: ${{ steps.scope.outputs.design_generated }}
     steps:
       - name: Checkout client
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -93,6 +94,10 @@ jobs:
       - name: Check documentation contracts
         if: needs.changes.outputs.runtime != 'true'
         run: pnpm check:dev-docs
+
+      - name: Check generated design tokens
+        if: needs.changes.outputs.design_generated == 'true'
+        run: pnpm --filter @cindy/design-tokens check:generated
 
       # Cross-file security, permission, and design contracts are intentionally
       # outside the ordinary behavior-test pool, but remain a required gate.
