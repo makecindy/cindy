@@ -913,9 +913,13 @@
       "description": "為了平均用完各帳號的配額，建議這則訊息換到 {{label}} 傳送（{{quota}}）。換過去會帶上最近幾輪對話和摘要，更早的細節可能記不全。",
       "quota": "還剩 {{left}}%",
       "quotaReset": "還剩 {{left}}%，{{reset}}",
-      "confirm": "換過去",
-      "cancel": "取消",
-      "remember": "以後自動換，不再詢問（僅此任務）"
+      "confirm": "僅這次換過去",
+      "cancel": "暫不切換",
+      "remember": "以後自動切換，不再詢問",
+      "disable": "不自動切換，不再詢問",
+      "disableFailed": "無法確認選擇是否已儲存。請檢查連線，並確認任務所在電腦上的 Cindy 已更新後重試。這則訊息仍會照常傳送。",
+      "choiceLabel": "切換方式（僅本任務）",
+      "send": "繼續傳送"
     },
     "deleteConfirm": {
       "title": "刪除 {{provider}} 的供應商組？",
