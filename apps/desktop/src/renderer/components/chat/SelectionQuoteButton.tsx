@@ -131,7 +131,7 @@ function getFloatingAnchor(selection: Selection, range: Range): Omit<SelectionAn
   };
 }
 
-// User rows contain source labels, timestamps, controls and hidden measurement
+// Message rows contain source labels, timestamps, controls and hidden measurement
 // text as well as the sent body. Filter those nodes without changing the live
 // selection (including ranges crossing into the following assistant reply).
 function readQuoteText(selection: Selection, range: Range): string {

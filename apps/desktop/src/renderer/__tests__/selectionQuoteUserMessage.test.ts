@@ -139,7 +139,7 @@ describe('SelectionQuoteButton — message body selection actions', () => {
     vi.useRealTimers();
   });
 
-  async function renderMessages(onAskInSideChat?: (quote: string) => Promise<boolean>, reply = assistantText) {
+  async function renderMessages(onAskInSideChat?: (quote: string) => Promise<boolean>, reply = assistantText, nextUser?: string) {
     const containerRef = createRef<HTMLDivElement>();
     await act(async () => {
       render(createElement(MemoryRouter, null,
@@ -150,7 +150,12 @@ describe('SelectionQuoteButton — message body selection actions', () => {
                 workingDir: '', content: userText,
                 createdAt: '2026-11-09T10:00:00Z', sharedAuthorName: 'Message author',
               }),
-              createElement(AssistantMessage, { workingDir: '', content: reply }),
+              createElement(AssistantMessage, {
+                workingDir: '', content: reply,
+                createdAt: '2026-11-09T10:01:00Z', ghostReplyPending: true,
+                showActionBar: true, turnCostUsd: 0.001,
+              }),
+              nextUser && createElement(UserMessage, { workingDir: '', content: nextUser }),
               createElement(SelectionQuoteButton, { sessionId, containerRef, onAskInSideChat }),
             ),
             createElement('p', null, 'Outside the message stream'),
@@ -160,10 +165,12 @@ describe('SelectionQuoteButton — message body selection actions', () => {
     });
   }
 
-  function selectText(start: HTMLElement, end = start, startOffset = 0, endOffset = end.firstChild!.textContent!.length) {
+  function selectText(start: HTMLElement, end = start, startOffset = 0, endOffset?: number) {
+    const startNode = document.createTreeWalker(start, NodeFilter.SHOW_TEXT).nextNode()!;
+    const endNode = document.createTreeWalker(end, NodeFilter.SHOW_TEXT).nextNode()!;
     const range = document.createRange();
-    range.setStart(start.firstChild!, startOffset);
-    range.setEnd(end.firstChild!, endOffset);
+    range.setStart(startNode, startOffset);
+    range.setEnd(endNode, endOffset ?? endNode.textContent!.length);
     Object.defineProperty(range, 'getClientRects', {
       value: () => [new DOMRect(120, 100, 160, 20)],
     });
@@ -224,14 +231,36 @@ describe('SelectionQuoteButton — message body selection actions', () => {
     ]);
   });
 
-  it('does not offer quote actions for user message metadata', async () => {
+  it.each(['user', 'assistant'])('does not offer quote actions for %s message metadata', async (source) => {
     await renderMessages(vi.fn(async () => true));
-    const selection = selectText(screen.getByText('Message author'));
+    const selection = selectText(screen.getByText(source === 'user' ? 'Message author' : 'chat.ghostHook.processing'));
     expect(screen.queryByRole('button', { name: 'chat.quote.addToChat' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'chat.sideChat.title' })).toBeNull();
     act(() => nativeAddToChat());
     expect(getDraft(sessionId)).toBeUndefined();
     expect(selection.isCollapsed).toBe(false);
+  });
+
+  // PR #9503 discussion_r4511952066: selecting through a complete assistant row
+  // must exclude its action bar and status notice as well as user-row metadata.
+  // Earlier ranges ended inside the assistant body, before those siblings.
+  it.each(['quote', 'side chat'])('omits intervening assistant metadata from a cross-user %s', async (action) => {
+    const onAskInSideChat = vi.fn(async () => true);
+    const nextUser = 'Please continue';
+    await renderMessages(onAskInSideChat, assistantText, nextUser);
+    const selection = selectText(screen.getByText(userText), screen.getByText(nextUser));
+    expect(selection.toString()).toContain('chat.ghostHook.processing');
+    const expected = `${userText}\n\n${assistantText}\n\n${nextUser}`;
+    if (action === 'quote') {
+      fireEvent.click(screen.getByRole('button', { name: 'chat.quote.addToChat' }));
+      expect(getDraft(sessionId)?.text?.content?.[0]?.content).toEqual([
+        { type: 'composerQuote', attrs: { text: expected, sourcePath: null, startLine: null, endLine: null } },
+      ]);
+    } else {
+      await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'chat.sideChat.title' })); });
+      expect(onAskInSideChat).toHaveBeenCalledExactlyOnceWith(expected);
+      expect(getDraft(sessionId)).toBeUndefined();
+    }
   });
 
   it('preserves partial endpoints and paragraph breaks while filtering a cross-message quote', async () => {
