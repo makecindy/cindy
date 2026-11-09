@@ -382,6 +382,15 @@ let activeAuthRealm: AuthRegion = AUTH_REGION;
 let pendingAuthRealm: AuthRegion | null = null;
 let refreshTimer: ReturnType<typeof setTimeout> | null = null;
 let refreshPromise: Promise<boolean> | null = null;
+// At most one uncertain Resource generation per realm, never persisted/logged.
+// An explicit rejection without a preceding lost response must not trigger re-login.
+const uncertainResourceRefreshTokens = new Map<AuthRegion, string>();
+// Retain a received rotation until its durable commit succeeds. Retrying a
+// failed write must not send the already-consumed predecessor to the server.
+const pendingResourceRefreshResults = new Map<
+  AuthRegion,
+  { requestedToken: string; pair: AuthTokenPair; expectedVaultRefreshToken: string | null }
+>();
 const refreshBackoff = new AuthRefreshBackoff();
 let sessionInvalidationPromise: Promise<void> | null = null;
 // Real owner change / logout: keep the renderer fail-closed even if a late
@@ -1233,6 +1242,8 @@ async function transactAuthAccountVault<T>(
     allowUnreadableLogoutTombstones?: boolean;
     replaceUnreadableLogoutTombstones?: boolean;
     waitWhileBusyAfterRotation?: boolean;
+    /** A rotated server credential cannot be restored to its consumed predecessor. */
+    preserveRotatedCredentials?: boolean;
   } = {},
 ): Promise<T> {
   type Attempt = { kind: 'busy' } | { kind: 'committed'; result: T };
@@ -1276,6 +1287,14 @@ async function transactAuthAccountVault<T>(
           await afterPersist(result);
           return { kind: 'committed', result };
         } catch (error) {
+          if (options.preserveRotatedCredentials) {
+            // The new vault is already durable. Rolling it back would discard
+            // the only usable refresh token after an active-session write
+            // failure. Existing multi-source refresh reads can repair that
+            // projection from this vault on the next attempt.
+            log.warn('keeping rotated credentials after active-session projection write failed');
+            throw error;
+          }
           if (previousWasAbsent) {
             removeAtomicSafeOrThrow(AUTH_ACCOUNT_VAULT_KEY);
           } else if (
@@ -1688,13 +1707,25 @@ async function commitDesktopRefreshCredentials(
   requestedRefreshToken: string,
   options: {
     allowUnclaimedVault?: boolean;
+    expectedVaultRefreshToken?: string | null;
     validateBeforeWrite?: () => void;
   } = {},
 ): Promise<ActiveRefreshCredentialCommit> {
-  return transactAuthAccountVault(
+  const commit = await transactAuthAccountVault(
     (vault) => {
       options.validateBeforeWrite?.();
       const key = accountVaultKey(realm, pair.membership.id);
+      const currentVaultToken = vault.resources[key]?.refreshToken ?? null;
+      // The compatibility projection can remain stale after a failed write.
+      // Under the vault lock, accept only the generation observed before the
+      // request, or our own saved result whose projection still needs repair.
+      if (
+        options.expectedVaultRefreshToken !== undefined &&
+        currentVaultToken !== options.expectedVaultRefreshToken &&
+        currentVaultToken !== pair.refreshToken
+      ) {
+        return vault.resources[key] ? 'inactive' : 'discarded';
+      }
       const latestSession = readPersistedAuthSession();
       const requestedTokenStillStored =
         (latestSession?.realm === realm && latestSession.refreshToken === requestedRefreshToken) ||
@@ -1731,11 +1762,15 @@ async function commitDesktopRefreshCredentials(
         writePersistedAuthSessionOrThrow(pair.refreshToken, realm);
       }
     },
-    { waitWhileBusyAfterRotation: true },
+    { waitWhileBusyAfterRotation: true, preserveRotatedCredentials: true },
   ).catch((error) => {
     log.warn('refresh credential save failed', { realm }, requestErrorMessage(error));
     throw error;
   });
+  if (pendingResourceRefreshResults.get(realm)?.pair.refreshToken === pair.refreshToken) {
+    pendingResourceRefreshResults.delete(realm);
+  }
+  return commit;
 }
 
 /**
@@ -1953,6 +1988,61 @@ async function refreshSavedResourceSession(input: {
     );
   }
   return null;
+}
+
+/**
+ * A Resource rotation may complete on the server while its response is lost.
+ * Re-reading disk cannot recover that replacement in a single-instance app.
+ * Use only the still-active account's saved Passport, just as an explicit saved
+ * account switch does; device mismatch and disabled memberships never enter here.
+ */
+async function recoverActiveResourceSession(
+  realm: AuthRegion,
+  rejectedRefreshToken: string,
+): Promise<AuthTokenPair | null> {
+  if (isPassiveSharedUserDataInstance()) return null;
+  const vault = readAuthAccountVault();
+  const key = vault.activeAccountKey;
+  const resource = key ? vault.resources[key] : undefined;
+  if (
+    !key ||
+    !resource ||
+    resource.realm !== realm ||
+    resource.refreshToken !== rejectedRefreshToken ||
+    typeof vault.signedOutAt === 'number' ||
+    isLoggedOutVaultAccount(vault, key)
+  ) {
+    return null;
+  }
+  const metadata = resource.metadata;
+  const passport = vault.passports[passportVaultKey(realm, metadata.passportId)];
+  if (!passport) return null;
+  const recoveryEpoch = authStateEpoch;
+  const recoveryLoginEpoch = loginFlowEpoch;
+  const stillCurrent = (): boolean => {
+    if (authStateEpoch !== recoveryEpoch || loginFlowEpoch !== recoveryLoginEpoch) return false;
+    const latest = readAuthAccountVault();
+    const session = readPersistedAuthSession();
+    return (
+      latest.activeAccountKey === key &&
+      typeof latest.signedOutAt !== 'number' &&
+      !isLoggedOutVaultAccount(latest, key) &&
+      latest.resources[key]?.refreshToken === rejectedRefreshToken &&
+      session?.realm === realm &&
+      session.refreshToken === rejectedRefreshToken
+    );
+  };
+  if (!stillCurrent()) return null;
+  const client = createAuthClient(realm);
+  // This helper persists the rotated Passport before resolving and coalesces
+  // other consumers. A failed save must not be followed by a Resource exchange.
+  const account = await refreshPassportSessionSingleFlight(client, realm, passport.passportId);
+  if (!stillCurrent()) return null;
+  const pair = await client.exchangeAccountMembership(account.accountToken, metadata.membershipId);
+  // Even if an owner change raced the exchange, return the minted credential:
+  // the caller's vault CAS preserves it only for the account that still owns
+  // the consumed generation, without reactivating a switched/logged-out account.
+  return bindResourcePairToSavedAccount(pair, realm, metadata);
 }
 
 function readPersistedAuthSession() {
@@ -3202,11 +3292,10 @@ function scheduleRefresh(token: string): void {
   try {
     const payload = JSON.parse(Buffer.from(token.split('.')[1], 'base64').toString('utf-8'));
     const delay = (payload.exp - 300) * 1000 - Date.now();
-    if (delay <= 0) {
-      refresh();
-    } else {
-      refreshTimer = setTimeout(() => refresh(), delay);
-    }
+    // A cached rotation may already be due after retrying a failed save. Use a
+    // timer even then: a synchronous refresh would only join the current flight
+    // and leave no request scheduled after its refreshPromise is cleared.
+    refreshTimer = setTimeout(() => refresh(), Math.max(0, delay));
   } catch {
     // Invalid JWT format — skip scheduling
   }
@@ -3529,10 +3618,42 @@ async function runAuthRefreshWithReplacementRetry(
   replacementRetryExhausted: boolean;
   failureAction?: RefreshFailureAction;
   rejectedTokens: readonly string[];
+  expectedVaultRefreshToken?: string | null;
 }> {
+  let expectedVaultRefreshToken: string | null | undefined;
   const run = await runRefreshWithReplacementRetry(initialRefreshToken, {
-    doRefresh: (refreshToken) => requestAuthRefresh(refreshToken, opts.realm),
     readLatestStoredTokens: () => readStoredRefreshTokenCandidates(opts.realm),
+    doRefresh: async (refreshToken) => {
+      const pending = pendingResourceRefreshResults.get(opts.realm);
+      if (pending?.requestedToken === refreshToken) {
+        expectedVaultRefreshToken = pending.expectedVaultRefreshToken;
+        return { ok: true, status: 200, data: pending.pair };
+      }
+      // Copy token values before sending: the response identifies the account,
+      // but another instance may have advanced its vault entry by then.
+      const vaultTokens = new Map(
+        Object.entries(readAuthAccountVault().resources).map(
+          ([key, resource]) => [key, resource.refreshToken] as const,
+        ),
+      );
+      const result = await requestAuthRefresh(refreshToken, opts.realm);
+      if (!result.ok && (result.status === 0 || (result.status >= 200 && result.status < 300))) {
+        uncertainResourceRefreshTokens.set(opts.realm, refreshToken);
+      } else if (result.ok) {
+        const pair = result.data as RefreshResponse;
+        expectedVaultRefreshToken =
+          vaultTokens.get(accountVaultKey(opts.realm, pair.membership.id)) ?? null;
+        pendingResourceRefreshResults.set(opts.realm, {
+          requestedToken: refreshToken,
+          pair,
+          expectedVaultRefreshToken,
+        });
+        if (uncertainResourceRefreshTokens.get(opts.realm) === refreshToken) {
+          uncertainResourceRefreshTokens.delete(opts.realm);
+        }
+      }
+      return result;
+    },
     transientRetry: opts.withTransientRetry
       ? {
           rateLimitDelayMs: opts.rateLimitDelayMs,
@@ -3562,7 +3683,61 @@ async function runAuthRefreshWithReplacementRetry(
     );
   }
 
-  return run;
+  if (
+    run.failureAction?.kind === 'definitive-failure' &&
+    getRefreshErrorCode(run.result) === 'INVALID_REFRESH_TOKEN' &&
+    uncertainResourceRefreshTokens.get(opts.realm) === run.requestedToken
+  ) {
+    try {
+      const pair = await recoverActiveResourceSession(opts.realm, run.requestedToken);
+      if (pair) {
+        uncertainResourceRefreshTokens.delete(opts.realm);
+        expectedVaultRefreshToken = run.requestedToken;
+        pendingResourceRefreshResults.set(opts.realm, {
+          requestedToken: run.requestedToken,
+          pair,
+          expectedVaultRefreshToken,
+        });
+        log.info('recovered the active Resource session using its saved Passport');
+        return {
+          ...run,
+          result: { ok: true, status: 200, data: pair },
+          failureAction: undefined,
+          expectedVaultRefreshToken,
+        };
+      }
+    } catch (error) {
+      if (!(error instanceof AuthApiError)) throw error;
+      // An invalid Passport proves this fallback unavailable; preserve the
+      // original Resource failure. Transient failures retain the session and
+      // share the normal backoff, including the server's Retry-After deadline.
+      if (!isDefinitiveRefreshError(error)) {
+        return {
+          ...run,
+          result: {
+            ok: false,
+            status: error.statusCode,
+            data: { error: { code: error.code, message: 'Saved session recovery failed' } },
+            retryAt: error.retryAt,
+          },
+          failureAction: { kind: 'transient-failure' },
+        };
+      }
+      if (error.code === 'DEVICE_MISMATCH') {
+        return {
+          ...run,
+          result: {
+            ok: false,
+            status: error.statusCode,
+            data: { error: { code: error.code, message: 'Saved session device mismatch' } },
+          },
+          failureAction: { kind: 'foreign-device' },
+        };
+      }
+    }
+  }
+
+  return { ...run, expectedVaultRefreshToken };
 }
 
 // ── Renderer notification ───────────────────────────────────────────────────
@@ -3867,6 +4042,8 @@ function clearAuth(
     // when no refresh guard ran between that action and a sibling window timeout.
     coldStartTimeoutFallbacks.clear();
     coldStartRetryWait?.(true);
+    uncertainResourceRefreshTokens.clear();
+    pendingResourceRefreshResults.clear();
   }
   refreshBackoff.clear();
   loginFlowEpoch += 1;
@@ -5050,6 +5227,7 @@ async function runColdStartRefreshFlow(
           requestedToken,
           {
             allowUnclaimedVault: true,
+            expectedVaultRefreshToken: run.expectedVaultRefreshToken,
           },
         )
       : undefined;
@@ -6173,12 +6351,22 @@ export async function refresh(options?: { serverRejectedToken?: boolean }): Prom
     }
 
     try {
-      const { result, failureAction, replacementRetries, requestedToken } =
+      const { result, failureAction, replacementRetries, requestedToken, expectedVaultRefreshToken } =
         await runAuthRefreshWithReplacementRetry(storedToken, {
           phase: 'runtime',
           realm: refreshRealm,
           withTransientRetry: false,
         });
+      // A successful rotation is irreversible on the server. Save its result
+      // before dropping stale UI work, just as cold-start recovery already does.
+      const credentialCommit = result.ok
+        ? await commitDesktopRefreshCredentials(
+            result.data as RefreshResponse,
+            refreshRealm,
+            requestedToken,
+            { expectedVaultRefreshToken },
+          )
+        : undefined;
       if (refreshWasSuperseded('after-refresh')) return false;
       const latestSession = readPersistedAuthSession();
       const stillOwnsRequestedSession =
@@ -6227,11 +6415,6 @@ export async function refresh(options?: { serverRejectedToken?: boolean }): Prom
 
       const authRealmChanged = refreshRealm !== activeAuthRealm;
       const data = result.data as RefreshResponse;
-      const credentialCommit = await commitDesktopRefreshCredentials(
-        data,
-        refreshRealm,
-        requestedToken,
-      );
       if (credentialCommit !== 'active') {
         log.warn(
           `runtime refresh lost active credential ownership (${credentialCommit}); preserved only the still-saved account token and will reconcile from disk`,

@@ -176,6 +176,40 @@ describe("CindyAuthClient", () => {
     );
   });
 
+  // P2: saved Passport recovery uses both endpoints. Unlike the existing 429
+  // coverage, a 503 (including an HTML proxy response) must retain its cooldown.
+  it.each([
+    ["refresh", true], ["refresh", false],
+    ["exchange", true], ["exchange", false],
+  ] as const)("preserves 503 Retry-After for account %s with JSON=%s", async (stage, json) => {
+    const now = Date.now();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+    try {
+      const fetch = vi.fn<AuthFetch>(async () => ({
+        ok: false, status: 503,
+        headers: new Headers({
+          "Retry-After": json ? "600" : "Wed, 07 Oct 2026 06:10:00 GMT",
+          Date: "Wed, 07 Oct 2026 06:00:00 GMT",
+        }),
+        json: async () => {
+          if (!json) throw new SyntaxError("HTML response");
+          return { error: { code: "SERVICE_UNAVAILABLE" } };
+        },
+      }));
+      const auth = client(fetch);
+      const request = stage === "refresh"
+        ? auth.refreshAccount("test-refresh")
+        : auth.exchangeAccountMembership("test-account", "test-membership");
+      await expect(request).rejects.toMatchObject({
+        statusCode: 503, retryAt: now + 600_000,
+        code: json ? "SERVICE_UNAVAILABLE" : "INVALID_RESPONSE",
+      });
+      expect(fetch).toHaveBeenCalledOnce();
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
   it("validates provider region and normalizes the base URL", async () => {
     const fetch = vi.fn(async () =>
       response(200, {
