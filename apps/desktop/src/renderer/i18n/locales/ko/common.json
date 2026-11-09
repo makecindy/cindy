@@ -7368,6 +7368,11 @@
         "installedExpand": "설치된 플러그인 {{count}}개 모두 보기",
         "installedCollapse": "추가 설치 플러그인 숨기기",
         "recommendedSection": "추천",
+        "todayRecommendations": "오늘의 추천",
+        "marketSection": "플러그인 마켓",
+        "browseMarket": "플러그인 마켓 둘러보기",
+        "searching": "검색 중…",
+        "allLoaded": "플러그인 {{count}}개를 모두 표시했습니다",
         "updatesAvailable": "플러그인 업데이트 {{count}}개 사용 가능",
         "updateAll": "모두 업데이트",
         "ignoreRound": "이번은 무시",
@@ -7397,7 +7402,15 @@
       },
       "market": {
         "publisherKind": {
-          "official": "공식"
+          "official": "공식",
+          "community": "커뮤니티"
+        },
+        "publisherDescription": {
+          "official": "Cindy 공식 배포 및 유지 관리",
+          "community": "커뮤니티 개발자가 배포 및 유지 관리",
+          "team": "조직에서 권한이 있는 구성원에게 공유",
+          "custom": "추가한 Git 또는 로컬 폴더 마켓에서 제공",
+          "local": "로컬 파일에서 설치하거나 이 컴퓨터에서 개발"
         },
         "scopeAria": "플러그인 출처 필터",
         "scope": {

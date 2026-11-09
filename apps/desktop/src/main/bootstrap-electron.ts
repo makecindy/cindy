@@ -2865,7 +2865,9 @@ setRemotePluginManagementServices({
     write: async (id, visible, assertCurrent) => { await setLocalMainViewHidden(id, !visible, assertCurrent); },
   },
   market: {
-    snapshot: () => getPluginMarketService().snapshot({ discoveryOnly: true }),
+    snapshot: legacyCatalog => getPluginMarketService().snapshot({ discoveryOnly: true, legacyCatalog }),
+    query: input => getPluginMarketService().query(input),
+    recommendations: () => getPluginMarketService().recommendations(),
     detail: id => getPluginMarketService().detail(id),
     install: async (id, options, prompt, assertCurrent, assertScope) => {
       await getPluginMarketService().install(id, options, { consent: { prompt, initiator: 'user' }, assertCurrent, assertScope });

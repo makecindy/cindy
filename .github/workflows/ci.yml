@@ -95,6 +95,12 @@ jobs:
         if: needs.changes.outputs.runtime != 'true'
         run: pnpm check:dev-docs
 
+      # Some root runner tests validate live locale content, not the runner.
+      # Preserve their billing/terminology contracts on translation-only PRs.
+      - name: Check locale content contracts
+        if: needs.changes.outputs.mode == 'locales'
+        run: node --test scripts/__tests__/glossary-rules.test.mjs
+
       - name: Check generated design tokens
         if: needs.changes.outputs.design_generated == 'true'
         run: pnpm --filter @cindy/design-tokens check:generated

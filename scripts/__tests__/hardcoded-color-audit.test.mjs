@@ -493,6 +493,10 @@ test('CI aggregates only accept planned skips and preserve failure propagation',
   assert.equal(generated.if, "needs.changes.outputs.design_generated == 'true'");
   assert.equal(generated.run, 'pnpm --filter @cindy/design-tokens check:generated');
   assert.equal(generated['continue-on-error'], undefined);
+  const localeContracts = jobs['verify-checks'].steps.find(step => step.name === 'Check locale content contracts');
+  assert.equal(localeContracts.if, "needs.changes.outputs.mode == 'locales'");
+  assert.equal(localeContracts.run, 'node --test scripts/__tests__/glossary-rules.test.mjs');
+  assert.equal(localeContracts['continue-on-error'], undefined);
   assert.equal(jobs['linux-unit-shards'].if, "needs.changes.outputs.linux_unit == 'true'");
   assert.equal(jobs['windows-unit-shards'].if, "needs.changes.outputs.windows_unit == 'true'");
   assert.equal(jobs['windows-runner-checks'].if, "needs.changes.outputs.desktop == 'true'");

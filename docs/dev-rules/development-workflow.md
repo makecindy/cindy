@@ -77,6 +77,8 @@ worktree 建成空目录或自动切到项目根继续修改代码。
   继续由完整 unit 中的生产生成回归覆盖。
 - 纯 locale JSON（可混合上述文档）保留 Linux 完整 unit、文案及静态契约检查，跳过
   Windows 重跑、类型检查和运行时集成。没有只挑几个翻译测试代替既有覆盖。
+  根级 `glossary-rules.test.mjs` 还会读取真实语言包验证计费文案等内容合同，纯翻译
+  路径单独执行该文件；它不属于可以一并省去的 runner 自测。
 - 纯 Mobile `app/`、`src/` 改动保留完整双平台 unit、双端类型检查、静态契约和
   Device Link 集成，跳过 Desktop Git、Pi manager 与数据库专项。
 - 普通代码继续完整双平台 unit。两端测试存在交叉源码导入，所以不单凭 `apps/` 目录
