@@ -545,10 +545,10 @@ describe('scanAllSkills', () => {
       projects: [{ projectRoot, hash: 'abcd1234' }],
     }, maker);
 
-    expect(maker.listCustomizations).toHaveBeenCalledWith({
+    expect(maker.listCustomizations).toHaveBeenCalledWith(expect.objectContaining({
       workingDirs: [projectRoot],
       forceReload: false,
-    });
+    }));
     expect(result.skills[0]).toMatchObject({
       id: 'claude-code:skill:project:abcd1234:demo',
       urlKey: 'skill:project:abcd1234:demo',
@@ -729,10 +729,10 @@ describe('scanAllSkills', () => {
       projects: [{ projectRoot: 'relative/project', hash: 'badroot' }],
     }, maker);
 
-    expect(maker.listCustomizations).toHaveBeenCalledWith({
+    expect(maker.listCustomizations).toHaveBeenCalledWith(expect.objectContaining({
       workingDirs: [],
       forceReload: false,
-    });
+    }));
   });
 
   it('dedupes the same global skill across Claude and Codex, preferring the shared .agents path', async () => {

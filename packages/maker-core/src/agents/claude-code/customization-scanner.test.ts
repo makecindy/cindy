@@ -141,6 +141,21 @@ describe('scanClaudeRuntimeSkills', () => {
     }));
   });
 
+  it('scans the runtime config directory when the host overrides it', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-config-override-'));
+    roots.push(root);
+    const home = path.join(root, 'home');
+    const isolatedConfig = path.join(root, 'user-data', 'claude-home');
+    writeSkill(path.join(home, '.claude'), 'default-home');
+    writeSkill(isolatedConfig, 'isolated-home');
+    vi.spyOn(os, 'homedir').mockReturnValue(home);
+
+    const result = await scanClaudeCustomizations({ runtimeConfigDir: isolatedConfig });
+
+    // 只认运行时实际使用的目录，默认目录的内容不应混进来。
+    expect(result.items.map((item) => item.name)).toEqual(['isolated-home']);
+  });
+
   it('merges plugin Skills from every project supplied to the SkillHub scan', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-multi-project-'));
     roots.push(root);

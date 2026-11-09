@@ -104,6 +104,13 @@ export interface ListCustomizationsOptions {
   forceReload?: boolean;
 
   /**
+   * Session runtime's config directory, when it differs from the default
+   * `~/.claude` — a non-default subscription account or an overridden
+   * `CLAUDE_CONFIG_DIR`. Host-resolved; discovery never guesses it.
+   */
+  runtimeConfigDir?: string;
+
+  /**
    * 可选过滤; 调用方只关心某几种 kind 时减少传输。
    * 不填 = 全部返回。
    */

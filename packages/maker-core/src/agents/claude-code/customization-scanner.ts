@@ -86,7 +86,7 @@ export async function scanClaudeCustomizations(
   }
   return scanClaudeCustomizationsAtConfig(
     opts,
-    path.join(os.homedir(), '.claude'),
+    opts.runtimeConfigDir ?? path.join(os.homedir(), '.claude'),
     targets,
     // Aggregate listing: keep the global view even when a project disables the
     // plugin, because other projects (and no-project sessions) still load it.

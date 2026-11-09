@@ -1,6 +1,7 @@
 import { isLexicallyAllowedSkillPath, isPathWithin, resolveAllowedExistingSkillPath, resolveExistingSkillPathForGrant } from './skillPathPolicy';
 export { resolveExistingSkillPathForGrant } from './skillPathPolicy';
 import { readDisabledSkillPathsForListing, renameSkillWithActivation } from './activationPreferences';
+import { claudeConfigDir } from '../remote-agent/controller/projectFiles';
 import { skillInstallLockKey, tryAcquireSkillInstallLock } from './installLock';
 import { acquireSharedSkillMutationLease, type SkillMutationRelease } from './sharedMutationLease';
 /**
@@ -179,6 +180,9 @@ export async function scanAllSkills(
     listed = await maker.listCustomizations({
       workingDirs: projects.filter((p) => p.projectRoot && path.isAbsolute(p.projectRoot)).map((p) => p.projectRoot),
       forceReload: false,
+      // Same directory the palette and the running runtime use; without this
+      // SkillHub reads the default `~/.claude` even when it is overridden.
+      runtimeConfigDir: claudeConfigDir(),
     });
   } catch (err) {
     log.error('maker.listCustomizations failed', err);
