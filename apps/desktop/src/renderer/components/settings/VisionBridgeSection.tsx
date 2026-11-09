@@ -363,8 +363,9 @@ export function VisionBridgeSection() {
         />
       </SettingsCard>
 
+      {/* 关闭时只隐藏明细，保留已保存选择与选择器状态。 */}
       {/* ── 卡 1：目标模型（走视觉桥的纯文本模型） ────────────────────── */}
-      <SettingsCard>
+      <SettingsCard hidden={!enabled}>
         <SettingsField
           title={<span id={visionBridgeSettings.targetModelsLabel.targetId}>{t(visionBridgeSettings.targetModelsLabel.titleKey)}</span>}
           hint={t(visionBridgeSettings.targetModelsLabel.descriptionKey)}
@@ -416,7 +417,7 @@ export function VisionBridgeSection() {
       </SettingsCard>
 
       {/* ── 卡 2：视觉后端模型（主 + 备，最多两个） ────────────────────── */}
-      <SettingsCard>
+      <SettingsCard hidden={!enabled}>
         <SettingsField
           title={<span id={visionBridgeSettings.backendsLabel.targetId}>{t(visionBridgeSettings.backendsLabel.titleKey)}</span>}
           hint={t(visionBridgeSettings.backendsLabel.descriptionKey)}
