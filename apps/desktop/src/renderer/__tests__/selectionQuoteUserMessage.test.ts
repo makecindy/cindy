@@ -2,7 +2,7 @@
 
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { createElement, createRef } from 'react';
+import { createElement, createRef, Fragment, type ReactNode } from 'react';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MemoryRouter } from 'react-router-dom';
@@ -12,6 +12,9 @@ import { UserMessage } from '../components/chat/UserMessage';
 import { AssistantMessage } from '../components/chat/AssistantMessage';
 import { MessageSourceLabels } from '../components/chat/MessageSourceLabels';
 import { BotMessageTimelineHeader } from '../components/chat/BotMessageTimelineHeader';
+import { ChatAudioCard } from '../components/chat/ChatAudioCard';
+import { ChatSoundEffectCard } from '../components/chat/ChatSoundEffectCard';
+import { BotTaskCard } from '../features/bots/BotCollaborationCard';
 import { clearDraft, getDraft } from '@/lib/composerDraftStore';
 import { formatQuoteForSend } from '@/lib/chatQuotes';
 
@@ -22,12 +25,24 @@ const outsideSelectionCase = vi.hoisted(() => () => {
 });
 
 vi.mock('@/contexts/AuthContext', () => ({ useAuth: () => ({ user: { id: 'selection-test' } }) }));
+// Keep the actual task card, with a settled offline record and no live queries.
+vi.mock('@/features/bots/useRemoteBots', () => ({ useRemoteBots: () => [] }));
+vi.mock('@/features/bots/BotSessionTaskLink', () => ({ useBotTaskSession: () => ({
+  resolved: true, targetId: null, row: null, session: null, activity: null,
+}) }));
+vi.mock('@/cindy-brain/ghostUnreadStore', () => ({ useElementVisible: () => ({ ref: () => {}, visible: false }) }));
+vi.mock('@/contexts/PrRefsContext', () => ({
+  usePrActions: () => ({}), usePrRefsForSession: () => [],
+  usePrStatuses: () => ({ statuses: new Map(), successfulStatuses: new Map() }),
+}));
 // Use the same production helpers through narrow entries; the shared barrel
 // eagerly imports unrelated task/runtime modules in the unit runner.
 vi.mock('@cindy/maker-shared', async () => {
   const { leadingSlashInvocation } = await import('@cindy/maker-shared/composer-palette');
   const { normalizeTaskTags, reconcileTaskTags } = await import('../../../../../packages/maker-shared/src/taskTags');
-  return { leadingSlashInvocation, normalizeTaskTags, reconcileTaskTags };
+  const { MAX_STATUS_QUERIES } = await import('../../../../../packages/maker-shared/src/sessionPrRefs');
+  const workingStatus = await import('../../../../../packages/maker-shared/src/workingStatus');
+  return { leadingSlashInvocation, normalizeTaskTags, reconcileTaskTags, MAX_STATUS_QUERIES, ...workingStatus };
 });
 vi.mock('@cindy/device-link', async () => ({
   ...await import('../../../../../packages/device-link/src/sharedTaskPeer'),
@@ -185,7 +200,7 @@ describe('SelectionQuoteButton — message body selection actions', () => {
   });
 
   async function renderMessages(onAskInSideChat?: (quote: string) => Promise<boolean>, reply = assistantText, nextUser?: string,
-    userProps?: { content: string; quotesEncoded: boolean }) {
+    userProps?: { content: string; quotesEncoded: boolean }, cards?: ReactNode) {
     const containerRef = createRef<HTMLDivElement>();
     await act(async () => {
       render(createElement(MemoryRouter, null,
@@ -206,6 +221,7 @@ describe('SelectionQuoteButton — message body selection actions', () => {
                 createdAt: '2026-11-09T10:01:00Z', ghostReplyPending: true,
                 showActionBar: true, turnCostUsd: 0.001,
               }),
+              cards,
               nextUser && createElement(UserMessage, { workingDir: '', content: nextUser }),
               createElement(SelectionQuoteButton, { sessionId, containerRef, onAskInSideChat }),
             ),
@@ -452,6 +468,30 @@ describe('SelectionQuoteButton — message body selection actions', () => {
     fireEvent.click(screen.getByRole('button', { name: 'chat.quote.addToChat' }));
     expect(getDraft(sessionId)?.text?.content?.[0]?.content?.[0]?.attrs?.text)
       .toBe(`${userText}\nChoose a fruit\n\nFollowing body\n\n${nextUser}`);
+  });
+
+  // PR #9503 discussion_r4515427401: production media controls and screen-reader
+  // task status have normal computed display/visibility. Unit/DOM: cross-message
+  // quotes keep selectable card content, but omit explicit copy-excluded subtrees.
+  it('omits production media controls and screen-reader task status from a cross-message quote', async () => {
+    // jsdom has no layout observer for the real media scrubbers.
+    vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
+    const nextUser = 'Please continue';
+    const track = { audioUrl: 'https://example.com/audio.mp3', coverUrl: '', lyrics: '', durationSeconds: 30 };
+    await renderMessages(undefined, assistantText, nextUser, undefined, createElement(Fragment, null,
+      createElement(ChatAudioCard, { track: { ...track, kind: 'music', title: 'Song title', tags: 'Ambient' } }),
+      createElement(ChatSoundEffectCard, { track: { ...track, kind: 'sound_effect', title: 'Rain sound', tags: '' } }),
+      createElement(BotTaskCard, { card: { role: 'delegation-request', objective: 'Task title' } as Parameters<typeof BotTaskCard>[0]['card'] }),
+    ));
+    expect(screen.getAllByText('0:00')).toHaveLength(2);
+    expect(screen.getByText('bots.collab.status.unknown')).toBeTruthy();
+    selectText(screen.getByText(userText), screen.getByText(nextUser));
+    fireEvent.click(screen.getByRole('button', { name: 'chat.quote.addToChat' }));
+    const quote = getDraft(sessionId)?.text?.content?.[0]?.content?.[0]?.attrs?.text;
+    for (const visible of [userText, assistantText, 'Song title', 'Ambient', 'Rain sound', 'Task title', nextUser]) {
+      expect(quote).toContain(visible);
+    }
+    expect(quote).not.toMatch(/0:00|0:30|bots\.collab\.status\.unknown/);
   });
 
   it('does not claim a selection extending beyond its message stream', async () => {

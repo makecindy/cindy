@@ -1,5 +1,8 @@
 import type { ClipboardEvent } from 'react';
 
+/** Non-prose subtrees omitted by both clipboard copy and rebuilt chat quotes. */
+export const CHAT_SELECTION_EXCLUDE_SELECTOR = '.sr-only, [data-chat-video-preview], [data-chat-copy-exclude]';
+
 const EDITABLE_SELECTOR = 'input, textarea, select, [contenteditable]:not([contenteditable="false"])';
 const SEMANTIC_CONTAINER_SELECTOR = 'a, strong, b, em, i, u, s, del, code, pre, p, h1, h2, h3, h4, h5, h6, blockquote, ul, ol, li, table, thead, tbody, tfoot, tr, th, td';
 
@@ -239,7 +242,7 @@ export function copyChatSelection(event: ClipboardEvent<HTMLElement>): void {
     // Application chrome and screen-reader copies are excluded even when the
     // selection starts inside them, bypassing their marked wrapper entirely.
     const sourceElement = node.nodeType === Node.ELEMENT_NODE ? node as Element : node.parentElement;
-    if (sourceElement?.closest('.sr-only, [data-chat-video-preview], [data-chat-copy-exclude]')) {
+    if (sourceElement?.closest(CHAT_SELECTION_EXCLUDE_SELECTOR)) {
       needsRenderedPlainText = true;
       return null;
     }

@@ -25,6 +25,7 @@ import { useTranslation } from 'react-i18next';
 
 import type { ChatQuote } from '@/lib/chatQuotes';
 import { appendQuoteToDraft } from '@/lib/composerDraftStore';
+import { CHAT_SELECTION_EXCLUDE_SELECTOR } from './chatSelectionClipboard';
 
 /** 单条引用的长度上限:防止误选整篇转录把 prompt 撑爆;超出截断并加省略号。 */
 const QUOTE_MAX_CHARS = 4000;
@@ -182,6 +183,7 @@ function readQuoteText(selection: Selection, range: Range): string {
     if (!range.intersectsNode(node)) return;
     const el = node instanceof Element ? node : node.parentElement;
     if (!el) return;
+    if (el.closest(CHAT_SELECTION_EXCLUDE_SELECTOR)) return;
     if (el.closest(scopeSelector) && !el.closest(bodySelector) && !el.querySelector(bodySelector)) return;
     if (node.nodeType === Node.TEXT_NODE) {
       if (!canSelect(el)) return;
