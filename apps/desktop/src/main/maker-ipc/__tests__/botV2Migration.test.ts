@@ -31,6 +31,7 @@ vi.mock('../botProjectMode.js', () => ({
   prepareBotProjectWorkspace: async () => ({ workingDir: path.join(h.root, 'bots', 'import_ada', 'workspace') }),
   ensureBotProjectAutomations: vi.fn(async () => true),
   moveTeammateMemoryIntoProject: h.moveMemory,
+  ensureTeammateTemplate: async () => false,
 }));
 vi.mock('../botV1Routines.js', () => ({
   readV1Routines: async (_root: string, botId: string) => h.routines.filter(routine => routine.botId === botId),

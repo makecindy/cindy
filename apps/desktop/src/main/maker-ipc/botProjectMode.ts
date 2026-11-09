@@ -35,26 +35,12 @@ import {
   unlinkedTeammateProjectMemoryDir,
 } from './botProjectMemory.js';
 import { setBotProjectSkillsDir } from './botSkillStore.js';
+import { TEAMMATE_TEMPLATE_VERSION, applyTeammateTemplate } from './botProjectTemplate.js';
 import { routeModelFields } from './botV2Carryover.js';
 import type { ProjectScheduleConfig } from '../scheduler-host/project-automation-loader.js';
 import type { BotModelRoute } from '../../shared/botModelChain.js';
 
 const log = createLogger('maker-ipc:bot-project-mode');
-
-export function botProjectAgentsTemplate(displayName: string): string {
-  const name = displayName.trim() || 'This teammate';
-  return [
-    `# ${name} · project rules`,
-    '',
-    `This folder is ${name}'s project. Everything in this file is loaded at the start of every task ${name} runs here, on every engine.`,
-    '',
-    `- Write down how ${name} should work: steps, conventions, checklists, things to avoid.`,
-    `- ${name} may edit this file to improve its own way of working. Changes apply to the next task; versions are kept, so any edit can be reviewed and undone.`,
-    '- Who the teammate is (name, personality, relationship) stays in its profile, not here.',
-    '- Project skills go in `.agents/skills/<name>/SKILL.md`.',
-    '',
-  ].join('\n');
-}
 
 /** Copy durable memory records into the project's memory; existing project records win. */
 async function copyMemoryRecords(sourceDir: string, targetDir: string): Promise<number> {
@@ -180,6 +166,13 @@ export async function moveTeammateMemoryIntoProject(input: {
   return copied;
 }
 
+/** An upgraded teammate gets the starter template's missing files (or a newer version) once, as a version. */
+export async function ensureTeammateTemplate(input: { botId: string; displayName: string; workspace: string }): Promise<boolean> {
+  const applied = await applyTeammateTemplate(input.workspace, input.displayName);
+  if (applied) await snapshotTeammateProject(input.botId, input.workspace, `Apply teammate template v${TEAMMATE_TEMPLATE_VERSION}`);
+  return applied;
+}
+
 /** A repository whose root is the workspace itself; an enclosing repo does not count. */
 async function ensureWorkspaceRepository(workspace: string): Promise<'initialized' | 'already-git' | 'unavailable'> {
   const before = await detectCwd(workspace);
@@ -285,7 +278,8 @@ export async function prepareBotProjectWorkspace(input: {
   legacyUserDataDir?: string;
 }): Promise<BotProjectPreparation> {
   const workspace = await ensureBotWorkspaceDir(input.ownerRoot, input.botId, input.legacyUserDataDir);
-  await writeIfMissing(path.join(workspace, 'AGENTS.md'), botProjectAgentsTemplate(input.displayName));
+  // A clean starter template, before the first version, so the project starts from it.
+  const templated = await applyTeammateTemplate(workspace, input.displayName);
   await writeIfMissing(path.join(workspace, 'CLAUDE.md'), '@AGENTS.md\n');
   // Memory and Skills become the project's own, before the first V2 turn reads them. A project
   // memory kept outside the folder (earlier versions) comes first: it is newer than the V1 copy.
@@ -302,6 +296,9 @@ export async function prepareBotProjectWorkspace(input: {
     repository = await ensureWorkspaceRepository(workspace);
     if (repository === 'already-git' && v1Copied > 0) {
       await snapshotTeammateProject(input.botId, workspace, 'Copy teammate memories into the project');
+    }
+    if (repository === 'already-git' && templated) {
+      await snapshotTeammateProject(input.botId, workspace, `Apply teammate template v${TEAMMATE_TEMPLATE_VERSION}`);
     }
   } catch (error) {
     // Versions are an addition: a Git failure must not keep the project from opening.

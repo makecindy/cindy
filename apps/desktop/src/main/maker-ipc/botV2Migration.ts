@@ -29,7 +29,7 @@ import { createLogger } from '../logger.js';
 import { readEffectiveBotModelChain } from '../maker-host/bot-model-chain-settings-store.js';
 import { activeOwnerScopeKey, ownerScopedUserDataPath } from '../appSessionState.js';
 import { botProfileDir, ensureBotWorkspaceDir } from './botProfileFolder.js';
-import { ensureBotProjectAutomations, moveTeammateMemoryIntoProject, prepareBotProjectWorkspace } from './botProjectMode.js';
+import { ensureBotProjectAutomations, ensureTeammateTemplate, moveTeammateMemoryIntoProject, prepareBotProjectWorkspace } from './botProjectMode.js';
 import { TEAMMATE_V2_RECEIPT_FILE, teammateWorkspaceDir } from './botProjectMemory.js';
 import { writeRoutineAutomations } from './botRoutineAutomations.js';
 import { readV1Routines, removeV1Routine } from './botV1Routines.js';
@@ -205,6 +205,8 @@ async function migrateTeammateOnce(botId: string, ownerRoot: string,
     if (await exists(workspace)) await moveTeammateMemoryIntoProject({ botId, ownerRoot, workspace });
     // A build that still had the switch may have turned it off after the upgrade: V1 is gone.
     const upgraded = await readBotSettingsProfile(botId);
+    // Upgraded before the starter template existed (or an older version of it): fill it in once.
+    if (await exists(workspace)) await ensureTeammateTemplate({ botId, displayName: upgraded.name, workspace });
     if (!readBotProjectMode(upgraded.capabilities as unknown as Record<string, unknown>)) {
       await updateBotProfile({ id: botId, capabilities: { projectMode: true } });
     }
