@@ -9,6 +9,13 @@ const mocks = vi.hoisted(() => ({
   resumeOnOpen: vi.fn(),
   resumeGoal: vi.fn(),
   updateGoal: vi.fn(),
+  scope: 'owner-a:1',
+  boundaryPending: false,
+}));
+
+vi.mock('../../appSessionState.js', () => ({
+  activeOwnerScopeKey: () => mocks.scope,
+  isAppSessionBoundaryPending: () => mocks.boundaryPending,
 }));
 
 vi.mock('electron', () => ({
@@ -62,6 +69,8 @@ describe('goal update IPC errors', () => {
     vi.clearAllMocks();
     mocks.handlers.clear();
     mocks.controllerAvailable = true;
+    mocks.scope = 'owner-a:1';
+    mocks.boundaryPending = false;
     mocks.awaitReady.mockResolvedValue(undefined);
     registerGoalHandlers();
   });
@@ -97,6 +106,17 @@ describe('goal update IPC errors', () => {
     const failure = Object.assign(new Error('account changed'), { code: 'PRECONDITION_FAILED' });
     mocks.awaitReady.mockRejectedValueOnce(failure);
     await expect(handlerFor(MAKER_INVOKE.GOAL_RESUME)({}, 's1')).rejects.toBe(failure);
+    expect(mocks.resumeGoal).not.toHaveBeenCalled();
+  });
+
+  it('rejects a Goal request during an account switch and one whose owner changed while waiting', async () => {
+    mocks.boundaryPending = true;
+    await expect(handlerFor(MAKER_INVOKE.GOAL_RESUME)({}, 's1')).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+    expect(mocks.awaitReady).not.toHaveBeenCalled();
+
+    mocks.boundaryPending = false;
+    mocks.awaitReady.mockImplementationOnce(async () => { mocks.scope = 'owner-b:2'; });
+    await expect(handlerFor(MAKER_INVOKE.GOAL_RESUME)({}, 's1')).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
     expect(mocks.resumeGoal).not.toHaveBeenCalled();
   });
 

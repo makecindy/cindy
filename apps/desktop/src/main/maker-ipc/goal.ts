@@ -14,6 +14,7 @@
 
 import { ipcMain, BrowserWindow } from 'electron';
 
+import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState.js';
 import { createLogger } from '../logger.js';
 import { throwIpcError, requireString, requireObject } from '../utils/ipcValidate.js';
 import {
@@ -88,8 +89,15 @@ export function broadcastGoalStatus(update: GoalStatusUpdate): void {
 }
 
 async function requireGoalController() {
+  // 与 awaitAccountSchedulerReady 同口径:切账号期间不接新请求,等待返回后核对账号,
+  // 避免旧会话的请求落到下一个账号的控制器上。
+  const scope = activeOwnerScopeKey();
+  if (isAppSessionBoundaryPending()) throwIpcError('PRECONDITION_FAILED', 'account is changing');
   try {
     const controller = await waitForGoalController();
+    if (scope !== activeOwnerScopeKey() || isAppSessionBoundaryPending()) {
+      throwIpcError('PRECONDITION_FAILED', 'account changed while waiting for startup');
+    }
     if (!controller) throwIpcError('INTERNAL', 'goal controller not started');
     return controller;
   } catch (error) {
