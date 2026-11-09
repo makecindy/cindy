@@ -275,6 +275,7 @@ function createRunnerHarness(
       typeof MakerScheduleRunner
     >[0]['resolveDefaultModelRoute'];
     getSessionMeta?: () => Promise<typeof meta>;
+    schedulerQueue?: ConstructorParameters<typeof MakerScheduleRunner>[0]['schedulerQueue'];
   } = {},
 ): RunnerHarness {
   const createSession = vi.fn(async () => h.session);
@@ -311,6 +312,7 @@ function createRunnerHarness(
     resolveModelSelection: opts.resolveModelSelection,
     resolveRouteCopyCapabilities: opts.resolveRouteCopyCapabilities,
     resolveDefaultModelRoute: opts.resolveDefaultModelRoute,
+    schedulerQueue: opts.schedulerQueue,
   });
   return { runner, createSession, closeSession };
 }
@@ -591,6 +593,83 @@ describe('MakerScheduleRunner model selection', () => {
       expect(harness.closeSession).toHaveBeenCalledTimes(mode === 'rebuild' ? 1 : 0);
     });
 
+  // 测试价值
+  // - 生产入口与可观察结果：MakerScheduleRunner.fire；删除目标不恢复旧队列，仍创建并发送到替代任务。
+  // - Bug／依据：#8018；重绑前恢复已删除目标的持久队列会阻断“立即运行”。
+  // - 现有覆盖缺口：旧用例未注入 schedulerQueue，因此 restoreBoundQueue 的保护分支没有被执行验证。
+  // - 最小失败输入：deleted 持久目标，旧目标的 ensureQueueRestored 返回 false，替代任务仍须完成发送。
+  // - tier：unit；复用本文件的内存 runner fixture。
+  it('rebinds a deleted persistent target before touching its pending model switch', async () => {
+    const h = createSessionHarness();
+    Object.assign(h.session, { agentKind: 'codex', model: 'gpt-5.5', setFastMode: vi.fn() });
+    mocks.getSessionRowSnapshot.mockResolvedValue({ status: 'deleted' });
+    const ensureQueueRestored = vi.fn(async () => false);
+    let completeQueuedDispatch: (() => void) | undefined;
+    const queuedDispatchCompleted = new Promise<void>((resolve) => {
+      completeQueuedDispatch = resolve;
+    });
+    const schedulerQueue = {
+      ensureQueueRestored,
+      isSessionBusy: vi.fn(() => false),
+      hasQueuedPrompt: vi.fn(() => false),
+      enqueuePrompt: vi.fn(async (request) => {
+        // The real coordinator calls Session.send after accepting the queued
+        // item. Keep this fixture on the same production boundary so the
+        // replacement task still proves it was actually dispatched.
+        await h.send(
+          { role: 'user', content: request.text } as never,
+          {
+            onAccepted: async () => {
+              await request.onAccepted?.({ permissionMode: 'ask', planMode: false });
+            },
+          } as never,
+        );
+        completeQueuedDispatch?.();
+        return { clientId: 'replacement-queued-message' };
+      }),
+      removeQueuedPrompt: vi.fn(),
+      isPromptTracked: vi.fn(() => false),
+    } as unknown as NonNullable<ConstructorParameters<typeof MakerScheduleRunner>[0]['schedulerQueue']>;
+    const acquirePendingAgentSwitch = vi.fn(async () => {
+      throw new Error('target session is deleted');
+    });
+    const update = vi.fn(async () => undefined);
+    const harness = createRunnerHarness(h, null, {
+      acquirePendingAgentSwitch,
+      resolveModelSelection: async (choice) => choice,
+      schedulerQueue,
+    });
+    harness.runner.attachScheduler({ update, isRunSilenced: () => false } as unknown as Scheduler);
+
+    const firePromise = harness.runner.fire(baseSchedule({
+      targetSessionId: h.session.id,
+      persistentSession: true,
+      agentKind: 'codex',
+      modelAgentKind: 'codex',
+      model: 'gpt-5.5',
+    }), createFireContext());
+    await vi.waitFor(() => expect(schedulerQueue.enqueuePrompt).toHaveBeenCalledOnce());
+    await queuedDispatchCompleted;
+    h.emit({
+      type: 'done',
+      data: {},
+      turnOrigin: {
+        kind: 'scheduler',
+        scheduleId: 'schedule-1',
+        scheduleName: 'model selection test',
+        runId: 'run-1',
+      },
+    });
+    await firePromise;
+
+    expect(harness.createSession).toHaveBeenCalledOnce();
+    expect(h.send).toHaveBeenCalledOnce();
+    expect(ensureQueueRestored).not.toHaveBeenCalled();
+    expect(acquirePendingAgentSwitch).not.toHaveBeenCalled();
+    expect(update).toHaveBeenCalledWith('schedule-1', { targetSessionId: undefined });
+    expect(update).toHaveBeenCalledWith('schedule-1', { targetSessionId: h.session.id });
+  });
+
     it.each(['active', 'deleted', 'missing'] as const)('uses the explicit Pi route for a %s Codex target', async (status) => {
       const h = createSessionHarness();
       Object.assign(h.session, { agentKind: 'pi', model: 'shared-model' });
@@ -631,7 +710,7 @@ describe('MakerScheduleRunner model selection', () => {
       expect(mocks.setSessionProvider).toHaveBeenCalledWith(h.session.id, 'selected');
       expect(h.setEffort.mock.calls.flat()).not.toContain('low');
       expect(schedule).toEqual(saved);
-      expect(release).toHaveBeenCalledTimes(1);
+      expect(release).toHaveBeenCalledTimes(status === 'active' ? 1 : 0);
       if (status !== 'active') {
         expect(update).toHaveBeenCalledWith(schedule.id, { targetSessionId: undefined });
         expect(update).toHaveBeenCalledWith(schedule.id, { targetSessionId: h.session.id });
