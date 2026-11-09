@@ -277,7 +277,10 @@ describe("CindyAuthClient", () => {
     try {
       const fetch: AuthFetch = async () => ({
         ...response(429, row.body),
-        headers: { get: (name) => row.headers[name.toLowerCase()] ?? null },
+        headers: {
+          get: (name) =>
+            (row.headers as Record<string, string | undefined>)[name.toLowerCase()] ?? null,
+        },
       });
       await expect(
         client(fetch).requestCode("phone", "13800138000"),
