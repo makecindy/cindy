@@ -438,6 +438,42 @@ describe('Claude Code translator silent-stop observation (log only)', () => {
     expect(doneSilentStopFlag(events)).toBe(true);
   });
 
+  it('keeps silent-stop detection when a non-dispatch tool in the dispatch batch failed', async () => {
+    // 并行批次 = 真实 send_to_worker 派发 + 非 Orca 工具报错(如 Read 失败)。
+    // 失败项的名字不匹配派发工具,不能因此丢掉汇报义务:模型只回 thinking 收尾时,
+    // 派发成功项的豁免会把失败静默吞掉(用户既不知道派发结果也不知道失败原因)。
+    const tracker = new UsageTracker();
+    const queue = createAsyncQueue<AgentEvent>();
+    const ctx = createCtx(tracker);
+
+    pushWorkerToolBatch(queue, ctx, [
+      { name: 'mcp__cindy_orca__send_to_worker', payload: { ok: true, target_session_id: 's-1', queued_message_id: 'm-1' } },
+      { name: 'Read', payload: { error: 'ENOENT: no such file /tmp/a' }, isError: true },
+    ]);
+    finishWithEmptyThinking(queue, ctx);
+
+    const events = await drain(queue);
+    expect(silentStopWarned(ctx)).toBe(true);
+    expect(doneSilentStopFlag(events)).toBe(true);
+  });
+
+  it('keeps the zero-body exemption when a non-dispatch tool in the batch succeeded', async () => {
+    // 对照: 非 Orca 工具成功完成时不改变豁免判定 —— 干净派发批次仍可零正文收口。
+    const tracker = new UsageTracker();
+    const queue = createAsyncQueue<AgentEvent>();
+    const ctx = createCtx(tracker);
+
+    pushWorkerToolBatch(queue, ctx, [
+      { name: 'mcp__cindy_orca__send_to_worker', payload: { ok: true, target_session_id: 's-1', queued_message_id: 'm-2' } },
+      { name: 'Read', payload: { content: 'file body' } },
+    ]);
+    finishWithEmptyThinking(queue, ctx);
+
+    const events = await drain(queue);
+    expect(silentStopWarned(ctx)).toBe(false);
+    expect(doneSilentStopFlag(events)).toBeUndefined();
+  });
+
   it('keeps the zero-body exemption when every dispatch in the batch landed', async () => {
     const tracker = new UsageTracker();
     const queue = createAsyncQueue<AgentEvent>();

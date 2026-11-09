@@ -469,7 +469,14 @@ function observeWorkerDispatchBatch(
 ): void {
   for (const result of results) {
     const tool = parseOrcaDispatchTool(result.toolName);
-    if (!tool) continue;
+    if (!tool) {
+      // 同批里非派发工具的失败项（如 Read / Bash 报错）也必须有人汇报：
+      // 派发项已成功时，「零正文收口」豁免会把整批当作干净收口，若模型只回
+      // thinking 收尾，失败原因就无声丢失了。失败项置位 needsReport，让
+      // silent-stop 恢复保留（无派发的轮次该标志本就不影响豁免判定）。
+      if (result.isError) turn.workerDispatchNeedsReport = true;
+      continue;
+    }
     if (tool.kind === 'batch') {
       // 批量派发要求逐项转告 user_report / 失败项，不能当作正常收口。
       turn.workerDispatchNeedsReport = true;
