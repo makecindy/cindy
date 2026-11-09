@@ -132,11 +132,13 @@ it('observes a one-off approach first and only turns it into a skill when it rec
   const clock = vi.spyOn(Date, 'now').mockReturnValue(next);
   try {
     const unrelated = 'Move the Wednesday meeting to Thursday afternoon.';
+    const tail = 'The quoted example is unrelated to this request. Do not use the chat-history procedure.';
     await recordNightlyLearningTurn(h.root, 'bot', 'main', next);
-    h.rows = [turn(2, unrelated, next)];
+    h.rows = [turn(2, unrelated + ' '.repeat(4200) + tail, next)];
     reply({ promote: [{ ...promote, candidateId: candidate.id, evidence: { messageId: 'user2', quote: unrelated } }], forget: [candidate.id] });
     reply({ supported: [] });
     await runNightlyLearning('bot', { manual: false });
+    expect(h.model.mock.calls.at(-1)?.[1]).toContain(tail);
     expect(h.skills.size).toBe(0);
     expect((await readNightlyLearningState(h.root, 'bot'))!.candidates[0]?.id).toBe(candidate.id);
 

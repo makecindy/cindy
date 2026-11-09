@@ -540,13 +540,14 @@ async function runLocked(
     if (!candidate || !hasLearningEvidence(op, messages, true)) return [];
     const first = candidate.firstEvidence;
     if (first && first.userMessageId === op.evidence.messageId) return [];
-    const message = messages.find((m) => m.role === 'user' && m.id === op.evidence.messageId)!;
+    const text = scan.ownerTexts.get(op.evidence.messageId);
+    if (!text) return [];
     return [{ id, proposal: {
       candidate: { title: candidate.title, summary: candidate.summary, draft: candidate.draft },
       first: first ?? null,
       skill: { title: op.title, description: op.description, body: op.body },
       citedText: op.evidence.quote,
-    }, sources: [{ source: message.id, text: message.text }] }];
+    }, sources: [{ source: op.evidence.messageId, text }] }];
   });
   const recurrences = await reviewNightlyEvidence(ask,
     'Does the current user request actually call for this candidate approach a second time? Judge the cited text in the context of the whole current message. ' +
@@ -561,7 +562,7 @@ async function runLocked(
     const candidate = candidates.find((c) => c.id === op.candidateId);
     if (!candidate || !supported || promoted.has(candidate.id)) continue;
     if (!candidate.firstEvidence) {
-      firstSeen.set(candidate.id, supported);
+      if ((scan.ownerTexts.get(supported.source)?.length ?? Infinity) <= USER_TEXT_CHARS) firstSeen.set(candidate.id, supported);
       continue;
     }
     if (catalog.some((s) => s.slug === op.slug)) continue;
@@ -588,10 +589,13 @@ async function runLocked(
     const turn = selected.find((t) => t.messages.some((m) => m.id === op.evidence.messageId && m.text.includes(op.evidence.quote)));
     if (!turn) continue;
     const source = turn.messages.find((m) => m.id === op.evidence.messageId)!;
-    const start = source.text.indexOf(op.evidence.quote);
-    const context = source.text.slice(Math.max(0, start - 160), start + op.evidence.quote.length + 160);
-    const firstEvidence = { ...op.evidence, role: source.role, userMessageId: turn.messages[0]!.id, context };
-    observed.push({ id: `c_${randomUUID().slice(0, 12)}`, title: op.title, summary: op.summary, draft: op.draft, firstSeenAt: startedAt, lastSeenAt: startedAt, firstEvidence });
+    const userMessageId = turn.messages[0]!.id;
+    const ownerText = scan.ownerTexts.get(userMessageId);
+    // Keep a bounded, complete owner request. If it will not fit, leave the candidate unanchored.
+    const firstEvidence = ownerText && ownerText.length <= USER_TEXT_CHARS
+      ? { ...op.evidence, role: source.role, userMessageId, context: ownerText } : undefined;
+    observed.push({ id: `c_${randomUUID().slice(0, 12)}`, title: op.title, summary: op.summary, draft: op.draft,
+      firstSeenAt: startedAt, lastSeenAt: startedAt, firstEvidence });
   }
   const forgotten = new Set(plan.forget);
   // A failed or indeterminate promotion leaves the candidate available for the next run.
@@ -607,7 +611,7 @@ async function runLocked(
         ...s.candidates.filter((c) => !promoted.has(c.id) && !forgotten.has(c.id)).map((c) => {
           const evidence = firstSeen.get(c.id);
           if (!evidence) return c;
-          const firstEvidence = { messageId: evidence.source, userMessageId: evidence.source, role: 'user' as const, quote: evidence.quote };
+          const firstEvidence = { messageId: evidence.source, userMessageId: evidence.source, role: 'user' as const, quote: evidence.quote, context: scan.ownerTexts.get(evidence.source) };
           return { ...c, firstEvidence, lastSeenAt: startedAt };
         }),
       ].slice(0, MAX_NIGHTLY_CANDIDATES);
