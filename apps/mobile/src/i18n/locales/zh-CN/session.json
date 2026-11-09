@@ -813,7 +813,10 @@
     "quotaReset": "还剩 {{left}}%，{{reset}}后重置",
     "confirm": "换过去",
     "remember": "换过去，以后自动换（仅本任务）",
-    "cancel": "取消"
+    "cancel": "取消",
+    "disable": "不自动切换（仅本任务）",
+    "disableFailed": "未能确认选择是否已保存。请检查连接，并确认任务所在电脑上的 Cindy 已更新后重试。这条消息仍照常发送。",
+    "moreOptions": "更多选项"
   },
   "messageEdit": {
     "editing": "正在编辑消息",
