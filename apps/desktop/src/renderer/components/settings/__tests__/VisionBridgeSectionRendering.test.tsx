@@ -25,6 +25,8 @@ class ResizeObserverStub {
 
 // The shared-quota rail observes auth; this component fixture has no auth host.
 vi.mock('@/contexts/AuthContext', () => ({ useOptionalAuthUser: () => null }));
+// Collapse 的动画帧不在 jsdom 自动推进；此组件回归验证 reduced-motion 终态。
+vi.mock('@/hooks/useReducedMotion', () => ({ useReducedMotion: () => true }));
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
@@ -226,17 +228,18 @@ describe('VisionBridgeSection', () => {
 
     fireEvent.click(toggle);
     await waitFor(() => expect(toggle.getAttribute('aria-checked')).toBe('true'));
-    expect(screen.getByText('settings.visionBridge.targetModels.label')).toBeTruthy();
+    await screen.findByText('settings.visionBridge.targetModels.label');
     expect(screen.getByText('settings.visionBridge.backends.label')).toBeTruthy();
     expect(screen.getAllByRole('switch', { name: 'settings.visionBridge.targetModels.toggleAria' })[0].getAttribute('aria-checked')).toBe('true');
 
     fireEvent.click(toggle);
     await waitFor(() => expect(toggle.getAttribute('aria-checked')).toBe('false'));
-    expect(screen.queryByRole('switch', { name: 'settings.visionBridge.targetModels.toggleAria' })).toBeNull();
+    await waitFor(() => expect(screen.queryByRole('switch', { name: 'settings.visionBridge.targetModels.toggleAria' })).toBeNull());
     expect(screen.queryByRole('button', { expanded: false })).toBeNull();
 
     fireEvent.click(toggle);
     await waitFor(() => expect(toggle.getAttribute('aria-checked')).toBe('true'));
+    await screen.findByText('settings.visionBridge.targetModels.label');
     expect(screen.getAllByRole('switch', { name: 'settings.visionBridge.targetModels.toggleAria' })[0].getAttribute('aria-checked')).toBe('true');
     expect(settingsSetMock.mock.calls).toEqual([[{ enabled: true }], [{ enabled: false }], [{ enabled: true }]]);
     expect(settingsResetMock).not.toHaveBeenCalled();
