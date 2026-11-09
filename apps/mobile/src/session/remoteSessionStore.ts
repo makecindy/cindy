@@ -3538,6 +3538,7 @@ export const remoteSessionStore = {
   },
 
   setDeviceSessions(deviceId: string, deviceName: string, rawSessions: readonly RemoteSession[]): void {
+    const firstSnapshot = !sessionListRefreshSeen.has(deviceId);
     if (!sessionListRefreshSeen.has(deviceId) || sessionListRefreshArmed.has(deviceId)) {
       sessionListRefreshSeen.add(deviceId);
       sessionListRefreshArmed.delete(deviceId);
@@ -3603,11 +3604,13 @@ export const remoteSessionStore = {
           || (isDetailOnlySession(row) && (row.status === 'active' || row.status === 'archived'))));
       if (pendingStatusRows.length > 0) nextSessions = [...pendingStatusRows, ...nextSessions];
     }
+    if (firstSnapshot) bumpHomeStatusVersion();
     if (
       existing
       && existing.deviceName === deviceName
       && remoteSessionListsEqual(existing.sessions, nextSessions)
     ) {
+      if (firstSnapshot) emit();
       return;
     }
     shards.set(deviceId, { deviceId, deviceName, sessions: nextSessions });
@@ -5657,6 +5660,11 @@ export const remoteSessionStore = {
 
   getHomeSessions(): RemoteSession[] {
     return homeSessions;
+  },
+
+  /** A cold/cleared store has no snapshots; distinguish it from a received empty list. */
+  getSessionSnapshotDeviceIds(): string[] {
+    return [...shards.keys()].filter(id => sessionListRefreshSeen.has(id));
   },
 
   getMessages(sessionId: string): RemoteMessage[] {

@@ -18,6 +18,7 @@ import {
 import { getActiveSelfHostedRelay } from '@/device-link/selfHostedRelayRouting';
 import Notifications from './nativeNotifications';
 import { readIosPushEnvironment } from './nativePushEnvironment';
+import { clearNotificationBadge } from './notificationBadge';
 import { buildPushTokenRegistrationBody, parseNotificationResponseDeepLink } from './pushRegistrationModel';
 
 /** APNs / FCM registration, scoped to the current account realm and lifecycle. */
@@ -287,16 +288,26 @@ export async function readPushEnabled(): Promise<boolean> {
 
 export async function writePushEnabled(enabled: boolean): Promise<void> {
   await AsyncStorage.setItem(PUSH_ENABLED_KEY, enabled ? '1' : '0');
+  if (!enabled && isPushSupported()) await clearNotificationBadge().catch(() => undefined);
   for (const listener of pushPreferenceListeners) listener();
 }
 
 /** Suppress a foreground banner only while its conversation and thread are visible. */
-export function configureForegroundNotificationBehavior(isReading: (path: string) => boolean = () => false): void {
+export function configureForegroundNotificationBehavior(
+  isReading: (path: string) => boolean = () => false,
+  current: () => boolean = () => true,
+): void {
   Notifications.setNotificationHandler({
     handleNotification: async notification => {
+      const generation = pushLifecycleGeneration;
       const route = parseNotificationResponseDeepLink({ notification });
-      const show = !!route?.startsWith('/companions/groups/') && !isReading(route);
-      return { shouldShowBanner: show, shouldShowList: show, shouldPlaySound: show, shouldSetBadge: false };
+      const enabled = await readPushEnabled();
+      const stillCurrent = () => generation === pushLifecycleGeneration && current();
+      const unread = enabled && stillCurrent() && !!route && !isReading(route);
+      const show = unread && !!route?.startsWith('/companions/groups/');
+      // TaskBadgeBridge owns the foreground count. A push is not another task:
+      // never increment here or overwrite the projection with an older payload.
+      return { shouldShowBanner: show, shouldShowList: unread, shouldPlaySound: show, shouldSetBadge: false };
     },
   });
 }
@@ -356,7 +367,9 @@ async function syncPushRegistrationInternal(
   let permission = await Notifications.getPermissionsAsync();
   if (lifecycleGeneration !== pushLifecycleGeneration) return 'skipped';
   if (permission.status !== 'granted' && permission.canAskAgain) {
-    permission = await Notifications.requestPermissionsAsync();
+    permission = await Notifications.requestPermissionsAsync({
+      ios: { allowAlert: true, allowSound: true, allowBadge: true },
+    });
     if (lifecycleGeneration !== pushLifecycleGeneration) return 'skipped';
   }
   if (permission.status !== 'granted') {
@@ -474,6 +487,7 @@ export function unregisterPushTokenBestEffort(
   realm: ClientEndpointRegion = getActiveMobileSessionRealm(),
 ): Promise<void> {
   pushLifecycleGeneration += 1;
+  if (isPushSupported()) void clearNotificationBadge().catch(() => undefined);
   for (const listener of pushPreferenceListeners) listener(true);
   // 不进入 pushMutationTail：当前 tail 可能正在 apiFetch → terminal handler →
   // clearLocalSession → 本函数。等待 tail 会形成自等待死锁。

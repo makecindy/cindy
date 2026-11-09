@@ -20,6 +20,8 @@ const mocks = vi.hoisted(() => ({
   getDevicePushTokenAsync: vi.fn(),
   readIosPushEnvironment: vi.fn(),
   setNotificationHandler: vi.fn(),
+  setBadgeCountAsync: vi.fn(async (_count: number) => true),
+  dismissAllNotificationsAsync: vi.fn(async () => {}),
 }));
 
 vi.mock('@react-native-async-storage/async-storage', () => ({
@@ -35,6 +37,8 @@ vi.mock('@react-native-async-storage/async-storage', () => ({
 }));
 
 vi.mock('expo-notifications', () => ({
+  setBadgeCountAsync: mocks.setBadgeCountAsync,
+  dismissAllNotificationsAsync: mocks.dismissAllNotificationsAsync,
   setNotificationHandler: mocks.setNotificationHandler,
   getPermissionsAsync: mocks.getPermissionsAsync,
   requestPermissionsAsync: mocks.requestPermissionsAsync,
@@ -70,6 +74,7 @@ import {
   unregisterPushTokenBestEffort,
 } from '@/notifications/pushNotifications';
 import { setActiveSelfHostedRelay } from '@/device-link/selfHostedRelayRouting';
+import { clearNotificationBadge, isNotificationRouteVisible, createTaskBadgeSync } from '@/notifications/notificationBadge';
 
 const REGISTERED_KEY = 'cindy.push.registered';
 const PENDING_KEY = 'cindy.push.pendingUnregister';
@@ -90,6 +95,62 @@ function readStoredRealms(key: string): string[] {
 }
 
 describe('push notification realm routing', () => {
+  // Unit: fixed-1/notification counting could not represent real task counts.
+  // Registration tests do not cover native ordering, unknown state or read clears.
+  it('writes exact task counts, keeps unknown state and clears only a confirmed zero', async () => {
+    let count: number | undefined = 6;
+    const controller = createTaskBadgeSync(() => count, () => true);
+    await controller.sync();
+    await controller.sync();
+    count = undefined;
+    await controller.sync();
+    count = 2;
+    await controller.sync();
+    count = 0;
+    await controller.sync();
+    expect(mocks.setBadgeCountAsync.mock.calls).toEqual([[6], [2], [0]]);
+    controller.dispose();
+  });
+
+  it('does not restore an old account count after sign-out during a native write', async () => {
+    expect(isNotificationRouteVisible('/companions/groups/group?threadRootId=thread',
+      { pathname: '/companions/groups/group' })).toBe(false);
+    expect(isNotificationRouteVisible('/sessions/task?deviceId=two',
+      { pathname: '/sessions/task', deviceId: 'one' })).toBe(false);
+    let release!: (value: boolean) => void;
+    mocks.setBadgeCountAsync.mockImplementationOnce(() => new Promise(resolve => { release = resolve; }));
+    const controller = createTaskBadgeSync(() => 6, () => true);
+    const writing = controller.sync();
+    await vi.waitFor(() => expect(release).toBeTypeOf('function'), { interval: 1 });
+    controller.dispose();
+    const clear = clearNotificationBadge();
+    release(true);
+    await Promise.all([writing, clear]);
+    await controller.sync();
+    expect(mocks.dismissAllNotificationsAsync).toHaveBeenCalledOnce();
+    expect(mocks.setBadgeCountAsync.mock.calls).toEqual([[6], [0]]);
+  });
+
+  it('keeps a foreground task reminder in the tray without adding a banner', async () => {
+    store.set('cindy.push.enabled', '1');
+    configureForegroundNotificationBehavior();
+    const handler = mocks.setNotificationHandler.mock.calls.at(-1)![0];
+    expect(await handler.handleNotification({ request: { content: { data: { deepLink: '/sessions/task' } } } }))
+      .toEqual({ shouldShowBanner: false, shouldShowList: true, shouldPlaySound: false, shouldSetBadge: false });
+    expect(mocks.setBadgeCountAsync).not.toHaveBeenCalled();
+    store.set('cindy.push.enabled', '0');
+    mocks.setBadgeCountAsync.mockClear();
+    expect(await handler.handleNotification({ request: { content: { data: { deepLink: '/sessions/task' } } } }))
+      .toMatchObject({ shouldShowList: false, shouldSetBadge: false });
+    expect(mocks.setBadgeCountAsync).not.toHaveBeenCalled();
+  });
+
+  it('requests iOS badge permission along with alerts and sounds', async () => {
+    mocks.getPermissionsAsync.mockResolvedValueOnce({ status: 'undetermined', canAskAgain: true });
+    mocks.requestPermissionsAsync.mockResolvedValueOnce({ status: 'granted' });
+    await syncPushRegistration({ enabled: true, apiFetch: vi.fn().mockResolvedValue({}) });
+    expect(mocks.requestPermissionsAsync).toHaveBeenCalledWith({ ios: { allowAlert: true, allowSound: true, allowBadge: true } });
+  });
   it('compensates both endpoints when first enable partially fails, retaining retry state if DELETE fails', async () => {
     let failDelete = true;
     const apiFetch = vi.fn(async (path: string, opts: { method?: string }) => {
@@ -108,6 +169,7 @@ describe('push notification realm routing', () => {
   });
   // Same group, another thread must still be noticeable while reading the main timeline.
   it('passes the thread route to the foreground visibility gate', async () => {
+    store.set('cindy.push.enabled', '1');
     const room = '00000000-0000-4000-8000-000000000001';
     const message = '00000000-0000-4000-8000-000000000002';
     const thread = '00000000-0000-4000-8000-000000000003';

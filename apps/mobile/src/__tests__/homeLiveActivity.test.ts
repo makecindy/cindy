@@ -8,6 +8,7 @@ import {
   type RemoteSessionLiveActivity,
 } from '@/session/sessionList';
 import type { RemoteSession } from '@/session/types';
+import { projectAgentActivity, readTaskBadgeCount, summarizeAgentActivities } from '@/widgets/agentActivity';
 
 function session(id: string, patch: Partial<RemoteSession> = {}): RemoteSession {
   return {
@@ -40,6 +41,50 @@ function buildLiveActivityIndex(sessions: readonly RemoteSession[]): Map<string,
 
 describe('mobile Home live activity', () => {
   beforeEach(() => remoteSessionStore.clear());
+
+  // Unit: approved badge rule is waiting + unread terminal tasks, never running
+  // or push count. Existing Home row tests did not exercise aggregate counts.
+  // Real host pushes below prove a read acknowledgement reduces the same source
+  // used by the island projection and the Android/iOS badge.
+  it('shares exact deduplicated counts between the island and task badges', () => {
+    const phases = ['needs-interaction', 'needs-interaction', 'running', 'running', 'running',
+      'completed', 'completed', 'completed', 'error'] as const;
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', phases.map((_, index) => session(`s${index}`)));
+    phases.forEach((phase, index) => remoteSessionStore.applyRemotePush('dev-1', SESSION_ACTIVITY_CHANNEL, {
+      sessionId: `s${index}`, phase, compactDetail: '', attention: true,
+    }));
+    const rows = remoteSessionStore.getHomeSessions();
+    const read = (row: RemoteSession) => remoteSessionStore.getSessionLiveActivity(row.id, row.deviceLinkDeviceId);
+    const labels = { attention: 'Waiting', running: 'Running', completed: 'Done', error: 'Error' };
+    const island = projectAgentActivity(rows, read, labels, row => `/sessions/${row.id}`, 'Stale');
+    expect(island).toMatchObject({ attentionCount: 2, runningCount: 3, unreadCompletedCount: 4, badgeCount: 6 });
+    expect(summarizeAgentActivities([...rows, ...rows], read).badgeCount).toBe(6);
+    const badge = (online = true) => readTaskBadgeCount(remoteSessionStore.getHomeSessions(), 'user-1',
+      remoteSessionStore.getSessionSnapshotDeviceIds(), () => online, read);
+    expect(badge()).toBe(island?.badgeCount);
+    expect(badge(false)).toBeUndefined();
+    remoteSessionStore.applyRemotePush('dev-1', SESSION_ACTIVITY_CHANNEL, {
+      sessionId: 's5', phase: 'completed', compactDetail: '', attention: false,
+    });
+    expect(badge()).toBe(5);
+    expect(readTaskBadgeCount(rows, 'other-user', ['dev-1'], () => true, read)).toBe(0);
+    expect(summarizeAgentActivities(rows.map(row => ({ ...row, status: 'archived' })), read).badgeCount).toBe(0);
+    expect(summarizeAgentActivities(rows.map(row => ({ ...row, pendingLocalCreation: true })), read).badgeCount).toBe(0);
+    expect(readTaskBadgeCount(rows.map(row => ({ ...row, cacheSeeded: true })), 'user-1', ['dev-1'], () => true, read)).toBeUndefined();
+  });
+
+  it('distinguishes cold state from a received empty snapshot and notifies badge subscribers', async () => {
+    const count = () => readTaskBadgeCount(remoteSessionStore.getHomeSessions(), 'user-1',
+      remoteSessionStore.getSessionSnapshotDeviceIds(), () => true, () => null);
+    expect(count()).toBeUndefined();
+    const seen: Array<number | undefined> = [];
+    const unsubscribe = remoteSessionStore.subscribeHomeStatus(() => { seen.push(count()); });
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', []);
+    await Promise.resolve();
+    expect(count()).toBe(0);
+    expect(seen).toContain(0);
+    unsubscribe();
+  });
 
   it('keeps unread completed/error live activity for the right-slot dots and clears once read', () => {
     remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1')]);

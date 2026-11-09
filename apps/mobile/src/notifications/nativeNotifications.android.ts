@@ -6,6 +6,7 @@ async function prepareChannel() {
   await Notifications.setNotificationChannelAsync('chat-messages', {
     name: 'Cindy', importance: Notifications.AndroidImportance.HIGH,
     lockscreenVisibility: Notifications.AndroidNotificationVisibility.PRIVATE,
+    showBadge: true,
   });
 }
 const nativeNotifications: NativeNotificationsApi = {

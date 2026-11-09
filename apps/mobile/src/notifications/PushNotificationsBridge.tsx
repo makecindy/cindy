@@ -5,6 +5,7 @@ import { useAuth } from '@/auth/AuthContext';
 import { useSelfHostedRelay } from '@/device-link/selfHostedRelay';
 import Notifications from './nativeNotifications';
 import { ChatBackgroundBridge } from './ChatBackgroundBridge';
+import { isNotificationRouteVisible } from './notificationBadge';
 import { notificationRecoveryRoute, parseNotificationResponseDeepLink } from './pushRegistrationModel';
 import {
   configureForegroundNotificationBehavior,
@@ -32,9 +33,9 @@ export function PushNotificationsBridge() {
   const auth = useAuth();
   const router = useRouter();
   const pathname = usePathname();
-  const { threadRootId } = useGlobalSearchParams<{ threadRootId?: string }>();
-  const visibleChat = useRef({ pathname, threadRootId });
-  visibleChat.current = { pathname, threadRootId };
+  const { threadRootId, deviceId } = useGlobalSearchParams<{ threadRootId?: string; deviceId?: string }>();
+  const visibleChat = useRef({ pathname, threadRootId, deviceId });
+  visibleChat.current = { pathname, threadRootId, deviceId };
   const routerRef = useRef(router);
   routerRef.current = router;
   /** 冷启动点通知时 auth 可能未就绪,先存下待路由的深链。 */
@@ -55,10 +56,8 @@ export function PushNotificationsBridge() {
   useEffect(() => {
     if (!isPushSupported()) return;
     configureForegroundNotificationBehavior(route => {
-      const [path, query] = route.split('?');
-      const thread = new URLSearchParams(query).get('threadRootId') ?? undefined;
-      return visibleChat.current.pathname === path && visibleChat.current.threadRootId === thread;
-    });
+      return AppState.currentState === 'active' && isNotificationRouteVisible(route, visibleChat.current);
+    }, () => authStateRef.current.initialized && authStateRef.current.isAuthenticated);
   }, []);
 
   // 登录态就绪后同步注册状态(开关关闭 / 从未注册时是 no-op)
