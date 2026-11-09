@@ -37,7 +37,7 @@ describe('reply sender identities for contact plugins', () => {
       author: 'Alice', senderId: 'ou_alice', text: 'x'.repeat(GROUP_CONTEXT_MAX_CHARS + 1),
     });
     expect(result).toContain('[Alice (user_id: ou_alice)]');
-    expect(result).toContain('[引用内容过长，后续已省略]');
+    expect(result).toContain('[…已截断]');
     expect(result).not.toContain('x'.repeat(GROUP_CONTEXT_MAX_CHARS + 1));
   });
 
