@@ -105,7 +105,10 @@ export async function buildMobile(file) {
       exec('xcodebuild', ['-workspace', path.join(mobile, 'ios', workspaces[0]), '-scheme', scheme,
         '-configuration', 'Release', '-destination', `platform=iOS,id=${m.hardwareUdid}`, '-derivedDataPath', derived,
         '-allowProvisioningUpdates', `DEVELOPMENT_TEAM=${m.teamId}`, 'CODE_SIGN_STYLE=Automatic',
-        `CODE_SIGN_IDENTITY=${m.signingCertificateSha1}`, 'SWIFT_ENABLE_EXPLICIT_MODULES=NO',
+        // Automatic provisioning requires a certificate class, not a SHA-1 identity.
+        // verifyMobileArtifact still requires the configured exact certificate on every bundle;
+        // an Xcode-selected identity mismatch blocks delivery rather than weakening the pin.
+        'CODE_SIGN_IDENTITY=Apple Development', 'SWIFT_ENABLE_EXPLICIT_MODULES=NO',
         'CLANG_ENABLE_EXPLICIT_MODULES=NO', `CURRENT_PROJECT_VERSION=${build}`, '-quiet', 'build']);
       d.app = path.join(derived, 'Build/Products/Release-iphoneos', `${scheme}.app`);
     } finally { fs.closeSync(log); }

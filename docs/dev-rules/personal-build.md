@@ -190,6 +190,10 @@ regenerated there. Tracked native sources are refused before `prebuild --clean`.
 
 Build uses Release mode, the existing endpoint/region loader and CocoaPods setup, and Xcode's exact
 physical-device destination (not `generic/platform=iOS`).
+Automatic provisioning uses the `Apple Development` certificate class: Xcode rejects an explicit
+SHA-1 identity with automatic signing. Before delivery, every signed bundle must still match the
+configured certificate fingerprint and its provisioning profile; a different certificate blocks
+installation, even when Xcode reports a successful build.
 
 APNs registration uses the installed native provisioning environment, never JavaScript `__DEV__`:
 a Release build signed for development registers with sandbox APNs. Artifact verification requires
