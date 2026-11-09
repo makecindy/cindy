@@ -366,6 +366,26 @@ describe('SelectionQuoteButton — message body selection actions', () => {
     }
   });
 
+  // PR #9503 discussion_r4514841384: cross-message reconstruction appended a
+  // tab after every cell, including partial endpoints and the last cell in a row.
+  // Unit/DOM: real Markdown table output must delimit cells, not trail each row.
+  it.each(['partial cell', 'whole table'] as const)('preserves table separators for a cross-message %s selection', async (source) => {
+    const onAskInSideChat = vi.fn(async (_quote: string) => true);
+    const nextUser = 'Please continue';
+    await renderMessages(onAskInSideChat, '| H1 | H2 |\n| --- | --- |\n| A1 | B1 |\n| A2 | B2 |', nextUser);
+    const partial = source === 'partial cell';
+    selectText(screen.getByText(userText), screen.getByText(partial ? 'B1' : nextUser), 0, partial ? 1 : undefined);
+    const expected = `${userText}\nH1\tH2\nA1\t${partial ? 'B' : `B1\nA2\tB2\n${nextUser}`}`;
+    if (partial) {
+      fireEvent.click(screen.getByRole('button', { name: 'chat.quote.addToChat' }));
+      expect(getDraft(sessionId)?.text?.content?.[0]?.content?.[0]?.attrs?.text).toBe(expected);
+    } else {
+      await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'chat.sideChat.title' })); });
+      expect(onAskInSideChat).toHaveBeenCalledExactlyOnceWith(expected);
+      expect(getDraft(sessionId)).toBeUndefined();
+    }
+  });
+
   it('does not claim a selection extending beyond its message stream', async () => {
     await renderMessages(vi.fn(async () => true));
     const selection = selectText(screen.getByText(userText), screen.getByText('Outside the message stream'));

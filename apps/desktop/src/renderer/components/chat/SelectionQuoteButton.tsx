@@ -149,6 +149,7 @@ function readQuoteText(selection: Selection, range: Range): string {
 
   let text = '';
   let pendingBreaks = 0;
+  let tableRow: { separator: string; inCell: boolean } | null = null;
   const selectability = new WeakMap<Element, boolean>();
   const canSelect = (el: Element): boolean => {
     const cached = selectability.get(el);
@@ -167,6 +168,12 @@ function readQuoteText(selection: Selection, range: Range): string {
       const trailing = text.match(/\n*$/)![0].length;
       const leading = value.match(/^\n*/)![0].length;
       text += '\n'.repeat(Math.max(0, pendingBreaks - trailing - leading));
+    }
+    // Commit cell separators only when more selected cell content follows.
+    // Empty intervening cells retain their columns; row-end separators expire.
+    if (tableRow?.inCell) {
+      text += tableRow.separator;
+      tableRow.separator = '';
     }
     text += value;
     pendingBreaks = 0;
@@ -191,10 +198,17 @@ function readQuoteText(selection: Selection, range: Range): string {
     // cross-message selection is rebuilt. Range.toString() alone joins blocks.
     const breaks = node.tagName === 'P' ? 2
       : /^(block|flex|grid|list-item|table|table-row)$/.test(style.display) ? 1 : 0;
+    const outerRow = tableRow;
+    if (style.display === 'table-row') tableRow = { separator: '', inCell: false };
+    if (style.display === 'table-cell' && tableRow) tableRow.inCell = true;
     pendingBreaks = Math.max(pendingBreaks, breaks);
     node.childNodes.forEach(visit);
     pendingBreaks = Math.max(pendingBreaks, breaks);
-    if (style.display === 'table-cell' && canSelect(node)) append('\t');
+    if (style.display === 'table-cell' && tableRow) {
+      if (canSelect(node)) tableRow.separator += '\t';
+      tableRow.inCell = false;
+    }
+    tableRow = outerRow;
   };
   visit(common);
   return text;
