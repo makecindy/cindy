@@ -131,6 +131,62 @@ function getFloatingAnchor(selection: Selection, range: Range): Omit<SelectionAn
   };
 }
 
+// User rows contain source labels, timestamps, controls and hidden measurement
+// text as well as the sent body. Filter those nodes without changing the live
+// selection (including ranges crossing into the following assistant reply).
+function readQuoteText(selection: Selection, range: Range): string {
+  const scopeSelector = '[data-selection-quote-scope]';
+  const bodySelector = '[data-selection-quote-body]';
+  const common = range.commonAncestorContainer;
+  const element = common instanceof Element ? common : common.parentElement;
+  if (!element) return '';
+  // Preserve Chromium's serialization for body-only selections and other hosts
+  // such as file previews. Only mixed/scoped selections need DOM filtering.
+  if (element.closest(bodySelector) || (
+    !element.closest(scopeSelector)
+    && !Array.from(element.querySelectorAll(scopeSelector)).some(node => range.intersectsNode(node))
+  )) return selection.toString();
+
+  let text = '';
+  let pendingBreaks = 0;
+  const append = (value: string) => {
+    if (!value) return;
+    if (text && pendingBreaks) {
+      const trailing = text.match(/\n*$/)![0].length;
+      const leading = value.match(/^\n*/)![0].length;
+      text += '\n'.repeat(Math.max(0, pendingBreaks - trailing - leading));
+    }
+    text += value;
+    pendingBreaks = 0;
+  };
+  const visit = (node: Node) => {
+    if (!range.intersectsNode(node)) return;
+    const el = node instanceof Element ? node : node.parentElement;
+    if (!el) return;
+    if (el.closest(scopeSelector) && !el.closest(bodySelector) && !el.querySelector(bodySelector)) return;
+    if (node.nodeType === Node.TEXT_NODE) {
+      const value = node.textContent ?? '';
+      append(value.slice(node === range.startContainer ? range.startOffset : 0,
+        node === range.endContainer ? range.endOffset : value.length));
+      return;
+    }
+    if (!(node instanceof Element)) return;
+    const style = getComputedStyle(node);
+    if (style.display === 'none' || style.visibility === 'hidden') return;
+    if (node.tagName === 'BR') { append('\n'); return; }
+    // Keep paragraph/list/table boundaries and preformatted whitespace when a
+    // cross-message selection is rebuilt. Range.toString() alone joins blocks.
+    const breaks = node.tagName === 'P' ? 2
+      : /^(block|flex|grid|list-item|table|table-row)$/.test(style.display) ? 1 : 0;
+    pendingBreaks = Math.max(pendingBreaks, breaks);
+    node.childNodes.forEach(visit);
+    pendingBreaks = Math.max(pendingBreaks, breaks);
+    if (style.display === 'table-cell') append('\t');
+  };
+  visit(common);
+  return text;
+}
+
 export function SelectionQuoteButton({
   sessionId,
   containerRef,
@@ -190,14 +246,6 @@ export function SelectionQuoteButton({
     const readSelectionInStream = (): SelectionAnchor | null => {
       const sel = window.getSelection();
       if (!sel || sel.isCollapsed || sel.rangeCount === 0) return null;
-      const raw = getQuoteText?.() ?? sel.toString();
-      if (!raw.trim()) return null;
-      // 前导**缩进空格**必须保留:空白敏感代码(FileBodyView 选中缩进行)的
-      // 引用要与文件原文逐字符一致,模型才能按引用文本定位 / 精准编辑。但前
-      // 导 / 尾部**换行**要剥:对定位无意义,且以换行开头的引用会让
-      // formatQuoteForSend 的首行产出裸 `>`,引用解析的 `> ` 守卫会失配。
-      // trim 仅用于上面的空选区判定。
-      const text = raw.replace(/^[\r\n]+/, '').replace(/[\r\n]+$/, '');
       const container = containerRef.current;
       if (!container) return null;
       const range = sel.getRangeAt(0);
@@ -208,6 +256,14 @@ export function SelectionQuoteButton({
       ) {
         return null;
       }
+      const raw = getQuoteText?.() ?? readQuoteText(sel, range);
+      if (!raw.trim()) return null;
+      // 前导**缩进空格**必须保留:空白敏感代码(FileBodyView 选中缩进行)的
+      // 引用要与文件原文逐字符一致,模型才能按引用文本定位 / 精准编辑。但前
+      // 导 / 尾部**换行**要剥:对定位无意义,且以换行开头的引用会让
+      // formatQuoteForSend 的首行产出裸 `>`,引用解析的 `> ` 守卫会失配。
+      // trim 仅用于上面的空选区判定。
+      const text = raw.replace(/^[\r\n]+/, '').replace(/[\r\n]+$/, '');
       const floatingAnchor = getFloatingAnchor(sel, range);
       if (!floatingAnchor) return null;
 

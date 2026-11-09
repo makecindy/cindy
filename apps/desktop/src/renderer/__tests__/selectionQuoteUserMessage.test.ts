@@ -139,15 +139,18 @@ describe('SelectionQuoteButton — message body selection actions', () => {
     vi.useRealTimers();
   });
 
-  async function renderMessages(onAskInSideChat?: (quote: string) => Promise<boolean>) {
+  async function renderMessages(onAskInSideChat?: (quote: string) => Promise<boolean>, reply = assistantText) {
     const containerRef = createRef<HTMLDivElement>();
     await act(async () => {
       render(createElement(MemoryRouter, null,
         createElement(Tooltip.Provider, null,
           createElement(ConfirmDialogProvider, null,
             createElement('div', { ref: containerRef },
-              createElement(UserMessage, { workingDir: '', content: userText }),
-              createElement(AssistantMessage, { workingDir: '', content: assistantText }),
+              createElement(UserMessage, {
+                workingDir: '', content: userText,
+                createdAt: '2026-11-09T10:00:00Z', sharedAuthorName: 'Message author',
+              }),
+              createElement(AssistantMessage, { workingDir: '', content: reply }),
               createElement(SelectionQuoteButton, { sessionId, containerRef, onAskInSideChat }),
             ),
             createElement('p', null, 'Outside the message stream'),
@@ -157,10 +160,10 @@ describe('SelectionQuoteButton — message body selection actions', () => {
     });
   }
 
-  function selectText(start: HTMLElement, end = start) {
+  function selectText(start: HTMLElement, end = start, startOffset = 0, endOffset = end.firstChild!.textContent!.length) {
     const range = document.createRange();
-    range.setStart(start.firstChild!, 0);
-    range.setEnd(end.firstChild!, end.firstChild!.textContent!.length);
+    range.setStart(start.firstChild!, startOffset);
+    range.setEnd(end.firstChild!, endOffset);
     Object.defineProperty(range, 'getClientRects', {
       value: () => [new DOMRect(120, 100, 160, 20)],
     });
@@ -196,7 +199,7 @@ describe('SelectionQuoteButton — message body selection actions', () => {
     const start = screen.getByText(source === 'assistant' ? assistantText : userText);
     const end = source === 'both' ? screen.getByText(assistantText) : start;
     const selection = selectText(start, end);
-    const selectedText = selection.toString();
+    const selectedText = source === 'both' ? `${userText}\n\n${assistantText}` : start.textContent;
     expect(screen.getByRole('button', { name: 'chat.quote.addToChat' })).toBeTruthy();
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: 'chat.sideChat.title' }));
@@ -205,6 +208,39 @@ describe('SelectionQuoteButton — message body selection actions', () => {
     expect(getDraft(sessionId)).toBeUndefined();
     expect(selection.isCollapsed).toBe(true);
     expect(screen.queryByRole('button', { name: 'chat.sideChat.title' })).toBeNull();
+  });
+
+  // PR #9503 discussion_r4511756287: the old test omitted metadata and asserted
+  // against Selection.toString(), accepting the timestamp as expected content.
+  // Unit/DOM: a real user row with a timestamp must quote only its selected body;
+  // selecting its author label alone must not create either selection action.
+  it('omits message metadata from a cross-message native quote', async () => {
+    await renderMessages();
+    const selection = selectText(screen.getByText(userText), screen.getByText(assistantText));
+    expect(selection.toString()).toContain(document.querySelector('time')!.textContent);
+    act(() => nativeAddToChat());
+    expect(getDraft(sessionId)?.text?.content?.[0]?.content).toEqual([
+      { type: 'composerQuote', attrs: { text: `${userText}\n\n${assistantText}`, sourcePath: null, startLine: null, endLine: null } },
+    ]);
+  });
+
+  it('does not offer quote actions for user message metadata', async () => {
+    await renderMessages(vi.fn(async () => true));
+    const selection = selectText(screen.getByText('Message author'));
+    expect(screen.queryByRole('button', { name: 'chat.quote.addToChat' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'chat.sideChat.title' })).toBeNull();
+    act(() => nativeAddToChat());
+    expect(getDraft(sessionId)).toBeUndefined();
+    expect(selection.isCollapsed).toBe(false);
+  });
+
+  it('preserves partial endpoints and paragraph breaks while filtering a cross-message quote', async () => {
+    await renderMessages(undefined, 'First paragraph\n\nSecond paragraph');
+    selectText(screen.getByText(userText), screen.getByText('Second paragraph'), 7, 6);
+    fireEvent.click(screen.getByRole('button', { name: 'chat.quote.addToChat' }));
+    expect(getDraft(sessionId)?.text?.content?.[0]?.content).toEqual([
+      { type: 'composerQuote', attrs: { text: 'check this requirement\n\nFirst paragraph\n\nSecond', sourcePath: null, startLine: null, endLine: null } },
+    ]);
   });
 
   it('does not claim a selection extending beyond its message stream', async () => {
