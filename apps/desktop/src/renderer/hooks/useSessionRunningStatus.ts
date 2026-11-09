@@ -82,11 +82,29 @@ let pendingReminderOwnerId: string | null = null;
 const notifiedPendingRequests = new Map<string, Set<string>>();
 
 /**
+ * Main drops the whole notification when this field is longer than 256, so the
+ * id itself must stay inside that bound. A needs-reply joins every pending
+ * request key; a handful of long keys already overflows. Fold the tail into a
+ * fixed-width hash instead of letting the payload be rejected.
+ */
+const ALERT_EVENT_ID_MAX_LENGTH = 256;
+
+/** FNV-1a, hex. Stable across reloads and short enough to keep the id bounded. */
+function shortAlertKeyHash(value: string): string {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < value.length; i += 1) {
+    hash ^= value.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(16).padStart(8, '0');
+}
+
+/**
  * Identity of one needs-reply or error, built from the turn that produced it.
  * The same turn plus the same pending request (or the same failure) is one
  * desktop toast; a later turn, or a different request, is a new one.
  * No turn clock means no identity: the caller still notifies, it just cannot
- * collapse a repeat.
+ * collapse a repeat. Always at most 256 characters.
  */
 export function sessionAlertEventId(
   kind: 'error' | 'needs-reply',
@@ -97,7 +115,15 @@ export function sessionAlertEventId(
     return undefined;
   }
   const turn = `turn:${Math.floor(turnStartedAt)}`;
-  return kind === 'error' ? `${turn}:error` : `${turn}:${requestKey ?? 'needs-reply'}`;
+  if (kind === 'error') return `${turn}:error`;
+  const key = requestKey && requestKey.length > 0 ? requestKey : 'needs-reply';
+  const raw = `${turn}:${key}`;
+  if (raw.length <= ALERT_EVENT_ID_MAX_LENGTH) return raw;
+  // Keep the turn clock readable and fold only the request tail. Two different
+  // long key lists of the same turn must not collapse into one id.
+  const digest = shortAlertKeyHash(key);
+  const room = ALERT_EVENT_ID_MAX_LENGTH - turn.length - 1 - 1 - digest.length;
+  return `${turn}:${key.slice(0, Math.max(0, room))}#${digest}`;
 }
 
 interface UseSessionRunningStatusOptions {

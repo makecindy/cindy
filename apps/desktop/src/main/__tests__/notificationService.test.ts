@@ -1196,6 +1196,28 @@ describe('notificationService — channels 分发', () => {
     expect(notificationCtor).toHaveBeenCalledTimes(3);
   });
 
+  // #9317 review / unit: an alert id longer than 256 used to fail the whole
+  // payload check, so the needs-reply or error never toasted. The id is only a
+  // dedup key: drop it and still deliver. A later short id of the same task is
+  // a different alert and must toast again.
+  it('still delivers a needs-reply or error when its alert id is too long to keep', async () => {
+    const { initNotificationService } = await freshService();
+    initNotificationService(baseDeps(makeFeishuIm(null)));
+    const channels = { desktop: true, feishu: false, mobile: false };
+    const tooLong = 'turn:100:' + 'k'.repeat(300);
+    await invokeHandler({
+      sessionId: 's1', title: 'Ask', kind: 'needs-reply', alertEventId: tooLong, channels,
+    });
+    await invokeHandler({
+      sessionId: 's1', title: 'Ask', kind: 'error', alertEventId: '', channels,
+    });
+    expect(notificationCtor).toHaveBeenCalledTimes(2);
+    await invokeHandler({
+      sessionId: 's1', title: 'Ask', kind: 'error', alertEventId: 'turn:200:error', channels,
+    });
+    expect(notificationCtor).toHaveBeenCalledTimes(3);
+  });
+
   // #9317 / unit: a done with no turn id and a failed preview read records only a
   // send time. An alert keeps its own ledger, so a later needs-reply or error of
   // the same task — even one that also has no id — must still toast.

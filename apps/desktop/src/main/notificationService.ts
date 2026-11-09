@@ -293,6 +293,9 @@ export function initNotificationService(deps: NotificationServiceDeps): void {
       // main 必须做运行时形状校验,TS 类型不算(electron-security 规则)。正文摘要
       // 不来自 renderer(main 侧读库),relay 有 per-user 频控、main 侧另有 5s
       // 去重与「被远程观看则不推」收口。
+      // 告警标识是可选的去重键,不是通知本身:超长或空串只丢掉它,
+      // 需要回复 / 失败仍要弹出来。其它字段仍然不合法就整条拒绝。
+      const alertEventId = takeUsableAlertEventId(payload);
       assertValidSessionEventPayload(payload);
       const { sessionId, title, kind, channels } = payload;
       const markAttention = payload.markAttention !== false;
@@ -393,8 +396,9 @@ export function initNotificationService(deps: NotificationServiceDeps): void {
         const eventId = signal?.id ?? preview?.eventId;
         // needs-reply / error have no turn signal. Their alert id is the only
         // identity that can collapse a duplicate IPC without swallowing the next
-        // question or a later failure of the same task.
-        const alertEventId = kind === 'done' ? undefined : payload.alertEventId;
+        // question or a later failure of the same task. A completion never uses
+        // it, and an unusable id was already stripped before validation.
+        const usableAlertEventId = kind === 'done' ? undefined : alertEventId;
         const mobileEventId = preview?.eventId ?? signal?.fallbackEventId;
         // A device-link handoff advances only the mobile send generation. It
         // must not make an already accepted desktop/Feishu reply eligible again.
@@ -409,7 +413,7 @@ export function initNotificationService(deps: NotificationServiceDeps): void {
         const mobileTeammateBotId = preview?.teammateBotId ?? teammateBotId;
         if (wantDesktop && (kind === 'done'
           ? !wasReplyNotified(desktopKey, eventId)
-          : !wasAlertNotified(desktopKey, alertEventId))) {
+          : !wasAlertNotified(desktopKey, usableAlertEventId))) {
           try {
             const accepted = showDesktopSessionEvent(getWindow, {
               sessionId, title: notificationTitle, kind, teammate, markAttention, avatarJpeg,
@@ -418,9 +422,9 @@ export function initNotificationService(deps: NotificationServiceDeps): void {
             });
             if (kind === 'done' && accepted) {
               notifiedReplies.set(desktopKey, eventId ? { eventId } : { fallbackSentAt: Date.now() });
-            } else if (accepted && alertEventId) {
+            } else if (accepted && usableAlertEventId) {
               // 只记下有标识的告警。无标识的不留记录，下一次同样无标识的调用仍要通知。
-              notifiedAlerts.set(desktopKey, alertEventId);
+              notifiedAlerts.set(desktopKey, usableAlertEventId);
             }
           } catch (err) {
             log.warn('[notification] desktop reply notification failed (non-fatal)', err);
@@ -483,6 +487,24 @@ export function initNotificationService(deps: NotificationServiceDeps): void {
 const SESSION_EVENT_KINDS: ReadonlySet<string> = new Set(['done', 'error', 'needs-reply']);
 const SESSION_ID_MAX_LENGTH = 256;
 const SESSION_TITLE_MAX_LENGTH = 1024;
+const ALERT_EVENT_ID_MAX_LENGTH = 256;
+
+/**
+ * 告警标识只用于桌面去重。它不合法（完成通知不该带、不是字符串、空串、超长）
+ * 时从 payload 上拿掉并当作没有标识：通知照常发，只是这次不去重。
+ * 返回仍可用的那一串；没有则返回 undefined。
+ */
+function takeUsableAlertEventId(payload: unknown): string | undefined {
+  if (!payload || typeof payload !== 'object') return undefined;
+  const record = payload as { alertEventId?: unknown; kind?: unknown };
+  const id = record.alertEventId;
+  const usable = record.kind !== 'done'
+    && typeof id === 'string'
+    && id.length > 0
+    && id.length <= ALERT_EVENT_ID_MAX_LENGTH;
+  if (!usable && id !== undefined) delete record.alertEventId;
+  return usable ? id : undefined;
+}
 
 /** show-session-event 的运行时校验:非法直接抛(invoke reject),不进任何通知通道。 */
 function assertValidSessionEventPayload(
@@ -509,7 +531,7 @@ function assertValidSessionEventPayload(
     )) ||
     (p.alertEventId !== undefined && (
       p.kind === 'done' || typeof p.alertEventId !== 'string'
-      || p.alertEventId.length === 0 || p.alertEventId.length > 256
+      || p.alertEventId.length === 0 || p.alertEventId.length > ALERT_EVENT_ID_MAX_LENGTH
     ))
   ) {
     throw new TypeError('invalid session event payload');
