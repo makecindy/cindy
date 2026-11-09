@@ -81,6 +81,9 @@ Codex 共享登录使用文件软链接，不创建硬链接。Windows 无文件
 系统文件一次性拆链。早期开发实现遗留的 `.swapbak` / `.copytmp` 保留原样，
 不自动恢复或删除，避免撤销原生 Codex 登出或干扰仍在运行的旧实例。
 既有只读 Dev 消费 Release 凭证的一次性快照例外保持不变。
+目录 junction 或软链接可能让两个不同路径实际指向同一 `auth.json` 目录项。
+判断时展开父目录别名，不能仅比较路径字符串，也不能将不同名字的硬链接视为
+同一目录项；同一目录项直接复用，不执行迁移、快照覆盖或失效时的文件删除。
 
 实现与回归见 `maker-host/codex-auth-link.ts`、`auth-adapters.ts`、
 `codexAuthLink.test.ts` 和 `codexAuthInvalidation.test.ts`。

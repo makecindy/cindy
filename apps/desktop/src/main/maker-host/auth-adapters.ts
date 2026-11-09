@@ -61,6 +61,7 @@ import {
   resolveWindowsAclPrincipal,
   codexAuthLinkAcceptanceFor,
   codexAuthPathsShareIdentity,
+  codexAuthPathsShareEntry,
 } from './codex-auth-link.js';
 import { getCodexCliAuthPath, getPreferredSharedCodexAuthPath, getReleaseCodexAuthPath } from './codex-shared-auth.js';
 import { codexWorkspaceIdFromTokens, readChatgptIdTokenClaims } from './codex-auth-identity.js';
@@ -985,8 +986,8 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
    */
   private shouldSnapshotReleaseCodexAuth(systemAuth: string, myAuth: string): boolean {
     if (!this.devOAuthWritesBlocked()) return false;
-    if (path.resolve(systemAuth) !== path.resolve(getReleaseCodexAuthPath())) return false;
-    return path.resolve(systemAuth) !== path.resolve(myAuth);
+    if (!codexAuthPathsShareEntry(systemAuth, getReleaseCodexAuthPath())) return false;
+    return !codexAuthPathsShareEntry(systemAuth, myAuth);
   }
 
   private warnDevOAuthWriteOverride(action: string): void {
@@ -1105,7 +1106,7 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
     const authPath = path.join(this.codexHome, 'auth.json');
     if (
       this.devOAuthWritesBlocked() &&
-      path.resolve(getSystemCodexAuthPath()) === path.resolve(authPath)
+      codexAuthPathsShareEntry(getSystemCodexAuthPath(), authPath)
     ) {
       // Shared Dev may consume an existing Release binding, but must never
       // create or repair that binding on the Release profile.
@@ -1239,7 +1240,7 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
       this.oauthRecoveryCredentialScope = marker?.credentialScope ?? 'unknown';
     }
 
-    if (path.resolve(systemAuth) === path.resolve(myAuth)) {
+    if (codexAuthPathsShareEntry(systemAuth, myAuth)) {
       this.lastKnownCodexCredentialScope = 'system-shared';
       return;
     }
@@ -1363,6 +1364,9 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
       this.lastOrphanRepair = kind === 'linked' ? 'relinked' : 'failed';
     }
     switch (kind) {
+      case 'same-entry':
+        this.lastKnownCodexCredentialScope = 'system-shared';
+        break;
       case 'linked':
         this.lastKnownCodexCredentialScope = 'system-shared';
         log.info('codex auth.json linked with shared OpenAI login', { linkType });
@@ -1971,7 +1975,7 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
         if (typeof tokens?.access_token !== 'string' || !tokens.access_token) return { authenticated: false, errorReason: 'no_oauth' };
         const topology = await inspectCodexAuthLink(systemAuth, localAuth);
         if (
-          path.resolve(localAuth) !== path.resolve(systemAuth) &&
+          !codexAuthPathsShareEntry(localAuth, systemAuth) &&
           !(topology.linkType === 'symlink' && await codexAuthPathsShareIdentity(localAuth, systemAuth))
         ) {
           fs.mkdirSync(this.codexHome, { recursive: true, mode: 0o700 });
@@ -1986,8 +1990,9 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
             // 已经共享了系统凭证(重建成功,或并发的另一次已抢先放好)。看最终的
             // 文件身份,别把健康的结果当成失败(#9316 review)。
             const finalTopology = await inspectCodexAuthLink(systemAuth, localAuth);
-            const sharesSystemCredential = finalTopology.linkType === 'symlink' &&
-              await codexAuthPathsShareIdentity(localAuth, systemAuth);
+            const sharesSystemCredential = codexAuthPathsShareEntry(localAuth, systemAuth) ||
+              (finalTopology.linkType === 'symlink' &&
+                await codexAuthPathsShareIdentity(localAuth, systemAuth));
             const acceptance = codexAuthLinkAcceptanceFor(relink.kind, sharesSystemCredential, process.platform);
             if (acceptance === 'accept-shared' && relink.kind !== 'linked') {
               credPathLog.warn('codex auth.json link recovered with the shared system credential', {
@@ -2517,7 +2522,7 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
     this.commitExplicitCodexDisconnectBoundary(activeIntent);
     const authPath = path.join(this.codexHome, 'auth.json');
     try {
-      if (!activeIntent.explicitRequested && path.resolve(authPath) !== path.resolve(getCodexCliAuthPath())) {
+      if (!activeIntent.explicitRequested && !codexAuthPathsShareEntry(authPath, getCodexCliAuthPath())) {
         await fsp.rm(authPath, { force: true });
       }
     } catch (err) {

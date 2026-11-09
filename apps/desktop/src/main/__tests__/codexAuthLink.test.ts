@@ -85,6 +85,44 @@ function leftoverSidecars(): string[] {
 }
 
 describe('relinkSharedCodexAuth', () => {
+  // #9316 / unit: a junction aliases a directory entry, unlike a second hardlink.
+  // Exercise each mutating primitive: none may delete/replace the native auth inode.
+  describe.each(['win32', 'darwin'] as const)('directory alias (%s)', (platform) => {
+    it.each(['relink', 'snapshot', 'recover'] as const)(
+      '%s preserves the native entry',
+      async (operation) => {
+        fs.rmdirSync(path.dirname(myAuth));
+        fs.symlinkSync(path.dirname(systemAuth), path.dirname(myAuth), 'junction');
+        fs.writeFileSync(systemAuth, SYSTEM_CONTENT);
+        // An unrelated old profile may still hold a hardlink. Same-entry protection
+        // must not depend on nlink === 1 or mistake this path for a removable alias.
+        fs.linkSync(systemAuth, `${systemAuth}.other-profile`);
+        const before = fs.statSync(systemAuth, { bigint: true });
+        if (operation === 'relink') {
+          await expect(relinkSharedCodexAuth(systemAuth, myAuth, platform)).resolves.toMatchObject({
+            kind: 'same-entry',
+          });
+        } else if (operation === 'snapshot') {
+          await expect(copyCodexAuthSnapshot(systemAuth, myAuth, platform)).resolves.toMatchObject({
+            kind: 'copy-unsupported',
+          });
+        } else {
+          await expect(recoverCodexAuth(systemAuth, myAuth, platform)).resolves.toBe(true);
+        }
+        expect(fs.readFileSync(systemAuth, 'utf8')).toBe(SYSTEM_CONTENT);
+        expect(fs.lstatSync(systemAuth).isSymbolicLink()).toBe(false);
+        expect(fs.statSync(systemAuth, { bigint: true })).toMatchObject({
+          ino: before.ino,
+          nlink: before.nlink,
+        });
+        expect(fs.readdirSync(path.dirname(systemAuth)).sort()).toEqual([
+          'auth.json',
+          'auth.json.other-profile',
+        ]);
+      },
+    );
+  });
+
   it.skipIf(!canLinkFile)('POSIX:myAuth 已存在→原子替换为 symlink', async () => {
     fs.writeFileSync(systemAuth, SYSTEM_CONTENT);
     fs.writeFileSync(myAuth, MY_CONTENT);

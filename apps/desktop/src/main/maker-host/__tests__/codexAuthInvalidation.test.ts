@@ -3427,6 +3427,47 @@ describe('Codex 系统凭证备份与旧硬链接 (#9316 review)', () => {
     expect(fs.existsSync(systemAuth)).toBe(false);
   });
 
+  // #9316 / unit: directory aliases are the same entry, not removable hardlinks.
+  // Cover login, background reconciliation and invalidation through public entries.
+  it.each(['win32', 'darwin'] as const)(
+    'preserves native auth through a directory alias (%s)',
+    async (platform) => {
+      vi.spyOn(process, 'platform', 'get').mockReturnValue(platform);
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-codex-directory-alias-'));
+      dirs.push(root);
+      h.userDataDir = path.join(root, 'user-data');
+      h.dataOwnerId = 'owner-a';
+      const home = path.join(root, 'home');
+      vi.spyOn(os, 'homedir').mockReturnValue(home);
+      const systemAuth = path.join(home, '.codex', 'auth.json');
+      const codexHome = path.join(h.userDataDir, 'codex-home');
+      fs.mkdirSync(path.dirname(systemAuth), { recursive: true });
+      fs.mkdirSync(h.userDataDir, { recursive: true });
+      fs.symlinkSync(path.dirname(systemAuth), codexHome, 'junction');
+      const bytes = JSON.stringify({ tokens: { access_token: 'alias-token', account_id: 'acct-1' } });
+      fs.writeFileSync(systemAuth, bytes);
+      const before = fs.statSync(systemAuth, { bigint: true });
+      const { DesktopCodexAuthAdapter } = await import('../auth-adapters.js');
+      const adapter = new DesktopCodexAuthAdapter();
+      await expect(adapter.triggerLogin({ mode: 'local' })).resolves.toMatchObject({
+        authenticated: true,
+        credentialScope: 'system-shared',
+      });
+      await expect(adapter.getState({ credentialMode: 'oauth-bearer' })).resolves.toMatchObject({
+        authenticated: true,
+      });
+      await expect(adapter.getAccessToken()).resolves.toBe('alias-token');
+      await adapter.invalidate('token_revoked');
+      await expect(adapter.getAccessToken()).resolves.toBeNull();
+      expect(fs.readFileSync(systemAuth, 'utf8')).toBe(bytes);
+      expect(fs.lstatSync(systemAuth).isSymbolicLink()).toBe(false);
+      expect(fs.statSync(systemAuth, { bigint: true })).toMatchObject({
+        ino: before.ino,
+        nlink: before.nlink,
+      });
+    },
+  );
+
   // 升级前的 profile 把本地这份硬链到系统凭证(nlink=2)。durable disconnect 期间对账被
   // 抑制,硬链一直没迁移;本地登录若只凭「身份相同」就短路,会跳过残留硬链清理 ——
   // 登录报 system-shared,Codex 0.165+ 却因为 nlink>1 存不住新 token(#9316 review)。

@@ -34,6 +34,30 @@ import { moveCodexAuthFile } from './codex-auth-file-move';
 const execFileP = promisify(execFile);
 
 /**
+ * Compare directory entries, not target inodes. Stat only the parent so a
+ * junction/directory symlink is recognized without conflating distinct hardlinks
+ * or a replaceable file symlink with the native entry itself.
+ * Missing parents cannot alias an existing entry; other lookup errors fail closed.
+ */
+export function codexAuthPathsShareEntry(left: string, right: string): boolean {
+  const a = path.resolve(left);
+  const b = path.resolve(right);
+  if (a === b) return true;
+  if (path.basename(a) !== path.basename(b)) return false;
+  try {
+    const parentA = fs.statSync(path.dirname(a), { bigint: true });
+    const parentB = fs.statSync(path.dirname(b), { bigint: true });
+    if (parentA.ino === 0n || parentB.ino === 0n) {
+      throw new Error('Cannot establish Codex auth parent directory identity');
+    }
+    return parentA.dev === parentB.dev && parentA.ino === parentB.ino;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
+    throw error;
+  }
+}
+
+/**
  * Windows: icacls 授权主体。域账户组合 `DOMAIN\\user`(缺域回退裸用户名);
  * username 自带 `\\` 或 `@`(UPN)时视为已限定,不再拼接。
  * 单源在本模块 —— auth-adapters 的 tightenAclWindows 同样消费(它 import 本模块,
@@ -85,13 +109,14 @@ async function healWindowsAuthAcl(
 /**
  * relinkSharedCodexAuth 的结果分类:
  *   - linked              成功:symlink 指向 systemAuth(含 Windows;不再建 hardlink,#9277)
+ *   - same-entry          两个路径是同一目录项,无需迁移且不能删除其中一端
  *   - link-unsupported    建不了共享链接;Windows 仅移除仍共享系统 inode 的旧硬链接别名
  *   - swap-failed-intact  替换失败但 myAuth 仍在 (多半是并发的另一次 reconcile 已抢先放好)
  *   - recovered           替换中途 myAuth 一度丢失, 已从 systemAuth 重建共享链接
  *   - lost                替换失败且无法重建 (systemAuth 也读不了) → 需要用户重新登录
  */
 export type RelinkResultKind =
-  'linked' | 'link-unsupported' | 'swap-failed-intact' | 'recovered' | 'lost';
+  'linked' | 'same-entry' | 'link-unsupported' | 'swap-failed-intact' | 'recovered' | 'lost';
 
 export interface RelinkOutcome {
   kind: RelinkResultKind;
@@ -138,6 +163,7 @@ export async function relinkSharedCodexAuth(
   // hardlink(那会把 Codex 登录再次卡死)。无权限时由调用方进入独立登录。
   try {
     await fsp.stat(systemAuth);
+    if (codexAuthPathsShareEntry(systemAuth, myAuth)) return { kind: 'same-entry' };
     await fsp.symlink(systemAuth, sidecar, 'file');
   } catch (error) {
     if (platform === 'win32') removeLegacyCodexAuthAlias(systemAuth, myAuth);
@@ -196,6 +222,7 @@ export async function recoverCodexAuth(
 ): Promise<boolean> {
   try {
     await fsp.stat(systemAuth);
+    if (codexAuthPathsShareEntry(systemAuth, myAuth)) return true;
   } catch {
     return false;
   }
@@ -212,8 +239,8 @@ export async function recoverCodexAuth(
  * symlinks are preserved, including a native credential that already rotated away.
  */
 function removeLegacyCodexAuthAlias(systemAuth: string, myAuth: string): boolean {
-  if (path.resolve(systemAuth) === path.resolve(myAuth)) return false;
   try {
+    if (codexAuthPathsShareEntry(systemAuth, myAuth)) return false;
     const local = fs.lstatSync(myAuth, { bigint: true });
     const system = fs.statSync(systemAuth, { bigint: true });
     if (
@@ -242,6 +269,9 @@ export async function copyCodexAuthSnapshot(
   const sidecar = `${myAuth}.${token}.copytmp`;
   let sourceStat: BigIntStats;
   try {
+    if (codexAuthPathsShareEntry(systemAuth, myAuth)) {
+      throw new Error('Cannot snapshot a Codex credential onto its own directory entry');
+    }
     // 身份比较必须用 bigint:NTFS 的 file id 可能超出安全整数范围,四舍五入后
     // 两个不同的 inode 会比较成相等 —— 撕裂代次的字节会被当成稳定代次发布,
     // 随后的等 mtime 对账再把旧 refresh token 写回系统文件(#9316 review)。

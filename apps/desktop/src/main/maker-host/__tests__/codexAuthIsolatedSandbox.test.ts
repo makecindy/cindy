@@ -423,33 +423,44 @@ describe('dev 沙箱凭证隔离(XDT_ISOLATED_AUTH)', () => {
     expect(getPreferredSharedCodexAuthPath('owner-a')).toBe(useCli ? systemAuth : releaseAuth);
   });
 
-  it('共享 Dev 直接使用 Release 登录态，不重链接或改 binding', async () => {
-    const { releaseAuth, systemAuth } = fixture();
-    h.userDataDir = path.join(h.appDataDir, 'CindyGlobal');
-    fs.mkdirSync(path.dirname(releaseAuth), { recursive: true });
-    fs.writeFileSync(
-      releaseAuth,
-      JSON.stringify({
-        account: { email: 'release@example.test' },
-        tokens: { access_token: 'release-token', account_id: 'acct-release' },
-      }),
-    );
-    const releaseBinding = bindReleaseOpenAi(releaseAuth);
-    const releaseStat = fs.statSync(releaseAuth);
-    const releaseBindingBytes = fs.readFileSync(releaseBinding);
-    h.dataOwnerId = 'owner-a';
-    const adapter = new DesktopCodexAuthAdapter();
+  // #9316 / unit: a junction to the Release profile must preserve the same-entry
+  // read-only exception; making a snapshot there would replace Release auth itself.
+  it.each([false, true])(
+    '共享 Dev 直接使用 Release 登录态，不重链接或改 binding (alias=%s)',
+    async (alias) => {
+      const { releaseAuth, systemAuth } = fixture();
+      fs.mkdirSync(path.dirname(releaseAuth), { recursive: true });
+      if (alias) {
+        fs.symlinkSync(path.dirname(releaseAuth), path.join(h.userDataDir, 'codex-home'), 'junction');
+      } else {
+        h.userDataDir = path.join(h.appDataDir, 'CindyGlobal');
+      }
+      fs.writeFileSync(
+        releaseAuth,
+        JSON.stringify({
+          account: { email: 'release@example.test' },
+          tokens: { access_token: 'release-token', account_id: 'acct-release' },
+        }),
+      );
+      const releaseBinding = bindReleaseOpenAi(releaseAuth);
+      if (alias)
+        fs.copyFileSync(releaseBinding, path.join(h.userDataDir, 'native-provider-auth.json'));
+      const releaseStat = fs.statSync(releaseAuth);
+      const releaseBindingBytes = fs.readFileSync(releaseBinding);
+      h.dataOwnerId = 'owner-a';
+      const adapter = new DesktopCodexAuthAdapter();
 
-    await expect(adapter.getState({ credentialMode: 'oauth-bearer' })).resolves.toMatchObject({
-      authenticated: true,
-      credentialScope: 'system-shared',
-      oauthWritesBlocked: true,
-    });
-    await expect(adapter.getAccessToken()).resolves.toBe('release-token');
-    expect(fs.statSync(releaseAuth).ino).toBe(releaseStat.ino);
-    expect(fs.readFileSync(releaseBinding)).toEqual(releaseBindingBytes);
-    expect(fs.readFileSync(systemAuth, 'utf8')).toContain('system-token');
-  });
+      await expect(adapter.getState({ credentialMode: 'oauth-bearer' })).resolves.toMatchObject({
+        authenticated: true,
+        credentialScope: 'system-shared',
+        oauthWritesBlocked: true,
+      });
+      await expect(adapter.getAccessToken()).resolves.toBe('release-token');
+      expect(fs.statSync(releaseAuth).ino).toBe(releaseStat.ino);
+      expect(fs.readFileSync(releaseBinding)).toEqual(releaseBindingBytes);
+      expect(fs.readFileSync(systemAuth, 'utf8')).toContain('system-token');
+    },
+  );
 
   it('共享 Dev 遇到未绑定的 Release 残留时不覆盖或回落', async () => {
     const { releaseAuth, systemAuth } = fixture();
