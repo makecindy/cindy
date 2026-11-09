@@ -2080,7 +2080,8 @@ export async function prepareImportedBotInvitation(botId: string, requestId: str
 /** Shared profile mutation for trusted settings and owner-bound capability selection. */
 export async function updateBotProfile(raw: unknown, expectedVersion?: number,
   validateAdditions?: (update: BotCapabilityUpdate) => Promise<void>, restored?: RestoredBotOrigin,
-  guard?: { assertCurrent(): void; beforeCommit(): Promise<void>; onCommitted(receipt: { currentVersion: number }): void }) {
+  guard?: { assertCurrent(): void; beforeCommit(): Promise<void>; onCommitted(receipt: { currentVersion: number }): void;
+    onRuntimeRefresh?(outcome: Awaited<ReturnType<typeof requestBotRuntimeEpochRefreshOutcome>>): void }) {
   const body =
     raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
   const id = readText(body.id, 'botId', 128, true);
@@ -2360,6 +2361,7 @@ export async function updateBotProfile(raw: unknown, expectedVersion?: number,
         // turn, but a failed rebuild must reach the target tool's saved receipt.
         const outcome = await requestBotRuntimeEpochRefreshOutcome(canonical.sessionId, reason);
         owner.assertCurrent();
+        guard.onRuntimeRefresh?.(outcome);
         runtimeRefreshUnconfirmed = outcome === 'failed' || outcome === 'unavailable';
       } else void requestBotRuntimeEpochRefresh(canonical.sessionId, reason);
     }

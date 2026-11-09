@@ -1,6 +1,7 @@
+import { acceptSessionRuntimeMutation, clearSessionRuntimeControlState, type SessionRuntimeProfile } from '../../../maker-ipc/sessionRuntimeControl';
 import sharp from 'sharp';
 import { configureBotRuntimeEpochRefreshRequest } from '../../../maker-ipc/botRuntimeEpochRefreshSignal';
-import { createBotCompactRuntimeRefreshCoordinator, replaceBotRuntimeAfterPreflight } from '../../../maker-ipc/botCompactRuntimeRefresh';
+import { createBotCompactRuntimeRefreshCoordinator, prepareBotCapabilityEpochBeforeSend, refreshBotRuntimeAfterModelSelection, replaceBotRuntimeAfterPreflight } from '../../../maker-ipc/botCompactRuntimeRefresh';
 import { createBotDesignerHost } from '../../../maker-ipc/botDesignerHost';
 import { companionHomes } from '../../../companion-cloud/homes';
 import { writeBlob } from '../../../cindy-media/blobStore';
@@ -39,7 +40,7 @@ import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { BOT_TEMPLATE_PRESET_IDENTITIES } from '../../../../shared/botTemplatePreset';
 import { normalizeWorkingDirForStorage } from '../../../../shared/workingDir';
-import { createBotModelRouteReconciler } from '../../../maker-ipc/botModelRouteReconciler';
+import { createBotModelRouteApplier, createBotModelRouteReconciler } from '../../../maker-ipc/botModelRouteReconciler';
 import { configureBotModelSelectionCoordinator, createBotModelSelectionCoordinator } from '../../../maker-ipc/botModelSelectionCoordinator';
 import { createScheduledModelScope, writeScheduledModelBaselineIfProfileCurrent, ScheduledModelSelectionBusyError, type ScheduledModelSelection } from '../../../maker-ipc/scheduledModelSelection';
 import { acquireSendToSessionLock, withSendToSessionLock } from '../../../maker-ipc/sendToSessionLock';
@@ -11283,6 +11284,70 @@ describe('Target teammate configuration', () => {
     expect((await invoke('local-db:bots:get', 'design-target')).description).toBe('Changed by owner');
   });
 
+  // #9433 review 4509953181: a legacy/imported inherit profile accepted the
+  // selected list but hydration suppressed it. Standard tier, real profile
+  // transaction -> target API -> runtime policy; no new fixture or source scan.
+  it('loads explicitly selected Skills on a legacy inherit target and preserves or clears that choice', async () => {
+    const { callerSessionId, target, service } = await pair();
+    await invoke('local-db:bots:update', { id: 'design-target', capabilities: { skillMode: 'inherit', skills: [] } });
+    const makeOpts = (): MakerSessionCreateOpts => ({ id: target.session.id, agentKind: 'pi',
+      workingDir: target.session.workingDir, workspaceKind: 'dialogue', model: 'test-model', permissionMode: 'auto' });
+    const resources = {
+      listSkills: async () => [{ name: 'release-check', path: '/skills/release-check/SKILL.md',
+        enabled: true, runtimeCommandName: 'skill:release-check' }],
+      readSkillSource: async () => '# Release check\nCheck the release evidence.',
+    };
+    expect((await hydrateBotProfileRuntime(makeOpts(), resources))?.resolvedSkills).toEqual([]);
+    expect(await service.updateConfiguration({ callerSessionId, botId: 'design-target', expectedVersion: 2,
+      patch: { references: { skills: ['release-check'] } } })).toMatchObject({ ok: true, savedVersion: 3 });
+    expect(await hydrateBotProfileRuntime(makeOpts(), resources)).toMatchObject({
+      resolvedSkillEntries: [expect.objectContaining({ name: 'release-check', runtimeCommandName: 'skill:release-check' })],
+    });
+    await service.updateConfiguration({ callerSessionId, botId: 'design-target', expectedVersion: 3,
+      patch: { description: 'Keep the selected method' } });
+    expect((await hydrateBotProfileRuntime(makeOpts(), resources))?.resolvedSkillEntries).toHaveLength(1);
+    await service.updateConfiguration({ callerSessionId, botId: 'design-target', expectedVersion: 4,
+      patch: { references: { skills: [] } } });
+    expect((await hydrateBotProfileRuntime(makeOpts(), resources))?.resolvedSkills).toEqual([]);
+  });
+
+  // #9433 review 4509953184: use the real model applier and runtime-control
+  // pending state, not an injected 'deferred'. Standard tier: saved receipt and
+  // eventual model selection must agree without replaying the profile write.
+  it('reports a real queued model selection as saved and applies it after the running turn', async () => {
+    const { callerSessionId, target, service } = await pair();
+    const models = await service.models({ callerSessionId });
+    if (!models.ok || !models.available[0]) throw new Error('Expected an available model');
+    const choice = models.available[0];
+    const sessionId = target.session.id;
+    let busy = true;
+    let current: SessionRuntimeProfile = { agentKind: 'pi', model: 'previous-model', providerId: null, effort: null, fastMode: false };
+    const live = { id: sessionId };
+    const apply = createBotModelRouteApplier({
+      stage: async (_id, route) => {
+        const profile: SessionRuntimeProfile = { ...route, effort: null };
+        acceptSessionRuntimeMutation({ sessionId, source: 'agent', profile, deferred: busy });
+        if (!busy) current = profile;
+      },
+      isIdle: () => !busy, applyPendingSwitch: async () => {}, hasPendingSwitch: () => false,
+      onApplied: async () => {},
+    });
+    const reconcile = createBotModelRouteReconciler({ ownerEpoch: () => h.ownerScopeKey,
+      read: async () => ({ chain: [choice.route], current, hasRuntimeOverride: false }), apply });
+    const refresh = () => refreshBotRuntimeAfterModelSelection({ current: () => live,
+      select: () => reconcile.profileChanged(sessionId), refresh: async () => 'refreshed' });
+    h.requestRuntimeRefresh.mockImplementation(refresh);
+    try {
+      expect(await service.updateConfiguration({ callerSessionId, botId: 'design-target', expectedVersion: 1,
+        patch: { modelChain: [{ id: choice.id }] } })).toMatchObject({ ok: true, savedVersion: 2, effective: 'deferred' });
+      expect(current.model).toBe('previous-model');
+      busy = false;
+      expect(await refresh()).toBe('refreshed');
+      expect(current.model).toBe(choice.route.model);
+      expect((await invoke('local-db:bots:get', 'design-target')).currentVersion).toBe(2);
+    } finally { clearSessionRuntimeControlState(sessionId); }
+  });
+
   it('validates references using the target route and preserves explicit versus inherited selection', async () => {
     const { callerSessionId, target } = await pair();
     const resolveBotAgentKind = vi.fn(capabilityDeps.resolveBotAgentKind);
@@ -11345,6 +11410,8 @@ describe('Target teammate configuration', () => {
   // Bot-only host callback. Real profile/DB fixture; no live account or greetings.
   it('lists local active and paused targets without provisioning, and creates from an ordinary task', async () => {
     const { callerSessionId, service } = await pair();
+    const models = await service.models({ callerSessionId });
+    if (!models.ok || !models.available[0]) throw new Error('Expected an available model');
     h.sqlite!.prepare("UPDATE bot_profiles SET status = 'paused' WHERE id = 'design-target'").run();
     const count = () => h.sqlite!.prepare('SELECT count(*) AS count FROM bot_profiles').get();
     const before = count();
@@ -11358,10 +11425,14 @@ describe('Target teammate configuration', () => {
     const created = await service.createTeammate({ callerSessionId, name: 'Created in task', description: 'Scoped purpose', identitySource: 'Scoped identity', welcomeMessage: '' });
     expect(created).toMatchObject({ ok: true, bot: { name: 'Created in task', description: 'Scoped purpose' } });
     if (!created.ok) throw new Error('Creation failed');
-    // The native invitation prepares the target chat asynchronously; creation is
-    // not a claim that its first model turn has already run. Exercise that boundary.
-    expect(await service.inspectConfiguration({ callerSessionId, botId: created.bot.id })).toMatchObject({ ok: false, errorCode: 'PRECONDITION_FAILED' });
-    expect(await invoke('local-db:bots:get', created.bot.id)).toMatchObject({ identitySource: 'Scoped identity', currentVersion: 1, invitation: { stage: 'skills' } });
+    // Creation may wait for the default model before any canonical chat exists.
+    // Read/repair that same durable object; do not change global defaults or create
+    // another teammate. The native invitation still owns identity preparation.
+    expect(await service.inspectConfiguration({ callerSessionId, botId: created.bot.id })).toMatchObject({ ok: true,
+      configuration: { profile: { identitySource: 'Scoped identity', version: 1 }, runtime: { status: 'not-prepared' } } });
+    expect(await service.updateConfiguration({ callerSessionId, botId: created.bot.id, expectedVersion: 1,
+      patch: { modelChain: [{ id: models.available[0].id }] } })).toMatchObject({ ok: true, savedVersion: 2 });
+    expect(await invoke('local-db:bots:get', created.bot.id)).toMatchObject({ identitySource: 'Scoped identity', currentVersion: 2, invitation: { stage: 'skills' } });
     companionHomes.setPersistedShadows(['design-target']);
     try {
       const list = await service.listTeammates({ callerSessionId });
@@ -11438,13 +11509,45 @@ describe('Target teammate configuration', () => {
       .toEqual({ version: 2 });
   });
 
+  // #9088 whole-flow acceptance: background jobs intentionally allow another
+  // input on the old runtime. A successful save must not promise that input uses
+  // the new identity. Standard tier, real coordinator/send gate/hydration.
+  it('reports background-delayed adoption and refreshes the saved profile without another write', async () => {
+    const { callerSessionId, target, service } = await pair();
+    const makeOpts = (): MakerSessionCreateOpts => ({ id: target.session.id, agentKind: 'pi',
+      workingDir: target.session.workingDir, workspaceKind: 'dialogue', model: 'test-model', permissionMode: 'auto' });
+    let options = makeOpts();
+    await markBotProfileRuntimeApplied((await hydrateBotProfileRuntime(options))!);
+    let background = true;
+    const runtime = { id: target.session.id, instanceId: 'background-runtime', isTurnRunning: () => false,
+      listBackgroundTasks: () => background ? [{}] : [] };
+    const coordinator = createBotCompactRuntimeRefreshCoordinator({ hasPendingInteraction: () => false,
+      refresh: async () => {
+        options = makeOpts();
+        await markBotProfileRuntimeApplied((await hydrateBotProfileRuntime(options))!);
+        return 'refreshed';
+      } });
+    h.requestRuntimeRefresh.mockImplementation(() => { coordinator.noteBoundary(runtime); return coordinator.attempt(runtime); });
+    expect(await service.updateConfiguration({ callerSessionId, botId: 'design-target', expectedVersion: 1,
+      patch: { identitySource: 'Updated after background work' } })).toMatchObject({ ok: true, savedVersion: 2, effective: 'deferred' });
+    expect(await prepareBotCapabilityEpochBeforeSend(runtime, { coordinator,
+      readSession: async () => ({ role: 'canonical', source: 'bot', status: 'active', workingDir: target.session.workingDir }),
+      preflight: async () => true })).toBe('kept-current-runtime');
+    expect(options.botProfilePrompt).toContain('Original target identity');
+    background = false;
+    expect(await coordinator.attempt(runtime)).toBe('refreshed');
+    expect(options.botProfilePrompt).toContain('Updated after background work');
+    expect(await service.inspectConfiguration({ callerSessionId, botId: 'design-target' })).toMatchObject({ ok: true,
+      configuration: { profile: { version: 2 }, runtime: { profileVersion: 2, matchesSavedVersion: true } } });
+  });
+
   it.each(['refreshed', 'deferred', 'not-bot', 'unavailable'] as const)('distinguishes %s from a failed refresh receipt', async outcome => {
     const { callerSessionId, service } = await pair();
     if (outcome === 'unavailable') configureBotRuntimeEpochRefreshRequest(null);
     else h.requestRuntimeRefresh.mockResolvedValue(outcome);
     expect(await service.updateConfiguration({ callerSessionId, botId: 'design-target', expectedVersion: 1,
       patch: { description: 'Saved configuration' } })).toMatchObject({ ok: true, savedVersion: 2,
-      effective: outcome === 'unavailable' ? 'unconfirmed' : 'next-turn' });
+      effective: outcome === 'unavailable' ? 'unconfirmed' : outcome === 'deferred' ? 'deferred' : 'next-turn' });
   });
 
   it('reports a saved version without claiming adoption when the identity file cannot be replaced', async () => {

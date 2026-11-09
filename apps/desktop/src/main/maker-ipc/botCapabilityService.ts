@@ -48,6 +48,11 @@ const fields: Record<Kind, { list: string; mode: string }> = {
   mcp: { list: 'mcpServers', mode: 'mcpMode' },
   toolset: { list: 'toolsets', mode: 'toolsetMode' },
 };
+/** Self and target selection share the native explicit-list/restore semantics. */
+function capabilitySelection(kind: Kind, value: string[] | null): Record<string, unknown> {
+  const field = fields[kind];
+  return { [field.list]: value ?? [], [field.mode]: value === null ? 'inherit' : 'allowlist' };
+}
 /** `kind=feature`: this teammate's own switches. Memory keeps its own field; the rest are system Skills. */
 const FEATURES: { id: 'memory' | BotSystemSkillId; name: string; description: string }[] = [
   { id: 'memory', name: '记忆', description: '记住主人的偏好与背景；关闭后不读也不存记忆。' },
@@ -283,7 +288,7 @@ async function selectBotCapability(input: Input & { id: string; joined: boolean 
       ? [...new Set([...previous, input.id])]
       : previous.filter((id) => id !== input.id);
     await updateBotProfile(
-      { id: ctx.botId, capabilities: { [field.list]: selected, [field.mode]: 'allowlist' } },
+      { id: ctx.botId, capabilities: capabilitySelection(kind, selected) },
       ctx.version,
     );
     ctx.assertOwner();
@@ -563,11 +568,23 @@ export async function readBotConfigurationContext(input: TargetInput) {
   input.assertCurrent();
   assertConfigurationHome(input.botId);
   if (!/^[A-Za-z0-9_-]{1,128}$/.test(input.botId)) throwIpcError('INVALID_PARAMS', '请选择本机伙伴的 botId');
-  const [profile] = await getDbClient().drizzle.select({ canonicalSessionId: botProfiles.canonicalSessionId, status: botProfiles.status })
-    .from(botProfiles).where(eq(botProfiles.id, input.botId)).limit(1);
+  const [profile] = await getDbClient().drizzle.select({ canonicalSessionId: botProfiles.canonicalSessionId,
+    profileStatus: botProfiles.status, botId: botProfiles.id, displayName: botProfiles.displayName,
+    description: botProfiles.description, avatar: botProfiles.avatar, avatarColor: botProfiles.avatarColor,
+    version: botProfiles.currentVersion, identitySource: botProfileVersions.identitySource, config: botProfileVersions.capabilitiesJson })
+    .from(botProfiles).innerJoin(botProfileVersions, and(eq(botProfileVersions.botId, botProfiles.id),
+      eq(botProfileVersions.version, botProfiles.currentVersion))).where(eq(botProfiles.id, input.botId)).limit(1);
   input.assertCurrent();
-  if (!profile || profile.status === 'archived') throwIpcError('NOT_FOUND', '找不到目标伙伴');
-  if (!profile.canonicalSessionId) throwIpcError('PRECONDITION_FAILED', '伙伴主任务尚未准备好');
+  if (!profile || (profile.profileStatus !== 'active' && profile.profileStatus !== 'paused'))
+    throwIpcError('NOT_FOUND', '找不到目标伙伴');
+  if (!profile.canonicalSessionId) {
+    // A persisted invitation can wait for a model before it creates a chat.
+    // Keep that same profile readable/repairable; catalogs still require its route.
+    const parsed: unknown = JSON.parse(profile.config);
+    const config = parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {};
+    return { ...profile, config: normalizeBotToolCapabilities(config), workingDir: null, remoteHostId: null,
+      role: null, assertOwner: input.assertCurrent };
+  }
   const ctx = await context(profile.canonicalSessionId, { allowPaused: true });
   input.assertCurrent();
   if (ctx.botId !== input.botId || ctx.canonicalSessionId !== profile.canonicalSessionId || ctx.role !== 'canonical')
@@ -585,6 +602,7 @@ export function createBotConfigurationTargetService(deps: BotCapabilityServiceDe
       let requestedCatalog: TeammateConfiguration['catalog'];
       if (input.catalog) {
         try {
+          if (!ctx.canonicalSessionId) throw new Error('Target chat is still preparing');
           const modelChain = await readEffectiveBotModelChain(ctx.config);
           const entries = await catalog({ callerSessionId: ctx.canonicalSessionId!, kind: input.catalog }, ctx, deps, { modelChain });
           requestedCatalog = { kind: input.catalog, status: 'available', entries };
@@ -593,9 +611,9 @@ export function createBotConfigurationTargetService(deps: BotCapabilityServiceDe
         }
         input.assertCurrent();
       }
-      const [snapshot] = await getDbClient().drizzle.select({ profileVersion: botRuntimeSnapshots.profileVersion, status: botRuntimeSnapshots.status })
-        .from(botRuntimeSnapshots).where(eq(botRuntimeSnapshots.sessionId, ctx.canonicalSessionId!))
-        .orderBy(desc(botRuntimeSnapshots.preparedAt), desc(botRuntimeSnapshots.appliedAt)).limit(1);
+      const [snapshot] = ctx.canonicalSessionId ? await getDbClient().drizzle.select({ profileVersion: botRuntimeSnapshots.profileVersion, status: botRuntimeSnapshots.status })
+        .from(botRuntimeSnapshots).where(eq(botRuntimeSnapshots.sessionId, ctx.canonicalSessionId))
+        .orderBy(desc(botRuntimeSnapshots.preparedAt), desc(botRuntimeSnapshots.appliedAt)).limit(1) : [];
       const current = await readBotConfigurationContext(input);
       if (current.version !== ctx.version || current.avatar !== ctx.avatar)
         throwIpcError('PRECONDITION_FAILED', '伙伴配置已变化，请重新读取');
@@ -608,7 +626,7 @@ export function createBotConfigurationTargetService(deps: BotCapabilityServiceDe
           mcpServers: { mode: ctx.config.mcpMode === 'inherit' ? 'inherit' : 'allowlist', ids: strings(ctx.config.mcpServers) },
           toolsets: { mode: ctx.config.toolsetMode === 'inherit' ? 'inherit' : 'allowlist', ids: strings(ctx.config.toolsets) } },
         ...(requestedCatalog ? { catalog: requestedCatalog } : {}),
-        runtime: { profileVersion: snapshot?.profileVersion ?? null, status: snapshot?.status ?? null,
+        runtime: { profileVersion: snapshot?.profileVersion ?? null, status: ctx.canonicalSessionId ? snapshot?.status ?? null : 'not-prepared',
           matchesSavedVersion: snapshot?.status === 'applied' && snapshot.profileVersion === ctx.version } };
     },
     async update(input: TargetInput & { expectedVersion: number; patch: import('@cindy/mcps').TeammateConfigurationPatch }) {
@@ -619,17 +637,16 @@ export function createBotConfigurationTargetService(deps: BotCapabilityServiceDe
       const references = input.patch.references;
       const capabilities: Record<string, unknown> = {};
       if (modelChain !== undefined) Object.assign(capabilities, { modelChainOverride: modelChain, modelOverride: null });
-      for (const kind of ['mcp', 'toolset'] as const) {
-        const field = fields[kind];
-        const value = kind === 'mcp' ? references?.mcpServers : references?.toolsets;
-        if (value !== undefined) Object.assign(capabilities, { [field.mode]: value === null ? 'inherit' : 'allowlist', [field.list]: value ?? [] });
+      for (const kind of ['skill', 'mcp', 'toolset'] as const) {
+        const value = kind === 'skill' ? references?.skills : kind === 'mcp' ? references?.mcpServers : references?.toolsets;
+        if (value !== undefined) Object.assign(capabilities, capabilitySelection(kind, value));
       }
       let savedVersion: number | undefined;
+      let deferred = false;
       try { await updateBotProfile({ id: input.botId,
         ...(input.patch.name !== undefined ? { name: input.patch.name } : {}),
         ...(input.patch.description !== undefined ? { description: input.patch.description } : {}),
         ...(input.patch.identitySource !== undefined ? { identitySource: input.patch.identitySource } : {}),
-        ...(references?.skills !== undefined ? { skills: references.skills } : {}),
         ...(modelChain !== undefined ? { acceptSavedModelSelectionVersion: input.expectedVersion } : {}),
         ...(Object.keys(capabilities).length ? { capabilities } : {}),
       }, input.expectedVersion, async update => {
@@ -638,6 +655,7 @@ export function createBotConfigurationTargetService(deps: BotCapabilityServiceDe
         assertCurrent: () => { input.assertCurrent(); input.assertCommit?.(); assertConfigurationHome(input.botId); },
         beforeCommit: async () => { await input.beforeCommit?.(); await readBotConfigurationContext(input); },
         onCommitted: receipt => { savedVersion = receipt.currentVersion; },
+        onRuntimeRefresh: outcome => { deferred = outcome === 'deferred'; },
       }); } catch (error) {
         input.assertCurrent();
         if (savedVersion === undefined) throw error;
@@ -645,7 +663,9 @@ export function createBotConfigurationTargetService(deps: BotCapabilityServiceDe
       }
       input.assertCurrent();
       if (savedVersion === undefined) throwIpcError('PRECONDITION_FAILED', '配置写入尚未确认，请重新读取');
-      return { savedVersion, effective: 'next-turn' as const };
+      return deferred
+        ? { savedVersion, effective: 'deferred' as const, warning: '配置已保存，等待目标的安全运行边界采用；不影响正在进行的工作。' }
+        : { savedVersion, effective: 'next-turn' as const };
     },
   };
 }

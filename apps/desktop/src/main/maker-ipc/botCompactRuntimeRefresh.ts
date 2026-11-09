@@ -1,3 +1,5 @@
+import { ScheduledModelSelectionBusyError } from './scheduledModelSelection.js';
+
 export interface BotCompactRuntimeSession {
   readonly id: string;
   readonly instanceId: string;
@@ -29,7 +31,13 @@ export async function refreshBotRuntimeAfterModelSelection<T>(deps: {
   refresh(session: T): Promise<BotCompactRuntimeRefreshOutcome>;
 }): Promise<BotCompactRuntimeRefreshOutcome> {
   const before = deps.current();
-  await deps.select();
+  try { await deps.select(); }
+  catch (error) {
+    // The native route applier has accepted the choice but cannot apply it in
+    // the running turn. Preserve that queued intent; real failures still escape.
+    if (error instanceof ScheduledModelSelectionBusyError) return 'deferred';
+    throw error;
+  }
   const after = deps.current();
   if (!after || after !== before) return 'not-bot';
   return deps.refresh(after);

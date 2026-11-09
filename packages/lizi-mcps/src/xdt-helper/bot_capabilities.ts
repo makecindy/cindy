@@ -30,7 +30,7 @@ export interface BotCapabilityCallbacks {
   }, string>>;
   inspectConfiguration?(params: { callerSessionId: string; botId: string; catalog?: 'skill' | 'mcp' | 'toolset' }): Promise<ControlResult<{ configuration: TeammateConfiguration }, string>>;
   updateConfiguration?(params: { callerSessionId: string; botId: string; expectedVersion: number; patch: TeammateConfigurationPatch }): Promise<ControlResult<{
-    savedVersion: number; effective: 'next-turn' | 'unconfirmed'; warning?: string;
+    savedVersion: number; effective: 'next-turn' | 'deferred' | 'unconfirmed'; warning?: string;
   }, string>>;
   models?(params: { callerSessionId: string }): Promise<ControlResult<{
     current: AppDefaultModelRoute | null;
@@ -176,7 +176,7 @@ export function registerBotCapabilityTools(
   });
   if (deps.callbacks.updateConfiguration) registry.register({
     name: 'update_teammate_configuration', category: 'bots',
-    description: '按已确定的设计修改指定伙伴。先 inspect_teammate_configuration，提交读取时的 expectedVersion 和局部 patch；冲突后先重新读取，不覆盖新修改。modelChain 使用 get_app_default_model 的有效 id，null 恢复默认。references 只引用已有能力；mcpServers/toolsets 的 null 恢复继承，数组是完整显式名单，省略保持原选择。保存下一轮生效，回执不证明真实工具已装载。不修改权限、记忆、私有技能、例行任务。',
+    description: '按已确定的设计修改指定伙伴。先 inspect_teammate_configuration，提交读取时的 expectedVersion 和局部 patch；冲突后先重新读取，不覆盖新修改。modelChain 使用 get_app_default_model 的有效 id，null 恢复默认。references 只引用已有能力；mcpServers/toolsets 的 null 恢复继承，数组是完整显式名单，省略保持原选择。保存与实际采用分开：deferred 表示等待目标安全运行边界，unconfirmed 表示后续同步未确认；回执不证明真实工具已装载。不修改权限、记忆、私有技能、例行任务。',
     inputShape: {
       botId, expectedVersion: z.number().int().positive(),
       patch: z.strictObject({
