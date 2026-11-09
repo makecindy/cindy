@@ -15,6 +15,7 @@ import { DEEP_LINK_SCHEME_GROUP } from '@/session/sessionLinks';
 // App bootstrap initializes this instance; parsing summaries must not initialize React bindings.
 import i18n from 'i18next';
 import { createMarkdownRegexSearch } from './markdownRegexSearch';
+import { nextMarkdownReference, readMarkdownReferenceDefinition, type MarkdownReferenceDefinitions } from './markdownReferences';
 
 // 加粗 / 斜体 / 删除线里的内容会继续按行内语法解析(`**https://…**` 的链接照样可点,
 // 与桌面 remark 同口径),结果拍平进同一层 inline 列表:里面的纯文本就是该强调类型本身,
@@ -94,6 +95,60 @@ export interface ParseMobileMarkdownOptions {
   sourceIsNormalized?: boolean;
   /** Previous committed parse, used only for immutable paragraph inline prefixes. */
   previous?: MobileMarkdownParseResult;
+  /** Full-document references when only an append-only suffix is reparsed. */
+  referenceContext?: MarkdownReferenceContext;
+}
+
+interface MarkdownReferenceContext {
+  definitions: MarkdownReferenceDefinitions;
+  definitionLines: ReadonlySet<number>;
+  signature: string;
+}
+const referenceContexts = new WeakMap<MobileMarkdownParseResult, MarkdownReferenceContext>();
+
+function collectMarkdownReferences(source: string): MarkdownReferenceContext {
+  const definitions = new Map<string, string>();
+  const definitionLines = new Set<number>();
+  if (!/^ {0,3}\[/m.test(source)) return { definitions, definitionLines, signature: '' };
+  const lines = source.split('\n');
+  let fence: CodeFenceState | null = null;
+  let comment = false;
+  let math = false;
+  let html = false;
+  let paragraph = false;
+  for (let index = 0; index < lines.length; index++) {
+    const line = lines[index];
+    if (fence) {
+      if (isClosingCodeFence(line, fence)) fence = null;
+      continue;
+    }
+    if (math) {
+      if (line.trim() === '$$') math = false;
+      continue;
+    }
+    const opening = parseOpeningCodeFence(line);
+    if (opening && !comment && !html) {
+      fence = { ...opening, start: index, lines: [] };
+      paragraph = false;
+      continue;
+    }
+    const startsInComment = comment;
+    comment = advanceHtmlCommentState(line, comment);
+    if (startsInComment || comment || line.includes('<!--')) { paragraph = false; continue; }
+    if (!html && line.trim() === '$$') { math = true; paragraph = false; continue; }
+    if (!line.trim()) { html = false; paragraph = false; continue; }
+    if (/^ {0,3}<\/?[A-Za-z!]/.test(line)) html = true;
+    if (html) continue;
+    const definition = !paragraph ? readMarkdownReferenceDefinition(lines, index) : null;
+    if (definition) {
+      if (!definitions.has(definition.label)) definitions.set(definition.label, definition.url);
+      for (; index <= definition.endLine; index++) definitionLines.add(index);
+      index--;
+      continue;
+    }
+    paragraph = !/^(?:#{1,6}\s|\s*>|\s*(?:[-*]|\d+[.)])\s|\s*\|)/.test(line);
+  }
+  return { definitions, definitionLines, signature: definitions.size ? JSON.stringify([...definitions]) : '' };
 }
 
 export interface MobileMarkdownBlockRange {
@@ -209,6 +264,9 @@ export function parseMobileMarkdownDocument(
   const normalized = options?.sourceIsNormalized === true
     ? source
     : normalizeMathDelimiters(source, { preserveLineCount: withSrc });
+  const references = options?.referenceContext ?? collectMarkdownReferences(normalized);
+  const parseDocumentInlines = (text: string, inComment = false) =>
+    parseMobileMarkdownInlines(text, inComment, references.definitions);
   const lines = normalized.split('\n');
   const blocks: MobileMarkdownBlock[] = [];
   const ranges: MobileMarkdownBlockRange[] = [];
@@ -269,13 +327,13 @@ export function parseMobileMarkdownDocument(
       const from = retained?.safeOffset ?? 0;
       const safeOffset = safeParagraphInlineEnd(text, from);
       const stable = joinParagraphInlines(retained?.stable ?? [],
-        safeOffset > from ? parseMobileMarkdownInlines(text.slice(from, safeOffset)) : []);
+        safeOffset > from ? parseDocumentInlines(text.slice(from, safeOffset)) : []);
       inlines = joinParagraphInlines(stable,
-        safeOffset < text.length ? parseMobileMarkdownInlines(text.slice(safeOffset)) : []);
+        safeOffset < text.length ? parseDocumentInlines(text.slice(safeOffset)) : []);
       snapshot = { source: text, safeOffset, stable };
       reusedInlineUtf16Length += from;
     } else {
-      inlines = parseMobileMarkdownInlines(text, paragraphStartsInComment);
+      inlines = parseDocumentInlines(text, paragraphStartsInComment);
     }
     const block: MobileMarkdownBlock = {
       type: 'paragraph',
@@ -289,6 +347,10 @@ export function parseMobileMarkdownDocument(
 
   for (let index = 0; index < lines.length; index++) {
     const line = lines[index];
+    if (references.definitionLines.has(lineNumber(index))) {
+      flushParagraph(index);
+      continue;
+    }
     if (code) {
       if (isClosingCodeFence(line, code)) {
         pushBlock(
@@ -397,7 +459,7 @@ export function parseMobileMarkdownDocument(
         key: `h:${lineNumber(index)}:${blockNumber()}`,
         ...(withSrc ? { srcLine: lineNumber(index) } : {}),
         level: heading[1].length,
-        inlines: parseMobileMarkdownInlines(heading[2].trim(), lineStartsInComment),
+        inlines: parseDocumentInlines(heading[2].trim(), lineStartsInComment),
       }, index, index + 1);
       continue;
     }
@@ -416,7 +478,7 @@ export function parseMobileMarkdownDocument(
         type: 'blockquote',
         key: `quote:${lineNumber(quoteStart)}:${blockNumber()}`,
         ...(withSrc ? { srcLine: lineNumber(quoteStart) } : {}),
-        inlines: parseMobileMarkdownInlines(quoteLines.join('\n').trim(), lineStartsInComment),
+        inlines: parseDocumentInlines(quoteLines.join('\n').trim(), lineStartsInComment),
       }, quoteStart, index + 1);
       continue;
     }
@@ -432,7 +494,7 @@ export function parseMobileMarkdownDocument(
       const parseCellsWithCommentState = (cells: readonly string[], rowState: boolean) => {
         let cellState = rowState;
         return cells.map((cell) => {
-          const parsed = parseMobileMarkdownInlines(cell, cellState);
+          const parsed = parseDocumentInlines(cell, cellState);
           cellState = advanceHtmlCommentState(cell, cellState);
           return parsed;
         });
@@ -470,7 +532,7 @@ export function parseMobileMarkdownDocument(
         ordered: /^\d/.test(marker),
         marker,
         checked: task ? task[1].toLowerCase() === 'x' : undefined,
-        inlines: parseMobileMarkdownInlines(task ? task[2] : list[3], lineStartsInComment),
+        inlines: parseDocumentInlines(task ? task[2] : list[3], lineStartsInComment),
       }, index, index + 1);
       continue;
     }
@@ -500,7 +562,7 @@ export function parseMobileMarkdownDocument(
     paragraph = ['$$', ...math.lines];
   }
   flushParagraph(lines.length);
-  return {
+  const result: MobileMarkdownParseResult = {
     source: normalized,
     blocks,
     ranges,
@@ -510,6 +572,8 @@ export function parseMobileMarkdownDocument(
     parsedSourceUtf16Length: normalized.length,
     reusedInlineUtf16Length,
   };
+  referenceContexts.set(result, references);
+  return result;
 }
 
 /**
@@ -526,6 +590,11 @@ export function parseMobileMarkdownIncremental(
   if (!previous || !normalizedInput.startsWith(previous.source)) {
     return parseMobileMarkdownDocument(input);
   }
+
+  const references = collectMarkdownReferences(normalizedInput);
+  const priorReferences = referenceContexts.get(previous) ?? collectMarkdownReferences(previous.source);
+  // A definition appended at the end can resolve references in any earlier block.
+  if (references.signature !== priorReferences.signature) return parseMobileMarkdownDocument(input);
 
   // normalizeMathDelimiters can resolve a delimiter that was incomplete in an
   // earlier streaming flush. In that case the normalized prefix itself changes
@@ -578,10 +647,11 @@ export function parseMobileMarkdownIncremental(
       blockIndexOffset: checkpoint.blockCount,
       charOffset: suffixCharOffset,
       previous,
+      referenceContext: references,
     },
   );
 
-  return {
+  const result: MobileMarkdownParseResult = {
     source: normalizedInput,
     blocks: [
       ...previous.blocks.slice(0, checkpoint.blockCount),
@@ -602,6 +672,8 @@ export function parseMobileMarkdownIncremental(
     parsedSourceUtf16Length: suffixResult.parsedSourceUtf16Length,
     reusedInlineUtf16Length: suffixResult.reusedInlineUtf16Length,
   };
+  referenceContexts.set(result, references);
+  return result;
 }
 
 function hasUnclosedEscapedMathDelimiter(source: string): boolean {
@@ -1156,17 +1228,19 @@ function stripCodeFenceIndent(line: string, indent: string): string {
 export function parseMobileMarkdownInlines(
   input: string,
   startsInsideHtmlComment = false,
+  references: MarkdownReferenceDefinitions = new Map(),
 ): MobileMarkdownInline[] {
-  return parseInlines(input, startsInsideHtmlComment, false);
+  return parseInlines(input, startsInsideHtmlComment, false, references);
 }
 
 function parseInlines(
   input: string,
   startsInsideHtmlComment: boolean,
   imagesAsText: boolean,
+  references: MarkdownReferenceDefinitions,
 ): MobileMarkdownInline[] {
   const out: MobileMarkdownInline[] = [];
-  const context = createInlineParseContext(input, startsInsideHtmlComment);
+  const context = createInlineParseContext(input, startsInsideHtmlComment, references);
   let cursor = 0;
   while (cursor < input.length) {
     const token = findNextInlineToken(input, cursor, context);
@@ -1210,7 +1284,7 @@ function parseMarkedInlines(
 ): MobileMarkdownInline[] {
   const innerStartsInsideHtmlComment = context.needsCommentCheck
     && isInsideHtmlComment(context.commentProbe(), index, context.startsInsideHtmlComment);
-  return parseInlines(text, innerStartsInsideHtmlComment, true).map((inline) => (
+  return parseInlines(text, innerStartsInsideHtmlComment, true, context.references).map((inline) => (
     inline.type === 'text'
       ? { type: mark, text: inline.text }
       : { ...inline, marks: [mark, ...(inline.marks ?? [])] }
@@ -1227,13 +1301,14 @@ function mobileMarkdownWrapMarker(prefix: string): string | null {
 // Image guards inspect the whole paragraph, not the remaining suffix: a later
 // disallowed HTML tag must still suppress an earlier image. Prepare those masks
 // lazily once rather than copying/scanning the paragraph for every inline token.
-function createInlineParseContext(input: string, startsInsideHtmlComment: boolean) {
+function createInlineParseContext(input: string, startsInsideHtmlComment: boolean, references: MarkdownReferenceDefinitions) {
   let probe: string | undefined;
   let imagesAllowed: boolean | undefined;
   let bareUrl: ReturnType<typeof matchBareUrl> | undefined;
   const commentProbe = () => (probe ??= blankEscapedAngles(blankCodeSpans(input)));
   return {
     startsInsideHtmlComment,
+    references,
     search: createMarkdownRegexSearch<{ index: number; end: number; inline: MobileMarkdownInline } | null>(input),
     needsCommentCheck: startsInsideHtmlComment || input.includes('<!--'),
     hasMarkdownImage: input.includes('!['),
@@ -1258,6 +1333,34 @@ function createInlineParseContext(input: string, startsInsideHtmlComment: boolea
 }
 type InlineParseContext = ReturnType<typeof createInlineParseContext>;
 
+const REFERENCE_LINK_URL_RE = new RegExp(
+  `^(?:https?://[^\\s]+|(?:${DEEP_LINK_SCHEME_GROUP})://(?:session|project)/[^\\s]+|cindy-media://blobs/[0-9a-f]{64}\\.(?:mp4|webm|mov))$`,
+);
+
+function matchMarkdownReference(input: string, from: number, context: InlineParseContext): {
+  index: number; end: number; inline: MobileMarkdownInline;
+} | null {
+  let cursor = from;
+  while (cursor < input.length) {
+    const reference = nextMarkdownReference(input, cursor, context.references, context.search.exec);
+    if (!reference) return null;
+    cursor = reference.end;
+    if (isBackslashEscaped(input, reference.index)
+      || (context.needsCommentCheck && isInsideHtmlComment(context.commentProbe(), reference.index, context.startsInsideHtmlComment))) continue;
+    const url = reference.url;
+    if (reference.image) {
+      if (!context.allowsImages()
+        || (!(SAFE_IMAGE_SRC_RE.test(url) && !/\s/.test(url)) && !classifyChatPathLinkTarget(url))) continue;
+      return { ...reference, inline: { type: 'image', alt: reference.text,
+        url: SAFE_IMAGE_SRC_RE.test(url) ? normalizeImageUrlScheme(url) : url } };
+    }
+    if (!REFERENCE_LINK_URL_RE.test(url) && !classifyChatPathLinkTarget(url)) continue;
+    return { ...reference, inline: { type: 'link', text: reference.text, url,
+      ...(url.startsWith('cindy-media://') ? { managedMediaKind: 'video' as const } : {}) } };
+  }
+  return null;
+}
+
 function findNextInlineToken(
   input: string,
   from: number,
@@ -1269,6 +1372,7 @@ function findNextInlineToken(
     // 靠 image 的起点(`!`)更靠前在排序里胜出,这里的顺序只是可读性上的强调。
     context.search.next('MarkdownImage', from, () => matchMarkdownImage(input, from, context)),
     context.search.next('HtmlImage', from, () => matchHtmlImage(input, from, context)),
+    context.search.next('Reference', from, () => matchMarkdownReference(input, from, context)),
     // 链接语法:http(s) 之外放行 Cindy 深链(双 scheme:cindy 主 + xdt-maker
     // 兼容存量消息)session|project/(session 渲染成会话 chip;project 在
     // renderInline 里显示 label 纯文本,不落 Linking.openURL——桌面端粘贴
