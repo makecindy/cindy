@@ -16,7 +16,14 @@ export function parseSubscriptionAccountCommand(raw: unknown): SubscriptionAccou
   const loginKey = value.loginKey;
   const accountId = value.accountId;
   const validLoginKey = typeof loginKey === 'string' && /^[A-Za-z0-9_-]{1,100}$/.test(loginKey);
-  if (value.action === 'read') return { action: 'read', providerId };
+  if (value.action === 'read' || value.action === 'preview')
+    return { action: value.action, providerId };
+  if (
+    value.action === 'connect' &&
+    validLoginKey &&
+    (value.target === 'default' || value.target === 'new')
+  )
+    return { action: 'connect', providerId, loginKey, target: value.target };
   if ((value.action === 'add' || value.action === 'cancel') && validLoginKey)
     return { action: value.action, providerId, loginKey };
   if (value.action === 'login' && accountIdValid(accountId) && validLoginKey)

@@ -7,25 +7,11 @@ import type {
 
 export const MAX_REQUEST_USER_INPUT_QUESTIONS = 3;
 export const MAX_REQUEST_USER_INPUT_OPTIONS = 10;
-const MAX_REQUEST_USER_INPUT_TEXT_CHARS = 1_000;
-const MAX_REQUEST_USER_INPUT_ANSWER_CHARS = 2_000;
 const ASK_USER_CONTINUATION_INTRO = 'The user answered the pending question.';
 const ASK_USER_CONTINUATION_OUTRO = 'Continue from the previous turn. Do not ask the same question again.';
 
-function truncateUserInputText(value: string): string {
-  return value.length > MAX_REQUEST_USER_INPUT_TEXT_CHARS
-    ? value.slice(0, MAX_REQUEST_USER_INPUT_TEXT_CHARS)
-    : value;
-}
-
-function truncateAnswerText(value: string): string {
-  return value.length > MAX_REQUEST_USER_INPUT_ANSWER_CHARS
-    ? value.slice(0, MAX_REQUEST_USER_INPUT_ANSWER_CHARS)
-    : value;
-}
-
 export function emptyUserInputResponse(questions: readonly Pick<ToolRequestUserInputQuestion, 'id'>[]): ToolRequestUserInputResponse {
-  const answers: ToolRequestUserInputResponse['answers'] = {};
+  const answers: ToolRequestUserInputResponse['answers'] = Object.create(null);
   for (const q of questions) {
     if (q.id) answers[q.id] = { answers: [] };
   }
@@ -35,16 +21,16 @@ export function emptyUserInputResponse(questions: readonly Pick<ToolRequestUserI
 export function normalizeRequestUserInputQuestions(
   questions: readonly ToolRequestUserInputQuestion[],
 ): ToolRequestUserInputQuestion[] {
-  return questions.slice(0, MAX_REQUEST_USER_INPUT_QUESTIONS).map((q, index) => ({
+  return questions.map((q, index) => ({
     id: q.id || `question-${index + 1}`,
-    header: truncateUserInputText(q.header || ''),
-    question: truncateUserInputText(q.question || q.header || `Question ${index + 1}`),
+    header: q.header || '',
+    question: q.question || q.header || `Question ${index + 1}`,
     isOther: q.isOther === true,
     isSecret: q.isSecret === true,
     options: Array.isArray(q.options)
-      ? q.options.slice(0, MAX_REQUEST_USER_INPUT_OPTIONS).map((option) => ({
-          label: truncateUserInputText(option.label || ''),
-          description: truncateUserInputText(option.description || ''),
+      ? q.options.map((option) => ({
+          label: option.label || '',
+          description: option.description || '',
         })).filter((option) => option.label.trim().length > 0)
       : null,
   }));
@@ -81,6 +67,7 @@ export function normalizeDynamicAskUserQuestions(args: unknown): ToolRequestUser
 
 export function questionsToAskUserItems(questions: readonly ToolRequestUserInputQuestion[]) {
   return questions.map((q) => ({
+    id: q.id,
     question: q.question,
     header: q.header || undefined,
     options: q.options?.map((option) => ({
@@ -95,9 +82,9 @@ export function responseFromAskUserAnswers(
   questions: readonly ToolRequestUserInputQuestion[],
   answers: Record<string, string>,
 ): ToolRequestUserInputResponse {
-  const out: ToolRequestUserInputResponse['answers'] = {};
+  const out: ToolRequestUserInputResponse['answers'] = Object.create(null);
   for (const q of questions) {
-    const raw = answers[q.question] ?? answers[q.header] ?? answers[q.id] ?? '';
+    const raw = [answers[q.id], answers[q.question], answers[q.header]].find((value) => typeof value === 'string') ?? '';
     if (!raw) {
       out[q.id] = { answers: [] };
       continue;
@@ -105,13 +92,13 @@ export function responseFromAskUserAnswers(
     try {
       const parsed = JSON.parse(raw);
       if (Array.isArray(parsed)) {
-        out[q.id] = { answers: parsed.filter((v): v is string => typeof v === 'string').map(truncateAnswerText) };
+        out[q.id] = { answers: parsed.filter((v): v is string => typeof v === 'string') };
         continue;
       }
     } catch {
       // Single-select answers are plain labels, not JSON.
     }
-    out[q.id] = { answers: [truncateAnswerText(raw)] };
+    out[q.id] = { answers: [raw] };
   }
   return { answers: out };
 }
@@ -121,7 +108,7 @@ export function responseFromPermissionDecision(
   decision: Extract<InteractionDecision, { kind: 'permission' }>,
 ): ToolRequestUserInputResponse {
   if (decision.behavior === 'deny') return emptyUserInputResponse(questions);
-  const out: ToolRequestUserInputResponse['answers'] = {};
+  const out: ToolRequestUserInputResponse['answers'] = Object.create(null);
   for (const q of questions) {
     const positiveOption = q.options?.find((option) =>
       /^(allow|approve|accept|yes|continue|confirm)$/i.test(option.label.trim()),
@@ -168,7 +155,7 @@ export function responseFromUserInputAnswersByPosition(
   questions: readonly ToolRequestUserInputQuestion[],
   answersByPosition: readonly (readonly string[])[],
 ): ToolRequestUserInputResponse {
-  const answers: ToolRequestUserInputResponse['answers'] = {};
+  const answers: ToolRequestUserInputResponse['answers'] = Object.create(null);
   questions.forEach((question, index) => {
     answers[question.id] = { answers: [...(answersByPosition[index] ?? [])] };
   });
@@ -185,9 +172,16 @@ export function formatAskUserContinuationMessage(
   questions: readonly ToolRequestUserInputQuestion[],
   answers: Record<string, string>,
 ): string {
+  if (questions.every((q) => q.id.startsWith('["request_user_input_async",'))) {
+    const replies = questions.flatMap((q) => {
+      const answer = answers[q.id] ?? answers[q.question] ?? '';
+      return answer.trim() ? [{ questionItemId: q.id, question: q.question, answer }] : [];
+    });
+    return `<send_user_message_question_reply>\n${JSON.stringify(replies)}\n</send_user_message_question_reply>`;
+  }
   const lines = [ASK_USER_CONTINUATION_INTRO, ''];
   for (const question of questions) {
-    const raw = answers[question.question] ?? answers[question.header] ?? answers[question.id] ?? '';
+    const raw = answers[question.id] ?? answers[question.question] ?? answers[question.header] ?? '';
     lines.push(`Q: ${question.question}`);
     lines.push(`A: ${raw.trim() || '(no answer)'}`);
     lines.push('');

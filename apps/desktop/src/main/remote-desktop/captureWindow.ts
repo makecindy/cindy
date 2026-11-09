@@ -6,11 +6,60 @@ import { installContentSecurityPolicy, parseOrigin } from '../security/csp';
 import { throwIpcError } from '../utils/ipcValidate';
 import { markCaptureWindowWebContents } from './captureWindowRegistry';
 import type { RecordingAudioOptions } from '../../shared/recordingAudio';
+import { createLogger } from '../logger';
 
 declare const DESKTOP_CAPTURE_VITE_DEV_SERVER_URL: string | undefined;
 declare const DESKTOP_CAPTURE_VITE_NAME: string;
 const CAPTURE_URL = 'cindy-desktop-capture://capture/index.html';
 const recordingSessions = new WeakSet<Session>();
+const windowLog = createLogger('desktop-capture:window');
+
+/** These data hosts must stay hidden. Keep native events separate from JS calls:
+ * an Electron event callback's stack cannot identify the original native caller. */
+function traceCaptureWindow(win: BrowserWindow, mode: string): void {
+  let remaining = 32;
+  const record = (action: string, origin: 'lifecycle' | 'js-call' | 'native-event') => {
+    if (remaining < 0) return;
+    try {
+      if (remaining-- === 0) {
+        windowLog.info('capture window diagnostic limit reached', { id: win.id, mode });
+        return;
+      }
+      // Keep only function names and source basenames/positions, never raw paths,
+      // URL queries, error messages or method arguments. Bound both work and output.
+      const stack = origin === 'js-call' ? (new Error().stack ?? '').split('\n').slice(1, 13).flatMap((line) => {
+        const source = /(?:[/\\]|\()([\w.-]+\.(?:[cm]?js|tsx?)):(\d+):(\d+)\)?$/.exec(line);
+        if (!source) return [];
+        const name = /^\s*at ([\w.$<>]+) \(/.exec(line)?.[1]?.slice(0, 120) ?? '<anonymous>';
+        return [`${name} (${source[1]}:${source[2]}:${source[3]})`];
+      }) : undefined;
+      const state = win.isDestroyed() ? { destroyed: true } : {
+        nativeHandle: Buffer.from(win.getNativeWindowHandle()).reverse().toString('hex'),
+        visible: win.isVisible(), focused: win.isFocused(), minimized: win.isMinimized(),
+        bounds: win.getBounds(), contentBounds: win.getContentBounds(),
+      };
+      const details = { id: win.id, mode, action, origin, ...state, ...(stack ? { stack } : {}) };
+      if (origin === 'lifecycle') windowLog.info('capture window created', details);
+      else windowLog.warn('capture window visibility activity', details);
+    } catch {
+      // Diagnostics must never interfere with transport or window teardown.
+    }
+  };
+  for (const method of ['show', 'showInactive', 'restore', 'focus'] as const) {
+    const original = win[method];
+    win[method] = () => { record(method, 'js-call'); original.call(win); };
+  }
+  const setAlwaysOnTop = win.setAlwaysOnTop;
+  win.setAlwaysOnTop = (...args: Parameters<BrowserWindow['setAlwaysOnTop']>) => {
+    record('setAlwaysOnTop', 'js-call');
+    setAlwaysOnTop.apply(win, args);
+  };
+  win.on('show', () => record('show', 'native-event'));
+  win.on('hide', () => record('hide', 'native-event'));
+  win.on('focus', () => record('focus', 'native-event'));
+  win.on('restore', () => record('restore', 'native-event'));
+  record('created', 'lifecycle');
+}
 
 /** Main owns one ephemeral capture process. Unlike a reusable UI tool window,
  * hiding is NOT a stop boundary: disposal must kill every media stream, including
@@ -174,6 +223,7 @@ export class DesktopCaptureWindow {
       },
     });
     this.window = win;
+    traceCaptureWindow(win, this.mode);
     markCaptureWindowWebContents(win.webContents);
     if (this.mode === 'direct') {
       // This data-only window signals exclusively to already authorized peers.

@@ -27,7 +27,7 @@ import {
   clearSessionAttention as clearAppBadgeSessionAttention,
   hasSessionAttention as hasAppBadgeSessionAttention,
 } from '../appBadgeService.js';
-import { openMainWindowSession, openMainWindowChatMessage } from '../deepLink.js';
+import { buildSessionDeepLink, openMainWindowSession, openMainWindowChatMessage } from '../deepLink.js';
 import { groupChatIslandId, type AgentIslandGroupChatInput } from './groupChat.js';
 import {
   AGENT_ISLAND_CONSUME_ENTRY_ALERT_CHANNEL,
@@ -63,6 +63,7 @@ import {
   isAgentIslandSoundId,
   isAgentIslandSupportedPlatform,
   isSilentAgentIslandSoundChoice,
+  hasAgentIslandNotificationSound,
   normalizeAgentIslandDisplayTarget,
   normalizeAgentIslandSoundChoice,
   normalizeAgentIslandSoundSettings,
@@ -861,8 +862,16 @@ export class AgentIslandService {
    * is on; it has no error presentation.
    */
   ownsTaskAlert(kind: 'done' | 'needs-reply' | 'error'): boolean {
+    // Keep the OS notification when this event has no enabled Cindy sound.
+    if (!hasAgentIslandNotificationSound(this.soundSettings, kind)) return false;
     if (this.isEnabled()) return true;
     return kind !== 'error' && this.deps.liveActivity?.ownsAlerts() === true;
+  }
+
+  /** Direct main callers and teammate replies use the same per-event sound policy. */
+  shouldSilenceTaskNotification(kind: 'done' | 'needs-reply' | 'error'): boolean {
+    if (!this.isEnabled() && this.deps.liveActivity?.ownsAlerts() !== true) return false;
+    return hasAgentIslandNotificationSound(this.soundSettings, kind);
   }
 
   refreshLocalization(): void {
@@ -913,7 +922,7 @@ export class AgentIslandService {
     }
     for (const sessionId of result.baselineSessionIds) this.baselineSoundSessionIds.add(sessionId);
     if (result.changed) this.publish();
-    if (this.isEnabled()) return;
+    // ownsTaskAlert covers the island itself; only events it will not sound for reach the OS.
     for (const event of result.events) {
       if (this.ownsTaskAlert(event.kind)) continue;
       try {
@@ -2243,6 +2252,14 @@ export class AgentIslandService {
       : soundDisplayState;
     // The system Live Activity works whether or not our own island is shown.
     const { pillSnapshot } = chatDisplayState;
+    const priorityId = pillSnapshot.priorityId;
+    const prioritySession = priorityId ? this.state.sessions.get(priorityId) : undefined;
+    const priorityDeviceId = prioritySession?.sourceDeviceId
+      ?? (priorityId ? this.companionChats.get(priorityId)?.input.deviceId : undefined);
+    // Group summaries are not session ids; retain app-level opening for those cards.
+    const taskUrl = priorityId && !prioritySession?.groupChat
+      ? buildSessionDeepLink(priorityId, { deviceId: priorityDeviceId })
+      : undefined;
     this.deps.liveActivity?.sync(agentIslandLiveActivityStateFromPill(
       pillSnapshot,
       this.mascotSkin,
@@ -2256,6 +2273,7 @@ export class AgentIslandService {
         waitingCount: (count) => tCount('agentIsland.native.liveActivityWaiting', count),
       },
       chatDisplayState.sessions.find((session) => session.sessionId === pillSnapshot.priorityId)?.companion,
+      taskUrl,
     ));
     if (!this.enabled) {
       // Agent Notch is off: its event sounds still accompany the Live Activity's alerts.

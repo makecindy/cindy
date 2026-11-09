@@ -239,6 +239,10 @@ Primitive 与 Pattern 默认只绑定 semantic 角色。只有品牌表达、兼
 
 UI 路径与 design-inventory 共用唯一来源（§11）本批未做。行高 `leading-4/5/6` 是否随字号缩放尚未核实，未纳入。回退：撤回本批脚本、测试与豁免表改动即可，不影响 DS-7 / DS-10 既有接线；续期的 4 条豁免回退后恢复为过期前的放行行为。
 
+### 阴影、渐变与失效写法门禁（2026-11-07）
+
+`designEffectsDiscipline.test.ts`（登记在 Desktop guard 层）扫描 renderer 源码：无类型 `shadow-[var(--x)]`、HSL 三元组直接当颜色、优先级低于 Button 变体的 `enabled:hover:` 零容忍；阴影和渐变只留逐文件计数的登记例外，与 DESIGN.md §2、§6、§7 对应。失败信息带文件、行号和改法。未覆盖 CSS 与行内 style，也未覆盖 `sidebar-item-active-*` 这类跨主题混合格式的 token。存量已在同一 PR 清零。
+
 ### DS-10 报告准确性与维护（提交候选已验证）
 
 沿用 DS-7 的颜色增量阻断、inventory 新鲜度和 Token unit tier 生成保护，不新增 CI 步骤、required 或豁免。`design-layer-report.mjs` 从 Token `desktop-bindings.json` 的 foundations.spacing/css 读取真实变量：例如 `--space-4` 已登记，`--spacing-4` 未登记，不能凭命名猜测合法性。审计结果的 scriptHashes 同时绑定这份输入。

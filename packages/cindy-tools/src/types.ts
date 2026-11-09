@@ -366,7 +366,7 @@ export type CindyMediaToolRequest =
   | { action: 'poll'; invocationId: string };
 
 /** Host-owned connections: Grok login, or a messaging platform a teammate connects to itself. */
-export type CindyHostConnectionId = 'grok' | 'im-telegram' | 'im-feishu' | 'im-wecom' | 'im-dingtalk' | 'im-discord';
+export type CindyHostConnectionId = 'grok' | 'im-telegram' | 'im-feishu' | 'im-wecom' | 'im-dingtalk' | 'im-discord' | 'im-imessage';
 
 /** host 注入的依赖:总机的全部真实能力都在这几个回调里。 */
 export interface CindyGhostsMcpDeps {

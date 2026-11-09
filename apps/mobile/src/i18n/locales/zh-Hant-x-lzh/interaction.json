@@ -1,5 +1,7 @@
 {
   "permission": {
+    "mcpComplete": "已畢",
+    "mcpCancel": "取消",
     "mode": {
       "default": "常例權柄",
       "acceptEdits": "許修",
@@ -98,7 +100,14 @@
     "planFeedbackPlaceholder": "告 Claude 當如何為之",
     "planFeedbackRequired": "書回饋方可呈。",
     "planFeedbackSubmit": "呈謀之回饋",
-    "planFeedbackAccessibility": "以回饋改其謀"
+    "planFeedbackAccessibility": "以回饋改其謀",
+    "validation": {
+      "required": "此項必填。",
+      "choice": "請擇所列之項。",
+      "tooShort": "所填須足 {{count}} 字。",
+      "tooLong": "所填勿逾 {{count}} 字。"
+    },
+    "askRestrictedMetaCaption": "{{options}} · {{mode}}"
   },
   "kinds": {
     "permission": {
@@ -385,6 +394,8 @@
       "submitting": "方呈"
     },
     "permission": {
+      "titleStdin": "可向終端輸入乎？",
+      "titleMcpUrl": "應 {{server}} 之請",
       "highRiskTitle": "高險之授權須再確認",
       "highRiskDetail": "先核指令內容，再點一次確許；不確則拒之。",
       "sessionAllowTitle": "可唯許一次，亦可本差事常許",

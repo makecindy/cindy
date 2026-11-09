@@ -2,7 +2,7 @@
 // Regression coverage: real form, serialization, provider projection and drawer.
 // IPC is replaced with an in-memory store; no real credentials or network calls.
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { BUNDLED_CATALOG, buildUserProvider, modelProtocolComparison } from '@cindy/model-providers';
 import type { AgentKind, CustomProviderConfig, ProviderRuntimeModelConfig, ProviderView } from '@cindy/model-providers';
 
@@ -26,6 +26,9 @@ vi.mock('@/components/settings/ModelPriceOverrideDialog', () => ({ ModelPriceOve
 import { ProviderConnectionDialog } from '@/components/settings/ProviderConnectionDialog';
 import { ModelAdvancedDrawer } from '@/components/settings/ModelAdvancedDrawer';
 import { providerViewToCustomProviderConfig } from '@/lib/customProviders';
+
+// Radix Select scrolls the focused option; jsdom does not implement layout scrolling.
+beforeEach(() => { Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() }); });
 
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
@@ -104,12 +107,11 @@ describe('issue #6015: saved connection protocol versus model protocol', () => {
         row={{ id: model.id, name: model.name, avail: ['codex'], byAgent: { codex: model } }}
         open onOpenChange={vi.fn()} pricePresentationOf={() => null}
         onDisable={vi.fn()} disabled={false} paymentRequired={false} />);
-      expect(screen.getByRole('button', { name: 'Codex · settings.providers.custom.fields.wireProtocol' }).textContent)
+      expect(screen.getByRole('combobox', { name: 'Codex · settings.providers.custom.fields.wireProtocol' }).textContent)
         .toContain(label);
       expect(screen.getByText(`settings.providers.models.advanced.protocol.source${name === 'no model override' ? 'Connection' : 'Model'}`)).toBeTruthy();
       if (name !== 'no model override') {
-        fireEvent.keyDown(screen.getByRole('button', { name: 'Codex · settings.providers.custom.fields.wireProtocol' }), { key: 'ArrowDown' });
-        fireEvent.click(await screen.findByRole('menuitem', { name: 'settings.providers.models.advanced.protocol.restoreRoute' }));
+        fireEvent.click(await screen.findByRole('button', { name: 'settings.providers.models.advanced.protocol.restoreRoute' }));
         await waitFor(() => expect(update).toHaveBeenCalledTimes(2));
         const restored = saved.runtimes.codex!.models[0]!;
         expect(restored.api).toBeUndefined();
@@ -174,9 +176,7 @@ it.each([
   }
   try {
     const view = renderDrawer();
-    const button = screen.getByRole('button', { name: `${engine === 'pi' ? 'Pi' : 'Codex'} · settings.providers.custom.fields.wireProtocol` });
-    fireEvent.keyDown(button, { key: 'ArrowDown' });
-    fireEvent.click(await screen.findByRole('menuitem', { name: 'settings.providers.models.advanced.protocol.restoreRoute' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'settings.providers.models.advanced.protocol.restoreRoute' }));
     await waitFor(() => expect(update).toHaveBeenCalledOnce());
     const unchanged = { ...original };
     delete unchanged.api;
@@ -221,19 +221,19 @@ it('keeps preset reset disabled but allows restoring a sparse explicit choice of
   }
   try {
     const view = render(drawer());
-    fireEvent.keyDown(screen.getByRole('button', { name: 'Pi · settings.providers.custom.fields.wireProtocol' }), { key: 'ArrowDown' });
-    const restore = await screen.findByRole('menuitem', { name: 'settings.providers.models.advanced.protocol.restoreRoute' });
-    expect(restore.getAttribute('aria-disabled')).toBe('true');
+    const restore = await screen.findByRole('button', { name: 'settings.providers.models.advanced.protocol.restoreRoute' });
+    expect(restore.hasAttribute('disabled')).toBe(true);
     fireEvent.click(restore);
     expect(update).not.toHaveBeenCalled();
     expect(screen.getByText('settings.providers.models.advanced.protocol.sourceCatalog')).toBeTruthy();
-    fireEvent.click(screen.getByRole('menuitemradio', { name: 'settings.providers.models.advanced.protocol.automatic' }));
+    fireEvent.keyDown(screen.getByRole('combobox', { name: 'Pi · settings.providers.custom.fields.wireProtocol' }), { key: 'ArrowDown' });
+    fireEvent.click(await screen.findByRole('option', { name: 'settings.providers.models.advanced.protocol.automatic' }));
     await waitFor(() => expect(update).toHaveBeenCalledOnce());
     view.rerender(drawer());
-    const button = () => screen.getByRole('button', { name: 'Pi · settings.providers.custom.fields.wireProtocol' });
+    const button = () => screen.getByRole('combobox', { name: 'Pi · settings.providers.custom.fields.wireProtocol' });
     expect(button().textContent).toContain('Chat Completions');
     fireEvent.keyDown(button(), { key: 'ArrowDown' });
-    fireEvent.click(await screen.findByRole('menuitemradio', { name: 'Messages' }));
+    fireEvent.click(await screen.findByRole('option', { name: 'Messages' }));
     await waitFor(() => expect(update).toHaveBeenCalledTimes(2));
     const chosen = structuredClone(config);
     expect(chosen.runtimes.pi!.models[0]!.interfaceId).toBe(original.interfaceId);
@@ -241,9 +241,8 @@ it('keeps preset reset disabled but allows restoring a sparse explicit choice of
     view.rerender(drawer());
     expect(button().textContent).toContain('Messages');
     expect(screen.getByText('settings.providers.models.advanced.protocol.sourceModel')).toBeTruthy();
-    fireEvent.keyDown(button(), { key: 'ArrowDown' });
-    const enabledRestore = await screen.findByRole('menuitem', { name: 'settings.providers.models.advanced.protocol.restoreRoute' });
-    expect(enabledRestore.getAttribute('aria-disabled')).not.toBe('true');
+    const enabledRestore = await screen.findByRole('button', { name: 'settings.providers.models.advanced.protocol.restoreRoute' });
+    expect(enabledRestore.hasAttribute('disabled')).toBe(false);
     fireEvent.click(enabledRestore);
     await waitFor(() => expect(update).toHaveBeenCalledTimes(3));
     delete chosen.runtimes.pi!.models[0]!.interfaceId;
@@ -252,7 +251,7 @@ it('keeps preset reset disabled but allows restoring a sparse explicit choice of
     const restored = buildUserProvider(config, { presets: [preset], modelRegistry: BUNDLED_CATALOG.modelRegistry });
     expect(modelProtocolComparison(restored, { pi: restored.models.pi![0]! }).forAgent('pi'))
       .toMatchObject({ outbound: 'openai-completions', source: 'catalog', customized: false });
-    expect(screen.queryByRole('button', { name: 'Pi · settings.providers.custom.fields.wireProtocol' })).toBeNull();
+    expect(screen.queryByRole('combobox', { name: 'Pi · settings.providers.custom.fields.wireProtocol' })).toBeNull();
     expect(screen.getByText('settings.providers.models.advanced.protocol.sourceCatalog')).toBeTruthy();
   } finally {
     cleanup();
@@ -284,10 +283,9 @@ it.each([
       row={{ id: model.id, name: model.name, avail: ['codex'], byAgent: { codex: model } }}
       open onOpenChange={vi.fn()} pricePresentationOf={() => null}
       onDisable={vi.fn()} disabled={false} paymentRequired={false} />);
-    fireEvent.keyDown(screen.getByRole('button', { name: 'Codex · settings.providers.custom.fields.wireProtocol' }), { key: 'ArrowDown' });
-    const restore = await screen.findByRole('menuitem', { name: 'settings.providers.models.advanced.protocol.restoreRoute' });
+    const restore = await screen.findByRole('button', { name: 'settings.providers.models.advanced.protocol.restoreRoute' });
     if (source === 'catalog') {
-      expect(restore.getAttribute('aria-disabled')).toBe('true');
+      expect(restore.hasAttribute('disabled')).toBe(true);
       expect(update).not.toHaveBeenCalled();
       return;
     }

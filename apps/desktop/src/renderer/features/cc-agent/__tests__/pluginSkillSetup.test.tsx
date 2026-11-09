@@ -92,7 +92,7 @@ beforeEach(() => {
       workdirPrefsSync: () => ({ disabled: disabledInWorkdir }),
       recommendationsSync: () => ({ ownerId: OWNER, sources: [], recentIds: [], newlyInstalledId: null }),
     },
-    pluginMarket: { snapshot: async () => ({ items: marketItems }) },
+    pluginMarket: { lookup: async () => ({ items: marketItems }) },
   });
 });
 afterEach(() => {

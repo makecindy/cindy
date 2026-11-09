@@ -104,6 +104,9 @@ interface UseCCAgentChatReturn {
   steeringQueueClientIds: string[];
   /** Queue was paused by Stop and resumes only after the user clicks Continue. */
   queuePaused: boolean;
+  queueEditLocks: string[];
+  queueInteractionLocks: string[];
+  queueAbortPending: boolean;
   /** F-QUEUE-DEFER: 队列面板是否显示三条以后的尾部，仅影响展示。 */
   queueExpanded: boolean;
   /** F-QUEUE-DEFER: 切换队列面板的展开 / 折叠态，仅影响展示。 */
@@ -865,6 +868,9 @@ export function useCCAgentChat(
     pendingQueue: lightState.pendingQueue,
     steeringQueueClientIds: lightState.steeringQueueClientIds,
     queuePaused: lightState.queuePaused,
+    queueEditLocks: lightState.queueEditLocks,
+    queueInteractionLocks: lightState.queueInteractionLocks,
+    queueAbortPending: lightState.queueAbortPending,
     queueExpanded: lightState.queueExpanded,
     setQueueExpanded,
     resumeQueue,

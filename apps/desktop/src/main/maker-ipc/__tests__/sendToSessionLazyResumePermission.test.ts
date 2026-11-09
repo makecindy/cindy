@@ -24,6 +24,7 @@ import { AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT, AUTO_REVIEW_DELEGA
 import { restoreAutoReviewUserIntent } from '../autoReviewUserIntent.js';
 import { verifiedOwnerRequestText } from '../../../shared/forwardedRequest.js';
 import { createWireNoteMemory } from '../wireNoteMemory.js';
+import { resolveSendToSessionCreateRoute } from '../sendToSessionExecutionConfig.js';
 
 const registerSource = readFileSync(resolve(__dirname, '..', 'register.ts'), 'utf8').replace(
   /\r\n?/g,
@@ -112,12 +113,18 @@ function botTaskDispatchSlice(): string {
     ',\n    discardDelegationQueuedInputs:',
     registerSource.indexOf('botDelegationServiceHolder = createBotDelegationService({'),
   );
+  const groupDispatch = slice(
+    '({ targetSessionId, message, persistedContent, autoReviewUserText, clientId, attachments, toolsDisabled, onQueued, onAccepted }) =>',
+    ',\n    prepareAttachments:',
+    registerSource.indexOf('const botGroupChatDeps: BotGroupChatServiceDeps = {'),
+  );
   return ts.transpileModule(
     `${sendWithBaseline}
 ${sendToSessionInternal}
 ${dispatchBotSessionMessage}
 const delegationDispatch = ${delegationDispatch};
-return { delegationDispatch, dispatchBotSessionMessage, sendToSessionInternal };`,
+const groupDispatch = ${groupDispatch};
+return { delegationDispatch, groupDispatch, dispatchBotSessionMessage, sendToSessionInternal };`,
     { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None } },
   ).outputText;
 }
@@ -129,6 +136,7 @@ const loadBotTaskDispatch = new Function(
   `with (scope) { return (function () { ${botTaskDispatchSlice()} })(); }`,
 ) as (scope: object) => {
   sendToSessionInternal: (input: Record<string, unknown>) => Promise<{ ok: boolean; wakeKind?: string }>;
+  groupDispatch: (input: Record<string, unknown>) => Promise<{ ok: boolean; wakeKind?: string }>;
   dispatchBotSessionMessage: (input: Record<string, unknown>) => Promise<{ ok: boolean; wakeKind?: string }>;
   delegationDispatch: (
     input: Record<string, unknown>,
@@ -260,6 +268,9 @@ function botTaskDispatchHarness(
     isSessionRunningError: () => false,
     GroupToolAuthorizationError: class extends Error {},
     AcceptedCallbackDispatchCancelled: class extends Error {},
+    // create 分支的位置与执行配置走真实解析；不指定位置与配置时不读任何供应商。
+    resolveSendToSessionCreateRoute,
+    getSelfDeviceId: () => 'self-device',
   };
   Object.assign(stubs, overrides);
   const scope = new Proxy(stubs, {
@@ -281,6 +292,62 @@ it('advances an accepted send_to_session with a dispatcher without touching huma
   expect(result).toMatchObject({ ok: true });
   expect(current.activity.get('child')).toBeGreaterThan(123);
   expect(row.userSendAt).toBe(123);
+});
+
+// #9483, bot-group-chat §3: external input into a hidden lane cannot reach the
+// public group timeline. Guard tier executes the real handoff and group-dispatch
+// closures; existing permission tests did not cover role=group or false receipts.
+describe('external handoff to hidden group lanes', () => {
+  function groupHarness(live: boolean) {
+    const sync = vi.fn(async () => undefined);
+    const persist = vi.fn(async () => undefined);
+    const accepted = vi.fn();
+    const links = {};
+    let table: unknown;
+    const dbChain = { from: (value: unknown) => { table = value; return dbChain; }, where: () => dbChain,
+      limit: async () => table === links ? [{ role: 'group', botId: 'companion' }] : [] };
+    const h = botTaskDispatchHarness({ child: { permissionMode: 'auto', planModeEnabled: false } },
+      live ? { child: { id: 'child', agentKind: 'codex' } } : {}, {
+        getDbClient: () => ({ drizzle: { select: () => dbChain } }),
+        botSessionLinks: links,
+        syncBotLanePermission: sync, createDbMessage: persist,
+      });
+    return { ...h, sync, persist, accepted };
+  }
+
+  it.each(['cold', 'live', 'queued'] as const)('rejects %s external delivery before changing the target', async (path) => {
+    const h = groupHarness(path === 'live');
+    const result = await h.sendToSessionInternal({ targetSessionId: 'child', message: 'Forward this into the group',
+      dispatcherSessionId: 'lead', clientId: path === 'queued' ? 'bot-group:forged' : 'external-input',
+      forceQueue: path === 'queued', onAccepted: h.accepted });
+    expect(result).toMatchObject({ ok: false, errorCode: 'UNSUPPORTED_CAPABILITY',
+      message: expect.stringMatching(/group.*not.*delivered/i) });
+    expect(h.sync).not.toHaveBeenCalled();
+    expect(h.persist).not.toHaveBeenCalled();
+    expect(h.accepted).not.toHaveBeenCalled();
+    expect(h.scope.enqueueSendToSessionMessage).not.toHaveBeenCalled();
+    expect(h.bootstrapped).toEqual([]);
+    expect(h.sentTo).toEqual([]);
+    expect(h.activity.size).toBe(0);
+  });
+
+  it('preserves managed group delivery through the real group dispatcher', async () => {
+    const h = groupHarness(false);
+    expect(await h.groupDispatch({ targetSessionId: 'child', message: 'Managed group turn',
+      clientId: 'bot-group:managed-turn', onAccepted: h.accepted }))
+      .toMatchObject({ ok: true, wakeKind: 'queued', queuedMessageId: 'bot-group:managed-turn' });
+    expect(h.scope.enqueueSendToSessionMessage).toHaveBeenCalledWith(expect.objectContaining({
+      targetSessionId: 'child', clientId: 'bot-group:managed-turn', message: 'Managed group turn',
+    }));
+  });
+
+  it('preserves host continuations inside a group lane', async () => {
+    const h = groupHarness(false);
+    expect(await h.dispatchBotSessionMessage({ targetSessionId: 'child', message: 'Host continuation',
+      clientId: 'input-handoff-result:request', onAccepted: h.accepted })).toMatchObject({ ok: true });
+    expect(h.sentTo).toEqual([{ sessionId: 'child', planMode: false }]);
+    expect(h.accepted).toHaveBeenCalledOnce();
+  });
 });
 
 // #6895 review: the cloud-room dispatcher bypassed the ordinary send transaction.

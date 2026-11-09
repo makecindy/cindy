@@ -169,7 +169,7 @@ export function RunningTokenRatePopover({
     </div>
   );
   const surface =
-    'w-[320px] max-w-[calc(100vw-32px)] rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-3 text-[var(--text-primary)] shadow-[var(--shadow-menu)]';
+    'w-[320px] max-w-[calc(100vw-32px)] rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-3 text-[var(--text-primary)] shadow-[shadow:var(--shadow-menu)]';
   return (
     <Popover
       open={open}
