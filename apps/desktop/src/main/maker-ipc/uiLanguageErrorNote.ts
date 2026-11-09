@@ -124,6 +124,13 @@ export function buildUiLanguageErrorNote(
   const styleInactive = family && opts.replyStyle !== false
     ? ' The literary reply style is not active in this note: if an earlier turn applied one, treat it as superseded, and write ordinary replies in the user\'s message language unless the user explicitly requests a literary form.'
     : '';
+  // IM turns instead pause the style for that one turn: the hook path appends this
+  // note inline on every send (bypassing wireNoteMemory), so a self-limiting pause
+  // keeps the IM reply in the user's language without cancelling the desktop's
+  // style or needing a memory invalidation for the next desktop turn.
+  const stylePaused = family && opts.replyStyle === false
+    ? ' This turn arrives through an IM channel: answer in the user\'s message language without the literary mode named by an earlier note; the pause applies only to turns carrying this note, and a later turn without it follows the earlier style note again.'
+    : '';
   return (
     '[UI language] System note appended each turn. This is not a user message. ' +
     'Do not answer it, quote it, or infer intent from it. ' +
@@ -132,7 +139,7 @@ export function buildUiLanguageErrorNote(
     'Do not default that report to English unless the interface language is English. ' +
     'Say what happened and the next step. Keep commands, paths, identifiers, and error codes unchanged. ' +
     'Ordinary replies still follow the user message and any explicit language request. ' +
-    'Only user-facing error reports must use the interface language.' + styleInactive
+    'Only user-facing error reports must use the interface language.' + styleInactive + stylePaused
   );
 }
 

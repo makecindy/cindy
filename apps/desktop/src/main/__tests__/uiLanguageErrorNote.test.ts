@@ -86,9 +86,13 @@ describe('ui language error note', () => {
     for (const locale of SUPPORTED_LOCALES) {
       for (const { id } of CLASSICAL_REPLY_STYLES.lzh) {
         const im = buildUiLanguageErrorNote(locale, { replyStyle: false, classicalStyle: id });
-        // IM turns share one style-free note regardless of the client's style choice.
+        // IM turns share one style-free note regardless of the client's style choice;
+        // family locales pause the style for that turn without cancelling it.
         expect(im).toBe(buildUiLanguageErrorNote(locale, { replyStyle: false }));
         expect(im).not.toContain('literary reply style is not active');
+        expect(im.includes('pause applies only to turns carrying this note')).toBe(
+          familyLocales.includes(locale),
+        );
         // Only family locales carry the cancellation; only when the style is off.
         const ordinary = buildUiLanguageErrorNote(locale, { classicalStyle: id });
         expect(ordinary.includes('literary reply style is not active')).toBe(
