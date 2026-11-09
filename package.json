@@ -75,6 +75,9 @@
   },
   "scripts": {
     "h": "node scripts/help.mjs",
+    "host:open": "node apps/host/src/open-client.mjs",
+    "preview:host": "node scripts/preview-host.mjs",
+    "start-host": "node --import tsx --import ./apps/host/src/loaders/register-raw.mjs apps/host/src/main.ts",
     "mobile:xcode": "node apps/mobile/scripts/open-ios-xcode.mjs",
     "mobile:sim:rebuild": "node scripts/ensure-deps.mjs --workspace-only && node apps/mobile/scripts/sim-rebuild.mjs",
     "mobile:sim:up": "node scripts/ensure-deps.mjs --workspace-only && node apps/mobile/scripts/sim-up.mjs",
@@ -155,6 +158,7 @@
     "ci:scheduler-guard": "node scripts/scheduler-ci-guard.mjs",
     "pctx": "node packages/project-context/dist/cli.js",
     "pctx:build": "pnpm --filter project-context build",
+    "dev:host": "node scripts/dev-with-host.mjs",
     "personal:build": "node scripts/personal-build.mjs"
   },
   "dependencies": {

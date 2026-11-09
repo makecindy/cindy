@@ -10,9 +10,10 @@ import { useTranslation } from 'react-i18next';
 import { ghostPermissionItems } from '../../../shared/ghost';
 import type { PluginMarketDetail } from '../../../shared/pluginMarket';
 import { PluginSharedUsage } from './PluginSharedUsage';
+import { PluginPublisherBadge, PluginPublisherDescription } from './PluginPublisherBadge';
 import { GhostPluginIcon } from './GhostPluginIcon';
 import { usePluginMarketIcon } from './lib/usePluginMarketIcon';
-import { pluginPresentationOrigin } from './lib/pluginMarketPresentation';
+import { pluginPresentationAuthor, pluginPresentationOrigin } from './lib/pluginMarketPresentation';
 import { PluginDetailTopBar, usePluginDetailScrolled } from './PluginDetailTopBar';
 
 interface MarketPluginDetailViewProps {
@@ -79,18 +80,19 @@ export function MarketPluginDetailView({
               size="detail"
             />
             <div className="plugin-detail-heading min-w-0">
-              <h1 className="truncate text-28 font-medium leading-[1.214] text-[var(--text-primary)]">
-                {detail.name}
-              </h1>
+              <div className="flex min-w-0 items-center gap-1.5">
+                <h1 className="truncate text-28 font-medium leading-[1.214] text-[var(--text-primary)]">{detail.name}</h1>
+                <PluginPublisherBadge origin={presentationOrigin} kind={detail.publisherKind} />
+              </div>
               <div className="plugin-detail-metadata mt-1.5 flex min-w-0 flex-wrap items-center gap-2 text-12 text-[var(--text-tertiary)]">
                 <span>{t(`settings.ghosts.market.scope.${presentationOrigin}`)}</span>
                 <span aria-hidden="true">·</span>
                 <span>v{detail.version}</span>
                 <PluginSharedUsage detail={detail} />
-                {detail.author ? (
+                {pluginPresentationAuthor(detail) ? (
                   <>
                     <span aria-hidden="true">·</span>
-                    <span>{detail.author}</span>
+                    <span>{pluginPresentationAuthor(detail)}</span>
                   </>
                 ) : null}
               </div>
@@ -114,6 +116,7 @@ export function MarketPluginDetailView({
               </Button>
             ) : null}
           </div>
+          <PluginPublisherDescription origin={presentationOrigin} kind={detail.publisherKind} />
           <p className="mt-5 text-14 leading-[1.571] text-[var(--text-secondary)]">
             {detail.description || detail.ghostId}
           </p>

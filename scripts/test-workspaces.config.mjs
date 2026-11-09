@@ -339,6 +339,8 @@ const requiredUnitWorkspace = (name, cwd, { workers = 1, execution, pool, exclud
 export default {
   workspaces: [
     requiredUnitWorkspace('cindy-headless', 'apps/cindy-headless'),
+    noCollectableWorkspace('@cindy/host', 'apps/host',
+      'Uses node:test and runs in the dedicated Host regressions CI job on macOS, Windows and Linux (pnpm --dir apps/host test).'),
     {
       name: 'desktop',
       cwd: 'apps/desktop',

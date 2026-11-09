@@ -292,10 +292,12 @@ export function useComposerResize(input: UseComposerResizeInput) {
         bodyPhase.value = BODY_DRAG_IDLE;
         manager.fail();
       })
-      .onTouchesCancelled((_touches, manager) => {
+      .onTouchesCancelled(() => {
         'worklet';
+        // Native cancel() is still committing CANCELLED. Calling manager.fail()
+        // here re-enters that transition and can reset its orchestrator before
+        // the outer cancel resumes (Android TextInput touch lock, #9452).
         cancel();
-        manager.fail();
       })
       .onFinalize(() => {
         'worklet';

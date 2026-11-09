@@ -475,7 +475,12 @@ describe('shared read-only insights', () => {
     await act(async () => { render(<ProviderShareInsightsSection share={{ ...share, status: 'active' }} />); });
     expect(screen.getByRole('progressbar').getAttribute('aria-valuenow')).toBe('72');
     expect(screen.queryByRole('button')).toBeNull();
-    expect(screen.getByText('quotaCard.remainingPercent:{"percent":72}')).toBeTruthy();
+    expect(screen.getByText('72%').getAttribute('title')).toBe(
+      'quotaCard.remainingPercent:{"percent":72}',
+    );
+    expect(screen.getByRole('progressbar').getAttribute('aria-valuetext')).toBe(
+      'quotaCard.remainingPercent:{"percent":72}',
+    );
   });
   // 新只读通道的旧版/离线错误必须清旧数据并显示原因，不能看起来仍有额度。tier: unit。
   it.each([

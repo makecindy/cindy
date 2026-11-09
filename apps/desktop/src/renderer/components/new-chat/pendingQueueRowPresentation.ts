@@ -1,5 +1,5 @@
 import { forwardedRequestDisplayText, isHookSchedulerOrigin } from '@cindy/maker-shared/message-source';
-import { queueItemVisibleText } from '@cindy/maker-shared/queue';
+import { queueItemVisibleSource, queueItemVisibleText } from '@cindy/maker-shared/queue';
 import { UI_ACTION_TRIGGER_PREFIX, type QueuedMessage } from '@/lib/makerChatStore';
 import { stripChatQuoteMarkerLines } from '@/lib/chatQuotes';
 import {
@@ -30,6 +30,12 @@ export interface PendingQueueRowPresentation {
   /** 任务来源属于伙伴时的伙伴 id：面板行首显示伙伴头像，来源名为伙伴名。 */
   senderBotId: string | null;
   displayText: string;
+  /**
+   * 机器消息的粘贴段已被折成短标签写进 displayText 时，对应的未折叠正文；
+   * 气泡把它连同 pastedTextRanges 交给 UserMessage 只替换一次（范围基于未折叠正文）。
+   * 没有可用范围时为 null。
+   */
+  rangedSourceText: string | null;
   canEdit: boolean;
   canSteer: boolean;
   /**
@@ -97,6 +103,13 @@ export function getPendingQueueRowPresentation(entry: QueuedMessage): PendingQue
         : entry.chatMessage.quotesEncoded === true
           ? stripChatQuoteMarkerLines(entry.text)
           : entry.text,
+    rangedSourceText:
+      isScheduler || isSession || isPlugin
+        ? (() => {
+            const source = queueItemVisibleSource(entry);
+            return source.replaceRanges ? source.text : null;
+          })()
+        : null,
     canEdit: !isPendingEnqueue && !isMachineGenerated && !isSyntheticTrigger,
     // 协同消息可以转为插话:插话不改正文与来源,主进程在接受后结清协同回报。
     canSteer: !isPendingEnqueue && (isOrca || !isMachineGenerated) && !isSyntheticTrigger,

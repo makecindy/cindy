@@ -891,6 +891,7 @@
         "pausedLocal": "N'accepte pas de nouvelles tâches provenant d'autres ordinateurs",
         "cooling": "En refroidissement",
         "coolingUntil": "En refroidissement · de retour vers {{time}}",
+        "quotaExhausted": "Quota épuisé",
         "offline": "Hors ligne",
         "unreachableHere": "Injoignable depuis cet ordinateur",
         "unavailable": {
@@ -937,9 +938,13 @@
       "description": "Pour consommer le quota de chaque compte de façon équilibrée, envoyez ce message depuis {{label}} ({{quota}}). Les derniers messages et un résumé sont repris ; des détails plus anciens peuvent être perdus.",
       "quota": "{{left}} % restant",
       "quotaReset": "{{left}} % restant · {{reset}}",
-      "confirm": "Changer",
-      "cancel": "Annuler",
-      "remember": "Changer automatiquement à l'avenir (pour cette tâche uniquement)"
+      "confirm": "Changer cette fois uniquement",
+      "cancel": "Pas maintenant",
+      "remember": "Changer automatiquement sans redemander",
+      "disable": "Ne pas changer automatiquement ni redemander",
+      "disableFailed": "Impossible de confirmer si votre choix a été enregistré. Vérifiez la connexion et que Cindy est à jour sur l’ordinateur où se trouve la tâche, puis réessayez. Ce message sera envoyé normalement.",
+      "choiceLabel": "Changement d’ordinateur (cette tâche uniquement)",
+      "send": "Envoyer le message"
     },
     "deleteConfirm": {
       "title": "Supprimer le groupe de fournisseurs {{provider}} ?",
@@ -7475,6 +7480,11 @@
         "installedExpand": "Afficher les {{count}} plugins installés",
         "installedCollapse": "Masquer les autres plugins installés",
         "recommendedSection": "Recommandés",
+        "todayRecommendations": "La sélection du jour",
+        "marketSection": "Marché des plugins",
+        "browseMarket": "Parcourir le marché des plugins",
+        "searching": "Recherche…",
+        "allLoaded": "Les {{count}} plugins sont affichés",
         "updatesAvailable": "Mises à jour de plugins disponibles : {{count}}",
         "updateAll": "Tout mettre à jour",
         "ignoreRound": "Ignorer cette fois",
@@ -7504,7 +7514,15 @@
       },
       "market": {
         "publisherKind": {
-          "official": "Officiel"
+          "official": "Officiel",
+          "community": "Communauté"
+        },
+        "publisherDescription": {
+          "official": "Publié et maintenu par Cindy",
+          "community": "Publié et maintenu par des développeurs de la communauté",
+          "team": "Partagé par votre organisation avec les membres autorisés",
+          "custom": "Provenant d’un marché Git ou d’un dossier local que vous avez ajouté",
+          "local": "Installé depuis un fichier local ou développé sur cet ordinateur"
         },
         "scopeAria": "Filtrer les sources de plugins",
         "scope": {
@@ -12629,6 +12647,12 @@
       "missingDir": "Dossier introuvable"
     },
     "pendingQueue": {
+      "stopping": "Arrêt en cours",
+      "queued": "En file d'attente",
+      "editingInComposer": "Modification dans la zone de saisie ci-dessous…",
+      "moveUp": "Avancer",
+      "moveDown": "Reculer",
+      "cancelSend": "Annuler l'envoi",
       "regionAria": "File d'attente des messages",
       "listAria": "Messages en file d'attente",
       "pausedFooter": "Tâche arrêtée, file d'attente en pause",
@@ -19956,10 +19980,10 @@
       "useCodex": "Se connecter avec Codex"
     },
     "title": "Comptes d’abonnement",
-    "note": "Le premier compte utilise le dossier par défaut de la CLI. Les comptes ajoutés se connectent séparément. Les nouvelles tâches sont réparties ; les tâches existantes conservent leur compte.",
     "strategy": "Répartition de charge",
     "add": "Ajouter un compte",
     "default": "Dossier par défaut",
+    "defaultTag": "Par défaut",
     "ready": "Connecté",
     "signedOut": "Connexion requise",
     "unavailable": "État indisponible",
