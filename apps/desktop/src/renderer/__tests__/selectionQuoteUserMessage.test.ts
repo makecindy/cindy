@@ -412,6 +412,48 @@ describe('SelectionQuoteButton — message body selection actions', () => {
     }
   });
 
+  // PR #9503 discussion_r4515218826: KaTeX includes both a clipped MathML
+  // accessibility copy and visible glyphs. Unit/DOM: actual Markdown output
+  // must contribute the selected visual text once, including partial endpoints.
+  it.each([false, true])('quotes a formula once without expanding a partial selection=%s', async (partial) => {
+    const onAskInSideChat = vi.fn(async (_quote: string) => true);
+    const nextUser = 'Please continue';
+    const stream = await renderMessages(onAskInSideChat, '$x+1$', nextUser);
+    const visualStart = stream.querySelector<HTMLElement>('.katex-html .mathnormal')!;
+    expect(visualStart.textContent).toBe('x');
+    selectText(screen.getByText(userText), partial ? visualStart : screen.getByText(nextUser));
+    const expected = `${userText}\n\n${partial ? 'x' : `x+1\n\n${nextUser}`}`;
+    if (partial) {
+      fireEvent.click(screen.getByRole('button', { name: 'chat.quote.addToChat' }));
+      expect(getDraft(sessionId)?.text?.content?.[0]?.content?.[0]?.attrs?.text).toBe(expected);
+    } else {
+      await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'chat.sideChat.title' })); });
+      expect(onAskInSideChat).toHaveBeenCalledExactlyOnceWith(expected);
+    }
+  });
+
+  // PR #9503 discussion_r4515218839: native select options are not selected
+  // message text. Unit/DOM: preserve the real RichAnswer label and following
+  // body, but omit the field's current value, placeholder and unused choices.
+  it('omits a native select subtree from a cross-message quote', async () => {
+    const nextUser = 'Please continue';
+    const operations = [
+      { version: 1, seq: 1, op: 'create', id: 'choice', kind: 'select', props: {
+        label: 'Choose a fruit', placeholder: 'Pick one', default: 'apple',
+        options: [{ label: 'Apple', value: 'apple' }, { label: 'Pear', value: 'pear' }],
+      } },
+      { seq: 2, op: 'create', id: 'body', kind: 'text', props: { text: 'Following body' } },
+    ];
+    await renderMessages(undefined, `\`\`\`cindy-ui\n${operations.map(op => JSON.stringify(op)).join('\n')}\n\`\`\``, nextUser);
+    const select = screen.getByRole('combobox', { name: 'Choose a fruit' });
+    fireEvent.change(select, { target: { value: 'pear' } });
+    expect((select as HTMLSelectElement).value).toBe('pear');
+    selectText(screen.getByText(userText), screen.getByText(nextUser));
+    fireEvent.click(screen.getByRole('button', { name: 'chat.quote.addToChat' }));
+    expect(getDraft(sessionId)?.text?.content?.[0]?.content?.[0]?.attrs?.text)
+      .toBe(`${userText}\nChoose a fruit\n\nFollowing body\n\n${nextUser}`);
+  });
+
   it('does not claim a selection extending beyond its message stream', async () => {
     await renderMessages(vi.fn(async () => true));
     const selection = selectText(screen.getByText(userText), screen.getByText('Outside the message stream'));

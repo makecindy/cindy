@@ -191,6 +191,10 @@ function readQuoteText(selection: Selection, range: Range): string {
       return;
     }
     if (!(node instanceof Element)) return;
+    // KaTeX's clipped accessibility tree duplicates its visible glyphs. Keep
+    // only the visual range, so a partial formula stays partial. Native fields
+    // hold interactive state/options, not selected prose (as in chat copy).
+    if (node.matches('.katex-mathml, input, textarea, select')) return;
     const style = getComputedStyle(node);
     if (style.display === 'none' || style.visibility === 'hidden') return;
     if (node.tagName === 'BR') { if (canSelect(node)) append('\n'); return; }
