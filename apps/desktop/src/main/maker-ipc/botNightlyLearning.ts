@@ -442,7 +442,9 @@ async function runLocked(
 
   const full = new Map(memoryFull.map((m) => [m.filename, m]));
   const memoryChanges = plan.memories.flatMap((op, id) => {
-    if (op.op !== 'update' || !full.has(op.filename)) return [];
+    if (op.op !== 'update') return [];
+    const prior = full.get(op.filename);
+    if (!prior || (op.title === prior.frontmatter.title && op.description === prior.frontmatter.description && op.body === prior.body)) return [];
     const sourceNames = new Set([op.filename]);
     for (const other of plan.memories) {
       if (other.op === 'delete' && other.mergedInto === op.filename) sourceNames.add(other.filename);
@@ -453,13 +455,29 @@ async function runLocked(
     }));
     return [{ id, proposal: { filename: op.filename, title: op.title, description: op.description, body: op.body }, sources }];
   });
+  const ownerSources: { source: string; text: string }[] = [];
+  let remaining = MESSAGE_BUDGET;
+  for (const message of messages) {
+    if (message.role !== 'user') continue;
+    const text = scan.ownerTexts.get(message.id);
+    if (text === undefined || text.length > remaining) {
+      remaining = -1;
+      break;
+    }
+    ownerSources.push({ source: `user:${message.id}`, text });
+    remaining -= text.length;
+  }
   const memorySupport = await reviewNightlyEvidence(ask,
     'Check each proposed replacement of a saved memory against the original record, any merge sources, and the user statements. ' +
     'For housekeeping, all claims in the title, description and body must follow from the records, preserving conditions, exceptions and still-valid preferences. ' +
     'A new or changed preference (including broader scope) requires an explicit user statement supporting the change; cite that statement. A reason given by the planner is not evidence.',
-    memoryChanges, messages.filter((m) => m.role === 'user').map((m) => ({ source: `user:${m.id}`, text: m.text })),
+    remaining < 0 ? [] : memoryChanges, ownerSources,
   );
   if (!current()) return { skipped: true, resultText: 'Owner changed' };
+  if (!memorySupport) {
+    await recordRun({ id: runId, at: startedAt, manual: manual || undefined, outcome: 'failed', turns: selected.length, items: [], errorCode: 'MODEL_UNAVAILABLE' }, undefined, false);
+    return { error: 'Could not verify nightly memory updates' };
+  }
   const items: NightlyLearningItem[] = [];
   const backup: NightlyLearningBackup = {};
   // 改动前先登记这次运行，每改一条就把备份和记录落盘：中途退出时已做的改动仍能在记录里撤销。
@@ -507,7 +525,6 @@ async function runLocked(
       if (op.op === 'update') {
         const evidence = memorySupport.get(plan.memories.indexOf(op));
         if (!evidence) continue;
-        if (op.body === live.body && op.title === live.frontmatter.title && op.description === live.frontmatter.description) continue;
         const afterSnap = await applyMemory(store!, op.filename, { ...beforeSnap!, title: op.title, description: op.description, body: op.body }, live.frontmatter.updatedAt);
         appliedUpdates.set(op.filename, op.title);
         await add({ kind: 'memory', action: 'updated', target: op.filename, title: op.title, reason: op.reason }, 'memory', beforeSnap, afterSnap, evidence);

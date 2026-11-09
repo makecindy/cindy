@@ -214,6 +214,7 @@ it('never overwrites edits made while the model was thinking, and keeps a merge 
       skills: [{ op: 'update', slug: 'deploy', title: 'Deploy', description: 'd', body: 'model steps', reason: 'r' }],
     }) };
   });
+  reply({ supported: [{ id: 1, source: `memory:${kept}`, quote: 'Report feature results.' }] });
   await runNightlyLearning('bot', { manual: true });
   expect(h.memories.get(kept).body).toBe('Report feature results.');
   expect(h.memories.get(dup).body).toBe('Only report results.');
@@ -245,6 +246,28 @@ it('keeps a scoped preference unless the reviewed change is grounded in an actua
     const backup = await readNightlyLearningBackup(h.root, 'bot', run!.id);
     expect(backup.i1?.evidence).toEqual({ source: 'user:user1', quote: wider });
   } finally { clock.mockRestore(); }
+});
+
+it('retries a correction after review failure and skips review for an identical update', async () => {
+  const filename = memory('report', '汇报', '汇报时先写判断。');
+  const body = '汇报时先写事实。';
+  await recordNightlyLearningTurn(h.root, 'bot', 'main', 1000);
+  h.rows = [turn(1, body, 1000)];
+  const update = { op: 'update', filename, title: '汇报', description: 'd', body, reason: '纠正' };
+  reply({ memories: [update] });
+  h.model.mockResolvedValueOnce({ ok: false, reason: 'timeout' });
+  await expect(runNightlyLearning('bot', { manual: false })).resolves.toHaveProperty('error');
+  expect((await readNightlyLearningState(h.root, 'bot'))!.pending.turns).toBe(1);
+  expect(h.memories.get(filename).body).toBe('汇报时先写判断。');
+
+  reply({ memories: [update] });
+  reply({ supported: [{ id: 0, source: 'user:user1', quote: body }] });
+  await runNightlyLearning('bot', { manual: false });
+  expect(sentIds(2)).toEqual(['user1', 'reply1']);
+  expect(h.memories.get(filename).body).toBe(body);
+  reply({ memories: [update] });
+  await runNightlyLearning('bot', { manual: true });
+  expect(h.model).toHaveBeenCalledTimes(5);
 });
 
 it('retains both merge records if the reviewer cannot support the replacement', async () => {
