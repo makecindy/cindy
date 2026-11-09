@@ -10,6 +10,8 @@ import { Tooltip } from '@/components/ui/tooltip';
 import { ConfirmDialogProvider } from '@/components/ui/confirm-dialog-provider';
 import { UserMessage } from '../components/chat/UserMessage';
 import { AssistantMessage } from '../components/chat/AssistantMessage';
+import { MessageSourceLabels } from '../components/chat/MessageSourceLabels';
+import { BotMessageTimelineHeader } from '../components/chat/BotMessageTimelineHeader';
 import { clearDraft, getDraft } from '@/lib/composerDraftStore';
 import { formatQuoteForSend } from '@/lib/chatQuotes';
 
@@ -53,7 +55,11 @@ vi.mock('@/i18n', async () => {
 // Costs/timestamps still use the real action bar. These cases have no model name.
 vi.mock('../../shared/usageModelLabel', () => ({ formatModelShort: outsideSelectionCase }));
 vi.mock('@/lib/modelShortLabel', () => ({ formatModelShortLabel: outsideSelectionCase }));
-vi.mock('../components/chat/AutomationOriginBadge', () => ({ AutomationOriginBadge: outsideSelectionCase }));
+vi.mock('../components/chat/AutomationOriginBadge', () => ({
+  AutomationOriginBadge: outsideSelectionCase,
+  // Keep the real source row and its text; label navigation is outside selection.
+  MessageSourceLabelShell: ({ label }: { label: string }) => label,
+}));
 // Plugin cards are absent from these text-only messages; avoid loading their editors.
 vi.mock('../components/chat/GhostToolCard', () => ({
   CARD_EXPAND_TOGGLE_EVENT: 'xdt-card-expand-toggle',
@@ -191,6 +197,10 @@ describe('SelectionQuoteButton — message body selection actions', () => {
                 createdAt: '2026-11-09T10:00:00Z', sharedAuthorName: 'Message author',
                 ...userProps,
               }),
+              // Stream-owned metadata must not depend on being nested inside
+              // UserMessage/AssistantMessage to stay out of a selected quote.
+              createElement(BotMessageTimelineHeader, { startsUnread: true, groupTimestamp: 1794218400000 }),
+              createElement(MessageSourceLabels, { sourceGroup: { groupId: 'group-1', name: 'Planning' }, align: 'start' }),
               createElement(AssistantMessage, {
                 workingDir: '', content: reply,
                 createdAt: '2026-11-09T10:01:00Z', ghostReplyPending: true,
@@ -273,9 +283,16 @@ describe('SelectionQuoteButton — message body selection actions', () => {
     ]);
   });
 
-  it.each(['user', 'assistant'])('does not offer quote actions for %s message metadata', async (source) => {
+  // PR #9503 discussion_r4514435440: source labels and timeline separators are
+  // stream siblings, not children of a message scope. The same real components
+  // now exercise that missing boundary in cross-body cases and standalone picks.
+  it.each(['user', 'assistant', 'source', 'unread', 'time'] as const)('does not offer quote actions for %s message metadata', async (source) => {
     await renderMessages(vi.fn(async () => true));
-    const selection = selectText(screen.getByText(source === 'user' ? 'Message author' : 'chat.ghostHook.processing'));
+    const target = source === 'time'
+      ? document.querySelector<HTMLElement>('time[datetime="2026-11-09T10:00:00.000Z"]')!
+      : screen.getByText({ user: 'Message author', assistant: 'chat.ghostHook.processing',
+          source: 'chat.userMessage.groupSentNamed', unread: 'bots.chat.newMessagesBoundary' }[source]!);
+    const selection = selectText(target);
     expect(screen.queryByRole('button', { name: 'chat.quote.addToChat' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'chat.sideChat.title' })).toBeNull();
     act(() => nativeAddToChat());
