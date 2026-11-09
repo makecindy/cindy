@@ -155,7 +155,12 @@
         "details": "請重新傳送訊息；若仍失敗，請查看記錄並回報問題。"
       }
     },
-    "runtimeFailureSetupHint": "如需調整模型或設定，請在夥伴所屬電腦上處理。"
+    "runtimeFailureSetupHint": "如需調整模型或設定，請在夥伴所屬電腦上處理。",
+    "capability": {
+      "GROUP_AUTHORIZATION_REQUIRED": "{{name}} 的工具呼叫未執行：群內授權已失效或不允許此操作。請由夥伴主人在目前群組重新發起。",
+      "GROUP_AUTHORIZATION_UNAVAILABLE": "暫時無法核驗 {{name}} 的群聊授權，這次工具呼叫未執行。請在連線恢復後重試。",
+      "ATTACHMENTS_UNAVAILABLE": "部分附件未交給 {{name}}（下載失敗或數量限制）。請重新傳送這次需要的附件。"
+    }
   },
   "plan": {
     "intro_one": "這件事分 {{count}} 步，我這樣分工：",
@@ -186,7 +191,21 @@
     "awaitingStart": "等你開始",
     "progressRunning": "正在做 {{current}} / {{total}}",
     "progressDone": "做完 {{done}} / {{total}}",
-    "allDone": "都做完了"
+    "allDone": "都做完了",
+    "stepQueued": "等待開始",
+    "stepExecuting": "執行中",
+    "stepSkipped": "已略過",
+    "skippingTurn": "略過中…",
+    "queueWaiting": "等你點繼續",
+    "skipTurnLabel": "略過 {{name}}",
+    "stepSpoken": "說完了",
+    "allTurns_one": "共 {{count}} 位",
+    "allTurns_other": "共 {{count}} 位",
+    "foldTurns": "收起",
+    "talkTitle": "依序說說看法",
+    "talkPending": "待開始",
+    "skipTurn": "略過",
+    "queueEnded": "本輪結束"
   },
   "speaking": {
     "queued": "排隊中",
@@ -304,7 +323,8 @@
     "lifecycleUnavailable": "目前伺服器或電腦尚不支援此操作。",
     "groupDissolved": "群聊已解散，仍可查看有權存取的歷史訊息。",
     "lastOwner": "請先轉讓群主或解散群聊，再退出。",
-    "allBotsMentionDisabled": "群主尚未開啟 @所有夥伴。"
+    "allBotsMentionDisabled": "群主尚未開啟 @所有夥伴。",
+    "turnAlreadyStarted": "這位夥伴已開始執行，不能略過"
   },
   "followUp": {
     "next": "分工 · 下一步",
@@ -500,6 +520,7 @@
     "searchMembers": "搜尋成員",
     "membersNoMatch": "找不到「{{query}}」",
     "you": "你",
+    "companionOf": "{{name}} 的夥伴",
     "teammateTag": "夥伴",
     "paused": "已暫停",
     "accessNone": "僅主人可用",

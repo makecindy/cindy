@@ -4,9 +4,24 @@ import {
   getWallpaperVeil,
   clampAppearanceWallpaperOverlay,
   getWallpaperVisibility,
+  getBackgroundVisibility,
 } from '../appearanceSettings';
 
 describe('wallpaper catalog compatibility', () => {
+  // Unit upgrade contract: legacy/default artwork settings are not desktop consent.
+  it.each([false, true])('defaults desktop to opaque without changing artwork (dark=%s)', dark => {
+    for (const wallpaperVisibility of [undefined, 0, 0.8, 1]) {
+      const settings = normalizeAppearanceSettings({ wallpaperVisibility, wallpaperBlur: 12 });
+      expect(getBackgroundVisibility(settings, dark)).toBe(0);
+      expect(getBackgroundVisibility({ ...settings, wallpaperId: 'cindy-window' }, dark))
+        .toBe(wallpaperVisibility ?? (dark ? 0.27 : 0.37));
+      expect(getBackgroundVisibility(normalizeAppearanceSettings({ ...settings, desktopVisibility: 0.6 }), dark)).toBe(0.6);
+      for (const desktopVisibility of [null, undefined, NaN, Infinity, '0.6']) {
+        expect(getBackgroundVisibility(normalizeAppearanceSettings({ ...settings, desktopVisibility }), dark)).toBe(0);
+      }
+    }
+  });
+
   it.each([false, true])(
     'preserves legacy visuals but gives explicit visibility the full range (dark=%s)',
     (dark) => {
@@ -95,6 +110,7 @@ describe('wallpaper catalog compatibility', () => {
         terminalFamily: '',
         terminalSize: 13,
         wallpaperId: 'none',
+        appIcon: 'default',
         customWallpaperUrl: '',
         wallpaperMotion: 'dynamic',
         wallpaperOverlay: 0.35,

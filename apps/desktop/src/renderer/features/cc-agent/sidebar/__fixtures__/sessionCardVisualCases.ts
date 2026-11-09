@@ -68,7 +68,7 @@ export const sessionCardVisualCases: SessionCardVisualCase[] = [
   },
   {
     id: 'two-line-title-codex',
-    label: '两行标题 / Codex / 短正文',
+    label: '短标题 / Codex / 短正文',
     session: makeSession({
       id: 'two-line-title-codex',
       title: '部门Token用量分析',
@@ -79,7 +79,7 @@ export const sessionCardVisualCases: SessionCardVisualCase[] = [
   },
   {
     id: 'very-long-title',
-    label: '超长标题 / 普通正文 / 两行截断',
+    label: '超长标题 / 普通正文 / 单行截断',
     session: makeSession({
       id: 'very-long-title',
       title: '这是一个很长很长的标题用于验证置顶卡片两行截断和第二行左侧对齐关系',
@@ -90,7 +90,7 @@ export const sessionCardVisualCases: SessionCardVisualCase[] = [
   },
   {
     id: 'summary-long-body',
-    label: '中等标题 / summary 三行预算',
+    label: '中等标题 / summary 两行预算',
     session: makeSession({
       id: 'summary-long-body',
       title: '玩家反馈精华回复整理',

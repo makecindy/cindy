@@ -16,6 +16,7 @@ import {
   type CSSProperties,
   forwardRef,
   useEffect,
+  useContext,
   useImperativeHandle,
   useRef,
   useState,
@@ -24,6 +25,7 @@ import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/lib/utils';
 import { RightSidebarShell } from '@/features/right-sidebar/RightSidebarShell';
+import { SidebarPresentationContext } from '@/layout/sidebarPresentation';
 import { usePanelWidth } from '@/layout/paneWidths';
 import { CHAT_AREA_MIN_WIDTH } from '@/hooks/useRightSidebarResize';
 import { CHROME_ACTIONS_GEOMETRY } from './chromeActionsGeometry';
@@ -88,7 +90,7 @@ interface RightSidebarProps {
 
 export const RightSidebar = forwardRef<RightSidebarHandle, RightSidebarProps>(function RightSidebar(
   {
-    isCollapsed,
+    isCollapsed: requestedCollapsed,
     width,
     isMac,
     onCloseSidebar,
@@ -109,6 +111,9 @@ export const RightSidebar = forwardRef<RightSidebarHandle, RightSidebarProps>(fu
   ref,
 ) {
   const { t } = useTranslation();
+  const presentation = useContext(SidebarPresentationContext);
+  const isCollapsed = presentation?.collapsed ?? requestedCollapsed;
+  const instant = presentation?.instant ?? false;
 
   // 折叠 / 展开过渡动画 —— **只在 toggle 按钮主动 prime 时跑**;其它任何 isCollapsed prop
   // 变化(sessionId 切换 / 草稿切换 / init 等)默认都直接同步 displayCollapsed = isCollapsed,
@@ -146,7 +151,8 @@ export const RightSidebar = forwardRef<RightSidebarHandle, RightSidebarProps>(fu
   );
 
   useEffect(() => {
-    if (!animateNextRef.current) {
+    if (instant || !animateNextRef.current) {
+      animateNextRef.current = false;
       // 默认路径:直接同步,不动画(sessionId 切换 / init / 任何非 toggle 引起的变化)
       setAnimating(false);
       setAnimationWidthSnapshot(null);
@@ -167,10 +173,13 @@ export const RightSidebar = forwardRef<RightSidebarHandle, RightSidebarProps>(fu
       window.cancelAnimationFrame(raf);
       window.clearTimeout(timer);
     };
-  }, [isCollapsed]);
+  }, [isCollapsed, instant]);
+
+  const visibleCollapsed = instant ? isCollapsed : displayCollapsed;
+  const visibleAnimating = !instant && animating;
 
   const expandedSidebarStyle: CSSProperties | undefined =
-    !displayCollapsed && !isMaximized
+    !visibleCollapsed && !isMaximized
       ? {
           width: effectiveWidth,
           flexShrink: 1,
@@ -178,7 +187,7 @@ export const RightSidebar = forwardRef<RightSidebarHandle, RightSidebarProps>(fu
         }
       : undefined;
   const contentStyle: CSSProperties | undefined =
-    !isMaximized && animating && animationWidthSnapshot !== null
+    !isMaximized && visibleAnimating && animationWidthSnapshot !== null
       ? { width: animationWidthSnapshot }
       : undefined;
 
@@ -190,11 +199,11 @@ export const RightSidebar = forwardRef<RightSidebarHandle, RightSidebarProps>(fu
       data-panel-drag-root="right-tabs"
       // 折叠态标记:引擎分割线的 CSS 据此隐藏邻接缝(globals.css .layout-divider-*),
       // 收起到 0 宽时不在窗口边缘留孤线。
-      data-pane-collapsed={displayCollapsed ? '' : undefined}
+      data-pane-collapsed={visibleCollapsed ? '' : undefined}
       className={cn(
         // 侧边分割线由布局引擎统一绘制,aside 与内容层都不自画竖线。
         'relative flex flex-col bg-content-area',
-        animating &&
+        visibleAnimating &&
           'transition-[width] duration-[250ms] ease-[cubic-bezier(0.4,0,0.2,1)] motion-reduce:duration-0',
         // maximize 态:用 flex-1 撑满 row 内 sidebar 之后的剩余空间,不传 fixed
         // width —— 否则普通态的引擎 pane width 在 main hidden 后仍会留下固定宽,
@@ -204,7 +213,7 @@ export const RightSidebar = forwardRef<RightSidebarHandle, RightSidebarProps>(fu
         isMaximized ? 'flex-1' : 'shrink',
         'min-w-0 max-w-full',
         'overflow-hidden',
-        displayCollapsed && 'w-0',
+        visibleCollapsed && 'w-0',
       )}
       style={expandedSidebarStyle}
       aria-hidden={isCollapsed || undefined}
@@ -266,7 +275,7 @@ export const RightSidebar = forwardRef<RightSidebarHandle, RightSidebarProps>(fu
           remoteHostId={remoteHostId}
           deviceLinkDeviceId={deviceLinkDeviceId}
           subagentsAvailable={subagentsAvailable}
-          shellVisible={!displayCollapsed}
+          shellVisible={!visibleCollapsed}
           isMac={isMac}
           unifiedTopbar={isMac}
           onCloseSidebar={onCloseSidebar}

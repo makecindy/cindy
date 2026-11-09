@@ -17,10 +17,11 @@ import { BotGroupProcess } from './BotGroupProcess';
  * 让它重绘；回调一律是父组件的稳定引用，按消息 id 调用。
  */
 import type { BotGroupAuthorKind } from '@cindy/maker-shared/botGroupChat';
-import { botGroupBodyParts } from '@cindy/maker-shared/botGroupPresentation';
-import { memo, useEffect, useState, useLayoutEffect, useRef, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
+import { hasRichAnswer } from '@cindy/maker-shared/rich-answer';
+import { memo, useMemo, useEffect, useState, useLayoutEffect, useRef, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { CircleAlert, CornerDownRight, RefreshCcw } from 'lucide-react';
+import { BotGroupCapabilityNotice } from './BotGroupCapabilityNotice';
 import { BotGroupThreadPreview, BotGroupThreadShareQuote, botGroupThreadShareLabel } from './BotGroupThreadViews';
 import { toast } from '@/lib/toast';
 import { editBotGroupSend, retryBotGroupSend, type BotGroupOutboxEntry } from './botGroupOutbox';
@@ -28,6 +29,7 @@ import { editBotGroupSend, retryBotGroupSend, type BotGroupOutboxEntry } from '.
 import { formatBotTimelineClock, formatBotTimelineDate } from '@cindy/maker-shared/botTimeline';
 import { MarkdownRenderer } from '@/components/chat/MarkdownRenderer';
 import { ChatBubble, CHAT_BUBBLE_COLUMN_CLASS } from '@/components/chat/ChatBubble';
+import { SessionQuickSendProvider } from '@/components/chat/SessionQuickSendContext';
 import { ShareMessageCheckbox } from '@/components/chat/ShareMessageCheckbox';
 import { Button } from '@/components/ui/button';
 import { SHARE_EXCLUDE_ATTR, SHARE_MESSAGE_ATTR, SHARE_SESSION_ATTR } from '@/lib/shareConversationImage';
@@ -41,7 +43,7 @@ import type {
   BotGroupQuoteDisplay,
   BotGroupQuoteView,
 } from '../../../shared/botGroupChat';
-import { isBotGroupRuntimeFailureCode } from '../../../shared/botGroupChat';
+import { isBotGroupCapabilityNoticeCode, isBotGroupRuntimeFailureCode } from '../../../shared/botGroupChat';
 import { GroupMaskMessageAvatar } from './GroupMaskControls';
 import { useGroupMask, maskIdentity } from './groupMaskPresentation';
 import { BotAvatar } from './BotAvatar';
@@ -167,7 +169,9 @@ function ReadTailRow() {
   return <div aria-hidden {...{ [SHARE_EXCLUDE_ATTR]: '' }} className="h-5 shrink-0" />;
 }
 
-function BotGroupMessageText({ content, mentionLabels, members, mentions, serverBacked, authorKind, readTail = false }: {
+function BotGroupMessageText({ content, mentionLabels, members, mentions, serverBacked, authorKind, messageKey, onRichSend, readTail = false }: {
+  messageKey?: string;
+  onRichSend?: (text: string) => Promise<boolean>;
   /** Reserve room for the read check at the end of the last line. */
   readTail?: boolean;
   authorKind?: BotGroupAuthorKind; content: string; mentionLabels: readonly string[]; members: readonly BotGroupMemberView[];
@@ -175,6 +179,7 @@ function BotGroupMessageText({ content, mentionLabels, members, mentions, server
   mentions: BotGroupMention;
   serverBacked: boolean;
 }) {
+  const sender = useMemo(() => onRichSend ? { send: onRichSend } : null, [onRichSend]);
   const ref = useRef<HTMLDivElement>(null);
   const rangesRef = useRef<Range[]>([]);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -247,9 +252,10 @@ function BotGroupMessageText({ content, mentionLabels, members, mentions, server
   return (
     <div ref={ref} className="relative min-w-0 break-words" onPointerMove={onPointerMove}
       onPointerLeave={() => { if (ref.current) ref.current.style.cursor = ''; scheduleClose(); }}>
-      {botGroupBodyParts(content, authorKind).map((part, index) => part.kind === 'markdown'
-        ? <MarkdownRenderer key={index} workingDir="" content={part.content} allowPrivilegedLinks={false} />
-        : <p key={index} className="whitespace-pre-wrap break-words">{part.content}</p>)}
+      <SessionQuickSendProvider value={authorKind === 'bot' ? sender : null}>
+        <MarkdownRenderer workingDir="" content={content} allowPrivilegedLinks={false}
+          renderRichAnswers={authorKind === 'bot'} streamFadeKey={messageKey} />
+      </SessionQuickSendProvider>
       {readTail && tailRow ? <ReadTailRow /> : null}
       <BotGroupMentionCard member={card?.member ?? null} anchor={card?.anchor ?? null}
         onPointerEnter={keepOpen} onPointerLeave={scheduleClose} />
@@ -333,7 +339,9 @@ export interface BotGroupTimelineItemProps {
   planDoneAt?: ReadonlyMap<number, number>;
   onPlanAction?: (action: 'start' | 'dismiss', planId: string) => void;
   readOnly?: boolean;
-  onEditStep?: (planId: string, step: BotGroupPlanStepView, action: 'reassign' | 'remove', botId?: string) => void;
+  /** Explicit component submissions use this room or thread, independently of composer drafts. */
+  onRichSend?: (text: string) => Promise<boolean>;
+  onEditStep?: (planId: string, step: BotGroupPlanStepView, action: 'reassign' | 'remove' | 'skip', botId?: string) => void;
   /** Present on the open 分工 card for whoever may press 继续 (§7.4). */
   onPlanAutoContinue?: (planId: string, on: boolean) => void;
 }
@@ -408,6 +416,9 @@ function BotGroupTimelineItemImpl(props: BotGroupTimelineItemProps) {
   }
   if (message.kind === 'notice' || message.authorKind === 'system') {
     const name = message.authorName.trim() || authorName;
+    if (isBotGroupCapabilityNoticeCode(message.capabilityNoticeCode)) return <Row {...rowProps} block="system">
+      <BotGroupCapabilityNotice name={name} code={message.capabilityNoticeCode} />
+    </Row>;
     if (isBotGroupRuntimeFailureCode(message.runtimeFailureCode)) {
       return (
         <Row {...rowProps} block="system">
@@ -456,7 +467,7 @@ function BotGroupTimelineItemImpl(props: BotGroupTimelineItemProps) {
   const shareBody = share ? <>
     <p className="flex select-none items-center gap-1 text-12 text-[var(--text-tertiary)]">
       <CornerDownRight size={12} aria-hidden />{sending ? t('bots.groupChat.timeline.sending') : botGroupThreadShareLabel(share, t)}</p>
-    <BotGroupThreadShareQuote share={share} members={members} inset={!self}
+    <BotGroupThreadShareQuote share={share} members={members} inset={!self} richScope={props.reactionGroupId ?? shareScope}
       attachments={<BotGroupMessageAttachments attachments={share.attachments} align="start" />}
       onOpenThread={props.onOpenThread ? () => props.onOpenThread!(share.threadRootId, share.messageId) : undefined} />
   </> : null;
@@ -529,12 +540,13 @@ function BotGroupTimelineItemImpl(props: BotGroupTimelineItemProps) {
       <Row {...rowProps} block="author">
         <div className="flex min-w-0 gap-2.5">
           <span aria-hidden className="w-7 shrink-0" />
-          <div data-testid="bot-group-arrangement" className={cn('min-w-0', CHAT_BUBBLE_COLUMN_CLASS)}>
-            <div className="w-fit min-w-0 max-w-full">
+          <div data-testid="bot-group-arrangement" className={cn('w-full min-w-0', CHAT_BUBBLE_COLUMN_CLASS)}>
+            <div className="w-full min-w-0 max-w-full">
               <BotGroupPlanCard
                 plan={props.plan}
                 members={members}
                 actionable={false}
+                readOnly={props.readOnly}
                 // Only the creator, an owner or an admin may change who speaks next.
                 reassignable={(props.planReassignable ?? false) && props.plan.canManage !== false}
                 pending={props.planPending ?? null}
@@ -590,7 +602,8 @@ function BotGroupTimelineItemImpl(props: BotGroupTimelineItemProps) {
               ) : null}
             </span>
           ) : null}
-          <div className={cn('relative flex min-w-0 flex-col', CHAT_BUBBLE_COLUMN_CLASS)}>
+          <div className={cn('relative flex min-w-0 flex-col', CHAT_BUBBLE_COLUMN_CLASS,
+            message.authorKind === 'bot' && hasRichAnswer(share?.content ?? message.content) && 'w-full')}>
             <ChatMessageReactions corner groupId={props.reactionGroupId} message={message} members={members} reactionRevision={props.reactionRevision} onChanged={props.onChanged} />
             {message.process && message.process.groupId === props.reactionGroupId ? <BotGroupProcess process={message.process}
               member={members.find(member => member.botId === message.authorBotId)} /> : null}
@@ -619,7 +632,8 @@ function BotGroupTimelineItemImpl(props: BotGroupTimelineItemProps) {
                   {shareBody}
                   {!share && hasText ? (
                     <div className="min-w-0">
-                      <BotGroupMessageText authorKind={message.authorKind} content={message.content} mentionLabels={mentionLabels} members={members} mentions={message.mentions ?? NO_MENTIONS} serverBacked={Boolean(props.reactionGroupId)} />
+                      <BotGroupMessageText authorKind={message.authorKind} messageKey={`group:${props.reactionGroupId ?? shareScope}:${message.id}`}
+                        onRichSend={!props.readOnly && !sharing ? props.onRichSend : undefined} content={message.content} mentionLabels={mentionLabels} members={members} mentions={message.mentions ?? NO_MENTIONS} serverBacked={Boolean(props.reactionGroupId)} />
                     </div>
                   ) : null}
                   {/* A task this teammate started from the group, under what it said about it; mine is live
@@ -651,6 +665,7 @@ function BotGroupOutboxStatus({ entry, readOnly }: { entry: BotGroupOutboxEntry;
   const { t } = useTranslation();
   const sending = entry.status === 'sending';
   const [slow, setSlow] = useState(false);
+  const [editing, setEditing] = useState(false);
   useEffect(() => {
     if (!sending) {
       setSlow(false);
@@ -679,15 +694,19 @@ function BotGroupOutboxStatus({ entry, readOnly }: { entry: BotGroupOutboxEntry;
             size="sm"
             compact
             type="button"
-            disabled={readOnly}
-            onClick={() => {
-              if (!editBotGroupSend(entry.input.groupId, entry.input.clientId)) toast.warning(t('bots.groupChat.outbox.editBlocked'));
+            disabled={readOnly || editing}
+            onClick={async () => {
+              setEditing(true);
+              try {
+                if (!await editBotGroupSend(entry.input.groupId, entry.input.clientId)) toast.warning(t('bots.groupChat.outbox.editBlocked'));
+              } catch { toast.error(t('bots.groupChat.composer.sendFailed')); }
+              finally { setEditing(false); }
             }}
           >
             {t('bots.groupChat.outbox.edit')}
           </Button>
           {entry.retryable !== false ? (
-            <Button variant="secondary" size="sm" compact type="button" disabled={readOnly} onClick={() => retryBotGroupSend(entry.input.groupId, entry.input.clientId)}>
+            <Button variant="secondary" size="sm" compact type="button" disabled={readOnly || editing} onClick={() => retryBotGroupSend(entry.input.groupId, entry.input.clientId)}>
               <RefreshCcw size={13} />
               {t('bots.retry')}
             </Button>

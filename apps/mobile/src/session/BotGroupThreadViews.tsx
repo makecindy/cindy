@@ -15,6 +15,7 @@ import type { BotGroupIdentityLookup } from './BotGroupPlan';
 import { BotGroupMenu } from './BotGroupMenu';
 import { BotGroupMessageAttachments } from './BotGroupMessageAttachments';
 import { BotGroupMarkdownText } from './BotGroupMessageText';
+import type { BotGroupMentionContext } from './botGroupMentions';
 import type { ResolveRemoteMediaFn } from './remoteMedia';
 
 type BotGroupThreadSummary = Pick<BotGroupMessageView, 'replyCount' | 'threadPreview' | 'threadUnread'>;
@@ -53,8 +54,11 @@ export function BotGroupThreadFollow({ nativeHeader = false, following, online, 
     disabled, busy, testID: 'botGroup.thread.follow', onPress: toggle }} />;
 }
 
-export function BotGroupThreadShare({ share, resolveMedia, resolveServerMedia, onRetry }: {
+export function BotGroupThreadShare({ share, mentionContext, resolveMedia, resolveServerMedia, onRetry, messageKey, messageId, onOpenDiagram, interactive = true, active = true }: {
+  messageKey?: string; messageId?: string;
   share: BotGroupThreadShareView; resolveMedia: ResolveRemoteMediaFn;
+  onOpenDiagram?: (source: string) => void; interactive?: boolean; active?: boolean;
+  mentionContext?: BotGroupMentionContext;
   resolveServerMedia?: (id: string, signal?: AbortSignal) => Promise<BotGroupAttachment>; onRetry?(): void;
 }) {
   const { t } = useTranslation(); const styles = useThemedStyles(makeStyles); const { colors } = useTheme();
@@ -65,7 +69,7 @@ export function BotGroupThreadShare({ share, resolveMedia, resolveServerMedia, o
       : <>
         <Text style={styles.count}>{share.authorName}{share.edited ? ` · ${t('groupChat.thread.edited')}` : ''}</Text>
         {share.attachments.length ? <BotGroupMessageAttachments messageId={share.messageId} attachments={share.attachments} align="left" onResolveRemoteMedia={resolveMedia} resolveServerMedia={resolveServerMedia} /> : null}
-        <BotGroupMarkdownText content={share.content} authorKind={share.authorKind} />
+        <BotGroupMarkdownText readOnly messageKey={messageKey} messageId={messageId} richContent active={active} interactive={interactive} onOpenDiagram={onOpenDiagram} content={share.content} authorKind={share.authorKind} mentionContext={mentionContext} />
       </>}
   </View>;
 }

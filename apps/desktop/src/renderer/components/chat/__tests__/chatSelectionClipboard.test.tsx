@@ -216,8 +216,10 @@ describe('chat selection clipboard', () => {
     const html = formats.find(([type]) => type === 'text/html')![1];
     const pasted = document.createElement('div');
     pasted.innerHTML = html;
-    // Running retains its adjacent status glyph, but no action-row icons.
-    expect(pasted.querySelectorAll('svg')).toHaveLength(state === 'running' ? 1 : 0);
+    // Upstream now renders the running status as a decorative aria-hidden CSS
+    // dot (no longer an SVG spinner); the empty dot is dropped as decoration,
+    // and no action-row icons may leak into either format.
+    expect(pasted.querySelectorAll('svg')).toHaveLength(0);
     // Excluding copy must not remove or disable the original task actions.
     expect(root.querySelectorAll('button').length).toBeGreaterThan(1);
   });

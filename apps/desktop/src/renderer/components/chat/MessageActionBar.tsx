@@ -127,6 +127,9 @@ interface MessageActionBarProps {
   /** When provided, render an Edit (Pencil) button (last user message only).
    *  Click is fire-and-forget — the parent owns the inline edit lifecycle. */
   onEdit?: () => void;
+  /** Move Edit from the bar into the More menu (the task is running: editing
+   *  does not stop it, and the visible button returns once it stops). */
+  editInMenu?: boolean;
   /** When provided, render a Rewind (Undo2) button (user messages only).
    *  Click is fire-and-forget — the parent owns the dialog lifecycle and
    *  signals the loading state via `rewindInFlight`. */
@@ -181,6 +184,7 @@ export function MessageActionBar({
   reactionAction,
   onDelete,
   onEdit,
+  editInMenu = false,
   onRewind,
   rewindInFlight = false,
   turnMoney,
@@ -601,7 +605,7 @@ export function MessageActionBar({
   // Edit (Pencil) button — last user message only. Enters the inline edit
   // state owned by UserMessage; keep it disabled while any message action is
   // in flight so editing cannot race with Fork's history read or a menu action.
-  const editBtn = onEdit && (
+  const editBtn = onEdit && !editInMenu && (
     <Tooltip.Root key="edit">
       <Tooltip.Trigger asChild>
         <button
@@ -629,10 +633,11 @@ export function MessageActionBar({
   // “添加到对话”，伙伴对话则将同一动作外显成“回复”。
   // 面板/行几何遵守 12px container + 8px inner-control 两档圆角。
   const canRewind = Boolean(onRewind);
+  const onEditInMenu = editInMenu ? onEdit : undefined;
   const addToChatInMenu = simplifiedBotConversation ? undefined : onAddToChat;
   const moreTriggerRef = useRef<HTMLButtonElement>(null);
   const pendingTopicRef = useRef(false);
-  const moreMenu = (compact || companionFooter || addToChatInMenu || menuActions?.length || copyLinkText || canRewind || onDelete) && (
+  const moreMenu = (compact || companionFooter || addToChatInMenu || menuActions?.length || copyLinkText || onEditInMenu || canRewind || onDelete) && (
     <DropdownMenu key="more" open={menuOpen} onOpenChange={setMenuOpen}>
       <DropdownMenuTrigger asChild>
         <Tip text={t('chat.messageActionBar.moreActions')}>
@@ -755,6 +760,19 @@ export function MessageActionBar({
             {t('chat.messageActionBar.copyLink')}
           </DropdownMenuItem>
         )}
+        {onEditInMenu && (
+          <DropdownMenuItem
+            disabled={inFlight}
+            onSelect={(event) => {
+              event.stopPropagation();
+              onEditInMenu();
+            }}
+            className={MENU_ITEM_CLASS}
+          >
+            <Pencil size={14} strokeWidth={2} className="shrink-0" />
+            {t('chat.messageActionBar.edit')}
+          </DropdownMenuItem>
+        )}
         {canRewind && (
           <DropdownMenuItem
             disabled={rewindInFlight}
@@ -770,7 +788,7 @@ export function MessageActionBar({
         )}
         {onDelete && (
           <>
-            {(addToChatInMenu || menuActions?.length || copyLinkText || canRewind) && (
+            {(addToChatInMenu || menuActions?.length || copyLinkText || onEditInMenu || canRewind) && (
               <DropdownMenuSeparator />
             )}
             <DropdownMenuItem

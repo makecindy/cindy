@@ -26,6 +26,7 @@ import {
   buildHookCommandForScriptFile,
   applyRunMode,
   buildScheduleInput,
+  webhookSourceFormFields,
   canSubmitSessionBinding,
   captureBinding,
   deriveRunMode,
@@ -44,6 +45,7 @@ import {
   usesBoundSessionModel,
 } from '../scheduleFormLogic';
 import type { ScheduleFormState } from '../scheduleFormLogic';
+import { formToProjectConfig } from '../projectAutomationConfig';
 import {
   cronExprToIntervalMs,
   intervalMsToCronExpr,
@@ -75,6 +77,18 @@ const tapsvcProvider: ProviderView = {
 // An automation with both a script and a plugin (set by an Agent) opens on the
 // plugin; saving an unrelated edit must keep the script, while choosing the plugin instead of a
 // script must still drop it. Existing cases do not cover the plugin source.
+// Issue 8886 / unit: both desktop save paths must retain, edit and clear the cutoff.
+it('serializes deadline edits through normal and project automation forms', () => {
+  const expireAt = new Date(2027, 3, 5, 10, 30, 15).getTime();
+  const form = makeForm({ deadline: '2027-04-05T10:30', sourceExpireAt: expireAt });
+  expect(buildScheduleInput(form).expireAt).toBe(expireAt);
+  expect(formToProjectConfig(form, 'expiry').expireAt).toBe(expireAt);
+  expect(buildScheduleInput({ ...form, deadline: '' }).expireAt).toBeNull();
+  expect(formToProjectConfig({ ...form, deadline: '' }, 'expiry').expireAt).toBeUndefined();
+  expect(buildScheduleInput({ ...form, deadline: '2027-04-06T11:45' }).expireAt)
+    .toBe(new Date(2027, 3, 6, 11, 45).getTime());
+});
+
 describe('buildPreRunHook with a plugin source', () => {
   const form = { preRunHookEnabled: true, preRunHookCommand: 'sh check.sh', preRunHookTimeoutSec: '' };
   it('keeps the saved script only when the task opened with both', () => {
@@ -321,6 +335,58 @@ describe('canSubmitSessionBinding', () => {
       state: 'available',
       status: 'archived',
     })).toBe(true);
+  });
+});
+
+// Rule: docs/product-rules/schedule-webhook-trigger.md. Turning the switch off must clear the
+// trigger, and a caller that never touched it must not; JSON null is the only clearing form.
+describe('buildScheduleInput webhook trigger', () => {
+  it.each([
+    [{ webhookEnabled: true, webhookEvents: ' check_suite, pull_request.closed ,' }, { events: ['check_suite', 'pull_request.closed'] }],
+    [{ webhookEnabled: true, webhookEvents: '' }, { events: [] }],
+    [{ webhookEnabled: false, webhookEvents: 'issues' }, null],
+  ])('%j', (fields, expected) => {
+    expect(buildScheduleInput(makeForm(fields)).webhookTrigger).toEqual(expected);
+  });
+
+  it('omits the key when the form does not carry the field', () => {
+    expect(Object.prototype.hasOwnProperty.call(buildScheduleInput(makeForm()), 'webhookTrigger')).toBe(false);
+  });
+
+  // A sender this build does not know came from a newer version; submitting it as GitHub
+  // would switch the server's format and reject every delivery.
+  it.each([
+    [{ webhookPreset: 'stripe', webhookSigned: false }, { preset: 'stripe', signed: false }],
+    [{ webhookPreset: 'linear', webhookSigned: true }, { preset: 'linear' }],
+    [{ webhookPreset: 'from-a-newer-version' }, undefined],
+    [{ webhookPreset: 'custom', webhookFormat: '{"version":1,"signature":null,"fields":{}}' }, { preset: 'custom', format: { version: 1, signature: null, fields: {} } }],
+    [{ webhookPreset: 'custom', webhookFormat: '{"version":1}' }, undefined],
+    // The timestamp must be signed, otherwise an old request with a fresh timestamp passes.
+    [
+      {
+        webhookPreset: 'custom',
+        webhookFormat: JSON.stringify({
+          version: 1,
+          signature: {
+            type: 'hmac', algorithm: 'sha256', header: 'x-sig', encoding: 'hex', payload: '{body}', secret: 'text',
+            timestamp: { source: { header: 'x-ts' }, unit: 's', toleranceSec: 300 },
+          },
+          fields: {},
+        }),
+      },
+      undefined,
+    ],
+  ])('sender %j', (fields, source) => {
+    const trigger = buildScheduleInput(makeForm({ webhookEnabled: true, ...fields })).webhookTrigger;
+    expect(trigger).toEqual({ events: [], ...(source ? { source } : {}) });
+  });
+
+  it('round-trips a saved sender through the form fields', () => {
+    const sources = [undefined, { preset: 'stripe', signed: false }, { preset: 'custom', format: { version: 1, signature: null, fields: {} } }] as const;
+    for (const source of sources) {
+      const form = makeForm({ webhookEnabled: true, ...webhookSourceFormFields(source) });
+      expect(buildScheduleInput(form).webhookTrigger).toEqual({ events: [], source: source ?? { preset: 'github' } });
+    }
   });
 });
 

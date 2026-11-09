@@ -15,6 +15,7 @@ import type { CompanionMediaUpload, CompanionMirrorAttachment } from './mirror.j
 import { readAllRoomMessages, readRoomPage } from './room.js';
 import { companionSkillFileFetch, parseCompanionSkillFiles } from './skillFiles.js';
 import { isTransientAttachmentFailure, type CompanionApi, type CompanionLog } from './types.js';
+import { readCompanionRows, readCompanionValue, type CompanionStore } from './store.js';
 import {
   COMPANION_MEMORY_PREFIX, COMPANION_PROFILE_KEY, COMPANION_ROUTINE_PREFIX, COMPANION_SKILL_FILES_PREFIX, COMPANION_SKILL_PREFIX, COMPANION_TODO_PREFIX,
   COMPANION_WORKBENCH_KEY,
@@ -100,6 +101,7 @@ export function mergedTodoId(keepBotId: string, sourceActorId: string, todoId: s
 
 export async function mergeCompanionsInto(input: {
   api: CompanionApi;
+  store?: CompanionStore;
   host: Pick<CompanionMaterializeHost, 'readMemory' | 'restoreMemory' | 'readSkill' | 'saveSkill' | 'readSkillFiles' | 'applySkillFiles' | 'applyTodos' | 'applyRoutines' | 'applyWorkbench'>;
   keep: CompanionMergeActor;
   from: CompanionMergeActor[];
@@ -121,9 +123,8 @@ export async function mergeCompanionsInto(input: {
   const seen = new Map<string, string>();
   for (const source of input.from) {
     fence.assertCurrent();
-    seen.set(source.id, await cloudMark(api, source, input.roomOf));
-    const rows = await api<PrefRow[]>('/preferences', 'GET', undefined, source.id);
-    const prefs = (Array.isArray(rows) ? rows : []).filter(row => row.value !== null);
+    seen.set(source.id, await cloudMark(api, source, input.roomOf, input.store));
+    const prefs = (await readCompanionRows(api, input.store, source.id)).filter(row => row.value !== null);
     const suffix = source.label || (source.name && source.name !== keep.name ? source.name : source.externalId.slice(-8));
 
     for (const row of prefs.filter(candidate => candidate.key.startsWith(COMPANION_MEMORY_PREFIX))) {
@@ -192,7 +193,7 @@ export async function mergeCompanionsInto(input: {
   await input.beforeRetire?.();
   for (const source of input.from) {
     fence.assertCurrent();
-    if (await cloudMark(api, source, input.roomOf) !== seen.get(source.id)) throw new Error('COMPANION_STILL_CHANGING');
+    if (await cloudMark(api, source, input.roomOf, input.store) !== seen.get(source.id)) throw new Error('COMPANION_STILL_CHANGING');
   }
   // Only now are the merged copies no longer companions: other computers hide and stop their copy.
   // Until here a failure leaves every source active, so the merge can run again.
@@ -270,16 +271,22 @@ async function mergeConversation(input: {
  * new, changed or removed one changes the list) and the newest room message (room order). Any
  * difference means it added something.
  */
-async function cloudMark(api: CompanionApi, actor: CompanionMergeActor, roomOf: (actor: CompanionMergeActor) => Promise<string>): Promise<string> {
+async function cloudMark(api: CompanionApi, actor: CompanionMergeActor, roomOf: (actor: CompanionMergeActor) => Promise<string>, store?: CompanionStore): Promise<string> {
   const rows = await api<PrefRow[]>('/preferences', 'GET', undefined, actor.id);
   const prefs = (Array.isArray(rows) ? rows : []).map(row => `${row.key}\u0000${row.revision}`).sort();
+  // Values too large for the preferences change only in the companion store.
+  if (store?.active()) {
+    try {
+      for (const [key, row] of await store.revisions(actor.id)) prefs.push(`store\u0000${key}\u0000${row.revision}`);
+    } catch (error) { if (store.active()) throw error; }
+    prefs.sort();
+  }
   const page = await readRoomPage(api, await roomOf(actor));
   const seq = page.reduce((max, message) => (BigInt(message.seq) > max ? BigInt(message.seq) : max), 0n);
   return createHash('sha256').update(JSON.stringify([prefs, String(seq)])).digest('hex');
 }
 
 /** The profile snapshot of a companion actor, for telling the copies of Cindy apart. */
-export async function readProfileSnapshot(api: CompanionApi, actorId: string): Promise<unknown> {
-  const rows = await api<PrefRow[]>('/preferences', 'GET', undefined, actorId);
-  return (Array.isArray(rows) ? rows : []).find(row => row.key === COMPANION_PROFILE_KEY)?.value ?? null;
+export async function readProfileSnapshot(api: CompanionApi, actorId: string, store?: CompanionStore): Promise<unknown> {
+  return (await readCompanionValue(api, store, actorId, COMPANION_PROFILE_KEY))?.value ?? null;
 }

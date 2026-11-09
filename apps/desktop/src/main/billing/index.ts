@@ -14,6 +14,7 @@ import {
   projectBillingCatalog,
   projectBillingCurrentSubscription,
   projectBillingOrderList,
+  projectBillingPaymentHistory,
   projectBillingPortalSession,
   projectBillingPaymentOrder,
   projectBillingPlanChange,
@@ -277,6 +278,19 @@ export function createBillingHandlers(
         throwIpcError('INVALID_PARAMS', 'catalog request does not accept a payload');
       }
       return projectResponse(await invoke<unknown>('/api/billing/catalog'), projectBillingCatalog);
+    }),
+    [BILLING_INVOKE.LIST_PAYMENT_HISTORY]: protect(async (raw) => {
+      const payload = requireObject(raw);
+      assertOnlyKeys(payload, ['limit', 'cursor'], 'payload');
+      if (typeof payload.limit !== 'number' || !Number.isInteger(payload.limit) || payload.limit < 1 || payload.limit > 100) {
+        throwIpcError('INVALID_PARAMS', 'limit must be an integer between 1 and 100');
+      }
+      if (payload.cursor !== undefined && (typeof payload.cursor !== 'string' || !/^[A-Za-z0-9_-]{1,1024}$/.test(payload.cursor))) {
+        throwIpcError('INVALID_PARAMS', 'cursor must be a bounded history cursor');
+      }
+      const query = new URLSearchParams({ limit: String(payload.limit) });
+      if (typeof payload.cursor === 'string') query.set('cursor', payload.cursor);
+      return projectResponse(await invoke<unknown>(`/api/billing/payment-history?${query}`), projectBillingPaymentHistory);
     }),
     [BILLING_INVOKE.LIST_ORDERS]: protect(async (raw) => {
       const payload = requireObject(raw);

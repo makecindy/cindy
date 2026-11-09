@@ -130,6 +130,9 @@
   "detail": {
     "useItIn": "使用方式",
     "openPlugin": "開啟插件",
+    "readme": "介紹",
+    "readmeLoadFailed": "無法載入介紹，請重試。",
+    "readmeUnavailable": "暫無介紹。",
     "computerSettings": "請在電腦端 Cindy 的「插件」中開啟此插件詳情，完成配置。",
     "runtimeIssue": "插件上次執行異常，可重新開啟或在任務中重試。",
     "runtimeFused": "插件多次停止。關閉後重新啟用，再試一次。",
@@ -343,5 +346,31 @@
     "purpose": "確認互動頁面權限",
     "updateHost": "請更新執行電腦上的 Cindy，再在此確認。文字工具仍可使用。",
     "failed": "互動頁面未能啟用，請檢查連線和插件版本後重試。"
+  },
+  "openLinkHost": "開啟 {{host}}",
+  "prStatus": {
+    "checksFailed": "失敗",
+    "checksPending": "進行中",
+    "checksPassed": "通過",
+    "checksSkipped": "略過或中立",
+    "threadsOpen": "{{count}} 條未解決的 review 評論",
+    "threadsNone": "沒有待處理意見",
+    "mergeReady": "可以合併",
+    "mergeConflict": "有衝突",
+    "mergeBehind": "需要同步目標分支",
+    "mergeApproval": "等待核准",
+    "mergeChanges": "需要修改",
+    "mergeWaiting": "等待合併",
+    "merged": "已合併",
+    "closed": "已關閉",
+    "draft": "草稿"
+  },
+  "taskArchive": {
+    "now": "立即封存",
+    "pending": "離開此任務後將自動封存",
+    "cancel": "取消",
+    "cancelled": "本次不會自動封存",
+    "archived": "已歸檔「{{title}}」",
+    "undo": "撤銷"
   }
 }

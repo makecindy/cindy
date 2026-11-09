@@ -203,6 +203,26 @@ function RichAnswerDocument({
   const renderContent = (id: string): ReactNode => {
     const node = doc.nodes.get(id);
     if (!node) return null;
+    const imageSource = node.kind === 'image' ? richString(node, 'src').trim() : '';
+    // Both media namespaces are served by the Desktop protocol. Reloading a
+    // placeholder or truncated reference cannot recover the existing image.
+    if (/^cindy-media:/i.test(imageSource)
+      && !/^cindy-media:\/\/blobs\/[a-f0-9]{64}\.[a-zA-Z0-9]+$/.test(imageSource)
+      && !/^cindy-media:\/\/client-wallpaper\/[a-f0-9]{64}\.(webp|mp4)$/.test(imageSource)) {
+      const message = t('richAnswer.requestImageAgainMessage', {
+        name: JSON.stringify(richString(node, 'alt', id)),
+        source: JSON.stringify(imageSource),
+      });
+      return <div data-rich-node={id} className="rich-answer-layout rich-answer-stack" style={{ overflowWrap: 'anywhere' }}>
+        <p className="rich-answer-caption" role="status">{complete ? t('richAnswer.invalidImageReference') : '…'}</p>
+        {complete && <RichSendAction
+          node={{ ...node, kind: 'button', props: { label: t('richAnswer.requestImageAgain') } }}
+          text={message.length <= 16_000 ? message : undefined}
+          receiptKey={`${stateKey}:invalid-image:${id}`} ready
+        />}
+        {richString(node, 'caption') && <p className="rich-answer-caption">{richString(node, 'caption')}</p>}
+      </div>;
+    }
     if (richCalculationUnavailable(node, values))
       return (
         <p className="rich-answer-caption" role="status">

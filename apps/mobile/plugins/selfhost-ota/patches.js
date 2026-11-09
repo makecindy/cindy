@@ -121,8 +121,8 @@ function patches() {
       '  public func setUpdateRequestHeadersOverride(_ requestHeaders: [String: String]?) throws {\n' +
       '    try CindyOtaJournal.validateHeaders(requestHeaders)'],
     [ios + 'AppLoader/AppLoaderTask.swift',
-      '  private func loadEmbeddedUpdate(withCompletion completion: @escaping () -> Void) {',
-      '  private func loadEmbeddedUpdate(withCompletion completion: @escaping () -> Void) {\n' +
+      '  func loadEmbeddedUpdate(withCompletion completion: @escaping () -> Void) {',
+      '  func loadEmbeddedUpdate(withCompletion completion: @escaping () -> Void) {\n' +
       '    if let embedded = EmbeddedAppLoader.originalEmbeddedManifest(withConfig: config, database: database) {\n' +
       '      CindyOtaJournal.observeEmbedded(embedded)\n    }'],
     [ios + 'AppLoader/AppLoaderTask.swift',
@@ -154,8 +154,8 @@ function patches() {
       '  public func launchableUpdate(fromUpdates updates: [Update], filters: [String: Any]?) -> Update? {\n' +
       '    if let choice = CindyOtaJournal.select(updates, config: config) { return choice.update }\n    return updates'],
     [ios + 'SelectionPolicy/ReaperSelectionPolicyFilterAware.swift',
-      '    return updatesToDelete\n',
-      '    return updatesToDelete.filter { !CindyOtaJournal.pinned($0.updateId) }\n'],
+      '    return olderUpdates.filter { !olderUpdatesToKeep.contains($0) && $0.updateId != embeddedUpdateId }\n',
+      '    return olderUpdates.filter { !olderUpdatesToKeep.contains($0) && $0.updateId != embeddedUpdateId && !CindyOtaJournal.pinned($0.updateId) }\n'],
     [ios + 'Procedures/StartupProcedure.swift',
       '  private let errorRecovery: ErrorRecovery',
       '  private var errorRecovery: ErrorRecovery'],
@@ -225,11 +225,14 @@ function patches() {
       '        callback?(UpdatesError.appLauncherNoLaunchableUpdates(cause: error), false)\n        return\n      }\n    }\n' +
       '    markUpdateAccessed()'],
     [ios + 'AppLauncher/AppLauncherWithDatabase.swift',
-      'self.completion!(self.launchAssetError, self.launchAssetUrl != nil)\n        self.completion = nil',
-      'let callback = self.completion\n        self.completion = nil\n        callback?(self.launchAssetError, self.launchAssetUrl != nil)'],
+      'self.completion!(error, self.launchAssetUrl != nil)\n        self.completion = nil',
+      'let callback = self.completion\n        self.completion = nil\n        callback?(error, self.launchAssetUrl != nil)'],
     [ios + 'AppLauncher/AppLauncherWithDatabase.swift',
-      'self.completion!(self.launchAssetError, self.launchAssetUrl != nil)\n            self.completion = nil',
-      'let callback = self.completion\n            self.completion = nil\n            callback?(self.launchAssetError, self.launchAssetUrl != nil)'],
+      'self.completion!(error, self.launchAssetUrl != nil)\n            self.completion = nil',
+      'let callback = self.completion\n            self.completion = nil\n            callback?(error, self.launchAssetUrl != nil)'],
+    [ios + 'AppLauncher/AppLauncherWithDatabase.swift',
+      'self.completion!(UpdatesError.appLauncherLaunchAssetNotFound(updateId: launchedUpdate.updateId), false)\n        self.completion = nil',
+      'let callback = self.completion\n        self.completion = nil\n        callback?(UpdatesError.appLauncherLaunchAssetNotFound(updateId: launchedUpdate.updateId), false)'],
     // Never silently select an unmodified prebuilt framework over the adapter.
     ['ios/EXUpdates.podspec',
       '  if !ex_updates_native_debug && !$ExpoUseSources&.include?(package[\'name\'])',

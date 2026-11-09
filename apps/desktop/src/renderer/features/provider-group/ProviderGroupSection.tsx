@@ -16,7 +16,6 @@ import { useCallback, useEffect, useId, useMemo, useState } from 'react';
 import type { ProviderView } from '@cindy/model-providers';
 import { useTranslation } from 'react-i18next';
 
-import { formatQuotaResetAt } from '@/components/status/usageCardModel';
 import { Button } from '@/components/ui/button';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import {
@@ -26,6 +25,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { SegmentedControl } from '@/components/ui/segmented-control';
+import { SETTINGS_HINT, SETTINGS_SECTION_TITLE_CLASS, SettingsBlock, SettingsCard, SettingsRow } from '@/components/ui/settings-rows';
 import { Select } from '@/components/ui/select';
 import { Switch } from '@/components/ui/switch';
 import { Tip } from '@/components/ui/tooltip';
@@ -50,11 +50,14 @@ import { GroupMemberDetailsButton, GroupMemberVersion } from './GroupMemberVersi
 import { ProviderGroupAddDialog } from './ProviderGroupAddDialog';
 import {
   groupProviderGroupItems,
+  memberStatusText,
   providerGroupAccountName,
   providerGroupDeviceVersion,
 } from './providerGroupPresentation';
 import { useProviderGroup } from './useProviderGroup';
 import { providerManagementErrorKey } from './providerManagement';
+
+export { memberStatusText };
 
 /**
  * Claude 订阅的配额排序已对所有组策略生效(provider-groups.md §5，2026-10-15)，不再单列「用量均衡」；
@@ -88,9 +91,14 @@ export function ProviderGroupSection({ providerId, providerName, deviceId, devic
   useEffect(() => {
     if (group.view) onConfigChange?.(group.view.config);
   }, [group.view, onConfigChange]);
+  // A failed or stale source may still provide navigation/config, but its running/cooling/
+  // quota values are not live status. Hiding the rows' status keeps the old snapshot from
+  // masquerading as current, matching RemoteProviderGroupMembers and SharedProviderGroupStatus.
+  const statusStale = group.failed || group.expired
+    || group.view?.providerContinuity?.stale === true;
   const statuses = useMemo(
-    () => new Map((group.view?.members ?? []).map((status) => [status.key, status])),
-    [group.view],
+    () => new Map((statusStale ? [] : group.view?.members ?? []).map((status) => [status.key, status])),
+    [group.view, statusStale],
   );
 
   const save = useCallback(
@@ -163,7 +171,7 @@ export function ProviderGroupSection({ providerId, providerName, deviceId, devic
   return (
     <section className="mt-6 shrink-0" aria-labelledby="provider-group-title" data-testid="provider-group-section">
       <div className="mb-2 flex flex-wrap items-center gap-2">
-        <h3 id="provider-group-title" className="text-13 font-medium text-[var(--settings-section-title)]">
+        <h3 id="provider-group-title" className={SETTINGS_SECTION_TITLE_CLASS}>
           {t('providerGroup.section.title')}
         </h3>
         {/* 台数按电脑算：一台电脑上的几个账号算一台(与入口的「N 台电脑」一致)。 */}
@@ -179,7 +187,7 @@ export function ProviderGroupSection({ providerId, providerName, deviceId, devic
         </Button>
       </div>
 
-      <div className="overflow-hidden rounded-xl border border-[var(--settings-theme-card-border)] bg-[var(--settings-theme-card-bg)]">
+      <SettingsCard>
         {!config ? (
           <p className="px-4 py-7 text-center text-13 leading-[1.5] text-[var(--text-secondary)]">
             {group.loading
@@ -223,7 +231,7 @@ export function ProviderGroupSection({ providerId, providerName, deviceId, devic
                 </div>
               );
             })}
-            <div className="flex flex-col gap-1.5 border-t border-[var(--settings-theme-card-border)] px-4 py-3">
+            <SettingsBlock className="flex flex-col gap-1.5">
               <div className="flex flex-wrap items-center gap-3">
                 <span className="text-13 text-[var(--text-primary)]">{t('providerGroup.strategy.label')}</span>
                 <SegmentedControl
@@ -244,42 +252,44 @@ export function ProviderGroupSection({ providerId, providerName, deviceId, devic
               <span className="text-12 leading-[1.4] text-[var(--text-tertiary)]">
                 {t('providerGroup.strategy.quotaFirst')}
               </span>
-            </div>
-            <div className="flex items-start justify-between gap-3 border-t border-[var(--settings-theme-card-border)] px-4 py-3">
-              <div className="flex min-w-0 flex-col gap-0.5">
-                <span className="text-13 text-[var(--text-primary)]">{t('providerGroup.autoSwitch.label')}</span>
-                <span className="text-12 leading-[1.4] text-[var(--text-tertiary)]">
-                  {t('providerGroup.autoSwitch.description')}
-                </span>
-              </div>
-              <Switch
-                checked={config.autoSwitch}
-                disabled={blocked}
-                aria-label={t('providerGroup.autoSwitch.label')}
-                onCheckedChange={(autoSwitch) => void save({ ...config, autoSwitch })}
-              />
-            </div>
+            </SettingsBlock>
+            <SettingsRow
+              title={t('providerGroup.autoSwitch.label')}
+              hint={t('providerGroup.autoSwitch.description')}
+              trailing={
+                <Switch
+                  checked={config.autoSwitch}
+                  disabled={blocked}
+                  aria-label={t('providerGroup.autoSwitch.label')}
+                  onCheckedChange={(autoSwitch) => void save({ ...config, autoSwitch })}
+                />
+              }
+            />
             {fastPolicySupported && (
-              <div className="flex items-start justify-between gap-3 border-t border-[var(--settings-theme-card-border)] px-4 py-4">
-                <div className="flex min-w-0 flex-col gap-1">
-                  <span className="text-13 font-medium text-[var(--text-primary)]">{t('subscriptionFastPolicy.label')}</span>
-                  <span className="text-12 leading-[1.4] text-[var(--text-secondary)]">{t('subscriptionFastPolicy.groupHint')}</span>
-                  {group.view?.fastPolicyPending && <span role="status" className="text-12 leading-[1.4] text-[var(--text-secondary)]">{t('subscriptionFastPolicy.pending')}</span>}
-                </div>
-                <Switch checked={config.allowFast !== false} disabled={blocked} aria-label={t('subscriptionFastPolicy.label')}
-                  onCheckedChange={allowFast => void save({ ...config, allowFast })} />
-              </div>
+              <SettingsRow
+                title={t('subscriptionFastPolicy.label')}
+                hint={
+                  <span className="flex flex-col gap-1">
+                    <span>{t('subscriptionFastPolicy.groupHint')}</span>
+                    {group.view?.fastPolicyPending && <span role="status">{t('subscriptionFastPolicy.pending')}</span>}
+                  </span>
+                }
+                trailing={
+                  <Switch checked={config.allowFast !== false} disabled={blocked} aria-label={t('subscriptionFastPolicy.label')}
+                    onCheckedChange={allowFast => void save({ ...config, allowFast })} />
+                }
+              />
             )}
           </>
         )}
-      </div>
+      </SettingsCard>
       {config && group.failed && (
-        <p role="status" className="mt-2 text-12 leading-[1.5] text-[var(--text-secondary)]">
+        <p role="status" className={cn('mt-2', SETTINGS_HINT)}>
           {t(group.errorKey ?? 'providerGroup.section.loadFailed')}
         </p>
       )}
       {config && (
-        <p className="mt-2 text-12 leading-[1.5] text-[var(--text-tertiary)]">{t('providerGroup.section.note')}</p>
+        <p className={cn('mt-2', SETTINGS_HINT)}>{t('providerGroup.section.note')}</p>
       )}
 
       {addOpen && (
@@ -539,37 +549,4 @@ function MemberRow({
       {quotaOpen && reshare && <GroupMemberReshare summary={reshare} owner={ownerName ?? ''} />}
     </div>
   );
-}
-
-/** 组内电脑的状态词(本机的组与另一台电脑上的组的只读列表共用)。 */
-export function memberStatusText(
-  t: ReturnType<typeof useTranslation>['t'],
-  status: ProviderGroupMemberStatus | undefined,
-  locale: string,
-  nowMs: number = Date.now(),
-): string {
-  if (!status) return t('providerGroup.member.status.checking');
-  switch (status.state) {
-    case 'available':
-      // 「可用」不报负载，整列空着时就看不出每台跑了几个；状态词直接承载运行数。
-      return status.running > 0
-        ? t('providerGroup.member.runningCount', { count: status.running })
-        : t('providerGroup.member.status.idle');
-    case 'full':
-      return t('providerGroup.member.status.full');
-    case 'paused':
-      return t('providerGroup.member.status.paused');
-    case 'cooling': {
-      // 不在今天恢复的(周上限等)带上日期，不让「约 16:00 恢复」看起来像今天就能用。
-      const time = status.coolingUntil ? formatQuotaResetAt(status.coolingUntil / 1000, nowMs, locale) : null;
-      return time
-        ? t('providerGroup.member.status.coolingUntil', { time })
-        : t('providerGroup.member.status.cooling');
-    }
-    case 'offline':
-      return t('providerGroup.member.status.offline');
-    case 'unavailable':
-    default:
-      return t(`providerGroup.member.status.unavailable.${status.reason ?? 'disconnected'}`);
-  }
 }

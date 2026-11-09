@@ -32,8 +32,12 @@ import {
   GHOST_CARD_REOPEN_WINDOW_MS,
   GHOST_CARD_WORKING_WINDOW_MS,
   GHOST_CARD_ID_KEY,
+  GHOST_CARD_TURN_END_KEY,
+  isTurnEndGhostCardHtml,
   type GhostToolCallResult,
 } from '../../shared/ghost.js';
+import { markGhostCardSuperseded } from '@cindy/maker-shared/ghost-card-form';
+
 import type { SanitizeCardResult } from './cardSanitizer.js';
 
 /**
@@ -48,15 +52,17 @@ export function withCardToken(
   result: GhostToolCallResult,
   hasCard: boolean,
   callId: string,
+  turnEnd = false,
 ): GhostToolCallResult {
   if (!hasCard || !result.ok) return result;
+  const token = { [GHOST_CARD_ID_KEY]: callId, ...(turnEnd ? { [GHOST_CARD_TURN_END_KEY]: true } : {}) };
   if (result.result === null || result.result === undefined) {
-    return { ok: true, result: { [GHOST_CARD_ID_KEY]: callId } };
+    return { ok: true, result: token };
   }
   if (typeof result.result === 'object' && !Array.isArray(result.result)) {
     return {
       ok: true,
-      result: { ...(result.result as Record<string, unknown>), [GHOST_CARD_ID_KEY]: callId },
+      result: { ...(result.result as Record<string, unknown>), ...token },
     };
   }
   return result;
@@ -186,6 +192,8 @@ interface CallEntry {
    */
   scriptWritePath: string | null;
   hasCard: boolean;
+  /** 最新一版卡片声明了排到本轮末尾。 */
+  turnEnd?: boolean;
   lastAcceptedAt: number | null;
   settledAt: number | null;
   /**
@@ -290,6 +298,11 @@ export class GhostCardService {
     if (!entry) return false;
     entry.settledAt = this.now();
     return entry.hasCard;
+  }
+
+  /** 该单最新一版卡片是否声明排到本轮末尾。 */
+  isTurnEnd(callId: string): boolean {
+    return this.calls.get(callId)?.turnEnd === true;
   }
 
   /** 该单当前是否已有卡(finalize 前后皆可查)。 */
@@ -422,6 +435,13 @@ export class GhostCardService {
       return reject('bad-state');
     }
     const activityState = p.state === 'working' || p.state === 'done' ? p.state : null;
+    // supersededBy: the card the plugin moved this one to. Only the active call that reopened this card
+    // (sourceCallId, verified before this handler) may name itself; views then hide this card.
+    if (p.supersededBy !== undefined && (hostMail || typeof p.supersededBy !== 'string' ||
+        p.supersededBy !== p.sourceCallId || p.supersededBy === p.callId || !/^[A-Za-z0-9_:.-]{1,128}$/.test(p.supersededBy))) {
+      return reject('bad-superseded-by', { callId: p.callId });
+    }
+    const supersededBy = typeof p.supersededBy === 'string' ? p.supersededBy : undefined;
 
     const entry = this.calls.get(p.callId);
     if (!entry) return reject('unknown-call', { callId: p.callId });
@@ -464,6 +484,7 @@ export class GhostCardService {
     if (!sanitized.ok) return reject(`sanitize:${sanitized.reason}`, { callId: p.callId });
 
     entry.hasCard = true;
+    entry.turnEnd = isTurnEndGhostCardHtml(sanitized.html);
     entry.lastAcceptedAt = now;
     // working 窗口记账:首个 working 开窗(固定起点),done 关窗(回到
     // settle 宽限语义,后续更新按旧规则判 too-late)。
@@ -473,11 +494,12 @@ export class GhostCardService {
       entry.workingSince = null;
     }
 
+    const html = supersededBy ? markGhostCardSuperseded(sanitized.html, supersededBy) : sanitized.html;
     const row: GhostCardRow = {
       callId: p.callId,
       ghostId: senderGhostId,
       sessionId: entry.sessionId,
-      html: sanitized.html,
+      html,
       height,
       v: cardVersion,
       updatedAt: now,
@@ -496,8 +518,8 @@ export class GhostCardService {
       ghostId: senderGhostId,
       ...(entry.logicalGhostId !== undefined ? { logicalGhostId: entry.logicalGhostId } : {}),
       toolUseId: entry.toolUseId,
-      html: sanitized.html,
-      animatedHtml: sanitized.animatedHtml ?? null,
+      html,
+      animatedHtml: supersededBy ? null : sanitized.animatedHtml ?? null,
       height,
       state: activityState,
     });

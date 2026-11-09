@@ -28,7 +28,7 @@ import { repairMermaidSource } from '@cindy/maker-shared/mermaid-autofix';
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import { resolveExportBackground, svgToPngBlob } from '@/lib/rasterizeToImage';
-import { MermaidLightbox } from './MermaidLightbox';
+import { MermaidLightbox } from './lazyPreviewLightboxes';
 import { useCopyAsImage } from './useCopyAsImage';
 import {
   DropdownMenu,

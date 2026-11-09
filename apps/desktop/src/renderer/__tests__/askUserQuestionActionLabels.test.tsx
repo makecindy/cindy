@@ -75,11 +75,17 @@ describe('AskUserQuestionPrompt action labels', () => {
     link.focus();
     fireEvent.click(link);
     await waitFor(() => expect(document.querySelector('[data-text-lightbox-card]')).not.toBeNull());
+    await view.findByRole('tooltip');
     vi.useFakeTimers();
+    // The focused preview toolbar tooltip consumes the first Escape, preserving
+    // the preview and unanswered question; the next press dismisses the document.
     fireEvent.keyDown(link, { key: 'Escape' });
+    expect(view.queryByRole('tooltip')).toBeNull();
+    expect(document.querySelector('[data-text-lightbox-card]')).not.toBeNull();
     expect(onAnswer).not.toHaveBeenCalled();
     fireEvent.keyDown(link, { key: '1' });
     expect(onAnswer).not.toHaveBeenCalled();
+    fireEvent.keyDown(link, { key: 'Escape' });
     act(() => vi.advanceTimersByTime(200));
     expect(document.querySelector('[data-text-lightbox-card]')).toBeNull();
     expect(onAnswer).not.toHaveBeenCalled();
@@ -228,7 +234,7 @@ describe('AskUserQuestionPrompt action labels', () => {
     });
   });
 
-  it('provides localized prompt copy in every supported locale', () => {
+  it('provides localized prompt copy in every supported locale', async () => {
     const expected = {
       en: ['Next', 'Submit'],
       'zh-CN': ['下一题', '提交'],
@@ -236,6 +242,8 @@ describe('AskUserQuestionPrompt action labels', () => {
       ja: ['次へ', '送信'],
       ko: ['다음', '제출'],
     } as const;
+    // 非英文语言包按需加载；t(key, { lng }) 只读已加载的语言。
+    await i18n.loadLanguages(Object.keys(expected));
 
     for (const [locale, labels] of Object.entries(expected)) {
       expect(i18n.t('chat.askUserQuestion.next', { lng: locale })).toBe(labels[0]);

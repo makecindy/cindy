@@ -75,6 +75,7 @@ describe('topicForPush', () => {
       fiveHour: { utilization: 4, resetsAt: 1788345000 },
     })).toBe('sessions');
     expect(topicForPush('usage:claude-subscription-changed', null)).toBe('sessions');
+    expect(topicForPush('subscription-accounts:changed', { providerId: 'anthropic' })).toBe('sessions');
     // 其余账号级用量快照同口径。
     expect(topicForPush('usage:codex-account-changed', {
       primary: { usedPercent: 3 }, webSnapshot: null,
