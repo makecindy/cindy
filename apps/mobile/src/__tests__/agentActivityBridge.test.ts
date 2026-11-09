@@ -81,6 +81,42 @@ it('preserves a background activity while native discovery and registration sett
   expect(mock.native.setState).not.toHaveBeenCalled();
 });
 
+// Unit, discussion_r4514700790: failed HTTP registration must leave the real
+// bridge subscribed to live host updates, including the final empty projection.
+it('updates and ends the local activity when its update token cannot be registered', async () => {
+  setMobileAuthOwner('account-a', 'global');
+  vi.stubGlobal('__DEV__', true);
+  vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, status: 503 } as Response)));
+  mock.native.configureAccount = vi.fn(async () => {});
+  mock.native.getPushRegistration = vi.fn(async () => ({
+    accountScope: JSON.stringify(['https://example.test', 'account-a']),
+    enabled: true, startToken: 'start', updateToken: 'local', activityId: 'active',
+    dismissed: false, supportsInputPushToken: true,
+  }));
+  const row: RemoteSession = {
+    id: 'host-task', userId: '', title: 'Host task', workingDir: '/example', workspaceKind: 'project',
+    model: 'claude', effort: 'medium', permissionMode: 'default', fastMode: false,
+    status: 'active', agentKind: 'cc', userSendAt: null,
+    createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z',
+  };
+  remoteSessionStore.setDeviceSessions('desktop', 'Example Mac', [row]);
+  remoteSessionStore.applyRemotePush('desktop', SESSION_ACTIVITY_CHANNEL, {
+    sessionId: row.id, phase: 'running', attention: false,
+  });
+  await act(() => root.render(createElement(AgentActivityBridge)));
+  expect(JSON.parse(mock.native.setState.mock.calls.at(-1)![0]).state.status).toBe('running');
+  remoteSessionStore.applyRemotePush('desktop', SESSION_ACTIVITY_CHANNEL, {
+    sessionId: row.id, phase: 'needs-interaction', attention: true,
+  });
+  await act(() => vi.advanceTimersByTime(1000));
+  expect(JSON.parse(mock.native.setState.mock.calls.at(-1)![0]).state.status).toBe('attention');
+  remoteSessionStore.applyRemotePush('desktop', SESSION_ACTIVITY_CHANNEL, {
+    sessionId: row.id, phase: 'completed', attention: false,
+  });
+  await act(() => vi.advanceTimersByTime(1000));
+  expect(mock.native.setState).toHaveBeenLastCalledWith(null);
+});
+
 // Unit, PR #9507 / discussion_r4511883168: the desktop mapper emits userId:''.
 // Projection-only Home tests bypassed the bridge's erroneous ownership filter.
 // This separate file mounts the real bridge in jsdom (Home tests are node-only),

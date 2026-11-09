@@ -108,7 +108,6 @@ export function startActivityPushSync(options: {
   let tail = Promise.resolve();
   let last: string | undefined;
   let unsupported = false;
-  let hasActivity = false;
   const assertCurrent = () => {
     if (
       controller.signal.aborted ||
@@ -126,9 +125,8 @@ export function startActivityPushSync(options: {
         const registration = await native.getPushRegistration!();
         assertCurrent();
         if (registration.accountScope !== options.accountScope) return;
-        hasActivity = registration.enabled && !!registration.updateToken;
-        // Preserve a background activity before Home/auth transport has loaded.
-        if (hasActivity) options.onRegistered(true);
+        // A native token is not evidence that the service received it. The
+        // bridge keeps its initial discovery pending until this attempt settles.
         const body = {
           ...registration,
           schemaVersion: 1,
@@ -150,7 +148,7 @@ export function startActivityPushSync(options: {
         const token = await options.getAccessToken();
         assertCurrent();
         if (!token) {
-          options.onRegistered(hasActivity);
+          options.onRegistered(false);
           return;
         }
         await sendRegistration(
@@ -179,7 +177,7 @@ export function startActivityPushSync(options: {
           unsupported = true;
         try {
           assertCurrent();
-          options.onRegistered(!unsupported && hasActivity);
+          options.onRegistered(false);
         } catch {
           /* disposed or previous account */
         }

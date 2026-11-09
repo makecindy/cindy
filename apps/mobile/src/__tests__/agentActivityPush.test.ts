@@ -110,6 +110,29 @@ it("unregisters on system disable without ending auth or enabling ordinary notif
   expect(fetchMock.mock.calls.at(-1)![1]!.body).toBeUndefined();
   sync.dispose();
 });
+// Unit, discussion_r4514700790: merely obtaining an update token previously
+// disabled local sync even when upload failed. Existing cases only covered 2xx.
+it.each(["server", "network", "no-auth"])("keeps local ownership after %s registration failure and hands over after success", async (failure) => {
+  fixture.native.getPushRegistration.mockResolvedValue({
+    ...registration(), updateToken: "local-update", activityId: "local",
+  });
+  const opts = options();
+  if (failure === "server") fetchMock.mockResolvedValue({ ok: false, status: 503 } as Response);
+  if (failure === "network") fetchMock.mockRejectedValue(new TypeError("network unavailable"));
+  const sync = startActivityPushSync({ ...opts,
+    getAccessToken: async () => failure === "no-auth" ? null : opts.getAccessToken(),
+  });
+  await sync.sync();
+  expect(opts.onRegistered).toHaveBeenLastCalledWith(false);
+  expect(opts.onRegistered).not.toHaveBeenCalledWith(true);
+  sync.dispose();
+
+  fetchMock.mockResolvedValue({ ok: true, status: 200 } as Response);
+  const recovered = startActivityPushSync(opts);
+  await recovered.sync();
+  expect(opts.onRegistered).toHaveBeenLastCalledWith(true);
+  recovered.dispose();
+});
 it("rejects a delayed token read after switching owner and scopes logout to the old realm", async () => {
   let resolve!: (value: unknown) => void;
   fixture.native.getPushRegistration.mockImplementationOnce(
