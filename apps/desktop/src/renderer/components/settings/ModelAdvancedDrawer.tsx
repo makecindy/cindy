@@ -30,7 +30,16 @@ import { useTranslation } from 'react-i18next';
 import { SegmentedControl } from '@/components/ui/segmented-control';
 import { cn } from '@/lib/utils';
 import { providerViewToCustomProviderConfig, updateCustomProvider } from '@/lib/customProviders';
-import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuRadioGroup, DropdownMenuRadioItem } from '@/components/ui/dropdown-menu';
+import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { MODEL_HARNESS_COLOR } from '@/lib/modelHarnessPresentation';
 import { ModelCompatibilityNotice } from '@/components/new-chat/ModelCompatibilityNotice';
 import { MODEL_PROTOCOL_LABEL, MODEL_PROTOCOL_OPTIONS } from '@/lib/modelProtocolLabel';
@@ -62,6 +71,7 @@ import { EFFORT_TIER_COLORS } from '@/themes/effortTierColors';
 
 import {
   classifyVisionCapability,
+  defaultEffortForCapabilities,
   providerWireProtocolForApi,
   providerBaseUrlForApi,
   clampEffortToSupported,
@@ -69,6 +79,7 @@ import {
   isAgentSelectableModel,
   isOrganizationManagedProvider,
   modelProtocolComparison,
+  PI_REASONING_EFFORTS,
   pickRecommendedAgent,
 } from '@cindy/model-providers';
 import type {
@@ -99,6 +110,37 @@ const AGENT_MARK: Record<AgentKind, (size: number) => ReactNode> = {
 
 /** 抽屉里的档位顺序 = 目录枚举顺序（弱到强）。ultra 只在模型真的提供时出现。 */
 const EFFORT_ORDER = EFFORT_VALUES;
+
+/** Codex / Claude Code 接受的自定义模型档位；Pi 走自己的原生档位表。 */
+const RUNTIME_REASONING_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
+
+function reasoningEffortsForAgent(agent: AgentKind): readonly Effort[] {
+  return agent === 'pi'
+    ? (PI_REASONING_EFFORTS as readonly Effort[])
+    : RUNTIME_REASONING_EFFORTS;
+}
+
+type ReasoningDraft = {
+  reasoning: boolean | undefined;
+  efforts: Effort[];
+  defaultEffort: Effort | null;
+};
+
+function reasoningDraftFrom(model: CatalogModel | null | undefined): ReasoningDraft {
+  const config = model?.userModelConfig;
+  const efforts = config?.reasoning === true
+    ? EFFORT_ORDER.filter((effort) =>
+        ((config.reasoningEfforts ?? []) as readonly Effort[]).includes(effort),
+      )
+    : config?.reasoning === undefined
+      ? EFFORT_ORDER.filter((effort) => (model?.efforts ?? []).includes(effort))
+      : [];
+  return {
+    reasoning: config?.reasoning,
+    efforts,
+    defaultEffort: config?.reasoningDefaultEffort ?? model?.defaultEffort ?? null,
+  };
+}
 
 /**
  * K / M 缩写在真实数据里是**歧义的**:contextWindow 同时存在 1,000,000、1,050,000、
@@ -255,6 +297,21 @@ export function ModelAdvancedDrawer({
           : agent === 'pi',
     ) ?? primaryCandidates?.[0] ?? null;
   const primaryModel = row && primaryAgent ? (row.byAgent[primaryAgent] ?? null) : null;
+  const [pendingReasoningDraft, setPendingReasoningDraft] = useState<ReasoningDraft | null>(null);
+  const [reasoningSaving, setReasoningSaving] = useState(false);
+  const reasoningSavingRef = useRef(false);
+  const reasoningConfigKey = [
+    provider.id,
+    primaryModel?.id ?? '',
+    primaryModel?.userModelConfig?.reasoning ?? 'undefined',
+    (primaryModel?.userModelConfig?.reasoningEfforts ?? []).join(','),
+    primaryModel?.userModelConfig?.reasoningDefaultEffort ?? '',
+  ].join('|');
+  const sourceReasoningDraft = reasoningDraftFrom(primaryModel);
+  const reasoningDraft = pendingReasoningDraft ?? sourceReasoningDraft;
+  useEffect(() => {
+    setPendingReasoningDraft(null);
+  }, [open, reasoningConfigKey]);
   const [localModelRepo, setLocalModelRepo] = useState<{ id: string; repo: string } | null>(null);
   const [localConfigurationBlocked, setLocalConfigurationBlocked] = useState(false);
   useEffect(() => {
@@ -376,6 +433,80 @@ export function ModelAdvancedDrawer({
     catch { toast.error(t('settings.providers.custom.toast.saveFailed')); }
     finally { setProtocolSaving(false); }
   };
+
+  const saveReasoning = async (next: ReasoningDraft): Promise<boolean> => {
+    if (!canEditProtocol || reasoningSavingRef.current) return false;
+    reasoningSavingRef.current = true;
+    setReasoningSaving(true);
+    try {
+      const config = providerViewToCustomProviderConfig(provider);
+      for (const agent of chatAgents) {
+        const modelId = row?.byAgent[agent]?.id;
+        if (!modelId) continue;
+        const model = config.runtimes[agent]?.models.find((item) => item.id === modelId);
+        if (!model) continue;
+        delete model.reasoning;
+        delete model.reasoningEfforts;
+        delete model.reasoningDefaultEffort;
+        if (next.reasoning === false) {
+          model.reasoning = false;
+          continue;
+        }
+        if (next.reasoning !== true) continue;
+        const allowed = next.efforts.filter((effort) =>
+          reasoningEffortsForAgent(agent).includes(effort),
+        );
+        if (allowed.length === 0) {
+          model.reasoning = false;
+          continue;
+        }
+        model.reasoning = true;
+        model.reasoningEfforts = allowed as NonNullable<typeof model.reasoningEfforts>;
+        const defaultEffort =
+          next.defaultEffort && allowed.includes(next.defaultEffort)
+            ? next.defaultEffort
+            : defaultEffortForCapabilities(allowed);
+        if (defaultEffort) {
+          model.reasoningDefaultEffort =
+            defaultEffort as NonNullable<typeof model.reasoningDefaultEffort>;
+        }
+      }
+      const result = await updateCustomProvider(config, {}, { source: 'manual-settings' });
+      if (!result.ok) {
+        toast.error(t('settings.providers.custom.toast.saveFailed'));
+        return false;
+      }
+      return true;
+    } catch {
+      toast.error(t('settings.providers.custom.toast.saveFailed'));
+      return false;
+    } finally {
+      reasoningSavingRef.current = false;
+      setReasoningSaving(false);
+    }
+  };
+
+  const applyReasoningDraft = (next: ReasoningDraft) => {
+    if (!canEditProtocol || reasoningSavingRef.current) return;
+    setPendingReasoningDraft(next);
+    void saveReasoning(next).then((ok) => {
+      if (!ok) setPendingReasoningDraft(null);
+    });
+  };
+
+  const toggleReasoningEffort = (effort: Effort, checked: boolean) => {
+    const efforts = checked
+      ? EFFORT_ORDER.filter((item) => item === effort || reasoningDraft.efforts.includes(item))
+      : reasoningDraft.efforts.filter((item) => item !== effort);
+    const defaultEffort =
+      reasoningDraft.defaultEffort && efforts.includes(reasoningDraft.defaultEffort)
+        ? reasoningDraft.defaultEffort
+        : defaultEffortForCapabilities(efforts);
+    applyReasoningDraft({ reasoning: efforts.length > 0, efforts, defaultEffort });
+  };
+
+  const resetReasoning = () =>
+    applyReasoningDraft({ reasoning: undefined, efforts: [], defaultEffort: null });
 
 
   const [ctxDraft, setCtxDraft] = useState('');
@@ -547,6 +678,20 @@ export function ModelAdvancedDrawer({
       return model?.efforts.includes(effort) || model?.displayEfforts?.includes(effort);
     }),
   );
+  const allowedReasoningEfforts = EFFORT_ORDER.filter((effort) =>
+    chatAgents.length > 0 &&
+    chatAgents.every((agent) => reasoningEffortsForAgent(agent).includes(effort)),
+  );
+  const reasoningState =
+    reasoningDraft.reasoning === false
+      ? 'unsupported'
+      : reasoningDraft.efforts.length > 0
+        ? 'supported'
+        : 'undeclared';
+  const reasoningSummary =
+    reasoningState === 'supported'
+      ? reasoningDraft.efforts.map((effort) => t(`effortLevels.${effort}`)).join(' · ')
+      : t(`settings.providers.models.advanced.${reasoningState}`);
   const ultrafastSupport = chatAgents.includes('codex')
     ? row.byAgent.codex?.supportsUltrafastMode
     : false;
@@ -911,6 +1056,47 @@ export function ModelAdvancedDrawer({
                           {t('settings.providers.models.advanced.restoreDefault')}
                         </Button>
                       )}
+                    </Section>
+                  )}
+
+                  {conversational && canEditProtocol && (
+                    <Section
+                      title={t('settings.providers.models.advanced.reasoning')}
+                      hint={t('settings.providers.models.advanced.reasoningHint')}
+                    >
+                      <Row label={t('settings.providers.models.advanced.reasoningEfforts')}>
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <button
+                              type="button"
+                              disabled={reasoningSaving || localConfigurationBlocked}
+                              aria-label={t('settings.providers.models.advanced.reasoningEfforts')}
+                              className="inline-flex min-h-8 items-center gap-1.5 rounded-full px-2 py-1 text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] disabled:opacity-50"
+                            >
+                              {reasoningSummary}
+                              <ChevronDown size={12} aria-hidden />
+                            </button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent className="z-[10003]" align="end">
+                            {allowedReasoningEfforts.map((effort) => (
+                              <DropdownMenuCheckboxItem
+                                key={effort}
+                                checked={reasoningDraft.efforts.includes(effort)}
+                                disabled={reasoningSaving}
+                                onCheckedChange={(checked) =>
+                                  toggleReasoningEffort(effort, checked === true)
+                                }
+                              >
+                                {t(`effortLevels.${effort}`)}
+                              </DropdownMenuCheckboxItem>
+                            ))}
+                            <DropdownMenuSeparator />
+                            <DropdownMenuItem onSelect={resetReasoning} disabled={reasoningSaving}>
+                              {t('settings.providers.models.advanced.restoreDefault')}
+                            </DropdownMenuItem>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                      </Row>
                     </Section>
                   )}
 
