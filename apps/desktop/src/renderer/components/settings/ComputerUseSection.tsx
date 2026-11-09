@@ -540,7 +540,7 @@ export function ComputerUseSection({ workingDir }: ComputerUseSectionProps) {
         );
       } else {
         // Market ids are opaque; the plugin is found by the ghost id it installs as.
-        const item = (await window.electronAPI.pluginMarket.snapshot()).items.find(
+        const item = (await window.electronAPI.pluginMarket.lookup([RECOMMENDED_PAGE_CONTROL_PLUGIN_ID])).items.find(
           (entry) => entry.ghostId === RECOMMENDED_PAGE_CONTROL_PLUGIN_ID,
         );
         const detail = item ? await window.electronAPI.pluginMarket.detail(item.pluginId) : null;
