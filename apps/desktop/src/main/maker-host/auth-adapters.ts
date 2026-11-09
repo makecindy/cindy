@@ -2044,6 +2044,11 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
         return { authenticated: false, errorReason: 'local_auth_unavailable' };
       }
     }
+    // Local reuse can fall through to independent OAuth. Apply the same write
+    // policy as an explicit browser/device login before preparing that flow.
+    if (this.devOAuthWritesBlocked()) {
+      return { authenticated: false, errorReason: 'dev_oauth_write_blocked', oauthWritesBlocked: true };
+    }
     await this.ensureGlobalCodexAssets();
 
     // Binary 必须在应用启动时就绪 (bootstrap-electron 的 ready 钩子会阻塞预下载)。
@@ -2073,6 +2078,22 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
     // 执行前复核路径确为受管二进制(CodeQL js/command-line-injection 防御纵深)
     if (!isVettedAgentBinaryPath('codex', binaryPath)) {
       return { authenticated: false, errorReason: 'codex_binary_missing' };
+    }
+
+    if (opts?.mode === 'local') {
+      // This is the independent-login fallback, not successful shared reuse.
+      // Check after all asynchronous setup/cleanup: failed unlink or a new alias
+      // during setup must never hand the native credential's inode to OAuth.
+      try {
+        const local = fs.lstatSync(path.join(this.codexHome, 'auth.json'), { bigint: true });
+        if (!local.isFile() || local.nlink !== 1n) {
+          return { authenticated: false, errorReason: 'local_auth_unavailable' };
+        }
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+          return { authenticated: false, errorReason: 'local_auth_unavailable' };
+        }
+      }
     }
 
     // spawn codex login。POSIX 建独立进程组，取消/超时时连同回调 server 一起收割。

@@ -24,7 +24,7 @@
  */
 import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { promises as fsp, lstatSync, statSync, unlinkSync } from 'node:fs';
+import fs, { promises as fsp } from 'node:fs';
 import type { BigIntStats } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -214,8 +214,8 @@ export async function recoverCodexAuth(
 function removeLegacyCodexAuthAlias(systemAuth: string, myAuth: string): boolean {
   if (path.resolve(systemAuth) === path.resolve(myAuth)) return false;
   try {
-    const local = lstatSync(myAuth, { bigint: true });
-    const system = statSync(systemAuth, { bigint: true });
+    const local = fs.lstatSync(myAuth, { bigint: true });
+    const system = fs.statSync(systemAuth, { bigint: true });
     if (
       !local.isFile() ||
       local.nlink <= 1n ||
@@ -224,7 +224,7 @@ function removeLegacyCodexAuthAlias(systemAuth: string, myAuth: string): boolean
       local.dev !== system.dev
     )
       return false;
-    unlinkSync(myAuth);
+    fs.unlinkSync(myAuth);
     return true;
   } catch {
     return false;

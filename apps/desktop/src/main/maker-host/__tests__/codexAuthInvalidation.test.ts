@@ -3192,10 +3192,20 @@ describe('deferred Codex OAuth dispatch proof', () => {
   });
 });
 
-// #9316: real adapter entry, fake CLI/OS boundaries. A denied symlink must start
-// independent OAuth, not copy or restore a refresh token. Unit tier, no real waits.
-it.each(['missing', 'hardlink', 'hardlink-without-account', 'file'] as const)(
-  'Windows without symlink privilege uses independent OAuth (local=%s)',
+// #9316: real adapter entry, fake CLI/OS boundaries. Denied symlinks may fall
+// back only when OAuth writes are allowed and the credential is independent.
+// Dev, failed unlink, and a new alias during setup failed before the gate fix.
+// Unit tier: assert child launch/refusal and native bytes, without real waits.
+it.each([
+  'missing',
+  'hardlink',
+  'hardlink-without-account',
+  'file',
+  'dev',
+  'hardlink-locked',
+  'late-hardlink',
+] as const)(
+  'Windows without symlink privilege enforces the independent OAuth boundary (local=%s)',
   async (initial) => {
     const originalPlatform = process.platform;
     Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
@@ -3220,6 +3230,15 @@ it.each(['missing', 'hardlink', 'hardlink-without-account', 'file'] as const)(
       const before = fs.statSync(systemAuth, { bigint: true });
       if (initial.startsWith('hardlink')) fs.linkSync(systemAuth, localAuth);
       if (initial === 'file') fs.writeFileSync(localAuth, 'existing-independent-credential');
+      if (initial === 'dev') h.isPackaged = false;
+      if (initial === 'hardlink-locked') {
+        const unlink = fs.unlinkSync;
+        vi.spyOn(fs, 'unlinkSync').mockImplementation((file) => {
+          if (String(file) === localAuth)
+            throw Object.assign(new Error('locked'), { code: 'EBUSY' });
+          return unlink(file);
+        });
+      }
       vi.spyOn(fs.promises, 'symlink').mockRejectedValue(
         Object.assign(new Error('denied'), { code: 'EPERM' }),
       );
@@ -3229,9 +3248,11 @@ it.each(['missing', 'hardlink', 'hardlink-without-account', 'file'] as const)(
       await adapter.getState({ credentialMode: 'oauth-bearer' });
       if (initial === 'file')
         expect(fs.readFileSync(localAuth, 'utf8')).toBe('existing-independent-credential');
-      else expect(fs.existsSync(localAuth)).toBe(false);
-      expect(fs.statSync(systemAuth).nlink).toBe(1);
-      vi.spyOn(adapter, 'ensureGlobalCodexAssets').mockResolvedValue(undefined);
+      else expect(fs.existsSync(localAuth)).toBe(initial === 'hardlink-locked');
+      expect(fs.statSync(systemAuth).nlink).toBe(initial === 'hardlink-locked' ? 2 : 1);
+      vi.spyOn(adapter, 'ensureGlobalCodexAssets').mockImplementation(async () => {
+        if (initial === 'late-hardlink') fs.linkSync(systemAuth, localAuth);
+      });
       const binaryPath = path.join(root, 'fake-codex.exe');
       vi.spyOn(binaries, 'getCachedBinaryStatus').mockReturnValue({
         binaryReady: true,
@@ -3254,6 +3275,18 @@ it.each(['missing', 'hardlink', 'hardlink-without-account', 'file'] as const)(
         });
         return child as childProcess.ChildProcess;
       });
+      if (initial === 'dev' || initial === 'hardlink-locked' || initial === 'late-hardlink') {
+        await expect(adapter.triggerLogin({ mode: 'local' })).resolves.toMatchObject({
+          authenticated: false,
+          errorReason: initial === 'dev' ? 'dev_oauth_write_blocked' : 'local_auth_unavailable',
+          ...(initial === 'dev' ? { oauthWritesBlocked: true } : {}),
+        });
+        expect(spawn).not.toHaveBeenCalled();
+        expect(copy).not.toHaveBeenCalled();
+        expect(fs.readFileSync(systemAuth, 'utf8')).toBe(credential);
+        expect(fs.statSync(systemAuth, { bigint: true }).ino).toBe(before.ino);
+        return;
+      }
       await expect(adapter.triggerLogin({ mode: 'local' })).resolves.toMatchObject({
         authenticated: true,
         credentialScope: 'instance-isolated',
