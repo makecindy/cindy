@@ -16,7 +16,7 @@ import type { TurnUsageContext } from './turnUsageContext.js';
 import type { Session } from '@cindy/maker-core';
 import { approvalSpendKey, isWithinProject, type ModelExecutionPolicySnapshot } from '@cindy/maker-core';
 import { readSubagentModelApprovals } from '../maker-host/subagent-model-approvals-store.js';
-import { addSubagentModelSpend } from '../maker-host/subagent-model-spend.js';
+import { addSubagentModelSpend, releaseSubagentModelSpend } from '../maker-host/subagent-model-spend.js';
 
 const log = createLogger('pi-usage');
 const pending = new Set<Promise<unknown>>();
@@ -174,10 +174,20 @@ async function accrueCappedApprovalSpend(
   const now = Date.now();
   const workingDir = (await owner.db.queryOne<{ workingDir: string | null }>(
     'SELECT working_dir AS workingDir FROM sessions WHERE id = ?', [sessionId]))?.workingDir ?? undefined;
+  // 把子会话的账记到父会话的 session-scope approval:piUsageReceipts 里
+  // 子 LLM 调用的 sessionId 是子 pi 会话;经 sessions.parent_session_id 抬到父会话。
+  // 非 USD 币种无法无歧义换算,不记。归属条件:approval 的 (provider, model) 必须
+  // 与本次行一致,provider 取 context.providerId(行本身不含 provider)。
+  const parentRow = await owner.db.queryOne<{ parent: string | null }>(
+    'SELECT parent_session_id AS parent FROM sessions WHERE id = ?', [sessionId]);
+  const attributableSessionIds = new Set([sessionId, ...(parentRow?.parent ? [parentRow.parent] : [])]);
   const relevant = approvals.filter((approval) => {
     if (approval.maxCostUsd === undefined) return false;
     if (now < approval.grantedAt || now > approval.expiresAt) return false;
-    if (approval.scope === 'session') return approval.sessionId === sessionId;
+    const rowProvider = context.providerId ?? '';
+    const anyRowModelMatch = receipts.some((r) => approval.model === r.model && rowProvider === approval.provider);
+    if (!anyRowModelMatch) return false;
+    if (approval.scope === 'session') return Boolean(approval.sessionId && attributableSessionIds.has(approval.sessionId));
     return Boolean(workingDir && approval.projectRoot && isWithinProject(workingDir, approval.projectRoot));
   });
   if (!relevant.length) return;
@@ -191,10 +201,12 @@ async function accrueCappedApprovalSpend(
     const pricedRow = pricedAmountByReceipt.get(row.receiptId);
     let amountUsd: number | null = null;
     let estimated = true;
+    // P0-C:pricedRow 存在但 amount=0(BYOM 参考估算的消息价)也必须进入参考定价
+    // 估算分支,否则 estimate 路径永远走不通 -> 真实费用被低估。
     if (pricedRow && typeof pricedRow.amount === 'number' && pricedRow.amount > 0 && pricedRow.currency === 'USD') {
       amountUsd = pricedRow.amount;
       estimated = !pricedRow.actualCost;
-    } else if (!pricedRow) {
+    } else {
       // provider-api 行台账 amount 为 0 —— 用参考定价估算(估计口径,上限文档中如实说明)。
       const money = resolveTurnCost({ rawModel: model, agent: 'pi', tokens: row,
         sdkCostDelta: route === 'provider-api' ? undefined : segment.costUsd,
@@ -209,6 +221,8 @@ async function accrueCappedApprovalSpend(
     if (amountUsd === null || amountUsd <= 0) continue;
     for (const scopeKey of scopeKeys) addSubagentModelSpend(scopeKey, amountUsd, estimated);
   }
+  // P0-C:结算落地即释放以子会话 id 为 key 的并发预留(幂等;runner 侧也会释放)。
+  for (const scopeKey of scopeKeys) releaseSubagentModelSpend(scopeKey, sessionId);
 }
 
 async function broadcastPersistedPiSpend(owner: PiUsageOwner, sessionId: string): Promise<void> {

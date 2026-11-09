@@ -3477,10 +3477,9 @@ export class PiAgent extends BaseAgent {
       process.pid,
       opts.sessionInstanceId?.trim() || runtimeInstanceId,
     );
-    // 执行策略校验文件(P1-7/P1-8):Host 按当前会话的保护区生成 key/费用累计路径。
-    // 路径本身不含 key,但路径泄露即可读 key 伪造签名,因此只进 spawnEnv
-    // (随 spawnEnv 进扩展与 runner),其 env 名进入 piSecretEnvNames 剥离面。
-    let executionPolicyFiles: { keyFile?: string; spendFile?: string } | undefined;
+    // 执行策略校验资产(P1-7/P0-B):公钥文件(SPKI DER base64,公开值)+费用累计路径。
+    // 私钥从不下发到扩展/runner;公钥文件路径仅用于扩展/runner 的 verifier 读取。
+    let executionPolicyFiles: { publicKeyFile?: string; spendFile?: string } | undefined;
     try {
       executionPolicyFiles = await this.deps.resolvePiSubagentModelExecutionFiles?.();
     } catch {
@@ -5704,9 +5703,7 @@ export class PiAgent extends BaseAgent {
         // 扩展照旧现读快照,能力不受影响。
         CINDY_SUBAGENT_ENV.runtimeFile,
         CINDY_SUBAGENT_ENV.ownerId,
-        // 执行策略的校验文件路径(签名 key + 费用累计)同样是控制面:
-        // 拿到路径可直接读出 signing key 伪造快照;只用于扩展/runner 的校验读取。
-        'CINDY_PI_SUBAGENT_POLICY_KEY_FILE',
+        // 执行策略校验资产(费用账本路径是控制面:防 Agent 篡改记账;公钥文件公开值放行):
         'CINDY_PI_SUBAGENT_SPEND_FILE',
         'CINDY_PI_MODEL_REQUEST_PREFS_FILE',
         // 受管工具路径同属控制面：不得让获批 bash 改写/替换后影响后续自动放行的 grep/find。
@@ -5773,7 +5770,7 @@ export class PiAgent extends BaseAgent {
           [CINDY_SUBAGENT_ENV.ownerId]: subagentRuntimeOwnerId,
           // 校验文件路径:扩展/runner 派发前读取 key 与累计费用(P1-7/P1-8)。
           // 只存在时注入;缺省时扩展侧验证失败 -> fail-closed。
-          ...(executionPolicyFiles?.keyFile ? { CINDY_PI_SUBAGENT_POLICY_KEY_FILE: executionPolicyFiles.keyFile } : {}),
+          ...(executionPolicyFiles?.publicKeyFile ? { CINDY_PI_SUBAGENT_POLICY_PUBLIC_KEY: executionPolicyFiles.publicKeyFile } : {}),
           ...(executionPolicyFiles?.spendFile ? { CINDY_PI_SUBAGENT_SPEND_FILE: executionPolicyFiles.spendFile } : {}),
         } : {}),
         // 嵌入式 runtime 不做启动期联网:关掉 pi 的版本检查与安装遥测

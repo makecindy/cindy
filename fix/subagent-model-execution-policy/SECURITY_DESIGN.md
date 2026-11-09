@@ -19,11 +19,17 @@
 6. **费用敏感默认收紧。** paid 路由只有在 `approved-paid` 模式或存在未过期
    approval 时才可执行；development 下 allow-list 命中也不够，必须叠加
    Host approval(P1-4)。
-7. **快照可复核。** Host 对快照 HMAC-SHA256 签名(密钥文件 0600，按 owner 隔离)；
-   扩展 / runner 验签、会话绑定、24 小时时效，篡改即失效(P1-8)。
-8. **费用上限是真的。** 带 `maxCostUsd` 的 approval 累计记账(Host 结算钩子)，
-   派发前用同一 `approvalSpendKey` 口径读累计并执行上限(P1-7)；BYOM 行
-   用参考定价估算并单独标记为估计口径。
+7. **快照可复核(P0-B 非对称)。** 授权**判断**只在可信 Host 边界(Desktop 主
+   进程)做出,并以 **Ed25519** 签名；扩展/runner 的 verifier 只凭**公钥**
+   验签。私钥永不进 Agent env;公钥文件公开值放行。Agent 即使有 shell 和
+   文件读写权限,也只能读到公钥,伪造授权必须私钥 —— 故无法自行生成有效
+   授权。签名 + 会话绑定 + 24 小时时效三重校验。HMAC 方案(P1-8)已退役:
+   0600 文件模式不等于同用户进程隔离。
+8. **费用上限(诚实口径)。** 带 `maxCostUsd` 的 approval 累计记账(Host 结算
+   钩子,paypal>0 实际 / BYOM 参考估算分开标注),派发前用同一 `approvalSpendKey`
+   口径读 **结算累计 + 在途预留**,上限到达即拒(P1-7/P0-C)。⚠️ 上限度量的是
+   已结算费用 + 预留,不是「单次请求的硬天花板」:运行中单请求的 token 消费
+   无法实时拦截,文档与 PR 文案不作此宣称。
 
 ## 架构(四道闸)
 
@@ -44,7 +50,8 @@ approvals,version=1)     + policy-denials.jsonl                            ↓
   fail-closed 的 `parseModelExecutionPolicy`(任一 route/approval 非法即整页拒)；
   `decision.allowed === true` 之外的一切状态都是 deny。
 - **扩展不能 import Host 模块**(字符串模板注入)，`cindy-subagent-source.ts` 里
-  逐字镜像了判定逻辑并验签(读 `CINDY_PI_SUBAGENT_POLICY_KEY_FILE`)；
+  逐字镜像了判定逻辑并验签(读 `CINDY_PI_SUBAGENT_POLICY_PUBLIC_KEY`,只认
+  Host 公钥)；
   runner 同样内联一份，在 `launchTask` 里 spawn 前复核验签。
   三方同语义由测试守住关键字符串 + 决策单测。
 - **分级规则**(仅审计展示)：
@@ -58,12 +65,13 @@ approvals,version=1)     + policy-denials.jsonl                            ↓
   `sourceProviderId`，匹配时严格相等)(P1-5)；
   approvals 来自 Host 用户审批存储(`subagent-model-approvals-store.ts`，
   唯一写入口仅设置 UI 可达，Agent 不在 AgentDeps 上)；只下发未过期的。
-- **本地模式**：默认 `approved-paid`(见 `subagent-model-execution-settings-store.ts`)；
+- **本地模式**：默认 `development`(P1-D)；
   私人数据会话/项目强制 `local-only`，设置里的 mode 对其不生效(P1-6)。
 - **pi/index.ts** 每次写运行时快照时调用 Host resolver 注入签名后的
-  `executionPolicy`，并以文件路径 env 形式把密钥文件 / 费用账本路径给扩展
-  (两者名均在 pi bash/model .spawn 边界处剥离)；未注入/失败 → 快照里**不带**
-  授权 → 扩展 fail-closed 拒绝新派发(已有会话的运行中任务不受影响)。
+  `executionPolicy`，并以文件路径 env 形式把**公钥文件 / 费用账本路径**(不再
+  是私钥文件)给扩展；私钥永不下发,费用账本路径名在 pi bash/model .spawn
+  边界处剥离(公钥文件公开可放行)。未注入/失败 → 快照里**不带**授权 →
+  扩展 fail-closed 拒绝新派发(已有会话的运行中任务不受影响)。
 
 ## Orca Worker
 
@@ -72,6 +80,22 @@ approvals,version=1)     + policy-denials.jsonl                            ↓
 deny → 返回 `MODEL_EXECUTION_DENIED`，不建会话。**失败关闭**(P0-3)：
 resolver 缺失、抛错、返回 null/undefined 都是 deny；只有显式
 `{ allowed: true }` 才继续。Desktop 主进程已注入。
+
+## 威胁模型(P0-B)
+
+| 攻击者能力 | 对本方案的影响 |
+|---|---|
+| Agent 可改写 runtime 快照 / runner config | 签名断裂 → fail-closed |
+| Agent 可读公钥文件、生成自己的 Ed25519 密钥对 | 伪造快照用攻击者密钥签;verifier 只认 Host 公钥 → 拒(回归测试覆盖) |
+| Agent 可直接调 provider API(自有 Key) | 策略管的是 Cindy Host 的执行面;Agent 自持 Key 的场外调用由 API 返回面治理,**不在本策略内** |
+| Agent 进程崩溃留下过期预留 | 预留 TTL 10min 自清(Host/Runner) |
+
+**设计说明(为什么不是 IPC/Proxy 实时问答)**:pi 扩展在子进程内运行,与
+Host 之间没有可同步调用的执行面 —— 授权判断必须在**会话级**(setModel/
+writeSubagentRuntimeFile)预先作出。本方案把判断点做在可信边界、把结果做成
+不可伪造的密码学凭据(Ed25519 签名快照 + 24h 时效),效果等价于「每次
+派发都问一次可信 Host」:判断永远由可信边界做出,不可被 Agent 伪造、重放或
+篡改。Agent 即使拿到凭据,也只能做已授权的事。
 
 ## 残留路径(未覆盖,见 MIGRATION_PLAN.md)
 
@@ -87,5 +111,7 @@ resolver 缺失、抛错、返回 null/undefined 都是 deny；只有显式
   只记时间、父会话、provider、model、裁决、原因;**不记** API Key、提示词、用户内容。
 - 每次执行的 usageSegments 本就带 model/provider，已有；tier 追加为展示；
   费用以 `daily_model_usage` 为准；approval 的 `maxCostUsd` 以派发时累计
-  记账 `subagent-model-spend.json` 为执行依据(币种非 USD 的行不记账，
-  避免汇率猜测；BYOM 行用参考定价估算并标注估计口径)。
+  记账 `subagent-model-spend.json` 为执行依据(币种非 USD 的行不记账,
+  避免汇率猜测;BYOM 行用参考定价估算并标注估计口径)。
+  上限是「已结算累计 + 在途预留」口径,不是单请求硬天花板(运行中单请求 token
+  消费无法实时拦截)。

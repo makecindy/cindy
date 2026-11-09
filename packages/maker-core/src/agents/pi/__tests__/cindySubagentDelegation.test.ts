@@ -1,4 +1,4 @@
-import { randomUUID, createHmac } from 'node:crypto';
+import { randomUUID, createHmac, generateKeyPairSync, sign } from 'node:crypto';
 import { Buffer } from 'node:buffer';
 import { createRequire } from 'node:module';
 import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
@@ -26,7 +26,8 @@ afterEach(async () => {
   vi.unstubAllEnvs();
   await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true })));
 });
-const POLICY_KEY = Buffer.alloc(32, 7);
+const testKeyPair = generateKeyPairSync('ed25519');
+const POLICY_PUBLIC_KEY = testKeyPair.publicKey.export({ format: 'der', type: 'spki' }).toString('base64');
 // 与 maker-core canonicalExecutionPolicy 字节级一致的签发（P1-8：签名防篡改）。
 function signPolicy(policy: Record<string, unknown>) {
   const snapshot = { ...policy, issuedAt: Date.now() };
@@ -56,7 +57,7 @@ function signPolicy(policy: Record<string, unknown>) {
     })),
     issuedAt: snapshot.issuedAt,
   });
-  const signature = createHmac('sha256', POLICY_KEY).update(canonical, 'utf8').digest('hex');
+  const signature = sign(null, Buffer.from(canonical, 'utf8'), testKeyPair.privateKey).toString('hex');
   return { ...snapshot, signature };
 }
 
@@ -69,8 +70,8 @@ async function fixture(fsOverrides: Record<string, unknown> = {}) {
   vi.stubEnv('CINDY_PI_SUBAGENT_RUNTIME_FILE', path.join(root, 'runtime.json'));
   // P1-8：快照验签需要 key 文件与会话 id env，与生产 pi/index.ts 注入一致。
   const policyKeyFile = path.join(root, 'policy-key.json');
-  await writeFile(policyKeyFile, JSON.stringify({ key: POLICY_KEY.toString('base64') }), { mode: 0o600 });
-  vi.stubEnv('CINDY_PI_SUBAGENT_POLICY_KEY_FILE', policyKeyFile);
+  await writeFile(policyKeyFile, JSON.stringify({ publicKey: POLICY_PUBLIC_KEY }), { mode: 0o600 });
+  vi.stubEnv('CINDY_PI_SUBAGENT_POLICY_PUBLIC_KEY', policyKeyFile);
   vi.stubEnv('CINDY_PI_SESSION_ID', 'sess-test');
   await writeFile(path.join(root, 'runtime.json'), JSON.stringify({ modelRoutes: { 'available-model': [] } }));
   const runId = randomUUID();
@@ -349,8 +350,8 @@ describe('Pi subagent provider selection', () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), 'pi-policy-key-'));
     roots.push(dir);
     const policyKeyFile = path.join(dir, 'policy-key.json');
-    await writeFile(policyKeyFile, JSON.stringify({ key: POLICY_KEY.toString('base64') }), { mode: 0o600 });
-    vi.stubEnv('CINDY_PI_SUBAGENT_POLICY_KEY_FILE', policyKeyFile);
+    await writeFile(policyKeyFile, JSON.stringify({ publicKey: POLICY_PUBLIC_KEY }), { mode: 0o600 });
+    vi.stubEnv('CINDY_PI_SUBAGENT_POLICY_PUBLIC_KEY', policyKeyFile);
     vi.stubEnv('CINDY_PI_SESSION_ID', 'sess-test');
   });
   // 同一裸模型 id 在两个真实连接下重名(ex: 智谱 Coding Plan 与 OpenCode Go 都有 glm-5.3-flash),

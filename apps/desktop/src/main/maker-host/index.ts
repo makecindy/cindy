@@ -2580,11 +2580,11 @@ export function getMaker(): Maker {
       },
       resolvePiRuntimeModels: () => deriveAvailableModels(getDesktopSelectableCatalog(), 'pi'),
       resolvePiSubagentModelExecutionPolicy: resolveDesktopPiSubagentModelExecutionPolicy,
-      // fail-closed:拿不到 key 路径时扩展/runner 没有校验材料,只会导致拒绝派发,
-      // 不会退化为不鉴权。
+      // fail-closed:拿不到公钥文件时扩展/runner 没有校验材料,只会导致拒绝派发,
+      // 不会退化为不鉴权。公钥可公开;私钥不经任何 env 出 Desktop 主进程。
       resolvePiSubagentModelExecutionFiles: () => {
-        const { filePath: keyFile } = getOrCreateSubagentModelSigningKey();
-        return { keyFile, spendFile: subagentModelSpendFilePath() };
+        const { publicFilePath: publicKeyFile } = getOrCreateSubagentModelSigningKey();
+        return { publicKeyFile, spendFile: subagentModelSpendFilePath() };
       },
       resolvePiRuntimeModelDescriptor: (providerId, modelId) =>
         resolvePiRuntimeModelDescriptor(getDesktopSelectableCatalog(), providerId, modelId, {

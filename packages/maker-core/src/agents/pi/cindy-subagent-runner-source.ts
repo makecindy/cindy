@@ -838,7 +838,7 @@ function main() {
       approvals.push(approval);
     }
     if (typeof raw.issuedAt !== 'number' || !Number.isFinite(raw.issuedAt) || raw.issuedAt <= 0) return null;
-    if (raw.signature !== undefined && (typeof raw.signature !== 'string' || !/^[0-9a-f]{64}$/.test(raw.signature))) return null;
+    if (raw.signature !== undefined && (typeof raw.signature !== 'string' || !/^[0-9a-f]{128}$/.test(raw.signature))) return null;
     return {
       version: 1,
       sessionId: raw.sessionId.trim(),
@@ -884,15 +884,20 @@ function main() {
   }
   var POLICY_MAX_AGE_MS = 24 * 60 * 60 * 1000;
   var policyKeyCache = {};
-  function policyReadSigningKey() {
-    const file = process.env.CINDY_PI_SUBAGENT_POLICY_KEY_FILE;
+  /** 读取 Host 公钥(公开值;读不到一律 null -> fail-closed)。 */
+  function policyReadPublicKey() {
+    const file = process.env.CINDY_PI_SUBAGENT_POLICY_PUBLIC_KEY;
     if (typeof file !== 'string' || file.length === 0) return null;
     if (policyKeyCache.file === file) return policyKeyCache.key || null;
     policyKeyCache.file = file;
+    policyKeyCache.key = null;
     try {
       const parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
-      const key = typeof parsed.key === 'string' ? Buffer.from(parsed.key, 'base64') : null;
-      policyKeyCache.key = key && key.length >= 16 ? key : null;
+      const raw = typeof parsed.publicKey === 'string' ? parsed.publicKey : null;
+      if (raw) {
+        const { createPublicKey } = require('node:crypto');
+        policyKeyCache.key = createPublicKey({ key: Buffer.from(raw, 'base64'), format: 'der', type: 'spki' });
+      }
     } catch (error) {
       policyKeyCache.key = null;
     }
@@ -900,22 +905,128 @@ function main() {
   }
   function verifyRunnerExecutionPolicy(snapshot, expectedSessionId, now) {
     if (!snapshot) return null;
-    const key = policyReadSigningKey();
-    if (!key) return null;
+    const publicKey = policyReadPublicKey();
+    if (!publicKey) return null;
     if (typeof snapshot.signature !== 'string') return null;
     if (!expectedSessionId || snapshot.sessionId !== expectedSessionId) return null;
     if ((now || Date.now()) - snapshot.issuedAt > POLICY_MAX_AGE_MS) return null;
-    const { createHmac, timingSafeEqual } = require('node:crypto');
-    const expected = createHmac('sha256', key).update(policyCanonical(snapshot), 'utf8').digest();
-    let actual;
-    try { actual = Buffer.from(snapshot.signature, 'hex'); } catch (error) { return null; }
-    if (actual.length !== expected.length || !timingSafeEqual(actual, expected)) return null;
+    const { verify: ed25519Verify } = require('node:crypto');
+    let ok = false;
+    try {
+      ok = ed25519Verify(null, Buffer.from(policyCanonical(snapshot), 'utf8'), publicKey, Buffer.from(snapshot.signature, 'hex'));
+    } catch (error) {
+      return null;
+    }
+    if (!ok) return null;
     return snapshot;
   }
   function policyApprovalSpendKey(approval, snapshot) {
     if (approval.scope === 'session') return 'session:' + (approval.sessionId || snapshot.sessionId);
     const root = String(approval.projectRoot || '').replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
     return 'project:' + root;
+  }
+  function policyReleaseReservation(scopeKey, reservationId) {
+    // 在 settle 时释放并发预留(P0-C);best-effort,失败不影响任务收尾。
+    if (typeof scopeKey !== 'string' || !scopeKey || typeof reservationId !== 'string' || !reservationId) return;
+    const file = process.env.CINDY_PI_SUBAGENT_SPEND_FILE;
+    if (typeof file !== 'string' || !file) return;
+    const lockPath = file + '.lock';
+    let fd;
+    const deadline = Date.now() + 2000;
+    while (true) {
+      try {
+        fd = fs.openSync(lockPath, 'wx');
+        fs.writeSync(fd, String(process.pid));
+        break;
+      } catch (error) {
+        if (fd !== undefined) { try { fs.closeSync(fd); } catch (ignored) {} }
+        try {
+          const stat = fs.statSync(lockPath);
+          if (Date.now() - stat.mtimeMs > 30000) { fs.unlinkSync(lockPath); continue; }
+        } catch (ignored) {}
+        if (Date.now() > deadline) return;
+        const end = Date.now() + 10;
+        while (Date.now() < end) {}
+      }
+    }
+    try {
+      const parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
+      const scope = parsed && typeof parsed === 'object' && parsed.byScope && typeof parsed.byScope === 'object'
+        ? parsed.byScope[scopeKey]
+        : null;
+      if (scope && typeof scope === 'object' && scope.reservedUsdById && typeof scope.reservedUsdById === 'object') {
+        if (reservationId in scope.reservedUsdById) {
+          delete scope.reservedUsdById[reservationId];
+          scope.updatedAt = Date.now();
+          atomicWriteJson(file, parsed);
+        }
+      }
+    } catch (ignored) {} finally {
+      try { if (fd !== undefined) fs.closeSync(fd); } catch (ignored) {}
+      try { fs.unlinkSync(lockPath); } catch (ignored) {}
+    }
+  }
+  /**
+   * 预算预留(P0-C 并发):launch 时按剩余 cap 预留一笔(plausible upper bound),
+   * 并发 Worker 互相可见 reserved,避免 N 个 Worker 同时穿透 cap。
+   * reservationId = 子会话 id —— Host 结算时以同一 id 释放。
+   */
+  function policyReserve(amountUsd, scopeKey, reservationId) {
+    const file = process.env.CINDY_PI_SUBAGENT_SPEND_FILE;
+    if (typeof file !== 'string' || !file) return 0;
+    const lockPath = file + '.lock';
+    let fd;
+    const deadline = Date.now() + 2000;
+    while (true) {
+      try {
+        fd = fs.openSync(lockPath, 'wx');
+        fs.writeSync(fd, String(process.pid));
+        break;
+      } catch (error) {
+        if (fd !== undefined) { try { fs.closeSync(fd); } catch (ignored) {} }
+        try {
+          const stat = fs.statSync(lockPath);
+          if (Date.now() - stat.mtimeMs > 30000) { fs.unlinkSync(lockPath); continue; }
+        } catch (ignored) {}
+        if (Date.now() > deadline) return 0;
+        const end = Date.now() + 10;
+        while (Date.now() < end) {}
+      }
+    }
+    try {
+      const parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
+      if (!parsed || typeof parsed !== 'object' || !parsed.byScope || typeof parsed.byScope !== 'object') return 0;
+      const scope = parsed.byScope[scopeKey] || { actualUsd: 0, estimatedUsd: 0, reservedUsdById: {}, updatedAt: 0 };
+      if (scope.reservedUsdById && typeof scope.reservedUsdById === 'object' && reservationId in scope.reservedUsdById) {
+        return scope.reservedUsdById[reservationId];
+      }
+      scope.reservedUsdById = scope.reservedUsdById && typeof scope.reservedUsdById === 'object' ? scope.reservedUsdById : {};
+      scope.reservedUsdById[reservationId] = amountUsd;
+      scope.updatedAt = Date.now();
+      parsed.byScope[scopeKey] = scope;
+      // 一条写路径两种口径:spend 记账也走 atomicWriteJson(带 retry 的 tmp+rename)
+      atomicWriteJson(file, parsed);
+      return amountUsd;
+    } catch (ignored) {
+      return 0;
+    } finally {
+      try { if (fd !== undefined) fs.closeSync(fd); } catch (ignored) {}
+      try { fs.unlinkSync(lockPath); } catch (ignored) {}
+    }
+  }
+  /**
+   * 预算预留(P0-C 并发):launch 时按剩余 cap 预留一笔(plausible upper bound),
+   * 并发 Worker 互相可见 reserved,避免 N 个 Worker 同时穿透 cap。
+   * reservationId = 子会话 id —— Host 结算时以同一 id 释放。
+   */
+  function policyReserveAmount(capUsd, spentUsd, scopeKey, reservationId) {
+    if (!(capUsd > 0) || !(spentUsd >= 0)) return 0;
+    const remaining = capUsd - spentUsd;
+    if (remaining <= 0) return 0;
+    // 单任务预留上限:每子会话最多预留 $1 —— 防止一个长会话把 cap 全部占住,
+    // 其余任务拿不到额度。(onset-real cost 结算后释放。)
+    const perTaskCeiling = 1;
+    return policyReserve(Math.min(perTaskCeiling, remaining), scopeKey, reservationId);
   }
   function policyReadSpendByScope() {
     const file = process.env.CINDY_PI_SUBAGENT_SPEND_FILE;
@@ -930,7 +1041,10 @@ function main() {
         if (!entry || typeof entry !== 'object') continue;
         const actual = typeof entry.actualUsd === 'number' && Number.isFinite(entry.actualUsd) ? Math.max(0, entry.actualUsd) : 0;
         const estimated = typeof entry.estimatedUsd === 'number' && Number.isFinite(entry.estimatedUsd) ? Math.max(0, entry.estimatedUsd) : 0;
-        out[scopeKey] = actual + estimated;
+        const reserved = entry.reservedUsdById && typeof entry.reservedUsdById === 'object'
+          ? Object.values(entry.reservedUsdById).reduce(function (acc, v) { return acc + (typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : 0); }, 0)
+          : 0;
+        out[scopeKey] = actual + estimated + reserved;
       }
       return out;
     } catch (error) {
@@ -957,6 +1071,10 @@ function main() {
       }
       if (snapshot.mode !== 'approved-paid') break; // paid 继续走 approval 检查(P1-4)
       return { allowed: true, reason: 'explicitly allow-listed paid route under approved-paid mode' };
+    }
+    // P0-A:local-only 硬隔离 —— approvals 不进入判定,任何非本地路由直接拒。
+    if (snapshot.mode === 'local-only') {
+      return { allowed: false, reason: 'route "' + provider + '/' + model + '" is not executable in local-only mode; temporary approvals cannot override local-only' };
     }
     let exhaustedByCap = false;
     for (const approval of snapshot.approvals) {
@@ -1010,6 +1128,31 @@ function main() {
       }
       task.authorizationDecision = 'allowed';
       if (policyDecision.approvalId) task.approvalId = policyDecision.approvalId;
+      // P0-C:带 maxCostUsd 的 approval 在 launch 时原子预留预算(并发可见),
+      // 避免 N 个 Worker 同时穿透 cap。reservationId = 子会话 id(Host 结算释放)。
+      if (policySnapshot && policyDecision.approvalId) {
+        const approval = policySnapshot.approvals.find(a => a.id === policyDecision.approvalId);
+        if (approval && approval.maxCostUsd !== undefined) {
+          const scopeKeyForReserve = policyApprovalSpendKey(approval, policySnapshot);
+          const spentNow = Object.prototype.hasOwnProperty.call(policySpend, scopeKeyForReserve)
+            ? Number(policySpend[scopeKeyForReserve])
+            : 0;
+          const reserved = policyReserveAmount(approval.maxCostUsd, spentNow, scopeKeyForReserve, task.sessionId);
+          if (reserved > 0) {
+            task.policySpendScopeKey = scopeKeyForReserve;
+            task.policyReservationId = task.sessionId;
+          } else if (spentNow >= approval.maxCostUsd) {
+            // 预留不到且已到 cap —— 视为耗尽,拒绝 spawn(与 decide 的 spend 检查对齐)。
+            task.status = 'failed';
+            task.error = 'Model execution policy denied spawn for ' + task.provider + '/' + (task.model || task.displayModel) + ': approval spend cap reached; request a new capped approval from the user';
+            task.authorizationDecision = 'denied';
+            task.endedAt = Date.now();
+            scheduleStatus();
+            resolve();
+            return;
+          }
+        }
+      }
       fs.mkdirSync(task.sessionDir, { recursive: true, mode: 0o700 });
       const args = [
         '--mode', 'rpc',
@@ -1126,6 +1269,12 @@ function main() {
         task.stdin = undefined;
         task.inputClosed = true;
         task.pendingApprovals = [];
+        // P0-C:任务收尾释放并发预留(Host 结算侧也会按子会话 id 释放,幂等)。
+        if (task.policySpendScopeKey && task.policyReservationId) {
+          policyReleaseReservation(task.policySpendScopeKey, task.policyReservationId);
+          task.policySpendScopeKey = undefined;
+          task.policyReservationId = undefined;
+        }
         task.endedAt = Date.now();
         if (state.stopRequested || task.stopRequested) {
           task.status = 'stopped';

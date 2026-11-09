@@ -3,6 +3,7 @@ import { Buffer } from 'node:buffer';
 
 import {
   approvalSpendKey,
+  createExecutionPolicyKeyPair,
   decideModelExecution,
   isWithinProject,
   normalizeApproval,
@@ -13,7 +14,9 @@ import {
 } from '../model-execution-policy.js';
 
 const NOW = 1_700_000_000_000;
-const KEY = Buffer.alloc(32, 7);
+const keyPair = createExecutionPolicyKeyPair();
+const PUB = keyPair.publicKey;
+const SEC = keyPair.secretKey;
 
 function snapshot(overrides: Partial<ModelExecutionPolicySnapshot> = {}): ModelExecutionPolicySnapshot {
   return {
@@ -291,33 +294,79 @@ describe('isWithinProject', () => {
 describe('snapshot signature (P1-8)', () => {
   function signed(overrides: Partial<ModelExecutionPolicySnapshot> = {}) {
     const snap = snapshot(overrides);
-    return { ...snap, signature: signExecutionPolicySnapshot(snap, KEY) };
+    return { ...snap, signature: signExecutionPolicySnapshot(snap, SEC) };
   }
 
   it('round-trips: signed snapshot verifies for the bound session', () => {
-    expect(parseAndVerifyExecutionPolicy(signed(), KEY, 'sess-parent', NOW)?.sessionId).toBe('sess-parent');
+    expect(parseAndVerifyExecutionPolicy(signed(), PUB, 'sess-parent', NOW)?.sessionId).toBe('sess-parent');
   });
 
   it('rejects a tampered snapshot even with a syntactically valid signature', () => {
     const tampered = { ...signed(), mode: 'approved-paid' as const };
-    expect(parseAndVerifyExecutionPolicy(tampered, KEY, 'sess-parent', NOW)).toBeNull();
+    expect(parseAndVerifyExecutionPolicy(tampered, PUB, 'sess-parent', NOW)).toBeNull();
   });
 
   it('rejects an unsigned snapshot', () => {
-    expect(parseAndVerifyExecutionPolicy(snapshot(), KEY, 'sess-parent', NOW)).toBeNull();
+    expect(parseAndVerifyExecutionPolicy(snapshot(), PUB, 'sess-parent', NOW)).toBeNull();
   });
 
   it('rejects a snapshot replayed into a different session', () => {
-    expect(parseAndVerifyExecutionPolicy(signed(), KEY, 'sess-other', NOW)).toBeNull();
+    expect(parseAndVerifyExecutionPolicy(signed(), PUB, 'sess-other', NOW)).toBeNull();
   });
 
   it('rejects a stale snapshot beyond 24h', () => {
     const stale = signed({ issuedAt: NOW - 25 * 60 * 60 * 1000 });
-    expect(parseAndVerifyExecutionPolicy(stale, KEY, 'sess-parent', NOW)).toBeNull();
+    expect(parseAndVerifyExecutionPolicy(stale, PUB, 'sess-parent', NOW)).toBeNull();
   });
 
-  it('rejects verification with a different key', () => {
-    expect(parseAndVerifyExecutionPolicy(signed(), Buffer.alloc(32, 9), 'sess-parent', NOW)).toBeNull();
+  it('rejects verification with a different public key', () => {
+    expect(parseAndVerifyExecutionPolicy(signed(), createExecutionPolicyKeyPair().publicKey, 'sess-parent', NOW)).toBeNull();
+  });
+
+  it('P0-B: a snapshot signed by an attacker keypair with the same structure is rejected (no secret = no authorization)', () => {
+    const attacker = createExecutionPolicyKeyPair();
+    const forged = { ...snapshot(), signature: signExecutionPolicySnapshot(snapshot(), attacker.secretKey) };
+    // attacker 把整份快照(含更宽松的 mode)以自己的私钥签了出来 —— verifier 只认 Host 公钥
+    expect(parseAndVerifyExecutionPolicy(forged, PUB, 'sess-parent', NOW)).toBeNull();
+  });
+});
+
+describe('P0-A: local-only cannot be overridden by approvals', () => {
+  it('denies a paid route in local-only even with a valid live approval', () => {
+    const decision = decideModelExecution(snapshot({
+      mode: 'local-only',
+      approvals: [{
+        id: 'appr-paid', provider: 'openrouter-a3fe858b', model: 'stealth/crouton-alpha',
+        scope: 'session', sessionId: 'sess-parent', grantedBy: 'user',
+        grantedAt: NOW - 1000, expiresAt: NOW + 60_000,
+      }],
+    }), {
+      provider: 'openrouter-a3fe858b', model: 'stealth/crouton-alpha',
+    }, NOW);
+    expect(decision.allowed).toBe(false);
+    expect(decision.reason).toContain('local-only');
+  });
+
+  it('denies an unmatched paid route in local-only even with a valid live approval', () => {
+    const decision = decideModelExecution(snapshot({
+      mode: 'local-only',
+      approvals: [{
+        id: 'appr-x', provider: 'openrouter-a3fe858b', model: 'deepseek/deepseek-v4-flash',
+        scope: 'session', sessionId: 'sess-parent', grantedBy: 'user',
+        grantedAt: NOW - 1000, expiresAt: NOW + 60_000,
+      }],
+    }), {
+      provider: 'openrouter-a3fe858b', model: 'deepseek/deepseek-v4-flash',
+    }, NOW);
+    expect(decision.allowed).toBe(false);
+    expect(decision.reason).toContain('local-only');
+  });
+
+  it('still allows a local route in local-only', () => {
+    const decision = decideModelExecution(snapshot({ mode: 'local-only' }), {
+      provider: 'omlx', model: 'Qwen',
+    }, NOW);
+    expect(decision.allowed).toBe(true);
   });
 });
 

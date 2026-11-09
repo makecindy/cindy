@@ -8,14 +8,14 @@ import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { CINDY_SUBAGENT_RUNNER_SOURCE } from '../cindy-subagent-runner-source.js';
-import { parseModelExecutionPolicy, signExecutionPolicySnapshot } from '../model-execution-policy.js';
+import { createExecutionPolicyKeyPair, parseModelExecutionPolicy, signExecutionPolicySnapshot } from '../model-execution-policy.js';
 
 // 测试签发 key:与 maker-core canonicalExecutionPolicy 字节级一致(P1-8)。
-const POLICY_KEY = Buffer.alloc(32, 7);
+const POLICY_KEYPAIR = createExecutionPolicyKeyPair();
 function signPolicy(policy: Record<string, unknown>) {
   const parsed = parseModelExecutionPolicy(policy);
   if (!parsed) throw new Error('invalid test execution policy');
-  return { ...parsed, signature: signExecutionPolicySnapshot(parsed, POLICY_KEY) };
+  return { ...parsed, signature: signExecutionPolicySnapshot(parsed, POLICY_KEYPAIR.secretKey) };
 }
 
 /**
@@ -578,14 +578,14 @@ process.stdin.on('end', () => {
   // first terminal write — no race with a fast child.
   if (options.poisonResultPath) await mkdir(path.join(runDir, 'result.json'), { recursive: true });
   const policyKeyFile = path.join(runDir, 'policy-key.json');
-  await writeFile(policyKeyFile, JSON.stringify({ key: POLICY_KEY.toString('base64') }), { mode: 0o600 });
+  await writeFile(policyKeyFile, JSON.stringify({ publicKey: POLICY_KEYPAIR.publicKey }), { mode: 0o600 });
   // resume 重新拉起 runner 时要继承 key 文件 env(与生产 Host 注入一致)。
-  process.env.CINDY_PI_SUBAGENT_POLICY_KEY_FILE = policyKeyFile;
+  process.env.CINDY_PI_SUBAGENT_POLICY_PUBLIC_KEY = policyKeyFile;
   const child = spawn(process.execPath, [runnerFile, configPath], {
     cwd: root,
     env: {
       ...process.env,
-      CINDY_PI_SUBAGENT_POLICY_KEY_FILE: policyKeyFile,
+      CINDY_PI_SUBAGENT_POLICY_PUBLIC_KEY: policyKeyFile,
       CINDY_TEST_PI_PIDS: pidsFile,
       CINDY_TEST_PI_ARGS: argsFile,
       CINDY_TEST_PI_PROMPTS: promptsFile,

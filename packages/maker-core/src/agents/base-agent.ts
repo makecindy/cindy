@@ -740,7 +740,8 @@ export interface AgentDeps {
    * pi 以 env(CINDY_PI_SUBAGENT_POLICY_KEY_FILE / CINDY_PI_SUBAGENT_SPEND_FILE)
    * 交给扩展和 runner;扩展/runner 派发前用它做 HMAC 校验与费用上限检查。
    */
-  resolvePiSubagentModelExecutionFiles?: () => { keyFile?: string; spendFile?: string } | Promise<{ keyFile?: string; spendFile?: string } | undefined>;
+  /** 可信 verifier 资产(仅 Host 资产,Agent 无写入面):公钥文件(公开值)+费用账本文件。 */
+  resolvePiSubagentModelExecutionFiles?: () => { publicKeyFile?: string; spendFile?: string } | Promise<{ publicKeyFile?: string; spendFile?: string } | undefined>;
 
   /**
    * 解析某 session 的 cc-debug raw 文件落盘路径 (host 注入)。host 用 logger 的 logDir 拼

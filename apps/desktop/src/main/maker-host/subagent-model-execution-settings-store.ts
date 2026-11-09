@@ -1,11 +1,12 @@
 // Subagent 模型执行策略的**用户侧设置**(owner 隔离,见 SECURITY_DESIGN.md):
 //
-//   - mode:子代理模型执行模式。默认 `approved-paid` —— allow-list 内路由可完整
-//     执行,allow-list 外一律拒绝(不再默认 development 需要额外审批)。
+//   - mode:子代理模型执行模式。默认 `development`(P1-D)—— local 照常,
+//     allow-list 免费模型照常,未单独授权的收费模型一律拒绝(即使列在
+//     model chain 中)。`approved-paid` 保留,但只能经用户显式启用。
 //   - privateData:声明为「涉及私人数据」的 session / project。命中时**强制**
 //     local-only,无论用户在设置里把 mode 调成什么。
 //
-// 写入口只属于用户设置面;Agent 无权调用。
+// 写入口只属于用户设置面(Host 侧写文件);Agent 无权调用。
 
 import { app } from 'electron';
 import path from 'node:path';
@@ -20,8 +21,12 @@ const log = desktopMakerLogger.child('subagent-model-execution-settings-store');
 
 export type { ModelExecutionMode };
 
-/** 默认 approved-paid:allow-list 内模型(含付费)可运行,allow-list 外拒绝。 */
-export const DEFAULT_EXECUTION_MODE: ModelExecutionMode = 'approved-paid';
+/**
+ * 默认模式(P1-D):开发模式 —— local 照常;allow-list 中的免费模型照常;
+ * 任何未单独授权的收费模型一律拒绝(即使列在 model chain 中)。
+ * `approved-paid` 保留,但只能经用户显式启用(设置入口,不经 Agent)。
+ */
+export const DEFAULT_EXECUTION_MODE: ModelExecutionMode = 'development';
 
 export interface ExecutionSettings {
   mode: ModelExecutionMode;

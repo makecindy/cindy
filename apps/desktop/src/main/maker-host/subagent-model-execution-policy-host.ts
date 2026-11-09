@@ -220,7 +220,9 @@ async function buildSnapshot(
     // 故签发前先归一化,保证签出的对象与验签的对象字节级一致(P1-8)。
     const parsed = parseModelExecutionPolicy(unsigned);
     if (!parsed) return undefined;
-    return { ...parsed, signature: signExecutionPolicySnapshot(parsed, key) };
+    // 授权判断只在可信 Host 边界(Desktop 主进程)做出:私钥只在此处使用(P0-B)。
+    const { secretKey } = getOrCreateSubagentModelSigningKey();
+    return { ...parsed, signature: signExecutionPolicySnapshot(parsed, secretKey) };
   } catch (error) {
     log.warn(`${label} execution policy failed; snapshot omitted (fail-closed)`, {
       sessionId: context.sessionId,

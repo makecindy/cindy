@@ -22,13 +22,13 @@
  *     从 bot-model-chain + approvals store 组装 allowedRoutes 并签名。
  *   - durable runner 在 spawn 前第二道检查(见 cindy-subagent-runner-source)。
  *
- * 快照签名(P1-8):Host 用只有 Desktop 主进程能读的 signing key 对快照做
- * HMAC 签名;扩展/runner 派发前必须用 `parseAndVerifyExecutionPolicy`
- * 校验签名 + session 绑定 + 时效。Agent 即使能改写运行期文件 / config,
- * 也无法伪造 Host 授权(伪造需先读出 key 文件,属蓄意泄漏行为,见文档)。
+ * 快照签名(P1-8 / P0-B):Host 只在可信边界(Desktop 主进程)做**授权判断**并用
+ * Ed25519 私钥签名;扩展/runner 只凭**公钥**验签,密钥文件从不下发给同权限的
+ * Agent/Runner(P0-B:0600 ≠ 进程隔离)。Agent 即使有 shell / 文件读写,也只能
+ * 读到公钥,无法伪造 Host 授权;签名、session 绑定、24h 时效三重校验。
  */
 
-import { createHmac, timingSafeEqual } from 'node:crypto';
+import { createPrivateKey, createPublicKey, generateKeyPairSync, sign as ed25519Sign, verify as ed25519Verify } from 'node:crypto';
 
 export const MODEL_EXECUTION_POLICY_VERSION = 1;
 
@@ -74,7 +74,7 @@ export interface ModelExecutionPolicySnapshot {
   approvals: ModelExecutionApproval[];
   /** 快照生成时间(审计用)。 */
   issuedAt: number;
-  /** Host HMAC(对 canonicalExecutionPolicy 编码后的签名);缺失即拒绝。 */
+  /** Host Ed25519 签名(对 canonicalExecutionPolicy 编码后的签名,hex);缺失即拒绝。 */
   signature?: string;
 }
 
@@ -164,7 +164,7 @@ export function parseModelExecutionPolicy(raw: unknown): ModelExecutionPolicySna
   const issuedAt = record.issuedAt;
   if (typeof issuedAt !== 'number' || !Number.isFinite(issuedAt) || issuedAt <= 0) return null;
   const signatureRaw = record.signature;
-  if (signatureRaw !== undefined && (typeof signatureRaw !== 'string' || !/^[0-9a-f]{64}$/.test(signatureRaw))) {
+  if (signatureRaw !== undefined && (typeof signatureRaw !== 'string' || !/^[0-9a-f]{128}$/.test(signatureRaw))) {
     return null;
   }
   return {
@@ -212,29 +212,56 @@ export function canonicalExecutionPolicy(snapshot: ModelExecutionPolicySnapshot)
   });
 }
 
-/** Host 侧签名:调用方必须先 `parseModelExecutionPolicy` 校验结构。 */
-export function signExecutionPolicySnapshot(snapshot: ModelExecutionPolicySnapshot, key: Buffer): string {
-  return createHmac('sha256', key).update(canonicalExecutionPolicy(snapshot), 'utf8').digest('hex');
+export interface ExecutionPolicyKeyPair {
+  /** SPKI DER base64,仅公钥,可安全分发给 verifier。 */
+  publicKey: string;
+  /** PKCS8 DER base64,只能在可信 Host 边界保存与使用。 */
+  secretKey: string;
+}
+
+export function createExecutionPolicyKeyPair(): ExecutionPolicyKeyPair {
+  const { publicKey, privateKey } = generateKeyPairSync('ed25519');
+  return {
+    publicKey: publicKey.export({ format: 'der', type: 'spki' }).toString('base64'),
+    secretKey: privateKey.export({ format: 'der', type: 'pkcs8' }).toString('base64'),
+  };
+}
+
+/** Host 侧签名(唯一持私钥处);调用方必须先 `parseModelExecutionPolicy` 校验结构。 */
+export function signExecutionPolicySnapshot(snapshot: ModelExecutionPolicySnapshot, secretKeyB64: string): string {
+  const secretKey = createPrivateKey({ key: Buffer.from(secretKeyB64, 'base64'), format: 'der', type: 'pkcs8' });
+  return ed25519Sign(null, Buffer.from(canonicalExecutionPolicy(snapshot), 'utf8'), secretKey).toString('hex');
 }
 
 /**
- * 完整校验:结构 + 签名 + session 绑定 + 时效。任一失败返回 null;
- * 调用方据此 fail-closed。key 为 Host 的 signing key(32 字节随机)。
+ * 完整校验:结构 + Ed25519 签名 + session 绑定 + 时效。任一失败返回 null;
+ * 调用方据此 fail-closed。publicKeyB64 为 Host 公钥(SPKI DER base64)。
  */
 export function parseAndVerifyExecutionPolicy(
   raw: unknown,
-  key: Buffer | null | undefined,
+  publicKeyB64: string | null | undefined,
   expectedSessionId: string | null | undefined,
   now = Date.now(),
 ): ModelExecutionPolicySnapshot | null {
   const snapshot = parseModelExecutionPolicy(raw);
   if (!snapshot) return null;
-  if (!key || key.length === 0) return null;
+  if (!publicKeyB64) return null;
   if (typeof snapshot.signature !== 'string') return null;
   if (!expectedSessionId || snapshot.sessionId !== expectedSessionId) return null;
   if (now - snapshot.issuedAt > EXECUTION_POLICY_MAX_AGE_MS) return null;
-  const expected = signExecutionPolicySnapshot(snapshot, key);
-  if (!timingSafeEqual(Buffer.from(expected, 'hex'), Buffer.from(snapshot.signature, 'hex'))) return null;
+  let publicKey;
+  try {
+    publicKey = createPublicKey({ key: Buffer.from(publicKeyB64, 'base64'), format: 'der', type: 'spki' });
+  } catch {
+    return null;
+  }
+  const ok = ed25519Verify(
+    null,
+    Buffer.from(canonicalExecutionPolicy(snapshot), 'utf8'),
+    publicKey,
+    Buffer.from(snapshot.signature, 'hex'),
+  );
+  if (!ok) return null;
   return snapshot;
 }
 
@@ -274,6 +301,9 @@ function routeMatches(
  *     精确归属)、scope 匹配本 session/project、未过期、maxCostUsd 未耗尽
  *     (调用方用 spendUsdByApproval 传入已记账金额;未提供则跳过该项)→
  *     放行并带回 approvalId。
+ *     ⚠️ P0-A 例外:mode 为 local-only 时**跳过整段 approval 检查** —— 任何
+ *     非本地路由在 local-only 下无条件拒绝,临时 approval 不能覆盖;要跑非本地
+ *     模型必须由用户显式把 mode 切出 local-only(模式切换只经用户设置入口)。
  *  4. 其余 → deny。
  *
  * 注:模糊的用户文本(如"用其他模型协作")不进入本函数;授权只能来自
@@ -316,6 +346,14 @@ export function decideModelExecution(
       break;
     }
     return { allowed: true, reason: 'explicitly allow-listed paid route under approved-paid mode' };
+  }
+  // P0-A:local-only 硬隔离 —— approvals 不进入判定,任何非本地路由直接拒。
+  // (free 路由在上面的 allowedRoutes 循环里已按同规则拒绝,此处覆盖未命中/paid 情形。)
+  if (snapshot.mode === 'local-only') {
+    return {
+      allowed: false,
+      reason: `route "${provider}/${model}" is not executable in local-only mode; temporary approvals cannot override local-only`,
+    };
   }
   let exhaustedByCap = false;
   for (const approval of snapshot.approvals) {

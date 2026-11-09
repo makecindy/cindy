@@ -15,14 +15,14 @@ import {
   CINDY_SUBAGENT_ENV,
   CINDY_SUBAGENT_EXTENSION_SOURCE,
 } from '../cindy-subagent-source.js';
-import { parseModelExecutionPolicy, signExecutionPolicySnapshot } from '../model-execution-policy.js';
+import { createExecutionPolicyKeyPair, parseModelExecutionPolicy, signExecutionPolicySnapshot } from '../model-execution-policy.js';
 
 // 与 maker-core canonicalExecutionPolicy 字节级一致的测试签发(P1-8)。
-const POLICY_KEY = Buffer.alloc(32, 7);
+const POLICY_KEYPAIR = createExecutionPolicyKeyPair();
 function signedPolicy(policy: Record<string, unknown>) {
   const parsed = parseModelExecutionPolicy(policy);
   if (!parsed) throw new Error('invalid test execution policy');
-  return { ...parsed, signature: signExecutionPolicySnapshot(parsed, POLICY_KEY) };
+  return { ...parsed, signature: signExecutionPolicySnapshot(parsed, POLICY_KEYPAIR.secretKey) };
 }
 
 const roots: string[] = [];
@@ -48,7 +48,7 @@ async function fixture() {
   const extensionFile = path.join(root, 'extension.cjs');
   await writeFile(permissionFile, '{"mode":"ask"}\n');
   const policyKeyFile = path.join(root, 'policy-key.json');
-  await writeFile(policyKeyFile, JSON.stringify({ key: POLICY_KEY.toString('base64') }), { mode: 0o600 });
+  await writeFile(policyKeyFile, JSON.stringify({ publicKey: POLICY_KEYPAIR.publicKey }), { mode: 0o600 });
   await writeFile(runtimeFile, JSON.stringify({
     provider: 'fixture',
     model: 'fixture-model',
@@ -193,9 +193,9 @@ describe('Cindy PI Subagent foreground durable path', () => {
       [CINDY_SUBAGENT_ENV.ownerId]: 'foreground-owner',
       CINDY_PI_PERMISSION_FILE: f.permissionFile,
       CINDY_PI_SESSION_ID: 'parent-session',
-        CINDY_PI_SUBAGENT_POLICY_KEY_FILE: f.policyKeyFile,
+        CINDY_PI_SUBAGENT_POLICY_PUBLIC_KEY: f.policyKeyFile,
       CINDY_PI_SESSION_TOKEN: 'parent-session-token-1234567890abcdef',
-      CINDY_PI_SUBAGENT_POLICY_KEY_FILE: f.policyKeyFile,
+      CINDY_PI_SUBAGENT_POLICY_PUBLIC_KEY: f.policyKeyFile,
       PI_CODING_AGENT_DIR: f.configHome,
     });
     const registered: {
@@ -285,7 +285,7 @@ describe('Cindy PI Subagent foreground durable path', () => {
         [CINDY_SUBAGENT_ENV.ownerId]: 'foreground-owner',
         CINDY_PI_PERMISSION_FILE: f.permissionFile,
         CINDY_PI_SESSION_ID: 'parent-session',
-        CINDY_PI_SUBAGENT_POLICY_KEY_FILE: f.policyKeyFile,
+        CINDY_PI_SUBAGENT_POLICY_PUBLIC_KEY: f.policyKeyFile,
         PI_CODING_AGENT_DIR: f.configHome,
       });
       const registered: { execute?: (...args: unknown[]) => Promise<unknown> } = {};
@@ -352,7 +352,7 @@ setTimeout(() => process.exit(0), 20000).unref();
         [CINDY_SUBAGENT_ENV.ownerId]: 'foreground-owner',
         CINDY_PI_PERMISSION_FILE: f.permissionFile,
         CINDY_PI_SESSION_ID: 'parent-session',
-        CINDY_PI_SUBAGENT_POLICY_KEY_FILE: f.policyKeyFile,
+        CINDY_PI_SUBAGENT_POLICY_PUBLIC_KEY: f.policyKeyFile,
         PI_CODING_AGENT_DIR: f.configHome,
       });
       const registered: { execute?: (...args: unknown[]) => Promise<unknown> } = {};
@@ -468,7 +468,7 @@ setTimeout(() => process.exit(2), 5000).unref();
         [CINDY_SUBAGENT_ENV.ownerId]: 'foreground-owner',
         CINDY_PI_PERMISSION_FILE: f.permissionFile,
         CINDY_PI_SESSION_ID: 'parent-session',
-        CINDY_PI_SUBAGENT_POLICY_KEY_FILE: f.policyKeyFile,
+        CINDY_PI_SUBAGENT_POLICY_PUBLIC_KEY: f.policyKeyFile,
         PI_CODING_AGENT_DIR: f.configHome,
       });
       const registered: { execute?: (...args: unknown[]) => Promise<unknown> } = {};
