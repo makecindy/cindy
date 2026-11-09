@@ -159,17 +159,16 @@ function start(c, release, { mock = false } = {}) {
   env.CINDY_PERSONAL_MONITOR_DIR = dir; env.CINDY_PERSONAL_GENERATION = generation;
   const mode = mock ? [`--isolated=personal-smoke-${generation.slice(0, 8)}`, '--mock'] : c.runtime.mode === 'shared' ? ['--shared'] : [`--isolated=${c.name}`, ...(c.automatic.mock ? ['--mock'] : [])];
   const log = path.join(dir, 'console.log');
-  // Let the repository wrapper own Terminal and its bounded log drain. A nested
-  // script PTY is not needed; it can leave Electron alive after the wait-ready
-  // wrapper exits while Forge/Vite lose their terminal. Regular file output also
-  // prevents application logs from depending on the supervisor's PTY consumer.
+  // Keep coordinator output in a file, but pass the existing terminal input.
+  // The repository wrapper uses that terminal for the dev server and owns its
+  // single PTY + bounded log drain. Never pipe the PTY through the supervisor.
   const output = fs.openSync(log, 'a', 0o600);
   let child;
   try {
     child = spawn('/bin/zsh', ['-c', personalLaunchCommand,
       'personal-build', c.runtime.node, path.join(release.directory, 'scripts/desktop-restart-runner.mjs'),
-      '--wait-ready', `--region=${c.region}`, ...mode], {
-      cwd: release.directory, env, detached: true, stdio: ['ignore', output, output],
+      '--wait-ready', '--reuse-terminal', `--region=${c.region}`, ...mode], {
+      cwd: release.directory, env, detached: true, stdio: ['inherit', output, output],
     });
   } finally { fs.closeSync(output); }
   let exited = false, error, exitCode;

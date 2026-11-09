@@ -711,10 +711,15 @@ preparation never authorizes a restart or enables it. Moving from an ad-hoc shel
 identity can require macOS permission approval once; signature verification does not prove
 privacy permission or remote login works. This is local signing, not notarized public distribution.
 
-The supervisor uses `desktop-restart-runner.mjs` to own Terminal and its bounded log drain,
-with the wrapper's own output going to a regular file. Do not wrap this again in a detached
-`script` PTY: a blocked/lost PTY can leave Electron alive after Forge/Vite exits and produce a
-white window. A nonzero wrapper exit immediately fails acceptance even if a main PID remains.
+The supervisor and dev server share one Terminal window. It passes live stdin and
+`--reuse-terminal` to `desktop-restart-runner.mjs`; coordinator output still goes to the
+generation's `console.log`. The repository wrapper writes dev output directly to that input
+terminal, using one `script` PTY with the existing bounded `apps/desktop/logs/dev-terminal.log`
+drain. It does not open another Terminal window. Missing terminal input fails before stopping
+anything; ordinary headless developer launches retain their existing new-window behavior.
+Do not add another detached PTY or pipe PTY output through the supervisor: a blocked/lost
+consumer can leave Electron alive after Forge/Vite exits and produce a white window.
+A nonzero wrapper exit immediately fails acceptance even if a main PID remains.
 A successful wrapper exit means readiness only, not the end of the running app. The interface
 still uses the development server; prebuilt static UI delivery is not part of this change.
 
