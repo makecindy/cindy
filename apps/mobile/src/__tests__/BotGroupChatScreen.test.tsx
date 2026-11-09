@@ -330,7 +330,15 @@ vi.mock('@/session/ImageLightbox', () => ({
     return el('div', { 'data-testid': 'lightbox', 'data-url': url, 'data-count': String(images.length) });
   },
 }));
-vi.mock('@/session/MessageRenderer', () => ({
+vi.mock('@/session/MessageRenderer', async () => {
+  const { useSessionQuickSend } = await import('@/session/SessionQuickSendContext');
+  const { richAnswerText } = await import('@cindy/maker-shared/rich-answer');
+  const { createContext } = await import('react');
+  return { MessageHeavyContentVisibilityContext: createContext(true),
+  MarkdownBody: ({ text }: any) => {
+    const send = useSessionQuickSend();
+    return el('button', { 'data-testid': 'rich-group-send', disabled: !send, onClick: () => send?.('Visible rich reply') }, richAnswerText(text));
+  },
   MessagePayloadModal: ({ payload, onClose }: any) => payload
     ? el('div', { 'data-testid': 'diagramModal', 'data-source': payload.body },
       el('button', { 'data-testid': 'diagramModal.close', onClick: onClose }, '关闭'))
@@ -344,7 +352,8 @@ vi.mock('@/session/MessageRenderer', () => ({
         ? { kind: 'media', media: { kind: 'image', url: item.uri, previewable: false } }
         : { kind: 'file', title: item.name, body: '' }),
     }, item.name))),
-}));
+};
+});
 vi.mock('@/session/useBotGroupRemoteMedia', () => {
   const resolve = async (media: any) => ({ url: media.url, previewable: true, mimeType: 'image/png' });
   return { useBotGroupRemoteMedia: () => resolve };
@@ -3104,6 +3113,33 @@ vi.mock('@/session/ModelDocumentPreview', () => ({ ModelDocumentPreview: () => n
 vi.mock('@/session/BotGroupTextAttachmentPreview', () => ({ BotGroupTextAttachmentPreview: () => null, botGroupTextAttachmentPreviewKind: () => null }));
 vi.mock('@/session/NativeVideoPlayer', () => ({ NativeVideoPlayer: () => null }));
 vi.mock('@/session/mediaPlayerWebView', () => ({ RemoteMediaPlayerWebView: () => null }));
+
+// Unit: verify the group screen supplies its own sender in both main and thread surfaces.
+// Rich controls themselves are exercised in BotGroupMarkdownText.test.tsx.
+it.each([undefined, 'thread-root'])('sends a rich answer independently of the composer in %s', async threadRootId => {
+  h.chat.server = true;
+  const content = '```cindy-ui\n' + JSON.stringify({ seq: 1, version: 1, op: 'create', id: 'submit', kind: 'button', props: { label: 'Reply', send: 'Visible rich reply' } }) + '\n```';
+  const data = group({ openPlan: null, plans: [], messages: [message('rich-screen', 1, { authorBotId: 'mimi', content, threadRootId })] });
+  await render(data, 'ready', threadRootId, '');
+  await act(async () => h.row.onChangeText('Keep composer draft'));
+  expect(h.chat.act).not.toHaveBeenCalled();
+  await click('rich-group-send');
+  expect(h.chat.act).toHaveBeenCalledWith('send', { text: 'Visible rich reply', clientId: 'uuid-1', mentions: { all: false, botIds: [] } });
+  expect(h.row.value).toBe('Keep composer draft');
+  await render({ ...data, archived: true }, 'ready', threadRootId, '');
+  expect(byId('rich-group-send')!.disabled).toBe(true);
+});
+
+it('keeps a shared rich thread answer readable without inheriting the main group sender', async () => {
+  h.chat.server = true;
+  const content = '```cindy-ui\n' + JSON.stringify({ seq: 1, version: 1, op: 'create', id: 'submit', kind: 'button', props: { label: 'Reply', send: 'Visible rich reply' } }) + '\n```';
+  await render(group({ openPlan: null, plans: [], messages: [message('rich-share', 1, { authorKind: 'user', isSelf: false, threadShare: {
+    messageId: 'rich-original', threadRootId: 'thread-root', status: 'available', authorKind: 'bot', authorBotId: 'mimi',
+    authorName: 'Mimi', sharedByAuthor: false, content, attachments: [], createdAt: 1000, edited: false,
+  } })] }), 'ready', undefined, '');
+  expect(byId('rich-group-send')!.disabled).toBe(true);
+  expect(h.chat.act).not.toHaveBeenCalled();
+});
 
 // Behavior/performance: UI-only rerenders must not regroup the whole history; new data must.
 it('reuses history time grouping across unrelated UI renders and invalidates for messages', async () => {
