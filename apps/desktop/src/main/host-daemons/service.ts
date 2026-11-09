@@ -106,28 +106,36 @@ export interface HostDaemonsService {
   remove(id: string): Promise<void>;
 }
 
-/** 边界进行中的哨兵值：永远不会等于任何真实账号的 key。 */
-const SCOPE_BOUNDARY = 'boundary:pending';
-
 export function createHostDaemonsService(deps: HostDaemonsServiceDeps): HostDaemonsService {
   const now = deps.now ?? Date.now;
   const platform = deps.platform ?? process.platform;
 
+  /** 账号边界是否正在进行。未接线（纯逻辑 / 单测）时永远为 false。 */
+  function boundaryPending(): boolean {
+    return deps.ownerScopeKey ? (deps.isOwnerBoundaryPending?.() ?? false) : false;
+  }
+
   /**
    * 账号边界快照。null = 未接线（纯逻辑 / 单测不校验账号）。
+   *
+   * 必须保留真实 key：边界期间 `activeOwnerScopeKey()` 会随 owner 提交而改变，
+   * 用一个固定哨兵代替它，等于把「中间换过账号」这件事藏起来 —— 请求开始和结束
+   * 都落在边界里、但中间已经切了账号时，相等检查就会误判为没变。
+   *
    * 归属记录带会话标题，所以任何跨 await 的读、以及任何台账写入，都必须先取得
    * 这个值，再在之后重新比对；不一致就整体作废，不能只把返回值清空。
    */
   function scopeStamp(): string | null {
     if (!deps.ownerScopeKey) return null;
-    if (deps.isOwnerBoundaryPending?.()) return SCOPE_BOUNDARY;
-    return deps.ownerScopeKey();
+    return `${deps.ownerScopeKey()}|${boundaryPending() ? 'pending' : 'idle'}`;
   }
 
   async function traceOwner(
     task: RawScheduledTask,
   ): Promise<{ sessionId: string; title: string | null } | null | undefined> {
     if (!task.definitionMtimeMs) return null;
+    // 边界期间数据库可能正被换掉：此刻读到的行属于哪个账号无法确定，直接不读。
+    if (boundaryPending()) return undefined;
     const fromMs = task.definitionMtimeMs - ATTRIBUTION_WINDOW_MS;
     const toMs = task.definitionMtimeMs + ATTRIBUTION_WINDOW_MS;
     // 追溯要读消息库（跨 await）：切号期间读到的可能已是另一个账号的库。
@@ -166,6 +174,9 @@ export function createHostDaemonsService(deps: HostDaemonsServiceDeps): HostDaem
     if (!id.startsWith('\\') || isSystemScheduledTaskId(id)) {
       throw new HostDaemonActionError('NOT_FOUND', 'host daemon is not operable');
     }
+    if (boundaryPending()) {
+      throw new HostDaemonActionError('NOT_OWNED', 'account boundary in progress');
+    }
     const scopeBefore = scopeStamp();
     const tasks = await deps.scanTasks();
     // 扫描期间切号：这条授权可能来自上一个账号的台账，不能拿来操作本机任务。
@@ -186,6 +197,10 @@ export function createHostDaemonsService(deps: HostDaemonsServiceDeps): HostDaem
       const capturedAtMs = now();
       if (platform !== 'win32') {
         return { capturedAtMs, supported: false, entries: [], unrelatedCount: 0 };
+      }
+      // 边界进行中（拆运行时 / 换库）不扫不读：库和台账目录可能分属两个账号。
+      if (boundaryPending()) {
+        return { capturedAtMs, supported: true, entries: [], unrelatedCount: 0 };
       }
       // 清单里的条目带归属会话标题：账号切换后本次结果作废，不能把旧账号的标题
       // 交给新账号的界面（下次扫描会按新账号重新归属）。

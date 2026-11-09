@@ -441,6 +441,62 @@ describe('hostDaemons service', () => {
     expect(ledger.getMissMtime('\\airlink-autopm')).toBeNull();
   });
 
+  // 边界期间 owner 提交会换掉真实的账号 key：不能用固定哨兵把它折叠掉，
+  // 否则「开始在边界里、结束还在边界里、中间换了账号」会被判成没变。
+  it('detects an owner commit that happens entirely inside a boundary', async () => {
+    let scope = 'account-a';
+    // 请求一开始就落在边界里，结束时边界仍未结束 —— 只有真实 key 能暴露中间那次提交。
+    const pending = true;
+    const ledger = memoryLedger();
+    const readToolMessages = vi.fn(async () => {
+      // 查询期间 owner 被提交，边界仍未结束。
+      scope = 'account-b';
+      return [
+        { sessionId: 'session-a', title: '账号A的标题', content: 'schtasks /create /tn airlink-autopm' },
+      ];
+    });
+    const service = createHostDaemonsService({
+      scanTasks: async () => [task()],
+      readToolMessages,
+      ledger,
+      stopTask: async () => {},
+      runTask: async () => {},
+      deleteTask: async () => {},
+      platform: 'win32',
+      now: () => 1_800_000_000_000,
+      ownerScopeKey: () => scope,
+      isOwnerBoundaryPending: () => pending,
+    });
+
+    const snapshot = await service.list();
+    expect(snapshot.entries).toEqual([]);
+    expect(ledger.owners.size).toBe(0);
+  });
+
+  // 边界进行中连库都不读：那一刻数据库可能正被换掉，读到的行属于哪个账号无法确定。
+  it('refuses to read tool history while the account boundary is in progress', async () => {
+    const readToolMessages = vi.fn(async () => []);
+    const ledger = memoryLedger();
+    const service = createHostDaemonsService({
+      scanTasks: async () => [task()],
+      readToolMessages,
+      ledger,
+      stopTask: async () => {},
+      runTask: async () => {},
+      deleteTask: async () => {},
+      platform: 'win32',
+      now: () => 1_800_000_000_000,
+      ownerScopeKey: () => 'account-a',
+      isOwnerBoundaryPending: () => true,
+    });
+
+    const snapshot = await service.list();
+    expect(snapshot.entries).toEqual([]);
+    expect(readToolMessages).not.toHaveBeenCalled();
+    expect(ledger.owners.size).toBe(0);
+    await expect(service.run('\\airlink-autopm')).rejects.toMatchObject({ code: 'NOT_OWNED' });
+  });
+
   // 切号发生在两条任务之间：第一条已经算出归属、只在内存里等着提交，也绝不能
   // 写进任何账号的台账（提交是整轮一次性的）。
   it('commits nothing when the account switches between two tasks', async () => {
