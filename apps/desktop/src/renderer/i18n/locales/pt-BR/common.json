@@ -19980,10 +19980,10 @@
       "useCodex": "Entrar com o Codex"
     },
     "title": "Contas de assinatura",
-    "note": "A primeira conta usa a pasta padrão da CLI. As contas adicionais fazem login separadamente. Novas tarefas são distribuídas; as existentes mantêm sua conta.",
     "strategy": "Balanceamento de carga",
     "add": "Adicionar conta",
     "default": "Pasta padrão",
+    "defaultTag": "Padrão",
     "ready": "Conectada",
     "signedOut": "Login necessário",
     "unavailable": "Status indisponível",
