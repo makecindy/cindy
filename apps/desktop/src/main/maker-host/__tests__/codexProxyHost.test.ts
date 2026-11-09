@@ -2122,6 +2122,94 @@ describe('chatBridgeCapabilitiesForRoute', () => {
     }
   });
 
+  it('keeps Codex-converted effort when the smart child stays on the parent Responses connection', async () => {
+    const host = await freshCodexProxyHost();
+    const { setCustomProviders } = await import('../active-catalog.js');
+    const { setCustomProviderKeyReader } = await import('../provider-route.js');
+    const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+    setCustomProviders([{
+      id: 'openai-api',
+      name: 'OpenAI API',
+      source: 'user',
+      agents: ['codex'],
+      auth: { method: 'apiKey' },
+      routing: {
+        codex: {
+          wireProtocol: 'openai-responses',
+          upstream: 'https://api.openai.com/v1',
+          authStrategy: 'api-key-header',
+          supportsImageGeneration: true,
+        },
+      },
+      models: { codex: [{ id: 'gpt-6.1-sol', name: 'GPT-6.1 Sol', efforts: ['low', 'xhigh', 'ultra'] }] },
+    } as never]);
+    setCustomProviderKeyReader(() => 'openai-api-key');
+    mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
+      url: 'http://127.0.0.1:43212',
+      dispose: vi.fn(async () => undefined),
+    });
+    await host.ensureCodexProxyReady();
+    host.setCodexProxyAuthInjection('env-key');
+    host.registerComposed(
+      'session-same-connection',
+      'thread-same-connection',
+      'PRODUCT_PROMPT',
+      {
+        smartSubagentRoutes: [{
+          providerId: 'openai-api',
+          catalogModel: 'gpt-6.1-sol',
+          reasoningEffort: 'ultra',
+        }, {
+          providerId: 'other-provider',
+          catalogModel: 'other-model',
+          reasoningEffort: 'high',
+        }],
+      },
+    );
+    setSessionProvider('session-same-connection', 'openai-api');
+
+    try {
+      const transforms = mockState.createAnthropicCompatProxy.mock.calls.at(-1)?.[0]?.transformRequest ?? [];
+      const forcedRouteTransform = transforms[4];
+      if (!forcedRouteTransform) throw new Error('expected smart Subagent route transform');
+      const headers = {
+        'thread-id': 'thread-same-connection-child',
+        'x-openai-subagent': 'collab_spawn',
+        'x-codex-parent-thread-id': 'thread-same-connection',
+      };
+      // Codex already resolved native ultra to this model's HTTP effort.
+      expect(forcedRouteTransform({
+        model: 'gpt-6.1-sol',
+        reasoning: { effort: 'xhigh', summary: 'auto' },
+        input: [],
+      }, { reqId: 1, method: 'POST', url: '/responses', headers })).toEqual({
+        model: 'gpt-6.1-sol',
+        reasoning: { effort: 'xhigh', summary: 'auto' },
+        input: [],
+      });
+      // A different provider does not get that conversion, so the parent level still stamps.
+      expect(forcedRouteTransform({
+        model: 'other-model',
+        reasoning: { effort: 'low', summary: 'auto' },
+        input: [],
+      }, {
+        reqId: 2,
+        method: 'POST',
+        url: '/responses',
+        headers: { ...headers, 'thread-id': 'thread-other-provider-child' },
+      })).toEqual({
+        model: 'other-model',
+        reasoning: { effort: 'high', summary: 'auto' },
+        input: [],
+      });
+    } finally {
+      host.unregister('session-same-connection');
+      clearSessionProvider('session-same-connection');
+      setCustomProviderKeyReader(() => null);
+      setCustomProviders([]);
+    }
+  });
+
   it('passes a locked Subagent effort through the Chat local bridge', async () => {
     const host = await freshCodexProxyHost();
     const { setCustomProviders } = await import('../active-catalog.js');

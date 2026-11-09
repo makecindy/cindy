@@ -707,7 +707,16 @@ function createForcedSubagentRequestTransform(): RequestTransform {
       ...body,
       model: route.catalogModel,
     };
-    const routed = applyReasoningEffortOverride(next, route.reasoningEffort);
+    // Codex 出站前会把原生档位换成 HTTP 档（GPT-6.1 Sol 的 ultra →
+    // multi_agent_reasoning_effort，xhigh；见 api-capabilities integration）。
+    // 智能路由跟父任务走同一条自定义 Responses 连接时，这个请求
+    // 已经是转换后的值；再把存档里的字面 ultra 盖上去会覆盖它。
+    // 换了供应商的路由不走这条转换，仍要盖父档位。
+    const parentProviderId = getSessionProvider(sessionIdFromHeaders(ctx.headers) ?? '');
+    const reasoningEffort = route.providerId === parentProviderId
+      ? undefined
+      : route.reasoningEffort;
+    const routed = applyReasoningEffortOverride(next, reasoningEffort);
     recordObservedSubagentIdentity(
       ctx.headers,
       route.catalogModel,
