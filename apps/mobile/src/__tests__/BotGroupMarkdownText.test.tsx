@@ -24,7 +24,9 @@ vi.mock('react-native', async () => {
     View: host('div'),
     ScrollView: host('section'),
     Text: host('span'),
-    Pressable: host('button'),
+    Pressable: ({ children, onPress, disabled, testID }: any) => React.createElement('button', { onClick: onPress, disabled, 'data-testid': testID }, children),
+    Switch: () => null,
+    AppState: { addEventListener: () => ({ remove() {} }) },
     ActivityIndicator: () => null,
     Linking: { openURL: actions.open },
     Dimensions: { get: () => viewport.size, addEventListener: (_: string, listener: () => void) => { viewport.listeners.add(listener); return { remove: () => viewport.listeners.delete(listener) }; } },
@@ -33,7 +35,7 @@ vi.mock('react-native', async () => {
     Platform: { OS: 'ios', select: (s: any) => s.ios ?? s.default },
   };
 });
-vi.mock('@/components/AppText', async () => ({ Text: (await import('react-native')).Text, MAX_FONT_SIZE_MULTIPLIER: 1.5 }));
+vi.mock('@/components/AppText', async () => ({ Text: (await import('react-native')).Text, MAX_FONT_SIZE_MULTIPLIER: 1.5, TextInput: ({ value, onChangeText, accessibilityLabel }: any) => createElement('input', { value, 'aria-label': accessibilityLabel, onChange: (event: any) => onChangeText(event.target.value) }) }));
 vi.mock('react-native-uitextview', async () => {
   const React = await import('react');
   const { StyleSheet } = await import('react-native');
@@ -45,6 +47,23 @@ vi.mock('react-native-uitextview', async () => {
 vi.mock('@/session/SelectionMenuText', async () => ({ SelectionMenuText: (await import('react-native')).Text }));
 vi.mock('@/session/ShareMessageCheckbox', () => ({ useCancelShareSelectionRowTap: () => null }));
 vi.mock('@/i18n', () => ({ i18n: { t: (key: string) => key } }));
+vi.mock('@react-native-async-storage/async-storage', () => ({ default: { getItem: async () => null, setItem: async () => undefined } }));
+vi.mock('lucide-react-native', () => Object.fromEntries(['Copy', 'CircleAlert', 'Mail', 'CalendarDays', 'Folder', 'ChartColumn', 'Check', 'Info', 'Clock', 'MapPin', 'Coffee', 'Image', 'Users', 'Star'].map(name => [name, () => null])));
+vi.mock('react-native-svg', () => Object.fromEntries(['default', 'Path', 'Rect', 'Ellipse', 'Polygon', 'Polyline', 'Line', 'Circle', 'Text'].map(name => [name, () => null])));
+vi.mock('@/session/ImageLightbox', () => ({ ImageLightbox: () => null }));
+vi.mock('@/auth/AuthContext', () => ({ useAuth: () => ({ user: { id: 'group-rich-test' } }) }));
+vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
+// Keep native media/WebViews out of jsdom; use real controls and the production protocol.
+vi.mock('@/session/MessageRenderer', async () => {
+  const { RichAnswer } = await import('@/session/RichAnswer');
+  const { splitRichAnswer } = await import('@cindy/maker-shared/rich-answer');
+  const { createContext } = await import('react');
+  return { MessageHeavyContentVisibilityContext: createContext(true), MarkdownBody: ({ text, richStateKey, publicMediaOnly }: any) => createElement('div', { 'data-public-media-only': publicMediaOnly },
+    splitRichAnswer(text).map(part => part.kind === 'rich'
+      ? createElement(RichAnswer, { key: part.key, source: part.source, complete: true, stateKey: `${richStateKey}:${part.key}`,
+        renderMedia: (node: any) => createElement('span', {}, /^https?:/.test(node.props.src) ? node.props.src : node.props.alt),
+        renderMarkdown: (source: string) => createElement(BotGroupMarkdownText, { content: source }) }) : part.source)) };
+});
 vi.mock('@/theme', async () => ({
   ...await import('@/theme/tokens'), monoFont: 'Menlo',
   useThemedStyles: (make: (colors: any) => any) => useMemo(() => make(palettes[theme.mode]), [make, theme.mode]),
@@ -52,7 +71,7 @@ vi.mock('@/theme', async () => ({
 }));
 
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
-vi.mock('lucide-react-native', () => ({ Copy: () => null, Check: () => null, CircleAlert: () => null }));
+
 vi.mock('@/session/messageActions', () => ({ writeClipboardText: actions.copy }));
 vi.mock('expo-file-system', () => ({ Directory: class {}, File: class {}, Paths: { cache: 'mock-cache' } }));
 vi.mock('react-native-webview', async () => {
@@ -350,6 +369,33 @@ it.each(['ios', 'android'])('matches complete rendered words across formatting o
     await act(async () => [...node.querySelectorAll('span')].find(span => span.textContent === '网页')!.click());
     expect(actions.open).toHaveBeenCalledWith('https://example.com');
   } finally { Platform.OS = 'ios'; }
+});
+
+// Unit: real group body + native rich controls. Text projection did not exercise local values,
+// explicit send or remount isolation; minimal input is one field and one send button.
+it('retains a group control value after remount and sends only on explicit click', async () => {
+  const { SessionQuickSendProvider } = await import('@/session/SessionQuickSendContext');
+  const send = vi.fn().mockResolvedValue(true);
+  const content = '```cindy-ui\n' + [
+    { seq: 1, version: 1, op: 'create', id: 'destination', kind: 'input', props: { label: 'Destination', default: 'Hangzhou' } },
+    { seq: 2, op: 'create', id: 'submit', kind: 'button', props: { label: 'Submit', send: { ref: 'destination' } } },
+  ].map(op => JSON.stringify(op)).join('\n') + '\n```';
+  const show = () => root.render(createElement(SessionQuickSendProvider, { value: send },
+    createElement(BotGroupMarkdownText, { content, authorKind: 'bot', messageKey: 'group:one:message-one' })));
+  await act(async () => show());
+  const input = node.querySelector('input')!;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, 'Shanghai');
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+  });
+  expect(send).not.toHaveBeenCalled();
+  await act(async () => root.render(null));
+  await act(async () => show());
+  expect(node.querySelector('input')!.value).toBe('Shanghai');
+  expect(node.querySelector('[data-public-media-only="true"]')).not.toBeNull();
+  await act(async () => node.querySelector('button')!.click());
+  expect(send).toHaveBeenCalledWith('Shanghai');
 });
 
 // Unit regression: switching focus rebuilt unchanged native selectable text.
