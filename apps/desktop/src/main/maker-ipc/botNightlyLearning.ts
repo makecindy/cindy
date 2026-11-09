@@ -20,6 +20,7 @@ import { isSyntheticTriggerText } from '@cindy/maker-shared/synthetic-trigger';
 import { isAutomaticInputOriginKind } from '../../shared/agentInputQueue.js';
 import type { NightlyLearningItem, NightlyLearningRun } from '../../shared/botNightlyLearning.js';
 import { hasLearningEvidence, learningSnapshotBudget, learningSnapshotPrefix } from './botLearningReviewPlan.js';
+import { reviewNightlyEvidence, type LearningCitation } from './botNightlyEvidence.js';
 import { nightlyLearningInstructions, nightlyLearningSchema, type NightlyLearningPlan } from './botNightlyLearningPlan.js';
 import {
   MAX_NIGHTLY_CANDIDATES,
@@ -435,6 +436,26 @@ async function runLocked(
     return { error: 'Nightly learning returned an invalid result' };
   }
 
+  const full = new Map(memoryFull.map((m) => [m.filename, m]));
+  const memoryChanges = plan.memories.flatMap((op, id) => {
+    if (op.op !== 'update' || !full.has(op.filename)) return [];
+    const sourceNames = new Set([op.filename]);
+    for (const other of plan.memories) {
+      if (other.op === 'delete' && other.mergedInto === op.filename) sourceNames.add(other.filename);
+    }
+    const sources = memoryFull.filter((m) => sourceNames.has(m.filename)).map((m) => ({
+      source: `memory:${m.filename}`,
+      text: [m.frontmatter.title, m.frontmatter.description, m.body].join('\n'),
+    }));
+    return [{ id, proposal: { filename: op.filename, title: op.title, description: op.description, body: op.body }, sources }];
+  });
+  const memorySupport = await reviewNightlyEvidence(ask,
+    'Check each proposed replacement of a saved memory against the original record, any merge sources, and the user statements. ' +
+    'For housekeeping, all claims in the title, description and body must follow from the records, preserving conditions, exceptions and still-valid preferences. ' +
+    'A new or changed preference (including broader scope) requires an explicit user statement supporting the change; cite that statement. A reason given by the planner is not evidence.',
+    memoryChanges, messages.filter((m) => m.role === 'user').map((m) => ({ source: `user:${m.id}`, text: m.text })),
+  );
+  if (!current()) return { skipped: true, resultText: 'Owner changed' };
   const items: NightlyLearningItem[] = [];
   const backup: NightlyLearningBackup = {};
   // 改动前先登记这次运行，每改一条就把备份和记录落盘：中途退出时已做的改动仍能在记录里撤销。
@@ -442,10 +463,10 @@ async function runLocked(
     s.runs.unshift({ id: runId, at: startedAt, ...(manual ? { manual: true } : {}), outcome: 'nothing', turns: selected.length, items: [] });
     return s;
   });
-  const add = async (item: Omit<NightlyLearningItem, 'id'>, kind: 'memory' | 'skill', b: MemorySnapshot | SkillSnapshot, a: MemorySnapshot | SkillSnapshot) => {
+  const add = async (item: Omit<NightlyLearningItem, 'id'>, kind: 'memory' | 'skill', b: MemorySnapshot | SkillSnapshot, a: MemorySnapshot | SkillSnapshot, evidence?: LearningCitation) => {
     const id = `i${items.length + 1}`;
     items.push({ id, ...item });
-    backup[id] = { kind, before: b, after: a };
+    backup[id] = { kind, before: b, after: a, ...(evidence ? { evidence } : {}) };
     await writeNightlyLearningBackup(root, botId, runId, backup);
     await updateNightlyLearningState(root, botId, (s) => {
       const run = s.runs.find((r) => r.id === runId);
@@ -455,7 +476,6 @@ async function runLocked(
       return s;
     });
   };
-  const full = new Map(memoryFull.map((m) => [m.filename, m]));
   // 合并 = 更新保留的那一条 + 删除来源。保留项的更新没写成功、保留项不存在或这一轮也要删时，不删来源。
   const plannedUpdates = new Set(plan.memories.flatMap((op) => (op.op === 'update' ? [op.filename] : [])));
   const plannedDeletes = new Set(plan.memories.flatMap((op) => (op.op === 'delete' ? [op.filename] : [])));
@@ -481,10 +501,12 @@ async function runLocked(
       if (!live || live.frontmatter.updatedAt !== prior.frontmatter.updatedAt) continue;
       const beforeSnap = memorySnapshot(live);
       if (op.op === 'update') {
+        const evidence = memorySupport.get(plan.memories.indexOf(op));
+        if (!evidence) continue;
         if (op.body === live.body && op.title === live.frontmatter.title && op.description === live.frontmatter.description) continue;
         const afterSnap = await applyMemory(store!, op.filename, { ...beforeSnap!, title: op.title, description: op.description, body: op.body }, live.frontmatter.updatedAt);
         appliedUpdates.set(op.filename, op.title);
-        await add({ kind: 'memory', action: 'updated', target: op.filename, title: op.title, reason: op.reason }, 'memory', beforeSnap, afterSnap);
+        await add({ kind: 'memory', action: 'updated', target: op.filename, title: op.title, reason: op.reason }, 'memory', beforeSnap, afterSnap, evidence);
       } else {
         const into = op.mergedInto;
         if (into && (plannedDeletes.has(into) || (plannedUpdates.has(into) && !appliedUpdates.has(into)) || !(await readMemory(store!, into)))) continue;

@@ -75,7 +75,7 @@ vi.mock('../../maker-host/index.js', () => ({
 }));
 
 import { revertNightlyLearningItem, runNightlyLearning } from '../botNightlyLearning.js';
-import { readNightlyLearningState, recordNightlyLearningTurn } from '../botNightlyLearningState.js';
+import { readNightlyLearningBackup, readNightlyLearningState, recordNightlyLearningTurn } from '../botNightlyLearningState.js';
 
 const turn = (n: number, text: string, createdAt: number) => ({
   sessionId: 'main', id: `reply${n}`, content: 'Done.', meta: JSON.stringify({ turnCompleted: true }), createdAt, role: 'canonical',
@@ -147,6 +147,7 @@ it('refuses to undo a merge after the kept memory was edited, without overwritin
     { op: 'update', filename: kept, title: 'Report results', description: 'd', body: 'Report feature results only.', reason: 'merge' },
     { op: 'delete', filename: dup, mergedInto: kept, reason: 'duplicate' },
   ] });
+  reply({ supported: [{ id: 0, source: `memory:${dup}`, quote: 'Only report results.' }] });
   await runNightlyLearning('bot', { manual: true });
   expect(h.memories.has(dup)).toBe(false);
   const [run] = (await readNightlyLearningState(h.root, 'bot'))!.runs;
@@ -218,4 +219,43 @@ it('never overwrites edits made while the model was thinking, and keeps a merge 
   expect(h.memories.get(dup).body).toBe('Only report results.');
   expect(h.skills.get('deploy')!.source).toBe('owner steps');
   expect((await readNightlyLearningState(h.root, 'bot'))!.runs[0]!.items).toEqual([]);
+});
+
+it('keeps a scoped preference unless the reviewed change is grounded in an actual source', async () => {
+  const before = '只有给负责人写汇报时，先写判断。';
+  const wider = '所有回复都先写判断。';
+  const filename = memory('report', '汇报', before);
+  const update = { op: 'update', filename, title: '表达顺序', description: 'd', body: wider, reason: '统一表述' };
+  reply({ memories: [update] });
+  reply({ supported: [{ id: 0, source: 'user:missing', quote: wider }] });
+  await runNightlyLearning('bot', { manual: true });
+  expect(h.memories.get(filename).body).toBe(before);
+  expect((await readNightlyLearningState(h.root, 'bot'))!.runs[0]!.items).toEqual([]);
+
+  const now = Date.now() + 10;
+  const clock = vi.spyOn(Date, 'now').mockReturnValue(now);
+  try {
+    await recordNightlyLearningTurn(h.root, 'bot', 'main', now);
+    h.rows = [turn(1, wider, now)];
+    reply({ memories: [update] });
+    reply({ supported: [{ id: 0, source: 'user:user1', quote: wider }] });
+    await runNightlyLearning('bot', { manual: false });
+    expect(h.memories.get(filename).body).toBe(wider);
+    const [run] = (await readNightlyLearningState(h.root, 'bot'))!.runs;
+    const backup = await readNightlyLearningBackup(h.root, 'bot', run!.id);
+    expect(backup.i1?.evidence).toEqual({ source: 'user:user1', quote: wider });
+  } finally { clock.mockRestore(); }
+});
+
+it('retains both merge records if the reviewer cannot support the replacement', async () => {
+  const kept = memory('owner', '周报', '给负责人写周报时先写风险。');
+  const duplicate = memory('weekly', '周报顺序', '周报先写风险。');
+  reply({ memories: [
+    { op: 'update', filename: kept, title: '所有答复', description: 'd', body: '所有答复先写风险。', reason: '合并' },
+    { op: 'delete', filename: duplicate, mergedInto: kept, reason: '合并' },
+  ] });
+  reply({ supported: [] });
+  await runNightlyLearning('bot', { manual: true });
+  expect(h.memories.get(kept).body).toBe('给负责人写周报时先写风险。');
+  expect(h.memories.has(duplicate)).toBe(true);
 });
