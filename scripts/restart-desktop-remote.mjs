@@ -469,6 +469,7 @@ function hasDesktopDevSignature(command) {
     command.includes('dev:desktop') ||
     command.includes('pnpm --filter desktop dev') ||
     command.includes('/node_modules/electron/') ||
+    (/\.app\/contents\/macos\/electron /.test(command) && command.includes('/apps/desktop')) ||
     (command.includes('/apps/desktop/') && (
       command.includes('vite.main.config') ||
       command.includes('vite.renderer.config') ||
@@ -546,6 +547,36 @@ async function waitForDesktopDevProcessesToExit(timeoutMs, filter = () => true) 
 
 function hasInteractiveTty() {
   return Boolean(process.stdin.isTTY && process.stdout.isTTY);
+}
+
+// A supervised personal launch has a live input terminal, but redirects the
+// coordinator's output to a file. Reuse stdin's terminal explicitly instead of
+// mistaking redirected stdout for a headless launch and opening another window.
+export function currentDarwinTerminal() {
+  if (process.platform !== 'darwin' || !process.stdin.isTTY) {
+    throw new Error('--reuse-terminal requires a live macOS terminal');
+  }
+  const result = spawnSync('/usr/bin/tty', [], {
+    stdio: ['inherit', 'pipe', 'pipe'], encoding: 'utf8',
+  });
+  const terminal = result.stdout?.trim();
+  if (result.status !== 0 || !terminal?.startsWith('/dev/tty')) {
+    throw new Error('Cannot identify the current terminal; no extra window opened');
+  }
+  return terminal;
+}
+
+export function launchDarwinDevInCurrentTerminal(command, logPath, { cwd = rootDir, env = process.env } = {}) {
+  const terminal = currentDarwinTerminal();
+  fs.mkdirSync(path.dirname(logPath), { recursive: true });
+  const output = fs.openSync(terminal, 'w');
+  try {
+    // Only this layer creates a PTY. Its output goes directly to the existing
+    // terminal; the bounded file drain remains alive for the entire dev process.
+    return spawn('/bin/zsh', ['-c', darwinTerminalLoggedCommand(command, logPath)], {
+      cwd, env, stdio: ['inherit', output, output],
+    });
+  } finally { fs.closeSync(output); }
 }
 
 function psSingleQuote(value) {
@@ -1089,6 +1120,7 @@ function devEnvEntries(env) {
     ['XDT_DESKTOP_DEV_STARTUP_STATUS_FILE', env.XDT_DESKTOP_DEV_STARTUP_STATUS_FILE],
     ['CINDY_PERSONAL_MONITOR_DIR', env.CINDY_PERSONAL_MONITOR_DIR],
     ['CINDY_PERSONAL_GENERATION', env.CINDY_PERSONAL_GENERATION],
+    ['CINDY_PERSONAL_FIXED_APP', env.CINDY_PERSONAL_FIXED_APP],
     // 插件存储启动边界的 dev 黑盒验收：仅显式临时结果路径时启用。
     ['XDT_PLUGIN_STORAGE_SMOKE_RESULT_FILE', env.XDT_PLUGIN_STORAGE_SMOKE_RESULT_FILE],
   ];
@@ -1174,14 +1206,17 @@ function launchInSystemTerminal(mode) {
   return null;
 }
 
-function startDesktopDev(mode) {
+function startDesktopDev(mode, reuseTerminal = false) {
   console.log(`==> Starting desktop ${mode} dev...`);
 
-  if (!hasInteractiveTty() && (process.platform === 'win32' || process.platform === 'darwin')) {
+  if (!reuseTerminal && !hasInteractiveTty() && (process.platform === 'win32' || process.platform === 'darwin')) {
     return launchInSystemTerminal(mode) ?? null;
   }
 
-  const child = spawn(process.execPath, [path.join(rootDir, 'scripts', 'desktop-dev-runner.mjs'), mode], {
+  const logPath = reuseTerminal ? desktopDevTerminalLogPath() : null;
+  const child = reuseTerminal
+    ? launchDarwinDevInCurrentTerminal(packageManagerCommand(mode), logPath)
+    : spawn(process.execPath, [path.join(rootDir, 'scripts', 'desktop-dev-runner.mjs'), mode], {
     cwd: rootDir,
     stdio: 'inherit',
     windowsHide: false,
@@ -1194,7 +1229,7 @@ function startDesktopDev(mode) {
     if (signal) process.kill(process.pid, signal);
     process.exit(code ?? 0);
   });
-  return null;
+  return logPath;
 }
 
 function createStartupStatusPath() {
@@ -1314,6 +1349,9 @@ async function main() {
   }
   const killOnly = argv.includes('--kill-only');
   const waitReady = argv.includes('--wait-ready');
+  const reuseTerminal = argv.includes('--reuse-terminal');
+  // Fail before the stop stage if the requested terminal has disappeared.
+  if (reuseTerminal) currentDarwinTerminal();
   const preserveRunning = argv.includes('--preserve-running');
   const replaceRunningArg = argv.find((arg) => arg.startsWith('--replace-running-root='));
   const replaceRunningRoot = replaceRunningArg
@@ -1692,7 +1730,7 @@ async function main() {
       isolationName: process.env.XDT_ISOLATED_NAME || '',
     });
   }
-  const terminalLogPath = startDesktopDev(mode);
+  const terminalLogPath = startDesktopDev(mode, reuseTerminal);
   // 所有非 ready 的结论（启动失败、超时、ready 后进程退出导致的 WHOAMI_MISMATCH）
   // 都先打印终端日志末尾，并在 verdict 里带上 log=。
   const printFailedVerdict = (verdict) => {

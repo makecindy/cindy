@@ -873,6 +873,7 @@
         "pausedLocal": "他のパソコンからの新しいタスクは受付停止中",
         "cooling": "クールダウン中",
         "coolingUntil": "クールダウン中 · {{time}} ごろ回復",
+        "quotaExhausted": "クォータを使い切りました",
         "offline": "オフライン",
         "unreachableHere": "このパソコンから接続できません",
         "unavailable": {
@@ -912,9 +913,13 @@
       "description": "各アカウントのクォータを均等に使い切るため、このメッセージは {{label}} から送ることをおすすめします（{{quota}}）。直近数回のやり取りと要約は引き継がれますが、それより前の細部は失われることがあります。",
       "quota": "残り {{left}}%",
       "quotaReset": "残り {{left}}%・{{reset}}",
-      "confirm": "切り替える",
-      "cancel": "キャンセル",
-      "remember": "今後は確認せず自動で切り替える（このタスクのみ）"
+      "confirm": "今回だけ切り替える",
+      "cancel": "今は切り替えない",
+      "remember": "今後は確認せず自動で切り替える",
+      "disable": "自動では切り替えず、確認もしない",
+      "disableFailed": "選択が保存されたか確認できませんでした。接続を確認し、タスクがあるパソコンの Cindy を最新版にしてから、もう一度お試しください。このメッセージは通常どおり送信されます。",
+      "choiceLabel": "切り替え方法（このタスクのみ）",
+      "send": "メッセージを送信"
     },
     "deleteConfirm": {
       "title": "{{provider}} のプロバイダーグループを削除しますか？",
@@ -7367,6 +7372,11 @@
         "installedExpand": "インストール済みプラグイン {{count}} 件をすべて表示",
         "installedCollapse": "追加のインストール済みプラグインを隠す",
         "recommendedSection": "おすすめ",
+        "todayRecommendations": "今日のおすすめ",
+        "marketSection": "プラグインマーケット",
+        "browseMarket": "プラグインマーケットを見る",
+        "searching": "検索中…",
+        "allLoaded": "全 {{count}} 件のプラグインを表示しました",
         "updatesAvailable": "{{count}} 件のプラグイン更新があります",
         "updateAll": "すべて更新",
         "ignoreRound": "今回は無視",
@@ -7396,7 +7406,15 @@
       },
       "market": {
         "publisherKind": {
-          "official": "公式"
+          "official": "公式",
+          "community": "コミュニティ"
+        },
+        "publisherDescription": {
+          "official": "Cindy が公式に公開・保守しています",
+          "community": "コミュニティ開発者が公開・保守しています",
+          "team": "組織内の権限を持つメンバーに共有されています",
+          "custom": "追加した Git またはローカルフォルダーのマーケットから取得",
+          "local": "このコンピューター上で開発、またはローカルファイルからインストール"
         },
         "scopeAria": "プラグインの提供元を絞り込む",
         "scope": {

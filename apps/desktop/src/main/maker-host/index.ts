@@ -1009,7 +1009,23 @@ function broadcastVisionBridgeEvent(
   }
 }
 
+/**
+ * Client mode: another process (cindy-host) owns the runtime. Every maker access
+ * throws instead of assembling a second one — the callers already treat a
+ * failed maker probe as "no runtime".
+ */
+let makerClientMode = false;
+export function setMakerClientMode(active: boolean): void {
+  makerClientMode = active;
+}
+export function isMakerClientMode(): boolean {
+  return makerClientMode;
+}
+
 export function getMaker(): Maker {
+  if (makerClientMode) {
+    throw new Error('cindy-host owns the runtime; this process is a client');
+  }
   if (!_maker) {
     makerStartupGate.assertComplete();
     // splash 已经 prepare 过, 这里只是同步读 cache 路径; 任一缺失说明 bootstrap

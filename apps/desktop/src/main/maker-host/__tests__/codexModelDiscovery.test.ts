@@ -1,3 +1,5 @@
+import path from 'node:path';
+import os from 'node:os';
 /**
  * codex-model-discovery mapper 单测 —— 用真实 codex models_cache.json 的字段形状,
  * 验证筛选(visibility/supported_in_api)+ 规范化映射 + capability 字段。
@@ -10,7 +12,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 // codex-model-discovery 顶层 import electron(readCodexDiscoveredModels 用 app.getPath);
 // 本套件只测纯 mapper,但按 main 侧测试惯例显式 mock,避免依赖 Node 下 electron 包的
 // 「名导出恰好是 undefined 不炸」这种脆弱行为。
-vi.mock('electron', () => ({ app: { getPath: () => '/tmp/xdt-codex-model-discovery-test' } }));
+// Catalog parsing exercises OAuth/cache reads; account binding is covered by
+// codexAuthBindingClaim/Invalidation, so keep this fixture explicitly authorized.
+vi.mock('../nativeProviderAuthBinding.js', () => ({ isNativeProviderAuthBound: () => true }));
+vi.mock('electron', () => ({ app: { getPath: () => path.join(os.tmpdir(), 'cindy-codex-model-discovery-test') } }));
+vi.mock('../../userDataPath.js', () => ({ getUserDataDir: () => path.join(os.tmpdir(), 'cindy-codex-model-discovery-test'), userDataPath: (...parts: string[]) => path.join(os.tmpdir(), 'cindy-codex-model-discovery-test', ...parts) }));
 vi.mock('node:fs/promises', () => ({ default: { readFile: vi.fn() } }));
 
 import {

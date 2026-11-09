@@ -12,6 +12,13 @@ import {
   parsePluginUsageAck,
   type PluginUsageEventInput,
   type PluginUsageAck,
+  parsePluginCatalogPage,
+  parsePluginReadPage,
+  parsePluginRecommendations,
+  parsePluginResolveRequest,
+  parsePluginResolveResponse,
+  type PluginResolveTarget,
+  type PluginScope,
 } from '@cindy/plugin-protocol';
 
 import { getClientEndpoint } from '../clientEndpointsService.js';
@@ -78,6 +85,32 @@ export class PluginMarketApi {
         'x-cindy-plugin-migrations': 'simulator-id-v1' },
       timeoutMs: PLUGIN_MARKET_API_TIMEOUT_MS,
     };
+  }
+
+  async catalog(options: { scope?: PluginScope | 'all'; query?: string; limit?: number;
+    cursor?: string | null; counts?: boolean } = {}) {
+    const search = new URLSearchParams({ scope: options.scope ?? 'all', limit: String(options.limit ?? 12),
+      counts: String(options.counts !== false) });
+    if (options.query?.trim()) search.set('query', options.query.trim());
+    if (options.cursor) search.set('cursor', options.cursor);
+    return parsePluginCatalogPage(await this.fetcher<unknown>(`/api/plugins/catalog?${search}`, this.requestOptions()), pluginObjectUrlOptions());
+  }
+
+  async recommendations() {
+    return parsePluginRecommendations(await this.fetcher<unknown>('/api/plugins/recommendations', this.requestOptions()), pluginObjectUrlOptions());
+  }
+
+  async resolve(targets: PluginResolveTarget[], query?: string) {
+    const body = parsePluginResolveRequest({ targets, ...(query?.trim() ? { query: query.trim() } : {}) });
+    return parsePluginResolveResponse(await this.fetcher<unknown>('/api/plugins/resolve', {
+      ...this.requestOptions(), method: 'POST', body,
+    }), targets, pluginObjectUrlOptions());
+  }
+
+  async defaults(cursor: string | null = null) {
+    const search = new URLSearchParams({ limit: '100' });
+    if (cursor) search.set('cursor', cursor);
+    return parsePluginReadPage(await this.fetcher<unknown>(`/api/plugins/defaults?${search}`, this.requestOptions()), pluginObjectUrlOptions());
   }
 
   async listAll(
