@@ -14118,6 +14118,7 @@
       "taskAutoArchived": "已归档「{{title}}」",
       "taskAutoArchivedUndo": "撤销",
       "taskAutoArchivePending": "离开此任务后将自动归档",
+      "taskAutoArchiveBlockedDirty": "「{{title}}」工作区有未提交改动，未自动归档",
       "taskAutoArchiveCancel": "取消",
       "taskAutoArchiveCancelled": "本次不会自动归档",
       "taskArchiveNow": "立即归档"

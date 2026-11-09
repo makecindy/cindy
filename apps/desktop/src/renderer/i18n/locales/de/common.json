@@ -14147,6 +14147,7 @@
       "taskAutoArchived": "„{{title}}“ archiviert",
       "taskAutoArchivedUndo": "Rückgängig",
       "taskAutoArchivePending": "Wird beim Verlassen dieser Aufgabe archiviert",
+      "taskAutoArchiveBlockedDirty": "„{{title}}“ wurde nicht automatisch archiviert: Der Arbeitsbereich enthält nicht committete Änderungen",
       "taskAutoArchiveCancel": "Abbrechen",
       "taskAutoArchiveCancelled": "Diesmal keine automatische Archivierung",
       "taskArchiveNow": "Jetzt archivieren"

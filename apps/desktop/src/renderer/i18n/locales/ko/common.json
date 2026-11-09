@@ -14118,6 +14118,7 @@
       "taskAutoArchived": "\"{{title}}\"을(를) 보관했습니다",
       "taskAutoArchivedUndo": "실행 취소",
       "taskAutoArchivePending": "이 작업을 나가면 자동으로 보관됩니다",
+      "taskAutoArchiveBlockedDirty": "「{{title}}」 작업 공간에 커밋하지 않은 변경 사항이 있어 자동 보관하지 않았습니다",
       "taskAutoArchiveCancel": "취소",
       "taskAutoArchiveCancelled": "이번에는 자동으로 보관하지 않습니다",
       "taskArchiveNow": "지금 보관"

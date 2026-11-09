@@ -14278,6 +14278,7 @@
       "taskAutoArchived": "« {{title}} » archivée",
       "taskAutoArchivedUndo": "Annuler",
       "taskAutoArchivePending": "Archivage automatique en quittant cette tâche",
+      "taskAutoArchiveBlockedDirty": "« {{title}} » n’a pas été archivée automatiquement : son espace de travail contient des modifications non validées",
       "taskAutoArchiveCancel": "Annuler",
       "taskAutoArchiveCancelled": "Pas d’archivage automatique cette fois",
       "taskArchiveNow": "Archiver maintenant"
