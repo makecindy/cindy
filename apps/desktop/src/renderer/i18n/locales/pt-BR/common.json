@@ -14278,6 +14278,7 @@
       "taskAutoArchived": "\"{{title}}\" arquivada",
       "taskAutoArchivedUndo": "Desfazer",
       "taskAutoArchivePending": "Será arquivada ao sair desta tarefa",
+      "taskAutoArchiveBlockedDirty": "“{{title}}” não foi arquivada automaticamente: há alterações não commitadas no espaço de trabalho",
       "taskAutoArchiveCancel": "Cancelar",
       "taskAutoArchiveCancelled": "Não será arquivada automaticamente desta vez",
       "taskArchiveNow": "Arquivar agora"
@@ -19990,10 +19991,10 @@
       "useCodex": "Entrar com o Codex"
     },
     "title": "Contas de assinatura",
-    "note": "A primeira conta usa a pasta padrão da CLI. As contas adicionais fazem login separadamente. Novas tarefas são distribuídas; as existentes mantêm sua conta.",
     "strategy": "Balanceamento de carga",
     "add": "Adicionar conta",
     "default": "Pasta padrão",
+    "defaultTag": "Padrão",
     "ready": "Conectada",
     "signedOut": "Login necessário",
     "unavailable": "Status indisponível",

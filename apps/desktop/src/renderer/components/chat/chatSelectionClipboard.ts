@@ -1,5 +1,23 @@
 import type { ClipboardEvent } from 'react';
 
+/** Non-prose subtrees omitted by both clipboard copy and rebuilt chat quotes. */
+export const CHAT_SELECTION_EXCLUDE_SELECTOR = '.sr-only, [data-chat-video-preview], [data-chat-copy-exclude]';
+
+export function isChatSelectionRow(style: CSSStyleDeclaration): boolean {
+  return ['grid', 'inline-grid'].includes(style.display) ||
+    (['flex', 'inline-flex'].includes(style.display) && !style.flexDirection.startsWith('column'));
+}
+
+/** Layout spacing must survive when selected children become plain text. */
+export function hasChatSelectionGap(style: CSSStyleDeclaration): boolean {
+  const gap = style.columnGap && style.columnGap !== 'normal'
+    ? style.columnGap : style.gap.split(/\s+/).at(-1) ?? '';
+  // Grid cells remain distinct even with zero gap (for example sheet numbers).
+  return ['grid', 'inline-grid'].includes(style.display) ||
+    (isChatSelectionRow(style) && (parseFloat(gap) > 0 ||
+      ['space-between', 'space-around', 'space-evenly'].includes(style.justifyContent)));
+}
+
 const EDITABLE_SELECTOR = 'input, textarea, select, [contenteditable]:not([contenteditable="false"])';
 const SEMANTIC_CONTAINER_SELECTOR = 'a, strong, b, em, i, u, s, del, code, pre, p, h1, h2, h3, h4, h5, h6, blockquote, ul, ol, li, table, thead, tbody, tfoot, tr, th, td';
 
@@ -201,15 +219,9 @@ export function copyChatSelection(event: ClipboardEvent<HTMLElement>): void {
   const preserveTextBoundaries = (source: Element, copy: Element | DocumentFragment): void => {
     if (!copy.textContent?.trim() || source.closest('.katex-html')) return;
     const style = styleOf(source);
-    const gap = style.columnGap && style.columnGap !== 'normal'
-      ? style.columnGap : style.gap.split(/\s+/).at(-1) ?? '';
-    // Grid cells remain distinct even with zero gap (for example sheet numbers).
-    const gridCells = ['grid', 'inline-grid'].includes(style.display);
     // Flex gaps carry word boundaries even when adjacent JSX has no whitespace.
     // Export text separators rather than retaining the application's layout CSS.
-    if (gridCells || (['flex', 'inline-flex'].includes(style.display) &&
-        !style.flexDirection.startsWith('column') && (parseFloat(gap) > 0 ||
-          ['space-between', 'space-around', 'space-evenly'].includes(style.justifyContent)))) {
+    if (hasChatSelectionGap(style)) {
       let previous: Node | undefined;
       for (const child of [...copy.childNodes]) {
         if (previous && !/\s$/.test(previous.textContent ?? '') && !/^\s/.test(child.textContent ?? '')) {
@@ -225,9 +237,7 @@ export function copyChatSelection(event: ClipboardEvent<HTMLElement>): void {
     const parentStyle = source.parentElement && styleOf(source.parentElement);
     // Flex row items are blockified by layout even when their authored tag is
     // inline. Keep those labels on the same line; the row's gap supplies spaces.
-    const rowItem = style.display === 'block' && parentStyle &&
-      (['grid', 'inline-grid'].includes(parentStyle.display) ||
-        (['flex', 'inline-flex'].includes(parentStyle.display) && !parentStyle.flexDirection.startsWith('column')));
+    const rowItem = style.display === 'block' && parentStyle && isChatSelectionRow(parentStyle);
     if (source.matches('span, label') && !rowItem && ['block', 'flex', 'grid'].includes(style.display)) {
       copy.prepend(doc.createElement('br'), doc.createTextNode('\n'));
       copy.append(doc.createElement('br'), doc.createTextNode('\n'));
@@ -239,7 +249,7 @@ export function copyChatSelection(event: ClipboardEvent<HTMLElement>): void {
     // Application chrome and screen-reader copies are excluded even when the
     // selection starts inside them, bypassing their marked wrapper entirely.
     const sourceElement = node.nodeType === Node.ELEMENT_NODE ? node as Element : node.parentElement;
-    if (sourceElement?.closest('.sr-only, [data-chat-video-preview], [data-chat-copy-exclude]')) {
+    if (sourceElement?.closest(CHAT_SELECTION_EXCLUDE_SELECTOR)) {
       needsRenderedPlainText = true;
       return null;
     }

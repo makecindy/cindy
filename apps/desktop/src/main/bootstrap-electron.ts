@@ -1272,10 +1272,12 @@ import { hasVoiceConversationLease } from './voice-conversation/lease.js';
 import { getBotRemoteResourceSource, ensureBotRoutineLaneSession } from './localDb/ipc/bots.js';
 import {
   registerScheduleHandlers,
+  awaitAccountSchedulerReady,
   attachSchedulerEventListeners,
   resetSchedulerReady,
 } from './maker-ipc/schedule.js';
-import { registerProjectAutomationIpc } from './maker-ipc/project-automation.js';
+import { reconcileRenamedBuiltinGhostCards } from './cindy-brain/cardStoreDb.js';
+import { attachProjectAutomationEventListeners, registerProjectAutomationIpc } from './maker-ipc/project-automation.js';
 import {
   startGoalController,
   getGoalController,
@@ -1575,7 +1577,7 @@ async function attemptStartSchedulerOnce(): Promise<void> {
           console.warn('[usage-limit] schedule reconciliation failed', error));
       });
       attachSchedulerEventListeners(scheduler, getScheduleStorage());
-      registerProjectAutomationIpc(getProjectAutomationLoader());
+      attachProjectAutomationEventListeners(getProjectAutomationLoader());
       _scheduleIpcRegistered.add(scheduler);
     }
   } catch (err) {
@@ -1819,7 +1821,8 @@ function rebindChatEmbeddingSettingsWatcher(): void {
   chatEmbeddingSettingsWatcher.rebind(ownerScopedUserDataPath('chat-embedding-settings.json'));
 }
 
-app.once('will-quit', () => chatEmbeddingSettingsWatcher.dispose());
+// The quit coordinator finishes with app.exit(), which bypasses will-quit.
+onQuit('chat-embedding-settings-watcher', () => chatEmbeddingSettingsWatcher.dispose());
 
 /**
  * 「聊天嵌入」关闭时的收尾: 总是让 chat 的 enqueue 守卫立即失效; 但只有在没有插件
@@ -4758,7 +4761,7 @@ const databaseSizeWarningSettingsWatcher = createDatabaseSizeWarningSettingsWatc
   broadcastDatabaseSizeWarningChanged();
 });
 
-app.once('will-quit', () => databaseSizeWarningSettingsWatcher.dispose());
+onQuit('database-size-warning-settings-watcher', () => databaseSizeWarningSettingsWatcher.dispose());
 
 function rebindDatabaseSizeWarningSettingsWatcher(): void {
   databaseSizeWarningSettingsWatcher.rebind(getDatabaseSizeWarningSettingsFilePath());
@@ -4951,7 +4954,7 @@ const registerIpcHandlers = () => {
       if (win) dispatchApplicationMenuCommand(win, resolveNewMakerMenuCommand(false));
     },
   });
-  app.once('will-quit', stopMenubarService);
+  onQuit('menubar-service', stopMenubarService);
   // macOS「离开时继续工作」(默认关):开着时本机不因空闲熄屏锁屏;主人离开后盖黑色遮罩,
   // 本机有人按键/点击即转系统真锁屏。共享 userData 的被动实例不接管本机屏幕。
   if (!authManager.isPassiveSharedUserDataInstance()) {
@@ -4966,11 +4969,11 @@ const registerIpcHandlers = () => {
   }
   // 灵动岛余量:与菜单栏同一份余量概览(顺序、显示与隐私设置都跟菜单栏),岛开着时才读取。
   const agentIsland = getAgentIslandService();
-  if (agentIsland) app.once('will-quit', startAgentIslandQuota(agentIsland, getQuotaOverviewService()));
+  if (agentIsland) onQuit('agent-island-quota', startAgentIslandQuota(agentIsland, getQuotaOverviewService()));
 
   // 全局框选截图快捷键 (键盘快捷键设置里可改)，支持复制、保存、贴图与新任务。
   initRegionScreenshot();
-  app.once('will-quit', stopRegionScreenshot);
+  onQuit('region-screenshot', stopRegionScreenshot);
 
   // 「在新窗口打开」会话多开 —— 新建一个完整窗口定位到该 session, 初始 bounds 取主窗。
   ipcMain.handle(
@@ -6955,8 +6958,12 @@ const registerIpcHandlers = () => {
           return null;
         }
       });
-      // maker:goal:* handler 同样提前一次性注册(eager);handler 内部 getGoalController()
-      // 取单例,invoke 时 controller 已由 attemptStartScheduler → startGoalController 启动。
+      // Project automation shares the scheduler gate; register even before its loader exists.
+      registerProjectAutomationIpc(async () => {
+        await awaitAccountSchedulerReady();
+        return getProjectAutomationLoader();
+      });
+      // Goal handlers also wait for account-host readiness when startup is still in flight.
       registerGoalHandlers();
       // clear-context 清目标 / turn 收尾 idle 兜底续跑(setter 注入,null-safe)。
       setGoalClearObserver((sid) => {
@@ -7013,11 +7020,6 @@ const registerIpcHandlers = () => {
         '[bootstrap-electron] safe.directory cleanup reconcile failed (non-fatal):',
         err,
       );
-    });
-    // 同窗口的 shadow savepoint 对账:owning session 已删除的孤儿保存点链
-    // (refs/cindy/savepoints/<sid>)启动期补删。fire-and-forget,不阻塞启动。
-    void reconcileSavepointRefsForDeletedSessions().catch((err) => {
-      console.error('[bootstrap-electron] savepoint reconcile failed (non-fatal):', err);
     });
 
     // Scheduler / Goal / Learn 统一由 localDb onReady 在 provider readiness settle 后启动。
@@ -10032,6 +10034,10 @@ app.on('ready', async () => {
         }
         return;
       }
+      // Await idempotent history repair after DB takeover, including same-owner retries.
+      // Failure goes through ensure-ready's existing retry path, never a false completion.
+      await reconcileRenamedBuiltinGhostCards(userId);
+      dbClientLog.info('builtin ghost card rename reconciliation completed');
       if (getActiveAppSession().dataOwnerId === userId) {
         void getGhostManager().retryInterruptedMutationsAfterDbReady().catch((error) => {
           dbClientLog.warn('ghost mutation recovery after DB readiness failed', {
@@ -10491,6 +10497,7 @@ app.on('ready', async () => {
   // 设备互联(跨设备远程控制):登录后连 relay,登出即断;开关与设备列表 IPC 一并注册
   let updateRelaunchRemoteBusy = false;
   initDeviceLinkService({
+    taskActivity: getAgentIslandService() ?? undefined,
     onControlledStateChanged: refreshQuotaPanelsControlState,
     onUpdateRelaunchBusyChanged: (busy) => {
       const transition = decideUpdateRelaunchBusyTransition(updateRelaunchRemoteBusy, busy);
@@ -11314,6 +11321,11 @@ function startReadyWorktreeMaintenance(): void {
       if (!isReady() || tryGetDbClient() !== db) return;
       await WorktreePool.recoverPool().catch((error) =>
         dbClientLog.warn('worktree pool recovery postponed', error),
+      );
+      if (!isReady() || tryGetDbClient() !== db) return;
+      // This DB-backed repair used to run at Maker registration, before DB takeover.
+      await reconcileSavepointRefsForDeletedSessions().catch((error) =>
+        dbClientLog.warn('savepoint reconcile postponed', error),
       );
       if (tryGetDbClient() === db) lastWorktreeMaintenanceDb = db;
     },

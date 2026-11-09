@@ -14278,6 +14278,7 @@
       "taskAutoArchived": "Se archivó «{{title}}»",
       "taskAutoArchivedUndo": "Deshacer",
       "taskAutoArchivePending": "Se archivará al salir de esta tarea",
+      "taskAutoArchiveBlockedDirty": "No se archivó «{{title}}» automáticamente: hay cambios sin confirmar en su espacio de trabajo",
       "taskAutoArchiveCancel": "Cancelar",
       "taskAutoArchiveCancelled": "No se archivará automáticamente esta vez",
       "taskArchiveNow": "Archivar ahora"
@@ -19990,10 +19991,10 @@
       "useCodex": "Iniciar sesión con Codex"
     },
     "title": "Cuentas de suscripción",
-    "note": "La primera cuenta usa la carpeta predeterminada de la CLI. Las cuentas adicionales inician sesión por separado. Las tareas nuevas se distribuyen; las existentes conservan su cuenta.",
     "strategy": "Equilibrio de carga",
     "add": "Añadir cuenta",
     "default": "Carpeta predeterminada",
+    "defaultTag": "Predeterminada",
     "ready": "Conectada",
     "signedOut": "Requiere iniciar sesión",
     "unavailable": "Estado no disponible",

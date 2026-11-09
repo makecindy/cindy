@@ -14184,6 +14184,7 @@
       "taskAutoArchived": "Archived \"{{title}}\"",
       "taskAutoArchivedUndo": "Undo",
       "taskAutoArchivePending": "Will archive when you leave this task",
+      "taskAutoArchiveBlockedDirty": "“{{title}}” was not auto-archived: its workspace has uncommitted changes",
       "taskAutoArchiveCancel": "Cancel",
       "taskAutoArchiveCancelled": "Will not auto-archive this time",
       "taskArchiveNow": "Archive now"
@@ -19803,10 +19804,10 @@
       "useCodex": "Sign in with Codex"
     },
     "title": "Subscription accounts",
-    "note": "The first account uses the CLI’s default folder. Additional accounts sign in separately. New tasks are balanced across accounts; existing tasks keep their account.",
     "strategy": "Load balancing",
     "add": "Add account",
     "default": "Default folder",
+    "defaultTag": "Default",
     "ready": "Connected",
     "signedOut": "Sign in required",
     "unavailable": "Status unavailable",

@@ -9,6 +9,7 @@ import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
+import { SettingsCard, SettingsRow } from '@/components/ui/settings-rows';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
@@ -91,20 +92,15 @@ export function CindyMergeSetting({ bot, className = 'mt-3' }: { bot: { id: stri
 
   return (
     <div className={className}>
-      <div className="overflow-hidden rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)]">
-        <button
-          type="button"
+      <SettingsCard>
+        <SettingsRow
           data-testid="cindy-merge-row"
+          lead={<Layers size={16} aria-hidden className="text-[var(--text-secondary)]" />}
+          title={t('bots.cloud.mergeLabel')}
+          hint={t('bots.cloud.mergeHint', { count: copies.length, devices })}
           onClick={() => { setKeep(bot.id); setError(null); setOpen(true); }}
-          className="flex min-h-12 w-full items-center gap-3 px-4 py-3 text-left text-14 text-[var(--text-primary)] outline-none hover:bg-[var(--surface-hover)] focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--focus-ring)]"
-        >
-          <Layers size={18} className="shrink-0 text-[var(--text-secondary)]" />
-          <span className="min-w-0 flex-1">
-            <span className="block">{t('bots.cloud.mergeLabel')}</span>
-            <span className="block truncate text-12 text-[var(--text-secondary)]">{t('bots.cloud.mergeHint', { count: copies.length, devices })}</span>
-          </span>
-        </button>
-      </div>
+        />
+      </SettingsCard>
       <ConfirmDialog
         open={open}
         presentation="standard"
