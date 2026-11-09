@@ -630,6 +630,28 @@ describe('ScheduleWebhookHost 服务器通道', () => {
 
 // New protocol outcome: managed GitHub events reach only active PR follow-up gates,
 // through the production remote receiver; stale account deliveries cannot cross owners.
+it('returns the completed GitHub snapshot even when another refresh is queued', async () => {
+  const server = new FakeServer();
+  server.github = { available: true, login: 'example-user', endpointId: 'whk-github', repositories: [] };
+  const baseUrl = await server.listen();
+  const remote = new ScheduleWebhookRemote({ baseUrl: () => baseUrl, getAccessToken: async () => 'token-1',
+    refreshAccessToken: async () => false, fetch, socketOptions: async () => ({}), logger: {}, onBatch: async () => {} });
+  try {
+    await remote.sync([]);
+    // Opening settings and regaining focus can ask for the same state together.
+    const results = await Promise.allSettled([remote.githubStatus(), remote.githubStatus()]);
+    for (const result of results) {
+      expect(result.status).toBe('fulfilled');
+      if (result.status === 'fulfilled') expect(result.value.login).toBe('example-user');
+    }
+    // A genuine failed refresh must still reject instead of claiming stale success.
+    server.unavailable = true;
+    await expect(remote.githubStatus()).rejects.toThrow('GITHUB_CONNECTION_UNAVAILABLE');
+    server.unavailable = false;
+    await expect(remote.githubStatus()).resolves.toMatchObject({ login: 'example-user' });
+  } finally { remote.stop(); await server.close(); }
+});
+
 it('discards a GitHub reconciliation response after the account is paused', async () => {
   const server = new FakeServer();
   server.github = { available: true, login: 'example-user', endpointId: 'whk-github', repositories: [] };

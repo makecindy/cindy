@@ -239,11 +239,19 @@ export class ScheduleWebhookRemote {
   }
 
   async githubStatus(): Promise<GithubAppStatus> {
+    const generation = this.generation;
     if (!this.deps.baseUrl() || !(await this.deps.getAccessToken())) return { available: false };
-    await this.refresh();
-    if (this.githubError) throw this.githubError;
-    if (this.running && !this.loaded) throw new Error('GITHUB_CONNECTION_UNAVAILABLE');
-    return this.github;
+    if (generation !== this.generation) throw new Error('WEBHOOK_ACCOUNT_CHANGED');
+    return this.enqueue(async () => {
+      this.loaded = false;
+      this.githubSynced = '';
+      await this.reconcile();
+      if (generation !== this.generation) throw new Error('WEBHOOK_ACCOUNT_CHANGED');
+      if (this.githubError) throw this.githubError;
+      if (this.running && !this.loaded) throw new Error('GITHUB_CONNECTION_UNAVAILABLE');
+      // Capture this refresh's result before the next queued refresh resets loaded.
+      return this.github;
+    });
   }
 
   async connectGithub(): Promise<string> {
@@ -349,13 +357,13 @@ export class ScheduleWebhookRemote {
     return this.enqueue(() => this.reconcile());
   }
 
-  private enqueue(operation: () => Promise<void>): Promise<void> {
+  private enqueue<T>(operation: () => Promise<T>): Promise<T> {
     const generation = this.generation;
     const run = this.work.then(() => {
       if (generation !== this.generation) throw new Error('WEBHOOK_ACCOUNT_CHANGED');
       return operation();
     });
-    this.work = run.catch(() => undefined);
+    this.work = run.then(() => undefined, () => undefined);
     return run;
   }
 
