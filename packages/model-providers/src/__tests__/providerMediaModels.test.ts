@@ -9,7 +9,7 @@ import {
 import { deriveModelList } from '../modelList.js';
 import { buildRegistry, chatEligibleSourcesForModel } from '../registry.js';
 import { buildUserProvider } from '../user-provider.js';
-import { remoteInvocationModels } from '../remoteModels.js';
+import { remoteInvocationModels, withEffectiveModelContextWindows } from '../remoteModels.js';
 import {
   isChatEligible,
   isAgentSelectableModel,
@@ -53,6 +53,13 @@ describe('remote media authorization projection', () => {
     expect(projected.models['claude-code']).toEqual([{ ...model, contextWindow: limit === 1_000_000 ? 1_000_000 : 200_000 }]);
     expect(model.contextWindow).toBe(200_000);
     expect(original.models['claude-code']).toHaveLength(2);
+    // A controlled computer's picker uses the same budget projection but keeps
+    // its full catalog, including models that cannot be invoked from elsewhere.
+    const controlled = withEffectiveModelContextWindows(original);
+    expect(controlled.models['claude-code']?.map((row) => [row.id, row.contextWindow])).toEqual([
+      ['allowed', limit === 1_000_000 ? 1_000_000 : 200_000],
+      ['denied', limit === 1_000_000 ? 1_000_000 : 200_000],
+    ]);
   });
   const fields = ['imageModels', 'videoModels', 'audioModels', 'embeddingModels'] as const;
   const defaultsFields = ['imageDefaults', 'videoDefaults', 'embeddingDefaults'] as const;
