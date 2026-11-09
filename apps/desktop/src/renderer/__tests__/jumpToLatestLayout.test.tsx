@@ -33,6 +33,7 @@ it('measures the latest window after its React commit when jumping out of histor
     const scrollRef = useRef<HTMLDivElement>(null);
     const bindings = {
       useCallback: (callback: () => void) => callback, flushSync, scrollRef,
+      contentRef: { current: null },
       restoringRef: { current: false }, cancelFocusJump: vi.fn(),
       chipJumpGenerationRef: { current: null }, finishChipJump: vi.fn(),
       setUnreadKeys: vi.fn(), NO_UNREAD_KEYS: new Set(), setIsNearBottom: vi.fn(), isNearBottomRef: { current: false },

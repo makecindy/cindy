@@ -1,11 +1,16 @@
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 
-import i18n from '../../../../i18n';
+import i18n, { SUPPORTED_LOCALES } from '../../../../i18n';
 import { GHOST_OFFICIAL_ID_PREFIX } from '../../../../../shared/ghost';
 import {
   pluginMarketErrorKey,
   pluginMarketOrganizationAccessErrorKey,
 } from '../pluginMarketErrorKey';
+
+// 非英文语言包按需加载；getFixedT(locale) 只读已加载的语言。
+beforeAll(async () => {
+  await i18n.loadLanguages([...SUPPORTED_LOCALES]);
+});
 
 function serializedIpcError(code: string): Error {
   return new Error(`Error invoking remote method: Error: [${code}] internal detail`);

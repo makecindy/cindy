@@ -14,7 +14,7 @@ const source = readFileSync(resolve(__dirname, '..', 'bootstrap-electron.ts'), '
 
 describe('model pricing prewarm ordering', () => {
   it('only prewarms model pricing once', () => {
-    const calls = source.match(/void prewarmModelPricing\(\);/g) ?? [];
+    const calls = source.match(/void prewarmModelPricing\(\)/g) ?? [];
     expect(calls).toHaveLength(1);
   });
 
@@ -28,7 +28,7 @@ describe('model pricing prewarm ordering', () => {
     );
     const lifecycleStartupBlock = source.slice(localDbReady, takeoverStart);
     const earlyUsageIpc = source.indexOf('registerMakerUsageIpc(ipcMaker);');
-    const prewarm = source.indexOf('void prewarmModelPricing();');
+    const prewarm = source.indexOf('void prewarmModelPricing()');
     const refreshCatalog = source.indexOf('await refreshCustomProvidersIntoCatalog(');
 
     expect(localDbReady).toBeGreaterThanOrEqual(0);

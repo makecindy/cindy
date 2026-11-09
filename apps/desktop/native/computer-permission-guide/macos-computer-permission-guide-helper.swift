@@ -1062,7 +1062,6 @@ private final class PermissionGuideCoordinator {
                 }
                 if !switchPanel.isVisible {
                     switchGuideController.prepareForDisplay()
-                    switchPanel.order(.above, relativeTo: settingsInfo.windowNumber)
                     emit([
                         "type": "attached",
                         "systemX": settingsFrame.origin.x,
@@ -1072,6 +1071,9 @@ private final class PermissionGuideCoordinator {
                         "panelX": desiredFrame.origin.x,
                         "panelY": desiredFrame.origin.y,
                     ])
+                }
+                if !isDragging {
+                    switchPanel.order(.above, relativeTo: settingsInfo.windowNumber)
                 }
                 return
             } else {
@@ -1091,7 +1093,6 @@ private final class PermissionGuideCoordinator {
             panel.setFrame(desiredFrame, display: panel.isVisible, animate: false)
         }
         if !panel.isVisible && !isDragging {
-            panel.order(.above, relativeTo: settingsInfo.windowNumber)
             emit([
                 "type": "attached",
                 "systemX": settingsFrame.origin.x,
@@ -1101,6 +1102,14 @@ private final class PermissionGuideCoordinator {
                 "panelX": desiredFrame.origin.x,
                 "panelY": desiredFrame.origin.y,
             ])
+        }
+        // isVisible stays true when Settings raises its window over ours.
+        // Reassert the attachment on every tracking tick, including after a
+        // permission-pane transition, without activating the helper or
+        // disturbing an in-progress drag. Keep the normal window level so
+        // System Settings sheets retain their usual stacking behavior.
+        if !isDragging {
+            panel.order(.above, relativeTo: settingsInfo.windowNumber)
         }
     }
 

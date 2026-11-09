@@ -1785,9 +1785,14 @@ function sameElementRefs<T>(a: readonly T[], b: readonly T[]): boolean {
   return true;
 }
 
+// Ordinary task-list snapshots do not describe these detail-only conversations.
+// Share the omission rule with reconciliation: absence from Home is not deletion.
+function isDetailOnlySession(session: RemoteSession): boolean {
+  return session.source === 'side-chat' || (session.source === 'bot' && !isTeammateTask(session));
+}
+
 function reconcileVisibleSessions(): void {
-  const next = mergedSessions.filter((session) => session.source !== 'side-chat'
-    && (session.source !== 'bot' || isTeammateTask(session))
+  const next = mergedSessions.filter((session) => !isDetailOnlySession(session)
     && sessionListRemovalPreviews.pendingFields(session.id).length === 0
     && (CINDY_MAKE_ENABLED || !isCindyMakeSource(session.source)));
   if (!sameElementRefs(visibleSessions, next)) visibleSessions = next;
@@ -3594,7 +3599,7 @@ export const remoteSessionStore = {
       const pendingStatusRows = (existing?.sessions ?? []).filter((row) =>
         !snapshotIds.has(row.id) && (sessionPendingWrites.pendingFields(row.id).includes('status')
           // These details are deliberately omitted from the host's ordinary task list.
-          || (row.source === 'side-chat' && (row.status === 'active' || row.status === 'archived'))));
+          || (isDetailOnlySession(row) && (row.status === 'active' || row.status === 'archived'))));
       if (pendingStatusRows.length > 0) nextSessions = [...pendingStatusRows, ...nextSessions];
     }
     if (

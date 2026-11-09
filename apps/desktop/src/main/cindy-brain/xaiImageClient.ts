@@ -221,12 +221,13 @@ export function createXaiImageChannel(opts: CreateXaiImageChannelOptions): Image
     ]);
     const isEdit = images.length > 0;
     const body: Record<string, unknown> = {
-      model: upstreamModelId(params.model),
-      prompt: params.prompt,
       response_format: 'b64_json',
       ...(options.resolution ? { resolution: options.resolution } : {}),
       ...(options.quality ? { quality: options.quality } : {}),
       ...(options.aspectRatio ? { aspect_ratio: options.aspectRatio } : {}),
+      ...options.nativeParameters,
+      model: upstreamModelId(params.model),
+      prompt: params.prompt,
     };
     if (isEdit) {
       if (images.length === 1) body.image = images[0];

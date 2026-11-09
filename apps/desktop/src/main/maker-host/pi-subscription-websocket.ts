@@ -1,5 +1,5 @@
 import { PassThrough } from 'node:stream';
-import { standardSpeedRequest } from '@cindy/maker-core';
+import { standardSpeedRequest, type NativeSubscriptionAccount } from '@cindy/maker-core';
 import { subscriptionRequestAllowsFast } from './subscription-fast-request-policy.js';
 import { createWebSocketMessageTransform, type ProxyOptions } from '@cindy/anthropic-compat-proxy';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState.js';
@@ -11,6 +11,7 @@ import {
   authenticatePiProxySession,
   getPiProxySessionProvider,
   getPiProxySessionSignal,
+  getPiProxySubscriptionAccount,
   isPiProxySubagentRoute,
 } from './pi-proxy-session-auth.js';
 import { getSessionProvider, hasHostedSessionModelAccess } from './session-provider-store.js';
@@ -40,15 +41,16 @@ export const resolvePiWebSocketUpstream: NonNullable<ProxyOptions['resolveWebSoc
   authenticatedRoute(ctx) ? 'https://chatgpt.com/backend-api' : null;
 
 export function createPiWebSocketRequestPreparer(
-  readAuth: (providerId: string) => ReturnType<typeof getChatgptBridgeAuthForDispatch>
-    = providerId => getChatgptBridgeAuthForDispatch(providerId),
+  readAuth: (providerId: string, account?: NativeSubscriptionAccount) => ReturnType<typeof getChatgptBridgeAuthForDispatch>
+    = (providerId, account) => getChatgptBridgeAuthForDispatch(providerId, account),
   invalidate: typeof invalidateChatgptBridgeAuth = invalidateChatgptBridgeAuth,
 ): NonNullable<ProxyOptions['prepareWebSocketRequest']> {
   return async (ctx) => {
     const owner = activeOwnerScopeKey();
     const route = authenticatedRoute(ctx);
     if (!route) throw new Error('PI_WEBSOCKET_ROUTE_UNAVAILABLE');
-    const auth = await readAuth(route.providerId);
+    const account = getPiProxySubscriptionAccount(route.sessionId, ctx.headers['x-cindy-pi-session-token'] ?? null);
+    const auth = account ? await readAuth(route.providerId, account) : await readAuth(route.providerId);
     const current = authenticatedRoute(ctx);
     if (owner !== activeOwnerScopeKey() || !current || route.signal !== current.signal
       || route.providerId !== current.providerId || !auth.canDispatch()) throw new Error('PI_WEBSOCKET_ROUTE_CHANGED');
@@ -64,7 +66,9 @@ export function createPiWebSocketRequestPreparer(
     };
     const onUpgradeFailure = async (status: number, body: string) => {
       if (!authorize() || !detectChatgptBridgeAuthInvalidationReason(status, body)) return;
-      await invalidate({ status, body, failedAccessToken: auth.accessToken }, route.providerId);
+      const failure = { status, body, failedAccessToken: auth.accessToken };
+      if (account) await invalidate(failure, route.providerId, account);
+      else await invalidate(failure, route.providerId);
     };
     const transforms = () => piWebSocketTransforms(ctx, onUpgradeFailure);
     return { headers, signal: route.signal, authorize, onUpgradeFailure, transforms };
@@ -89,7 +93,7 @@ export function piWebSocketTransforms(
       // Ordinary content, including text mentioning authentication, cannot revoke
       // credentials. Only bounded explicit provider error events are inspected.
       if (message.length <= 64 * 1024) {
-        let event: any;
+        let event: { type?: string; status?: number; error?: { status?: number }; response?: { error?: { status?: number } } } | null;
         try { event = JSON.parse(message.toString('utf8')); } catch { return message; }
         if (event?.type === 'error' || event?.type === 'response.failed') {
           const error = event.error ?? event.response?.error;

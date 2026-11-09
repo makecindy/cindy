@@ -127,7 +127,7 @@ function ColorGrid({ form }: { form: TaskTagsExpandedState['form'] }) {
             >
               <ZStack
                 modifiers={[
-                  frame({ maxWidth: Infinity, height: 48 }),
+                  frame({ height: 48 }), frame({ maxWidth: Infinity }),
                   contentShape(shapes.rectangle()),
                   opacity(item.available ? 1 : 0.3),
                 ]}

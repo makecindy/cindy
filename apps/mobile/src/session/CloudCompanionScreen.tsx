@@ -1,3 +1,4 @@
+import type { ScrollViewInstance } from 'react-native';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Platform, ScrollView, StyleSheet, View, type NativeScrollEvent, type NativeSyntheticEvent } from 'react-native';
 import { Stack, useRouter } from 'expo-router';
@@ -21,7 +22,7 @@ import { useRevokedDevices } from '@/device-link/revokedDevicesStore';
 import { useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 import { fontWeight, lineHeight, radius, spacing, typeScale } from '@/theme/tokens';
 import { useUserBubbleAppearance } from '@/theme/userBubblePreference';
-import { goBackGuarded } from '@/utils/backGuard';
+import { useTaskListBack } from '@/utils/useTaskListBack';
 import { BOT_GROUP_MESSAGE_AVATAR_SIZE } from './BotGroupAvatars';
 import { BotGroupMessageAttachments } from './BotGroupMessageAttachments';
 import { BotGroupMarkdownText, BotGroupUserText } from './BotGroupMessageText';
@@ -69,6 +70,7 @@ export function CloudCompanionScreen({ actorId, botId, deviceId, deviceName, tit
   const answerLayout = useMemo(() => buildMessageContentLayout({ screenWidth: width }), [width]);
   const styles = useThemedStyles(makeStyles);
   const router = useRouter();
+  const backToTaskList = useTaskListBack();
   const { user, accountGeneration } = useAuth();
   const [openMedia, setOpenMedia] = useState<Extract<MessagePayload, { kind: 'media' }> | null>(null);
   const openPayload = useCallback((payload: MessagePayload) => {
@@ -171,7 +173,7 @@ export function CloudCompanionScreen({ actorId, botId, deviceId, deviceName, tit
 
   // Timeline: newest at the bottom; older pages load near the top.
   const messages = useMemo(() => cloudCompanionMessages(room.messages, actorId), [actorId, room.messages]);
-  const scrollRef = useRef<ScrollView>(null);
+  const scrollRef = useRef<ScrollViewInstance>(null);
   const stickToBottom = useRef(true);
   const onScroll = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
     const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
@@ -271,7 +273,7 @@ export function CloudCompanionScreen({ actorId, botId, deviceId, deviceName, tit
         <ChatIdentitySubtitle>{homeOffline}</ChatIdentitySubtitle>
       </View>}
       identityLabel={[name, homeOffline].join(', ')}
-      onBack={() => goBackGuarded(router)} />
+      onBack={backToTaskList} />
     <View style={styles.banner} testID="cloudCompanion.banner">
       <Text style={styles.bannerTitle}>{homeOffline}</Text>
       {status ?? <Text style={styles.bannerCopy}>{t('devices.cloudCompanion.readOnlyNote')}</Text>}

@@ -1,12 +1,9 @@
-import { getPluginToolUi } from '@cindy/plugin-protocol';
 import { toast } from '@/lib/toast';
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   isSharedTaskPeer,
   isProviderSharePeer,
-  PLUGIN_COLLECTION,
-  REMOTE_RESOURCE_CHANGED_CHANNEL,
 } from '@cindy/device-link';
 import { Button } from '@/components/ui/button';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
@@ -15,18 +12,14 @@ import {
   getDataOwnerGeneration,
   isDataOwnerGenerationCurrent,
 } from '@/contexts/dataOwnerGeneration';
-import { isDeviceLinkRemotePushCurrent } from '@/lib/remoteDataOwnerPushFence';
 import { usePluginDeviceDirectory } from '@/features/plugin/PluginDevicePicker';
 import { extractIpcError } from '@/utils/ipcError';
 import {
-  hasPluginManagement,
   invokePluginManagement,
-  parsePluginManagementSnapshot,
   parsePluginManagementReceipt,
 } from '@/features/plugin/remotePluginManagementClient';
-import { ghostInstallApprovalToken } from '../../../shared/ghost';
-import { installedGhostStoragePart } from '../../../shared/pluginIdentity';
-import type { PluginManagementSnapshot } from '../../../shared/pluginManagement';
+import type { PluginUiConsentSnapshot } from '../../../shared/pluginUiConsent';
+import { subscribeRemotePluginUiConsent, refreshRemotePluginUiConsent, invalidateRemotePluginUiConsent } from '@/features/plugin/remotePluginUiConsent';
 
 export function RemotePluginUiEnablePrompt({ deviceId }: { deviceId: string }) {
   if (isSharedTaskPeer(deviceId) || isProviderSharePeer(deviceId)) return null;
@@ -36,11 +29,12 @@ function OwnerPrompt({ deviceId }: { deviceId: string }) {
   const { t } = useTranslation();
   const { confirm } = useConfirmDialog();
   const directory = usePluginDeviceDirectory({ deviceId, name: deviceId });
-  const [snapshot, setSnapshot] = useState<PluginManagementSnapshot>();
+  const [snapshot, setSnapshot] = useState<PluginUiConsentSnapshot>();
   const [operation, setOperation] = useState<string>();
   const [unknown, setUnknown] = useState(false);
   const [ready, setReady] = useState(false);
   const owner = useRef(getDataOwnerGeneration());
+  const wasOnline = useRef(false);
   const live = useRef({ active: true, online: directory.online });
   live.current.online = directory.online;
   const abort = useRef<AbortController | undefined>(undefined);
@@ -52,15 +46,7 @@ function OwnerPrompt({ deviceId }: { deviceId: string }) {
     if (!current() || !live.current.online) throw new Error('PRECONDITION_FAILED');
     return invokePluginManagement(deviceId, action, input, instance);
   };
-  const refresh = async () => {
-    try {
-      if (!(await hasPluginManagement(deviceId)) || !current()) return;
-      const value = parsePluginManagementSnapshot(await invoke('snapshot'));
-      if (current()) setSnapshot(value);
-    } catch {
-      /* Discovery never opens a confirmation or installs anything. */
-    }
-  };
+  const refresh = () => refreshRemotePluginUiConsent(deviceId);
   useEffect(() => {
     live.current.active = true;
     return () => {
@@ -73,26 +59,19 @@ function OwnerPrompt({ deviceId }: { deviceId: string }) {
     };
   }, [deviceId]);
   useEffect(() => {
-    if (directory.online) void refresh();
-    else abort.current?.abort();
-  }, [directory.online]);
-  // Hosts push plugin changes (install, enable, approval, badge) as the "plugins"
-  // collection. Teammate, group and card pushes arrive constantly while a teammate
-  // works; re-reading the ~1 MB snapshot for each of them saturated the link.
-  useEffect(
-    () =>
-      window.electronAPI.deviceLink.onRemotePush((push, stamp) => {
-        if (
-          current() &&
-          push.deviceId === deviceId &&
-          push.channel === REMOTE_RESOURCE_CHANGED_CHANNEL &&
-          isDeviceLinkRemotePushCurrent(push, stamp) &&
-          (push.payload as { collectionId?: unknown } | null)?.collectionId === PLUGIN_COLLECTION
-        )
-          void refresh();
-      }),
-    [deviceId],
-  );
+    const disconnected = wasOnline.current && !directory.online;
+    wasOnline.current = directory.online;
+    if (!directory.online) {
+      abort.current?.abort();
+      // Each directory Hook starts offline while getState is pending. A new
+      // composer must not invalidate another composer's live shared entry.
+      if (disconnected) invalidateRemotePluginUiConsent(deviceId);
+      return;
+    }
+    return subscribeRemotePluginUiConsent(deviceId, value => {
+      if (current()) setSnapshot(value);
+    });
+  }, [deviceId, directory.online]);
   const reconcile = async (id: string) => {
     try {
       const receipt = parsePluginManagementReceipt(
@@ -172,14 +151,7 @@ function OwnerPrompt({ deviceId }: { deviceId: string }) {
       clearTimeout(timer);
     };
   }, [operation, directory.online]);
-  const item = snapshot?.ghosts.find(
-    (ghost) =>
-      ghost.enabled &&
-      ghost.approval.state === 'approved' &&
-      getPluginToolUi(ghost.manifest) &&
-      ghost.uiCapabilityApproved !== true &&
-      !ghost.uiPromptSuppressed,
-  );
+  const item = snapshot?.item;
   const begin = async (kind: 'approve-ui' | 'defer-ui') => {
     if (!item || operationRef.current || snapshot?.uiCapabilityApproval !== true) return;
     const id = crypto.randomUUID();
@@ -192,9 +164,9 @@ function OwnerPrompt({ deviceId }: { deviceId: string }) {
           operationId: id,
           kind,
           uiConsentVersion: 1,
-          expectedInstalledApproval: ghostInstallApprovalToken(item.approval),
+          expectedInstalledApproval: item.approvalToken,
         },
-        installedGhostStoragePart(item),
+        item.instanceKey,
       );
     } catch (error) {
       if (!current() || operationRef.current !== id) return;
@@ -221,7 +193,7 @@ function OwnerPrompt({ deviceId }: { deviceId: string }) {
         {unknown
           ? t('settings.ghosts.remote.unknown')
           : item
-            ? t('newChat.pluginUi.title', { name: item.manifest.name })
+            ? t('newChat.pluginUi.title', { name: item.name })
             : t('newChat.pluginUi.ready')}
       </p>
       {item && snapshot?.uiCapabilityApproval !== true ? (

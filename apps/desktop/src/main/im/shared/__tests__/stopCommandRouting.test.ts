@@ -398,6 +398,25 @@ describe('messageHandler !stop routing', () => {
     });
   });
 
+  // Tier 1, #9250 review4503463411: external receipt writes may fail while
+  // cancelling a queue. Existing stop tests only exercised runner failures.
+  // The production handler must still abort and report the cancellation error.
+  it('stops an active turn even when external queue cancellation throws', async () => {
+    wire(false, undefined, undefined, undefined, { channel: 'imessage' });
+    const cancelPending = vi.fn(() => { throw new Error('ENOSPC'); });
+    deliver(makeEvent({ channelName: 'imessage', text: '/stop', delivery: {
+      cancelPending, accept() {}, awaitPersistence() {}, defer() {},
+    } }));
+    await flushMicrotasks();
+
+    expect(cancelPending).toHaveBeenCalledTimes(1);
+    expect(stopActiveTurn).toHaveBeenCalledWith({ botContextId: 'bot-ctx', userId: 'U123456789', scopeKey: undefined });
+    expect(sendMarkdownText).toHaveBeenCalledWith('U123456789',
+      `${slackUi.agent.stopDone(0)}\n\n${slackUi.agent.sendInternalError('ENOSPC')}`, { threadTs: '1234.5678' });
+    expect(runAgentTurn).not.toHaveBeenCalled();
+    expect(handleSlashCommand).not.toHaveBeenCalled();
+  });
+
   it('replies stopIdle when nothing is running', async () => {
     stopActiveTurn.mockResolvedValue({ stopped: false, droppedQueued: 0 });
     deliver(makeEvent());

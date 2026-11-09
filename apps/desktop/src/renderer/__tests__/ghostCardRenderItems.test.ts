@@ -104,6 +104,19 @@ describe('ghost_card · settled 配对', () => {
     ]));
     expect(live.some(i => i.type === 'ghost_card' || i.type === 'tool_segment')).toBe(false);
   });
+  // A plugin card moved to the latest reply (pr_card to_latest) used to leave its old frame in place.
+  it('hides a plugin card the Host marked superseded, and never lets it claim the call it moved to', () => {
+    const moved: GhostCardEntry = { ...readyEntry('cindy-github'), html: '<div data-cindy-superseded-by="new" hidden></div><div>octo/repo</div>' };
+    const cards = { old: moved, new: readyEntry('cindy-github') };
+    const settled = itemsOf([mkGhostCall('old', 'cindy-github', 'pr_card'), mkResult('r-old', 'tu-old', { xdt_card_id: 'old' })], snapshot(cards));
+    expect(settled.some(i => i.type === 'ghost_card' || i.type === 'tool_segment')).toBe(false);
+    // The old card's update arrives first; the in-flight call without a tool ID still gets the new card.
+    const live = itemsOf([mkGhostCall('cur', 'cindy-github', 'pr_card')], snapshot(cards, [
+      { callId: 'old', ghostId: 'cindy-github', sessionId: 'session-a', toolUseId: null, receivedAt: 1 },
+      { callId: 'new', ghostId: 'cindy-github', sessionId: 'session-a', toolUseId: null, receivedAt: 2 },
+    ]));
+    expect(live.filter(i => i.type === 'ghost_card').map(i => i.callId)).toEqual(['new']);
+  });
   it('keeps the card store physical id for a namespaced settled call', () => {
     const call = { ...mkGhostCall('org', 'helper'), toolInput: { ghost_id: 'helper', namespace: 'acme', tool: 'run' } };
     const cards = itemsOf([call, mkResult('result-org', 'tu-org', { xdt_card_id: 'org-card' })],

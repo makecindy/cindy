@@ -783,6 +783,9 @@ final class StatusController: NSObject, NSWindowDelegate {
     self.store = store
     statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     super.init()
+    // Give macOS a stable identity so menu-bar managers can persist the user's
+    // placement across helper restarts and menu-bar reordering.
+    statusItem.autosaveName = "cindy.menubar.primary"
     if let button = statusItem.button {
       // Wallpaper can give the menu bar a different appearance from the app.
       statusAppearanceObservation = button.observe(\.effectiveAppearance, options: [.initial, .new]) { [weak self] _, _ in

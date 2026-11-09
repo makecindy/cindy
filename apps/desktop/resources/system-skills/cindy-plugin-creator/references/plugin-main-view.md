@@ -1,8 +1,5 @@
 ## 4.20 一级主视图(mainView 能力)
 
-多个独立命名页签使用开发中的 `ui.tabViews`，从既有原生动作打开并传入定位；见
-[原生界面扩展](plugin-native-ui.md)。它不改变本节 `mainView` 的导航入口与单实例语义。
-
 插件需要一个从 Cindy 左侧导航进入的完整页面时，直接声明 `mainView`：
 
 ```json

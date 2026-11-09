@@ -128,7 +128,7 @@ import { ChatVideoView } from './ChatVideoView';
 import { isManagedMarkdownVideoUrl, markdownMediaFilename } from './markdownMedia';
 import { MarkdownDiffBlock } from './MarkdownDiffBlock';
 import { MarkdownMermaidBlock } from './MarkdownMermaidBlock';
-import { TextLightbox } from './TextLightbox';
+import { TextLightbox } from './lazyPreviewLightboxes';
 import { ModelLightbox } from './ModelLightbox';
 import { useFileChipContextMenu } from './useFileChipContextMenu';
 import {
@@ -342,6 +342,13 @@ const previewSafeUrlTransform: UrlTransform = (url, key) => {
   return defaultUrlTransform(url);
 };
 
+// 外部内容里的图片只认宿主给出的白名单：带协议（含 data:）或协议相对地址直接清空，
+// 相对地址原样交给 img renderer 查表；链接仍走默认白名单。
+const allowlistedImageUrlTransform: UrlTransform = (url, key) => {
+  if (key === 'src') return /^[a-z][a-z0-9+.-]*:/i.test(url) || url.startsWith('//') ? '' : url;
+  return defaultUrlTransform(url);
+};
+
 interface MarkdownRendererProps {
   renderRichAnswers?: boolean;
   /** F1: session cwd used to resolve relative paths in markdown links.
@@ -374,6 +381,11 @@ interface MarkdownRendererProps {
   currentSessionTitle?: string | null;
   /** 受信任内容可解析本地路径和 xdt-* 内部协议；外部 Market 内容必须关闭。 */
   allowPrivilegedLinks?: boolean;
+  /**
+   * 外部内容的图片白名单（如插件详细介绍）：提供时图片只显示它返回的地址，返回 null
+   * 的不显示，也不会加载任何外部图片。只与 `allowPrivilegedLinks={false}` 一起使用。
+   */
+  resolveImageSrc?: (src: string) => string | null;
   /**
    * doc 模式专用 opt-in: 在每个 block 元素根上写入 `data-source-line="<N>"`,
    * N = 该节点在源码里的 1-based 起始行号 (取自 mdast `node.position.start.line`)。
@@ -501,10 +513,9 @@ function useStreamingThrottle(value: string, enabled: boolean): string {
 }
 
 /**
- * CodeBlockPre — fenced code block with a hover-revealed copy button at the
+ * CodeBlockPre — fenced code block with a persistent copy button at the
  * top-right corner. The button reads `innerText` from the live <pre>, so it
- * always copies the latest text even mid-stream. We use group-hover to keep
- * the chrome out of the way until the user reaches for it.
+ * always copies the latest text even mid-stream.
  */
 function CodeBlockPre({ children, ...props }: HTMLAttributes<HTMLPreElement>) {
   const { t } = useTranslation();
@@ -541,7 +552,8 @@ function CodeBlockPre({ children, ...props }: HTMLAttributes<HTMLPreElement>) {
         className={cn(
           CHAT_CODE_SURFACE_CLASS,
           CHAT_CODE_CLASS,
-          'p-4',
+          // Keep the persistent copy button above the code, including wrapped first lines.
+          'p-4 pt-10',
           // 取消横向滚动:长行/长 token 自动折行,避免出现横滚条
           'whitespace-pre-wrap break-all',
         )}
@@ -558,8 +570,7 @@ function CodeBlockPre({ children, ...props }: HTMLAttributes<HTMLPreElement>) {
             CHAT_ICON_BUTTON_CLASS,
             'absolute right-2 top-2 h-7 w-7 border border-[var(--msg-code-block-border)]',
             'bg-[var(--msg-code-block-bg)] text-[var(--msg-tool-text)]',
-            'opacity-0 transition-[color,background-color,opacity] duration-[var(--motion-fast)]',
-            'group-hover:opacity-100 focus-visible:opacity-100',
+            'transition-[color,background-color] duration-[var(--motion-fast)]',
             'enabled:hover:bg-[var(--cmd-palette-item-hover)] enabled:hover:text-[var(--msg-assistant-text)]',
           )}
         >
@@ -1779,6 +1790,7 @@ const MarkdownRendererBase = memo(function MarkdownRendererBase({
   currentSessionId,
   currentSessionTitle,
   allowPrivilegedLinks = true,
+  resolveImageSrc,
   emitSourceLines = false,
 }: MarkdownRendererProps) {
   const embeddedMediaStreaming = mediaStreaming ?? isStreaming;
@@ -1870,6 +1882,12 @@ const MarkdownRendererBase = memo(function MarkdownRendererBase({
         const rawLocalSrc = node?.properties?.[RAW_LOCAL_IMAGE_SRC_PROP];
         const imageProps = { ...props };
         delete (imageProps as Record<string, unknown>)[RAW_LOCAL_IMAGE_SRC_PROP];
+        if (resolveImageSrc) {
+          const resolved = typeof src === 'string' && src ? resolveImageSrc(src) : null;
+          return resolved ? (
+            <LightboxImage streaming={false} src={resolved} alt={alt} onZoom={setLightboxSrc} {...imageProps} />
+          ) : null;
+        }
         return (
           <WorkspaceMediaSrc
             src={typeof rawLocalSrc === 'string' ? rawLocalSrc : src}
@@ -2035,11 +2053,15 @@ const MarkdownRendererBase = memo(function MarkdownRendererBase({
       currentSessionId,
       currentSessionTitle,
       allowPrivilegedLinks,
+      resolveImageSrc,
       remoteMediaOrigin,
       resolveMediaInWorkspace,
       embeddedMediaStreaming,
     ],
   );
+  const urlTransform = resolveImageSrc
+    ? allowlistedImageUrlTransform
+    : allowPrivilegedLinks ? trustedUrlTransform : previewSafeUrlTransform;
 
   return (
     <div className="msg-markdown select-text">
@@ -2054,9 +2076,7 @@ const MarkdownRendererBase = memo(function MarkdownRendererBase({
             }
             rehypePlugins={REHYPE_PLUGINS}
             components={components}
-            urlTransform={
-              allowPrivilegedLinks ? trustedUrlTransform : previewSafeUrlTransform
-            }
+            urlTransform={urlTransform}
             wordFadeState={wordFadeState}
             emitSourceLines={emitSourceLines}
             wholeDocument={streamingChunks.length === 1}
@@ -2067,7 +2087,7 @@ const MarkdownRendererBase = memo(function MarkdownRendererBase({
           remarkPlugins={allowPrivilegedLinks ? REMARK_PLUGINS_PRIVILEGED : REMARK_PLUGINS}
           rehypePlugins={REHYPE_PLUGINS}
           components={components}
-          urlTransform={allowPrivilegedLinks ? trustedUrlTransform : previewSafeUrlTransform}
+          urlTransform={urlTransform}
           skipHtml
         >
           {renderedContent}

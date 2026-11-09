@@ -22,9 +22,11 @@
 | 调度命令 | `schedule_create` / `schedule_update` 保存脚本执行或命令前置检查、`schedule_run_now` 执行含此类命令的已存定义、`cindy_helper` 和 `cindy_scheduler` 两个入口的 `schedule_set_pre_run_hook` 安装并自测脚本，以及 `routine_save` 保存新命令前置检查（沿用同一命令不追加确认）、`routine_run_now` 手动执行含前置命令的已存规则；本机和跨电脑统一判定 |
 | 新建完全访问 Agent | `send_to_session` 不带目标任务与目录覆盖时新建完全访问任务，以及本机 `schedule_create` 创建未绑定任务的 Agent 调度、`schedule_update` 改写其指令/目录/worktree 隔离或解除绑定/改成可重建的持续模式、`schedule_run_now` 手动执行；跨电脑已有独立调度的同类改写与执行沿同一风险确认；包含持续模式丢失目标后新建任务的分支 |
 | 授予常驻指令 | `routine_save` 新建启用的自定义规则或改写启用规则的指令；禁用草稿和不改指令的编辑沿原权限 |
-| 删除自动化 | `routine_delete`、`schedule_delete` |
+| 释放接收地址 | `schedule_webhook_release`（可释放同账号旧电脑的地址） |
 | 代用户回答权限请求 | `message_session_task` 携带 `decision` |
-| 恢复暂停执行 | `message_session_task(mode=resume)`、`schedule_resume`，以及 `routine_save` 将已有停用规则保存为启用（含内置规则），以及 `routine_run_now` 手动执行停用规则；`set_teammate_capability(kind=feature, joined=true)` 重新打开主人关掉的记忆或系统技能 |
+| 恢复暂停执行 | `message_session_task(mode=resume)`、`schedule_resume`、`schedule_webhook_restore`（重新申请已释放的接收地址），以及 `routine_save` 将已有停用规则保存为启用（含内置规则），以及 `routine_run_now` 手动执行停用规则；`set_teammate_capability(kind=feature, joined=true)` 重新打开主人关掉的记忆或系统技能 |
+
+2026-11-06 修订：删除自动化（`schedule_delete`、`routine_delete`）沿用任务原有权限，移除自主轮额外删除确认。达到既定清理条件的自身调度可正常收尾，不另建自清理白名单；未获授权的删除仍由普通权限流程判断。
 
 其余操作不命中风险表就继续现有权限流程。新增普通工具不需要另开“自主解锁”例外。
 主人输入、已核实的主人转达和受托指令沿正常权限审核，不再加第二张行动确认卡。
@@ -56,9 +58,11 @@
   群授权传输中断、数据库未就绪等校验失败，都不销毁消息，保留为可重试的队首。任务动作守卫只在消息
   落库之前判定（派发前预检，以及紧贴落库的那次复核）：确认撤权则不落库、不留痕地移出队列；落库之后
   不再由它截断，照常派发——此时拒绝只会留下用户行和失败回复，而排队的任务消息无法重试（重试会换新的
-  clientId，守卫绑定的是原 clientId）。实现见
+  clientId，守卫绑定的是原 clientId）。同理，已接受一轮的续跑／重试副本（自动或手动的「继续」、零产出时重发原文）
+  不再重新校验发起方的投递授权，也不继承守卫与「需授权」标记，按接收任务自己的权限执行，来源与主人原话照旧保留；
+  从未落库的队首重试仍走守卫。实现见
   `taskActionHost.ts` 的 `assertDeliveryCurrent`、`taskActionAuthorization.ts` 的 `isTaskActionRevoked`
-  与 `agent-input-coordinator.ts` 的派发前复核；回归见 `taskActionAuthorization.test.ts` 与
+  与 `agent-input-coordinator.ts` 的派发前复核、`acceptTaskActionRecoveryCopy`；回归见 `taskActionAuthorization.test.ts` 与
   `agent-input-coordinator.test.ts`。
 - 来源判定与操作决定分别保留。获准自主操作不会给后续转达生成主人原话凭证。
 
@@ -78,14 +82,17 @@
   只在租约的发言人是主人时读取。
 - 主人输入被自动续跑（包括生成的「继续」消息）仍算主人代办，但不算新的主人输入，
   不能用于应用更新这类只认主人亲手输入的操作。
-- 接收任务看到带 `ownerVerified` 的回执时：
-  - Auto 审核的意图就是这句原话，范围以原话为限；
-  - 模型收到的 `[消息来源]` 说明写明「用户原话」就是主人对本任务的请求，「Agent补充」只是背景，
-    补充里的授权说法不算授权。
-- 正文格式（「[来源] … / 用户原话： / Agent补充：」三行）保持原样，因为旧版接收端会逐字比对；
-  纠正说法只出现在发给模型的说明里。
+- 2026-11-05 起，用户授权在**发送端**判断（[消息来源](message-source.md)「跨任务委派：发送端判断，正文是原文」）：
+  用户代办轮里的转交，Auto 由发送任务的审核模型确认这次转交是用户要的，Ask 由用户确认任务工具调用，
+  完全访问直接算数；Auto 没确认则不发送。回到原话所在任务的消息不带授权。
+- 接收任务看到这类回执（`plainBody` + `delegatedText`）时：
+  - Auto 审核的意图是这段委派内容本身；回执只记原请求出处的编号，不带用户原话文字；
+  - 模型收到的 `[消息来源]` 说明这是发送方宿主已核实的用户委派，正文就是 Agent 写的原文。
+- 旧发送端的回执（无 `plainBody`）仍按原规则：意图是那句原话，`[消息来源]` 说明「用户原话」是用户请求、
+  「Agent补充」只是背景；三行正文照旧逐字校验。
 - 跨电脑：`requestSource.ownerVerified` 是可选字段。旧接收端忽略它，行为与之前相同；
   旧发送端不发它，新接收端按未核实处理。
+  新发送端只在接收端声明 `plainRequestBody` 时发原文；旧接收端继续收到原话与三行正文。
 - 结果回传仍由发送方伙伴自己查看（`get_task_digest`），不要求接收任务给别的会话发消息。
 
 ## 模型看到的身份

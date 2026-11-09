@@ -223,6 +223,12 @@ beforeEach(() => {
   confirmSpy.mockReset().mockResolvedValue(false);
   vi.mocked(updateCustomProvider).mockResolvedValue({ ok: true });
   (window as unknown as { electronAPI: unknown }).electronAPI = {
+    subscriptionAccounts: {
+      command: vi.fn(async ({ providerId }: { providerId: string }) => ({
+        providerId, configured: false, strategy: 'least', accounts: [],
+      })),
+      onChanged: vi.fn(() => () => undefined),
+    },
     maker: {
       scanLocalCli: vi.fn(async () => scanResult),
       refreshBuiltinProviderModels: refreshBuiltinModelsSpy,
@@ -239,6 +245,49 @@ afterEach(() => {
 });
 
 describe('ProvidersSection — 双栏管理', () => {
+  it('batches a saved Hinoki refresh before waiting and preserves manual models', async () => {
+    const preset = BUNDLED_CATALOG.presets!.find(p => p.id === 'hinoki')!;
+    const config: CustomProviderConfig = {
+      id: 'saved-hinoki', name: 'Saved Hinoki', runtimes: structuredClone(preset.runtimes),
+    };
+    config.runtimes.codex!.models.push({
+      id: 'manual-model', name: 'My model', contextWindow: 64000, defaultEnabled: false,
+    });
+    const provider = buildUserProvider(config, { presets: [preset] });
+    providerSnapshotState.customOverride = { ...provider, connected: true };
+    providerSnapshotState.order = [provider.id, 'xd'];
+    window.electronAPI.safeStorageRead = vi.fn(async () => 'fake-hinoki-key');
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const fetchModels = vi.fn(async () => {
+      await gate;
+      return { ok: true, models: [{ id: 'new-model', name: 'New model' }] };
+    });
+    window.electronAPI.maker.fetchProviderModels = fetchModels;
+    render(<MemoryRouter><ProvidersSection /></MemoryRouter>);
+    await act(async () => {
+      fireEvent.click(await screen.findByRole('button', { name: 'settings.providers.models.refreshAria' }));
+    });
+    try {
+      await waitFor(() => expect(fetchModels).toHaveBeenCalledTimes(3));
+      expect(window.electronAPI.safeStorageRead).toHaveBeenCalledTimes(3);
+      expect(updateCustomProvider).not.toHaveBeenCalled();
+    } finally {
+      await act(async () => { release(); });
+    }
+    await waitFor(() => expect(updateCustomProvider).toHaveBeenCalledOnce());
+    const saved = vi.mocked(updateCustomProvider).mock.lastCall![0];
+    expect(saved.runtimes.codex!.models).toContainEqual(config.runtimes.codex!.models.find(m => m.id === 'manual-model'));
+    for (const agent of provider.agents) {
+      expect(saved.runtimes[agent]!.models.find(m => m.id === 'new-model')).toEqual({
+        id: 'new-model', name: 'New model', discoveredMetadata: { name: 'New model' }, discoveredSource: undefined,
+      });
+      expect(fetchModels).toHaveBeenCalledWith(expect.objectContaining({
+        agent, apiKey: 'fake-hinoki-key', savedProviderId: provider.id,
+      }));
+    }
+    expect(refetchProvidersSpy).toHaveBeenCalledOnce();
+  });
   // Renderer unit: click the real provider refresh/menu, inspect the persisted
   // config and visible dialog. Earlier refresh cases only used chat-only proxies;
   // a MiniMax API connection with no speech is the minimal missing-default case.

@@ -1,4 +1,5 @@
 import type { SupportedLocale } from '../../shared/locale.js';
+import { markBotReadPositions, readBotReadPosition } from './botReadStateStore.js';
 import { teammateGroupActivity } from '@cindy/maker-shared/teammate-status';
 /**
  * Bot group chat for controllers (phones) through the Remote Resource protocol
@@ -260,6 +261,8 @@ export function botGroupRemoteItem(group: BotGroupSummary): RemoteCollectionItem
       ...(preview ? { preview } : {}),
       timestamp: botGroupActivityAt(group),
       lastReplyAt: group.lastReplyAt,
+      // Early local groups keep their read position on this computer (server groups on the Chat Server).
+      ...(group.serverBacked ? {} : { lastReadAt: localGroupReadPosition(group.id) }),
       ...(busy ? { generation: { phase: 'processing', startedAt: null } } : {}),
     },
     links: group.members.map((member) => ({
@@ -280,8 +283,13 @@ export function botGroupRemoteItem(group: BotGroupSummary): RemoteCollectionItem
       group.openPlan,
       group.speakingBotIds,
       group.planningBotId,
+      group.serverBacked ? null : localGroupReadPosition(group.id),
     ]),
   };
+}
+
+function localGroupReadPosition(groupId: string): number {
+  try { return readBotReadPosition(`group:${groupId}`) ?? 0; } catch { return 0; }
 }
 
 function withoutPaths(attachments: BotGroupMessageView['attachments']): BotGroupMessageView['attachments'] {
@@ -309,6 +317,7 @@ export function botGroupRemoteChatData(detail: BotGroupDetail): BotGroupRemoteCh
       .map(([id, share]) => [id, shareWithoutPaths(share)])) } : {}),
     supportsAttachments: true,
     supportsReadReceipts: detail.serverBacked === true,
+    ...(detail.serverBacked === true ? {} : { supportsLocalReadSync: true }),
     supportsPersonalMask: detail.serverBacked === true,
     supportsMemberRemoval: detail.serverBacked === true,
     supportsSettingsManagement: detail.serverBacked === true,
@@ -561,7 +570,15 @@ export function registerBotGroupRemoteResourceProvider(service: () => BotGroupCh
           return { result: receipt, effects: [] };
         }
         case 'read': {
-          if (!visibleGroup.serverBacked || !current.chatServer || typeof input.messageId !== 'string')
+          if (!visibleGroup.serverBacked) {
+            // Early local group: the device showed it up to `at` (host time), never past its latest message.
+            const at = input.at;
+            if (typeof at !== 'number' || !Number.isFinite(at) || at <= 0) throw new RemoteResourceRegistryError('INVALID_PARAMS', 'INVALID_PARAMS');
+            const latest = Math.max(visibleGroup.lastReplyAt ?? 0, visibleGroup.lastMessage?.createdAt ?? 0);
+            if (latest > 0) markBotReadPositions({ [`group:${groupId}`]: Math.min(Math.floor(at), latest) });
+            return { effects: [] };
+          }
+          if (!current.chatServer || typeof input.messageId !== 'string')
             throw new RemoteResourceRegistryError('INVALID_PARAMS', 'INVALID_PARAMS');
           const receipt = await current.chatServer.manage({ groupId, action: { type: 'read', messageId: input.messageId } });
           if (!receipt.ok) refuse(chatGroupFailure(new Error(receipt.errorCode)));
