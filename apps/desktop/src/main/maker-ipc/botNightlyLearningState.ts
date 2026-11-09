@@ -21,7 +21,16 @@ const MAX_RUNS = 30;
 export const MAX_NIGHTLY_CANDIDATES = 20;
 const MAX_DECLINED = 40;
 
+export type NightlyOccurrence = {
+  messageId: string;
+  userMessageId: string;
+  role: 'user' | 'assistant';
+  quote: string;
+  context?: string;
+};
+
 export interface NightlyLearningCandidateRecord extends NightlyLearningCandidate {
+  firstEvidence?: NightlyOccurrence;
   /** 转正时直接用的技能草稿；不加载、不进提示词，只在转正时写成技能。 */
   draft: { name: string; description: string; body: string };
 }
