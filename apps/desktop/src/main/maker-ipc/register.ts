@@ -67,7 +67,7 @@ import {
   preparePluginInvocation,
   acceptPluginInvocation,
 } from '../cindy-brain/index.js';
-import { listPluginTargetCandidates, resolvePluginTargetSession } from './pluginTargetCandidates.js';
+import { listPluginTargetCandidates, resolvePluginSessionTarget, resolvePluginTargetSession } from './pluginTargetCandidates.js';
 import { assertPluginObservableTask, listPluginObserveTasks } from './pluginObserveTasks.js';
 import { createPluginCompanionHost } from './pluginCompanionHost.js';
 import { createPluginTargetStore } from './pluginTargetStore.js';
@@ -15429,6 +15429,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     delegationRevision: pluginDelegationAuthorizationRevision,
     delegationReviewAvailable: () => pluginTargetReviewReady,
     candidates: listPluginTargetCandidates,
+    targetForSession: resolvePluginSessionTarget,
     session: resolvePluginTargetSession,
     assertCreatePermission: (pluginId, permissionMode) => {
       if (!isPluginTaskAuthorized(pluginId)) throw new PluginTaskError('PERMISSION_DENIED', 'Plugin task capability is unavailable');
