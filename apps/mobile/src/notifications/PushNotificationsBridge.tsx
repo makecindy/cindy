@@ -83,17 +83,23 @@ export function PushNotificationsBridge() {
   useEffect(() => {
     if (!isPushSupported()) return;
     if (!auth.initialized || !auth.isAuthenticated) return;
-    const sub = Notifications.addPushTokenListener(() => {
+    let lastToken: string | undefined;
+    let cancelled = false;
+    const sub = Notifications.addPushTokenListener((deviceToken) => {
+      if (typeof deviceToken.data !== 'string' || !deviceToken.data.trim()) return;
+      const token = `${deviceToken.type}:${deviceToken.data}`;
+      if (lastToken === token) return;
+      lastToken = token;
       void (async () => {
         const enabled = await readPushEnabled();
-        if (!enabled) return;
-        await syncPushRegistration({ enabled, apiFetch: apiFetchRef.current }).catch(
-          () => undefined,
-        );
+        if (cancelled) return;
+        if (!enabled) { if (lastToken === token) lastToken = undefined; return; }
+        await syncPushRegistration({ enabled, apiFetch: apiFetchRef.current, deviceToken })
+          .catch(() => { if (lastToken === token) lastToken = undefined; });
       })();
     });
-    return () => sub.remove();
-  }, [auth.initialized, auth.isAuthenticated]);
+    return () => { cancelled = true; sub.remove(); };
+  }, [auth.accountGeneration, auth.initialized, auth.isAuthenticated]);
 
   const flushPendingDeepLink = useCallback((): void => {
     const target = pendingDeepLinkRef.current;

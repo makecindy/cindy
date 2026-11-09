@@ -180,6 +180,18 @@ PostgreSQL 的多电脑、版本、设备移除和活动 start/update/end 集成
 原生验收需检查紧凑／展开／锁屏、浅深模式、点击任务定位、账号切换、后台过期和关闭实时活动。
 TypeScript 测试不能替代这些原生验收。
 
+### 推送 token 事件与验收
+
+iOS 每次 `getDevicePushTokenAsync()` 完成都会发出 token 事件，不代表 token 已轮换。
+`PushNotificationsBridge` 的监听器必须直接把事件携带的 token 交给注册函数，不能再次
+读取原生 token；否则“读取 → 事件 → 注册 → 读取”会持续向两个推送端点重复注册。
+同一次账号生命周期内相同事件去重，实际 token 变化仍注册；关闭通知或离开旧账号后不再提交。
+回归分别由 `pushNotificationsBridge.test.ts`（事件接线与去重）和
+`pushNotificationsRealm.test.ts`（真实注册函数与端点请求）覆盖。
+
+注册 API 成功、桌面提交 notify 帧成功都不是 APNs 送达证明。验收需分别记录签名环境、
+手机注册结果、服务端 APNs 回执（可取得时）和真机是否实际收到，不能用本地通知代替。
+
 Release 构建必须使用 `NODE_ENV=production BABEL_ENV=production`，包括手动调用
 `xcodebuild`、Gradle 或 `expo export:embed --dev false`。Expo 会保留父进程的环境变量，
 因此 `__DEV__=false` 或 Xcode 的 Release 配置本身不能证明 Worklets 已按生产模式编译。

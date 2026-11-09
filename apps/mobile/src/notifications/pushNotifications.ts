@@ -360,6 +360,7 @@ async function syncPushRegistrationInternal(
   opts: {
     enabled: boolean;
     apiFetch: AuthedApiFetch;
+    deviceToken?: Awaited<ReturnType<typeof Notifications.getDevicePushTokenAsync>>;
   },
   lifecycleGeneration: number,
   registration: PushRegistrationStatus,
@@ -405,7 +406,9 @@ async function syncPushRegistrationInternal(
 
   let deviceToken;
   registration.stage = 'device-token';
-  try { deviceToken = await Notifications.getDevicePushTokenAsync(); }
+  // iOS emits a token event for every native token read, even when unchanged.
+  // Rotation listeners must reuse the event's token instead of feeding a loop.
+  try { deviceToken = opts.deviceToken ?? await Notifications.getDevicePushTokenAsync(); }
   catch (error) {
     if (lifecycleGeneration !== pushLifecycleGeneration) return 'skipped';
     if (Platform.OS === 'android') return 'local-only';
@@ -467,6 +470,7 @@ async function syncPushRegistrationInternal(
 export function syncPushRegistration(opts: {
   enabled: boolean;
   apiFetch: AuthedApiFetch;
+  deviceToken?: Awaited<ReturnType<typeof Notifications.getDevicePushTokenAsync>>;
 }): Promise<PushSyncResult> {
   const lifecycleGeneration = pushLifecycleGeneration;
   return runPushMutation(async () => {

@@ -175,6 +175,20 @@ describe('push notification realm routing', () => {
     expect(apiFetch.mock.calls[0][1].body).toMatchObject({ apnsEnv: 'sandbox' });
   });
 
+  // Regression: iOS token reads emit another token event. A rotation callback
+  // must upload the supplied token, not request a token and feed itself forever.
+  it('registers a rotated token without requesting another native token', async () => {
+    const apiFetch = vi.fn().mockResolvedValue({ registered: true });
+    await expect(syncPushRegistration({ enabled: true, apiFetch,
+      deviceToken: { type: 'ios', data: 'rotated-device-token' },
+    })).resolves.toBe('registered');
+    expect(mocks.getDevicePushTokenAsync).not.toHaveBeenCalled();
+    expect(apiFetch).toHaveBeenCalledTimes(2);
+    for (const [, options] of apiFetch.mock.calls) {
+      expect(options.body).toMatchObject({ token: 'rotated-device-token', apnsEnv: 'sandbox' });
+    }
+  });
+
   it('never uploads a token with an unknown signing environment', async () => {
     mocks.readIosPushEnvironment.mockResolvedValue(null);
     const apiFetch = vi.fn();
