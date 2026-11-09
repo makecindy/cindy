@@ -118,7 +118,15 @@ omitting it retains normal companion defaults, and a rejected request can be cor
   Credential-safe readable copies are streamed into private staging directories
   and published only after archive integrity verification. Originals remain in
   the account vault and are streamed into a temporary directory for authorized
-  commands. UTF-8 and BOM-marked UTF-16 redaction preserves chunk boundaries;
+  commands only when their published copy required masking or interpreter links.
+  Failed/unpublished Skills never enter the executable environment; their
+  archive references stay in the retry checkpoint. The executable reference is
+  saved before the copied receipt, so crash recovery preserves this distinction.
+  Resource restoration shares command cancellation and its 120-second deadline.
+  Automation verification reads authenticated redacted excerpts directly from
+  archives (32,000 characters per file, 96,000 total including names), without
+  materializing the resource tree; incomplete excerpts are marked as such.
+  UTF-8 and BOM-marked UTF-16 redaction preserves chunk boundaries;
   binary files keep exact bytes. Retry works without the source after capture,
   compares existing files incrementally, and refuses to overwrite user edits.
   The resource directory follows companion deletion/failed-import cleanup.

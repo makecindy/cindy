@@ -2098,3 +2098,36 @@ it('bounds legacy source lists and saved results while preserving the chunk-capa
   expect(await api.status(requestId)).toEqual(result);
   expect(h.created).toBe(false);
 });
+
+// Unit #9583 review: failed captures must not become executable references, and
+// ordinary unredacted Skills need no private copy on every command. Previous
+// tests checked files but not the environment after a second failed capture.
+it('keeps failed recaptures and ordinary skills out of executable archives', async () => {
+  const bad = path.join(h.root, 'bad-skill'), good = path.join(h.root, 'good-skill');
+  for (const directory of [bad, good]) { await fs.mkdir(directory); await fs.writeFile(path.join(directory, 'SKILL.md'), '# Report'); }
+  const badId = `skill-${fingerprint(bad).slice(0, 20)}`;
+  h.snapshot.items = [
+    { view: { id: badId, name: 'bad', category: 'skills', selected: true }, sourceDirectory: bad, filesComplete: false, captureIssue: 'SOURCE_CONFIG_INVALID' },
+    { view: { id: 'good', name: 'good', category: 'skills', selected: true }, sourceDirectory: good, filesComplete: false },
+  ];
+  vi.mocked(createImportSourceReader).mockImplementation(() => ({ readName: h.readName, readRedactions: async () => ({}), readConfig: async () => { throw new Error('broken config'); } }) as never);
+  const [source] = await listCompanionImportSources('fixture');
+  const preview = await previewCompanionImport(source!.id, 'fixture');
+  const selection = { requestId: 'fixture-failed-recapture', previewId: preview.id, name: 'Ada', entryIds: [badId, 'good'], takeover: false, deferSetup: true };
+  await startCompanionImport(selection, 'fixture');
+  await withBotProfileLocks([h.botId], async () => {});
+  const first = (await getCompanionImportResult(selection.requestId))!;
+  const firstEnv = (await h.store.read(h.root, first.botId, () => {}))!;
+  const originalRef = (await deserializeImportSnapshotAsync(firstEnv.pendingImport!.snapshotJson, () => {})).items.find(item => item.view.id === badId)!.skillArchive!;
+  expect(originalRef).toBeDefined();
+  expect(firstEnv.skillArchives ?? {}).toEqual({});
+  await fs.writeFile(path.join(bad, 'SKILL.md'), '# Changed but config still broken');
+  await startCompanionImport(selection, 'fixture');
+  await withBotProfileLocks([first.botId], async () => {});
+  const env = (await h.store.read(h.root, first.botId, () => {}))!;
+  const retryRef = (await deserializeImportSnapshotAsync(env.pendingImport!.snapshotJson, () => {})).items.find(item => item.view.id === badId)!.skillArchive!;
+  expect(retryRef.digest).not.toBe(originalRef.digest);
+  expect(env.skillArchives ?? {}).toEqual({});
+  const { withImportedSkillResources } = await import('../skillResources.js');
+  await expect(withImportedSkillResources(env, () => {}, async variables => variables.CINDY_IMPORTED_SKILLS ?? 'ordinary command')).resolves.toBe('ordinary command');
+});

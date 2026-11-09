@@ -636,6 +636,7 @@ export async function startCompanionImport(selection: CompanionImportSelection, 
   // Completed entries may be skipped after a crash before environmentSaved.
   // Partial entries contribute only documents completed during this attempt.
   const previouslyCopied = new Set(prior?.copied);
+  const completedSkillIds = new Set(selected.filter(item => item.view.category === 'skills' && previouslyCopied.has(item.view.id)).map(item => item.view.id));
   const completedDocumentIds = new Set(selected.filter(item => previouslyCopied.has(item.view.id))
     .flatMap(item => documentEntries(item).map(([id]) => id)));
   const readLegacyDeferSetup = async (botId: string) => {
@@ -737,11 +738,13 @@ export async function startCompanionImport(selection: CompanionImportSelection, 
     async importItem(botId, item) {
       let pendingFailure: Error | undefined;
       let persistedItem = item;
+      let needsPrivate = false;
       if (item.view.category === 'skills') {
         const slug = skillSlug(item);
-        if (item.skillArchive) await importBotSkillDirectory(scope.root, botId, slug,
-          directory => materializeSkillArchive(item.skillArchive!, directory, companionEnvironmentStore, contentSecrets, scope.assert, true, slug), scope.assert, item.view.enabled !== false);
-        else {
+        if (item.skillArchive) {
+          await importBotSkillDirectory(scope.root, botId, slug,
+            directory => materializeSkillArchive(item.skillArchive!, directory, companionEnvironmentStore, contentSecrets, scope.assert, true, slug, value => { needsPrivate = value; }), scope.assert, item.view.enabled !== false);
+        } else {
           const projected = projectImportedSkill(item.files ?? [], slug, contentSecrets);
           await importBotSkillFiles(scope.root, botId, slug, projected.files, scope.assert, item.view.enabled !== false);
         }
@@ -808,7 +811,9 @@ export async function startCompanionImport(selection: CompanionImportSelection, 
         await applyProfile(botId, selected.map(candidate => candidate.view.id === item.view.id ? item : candidate), previous,
           { ...previous, ...Object.fromEntries(documentEntries(persistedItem)) });
       }
-      if (prior?.environmentSaved) await companionEnvironmentStore.update(scope.root, botId, scope.assert, environment => {
+      // Private references are committed after publication and before the copied
+      // receipt. Ordinary Skills need no per-item environment write.
+      if (prior?.environmentSaved || needsPrivate) await companionEnvironmentStore.update(scope.root, botId, scope.assert, environment => {
         // A formerly unreadable manifest may only now supply its own settings.
         if (item.env) environment.env = { ...environment.env, ...item.env };
         if (isMemoryItem(item)) {
@@ -829,13 +834,14 @@ export async function startCompanionImport(selection: CompanionImportSelection, 
         for (const [id, text] of documentEntries(persistedItem)) { environment.documents ??= {}; environment.documents[id] = text; }
         if (item.view.category === 'skills') {
           const slug = skillSlug(item);
-          if (item.skillArchive) { environment.skillArchives ??= {}; environment.skillArchives[slug] = item.skillArchive; }
+          if (item.skillArchive && needsPrivate) { environment.skillArchives ??= {}; environment.skillArchives[slug] = item.skillArchive; }
           const originals = projectImportedSkill(item.files ?? [], slug, contentSecrets).originals;
           if (originals) { environment.skillFiles ??= {}; environment.skillFiles[slug] = originals; }
         }
         environment.contentRedactions = { ...environment.contentRedactions, ...publicationRedactions([item]) };
       });
       if (pendingFailure) throw pendingFailure;
+      if (item.view.category === 'skills') completedSkillIds.add(item.view.id);
     },
     async saveCheckpoint(botId, items) {
       const previous = await companionEnvironmentStore.read(scope.root, botId, scope.assert);
@@ -855,7 +861,7 @@ export async function startCompanionImport(selection: CompanionImportSelection, 
       const chosen = new Set(items.map(item => item.view.id));
       const env = selectedImportEnvironment(items);
       const resolveReferences = (value: unknown) => resolveImportReferences(value, env);
-      const skillFiles = Object.fromEntries(items.filter(item => item.view.category === 'skills').flatMap(item => {
+      const skillFiles = Object.fromEntries(items.filter(item => item.view.category === 'skills' && completedSkillIds.has(item.view.id)).flatMap(item => {
         const slug = skillSlug(item);
         const originals = projectImportedSkill(item.files ?? [], slug, contentSecrets).originals;
         return originals ? [[slug, originals]] : [];
@@ -876,7 +882,8 @@ export async function startCompanionImport(selection: CompanionImportSelection, 
         fileExecutables: Object.fromEntries(items.flatMap(item => item.asset && !isMemoryItem(item) ? [[item.asset.name, item.asset.executable === true]] : [])),
         memoryFiles: Object.fromEntries(items.flatMap(memoryFileEntries)),
         skillFiles,
-        skillArchives: Object.fromEntries(items.filter(item => item.skillArchive).map(item => [skillSlug(item), item.skillArchive!])),
+        skillArchives: Object.fromEntries(items.filter(item => item.skillArchive && completedSkillIds.has(item.view.id))
+          .flatMap(item => { const slug = skillSlug(item); const ref = previous?.skillArchives?.[slug]; return ref ? [[slug, ref]] : []; })),
         documents,
         contentRedactions: publicationRedactions(items),
         sourceAutomations: snapshot.source.kind === 'cindy' ? [] : items.flatMap(item => item.automation ? [{ entryId: item.view.id, kind: snapshot.source.kind as 'hermes' | 'openclaw', original: item.automation.original }] : []),

@@ -3,7 +3,7 @@ import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
-import { captureSkillArchive, materializeSkillArchive, type SkillArchiveIo } from '../skillArchive.js';
+import { captureSkillArchive, materializeSkillArchive, readSkillArchiveContext, type SkillArchiveIo } from '../skillArchive.js';
 import { readStreamedSecret, writeStreamedSecret } from '../../secrets/streamedSecretFile.js';
 import { importBotSkillDirectory } from '../../maker-ipc/botSkillStore.js';
 import { createImportBudget, serializeImportSnapshotAsync } from '../files.js';
@@ -13,7 +13,8 @@ import type { ImportItem } from '../types.js';
 
 // Unit: real discovery/capture/vault/publication, isolated temp data and injected
 // OS cipher. Regression: a resource or aggregate above 128 MiB could never
-// migrate. Existing tests used buffered files and could not test bounded reads,
+// migrate. The >128 MiB disk matrix lives in skillArchive.integration.test.ts;
+// this unit suite keeps a small multi-chunk smoke. Existing tests could not test bounded reads,
 // archive corruption or recovery without the source. No native accounts/servers.
 let root: string;
 let maxCryptoInput = 0;
@@ -47,10 +48,10 @@ async function source(name = 'report') {
   return { directory, item };
 }
 
-it('imports more than 128 MiB with bounded records and restores it without the source', async () => {
+it('imports resources beyond the preview budget with bounded records and restores without the source', async () => {
   const { directory, item } = await source();
   const file = await fs.open(path.join(directory, 'large.bin'), 'w');
-  const size = 128 * 1024 * 1024 + 1;
+  const size = 1024 * 1024 + 1;
   try { await file.write(Buffer.from([9]), 0, 1, size - 1); } finally { await file.close(); }
   await fs.mkdir(path.join(root, 'skills'));
   await fs.rename(directory, path.join(root, 'skills', 'report'));
@@ -132,6 +133,13 @@ it('previews large manifest bodies and scans exact dependency identifiers across
   await fs.writeFile(manifest, '---\n---\n# Report');
   await fs.truncate(manifest, 16 * 1024 * 1024 + 1);
   expect(await readImportSkillManifest(directory)).toBe('---\n---\n');
+  // Closing delimiters can straddle a read boundary (including CRLF).
+  for (const newline of ['\n', '\r\n']) {
+    const prefix = '---' + newline + 'description: ';
+    const header = prefix + 'x'.repeat(32766 - prefix.length) + newline + '---' + newline;
+    await fs.writeFile(manifest, header + '# Body must not enter the YAML preview');
+    expect(await readImportSkillManifest(directory)).toBe(header);
+  }
   await fs.writeFile(manifest, ' '.repeat(32768) + '# Report');
   expect(await readImportSkillManifest(directory)).toBe('# Skill');
   await fs.writeFile(path.join(directory, 'run.py'), 'x'.repeat(32763) + ' TOKEN_SUFFIX ' + 'x'.repeat(32740) + ' REAL_TOKEN');
@@ -155,4 +163,24 @@ it('rejects a resource edited between inspection and capture without publishing 
   } };
   await expect(captureSkillArchive('bot', item, changingIo, {}, () => {})).rejects.toThrow('SOURCE_CHANGED');
   expect((await fs.readdir(root)).filter(name => name.endsWith('.enc') || name.endsWith('.tmp'))).toEqual([]);
+});
+
+// Unit #9583: planning must retain useful code without loading whole resources,
+// exposing a partially cut credential, or returning text before the footer verifies.
+it('bounds authenticated planning excerpts and masks credentials before truncation', async () => {
+  const { directory, item } = await source();
+  const secret = 'fixture-secret-spanning-the-prefix-limit';
+  await fs.writeFile(path.join(directory, 'query.py'), 'x'.repeat(31990) + secret + 'y'.repeat(100000));
+  const { ref } = await captureSkillArchive('bot', item, io, { TOKEN: secret }, () => {});
+  const budget = { remaining: 96000 };
+  const context = await readSkillArchiveContext(ref, io, { TOKEN: secret }, () => {}, 'report', budget);
+  const query = context.find(file => file.name === 'report/query.py')!;
+  expect(query.complete).toBe(false);
+  expect(query.source.length).toBe(32000);
+  expect(query.source).toContain('[TOKEN]');
+  expect(query.source).not.toContain('fixture-secret');
+  expect(context.reduce((size, file) => size + file.name.length + file.source.length, 0)).toBeLessThanOrEqual(96000);
+  const file = path.join(root, `${ref.id}.enc`);
+  await fs.truncate(file, (await fs.stat(file)).size - 100);
+  await expect(readSkillArchiveContext(ref, io, {}, () => {}, 'report', { remaining: 96000 })).rejects.toThrow();
 });

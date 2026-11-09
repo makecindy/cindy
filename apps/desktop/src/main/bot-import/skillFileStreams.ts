@@ -122,23 +122,29 @@ export async function readImportSkillManifest(root: string): Promise<string> {
   try {
     if (!(await handle.stat()).isFile()) throw new CompanionImportError('SOURCE_NOT_REGULAR_FILE');
     const decoder = new StringDecoder('utf8');
-    let text = '', bodyOnly = false;
+    const parts: string[] = [];
+    let tail = '', size = 0, bodyOnly = false;
     for await (const bytes of skillFileChunks(handle)) {
-      if (bodyOnly) { if (decoder.write(bytes).trim()) return '# Skill'; continue; }
-      text += decoder.write(bytes);
-      if (!/^---\r?\n/.test(text)) {
+      const text = decoder.write(bytes);
+      if (bodyOnly) { if (text.trim()) return '# Skill'; continue; }
+      if (!parts.length && !/^---\r?\n/.test(text)) {
         if (text.trim()) return '# Skill';
-        bodyOnly = true; text = ''; continue;
+        bodyOnly = true; continue;
       }
-      const end = /\r?\n---\r?\n/.exec(text);
-      if (end) {
-        const header = text.slice(0, end.index + end[0].length);
-        if (Buffer.byteLength(header) > MAX_FILE_BYTES) throw new CompanionImportError('SOURCE_FILE_TOO_LARGE');
-        return header;
-      }
-      if (Buffer.byteLength(text) > MAX_FILE_BYTES) throw new CompanionImportError('SOURCE_FILE_TOO_LARGE');
+      // Scan each chunk once, retaining only delimiter overlap. Re-scanning an
+      // ever-growing YAML prefix made a 16 MiB rejection quadratic.
+      const scanned = tail + text;
+      const end = /\r?\n---\r?\n/.exec(scanned);
+      const part = end ? text.slice(0, end.index + end[0].length - tail.length) : text;
+      size += Buffer.byteLength(part);
+      if (size > MAX_FILE_BYTES) throw new CompanionImportError('SOURCE_FILE_TOO_LARGE');
+      parts.push(part);
+      if (end) return parts.join('');
+      tail = scanned.slice(-6);
     }
-    return text + decoder.end();
+    const rest = decoder.end();
+    if (size + Buffer.byteLength(rest) > MAX_FILE_BYTES) throw new CompanionImportError('SOURCE_FILE_TOO_LARGE');
+    return parts.join('') + rest;
   } finally { await handle.close(); }
 }
 

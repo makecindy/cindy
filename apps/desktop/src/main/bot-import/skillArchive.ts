@@ -5,7 +5,7 @@ import path from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
 import { fingerprint, inside } from './files.js';
 import { CompanionImportError, type ImportFile, type ImportItem, type ImportResourceRef } from './types.js';
-import { createStreamingEnvironmentRedactor } from './process.js';
+import { createStreamingEnvironmentRedactor, redactEnvironmentValues } from './process.js';
 import { inspectSkillFile, skillFileChunks, streamImportSkillFiles, SKILL_RESOURCE_CHUNK_BYTES, type SkillEncoding } from './skillFileStreams.js';
 
 export interface SkillArchiveIo {
@@ -92,9 +92,9 @@ function validateHeader(value: unknown): Header {
 /** Caller owns a private staging directory. Nothing becomes an active Skill
  * until the final authenticated archive record has been consumed. */
 export async function materializeSkillArchive(ref: ImportResourceRef, root: string, io: Pick<SkillArchiveIo, 'readResource'>,
-  secrets: Record<string, string>, assertOwner: () => void, project = true, slug = ''): Promise<void> {
+  secrets: Record<string, string>, assertOwner: () => void, project = true, slug = '', onProjection?: (needsPrivate: boolean) => void): Promise<void> {
   let current: { header: Header; handle?: FileHandle; hash: ReturnType<typeof createHash>; size: number; text: ReturnType<typeof codec>; redact: ReturnType<typeof createStreamingEnvironmentRedactor> } | undefined;
-  let complete = false, manifest: Header | undefined, changed = false;
+  let complete = false, manifest: Header | undefined, changed = false, interpreter = false;
   try {
     for await (const encoded of io.readResource(ref, assertOwner)) {
       assertOwner();
@@ -103,6 +103,7 @@ export async function materializeSkillArchive(ref: ImportResourceRef, root: stri
       if (record.file) {
         if (current) throw new CompanionImportError('CREDENTIAL_STORAGE_INVALID');
         const header = validateHeader(record.file);
+        interpreter ||= !!header.interpreterLink;
         const output = path.resolve(root, header.name);
         if (!inside(root, output)) throw new CompanionImportError('INVALID_TARGET');
         await fs.mkdir(path.dirname(output), { recursive: true, mode: 0o700 });
@@ -136,5 +137,47 @@ export async function materializeSkillArchive(ref: ImportResourceRef, root: stri
       const guidance = `\n\nImported credentials are masked in these readable files. Execute this skill's commands with companion_connections.run_command, using the original resources at "$CINDY_IMPORTED_SKILLS/${slug}" (Windows cmd: "%CINDY_IMPORTED_SKILLS%\\${slug}") instead of this readable skill directory. Preserve relative resource paths within that directory. Write generated outputs to the current companion workspace.\n`;
       await fs.appendFile(path.join(root, 'SKILL.md'), codec(manifest.encoding).encode(guidance));
     }
+    onProjection?.(changed || interpreter);
   } finally { await current?.handle?.close().catch(() => {}); }
+}
+
+/** Planning reads bounded, redacted excerpts, but exhausts the authenticated
+ * stream before returning any text. It never materializes the resource tree. */
+export async function readSkillArchiveContext(ref: ImportResourceRef, io: Pick<SkillArchiveIo, 'readResource'>,
+  secrets: Record<string, string>, assertOwner: () => void, label: string, budget: { remaining: number }) {
+  const files: Array<{ name: string; source: string; complete: boolean }> = [];
+  let current: { header: Header; text: ReturnType<typeof codec>; redact: ReturnType<typeof createStreamingEnvironmentRedactor>;
+    entry?: typeof files[number]; remaining: number } | undefined;
+  let complete = false;
+  const append = (text: string) => {
+    if (!current?.entry) return;
+    const count = Math.min(text.length, current.remaining, budget.remaining);
+    current.entry.source += text.slice(0, count);
+    current.entry.complete &&= count === text.length;
+    current.remaining -= count; budget.remaining -= count;
+  };
+  for await (const encoded of io.readResource(ref, assertOwner)) {
+    assertOwner();
+    if (complete) throw new CompanionImportError('CREDENTIAL_STORAGE_INVALID');
+    const record = JSON.parse(encoded) as { file?: unknown; data?: unknown; end?: unknown; complete?: unknown };
+    if (record.file && !current) {
+      const header = validateHeader(record.file);
+      const name = redactEnvironmentValues(`${label}/${header.name}`, secrets);
+      const eligible = header.encoding !== 'binary' && /\.(md|py|js|mjs|cjs|sh|ts|json|ya?ml|toml)$/i.test(header.name) && name.length < budget.remaining;
+      const entry = eligible ? { name, source: '', complete: true } : undefined;
+      if (entry) budget.remaining -= name.length;
+      current = { header, text: codec(header.encoding), redact: createStreamingEnvironmentRedactor(secrets), entry, remaining: 32000 };
+    } else if (typeof record.data === 'string' && current) {
+      if (current.entry && current.remaining > 0 && budget.remaining > 0) append(current.redact(current.text.decode(Buffer.from(record.data, 'base64'))));
+      else if (current.entry) current.entry.complete = false;
+    } else if (record.end === true && current) {
+      // Flush only a complete prefix; never expose a credential cut by a limit.
+      if (current.entry?.complete) append(current.redact(current.text.end(), true));
+      if (current.entry?.source) files.push(current.entry);
+      current = undefined;
+    } else if (record.complete === true && !current) complete = true;
+    else throw new CompanionImportError('CREDENTIAL_STORAGE_INVALID');
+  }
+  if (!complete || current) throw new CompanionImportError('CREDENTIAL_STORAGE_INVALID');
+  return files;
 }
