@@ -95,6 +95,38 @@ describe('capToolResultTextForPersist', () => {
     expect(payload.ok).toBe(false);
   });
 
+  // 审查 P1：否决口径要与 sharedTaskFileReferences.toolResultFailed 对齐——
+  // 外层 error/errors/exception 键非空，以及沿 ok===true 的 result 链每一层的
+  // status/success/isError/exitCode 都算失败，否则失败声明会被摘要洗成交付授权。
+  it.each([
+    ['outer error string', { error: 'boom' }],
+    ['outer errors array', { errors: ['boom'] }],
+    ['outer exception flag', { exception: true }],
+    ['inner status', { ok: true, result: { status: 'failed' } }],
+    ['inner isError', { ok: true, result: { isError: true } }],
+    ['inner error key', { ok: true, result: { error: 'boom' } }],
+    ['nested failure three levels deep', { ok: true, result: { ok: true, result: { status: 'denied' } } }],
+  ])('drops declared files when the failure only shows as %s', (_label, failure) => {
+    const url = 'xdt-file:///out/secret.pdf';
+    const text = JSON.stringify({ ...failure, _xdt_model_files: [{ url }], body: 'k'.repeat(20000) });
+    const payload = JSON.parse(capToolResultTextForPersist(text));
+    expect(payload._xdt_model_files).toBeUndefined();
+    expect(payload.xdt_media_produced).toBeUndefined();
+    // 同一口径复核：摘要仍被判失败，回不到成功交付路径。
+    expect(payload.ok === false || payload.success === false || payload.isError === true
+      || ['failed', 'denied', 'error'].includes(payload.status)).toBe(true);
+    expect(extractPayloadToolResultFiles(JSON.stringify(payload))).toEqual([]);
+  });
+
+  it('keeps an error-free envelope delivering its declared files', () => {
+    const url = 'xdt-file:///out/report.pdf';
+    // 对照：成功结果与无 ok 字段的声明仍要保住卡片，否决不能误伤。
+    for (const envelope of [{ ok: true }, { status: 'completed' }, {}]) {
+      const text = JSON.stringify({ ...envelope, _xdt_model_files: [{ url }], body: 'm'.repeat(20000) });
+      expect(extractPayloadToolResultFiles(capToolResultTextForPersist(text)).map((file) => file.url)).toEqual([url]);
+    }
+  });
+
   // 字节预算：文件装不下时退回卡片摘要，不能把父提交能保留的 card id 一起丢掉。
   it('keeps the card reference when declared files cannot fit the budget', () => {
     const files = Array.from({ length: 50 }, (_, index) => ({

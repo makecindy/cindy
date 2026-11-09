@@ -53,17 +53,41 @@ export function compactToolCardResult(text: string, limit: number, diagnostics?:
       : payload;
     // Delivery grants are decided from the persisted body (sharedTaskFileReferences):
     // a failed or hidden result must not gain file fields it never exposed, so keep the
-    // denial signals and drop the declarations.
+    // denial signals and drop the declarations. The walk mirrors toolResultFailed: it
+    // descends the documented ok===true result chain and treats a non-empty
+    // error/errors/exception key as failure, so a nested status or inner error can no
+    // longer be laundered into a delivery grant by the summary.
     const denial: Record<string, unknown> = {};
-    const status = typeof payload.status === 'string' ? payload.status.toLowerCase() : '';
     if (source._xdt_render_image === false) denial._xdt_render_image = false;
-    if (payload.ok === false || inner?.ok === false) denial.ok = false;
-    if (payload.success === false) denial.success = false;
-    if (payload.isError === true || payload.is_error === true) denial.isError = true;
-    if (['error', 'failed', 'failure', 'denied', 'declined'].includes(status)) denial.status = status;
-    for (const key of ['exitCode', 'exit_code']) {
-      const code = payload[key];
-      if (typeof code === 'number' && Number.isFinite(code) && code !== 0) denial[key] = code;
+    const failureStatuses = ['error', 'failed', 'failure', 'denied', 'declined'];
+    const noteFailure = (envelope: Record<string, unknown>) => {
+      if (envelope.ok === false) denial.ok = false;
+      if (envelope.success === false) denial.success = false;
+      if (envelope.isError === true || envelope.is_error === true) denial.isError = true;
+      const status = typeof envelope.status === 'string' ? envelope.status.toLowerCase() : '';
+      if (failureStatuses.includes(status)) denial.status = status;
+      for (const key of ['exitCode', 'exit_code']) {
+        const code = envelope[key];
+        if (typeof code === 'number' && Number.isFinite(code) && code !== 0) denial[key] = code;
+      }
+      // An error field carries no display value we can keep, so it collapses into the
+      // explicit error flag the consumer already reads.
+      const hasError = ['error', 'errors', 'exception'].some((key) => {
+        const error = envelope[key];
+        if (typeof error === 'string') return error.trim().length > 0;
+        if (Array.isArray(error)) return error.length > 0;
+        return error === true || (typeof error === 'number' && error !== 0)
+          || (!!error && typeof error === 'object');
+      });
+      if (hasError) denial.isError = true;
+    };
+    for (let cursor: unknown = payload;;) {
+      if (!cursor || typeof cursor !== 'object' || Array.isArray(cursor)) break;
+      const envelope = cursor as Record<string, unknown>;
+      noteFailure(envelope);
+      if (envelope.ok !== true || !envelope.result || typeof envelope.result !== 'object'
+        || Array.isArray(envelope.result)) break;
+      cursor = envelope.result;
     }
     const denied = Object.keys(denial).length > 0;
     // Declared deliverables must survive the cap as references: cutting the body
