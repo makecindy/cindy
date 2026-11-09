@@ -2233,7 +2233,7 @@ describe('new-connection identification', () => {
     fireEvent.click(screen.getByRole('button', { name: 'settings.providers.connection.saveProvider' }));
     await waitFor(() => expect(customProviderMocks.createCustomProvider).toHaveBeenCalledOnce());
     const saved = customProviderMocks.createCustomProvider.mock.calls[0]?.[0] as CustomProviderConfig;
-    expect(saved.runtimes.pi.imageApi).toBe('openai-images');
+    expect(saved.runtimes.pi?.imageApi).toBe('openai-images');
     expect(buildUserProvider(saved).imageModels).toEqual([
       expect.objectContaining({ id: 'private-image', sourceAgent: 'pi' }),
     ]);
