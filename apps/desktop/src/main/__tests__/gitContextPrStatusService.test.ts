@@ -17,10 +17,70 @@ import {
 import type { GhCliTokenReadResult } from '../git-context/ghCliTokenSource';
 import { fetchPrSummary, summarizeChecks } from '../git-context/prSummary';
 import { PrFollowWatch, prStatusSignature } from '../git-context/prFollowWatch';
+import { cachedGithubPrHeads, refreshGithubPrEvents } from '../git-context/githubPrEvents';
 import type { GithubClient } from '@cindy/github-client';
 
 const Q = { owner: 'makecindy', repo: 'cindy', prNumber: 85 };
 const TOKEN_OK = async (): Promise<GhCliTokenReadResult> => ({ ok: true, token: 'ghp_x' });
+
+// Real shared status cache/event reader, synthetic clock and network. Verify request
+// counts and current facts, not implementation strings: healthy vs failed delivery,
+// explicit refresh, account switching and an overflow larger than the API batch cap.
+describe('GitHub App status refresh policy', () => {
+  it('reduces only covered PR reads, keeps bounded reconciliation, and falls back immediately when unhealthy', async () => {
+    let now = 0;
+    let healthy = true;
+    const fetchPr = vi.fn(async () => remote({}));
+    const svc = new PrStatusService({ readToken: TOKEN_OK, fetchPr, now: () => now, staleTtlMs: 0,
+      eventCacheTtlMs: q => healthy && q.prNumber === Q.prNumber ? 300_000 : undefined });
+    const other = { ...Q, prNumber: 86 };
+    await svc.getStatuses([Q, other]);
+    now = 90_000;
+    await svc.getStatuses([Q, other]);
+    expect(fetchPr).toHaveBeenCalledTimes(3); // only the uncovered PR polls
+    now = 180_000;
+    await svc.getStatuses([Q]);
+    expect(fetchPr).toHaveBeenCalledTimes(3);
+    now = 300_000;
+    await svc.getStatuses([Q]);
+    expect(fetchPr).toHaveBeenCalledTimes(4); // bounded read even on a quiet socket
+    now = 390_000;
+    healthy = false;
+    await svc.getStatuses([Q]);
+    expect(fetchPr).toHaveBeenCalledTimes(5); // original 60s TTL, no extended stale window
+    healthy = true;
+    await svc.getStatuses([Q], { refresh: true });
+    expect(fetchPr).toHaveBeenCalledTimes(6); // user/event force refresh bypasses TTL
+  });
+
+  it('rechecks all overflow PRs, propagates failures for retry, and keeps old-owner heads private', async () => {
+    let scope = 'first';
+    let current = true;
+    let fail = false;
+    const fetchPr = vi.fn(async () => { if (fail) throw new Error('offline'); return remote({ head_sha: 'a'.repeat(40) }); });
+    const svc = new PrStatusService({ readToken: TOKEN_OK, fetchPr, scope: async () => scope });
+    const notify = vi.fn(async () => {});
+    const urls = Array.from({ length: 12 }, (_, i) => `https://github.com/example/project/pull/${i + 1}`);
+    await refreshGithubPrEvents(svc, { notify }, urls, () => current, { reason: 'overflow', notify: urls });
+    expect(fetchPr).toHaveBeenCalledTimes(12);
+    expect(notify).toHaveBeenCalledTimes(12);
+    expect(Object.keys(await cachedGithubPrHeads(svc, urls))).toHaveLength(12);
+    expect(fetchPr).toHaveBeenCalledTimes(12); // head lookup never polls
+    notify.mockClear();
+    await refreshGithubPrEvents(svc, { notify }, [urls[0]!], () => current, { reason: 'event', notify: [] });
+    expect(notify).not.toHaveBeenCalled(); // unchanged CI does not force the gate
+    fail = true;
+    await expect(refreshGithubPrEvents(svc, { notify }, urls, () => current, { reason: 'overflow', notify: urls }))
+      .rejects.toThrow('PR_VERIFICATION_FAILED');
+    scope = 'other';
+    expect(await cachedGithubPrHeads(svc, urls)).toEqual({});
+    current = false;
+    const reads = fetchPr.mock.calls.length;
+    await refreshGithubPrEvents(svc, { notify }, urls, () => current, { reason: 'overflow', notify: urls });
+    expect(fetchPr).toHaveBeenCalledTimes(reads);
+    expect(notify).not.toHaveBeenCalled();
+  });
+});
 
 // Production summary + cache entry points. New counts must cover both GitHub APIs,
 // truncated and unavailable results, absent from the prior four-state tests.

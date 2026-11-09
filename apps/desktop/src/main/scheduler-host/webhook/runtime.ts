@@ -66,9 +66,13 @@ export async function startScheduleWebhooks(scheduler: Scheduler, logger: Logger
       });
     },
     remote: {
-      onGithubPrs: async (urls, isCurrent) => {
+      githubPrHeads: async urls => {
+        const { githubPrHeads } = await import('../../git-context/ipc.js');
+        return githubPrHeads(urls);
+      },
+      onGithubPrs: async (urls, isCurrent, refresh) => {
         const { notifyGithubPrEvents } = await import('../../git-context/ipc.js');
-        await notifyGithubPrEvents(urls, isCurrent);
+        await notifyGithubPrEvents(urls, isCurrent, refresh);
       },
       deviceName,
       isSignedIn,

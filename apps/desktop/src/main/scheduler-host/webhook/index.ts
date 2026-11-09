@@ -256,6 +256,10 @@ export class ScheduleWebhookHost {
     return this.remote?.githubStatus() ?? { available: false };
   }
 
+  githubEventsHealthy(url: string): boolean {
+    return this.remote?.githubEventsHealthy(url) ?? false;
+  }
+
   async connectGithub(): Promise<string> {
     if (this.receiver() !== 'cloud' || !this.remote) throw new Error('WEBHOOK_ACCOUNT_REQUIRED');
     return this.remote.connectGithub();

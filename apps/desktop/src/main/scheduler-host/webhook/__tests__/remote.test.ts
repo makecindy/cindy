@@ -28,6 +28,7 @@ vi.mock('../../../plugin-oauth/identityStore.js', () => ({ oauthSecureStorageAva
 
 import { ScheduleWebhookHost } from '../index';
 import { ScheduleWebhookRemote } from '../remote';
+import { matchingGithubPrs, type GithubPrRefresh } from '../github';
 
 class FakeScheduler extends EventEmitter {
   schedules: Schedule[] = [];
@@ -62,7 +63,7 @@ interface FakeEndpoint {
 
 /** 与 webhook-server 合同相同的最小实现。 */
 class FakeServer {
-  github: { available: boolean; login: string; endpointId: string; repositories: string[] } | null = null;
+  github: { available: boolean; login: string; endpointId: string; repositories: string[]; unavailable?: string[] } | null = null;
   readonly releases = new Map<string, string>();
   accountManagement = false;
   readonly requests: string[] = [];
@@ -685,7 +686,8 @@ it('routes managed GitHub events to matching active follow-ups and acknowledges 
   const baseUrl = await server.listen();
   let complete!: () => void;
   const pending = new Promise<void>(resolve => { complete = resolve; });
-  const onGithubPrs = vi.fn<(urls: string[], isCurrent: () => boolean) => Promise<void>>(() => pending);
+  const onGithubPrs = vi.fn<(urls: string[], isCurrent: () => boolean, refresh: GithubPrRefresh) => Promise<void>>(
+    (_urls, _isCurrent, refresh) => refresh.reason === 'reconnect' ? Promise.resolve() : pending);
   const onBatch = vi.fn(async () => {});
   const remote = new ScheduleWebhookRemote({ baseUrl: () => baseUrl, getAccessToken: async () => 'token-1',
     refreshAccessToken: async () => false, fetch, socketOptions: async () => ({}), logger: {}, onBatch, onGithubPrs });
@@ -693,7 +695,9 @@ it('routes managed GitHub events to matching active follow-ups and acknowledges 
     recurring: true, manual: false, preRunHook: { command: `node gate.mjs https://github.com/example/project/pull/${number}` } }) as Schedule;
   try {
     await remote.sync([follow(12), follow(123), follow(9, 'paused')]);
-    await vi.waitFor(() => expect(remote.isConnected()).toBe(true));
+    await vi.waitFor(() => expect(remote.githubEventsHealthy('https://github.com/example/project/pull/12')).toBe(true));
+    expect(onGithubPrs.mock.calls[0]?.[0]).toEqual(['https://github.com/example/project/pull/12', 'https://github.com/example/project/pull/123']);
+    onGithubPrs.mockClear();
     server.push({ batchId: 'github-batch', endpointId: 'whk-github', scheduleId: '__github_pr_watch__', omitted: 0,
       events: [{ deliveryId: 'g-1', event: 'pull_request_review', repository: 'example/project', number: 12, receivedAt: 1 }] });
     await vi.waitFor(() => expect(onGithubPrs).toHaveBeenCalledOnce());
@@ -708,4 +712,89 @@ it('routes managed GitHub events to matching active follow-ups and acknowledges 
     remote.pause();
     expect(stillCurrent?.()).toBe(false);
   } finally { complete(); remote.stop(); await server.close(); }
+});
+
+// Production routing/ACK entry, real loopback WS with a fake server. Missing CI
+// numbers used to fan out to every PR; omitted batches used to be silently ACKed.
+it('matches CI by current commit, without matching unrelated or ambiguous unknown commits', () => {
+  const urls = [12, 13, 14].map(n => `https://github.com/example/project/pull/${n}`);
+  const heads = { [urls[0]!]: 'a'.repeat(40), [urls[1]!]: 'b'.repeat(40), [urls[2]!]: 'a'.repeat(40) };
+  const ci = { deliveryId: 'ci', event: 'check_run', receivedAt: 1, repository: 'EXAMPLE/PROJECT', headSha: 'a'.repeat(40) };
+  expect(matchingGithubPrs(urls, [ci], heads)).toEqual([urls[0], urls[2]]);
+  expect(matchingGithubPrs(urls, [{ ...ci, headSha: 'c'.repeat(40) }], heads)).toEqual([]);
+  expect(matchingGithubPrs(urls, [{ ...ci, headSha: undefined }], heads)).toEqual([]);
+  expect(matchingGithubPrs(urls, [{ ...ci, number: 13 }], heads)).toEqual([urls[1]]);
+  expect(matchingGithubPrs(urls, [{ ...ci, repository: 'other/project' }], heads)).toEqual([]);
+});
+
+it('recovers omissions before ACK, retries failed recovery, and reduces polling only while delivery is healthy', async () => {
+  const server = new FakeServer();
+  server.github = { available: true, login: 'example-user', endpointId: 'whk-github', repositories: [] };
+  const baseUrl = await server.listen();
+  const urls = [12, 13].map(n => `https://github.com/example/project/pull/${n}`);
+  const heads = { [urls[0]!]: 'a'.repeat(40), [urls[1]!]: 'b'.repeat(40) };
+  const onGithubPrs = vi.fn<(urls: string[], current: () => boolean, refresh: GithubPrRefresh) => Promise<void>>(async () => {});
+  const remote = new ScheduleWebhookRemote({ baseUrl: () => baseUrl, getAccessToken: async () => 'token-1',
+    refreshAccessToken: async () => false, fetch, socketOptions: async () => ({}), logger: {}, onBatch: async () => {},
+    onGithubPrs, githubPrHeads: async () => heads });
+  const follows = urls.map(url => ({ id: url, name: 'Follow', status: 'active', recurring: true,
+    preRunHook: { command: `node gate ${url}` } }) as Schedule);
+  const batch = (batchId: string, omitted: number, headSha = heads[urls[0]!]!) => ({ batchId, omitted,
+    endpointId: 'whk-github', scheduleId: '__github_pr_watch__',
+    events: [{ deliveryId: batchId, event: 'check_run', repository: 'example/project', headSha, receivedAt: 1 }] });
+  try {
+    await remote.sync(follows);
+    await vi.waitFor(() => expect(remote.githubEventsHealthy(urls[0]!)).toBe(true));
+    expect(remote.githubEventsHealthy('https://github.com/example/project/pull/99')).toBe(false);
+    onGithubPrs.mockClear();
+    server.push(batch('ci', 0));
+    await vi.waitFor(() => expect(server.frames).toContainEqual({ type: 'ack', batchId: 'ci' }));
+    expect(onGithubPrs.mock.calls[0]?.[0]).toEqual([urls[0]]);
+    expect(onGithubPrs.mock.calls[0]?.[2]).toEqual({ reason: 'event', notify: [] });
+
+    onGithubPrs.mockRejectedValueOnce(new Error('offline'));
+    server.push(batch('lost', 30));
+    await vi.waitFor(() => expect(remote.githubEventsHealthy(urls[0]!)).toBe(false));
+    expect(onGithubPrs.mock.calls.at(-1)?.[0]).toEqual(urls);
+    expect(server.frames).not.toContainEqual({ type: 'ack', batchId: 'lost' });
+    server.push(batch('lost', 30));
+    await vi.waitFor(() => expect(server.frames).toContainEqual({ type: 'ack', batchId: 'lost' }));
+    expect(onGithubPrs.mock.calls.at(-1)?.[2]).toEqual({ reason: 'overflow', notify: urls });
+    expect(remote.githubEventsHealthy(urls[0]!)).toBe(true);
+
+    const date = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 71_000);
+    expect(remote.githubEventsHealthy(urls[0]!)).toBe(false);
+    date.mockRestore();
+    server.sockets.at(-1)!.send(JSON.stringify({ type: 'quota', limit: 3000, resetAt: Date.now() + 60_000 }));
+    await vi.waitFor(() => expect(remote.githubEventsHealthy(urls[0]!)).toBe(false));
+    remote.pause();
+    expect(remote.githubEventsHealthy(urls[0]!)).toBe(false);
+    await remote.sync(follows);
+    await vi.waitFor(() => expect(remote.githubEventsHealthy(urls[0]!)).toBe(true));
+    expect(onGithubPrs.mock.calls.at(-1)?.[2].reason).toBe('reconnect');
+    await remote.sync([follows[0]!]);
+    expect(remote.githubEventsHealthy(urls[1]!)).toBe(false);
+  } finally { remote.stop(); await server.close(); }
+});
+
+it('keeps the App connection visible when baseline reads fail, and excludes unavailable repositories', async () => {
+  const server = new FakeServer();
+  server.github = { available: true, login: 'example-user', endpointId: 'whk-github', repositories: [] };
+  const baseUrl = await server.listen();
+  const url = 'https://github.com/example/project/pull/12';
+  const onGithubPrs = vi.fn(async () => { throw new Error('PR_VERIFICATION_FAILED'); });
+  const remote = new ScheduleWebhookRemote({ baseUrl: () => baseUrl, getAccessToken: async () => 'token-1',
+    refreshAccessToken: async () => false, fetch, socketOptions: async () => ({}), logger: {}, onBatch: async () => {}, onGithubPrs });
+  try {
+    await remote.sync([{ id: 'follow', name: 'Follow', status: 'active', recurring: true, preRunHook: { command: `node gate ${url}` } } as Schedule]);
+    await vi.waitFor(() => expect(onGithubPrs).toHaveBeenCalled());
+    expect(remote.githubEventsHealthy(url)).toBe(false);
+    await expect(remote.githubStatus()).resolves.toMatchObject({ login: 'example-user', repositories: ['example/project'] });
+    onGithubPrs.mockImplementation(async () => {});
+    await remote.refresh();
+    expect(remote.githubEventsHealthy(url)).toBe(true);
+    server.github.unavailable = ['example/project'];
+    await remote.refresh();
+    expect(remote.githubEventsHealthy(url)).toBe(false);
+  } finally { remote.stop(); await server.close(); }
 });
