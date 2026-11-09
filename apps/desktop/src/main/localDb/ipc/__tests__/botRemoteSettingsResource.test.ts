@@ -24,6 +24,14 @@ function actionId(resource: Awaited<ReturnType<ReturnType<typeof fixture>['get']
   return (resource.blocks!.find(block => block.id === id)!.data as { actionId: string }).actionId;
 }
 describe('opaque teammate settings actions', () => {
+  // 2026-11-10 owner: a V2 teammate has the same capabilities in every session, so the phone
+  // shows no capability references for it (third-round review #1).
+  it('shows no capability references for a V2 teammate', async () => {
+    const f = fixture();
+    expect((await f.get()).blocks?.some(block => block.id === 'connections')).toBe(true);
+    Object.assign(f.settings, { projectMode: true });
+    expect((await f.get()).blocks?.some(block => block.id === 'connections')).toBe(false);
+  });
   it('detects display-only edits without treating arriving chat messages as a settings conflict', async () => {
     const f = fixture(); const original = await f.get();
     f.source.activityAt++; f.source.updatedAt++;

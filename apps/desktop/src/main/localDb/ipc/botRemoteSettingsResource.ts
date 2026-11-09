@@ -131,7 +131,7 @@ export function createBotRemoteSettingsResource(deps: BotRemoteSettingsDeps) {
       form('permissions', [{ id: 'permissions', kind: 'select', label: copy.permissions, options: ['ask', 'auto', 'trusted'].map(value => ({ value, label: copy[value as 'ask' | 'auto' | 'trusted'] })) }], { permissions: settings.permissions }),
       form('models', [{ id: 'followsDefault', label: copy.followsDefault, kind: 'toggle' }, { id: 'modelChain', label: copy.models, kind: 'multiline' }],
         { followsDefault: settings.followsDefault, modelChain: serializeModelRoutes(settings.modelChain) }),
-      { id: 'connections', primitive: 'markdown', fallbackMarkdown: [...settings.skills, ...settings.connections, ...settings.toolsets].join('\n') },
+      ...(settings.projectMode ? [] : [{ id: 'connections', primitive: 'markdown' as const, fallbackMarkdown: [...settings.skills, ...settings.connections, ...settings.toolsets].join('\n') }]),
     ];
     // A failed shelf read must not turn into an empty shelf or prevent profile recovery.
     try {

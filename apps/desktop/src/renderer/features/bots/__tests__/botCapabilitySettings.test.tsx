@@ -239,6 +239,28 @@ it('offers turning on an unavailable tool and keeps tool settings in the group h
   expect(view.queryByRole('switch', { name: 'Computer' })).toBeNull();
 });
 
+// 2026-11-10 owner (third-round review #1): a V2 teammate has the same capabilities in every
+// session, so its page offers no tool / MCP / Skill selection, only its own Skills.
+it('offers no capability selection for a V2 teammate', async () => {
+  Object.defineProperty(window, 'electronAPI', { configurable: true, value: {
+    localDb: { sessionsPush: { onPatched: () => h.offPush }, bots: {
+      listSkills: async () => [{ slug: 'hand-off', name: 'hand-off', enabled: true }],
+    } },
+    maker: { onMcpChanged: () => h.offMcp, listCustomMcpServers: h.list,
+      listAgentSkills: async () => ({ success: true, skills: [{ name: 'agent-ops', enabled: true }] }),
+      plugins: { list: async () => [{ id: 'browser', name: 'Browser', available: true }] } },
+  } });
+  const view = render(<BotCapabilitySettings expanded
+    bot={{ id: 'bot-1', canonicalSessionId: 's1' } as BotProfile}
+    capabilities={{ modelChain: [], modelChainOverride: null, mcpServers: [], toolsets: [], projectMode: true } as unknown as BotProfile['capabilities']}
+    skills={[]} onChange={vi.fn()} />);
+  expect(await view.findByRole('switch', { name: 'hand-off' })).toBeTruthy();
+  await waitFor(() => expect(h.list).toHaveBeenCalled());
+  expect(view.queryByRole('switch', { name: 'Browser' })).toBeNull();
+  expect(view.queryByRole('switch', { name: 'agent-ops' })).toBeNull();
+  expect(view.queryByText('bots.capabilities.core.name')).toBeNull();
+});
+
 // Greptile #8330: back and closing settings must not silently drop an edited learned Skill.
 it('asks before leaving a learned Skill editor with unsaved changes', async () => {
   Object.defineProperty(window, 'electronAPI', { configurable: true, value: {

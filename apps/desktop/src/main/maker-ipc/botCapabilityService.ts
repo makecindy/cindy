@@ -8,6 +8,7 @@ import { updateBotProfile } from '../localDb/ipc/bots.js';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState.js';
 import { listCustomMcpServers } from '../maker-host/custom-mcp-store.js';
 import { normalizeBotToolCapabilities } from '../../shared/botCapabilitySelection.js';
+import { readBotProjectMode } from '../../shared/botProjectMode.js';
 import { BOT_BASELINE_PLUGIN_IDS } from '../maker-host/plugins/types.js';
 import type { AgentKind, Maker } from '@cindy/maker-core';
 import type { PluginRegistry } from '../maker-host/plugins/plugin-registry.js';
@@ -179,7 +180,9 @@ async function catalog(input: { callerSessionId: string; kind: Kind }, ctx: Pick
     );
   }
   ctx.assertOwner();
-  const inherit = input.kind !== 'skill' && ctx.config[fields[input.kind].mode] === 'inherit';
+  // V2: every session of the teammate has everything here; there is no selection.
+  const inherit = readBotProjectMode(ctx.config)
+    || (input.kind !== 'skill' && ctx.config[fields[input.kind].mode] === 'inherit');
   const result = items.map((item) => ({ ...item, joined: joined.has(item.id) || (inherit && item.available) }));
   // Uninstalled references remain removable, instead of silently disappearing.
   for (const id of joined)
@@ -221,6 +224,13 @@ async function selectBotCapability(input: Input & { id: string; joined: boolean 
       return { ok: true as const, joined: input.joined, effective: 'next-turn' as const };
     }
     const kind = input.kind;
+    if (readBotProjectMode(ctx.config)) {
+      return {
+        ok: false as const,
+        errorCode: 'CAPABILITY_NOT_SELECTABLE',
+        message: '伙伴的每个对话都能用这台电脑上已有的工具、MCP 与技能，无需加入或移除；要给自己加技能，写进项目的 .agents/skills/',
+      };
+    }
     if (kind === 'toolset' && BOT_BASELINE_PLUGIN_IDS.has(input.id)) {
       return {
         ok: false as const,

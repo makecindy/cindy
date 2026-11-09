@@ -175,8 +175,9 @@ describe('IM channel lanes hydrate the full Bot profile', () => {
     expect(lane.vendorOptions?.[BOT_IM_CHANNELS_VENDOR_KEY]).toBeUndefined();
   });
 
-  // 伙伴 V2:在自己 workspace 里干活时就是普通项目任务——不用伙伴记忆、不收窄工具集与技能,只叠加身份;
-  // 本机关联项目只读挂载。别的目录(群分工)和未开启时保持原伙伴。依据:主人 2026-11-06。unit,mock DB。
+  // 伙伴 V2:在自己 workspace 里干活时就是普通项目任务——不用伙伴记忆,只叠加身份;本机关联项目只读挂载。
+  // 能力选择不收窄任何一个 session(主人 2026-11-10:群聊、私聊都是 session,要么都支持要么都不支持),
+  // 只聊天的群照旧没有工具。依据:主人 2026-11-06 / 2026-11-10;第三轮审查 #1。unit,mock DB。
   it('runs a V2 teammate in its workspace as an ordinary project task', async () => {
     const deps = {
       readProfileFolder: vi.fn(async () => ({ homeDir: '/bots/bot', systemPromptOverride: '' })),
@@ -207,14 +208,15 @@ describe('IM channel lanes hydrate the full Bot profile', () => {
     const elsewhere = { id: 'plan', agentKind: 'pi', workingDir: '/code/app', model: 'm' } as MakerSessionCreateOpts;
     const planSnapshot = await hydrateBotProfileRuntime(elsewhere, deps, { persistSnapshot: false });
     expect(elsewhere.botRuntimeProfile?.projectContext).toBeUndefined();
-    expect(planSnapshot?.disabledToolsets).toEqual(['browser', 'docs']);
+    expect(planSnapshot?.disabledToolsets).toEqual([]);
 
-    // A group lane in the workspace keeps the group's own tool authorization.
+    // A group lane has the same tools; whether the group may use them is the group's authorization.
     seed('group', 'group:g1', { ...narrow, projectMode: true });
     const group = { id: 'group', agentKind: 'pi', workingDir: '/bots/bot/workspace', model: 'm' } as MakerSessionCreateOpts;
     const groupSnapshot = await hydrateBotProfileRuntime(group, deps, { persistSnapshot: false });
     expect(group.botRuntimeProfile?.projectContext).toBeUndefined();
-    expect(groupSnapshot?.disabledToolsets).toEqual(['browser', 'docs']);
+    expect(groupSnapshot?.disabledToolsets).toEqual([]);
+    expect(group.botRuntimeProfile?.toolsetPolicy.configured).toEqual(['browser', 'docs']);
     // ...but shares the teammate's one project memory, not the old teammate store.
     expect(group.makerMemoryEnabled).toBe(true);
     expect(group.makerMemoryScopeKey).toBe(await resolveMemoryScopeKey('/bots/bot/workspace'));
@@ -226,8 +228,14 @@ describe('IM channel lanes hydrate the full Bot profile', () => {
     const lane = { id: 'lane', agentKind: 'pi', workingDir: '/bots/bot/workspace', model: 'm' } as MakerSessionCreateOpts;
     const laneSnapshot = await hydrateBotProfileRuntime(lane, deps, { persistSnapshot: false });
     expect(lane.botRuntimeProfile?.projectContext).toBeUndefined();
-    expect(laneSnapshot?.disabledToolsets).toEqual(['browser', 'docs']);
+    expect(laneSnapshot?.disabledToolsets).toEqual([]);
     expect(lane.makerMemoryScopeKey).toBe(await resolveMemoryScopeKey('/bots/bot/workspace'));
+
+    // A chat-only group still gets no tools.
+    seed('group', 'group:g1:access:chat:1', { ...narrow, projectMode: true });
+    const chatOnly = { id: 'chat', agentKind: 'pi', workingDir: '/bots/bot/workspace', model: 'm' } as MakerSessionCreateOpts;
+    await hydrateBotProfileRuntime(chatOnly, deps, { persistSnapshot: false });
+    expect(chatOnly.botRuntimeProfile?.toolsetPolicy.configured).toEqual([]);
 
     seed('canonical', null, narrow);
     const classic = { id: 'main', agentKind: 'pi', workingDir: '/bots/bot/workspace', model: 'm' } as MakerSessionCreateOpts;

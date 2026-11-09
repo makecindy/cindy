@@ -547,7 +547,7 @@ export async function hydrateBotProfileRuntime(
   const configuredSkills = Array.isArray(config.skills)
     ? config.skills.filter((item): item is string => typeof item === 'string')
     : [];
-  const skillMode =
+  let skillMode: 'inherit' | 'allowlist' =
     config.skillMode === 'allowlist'
       ? 'allowlist'
       : config.skillMode === 'inherit'
@@ -559,7 +559,7 @@ export async function hydrateBotProfileRuntime(
   // Bot it now means "no explicit external Skill grant"; ambient Cindy,
   // project, and harness Skills never become part of the Bot runtime.
   const configuredMcpServers = readStringList(config.mcpServers);
-  const mcpMode =
+  let mcpMode: 'inherit' | 'allowlist' =
     config.mcpMode === 'allowlist'
       ? 'allowlist'
       : config.mcpMode === 'inherit'
@@ -575,7 +575,7 @@ export async function hydrateBotProfileRuntime(
     config.toolsetMode !== 'allowlist' &&
     rawToolsets.length > 0 && rawToolsets.every((item) => legacyToolPlaceholders.has(item));
   const configuredToolsets = hasOnlyLegacyToolPlaceholders ? [] : rawToolsets;
-  const toolsetMode =
+  let toolsetMode: 'inherit' | 'allowlist' =
     config.toolsetMode === 'allowlist'
       ? 'allowlist'
       : config.toolsetMode === 'inherit'
@@ -620,6 +620,15 @@ export async function hydrateBotProfileRuntime(
   // Every V2 lane (group and plan lanes too, wherever they run) shares that one project memory.
   const projectMode = !!workspaceDir && readBotProjectMode(config);
   if (projectMode && opts.id) botLearningTracker.markProjectTeammate(opts.id);
+  // V2 (2026-11-10, owner): one capability set in every session of the teammate — its own chats,
+  // group and IM lanes, 分工 — so the capability selection no longer narrows any of them. Its Skills
+  // are the project's own; lanes still never take the owner's personal Skills, and a chat-only
+  // group stays without tools (that is the group's authorization, not a capability choice).
+  if (projectMode && !chatOnly) {
+    skillMode = 'inherit';
+    mcpMode = 'inherit';
+    toolsetMode = 'inherit';
+  }
   const memoryEngineEnabled = !projectMode && config.memory !== false;
   opts.makerMemoryEnabled = projectMode ? config.memory !== false : memoryEngineEnabled;
   const botMemoryScopeKey = buildBotMemoryScopeKey(row.botId);
@@ -840,14 +849,8 @@ export async function hydrateBotProfileRuntime(
   } else if (toolsetMode === 'allowlist') {
     unavailableToolsets = configuredToolsets;
   }
-  if (projectContext) {
-    // V2: every toolset an ordinary task here has; nothing is switched off.
-    resolvedToolsets = toolsetCatalog.filter((item) => item.available !== false).map((item) => item.id);
-    unavailableToolsets = [];
-    disabledToolsets = [];
-  }
   const runtimeConfiguredToolsets =
-    toolsetMode === 'inherit' || projectContext ? [...resolvedToolsets] : [...configuredToolsets];
+    toolsetMode === 'inherit' ? [...resolvedToolsets] : [...configuredToolsets];
   // 工具集与内置 MCP 共用宿主映射；已选择的能力必须同轮进入 MCP allowlist。
   // 显式挂载 docs 时提示词会承诺文档能力，其他工具集同样需要真正挂载。
   // 开头记录的那类事故:「提示词说有,运行时够不到」。伙伴基线工具集（如 scheduler）

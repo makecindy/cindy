@@ -223,8 +223,11 @@ export function BotCapabilitySettings({
 
   const groups: ReactNode[] = [];
 
+  // V2: every session of the teammate has the tools, MCP and Skills an ordinary task here has,
+  // and its own Skills live in its project, so there is no core Skill and nothing to select.
+  const projectMode = capabilities.projectMode === true;
   // Core: always on, opens a read-only explanation.
-  if (matches(t('bots.capabilities.core.name'), t('bots.capabilities.core.hint'), 'teammate-guide')) {
+  if (!projectMode && matches(t('bots.capabilities.core.name'), t('bots.capabilities.core.hint'), 'teammate-guide')) {
     groups.push(
       <Group key="core" title={t('bots.capabilities.core.group')}>
         <ListRow
@@ -264,7 +267,7 @@ export function BotCapabilitySettings({
   }
 
   // Shared references: Skills on this computer, built-in tools, MCP.
-  for (const kind of ['skill', 'toolset', 'mcp'] as const) {
+  for (const kind of projectMode ? [] : ['skill', 'toolset', 'mcp'] as const) {
     const data = rowsOf(kind, false);
     if (!data.rows.length && (needle || !entries[kind])) continue;
     const key = `shared-${kind}`;

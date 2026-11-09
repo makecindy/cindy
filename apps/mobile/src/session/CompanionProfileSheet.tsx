@@ -442,7 +442,8 @@ function CompanionProfileSheetContent(props: CompanionProfileSheetProps) {
         : page === 'settings' ? <View style={styles.group}>{row('permissions', Hand)}</View>
         : page === 'skills' ? <>
           {skills?.entries?.length ? <View style={styles.group}>{row('personalSkills', Settings2)}</View> : noteText(skills?.text || t('devices.companionProfile.skillsEmpty'))}
-          {connections?.entries?.length ? <View style={styles.group}>{row('connections', Link2)}</View> : noteText(connections?.text || t('devices.companionProfile.emptyEditor'))}
+          {/* A V2 teammate has no capability selection; its host sends no connections block. */}
+          {!connections ? null : connections.entries?.length ? <View style={styles.group}>{row('connections', Link2)}</View> : noteText(connections.text || t('devices.companionProfile.emptyEditor'))}
         </>
         : page === 'channels' ? resource ? <CompanionChannelTasks deviceId={deviceId} botId={resource.ref.id} online={online} onOpenTask={openArtifactTask} /> : null
         : page === 'artifacts' ? sessionId && resource ? <CompanionProfileArtifacts deviceId={deviceId} botId={resource.ref.id} sessionId={sessionId} online={online} onOpenTask={openArtifactTask} /> : note('artifactsRecovery')

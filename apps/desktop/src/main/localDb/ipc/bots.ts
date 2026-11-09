@@ -1679,6 +1679,8 @@ export async function getBotRemoteSettingsSource(botId: string) {
     skills: strings(config.skills),
     connections: strings(config.mcpServers),
     toolsets: strings(config.toolsets),
+    // V2: every session has everything here, so there is no selection to show.
+    ...(readBotProjectMode(config) ? { projectMode: true as const } : {}),
   };
 }
 
