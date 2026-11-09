@@ -63,6 +63,15 @@ subscription forwarding and 422 recovery; text-only results retain their string 
 This follows the [xAI Responses input schema](https://docs.x.ai/developers/rest-api-reference/inference/responses).
 Regression coverage lives in `anthropic-compat-proxy/src/xai-model-input.test.ts`.
 
+Claude Code's Messages → Responses bridge also maps Anthropic tool-result images
+(base64 or URL sources) into `input_image` parts before provider normalization.
+Images remain tool output under the original `call_id`; no user message is invented.
+The bridge keeps text-only results as strings and reports missing image sources as text.
+Its request translator and HTTP handler tests cover this path, including the OpenAI
+subscription route. Desktop's `codexProxyHost.test.ts` checks Codex's configured
+transform chain, and `piNativeSubscriptionForwarding.test.ts` checks Pi's native
+forwarding request bytes.
+
 ## Responses initial item repair
 
 The existing uncompressed SSE passthrough repair also fills absent initialization fields on
