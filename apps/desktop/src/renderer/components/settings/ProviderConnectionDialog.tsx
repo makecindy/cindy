@@ -3066,7 +3066,7 @@ export function ProviderConnectionDialog({
                   </button>
                 </div>
 
-                {!simpleAdding && authMode !== 'oauth' && (
+                {authMode !== 'oauth' && (!simpleAdding || f.models.some(model => model.mode === 'image_generation')) && (
                   <div className="flex flex-col gap-1.5 border-t border-[var(--border-default)] pt-3">
                     <label className="flex cursor-pointer items-center gap-2 text-13 text-[var(--settings-section-title)]">
                       <input
