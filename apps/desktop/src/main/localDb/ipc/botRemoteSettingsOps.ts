@@ -6,6 +6,7 @@ import {
 } from '../../../shared/botRemoteSettings.js';
 import {
   BOT_IM_CHANNELS,
+  isBotImGroupChatId,
   type BotImAdoptablePersonalBotsPayload,
   type BotImChannel,
   type BotImConnectionAddResult,
@@ -144,7 +145,6 @@ export function readBotSettingsPatch(value: unknown, allowEmpty = false): Record
 }
 
 const ACTIONS = new Set(['resume', 'restart', 'delete']);
-const GROUP_CHAT_ID = /^-?\d{1,32}$/;
 const LANE_SESSION_ID = /^[A-Za-z0-9_.:-]{1,200}$/;
 
 /** A connection page operation may touch only this teammate's own connections. */
@@ -154,7 +154,8 @@ async function ownConnection(deps: BotSettingsOpsDeps, call: BotSettingsCall): P
   return own ? id : throwIpcError('NOT_FOUND', 'Connection unavailable');
 }
 const onlyThisTeammate = (deps: BotSettingsOpsDeps, payload: BotImConnectionListPayload, call: BotSettingsCall): BotImConnectionListPayload =>
-  ({ connections: payload.connections.filter((connection) => connection.botId === botOf(call)) });
+  ({ connections: payload.connections.filter((connection) => connection.botId === botOf(call)
+    && (connection.channel !== 'imessage' || (Array.isArray(call.args.supportedChannels) && call.args.supportedChannels.includes('imessage')))) });
 
 /** The path of the WeChat working folder belongs to the teammate's computer. */
 const wechatSettings = (settings: unknown) => ({ ...record(settings, 'settings'), workingDir: null });
@@ -284,7 +285,7 @@ export function createBotRemoteSettingsOps(deps: BotSettingsOpsDeps): Partial<Re
     'channels.im.listGroups': async call => deps.channels.im.listGroups(await ownConnection(deps, call)),
     'channels.im.setGroupActivation': async call => {
       const id = await ownConnection(deps, call);
-      if (typeof call.args.chatId !== 'string' || !GROUP_CHAT_ID.test(call.args.chatId)) fail('chatId is invalid');
+      if (!isBotImGroupChatId(call.args.chatId)) fail('chatId is invalid');
       return deps.channels.im.setGroupActivation(id, call.args.chatId as string, call.args.mode === 'always' ? 'always' : 'mention');
     },
     'channels.im.listLanes': async call => deps.channels.im.listLanes(await ownConnection(deps, call)),

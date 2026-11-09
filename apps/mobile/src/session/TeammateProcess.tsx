@@ -87,13 +87,26 @@ export function TeammateProcess({ id, title, running = false, children, secondar
   const [mounted, setMounted] = useState(expanded);
   const [contentHeight, setContentHeight] = useState(0);
   const height = useRef(new Animated.Value(0)).current;
-  useEffect(() => {
+  // A restored/live disclosure already starts open. Keep it in normal flow so
+  // initial measurement and later text wrapping cannot replay a height animation.
+  // Only a change of expansion state needs an explicit, animated height.
+  const [disclosure, setDisclosure] = useState({ expanded, moving: false });
+  if (disclosure.expanded !== expanded) setDisclosure({ expanded, moving: true });
+  useLayoutEffect(() => {
     if (expanded) setMounted(true);
+    if (!disclosure.moving) {
+      height.setValue(expanded ? contentHeight : 0);
+      return;
+    }
     const animation = Animated.timing(height, { toValue: expanded ? contentHeight : 0,
       duration: reduceMotion === false ? listDisclosureMotion.duration : 0, useNativeDriver: false });
-    animation.start(({ finished }) => { if (finished && !expanded) setMounted(false); });
+    animation.start(({ finished }) => {
+      if (!finished) return;
+      if (!expanded) setMounted(false);
+      setDisclosure(current => current.expanded === expanded ? { expanded, moving: false } : current);
+    });
     return () => animation.stop();
-  }, [expanded, contentHeight, height, reduceMotion]);
+  }, [expanded, contentHeight, height, reduceMotion, disclosure.moving]);
   return <View style={styles.container}>
       <Pressable accessibilityRole="button" accessibilityState={{ expanded }} accessibilityLabel={title}
         onPress={toggle} testID={secondary ? 'message.processRecords' : 'message.teammateProcess'}
@@ -105,10 +118,10 @@ export function TeammateProcess({ id, title, running = false, children, secondar
           <ChevronRight size={iconSize.sm} color={colors.textTertiary} />
         </Animated.View>
       </Pressable>
-      {(expanded || mounted) && <Animated.View style={{ height, overflow: 'hidden' }}
+      {(expanded || mounted) && <Animated.View style={{ height: disclosure.moving ? height : undefined, overflow: 'hidden' }}
         onLayout={event => { visibleHeight.current = event.nativeEvent.layout.height; }}
         accessibilityElementsHidden={!expanded} importantForAccessibility={expanded ? 'auto' : 'no-hide-descendants'}>
-        <View style={styles.measuredBody} onLayout={event => setContentHeight(event.nativeEvent.layout.height)}>
+        <View style={disclosure.moving ? styles.measuredBody : undefined} onLayout={event => setContentHeight(event.nativeEvent.layout.height)}>
           <View style={secondary ? styles.records : styles.guide}>
             {!secondary && <View pointerEvents="none" testID="message.processGuide" style={[styles.rail, { bottom: spacing.xs + railEndInset }]} />}
             <ProcessRailEnd.Provider value={secondary ? null : setRailEndInset}>

@@ -8,7 +8,7 @@ An explicitly selected Desktop wallpaper replaces the flat page canvas across
 the whole host application: title bar, navigation, messages, tool-pane chrome,
 settings and other host pages share continuous viewport-aligned artwork. This
 opt-in setting supersedes the CINDY sidebar-only backdrop treatment while active;
-disabling it restores the original theme without modifying theme files or tokens.
+selecting None switches to the native desktop backdrop described below, without modifying theme files or tokens.
 Blend wallpaper with the theme surface, never a fixed black overlay in Light mode. Image opacity
 must not affect text or icons. In-page raised surfaces — composer, message bubbles,
 tool and table-header cards, page cards, inputs and the selected sidebar row —
@@ -24,6 +24,11 @@ syntax-highlighted code, such as code blocks and diffs (the fixed syntax palette
 web or editor content keep their readable opaque surfaces. Implementation: the in-page
 glass rule in `globals.css`, scoped to page containers and excluding floating roles and
 absolute / fixed / sticky surfaces; the floor comes from `useWallpaperBackground`.
+Desktop transparency uses this same rule and contrast floor, including its exclusions
+(user decision, 2026-11-08). Do not duplicate per-control styles by background source.
+At zero desktop transparency, keep raised surfaces fully opaque. The sidebar's own
+frost remains independent. Host layout dividers and plugin main-view canvases share
+the desktop background just as they share artwork; embedded controls retain their surfaces.
 Composer scroll masking must align with the same wallpaper instead of introducing an opaque footer rectangle.
 Built-in SVG wallpapers are decorative assets, not new semantic UI colors.
 Verify actual Light/Dark screenshots across host pages and the expanded tool pane.
@@ -64,10 +69,56 @@ images offline and after upgrades. Do not request CDN assets for IDs absent from
 Earlier unreleased artwork (including Blue Gaze, Amber Light and the 2026-10-16 batch
 trimmed on 2026-10-17) is not shipped and needs no compatibility.
 The new artwork uses the existing continuous cover fit, theme-derived visibility
-and blur controls. None remains the default and restores the theme canvas.
+and blur controls. None remains the default. With None selected, visibility controls
+desktop background transparency (0% opaque, 100% clear); the retained left sidebar
+material is independent. Both controls remain
+sliders with the same ranges, preview/commit behavior and reset action when switching
+between None and artwork (user decision, 2026-11-08). Their labels and hints identify
+the current background source; do not replace desktop blur with a separate switch.
+Desktop transparency has its own optional `desktopVisibility` override, defaulting to
+0% for both upgrades and new installs. Never infer desktop opt-in from legacy
+`wallpaperVisibility` or `wallpaperOverlay`; artwork keeps its existing values.
+Switching background sources restores each source's visibility. Reset removes the
+desktop override and returns to opaque content, retaining independent sidebar frost.
+At 0% desktop transparency or wallpaper visibility, disable the blur slider and
+suspend background blur without writing over its saved value. Restore that value
+as soon as visibility becomes positive. The independent sidebar material is not
+disabled by this optimization (user decision, 2026-11-08).
+macOS passes the numeric radius to the native window backdrop. See
+[`desktop-backdrop-blur-research.md`](../desktop-backdrop-blur-research.md).
+Text and controls are never faded.
+The left task sidebar retains its own frosted material and readable tint floor,
+even when the background blur is zero (user decision, 2026-11-08). The two existing
+sliders still control the background; do not add a separate sidebar preference.
+For a desktop background on macOS, a non-interactive native effect view covers
+only the sidebar's currently visible width. Its geometry is local to each window,
+follows collapse/rail/peek animation and UI zoom, and disappears when hidden or
+when artwork covers the window. With artwork, a paint-only child of the sidebar
+blurs the in-app canvas; never apply the filter to the sidebar ancestor, which
+would change the containing block of its fixed menus. In desktop mode, the shared
+veil starts after the sidebar's visible edge; otherwise 0% transparency hides the
+native material beneath an opaque body. The sidebar retains its original tint.
+With artwork, compensate for the existing canvas veil rather than stacking two full coats.
+Windows/Linux retain the readable tint; native regional desktop sampling has only
+been implemented on macOS. Existing Windows whole-window Acrylic fallback remains.
+Without that native sidebar material (Windows/Linux), 0% desktop transparency does not
+enter desktop-background mode: the window keeps its original backdrop (Windows 11
+Acrylic, otherwise opaque) until transparency is raised (#9424).
+The controls reuse the visibility and blur overrides. On macOS, the own-window
+native addon applies `CGSSetWindowBackgroundBlurRadius` (0–20), with fixed vibrancy
+removed so it cannot obscure radius changes. Artwork clears this native radius.
+Positive blur must preserve AppKit's native rounded window mask: a completely
+clear NSWindow background needs a visually negligible alpha (0.001), restored
+when blur is cleared without overwriting the next theme's background.
+The private API is resolved at runtime; a missing addon or failed call falls back
+to the system material. Windows 11 continues to use Acrylic for nonzero values;
+systems without a native material retain clear transparency. The hint describes
+system-default fallback where adjustable blur is unavailable. A successful native
+call alone is not visual acceptance; keep the research document's validation limits.
+Selecting artwork restores the image/video controls. Reset removes these overrides.
 While a window's opaque in-app wallpaper canvas is active, disable its covered
-native macOS Vibrancy / Windows backdrop material. Restore the theme's native
-material when that canvas is removed. Use actual per-window canvas state rather
+native macOS Vibrancy / Windows backdrop material. With None selected, restore the
+user's desktop backdrop choice when that canvas is removed. Use actual per-window canvas state rather
 than the saved selection; pending replacements may retain the previous canvas.
 The visibility veil (including 0%) remains opaque to the desktop. Wallpaper blur
 and in-app overlay blur keep their existing behavior.
@@ -122,10 +173,15 @@ and clip the video at the viewport to avoid transparent edges; static and video 
 must match. For blurred static scenes, reuse the moving-scene message fade instead
 of repainting a sharp wallpaper behind the composer. Persist only explicit overrides;
 Reset removes the blur override. Reuse the settings Slider with a localized accessible
-label and hint, disable it for None, and explain the additional GPU cost for video.
-Dragging previews blur locally; only a committed pointer/keyboard value is saved and
-broadcast. Cancelled gestures or leaving settings discard the preview.
-Existing preferences without an explicit visibility override keep the previous Light/Dark veil
+label and hint; None uses the desktop behavior above. Explain the additional GPU cost for video.
+Dragging previews both visibility and blur locally; only a committed pointer/keyboard
+value is saved and broadcast to other windows. Cancelled gestures, window blur or
+leaving settings discard the preview; a failed save restores the saved value.
+The macOS dispatcher caches successful native state per window: radius-only changes
+retain the sidebar material, replaced materials resynchronize its mask, and failed
+native calls remain retryable. It also owns background-color writes so redundant
+updates cannot erase the tiny alpha backing that preserves AppKit window corners.
+Existing artwork preferences without an explicit visibility override keep the previous Light/Dark veil
 mapping and display its equivalent visibility. The unchanged soft default is 37% visible in
 Light and 27% in Dark. Adjusting the slider saves literal visibility, shared across themes;
 Reset removes that override and restores the theme-dependent default. Do not rewrite old

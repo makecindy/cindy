@@ -2589,6 +2589,7 @@ interface McpServerRef {
 }
 
 const CINDY_MCP_LIST_TOOLS = 'cindy_mcp_list_tools';
+const CINDY_ASYNC_QUESTION_TOOL = 'ask_user_question_async';
 const CINDY_MCP_CALL_TOOL = 'cindy_mcp_call_tool';
 const CINDY_LIST_AGENTS_TOOL = 'list_agents';
 const CINDY_LIST_MACHINES_TOOL = 'list_machines';
@@ -3368,7 +3369,7 @@ class CindyMcpGateway {
   /** The real MCP identity of a tool the model called by its short name, for the permission and capture hooks. */
   resolveHookedCall(toolName: string, input: unknown): ResolvedMcpGatewayCall | null {
     if (toolName === CINDY_MCP_CALL_TOOL) return this.resolveCall(input);
-    if (CINDY_DIRECT_BOT_TOOLS.has(toolName) || toolName === CINDY_LIST_MACHINES_TOOL) return this.resolveDirectHelperTool(toolName, input);
+    if (CINDY_DIRECT_BOT_TOOLS.has(toolName) || toolName === CINDY_LIST_MACHINES_TOOL || toolName === CINDY_ASYNC_QUESTION_TOOL) return this.resolveDirectHelperTool(toolName, input);
     return toolName === CINDY_BOT_MEMORY_TOOL ? this.resolveBotMemory(input) : null;
   }
 
@@ -3980,6 +3981,19 @@ class CindyMcpGateway {
           additionalProperties: false,
         },
         execute: async (_toolCallId: string, params: unknown, signal?: AbortSignal) => this.executeBotMemory(params, signal),
+      });
+    }
+
+    // Match synchronous question discoverability while retaining the host schema and lifecycle.
+    const asyncQuestion = this.tools.get(mcpGatewayKey('cindy_helper', CINDY_ASYNC_QUESTION_TOOL));
+    if (asyncQuestion && !options.deniedTools?.includes(CINDY_ASYNC_QUESTION_TOOL)) {
+      pi.registerTool({
+        name: CINDY_ASYNC_QUESTION_TOOL,
+        label: 'Ask an optional question',
+        description: asyncQuestion.description,
+        parameters: asyncQuestion.inputSchema,
+        execute: async (_id: string, params: unknown, signal?: AbortSignal) =>
+          this.executeDirectHelperTool(CINDY_ASYNC_QUESTION_TOOL, params, signal),
       });
     }
 
@@ -5040,6 +5054,7 @@ export default async function cindyBridge(piApi: any) {
       (event.toolName === CINDY_MCP_CALL_TOOL
         || CINDY_DIRECT_BOT_TOOLS.has(event.toolName)
         || event.toolName === CINDY_LIST_MACHINES_TOOL
+        || event.toolName === CINDY_ASYNC_QUESTION_TOOL
         || event.toolName === CINDY_BOT_MEMORY_TOOL)
       && !gatewayCall
     ) return;

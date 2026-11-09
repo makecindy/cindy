@@ -23,7 +23,7 @@ const PRESENCE_DOT = 6;
  */
 export function CompanionHeader(props: {
   nativeHeader?: boolean;
-  resource: RemoteResource; deviceId: string; deviceName: string; online: boolean; controlsReady?: boolean;
+  resource: RemoteResource; deviceId: string; deviceName: string; online: boolean;
   /** The companion is working on a reply (the avatar breathes). */
   working?: boolean;
   settingsRequest?: { page: 'memory' | 'capabilities'; sequence: number };
@@ -35,7 +35,7 @@ export function CompanionHeader(props: {
   return <CompanionHeaderContent key={accountGeneration} {...props} />;
 }
 
-function CompanionHeaderContent({ nativeHeader, resource, deviceId, deviceName, online, controlsReady = true, working = false, sessionId, onSearch, onBack, settingsRequest }: Parameters<typeof CompanionHeader>[0]) {
+function CompanionHeaderContent({ nativeHeader, resource, deviceId, deviceName, online, working = false, sessionId, onSearch, onBack, settingsRequest }: Parameters<typeof CompanionHeader>[0]) {
   const { t, i18n } = useTranslation();
   const styles = useThemedStyles(makeStyles);
   const navigation = useTeammateNavigation();
@@ -67,7 +67,6 @@ function CompanionHeaderContent({ nativeHeader, resource, deviceId, deviceName, 
       </View>}
       identityLabel={[name, deviceName, connection].filter(Boolean).join(', ')}
       identityHint={t('devices.glance.open', { name })}
-      controlsReady={controlsReady}
       onBack={onBack}
       onOpenIdentity={() => setGlance(true)}
       onOpenSettings={() => { setInitialPage('home'); setProfile(true); }}

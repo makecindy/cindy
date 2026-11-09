@@ -1,12 +1,13 @@
 /** Managed developer checkout, retaining the macOS launcher workflow without machine-specific paths. */
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { resumableCompose } from './composition.mjs';
 import { readJournal } from './recovery.mjs';
-import { configFrom, discover, copyPlugin, packageHash, auditPlugins, run, verifyReport } from '../personal-build.mjs';
+import { configFrom, discover, copyPlugin, packageHash, auditPlugins, run, verifyReport, verifyUpgradeSnapshot } from '../personal-build.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const cli = path.join(here, '../personal-build.mjs');
@@ -28,7 +29,10 @@ export function managedConfig(file) {
   check(new Set([c.app.checkout, r.clientDir, r.stagingDir, r.stateDir]).size === 4, 'Source, client, staging and state directories must differ');
   r.node = r.node ? path.resolve(base, r.node) : process.execPath;
   r.toolPaths = (r.toolPaths || []).map(p => path.resolve(base, p));
+  r.personalApp = r.personalApp ? path.resolve(base, r.personalApp) : path.join(os.homedir(), 'Applications', `Cindy Personal${c.region === 'global' ? '' : c.region === 'cn' ? ' CN' : ' Dev'}.app`);
+  check(r.personalApp.endsWith('.app'), 'runtime.personalApp must be an app directory');
   r.installedApp = r.installedApp || '/Applications/Cindy.app';
+  check(path.resolve(r.personalApp) !== path.resolve(r.installedApp), 'Personal runtime must not replace the official installed app');
   r.idleMinutes ??= 120;
   check(Number.isInteger(r.idleMinutes) && r.idleMinutes >= 1 && r.idleMinutes <= 1440, 'Invalid idle timeout');
   return c;
@@ -68,13 +72,22 @@ export function loadManifest(state) {
 export function runtimeEnv(c, configFile, manifest = {}) {
   const r = c.runtime;
   const escape = text => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  // A native build launches from the shared runtime cache: the process is that cache's Cindy.app run
+  // for this checkout. Recognize it by checkout (never by the shared executable alone), or the
+  // update gates and launcher stop checks cannot see the real application.
+  let nativeRuntime = null;
+  try { nativeRuntime = read(path.join(r.clientDir, 'apps/desktop/resources/personal-native.json')).runtime?.directory ?? null; } catch { /* Ordinary Electron checkout. */ }
+  const sourceElectron = `${escape(path.join(r.clientDir, 'node_modules/electron/dist/Electron.app/Contents/MacOS/Electron'))}( |$)`;
+  const electronPattern = typeof nativeRuntime === 'string' && path.isAbsolute(nativeRuntime)
+    ? `(${sourceElectron}|${escape(path.join(nativeRuntime, 'Cindy.app/Contents/MacOS/Electron'))} .*${escape(path.join(r.clientDir, 'apps/desktop'))}( |$))`
+    : sourceElectron;
   const result = { ...process.env,
     PERSONAL_CONFIG: path.resolve(configFile), PERSONAL_CLI: cli, PERSONAL_TOOLS_DIR: here,
     PERSONAL_SOURCE_DIR: c.app.checkout, PERSONAL_CLIENT_DIR: r.clientDir, PERSONAL_STAGING_DIR: r.stagingDir,
     PERSONAL_STATE_DIR: r.stateDir, PERSONAL_DATA_DIR: r.dataDir, PERSONAL_REGION: c.region,
     PERSONAL_MODE: r.mode, PERSONAL_PROFILE_NAME: c.name, PERSONAL_INSTALLED_APP: r.installedApp,
     PERSONAL_PREVIOUS_REF: `personal-build/${c.name}/previous`, PERSONAL_IDLE_MINUTES: String(r.idleMinutes),
-    PERSONAL_ELECTRON_RE: `${escape(path.join(r.clientDir, 'node_modules/electron/dist/Electron.app/Contents/MacOS/Electron'))}( |$)`,
+    PERSONAL_ELECTRON_RE: electronPattern,
     PERSONAL_FETCH_COMMITS: (manifest.FETCH_COMMITS || []).join(' '), PERSONAL_REPOSITORY: c.app.repository,
     PERSONAL_NODE: r.node, PERSONAL_TOOL_PATH: r.toolPaths.join(path.delimiter),
     PATH: [path.dirname(r.node), ...r.toolPaths, process.env.PATH || ''].join(path.delimiter),
@@ -198,6 +211,7 @@ export function syncPlugins(c, exec = run) {
 
 export function selectBuild(c, reportFile) {
   const report = verifyReport(reportFile);
+  verifyUpgradeSnapshot(c, report);
   // Managed stage still validates shared profile compatibility, even when the isolated check passed.
   run('git', ['-C', c.app.checkout, 'cat-file', '-e', `${report.app.target}^{commit}`], c.app.checkout);
   const m = { TARGET: report.app.target, MAIN: report.app.baseSha, PACK: '', FETCH: '', DB_SCRIPT: '', LABEL: `Personal build ${report.app.target.slice(0, 10)}` };

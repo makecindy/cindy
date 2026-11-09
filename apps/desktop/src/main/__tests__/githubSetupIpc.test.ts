@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 vi.mock('../secrets/providerSecretStore', () => ({ readGhostSecret: vi.fn() }));
 vi.mock('../maker-host/outbound-fetch', () => ({ outboundFetch: vi.fn() }));
-vi.mock('../appSessionState', () => ({ activeOwnerScopeKey: () => 'test-owner' }));
+vi.mock('../appSessionState', () => ({ activeOwnerScopeKey: () => 'test-owner', getActiveAppSession: () => ({ dataOwnerId: 'test-owner' }) }));
 const mocks = vi.hoisted(() => ({
   handlers: new Map<string, (...args: any[]) => unknown>(),
   guard: vi.fn(),
@@ -88,6 +88,25 @@ describe('GitHub setup IPC boundary', () => {
     expect(mocks.start).not.toHaveBeenCalled();
     start({});
     expect(mocks.start).toHaveBeenCalledOnce();
+  });
+  // Star is a local fixed-target action: arbitrary payloads and untrusted frames cannot write.
+  it('guards the Star endpoints and uses the existing GitHub credential source', async () => {
+    registerGithubSetupIpc(vi.fn());
+    const star = mocks.handlers.get('git-context:github-star:add')!;
+    const check = mocks.handlers.get('git-context:github-star:check')!;
+    expect(() => star({}, { repo: 'other/repo' })).toThrow();
+    mocks.guard.mockImplementationOnce(() => { throw new Error('untrusted'); });
+    expect(() => star({})).toThrow('untrusted');
+    expect(outboundFetch).not.toHaveBeenCalled();
+    mocks.readToken.mockResolvedValue('fake-cli-token');
+    vi.mocked(outboundFetch).mockImplementation(async url => url === 'https://api.github.com/user'
+      ? new Response(JSON.stringify({ login: 'test-user' })) : new Response(null, { status: 204 }));
+    expect(await check({})).toBe(true);
+    expect(await star({})).toBe(true);
+    expect(outboundFetch).toHaveBeenLastCalledWith(
+      'https://api.github.com/user/starred/makecindy/cindy',
+      expect.objectContaining({ method: 'PUT', headers: expect.objectContaining({ Authorization: 'Bearer fake-cli-token' }) }),
+    );
   });
   it('clears both caches before notifying every window', () => {
     const invalidate = vi.fn();

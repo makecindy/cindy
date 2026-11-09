@@ -38,6 +38,12 @@ export function useResidentHomeList(embedded = false) {
   return { enabled: !!context && (embedded ? context.persistent : Platform.OS !== 'ios'), mounted: context?.mounted };
 }
 
+/** A native-docked Home already owns its whole list. Keep the list within that
+ * surface in both orientations instead of moving it to the legacy root host. */
+export function LocalHomeList({ children }: { children: ReactNode }) {
+  return <Context.Provider value={null}>{children}</Context.Provider>;
+}
+
 /** Preserve the resident-list owner when route content is re-hosted above this
  * provider. React context follows the render destination, so an explicit bridge
  * is required for Android root overlays that otherwise fall back to an inline
@@ -51,8 +57,8 @@ export function useResidentHomeListContextBridge(children: ReactNode) {
 }
 
 /** One task-list width for the side column and the floating quick-switch
- * drawer: resizing either one is the same choice. Each surface clamps it to
- * its own bounds and uses its own default until the user has dragged. */
+ * drawer: resizing either one is the same choice, with the same default and
+ * drag range. Only a constrained window or an actual hinge can override it. */
 export function useSessionSidebarWidthPreference(): SidebarWidthPreference {
   const context = useContext(SidebarWidthContext);
   const [width, setWidth] = useState<number | null>(null);

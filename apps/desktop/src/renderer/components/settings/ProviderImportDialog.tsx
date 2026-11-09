@@ -4,6 +4,8 @@ import { useProviderOAuthDeviceCode } from '@/hooks/useProviderOAuthDeviceCode';
 import { toast } from '@/lib/toast';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
+import { Select } from '@/components/ui/select';
 import { extractIpcError } from '@/utils/ipcError';
 import { ChevronDown, Download, FileUp } from 'lucide-react';
 import type { ProviderImportPreview } from '../../../shared/providerImport';
@@ -158,6 +160,8 @@ export function ProviderImportFileButton({ onImported }: { onImported: (id: stri
 }
 
 /** A secret-free review surface. Mutations and credentials remain in Main. */
+const NEW_CONNECTION_TARGET = '__new-connection';
+
 export function ProviderImportDialog({ importId, onClose, onDone }: ProviderImportDialogProps) {
   const { t } = useTranslation();
   const [preview, setPreview] = useState<ProviderImportPreview | null>(null);
@@ -338,27 +342,29 @@ export function ProviderImportDialog({ importId, onClose, onDone }: ProviderImpo
             <div className="flex flex-col gap-3 text-13 text-[var(--text-primary)]">
               <p className="font-medium">{preview.name}</p>
               {!createdId && preview.updateTargets.length > 0 && (
-                <label className="flex flex-col gap-2">
+                <div className="flex flex-col gap-2">
                   {t('settings.providers.import.destination')}
-                  <select
-                    aria-label={t('settings.providers.import.destination')}
-                    value={target}
+                  {/* Radix Select items cannot use '' — a sentinel stands for a new connection. */}
+                  <Select data-settings-search-action="Choose whether the import creates a connection or updates an existing one"
+                    label={t('settings.providers.import.destination')}
+                    width="full"
+                    truncateOptions
+                    value={target || NEW_CONNECTION_TARGET}
                     disabled={saving}
-                    className="h-9 rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3 text-[var(--text-primary)]"
-                    onChange={(event) => {
+                    onValueChange={(value) => {
                       previewRef.current = null;
                       setLoading(true);
-                      setTarget(event.target.value);
+                      setTarget(value === NEW_CONNECTION_TARGET ? '' : value);
                     }}
-                  >
-                    <option value="">{t('settings.providers.import.newConnection')}</option>
-                    {preview.updateTargets.map((item) => (
-                      <option key={item.id} value={item.id}>
-                        {item.name} · {item.id}
-                      </option>
-                    ))}
-                  </select>
-                </label>
+                    options={[
+                      { value: NEW_CONNECTION_TARGET, label: t('settings.providers.import.newConnection') },
+                      ...preview.updateTargets.map((item) => ({
+                        value: item.id,
+                        label: `${item.name} · ${item.id}`,
+                      })),
+                    ]}
+                  />
+                </div>
               )}
               <p>
                 {t(`settings.providers.import.action.${preview.action}`, {
@@ -568,7 +574,7 @@ export function ProviderImportBatchDialog({ importIds, onClose, onDone }: {
         {rows.map((row, index) => <li key={row.id} className="space-y-2 py-3 first:pt-0">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <label className="flex min-h-9 min-w-0 items-center gap-2 font-medium">
-              <input type="checkbox" className="size-4 shrink-0 accent-[var(--text-primary)]" checked={row.selected} disabled={saving || !selectable(row)}
+              <Checkbox data-settings-search-action="Include this provider in the batch import" checked={row.selected} disabled={saving || !selectable(row)}
                 onChange={event => patchRow(row.id, { selected: event.target.checked })} />
               <span className="break-words">{row.preview?.name ?? t('settings.providers.import.batchItem', { index: index + 1 })}</span>
             </label>

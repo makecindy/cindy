@@ -39,6 +39,8 @@ export function exposeScreenshotPageElectronApi(): void {
           return { success: false, error: String(error), themes: [], diagnostics: [] };
         }
       },
+      onChanged: (cb: (payload: LocalThemesResult) => void): (() => void) =>
+        onPayload('local-themes:changed', cb),
     },
     // 首启亮色门需要这条线索, 否则已登录的暗色用户会看到亮色浮层。
     authHasPersistedSessionHintSync: (): boolean =>

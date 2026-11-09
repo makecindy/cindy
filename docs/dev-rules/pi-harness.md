@@ -102,6 +102,13 @@ Cindy 以 `pi --mode rpc` spawn pi 二进制(JSONL/stdio),`translator.ts` 把 pi
 超时或回复无效时使用普通档；已开启的正常请求仍发送 `service_tier: priority`。
 这修复偏好文件被改写或重放的路径，不改变 Pi Full Access 的原生 shell 权限边界。
 
+### 普通提问与操作交接
+
+同步提问继续使用 `ask_user_question`；异步提问直接展示 `ask_user_question_async`，
+从宿主 `cindy_helper` 已注册的定义获取说明与参数，执行仍走同一 MCP 通道及真实权限身份。
+宿主未提供时不注册，不另建卡片或答案队列。`ask_owner` 仅处理 fill／scan／connect，
+不承接普通提问。异步问题随本轮结束或被替换而失效，用户答案经同轮 steer 交回。
+
 ## 2. 配置面:Cindy 显式设置 vs 放任 pi 默认
 
 ### 请求计时与档位核验

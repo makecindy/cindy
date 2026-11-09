@@ -1,3 +1,6 @@
+import org.gradle.api.file.DirectoryProperty
+import org.gradle.api.tasks.OutputDirectory
+
 plugins {
   id 'com.android.library'
   id 'expo-module-gradle-plugin'
@@ -7,7 +10,6 @@ version = '0.1.0'
 android {
   namespace 'app.cindy.usagewidgets'
   defaultConfig { versionCode 1; versionName '0.1.0' }
-  sourceSets.main.assets.srcDir(layout.buildDirectory.dir('generated/usage-widget-fonts'))
 }
 dependencies {
   implementation 'androidx.core:core:1.15.0'
@@ -15,10 +17,22 @@ dependencies {
 
 // Same number font as the macOS menu bar panel and the iOS widgets (OFL), taken from the desktop
 // sources instead of being committed a third time.
-def copyWidgetFonts = tasks.register('copyUsageWidgetFonts', Copy) {
+abstract class CopyUsageWidgetFonts extends Copy {
+  @OutputDirectory
+  abstract DirectoryProperty getAssetsDirectory()
+}
+
+def copyWidgetFonts = tasks.register('copyUsageWidgetFonts', CopyUsageWidgetFonts) {
+  assetsDirectory.set(layout.buildDirectory.dir('generated/usage-widget-fonts'))
   from(file("$projectDir/../../../../desktop/native/menubar")) {
     include 'BarlowCondensed-Medium.ttf', 'BarlowCondensed-SemiBold.ttf'
+    into 'usage-widgets'
   }
-  into(layout.buildDirectory.dir('generated/usage-widget-fonts/usage-widgets'))
+  into(assetsDirectory)
 }
-tasks.matching { it.name == 'preBuild' }.configureEach { dependsOn(copyWidgetFonts) }
+
+androidComponents {
+  onVariants(selector().all()) { variant ->
+    variant.sources.assets.addGeneratedSourceDirectory(copyWidgetFonts) { it.assetsDirectory }
+  }
+}

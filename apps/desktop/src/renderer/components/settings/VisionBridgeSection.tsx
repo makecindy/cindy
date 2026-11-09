@@ -20,6 +20,7 @@ import {
 } from '@cindy/model-providers';
 
 import { ModelSelector } from '@/components/new-chat/ModelSelector';
+import { SETTINGS_HINT, SettingsCard, SettingsField, SettingsRow, SettingsSection } from '@/components/ui/settings-rows';
 import { Switch } from '@/components/ui/switch';
 import { useProviders } from '@/hooks/useProviders';
 import { createLogger } from '@/lib/logger';
@@ -345,217 +346,194 @@ export function VisionBridgeSection() {
   };
 
   return (
-    <div className="flex flex-col gap-[14px]">
-      <div className="flex flex-col gap-1">
-        <h2 className="text-16 font-medium leading-[1.2] text-[var(--settings-section-title)]">
-          {t('settings.visionBridge.title')}
-        </h2>
-        <p className="text-13 leading-[1.5] text-[var(--settings-section-desc)]">
-          {t('settings.visionBridge.description')}
-        </p>
-      </div>
-
+    <SettingsSection title={t('settings.visionBridge.title')} description={t('settings.visionBridge.description')}>
       {/* ── 总开关 ────────────────────────────────────────────────────── */}
-      <div className="flex items-center justify-between gap-3 rounded-xl border border-[var(--settings-theme-card-border)] bg-[var(--settings-theme-card-bg)] px-4 py-4">
-        <div className="flex min-w-0 flex-col gap-1">
-          <p id={visionBridgeSettings.enableLabel.targetId} className="text-14 font-medium text-[var(--text-primary)]">
-            {t(visionBridgeSettings.enableLabel.titleKey)}
-          </p>
-          <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
-            {t(visionBridgeSettings.enableLabel.descriptionKey)}
-          </p>
-        </div>
-        <Switch data-setting-id={visionBridgeSettings.enableLabel.id}
-          checked={enabled}
-          disabled={pending}
-          onCheckedChange={toggleEnabled}
-          aria-label={t('settings.visionBridge.enableAria')}
+      <SettingsCard>
+        <SettingsRow
+          title={<span id={visionBridgeSettings.enableLabel.targetId}>{t(visionBridgeSettings.enableLabel.titleKey)}</span>}
+          hint={t(visionBridgeSettings.enableLabel.descriptionKey)}
+          trailing={
+            <Switch data-setting-id={visionBridgeSettings.enableLabel.id}
+              checked={enabled}
+              disabled={pending}
+              onCheckedChange={toggleEnabled}
+              aria-label={t('settings.visionBridge.enableAria')}
+            />
+          }
         />
-      </div>
+      </SettingsCard>
 
       {/* ── 卡 1：目标模型（走视觉桥的纯文本模型） ────────────────────── */}
-      <div className="flex flex-col rounded-xl border border-[var(--settings-theme-card-border)] bg-[var(--settings-theme-card-bg)]">
-        <div className="flex items-center justify-between gap-3 px-4 py-4">
-          <div className="flex min-w-0 flex-col gap-1">
-            <p id={visionBridgeSettings.targetModelsLabel.targetId} className="text-14 font-medium text-[var(--text-primary)]">
-              {t(visionBridgeSettings.targetModelsLabel.titleKey)}
+      <SettingsCard>
+        <SettingsField
+          title={<span id={visionBridgeSettings.targetModelsLabel.targetId}>{t(visionBridgeSettings.targetModelsLabel.titleKey)}</span>}
+          hint={t(visionBridgeSettings.targetModelsLabel.descriptionKey)}
+          action={(
+            <DefaultOverrideControls
+              isCustomized={targetModelsCustomized}
+              disabled={pending}
+              onReset={() => {
+                void resetTargetModels();
+              }}
+            />
+          )}
+        >
+          {targetRows.length === 0 ? (
+            <p className="text-12 text-[var(--text-tertiary)]">
+              {t('settings.visionBridge.targetModels.empty')}
             </p>
-            <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
-              {t(visionBridgeSettings.targetModelsLabel.descriptionKey)}
-            </p>
-          </div>
-          <DefaultOverrideControls
-            isCustomized={targetModelsCustomized}
-            disabled={pending}
-            onReset={() => {
-              void resetTargetModels();
-            }}
-          />
-        </div>
-
-        <div className="mx-4 h-px bg-[var(--settings-theme-card-border)]" />
-
-        {targetRows.length === 0 ? (
-          <p className="px-4 py-4 text-12 text-[var(--text-tertiary)]">
-            {t('settings.visionBridge.targetModels.empty')}
-          </p>
-        ) : (
-          <div className="flex max-h-[320px] flex-col overflow-y-auto">
-            {targetRows.map((row) => {
-              // 未显式自定义 targetModels 时，no-vision 模型默认勾选（对齐设计文档）。
-              const checked = targetModels.includes(row.id) || isTargetDefaultChecked(row.capability);
-              return (
-                <div
-                  key={row.id}
-                  className={`flex items-center justify-between gap-3 px-4 py-3 ${enabled ? '' : 'pointer-events-none opacity-50'}`}
-                >
-                  <div className="flex min-w-0 flex-col gap-0.5">
-                    <span className="truncate text-13 text-[var(--text-primary)]">{row.name}</span>
-                    <span className="text-11 leading-none text-[var(--text-tertiary)]">
-                      {t(CAPABILITY_LABEL_KEY[row.capability])}
-                    </span>
+          ) : (
+            // 首行不留上边距、末行不留下边距：名称到第一行 12px 由 SettingsField 负责
+            <div className="flex max-h-[320px] flex-col overflow-y-auto">
+              {targetRows.map((row) => {
+                // 未显式自定义 targetModels 时，no-vision 模型默认勾选（对齐设计文档）。
+                const checked = targetModels.includes(row.id) || isTargetDefaultChecked(row.capability);
+                return (
+                  <div
+                    key={row.id}
+                    className={`flex items-center justify-between gap-3 py-3 first:pt-0 last:pb-0 ${enabled ? '' : 'pointer-events-none opacity-50'}`}
+                  >
+                    <div className="flex min-w-0 flex-col gap-0.5">
+                      <span className="truncate text-13 text-[var(--text-primary)]">{row.name}</span>
+                      <span className="text-11 leading-none text-[var(--text-tertiary)]">
+                        {t(CAPABILITY_LABEL_KEY[row.capability])}
+                      </span>
+                    </div>
+                    <Switch data-setting-id={visionBridgeSettings.targetModelsLabel.id}
+                      checked={checked}
+                      disabled={pending || !enabled}
+                      onCheckedChange={() => {
+                        void toggleTarget(row.id, row.capability);
+                      }}
+                      aria-label={t('settings.visionBridge.targetModels.toggleAria', { model: row.name })}
+                    />
                   </div>
-                  <Switch data-setting-id={visionBridgeSettings.targetModelsLabel.id}
-                    checked={checked}
-                    disabled={pending || !enabled}
-                    onCheckedChange={() => {
-                      void toggleTarget(row.id, row.capability);
-                    }}
-                    aria-label={t('settings.visionBridge.targetModels.toggleAria', { model: row.name })}
-                  />
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </div>
+                );
+              })}
+            </div>
+          )}
+        </SettingsField>
+      </SettingsCard>
 
       {/* ── 卡 2：视觉后端模型（主 + 备，最多两个） ────────────────────── */}
-      <div className="flex flex-col rounded-xl border border-[var(--settings-theme-card-border)] bg-[var(--settings-theme-card-bg)]">
-        <div className="px-4 py-4">
-          <div className="flex flex-col gap-1">
-            <p id={visionBridgeSettings.backendsLabel.targetId} className="text-14 font-medium text-[var(--text-primary)]">
-              {t(visionBridgeSettings.backendsLabel.titleKey)}
-            </p>
-            <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
-              {t(visionBridgeSettings.backendsLabel.descriptionKey)}
-            </p>
-          </div>
-        </div>
-
-        <div className="mx-4 h-px bg-[var(--settings-theme-card-border)]" />
-
-        <div className={`flex flex-col gap-3 px-4 py-4 ${enabled ? '' : 'pointer-events-none opacity-50'}`}>
-          {/* 主后端 */}
-          <div className="flex items-center gap-4">
-            <div className="w-[70px] shrink-0 text-13 font-medium text-[var(--settings-section-sublabel)]">
-              {t('settings.visionBridge.backends.primary')}
+      <SettingsCard>
+        <SettingsField
+          title={<span id={visionBridgeSettings.backendsLabel.targetId}>{t(visionBridgeSettings.backendsLabel.titleKey)}</span>}
+          hint={t(visionBridgeSettings.backendsLabel.descriptionKey)}
+        >
+          {/* 关闭时只淡化选择器，名称、说明不跟着变淡 */}
+          <div className={`flex flex-col gap-3 ${enabled ? '' : 'pointer-events-none opacity-50'}`}>
+            {/* 主后端 */}
+            <div className="flex items-center gap-4">
+              <div className="w-[70px] shrink-0 text-13 font-medium text-[var(--settings-section-sublabel)]">
+                {t('settings.visionBridge.backends.primary')}
+              </div>
+              <div className="min-w-0 flex-1">
+                <ModelSelector
+                  localOnlyReason="vision-bridge-local-proxy"
+                  providersOverride={visionProviders}
+                  modelId={primary?.modelId ?? ''}
+                  effort=""
+                  // provider-first：同一模型被多个 provider 提供时（如 Claude 模型同时出现在
+                  // Anthropic 订阅与 XD managed 路由），必须保存用户实际选行的 provider，而不是
+                  // 取首个匹配——OAuth 路线视觉通道视为不可用，取错会让每次描述请求都 fallback。
+                  currentProviderId={primary?.providerId ?? null}
+                  onProviderChange={(providerId, modelId) => {
+                    if (!providerId || !modelId) {
+                      return setBackend('primary', null);
+                    }
+                    // 已知无视觉模型不能作视觉后端（选中运行时必失败，表现为「视觉桥不可用」）。
+                    if (classifyVisionCapability(modelId) === 'no-vision') return false;
+                    return setBackend('primary', { providerId, modelId });
+                  }}
+                  onModelChange={(modelId) => {
+                    if (!modelId) {
+                      return setBackend('primary', null);
+                    }
+                    // 降级路径（onProviderChange 未触发时）：跨面查找提供该模型的 provider
+                    // （视觉后端可能只在 codex/pi 面配置），多 provider 场景由 onProviderChange 覆盖。
+                    if (classifyVisionCapability(modelId) === 'no-vision') return false;
+                    return setBackend('primary', {
+                      providerId: findProviderForModel(modelId) ?? '',
+                      modelId,
+                    });
+                  }}
+                  onEffortChange={() => undefined}
+                  // 不传 vendorKey → 三 agent 面模型一起展示（视觉后端可能只在
+                  // codex/pi 面配置，如 OpenRouter/OpenAI 兼容 provider）。
+                  switching={pending}
+                  disabled={providersLoading || !enabled}
+                  triggerVariant="field"
+                  popoverSide="bottom"
+                  configurationEnabled={false}
+                  unknownModelLabel={(id) => id}
+                  fallbackOption={{
+                    active: primary === null,
+                    label: t('settings.visionBridge.backends.unset'),
+                    onSelect: () => {
+                      return setBackend('primary', null);
+                    },
+                  }}
+                />
+              </div>
             </div>
-            <div className="min-w-0 flex-1">
-              <ModelSelector
-                localOnlyReason="vision-bridge-local-proxy"
-                providersOverride={visionProviders}
-                modelId={primary?.modelId ?? ''}
-                effort=""
-                // provider-first：同一模型被多个 provider 提供时（如 Claude 模型同时出现在
-                // Anthropic 订阅与 XD managed 路由），必须保存用户实际选行的 provider，而不是
-                // 取首个匹配——OAuth 路线视觉通道视为不可用，取错会让每次描述请求都 fallback。
-                currentProviderId={primary?.providerId ?? null}
-                onProviderChange={(providerId, modelId) => {
-                  if (!providerId || !modelId) {
-                    return setBackend('primary', null);
-                  }
-                  // 已知无视觉模型不能作视觉后端（选中运行时必失败，表现为「视觉桥不可用」）。
-                  if (classifyVisionCapability(modelId) === 'no-vision') return false;
-                  return setBackend('primary', { providerId, modelId });
-                }}
-                onModelChange={(modelId) => {
-                  if (!modelId) {
-                    return setBackend('primary', null);
-                  }
-                  // 降级路径（onProviderChange 未触发时）：跨面查找提供该模型的 provider
-                  // （视觉后端可能只在 codex/pi 面配置），多 provider 场景由 onProviderChange 覆盖。
-                  if (classifyVisionCapability(modelId) === 'no-vision') return false;
-                  return setBackend('primary', {
-                    providerId: findProviderForModel(modelId) ?? '',
-                    modelId,
-                  });
-                }}
-                onEffortChange={() => undefined}
-                // 不传 vendorKey → 三 agent 面模型一起展示（视觉后端可能只在
-                // codex/pi 面配置，如 OpenRouter/OpenAI 兼容 provider）。
-                switching={pending}
-                disabled={providersLoading || !enabled}
-                triggerVariant="field"
-                popoverSide="bottom"
-                configurationEnabled={false}
-                unknownModelLabel={(id) => id}
-                fallbackOption={{
-                  active: primary === null,
-                  label: t('settings.visionBridge.backends.unset'),
-                  onSelect: () => {
-                    return setBackend('primary', null);
-                  },
-                }}
-              />
-            </div>
-          </div>
 
-          {/* 备后端（可空 = 无灾备） */}
-          <div className="flex items-center gap-4">
-            <div className="w-[70px] shrink-0 text-13 font-medium text-[var(--settings-section-sublabel)]">
-              {t('settings.visionBridge.backends.fallback')}
-            </div>
-            <div className="min-w-0 flex-1">
-              <ModelSelector
-                localOnlyReason="vision-bridge-local-proxy"
-                providersOverride={visionProviders}
-                modelId={fallback?.modelId ?? ''}
-                effort=""
-                // provider-first：与主后端一致，保存用户实际选行的 provider（防多 provider
-                // 共享模型时取到 OAuth 不可用路线）。
-                currentProviderId={fallback?.providerId ?? null}
-                onProviderChange={(providerId, modelId) => {
-                  if (!providerId || !modelId) {
-                    return setBackend('fallback', null);
-                  }
-                  if (classifyVisionCapability(modelId) === 'no-vision') return false;
-                  return setBackend('fallback', { providerId, modelId });
-                }}
-                onModelChange={(modelId) => {
-                  if (!modelId) {
-                    return setBackend('fallback', null);
-                  }
-                  if (classifyVisionCapability(modelId) === 'no-vision') return false;
-                  return setBackend('fallback', {
-                    providerId: findProviderForModel(modelId) ?? '',
-                    modelId,
-                  });
-                }}
-                onEffortChange={() => undefined}
-                // 与主后端一致：不传 vendorKey → 三面模型可选。
-                switching={pending}
-                disabled={providersLoading || !enabled}
-                triggerVariant="field"
-                popoverSide="bottom"
-                configurationEnabled={false}
-                unknownModelLabel={(id) => id}
-                fallbackOption={{
-                  active: fallback === null,
-                  label: t('settings.visionBridge.backends.noBackup'),
-                  onSelect: () => {
-                    return setBackend('fallback', null);
-                  },
-                }}
-              />
+            {/* 备后端（可空 = 无灾备） */}
+            <div className="flex items-center gap-4">
+              <div className="w-[70px] shrink-0 text-13 font-medium text-[var(--settings-section-sublabel)]">
+                {t('settings.visionBridge.backends.fallback')}
+              </div>
+              <div className="min-w-0 flex-1">
+                <ModelSelector
+                  localOnlyReason="vision-bridge-local-proxy"
+                  providersOverride={visionProviders}
+                  modelId={fallback?.modelId ?? ''}
+                  effort=""
+                  // provider-first：与主后端一致，保存用户实际选行的 provider（防多 provider
+                  // 共享模型时取到 OAuth 不可用路线）。
+                  currentProviderId={fallback?.providerId ?? null}
+                  onProviderChange={(providerId, modelId) => {
+                    if (!providerId || !modelId) {
+                      return setBackend('fallback', null);
+                    }
+                    if (classifyVisionCapability(modelId) === 'no-vision') return false;
+                    return setBackend('fallback', { providerId, modelId });
+                  }}
+                  onModelChange={(modelId) => {
+                    if (!modelId) {
+                      return setBackend('fallback', null);
+                    }
+                    if (classifyVisionCapability(modelId) === 'no-vision') return false;
+                    return setBackend('fallback', {
+                      providerId: findProviderForModel(modelId) ?? '',
+                      modelId,
+                    });
+                  }}
+                  onEffortChange={() => undefined}
+                  // 与主后端一致：不传 vendorKey → 三面模型可选。
+                  switching={pending}
+                  disabled={providersLoading || !enabled}
+                  triggerVariant="field"
+                  popoverSide="bottom"
+                  configurationEnabled={false}
+                  unknownModelLabel={(id) => id}
+                  fallbackOption={{
+                    active: fallback === null,
+                    label: t('settings.visionBridge.backends.noBackup'),
+                    onSelect: () => {
+                      return setBackend('fallback', null);
+                    },
+                  }}
+                />
+              </div>
             </div>
           </div>
-        </div>
 
-        <p className="px-4 pb-4 text-12 leading-[1.5] text-[var(--text-secondary)]">
-          {t('settings.visionBridge.backends.hintSecondary')}
-        </p>
-      </div>
-    </div>
+          <p className={SETTINGS_HINT}>
+            {t('settings.visionBridge.backends.hintSecondary')}
+          </p>
+        </SettingsField>
+      </SettingsCard>
+    </SettingsSection>
   );
 }

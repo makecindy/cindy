@@ -240,3 +240,17 @@ it('refuses the retired routine operations without advertising them', async () =
   expect(await call('routines.sources', undefined, null)).toMatchObject({ ok: false, code: 'UNSUPPORTED_CAPABILITY' });
   expect(await call('routines.save', { input: { name: 'Digest', prompt: 'Summarise', enabled: true, triggers: [] } })).toMatchObject({ ok: false, code: 'UNSUPPORTED_CAPABILITY' });
 });
+
+// Protocol regression: an old renderer indexes channel icons without an unknown fallback.
+// Advertise new channels explicitly so a newer host cannot crash an older settings page.
+it('projects iMessage connections only to controllers that advertise the channel', async () => {
+  const { deps, call } = setup();
+  deps.channels.im.list.mockResolvedValue({ connections: [
+    { id: 'legacy', botId: 'bot-1', channel: 'telegram' },
+    { id: 'local-bridge', botId: 'bot-1', channel: 'imessage' },
+  ] } as never);
+  expect(await call('channels.im.list')).toMatchObject({ ok: true, value: { connections: [{ id: 'legacy' }] } });
+  expect(await call('channels.im.list', { supportedChannels: ['telegram', 'imessage'] })).toMatchObject({
+    ok: true, value: { connections: [{ id: 'legacy' }, { id: 'local-bridge' }] },
+  });
+});

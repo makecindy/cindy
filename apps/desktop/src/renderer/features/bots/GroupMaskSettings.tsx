@@ -8,12 +8,12 @@ import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { cn } from '@/lib/utils';
 import { GroupMaskAvatar, GroupMaskStatusText } from './GroupMaskControls';
 import { useGroupMask, type GroupMaskTrigger } from './groupMaskPresentation';
-import { SETTINGS_DIVIDER, SETTINGS_HINT, SettingsCard, SettingsNotice, SettingsRow, SettingsRowIcon } from './ChatGroupSettingsRows';
+import { SETTINGS_DIVIDER, SETTINGS_HINT, SettingsCard, SettingsNotice, SettingsRow, SettingsRowIcon } from '@/components/ui/settings-rows';
 import { Reply } from 'lucide-react';
 
 /** A setting row whose choice sits on the right, in the group settings' row look. */
 function SelectRow(props: SelectProps) {
-  return <SettingsRow wrap title={props.label} trailing={<Select {...props} className="h-8 max-w-[220px]" />} />;
+  return <SettingsRow wrap title={props.label} trailing={<Select {...props} size="compact" className="max-w-[220px]" />} />;
 }
 
 const key = (name: string) => `bots.groupChat.mask.${name}`;

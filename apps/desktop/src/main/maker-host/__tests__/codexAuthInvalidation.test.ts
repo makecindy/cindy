@@ -1,3 +1,4 @@
+import { configureOwnerContext } from '../../ownerContext.js';
 import fs from 'node:fs';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -46,6 +47,13 @@ const h = vi.hoisted(() => ({
   sessionBoundaryPending: false,
   isPackaged: true,
 }));
+
+// Mirror this fixture's changing profile/owner through the Host-neutral ports.
+vi.mock('../../userDataPath.js', () => ({ getUserDataDir: () => h.userDataDir, userDataPath: (...parts: string[]) => path.join(h.userDataDir, ...parts) }));
+configureOwnerContext({
+  read: () => ({ dataOwnerId: h.dataOwnerId, generation: h.sessionGeneration, boundaryPending: h.sessionBoundaryPending }),
+  fallbackBaseDir: () => h.userDataDir,
+});
 
 vi.mock('electron', () => ({
   app: {

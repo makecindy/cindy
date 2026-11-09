@@ -84,6 +84,86 @@ describe('private report recovery', () => {
 });
 
 describe('take over', () => {
+  // Regression: a different local Cindy made automatic take-over recreate the same missing
+  // profile every minute. Existing tests only used an unconstrained in-memory profile.
+  // Unit tier: drive real takeOver/reconcile; conflicting identities never overwrite or upload.
+  it('refuses a different Cindy before changing its home or claiming the installation', async () => {
+    const t = setup({ home: 'laptop', installationId: 'this-install', handler: (route, method) => {
+      if (route === '/preferences' && method === 'GET') return [{ key: 'companion.profile.v1', value: { ...MIA, templateId: 'cindy' }, revision: 1 }];
+      return {};
+    } });
+    t.local.host.findConflictingCindy = vi.fn(async () => 'local-cindy');
+    expect(await t.runtime.takeOver('bot_mia')).toEqual({ ok: false, code: 'FAILED' });
+    expect(t.calls.every(call => call.method === 'GET')).toBe(true);
+    expect(t.actors[0]!.homeDeviceId).toBe('laptop');
+    expect(t.local.host.createProfile).not.toHaveBeenCalled();
+    expect(t.local.host.updateProfile).not.toHaveBeenCalled();
+  });
+
+  it('holds a conflicting Cindy without repeating cloud writes, then resumes after the conflict clears', async () => {
+    vi.useFakeTimers();
+    try {
+      const t = setup({ home: 'desk', handler: (route, method) => {
+        if (route === '/preferences') return method === 'GET' ? [{ key: 'companion.profile.v1', value: { ...MIA, templateId: 'cindy' }, revision: 1 }] : { revision: 1 };
+        if (route === '/conversations') return { id: ROOM };
+        if (route.includes('/messages?')) return [];
+        return {};
+      } });
+      const conflict = vi.fn(async (): Promise<string | null> => 'local-cindy');
+      t.local.host.findConflictingCindy = conflict;
+      t.runtime.reconcile([]);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(t.state.isDemoted('bot_mia')).toBe(true);
+      expect(t.local.host.createProfile).not.toHaveBeenCalled();
+      const calls = t.calls.length;
+      for (let i = 0; i < 3; i++) {
+        await vi.advanceTimersByTimeAsync(60_000);
+        t.runtime.reconcile([]);
+        await vi.advanceTimersByTimeAsync(0);
+      }
+      expect(t.calls).toHaveLength(calls);
+      expect(t.local.host.writeSystemPrompt).not.toHaveBeenCalled();
+      conflict.mockResolvedValue(null);
+      await vi.advanceTimersByTimeAsync(60_000);
+      t.runtime.reconcile([]);
+      t.runtime.reconcile([]);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(t.state.isDemoted('bot_mia')).toBe(false);
+      expect(t.local.host.createProfile).toHaveBeenCalledOnce();
+      t.runtime.reconcile([{ id: 'bot_mia', status: 'active' }]);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(t.local.host.createProfile).toHaveBeenCalledOnce();
+    } finally { runtime?.dispose(); vi.useRealTimers(); }
+  });
+
+  it.each(['replacement-actor', 'explicit-retry'])('rechecks cloud identity after a conflict: %s', async mode => {
+    vi.useFakeTimers();
+    try {
+      let templateId: string | undefined = 'cindy';
+      const t = setup({ home: 'desk', handler: (route, method) => {
+        if (route === '/preferences') return method === 'GET' ? [{ key: 'companion.profile.v1', value: { ...MIA, templateId }, revision: 1 }] : { revision: 1 };
+        if (route === '/conversations') return { id: ROOM };
+        if (route.includes('/messages?')) return [];
+        return {};
+      } });
+      t.local.host.findConflictingCindy = vi.fn(async () => 'local-cindy');
+      t.runtime.reconcile([]);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(t.state.isDemoted('bot_mia')).toBe(true);
+      templateId = undefined;
+      if (mode === 'replacement-actor') {
+        t.actors[0]!.id = 'replacement';
+        await vi.advanceTimersByTimeAsync(60_000);
+        t.runtime.reconcile([]);
+        await vi.advanceTimersByTimeAsync(0);
+      } else {
+        expect(await t.runtime.takeOver('bot_mia')).toEqual({ ok: true });
+      }
+      expect(t.state.isDemoted('bot_mia')).toBe(false);
+      expect(t.local.host.createProfile).toHaveBeenCalledOnce();
+    } finally { runtime?.dispose(); vi.useRealTimers(); }
+  });
+
   it('resolves an uncached actor through the explicit refresh channel before taking over', async () => {
     let restore = () => {};
     const foreground = vi.fn(async () => { restore(); });
@@ -369,7 +449,7 @@ describe('transfer', () => {
     { peer: 'current', version: COMPANION_CLOUD_VERSION, storeEnabled: true, succeeds: true },
     { peer: 'old', version: 2, storeEnabled: true, succeeds: false },
     { peer: 'current without server store', version: COMPANION_CLOUD_VERSION, storeEnabled: false, succeeds: false },
-  ])('hands large content only to a capable peer ($peer)', async ({ version, storeEnabled, succeeds, code }) => {
+  ])('hands large content only to a capable peer ($peer)', async ({ version, storeEnabled, succeeds }) => {
     const key = 'companion.skill.v1:large';
     const value = { slug: 'large', content: 'x'.repeat(70 * 1024) };
     let stored: unknown;
@@ -390,7 +470,7 @@ describe('transfer', () => {
         if (route.endsWith('/import') || method === 'PATCH') return {};
         throw new Error(`unexpected ${method} ${route}`);
       } });
-    expect(await t.runtime.switchHome('bot_mia', 'laptop')).toEqual(succeeds ? { ok: true } : { ok: false, code: code ?? 'FAILED' });
+    expect(await t.runtime.switchHome('bot_mia', 'laptop')).toEqual(succeeds ? { ok: true } : { ok: false, code: 'FAILED' });
     expect(t.actors[0]!.homeDeviceId).toBe(succeeds ? 'laptop' : 'desk');
     expect(t.state.isDemoted('bot_mia')).toBe(succeeds);
     expect(t.calls.some(call => call.method === 'PATCH')).toBe(succeeds);

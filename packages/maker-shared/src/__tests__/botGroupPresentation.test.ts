@@ -143,6 +143,22 @@ describe('execution failures are a projection of the current snapshot', () => {
 describe('public failure snapshot decoder', () => {
   const row = { id: 'run', conversation_id: 'room', source_message_id: 'source', bot_id: 'bot', epoch: 2,
     plan_id: 'plan', updated_at: '2026-10-10T00:00:00Z', detail: 'private diagnostic' };
+  it('carries the server-owned unclaimed timeout reason through the source notice', () => {
+    const failure = readBotGroupExecutionFailure({ ...row, failure_code: 'RUNTIME_TIMEOUT',
+      failure_reason: 'unclaimed_timeout' }, 'room')!;
+    expect(failure).toHaveProperty('reason', 'unclaimed_timeout');
+    const source = { id: 'source', sequence: 1, createdAt: 1, threadRootId: 'thread' } as BotGroupMessageView;
+    expect(projectBotGroupExecutionFailures([source], [failure])[1]).toMatchObject({
+      runtimeFailureCode: 'RUNTIME_TIMEOUT', runtimeFailureReason: 'unclaimed_timeout', threadRootId: 'thread',
+    });
+  });
+  it.each([
+    ['RUNTIME_TIMEOUT', undefined], ['RUNTIME_TIMEOUT', 'private diagnostic'],
+    ['AUTH_REQUIRED', 'unclaimed_timeout'], ['future-code', 'unclaimed_timeout'],
+  ])('ignores absent, unknown or mismatched reasons (%s, %s)', (code, reason) => {
+    const failure = readBotGroupExecutionFailure({ ...row, failure_code: code, failure_reason: reason }, 'room')!;
+    expect(failure).not.toHaveProperty('reason');
+  });
   it.each(BOT_GROUP_RUNTIME_FAILURE_CODES)('reads a new server snapshot without requiring legacy status: %s', code => {
     const view = readBotGroupExecutionFailure({ ...row, failure_code: code }, 'room');
     expect(view).toEqual({ executionId: 'run', epoch: 2, sourceMessageId: 'source', botId: 'bot', botName: '',

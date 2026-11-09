@@ -364,5 +364,13 @@
     "merged": "Gemergt",
     "closed": "Geschlossen",
     "draft": "Entwurf"
+  },
+  "taskArchive": {
+    "now": "Jetzt archivieren",
+    "pending": "Wird beim Verlassen dieser Aufgabe archiviert",
+    "cancel": "Abbrechen",
+    "cancelled": "Diesmal keine automatische Archivierung",
+    "archived": "„{{title}}“ archiviert",
+    "undo": "Rückgängig"
   }
 }

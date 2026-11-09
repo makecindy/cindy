@@ -22,6 +22,26 @@ function cloud(prefs: Array<{ key: string; value: unknown }>, room: unknown[] = 
 const profilePref = { key: 'companion.profile.v1', value: { name: 'Mia', description: 'helper', soul: 'I am Mia', systemPrompt: 'custom', user: 'Owner likes tea' } };
 
 describe('materializeCompanion', () => {
+  // The new local identity lookup is asynchronous: losing the account while it reads must
+  // stop before a backup, profile write or history import (cloud-companions.md §6, unit tier).
+  it('fences a local identity check that finishes after the account changed', async () => {
+    let current = true;
+    const { api } = cloud([{ ...profilePref, value: { ...profilePref.value, templateId: 'cindy' } }]);
+    const local = fakeLocal({
+      findConflictingCindy: async () => { current = false; return null; },
+      backupHome: vi.fn(async () => '/backup'),
+    });
+    local.setProfile({ status: 'active', displayName: 'Old Cindy', description: '' });
+    const { state } = memoryState();
+    await expect(materializeCompanion({ api, state, host: local.host, actor, roomId: async () => ROOM,
+      fence: { assertCurrent: () => { if (!current) throw new Error('OWNER_CHANGED'); } },
+    })).rejects.toThrow('OWNER_CHANGED');
+    expect(local.host.backupHome).not.toHaveBeenCalled();
+    expect(local.host.updateProfile).not.toHaveBeenCalled();
+    expect(local.host.insertHistory).not.toHaveBeenCalled();
+    expect(state.isDemoted(actor.externalId)).toBe(true);
+  });
+
   it('creates a missing companion from its cloud profile, memories and skills', async () => {
     const { api, calls } = cloud([profilePref,
       { key: 'companion.memory.v1:user_tea.md', value: { filename: 'user_tea.md', content: '---\ntitle: Tea\n---\nlikes tea' } },
