@@ -47,6 +47,10 @@ const ALLOWED_NON_PRODUCTION_ORIGINS = new Set([
   'http://localhost:3335',
   // model-access-server 本地开发兜底(服务端仓,端口 3339)
   'http://localhost:3339',
+  // 个人版内部测试的 GitHub 事件接收服务(本机回环,cn 8794 / global 8793),
+  // 仅非打包且设置 CINDY_PERSONAL_FIXED_APP 时由 clientEndpointsService 使用。
+  'http://127.0.0.1:8793',
+  'http://127.0.0.1:8794',
   // TapDB 埋点采集端(cn / global 各一),第三方固定协议地址而非本产品生产端点,
   // 不进入 config/endpoint*.json;与项目 appId 的区域配对见
   // renderer/analytics/tapdbClient.ts 的 TAPDB_PROJECT_BY_REGION。
