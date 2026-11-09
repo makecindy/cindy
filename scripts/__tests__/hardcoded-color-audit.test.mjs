@@ -306,8 +306,6 @@ test('worktree includes staged, unstaged and untracked source; commit mode exclu
   for (const args of [['--base-ref'], ['--bogus'], ['--base-ref','missing-ref'], ['--head-ref',commit,'--worktree']]) assert.equal(cli(...args).status,2);
   const workflow = matter.engines.yaml.parse(fs.readFileSync(path.join(root,'.github/workflows/ci.yml'),'utf8'));
   const summary = workflow.jobs.verify.steps[0];
-  // #9019 adds a required AppKit check. Exercise every input to the real
-  // aggregation shell: a failed/cancelled/skipped native check must block verify.
   for (const checks of ['success','failure','cancelled','skipped']) {
     for (const shards of ['success','failure','cancelled','skipped']) {
       // Windows' bash.exe is a WSL shim and does not forward Node's ad-hoc
@@ -315,26 +313,15 @@ test('worktree includes staged, unstaged and untracked source; commit mode exclu
       // this contract test behaves the same on Windows and Linux.
       const aggregateScript = summary.run
         .replaceAll('$VERIFY_CHECKS_RESULT', checks)
-        .replaceAll('$LINUX_UNIT_SHARDS_RESULT', shards)
-        .replaceAll('$MACOS_MENUBAR_RESULT', 'success');
+        .replaceAll('$LINUX_UNIT_SHARDS_RESULT', shards);
       const aggregate = runBash(aggregateScript);
       if (!aggregate) return t.skip('Git Bash is unavailable on this host');
       assert.equal(aggregate.status === 0, checks === 'success' && shards === 'success');
     }
   }
-  for (const native of ['failure','cancelled','skipped']) {
-    const aggregateScript = summary.run
-      .replaceAll('$VERIFY_CHECKS_RESULT', 'success')
-      .replaceAll('$LINUX_UNIT_SHARDS_RESULT', 'success')
-      .replaceAll('$MACOS_MENUBAR_RESULT', native);
-    const aggregate = runBash(aggregateScript);
-    if (!aggregate) return t.skip('Git Bash is unavailable on this host');
-    assert.notEqual(aggregate.status, 0, `macos-menubar=${native}`);
-  }
   const propagatedScript = summary.run
     .replaceAll('$VERIFY_CHECKS_RESULT', failed.status ? 'failure' : 'success')
-    .replaceAll('$LINUX_UNIT_SHARDS_RESULT', 'success')
-    .replaceAll('$MACOS_MENUBAR_RESULT', 'success');
+    .replaceAll('$LINUX_UNIT_SHARDS_RESULT', 'success');
   const propagated = runBash(propagatedScript);
   if (!propagated) return t.skip('Git Bash is unavailable on this host');
   assert.notEqual(propagated.status,0);
@@ -437,7 +424,7 @@ test('CI design commands feed the existing verify job and preserve Windows aggre
   assert.ok(pkg.scripts['test:runner'].includes('scripts/__tests__/hardcoded-color-audit.test.mjs'));
   assert.equal(workflow.jobs.verify.name,'verify');
   assert.match(workflow.jobs.verify.if,/always\(\)/);
-  assert.deepEqual(workflow.jobs.verify.needs,['verify-checks','linux-unit-shards','macos-menubar']);
+  assert.deepEqual(workflow.jobs.verify.needs,['verify-checks','linux-unit-shards']);
   const windows=workflow.jobs['windows-unit'];
   assert.equal(windows.name,'Windows unit tests');
   assert.deepEqual(windows.needs,['windows-unit-shards','windows-runner-checks']);
