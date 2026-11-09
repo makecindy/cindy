@@ -201,7 +201,7 @@ describe('断网后远端选择的逃生路径', () => {
     expect(shouldShowMachineSwitcher(MACHINE_ALL, [])).toBe(false);
     expect(
       shouldShowMachineSwitcher(MACHINE_ALL, [
-        { deviceId: 'dev-a', name: 'Mac A', status: 'connecting' },
+        { deviceId: 'dev-a', name: 'Mac A', status: 'connecting', online: false },
       ]),
     ).toBe(true);
   });
@@ -357,7 +357,9 @@ describe('buildSwitcherDevices', () => {
       // dev-x 仍在线可控,但被拒优先 → rejected 而非 connecting。
       revoked: new Set(['dev-x']),
     });
-    expect(result).toEqual([{ deviceId: 'dev-x', name: 'DEV-X', status: 'rejected' }]);
+    expect(result).toEqual([
+      { deviceId: 'dev-x', name: 'DEV-X', status: 'rejected', online: true },
+    ]);
   });
 
   it('按名字稳定排序,与连接状态无关(状态只决定显示、不决定位置)', () => {
@@ -384,7 +386,9 @@ describe('buildSwitcherDevices', () => {
       syncedDevices: [],
       revoked: new Set(['gone-dev']),
     });
-    expect(result).toEqual([{ deviceId: 'gone-dev', name: 'another computer', status: 'rejected' }]);
+    expect(result).toEqual([
+      { deviceId: 'gone-dev', name: 'another computer', status: 'rejected', online: false },
+    ]);
   });
 
   it('fullList 为 null(尚未加载)→ 仅由已同步 / 被拒撑起', () => {
@@ -393,7 +397,7 @@ describe('buildSwitcherDevices', () => {
       syncedDevices: [{ deviceId: 'dev-a', deviceName: 'Mac A', sessionCount: 2, connected: true }],
       revoked: new Set(),
     });
-    expect(result).toEqual([{ deviceId: 'dev-a', name: 'Mac A', status: 'connected' }]);
+    expect(result).toEqual([{ deviceId: 'dev-a', name: 'Mac A', status: 'connected', online: true }]);
   });
 
   it('仅有断线缓存的设备仍显示,但状态为 connecting', () => {
@@ -404,7 +408,7 @@ describe('buildSwitcherDevices', () => {
       ],
       revoked: new Set(),
     });
-    expect(result).toEqual([{ deviceId: 'dev-a', name: 'Mac A', status: 'connecting' }]);
+    expect(result).toEqual([{ deviceId: 'dev-a', name: 'Mac A', status: 'connecting', online: false }]);
   });
 
   it('已连接设备名以同步分片为准(覆盖 fullList 滞后的旧名;REST 改名不广播 presence)', () => {
@@ -413,7 +417,7 @@ describe('buildSwitcherDevices', () => {
       syncedDevices: [{ deviceId: 'dev-a', deviceName: '新名', sessionCount: 1, connected: true }],
       revoked: new Set(),
     });
-    expect(result).toEqual([{ deviceId: 'dev-a', name: '新名', status: 'connected' }]);
+    expect(result).toEqual([{ deviceId: 'dev-a', name: '新名', status: 'connected', online: true }]);
   });
 
   it('同步分片名为空 → 回退 fullList 既有名(不被空名覆盖)', () => {
@@ -422,7 +426,7 @@ describe('buildSwitcherDevices', () => {
       syncedDevices: [{ deviceId: 'dev-a', deviceName: '', sessionCount: 0, connected: true }],
       revoked: new Set(),
     });
-    expect(result).toEqual([{ deviceId: 'dev-a', name: 'Mac A', status: 'connected' }]);
+    expect(result).toEqual([{ deviceId: 'dev-a', name: 'Mac A', status: 'connected', online: true }]);
   });
 });
 
@@ -461,13 +465,50 @@ describe('sidebar device grouping across disconnection', () => {
         revoked: new Set(['rejected']),
       }),
     );
-    expect([...index]).toEqual([['connecting', { name: 'CONNECTING', online: false }]]);
+    // connecting 只是「还没同步」,不是「设备不在」:设备目录说它在线,侧栏就按在线画。
+    expect([...index]).toEqual([['connecting', { name: 'CONNECTING', online: true }]]);
+  });
+
+  it('在线未同步的设备算在线;真正离线只剩缓存的设备仍是离线 (#9329)', () => {
+    const index = buildSidebarDeviceIndex(
+      buildSwitcherDevices({
+        fullList: [
+          mkDevice('online-not-synced'),
+          mkDevice('offline-cached', { online: false }),
+        ],
+        syncedDevices: [
+          // 断线缓存:分片还在,设备已经离线。
+          { deviceId: 'offline-cached', deviceName: '', sessionCount: 2, connected: false },
+        ],
+        revoked: new Set(),
+      }),
+    );
+    expect([...index]).toEqual([
+      ['offline-cached', { name: 'OFFLINE-CACHED', online: false }],
+      ['online-not-synced', { name: 'ONLINE-NOT-SYNCED', online: true }],
+    ]);
+  });
+
+  it('presence 不受本机「是否允许控这台设备」的本地偏好影响 (#9329)', () => {
+    // controlEnabled 只是本机偏好:关掉它不该把这台明明在线的设备说成离线。
+    const index = buildSidebarDeviceIndex(
+      buildSwitcherDevices({
+        fullList: [mkDevice('not-controllable', { controlEnabled: false })],
+        syncedDevices: [
+          { deviceId: 'not-controllable', deviceName: '', sessionCount: 1, connected: false },
+        ],
+        revoked: new Set(),
+      }),
+    );
+    expect([...index]).toEqual([
+      ['not-controllable', { name: 'NOT-CONTROLLABLE', online: true }],
+    ]);
   });
 
   it('removes grouping availability when the retained device is removed', () => {
     expect(buildSidebarDeviceIndex([]).size).toBe(0);
     expect(
-      buildSidebarDeviceIndex([{ deviceId: 'rejected', name: 'Rejected', status: 'rejected' }])
+      buildSidebarDeviceIndex([{ deviceId: 'rejected', name: 'Rejected', status: 'rejected', online: false }])
         .size,
     ).toBe(0);
   });
@@ -499,9 +540,9 @@ describe('selectableDeviceIds', () => {
   it('已连接 + 连接中可选中,被拒不可选', () => {
     expect(
       selectableDeviceIds([
-        { deviceId: 'a', name: 'A', status: 'connected' },
-        { deviceId: 'b', name: 'B', status: 'connecting' },
-        { deviceId: 'c', name: 'C', status: 'rejected' },
+        { deviceId: 'a', name: 'A', status: 'connected', online: true },
+        { deviceId: 'b', name: 'B', status: 'connecting', online: false },
+        { deviceId: 'c', name: 'C', status: 'rejected', online: false },
       ]),
     ).toEqual(['a', 'b']);
   });
@@ -521,7 +562,7 @@ describe('normalizeSelectedMachineId 配合可选中集(连接中可保留,被�
 });
 
 describe('shouldWaitForRemoteSessionBootstrap', () => {
-  const connecting = [{ deviceId: 'dev-a', name: 'Mac A', status: 'connecting' as const }];
+  const connecting = [{ deviceId: 'dev-a', name: 'Mac A', status: 'connecting' as const, online: false }];
   const noBootstrapFailures = new Set<string>();
 
   it('所有机器:设备清单或在线远端首快照未落地 → 保持加载态', () => {
@@ -620,7 +661,7 @@ describe('shouldWaitForRemoteSessionBootstrap', () => {
       shouldWaitForRemoteSessionBootstrap({
         selectedMachineId: MACHINE_ALL,
         deviceListSettled: true,
-        devices: [{ deviceId: 'dev-a', name: 'Mac A', status: 'rejected' }],
+        devices: [{ deviceId: 'dev-a', name: 'Mac A', status: 'rejected', online: false }],
         syncedDevices: [],
         bootstrapFailedDeviceIds: noBootstrapFailures,
       }),
@@ -640,8 +681,8 @@ describe('shouldWaitForRemoteSessionBootstrap', () => {
 
   it('bootstrap 终态失败的连接中设备不再无限 loading；其它未结算设备仍继续等待', () => {
     const devices = [
-      { deviceId: 'dev-a', name: 'Mac A', status: 'connecting' as const },
-      { deviceId: 'dev-b', name: 'Mac B', status: 'connecting' as const },
+      { deviceId: 'dev-a', name: 'Mac A', status: 'connecting' as const, online: false },
+      { deviceId: 'dev-b', name: 'Mac B', status: 'connecting' as const, online: false },
     ];
     expect(
       shouldWaitForRemoteSessionBootstrap({
@@ -666,9 +707,9 @@ describe('shouldWaitForRemoteSessionBootstrap', () => {
 
 describe('selectRemoteSessionBootstrapFailures', () => {
   const devices = [
-    { deviceId: 'dev-a', name: 'Mac A', status: 'connecting' as const },
-    { deviceId: 'dev-b', name: 'Mac B', status: 'connected' as const },
-    { deviceId: 'dev-c', name: 'Mac C', status: 'rejected' as const },
+    { deviceId: 'dev-a', name: 'Mac A', status: 'connecting' as const, online: false },
+    { deviceId: 'dev-b', name: 'Mac B', status: 'connected' as const, online: true },
+    { deviceId: 'dev-c', name: 'Mac C', status: 'rejected' as const, online: false },
   ];
   const failures = new Set(['dev-a', 'dev-b', 'dev-c']);
 
@@ -709,8 +750,8 @@ describe('selectRemoteSessionBootstrapFailures', () => {
 
 describe('selectRemoteSessionBootstrapLoadingDevices', () => {
   const devices = [
-    { deviceId: 'dev-a', name: 'Mac A', status: 'connecting' as const },
-    { deviceId: 'dev-b', name: 'Mac B', status: 'connected' as const },
+    { deviceId: 'dev-a', name: 'Mac A', status: 'connecting' as const, online: false },
+    { deviceId: 'dev-b', name: 'Mac B', status: 'connected' as const, online: true },
   ];
   const loading = new Set(['dev-a', 'dev-b']);
 
@@ -746,7 +787,7 @@ describe('shouldShowSelectedMachineConnectingPlaceholder', () => {
     expect(
       shouldShowSelectedMachineConnectingPlaceholder({
         rawSelection: ['dev-a'],
-        devices: [{ deviceId: 'dev-a', name: 'Mac A', status: 'connecting' }],
+        devices: [{ deviceId: 'dev-a', name: 'Mac A', status: 'connecting', online: false }],
         syncedDevices: [],
         bootstrapFailedDeviceIds: noBootstrapFailures,
       }),
@@ -757,7 +798,7 @@ describe('shouldShowSelectedMachineConnectingPlaceholder', () => {
     expect(
       shouldShowSelectedMachineConnectingPlaceholder({
         rawSelection: ['dev-a'],
-        devices: [{ deviceId: 'dev-a', name: 'Mac A', status: 'connecting' }],
+        devices: [{ deviceId: 'dev-a', name: 'Mac A', status: 'connecting', online: false }],
         syncedDevices: [
           { deviceId: 'dev-a', deviceName: 'Mac A', sessionCount: 2, connected: false },
         ],
@@ -770,7 +811,7 @@ describe('shouldShowSelectedMachineConnectingPlaceholder', () => {
     expect(
       shouldShowSelectedMachineConnectingPlaceholder({
         rawSelection: ['dev-a'],
-        devices: [{ deviceId: 'dev-a', name: 'Mac A', status: 'connecting' }],
+        devices: [{ deviceId: 'dev-a', name: 'Mac A', status: 'connecting', online: false }],
         syncedDevices: [
           { deviceId: 'dev-a', deviceName: 'Mac A', sessionCount: 0, connected: false },
         ],
@@ -783,7 +824,7 @@ describe('shouldShowSelectedMachineConnectingPlaceholder', () => {
     expect(
       shouldShowSelectedMachineConnectingPlaceholder({
         rawSelection: ['dev-a'],
-        devices: [{ deviceId: 'dev-a', name: 'Mac A', status: 'connecting' }],
+        devices: [{ deviceId: 'dev-a', name: 'Mac A', status: 'connecting', online: false }],
         syncedDevices: [],
         bootstrapFailedDeviceIds: new Set(['dev-a']),
       }),
@@ -792,8 +833,8 @@ describe('shouldShowSelectedMachineConnectingPlaceholder', () => {
 
   it('多选:全是连接中且无缓存 → 占位;混入本机或已连接设备 → 不占位', () => {
     const devices = [
-      { deviceId: 'dev-a', name: 'Mac A', status: 'connecting' as const },
-      { deviceId: 'dev-b', name: 'PC B', status: 'connected' as const },
+      { deviceId: 'dev-a', name: 'Mac A', status: 'connecting' as const, online: false },
+      { deviceId: 'dev-b', name: 'PC B', status: 'connected' as const, online: true },
     ];
     expect(
       shouldShowSelectedMachineConnectingPlaceholder({
@@ -898,6 +939,6 @@ describe('applyDeviceRename(切换栏全量设备就地改名)', () => {
       syncedDevices: [],
       revoked: new Set(),
     });
-    expect(devices).toEqual([{ deviceId: 'dev-c', name: 'New C', status: 'connecting' }]);
+    expect(devices).toEqual([{ deviceId: 'dev-c', name: 'New C', status: 'connecting', online: true }]);
   });
 });

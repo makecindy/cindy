@@ -25,6 +25,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { SegmentedControl } from '@/components/ui/segmented-control';
+import { SETTINGS_HINT, SETTINGS_SECTION_TITLE_CLASS, SettingsBlock, SettingsCard, SettingsRow } from '@/components/ui/settings-rows';
 import { Select } from '@/components/ui/select';
 import { Switch } from '@/components/ui/switch';
 import { Tip } from '@/components/ui/tooltip';
@@ -170,7 +171,7 @@ export function ProviderGroupSection({ providerId, providerName, deviceId, devic
   return (
     <section className="mt-6 shrink-0" aria-labelledby="provider-group-title" data-testid="provider-group-section">
       <div className="mb-2 flex flex-wrap items-center gap-2">
-        <h3 id="provider-group-title" className="text-13 font-medium text-[var(--settings-section-title)]">
+        <h3 id="provider-group-title" className={SETTINGS_SECTION_TITLE_CLASS}>
           {t('providerGroup.section.title')}
         </h3>
         {/* 台数按电脑算：一台电脑上的几个账号算一台(与入口的「N 台电脑」一致)。 */}
@@ -186,7 +187,7 @@ export function ProviderGroupSection({ providerId, providerName, deviceId, devic
         </Button>
       </div>
 
-      <div className="overflow-hidden rounded-xl border border-[var(--settings-theme-card-border)] bg-[var(--settings-theme-card-bg)]">
+      <SettingsCard>
         {!config ? (
           <p className="px-4 py-7 text-center text-13 leading-[1.5] text-[var(--text-secondary)]">
             {group.loading
@@ -230,7 +231,7 @@ export function ProviderGroupSection({ providerId, providerName, deviceId, devic
                 </div>
               );
             })}
-            <div className="flex flex-col gap-1.5 border-t border-[var(--settings-theme-card-border)] px-4 py-3">
+            <SettingsBlock className="flex flex-col gap-1.5">
               <div className="flex flex-wrap items-center gap-3">
                 <span className="text-13 text-[var(--text-primary)]">{t('providerGroup.strategy.label')}</span>
                 <SegmentedControl
@@ -251,42 +252,44 @@ export function ProviderGroupSection({ providerId, providerName, deviceId, devic
               <span className="text-12 leading-[1.4] text-[var(--text-tertiary)]">
                 {t('providerGroup.strategy.quotaFirst')}
               </span>
-            </div>
-            <div className="flex items-start justify-between gap-3 border-t border-[var(--settings-theme-card-border)] px-4 py-3">
-              <div className="flex min-w-0 flex-col gap-0.5">
-                <span className="text-13 text-[var(--text-primary)]">{t('providerGroup.autoSwitch.label')}</span>
-                <span className="text-12 leading-[1.4] text-[var(--text-tertiary)]">
-                  {t('providerGroup.autoSwitch.description')}
-                </span>
-              </div>
-              <Switch
-                checked={config.autoSwitch}
-                disabled={blocked}
-                aria-label={t('providerGroup.autoSwitch.label')}
-                onCheckedChange={(autoSwitch) => void save({ ...config, autoSwitch })}
-              />
-            </div>
+            </SettingsBlock>
+            <SettingsRow
+              title={t('providerGroup.autoSwitch.label')}
+              hint={t('providerGroup.autoSwitch.description')}
+              trailing={
+                <Switch
+                  checked={config.autoSwitch}
+                  disabled={blocked}
+                  aria-label={t('providerGroup.autoSwitch.label')}
+                  onCheckedChange={(autoSwitch) => void save({ ...config, autoSwitch })}
+                />
+              }
+            />
             {fastPolicySupported && (
-              <div className="flex items-start justify-between gap-3 border-t border-[var(--settings-theme-card-border)] px-4 py-4">
-                <div className="flex min-w-0 flex-col gap-1">
-                  <span className="text-13 font-medium text-[var(--text-primary)]">{t('subscriptionFastPolicy.label')}</span>
-                  <span className="text-12 leading-[1.4] text-[var(--text-secondary)]">{t('subscriptionFastPolicy.groupHint')}</span>
-                  {group.view?.fastPolicyPending && <span role="status" className="text-12 leading-[1.4] text-[var(--text-secondary)]">{t('subscriptionFastPolicy.pending')}</span>}
-                </div>
-                <Switch checked={config.allowFast !== false} disabled={blocked} aria-label={t('subscriptionFastPolicy.label')}
-                  onCheckedChange={allowFast => void save({ ...config, allowFast })} />
-              </div>
+              <SettingsRow
+                title={t('subscriptionFastPolicy.label')}
+                hint={
+                  <span className="flex flex-col gap-1">
+                    <span>{t('subscriptionFastPolicy.groupHint')}</span>
+                    {group.view?.fastPolicyPending && <span role="status">{t('subscriptionFastPolicy.pending')}</span>}
+                  </span>
+                }
+                trailing={
+                  <Switch checked={config.allowFast !== false} disabled={blocked} aria-label={t('subscriptionFastPolicy.label')}
+                    onCheckedChange={allowFast => void save({ ...config, allowFast })} />
+                }
+              />
             )}
           </>
         )}
-      </div>
+      </SettingsCard>
       {config && group.failed && (
-        <p role="status" className="mt-2 text-12 leading-[1.5] text-[var(--text-secondary)]">
+        <p role="status" className={cn('mt-2', SETTINGS_HINT)}>
           {t(group.errorKey ?? 'providerGroup.section.loadFailed')}
         </p>
       )}
       {config && (
-        <p className="mt-2 text-12 leading-[1.5] text-[var(--text-tertiary)]">{t('providerGroup.section.note')}</p>
+        <p className={cn('mt-2', SETTINGS_HINT)}>{t('providerGroup.section.note')}</p>
       )}
 
       {addOpen && (

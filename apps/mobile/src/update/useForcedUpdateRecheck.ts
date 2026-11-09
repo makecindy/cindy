@@ -53,7 +53,7 @@ export function useForcedUpdateRecheck(
       isCurrent: () => current,
       // 阻断态可能在 App 已切后台后才被置位(检查的 /latest 迟到返回),
       // 那时本实例见不到 'background' 事件;这里补种当前状态。
-      getAppState: () => AppState.currentState,
+      getAppState: () => AppState.currentState ?? "unknown",
     });
 
     const subscription = AppState.addEventListener('change', (next) => {

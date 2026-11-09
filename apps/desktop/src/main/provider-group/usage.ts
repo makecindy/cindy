@@ -116,6 +116,8 @@ interface CodexUsageBucket {
 
 /** Only quota fields survive parsing; account identity and reset-credit offers stay out of the directory. */
 export interface ProviderGroupCodexUsageSnapshot {
+  /** These accounts are selected by the native pool for every engine, including ChatGPT bridges. */
+  nativeAccountPool?: boolean;
   appServerBuckets: Record<string, CodexUsageBucket> | null;
   webSnapshot: CodexUsageBucket | null;
 }
@@ -161,7 +163,10 @@ export function providerGroupCodexUsageSnapshot(raw: unknown): ProviderGroupCode
     ? Object.fromEntries(Object.entries(table).map(([key, bucket]) => [key, codexBucket(bucket)!]))
     : fallback ? { [codexLimitBucketKey(fallback)]: fallback } : null;
   const webSnapshot = codexBucket(value.webSnapshot ?? (value.source === 'openai-web' ? value : null));
-  return appServerBuckets || webSnapshot ? { appServerBuckets, webSnapshot } : null;
+  return appServerBuckets || webSnapshot ? {
+    appServerBuckets, webSnapshot,
+    ...(value.nativeAccountPool === true ? { nativeAccountPool: true } : {}),
+  } : null;
 }
 
 /** A completed account/rateLimits/read is fresh; cached account payloads retain each bucket's own timestamp. */
@@ -180,8 +185,10 @@ export function providerGroupCodexUsageFromReads(account: unknown, rateLimits: u
 
 /** Select a model's own bucket before checking age: fresh unrelated buckets cannot refresh it. */
 function codexUsageState(snapshot: ProviderGroupCodexUsageSnapshot, model: string | null | undefined, now: number, agentKind?: string) {
-  const bucket = (agentKind !== undefined && agentKind !== 'codex') || model?.startsWith('chatgpt/')
-    ? snapshot.webSnapshot : matchCodexBucketForModel(snapshot.appServerBuckets, model, now);
+  const bucket = snapshot.nativeAccountPool
+    ? matchCodexBucketForModel(snapshot.appServerBuckets, model?.replace(/^chatgpt\//, ''), now)
+    : (agentKind !== undefined && agentKind !== 'codex') || model?.startsWith('chatgpt/')
+      ? snapshot.webSnapshot : matchCodexBucketForModel(snapshot.appServerBuckets, model, now);
   if (!bucket || !currentSnapshot(bucket.updatedAt, now)) return providerGroupUsageState(null, model, now);
   const windows = [bucket.primary, bucket.secondary].filter((w): w is CodexUsageWindow => w !== null);
   const limit = accountUsageLimitFromWindows(windows.flatMap((w) => w.usedPercent === undefined

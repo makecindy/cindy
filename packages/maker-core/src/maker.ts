@@ -1206,6 +1206,8 @@ export class Maker {
       // 层 B：视觉桥钩子（per-session 优先，否则全局默认；缺省不传 = 零干扰）。
       visionBridge: startOpts.visionBridge ?? this.visionBridge,
       toolLoopReviewer: this.toolLoopReviewer,
+      // 整机拆除期间抑制空闲会话的进程死亡终态错误(#8831 退出期守卫)。
+      isHostShuttingDown: () => this.shutdownStarted,
     });
 
     // 另一台电脑上的 Claude Code：新编号等这一轮成功结束才落库。失联的回合里，对方可能还没写出
@@ -1668,6 +1670,8 @@ export class Maker {
         permissionMode: opts.permissionMode,
         capabilities: deviceId ? applicationHandleCapabilities(handle) : capabilitiesForSession(kind, agent!.capabilities, undefined, undefined, handle),
         toolLoopReviewer: this.toolLoopReviewer,
+        // 整机拆除期间抑制空闲会话的进程死亡终态错误(#8831 退出期守卫)。
+        isHostShuttingDown: () => this.shutdownStarted,
       });
       this.localAgentSessions.add(session);
       session.onStatusChange(status => {

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createDefaultLayout, type Layout, type SplitNode } from '../../../shared/layoutTree';
 import {
@@ -352,4 +352,74 @@ describe('RootDivider 拖宽 · 在场份额口径', () => {
     expect(children[3].fraction).toBeCloseTo(0.622 + moved, 6);
     expect(children.reduce((s, c) => s + c.fraction, 0)).toBeCloseTo(1, 6);
   });
+});
+
+
+it('keeps chat width during native resize, then drags the divider from the resized geometry', async () => {
+  let resolve!: (delta: number) => void;
+  window.electronAPI.windowSidebarExpansion = vi.fn(() => new Promise<number>((done) => { resolve = done; }));
+  const viewport = window.innerWidth;
+  const view = (collapsed: boolean) => (
+    <BuiltinPanelBridgeProvider value={bridge}>
+      <LayoutRoot rightTabsCollapsed={collapsed} />
+    </BuiltinPanelBridgeProvider>
+  );
+  const rendered = render(view(true));
+  const root = screen.getByTestId('layout-root-content');
+  mockElementWidth(root, 800);
+  rendered.rerender(view(false));
+  await act(async () => {
+    window.innerWidth = viewport + 800;
+    mockElementWidth(root, 1600);
+    resolve(800);
+  });
+  await waitFor(() => expect(screen.getByTestId('w-right-tabs').textContent)
+    .toBe('clamp(120px, calc(100cqw - 800px), calc(100cqw - 400px))'));
+
+  // Native resize grows the right pane from 800 to 1200; the CSS remainder
+  // keeps chat at 799px (including the 1px divider), without React resize state.
+  mockElementWidth(root, 2000);
+  window.innerWidth += 400;
+  fireEvent(window, new Event('resize'));
+  expect(screen.getByTestId('w-right-tabs').textContent)
+    .toBe('clamp(120px, calc(100cqw - 800px), calc(100cqw - 400px))');
+  mockPaneWidth('chat-main', 799);
+  mockPaneWidth('right-tabs', 1200);
+  dragDividerLeft(rendered.container, 100);
+  const content = setCalls.at(-1)!.content as SplitNode;
+  const right = content.children.find((child) => child.node.type === 'pane' && child.node.panelKind === 'right-tabs')!;
+  expect(right.fraction).toBeCloseTo(0.65); // 1300 / 2000, not the old 50% + 5%.
+  expect(screen.getByTestId('w-right-tabs').textContent)
+    .toBe('clamp(120px, calc(100cqw - 700px), calc(100cqw - 400px))');
+  window.innerWidth = viewport;
+});
+
+it('remembers native edge resizing and reopens at the saved pixel width', async () => {
+  let nativeResized: () => void = () => undefined;
+  window.electronAPI.onSidebarWindowUserResize = (callback) => { nativeResized = callback; return () => undefined; };
+  const expand = vi.fn(async () => 0);
+  window.electronAPI.windowSidebarExpansion = expand;
+  const view = (collapsed: boolean) => (
+    <BuiltinPanelBridgeProvider value={bridge}><LayoutRoot rightTabsCollapsed={collapsed} /></BuiltinPanelBridgeProvider>
+  );
+  const rendered = render(view(true));
+  const root = screen.getByTestId('layout-root-content');
+  mockElementWidth(root, 1200);
+  await act(async () => { rendered.rerender(view(false)); });
+  mockPaneWidth('chat-main', 699);
+  mockPaneWidth('right-tabs', 500);
+  act(() => nativeResized());
+  await waitFor(() => expect(setCalls.length).toBeGreaterThan(0));
+  const saved = setCalls.at(-1)!;
+  expect((saved.content as SplitNode).children[1].node).toHaveProperty('preferredWidth', 500);
+  await act(async () => { rendered.rerender(view(true)); });
+  await act(async () => { rendered.rerender(view(false)); });
+  expect(expand).toHaveBeenLastCalledWith(501, undefined);
+  expect(screen.getByTestId('w-right-tabs').textContent).toContain('calc(100cqw - 700px)');
+  // A constrained open/fullscreen resize alone never rewrites the explicit preference.
+  const count = setCalls.length;
+  mockElementWidth(root, 850);
+  mockPaneWidth('right-tabs', 350);
+  fireEvent(window, new Event('resize'));
+  expect(setCalls).toHaveLength(count);
 });

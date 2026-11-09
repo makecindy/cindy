@@ -147,10 +147,9 @@ describe('VoiceInputSection restore defaults', () => {
     updateSettings.mockImplementation(async () => { settings = restored; return settings; });
     render(<MemoryRouter><VoiceInputSection /></MemoryRouter>);
 
-    const dictionaryHeading = screen.getByText('settings.voiceInput.refinement.dictionary.label');
-    fireEvent.click(within(dictionaryHeading.parentElement!.parentElement!).getByRole('button', {
-      name: 'settings.voiceInput.refinement.instructions.edit',
-    }));
+    const dictionaryToggle = screen.getAllByRole('button', { name: 'settings.voiceInput.refinement.instructions.edit' })
+      .find((button) => button.getAttribute('aria-controls') === 'voice-input-custom-dictionary');
+    fireEvent.click(dictionaryToggle!);
 
     const toggle = () => screen.getByRole('switch', { name: label });
     const row = () => within(toggle().parentElement!.parentElement!);

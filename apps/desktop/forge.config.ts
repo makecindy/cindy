@@ -725,6 +725,30 @@ function applyMacPackagedDisplayName(buildPath: string, platform: string): void 
   }
 }
 
+/**
+ * macOS Live Activity (Agent Island in the system Dynamic Island). `build.mjs` skips
+ * every step unless the macOS 27.3 SDK and Apple silicon are available, so older
+ * toolchains still package the app without it. The widget extension needs its own
+ * App Sandbox entitlements: release signing must sign
+ * `Contents/PlugIns/CindyAgentActivity.appex` with
+ * `native/agent-island/live-activity/extension.entitlements` before the app.
+ */
+function runAgentActivityBuild(args: string[]): void {
+  const result = spawnSync(
+    process.execPath,
+    [path.join(__dirname, 'native/agent-island/live-activity/build.mjs'), ...args],
+    { stdio: 'inherit' },
+  );
+  if (result.error || result.status !== 0) throw new Error('macOS Live Activity build failed');
+}
+
+function installMacAgentActivityExtension(buildPath: string, platform: string, arch: string): void {
+  if (platform !== 'darwin' || process.platform !== 'darwin') return;
+  for (const appDir of fs.readdirSync(buildPath).filter((n) => n.endsWith('.app'))) {
+    runAgentActivityBuild(['extension', path.join(buildPath, appDir), arch]);
+  }
+}
+
 function targetPlatformKey(targetPlatform: string, targetArch: string): string {
   return `${targetPlatform}-${targetArch}`;
 }
@@ -2064,6 +2088,14 @@ const config: ForgeConfig = {
       buildWindowsAtomicRenameHelper(platform, arch);
       buildWindowsTaskbarAddon(platform, arch);
       if (platform === 'darwin') {
+        const desktopBlurBuild = spawnSync(
+          process.execPath,
+          [path.join(__dirname, 'native/desktop-blur/build.mjs'),
+            path.join(__dirname, 'resources/tools/desktop-blur/cindy-desktop-blur.node'), arch],
+          { stdio: 'inherit' },
+        );
+        if (desktopBlurBuild.error || desktopBlurBuild.status !== 0)
+          throw new Error('Native desktop blur build failed');
         const trackpadBuild = spawnSync(
           process.execPath,
           [
@@ -2075,6 +2107,11 @@ const config: ForgeConfig = {
         );
         if (trackpadBuild.error || trackpadBuild.status !== 0)
           throw new Error('Native trackpad build failed');
+        runAgentActivityBuild([
+          'addon',
+          path.join(__dirname, 'resources/tools/agent-island/cindy-agent-activity.node'),
+          arch,
+        ]);
       }
       buildMacVoiceInputModifierShortcutListener(platform, arch);
       buildMacAgentIslandHelper(platform, arch);
@@ -2101,6 +2138,7 @@ const config: ForgeConfig = {
           console.log(`[forge:postPackage] staged ${noticeName} + restricted component disclosure`);
           signPackagedExes(buildPath);
           applyMacPackagedDisplayName(buildPath, opts.platform);
+          installMacAgentActivityExtension(buildPath, opts.platform, opts.arch);
         }
       } finally {
         removeCindySourceMetadata();

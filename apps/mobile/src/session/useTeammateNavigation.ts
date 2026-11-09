@@ -6,8 +6,9 @@ import { useAuth } from '@/auth/AuthContext';
 import type { RemoteResourceRef } from '@cindy/device-link';
 import type { HostedRemoteCollectionItem, RemoteResourceHostTarget } from '@/device-link/remoteResources';
 import { useGuardedPush } from '@/utils/useGuardedPush';
+import { useTaskListBack } from '@/utils/useTaskListBack';
 import { useHomeMode } from './useHomeMode';
-import { homeDismissCount, staleCompanionChatCount, teammateIdentity, teammateResourceRoute, teammateSessionPreview } from './teammateNavigation';
+import { staleCompanionChatCount, teammateIdentity, teammateResourceRoute, teammateSessionPreview } from './teammateNavigation';
 import { remoteSessionStore } from './remoteSessionStore';
 import { readRemoteCollectionCache, writeRemoteCollectionCache } from '@/device-link/remoteResourceAvailability';
 
@@ -26,26 +27,10 @@ export function useTeammateNavigation(hostPush?: ReturnType<typeof useGuardedPus
   const pendingAccount = useRef<number | null>(null);
   const mounted = useRef(true);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
-  /** Back to the home, whose teammate section replaced the separate teammate list. */
+  const backToTaskList = useTaskListBack();
   const returnHome = useCallback(() => {
-    if (pendingAccount.current === accountGeneration) return;
-    Keyboard.dismiss();
-    const state = navigation.getState();
-    const routes = state?.routes.slice(0, state.index + 1) ?? [];
-    const count = homeDismissCount(routes);
-    // Pop by position to preserve the mounted home's state.
-    if (count === null) {
-      const legacyIndex = routes.findIndex(route => route.name === 'resources/[collectionId]'
-        && (route.params as { collectionId?: string } | undefined)?.collectionId === 'teammates');
-      // POP_TO only replaces the top when home is absent, leaving the retired route underneath.
-      if (legacyIndex >= 0) navigation.reset({
-        index: legacyIndex,
-        routes: [...routes.slice(0, legacyIndex), { name: 'devices/index' }],
-      } as never);
-      else router.dismissTo('/devices');
-    }
-    else if (count > 0) router.dismiss(count);
-  }, [accountGeneration, navigation, router]);
+    if (pendingAccount.current !== accountGeneration) backToTaskList();
+  }, [accountGeneration, backToTaskList]);
   /**
    * `replace` swaps the current screen (the cloud view handing over to the new main computer);
    * `leaving` also drops that companion's chat on the computer being left from under it, so back goes to the list.
@@ -76,6 +61,8 @@ export function useTeammateNavigation(hostPush?: ReturnType<typeof useGuardedPus
         const routes = state?.routes.slice(0, state.index + 1) ?? [];
         const stale = options?.leaving ? staleCompanionChatCount(routes, options.leaving.botId, options.leaving.deviceId) : 0;
         if (stale > 0) navigation.reset({
+          ...state,
+          stale: false,
           index: routes.length - stale - 1,
           routes: [...routes.slice(0, routes.length - 1 - stale), { name: route.pathname.slice(1), params: route.params }],
         } as never);

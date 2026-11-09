@@ -1,3 +1,4 @@
+import { BLUEBUBBLES_SECRET_KEYS, parseBlueBubblesConfig } from '@cindy/im';
 /**
  * main/im/shared/botImConnectionRuntime.ts
  * ---------------------------------------------------------------------------
@@ -17,7 +18,7 @@
 
 import { BrowserWindow, ipcMain } from 'electron';
 import { eq } from 'drizzle-orm';
-import type { DingTalkIM, DiscordIM, FeishuIM, IMStatus, TelegramIM, WecomIM } from '@cindy/im';
+import type { BlueBubblesIM, DingTalkIM, DiscordIM, FeishuIM, IMStatus, TelegramIM, WecomIM } from '@cindy/im';
 
 import { createLogger } from '../../logger';
 import { getDbClient } from '../../localDb/client/current';
@@ -31,6 +32,7 @@ import { ownerScopedImSecrets } from '../ownerScopedStorage';
 import { readWechatChannelSettings, writeWechatCompanionBinding } from '../wechat/channelSettings';
 import {
   BOT_IM_CONNECTION_CHANGED_EVENT,
+  isBotImGroupChatId,
   type BotImChannel,
   type BotImConnectionAddInput,
   type BotImConnectionAddResult,
@@ -60,6 +62,7 @@ import type { ImOrchestrator } from './orchestrator';
 const log = createLogger('im:bot-connections');
 
 export type BotImTransportInstance =
+  | { kind: 'imessage'; im: BlueBubblesIM; orchestrator: ImOrchestrator }
   | { kind: 'telegram'; im: TelegramIM; orchestrator: ImOrchestrator }
   | { kind: 'feishu'; im: FeishuIM; orchestrator: ImOrchestrator }
   | { kind: 'wecom'; im: WecomIM; orchestrator: ImOrchestrator }
@@ -120,6 +123,7 @@ const DISCORD_SECRET_KEYS = [
   'discord-bot-lifecycle-announcement',
 ] as const;
 export const SECRET_KEYS_BY_CHANNEL: Record<BotImChannel, readonly string[]> = {
+  imessage: BLUEBUBBLES_SECRET_KEYS,
   telegram: TELEGRAM_SECRET_KEYS,
   feishu: FEISHU_SECRET_KEYS,
   wecom: WECOM_SECRET_KEYS,
@@ -132,6 +136,7 @@ export const SECRET_KEYS_BY_CHANNEL: Record<BotImChannel, readonly string[]> = {
  * 同名键。凭证身份只比相等, 不读出来展示。
  */
 export const IDENTITY_SECRET_KEY: Record<BotImChannel, string> = {
+  imessage: 'bluebubbles-origin',
   telegram: 'telegram-bot-token',
   feishu: 'feishu_bot_app_id',
   wecom: 'wecom-bot-id',
@@ -139,6 +144,7 @@ export const IDENTITY_SECRET_KEY: Record<BotImChannel, string> = {
   discord: 'discord-bot-token',
 };
 const IDENTITY_IN_USE_CODE: Record<BotImChannel, string> = {
+  imessage: 'APP_IN_USE: this BlueBubbles server is already connected on this computer',
   telegram: 'TOKEN_IN_USE: this Telegram bot is already connected on this computer',
   feishu: 'APP_IN_USE: this Feishu app is already connected on this computer',
   wecom: 'APP_IN_USE: this WeCom bot is already connected on this computer',
@@ -191,6 +197,7 @@ function identityOf(transport: BotImTransportInstance | undefined): BotImConnect
     }
     case 'feishu':
       return { username: null, ownerUserId: transport.im.getOwnerOpenId() };
+    case 'imessage':
     case 'wecom':
     case 'dingtalk':
       return { username: null, ownerUserId: transport.im.getOwnerUserId() || null };
@@ -206,7 +213,8 @@ function identityOf(transport: BotImTransportInstance | undefined): BotImConnect
 
 function toView(record: BotImConnectionRecord): BotImConnectionView {
   const transport = instances.get(record.id)?.transport;
-  return { ...record, status: statusOf(transport), identity: identityOf(transport) };
+  return { ...record, status: statusOf(transport), identity: identityOf(transport),
+    ...(transport?.kind === 'imessage' ? { health: transport.im.health() } : {}) };
 }
 
 export function buildBotImConnectionListPayload(botId?: string): BotImConnectionListPayload {
@@ -316,6 +324,7 @@ async function readBotProfileStatus(botId: string): Promise<string | null> {
 
 function identityValueOf(input: BotImConnectionAddInput): string {
   switch (input.channel) {
+    case 'imessage': return input.serverUrl;
     case 'telegram':
       return input.token;
     case 'feishu':
@@ -331,6 +340,7 @@ function identityValueOf(input: BotImConnectionAddInput): string {
 
 function settingsIdentityValueOf(settings: BotImSettingsIdentity, channel: BotImChannel): string | null {
   switch (channel) {
+    case 'imessage': return null;
     case 'telegram':
       return settings.telegramToken;
     case 'feishu':
@@ -498,6 +508,7 @@ async function addBotImConnectionNow(
   const carriedOwner = options.ownerUserId?.trim() || '';
 
   const rollback = async (reason: string): Promise<never> => {
+    if (live.transport.kind === 'imessage') await live.transport.im.clearCredentials();
     await releaseInstance(live);
     purgeSecrets(record);
     await removeBotImConnectionRecord(record.id);
@@ -509,6 +520,11 @@ async function addBotImConnectionNow(
   if (transport.kind !== input.channel) return rollback('channel mismatch');
   try {
     switch (transport.kind) {
+      case 'imessage': {
+        if (input.channel !== 'imessage') return rollback('channel mismatch');
+        await transport.im.saveCredentials(input);
+        break;
+      }
       case 'telegram': {
         if (input.channel !== 'telegram') return rollback('channel mismatch');
         const state = await transport.im.setConfig({ token: input.token, ownerUserId: input.ownerUserId });
@@ -585,7 +601,10 @@ async function addBotImConnectionNow(
 export async function listBotImConnectionGroups(id: string): Promise<BotImConnectionGroupsPayload> {
   const record = readBotImConnection(id);
   if (!record) throwIpcError('NOT_FOUND', 'CONNECTION_NOT_FOUND');
-  const groups = record.botContextId ? await requireDeps().listKnownGroups(record) : [];
+  const transport = instances.get(id)?.transport;
+  const groups = transport?.kind === 'imessage'
+    ? transport.im.listChats().filter(chat => transport.im.isGroup(chat.guid)).map(chat => ({ chatId: chat.guid, chatName: chat.displayName ?? null }))
+    : record.botContextId ? await requireDeps().listKnownGroups(record) : [];
   const activation = record.groupActivation ?? {};
   return {
     connectionId: id,
@@ -700,6 +719,13 @@ export function parseBotImConnectionAddInput(payload: unknown): BotImConnectionA
   if (typeof p.botId !== 'string' || !p.botId.trim()) throwIpcError('INVALID_PARAMS', 'botId is required');
   if (!isBotImChannel(p.channel)) throwIpcError('INVALID_PARAMS', 'channel is invalid');
   const botId = p.botId.trim();
+  if (p.channel === 'imessage') {
+    try {
+      const config = parseBlueBubblesConfig(p);
+      if (typeof p.password !== 'string' || !p.password || p.password.length > 4096) throw new Error('invalid password');
+      return { botId, channel: 'imessage', ...config, password: p.password };
+    } catch { throwIpcError('INVALID_PARAMS', 'BLUEBUBBLES_INVALID_CONFIG'); }
+  }
   if (p.channel === 'telegram') {
     const token = typeof p.token === 'string' ? p.token.trim() : '';
     const ownerUserId = typeof p.ownerUserId === 'string' ? p.ownerUserId.trim() : '';
@@ -769,7 +795,7 @@ export function registerBotImConnectionIpc(): void {
     assertTrustedAppRendererEvent(e);
     const p = (payload ?? {}) as { id?: unknown; chatId?: unknown; mode?: unknown };
     if (!isBotImConnectionId(p.id)) throwIpcError('INVALID_PARAMS', 'id is invalid');
-    if (typeof p.chatId !== 'string' || !/^-?\d{1,32}$/.test(p.chatId)) {
+    if (!isBotImGroupChatId(p.chatId)) {
       throwIpcError('INVALID_PARAMS', 'chatId is invalid');
     }
     const mode = p.mode === 'always' ? 'always' : 'mention';

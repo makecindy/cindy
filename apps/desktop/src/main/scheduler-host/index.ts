@@ -133,7 +133,8 @@ async function startSchedulerInternal(deps: StartSchedulerDeps): Promise<Schedul
     feishuIm: deps.feishuIm,
     logger: deps.logger,
     shouldNotifyDesktop: getDesktopNotificationsEnabled,
-    isAgentIslandEnabled: () => getAgentIslandService()?.isEnabled() ?? false,
+    isRunAlertShownElsewhere: (run) =>
+      getAgentIslandService()?.ownsTaskAlert(run.status === 'failed' ? 'error' : 'done') === true,
     wecomGroupPublisher: wecomGroupNotificationService,
   });
   const promptRunner = new MakerScheduleRunner({

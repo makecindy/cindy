@@ -8,7 +8,7 @@ import { aboutSettings } from './AboutSection.settings-search';
  *     线上版本;菜单样式与 Pi 共用 HarnessVersionMenuRow,更新仍是重启后由启动流程安装
  *   - Pi 版本号与内核更新由 PiKernelVersionRow 管理
  *
- * 卡片样式与 NotificationSection / FeishuBotSection 同级 (rounded-xl / Board border)。
+ * 分区、卡片与行用 settings-rows;版本菜单行与日志行来自别的文件,包在 SettingsBlock(p-0) 里只取分割线。
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -19,6 +19,7 @@ import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import { Switch } from '@/components/ui/switch';
 import { Button } from '@/components/ui/button';
+import { SettingsBlock, SettingsCard, SettingsRow, SettingsSection } from '@/components/ui/settings-rows';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { DropdownMenuItem, DropdownMenuSeparator } from '@/components/ui/dropdown-menu';
 import { useExperimentalFlag } from '@/hooks/useExperimentalFeatures';
@@ -170,24 +171,27 @@ export function AgentVersionsRows() {
 
   return (
     <>
-      <AgentVersionRow
-        kind="claude-code"
-        name="Claude Code"
-        label={t('settings.about.claudeCodeVersionLabel')}
-        state={claudeCode.state}
-        onCheck={claudeCode.check}
-      />
-      <Divider />
-      <AgentVersionRow
-        kind="codex"
-        name="Codex"
-        label={t('settings.about.codexVersionLabel')}
-        state={codex.state}
-        onCheck={codex.check}
-      />
-      <Divider />
-      <PiKernelVersionRow />
-      <Divider />
+      <SettingsBlock className="p-0">
+        <AgentVersionRow
+          kind="claude-code"
+          name="Claude Code"
+          label={t('settings.about.claudeCodeVersionLabel')}
+          state={claudeCode.state}
+          onCheck={claudeCode.check}
+        />
+      </SettingsBlock>
+      <SettingsBlock className="p-0">
+        <AgentVersionRow
+          kind="codex"
+          name="Codex"
+          label={t('settings.about.codexVersionLabel')}
+          state={codex.state}
+          onCheck={codex.check}
+        />
+      </SettingsBlock>
+      <SettingsBlock className="p-0">
+        <PiKernelVersionRow />
+      </SettingsBlock>
     </>
   );
 }
@@ -333,57 +337,32 @@ export function AboutSection() {
   const { t } = useTranslation();
 
   return (
-    <div className="flex flex-col gap-3">
-      <div className="flex flex-col gap-1">
-        <h2 className="text-16 font-medium leading-[1.2] text-[var(--settings-section-title)]">
-          {t('settings.about.title')}
-        </h2>
-        <p className="text-13 leading-[1.5] text-[var(--settings-section-desc)]">
-          {t('settings.about.description')}
-        </p>
-      </div>
-
+    <SettingsSection variant="page" title={t('settings.about.title')} description={t('settings.about.description')}>
       {/* Info Card */}
-      <div id={aboutSettings.appVersionLabel.targetId}
-        className={cn(
-          'flex flex-col rounded-xl',
-          'bg-[var(--settings-theme-card-bg)]',
-          'border border-[var(--settings-theme-card-border)]',
-        )}
-      >
+      <SettingsCard id={aboutSettings.appVersionLabel.targetId}>
         {CURRENT_CINDY_REGION === 'cn' && (
-          <>
-            <InfoRow
-              label={t(aboutSettings.appVersionLabel.titleKey)}
-              value={window.electronAPI.appDisplayVersion}
-              title={window.electronAPI.appDisplayVersionDetail}
-            />
-            <Divider />
-          </>
+          <InfoRow
+            label={t(aboutSettings.appVersionLabel.titleKey)}
+            value={window.electronAPI.appDisplayVersion}
+            title={window.electronAPI.appDisplayVersionDetail}
+          />
         )}
         <AutoUpdateToggleRow />
-        <Divider />
         <AnalyticsToggleRow />
-        <Divider />
         <AgentVersionsRows />
         <DebugLogToggleRow />
-        <Divider />
-        <div id={aboutSettings.logsDirLabel.targetId}>
+        <SettingsBlock id={aboutSettings.logsDirLabel.targetId} className="p-0">
           <OpenLogsRow />
-        </div>
-        <Divider />
+        </SettingsBlock>
         <CrashAutoUploadToggleRow />
-        <Divider />
-        <div id={aboutSettings.logUploadUploadLabel.targetId}>
+        <SettingsBlock id={aboutSettings.logUploadUploadLabel.targetId} className="p-0">
           <UploadLogsRow />
-        </div>
-        <Divider />
+        </SettingsBlock>
         <LegalLinksRows />
-      </div>
+      </SettingsCard>
 
-      {/* 存储空间(媒体总仓占用 / 清理 / 体检) */}
       <SocialLinksPanel />
-    </div>
+    </SettingsSection>
   );
 }
 
@@ -396,7 +375,6 @@ export function LegalLinksRows() {
         label={t('settings.about.legal.termsOfServiceLabel')}
         url={LEGAL_LINKS.termsOfService}
       />
-      <Divider />
       <LegalLinkRow
         label={t('settings.about.legal.privacyPolicyLabel')}
         url={LEGAL_LINKS.privacyPolicy}
@@ -420,21 +398,23 @@ function LegalLinkRow({ label, url }: { label: string; url: string }) {
   };
 
   return (
-    <div className="flex items-center justify-between gap-3 px-[18px] py-4">
-      <span className="select-none text-13 text-[var(--settings-section-sublabel)]">{label}</span>
-      <Button data-settings-search-action="Open the selected help link or legal document"
-        variant="secondary"
-        size="lg"
-        aria-label={t('settings.about.legal.viewDocument', { document: label })}
-        className="-mr-1 select-none"
-        onClick={() => void handleOpen()}
-        title={url}
-        type="button"
-      >
-        {t('settings.about.legal.viewDocument', { document: label })}
-        <ExternalLink aria-hidden size={13} strokeWidth={1.7} />
-      </Button>
-    </div>
+    <SettingsRow
+      title={<span className="select-none">{label}</span>}
+      trailing={
+        <Button data-settings-search-action="Open the selected help link or legal document"
+          variant="secondary"
+          size="lg"
+          aria-label={t('settings.about.legal.viewDocument', { document: label })}
+          className="-mr-1 select-none"
+          onClick={() => void handleOpen()}
+          title={url}
+          type="button"
+        >
+          {t('settings.about.legal.viewDocument', { document: label })}
+          <ExternalLink aria-hidden size={13} strokeWidth={1.7} />
+        </Button>
+      }
+    />
   );
 }
 
@@ -453,7 +433,7 @@ function SocialLinksPanel() {
   };
 
   return (
-    <div className="mt-5 flex flex-col gap-2.5">
+    <div className="flex flex-col gap-2.5">
       <h3 className="text-13 font-medium text-[var(--settings-section-title)]">
         {t('settings.about.social.title')}
       </h3>
@@ -540,16 +520,10 @@ export function AutoUpdateToggleRow() {
 
   if (isLinux) {
     return (
-      <div className="flex flex-col gap-1.5 px-[18px] py-4">
-        <div className="flex min-w-0 flex-col gap-1">
-          <span id={aboutSettings.autoUpdateLabel.targetId} className="text-13 text-[var(--settings-section-sublabel)]">
-            {t(aboutSettings.autoUpdateLabel.titleKey)}
-          </span>
-          <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
-            {t('settings.about.linuxUpdateDescription')}
-          </p>
-        </div>
-      </div>
+      <SettingsRow
+        title={<span id={aboutSettings.autoUpdateLabel.targetId}>{t(aboutSettings.autoUpdateLabel.titleKey)}</span>}
+        hint={t('settings.about.linuxUpdateDescription')}
+      />
     );
   }
 
@@ -584,16 +558,10 @@ export function AutoUpdateToggleRow() {
   const disabled = state.loading || saving;
 
   return (
-    <div className="flex flex-col gap-1.5 px-[18px] py-4">
-      <div className="flex items-center justify-between gap-3">
-        <div className="flex min-w-0 flex-col gap-1">
-          <span id={aboutSettings.autoUpdateLabel.targetId} className="text-13 text-[var(--settings-section-sublabel)]">
-            {t(aboutSettings.autoUpdateLabel.titleKey)}
-          </span>
-          <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
-            {t(aboutSettings.autoUpdateLabel.descriptionKey)}
-          </p>
-        </div>
+    <SettingsRow
+      title={<span id={aboutSettings.autoUpdateLabel.targetId}>{t(aboutSettings.autoUpdateLabel.titleKey)}</span>}
+      hint={t(aboutSettings.autoUpdateLabel.descriptionKey)}
+      trailing={
         <div className="flex shrink-0 items-center gap-2">
           <DefaultOverrideControls
             isCustomized={state.isCustomized}
@@ -607,8 +575,8 @@ export function AutoUpdateToggleRow() {
             aria-label={t(aboutSettings.autoUpdateLabel.titleKey)}
           />
         </div>
-      </div>
-    </div>
+      }
+    />
   );
 }
 
@@ -660,16 +628,10 @@ function AnalyticsToggleRow() {
   };
 
   return (
-    <div className="flex flex-col gap-1.5 px-[18px] py-4">
-      <div className="flex items-center justify-between gap-3">
-        <div className="flex min-w-0 flex-col gap-1">
-          <span id={aboutSettings.analyticsLabel.targetId} className="text-13 text-[var(--settings-section-sublabel)]">
-            {t(aboutSettings.analyticsLabel.titleKey)}
-          </span>
-          <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
-            {t(aboutSettings.analyticsLabel.descriptionKey)}
-          </p>
-        </div>
+    <SettingsRow
+      title={<span id={aboutSettings.analyticsLabel.targetId}>{t(aboutSettings.analyticsLabel.titleKey)}</span>}
+      hint={t(aboutSettings.analyticsLabel.descriptionKey)}
+      trailing={
         <div className="flex shrink-0 items-center gap-2">
           <DefaultOverrideControls
             isCustomized={state.analyticsEnabledCustomized}
@@ -683,8 +645,8 @@ function AnalyticsToggleRow() {
             aria-label={t(aboutSettings.analyticsLabel.titleKey)}
           />
         </div>
-      </div>
-    </div>
+      }
+    />
   );
 }
 
@@ -710,22 +672,18 @@ function DebugLogToggleRow() {
   }, [effectiveEnabled]);
 
   return (
-    <div className="flex flex-col gap-1.5 px-[18px] py-4">
-      <div className="flex items-center justify-between gap-3">
-        <span id={aboutSettings.debugLogLabel.targetId} className="text-13 text-[var(--settings-section-sublabel)]">
-          {t(aboutSettings.debugLogLabel.titleKey)}
-        </span>
+    <SettingsRow
+      title={<span id={aboutSettings.debugLogLabel.targetId}>{t(aboutSettings.debugLogLabel.titleKey)}</span>}
+      hint={t(aboutSettings.debugLogLabel.descriptionKey)}
+      trailing={
         <Switch data-setting-id={aboutSettings.debugLogLabel.id}
           checked={effectiveEnabled}
           disabled={lockedOn}
           onCheckedChange={setEnabled}
           aria-label={t(aboutSettings.debugLogLabel.titleKey)}
         />
-      </div>
-      <p className="text-12 leading-[1.4] text-[var(--text-secondary)] pr-12">
-        {t(aboutSettings.debugLogLabel.descriptionKey)}
-      </p>
-    </div>
+      }
+    />
   );
 }
 
@@ -779,16 +737,10 @@ function CrashAutoUploadToggleRow() {
   const disabled = state.loading || saving || blocked;
 
   return (
-    <div className="flex flex-col gap-1.5 px-[18px] py-4">
-      <div className="flex items-center justify-between gap-3">
-        <div className="flex min-w-0 flex-col gap-1">
-          <span id={aboutSettings.logUploadCrashAutoLabel.targetId} className="text-13 text-[var(--settings-section-sublabel)]">
-            {t(aboutSettings.logUploadCrashAutoLabel.titleKey)}
-          </span>
-          <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
-            {t('settings.about.logUpload.crashAutoDescription')}
-          </p>
-        </div>
+    <SettingsRow
+      title={<span id={aboutSettings.logUploadCrashAutoLabel.targetId}>{t(aboutSettings.logUploadCrashAutoLabel.titleKey)}</span>}
+      hint={t('settings.about.logUpload.crashAutoDescription')}
+      trailing={
         <div className="flex shrink-0 items-center gap-2">
           <DefaultOverrideControls
             isCustomized={state.crashAutoUploadCustomized}
@@ -802,8 +754,8 @@ function CrashAutoUploadToggleRow() {
             aria-label={t(aboutSettings.logUploadCrashAutoLabel.titleKey)}
           />
         </div>
-      </div>
-    </div>
+      }
+    />
   );
 }
 
@@ -818,29 +770,23 @@ function InfoRow({
   title?: string;
   dim?: boolean;
 }) {
+  // SettingsRow 的 title 是行名称,悬停说明挂在名称和值上
   return (
-    <div className="flex items-center justify-between gap-3 px-[18px] py-4" title={title}>
-      <span className="text-13 text-[var(--settings-section-sublabel)]">{label}</span>
-      <span
-        className={cn(
-          'truncate text-13 font-medium',
-          dim
-            ? 'text-[var(--text-secondary)]'
-            : 'text-[var(--settings-section-title)]',
-        )}
-      >
-        {value}
-      </span>
-    </div>
-  );
-}
-
-function Divider() {
-  return (
-    <div
-      aria-hidden
-      className="h-px w-full"
-      style={{ background: 'var(--settings-theme-card-border)' }}
+    <SettingsRow
+      title={<span title={title}>{label}</span>}
+      trailing={
+        <span
+          title={title}
+          className={cn(
+            'truncate text-13 font-medium',
+            dim
+              ? 'text-[var(--text-secondary)]'
+              : 'text-[var(--settings-section-title)]',
+          )}
+        >
+          {value}
+        </span>
+      }
     />
   );
 }

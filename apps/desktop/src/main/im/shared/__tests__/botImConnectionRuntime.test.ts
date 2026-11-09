@@ -5,6 +5,9 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import http from 'node:http';
+import { once } from 'node:events';
+import { BlueBubblesIM, LocalWebhookReceiver, type IMHost } from '@cindy/im';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -98,6 +101,7 @@ import {
 } from '../botImConnectionRuntime';
 import { addBotImConnectionRecord, listBotImConnections, secretKeyPrefixFor } from '../botImConnectionStore';
 import * as connectionStore from '../botImConnectionStore';
+import { blueBubblesStateStorage } from '../../imessage/storage';
 import { __testing as laneTesting } from '../botImLaneRuntime';
 import { withBotProfileLocks } from '../../../maker-ipc/botProfileLock';
 import { readWechatChannelSettings, writeWechatCompanionBinding, writeWechatWorkingDir } from '../../wechat/channelSettings';
@@ -463,11 +467,104 @@ describe('bot im connection runtime', () => {
     expect(listBotImConnections()[0]?.groupActivation).toBeUndefined();
   });
 
+  // Runtime acceptance found both IPC and stored settings restricted to numeric Telegram IDs.
+  // Tier 1: real IPC + settings persistence must retain an actual BlueBubbles group identifier.
+  it('persists an iMessage group mode through the settings IPC', async () => {
+    const record = await addBotImConnectionRecord({ botId: 'bot-mia', channel: 'imessage' });
+    registerBotImConnectionIpc();
+    const handler = h.ipcHandlers.get('botImConnection:set-group-activation')!;
+    const chatId = 'any;+;acceptance-group';
+    await handler({}, { id: record.id, chatId, mode: 'always' });
+    expect(connectionStore.readBotImConnection(record.id)?.groupActivation).toEqual({ [chatId]: 'always' });
+    await handler({}, { id: record.id, chatId, mode: 'mention' });
+    expect(connectionStore.readBotImConnection(record.id)?.groupActivation).toBeUndefined();
+    expect(() => handler({}, { id: record.id, chatId: 'any;-;private', mode: 'always' })).toThrow(/INVALID_PARAMS/);
+  });
+
   afterEach(async () => {
     vi.restoreAllMocks();
     laneTesting.setStore(null);
     await stopBotImConnections();
     fs.rmSync(h.root, { recursive: true, force: true });
+  });
+
+  // Tier 1, #9250/r4506188541: use the production add/rollback, transport and
+  // journal. Existing fake transports cannot expose a 202 during first connect.
+  it.each(['input-failure', 'connect-failure'])('handles iMessage first-add %s without losing durable ingress', async scenario => {
+    const chat = { guid: 'any;-;owner@example.test', participants: [{ address: 'owner@example.test', service: 'iMessage' }] };
+    let callback = '', available = false, now = 1000;
+    const server = http.createServer(async (req, res) => {
+      const url = new URL(req.url!, 'http://127.0.0.1');
+      const send = (data: unknown) => res.end(JSON.stringify({ status: 200, data }));
+      if (url.pathname.endsWith('/server/info')) {
+        if (scenario === 'connect-failure') { res.writeHead(401).end(); return; }
+        send({ server_version: '1.9.9' }); return;
+      }
+      if (url.pathname.startsWith('/api/v1/chat/')) { send(chat); return; }
+      if (url.pathname === '/api/v1/webhook') {
+        if (req.method === 'POST') {
+          const chunks: Buffer[] = [];
+          for await (const chunk of req) chunks.push(Buffer.from(chunk));
+          callback = JSON.parse(Buffer.concat(chunks).toString()).url;
+          expect((await fetch(callback, { method: 'POST', body: JSON.stringify({ type: 'new-message', data: { guid: 'first-add-message' } }) })).status).toBe(202);
+          send(null); return;
+        }
+        send([{ id: 1, url: callback }]); return;
+      }
+      if (url.pathname.startsWith('/api/v1/webhook/')) { send(null); return; }
+      if (url.pathname === '/api/v1/message/query') { send([]); return; }
+      if (url.pathname === '/api/v1/message/first-add-message') {
+        if (!available) { res.writeHead(503).end(); return; }
+        send({ guid: 'first-add-message', text: 'first work', dateCreated: 1001, isFromMe: false,
+          chats: [chat], handle: { address: 'owner@example.test', service: 'iMessage' } }); return;
+      }
+      res.writeHead(404).end();
+    });
+    server.listen(0, '127.0.0.1'); await once(server, 'listening');
+    const origin = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+    let transport!: BlueBubblesIM;
+    let storage!: ReturnType<typeof blueBubblesStateStorage>;
+    const host: IMHost = {
+      secrets: { read: key => h.secrets.get(key) ?? null, write: (key, value) => { h.secrets.set(key, value); return true; },
+        remove: key => { h.secrets.delete(key); }, isAvailable: () => true },
+      ipc: { handle() {}, broadcast() {}, throwIpcError(_code, message): never { throw new Error(message); } },
+      paths: { feishuMediaDir: h.root }, httpPostForm: async () => ({ status: 200, body: {} }),
+    };
+    configureBotImConnectionRuntime({
+      removeWechatCompanionBinding: h.drainWechat,
+      create: record => {
+        storage = blueBubblesStateStorage(record.id);
+        transport = new BlueBubblesIM(host, { secretPrefix: secretKeyPrefixFor(record.id), storage,
+          receiver: () => new LocalWebhookReceiver('127.0.0.1', 0), resolvePeers: async () => ['127.0.0.1'], now: () => now });
+        transport.onMessage(event => { event.delivery!.awaitPersistence(); event.delivery!.accept(); });
+        return { kind: 'imessage', im: transport, orchestrator: fakeOrchestrator() as never };
+      },
+      settingsIdentity: () => ({ telegramToken: null, feishuAppId: null, wecomBotId: null, dingtalkAppKey: null, discordToken: null }),
+      listKnownGroups: async () => [],
+    });
+    try {
+      const adding = addBotImConnection({ botId: 'bot-mia', channel: 'imessage', serverUrl: origin,
+        password: 'test-only', ownerAddress: 'owner@example.test', chatGuids: [chat.guid], listenHost: '127.0.0.1', listenPort: 18747 });
+      if (scenario === 'connect-failure') {
+        await expect(adding).rejects.toThrow(/CONNECT_FAILED/);
+        expect(listBotImConnections()).toEqual([]);
+        expect(h.secrets.size).toBe(0);
+      } else {
+        const result = await adding;
+        expect(listBotImConnections().map(row => row.id)).toEqual([result.connection.id]);
+        expect(h.secrets.get(`${secretKeyPrefixFor(result.connection.id)}bluebubbles-password`)).toBe('test-only');
+        expect(storage.read()!.inbox['first-add-message'].state).toBe('pending');
+        expect(transport.getStatus().kind).toBe('error');
+        available = true; now += 30_000;
+        await transport.reconcile();
+        expect(storage.read()!.inbox['first-add-message'].state).toBe('accepted');
+        expect(transport.getStatus().kind).toBe('connected');
+        expect(listBotImConnections()[0]?.id).toBe(result.connection.id);
+      }
+    } finally {
+      await stopBotImConnections();
+      server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve()));
+    }
   });
 
   it('adds a Telegram connection, hands the credentials to its own transport and records the platform id', async () => {
