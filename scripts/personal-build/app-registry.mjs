@@ -2,7 +2,7 @@
 import {execFileSync} from 'node:child_process';
 import fs from 'node:fs';
 const tool='/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister';
-const execute=args=>execFileSync(tool,args,{encoding:'utf8',maxBuffer:64*1024*1024});
+const execute=args=>execFileSync(tool,args,{encoding:'utf8',maxBuffer:64*1024*1024,timeout:15000,killSignal:'SIGKILL'});
 export function parseRegisteredApps(dump, bundleId) {
   const paths=[];
   for(const block of dump.split(/^-{10,}\s*$/m)) {

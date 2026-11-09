@@ -271,7 +271,7 @@ export async function automaticCheck(file) {
     status(c, 'preparing');
     const report = prepare(c, out);
     let release = releaseDescriptor(report.directory);
-    if (release.id === state.good.id || state.rejected.some(r => r.id === release.id)) { status(c, 'unchanged-or-rejected', { id: release.id }); return; }
+    if (release.id === state.good.id || blockedAutomaticCandidate(state, release.id)) { status(c, 'unchanged-or-rejected', { id: release.id }); return; }
     const compat = compatibility(state.good, release);
     if (release.monitorProtocol !== 1) { compat.compatible = false; compat.reasons.push('host health protocol missing'); }
     if (!compat.compatible) { status(c, 'deferred', { reasons: compat.reasons, report: path.join(out, 'report.json') }); return; }
@@ -279,7 +279,7 @@ export async function automaticCheck(file) {
     release = releaseDescriptor(report.directory); // Native artifacts participate in the checked identity.
     // The first comparison predates the native receipt; repeat it on the final identity so an
     // unchanged or previously rejected release never reruns assets, smoke startup or publication.
-    if (release.id === state.good.id || state.rejected.some(r => r.id === release.id)) { status(c, 'unchanged-or-rejected', { id: release.id }); return; }
+    if (release.id === state.good.id || blockedAutomaticCandidate(state, release.id)) { status(c, 'unchanged-or-rejected', { id: release.id }); return; }
     // Materialize assets before activation; recovery never depends on downloading a replacement runtime.
     run(c.runtime.node, ['scripts/ensure-dev-runtime-assets.mjs'], report.directory);
     verifyUpgradeSnapshot(c, report);
