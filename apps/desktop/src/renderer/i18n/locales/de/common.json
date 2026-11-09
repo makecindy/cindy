@@ -19793,10 +19793,10 @@
       "useCodex": "Mit Codex anmelden"
     },
     "title": "Abonnementkonten",
-    "note": "Das erste Konto verwendet den Standardordner der CLI. Weitere Konten melden sich separat an. Neue Aufgaben werden verteilt; bestehende Aufgaben behalten ihr Konto.",
     "strategy": "Lastverteilung",
     "add": "Konto hinzufügen",
     "default": "Standardordner",
+    "defaultTag": "Standard",
     "ready": "Verbunden",
     "signedOut": "Anmeldung erforderlich",
     "unavailable": "Status nicht verfügbar",

@@ -61,7 +61,7 @@ describe('settings subscription card', () => {
     render(<QuotaHoverCard variant="embedded" account={data} />);
     expect(screen.getByTestId('quota-plan-badge').textContent).toBe('Pro');
     expect(screen.getByRole('progressbar').getAttribute('aria-valuenow')).toBe('12');
-    expect(screen.getByText('Remaining 12%')).toBeTruthy();
+    expect(screen.getByText('12%').getAttribute('title')).toBe('Remaining 12%');
     expect(screen.getByTestId('quota-hover-card').className).not.toContain('w-[340px]');
     expect(screen.getByTestId('quota-hover-card').style.boxShadow).toBe('');
   });
