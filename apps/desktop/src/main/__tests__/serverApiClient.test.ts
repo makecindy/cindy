@@ -132,6 +132,36 @@ describe('serverApiFetch', () => {
     }
   });
 
+  // Unit: a 429 whose **body** stalls must still carry the server's retry deadline.
+  // The deadline lives in the response headers; reading the body first used to lose
+  // it, so the caller kept polling on its own cadence and the limit window slid.
+  it('keeps the 429 retry deadline when the response body stalls', async () => {
+    const now = Date.now();
+    const headers = new Headers({ 'Retry-After': '120' });
+    mocks.netFetch.mockImplementationOnce((_url: string, opts: RequestInit) => Promise.resolve({
+      ok: false,
+      status: 429,
+      headers,
+      json: () => new Promise((_yes, no) => {
+        opts.signal?.addEventListener('abort', () => {
+          const error = new Error('the body read was aborted');
+          error.name = 'AbortError';
+          no(error);
+        }, { once: true });
+      }),
+    } as unknown as Response));
+    try {
+      await serverApiFetch('/api/device-link/devices', {
+        baseUrl: 'https://api.example.invalid', timeoutMs: 5,
+      });
+      expect.fail('the stalled body must reject');
+    } catch (error) {
+      expect(error).toBeInstanceOf(ServerApiError);
+      expect(error).toHaveProperty('retryAt', expect.any(Number));
+      expect((error as ServerApiError).retryAt).toBeGreaterThanOrEqual(now + 120_000);
+    }
+  });
+
   // Unit: exercise the real quota reader through the HTTP client. Previously its
   // mocked client hid recurring warnings for a successful legacy fallback.
   it.each([

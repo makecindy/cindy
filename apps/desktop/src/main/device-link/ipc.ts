@@ -41,7 +41,7 @@ import {
 } from '@cindy/device-link';
 import { isMobilePlatform } from '@cindy/maker-shared/device-list';
 import { ServerApiError } from '../serverApiClient';
-import { deviceLinkApiFetch } from './deviceLinkApi.js';
+import { deviceLinkApiFetch, resolveDeviceLinkApiBase } from './deviceLinkApi.js';
 import { requireString, throwIpcError } from '../utils/ipcValidate';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer';
 import { isIpcError, type IpcErrorCode } from '../../shared/ipc-errors';
@@ -168,7 +168,8 @@ export interface DeviceLinkIpcDeps {
   getState(): DeviceLinkState;
   setEnabled(enabled: boolean): Promise<void>;
   setKeepAwake(enabled: boolean): Promise<void>;
-  apiFetch<T>(path: string, opts?: { method?: string; body?: unknown; timeoutMs?: number }): Promise<T>;
+  /** `signal` 是调用方的期限信号:目录读用它把「fetch + 刷新等待 + 重试」一起框住。 */
+  apiFetch<T>(path: string, opts?: { method?: string; body?: unknown; timeoutMs?: number; signal?: AbortSignal }): Promise<T>;
   openLink(deviceId: string): Promise<LinkAcceptPayload>;
   closeLink(deviceId: string): void;
   invoke(deviceId: string, channel: string, args: unknown[], options?: { background?: boolean; diagnosticSource?: 'renderer' }): Promise<InvokeResultPayload>;
@@ -455,8 +456,23 @@ const DEVICE_LIST_COALESCE_WINDOW_MS = 300;
  */
 const DIRECTORY_READ_TIMEOUT_MS = 8_000;
 
-/** 服务端限流(429)给出的目录重试期限(墙钟 ms),按 owner 记。 */
-let directoryRetryAt: { owner: string; retryAtMs: number } | null = null;
+/**
+ * 服务端限流(429)给出的目录重试期限(墙钟 ms),按 owner + 中转身份记。
+ *
+ * 中转身份也要算进去:官方中转与自建中转是**各自独立**的限流桶,同一账号从官方切到
+ * 自建(或反过来)之后,上一个中转给的期限不该拦住新中转上的第一次读 —— 否则换中转后
+ * 目录一直读不出去,恢复被一个已经无关的期限拖住(Codex review #9360)。
+ */
+let directoryRetryAt: { owner: string; relay: string; retryAtMs: number } | null = null;
+
+/** 当前中转身份(官方端点或自建中转地址):限流期限按它分桶。 */
+function directoryRelayScope(): string {
+  try {
+    return resolveDeviceLinkApiBase();
+  } catch {
+    return '';
+  }
+}
 
 /** fetch 被中止时抛出的错误:目录读取超时走这条(而不是当成权威拒绝)。 */
 function isAbortError(error: unknown): boolean {
@@ -475,6 +491,7 @@ export function handleListDevices(
   deps: DeviceLinkIpcDeps,
 ): Promise<DeviceListResult> {
   const owner = activeOwnerScopeKey();
+  const relay = directoryRelayScope();
   const inFlight = latestDeviceListRequest;
   if (inFlight && inFlight.owner === owner && inFlight.joinable && Date.now() - inFlight.startedAt < DEVICE_LIST_COALESCE_WINDOW_MS) {
     return inFlight.promise;
@@ -487,23 +504,38 @@ export function handleListDevices(
     const request = readProviderDirectoryContinuity(() => {
       // 限流窗口内不再发**物理读**:每次追问都会让服务端把窗口重新推后,越问越久。
       // 冷启动(没有旧快照可沿用)时尤其明显:本地退避是 5 秒起,一路追问到窗口之后。
-      // 这里按 owner 记住的期限直接回一个暂时性失败(429),让调用方按自己的节奏重试;
-      // 期限按 owner 记(main 侧刻意如此),换账号不该继承上一个账号的限流期限。
-      const throttledUntil = directoryRetryAt?.owner === owner ? directoryRetryAt.retryAtMs : 0;
+      // 这里按 owner + 中转记住的期限直接回一个暂时性失败(429),让调用方按自己的节奏
+      // 重试;换账号不该继承上一个账号的限流期限,换中转也不该继承上一个中转的。
+      const throttledUntil =
+        directoryRetryAt?.owner === owner && directoryRetryAt.relay === relay
+          ? directoryRetryAt.retryAtMs
+          : 0;
       if (throttledUntil !== 0 && throttledUntil > Date.now()) {
         throw Object.assign(new Error('设备目录限流退避中'), { statusCode: 429 });
       }
+      // 整条目录读有**总期限**:timeoutMs 只管单次 fetch,401 之后的共享登录刷新不在它
+      // 里面(官方端点的刷新端点是轮换的,timeoutMs: 0 = 不超时),于是一次目录读可以
+      // 无限期挂着 —— 渲染侧的退避每轮都再开一条这样的等待,越挂越多。用调用方的期限
+      // 信号把「fetch + 刷新等待 + 重试」一起框住:超时的按 status 0 的暂时性失败走。
+      const controller = new AbortController();
+      const deadline = setTimeout(() => {
+        controller.abort(Object.assign(new Error('设备目录读取超时'), { name: 'TimeoutError' }));
+      }, DIRECTORY_READ_TIMEOUT_MS);
       return deps.apiFetch<{ devices: DeviceLinkServerDeviceView[] }>(
         '/api/device-link/devices',
-        { timeoutMs: DIRECTORY_READ_TIMEOUT_MS },
+        { timeoutMs: DIRECTORY_READ_TIMEOUT_MS, signal: controller.signal },
       ).catch((error: unknown) => {
         // 429 的 Retry-After:服务端明确说了多久之后再问。把期限带给调用方(渲染进程的目录
         // 退避要让过它),否则限流窗口里每个挂载的窗口都会继续追问,延长限流并放大共享
-        // 目录压力。期限按 owner 记:换账号不该继承上一个账号的限流期限。
+        // 目录压力。期限按 owner + 中转记:换账号不该继承上一个账号的限流期限,换中转
+        // (两个中转是各自独立的限流桶)也不该继承。
         const retryAt = (error as { retryAt?: unknown } | null | undefined)?.retryAt;
         if (typeof retryAt === 'number' && Number.isFinite(retryAt)) {
-          const known = directoryRetryAt?.owner === owner ? directoryRetryAt.retryAtMs : 0;
-          directoryRetryAt = { owner, retryAtMs: Math.max(known, retryAt) };
+          const known =
+            directoryRetryAt?.owner === owner && directoryRetryAt.relay === relay
+              ? directoryRetryAt.retryAtMs
+              : 0;
+          directoryRetryAt = { owner, relay, retryAtMs: Math.max(known, retryAt) };
         }
         // 读取超时是**暂时性**失败:让 continuity reader 沿用有界旧快照,而不是把快照一起
         // 丢掉(丢掉的话渲染进程连旧设备都看不到)。statusCode 0 = 连不上,不是权威拒绝。
@@ -511,7 +543,7 @@ export function handleListDevices(
           throw Object.assign(new Error('设备目录读取超时'), { statusCode: 0 });
         }
         throw error;
-      });
+      }).finally(() => clearTimeout(deadline));
     }).then(
     async ({ value: result, stale, remainingMs }) => {
       if (activeOwnerScopeKey() !== owner) throw new Error('[DEVICE_LINK_NOT_CONNECTED] device directory account changed');
@@ -533,7 +565,9 @@ export function handleListDevices(
         if (latest && latest.sequence > sequence) return latest.promise;
       }
       // 拿到权威目录 = 服务端没有在限流:上一轮的限流期限作废。
-      if (!stale && directoryRetryAt?.owner === owner) directoryRetryAt = null;
+      if (!stale && directoryRetryAt?.owner === owner && directoryRetryAt.relay === relay) {
+        directoryRetryAt = null;
+      }
       const reconciled = reconcileDeviceNames(
         result,
         deps,
@@ -586,7 +620,9 @@ export function handleListDevices(
         // stamp, while zero means this read is already outside its source window.
         displayBudget: { remainingMs: Math.max(0, remainingMs) },
         // 服务端限流给出的重试期限:调用方的退避要让过它(见 handleListDevices)。
-        ...(directoryRetryAt?.owner === owner ? { retryAtMs: directoryRetryAt.retryAtMs } : {}),
+        ...(directoryRetryAt?.owner === owner && directoryRetryAt.relay === relay
+          ? { retryAtMs: directoryRetryAt.retryAtMs }
+          : {}),
       };
     },
     (err: unknown) => {

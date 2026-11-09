@@ -17,6 +17,13 @@ vi.mock('../clientEndpointsService.js', async importOriginal => ({
   getClientEndpoint: () => 'https://continuity.test.invalid',
 }));
 
+// 中转身份:限流期限按它分桶(官方中转与自建中转是各自独立的限流桶)。
+const relayScope = vi.hoisted(() => ({ baseUrl: 'https://relay-a.test.invalid' }));
+vi.mock('../device-link/deviceLinkApi.js', async importOriginal => ({
+  ...await importOriginal<typeof import('../device-link/deviceLinkApi.js')>(),
+  resolveDeviceLinkApiBase: () => relayScope.baseUrl,
+}));
+
 // Transport windows are outside this in-memory IPC handler harness.
 vi.mock('../device-link/filePeer', () => ({
   tryUploadPeerAttachment: vi.fn(async () => null),
@@ -428,6 +435,8 @@ describe('device-link IPC handlers', () => {
     await expect(handleListDevices(deps)).resolves.not.toHaveProperty('stale');
     expect(apiFetch).toHaveBeenCalledWith('/api/device-link/devices', {
       timeoutMs: expect.any(Number),
+      // 调用方的期限信号:把「fetch + 401 之后的共享登录刷新 + 重试」一起框住。
+      signal: expect.any(AbortSignal),
     });
     const limited = await handleListDevices(deps);
     expect(limited).toMatchObject({ stale: true });
@@ -451,6 +460,56 @@ describe('device-link IPC handlers', () => {
       expect(apiFetch).toHaveBeenCalledTimes(1);
     } finally {
       // 限流期限是模块级状态:留给下一个用例就等于替它限流。
+      __resetDeviceListCoalescingForTests();
+    }
+  });
+
+  // 限流期限按**中转**分桶:官方中转与自建中转是各自独立的限流桶。同一账号换中转
+  // 之后,上一个中转给的期限不该拦住新中转上的第一次读 —— 否则换中转之后目录一直读
+  // 不出去,恢复被一个已经无关的期限拖住(Codex review #9360)。
+  it('listDevices:换中转后不继承上一个中转的限流期限', async () => {
+    __resetDeviceListCoalescingForTests();
+    relayScope.baseUrl = 'https://relay-a.test.invalid';
+    const retryAt = Date.now() + 60_000;
+    const apiFetch = vi.fn()
+      .mockRejectedValueOnce(new ServerApiError('UNAVAILABLE', 429, 'rate limited', retryAt))
+      .mockResolvedValue({ devices: [] });
+    const deps = makeDeps({ apiFetch });
+    try {
+      await expect(handleListDevices(deps)).rejects.toThrow(/rate limited/);
+      expect(apiFetch).toHaveBeenCalledTimes(1);
+      // 同一个中转:限流窗口内不再发物理读。
+      await expect(handleListDevices(deps)).rejects.toThrow();
+      expect(apiFetch).toHaveBeenCalledTimes(1);
+      // 换中转:新的限流桶,立刻发物理读。
+      relayScope.baseUrl = 'https://relay-b.test.invalid';
+      await expect(handleListDevices(deps)).resolves.toMatchObject({ devices: [] });
+      expect(apiFetch).toHaveBeenCalledTimes(2);
+    } finally {
+      relayScope.baseUrl = 'https://relay-a.test.invalid';
+      __resetDeviceListCoalescingForTests();
+    }
+  });
+
+  // 目录读要有**总期限**:timeoutMs 只管单次 fetch,401 之后的共享登录刷新不在它里面
+  // (官方端点的刷新端点是轮换的,timeoutMs: 0 = 不超时)—— 一次目录读可以无限期挂着,
+  // 渲染侧的退避每轮都再开一条等待,越挂越多。调用方的期限信号把整条链路框住。
+  it('listDevices:整条目录读有总期限,挂死的读按暂时性失败收口', async () => {
+    __resetDeviceListCoalescingForTests();
+    vi.useFakeTimers();
+    try {
+      const apiFetch = vi.fn((_path: string, opts?: { signal?: AbortSignal }) => new Promise((_yes, no) => {
+        opts?.signal?.addEventListener('abort', () => no(opts.signal?.reason), { once: true });
+      }));
+      const deps = makeDeps({ apiFetch });
+      const pending = handleListDevices(deps);
+      expect(apiFetch).toHaveBeenCalledTimes(1);
+      // 8 秒期限到点:整条读(含 401 之后的共享登录刷新等待)一起收口。
+      await vi.advanceTimersByTimeAsync(9_000);
+      // 超时是**暂时性**失败:statusCode 0 = 连不上,不是权威拒绝(旧快照仍可用)。
+      await expect(pending).rejects.toThrow(/设备目录读取超时/);
+    } finally {
+      vi.useRealTimers();
       __resetDeviceListCoalescingForTests();
     }
   });

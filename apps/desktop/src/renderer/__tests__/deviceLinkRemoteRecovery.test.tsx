@@ -93,6 +93,7 @@ beforeEach(() => {
       'onStatusChanged',
       'onAccessRevoked',
       'onControlTargetChanged',
+      'onDeviceDirectoryInvalidated',
     ].map((name) => [
       name,
       (listener: Listener) => {
@@ -517,6 +518,25 @@ describe('stale device directory', () => {
       await vi.advanceTimersByTimeAsync(120_000);
     });
     expect(listDevices.mock.calls.length).toBe(afterFresh);
+  });
+
+  // 目录被**权威作废**(main 侧确认 401/403 后广播)后不该再按 5–60 秒的节奏追问:
+  // 每问一次都被再拒一次、再广播一次,读永远拿不到结果,只是把请求放大 —— relay 明明
+  // 在线,用户看到的却是「一直在转」。
+  it('stops re-reading the directory once it is authoritatively invalidated', async () => {
+    const listDevices = window.electronAPI.deviceLink.listDevices as unknown as ReturnType<typeof vi.fn>;
+    listDevices.mockRejectedValue(new Error('forbidden'));
+    renderHook(() => useDeviceLinkRemoteProjects());
+    await settle();
+    const initial = listDevices.mock.calls.length;
+    expect(initial).toBeGreaterThan(0);
+
+    // 权威作废事件 → 停掉目录重读。
+    act(() => listeners.onDeviceDirectoryInvalidated({}));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(120_000);
+    });
+    expect(listDevices.mock.calls.length).toBe(initial);
   });
 
   // 跳过旧快照的 offline 行不能把冷缓存设备永远留在「检测中」:缓存种入时标 connecting,

@@ -115,6 +115,9 @@ async function rawFetch<T>(apiPath: string, opts: ApiFetchOptions): Promise<RawR
   const abort = () => controller?.abort(opts.signal?.reason);
   opts.signal?.addEventListener('abort', abort, { once: true });
   const timeoutId = controller && timeoutMs > 0 ? setTimeout(() => controller.abort(), timeoutMs) : null;
+  // 响应头给出的限流期限:读响应体卡住时这一跳会走下面的 catch,状态被归一成 0 ——
+  // 期限必须一起带出去,否则调用方只知道「失败了」,不知道服务端让它等多久。
+  let responseRetryAt: number | undefined;
   try {
     const body = opts.bodyFactory ? opts.bodyFactory() : opts.body;
     const response = await net.fetch(url, {
@@ -124,6 +127,11 @@ async function rawFetch<T>(apiPath: string, opts: ApiFetchOptions): Promise<RawR
       body: body !== undefined ? JSON.stringify(body) : undefined,
       signal: controller?.signal,
     });
+    // 限流期限必须在**读响应体之前**从响应头取:响应体可能整个卡住(超时),那时这一跳
+    // 走的是下面的 catch,状态被归一成 0 —— 期限跟着一起丢掉,调用方就不知道服务端让它
+    // 等多久,只能按自己的节奏继续追问,把限流窗口越推越远。
+    const retryAt = response.status === 429 ? retryAfterDeadline(response) : undefined;
+    responseRetryAt = retryAt;
     let data: T | null = null;
     try {
       data = (await response.json()) as T;
@@ -139,8 +147,7 @@ async function rawFetch<T>(apiPath: string, opts: ApiFetchOptions): Promise<RawR
         opts.redactErrorDetails || opts.logLabel ? '[response details hidden]' : requestErrorMessage(error));
       data = null;
     }
-    return { ok: response.ok, status: response.status, data,
-      retryAt: response.status === 429 ? retryAfterDeadline(response) : undefined };
+    return { ok: response.ok, status: response.status, data, retryAt };
   } catch (err) {
     opts.signal?.throwIfAborted();
     if (opts.redactErrorDetails) {
@@ -152,7 +159,7 @@ async function rawFetch<T>(apiPath: string, opts: ApiFetchOptions): Promise<RawR
     } else {
       log.error('fetch failed', opts.logLabel ?? apiPath, requestErrorMessage(err));
     }
-    return { ok: false, status: 0, data: null };
+    return { ok: false, status: 0, data: null, retryAt: responseRetryAt };
   } finally {
     if (timeoutId !== null) clearTimeout(timeoutId);
     opts.signal?.removeEventListener('abort', abort);

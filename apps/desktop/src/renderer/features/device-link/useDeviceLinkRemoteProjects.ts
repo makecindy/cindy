@@ -483,6 +483,13 @@ export function useDeviceLinkRemoteProjects(
      * 没有它,每个挂载窗口都会在限流窗口里继续追问,延长限流并放大共享目录压力。
      */
     let directoryRetryDeadlineMs = 0;
+    /**
+     * 目录被**权威作废**(main 侧确认 401/403 后广播):此时不再按 5–60 秒的节奏一直追问。
+     * 每问一次都被服务端再拒一次、再广播一次作废,读永远拿不到结果,只是把请求放大 ——
+     * 而 relay 明明在线,看起来像「一直在转」。等真正的状态变化(relay 重连 / 重新登录)
+     * 再读一轮。
+     */
+    let directoryInvalidated = false;
     /** relay 在线时才跑 anti-entropy；初始状态未知时保守暂停，避免离线失败重试。 */
     let linkOnline: boolean | null = null;
     let directDataDevices = new Set<string>();
@@ -905,6 +912,8 @@ export function useDeviceLinkRemoteProjects(
             stopDirectoryRetry();
             // 新目录到手 = 服务端没有在限流,期限作废。
             directoryRetryDeadlineMs = 0;
+            // 目录又拿到了:上一轮的权威作废不再成立,退避可以重新开始。
+            directoryInvalidated = false;
           } else {
             // 仍然只有旧快照:按退避重读,直到目录恢复。
             scheduleDirectoryRetry();
@@ -912,6 +921,9 @@ export function useDeviceLinkRemoteProjects(
         })
         .catch((err) => {
           log.debug('listDevices reseed failed', err);
+          // 目录被权威作废后不再追问(main 侧会广播 onDeviceDirectoryInvalidated):
+          // 每次追问都会被再拒一次、再广播一次,读永远拿不到结果。
+          if (directoryInvalidated) return;
           scheduleDirectoryRetry();
         });
     };
@@ -1213,16 +1225,34 @@ export function useDeviceLinkRemoteProjects(
           // 账号边界:上一个账号的限流期限不该被下一个账号继承(main 侧按 owner 记期限,
           // 渲染侧同理)。否则新账号的第一次目录读失败时,退避会一直等到旧期限。
           directoryRetryDeadlineMs = 0;
+          // 作废标记同样归账号边界:换账号后目录要重新读,不能带着上一轮的「已作废」。
+          directoryInvalidated = false;
           for (const deviceId of revokedDevicesStore.getSnapshot()) {
             if (!isSharedTaskPeer(deviceId)) revokedDevicesStore.clearRevoked(deviceId);
           }
         }
         return;
       }
-      if (wasOnline) return;
+      if (wasOnline) {
+        // 目录曾被权威作废:状态事件说明 relay 侧动过了(重连 / 重新登录),再读一轮 ——
+        // 还是被拒就再等下一次事件,不再自己按 5–60 秒的节奏追问。
+        if (directoryInvalidated) {
+          directoryInvalidated = false;
+          reseed();
+        }
+        return;
+      }
       clearConnectingGrace();
       for (const [deviceId, name] of eligible) void subscribeAndBootstrap(deviceId, name);
       reseed();
+    });
+
+    // 目录被权威作废(main 侧确认 401/403):停掉目录重读,别再对着被拒的目录追问。
+    const offDirectoryInvalidated = window.electronAPI.deviceLink.onDeviceDirectoryInvalidated?.(() => {
+      directoryInvalidated = true;
+      stopDirectoryRetry();
+      // 上一轮的限流期限一并作废:下一次读按新的节奏来。
+      directoryRetryDeadlineMs = 0;
     });
 
     // 控制端:被某被控端撤销访问权限(收到其 link-close('revoked'))→ 立即移除 + 标记已撤销。
@@ -1322,6 +1352,7 @@ export function useDeviceLinkRemoteProjects(
       offPresence();
       offRemotePush();
       offStatus();
+      offDirectoryInvalidated?.();
       offAccessRevoked();
       offPeerReset?.();
       offControlTarget();
