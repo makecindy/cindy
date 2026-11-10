@@ -652,11 +652,20 @@ describe('readUsageHistoryWith', () => {
       }),
     );
 
+    const projectedAmount = DEFAULT_USAGE_CURRENCY === 'CNY'
+      ? stored.amount * USD_TO_CNY_FIXED_RATE : 0;
     expect(result.estimatesPending).toBe(false);
-    expect(result.models[0].estimatedMoney).toBeNull();
+    if (DEFAULT_USAGE_CURRENCY === 'CNY') {
+      // 保留历史估值的换算结果，不能按上面的当前参考价重新计价。
+      expect(result.models[0].estimatedMoney).toMatchObject({
+        amount: projectedAmount, currency: 'CNY', kind: 'value-estimate',
+      });
+    } else {
+      expect(result.models[0].estimatedMoney).toBeNull();
+    }
     expect(result.modelDaily[0]).toMatchObject({
       subscriptionEstimateMoney: {
-        amount: 0,
+        amount: projectedAmount,
         currency: DEFAULT_USAGE_CURRENCY,
         kind: 'value-estimate',
       },
