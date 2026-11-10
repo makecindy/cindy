@@ -1355,26 +1355,31 @@ export class DiscordIM extends BaseIM implements ChannelIM {
    * 都复核白名单与连接代次（缓存命中走发消息时记下的复核函数，未命中按取到的频道自身判定，await 之后再复核）。
    * `cleanup` 只用于撤掉机器人自己发出的占位 / 过期卡片：撤销白名单后也允许删除，但不允许改内容。
    */
-  private async fetchMessage(messageId: string, opts: { cleanup?: boolean } = {}): Promise<FetchedMessage> {
+  private async fetchMessage(messageId: string, opts: { cleanup?: boolean } = {}): Promise<Pick<FetchedMessage, 'edit' | 'delete'>> {
     const cached = this.messageCache.get(messageId);
+    let message: FetchedMessage;
+    let assertCurrent: () => void;
     if (cached) {
-      if (!opts.cleanup) cached.assertCurrent();
-      return cached.message;
+      message = cached.message;
+      assertCurrent = cached.assertCurrent;
+    } else {
+      const identity = this.captureIdentityGuard();
+      const { channelId, messageId: nativeMessageId } = decodeMessageId(messageId);
+      const channel = await this.fetchChannel(channelId);
+      assertCurrent = () => {
+        identity();
+        this.assertFetchedChannelAdmitted(channel);
+      };
+      if (!opts.cleanup) assertCurrent();
+      message = await channel.messages.fetch(nativeMessageId);
     }
-    // 缓存没命中：本次操作开始时的 bot 身份在每个 await 之后都要复核，取频道 / 取消息在途换了 bot 就不再返回旧对象。
-    const identity = this.captureIdentityGuard();
-    const { channelId, messageId: nativeMessageId } = decodeMessageId(messageId);
-    const channel = await this.fetchChannel(channelId);
-    if (!opts.cleanup) {
-      identity();
-      this.assertFetchedChannelAdmitted(channel);
-    }
-    const message = await channel.messages.fetch(nativeMessageId);
-    if (!opts.cleanup) {
-      identity();
-      this.assertFetchedChannelAdmitted(channel);
-    }
-    return message;
+    if (opts.cleanup) return message;
+    assertCurrent();
+    return {
+      // 调用方 await 返回后仍可能撤权或换身份，复核必须紧邻真正的编辑 I/O。
+      edit: (payload) => { assertCurrent(); return message.edit(payload); },
+      delete: () => message.delete(),
+    };
   }
 
   private async uploadImages(messageId: string, absPaths: string[], assertCurrent?: () => void): Promise<void> {

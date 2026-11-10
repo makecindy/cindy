@@ -70,6 +70,7 @@ export function useDiscordChannelAccess(
   const saveFailed = useRef(false);
   const saveQueue = useRef<Promise<void>>(Promise.resolve());
   const loadVersion = useRef(0);
+  const mutationRevision = useRef(0);
   const mounted = useRef(true);
   const sourceRef = useRef(source);
   sourceRef.current = source;
@@ -102,6 +103,7 @@ export function useDiscordChannelAccess(
   const load = useCallback(async () => {
     const version = ++loadVersion.current;
     const owner = getDataOwnerGeneration();
+    const revision = mutationRevision.current;
     setLoading(true);
     try {
       const loaded = await sourceRef.current.load();
@@ -110,7 +112,8 @@ export function useDiscordChannelAccess(
         return;
       setGuilds(loaded.guilds);
       setOnline(loaded.online !== false);
-      if (pendingWrites.current === 0) {
+      // 请求发出后的保存即使已经结束，旧快照也不能再作为编辑基准。
+      if (pendingWrites.current === 0 && revision === mutationRevision.current) {
         desiredRef.current = loaded.access;
         setAccess(loaded.access);
       }
@@ -156,6 +159,7 @@ export function useDiscordChannelAccess(
   }, [active, load, sourceKey]);
 
   const enqueueSave = useCallback((next: DiscordChannelAccess) => {
+    mutationRevision.current += 1;
     desiredRef.current = next;
     setAccess(next);
     setError(null);
