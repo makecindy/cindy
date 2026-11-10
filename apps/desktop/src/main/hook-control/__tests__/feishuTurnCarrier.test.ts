@@ -48,6 +48,7 @@ function harness() {
   };
   return {
     carrier,
+    router,
     sent,
     elements,
     reply(result: Partial<MessageOpResultPayload> & { ok: boolean }, index = sent.length - 1): void {
@@ -115,6 +116,30 @@ describe('官方飞书 / Lark 轮次载体(msg.op)', () => {
     h.reply({ ok: true, messageId: 'om_card' });
     await expect(published).resolves.toBe(true);
     expect(h.sent).toHaveLength(3);
+  });
+
+  // 规则: 回执未知的建卡必须原样重发(同 opId 同内容), 否则服务端按内容指纹拒为
+  // IDEMPOTENCY_CONFLICT(评审 #9746 greptile)。入口: update → msg.op; 官方 Telegram 载体已有同款
+  // 用例, 飞书载体此前没有。最小输入: 首帧回执丢失后再来一帧不同内容; unit, 假定时器。
+  it('建卡回执未知后原样重发同一 opId 与卡片, 再补一次更新到最新内容', async () => {
+    const h = harness();
+    h.carrier.update('进度 A');
+    await advance(THROTTLE_MS);
+    expect(h.sent).toHaveLength(1);
+    h.router.failAll();
+    await flushMicrotasks();
+
+    h.carrier.update('进度 B');
+    await advance(THROTTLE_MS);
+    expect(h.sent).toHaveLength(2);
+    expect(h.sent[1]!.payload.opId).toBe(h.sent[0]!.payload.opId);
+    expect(h.sent[1]!.payload.action).toEqual(h.sent[0]!.payload.action);
+    h.reply({ ok: true, messageId: 'om_card' });
+    await flushMicrotasks();
+
+    expect(h.sent).toHaveLength(3);
+    expect(h.sent[2]!.payload.action).toMatchObject({ kind: 'edit', messageId: 'om_card' });
+    expect(h.elements(2)).toEqual([{ tag: 'markdown', content: '进度 B' }]);
   });
 
   it('长回复按卡片分条依次发布, 全部确认才算完整', async () => {

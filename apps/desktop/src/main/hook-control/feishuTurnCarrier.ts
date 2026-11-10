@@ -83,6 +83,12 @@ export function createOfficialFeishuTurnCarrier(
   let turnStopped = false;
   let progressSendSeq = 0;
   let progressEditSeq = 0;
+  /**
+   * 回执未知的进度卡首个 send。服务端按 opId + 内容指纹去重, 所以下一次 send 必须**原样**
+   * 重发它(同 opId 同卡片)对账: 沿用 opId 换内容会被拒为 IDEMPOTENCY_CONFLICT, 换 opId 又
+   * 可能多建一张。
+   */
+  let unresolvedProgressSend: { opId: string; action: MessageOpAction } | null = null;
   /** 每张终稿卡片的 opId 序号: 只在拿到明确失败后换号。 */
   const finalAttempt = new Map<number, number>();
   const abort = new AbortController();
@@ -149,19 +155,30 @@ export function createOfficialFeishuTurnCarrier(
     throw new FeishuMsgOpError(`feishu ${what} returned no messageId`);
   };
 
-  async function progressOp(action: MessageOpAction): Promise<MessageOpResultPayload> {
-    // 建卡在拿到定案回执前沿用同一个 opId: 回执未知时下一帧用它对账, 不换号多建一张。
-    const opId =
-      action.kind === 'send'
-        ? `${requestId}${TELEGRAM_OP_MARKER.progress}send:${progressSendSeq}`
-        : `${requestId}${TELEGRAM_OP_MARKER.progress}edit:${++progressEditSeq}`;
+  async function progressOp(requested: MessageOpAction): Promise<MessageOpResultPayload> {
+    let opId: string;
+    let action = requested;
+    if (requested.kind === 'send') {
+      if (unresolvedProgressSend !== null) {
+        ({ opId, action } = unresolvedProgressSend);
+      } else {
+        opId = `${requestId}${TELEGRAM_OP_MARKER.progress}send:${progressSendSeq}`;
+        unresolvedProgressSend = { opId, action };
+      }
+    } else {
+      opId = `${requestId}${TELEGRAM_OP_MARKER.progress}edit:${++progressEditSeq}`;
+    }
     const result = await request(opId, 'turn-progress', action);
+    // 回执未知: send 保持 unresolvedProgressSend, 下一帧原样重发对账。
     if (isMsgOpOutcomeUnknown(result)) {
       throw new FeishuMsgOpError(`feishu msg.op ${opId} outcome unknown`);
     }
     const settled = result!;
+    if (action.kind === 'send') {
+      unresolvedProgressSend = null;
+      if (!settled.ok) progressSendSeq += 1;
+    }
     if (settled.ok) return settled;
-    if (action.kind === 'send') progressSendSeq += 1;
     throw failed(settled);
   }
 
@@ -205,8 +222,16 @@ export function createOfficialFeishuTurnCarrier(
   const streamingDeps: FeishuStreamingDeps = {
     isCurrent: isLive,
     async createCard(card) {
-      const result = await progressOp({ kind: 'send', text: JSON.stringify(card) });
-      return messageIdOf(result, 'progress card');
+      const text = JSON.stringify(card);
+      const pending = unresolvedProgressSend?.action;
+      // 对账重发的是更早那一帧: 拿到消息号后补一次更新到这一帧, 失败交给下一帧。
+      const replayedOlderFrame = pending?.kind === 'send' && pending.text !== text;
+      const result = await progressOp({ kind: 'send', text });
+      const messageId = messageIdOf(result, 'progress card');
+      if (replayedOlderFrame) {
+        await progressOp({ kind: 'edit', messageId, text }).catch(() => undefined);
+      }
+      return messageId;
     },
     async updateCard(messageId, card) {
       await progressOp({ kind: 'edit', messageId, text: JSON.stringify(card) });

@@ -132,17 +132,31 @@ interface Cut {
 /** 在第 k 行行首下刀(k ≥ 1): 前 k 行成段, 其余留给下一段。 */
 function cutAtLine(text: string, lines: readonly LineInfo[], k: number): Cut {
   const line = lines[k];
-  let chunk = text.slice(0, line.start).replace(/\s+$/, '');
+  const before = text.slice(0, line.start);
   let rest = text.slice(line.start);
   if (line.fenceBefore) {
-    chunk = `${chunk}\n${line.fenceBefore.marker}`;
-    rest = `${line.fenceBefore.opener}\n${rest}`;
-  } else if (line.tableHead) {
+    // 代码块里的空白是内容(Python 三引号、heredoc、文本样例的行尾空格与空行都要原样保留):
+    // 只去掉分隔上一行与本行的那个换行, 再接上收尾围栏。
+    const head = before.endsWith('\n') ? before.slice(0, -1) : before;
+    return {
+      chunk: `${head}\n${line.fenceBefore.marker}`,
+      rest: `${line.fenceBefore.opener}\n${rest}`,
+    };
+  }
+  const chunk = before.replace(/\s+$/, '');
+  if (line.tableHead) {
     rest = `${line.tableHead.header}\n${line.tableHead.separator}\n${rest}`;
   } else {
     rest = rest.replace(/^(?:[ \t]*\n)+/, '');
   }
   return { chunk, rest };
+}
+
+/** text[from, to) 里的竖线个数。 */
+function countPipes(text: string, from: number, to: number): number {
+  let count = 0;
+  for (let i = from; i < to; i++) if (text.charCodeAt(i) === 0x7c) count += 1;
+  return count;
 }
 
 /** 在字符偏移 p 处下刀(单行超限的兜底), 不拆代理对。 */
@@ -156,11 +170,31 @@ function cutAtChar(text: string, lines: readonly LineInfo[], p: number): Cut {
     owner = line;
   }
   const fence = owner.fenceBefore;
-  const chunk = text.slice(0, at);
-  const rest = text.slice(at);
-  return fence
-    ? { chunk: `${chunk}\n${fence.marker}`, rest: `${fence.opener}\n${rest}` }
-    : { chunk, rest };
+  if (fence) {
+    const chunk = text.slice(0, at);
+    // 落在行首时 chunk 已以换行结尾, 它就是收尾围栏前的行分隔, 不再多加一个(否则多出一行空行)。
+    return {
+      chunk: `${chunk}${chunk.endsWith('\n') ? '' : '\n'}${fence.marker}`,
+      rest: `${fence.opener}\n${text.slice(at)}`,
+    };
+  }
+  const table = owner.tableHead;
+  if (table) {
+    // 表格里的一行就超过一张卡: 后面的卡片带上表头, 不丢列结构; 能切在单元格边界就不切断单元格。
+    if (at === owner.start) {
+      return {
+        chunk: text.slice(0, at).replace(/\s+$/, ''),
+        rest: `${table.header}\n${table.separator}\n${text.slice(at)}`,
+      };
+    }
+    const pipe = text.lastIndexOf('|', at - 1);
+    const cellEnd = pipe > owner.start && countPipes(text, owner.start, pipe + 1) >= 2 ? pipe + 1 : at;
+    return {
+      chunk: text.slice(0, cellEnd),
+      rest: `${table.header}\n${table.separator}\n|${text.slice(cellEnd)}`,
+    };
+  }
+  return { chunk: text.slice(0, at), rest: text.slice(at) };
 }
 
 /**

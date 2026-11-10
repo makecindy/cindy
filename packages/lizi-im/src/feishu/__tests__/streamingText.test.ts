@@ -159,6 +159,46 @@ describe('feishu streaming text', () => {
     expect(mocks.sendText).not.toHaveBeenCalled();
   });
 
+  // Rule: splitting must not change what the reader receives. Review #9746 (codex P2): the splitter
+  // trimmed trailing spaces and blank lines at a cut inside a code block, so Python triple-quoted
+  // strings, heredocs and text samples came back different. Production entry: finalize.
+  // Minimal failing input: one code block whose lines end in two spaces and include blank lines,
+  // longer than a card; unit tier.
+  it('keeps trailing spaces and blank lines of a code block that is split across cards', async () => {
+    const handle = await start('ou_owner');
+    const codeLines = Array.from({ length: 1500 }, (_, i) => (i % 7 === 3 ? '' : `const line${i} = "代码行";  `));
+    await handle.finalize(['```py', ...codeLines, '```'].join('\n'));
+
+    const cards = deliveredCards();
+    expect(cards.length).toBeGreaterThan(1);
+    const received = cards.flatMap((card) => {
+      const body = cardElements(card).find((element) => element.tag === 'markdown')?.content ?? '';
+      return body.split('\n').slice(1, -1);
+    });
+    expect(received).toEqual(codeLines);
+  });
+
+  // Review #9746 (greptile P2): a single table row longer than a card was cut by characters without
+  // its header, so later cards began mid-cell with no columns. Production entry: finalize.
+  // Minimal failing input: a header, a separator and one row whose first cell exceeds 30 KB; unit tier.
+  it('keeps the table header on every card when one row alone exceeds a card', async () => {
+    const handle = await start('ou_owner');
+    const header = '| 列一 | 列二 |';
+    const separator = '| --- | --- |';
+    await handle.finalize([header, separator, `| ${'很长的内容'.repeat(5000)} | 第二列 |`].join('\n'));
+
+    const cards = deliveredCards();
+    expect(cards.length).toBeGreaterThan(2);
+    const bodies = cards.map((card) => cardElements(card).find((element) => element.tag === 'markdown')?.content ?? '');
+    for (const [index, card] of cards.entries()) {
+      expect(requestBytes(card)).toBeLessThanOrEqual(FEISHU_CARD_REQUEST_MAX_BYTES);
+      expect(bodies[index].split('\n').slice(0, 2)).toEqual([header, separator]);
+    }
+    // Nothing of the long cell or the second column is lost.
+    expect(bodies.join('').split('很').length - 1).toBe(5000);
+    expect(bodies.at(-1)).toContain('第二列');
+  });
+
   // Rule: a later card that cannot be sent stops the sequence with one visible notice;
   // the remaining parts are not posted after a gap. Unit tier; no earlier coverage.
   it('stops with a notice when a following card cannot be sent', async () => {
