@@ -16,6 +16,19 @@ vi.mock('expo-modules-core', () => ({
   requireNativeViewManager: () => () => null,
 }));
 vi.mock('@/session/NativeVideoPlayer', () => ({ NativeVideoPlayer: () => null }));
+// Assertions read English copy. Keep the real i18n initializer and English catalog
+// without collecting the eleven unused locale catalogs (most of this file's import time).
+vi.mock('@/i18n/locales/es', () => ({ default: {} }));
+vi.mock('@/i18n/locales/fr', () => ({ default: {} }));
+vi.mock('@/i18n/locales/de', () => ({ default: {} }));
+vi.mock('@/i18n/locales/pt-PT', () => ({ default: {} }));
+vi.mock('@/i18n/locales/pt-BR', () => ({ default: {} }));
+vi.mock('@/i18n/locales/zh-Hant-x-lzh', () => ({ default: {} }));
+vi.mock('@/i18n/locales/zh-Hans-x-lzh', () => ({ default: {} }));
+vi.mock('@/i18n/locales/zh-CN', () => ({ default: {} }));
+vi.mock('@/i18n/locales/zh-TW', () => ({ default: {} }));
+vi.mock('@/i18n/locales/ja', () => ({ default: {} }));
+vi.mock('@/i18n/locales/ko', () => ({ default: {} }));
 
 // Keep the real group attachment, AttachmentStrip, MediaPreview and LegendList hooks.
 // Only native surfaces and unrelated viewers are replaced for Node rendering.
@@ -117,6 +130,22 @@ vi.mock('@/session/AuthorizationMessageCard', () => ({ AuthorizationMessageCard:
 vi.mock('@/session/CompanionMessageActions', () => ({ CompanionMessageActions: () => null }));
 vi.mock('@/session/CompanionMessageCard', () => ({ CompanionMessageCard: () => null }));
 vi.mock('@/session/PendingSendBubble', () => ({ PendingSendBubble: () => null }));
+// Stores and cards these attachment/Markdown bodies never reach; real imports dominate collection.
+vi.mock('@/session/remoteSessionStore', () => ({
+  useRemoteDeviceIdentity: () => null, useRemoteSessionMessages: () => [], useRemoteSessionTitles: () => undefined,
+}));
+vi.mock('@/device-link/remoteStatus', () => ({ describeAgentAuthError: () => null }));
+vi.mock('@/plugins/PluginCardActions', () => ({ PluginCardActions: () => null }));
+vi.mock('@/session/sessionOutbox', () => ({ outboxItemAttachments: () => [] }));
+// The package barrel re-exports ~70 transport modules. Keep the production helpers these
+// attachment and Markdown paths call, loaded from their dependency-light source files.
+vi.mock('@cindy/device-link', async () => ({
+  ...await import('../../../../packages/device-link/src/attachmentOssRef'),
+  ...await import('../../../../packages/device-link/src/peerAttachment'),
+  ...await import('../../../../packages/device-link/src/sharedTaskPeer'),
+  ...await import('../../../../packages/device-link/src/filePeer'),
+  ...await import('../../../../packages/device-link/src/fileTransferPolicy'),
+}));
 vi.mock('@/session/messageActions', async (original) => ({ ...await original<object>(), copyMessageText: vi.fn(), writeClipboardText: vi.fn() }));
 
 import { BotGroupMessageAttachments, botGroupAttachmentRuns } from '@/session/BotGroupMessageAttachments';
