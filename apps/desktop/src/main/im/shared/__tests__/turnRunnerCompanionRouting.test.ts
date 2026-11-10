@@ -598,3 +598,52 @@ describe('turnRunner: connection handed to a companion bot', () => {
     expect(harnesses.get('desktop-sess-1')!.send).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('turnRunner: project-resource drift recycle before IM dispatch', () => {
+  it('rebuilds the runtime from the DB row and dispatches on the rebuilt instance', async () => {
+    // 回归(MagicLizi P1):IM 直发的「漂移回收 → 按 DB 行重建 → 换实例投递」分支
+    // 此前零测试覆盖,是三个 P1 修复(e39f100091/2a35bd8f31/fe45afa803)的共同落点。
+    const original = makeSessionHarness('mimi-main');
+    const rebuilt = makeSessionHarness('mimi-main-rebuilt');
+    let recycleCalledWith: string | undefined;
+    let createCalls = 0;
+    // rebuilt 只在回收窗口之后对 getSession 可见:漂移检查前的 agent-switch 复核
+    // 也读 getSession,提前暴露会让它抢先把 rebuilt 绑进 state(时序失真)。
+    let rebuiltLive = false;
+    mocks.getMaker.mockImplementation(() => ({
+      getSession: vi.fn((id: string) => (rebuiltLive && id === 'mimi-main' ? rebuilt.session : original.session)),
+      on: vi.fn(() => () => undefined),
+      createSession: vi.fn(async () => {
+        createCalls += 1;
+        return createCalls === 1 ? original.session : rebuilt.session;
+      }),
+      recyclePiRuntimeIfResourcesDrifted: vi.fn(async (id: string) => {
+        recycleCalledWith = id;
+        rebuiltLive = true;
+        return true;
+      }),
+    }));
+    // 重建按 DB 行走:refreshSessionAfterPendingAgentSwitch 读 sessions 表。
+    mocks.dbSelect.mockImplementation(() => ({
+      from: () => ({
+        where: () => ({
+          limit: async () => [{ ...botRows.get('mimi-main'), status: 'active' }],
+        }),
+      }),
+    }));
+    runner = createTurnRunner(fakeAdapter, fakeRepo, fakeCards, {
+      companion: companion as unknown as ImCompanionRouteDeps,
+      acquirePendingAgentSwitch,
+    });
+
+    await runTurn(OWNER);
+
+    // 实现传的是 session 实例(不是 id):必须是回收前的旧实例。
+    expect((recycleCalledWith as { id: string } | undefined)?.id).toBe('mimi-main');
+    // 旧实例已关闭:投递必须落在重建实例上,而不是把真实原因换成「会话已关闭」。
+    expect(original.send).not.toHaveBeenCalled();
+    expect(rebuilt.send).toHaveBeenCalledTimes(1);
+    // 换实例必须重接广播/落库链路(wireSessionToIpcExternal 按 Session 实例幂等)。
+    expect(mocks.wireSessionToIpcExternal).toHaveBeenCalledWith(rebuilt.session);
+  });
+});
