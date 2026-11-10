@@ -39,7 +39,9 @@ it('keeps legacy appearance writes within the newly approved field list', async 
   await expect(binding.callHostTool!('cindy.ui.app-icon', { icon: 'cat' }, signal)).rejects.toThrow('FIELD_NOT_DECLARED');
   expect(boundary.setAppearance).not.toHaveBeenCalled();
   await binding.callHostTool!('cindy.ui.appearance', { patch: { uiSize: 18 } }, signal);
-  expect(boundary.setAppearance).toHaveBeenCalledExactlyOnceWith({ uiSize: 18 });
+  expect(boundary.setAppearance).toHaveBeenCalledExactlyOnceWith({ uiSize: 18 }, {
+    ifRevision: undefined, assertCurrent: expect.any(Function),
+  });
 });
 afterEach(() => { releasePluginUiRegions('plugin'); vi.restoreAllMocks(); });
 

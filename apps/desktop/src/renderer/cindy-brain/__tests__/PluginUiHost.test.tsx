@@ -15,6 +15,15 @@ vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => k
 import { PluginUiHost } from '../PluginUiHost';
 import { InteractionPromptHost } from '@/components/interaction-portal/InteractionPromptHost';
 import { setSlotElement } from '@/components/interaction-portal/store';
+import { McpAppPermissionPrompt } from '@/components/chat/McpAppPermissionPrompt';
+import { isPluginUiElementVisible } from '../pluginUiVisibility';
+const appPermission = vi.hoisted(() => ({ respond: vi.fn(), snapshot: { pendingAppPermissions: [{
+  requestId: 'app-approval', toolName: 'save', input: {},
+  mcpApp: { clientId: 'app', title: 'Example', serverId: 'plugin', scope: 'view' },
+}] } }));
+vi.mock('@/lib/makerChatStore', () => ({ makerChatStore: {
+  subscribe: () => () => {}, getSnapshot: () => appPermission.snapshot, respondToPermission: appPermission.respond,
+} }));
 
 // 生产入口：实际 PluginUiHost、草稿 store 和原输入调度器，仅替换窗口 IPC。
 // PR review：120ms 未落库的键入会被追加或旧 revision 覆盖；旧 Host 测试只覆盖 Main。
@@ -77,6 +86,18 @@ it('keeps approval prompts inline when their preferred tool region is hidden', a
     expect(slot.textContent).toBe('');
     expect(view.container.textContent).toBe('Approval required');
   } finally { await act(async () => setSlotElement(null)); slot.remove(); }
+});
+
+// PR #9496: workspace hiding retained generic prompts but hid the floating App
+// approval. The real prompt must remain visible and answer the original request. tier: unit.
+it('keeps floating MCP Apps approval visible when the workspace is hidden', async () => {
+  const view = render(<><PluginUiHost /><div data-plugin-ui-element="workspace"><McpAppPermissionPrompt sessionId="approval-task" floating /></div></>);
+  await act(async () => receive({ requestId: 'hide-workspace', ownerStamp: { dataOwnerId: 'owner', ownerGeneration: 1 },
+    kind: 'regions', values: { workspace: false, sidebar: true, header: true, messages: true, composer: true, tools: true, windowControls: true } }));
+  const prompt = view.getByRole('region', { name: 'mcpApps.awaitingApproval' });
+  expect(isPluginUiElementVisible(prompt)).toBe(true);
+  await act(async () => view.getByRole('button', { name: 'agentIsland.native.allowOnce' }).click());
+  expect(appPermission.respond).toHaveBeenCalledWith('approval-task', { behavior: 'allow' }, 'app-approval');
 });
 
 // 能力对齐：原版支持替换选区；完整草稿替换不能替代它。真实 Tiptap 编辑器验证文本边界，

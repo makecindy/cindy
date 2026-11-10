@@ -33,6 +33,7 @@ import {
   writeAppearanceSettingsPatch,
 } from './appearance-settings-store.js';
 import { applyDockIcon, applyPluginAppIconToWindow } from './app-icon.js';
+import { pluginAppearanceRevision } from './cindy-brain/pluginAppearanceRevision.js';
 
 export { writeAppearanceSettingsPatch } from './appearance-settings-store.js';
 
@@ -373,8 +374,16 @@ export function publishAppearanceFromOwner(settings: AppearanceSettings): void {
 }
 
 /** UI and Agent edits share validation, persistence, live windows and broadcasts. */
-export async function updateAppearanceFromSettings(rawPatch: unknown) {
-  const settings = await writeAppearanceSettingsPatch(parsePatch(rawPatch));
+export async function updateAppearanceFromSettings(rawPatch: unknown, options?: { ifRevision?: unknown; assertCurrent?(): void }) {
+  const patch = parsePatch(rawPatch);
+  const settings = options ? await updateAppearanceSettingsAtomic(() => {
+    options.assertCurrent?.();
+    if (options.ifRevision !== undefined) {
+      if (typeof options.ifRevision !== 'string' || !/^[a-f0-9]{64}$/.test(options.ifRevision)) throw new Error('MCP_APP_INVALID_REQUEST');
+      if (options.ifRevision !== pluginAppearanceRevision(readAppearanceSettings())) throw new Error('MCP_APP_APPEARANCE_CHANGED');
+    }
+    return patch;
+  }) : await writeAppearanceSettingsPatch(patch);
   applyAppearanceToWindows(settings);
   applyDockIcon(settings);
   broadcast(settings);

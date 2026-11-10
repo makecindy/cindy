@@ -186,7 +186,7 @@ export function bindPluginUiResource(caller: string, sessionId: string | null, i
               desktopVisibility: 'wallpaper', wallpaperBlur: 'wallpaper' };
             if (Object.keys(args.patch).some(key => !entry.host.appearance!.fields.includes(fields[key]))) throw new Error('FIELD_NOT_DECLARED');
           }
-          return result(await updateAppearanceFromSettings(args.patch));
+          return result(await updateAppearanceFromSettings(args.patch, { ifRevision: args.ifRevision, assertCurrent }));
         }
         case 'cindy.ui.app-icon': {
           if (args.resource !== undefined) {
@@ -197,7 +197,7 @@ export function bindPluginUiResource(caller: string, sessionId: string | null, i
           if (entry.host.appearance && !entry.host.appearance.fields.includes('appIcon')) throw new Error('FIELD_NOT_DECLARED');
           const { updateAppearanceFromSettings } = await import('../appearance-settings-ipc.js');
           assertCurrent(); signal.throwIfAborted();
-          return result(await updateAppearanceFromSettings({ appIcon: args.icon }));
+          return result(await updateAppearanceFromSettings({ appIcon: args.icon }, { ifRevision: args.ifRevision, assertCurrent }));
         }
         case 'cindy.ui.visibility': {
           const window = callerWindow(caller);

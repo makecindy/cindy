@@ -15,7 +15,9 @@ function fixture(fields = ['uiFont', 'reading', 'theme']) {
   let iconBytes: Buffer | null = null;
   let ready = true;
   const nativeIcons: Array<Buffer | null> = [];
-  const saveWallpaper = vi.fn<ConstructorParameters<typeof PluginAppearanceService>[0]['saveWallpaper']>(async () => ({ url: '' }));
+  const saveWallpaper = vi.fn<ConstructorParameters<typeof PluginAppearanceService>[0]['saveWallpaper']>(async (_bytes, options) => {
+    await options.commit(() => {}); return { url: '' };
+  });
   const rendererApply = vi.fn(() => apply());
   let apply: () => Promise<{ status: 'applied' | 'saved' | 'failed'; reason?: string }> = async () => ({ status: 'saved', reason: 'NO_VIEWING_WINDOW' });
   const createService = () => new PluginAppearanceService({ ready: () => ready, current: id => instance?.id === id ? instance : null,
@@ -77,7 +79,7 @@ describe('plugin appearance calls', () => {
     h.saveWallpaper.mockImplementation(async (_bytes, options) => {
       entered(); await lock;
       options.assertCurrent();
-      h.replace({ customWallpaperUrl: url('c') });
+      await options.commit(() => h.replace({ customWallpaperUrl: url('c') }));
       return { url: url('c') };
     });
     const pending = h.service.handle('example', { kind: 'set', ifRevision: expected,
@@ -88,6 +90,24 @@ describe('plugin appearance calls', () => {
     vi.mocked(appearanceResources.loadPluginAppearanceResource).mockRestore();
     expect(result).toMatchObject({ ok: false, error: { code: 'APPEARANCE_CHANGED' } });
     expect(h.get().customWallpaperUrl).toBe(url('b'));
+  });
+  it('rejects a newer appearance value before the prepared wallpaper reference is published', async () => {
+    const h = fixture(['wallpaper']);
+    const oldUrl = `cindy-media://client-wallpaper/${'a'.repeat(64)}.webp`;
+    h.replace({ wallpaperId: 'custom', customWallpaperUrl: oldUrl });
+    const expected = h.service.read('example').revision, publish = vi.fn();
+    vi.spyOn(appearanceResources, 'loadPluginAppearanceResource').mockResolvedValueOnce({
+      kind: 'image', bytes: Buffer.from('prepared'), mimeType: 'image/webp', hash: 'd'.repeat(64),
+    });
+    h.beforeUpdate(() => h.replace({ uiSize: 20 }));
+    h.saveWallpaper.mockImplementation(async (_bytes, options) => {
+      await options.commit(publish); return { url: oldUrl };
+    });
+    try {
+      expect(await h.service.handle('example', { kind: 'set', ifRevision: expected,
+        patch: { wallpaper: { resource: 'library:background.webp' } } })).toMatchObject({ ok: false, error: { code: 'APPEARANCE_CHANGED' } });
+      expect(publish).not.toHaveBeenCalled(); expect(h.get()).toMatchObject({ uiSize: 20, customWallpaperUrl: oldUrl });
+    } finally { vi.mocked(appearanceResources.loadPluginAppearanceResource).mockRestore(); }
   });
   it('applies and resets a runtime app icon without waiting for a viewing page', async () => {
     const h = fixture(['appIcon']);
@@ -147,11 +167,13 @@ describe('plugin appearance calls', () => {
     const h = fixture(), completions: Array<() => void> = [];
     h.setApply(() => new Promise(resolve => { completions.push(() => resolve({ status: 'applied' })); }));
     const first = h.service.handle('example', { kind: 'set', patch: { uiFont: { size: 16 } } });
+    // Keep both receipts in flight; an already superseded write need not reach a renderer.
+    await vi.waitFor(() => expect(completions).toHaveLength(1));
     const second = h.service.handle('example', { kind: 'set', patch: { reading: { maxWidth: 720 } } });
     expect(await h.service.handle('example', { kind: 'set', patch: { uiFont: { size: 22 } } }))
       .toMatchObject({ ok: false, error: { code: 'APPEARANCE_BUSY' } });
     expect(await h.service.handle('example', { kind: 'read' })).toMatchObject({ ok: true });
-    expect(completions).toHaveLength(2); completions.forEach(complete => complete());
+    await vi.waitFor(() => expect(completions).toHaveLength(2)); completions.forEach(complete => complete());
     await Promise.all([first, second]); expect(h.get().uiSize).toBe(16);
   });
   it('exposes only declared fields and rejects private or undeclared writes', async () => {

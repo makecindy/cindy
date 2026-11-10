@@ -91,17 +91,36 @@ export async function removeCustomWallpaper(): Promise<void> {
 /** Resource bytes have already passed the plugin ownership and media guards. */
 export async function savePluginWallpaper(bytes: Buffer, options: {
   fallback?: Buffer; pluginSource: PluginAppearanceSource; assertCurrent(): void;
+  commit(publish: () => void): Promise<void>;
 }): Promise<{ url: string; fallbackUrl?: string }> {
   return withClientWallpaperLock(async () => {
     options.assertCurrent();
     const media = await ingestClientWallpaper({ buffer: bytes, mimeType: sniffMediaMime(bytes) === 'video/mp4' ? 'video/mp4' : 'image/webp' });
+    const previous = customWallpaperStore.read();
+    let published = false;
     try {
       const fallback = options.fallback ? await ingestClientWallpaper({ buffer: options.fallback, mimeType: 'image/webp' }) : undefined;
       options.assertCurrent();
-      await customWallpaperStore.writePatchAtomic({ url: media.url, fallbackUrl: fallback?.url, pluginSource: options.pluginSource });
+      // The existing media lock serializes wallpaper writers. Publish synchronously
+      // inside the appearance owner's CAS, then recycle only after both files commit.
+      await options.commit(() => {
+        options.assertCurrent();
+        published = true;
+        customWallpaperStore.writePatch({ url: media.url, fallbackUrl: fallback?.url, pluginSource: options.pluginSource });
+      });
       await recycleUnusedWallpapers();
       return { url: media.url, ...(fallback ? { fallbackUrl: fallback.url } : {}) };
-    } catch (failure) { await recycleUnusedWallpapers(); throw failure; }
+    } catch (failure) {
+      if (published) {
+        try {
+          customWallpaperStore.writePatch({ ...previous, fallbackUrl: previous.fallbackUrl, pluginSource: previous.pluginSource });
+        } catch {
+          log.warn('Plugin wallpaper rollback failed; media cleanup deferred');
+          throw failure;
+        }
+      }
+      await recycleUnusedWallpapers(); throw failure;
+    }
   });
 }
 

@@ -128,7 +128,7 @@ export function refreshPluginApps(
     }
   }
   replacePluginAppServers(configs);
-  reconcilePluginAppearanceSources(instance => hostEntries.get(instance));
+  void reconcilePluginAppearanceSources(instance => hostEntries.get(instance), deps.available).catch(() => {});
   reconcilePluginUiRegions((instance, token) => {
     const entry = hostEntries.get(instance);
     return !!entry && `${entry.owner}:${entry.fingerprint}` === token && entry.host.capabilities?.includes('visibility') === true;

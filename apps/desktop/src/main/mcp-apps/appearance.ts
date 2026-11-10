@@ -7,6 +7,7 @@ import type { PluginAppearanceService } from '../cindy-brain/pluginAppearanceSer
 interface Source { host: GhostHostUi; ghost: { dir: string }; owner: string; fingerprint: string;
   config: { plugin?: { assertCurrent(sessionId?: string): void } } }
 let resolveSource: (instance: string) => Source | undefined = () => undefined;
+let sourcesAvailable: () => boolean = () => false;
 let files: PluginFileAccess | undefined;
 let service: PluginAppearanceService | undefined;
 let preparing: Promise<PluginAppearanceService> | undefined;
@@ -16,15 +17,29 @@ let restoreRequested = false;
 
 export function configurePluginAppearanceFiles(access: PluginFileAccess): PluginFileAccess {
   files = access;
-  if (restoreRequested) void restorePluginAppearanceIcon().catch(() => {});
+  void reconcileAppearance().catch(() => {});
   return access;
 }
 
 export function configurePluginAppearanceApply(next: typeof apply): void { apply = next; }
-export function reconcilePluginAppearanceSources(resolve: typeof resolveSource): void {
+export function reconcilePluginAppearanceSources(resolve: typeof resolveSource, available: () => boolean): Promise<void> {
   resolveSource = resolve;
-  if (service) void service.reconcile().catch(() => {});
-  else if (restoreRequested) void restorePluginAppearanceIcon().catch(() => {});
+  sourcesAvailable = available;
+  return reconcileAppearance();
+}
+
+async function reconcileAppearance(released?: string): Promise<void> {
+  if (service) await service.reconcile(released);
+  else if (files && sourcesAvailable()) {
+    // Only selected wallpaper metadata can require a service on cold startup.
+    // Registry refreshes never read or decode appearance media for an unused capability.
+    const { customWallpaperStore } = await import('../custom-wallpaper-settings.js');
+    if (!sourcesAvailable()) return;
+    const source = customWallpaperStore.read().pluginSource;
+    if (source && (!released || source.instanceId === released))
+      await (await getPluginAppearanceService()).reconcile(released);
+  }
+  if (restoreRequested) await restorePluginAppearanceIcon();
 }
 
 /** Heavy resource code is loaded only for selected appearance data or explicit calls. */
@@ -38,7 +53,7 @@ export async function getPluginAppearanceService(): Promise<PluginAppearanceServ
       import('../appearance-settings-ipc.js'), import('../custom-wallpaper.js'), import('../app-icon.js'),
     ]);
     service = new PluginAppearanceService({
-      ready: () => !!files,
+      ready: () => !!files && sourcesAvailable(),
       current(instance) {
         const source = resolveSource(instance);
         if (!source || !source.host.capabilities?.some(cap => cap === 'appearance' || cap === 'app-icon')) return null;
@@ -60,7 +75,7 @@ export async function getPluginAppearanceService(): Promise<PluginAppearanceServ
 
 export async function restorePluginAppearanceIcon(): Promise<void> {
   restoreRequested = true;
-  if (!files) return;
+  if (!files || !sourcesAvailable()) return;
   const { readAppearanceSettings } = await import('../appearance-settings-store.js');
   const resource = readAppearanceSettings().appIconResource;
   if (!resource || !resolveSource(resource.source.instanceId)) return;
@@ -69,7 +84,7 @@ export async function restorePluginAppearanceIcon(): Promise<void> {
 }
 
 export function releasePluginAppearance(instance: string): void {
-  if (service) void service.reconcile(instance).catch(() => {});
+  void reconcileAppearance(instance).catch(() => {});
 }
 
 export async function readSelectedPluginFont(role: string) {

@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { pluginAppearanceRevision as revision } from './pluginAppearanceRevision.js';
 import { parsePluginAppearancePatch, PLUGIN_APPEARANCE_FIELDS, type PluginAppearancePatch, type PluginAppearanceField, type PluginAppearanceResult, type PluginAppearanceSnapshot } from '@cindy/plugin-protocol/appearance';
 import type { GhostHostUi } from '@cindy/plugin-protocol';
 const pluginUiRecord = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value);
@@ -14,16 +14,13 @@ interface Dependencies {
   files: PluginFileAccess;
   read(): AppearanceSettings;
   update(updater: (current: AppearanceSettings) => AppearanceOverrides): Promise<AppearanceSettings>;
-  saveWallpaper(bytes: Buffer, options: { fallback?: Buffer; pluginSource: PluginAppearanceSource; assertCurrent(): void }): Promise<{ url: string; fallbackUrl?: string }>;
+  saveWallpaper(bytes: Buffer, options: { fallback?: Buffer; pluginSource: PluginAppearanceSource; assertCurrent(): void;
+    commit(publish: () => void): Promise<void> }): Promise<{ url: string; fallbackUrl?: string }>;
   revokeWallpaper(isCurrent: (source: PluginAppearanceSource) => boolean): Promise<boolean>;
   publish(settings: AppearanceSettings): void;
   apply(settings: AppearanceSettings): Promise<PluginAppearanceResult['application']>;
   applyAppIcon(bytes: Buffer | null): void;
 }
-const revision = (value: AppearanceSettings) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
-const scalarRevision = ({ customWallpaperUrl: _url, customWallpaperFallbackUrl: _fallback, ...settings }: AppearanceSettings) => {
-  void _url; void _fallback; return createHash('sha256').update(JSON.stringify(settings)).digest('hex');
-};
 const fontRoles = ['uiFont', 'codeFont', 'bodyFont'] as const;
 const iconIdentity = (resource: AppearanceSettings['appIconResource']) => resource &&
   JSON.stringify([resource.source.instanceId, resource.source.key, resource.reference, resource.hash]);
@@ -96,7 +93,6 @@ export class PluginAppearanceService {
     const { instance, fields, assertCurrent } = this.access(id, assertCaller);
     if (Object.keys(patch).some(field => !fields.includes(field as PluginAppearanceField))) throw new Error('FIELD_NOT_DECLARED');
     this.assertRevision(expected);
-    const expectedScalars = scalarRevision(this.deps.read());
     const source = { instanceId: id, key: instance.key };
     const resourceSource = { instanceId: id, ghost: instance, files: this.deps.files, assertCurrent };
     const assets: Partial<Record<typeof fontRoles[number], PluginFontResource>> = {};
@@ -111,13 +107,10 @@ export class PluginAppearanceService {
     if (patch.wallpaper?.fallbackResource) fallback = (await loadPluginAppearanceResource(resourceSource, patch.wallpaper.fallbackResource, 'image')).bytes;
     const icon = patch.appIcon ? await loadPluginAppearanceResource(resourceSource, patch.appIcon.resource, 'icon') : undefined;
     assertCurrent(); this.assertRevision(expected);
-    const media = wallpaper ? await this.deps.saveWallpaper(wallpaper.bytes, { fallback, pluginSource: source,
-      assertCurrent: () => { assertCurrent(); this.assertRevision(expected); } }) : undefined;
-    const settings = await this.deps.update(current => {
+    let settings!: AppearanceSettings;
+    const commit = async (publishWallpaper?: () => void) => { settings = await this.deps.update(current => {
       assertCurrent();
-      const latest = this.deps.read();
-      if (expected && (media ? scalarRevision(latest) !== expectedScalars : revision(latest) !== expected)) throw new Error('APPEARANCE_CHANGED');
-      if (media && (latest.customWallpaperUrl !== media.url || latest.customWallpaperFallbackUrl !== media.fallbackUrl)) throw new Error('APPEARANCE_CHANGED');
+      this.assertRevision(expected);
       const next: AppearanceOverrides = {};
       if (icon && patch.appIcon) next.appIconResource = { source, reference: patch.appIcon.resource, hash: icon.hash };
       for (const role of fontRoles) {
@@ -147,8 +140,12 @@ export class PluginAppearanceService {
         if (patch.wallpaper.blur !== undefined) next.wallpaperBlur = patch.wallpaper.blur;
         if (patch.wallpaper.motion !== undefined) next.wallpaperMotion = patch.wallpaper.motion;
       }
+      publishWallpaper?.();
       return next;
-    });
+    }); };
+    if (wallpaper) await this.deps.saveWallpaper(wallpaper.bytes, { fallback, pluginSource: source,
+      assertCurrent: () => { assertCurrent(); this.assertRevision(expected); }, commit });
+    else await commit();
     return this.finish(id, settings, assertCurrent, Object.keys(patch), icon);
   }
 
@@ -182,6 +179,9 @@ export class PluginAppearanceService {
 
   private async finish(id: string, settings: AppearanceSettings, assertCurrent: () => void,
     fields: readonly string[], icon?: LoadedPluginAppearanceResource): Promise<PluginAppearanceResult> {
+    assertCurrent();
+    if (revision(this.deps.read()) !== revision(settings))
+      return { ...this.read(id, assertCurrent), application: { status: 'saved', reason: 'SUPERSEDED' } };
     this.deps.publish(settings);
     const native = fields.includes('appIcon') ? await this.applyIcon(settings, icon)
       .catch(() => ({ status: 'failed' as const, reason: 'APP_ICON_APPLICATION_FAILED' })) : undefined;
