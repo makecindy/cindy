@@ -3380,3 +3380,22 @@ it('does not borrow a provider adapter for a future generation on an unrelated r
   expect(result.providers[0]?.models[0].compat).not.toHaveProperty('supportsMidConvoEffort');
   expect(result.providers[0]?.models[0].compat).toMatchObject({ forceAdaptiveThinking: true });
 });
+
+// #9630 review, unit: the saved preset survives URL edits, while an official
+// /v1 input is normalized by the native host before the SDK sends a request.
+it.each([
+  { id: 'claude-opus-5', baseUrl: 'https://relay.example', catalogPresetId: 'anthropic-api', enabled: false },
+  { id: 'claude-opus-5-5', baseUrl: 'https://relay.example', catalogPresetId: 'anthropic-api', enabled: false },
+  { id: 'claude-opus-5', baseUrl: 'https://api.anthropic.com/v1', enabled: true },
+  { id: 'claude-opus-5-5', baseUrl: 'https://api.anthropic.com/v1', enabled: true },
+])('uses the effective Anthropic endpoint for $id at $baseUrl', ({ id, baseUrl, catalogPresetId, enabled }) => {
+  const result = buildPiNativeProvidersFromConfigs([{ id: 'anthropic-boundary', name: 'Anthropic boundary',
+    auth: { method: 'apiKey' }, runtimes: { pi: { baseUrl, catalogPresetId,
+      wireProtocol: 'anthropic-messages', models: [{ id, api: 'anthropic-messages' }] } } }], () => 'fixture-key');
+  const model = result.providers[0]?.models[0];
+  expect(model?.compat).toMatchObject({ forceAdaptiveThinking: true });
+  if (enabled) {
+    expect(model?.baseUrl).toBe('https://api.anthropic.com');
+    expect(model?.compat).toMatchObject({ supportsMidConvoEffort: true });
+  } else expect(model?.compat).not.toHaveProperty('supportsMidConvoEffort');
+});

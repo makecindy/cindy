@@ -31,7 +31,7 @@ import { PiAgent } from '../index.js';
 import { ANSWER_DELIVERY_PROMPT, PI_ANSWER_DELIVERY_PROMPT } from '@cindy/maker-shared/rich-answer-guide';
 import { PiRpcProcess } from '../rpc-client.js';
 import * as sessionJsonlScan from '../session-jsonl-scan.js';
-import { providerCatalogForPi, providerModelGenerationRecord, BUNDLED_CATALOG } from '@cindy/model-providers';
+import { providerCatalogForPi, providerModelGenerationRecord, providerPresetModelRecord, BUNDLED_CATALOG } from '@cindy/model-providers';
 import { TurnPermissionPolicyUnsupportedError, type AgentDeps, type AgentSessionHandle } from '../../base-agent.js';
 import type { AgentEvent } from '../../../types/events.js';
 import type { Logger } from '../../../interfaces/logger.js';
@@ -2245,15 +2245,20 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
     ['claude-fable-5-1', 'relay'],
     ['claude-fable-5-2', 'relay'],
     ['claude-sonnet-5-5', 'relay'],
+    ['claude-opus-5', 'preset-relay'],
+    ['claude-opus-5-5', 'preset-relay'],
     ['claude-opus-5-5', 'official'],
     ['claude-opus-5-5', 'explicit'],
   ] as const)('Anthropic effort boundary: %s (%s)', { timeout: 30_000 }, async (id, source) => {
     const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-anthropic-effort-'));
-    const row = providerModelGenerationRecord(id,
-      source === 'official' ? 'https://api.anthropic.com' : endpoint, 'anthropic-messages')!;
+    const upstream = source === 'official' ? 'https://api.anthropic.com' : endpoint;
+    const preset = source === 'preset-relay' ? 'anthropic-api' : undefined;
+    const row = (preset ? providerPresetModelRecord(preset, id, 'anthropic-messages', upstream) : undefined)
+      ?? providerModelGenerationRecord(id, upstream, 'anthropic-messages', preset)!;
     const deps = buildDeps();
     deps.resolvePiNativeProviders = async () => ({
       providers: [{ id: 'effort-relay', name: 'Effort fixture', baseUrl: endpoint,
+        ...(preset ? { adapterProvider: 'anthropic' } : {}),
         api: 'anthropic-messages', apiKeyEnvVar: 'CINDY_TEST_EFFORT_KEY',
         models: [{ id, reasoning: row.reasoning, contextWindow: row.contextWindow,
           maxTokens: row.maxOutput, thinkingLevelMap: row.execution.pi.thinkingLevelMap,
@@ -2279,11 +2284,12 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
         expect(requests).toHaveLength(1);
         expect(new URL(requests[0]!.url, endpoint).pathname).toBe('/v1/messages');
         const body = JSON.parse(requests[0]!.body);
-        expect(body.output_config.effort).toBe(source === 'relay' ? effort : 'high');
+        const messageScoped = source === 'official' || source === 'explicit';
+        expect(body.output_config.effort).toBe(messageScoped ? 'high' : effort);
         const effortMessages = body.messages.filter((message: { role: string; output_config?: unknown }) =>
           message.role === 'system' && message.output_config);
-        if (source === 'relay') expect(effortMessages).toEqual([]);
-        else expect(effortMessages.at(-1).output_config.effort).toBe(effort);
+        if (messageScoped) expect(effortMessages.at(-1).output_config.effort).toBe(effort);
+        else expect(effortMessages).toEqual([]);
       }
     } finally {
       await handle?.close();

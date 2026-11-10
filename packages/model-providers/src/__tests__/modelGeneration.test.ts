@@ -3,7 +3,7 @@ import { previousModelGenerations } from '../modelGeneration.js';
 import { buildUserProvider } from '../user-provider.js';
 import { isChatEligible } from '../classification.js';
 import { BUNDLED_CATALOG } from '../builtin.js';
-import { providerModelGenerationRecord, providerModelRecord, providerModelAdapterId } from '../providerModelCatalog.js';
+import { providerModelGenerationRecord, providerModelRecord, providerPresetModelRecord, providerModelAdapterId } from '../providerModelCatalog.js';
 import { parseModelsListResponse } from '../modelDiscovery.js';
 import { mergeDiscoveredRuntimeModels } from '../modelMetadataLayers.js';
 import type { ProviderRuntimeModelConfig, ProviderWireProtocol } from '../types.js';
@@ -205,9 +205,24 @@ describe('new model generation defaults', () => {
       expect(official.execution.pi.compat).toMatchObject({ supportsMidConvoEffort: true });
       expect(providerModelGenerationRecord(id, 'https://api.anthropic.com/', 'anthropic-messages')).toEqual(original);
       const preset = providerModelGenerationRecord(id, 'https://account.example', 'anthropic-messages', 'anthropic-api')!;
-      expect(preset.execution.pi.compat).toMatchObject({ supportsMidConvoEffort: true });
+      expect(preset.execution.pi.compat).not.toHaveProperty('supportsMidConvoEffort');
     },
   );
+
+  // Editing a preset URL retains its ID; exact catalog rows must enforce the
+  // same channel boundary as generation fallback, without mutating the catalog.
+  it('does not treat a saved Anthropic preset ID as a message-scoped effort declaration', () => {
+    const official = providerPresetModelRecord('anthropic-api', 'claude-opus-5', 'anthropic-messages')!;
+    const original = structuredClone(official);
+    for (const endpoint of ['https://relay.example', 'https://api.anthropic.com/proxy']) {
+      const relay = providerPresetModelRecord('anthropic-api', 'claude-opus-5', 'anthropic-messages', endpoint)!;
+      expect(relay.execution.pi.compat).not.toHaveProperty('supportsMidConvoEffort');
+      expect(relay.execution.pi.compat).toMatchObject({ forceAdaptiveThinking: true });
+    }
+    expect(providerPresetModelRecord('anthropic-api', 'claude-opus-5', 'anthropic-messages', 'https://api.anthropic.com/')!
+      .execution.pi.compat).toMatchObject({ supportsMidConvoEffort: true });
+    expect(official).toEqual(original);
+  });
 
   it('retains exact adapter metadata across engines even without Registry entries', () => {
     const exact = providerModelRecord('grok-4.7', 'https://api.x.ai/v1', 'openai-responses')!;
