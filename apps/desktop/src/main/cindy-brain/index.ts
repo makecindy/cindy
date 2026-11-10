@@ -2327,6 +2327,14 @@ export function acceptPluginInvocation(id: string, invocationId: string): void {
   catch { log.warn('plugin invocation acceptance bookkeeping unavailable'); }
 }
 
+/** Both sandbox pages and Node workers release their Host-owned resources here. */
+function disposePluginRuntimeHostServices(id: string): void {
+  networkSlotSingleton?.disposeGhost(id);
+  fsSlotSingleton?.disposePlugin(id);
+  getDesktopHostTerminalService().disposePlugin(id);
+  disposePluginHostTools(id);
+}
+
 export function getGhostRuntime(): GhostRuntime {
   if (!runtimeSingleton) {
     runtimeSingleton = new GhostRuntime({
@@ -2345,9 +2353,7 @@ export function getGhostRuntime(): GhostRuntime {
         // 崩溃/熄灯时把该意识名下的在途工具调用收掉(结构化失败给 agent)。
         getGhostPipeDispatcher().onRuntimeState(storagePart, state);
         if (state !== 'running') {
-          networkSlotSingleton?.disposeGhost(storagePart);
-          fsSlotSingleton?.disposePlugin(storagePart);
-          getDesktopHostTerminalService().disposePlugin(storagePart);
+          disposePluginRuntimeHostServices(storagePart);
           modelPickerSingleton?.cancel(storagePart);
           pluginInvocations.invalidate(storagePart);
           invocationRuntimeGenerations.set(storagePart, (invocationRuntimeGenerations.get(storagePart) ?? 0) + 1);
@@ -2669,7 +2675,7 @@ export function getGhostNodeRuntimeBroker(): GhostNodeRuntimeBroker {
       authenticatedFetch: (ghostId, request, authorization, assertCurrent, signal) =>
         getGhostNetworkSlot().handleAuthenticatedNodeFetch(ghostId, request, authorization, assertCurrent, signal),
       hostToolRequest: requestPluginHostToolCall,
-      onStopped: id => { getDesktopHostTerminalService().disposePlugin(id); fsSlotSingleton?.disposePlugin(id); disposePluginHostTools(id); },
+      onStopped: disposePluginRuntimeHostServices,
       networkRequest: (id, request) => request.op === 'fetch'
         ? getGhostNetworkSlot().handleFetchRequest(id, request)
         : getGhostNetworkSlot().handleNetworkRequest(id, request),

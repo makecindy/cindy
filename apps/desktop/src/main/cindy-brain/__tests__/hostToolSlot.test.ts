@@ -10,10 +10,16 @@ import { createSchedulerMcpServer, type SchedulerMcpDeps } from '@cindy/mcps';
 import { Scheduler, type Schedule } from '@cindy/maker-scheduler';
 import { getDesktopMcpToolApprovalPolicy } from '../../maker-host/mcp-tool-approval-policy.js';
 import { withPluginSchedulerApproval } from '../pluginSchedulerApproval.js';
+import { GhostRuntime, type SandboxHandle } from '../runtime/GhostRuntime.js';
+import { isValidPluginInstallRelId, pluginInstallStoragePart } from '../../../shared/pluginIdentity.js';
 
 const uiPipe = createGhostProductionCallbacks<{
   send(event: { sender: { id: number; isDestroyed(): boolean } }, payload: unknown): Promise<unknown>;
 }>({ variables: ['executionPipe'], callbacks: { send: ['ipcMain.handle', 'ghost-pipe:send'] } });
+
+const lifecycle = createGhostProductionCallbacks<{ getGhostRuntime(): GhostRuntime }>({
+  functions: ['getGhostRuntime', 'disposePluginRuntimeHostServices'], initialize: 'let runtimeSingleton = null;',
+});
 
 // Test value: the production gateway must preserve raw tool results and enforce §1.2/§3
 // approval and owner/install fences for a caller without a Session. Existing taskSlot tests
@@ -66,6 +72,49 @@ describe('plugin Host tool entry', () => {
     f.ports.createRuntime = (server, caller) => ({ ...create(server, caller)!, close });
     expect(code(await f.call())).toBe('PERMISSION_DENIED');
     expect(close).toHaveBeenCalledOnce();
+  });
+
+  // Item 28, unit: the real sandbox lifecycle and production exit callback must
+  // close the native service scope. Node stop coverage missed the logic-page
+  // stop/crash/update path added for computer connections in item 26.
+  it.each(['stop', 'crash', 'update'] as const)('releases an old computer connection after logic-page %s', async action => {
+    const owner = { dataOwnerId: 'owner', ownerGeneration: 31 };
+    const caller = { ...owner, kind: 'plugin' as const, pluginId: 'dashboard' };
+    setHostToolProviders([{ name: 'cindy_computer', toClaudeSdkConfig: () => null, toHostTools: () => {
+      let count = 0, open = true;
+      return { list: () => [{ name: 'status', category: 'computer' }],
+        describe: name => ({ name, category: 'computer' }),
+        call: async () => { if (!open) throw new Error('CONNECTION_CLOSED'); return { content: [{ type: 'text', text: String(++count) }] }; },
+        close: async () => { open = false; } };
+    } }], owner);
+    const handles: Array<SandboxHandle & { gone(): void }> = [];
+    const noop = () => {};
+    const api = lifecycle({ GhostRuntime,
+      electronSandboxAdapter: { create() {
+        let onGone: ((details: { reason: string }) => void) | null = null;
+        const handle = { load: async () => {}, destroy: noop, onGone: (fn: (details: { reason: string }) => void) => { onGone = fn; },
+          crashForTest: () => onGone?.({ reason: 'crashed' }), gone: () => onGone?.({ reason: 'oom' }) };
+        handles.push(handle); return handle;
+      } },
+      isValidPluginInstallRelId, pluginInstallStoragePart,
+      log: { info: noop, warn: noop }, disconnectRoutineSource: noop,
+      pluginDeviceSync: { invalidate: noop }, getGhostPipeDispatcher: () => ({ onRuntimeState: noop }),
+      networkSlotSingleton: null, fsSlotSingleton: null, getDesktopHostTerminalService: () => ({ disposePlugin: noop }),
+      disposePluginHostTools, modelPickerSingleton: null, pluginInvocations: { invalidate: noop },
+      invocationRuntimeGenerations: new Map(), broadcastGhostRuntimeStates: noop,
+    });
+    const runtime = api.getGhostRuntime(), ghost = fixture().ghost;
+    try {
+      await runtime.spawn(ghost);
+      const old = createHostToolRuntime('cindy_computer', caller)!;
+      expect((await old.call('status')).content[0]).toMatchObject({ text: '1' });
+      if (action === 'stop') runtime.stop('dashboard');
+      if (action === 'crash') handles.at(-1)!.gone();
+      if (action === 'update') await runtime.spawn({ ...ghost, manifest: { ...ghost.manifest, version: '2.0.0' }, approval: { state: 'approved', revision: 'r2' } });
+      await expect(old.call('status')).rejects.toThrow('CONNECTION_CLOSED');
+      if (action !== 'update') await runtime.spawn(ghost);
+      expect((await createHostToolRuntime('cindy_computer', caller)!.call('status')).content[0]).toMatchObject({ text: '1' });
+    } finally { runtime.destroyAll(); setHostToolProviders([], { ...owner, ownerGeneration: 32 }); }
   });
 
   it('rejects malformed server identities before service lookup', async () => {

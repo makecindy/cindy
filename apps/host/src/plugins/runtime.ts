@@ -213,8 +213,11 @@ export async function createHostPluginRuntime(options: PluginRuntimeOptions) {
     },
   });
   const ownerScope = { capture: () => owner, isCurrent: (value: unknown) => value === owner && current(), isStable: (value: unknown) => value === owner && current() };
+  const disposeRuntimeHostServices = (id: string) => {
+    network.disposeGhost(id); fsSlot.disposePlugin(id); options.onPluginStopped?.(id);
+  };
   const node = createHostNodeRuntimeBroker(assets.nodeWorker!, { getGhost, ownerScope,
-    hostToolRequest: options.hostToolRequest, onStopped: id => { fsSlot.disposePlugin(id); options.onPluginStopped?.(id); },
+    hostToolRequest: options.hostToolRequest, onStopped: disposeRuntimeHostServices,
     readSecret: secret.readGhostSecret, secretSaved: secret.ghostSecretSaved,
     resolveOauthSecret: async (id, key, accountId) => {
       const decl = getGhost(id)?.manifest.network?.secrets?.find(item => item.key === key && item.source === 'oauth')?.oauth;
@@ -301,7 +304,7 @@ export async function createHostPluginRuntime(options: PluginRuntimeOptions) {
   });
   const runtime = new GhostRuntime({ adapter: sandbox.adapter, log,
     onStateChanged: (id, state) => {
-      if (state !== 'running') { network.disposeGhost(id); fsSlot.disposePlugin(id); options.onPluginStopped?.(id); }
+      if (state !== 'running') disposeRuntimeHostServices(id);
       dispatcher?.onRuntimeState(id, state); options.publish('ghosts:runtime-changed', { states: runtime.listStates() });
     } });
   const dispatcher = new GhostPipeDispatcher({ getGhost, runtimeStateOf: id => runtime.stateOf(id),

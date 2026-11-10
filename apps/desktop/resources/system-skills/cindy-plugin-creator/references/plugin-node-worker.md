@@ -218,6 +218,9 @@ MCP server 的 sampling / elicitation / roots 等 server→client 反向请求�
 
 ### 4.12.3 打包和生命周期红线
 
+宿主服务依赖使用 `agent.hostTools` 并在调用时解析；能力查询与资源退出规则见
+[宿主服务依赖与生命周期](plugin-host-tools.md#服务依赖与生命周期)。服务不可用不代替安装批准，也不授予管理其他插件的能力。
+
 - 用户不需要安装 Node、npm、CLI 或 MCP。运行时由 Cindy 随包提供；你必须在制作阶段
   把依赖打成单个 worker 文件或连同静态资源放进目录；**禁止**在安装/首次运行时执行
   `npm install`、`npx`、`postinstall` 或从网络下载可执行代码；
