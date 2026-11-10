@@ -858,7 +858,7 @@
       },
       "runningCount_other": "{{count}} 件差事方行",
       "limitAria": "{{name}} 之并行上限",
-      "limitOption_other": "至多 {{count}}",
+      "limitOption_other": "并行 {{count}}",
       "weightAria": "{{name}} 之权重",
       "weightOption": "轻重 {{weight}}",
       "assignAria": "分差事予 {{name}}",
@@ -5200,6 +5200,15 @@
         "hint": "启则按 {{shortcut}} 遣讯；阖则按 Enter 遣讯，按 Shift+Enter 换行。",
         "ariaLabel": "以 {{shortcut}} 遣讯"
       }
+    },
+    "defaultNewTaskWorkingDir": {
+      "title": "新任务常例工作目录",
+      "label": "此机常例工作目录",
+      "hint": "新立此机之任而未择项目，则先取此目录；若已明择项目、言谈或远机，仍从其择。",
+      "unset": "未设（不预取目录）",
+      "choose": "择目录",
+      "clear": "清常例目录",
+      "failed": "存常例工作目录未成，请重试"
     },
     "linkOpen": {
       "title": "启链接",
@@ -13005,6 +13014,11 @@
     "jumpToBottom": "至底",
     "prevMessageJump": "至上一问：{{preview}}",
     "askUserQuestion": {
+    "unanswered": "未答",
+    "withdrawn": "无须再答",
+    "withdrawnDraft": "此问无须再答。\n{{reason}}\n草稿尚存，可另作补充发送。",
+    "sendSupplement": "发送补充",
+
       "voice": {
         "hint": "可言「第一项」或选项之名；多选毕，请言「确认选择」。",
         "freeTextHint": "可径言其答，察毕言「确认选择」以呈。",
@@ -19718,6 +19732,7 @@
     }
   },
   "subscriptionAccounts": {
+    "providerManagedAuth": "Codex 目前供方未提供 ChatGPT 账号资讯。请于新增供方时选「$t(subscriptionAccounts.signIn.anotherAccount)」，另用独立目录",
     "signIn": {
       "checking": "正察本机账号…",
       "detected": "已有账号登录",
@@ -19766,5 +19781,15 @@
     "browserFallback": "请至 GitHub 为 Cindy 点 Star",
     "openGithub": "开启 GitHub",
     "openFailed": "未能开启 GitHub"
+  },
+  "hostConnection": {
+    "connecting": "正连 Cindy 后台…",
+    "restoring": "正复任务之态…",
+    "retrying": "任务未同步，正重试…",
+    "pairing": "连接须再授权",
+    "pairingHelp": "请留此页。于启动 Cindy 后台之终端重行打开网页之命令，于新页配对毕，再返此页。",
+    "keepDraft": "草稿仍存。连接复通，任务之态将自同步。",
+    "retry": "重试连接",
+    "desktopAuthHelp": "请于启动终端更新后台连接设置，再启此实验客户端。"
   }
 }

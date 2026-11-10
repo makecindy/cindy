@@ -49,7 +49,7 @@ import {
   readFile,
   readClientWallpaperFile,
   listBlobFiles,
-} from '../cindy-media/blobStore';
+} from '../cindy-media/blobStore.desktop';
 import * as recycler from '../cindy-media/recycler';
 
 beforeEach(() => {

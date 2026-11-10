@@ -875,8 +875,8 @@
       "runningCount_one": "{{count}} tarefa em execução",
       "runningCount_other": "{{count}} tarefas em execução",
       "limitAria": "Limite de tarefas de {{name}}",
-      "limitOption_one": "Máx. {{count}}",
-      "limitOption_other": "Máx. {{count}}",
+      "limitOption_one": "Até {{count}}",
+      "limitOption_other": "Até {{count}}",
       "weightAria": "Peso de {{name}}",
       "weightOption": "Peso {{weight}}",
       "assignAria": "Atribuir tarefas a {{name}}",
@@ -929,7 +929,7 @@
       },
       "accountCount_many": "{{count}} contas",
       "runningCount_many": "{{count}} tarefas em execução",
-      "limitOption_many": "Máx. {{count}}"
+      "limitOption_many": "Até {{count}}"
     },
     "rebalance": {
       "title": "Continuar em {{label}}?",
@@ -5367,6 +5367,15 @@
         "hint": "Quando ativado, {{shortcut}} envia mensagens. Quando desativado, Enter envia mensagens e Shift+Enter insere uma nova linha.",
         "ariaLabel": "Usar {{shortcut}} para enviar mensagens"
       }
+    },
+    "defaultNewTaskWorkingDir": {
+      "title": "Diretório de trabalho predefinido para novas tarefas",
+      "label": "Diretório predefinido neste computador",
+      "hint": "Pré-selecionado para novas tarefas locais sem projeto escolhido. Um projeto, uma conversa ou um computador remoto selecionado explicitamente tem prioridade.",
+      "unset": "Não definido (nenhum diretório pré-selecionado)",
+      "choose": "Escolher diretório",
+      "clear": "Limpar predefinição",
+      "failed": "Não foi possível guardar o diretório de trabalho predefinido. Tenta novamente."
     },
     "linkOpen": {
       "title": "Abrir ligações",
@@ -13135,6 +13144,11 @@
     "prevMessageJump": "Ir para o pedido anterior: {{preview}}",
     "sessionLoading": "A carregar tarefa",
     "askUserQuestion": {
+    "unanswered": "Sem resposta",
+    "withdrawn": "Já não precisa de resposta",
+    "withdrawnDraft": "Esta pergunta já não precisa de resposta.\n{{reason}}\nO rascunho foi guardado e pode ser enviado como complemento.",
+    "sendSupplement": "Enviar complemento",
+
       "voice": {
         "hint": "Diga o número ou nome de uma opção. Para várias escolhas, diga depois «confirmar seleção».",
         "freeTextHint": "Diga a sua resposta, reveja-a e diga «confirmar seleção» para enviar.",
@@ -14445,7 +14459,7 @@
       "running": "Em execução…",
       "waitingWorkflow": "A aguardar o Workflow…",
       "waitingWorkflowProgress": "A aguardar o Workflow · {{done}}/{{total}} Agents",
-      "turnStart": "{{status}}",
+      "turnStart": "A processar, {{name}}…",
       "issueTip": "{{name}}, experimente /issue para nos enviar comentários ou sugestões",
       "runningTool": "{{tool}} em execução…"
     },
@@ -19977,6 +19991,7 @@
     "lineNumbers": "Números de linha"
   },
   "subscriptionAccounts": {
+    "providerManagedAuth": "O fornecedor atual do Codex não disponibiliza informações da conta ChatGPT. Ao adicionar o fornecedor, selecione «$t(subscriptionAccounts.signIn.anotherAccount)» para usar uma pasta separada.",
     "signIn": {
       "checking": "A verificar a conta local…",
       "detected": "Conta com sessão iniciada encontrada",
@@ -20025,5 +20040,15 @@
     "browserFallback": "Abre o GitHub para dar uma estrela ao Cindy.",
     "openGithub": "Abrir GitHub",
     "openFailed": "Não foi possível abrir o GitHub."
+  },
+  "hostConnection": {
+    "connecting": "A ligar ao Cindy…",
+    "restoring": "A restaurar o estado das tarefas…",
+    "retrying": "Tarefas ainda não sincronizadas. A tentar novamente…",
+    "pairing": "É necessário autorizar a ligação",
+    "pairingHelp": "Mantenha esta página aberta. No terminal usado para iniciar o Cindy Host, execute novamente o comando para abrir o cliente web. Faça o emparelhamento na nova página e volte aqui.",
+    "keepDraft": "O rascunho será mantido. As tarefas serão sincronizadas quando a ligação for restabelecida.",
+    "retry": "Voltar a ligar",
+    "desktopAuthHelp": "Atualize as definições de ligação no terminal de arranque e reabra este cliente experimental."
   }
 }

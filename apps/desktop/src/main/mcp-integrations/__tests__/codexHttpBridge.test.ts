@@ -13,7 +13,7 @@ import {
   startCodexHttpBridge,
   type CodexHttpBridge,
   withMcpRouteIdentity,
-} from '../codexHttpBridge.js';
+} from '../codexHttpBridge.desktop.js';
 import { CODEX_ALLOWED_BUILTIN_PLUGIN_IDS_KEY, CODEX_DISABLED_BUILTIN_PLUGIN_IDS_KEY } from '../codexBuiltinToolPolicy.js';
 import { isBotToolsetAvailableOnTarget } from '../../../shared/botRemoteCapabilities.js';
 import { resolveBotAllowedBuiltinPluginIds } from '../../maker-host/plugins/types.js';
