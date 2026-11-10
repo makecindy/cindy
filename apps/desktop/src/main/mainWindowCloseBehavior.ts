@@ -45,6 +45,33 @@ export function requestActiveTurnGuardedQuit(
   deps.quit();
 }
 
+/**
+ * Bind the guard's side effects once and ignore quit requests while its confirmation is open.
+ * A synchronous native message box runs a nested message loop on Windows, so another Alt+F4,
+ * taskbar close or tray Quit can re-enter the guard from inside confirmQuit; it must neither
+ * stack a second dialog nor quit underneath the one the user is still answering.
+ */
+export function createActiveTurnQuitGuard(
+  deps: ActiveTurnQuitGuardDependencies,
+): ActiveTurnQuitGuardDependencies {
+  let confirming = false;
+  return {
+    hasActiveTurn: () => deps.hasActiveTurn(),
+    confirmQuit: () => {
+      if (confirming) return false;
+      confirming = true;
+      try {
+        return deps.confirmQuit();
+      } finally {
+        confirming = false;
+      }
+    },
+    quit: () => {
+      if (!confirming) deps.quit();
+    },
+  };
+}
+
 /** Platform policy inputs for a Windows / Linux main-window close request. */
 export interface MainWindowCloseRequestDependencies {
   platform: NodeJS.Platform;

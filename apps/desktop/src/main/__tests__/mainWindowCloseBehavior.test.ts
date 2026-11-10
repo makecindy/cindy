@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   applyLinuxMainWindowCloseBehavior,
   cancelPendingWindowHide,
+  createActiveTurnQuitGuard,
   createCloseBehaviorPromptFallbackController,
   handleMainWindowCloseRequest,
   minimizeDesktopWindow,
@@ -356,7 +357,16 @@ describe('main window close request quit guard', () => {
     ['freebsd', null, null, 'busy', false, false, false, true],
   ] as const)(
     '%s windows=%s linux=%s busy=%s confirm=%s checked=%s -> quit=%s prompted=%s',
-    (platform, windowsBehavior, linuxBehavior, busy, confirm, activeTurnChecked, quits, prompted) => {
+    (
+      platform,
+      windowsBehavior,
+      linuxBehavior,
+      busy,
+      confirm,
+      activeTurnChecked,
+      quits,
+      prompted,
+    ) => {
       const deps = closeRequestHarness({ platform, windowsBehavior, linuxBehavior, busy, confirm });
 
       handleMainWindowCloseRequest(deps, { activeTurnChecked });
@@ -395,11 +405,47 @@ describe('main window close request quit guard', () => {
   // Tray Quit and the first-close chooser fallback call the guard directly; a throwing probe
   // there was already fail-closed and must stay so (it is now the shared readActiveTurnForQuit).
   it('confirms instead of quitting when the probe throws on a direct quit request', () => {
-    const { quitGuard } = closeRequestHarness({ platform: 'win32', busy: 'throws', confirm: false });
+    const { quitGuard } = closeRequestHarness({
+      platform: 'win32',
+      busy: 'throws',
+      confirm: false,
+    });
 
     requestActiveTurnGuardedQuit(quitGuard);
 
     expect(quitGuard.confirmQuit).toHaveBeenCalledTimes(1);
     expect(quitGuard.quit).not.toHaveBeenCalled();
   });
+
+  // The native confirm is a synchronous message box with a nested message loop on Windows, so
+  // an Alt+F4 or a renderer-checked X can re-enter the guard while a tray Quit confirmation is
+  // still open. Without createActiveTurnQuitGuard the nested close stacked a second prompt and the
+  // checked one quit underneath the open dialog; only the answer to the first prompt may decide.
+  it.each([false, true])(
+    'ignores close requests that arrive while the confirmation is open (confirm=%s)',
+    (confirm) => {
+      const quit = vi.fn();
+      const deps = closeRequestHarness({
+        platform: 'win32',
+        windowsBehavior: 'quit',
+        busy: 'busy',
+        confirm,
+      });
+      let nested = false;
+      const confirmQuit = vi.fn(() => {
+        if (!nested) {
+          nested = true;
+          handleMainWindowCloseRequest({ ...deps, quitGuard: guard });
+          handleMainWindowCloseRequest({ ...deps, quitGuard: guard }, { activeTurnChecked: true });
+        }
+        return confirm;
+      });
+      const guard = createActiveTurnQuitGuard({ hasActiveTurn: () => true, confirmQuit, quit });
+
+      requestActiveTurnGuardedQuit(guard);
+
+      expect(confirmQuit).toHaveBeenCalledTimes(1);
+      expect(quit).toHaveBeenCalledTimes(confirm ? 1 : 0);
+    },
+  );
 });

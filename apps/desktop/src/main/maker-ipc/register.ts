@@ -5702,7 +5702,8 @@ function rollbackAgentIslandUserPrompt(
 
 /**
  * 当前是否有任意一个 session 正在跑 turn。
- * 给 WindowControls 关闭按钮用: 无 in-flight 直接进 closing overlay, 有 in-flight 弹确认框。
+ * main 的关窗 / 退出确认(activeTurnQuitGuard: 标题栏 X 经 window-behavior:quit-needs-confirmation、
+ * 原生关闭、托盘退出)直接调用它, 不经 maker:any-session-in-turn IPC。
  * sessionTurnActivityTracker 由 maker-core 发出的 status event、done、close 边界维护；
  * maker active sessions 覆盖 Session.send accepted/reserved 到首个 status 之间的窗口。
  * 这里只是 snapshot 一次, O(N) 其中 N = 当前 alive session 数, 几十量级, 可忽略。

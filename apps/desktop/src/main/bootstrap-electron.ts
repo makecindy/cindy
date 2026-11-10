@@ -1136,13 +1136,13 @@ import { createLinuxTrayController } from './linuxTrayLifecycle.js';
 import {
   applyLinuxMainWindowCloseBehavior,
   cancelPendingWindowHide,
+  createActiveTurnQuitGuard,
   createCloseBehaviorPromptFallbackController,
   handleMainWindowCloseRequest,
   minimizeDesktopWindow,
   readActiveTurnForQuit,
   requestActiveTurnGuardedQuit,
   requestMainWindowCloseBehavior,
-  type ActiveTurnQuitGuardDependencies,
   type ActiveTurnQuitGuardOptions,
 } from './mainWindowCloseBehavior.js';
 import {
@@ -3866,12 +3866,15 @@ function openWindowsTrayMenu(): void {
 // window manager), the first-close chooser and the custom title-bar X. The probe reads the
 // Maker without constructing it: before splash/login finishes there is no Maker and therefore
 // no turn, so closing there quits without a spurious prompt. A probe that throws counts as
-// busy (readActiveTurnForQuit).
-const activeTurnQuitGuard: ActiveTurnQuitGuardDependencies = {
+// busy (readActiveTurnForQuit). While the confirmation is open, further quit requests are
+// ignored (createActiveTurnQuitGuard). The confirmation is modal to the main window when the user
+// can see it (Alt+F4, taskbar close); a hidden or minimized window (tray Quit) would hide an
+// owned dialog with it, so it stays parentless there.
+const activeTurnQuitGuard = createActiveTurnQuitGuard({
   hasActiveTurn: () => anySessionInTurn(getMakerIfReady()),
-  confirmQuit: () =>
-    dialog.showMessageBoxSync({
-      type: 'warning',
+  confirmQuit: () => {
+    const options = {
+      type: 'warning' as const,
       title: t('titleBar.closeConfirm.title'),
       message: t('titleBar.closeConfirm.title'),
       detail: t('titleBar.closeConfirm.description'),
@@ -3879,9 +3882,19 @@ const activeTurnQuitGuard: ActiveTurnQuitGuardDependencies = {
       defaultId: 0,
       cancelId: 0,
       noLink: true,
-    }) === 1,
+    };
+    const mainWindow = mainWindowRef;
+    const choice =
+      mainWindow &&
+      !mainWindow.isDestroyed() &&
+      mainWindow.isVisible() &&
+      !mainWindow.isMinimized()
+        ? dialog.showMessageBoxSync(mainWindow, options)
+        : dialog.showMessageBoxSync(options);
+    return choice === 1;
+  },
   quit: () => app.quit(),
-};
+});
 
 function quitAppWithActiveTurnGuard(options?: ActiveTurnQuitGuardOptions): void {
   requestActiveTurnGuardedQuit(activeTurnQuitGuard, options);
@@ -3974,6 +3987,15 @@ function applyWindowsCloseBehavior(
     quitAppWithActiveTurnGuard();
   }
 }
+
+// The disposable Cindy Make preview quits on every main-window close instead of applying the
+// close behavior. Both the main window's close handler and the 'window-close' IPC consult it.
+const makeTestWindow = createMakeTestWindowBehavior({
+  isPackaged: app.isPackaged,
+  environment: process.env,
+  focus: () => activateMainWindow(),
+  quit: () => app.quit(),
+});
 
 /** Windows / Linux main-window close policy shared by native closes and the title-bar X. */
 function closeMainWindowWithBehavior(
@@ -4698,12 +4720,6 @@ const createWindow = () => {
   });
   // Main-window close policy is explicit because hidden utility windows (for
   // example the prewarmed global voice overlay) can keep the process alive.
-  const makeTestWindow = createMakeTestWindowBehavior({
-    isPackaged: app.isPackaged,
-    environment: process.env,
-    focus: () => activateMainWindow(),
-    quit: () => app.quit(),
-  });
   mainWindow.on('close', (event) => {
     if (isQuitting) return;
     if (makeTestWindow.close(event)) return;
@@ -6296,6 +6312,7 @@ const registerIpcHandlers = () => {
   //    等都收掉;否则 voice overlay 这种 hidden BrowserWindow 还活着,window-all-closed
   //    不 fire,残留进程。主窗 renderer 已向 main 查过 turn、忙时自绘确认过,会带
   //    activeTurnChecked,main 不再二次弹窗;没带的请求照常经过 main 的确认。
+  //    Cindy Make 预览实例与 close handler 一致,一律直接退出。
   //  - 解析不到 sender 的兜底: 走带确认的退出。
   //  - 「在新窗口打开」的副窗: 只关自己, 不退出 app(会话活在主进程, 不受影响)。
   ipcMain.on('window-close', (event, rawOptions: unknown) => {
@@ -6309,8 +6326,12 @@ const registerIpcHandlers = () => {
           rawOptions !== null &&
           (rawOptions as { activeTurnChecked?: unknown }).activeTurnChecked === true,
       };
-      if (win) closeMainWindowWithBehavior(win, options);
-      else quitAppWithActiveTurnGuard(options);
+      if (!win) {
+        quitAppWithActiveTurnGuard(options);
+      } else if (!makeTestWindow.close({ preventDefault: () => {} })) {
+        // Same first check as the close handler (there is no native close event to cancel).
+        closeMainWindowWithBehavior(win, options);
+      }
       return;
     }
     win.close();
