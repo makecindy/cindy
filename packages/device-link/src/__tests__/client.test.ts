@@ -38,7 +38,13 @@ import {
 } from '../transport.js';
 import { PLUGIN_SYNC_CHANNEL } from '../pluginSyncProtocol.js';
 import { deflateRawBase64Sync, inflateRawBase64TextBounded } from '../nodeCompression.js';
-import { DEVICE_LINK_CAPABILITY_PUSH_DEFLATE_V1 } from '../pushTransfer.js';
+import {
+  DEVICE_LINK_CAPABILITY_PUSH_DEFLATE_V1,
+  decodePushTransfer,
+  encodePushTransfer,
+  pushDeflateCapabilities,
+  selectPushDeflateDictionary,
+} from '../pushTransfer.js';
 import { BACKLOG_WARN_MESSAGES, summarizeBacklog } from '../transportBacklog.js';
 import { sharedTaskGuestPeer } from '../sharedTaskPeer.js';
 import { DIRECT_LINK_SIGNAL, type DirectRuntime, type DirectRuntimeEvents } from '../directNegotiation.js';
@@ -12907,6 +12913,22 @@ describe('推送传输编码（push-deflate-v1）', () => {
     expect(received).toEqual([{ channel: 'maker:event:batch', payload: largeBatch(2) }]);
     host.stop();
     downgraded.stop();
+  });
+
+  it('字典按能力协商：选双方都有的最大 id，线上标明；不认识的字典 id 不交给业务', () => {
+    // 协议契约：新字典只追加新能力名与 id；未声明新能力的对端继续用旧字典，旧形状（无 dict 字段）不变。
+    expect(pushDeflateCapabilities()).toContain(DEVICE_LINK_CAPABILITY_PUSH_DEFLATE_V1);
+    expect(selectPushDeflateDictionary([DEVICE_LINK_CAPABILITY_PUSH_DEFLATE_V1, 'push-deflate-v99'])).toBe(1);
+    expect(selectPushDeflateDictionary(['push-deflate-v99'])).toBeUndefined();
+    const push = { channel: 'maker:event:batch', payload: largeBatch(1) };
+    const encoded = encodePushTransfer(push, nodeCodec, 1);
+    expect(encoded).toMatchObject({ payload: null, transfer: { deflateBase64: expect.any(String) } });
+    expect('dict' in (encoded as { transfer: object }).transfer).toBe(false);
+    expect(decodePushTransfer(encoded as Parameters<typeof decodePushTransfer>[0], nodeCodec)).toEqual({ ok: true, push });
+    const future = { ...(encoded as object), transfer: { ...(encoded as { transfer: object }).transfer, dict: 99 } } as Parameters<typeof decodePushTransfer>[0];
+    expect(decodePushTransfer(future, nodeCodec)).toMatchObject({ ok: false, reason: expect.stringContaining('dictionary') });
+    // 本端没有的字典 id：不压缩，原样发送。
+    expect(encodePushTransfer(push, nodeCodec, 99)).toBe(push);
   });
 
   it('解不开的压缩推送不交给业务、不确认；控制端之后不再声明能力，恢复后推送改为明文送达', async () => {

@@ -19,6 +19,34 @@ import { byteLength } from './transport.js';
 export const DEVICE_LINK_CAPABILITY_PUSH_DEFLATE_V1 = 'push-deflate-v1';
 
 /**
+ * 字典按字节参与解码，发布后不能改；要换字典就在这里追加一项（新的 id 与能力名），旧项保留到
+ * 不再有对端只声明它为止。协商：控制端在 link-open 声明自己能解的**全部**字典能力；被控端选
+ * 双方都有的最大 id，线上用 `transfer.dict` 标明（id 1 省略，保持 v1 形状）。新旧端混用时自然
+ * 落到共同的最高版本；没有共同字典就不压缩。
+ */
+export const PUSH_TRANSFER_DICTIONARIES: ReadonlyArray<{ id: number; capability: string; dictionary: string }> = [
+  { id: 1, capability: DEVICE_LINK_CAPABILITY_PUSH_DEFLATE_V1, dictionary: PUSH_TRANSFER_DICTIONARY_V1 },
+];
+
+/** 本端能解的全部字典能力，用于 link-open 声明。 */
+export function pushDeflateCapabilities(): string[] {
+  return PUSH_TRANSFER_DICTIONARIES.map((entry) => entry.capability);
+}
+
+/** 被控端：对端声明的能力里双方都有的最大字典 id；没有则 undefined（不压缩）。 */
+export function selectPushDeflateDictionary(capabilities: readonly string[]): number | undefined {
+  let selected: number | undefined;
+  for (const entry of PUSH_TRANSFER_DICTIONARIES) {
+    if (capabilities.includes(entry.capability) && (selected === undefined || entry.id > selected)) selected = entry.id;
+  }
+  return selected;
+}
+
+function dictionaryById(id: number): string | undefined {
+  return PUSH_TRANSFER_DICTIONARIES.find((entry) => entry.id === id)?.dictionary;
+}
+
+/**
  * 小于此值的推送原样发送（按 UTF-8 字节）。有字典时 ~300 B 的事件批也能压到一半多一点，
  * 再小的推送（如 `{ sessionId }` 通知）省下的不够抵 transfer 包装本身。
  */
@@ -35,8 +63,10 @@ export const PUSH_TRANSFER_MAX_BYTES = 512 * 1024;
 export const PUSH_TRANSFER_MAX_CHARS = PUSH_TRANSFER_MAX_BYTES;
 
 export interface PushTransfer {
-  /** raw DEFLATE（预置字典 PUSH_TRANSFER_DICTIONARY_V1）后的 base64。 */
+  /** raw DEFLATE（预置字典见 dict）后的 base64。 */
   deflateBase64: string;
+  /** 所用字典 id（PUSH_TRANSFER_DICTIONARIES）；缺省为 1。 */
+  dict?: number;
 }
 
 /** 被压缩推送在线上的形状：原 PushPayload 的 payload 为 null，加 transfer。 */
@@ -52,8 +82,10 @@ export interface EncodedPushPayload extends PushPayload {
 export function encodePushTransfer(
   push: PushPayload,
   codec: DeviceLinkTransferCodec,
+  dict = 1,
 ): PushPayload | EncodedPushPayload {
-  if (!codec.deflateRawBase64 || push.payload === null || push.payload === undefined) return push;
+  const dictionary = dictionaryById(dict);
+  if (!dictionary || !codec.deflateRawBase64 || push.payload === null || push.payload === undefined) return push;
   let text: string | undefined;
   try {
     text = JSON.stringify(push.payload);
@@ -63,16 +95,21 @@ export function encodePushTransfer(
   if (text === undefined || text.length > PUSH_TRANSFER_MAX_BYTES) return push;
   const bytes = byteLength(text);
   if (bytes < PUSH_TRANSFER_MIN_BYTES || bytes > PUSH_TRANSFER_MAX_BYTES) return push;
-  const deflateBase64 = codec.deflateRawBase64(text, PUSH_TRANSFER_DICTIONARY_V1);
+  const deflateBase64 = codec.deflateRawBase64(text, dictionary);
   // 按线上字节比较：可靠层把 payload 作为 JSON 字符串再转义一次（原文里的引号、反斜杠
   // 各多一个字节，base64 没有），压缩形状另有固定包装。省不到 10% 就原样发送。
   if (deflateBase64.length + ENCODED_WRAPPER_BYTES >= byteLength(JSON.stringify(text)) * 0.9) return push;
   return {
     channel: push.channel,
     payload: null,
-    transfer: { deflateBase64 },
+    transfer: { deflateBase64, ...(dict !== 1 ? { dict } : {}) },
     ...(push.ownerStamp ? { ownerStamp: push.ownerStamp } : {}),
   };
+}
+
+/** 压缩推送所用的字典 id（缺省 1）。 */
+export function encodedPushDictionary(push: EncodedPushPayload): number {
+  return typeof push.transfer.dict === 'number' ? push.transfer.dict : 1;
 }
 
 /**
@@ -104,9 +141,11 @@ export function decodePushTransfer(
   codec: DeviceLinkTransferCodec | undefined,
 ): DecodedPush {
   if (!codec?.inflateRawBase64) return { ok: false, reason: 'no deflate decoder' };
+  const dictionary = dictionaryById(encodedPushDictionary(push));
+  if (!dictionary) return { ok: false, reason: `unknown dictionary ${String(push.transfer.dict)}` };
   let payload: unknown;
   try {
-    payload = JSON.parse(codec.inflateRawBase64(push.transfer.deflateBase64, PUSH_TRANSFER_MAX_CHARS, PUSH_TRANSFER_DICTIONARY_V1));
+    payload = JSON.parse(codec.inflateRawBase64(push.transfer.deflateBase64, PUSH_TRANSFER_MAX_CHARS, dictionary));
   } catch (err) {
     return { ok: false, reason: err instanceof Error ? err.message : String(err) };
   }
