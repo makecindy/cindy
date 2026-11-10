@@ -1,6 +1,9 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
-import { toAppServerInput } from '../../../../../packages/maker-core/src/agents/codex/index';
+import {
+  createRemoteAttachmentTaskQueue,
+  toAppServerInput,
+} from '../../../../../packages/maker-core/src/agents/codex/index';
 import type { UserMessage } from '../../../../../packages/maker-core/src/types/common';
 
 // 注意: toAppServerInput 自 image-resizer 接通后改为 async。image block 的 path
@@ -44,6 +47,62 @@ describe('Codex app-server input', () => {
         text: ['# Files mentioned by the user:', '', '## notes.txt: C:\\tmp\\notes.txt'].join('\n'),
       },
     ]);
+  });
+
+  it('rewrites local image paths through remote staging while leaving HTTP images unchanged', async () => {
+    const stageLocalImages = vi.fn(async (
+      images: readonly { path: string; mimeType?: string }[],
+    ) => images.map((_image, index) => `/remote/session/image-${index}.png`));
+    const content: UserMessage['content'] = [
+      { type: 'image', path: '/tmp/local-a.png', mimeType: 'image/png' },
+      { type: 'image', path: 'https://example.test/remote.png', mimeType: 'image/png' },
+      { type: 'image', path: '/tmp/local-b.jpg', mimeType: 'image/jpeg' },
+    ];
+
+    const inputs = await toAppServerInput(content, '/tmp', { stageLocalImages });
+
+    expect(stageLocalImages).toHaveBeenCalledWith([
+      { path: '/tmp/local-a.png', mimeType: 'image/png' },
+      { path: '/tmp/local-b.jpg', mimeType: 'image/jpeg' },
+    ]);
+    expect(inputs).toEqual([
+      { type: 'localImage', path: '/remote/session/image-0.png' },
+      { type: 'image', url: 'https://example.test/remote.png' },
+      { type: 'localImage', path: '/remote/session/image-1.png' },
+    ]);
+  });
+
+  it('serializes attachment work so cleanup cannot overtake an upload', async () => {
+    const queue = createRemoteAttachmentTaskQueue();
+    const events: string[] = [];
+    let releaseUpload!: () => void;
+    let markStarted!: () => void;
+    const started = new Promise<void>((resolve) => { markStarted = resolve; });
+    const gate = new Promise<void>((resolve) => { releaseUpload = resolve; });
+    const upload = queue.enqueue(async () => {
+      events.push('upload:start');
+      markStarted();
+      await gate;
+      events.push('upload:end');
+    });
+    const cleanup = queue.enqueue(async () => {
+      events.push('cleanup');
+    });
+
+    await started;
+    expect(events).toEqual(['upload:start']);
+    releaseUpload();
+    await Promise.all([upload, cleanup]);
+    await queue.drain();
+    expect(events).toEqual(['upload:start', 'upload:end', 'cleanup']);
+  });
+
+  it('rejects a remote staging callback that does not preserve image order/count', async () => {
+    await expect(toAppServerInput(
+      [{ type: 'image', path: '/tmp/local-a.png', mimeType: 'image/png' }],
+      '/tmp',
+      { stageLocalImages: async () => [] },
+    )).rejects.toThrow('invalid path list');
   });
 
   it('keeps the original Host-managed URI when a local image is projected to Codex', async () => {
