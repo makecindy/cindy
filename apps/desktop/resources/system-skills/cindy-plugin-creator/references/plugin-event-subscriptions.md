@@ -12,13 +12,14 @@
 结构化内容只包含正文与附件位置 `{attachment_index,name,mimeType?}`；读取附件使用
 `cindy.host.call('cindy_helper','read_session_attachment',...)`，另需 `history` 组批准。
 `did-task-state-changed` 的 `data` 为 `{sessionId,state}`：归档/恢复/隐藏变化提供相应状态字段，
-运行变化提供宿主规范的 `activity` 快照（或退出活动投影时的 null）及 `changedAtMs`。
+运行变化提供宿主规范投影的 `activity` 状态字段（或退出活动投影时的 null）及 `changedAtMs`。
+仅含阶段、时间、运行/等待/注意状态与代次，不含活动摘要、标题派生标签、工具参数或消息内容。
 两种新 topic 包含宿主实际保存的各类任务，不套用下文旧 topic 的主任务/轮次过滤。
 消息事件不主动订阅其它电脑；跨电脑历史读取仍使用原工具的设备参数。
 
 它们复用既有 `onHostMessage`、`seq`、100 条缓冲、唤醒与 `dropped` 语义，没有持久事件日志。
 断线、重启或 `dropped` 后，用最后保存的 `historyCursor` 调用 `get_chat_history({session_ids:[sessionId],cursor,order:'asc'})`
-补拉（另需 `history` 组），并按消息 ID 合并；任务当前状态用 `get_session_status` 重读。
+补拉（另需 `history` 组），并按消息 ID 合并；任务当前状态用 `get_session_runtime` 重读（另需 `control` 组）。
 首次连接先分页读取所需历史；事件顺序号只属于当次宿主运行，不能用作跨重启游标。
 停用、卸载、移除声明、更新安装或账号切换后，旧缓冲不会继续投递给新安装或新账号。
 

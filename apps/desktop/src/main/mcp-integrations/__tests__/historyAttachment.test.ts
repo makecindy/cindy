@@ -100,4 +100,14 @@ describe('history attachment reader', () => {
     expect(result).toMatchObject({ ok: true, base64: Buffer.from('re').toString('base64'), size: 6 });
     expect(JSON.stringify(result)).not.toContain('remote-private');
   });
+
+  // Unit/old-peer compatibility: valid new-tool input rejected by an old query registry
+  // means unsupported, while a missing registered attachment remains NOT_FOUND.
+  it.each([['INVALID_ARGS', 'REMOTE_UNSUPPORTED'], ['REMOTE_UNSUPPORTED_QUERY', 'REMOTE_UNSUPPORTED'],
+    ['NOT_FOUND', 'NOT_FOUND'], ['REMOTE_TIMEOUT', 'REMOTE_TIMEOUT']])('preserves remote attachment failure %s', async (remoteCode, expected) => {
+    host.plugin = false;
+    const result = await readDesktopHistoryAttachment({ ...args, session_id: 'device::task' }, { agentKind: 'codex', workingDir: '', sessionId: 'ordinary' },
+      { query: async () => ({ ok: false, errorCode: remoteCode }), invoke: vi.fn() });
+    expect(result).toMatchObject({ ok: false, errorCode: expected });
+  });
 });

@@ -204,7 +204,7 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
   依赖当前任务的工具必须显式指定目标，缺省保留 `NO_SESSION_CONTEXT`；插件管理、主人代输入、应用更新、反馈不经此入口开放。
   作者契约见 [宿主工具调用](../../apps/desktop/resources/system-skills/cindy-plugin-creator/references/plugin-host-tools.md)。
 - `subscribe.topics` 的 `message` / `task-state` 独立展示和批准，receipt 可选 `approvedEventTopics` 只记录显式事实，不从旧未知声明推断。
-  消息仅在持久化后通知，结构化附件使用不透明位置引用；状态复用宿主规范投影。
+  消息仅在持久化后通知，结构化附件使用不透明位置引用；状态复用宿主规范投影的状态字段，不含活动摘要、标题标签或工具参数。
   花名册变动时建立 topic 索引，禁止每个消息/状态事件扫描全部插件；缓冲补投重查安装版本、批准和 owner。
   断线按 `get_chat_history` 游标补拉，旧 `turn` / `session` / `activity` 订阅和既有插件批准保持原行为。
   作者契约见 [事件订阅](../../apps/desktop/resources/system-skills/cindy-plugin-creator/references/plugin-event-subscriptions.md)。

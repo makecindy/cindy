@@ -339,6 +339,20 @@ describe('indexed task content and state events', () => {
     expect(gateway).not.toHaveBeenCalled();
   });
 
+  // State-only permission must never deliver tool/activity prose or title-derived labels.
+  it('keeps state-only subscriptions free of action summaries and workflow text', () => {
+    const g = { ...subscriber(), approvedEventTopics: ['task-state'] } as InstalledGhost;
+    const { gw, sent, running } = makeGateway({ findGhostForDelivery: () => g });
+    running.add('reader');
+    const index = new GhostTaskEventIndex(); index.replace([g], owner);
+    index.publish({ kind: 'state', sessionId: 'task', state: { changedAtMs: 10, activity: {
+      sessionId: 'task', phase: 'running', attention: false, currentActionSummary: 'private command arguments',
+      workflow: { key: 'title:private', label: 'private task title' },
+    } } }, owner, () => gw);
+    expect(sent[0]!.payload).toMatchObject({ data: { state: { changedAtMs: 10, activity: { sessionId: 'task', phase: 'running', attention: false } } } });
+    expect(JSON.stringify(sent)).not.toContain('private');
+  });
+
   it.each(['revision', 'uninstalled', 'revoked', 'disabled'] as const)('drops buffered content when %s changes before wake completes', async change => {
     const g = subscriber() as InstalledGhost;
     let live: InstalledGhost | null = g;

@@ -40,10 +40,25 @@ export class GhostTaskEventIndex {
         content: taskMessageContent(msg.content), createdAt: msg.createdAt,
         historyCursor: encodeCursor({ createdAt: Date.parse(msg.createdAt), id: msg.id, rowid: msg.rowid }) };
     } else {
-      data = { sessionId: event.sessionId, state: event.state };
+      data = { sessionId: event.sessionId, state: taskState(event.state) };
     }
     gateway().publishIndexed(ghosts, topic, event.kind === 'message' ? 'did-message-created' : 'did-task-state-changed', data);
   }
+}
+
+/** Select state facts from the canonical projection; content needs separate message approval. */
+function taskState(raw: Record<string, unknown>): Record<string, unknown> {
+  const result: Record<string, unknown> = {};
+  for (const key of ['status', 'hiddenAt', 'changedAtMs']) if (key in raw) result[key] = raw[key];
+  if (raw.activity === null) result.activity = null;
+  else if (raw.activity && typeof raw.activity === 'object') {
+    const activity = raw.activity as Record<string, unknown>;
+    result.activity = Object.fromEntries([
+      'sessionId', 'phase', 'currentTurnActive', 'workingPhase', 'recordStatus', 'startedAtMs',
+      'lastActivityAtMs', 'attention', 'turnGeneration', 'gracefulStopState', 'source', 'interactionKind',
+    ].filter(key => key in activity).map(key => [key, activity[key]]));
+  }
+  return result;
 }
 
 /** Message text plus opaque attachment positions; never hand a Host file URL/path to a plugin. */

@@ -39,6 +39,7 @@ export async function readDesktopHistoryAttachment(args: ReadSessionAttachmentAr
         if (!device) return resolveStoredHistoryAttachment(args);
         const result = await remote.query(device, { ...args, session_id: args.session_id.slice(split + 2), attachment_ref: undefined });
         assertCurrent();
+        if (result.ok !== true && (result.errorCode === 'INVALID_ARGS' || result.errorCode === 'REMOTE_UNSUPPORTED_QUERY')) throw new Error('REMOTE_UNSUPPORTED');
         if (result.ok !== true || typeof result.url !== 'string' || typeof result.name !== 'string')
           throw new Error(typeof result.errorCode === 'string' ? result.errorCode : 'REMOTE_UNSUPPORTED');
         return { url: result.url, name: result.name, originKind: result.originKind === 'user' ? 'user' : 'tool' };
@@ -86,7 +87,8 @@ export async function readDesktopHistoryAttachment(args: ReadSessionAttachmentAr
     });
   } catch (error) {
     assertCurrent();
-    const known = ['PERMISSION_DENIED', 'REMOTE_UNSUPPORTED', 'REMOTE_DEVICE_OFFLINE', 'REMOTE_DISABLED', 'REMOTE_ACCESS_REVOKED', 'HANDOFF_UNAVAILABLE'];
+    const known = ['PERMISSION_DENIED', 'NOT_FOUND', 'HOST_NOT_READY', 'REMOTE_UNSUPPORTED', 'REMOTE_DEVICE_OFFLINE',
+      'REMOTE_LINK_REQUIRED', 'DEVICE_LINK_NOT_READY', 'REMOTE_TIMEOUT', 'REMOTE_PAYLOAD_TOO_LARGE', 'REMOTE_DISABLED', 'REMOTE_ACCESS_REVOKED', 'HANDOFF_UNAVAILABLE'];
     const code = error instanceof Error && known.includes(error.message) ? error.message : 'ATTACHMENT_UNAVAILABLE';
     return { ok: false as const, errorCode: code, message: code };
   }
