@@ -203,6 +203,10 @@ timeout 不得触发自动换窗或 replay。Codex 当前没有与 Claude `AutoC
 超时或其他详情的消息不走此兜底。原始错误未带此持久化原因时仍须有密文证据。
 手动压缩入口不受此规则影响，
 手动 compact 失败不得锁存换窗。
+Codex 手动压缩使用原生 `thread/compact/start`，ACK 只表示受理；等待原生 turn 终态后返回结果。
+压缩期间独占当前 handle、禁止 send/steer/重复 compact，Stop 沿原生 interrupt 收口。
+成功边界标记 `manual`，无压缩边界的成功终态为 noop；失败不重放旧请求、不触发自动恢复。
+能力通过现有 `maker:compact-session` 本机/设备互联入口暴露；SSH 未提供此调用路由时不展示入口。
 
 Cindy 保底压缩是**一套**交接重建流程。装得进当前约束就不动；字节预算破了
 （可剥的超大内联图）或 token 预算破了，都直接交接重建。Codex 索引历史归原生运行时

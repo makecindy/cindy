@@ -35897,3 +35897,170 @@ describe('Codex native model context overrides', () => {
     await handle.close();
   });
 });
+
+describe('Codex native manual compaction', () => {
+  async function setup(compactResponse?: () => unknown, consumeEvents = true) {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.ThreadCompactStart) return compactResponse?.() ?? {};
+      if (method === Method.TurnInterrupt) return {};
+      if (method === Method.TurnStart) return { turn: { id: 'next-user-turn' } };
+      return undefined;
+    });
+    const handle = await agent.startSession({ sessionId: 'manual-compact-test', model: 'gpt-5.4', workingDir: '/repo' });
+    const events: AgentEvent[] = [];
+    if (consumeEvents) void (async () => { for await (const e of handle.events()) events.push(e); })();
+    const handlers = host.getThreadHandlers()!;
+    const started = () => handlers.turnStarted!({ threadId: handle.id, turn: { id: 'manual-turn', status: 'inProgress' } });
+    const completed = (status = 'completed', error?: { message: string }) => handlers.turnCompleted!({ threadId: handle.id, turn: { id: 'manual-turn', status, error } });
+    const boundary = () => handlers.itemCompleted!({ threadId: handle.id, turnId: 'manual-turn', item: { id: 'manual-boundary', type: 'contextCompaction' } });
+    return { agent, host, handle, events, handlers, started, completed, boundary };
+  }
+
+  it('waits beyond the ACK, emits a manual boundary and releases the session for the next send', async () => {
+    const { agent, host, handle, events, started, boundary, completed } = await setup();
+    expect(agent.capabilities.manualCompact?.supported).toBe(true);
+    let resolved = false;
+    const result = handle.compactSession!().then(value => { resolved = true; return value; });
+    await Promise.resolve();
+    expect(resolved).toBe(false);
+    expect(handle.hasPendingHostOperation?.()).toBe(true);
+    expect(handle.isTurnRunning?.()).toBe(true);
+    expect(host.request).toHaveBeenCalledWith(Method.ThreadCompactStart, { threadId: handle.id });
+    await expect(handle.send({ type: 'user', content: 'do not race' })).rejects.toThrow('compacting');
+    await expect(handle.compactSession!()).rejects.toThrow('active');
+    started(); boundary();
+    expect(resolved).toBe(false);
+    completed();
+    await expect(result).resolves.toEqual({ tokensBefore: 0, estimatedTokensAfter: undefined });
+    await waitForExpectation(() => expect(events.filter(e => e.type === 'compact_boundary')).toHaveLength(1));
+    expect(events.find(e => e.type === 'compact_boundary')?.data).toMatchObject({ trigger: 'manual' });
+    expect(handle.hasPendingHostOperation?.()).toBe(false);
+    expect(handle.isTurnRunning?.()).toBe(false);
+    await handle.send({ type: 'user', content: 'continue' });
+    expect(host.request.mock.calls.filter(([m]) => m === Method.TurnStart)).toHaveLength(1);
+    await handle.close();
+  });
+
+  it('reports an empty native compact as a no-op, not success', async () => {
+    const { handle, started, completed } = await setup();
+    const result = handle.compactSession!();
+    started(); completed();
+    await expect(result).resolves.toEqual({ noop: true });
+    await handle.close();
+  });
+
+  it('refreshes context from the native zero-cost compact frame with unchanged billing totals', async () => {
+    const { handle, handlers, events, started, boundary, completed } = await setup();
+    const total = { inputTokens: 4000, cachedInputTokens: 0, outputTokens: 50, reasoningOutputTokens: 0, totalTokens: 4050 };
+    handlers.tokenUsageUpdated!({ threadId: handle.id, turnId: 'previous-turn',
+      tokenUsage: { last: total, total, modelContextWindow: 500000 } });
+    const result = handle.compactSession!();
+    started();
+    handlers.tokenUsageUpdated!({ threadId: handle.id, turnId: 'manual-turn', tokenUsage: {
+      total, modelContextWindow: 500000,
+      last: { inputTokens: 0, cachedInputTokens: 0, outputTokens: 0, reasoningOutputTokens: 0, totalTokens: 1200 },
+    } });
+    boundary(); completed();
+    await expect(result).resolves.toEqual({ tokensBefore: 4000, estimatedTokensAfter: 1200 });
+    await waitForExpectation(() => expect(events.some(e => e.type === 'status' && e.data.contextTokens === 1200 && e.data.isRunning === false)).toBe(true));
+    expect(events.find(e => e.type === 'compact_boundary')?.turnScope).toBe('background');
+    await handle.close();
+  });
+
+  it('protects a Session send reservation before the native turn has started', async () => {
+    const { agent, handle, host } = await setup(undefined, false);
+    const session = new Session({ id: 'manual-compact-test', agentKind: 'codex', workDir: '/repo',
+      handle, capabilities: agent.capabilities, logger: createNoopLogger(), turnStallMs: 0 });
+    let release!: () => void;
+    const preparation = new Promise<void>(resolve => { release = resolve; });
+    const sending = session.send('pending input', { afterTurnReserved: () => preparation });
+    await expect(session.compactSession()).rejects.toThrow('reserved');
+    expect(host.request.mock.calls.some(([m]) => m === Method.ThreadCompactStart)).toBe(false);
+    release();
+    await sending;
+    await session.close();
+  });
+
+  it('rejects failed compaction without rollover or replay and permits another send', async () => {
+    const { handle, host, events, handlers, started, completed } = await setup();
+    const result = handle.compactSession!();
+    const failed = expect(result).rejects.toThrow('invalid_encrypted_content');
+    started();
+    const error = { message: 'Error running remote compact task: invalid_encrypted_content' };
+    handlers.error!({ threadId: handle.id, turnId: 'manual-turn', willRetry: false, error });
+    completed('failed', error);
+    await failed;
+    expect(events.some(e => e.type === 'error' || e.type === 'done')).toBe(false);
+    expect(host.request.mock.calls.some(([m]) => m === Method.TurnStart || m === Method.ThreadFork)).toBe(false);
+    await handle.send({ type: 'user', content: 'continue after failure' });
+    expect(handle.isTurnRunning?.()).toBe(true);
+    await handle.close();
+  });
+
+  it('interrupts a compact stopped before its native turn id arrives', async () => {
+    const { handle, host, started, completed } = await setup();
+    const result = handle.compactSession!();
+    const stopped = expect(result).rejects.toThrow('interrupted');
+    await handle.abort();
+    expect(handle.isTurnRunning?.()).toBe(true);
+    started();
+    expect(host.request).toHaveBeenCalledWith(Method.TurnInterrupt, { threadId: handle.id, turnId: 'manual-turn' });
+    completed('interrupted');
+    await stopped;
+    expect(handle.isTurnRunning?.()).toBe(false);
+    await handle.close();
+  });
+
+  it('settles transport loss and close while waiting for the native terminal', async () => {
+    for (const transportLoss of [false, true]) {
+      const { handle, handlers, started } = await setup();
+      const result = handle.compactSession!();
+      const failure = expect(result).rejects.toThrow(transportLoss ? 'disconnected' : 'closed');
+      started();
+      if (transportLoss) handlers.error!({ scope: 'transport', turnId: '', error: { message: 'disconnected' }, willRetry: false });
+      else await handle.close();
+      await failure;
+      expect(handle.hasPendingHostOperation?.()).toBe(false);
+      await handle.close();
+    }
+  });
+
+  it('surfaces unsupported daemons and does not submit a synthetic user prompt', async () => {
+    const { handle, host } = await setup(() => { throw Object.assign(new Error('Method not found'), { code: -32601 }); });
+    await expect(handle.compactSession!()).rejects.toThrow('Method not found');
+    expect(host.request.mock.calls.some(([m]) => m === Method.TurnStart)).toBe(false);
+    await handle.close();
+  });
+
+  it('keeps authoritative completion when the ACK arrives late', async () => {
+    let rejectAck!: (error: Error) => void;
+    const ack = new Promise((_, reject) => { rejectAck = reject; });
+    const { handle, started, boundary, completed } = await setup(() => ack);
+    const result = handle.compactSession!();
+    started(); boundary(); completed();
+    await expect(result).resolves.toEqual({ tokensBefore: 0, estimatedTokensAfter: undefined });
+    rejectAck(new Error('late ACK timeout'));
+    await Promise.resolve();
+    await handle.send({ type: 'user', content: 'continue' });
+    expect(handle.isTurnRunning?.()).toBe(true);
+    await handle.close();
+  });
+
+  it('bounds a missing native terminal and retires the uncertain handle', async () => {
+    const { handle, started } = await setup();
+    vi.useFakeTimers();
+    try {
+      const result = handle.compactSession!();
+      const failure = expect(result).rejects.toThrow('timed out');
+      started();
+      await vi.advanceTimersByTimeAsync(10 * 60_000);
+      await failure;
+      expect(handle.hasPendingHostOperation?.()).toBe(false);
+      await expect(handle.compactSession!()).rejects.toThrow('closed');
+    } finally {
+      vi.useRealTimers();
+      await handle.close();
+    }
+  });
+});

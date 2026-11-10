@@ -14800,6 +14800,7 @@
         "compactSuccess": "컨텍스트를 압축했습니다",
         "compactSuccessWithTokens": "컨텍스트를 압축했습니다: {{before}}k → {{after}}k tokens",
         "compactFailed": "압축 실패",
+        "compactResumeFirst": "먼저 메시지를 보내 작업을 재개한 다음 컨텍스트를 압축하세요.",
         "compactNothing": "아직 압축할 내용이 없습니다",
         "sessionBranches": "세션 분기",
         "copySessionLink": "세션 링크 복사"

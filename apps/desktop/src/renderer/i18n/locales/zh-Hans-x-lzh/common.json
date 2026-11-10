@@ -14800,6 +14800,7 @@
         "compactSuccess": "上下文已压缩",
         "compactSuccessWithTokens": "上下文已缩：{{before}}k → {{after}}k tokens",
         "compactFailed": "压缩未成",
+        "compactResumeFirst": "请先发一言以续此事，再约上下文。",
         "compactNothing": "无可压缩者",
         "sessionBranches": "差事分支",
         "copySessionLink": "录差事链接"
