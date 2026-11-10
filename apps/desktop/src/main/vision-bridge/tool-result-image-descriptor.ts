@@ -52,7 +52,7 @@ export function createToolResultImageDescriptor(deps: ToolResultImageDescriptorD
       return { skipped: true, description: null };
     }
     try {
-      const description = await controller.describeImage({ imagePath: absPath, prompt, signal });
+      const description = await controller.describeImage({ imagePath: absPath, prompt, signal, sessionId });
       return { skipped: false, description };
     } catch {
       // 视觉后端失败 / 预算 abort → 静默跳过,不阻塞工具结果。真实尝试过,

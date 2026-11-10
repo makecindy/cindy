@@ -29,6 +29,7 @@ export interface VisionBridgeController {
     imagePath?: string;
     prompt: string;
     signal?: AbortSignal;
+    sessionId?: string;
   }): Promise<string>;
 }
 
@@ -52,26 +53,19 @@ export function buildVisionBridgeProxyTransform(
   logger?: ProxyLogger,
   /** 返回 true 的请求不走视觉桥(供应商分享受邀者：视觉后端是本机用户自己的其它供应商)。 */
   skipRequest?: (ctx: RequestTransformCtx) => boolean,
+  resolveSessionId?: (ctx: RequestTransformCtx) => string | null | undefined,
 ): RequestTransform {
-  const transform = buildVisionBridgeTransform(logger);
-  if (!skipRequest) return transform;
-  const guarded: RequestTransform = (body, ctx) => (skipRequest(ctx) ? null : transform(body, ctx));
-  guarded.errorMode = transform.errorMode;
-  guarded.onRequestSettled = transform.onRequestSettled;
-  return guarded;
-}
-
-function buildVisionBridgeTransform(logger?: ProxyLogger): RequestTransform {
-  return createVisionBridgeTransform({
-    shouldBridge: (model) => _controller?.shouldBridge(model) ?? false,
-    describeImage: (input) => {
-      if (!_controller) {
-        return Promise.reject(new Error('vision bridge not configured'));
-      }
-      return _controller.describeImage(input);
-    },
-    // 传入 proxy logger：transform 失败时记 warn 到 cc-proxy / codex proxy 日志
-    // （之前未注入 → 失败静默无日志）。
-    logger,
-  });
+  return (body, ctx) => {
+    if (skipRequest?.(ctx)) return null;
+    const sessionId = resolveSessionId?.(ctx) ?? undefined;
+    // Capture the request identity in a closure; concurrent proxy requests never share it.
+    return createVisionBridgeTransform({
+      shouldBridge: model => _controller?.shouldBridge(model) ?? false,
+      describeImage: input => {
+        if (!_controller) return Promise.reject(new Error('vision bridge not configured'));
+        return _controller.describeImage({ ...input, sessionId });
+      },
+      logger,
+    })(body, ctx);
+  };
 }

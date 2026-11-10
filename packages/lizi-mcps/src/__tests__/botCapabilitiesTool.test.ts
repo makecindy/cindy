@@ -144,3 +144,22 @@ it('accepts scoped model chains and reset through the existing profile tool with
   expect((await registry.call('update_teammate_profile', { expectedVersion: 3, modelChain: null })).isError).not.toBe(true);
   expect(updateProfile).toHaveBeenLastCalledWith({ callerSessionId: 'self', expectedVersion: 3, modelChain: null });
 });
+
+// Media settings are a new self-profile operation; schema must preserve exact provider identities
+// and explicit no-fallback while rejecting foreign teammate targets. Unit tier, no runtime IO.
+it('updates and resets media routes through the caller-bound profile tool', async () => {
+  const registry = new XdtHelperToolRegistry();
+  const updateProfile = vi.fn(async () => ({ ok: true as const, effective: 'next-turn' as const }));
+  registerBotCapabilityTools(registry, { getSessionContext: () => ({ sessionId: 'self', agentKind: 'pi', workingDir: '/w' }),
+    callbacks: { ...fixture().callbacks, updateProfile } });
+  const ref = { providerId: 'configured-account', modelId: 'selected-model' };
+  const mediaModels = { vision: { primary: ref, fallback: null }, image: ref, video: ref };
+  for (const invalid of [{ mediaModels: { vision: { primary: ref } } }, { mediaModels: { image: { modelId: 'missing-provider' } } }, { mediaModels, botId: 'other' }]) {
+    expect((await registry.call('update_teammate_profile', { expectedVersion: 1, ...invalid })).isError).toBe(true);
+  }
+  expect(updateProfile).not.toHaveBeenCalled();
+  expect((await registry.call('update_teammate_profile', { expectedVersion: 1, mediaModels })).isError).not.toBe(true);
+  expect(updateProfile).toHaveBeenLastCalledWith({ expectedVersion: 1, callerSessionId: 'self', mediaModels });
+  expect((await registry.call('update_teammate_profile', { expectedVersion: 2, mediaModels: null })).isError).not.toBe(true);
+  expect(updateProfile).toHaveBeenLastCalledWith({ expectedVersion: 2, callerSessionId: 'self', mediaModels: null });
+});
