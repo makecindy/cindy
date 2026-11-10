@@ -1,6 +1,7 @@
 import { addGlobalPluginTab, setActiveGlobalTabId } from '../globalTabs';
 import { openPluginTaskTab } from './openPluginTaskTab';
 import { requestRightSidebarVisibility } from './sidebarCommands';
+import { routeSidebarCommand } from './detachedSidebarRouting';
 import { readInstalledGhostsSnapshot } from '@/cindy-brain/useInstalledGhosts';
 import { getApprovedGhostHostUi } from '../../../../shared/ghost';
 import { installedGhostStoragePart } from '../../../../shared/pluginIdentity';
@@ -11,9 +12,14 @@ export async function openPluginUiView(instanceId: string, viewId: string, sessi
   const view = ghost?.enabled && getApprovedGhostHostUi(ghost)?.views?.find(view => view.id === viewId);
   if (!ghost || !view) throw new Error('MCP_APP_SOURCE_UNAVAILABLE');
   if (view.scope !== 'task') {
-    const tab = addGlobalPluginTab(instanceId, { ghost, resourceViewId: viewId, resourceInput: input });
-    if (!tab) throw new Error('MCP_APP_VIEW_LIMIT');
-    setActiveGlobalTabId(tab.id);
+    const route = await routeSidebarCommand({ type: 'open-plugin-view', instanceId, resourceViewId: viewId,
+      ...(input === undefined ? {} : { resourceInput: input }) });
+    if (route !== 'attached' && route !== 'routed') throw new Error('MCP_APP_HOST_NOT_READY');
+    if (route === 'attached') {
+      const tab = addGlobalPluginTab(instanceId, { ghost, resourceViewId: viewId, resourceInput: input });
+      if (!tab) throw new Error('MCP_APP_VIEW_LIMIT');
+      setActiveGlobalTabId(tab.id);
+    }
     requestRightSidebarVisibility('open');
     return;
   }

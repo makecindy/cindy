@@ -180,11 +180,12 @@ export class PluginAppearanceService {
   private async finish(id: string, settings: AppearanceSettings, assertCurrent: () => void,
     fields: readonly string[], icon?: LoadedPluginAppearanceResource): Promise<PluginAppearanceResult> {
     assertCurrent();
+    const native = fields.includes('appIcon') ? await this.applyIcon(settings, icon)
+      .catch(() => ({ status: 'failed' as const, reason: 'APP_ICON_APPLICATION_FAILED' })) : undefined;
+    assertCurrent();
     if (revision(this.deps.read()) !== revision(settings))
       return { ...this.read(id, assertCurrent), application: { status: 'saved', reason: 'SUPERSEDED' } };
     this.deps.publish(settings);
-    const native = fields.includes('appIcon') ? await this.applyIcon(settings, icon)
-      .catch(() => ({ status: 'failed' as const, reason: 'APP_ICON_APPLICATION_FAILED' })) : undefined;
     let application = fields.every(field => field === 'appIcon') ? native! :
       await this.deps.apply(settings).catch(() => ({ status: 'failed' as const, reason: 'APPLICATION_FAILED' }));
     if (native?.status === 'failed' || native?.status === 'saved' && application.status !== 'failed') application = native;

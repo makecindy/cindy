@@ -1,4 +1,5 @@
 import { openPluginTaskTab } from './openPluginTaskTab';
+import { openPluginUiView } from './openPluginUiView';
 import { openRoutinesTab } from './openRoutinesTab';
 import { openMailPreview, openMailCard } from './mailPreview';
 /** 执行 main 已裁决并推给当前 renderer host 的 RSB command。 */
@@ -21,6 +22,10 @@ import { openUrlInSidebarBrowser } from './openInSidebarBrowser';
 
 /** 在 main 已选定的当前 renderer host 中执行命令，不自行选择宿主。 */
 export async function executeSidebarCommand(command: RsbWindowCommand): Promise<void> {
+  if (command.type === 'open-plugin-view') {
+    await openPluginUiView(command.instanceId, command.resourceViewId, null, command.resourceInput);
+    return;
+  }
   if (command.type === 'open-mail-card') {
     await openMailCard(command.sessionId, command.callId);
     return;

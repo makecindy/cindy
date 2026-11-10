@@ -1151,7 +1151,7 @@ export function MainLayout() {
   useEffect(() => {
     if (isSecondaryWindow()) return;
     return window.electronAPI.rightSidebarWindow.onCommand((command) => {
-      if (command.sessionId !== rightSidebarSessionIdRef.current) return;
+      if (command.type !== 'open-plugin-view' && command.sessionId !== rightSidebarSessionIdRef.current) return;
       void executeSidebarCommand(command).catch((err) => {
         applicationMenuLog.warn('execute attached sidebar command failed', err);
       });

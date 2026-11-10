@@ -121,6 +121,22 @@ describe('plugin appearance calls', () => {
     expect(h.nativeIcons.at(-1)).toBeNull(); expect(h.get().appIconResource).toBeUndefined();
     expect(h.get().uiFamily).toBe('Inter');
   });
+  // A media cleanup wait lets an unrelated write supersede the full snapshot,
+  // but must not suppress an icon which is still selected. Real resource decoding; tier: unit.
+  it('applies the selected icon after an unrelated update during wallpaper cleanup', async () => {
+    const h = fixture(['appIcon', 'wallpaper', 'reading']);
+    h.icon(await sharp({ create: { width: 8, height: 8, channels: 4, background: '#123456' } }).png().toBuffer());
+    h.saveWallpaper.mockImplementation(async (_bytes, options) => {
+      await options.commit(() => {});
+      await h.service.handle('example', { kind: 'set', patch: { reading: { maxWidth: 720 } } });
+      return { url: '' };
+    });
+    expect(await h.service.handle('example', { kind: 'set', patch: {
+      appIcon: { resource: 'library:icon.png' }, wallpaper: { resource: 'library:wallpaper.png' },
+    } })).toMatchObject({ ok: true });
+    expect(h.get().appIconResource).toBeDefined(); expect(h.get().reading?.maxWidth).toBe(720);
+    expect(h.nativeIcons).toHaveLength(1); expect(h.nativeIcons[0]).toBeInstanceOf(Buffer);
+  });
   it('preserves the current app icon when a resource is invalid or undeclared', async () => {
     const undeclared = fixture(['uiFont']);
     expect(await undeclared.service.handle('example', { kind: 'set', patch: { appIcon: { resource: 'library:icon.png' } } }))
