@@ -261,9 +261,11 @@ export function observeClaudeSpeedEvent(
 export function settleClaudeSpeedRequest(
   state: ClaudeGenerationState,
   turnOutputTokens: number,
-  usage: { output_tokens_details?: unknown } | undefined,
+  usage: { output_tokens?: unknown; output_tokens_details?: unknown } | undefined,
   now = Date.now(),
 ): SpeedCalibrationReport | undefined {
+  // Usage that does not report output says nothing about this request: keep the stream estimate.
+  if (typeof usage?.output_tokens !== 'number') return undefined;
   const details = usage?.output_tokens_details as { thinking_tokens?: unknown } | undefined;
   const thinkingTokens = typeof details?.thinking_tokens === 'number' ? details.thinking_tokens : undefined;
   return state.tokenSpeed.settle(turnOutputTokens, now, thinkingTokens);

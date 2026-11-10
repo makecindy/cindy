@@ -2682,6 +2682,34 @@ describe('pi translator live token speed', () => {
     }
   });
 
+  // Greptile review of PR 9597: a reply that streamed and then reported zero output left its
+  // estimate in the turn's total, and in the next try's calibration.
+  it('drops the streamed estimate when message_end explicitly reports zero output', () => {
+    vi.useFakeTimers();
+    try {
+      const ctx = createPiTranslateContext(noopLogger);
+      const { queue } = makeQueue();
+      const send = (event: Record<string, unknown>, at: number) => {
+        vi.setSystemTime(at);
+        translatePiEvent(ev(event), queue, ctx);
+      };
+      send({ type: 'agent_start' }, 1_000);
+      send({ type: 'message_start', message: { role: 'assistant' } }, 1_000);
+      send({ type: 'message_update', assistantMessageEvent: { type: 'text_start', contentIndex: 0 } }, 1_000);
+      send({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', contentIndex: 0, delta: 'one two three four five six' } }, 1_500);
+      expect(ctx.tokenSpeed.snapshot()).toMatchObject({ tokens: 6 });
+      send({ type: 'message_end', message: {
+        role: 'assistant', content: [], stopReason: 'error', errorMessage: 'HTTP status 500', usage: { input: 10, output: 0 },
+      } }, 2_000);
+      expect(ctx.tokenSpeed.snapshot()).toBeUndefined();
+      send({ type: 'agent_settled' }, 2_500);
+      expect(ctx.tokenSpeed.snapshot()).toBeUndefined();
+      disposePiTranslateContext(ctx);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('keeps the streamed estimate when message_end reports no output usage', () => {
     vi.useFakeTimers();
     try {

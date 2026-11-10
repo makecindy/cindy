@@ -245,7 +245,11 @@ export function settleCodexSpeedUsage(
     return undefined;
   }
   rt.speedPaired = responseWallMs > 0;
-  if (!rt.speedPaired) return undefined;
+  if (!rt.speedPaired) {
+    // Whatever streamed meanwhile and the tool wait in between stay out of the next response.
+    rt.tokenSpeed.discardRequest(now);
+    return undefined;
+  }
   rt.speedOutputTokens += last.outputTokens;
   return rt.tokenSpeed.settle(rt.speedOutputTokens, now, last.reasoningOutputTokens, responseWallMs);
 }
@@ -336,6 +340,8 @@ export function pauseCodexGeneration(
   if (rt.generationPendingToolIds.has(pauseId)) return;
   if (rt.generationPendingToolIds.size === 0) closeCodexGenerationInterval(rt, pausedAt);
   rt.generationPendingToolIds.add(pauseId);
+  // Tool execution, approvals and answers the user owes are not generation time either.
+  rt.tokenSpeed.pause(pausedAt);
 }
 
 export function resumeCodexGeneration(
@@ -406,7 +412,6 @@ function noteCodexGenerationBoundary(
   if (phase === 'started') {
     // The model finished emitting this call; its execution is not generation time.
     pauseCodexGeneration(rt, turnId, pauseId, receivedAt);
-    rt.tokenSpeed.pause(receivedAt);
     return;
   }
   if (phase !== 'completed') return;

@@ -2213,6 +2213,21 @@ describe('claude live token speed', () => {
     finish();
   });
 
+  // Review of PR 9597: a held-back burst inside an otherwise steady window read as a spike
+  // (the window stayed below the ceiling) and kept the peak for the whole turn.
+  it('keeps a burst released at once out of the readings and the peak', () => {
+    const { stream, speed, flow, text, start, finish, readings } = speedHarness();
+    start(0);
+    stream({ type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } }, 0);
+    flow(0, text, 11, 0, 4_000);
+    // 12 000 estimated tokens released within a few milliseconds.
+    stream({ type: 'content_block_delta', index: 0, delta: text('a'.repeat(25_700)) }, 4_005);
+    flow(0, text, 11, 4_005, 8_000);
+    expect(Math.max(...readings)).toBeLessThan(115);
+    expect(speed(8_000)!.peak).toBeLessThan(115);
+    finish();
+  });
+
   it('takes no reading from the silence before visible output', () => {
     const { stream, flow, text, start, finish, readings } = speedHarness();
     start(0);

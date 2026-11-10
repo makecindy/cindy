@@ -2839,8 +2839,74 @@ it.each([
     // The answer is read while it streams, at the pace it streams.
     expect(readings.length).toBeGreaterThan(0);
     expect(Math.min(...readings)).toBeGreaterThan(40);
-    expect(Math.max(...readings)).toBeLessThan(120);
+    // The recorded answer itself speeds up to about 150 words a second near its end.
+    expect(Math.max(...readings)).toBeLessThan(170);
   } finally {
     vi.useRealTimers();
   }
+});
+
+// Review of the speed meter (PR 9597): output that streams while a tool owns the turn, and
+// waits for the user, used to leak into the next response's speed. Unit tier, translator entry points.
+describe('codex speed around unpaired output and human waits', () => {
+  const answer = (rt: CodexRuntimeState, q: ReturnType<typeof createAsyncQueue<AgentEvent>>, ctx: ReturnType<typeof makeCtx>, id: string, from: number, words: number, perDelta = 5) => {
+    translateItemNotification('started', { threadId: 't', turnId: 'turn', item: { type: 'agentMessage', id, text: '' } }, q, ctx);
+    for (let at = from + 100; at <= from + 100 * (words / perDelta); at += 100) {
+      vi.setSystemTime(at);
+      translateAgentMessageDelta({ threadId: 't', turnId: 'turn', itemId: id, delta: 'w '.repeat(perDelta) }, q, ctx);
+    }
+  };
+
+  it('drops output that streamed while tools owned the turn instead of timing the next response with it', () => {
+    vi.useFakeTimers();
+    try {
+      const rt = newCodexRuntimeState(), q = createAsyncQueue<AgentEvent>(), ctx = makeCtx(rt);
+      vi.setSystemTime(0);
+      beginCodexGenerationTurn(rt, 'turn', 0);
+      // A response of 250 tokens at 50 tok/s.
+      answer(rt, q, ctx, 'a1', 0, 250);
+      vi.setSystemTime(5_000);
+      expect(settleCodexSpeedUsage(rt, { outputTokens: 250 })?.requestTps).toBeCloseTo(50, -1);
+      // A background tool owns the turn while 50 more tokens stream, then the tool runs for 10s.
+      translateItemNotification('started', { threadId: 't', turnId: 'turn', item: { type: 'mcpToolCall', id: 'tool', server: 's', tool: 't', arguments: {} } }, q, ctx);
+      vi.setSystemTime(6_000);
+      translateAgentMessageDelta({ threadId: 't', turnId: 'turn', itemId: 'a1', delta: 'w '.repeat(50) }, q, ctx);
+      vi.setSystemTime(16_000);
+      expect(settleCodexSpeedUsage(rt, { outputTokens: 50 })).toBeUndefined();
+      expect(codexSpeedSnapshot(rt)).toBeUndefined();
+      translateItemNotification('completed', { threadId: 't', turnId: 'turn', item: { type: 'mcpToolCall', id: 'tool', server: 's', tool: 't', arguments: {} } }, q, ctx);
+      // The next response is timed from its own first byte, at its own 50 tok/s.
+      vi.setSystemTime(17_000);
+      answer(rt, q, ctx, 'a2', 17_000, 250);
+      vi.setSystemTime(22_000);
+      const report = settleCodexSpeedUsage(rt, { outputTokens: 250 });
+      expect(report?.requestTps).toBeCloseTo(50, -1);
+      expect(report!.requestMs).toBeLessThan(6_000);
+      expect(codexSpeedSnapshot(rt)).toMatchObject({ tokens: 500 });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('stops the speed clock while the user owes an answer, and restarts it with the next output', () => {
+    vi.useFakeTimers();
+    try {
+      const rt = newCodexRuntimeState(), q = createAsyncQueue<AgentEvent>(), ctx = makeCtx(rt);
+      vi.setSystemTime(0);
+      beginCodexGenerationTurn(rt, 'turn', 0);
+      answer(rt, q, ctx, 'a1', 0, 250);
+      vi.setSystemTime(5_000);
+      // An approval or a question to the user is not an item with a boundary of its own.
+      pauseCodexGeneration(rt, 'turn', 'approval:cmd-1', 5_000);
+      vi.setSystemTime(65_000);
+      expect(codexSpeedSnapshot(rt)).toMatchObject({ streaming: false, elapsedMs: 5_000 });
+      resumeCodexGeneration(rt, 'turn', 'approval:cmd-1', 65_000);
+      answer(rt, q, ctx, 'a2', 65_000, 250);
+      vi.setSystemTime(70_000);
+      expect(settleCodexSpeedUsage(rt, { outputTokens: 500 })?.requestTps).toBeCloseTo(50, -1);
+      expect(codexSpeedSnapshot(rt)).toMatchObject({ tokens: 500, elapsedMs: 10_000, average: 50 });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

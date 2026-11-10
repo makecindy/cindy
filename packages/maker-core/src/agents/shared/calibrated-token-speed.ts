@@ -49,6 +49,8 @@ const MIN_SPAN_MS = 2_000;
 const SUMMARY_WINDOW_MS = 30_000;
 const SUMMARY_MIN_SPAN_MS = 10_000;
 const MIN_WINDOW_TOKENS = 5;
+/** What a delta of a few tokens arriving in the same millisecond is taken to have spanned. */
+const MIN_BURST_SPAN_MS = 100;
 /** Output released together with the first byte, or right after a silence, is backlog, not pace. */
 const BACKLOG_MS = 300;
 /** Shorter pauses are consecutive blocks of one response, not a new request. */
@@ -333,8 +335,12 @@ export class CalibratedTokenSpeedMeter {
     }
     if (!Number.isFinite(turnOutputTokens)) return undefined;
     const requestTokens = turnOutputTokens - this.settledTokens;
-    // No output reported for this request: its stream estimate is all there is.
-    if (requestTokens <= 0) return undefined;
+    if (requestTokens < 0) return undefined;
+    if (requestTokens === 0) {
+      // The provider reported nothing billed for this request: what streamed is not output.
+      this.discardRequest(now);
+      return undefined;
+    }
     const requestMs = this.clockMs - this.clockAtSettle;
     const leadThinking = this.rawThinkingLead * SUMMARY_LEAD_SCALE;
     const estimatedThinking = this.rawThinkingText + this.rawThinkingLead + this.rawThinkingCount;
@@ -436,6 +442,20 @@ export class CalibratedTokenSpeedMeter {
     this.clearLive();
   }
 
+  /**
+   * What streamed since the last finished request cannot be paired with real usage
+   * or time (billed nothing, or arrived while tools owned the turn): drop it, keep
+   * what finished requests settled, and let the next request time itself from its
+   * own first byte.
+   */
+  discardRequest(now = Date.now()): void {
+    if (!this.started || this.stopped) return;
+    this.pause(now);
+    this.clockAtSettle = this.clockMs;
+    this.clearLive();
+    this.bound(this.flowMs);
+  }
+
   /** The harness continues the same turn after ending it: keep the totals and measure on. */
   reopen(): void {
     this.stopped = false;
@@ -532,6 +552,7 @@ export class CalibratedTokenSpeedMeter {
     if (this.measuring !== 'yes') return this.publishDue(now);
     const at = this.flowMs;
     const windowMs = summary ? SUMMARY_WINDOW_MS : WINDOW_MS;
+    const previousAt = this.lastEventAt;
     // After a silence longer than the window nothing links this output to a pace.
     if ((summary && this.awaitingSummary) || (this.lastEventAt !== null && at - this.lastEventAt > windowMs)) {
       this.boundaryUntil = at + BACKLOG_MS;
@@ -544,6 +565,15 @@ export class CalibratedTokenSpeedMeter {
       return this.publishDue(now);
     }
     this.liveTokens += tokens;
+    // A burst faster than any provider generates is output held back and released at once
+    // (a summary always arrives that way): it is no pace, and must not join the window or
+    // dilute the deltas that follow it.
+    const sincePrevious = previousAt === null ? 0 : at - previousAt;
+    const arrivalMs = sincePrevious > 0 ? sincePrevious : tokens < MIN_WINDOW_TOKENS ? MIN_BURST_SPAN_MS : 1;
+    if (!summary && (tokens * 1_000) / arrivalMs > MAX_VALID_TPS) {
+      this.bound(at);
+      return this.publishDue(now);
+    }
     if (at <= this.boundaryUntil) this.bound(at);
     else this.events.push({ at, tokens });
     const reading = this.windowTps(at, windowMs, summary ? SUMMARY_MIN_SPAN_MS : MIN_SPAN_MS);
