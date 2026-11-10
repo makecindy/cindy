@@ -81,17 +81,42 @@ function ownerGuard(owner: MobileAuthOwnerGeneration, scope: string, deviceId: s
 async function post(base: string, resource: string, body: unknown, guard: () => void, authorization?: string): Promise<unknown> {
   guard();
   const controller = new AbortController(), timer = setTimeout(() => controller.abort(), 12_000);
+  const readTransport = async <T>(read: () => Promise<T>, status?: number): Promise<T> => {
+    try { return await read(); }
+    catch (error) {
+      guard();
+      if (status && status >= 400 && status < 500 && status !== 429) {
+        const code = 'AGENT_NET_REQUEST_' + status;
+        throw Object.assign(new Error(code), { status, code });
+      }
+      if (controller.signal.aborted || error instanceof TypeError || (error as { name?: unknown } | null)?.name === 'AbortError') {
+        const code = controller.signal.aborted ? 'AGENT_NET_REQUEST_TIMEOUT' : 'AGENT_NET_NETWORK_ERROR';
+        throw Object.assign(new Error(code), { status: 0, code });
+      }
+      throw error;
+    }
+  };
   try {
-    const response = await fetch(base + '/api/agent-net' + resource, {
+    const response = await readTransport(() => fetch(base + '/api/agent-net' + resource, {
       method: 'POST', headers: { 'content-type': 'application/json', ...(authorization ? { authorization } : {}) },
       body: JSON.stringify(body), signal: controller.signal, redirect: 'error',
-    });
+    }));
     guard();
-    const value = await response.json();
+    const value = await readTransport(() => response.json(), response.status);
     guard();
-    if (!response.ok) throw new Error('AGENT_NET_REQUEST_' + response.status);
+    if (!response.ok) {
+      const serverCode = (value as { error?: { code?: unknown } } | null)?.error?.code;
+      const code = typeof serverCode === 'string' && /^[A-Z0-9_]{1,80}$/.test(serverCode) ? serverCode : 'AGENT_NET_REQUEST_' + response.status;
+      throw Object.assign(new Error(code), { status: response.status, code });
+    }
     return value;
   } finally { clearTimeout(timer); }
+}
+function enrollmentUnavailable(error: unknown): boolean {
+  const value = error as { status?: unknown; code?: unknown } | null;
+  if (typeof value?.code === 'string' && /INVALID|DENIED|REVOKED|UNAUTHORIZED|FORBIDDEN|SCOPE_CHANGED|OWNER_CHANGED/.test(value.code)) return false;
+  return value?.status === 0 || value?.status === 429
+    || typeof value?.status === 'number' && value.status >= 500 && value.status < 600;
 }
 function binarySocket(url: string, headers: Record<string, string>): BinarySocket {
   const Constructor = globalThis.WebSocket as unknown as new (url: string, protocols?: string[] | null,
@@ -181,21 +206,32 @@ export async function ensureMobileAgentNetIdentity(options: MobileAgentNetEnroll
         throw new Error('AGENT_NET_IDENTITY_MISMATCH');
       }
       if (!old || old.expiresAt - Date.now() <= 24 * 60 * 60_000) {
-        const request = { deviceId: options.deviceId, name: options.deviceName.trim().slice(0, 64),
-          signingKey: signer.identity.signingKey, transportKey: signer.identity.transportKey };
-        const signature = await signer.sign(enrollmentPayload(request));
-        const token = await options.getAccessToken(); guard();
-        if (!token) throw new Error('AGENT_NET_ACCOUNT_AUTH_REQUIRED');
-        const result = await post(base, '/enroll', { ...request, signature }, guard, 'Bearer ' + token) as {
-          rootPublicKey?: string; certificate?: DeviceCertificate;
-        };
-        if (typeof result.rootPublicKey !== 'string' || (record.rootPublicKey && record.rootPublicKey !== result.rootPublicKey)
-          || !verifyMobileAgentNetCertificate(result.rootPublicKey, result.certificate)
-          || !result.certificate.networkId.startsWith('account:') || result.certificate.subject !== owner.accountId
-          || result.certificate.deviceId !== options.deviceId || result.certificate.signingKey !== signer.identity.signingKey
-          || result.certificate.transportKey !== signer.identity.transportKey) throw new Error('AGENT_NET_IDENTITY_MISMATCH');
-        record = { ...record, rootPublicKey: result.rootPublicKey, certificate: result.certificate };
-        await setSecureItem(key, JSON.stringify(record), { thisDeviceOnly: true }); guard();
+        try {
+          const request = { deviceId: options.deviceId, name: options.deviceName.trim().slice(0, 64),
+            signingKey: signer.identity.signingKey, transportKey: signer.identity.transportKey };
+          const signature = await signer.sign(enrollmentPayload(request));
+          const token = await options.getAccessToken(); guard();
+          if (!token) throw new Error('AGENT_NET_ACCOUNT_AUTH_REQUIRED');
+          const result = await post(base, '/enroll', { ...request, signature }, guard, 'Bearer ' + token) as {
+            rootPublicKey?: string; certificate?: DeviceCertificate;
+          };
+          if (typeof result.rootPublicKey !== 'string' || (record.rootPublicKey && record.rootPublicKey !== result.rootPublicKey)
+            || !verifyMobileAgentNetCertificate(result.rootPublicKey, result.certificate)
+            || !result.certificate.networkId.startsWith('account:') || result.certificate.subject !== owner.accountId
+            || result.certificate.deviceId !== options.deviceId || result.certificate.signingKey !== signer.identity.signingKey
+            || result.certificate.transportKey !== signer.identity.transportKey) throw new Error('AGENT_NET_IDENTITY_MISMATCH');
+          record = { ...record, rootPublicKey: result.rootPublicKey, certificate: result.certificate };
+          await setSecureItem(key, JSON.stringify(record), { thisDeviceOnly: true }); guard();
+        } catch (error) {
+          guard();
+          // Keep the exact stored certificate only while it remains valid;
+          // the runtime already retries early renewal on its existing timer.
+          if (!old || old.expiresAt <= Date.now() || !enrollmentUnavailable(error)) throw error;
+          if (cached?.scope === scope && cached.api.certificate.signature === old.signature) {
+            cached.signer.assertCurrent();
+            return cached;
+          }
+        }
       }
       const value = prepared(scope, base, signer, native, record.certificate!, record.rootPublicKey!, guard, false);
       guard(); const previous = cached; cached = value; retained = true;

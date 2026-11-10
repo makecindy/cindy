@@ -29,7 +29,7 @@ function fixture(complete = false, kind: 'portable' | 'node' = 'portable', reque
       { status: 206, headers: { 'content-range': `bytes 0-${HEADER - 1}/${HEADER}` } });
     };
   const api = kind === 'node' ? new AgentNetClient('https://relay.example.test', identity,
-    bootstrap.ownerCertificate, bootstrap.rootPublicKey, undefined, { fetch: fetchResponse })
+    bootstrap.ownerCertificate, bootstrap.rootPublicKey, undefined, { fetch: requestFetch ?? fetchResponse })
     : new PortableAgentNetClient('https://relay.example.test', { identity,
       sign: async text => signature(identity.signingPrivateKey, text), random: async () => Buffer.alloc(32, 17).toString('base64url') },
     bootstrap.ownerCertificate, bootstrap.rootPublicKey, { verifyCertificate, assertCurrent, fetch: requestFetch ?? fetchResponse,
@@ -91,17 +91,18 @@ it('also cancels an upload acknowledgement whose JSON body stalls after headers'
 // Directory fallback receives SDK errors, not ApiError. Previous media coverage
 // never exercised raw Fetch failures or the control request's 10-second deadline.
 // Unit: real request/signing/JSON path with injected Fetch, no I/O or real waits.
-it.each(['headers', 'body'] as const)('classifies a network failure during %s as an unavailable request', async stage => {
+const requestCases = (['portable', 'node'] as const).flatMap(kind => (['headers', 'body'] as const).map(stage => ({ kind, stage })));
+it.each(requestCases)('classifies a $kind network failure during $stage as an unavailable request', async ({ kind, stage }) => {
   const requestFetch = vi.fn<typeof fetch>(async () => {
     if (stage === 'headers') throw new TypeError('Network request failed');
     return new Response(new ReadableStream({ start(controller) { controller.error(new TypeError('Network request failed')); } }));
   });
-  const value = fixture(false, 'portable', requestFetch);
+  const value = fixture(false, kind, requestFetch);
   await expect(value.api.request('GET', '/directory')).rejects.toMatchObject({ status: 0, code: 'AGENT_NET_NETWORK_ERROR' });
   expect(requestFetch).toHaveBeenCalledTimes(1);
 });
 
-it.each(['headers', 'body'] as const)('classifies the request deadline during %s without waiting in real time', async stage => {
+it.each(requestCases)('classifies the $kind request deadline during $stage without waiting in real time', async ({ kind, stage }) => {
   vi.useFakeTimers();
   let started!: () => void;
   const ready = new Promise<void>(resolve => { started = resolve; });
@@ -113,7 +114,7 @@ it.each(['headers', 'body'] as const)('classifies the request deadline during %s
       signal.addEventListener('abort', () => controller.error(signal.reason), { once: true });
     } }));
   };
-  const value = fixture(false, 'portable', requestFetch);
+  const value = fixture(false, kind, requestFetch);
   const outcome = value.api.request('GET', '/directory').catch(error => error);
   await ready;
   await vi.advanceTimersByTimeAsync(10_000);
@@ -121,17 +122,21 @@ it.each(['headers', 'body'] as const)('classifies the request deadline during %s
   expect(vi.getTimerCount()).toBe(0);
 });
 
-it('preserves certificate denial and malformed JSON as terminal failures', async () => {
-  const denied = fixture(false, 'portable', async () => Response.json({ error: { code: 'CERTIFICATE_INVALID' } }, { status: 403 }));
+it.each(['portable', 'node'] as const)('preserves %s certificate denial and malformed JSON as terminal failures', async kind => {
+  const denied = fixture(false, kind, async () => Response.json({ error: { code: 'CERTIFICATE_INVALID' } }, { status: 403 }));
   await expect(denied.api.request('GET', '/directory')).rejects.toMatchObject({ status: 403, code: 'CERTIFICATE_INVALID' });
-  const malformed = fixture(false, 'portable', async () => new Response('not JSON'));
+  const malformed = fixture(false, kind, async () => new Response('not JSON'));
   await expect(malformed.api.request('GET', '/directory')).rejects.toBeInstanceOf(SyntaxError);
+  const unreadableDenial = fixture(false, kind, async () => new Response(new ReadableStream({ start(controller) {
+    controller.error(new TypeError('Network request failed'));
+  } }), { status: 403 }));
+  await expect(unreadableDenial.api.request('GET', '/directory')).rejects.toMatchObject({ status: 403 });
 });
 
-it('does not reclassify caller cancellation as a transient outage', async () => {
+it.each(['portable', 'node'] as const)('does not reclassify %s caller cancellation as a transient outage', async kind => {
   let started!: () => void;
   const ready = new Promise<void>(resolve => { started = resolve; });
-  const value = fixture(false, 'portable', async (_url, init) => new Promise((_resolve, reject) => {
+  const value = fixture(false, kind, async (_url, init) => new Promise((_resolve, reject) => {
     init!.signal!.addEventListener('abort', () => reject(init!.signal!.reason), { once: true }); started();
   }));
   const caller = new AbortController(), outcome = value.api.request('GET', '/directory', undefined, { signal: caller.signal }).catch(error => error);

@@ -297,6 +297,7 @@ export async function createAgentNetAppSocket(): Promise<AgentNetAppSocket | nul
   } catch (error) { socket.close(); throw error; }
   const previous = current; current = socket; previous?.close();
   let renewal: ReturnType<typeof setTimeout> | undefined;
+  let activeCertificate = api.certificate.signature;
   const scheduleRenewal = (expiresAt: number, retry = false) => {
     renewal = setTimeout(() => {
       if (current !== socket) return;
@@ -304,8 +305,12 @@ export async function createAgentNetAppSocket(): Promise<AgentNetAppSocket | nul
       catch { return; }
       void ensureOfficialAgentNetClient(deviceName()).then(async (next) => {
         assertOwner(); if (current !== socket) return;
-        approver.close(); approver = createDelegationApprover(next, assertOwner, authorizeAgentNetSharingRequest);
-        await socket.replaceClient(next); scheduleRenewal(next.certificate.expiresAt);
+        if (next.certificate.signature !== activeCertificate) {
+          await socket.replaceClient(next);
+          approver.close(); approver = createDelegationApprover(next, assertOwner, authorizeAgentNetSharingRequest);
+          activeCertificate = next.certificate.signature;
+        }
+        scheduleRenewal(next.certificate.expiresAt);
       }).catch(() => { if (current === socket) scheduleRenewal(expiresAt, true); });
     }, retry ? 60_000 : Math.max(60_000, expiresAt - Date.now() - 24 * 60 * 60_000));
     renewal.unref();

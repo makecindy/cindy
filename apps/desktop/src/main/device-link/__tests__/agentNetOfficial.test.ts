@@ -3,7 +3,7 @@
  * 依据：V2 独立身份/现有凭据安全规则；已有私有中转测试不覆盖账号 enrollment。
  * 最小失败输入：两个同时初始化、续签更换根、请求期间换账号；tier：unit，只有宿主 IO 边界注入。
  */
-import { beforeEach, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { generateKeyPairSync } from 'node:crypto';
 import { enrollmentPayload } from '@cindy/agent-net-protocol';
 import { issueCertificate, publicBytes, verifySignature } from '@cindy/agent-net-relay';
@@ -40,6 +40,7 @@ beforeEach(() => {
   state.base = 'https://agent-net.example.test'; state.root = generateKeyPairSync('ed25519').privateKey;
   state.secrets.clear(); state.writes = []; state.requests = 0; state.beforeIssue = null;
 });
+afterEach(() => vi.useRealTimers());
 it('single-flights account enrollment and keeps the signed identity in the existing encrypted vault', async () => {
   const [first, second] = await Promise.all([ensureOfficialAgentNetClient('Unit device'), ensureOfficialAgentNetClient('Unit device')]);
   expect(first).toBe(second); expect(state.requests).toBe(1);
@@ -67,4 +68,35 @@ it('does not persist a late certificate after the account changes', async () => 
   state.scope = 'scope-b'; state.subject = 'membership-b'; release.resolve();
   await expect(pending).rejects.toThrow('AGENT_NET_OWNER_CHANGED');
   expect(state.writes.every((entry) => entry.agentNet === undefined)).toBe(true);
+});
+
+// Offline restart during the final 24h was not covered by successful enrollment
+// or root-pinning tests. Real certificates and vault boundary, no I/O or waits.
+it.each([0, 503])('retains an unexpired identity on enrollment status %s and renews on the next attempt', async status => {
+  const first = await ensureOfficialAgentNetClient('Unit device'), saved = state.secrets.get(officialAgentNetSlot());
+  saved.agentNet.certificate = issueCertificate(state.root, { networkId: first.certificate.networkId, subject: first.certificate.subject,
+    identity: first.identity, role: 'owner', now: Date.now() - 13.5 * 24 * 60 * 60_000 });
+  const previous = saved.agentNet.certificate;
+  state.writes = [];
+  state.beforeIssue = async () => { throw Object.assign(new Error('enrollment unavailable'), { status, code: 'NETWORK_ERROR' }); };
+  const retained = await ensureOfficialAgentNetClient('Unit device');
+  expect(retained.certificate).toEqual(previous);
+  expect(retained.identity.signingKey).toBe(first.identity.signingKey);
+  expect(state.writes).toHaveLength(0);
+  state.beforeIssue = null;
+  expect((await ensureOfficialAgentNetClient('Unit device')).certificate.expiresAt).toBeGreaterThan(previous.expiresAt);
+});
+
+it('does not retain a certificate past expiry or after an authoritative renewal denial', async () => {
+  const first = await ensureOfficialAgentNetClient('Unit device'), saved = state.secrets.get(officialAgentNetSlot());
+  saved.agentNet.certificate = issueCertificate(state.root, { networkId: first.certificate.networkId, subject: first.certificate.subject,
+    identity: first.identity, role: 'owner', now: Date.now() - 13.5 * 24 * 60 * 60_000 });
+  state.beforeIssue = async () => { throw Object.assign(new Error('certificate rejected'), { status: 403, code: 'DEVICE_REENROLLMENT_REQUIRES_APPROVAL' }); };
+  await expect(ensureOfficialAgentNetClient('Unit device')).rejects.toMatchObject({ status: 403 });
+  vi.useFakeTimers(); vi.setSystemTime(saved.agentNet.certificate.expiresAt - 1);
+  state.beforeIssue = async () => {
+    vi.setSystemTime(saved.agentNet.certificate.expiresAt + 1);
+    throw Object.assign(new Error('enrollment unavailable'), { status: 0, code: 'NETWORK_ERROR' });
+  };
+  await expect(ensureOfficialAgentNetClient('Unit device')).rejects.toMatchObject({ status: 0 });
 });

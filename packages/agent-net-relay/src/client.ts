@@ -99,10 +99,33 @@ export class AgentNetClient {
   async request<T = Record<string, unknown>>(method: string, resource: string, input?: unknown, options?: { signal?: AbortSignal }): Promise<T> {
     const path = this.path(resource);
     const body = input === undefined ? '' : JSON.stringify(input);
-    return responseBody(await (this.transport.fetch ?? fetch)(this.base + path, {
-      method, headers: { authorization: this.header(method, path, body), ...(body ? { 'content-type': 'application/json' } : {}) },
-      ...(body ? { body } : {}), redirect: 'error', signal: options?.signal ? AbortSignal.any([options.signal, AbortSignal.timeout(10_000)]) : AbortSignal.timeout(10_000),
-    })) as Promise<T>;
+    const authorization = this.header(method, path, body);
+    const controller = new AbortController(), timer = setTimeout(() => controller.abort(), 10_000);
+    const abort = () => controller.abort();
+    if (options?.signal?.aborted) controller.abort();
+    else options?.signal?.addEventListener('abort', abort, { once: true });
+    const readTransport = async <R>(read: () => Promise<R>, status?: number): Promise<R> => {
+      try { return await read(); }
+      catch (error) {
+        if (!options?.signal?.aborted) {
+          if (status && status >= 400 && status < 500 && status !== 429) throw new AgentNetClientError(status, 'AGENT_NET_REQUEST_FAILED');
+          if (controller.signal.aborted) throw new AgentNetClientError(0, 'AGENT_NET_REQUEST_TIMEOUT');
+          if (error instanceof TypeError || (error as { name?: unknown } | null)?.name === 'AbortError') {
+            throw new AgentNetClientError(0, 'AGENT_NET_NETWORK_ERROR');
+          }
+        }
+        throw error;
+      }
+    };
+    try {
+      const response = await readTransport(() => (this.transport.fetch ?? fetch)(this.base + path, {
+        method, headers: { authorization, ...(body ? { 'content-type': 'application/json' } : {}) },
+        ...(body ? { body } : {}), redirect: 'error', signal: controller.signal,
+      }));
+      const result = await readTransport(() => response.json(), response.status) as { error?: { code?: string } };
+      if (!response.ok) throw new AgentNetClientError(response.status, result.error?.code ?? 'AGENT_NET_REQUEST_FAILED');
+      return result as T;
+    } finally { clearTimeout(timer); options?.signal?.removeEventListener('abort', abort); }
   }
   async directory(): Promise<DeviceView[]> {
     const result = await this.request<{ rootPublicKey: string; devices: DeviceView[] }>('GET', '/directory');

@@ -97,13 +97,14 @@ export class PortableAgentNetClient implements SocketClient {
     const abort = () => controller.abort();
     if (options?.signal?.aborted) controller.abort();
     else options?.signal?.addEventListener('abort', abort, { once: true });
-    const readTransport = async <R>(read: () => Promise<R>): Promise<R> => {
+    const readTransport = async <R>(read: () => Promise<R>, status?: number): Promise<R> => {
       try { return await read(); }
       catch (error) {
         this.options.assertCurrent();
         // Only Fetch/body transport errors are transient. Caller cancellation,
         // invalid JSON and authenticated server rejections keep their meaning.
         if (!options?.signal?.aborted) {
+          if (status && status >= 400 && status < 500 && status !== 429) throw new PortableAgentNetClientError(status, 'AGENT_NET_REQUEST_FAILED');
           if (controller.signal.aborted) throw new PortableAgentNetClientError(0, 'AGENT_NET_REQUEST_TIMEOUT');
           if (error instanceof TypeError || (error as { name?: unknown } | null)?.name === 'AbortError') {
             throw new PortableAgentNetClientError(0, 'AGENT_NET_NETWORK_ERROR');
@@ -118,7 +119,7 @@ export class PortableAgentNetClient implements SocketClient {
         ...(body ? { body } : {}), redirect: 'error', signal: controller.signal,
       }));
       this.options.assertCurrent();
-      const result = await readTransport(() => response.json()) as { error?: { code?: unknown } };
+      const result = await readTransport(() => response.json(), response.status) as { error?: { code?: unknown } };
       this.options.assertCurrent();
       if (!response.ok) throw new PortableAgentNetClientError(response.status,
         typeof result.error?.code === 'string' && /^[A-Z0-9_]{1,80}$/.test(result.error.code)

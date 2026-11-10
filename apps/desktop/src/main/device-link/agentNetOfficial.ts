@@ -13,6 +13,7 @@ import { outboundFetch, createOutboundHttpAgent } from '../maker-host/outbound-f
 import { readRelaySecrets, writeRelaySecrets, relayDataPath, type RelaySecrets } from './selfHostedRelayConfig.js';
 import { activeSelfHostedRelay } from './selfHostedRelayRouting.js';
 import { withCrossProcessLock } from './crossProcessLock.js';
+import { isTemporaryProviderMetadataFailure } from './providerMetadataContinuity.js';
 
 const renewalMargin = 24 * 60 * 60_000;
 const inflight = new Map<string, Promise<AgentNetClient>>();
@@ -77,11 +78,18 @@ export function ensureOfficialAgentNetClient(name: string): Promise<AgentNetClie
     const ready = client(base, secrets);
     if (ready && ready.certificate.expiresAt - Date.now() > renewalMargin) return ready;
     const keys = identity(slot, secrets);
-    const response = await serverApiFetch('/api/agent-net/enroll', {
+    let response: unknown;
+    try { response = await serverApiFetch('/api/agent-net/enroll', {
       baseUrl: () => { assertCurrent(); return base; }, method: 'POST', body: createEnrollmentRequest(keys, name.trim().slice(0, 64) || 'Cindy'),
       timeoutMs: 10_000, cache: 'no-store', logLabel: '/api/agent-net/enroll', redactErrorDetails: true,
       allowedRedactedErrorCodes: ['DEVICE_REENROLLMENT_REQUIRES_APPROVAL', 'ACCOUNT_AUTH_INVALID', 'ENROLLMENT_PROOF_INVALID'],
-    });
+    }); } catch (error) {
+      assertCurrent();
+      // Early renewal is optional while the original identity is still valid.
+      // The socket's existing renewal timer retries without extending expiry.
+      if (ready && ready.certificate.expiresAt > Date.now() && isTemporaryProviderMetadataFailure(error)) return ready;
+      throw error;
+    }
     assertCurrent();
     const enrolled = acceptEnrollment(keys, response, subject!, secrets.agentNet?.rootPublicKey);
     return locked(() => {
