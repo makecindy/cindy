@@ -6,6 +6,7 @@ import { parseGhostRoutineEvents, type GhostRoutineEvents } from '@cindy/plugin-
 import { parseGhostModelsNeeds, type GhostModelsNeeds } from '@cindy/plugin-protocol';
 export type { GhostModelRoute } from '@cindy/plugin-protocol';
 import type { GhostModelRoute } from '@cindy/plugin-protocol';
+import type { GhostContextBlock, GhostMemoryEntry } from '@cindy/plugin-protocol';
 import { parseMailReader } from '@cindy/maker-shared/mail-message';
 import { isPluginModelSelection, parsePluginAuthorizationRequest, type PluginAuthorizationRequest, type PluginAuthorizationResult, type PluginModelSelection } from '@cindy/device-link';
 import {
@@ -719,7 +720,7 @@ export type GhostMessageHook = (typeof GHOST_MESSAGE_HOOKS)[number];
 export const GHOST_CONTROL_POINT_FAILURE_ACTIONS = ['allow', 'skip', 'block'] as const;
 export type GhostControlPointFailureAction = (typeof GHOST_CONTROL_POINT_FAILURE_ACTIONS)[number];
 
-export type GhostControlPointAction = 'allow' | 'skip' | 'block' | 'route' | 'transform';
+export type GhostControlPointAction = 'allow' | 'skip' | 'block' | 'route' | 'transform' | 'context' | 'memories';
 
 export interface GhostControlPointSpec {
   /** 插件可返回的裁决(allow 恒可用)。route 只用于开新任务时选模型。 */
@@ -787,6 +788,16 @@ export const GHOST_CONTROL_POINTS = {
     permissionKey: 'subscribe:hooks:model-request',
     labelKey: 'subscribeModelRequest',
     detailKey: 'subscribeModelRequestDetail',
+  },
+  'will-compose-context': {
+    actions: ['allow', 'context', 'skip', 'block'], failureActions: ['allow', 'skip', 'block'],
+    defaultOnFailure: 'block', timeoutMs: 8_000, permissionKey: 'subscribe:hooks:compose-context',
+    labelKey: 'subscribeComposeContext', detailKey: 'subscribeComposeContextDetail',
+  },
+  'will-search-memory': {
+    actions: ['allow', 'memories'], failureActions: ['allow'],
+    defaultOnFailure: 'allow', timeoutMs: 8_000, permissionKey: 'subscribe:hooks:search-memory',
+    labelKey: 'subscribeSearchMemory', detailKey: 'subscribeSearchMemoryDetail',
   },
 } as const satisfies Record<string, GhostControlPointSpec>;
 export type GhostControlPointId = keyof typeof GHOST_CONTROL_POINTS;
@@ -8964,7 +8975,15 @@ export interface GhostRuntimePointData {
 
 export const GHOST_MODEL_REQUEST_MAX_CHARS = 1_048_576;
 
-export type GhostControlPointData = GhostScheduleRunPointData | GhostRoutineRunPointData | GhostStartTaskPointData | GhostRuntimePointData;
+export interface GhostMemorySearchPointData {
+  sessionId: string;
+  query: string;
+  limit: number;
+  type?: 'user' | 'feedback' | 'project' | 'reference';
+}
+export interface GhostComposeContextPointData { sessionId: string; text: string }
+
+export type GhostControlPointData = GhostScheduleRunPointData | GhostRoutineRunPointData | GhostStartTaskPointData | GhostRuntimePointData | GhostMemorySearchPointData | GhostComposeContextPointData;
 
 /** 选择器里的一个插件模型(已按当前语言解析文案)。 */
 export interface GhostPickerModel {
@@ -8993,6 +9012,8 @@ export type GhostControlPointResult =
   | { action: 'route'; ghostId: string; ghostName: string; route: GhostModelRoute; reason: string };
 
 export type GhostRuntimeControlPointResult = GhostControlPointResult
+  | { action: 'context'; ghostId: string; ghostName: string; blocks: GhostContextBlock[] }
+  | { action: 'memories'; ghostId: string; ghostName: string; entries: GhostMemoryEntry[] }
   | { action: 'transform'; ghostId: string; ghostName: string; request: Record<string, unknown> };
 
 
@@ -9131,7 +9152,9 @@ export type GhostPipeEventPush =
 export interface GhostPipeEventVerdict {
   type: 'event-verdict';
   hookId: string;
-  action: 'allow' | 'block' | 'rewrite' | 'render' | 'skip' | 'route' | 'transform';
+  action: 'allow' | 'block' | 'rewrite' | 'render' | 'skip' | 'route' | 'transform' | 'context' | 'memories';
+  blocks?: GhostContextBlock[];
+  entries?: GhostMemoryEntry[];
   /** Provider request JSON body, only for will-model-request phase=payload. */
   request?: Record<string, unknown>;
   /** route 时选定的模型(仅开新任务时)。 */

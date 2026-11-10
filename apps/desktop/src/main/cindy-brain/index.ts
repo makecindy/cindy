@@ -1,4 +1,7 @@
 import { setPluginEnabled } from './pluginEnableService.js';
+import { createRuntimePluginControl } from './runtimeControl.js';
+import { createRuntimeContextProviders } from './runtimeContext.js';
+import { readRuntimePluginSettings } from '../maker-host/runtime-plugin-settings.js';
 import { createGhostExecutionPipe } from './executionPipe.js';
 import { createPluginFileAccess } from '../mcp-apps/pluginFileAccess.js';
 import { ownsPersonalBuildMonitor } from '../personalBuildMonitor.js';
@@ -3134,13 +3137,39 @@ export async function screenGhostUserMessage(
  * 插件不可用或出错时按任务的 onFailure 处理。owner 在询问期间切换时按放行收口，调用方的
  * 流程自己也会因 owner 失效而中止；网关本身异常同样按 onFailure 处理，不静默放行。
  */
+export function getGhostRuntimePluginControl(): ReturnType<typeof createRuntimePluginControl> {
+  return ghostRuntimeControl ??= createRuntimePluginControl({
+    readSettings: readRuntimePluginSettings,
+    captureOwner: () => {
+      const owner = getGhostOwnerPushStamp();
+      return () => isGhostOwnerStampCurrent(owner) && !isAppSessionBoundaryPending();
+    },
+    screen: (point, data, target) => screenGhostControlPoint(point, data, target),
+  });
+}
+let ghostRuntimeControl: ReturnType<typeof createRuntimePluginControl> | undefined;
+let ghostRuntimeContexts: ReturnType<typeof createRuntimeContextProviders> | undefined;
+function runtimeContextProviders() {
+  return ghostRuntimeContexts ??= createRuntimeContextProviders(getGhostRuntimePluginControl());
+}
+export function composeGhostRuntimeContext(sessionId: string, text: string, signal?: AbortSignal): Promise<string> | undefined {
+  return runtimeContextProviders().compose(sessionId, text, signal);
+}
+export function searchGhostRuntimeMemories(query: string,
+  opts: { type?: 'user' | 'feedback' | 'project' | 'reference'; limit?: number },
+  context?: { sessionId?: string }) {
+  if (!context?.sessionId) return undefined;
+  return runtimeContextProviders().search({ sessionId: context.sessionId, query, limit: opts.limit ?? 10,
+    ...(opts.type ? { type: opts.type } : {}) });
+}
+
 export function screenGhostControlPoint(
-  point: 'will-start-turn' | 'will-model-request',
+  point: 'will-start-turn' | 'will-model-request' | 'will-compose-context' | 'will-search-memory',
   data: GhostControlPointData,
   target: { pluginId: string; onFailure: GhostControlPointFailureAction },
 ): Promise<GhostRuntimeControlPointResult>;
 export function screenGhostControlPoint(
-  point: Exclude<GhostControlPointId, 'will-start-turn' | 'will-model-request'>,
+  point: Exclude<GhostControlPointId, 'will-start-turn' | 'will-model-request' | 'will-compose-context' | 'will-search-memory'>,
   data: GhostControlPointData,
   target: { pluginId: string; onFailure: GhostControlPointFailureAction },
 ): Promise<GhostControlPointResult>;

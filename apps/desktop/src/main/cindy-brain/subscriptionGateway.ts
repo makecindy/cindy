@@ -23,7 +23,8 @@ import { createHash, randomUUID } from 'node:crypto';
 
 import { isTurnContinuationBoundaryEvent } from '@cindy/maker-shared/turn-continuation';
 import { eq } from 'drizzle-orm';
-import { parseGhostModelRoute } from '@cindy/plugin-protocol';
+import { parseGhostModelRoute, parseGhostContextBlocks, parseGhostMemoryEntries, type GhostContextBlock, type GhostMemoryEntry } from '@cindy/plugin-protocol';
+import { isRuntimePluginPoint } from '../../shared/pluginRuntime.js';
 
 import {
   GHOST_ASSISTANT_HOOK_TIMEOUT_MS,
@@ -63,7 +64,9 @@ const BLOCK_REASON_MAX_CHARS = 200;
 
 /** 单意识裁决(askOne 归一化产物;null = 本轮失败已计熔断)。 */
 type HookVerdict = {
-  action: 'allow' | 'block' | 'rewrite' | 'render' | 'skip' | 'route' | 'transform';
+  action: 'allow' | 'block' | 'rewrite' | 'render' | 'skip' | 'route' | 'transform' | 'context' | 'memories';
+  blocks?: GhostContextBlock[];
+  entries?: GhostMemoryEntry[];
   route?: GhostModelRoute;
   request?: Record<string, unknown>;
   reason?: string;
@@ -598,7 +601,7 @@ export class GhostSubscriptionGateway {
     const verdict = e.pointFused ? null : await this.askControlPoint(ghost, e, point, data, spec.timeoutMs, ownerScope);
     if (!this.ownerScopeUsable(ownerScope)) return { action: 'allow' };
     if (verdict === null) return failed(ghostId, ghost.manifest.name, e.pointFused ? 'fused' : 'unanswered');
-    const runtimePoint = point === 'will-start-turn' || point === 'will-model-request';
+    const runtimePoint = isRuntimePluginPoint(point);
     if (runtimePoint) {
       const current = findInstalledGhostByInstanceId(this.deps.listGhosts(), ghostId);
       if (!current || !ghostControlPointActive(current, point)
@@ -624,6 +627,12 @@ export class GhostSubscriptionGateway {
     if (point === 'will-model-request' && verdict.action === 'transform' && verdict.request
       && 'phase' in data && data.phase === 'payload') {
       return { action: 'transform', ghostId, ghostName: ghost.manifest.name, request: verdict.request };
+    }
+    if (point === 'will-compose-context' && verdict.action === 'context' && verdict.blocks) {
+      return { action: 'context', ghostId, ghostName: ghost.manifest.name, blocks: verdict.blocks };
+    }
+    if (point === 'will-search-memory' && verdict.action === 'memories' && verdict.entries) {
+      return { action: 'memories', ghostId, ghostName: ghost.manifest.name, entries: verdict.entries };
     }
     if ((verdict.action === 'skip' || verdict.action === 'block') &&
         (spec.actions as readonly string[]).includes(verdict.action)) {
@@ -830,7 +839,7 @@ export class GhostSubscriptionGateway {
     if (p.type !== 'event-verdict' || typeof p.hookId !== 'string') return;
     const pending = this.pendingHooks.get(p.hookId);
     if (!pending || pending.ghostId !== ghostId) return;
-    if (p.action !== 'allow' && p.action !== 'block' && p.action !== 'rewrite' && p.action !== 'render' && p.action !== 'skip' && p.action !== 'route' && p.action !== 'transform') return;
+    if (p.action !== 'allow' && p.action !== 'block' && p.action !== 'rewrite' && p.action !== 'render' && p.action !== 'skip' && p.action !== 'route' && p.action !== 'transform' && p.action !== 'context' && p.action !== 'memories') return;
     const route = p.action === 'route' ? parseGhostModelRoute(p.route) : undefined;
     let request: Record<string, unknown> | undefined;
     if (p.action === 'transform' && p.request && typeof p.request === 'object' && !Array.isArray(p.request)) {
@@ -848,6 +857,8 @@ export class GhostSubscriptionGateway {
       ...(typeof p.height === 'number' ? { height: p.height } : {}),
       ...(route ? { route } : {}),
       ...(request ? { request } : {}),
+      ...(p.action === 'context' ? { blocks: parseGhostContextBlocks(p.blocks) } : {}),
+      ...(p.action === 'memories' ? { entries: parseGhostMemoryEntries(p.entries) } : {}),
     });
   }
 

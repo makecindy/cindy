@@ -36,8 +36,9 @@ describe('Ghost manifest contract', () => {
   // one must not require a resident process (protocol contract, unit).
   it('accepts on-demand runtime controls without making message hooks non-resident', () => {
     const base = { ...validManifest, schemaVersion: 3, minCindyVersion: '0.1.61', slots: undefined };
-    const result = validateGhostManifest({ ...base, subscribe: { hooks: ['will-start-turn', 'will-model-request'] } });
-    expect(result).toMatchObject({ ok: true, manifest: { subscribe: { hooks: ['will-start-turn', 'will-model-request'] } } });
+    const hooks = ['will-start-turn', 'will-model-request', 'will-compose-context', 'will-search-memory'];
+    const result = validateGhostManifest({ ...base, subscribe: { hooks } });
+    expect(result).toMatchObject({ ok: true, manifest: { subscribe: { hooks } } });
     expect(validateGhostManifest({ ...base, subscribe: { hooks: ['will-user-message'] } }).ok).toBe(false);
   });
 

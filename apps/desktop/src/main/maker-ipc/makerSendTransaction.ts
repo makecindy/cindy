@@ -44,6 +44,8 @@ import {
   type HandoffWireMessage,
 } from './agentHandoff.js';
 import type { MessageSourceDevice, MessageSourceHostDevice } from '@cindy/maker-shared/message-source';
+import { pluginMessageText } from '../../shared/pluginMessage.js';
+import { RuntimePluginControlError } from '../cindy-brain/runtimeControl.js';
 import {
   buildClientEnvironmentNote,
   shouldPrependMobileClientPromptNote,
@@ -272,6 +274,7 @@ export interface MakerSendTransactionLog {
 }
 
 export interface MakerSendTransactionDeps {
+  composeRuntimeContext?(sessionId: string, text: string, signal?: AbortSignal): Promise<string> | undefined;
   prepareRuntimeTurn?(sessionId: string, message: unknown, signal?: AbortSignal): Promise<{
     options?: Partial<SessionSendOptions>; failure?: DesktopMakerSendResult;
   }> | undefined;
@@ -1082,7 +1085,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       const runtimePreparation = deps.prepareRuntimeTurn?.(sessionId, message, requestedSendOpts.signal);
       if (runtimePreparation) {
         const runtime = await runtimePreparation;
-        if (runtime.failure) return runtime.failure;
+        if (runtime.failure && !requestedSendOpts.signal?.aborted) return runtime.failure;
         Object.assign(requestedSendOpts, runtime.options);
       }
       // session-agent-switch:pending 切换在发送时刻生效(用户语义:「消息真正发出
@@ -1569,6 +1572,24 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
         : undefined;
       if (appContext?.text) {
         outgoing = prependNoteToWireUserMessage(outgoing as HandoffWireMessage, appContext.text);
+      }
+      if (allowsEnvironmentNotes) {
+        try {
+          const pending = deps.composeRuntimeContext?.(sessionId, extractIpcUserMessageText(normalized), so.signal);
+          const context = pending ? await pending : undefined;
+          if (context) outgoing = prependNoteToWireUserMessage(outgoing as HandoffWireMessage, pluginMessageText('', context).trimStart());
+        } catch (error) {
+          await cleanupRejectedMaterialization();
+          if (so.signal?.aborted) {
+            return toCompatibleMakerSendResult(toDesktopSessionDispatchOutcome(
+              { accepted: false, reason: 'cancelled-before-dispatch' },
+              { source: 'maker-ipc', context: `SEND/${sessionId}/runtime-context` },
+            ));
+          }
+          if (!(error instanceof RuntimePluginControlError)) throw error;
+          const code = error.action === 'skip' ? 'PLUGIN_TURN_SKIPPED' : 'PLUGIN_TURN_BLOCKED';
+          return toCompatibleMakerSendResult(createHostSendFailure(code, 'The selected runtime plugin stopped this reply.'));
+        }
       }
       const assertAppCurrent = so[MCP_APP_MESSAGE_GUARD] || appContext?.text
         ? async () => {

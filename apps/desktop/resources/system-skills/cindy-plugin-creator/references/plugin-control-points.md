@@ -15,6 +15,8 @@
 | `will-start-task` | 新任务(含 `/goal` 开的)第一条消息发出、任务建好之前;只问一次,之后的消息不再问;伙伴对话不问 | allow / route | 8 秒 |
 | `will-start-turn` | 任务中每条消息发给引擎之前；只问任务设置中选中的插件 | allow / route / skip / block | 8 秒 |
 | `will-model-request` | 本机 Pi 的每次模型请求，包含工具结果后的继续请求 | allow / route（select 阶段）/ transform（payload 阶段）/ skip / block | 每次询问 8 秒 |
+| `will-compose-context` | 每条模型消息装配时，为选了该插件的任务补参考资料 | allow / context / skip / block | 8 秒 |
+| `will-search-memory` | 所选任务调用已有 `cindy_memory.memory_search` 时 | allow / memories | 8 秒，失败保留 Cindy 结果 |
 
 运行时用 `host-request` 查当前 Cindy 实际提供哪些节点,别靠版本号猜:
 
@@ -156,3 +158,41 @@ cindy.send({
 超时、未批准、被停用、非法结果或不可用路由都走该任务为该插件设置的出错策略。`skip` 跳过
 本次回复，`block` 停止并报错；插件不能更改出错策略。逐请求阶段发生时，Pi 已接受本次输入，
 `skip` 通过 Pi 原生取消收尾，`block` 通过错误生命周期返回，不伪装成已完成的模型回复。数据只传给选中的插件。
+
+### 上下文与记忆提供者
+
+在 `subscribe.hooks` 声明 `will-compose-context` 或 `will-search-memory`，安装确认分别展示权限。
+用户在任务菜单的「任务插件」中分别选择，可以只用其中一种；不会为其它任务调用插件。
+
+`will-compose-context` 数据为 `{ sessionId, text }`（当前消息）。返回：
+
+```js
+cindy.send({ type: 'event-verdict', hookId: msg.hookId, action: 'context',
+  blocks: [{ id: 'project-notes', text: 'Retrieved project reference material.' }] });
+```
+
+每个块的 `id` 唯一、最多 128 字符；最多 32 块、正文合计最多 32768 字符。宿主给每组资料
+加来源插件，再受同一附带资料预算约束。资料复用消息附带 `context` 的普通消息通道；不进
+system prompt，不改变显示／落库的主人原话，也不进入自动审核的用户授权来源。原生控制命令
+（如 `/compact`）不追加资料。`sessionContext: true` 仍只是工具参数里的任务／目录元数据，
+不是模型上下文注入通道。
+
+`will-search-memory` 数据为 `{ sessionId, query, type?, limit }`，只发送当前查询，不发送 Cindy
+已搜到的记忆。返回：
+
+```js
+cindy.send({ type: 'event-verdict', hookId: msg.hookId, action: 'memories',
+  entries: [{ id: 'preference-1', title: 'Preferred format', type: 'reference',
+    content: 'Complete memory content returned inline.' }] });
+```
+
+每批最多 50 项、全文合计最多 32768 字符；`id` 最多 128 字符、`title` 最多 256 字符，
+`type` 可选 `user / feedback / project / reference`。来源 `sourcePlugin: { id, name }`
+始终由宿主填写；插件自报的来源会被丢弃。结果全文直接在 `memory_search` 返回，不伪造本地
+文件名，也不要求 Agent 再调用其它工具。Cindy 原有结果与插件结果各保留自身排序，交替合并
+并遵守调用者的总 `limit`；不同索引的分数不混排。
+
+沿用现有 `cindy_memory` 的启用与账号／任务边界，不另建记忆库或额外工具。需已有记忆检索
+可用；不开启记忆时保持原行为。提供者超时、停用、出错或给了非法数据时忽略其结果，Cindy
+原有检索仍正常返回；这个节点只有“照常检索”的出错策略。源任务／账号失效后丢弃迟到结果。
+Claude Code、Codex、Pi 都复用同一个检索入口；多插件仅调用任务实际选择的提供者。

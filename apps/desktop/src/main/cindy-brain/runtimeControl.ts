@@ -1,4 +1,4 @@
-import type { GhostRuntimeControlPointResult, GhostRuntimePointData } from '../../shared/ghost.js';
+import type { GhostRuntimeControlPointResult, GhostControlPointData } from '../../shared/ghost.js';
 import type { RuntimePluginPoint, RuntimePluginSettings, RuntimePluginTarget } from '../../shared/pluginRuntime.js';
 
 export class RuntimePluginControlError extends Error {
@@ -17,21 +17,21 @@ export class RuntimePluginControlError extends Error {
 export function createRuntimePluginControl(deps: {
   readSettings(sessionId: string): RuntimePluginSettings | undefined;
   captureOwner(): () => boolean;
-  screen(point: RuntimePluginPoint, data: GhostRuntimePointData, target: RuntimePluginTarget): Promise<GhostRuntimeControlPointResult>;
+  screen(point: RuntimePluginPoint, data: GhostControlPointData, target: RuntimePluginTarget): Promise<GhostRuntimeControlPointResult>;
 }) {
   return {
     /** Undefined is deliberately synchronous: no selection adds no await or data lookup. */
-    run(
+    run<Data extends GhostControlPointData>(
       point: RuntimePluginPoint,
       sessionId: string,
-      readData: () => Promise<GhostRuntimePointData>,
+      readData: () => Promise<Data>,
       apply: (
         result: GhostRuntimeControlPointResult,
-        data: GhostRuntimePointData,
+        data: Data,
         assertCurrent: () => void,
-      ) => Promise<GhostRuntimePointData | void>,
+      ) => Promise<Data | void>,
       signal?: AbortSignal,
-    ): Promise<GhostRuntimePointData> | undefined {
+    ): Promise<Data> | undefined {
       const targets = deps.readSettings(sessionId)?.[point];
       if (!targets?.length) return undefined;
       const selection = JSON.stringify(targets);

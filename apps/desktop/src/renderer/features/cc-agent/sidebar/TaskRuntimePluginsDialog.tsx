@@ -60,6 +60,7 @@ export function TaskRuntimePluginsDialog({ session, onDismiss }: { session: Sess
             const spec = GHOST_CONTROL_POINTS[point];
             return <fieldset key={point} disabled={busy || !loaded} className="flex flex-col gap-2">
               <legend className="mb-2 text-14 font-medium text-[var(--text-primary)]">{t(`settings.ghosts.perm.${spec.labelKey}`)}</legend>
+              {(point === 'will-compose-context' || point === 'will-search-memory') && <p className="text-13 leading-5 text-[var(--text-secondary)]">{t(`settings.ghosts.perm.${spec.detailKey}`)}</p>}
               {unsupported && <p className="text-13 leading-5 text-[var(--text-secondary)]">{t('runtimePlugins.unsupported')}</p>}
               {loaded && !list.length && <p className="text-13 text-[var(--text-secondary)]">{t('scheduler.editor.preRunPlugin.empty')}</p>}
               {list.map(plugin => {

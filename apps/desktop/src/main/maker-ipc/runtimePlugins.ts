@@ -1,5 +1,5 @@
 import { MODEL_REQUEST_CONTROL, type ModelRequestControl, type SendOptions } from '@cindy/maker-core';
-import type { GhostModelRoute } from '../../shared/ghost.js';
+import type { GhostModelRoute, GhostRuntimePointData } from '../../shared/ghost.js';
 import { assertRuntimeRequestShape, type RuntimePluginSettings } from '../../shared/pluginRuntime.js';
 import { createRuntimePluginControl, RuntimePluginControlError } from '../cindy-brain/runtimeControl.js';
 
@@ -20,7 +20,7 @@ export function createTaskRuntimePlugins(deps: {
         const content = typeof message === 'string' ? message : (message as { content?: unknown } | null)?.content;
         const text = typeof content === 'string' ? content : Array.isArray(content)
           ? content.filter(item => item?.type === 'text' && typeof item.text === 'string').map(item => item.text).join('\n') : '';
-        const turn = deps.control.run('will-start-turn', sessionId, async () => ({ sessionId,
+        const turn = deps.control.run<GhostRuntimePointData>('will-start-turn', sessionId, async () => ({ sessionId,
           route: await deps.readRoute(sessionId), text,
         }), async (result, data, assertCurrent) => {
           if (result.action !== 'route') return;
@@ -41,7 +41,7 @@ export function createTaskRuntimePlugins(deps: {
         }
         const control: ModelRequestControl = async input => {
           let changedRoute = false;
-          const result = deps.control.run('will-model-request', sessionId, async () => ({ sessionId,
+          const result = deps.control.run<GhostRuntimePointData>('will-model-request', sessionId, async () => ({ sessionId,
             route: { agentKind: 'pi', providerId: input.providerId, model: input.model },
             phase: input.phase, request: input.request,
           }), async (verdict, data, assertCurrent) => {

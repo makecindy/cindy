@@ -1,9 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createRuntimePluginControl, RuntimePluginControlError } from '../runtimeControl.js';
-import type { GhostRuntimeControlPointResult, GhostRuntimePointData } from '../../../shared/ghost.js';
+import type { GhostControlPointData, GhostRuntimeControlPointResult, GhostRuntimePointData } from '../../../shared/ghost.js';
 import type { RuntimePluginPoint, RuntimePluginSettings, RuntimePluginTarget } from '../../../shared/pluginRuntime.js';
 import { MODEL_REQUEST_CONTROL } from '@cindy/maker-core';
 import { createTaskRuntimePlugins } from '../../maker-ipc/runtimePlugins.js';
+import { createRuntimeContextProviders } from '../runtimeContext.js';
 
 // Test value: the production controller must never load data or call plugins for
 // unselected tasks, must preserve selected order, and must not apply stale answers.
@@ -16,7 +17,7 @@ describe('task runtime plugin control', () => {
   function fixture(initial: RuntimePluginSettings = {}) {
     let settings = initial;
     let owner = true;
-    const screen = vi.fn(async (_point: RuntimePluginPoint, _data: GhostRuntimePointData, _target: RuntimePluginTarget): Promise<GhostRuntimeControlPointResult> => ({ action: 'allow' }));
+    const screen = vi.fn(async (_point: RuntimePluginPoint, _data: GhostControlPointData, _target: RuntimePluginTarget): Promise<GhostRuntimeControlPointResult> => ({ action: 'allow' }));
     const apply = vi.fn(async (_result: GhostRuntimeControlPointResult, _data: GhostRuntimePointData) => {});
     const control = createRuntimePluginControl({
       readSettings: () => settings,
@@ -36,8 +37,11 @@ describe('task runtime plugin control', () => {
 
   it('composes only selected providers in task order', async () => {
     const f = fixture({ 'will-start-turn': [{ pluginId: 'second', onFailure: 'block' }, { pluginId: 'first', onFailure: 'block' }] });
-    f.screen.mockImplementation(async (_point, data, target) => ({ action: 'route', ghostId: target.pluginId, ghostName: target.pluginId,
-      reason: '', route: { ...data.route, model: `${data.route.model}-next` } }));
+    f.screen.mockImplementation(async (_point, data, target) => {
+      if (!('route' in data)) throw new Error('Route fixture required');
+      return { action: 'route', ghostId: target.pluginId, ghostName: target.pluginId,
+        reason: '', route: { ...data.route, model: `${data.route.model}-next` } };
+    });
     const apply = vi.fn(async (result: GhostRuntimeControlPointResult, data: GhostRuntimePointData) =>
       result.action === 'route' ? { ...data, route: result.route } : data);
     const output = await f.control.run('will-start-turn', 'task', async () => input, apply);
@@ -73,8 +77,8 @@ describe('task runtime plugin control', () => {
     const f = fixture({ 'will-start-turn': [{ pluginId: 'router', onFailure: 'block' }],
       'will-model-request': [{ pluginId: 'editor', onFailure: 'allow' }] });
     f.screen.mockImplementation(async (point, data, target) => point === 'will-start-turn'
-      ? { action: 'route', ghostId: target.pluginId, ghostName: 'Router', reason: '', route: { ...data.route, model: 'm2' } }
-      : { action: 'transform', ghostId: target.pluginId, ghostName: 'Editor', request: { ...data.request, messages: null } });
+      ? { action: 'route', ghostId: target.pluginId, ghostName: 'Router', reason: '', route: { ...input.route, model: 'm2' } }
+      : { action: 'transform', ghostId: target.pluginId, ghostName: 'Editor', request: { ...('request' in data ? data.request : {}), messages: null } });
     let route = input.route;
     const applyRoute = vi.fn(async (_id, next) => { route = next; });
     const service = createTaskRuntimePlugins({ control: f.control,
@@ -88,5 +92,25 @@ describe('task runtime plugin control', () => {
     const body = { model: 'm2', messages: [{ role: 'user', content: 'hello' }] };
     const output = await options![MODEL_REQUEST_CONTROL]!({ phase: 'payload', providerId: 'p', model: 'm2', request: body });
     expect(output.request).toEqual(body);
+  });
+
+  // Provider origin belongs to the Host, and search input is the query alone.
+  // Unit: production provider adapter, selected-only transport, no storage copy.
+  it('supplies attributed context and memories only for the selected task', async () => {
+    const f = fixture({ 'will-compose-context': [{ pluginId: 'context', onFailure: 'block' }],
+      'will-search-memory': [{ pluginId: 'memory', onFailure: 'allow' }] });
+    f.screen.mockImplementation(async (point, _data, target) => point === 'will-compose-context'
+      ? { action: 'context', ghostId: target.pluginId, ghostName: 'Context', blocks: [{ id: 'b', text: 'reference' }] }
+      : { action: 'memories', ghostId: target.pluginId, ghostName: 'Memory', entries: [{ id: 'm', title: 'Title', content: 'memory' }] });
+    const providers = createRuntimeContextProviders(f.control);
+    expect(await providers.compose('task', 'read only')).toContain('"sourcePlugin":{"id":"context","name":"Context"}');
+    expect(await providers.search({ sessionId: 'task', query: 'word', limit: 10 })).toEqual([
+      { id: 'm', title: 'Title', content: 'memory', sourcePlugin: { id: 'memory', name: 'Memory' } },
+    ]);
+    expect(f.screen.mock.calls[1][1]).toEqual({ sessionId: 'task', query: 'word', limit: 10 });
+    f.setSettings({});
+    expect(providers.compose('task', 'private')).toBeUndefined();
+    expect(providers.search({ sessionId: 'task', query: 'private', limit: 10 })).toBeUndefined();
+    expect(f.screen).toHaveBeenCalledTimes(2);
   });
 });

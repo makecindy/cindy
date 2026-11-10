@@ -421,7 +421,7 @@ export type GhostSubscribeTopic = (typeof GHOST_SUBSCRIBE_TOPICS)[number];
  * 在场,冷启动延迟不可接受),校验强制。
  */
 export const GHOST_SUBSCRIBE_HOOKS = ['will-user-message', 'will-assistant-message'] as const;
-export type GhostSubscribeHook = (typeof GHOST_SUBSCRIBE_HOOKS)[number] | 'will-start-turn' | 'will-model-request';
+export type GhostSubscribeHook = (typeof GHOST_SUBSCRIBE_HOOKS)[number] | 'will-start-turn' | 'will-model-request' | 'will-compose-context' | 'will-search-memory';
 
 /**
  * 订阅槽详单(与 slots 含 'subscribe' 成对;有槽无详单允许装入但零事件——

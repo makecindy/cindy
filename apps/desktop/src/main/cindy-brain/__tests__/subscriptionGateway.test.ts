@@ -1862,4 +1862,21 @@ describe('control points', () => {
     gw.handleVerdict('r1', { type: 'event-verdict', hookId: (sent[0].payload as { hookId: string }).hookId, action: 'route', route });
     expect(await response).toMatchObject({ action: 'block', failure: true });
   });
+
+  it.each(['will-compose-context', 'will-search-memory'] as const)('validates provider results and times out %s without blocking', async point => {
+    const selected = { ...ghost('provider', { hooks: [point] }), approvedControlPoints: [point] };
+    const { gw, sent, running } = makeGateway({ listGhosts: () => [selected] });
+    running.add('provider');
+    const data = point === 'will-compose-context' ? { sessionId: 'task', text: 'read' }
+      : { sessionId: 'task', query: 'word', limit: 10 };
+    const pending = gw.screenControlPoint(point, data, { pluginId: 'provider', onFailure: 'allow' });
+    await vi.advanceTimersByTimeAsync(0);
+    const answer = point === 'will-compose-context' ? { action: 'context', blocks: [{ id: 'a', text: 'reference', sourcePlugin: 'forged' }] }
+      : { action: 'memories', entries: [{ id: 'a', title: 'Title', content: 'Full memory', sourcePlugin: 'forged' }] };
+    gw.handleVerdict('provider', { type: 'event-verdict', hookId: (sent[0].payload as { hookId: string }).hookId, ...answer });
+    expect(JSON.stringify(await pending)).not.toContain('forged');
+    const timeout = gw.screenControlPoint(point, data, { pluginId: 'provider', onFailure: 'allow' });
+    await vi.advanceTimersByTimeAsync(8001);
+    expect(await timeout).toEqual({ action: 'allow' });
+  });
 });

@@ -11,3 +11,9 @@
 执行电脑仍在统一发送入口应用其已保存的选择。官方及自建中转无新帧、relay 或服务端改动。
 逐请求控制只支持本机 Pi；Claude Code、Codex、SSH／设备托管 Pi 明确不支持。
 Pi 通过进程内 Symbol 接收宿主回调，能力不从 Renderer／远程 JSON 选项取得。
+
+同一任务设置追加 `will-compose-context` 和 `will-search-memory`。管子返回分别为
+`context + blocks[{id,text}]`、`memories + entries[{id,title,content,type?}]`，旧宿主忽略未知
+节点，不会自动批准。资料只进入普通消息资料通道；现有 `memory_search` 的 hits 可追加
+内联条目与 `sourcePlugin:{id,name}`，不改变原有本地命中形状，不加新工具。失败时返回原结果。
+资料、记忆只在原执行电脑按任务选择调用，仍无 device-link／relay／服务端或数据库变更。

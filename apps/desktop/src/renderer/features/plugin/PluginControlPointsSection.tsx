@@ -51,7 +51,7 @@ function PluginControlPointsSectionInner({ ghostId }: { ghostId: string }) {
       </h2>
       <p className="mt-2 max-w-[760px] text-13 leading-5 text-[var(--text-secondary)]">
         {t(
-          withStartTask
+          points.some(point => isRuntimePluginPoint(point.id)) ? 'runtimePlugins.description' : withStartTask
             ? 'settings.ghosts.controlPoints.descriptionWithStartTask'
             : 'settings.ghosts.controlPoints.description',
         )}

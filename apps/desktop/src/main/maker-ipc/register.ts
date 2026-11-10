@@ -2,10 +2,10 @@ import { createSchedulerQueueBridge, type SchedulerQueueBridge, type SchedulerQu
 import { markCindyOfficialSkills } from '../maker-host/managed-skills.js';
 import { registerRuntimeSettingsSection } from '../app-settings/runtime.js';
 import { createTaskRuntimePlugins } from './runtimePlugins.js';
-import { createRuntimePluginControl, RuntimePluginControlError } from '../cindy-brain/runtimeControl.js';
+import { RuntimePluginControlError } from '../cindy-brain/runtimeControl.js';
 import { readRuntimePluginSettings, writeRuntimePluginSettings } from '../maker-host/runtime-plugin-settings.js';
 import { parseRuntimePluginSettings } from '../../shared/pluginRuntime.js';
-import { ghostControlPointCandidates, resolveGhostControlPointPlugin, screenGhostControlPoint, isPluginModelRouteAvailableNow } from '../cindy-brain/index.js';
+import { resolveGhostControlPointPlugin, getGhostRuntimePluginControl, composeGhostRuntimeContext, isPluginModelRouteAvailableNow } from '../cindy-brain/index.js';
 import { z as settingsSchema } from 'zod';
 import { registerPreferenceControlIpc } from '../app-settings/preferences.js';
 import { configureModelSettingsActions } from '../app-settings/models.js';
@@ -18367,14 +18367,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
 
   pluginTargetReviewReady = true;
 
-  const runtimePluginControl = createRuntimePluginControl({
-    readSettings: readRuntimePluginSettings,
-    captureOwner: () => {
-      const owner = captureDataOwnerBroadcastScope();
-      return () => isDataOwnerBroadcastScopeCurrent(owner) && !isAppSessionBoundaryPending();
-    },
-    screen: (point, data, target) => screenGhostControlPoint(point, data, target),
-  });
+  const runtimePluginControl = getGhostRuntimePluginControl();
   const taskRuntimePlugins = createTaskRuntimePlugins({
     control: runtimePluginControl, readSettings: readRuntimePluginSettings,
     requestSupported: sessionId => !maker.getSession(sessionId)?.remoteHostId,
@@ -18432,6 +18425,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     prewarmSession: prewarmSessionRuntime,
     hydrateActiveOrcaSession,
   } = createMakerSendTransaction({
+    composeRuntimeContext: composeGhostRuntimeContext,
     prepareRuntimeTurn: (sessionId, message, signal) => {
       const prepared = taskRuntimePlugins.prepare(sessionId, message, signal);
       return prepared?.then(options => ({ options })).catch(error => ({ failure: {
