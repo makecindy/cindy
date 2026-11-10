@@ -574,6 +574,37 @@ describe('stale device directory', () => {
     expect(listDevices.mock.calls.length).toBeGreaterThan(initial);
   });
 
+  // 测试价值
+  // - 生产入口与可观察结果:useDeviceLinkRemoteProjects 的目录退避 ——
+  //   `getState` 拒绝、状态仍未知时,`scheduleDirectoryRetry` 不起 5–60 秒的物理读循环;
+  //   状态 push 到 `online`(在线转换)后再读一轮。
+  // - Bug/规则依据:Codex review #9360「Pause directory retries until relay status is
+  //   known」—— 状态未知时退避只拦 `false`,一次失败的 /devices 就会在每个挂载窗口里
+  //   起循环,而 relay 可能已经停掉,且没有事件保证把它停掉。
+  // - 现有覆盖缺口:既有退避用例的 getState 都 resolve 成 `online`,没覆盖状态未知这条路径。
+  // - 最小失败输入:getState 拒绝、listDevices 拒绝,推进 120 秒后断言调用数不增长。
+  // - tier:unit(electronAPI 为进程内 fake,假计时器)。
+  it('does not arm the directory retry loop while the link status is still unknown', async () => {
+    const listDevices = window.electronAPI.deviceLink.listDevices as unknown as ReturnType<typeof vi.fn>;
+    listDevices.mockRejectedValue(new Error('directory unavailable'));
+    getState.mockRejectedValue(new Error('getState unavailable'));
+    renderHook(() => useDeviceLinkRemoteProjects());
+    await settle();
+    const initial = listDevices.mock.calls.length;
+    expect(initial).toBeGreaterThan(0);
+
+    // 状态未知:推进 120 秒也不该起 5–60 秒的物理读循环。
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(120_000);
+    });
+    expect(listDevices.mock.calls.length).toBe(initial);
+
+    // 恢复挂在状态转换上:push 到 online 必须再读一轮(之后退避照常,状态已知)。
+    act(() => listeners.onStatusChanged({ status: 'online', directDataDeviceIds: [] }));
+    await settle();
+    expect(listDevices.mock.calls.length).toBeGreaterThan(initial);
+  });
+
   // 跳过旧快照的 offline 行不能把冷缓存设备永远留在「检测中」:缓存种入时标 connecting,
   // 而宽限计时器只在 relay 不在线时才降级 —— relay 在线时没人收口,它会一直「检测中」。
   // 旧快照的 offline 至少能证明此刻连不上,收成离线(与跳过之前的呈现一致)。

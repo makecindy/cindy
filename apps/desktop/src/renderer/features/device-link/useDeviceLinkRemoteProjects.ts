@@ -844,13 +844,19 @@ export function useDeviceLinkRemoteProjects(
       directoryRetryDelayMs = DIRECTORY_RETRY_BASE_MS;
     };
     /**
-     * 目录读不到时的有界重读。一次只挂一个计时器(不叠加),relay 离线不重读。
+     * 目录读不到时的有界重读。一次只挂一个计时器(不叠加),relay 不在线不重读。
      * 旧快照最多 30 分钟有界,过期后连旧快照都没有 —— 没有这条退避,重连后的视图永远
      * 停在「目录不可用」上,直到重启(#9342)。
+     *
+     * 只在**已知在线**时起循环:状态还未知(`getState` 拒绝 / 仍挂起、也没有状态 push)
+     * 就起的话,每个挂载窗口都会对着一个可能已经停掉的 relay 每 5–60 秒发一次物理读,
+     * 而且没有任何事件保证把它停掉。恢复挂在状态转换上 —— push 到 `online` 时
+     * `onStatusChanged` 本来就会再 reseed 一轮(Codex review #9360「Pause directory
+     * retries until relay status is known」)。
      */
     const scheduleDirectoryRetry = (): void => {
       if (disposed || directoryRetryTimer) return;
-      if (linkOnline === false) return;
+      if (linkOnline !== true) return;
       const delay = directoryRetryDelayMs;
       directoryRetryDelayMs = Math.min(DIRECTORY_RETRY_MAX_MS, directoryRetryDelayMs * 2);
       // 服务端明确说了多久之后再问(429 的 Retry-After):退避要让过那个期限。
@@ -863,7 +869,7 @@ export function useDeviceLinkRemoteProjects(
         const chunk = Math.min(Math.max(0, remainingMs), MAX_TIMER_DELAY_MS);
         directoryRetryTimer = setTimeout(() => {
           directoryRetryTimer = null;
-          if (disposed || linkOnline === false) return;
+          if (disposed || linkOnline !== true) return;
           const left = Math.max(0, directoryRetryDeadlineMs - Date.now());
           // 还有整块没走完(只有超大的服务端期限才会走到这里):接着等剩下的。
           if (left > 0 && chunk >= MAX_TIMER_DELAY_MS) {

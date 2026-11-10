@@ -7,7 +7,13 @@
  * 远),它们收到的 429 也无人记账(Codex review #9360「Share the directory cooldown across
  * all /devices readers」)。所以账本与 `deviceLinkApiFetch` 共用同一份。
  *
- * 期限按 owner + 中转身份**分桶**记:
+ * 期限按桶身份 + 中转身份**分桶**记:
+ * - 桶身份是**账号成员**(`activeOwnerScopeKey()` 去掉末尾的代次段,见
+ *   `directoryThrottleMembershipOf`):限流窗口在服务端按账号算,不按客户端的会话代次 ——
+ *   同 owner 的 projection 修复 / 同账号重登只 bump `generation`,账号与端点都没变,窗口
+ *   还是同一个。按代次分桶会让未过期的 `Retry-After` 在 recovery 之后变得**不可达**,另一个
+ *   `/devices` 读者直接撞进同一个窗口(Codex review #9360「Keep cooldown keys stable across
+ *   same-owner generations」)。代次只用来圈住在途结果(`activeOwnerScopeKey` 的既有用途)。
  * - 中转身份也要算进去:官方中转与自建中转是各自独立的限流桶,同一账号从官方切到自建
  *   (或反过来)之后,上一个中转给的期限不该拦住新中转上的第一次读;
  * - 每个桶的期限要各自留着:只留最后一个桶的话,中转 A -> B -> A 来回切时,A 的期限会被 B
@@ -33,7 +39,8 @@ const directoryRetryByScope = new Map<string, DirectoryRetryEntry>();
 let retryRecordSequence = 0;
 
 /**
- * 当前账号的桶身份来源。
+ * 当前账号的 `activeOwnerScopeKey()` 来源(桶身份由 `currentDirectoryThrottleOwner`
+ * 收敛成账号成员,见 `directoryThrottleMembershipOf`)。
  *
  * 不在这里直接 import `appSessionState`:那会把 electron 的 `app` 拉进 `deviceLinkApi`
  * 的模块图,而 `deviceLinkApi` 有只 mock 了 `net.fetch` 的轻量测试。由真正持有
@@ -47,9 +54,23 @@ export function setDirectoryThrottleOwnerSource(source: () => string): void {
   ownerSource = source;
 }
 
+/**
+ * 把 `activeOwnerScopeKey()` 收敛成**账号成员**身份(限流桶的 owner)。
+ *
+ * `activeOwnerScopeKey` 的格式是 `${mode}:${dataOwnerId}:${generation}`,代次恒为最后一段
+ * (见 appSessionState 的文档):同 owner 的 projection 修复 / 同账号重登只 bump 代次,
+ * 账号与端点都没变,服务端的限流窗口也还是同一个 —— 桶身份必须跨这些修复保持稳定,
+ * 代次只用来圈住在途结果。从最后一个冒号切掉代次段;没有冒号的身份(测试替身的整串
+ * owner)原样返回。
+ */
+export function directoryThrottleMembershipOf(scopeKey: string): string {
+  const cut = scopeKey.lastIndexOf(':');
+  return cut === -1 ? scopeKey : scopeKey.slice(0, cut);
+}
+
 /** 当前账号的桶身份:检查与记账都用它,保证两边落在同一个桶里。 */
 export function currentDirectoryThrottleOwner(): string {
-  return ownerSource();
+  return directoryThrottleMembershipOf(ownerSource());
 }
 
 /**
@@ -60,7 +81,12 @@ export function currentDirectoryRetrySequence(): number {
   return retryRecordSequence;
 }
 
-/** 限流桶的键:owner + 中转身份。 */
+/**
+ * 限流桶的键:owner + 中转身份。
+ *
+ * `owner` 必须来自 `currentDirectoryThrottleOwner()`(账号成员身份)—— 直接传
+ * `activeOwnerScopeKey()` 会把代次编进桶键,同账号 recovery 之后旧期限就找不到了。
+ */
 function directoryScopeKey(owner: string, relay: string): string {
   return JSON.stringify([owner, relay]);
 }

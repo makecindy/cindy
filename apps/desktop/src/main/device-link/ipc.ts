@@ -46,6 +46,7 @@ import {
   __resetDirectoryThrottleForTests,
   clearDirectoryRetryDeadline,
   currentDirectoryRetrySequence,
+  currentDirectoryThrottleOwner,
   directoryRetryDeadline,
   recordDirectoryRetryDeadline,
 } from './directoryThrottle.js';
@@ -130,8 +131,9 @@ import {
 import { activeOwnerScopeKey, ownerScopedUserDataPath } from '../appSessionState';
 import { setDirectoryThrottleOwnerSource } from './directoryThrottle.js';
 
-// 目录限流账本按 owner 分桶:登记当前账号的桶身份来源,让 deviceLinkApiFetch 的
-// 检查与 handleListDevices 的记账落在同一个桶里(Codex review #9360)。
+// 目录限流账本按桶身份分桶:登记 scope key 来源(桶身份 = 账号成员,见
+// directoryThrottleMembershipOf),让 deviceLinkApiFetch 的检查与 handleListDevices
+// 的记账落在同一个桶里(Codex review #9360)。
 setDirectoryThrottleOwnerSource(activeOwnerScopeKey);
 import {
   coerceCachedSession,
@@ -500,6 +502,11 @@ export function handleListDevices(
   deps: DeviceLinkIpcDeps,
 ): Promise<DeviceListResult> {
   const owner = activeOwnerScopeKey();
+  // 限流桶的身份是**账号成员**(scope key 去掉代次),不是完整 scope key:同账号的
+  // projection 修复只 bump 代次,服务端的限流窗口没变,桶键跟着变会让未过期的期限
+  // 变得不可达(Codex review #9360「Keep cooldown keys stable across same-owner
+  // generations」)。`owner` 仍按完整 scope key 圈住在途结果(换账号 / 换代次都作废)。
+  const throttleOwner = currentDirectoryThrottleOwner();
   const relay = directoryRelayScope();
   const inFlight = latestDeviceListRequest;
   if (inFlight && inFlight.owner === owner && inFlight.joinable && Date.now() - inFlight.startedAt < DEVICE_LIST_COALESCE_WINDOW_MS) {
@@ -515,9 +522,9 @@ export function handleListDevices(
     const request = readProviderDirectoryContinuity(() => {
       // 限流窗口内不再发**物理读**:每次追问都会让服务端把窗口重新推后,越问越久。
       // 冷启动(没有旧快照可沿用)时尤其明显:本地退避是 5 秒起,一路追问到窗口之后。
-      // 这里按 owner + 中转记住的期限直接回一个暂时性失败(429),让调用方按自己的节奏
-      // 重试;换账号不该继承上一个账号的限流期限,换中转也不该继承上一个中转的。
-      const throttledUntil = directoryRetryDeadline(owner, relay);
+      // 这里按桶身份(账号成员) + 中转记住的期限直接回一个暂时性失败(429),让调用方按
+      // 自己的节奏重试;换账号不该继承上一个账号的限流期限,换中转也不该继承上一个中转的。
+      const throttledUntil = directoryRetryDeadline(throttleOwner, relay);
       if (throttledUntil !== 0 && throttledUntil > Date.now()) {
         throw Object.assign(new Error('设备目录限流退避中'), { statusCode: 429 });
       }
@@ -536,8 +543,8 @@ export function handleListDevices(
       ).catch((error: unknown) => {
         // 429 的 Retry-After:服务端明确说了多久之后再问。把期限带给调用方(渲染进程的目录
         // 退避要让过它),否则限流窗口里每个挂载的窗口都会继续追问,延长限流并放大共享
-        // 目录压力。期限按 owner + 中转记:换账号不该继承上一个账号的限流期限,换中转
-        // (两个中转是各自独立的限流桶)也不该继承。
+        // 目录压力。期限按桶身份(账号成员) + 中转记:换账号不该继承上一个账号的限流期限,
+        // 换中转(两个中转是各自独立的限流桶)也不该继承。
         const retryAt = (error as { retryAt?: unknown } | null | undefined)?.retryAt;
         const servedBaseUrl = (error as { servedBaseUrl?: unknown } | null | undefined)?.servedBaseUrl;
         if (typeof retryAt === 'number' && Number.isFinite(retryAt)) {
@@ -549,11 +556,14 @@ export function handleListDevices(
           //    的 baseUrl 在发起时就定住了):它的限流期限属于旧线路,记到新线路头上
           //    会把新线路也限住 —— 两个中转是各自独立的限流桶(Codex review #9360)。
           // 拿不到服务方(非本层的错误)时退回发起这条请求的线路。
-          // 账号换过就整个丢弃:那次的响应已经不算数了(下面 then 也会拒)。
-          if (activeOwnerScopeKey() === owner) {
+          // 换账号(成员身份变了)就整个丢弃:那次的响应已经不算数了(下面 then 也会拒)。
+          // 同账号只 bump 代次不算换 —— 服务端的窗口没变,期限照记,否则 recovery 之后
+          // 这条 429 就丢了(Codex review #9360「Keep cooldown keys stable across
+          // same-owner generations」)。
+          if (currentDirectoryThrottleOwner() === throttleOwner) {
             const scope =
               typeof servedBaseUrl === 'string' && servedBaseUrl !== '' ? servedBaseUrl : relay;
-            recordDirectoryRetryDeadline(owner, scope, retryAt);
+            recordDirectoryRetryDeadline(throttleOwner, scope, retryAt);
           }
         }
         // 读取超时是**暂时性**失败:让 continuity reader 沿用有界旧快照,而不是把快照一起
@@ -599,11 +609,11 @@ export function handleListDevices(
         // 只清掉**这次读发起之前**就已记下的期限:在途期间(issuedSeq 之后)另一次 429
         // 记下的期限比这次成功更新,抹掉它会让下一次读直接撞进限流窗口,把窗口越推越远
         // (Codex review #9360「Preserve cooldowns newer than the completing request」)。
-        clearDirectoryRetryDeadline(owner, currentRelay, issuedSeq);
+        clearDirectoryRetryDeadline(throttleOwner, currentRelay, issuedSeq);
       }
       // 服务端限流给出的重试期限:调用方的退避要让过它(见 handleListDevices)。按当前
       // 中转取 —— 下一次读用的就是这个身份。
-      const retryDeadlineMs = directoryRetryDeadline(owner, currentRelay);
+      const retryDeadlineMs = directoryRetryDeadline(throttleOwner, currentRelay);
       const reconciled = reconcileDeviceNames(
         result,
         deps,

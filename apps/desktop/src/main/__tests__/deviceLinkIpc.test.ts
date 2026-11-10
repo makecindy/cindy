@@ -8,10 +8,10 @@ import { createProviderGroupDirectory } from '../provider-group/directory';
 import { onProviderDirectoryDenied } from '../device-link/providerMetadataContinuity.js';
 
 const capabilities = vi.hoisted(() => ({ canUseDeviceLink: true }));
-const metadataOwner = vi.hoisted(() => ({ key: 'directory-owner-a' }));
+const metadataOwner = vi.hoisted(() => ({ key: 'directory-owner-a', generation: 0 }));
 const dataPath = vi.hoisted(() => ({ available: vi.fn<(deviceId: string) => boolean>(() => false) }));
 vi.mock('../appSessionState.js', async importOriginal => ({
-  ...await importOriginal<typeof import('../appSessionState.js')>(), activeOwnerScopeKey: () => metadataOwner.key,
+  ...await importOriginal<typeof import('../appSessionState.js')>(), activeOwnerScopeKey: () => `${metadataOwner.key}:${metadataOwner.generation}`,
 }));
 vi.mock('../clientEndpointsService.js', async importOriginal => ({
   ...await importOriginal<typeof import('../clientEndpointsService.js')>(),
@@ -244,6 +244,7 @@ describe('device-link IPC handlers', () => {
     refcountTesting.reset(); // 多窗口订阅引用计数:每个用例独立
     capabilities.canUseDeviceLink = true;
     metadataOwner.key = 'directory-owner-a';
+    metadataOwner.generation = 0;
     __resetDeviceListCoalescingForTests(); // /devices 合并窗口:不让上一用例的在途请求漏到下一个
     vi.restoreAllMocks();
     dataPath.available.mockReset().mockReturnValue(false);
@@ -646,6 +647,40 @@ describe('device-link IPC handlers', () => {
       await expect(handleListDevices(deps)).resolves.toMatchObject({ devices: [] });
       expect(apiFetch).toHaveBeenCalledTimes(2);
     } finally {
+      metadataOwner.key = 'directory-owner-a';
+      __resetDeviceListCoalescingForTests();
+    }
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果:`handleListDevices` 的限流预检(窗口内不发物理读)——
+  //   同账号只 bump 会话代次(projection 修复 / 同账号重登)之后,未过期的期限必须
+  //   仍然拦得住,`apiFetch` 不再被调用。
+  // - Bug/规则依据:Codex review #9360「Keep cooldown keys stable across same-owner
+  //   generations」—— 桶键按 `activeOwnerScopeKey()`(含代次)记时,同 owner 的
+  //   generation bump 会让旧期限不可达,另一个 `/devices` 读者直接撞进同一个服务端
+  //   限流窗口,把窗口越推越远。
+  // - 现有覆盖缺口:既有用例只覆盖换账号(整个身份换掉)与换中转,没覆盖「同账号、
+  //   只 bump 代次」这条 recovery 路径。
+  // - 最小失败输入:先撞一次 429 记下期限,再把 `metadataOwner.generation` +1(账号不变)。
+  // - tier:unit(内存 harness + 假计时无关的墙钟期限)。
+  it('listDevices:同账号只 bump 代次后,限流期限仍然拦得住', async () => {
+    __resetDeviceListCoalescingForTests();
+    const retryAt = Date.now() + 60_000;
+    const apiFetch = vi.fn()
+      .mockRejectedValueOnce(new ServerApiError('UNAVAILABLE', 429, 'rate limited', retryAt))
+      .mockResolvedValue({ devices: [] });
+    const deps = makeDeps({ apiFetch });
+    try {
+      // 第一次读撞上限流:期限记进共享账本。
+      await expect(handleListDevices(deps)).rejects.toThrow(/rate limited/);
+      expect(apiFetch).toHaveBeenCalledTimes(1);
+      // 同账号只 bump 代次:服务端的限流桶没变,窗口内的追问照旧不发物理读。
+      metadataOwner.generation += 1;
+      await expect(handleListDevices(deps)).rejects.toThrow(/限流退避中/);
+      expect(apiFetch).toHaveBeenCalledTimes(1);
+    } finally {
+      metadataOwner.generation = 0;
       metadataOwner.key = 'directory-owner-a';
       __resetDeviceListCoalescingForTests();
     }
