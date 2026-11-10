@@ -42,6 +42,9 @@ const mockState = vi.hoisted(() => {
     injectionTransform: vi.fn<(body: unknown, ctx: unknown) => unknown | null>(() => null),
     stripNonAnthropicFields: vi.fn<(body: unknown, ctx: unknown) => unknown | null>(() => null),
     recordXaiRateLimitSnapshot: vi.fn(),
+    // 默认短路。视觉桥命名空间用例会换成真实 createVisionBridgeTransform，用完再复位。
+    // 参数类型放宽：vi.fn 的默认签名是零参数，接不住真实 opts。
+    createVisionBridgeTransform: vi.fn((..._args: unknown[]) => (() => null) as unknown),
     createInstructionsInjectionTransform: vi.fn((opts: { registry: Registry }) => {
       capturedRegistry = opts.registry;
       return (body: unknown, ctx: unknown) => state.injectionTransform(body, ctx);
@@ -151,7 +154,9 @@ vi.mock('@cindy/anthropic-compat-proxy', async (importOriginal) => {
     shortenOversizedResponsesItemIdsFromBody: () => null,
     stripNonAnthropicFields: mockState.stripNonAnthropicFields,
     // 视觉桥 transform：默认短路（controller 未注入 → shouldBridge 恒 false → null 透传）。
-    createVisionBridgeTransform: () => (() => null),
+    // 经 mockState 转发，单测可换成真实实现，证明命名空间白名单放行后图片会被改写。
+    createVisionBridgeTransform: (...args: unknown[]) =>
+      mockState.createVisionBridgeTransform(...args) as ReturnType<typeof import('@cindy/anthropic-compat-proxy').createVisionBridgeTransform>,
     createInstructionsRegistry: () => {
       const map = new Map<string, string>();
       return {
@@ -207,6 +212,8 @@ async function freshCodexProxyHost(realStripTransforms = false) {
   mockState.injectionTransform.mockReturnValue(null);
   mockState.stripNonAnthropicFields.mockReset();
   mockState.stripNonAnthropicFields.mockReturnValue(null);
+  mockState.createVisionBridgeTransform.mockReset();
+  mockState.createVisionBridgeTransform.mockReturnValue(() => null);
   mockState.logLevel = 'debug';
   mockState.resetCapturedRegistry();
   return host;
@@ -8388,6 +8395,170 @@ describe('codex proxy host', () => {
     }
   });
 
+  // 测试价值
+  // - 生产入口与可观察结果：ensureCodexProxyReady 装上的 transformRequest。
+  //   自定义供应商命名空间请求里，input 中带 encrypted_content 的 compaction
+  //   被换成明文「早期上下文不可用」提示，上游请求体不再含 encrypted_content。
+  // - Bug／规则依据：#9759。命名空间白名单漏了跨供应商加密压缩历史降级，
+  //   解不开的 compaction 会原样发给非 GPT 自定义供应商上游。
+  // - 现有覆盖缺口：降级本身有单测，但不经过命名空间包装。
+  // - 最小失败输入：已登记的 Responses 路由，url 为 /_cindy/custom-provider/<routeId>/responses，
+  //   非 GPT model，input 含 {type:'compaction', encrypted_content:'...'}。
+  // - tier：unit。进程内代理桩，不访问网络。
+  it('rewrites encrypted compaction on a custom-provider namespace route', async () => {
+    const host = await freshCodexProxyHost();
+    const { BUNDLED_CATALOG, buildUserProvider } = await import('@cindy/model-providers');
+    const { setActiveCatalog } = await import('../active-catalog.js');
+    const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+    const { deriveCodexCustomProviderRoutes } = await import('../codex-custom-provider-route.js');
+    const provider = buildUserProvider({
+      id: 'namespace-compaction-provider',
+      name: 'Namespace Compaction Provider',
+      runtimes: {
+        codex: {
+          baseUrl: 'https://example.com/v1',
+          wireProtocol: 'openai-responses',
+          models: [{ id: 'not-gpt-5', name: 'Not GPT' }],
+        },
+      },
+    });
+    const catalog = { ...BUNDLED_CATALOG, providers: [...BUNDLED_CATALOG.providers, provider] };
+    setActiveCatalog(catalog);
+    const route = deriveCodexCustomProviderRoutes(catalog).find(item => item.providerId === provider.id)!;
+    host.setCodexAppliedCustomProviderRoutes([route]);
+    host.registerComposed('session-namespace-compaction', 'thread-namespace-compaction', 'PRODUCT_PROMPT');
+    setSessionProvider('session-namespace-compaction', provider.id);
+    mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
+      url: 'http://127.0.0.1:43210',
+      dispose: vi.fn(async () => undefined),
+    });
+    try {
+      await host.ensureCodexProxyReady();
+      const transforms = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0]?.transformRequest ?? [];
+      const ctx = {
+        reqId: 9761,
+        method: 'POST',
+        url: `/_cindy/custom-provider/${route.routeId}/responses`,
+        headers: { 'thread-id': 'thread-namespace-compaction' },
+        upstreamBase: 'https://example.com/v1',
+      };
+      let current: unknown = {
+        model: 'not-gpt-5',
+        input: [
+          { type: 'compaction', encrypted_content: 'ENC_NAMESPACE' },
+          { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'hi' }] },
+        ],
+      };
+      for (const transform of transforms) {
+        const next = transform(current, ctx);
+        if (next !== null && next !== undefined) current = next;
+      }
+      const input = (current as { input: Array<Record<string, unknown>> }).input;
+      expect(input[0]).toMatchObject({
+        type: 'message',
+        role: 'user',
+        content: [expect.objectContaining({ type: 'input_text' })],
+      });
+      expect(JSON.stringify(input[0])).toContain('compacted into an encrypted snapshot');
+      expect(JSON.stringify(current)).not.toContain('encrypted_content');
+      expect(JSON.stringify(current)).not.toContain('ENC_NAMESPACE');
+    } finally {
+      host.unregister('session-namespace-compaction');
+      clearSessionProvider('session-namespace-compaction');
+      host.setCodexAppliedCustomProviderRoutes([]);
+      setActiveCatalog(BUNDLED_CATALOG);
+    }
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：ensureCodexProxyReady 装上的 transformRequest。
+  //   视觉桥已装配（shouldBridge 为 true）时，命名空间请求 input 里的 input_image
+  //   被换成文字描述，上游请求体不再含 input_image。
+  // - Bug／规则依据：#9759。命名空间白名单漏了视觉桥，纯文本上游会收到原图。
+  // - 现有覆盖缺口：本文件把 createVisionBridgeTransform mock 成恒 null，
+  //   真实替换逻辑在视觉桥包里另有单测；这里覆盖的是命名空间包装是否放行同一实例。
+  //   mock 实现按 shouldBridge 把 input_image 换成固定文字，证明白名单放行后链上真的改写。
+  // - 最小失败输入：已登记的 Responses 路由，url 为 /_cindy/custom-provider/<routeId>/responses，
+  //   input_image 的 image_url 为 data: URL。
+  // - tier：unit。进程内代理桩，不访问网络。
+  it('replaces input_image on a custom-provider namespace route when the vision bridge is armed', async () => {
+    const host = await freshCodexProxyHost();
+    const { BUNDLED_CATALOG, buildUserProvider } = await import('@cindy/model-providers');
+    const { setActiveCatalog } = await import('../active-catalog.js');
+    const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+    const { deriveCodexCustomProviderRoutes } = await import('../codex-custom-provider-route.js');
+    const { setVisionBridgeController } = await import('../../vision-bridge/vision-bridge-controller.js');
+    const provider = buildUserProvider({
+      id: 'namespace-vision-provider',
+      name: 'Namespace Vision Provider',
+      runtimes: {
+        codex: {
+          baseUrl: 'https://example.com/v1',
+          wireProtocol: 'openai-responses',
+          models: [{ id: 'text-only-model', name: 'Text Only' }],
+        },
+      },
+    });
+    const catalog = { ...BUNDLED_CATALOG, providers: [...BUNDLED_CATALOG.providers, provider] };
+    setActiveCatalog(catalog);
+    const route = deriveCodexCustomProviderRoutes(catalog).find(item => item.providerId === provider.id)!;
+    host.setCodexAppliedCustomProviderRoutes([route]);
+    host.registerComposed('session-namespace-vision', 'thread-namespace-vision', 'PRODUCT_PROMPT');
+    setSessionProvider('session-namespace-vision', provider.id);
+    // 纯文本模型才桥接。describeImage 不会被调用：本文件的视觉桥 transform 是 mock，
+    // 见 fresh 之后对 createVisionBridgeTransform 的替换实现。
+    setVisionBridgeController({
+      shouldBridge: (model) => model === 'text-only-model',
+      describeImage: async () => 'a red square',
+    });
+    const actualProxy = await vi.importActual<typeof import('@cindy/anthropic-compat-proxy')>('@cindy/anthropic-compat-proxy');
+    mockState.createVisionBridgeTransform.mockImplementation((...args: unknown[]) =>
+      actualProxy.createVisionBridgeTransform(args[0] as Parameters<typeof actualProxy.createVisionBridgeTransform>[0]));
+    mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
+      url: 'http://127.0.0.1:43210',
+      dispose: vi.fn(async () => undefined),
+    });
+    try {
+      await host.ensureCodexProxyReady();
+      const transforms = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0]?.transformRequest ?? [];
+      const ctx = {
+        reqId: 9762,
+        method: 'POST',
+        url: `/_cindy/custom-provider/${route.routeId}/responses`,
+        headers: { 'thread-id': 'thread-namespace-vision' },
+        upstreamBase: 'https://example.com/v1',
+      };
+      let current: unknown = {
+        model: 'text-only-model',
+        input: [{
+          type: 'message',
+          role: 'user',
+          content: [
+            { type: 'input_text', text: 'what is this' },
+            { type: 'input_image', image_url: 'data:image/png;base64,eA==' },
+          ],
+        }],
+      };
+      for (const transform of transforms) {
+        const next = transform(current, ctx);
+        current = next !== null && next !== undefined
+          ? (typeof (next as PromiseLike<unknown>).then === 'function' ? await next : next)
+          : current;
+      }
+      expect(JSON.stringify(current)).not.toContain('input_image');
+      expect(JSON.stringify(current)).toContain('a red square');
+      expect(JSON.stringify(current)).not.toContain('data:image/png');
+    } finally {
+      setVisionBridgeController(null);
+      mockState.createVisionBridgeTransform.mockReset();
+      mockState.createVisionBridgeTransform.mockReturnValue(() => null);
+      host.unregister('session-namespace-vision');
+      clearSessionProvider('session-namespace-vision');
+      host.setCodexAppliedCustomProviderRoutes([]);
+      setActiveCatalog(BUNDLED_CATALOG);
+    }
+  });
+
   it('keeps xhigh effort for non-MiniMax custom Responses providers', async () => {
     const host = await freshCodexProxyHost();
     const { buildUserProvider } = await import('@cindy/model-providers');
@@ -10119,6 +10290,9 @@ describe('createModelRoutingTransform —— custom Provider native imagegen pre
       // This user-built Responses connection has supportsResponsesCustomTools === false,
       // so the namespace path now adapts exec to a function (#9759). Effort still comes
       // only from the frozen route; vendor fields, model and image JSON stay untouched.
+      // Encrypted compaction is not a native field of this route: the namespace allowlist
+      // now rewrites it into a plaintext context note (#9759 review). Image JSON is a
+      // different path and stays byte-identical below.
       const execTool = body.tools[0]!;
       const adapted = {
         ...body,
@@ -10145,7 +10319,14 @@ describe('createModelRoutingTransform —— custom Provider native imagegen pre
           },
           { type: 'function_call_output', id: 'fco_legacy', call_id: 'call_same', output: 'result' },
           body.input[2],
-          body.input[3],
+          {
+            type: 'message',
+            role: 'user',
+            content: [{
+              type: 'input_text',
+              text: '[context note] Earlier conversation history was compacted into an encrypted snapshot by the previous Codex backend and is not readable on the current model provider. Treat the conversation from this point on as the available context; ask the user if earlier details are needed.',
+            }],
+          },
         ],
       };
       const post = async (path: string, raw: string) => {

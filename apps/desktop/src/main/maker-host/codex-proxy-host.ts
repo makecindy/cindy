@@ -3321,6 +3321,8 @@ function createTransformRequestChain(
   codexTransform: RequestTransform;
   miniMaxResponsesCompatTransform: RequestTransform;
   providerRequestTransform: RequestTransform;
+  crossProviderCompactionCompatTransform: RequestTransform;
+  visionBridgeTransform?: RequestTransform;
 } {
   const execFunctionAdapterTransform: RequestTransform = (body, ctx) => {
     if (!isPlainObject(body)) return null;
@@ -3357,6 +3359,12 @@ function createTransformRequestChain(
   };
   const codexTransform = createCodexTransform();
   const miniMaxResponsesCompatTransform = createMiniMaxResponsesCompatTransform();
+  // 提出同一实例：命名空间白名单按引用相等判定，链里再内联调用就进不了 Set。
+  // 这两类不是模型改写，是修复请求内容合法性：跨供应商加密压缩历史降级成明文，
+  // 以及纯文本模型上把 input_image 换成文字描述。跳过会把解不开的密文和原图原样发给自定义供应商上游。
+  const crossProviderCompactionCompatTransform = createCrossProviderCompactionCompatTransform();
+  // guest 隔离不装视觉桥：视觉桥走的是本机用户自己的视觉供应商，供应商分享的访客不能用。
+  const visionBridgeTransform = guest ? undefined : buildVisionBridgeProxyTransform(log);
   const transforms: RequestTransform[] = [
     createArmedHttpRecoveryStripTransform(),
     createActiveStripTransform({
@@ -3381,7 +3389,7 @@ function createTransformRequestChain(
     createGatewayNativeWebSearchTransform(frozenAuthInjection),
     // 必须先于 xAI/MiniMax 兼容改写:先把供应商绑定的历史项降级成标准 message，
     // 后续针对具体供应商的 input 归一化才能稳定处理。
-    createCrossProviderCompactionCompatTransform(),
+    crossProviderCompactionCompatTransform,
     // 必须在 compaction 降级之后:自定义 LiteLLM 别名首次 422 会激活本 strip,
     // 若先于降级跑,会把 compaction 当未知 type 丢掉,明文「早期上下文不可用」提示就没了。
     createActiveStripTransform({
@@ -3427,7 +3435,7 @@ function createTransformRequestChain(
     // 视觉桥透明替换（层 A，Responses 格式）：controller 未注入时短路透传，零干扰；
     // 注入后把纯文本模型请求 input[] 里的 input_image 转成文字描述。放在 strip 之前与
     // Anthropic 链一致，避免未来 strip 扩展覆盖 Responses input_image 时吃掉图。
-    ...(guest ? [] : [buildVisionBridgeProxyTransform(log)]),
+    ...(visionBridgeTransform ? [visionBridgeTransform] : []),
     // Run after every provider dialect rewrite: xAI can also turn custom calls into functions.
     // This covers native-custom routes and tool-less /responses/compact without changing call_id.
     normalizeResponsesToolItemIds,
@@ -3450,6 +3458,8 @@ function createTransformRequestChain(
     codexTransform,
     miniMaxResponsesCompatTransform,
     providerRequestTransform,
+    crossProviderCompactionCompatTransform,
+    visionBridgeTransform,
   };
 }
 
@@ -3605,6 +3615,8 @@ async function createCodexProxyHandle(
     codexTransform,
     miniMaxResponsesCompatTransform,
     providerRequestTransform,
+    crossProviderCompactionCompatTransform,
+    visionBridgeTransform,
   } = createTransformRequestChain(
     frozenAuthInjection, execAdapter, pricing, guestProviderId !== undefined,
   );
@@ -3617,12 +3629,19 @@ async function createCodexProxyHandle(
   // 原生支持 custom tools 的路由不会被改写（#9759）。
   // 白名单按引用相等判断，必须放链里的同一个实例：providerRequestTransform 和
   // execFunctionAdapterTransform 都挂了 errorMode / onRequestSettled，重新创建函数对不上。
+  // 加密压缩历史降级和视觉桥也必须留在名下：前者按 upstreamBase 判断，
+  // 自定义供应商上游正好走「解不开的 compaction / encrypted_content 换成明文提示」；
+  // 后者只在 shouldBridge 为真（纯文本模型且视觉桥已装配）时把 input_image 换成文字描述。
+  // 跳过会把不可解密的历史和原图原样发给非 GPT / 纯文本上游。
+  // 视觉桥仅在非 guest 时入链，白名单按同一实例追加；guest 不入链也不入白名单。
   const customProviderNamespaceTransforms = new Set<RequestTransform>([
     codexTransform,
     miniMaxResponsesCompatTransform,
     providerRequestTransform,
     normalizeResponsesToolItemIds,
     execFunctionAdapterTransform,
+    crossProviderCompactionCompatTransform,
+    ...(visionBridgeTransform ? [visionBridgeTransform] : []),
   ]);
   const transformRequest: RequestTransform[] = transformChain.map(
     (transform): RequestTransform => {
