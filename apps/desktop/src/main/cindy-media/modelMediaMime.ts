@@ -1,4 +1,4 @@
-import { inflateRawSync } from 'node:zlib';
+import { constants, inflateRawSync } from 'node:zlib';
 
 /** Canonical model file types accepted by the media warehouse. */
 export const MODEL_MIME_BY_EXT: Record<string, string> = {
@@ -40,8 +40,7 @@ export function isModelMediaCandidate(bytes: Uint8Array, declaredMime = ''): boo
   if (Object.values(MODEL_MIME_BY_EXT).includes(declaredMime)) return true;
   const prefix = new TextDecoder().decode(bytes.subarray(0, 4096));
   return /^\s*(?:ply[\r\n]|solid(?:\s|$)|;\s*FBX|<COLLADA\b)/.test(prefix) ||
-    // glTF JSON member order is arbitrary, so any JSON object may hide `asset` past the prefix.
-    /^\s*\{/.test(prefix) || vertex.test(prefix) ||
+    /["']asset["']\s*:\s*\{/.test(prefix) || vertex.test(prefix) ||
     /<COLLADA\b/.test(prefix) ||
     prefix.startsWith('Kaydara FBX Binary  ') ||
     (bytes.length >= 4 && bytes[0] === 0x50 && bytes[1] === 0x4b && bytes[2] === 3 && bytes[3] === 4) ||
@@ -71,6 +70,15 @@ function is3mf(bytes: Uint8Array): boolean {
       if (/^3D\/[^/]+\.model$/i.test(name)) {
         const local = data.getUint32(cursor + 42, true);
         if (!data.getUint32(cursor + 24, true) || local + 30 > cursor || data.getUint32(local, true) !== 0x04034b50) return false;
+        // Inspect only the XML head (bounded): a package whose model is not 3MF XML is not a model.
+        const start = local + 30 + data.getUint16(local + 26, true) + data.getUint16(local + 28, true);
+        const compressed = Math.min(data.getUint32(cursor + 20, true), 65536);
+        if (start + compressed > cursor) return false;
+        const method = data.getUint16(cursor + 10, true);
+        const raw = bytes.subarray(start, start + compressed);
+        let head: Uint8Array;
+        try { head = method === 0 ? raw : method === 8 ? inflateRawSync(raw, { finishFlush: constants.Z_SYNC_FLUSH, maxOutputLength: 1 << 20 }) : new Uint8Array(); } catch { return false; }
+        if (!/<model\b[^>]*\bxmlns\s*=\s*["']http:\/\/schemas\.microsoft\.com\/3dmanufacturing\/core\/\d{4}\/\d{2}["']/.test(new TextDecoder().decode(head))) return false;
         model = true;
       }
       if (name === '[Content_Types].xml') {

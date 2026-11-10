@@ -61,7 +61,8 @@ export async function importPickedFiles(deps: PickedFilesDeps, ghostId: string, 
           prefix = Buffer.alloc(mp3ProbeBytes);
           await source.read(prefix, 0, prefix.length, 0);
         }
-        if (input.into === 'media' && isModelMediaCandidate(prefix)) {
+        // glTF JSON member order is arbitrary; the full read below is already bounded by `limit`.
+        if (input.into === 'media' && (isModelMediaCandidate(prefix) || /^\s*\{/.test(prefix.toString('utf8', 0, 4096)))) {
           prefix = Buffer.alloc(stat.size);
           let offset = 0;
           while (offset < prefix.length) {
