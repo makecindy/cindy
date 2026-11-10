@@ -13291,8 +13291,10 @@
     },
     "backgroundActivity": {
       "status": "Background subtasks running, still consuming model usage…",
-      "bashStatus_one": "{{count}} background task running…",
-      "bashStatus_other": "{{count}} background tasks running…",
+      "bashWorkStatus_one": "Working in the background ({{count}} command)…",
+      "bashServiceStatus_one": "{{count}} background service running",
+      "bashWorkStatus_other": "Working in the background ({{count}} commands)…",
+      "bashServiceStatus_other": "{{count}} background services running",
       "stopAll": "Stop all",
       "stopAllTitle": "Shut down this session's background process and stop all background subtasks (the session stays usable)",
       "stopBashTitle": "Stop the background tasks still running in this session (keeps the session process)",

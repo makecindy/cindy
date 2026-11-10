@@ -13254,8 +13254,10 @@
     },
     "backgroundActivity": {
       "status": "Hintergrund-Unteraufgaben laufen und verbrauchen weiterhin Modellkontingent…",
-      "bashStatus_one": "{{count}} Hintergrundaufgabe läuft…",
-      "bashStatus_other": "{{count}} Hintergrundaufgaben laufen…",
+      "bashWorkStatus_one": "Arbeitet im Hintergrund ({{count}} Befehl)…",
+      "bashServiceStatus_one": "{{count}} Hintergrunddienst läuft",
+      "bashWorkStatus_other": "Arbeitet im Hintergrund ({{count}} Befehle)…",
+      "bashServiceStatus_other": "{{count}} Hintergrunddienste laufen",
       "stopAll": "Alle stoppen",
       "stopAllTitle": "Hintergrundprozess dieser Sitzung beenden und alle Hintergrund-Unteraufgaben stoppen (die Sitzung bleibt nutzbar)",
       "stopBashTitle": "Noch laufende Hintergrundaufgaben dieser Sitzung stoppen (der Sitzungsprozess bleibt erhalten)",
