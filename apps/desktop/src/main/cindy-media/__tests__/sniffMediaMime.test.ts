@@ -129,6 +129,8 @@ describe('sniffMediaMime', () => {
     expect(sniffMediaMime(await zip.generateAsync({ type: 'uint8array', compression: 'DEFLATE' }))).toBe('model/3mf');
     zip.file('3D/3dmodel.model', '<model unit="millimeter" xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02">' + ' '.repeat(1_300_000) + '</model>');
     expect(sniffMediaMime(await zip.generateAsync({ type: 'uint8array', compression: 'DEFLATE' }))).toBe('model/3mf');
+    zip.file('3D/3dmodel.model', '<!--' + 'x'.repeat(5000) + '-->' + '<model unit="millimeter" xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02"/>');
+    expect(sniffMediaMime(await zip.generateAsync({ type: 'uint8array', compression: 'STORE' }))).toBe('model/3mf');
     zip.file('3D/3dmodel.model', 'hello');
     expect(sniffMediaMime(await zip.generateAsync({ type: 'uint8array', compression: 'DEFLATE' }))).toBeNull();
     zip.file('3D/3dmodel.model', '<model unit="millimeter" xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02"/>');

@@ -91,3 +91,53 @@ export async function loadPluginPageAssets(
   if (!current()) throw new Error("PLUGIN_PAGE_CLOSED");
   return assets;
 }
+
+/** Read-only page recovery. Never retries a page post, fetch write or native answer. */
+export function createPluginPagePoller(options: {
+  active(): boolean;
+  read(current: () => boolean): Promise<void>;
+  failed(error: unknown): void;
+}) {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let running = false, disposed = false, generation = 0, failures = 0;
+  let resumed = false;
+  const clear = () => {
+    if (timer !== undefined) clearTimeout(timer);
+    timer = undefined;
+  };
+  const run = async () => {
+    if (disposed || running || !options.active()) return;
+    clear();
+    running = true;
+    resumed = false;
+    const started = generation;
+    let again = true;
+    try {
+      await options.read(() => !disposed && started === generation && options.active());
+      if (started === generation && options.active()) failures = 0;
+    } catch (error) {
+      if (!disposed && started === generation && options.active()) {
+        failures++;
+        // Expired/revoked pages need an explicit reopen, preserving unsaved page content.
+        const message = error instanceof Error ? error.message : String(error);
+        again = failures < 3 && !/\[(?:NOT_FOUND|PERMISSION_DENIED|PRECONDITION_FAILED|INVALID_PARAMS)\]/.test(message);
+        if (!again) options.failed(error);
+      }
+    } finally {
+      running = false;
+      if (!disposed && options.active() && (resumed || (again && started === generation)))
+        timer = setTimeout(() => void run(), resumed ? 0 : 1_000 * 2 ** failures);
+    }
+  };
+  return {
+    resume() {
+      if (disposed) return;
+      clear();
+      failures = 0;
+      if (running) resumed = true;
+      else void run();
+    },
+    pause() { generation++; resumed = false; clear(); },
+    dispose() { disposed = true; generation++; clear(); },
+  };
+}
