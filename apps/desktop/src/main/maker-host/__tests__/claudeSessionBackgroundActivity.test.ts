@@ -11,11 +11,15 @@ import {
   clearClaudeSessionBackgroundActivity,
   createClaudeSessionActivityResponseObserver,
   getClaudeSessionBackgroundActivity,
+  hasWorkingBackgroundCommand,
   listActiveClaudeBackgroundActivitySessions,
+  listClaudeBackgroundCommandWorkSessions,
+  noteClaudeSessionBackgroundCommandWork,
   noteClaudeSessionTurnState,
   recordClaudeApiActivity,
   resetClaudeBackgroundActivityForTests,
   setClaudeBackgroundActivityBroadcaster,
+  setClaudeBackgroundCommandWorkBroadcaster,
 } from '../claude-session-background-activity.js';
 
 vi.mock('../../logger.js', () => ({
@@ -143,6 +147,78 @@ describe('claude-session-background-activity', () => {
     expect(listActiveClaudeBackgroundActivitySessions()).toEqual(['s-b']);
     vi.advanceTimersByTime(ACTIVITY_WINDOW_MS + 1_000);
     expect(listActiveClaudeBackgroundActivitySessions()).toEqual([]);
+  });
+
+  // 「后台命令仍在工作」:回合收尾时测试、构建这类命令没跑完,任务列表要显示运行中而不是已结束
+  // (与 Codex / Pi 命令没跑完回合就不结束一致)。长驻服务不算;只影响展示。
+  describe('后台命令仍在工作', () => {
+    const COMMAND_WORK_END_GRACE_MS = 5_000;
+    let workBroadcasts: Array<{ sessionId: string; active: boolean }>;
+
+    beforeEach(() => {
+      workBroadcasts = [];
+      setClaudeBackgroundCommandWorkBroadcaster((p) => workBroadcasts.push(p));
+    });
+
+    it('只把会自己结束的后台命令算作工作,长驻服务与其他任务类型不算', () => {
+      expect(
+        hasWorkingBackgroundCommand([
+          { taskType: 'local_bash', backgroundCommandKind: 'service' },
+          { taskType: 'local_agent' },
+        ]),
+      ).toBe(false);
+      expect(hasWorkingBackgroundCommand([{ taskType: 'local_bash', backgroundCommandKind: 'work' }])).toBe(true);
+      // 种类未知(没见过启动它的命令)按工作算。
+      expect(hasWorkingBackgroundCommand([{ taskType: 'local_bash' }])).toBe(true);
+    });
+
+    it('回合在跑时不点亮;回合结束而命令仍在工作才点亮,新回合开始即让位', () => {
+      const sid = 'w1';
+      noteClaudeSessionTurnState(sid, true);
+      noteClaudeSessionBackgroundCommandWork(sid, true);
+      expect(listClaudeBackgroundCommandWorkSessions()).toEqual([]);
+
+      noteClaudeSessionTurnState(sid, false);
+      expect(listClaudeBackgroundCommandWorkSessions()).toEqual([sid]);
+      expect(workBroadcasts).toEqual([{ sessionId: sid, active: true }]);
+
+      noteClaudeSessionTurnState(sid, true);
+      expect(listClaudeBackgroundCommandWorkSessions()).toEqual([]);
+      expect(workBroadcasts.at(-1)).toEqual({ sessionId: sid, active: false });
+    });
+
+    it('命令结束后保持到自动续跑的那一轮接上,中间不闪成已结束', () => {
+      const sid = 'w2';
+      noteClaudeSessionTurnState(sid, true);
+      noteClaudeSessionBackgroundCommandWork(sid, true);
+      noteClaudeSessionTurnState(sid, false);
+
+      noteClaudeSessionBackgroundCommandWork(sid, false); // 命令跑完,CLI 即将自动开新一轮
+      vi.advanceTimersByTime(COMMAND_WORK_END_GRACE_MS - 1);
+      expect(listClaudeBackgroundCommandWorkSessions()).toEqual([sid]);
+
+      noteClaudeSessionTurnState(sid, true); // 续跑那一轮开始:运行态接管
+      expect(workBroadcasts).toEqual([
+        { sessionId: sid, active: true },
+        { sessionId: sid, active: false },
+      ]);
+    });
+
+    it('续跑没来时到点熄灭;关闭任务进程立即熄灭', () => {
+      const sid = 'w3';
+      noteClaudeSessionTurnState(sid, true);
+      noteClaudeSessionBackgroundCommandWork(sid, true);
+      noteClaudeSessionTurnState(sid, false);
+      noteClaudeSessionBackgroundCommandWork(sid, false);
+      vi.advanceTimersByTime(COMMAND_WORK_END_GRACE_MS);
+      expect(listClaudeBackgroundCommandWorkSessions()).toEqual([]);
+
+      noteClaudeSessionBackgroundCommandWork(sid, true);
+      expect(listClaudeBackgroundCommandWorkSessions()).toEqual([sid]);
+      clearClaudeSessionBackgroundActivity(sid);
+      expect(listClaudeBackgroundCommandWorkSessions()).toEqual([]);
+      expect(workBroadcasts.at(-1)).toEqual({ sessionId: sid, active: false });
+    });
   });
 
   it('响应观察器:带会话标头才建 sink,onData 节流刷新活动', () => {
