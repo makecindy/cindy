@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { outboundFetch } from '../maker-host/outbound-fetch.js';
+import { outboundFetch } from '../maker-host/outbound-fetch.desktop.js';
 import { MediaDownloadError } from './mediaDownload.js';
 import type { ProviderVideoConnection } from './providerMediaRuntime.js';
 

@@ -13,7 +13,7 @@ import { ipcMain } from 'electron';
 
 import { createLogger } from '../logger.js';
 import { previewRewindAtMessage, commitRewindAtMessage, type RewindCommitOptions } from '../maker-orchestration/rewind.js';
-import { drainPersistQueue } from '../messagePersistBroadcaster.js';
+import { drainPersistQueue } from '../messagePersistBroadcaster.desktop.js';
 import { getGoalController } from '../goal-host/index.js';
 import { captureDataOwnerBroadcastScope } from '../device-link/broadcast-tap.js';
 import { broadcastSubagentRunsInvalidated } from '../localDb/ipc/subagentRuns.js';

@@ -371,7 +371,7 @@ export async function ensureBotProjectAutomations(input: {
 }): Promise<boolean> {
   // Loaded on use: the scheduler host is not part of the teammate profile store's import graph.
   const [{ getProjectAutomationLoader }, { t }] = await Promise.all([
-    import('../scheduler-host/index.js'), import('../i18n.js'),
+    import('../scheduler-host/index.desktop.js'), import('../i18n.desktop.js'),
   ]);
   const loader = getProjectAutomationLoader();
   const existing = await loader.loadProjectSchedules(input.workingDir);
@@ -386,7 +386,7 @@ export async function ensureBotProjectAutomations(input: {
 
 /** Turning project mode off removes the project's memory review. */
 export async function removeBotProjectAutomations(workingDir: string): Promise<void> {
-  const { getProjectAutomationLoader } = await import('../scheduler-host/index.js');
+  const { getProjectAutomationLoader } = await import('../scheduler-host/index.desktop.js');
   await getProjectAutomationLoader().removeSchedule(workingDir, BOT_PROJECT_MEMORY_REVIEW_ID);
 }
 

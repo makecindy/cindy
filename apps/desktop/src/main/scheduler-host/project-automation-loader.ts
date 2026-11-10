@@ -17,7 +17,7 @@ import { projectAutomationConsents, schedules, sessions } from '../localDb/schem
 import { projectAutomationConsentToRow } from '../localDb/mapper';
 import { PROJECT_AUTOMATION_REL_SEGMENTS } from '../../shared/projectAutomationPaths';
 import { migrateLegacyXdmakerDir } from '../utils/legacyXdmakerMigration';
-import type { DrizzleScheduleStorage, SchedulerDrizzleDb } from './storage';
+import type { DrizzleScheduleStorage, SchedulerDrizzleDb } from './storage.desktop';
 
 /**
  * ProjectAutomationLoader reads .cindy/automations/schedules.json and syncs it

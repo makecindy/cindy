@@ -1,3 +1,4 @@
+import type { HostConnectionState } from '@cindy/maker-shared/host-event-stream';
 import { applyMacWindowBackdrop, setMacSidebarWidth } from './macosDesktopBlur';
 import { createPersonalBuildMonitor } from './personalBuildMonitor.js';
 import { updatePersonalLocalPlugins } from './cindy-brain/index.js';
@@ -17,7 +18,7 @@ import { registerLoginItemIpc } from './login-item-ipc.js';
 import { registerMenubarIpc } from './menubar/ipc.js';
 import { initMenubarService, stopMenubarService } from './menubar/service.js';
 import { refreshQuotaPanelsControlState } from './quota-overview/panelController.js';
-import { getQuotaOverviewService } from './quota-overview/service.js';
+import { getQuotaOverviewService, readUsageWidgetSnapshot } from './quota-overview/service.js';
 import {
   createLatestSourceVersionReader,
   sourceChannel,
@@ -48,7 +49,7 @@ import {
   writeCindyMakeSyncLatestBeforeBuild,
 } from './cindy-make/settingsStore.js';
 import { retainProviderPresentationAfterAuthChange } from './maker-host/provider-presentation-store.js';
-import { codexAccountState } from './maker-host/codex-account-auth.js';
+import { codexAccountState } from './maker-host/codex-account-auth.desktop.js';
 import { syncSubscriptionAccountUsage } from './usage/subscriptionAccountUsage.js';
 import {
   clearSubscriptionAccountDiscoveredModels,
@@ -91,7 +92,7 @@ import {
   setWindowDesktopBlur,
   setWindowWallpaperCovered,
 } from './vibrancyConfig';
-import { getSessionThinkingSnapshots, getHistoryToolName, drainPersistQueue } from './messagePersistBroadcaster';
+import { getSessionThinkingSnapshots, getHistoryToolName, drainPersistQueue } from './messagePersistBroadcaster.desktop';
 import { applyVibrancyToSecondaryWindows } from './secondary-windows';
 import { rememberResolvedAppTheme, resolveAppThemeIsDark } from './resolved-app-theme';
 import {
@@ -121,6 +122,7 @@ import {
   recordDesktopDevAuthStartupResult,
   markDesktopDevStartupFailed,
   markDesktopDevWindowReady,
+  enableDesktopDevQuitRequests,
 } from './devStartupStatus';
 import {
   installWindowFullscreenStateBroadcast,
@@ -360,11 +362,11 @@ import {
   registerRsbNativePopupSurfaceIpc,
 } from './rsb-browser-bridge/native-popup-surfaces.js';
 import { disposeAndroidAdb } from './mcp-integrations/android.js';
-import { shutdownCodexEnvironment } from './mcp-integrations/codexEnvironment.js';
-import { countLiveBridgeMcpSessions } from './mcp-integrations/codexHttpBridge.js';
-import { shutdownPiEnvironment } from './mcp-integrations/piEnvironment.js';
+import { shutdownCodexEnvironment } from './mcp-integrations/codexEnvironment.desktop.js';
+import { countLiveBridgeMcpSessions } from './mcp-integrations/codexHttpBridge.desktop.js';
+import { shutdownPiEnvironment } from './mcp-integrations/piEnvironment.desktop.js';
 import { fetchRemoteMediaImageBytes } from './device-link/remoteMediaProtocol';
-import * as imageCacheStore from './imageCacheStore';
+import * as imageCacheStore from './imageCacheStore.desktop';
 import { readCachedImage } from './cindy-media/readCachedImage';
 import {
   collectStreamWithLimit,
@@ -390,7 +392,7 @@ import {
   cindyMediaSchemePrivilege,
   registerCindyMediaProtocolHandler,
 } from './cindy-media/cindyMediaProtocol';
-import * as cindyMediaBlobStore from './cindy-media/blobStore';
+import * as cindyMediaBlobStore from './cindy-media/blobStore.desktop';
 import * as cindyChatAttachments from './cindy-media/chatAttachments';
 import { getFixedDirectoryStats, openOrCreateFixedDirectory } from './cindy-media/fixedDirectory';
 import { openMakeSourceDirectory, openMakeToolsDirectory } from './cindy-make/toolsDirectory';
@@ -574,7 +576,7 @@ import {
   type EmbeddingService,
 } from './embedding-host';
 import { readClaudeApiKey } from './maker-host/auth-adapters';
-import { outboundFetch } from './maker-host/outbound-fetch';
+import { outboundFetch } from './maker-host/outbound-fetch.desktop';
 import { registerDevEmbeddingIpc } from './ipc/dev/embedding';
 import {
   acquirePiSubagentLaunchFence,
@@ -662,6 +664,7 @@ import { initCrashDiagnosisService } from './crash-diagnosis';
 import { initLogUploadService, scheduleStartupBackfill } from './log-upload';
 import { initPerformanceTraceService } from './performance-trace';
 import { createOpenLogsMenuItem, openLogsDirectory } from './logSupport';
+import { sidebarWindowExpansion } from './sidebarWindowExpansion';
 import { registerSidebarWindowExpansionIpc } from './sidebarWindowExpansionIpc';
 import { WindowManualDragController } from './windowManualDrag';
 import { loadWindowsTaskbarNative } from './windowsTaskbarNative';
@@ -696,9 +699,10 @@ import {
   getUpdateRelaunchControllers,
   hasInFlightRemoteInvokes,
   setHistoryToolNameReader,
+  setUsageWidgetSnapshotReader,
   pushSessionActivityToController,
   setSessionsSubscribedListener,
-} from './device-link/dispatch';
+} from './device-link/dispatch.desktop';
 import {
   registerDeviceLinkIpc,
   defaultDeps as deviceLinkIpcDeps,
@@ -804,7 +808,7 @@ import {
   refreshXaiModelsFromHttp,
 } from './maker-host/model-discovery/xai.js';
 import { notifyOpenAiMediaCredentialChanged } from './maker-host/model-discovery/openai-media.js';
-import { refreshCustomMcpProviders } from './mcp-integrations/custom-mcp-registry.js';
+import { refreshCustomMcpProviders } from './mcp-integrations/custom-mcp-registry.desktop.js';
 import {
   clearXaiRateLimitSnapshot,
   clearXaiSubscriptionUsageSnapshot,
@@ -820,7 +824,7 @@ import {
 import {
   disposeCodexProxy,
   getCodexProxyAuthInjectionState,
-} from './maker-host/codex-proxy-host.js';
+} from './maker-host/codex-proxy-host.desktop.js';
 import {
   disposeBrowserRuntime,
   registerBrowserBackendIpc,
@@ -830,7 +834,7 @@ import {
   setIsDetachedForBackend,
   setUserBrowserPageControlProvider,
 } from './mcp-integrations/browser.js';
-import { setPageControlGhostProvider } from './mcp-integrations/ghost.js';
+import { setPageControlGhostProvider } from './mcp-integrations/ghost.desktop.js';
 import { RsbWindowController } from './right-sidebar-window/controller.js';
 import { resolveRsbHostContextFromSession } from './right-sidebar-window/resolveHostContext.js';
 import { createRightSidebarWindow } from './right-sidebar-window/window.js';
@@ -940,7 +944,7 @@ import {
   onClaudeCliLoginStatusChange,
   readClaudeCliLoginStatus,
   runClaudeCliLogin,
-} from './maker-host/claude-native-cli.js';
+} from './maker-host/claude-native-cli.desktop.js';
 import { closeClaudeCliProxyBridge } from './maker-host/claude-cli-proxy-bridge.js';
 import { startLegacyClaudeConfigMigration } from './maker-host/claude-legacy-config-migration.js';
 import { isNativeProviderAuthBound, isNativeProviderAuthRevoked } from './maker-host/nativeProviderAuthBinding.js';
@@ -949,7 +953,7 @@ import {
   cancelGrokOAuthLogin,
   logoutGrok,
   hasGrokOAuthLogin,
-} from './maker-host/grok-oauth-login.js';
+} from './maker-host/grok-oauth-login.desktop.js';
 import { setGrokDeviceLoginConnectedHandler } from './maker-host/grok-device-login-service.js';
 import { setXaiAuthInvalidatedHandler } from './maker-host/xai-auth-invalidation-host.js';
 import { clearXaiMediaModels } from './maker-host/model-discovery/xai-media.js';
@@ -1249,7 +1253,7 @@ import { handleIncomingCindyFile } from './cindy-brain/openFileInstall.js';
 import { registerCindyFileAssociation } from './cindy-brain/fileAssociation.js';
 import { runPluginStorageSmoke } from './smoke/pluginStorageSmoke.js';
 import { runComputerUseSmokeIfRequested } from './smoke/computerUseSmoke.js';
-import { getResolvedMainLocale, setMainClassicalStyle, setMainLocale, t } from './i18n.js';
+import { getResolvedMainLocale, setMainClassicalStyle, setMainLocale, t } from './i18n.desktop.js';
 import { isClassicalReplyStyle } from '@cindy/maker-shared/classical-reply';
 import { requireObject, requireString, throwIpcError } from './utils/ipcValidate.js';
 import { pickNativeAtResource } from './nativeAtResourcePicker.js';
@@ -1264,7 +1268,7 @@ import {
   getScheduleStorage,
   getScheduleStorageIfInitialized,
   getProjectAutomationLoader,
-} from './scheduler-host/index.js';
+} from './scheduler-host/index.desktop.js';
 import { voiceCallCoordinator } from './voice-conversation/callCoordinator.js';
 import { hasVoiceConversationLease } from './voice-conversation/lease.js';
 import {
@@ -1349,9 +1353,18 @@ function installHostClientMode(): boolean {
       if (!win.isDestroyed()) win.webContents.send(channel, ...args);
     }
   };
-  startHostEventBridge({
+  let hostConnectionState: HostConnectionState | null = null;
+  const eventBridge = startHostEventBridge({
     baseUrl: delegation.baseUrl,
     token: delegation.token,
+    beforeEvents: async (signal) => {
+      const auth = await hostClient.request('/api/auth/state', null, signal) as authManager.AuthState;
+      if (!signal.aborted) authManager.receiveHostAuthState(auth);
+    },
+    onConnectionState: (state) => {
+      hostConnectionState = state;
+      sendToAllWindows('host-client:connection', state);
+    },
     onInputProjection: (payload) => sendToAllWindows('maker:input:projection', payload),
     onInteractionRequest: (payload) => sendToAllWindows('maker:interaction-request', payload),
     onInteractionDismissed: (payload) => sendToAllWindows('maker:interaction-dismissed', payload),
@@ -1388,6 +1401,9 @@ function installHostClientMode(): boolean {
     onMessageCreated: (event: any) => {
       sendToAllWindows('local-db:messages:created', { sessionId: event?.sessionId, message: event?.message });
     },
+    onMessageDeleted: event => sendToAllWindows('local-db:messages:deleted', event),
+    onErrorPersisted: event => sendToAllWindows('local-db:session:error-persisted', event),
+    onSubagentRunsChanged: event => sendToAllWindows('local-db:subagent-runs:changed', event),
     onProjectAliasesChanged: () => {
       sendToAllWindows('local-db:project-aliases:changed', {});
     },
@@ -1398,6 +1414,14 @@ function installHostClientMode(): boolean {
       );
     },
   });
+  ipcMain.on('host-client:observe', (event) => {
+    if (!isTrustedAppRendererEvent(event) || !hostConnectionState) return;
+    event.sender.send('host-client:connection', hostConnectionState);
+  });
+  ipcMain.on('host-client:retry', (event) => {
+    if (isTrustedAppRendererEvent(event)) eventBridge.reconnect();
+  });
+  app.once('before-quit', () => eventBridge());
   return true;
 }
 
@@ -1808,6 +1832,7 @@ function rebindChatEmbeddingSettingsWatcher(): void {
 
 // The quit coordinator finishes with app.exit(), which bypasses will-quit.
 onQuit('chat-embedding-settings-watcher', () => chatEmbeddingSettingsWatcher.dispose());
+onQuit('workdir-probe-host', () => workdirProbeHostClient.dispose(), 'sync');
 
 /**
  * 「聊天嵌入」关闭时的收尾: 总是让 chat 的 enqueue 守卫立即失效; 但只有在没有插件
@@ -2967,6 +2992,11 @@ import started from 'electron-squirrel-startup';
 
 import { APPLICATION_MENU_LABELS, type ApplicationMenuLocale } from './applicationMenuLabels.js';
 import { installCindyCliCommand, CLI_COMMAND_NAME } from './installCliCommand.js';
+// Keep these three last. Static imports evaluate in source order, so listing them
+// first would load everything they reach ahead of the existing startup sequence.
+import { workdirProbeHostClient } from './workdir-probe-host/index.js';
+import { setToolProcessMediaRemoteReader } from './cindy-media/toolProcessMedia.js';
+import { materializeSshRemoteMedia } from './file-browser/ssh-media.js';
 
 if (started) {
   app.quit();
@@ -4512,7 +4542,7 @@ const createWindow = () => {
   // work-area fill, so that fill cannot become the next restore size (#9461).
   // The keeper keeps this filtered view for its whole lifetime; the window itself
   // is untouched, so drag / sidebar reads still see the live rectangle.
-  manageWindowStatePreservingNormalBounds(mainWindowState, mainWindow, screen);
+  manageWindowStatePreservingNormalBounds(mainWindowState, sidebarWindowExpansion.persistenceView(mainWindow), screen);
   // The constructor size is not the rectangle the keeper will save. `saveState`
   // copies the live normal bounds into its closure; `maximize()` after that only
   // flips the flag, so quit no longer writes the old work-area rectangle back.
@@ -9886,6 +9916,7 @@ app.on('ready', async () => {
   // 首登轻量数据迁移(mToc)的确认弹窗 IPC —— 必须先于 registerLocalDbIpc 注册,
   // 保证 beforeEnsureReady 推送 confirm 态时 renderer 已能 invoke 确认通道。
   registerLegacyMigrationIpc();
+  setToolProcessMediaRemoteReader(materializeSshRemoteMedia);
   setHistoryToolNameReader(getHistoryToolName);
   registerLocalDbIpc({
     isSessionTurnPendingCompletion,
@@ -10508,6 +10539,7 @@ app.on('ready', async () => {
   initHeartbeatService();
   // 设备互联(跨设备远程控制):登录后连 relay,登出即断;开关与设备列表 IPC 一并注册
   let updateRelaunchRemoteBusy = false;
+  setUsageWidgetSnapshotReader(readUsageWidgetSnapshot);
   initDeviceLinkService({
     taskActivity: getAgentIslandService() ?? undefined,
     onControlledStateChanged: refreshQuotaPanelsControlState,
@@ -11050,6 +11082,11 @@ onQuit('local-db-close', () => localDbCloseDb(), 'post-async');
 // original mode (5s), then await Electron geometry (5s). Keep a margin before
 // the existing 20s hard-exit watchdog; completed disposers never wait this long.
 installQuitHandler(16000);
+if (!app.isPackaged && process.platform === 'win32') {
+  const stopQuitRequests = enableDesktopDevQuitRequests(() => app.quit());
+  onQuit('dev-quit-requests', stopQuitRequests);
+  process.once('exit', stopQuitRequests);
+}
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {

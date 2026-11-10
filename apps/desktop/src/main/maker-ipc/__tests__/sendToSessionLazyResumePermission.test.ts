@@ -69,7 +69,7 @@ describe('sendToSessionInternal lazy-resume permission mode', () => {
   });
 
   it('reads the persisted permission mode in the row snapshot used by lazy resume', () => {
-    const sessionsSource = readFileSync(resolve(__dirname, '..', '..', 'localDb', 'ipc', 'sessions.ts'), 'utf8');
+    const sessionsSource = readFileSync(resolve(__dirname, '..', '..', 'localDb', 'sessionDispatchSnapshot.ts'), 'utf8');
     const select = sessionsSource.slice(sessionsSource.indexOf('async function selectSessionRowSnapshot('));
     expect(select.slice(0, select.indexOf('.from(sessions)'))).toContain('permissionMode: sessions.permissionMode,');
   });

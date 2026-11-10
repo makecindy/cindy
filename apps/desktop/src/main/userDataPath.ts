@@ -25,3 +25,15 @@ export function getUserDataDir(): string {
 export function userDataPath(...parts: string[]): string {
   return path.join(getUserDataDir(), ...parts);
 }
+
+// Machine-wide shared resources (e.g. native Skill locks) must stay outside a
+// profile. Each launcher injects the OS app-data directory independently.
+let configuredAppDataDir: string | null = null;
+export function configureAppDataDir(dir: string): void {
+  if (!dir || !path.isAbsolute(dir)) throw new Error('appData must be an absolute directory');
+  configuredAppDataDir = dir;
+}
+export function getAppDataDir(): string {
+  if (!configuredAppDataDir) throw new Error('appData directory is not configured');
+  return configuredAppDataDir;
+}

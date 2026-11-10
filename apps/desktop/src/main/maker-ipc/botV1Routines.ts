@@ -13,7 +13,7 @@ import path from 'node:path';
 import type { Routine, RoutineState } from '@cindy/maker-scheduler';
 
 import { createLogger } from '../logger.js';
-import { getScheduler, getScheduleStorage } from '../scheduler-host/index.js';
+import { getScheduler, getScheduleStorage } from '../scheduler-host/index.desktop.js';
 
 const log = createLogger('maker-ipc:bot-v1-routines');
 

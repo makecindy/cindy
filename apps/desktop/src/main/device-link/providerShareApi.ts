@@ -14,7 +14,7 @@ import {
 import { activeOwnerScopeKey, getActiveAppSession, isAppSessionBoundaryPending } from '../appSessionState.js';
 import { getAuthState } from '../authManager.js';
 import { getClientEndpoint } from '../clientEndpointsService.js';
-import { serverApiFetch } from '../serverApiClient.js';
+import { serverApiFetch } from '../serverApiClient.desktop.js';
 import type { IpcErrorCode } from '../../shared/ipc-errors.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import { createProviderShareDelegationChecks, type DelegationCheckInput,

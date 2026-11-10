@@ -1900,6 +1900,8 @@ function CCAgentSessionContent({
     pendingPermission,
     respondToPermission,
     pendingAskUser,
+    pendingAskUserQueue,
+    selectAskUserQuestion,
     answerUserQuestion,
     pendingPluginSetup,
     pluginSetupViewerState,
@@ -6054,6 +6056,8 @@ function CCAgentSessionContent({
                     workingDir={session?.workingDir ?? ''}
                     remoteHostId={session?.remoteHostId}
                     pending={pendingAskUser}
+                    pendingQuestions={pendingAskUserQueue}
+                    onSelectQuestion={selectAskUserQuestion}
                     onAnswer={answerUserQuestion}
                     viewerState={askUserViewerState}
                     onViewerStateChange={setAskUserViewerState}

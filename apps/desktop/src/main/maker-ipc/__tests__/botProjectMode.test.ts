@@ -20,8 +20,8 @@ const snapshot = vi.hoisted(() => vi.fn(async () => ({})));
 
 vi.mock('electron', () => ({ app: { getPath: () => '/tmp' }, BrowserWindow: { getAllWindows: () => [] } }));
 vi.mock('../../git-snapshot/gitSnapshotService.js', () => ({ createSnapshotDetailed: snapshot }));
-vi.mock('../../scheduler-host/index.js', () => ({ getProjectAutomationLoader: () => loader }));
-vi.mock('../../i18n.js', () => ({ t: () => '{{name}} · Review memory' }));
+vi.mock('../../scheduler-host/index.desktop.js', () => ({ getProjectAutomationLoader: () => loader }));
+vi.mock('../../i18n.desktop.js', () => ({ t: () => '{{name}} · Review memory' }));
 vi.mock('../../localDb/ipc/projectAliases.js', () => ({
   listProjectAliases: async () => aliases.rows,
   upsertProjectAlias: aliases.upsert,

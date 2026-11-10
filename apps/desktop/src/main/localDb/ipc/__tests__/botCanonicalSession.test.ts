@@ -7,7 +7,7 @@ import { createDrizzleProxy } from '../../client/drizzleProxy';
 import type { DbTransport } from '../../client/DbTransport';
 import { getSelectedNewMakerRoute, setNewMakerDraftCache } from '../../../maker-host/newMakerDefaultsCache';
 import { setModelVisibilityMirror } from '../../../maker-host/model-visibility-mirror';
-import { setMainLocale } from '../../../i18n';
+import { setMainLocale } from '../../../i18n.desktop';
 import Database from 'better-sqlite3';
 import { createMessage } from '../messages';
 import type { ProviderView } from '@cindy/model-providers';
@@ -15,7 +15,7 @@ import { createHash } from 'node:crypto';
 import { createCompanionCloudHost } from '../../../companion-cloud/host';
 import { materializeCompanion } from '../../../companion-cloud/materialize';
 import { fakeApi, memoryState } from '../../../companion-cloud/__tests__/fakes';
-import { clearSessionPersistState, noteSessionAgentKind, getAssistantSamplingRuntimeId } from '../../../messagePersistBroadcaster';
+import { clearSessionPersistState, noteSessionAgentKind, getAssistantSamplingRuntimeId } from '../../../messagePersistBroadcaster.desktop';
 import { join, resolve } from 'node:path';
 import { existsSync, mkdirSync, promises as fsPromises, readFileSync, rmSync, writeFileSync } from 'node:fs';
 
@@ -37,7 +37,7 @@ import type { CustomMcpConfig } from '../../../../shared/customMcp';
 import { Session } from '@cindy/maker-core';
 import { withSessionPermissionChange } from '../../../maker-ipc/sessionPermissionChange';
 import { getMaker, getPluginRegistry, isBotToolsetAvailable } from '../../../maker-host/index';
-import { getBuiltinMcpServerNames, refreshCustomMcpProviders, registerCustomMcpArrays, resetCustomMcpRegistry } from '../../../mcp-integrations/custom-mcp-registry';
+import { getBuiltinMcpServerNames, refreshCustomMcpProviders, registerCustomMcpArrays, resetCustomMcpRegistry } from '../../../mcp-integrations/custom-mcp-registry.desktop';
 import { isBotToolsetAvailableOnTarget } from '../../../../shared/botRemoteCapabilities';
 import { resolveBotAllowedBuiltinPluginIds } from '../../../maker-host/plugins/types';
 
@@ -183,8 +183,8 @@ vi.mock('../../../git-snapshot/projectGitBootstrap.js', () => ({
 vi.mock('../../../maker-host/git-safety-settings-store.js', () => ({
   readGitSafetySettings: () => ({ mode: 'all-projects', autoSnapshotEnabled: true, autoInitProjectGit: true }),
 }));
-vi.mock('../../../maker-host/custom-mcp-store.js', async (importOriginal) => ({
-  ...await importOriginal<typeof import('../../../maker-host/custom-mcp-store.js')>(),
+vi.mock('../../../maker-host/custom-mcp-store.desktop.js', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../../../maker-host/custom-mcp-store.desktop.js')>(),
   listCustomMcpServers: async () => h.customMcpConfigs,
 }));
 vi.mock('../../../maker-host/createDesktopProviderService.js', () => ({
@@ -276,7 +276,7 @@ import { readRemoteBotSessionAccess } from '../botRemoteSessionAccess';
 import { assertRemoteBotInvocationAllowed, projectRemoteSessionResult, projectRemoteBotPush } from '../../../device-link/remoteBotSessionBoundary';
 import { listBotSkillsForSession, saveBotSkillForSession } from '../../../maker-ipc/botSkillService';
 import { provisionDefaultBot } from '../../../maker-ipc/botDefaultProvisioning';
-import { resolveSafe } from '../../../cindy-media/blobStore';
+import { resolveSafe } from '../../../cindy-media/blobStore.desktop';
 
 function testSha256(value: string): string {
   return createHash('sha256').update(value).digest('hex');
@@ -4397,7 +4397,7 @@ describe('Bots list unread projection', () => {
       agentMeta: { samplingAttemptPending: { runtimeId: 'old-runtime' }, turnCompleted: true } });
     const { assistantSamplingSettlements } = await import('../../../assistantSamplingSettlement.js');
     assistantSamplingSettlements.put({ sessionId, persistId: 'accepted-pending', patch: { samplingAttemptPending: false } });
-    const { clearSessionPersistState } = await import('../../../messagePersistBroadcaster.js');
+    const { clearSessionPersistState } = await import('../../../messagePersistBroadcaster.desktop.js');
     clearSessionPersistState(sessionId);
     h.getSession.mockReturnValue(null);
     if (projection === 'local') {

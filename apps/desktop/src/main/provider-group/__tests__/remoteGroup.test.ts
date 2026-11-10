@@ -7,7 +7,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import type { ProviderGroupConfig, ProviderGroupMember, ProviderGroupView } from '../../../shared/providerGroup';
-import type { ProviderGroupBinding, ProviderGroupRef } from '../bindings';
+import type { ProviderGroupBinding, ProviderGroupRef } from '../bindings.desktop';
 import type { ProviderGroupDirectory, ResolvedMemberState } from '../directory';
 import { ProviderGroupLocalCapacityError } from '../localCapacity';
 import { createProviderGroupRouter } from '../router';

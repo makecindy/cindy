@@ -54,6 +54,7 @@ function harness() {
   const entries = new Map();
   const dismiss = vi.fn();
   const deps = {
+    maker: { getSession: () => ({ submitAsyncQuestionAnswer: vi.fn(async () => true) }) },
     createSharedPermission,
     getDeviceLinkInvokeContext: () => ({ sharedTask }),
     assertSharedTaskInteractionResolveCurrent,
@@ -80,7 +81,7 @@ function harness() {
     take: (id: string) => Array<{ resolve: (decision: InteractionDecision) => void; sharedPermission?: SharedPermission }>;
     resolveFromIpc: (event: unknown, id: string, decision: InteractionDecision) => Promise<{ accepted: boolean }>;
   };
-  const request = (id = 'permission', sessionId = 'task', kind: InteractionRequest['kind'] = 'permission', channel?: InteractionHandler, signal?: AbortSignal, isBlocking?: boolean) => {
+  const request = (id = 'permission', sessionId = 'task', kind: InteractionRequest['kind'] = 'permission', channel?: InteractionHandler, signal?: AbortSignal, isBlocking?: boolean, delivery?: 'async') => {
     const session: InteractionSession = { id: sessionId, setInteractionListener: handler => { if (handler) listeners.set(sessionId, handler); } };
     runtime.install(session);
     const lease = channel ? beginInteractionRoute(session, {
@@ -90,7 +91,7 @@ function harness() {
       onCancel: () => true,
     }) : undefined;
     const settled = vi.fn();
-    const promise = listeners.get(sessionId)!({ kind, requestId: id, toolName: 'Shell', input: {}, ...(isBlocking === undefined ? {} : { isBlocking }) } as InteractionRequest, signal);
+    const promise = listeners.get(sessionId)!({ kind, requestId: id, ...(delivery ? { delivery } : {}), toolName: 'Shell', input: {}, ...(isBlocking === undefined ? {} : { isBlocking }) } as InteractionRequest, signal);
     void promise.then(settled);
     return { promise, settled, lease };
   };

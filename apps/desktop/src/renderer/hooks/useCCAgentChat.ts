@@ -234,6 +234,8 @@ interface UseCCAgentChatReturn {
   respondToPermission: (result: CCAgentPermissionResult) => void;
   /** F7.2: Currently pending ask-user-question */
   pendingAskUser: PendingAskUser | null;
+  pendingAskUserQueue?: PendingAskUser[];
+  selectAskUserQuestion: (requestId: string) => void;
   /** Host-owned plugin setup snapshot. */
   pendingPluginSetup: PendingPluginSetup | null;
   pluginSetupViewerState: PluginSetupViewerState;
@@ -704,6 +706,10 @@ export function useCCAgentChat(
     [sessionId],
   );
 
+  const selectAskUserQuestion = useCallback((requestId: string) => {
+    if (sessionId) makerChatStore.selectAskUserQuestion(sessionId, requestId);
+  }, [sessionId]);
+
   const setAskUserDraft = useCallback(
     (next: AskUserDraft | null) => {
       if (!sessionId) return;
@@ -925,6 +931,8 @@ export function useCCAgentChat(
     pendingPermission: lightState.pendingPermission,
     respondToPermission,
     pendingAskUser: lightState.pendingAskUser,
+    pendingAskUserQueue: lightState.pendingAskUserQueue,
+    selectAskUserQuestion,
     pendingPluginSetup: lightState.pendingPluginSetup,
     pluginSetupViewerState: lightState.pluginSetupViewerState,
     pluginSetupCommandInFlight: lightState.pluginSetupCommandInFlight,

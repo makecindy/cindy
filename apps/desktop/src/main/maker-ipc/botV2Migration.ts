@@ -21,7 +21,7 @@ import type { Routine } from '@cindy/maker-scheduler';
 
 import { readBotProjectMode } from '../../shared/botProjectMode.js';
 import { companionHomes } from '../companion-cloud/homes.js';
-import { t } from '../i18n.js';
+import { t } from '../i18n.desktop.js';
 import { getDbClient } from '../localDb/client/current.js';
 import { readBotSettingsProfile, setNewTeammateSetup, updateBotProfile } from '../localDb/ipc/bots.js';
 import { botProfiles } from '../localDb/schema.js';

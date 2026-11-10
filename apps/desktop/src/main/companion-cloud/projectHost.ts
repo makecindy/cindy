@@ -25,7 +25,7 @@ import type { CompanionProjectIo } from './project.js';
 const RULES_FILE = 'AGENTS.md';
 
 /** Loaded on use: the scheduler host pulls in services the companion host does not otherwise need. */
-const schedulerHost = () => import('../scheduler-host/index.js');
+const schedulerHost = () => import('../scheduler-host/index.desktop.js');
 
 const missing = (error: unknown) => (error as NodeJS.ErrnoException | null)?.code === 'ENOENT';
 

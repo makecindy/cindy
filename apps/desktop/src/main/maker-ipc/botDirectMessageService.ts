@@ -1,7 +1,7 @@
 import { isCompanionShadowed } from '../companion-cloud/homes.js';
 import { withBotProfileLocks } from './botProfileLock.js';
 import { authorizeGroupTool, GroupToolAuthorizationError } from './botGroupToolAuthorization.js';
-import { t } from '../i18n.js';
+import { t } from '../i18n.desktop.js';
 
 import { and, asc, desc, eq, inArray, isNull } from 'drizzle-orm';
 

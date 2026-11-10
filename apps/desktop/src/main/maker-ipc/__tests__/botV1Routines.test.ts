@@ -6,7 +6,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 
 const h = vi.hoisted(() => ({ schedules: new Set<string>(), remove: vi.fn() }));
 vi.mock('../../logger.js', () => ({ createLogger: () => ({ warn: vi.fn(), info: vi.fn() }) }));
-vi.mock('../../scheduler-host/index.js', () => ({
+vi.mock('../../scheduler-host/index.desktop.js', () => ({
   getScheduleStorage: () => ({ get: async (id: string) => (h.schedules.has(id) ? { id, source: 'bot' } : null) }),
   getScheduler: () => ({ delete: async (id: string, options: unknown) => { h.remove(id, options); h.schedules.delete(id); } }),
 }));

@@ -11,7 +11,7 @@ const h = vi.hoisted(() => ({
 }));
 vi.mock('electron', () => ({ app: { getPath: () => h.root } }));
 vi.mock('../../logger.js', () => ({ createLogger: () => ({ warn: vi.fn(), info: vi.fn() }) }));
-vi.mock('../../i18n.js', () => ({ t: (key: string) => key.split('.').at(-1) }));
+vi.mock('../../i18n.desktop.js', () => ({ t: (key: string) => key.split('.').at(-1) }));
 vi.mock('../../appSessionState.js', () => ({ activeOwnerScopeKey: () => 'owner', ownerScopedUserDataPath: () => h.root }));
 vi.mock('../../companion-cloud/homes.js', () => ({ companionHomes: { snapshot: () => ({ demotedBotIds: [] }) } }));
 vi.mock('../../localDb/client/current.js', () => ({ getDbClient: vi.fn() }));

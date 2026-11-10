@@ -19,7 +19,7 @@ import { ensureBotWorkspaceDir } from './botProfileFolder.js';
 import { convertRoutine, migratedAutomationId } from './botV2Carryover.js';
 
 // Loaded lazily: the scheduler host pulls in Electron-only services that import paths must not.
-const schedulerHost = () => import('../scheduler-host/index.js');
+const schedulerHost = () => import('../scheduler-host/index.desktop.js');
 
 const localTimezone = () => Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
 

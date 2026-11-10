@@ -59,7 +59,7 @@ import {
 
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState.js';
 import { createLogger } from '../logger.js';
-import type { DrizzleScheduleStorage } from '../scheduler-host/storage.js';
+import type { DrizzleScheduleStorage } from '../scheduler-host/storage.desktop.js';
 import {
   assertPreRunHookCommandSyntax,
   executePreRunHook,

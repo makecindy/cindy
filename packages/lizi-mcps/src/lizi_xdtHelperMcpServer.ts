@@ -45,6 +45,8 @@ import { INPUT_HANDOFF_TOOL_NAME, registerInputHandoffTool, type InputHandoffCal
 import { jsonObjectArg } from './json-object-arg.js';
 import {
   registerAsyncQuestionTool,
+  registerManageUserQuestionsTool,
+  type ManageUserQuestionsCallback,
   supportsAsyncQuestionTool,
   type AskUserQuestionAsyncCallback,
 } from './xdt-helper/ask_user_question_async.js';
@@ -93,7 +95,7 @@ import type { SetCurrentSessionTitleDeps } from './xdt-helper/set_current_sessio
 import type { RenameSessionsDeps } from './xdt-helper/rename_sessions.js';
 import type { ArchiveSessionsDeps } from './xdt-helper/archive_sessions.js';
 import { registerSessionImportTools, type SessionImportCallbacks } from './xdt-helper/session_import.js';
-import type { SendToRemoteSessionCallback, SendToSessionCallback } from './xdt-helper/send_to_session.js';
+import { projectMembershipNote, type SendToRemoteSessionCallback, type SendToSessionCallback } from './xdt-helper/send_to_session.js';
 import type {
   AuthorizeSkillLearningCallback,
   StartSkillLearningCallback,
@@ -175,7 +177,7 @@ export const HELPER_CATEGORY_DESCRIPTIONS: Record<(typeof CATEGORY_ENUM)[number]
   github: '读取 PR、CI、评审变化与详情，明确管理任务关联。本机与同账号跨电脑；查询不会关联任务或启动跟进。',
   history: '按话题查找跨渠道聊天，支持伙伴归属（teammate_id）、最近活动时间与真实来源；不要默认限制当前工作目录或创建日期。查询任务、工作目录、聊天记录、任务摘要与输入队列；任务结果附带可直接引用的 sessionUrl，已知 id 要链接用 get_task_digest。任务列表、搜索、读取聊天记录、任务摘要（get_task_digest）可跨电脑（device 参数 / deviceId::sessionId）；搜索还能查到主力电脑离线的伙伴的云端对话；其余本机。',
   feedback: `向 ${BRAND_NAME} 官方提交反馈。`,
-  handoff: '给已有任务发消息或新建任务。新建可指定 title；省略 project_path 继承来源归属，传已有项目路径切换项目，传 null 创建不绑项目的任务。执行目录独立，不隐式创建项目。发给已有任务可跨电脑（deviceId::sessionId）；新建的任务与文件仍在本机，新建时可用 agent_device_id 选择 Agent 使用哪台电脑的远程或分享供应商（取 list_available_models 的 locations）。',
+  handoff: '给已有任务发消息或新建任务。新建可指定 title；省略 project_path 继承来源归属（来源不绑项目时按执行目录所在的已登记可见项目归属），传已有项目路径切换项目，传 null 创建不绑项目的任务。执行目录不隐式创建项目。发给已有任务可跨电脑（deviceId::sessionId）；新建的任务与文件仍在本机，新建时可用 agent_device_id 选择 Agent 使用哪台电脑的远程或分享供应商（取 list_available_models 的 locations）。',
   skills: 'Skill 的搜索、发布与学习。本机与 SkillHub。',
   app_update: `检查与安装本机的 ${BRAND_NAME} 更新。本机。`,
   bots: '伙伴：资料、能力、关联项目（list_teammate_projects / set_teammate_project，仅自身）、发现伙伴与主力电脑。发现伙伴（list_agents，返回伙伴主对话的 session_id，发消息用 handoff 类的 send_to_session）与主力电脑（get_teammate_home / move_teammate_home）可跨电脑；其余本机。',
@@ -492,6 +494,7 @@ export interface XdtHelperMcpDeps {
    */
   setCurrentSessionTitle?: SetCurrentSessionTitleDeps['setCurrentSessionTitle'];
   askUserQuestionAsync?: AskUserQuestionAsyncCallback;
+  manageUserQuestions?: ManageUserQuestionsCallback;
   /**
    * 批量 session 标题更新回调。host 注入后, control 类工具 rename_sessions 会被注册。
    * 工具层负责 dry-run token 护栏; host 负责读取当前标题、校验前置条件和写库。
@@ -795,13 +798,25 @@ export function createXdtHelperMcpServer(
       description: definition.description, inputSchema: z.strictObject(definition.inputShape),
     }, async (args) => questions.call(definition.name, args));
   }
+  if (deps.manageUserQuestions) {
+    registerManageUserQuestionsTool(questions, () => resolveLiziMcpSessionContext(sessionCtx),
+      deps.manageUserQuestions, async () => (await allowedSurface()).categories);
+    const definition = questions.get('manage_user_questions')!;
+    server.registerTool(definition.name, {
+      description: definition.description, inputSchema: z.strictObject(definition.inputShape),
+    }, async (args) => questions.call(definition.name, args));
+  }
   const asyncQuestionListing = async (): Promise<Tool[]> => {
-    const definition = questions.get('ask_user_question_async');
     const allowed = await allowedSurface();
-    if (!definition || !supportsAsyncQuestionTool(resolveLiziMcpSessionContext(sessionCtx))
-      || (allowed.categories && !allowed.categories.has('cindy'))) return [];
-    return [{ name: definition.name, description: definition.description,
-      inputSchema: z.toJSONSchema(z.strictObject(definition.inputShape)) as Tool['inputSchema'] }];
+    const context = resolveLiziMcpSessionContext(sessionCtx);
+    if (allowed.categories && !allowed.categories.has('cindy')) return [];
+    return ['ask_user_question_async', 'manage_user_questions'].flatMap((name) => {
+      const definition = questions.get(name);
+      if (!definition || (name === 'ask_user_question_async' ? !supportsAsyncQuestionTool(context)
+        : !['codex', 'claude-code', 'pi'].includes(context.agentKind ?? ''))) return [];
+      return [{ name, description: definition.description,
+        inputSchema: z.toJSONSchema(z.strictObject(definition.inputShape)) as Tool['inputSchema'] }];
+    });
   };
 
   // list_machines: the first step of any work across computers, so it is listed
