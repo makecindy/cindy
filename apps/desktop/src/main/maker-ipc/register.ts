@@ -155,6 +155,7 @@ import {
   isRemoteProviderInvocationAllowed,
   setRemoteProviderInvocationEnabled,
 } from '../maker-host/remote-provider-access-store.js';
+import { readProviderRunLocation, setProviderRunLocation } from '../maker-host/provider-run-location-store.js';
 import { registerModelFavoritesSync } from './modelFavoritesSync.js';
 import { advanceRuntimeRecoveryNotice } from '../im/shared/runtimeRecoveryNotice.js';
 import { removeBotImConnectionsForBot } from '../im/shared/botImConnectionRuntime.js';
@@ -7948,6 +7949,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       isRemoteProviderInvocationAllowed(providerId),
     setRemoteProviderInvocationEnabled: (providerId, enabled) =>
       setRemoteProviderInvocationEnabled(providerId, enabled),
+    getProviderRunLocation: (providerId) => readProviderRunLocation(providerId),
+    setProviderRunLocation: (providerId, location) => setProviderRunLocation(providerId, location),
     stageClearProviderDisableOverrides: (providerId) =>
       stageProviderDisableOverridesClear(providerId),
     // 「恢复默认」= 删除该供应商整组停用 override(configuration-and-overrides.md §4)。
