@@ -99,6 +99,7 @@ export interface SessionControlServiceDeps {
     beforeMutation?: () => Promise<void>;
     patch: {
       harness?: AgentKind;
+      agentDeviceId?: string | null;
       model?: string;
       providerId?: string | null;
       effort?: Effort | null;
@@ -365,6 +366,7 @@ export function createSessionControlService(deps: SessionControlServiceDeps) {
       beforeMutation?: () => Promise<void>;
       patch: {
         harness?: AgentKind;
+        agentDeviceId?: string | null;
         model?: string;
         providerId?: string | null;
         effort?: Effort | null;

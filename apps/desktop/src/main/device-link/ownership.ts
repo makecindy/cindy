@@ -28,6 +28,10 @@
  */
 
 import type Database from 'better-sqlite3';
+import {
+  createSqliteExclusiveFileLock as createSharedSqliteExclusiveFileLock,
+  isSqliteLockContention,
+} from '@cindy/maker-core/runtime-owner-lock';
 import { markStartupMilestone } from '../startupTimeline';
 
 import { createBetterSqliteDatabase } from '../localDb/betterSqliteFactory';
@@ -39,28 +43,7 @@ const log = createLogger('device-link-ownership');
 /** 被动实例重试抢锁的间隔。崩溃后接管延迟由这一拍决定,不是过期窗口。 */
 export const DEFAULT_LOCK_RETRY_MS = 500;
 
-function sqliteErrorCode(err: unknown): string {
-  if (!err || typeof err !== 'object' || !('code' in err)) return '';
-  return String((err as { code: unknown }).code);
-}
-
-/** SQLITE_BUSY / LOCKED 是同伴持锁;其它错误不能当成「有人占用」。 */
-export function isSqliteLockContention(err: unknown): boolean {
-  const code = sqliteErrorCode(err);
-  if (
-    code === 'SQLITE_BUSY' ||
-    code === 'SQLITE_LOCKED' ||
-    code === 'SQLITE_BUSY_SNAPSHOT' ||
-    code === 'SQLITE_BUSY_RECOVERY' ||
-    code === 'SQLITE_BUSY_TIMEOUT' ||
-    code === '5' ||
-    code === '6'
-  ) {
-    return true;
-  }
-  const message = err instanceof Error ? err.message : String(err);
-  return /database is locked|SQLITE_BUSY|SQLITE_LOCKED/i.test(message);
-}
+export { isSqliteLockContention };
 
 export interface OwnershipLock {
   /** 非阻塞:拿到返回 true,已被他人持有返回 false */
@@ -214,47 +197,5 @@ export function createSqliteExclusiveFileLock(
       createBetterSqliteDatabase(file, {
         timeout: 0,
       }));
-  let db: Database.Database | null = null;
-
-  const closeQuietly = (handle: Database.Database): void => {
-    try {
-      handle.exec('ROLLBACK');
-    } catch {
-      // 没有事务
-    }
-    try {
-      handle.close();
-    } catch {
-      // 已关
-    }
-  };
-
-  return {
-    tryAcquire() {
-      if (db) return true;
-      let handle: Database.Database | null = null;
-      try {
-        handle = open(lockPath);
-        handle.pragma('journal_mode = DELETE');
-        handle.pragma('busy_timeout = 0');
-        handle.exec('BEGIN EXCLUSIVE');
-        handle.exec('CREATE TABLE IF NOT EXISTS ownership_lock (id INTEGER PRIMARY KEY NOT NULL)');
-        db = handle;
-        return true;
-      } catch (err) {
-        if (handle) closeQuietly(handle);
-        if (isSqliteLockContention(err)) return false;
-        log.warn('ownership lock initialize failed', err);
-        throw err;
-      }
-    },
-    release() {
-      if (!db) return;
-      closeQuietly(db);
-      db = null;
-    },
-    isHeld() {
-      return db !== null;
-    },
-  };
+  return createSharedSqliteExclusiveFileLock(lockPath, open);
 }

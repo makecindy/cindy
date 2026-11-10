@@ -15,6 +15,8 @@ import { app, ipcMain, BrowserWindow, net, shell } from 'electron';
 
 import {
   createIM,
+  BlueBubblesIM,
+  LocalWebhookReceiver,
   createDiscordIM,
   createDingTalkIM,
   createFeishuIM,
@@ -33,15 +35,15 @@ import { TencentIlinkTransport } from '@cindy/wechat-ilink';
 import { inboundFileStaging } from './shared/inboundFileStaging';
 import { verifiedInboundMediaMime } from './shared/inboundMediaVerify';
 import { createLogger } from '../logger';
-import { resolveSafe as resolveXdtImageUrl } from '../imageCacheStore';
-import { resolveSafe as resolveCindyMediaUrl } from '../cindy-media/blobStore';
+import { resolveSafe as resolveXdtImageUrl } from '../imageCacheStore.desktop';
+import { resolveSafe as resolveCindyMediaUrl } from '../cindy-media/blobStore.desktop';
 import {
   integrationCacheGet,
   integrationCacheKey,
   integrationCachePut,
 } from '../cindy-media/integrationCache';
 import { pinBlob } from '../cindy-media/ledger';
-import { t } from '../i18n';
+import { t } from '../i18n.desktop';
 import { discordUiText } from './discord/uiText';
 import { telegramUiText } from './telegram/uiText';
 import {
@@ -55,6 +57,7 @@ import { listTelegramKnownGroups } from './telegram/groupWindow';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import { imHostAccountScope } from './accountScopeBridge';
+import { blueBubblesStateStorage } from './imessage/storage';
 import { ownerScopedImSecrets } from './ownerScopedStorage';
 import { captureImAccountGeneration, isImAccountGenerationCurrent } from './accountBoundary';
 import { getDbClient } from '../localDb/client/current';
@@ -380,3 +383,17 @@ export const im = createIM([
   dingtalkIm,
   wecomIm,
 ]);
+
+const localImReceivers = new Map<string, LocalWebhookReceiver>();
+export function createBotIMessageIM(secretKeyPrefix: string, connectionId: string): BlueBubblesIM {
+  return new BlueBubblesIM(host, {
+    secretPrefix: secretKeyPrefix,
+    storage: blueBubblesStateStorage(connectionId),
+    receiver: (listenHost, port) => {
+      const key = `${listenHost}:${port}`;
+      let receiver = localImReceivers.get(key);
+      if (!receiver) { receiver = new LocalWebhookReceiver(listenHost, port); localImReceivers.set(key, receiver); }
+      return receiver;
+    },
+  });
+}

@@ -36,7 +36,8 @@ button.addEventListener('click', async () => {
 模型说明、引擎、推理强度及 Fast；选中即返回，与下述居中弹窗不同，不需再点确认。
 只返回完整选择配置，不返回供应商密钥、endpoint 或内部目录对象。配置与收藏编辑只影响
 这次选模草稿，不改变宿主默认、现有任务或偏好，不调用模型。新页面 API 默认列出全部运行来源，
-`allowRemote:false` 可显式限本机；`cindy.tasks` 自建后台任务仍只能使用本机配置。
+`allowRemote:false` 可显式限本机。把结果交给 `cindy.tasks` 前，先检查
+`(await cindy.tasks.capabilities()).remoteRoutes === true`；旧 Host 只接受本机配置。
 页面滚动、尺寸／缩放变化、导航和关闭会取消此次选择；取消保留插件原配置，不自动重试。
 所有坐标相对当前顶层插件页面，使用 CSS 像素；不要传屏幕坐标或主窗口坐标。
 此桥仅在本机桌面 WebView 可用，手机／远程控制页面和旧版 Host 继续走原生选模通道，
@@ -59,7 +60,7 @@ const selected = await cindy.pickModel({
 });
 if (selected.ok) {
   // 自行保存完整 selected.route，包括可选的运行来源 agentDeviceId。
-  // 本机配置可用于 tasks.create；远程配置目前用于 will-start-task 裁决。
+  // tasks.capabilities().remoteRoutes === true 时，本机与远程 route 均可原样交给 tasks.create / setModel。
   // 任务创建和执行仍需 agent.tasks 的正常批准，选模本身不授予执行权限。
 }
 ```
@@ -68,8 +69,10 @@ if (selected.ok) {
 `allowRemote:true` 显式开启同账号电脑与供应商分享；未传时保持本机选择，远程答案也会被拒绝。
 `agentDeviceId` 相对插件执行电脑；省略表示该电脑，`share:<shareId>` 表示其收到的供应商分享。
 本机、远程 Desktop 设置页与手机选择器使用同一来源语义，调用方须完整保存并回传；
-来源撤销或不可用时确认失败，不回落本机同名供应商。`cindy.tasks` 自建后台任务仍只支持本机配置，
-不要把远程配置交给这个 API；`will-start-task` 路由支持此字段。
+来源撤销或不可用时确认失败，不回落本机同名供应商。新增的
+`tasks.capabilities().remoteRoutes:true` 表示自建任务的 create、setModel、发送、结果与取消
+支持此字段；缺少该标记时须显式 `allowRemote:false`，不能删掉来源后执行。
+`will-start-task` 路由继续支持此字段。
 `agentKind` 为 `cc | codex | pi`，`effort` 为空串表示未指定，
 `fastMode` 为布尔值或 `"ultrafast"`。保留完整组合，不根据模型名重新猜来源或引擎。
 失败：`{ok:false,errorCode,message}`；`CANCELLED` 表示本次选择已取消，

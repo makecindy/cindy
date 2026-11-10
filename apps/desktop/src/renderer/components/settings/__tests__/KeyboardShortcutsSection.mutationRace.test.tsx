@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { act, fireEvent, render, screen, within } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 beforeAll(() => {
@@ -19,7 +19,6 @@ const mocks = vi.hoisted(() => ({
   getOverrides: vi.fn(),
   getCombos: vi.fn(),
   workLouderPresent: false as boolean,
-  pluginDefinitions: [] as import('../../../../shared/appShortcuts').PluginShortcutDefinition[],
 }));
 
 vi.mock('@/features/skillhub/hooks/useSkillhub', () => ({
@@ -44,10 +43,6 @@ vi.mock('@/lib/appShortcutStore', () => ({
   getAppShortcutOverrides: mocks.getOverrides,
   getAppShortcutPlatform: () => 'darwin',
   subscribeAppShortcuts: () => () => {},
-}));
-
-vi.mock('@/cindy-brain/usePluginShortcutDefinitions', () => ({
-  usePluginShortcutDefinitions: () => mocks.pluginDefinitions,
 }));
 
 vi.mock('@/hooks/useVoiceInputSettings', () => ({
@@ -128,7 +123,6 @@ describe('KeyboardShortcutsSection mutation ordering', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.workLouderPresent = false;
-    mocks.pluginDefinitions = [];
   });
 
   afterEach(() => {
@@ -151,36 +145,6 @@ describe('KeyboardShortcutsSection mutation ordering', () => {
     fireEvent.click(screen.getByLabelText('settings.shortcuts.workLouderCodex.openAria'));
 
     expect(screen.getByLabelText('settings.shortcuts.workLouderCodex.back')).toBeTruthy();
-  });
-
-  it('shows a plugin command in the existing list and saves its new shortcut', async () => {
-    const id = `plugin:${'a'.repeat(64)}` as const;
-    mocks.pluginDefinitions = [{ id, label: 'Format message', pluginName: 'Writer', scope: 'message' }];
-    mocks.getOverrides.mockReturnValue({});
-    mocks.getCombos.mockReturnValue([]);
-    const setOverride = vi.fn(async () => ({ overrides: {} }));
-    Object.defineProperty(window, 'electronAPI', {
-      configurable: true,
-      value: {
-        appShortcuts: {
-          setOverride,
-          clearOverride: vi.fn(async () => ({ overrides: {} })),
-          resetAll: vi.fn(async () => ({ overrides: {} })),
-          setRecording: vi.fn(),
-        },
-      },
-    });
-
-    render(<KeyboardShortcutsSection />);
-    const row = screen.getByText('Format message').parentElement?.parentElement;
-    expect(row).toBeTruthy();
-    expect(within(row!).getByText('Writer')).toBeTruthy();
-    fireEvent.click(within(row!).getByTitle('settings.shortcuts.edit'));
-    fireEvent.keyDown(window, { key: 'j', code: 'KeyJ', metaKey: true });
-    await vi.waitFor(() => expect(setOverride).toHaveBeenCalledWith(id, {
-      ...combo,
-      key: 'j',
-    }));
   });
 
   it('ignores an older mutation failure after a newer mutation succeeds', async () => {
@@ -206,8 +170,8 @@ describe('KeyboardShortcutsSection mutation ordering', () => {
     });
 
     render(<KeyboardShortcutsSection />);
-    fireEvent.click(screen.getAllByTitle('settings.shortcuts.delete')[0]!);
-    fireEvent.click(screen.getByTitle('settings.shortcuts.reset'));
+    fireEvent.click(screen.getAllByLabelText('settings.shortcuts.deleteAria')[0]!);
+    fireEvent.click(screen.getByLabelText('settings.shortcuts.reset'));
     await vi.waitFor(() => expect(clearOverride).toHaveBeenCalledTimes(1));
 
     await act(async () => {
@@ -240,8 +204,8 @@ describe('KeyboardShortcutsSection mutation ordering', () => {
     });
 
     render(<KeyboardShortcutsSection />);
-    fireEvent.click(screen.getAllByTitle('settings.shortcuts.delete')[0]!);
-    fireEvent.click(screen.getAllByTitle('settings.shortcuts.edit')[1]!);
+    fireEvent.click(screen.getAllByLabelText('settings.shortcuts.deleteAria')[0]!);
+    fireEvent.click(screen.getAllByLabelText('settings.shortcuts.editAria')[1]!);
     await vi.waitFor(() => expect(document.body.dataset.appShortcutRecording).toBe('1'));
     fireEvent.keyDown(window, { key: 'q', code: 'KeyQ' });
     await vi.waitFor(() => {

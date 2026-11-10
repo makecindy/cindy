@@ -39,7 +39,7 @@ import {
 } from '../../shared/menubarQuota.js';
 
 export type MenubarHarness = 'claude-code' | 'codex' | 'pi';
-export type MenubarFamily = 'claude' | 'codex' | 'grok' | 'kimi' | 'opencode-go';
+export type MenubarFamily = 'claude' | 'codex' | 'grok' | 'kimi' | 'opencode-go' | 'shared';
 
 export interface MenubarWindowInput {
   kind: 'session' | 'week' | 'scoped' | 'period';
@@ -59,6 +59,8 @@ export interface MenubarSubscriptionInput {
   logoSvg: string;
   /** Brand shown as the detail title: Claude, Codex, Grok. */
   brand: string;
+  /** Sharer display name, falling back to the provider label; never an account email or device name. */
+  shared?: { label: string; note: string; ownerName?: string; highestWeekly?: boolean };
   /** Account email when the provider exposes one (Codex accounts). */
   account: string | null;
   plan: string | null;
@@ -221,13 +223,14 @@ const MIN_PACE_ELAPSED = 0.03;
 const ROOMY_CELL_LIMIT = 4;
 /** Settings' soft daily limit for a period quota: period total / 30 × 4.5 (a display hint, not a cap). */
 const DAILY_SOFT_LIMIT_FACTOR = 4.5;
-const FAMILY_ORDER: Record<MenubarFamily, number> = { claude: 0, codex: 1, grok: 2, kimi: 3, 'opencode-go': 4 };
+const FAMILY_ORDER: Record<MenubarFamily, number> = { claude: 0, codex: 1, grok: 2, kimi: 3, 'opencode-go': 4, shared: 5 };
 const FAMILY_COLORS: Record<MenubarFamily, MenubarColor[]> = {
   claude: ['claude', 'claude2', 'claude3'],
   codex: ['codex'],
   grok: ['fill'],
   kimi: ['fill'],
   'opencode-go': ['fill'],
+  shared: ['fill'],
 };
 const HARNESS_ORDER: MenubarHarness[] = ['claude-code', 'codex', 'pi'];
 
@@ -488,15 +491,21 @@ class Builder {
     return domain ? `${this.handle(source)}@${domain}` : this.handle(source) ?? '';
   }
 
+  /** Every shared identity surface uses the same privacy projection. */
+  private sharedIdentity(source: MenubarSubscriptionInput): { label: string; ownerName?: string } | null {
+    if (!source.shared) return null;
+    return this.input.settings.privacy ? { label: source.brand } : source.shared;
+  }
+
   /** Short name under a tube and in sentences: the other computer, else the account handle, else the brand. */
   private who(source: MenubarSourceInput): string {
-    if (source.kind === 'subscription') return source.device?.name ?? this.handle(source) ?? source.brand;
+    if (source.kind === 'subscription') return this.sharedIdentity(source)?.label ?? source.device?.name ?? this.handle(source) ?? source.brand;
     if (source.kind === 'balance') return this.t('balance.short');
     return source.name;
   }
 
   private sourceTitle(source: MenubarSourceInput): string {
-    if (source.kind === 'subscription') return source.device?.name ?? this.handle(source) ?? source.brand;
+    if (source.kind === 'subscription') return this.sharedIdentity(source)?.label ?? source.device?.name ?? this.handle(source) ?? source.brand;
     if (source.kind === 'balance') return this.t(source.quota ? 'balance.quotaName' : 'balance.name');
     return source.name;
   }
@@ -698,6 +707,10 @@ class Builder {
     const remaining = state.remaining;
     const level = levelOf(remaining);
     const reserve = remaining <= 0 && (source.creditsUnlimited || (source.credits ?? 0) > 0);
+    // Keep the narrow tube header readable, including fractional and unlimited credits.
+    const creditValue = source.creditsUnlimited ? '∞' : new Intl.NumberFormat(this.input.locale, {
+      notation: 'compact', maximumSignificantDigits: 3,
+    }).format(source.credits ?? 0);
     const limit = state.limit;
     // Read together with the percentage above: "90% · resets in 6d 7h", for the window shown.
     // An unreachable computer's reading says how old it is instead of a countdown.
@@ -716,9 +729,9 @@ class Builder {
     return {
       ...base,
       name,
-      value: reserve ? null : String(Math.round(remaining)),
-      valueUnit: reserve ? null : '%',
-      valueLabel: reserve ? this.t('cell.credits') : null,
+      value: reserve ? creditValue : String(Math.round(remaining)),
+      valueUnit: reserve ? this.t('cell.credits') : '%',
+      valueLabel: null,
       level,
       fill: clamp(remaining / 100, 0, 1),
       reserve,
@@ -728,7 +741,7 @@ class Builder {
       ...(unusedAtReset ? { unusedAtReset: true } : {}),
       ...(seenAtMs !== null ? { stale: true } : {}),
       accessibilityLabel: reserve
-        ? this.t('a11y.reserve', { name: `${source.brand} ${name}` })
+        ? `${this.t('a11y.reserve', { name: `${source.brand} ${name}` })} · ${source.creditsUnlimited ? this.t('fact.unlimited') : source.credits?.toLocaleString(this.input.locale, { maximumSignificantDigits: 21 })} ${this.t('cell.credits')}`
         : this.t('a11y.remaining', { name: source.brand === name ? name : `${source.brand} ${name}`, n: Math.round(remaining) }),
     };
   }
@@ -876,22 +889,24 @@ class Builder {
 
   private subscriptionDetail(source: MenubarSubscriptionInput): MenubarDetail {
     const state = this.state(source);
+    const ownerName = this.sharedIdentity(source)?.ownerName;
+    const title = ownerName ? `${ownerName} · ${source.brand}` : source.brand;
     // The detail page is about what actually limits the account, not the tube's weekly view.
     const limit = state.tightest;
     const handle = this.handle(source);
     const resets = source.resetCredits?.count ?? 0;
     // An account on another computer runs there; this computer cannot start a task on it directly.
-    let actionLabel = source.device
+    let actionLabel = source.device || source.shared
       ? this.t('action.openApp')
       : this.t('action.newTask', { name: handle ?? source.brand });
-    let action: MenubarDetailAction = source.device
+    let action: MenubarDetailAction = source.device || source.shared
       ? { kind: 'open-app' }
       : { kind: 'new-task', providerId: source.providerId };
     if (!limit) {
       return {
         id: source.id,
         logoSvg: source.logoSvg,
-        title: source.brand,
+        title,
         plan: source.plan ?? '',
         rings: [{ fraction: 0, color: 'ink3' }],
         bigValue: '—',
@@ -1009,7 +1024,7 @@ class Builder {
     return {
       id: source.id,
       logoSvg: source.logoSvg,
-      title: source.brand,
+      title,
       plan: source.plan ?? '',
       rings,
       bigValue: String(Math.round(remaining)),
@@ -1024,7 +1039,7 @@ class Builder {
           }))
         : [],
       sayPrimary,
-      saySecondary,
+      saySecondary: source.shared?.note ?? saySecondary,
       facts,
       actionLabel,
       action,
@@ -1034,6 +1049,9 @@ class Builder {
   private accountFacts(source: MenubarSubscriptionInput): MenubarFact[] {
     const updated = source.updatedAtMs ? this.t('fact.updatedAgo', { ago: this.ago(source.updatedAtMs) }) : '';
     const facts: MenubarFact[] = [];
+    const shared = this.sharedIdentity(source);
+    if (shared) facts.push({ label: shared.ownerName
+      ? this.t('shared.from', { name: shared.ownerName }) : shared.label, value: updated, sub: '' });
     if (source.device) facts.push({ label: this.t('fact.device'), value: source.device.name, sub: this.t('fact.deviceSub') });
     if (source.account) facts.push({ label: this.t('fact.account'), value: this.email(source), sub: updated });
     else if (source.device) facts[0] = { ...facts[0]!, sub: updated || this.t('fact.deviceSub') };

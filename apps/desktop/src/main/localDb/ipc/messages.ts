@@ -1,3 +1,8 @@
+import { parseAgentMetaRecord, patchMessageAgentMetaWithResultRow, findVisibleToolUseMessageByAliasesRow,
+  writeMessageContentRow, rollbackAssistantMessageRow } from '../messageMutations.js';
+import type { MessageAgentMetaPatchResult, VisibleToolUseMessageLink } from '../messageMutations.js';
+export type { MessageAgentMetaPatchResult, VisibleToolUseMessageLink } from '../messageMutations.js';
+import { writeMessageRow } from '../messageWrite.js';
 /**
  * chat-data-localization F5：Messages IPC handlers（C7）。
  *
@@ -385,6 +390,8 @@ export function registerMessageIpc(
 
   const historyView = createHistoryViewReader({
     list: readMessagesList,
+    // readMessagesList skips paged imports only for device-link callers (#318).
+    shareScope: () => (isDeviceLinkInvoke() ? 'device-link' : 'local'),
     revision: async () => {
       const current = getCurrentDbClientSnapshot();
       if (!current) throw new Error('DbClient not ready');
@@ -819,7 +826,7 @@ export function registerMessageIpc(
       const cid = requireString(clientId, 'clientId');
       // 动态 import:messagePersistBroadcaster 已静态依赖本模块 createMessage,
       // 静态反向 import 会成环。落库前点关闭/重试时先等同一 persistId 写完。
-      const { whenTurnErrorPersisted } = await import('../../messagePersistBroadcaster.js');
+      const { whenTurnErrorPersisted } = await import('../../messagePersistBroadcaster.desktop.js');
       await whenTurnErrorPersisted(sid, cid);
       const msg = await dismissErrorMessage(sid, cid);
       if (!msg) throwIpcError('NOT_FOUND', 'Error message 不存在');
@@ -1572,18 +1579,9 @@ export async function discardPersistedAssistantMessage(
   const ownerScope = captureOwnerBroadcastScope();
   const dbClient = getDbClient();
   if (!isCurrent() || !isOwnerBroadcastScopeCurrent(ownerScope)) return false;
-  const [row] = await dbClient.drizzle.select().from(messages).where(and(
-    eq(messages.sessionId, sessionId), eq(messages.clientId, clientId),
-    eq(messages.role, 'assistant'), isNull(messages.rewindAt),
-  )).limit(1);
-  if (!row || !isCurrent() || !isOwnerBroadcastScopeCurrent(ownerScope)) return false;
-  const result = await dbClient.tx('message.insert', {
-    id: row.id, clientId: row.clientId, sessionId: row.sessionId,
-    role: row.role, content: row.content, toolUseId: row.toolUseId,
-    agentMeta: row.agentMeta, agentKind: row.agentKind, createdAt: row.createdAt,
-    guarded: false, publication: 'rollback',
-  });
-  if (result.changes === 0) return false;
+  const row = await rollbackAssistantMessageRow(dbClient, sessionId, clientId,
+    () => isCurrent() && isOwnerBroadcastScopeCurrent(ownerScope));
+  if (!row) return false;
   await reconcileAssistantDerivedState(row, dbClient,
     () => isCurrent() && isOwnerBroadcastScopeCurrent(ownerScope), ownerScope, true);
   return true;
@@ -1605,41 +1603,9 @@ export async function updateMessageContent(
       eq(messages.clientId, clientId), eq(messages.role, 'assistant'), isNull(messages.rewindAt))).limit(1)
     : [];
   if (finalSnapshot && (!original || !isCurrent())) return null;
-  const serialized = safeStringify(content);
-  if (autoReviewAnswer !== undefined) {
-    // Host-only interaction result: keep content and its authorization evidence atomic.
-    await db.update(messages).set({
-      content: serialized,
-      agentMeta: sql`json_set(CASE WHEN json_valid(${messages.agentMeta}) THEN ${messages.agentMeta} ELSE '{}' END,
-        '$.autoReviewUserText', json(${JSON.stringify(autoReviewAnswer)}))`,
-    }).where(and(eq(messages.sessionId, sessionId), eq(messages.clientId, clientId),
-      inArray(messages.role, ['ask_user', 'plan_review'])));
-  } else await dbClient.tx('message.updateContent', {
-    sessionId,
-    clientId,
-    content: serialized,
-  });
-  // 窄回读:刻意不选 content——tool_result 全文可达 MB 级,整行回读会把大字段
-  // 经 DB worker 的 postMessage 结构化克隆再送回主进程一次。content 就是本次
-  // 写入值,用 serialized 回填;行不存在(clientId 未落库)仍以回读判 null。
-  const [narrow] = await db
-    .select({
-      id: messages.id,
-      clientId: messages.clientId,
-      sessionId: messages.sessionId,
-      role: messages.role,
-      toolUseId: messages.toolUseId,
-      agentMeta: messages.agentMeta,
-      agentKind: messages.agentKind,
-      createdAt: messages.createdAt,
-      rewindAt: messages.rewindAt,
-    })
-    .from(messages)
-    .where(and(eq(messages.sessionId, sessionId), eq(messages.clientId, clientId)))
-    .limit(1);
-  const row: MessageRow | undefined = narrow
-    ? (await restoreTaskImageRows(dbClient, [{ ...narrow, content: serialized }]))[0]
-    : undefined;
+  const updated = await writeMessageContentRow(dbClient, sessionId, clientId, content, autoReviewAnswer);
+  const row: MessageRow | undefined = updated
+    ? (await restoreTaskImageRows(dbClient, [updated]))[0] : undefined;
   if (row && (!finalSnapshot || isCurrent())) {
     // 挂账钩子同样覆盖"先摘要 create、后全文 update"的 tool_result 顺序
     // (review P2:vendor 事件顺序一变,首现于 update 的 blob URL 若不在这里
@@ -1777,180 +1743,21 @@ export async function createMessage(
   },
 ): Promise<Message> {
   const dbClient = getDbClient();
-  const db = dbClient.drizzle;
-  const guarded =
-    opts !== undefined && Object.prototype.hasOwnProperty.call(opts, 'expectedClearBoundaryMs');
-  const expected = guarded ? opts?.expectedClearBoundaryMs : undefined;
-  if (
-    guarded &&
-    expected !== null &&
-    (typeof expected !== 'number' || !Number.isFinite(expected) || expected < 0)
-  ) {
-    throw new Error('expectedClearBoundaryMs must be null or a non-negative finite number');
-  }
-
-  // The unguarded API keeps its historical fast idempotency read. Guarded
-  // optimistic sends must skip it: a pre-clear row can otherwise be returned
-  // before the compare-and-set boundary is checked.
-  if (!guarded) {
-    const existing = await db
-      .select()
-      .from(messages)
-      .where(and(eq(messages.sessionId, sessionId), eq(messages.clientId, body.clientId)))
-      .limit(1);
-    if (existing.length > 0) return messageToCamel(existing[0]);
-  }
-
-  if (guarded && opts?.beforePublish) throw new Error('Publication guard cannot be combined with optimistic input');
-  const id = createId();
-  const now = Date.now();
-  const visibleCreatedAt =
-    guarded && expected !== null && expected !== undefined
-      ? Math.max(body.createdAt ?? now, expected + 1)
-      : (body.createdAt ?? now);
-  const insertRow = messageCreateToRow(id, sessionId, body, visibleCreatedAt);
-  const insertArgs = {
-    id: insertRow.id,
-    clientId: insertRow.clientId,
-    sessionId,
-    role: insertRow.role,
-    content: insertRow.content,
-    toolUseId: insertRow.toolUseId ?? null,
-    agentMeta: insertRow.agentMeta ?? null,
-    agentKind: insertRow.agentKind ?? null,
-    createdAt: insertRow.createdAt,
-    guarded,
-    expectedClearBoundaryMs: guarded ? (expected ?? null) : undefined,
-    ...(opts?.requireNoUserMessage ? { requireNoUserMessage: true } : {}),
-  };
-  try {
-    const inserted = await dbClient.tx('message.insert', { ...insertArgs,
-      ...(opts?.beforePublish ? { publication: 'stage' as const } : {}),
-    });
-    if (opts?.beforePublish) {
-      await opts.beforePublish();
-      try {
-        const published = await dbClient.tx('message.insert', { ...insertArgs, publication: 'publish' });
-        if (published.changes !== 1) throw new Error('Message publication lost its pending row');
-      } catch (error) {
-        // The worker can commit before its receipt is lost. Recover only this
-        // exact publication, then run the same delivery/indexing hooks below.
-        const [committed] = await db.select().from(messages)
-          .where(and(eq(messages.id, id), eq(messages.sessionId, sessionId), eq(messages.clientId, body.clientId)))
-          .limit(1);
-        if (!committed || committed.role !== insertArgs.role || committed.content !== insertArgs.content
-          || committed.toolUseId !== insertArgs.toolUseId || committed.agentMeta !== insertArgs.agentMeta
-          || committed.agentKind !== insertArgs.agentKind || committed.createdAt !== insertArgs.createdAt
-          || committed.rewindAt !== null) throw error;
-      }
-      // Keep this outside the lost-receipt recovery: a failed authorization
-      // check must never be mistaken for a successful committed publication.
-      try {
-        await opts.beforePublish();
-      } catch (error) {
-        await dbClient.tx('message.insert', { ...insertArgs, publication: 'rollback' });
-        throw error;
-      }
-    }
-    if (guarded && inserted.changes === 0) {
-      const [existingAfterGuard] = await db
-        .select()
-        .from(messages)
-        .where(and(eq(messages.sessionId, sessionId), eq(messages.clientId, body.clientId)))
-        .limit(1);
-      const [sessionAfterGuard] = await db
-        .select({ clearedAt: sessions.clearedAt })
-        .from(sessions)
-        .where(eq(sessions.id, sessionId))
-        .limit(1);
-      const actual = sessionAfterGuard?.clearedAt ?? null;
-      if (
-        existingAfterGuard &&
-        actual === expected &&
-        existingAfterGuard.rewindAt === null &&
-        (expected === null || existingAfterGuard.createdAt > expected)
-      ) {
-        return messageToCamel(existingAfterGuard);
-      }
-      if (actual !== expected) {
-        throw Object.assign(
-          new Error(
-            `REMOTE_OPTIMISTIC_INPUT_CLEARED: expectedClearBoundaryMs=${expected ?? 'null'}; currentClearBoundaryMs=${actual ?? 'null'}`,
-          ),
-          { code: 'REMOTE_OPTIMISTIC_INPUT_CLEARED' },
-        );
-      }
-      throw new Error('Message insert skipped without a clear-boundary change');
-    }
-  } catch (err) {
-    if (opts?.beforePublish) {
-      await dbClient.tx('message.insert', { ...insertArgs, publication: 'discard' });
-      throw err;
-    }
-    const after = await db
-      .select()
-      .from(messages)
-      .where(and(eq(messages.sessionId, sessionId), eq(messages.clientId, body.clientId)))
-      .limit(1);
-    if (guarded) {
-      const [sessionAfterError] = await db
-        .select({ clearedAt: sessions.clearedAt })
-        .from(sessions)
-        .where(eq(sessions.id, sessionId))
-        .limit(1);
-      const actual = sessionAfterError?.clearedAt ?? null;
-      const existingAfterError = after[0];
-      if (
-        existingAfterError &&
-        actual === expected &&
-        existingAfterError.rewindAt === null &&
-        (expected === null || existingAfterError.createdAt > expected)
-      ) {
-        return messageToCamel(existingAfterError);
-      }
-      if (actual !== expected) {
-        throw Object.assign(
-          new Error(
-            `REMOTE_OPTIMISTIC_INPUT_CLEARED: expectedClearBoundaryMs=${expected ?? 'null'}; currentClearBoundaryMs=${actual ?? 'null'}`,
-          ),
-          { code: 'REMOTE_OPTIMISTIC_INPUT_CLEARED' },
-        );
-      }
-    } else if (after.length > 0) {
-      return messageToCamel(after[0]);
-    }
-    throw err;
-  }
-  // 插入成功后不再整行回读:大 content(tool_result 全文)会经 DB worker 的
-  // postMessage 再送回主进程一次。insertRow 就是刚写入的行(新行 rewind_at 恒
-  // NULL);必须过 messageToCamel 走与回读完全相同的解析路径(JSON.parse 失败
-  // 回退裸串、assistant 引文剥离),否则返回值/广播行的类型语义会漂移。幂等命中
-  // 与 UNIQUE / guarded 回退路径仍保留各自的回读(上方),不受影响。
-  const row: MessageRow = {
-    id: insertRow.id,
-    clientId: insertRow.clientId,
-    sessionId: insertRow.sessionId,
-    role: insertRow.role,
-    content: insertRow.content,
-    toolUseId: insertRow.toolUseId ?? null,
-    agentMeta: insertRow.agentMeta ?? null,
-    agentKind: insertRow.agentKind ?? null,
-    createdAt: insertRow.createdAt,
-    rewindAt: null,
-  };
+  const { row, created } = await writeMessageRow(dbClient, sessionId, body, opts);
+  if (!created) return messageToCamel(row);
   const [restoredRow] = await restoreTaskImageRows(dbClient, [row]);
   const msg = messageToCamel(restoredRow);
   // 媒体总仓挂账钩子(规则 25):消息落库是"blob 归属本会话"的
   // 确定时点,覆盖所有落库来源(renderer IPC / hook / im / agent echo / 合成
   // tool_result)。生成产物(art/mivo/codex)入仓时零引用,在这里补挂
   // session-attachment 引用;用户附件已在发送链路 commit 过,hasRef 幂等跳过。
-  // 传 insertRow.content(已序列化字符串)避免二次 stringify(review P2)。
+  // 传 row.content(已序列化字符串)避免二次 stringify(review P2)。
   const commitMediaRefs = async (): Promise<void> => {
     try {
       await commitMessageMediaRefs({
         sessionId,
         role: body.role,
-        content: insertRow.content,
+        content: row.content,
       });
     } catch (err) {
       log.warn('message media ref commit failed', {
@@ -2095,10 +1902,7 @@ export function extractEstimatedSessionValueEntries(
  *
  * 用于 turnCostBroadcaster:turn 结束后把 per-turn 费用挂到该轮最后一条 assistant。
  */
-export interface MessageAgentMetaPatchResult {
-  previous: Record<string, unknown>;
-  next: Record<string, unknown>;
-}
+
 
 /** Stable native identity of a visible user input; do not match retries by text. */
 export async function readPiUserEntry(sessionId: string, clientId: string): Promise<string | undefined> {
@@ -2117,64 +1921,19 @@ export async function readPiUserEntry(sessionId: string, clientId: string): Prom
 }
 
 /** 与 patchMessageAgentMeta 相同，但返回补丁前后的元数据供幂等账本计算。 */
-export async function patchMessageAgentMetaWithResult(
-  sessionId: string,
-  clientId: string,
-  patch: Record<string, unknown>,
-): Promise<MessageAgentMetaPatchResult | null> {
-  const db = getDbClient().drizzle;
-  const rows = await db
-    .select({ agentMeta: messages.agentMeta })
-    .from(messages)
-    .where(and(eq(messages.sessionId, sessionId), eq(messages.clientId, clientId)))
-    .limit(1);
-  if (rows.length === 0) return null;
-  // 损坏的 JSON 以 {} 为底重建(补丁字段仍写入,旧字段无法挽救)。
-  const previous = parseAgentMetaRecord(rows[0].agentMeta) ?? {};
-  const next = { ...previous, ...patch };
-  // Keep the read and write on the same owner even if login changes across await.
-  await db.update(messages).set({ agentMeta: JSON.stringify(next) })
-    .where(and(eq(messages.sessionId, sessionId), eq(messages.clientId, clientId)));
-  return { previous, next };
+export async function patchMessageAgentMetaWithResult(sessionId: string, clientId: string, patch: Record<string, unknown>): Promise<MessageAgentMetaPatchResult | null> {
+  return patchMessageAgentMetaWithResultRow(getDbClient(), sessionId, clientId, patch);
 }
 
-export interface VisibleToolUseMessageLink {
-  clientId: string;
-  toolUseId: string;
-}
+
 
 /**
  * Recover a durable tool-use row after process-local event linkage was lost.
  * The session clear boundary is part of visibility: a restart must not make a
  * pre-clear row eligible for a late background terminal update again.
  */
-export async function findVisibleToolUseMessageByAliases(
-  sessionId: string,
-  aliases: readonly string[],
-): Promise<VisibleToolUseMessageLink | null> {
-  const normalizedAliases = [...new Set(aliases.filter((alias) => alias.length > 0))];
-  if (!sessionId || normalizedAliases.length === 0) return null;
-  const [row] = await getDbClient()
-    .drizzle.select({
-      clientId: messages.clientId,
-      toolUseId: messages.toolUseId,
-    })
-    .from(messages)
-    .innerJoin(sessions, eq(messages.sessionId, sessions.id))
-    .where(
-      and(
-        eq(messages.sessionId, sessionId),
-        eq(messages.role, 'tool_use'),
-        inArray(messages.toolUseId, normalizedAliases),
-        isNull(messages.rewindAt),
-        or(isNull(sessions.clearedAt), gt(messages.createdAt, sessions.clearedAt)),
-      ),
-    )
-    .orderBy(desc(messages.createdAt))
-    .limit(1);
-  return row?.clientId && row.toolUseId
-    ? { clientId: row.clientId, toolUseId: row.toolUseId }
-    : null;
+export async function findVisibleToolUseMessageByAliases(sessionId: string, aliases: readonly string[]): Promise<VisibleToolUseMessageLink | null> {
+  return findVisibleToolUseMessageByAliasesRow(getDbClient(), sessionId, aliases);
 }
 
 export async function patchMessageAgentMeta(
@@ -2595,17 +2354,7 @@ function isHiddenContinuationUserMessage(agentMeta: string | null, content: stri
   return isAutoResumeUserMessage(agentMeta) || isSyntheticTriggerText(readMessageText(content));
 }
 
-function parseAgentMetaRecord(agentMeta: string | null): Record<string, unknown> | null {
-  if (!agentMeta) return null;
-  try {
-    const parsed = JSON.parse(agentMeta);
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
-      ? (parsed as Record<string, unknown>)
-      : null;
-  } catch {
-    return null;
-  }
-}
+
 
 /**
  * 查是否有尚未随首条 user 消息发送的内部 handoff。

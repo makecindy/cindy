@@ -38,9 +38,11 @@ vi.mock('@/lib/useCindyVersions', () => ({
   useCindyVersions: () => ({ state: 'idle' }),
 }));
 
-const { Stub, voicePage } = vi.hoisted(() => ({ Stub: () => null, voicePage: { real: false } }));
+const { Stub, voicePage, slowSection } = vi.hoisted(() => ({
+  Stub: () => null, voicePage: { real: false },
+  slowSection: { promise: null as Promise<void> | null, attempts: 0 },
+}));
 vi.mock('../VoiceSpeakerFilterCard', () => ({ VoiceSpeakerFilterCard: Stub }));
-vi.mock('@/cindy-brain/PluginUiControls', () => ({ PluginUiContributionControls: Stub }));
 vi.mock('../UserProfileCard', () => ({ UserProfileCard: Stub }));
 vi.mock('../VoiceInputSection', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../VoiceInputSection')>();
@@ -55,7 +57,10 @@ vi.mock('../VoiceInputSection', async (importOriginal) => {
     ),
   };
 });
-vi.mock('../AppearanceSection', () => ({ AppearanceSection: Stub }));
+vi.mock('../AppearanceSection', () => ({ AppearanceSection: () => {
+  if (slowSection.promise) { slowSection.attempts += 1; throw slowSection.promise; }
+  return null;
+} }));
 vi.mock('../SubagentModelSection', () => ({ SubagentModelSection: Stub }));
 vi.mock('../AuxiliaryModelSection', () => ({ AuxiliaryModelSection: Stub }));
 vi.mock('../VisionBridgeSection', () => ({ VisionBridgeSection: Stub }));
@@ -165,6 +170,7 @@ beforeEach(() => {
   vi.stubGlobal('matchMedia', () => ({ matches: true, addEventListener() {}, removeEventListener() {} }));
   vi.stubGlobal('ResizeObserver', class {
     observe() {}
+    unobserve() {}
     disconnect() {}
   });
   vi.stubGlobal('electronAPI', { platform: 'darwin', osRelease: '23.0.0', appVersion: '1.0.0',
@@ -205,18 +211,19 @@ describe('SettingsView Escape', () => {
     await act(async () => { renderSettings('/settings?tab=voice-input'); });
     const missingCredential = 'settings.voiceInput.serviceSource.credentialError.gatewayMissing';
     const cannotRefine = 'settings.voiceInput.serviceSource.refiner.cannotRefine';
-    expect(screen.getByText(missingCredential)).toBeTruthy();
+    // 语音页是懒加载分区，第一次等待包含它整棵依赖的冷加载；Windows CI 上会超过默认 1 秒。
+    expect(await screen.findByText(missingCredential, {}, { timeout: 5000 })).toBeTruthy();
     expect(screen.getByText(cannotRefine)).toBeTruthy();
 
     fireEvent.click(screen.getByRole('button', { name: 'settings.voiceInput.serviceSource.manageProviders' }));
-    expect(location()).toContain('tab=providers');
+    await waitFor(() => expect(location()).toContain('tab=providers'));
     snapshot.readiness.ok = true;
     fireEvent.click(screen.getByRole('tab', { name: 'settings.tabs.voiceInput' }));
     await waitFor(() => expect(screen.queryByText(missingCredential)).toBeNull());
     expect(screen.getByText(cannotRefine)).toBeTruthy();
 
     fireEvent.click(screen.getByRole('button', { name: 'settings.voiceInput.serviceSource.refiner.openAuxiliary' }));
-    expect(location()).toContain('tab=personalization');
+    await waitFor(() => expect(location()).toContain('tab=personalization'));
     snapshot.selection.refinerProviderChain = ['configured-refiner'];
     fireEvent.click(screen.getByRole('tab', { name: 'settings.tabs.voiceInput' }));
     await waitFor(() => expect(screen.queryByText(cannotRefine)).toBeNull());
@@ -358,7 +365,7 @@ describe('SettingsView Escape', () => {
     await act(async () => resolveSelection({ selection: { serviceMode: 'cindy', asrProvider: 'custom-realtime-asr' } }));
     expect(result()).not.toBeNull();
     fireEvent.click(result()!);
-    expect(location()).toContain('tab=voice-input');
+    await waitFor(() => expect(location()).toContain('tab=voice-input'));
     expect(location()).toContain('section=voiceInput.customAsrWebsocketUrl');
     fireEvent.change(search, { target: { value: query } });
     fireEvent.click(screen.getByRole('button', { name: 'Use preset ASR' }));
@@ -374,9 +381,32 @@ describe('SettingsView Escape', () => {
     expect(setSelection).toHaveBeenCalledTimes(2);
   });
 
-  it('returns from the Pi extensions page to General before leaving Settings', () => {
+  it.each(['escape', 'general'] as const)('cancels a pending section with %s without blanking the current page', async (action) => {
+    let release!: () => void;
+    slowSection.promise = new Promise<void>((resolve) => { release = resolve; });
+    slowSection.attempts = 0;
+    try {
+      await act(async () => { renderSettings('/settings'); });
+      fireEvent.click(screen.getByRole('tab', { name: 'settings.tabs.appearance' }));
+      await waitFor(() => expect(slowSection.attempts).toBeGreaterThan(0));
+      expect(screen.getByRole('tabpanel').id).toBe('settings-panel-general');
+      if (action === 'escape') pressEscape();
+      else fireEvent.click(screen.getByRole('tab', { name: 'settings.tabs.general' }));
+      const destination = action === 'escape' ? '/' : '/settings';
+      await waitFor(() => expect(location()).toBe(destination));
+      await act(async () => { slowSection.promise = null; release(); });
+      expect(location()).toBe(destination);
+      if (action === 'general') expect(screen.getByRole('tabpanel').id).toBe('settings-panel-general');
+      else expect(screen.getByText('Home')).toBeTruthy();
+    } finally {
+      slowSection.promise = null;
+      release();
+    }
+  });
+
+  it('returns from the Pi extensions page to General before leaving Settings', async () => {
     renderSettings('/settings?openPanel=pi-extensions');
-    expect(screen.getByText('PI packages')).toBeTruthy();
+    expect(await screen.findByText('PI packages')).toBeTruthy();
 
     pressEscape();
     expect(location()).toBe('/settings');
@@ -387,9 +417,9 @@ describe('SettingsView Escape', () => {
     expect(screen.getByText('Home')).toBeTruthy();
   });
 
-  it('closes the Help panel before leaving Settings', () => {
+  it('closes the Help panel before leaving Settings', async () => {
     renderSettings('/settings?tab=help');
-    fireEvent.click(screen.getByRole('button', { name: 'Ask help' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Ask help' }));
     expect(
       screen.getByRole('complementary', { name: 'Help assistant' }).getAttribute('aria-hidden'),
     ).not.toBe('true');

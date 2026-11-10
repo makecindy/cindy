@@ -862,6 +862,13 @@ export async function hydrateBotProfileRuntime(
       runtimeConfiguredMcpServers.push(imServer);
     }
   }
+  if ((row.role === 'channel' && typeof opts.vendorOptions?.imessageChatId === 'string')
+    || boundImChannels.includes('imessage')) {
+    if (!runtimeConfiguredMcpServers.includes('cindy_imessage')
+      && mcpCatalog.some(item => item.name === 'cindy_imessage' && item.available !== false)) {
+      runtimeConfiguredMcpServers.push('cindy_imessage');
+    }
+  }
   const identity = chatOnly ? profile.description : version.identitySource.trim();
   opts.botProfilePrompt = buildBotProfilePrompt({
     displayName: profile.displayName,

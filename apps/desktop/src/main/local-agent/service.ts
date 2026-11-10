@@ -11,7 +11,7 @@ import {
 } from '../appSessionState.js';
 import { getDesktopProviderService } from '../maker-host/createDesktopProviderService.js';
 import { createLogger } from '../logger.js';
-import { t } from '../i18n.js';
+import { t } from '../i18n.desktop.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import { isIpcError } from '../../shared/ipc-errors.js';
 import {

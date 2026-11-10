@@ -95,7 +95,7 @@ vi.mock('../mediaRequestLog.js', async (importOriginal) => {
     },
   };
 });
-vi.mock('../../maker-host/outbound-fetch.js', () => ({
+vi.mock('../../maker-host/outbound-fetch.desktop.js', () => ({
   outboundFetch: mocks.outboundFetch,
   guardedOutboundFetch: mocks.guardedOutboundFetch,
 }));
@@ -130,7 +130,7 @@ vi.mock('../providerMediaRuntime.js', () => ({
   resolveProviderVideoConnection: mocks.videoConnection,
 }));
 vi.mock('../ingest.js', () => ({ ingestMedia: mocks.ingestMedia }));
-vi.mock('../blobStore.js', () => ({
+vi.mock('../blobStore.desktop.js', () => ({
   readFile: mocks.readBlob,
   parseBlobUrl: (url: string) => {
     const match = /^cindy-media:\/\/blobs\/([0-9a-f]{64})(\.[a-z0-9]+)$/.exec(url);
@@ -140,12 +140,12 @@ vi.mock('../blobStore.js', () => ({
   supportedMime: (mime: string) =>
     ['image/png', 'video/mp4', 'audio/mpeg'].includes(mime),
 }));
-vi.mock('../../imageCacheStore.js', () => ({ resolveSafe: mocks.resolveLegacyImage }));
+vi.mock('../../imageCacheStore.desktop.js', () => ({ resolveSafe: mocks.resolveLegacyImage }));
 vi.mock('../../videoCacheStore.js', () => ({ resolveSafe: mocks.resolveLegacyVideo }));
 vi.mock('../../logger.js', () => ({
   createLogger: () => ({ warn: vi.fn(), info: vi.fn(), debug: vi.fn(), error: vi.fn() }),
 }));
-vi.mock('../../serverApiClient.js', () => ({
+vi.mock('../../serverApiClient.desktop.js', () => ({
   ServerApiError: class ServerApiError extends Error {
     constructor(readonly code: string) {
       super(code);
@@ -948,15 +948,21 @@ describe('Cindy Core media invocation state and security boundary', () => {
     expect(mocks.providerInvoke).toHaveBeenCalledTimes(1);
   });
 
-  it('validates Gateway GPT Image geometry without a paid round trip', async () => {
+  it('leaves Gateway image parameters to the model guide', async () => {
     const id = 'openai/gpt-image-2.5-sunburst';
     mocks.models.mockResolvedValue([{ id, name: 'Sunburst', providerId: 'xd', mode: 'image_generation' }]);
     const guide = resolvedGuide(operation({ mode: 'sync', media: [{ path: ['data'], encoding: 'base64', kind: 'image' }] }));
     guide.modelId = id;
     mocks.guide.mockResolvedValue(guide);
+    mocks.outboundFetch.mockResolvedValueOnce(Response.json({ data: PNG.toString('base64') }));
     const prepared = await callCindyMedia({ action: 'prepare', providerId: 'xd', modelId: id, capability: 'image.generate' });
-    expect(await callCindyMedia({ action: 'request', invocationId: prepared.invocation_id as string, body: { prompt: 'p', size: '1320x2868' } })).toMatchObject({ ok: false, errorCode: 'REQUEST_INVALID' });
-    expect(mocks.outboundFetch).not.toHaveBeenCalled();
+    await expect(callCindyMedia({
+      action: 'request',
+      invocationId: prepared.invocation_id as string,
+      body: { prompt: 'p', size: '1320x2868', quality: 'max' },
+    })).resolves.toMatchObject({ ok: true, status: 'complete' });
+    const init = mocks.outboundFetch.mock.calls[0]![1] as RequestInit;
+    expect(JSON.parse(init.body as string)).toMatchObject({ size: '1320x2868', quality: 'max' });
   });
 
   it('本机准备期间同 owner 代次变化时不保存调用', async () => {

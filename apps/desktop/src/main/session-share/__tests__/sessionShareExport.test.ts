@@ -79,11 +79,15 @@ vi.mock('../../maker-host/codex-thread-storage.js', () => ({
   readCodexThreadStorageReadOnly: readCodexThreadStorageReadOnlyMock,
 }));
 const configDirCandidatesRef = { dirs: [path.join(tmpRoot, 'claude-home')] };
+const readBoundClaudeConfigDirMock = vi.fn<(_sdkSessionId: string) => string | undefined>();
+vi.mock('../../subscription-accounts/store.js', () => ({
+  readBoundClaudeConfigDir: readBoundClaudeConfigDirMock,
+}));
 vi.mock('../../maker-orchestration/claudeTranscriptAnchors.js', () => ({
   defaultClaudeConfigDirCandidates: () => configDirCandidatesRef.dirs,
 }));
 const imagePathRef = { path: path.join(tmpRoot, 'img.png') };
-vi.mock('../../imageCacheStore.js', () => ({
+vi.mock('../../imageCacheStore.desktop.js', () => ({
   resolveSafe: (url: string) => {
     if (!url.startsWith('xdt-image://')) throw new Error('bad url');
     return { absPath: imagePathRef.path, mimeType: 'image/png' };
@@ -173,6 +177,7 @@ async function unzipOf(filePath: string, password?: string): Promise<JSZip> {
 
 describe('exportSessionShare', () => {
   beforeEach(async () => {
+    readBoundClaudeConfigDirMock.mockReset();
     sessionRowRef.row = baseSession();
     messagesRef.rows = baseMessages();
     activeTeamRef.row = null;
@@ -199,7 +204,12 @@ describe('exportSessionShare', () => {
     rmSync(tmpRoot, { recursive: true, force: true });
   });
 
-  it('cc full export: transcripts + media + manifest roundtrip (encrypted)', async () => {
+  // Standard regression: export must include histories outside the default CLI home.
+  it.each([false, true])('cc full export: transcripts + media + manifest roundtrip (encrypted, secondary=%s)', async (secondary) => {
+    if (secondary) {
+      readBoundClaudeConfigDirMock.mockReturnValue(path.join(tmpRoot, 'claude-home'));
+      configDirCandidatesRef.dirs = [path.join(tmpRoot, 'empty-default-home')];
+    }
     const target = path.join(tmpRoot, 'out-full.xdtshare');
     const outcome = await exportSessionShare({
       sessionId: 'xdt-session-1',
@@ -251,9 +261,15 @@ describe('exportSessionShare', () => {
     expect(outcome.missingTranscripts).toEqual([]);
   });
 
-  it('cc partial: missing fork-chain jsonl downgrades fidelity and reports id', async () => {
+  it.each([false, true])('cc partial: missing fork-chain jsonl downgrades fidelity and reports id (secondary=%s)', async (secondary) => {
     const projKey = workingDir.replace(/[^a-zA-Z0-9]/g, '-');
-    await fsp.rm(path.join(projectsRoot, projKey, 'sid-a.jsonl'));
+    if (secondary) {
+      // A same-id transcript in the default profile must not replace the bound one.
+      readBoundClaudeConfigDirMock.mockImplementation((id) =>
+        id === 'sid-a' ? path.join(tmpRoot, 'missing-secondary-profile') : undefined);
+    } else {
+      await fsp.rm(path.join(projectsRoot, projKey, 'sid-a.jsonl'));
+    }
     const target = path.join(tmpRoot, 'out-partial.xdtshare');
     const outcome = await exportSessionShare({ sessionId: 'xdt-session-1', targetPath: target });
     expect(outcome.status).toBe('ok');

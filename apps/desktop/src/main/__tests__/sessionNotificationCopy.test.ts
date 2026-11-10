@@ -7,7 +7,7 @@ vi.mock('electron', () => ({
   },
 }));
 
-import { setMainLocale } from '../i18n';
+import { setMainLocale } from '../i18n.desktop';
 import {
   getSessionExternalNotificationText,
   getSessionNotificationBody,

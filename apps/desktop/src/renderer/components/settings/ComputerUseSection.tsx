@@ -39,6 +39,7 @@ import screenRecordingPermissionIcon from '@/assets/system-settings/screen-recor
 import { toast } from '@/lib/toast';
 import { Switch } from '@/components/ui/switch';
 import { Spinner } from '@/components/ui/spinner';
+import { SETTINGS_HINT, SettingsBlock, SettingsCard, SettingsField, SettingsRow, SettingsSection } from '@/components/ui/settings-rows';
 import { useOptionalConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import {
   DropdownMenu,
@@ -180,10 +181,10 @@ function ConfigurationReadStatus({
   const { t } = useTranslation();
   if (status === 'ready') return null;
   return (
-    <div
+    <SettingsBlock
       role="status"
       aria-label={label}
-      className="flex flex-wrap items-center gap-2 border-t border-[var(--settings-theme-card-border)] px-4 py-3 text-12 text-[var(--settings-section-desc)]"
+      className="flex flex-wrap items-center gap-2 text-12 text-[var(--settings-section-desc)]"
     >
       {status !== 'error' ? <Spinner size={12} /> : null}
       <span>{t(`settings.computerUse.configurationRead.${status}`, { section: label })}</span>
@@ -192,7 +193,7 @@ function ConfigurationReadStatus({
           {t('settings.computerUse.configurationRead.retry')}
         </Button>
       ) : null}
-    </div>
+    </SettingsBlock>
   );
 }
 
@@ -463,10 +464,11 @@ export function ComputerUseSection({ workingDir }: ComputerUseSectionProps) {
     [setBackendConfig],
   );
   const navigate = useNavigate();
+  const installedGhosts = useInstalledGhosts();
   const userBrowserPlugin =
     // Only the root instance can provide My browser (an organization copy with the same id cannot),
     // so that is the one the setup steps install, enable and open.
-    useInstalledGhosts().find(
+    installedGhosts.find(
       (ghost) => ghost.manifest.id === RECOMMENDED_PAGE_CONTROL_PLUGIN_ID && ghost.namespace == null,
     ) ?? null;
   const [userBrowserSetupBusy, setUserBrowserSetupBusy] = useState(false);
@@ -510,6 +512,20 @@ export function ComputerUseSection({ workingDir }: ComputerUseSectionProps) {
       else openPluginPage();
       return;
     }
+    if (browserBackendHealth?.reason === 'plugin-selection-required') {
+      // Any enabled page-control plugin can need the confirmation, not only the recommended one:
+      // open the one that does; with several, the list lets the user pick.
+      const candidates = installedGhosts.filter(
+        (ghost) => ghost.enabled && ghost.approval.state === 'approved' &&
+          ghost.manifest.browserExtension?.pageControl === true,
+      );
+      navigate(
+        candidates.length === 1
+          ? `/plugins?ghost=${encodeURIComponent(installedGhostStoragePart(candidates[0]!))}`
+          : '/plugins',
+      );
+      return;
+    }
     if (browserBackendHealth?.reason !== 'plugin-missing' || userBrowserPlugin?.enabled) {
       openPluginPage();
       return;
@@ -524,7 +540,7 @@ export function ComputerUseSection({ workingDir }: ComputerUseSectionProps) {
         );
       } else {
         // Market ids are opaque; the plugin is found by the ghost id it installs as.
-        const item = (await window.electronAPI.pluginMarket.snapshot()).items.find(
+        const item = (await window.electronAPI.pluginMarket.lookup([RECOMMENDED_PAGE_CONTROL_PLUGIN_ID])).items.find(
           (entry) => entry.ghostId === RECOMMENDED_PAGE_CONTROL_PLUGIN_ID,
         );
         const detail = item ? await window.electronAPI.pluginMarket.detail(item.pluginId) : null;
@@ -549,7 +565,7 @@ export function ComputerUseSection({ workingDir }: ComputerUseSectionProps) {
     } finally {
       setUserBrowserSetupBusy(false);
     }
-  }, [browserBackendHealth?.reason, navigate, refreshUserBrowserHealth, t, userBrowserPlugin]);
+  }, [browserBackendHealth?.reason, installedGhosts, navigate, refreshUserBrowserHealth, t, userBrowserPlugin]);
   // While "My browser" still lacks its plugin or extension, check again every few seconds so the
   // guidance turns into "connected" as soon as the user finishes a step elsewhere.
   useEffect(() => {
@@ -1519,214 +1535,189 @@ export function ComputerUseSection({ workingDir }: ComputerUseSectionProps) {
   const androidAdbPathBusy = androidAdbPathPending || androidPreparePending;
 
   return (
-    <div className="flex flex-col gap-[14px]">
-      <div className="flex flex-col gap-1 min-w-0">
-        <h2 className="text-16 font-medium leading-[1.2] text-[var(--settings-section-title)]">
-          {t(computerUseSettings.computerUse.sectionKey)}
-        </h2>
-        <p className="text-13 leading-[1.5] text-[var(--settings-section-desc)]">
-          {t('settings.computerUse.description')}
-        </p>
-      </div>
-
-      <div
-        id="automation-browser"
-        className={cn(
-          'flex flex-col overflow-hidden rounded-xl',
-          'bg-[var(--settings-theme-card-bg)]',
-          'border border-[var(--settings-theme-card-border)]',
-        )}
-      >
-        <div className="flex items-center justify-between gap-3 px-4 py-[14px]">
-          <div className="flex min-w-0 items-center gap-3">
-            <div
-              className={cn(
-                'flex h-9 w-9 shrink-0 items-center justify-center rounded-lg',
-                'bg-[var(--settings-input-bg)]',
-              )}
-            >
-              <Globe size={16} className="text-[var(--settings-section-title)]" />
-            </div>
-            <div className="flex min-w-0 flex-col gap-[8px]">
-              <p
-                id={computerUseSettings.browserTitle.targetId}
-                className="truncate text-14 font-medium leading-none text-[var(--settings-section-title)]"
+    <SettingsSection
+      variant="page"
+      title={t(computerUseSettings.computerUse.sectionKey)}
+      description={t('settings.computerUse.description')}
+    >
+      <SettingsSection>
+        <SettingsCard id="automation-browser">
+          <SettingsRow
+            lead={
+              <span
+                className={cn(
+                  'flex h-9 w-9 shrink-0 items-center justify-center rounded-lg',
+                  'bg-[var(--settings-input-bg)]',
+                )}
               >
-                {t(computerUseSettings.browserTitle.titleKey)}
-              </p>
-              <p className="truncate text-12 leading-none text-[var(--settings-section-desc)]">
-                {t(computerUseSettings.browserTitle.descriptionKey)}
-              </p>
-            </div>
-          </div>
-          <Switch data-setting-id={computerUseSettings.browserTitle.id}
-            checked={browserEnabled ?? false}
-            disabled={browserEnabled === null || togglePending}
-            onCheckedChange={handleToggleBrowser}
-            aria-label={t('settings.computerUse.browser.toggleAria')}
-          />
-        </div>
-        <ConfigurationReadStatus
-          label={t(computerUseSettings.browserTitle.titleKey)}
-          status={browserRead.status}
-          retry={browserRead.retry}
-        />
-        <ConfigurationReadStatus
-          label={t('settings.computerUse.browserBackend.title')}
-          status={backendRead.status}
-          retry={backendRead.retry}
-        />
-        {/* Phase 5: backend 切换 segmented control,排在 enable toggle 紧下方 —
-            「使用哪个浏览器」是控制 toggle 之后用户首先需要回答的问题,所以放在
-            探测 / 登录 cell 之前。state 还没拉到时不渲染。 */}
-        {browserBackendKind !== null ? (
-          <BrowserBackendSubsection
-            active={browserBackendKind}
-            pending={browserBackendPending || browserBackendRecovering}
-            recovering={browserBackendRecovering}
-            health={browserBackendHealth}
-            onSelect={(kind) => void handleSelectBackend(kind)}
-            onRecover={() => void handleRecoverBrowserBackend()}
-            userBrowserPluginState={
-              userBrowserPlugin === null
-                ? 'not-installed'
-                : userBrowserPlugin.enabled
-                  ? 'enabled'
-                  : 'disabled'
+                <Globe size={16} className="text-[var(--settings-section-title)]" />
+              </span>
             }
-            userBrowserSetupBusy={userBrowserSetupBusy}
-            onSetUpUserBrowser={() => void handleSetUpUserBrowser()}
+            title={
+              <span id={computerUseSettings.browserTitle.targetId}>
+                {t(computerUseSettings.browserTitle.titleKey)}
+              </span>
+            }
+            hint={t(computerUseSettings.browserTitle.descriptionKey)}
+            trailing={
+              <Switch data-setting-id={computerUseSettings.browserTitle.id}
+                checked={browserEnabled ?? false}
+                disabled={browserEnabled === null || togglePending}
+                onCheckedChange={handleToggleBrowser}
+                aria-label={t('settings.computerUse.browser.toggleAria')}
+              />
+            }
           />
-        ) : null}
-        {/* 拷贝登录文件只对独立浏览器有用,其它浏览器下一律隐藏;要删除拷贝时切回独立浏览器再关。 */}
-        {browserBackendKind === 'external' ? (
-          <BrowserRealProfileSubsection
-            enabled={useRealProfile}
-            pending={useRealProfilePending}
-            onToggle={(next) => void handleToggleRealProfile(next)}
-          />
-        ) : null}
-        {/* 只在 backend === 'external' 时展示 Chrome 探测 + 登录入口。内置 webview
-            backend 用 Electron 自带 Chromium,这些 UI 对它都没有意义。 */}
-        {browserBackendKind === 'external' ? (
           <ConfigurationReadStatus
-            label={t('settings.computerUse.configurationRead.browserDetection')}
-            status={availabilityRead.status}
-            retry={availabilityRead.retry}
+            label={t(computerUseSettings.browserTitle.titleKey)}
+            status={browserRead.status}
+            retry={browserRead.retry}
           />
-        ) : null}
-        {browserBackendKind === 'external' && availability !== null ? (
-          <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[var(--settings-theme-card-border)] px-4 py-[14px]">
-            <p className="min-w-0 text-12 leading-[1.5] text-[var(--settings-section-desc)]">
-              {availability.detected
-                ? t('settings.computerUse.browser.detected', {
-                    browser: (availability.browserKind ?? 'chromium').replace(/^./, (c) =>
-                      c.toUpperCase(),
-                    ),
-                  })
-                : t('settings.computerUse.browser.notDetected')}
-            </p>
-            {availability.detected ? (
-              <Button data-setting-id={computerUseSettings.browserTitle.id}
-                variant="secondary"
-                size="sm"
-                className="px-3"
-                type="button"
-                onClick={handleOpenForLogin}
-              >
-                <LogIn size={12} className="shrink-0" />
-                {t('settings.computerUse.browser.openForLogin')}
-              </Button>
-            ) : (
-              <Button data-setting-id={computerUseSettings.browserTitle.id}
-                variant="secondary"
-                size="sm"
-                className="px-3"
-                type="button"
-                onClick={handleDownload}
-              >
-                <Download size={12} className="shrink-0" />
-                {t('settings.computerUse.browser.download')}
-              </Button>
-            )}
-          </div>
-        ) : null}
-      </div>
-
-      {browserBackendKind === 'external' && availability?.detected ? (
-        <p className="text-12 leading-[1.5] text-[var(--settings-section-desc)]">
-          {t('settings.computerUse.browser.openForLoginHint')}
-        </p>
-      ) : null}
-      <p className="text-12 leading-[1.5] text-[var(--settings-section-desc)]">
-        {t('settings.computerUse.browser.toggleHint')}
-      </p>
-
-      <div aria-hidden="true" className="h-px bg-[var(--settings-theme-card-border)]" />
-
-      <div
-        id="automation-computer"
-        className={cn(
-          'flex flex-col overflow-hidden rounded-xl',
-          'bg-[var(--settings-theme-card-bg)]',
-          'border border-[var(--settings-theme-card-border)]',
-        )}
-      >
-        <div className="flex items-center justify-between gap-3 px-4 py-[14px]">
-          <div className="flex min-w-0 items-center gap-3">
-            <div
-              className={cn(
-                'flex h-9 w-9 shrink-0 items-center justify-center rounded-lg',
-                'bg-[var(--settings-input-bg)]',
+          <ConfigurationReadStatus
+            label={t('settings.computerUse.browserBackend.title')}
+            status={backendRead.status}
+            retry={backendRead.retry}
+          />
+          {/* Phase 5: backend 切换 segmented control,排在 enable toggle 紧下方 —
+              「使用哪个浏览器」是控制 toggle 之后用户首先需要回答的问题,所以放在
+              探测 / 登录 cell 之前。state 还没拉到时不渲染。 */}
+          {browserBackendKind !== null ? (
+            <BrowserBackendSubsection
+              active={browserBackendKind}
+              pending={browserBackendPending || browserBackendRecovering}
+              recovering={browserBackendRecovering}
+              health={browserBackendHealth}
+              onSelect={(kind) => void handleSelectBackend(kind)}
+              onRecover={() => void handleRecoverBrowserBackend()}
+              userBrowserPluginState={
+                userBrowserPlugin === null
+                  ? 'not-installed'
+                  : userBrowserPlugin.enabled
+                    ? 'enabled'
+                    : 'disabled'
+              }
+              userBrowserPluginSupportsControl={userBrowserPlugin?.manifest.browserExtension?.pageControl === true}
+              userBrowserSetupBusy={userBrowserSetupBusy}
+              onSetUpUserBrowser={() => void handleSetUpUserBrowser()}
+            />
+          ) : null}
+          {/* 拷贝登录文件只对独立浏览器有用,其它浏览器下一律隐藏;要删除拷贝时切回独立浏览器再关。 */}
+          {browserBackendKind === 'external' ? (
+            <BrowserRealProfileSubsection
+              enabled={useRealProfile}
+              pending={useRealProfilePending}
+              onToggle={(next) => void handleToggleRealProfile(next)}
+            />
+          ) : null}
+          {/* 只在 backend === 'external' 时展示 Chrome 探测 + 登录入口。内置 webview
+              backend 用 Electron 自带 Chromium,这些 UI 对它都没有意义。 */}
+          {browserBackendKind === 'external' ? (
+            <ConfigurationReadStatus
+              label={t('settings.computerUse.configurationRead.browserDetection')}
+              status={availabilityRead.status}
+              retry={availabilityRead.retry}
+            />
+          ) : null}
+          {browserBackendKind === 'external' && availability !== null ? (
+            <SettingsBlock className="flex flex-wrap items-center justify-between gap-3">
+              <p className={cn('min-w-0', SETTINGS_HINT)}>
+                {availability.detected
+                  ? t('settings.computerUse.browser.detected', {
+                      browser: (availability.browserKind ?? 'chromium').replace(/^./, (c) =>
+                        c.toUpperCase(),
+                      ),
+                    })
+                  : t('settings.computerUse.browser.notDetected')}
+              </p>
+              {availability.detected ? (
+                <Button data-setting-id={computerUseSettings.browserTitle.id}
+                  variant="secondary"
+                  size="sm"
+                  className="px-3"
+                  type="button"
+                  onClick={handleOpenForLogin}
+                >
+                  <LogIn size={12} className="shrink-0" />
+                  {t('settings.computerUse.browser.openForLogin')}
+                </Button>
+              ) : (
+                <Button data-setting-id={computerUseSettings.browserTitle.id}
+                  variant="secondary"
+                  size="sm"
+                  className="px-3"
+                  type="button"
+                  onClick={handleDownload}
+                >
+                  <Download size={12} className="shrink-0" />
+                  {t('settings.computerUse.browser.download')}
+                </Button>
               )}
-            >
-              <MonitorCog size={16} className="text-[var(--settings-section-title)]" />
-            </div>
-            <div className="flex min-w-0 flex-col gap-[8px]">
-              <p
-                id={computerUseSettings.directControlTitle.targetId}
-                className="truncate text-14 font-medium leading-none text-[var(--settings-section-title)]"
+            </SettingsBlock>
+          ) : null}
+        </SettingsCard>
+
+        {browserBackendKind === 'external' && availability?.detected ? (
+          <p className={SETTINGS_HINT}>
+            {t('settings.computerUse.browser.openForLoginHint')}
+          </p>
+        ) : null}
+        <p className={SETTINGS_HINT}>
+          {t('settings.computerUse.browser.toggleHint')}
+        </p>
+      </SettingsSection>
+
+      <SettingsSection>
+        <SettingsCard id="automation-computer">
+          <SettingsRow
+            lead={
+              <span
+                className={cn(
+                  'flex h-9 w-9 shrink-0 items-center justify-center rounded-lg',
+                  'bg-[var(--settings-input-bg)]',
+                )}
               >
+                <MonitorCog size={16} className="text-[var(--settings-section-title)]" />
+              </span>
+            }
+            title={
+              <span id={computerUseSettings.directControlTitle.targetId}>
                 {t(computerUseSettings.directControlTitle.titleKey)}
-              </p>
-              <p className="truncate text-12 leading-none text-[var(--settings-section-desc)]">
-                {t(computerUseSettings.directControlTitle.descriptionKey)}
-              </p>
-            </div>
-          </div>
-          <Switch data-setting-id={computerUseSettings.directControlTitle.id}
-            checked={computerSwitchChecked}
-            disabled={computerSwitchDisabled}
-            onCheckedChange={handleToggleComputer}
-            aria-label={t('settings.computerUse.directControl.toggleAria')}
+              </span>
+            }
+            hint={t(computerUseSettings.directControlTitle.descriptionKey)}
+            trailing={
+              <Switch data-setting-id={computerUseSettings.directControlTitle.id}
+                checked={computerSwitchChecked}
+                disabled={computerSwitchDisabled}
+                onCheckedChange={handleToggleComputer}
+                aria-label={t('settings.computerUse.directControl.toggleAria')}
+              />
+            }
           />
-        </div>
-        <ConfigurationReadStatus
-          label={t(computerUseSettings.directControlTitle.titleKey)}
-          status={computerRead.status}
-          retry={computerRead.retry}
-        />
-        {computerStatus === null ? (
-          <div
-            role="status"
-            className="flex items-center gap-2 border-t border-[var(--settings-theme-card-border)] px-4 py-4 text-12 text-[var(--settings-section-desc)]"
-          >
-            <Spinner size={12} />
-            {t('settings.computerUse.directControl.update.readingVersion')}
-          </div>
-        ) : (
-          <>
-            {/* Windows/Linux 没有 macOS TCC 权限,整块隐藏;安装进度改在下方状态行展示。 */}
-            {window.electronAPI.platform === 'darwin' ? (
-              <div className="border-t border-[var(--settings-theme-card-border)] px-4 py-4">
-                <div className="flex items-center justify-between gap-3">
-                  <p
-                    id={computerUseSettings.directControlPermissionsTitle.targetId}
-                    className="text-13 font-medium text-[var(--settings-section-title)]"
-                  >
-                    {t(computerUseSettings.directControlPermissionsTitle.titleKey)}
-                  </p>
-                  {computerInstallPending || computerPermissionPending ? (
+          <ConfigurationReadStatus
+            label={t(computerUseSettings.directControlTitle.titleKey)}
+            status={computerRead.status}
+            retry={computerRead.retry}
+          />
+          {computerStatus === null ? (
+            <SettingsBlock
+              role="status"
+              className="flex items-center gap-2 text-12 text-[var(--settings-section-desc)]"
+            >
+              <Spinner size={12} />
+              {t('settings.computerUse.directControl.update.readingVersion')}
+            </SettingsBlock>
+          ) : (
+            <>
+              {/* Windows/Linux 没有 macOS TCC 权限,整块隐藏;安装进度改在下方状态行展示。 */}
+              {window.electronAPI.platform === 'darwin' ? (
+                <SettingsField
+                  title={(
+                    <span id={computerUseSettings.directControlPermissionsTitle.targetId}>
+                      {t(computerUseSettings.directControlPermissionsTitle.titleKey)}
+                    </span>
+                  )}
+                  action={computerInstallPending || computerPermissionPending ? (
                     <span className="inline-flex items-center gap-1.5 text-12 text-[var(--settings-section-desc)]">
                       <Spinner size={12} />
                       {computerInstallPending
@@ -1747,496 +1738,481 @@ export function ComputerUseSection({ workingDir }: ComputerUseSectionProps) {
                       {t('settings.computerUse.directControl.permissions.recheck')}
                     </Button>
                   )}
-                </div>
-
-                <div
-                  id={computerUseSettings.directControlPermissionsAccessibilityLabel.targetId}
-                  className="mt-3 grid gap-2.5 sm:grid-cols-2"
                 >
-                  <ComputerPermissionRow
-                    label={t(computerUseSettings.directControlPermissionsAccessibilityLabel.titleKey)}
-                    iconSrc={accessibilityPermissionIcon}
-                    granted={computerAccessibilityGranted}
-                    pending={computerAccessibilityPending}
-                    actionLabel={
-                      computerAccessibilityPending
-                        ? t('settings.computerUse.directControl.permissionGuide.waiting')
-                        : computerAccessibilityGranted
-                          ? t('settings.computerUse.directControl.permissions.granted')
-                          : t('settings.computerUse.directControl.permissions.grant')
-                    }
-                    onAction={() =>
-                      void (computerStatus.installed
-                        ? handleOpenComputerPermission(
-                            MAC_ACCESSIBILITY_SETTINGS_URL,
-                            computerAccessibilityGranted,
-                          )
-                        : handleToggleComputer(true))
-                    }
-                  />
-                  <div id={computerUseSettings.directControlPermissionsScreenRecordingLabel.targetId}>
+                  <div
+                    id={computerUseSettings.directControlPermissionsAccessibilityLabel.targetId}
+                    className="grid gap-2.5 sm:grid-cols-2"
+                  >
                     <ComputerPermissionRow
-                      label={t(
-                        computerUseSettings.directControlPermissionsScreenRecordingLabel.titleKey,
-                      )}
-                      iconSrc={screenRecordingPermissionIcon}
-                      granted={computerScreenRecordingGranted}
-                      pending={computerScreenRecordingPending}
+                      label={t(computerUseSettings.directControlPermissionsAccessibilityLabel.titleKey)}
+                      iconSrc={accessibilityPermissionIcon}
+                      granted={computerAccessibilityGranted}
+                      pending={computerAccessibilityPending}
                       actionLabel={
-                        computerScreenRecordingPending
+                        computerAccessibilityPending
                           ? t('settings.computerUse.directControl.permissionGuide.waiting')
-                          : computerScreenRecordingGranted
+                          : computerAccessibilityGranted
                             ? t('settings.computerUse.directControl.permissions.granted')
                             : t('settings.computerUse.directControl.permissions.grant')
                       }
                       onAction={() =>
                         void (computerStatus.installed
                           ? handleOpenComputerPermission(
-                              MAC_SCREEN_RECORDING_SETTINGS_URL,
-                              computerScreenRecordingGranted,
+                              MAC_ACCESSIBILITY_SETTINGS_URL,
+                              computerAccessibilityGranted,
                             )
                           : handleToggleComputer(true))
                       }
                     />
-                  </div>
-                </div>
-              </div>
-            ) : null}
-
-            <div className="relative border-t border-[var(--settings-theme-card-border)] px-4 py-2.5">
-              <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
-                <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
-                  <span className="text-11 text-[var(--settings-section-desc)]">
-                    {computerStatus.installed
-                      ? t('settings.computerUse.directControl.status.version', {
-                          version: computerStatus.version ?? 'cua-driver',
-                        })
-                      : t('settings.computerUse.directControl.notDetected')}
-                  </span>
-                  {window.electronAPI.platform !== 'darwin' && computerInstallPending ? (
-                    <>
-                      <span
-                        aria-hidden="true"
-                        className="text-11 text-[var(--settings-theme-card-border)]"
-                      >
-                        ·
-                      </span>
-                      <span className="inline-flex items-center gap-1.5 text-11 text-[var(--settings-section-desc)]">
-                        <Spinner size={12} />
-                        {t('settings.computerUse.directControl.installing')}
-                      </span>
-                    </>
-                  ) : null}
-                  {computerStatus.installed ? (
-                    <>
-                      {!driverUpdate?.updateAvailable ||
-                      driverCheckPending ||
-                      driverUpdatePending ||
-                      driverCheckFailed ? (
-                        <>
-                          <span
-                            aria-hidden="true"
-                            className="text-11 text-[var(--settings-theme-card-border)]"
-                          >
-                            ·
-                          </span>
-                          <span
-                            role="status"
-                            className="text-11 text-[var(--settings-section-desc)]"
-                          >
-                            {driverCheckPending
-                              ? t('settings.computerUse.directControl.update.checking')
-                              : driverUpdatePending
-                                ? driverUpdateProgress?.phase === 'installing'
-                                  ? t('settings.computerUse.directControl.update.installing')
-                                  : t('settings.computerUse.directControl.update.updating')
-                                : driverCheckRateLimited
-                                  ? t('settings.computerUse.directControl.update.rateLimited')
-                                  : driverCheckFailed
-                                    ? t('settings.computerUse.directControl.update.checkFailed')
-                                    : driverUpdate
-                                      ? t('settings.computerUse.directControl.update.upToDate')
-                                      : t('settings.computerUse.directControl.update.notChecked')}
-                          </span>
-                        </>
-                      ) : null}
-                      {driverUpdate?.checkedAt && !driverUpdatePending ? (
-                        <span className="text-11 text-[var(--settings-section-desc)]">
-                          {t('settings.computerUse.directControl.update.lastChecked', {
-                            time: new Date(driverUpdate.checkedAt).toLocaleString(i18n?.language, {
-                              month: 'short',
-                              day: 'numeric',
-                              hour: '2-digit',
-                              minute: '2-digit',
-                            }),
-                          })}
-                        </span>
-                      ) : null}
-                    </>
-                  ) : null}
-                  {computerStatus.installed &&
-                  driverUpdate?.updateAvailable &&
-                  driverUpdate.latestVersion &&
-                  !driverUpdatePending ? (
-                    <>
-                      <span
-                        aria-hidden="true"
-                        className="text-11 text-[var(--settings-theme-card-border)]"
-                      >
-                        ·
-                      </span>
-                      <span className="text-11 text-[var(--settings-section-desc)]">
-                        {t(
-                          driverCheckFailed
-                            ? 'settings.computerUse.directControl.update.previouslyAvailable'
-                            : 'settings.computerUse.directControl.update.available',
-                          {
-                            version: driverUpdate.latestVersion,
-                          },
+                    <div id={computerUseSettings.directControlPermissionsScreenRecordingLabel.targetId}>
+                      <ComputerPermissionRow
+                        label={t(
+                          computerUseSettings.directControlPermissionsScreenRecordingLabel.titleKey,
                         )}
-                      </span>
+                        iconSrc={screenRecordingPermissionIcon}
+                        granted={computerScreenRecordingGranted}
+                        pending={computerScreenRecordingPending}
+                        actionLabel={
+                          computerScreenRecordingPending
+                            ? t('settings.computerUse.directControl.permissionGuide.waiting')
+                            : computerScreenRecordingGranted
+                              ? t('settings.computerUse.directControl.permissions.granted')
+                              : t('settings.computerUse.directControl.permissions.grant')
+                        }
+                        onAction={() =>
+                          void (computerStatus.installed
+                            ? handleOpenComputerPermission(
+                                MAC_SCREEN_RECORDING_SETTINGS_URL,
+                                computerScreenRecordingGranted,
+                              )
+                            : handleToggleComputer(true))
+                        }
+                      />
+                    </div>
+                  </div>
+                </SettingsField>
+              ) : null}
+
+              <SettingsBlock>
+                <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
+                  <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+                    <span className="text-11 text-[var(--settings-section-desc)]">
+                      {computerStatus.installed
+                        ? t('settings.computerUse.directControl.status.version', {
+                            version: computerStatus.version ?? 'cua-driver',
+                          })
+                        : t('settings.computerUse.directControl.notDetected')}
+                    </span>
+                    {window.electronAPI.platform !== 'darwin' && computerInstallPending ? (
+                      <>
+                        <span
+                          aria-hidden="true"
+                          className="text-11 text-[var(--settings-theme-card-border)]"
+                        >
+                          ·
+                        </span>
+                        <span className="inline-flex items-center gap-1.5 text-11 text-[var(--settings-section-desc)]">
+                          <Spinner size={12} />
+                          {t('settings.computerUse.directControl.installing')}
+                        </span>
+                      </>
+                    ) : null}
+                    {computerStatus.installed ? (
+                      <>
+                        {!driverUpdate?.updateAvailable ||
+                        driverCheckPending ||
+                        driverUpdatePending ||
+                        driverCheckFailed ? (
+                          <>
+                            <span
+                              aria-hidden="true"
+                              className="text-11 text-[var(--settings-theme-card-border)]"
+                            >
+                              ·
+                            </span>
+                            <span
+                              role="status"
+                              className="text-11 text-[var(--settings-section-desc)]"
+                            >
+                              {driverCheckPending
+                                ? t('settings.computerUse.directControl.update.checking')
+                                : driverUpdatePending
+                                  ? driverUpdateProgress?.phase === 'installing'
+                                    ? t('settings.computerUse.directControl.update.installing')
+                                    : t('settings.computerUse.directControl.update.updating')
+                                  : driverCheckRateLimited
+                                    ? t('settings.computerUse.directControl.update.rateLimited')
+                                    : driverCheckFailed
+                                      ? t('settings.computerUse.directControl.update.checkFailed')
+                                      : driverUpdate
+                                        ? t('settings.computerUse.directControl.update.upToDate')
+                                        : t('settings.computerUse.directControl.update.notChecked')}
+                            </span>
+                          </>
+                        ) : null}
+                        {driverUpdate?.checkedAt && !driverUpdatePending ? (
+                          <span className="text-11 text-[var(--settings-section-desc)]">
+                            {t('settings.computerUse.directControl.update.lastChecked', {
+                              time: new Date(driverUpdate.checkedAt).toLocaleString(i18n?.language, {
+                                month: 'short',
+                                day: 'numeric',
+                                hour: '2-digit',
+                                minute: '2-digit',
+                              }),
+                            })}
+                          </span>
+                        ) : null}
+                      </>
+                    ) : null}
+                    {computerStatus.installed &&
+                    driverUpdate?.updateAvailable &&
+                    driverUpdate.latestVersion &&
+                    !driverUpdatePending ? (
+                      <>
+                        <span
+                          aria-hidden="true"
+                          className="text-11 text-[var(--settings-theme-card-border)]"
+                        >
+                          ·
+                        </span>
+                        <span className="text-11 text-[var(--settings-section-desc)]">
+                          {t(
+                            driverCheckFailed
+                              ? 'settings.computerUse.directControl.update.previouslyAvailable'
+                              : 'settings.computerUse.directControl.update.available',
+                            {
+                              version: driverUpdate.latestVersion,
+                            },
+                          )}
+                        </span>
+                        <Button data-settings-search-action="Retry, inspect or install the selected computer-control dependency"
+                          variant="secondary"
+                          size="sm"
+                          className="px-2.5"
+                          type="button"
+                          onClick={() => void handleUpdateDriver()}
+                          disabled={driverCheckPending || computerInstallPending}
+                        >
+                          <Download size={12} className="shrink-0" />
+                          {t('settings.computerUse.directControl.update.action')}
+                        </Button>
+                      </>
+                    ) : null}
+                    {computerStatus.installed ? (
                       <Button data-settings-search-action="Retry, inspect or install the selected computer-control dependency"
                         variant="secondary"
                         size="sm"
                         className="px-2.5"
                         type="button"
-                        onClick={() => void handleUpdateDriver()}
-                        disabled={driverCheckPending || computerInstallPending}
+                        loading={driverCheckPending}
+                        disabled={driverCheckPending || driverUpdatePending || computerInstallPending}
+                        onClick={() => void refreshDriverUpdateCheck(true)}
                       >
-                        <Download size={12} className="shrink-0" />
-                        {t('settings.computerUse.directControl.update.action')}
+                        <RefreshCw size={12} className="shrink-0" />
+                        {driverCheckFailed
+                          ? t('settings.computerUse.directControl.update.retry')
+                          : t('settings.computerUse.directControl.update.check')}
                       </Button>
-                    </>
-                  ) : null}
-                  {computerStatus.installed ? (
+                    ) : null}
+                  </div>
+                  <button data-settings-search-action="Retry, inspect or install the selected computer-control dependency"
+                    type="button"
+                    onClick={() => setComputerDetailsOpen((open) => !open)}
+                    aria-expanded={computerDetailsOpen}
+                    className={cn(
+                      'inline-flex h-6 shrink-0 items-center gap-1 rounded-full px-1.5',
+                      'text-11 font-medium text-[var(--settings-section-desc)]',
+                      'transition-colors hover:bg-[var(--settings-input-bg)] hover:text-[var(--settings-section-title)]',
+                      'focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
+                    )}
+                  >
+                    {computerDetailsOpen
+                      ? t('settings.computerUse.directControl.permissions.hideDetails')
+                      : t('settings.computerUse.directControl.permissions.moreDetails')}
+                    <ChevronDown
+                      size={12}
+                      className={cn(
+                        'transition-transform duration-200',
+                        computerDetailsOpen && 'rotate-180',
+                      )}
+                    />
+                  </button>
+                </div>
+                {driverUpdatePending &&
+                driverUpdateProgress?.phase === 'downloading' &&
+                driverUpdateProgress.downloadedBytes !== null &&
+                driverUpdateProgress.totalBytes ? (
+                  <div className="absolute inset-x-0 bottom-0 h-[2px] bg-[var(--settings-input-bg)]">
+                    <div
+                      className="h-full bg-[var(--settings-section-title)] transition-[width] duration-500"
+                      style={{
+                        width: `${Math.min(
+                          100,
+                          (driverUpdateProgress.downloadedBytes / driverUpdateProgress.totalBytes) *
+                            100,
+                        )}%`,
+                      }}
+                    />
+                  </div>
+                ) : null}
+              </SettingsBlock>
+
+              {computerDetailsOpen ? (
+                <SettingsBlock className="flex flex-col gap-3">
+                  <div className="flex flex-col gap-2">
+                    <p className={SETTINGS_HINT}>
+                      {t('settings.computerUse.directControl.driverInfo')}
+                    </p>
+                    {window.electronAPI.platform === 'darwin' ? (
+                      <p className={SETTINGS_HINT}>
+                        {computerReady
+                          ? t('settings.computerUse.directControl.permissions.runtimeConfirmations')
+                          : t('settings.computerUse.directControl.permissions.macosHint')}
+                      </p>
+                    ) : null}
+                  </div>
+                  <div>
                     <Button data-settings-search-action="Retry, inspect or install the selected computer-control dependency"
                       variant="secondary"
                       size="sm"
-                      className="px-2.5"
+                      className="px-3"
                       type="button"
-                      loading={driverCheckPending}
-                      disabled={driverCheckPending || driverUpdatePending || computerInstallPending}
-                      onClick={() => void refreshDriverUpdateCheck(true)}
+                      onClick={handleOpenCuaProject}
                     >
-                      <RefreshCw size={12} className="shrink-0" />
-                      {driverCheckFailed
-                        ? t('settings.computerUse.directControl.update.retry')
-                        : t('settings.computerUse.directControl.update.check')}
+                      <ExternalLink size={12} className="shrink-0" />
+                      {t('settings.computerUse.directControl.openSourceProject')}
                     </Button>
-                  ) : null}
-                </div>
-                <button data-settings-search-action="Retry, inspect or install the selected computer-control dependency"
-                  type="button"
-                  onClick={() => setComputerDetailsOpen((open) => !open)}
-                  aria-expanded={computerDetailsOpen}
-                  className={cn(
-                    'inline-flex h-6 shrink-0 items-center gap-1 rounded-md px-1.5',
-                    'text-11 font-medium text-[var(--settings-section-desc)]',
-                    'transition-colors hover:bg-[var(--settings-input-bg)] hover:text-[var(--settings-section-title)]',
-                    'focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
-                  )}
-                >
-                  {computerDetailsOpen
-                    ? t('settings.computerUse.directControl.permissions.hideDetails')
-                    : t('settings.computerUse.directControl.permissions.moreDetails')}
-                  <ChevronDown
-                    size={12}
-                    className={cn(
-                      'transition-transform duration-200',
-                      computerDetailsOpen && 'rotate-180',
-                    )}
-                  />
-                </button>
-              </div>
-              {driverUpdatePending &&
-              driverUpdateProgress?.phase === 'downloading' &&
-              driverUpdateProgress.downloadedBytes !== null &&
-              driverUpdateProgress.totalBytes ? (
-                <div className="absolute inset-x-0 bottom-0 h-[2px] bg-[var(--settings-input-bg)]">
-                  <div
-                    className="h-full bg-[var(--settings-section-title)] transition-[width] duration-500"
-                    style={{
-                      width: `${Math.min(
-                        100,
-                        (driverUpdateProgress.downloadedBytes / driverUpdateProgress.totalBytes) *
-                          100,
-                      )}%`,
-                    }}
-                  />
-                </div>
+                  </div>
+                </SettingsBlock>
               ) : null}
-            </div>
+            </>
+          )}
+        </SettingsCard>
+      </SettingsSection>
 
-            {computerDetailsOpen ? (
-              <div className="flex flex-col gap-3 border-t border-[var(--settings-theme-card-border)] px-4 py-3.5">
-                <div className="flex flex-col gap-2">
-                  <p className="text-12 leading-[1.5] text-[var(--settings-section-desc)]">
-                    {t('settings.computerUse.directControl.driverInfo')}
-                  </p>
-                  {window.electronAPI.platform === 'darwin' ? (
-                    <p className="text-12 leading-[1.5] text-[var(--settings-section-desc)]">
-                      {computerReady
-                        ? t('settings.computerUse.directControl.permissions.runtimeConfirmations')
-                        : t('settings.computerUse.directControl.permissions.macosHint')}
-                    </p>
-                  ) : null}
-                </div>
-                <div>
-                  <Button data-settings-search-action="Retry, inspect or install the selected computer-control dependency"
-                    variant="secondary"
-                    size="sm"
-                    className="px-3"
-                    type="button"
-                    onClick={handleOpenCuaProject}
-                  >
-                    <ExternalLink size={12} className="shrink-0" />
-                    {t('settings.computerUse.directControl.openSourceProject')}
-                  </Button>
-                </div>
-              </div>
-            ) : null}
-          </>
-        )}
-      </div>
-
-      <div aria-hidden="true" className="h-px bg-[var(--settings-theme-card-border)]" />
-
-      <div
-        id="automation-android"
-        className={cn(
-          'flex flex-col overflow-hidden rounded-xl',
-          'bg-[var(--settings-theme-card-bg)]',
-          'border border-[var(--settings-theme-card-border)]',
-        )}
-      >
-        <div className="flex items-center justify-between gap-3 px-4 py-[14px]">
-          <div className="flex min-w-0 items-center gap-3">
-            <div
-              className={cn(
-                'flex h-9 w-9 shrink-0 items-center justify-center rounded-lg',
-                'bg-[var(--settings-input-bg)]',
-              )}
-            >
-              <Smartphone size={16} className="text-[var(--settings-section-title)]" />
-            </div>
-            <div className="flex min-w-0 flex-col gap-[8px]">
-              <p
-                id={computerUseSettings.androidTitle.targetId}
-                className="truncate text-14 font-medium leading-none text-[var(--settings-section-title)]"
+      <SettingsSection>
+        <SettingsCard id="automation-android">
+          <SettingsRow
+            lead={
+              <span
+                className={cn(
+                  'flex h-9 w-9 shrink-0 items-center justify-center rounded-lg',
+                  'bg-[var(--settings-input-bg)]',
+                )}
               >
+                <Smartphone size={16} className="text-[var(--settings-section-title)]" />
+              </span>
+            }
+            title={
+              <span id={computerUseSettings.androidTitle.targetId}>
                 {t(computerUseSettings.androidTitle.titleKey)}
-              </p>
-              <p className="truncate text-12 leading-none text-[var(--settings-section-desc)]">
-                {t(computerUseSettings.androidTitle.descriptionKey)}
-              </p>
-            </div>
-          </div>
-          <Switch data-setting-id={computerUseSettings.androidTitle.id}
-            checked={androidEnabled ?? false}
-            disabled={androidEnabled === null || androidTogglePending}
-            onCheckedChange={handleToggleAndroid}
-            aria-label={t('settings.computerUse.android.toggleAria')}
+              </span>
+            }
+            hint={t(computerUseSettings.androidTitle.descriptionKey)}
+            trailing={
+              <Switch data-setting-id={computerUseSettings.androidTitle.id}
+                checked={androidEnabled ?? false}
+                disabled={androidEnabled === null || androidTogglePending}
+                onCheckedChange={handleToggleAndroid}
+                aria-label={t('settings.computerUse.android.toggleAria')}
+              />
+            }
           />
-        </div>
-        <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[var(--settings-theme-card-border)] px-4 py-[14px]">
-          <div className="flex min-w-0 flex-col gap-1">
-            <p className="text-12 font-medium leading-[1.5] text-[var(--settings-section-title)]">
-              {t('settings.computerUse.android.device.title')}
-            </p>
-            <p className="min-w-0 text-12 leading-[1.5] text-[var(--settings-section-desc)]">
-              {androidDeviceStatusText}
-            </p>
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <button data-setting-id={computerUseSettings.androidTitle.id}
-                  type="button"
-                  disabled={androidDevicePending || !androidStatus}
-                  className={cn(ACTION_BUTTON_CLASS, 'max-w-[260px] px-2.5')}
-                  aria-label={t('settings.computerUse.android.device.ariaLabel')}
-                  title={configuredDefaultAndroidDevice ?? undefined}
-                >
-                  <Smartphone size={12} className="shrink-0" />
-                  <span className="truncate">{androidDeviceTriggerLabel}</span>
-                  <ChevronDown size={12} className="shrink-0 opacity-60" />
-                </button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="min-w-[260px] max-w-[360px]">
-                <DropdownMenuItem
-                  onClick={() => void handleSelectAndroidDevice(ANDROID_AUTO_DEVICE_VALUE)}
-                  className="flex items-start gap-2"
-                >
-                  <Check
-                    size={14}
-                    className={cn(
-                      'mt-0.5 shrink-0',
-                      !configuredDefaultAndroidDevice ? 'opacity-100' : 'opacity-0',
-                    )}
-                  />
-                  <div className="flex min-w-0 flex-col gap-0.5">
-                    <span className="truncate">
-                      {t('settings.computerUse.android.device.auto')}
-                    </span>
-                    <span className="truncate text-12 leading-[1.33] text-[var(--cmd-palette-item-meta)]">
-                      {t('settings.computerUse.android.device.autoHint')}
-                    </span>
-                  </div>
-                </DropdownMenuItem>
-                {hasStaleConfiguredAndroidDevice ? (
-                  <DropdownMenuItem
-                    onClick={() =>
-                      void handleSelectAndroidDevice(configuredDefaultAndroidDevice ?? '')
-                    }
-                    className="flex items-start gap-2"
-                  >
-                    <Check size={14} className="mt-0.5 shrink-0 opacity-100" />
-                    <div className="flex min-w-0 flex-col gap-0.5">
-                      <span className="truncate">{configuredDefaultAndroidDevice}</span>
-                      <span className="truncate text-12 leading-[1.33] text-[var(--cmd-palette-item-meta)]">
-                        {t('settings.computerUse.android.device.unavailable')}
-                      </span>
-                    </div>
-                  </DropdownMenuItem>
-                ) : null}
-                {androidDevices.length === 0 ? (
-                  <div className="px-2 py-2 text-12 text-[var(--settings-section-desc)]">
-                    {t('settings.computerUse.android.device.none')}
-                  </div>
-                ) : (
-                  androidDevices.map((device) => {
-                    const selected = configuredDefaultAndroidDevice === device.device_serial;
-                    const ready = device.state === 'device';
-                    return (
+          <SettingsRow
+            wrap
+            title={t('settings.computerUse.android.device.title')}
+            hint={androidDeviceStatusText}
+            trailing={
+              <div className="flex flex-wrap items-center gap-2">
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <button data-setting-id={computerUseSettings.androidTitle.id}
+                      type="button"
+                      disabled={androidDevicePending || !androidStatus}
+                      className={cn(ACTION_BUTTON_CLASS, 'max-w-[260px] px-2.5')}
+                      aria-label={t('settings.computerUse.android.device.ariaLabel')}
+                      title={configuredDefaultAndroidDevice ?? undefined}
+                    >
+                      <Smartphone size={12} className="shrink-0" />
+                      <span className="truncate">{androidDeviceTriggerLabel}</span>
+                      <ChevronDown size={12} className="shrink-0 opacity-60" />
+                    </button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="min-w-[260px] max-w-[360px]">
+                    <DropdownMenuItem
+                      onClick={() => void handleSelectAndroidDevice(ANDROID_AUTO_DEVICE_VALUE)}
+                      className="flex items-start gap-2"
+                    >
+                      <Check
+                        size={14}
+                        className={cn(
+                          'mt-0.5 shrink-0',
+                          !configuredDefaultAndroidDevice ? 'opacity-100' : 'opacity-0',
+                        )}
+                      />
+                      <div className="flex min-w-0 flex-col gap-0.5">
+                        <span className="truncate">
+                          {t('settings.computerUse.android.device.auto')}
+                        </span>
+                        <span className="truncate text-12 leading-[1.33] text-[var(--cmd-palette-item-meta)]">
+                          {t('settings.computerUse.android.device.autoHint')}
+                        </span>
+                      </div>
+                    </DropdownMenuItem>
+                    {hasStaleConfiguredAndroidDevice ? (
                       <DropdownMenuItem
-                        key={device.device_serial}
-                        disabled={!ready}
-                        onClick={() => void handleSelectAndroidDevice(device.device_serial)}
+                        onClick={() =>
+                          void handleSelectAndroidDevice(configuredDefaultAndroidDevice ?? '')
+                        }
                         className="flex items-start gap-2"
                       >
-                        <Check
-                          size={14}
-                          className={cn('mt-0.5 shrink-0', selected ? 'opacity-100' : 'opacity-0')}
-                        />
+                        <Check size={14} className="mt-0.5 shrink-0 opacity-100" />
                         <div className="flex min-w-0 flex-col gap-0.5">
-                          <span className="truncate">{androidDeviceLabel(device)}</span>
+                          <span className="truncate">{configuredDefaultAndroidDevice}</span>
                           <span className="truncate text-12 leading-[1.33] text-[var(--cmd-palette-item-meta)]">
-                            {ready
-                              ? t('settings.computerUse.android.device.ready')
-                              : t('settings.computerUse.android.device.state', {
-                                  state: device.state,
-                                })}
+                            {t('settings.computerUse.android.device.unavailable')}
                           </span>
                         </div>
                       </DropdownMenuItem>
-                    );
-                  })
-                )}
-              </DropdownMenuContent>
-            </DropdownMenu>
-            <Button data-settings-search-action="Retry, inspect or install the selected computer-control dependency"
-              variant="secondary"
-              size="sm"
-              className="px-3"
-              loading={androidStatusPending}
-              type="button"
-              onClick={() => void handleRefreshAndroidStatus()}
-              disabled={androidStatusPending}
-            >
-              <RefreshCw size={12} className="shrink-0" />
-              {t('settings.computerUse.android.refresh')}
-            </Button>
-          </div>
-        </div>
-        {androidConnectionGuideKind ? (
-          <div className="border-t border-[var(--settings-theme-card-border)] px-4 py-3">
-            <div className="rounded-xl bg-[var(--settings-input-bg)] px-3 py-3">
-              <p className="text-12 font-medium leading-[1.5] text-[var(--settings-section-title)]">
-                {t(
-                  `settings.computerUse.android.connectionGuide.${androidConnectionGuideKind}.title`,
-                )}
-              </p>
-              {androidConnectionGuideKind === 'connect' ? (
-                <>
-                  <p className="mt-1.5 text-12 leading-[1.5] text-[var(--settings-section-desc)]">
-                    {t('settings.computerUse.android.connectionGuide.connect.adbNote')}
-                  </p>
-                  <ol className="mt-2 list-decimal space-y-1 pl-4 text-12 leading-[1.5] text-[var(--settings-section-desc)]">
-                    {[1, 2, 3, 4].map((step) => (
-                      <li key={step}>
-                        {t(`settings.computerUse.android.connectionGuide.connect.step${step}`)}
-                      </li>
-                    ))}
-                  </ol>
-                </>
-              ) : (
-                <p className="mt-1.5 text-12 leading-[1.5] text-[var(--settings-section-desc)]">
+                    ) : null}
+                    {androidDevices.length === 0 ? (
+                      <div className="px-2 py-2 text-12 text-[var(--settings-section-desc)]">
+                        {t('settings.computerUse.android.device.none')}
+                      </div>
+                    ) : (
+                      androidDevices.map((device) => {
+                        const selected = configuredDefaultAndroidDevice === device.device_serial;
+                        const ready = device.state === 'device';
+                        return (
+                          <DropdownMenuItem
+                            key={device.device_serial}
+                            disabled={!ready}
+                            onClick={() => void handleSelectAndroidDevice(device.device_serial)}
+                            className="flex items-start gap-2"
+                          >
+                            <Check
+                              size={14}
+                              className={cn('mt-0.5 shrink-0', selected ? 'opacity-100' : 'opacity-0')}
+                            />
+                            <div className="flex min-w-0 flex-col gap-0.5">
+                              <span className="truncate">{androidDeviceLabel(device)}</span>
+                              <span className="truncate text-12 leading-[1.33] text-[var(--cmd-palette-item-meta)]">
+                                {ready
+                                  ? t('settings.computerUse.android.device.ready')
+                                  : t('settings.computerUse.android.device.state', {
+                                      state: device.state,
+                                    })}
+                              </span>
+                            </div>
+                          </DropdownMenuItem>
+                        );
+                      })
+                    )}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+                <Button data-settings-search-action="Retry, inspect or install the selected computer-control dependency"
+                  variant="secondary"
+                  size="sm"
+                  className="px-3"
+                  loading={androidStatusPending}
+                  type="button"
+                  onClick={() => void handleRefreshAndroidStatus()}
+                  disabled={androidStatusPending}
+                >
+                  <RefreshCw size={12} className="shrink-0" />
+                  {t('settings.computerUse.android.refresh')}
+                </Button>
+              </div>
+            }
+          />
+          {androidConnectionGuideKind ? (
+            <SettingsBlock>
+              <div className="rounded-xl bg-[var(--settings-input-bg)] px-3 py-3">
+                <p className="text-12 font-medium leading-[1.5] text-[var(--settings-section-title)]">
                   {t(
-                    `settings.computerUse.android.connectionGuide.${androidConnectionGuideKind}.body`,
+                    `settings.computerUse.android.connectionGuide.${androidConnectionGuideKind}.title`,
                   )}
                 </p>
-              )}
-            </div>
-          </div>
-        ) : null}
-        <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[var(--settings-theme-card-border)] px-4 py-[14px]">
-          <div className="flex min-w-0 flex-col gap-1">
-            <p
-              id={computerUseSettings.androidAdbTitle.targetId}
-              className="text-12 font-medium leading-[1.5] text-[var(--settings-section-title)]"
-            >
-              {t(computerUseSettings.androidAdbTitle.titleKey)}
-            </p>
-            <p className="min-w-0 break-all text-12 leading-[1.5] text-[var(--settings-section-desc)]">
-              {androidAdbSourceText}
-            </p>
-          </div>
-          <div className="flex min-w-[240px] flex-1 flex-wrap items-center justify-end gap-2">
-            <input data-setting-id={computerUseSettings.androidAdbTitle.id}
-              value={androidAdbPathDraft}
-              onChange={(event) => {
-                setAndroidAdbPathDraft(event.target.value);
-                setAndroidAdbPathEdited(true);
-              }}
-              disabled={androidAdbPathBusy}
-              placeholder={t('settings.computerUse.android.adb.placeholder')}
-              aria-label={t('settings.computerUse.android.adb.pathAria')}
-              className={cn(
-                'h-8 min-w-[220px] flex-1 rounded-full px-3 text-12 outline-none',
-                'border border-[var(--settings-input-border)]',
-                'bg-[var(--settings-input-bg)] text-[var(--settings-input-text)]',
-                'placeholder:text-[var(--settings-input-placeholder)]',
-                'focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
-                'disabled:opacity-50',
-              )}
-            />
-            <Button data-setting-id={computerUseSettings.androidAdbTitle.id}
-              variant="secondary"
-              size="sm"
-              className="px-3"
-              type="button"
-              onClick={() => void handleSaveAndroidAdbPath()}
-              disabled={!androidAdbPathCanSave || androidAdbPathBusy}
-            >
-              {t('settings.computerUse.android.adb.save')}
-            </Button>
-            <Button data-setting-id={computerUseSettings.androidAdbTitle.id}
-              variant="secondary"
-              size="sm"
-              className="px-3"
-              type="button"
-              onClick={() => void handleUseDefaultAndroidAdbPath()}
-              disabled={androidAdbPathBusy}
-            >
-              {t('settings.computerUse.android.adb.useDefault')}
-            </Button>
-          </div>
-        </div>
-      </div>
+                {androidConnectionGuideKind === 'connect' ? (
+                  <>
+                    <p className="mt-1.5 text-12 leading-[1.5] text-[var(--settings-section-desc)]">
+                      {t('settings.computerUse.android.connectionGuide.connect.adbNote')}
+                    </p>
+                    <ol className="mt-2 list-decimal space-y-1 pl-4 text-12 leading-[1.5] text-[var(--settings-section-desc)]">
+                      {[1, 2, 3, 4].map((step) => (
+                        <li key={step}>
+                          {t(`settings.computerUse.android.connectionGuide.connect.step${step}`)}
+                        </li>
+                      ))}
+                    </ol>
+                  </>
+                ) : (
+                  <p className="mt-1.5 text-12 leading-[1.5] text-[var(--settings-section-desc)]">
+                    {t(
+                      `settings.computerUse.android.connectionGuide.${androidConnectionGuideKind}.body`,
+                    )}
+                  </p>
+                )}
+              </div>
+            </SettingsBlock>
+          ) : null}
+          <SettingsRow
+            wrap
+            title={
+              <span id={computerUseSettings.androidAdbTitle.targetId}>
+                {t(computerUseSettings.androidAdbTitle.titleKey)}
+              </span>
+            }
+            hint={<span className="break-all">{androidAdbSourceText}</span>}
+            trailing={
+              <div className="flex min-w-[240px] flex-1 flex-wrap items-center justify-end gap-2">
+                <input data-setting-id={computerUseSettings.androidAdbTitle.id}
+                  value={androidAdbPathDraft}
+                  onChange={(event) => {
+                    setAndroidAdbPathDraft(event.target.value);
+                    setAndroidAdbPathEdited(true);
+                  }}
+                  disabled={androidAdbPathBusy}
+                  placeholder={t('settings.computerUse.android.adb.placeholder')}
+                  aria-label={t('settings.computerUse.android.adb.pathAria')}
+                  className={cn(
+                    'h-8 min-w-[220px] flex-1 rounded-full px-3 text-12 outline-none',
+                    'border border-[var(--settings-input-border)]',
+                    'bg-[var(--settings-input-bg)] text-[var(--settings-input-text)]',
+                    'placeholder:text-[var(--settings-input-placeholder)]',
+                    'focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
+                    'disabled:opacity-50',
+                  )}
+                />
+                <Button data-setting-id={computerUseSettings.androidAdbTitle.id}
+                  variant="secondary"
+                  size="sm"
+                  className="px-3"
+                  type="button"
+                  onClick={() => void handleSaveAndroidAdbPath()}
+                  disabled={!androidAdbPathCanSave || androidAdbPathBusy}
+                >
+                  {t('settings.computerUse.android.adb.save')}
+                </Button>
+                <Button data-setting-id={computerUseSettings.androidAdbTitle.id}
+                  variant="secondary"
+                  size="sm"
+                  className="px-3"
+                  type="button"
+                  onClick={() => void handleUseDefaultAndroidAdbPath()}
+                  disabled={androidAdbPathBusy}
+                >
+                  {t('settings.computerUse.android.adb.useDefault')}
+                </Button>
+              </div>
+            }
+          />
+        </SettingsCard>
 
-      <p className="text-12 leading-[1.5] text-[var(--settings-section-desc)]">
-        {t('settings.computerUse.android.toggleHint')}
-      </p>
-    </div>
+        <p className={SETTINGS_HINT}>
+          {t('settings.computerUse.android.toggleHint')}
+        </p>
+      </SettingsSection>
+    </SettingsSection>
   );
 }

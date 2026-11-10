@@ -150,7 +150,7 @@ import { createSessionSnapshotPatchBuffer } from '../../renderer/features/cc-age
 import {
   backgroundTurnPredatesSessionClear,
   noteSessionClearBoundary,
-} from '../messagePersistBroadcaster.js';
+} from '../messagePersistBroadcaster.desktop.js';
 
 beforeEach(() => {
   vi.clearAllMocks();

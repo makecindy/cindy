@@ -373,7 +373,7 @@ it.each([
 });
 
 // Unit: production MR fetch + shared status service, not a copied mapper.
-// GitHub fixtures cannot detect SHA/paging mismatches or credentials crossing hosts.
+// GitHub fixtures cannot detect GitLab pipeline selection/paging or credentials crossing hosts.
 describe('GitLab MR status', () => {
   const q = {
     provider: 'gitlab' as const,
@@ -392,7 +392,6 @@ describe('GitLab MR status', () => {
     resolvedDiscussionsCount: 3,
     headPipeline: {
       status: 'RUNNING',
-      sha: 'head',
       jobs: {
         count: 5,
         nodes: ['SUCCESS', 'FAILED', 'MANUAL', 'SKIPPED', 'CANCELED'].map((status) => ({ status })),
@@ -422,8 +421,83 @@ describe('GitLab MR status', () => {
     });
     expect(fetch).toHaveBeenCalledTimes(1);
   });
-  it('queries the MR host once, counts discussions and conservatively summarizes complete current-head jobs', async () => {
+  it('skips optional manual jobs but keeps blocking or unknown manual jobs pending', async () => {
     const value = mr();
+    value.headPipeline.status = 'SUCCESS';
+    const nodes = [
+      { status: 'MANUAL', allowFailure: true },
+      { status: 'MANUAL', allowFailure: false },
+      { status: 'MANUAL' },
+      { status: 'MANUAL', allowFailure: 'true' },
+    ];
+    value.headPipeline.jobs = {
+      count: nodes.length,
+      nodes,
+      pageInfo: { hasNextPage: false },
+    };
+    const fetch = vi.fn(async (_input: unknown, init?: RequestInit) => {
+      const { query } = JSON.parse(String(init?.body));
+      value.headPipeline.jobs.nodes = /nodes\s*\{[^}]*\ballowFailure\b/.test(query)
+        ? nodes
+        : nodes.map(({ status }) => ({ status }));
+      return new Response(JSON.stringify({ data: { project: { mergeRequest: value } } }));
+    });
+    expect((await fetchGitlabMr('fake-token', q, fetch)).checks).toEqual({
+      total: 4,
+      passed: 0,
+      failed: 0,
+      pending: 3,
+      skipped: 1,
+    });
+  });
+  it('counts only latest GitLab jobs after a failed attempt is retried successfully', async () => {
+    const attempts = [
+      { status: 'FAILED', retried: true },
+      { status: 'SUCCESS', retried: false },
+      { status: 'SUCCESS', retried: false },
+    ];
+    const fetch = vi.fn(async (_input: unknown, init?: RequestInit) => {
+      const { query } = JSON.parse(String(init?.body));
+      const nodes = /jobs\s*\([^)]*retried\s*:\s*false/.test(query)
+        ? attempts.filter((job) => !job.retried)
+        : attempts;
+      const value = mr();
+      value.headPipeline.status = 'SUCCESS';
+      value.headPipeline.jobs = {
+        count: nodes.length,
+        nodes,
+        pageInfo: { hasNextPage: false },
+      };
+      return new Response(JSON.stringify({ data: { project: { mergeRequest: value } } }));
+    });
+
+    expect((await fetchGitlabMr('fake-token', q, fetch)).checks).toEqual({
+      total: 2,
+      passed: 2,
+      failed: 0,
+      pending: 0,
+      skipped: 0,
+    });
+  });
+  it('reports zero checks without a head pipeline but keeps a missing diff head unknown', async () => {
+    const value = { ...mr(), headPipeline: null };
+    const fetch = vi.fn(
+      async () => new Response(JSON.stringify({ data: { project: { mergeRequest: value } } })),
+    );
+    expect((await fetchGitlabMr('fake-token', q, fetch)).checks).toEqual({
+      total: 0,
+      failed: 0,
+      passed: 0,
+      pending: 0,
+      skipped: 0,
+    });
+    value.diffHeadSha = '';
+    expect((await fetchGitlabMr('fake-token', q, fetch)).checks).toBeNull();
+  });
+  it('summarizes GitLab-selected merged-result jobs', async () => {
+    const value = mr();
+    const pipeline = { ...value.headPipeline, sha: 'synthetic-merge-commit' };
+    value.headPipeline = pipeline;
     const fetch = vi
       .fn()
       .mockImplementation(
@@ -439,9 +513,6 @@ describe('GitLab MR status', () => {
       path: 'group/sub/project',
       iid: '7',
     });
-    value.headPipeline.sha = 'old';
-    expect((await fetchGitlabMr('fake-token', q, fetch)).checks).toBeNull();
-    value.headPipeline.sha = 'head';
     value.headPipeline.jobs.pageInfo.hasNextPage = true;
     expect((await fetchGitlabMr('fake-token', q, fetch)).checks).toBeNull();
     value.headPipeline.jobs.pageInfo.hasNextPage = false;

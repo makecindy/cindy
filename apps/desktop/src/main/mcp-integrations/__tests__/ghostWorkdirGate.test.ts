@@ -25,13 +25,14 @@ import type {
   GhostSetupEnsureRequest,
   GhostSetupEnsureResult,
 } from '../../cindy-brain/ghostSetupCoordinator';
-import { t } from '../../i18n';
+import { t } from '../../i18n.desktop';
 import { Session } from '@cindy/maker-core';
 import { resolveGhostFsSessionSnapshot } from '../../maker-ipc/ghostFsSessionSnapshot';
 import { createIpcError } from '../../../shared/ipc-errors';
 import { installedGhostStoragePart } from '../../../shared/pluginIdentity';
-import type { CindyGhostsHostDeps } from '../ghost';
+import type { CindyGhostsHostDeps } from '../ghost.desktop';
 import type { GhostInstallConsentPrompt } from '../../cindy-brain/ghostInstallConsent';
+import { beginHeadlessGhostSetupTurn } from '../ghostSetupInteractionSurface';
 import type { InstalledGhost, GhostSetupAssessment } from '../../../shared/ghost';
 
 const tmpUserData = fs.mkdtempSync(path.join(os.tmpdir(), 'ghost-workdir-gate-'));
@@ -130,6 +131,8 @@ vi.mock('../../git-context/githubSetupIpc.js', () => ({
 vi.mock('../../appSessionState.js', () => ({
   ownerScopedUserDataPath: (...parts: string[]) => path.join(tmpUserData, ...parts),
   getActiveAppSession: () => ({ mode: 'cloud', dataOwnerId: 'member-1', generation: 7 }),
+  activeOwnerScopeKey: () => 'cloud:member-1:7',
+  getActiveDataOwnerPushStamp: () => ({ dataOwnerId: 'member-1', ownerGeneration: 7 }),
   isAppSessionBoundaryPending: appSessionBoundaryPendingMock,
 }));
 vi.mock('../../maker-host/logger-adapter.js', () => {
@@ -261,7 +264,7 @@ vi.mock('../../plugin-publisher/host.js', () => ({
   startPluginPublish: startPluginPublishMock,
 }));
 // Existing cases classify through the mock below; only handoff routing reads non-media extensions.
-vi.mock('../../cindy-media/blobStore.js', () => ({ mimeForExt: (ext: string) => (['.csv', ''].includes(ext) ? null : 'image/png') }));
+vi.mock('../../cindy-media/blobStore.desktop.js', () => ({ mimeForExt: (ext: string) => (['.csv', ''].includes(ext) ? null : 'image/png') }));
 vi.mock('../../cindy-media/ledger.js', () => ({
   hasRef: ledgerHasRefMock,
   hasGhostToolGrant: ledgerHasGhostToolGrantMock,
@@ -291,7 +294,7 @@ vi.mock('../../plugin-contributions/prepared.js', () => ({
   getPreparedContribution: (...args: unknown[]) => communityPreparedMock(...args),
 }));
 
-const { authorizeDesktopSessionPath, getCindyGhostsMcpDeps, getGhostRosterPrompt, setPageControlGhostProvider } = await import('../ghost');
+const { authorizeDesktopSessionPath, getCindyGhostsMcpDeps, getGhostRosterPrompt, setPageControlGhostProvider } = await import('../ghost.desktop');
 const { createCindyGhostsMcpServer, handleGhostList, handleGhostInfo, handleGhostCall, handleGhostManual } = await import('cindy-tools');
 const chatAttachments = await import('../../cindy-media/chatAttachments');
 const { setGhostDisabledForWorkdir, listDisabledGhostIdsForWorkdir, isGhostDisabledForWorkdir } =
@@ -1292,6 +1295,21 @@ describe('写路径 roundtrip(真实存储,tmp userData)', () => {
 });
 
 describe('connect_account shares Host live plugin policy', () => {
+  // Tier 1, #9250 live acceptance: owner IM turns have a headless marker, but
+  // teammate authorization cards are persistent Desktop cards, not turn waiters.
+  it('opens a persistent owner teammate connection from IM while ordinary headless setup stays blocked', async () => {
+    const release = beginHeadlessGhostSetupTurn('bot-session');
+    try {
+      isAuthorizationSessionMock.mockResolvedValueOnce(true);
+      const result = await makeDeps('codex', 'bot-session', 'bot-instance', { source: 'imessage' }).connectAccount!({ kind: 'host', id: 'im-imessage' });
+      expect(result).not.toMatchObject({ errorCode: 'NO_SESSION_CONTEXT' });
+      expect(authorizationRequestMock).toHaveBeenCalledWith('bot-session', { kind: 'host', id: 'im-imessage' });
+    } finally { release(); }
+    // The ordinary channel lane lacks a transient marker but remains headless.
+    isAuthorizationSessionMock.mockResolvedValueOnce(false);
+    expect(await makeDeps('codex', 'bot-session', 'bot-instance', { source: 'imessage' }).connectAccount!({ kind: 'plugin', id: 'art' }))
+      .toMatchObject({ errorCode: 'NO_SESSION_CONTEXT' });
+  });
   it('passes dynamically discovered plugins to Host without treating builtin toolsets as plugin grants', async () => {
     isAuthorizationSessionMock.mockResolvedValueOnce(true);
     const deps = makeDeps('claude-code', 'bot-session', 'bot-instance', {
@@ -1579,6 +1597,48 @@ describe('花名册 / ghost_list 过滤', () => {
     expect(dispatchMock).toHaveBeenNthCalledWith(1, expect.objectContaining({ ghostId: '_root__art' }));
     expect(dispatchMock).toHaveBeenNthCalledWith(2, expect.objectContaining({ ghostId: '_ns__acme__art' }));
     await expect(deps.getAwakeGhost('art')).resolves.toMatchObject({ ok: false, errorCode: 'GHOST_AMBIGUOUS' });
+  });
+
+  // Regression: an older local simulator hid working device connectivity behind
+  // duplicate discovery. Exercise the real roster/list/info/call entry points;
+  // earlier namespace tests only covered organizations, not local/public pairs.
+  // Minimal input: two enabled chip instances with the same id (unit tier).
+  it.each([
+    ['0.3.38', '0.3.42', null],
+    ['0.3.43', '0.3.42', 'local'],
+    ['0.3.42', '0.3.42', null],
+    ['0.3.100', '0.3.42', 'local'],
+    ['0.3.42-beta.2', '0.3.42', null],
+    ['0.3.43-beta.2', '0.3.42', 'local'],
+    ['0.3.42+dev', '0.3.42+market', null],
+  ])('selects newest local=%s public=%s in everyday discovery and dispatch', async (localVersion, publicVersion, winner) => {
+    const base = chipGhost('art') as InstalledGhost;
+    const local = { ...base, namespace: 'local', namespaceState: 'confirmed' as const,
+      manifest: { ...base.manifest, version: localVersion! }, dir: path.join(tmpUserData, '_ns', 'local', 'art') };
+    const published = { ...base, namespace: null, namespaceState: 'confirmed' as const,
+      manifest: { ...base.manifest, version: publicVersion! }, dir: path.join(tmpUserData, '_ns', '_root', 'art') };
+    listMock.mockReturnValue([local, published]);
+    const deps = makeDeps();
+    expect(await deps.listAwakeGhosts()).toMatchObject([{ id: 'art', namespace: winner }]);
+    expect(await deps.listAwakeGhosts()).toHaveLength(1);
+    expect(deps.getRosterItems?.()).toMatchObject([{ id: 'art', namespace: winner }]);
+    const roster = getGhostRosterPrompt({ workingDir: WORKDIR });
+    expect(roster).toContain(`"namespace":${JSON.stringify(winner)}`);
+    expect(roster).not.toContain(`"namespace":${JSON.stringify(winner === null ? 'local' : null)}`);
+    expect(await deps.getAwakeGhost('art')).toMatchObject({ ok: true, ghost: { namespace: winner } });
+    expect(await deps.callGhostTool({ ghostId: 'art', tool: 'run', args: {} })).toMatchObject({ ok: true });
+    expect(dispatchMock).toHaveBeenLastCalledWith(expect.objectContaining({
+      ghostId: winner === 'local' ? '_ns__local__art' : '_root__art',
+    }));
+    // The next query sees updates without cached selection or rewriting installs.
+    local.manifest.version = '9.0.0';
+    expect(await deps.getAwakeGhost('art')).toMatchObject({ ok: true, ghost: { namespace: 'local' } });
+    expect(await deps.listAwakeGhosts()).toMatchObject([{ id: 'art', namespace: 'local' }]);
+    // Explicit addresses keep developer requests exact even when not listed.
+    expect(await deps.getAwakeGhost('art', null)).toMatchObject({ ok: true, ghost: { namespace: null } });
+    local.enabled = false;
+    expect(await deps.listAwakeGhosts()).toMatchObject([{ id: 'art', namespace: null }]);
+    expect(await deps.getAwakeGhost('art')).toMatchObject({ ok: true, ghost: { namespace: null } });
   });
 
   it('被禁用的意识不进花名册与现查清单;其余照常', async () => {
@@ -3571,6 +3631,7 @@ describe('market install live authority', () => {
     const ghost = { manifest: { id: 'mail-suite', name: 'Mail', version: '1' }, enabled: true };
     const market = {
       snapshot: vi.fn(async () => ({ items: [], unavailableReason: null, customSourceNames: [], unavailableCustomSourceNames: [] })),
+      query: vi.fn(async () => ({ items: [], nextCursor: null, counts: null, unavailableReason: null, customSourceNames: [], unavailableCustomSourceNames: [] })),
       detail: vi.fn(async () => ({ ghostId: 'mail-suite', releaseId: 'r1', manifest: ghost.manifest })),
       install: vi.fn(async (_id: string, _options: unknown, context: InstallContext) => { context.assertCurrent?.(); return { ghost }; }),
     };
@@ -3846,7 +3907,32 @@ describe('plugin page audience and shared tool execution', () => {
     const info = await deps.getAwakeGhost('art');
     expect(info).toMatchObject({ ok: true, ghost: { tools: [] } });
     const result = await deps.callGhostTool({ ghostId: 'art', tool: 'run', args: {} });
+    expect(result).toMatchObject({ ok: false, errorCode: 'TOOL_NOT_FOUND',
+      message: expect.stringContaining('只供插件页面调用') });
+    expect(result).toHaveProperty('message', expect.stringContaining('模型可见的工具: (无)'));
+    expect(dispatchMock).not.toHaveBeenCalled();
+  });
+  // The real ghost_call entry used to mistake an
+  // app-only tool for a missing capability. Existing case checked only the code.
+  // Minimal input: one app-only tool + one model opener; unit, no sandbox/network.
+  it.each(['run', 'missing', 'nested_operation'])('guides model calls to %s without dispatching', async tool => {
+    const ghost = pageGhost();
+    ghost.manifest.tools!.push({ name: 'open_view', description: '打开页面' });
+    ghost.manifest.mcpApps = { ui: {
+      resources: [{ uri: 'ui://records', file: 'ui/page.html' }],
+      tools: { run: { visibility: ['app'] }, open_view: { resourceUri: 'ui://records', visibility: ['model'] } },
+    } };
+    if (tool === 'nested_operation') ghost.manifest.tools!.push({ name: 'call_tool', description: '分派' });
+    listMock.mockReturnValue([ghost]);
+    const result = await makeDeps().callGhostTool({ ghostId: 'art', tool, args: {} });
     expect(result).toMatchObject({ ok: false, errorCode: 'TOOL_NOT_FOUND' });
+    if (tool === 'run') {
+      expect(result).toHaveProperty('message', '插件 art 已声明工具 run，但它只供插件页面调用，模型不能直接 ghost_call。请先通过 ghost_call 调用模型可见的开页面工具: open_view，再由页面调用 run。不要据此判定插件缺少该能力。');
+    } else if (tool === 'missing') {
+      expect(result).toHaveProperty('message', '插件 art 没有工具 missing;可用工具: open_view');
+    } else {
+      expect(result).toHaveProperty('message', expect.stringContaining('tool:"call_tool",args:{name:"nested_operation"'));
+    }
     expect(dispatchMock).not.toHaveBeenCalled();
   });
   // #4421074557, unit: real ghost_call entry must strip page-private metadata even
@@ -4258,4 +4344,14 @@ describe('对话文件交接(cindy_handoff_files)', async () => {
     });
     expect(dispatchedArgs()).toEqual({ keep: 1 });
   });
+});
+
+// Host extraction must preserve Desktop's persistent setup card lifetime;
+// a tool timeout is not a user cancellation of the setup interaction.
+it('does not couple ordinary desktop setup cards to a tool abort signal', async () => {
+  listMock.mockReturnValue([chipGhost('art')]);
+  const controller = new AbortController();
+  await makeDeps().callGhostTool({ ghostId: 'art', tool: 'run', args: {}, signal: controller.signal });
+  expect(ensureReadyMock).toHaveBeenCalled();
+  expect(ensureReadyMock.mock.calls[0][0].signal).toBeUndefined();
 });

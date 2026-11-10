@@ -17,7 +17,11 @@ const h = vi.hoisted(() => ({
 }));
 
 vi.mock('electron', () => ({ app: { isPackaged: true, getPath: () => '/tmp/cindy-test-user-data' } }));
-vi.mock('@cindy/maker-core', () => ({ cleanProcessEnv: () => ({ PATH: '/usr/bin' }) }));
+vi.mock('@cindy/maker-core', async () => {
+  // Keep the real status parser under test; only the ambient env is stubbed.
+  const actual = await vi.importActual<typeof import('@cindy/maker-core')>('@cindy/maker-core');
+  return { cleanProcessEnv: () => ({ PATH: '/usr/bin' }), parseClaudeCliLoginStatus: actual.parseClaudeCliLoginStatus };
+});
 vi.mock('../../agent-binaries/index.js', () => ({ getReadyBinaryPath: () => h.binary }));
 vi.mock('../../logger.js', () => ({
   createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
@@ -33,7 +37,7 @@ vi.mock('@cindy/anthropic-compat-proxy', async (original) => ({
   hasProxyEnvConfig: () => h.envProxy,
 }));
 vi.mock('../claude-cli-proxy-bridge.js', () => ({ ensureClaudeCliProxyBridge: h.bridge }));
-vi.mock('node:child_process', () => ({ spawn: h.spawn }));
+vi.mock('node:child_process', () => ({ spawn: h.spawn, execFile: vi.fn() }));
 vi.mock('node:worker_threads', () => ({
   Worker: class extends EventEmitter {
     constructor(_file: string, { workerData }: { workerData: { binary: string; env: NodeJS.ProcessEnv } }) {
@@ -60,7 +64,7 @@ import {
   refreshClaudeCliLoginStatus,
   resetClaudeNativeCliForTest,
   runClaudeCliLogin,
-} from '../claude-native-cli.js';
+} from '../claude-native-cli.desktop.js';
 
 type FakeChild = EventEmitter & { stdout: EventEmitter; stderr: EventEmitter; kill: ReturnType<typeof vi.fn> };
 
@@ -112,6 +116,20 @@ beforeEach(() => {
 });
 
 describe('parseClaudeCliLoginStatus', () => {
+  it('isolates concurrent custom profiles without publishing them as the default CLI login', async () => {
+    h.spawn.mockImplementation((_binary: string, _args: string[], options: { env: Record<string, string> }) =>
+      fakeChild({ stdout: JSON.stringify({ loggedIn: true, authMethod: 'claude.ai', email: options.env.CLAUDE_CONFIG_DIR ?? 'default' }) }));
+    const [a, b] = await Promise.all([
+      refreshClaudeCliLoginStatus({ configDir: '/profiles/a' }),
+      refreshClaudeCliLoginStatus({ configDir: '/profiles/b' }),
+    ]);
+    expect(a.email).toBe('/profiles/a');
+    expect(b.email).toBe('/profiles/b');
+    expect(peekClaudeCliLoginStatus()).toBeNull();
+    await refreshClaudeCliLoginStatus();
+    expect(peekClaudeCliLoginStatus()?.email).toBe('default');
+    expect(h.spawn.mock.calls[2][2].env).not.toHaveProperty('CLAUDE_CONFIG_DIR');
+  });
   it('只把 Claude.ai 订阅账号的 OAuth 登录当作 Claude 订阅', () => {
     expect(parseClaudeCliLoginStatus(SUBSCRIPTION)).toEqual({
       loggedIn: true,

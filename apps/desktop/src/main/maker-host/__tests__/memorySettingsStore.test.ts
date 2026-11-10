@@ -15,9 +15,18 @@ vi.mock('electron', () => ({
 }));
 
 describe('memory-settings-store', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'xdt-memory-settings-'));
     vi.resetModules();
+    const { configureUserDataDir } = await import('../../userDataPath.js');
+    const { configureOwnerContext } = await import('../../ownerContext.js');
+    configureUserDataDir(userDataDir);
+    // Signed-out profile: owner-scoped writes go to the configured fallback,
+    // while the settings file itself lives at the profile root.
+    configureOwnerContext({
+      read: () => ({ dataOwnerId: null, generation: 0, boundaryPending: false }),
+      fallbackBaseDir: () => userDataDir,
+    });
   });
 
   afterEach(() => {

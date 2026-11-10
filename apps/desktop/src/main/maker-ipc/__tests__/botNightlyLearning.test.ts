@@ -34,7 +34,7 @@ vi.mock('../../localDb/client/current.js', () => {
   };
   return { getDbClient: () => db };
 });
-vi.mock('../../messagePersistBroadcaster.js', () => ({ drainPersistQueue: async () => {} }));
+vi.mock('../../messagePersistBroadcaster.desktop.js', () => ({ drainPersistQueue: async () => {} }));
 vi.mock('../../logger.js', () => ({ createLogger: () => ({ warn: () => {}, info: () => {} }) }));
 vi.mock('../../learn-host/skillsIndex.js', () => ({ listInstalledSkills: async () => ({ entries: [], truncatedCount: 0 }) }));
 vi.mock('../botRuntimeEpochRefreshSignal.js', () => ({ requestBotRuntimeEpochRefresh: h.refresh }));

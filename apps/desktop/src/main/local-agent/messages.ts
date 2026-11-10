@@ -1,4 +1,4 @@
-import { t } from '../i18n.js';
+import { t } from '../i18n.desktop.js';
 
 /** Localize product copy at the host boundary; stable wire codes stay untranslated. */
 export function localAgentMessage(code: string): string {

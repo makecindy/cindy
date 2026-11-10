@@ -117,17 +117,21 @@ describe('selectRecentTitleMessages', () => {
     ]);
   });
 
-  it('never selects a subagent assistant as the legacy fallback', () => {
-    const rows = [
-      row('user', 1, '检查协同 UI'),
-      row('assistant', 2, 'subagent 内部播报', { parentUuid: 'toolu-1' }),
-      row('assistant', 3, '主线程最终回复'),
-    ];
-    expect(selectRecentTitleMessages(rows, 8).map((message) => message.text)).toEqual([
-      '检查协同 UI',
-      '主线程最终回复',
-    ]);
-  });
+  // 标题/通知的主回答判据须与消息渲染一致；子代理迟到时也不能顶替主回答。
+  // 旧用例把主回答放在末尾，未暴露兼容 tool parent 被当成顶层的错误。
+  it.each(['toolu-1', 'call_1', 'chatcmpl-tool-a1b2c3d4e5f60718', 'Task_1'])(
+    'never selects a subagent assistant as the legacy fallback (%s)', (parentUuid) => {
+      const rows = [
+        row('user', 1, '检查协同 UI'),
+        row('assistant', 2, '主线程最终回复'),
+        row('assistant', 3, 'subagent 内部播报', { parentUuid }),
+      ];
+      expect(selectRecentTitleMessages(rows, 8).map((message) => message.text)).toEqual([
+        '检查协同 UI',
+        '主线程最终回复',
+      ]);
+    },
+  );
 
   it('keeps legacy Claude transcript parentUuid while excluding confirmed tool parents', () => {
     const rows = [

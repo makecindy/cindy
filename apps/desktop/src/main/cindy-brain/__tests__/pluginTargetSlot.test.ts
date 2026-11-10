@@ -15,7 +15,7 @@ import { createGhostProductionCallbacks } from './ghostProductionCallbacksFixtur
 
 const loadPipe = createGhostProductionCallbacks<{
   send(event: { sender: { id: number; isDestroyed(): boolean } }, payload: unknown): Promise<unknown>;
-}>({ callbacks: { send: ['ipcMain.handle', 'ghost-pipe:send'] } });
+}>({ variables: ['executionPipe'], callbacks: { send: ['ipcMain.handle', 'ghost-pipe:send'] } });
 
 const receipts = new Map<string, PluginTargetReceipt>();
 const key = (pluginId: string, requestKey: string) => JSON.stringify([pluginId, requestKey]);
@@ -61,7 +61,7 @@ describe('plugin target queries and delivery', () => {
     const approvalRevision = vi.fn<PluginTargetAdapter['approvalRevision']>(() => 'approved-install');
     const assertCreatePermission = vi.fn();
     const assertProjectDispatch = vi.fn(async (_pluginId: string, _taskId: string) => {});
-    slot.adapter = { store: () => store, approvalRevision, candidates, session: async () => 'chosen', send, create, withdraw, assertCreatePermission, assertProjectDispatch };
+    slot.adapter = { store: () => store, approvalRevision, candidates, targetForSession: async () => ({ kind: 'task', id: 'chosen' }), session: async () => 'chosen', send, create, withdraw, assertCreatePermission, assertProjectDispatch };
     const guard = vi.fn();
     const call = (payload: unknown, plugin = 'plugin') => slot.handle(plugin, payload, guard);
     const request = { kind: 'send', target: { kind: 'task', id: 'chosen' },
@@ -423,6 +423,37 @@ describe('plugin target queries and delivery', () => {
       .rejects.toMatchObject({ code: 'TARGET_UNAVAILABLE' });
     await expect(f.call(f.request)).rejects.toMatchObject({ code: 'TARGET_UNAVAILABLE' });
     expect(f.send).not.toHaveBeenCalled();
+  });
+  // unit: the new session selector must share fixed-target availability and authorization
+  // checks; previously resolve({session}) was rejected before reaching the Host adapter.
+  it('resolves a session without delivery and rechecks target availability and authorization', async () => {
+    const f = fixture();
+    expect(await f.call({ kind: 'resolve', session: 'session' })).toEqual({
+      kind: 'task', id: 'chosen', label: 'Chosen target', detail: '/workspace/example',
+    });
+    expect(receipts.size).toBe(0);
+    expect(f.create).not.toHaveBeenCalled();
+    expect(f.send).not.toHaveBeenCalled();
+    f.candidates.mockResolvedValue([]);
+    await expect(f.call({ kind: 'resolve', session: 'session' })).rejects.toMatchObject({ code: 'TARGET_UNAVAILABLE' });
+    f.slot.adapter!.targetForSession = async () => {
+      f.guard.mockImplementation(() => { throw Object.assign(new Error('revoked'), { code: 'PERMISSION_DENIED' }); });
+      return { kind: 'task', id: 'chosen' };
+    };
+    await expect(f.call({ kind: 'resolve', session: 'session' })).rejects.toMatchObject({ code: 'PERMISSION_DENIED' });
+  });
+  it.each([{}, { session: '' }, { session: null }, { session: 1 }, { session: 'a\0b' },
+    { session: 'a'.repeat(201) }, { session: 'session', target: { kind: 'task', id: 'chosen' } }])(
+    'rejects invalid or ambiguous resolve selectors: %j', async selector => {
+      await expect(fixture().call({ kind: 'resolve', ...selector })).rejects.toMatchObject({ code: 'INVALID_PARAMS' });
+    },
+  );
+  it('rejects a companion whose canonical session changed during resolution', async () => {
+    const f = fixture();
+    f.slot.adapter!.targetForSession = async () => ({ kind: 'bot', id: 'chosen' });
+    await expect(f.call({ kind: 'resolve', session: 'chosen' })).resolves.toMatchObject({ kind: 'bot', id: 'chosen' });
+    f.slot.adapter!.session = async () => 'replacement';
+    await expect(f.call({ kind: 'resolve', session: 'chosen' })).rejects.toMatchObject({ code: 'TARGET_UNAVAILABLE' });
   });
   it.each([false, true, 'ultrafast'] as const)('creates in the specified project with fastMode %s', async (fastMode) => {
     const f = fixture();
