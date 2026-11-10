@@ -6170,13 +6170,18 @@
         "allowInboundAria": "{{name}}이(가) 본 기기를 제어하도록 허용할지 전환",
         "peerControlOff": "상대방이 제어를 허용하지 않음",
         "masterOffHint": "먼저 위의 메인 스위치를 켜세요",
-        "controllingThisMac": "Cindy에 연결됨"
+        "controllingThisMac": "Cindy에 연결됨",
+        "useThisDeviceModels": "이 컴퓨터 모델 사용",
+        "allowModelUseAria": "{{name}}이(가) 이 컴퓨터의 모델을 쓰도록 허용"
       },
       "toast": {
         "revoked": "이 기기의 액세스 권한을 철회했습니다",
         "revokeFailed": "철회에 실패했습니다",
         "restored": "이 기기의 액세스 권한을 복원했습니다",
-        "restoreFailed": "복원에 실패했습니다"
+        "restoreFailed": "복원에 실패했습니다",
+        "modelUseRestored": "그 컴퓨터가 이 컴퓨터의 모델을 다시 쓸 수 있습니다",
+        "modelUseRevoked": "그 컴퓨터는 더 이상 이 컴퓨터의 모델을 쓸 수 없습니다",
+        "modelUseFailed": "「이 컴퓨터 모델 사용」을 저장하지 못했습니다. 다시 시도해 주세요."
       },
       "sections": {
         "myDevices": "내 기기",

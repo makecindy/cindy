@@ -6170,13 +6170,18 @@
         "allowInboundAria": "切換是否允許 {{name}} 控制本機",
         "peerControlOff": "對方未允許遠端控制",
         "masterOffHint": "需先開啟上方總開關",
-        "controllingThisMac": "已連接到 Cindy"
+        "controllingThisMac": "已連接到 Cindy",
+        "useThisDeviceModels": "用本機模型",
+        "allowModelUseAria": "允許 {{name}} 用本機的模型"
       },
       "toast": {
         "revoked": "已撤銷該裝置的訪問權限",
         "revokeFailed": "撤銷失敗",
         "restored": "已恢復該裝置的訪問權限",
-        "restoreFailed": "恢復失敗"
+        "restoreFailed": "恢復失敗",
+        "modelUseRestored": "已允許這台電腦用本機的模型",
+        "modelUseRevoked": "這台電腦不能再用本機的模型",
+        "modelUseFailed": "「用本機模型」未能儲存，請重試"
       },
       "sections": {
         "myDevices": "我的裝置",

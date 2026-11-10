@@ -200,6 +200,7 @@ function makeDeps(overrides?: Partial<DeviceLinkIpcDeps>): DeviceLinkIpcDeps {
     disconnectAll: vi.fn(),
     revoke: vi.fn(),
     restore: vi.fn(),
+    setModelUse: vi.fn(),
     setDeviceControlEnabled: vi.fn(async () => []),
     clearDeviceResponsiveness: vi.fn(),
     broadcast: vi.fn(),
