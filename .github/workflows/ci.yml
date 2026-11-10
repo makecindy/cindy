@@ -68,7 +68,8 @@ jobs:
       - name: Check settings search coverage
         env:
           SETTINGS_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before || 'HEAD^' }}
-        run: pnpm check:settings-search --base-ref "$SETTINGS_BASE_REF"
+          SETTINGS_PR_HEAD: ${{ github.event.pull_request.head.sha || '' }}
+        run: pnpm check:settings-search --base-ref "$SETTINGS_BASE_REF" --pr-head "$SETTINGS_PR_HEAD"
 
       # test:unit 的 runner 自测不能跟着 Vitest 分片重复执行；在检查 job 中跑一次，
       # Linux 单测分片只负责 workspace unit tier。
