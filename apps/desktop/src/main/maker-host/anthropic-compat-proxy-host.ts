@@ -134,6 +134,7 @@ import { claudeUpstreamEndpoint } from './runtime-configs.js';
 import { readSilentEncryptedRetrySettings } from './silent-encrypted-retry-store.js';
 import {
   createClaudeSessionActivityResponseObserver,
+  isClaudeContextUsageProbeUrl,
   recordClaudeApiActivity,
 } from './claude-session-background-activity.js';
 import {
@@ -768,13 +769,16 @@ export function createModelRoutingTransform(): RoutingTransform {
     // 都记一笔活动时刻。routingTransform 会处理无 body 控制面请求与 JSON 请求；
     // 非 JSON 的 POST/PUT/PATCH 不经过这里,由响应侧 observer 兜底观察活动。
     // 开销 = 一次 header 读 + 一次活跃会话表反解 + Map.set,非 per-token 路径。
+    // count_tokens 上下文用量探测不算活动(#8671):/context 卡片触发的计量请求
+    // 不生成 token,计入会把查用量误点亮成「后台子任务运行中」;判据与响应侧
+    // observer 用同一处导出,两边必须一致。
     const sdkSessionId = ctx.headers['x-claude-code-session-id'];
     const ccSessionId = sdkSessionId && _resolveCcSessionId
       ? _resolveCcSessionId(sdkSessionId)
       : null;
     // 受邀者的托管会话不在活跃会话表里：会话由路由令牌的登记给出。
     const sessionId = piSessionId ?? (guest ? guest.sessionId : ccSessionId);
-    if (sdkSessionId) {
+    if (sdkSessionId && !isClaudeContextUsageProbeUrl(ctx.url)) {
       recordClaudeApiActivity(
         sdkSessionId,
         ccSessionId,
