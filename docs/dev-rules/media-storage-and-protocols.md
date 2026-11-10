@@ -244,7 +244,12 @@ Windows 使用 CF_HDROP，macOS 使用文件 URL 剪贴板，视频／GIF 均按
   下载并通过 `ingestMedia` 返回受管媒体；需要确认时暂停同一次操作，批准后自动继续。
 - Guide 的 `allowedUrlHosts` 保留为已确认来源名单。名单内正常目标自动下载；名单外
   来源、HTTP、特殊端口、地址内登录信息、受限网络等权限要求通过
-  Cindy 普通 `permission` 交互确认。卡片只说明实际地址、原因和本次范围，不出现
+  Cindy 普通 `permission` 交互确认。任务处于稳定的完全访问（`bypassPermissions`）时，只跳过
+  「名单外的普通 HTTPS 来源」这一项确认；HTTP、特殊端口、地址内登录信息、受限网络仍走同一张
+  确认卡，权限切换中（稳定权限为空）也不跳过。实现见
+  `apps/desktop/src/main/cindy-media/mediaDownloadApproval.ts`，回归见
+  `apps/desktop/src/main/cindy-media/__tests__/mediaDownloadApproval.test.ts`。
+  卡片只说明实际地址、原因和本次范围，不出现
   Guide、“模型说明”等内部概念，不使用仅限本机的 `ghost_grant_confirm`。
 - 用户拒绝后结束本次下载，不自动重试或再次审批。网络失败由客户端最多自动尝试
   三次，同一次操作及其只读地址刷新复用已经批准的来源和权限；只有目标或所需权限
