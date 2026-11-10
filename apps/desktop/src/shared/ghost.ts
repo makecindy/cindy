@@ -2755,6 +2755,7 @@ export function ghostPermissionItems(manifest: GhostManifest): GhostPermissionIt
   // - 默认:纯沙箱、无文件无网络。
   let codeDetailKey: string;
   if (manifest.node) codeDetailKey = 'codeDetailWithNode';
+  else if (declaredGhostHostToolGroups(manifest).includes('terminal')) codeDetailKey = 'codeDetailTerminal';
   else if (manifest.network) codeDetailKey = 'codeDetailNetwork';
   else codeDetailKey = 'codeDetail';
   items.push({

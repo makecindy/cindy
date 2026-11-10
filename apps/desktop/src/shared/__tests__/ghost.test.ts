@@ -4,7 +4,7 @@ import { validateGhostManifest as validateProtocolManifest } from '@cindy/plugin
 // Host groups are separate install permissions; unknown groups never become permissions.
 it('validates and projects each host tool group independently in both manifest readers', () => {
   const base = { schemaVersion: 3, minCindyVersion: '0.1.0', id: 'host-tools', name: 'Host tools', version: '1.0.0', entry: 'main.js' };
-  const agent = { hostTools: ['history', 'scheduler', 'future-group'] };
+  const agent = { hostTools: ['history', 'scheduler', 'terminal', 'future-group'] };
   for (const validate of [validateGhostManifest, validateProtocolManifest]) {
     const result = validate({ ...base, agent });
     expect(result).toMatchObject({ ok: true, manifest: { agent } });
@@ -14,8 +14,10 @@ it('validates and projects each host tool group independently in both manifest r
   const after = validateGhostManifest({ ...base, agent });
   if (!before.ok || !after.ok) throw new Error('invalid fixture');
   expect(ghostPermissionItems(after.manifest).filter(item => item.key.startsWith('agent:host-tools:')).map(item => item.key))
-    .toEqual(['agent:host-tools:history', 'agent:host-tools:scheduler']);
-  expect(diffGhostPermissionItems(before.manifest, after.manifest).added.map(item => item.key)).toEqual(['agent:host-tools:scheduler']);
+    .toEqual(['agent:host-tools:history', 'agent:host-tools:scheduler', 'agent:host-tools:terminal']);
+  // A command-capable plugin must not be described as unable to access local files.
+  expect(ghostPermissionItems(after.manifest).find(item => item.kind === 'code')?.detailKey).toBe('codeDetailTerminal');
+  expect(diffGhostPermissionItems(before.manifest, after.manifest).added.map(item => item.key)).toEqual(['agent:host-tools:scheduler', 'agent:host-tools:terminal', 'code']);
 });
 
 // 第23项：HTTPS 域名旧批准不能变成 HTTP 或自定义端口批准；双 validator 与权限 diff 共用真实入口。

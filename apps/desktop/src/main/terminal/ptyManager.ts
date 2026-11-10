@@ -278,7 +278,10 @@ export class PtyManager<Owner extends PtyOwner = WebContents> {
     const session = this.sessions.get(id);
     if (!session || session.exit || session.stopping) return;
     session.stopping = true; session.pendingInput = '';
-    try { session.pty.kill('SIGKILL'); } catch (error) { session.stopping = false; throw error; }
+    try {
+      if (this.platform === 'win32') session.pty.kill();
+      else session.pty.kill('SIGKILL');
+    } catch (error) { session.stopping = false; throw error; }
   }
 
   /**

@@ -1,6 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import { permissionModeOrAsk } from '@cindy/maker-shared/permission-mode';
 import { createIMessageMcpServer } from './imessageMcpServer';
+import { createTerminalToolExecutor } from '../terminal/terminalToolAccess.js';
+import { getDesktopHostTerminalService } from '../terminal/terminalService.desktop.js';
+import { getDefaultShellPref } from '../terminal/terminalPrefsStore.js';
+import { findGhostForInstanceId } from '../cindy-brain/index.js';
 import { getPiKernelManager } from '../agent-binaries/index.js';
 import { PiKernelError } from '../agent-binaries/pi-kernel-manager.js';
 import { manageAppSettings } from '../app-settings/sections.js';
@@ -720,6 +724,9 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
     // 启动早期跑, 那时 registerMakerIpc 还没执行, holder 是 null; 回调真正被调时
     // (LLM 调工具时) registerMakerIpc 早已执行完毕, holder 已 ready。
     xdtHelper: {
+      terminal: createTerminalToolExecutor({ service: getDesktopHostTerminalService(), owner: getActiveDataOwnerPushStamp,
+        pending: isAppSessionBoundaryPending, pluginCall: getPluginHostToolCaller, getGhost: findGhostForInstanceId,
+        getSession: getTaskActionSession, pluginDirectory: id => ownerScopedUserDataPath('ghost-fs', id), defaultShell: getDefaultShellPref }),
       github: { call: (caller, method, args) => withAccountDataAccess(caller, async assertCurrent => {
         const session = typeof args.session_id === 'string' ? args.session_id : caller;
         const parts = session.split('::');

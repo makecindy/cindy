@@ -24,6 +24,30 @@ it('deletes an explicit target through the shared lifecycle handler and protects
   expect(deleteSession).toHaveBeenCalledTimes(2);
 });
 
+// Unit: the real MCP registry validates terminal parameters and resolves caller identity per call.
+// Existing helper tests cover history/control, not Host-managed commands (requirement 22).
+it('discovers and dispatches terminal jobs through the shared schema for tasks and plugins', async () => {
+  const caller = { kind: 'plugin' as const, pluginId: 'console', dataOwnerId: 'owner', ownerGeneration: 1 };
+  let context: LiziMcpSessionContext = { agentKind: 'codex', workingDir: '/task', sessionId: 'task' };
+  const call = vi.fn(async (_context: LiziMcpSessionContext, _method: string, _args: Record<string, unknown>, _signal?: AbortSignal) => ({ scope: 'local', jobs: [] }));
+  const server = createXdtHelperMcpServer({ terminal: { call } }, { agentKind: 'codex', workingDir: '', getSessionContext: () => context });
+  const [ct, st] = InMemoryTransport.createLinkedPair();
+  const client = new Client({ name: 'terminal-test', version: '1' });
+  await Promise.all([server.connect(st), client.connect(ct)]);
+  try {
+    expect(parsePayload(await client.callTool({ name: 'list_tools', arguments: {} })).categories)
+      .toEqual(expect.arrayContaining([expect.objectContaining({ name: 'terminal' })]));
+    expect(parsePayload(await client.callTool({ name: 'call_tool', arguments: { name: 'terminal_start', args: { program: { command: '/bin/sh', args: ['-c', 'printf ready'] } } } }))).toMatchObject({ ok: true });
+    expect(call.mock.calls[0]).toMatchObject([context, 'terminal_start', { program: { command: '/bin/sh', args: ['-c', 'printf ready'] } }, expect.any(AbortSignal)]);
+    context = { agentKind: 'codex', workingDir: '', hostCaller: caller };
+    expect(parsePayload(await server.hostTools.call('terminal_list', {}))).toMatchObject({ ok: true, scope: 'local' });
+    expect(call.mock.calls[1][0]).toEqual(context);
+    expect(parsePayload(await server.hostTools.call('terminal_resize', { id: 'job', cols: 0, rows: 20 }))).toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+    expect(parsePayload(await server.hostTools.call('terminal_start', { owner: 'other' }))).toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+    expect(call).toHaveBeenCalledTimes(2);
+  } finally { await client.close(); await server.close(); }
+});
+
 it('validates attachment reads against the same history scope before host I/O', async () => {
   let denied = false;
   const readSessionAttachment = vi.fn(async () => ({ ok: true as const, base64: 'dGV4dA==', nextOffset: null }));

@@ -13,6 +13,13 @@ import { createPluginControlPipe } from '../../desktop/src/main/cindy-brain/node
 import { GhostNetworkSlot } from '../../desktop/src/main/cindy-brain/networkSlot.ts';
 import { GhostOauthAccountManager } from '../../desktop/src/main/cindy-brain/ghostOauthAccounts.ts';
 import { createHostNodeRuntimeBroker } from './plugins/node-process.ts';
+import { createXdtHelperMcpServer } from '@cindy/mcps';
+import { HostTerminalService } from '../../desktop/src/main/terminal/hostTerminalService.ts';
+import { defaultPtySpawn } from '../../desktop/src/main/terminal/ptyFactory.ts';
+import { createTerminalToolExecutor } from '../../desktop/src/main/terminal/terminalToolAccess.ts';
+import { handlePluginHostToolRequest } from '../../desktop/src/main/cindy-brain/hostToolSlot.ts';
+import { authorizePluginHostToolCall, getPluginHostToolCaller } from '../../desktop/src/main/mcp-integrations/hostToolCaller.ts';
+import { getDesktopMcpToolApprovalPolicy } from '../../desktop/src/main/maker-host/mcp-tool-approval-policy.ts';
 
 import { dataOwnerStorageKey } from '../../desktop/src/main/dataOwnerPath.ts';
 import { listInstalledPlugins } from './plugins.mjs';
@@ -118,6 +125,9 @@ test('runs and reaps real plugin workers through the common broker', async t => 
       } else if (request.method === 'account') {
         const response = await cindy.fetch({ url: 'https://api.example.test/account' });
         result = { response, receivedSecrets: !!request.cindy?.secrets };
+      } else if (request.method === 'terminal') {
+        const response = await cindy.host.call('cindy_helper', request.params.tool, request.params.args);
+        result = JSON.parse(response.content.find(item => item.type === 'text').text);
       } else result = { value: request.params.value, pid: process.pid,
         filtered: process.env.CINDY_TEST_PRIVATE_HOST_VALUE === undefined,
         privatePort: process.parentPort === undefined && process.send === undefined };
@@ -126,6 +136,12 @@ test('runs and reaps real plugin workers through the common broker', async t => 
   `);
   fs.writeFileSync(path.join(dir, 'child.cjs'),
     `process.stdout.write(JSON.stringify({ arg: process.argv[2], nestedSpawn: !!globalThis.__CINDY_NODE__ }));`);
+  fs.writeFileSync(path.join(dir, 'terminal.cjs'), `
+    process.stdout.write('managed-ready\\n');
+    require('node:readline').createInterface({ input: process.stdin }).on('line', line => {
+      process.stdout.write(JSON.stringify({ line, filtered: process.env.CINDY_TEST_PRIVATE_HOST_VALUE === undefined }) + '\\n');
+    });
+  `);
   const previous = process.env.CINDY_TEST_PRIVATE_HOST_VALUE;
   process.env.CINDY_TEST_PRIVATE_HOST_VALUE = 'synthetic-secret-for-filter-test';
   t.after(() => { if (previous === undefined) delete process.env.CINDY_TEST_PRIVATE_HOST_VALUE;
@@ -133,10 +149,10 @@ test('runs and reaps real plugin workers through the common broker', async t => 
   const ghost = { manifest: { id: 'test-node', version: '1.0.0', node: {
     entry: 'worker.cjs', protocol: 'json-rpc-stdio', entries: ['child.cjs'], childSpawn: true,
     secretBindings: [{ key: 'raw_account', label: 'Account', oauthSecret: 'account', methods: ['raw-account'] }],
-  }, network: { hosts: ['api.example.test', 'http://127.0.0.1:' + port, 'ws://127.0.0.1:' + port],
+  }, agent: { hostTools: ['terminal'] }, network: { hosts: ['api.example.test', 'http://127.0.0.1:' + port, 'ws://127.0.0.1:' + port],
     secrets: [{ key: 'account', label: 'Account', source: 'oauth', inject: { header: 'Authorization', format: 'Bearer {value}', hosts: ['api.example.test'] },
       oauth: { authorizeUrl: 'https://accounts.example.test/authorize', tokenUrl: 'https://accounts.example.test/token', scopes: ['read'], clientId: 'fixture-client' } }] } }, dir, enabled: true,
-    approval: { state: 'approved', revision: 'real-worker-fixture' } };
+    approval: { state: 'approved', revision: 'real-worker-fixture' }, approvedHostToolGroups: ['terminal'] };
   const original = { ...ghost, manifest: { ...ghost.manifest, id: 'source-account' } };
   const values = new Map([
     ['source-account:account-client-id', 'fixture-client'],
@@ -159,7 +175,31 @@ test('runs and reaps real plugin workers through the common broker', async t => 
     oauthTokens: { getFreshAccessToken: (...args) => oauth.getFreshAccessToken(...args), invalidateAccessToken: (...args) => oauth.invalidateAccessToken(...args) },
     readGhostMedia: async () => null, takeDirDeposit: () => null, writeSaveDeposit: async () => null,
     saveGhostMedia: async () => { throw new Error('media not used'); }, isSupportedMediaMime: () => false });
+  // Real PTY through the same Host service, gateway and registry. Only native
+  // owner confirmation is acknowledged by the fixture; no App install is fabricated here.
+  let readyResolve, echoResolve;
+  const ready = new Promise(resolve => { readyResolve = resolve; });
+  const echo = new Promise(resolve => { echoResolve = resolve; });
+  const terminalExits = new Map();
+  const terminals = new HostTerminalService({ spawn: (...args) => {
+    const pty = defaultPtySpawn(...args);
+    let text = '';
+    pty.onData(chunk => { text += chunk; if (text.includes('managed-ready')) readyResolve(); if (text.includes('"filtered":true')) echoResolve(); });
+    terminalExits.set(pty.pid, new Promise(resolve => pty.onExit(resolve)));
+    return pty;
+  } });
+  const owner = () => ({ dataOwnerId: 'fixture-owner', ownerGeneration: 1 });
+  const terminalTools = createTerminalToolExecutor({ service: terminals, owner, pending: () => false,
+    getGhost: () => ghost, getSession: () => undefined, pluginDirectory: () => dir, pluginCall: getPluginHostToolCaller });
+  const hostToolPorts = { owner, getGhost: () => ghost,
+    createRuntime: (_server, caller) => createXdtHelperMcpServer({ terminal: terminalTools, authorizeCall: authorizePluginHostToolCall },
+      { agentKind: 'codex', workingDir: '', hostCaller: caller }).hostTools,
+    approveGroup: async (_id, group, current) => current() && ghost.approvedHostToolGroups.includes(group),
+    policy: (server, tool, args) => getDesktopMcpToolApprovalPolicy({ serverName: server, toolName: 'call_tool', toolParams: { name: tool, args } }),
+    confirm: async () => true };
   const broker = createHostNodeRuntimeBroker(workerEntry, { getGhost: () => ghost,
+    hostToolRequest: (id, request, current) => handlePluginHostToolRequest(id, request, current, hostToolPorts),
+    onStopped: id => terminals.disposePlugin(id),
     resolveOauthSecret: (id, key, accountId) => oauth.getNodeAccessToken(id, key, ghost.manifest.network.secrets[0].oauth, accountId),
     networkRequest: (id, request) => request.op === 'fetch' ? network.handleFetchRequest(id, request) : network.handleNetworkRequest(id, request) });
   try {
@@ -185,11 +225,35 @@ test('runs and reaps real plugin workers through the common broker', async t => 
     const raw = await broker.handleRequest('test-node', { type: 'node-request', method: 'raw-account' });
     assert.equal(raw.ok, false);
     assert.equal(raw.errorCode, 'HOST_INJECTION_REQUIRED');
+    const terminalCall = async (tool, args = {}) => {
+      const result = await broker.handleRequest('test-node', { type: 'node-request', method: 'terminal', params: { tool, args } });
+      assert.equal(result.ok, true, JSON.stringify(result));
+      assert.equal(result.result.ok, true, JSON.stringify(result));
+      return result.result;
+    };
+    const terminal = await terminalCall('terminal_start', { program: { command: process.execPath, args: [path.join(dir, 'terminal.cjs')] } });
+    await ready;
+    const output = await terminalCall('terminal_read', { id: terminal.job.id });
+    assert.match(output.chunks.map(chunk => chunk.data).join(''), /managed-ready/);
+    await terminalCall('terminal_write', { id: terminal.job.id, data: 'managed-input\n' });
+    await echo;
+    const resumed = await terminalCall('terminal_read', { id: terminal.job.id, cursor: output.cursor, generation: output.generation });
+    assert.match(resumed.chunks.map(chunk => chunk.data).join(''), /managed-input/);
+    assert.match(resumed.chunks.map(chunk => chunk.data).join(''), /"filtered":true/);
+    assert.equal((await terminalCall('terminal_list')).jobs[0].id, terminal.job.id);
+    await terminalCall('terminal_stop', { id: terminal.job.id });
+    await terminalExits.get(terminal.job.pid);
+    assert.equal((await terminalCall('terminal_list')).jobs[0].status, 'exited');
+    await terminalCall('terminal_forget', { id: terminal.job.id });
+    assert.deepEqual((await terminalCall('terminal_list')).jobs, []);
+    const background = await terminalCall('terminal_start', { program: { command: process.execPath, args: [path.join(dir, 'terminal.cjs')] } });
     await broker.stopAndWait('test-node');
+    await terminalExits.get(background.job.pid);
+    assert.equal(terminals.manager.has(background.job.id), false);
     assert.throws(() => process.kill(first.result.pid, 0), { code: 'ESRCH' });
     ghost.enabled = false;
     assert.equal((await broker.handleRequest('test-node', { type: 'node-request', method: 'echo' })).ok, false);
-  } finally { await network.disposeAll(); await broker.stopAndWait('test-node'); broker.destroyAll(); }
+  } finally { terminals.disposeScoped(); await network.disposeAll(); await broker.stopAndWait('test-node'); broker.destroyAll(); }
 });
 
 // Unit: private IPC must decode arbitrary OS fragmentation and settle pending

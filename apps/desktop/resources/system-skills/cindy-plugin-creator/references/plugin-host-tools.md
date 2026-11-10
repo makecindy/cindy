@@ -15,6 +15,7 @@
 | `handoff` | `cindy_helper` | 工具目录中归属此组的协作能力 |
 | `settings` | `cindy_helper` | 应用设置与运行配置 |
 | `scheduler` | `cindy_scheduler` | 定时任务管理 |
+| `terminal` | `cindy_helper` | 宿主管理的命令、交互终端与后台作业 |
 
 每组在安装、更新确认和详情页各列一行权限。新增组需要批准；移除组立即收权。旧安装记录不会自动获得新能力，首次调用可请求宿主确认。用户拒绝后由详情页手动重试，插件不要循环请求。未知组按 Manifest v3 原样保存，当前宿主不授权。
 
@@ -84,6 +85,47 @@ user 锚点复制它之前的历史；assistant 锚点复制至下一条 user �
 不会借用任务身份，也不会继承别的任务权限档。收件任务继续使用它当前的权限与 Plan 状态，界面标签和模型来源说明同源。
 `send_to_session` 支持 `deviceId::sessionId`；派发前协商 `pluginCaller:1`，旧电脑缺少该能力时返回 `REMOTE_UNSUPPORTED`，不发送正文。
 来源标识为 `deviceId::pluginId`，仅用于来源展示；排队执行仍由既有一次性派发回执复核账号、安装、批准与原参数。
+
+## 命令、终端和后台作业
+
+声明 `agent.hostTools:["terminal"]` 后，逻辑页和 Node Worker 使用同一入口。启动、输入、
+调整尺寸、停止和清除已退出记录每次经原宿主风险判定与确认；读取、列表不会执行新命令。
+命令以用户身份在执行电脑上运行，能访问其本机文件和应用；这项能力不是文件沙箱。
+宿主只传筛选后的系统路径、语言与用户配置目录环境，不继承宿主 API key、token 或 Node
+启动注入变量，也不自动传任何 `node.secretBindings` 的凭证。
+
+```js
+const unpack = result => {
+  const value = JSON.parse(result.content.find(item => item.type === 'text').text);
+  if (result.isError || !value.ok) throw new Error(value.errorCode || 'TERMINAL_FAILED');
+  return value;
+};
+const { job } = unpack(await cindy.host.call('cindy_helper', 'terminal_start', {
+  program: { command: '/bin/sh', args: ['-c', 'printf "ready\\n"'] }
+}));
+// Windows 请显式选用本机存在的程序；省略 program 则启动用户选定的交互 shell。
+let output = unpack(await cindy.host.call('cindy_helper', 'terminal_read', { id: job.id }));
+output = unpack(await cindy.host.call('cindy_helper', 'terminal_read', {
+  id: job.id, cursor: output.cursor, generation: output.generation
+}));
+```
+
+`terminal_start` 立即返回 `{scope:'local',job}`，job 含 id、pid、generation、执行目录、
+起始时刻、尺寸、状态与退出事实。`cwd` 缺省为本插件私有文件目录；普通任务调用时为真实任务
+工作目录。`program.command/args` 直接传给程序；需要 shell 语法时显式选择该 shell 及参数。
+`cols/rows` 为 1–1000；`shell` 可按 `list_tools({name:'terminal_start'})` 查询可选值。
+
+`terminal_list` 返回当前调用方的 `jobs`。`terminal_write({id,data})` 写入最多 64 KiB UTF-8
+文本（换行与控制字符显式包含在 data）；`terminal_resize({id,cols,rows})` 改尺寸；
+`terminal_stop({id})` 请求停止该进程，收到退出后状态才是 `exited`；
+`terminal_forget({id})` 只清除已退出记录。不能以别的插件或任务的 id 越过归属。
+
+输出缓冲最多 1 MiB / 256 段，每次读取最多 64 KiB，`chunks` 含 sequence/data。
+每个客户端独立保存 cursor/generation；相同游标可重复读取，`hasMore` 表示还有保留输出，
+`resetRequired` 表示代次变化或旧输出被淘汰，不能把缺口拼成完整输出。
+作业不随一次调用或读连接结束；重连用 `terminal_list` 找回。停用、更新、卸载或切账号清理
+对应资源，Host 进程退出后不会自动重放命令。SSH 工作区返回 `REMOTE_TERMINAL_UNSUPPORTED`，
+不把远端路径当本机路径；旧 Host 未注册这些工具时按不支持处理。
 
 ## 完整历史与附件
 

@@ -18,6 +18,9 @@ import type { IPty } from 'node-pty';
 import type { WebContents } from 'electron';
 
 import { PtyManager, type DataPayload, type ExitPayload } from '../ptyManager';
+import { HostTerminalService, type HostTerminalScope } from '../hostTerminalService';
+import { createTerminalToolExecutor } from '../terminalToolAccess';
+import type { InstalledGhost } from '../../../shared/ghost';
 
 // ---------- Fake IPty ----------
 
@@ -315,6 +318,109 @@ describe('PtyManager host process lifecycle', () => {
     mgr.disposeOwner(owner);
     expect(mgr.list(owner)).toEqual([]);
     expect(lastSpawn!.__dataListenersDisposed).toBe(true);
+  });
+  it('stops Windows PTYs without passing an unsupported POSIX signal', () => {
+    const mgr = makeManager({ platform: 'win32' });
+    const owner = makeFakeWebContents() as unknown as WebContents;
+    mgr.create({ id: 'p', cwd: '/tmp', owner });
+    mgr.stop('p');
+    expect(lastSpawn!.kill).toHaveBeenCalledExactlyOnceWith();
+  });
+});
+
+// 需求 22 的作用域与断开恢复不能仅由 UI 推送测试覆盖；同一生产服务、fake PTY、unit。
+describe('HostTerminalService caller ownership', () => {
+  function scope(key: string, current: () => boolean = () => true): HostTerminalScope {
+    return { key, revision: 'r1', pluginId: key, defaultCwd: '/tmp', environment: { PATH: '/usr/bin' },
+      assertCurrent: () => { if (!current()) throw new Error('TERMINAL_SCOPE_CHANGED'); } };
+  }
+  function service() {
+    return new HostTerminalService({ spawn: (command, args, options) => {
+      const fake = makeFakePty({ command, args, cols: options.cols, rows: options.rows, env: options.env });
+      lastSpawn = fake; allSpawns.push(fake); return fake;
+    } });
+  }
+  it('keeps one process across readers and rejects another caller before revealing output or writing', async () => {
+    const host = service(), a = scope('a'), b = scope('b');
+    const started = await host.start(a, { program: { command: '/usr/bin/example', args: [] } });
+    lastSpawn!.__triggerData('private output');
+    expect(host.list(a)).toMatchObject([{ id: started.id }]);
+    expect(host.list(b)).toEqual([]);
+    expect(() => host.read(b, started.id)).toThrow('TERMINAL_NOT_FOUND');
+    expect(() => host.write(b, started.id, 'input')).toThrow('TERMINAL_NOT_FOUND');
+    const output = host.read(a, started.id);
+    expect(host.read({ ...a }, started.id)).toEqual(output);
+    expect(allSpawns).toHaveLength(1);
+    host.disposeScoped(); expect(lastSpawn!.__killed).toBe(true);
+  });
+  it('cleans only the invalidated plugin and rejects stale authority before starting', async () => {
+    const host = service();
+    let current = true;
+    const a = scope('a', () => current), b = scope('b');
+    const started = await host.start(a, {}), first = lastSpawn!;
+    await host.start(b, {}); const second = lastSpawn!;
+    current = false;
+    expect(() => host.read(a, started.id)).toThrow('TERMINAL_SCOPE_CHANGED');
+    host.disposePlugin('a');
+    expect(first.__killed).toBe(true); expect(second.__killed).toBe(false);
+    await expect(host.start(a, {})).rejects.toThrow('TERMINAL_SCOPE_CHANGED');
+    expect(allSpawns).toHaveLength(2);
+    host.disposeScoped();
+  });
+  it('retains stopped output and refuses to forget a running job', async () => {
+    const host = service(), a = scope('a');
+    const started = await host.start(a, {});
+    expect(() => host.forget(a, started.id)).toThrow('TERMINAL_STILL_RUNNING');
+    host.stop(a, started.id); lastSpawn!.__triggerExit({ exitCode: 1 });
+    expect(host.list(a)).toMatchObject([{ id: started.id, status: 'exited' }]);
+    host.forget(a, started.id); expect(host.list(a)).toEqual([]);
+    host.disposeScoped();
+  });
+  it('does not let a stale installation scope dispose jobs from its replacement', async () => {
+    const host = service();
+    let version = 1;
+    const old = scope('same', () => version === 1);
+    await host.start(old, {}); const previous = lastSpawn!;
+    version = 2;
+    const fresh = { ...scope('same', () => version === 2), revision: 'r2' };
+    const started = await host.start(fresh, {}); const replacement = lastSpawn!;
+    expect(previous.__killed).toBe(true);
+    expect(() => host.read(old, started.id)).toThrow('TERMINAL_SCOPE_CHANGED');
+    expect(replacement.__killed).toBe(false);
+    expect(host.list(fresh)).toMatchObject([{ id: started.id }]);
+    host.disposeScoped();
+  });
+  it('requires gateway-attested plugin identity and keeps reconnected clients on the same installation jobs', async () => {
+    const host = service();
+    const caller = { kind: 'plugin' as const, pluginId: 'p', dataOwnerId: 'owner', ownerGeneration: 1 };
+    const ghost = { enabled: true, dir: '/fixture/p', approval: { state: 'approved', revision: 'r1' },
+      approvedHostToolGroups: ['terminal'], manifest: { agent: { hostTools: ['terminal'] } } } as InstalledGhost;
+    let attested = false;
+    const call = createTerminalToolExecutor({ service: host, owner: () => ({ dataOwnerId: 'owner', ownerGeneration: 1 }), pending: () => false,
+      getGhost: () => ghost, getSession: () => undefined, pluginDirectory: () => '/tmp',
+      pluginCall: () => attested ? { caller, server: 'cindy_helper', tool: 'terminal_start', argsJson: '{}', assertCurrent() {} } : undefined });
+    const context = { agentKind: 'codex', workingDir: '', hostCaller: caller };
+    await expect(call.call(context, 'terminal_start', {})).rejects.toThrow('PERMISSION_DENIED');
+    expect(allSpawns).toHaveLength(0);
+    attested = true;
+    const result = await call.call(context, 'terminal_start', { cwd: '/tmp' });
+    expect(result).toMatchObject({ scope: 'local', job: { id: expect.any(String) } });
+    const resumed = await call.call({ ...context }, 'terminal_list', {});
+    expect(resumed.jobs).toMatchObject([{ id: (result.job as { id: string }).id }]);
+    ghost.manifest.agent!.hostTools = [];
+    await expect(call.call(context, 'terminal_list', {})).rejects.toThrow('TERMINAL_SCOPE_CHANGED');
+    host.disposeScoped();
+  });
+  it('binds ordinary tasks to the live Session instance and refuses local execution for SSH contexts', async () => {
+    const host = service();
+    const session = { instanceId: 'live', workDir: '/tmp' };
+    const call = createTerminalToolExecutor({ service: host, owner: () => ({ dataOwnerId: 'owner', ownerGeneration: 1 }), pending: () => false,
+      getGhost: () => null, getSession: () => session, pluginDirectory: () => '/tmp', pluginCall: () => undefined });
+    await expect(call.call({ agentKind: 'codex', workingDir: '/tmp', sessionId: 's', sessionInstanceId: 'old' }, 'terminal_start', {})).rejects.toThrow('SESSION_REQUIRED');
+    await expect(call.call({ agentKind: 'pi', workingDir: '/remote', sessionId: 's', remoteHostId: 'ssh' }, 'terminal_start', {})).rejects.toThrow('REMOTE_TERMINAL_UNSUPPORTED');
+    expect(allSpawns).toHaveLength(0);
+    expect(await call.call({ agentKind: 'codex', workingDir: '/ignored', sessionId: 's' }, 'terminal_start', {})).toMatchObject({ job: { cwd: expect.stringMatching(/tmp$/) } });
+    host.disposeScoped();
   });
 });
 

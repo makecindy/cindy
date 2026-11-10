@@ -162,6 +162,8 @@ export interface GhostNodeRuntimeBrokerDeps {
   authenticatedFetch?: (ghostId: string, request: Record<string, unknown>, authorization: string,
     assertCurrent: () => void, signal: AbortSignal) => Promise<unknown>;
   hostToolRequest?: (ghostId: string, payload: unknown, current: () => boolean) => Promise<unknown>;
+  /** Explicit disable/update/uninstall releases Host-owned resources; idle worker exit does not. */
+  onStopped?(ghostId: string): void;
   networkRequest?: (ghostId: string, payload: Record<string, unknown>) => Promise<unknown>;
   secretSaved?: (ghostId: string, secretKey: string) => boolean;
   /** 只解析本插件显式引用的 OAuth 槽；不交付 refresh token。 */
@@ -1348,6 +1350,7 @@ export class GhostNodeRuntimeBroker {
   stop(ghostId: string): void {
     this.stopGeneration.set(ghostId, (this.stopGeneration.get(ghostId) ?? 0) + 1);
     this.stoppedGhosts.add(ghostId);
+    this.deps.onStopped?.(ghostId);
     for (const starting of [...(this.startingChildren.get(ghostId) ?? [])]) {
       this.stopStartingChild(starting);
     }
