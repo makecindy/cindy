@@ -108,6 +108,8 @@ import {
   hasDeliveryNamespace,
   installedGhostPhysicalRelId,
   installedGhostStoragePart,
+  pluginInstallStoragePart,
+  pluginNewInstallRelId,
   knownDeliveryNamespacesDiffer,
   pluginLedgerRecordKey,
   sameDeliveryNamespaceState,
@@ -295,15 +297,26 @@ function installedGhostMatchingMarketPlugin(
 }
 
 /** Exact instance first; fall back to one explicit scan for install and mutation preflight. */
-function installedGhostMatchingMarketPluginNow(
+export function installedGhostMatchingMarketPluginNow(
   plugin: { ghostId: string; namespace?: string | null; scope?: string },
 ): InstalledGhost | undefined {
   const manager = getGhostManager();
-  const exact = typeof manager.findInstalledInstance === 'function'
-    ? manager.findInstalledInstance(plugin.ghostId)
-    : null;
   const expectedNamespace = hasDeliveryNamespace(plugin) ? plugin.namespace : null;
-  if (exact && exact.namespace === expectedNamespace) return exact;
+  if (typeof manager.findInstalledInstance === 'function') {
+    const candidates = new Set<string>([plugin.ghostId]);
+    if (isValidGhostId(plugin.ghostId)) {
+      try {
+        candidates.add(pluginInstallStoragePart(pluginNewInstallRelId(
+          createPluginLogicalIdentity(expectedNamespace, plugin.ghostId),
+        )));
+      } catch { /* invalid logical identity falls back to the full list */ }
+    }
+    for (const candidate of candidates) {
+      let exact: InstalledGhost | null = null;
+      try { exact = manager.findInstalledInstance(candidate); } catch { /* fall through */ }
+      if (exact && exact.namespace === expectedNamespace && exact.manifest.id === plugin.ghostId) return exact;
+    }
+  }
   return installedGhostMatchingMarketPlugin(plugin, listMarketInstallations());
 }
 
@@ -1307,7 +1320,7 @@ export class PluginMarketService {
         state = value;
       } catch { throwIpcError('INVALID_PARAMS', 'Invalid Plugin market cursor'); }
     }
-    const local = owner ? await this.readLocalInstallSnapshot(owner) : EMPTY_LOCAL_INSTALL_SNAPSHOT;
+    const local = owner ? await this.readLocalInstallSnapshot(owner, !input.cursor) : EMPTY_LOCAL_INSTALL_SNAPSHOT;
     assertCurrent();
     const customSourceNames = owner ? this.customSourceNamesSafe(owner) : [];
     const includeCounts = !input.cursor && input.counts !== false;
@@ -1720,7 +1733,7 @@ export class PluginMarketService {
           requireSameMarketOwner(owner);
           log.warn('plugin usage reporting provenance unavailable');
         }
-        if (rebound) await refreshPluginUsageBindings();
+        if (rebound) await refreshPluginUsageBindings(true);
       }
       await yieldMarketReconciliation(owner);
       await this.backfillOfficialCindyGithubTrust(ledger, owner, refresh);
@@ -4349,11 +4362,12 @@ export class PluginMarketService {
   }
 
   /** Coalesce pending read-only scans; completed approval/installation facts are never cached. */
-  private readLocalInstallSnapshot(owner: ActiveAppSession): Promise<LocalInstallSnapshot> {
-    const key = marketOwnerKey(owner);
+  private readLocalInstallSnapshot(owner: ActiveAppSession, fresh = false): Promise<LocalInstallSnapshot> {
+    const ownerKey = marketOwnerKey(owner);
+    const key = ownerKey + (fresh ? ':fresh' : ':reuse');
     const pending = this.localReadFlights.get(key);
     if (pending) return pending;
-    const flight = this.localInstallSnapshotAsync(owner, this.ledgerForOwner(owner), this.localRefreshContext(owner))
+    const flight = this.localInstallSnapshotAsync(owner, this.ledgerForOwner(owner), this.localRefreshContext(owner, fresh))
       .finally(() => {
         if (this.localReadFlights.get(key) === flight) this.localReadFlights.delete(key);
       });
@@ -4362,14 +4376,17 @@ export class PluginMarketService {
   }
 
   /** Keep one read-only installation view per owner so pagination reuses the same scan. */
-  private localRefreshContext(owner: ActiveAppSession): PluginMarketRefreshContext {
+  private localRefreshContext(owner: ActiveAppSession, fresh = false): PluginMarketRefreshContext {
     const key = marketOwnerKey(owner);
     const now = Date.now();
     const existing = this.localRefreshContexts.get(key);
-    if (existing) {
-      existing.lastUsed = now;
-      return existing.context;
+    if (existing && !fresh) {
+      if (now - existing.lastUsed <= LOCAL_REFRESH_CONTEXT_TTL_MS) {
+        existing.lastUsed = now;
+        return existing.context;
+      }
     }
+    if (existing) this.localRefreshContexts.delete(key);
     const context: PluginMarketRefreshContext = { installed: createMarketBackgroundRefresh() };
     this.localRefreshContexts.set(key, { context, lastUsed: now });
     this.pruneLocalRefreshContexts(now);

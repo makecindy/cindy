@@ -3734,7 +3734,7 @@ function pluginUsageServerRoot(): string {
   catch { return ''; }
 }
 
-async function bindPluginUsage(ghost: InstalledGhost, previousRevision?: string): Promise<void> {
+async function bindPluginUsage(ghost: InstalledGhost, previousRevision?: string, force = false): Promise<void> {
   const scope = activeOwnerScopeKey();
   const service = currentPluginUsageService();
   if (!service) return;
@@ -3742,7 +3742,7 @@ async function bindPluginUsage(ghost: InstalledGhost, previousRevision?: string)
   const existing = ghost.approval.state === 'approved' && typeof service.captureBound === 'function'
     ? service.captureBound(instanceKey, ghost.approval.revision)
     : null;
-  if (previousRevision === undefined && existing) return;
+  if (!force && previousRevision === undefined && existing) return;
   try {
     await withGhostInstallLock(ghost.manifest.id, async () => {
       if (activeOwnerScopeKey() !== scope || isAppSessionBoundaryPending()) return;
@@ -3758,11 +3758,11 @@ async function bindPluginUsage(ghost: InstalledGhost, previousRevision?: string)
 }
 
 /** Initialize generations before normal tool traffic; no old call is buffered for later replay. */
-export async function refreshPluginUsageBindings(): Promise<void> {
+export async function refreshPluginUsageBindings(force = false): Promise<void> {
   const scope = activeOwnerScopeKey();
   for (const ghost of getGhostManager().list()) {
     if (activeOwnerScopeKey() !== scope || isAppSessionBoundaryPending()) return;
-    await bindPluginUsage(ghost);
+    await bindPluginUsage(ghost, undefined, force);
   }
 }
 
