@@ -1264,6 +1264,46 @@ it('forwards connection tool cancellation to the host in all three harnesses', a
   }
 });
 
+// Screenshot regression: an authored theme could be dropped into the UI, but
+// its task could not discover an importer and launched another Cindy instead.
+// Unit, real MCP wire: existing settings tests never import theme files. One
+// .cindy path must be discoverable/callable; wrong types, SSH and guests cannot write.
+it('discovers theme imports in each harness and keeps them on the authorized local host', async () => {
+  for (const agentKind of ['codex', 'claude-code', 'pi'] as const) {
+    let restricted = false;
+    let remoteHostId: string | undefined;
+    const install = vi.fn(async () => ({ status: 'installed', refreshed: true, names: ['Mist'] }));
+    const server = createXdtHelperMcpServer({ themePackages: { import: install },
+      resolveSurface: async () => restricted ? 'restricted' : 'default' }, {
+      agentKind, workingDir: '/fixture', sessionId: 'theme-owner',
+      getSessionContext: () => ({ agentKind, workingDir: '/fixture', sessionId: 'theme-owner', remoteHostId }),
+    });
+    const client = new Client({ name: 'theme-import-test', version: '1' });
+    const [ct, st] = InMemoryTransport.createLinkedPair();
+    await Promise.all([server.connect(st), client.connect(ct)]);
+    const call = (filePath: string) => client.callTool({ name: 'call_tool', arguments: { name: 'import_theme_package', args: { filePath } } });
+    try {
+      const search = parsePayload(await client.callTool({ name: 'list_tools', arguments: { query: '导入主题' } }));
+      const item = (search.items as any[]).find(item => item.key === 'appearance.themes');
+      expect(item).toMatchObject({ availability: 'available' });
+      const detail = parsePayload(await client.callTool({ name: 'list_tools', arguments: { key: item.key } })).control as any;
+      expect(detail.operations).toEqual([expect.objectContaining({ name: 'import_theme_package' })]);
+      expect(install).not.toHaveBeenCalled();
+      expect(parsePayload(await call('/fixture/mist.cindy'))).toMatchObject({ ok: true, status: 'installed', refreshed: true });
+      expect(install).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ sessionId: 'theme-owner', workingDir: '/fixture', agentKind }), '/fixture/mist.cindy');
+      expect(parsePayload(await call('/fixture/mist.json'))).toMatchObject({ ok: false });
+      expect(install).toHaveBeenCalledTimes(1);
+      remoteHostId = 'ssh-host';
+      expect(parsePayload(await call('/fixture/mist.cindy'))).toMatchObject({ ok: false, errorCode: 'CAPABILITY_NOT_AVAILABLE' });
+      expect(install).toHaveBeenCalledTimes(1);
+      remoteHostId = undefined;
+      restricted = true;
+      expect(parsePayload(await call('/fixture/mist.cindy'))).toMatchObject({ ok: false });
+      expect(install).toHaveBeenCalledTimes(1);
+    } finally { await client.close(); await server.close(); }
+  }
+});
+
 // Regression: settings discovery was buried behind a second-level tool. Unit,
 // real MCP transport: a fresh client follows returned calls, reads the exact
 // schema without executing it, then saves through the original authorized tool.

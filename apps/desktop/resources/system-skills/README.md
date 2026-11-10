@@ -15,6 +15,10 @@ the Skill files, but cannot run the workflow without that host capability.
 
 Cindy materializes these resources into its user-data directory at startup. Do not put user-authored Skills here.
 
+`cindy-theme-creator` is authored and maintained by Cindy. It creates complete
+appearance assets and configuration through the existing local-theme and plugin
+appearance mechanisms, with a read-only JSON checker and verification guidance.
+
 ## Rules for bundled Skills
 
 - A bundled Skill only describes workflows that apply to any git project. Repository-specific

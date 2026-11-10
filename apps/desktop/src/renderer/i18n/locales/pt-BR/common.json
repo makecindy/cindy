@@ -2193,6 +2193,13 @@
       },
       "sidebarAndPanels": "Barra lateral e painéis",
       "themeLabel": "Tema",
+      "createTheme": {
+        "label": "Criar tema",
+        "hint": "Descreva um estilo ou adicione uma imagem de referência para personalizar a aparência do Cindy.",
+        "prompt": "Ajude-me a criar um tema do Cindy. O estilo que quero é:",
+        "unavailable": "A Skill de criação de temas não está disponível. Verifique nas Skills se ela está ativada.",
+        "startFailed": "Não foi possível abrir a tarefa de criação de tema"
+      },
       "themeAriaLabel": "Seleção de tema",
       "localBadge": "(Local)",
       "localThemes": {
@@ -16972,6 +16979,9 @@
       },
       "pluginCreator": {
         "description": "Crie, edite, depure e empacote plugins do Cindy ou publique-os quando solicitado."
+      },
+      "themeCreator": {
+        "description": "Crie e verifique as cores, os recursos visuais e as configurações de aparência do Cindy."
       }
     },
     "common": {
@@ -18104,7 +18114,7 @@
     "exit": "Sair do modo de planejamento"
   },
   "globalDrop": {
-    "cindyHint": "Solte para instalar o plugin",
+    "cindyHint": "Solte para importar o arquivo do Cindy",
     "cshareHint": "Solte para importar a sessão compartilhada"
   },
   "sessionShare": {
@@ -20143,5 +20153,12 @@
     "detail": "Solicitação de {{device}}\nFinalidade: {{purpose}}\n\nOs dispositivos da sua conta poderão controlar este computador, executar tarefas e acessar arquivos. A opção permanece ativa até você desativá-la nas configurações.",
     "decline": "Agora não",
     "enable": "Ativar controle remoto"
+  },
+  "cindyFiles": {
+    "unsupported": "Esta versão não oferece suporte a este arquivo. Atualize o Cindy e tente novamente.",
+    "invalid": "Este arquivo do Cindy é inválido ou está danificado. Obtenha uma nova cópia.",
+    "failed": "Não foi possível importar este arquivo. Tente novamente.",
+    "themeInstalled": "Tema adicionado. Selecione-o nas configurações de aparência.",
+    "refreshFailed": "O tema foi instalado, mas não foi possível atualizar a lista. Atualize-a nas configurações de aparência."
   }
 }

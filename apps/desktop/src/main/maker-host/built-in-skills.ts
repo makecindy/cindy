@@ -11,6 +11,7 @@ import {
   CINDY_SKILL_CREATOR_NAME,
   CINDY_BUILT_IN_SKILL_NAMES,
   CINDY_PLUGIN_CREATOR_NAME,
+  CINDY_THEME_CREATOR_NAME,
 } from '../../shared/cindyBuiltInSkills';
 import { withSkillMutation } from '../skillhub/sharedMutationLease';
 import { atomicWriteFileSync, readAtomicFileSync } from '../utils/atomicWriteFile';
@@ -27,6 +28,7 @@ const BUILT_IN_SKILL_MUTATION_WAIT_MS = 5_000;
 /** Increment whenever shipped built-in Skill bytes change between releases. */
 export const BUILT_IN_SKILLS_BUNDLE_VERSION = 97;
 const PLUGIN_CREATOR_FIRST_BUNDLE_VERSION = 13;
+const THEME_CREATOR_FIRST_BUNDLE_VERSION = 95;
 
 export interface BuiltInSkillDescriptor {
   name: string;
@@ -94,14 +96,16 @@ interface PublishedMaterializationManifest extends MaterializationManifest {
   activeBundle: string;
 }
 
-/** A pre-creator release legitimately contains only the two older Skills. */
+/** Releases before each creator legitimately omit that Skill. */
 function committedSkillDescriptors(
   descriptors: BuiltInSkillDescriptor[],
   manifest: MaterializationManifest,
 ): BuiltInSkillDescriptor[] {
   return descriptors.filter((descriptor) => !(
-    descriptor.name === CINDY_PLUGIN_CREATOR_NAME
-    && manifest.bundleVersion < PLUGIN_CREATOR_FIRST_BUNDLE_VERSION
+    (descriptor.name === CINDY_PLUGIN_CREATOR_NAME
+      && manifest.bundleVersion < PLUGIN_CREATOR_FIRST_BUNDLE_VERSION
+      || descriptor.name === CINDY_THEME_CREATOR_NAME
+      && manifest.bundleVersion < THEME_CREATOR_FIRST_BUNDLE_VERSION)
     && !Object.prototype.hasOwnProperty.call(manifest.fingerprints, descriptor.name)
   ));
 }

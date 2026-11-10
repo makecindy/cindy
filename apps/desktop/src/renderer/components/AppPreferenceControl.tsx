@@ -15,6 +15,7 @@ import { useFileBrowserPreference } from '@/hooks/useFileBrowserPreference';
 import { useHomeUsageDashboardPreference } from '@/hooks/useHomeUsageDashboardPreference';
 import { usePromptRecommendationPreference } from '@/hooks/usePromptRecommendationPreference';
 import { getThemeFamilies, tryGetFamily } from '@/themes/families';
+import { refreshLocalThemes } from '@/themes/local-themes';
 
 /** Validate persistence separately from hook memory: legacy setters may swallow quota errors. */
 const persisted: Record<keyof AppPreferencePatch, { key: string; absent?: unknown }> = {
@@ -72,6 +73,11 @@ export function AppPreferenceControl() {
         bridge.reply({ requestId: request.requestId, ok: false }); return;
       }
       try {
+        if (request.operation === 'refresh-themes') {
+          const refreshed = await refreshLocalThemes();
+          if (!refreshed.success || !isDataOwnerPushStampCurrent(request.ownerStamp) || Date.now() > request.expiresAt)
+            throw new Error('THEME_REFRESH_NOT_CONFIRMED');
+        }
         let modelVisibility: { visible: boolean; customized: boolean } | undefined;
         if (request.operation === 'model-visibility') {
           const change = request.modelVisibility;

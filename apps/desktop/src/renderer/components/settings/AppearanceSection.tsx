@@ -1,5 +1,6 @@
 import { appearanceSettings, UI_FONT_PRESETS, CODE_FONT_PRESETS, TERMINAL_FONT_PRESETS } from './AppearanceSection.settings-search';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { Select } from '@/components/ui/select';
 
@@ -8,12 +9,14 @@ import {
   Copy,
   FolderOpen,
   Import as ImportIcon,
+  Palette,
   RefreshCw,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 
 import { basename, cn } from '@/lib/utils';
 import { createLogger } from '@/lib/logger';
+import { prefillThemeCreatorDraft } from '@/lib/themeCreatorDraft';
 import { resolveIsDark, useTheme } from '@/hooks/useTheme';
 import {
   clampFontSize,
@@ -259,6 +262,7 @@ function LocalThemeIconButton({
 
 interface FamilyDropdownProps {
   label: string;
+  createAction: ReactNode;
   ariaLabel: string;
   families: ThemeFamily[];
   selectedId: string;
@@ -289,6 +293,7 @@ function VariantBadge({ text }: { text: string | null }) {
  */
 function FamilyDropdown({
   label,
+  createAction,
   ariaLabel,
   families,
   selectedId,
@@ -301,7 +306,7 @@ function FamilyDropdown({
   return (
     <SettingsRow
       className="gap-6"
-      title={label}
+      title={<span className="flex min-w-0 flex-wrap items-center gap-2">{label}{createAction}</span>}
       trailing={
       <Select data-setting-id={appearanceSettings.themeLabel.id}
         label={ariaLabel}
@@ -323,6 +328,7 @@ function FamilyDropdown({
 }
 
 export function AppearanceSection() {
+  const navigate = useNavigate();
   const { theme, setTheme, familyId, setFamily } = useTheme();
   const {
     uiFamily,
@@ -347,6 +353,7 @@ export function AppearanceSection() {
   const { mode: sidebarViewMode, setMode: setSidebarViewMode } = useSidebarCardMode();
   const { mode: sidebarMainViewMode, setMode: setSidebarMainViewMode } = useSidebarMainViewMode();
   const { t } = useTranslation();
+  const [creatingTheme, setCreatingTheme] = useState(false);
   const [localThemesVersion, setLocalThemesVersion] = useState(0);
   const [uiSizeInput, setUiSizeInput] = useState(String(uiSize));
   const [codeSizeInput, setCodeSizeInput] = useState(String(codeSize));
@@ -408,6 +415,21 @@ export function AppearanceSection() {
         : family.name,
     [t],
   );
+
+  const handleCreateTheme = useCallback(async () => {
+    if (creatingTheme) return;
+    setCreatingTheme(true);
+    try {
+      const result = await prefillThemeCreatorDraft(t('settings.appearance.createTheme.prompt'));
+      if (result === 'prepared') navigate('/cc-agent/new');
+      else if (result === 'unavailable') toast.error(t('settings.appearance.createTheme.unavailable'));
+    } catch (error) {
+      log.warn('Failed to prepare theme creation draft:', error);
+      toast.error(t('settings.appearance.createTheme.startFailed'));
+    } finally {
+      setCreatingTheme(false);
+    }
+  }, [creatingTheme, navigate, t]);
 
   const handleExport = useCallback(async () => {
     const isDark = resolveIsDark(theme);
@@ -555,6 +577,23 @@ export function AppearanceSection() {
           <SettingsCard id={appearanceSettings.themeLabel.targetId}>
             <FamilyDropdown
               label={t(appearanceSettings.themeLabel.titleKey)}
+              createAction={
+                <Tip text={t(appearanceSettings.createTheme.descriptionKey)}>
+                  <Button
+                    id={appearanceSettings.createTheme.targetId}
+                    data-setting-id={appearanceSettings.createTheme.id}
+                    variant="secondary"
+                    size="sm"
+                    compact
+                    type="button"
+                    loading={creatingTheme}
+                    onClick={() => { void handleCreateTheme(); }}
+                  >
+                    <Palette size={14} aria-hidden="true" />
+                    {t(appearanceSettings.createTheme.titleKey)}
+                  </Button>
+                </Tip>
+              }
               ariaLabel={t('settings.appearance.themeAriaLabel')}
               families={families}
               selectedId={familyId}

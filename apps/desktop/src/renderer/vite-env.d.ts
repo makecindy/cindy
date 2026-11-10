@@ -1290,6 +1290,10 @@ interface ElectronAPI {
   /** 开屏卡住时上报一次启动门快照;main 校验字段后写进可上传的诊断日志。仅主窗 preload 提供。 */
   reportStartupGateStall?: (snapshot: StartupGateStallSnapshot) => void;
 
+  cindyFiles: {
+    open: (filePath: string) => Promise<import('../shared/cindyFile').CindyFileOpenResult>;
+  };
+
   localThemes: {
     listSync: () => LocalThemesResult;
     list: () => Promise<LocalThemesResult>;

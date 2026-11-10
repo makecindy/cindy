@@ -5,8 +5,9 @@ import { nativeImage } from 'electron';
 
 import {
   LOCAL_THEME_SUFFIX,
+  parseLocalThemeDocument,
+  type LocalThemeDocument,
   type LocalThemeBrandBounds,
-  type LocalThemeBrandConfig,
   type LocalThemeBrandRevisions,
   type LocalThemeDiagnostic,
   type LocalThemeWire,
@@ -16,18 +17,9 @@ import { findVisibleAlphaBounds } from '../../shared/imageVisibleBounds';
 import type { ImageVisibleBounds } from '../../shared/imageVisibleBounds';
 import { createLogger } from '../logger';
 import { lastGoodOmarchyTheme, OMARCHY_THEME_FILE, readOmarchyTheme } from './omarchy';
+import { readPackagedThemesSync, type PackagedThemeEntry } from './packages';
 
 const log = createLogger('local-themes');
-
-interface LocalThemeJson {
-  id: string;
-  name: string;
-  type: 'light' | 'dark';
-  /** 可选家族键，见 shared/local-themes.ts 的 LocalThemeWire.family。 */
-  family?: string;
-  colors: Record<string, string>;
-  brand?: LocalThemeBrandConfig;
-}
 
 interface FileEntry {
   file: string;
@@ -90,67 +82,6 @@ function migrateLegacyThemesDirOnce(): void {
   }
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
-function asNonEmptyString(value: unknown, field: string): string {
-  if (typeof value !== 'string' || value.trim().length === 0) {
-    throw new Error(`Invalid '${field}': expected non-empty string.`);
-  }
-  return value;
-}
-
-function asOptionalPath(value: unknown): string | undefined {
-  return typeof value === 'string' && value.trim().length > 0 ? value.trim() : undefined;
-}
-
-function parseBrand(value: unknown): LocalThemeBrandConfig | undefined {
-  if (!isRecord(value)) return undefined;
-  const icon = asOptionalPath(value.icon);
-  const logo = asOptionalPath(value.logo);
-  return icon || logo
-    ? { ...(icon ? { icon } : {}), ...(logo ? { logo } : {}) }
-    : undefined;
-}
-
-function parseLocalThemeJson(raw: unknown): LocalThemeJson {
-  if (!isRecord(raw)) {
-    throw new Error('Invalid theme JSON: expected object.');
-  }
-
-  const id = asNonEmptyString(raw.id, 'id');
-  const name = asNonEmptyString(raw.name, 'name');
-  if (raw.type !== 'light' && raw.type !== 'dark') {
-    throw new Error("Invalid 'type': expected 'light' or 'dark'.");
-  }
-  if (!isRecord(raw.colors)) {
-    throw new Error("Invalid 'colors': expected object.");
-  }
-
-  const colors: Record<string, string> = {};
-  for (const [key, value] of Object.entries(raw.colors)) {
-    if (typeof value !== 'string') {
-      throw new Error(`Invalid color '${key}': expected string value.`);
-    }
-    colors[key] = value;
-  }
-
-  const brand = parseBrand(raw.brand);
-  // family 只认非空字符串;缺省/空白一律视为"不配对"(每个文件各自成家族),
-  // 保持引入该字段前的行为。
-  const family = typeof raw.family === 'string' && raw.family.trim().length > 0
-    ? raw.family.trim()
-    : undefined;
-  return {
-    id,
-    name,
-    type: raw.type,
-    ...(family ? { family } : {}),
-    colors,
-    ...(brand ? { brand } : {}),
-  };
-}
 
 const MAX_ALPHA_SCAN_PIXELS = 8_000_000;
 
@@ -197,7 +128,7 @@ function inspectBrandAsset(filePath: string): InspectedBrandAsset | undefined {
   }
 }
 
-function inspectBrandAssets(theme: LocalThemeJson): {
+function inspectBrandAssets(theme: LocalThemeDocument): {
   bounds?: LocalThemeBrandBounds;
   revisions?: LocalThemeBrandRevisions;
 } {
@@ -228,11 +159,12 @@ function normalizeError(error: unknown): string {
 }
 
 function processEntries(
-  entries: Array<FileEntry | { file: string; error: string }>,
+  entries: Array<FileEntry | PackagedThemeEntry>,
 ): LocalThemesResult {
   const themes: LocalThemeWire[] = [];
   const diagnostics: LocalThemeDiagnostic[] = [];
   const seenIds = new Set<string>();
+  const packageIds = new Set(entries.flatMap(entry => 'theme' in entry ? [`${entry.theme.id}${LOCAL_THEME_SUFFIX}`] : []));
 
   for (const entry of entries) {
     if ('error' in entry) {
@@ -241,9 +173,11 @@ function processEntries(
       continue;
     }
     try {
-      const parsed = parseLocalThemeJson(JSON.parse(entry.content));
+      const parsed = 'theme' in entry ? entry.theme : parseLocalThemeDocument(JSON.parse(entry.content));
       const id = `${parsed.id}${LOCAL_THEME_SUFFIX}`;
       if (seenIds.has(id)) {
+        // A package deliberately updates the effective value of a matching loose theme.
+        if (!('theme' in entry) && packageIds.has(id)) continue;
         const error = `Skipped duplicate local theme '${id}' from '${entry.file}'.`;
         log.warn(error);
         diagnostics.push({ file: entry.file, error });
@@ -307,7 +241,7 @@ export async function loadLocalThemes(): Promise<LocalThemesResult> {
         }
       }),
     );
-    return processEntries(entries);
+    return processEntries([...readPackagedThemesSync(dir), ...entries]);
   } catch (error) {
     return topLevelFailure(error);
   }
@@ -326,7 +260,7 @@ export function loadLocalThemesSync(): LocalThemesResult {
         return { file, error: normalizeError(error) };
       }
     });
-    return processEntries(entries);
+    return processEntries([...readPackagedThemesSync(dir), ...entries]);
   } catch (error) {
     return topLevelFailure(error);
   }

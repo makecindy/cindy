@@ -37,6 +37,7 @@ function fixture() {
   const source = path.join(bundledRoot, 'cindy-skill-creator');
   const learnSource = path.join(bundledRoot, 'learn');
   const pluginSource = path.join(bundledRoot, 'cindy-plugin-creator');
+  const themeSource = path.join(bundledRoot, 'cindy-theme-creator');
   const userDataDir = path.join(root, 'user-data');
   const appDataDir = path.join(root, 'app-data');
   const homeDir = path.join(root, 'home');
@@ -44,6 +45,11 @@ function fixture() {
   fs.mkdirSync(path.join(source, 'scripts'), { recursive: true });
   fs.mkdirSync(learnSource, { recursive: true });
   fs.mkdirSync(pluginSource, { recursive: true });
+  fs.mkdirSync(themeSource, { recursive: true });
+  fs.writeFileSync(
+    path.join(themeSource, 'SKILL.md'),
+    '---\nname: cindy-theme-creator\ndescription: Create Cindy themes\n---\n\n# Theme Creator\n',
+  );
   fs.writeFileSync(
     path.join(pluginSource, 'SKILL.md'),
     '---\nname: cindy-plugin-creator\ndescription: Create Cindy plugins\n---\n\n# Plugin Creator\n',
@@ -98,6 +104,47 @@ afterEach(() => {
 });
 
 describe('built-in Skills', () => {
+  // Unit: the theme entry needs a real managed Skill, including its verification
+  // resources. Listing metadata alone cannot prove that a user can load it.
+  it('ships the theme creator and its verification resources through the managed bundle', async () => {
+    const input = fixture();
+    const result = await prepareBuiltInSkills({
+      ...input,
+      bundledRoot: path.resolve(__dirname, '../../../../resources/system-skills'),
+    });
+    expect(result.warnings).toEqual([]);
+    expect(result.projectionSafe).toBe(true);
+    const theme = result.descriptors.find((item) => item.name === 'cindy-theme-creator');
+    expect(theme).toBeDefined();
+    expect(fs.realpathSync(theme!.nativeClaudePath)).toBe(fs.realpathSync(theme!.absolutePath));
+    for (const resource of ['SKILL.md', 'references/capabilities.md', 'references/verification.md', 'scripts/validate_theme.py']) {
+      expect(fs.statSync(path.join(theme!.absolutePath, resource)).isFile()).toBe(true);
+    }
+  });
+
+  // Unit: older releases shipped three Skills. A missing new resource must not
+  // make those authenticated, already-active Skills disappear during upgrade.
+  it.each(['success', 'missing-source'] as const)('upgrades the pre-theme bundle without losing existing Skills (%s)', async (mode) => {
+    const input = fixture();
+    const previous = await prepareBuiltInSkills({ ...input, bundleVersion: 83 });
+    const theme = previous.descriptors.find((item) => item.name === 'cindy-theme-creator')!;
+    const manifestPath = path.join(input.appDataDir, 'Cindy', 'shared-system-skills', '.cindy-system-skills.json');
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    delete manifest.fingerprints[theme.name];
+    fs.writeFileSync(manifestPath, JSON.stringify(manifest));
+    fs.rmSync(theme.absolutePath, { recursive: true });
+    fs.unlinkSync(theme.nativeClaudePath);
+    const existing = previous.descriptors.filter((item) => item.name !== theme.name);
+    expect(builtInSkillDescriptors(input.userDataDir, input.appDataDir)).toEqual(existing);
+    if (mode === 'missing-source') fs.rmSync(path.join(input.bundledRoot, theme.name), { recursive: true });
+
+    const updated = await prepareBuiltInSkills(input);
+    expect(updated.projectionSafe).toBe(true);
+    expect(updated.descriptors).toEqual(mode === 'success' ? previous.descriptors : existing);
+    if (mode === 'success') expect(updated.warnings).toEqual([]);
+    else expect(updated.warnings.length).toBeGreaterThan(0);
+  });
+
   it('stays above every bundle version pre-release builds of the /pr removal wrote', () => {
     // Builds that still shipped the built-in /pr reached 78. A lower number would make
     // prepareBuiltInSkills keep their newer bundle (and its pr/ folder) instead of replacing it.
@@ -595,8 +642,8 @@ describe('built-in Skills', () => {
       const target = fs.realpathSync(active);
       const skillPath = path.join(active, 'cindy-skill-creator');
       expect(prepared.projectionSafe).toBe(true);
-      expect(builtInSkillDescriptors(input.userDataDir, input.appDataDir)).toHaveLength(3);
-      await expect(builtInSkillDescriptorsAsync(input.userDataDir, input.appDataDir)).resolves.toHaveLength(3);
+      expect(builtInSkillDescriptors(input.userDataDir, input.appDataDir)).toHaveLength(4);
+      await expect(builtInSkillDescriptorsAsync(input.userDataDir, input.appDataDir)).resolves.toHaveLength(4);
       if (damage === 'modified-content') {
         fs.appendFileSync(path.join(skillPath, 'SKILL.md'), '\nChanged');
       } else if (damage === 'missing-manifest') {
@@ -649,7 +696,7 @@ describe('built-in Skills', () => {
     const pending = builtInSkillDescriptorsAsync(input.userDataDir, input.appDataDir);
     fs.writeFileSync(manifestPath, JSON.stringify({ ...manifest, bundleVersion: manifest.bundleVersion + 1 }));
     await expect(pending).resolves.toEqual([]);
-    await expect(builtInSkillDescriptorsAsync(input.userDataDir, input.appDataDir)).resolves.toHaveLength(3);
+    await expect(builtInSkillDescriptorsAsync(input.userDataDir, input.appDataDir)).resolves.toHaveLength(4);
   });
 
   // Unit, PR #8493: changes to an already-hashed Skill must be rejected even

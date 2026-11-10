@@ -2125,6 +2125,13 @@
       },
       "sidebarAndPanels": "側欄與面板",
       "themeLabel": "格調",
+      "createTheme": {
+        "label": "製格調",
+        "hint": "述風格或附參考圖，以製整套外觀",
+        "prompt": "為我製一套 Cindy 格調。所欲風格為：",
+        "unavailable": "製作格調之技藝不可用，請於技藝中檢查是否啟用",
+        "startFailed": "未能開啟製作格調之差事"
+      },
       "themeAriaLabel": "擇主題",
       "localBadge": "(此機)",
       "localThemes": {
@@ -16751,6 +16758,9 @@
       },
       "pluginCreator": {
         "description": "立、修、偵錯並打包 Cindy 法器，亦可依需發布。"
+      },
+      "themeCreator": {
+        "description": "為 Cindy 製配色、圖材與外觀設定，並驗之。"
       }
     },
     "common": {
@@ -17869,7 +17879,7 @@
     "exit": "出謀定模式"
   },
   "globalDrop": {
-    "cindyHint": "鬆手納法器",
+    "cindyHint": "鬆手納 Cindy 卷",
     "cshareHint": "鬆手納所分享之差事"
   },
   "sessionShare": {
@@ -19884,5 +19894,12 @@
     "detail": "請求來自「{{device}}」\n所為：{{purpose}}\n\n啟用後，同帳號裝置可遠控此機，執行任務、存取檔案。此設長效，可隨時於設定中關閉。",
     "decline": "暫不開啟",
     "enable": "開啟遠端控制"
+  },
+  "cindyFiles": {
+    "unsupported": "此版本不支援此卷，請更新 Cindy 後再試",
+    "invalid": "此 Cindy 卷無效或已損壞，請重新取得",
+    "failed": "此卷未能納入，請再試",
+    "themeInstalled": "主題已入列，請於外觀規制中選用",
+    "refreshFailed": "主題已裝入，清單未能更新，請於外觀規制中重新整理"
   }
 }

@@ -2155,6 +2155,13 @@
       },
       "sidebarAndPanels": "Seitenleiste und Bereiche",
       "themeLabel": "Design",
+      "createTheme": {
+        "label": "Design erstellen",
+        "hint": "Beschreibe einen Stil oder füge ein Referenzbild hinzu, um Cindys Erscheinungsbild zu gestalten.",
+        "prompt": "Hilf mir, ein Cindy-Design zu erstellen. Mein gewünschter Stil:",
+        "unavailable": "Der Skill zum Erstellen von Designs ist nicht verfügbar. Prüfe unter Skills, ob er aktiviert ist.",
+        "startFailed": "Die Aufgabe zum Erstellen eines Designs konnte nicht geöffnet werden"
+      },
       "themeAriaLabel": "Designauswahl",
       "localBadge": "(Lokal)",
       "localThemes": {
@@ -16818,6 +16825,9 @@
       },
       "pluginCreator": {
         "description": "Erstelle, bearbeite, debugge und packe Cindy-Plugins oder veröffentliche sie auf Wunsch."
+      },
+      "themeCreator": {
+        "description": "Cindys Farben, Bildmaterial und Darstellungseinstellungen erstellen und prüfen."
       }
     },
     "common": {
@@ -17937,7 +17947,7 @@
     "exit": "Planmodus beenden"
   },
   "globalDrop": {
-    "cindyHint": "Zum Installieren des Plugins ablegen",
+    "cindyHint": "Zum Importieren der Cindy-Datei ablegen",
     "cshareHint": "Zum Importieren der geteilten Sitzung ablegen"
   },
   "sessionShare": {
@@ -19956,5 +19966,12 @@
     "detail": "Anfrage von {{device}}\nZweck: {{purpose}}\n\nGeräte Ihres Kontos können diesen Computer steuern, Aufgaben ausführen und auf Dateien zugreifen. Die Einstellung bleibt aktiv, bis Sie sie in den Einstellungen deaktivieren.",
     "decline": "Jetzt nicht",
     "enable": "Fernsteuerung aktivieren"
+  },
+  "cindyFiles": {
+    "unsupported": "Diese Version unterstützt diese Datei nicht. Aktualisiere Cindy und versuche es erneut.",
+    "invalid": "Diese Cindy-Datei ist ungültig oder beschädigt. Lade sie erneut herunter.",
+    "failed": "Diese Datei konnte nicht importiert werden. Versuche es erneut.",
+    "themeInstalled": "Theme hinzugefügt. Wähle es in den Darstellungseinstellungen aus.",
+    "refreshFailed": "Das Theme wurde installiert, aber die Liste konnte nicht aktualisiert werden. Aktualisiere sie in den Darstellungseinstellungen."
   }
 }

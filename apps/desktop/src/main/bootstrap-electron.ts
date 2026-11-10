@@ -732,6 +732,7 @@ import { registerModelVisibilityOwnerClaimIpc } from './maker-host/model-visibil
 import { registerRemotePrecreatedWorktreeLedgerIpc } from './remotePrecreatedWorktreeLedger';
 import { registerTerminalHandlers } from './maker-ipc/terminal-handlers';
 import { registerLocalThemesIpc } from './local-themes/register';
+import { registerCindyFileIpc } from './cindy-files/register';
 import {
   registerRemoteSshIpc,
   disposeRemoteSshPool,
@@ -10464,6 +10465,7 @@ app.on('ready', async () => {
       mainWindowRef && !mainWindowRef.isDestroyed() ? mainWindowRef.webContents : null,
   });
   registerLocalThemesIpc();
+  registerCindyFileIpc();
   registerVoiceInputIpc();
   registerGlobalVoiceInputIpc({
     getMainWindow: () => mainWindowRef,

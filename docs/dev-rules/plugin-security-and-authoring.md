@@ -13,7 +13,8 @@
 媒体字节交接另见 [`media-storage-and-protocols.md`](media-storage-and-protocols.md)，插件在
 产品中的定位见 [`../product-rules/core-product-principles.md`](../product-rules/core-product-principles.md)。
 
-> **术语**：产品与对外措辞统一为「插件」，`.cindy` 即插件包；不再使用旧的概念称呼。
+> **术语**：产品与对外措辞统一为「插件」；以 `ghost.json` 为身份卡的 `.cindy` 是插件包。
+> `.cindy` 后缀也用于主题等文件类型，不能单凭后缀认作插件；不再使用旧的概念称呼。
 > 代码标识仍沿用历史 `Ghost` / `cindy-brain` 命名（目录 `cindy-brain/`、`GhostRuntime`、
 > `ghost.json`、`cindy-ghost://`、`ghost_forge_guide` 等），与产品术语「插件」指同一事物；
 > 引用代码时照实使用这些标识，不因措辞改写。
@@ -49,7 +50,21 @@ Desktop 本机、远程查看与 Mobile 的页面 CSP 始终保留 `form-action 
 
 ## 1. 插件形态与代码术语
 
-- `.cindy` 是以 `ghost.json` 为身份卡的插件包，现行唯一形态为 `kind: 'chip'`。
+- 插件 `.cindy` 包以 `ghost.json` 为身份卡，现行唯一形态为 `kind: 'chip'`。
+- 桌面文件导入先经 `main/cindy-files/` 识别类型：根或单层包装目录内有 `ghost.json`
+  时完整交回原插件安装／批准／更新流程，不要求旧包补字段、改包或重装。
+  其余包读取 `cindy.json` 的通用 `formatVersion` 与 `type`；当前支持版本 1 的
+  `theme`（`themes` 为包内 JSON 路径）。未知类型或格式版本明确提示当前版本不支持，
+  不降级交给插件解析器。主题仅装载现有颜色／明暗家族／品牌图片数据，不执行代码、
+  不新增插件 kind、不申请插件能力，也不改壁纸或字体设置。主题与资源在用户主题目录
+  的 `.packages/<包字节 SHA-256>/` 中原子发布；安装记录按主题 ID 原子切换当前引用，
+  同 ID 默认更新配色与图片，运行时本地 ID／family 保持稳定，其他主题保留。
+  Agent 的 `import_theme_package` 复用该安装器与原任务文件／行动授权，刷新当前窗口的
+  主题列表并分别返回安装与刷新结果；选择仍走现有 preferences，不启动其他应用。
+  该工具拒绝插件包；包含运行时代码或 `ui.appearance` 的外观插件仍按插件确认安装，
+  制作 Skill 应事先说明两种产物，不把外观插件称为数据主题包。
+  散装主题 JSON 保持原样，同 ID 导入包成为有效本地内容；制作契约见
+  `apps/desktop/resources/system-skills/cindy-theme-creator/references/package-format.md`。
 - 代码目录与运行时使用 `cindy-brain` / `Ghost` 命名，**不得重新引入已退役的 cartridge
   声明型兼容层**。
 - 插件 ID 或 `cindy-` / `filo-` / `xd-` 前缀不授予能力，也不阻止本地开发安装。
