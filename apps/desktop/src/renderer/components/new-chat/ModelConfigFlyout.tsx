@@ -40,6 +40,8 @@ export interface ModelConfigFlyoutProps {
   /** 刚刚点过 ☆ 的 0.7s 反馈态(规格 §1.5)。 */
   justFavorited?: boolean;
   disabled?: boolean;
+  /** Portaled menus must stay on the configuration flyout's overlay layer. */
+  overlayContentClassName?: string;
   /** Same-engine views show the current harness without offering a cross-engine switch. */
   engineLocked?: boolean;
   onEngineChange: (engine: UnifiedEngine) => void;
@@ -73,6 +75,7 @@ export function ModelConfigFlyout({
   effortLabelOf,
   justFavorited = false,
   disabled = false,
+  overlayContentClassName,
   engineLocked = false,
   onEngineChange,
   onEffortChange,
@@ -204,7 +207,7 @@ export function ModelConfigFlyout({
                   <SpeedIcon mode={config.fast} />
                 </button>
               </DropdownMenuTrigger>
-              <DropdownMenuContent>
+              <DropdownMenuContent className={overlayContentClassName}>
                 <DropdownMenuRadioGroup
                   value={config.fast === 'ultrafast' ? 'ultrafast' : config.fast ? 'fast' : 'standard'}
                   onValueChange={value => onFastChange(value === 'ultrafast' ? 'ultrafast' : value === 'fast')}

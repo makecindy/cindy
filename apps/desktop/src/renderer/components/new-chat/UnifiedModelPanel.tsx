@@ -1716,6 +1716,7 @@ export function UnifiedModelPanel({
                 : 'recommended';
             return (
               <ModelConfigFlyout
+                overlayContentClassName={overlayClassName}
                 entry={target.entry}
                 config={config}
                 state={state}
