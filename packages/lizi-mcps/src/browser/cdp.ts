@@ -169,7 +169,13 @@ export async function runCdpCommands(
       action: 'recipeCommand', ...base, targetId, recipeCommand: { method, sessionId, ...(params ? { params } : {}) },
     } as BrowserControlRequest);
     if (!sent.ok) throw new Error(sent.message ?? `${method} failed`);
-    return (sent.data ?? {}) as Record<string, unknown>;
+    const data = (sent.data ?? {}) as Record<string, unknown>;
+    // A script that throws in the page still comes back as a successful protocol response, with the
+    // exception beside the result. Any command, helper or raw, counts as failed then, so the sequence
+    // (and a batch around it) stops instead of going on to e.g. a submit click on unchanged data.
+    const failure = data.exceptionDetails as { exception?: { description?: unknown }; text?: unknown } | undefined;
+    if (failure) throw new Error(String(failure.exception?.description ?? failure.text ?? '页面里的函数执行出错').slice(0, 500));
+    return data;
   };
   const callOn = async (backendNodeId: number, fn: string, args: unknown[] = []): Promise<unknown> => {
     const resolved = await send('DOM.resolveNode', { backendNodeId });
@@ -180,8 +186,6 @@ export async function runCdpCommands(
         objectId, functionDeclaration: fn, returnByValue: true, awaitPromise: true, userGesture: true,
         ...(args.length ? { arguments: args.map((value) => ({ value })) } : {}),
       });
-      const failure = called.exceptionDetails as { exception?: { description?: unknown }; text?: unknown } | undefined;
-      if (failure) throw new Error(String(failure.exception?.description ?? failure.text ?? '函数执行出错').slice(0, 500));
       return (called.result as { value?: unknown } | undefined)?.value;
     } finally {
       await send('Runtime.releaseObject', { objectId }).catch(() => {});

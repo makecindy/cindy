@@ -2060,6 +2060,34 @@ describe('browser · batch, cdp and target-tailored rules', () => {
     } finally { await h.cleanup(); }
   });
 
+  // Codex review on #9701 (P1): a raw Runtime.callFunctionOn that throws in the page comes back as a
+  // successful protocol response carrying exceptionDetails. It used to be recorded as success, so the
+  // next command (a submit click) ran on unchanged data, and a batch around it went on too.
+  it('stops cdp and the batch around it when a raw page function throws', async () => {
+    const h = await scripted((request) => {
+      const command = request.recipeCommand as { method: string };
+      if (command.method === 'Cindy.begin') return { data: { sessionId: 's1' } };
+      if (command.method === 'Runtime.callFunctionOn') {
+        return { data: { result: { type: 'object' }, exceptionDetails: { text: 'Uncaught', exception: { description: 'TypeError: x is not a function' } } } };
+      }
+      return { data: {} };
+    });
+    try {
+      const { isError, body } = await h.invoke({ action: 'batch', targetId: 't1', steps: [
+        { action: 'cdp', commands: [
+          { method: 'Runtime.callFunctionOn', params: { objectId: 'o1', functionDeclaration: 'function(){ x() }' } },
+          { method: 'Input.dispatchMouseEvent', params: { type: 'mousePressed', x: 1, y: 1 } },
+        ] },
+        { action: 'navigate', url: 'https://example.test/next' },
+      ] });
+      expect(isError).toBe(true);
+      expect(body).toMatchObject({ ok: false, completed: 0, failedStep: 0 });
+      expect(body.steps[0].data.results).toEqual([{ method: 'Runtime.callFunctionOn', ok: false, error: 'TypeError: x is not a function' }]);
+      const sent = h.calls.map((request) => request.action === 'recipeCommand' ? (request.recipeCommand as { method: string }).method : request.action);
+      expect(sent).toEqual(['recipeCommand', 'recipeCommand', 'recipeCommand'].map((_, i) => ['Cindy.begin', 'Runtime.callFunctionOn', 'Cindy.end'][i]));
+    } finally { await h.cleanup(); }
+  });
+
   it.each([
     [{ commands: [{ method: 'nodes' }, { method: 'Network.getCookies' }] }, {}, 'Cookie'],
     [{ commands: [{ method: 'nodes' }] }, { backendCapabilities: () => ({ rawProtocol: false }) }, '不要自行切换'],
