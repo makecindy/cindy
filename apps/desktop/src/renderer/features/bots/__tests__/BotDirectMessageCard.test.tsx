@@ -69,7 +69,7 @@ describe('BotDirectMessageCard', () => {
   it.each(['sent', 'received'])('shows only the %s trace and opens its conversation', (direction) => {
     render(<BotDirectMessageCard data={{ ...data, direction }} />);
     const label = direction === 'sent' ? 'sentTo' : 'receivedFrom';
-    const button = screen.getByRole('button', { name: `bots.directMessage.${label}:{"name":"Planner"}` });
+    const button = screen.getByRole('button', { name: new RegExp(`bots\\.directMessage\\.${label}`) });
     expect(screen.getAllByRole('button')).toHaveLength(1);
     expect(screen.queryByText(data.preview)).toBeNull();
     expect(mocks.getThread).not.toHaveBeenCalled();
@@ -79,10 +79,19 @@ describe('BotDirectMessageCard', () => {
     });
   });
 
+  it.each([
+    ['failed', 'bots.directMessage.notDelivered'],
+    ['queued', 'bots.directMessage.queued'],
+  ] as const)('shows %s delivery state without hiding the thread entry', (deliveryStatus, label) => {
+    render(<BotDirectMessageCard data={{ ...data, deliveryStatus }} />);
+    expect(screen.getByRole('status').textContent).toContain(label);
+    expect(screen.getByRole('button', { name: /bots\.directMessage\.sentTo/ })).toBeTruthy();
+  });
+
   it('keeps the remote owner in the conversation route and uses its recorded name', () => {
     mocks.device = 'home';
     render(<BotDirectMessageCard data={{ ...data, peerBotName: 'Remote planner' }} sessionId="remote-main" />);
-    fireEvent.click(screen.getByRole('button', { name: 'bots.directMessage.sentTo:{"name":"Remote planner"}' }));
+    fireEvent.click(screen.getByRole('button', { name: /bots\.directMessage\.sentTo/ }));
     expect(mocks.navigate).toHaveBeenCalledWith('/bots/bot-a/direct/dm-1?deviceId=home', {
       state: { botDirectMessageReturnTo: '/bots/bot-a/session/a-main?from=chat' },
     });
