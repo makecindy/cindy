@@ -55,6 +55,9 @@ vi.mock('../appearance-settings-store.js', () => ({
   writeAppearanceSettingsPatch: mocks.writeAppearanceSettingsPatch,
   resetAppearanceSettings: mocks.resetAppearanceSettings,
   updateAppearanceSettingsAtomic: mocks.updateAppearanceSettingsAtomic,
+  appearanceService: { select: vi.fn(), refresh: vi.fn() },
+  migrateAppearanceThemeSelection: vi.fn(),
+  readSelectedThemeFont: vi.fn(() => null),
 }));
 
 import { registerAppearanceSettingsIpc, installWindowZoomRestoration, updateAppearanceFromSettings, __testing } from '../appearance-settings-ipc.js';
@@ -76,6 +79,12 @@ const persisted = {
 };
 
 describe('appearance settings IPC authorization', () => {
+  it.each(['select-theme', 'migrate-theme', 'reset-fields'])('keeps %s unavailable to untrusted windows', async channel => {
+    mocks.assertTrustedAppRendererEvent.mockImplementation(() => { throw new Error('untrusted app renderer'); });
+    const handler = mocks.ipcHandle.mock.calls.find(([name]) => name === `appearance-settings:${channel}`)?.[1];
+    await expect(handler({}, { mode: 'dark', familyId: 'cindy' })).rejects.toThrow('untrusted app renderer');
+    expect(mocks.writeAppearanceSettingsPatch).not.toHaveBeenCalled();
+  });
   // PR #9496: the legacy parameter format skipped ifRevision. Exercise the real
   // settings owner with a newer value appearing while its atomic update waits. tier: unit.
   it('rejects a stale plugin revision inside the original settings write lock', async () => {

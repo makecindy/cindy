@@ -15,6 +15,28 @@ export interface AppearanceResourceDefinition {
   path: string;
 }
 
+export interface ThemeSelection {
+  mode: 'system' | 'light' | 'dark';
+  familyId: string;
+}
+export const DEFAULT_THEME_SELECTION: ThemeSelection = { mode: 'system', familyId: 'cindy' };
+
+export function parseThemeSelection(raw: unknown): ThemeSelection | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const value = raw as Record<string, unknown>;
+  if (Object.keys(value).some(key => !['mode', 'familyId'].includes(key)) ||
+      !['system', 'light', 'dark'].includes(String(value.mode)) || typeof value.familyId !== 'string' ||
+      !value.familyId.trim() || value.familyId.length > 512) return null;
+  return { mode: value.mode as ThemeSelection['mode'], familyId: value.familyId };
+}
+
+export interface ThemeFontResource {
+  source: { themeId: string; packageSha256: string };
+  reference: string;
+  hash: string;
+  family: string;
+}
+
 export function parseAppearanceDefinition(raw: unknown): AppearanceDefinition | null {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
   const { terminalFont, density, motion, ...fixed } = raw as Record<string, unknown>;

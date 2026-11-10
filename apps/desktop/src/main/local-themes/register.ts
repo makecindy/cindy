@@ -10,10 +10,12 @@ import { importExternalTheme } from './importer';
 import { loadLocalThemes, loadLocalThemesSync } from './loader';
 import { watchOmarchyTheme } from './omarchy';
 import { openLocalThemesDir, writeLocalTheme } from './writer';
+import { refreshAppearanceTheme } from '../appearance-settings-ipc';
 
 const log = createLogger('local-themes/register');
 
 export async function broadcastLocalThemes(): Promise<void> {
+  await refreshAppearanceTheme();
   const payload = await loadLocalThemes();
   for (const window of BrowserWindow.getAllWindows()) {
     if (!isTrustedCindyRendererWindow(window)) continue;
@@ -45,7 +47,10 @@ export function registerLocalThemesIpc(): void {
     event.returnValue = loadLocalThemesSync();
   });
 
-  ipcMain.handle('local-themes:list', async () => loadLocalThemes());
+  ipcMain.handle('local-themes:list', async () => {
+    await refreshAppearanceTheme();
+    return loadLocalThemes();
+  });
   ipcMain.handle('local-themes:write', async (_event, req: LocalThemeWriteRequest) =>
     writeLocalTheme(req));
   ipcMain.handle('local-themes:open-dir', async () => openLocalThemesDir());

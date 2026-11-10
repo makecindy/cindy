@@ -31,7 +31,12 @@ import {
   resetAppearanceSettings,
   updateAppearanceSettingsAtomic,
   writeAppearanceSettingsPatch,
+  appearanceService,
+  migrateAppearanceThemeSelection,
+  readSelectedThemeFont,
 } from './appearance-settings-store.js';
+import { parseThemeSelection } from '../shared/appearanceDefinition.js';
+import { APPEARANCE_RESET_FIELDS, appearanceResetPatch } from './appearance/definition.js';
 import { applyDockIcon } from './app-icon.js';
 import { pluginAppearanceRevision } from './cindy-brain/pluginAppearanceRevision.js';
 
@@ -69,6 +74,8 @@ export function registerAppearanceSettingsIpc(): void {
 
   ipcMain.handle('appearance-settings:plugin-font', async (event, role: unknown) => {
     if (!isTrustedAppearanceSettingsReadEvent(event) || typeof role !== 'string') throwIpcError('INVALID_PARAMS', 'Appearance font reader required');
+    const themeFont = readSelectedThemeFont(role);
+    if (themeFont) return themeFont;
     const { readSelectedPluginFont } = await import('./mcp-apps/appearance.js');
     return readSelectedPluginFont(role);
   });
@@ -130,6 +137,27 @@ export function registerAppearanceSettingsIpc(): void {
   ipcMain.handle('appearance-settings:reset', async (event) => {
     assertTrustedAppRendererEvent(event);
     return resetAppearanceFromSettings();
+  });
+
+  for (const [channel, migrate] of [['appearance-settings:select-theme', false], ['appearance-settings:migrate-theme', true]] as const) {
+    ipcMain.handle(channel, async (event, raw: unknown) => {
+      assertTrustedAppRendererEvent(event);
+      const selection = parseThemeSelection(raw);
+      if (!selection) throwIpcError('INVALID_PARAMS', 'Invalid theme selection');
+      try {
+        const settings = migrate ? await migrateAppearanceThemeSelection(selection) : await appearanceService.select(selection);
+        publishAppearanceFromOwner(settings);
+        return settings;
+      } catch { throwIpcError('INTERNAL', 'Unable to save theme selection'); }
+    });
+  }
+  ipcMain.handle('appearance-settings:reset-fields', async (event, raw: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    if (!Array.isArray(raw) || !raw.length || raw.length > APPEARANCE_RESET_FIELDS.length ||
+        raw.some(field => !APPEARANCE_RESET_FIELDS.includes(field))) throwIpcError('INVALID_PARAMS', 'Invalid appearance reset');
+    const settings = await writeAppearanceSettingsPatch(appearanceResetPatch(raw));
+    publishAppearanceFromOwner(settings);
+    return settings;
   });
 }
 
@@ -237,6 +265,8 @@ function parsePatch(rawPatch: unknown): AppearanceOverrides {
     'wallpaperBlur',
     'wallpaperMotion',
     'appIcon',
+    'density',
+    'motion',
   ]);
   for (const key of Object.keys(raw)) {
     if (!allowed.has(key)) throwIpcError('INVALID_PARAMS', `unknown appearance field: ${key}`);
@@ -244,8 +274,13 @@ function parsePatch(rawPatch: unknown): AppearanceOverrides {
   const patch: AppearanceOverrides = {};
   if ('uiFamily' in raw) { patch.uiFamily = parseFamily(raw.uiFamily, 'uiFamily'); patch.uiFontResource = undefined; }
   if ('codeFamily' in raw) { patch.codeFamily = parseFamily(raw.codeFamily, 'codeFamily'); patch.codeFontResource = undefined; }
-  if ('terminalFamily' in raw)
+  if ('terminalFamily' in raw) {
     patch.terminalFamily = parseFamily(raw.terminalFamily, 'terminalFamily');
+    patch.terminalFontResource = undefined;
+  }
+  for (const [key, min, max] of [['density', 0.75, 1.25], ['motion', 0, 2]] as const) {
+    if (key in raw) patch[key] = parseNumber(raw[key], key, value => Math.min(max, Math.max(min, value)), { min, max });
+  }
   if ('uiSize' in raw)
     patch.uiSize = parseNumber(
       raw.uiSize,
@@ -367,7 +402,15 @@ export const __testing = { parsePatch };
 /** Plugin settings use the same profile owner and existing window broadcast. */
 export function publishAppearanceFromOwner(settings: AppearanceSettings): void {
   applyAppearanceToWindows(settings);
+  applyDockIcon(settings);
   broadcast(settings);
+}
+
+/** Rebuild the active theme before the first window or a catalog/mode refresh. */
+export async function refreshAppearanceTheme(): Promise<AppearanceSettings> {
+  const settings = await appearanceService.refresh();
+  publishAppearanceFromOwner(settings);
+  return settings;
 }
 
 /** UI and Agent edits share validation, persistence, live windows and broadcasts. */
