@@ -47,7 +47,7 @@ import { ChatFilePathContext, type ChatFilePathContextValue } from '@/session/ch
 import { QuestionReferenceText } from '@/session/QuestionReferenceText';
 import { formatRemoteError } from '@/device-link/remoteStatus';
 import { useMobileMakerTransport } from '@/device-link/useMobileMakerTransport';
-import { asyncQuestionNeedsSupplement, formatAsyncQuestionSupplement, withdrawnQuestionDraftText } from '@cindy/maker-shared/interaction';
+import { asyncQuestionNeedsSupplement, formatAsyncQuestionReplyDisplay, formatAsyncQuestionSupplement, withdrawnQuestionDraftText } from '@cindy/maker-shared/interaction';
 import { useAskCardVoice } from '@/session/useAskCardVoice';
 import { buildQueuedTextMessage } from '@/session/inputProjection';
 import {
@@ -605,7 +605,11 @@ function InteractionItem({
           const answerText = formatAsyncQuestionSupplement(normalizeAskQuestions(item.request.questions),
             (decision.answers ?? {}) as Record<string, string>);
           const answerId = bytesToHex(sha256(answerText));
-          const queued = buildQueuedTextMessage(session, text, new Date(), `question-reply:${currentRequestId}:${answerId}`, { planMode: false });
+          // History and the queue show the question and the answer; only the model's copy
+          // carries the native reply format and the delayed-answer note.
+          const queued = buildQueuedTextMessage(session, formatAsyncQuestionReplyDisplay(normalizeAskQuestions(item.request.questions),
+            (decision.answers ?? {}) as Record<string, string>), new Date(), `question-reply:${currentRequestId}:${answerId}`, { planMode: false });
+          queued.text = text;
           // Only a definite negative ACK permits enqueue after steer.
           const steered = inputProjection.queuePaused ? false
             : await maker.input.steer(sessionId, queued, { touchUserSend: true });

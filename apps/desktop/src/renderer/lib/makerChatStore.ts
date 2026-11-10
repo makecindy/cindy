@@ -6,7 +6,10 @@ import { isVoiceCallTaskMessage } from '../../shared/voiceConversation';
 import { remoteAgentLimitErrorKey } from '../../shared/remoteAgentLimits';
 import { sharedTaskRecoveryReason } from '../../shared/sharedTaskRecovery';
 import { readBotTaskResults } from '@cindy/maker-shared/botCollaboration';
-import { asyncQuestionNeedsSupplement, formatAsyncQuestionSupplement } from '@cindy/maker-shared/interaction';
+import {
+  asyncQuestionNeedsSupplement, asyncQuestionReplyDisplayText, formatAsyncQuestionReplyDisplay,
+  formatAsyncQuestionSupplement, isAnsweredAsyncQuestionClientId, isAsyncQuestionReplyClientId,
+} from '@cindy/maker-shared/interaction';
 import { isComposerTypingRecently } from './composerTypingActivity';
 import { readTokenSpeedSnapshot, type TokenSpeedSnapshot } from '@cindy/maker-shared/usage-format';
 import { remotePluginSetupErrorCode, type PluginSetupCommandError } from './pluginSetupCommandError';
@@ -17544,9 +17547,13 @@ async function sendProtectedQuestionSupplement(sessionId: string, requestId: str
     const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(answerText));
     const answerId = Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('');
     if (!current()) return;
-    const queued = buildQueuedMessage(sessionId, text, session.model, session.effort,
+    // History and the queue show the question and the answer; only the model's copy
+    // carries the native reply format and the delayed-answer note.
+    const queued = buildQueuedMessage(sessionId,
+      formatAsyncQuestionReplyDisplay(protectedQuestion.pending.questions, answers), session.model, session.effort,
       session.permissionMode, session.workingDir ?? '', undefined, undefined, undefined,
       { clientId: `question-reply:${requestId}:${answerId}`, createdAt: new Date().toISOString() });
+    queued.text = text;
     queued.createOpts = { ...queued.createOpts, planMode: false,
       agentKind: dbAgentKindToMakerKind(session.agentKind, state.agentKind),
       ...(session.sdkSessionId ? { resumeSessionId: session.sdkSessionId } : {}),
@@ -20021,7 +20028,14 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
           },
         };
       }
+      // The question card already shows this answer: the row keeps its place in the
+      // timeline (like the hidden instruction rows above) without a second copy as a bubble.
+      if (isAnsweredAsyncQuestionClientId(m.clientId)) {
+        return { clientId: m.clientId, role: m.role, content: '', isStreaming: false, isSyntheticTrigger: true };
+      }
       const parsed = parseUserContent(m.content);
+      // Replies saved before the readable copy existed hold the text sent to the model.
+      if (isAsyncQuestionReplyClientId(m.clientId)) parsed.text = asyncQuestionReplyDisplayText(parsed.text);
       // scheduler / 工具 / Orca 注入的消息带 agentMeta.origin(历史加载与
       // messages:created 直推两条路径都经过这里),投影后透传给 UserMessage 渲染来源标签。
       const automationOrigin = toMessageAutomationOrigin(m.agentMeta?.origin);

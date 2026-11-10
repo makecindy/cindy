@@ -1,3 +1,4 @@
+import { isAsyncQuestionReplyClientId } from '@cindy/maker-shared/interaction';
 import { forwardedRequestDisplayText, isHookSchedulerOrigin } from '@cindy/maker-shared/message-source';
 import { queueItemVisibleSource, queueItemVisibleText } from '@cindy/maker-shared/queue';
 import { UI_ACTION_TRIGGER_PREFIX, type QueuedMessage } from '@/lib/makerChatStore';
@@ -102,7 +103,10 @@ export function getPendingQueueRowPresentation(entry: QueuedMessage): PendingQue
         ? (isSession ? forwardedRequestDisplayText(queueItemVisibleText(entry)) : queueItemVisibleText(entry))
         : entry.chatMessage.quotesEncoded === true
           ? stripChatQuoteMarkerLines(entry.text)
-          : entry.text,
+          // An answer to a question shows as the question and the answer, never the reply format sent to the model.
+          : isAsyncQuestionReplyClientId(entry.clientId)
+            ? queueItemVisibleText(entry)
+            : entry.text,
     rangedSourceText:
       isScheduler || isSession || isPlugin
         ? (() => {

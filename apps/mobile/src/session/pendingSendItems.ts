@@ -183,7 +183,7 @@ export function mergePendingSendItems(
 }
 
 type PendingSendTextSource = Pick<QueuedRemoteMessage, 'text' | 'chatMessage'>
-  & Partial<Pick<QueuedRemoteMessage, 'persistedContent' | 'files' | 'origin'>>;
+  & Partial<Pick<QueuedRemoteMessage, 'clientId' | 'persistedContent' | 'files' | 'origin'>>;
 
 function readRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' && !Array.isArray(value)
