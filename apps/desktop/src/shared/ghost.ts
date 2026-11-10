@@ -7329,6 +7329,7 @@ export type GhostPipeNodeResult =
         | 'CANCELLED'
         | 'INVALID_REQUEST'
         | 'PERMISSION_DENIED'
+        | 'HOST_INJECTION_REQUIRED'
         | 'PROCESS_START_FAILED'
         | 'PROCESS_EXITED'
         | 'PROTOCOL_ERROR'

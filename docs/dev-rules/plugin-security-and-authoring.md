@@ -596,12 +596,18 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
   不允许 `exchange` 或 `setup.requires` 引用。安装确认须说明它能使用本机 GitHub 账号的实际权限。
 - OAuth 已连接账号复用沿用现有 `source:'oauth'` 服务端点、scope 与注入范围声明，由
   `GhostOauthAccountManager` 管理。只列当前 owner 下已批准、启用的来源，授权/token 端点必须相同，
-  注入头形态一致且目标范围不超出原来源，所需 scope 不超出现有授权面。宿主原生确认不可由插件
+  注入头形态一致且目标范围不超出原来源，所需 scope 不超出账号授权范围快照（旧账号无快照时
+  按原来源声明比较，实际访问仍由服务端决定）。宿主原生确认不可由插件
   代答；缺确认回调就拒绝复用。原 OAuth 账号记录只保存引用，不复制 refresh/client 凭证，
-  每次出网重新核对来源与目标声明/安装代次；停用、断开、撤销或范围不再匹配立即失效。
+  取得令牌后、实际派发前及每次流读取时重新核对来源与目标声明/安装代次；停用、断开、撤销或
+  范围不再匹配即拒绝后续派发/读取，上传准备期间撤销也不得继续带凭证派发。
   broker 刷新仍以原来源插件身份执行，不向受用插件授予 broker 资格。401 作废走原来源缓存，
   断开受用插件只删除该引用。复用结果只供宿主网络注入，`node.secretBindings` 返回
   `HOST_INJECTION_REQUIRED`，不能借旧 Node 明文绑定读取所引用的账号令牌。旧账号存储保持原义。
+  Cindy 自有详情区通过 trusted-renderer-only 的账号目录与操作 IPC 办理选择/停止使用，
+  插件页面不能调用。停止使用在 OAuth 原变更锁内复读当前记录，停用插件也可撤销；
+  引用删除落库失败必须回失败，`/oauth` 同样不能返回 204 假称已断开。界面目录与请求结果
+  按 owner generation 丢弃，不能在切换账号后显示旧账号资料。
 - `source: "oidc-token"` 是 Host 托管的短时 Cindy Connection JWT：只对当前企业
   Membership 生效。资格有两条默认基座：当前组织的 Plugin Market organization 安装记录仍有效、
   且安装目录 `ghost.json` 的 raw SHA（旧记录迁移前为集中 legacy digest）与记录一致；

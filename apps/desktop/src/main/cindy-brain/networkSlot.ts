@@ -208,7 +208,7 @@ export interface NetworkSlotDeps {
       decl: GhostSecretOauthDecl,
       accountId?: string,
     ): Promise<
-      | { ok: true; accessToken: string; accountId: string }
+      | { ok: true; accessToken: string; accountId: string; assertCurrent?(): void }
       | {
           ok: false;
           error:
@@ -1259,10 +1259,11 @@ export class GhostNetworkSlot {
     const guardedFetchReleases: Array<() => Promise<void>> = [];
     try {
       const hostGuard = this.captureGuard(instanceKey);
-      const assertStillValid = () => { hostGuard(); nodeAuth?.assertCurrent(); };
+      const credentialGuards: Array<() => void> = [];
+      const assertStillValid = () => { hostGuard(); nodeAuth?.assertCurrent(); for (const guard of credentialGuards) guard(); };
       assertStillValid();
       const inject0 = await this.injectSecrets(
-        instanceKey, declaredSecrets, connectionDecls, url, declaredHosts, requestHeaders, authAccount,
+        instanceKey, declaredSecrets, connectionDecls, url, declaredHosts, requestHeaders, authAccount, credentialGuards,
       );
       assertStillValid();
       if (inject0.error) return { ok: false, message: inject0.error };
@@ -1336,6 +1337,7 @@ export class GhostNetworkSlot {
             declaredHosts,
             requestHeaders,
             authAccount,
+            credentialGuards,
           );
           if (reInject.error) return { ok: false, message: reInject.error };
           initialConnectionInjected = new Map(reInject.connectionInjected);
@@ -1369,6 +1371,7 @@ export class GhostNetworkSlot {
               declaredHosts,
               hopHeaders,
               authAccount,
+              credentialGuards,
             );
             if (hopInject.error) return { ok: false, message: hopInject.error };
             currentConnectionInjected = hopInject.connectionInjected;
@@ -1811,6 +1814,7 @@ export class GhostNetworkSlot {
     allHosts: readonly string[],
     headers: Record<string, string>,
     authAccount?: string,
+    credentialGuards: Array<() => void> = [],
   ): Promise<{
     error: string | null;
     usedExchange: boolean;
@@ -1850,6 +1854,7 @@ export class GhostNetworkSlot {
       if ('error' in resolved) {
         return { error: resolved.error, usedExchange, oauthInjected, connectionInjected };
       }
+      if (resolved.assertCurrent) { resolved.assertCurrent(); credentialGuards.push(resolved.assertCurrent); }
       if (secret.exchange !== undefined) usedExchange = true;
       if (resolved.oauthAccountId !== undefined) oauthInjected.set(secret.key, resolved.oauthAccountId);
       if (resolved.connectionTokenKey !== undefined) {
@@ -1896,6 +1901,7 @@ export class GhostNetworkSlot {
     | {
         value: string;
         oauthAccountId?: string;
+        assertCurrent?(): void;
         connectionTokenKey?: { membershipId: string; audience: string; hostname: string };
       }
     | { error: string }
@@ -1989,7 +1995,7 @@ export class GhostNetworkSlot {
             return { error: `凭证「${secret.label}」刷新令牌失败${result.detail ? `:${result.detail}` : ''},请稍后重试` };
         }
       }
-      return { value: result.accessToken, oauthAccountId: result.accountId };
+      return { value: result.accessToken, oauthAccountId: result.accountId, assertCurrent: result.assertCurrent };
     }
     let raw: string;
     if (secret.source === 'login-email') {

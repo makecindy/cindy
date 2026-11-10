@@ -799,6 +799,7 @@ export class GhostNodeRuntimeBroker {
             }
             if (!resolved.ok) {
               clearHostSecrets(hostSecrets);
+              if (resolved.error === 'HOST_INJECTION_REQUIRED') return errorResult('HOST_INJECTION_REQUIRED', 'Use cindy.fetch for reused accounts');
               return errorResult('PERMISSION_DENIED', '账号不可用，请在插件详情页检查授权');
             }
             value = resolved.accessToken;

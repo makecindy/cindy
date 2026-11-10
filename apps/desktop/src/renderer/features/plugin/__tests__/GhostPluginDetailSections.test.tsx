@@ -114,6 +114,7 @@ import {
 } from '../GhostPluginDetailView';
 import { toGhostPluginDetail, type GhostPluginDetail } from '../lib/ghostPluginViewModel';
 import { RemotePluginReadOnlyDetail } from '../RemotePluginReadOnlyDetail';
+import { GhostAccountReuseSection } from '../GhostAccountReuseSection';
 
 const permissions: GhostPermissionItem[] = [
   {
@@ -188,6 +189,49 @@ beforeEach(() => {
 
     },
   });
+});
+
+// Tier 1: the real Host account controls must submit an exact chosen reference,
+// revoke only the consuming account, and discard another owner's late reply.
+it('selects an existing Host account and stops only its consumer reference', async () => {
+  const scroll = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'scrollIntoView');
+  Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
+  try {
+  const source = { instanceKey: 'source', secretKey: 'google', accountId: 'original', pluginName: 'Source', label: 'account@example.test', scopes: ['read'] };
+  let connected = false;
+  const reusableAccounts = vi.fn(async () => [{ key: 'google', label: 'Google', options: [source],
+    accounts: connected ? [{ id: 'consumer-reference', label: 'account@example.test', status: 'connected' as const }] : [] }]);
+  const reuseAccount = vi.fn(async (_id: string, request: { kind: string }) => { connected = request.kind === 'connect'; return { ok: true }; });
+  Object.assign(window.electronAPI, { ghosts: { reusableAccounts, reuseAccount } });
+  render(<GhostAccountReuseSection ghostId="consumer" declared enabled />);
+  fireEvent.click(await screen.findByRole('combobox'));
+  fireEvent.click(await screen.findByRole('option', { name: 'Source · account@example.test' }));
+  fireEvent.click(screen.getByRole('button', { name: 'settings.ghosts.detail.reuseAccountUse' }));
+  await screen.findByRole('button', { name: 'settings.ghosts.detail.reuseAccountStop' });
+  expect(reuseAccount).toHaveBeenCalledWith('consumer', { kind: 'connect', secretKey: 'google', source: { instanceKey: 'source', secretKey: 'google', accountId: 'original' } });
+  fireEvent.click(screen.getByRole('button', { name: 'settings.ghosts.detail.reuseAccountStop' }));
+  await waitFor(() => expect(screen.queryByRole('button', { name: 'settings.ghosts.detail.reuseAccountStop' })).toBeNull());
+  expect(reuseAccount).toHaveBeenLastCalledWith('consumer', { kind: 'disconnect', secretKey: 'google', accountId: 'consumer-reference' });
+  } finally {
+    if (scroll) Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', scroll);
+    else Reflect.deleteProperty(HTMLElement.prototype, 'scrollIntoView');
+  }
+});
+
+it('discards a late account catalogue after switching data owners', async () => {
+  let finish!: (value: unknown) => void;
+  const reusableAccounts = vi.fn().mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }))
+    .mockResolvedValue([{ key: 'new', label: 'Current owner account', options: [], accounts: [] }]);
+  Object.assign(window.electronAPI, { ghosts: { reusableAccounts, reuseAccount: vi.fn() } });
+  const view = <GhostAccountReuseSection ghostId="consumer" declared enabled />;
+  const { rerender } = render(view);
+  await waitFor(() => expect(reusableAccounts).toHaveBeenCalledOnce());
+  ownerGeneration.value += 1;
+  rerender(<GhostAccountReuseSection ghostId="consumer" declared enabled />);
+  await waitFor(() => expect(reusableAccounts).toHaveBeenCalledTimes(2));
+  await act(async () => { finish([{ key: 'old', label: 'Old owner account', options: [], accounts: [] }]); });
+  expect(screen.queryByText('Old owner account')).toBeNull();
+  expect(await screen.findByText('Current owner account')).toBeTruthy();
 });
 
 afterEach(() => {

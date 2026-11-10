@@ -11,6 +11,7 @@ import { createServer } from 'node:http';
 import { WebSocketServer } from 'ws';
 import { createPluginControlPipe } from '../../desktop/src/main/cindy-brain/nodeRuntimePipe.ts';
 import { GhostNetworkSlot } from '../../desktop/src/main/cindy-brain/networkSlot.ts';
+import { GhostOauthAccountManager } from '../../desktop/src/main/cindy-brain/ghostOauthAccounts.ts';
 import { createHostNodeRuntimeBroker } from './plugins/node-process.ts';
 
 import { dataOwnerStorageKey } from '../../desktop/src/main/dataOwnerPath.ts';
@@ -69,7 +70,12 @@ test('a missing profile yields an empty list rather than an error', (t) => {
 // broker tests use fake OS processes and cannot cover this platform adapter.
 test('runs and reaps real plugin workers through the common broker', async t => {
   const dir = tempProfile(t);
-  const http = createServer((_request, response) => { response.writeHead(200, { 'content-type': 'text/event-stream' }); response.write('data: ready\n\n'); });
+  const http = createServer((request, response) => {
+    if (request.url === '/account') {
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end(JSON.stringify({ authorized: request.headers.authorization === 'Bearer synthetic-host-only-access' }));
+    } else { response.writeHead(200, { 'content-type': 'text/event-stream' }); response.write('data: ready\n\n'); }
+  });
   const websocket = new WebSocketServer({ server: http });
   websocket.on('connection', socket => socket.on('message', (bytes, binary) => socket.send(bytes, { binary })));
   await new Promise(resolve => http.listen(0, '127.0.0.1', resolve));
@@ -109,6 +115,9 @@ test('runs and reaps real plugin workers through the common broker', async t => 
         const echoed = await cindy.network.read({ connectionId: socket.connectionId, waitMs: 1000 });
         await cindy.network.close({ connectionId: socket.connectionId });
         result = { status: stream.status, first, echoed };
+      } else if (request.method === 'account') {
+        const response = await cindy.fetch({ url: 'https://api.example.test/account' });
+        result = { response, receivedSecrets: !!request.cindy?.secrets };
       } else result = { value: request.params.value, pid: process.pid,
         filtered: process.env.CINDY_TEST_PRIVATE_HOST_VALUE === undefined,
         privatePort: process.parentPort === undefined && process.send === undefined };
@@ -123,13 +132,35 @@ test('runs and reaps real plugin workers through the common broker', async t => 
     else process.env.CINDY_TEST_PRIVATE_HOST_VALUE = previous; });
   const ghost = { manifest: { id: 'test-node', version: '1.0.0', node: {
     entry: 'worker.cjs', protocol: 'json-rpc-stdio', entries: ['child.cjs'], childSpawn: true,
-  }, network: { hosts: ['http://127.0.0.1:' + port, 'ws://127.0.0.1:' + port] } }, dir, enabled: true,
+    secretBindings: [{ key: 'raw_account', label: 'Account', oauthSecret: 'account', methods: ['raw-account'] }],
+  }, network: { hosts: ['api.example.test', 'http://127.0.0.1:' + port, 'ws://127.0.0.1:' + port],
+    secrets: [{ key: 'account', label: 'Account', source: 'oauth', inject: { header: 'Authorization', format: 'Bearer {value}', hosts: ['api.example.test'] },
+      oauth: { authorizeUrl: 'https://accounts.example.test/authorize', tokenUrl: 'https://accounts.example.test/token', scopes: ['read'], clientId: 'fixture-client' } }] } }, dir, enabled: true,
     approval: { state: 'approved', revision: 'real-worker-fixture' } };
+  const original = { ...ghost, manifest: { ...ghost.manifest, id: 'source-account' } };
+  const values = new Map([
+    ['source-account:account-client-id', 'fixture-client'],
+    ['source-account:account-accounts', JSON.stringify({ defaultAccountId: 'original', accounts: [{ id: 'original', label: 'demo@example.test', status: 'connected', createdAt: 1 }] })],
+    ['source-account:account-rt-original', 'synthetic-source-refresh'],
+  ]);
+  const oauth = new GhostOauthAccountManager({
+    vault: { read: (id, key) => values.get(id + ':' + key) ?? null, store: (id, key, value) => { values.set(id + ':' + key, value); return true; }, remove: (id, key) => values.delete(id + ':' + key) },
+    connectionSources: () => [ghost, original].map(item => ({ instanceKey: item.manifest.id, name: item.manifest.id, manifest: item.manifest })),
+    confirmAccountReuse: async () => true, openExternal: () => { throw new Error('reuse must not log in again'); },
+    fetchImpl: async () => Response.json({ access_token: 'synthetic-host-only-access', token_type: 'Bearer', expires_in: 3600 }),
+  });
+  assert.equal((await oauth.reuseAccount('test-node', 'account', ghost.manifest.network.secrets[0].oauth,
+    { instanceKey: 'source-account', secretKey: 'account', accountId: 'original' })).ok, true);
   const network = new GhostNetworkSlot({ getGhost: () => ghost, readSecret: () => null, getLoginEmail: () => null,
-    fetchImpl: (url, init) => fetch(url, init), fetchPublicImpl: async () => { throw new Error('undeclared request'); },
+    // Deterministic transport double: synthetic HTTPS origin reaches this real
+    // loopback server. This verifies Host injection, not TLS/DNS behavior.
+    fetchImpl: (url, init) => fetch(url === 'https://api.example.test/account' ? 'http://127.0.0.1:' + port + '/account' : url, init),
+    fetchPublicImpl: async () => { throw new Error('undeclared request'); },
+    oauthTokens: { getFreshAccessToken: (...args) => oauth.getFreshAccessToken(...args), invalidateAccessToken: (...args) => oauth.invalidateAccessToken(...args) },
     readGhostMedia: async () => null, takeDirDeposit: () => null, writeSaveDeposit: async () => null,
     saveGhostMedia: async () => { throw new Error('media not used'); }, isSupportedMediaMime: () => false });
   const broker = createHostNodeRuntimeBroker(workerEntry, { getGhost: () => ghost,
+    resolveOauthSecret: (id, key, accountId) => oauth.getNodeAccessToken(id, key, ghost.manifest.network.secrets[0].oauth, accountId),
     networkRequest: (id, request) => request.op === 'fetch' ? network.handleFetchRequest(id, request) : network.handleNetworkRequest(id, request) });
   try {
     const first = await broker.handleRequest('test-node', { type: 'node-request', method: 'echo', params: { value: '你好' } });
@@ -145,6 +176,15 @@ test('runs and reaps real plugin workers through the common broker', async t => 
     assert.equal(connected.result.status, 200);
     assert.equal(connected.result.first.events[0].data, 'data: ready\n\n');
     assert.equal(connected.result.echoed.events[0].data, 'plugin-frame');
+    const account = await broker.handleRequest('test-node', { type: 'node-request', method: 'account' });
+    assert.equal(account.ok, true, JSON.stringify(account));
+    assert.equal(account.result.response.ok, true);
+    assert.equal(JSON.parse(account.result.response.body).authorized, true);
+    assert.equal(account.result.receivedSecrets, false);
+    assert.equal(JSON.stringify(account).includes('synthetic-host-only-access'), false);
+    const raw = await broker.handleRequest('test-node', { type: 'node-request', method: 'raw-account' });
+    assert.equal(raw.ok, false);
+    assert.equal(raw.errorCode, 'HOST_INJECTION_REQUIRED');
     await broker.stopAndWait('test-node');
     assert.throws(() => process.kill(first.result.pid, 0), { code: 'ESRCH' });
     ghost.enabled = false;

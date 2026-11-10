@@ -16,6 +16,12 @@ import {
   type GhostOauthVault,
 } from '../ghostOauthAccounts.js';
 import type { GhostOauthAvatarHop } from '../ghostOauthFlow.js';
+import { createGhostProductionCallbacks } from './ghostProductionCallbacksFixture.js';
+
+const createAccountReuseIpc = createGhostProductionCallbacks<{
+  list(event: { trusted: boolean }, id: string): unknown;
+  change(event: { trusted: boolean }, id: string, request: unknown): Promise<{ ok: boolean }>;
+}>({ callbacks: { list: ['ipcMain.handle', 'ghosts:reusable-accounts'], change: ['ipcMain.handle', 'ghosts:reuse-account'] } });
 
 /** invalid_grant 路径的即时延时假体(不注入会真等 2 秒拖慢用例)。 */
 const instantSleep = async (): Promise<void> => {};
@@ -166,10 +172,13 @@ describe('reuse of owner-selected existing OAuth accounts', () => {
     h.mgr.invalidateAccessToken(h.consumer, KEY, first.accountId);
     expect(await h.mgr.getFreshAccessToken(h.consumer, KEY, decl)).toMatchObject({ ok: true });
     expect(h.fetchImpl).toHaveBeenCalledTimes(2);
+    expect(await h.mgr.getNodeAccessToken(h.consumer, KEY, decl)).toMatchObject({ ok: false, error: 'HOST_INJECTION_REQUIRED' });
+    expect(await h.mgr.getNodeAccessToken(GHOST, KEY, h.sourceManifest.network!.secrets![0]!.oauth!)).toMatchObject({ ok: true, accessToken: 'source-access' });
     const consumerData = [...h.vault.data].filter(([key]) => key.startsWith(h.consumer + '\u0000'));
     expect(JSON.stringify(consumerData)).not.toMatch(/source-refresh|source-access|csec/);
     expect(h.vault.read(GHOST, KEY + '-rt-acc-1')).toBe('source-refresh');
     h.hideSource();
+    expect(() => first.assertCurrent?.()).toThrow('OAUTH_REFERENCE_CHANGED');
     expect(await h.mgr.getFreshAccessToken(h.consumer, KEY, decl)).toMatchObject({ ok: false, error: 'AUTH_EXPIRED' });
     expect(h.fetchImpl).toHaveBeenCalledTimes(2);
   });
@@ -233,6 +242,29 @@ describe('reuse of owner-selected existing OAuth accounts', () => {
     expect(await mgr.reuseAccount(h.consumer, KEY, decl, h.selection)).toMatchObject({ ok: true });
     expect(await mgr.getFreshAccessToken(h.consumer, KEY, decl)).toMatchObject({ ok: true, accessToken: 'broker-access', reused: true });
     expect(refresh).toHaveBeenCalledWith('google', { refreshToken: 'source-refresh' });
+  });
+
+  it('permits only the trusted Cindy UI and keeps reference revocation available while disabled', async () => {
+    const h = setup();
+    const ghost = { manifest: h.consumerManifest, enabled: true, approval: { state: 'approved' } };
+    const handlers = createAccountReuseIpc({
+      assertTrustedAppRendererEvent: (event: { trusted: boolean }) => { if (!event.trusted) throw new Error('UNTRUSTED'); },
+      isGhostInstanceId: () => true, requireGhostAvailableForActiveSession: () => {}, findGhostForInstanceId: () => ghost,
+      getGhostOauthAccountManager: () => h.mgr, getGhostSetupChangeBus: () => ({ emit() {} }),
+      withActiveOwnerGhostOauthMutationLock: (_id: string, task: () => unknown) => Promise.resolve(task()),
+      throwIpcError: (code: string) => { throw new Error(code); },
+    });
+    expect(() => handlers.list({ trusted: false }, h.consumer)).toThrow('UNTRUSTED');
+    await expect(handlers.change({ trusted: false }, h.consumer, { kind: 'connect', secretKey: KEY, source: h.selection })).rejects.toThrow('UNTRUSTED');
+    expect(await handlers.change({ trusted: true }, h.consumer, { kind: 'connect', secretKey: KEY, source: { ...h.selection, extra: 'untrusted-field' } })).toEqual({ ok: true });
+    const list = handlers.list({ trusted: true }, h.consumer) as Array<{ accounts: { id: string }[] }>;
+    const accountId = list[0]!.accounts[0]!.id;
+    expect(JSON.stringify(list)).not.toMatch(/source-refresh|source-access|untrusted-field/);
+    ghost.enabled = false;
+    expect(await handlers.change({ trusted: true }, h.consumer, { kind: 'disconnect', secretKey: KEY, accountId })).toEqual({ ok: true });
+    expect(h.mgr.listAccounts(h.consumer, KEY)).toEqual([]);
+    expect(h.mgr.listAccounts(GHOST, KEY)).toHaveLength(1);
+    await expect(handlers.change({ trusted: true }, h.consumer, { kind: 'connect', secretKey: KEY, source: h.selection })).rejects.toThrow('PERMISSION_DENIED');
   });
 });
 

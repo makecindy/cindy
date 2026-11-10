@@ -207,7 +207,7 @@ export type GhostOauthConnectResult =
     };
 
 export type GhostOauthAccessTokenResult =
-  | { ok: true; accessToken: string; accountId: string; reused?: true }
+  | { ok: true; accessToken: string; accountId: string; reused?: true; assertCurrent?(): void }
   | {
       ok: false;
       /**
@@ -936,13 +936,13 @@ export class GhostOauthAccountManager {
   }
 
   /** 断开账号:清 refresh token、清头像、清缓存、从清单摘除(幂等)。 */
-  disconnectAccount(instanceKey: string, secretKey: string, accountId: string): void {
+  disconnectAccount(instanceKey: string, secretKey: string, accountId: string): boolean {
     const manifest = parseManifest(this.deps.vault.read(instanceKey, accountsKey(secretKey)));
     const remaining = manifest.accounts.filter((a) => a.id !== accountId);
     this.deps.vault.remove(instanceKey, refreshTokenKey(secretKey, accountId));
     this.deps.vault.remove(instanceKey, avatarKey(secretKey, accountId));
     this.tokenCache.delete(this.cacheKey(instanceKey, secretKey, accountId));
-    this.deps.vault.store(
+    return this.deps.vault.store(
       instanceKey,
       accountsKey(secretKey),
       JSON.stringify({
@@ -1329,12 +1329,16 @@ export class GhostOauthAccountManager {
       if (!this.reuseTargetCurrent(instanceKey, secretKey, decl, target) ||
           !this.reuseTargetCurrent(row.reused.instanceKey, row.reused.secretKey, source.secret.oauth, sourceTarget)) return { ok: false, error: 'AUTH_EXPIRED' };
       const result = await this.getFreshAccessToken(row.reused.instanceKey, row.reused.secretKey, source.secret.oauth, row.reused.accountId);
-      const currentRow = parseManifest(this.deps.vault.read(instanceKey, accountsKey(secretKey))).accounts.find(account => account.id === resolvedId);
-      if (this.ghostGeneration(instanceKey) !== generation || this.ghostGeneration(row.reused.instanceKey) !== sourceGeneration ||
-          !this.reuseTargetCurrent(instanceKey, secretKey, decl, target) ||
-          !this.reuseTargetCurrent(row.reused.instanceKey, row.reused.secretKey, source.secret.oauth, sourceTarget) ||
-          !isDeepStrictEqual(currentRow?.reused, row.reused) || !this.resolveReusableAccount(instanceKey, secretKey, decl, row.reused)) return { ok: false, error: 'AUTH_EXPIRED' };
-      return result.ok ? { ...result, accountId: resolvedId, reused: true } : result;
+      const ref = row.reused;
+      const assertCurrent = () => {
+        const currentRow = parseManifest(this.deps.vault.read(instanceKey, accountsKey(secretKey))).accounts.find(account => account.id === resolvedId);
+        if (this.ghostGeneration(instanceKey) !== generation || this.ghostGeneration(ref.instanceKey) !== sourceGeneration ||
+            !this.reuseTargetCurrent(instanceKey, secretKey, decl, target) ||
+            !this.reuseTargetCurrent(ref.instanceKey, ref.secretKey, source.secret.oauth, sourceTarget) ||
+            !isDeepStrictEqual(currentRow?.reused, ref) || !this.resolveReusableAccount(instanceKey, secretKey, decl, ref)) throw new Error('OAUTH_REFERENCE_CHANGED');
+      };
+      try { assertCurrent(); } catch { return { ok: false, error: 'AUTH_EXPIRED' }; }
+      return result.ok ? { ...result, accountId: resolvedId, reused: true, assertCurrent } : result;
     }
     // 旧 refresh token 与新的内置 clientId 不成对；必须重新走浏览器授权，
     // 不能先拿新 client 尝试刷新再把仍需保留的旧 token 当 invalid_grant 删除。
@@ -1360,10 +1364,15 @@ export class GhostOauthAccountManager {
     return task;
   }
 
-  /**
-   * 401 作废通道(networkSlot 上游 401 时调用):丢缓存,下一单强制刷新。
-   * 与 exchange 引擎的"作废重换整链重试一次"同一套路。
-   */
+  /** Only an explicitly bound, directly owned account may enter Node plaintext. */
+  async getNodeAccessToken(instanceKey: string, secretKey: string, decl: GhostOauthDecl, accountId?: string): Promise<
+    GhostOauthAccessTokenResult | { ok: false; error: 'HOST_INJECTION_REQUIRED' }
+  > {
+    const result = await this.getFreshAccessToken(instanceKey, secretKey, decl, accountId);
+    return result.ok && result.reused ? { ok: false, error: 'HOST_INJECTION_REQUIRED' } : result;
+  }
+
+  /** 401 invalidates the original source's cache so the next request refreshes once. */
   invalidateAccessToken(instanceKey: string, secretKey: string, accountId: string): void {
     this.tokenCache.delete(this.cacheKey(instanceKey, secretKey, accountId));
     const ref = parseManifest(this.deps.vault.read(instanceKey, accountsKey(secretKey))).accounts.find(row => row.id === accountId)?.reused;

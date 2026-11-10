@@ -2669,13 +2669,12 @@ export function getGhostNodeRuntimeBroker(): GhostNodeRuntimeBroker {
           : undefined;
         if (source?.source !== 'oauth' || !source.oauth)
           return { ok: false, error: 'INVALID_DECLARATION' };
-        const resolved = await getGhostOauthAccountManager().getFreshAccessToken(
+        return getGhostOauthAccountManager().getNodeAccessToken(
           ghostId,
           secretKey,
           source.oauth,
           accountId,
         );
-        return resolved.ok && resolved.reused ? { ok: false, error: 'HOST_INJECTION_REQUIRED' } : resolved;
       },
       sendToGhost: (ghostId, payload) => {
         sendToGhostLogic(ghostId, payload);
@@ -6298,6 +6297,25 @@ function getGhostOauthAccountManager(): GhostOauthAccountManager {
         return ghost?.enabled && ghost.approval?.state === 'approved' && isGhostAvailableForActiveSession(instanceKey)
           ? [{ instanceKey, name: ghost.manifest.name, manifest: ghost.manifest }] : [];
       }),
+      confirmAccountReuse: async input => {
+        const owner = activeOwnerScopeKey();
+        const parent = getDeepLinkMainWindow();
+        const ghost = findGhostForInstanceId(input.instanceKey);
+        if (isGhostBoundaryPending() || !ghost || !parent || parent.isDestroyed() || !isTrustedAppRendererWindow(parent)) return false;
+        const safe = (value: string) => sanitizeGhostNoticeText(value).replace(/\n+/g, ' ').slice(0, 200);
+        const decision = await dialog.showMessageBox(parent, {
+          type: 'question', title: t('settings.ghosts.detail.reuseAccountTitle'),
+          message: t('settings.ghosts.detail.reuseAccountConfirmMessage')
+            .replaceAll('{{name}}', () => safe(ghost.manifest.name))
+            .replaceAll('{{account}}', () => safe(input.source.label ?? input.source.accountId))
+            .replaceAll('{{source}}', () => safe(input.source.pluginName)),
+          detail: t('settings.ghosts.detail.reuseAccountConfirmDetail')
+            .replaceAll('{{hosts}}', () => input.hosts.join(', '))
+            .replaceAll('{{scopes}}', () => input.source.scopes.join('\n') || t('settings.ghosts.detail.reuseAccountUnknownScopes')),
+          buttons: [t('settings.ghosts.detail.reuseAccountUse'), t('common.cancel')], defaultId: 1, cancelId: 1, noLink: true,
+        });
+        return decision.response === 0 && !isGhostBoundaryPending() && owner === activeOwnerScopeKey() && !parent.isDestroyed();
+      },
       vault: {
         read: (ghostId, storageKey) => readGhostSecret(ghostId, storageKey),
         readStrict: (ghostId, storageKey) => readGhostSecretStrict(ghostId, storageKey),
@@ -10410,6 +10428,47 @@ export function registerGhostIpc(): void {
   });
 
   // ── 配置就绪检查(使用前置门,判定与 handler 主体在 ghostSetupStatus.ts)──
+  ipcMain.handle('ghosts:reusable-accounts', (event, id: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    if (typeof id !== 'string' || !isGhostInstanceId(id)) throwIpcError('INVALID_PARAMS', 'Invalid plugin instance');
+    requireGhostAvailableForActiveSession(id);
+    const ghost = findGhostForInstanceId(id);
+    if (!ghost) throwIpcError('NOT_FOUND', 'Plugin not found');
+    const manager = getGhostOauthAccountManager();
+    return (ghost.manifest.network?.secrets ?? []).flatMap(secret => secret.source === 'oauth' && secret.oauth ? [{
+      key: secret.key, label: secret.label,
+      options: ghost.enabled && ghost.approval?.state === 'approved' ? manager.listReusableAccounts(id, secret.key, secret.oauth) : [],
+      accounts: manager.listAccounts(id, secret.key, secret.oauth).filter(account => account.reused)
+        .map(({ id, label, status }) => ({ id, label, status })),
+    }] : []);
+  });
+  ipcMain.handle('ghosts:reuse-account', async (event, id: unknown, payload: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    if (typeof id !== 'string' || !isGhostInstanceId(id) || !payload || typeof payload !== 'object' || Array.isArray(payload)) throwIpcError('INVALID_PARAMS', 'Invalid account reuse request');
+    requireGhostAvailableForActiveSession(id);
+    const request = payload as Record<string, unknown>;
+    const ghost = findGhostForInstanceId(id);
+    const secret = ghost?.manifest.network?.secrets?.find(item => item.source === 'oauth' && item.key === request.secretKey);
+    if (!ghost || !secret?.oauth) throwIpcError('NOT_FOUND', 'OAuth declaration not found');
+    const manager = getGhostOauthAccountManager();
+    if (request.kind === 'disconnect' && typeof request.accountId === 'string') {
+      return withActiveOwnerGhostOauthMutationLock(id, () => {
+        const currentSecret = findGhostForInstanceId(id)?.manifest.network?.secrets?.find(item => item.source === 'oauth' && item.key === secret.key);
+        if (!currentSecret?.oauth || !manager.listAccounts(id, secret.key, currentSecret.oauth).some(account => account.id === request.accountId && account.reused)) throwIpcError('NOT_FOUND', 'Reused account not found');
+        if (!manager.disconnectAccount(id, secret.key, request.accountId as string)) return { ok: false, error: 'VAULT_WRITE_FAILED' };
+        getGhostSetupChangeBus().emit(id, { source: 'oauth', ref: secret.key });
+        return { ok: true };
+      });
+    }
+    const source = request.source as Record<string, unknown> | null;
+    if (request.kind !== 'connect' || !source || typeof source !== 'object' || Array.isArray(source) ||
+        !['instanceKey', 'secretKey', 'accountId'].every(key => typeof source[key] === 'string' && source[key].length > 0 && source[key].length <= 512)) throwIpcError('INVALID_PARAMS', 'Invalid account reference');
+    if (!ghost.enabled || ghost.approval?.state !== 'approved') throwIpcError('PERMISSION_DENIED', 'Plugin is not enabled and approved');
+    const result = await manager.reuseAccount(id, secret.key, secret.oauth, {
+      instanceKey: source.instanceKey as string, secretKey: source.secretKey as string, accountId: source.accountId as string,
+    });
+    return result.ok ? { ok: true } : { ok: false, error: result.error };
+  });
   // 插件页点「使用」时现查:清单推导需求(有 setup 声明按声明,无则启发式),
   // 逐项核对保险库 / OAuth 账号 / 连接 / kv。全同步毫秒级、不缓存、不唤沙箱;
   // oauth 判定用运行时清单(filo-google 的内置 client 是运行时注入的,读原始
