@@ -77,6 +77,30 @@ const persisted = {
 };
 
 describe('appearance settings IPC authorization', () => {
+  // #9758 review, unit: the service restores failure synchronously during backoff.
+  // Existing service tests cannot catch IPC subsequently broadcasting/returning its
+  // pre-reconcile idle snapshot. Minimal input: Bing idle -> reconcile failed/stale.
+  it.each(['failed', 'stale'] as const)('returns and broadcasts reconciled Bing %s after selection', async (status) => {
+    const idle = normalizeAppearanceSettings({
+      wallpaperId: 'bing-daily', bingWallpaper: { status: 'idle', image: null },
+    });
+    const restored = { ...idle, bingWallpaper: { status, image: null } };
+    const content = {
+      isDestroyed: () => false,
+      webContents: { isDestroyed: () => false, send: vi.fn(), setZoomFactor: vi.fn() },
+    };
+    markAppContentWindow(content as never);
+    mocks.allWindows.push(content);
+    mocks.trustedReadWindow.mockReturnValue(true);
+    mocks.writeAppearanceSettingsPatch.mockResolvedValue(idle);
+    mocks.readAppearanceSettings.mockReturnValue(idle);
+    mocks.bingReconcile.mockImplementation(() => {
+      mocks.readAppearanceSettings.mockReturnValue(restored);
+    });
+    const set = mocks.ipcHandle.mock.calls.find(([name]) => name === 'appearance-settings:set-patch')![1];
+    expect(await set({}, { wallpaperId: 'bing-daily' })).toEqual(restored);
+    expect(content.webContents.send).toHaveBeenLastCalledWith('appearance-settings:changed', restored);
+  });
   // #9640, unit: real IPC handlers; legacy CDN tests do not cover the mutable source.
   // A hostile frame must not trigger refresh; user selection cannot supply local media URLs.
   it('accepts Bing selection, rejects host-owned snapshots and guards refresh before dispatch', async () => {

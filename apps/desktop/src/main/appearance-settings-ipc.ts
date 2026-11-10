@@ -383,14 +383,18 @@ export async function updateAppearanceFromSettings(rawPatch: unknown) {
   applyAppearanceToWindows(settings);
   applyDockIcon(settings);
   bingWallpaperHandlers.reconcile?.();
-  broadcast(settings);
-  return settings;
+  // Reconciliation may synchronously restore a failure during retry backoff.
+  // Publish the current host snapshot rather than the pre-reconcile write result.
+  const current = readAppearanceSettings();
+  broadcast(current);
+  return current;
 }
 export async function resetAppearanceFromSettings() {
   const settings = await resetAppearanceSettings();
   applyAppearanceToWindows(settings);
   applyDockIcon(settings);
   bingWallpaperHandlers.reconcile?.();
-  broadcast(settings);
-  return settings;
+  const current = readAppearanceSettings();
+  broadcast(current);
+  return current;
 }
