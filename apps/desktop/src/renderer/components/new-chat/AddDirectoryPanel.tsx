@@ -179,7 +179,9 @@ export function AddDirectoryPanel({
       data-composer-suggestion-search=""
       onKeyDown={handleKeyDown}
       aria-busy={pending}
-      className="pointer-events-auto relative flex min-h-0 flex-1 flex-col outline-none"
+      // 外壳锁成不滚后，会把量到的确定高度写到本层的 style.height 上。
+      // 没有外壳时高度仍是 auto，独立挂载按内容撑开。
+      className="pointer-events-auto relative flex min-h-0 max-h-full flex-1 flex-col outline-none"
     >
       <div
         ref={highlightPanelRef}
@@ -249,6 +251,7 @@ export function AddDirectoryPanel({
         <div
           role="list"
           aria-label={t('newChat.folderPicker.recent')}
+          // 标题和「选择其他文件夹」固定，只有这一层在上面那个确定高度里滚动 (#9536)。
           className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden overscroll-contain"
         >
           {visibleOptions.map((option, index) => (

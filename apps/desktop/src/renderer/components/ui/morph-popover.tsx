@@ -185,10 +185,25 @@ function contentLocksShellScroll(content: HTMLElement): boolean {
   return content.querySelector('[data-morph-scroll="inner"]') !== null;
 }
 
+/**
+ * 外壳被锁成不滚时，把外壳刚量到的高度写到声明了内滚的那一层上。
+ * 只有 max-h-full 时父层高度仍是 auto，列表会按全部条目撑高、底部被裁掉 (#9536)。
+ * 内容变矮时外壳高度已经跟着变小，这里写成同一个数，内层不会再把外壳撑回去。
+ */
+function pinInnerScrollHeight(content: HTMLDivElement, shellHeightPx: number | null): void {
+  const pinned = content.querySelectorAll<HTMLElement>('[data-morph-scroll="inner"]');
+  if (pinned.length === 0) return;
+  // null = 解除锁定,回到自然高度。不能写成 0:开场 / 收合时外壳是 hidden,
+  // 此刻若还挂着内滚页,0px 会把内容整块压没。
+  const height = shellHeightPx === null ? '' : `${Math.max(0, Math.round(shellHeightPx))}px`;
+  for (const node of pinned) node.style.height = height;
+}
+
 /** overflow-y:auto/hidden 会把 visible 的 overflow-x 算成 auto;横轴必须显式 hidden。 */
 function setContentOverflowY(
   content: HTMLDivElement | null,
   overflowY: 'auto' | 'hidden',
+  shellHeightPx?: number,
 ): void {
   if (!content) return;
   // 子面板自己声明「外壳不要滚」(data-morph-scroll="inner")时，外壳始终 hidden。
@@ -197,6 +212,8 @@ function setContentOverflowY(
   const locked = overflowY === 'auto' && contentLocksShellScroll(content);
   content.style.overflowY = locked ? 'hidden' : overflowY;
   content.style.overflowX = 'hidden';
+  if (shellHeightPx !== undefined) pinInnerScrollHeight(content, shellHeightPx);
+  else if (!locked) pinInnerScrollHeight(content, null);
 }
 
 export function MorphPopover({
@@ -333,7 +350,8 @@ export function MorphPopover({
     const rect = chipRectRef.current;
     if (!panel || !rect) return;
     // 内容换代（「+」↔添加目录）不会重跑开场 settle，滚动归属必须在这里重新判定。
-    // 量高之前先写：内滚页把外壳锁成 hidden，否则 offsetHeight 会把内层滚动区的内容一并量进去。
+    // 量高之前先写：内滚页把外壳锁成 hidden，否则量高会把内层滚动区的内容一并量进去。
+    // 确定高度等量完再写：此时外壳高度还是上一页的。
     if (settledRef.current) setContentOverflowY(contentRef.current, 'auto');
     const prevT = panel.style.transition;
     panel.style.transition = 'none';
@@ -346,9 +364,14 @@ export function MorphPopover({
     void panel.offsetHeight;
     panel.style.transition = prevT;
     // 差 1px 内不动,防 ResizeObserver 观察回环。style 还没写上（NaN）时不算匹配，继续写目标尺寸。
-    if (unchanged) return;
-    panel.style.width = `${m.w}px`;
-    panel.style.height = `${m.h}px`;
+    if (!unchanged) {
+      panel.style.width = `${m.w}px`;
+      panel.style.height = `${m.h}px`;
+    }
+    // 高度没变也要重算内滚约束：切到二级页后外壳被锁住，列表必须接过这个确定高度。
+    if (settledRef.current && contentRef.current) {
+      pinInnerScrollHeight(contentRef.current, m.h);
+    }
   }, [measure]);
 
   const cancelPendingResync = useCallback(() => {
@@ -472,7 +495,7 @@ export function MorphPopover({
       const focusDelay = reduced ? 0 : MORPH_MS;
       closeTimerRef.current = setTimeout(() => {
         settledRef.current = true;
-        setContentOverflowY(contentRef.current, 'auto');
+        setContentOverflowY(contentRef.current, 'auto', m.h);
         // RO 在 opening 期间收到的尺寸变化不会在 settled 后自动重发,这里补量一次
         // (异步 capability / provider 列表在开场动画内返回时防面板卡旧尺寸)。
         // 开场期间的显式重测只登记、不改几何；这次补量读的是此刻的内容，等于把登记兑现。
@@ -699,6 +722,8 @@ export function MorphPopover({
                 // max-h-full 把外壳的确定高度传给内层作为上限：条目多时内层自己滚，不会把整页撑出视口。
                 // 不用 h-full：高度 100% 会让这一层恒等于外壳，ResizeObserver 看不到搜索后列表变矮，
                 // 弹层会留下打开时的高度和大块空白。自然高度（h-auto + max-h-full）变矮时外壳跟着收缩。
+                // 内滚页的确定高度由 pinInnerScrollHeight 写到 [data-morph-scroll=inner] 上，
+                // 不写在这一层：这一层保持自然高度，搜索后变矮才能被量到 (#9536)。
                 'flex h-auto min-h-0 max-h-full flex-col overflow-x-hidden overflow-y-hidden',
                 side === 'top' ? 'translate-y-[5px]' : 'translate-y-[-5px]',
                 'opacity-0 transition-[opacity,transform] delay-[50ms] duration-[140ms] ease-out',

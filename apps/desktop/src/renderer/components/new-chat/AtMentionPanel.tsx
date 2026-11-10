@@ -550,9 +550,9 @@ export function AtMentionPanel({
       {...(embedded ? { 'data-morph-scroll': 'inner' } : {})}
       className={cn(
         'pointer-events-auto',
-        // 内嵌时撑满外壳：外壳有确定高度后，本层跟着变高，条目多时只滚下面这一层 (#9536)。
-        // data-morph-scroll 告诉外壳不要再出一条滚动条；切页后外壳会按标记重新判定。
-        embedded ? 'relative flex min-h-0 flex-1 flex-col' : 'absolute left-0 bottom-full mb-2 z-50',
+        // 内嵌时外壳会把量到的确定高度写到本层 style.height 上，条目多时只滚下面这一层 (#9536)。
+        // 没有外壳时高度仍是 auto。data-morph-scroll 告诉外壳不要再出一条滚动条；切页后重新判定。
+        embedded ? 'relative flex min-h-0 max-h-full flex-1 flex-col' : 'absolute left-0 bottom-full mb-2 z-50',
       )}
     >
       <div
@@ -565,9 +565,9 @@ export function AtMentionPanel({
           // than the border-box panel and paints a horizontal scrollbar thumb
           // for ~2s via the global .is-scrolling auto-hide.
           embedded ? 'flex min-h-0 w-full min-w-0 flex-1 flex-col' : 'w-[480px]',
-          // 内嵌形态自己就是唯一滚动区：横轴锁死，竖向跟着外壳的确定高度滚。
+          // 内嵌形态自己就是唯一滚动区：横轴锁死，竖向跟着上面那个确定高度滚。
           // 外壳看到 data-morph-scroll="inner" 后保持不滚，避免并排两条竖向滚动条 (#9536)。
-          // 不再用 h-full：父层高度由 flex-1 传下来，再加 h-full 会按内容撑回 auto 高度。
+          // 不再用 h-full：父层只有 max-h-full 时百分比高度仍是 auto，列表会按内容撑出去。
           'overflow-x-hidden overflow-y-auto',
           'p-[6px]',
           !embedded && [
