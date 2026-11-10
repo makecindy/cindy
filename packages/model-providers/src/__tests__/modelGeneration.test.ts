@@ -192,6 +192,23 @@ describe('new model generation defaults', () => {
     expect(providerModelGenerationRecord('gpt-5.4', 'https://relay.example/v1', 'anthropic-messages')).toBeUndefined();
   });
 
+  // #9630, unit: a relay may accept Messages without supporting message-scoped
+  // effort. Existing inheritance tests only checked ordinary serializer fields.
+  it.each(['claude-opus-5', 'claude-opus-5-5', 'claude-fable-5-1', 'claude-fable-5-2'])(
+    'keeps message-scoped effort local to the declared endpoint for %s', (id) => {
+      const official = providerModelGenerationRecord(id, 'https://api.anthropic.com/', 'anthropic-messages')!;
+      const original = structuredClone(official);
+      const relay = providerModelGenerationRecord(id, 'https://relay.example/v1', 'anthropic-messages')!;
+      expect(relay.execution.pi.compat).not.toHaveProperty('supportsMidConvoEffort');
+      expect(relay.execution.pi.compat).toMatchObject({ forceAdaptiveThinking: true });
+      expect(relay.execution.pi.thinkingLevelMap).toEqual(official.execution.pi.thinkingLevelMap);
+      expect(official.execution.pi.compat).toMatchObject({ supportsMidConvoEffort: true });
+      expect(providerModelGenerationRecord(id, 'https://api.anthropic.com/', 'anthropic-messages')).toEqual(original);
+      const preset = providerModelGenerationRecord(id, 'https://account.example', 'anthropic-messages', 'anthropic-api')!;
+      expect(preset.execution.pi.compat).toMatchObject({ supportsMidConvoEffort: true });
+    },
+  );
+
   it('retains exact adapter metadata across engines even without Registry entries', () => {
     const exact = providerModelRecord('grok-4.7', 'https://api.x.ai/v1', 'openai-responses')!;
     expect(exact).toBeDefined();

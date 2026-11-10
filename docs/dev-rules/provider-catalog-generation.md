@@ -10,6 +10,10 @@
   推理、渠道报价与协议字段。Pi 专属请求兼容字段放在执行适配数据中。
 - 供应商 API 发现更新按连接保存，准确 ID 合并，不模糊匹配；无声明与明确 false 分开。
 - 渠道资料只借给地址和协议相符的连接，不能跨代理地址继承报价或协议承诺。
+- Anthropic 的 `supportsMidConvoEffort` 只随匹配端点或显式绑定的目录预设继承；
+  陌生中转借用厂商型号参数时不带此开关，避免 Pi 将顶层 effort 固定为 high。
+  普通思考参数仍可补缺，原生显式配置不变。回归见 `modelGeneration.test.ts`、
+  `piNativeProviders.test.ts` 和真实 Pi 的 `pi-agent.integration.test.ts`（#9630）。
 - 生成过程输出可重现的数据文件与来源，校验完成才替换；离线继续使用最后有效目录。
 - 保留模型原始 ID、账号、Key、开关、用户覆盖；刷新不把默认值固化成用户设置。
 

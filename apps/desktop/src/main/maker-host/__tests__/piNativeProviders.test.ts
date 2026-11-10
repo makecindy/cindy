@@ -3376,4 +3376,7 @@ it('does not borrow a provider adapter for a future generation on an unrelated r
       models: [{ id: 'claude-opus-9' }] } } }], () => 'fixture-key');
   expect(result.providers[0]?.models[0].id).toBe('claude-opus-9');
   expect(result.providers[0]?.adapterProvider).toBeUndefined();
+  // #9630: this is the real custom-provider launch descriptor, not a Gateway link.
+  expect(result.providers[0]?.models[0].compat).not.toHaveProperty('supportsMidConvoEffort');
+  expect(result.providers[0]?.models[0].compat).toMatchObject({ forceAdaptiveThinking: true });
 });

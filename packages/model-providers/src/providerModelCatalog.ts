@@ -120,8 +120,15 @@ export function providerModelGenerationRecord(modelId: string, upstream: string,
   if (!previous) return undefined;
   const { cost: _cost, execution, ...metadata } = previous;
   const { headers: _headers, ...parameters } = execution.pi;
+  const inheritedParameters = structuredClone(parameters);
+  // Message-scoped effort is a channel contract, not a portable model capability:
+  // Pi fixes top-level effort to high when enabled. Only the matching endpoint
+  // or an explicitly bound catalog preset can lend that contract to this route.
+  if (api === 'anthropic-messages' && !endpointRows.includes(previous) && !presetRows.includes(previous)) {
+    delete inheritedParameters.compat?.supportsMidConvoEffort;
+  }
   return { ...metadata, id: modelId, name: modelId, upstream, inheritedFrom: previous.id,
-    execution: { pi: structuredClone(parameters) } };
+    execution: { pi: inheritedParameters } };
 }
 
 /** Account-specific endpoints may still explicitly reference a maintained connection template. */
