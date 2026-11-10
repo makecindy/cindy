@@ -16301,7 +16301,15 @@
       "regionCodeCn": "CN",
       "regionCodeDev": "Dev",
       "submit": "フィードバックを送信",
-      "cancel": "キャンセル"
+      "cancel": "キャンセル",
+      "previewLabel": "GitHub · 公開フィードバック",
+      "edit": "編集",
+      "doneEditing": "編集を完了",
+      "publicSubmit": "公開で送信",
+      "publicationNotice": "内容と署名は GitHub で公開されます。",
+      "attribution": "署名：{{name}}",
+      "environment": "動作環境を添付",
+      "identitySettings": "署名とアカウント"
     },
     "redirect": {
       "descriptionBefore": "チャットで ",

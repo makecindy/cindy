@@ -16516,7 +16516,15 @@
       "regionCodeCn": "CN",
       "regionCodeDev": "Dev",
       "submit": "Enviar comentarios",
-      "cancel": "Cancelar"
+      "cancel": "Cancelar",
+      "previewLabel": "GitHub · Comentarios públicos",
+      "edit": "Editar",
+      "doneEditing": "Terminar edición",
+      "publicSubmit": "Enviar públicamente",
+      "publicationNotice": "El contenido y tu nombre serán públicos en GitHub.",
+      "attribution": "Por {{name}}",
+      "environment": "Entorno incluido",
+      "identitySettings": "Nombre y cuenta"
     },
     "redirect": {
       "descriptionBefore": "Escribe ",

@@ -121,8 +121,14 @@ describe('sharedTask dispatch scope', () => {
       'permission-1': { sessionId: 'task', kind: 'permission', toolName: 'Bash', suggestions: [permissionSuggestion] },
       'question-1': { sessionId: 'task', kind: 'ask_user_question' },
       'plan-1': { sessionId: 'task', kind: 'plan_review' },
+      'issue-1': { sessionId: 'task', kind: 'issue_confirm' },
     };
     setSharedTaskInteractionReader((requestId) => interactions[requestId]);
+    for (const confirmed of [true, false]) {
+      expect(() => assertSharedTaskInvoke(capture(), {
+        channel: 'maker:resolve-interaction', args: ['issue-1', { kind: 'issue_confirm', confirmed }],
+      })).toThrow('PERMISSION_DENIED');
+    }
     for (const [requestId, decision] of [
       ['permission-1', { kind: 'permission', behavior: 'allow' }],
       ['question-1', { kind: 'ask_user_question', answers: { choice: 'A' } }],

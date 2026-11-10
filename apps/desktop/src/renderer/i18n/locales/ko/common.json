@@ -16301,7 +16301,15 @@
       "regionCodeCn": "CN",
       "regionCodeDev": "Dev",
       "submit": "피드백 제출",
-      "cancel": "취소"
+      "cancel": "취소",
+      "previewLabel": "GitHub · 공개 피드백",
+      "edit": "수정",
+      "doneEditing": "수정 완료",
+      "publicSubmit": "공개 제출",
+      "publicationNotice": "내용과 작성자 이름이 GitHub에 공개됩니다.",
+      "attribution": "작성자: {{name}}",
+      "environment": "실행 환경 포함",
+      "identitySettings": "이름 및 계정"
     },
     "redirect": {
       "descriptionBefore": "채팅에서 ",
