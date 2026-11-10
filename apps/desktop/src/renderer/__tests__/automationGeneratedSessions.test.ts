@@ -22,6 +22,7 @@ import {
 import type { Session } from '@/lib/ccAgent.types';
 import {
   getAutomationGroupChildView,
+  getAutomationSidebarGroupDisplayTitle,
   getAutomationGroupLatestSession,
   getAutomationGroupPrimarySession,
   getVisibleAutomationGroupSessions,
@@ -479,6 +480,33 @@ describe('automation-generated sessions', () => {
     if (entries[0].kind !== 'automation-group') throw new Error('expected automation group');
     expect(entries[0].group.scheduleId).toBeUndefined();
     expect(entries[0].group.sessions.map((session) => session.id)).toEqual(['brief-2', 'brief-1']);
+  });
+
+  it('projects the built-in follow-up group title in the current locale without changing stored titles', () => {
+    const session = makeSession({
+      id: 'follow-up-run',
+      title: '跟进任务',
+      source: 'bot',
+      workspaceKind: 'dialogue',
+      companion: { id: 'bot-a', role: 'routine', routineId: 'builtin-follow-up-bot-a' },
+    });
+    const peer = { ...session, id: 'follow-up-peer' };
+    const [entry] = groupAutomationSidebarEntries([session, peer], { notifications: new Set() });
+    if (entry.kind !== 'automation-group') throw new Error('expected routine group');
+
+    expect(getAutomationSidebarGroupDisplayTitle(entry.group, '', (key) =>
+      key === 'routines.builtinFollowUp.name' ? 'Follow assigned sessions (built-in)' : key,
+    )).toBe('Follow assigned sessions (built-in)');
+    expect(session.title).toBe('跟进任务');
+
+    const custom = { ...session, title: 'My follow-up name' };
+    const [customEntry] = groupAutomationSidebarEntries(
+      [custom, { ...custom, id: 'custom-follow-up-peer' }],
+      { notifications: new Set() },
+    );
+    if (customEntry.kind !== 'automation-group') throw new Error('expected routine group');
+    expect(getAutomationSidebarGroupDisplayTitle(customEntry.group, '', () => 'Translated'))
+      .toBe('My follow-up name');
   });
 
   it('keeps the task represented by the header in expanded children', () => {

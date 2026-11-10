@@ -1,6 +1,7 @@
 import type { Session } from '@/lib/ccAgent.types';
 import type { Schedule } from '@cindy/maker-scheduler';
 import type { FailedScheduleRunSnapshot } from '../../scheduler/lib/failedScheduleDismissal';
+import { getSessionDisplayTitle } from './sessionDisplayTitle';
 
 import {
   getAutomationSessionDisplayTitle,
@@ -69,6 +70,18 @@ export interface AutomationSessionGroup {
   title: string;
   sessions: Session[];
   attentionSessionIds: string[];
+}
+
+export function getAutomationSidebarGroupDisplayTitle(
+  group: AutomationSessionGroup,
+  unnamedLabel: string,
+  translate?: (key: string) => string,
+): string {
+  if (!group.teammateRoutine || !translate) return group.title;
+  const session = group.sessions[0];
+  return session
+    ? getSessionDisplayTitle({ ...session, title: group.title }, unnamedLabel, translate)
+    : group.title;
 }
 
 export type SidebarSessionEntry =

@@ -22,6 +22,7 @@ import type {
 } from '../lib/automationSidebarGrouping';
 import {
   getAutomationGroupChildView,
+  getAutomationSidebarGroupDisplayTitle,
   getAutomationGroupLatestSession,
 } from '../lib/automationSidebarGrouping';
 import { useAutomationGroupCollapsed } from '../hooks/useAutomationGroupCollapsed';
@@ -142,6 +143,11 @@ export const AutomationSessionGroupItem = withSidebarNavigation<AutomationSessio
     sessionVariant = 'text',
   }: AutomationSessionGroupItemProps & SidebarNavigationProps) {
     const { t } = useTranslation();
+    const displayGroupTitle = getAutomationSidebarGroupDisplayTitle(
+      group,
+      t('ccAgent.common.unnamedSession'),
+      t,
+    );
     // 轴 1:文件夹开/关,持久化、记忆上次展开(默认收起)。
     const [storedCollapsed, toggleStoredCollapsed] = useAutomationGroupCollapsed(
       group.id,
@@ -466,7 +472,7 @@ export const AutomationSessionGroupItem = withSidebarNavigation<AutomationSessio
       collapsed
         ? 'ccAgent.sidebar.automationGroup.expand'
         : 'ccAgent.sidebar.automationGroup.collapse',
-      { title: group.title },
+      { title: displayGroupTitle },
     );
     const rowTooltip = useMemo(
       () =>
@@ -611,7 +617,7 @@ export const AutomationSessionGroupItem = withSidebarNavigation<AutomationSessio
                 disabled={!latestSession}
                 className="min-w-0 truncate text-left disabled:cursor-default"
               >
-                <span className="min-w-0 truncate">{group.title}</span>
+                <span className="min-w-0 truncate">{displayGroupTitle}</span>
               </button>
               {/* 例行任务分组：标题后显示所属伙伴头像，与组内各行的伙伴标记同源。 */}
               {teammateRoutine && latestSession && (
