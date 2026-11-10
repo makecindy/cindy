@@ -17,7 +17,7 @@ import {
   GHOST_INSTALL_CONSENT_TOOL_NAME,
   type GhostInstallConsentRequest,
 } from '../../shared/ghostInstallConsent.js';
-import { t as mainTranslate } from '../i18n.js';
+import { t as mainTranslate } from '../i18n.desktop.js';
 import {
   trackGhostInstallConsentPrompt,
   type GhostInstallConsentPrompt,
@@ -41,7 +41,8 @@ function consentText(translate: Translate, key: string, args?: Record<string, st
 export function ghostInstallTargetText(translate: Translate, target: GhostInstallConsentRequest['target']): string[] {
   if (!target) return [];
   return [
-    consentText(translate, 'targetIdentity', { name: target.namespace || consentText(translate, 'personalTarget') }),
+    consentText(translate, 'targetIdentity', { name: target.namespace === 'local' ? consentText(translate, 'localTarget') : target.namespace || consentText(translate, 'personalTarget') }),
+    ...(target.organizationIdentityUnavailable ? [consentText(translate, 'localOidcUnavailable')] : []),
     ...(target.sourceChanged ? [consentText(translate, 'sourceChanged')] : []),
     ...(target.otherCopies > 0 ? [consentText(translate, 'otherCopies', { count: String(target.otherCopies) })] : []),
   ];

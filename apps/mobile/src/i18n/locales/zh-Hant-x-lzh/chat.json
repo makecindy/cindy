@@ -1,5 +1,8 @@
 {
   "teammateProcess": {
+    "retry": "再試",
+    "empty": "此番無可示之處理記錄",
+    "unavailable": "未能讀取處理記錄",
     "record": "辦理錄",
     "operations": "操作錄",
     "elapsed": "已理 {{duration}}",

@@ -11,10 +11,14 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, renderHook } from '@testing-library/react';
 import { createElement, type ReactNode } from 'react';
 
+import '../../themes/colors';
+import { bootstrapLocalThemesSync } from '../../themes/local-themes';
 import { themeService } from '../../themes/theme-service';
+import type { LocalThemesResult } from '../../../shared/local-themes';
 import {
   __resetLoginFirstLaunchLightGateForTest,
   endLoginFirstLaunchLightGate,
+  followLocalThemeChanges,
   getInitialThemeVariant,
   ThemeProvider,
   useTheme,
@@ -68,7 +72,7 @@ describe('useTheme 跨窗口主题同步(D2-3)', () => {
     localStorage.setItem('theme', 'dark');
     renderHook(() => useTheme(), { wrapper });
 
-    expect(applyVibrancyMock).toHaveBeenCalledWith('cindy', true, 'dark', true, false);
+    expect(applyVibrancyMock).toHaveBeenCalledWith('cindy', true, 'dark', true, false, null);
   });
 
   it('utility 窗口复用 ThemeProvider 时不写全局窗口材质快照', () => {
@@ -82,7 +86,7 @@ describe('useTheme 跨窗口主题同步(D2-3)', () => {
     localStorage.setItem('theme.familyId', 'eclipse');
     renderHook(() => useTheme(), { wrapper });
 
-    expect(applyVibrancyMock).toHaveBeenCalledWith('eclipse', true, 'system', false, false);
+    expect(applyVibrancyMock).toHaveBeenCalledWith('eclipse', true, 'system', false, false, null);
   });
 
   it('系统深色下真首启按亮色门的实际主题上报 backing，门结束后恢复深色', () => {
@@ -90,12 +94,12 @@ describe('useTheme 跨窗口主题同步(D2-3)', () => {
     expect(getInitialThemeVariant().theme.type).toBe('light');
 
     renderHook(() => useTheme(), { wrapper });
-    expect(applyVibrancyMock).toHaveBeenLastCalledWith('cindy', false, 'system', true, false);
+    expect(applyVibrancyMock).toHaveBeenLastCalledWith('cindy', false, 'system', true, false, null);
 
     act(() => {
       endLoginFirstLaunchLightGate();
     });
-    expect(applyVibrancyMock).toHaveBeenLastCalledWith('cindy', true, 'system', true, false);
+    expect(applyVibrancyMock).toHaveBeenLastCalledWith('cindy', true, 'system', true, false, null);
   });
 
   it('其他窗口切 theme → storage 事件 → 本窗口 theme state 跟随并重应用', () => {
@@ -116,7 +120,7 @@ describe('useTheme 跨窗口主题同步(D2-3)', () => {
     await act(async () => {
       root.dataset.wallpaperActive = 'true';
     });
-    expect(applyVibrancyMock).toHaveBeenLastCalledWith('cindy', true, 'dark', true, true);
+    expect(applyVibrancyMock).toHaveBeenLastCalledWith('cindy', true, 'dark', true, true, null);
 
     const count = applyVibrancyMock.mock.calls.length;
     await act(async () => {
@@ -127,11 +131,11 @@ describe('useTheme 跨窗口主题同步(D2-3)', () => {
     act(() => {
       result.current.setTheme('light');
     });
-    expect(applyVibrancyMock).toHaveBeenLastCalledWith('cindy', false, 'light', true, true);
+    expect(applyVibrancyMock).toHaveBeenLastCalledWith('cindy', false, 'light', true, true, null);
     await act(async () => {
       delete root.dataset.wallpaperActive;
     });
-    expect(applyVibrancyMock).toHaveBeenLastCalledWith('cindy', false, 'light', true, false);
+    expect(applyVibrancyMock).toHaveBeenLastCalledWith('cindy', false, 'light', true, false, null);
 
     unmount();
     applyVibrancyMock.mockClear();
@@ -145,7 +149,7 @@ describe('useTheme 跨窗口主题同步(D2-3)', () => {
     localStorage.setItem('theme', 'dark');
     document.documentElement.dataset.wallpaperActive = 'true';
     renderHook(() => useTheme(), { wrapper });
-    expect(applyVibrancyMock).toHaveBeenLastCalledWith('cindy', true, 'dark', true, true);
+    expect(applyVibrancyMock).toHaveBeenLastCalledWith('cindy', true, 'dark', true, true, null);
   });
 
   it('无存档时默认 cindy,其他窗口切 familyId=default 后本窗口跟随', () => {
@@ -206,5 +210,75 @@ describe('useTheme 跨窗口主题同步(D2-3)', () => {
     });
     expect(result.current.theme).toBe(beforeTheme);
     expect(result.current.familyId).toBe(beforeFamily);
+  });
+
+// Unit IPC contract: without this observation, toggling desktop blur leaves the
+// native material stale until a theme change. Existing tests only change artwork.
+it('reports every desktop blur radius and clears the override when returning to artwork', async () => {
+  const { unmount } = renderHook(() => useTheme(), { wrapper });
+  const root = document.documentElement;
+  await act(async () => {
+    root.dataset.desktopBackground = 'true';
+    root.dataset.desktopBlur = '0';
+  });
+  expect(applyVibrancyMock.mock.lastCall?.[5]).toBe(0);
+  await act(async () => { root.dataset.desktopBlur = '5'; });
+  expect(applyVibrancyMock.mock.lastCall?.[5]).toBe(5);
+  await act(async () => { root.dataset.desktopBlur = '17'; });
+  expect(applyVibrancyMock.mock.lastCall?.[5]).toBe(17);
+  await act(async () => { delete root.dataset.desktopBackground; });
+  expect(applyVibrancyMock.mock.lastCall?.[5]).toBeNull();
+  delete root.dataset.desktopBlur;
+  unmount();
+});
+});
+
+// PR #9358：既有 Provider 测试没有覆盖无 Provider 的轻量窗口。
+// unit：从生产初始化入口接收同 ID 换色推送，验证实际 CSS、明暗及取消订阅。
+describe('辅助窗口 Omarchy 实时换色', () => {
+  it('同 ID 同明暗换色、明暗切换均更新 DOM，停止订阅后不再更新', () => {
+    vi.restoreAllMocks();
+    __resetLoginFirstLaunchLightGateForTest();
+    localStorage.clear();
+    localStorage.setItem('theme.familyId', 'omarchy');
+    localStorage.setItem('theme', 'light');
+    let push: (payload: LocalThemesResult) => void = () => {};
+    const payload = (type: 'light' | 'dark', surface: string): LocalThemesResult => ({
+      success: true, diagnostics: [], themes: [{ id: 'omarchy', name: 'Omarchy', type, colors: { surface } }],
+    });
+    (window as unknown as { electronAPI: unknown }).electronAPI = {
+      localThemes: {
+        listSync: () => payload('light', '#faf4ed'),
+        onChanged: (callback: typeof push) => { push = callback; return () => {}; },
+      },
+      theme: { applyVibrancy: applyVibrancyMock },
+    };
+    applyVibrancyMock.mockClear();
+    bootstrapLocalThemesSync();
+    themeService.applyTheme(getInitialThemeVariant().theme);
+    const stop = followLocalThemeChanges();
+    const root = document.documentElement;
+    const surface = () => getComputedStyle(root).getPropertyValue('--surface').trim();
+    try {
+      expect(surface()).toBe('#faf4ed');
+      push(payload('light', '#ffffff'));
+      expect(surface()).toBe('#ffffff');
+      push(payload('dark', '#142620'));
+      expect(surface()).toBe('#142620');
+      expect(root.classList.contains('dark')).toBe(true);
+      expect(root.style.colorScheme).toBe('dark');
+      push(payload('light', '#faf4ed'));
+      expect(surface()).toBe('#faf4ed');
+      expect(root.classList.contains('dark')).toBe(false);
+      expect(root.style.colorScheme).toBe('light');
+      expect(applyVibrancyMock).not.toHaveBeenCalled();
+      stop();
+      push(payload('dark', '#142620'));
+      expect(surface()).toBe('#faf4ed');
+    } finally {
+      stop();
+      localStorage.clear();
+      document.getElementById('theme-vars')?.remove();
+    }
   });
 });

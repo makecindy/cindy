@@ -57,7 +57,7 @@ vi.mock('../runners/_shared', () => ({
   backfillSessionMeta: mocks.backfillSessionMeta,
 }));
 
-import { MakerScheduleRunner } from '../runner';
+import { MakerScheduleRunner } from '../runner.desktop';
 
 function baseSchedule(overrides: Partial<Schedule> = {}): Schedule {
   return {
@@ -360,5 +360,18 @@ describe('MakerScheduleRunner pre-run hook cwd 解析', () => {
         stdinPayload: expect.objectContaining({ workingDir: '/repo/project' }),
       }),
     );
+  });
+
+  // Rule (2026-11-06): a host status change runs a PR follow-up at once, and its check must know
+  // the run was triggered so it skips its own pacing. Minimal input: the same fire with and without
+  // ctx.trigger (unit); a cron fire must not carry the field.
+  it('passes the host trigger to the hook input only when the run was triggered', async () => {
+    const { runner } = createRunner(vi.fn(async () => null) as never);
+    const trigger = { kind: 'watch' as const, source: 'pr-status', detail: 'https://github.com/o/r/pull/1' };
+    await runner.fire(baseSchedule({ workingDir: '/repo/project' }), { ...createFireContext(), trigger });
+    await runner.fire(baseSchedule({ workingDir: '/repo/project' }), createFireContext());
+    const payloads = mocks.executePreRunHook.mock.calls.map(([options]) => (options as { stdinPayload: Record<string, unknown> }).stdinPayload);
+    expect(payloads[0]).toMatchObject({ trigger });
+    expect(payloads[1]).not.toHaveProperty('trigger');
   });
 });

@@ -36,6 +36,7 @@ export const DEVICE_LINK_INVOKE = {
   DISCONNECT_ALL: 'device-link:disconnect-all',
   /** 被控端:撤销某控制端的访问权限(逐设备黑名单,持久化) */
   REVOKE: 'device-link:revoke',
+  SET_MODEL_USE: 'device-link:set-model-use',
   /** 被控端:恢复某控制端的访问权限 */
   RESTORE: 'device-link:restore',
   // —— 控制端:远程会话镜像的本地冷缓存(见 main/device-link/mirrorCacheStore.ts)——
@@ -67,6 +68,8 @@ export const DEVICE_LINK_PUSH = {
   PRESENCE_CHANGED: 'device-link:presence-changed',
   /** 本机 relay 连接状态变化,payload: { status: 'stopped'|'connecting'|'online' } */
   STATUS_CHANGED: 'device-link:status-changed',
+  /** 云端设备目录被明确拒绝后,本地目录与已挂载界面立即失效。payload: {} */
+  DEVICE_DIRECTORY_INVALIDATED: 'device-link:device-directory-invalidated',
   /**
    * 本机 relay 连接问题变化(鉴权失效/被顶号/超限/版本不符;null = 已恢复)。
    * payload: { issue: DeviceLinkConnectionIssue | null }
@@ -152,6 +155,8 @@ export interface DeviceLinkState {
    */
   keepAwake: boolean;
   linkStatus: DeviceLinkStatus;
+  /** Optional local projection; never a device authorization or a wire capability. */
+  directDataDeviceIds?: string[];
   /** 当前连接问题(null = 无;变化走 CONNECTION_ISSUE push) */
   connectionIssue: DeviceLinkConnectionIssue | null;
   /** 本机另一个 Cindy 实例持有 device-link,当前实例处于待命。 */
@@ -160,6 +165,8 @@ export interface DeviceLinkState {
   controlledBy: ControlledByDevice[];
   /** 被撤销访问权限的控制端 deviceId 列表(逐设备黑名单,被控端 UI 渲染「已撤销」用) */
   revokedControllers: string[];
+  /** 单独关掉「用本机模型」的同账号电脑(仍可远程控制本机，但借不到本机的模型)。 */
+  modelUseRevokedControllers?: string[];
   /** 本机主动关闭控制的目标设备 deviceId 列表(控制端本地偏好)。 */
   disabledControlDeviceIds: string[];
   /**

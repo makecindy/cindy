@@ -125,4 +125,6 @@ export interface HandoffTarget {
   app: string;
   bundleId: string;
   window: NativeWindowRef;
+  /** The window was minimized when chosen: it has to come back before it can be read or seen. */
+  minimized?: boolean;
 }

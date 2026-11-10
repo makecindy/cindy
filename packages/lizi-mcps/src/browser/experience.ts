@@ -65,11 +65,14 @@ export function suggestRecipes(
   site: string,
   intent = '',
   profile = '',
+  url?: string,
 ) {
   const terms = intent
     .toLowerCase()
     .split(/[^\p{L}\p{N}]+/u)
     .filter(Boolean);
+  let pathSegments: string[] | undefined;
+  try { if (url) pathSegments = new URL(url).pathname.split('/').filter(Boolean); } catch { /* site-only discovery */ }
   return [...recipes.values()]
     .filter(({ recipe }) => {
       if (recipe.validation?.state === 'suspended') return false;
@@ -84,9 +87,20 @@ export function suggestRecipes(
     })
     .map((entry) => {
       const haystack = `${entry.recipe.id} ${entry.recipe.description ?? ''}`.toLowerCase();
-      return { ...entry, score: terms.filter((term) => haystack.includes(term)).length };
+      const paths = entry.recipe.recommendationPaths ?? [];
+      const specificity = pathSegments ? Math.max(0, ...paths.map(template => {
+        const parts = template.split('/').filter(Boolean);
+        return parts.length <= pathSegments.length && parts.every((part, i) =>
+          part.startsWith(':') || part === pathSegments[i]) ? parts.length : 0;
+      })) : 0;
+      return { ...entry, specificity, score: terms.filter((term) => haystack.includes(term)).length };
     })
-    .sort((a, b) => b.score - a.score || a.recipe.id.localeCompare(b.recipe.id))
+    .filter(entry => !pathSegments || terms.length > 0 || !entry.recipe.recommendationPaths?.length || entry.specificity > 0)
+    // Explicit intent wins; for navigation prefer the matching resource reader,
+    // then other reads. This ranks suggestions only, never authorizes execution.
+    .sort((a, b) => b.score - a.score || b.specificity - a.specificity
+      || Number(b.recipe.access === 'read') - Number(a.recipe.access === 'read')
+      || a.recipe.id.localeCompare(b.recipe.id))
     .filter((entry) => !terms.length || entry.score > 0)
     .slice(0, 3)
     .map(({ recipe, provenance }) => ({

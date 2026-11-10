@@ -17,7 +17,7 @@ import { projectAutomationConsents, schedules, sessions } from '../localDb/schem
 import { projectAutomationConsentToRow } from '../localDb/mapper';
 import { PROJECT_AUTOMATION_REL_SEGMENTS } from '../../shared/projectAutomationPaths';
 import { migrateLegacyXdmakerDir } from '../utils/legacyXdmakerMigration';
-import type { DrizzleScheduleStorage, SchedulerDrizzleDb } from './storage';
+import type { DrizzleScheduleStorage, SchedulerDrizzleDb } from './storage.desktop';
 
 /**
  * ProjectAutomationLoader reads .cindy/automations/schedules.json and syncs it
@@ -47,6 +47,7 @@ export interface ProjectScheduleConfig {
   recurring?: boolean;
   manual?: boolean;
   intervalMs?: number;
+  expireAt?: number;
   agentKind?: 'claude-code' | 'codex' | 'pi';
   /** 显式模型选择的 Harness；省略时保留旧配置的跟随绑定任务语义。 */
   modelAgentKind?: 'claude-code' | 'codex' | 'pi';
@@ -472,6 +473,7 @@ function scheduleConfigToCreateInput(
     recurring: config.recurring ?? true,
     manual: config.manual ?? false,
     intervalMs: config.intervalMs,
+    expireAt: config.expireAt,
     agentKind: config.agentKind ?? 'claude-code',
     // 恒带 key：配置删除显式选择后，reconcile 清除已保存的标记。
     modelAgentKind: config.modelAgentKind,
@@ -517,6 +519,7 @@ export function schedulesDiffer(
     schedule.recurring !== expected.recurring ||
     schedule.manual !== expected.manual ||
     schedule.intervalMs !== expected.intervalMs ||
+    schedule.expireAt !== expected.expireAt ||
     schedule.agentKind !== expected.agentKind ||
     schedule.modelAgentKind !== expected.modelAgentKind ||
     schedule.modelAgentDeviceId !== expected.modelAgentDeviceId ||
@@ -588,6 +591,7 @@ function isProjectScheduleConfig(value: unknown): value is ProjectScheduleConfig
     optionalBoolean(config.recurring) &&
     optionalBoolean(config.manual) &&
     optionalNumber(config.intervalMs) &&
+    optionalNumber(config.expireAt) &&
     optionalAgentKind(config.agentKind) &&
     optionalAgentKind(config.modelAgentKind) &&
     (config.modelAgentDeviceId === undefined || (typeof config.modelAgentDeviceId === 'string' &&

@@ -13,7 +13,7 @@ import { rebroadcastTodaySpend } from '../usageBroadcaster.js';
 import { getGatewayMediaBillingCurrency } from './modelPricing.js';
 import { parseGatewayMediaBillingHeader } from './gatewayMediaBillingHeader.js';
 import { captureMediaUserTurn, refreshMediaUserTurnCost } from './mediaTurnCost.js';
-import { enqueueDurableWrite } from '../messagePersistBroadcaster.js';
+import { enqueueDurableWrite } from '../messagePersistBroadcaster.desktop.js';
 import { broadcastTurnCostPayload } from '../turnCostBroadcaster.js';
 import { broadcastSchedulerChanged } from '../maker-ipc/schedule.js';
 import {

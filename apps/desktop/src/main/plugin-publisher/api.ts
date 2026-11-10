@@ -20,7 +20,7 @@ import {
 
 import { getClientEndpoint } from '../clientEndpointsService.js';
 import { createLogger } from '../logger.js';
-import { ServerApiError, serverApiFetch, type ApiFetchOptions } from '../serverApiClient.js';
+import { ServerApiError, serverApiFetch, type ApiFetchOptions } from '../serverApiClient.desktop.js';
 
 const PLUGIN_PUBLISHER_API_TIMEOUT_MS = 15_000;
 export const UNKNOWN_FAILURE_CODE_REPORT_LIMIT = 64;

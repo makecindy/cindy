@@ -203,6 +203,24 @@ describe('Bot compact runtime refresh coordinator', () => {
 describe('capability refresh input admission', () => {
   const botChat = { role: 'canonical', source: 'bot', status: 'active', workingDir: '/virtual/bot' };
 
+  it('waits for an in-flight idle refresh before admitting a queued turn', async () => {
+    const h = createSession();
+    let finish!: (outcome: 'refreshed') => void;
+    const refresh = vi.fn(() => new Promise<'refreshed'>(resolve => { finish = resolve; }));
+    const coordinator = createBotCompactRuntimeRefreshCoordinator({ hasPendingInteraction: () => false, refresh });
+    coordinator.noteBoundary(h.session);
+    const idleRefresh = coordinator.attempt(h.session);
+    h.setRunning(true);
+    const admission = prepareBotCapabilityEpochBeforeSend(h.session, {
+      readSession: async () => botChat, preflight: async () => true, coordinator,
+    });
+    finish('refreshed');
+    await expect(admission).resolves.toBe('refreshed');
+    await idleRefresh;
+    expect(refresh).toHaveBeenCalledOnce();
+    expect(coordinator.hasPending(h.session.id)).toBe(false);
+  });
+
   it.each([undefined, { ...botChat, role: 'delegation' }, { ...botChat, source: 'desktop' }])(
     'does not block ordinary or delegated input after mid-turn compaction (%j)', async row => {
       const h = createSession();
@@ -240,8 +258,15 @@ describe('capability refresh input admission', () => {
     interaction = true;
     await expect(admit()).resolves.toBe('deferred');
     interaction = false;
+    // Regression: a background job used to block every send for as long as it ran.
+    // Input now runs on the current runtime; the refresh (which would close the
+    // runtime and kill the job) stays pending until the session is truly idle.
     h.setBackgroundTasks(1);
+    await expect(admit()).resolves.toBe('kept-current-runtime');
+    expect(coordinator.hasPending(h.session.id, h.session)).toBe(true);
+    h.setRunning(true);
     await expect(admit()).resolves.toBe('deferred');
+    h.setRunning(false);
     expect(refresh).not.toHaveBeenCalled();
     h.setBackgroundTasks(0);
     await expect(admit()).resolves.toBe('refreshed');

@@ -38,7 +38,7 @@ vi.mock('../custom-provider-header-secrets.js', () => ({
   ],
 }));
 vi.mock('../../secrets/providerSecretStore.js', () => ({
-  setMivoSecretAliasVerifier: vi.fn(),
+  migrateInstalledGhostSecretAliases: vi.fn(() => true),
   readCustomProviderKey: (id: string) => (id === 'my-vllm' ? 'BYOM-KEY' : null),
 }));
 

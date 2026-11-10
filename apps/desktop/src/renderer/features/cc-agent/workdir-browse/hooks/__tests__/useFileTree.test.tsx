@@ -81,6 +81,114 @@ describe('useFileTree refresh scheduling', () => {
     mocks.loadExpandedSet.mockImplementation(() => new Set<string>());
   });
 
+  // #8422: restored folders previously started all directory IPCs at once.
+  // Unit through the real hook: bounded outstanding reads, complete final tree,
+  // and no queued reads after leaving. Existing tests restore only a few folders.
+  // Assert the eight-read budget and single-slot refill, not merely < all 13 reads.
+  it.each([false, true])('bounds restored reads and cancels pending restore on unmount=%s', async (leave) => {
+    const folders: DirEntry[] = Array.from({ length: 12 }, (_, i) => ({
+      name: `pkg${i}`, relPath: `pkg${i}`, type: 'directory', size: 0, mtimeMs: 1,
+    }));
+    mocks.loadExpandedSet.mockReturnValue(new Set(folders.map((e) => e.relPath)));
+    const pending: Array<{ path: string; request: Deferred<readonly DirEntry[]> }> = [];
+    let active = 0;
+    let peak = 0;
+    mocks.listDir.mockImplementation(({ relPath }: { relPath: string }) => {
+      const request = deferred<readonly DirEntry[]>();
+      pending.push({ path: relPath, request });
+      peak = Math.max(peak, ++active);
+      return request.promise.finally(() => { active--; });
+    });
+    const view = renderHook(() => useFileTree({ workdir: `/restore-budget-${leave}` }));
+    expect(pending[0].path).toBe('');
+    expect(pending).toHaveLength(8);
+    const startedBeforeLeaving = pending.length;
+    if (leave) view.unmount();
+    await act(async () => {
+      pending[0].request.resolve(folders);
+    });
+    expect(pending).toHaveLength(leave ? startedBeforeLeaving : startedBeforeLeaving + 1);
+    expect(active).toBe(leave ? 7 : 8);
+    for (let i = 1; i < pending.length; i++) {
+      await act(async () => {
+        const { path: relPath, request } = pending[i];
+        request.resolve(relPath === '' ? folders : []);
+      });
+    }
+    expect(peak).toBeLessThanOrEqual(8);
+    expect(active).toBe(0);
+    if (leave) {
+      expect(pending).toHaveLength(startedBeforeLeaving);
+    } else {
+      expect(view.result.current.entries.size).toBe(folders.length + 1);
+      expect(view.result.current.loadingPaths.size).toBe(0);
+      expect(view.result.current.initialLoading).toBe(false);
+      view.unmount();
+    }
+  });
+
+  // Focus recovery calls the public refresh while remote reads are outstanding.
+  // Unit gap: queued restores must not start twice, while reads begun before
+  // focus still need fresh data. Nine folders leave one queued after root settles.
+  // Once a slot is free, the root retry must precede that untouched backlog.
+  it.each([false, true])('shares the restore budget with focus refresh and unmount=%s', async (leave) => {
+    const folders: DirEntry[] = Array.from({ length: 9 }, (_, i) => ({
+      name: `pkg${i}`, relPath: `pkg${i}`, type: 'directory', size: 0, mtimeMs: 1,
+    }));
+    mocks.loadExpandedSet.mockReturnValue(new Set(folders.map((e) => e.relPath)));
+    const pending: Array<{ path: string; phase: number; request: Deferred<readonly DirEntry[]> }> = [];
+    let phase = 0;
+    let active = 0;
+    let peak = 0;
+    mocks.listDir.mockImplementation(({ relPath }: { relPath: string }) => {
+      const request = deferred<readonly DirEntry[]>();
+      pending.push({ path: relPath, phase, request });
+      peak = Math.max(peak, ++active);
+      return request.promise.finally(() => { active--; });
+    });
+    const view = renderHook(() => useFileTree({ workdir: `/focus-restore-${leave}`, remoteHostId: 'test-remote' }));
+    await act(async () => { pending[0].request.resolve(folders); });
+    expect(pending).toHaveLength(9);
+    phase = 1;
+    let refreshed!: Promise<void[]>;
+    act(() => {
+      refreshed = Promise.all([view.result.current.refresh(), view.result.current.refresh()]);
+    });
+    expect(peak).toBeLessThanOrEqual(8);
+    expect(pending).toHaveLength(9);
+    if (leave) view.unmount();
+    for (let i = 1; i < pending.length; i++) {
+      await act(async () => {
+        const item = pending[i];
+        const entry: DirEntry = {
+          name: `phase-${item.phase}.md`, relPath: `${item.path ? item.path + '/' : ''}phase-${item.phase}.md`,
+          type: 'file', size: 1, mtimeMs: item.phase,
+        };
+        item.request.resolve(item.path === '' ? [...folders, entry] : [entry]);
+      });
+      if (!leave && pending[i].path === 'pkg0' && pending[i].phase === 1) {
+        expect(pending.at(-1)?.path).toBe('');
+        expect(pending.some((item) => item.path === 'pkg8')).toBe(false);
+      }
+    }
+    await act(async () => { await refreshed; });
+    expect(peak).toBeLessThanOrEqual(8);
+    expect(active).toBe(0);
+    expect(pending.filter((p) => p.path === '')).toHaveLength(leave ? 1 : 2);
+    expect(pending.filter((p) => p.path === 'pkg8')).toHaveLength(leave ? 0 : 1);
+    if (!leave) {
+      expect(pending).toHaveLength(19);
+      expect(view.result.current.entries.size).toBe(10);
+      for (const folder of folders) {
+        expect(view.result.current.entries.get(folder.relPath)?.[0].name).toBe('phase-1.md');
+      }
+      expect(view.result.current.entries.get('')?.at(-1)?.name).toBe('phase-1.md');
+      expect(view.result.current.loadingPaths.size).toBe(0);
+      expect(view.result.current.initialLoading).toBe(false);
+      view.unmount();
+    }
+  });
+
   it('limits a directory refresh to one trailing scan during a watcher storm', async () => {
     const entries: readonly DirEntry[] = [
       { name: 'src', relPath: 'src', type: 'directory', size: 0, mtimeMs: 1 },

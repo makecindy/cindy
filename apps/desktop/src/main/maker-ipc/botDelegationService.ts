@@ -6,7 +6,7 @@ import { approvedTaskDelegation, captureTaskActionDeliveryGuard, captureTaskActi
 import { authorizeGroupTool, GroupToolAuthorizationError } from './botGroupToolAuthorization.js';
 import { controlOwnedSessionExecution, isSameSessionExecution, withdrawOwnedSessionInputs } from './sessionExecutionOwnership.js';
 import { existsSync, statSync } from 'node:fs';
-import type { AgentInputCoordinator } from './agent-input-coordinator.js';
+import type { AgentInputCoordinator } from './agent-input-coordinator.desktop.js';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 
@@ -53,7 +53,7 @@ import type {
 } from '../../shared/botCollaboration.js';
 import { BOT_DELEGATION_CLIENT_ID, BOT_INTERJECTION_MAX_CHARS as MAX_INTERJECTION_CHARS, botInterjectionPreview } from '../../shared/botCollaboration.js';
 import { buildBotGroupTaskCard, parseBotGroupThreadRouteKey, type BotGroupTaskCardLabels, type BotGroupTaskCardState } from '../../shared/botGroupChat.js';
-import { t } from '../i18n.js';
+import { t } from '../i18n.desktop.js';
 import type { BotGroupTaskPostInput, BotGroupTaskPostResult } from './botGroupChatService.js';
 import { ensureBotWorkspaceDir } from './botProfileFolder.js';
 import type { SessionQueuedMessageControlResult, SessionSteerResult, SessionStopResult } from './sessionControlService.js';
@@ -129,7 +129,8 @@ export interface BotDelegationServiceDeps {
   readSessionExecution?: (sessionId: string) => DelegationExecutionReceipt | null;
   /** Non-expiring native-close fence shared with the Session send boundary. */
   withSessionLock?: (sessionId: string, operation: () => Promise<void>) => Promise<void>;
-  captureRequest?: (sessionId: string, supplement: string) => Promise<CapturedAgentRequest>;
+  /** `target` names the receiving task when known; a result back to the request's origin never speaks for the owner. */
+  captureRequest?: (sessionId: string, supplement: string, target?: { sessionId?: string }) => Promise<CapturedAgentRequest>;
   dispatch: (params: {
     autoReviewUserText?: AgentRequestReceipt;
     targetSessionId: string;
@@ -581,8 +582,10 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
   ): Promise<{ result: DispatchResult; row: DelegationRow; clientId: string }> => {
     const db = getDbClient().drizzle;
     if (input.dispatcherSessionId && !input.autoReviewUserText) {
-      const request = await captureRequest(input.dispatcherSessionId, input.message);
-      input = { ...input, ...request, persistedContent: request.message };
+      const request = await captureRequest(input.dispatcherSessionId, input.message, { sessionId: row.childSessionId ?? undefined });
+      if (request.blocked) return { clientId: input.clientId, row,
+        result: { ok: false, errorCode: 'DELEGATION_NOT_AUTHORIZED', message: request.blocked } };
+      input = { ...input, message: request.message, autoReviewUserText: request.autoReviewUserText, persistedContent: request.message };
     }
     const retry = parseRecord(row.permissionSnapshotJson).taskRecoveryRetry as
       { runSequence: number; originalClientId: string; clientId: string } | undefined;
@@ -2459,6 +2462,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
     // group stays in that group (bot-group-chat.md §10). Its card, confirmations and result
     // are posted there as the teammate's messages; the lane itself is never woken for them.
     const request = await captureRequest(input.callerSessionId, input.objective);
+    if (request.blocked) return { ok: false, errorCode: 'DELEGATION_NOT_AUTHORIZED', message: request.blocked };
     const parentSessionId = input.callerSessionId;
     const delegationId = createId();
     let childSessionId = resolveBusinessSessionId(undefined);
@@ -3378,7 +3382,8 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
         .limit(1);
       originalObjective = initial?.content && initial.content.length <= MAX_OBJECTIVE_CHARS ? initial.content : null;
     }
-    const request = await captureRequest(callerSessionId, trimmed);
+    const request = await captureRequest(callerSessionId, trimmed, { sessionId: row.childSessionId ?? undefined });
+    if (request.blocked) return { ok: false, errorCode: 'DELEGATION_NOT_AUTHORIZED', message: request.blocked };
     const taskInput: SessionTaskInputSnapshot = { runSequence: row.runSequence + 1, originalObjective, followUp: trimmed, requestSource: request.autoReviewUserText.request };
     // Preserve unrecoverable legacy data, but never send its wrappers as a new goal.
     const continuationObjective = originalObjective ?? row.objective;

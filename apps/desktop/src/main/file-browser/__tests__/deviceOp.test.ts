@@ -69,7 +69,7 @@ vi.mock('../../device-link/remote-workdir-guard.js', async (importOriginal) => {
 vi.mock('../../device-link/broadcast-tap.js', () => ({
   getSafeDataOwnerPushStamp: () => ownerStampState.current,
 }));
-vi.mock('../../device-link/dispatch.js', () => ({
+vi.mock('../../device-link/dispatch.desktop.js', () => ({
   pushToTopicSubscribers: (channel: string, payload: unknown, ownerStamp?: unknown) =>
     pushSpy(channel, payload, ownerStamp),
 }));

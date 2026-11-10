@@ -44,6 +44,8 @@ export interface DeviceLinkSettings {
   controlledBy: ActiveController[];
   /** 被撤销访问权限的控制端 deviceId 列表(逐设备黑名单)。 */
   revokedControllers: string[];
+  /** 单独关掉「用本机模型」的同账号电脑 deviceId 列表。 */
+  modelUseRevokedControllers: string[];
   /** 本机主动关闭控制的目标设备 deviceId 列表(控制端本地偏好)。 */
   disabledControlDeviceIds: string[];
   listError: string | null;
@@ -61,6 +63,8 @@ export interface DeviceLinkSettings {
   restore: (deviceId: string) => Promise<void>;
   /** 控制端本地偏好:是否允许本机主动控制某个目标设备。 */
   setDeviceControlEnabled: (deviceId: string, enabled: boolean) => Promise<void>;
+  /** 单独开关某台电脑的「用本机模型」。 */
+  setModelUse: (deviceId: string, allowed: boolean) => Promise<void>;
 }
 
 const POLL_INTERVAL_MS = 30_000;
@@ -76,6 +80,7 @@ export function useDeviceLinkSettings(active = true): DeviceLinkSettings {
   const [devices, setDevices] = useState<DeviceLinkDeviceView[] | null>(null);
   const [controlledBy, setControlledBy] = useState<ActiveController[]>([]);
   const [revokedControllers, setRevokedControllers] = useState<string[]>([]);
+  const [modelUseRevokedControllers, setModelUseRevokedControllers] = useState<string[]>([]);
   const [disabledControlDeviceIds, setDisabledControlDeviceIds] = useState<string[]>([]);
   const [listError, setListError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
@@ -155,6 +160,7 @@ export function useDeviceLinkSettings(active = true): DeviceLinkSettings {
         }
         if (controllerRevision === 0) setControlledBy(s.controlledBy ?? []);
         setRevokedControllers(s.revokedControllers ?? []);
+        setModelUseRevokedControllers(s.modelUseRevokedControllers ?? []);
         applyDisabledControlDeviceIds(s.disabledControlDeviceIds ?? []);
       })
       .catch((err) => log.warn('getState failed', err));
@@ -297,6 +303,22 @@ export function useDeviceLinkSettings(active = true): DeviceLinkSettings {
     [revokedControllers, t],
   );
 
+  const setModelUse = useCallback(
+    async (deviceId: string, allowed: boolean) => {
+      const prev = modelUseRevokedControllers;
+      setModelUseRevokedControllers((r) => allowed ? r.filter((id) => id !== deviceId) : r.includes(deviceId) ? r : [...r, deviceId]);
+      try {
+        await window.electronAPI.deviceLink.setModelUse(deviceId, allowed);
+        toast.success(t(allowed ? 'settings.remoteControl.toast.modelUseRestored' : 'settings.remoteControl.toast.modelUseRevoked'));
+      } catch (err) {
+        log.warn('setModelUse failed', err);
+        setModelUseRevokedControllers(prev);
+        toast.error(t('settings.remoteControl.toast.modelUseFailed'));
+      }
+    },
+    [modelUseRevokedControllers, t],
+  );
+
   const setDeviceControlEnabled = useCallback(
     async (deviceId: string, next: boolean) => {
       const prev = disabledControlDeviceIdsRef.current;
@@ -341,6 +363,7 @@ export function useDeviceLinkSettings(active = true): DeviceLinkSettings {
     devices,
     controlledBy,
     revokedControllers,
+    modelUseRevokedControllers,
     disabledControlDeviceIds,
     listError,
     refreshing,
@@ -352,5 +375,6 @@ export function useDeviceLinkSettings(active = true): DeviceLinkSettings {
     revoke,
     restore,
     setDeviceControlEnabled,
+    setModelUse,
   };
 }

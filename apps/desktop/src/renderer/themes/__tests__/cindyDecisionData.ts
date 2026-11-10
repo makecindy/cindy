@@ -146,8 +146,6 @@ export const CINDY_REQUIRED_COLOR_IDS = [
   // E1D send-btn 族纳入值表(lead 裁决反相中性四态 + disabled #444242 系):
   'send-btn-bg',
   'send-btn-icon',
-  'send-btn-hover-bg', // E1D 新增(反相中性 hover)
-  'send-btn-pressed-bg', // E1D 新增(反相中性 pressed)
   'send-btn-disabled-bg',
   'send-btn-disabled-icon', // 120→126
 ] as const;
@@ -284,8 +282,6 @@ export const CINDY_EXPECTED_VALUES: Record<string, { light: string; dark: string
   // E1D send-btn 族(lead 反相中性四态 + disabled #444242 系;default send-btn-bg aliases accent-cta-bg,CINDY override 全族)
   'send-btn-bg': { light: '#3C3F43', dark: '#EEEEEE' },
   'send-btn-icon': { light: '#FCFCFC', dark: '#151515' },
-  'send-btn-hover-bg': { light: '#2E3237', dark: '#E2E2E2' },
-  'send-btn-pressed-bg': { light: '#25282C', dark: '#D4D4D4' },
   'send-btn-disabled-bg': { light: '#444242', dark: '#323232' },
   'send-btn-disabled-icon': { light: '#585555', dark: '#464646' },
   'perm-allow-kbd-bg': { light: 'rgba(255, 255, 255, 0.16)', dark: 'rgba(0, 0, 0, 0.08)' }, // 2026-07-19 修复:kbd 随按钮反相
@@ -367,7 +363,7 @@ export const CINDY_EXPECTED_VALUES: Record<string, { light: string; dark: string
   'completion-badge-fg': { light: '#1f1f1e', dark: '#121212' },
   'create-agent-control-bg': { light: '#FFFFFA', dark: '#272727' },
   'create-agent-control-bg-hover': { light: 'var(--surface-hover)', dark: 'rgba(255, 255, 255, 0.06)' }, // 用户裁决 2026-10-22 墨水透明度(决策表 §9)
-  'create-agent-control-bg-pressed': { light: 'var(--surface-hover-soft)', dark: 'rgba(255, 255, 255, 0.10)' }, // 用户裁决 2026-10-22 墨水透明度(决策表 §9)
+  'create-agent-control-bg-pressed': { light: 'rgba(0, 0, 0, 0.08)', dark: 'rgba(255, 255, 255, 0.10)' }, // 用户裁决 2026-11-07 墨水透明度:按下不比悬停浅
   'create-agent-control-border': { light: 'rgba(0, 0, 0, 0.08)', dark: 'rgba(255, 255, 255, 0.10)' }, // 用户裁决 2026-10-22 墨水透明度(决策表 §9)
   'create-agent-control-icon': { light: 'rgba(0, 0, 0, 0.88)', dark: 'rgba(255, 255, 255, 0.82)' }, // 用户裁决 2026-10-22 墨水透明度(决策表 §9)
   'create-agent-control-text': { light: 'rgba(0, 0, 0, 0.88)', dark: 'rgba(255, 255, 255, 0.82)' }, // 用户裁决 2026-10-22 墨水透明度(决策表 §9)

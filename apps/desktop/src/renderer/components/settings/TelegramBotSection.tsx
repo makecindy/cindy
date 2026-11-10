@@ -1,3 +1,4 @@
+import { imBotSettings } from './ImBotSection.settings-search';
 import { Button } from '@/components/ui/button';
 import { ImConnectionError, ImSavedConnectionRecovery } from './ImConnectionRecovery';
 import { useCallback, useMemo, useState } from 'react';
@@ -144,8 +145,8 @@ export function TelegramBotSection({
 
   return (
     <ImChannelSettingsCard
-      id="personal-im-telegram"
-      title={t('settings.telegramBot.title')}
+      id={imBotSettings.telegram.targetId}
+      title={t(imBotSettings.telegram.titleKey)}
       description={t('settings.telegramBot.description')}
       routeSummary={
         routeSummary
@@ -205,7 +206,7 @@ export function TelegramBotSection({
             {t('settings.telegramBot.tokenLabel')}
           </label>
           <div className="relative">
-            <input
+            <input data-setting-id={imBotSettings.telegram.id}
               type={showToken ? 'text' : 'password'}
               value={token}
               onChange={(e) => setToken(e.target.value)}
@@ -220,7 +221,7 @@ export function TelegramBotSection({
               )}
               style={{ userSelect: 'text', WebkitUserSelect: 'text' }}
             />
-            <button
+            <button data-setting-id={imBotSettings.telegram.id}
               type="button"
               onClick={() => setShowToken(!showToken)}
               className="absolute right-[14px] top-1/2 -translate-y-1/2 text-[var(--settings-eye-icon)] transition-colors hover:text-[var(--settings-eye-icon-hover)]"
@@ -240,7 +241,7 @@ export function TelegramBotSection({
           >
             {t('settings.telegramBot.ownerUserIdLabel')}
           </label>
-          <input
+          <input data-setting-id={imBotSettings.telegram.id}
             type="text"
             value={ownerUserId}
             onChange={(e) => setOwnerUserId(e.target.value)}
@@ -275,7 +276,7 @@ export function TelegramBotSection({
               )}
             </div>
             {hasSavedCreds && (
-              <button
+              <button data-setting-id={imBotSettings.telegram.id}
                 type="button"
                 onClick={() => void handleDisconnectClick()}
                 disabled={isDisconnecting}
@@ -299,7 +300,7 @@ export function TelegramBotSection({
             />
           )}
 
-          <Button
+          <Button data-setting-id={imBotSettings.telegram.id}
             variant="cta"
             size="lg"
             loading={isSaving}
@@ -314,7 +315,7 @@ export function TelegramBotSection({
       )}
 
       <div className="border-t border-[var(--settings-theme-card-border)] pt-3">
-        <button
+        <button data-setting-id={imBotSettings.telegram.id}
           type="button"
           onClick={() => setGuideOpen(!guideOpen)}
           className="flex w-full items-center justify-between gap-3 bg-transparent p-0 text-left"
@@ -345,7 +346,7 @@ export function TelegramBotSection({
                 </div>
               </div>
             ))}
-            <button
+            <button data-setting-id={imBotSettings.telegram.id}
               type="button"
               onClick={openBotFather}
               className="w-fit cursor-pointer bg-transparent p-0 text-12 font-medium text-[var(--settings-source-link)] underline decoration-[var(--settings-source-link)] decoration-1 underline-offset-2"
@@ -434,7 +435,7 @@ function ConnectedCard(props: {
       </div>
       <div className="flex gap-2 pt-1">
         {/* 下线/上线: 可逆且零数据损失, 不加二次确认(解绑才需要确认)。 */}
-        <Button
+        <Button data-setting-id={imBotSettings.telegram.id}
           variant="secondary"
           size="lg"
           loading={props.isTogglingOnline}
@@ -460,7 +461,7 @@ function ConnectedCard(props: {
               )
             : t(isOffline ? 'settings.telegramBot.goOnline' : 'settings.telegramBot.goOffline')}
         </Button>
-        <Button
+        <Button data-settings-search-action="Disconnect this bot account"
           variant="secondary"
           size="lg"
           loading={props.isDisconnecting}

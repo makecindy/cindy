@@ -16,7 +16,7 @@ import {
 type ApiFetch = <T>(path: string, opts: Omit<ApiFetchOptions, 'token'>) => Promise<T>;
 const auth = vi.hoisted(() => ({ apiFetch: null as unknown as ApiFetch, accountGeneration: 1 }));
 vi.mock('@/auth/AuthContext', () => ({ useAuth: () => auth }));
-vi.mock('react', () => ({ useMemo: (factory: () => unknown) => factory() }));
+vi.mock('react', async (importOriginal) => ({ ...(await importOriginal<typeof import('react')>()), useMemo: (factory: () => unknown) => factory() }));
 vi.mock('@/config/env', () => ({
   DEVICE_LINK_API_BASE_URL: 'https://relay.example.invalid',
   getOfficialDeviceLinkApiBaseUrl: () => 'https://official.example.invalid',

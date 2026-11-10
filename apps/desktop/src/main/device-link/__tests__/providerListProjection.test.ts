@@ -15,7 +15,8 @@
  * 只 mock electron(app)+ logger,与同目录 dispatchSendSafety.test 同范式。
  */
 import { describe, it, expect, vi } from 'vitest';
-import { connectedProvidersForAgent, pickRecommendedAgent, type ProviderView } from '@cindy/model-providers';
+import { connectedProvidersForAgent, pickRecommendedAgent, remoteInvocationModels, type ProviderView } from '@cindy/model-providers';
+import { PROVIDER_METADATA_TRUST_MS } from '@cindy/device-link';
 import { TEST_XD_GATEWAY_BASE_URL as XD_GATEWAY_BASE_URL } from '../../../test/vitest/clientEndpointsFixture';
 
 // The projection never reads persistence; avoid loading Electron through transitive stores.
@@ -35,13 +36,14 @@ vi.mock('../../logger', () => ({
   createLogger: () => ({ info: vi.fn(), debug: vi.fn(), warn: vi.fn(), error: vi.fn() }),
 }));
 
-import { __testing } from '../dispatch';
+import { __testing } from '../dispatch.desktop';
 
 const project = (result: unknown) =>
   __testing.projectInvokeResultForTunnel('maker:provider:list', result) as {
     providers: Record<string, unknown>[];
     modelVisibilityOverrides?: Record<string, boolean>;
     providerOrder?: string[];
+    providerContinuity?: { stale: boolean; remainingMs: number };
   };
 const projectForCurrentController = (result: unknown) =>
   __testing.projectInvokeResultForTunnel('maker:provider:list', result, true) as {
@@ -132,7 +134,45 @@ function xdProviderWithFullRouting() {
   };
 }
 
+
+describe('allowed object-form read stamps', () => {
+  it.each(['maker:get-capabilities', 'maker:agent:status'] as const)(
+    'adds the host first-hop stamp to %s and keeps a shorter upstream budget',
+    (channel) => {
+      const value = channel === 'maker:agent:status' ? { binaryReady: true } : { availableModels: [] };
+      expect(__testing.projectInvokeResultForTunnel(channel, value)).toEqual({
+        ...value, providerContinuity: { stale: false, remainingMs: PROVIDER_METADATA_TRUST_MS },
+      });
+      const shorter = { ...value, providerContinuity: { stale: true, remainingMs: 1000 } };
+      expect(__testing.projectInvokeResultForTunnel(channel, shorter)).toEqual(shorter);
+    },
+  );
+
+  it('keeps array replies and unrelated object channels unchanged', () => {
+    const agents = ['claude-code', 'codex'];
+    expect(__testing.projectInvokeResultForTunnel('maker:list-available-agents', agents)).toBe(agents);
+    const other = { ok: true };
+    expect(__testing.projectInvokeResultForTunnel('maker:set-model', other)).toBe(other);
+  });
+});
+
 describe('projectInvokeResultForTunnel — maker:provider:list 投影', () => {
+  // #9501 unit: the actual tunnel projection must preserve the host-only budget
+  // for Remote Agent selection while remote-control/settings keep the default.
+  it('preserves separate context overrides across tunnel serialization', () => {
+    const provider = xdProviderWithFullRouting();
+    const model = { ...provider.models['claude-code'][0], contextWindow: 200_000, contextWindowOverride: 1_000_000 };
+    provider.models['claude-code'] = [model];
+    const result = JSON.parse(JSON.stringify(project({ providers: [provider] })));
+    expect(result.providers[0].models['claude-code'][0]).toMatchObject({ contextWindow: 200_000, contextWindowOverride: 1_000_000 });
+    expect(remoteInvocationModels(result.providers[0]).models['claude-code']![0].contextWindow).toBe(1_000_000);
+  });
+  it('advertises the bounded directory budget and keeps a shorter upstream remainder', () => {
+    expect(project({ providers: [] }).providerContinuity)
+      .toEqual({ stale: false, remainingMs: PROVIDER_METADATA_TRUST_MS });
+    expect(project({ providers: [], providerContinuity: { stale: true, remainingMs: 1000 } }).providerContinuity)
+      .toEqual({ stale: true, remainingMs: 1000 });
+  });
   it('keeps the source account name for mobile and desktop controllers', () => {
     for (const name of ['Cindy AI · 个人', 'Cindy AI · 心动', 'Cindy AI · Example Studio']) {
       const input = { providers: [{ ...xdProviderWithFullRouting(), name }] };

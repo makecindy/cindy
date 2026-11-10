@@ -1,5 +1,7 @@
 {
   "permission": {
+    "mcpComplete": "Concluído",
+    "mcpCancel": "Cancelar",
     "mode": {
       "default": "Permissões padrão",
       "acceptEdits": "Permitir edições",
@@ -34,6 +36,11 @@
     "exit": "Sair do modo de planejamento"
   },
   "panel": {
+    "questionUnanswered": "Sem resposta",
+    "questionWithdrawn": "Não precisa mais de resposta",
+    "withdrawnDraft": "Esta pergunta não precisa mais de resposta.\n{{reason}}\nSeu rascunho foi mantido e pode ser enviado como complemento.",
+    "sendSupplement": "Enviar complemento",
+
     "readOnlyKind": "Pendente",
     "readOnlyTitle": "Aguardando confirmação no seu computador",
     "pendingRequests": "Solicitações pendentes",
@@ -98,7 +105,14 @@
     "planFeedbackPlaceholder": "Diga ao Claude o que fazer",
     "planFeedbackRequired": "Digite seu feedback antes de enviar.",
     "planFeedbackSubmit": "Enviar feedback do plano",
-    "planFeedbackAccessibility": "Dar feedback para alterar o plano"
+    "planFeedbackAccessibility": "Dar feedback para alterar o plano",
+    "validation": {
+      "required": "Preencha este campo obrigatório.",
+      "choice": "Escolha uma das opções da lista.",
+      "tooShort": "Digite pelo menos {{count}} caracteres.",
+      "tooLong": "Digite no máximo {{count}} caracteres."
+    },
+    "askRestrictedMetaCaption": "{{options}} · {{mode}}"
   },
   "kinds": {
     "permission": {
@@ -299,6 +313,8 @@
       "picture": "Mostrar tela",
       "backToForm": "Voltar ao formulário",
       "liveView": "Visualização ao vivo",
+      "openRemoteDesktop": "Abrir área de trabalho remota",
+      "useForm": "Usar o formulário",
       "fill": "Preencher",
       "skip": "Pular",
       "continue": "Continuar",
@@ -306,6 +322,9 @@
       "showPassword": "Mostrar senha",
       "hidePassword": "Ocultar senha",
       "scan": "Escanear"
+    },
+    "directSignIn": {
+      "hint": "Faça login diretamente na janela. Ao terminar, tudo continua automaticamente."
     },
     "remoteUnavailable": "Este computador não pode receber entrada remotamente. Conclua esta etapa no computador host e devolva o controle ao Agent.",
     "unnamedField": "Campo",
@@ -384,6 +403,8 @@
       "submitting": "Enviando"
     },
     "permission": {
+      "titleStdin": "Permitir entrada neste terminal?",
+      "titleMcpUrl": "Concluir a solicitação de {{server}}",
       "highRiskTitle": "Permissão de alto risco exige confirmação",
       "highRiskDetail": "Revise o comando e confirme novamente para permiti-lo. Negue se não tiver certeza.",
       "sessionAllowTitle": "Permitir uma vez ou sempre permitir nesta tarefa",

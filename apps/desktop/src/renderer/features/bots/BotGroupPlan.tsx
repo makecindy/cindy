@@ -10,7 +10,8 @@
  * 交接文件相对安排的工作目录；点开交给系统默认方式，路径越出工作目录的一律不打开。
  */
 import { useState, type ReactNode } from 'react';
-import { Check, ChevronDown, ChevronUp, CircleAlert, CircleCheck, CircleDashed, Sparkles } from 'lucide-react';
+import { Check, ChevronDown, ChevronUp, Circle, CircleAlert, CircleCheck, CircleDashed, CircleMinus, Minus, Sparkles } from 'lucide-react';
+import { botGroupPlanStepState, botGroupQueueWindow, canSkipBotGroupPlanStep } from '@cindy/maker-shared/botGroupPresentation';
 import { useTranslation } from 'react-i18next';
 
 import { Button } from '@/components/ui/button';
@@ -37,6 +38,7 @@ import type {
 import { formatBotTimelineClock } from '@cindy/maker-shared/botTimeline';
 import { BotAvatar } from './BotAvatar';
 import { BotGroupElapsed } from './BotGroupElapsed';
+import './BotGroupPlan.css';
 import {
   botGroupPathBasename,
   botGroupPlanFilePath,
@@ -44,7 +46,7 @@ import {
   type BotGroupPlanFollowUp,
 } from './botGroupPresentation';
 
-type AvatarIdentity = { name: string; avatar: string | null; avatarColor: string | null };
+type AvatarIdentity = { name: string; avatar: string | null; avatarUrl?: string | null; avatarColor: string | null };
 
 export type BotGroupPlanCardAction = 'start' | 'dismiss' | 'edit';
 
@@ -54,6 +56,7 @@ function stepIdentity(step: BotGroupPlanStepView, members: readonly BotGroupMemb
   return {
     name: step.botName.trim() || member?.name || '',
     avatar: member?.avatar ?? null,
+    avatarUrl: member?.avatarUrl ?? null,
     avatarColor: member?.avatarColor ?? null,
   };
 }
@@ -71,13 +74,15 @@ export function BotGroupOrganizerTag() {
 /** 16px leading mark: the step number before 开始, its live status afterwards. */
 function StepLead({ plan, step, index }: { plan: BotGroupPlanView; step: BotGroupPlanStepView; index: number }) {
   const { t } = useTranslation();
+  const state = botGroupPlanStepState(plan, step);
   if (plan.status === 'proposed' || plan.status === 'superseded' || plan.status === 'dismissed') {
     return <span className="text-12 tabular-nums text-[var(--text-tertiary)]">{index + 1}</span>;
   }
   if (step.status === 'done') {
     return <CircleCheck size={16} aria-hidden className="text-[var(--text-secondary)]" />;
   }
-  if (step.status === 'running') {
+  if (state === 'skipped') return <CircleMinus size={16} aria-hidden className="text-[var(--text-tertiary)]" />;
+  if (state === 'running') {
     // Same running mark as the group speaking row (DESIGN.md §2 Thinking Orange).
     return <Sparkles size={15} aria-hidden className="text-[var(--status-bar-accent)]" />;
   }
@@ -87,21 +92,24 @@ function StepLead({ plan, step, index }: { plan: BotGroupPlanView; step: BotGrou
   return (
     <>
       <CircleDashed size={16} aria-hidden className="text-[var(--text-tertiary)]" />
-      <span className="sr-only">{t('bots.groupChat.plan.stepPending')}</span>
+      <span className="sr-only">{t(STEP_STATUS_KEYS[state] ?? 'bots.groupChat.plan.stepPending')}</span>
     </>
   );
 }
 
-const STEP_STATUS_KEYS: Partial<Record<BotGroupPlanStepView['status'], string>> = {
+const STEP_STATUS_KEYS: Partial<Record<ReturnType<typeof botGroupPlanStepState>, string>> = {
+  queued: 'bots.groupChat.plan.stepQueued',
+  skipped: 'bots.groupChat.plan.stepSkipped',
+  stopped: 'bots.groupChat.plan.stopped',
   done: 'bots.groupChat.plan.stepDone',
   running: 'bots.groupChat.plan.stepRunning',
   failed: 'bots.groupChat.plan.stepFailed',
 };
 /** A discussion's turns are spoken, not done. */
-const TALK_STATUS_KEYS: Partial<Record<BotGroupPlanStepView['status'], string>> = {
+const TALK_STATUS_KEYS: Partial<Record<ReturnType<typeof botGroupPlanStepState>, string>> = {
   ...STEP_STATUS_KEYS,
   done: 'bots.groupChat.plan.stepSpoken',
-  running: 'bots.groupChat.plan.stepSpeaking',
+  running: 'bots.groupChat.plan.stepExecuting',
 };
 
 /** What the step is about; a discussion turn without a focus just shares a view. */
@@ -134,7 +142,8 @@ function StepRowContent({
 }) {
   const { t } = useTranslation();
   const started = plan.status !== 'proposed' && plan.status !== 'superseded' && plan.status !== 'dismissed';
-  const statusKey = started ? (plan.kind === 'talk' ? TALK_STATUS_KEYS : STEP_STATUS_KEYS)[step.status] : undefined;
+  const state = botGroupPlanStepState(plan, step);
+  const statusKey = started ? (plan.kind === 'talk' ? TALK_STATUS_KEYS : STEP_STATUS_KEYS)[state] : undefined;
   const doneAt = step.status === 'done' ? timing.doneAt?.get(index + 1) : undefined;
   return (
     <>
@@ -152,11 +161,11 @@ function StepRowContent({
         <span
           className={cn(
             'shrink-0 text-12 tabular-nums',
-            step.status === 'running' ? 'text-[var(--status-bar-accent)]' : 'text-[var(--text-tertiary)]',
+            state === 'running' ? 'text-[var(--status-bar-accent)]' : 'text-[var(--text-tertiary)]',
           )}
         >
           {t(statusKey)}
-          {step.status === 'running' && plan.status === 'running' && timing.runningSince !== null ? (
+          {state === 'running' && plan.status === 'running' && timing.runningSince !== null ? (
             <>
               {' · '}
               <BotGroupElapsed since={timing.runningSince} />
@@ -191,7 +200,7 @@ function EditableStepRow({
   disabled: boolean;
   /** Steps are removed only before 开始. */
   allowRemove: boolean;
-  onEdit: (step: BotGroupPlanStepView, action: 'reassign' | 'remove', botId?: string) => void;
+  onEdit: (step: BotGroupPlanStepView, action: 'reassign' | 'remove' | 'skip', botId?: string) => void;
   timing: StepTiming;
 }) {
   const { t } = useTranslation();
@@ -260,18 +269,7 @@ const FINAL_NOTE_KEYS: Partial<Record<BotGroupPlanView['status'], string>> = {
   stopped: 'bots.groupChat.plan.stopped',
 };
 
-/** A long queue shows this many turns around the current one until it is expanded. */
-const QUEUE_VISIBLE_STEPS = 3;
-
-/** The turns a folded queue shows: the one before the current turn, it, and the next. */
-export function botGroupQueueWindow(plan: BotGroupPlanView): { start: number; end: number } {
-  const count = plan.steps.length;
-  // Folding away a single turn saves nothing.
-  if (count <= QUEUE_VISIBLE_STEPS + 1) return { start: 0, end: count };
-  const active = plan.steps.findIndex((step) => step.status !== 'done');
-  const start = Math.min(Math.max((active < 0 ? count - 1 : active) - 1, 0), count - QUEUE_VISIBLE_STEPS);
-  return { start, end: start + QUEUE_VISIBLE_STEPS };
-}
+export { botGroupQueueWindow } from '@cindy/maker-shared/botGroupPresentation';
 
 /**
  * Body of the 安排卡. A legacy plan is the organizer's message (the usual Bot header plus the
@@ -285,6 +283,7 @@ export function BotGroupPlanCard({
   members,
   actionable,
   reassignable = false,
+  readOnly = false,
   pending,
   runningSince = null,
   doneAt,
@@ -298,6 +297,7 @@ export function BotGroupPlanCard({
   members: readonly BotGroupMemberView[];
   actionable: boolean;
   reassignable?: boolean;
+  readOnly?: boolean;
   pending: BotGroupPlanCardAction | null;
   /** When the running step started (its Session's turn, else the plan's last change). */
   runningSince?: number | null;
@@ -306,7 +306,7 @@ export function BotGroupPlanCard({
   locale?: string;
   onStart: () => void;
   onDismiss: () => void;
-  onEditStep: (step: BotGroupPlanStepView, action: 'reassign' | 'remove', botId?: string) => void;
+  onEditStep: (step: BotGroupPlanStepView, action: 'reassign' | 'remove' | 'skip', botId?: string) => void;
   /** Present for whoever may press 继续 on this open 分工: switch between waiting and going on by itself. */
   onAutoContinueChange?: (on: boolean) => void;
 }) {
@@ -322,24 +322,62 @@ export function BotGroupPlanCard({
   const timing: StepTiming = { runningSince, doneAt, locale };
   const canReassign = reassignable && plan.steps.some((step) => step.status === 'pending' || step.status === 'failed');
   const underWay = plan.status === 'running' || plan.status === 'waiting';
-  // Only a server queue stands on its own; a division of work keeps its organizer card and actions.
-  const arranged = plan.kind === 'talk';
-  const turns = arranged ? botGroupQueueWindow(plan) : { start: 0, end: plan.steps.length };
-  const folded = !expanded && turns.end - turns.start < plan.steps.length;
-  const shown = folded ? plan.steps.slice(turns.start, turns.end) : plan.steps;
+  if (plan.kind === 'talk') {
+    const turns = botGroupQueueWindow(plan);
+    const folded = !expanded && turns.end - turns.start < plan.steps.length;
+    const shown = folded ? plan.steps.slice(turns.start, turns.end) : plan.steps;
+    const current = plan.steps.find(step => step.position === plan.currentStep);
+    const progress = finalNote ? t(finalNote)
+      : plan.status === 'done' ? t('bots.groupChat.plan.queueEnded')
+      : plan.status === 'waiting' ? t(current?.status === 'failed' ? 'bots.groupChat.plan.stepFailed' : 'bots.groupChat.plan.queueWaiting')
+      : current ? `${t(TALK_STATUS_KEYS[botGroupPlanStepState(plan, current)] ?? 'bots.groupChat.plan.talkPending')} · ${current.position + 1} / ${plan.steps.length}` : '';
+    return <div data-testid="bot-group-plan" data-plan-status={plan.status} data-plan-kind="talk"
+      className="bot-group-talk-card w-full max-w-[720px] min-w-0 rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3.5 py-2.5">
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+        <Circle size={16} aria-hidden className="shrink-0 text-[var(--text-tertiary)]" />
+        <span className="flex-1 text-15 font-semibold leading-6 text-[var(--text-primary)]">{t('bots.groupChat.plan.talkTitle')}</span>
+        <span className="text-12 leading-6 tabular-nums text-[var(--text-tertiary)]">{progress}</span>
+      </div>
+      <ol className="mt-2 flex flex-col">
+        {shown.map(step => {
+          const identity = stepIdentity(step, members);
+          const state = botGroupPlanStepState(plan, step);
+          return <li key={step.position} data-testid="bot-group-plan-step"
+            className="bot-group-talk-step grid min-h-10 min-w-0 grid-cols-[20px_minmax(0,1fr)] items-start gap-x-2.5 gap-y-0.5 py-[7px]">
+            <BotAvatar bot={identity} size="xs" className="h-5 w-5 shrink-0 text-11" />
+            <span className="min-w-0 flex-1 break-words text-13 font-medium leading-5 text-[var(--text-primary)] [overflow-wrap:anywhere]">{identity.name}</span>
+            <span className="bot-group-talk-tail col-start-2 flex min-w-0 items-center justify-between gap-2.5">
+              <span className="inline-flex items-center gap-1 text-12 leading-5 text-[var(--text-tertiary)]">
+                {state === 'done' ? <Check size={14} aria-hidden className="text-[var(--card-status-done)]" />
+                  : state === 'running' ? <Sparkles size={14} aria-hidden className="text-[var(--status-bar-accent)]" />
+                  : state === 'skipped' || state === 'stopped' ? <Minus size={14} aria-hidden />
+                  : state === 'failed' ? <CircleAlert size={14} aria-hidden className="text-[var(--error-fg)]" /> : null}
+                {t(TALK_STATUS_KEYS[state] ?? 'bots.groupChat.plan.talkPending')}
+              </span>
+              {!readOnly && canSkipBotGroupPlanStep(plan, step) ? <Button variant="secondary" size="sm" compact
+                aria-label={t('bots.groupChat.plan.skipTurnLabel', { name: identity.name })}
+                disabled={busy} loading={busy} onClick={() => onEditStep(step, 'skip')}>
+                {t('bots.groupChat.plan.skipTurn')}
+              </Button> : null}
+            </span>
+          </li>;
+        })}
+      </ol>
+      {turns.end - turns.start < plan.steps.length ? <Button variant="secondary" tone="quiet" size="sm" compact
+        className="mt-1" data-testid="bot-group-plan-fold" aria-expanded={expanded} onClick={() => setExpanded(open => !open)}>
+        {expanded ? t('bots.groupChat.plan.foldTurns') : t('bots.groupChat.plan.allTurns', { count: plan.steps.length })}
+        {expanded ? <ChevronUp size={12} aria-hidden /> : <ChevronDown size={12} aria-hidden />}
+      </Button> : null}
+    </div>;
+  }
   return (
     <div data-testid="bot-group-plan" data-plan-status={plan.status} data-plan-kind={plan.kind} className="flex min-w-0 flex-col">
-      {arranged ? null : (
-        <p className="min-w-0 text-15 font-normal leading-[1.6] text-[var(--msg-assistant-text)]">
+      <p className="min-w-0 text-15 font-normal leading-[1.6] text-[var(--msg-assistant-text)]">
           {t('bots.groupChat.plan.intro', { count: plan.steps.length })}
-        </p>
-      )}
-      <div className={cn('w-fit min-w-0 max-w-full overflow-hidden',
-        // A legacy plan sits inside the organizer's bubble; an arrangement is its own card.
-        arranged ? 'rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)]' : 'mt-2 rounded-lg bg-[var(--surface)]')}>
+      </p>
+      <div className="mt-2 w-fit min-w-0 max-w-full overflow-hidden rounded-lg bg-[var(--surface)]">
         <ol className="flex flex-col py-1.5">
-          {shown.map((step, shownIndex) => {
-            const index = folded ? turns.start + shownIndex : shownIndex;
+          {plan.steps.map((step, index) => {
             const identity = stepIdentity(step, members);
             const editable =
               actionable || (reassignable && (step.status === 'pending' || step.status === 'failed'));
@@ -393,20 +431,7 @@ export function BotGroupPlanCard({
             </Button>
           </div>
         ) : null}
-        {arranged && turns.end - turns.start < plan.steps.length ? (
-          <button
-            type="button"
-            data-testid="bot-group-plan-fold"
-            aria-expanded={expanded}
-            onClick={() => setExpanded((open) => !open)}
-            className="flex w-full min-w-0 items-center gap-1 border-t border-[var(--border-default)] px-3.5 py-1.5 text-left text-12 leading-4 text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
-          >
-            <span className="min-w-0">
-              {expanded ? t('bots.groupChat.plan.foldTurns') : t('bots.groupChat.plan.allTurns', { count: plan.steps.length })}
-            </span>
-            {expanded ? <ChevronUp size={12} aria-hidden /> : <ChevronDown size={12} aria-hidden />}
-          </button>
-        ) : !arranged && (actionable || underWay) ? (
+        {actionable || underWay ? (
           // Card footer: how it runs on the left, what the steps offer on the right.
           <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-0.5 border-t border-[var(--border-default)] px-3.5 py-1.5 text-11 leading-4 text-[var(--text-tertiary)]">
             {onAutoContinueChange ? (

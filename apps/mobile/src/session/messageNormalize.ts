@@ -1,9 +1,10 @@
+import { normalizeAskQuestions, answerKey } from "@cindy/maker-shared/interaction";
 import { readChatReplyQuote, type ChatReplyQuote } from '@cindy/maker-shared/chat-reply-quote';
 import { forwardedRequestDisplayText } from '@cindy/maker-shared/message-source';
 import { formatDuration } from '@cindy/maker-shared/message-render';
 import { parseMcpAppHistory } from '@cindy/maker-shared/mcp-apps';
 import { collectPluginInvocations, type PluginInvocation } from './pluginInvocations';
-import { extractPayloadToolResultFiles, extractPayloadToolCardIds, type PayloadToolFile } from '@cindy/maker-shared/payload-summary';
+import { extractPayloadToolResultFiles, extractPayloadToolCardIds, extractPayloadTurnEndCardIds, type PayloadToolFile } from '@cindy/maker-shared/payload-summary';
 import { placeBotTaskCardsAfterIntroduction, readBotCollaborationMeta, type BotCollaborationMeta } from '@cindy/maker-shared/botCollaboration';
 import { readBotDirectMessageMeta, type BotDirectMessageMeta } from '@cindy/maker-shared/botDirectMessage';
 import type { RemoteMessage, RemoteMessageRole } from '@/session/types';
@@ -116,6 +117,7 @@ export interface NormalizedRemoteMessage {
   media?: NormalizedToolMedia[];
   files?: PayloadToolFile[];
   cardIds?: string[];
+  turnEndCardIds?: string[];
   pluginInvocations?: PluginInvocation[];
   diff?: NormalizedToolDiff;
   align: 'user' | 'agent';
@@ -270,7 +272,7 @@ const toolUsePayloadByMessage = new WeakMap<RemoteMessage, ToolUsePayload>();
 
 export function normalizeRemoteMessages(
   messages: readonly RemoteMessage[],
-  options: { preserveSourceOrder?: boolean; sessionSource?: string | null } = {},
+  options: { preserveSourceOrder?: boolean; sessionSource?: string | null; pendingQuestionIds?: ReadonlySet<string> } = {},
 ): NormalizedRemoteMessage[] {
   // History views already place live tails after their persisted prefix. A live
   // row's provisional timestamp must not undo that order during normalization.
@@ -366,6 +368,7 @@ export function normalizeRemoteMessages(
         media: extractToolResultMedia(secondaryBody ?? ''),
         files: extractPayloadToolResultFiles(secondaryBody ?? ''),
         cardIds: extractPayloadToolCardIds(secondaryBody ?? ''),
+        turnEndCardIds: extractPayloadTurnEndCardIds(secondaryBody ?? ''),
         diff: tool.diff,
         align: 'agent',
         createdAt: message.createdAt,
@@ -379,7 +382,7 @@ export function normalizeRemoteMessages(
     }
 
     if (message.role === 'ask_user') {
-      const ask = normalizeAskUser(message);
+      const ask = normalizeAskUser(message, options.pendingQuestionIds);
       if (ask) result.push(ask);
       continue;
     }
@@ -403,7 +406,7 @@ export function normalizeRemoteMessages(
       const c = parseMaybeJsonObject(message.content);
       const rawText = typeof c?.message === 'string' ? c.message : contentToPreview(message.content);
       const toolLoop = parseMobileToolLoopErrorDetails(c?.toolLoop);
-      const guidance = describeAgentAuthError(rawText) ?? localizeAgentError(c?.reason, toolLoop, rawText);
+      const guidance = describeAgentAuthError(rawText) ?? localizeAgentError(c?.reason, toolLoop, rawText, c?.outputLimit);
       const errText = guidance ?? localizeUnclassifiedAgentError(rawText, options.sessionSource);
       result.push({
         key: messageNormalizeKey(message),
@@ -876,15 +879,17 @@ function normalizeGoalCard(message: RemoteMessage): NormalizedRemoteMessage | nu
   };
 }
 
-function normalizeAskUser(message: RemoteMessage): NormalizedRemoteMessage | null {
+function normalizeAskUser(message: RemoteMessage, pendingQuestionIds?: ReadonlySet<string>): NormalizedRemoteMessage | null {
   const content = readRecord(message.content);
   if (!content) return null;
-  if (content.status !== 'answered') return null;
+  const withdrawalReason = content.status === 'cancelled' ? readString(content.withdrawalReason) : undefined;
+  if (content.status === 'pending' && (pendingQuestionIds === undefined || pendingQuestionIds.has(String(content.requestId)))) return null;
+  if (!['answered', 'cancelled', 'expired', 'pending'].includes(String(content.status))) return null;
 
-  const questions = readQuestionTexts(content.questions);
+  const questions = normalizeAskQuestions(content.questions);
   const answers = readStringRecord(content.answers);
   const pairs = questions.length > 0
-    ? questions.map((question) => ({ question, answer: answers?.[question] ?? '' }))
+    ? questions.map((question) => ({ question: question.question, answer: answers?.[answerKey(question)] ?? answers?.[question.question] ?? '' }))
     : [{
         question: readString(content.question) ?? contentToPreview(message.content),
         answer: readString(content.reply) ?? '',
@@ -892,7 +897,9 @@ function normalizeAskUser(message: RemoteMessage): NormalizedRemoteMessage | nul
 
   const body = pairs
     .filter((pair) => pair.question || pair.answer)
-    .map((pair) => `Q: ${pair.question}\nA: ${pair.answer || '(skipped)'}`)
+    .map((pair) => content.status !== 'answered'
+      ? `Q: ${pair.question}\n${withdrawalReason ? `${i18n.t('interaction.panel.questionWithdrawn')} · ${withdrawalReason}` : i18n.t('interaction.panel.questionUnanswered')}`
+      : `Q: ${pair.question}\nA: ${pair.answer || '(skipped)'}`)
     .join('\n\n');
 
   if (!body) return null;
@@ -980,13 +987,6 @@ function buildToolDiff(toolName: string, input: unknown): NormalizedToolDiff | u
 
 export function extractToolResultMedia(toolResult: string): NormalizedToolMedia[] {
   return extractPayloadToolResultMedia(toolResult);
-}
-
-function readQuestionTexts(value: unknown): string[] {
-  if (!Array.isArray(value)) return [];
-  return value
-    .map((item) => readString(readRecord(item)?.question))
-    .filter((item): item is string => !!item);
 }
 
 function readStringRecord(value: unknown): Record<string, string> | null {
