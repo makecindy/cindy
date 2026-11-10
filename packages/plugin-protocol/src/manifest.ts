@@ -414,8 +414,8 @@ export interface GhostCindyNeeds {
  * 订阅槽 did- 旁听主题(卡槽①,2026-07-12 开闸)。v1 全部是**元数据级**:
  * turn = 轮次开始/结束(agent/模型/耗时/用量,不含消息内容);
  * session = 会话创建/归档/切换(切换 = 用户把哪个会话切到台前,2026-07-13 增)。
- * 正文级主题(消息内容旁听)刻意不开——隐私最重,等真实场景再议,权限文案
- * 也要另分一档。
+ * message = 已保存的用户/助手消息内容，task-state = 任务与运行状态字段。
+ * 两项分别展示权限并记录显式批准；旧元数据主题的批准语义保持。
  */
 export const GHOST_SUBSCRIBE_TOPICS = ['turn', 'session', 'message', 'task-state'] as const;
 export type GhostSubscribeTopic = (typeof GHOST_SUBSCRIBE_TOPICS)[number];

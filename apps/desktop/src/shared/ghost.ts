@@ -693,8 +693,8 @@ export interface GhostCindyNeeds {
  * turn = 轮次开始/结束(agent/模型/耗时/用量,不含消息内容);
  * activity = 轮次内思考/审批/等待用户输入的开始结束边界(只含 id 元数据);
  * session = 会话创建/归档/切换(切换 = 用户把哪个会话切到台前,2026-07-13 增)。
- * 正文级主题(消息内容旁听)刻意不开——隐私最重,等真实场景再议,权限文案
- * 也要另分一档。
+ * message = 已保存的用户/助手消息内容，task-state = 任务与运行状态字段。
+ * 两项分别展示权限并记录显式批准；旧元数据主题的批准语义保持。
  */
 export const GHOST_SUBSCRIBE_TOPICS = ['turn', 'session', 'activity', 'message', 'task-state'] as const;
 export type GhostSubscribeTopic = (typeof GHOST_SUBSCRIBE_TOPICS)[number];
@@ -8868,7 +8868,7 @@ export type GhostActivityEventName =
   | 'did-user-input-start'
   | 'did-user-input-end';
 
-/** did- 旁听事件名(topic 归属:turn / session / activity)。 */
+/** did- 旁听事件名，按声明并批准的 topic 分发。 */
 export type GhostDidEventName =
   | 'did-message-created'
   | 'did-task-state-changed'
@@ -8932,7 +8932,7 @@ export interface GhostEventInteractionActivityData {
 
 export type GhostEventActivityData = GhostEventThinkingData | GhostEventInteractionActivityData;
 
-/** 所有 did- 旁听事件共享的安全元数据载荷。 */
+/** did- 旁听载荷；消息内容与任务状态使用各自的批准主题。 */
 export type GhostDidEventData =
   GhostEventTurnStartData | GhostEventTurnEndData | GhostEventSessionData | GhostEventActivityData | GhostTaskEventData;
 export interface GhostTaskEventData {

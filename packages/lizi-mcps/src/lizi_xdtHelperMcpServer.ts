@@ -200,8 +200,8 @@ export const HELPER_CATEGORY_DESCRIPTIONS: Record<(typeof CATEGORY_ENUM)[number]
   control: [
     'list_projects(device) 可查询远程项目。',
     '管理任务与项目：当前任务的原生共享邀请/状态（create_shared_task_invitation / get_shared_task_state）在任务宿主执行，支持手机或同账号另一台电脑控制当前任务，不接受其他任务目标；',
-    '归档/取消归档支持本机与跨电脑（deviceId::sessionId）；',
-    '改名、移动、标签、排队消息、插话、停止、运行设置、给当前任务新建托管 worktree（create_task_worktree，可指定基线分支）、项目增删改、从其他 AI 编程工具导入任务（scan_importable_sessions / import_sessions）仅本机。',
+    '归档/取消归档、删除（delete_session）、按消息分叉（fork_session）与检查点回退（rewind_session）支持本机与跨电脑（deviceId::sessionId），删除和回退逐次确认；',
+    '改名、移动、标签、排队消息、插话、停止、运行设置（含权限档）、给当前任务新建托管 worktree（create_task_worktree，可指定基线分支）、项目增删改、从其他 AI 编程工具导入任务（scan_importable_sessions / import_sessions）仅本机。',
   ].join(''),
   github: [
     '读取 PR、CI、评审变化与详情，明确管理任务关联。',
@@ -214,7 +214,8 @@ export const HELPER_CATEGORY_DESCRIPTIONS: Record<(typeof CATEGORY_ENUM)[number]
     'list_teammates 枚举伙伴及已保存的任务关系（含隐藏与暂停），list_sessions 包含隐藏任务并返回 hiddenAt。',
     '查询任务、工作目录、聊天记录、任务摘要与输入队列；',
     '任务结果附带可直接引用的 sessionUrl，已知 id 要链接用 get_task_digest。',
-    '伙伴目录、任务列表、搜索、读取聊天记录、任务摘要（get_task_digest）可跨电脑（device 参数 / deviceId::sessionId）；',
+    '伙伴目录、任务列表、搜索、读取聊天记录、任务附件（read_session_attachment）、任务摘要（get_task_digest）可跨电脑（device 参数 / deviceId::sessionId）；',
+    '附件只返回分块字节和交接引用，不返回宿主路径。',
     '搜索还能查到主力电脑离线的伙伴的云端对话；',
     '其余本机。',
   ].join(''),
