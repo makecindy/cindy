@@ -774,9 +774,8 @@ const ASK_USER_DYNAMIC_TOOL: DynamicToolSpec = {
   type: 'function',
   name: ASK_USER_DYNAMIC_TOOL_CANONICAL_NAME,
   description: [
-    'Use this tool instead of listing choices or asking in prose when the user asks to choose, pick a direction, select an approach, or narrow options before you continue.',
-    'Use it for product preferences, game/design/business directions, business judgments, and choices between materially different approaches.',
-    'Use it when the next useful step depends on the user selecting among options, even if you could provide a generic list yourself.',
+    'Compatibility fallback for a question that must wait for the user when native request_user_input is unavailable in the current mode, or a free-form question that its schema cannot represent.',
+    'Prefer native request_user_input when it supports the question in the current mode. Use native request_user_input_async when independent work can continue while waiting.',
     'Ask 1 to 3 short questions in a single call when those questions are independent; do not make several back-to-back calls for independent clarification questions.',
     'Use a later follow-up call only when the next question depends on the user answer to an earlier question.',
     'Do not use it for routine implementation details; choose a reasonable default.',

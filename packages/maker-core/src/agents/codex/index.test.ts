@@ -19247,8 +19247,8 @@ describe('CodexAgent MCP thread context hooks', () => {
         name: 'cindy__ask_user_question',
       }),
     ]);
-    expect(startParams.dynamicTools?.[0]?.description).toContain('the user asks to choose');
-    expect(startParams.dynamicTools?.[0]?.description).toContain('provide a generic list');
+    expect(startParams.dynamicTools?.[0]?.description).toContain('Prefer native request_user_input');
+    expect(startParams.dynamicTools?.[0]?.description).toContain('Use native request_user_input_async');
     expect(startParams.dynamicTools?.[0]?.description).toContain('Ask 1 to 3 short questions in a single call');
     expect(startParams.dynamicTools?.[0]?.description).toContain('returns the awaited result as a JSON string');
     expect(startParams.dynamicTools?.[0]?.description).toContain('JSON.parse(raw)');
