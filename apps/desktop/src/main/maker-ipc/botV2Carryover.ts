@@ -135,7 +135,9 @@ export function convertRoutine(
   };
   const automations = schedules.map((schedule, index) => ({
     config: { id: migratedAutomationId(routine.id, index), ...shared, ...schedule },
-    enabled: routine.enabled && !lostCheck && !lostModel,
+    // Any part of it that cannot come along (a trigger, its plugin check, its model, its chat
+    // destination) makes it a different job: it waits paused for the owner instead.
+    enabled: routine.enabled && !lostCheck && !lostModel && skipped.length === 0 && routine.delivery?.kind !== 'im',
   }));
   // A draft without triggers, or triggers that cannot be carried: nothing can start it on its own
   // any more, so it is kept as a manual automation, paused. A finished one-off is not recreated.
@@ -150,14 +152,14 @@ export function convertRoutine(
     });
   }
   const reasons = [
-    ...(skipped.length > 0 ? [`trigger not carried: ${skipped.join(', ')}`] : []),
+    ...(skipped.length > 0 ? [`trigger not carried: ${skipped.join(', ')}, created paused`] : []),
     ...(draft ? ['it had no trigger; kept as a manual automation, paused'] : []),
     ...(automations.length === 0 && ran.length > 0 ? [`its one-off run (${ran.join(', ')}) is past; not recreated, its definition is in v1-archive/routines.json`] : []),
     ...(lostCheck ? ['plugin check not carried, created paused'] : []),
     // Running it here on another model would not be the same job: it waits for the owner.
     ...(lostModel ? ['its model on another computer could not be carried, created paused'] : []),
     // Results now stay in the automation's own task; a chat destination needs setting up again.
-    ...(routine.delivery?.kind === 'im' ? [`results were sent to a chat (${routine.delivery.targetId}); they now stay in the automation's task`] : []),
+    ...(routine.delivery?.kind === 'im' ? [`results were sent to a chat (${routine.delivery.targetId}); they now stay in the automation's task, created paused`] : []),
   ];
   return { automations, note: reasons.length > 0 ? `${routine.name}: ${reasons.join('; ')}` : null };
 }
@@ -239,6 +241,26 @@ export function buildCarryover(input: CarryoverInput, label: (key: CarryoverLabe
     `# ${label('title')}`, '', label('intro'), '',
     ...filled.flatMap(([key, rows]) => [`## ${label(key)}`, '', ...rows, '']),
   ].join('\n');
+}
+
+/**
+ * The part of `content` (a carryover document) that `current` does not have yet: its items not
+ * already there, under their headings. null when nothing is missing.
+ */
+export function missingCarryover(content: string, current: string): string | null {
+  const have = new Set(current.split('\n').map((row) => row.trim()).filter((row) => row.startsWith('- ')));
+  const lines = content.split('\n');
+  const out: string[] = [];
+  let heading: string[] = [];
+  let added = false;
+  for (const row of lines) {
+    if (row.startsWith('#')) { heading = [row, '']; continue; }
+    if (!row.startsWith('- ') || have.has(row.trim())) continue;
+    if (heading.length) { out.push(...(out.length ? [''] : []), ...heading); heading = []; }
+    out.push(row);
+    added = true;
+  }
+  return added ? `${out.join('\n')}\n` : null;
 }
 
 /** One line in the project rules so every task in the project can find the carried items. */

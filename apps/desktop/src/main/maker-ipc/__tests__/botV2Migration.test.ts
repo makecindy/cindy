@@ -129,8 +129,9 @@ it('keeps routine runs, reports unreadable files and adds to an existing carryov
   ];
   const home = path.join(h.root, 'bots', BOT);
   await fs.mkdir(path.join(home, 'workspace'), { recursive: true });
-  await fs.writeFile(path.join(home, 'workspace', 'CARRYOVER.md'), '# Earlier\n\n- from another computer\n');
-  await fs.writeFile(path.join(home, 'todos.v1.json'), JSON.stringify({ items: [{ title: 'Ship it', status: 'open' }] }));
+  // QA recheck: an existing file that already had one of the items got the whole list again.
+  await fs.writeFile(path.join(home, 'workspace', 'CARRYOVER.md'), '# Earlier\n\n- from another computer\n- Already here\n');
+  await fs.writeFile(path.join(home, 'todos.v1.json'), JSON.stringify({ items: [{ title: 'Ship it', status: 'open' }, { title: 'Already here', status: 'open' }] }));
   await fs.writeFile(path.join(home, 'working-memory.json'), '{"threads": [');
   await expect(migrateTeammateToV2(BOT, h.root)).resolves.toBe('migrated');
   const runs = await fs.readFile(path.join(home, 'v1-archive', 'routine-runs.json'), 'utf8');
@@ -139,6 +140,7 @@ it('keeps routine runs, reports unreadable files and adds to an existing carryov
   const carryover = await fs.readFile(path.join(home, 'workspace', 'CARRYOVER.md'), 'utf8');
   expect(carryover).toContain('from another computer');
   expect(carryover).toContain('Ship it');
+  expect(carryover.match(/Already here/g)).toHaveLength(1);
   expect(carryover).toContain('own: 1 run(s) were still waiting');
   expect(carryover).toContain('working-memory.json could not be read');
   expect(await fs.readFile(path.join(home, 'v1-archive', 'working-memory.json'), 'utf8')).toBe('{"threads": [');

@@ -166,10 +166,22 @@ describe('prepareBotProjectWorkspace', () => {
     await fs.symlink('real.md', path.join(legacy, 'instructions.md'));
     await fs.writeFile(path.join(root, 'secret.txt'), 'outside');
     await fs.symlink(path.join(root, 'secret.txt'), path.join(legacy, 'outside.md'));
+    // QA recheck: a link back to its own folder looped forever; a folder where the project has a file failed every start.
+    await fs.symlink('.', path.join(legacy, 'loop'));
+    await fs.mkdir(path.join(legacy, 'templates'));
+    await fs.writeFile(path.join(legacy, 'templates', 'brief.md'), 'brief');
+    const other = path.join(root, 'bots', 'bot_mia', 'skills', 'linked');
+    await fs.mkdir(other, { recursive: true });
+    await fs.writeFile(path.join(other, 'SKILL.md'), 'linked v1');
     const workspace = teammateWorkspaceDir(root, 'bot_mia');
     const existing = path.join(workspace, '.agents', 'skills', 'report');
     await fs.mkdir(existing, { recursive: true });
     await fs.writeFile(path.join(existing, 'SKILL.md'), 'project skill');
+    await fs.writeFile(path.join(existing, 'templates'), 'a file here');
+    // QA recheck: a link the project has must not be written through.
+    const elsewhere = path.join(root, 'elsewhere');
+    await fs.mkdir(elsewhere);
+    await fs.symlink(elsewhere, path.join(workspace, '.agents', 'skills', 'linked'));
 
     const prepared = await prepareBotProjectWorkspace({ botId: 'bot_mia', displayName: 'Mia', ownerRoot: root });
     await expect(fs.readFile(path.join(existing, 'SKILL.md'), 'utf8')).resolves.toBe('project skill');
@@ -177,6 +189,10 @@ describe('prepareBotProjectWorkspace', () => {
     await expect(fs.readFile(path.join(existing, 'instructions.md'), 'utf8')).resolves.toBe('the steps');
     await expect(fs.lstat(path.join(existing, 'outside.md'))).rejects.toThrow();
     expect(prepared.skippedSkillLinks).toEqual([path.join('report', 'outside.md')]);
+    await expect(fs.readFile(path.join(existing, 'templates'), 'utf8')).resolves.toBe('a file here');
+    await expect(fs.readFile(path.join(existing, 'templates-from-v1', 'brief.md'), 'utf8')).resolves.toBe('brief');
+    expect(await fs.readdir(elsewhere)).toEqual([]);
+    await expect(fs.readFile(path.join(workspace, '.agents', 'skills', 'linked-from-v1', 'SKILL.md'), 'utf8')).resolves.toBe('linked v1');
 
     const memory = path.join(root, 'bots', 'bot_mia', 'memories');
     await fs.mkdir(memory, { recursive: true });

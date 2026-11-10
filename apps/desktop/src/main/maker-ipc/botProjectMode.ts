@@ -103,17 +103,33 @@ function inside(root: string, target: string): boolean {
   return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
 }
 
+/** What is at `file` without following a link: null when nothing is there. */
+async function kindAt(file: string): Promise<'file' | 'dir' | 'other' | null> {
+  const stat = await fs.lstat(file).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === 'ENOENT') return null;
+    throw error;
+  });
+  if (!stat) return null;
+  return stat.isSymbolicLink() ? 'other' : stat.isDirectory() ? 'dir' : stat.isFile() ? 'file' : 'other';
+}
+
 /**
  * Merge one Skill folder into the project's copy, file by file: a missing file is copied, a file the
- * project has with other content keeps the project's and gets the old one beside it. A link to a
- * file inside the Skill folder is copied as that file; a link leading outside it is not followed
- * (it could expose anything on the computer) and is reported. Returns the files written.
+ * project has with other content keeps the project's and gets the old one beside it (`-from-v1`).
+ * A link to something inside the Skill folder is copied as what it points to (each folder once, so
+ * a link loop ends); a link leading outside it is not followed (it could expose anything on the
+ * computer) and is reported. Nothing is written through a link in the project, or over a file of
+ * the other kind: the old copy then goes beside. Returns the files written.
  */
-async function mergeSkillTree(sourceRoot: string, source: string, target: string, skipped: string[]): Promise<number> {
+async function mergeSkillTree(sourceRoot: string, source: string, target: string, skipped: string[],
+  visited: Set<string>): Promise<number> {
+  const realSource = await fs.realpath(source);
+  if (visited.has(realSource)) return 0;
+  visited.add(realSource);
   let written = 0;
   for (const entry of await readEntries(source)) {
     const from = path.join(source, entry.name);
-    const to = path.join(target, entry.name);
+    let to = path.join(target, entry.name);
     let real = from;
     let stat = await fs.lstat(from);
     if (stat.isSymbolicLink()) {
@@ -125,29 +141,27 @@ async function mergeSkillTree(sourceRoot: string, source: string, target: string
       real = resolved;
       stat = await fs.stat(resolved);
     }
-    if (stat.isDirectory()) {
-      if (real !== from) {
-        // A linked folder inside the Skill: copy its files (links inside it are left out).
-        await fs.mkdir(to, { recursive: true });
-        written += await mergeSkillTree(real, real, to, skipped);
-      } else {
-        await fs.mkdir(to, { recursive: true });
-        written += await mergeSkillTree(sourceRoot, from, to, skipped);
-      }
+    if (!stat.isDirectory() && !stat.isFile()) continue;
+    const kind = stat.isDirectory() ? 'dir' : 'file';
+    const existing = await kindAt(to);
+    // A link the project made, or a file where a folder was (or the reverse): keep it, put the old beside.
+    if (existing !== null && existing !== kind) to = await besideName(to);
+    if (kind === 'dir') {
+      if (visited.has(real)) continue;
+      await fs.mkdir(to, { recursive: true });
+      written += await mergeSkillTree(sourceRoot, real, to, skipped, visited);
       continue;
     }
-    if (!stat.isFile()) continue;
-    await fs.mkdir(target, { recursive: true });
     try {
       await fs.copyFile(real, to, fsConstants.COPYFILE_EXCL);
       written++;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
       if (await sameContent(real, to)) continue;
-      const siblings = (await readEntries(target)).map((item) => path.join(target, item.name))
+      const siblings = (await readEntries(target)).filter((item) => item.isFile()).map((item) => path.join(target, item.name))
         .filter((file) => file !== to && path.basename(file).startsWith(`${path.basename(to, path.extname(to))}-from-v1`));
       let present = false;
-      for (const sibling of siblings) if (await sameContent(real, sibling).catch(() => false)) present = true;
+      for (const sibling of siblings) if (await sameContent(real, sibling)) present = true;
       if (present) continue;
       await fs.copyFile(real, await besideName(to), fsConstants.COPYFILE_EXCL);
       written++;
@@ -157,16 +171,26 @@ async function mergeSkillTree(sourceRoot: string, source: string, target: string
 }
 
 /** Merge each Skill folder into the project's Skills; the project's own files are never overwritten. */
-async function copySkillFolders(sourceDir: string, targetDir: string): Promise<{ copied: number; skippedLinks: string[] }> {
+async function copySkillFolders(sourceDir: string, workspace: string): Promise<{ copied: number; skippedLinks: string[]; targetDir: string }> {
   let copied = 0;
   const skippedLinks: string[] = [];
+  let targetDir = path.join(workspace, '.agents', 'skills');
+  // The project's Skills folder (or `.agents`) is a link the project set up: never write through it.
+  for (const dir of [path.join(workspace, '.agents'), targetDir]) {
+    const kind = await kindAt(dir);
+    if (kind !== null && kind !== 'dir') { targetDir = await besideName(path.join(workspace, 'skills')); break; }
+  }
   const root = await fs.realpath(sourceDir).catch(() => sourceDir);
   for (const entry of await readEntries(sourceDir)) {
     if (!entry.isDirectory() || entry.name.startsWith('.')) continue;
     const skillRoot = path.join(root, entry.name);
-    if (await mergeSkillTree(skillRoot, skillRoot, path.join(targetDir, entry.name), skippedLinks) > 0) copied++;
+    let target = path.join(targetDir, entry.name);
+    const existing = await kindAt(target);
+    if (existing !== null && existing !== 'dir') target = await besideName(target);
+    await fs.mkdir(target, { recursive: true });
+    if (await mergeSkillTree(skillRoot, skillRoot, target, skippedLinks, new Set()) > 0) copied++;
   }
-  return { copied, skippedLinks };
+  return { copied, skippedLinks, targetDir };
 }
 
 /**
@@ -366,10 +390,10 @@ export async function prepareBotProjectWorkspace(input: {
   const moved = await moveTeammateMemoryIntoProject({ botId: input.botId, ownerRoot: input.ownerRoot, workspace });
   const v1Copied = await copyMemoryRecords(botProfileMemoryDir(input.ownerRoot, input.botId), teammateProjectMemoryDir(workspace));
   const memoriesCopied = (moved ?? 0) + v1Copied;
-  const skills = await copySkillFolders(
-    path.join(botProfileDir(input.ownerRoot, input.botId), 'skills'),
-    path.join(workspace, '.agents', 'skills'),
-  );
+  const skills = await copySkillFolders(path.join(botProfileDir(input.ownerRoot, input.botId), 'skills'), workspace);
+  if (skills.copied > 0 && skills.targetDir !== path.join(workspace, '.agents', 'skills')) {
+    skills.skippedLinks.push(`.agents/skills is a link, so the skills were put in ${path.relative(workspace, skills.targetDir)}/`);
+  }
   // The starter template only fills what the teammate does not have yet: its own skills and
   // rules (copied just above) win over a template file of the same name. Before the first version.
   const templated = await applyTeammateTemplate(workspace, input.displayName);

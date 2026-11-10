@@ -36,6 +36,7 @@ import { readV1RoutineSlice, removeV1Routine } from './botV1Routines.js';
 import {
   BOT_V2_CARRYOVER_FILE,
   buildCarryover,
+  missingCarryover,
   carryoverPointer,
   type CarryoverLabel,
 } from './botV2Carryover.js';
@@ -187,9 +188,10 @@ export async function carryLegacyTodos(botId: string, ownerRoot: string, items: 
   const workingDir = await ensureBotWorkspaceDir(ownerRoot, botId, app.getPath('userData'));
   const target = path.join(workingDir, BOT_V2_CARRYOVER_FILE);
   const current = await fs.readFile(target, 'utf8').catch(() => null);
-  if (current?.includes(content.trim())) return;
+  const missing = current === null ? content : missingCarryover(content, current);
+  if (!missing) return;
   assertCurrent();
-  await writeAtomic(target, current ? `${current.replace(/\s*$/, '')}\n\n${content}` : content);
+  await writeAtomic(target, current ? `${current.replace(/\s*$/, '')}\n\n${missing}` : missing);
   await pointRulesToCarryover(workingDir);
 }
 
@@ -213,8 +215,9 @@ async function writeCarryover(home: string, workingDir: string, routineNotes: st
     throw error;
   });
   if (!content) return current !== null;
-  if (current?.includes(content.trim())) return true;
-  await writeAtomic(target, current ? `${current.replace(/\s*$/, '')}\n\n${content}` : content);
+  const missing = current === null ? content : missingCarryover(content, current);
+  if (!missing) return true;
+  await writeAtomic(target, current ? `${current.replace(/\s*$/, '')}\n\n${missing}` : missing);
   await pointRulesToCarryover(workingDir);
   return true;
 }
@@ -281,7 +284,7 @@ async function migrateTeammateOnce(botId: string, ownerRoot: string,
   const workingDir = await ensureBotWorkspaceDir(ownerRoot, botId, legacyUserDataDir);
   const archiveDir = path.join(home, ARCHIVE_DIR);
   const upgradeNotes = prepared.skippedSkillLinks.length > 0
-    ? [`Links in its skills that lead outside the skill folder were not copied: ${prepared.skippedSkillLinks.join(', ')}. The originals stay in the teammate's skills folder.`]
+    ? [`Some skill content was not copied as it was (links leading outside a skill folder are not followed): ${prepared.skippedSkillLinks.join('; ')}. The originals stay in the teammate's skills folder.`]
     : [];
   const routineNotes = await migrateRoutines(botId, ownerRoot, workingDir, archiveDir, capabilities, assertCurrent, upgradeNotes);
   assertCurrent();

@@ -41,6 +41,11 @@ describe('convertRoutine', () => {
     const draft = convertRoutine(routine({ triggers: [] }), route, { now: 0, timezone: 'UTC' });
     expect(draft.automations).toEqual([{ enabled: false, config: expect.objectContaining({ manual: true, prompt: 'check PRs' }) }]);
     expect(draft.note).toContain('no trigger');
+    // QA recheck: a job that lost part of what it did (an event trigger, its chat destination) waits paused.
+    const cron = { id: 'c', kind: 'cron' as const, expression: '0 9 * * *', timezone: 'UTC' };
+    const withEvent = convertRoutine(routine({ enabled: true, triggers: [cron, { id: 'e', kind: 'event', sourceId: 'gmail', eventType: 'mail', filters: [] }] }), route, { now: 0, timezone: 'UTC' });
+    const withChat = convertRoutine(routine({ enabled: true, triggers: [cron], delivery: { kind: 'im', targetId: 'chat-1' } as Routine['delivery'] }), route, { now: 0, timezone: 'UTC' });
+    expect([withEvent.automations[0].enabled, withChat.automations[0].enabled]).toEqual([false, false]);
   });
 
   it('turns what cannot run on its own into a paused manual automation with a note', () => {
