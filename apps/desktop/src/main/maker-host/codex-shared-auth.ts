@@ -8,9 +8,20 @@ import { CURRENT_CINDY_REGION } from '../../shared/brandRegion.js';
 import { shouldSuppressLocalCodexAuth } from './codex-auth-invalidation.js';
 import { codexWorkspaceIdFromTokens } from './codex-auth-identity.js';
 
-/** 本机 Codex CLI 默认维护的 OpenAI 登录态。 */
+/**
+ * 本机 Codex CLI 主目录：尊重用户设置的 `CODEX_HOME`（仅绝对路径；空值、相对路径
+ * 一律回退 `~/.codex`，避免相对路径按 cwd 解析落进工作区）。判据与
+ * `remote-agent/controller/projectFiles.ts` 的 `codexHomeDir` 一致 (#8258)。
+ */
+function resolveCodexCliHome(): string {
+  const configured = process.env.CODEX_HOME;
+  if (configured && path.isAbsolute(configured)) return configured;
+  return path.join(os.homedir(), '.codex');
+}
+
+/** 本机 Codex CLI 维护的 OpenAI 登录态（默认 `~/.codex/auth.json`，随 `CODEX_HOME`）。 */
 export function getCodexCliAuthPath(): string {
-  return path.join(os.homedir(), '.codex', 'auth.json');
+  return path.join(resolveCodexCliHome(), 'auth.json');
 }
 
 /** 当前区域 Release 维护的 OpenAI 登录态。 */

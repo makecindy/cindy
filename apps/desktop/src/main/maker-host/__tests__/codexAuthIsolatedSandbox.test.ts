@@ -438,6 +438,34 @@ describe('dev 沙箱凭证隔离(XDT_ISOLATED_AUTH)', () => {
     expect(getPreferredSharedCodexAuthPath('owner-a')).toBe(useCli ? systemAuth : releaseAuth);
   });
 
+  // #8258 / unit: 本机 Codex CLI 凭证发现必须跟随用户设置的 CODEX_HOME。
+  // 依据:提报者把 codex login 放在 CODEX_HOME=E:\CodexHome / NixOS 自定义目录,
+  // 发现路径写死 ~/.codex 导致「使用本机 Codex 账号」找不到登录态;现有覆盖只测
+  // ~/.codex 常规位置。最小失败输入:packaged + CODEX_HOME=自定义绝对目录。
+  describe('本机 Codex CLI 凭证发现跟随 CODEX_HOME (#8258)', () => {
+    it('packaged 下 CODEX_HOME 为绝对路径时使用该目录的 auth.json', () => {
+      const { systemAuth } = fixture();
+      const customHome = path.join(path.dirname(systemAuth), 'custom-codex-home');
+      fs.mkdirSync(customHome, { recursive: true });
+      h.isPackaged = true;
+      vi.stubEnv('CODEX_HOME', customHome);
+
+      expect(getPreferredSharedCodexAuthPath('owner-a')).toBe(
+        path.join(customHome, 'auth.json'),
+      );
+    });
+
+    it('相对路径与空值不生效,回退 ~/.codex(不按 cwd 解析)', () => {
+      const { systemAuth } = fixture();
+      h.isPackaged = true;
+      vi.stubEnv('CODEX_HOME', 'relative-codex-home');
+      expect(getPreferredSharedCodexAuthPath('owner-a')).toBe(systemAuth);
+
+      vi.stubEnv('CODEX_HOME', '');
+      expect(getPreferredSharedCodexAuthPath('owner-a')).toBe(systemAuth);
+    });
+  });
+
   // #9316 / unit: a junction to the Release profile must preserve the same-entry
   // read-only exception; making a snapshot there would replace Release auth itself.
   it.each([false, true])(
