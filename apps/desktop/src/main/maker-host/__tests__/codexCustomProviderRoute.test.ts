@@ -12,6 +12,7 @@ import {
   codexCustomProviderRouteSignature,
   crossesCodexAppliedCustomProviderIdentity,
   deriveCodexCustomProviderRoutes,
+  hasAppliedCodexCustomProviderRoute,
   hasCodexAppliedCustomProviderCapability,
   isCodexCustomProviderNamespacePath,
   parseCodexCustomProviderPath,
@@ -158,6 +159,81 @@ describe('Codex custom Provider identity', () => {
     expect(argv).toContain(`/_cindy/custom-provider/${routes[0]!.routeId}`);
     expect(argv).not.toContain('x-openai-actor-authorization');
     expect(argv).not.toContain('provider.example');
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：hasAppliedCodexCustomProviderRoute。纯文本路由也要算已应用，
+  //   OAuth 重新登录才会重建 Host；否则凭证代次推进后专用路由持续 503（#9759）。
+  // - Bug／规则依据：#9759。旧判断只认 imageGeneration 已应用，纯文本路由被漏掉。
+  // - 现有覆盖缺口：hasCodexAppliedCustomProviderCapability 要求能力为 true，
+  //   覆盖不了「没有图片能力但路由已冻结」。
+  // - 最小失败输入：imageGeneration: false 的已应用路由；另一个不匹配的 providerId。
+  // - tier：unit。调公开函数，不启 Electron、不访问网络。
+  it('treats an applied text-only route as present and ignores a different provider', () => {
+    const textOnly = customProvider({
+      runtimes: {
+        codex: {
+          baseUrl: 'https://provider.example/v1',
+          requestPath: '/v1/responses',
+          wireProtocol: 'openai-responses',
+          models: [{ id: 'chat-text-only', name: 'Chat Text Only' }],
+        },
+      },
+    });
+    const [route] = deriveCodexCustomProviderRoutes(catalog(textOnly));
+    expect(route?.capabilities.imageGeneration).toBe(false);
+    setCodexAppliedCustomProviderRoutes(route ? [route] : []);
+
+    expect(hasAppliedCodexCustomProviderRoute('provider-alpha')).toBe(true);
+    expect(hasAppliedCodexCustomProviderRoute('custom:xai')).toBe(false);
+    expect(hasAppliedCodexCustomProviderRoute('provider-other')).toBe(false);
+
+    const release = registerCodexScopedCustomProviderRoutes('external:text', route ? [route] : []);
+    try {
+      setCodexAppliedCustomProviderRoutes([]);
+      expect(hasAppliedCodexCustomProviderRoute('provider-alpha')).toBe(true);
+    } finally {
+      release();
+    }
+    expect(hasAppliedCodexCustomProviderRoute('provider-alpha')).toBe(false);
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：deriveCodexCustomProviderRoutes（内部 routeForProvider）。
+  //   auth.native === 'codex' 的额外订阅账号不得拿到 cindy_custom_<hash>，否则占位 bearer
+  //   会发给 chatgpt.com；不带 native 的纯文本供应商仍要有路由（#9759）。
+  // - Bug／规则依据：#9759。去掉图片能力门槛后，source:'user' 的原生订阅账号被卷进来。
+  // - 现有覆盖缺口：文本供应商用例没有 auth.native。
+  // - 最小失败输入：oauth + native:'codex'，并带一个 openai-responses 模型。
+  // - tier：unit。调公开函数，不启 Electron、不访问网络。
+  it('does not register a native Codex subscription account on the custom route', () => {
+    const nativeCodex = customProvider({
+      id: 'extra-chatgpt',
+      name: 'Extra ChatGPT',
+      auth: { method: 'oauth', native: 'codex' },
+      runtimes: {
+        codex: {
+          baseUrl: 'https://chatgpt.com/backend-api/codex',
+          wireProtocol: 'openai-responses',
+          models: [{ id: 'gpt-subscription', name: 'GPT Subscription' }],
+        },
+      },
+    });
+    expect(nativeCodex.auth.native).toBe('codex');
+    expect(nativeCodex.models.codex?.map((model) => model.id)).toEqual(['gpt-subscription']);
+    expect(deriveCodexCustomProviderRoutes(catalog(nativeCodex))).toEqual([]);
+
+    const textOnly = customProvider({
+      runtimes: {
+        codex: {
+          baseUrl: 'https://provider.example/v1',
+          requestPath: '/v1/responses',
+          wireProtocol: 'openai-responses',
+          models: [{ id: 'chat-text-only', name: 'Chat Text Only' }],
+        },
+      },
+    });
+    expect(deriveCodexCustomProviderRoutes(catalog(textOnly))).toHaveLength(1);
   });
 
   it('uses the applied Host snapshot to identify only real dynamic identity crossings', () => {

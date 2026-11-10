@@ -95,6 +95,14 @@ export function hasCodexAppliedCustomProviderCapability(
   );
 }
 
+/** Whether any running Host snapshot already contains this custom Provider route. */
+export function hasAppliedCodexCustomProviderRoute(providerId: string): boolean {
+  const storedProviderId = storedCustomProviderId(providerId);
+  return [...appliedCustomProviderRoutes, ...Array.from(scopedAppliedCustomProviderRoutes.values()).flat()].some(
+    (route) => storedCustomProviderId(route.providerId) === storedProviderId,
+  );
+}
+
 function stableRouteId(providerId: string): string {
   return createHash('sha256').update(providerId, 'utf8').digest('hex').slice(0, 20);
 }
@@ -127,6 +135,11 @@ function frozenRoutingDescriptor(
 
 function routeForProvider(provider: Provider): CodexCustomProviderRoute | null {
   if (!isCustomRoutedProvider(provider) || !provider.agents.includes('codex')) return null;
+  // Native subscription accounts (claude / xai / codex) keep their fixed identities.
+  // Only a user-built API-key custom provider registers a cindy_custom route.
+  // An extra ChatGPT subscription row is also source:'user'; routing it here would
+  // send the oauth placeholder bearer to chatgpt.com (#9759).
+  if (provider.auth?.native) return null;
   const routing = provider.routing.codex;
   if (!routing || routing.disabled) return null;
   const capabilities: CodexCustomProviderCapabilities = {

@@ -1440,7 +1440,7 @@ import { patchSessionMetaInDb, updateSessionInDb } from '../localDb/ipc/sessions
 import { codexThreadTransferSourcePredicate, commitCodexThreadTransfer, relinkCodexProviderThread } from './codexProviderThreadRelink.js';
 import {
   codexCustomProviderConfigSignature,
-  hasCodexAppliedCustomProviderCapability,
+  hasAppliedCodexCustomProviderRoute,
 } from '../maker-host/codex-custom-provider-route.js';
 import {
   applyRuntimeSelectionAxesWithRecovery,
@@ -7790,8 +7790,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
     refreshCatalog: () => refreshCustomProvidersIntoCatalog(),
     codexCustomProviderConfigSignature,
-    hasAppliedCodexCustomProviderImageGeneration: (providerId) =>
-      hasCodexAppliedCustomProviderCapability(providerId, 'imageGeneration'),
+    hasAppliedCodexCustomProviderRoute: (providerId) =>
+      hasAppliedCodexCustomProviderRoute(providerId),
     listBusyLocalCodexSessionIds: () =>
       maker
         .listActiveSessions()
