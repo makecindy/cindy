@@ -13,7 +13,8 @@
  * 不变量（评审收敛时定下，新增判断前先对照）：
  *  1. 只有「命令自己的前台部分永远不会结束」才是 service；其余一律 work。
  *  2. 命令的存活时间由前台部分决定：`;` `&&` `||` 换行是顺序执行，卡在第一个不会结束的段；
- *     `|` 管道只要有一段不结束就不结束；以单个 `&` 结尾的段是后台作业，命令不等它
+ *     `|` 管道只要有一段不结束就不结束；以单个 `&` 结尾的整个命令列表（`a | b &`、`a && b &`）
+ *     是后台作业，命令不等它
  *     （除非有 `wait`），所以 `pnpm dev & …; pnpm test; kill $!` 是 work。
  *  3. 只看真正执行的程序名与子命令：选项和选项取值（`--include dev`、`--filter dev`）、包管理
  *     的安装发布类子命令不是脚本名；`2>&1`、`&>` 里的 `&` 不是命令分隔符；heredoc 正文
@@ -135,7 +136,10 @@ function isLongLivedCommand(command: string, depth: number): boolean {
 
 interface CommandSegment {
   text: string;
-  /** 以单个 `&` 结尾：后台作业。 */
+  /**
+   * 所在命令列表以单个 `&` 结尾：整个列表（`a | b`、`a && b`）都是后台作业，不只是最后一段。
+   * 命令列表由 `;`、换行、`&` 结束，`|`、`&&`、`||` 只是列表内部的连接。
+   */
   background: boolean;
 }
 
@@ -143,9 +147,15 @@ function splitCommandSegments(command: string): CommandSegment[] {
   const segments: CommandSegment[] = [];
   let current = '';
   let quote: '"' | "'" | null = null;
-  const push = (background: boolean): void => {
-    segments.push({ text: current, background });
+  let listStart = 0;
+  const push = (endsList: boolean, background = false): void => {
+    segments.push({ text: current, background: false });
     current = '';
+    if (!endsList) return;
+    if (background) {
+      for (let k = listStart; k < segments.length; k += 1) segments[k]!.background = true;
+    }
+    listStart = segments.length;
   };
   // 本行出现过的 heredoc 结束词；下一个换行之后的正文整段跳过。
   const pendingHeredocs: string[] = [];
@@ -185,17 +195,17 @@ function splitCommandSegments(command: string): CommandSegment[] {
         continue;
       }
       if (next === '&') {
-        // `&&`：顺序执行，两个字符一起消费。
+        // `&&`：同一列表内的连接，两个字符一起消费。
         i += 1;
         push(false);
         continue;
       }
-      push(true);
+      push(true, true);
       continue;
     }
     if (ch === '\n' || ch === ';' || ch === '|') {
       if (ch === '|' && command[i + 1] === '|') i += 1;
-      push(false);
+      push(ch !== '|');
       if (ch === '\n') {
         for (const delimiter of pendingHeredocs.splice(0)) {
           i = skipHeredocBody(command, i + 1, delimiter) - 1;
@@ -205,7 +215,7 @@ function splitCommandSegments(command: string): CommandSegment[] {
     }
     current += ch;
   }
-  push(false);
+  push(true);
   return segments;
 }
 

@@ -29,6 +29,9 @@ describe('classifyBackgroundCommand', () => {
     ['pnpm dev & server=$!; pnpm test; kill "$server"', 'work'],
     ['nohup pnpm dev > dev.log 2>&1 & pnpm test', 'work'],
     ['pnpm dev &', 'work'],
+    // & 作用于整个命令列表（管道、&&），不只是最后一段
+    ['pnpm dev | tee dev.log & pnpm test', 'work'],
+    ['pnpm test && pnpm dev & pnpm lint', 'work'],
     ['timeout 60 pnpm dev', 'work'],
     // 控制流和命令组：执行顺序无法静态判断，整条命令不猜，按工作（范围声明）
     ['if false; then\npnpm dev\nfi\npnpm test', 'work'],
@@ -59,6 +62,7 @@ describe('classifyBackgroundCommand', () => {
     ['cat <<EOF > run.sh\necho hi\nEOF\npnpm dev', 'service'],
     ['pnpm dev | tee dev.log', 'service'],
     ['pnpm dev > dev.log 2>&1 & wait', 'service'],
+    ['pnpm dev | tee dev.log & wait', 'service'],
     ['pnpm dev 2>&1', 'service'],
     ['pnpm -C apps/web dev', 'service'],
     ['npm run dev -w web', 'service'],
