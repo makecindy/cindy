@@ -77,47 +77,46 @@ static void StripView(NSView *view) {
   [CATransaction commit];
 }
 // AppKit rebuilds these layers on appearance, state and layout changes. A
-// per-view subclass strips them again after each rebuild; restoring the class
-// and appearance returns the untouched system material (0% and artwork).
-static Class NeutralClass(Class base) {
-  NSString *name = [@"CindyNeutral_" stringByAppendingString:NSStringFromClass(base)];
-  Class neutral = NSClassFromString(name);
-  if (neutral) return neutral;
-  neutral = objc_allocateClassPair(base, name.UTF8String, 0);
-  if (!neutral) return nil;
-  for (NSString *selectorName in @[@"updateLayer", @"layout", @"viewDidChangeEffectiveAppearance"]) {
-    SEL selector = NSSelectorFromString(selectorName);
-    Method method = class_getInstanceMethod(base, selector);
-    if (!method) continue;
-    IMP imp = imp_implementationWithBlock(^(id self) {
-      struct objc_super parent = { self, base };
-      ((void (*)(struct objc_super *, SEL))objc_msgSendSuper)(&parent, selector);
-      StripView(self);
-    });
-    class_addMethod(neutral, selector, imp, method_getTypeEncoding(method));
-  }
-  objc_registerClassPair(neutral);
-  return neutral;
+// one-time hook on NSVisualEffectView strips them again after each rebuild, only
+// for views marked here; no class is swapped, so KVO and other views are
+// unaffected. Unmarking restores the untouched system material (0% and artwork).
+static void InstallStripHook() {
+  static dispatch_once_t once;
+  dispatch_once(&once, ^{
+    Class base = NSVisualEffectView.class;
+    for (NSString *selectorName in @[@"updateLayer", @"layout", @"viewDidChangeEffectiveAppearance"]) {
+      SEL selector = NSSelectorFromString(selectorName);
+      Method method = class_getInstanceMethod(base, selector);
+      if (!method) continue;
+      IMP original = method_getImplementation(method);
+      IMP hook = imp_implementationWithBlock(^(NSVisualEffectView *self) {
+        ((void (*)(id, SEL))original)(self, selector);
+        if (objc_getAssociatedObject(self, &neutralStateKey)) StripView(self);
+      });
+      if (!class_addMethod(base, selector, hook, method_getTypeEncoding(method))) {
+        method_setImplementation(method, hook);
+      }
+    }
+  });
 }
 static void SetNeutral(NSVisualEffectView *view, bool neutral) {
   NSNumber *state = objc_getAssociatedObject(view, &neutralStateKey);
-  if (neutral && !state) {
-    Class subclass = NeutralClass(view.class);
-    if (!subclass) return;
-    objc_setAssociatedObject(view, &neutralStateKey, @(view.state), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    object_setClass(view, subclass);
-    // An inactive window would swap the blur for an opaque gray in another hue.
-    view.state = NSVisualEffectStateActive;
-  } else if (!neutral && state) {
-    object_setClass(view, class_getSuperclass(view.class));
+  if (neutral) {
+    InstallStripHook();
+    if (!state) {
+      objc_setAssociatedObject(view, &neutralStateKey, @(view.state), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+      // An inactive window would swap the blur for an opaque gray in another hue.
+      view.state = NSVisualEffectStateActive;
+    }
+    StripView(view);
+  } else if (state) {
     objc_setAssociatedObject(view, &neutralStateKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     view.state = (NSVisualEffectState)state.integerValue;
+    // Reassigning the appearance makes AppKit rebuild its own tint layers.
     NSAppearance *appearance = view.appearance;
     view.appearance = nil;
     view.appearance = appearance;
-    return;
   }
-  if (neutral) StripView(view);
 }
 
 static napi_value SetSidebar(napi_env env, napi_callback_info info) {

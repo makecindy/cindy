@@ -71,7 +71,7 @@ trimmed on 2026-10-17) is not shipped and needs no compatibility.
 The new artwork uses the existing continuous cover fit, theme-derived visibility
 and blur controls. None remains the default. With None selected, visibility controls
 desktop background transparency (0% opaque, 100% clear); the left sidebar follows
-the same controls (user decision, 2026-11-10). Both controls remain
+the same controls (user decision, 2026-11-10; refined 2026-11-11, below). Both controls remain
 sliders with the same ranges, preview/commit behavior and reset action when switching
 between None and artwork (user decision, 2026-11-08). Their labels and hints identify
 the current background source; do not replace desktop blur with a separate switch,
@@ -87,20 +87,30 @@ as soon as visibility becomes positive.
 macOS passes the numeric radius to the native window backdrop. See
 [`desktop-backdrop-blur-research.md`](../desktop-backdrop-blur-research.md).
 Text and controls are never faded.
-The left task sidebar follows the same visibility and blur as the main area, for
-artwork and the desktop alike (user decision, 2026-11-10; replaces the independent
-sidebar material of 2026-11-08). No separate native material or CSS blur sits
-beneath the docked sidebar: on macOS the window-wide radius covers it, on Windows 11
-the whole-window Acrylic does, and with artwork it shows the same blurred canvas.
-Do not add a separate sidebar preference. The docked sidebar paints no tint of its
-own: the shared veil covers the whole window, so sidebar and main area have the same
-color at every setting. Only its 1px divider separates it; do not add a shadow
-(owner decision, 2026-11-10: a trialed `--shadow-menu` edge was rejected). The peek
+The left task sidebar follows the same visibility and blur controls as the main area
+(user decision, 2026-11-10). Do not add a separate sidebar preference, and do not add a
+shadow to the docked sidebar (owner decision, 2026-11-10: a trialed `--shadow-menu`
+edge was rejected); only its 1px divider separates it. With artwork, the docked
+sidebar paints no tint of its own and shows the same blurred canvas as the main area.
+On the desktop (user decision, 2026-11-11), the docked sidebar has the main area's hue
+and transparency, one step deeper: the shared veil on the aside plus a fixed shade on
+its frost layer (black, 4% light / 10% dark), so it is slightly deeper at every setting.
+The main veil starts at the sidebar's visible edge so the two coats never stack. On
+macOS a non-interactive native effect view covers only the sidebar's visible width
+(local per-window geometry following collapse/rail/peek animation and UI zoom;
+cleared when hidden or covered by artwork) and adds a fixed frost over the adjustable
+window radius. It keeps only the material's blur: its tint, blend and desktop-tinting
+layers and saturation boost are removed, and it stays active in an inactive window,
+because the system tint read as a cooler, different hue than Cindy's surfaces. An
+unrecognized private layer layout is left untouched (system material fallback), and
+leaving desktop mode restores the untouched material. Windows has no regional
+material: its sidebar shares the whole-window Acrylic and only the tint rule applies.
+The peek
 drawer takes the main area's color (owner decision, 2026-11-10) but covers at least
 90%: it overlays app content, and CSS backdrop blur does not render in the transparent
 window, so a fully see-through drawer lets the text beneath collide with its own. The
-shared veil lies beneath that content and hides none of it, so the drawer's own surface
-coat is max(main area's veil, 90%). It drops that ineffective blur and keeps its divider and its
+shared veil hides none of that content, so the drawer's own surface coat is
+max(main area's veil, 90%). It drops that ineffective blur and keeps its divider and its
 `--shadow-menu` floating-layer elevation. At 0% desktop transparency the original
 backdrop, docked sidebar and peek drawer are unchanged.
 0% desktop transparency does not enter desktop-background mode on any platform: the
