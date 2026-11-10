@@ -25,23 +25,27 @@ describe('classifyBackgroundCommand', () => {
     ['pnpm --filter desktop test --watch=false', 'work'],
     // 选项取值和包管理子命令不是脚本名：`--include dev` 是依赖类型，`--filter dev` 是包名
     ['npm ci --include dev', 'work'],
-    // 前台部分会结束就是工作：后台作业（单个 &）不决定命令的存活时间，除非有 wait
+    ['timeout 60 pnpm dev', 'work'],
+    // 超出简单结构的 shell 语法一律不猜，整条命令按工作（不变量 5）
+    // 后台 &：命令的存活另有安排，kill / wait 都无从静态判断
     ['pnpm dev & server=$!; pnpm test; kill "$server"', 'work'],
+    ['pnpm dev & server=$!; pnpm test & tests=$!; wait "$tests"; kill "$server"', 'work'],
     ['nohup pnpm dev > dev.log 2>&1 & pnpm test', 'work'],
     ['pnpm dev &', 'work'],
-    // & 作用于整个命令列表（管道、&&），不只是最后一段
     ['pnpm dev | tee dev.log & pnpm test', 'work'],
-    ['pnpm test && pnpm dev & pnpm lint', 'work'],
-    ['timeout 60 pnpm dev', 'work'],
-    // 控制流和命令组：执行顺序无法静态判断，整条命令不猜，按工作（范围声明）
+    ['pnpm dev > dev.log 2>&1 & wait', 'work'],
+    // 注释：其后的分号和命令都不会执行
+    ['pnpm test # Run tests; pnpm dev is not started', 'work'],
+    // 控制流和命令组
     ['if false; then\npnpm dev\nfi\npnpm test', 'work'],
     ['while true; do pnpm dev; done', 'work'],
     ['for p in a b; do pnpm --filter $p dev; done', 'work'],
     ['(cd apps/web && pnpm dev)', 'work'],
     ['pnpm test && { pnpm dev; }', 'work'],
-    // heredoc 正文是数据，不是命令
+    // heredoc：正文是数据，不是命令，也不去猜它之后的命令
     ["cat <<'EOF' > /tmp/example-script\npnpm dev\nEOF\npnpm test", 'work'],
     ['cat <<-EOF > run.sh\n\tpnpm dev\n\tEOF\npnpm test', 'work'],
+    ['cat <<EOF > run.sh\necho hi\nEOF\npnpm dev', 'work'],
     ['cat <<< "pnpm dev"', 'work'],
     // 不认识的外层命令不让内层参数直接决定结果：timeout 给了期限，按工作
     ['timeout -k 5s 60s pnpm vitest --watch', 'work'],
@@ -56,13 +60,10 @@ describe('classifyBackgroundCommand', () => {
     // 启动后不会自己结束：服务
     ['pnpm dev', 'service'],
     ['pnpm --filter desktop dev', 'service'],
-    // 顺序执行卡在第一个不会结束的段；管道有一段不结束就不结束；wait 会等后台作业
+    // 顺序执行卡在第一个不会结束的段；管道有一段不结束就不结束；重定向里的 & 不是后台
     ['pnpm test && pnpm dev', 'service'],
-    // heredoc 之后的真实命令仍然要判断
-    ['cat <<EOF > run.sh\necho hi\nEOF\npnpm dev', 'service'],
     ['pnpm dev | tee dev.log', 'service'],
-    ['pnpm dev > dev.log 2>&1 & wait', 'service'],
-    ['pnpm dev | tee dev.log & wait', 'service'],
+    ['pnpm dev > dev.log 2>&1', 'service'],
     ['pnpm dev 2>&1', 'service'],
     ['pnpm -C apps/web dev', 'service'],
     ['npm run dev -w web', 'service'],

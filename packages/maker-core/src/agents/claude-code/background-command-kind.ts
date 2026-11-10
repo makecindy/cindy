@@ -12,22 +12,21 @@
  *
  * 不变量（评审收敛时定下，新增判断前先对照）：
  *  1. 只有「命令自己的前台部分永远不会结束」才是 service；其余一律 work。
- *  2. 命令的存活时间由前台部分决定：`;` `&&` `||` 换行是顺序执行，卡在第一个不会结束的段；
- *     `|` 管道只要有一段不结束就不结束；以单个 `&` 结尾的整个命令列表（`a | b &`、`a && b &`）
- *     是后台作业，命令不等它
- *     （除非有 `wait`），所以 `pnpm dev & …; pnpm test; kill $!` 是 work。
+ *  2. 只读懂简单结构：简单命令用 `;` `&&` `||` 换行顺序连接、用 `|` 连成管道。顺序执行卡在第一个
+ *     不会结束的段，管道只要有一段不结束就不结束。
  *  3. 只看真正执行的程序名与子命令：选项和选项取值（`--include dev`、`--filter dev`）、包管理
- *     的安装发布类子命令不是脚本名；`2>&1`、`&>` 里的 `&` 不是命令分隔符；heredoc 正文
- *     （`cat <<'EOF' > script` … `EOF`）是数据，不是命令。
+ *     的安装发布类子命令不是脚本名；`2>&1`、`&>` 里的 `&` 是重定向，不是分隔符。
  *  4. 单一判断入口：splitCommandSegments 拆段，isLongLivedCommand 汇总，isLongLivedSegment
  *     判单段；shell -c 递归复用同一套，不另写第二份。
- *  5. 看不懂的结构（子 shell / 命令组、`if`/`while`/`for`/`case` 等控制流）不猜，整条命令按 work：
- *     哪个分支会执行、循环几次都无从得知，不能把其中某一段单拿出来判断。外层命令不认识（`nice`、`ionice`、
- *     `timeout` 等）同理：不让内层参数（`--watch`）越过它直接决定结果。
+ *  5. 超出第 2 条的 shell 语法一律不猜，整条命令按 work：后台 `&`（有 `&` 就说明命令的存活
+ *     另有安排，`wait`、`kill` 等都无从静态判断）、注释 `#`、heredoc `<<`、控制流
+ *     （`if`/`while`/`for`/`case`）、命令组与子 shell。外层命令不认识（`nice`、`timeout` 等）
+ *     同理：不让内层参数（`--watch`）越过它直接决定结果。
  *
- * 范围（有意不处理，按 work）：子 shell / 命令组、控制流（整条命令）、`$(…)`、`xargs`、
- * shell 别名与函数、不在下面各表里的程序。这些写法启动的服务会多亮一段时间（最多到 SDK 的后台
- * 命令超时），不会让工作被误显示为已结束。新增判断必须是某条不变量的缺口，不为单个写法加特例。
+ * 范围（有意不处理，按 work）：上面第 5 条列出的语法、`$(…)`、`xargs`、shell 别名与函数、不在
+ * 下面各表里的程序。这些写法启动的服务会多亮一段时间（最多到 SDK 的后台命令超时），不会让工作
+ * 被误显示为已结束。新增判断必须是某条不变量的缺口，不为单个写法加特例；要读懂更多 shell 语法
+ * 之前，先想想能不能把它划进第 5 条。
  */
 export type BackgroundCommandKind = 'work' | 'service';
 
@@ -121,44 +120,27 @@ export function classifyBackgroundCommand(command: string | null | undefined): B
 }
 
 function isLongLivedCommand(command: string, depth: number): boolean {
-  // 引号内的 `&&` / `;` 不是命令分隔符：`bash -c "cd app && pnpm dev"` 要整体交给 shell 分支。
   const segments = splitCommandSegments(command);
-  // 有 `wait` 才会等后台作业；没有时，单个 `&` 结尾的段不决定命令的存活时间。
-  const waitsForJobs = segments.some((segment) => tokenize(segment.text)[0] === 'wait');
-  // 控制流和命令组：执行哪些段取决于运行时，整条命令不猜，按工作。
-  if (segments.some((segment) => startsUnparsedStructure(tokenize(segment.text)[0]))) return false;
-  for (const segment of segments) {
-    if (segment.background && !waitsForJobs) continue;
-    if (isLongLivedSegment(tokenize(segment.text), depth)) return true;
+  // 拆不干净（见不变量 5）或段首是控制流/命令组：整条命令不猜，按工作。
+  if (!segments || segments.some((segment) => startsUnparsedStructure(tokenize(segment)[0]))) {
+    return false;
   }
-  return false;
+  return segments.some((segment) => isLongLivedSegment(tokenize(segment), depth));
 }
 
-interface CommandSegment {
-  text: string;
-  /**
-   * 所在命令列表以单个 `&` 结尾：整个列表（`a | b`、`a && b`）都是后台作业，不只是最后一段。
-   * 命令列表由 `;`、换行、`&` 结束，`|`、`&&`、`||` 只是列表内部的连接。
-   */
-  background: boolean;
-}
-
-function splitCommandSegments(command: string): CommandSegment[] {
-  const segments: CommandSegment[] = [];
+/**
+ * 拆成由 `;`、`&&`、`||`、`|`、换行连接的简单命令。引号内的分隔符不算：
+ * `bash -c "cd app && pnpm dev"` 要整体交给 shell 分支。遇到本函数不读的 shell 语法
+ * （后台 `&`、注释 `#`、heredoc `<<`）返回 null，调用方按工作处理。
+ */
+function splitCommandSegments(command: string): string[] | null {
+  const segments: string[] = [];
   let current = '';
   let quote: '"' | "'" | null = null;
-  let listStart = 0;
-  const push = (endsList: boolean, background = false): void => {
-    segments.push({ text: current, background: false });
+  const push = (): void => {
+    segments.push(current);
     current = '';
-    if (!endsList) return;
-    if (background) {
-      for (let k = listStart; k < segments.length; k += 1) segments[k]!.background = true;
-    }
-    listStart = segments.length;
   };
-  // 本行出现过的 heredoc 结束词；下一个换行之后的正文整段跳过。
-  const pendingHeredocs: string[] = [];
   for (let i = 0; i < command.length; i += 1) {
     const ch = command[i]!;
     if (quote) {
@@ -171,20 +153,16 @@ function splitCommandSegments(command: string): CommandSegment[] {
       current += ch;
       continue;
     }
+    // 词首的 `#` 是注释：其后的 `;`、命令都不会执行。
+    if (ch === '#' && (i === 0 || /\s/.test(command[i - 1]!))) return null;
     if (ch === '<' && command[i + 1] === '<') {
       if (command[i + 2] === '<') {
-        // here-string `<<<`：不是 heredoc。
+        // here-string `<<<` 只是输入重定向。
         current += '<<<';
         i += 2;
         continue;
       }
-      const heredoc = HEREDOC_OPERATOR.exec(command.slice(i, i + 200));
-      if (heredoc) {
-        pendingHeredocs.push(heredoc[1] ?? heredoc[2] ?? heredoc[3]!);
-        current += heredoc[0];
-        i += heredoc[0].length - 1;
-        continue;
-      }
+      return null; // heredoc：正文是数据，不是命令
     }
     if (ch === '&') {
       // `2>&1`、`>&2`、`&>file` 里的 & 属于重定向，不是分隔符。
@@ -194,45 +172,20 @@ function splitCommandSegments(command: string): CommandSegment[] {
         current += ch;
         continue;
       }
-      if (next === '&') {
-        // `&&`：同一列表内的连接，两个字符一起消费。
-        i += 1;
-        push(false);
-        continue;
-      }
-      push(true, true);
+      if (next !== '&') return null; // 单个 `&`：后台作业
+      i += 1; // `&&`
+      push();
       continue;
     }
     if (ch === '\n' || ch === ';' || ch === '|') {
       if (ch === '|' && command[i + 1] === '|') i += 1;
-      push(ch !== '|');
-      if (ch === '\n') {
-        for (const delimiter of pendingHeredocs.splice(0)) {
-          i = skipHeredocBody(command, i + 1, delimiter) - 1;
-        }
-      }
+      push();
       continue;
     }
     current += ch;
   }
-  push(true);
+  push();
   return segments;
-}
-
-/** `<<EOF`、`<<-EOF`、`<<'EOF'`、`<<"EOF"`：结束词在第 1、2、3 个捕获组之一。 */
-const HEREDOC_OPERATOR = /^<<-?\s*(?:'([^'\n]+)'|"([^"\n]+)"|([A-Za-z_][A-Za-z0-9_]*))/;
-
-/** 从 `start`（正文第一行行首）找结束行，返回结束行之后的位置；找不到就吞到结尾。 */
-function skipHeredocBody(command: string, start: number, delimiter: string): number {
-  let lineStart = start;
-  while (lineStart < command.length) {
-    const lineEnd = command.indexOf('\n', lineStart);
-    const end = lineEnd < 0 ? command.length : lineEnd;
-    if (command.slice(lineStart, end).trim() === delimiter) return lineEnd < 0 ? command.length : lineEnd + 1;
-    if (lineEnd < 0) break;
-    lineStart = lineEnd + 1;
-  }
-  return command.length;
 }
 
 /** 控制流关键字与命令组/子 shell 的起止符：出现在段首就说明这条命令里的执行顺序无法静态判断。 */
