@@ -14,6 +14,7 @@ const captured = vi.hoisted(() => ({
   }>,
   catalogs: {} as Record<string, unknown>,
   runtimeFailures: new Set<string>(),
+  runtimeFailureMessage: 'provider=/secret/path rejected',
   runtimeDeferred: false,
   runtimeRelease: undefined as (() => void) | undefined,
   rewindStateFailure: false,
@@ -71,7 +72,7 @@ vi.mock('../rpc-client.js', () => ({
       }
       if (command.type === 'get_commands') {
         if (captured.runtimeFailures.has(this.state.sessionId)) {
-          return { type: 'response', command: 'get_commands', success: false, error: 'provider=/secret/path rejected' };
+          return { type: 'response', command: 'get_commands', success: false, error: captured.runtimeFailureMessage };
         }
         if (captured.runtimeDeferred) {
           await new Promise<void>((resolve) => { captured.runtimeRelease = resolve; });
@@ -99,6 +100,7 @@ vi.mock('../rpc-client.js', () => ({
 }));
 
 import { PiAgent } from '../index.js';
+import { PINNED_SKILL_INVOCATION } from '../../base-agent.js';
 import type { AgentDeps } from '../../base-agent.js';
 import type { Logger } from '../../../interfaces/logger.js';
 
@@ -114,6 +116,7 @@ describe('Pi runtime capability lifecycle', () => {
     captured.instances = [];
     captured.catalogs = {};
     captured.runtimeFailures = new Set();
+    captured.runtimeFailureMessage = 'provider=/secret/path rejected';
     captured.runtimeDeferred = false;
     captured.runtimeRelease = undefined;
     captured.rewindStateFailure = false;
@@ -121,6 +124,7 @@ describe('Pi runtime capability lifecycle', () => {
     cwd = mkdtempSync(path.join(tmpdir(), 'pi-runtime-cwd-'));
   });
   afterEach(() => {
+    vi.useRealTimers();
     rmSync(home, { recursive: true, force: true });
     rmSync(cwd, { recursive: true, force: true });
   });
@@ -136,6 +140,15 @@ describe('Pi runtime capability lifecycle', () => {
       resolvePiGatewayModelApi: () => 'openai-responses',
       resolvePiAgentHome: () => home,
     };
+  }
+
+  function pinnedSkill() {
+    const skillFile = path.join(cwd, 'SKILL.md');
+    writeFileSync(skillFile, '# Learn');
+    captured.catalogs.s1 = { commands: [{
+      name: 'skill:learn', source: 'skill', sourceInfo: { path: skillFile },
+    }] };
+    return { [PINNED_SKILL_INVOCATION]: { name: 'learn', path: skillFile } };
   }
 
   const catalog = (name: string) => ({ commands: [{ name, source: 'skill', sourceInfo: { source: 'auto', scope: 'user', baseDir: '/tmp' } }] });
@@ -173,7 +186,7 @@ describe('Pi runtime capability lifecycle', () => {
     expect(instance.closed).toBe(true);
   });
 
-  it('does not block normal prompt dispatch when get_commands fails', async () => {
+  it.each(['hello', '/skill:learn release flow'])('does not block unpinned %s when get_commands fails', async (content) => {
     captured.runtimeFailures.add('s1');
     const handle = await new PiAgent(deps()).startSession({ sessionId: 's1', workingDir: cwd, model: 'm' });
     await vi.waitFor(() => {
@@ -182,7 +195,10 @@ describe('Pi runtime capability lifecycle', () => {
         error: { code: 'rpc_failed', message: 'Pi runtime command discovery was rejected' },
       });
     });
-    await expect(handle.send({ type: 'user', content: 'hello' })).resolves.toBeUndefined();
+    await expect(handle.send({ type: 'user', content })).resolves.toBeUndefined();
+    expect(captured.instances[0]!.requests.filter((request) => request.type === 'prompt')).toEqual([
+      { type: 'prompt', message: content },
+    ]);
     await handle.close();
   });
 
@@ -197,6 +213,106 @@ describe('Pi runtime capability lifecycle', () => {
       expect(handle.getRuntimeCapabilities?.()).toMatchObject({ status: 'loaded', commands: [{ name: 'skill:s1' }] });
     });
     await handle.close();
+  });
+
+  // #9620 (unit): startSession/send must await the pending discovery retry,
+  // not reject a pinned Skill using its published failed/unknown snapshot.
+  // Existing lifecycle cases only dispatched unpinned messages during discovery.
+  it.each([
+    { status: 'failed', error: 'discovery rejected' },
+    { status: 'unknown', error: 'unsupported command' },
+  ])('waits for pinned Skill provenance after a $status discovery attempt', async ({ status, error }) => {
+    vi.useFakeTimers();
+    captured.runtimeFailures.add('s1');
+    captured.runtimeFailureMessage = error;
+    const sendOptions = pinnedSkill();
+    const handle = await new PiAgent(deps()).startSession({ sessionId: 's1', workingDir: cwd, model: 'm' });
+    try {
+      await vi.waitFor(() => expect(handle.getRuntimeCapabilities?.()?.status).toBe(status));
+      const send = handle.send({ type: 'user', content: '/skill:learn release flow' }, sendOptions)
+        .then(() => 'sent', (error: unknown) => error);
+      captured.runtimeFailures.delete('s1');
+      captured.runtimeDeferred = true;
+      await vi.advanceTimersByTimeAsync(4_000);
+      expect(captured.runtimeRelease).toBeTypeOf('function');
+      expect(captured.instances[0]!.requests.filter((request) => request.type === 'prompt')).toEqual([]);
+      captured.runtimeRelease?.();
+      expect(await send).toBe('sent');
+      expect(captured.instances[0]!.requests.filter((request) => request.type === 'prompt')).toEqual([
+        { type: 'prompt', message: '/skill:learn release flow' },
+      ]);
+    } finally {
+      captured.runtimeRelease?.();
+      await handle.close();
+    }
+  });
+
+  it('rejects pinned dispatch after retries are exhausted without starting another discovery chain', async () => {
+    vi.useFakeTimers();
+    captured.runtimeFailures.add('s1');
+    const sendOptions = pinnedSkill();
+    const handle = await new PiAgent(deps()).startSession({ sessionId: 's1', workingDir: cwd, model: 'm' });
+    try {
+      await vi.waitFor(() => expect(handle.getRuntimeCapabilities?.()?.status).toBe('failed'));
+      let settled = false;
+      const send = handle.send({ type: 'user', content: '/skill:learn' }, sendOptions)
+        .then(() => undefined, (error: unknown) => error)
+        .finally(() => { settled = true; });
+      await vi.advanceTimersByTimeAsync(33_000);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(await send).toEqual(new Error('Pi runtime Skill provenance is unavailable'));
+      await expect(handle.send({ type: 'user', content: '/skill:learn' }, sendOptions))
+        .rejects.toThrow('Pi runtime Skill provenance is unavailable');
+      expect(captured.instances[0]!.requests.filter((request) => request.type === 'get_commands')).toHaveLength(4);
+      expect(captured.instances[0]!.requests.filter((request) => request.type === 'prompt')).toEqual([]);
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it('preserves cancellation while pinned discovery retries are exhausted', async () => {
+    vi.useFakeTimers();
+    captured.runtimeFailures.add('s1');
+    const controller = new AbortController();
+    const sendOptions = { ...pinnedSkill(), signal: controller.signal };
+    const handle = await new PiAgent(deps()).startSession({ sessionId: 's1', workingDir: cwd, model: 'm' });
+    try {
+      await vi.waitFor(() => expect(handle.getRuntimeCapabilities?.()?.status).toBe('failed'));
+      const send = handle.send({ type: 'user', content: '/skill:learn' }, sendOptions)
+        .then(() => undefined, (error: unknown) => error);
+      await vi.advanceTimersByTimeAsync(0);
+      controller.abort();
+      await vi.advanceTimersByTimeAsync(34_000);
+      expect(await send).toEqual(new Error('pi send cancelled before acceptance'));
+      expect(captured.instances[0]!.requests.filter((request) => request.type === 'prompt')).toEqual([]);
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it('does not dispatch or republish a pinned catalog that arrives after close', async () => {
+    vi.useFakeTimers();
+    captured.runtimeFailures.add('s1');
+    const sendOptions = pinnedSkill();
+    const handle = await new PiAgent(deps()).startSession({ sessionId: 's1', workingDir: cwd, model: 'm' });
+    try {
+      await vi.waitFor(() => expect(handle.getRuntimeCapabilities?.()?.status).toBe('failed'));
+      const send = handle.send({ type: 'user', content: '/skill:learn' }, sendOptions)
+        .then(() => undefined, (error: unknown) => error);
+      captured.runtimeFailures.delete('s1');
+      captured.runtimeDeferred = true;
+      await vi.advanceTimersByTimeAsync(4_000);
+      expect(captured.runtimeRelease).toBeTypeOf('function');
+      await handle.close();
+      captured.runtimeRelease?.();
+      expect(await send).toBeInstanceOf(Error);
+      expect(handle.getRuntimeCapabilities?.()).toBeUndefined();
+      expect(captured.instances[0]!.requests.filter((request) => request.type === 'prompt')).toEqual([]);
+    } finally {
+      captured.runtimeRelease?.();
+      await handle.close();
+    }
   });
 
   it('keeps concurrent session catalogs isolated and does not let list calls trigger RPC', async () => {
