@@ -164,7 +164,8 @@ export function parsePackageArgs(argv, defaults = {}) {
   ) {
     throw new Error(`非法 --version: ${out.versionSpec}(可选 x.y.z / major / minor / patch)`);
   }
-  out.vendors ??= out.versionSpec !== null ? 'latest' : null;
+  // Release builds run on the signing machine: ship the reviewed, gated pins without executing them.
+  out.vendors ??= out.versionSpec !== null ? 'pinned' : null;
   return out;
 }
 

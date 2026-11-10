@@ -28,6 +28,7 @@
 // --open-pr          after the gate passes, commit the new pins onto the chore/vendor-pins branch
 //                    and open or refresh its pull request (used by the daily CI job and releases).
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -180,6 +181,46 @@ export function vendorRecord() {
     components[kind] = { version: pin.version, ...(pin.runtimeAssets ? { runtimeAssets: pin.runtimeAssets } : {}) };
   }
   return components;
+}
+
+/** What a packaged platform takes from the pins: bundled (ripgrep, SDK) or fetched at runtime (CDN or Linux fallback). */
+const shippedKinds = (platform) => (platform.startsWith('linux-') ? ['claude', 'codex-cli', 'ripgrep'] : ['claude', 'codex', 'pi', 'ripgrep']);
+
+async function sha256OfUrl(url) {
+  const res = await fetch(url, { headers: { 'user-agent': 'cindy-vendor-update' }, signal: AbortSignal.timeout(20 * 60_000) });
+  if (!res.ok || !res.body) throw new Error(`${res.status} ${url}`);
+  const hash = createHash('sha256');
+  let size = 0;
+  for await (const chunk of res.body) { hash.update(chunk); size += chunk.length; }
+  return { sha256: hash.digest('hex'), size };
+}
+
+/**
+ * Release builds on the signing machine: confirm every pinned asset the given platforms ship still
+ * downloads with the pinned SHA-256 and size, and that the installed SDK is the pinned one. Hashes the
+ * download stream in memory; nothing is written to disk or executed. The pins were gated before
+ * they landed (vendor-update.yml runs the gate on every pin change).
+ */
+export async function verifyPinnedVendors({ platforms, log = defaultLog }) {
+  const sdk = JSON.parse(fs.readFileSync(path.join(root, 'node_modules', SDK, 'package.json'), 'utf8')).version;
+  if (sdk !== pinnedVersion('claude-sdk')) throw new Error(`claude-sdk: node_modules has ${sdk}, pin is ${pinnedVersion('claude-sdk')}; run pnpm install`);
+  const checks = platforms.flatMap((platform) => shippedKinds(platform).map((kind) => ({ kind, platform })));
+  const results = await Promise.all(checks.map(async ({ kind, platform }) => {
+    const asset = readJson(PIN[kind]).runtimeAssets?.[platform];
+    const name = `${kind} ${pinnedVersion(kind)} ${platform}`;
+    if (!asset?.url || !/^[0-9a-f]{64}$/.test(asset.sha256 ?? '')) return { name, ok: false, detail: 'pin has no url/sha256 for this platform' };
+    try {
+      const got = await sha256OfUrl(asset.url);
+      const ok = got.sha256 === asset.sha256 && (asset.size == null || got.size === asset.size);
+      return { name, ok, detail: ok ? `${got.size} bytes, sha256 ok` : `got sha256 ${got.sha256} (${got.size} bytes)` };
+    } catch (error) {
+      return { name, ok: false, detail: `${error.message}${error.cause ? ` (${error.cause.code ?? error.cause.message})` : ''} ${asset.url}` };
+    }
+  }));
+  for (const r of results) log(`${r.ok ? 'VERIFIED' : 'MISMATCH'} ${r.name}: ${r.detail}`);
+  const failed = results.filter((r) => !r.ok);
+  if (failed.length) throw new Error(`${failed.length} pinned asset(s) failed verification`);
+  return { verified: results.map(({ name, detail }) => ({ name, detail })), components: vendorRecord() };
 }
 
 /**

@@ -37,7 +37,7 @@ export function printHelp(log = console.log) {
   log('    pnpm update:pi');
   log('    # 查看每个运行时的 pin、上游最新版与落后多少（只读）');
   log('    pnpm vendors:status');
-  log('    # 把 Claude Code／Agent SDK／Codex／Pi／ripgrep 升到发布满 24 小时的上游最新版，冒烟与集成测试通过才保留 pin，失败自动回滚（有版本打包与每日 CI 会自动执行）');
+  log('    # 把 Claude Code／Agent SDK／Codex／Pi／ripgrep 升到发布满 24 小时的上游最新版，冒烟与集成测试通过才保留 pin，失败自动回滚（每日 CI 自动执行并开 pin PR；有版本打包只校验 pin、不执行）');
   log('    pnpm update:vendors');
   log('    # 只对当前 pin 跑同一套冒烟与集成测试');
   log('    pnpm vendors:gate');

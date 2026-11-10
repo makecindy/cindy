@@ -29,13 +29,14 @@
 //              匹配 pin 时跳过下载;首次打包仍需网络拉一次,之后可离线。)
 //   --vendors  latest|pinned|<build-info.json>
 //              Agent 运行时(Claude Code / Agent SDK / Codex / Pi / ripgrep)的版本来源。
-//              有版本打包缺省 latest:打包前把它们升到上游最新(下载时校验上游
-//              SHA-256),再用真实二进制跑冒烟 + maker-core 集成测试,任一失败即恢复
-//              原 pin 并中止打包。pinned = 不升级,只对仓库 pin 跑同一套测试(上游坏版本
-//              时的退路)。<build-info.json> = 复用另一平台本次发版已测过的同一组版本。
-//              latest 只取发布满 24 小时的版本(同 mise 缺省的 minimum_release_age),不会降级。
-//              版本无关包缺省不处理(行为同前)。结果写入 build-info.json 的 vendors;
-//              升级了 pin 时打包结束后自动推 chore/vendor-pins 分支并开/更新 PR。
+//              有版本打包缺省 pinned:打包机持有签名密钥,只按仓库 pin 下载并校验上游
+//              SHA-256,不执行任何上游代码。升到上游最新由无凭证的 vendor-update CI 每天
+//              完成(冒烟 + maker-core 集成测试通过才开 pin PR,改 pin 的 PR 也跑同一测试门)。
+//              latest = 打包前在本机升到上游最新(发布满 24 小时、不降级),用真实二进制跑同一
+//              测试门,失败即恢复原 pin 并中止;<build-info.json> = 复用另一平台已测过的同一组
+//              版本。这两种会在本机运行上游代码,不要在持有签名密钥的机器上用。版本无关包
+//              缺省不处理。结果写入 build-info.json 的 vendors;latest 升级了 pin 时打包结束后
+//              自动推 chore/vendor-pins 分支并开/更新 PR。
 //   --skip-smoke                    跳过 packaged smoke test(调试用)
 //   --allow-unsigned                有版本打包放行无签名(win 缺 CINDY_WIN_SIGN_CMD /
 //                                   mac 缺 APPLE_APP_PASSWORD 时降级 ad-hoc)
@@ -56,7 +57,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ensureBinary } from '../../../scripts/ensure-agent-binaries.mjs';
-import { openPinPullRequest, updateVendors } from '../../../scripts/vendor-update.mjs';
+import { openPinPullRequest, updateVendors, verifyPinnedVendors } from '../../../scripts/vendor-update.mjs';
 import { desktopClientBuildEnv } from '../../../scripts/shared/client-endpoint-build-env.mjs';
 import { desktopLogUploadBuildEnv } from '../../../scripts/shared/log-upload-build-env.mjs';
 import {
@@ -556,16 +557,23 @@ async function main() {
   console.log('='.repeat(60));
 
   // Agent 运行时在 forge 之前定版:SDK 会被打进 bundle,Linux 回退下载读的 pin 也在构建时内联。
-  // 测试门失败时 updateVendors 已恢复原 pin,这里直接中止,不产出带未验证组件的包。
+  // pinned(有版本打包缺省):本机持有签名密钥,只下载并按 pin 校验 SHA-256,不执行任何上游代码;
+  // pin 合入前已由无凭证的 vendor-update CI 跑过冒烟与集成测试。latest / <build-info.json> 会在本机
+  // 下载并运行上游二进制做测试门,失败时 updateVendors 已恢复原 pin,这里直接中止。
   const vendorsMode = args.vendors;
   let vendors = null;
   let vendorsDirtyBefore = [];
-  if (vendorsMode) {
-    const target = vendorsMode === 'latest' || vendorsMode === 'pinned'
+  if (vendorsMode === 'pinned') {
+    console.log('==> Agent runtimes: pinned — verifying upstream SHA-256, not executing');
+    const { verified, components } = await verifyPinnedVendors({ platforms: archs.map((a) => `${platform}-${a}`) });
+    vendors = { mode: 'pinned', changes: [], gate: [], verified, components };
+  } else if (vendorsMode) {
+    const target = vendorsMode === 'latest'
       ? vendorsMode
       : JSON.parse(fs.readFileSync(path.resolve(vendorsMode), 'utf8')).vendors?.components;
     if (!target) throw new Error(`--vendors ${vendorsMode}: build-info.json 里没有 vendors.components`);
     console.log(`==> Agent runtimes: ${typeof target === 'string' ? target : `versions from ${vendorsMode}`} + smoke/integration gate`);
+    if (!versionless) console.log('WARN: 这会在本机运行刚下载的上游二进制;本机若持有签名密钥,请改用缺省的 --vendors pinned。');
     const { changes, steps, dirtyBefore, components } = await updateVendors({ target });
     vendors = { mode: typeof target === 'string' ? target : 'from-build-info', changes, gate: steps, components };
     vendorsDirtyBefore = dirtyBefore;

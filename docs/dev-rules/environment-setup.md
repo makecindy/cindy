@@ -156,19 +156,23 @@ rebase、fetch（包括 Cindy 自己的快照提交与 worktree 池 fetch）都�
 
 - 公开版本不包含内建插件种子；插件通过 SkillHub 或手动安装。不要把任何访问令牌写入
   仓库、Git 配置或脚本。
-- Desktop runtime（Claude Code、Claude Agent SDK、Codex、Pi、ripgrep）在**有版本打包时自动升到上游最新**：
-  `package-desktop.mjs` 在 forge 之前调用 `scripts/vendor-update.mjs`，下载时按上游校验和验证
-  （Claude 官方发布清单、GitHub asset digest、ripgrep 官方 `.sha256`），SDK 取与 Claude Code 同步构建的
-  版本；随后用真实二进制跑 `scripts/smoke-claude-sdk.mjs` 与 maker-core 的 `integration` tier，任一失败即
-  恢复原 pin、中止打包。实际带上的版本与各平台 URL／SHA-256 写入 `build-info.json` 的 `vendors`，发布侧据此
-  把同一组版本推到 CDN；同一次发版的其它平台用 `--vendors <build-info.json>` 复用这组版本，上游坏版本时用
-  `--vendors pinned` 只测不升。`latest` 只取发布满 24 小时的版本（同 mise 缺省的 `minimum_release_age`），
-  且不会把 pin 降级。Codex 只升到 `native-auto-review-policy.ts` 已核验的版本：上游更新时流程会提示先抓取
-  新版原生 reviewer 策略并比对（见 `maker-core-and-agent-behavior.md`），核验后加入版本表才继续升级。`tools/<kind>/latest.json` 是最近一次通过测试的版本：打包升级后自动推到
-  `chore/vendor-pins` 分支并开／更新 PR；`.github/workflows/vendor-update.yml` 每天跑同一流程并更新同一 PR（执行上游二进制的测试 job 不持有任何凭证，
-  开 PR 的 job 只按记录的版本重新下载、校验并写 pin，不执行上游代码；测试步骤也会剔除环境里的令牌类变量）。
+- Desktop runtime（Claude Code、Claude Agent SDK、Codex、Pi、ripgrep）由**无凭证的每日 CI 升到上游最新**，
+  有版本打包只用已过测试的 pin。`.github/workflows/vendor-update.yml` 每天调用 `scripts/vendor-update.mjs`：
+  取发布满 24 小时的上游版本（同 mise 缺省的 `minimum_release_age`，不降级），下载时按上游校验和验证
+  （Claude 官方发布清单、GitHub asset digest、ripgrep 官方 `.sha256`），SDK 取与 Claude Code 同步构建的版本；
+  随后用真实二进制跑 `--version`、`scripts/smoke-claude-sdk.mjs` 与 maker-core 的 `integration` tier，任一失败即
+  恢复原 pin，通过才推到 `chore/vendor-pins` 并开／更新 PR。执行上游二进制的测试 job 不持有任何凭证；开 PR 的
+  job 只按记录的版本重新下载、校验并写 pin，不执行上游代码；测试步骤也会剔除环境里的令牌类变量。改动 pin 的 PR
+  同样触发这个测试 job，手改的 pin 也必须过测试门。Codex 只升到 `native-auto-review-policy.ts` 已核验的版本：
+  上游更新时流程会提示先抓取新版原生 reviewer 策略并比对（见 `maker-core-and-agent-behavior.md`），核验后加入
+  版本表才继续升级。
+- 有版本打包（`package-desktop.mjs` 缺省 `--vendors pinned`）在持有签名密钥的机器上进行，**不执行任何上游代码**：
+  只按 pin 重新下载本平台要带的资产、核对 SHA-256 与大小（只在内存里算哈希，不落盘），并确认 `node_modules`
+  里的 SDK 是 pin 的版本。实际带上的版本与各平台 URL／SHA-256 写入 `build-info.json` 的 `vendors`，发布侧据此
+  把同一组版本推到 CDN。`--vendors latest` 与 `--vendors <build-info.json>` 会在本机运行上游二进制做测试门，
+  只用于不持有签名密钥的机器。构建与签名分机是后续工作。
   贡献者和 Agent 不在普通改动里改这些 pin。`pnpm vendors:status` 只读列出差距，`pnpm update:vendors`
-  手动走同一流程（`--open-pr` 同样开 PR，`--min-age-hours=0` 不等 24 小时），`pnpm vendors:gate` 只对当前 pin 跑测试。
+  手动走每日流程（`--open-pr` 同样开 PR，`--min-age-hours=0` 不等 24 小时），`pnpm vendors:gate` 只对当前 pin 跑测试。
 - 依赖和命令的事实源是当前 checkout 的 `package.json` 与脚本。文档和脚本冲突时，
   先核对代码并修正文档，不要继续执行已失效命令。
 - 不要把其他 checkout 的 `node_modules`、用户数据、授权文件或数据库复制进当前工作区。

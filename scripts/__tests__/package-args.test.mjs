@@ -140,12 +140,12 @@ test('parsePackageArgs: 版本化打包必须显式指定 region', () => {
   );
 });
 
-// 发版必须带上上游最新的 Agent 运行时(Claude Code / SDK / Codex / Pi / ripgrep):有版本打包
-// 缺省浮动到 latest,只有显式 --vendors pinned 或复用另一平台的 build-info 才不升级;
-// 版本无关的社区包不联网升级。build-info 记下实际带上的组件,发布侧据此推 CDN。
-test('有版本打包缺省把 Agent 运行时升到 latest,并写进 build-info', () => {
+// 有版本打包在持有签名密钥的机器上进行:缺省用已评审、已过测试门的 pin,只下载校验、不执行
+// 上游代码;升到上游最新由无凭证的每日 CI 负责,显式 --vendors latest 才在打包机上浮动。
+// 版本无关的社区包不处理。build-info 记下实际带上的组件,发布侧据此推 CDN。
+test('有版本打包缺省用已评审的 pin,并写进 build-info', () => {
   const host = { platform: 'linux', arch: 'x64' };
-  assert.equal(parsePackageArgs(['--version', '1.2.3', '--region', 'global'], host).vendors, 'latest');
+  assert.equal(parsePackageArgs(['--version', '1.2.3', '--region', 'global'], host).vendors, 'pinned');
   assert.equal(parsePackageArgs([], host).vendors, null);
   assert.equal(parsePackageArgs(['--version', 'patch', '--region', 'cn', '--vendors', 'pinned'], host).vendors, 'pinned');
   assert.equal(parsePackageArgs(['--vendors', 'latest'], host).vendors, 'latest');
