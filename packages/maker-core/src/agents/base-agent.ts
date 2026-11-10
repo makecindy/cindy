@@ -2301,6 +2301,8 @@ export interface BackgroundTaskSnapshot {
   taskId: string;
   /** SDK task_type(local_bash / local_agent / local_workflow 等),缺失表示未知。 */
   taskType?: string;
+  /** 后台命令是工作还是长驻服务;与 agent_task_update 的同名字段同源,缺省按 work。 */
+  backgroundCommandKind?: 'work' | 'service';
   toolUseId?: string;
   title?: string;
   /**
@@ -2706,6 +2708,11 @@ export interface AgentSessionHandle {
    * 默认实现为 false (capability 缺失时 host 不该问)。
    */
   isTurnRunning?(): boolean;
+  /**
+   * 盘上项目资源相对运行时启动快照是否已漂移(仅原地加载项目资源的 pi 本地根任务实现,
+   * 其余 agent 恒缺省)。host 可据此回收运行时,让下次 spawn 重扫并重算资源 argv。
+   */
+  hasProjectResourceDrift?(): boolean;
   /** A provider-owned preparatory turn still precedes the accepted user input.
    * Host timeouts must not resume it with a generic CONTINUE. Read synchronously
    * before abort clears the provider's existing preparation state.

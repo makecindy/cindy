@@ -11318,7 +11318,8 @@
       "toolSettings": "工具设置",
       "notTurnedOn": "这台电脑还没开启",
       "turnOn": "去开启",
-      "permissions": "权限"
+      "permissions": "权限",
+      "officialInherited": "Cindy 官方 · 跟随本机启停"
     },
     "systemSkills": {
       "followOffHint": "{{name}} 的系统技能「工作台与跟进」已关闭，在能力页重新开启后才能使用。",
@@ -13305,8 +13306,10 @@
     },
     "backgroundActivity": {
       "status": "后台子任务运行中，模型用量仍在消耗…",
-      "bashStatus_one": "后台任务运行中（{{count}} 个）…",
-      "bashStatus_other": "后台任务运行中（{{count}} 个）…",
+      "bashWorkStatus_one": "正在后台工作（{{count}} 个命令）…",
+      "bashServiceStatus_one": "后台服务运行中（{{count}} 个）",
+      "bashWorkStatus_other": "正在后台工作（{{count}} 个命令）…",
+      "bashServiceStatus_other": "后台服务运行中（{{count}} 个）",
       "stopAll": "全部停止",
       "stopAllTitle": "关闭该任务的后台进程，停止全部后台作业（任务可继续使用）",
       "stopBashTitle": "停止该任务仍在运行的后台作业（不关闭会话进程）",
@@ -19806,5 +19809,11 @@
     "keepDraft": "已输入的草稿会保留。连接恢复后将自动同步任务状态。",
     "retry": "重试连接",
     "desktopAuthHelp": "请在启动终端更新后台连接设置，然后重新打开这个实验客户端。"
+  },
+  "remoteControlConsent": {
+    "title": "允许远程控制这台电脑？",
+    "detail": "请求来自「{{device}}」\n用途：{{purpose}}\n\n开启后，同账号设备可以远程控制这台电脑，包括运行任务和访问文件。此设置持续有效，可随时在设置中关闭。",
+    "decline": "暂不开启",
+    "enable": "开启远程控制"
   }
 }

@@ -11318,7 +11318,8 @@
       "toolSettings": "器具之設",
       "notTurnedOn": "此機尚未開",
       "turnOn": "往開",
-      "permissions": "權"
+      "permissions": "權",
+      "officialInherited": "Cindy 官方 · 隨本機啟停"
     },
     "systemSkills": {
       "followOffHint": "{{name}} 之系統技藝「案頭與督促」已關，於才能頁復開之乃可用。",
@@ -13296,8 +13297,10 @@
     },
     "backgroundActivity": {
       "status": "後臺子差事方行，模型耗用未止…",
-      "bashStatus_one": "後臺差事方行（{{count}} 件）…",
-      "bashStatus_other": "後臺差事方行（{{count}} 件）…",
+      "bashWorkStatus_one": "後臺猶作（令 {{count}} 道）…",
+      "bashServiceStatus_one": "後臺常役方行（{{count}} 件）",
+      "bashWorkStatus_other": "後臺猶作（令 {{count}} 道）…",
+      "bashServiceStatus_other": "後臺常役方行（{{count}} 件）",
       "stopAll": "盡止",
       "stopAllTitle": "闔此差事之後臺程序，盡止後臺作業（差事仍可續用）",
       "stopBashTitle": "止此差事尚在行之後臺作業（不闔言談程序）",
@@ -19806,5 +19809,11 @@
     "keepDraft": "草稿仍存。連接復通，任務之態將自同步。",
     "retry": "重試連接",
     "desktopAuthHelp": "請於啟動終端更新後臺連接設定，再啟此實驗客戶端。"
+  },
+  "remoteControlConsent": {
+    "title": "許遠控此機乎？",
+    "detail": "請求來自「{{device}}」\n所為：{{purpose}}\n\n啟用後，同帳號裝置可遠控此機，執行任務、存取檔案。此設長效，可隨時於設定中關閉。",
+    "decline": "暫不開啟",
+    "enable": "開啟遠端控制"
   }
 }

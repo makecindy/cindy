@@ -877,6 +877,10 @@ const fanOutMakerClaudeSessionRouteChanged = createIpcFanOut('maker:claude-sessi
 const fanOutMakerSessionBackgroundActivityChanged = createIpcFanOut(
   'maker:session-background-activity-changed',
 );
+// 「回合已结束但后台命令仍在工作」翻转广播(payload = { sessionId, active }),任务列表显示运行中用。
+const fanOutMakerSessionBackgroundWorkChanged = createIpcFanOut(
+  'maker:session-background-work-changed',
+);
 const fanOutBotDelegationChanged = createIpcFanOut('maker:bot-delegation:changed');
 const fanOutBotDirectMessageChanged = createIpcFanOut('maker:bot-direct-message:changed');
 const fanOutBotGroupChanged = createIpcFanOut('maker:bot-group:changed');
@@ -930,6 +934,7 @@ const fanOutDeviceLinkRemotePush = createIpcFanOut('device-link:remote-push');
 const fanOutDeviceLinkControlledState = createIpcFanOut('device-link:controlled-state');
 const fanOutDeviceLinkAccessRevoked = createIpcFanOut('device-link:access-revoked');
 const fanOutDeviceLinkControlTargetChanged = createIpcFanOut('device-link:control-target-changed');
+const fanOutDeviceLinkControlEnabledChanged = createIpcFanOut('device-link:control-enabled-changed');
 const fanOutDeviceLinkKeepAwakeChanged = createIpcFanOut('device-link:keep-awake-changed');
 const fanOutProviderShareOwnedChanged = createIpcFanOut(PROVIDER_SHARE_IPC.OWNED_CHANGED);
 const fanOutProviderGroupChanged = createIpcFanOut(PROVIDER_GROUP_IPC.CHANGED);
@@ -5224,6 +5229,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     onControlTargetChanged: fanOutDeviceLinkControlTargetChanged,
     /** 「保持电脑唤醒」在其它共享 userData 实例被翻转后推送,payload: { keepAwake: boolean } */
     onKeepAwakeChanged: fanOutDeviceLinkKeepAwakeChanged,
+    onControlEnabledChanged: fanOutDeviceLinkControlEnabledChanged,
     /** 同机单持有者仲裁角色变化,payload: { standby: boolean }。 */
     onOwnershipChanged: fanOutDeviceLinkOwnershipChanged,
     /** 控制端:目标设备「无响应」熔断状态翻转,payload: { deviceId, unresponsive } */
@@ -7044,6 +7050,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('maker:session-background-tasks:stop', sessionId),
     /** 会话后台活动翻转订阅(payload = { sessionId, active },返回 off)。 */
     onSessionBackgroundActivityChanged: fanOutMakerSessionBackgroundActivityChanged,
+    /** 回合已结束但后台命令仍在工作的会话全量列表(任务列表初始快照,增量走 push 订阅)。 */
+    listSessionBackgroundWork: (): Promise<{ sessionIds: string[] }> =>
+      ipcRenderer.invoke('maker:session-background-work:list'),
+    /** 后台命令仍在工作的翻转订阅(payload = { sessionId, active },返回 off)。 */
+    onSessionBackgroundWorkChanged: fanOutMakerSessionBackgroundWorkChanged,
     /** 精确停止会话内单个后台任务(不中断当前 turn;任务已结束幂等成功)。 */
     stopAgentTask: (sessionId: string, taskId: string): Promise<{ ok: true }> =>
       ipcRenderer.invoke('maker:agent-task:stop', sessionId, taskId),
@@ -7065,6 +7076,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
         toolUseId?: string;
         title?: string;
         provider?: 'pi' | 'claude-code';
+        /** 后台命令是会自己结束的工作还是长驻服务;缺省按 work。 */
+        backgroundCommandKind?: 'work' | 'service';
       }>;
       /** 「任务已终态、wake turn 尚未启动或仍在跑」的 continuation claim 数(桥接对账收口权威依据)。 */
       pendingContinuations?: number;

@@ -11460,7 +11460,8 @@
       "toolSettings": "Réglages des outils",
       "notTurnedOn": "Pas encore activé sur cet ordinateur",
       "turnOn": "Activer",
-      "permissions": "Autorisations"
+      "permissions": "Autorisations",
+      "officialInherited": "Officiel Cindy · Suit les réglages de cet ordinateur"
     },
     "systemSkills": {
       "followOffHint": "Le skill système « Tableau de bord et suivi » de {{name}} est désactivé. Réactivez-le dans Capacités pour utiliser ceci.",
@@ -13441,15 +13442,18 @@
     },
     "backgroundActivity": {
       "status": "Sous-tâches en arrière-plan en cours d'exécution, consommation du modèle toujours en cours…",
-      "bashStatus_one": "{{count}} tâche en arrière-plan en cours d'exécution…",
-      "bashStatus_other": "{{count}} tâches en arrière-plan en cours d'exécution…",
+      "bashWorkStatus_one": "Travail en arrière-plan en cours ({{count}} commande)…",
+      "bashServiceStatus_one": "{{count}} service en arrière-plan en cours d'exécution",
+      "bashWorkStatus_other": "Travail en arrière-plan en cours ({{count}} commandes)…",
+      "bashServiceStatus_other": "{{count}} services en arrière-plan en cours d'exécution",
       "stopAll": "Tout arrêter",
       "stopAllTitle": "Arrêter le processus en arrière-plan de cette session et toutes les sous-tâches en arrière-plan (la session reste utilisable)",
       "stopBashTitle": "Arrêter les tâches en arrière-plan encore en cours dans cette session (conserve le processus de la session)",
       "stopping": "Arrêt…",
       "remoteStopUnsupported": "La version de {{appName}} sur l'ordinateur distant est trop ancienne pour arrêter les tâches en arrière-plan depuis ici. Mettez-la à jour et réessayez",
       "remoteStopUnreachable": "L'ordinateur distant ne répond pas pour le moment : la tâche en arrière-plan n'a donc pas été arrêtée. Réessayez plus tard",
-      "bashStatus_many": "{{count}} tâches en arrière-plan en cours d'exécution…"
+      "bashWorkStatus_many": "Travail en arrière-plan en cours ({{count}} commandes)…",
+      "bashServiceStatus_many": "{{count}} services en arrière-plan en cours d'exécution"
     },
     "interruptedBanner": {
       "text": "Cette tâche a été interrompue car l'application s'est fermée pendant son exécution.",
@@ -20065,5 +20069,11 @@
     "keepDraft": "Votre brouillon est conservé. L’état des tâches sera synchronisé au rétablissement de la connexion.",
     "retry": "Reconnecter",
     "desktopAuthHelp": "Mettez à jour les paramètres de connexion dans le terminal de lancement, puis rouvrez ce client expérimental."
+  },
+  "remoteControlConsent": {
+    "title": "Autoriser le contrôle à distance de cet ordinateur ?",
+    "detail": "Demande de {{device}}\nMotif : {{purpose}}\n\nLes appareils de votre compte pourront contrôler cet ordinateur, exécuter des tâches et accéder aux fichiers. Ce réglage reste actif jusqu’à sa désactivation dans les paramètres.",
+    "decline": "Pas maintenant",
+    "enable": "Activer le contrôle à distance"
   }
 }

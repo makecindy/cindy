@@ -11318,7 +11318,8 @@
       "toolSettings": "도구 설정",
       "notTurnedOn": "이 컴퓨터에서 아직 켜지지 않음",
       "turnOn": "켜기",
-      "permissions": "권한"
+      "permissions": "권한",
+      "officialInherited": "Cindy 공식 · 이 컴퓨터 설정 따름"
     },
     "systemSkills": {
       "followOffHint": "{{name}}의 시스템 스킬 ‘작업대와 후속 확인’이 꺼져 있습니다. 기능 페이지에서 다시 켜면 사용할 수 있습니다.",
@@ -13305,8 +13306,10 @@
     },
     "backgroundActivity": {
       "status": "백그라운드 하위 작업 실행 중, 모델 사용량을 소비하고 있습니다…",
-      "bashStatus_one": "백그라운드 작업 실행 중({{count}}개)…",
-      "bashStatus_other": "백그라운드 작업 실행 중({{count}}개)…",
+      "bashWorkStatus_one": "백그라운드에서 작업 중(명령 {{count}}개)…",
+      "bashServiceStatus_one": "백그라운드 서비스 실행 중({{count}}개)",
+      "bashWorkStatus_other": "백그라운드에서 작업 중(명령 {{count}}개)…",
+      "bashServiceStatus_other": "백그라운드 서비스 실행 중({{count}}개)",
       "stopAll": "모두 중지",
       "stopAllTitle": "이 세션의 백그라운드 프로세스를 종료하고 모든 하위 작업을 중지합니다(세션은 계속 사용할 수 있습니다)",
       "stopBashTitle": "이 세션에서 실행 중인 백그라운드 작업을 중지합니다(세션 프로세스는 유지됩니다)",
@@ -19806,5 +19809,11 @@
     "keepDraft": "작성 중인 초안은 유지됩니다. 연결이 복구되면 작업 상태가 동기화됩니다.",
     "retry": "다시 연결",
     "desktopAuthHelp": "시작 터미널에서 연결 설정을 업데이트한 후 이 실험용 클라이언트를 다시 여세요."
+  },
+  "remoteControlConsent": {
+    "title": "이 컴퓨터의 원격 제어를 허용할까요?",
+    "detail": "요청 기기: {{device}}\n목적: {{purpose}}\n\n활성화하면 같은 계정의 기기에서 작업 실행 및 파일 접근을 포함하여 이 컴퓨터를 제어할 수 있습니다. 설정에서 끌 때까지 유지됩니다.",
+    "decline": "나중에",
+    "enable": "원격 제어 활성화"
   }
 }

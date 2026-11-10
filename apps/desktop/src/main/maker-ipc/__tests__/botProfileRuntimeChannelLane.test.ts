@@ -31,6 +31,59 @@ function prompt(opts: MakerSessionCreateOpts): string {
 }
 
 describe('IM channel lanes hydrate the full Bot profile', () => {
+  it.each(['claude-code', 'codex', 'pi'] as const)('inherits only enabled official skills on %s', async agentKind => {
+    seed('channel', 'im:telegram:777:dm:555', { skillMode: 'allowlist', skills: ['personal'] });
+    const opts = { id: 'lane', agentKind, workingDir: '/bots/bot/workspace', model: 'm' } as MakerSessionCreateOpts;
+    const catalog = [
+      { name: 'cindy:learn', path: '/official/learn/SKILL.md', cindyOfficial: true },
+      { name: 'cindy-plugin-github:pr', path: '/official/pr/SKILL.md', cindyOfficial: true },
+      { name: 'off', path: '/official/off/SKILL.md', cindyOfficial: true, enabled: false },
+      { name: 'personal', path: '/personal/SKILL.md' },
+      { name: 'harness', path: '/harness/SKILL.md' },
+      { name: 'cindy-plugin-github:pr', path: '/personal/pr/SKILL.md' },
+    ];
+    await hydrateBotProfileRuntime(opts, { listSkills: async () => catalog,
+      fingerprintSkillSource: async () => 'a'.repeat(64) }, { persistSnapshot: false });
+    expect(opts.botRuntimeProfile?.skillPolicy.configured).toEqual(['personal', 'cindy:learn', 'cindy-plugin-github:pr']);
+    expect(opts.botRuntimeProfile?.skillPolicy.catalog.find(item => item.path === '/personal/pr/SKILL.md')).toMatchObject({ enabled: false });
+    expect(opts.botRuntimeProfile?.skillPolicy.catalog.find(item => item.path === '/official/pr/SKILL.md')).toMatchObject({ contentSha256: 'a'.repeat(64) });
+  });
+
+  it('resumes a frozen delegation task with the official set it already ran with', async () => {
+    const resource = (name: string, path: string) => ({ name, path, sha256: 'a'.repeat(64) });
+    const run = async (skillResources: unknown[], skills = ['personal']) => {
+      seed('delegation', null, { skillMode: 'allowlist', skills });
+      state.rows.push([{ profileVersion: 3, resolvedJson: JSON.stringify({ skillResources }) }]);
+      const opts = { id: 'child', agentKind: 'codex', workingDir: '/bots/bot/workspace', model: 'm' } as MakerSessionCreateOpts;
+      await hydrateBotProfileRuntime(opts, { listSkills: async () => [
+        { name: 'pr', path: '/official/pr/SKILL.md', cindyOfficial: true },
+        { name: 'learn', path: '/official/learn/SKILL.md', cindyOfficial: true },
+        { name: 'personal', path: '/personal/SKILL.md' },
+        { name: 'pr', path: '/personal/pr/SKILL.md' },
+      ], fingerprintSkillSource: async () => 'a'.repeat(64) }, { persistSnapshot: false });
+      return opts.botRuntimeProfile?.skillPolicy.configured;
+    };
+    const personal = resource('personal', '/personal/SKILL.md');
+    expect(await run([personal])).toEqual(['personal']);
+    expect(await run([personal, resource('pr', '/official/pr/SKILL.md')])).toEqual(['personal', 'pr']);
+    // Frozen with its own same-name personal file: the namesake official file must not replace it.
+    expect(await run([resource('pr', '/personal/pr/SKILL.md')], ['pr'])).toEqual(['pr']);
+  });
+
+  it('keeps official inheritance under legacy defaults and fails closed on unreadable sources', async () => {
+    seed('canonical', null);
+    const opts = { id: 'main', agentKind: 'codex', workingDir: '/bots/bot/workspace', model: 'm' } as MakerSessionCreateOpts;
+    await hydrateBotProfileRuntime(opts, {
+      listSkills: async () => [
+        { name: 'pr', path: '/official/pr/SKILL.md', cindyOfficial: true },
+        { name: 'personal', path: '/personal/SKILL.md' },
+      ],
+      fingerprintSkillSource: async () => { throw new Error('unreadable'); },
+    }, { persistSnapshot: false });
+    expect(opts.botRuntimeProfile?.skillPolicy.configured).toEqual(['pr']);
+    expect(opts.botRuntimeProfile?.skillPolicy.catalog.find(item => item.name === 'pr')).toMatchObject({ enabled: false, runtimeStatus: 'failed' });
+  });
+
   it('treats a channel group lane as a full-profile lane with the whole SOUL', async () => {
     seed('channel', 'im:telegram:777:g:-100123');
     const opts = { id: 'lane', agentKind: 'claude-code', workingDir: '/bots/bot/workspace', model: 'm' } as MakerSessionCreateOpts;

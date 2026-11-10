@@ -1,4 +1,5 @@
 import { createSchedulerQueueBridge, type SchedulerQueueBridge, type SchedulerQueuedPromptRequest, type SchedulerEnqueueResult } from './schedulerQueueBridge.js';
+import { markCindyOfficialSkills } from '../maker-host/managed-skills.js';
 import { registerRuntimeSettingsSection } from '../app-settings/runtime.js';
 import { z as settingsSchema } from 'zod';
 import { registerPreferenceControlIpc } from '../app-settings/preferences.js';
@@ -1387,8 +1388,10 @@ import {
   clearClaudeSessionBackgroundActivity,
   getClaudeSessionBackgroundActivity,
   listActiveClaudeBackgroundActivitySessions,
+  listClaudeBackgroundCommandWorkSessions,
   noteClaudeSessionTurnState,
   setClaudeBackgroundActivityBroadcaster,
+  setClaudeBackgroundCommandWorkBroadcaster,
 } from '../maker-host/claude-session-background-activity.js';
 
 import { setLiveCcSessionBridge } from '../maker-host/claude-transcript-relocation.js';
@@ -7362,6 +7365,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     return { sessionIds: listActiveClaudeBackgroundActivitySessions() };
   });
 
+  // 回合已结束但后台命令仍在工作的会话全量列表(任务列表初始快照,增量走 push)。
+  ipcMain.handle(MAKER_INVOKE.LIST_SESSION_BACKGROUND_WORK, () => {
+    return { sessionIds: listClaudeBackgroundCommandWorkSessions() };
+  });
+
   // “全部停止”是会话级最终止损入口：即使 turn 正在运行，也关闭其 agent 进程与全部子代理。
   registerStopSessionBackgroundTasksHandler(createElectronIpcHandlerRegistry(), {
     closeSession: (sessionId) => maker.closeSession(sessionId),
@@ -8335,6 +8343,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   setClaudeBackgroundActivityBroadcaster((payload) =>
     broadcastToAllWindows(MAKER_PUSH.SESSION_BACKGROUND_ACTIVITY_CHANGED, payload),
   );
+  // 回合已结束但后台命令仍在工作 → 广播给所有窗口(任务列表显示运行中)。
+  setClaudeBackgroundCommandWorkBroadcaster((payload) =>
+    broadcastToAllWindows(MAKER_PUSH.SESSION_BACKGROUND_WORK_CHANGED, payload),
+  );
 
   // per-session 供应商路由:把 cc loopback proxy 看到的 x-claude-code-session-id(= sdkSessionId)
   // 反解成 xdt sessionId,供其统一路由器查该会话显式选定的供应商。sdkSessionId 唯一,直接匹配活跃会话。
@@ -8512,11 +8524,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         return {
           success: true,
           ...result,
-          skills: activeCindyBuiltInAgentSkills(
+          skills: await markCindyOfficialSkills(activeCindyBuiltInAgentSkills(
             result.skills,
             descriptors,
             (source) => !disabled.has(skillActivationKey(source)),
-          ),
+          ), skillParams.remoteHostId),
         };
       } catch (err) {
         return toAgentSkillListFailure(err, {
@@ -13241,6 +13253,18 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         // whose Maker.createSession call performs the existing bounded close retry.
         live = undefined;
       }
+      // 会话中途新增的项目资源(如 openspec init):空闲时经 Maker 以
+      // 'runtime-refresh' 回收运行时(直接 Session.close 会丢 Maker 原因,IM 侧按
+      // unexpected 清排队回合),lazy resume 重扫重建
+      if (live?.agentKind === 'pi' && live.hasRecyclableProjectResourceDrift()) {
+        // 同 makerSendTransaction 的漂移回收:关闭包在抑制窗口内(保留重建窗口,
+        // 不 abort 本通道在途的派发边界,不释放 worktree/临时附件),下面的
+        // lazy resume 随即重扫重建再投递。
+        const driftedLive = live;
+        await withRehydrateCloseSuppressed(targetSessionId, () =>
+          maker.closeSessionIfCurrent(driftedLive, 'runtime-refresh'));
+        live = undefined;
+      }
       if (live) {
         if (live.isTurnRunning?.()) {
           lockStage = 'enqueue-queued-message';
@@ -15857,6 +15881,16 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     getSessionMeta: (sessionId) => maker.getSessionMeta(sessionId).catch(() => null),
     getSessionRowSnapshot,
     getLiveSession: (sessionId) => maker.getSession(sessionId),
+    recycleProjectResourceRuntime: async (sessionId) => {
+      const current = maker.getSession(sessionId);
+      if (current?.agentKind !== 'pi' || current.hasRecyclableProjectResourceDrift() !== true) return false;
+      // 与发送事务 deps.closeSessionIfCurrent 同一「重建窗口」:抑制窗口内关闭,
+      // 否则 close 广播 abort 在途派发边界(2026-11-08 自鲨实报);后续 queued/lazy
+      // 路径用重建后的 runtime 投递。
+      await withRehydrateCloseSuppressed(sessionId, () =>
+        maker.closeSessionIfCurrent(current, 'runtime-refresh'));
+      return true;
+    },
     validateImageAttachments: async (paths) => {
       // 图片来源两类: 会话受管地址(cindy-media:// / xdt-image://)与任意本机绝对路径。
       const images: Array<{ path: string; name: string; ext: string; size: number; mimeType: string }> = [];
@@ -18838,6 +18872,17 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
     getSession: (sessionId) => maker.getSession(sessionId),
     closeSession: (sessionId) => maker.closeSession(sessionId),
+    closeSessionIfCurrent: async (sessionId) => {
+      const current = maker.getSession(sessionId);
+      if (!current) return;
+      // 漂移回收是「重建窗口」,不是生命周期终止:本次发送事务随即 lazy bootstrap
+      // 重建并投递。必须在抑制窗口内关闭 —— 否则 onSessionClosed 会 abort 正在
+      // 驱动这次回收的发送边界,首条消息被标成 cancelled-before-dispatch,用户
+      // 手动重试才过(2026-11-08 实报)。副作用语义同 closeIdleSessionForMove
+      // (任务移动):跳过 worktree 释放与临时附件清理,交给重建后的 runtime。
+      await withRehydrateCloseSuppressed(sessionId, () =>
+        maker.closeSessionIfCurrent(current, 'runtime-refresh'));
+    },
     getSessionMeta: (sessionId) => maker.getSessionMeta(sessionId),
     ensureRemoteReadyForSessionStart: async (params) => {
       await ensureRemoteReadyForSessionStart(params);

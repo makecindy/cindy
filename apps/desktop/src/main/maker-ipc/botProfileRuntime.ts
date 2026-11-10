@@ -35,6 +35,7 @@ import businessOwnershipPrompt from '../maker-host/business-ownership-prompt.md?
 const log = createLogger('maker-ipc:bot-profile-runtime');
 
 interface BotSkillCatalogItem {
+  cindyOfficial?: boolean;
   name: string;
   enabled?: boolean;
   runtimeStatus?: 'discovered' | 'approved' | 'loaded' | 'failed' | 'unknown';
@@ -554,8 +555,8 @@ export async function hydrateBotProfileRuntime(
           ? 'allowlist'
           : 'inherit';
   // `inherit` is retained only as a wire/storage compatibility value. For a
-  // Bot it now means "no explicit external Skill grant"; ambient Cindy,
-  // project, and harness Skills never become part of the Bot runtime.
+  // Bot it means no personal Skill grants. Cindy official sources are added
+  // from the host-attested catalog; project and harness Skills stay opt-in.
   const configuredMcpServers = readStringList(config.mcpServers);
   const mcpMode =
     config.mcpMode === 'allowlist'
@@ -610,6 +611,27 @@ export async function hydrateBotProfileRuntime(
         memoryRef('bot', botMemoryScopeKey, 'read-write', botMemoryIndex),
         memoryRef('user', `profile:${row.botId}:v${row.profileVersion}`, 'read-only', userContextSource),
       ];
+  // Canonical Chats, private-chat topics, group lanes and IM channel lanes follow
+  // Profile updates; delegation children stay frozen.
+  const followsProfile = row.role === 'canonical' || row.role === 'thread' || row.role === 'routine' || row.role === 'group' || row.role === 'channel';
+  const [previousSnapshot] = await db
+    .select({
+      profileVersion: botRuntimeSnapshots.profileVersion,
+      resolvedJson: botRuntimeSnapshots.resolvedJson,
+    })
+    .from(botRuntimeSnapshots)
+    .where(
+      and(
+        eq(botRuntimeSnapshots.sessionId, opts.id),
+        inArray(botRuntimeSnapshots.status, ['applied', 'degraded']),
+      ),
+    )
+    .orderBy(desc(botRuntimeSnapshots.preparedAt))
+    .limit(1);
+  const previousResolved = previousSnapshot
+    ? parseObject(previousSnapshot.resolvedJson)
+    : null;
+  let runtimeConfiguredSkills = skillMode === 'allowlist' ? [...configuredSkills] : [];
   let resolvedSkills = configuredSkills;
   let unavailableSkills: string[] = [];
   let catalog: BotSkillCatalogItem[] = [];
@@ -623,19 +645,28 @@ export async function hydrateBotProfileRuntime(
         workingDir: opts.workingDir,
         remoteHostId: opts.remoteHostId,
       });
-      if (skillMode === 'inherit') {
-        // Legacy "inherit" means no explicit external grants for a Bot. A Bot
-        // owns Home Skills; Cindy/project/harness Skills never flow in ambiently.
-        // Keep the discovered catalog only so each harness can emit explicit
-        // `off` entries for every ambient Skill it would otherwise discover.
-        resolvedSkillEntries = [];
-        resolvedSkills = [];
-      } else {
-        ({ resolvedSkills, unavailableSkills, resolvedSkillEntries } = resolveBotSkillReferences(
-          configuredSkills,
-          catalog,
-        ));
-      }
+      // A frozen delegation task reproduces the files it already ran with: an official
+      // Skill is inherited only when that exact file is in the frozen snapshot, so a
+      // same-name personal file frozen before this inheritance existed stays in effect.
+      const frozenPaths = previousSnapshot && !followsProfile && Array.isArray(previousResolved?.skillResources)
+        ? new Set((previousResolved.skillResources as Array<{ path?: unknown }>).map(entry => entry.path)) : null;
+      const official = chatOnly ? [] : catalog.filter(item => item.cindyOfficial &&
+        item.enabled !== false && item.runtimeStatus !== 'failed' &&
+        (!frozenPaths || frozenPaths.has(item.path?.trim() || null)));
+      const officialNames = new Set(official.flatMap(item => [item.name.trim(), item.runtimeCommandName?.trim()].filter(Boolean)));
+      // Native engines can discover the same command in a personal/project source.
+      // Default inheritance grants only the attested file, not its namesakes.
+      catalog = [
+        ...catalog.filter(item => !official.includes(item)).map(item =>
+          officialNames.has(item.name.trim()) || officialNames.has(item.runtimeCommandName?.trim())
+            ? { ...item, enabled: false } : item),
+        ...official,
+      ];
+      const inherited = official.map(item => item.runtimeCommandName?.trim() || item.name.trim());
+      runtimeConfiguredSkills = [...new Set([...runtimeConfiguredSkills, ...inherited])];
+      ({ resolvedSkills, unavailableSkills, resolvedSkillEntries } = resolveBotSkillReferences(
+        runtimeConfiguredSkills, catalog,
+      ));
     } catch (error) {
       // A remote Bot must freeze the catalog from the same machine that will
       // execute the Agent. Continuing with an empty/local catalog can leave
@@ -684,24 +715,15 @@ export async function hydrateBotProfileRuntime(
     // Keep every discovered ambient entry so native harnesses can explicitly
     // turn unselected Skills off. A selected entry whose source could not be
     // fingerprinted stays in the catalog only as a forced-disabled row.
-    const selectedNames = new Set(configuredSkills.map((item) => item.trim()));
-    const fingerprintedByName = new Map<string, BotSkillCatalogItem>();
-    for (const entry of fingerprinted) {
-      fingerprintedByName.set(entry.name.trim(), entry);
-      if (entry.runtimeCommandName?.trim()) {
-        fingerprintedByName.set(entry.runtimeCommandName.trim(), entry);
-      }
-    }
+    const selectedNames = new Set(runtimeConfiguredSkills.map((item) => item.trim()));
+    const fingerprintedByPath = new Map(fingerprinted.map(entry => [entry.path, entry]));
     catalog = catalog.map((entry) => {
       const runtimeName = entry.runtimeCommandName?.trim();
       const selected = selectedNames.has(entry.name.trim())
         || (!!runtimeName && selectedNames.has(runtimeName));
-      if (!selected) return entry;
-      return (
-        fingerprintedByName.get(entry.name.trim())
-        ?? (runtimeName ? fingerprintedByName.get(runtimeName) : undefined)
-        ?? { ...entry, enabled: false, runtimeStatus: 'failed' as const }
-      );
+      if (!selected || entry.enabled === false) return entry;
+      return fingerprintedByPath.get(entry.path)
+        ?? { ...entry, enabled: false, runtimeStatus: 'failed' as const };
     });
     const usableNames = new Set(
       fingerprinted.map((entry) => entry.runtimeCommandName?.trim() || entry.name.trim()),
@@ -709,7 +731,6 @@ export async function hydrateBotProfileRuntime(
     resolvedSkills = resolvedSkills.filter((name) => usableNames.has(name));
     unavailableSkills = [...new Set(unavailableSkills)];
   }
-  const runtimeConfiguredSkills = skillMode === 'allowlist' ? [...configuredSkills] : [];
   /*
     伙伴自己沉淀的技能。
 
@@ -1116,23 +1137,6 @@ export async function hydrateBotProfileRuntime(
     }),
     runtimeEpoch: { sha256: runtimeEpochSha256 },
   });
-  const [previousSnapshot] = await db
-    .select({
-      profileVersion: botRuntimeSnapshots.profileVersion,
-      resolvedJson: botRuntimeSnapshots.resolvedJson,
-    })
-    .from(botRuntimeSnapshots)
-    .where(
-      and(
-        eq(botRuntimeSnapshots.sessionId, opts.id),
-        inArray(botRuntimeSnapshots.status, ['applied', 'degraded']),
-      ),
-    )
-    .orderBy(desc(botRuntimeSnapshots.preparedAt))
-    .limit(1);
-  const previousResolved = previousSnapshot
-    ? parseObject(previousSnapshot.resolvedJson)
-    : null;
   const previousRuntimeEpoch = previousResolved
     ? parseObject(
         typeof previousResolved.runtimeEpoch === 'string'
@@ -1140,9 +1144,6 @@ export async function hydrateBotProfileRuntime(
           : JSON.stringify(previousResolved.runtimeEpoch ?? {}),
       )
     : null;
-  // Canonical Chats, private-chat topics, group lanes and IM channel lanes follow
-  // Profile updates; delegation children stay frozen.
-  const followsProfile = row.role === 'canonical' || row.role === 'thread' || row.role === 'routine' || row.role === 'group' || row.role === 'channel';
   const runtimeEpochChanged = followsProfile && previousSnapshot !== undefined
     ? previousSnapshot.profileVersion !== row.profileVersion
       || previousRuntimeEpoch?.sha256 !== runtimeEpochSha256

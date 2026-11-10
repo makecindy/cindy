@@ -11363,7 +11363,8 @@
       "toolSettings": "Tool settings",
       "notTurnedOn": "Not turned on for this computer",
       "turnOn": "Enable",
-      "permissions": "Permissions"
+      "permissions": "Permissions",
+      "officialInherited": "Cindy official · Follows this computer’s settings"
     },
     "systemSkills": {
       "followOffHint": "{{name}}’s Workbench and follow-up system skill is off. Switch it back on in Capabilities to use this.",
@@ -13362,8 +13363,10 @@
     },
     "backgroundActivity": {
       "status": "Background subtasks running, still consuming model usage…",
-      "bashStatus_one": "{{count}} background task running…",
-      "bashStatus_other": "{{count}} background tasks running…",
+      "bashWorkStatus_one": "Working in the background ({{count}} command)…",
+      "bashServiceStatus_one": "{{count}} background service running",
+      "bashWorkStatus_other": "Working in the background ({{count}} commands)…",
+      "bashServiceStatus_other": "{{count}} background services running",
       "stopAll": "Stop all",
       "stopAllTitle": "Shut down this session's background process and stop all background subtasks (the session stays usable)",
       "stopBashTitle": "Stop the background tasks still running in this session (keeps the session process)",
@@ -19878,5 +19881,11 @@
     "keepDraft": "Your draft stays here. Task state will sync when the connection recovers.",
     "retry": "Retry connection",
     "desktopAuthHelp": "Update the Host connection settings in your launch terminal, then reopen this experimental client."
+  },
+  "remoteControlConsent": {
+    "title": "Allow remote control of this computer?",
+    "detail": "Request from {{device}}\nPurpose: {{purpose}}\n\nEnabling this setting lets devices on your account control this computer, including running tasks and accessing files. It stays enabled until you turn it off in Settings.",
+    "decline": "Not now",
+    "enable": "Enable remote control"
   }
 }

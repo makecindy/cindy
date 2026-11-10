@@ -127,6 +127,18 @@ describe('portable teammate editors', () => {
     expect(f.deps.update).toHaveBeenCalledWith({ id: 'bot-a', capabilities: { skills: [], skillMode: 'allowlist' } }, 3);
     expect(f.deps.removeSkill).not.toHaveBeenCalled();
   });
+  it('reports inherited official skills without offering a per-teammate override', async () => {
+    const f = fixture();
+    vi.mocked(f.deps.capabilities).mockResolvedValue([
+      { id: 'pr', name: 'pr', description: 'Pull requests', available: true, joined: true, cindyOfficial: true },
+    ]);
+    const list = await f.resource('settings:bot-a/connections/skill');
+    const detail = await f.resource(f.entries(list)[0].resourceId);
+    expect(detail.actions![0].disabled).toBe(true);
+    expect(detail.blocks![0].fallbackMarkdown).toContain('Cindy');
+    await expect(f.send(detail, { joined: false })).rejects.toThrow();
+    expect(f.deps.update).not.toHaveBeenCalled();
+  });
   it('rejects a stale capability selection and arbitrary resource paths', async () => {
     const f = fixture(); const list = await f.resource('settings:bot-a/connections/skill');
     const detail = await f.resource(f.entries(list)[1].resourceId); f.settings.source.currentVersion++;
