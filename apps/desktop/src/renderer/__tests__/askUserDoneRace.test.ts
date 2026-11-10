@@ -214,6 +214,31 @@ describe('ask_user 与 done 的时序', () => {
     }
   });
 
+  // Regression: a withdrawn question's unsent supplement must outlive a question switch or a blocking preemption.
+  // Entry: real IPC subscription -> store. Tier: unit.
+  it.each(['switched-away', 'preempted'] as const)('keeps a withdrawn supplement draft when %s', (mode) => {
+    emitAskUserRequest('async-1', [{ question: 'Original?' }], 'async');
+    const draft = { requestId: 'async-1', currentIndex: 0, answers: {}, started: true, customInput: 'Finished' };
+    makerChatStore.setAskUserDraft(SESSION_ID, draft);
+    let other = 'async-2';
+    if (mode === 'switched-away') {
+      emitAskUserRequest('async-2', [{ question: 'Next?' }], 'async');
+      makerChatStore.selectAskUserQuestion(SESSION_ID, 'async-2');
+    } else {
+      other = 'blocking-1';
+      onInteractionDismissed?.({ sessionId: SESSION_ID, requestId: 'async-1', reason: 'question_withdrawn', withdrawalReason: '已确认' });
+      emitAskUserRequest(other, [{ question: 'Now?' }]);
+    }
+    if (mode === 'switched-away') {
+      onInteractionDismissed?.({ sessionId: SESSION_ID, requestId: 'async-1', reason: 'question_withdrawn', withdrawalReason: '已确认' });
+    }
+    expect(makerChatStore.getLightSnapshot(SESSION_ID).pendingAskUser?.requestId).toBe(other);
+    onInteractionDismissed?.({ sessionId: SESSION_ID, requestId: other, reason: 'resolved' });
+    const restored = makerChatStore.getLightSnapshot(SESSION_ID);
+    expect(restored.pendingAskUser).toMatchObject({ requestId: 'async-1', withdrawalReason: '已确认' });
+    expect(restored.askUserDraft).toEqual(draft);
+  });
+
   it.each(['codex', 'claude-code', 'pi'] as const)('%s keeps an edited async draft after expiry and replacement, then sends the original question', async (agentKind) => {
     makerChatStore.setSessionRuntime(SESSION_ID, { agentKind });
     emitAskUserRequest('async-1', [{ question: 'Original?' }], 'async');

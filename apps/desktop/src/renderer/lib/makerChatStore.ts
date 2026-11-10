@@ -2542,6 +2542,7 @@ function cancelRemoteOptimisticSendsForRemoteClear(
         queueInteractionLocks: [],
         queueEditLocks: [],
         protectedAskUser: opts.historicalHydration ? state.protectedAskUser : undefined,
+        parkedProtectedAsks: opts.historicalHydration ? state.parkedProtectedAsks : undefined,
       };
     });
   }
@@ -2796,6 +2797,8 @@ export interface SessionChatState {
   askUserDraft: AskUserDraft | null;
   /** Local editing survives provider dismissal; it is not a pending Host interaction. */
   protectedAskUser?: { pending: PendingAskUser; draft: AskUserDraft };
+  /** Withdrawn questions whose unsent supplement was displaced; restored when no other question is shown. */
+  parkedProtectedAsks?: Array<{ pending: PendingAskUser; draft: AskUserDraft }>;
   /** FP-3: Currently pending plan-review; null when none. */
   pendingPlanReview: PendingPlanReview | null;
   /** issue_confirm: 提交 GitHub issue 前的确认卡片; null when none. */
@@ -3802,6 +3805,7 @@ function _isSessionBusy(sessionId: string, s: SessionChatState): boolean {
     s.pendingPermission ||
     s.pendingAskUser ||
     s.protectedAskUser ||
+    s.parkedProtectedAsks?.length ||
     hasPendingPluginSetupInteraction(s.pendingPluginSetup, s.pendingPluginSetupQueue) ||
     s.pendingPlanReview ||
     s.pendingIssueConfirm ||
@@ -6938,7 +6942,7 @@ export function handleStreamEvent(
             state.pendingAskUser?.requestId === data.requestId || releasesProtectedAsk ? 'expanded' : state.askUserViewerState,
           askUserDraft:
             state.pendingAskUser?.requestId === data.requestId ? null : state.askUserDraft,
-          ...removePendingQuestion(state, data.requestId, data.reason === 'resolved' || data.reason === 'superseded' || data.reason === 'session_closed'),
+          ...removePendingQuestion(state, data.requestId, data.reason === 'resolved' || data.reason === 'superseded' || data.reason === 'session_closed', withdrawalReason),
           ...(withdrawalReason && state.protectedAskUser?.pending.requestId === data.requestId ? {
             protectedAskUser: { ...state.protectedAskUser, pending: { ...state.protectedAskUser.pending, withdrawalReason } },
           } : {}),
@@ -10104,12 +10108,26 @@ function questionSelection(state: SessionChatState, queue: PendingAskUser[], sel
   const draft = state.protectedAskUser?.draft ?? state.askUserDraft;
   if (draft) drafts[draft.requestId] = draft;
   const unchanged = selected === state.pendingAskUser;
+  // A withdrawn question is no longer in the queue; switching away must not lose its supplement draft.
+  const displaced = !unchanged && state.protectedAskUser &&
+    !queue.some((q) => q.requestId === state.protectedAskUser!.pending.requestId) ? state.protectedAskUser : undefined;
+  const parked = displaced
+    ? [...(state.parkedProtectedAsks ?? []).filter((p) => p.pending.requestId !== displaced.pending.requestId), displaced]
+    : state.parkedProtectedAsks;
   return {
     pendingAskUserQueue: queue, pendingAskUser: selected, askUserDrafts: drafts,
     askUserDraft: unchanged ? state.askUserDraft : selected ? drafts[selected.requestId] ?? null : null,
     protectedAskUser: unchanged ? state.protectedAskUser : undefined,
+    parkedProtectedAsks: parked,
     askUserViewerState: unchanged ? state.askUserViewerState : 'expanded',
   };
+}
+
+/** Bring back the oldest displaced supplement once nothing else needs the answer card. */
+function restoreParkedQuestion(patch: Partial<SessionChatState>): Partial<SessionChatState> {
+  const [next, ...rest] = patch.parkedProtectedAsks ?? [];
+  if (!next || patch.pendingAskUser || patch.protectedAskUser) return patch;
+  return { ...patch, protectedAskUser: next, parkedProtectedAsks: rest, askUserViewerState: 'expanded' };
 }
 
 function upsertPendingQuestion(state: SessionChatState, question: PendingAskUser): Partial<SessionChatState> {
@@ -10132,13 +10150,25 @@ function upsertPendingQuestion(state: SessionChatState, question: PendingAskUser
   return patch;
 }
 
-function removePendingQuestion(state: SessionChatState, requestId: string, releaseDraft: boolean): Partial<SessionChatState> {
-  const queue = allPendingQuestions(state).filter((q) => q.requestId !== requestId);
+function removePendingQuestion(
+  state: SessionChatState, requestId: string, releaseDraft: boolean, withdrawalReason?: PendingAskUser['withdrawalReason'],
+): Partial<SessionChatState> {
+  const all = allPendingQuestions(state);
+  const queue = all.filter((q) => q.requestId !== requestId);
   const selected = state.pendingAskUser && state.pendingAskUser.requestId !== requestId ? state.pendingAskUser : queue[0] ?? null;
   const patch = questionSelection(state, queue, selected);
+  const draft = patch.askUserDrafts![requestId];
+  const removed = all.find((q) => q.requestId === requestId);
   delete patch.askUserDrafts![requestId];
+  patch.parkedProtectedAsks = (patch.parkedProtectedAsks ?? []).filter((p) => p.pending.requestId !== requestId);
   if (state.protectedAskUser?.pending.requestId === requestId) patch.protectedAskUser = releaseDraft ? undefined : state.protectedAskUser;
-  return patch;
+  else if (!releaseDraft && removed && draft?.started) {
+    // Withdrawn while another question was shown: keep the unsent supplement for later.
+    patch.parkedProtectedAsks = [...patch.parkedProtectedAsks, {
+      pending: withdrawalReason ? { ...removed, withdrawalReason } : removed, draft,
+    }];
+  }
+  return restoreParkedQuestion(patch);
 }
 
 function retainAsyncQuestions(state: SessionChatState): Partial<SessionChatState> {
@@ -17155,6 +17185,7 @@ async function clearSessionAfterGuardImpl(sessionId: string, clearedAt: string):
       // F-AUQ-DRAFT: Clear session also wipes any in-progress draft.
       askUserDraft: null,
       protectedAskUser: undefined,
+      parkedProtectedAsks: undefined,
       pendingPlanReview: null,
       pendingIssueConfirm: null,
       pendingInputHandoff: null,

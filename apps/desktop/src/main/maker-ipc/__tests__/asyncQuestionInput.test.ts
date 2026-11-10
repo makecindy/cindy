@@ -17,14 +17,16 @@ if (!body) throw new Error('Question input binding missing');
 const compiled = ts.transpileModule(`return ${body}`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
 function harness() {
   let paused = false;
-  let generation = 1;
+  const generation = 1;
   let held = false;
+  const inputBoundary = new AbortController();
   const session = { id: 'task', getTurnGeneration: () => 3 };
   const coordinator = {
     ensureQueueRestored: vi.fn(async () => {}),
     isExecutionPaused: () => held,
     getProjection: () => ({ queuePaused: paused }),
     getGeneration: () => generation,
+    getInputAbortSignal: () => inputBoundary.signal,
     steerControlInput: vi.fn(async () => 'not-attempted'),
     enqueue: vi.fn(), resume: vi.fn(),
   };
@@ -37,7 +39,7 @@ function harness() {
     { getSessionMeta: async () => ({}), getSession: () => session }, coordinator, build, createHash, ...Object.values(identityDeps),
   ) as (session: unknown, text: string, signal: AbortSignal, requestId: string) => Promise<void>;
   return { coordinator, build, run: (text = 'Answer') => run(session, text, new AbortController().signal, 'q1'),
-    pause: () => { paused = true; }, stop: () => { generation++; paused = true; }, hold: () => { held = true; } };
+    pause: () => { paused = true; }, stop: () => { inputBoundary.abort(); paused = true; }, hold: () => { held = true; } };
 }
 
 it.each(['steered', 'queued'])('does not replay or unpause a %s answer', async (outcome) => {
@@ -68,6 +70,14 @@ it.each(['restore', 'build'])('does not override a newer Stop during %s', async 
   const h = harness(); h.pause();
   if (stage === 'build') h.build.mockImplementation(async (params) => { h.stop(); return params; });
   else h.coordinator.ensureQueueRestored.mockImplementation(async () => { h.stop(); });
+  await expect(h.run()).rejects.toThrow('Question session changed');
+  expect(h.coordinator.enqueue).not.toHaveBeenCalled();
+  expect(h.coordinator.resume).not.toHaveBeenCalled();
+});
+
+it('does not enqueue an answer when Stop lands while steering reports not-attempted', async () => {
+  const h = harness();
+  h.coordinator.steerControlInput.mockImplementation(async () => { h.stop(); return 'not-attempted'; });
   await expect(h.run()).rejects.toThrow('Question session changed');
   expect(h.coordinator.enqueue).not.toHaveBeenCalled();
   expect(h.coordinator.resume).not.toHaveBeenCalled();

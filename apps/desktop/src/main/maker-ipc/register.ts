@@ -21289,9 +21289,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     const sharedTask = getDeviceLinkInvokeContext()?.sharedTask;
     const pausedBeforeAnswer = inputCoordinator.getProjection(session.id).queuePaused;
     const inputGeneration = inputCoordinator.getGeneration(session.id);
+    // Stop aborts this boundary without bumping the generation, so capture it before any await.
+    const inputSignal = inputCoordinator.getInputAbortSignal(session.id, inputGeneration);
     await inputCoordinator.ensureQueueRestored(session.id);
     const assertCurrent = () => {
-      if (signal.aborted || maker.getSession(session.id) !== session || inputCoordinator.getGeneration(session.id) !== inputGeneration) throw new Error('Question session changed');
+      if (signal.aborted || inputSignal.aborted || maker.getSession(session.id) !== session || inputCoordinator.getGeneration(session.id) !== inputGeneration) throw new Error('Question session changed');
       if (inputCoordinator.isExecutionPaused(session.id)) throw new Error('Question session is paused');
       if (sharedTask && (!sharedTask.isCurrent() || !sharedTask.authorize('input.send'))) throw new Error('[PERMISSION_DENIED] SharedTask task access denied');
     };
