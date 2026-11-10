@@ -12,6 +12,7 @@ let root: Root;
 let frames: Map<number, FrameRequestCallback>;
 let sequence: number;
 let viewportHeight: number;
+let headerHeight: number;
 let scrollWrites: number[];
 let rowMeasurements: number;
 let parentRenders: number;
@@ -68,7 +69,7 @@ const scroller = () => host.querySelector<HTMLElement>('[data-scroll]')!;
 const row = (key: number) => host.querySelector<HTMLElement>(`[data-render-item-key="${key}"]`)!;
 beforeEach(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-  frames = new Map(); sequence = 0; viewportHeight = 600; scrollWrites = []; rowMeasurements = 0; parentRenders = 0;
+  frames = new Map(); sequence = 0; viewportHeight = 600; headerHeight = 0; scrollWrites = []; rowMeasurements = 0; parentRenders = 0;
   vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => { frames.set(++sequence, callback); return sequence; });
   vi.stubGlobal('cancelAnimationFrame', (id: number) => { frames.delete(id); });
   vi.stubGlobal('ResizeObserver', class {
@@ -78,7 +79,7 @@ beforeEach(() => {
   vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
     if (this.hasAttribute('data-render-item-key')) {
       rowMeasurements++;
-      let top = 0;
+      let top = headerHeight;
       for (const sibling of Array.from(this.parentElement!.children) as HTMLElement[]) {
         if (sibling === this) break;
         top += Number.parseFloat(sibling.style.height) || 180;
@@ -90,7 +91,7 @@ beforeEach(() => {
   vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockImplementation(() => viewportHeight);
   vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockImplementation(function (this: HTMLElement) {
     return Array.from(this.querySelectorAll<HTMLElement>('[data-render-item-key]'))
-      .reduce((sum, row) => sum + (Number.parseFloat(row.style.height) || 180), 0);
+      .reduce((sum, row) => sum + (Number.parseFloat(row.style.height) || 180), headerHeight);
   });
   // jsdom does not clamp scrollTop like a browser.
   const tops = new WeakMap<HTMLElement, number>();
@@ -108,6 +109,19 @@ afterEach(async () => {
   host.remove(); vi.useRealTimers(); vi.restoreAllMocks(); vi.unstubAllGlobals();
 });
 describe('message viewport content virtualization', () => {
+  // A thread root lives before items and can resize without any row mutation.
+  // Keep scrollTop fixed to model reading after a header layout change.
+  it.each([{ height: 0, anchor: 42 }, { height: 720, anchor: 38 }])(
+    'refreshes the reading anchor when the preceding header becomes $height pixels tall', async ({ height, anchor }) => {
+      headerHeight = 360;
+      await act(async () => root.render(<Fixture restore />));
+      await flushFrames();
+      expect(getViewportTopRow()).toBe(row(40));
+      headerHeight = height;
+      expect(getViewportTopRow()).toBe(row(anchor));
+    },
+  );
+
   // Regression: reading-position snapshots scanned the entire expanded history
   // on every wheel frame despite virtualization already owning a geometry index.
   // Unit layout fixture checks both the actual anchor and the DOM-read budget;
@@ -120,7 +134,8 @@ describe('message viewport content virtualization', () => {
       scroller().scrollTop = 40 * 180 + index;
       expect(getViewportTopRow()).toBe(row(40));
     }
-    expect(rowMeasurements).toBe(0);
+    // One origin-row read per query, independent of preceding history length.
+    expect(rowMeasurements).toBeLessThanOrEqual(10);
   });
 
   it('refreshes an anchor after a synchronous row resize before observer delivery', async () => {

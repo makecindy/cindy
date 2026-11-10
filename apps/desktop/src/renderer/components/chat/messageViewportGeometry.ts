@@ -90,13 +90,16 @@ export class MessageViewportGeometry {
     // change. Keep the full measurement fallback for this uncommon path.
     this.full ||= this.width !== width || this.itemsWidth !== itemsWidth ||
       (this.itemsHeight !== itemsHeight && this.dirty.size === 0);
-    if (!this.full && !this.dirty.size) return;
     const boxes = new Map<number, DOMRect>();
     const box = (index: number) => {
       let result = boxes.get(index);
       if (!result) { result = this.rows[index].getBoundingClientRect(); boxes.set(index, result); }
       return result;
     };
+    // A header before items can resize without changing any indexed row or
+    // the items box. Refresh the origin independently of cached row sizes.
+    this.origin = this.rows.length ? box(0).top + root.scrollTop - root.getBoundingClientRect().top : 0;
+    if (!this.full && !this.dirty.size) return;
     const changed: number[] = [];
     for (let i = 0; i < this.rows.length; i++) if (this.full || this.dirty.has(this.rows[i])) changed.push(i);
     if (this.full) { this.sizes = []; this.gaps = []; }
@@ -115,7 +118,6 @@ export class MessageViewportGeometry {
       this.gaps[i] = i === 0 ? 0 : box(i).top - box(i - 1).bottom;
       if (i + 1 < this.rows.length) this.gaps[i + 1] = box(i + 1).top - box(i).bottom;
     }
-    this.origin = this.rows.length ? box(0).top + root.scrollTop - root.getBoundingClientRect().top : 0;
     this.tops = []; this.bottoms = [];
     let offset = 0;
     for (let i = 0; i < this.rows.length; i++) {

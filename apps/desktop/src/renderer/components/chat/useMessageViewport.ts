@@ -71,7 +71,9 @@ export function useMessageViewport(options: Options) {
     const records = mutations.current?.takeRecords();
     if (records?.length) geometry.mutations(records, items);
     if (geometry.invalid) measurement.current = null;
+    const previousOrigin = geometry.origin;
     geometry.refresh(root, items, heights.current);
+    if (geometry.origin !== previousOrigin) measurement.current = null;
     return geometry.range(root.scrollTop, root.clientHeight, 0).anchorElement;
   }, [geometry]);
   const needsReconcileRef = useRef<() => boolean>(() => true);

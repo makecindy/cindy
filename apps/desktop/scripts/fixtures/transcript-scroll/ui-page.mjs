@@ -8,10 +8,33 @@ export default {
   },
   real: 'Production MessageStream and subagent ConversationStream, Markdown, native wheel scrolling',
   notCovered: 'Host transcript transport, model execution, mobile',
-  cases: { default: { about: '300 historical main-thread messages' }, subagent: { about: '300 historical subagent replies' }, tools: { about: 'Expanded 300-step work group' } },
+  cases: { default: { about: '300 historical main-thread messages' }, subagent: { about: '300 historical subagent replies' }, tools: { about: 'Expanded 300-step work group' }, header: { about: 'Reading position after the preceding thread header shrinks' } },
   async check(page, ui) {
     const scroll = page.locator('[data-scroll-container]').first();
     await scroll.waitFor();
+    if (ui.case === 'header') {
+      await scroll.hover();
+      await page.mouse.wheel(0, -1440);
+      await page.waitForTimeout(100);
+      await page.getByRole('button', { name: 'Resize header', exact: true }).click();
+      await scroll.hover();
+      await page.mouse.wheel(0, -240);
+      await page.waitForTimeout(100);
+      await page.getByRole('button', { name: 'Read saved position', exact: true }).click();
+      const saved = JSON.parse(await page.getByTestId('saved-position').textContent());
+      const visible = await scroll.evaluate(root => {
+        const top = root.getBoundingClientRect().top;
+        const row = [...root.querySelector('.msg-stream-items').children].find(row => {
+          const rect = row.getBoundingClientRect();
+          return rect.height > 0 && rect.bottom > top;
+        });
+        return { key: row?.getAttribute('data-render-item-key'), offset: top - row.getBoundingClientRect().top };
+      });
+      assert.equal(saved.viewportTopKey, visible.key, 'Resized header must not leave a stale saved reading row');
+      assert.ok(Math.abs(saved.offset - visible.offset) < 1, 'Saved reading offset matches the actual visible row');
+      await ui.capture('header-resized');
+      return;
+    }
     const disclosure = page.locator('[data-scroll-disclosure-header][aria-expanded="false"]').first();
     if (await disclosure.count()) { await disclosure.click(); await page.waitForTimeout(400); }
     const cdp = await page.context().newCDPSession(page);
