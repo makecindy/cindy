@@ -39,9 +39,6 @@ static 原例使用 `structuredContent`，那部分数据也会进入模型。
 嵌套字段写进真实 `parameters` schema，不只放在可选读取的 Manual；分工见 [§3.6](plugin-manual.md)，
 调用时校验见 [§3](plugin-tools.md)。schema 上限为 `JSON.stringify(parameters).length <= 16_384`。
 
-插件进程随时可能被回收，进程内存只当缓存：交给页面的引用和状态必须存入插件自己的持久存储，
-或能根据卡片最初的工具结果重建，确保进程重启、卡片重新挂载、换设备查看后仍能接回。
-
 ### 2. 运行完整示例
 
 复制 [loader](examples/interactive-pages/loader/) 到自己的插件源码目录。默认
@@ -266,6 +263,7 @@ innerHTML 只接转义过动态值的可信模板，不接普通数据。片段�
 | 处理取消与卸载 | 用 AbortController 停止等待，关闭后不继续更新 DOM |
 | 支持浅色和深色 | 从 getHostContext 取主题，监听 onhostcontextchanged，不写死白底黑字 |
 | 明确结果归属 | 区分模型与页面调用，见 [§3](plugin-tools.md)；只供页面的数据放根 _meta |
+| 工具状态能跨进程回收接回 | 插件进程随时可能被回收，进程内存只当缓存；交给页面的引用和状态必须存入插件自己的持久存储，或能根据卡片最初的工具结果重建，确保进程重启、卡片重新挂载、换设备查看后仍能接回 |
 
 使用 `new App(info, capabilities, {autoResize:true})` 自动报告尺寸，通过
 `app.getHostContext()` 取主题、styles.variables 和 locale。表单应能适应窄屏。
