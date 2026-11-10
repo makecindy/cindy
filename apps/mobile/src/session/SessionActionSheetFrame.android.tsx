@@ -81,13 +81,7 @@ export function SessionActionSheetFrame({
           onClose();
         }}
       >
-        {/*
-          Expo UI 58 splits `matchContents` per axis: `true` measures BOTH axes
-          from the children, so the sheet's RN content collapsed to the width of
-          its widest child (the update card, the account switcher, every other
-          single-level sheet). Only the height may follow the content — the
-          width stays the sheet's (#9612).
-        */}
+        {/* Width follows the sheet; only the height comes from the content (see NativeBottomSheet). */}
         <RNHostView matchContents={{ vertical: true }}>
           <GestureHandlerRootView style={{ maxHeight: height * 0.8 }}>
             <ScrollView
