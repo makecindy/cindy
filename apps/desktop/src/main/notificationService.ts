@@ -189,6 +189,11 @@ interface NotifiedAlert {
    * 拿不到时不参与跨窗合并：宁可少合并，也不把同一窗口的两次失败并成一次。
    */
   senderId: number | undefined;
+  /**
+   * 另一扇窗已经弹过，这条只是同一事件换了个标识。精确标识再来仍不弹；
+   * 但它不能当跨窗合并的锚点，否则下一轮失败会撞上这扇窗的别名被吞掉。
+   */
+  alias?: true;
 }
 const NOTIFIED_ALERTS_PER_KEY = 8;
 /**
@@ -246,7 +251,8 @@ type NotifiedAlertMatch =
  * 跨窗是另一回事，不靠时间窗判断：每个窗口的 webContents id 不同，同一窗口恒定。
  * 只有 id 不同、种类相同、内容尾相同、到达相差不到 1 秒，才当成同一条事件的两扇窗。
  * 同一窗口发来的两条永不合并，所以一秒内的两次失败各弹一次。
- * 命中跨窗时把已经弹过那条的顺序带回去，调用方记新标识时沿用它，不把副本排成最近一条。
+ * 别名（另一扇窗那条没弹、只为记住标识）不参与这次查找：它只靠精确标识挡住重放，
+ * 不能把下一轮失败再并掉。命中跨窗时把已经弹过那条的顺序带回去，调用方记新标识时沿用它，不把副本排成最近一条。
  */
 function matchNotifiedAlert(
   key: string,
@@ -261,7 +267,8 @@ function matchNotifiedAlert(
   if (current.some(alert => alert.id === alertEventId)) return { matched: 'exact' };
   const content = alertContentKey(alertEventId);
   const cross = current.find(alert =>
-    alert.kind === kind
+    alert.alias !== true
+    && alert.kind === kind
     && alert.content === content
     && alert.senderId !== senderId
     && Math.abs(arrivedAt - alert.arrivedAt) < CROSS_WINDOW_ALERT_WINDOW_MS,
@@ -282,16 +289,19 @@ function rememberAlert(
   arrivedAt: number,
   senderId: number | undefined,
   kind: 'error' | 'needs-reply',
+  alias = false,
 ): void {
   const current = notifiedAlerts.get(key) ?? [];
   if (current.some(alert => alert.id === alertEventId)) return;
-  const entry = {
+  const entry: NotifiedAlert = {
     id: alertEventId,
     order,
     arrivedAt,
     content: alertContentKey(alertEventId),
     senderId,
     kind,
+    // 别名只记住「这条标识已经处理过」。跨窗查找会跳过它，避免下一轮失败把它当成锚点。
+    ...(alias ? { alias: true as const } : {}),
   };
   const newerAt = current.findIndex(alert => alert.order.source === order.source && alert.order.value > order.value);
   const next = newerAt === -1
@@ -574,9 +584,10 @@ export function initNotificationService(deps: NotificationServiceDeps): void {
           && alertArrivedAt !== undefined
         ) {
           // 另一扇窗已经弹过同一条。这条不弹，但标识要进账本，否则 1 秒后再投一次
-          // 对不上精确标识，窗口也过期了，会再弹。顺序沿用已弹那条，不用本条自己的
-          // 轮次时钟，免得这条晚到的副本变成「最近一条」、盖过真正更新的告警。
-          rememberAlert(desktopKey, usableAlertEventId, priorAlert.order, alertArrivedAt, alertSenderId, kind);
+          // 对不上精确标识，窗口也过期了，会再弹。记成别名：精确标识仍然压住重放，
+          // 跨窗查找会跳过它，下一轮失败不会被这扇窗的别名吞掉。顺序沿用已弹那条，
+          // 不用本条自己的轮次时钟，免得这条晚到的副本变成「最近一条」、盖过真正更新的告警。
+          rememberAlert(desktopKey, usableAlertEventId, priorAlert.order, alertArrivedAt, alertSenderId, kind, true);
         }
         if (channels?.mobile === true && (kind !== 'done' || !wasReplyNotified(mobileKey, eventId))) {
           try {

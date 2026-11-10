@@ -1450,6 +1450,41 @@ describe('notificationService — channels 分发', () => {
     }
   });
 
+  // Window 2's collapsed copy used to become a merge anchor: it keeps sender 2 and
+  // the shared `error` tail. Window 1's next failure, 200ms later, differs from
+  // window 1's first id but matches that alias, so both windows swallow the new
+  // failure. The third delivery must toast. Window 2's copy of that same id, a few
+  // ms later, is the duplicate and must not toast again.
+  it('toasts a later failure after the other window only recorded an alias', async () => {
+    const { initNotificationService } = await freshService();
+    initNotificationService(baseDeps(makeFeishuIm(null)));
+    const channels = { desktop: true, feishu: false, mobile: false };
+    let now = 1_700_000_000_000;
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    try {
+      await invokeHandler({
+        sessionId: 's1', title: 'Task', kind: 'error', alertEventId: 'turn:1000:error', channels,
+      }, windowEvent(1));
+      now += 200;
+      await invokeHandler({
+        sessionId: 's1', title: 'Task', kind: 'error', alertEventId: 'turn:1002:error', channels,
+      }, windowEvent(2));
+      expect(notificationCtor).toHaveBeenCalledTimes(1);
+      now += 200;
+      await invokeHandler({
+        sessionId: 's1', title: 'Task', kind: 'error', alertEventId: 'turn:1200:error', channels,
+      }, windowEvent(1));
+      expect(notificationCtor).toHaveBeenCalledTimes(2);
+      now += 2;
+      await invokeHandler({
+        sessionId: 's1', title: 'Task', kind: 'error', alertEventId: 'turn:1200:error', channels,
+      }, windowEvent(2));
+      expect(notificationCtor).toHaveBeenCalledTimes(2);
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
   // Same window, two needs-reply request keys. Different content must not merge
   // even inside the 1s window.
   it('toasts twice when the same window reports two different requests', async () => {
