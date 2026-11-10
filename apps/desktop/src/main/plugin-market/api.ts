@@ -254,11 +254,12 @@ export class PluginMarketApi {
     const catalog = await this.listAll();
     const matching = query?.trim() ? new Set((await this.listAll(query.trim())).plugins.map(plugin => plugin.id)) : null;
     const orgSlug = catalog.currentOrganization?.orgSlug ?? null;
-    const namespaceOf = (plugin: { scope: PluginScope; namespace?: string | null }) =>
-      plugin.namespace !== undefined ? plugin.namespace : plugin.scope === 'organization' ? orgSlug : null;
+    // `undefined` = unknown organization namespace (old server sent neither): never match it to a public (`null`) target.
+    const namespaceOf = (plugin: { scope: PluginScope; namespace?: string | null }): string | null | undefined =>
+      plugin.namespace !== undefined ? plugin.namespace : plugin.scope === 'organization' ? (orgSlug ?? undefined) : null;
     const owns = (target: PluginResolveTarget, identity: { pluginId: string; ghostId: string; scope: PluginScope; namespace?: string | null }) =>
       target.pluginId ? target.pluginId === identity.pluginId
-        : target.ghostId === identity.ghostId && target.namespace === namespaceOf(identity);
+        : target.ghostId === identity.ghostId && namespaceOf(identity) !== undefined && target.namespace === namespaceOf(identity);
     const results: PluginResolveResponse['results'] = targets.map((target) => {
       const plugin: VisiblePluginSummary | undefined = catalog.plugins.find(item => owns(target, { ...item, pluginId: item.id }));
       return plugin

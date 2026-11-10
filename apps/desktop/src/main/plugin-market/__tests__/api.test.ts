@@ -137,6 +137,13 @@ describe('PluginMarketApi 旧服务端兼容', () => {
     expect(fetcher.mock.calls.filter(call => call[0] === '/api/plugins/resolve')).toHaveLength(2);
   });
 
+  it('does not match an organization plugin with unknown namespace to a public target', async () => {
+    const org = { ...summary(PLUGIN_A, 'alpha'), scope: 'organization', organizationId: 'org-1' };
+    const api = new PluginMarketApi(legacyServer([org]), undefined, () => 'https://plugins.example.com', () => 0);
+    const resolved = await api.resolve([{ key: 'root', ghostId: 'alpha', namespace: null }]);
+    expect(resolved.results).toEqual([{ key: 'root', status: 'unavailable' }]);
+  });
+
   it.each([0, 401, 403, 500, 503])('does not fall back on HTTP %i', async (status) => {
     const fetcher = legacyServer([summary(PLUGIN_A, 'alpha')], () => { throw httpError(status); });
     const api = new PluginMarketApi(fetcher);
