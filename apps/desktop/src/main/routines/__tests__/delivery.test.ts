@@ -5,6 +5,10 @@ import type { ImOrchestrator } from '../../im/shared/orchestrator.js';
 const h = vi.hoisted(() => ({
   createMessage: vi.fn(async () => {}), send: vi.fn(async () => ({ messageId: 'sent' })),
   dispatch: vi.fn(async () => ({ ok: true })), connected: true, contextId: 'tg-bot',
+  channel: 'telegram', ownerUserId: 'owner' as string | null,
+  lanes: [{ kind: 'topic', chatId: '-100123', threadId: '42', name: 'Reports' }] as Array<{
+    kind: string; chatId: string; threadId?: string; name: string;
+  }>,
   personal: [] as ImOrchestrator[], companionBotId: 'bot' as string | undefined,
   sessionRows: vi.fn(async (): Promise<Array<{ receiver: string; title: string }>> => []),
 }));
@@ -22,16 +26,14 @@ vi.mock('../../im/wechat/channelSettings.js', () => ({
 }));
 vi.mock('../../im/shared/botImConnectionRuntime.js', () => ({
   buildBotImConnectionListPayload: (botId: string) => ({ connections: botId === 'bot' ? [{
-    id: 'connection', channel: 'telegram', botContextId: h.contextId,
-    status: { kind: h.connected ? 'connected' : 'idle' }, identity: { ownerUserId: 'owner' },
+    id: 'connection', channel: h.channel, botContextId: h.contextId,
+    status: { kind: h.connected ? 'connected' : 'idle' }, identity: { ownerUserId: h.ownerUserId },
   }] : [] }),
-  getBotImConnectionOrchestrator: () => ({ channel: 'telegram', adapter: {
+  getBotImConnectionOrchestrator: () => ({ channel: h.channel, adapter: {
     getBotDisplayName: () => 'My bot', im: { getStatus: () => ({ kind: h.connected ? 'connected' : 'idle', appId: h.contextId }), sendMarkdownText: h.send },
   } }),
 }));
-vi.mock('../../im/shared/botImLaneRuntime.js', () => ({ listBotImConnectionLanes: async () => ({ lanes: [
-  { kind: 'topic', chatId: '-100123', threadId: '42', name: 'Reports' },
-] }) }));
+vi.mock('../../im/shared/botImLaneRuntime.js', () => ({ listBotImConnectionLanes: async () => ({ lanes: h.lanes }) }));
 import { deliverRoutineResult, listRoutineDeliveryTargets } from '../delivery.js';
 import { setRoutineResultDispatch } from '../deliveryDispatch.js';
 
@@ -41,6 +43,8 @@ const input = () => ({ routine, runId: 'run', sessionId: 'lane', targetSessionId
   text: 'Finished report', assertCurrent: vi.fn() });
 beforeEach(() => {
   vi.clearAllMocks(); h.connected = true; h.contextId = 'tg-bot';
+  h.channel = 'telegram'; h.ownerUserId = 'owner';
+  h.lanes = [{ kind: 'topic', chatId: '-100123', threadId: '42', name: 'Reports' }];
   h.personal = []; h.companionBotId = 'bot';
   h.sessionRows.mockResolvedValue([]);
   h.dispatch.mockResolvedValue({ ok: true }); setRoutineResultDispatch(h.dispatch);
@@ -77,6 +81,24 @@ it('sends a discovered Telegram topic through its own transport and refuses chan
   await expect(deliverRoutineResult(args)).rejects.toThrow('unavailable');
   expect(h.send).toHaveBeenCalledTimes(1);
   expect(await listRoutineDeliveryTargets('other-bot')).toEqual([]);
+});
+
+// Test value: #9399; exercises production target discovery and send with an ownerless iMessage group.
+// The existing Telegram topic case did not cover channels whose group receiver must remain a raw GUID.
+it('discovers and delivers to an iMessage group GUID only while its bot connection is current', async () => {
+  h.channel = 'imessage'; h.ownerUserId = null;
+  h.lanes = [{ kind: 'group', chatId: 'any;+;synthetic-group', name: 'Family' }];
+  const target = (await listRoutineDeliveryTargets('bot'))[0];
+  expect(target).toMatchObject({ channel: 'imessage', recipient: 'Family' });
+  const args = { ...input(), routine: { ...routine, delivery: { kind: 'im' as const, targetId: target.id } } };
+
+  await deliverRoutineResult(args);
+  expect(h.send).toHaveBeenCalledWith('any;+;synthetic-group', 'Report\n\nFinished report');
+  h.connected = false;
+  await expect(deliverRoutineResult(args)).rejects.toThrow('unavailable');
+  h.connected = true; h.contextId = 'replacement-imessage-bot';
+  await expect(deliverRoutineResult(args)).rejects.toThrow('unavailable');
+  expect(h.send).toHaveBeenCalledTimes(1);
 });
 
 it('stops publication at the account boundary and respects an explicit no-delivery choice', async () => {
