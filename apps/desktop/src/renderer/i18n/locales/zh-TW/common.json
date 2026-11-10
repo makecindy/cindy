@@ -14124,11 +14124,11 @@
       "mailLegacy": "歷史草稿（唯讀）",
       "taskAutoArchived": "已歸檔「{{title}}」",
       "taskAutoArchivedUndo": "撤銷",
-      "taskAutoArchivePending": "離開此任務後將自動封存",
+      "taskAutoArchivePending": "離開此任務後將自動歸檔",
       "taskAutoArchiveBlockedDirty": "「{{title}}」工作區有未提交變更，未自動封存",
       "taskAutoArchiveCancel": "取消",
-      "taskAutoArchiveCancelled": "本次不會自動封存",
-      "taskArchiveNow": "立即封存"
+      "taskAutoArchiveCancelled": "本次不會自動歸檔",
+      "taskArchiveNow": "立即歸檔"
     },
     "ghostHook": {
       "blockedFallback": "訊息被插件攔下，未傳送",
