@@ -1028,6 +1028,14 @@ export function CreateWorkerPopover({
     [confirmDialog, selectedWorkerPermissionMode, t],
   );
 
+  // 弹窗打开期间，手机或另一台电脑可能已改了这台电脑的角色清单(App 直接写进存储)。提交时
+  // 角色清单以存储里最新的为准，只叠加本次提交涉及的角色，不用打开时的快照覆盖别处的改动。
+  const withLatestRoles = (base: WorkerCreationPrefs): WorkerCreationPrefs => {
+    const { rolesByOwner } = readWorkerCreationPrefs();
+    const { rolesByOwner: _stale, ...rest } = base;
+    return rolesByOwner ? { ...rest, rolesByOwner } : rest;
+  };
+
   const handleCreate = useCallback(async () => {
     if (!canCreate || submittingRef.current) return;
     submittingRef.current = true;
@@ -1074,8 +1082,9 @@ export function CreateWorkerPopover({
       // 角色的「上次选择」(choice)。只有那台电脑版本太旧时，「上次选择」才按旧办法记在这台电脑上。
       const memoryHome = remoteRoles?.deviceId === leadDeviceId ? remoteRoles.memory : 'none';
       const rememberHere = () => {
-        setPrefs(nextPrefs);
-        writeWorkerCreationPrefs(nextPrefs);
+        const merged = withLatestRoles(nextPrefs);
+        setPrefs(merged);
+        writeWorkerCreationPrefs(merged);
       };
       if (memoryHome === 'controller') rememberHere();
       else {
@@ -1104,7 +1113,7 @@ export function CreateWorkerPopover({
           });
       }
     } else {
-      const nextPrefsWithRole = rememberWorkerRoleSubmission(nextPrefs, dataOwnerId, {
+      const nextPrefsWithRole = rememberWorkerRoleSubmission(withLatestRoles(nextPrefs), dataOwnerId, {
         role: activeRole,
         ...(rememberedTask !== undefined ? { task: rememberedTask } : {}),
         ...(rememberedPermission ? { permission: rememberedPermission } : {}),

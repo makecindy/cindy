@@ -606,6 +606,26 @@ describe('worker roles kept on the task computer', () => {
     expect(latest!.form.initialTask).toBe('Update the API reference');
   });
 
+  // 回归(PR #9731 review)：电脑上某个 Agent 记的来源(providerId)不能在手机上被丢成「不指定」，
+  // 否则切到该 Agent 后同一个模型可能走另一个来源，提交时还会把电脑记的来源覆盖掉。
+  it('keeps the provider the computer remembered for an Agent when switching to it and submitting', async () => {
+    const agentModel = (id: string, providerId: string | null) => ({ model: id, effort: 'low', fast: false, providerId });
+    const host = hostWithRoles([{ role: 'developer' }], undefined, {
+      agent: 'claude-code',
+      permission: 'auto',
+      agents: { codex: agentModel('codex/gpt-5.5', 'openai'), 'claude-code': agentModel('claude-opus-4-7', 'anthropic'), pi: agentModel('pi-model', null) },
+    });
+    await act(async () => root.render(<Probe maker={host.maker} />));
+    await act(async () => { latest!.reset(); await settle(); });
+    expect(latest!.form.model).toMatchObject({ id: 'claude-opus-4-7', providerId: 'anthropic' });
+    await act(async () => { latest!.changeAgent('codex'); await settle(); });
+    expect(latest!.form.model).toMatchObject({ id: 'codex/gpt-5.5', providerId: 'openai' });
+    await act(async () => { latest!.remember(latest!.submission); await settle(); });
+    expect(host.applyWorkerRoles).toHaveBeenLastCalledWith(expect.objectContaining({
+      choice: expect.objectContaining({ agent: 'codex', agentModel: expect.objectContaining({ providerId: 'openai' }) }),
+    }));
+  });
+
   it('keeps a form the user already changed when the role list arrives late', async () => {
     const host = hostWithRoles([{ role: 'Docs', task: 'Update the API reference', permission: 'auto' }]);
     await act(async () => root.render(<Probe maker={host.maker} />));

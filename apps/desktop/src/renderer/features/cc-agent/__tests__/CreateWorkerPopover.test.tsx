@@ -824,6 +824,27 @@ describe('CreateWorkerPopover', () => {
     expect(toRemoteWorkerRoles(readWorkerCreationPrefs(), null).defaults?.model).toBeUndefined();
   });
 
+  // 回归(PR #9731 review)：弹窗打开期间手机或另一台电脑改了这台电脑的角色清单(App 直接写进存储)，
+  // 提交不能用打开时的快照整份写回，把别处新增的角色丢掉、或让别处移除的角色重新出现。
+  // 生产入口 CreateWorkerPopover 提交；最小失败输入：打开 → 存储里新增 researcher、移除 tester → 提交。
+  it('keeps roles another controller changed while the dialog was open when submitting', async () => {
+    const onCreate = vi.fn();
+    render(<CreateWorkerPopover open onClose={vi.fn()} onCreate={onCreate} />);
+    writeWorkerCreationPrefs(
+      applyWorkerRolesMutation(readWorkerCreationPrefs(), null, {
+        kind: 'remember', role: 'researcher', task: 'Read the changelog',
+      }),
+    );
+    writeWorkerCreationPrefs(
+      applyWorkerRolesMutation(readWorkerCreationPrefs(), null, { kind: 'forget', role: 'tester' }),
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'orca.createWorker.submit' }));
+    await waitFor(() => expect(onCreate).toHaveBeenCalledOnce());
+    const roles = toRemoteWorkerRoles(readWorkerCreationPrefs(), null).roles;
+    expect(roles.map((entry) => entry.role)).toEqual(['reviewer', 'researcher', 'developer']);
+    expect(roles.find((entry) => entry.role === 'researcher')?.task).toBe('Read the changelog');
+  });
+
   it('requires a role name for a custom Worker and submits it trimmed', async () => {
     const onCreate = vi.fn();
     render(<CreateWorkerPopover open onClose={vi.fn()} onCreate={onCreate} />);

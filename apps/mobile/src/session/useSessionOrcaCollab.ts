@@ -735,7 +735,7 @@ export function useOrcaWorkerForm(params: {
           // 本机记忆的模型只属于被控电脑的目录；Agent 在另一台电脑时回到「默认」。
           model: orcaWorkerAgentElsewhere(value)
             ? null
-            : { id: agentPrefs.model, providerId: null, effort: agentPrefs.effort, fast: agentPrefs.fast },
+            : { id: agentPrefs.model, providerId: agentPrefs.providerId ?? null, effort: agentPrefs.effort, fast: agentPrefs.fast },
         }));
         converge(switched);
       })
@@ -783,7 +783,7 @@ export function useOrcaWorkerForm(params: {
       // 本机记忆的模型只属于被控电脑的目录；Agent 在另一台电脑时回到「默认」。
       model: orcaWorkerAgentElsewhere(current)
         ? null
-        : { id: remembered.model, providerId: null, effort: remembered.effort, fast: remembered.fast },
+        : { id: remembered.model, providerId: remembered.providerId ?? null, effort: remembered.effort, fast: remembered.fast },
     }));
     converge(agent);
   }, [converge, currentPrefs]);

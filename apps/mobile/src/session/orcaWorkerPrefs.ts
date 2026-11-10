@@ -26,6 +26,8 @@ export interface OrcaWorkerAgentPrefs {
   model: string;
   effort: string;
   fast: boolean | 'ultrafast';
+  /** 任务所在电脑记的来源；手机本地的旧记忆没有这一项(缺省 = 不指定来源)。 */
+  providerId?: string | null;
 }
 
 export interface OrcaWorkerModelSelection {

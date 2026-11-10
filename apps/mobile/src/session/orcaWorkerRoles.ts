@@ -75,6 +75,8 @@ export function orcaPrefsFromHostDefaults(
     model: defaults.agents[kind].model,
     effort: defaults.agents[kind].effort || DEFAULT_ORCA_WORKER_EFFORT,
     fast: defaults.agents[kind].fast,
+    // 那台电脑记的来源要带着走：同一个模型在多个来源下，不能悄悄换成别的来源运行。
+    providerId: defaults.agents[kind].providerId,
   });
   const route = defaults.model;
   return {
