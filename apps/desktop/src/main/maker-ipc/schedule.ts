@@ -57,6 +57,7 @@ import {
   stabilizePreRunHookForUpdate,
 } from '@cindy/maker-scheduler';
 
+import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState.js';
 import { createLogger } from '../logger.js';
 import type { DrizzleScheduleStorage } from '../scheduler-host/storage.js';
 import {
@@ -200,6 +201,20 @@ export async function awaitReadyWithTimeout(): Promise<SchedulerDeps> {
     // 防 timer 堆积:scheduler 已 resolve 时若不 clear,setTimeout 仍会 30s 后 fire,
     // reject 被 race 忽略但 timer 句柄不释放,高频 IPC 下 N 个并发 = N 个 timer。
     if (timer) clearTimeout(timer);
+  }
+}
+
+/** Join the existing bounded scheduler gate without carrying a call into another owner. */
+export async function awaitAccountSchedulerReady(): Promise<void> {
+  const scope = activeOwnerScopeKey();
+  if (isAppSessionBoundaryPending()) throwIpcError('PRECONDITION_FAILED', 'account is changing');
+  try {
+    await awaitReadyWithTimeout();
+  } catch {
+    throwIpcError('INTERNAL', 'scheduler readiness timeout');
+  }
+  if (scope !== activeOwnerScopeKey() || isAppSessionBoundaryPending()) {
+    throwIpcError('PRECONDITION_FAILED', 'account changed while waiting for startup');
   }
 }
 

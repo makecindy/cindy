@@ -204,7 +204,7 @@ function deliverSessionEventNotification(
   title: string,
   kind: SessionEventNotificationKind,
   remoteDevice: boolean,
-  options: { mobile?: boolean; feishu?: boolean },
+  options: { mobile?: boolean; feishu?: boolean; remoteDeviceId?: string | null },
 ): void {
   // A handoff can finish after the user has opened Cindy or changed preferences.
   if (typeof document !== 'undefined' && document.hasFocus()) return;
@@ -216,6 +216,7 @@ function deliverSessionEventNotification(
     title,
     kind,
     ...(remoteDevice ? { markAttention: false } : {}),
+    ...(options.remoteDeviceId ? { remoteDeviceId: options.remoteDeviceId } : {}),
     channels: {
       desktop: !remoteDevice && getNotificationsEnabled() && (!islandActive || !hasAgentIslandNotificationSound(getAgentIslandSoundSettings(), kind)),
       feishu: options.feishu !== false && getFeishuNotificationsEnabled(),

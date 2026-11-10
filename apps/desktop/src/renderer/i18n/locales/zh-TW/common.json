@@ -858,7 +858,7 @@
       },
       "runningCount_other": "{{count}} 個任務執行中",
       "limitAria": "{{name}} 的並行上限",
-      "limitOption_other": "上限 {{count}}",
+      "limitOption_other": "同時 {{count}}",
       "weightAria": "{{name}} 的權重",
       "weightOption": "權重 {{weight}}",
       "assignAria": "給 {{name}} 分配任務",
@@ -873,6 +873,7 @@
         "pausedLocal": "已暫停接收外部新任務",
         "cooling": "冷卻中",
         "coolingUntil": "冷卻中 · 約 {{time}} 恢復",
+        "quotaExhausted": "配額已用完",
         "offline": "離線",
         "unreachableHere": "從這台電腦連不上",
         "unavailable": {
@@ -912,9 +913,13 @@
       "description": "為了平均用完各帳號的配額，建議這則訊息換到 {{label}} 傳送（{{quota}}）。換過去會帶上最近幾輪對話和摘要，更早的細節可能記不全。",
       "quota": "還剩 {{left}}%",
       "quotaReset": "還剩 {{left}}%，{{reset}}",
-      "confirm": "換過去",
-      "cancel": "取消",
-      "remember": "以後自動換，不再詢問（僅此任務）"
+      "confirm": "僅這次換過去",
+      "cancel": "暫不切換",
+      "remember": "以後自動切換，不再詢問",
+      "disable": "不自動切換，不再詢問",
+      "disableFailed": "無法確認選擇是否已儲存。請檢查連線，並確認任務所在電腦上的 Cindy 已更新後重試。這則訊息仍會照常傳送。",
+      "choiceLabel": "切換方式（僅本任務）",
+      "send": "繼續傳送"
     },
     "deleteConfirm": {
       "title": "刪除 {{provider}} 的供應商組？",
@@ -7367,6 +7372,11 @@
         "installedExpand": "展開全部 {{count}} 個已安裝插件",
         "installedCollapse": "收起更多已安裝插件",
         "recommendedSection": "推薦",
+        "todayRecommendations": "今日推薦",
+        "marketSection": "插件市場",
+        "browseMarket": "瀏覽插件市場",
+        "searching": "正在搜尋…",
+        "allLoaded": "已顯示全部 {{count}} 個插件",
         "updatesAvailable": "{{count}} 個插件有可用更新",
         "updateAll": "全部更新",
         "ignoreRound": "忽略本輪",
@@ -7396,7 +7406,15 @@
       },
       "market": {
         "publisherKind": {
-          "official": "官方"
+          "official": "官方",
+          "community": "社群"
+        },
+        "publisherDescription": {
+          "official": "由 Cindy 官方發布及維護",
+          "community": "由社群開發者發布及維護",
+          "team": "由目前組織分享給有權限的成員",
+          "custom": "來自你新增的 Git 或本機資料夾市集",
+          "local": "從本機檔案安裝，或在本機開發"
         },
         "scopeAria": "篩選插件來源",
         "scope": {
@@ -10722,6 +10740,9 @@
         "stepFailed": "{{name}}這一步出錯了，沒做完",
         "stepTimeout": "{{name}}太久沒做完，這一步先停下",
         "stepUnavailable": "{{name}}現在無法使用，這一步沒辦法做",
+        "runtimeFailureReason": {
+          "unclaimed_timeout": "{{name}}未能在等待期限內開始處理，本次請求已結束。\n請夥伴的主人檢查所屬電腦上的 Cindy 是否正常執行、網路是否連線。"
+        },
         "runtimeFailure": {
           "REMOTE_DEVICE_LIMIT": "{{name}}無法回覆：夥伴所在裝置保留的遠端任務數已達上限。\n請夥伴的主人封存暫時不用的任務，或請遠端電腦的主人在「遠端與分享」中提高上限。",
           "REMOTE_TOTAL_LIMIT": "{{name}}無法回覆：遠端電腦保留的任務總數已達上限。\n請那台電腦的主人釋放暫時不用的任務，或在「遠端與分享」中提高上限。",
@@ -11367,6 +11388,9 @@
       "databaseDriver": "資料庫驅動程式無法載入，請更新或修復 Cindy 後重試。",
       "databaseUnavailable": "無法讀取來源資料庫，原資料未變更。修復後可重試。",
       "fileTooLarge": "檔案或本次資料超過讀取上限，未截斷匯入。",
+      "sourceFileTooLarge": "單一檔案超過讀取上限，此項未完整匯入。",
+      "snapshotTooLarge": "本次讀取的資料累計超過上限，未能完整匯入。",
+      "itemTooLarge": "此項檔案的總大小超過 128 MiB，未完整匯入。",
       "memoryMetadata": "記憶摘要或標題不符合儲存要求。",
       "memoryWrite": "記憶寫入或完整性檢查失敗，可重試。",
       "memoryChanged": "已儲存的記憶發生變更，未覆寫。",
@@ -12482,6 +12506,12 @@
       "missingDir": "目錄不存在"
     },
     "pendingQueue": {
+      "stopping": "停止處理中",
+      "queued": "排隊中",
+      "editingInComposer": "正在下方輸入框編輯…",
+      "moveUp": "提前一位",
+      "moveDown": "延後一位",
+      "cancelSend": "取消傳送",
       "regionAria": "待傳送訊息佇列",
       "listAria": "佇列訊息",
       "pausedFooter": "任務已停止，佇列暫停",
@@ -12979,6 +13009,11 @@
     "jumpToBottom": "跳到底部",
     "prevMessageJump": "跳到上一則提問：{{preview}}",
     "askUserQuestion": {
+    "unanswered": "未回答",
+    "withdrawn": "無需再回答",
+    "withdrawnDraft": "這個問題已不再需要回答。\n{{reason}}\n草稿已保留，你仍可作為補充傳送。",
+    "sendSupplement": "傳送補充",
+
       "voice": {
         "hint": "可以說「第一項」或選項名稱；多選後請說「確認選擇」。",
         "freeTextHint": "可以直接說出回答，檢查後說「確認選擇」提交。",
@@ -14090,6 +14125,7 @@
       "taskAutoArchived": "已歸檔「{{title}}」",
       "taskAutoArchivedUndo": "撤銷",
       "taskAutoArchivePending": "離開此任務後將自動封存",
+      "taskAutoArchiveBlockedDirty": "「{{title}}」工作區有未提交變更，未自動封存",
       "taskAutoArchiveCancel": "取消",
       "taskAutoArchiveCancelled": "本次不會自動封存",
       "taskArchiveNow": "立即封存"
@@ -19694,10 +19730,10 @@
       "useCodex": "使用 Codex 登入"
     },
     "title": "訂閱帳號",
-    "note": "首個帳號沿用 CLI 預設目錄，新增帳號獨立登入。新任務按策略分配，已有任務保留原帳號。",
     "strategy": "負載平衡",
     "add": "新增帳號",
     "default": "預設目錄",
+    "defaultTag": "預設",
     "ready": "已連線",
     "signedOut": "需要登入",
     "unavailable": "暫時讀不到狀態",
@@ -19706,7 +19742,8 @@
     "removeTitle": "移出 {{name}}？",
     "removeDescription": "Cindy 將不再給這個帳號分配任務。CLI 登入和對話歷史仍保留在本機。",
     "failed": "無法讀取或更新帳號。請檢查 CLI 登入和網路連線後重試。",
-    "directory": "帳號目錄",
+    "openDirectory": "開啟帳號目錄",
+    "openDirectoryFailed": "無法開啟帳號目錄，它可能已被移動或刪除。",
     "loginAgain": "重新登入",
     "login": "登入"
   },
@@ -19718,5 +19755,17 @@
     "logExcerpt": "相關日誌（節錄，可能不完整）",
     "logsUnavailable": "沒有可用的相關日誌，暫時無法確定原因。",
     "failed": "診斷資料準備失敗，請重試。"
+  },
+  "githubStar": {
+    "title": "喜歡 Cindy 嗎？",
+    "description": "在 GitHub 點個 Star，支持 Cindy",
+    "dismiss": "不再提醒",
+    "action": "給 Cindy 按讚",
+    "starring": "點亮星星…",
+    "thanks": "感謝你的 Star！",
+    "thanksDescription": "你的支持讓 Cindy 繼續成長",
+    "browserFallback": "前往 GitHub 為 Cindy 點 Star",
+    "openGithub": "開啟 GitHub",
+    "openFailed": "無法開啟 GitHub"
   }
 }

@@ -202,11 +202,10 @@ describe('AskUserQuestion voice entry', () => {
 
     const voice = view.getByTestId('ask-user-voice');
     const cluster = voice.parentElement!;
-    // Sharing one container is what keeps the two on the same center line as the
-    // answer grows; self-end pins the pair to the row's bottom edge.
+    // Both actions remain within the full-width input frame.
     expect(within(cluster).getByRole('button', { name: '提交' }).tagName).toBe('BUTTON');
-    expect(cluster.className).toContain('items-center');
-    expect(cluster.className).toContain('self-end');
+    expect(view.getByTestId('interaction-answer-composer').contains(cluster)).toBe(true);
+    expect(within(cluster).getByRole('button', { name: '提交' }).textContent).toBe('');
   });
 
   it('keeps a voice button when the question has no options', () => {
@@ -217,7 +216,7 @@ describe('AskUserQuestion voice entry', () => {
     expect(within(voice.parentElement!).getByRole('button', { name: '提交' }).tagName).toBe('BUTTON');
   });
 
-  it('bottom-pins the voice button in multi-select where the row has no send button', () => {
+  it('keeps one icon submit inside the multi-select custom input', () => {
     const { view } = renderAsk([
       { question: '选哪些？', multiSelect: true, options: [{ label: '甲' }, { label: '乙' }] },
     ]);
@@ -225,8 +224,8 @@ describe('AskUserQuestion voice entry', () => {
 
     const voice = view.getByTestId('ask-user-voice');
     const cluster = voice.parentElement!;
-    expect(within(cluster).queryByText('提交')).toBeNull();
-    expect(cluster.className).toContain('self-end');
+    expect(within(cluster).getByRole('button', { name: '提交' }).textContent).toBe('');
+    expect(view.getAllByRole('button', { name: '提交' })).toHaveLength(1);
   });
 
   it('starts dictation from the global voice shortcut while the card is open', async () => {
@@ -362,7 +361,7 @@ describe('AskUserQuestion voice entry', () => {
     stop.mockImplementationOnce(() => new Promise<boolean>((resolve) => { finish = resolve; }));
     const { view, onAnswer } = renderAsk([{ question: '补充一句', ...(action === 'custom' ? { options: [{ label: '甲' }] } : {}) }]);
     fireEvent.click(view.getByTestId('ask-user-voice'));
-    const submit = view.getByText('提交').closest('button')!;
+    const submit = (view.getByRole('button', { name: '提交' }) as HTMLButtonElement)!;
     expect(submit.disabled).toBe(false);
     if (action !== 'enter') fireEvent.click(submit);
     else fireEvent.keyDown(view.getByPlaceholderText('请输入回答…'), { key: 'Enter' });
@@ -380,7 +379,7 @@ describe('AskUserQuestion voice entry', () => {
     stop.mockImplementationOnce(() => new Promise<boolean>((resolve) => { finish = resolve; }));
     const { view, onAnswer } = renderAsk([{ question: '选哪些？', multiSelect: true, options: [{ label: '甲' }, { label: '乙' }] }]);
     fireEvent.click(view.getByTestId('ask-user-voice'));
-    fireEvent.click(view.getByText('提交'));
+    fireEvent.click((view.getByRole('button', { name: '提交' }) as HTMLButtonElement));
     const submit = view.getByRole('button', { name: '提交' });
     expect(submit.getAttribute('aria-busy')).toBe('true');
     expect((view.getByText('跳过').closest('button') as HTMLButtonElement).disabled).toBe(true);
@@ -397,7 +396,7 @@ describe('AskUserQuestion voice entry', () => {
     const { view, onAnswer } = renderAsk([{ question: '补充一句' }]);
     fireEvent.change(view.getByPlaceholderText('请输入回答…'), { target: { value: '保留文字' } });
     fireEvent.click(view.getByTestId('ask-user-voice'));
-    await act(async () => fireEvent.click(view.getByText('提交')));
+    await act(async () => fireEvent.click((view.getByRole('button', { name: '提交' }) as HTMLButtonElement)));
     expect(onAnswer).not.toHaveBeenCalled();
     expect((view.getByPlaceholderText('请输入回答…') as HTMLTextAreaElement).value).toBe('保留文字');
   });
@@ -406,10 +405,10 @@ describe('AskUserQuestion voice entry', () => {
     finalTranscript = '';
     const { view, onAnswer } = renderAsk([{ question: '补充一句' }]);
     fireEvent.click(view.getByTestId('ask-user-voice'));
-    await act(async () => fireEvent.click(view.getByText('提交')));
+    await act(async () => fireEvent.click((view.getByRole('button', { name: '提交' }) as HTMLButtonElement)));
     expect(stop).toHaveBeenCalledOnce();
     expect(onAnswer).not.toHaveBeenCalled();
-    expect(view.getByText('提交').closest('button')!.disabled).toBe(true);
+    expect((view.getByRole('button', { name: '提交' }) as HTMLButtonElement)!.disabled).toBe(true);
   });
 
   it('does not submit a late result after leaving the card', async () => {
@@ -417,7 +416,7 @@ describe('AskUserQuestion voice entry', () => {
     stop.mockImplementationOnce(() => new Promise<boolean>((resolve) => { finish = resolve; }));
     const { view, onAnswer } = renderAsk([{ question: '补充一句' }]);
     fireEvent.click(view.getByTestId('ask-user-voice'));
-    fireEvent.click(view.getByText('提交'));
+    fireEvent.click((view.getByRole('button', { name: '提交' }) as HTMLButtonElement));
     view.unmount();
     await act(async () => finish(true));
     expect(onAnswer).not.toHaveBeenCalled();
@@ -427,7 +426,7 @@ describe('AskUserQuestion voice entry', () => {
     const { view, onAnswer } = renderAsk([{ question: '选哪些？', multiSelect: true, options: [{ label: '甲' }, { label: '乙' }] }]);
     fireEvent.click(view.getByText('甲'));
     fireEvent.click(view.getByTestId('ask-user-voice'));
-    await act(async () => fireEvent.click(view.getByText('提交')));
+    await act(async () => fireEvent.click((view.getByRole('button', { name: '提交' }) as HTMLButtonElement)));
     expect(onAnswer).toHaveBeenCalledExactlyOnceWith('req-voice', { '选哪些？': JSON.stringify(['甲', '完整回答']) });
   });
 });

@@ -2302,13 +2302,13 @@ describe('Chat Server result delivery and refresh', () => {
     expect(result.ok && result.group.round.speakers).toHaveLength(2);
   });
 
-  it.each(['IMAGE_INPUT_UNSUPPORTED', 'private token and path'])('projects a failed execution from its visible source with a safe code %s', async code => {
+  it.each(['IMAGE_INPUT_UNSUPPORTED', 'RUNTIME_TIMEOUT', 'private token and path'])('projects a failed execution from its visible source with a safe code %s', async code => {
     const source = { id: execution.source_message_id, seq: '7', authorId: selfId, author: { kind: 'human', name: 'Owner' },
       content: [{ type: 'text', text: 'Question' }], origin: 'user', deleted: false, threadRootId: null, createdAt: '2026-10-03T00:00:00Z' };
     fixture.handle.mockImplementation((route, method, body) => {
       if (route.endsWith('/snapshot')) return { body: { room: room(roomId), members: [], messages: [source], cursor: '7' } };
       if (route.includes('/messages?')) return { body: [source] };
-      if (route.endsWith('/executions') || route.includes('/execution-failures?')) return { body: [{ ...execution, status: 'failed', failure_code: code }] };
+      if (route.endsWith('/executions') || route.includes('/execution-failures?')) return { body: [{ ...execution, status: 'failed', failure_code: code, failure_reason: 'unclaimed_timeout' }] };
       return response(route);
     });
     const result = await service.getGroup(roomId);
@@ -2316,7 +2316,8 @@ describe('Chat Server result delivery and refresh', () => {
     if (!result.ok) throw new Error('group missing');
     expect(result.group.messages).toHaveLength(1);
     const notice = projectBotGroupExecutionFailures(result.group.messages, result.group.executionFailures)[1];
-    expect(notice).toMatchObject({ sequence: 7, authorName: 'Bot', runtimeFailureCode: code === 'IMAGE_INPUT_UNSUPPORTED' ? code : 'RUNTIME_ERROR' });
+    expect(notice).toMatchObject({ sequence: 7, authorName: 'Bot', runtimeFailureCode: code === 'private token and path' ? 'RUNTIME_ERROR' : code });
+    expect(notice.runtimeFailureReason).toBe(code === 'RUNTIME_TIMEOUT' ? 'unclaimed_timeout' : undefined);
     expect(JSON.stringify(notice)).not.toContain('private token and path');
   });
 

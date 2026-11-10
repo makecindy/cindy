@@ -13,7 +13,8 @@ export interface TeammateConfigurationPatch {
 
 export interface TeammateConfiguration {
   scope: 'local';
-  profile: BotControlState['profile'] & { avatar: string; avatarColor: string };
+  // Target inspection intentionally excludes the caller-only user context and memory.
+  profile: { id: string; name: string; description: string; identitySource: string; version: number; avatar: string; avatarColor: string };
   model: { source: 'default' | 'override'; candidates: AppDefaultModelRoute[] | null };
   references: {
     skills: string[];

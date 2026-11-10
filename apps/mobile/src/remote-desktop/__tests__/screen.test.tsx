@@ -74,7 +74,8 @@ vi.mock("../useAutoUnlockSettings", () => ({
       biometricVerification: true,
       available: true,
       busy: fixture.securityBusy,
-      notice: null,
+      notice: fixture.securityNotice,
+      clearNotice: fixture.clearSecurityNotice,
       onAutoUnlock: vi.fn(),
       onBiometricVerification: vi.fn(),
       maybeUnlock: fixture.maybeUnlock,
@@ -128,6 +129,8 @@ const fixture = vi.hoisted(() => ({
   safe: { top: 59, bottom: 34, left: 0, right: 0 },
   securityAutoUnlock: false,
   securityBusy: false,
+  securityNotice: null as string | null,
+  clearSecurityNotice: vi.fn(),
   themeMode: "light",
   lockOnExit: false,
   lockPreferenceFromStorage: false,
@@ -334,6 +337,7 @@ vi.mock("@/platform/chrome/NativePullDownMenu", () => ({
     ),
 }));
 vi.mock("lucide-react-native", () => ({
+  CircleAlert: () => null,
   Smartphone: () => null,
   Tablet: () => null,
   ArrowBigUp: () => null,
@@ -517,6 +521,8 @@ beforeEach(async () => {
   fixture.liveScreen = undefined;
   fixture.securityAutoUnlock = false;
   fixture.securityBusy = false;
+  fixture.securityNotice = null;
+  fixture.clearSecurityNotice.mockReset();
   fixture.maybeUnlock.mockReset().mockResolvedValue(undefined);
   fixture.themeMode = "light";
   fixture.lockOnExit = false;
@@ -3497,6 +3503,50 @@ describe("remote desktop controls", () => {
     await act(async () => vi.advanceTimersByTimeAsync(4000));
     act(() => button("operations").click());
     expect(host.textContent).not.toContain("remoteDesktop.pipUnavailable");
+  });
+  // 回归：自动解锁失败原先只藏在安全页；主画面应给出非模态错误，安全页打开时不重复。
+  // 生产入口 RemoteDesktopScreen；最小输入 security.notice；unit，真实组件渲染。
+  it("surfaces automatic unlock failure on the remote picture without a modal", async () => {
+    await connect();
+    fixture.securityNotice = "remoteDesktop.credentialUnlockUnavailable";
+    act(() => root.render(<RemoteDesktopScreen />));
+    const notice = host.querySelector(
+      '[data-testid="remoteDesktop.autoUnlockNotice"]',
+    );
+    expect(notice).not.toBeNull();
+    expect(notice?.textContent).toContain(
+      "remoteDesktop.credentialUnlockUnavailable",
+    );
+    // 自动解锁失败是异步出现的告警，读屏也必须能播报，不能只有视觉提示。
+    expect(
+      fixture.views["remoteDesktop.autoUnlockNotice"]?.accessibilityRole,
+    ).toBe("alert");
+    expect(fixture.alert).not.toHaveBeenCalled();
+    fixture.clearSecurityNotice.mockImplementation(() => {
+      fixture.securityNotice = null;
+    });
+    act(() =>
+      host
+        .querySelector<HTMLButtonElement>(
+          '[data-testid="remoteDesktop.dismissUnlockNotice"]',
+        )!
+        .click(),
+    );
+    act(() => root.render(<RemoteDesktopScreen />));
+    expect(
+      host.querySelector('[data-testid="remoteDesktop.autoUnlockNotice"]'),
+    ).toBeNull();
+    fixture.securityNotice = "remoteDesktop.credentialUnlockUnavailable";
+    act(() => root.render(<RemoteDesktopScreen />));
+    act(() => button("operations").click());
+    act(() => button("security").click());
+    expect(
+      host.querySelector('[data-testid="remoteDesktop.autoUnlockNotice"]'),
+    ).toBeNull();
+    expect(
+      host.querySelector('[data-testid="remoteDesktop.panelScroll"]')
+        ?.textContent,
+    ).toContain("remoteDesktop.credentialUnlockUnavailable");
   });
   it("does not reuse Mac eligibility when the route changes to another host", async () => {
     await connect();

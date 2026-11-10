@@ -5,7 +5,7 @@ import type { ViewInstance } from 'react-native';
  */
 import { botGroupBodyParts } from '@cindy/maker-shared/botGroupPresentation';
 import type { BotGroupAuthorKind } from '@cindy/maker-shared/botGroupChat';
-import { memo, useCallback, useMemo, useRef, useState, type ReactNode } from 'react';
+import { memo, useContext, useId, useCallback, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Linking, Pressable, Platform, ScrollView, StyleSheet, View, type GestureResponderEvent, type LayoutChangeEvent, type StyleProp, type TextStyle } from 'react-native';
 import { useTranslation } from 'react-i18next';
 import { latexToUnicodeApproximation } from '@cindy/maker-shared/math-markdown';
@@ -13,6 +13,7 @@ import { HighlightedCodeText } from './HighlightedCodeText';
 import { MarkdownCodeCopyButton } from './MarkdownCodeCopyButton';
 import { MermaidDiagramWebView } from './mermaidWebView';
 import { MathFormulaWebView } from './mathWebView';
+import { hasRichAnswer } from '@cindy/maker-shared/rich-answer';
 import { splitBotGroupMentionSegments, type BotGroupTextSegment } from '@cindy/maker-shared/botGroupMentions';
 import { Text } from '@/components/AppText';
 import { MarkdownSelectableText, MarkdownSelectableSpan } from './MarkdownSelectableText';
@@ -22,6 +23,12 @@ import { parseMobileMarkdown, type MobileMarkdownBlock, type MobileMarkdownInlin
 import { buildMessageContentLayout } from './messageContentLayout';
 import { buildMobileMarkdownTableColumnWidths } from './messageTableLayout';
 import { botGroupMentionMember, type BotGroupMentionContext, type BotGroupMentionPoint } from './botGroupMentions';
+import { MarkdownBody, MessagePayloadModal, MessageHeavyContentVisibilityContext } from './MessageRenderer';
+import { ImageLightbox } from './ImageLightbox';
+import type { MessagePayload } from './messagePayload';
+import { ChatFilePathContext } from './chatFilePathContext';
+import { SessionQuickSendProvider, useSessionQuickSend } from './SessionQuickSendContext';
+import { MessageListVisibilityContext, useMessageListItemVisible } from './messageListVisibility';
 
 type Styles = ReturnType<typeof makeStyles>;
 type BodyOptions = {
@@ -214,15 +221,42 @@ const BotGroupMarkdownBlock = memo(function BotGroupMarkdownBlock({ block, style
   return renderBlock(block, styles, options, diagramLabel, context);
 });
 
-export function BotGroupMarkdownText({ content, authorKind, mentionContext, richContent = false, interactive = true, active = true, onOpenDiagram }: {
+export function BotGroupMarkdownText({ content, authorKind, mentionContext, richContent = false, interactive = true, active = true, onOpenDiagram, messageKey, messageId, readOnly = false }: {
   content: string; authorKind?: BotGroupAuthorKind; mentionContext?: BotGroupMentionContext;
+  messageKey?: string; messageId?: string; readOnly?: boolean;
 } & BodyOptions) {
   const { t } = useTranslation();
   const styles = useThemedStyles(makeStyles);
   const touch = useMentionTouchContext(content.includes('@') ? mentionContext : undefined);
-  const blocks = useMemo(() => botGroupBodyParts(content, authorKind).flatMap((part, index): MobileMarkdownBlock[] => part.kind === 'markdown'
+  const width = useWindowWidth();
+  const instanceKey = useId();
+  const sender = useSessionQuickSend();
+  const visibility = useContext(MessageListVisibilityContext);
+  const visible = useMessageListItemVisible(messageId ?? instanceKey);
+  const [payload, setPayload] = useState<MessagePayload | null>(null);
+  const layout = useMemo(() => buildMessageContentLayout({ screenWidth: width }), [width]);
+  const rich = authorKind === 'bot' && hasRichAnswer(content);
+  const blocks = useMemo(() => rich ? [] : botGroupBodyParts(content, authorKind).flatMap((part, index): MobileMarkdownBlock[] => part.kind === 'markdown'
     ? parseMobileMarkdown(part.content).map(block => ({ ...block, key: `${index}:${block.key}` }))
-    : [{ type: 'paragraph', key: String(index), inlines: [{ type: 'text', text: part.content }] }]), [content, authorKind]);
+    : [{ type: 'paragraph', key: String(index), inlines: [{ type: 'text', text: part.content }] }]), [content, authorKind, rich]);
+  if (rich) return (
+    <SessionQuickSendProvider value={readOnly || !interactive ? null : sender}>
+      <MessageHeavyContentVisibilityContext.Provider value={active && (!visibility || visible)}>
+        <ChatFilePathContext.Provider value={null}>
+          <MarkdownBody renderRichAnswers publicMediaOnly richStateKey={messageKey ?? instanceKey}
+            markdownImageCacheKey={messageKey ?? instanceKey} layout={layout} text={content} selectable
+            onOpenPayload={next => {
+              // Shared answers may open public media and diagrams, never task-local files.
+              if (next.kind === 'mermaid' || (next.kind === 'media' && /^https?:\/\//i.test(next.media.url))) setPayload(next);
+            }} />
+          {payload?.kind === 'media' && payload.media.kind === 'image'
+            ? <ImageLightbox images={[{ key: messageKey ?? instanceKey, title: payload.title, url: payload.media.url, payload }]}
+                initialUrl={payload.media.url} onClose={() => setPayload(null)} />
+            : payload ? <MessagePayloadModal payload={payload} onClose={() => setPayload(null)} /> : null}
+        </ChatFilePathContext.Provider>
+      </MessageHeavyContentVisibilityContext.Provider>
+    </SessionQuickSendProvider>
+  );
   const diagramLabel = t('message.renderer.openDiagramDetail');
   return <View ref={touch.ref} collapsable={false} style={styles.body} onTouchStart={touch.onTouchStart}>{blocks.map(block =>
     <BotGroupMarkdownBlock key={block.key} block={block} styles={styles} diagramLabel={diagramLabel}

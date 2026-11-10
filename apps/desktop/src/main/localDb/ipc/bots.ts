@@ -1,5 +1,6 @@
 import { emitSessionCreated } from './sessionCreatedBroadcast.js';
 import type { RoutineModel } from '@cindy/maker-scheduler';
+import { isSubagentParentToolUseId } from '@cindy/maker-shared/message-render';
 import { todoAccess } from '../../maker-ipc/botTodoAccess.js';
 import { loadBotReadState, loadAcknowledgedBotReadState, readBotReadPosition } from '../../maker-ipc/botReadStateStore.js';
 import { registerBotReadStateIpc } from '../../maker-ipc/botReadStateIpc.js';
@@ -1121,6 +1122,7 @@ async function readCanonicalChatPreview(
         role: messages.role,
         content: messages.content,
         createdAt: messages.createdAt,
+        parentUuid: sql<unknown>`json_extract(${messages.agentMeta}, '$.parentUuid')`,
       })
       .from(messages)
       .where(
@@ -1140,6 +1142,9 @@ async function readCanonicalChatPreview(
       .orderBy(desc(messages.createdAt))
       .limit(CANONICAL_PREVIEW_SCAN).offset(offset);
     for (const row of rows) {
+      // Share the transcript's classifier: legacy imports also used parentUuid
+      // for ordinary message links, so field presence alone would hide replies.
+      if (typeof row.parentUuid === 'string' && isSubagentParentToolUseId(row.parentUuid)) continue;
       const preview = extractMessagePreview(row.content, row.role);
       if (preview) {
         return {
@@ -1183,7 +1188,7 @@ async function countCanonicalUnread(
   let offset = 0;
   for (;;) {
     const rows = await db
-      .select({ content: messages.content })
+      .select({ content: messages.content, parentUuid: sql<unknown>`json_extract(${messages.agentMeta}, '$.parentUuid')` })
       .from(messages)
       .where(
         and(
@@ -1200,7 +1205,8 @@ async function countCanonicalUnread(
       )
       .orderBy(desc(messages.createdAt), desc(messages.id))
       .limit(CANONICAL_UNREAD_SCAN).offset(offset);
-    count += rows.filter(row => Boolean(extractMessagePreview(row.content, 'assistant'))).length;
+    count += rows.filter(row => !(typeof row.parentUuid === 'string' && isSubagentParentToolUseId(row.parentUuid))
+      && Boolean(extractMessagePreview(row.content, 'assistant'))).length;
     if (count >= CANONICAL_UNREAD_SCAN || rows.length < CANONICAL_UNREAD_SCAN) return Math.min(count, CANONICAL_UNREAD_SCAN);
     offset += rows.length;
   }

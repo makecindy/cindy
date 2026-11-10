@@ -15,6 +15,9 @@ import { PluginSyncAccess } from './pluginSyncAccess.js';
  */
 
 import os from 'node:os';
+import type { AgentIslandSessionSnapshot } from '../../shared/agentIsland.js';
+import { createTaskActivityPublisher, projectHostTaskActivity } from './taskActivity.js';
+import { serverApiFetch, ServerApiError } from '../serverApiClient.js';
 import { tryPeerInvoke, stopFilePeers } from './filePeer';
 import { desktopDirectRuntime } from './directLink';
 import { assertBackgroundLinkAccepted, linkOpenCapabilities } from './backgroundLink';
@@ -802,6 +805,10 @@ function wsUrl(): string {
 
 /** Host integrations that consume device-link lifecycle state. */
 export interface DeviceLinkServiceOptions {
+  taskActivity?: {
+    getLocalTaskActivitySnapshots(): AgentIslandSessionSnapshot[];
+    subscribeTaskOverview(listener: () => void): () => void;
+  };
   onUpdateRelaunchBusyChanged?: (busy: boolean) => void;
   /** Host chrome follows the same controller set as CONTROLLED_STATE. */
   onControlledStateChanged?: () => void;
@@ -821,6 +828,30 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
   }
 
   const deviceNameReady = initializeDeviceName();
+  let activityEndpointUnsupported = false;
+  let lastActivityUpload: { key: string; at: number } | undefined;
+  const taskActivityPublisher = createTaskActivityPublisher(async signal => {
+    if (activityEndpointUnsupported || activeSelfHostedRelay() || isAppSessionBoundaryPending()) return;
+    const island = options.taskActivity;
+    const token = authManager.getAccessToken();
+    if (!island || !token || !authManager.getCurrentUserId()) return;
+    // Capture both the endpoint and credential: a later account/realm switch
+    // must never re-label an old host snapshot with the new account's token.
+    const baseUrl = officialDeviceLinkApiBase();
+    const body = projectHostTaskActivity(island.getLocalTaskActivitySnapshots());
+    const key = JSON.stringify([baseUrl, authManager.getCurrentUserId(), body]);
+    if (lastActivityUpload?.key === key && Date.now() - lastActivityUpload.at < 55_000) return;
+    try {
+      await serverApiFetch('/api/device-link/task-activity', { baseUrl, token, body, method: 'PUT', signal,
+        timeoutMs: 8_000, skipAutoRefresh: true, skipSessionInvalidation: true, redactErrorDetails: true,
+        expectedErrors: [{ status: 404 }, { status: 405 }] });
+      if (!signal.aborted) lastActivityUpload = { key, at: Date.now() };
+    } catch (error) {
+      if (!signal.aborted && error instanceof ServerApiError && [404, 405].includes(error.statusCode)) activityEndpointUnsupported = true;
+    }
+  });
+  const unsubscribeTaskActivity = options.taskActivity?.subscribeTaskOverview(taskActivityPublisher.changed);
+  onQuit('task-activity-push', () => { unsubscribeTaskActivity?.(); taskActivityPublisher.dispose(); });
   remoteCredentialHost.currentToken = () => {
     const membership = authManager.getCurrentUserId(), token = authManager.getAccessToken();
     return membership && token ? { realm: authManager.getActiveAuthRealm(), membership, authDevice: authManager.getDeviceId(), token } : null;
@@ -1022,6 +1053,9 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
   });
 
   client.onStatusChange((status) => {
+    activityEndpointUnsupported = false;
+    lastActivityUpload = undefined;
+    taskActivityPublisher.setOnline(status === 'online');
     if (status !== 'online') {
       stopFilePeers();
       invalidatePluginOauth();
@@ -2428,6 +2462,8 @@ export function sendMobileSessionNotify(payload: {
    * 那一行的静音标记管不到这条远端事件,不参与手机通道的免打扰判定。
    */
   muteExempt?: boolean;
+  /** Execution host for a remotely mirrored session. */
+  remoteDeviceId?: string;
 }): boolean {
   if (!client) return false;
   // 「消息免打扰」任务不推手机。放在这里而不是各调用方:代输入等旁路不经过
@@ -2455,6 +2491,7 @@ export function sendMobileSessionNotify(payload: {
       title: payload.title,
       kind: payload.kind,
       selfDeviceId,
+      ...(payload.remoteDeviceId ? { targetDeviceId: payload.remoteDeviceId } : {}),
       fallbackBody: payload.fallbackBody ?? getSessionNotificationBody(payload.kind),
       detail: payload.detail,
       imageFallback: getNotificationImageLabel(),
