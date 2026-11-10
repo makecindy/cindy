@@ -4,6 +4,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { createHash } from 'node:crypto';
 import { and, eq, isNull, sql } from 'drizzle-orm';
+import { isNetworkOrDevicePath } from '../filePathPolicy';
 import { getCurrentDbClientSnapshot } from '../localDb/client/current';
 import type { DbClient } from '../localDb/client/DbClient';
 import { messages, sessions } from '../localDb/schema';
@@ -96,7 +97,7 @@ export async function readTaskImage(
     roots === null || roots.some((root) => isPathWithin(root, target));
   // Reject Windows UNC / WebDAV / device namespaces before realpath can contact
   // a remote server. Apply to decoded paths too, independent of the host OS.
-  if (/^[\\/]{2}|^[\\/]\?\?[\\/]/.test(source))
+  if (isNetworkOrDevicePath(source))
     throw new Error('task-image: network or device path');
   const real = await fs.realpath(source);
   if (!withinRoots(real)) throw new Error('task-image: outside task');

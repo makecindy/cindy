@@ -420,6 +420,10 @@ describe("cindy_helper MCP server", () => {
           description: "负责开发",
           identity_source: "你是一个可靠的程序员伙伴。",
           welcome_message: "你好，我是程序员，以后开发工作可以直接找我。",
+          avatar: '🧑‍💻',
+          avatar_color: 'teal',
+          gender: 'female',
+          user_context_source: '用户正在学习 Agent 应用开发。',
         } } });
       expect(result.isError).not.toBe(true);
       expect(parsePayload(result)).toMatchObject({
@@ -433,7 +437,37 @@ describe("cindy_helper MCP server", () => {
         description: "负责开发",
         identitySource: "你是一个可靠的程序员伙伴。",
         welcomeMessage: "",
+        avatar: '🧑‍💻',
+        avatarColor: 'teal',
+        gender: 'female',
+        userContextSource: '用户正在学习 Agent 应用开发。',
       });
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
+  it('binds avatar changes to the current teammate and forwards the profile version', async () => {
+    const setAvatar = vi.fn(async () => ({ ok: true as const, effective: 'next-turn' as const }));
+    const server = createXdtHelperMcpServer(
+      { resolveSurface: async () => 'bot', botProfiles: { create: vi.fn(), setAvatar } },
+      { agentKind: 'pi', workingDir: '/repo', sessionId: 'bot-self',
+        getSessionContext: () => ({ agentKind: 'pi', workingDir: '/repo', sessionId: 'bot-self', sessionInstanceId: 'live-1' }) },
+    );
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: 'cindy-helper-avatar-test', version: '0.0.0' });
+    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+    try {
+      const result = await client.callTool({ name: 'call_tool', arguments: { name: 'set_teammate_avatar',
+        args: { expectedVersion: 2, avatar: 'https://example.com/me.png' } } });
+      expect(result.isError).not.toBe(true);
+      expect(setAvatar).toHaveBeenCalledWith({ callerSessionId: 'bot-self', callerSessionInstanceId: 'live-1',
+        expectedVersion: 2, avatar: 'https://example.com/me.png' });
+      const foreign = await client.callTool({ name: 'call_tool', arguments: { name: 'set_teammate_avatar',
+        args: { expectedVersion: 2, avatar: '🙂', botId: 'other' } } });
+      expect(foreign.isError).toBe(true);
+      expect(setAvatar).toHaveBeenCalledTimes(1);
     } finally {
       await client.close();
       await server.close();

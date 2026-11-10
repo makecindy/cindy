@@ -44,6 +44,11 @@ import * as fsSync from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
+/** Check decoded paths before any filesystem lookup can contact a remote share. */
+export function isNetworkOrDevicePath(value: string): boolean {
+  return /^[\\/]{2}|^[\\/]\?\?[\\/]/.test(value);
+}
+
 /** Platform-correct path helpers (default to the host so production behaves
  *  exactly like the previous global-`path` usage). */
 function pathFor(platform: NodeJS.Platform): typeof path.posix {

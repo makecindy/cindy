@@ -95,7 +95,9 @@ import {
   requestMcpSetupForSession,
   captureTaskActionPermissionRequest,
 } from '../maker-ipc/register.js';
-import { createBotProfile } from '../localDb/ipc/bots.js';
+import { createBotProfile, setBotProfileAvatar, updateBotProfile } from '../localDb/ipc/bots.js';
+import { validateBotAvatarBuffer } from '../localDb/ipc/botAvatarSelection.js';
+import { resolveTeammateAvatarInput } from './teammateAvatarInput.js';
 import { submitGithubIssueForSession } from '../github-issue/index.js';
 import {
   listWorkdirsForHistory,
@@ -137,6 +139,7 @@ import { getInputHandoffService } from '../input-handoff/service.js';
 import { isInputHandoffDisabledForSession } from '../input-handoff/botPolicy.js';
 import { readHandoffPicture } from '../input-handoff/pictureRef.js';
 import { isIpcError } from '../../shared/ipc-errors.js';
+import { throwIpcError } from '../utils/ipcValidate.js';
 import type { PluginRegistry } from '../maker-host/plugins/plugin-registry.js';
 import { BUILTIN_LIZI_MCP_IDS, pluginIdForProviderName } from '../maker-host/plugins/builtin-plugins.js';
 import { isFrozenBuiltinPluginAllowed } from './codexBuiltinToolPolicy.js';
@@ -145,7 +148,7 @@ import {
   readChatHistoryMessages,
   type ChatHistoryReaderDeps,
 } from './remoteChatHistory.js';
-import { botSessionLinks, sessions } from '../localDb/schema.js';
+import { botProfiles, botSessionLinks, sessions } from '../localDb/schema.js';
 import { createSchedulerRemoteDeps } from './schedulerDevices.js';
 import { createRemoteSessionHandoff } from './sessionHandoffRemote.js';
 import { createRemoteSessionsStatusSetter } from './sessionStatusRemote.js';
@@ -191,6 +194,8 @@ export interface DesktopMcpProvidersDeps {
     sessionId: string,
     sessionInstanceId: string | undefined,
   ) => boolean;
+  /** Current live session instance, whether local or SSH-backed. */
+  isCurrentSessionInstance?: (sessionId: string, sessionInstanceId: string) => boolean;
   /** Current live session, including sessions whose agent runs over SSH. */
   isCurrentGrokLoginCaller?: (sessionId: string, sessionInstanceId: string) => boolean;
   /** 把工具结果图片转成文字描述（视觉桥，最佳努力）。缺失 = 不处理。
@@ -499,6 +504,17 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
     await assertAccess();
     return result;
   };
+
+  const resolveTeammateAvatar = async (input: {
+    avatar: string; sessionId: string; sessionInstanceId?: string;
+    workingDir: string | null; remoteHostId: string | null; toolName: string;
+  }) => resolveTeammateAvatarInput(input, {
+    isCurrentSession: (sessionId, instanceId) => deps.isCurrentSessionInstance?.(sessionId, instanceId) === true,
+    authorizePath: (absPath) => authorizeDesktopSessionPath({
+      sessionId: input.sessionId, sessionInstanceId: input.sessionInstanceId,
+      workingDir: input.workingDir ?? '', path: absPath, toolName: input.toolName, operation: 'read',
+    }, deps.getLiveSessionGrantState),
+  });
 
   const providers = createLiziMcpProviders({
     // 先传完整内置列表；按会话启停由下面的 isEnabled 包装处理。
@@ -1344,13 +1360,14 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
         },
       },
       botProfiles: {
-        create: async ({ callerSessionId, name, description, identitySource }) => {
+        create: async ({ callerSessionId, callerSessionInstanceId, name, description, identitySource, avatar, avatarColor, gender, userContextSource }) => {
           const dbClient = tryGetDbClient();
+          const ownerScope = activeOwnerScopeKey();
           if (!dbClient) {
             return { ok: false, errorCode: 'HOST_NOT_READY', message: 'localDb not ready' };
           }
           const [owned] = await dbClient.drizzle
-            .select({ botId: botSessionLinks.botId })
+            .select({ botId: botSessionLinks.botId, workingDir: sessions.workingDir, remoteHostId: sessions.remoteHostId })
             .from(botSessionLinks)
             .innerJoin(sessions, eq(sessions.id, botSessionLinks.sessionId))
             .where(
@@ -1365,12 +1382,28 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
             return { ok: false, errorCode: 'NOT_A_BOT_SESSION', message: '当前调用未绑定伙伴主任务' };
           }
           try {
+            const resolvedAvatar = avatar === undefined ? { ok: true as const }
+              : await resolveTeammateAvatar({ avatar, sessionId: callerSessionId, sessionInstanceId: callerSessionInstanceId,
+                workingDir: owned.workingDir, remoteHostId: owned.remoteHostId, toolName: 'cindy_helper.create_teammate' });
+            if (!resolvedAvatar.ok) return resolvedAvatar;
+            const assertAvatarAccess = () => {
+              if ('isAccessCurrent' in resolvedAvatar && resolvedAvatar.isAccessCurrent?.() === false)
+                throwIpcError('PERMISSION_DENIED', '头像文件授权已变化，请重新操作');
+            };
+            if (isAppSessionBoundaryPending() || activeOwnerScopeKey() !== ownerScope || tryGetDbClient() !== dbClient)
+              return { ok: false, errorCode: 'PRECONDITION_FAILED', message: '账号已切换，请在当前账号重新创建伙伴' };
+            assertAvatarAccess();
             const profile = await createBotProfile({
               name,
               description,
               identitySource,
+              ...('avatar' in resolvedAvatar ? { avatar: resolvedAvatar.avatar } : {}),
+              ...('avatarImageBase64' in resolvedAvatar ? { avatarImageBase64: resolvedAvatar.avatarImageBase64 } : {}),
+              ...(avatarColor !== undefined ? { avatarColor } : {}),
+              ...(gender !== undefined ? { gender } : {}),
+              ...(userContextSource !== undefined ? { userContextSource } : {}),
               prepareInvitation: true,
-            });
+            }, undefined, assertAvatarAccess);
             return {
               ok: true,
               bot: { id: profile.id, name: profile.name, description: profile.description },
@@ -1378,9 +1411,60 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
           } catch (err) {
             return {
               ok: false,
-              errorCode: isIpcError(err) && err.code === 'INVALID_PARAMS' ? 'INVALID_ARGS' : 'INTERNAL',
+              errorCode: isIpcError(err) ? err.code === 'INVALID_PARAMS' ? 'INVALID_ARGS' : err.code : 'INTERNAL',
               message: err instanceof Error ? err.message : String(err),
             };
+          }
+        },
+        setAvatar: async ({ callerSessionId, callerSessionInstanceId, expectedVersion, avatar }) => {
+          const dbClient = tryGetDbClient();
+          const ownerScope = activeOwnerScopeKey();
+          if (!dbClient) return { ok: false, errorCode: 'HOST_NOT_READY', message: 'localDb not ready' };
+          const [owned] = await dbClient.drizzle.select({
+            botId: botSessionLinks.botId,
+            role: botSessionLinks.role,
+            archivedAt: botSessionLinks.archivedAt,
+            source: sessions.source,
+            sessionStatus: sessions.status,
+            workingDir: sessions.workingDir,
+            remoteHostId: sessions.remoteHostId,
+            canonicalSessionId: botProfiles.canonicalSessionId,
+            profileStatus: botProfiles.status,
+            currentAvatar: botProfiles.avatar,
+          }).from(botSessionLinks)
+            .innerJoin(sessions, eq(sessions.id, botSessionLinks.sessionId))
+            .innerJoin(botProfiles, eq(botProfiles.id, botSessionLinks.botId))
+            .where(eq(botSessionLinks.sessionId, callerSessionId)).limit(1);
+          if (!owned || owned.source !== 'bot' || owned.sessionStatus !== 'active' || owned.profileStatus !== 'active'
+            || owned.archivedAt !== null || !['canonical', 'thread', 'routine'].includes(owned.role)
+            || (owned.role === 'canonical' && owned.canonicalSessionId !== callerSessionId))
+            return { ok: false, errorCode: 'NOT_A_BOT_SESSION', message: '只有当前伙伴主任务可以修改自己的头像' };
+          const resolvedAvatar = await resolveTeammateAvatar({ avatar, sessionId: callerSessionId,
+            sessionInstanceId: callerSessionInstanceId, workingDir: owned.workingDir,
+            remoteHostId: owned.remoteHostId, toolName: 'cindy_helper.set_teammate_avatar' });
+          if (!resolvedAvatar.ok) return resolvedAvatar;
+          const assertAvatarAccess = () => {
+            if ('isAccessCurrent' in resolvedAvatar && resolvedAvatar.isAccessCurrent?.() === false)
+              throwIpcError('PERMISSION_DENIED', '头像文件授权已变化，请重新操作');
+          };
+          if (isAppSessionBoundaryPending() || activeOwnerScopeKey() !== ownerScope || tryGetDbClient() !== dbClient)
+            return { ok: false, errorCode: 'PRECONDITION_FAILED', message: '账号已切换，请在当前账号重新操作' };
+          try {
+            assertAvatarAccess();
+            if (resolvedAvatar.avatarImageBase64) {
+              const buffer = Buffer.from(resolvedAvatar.avatarImageBase64, 'base64');
+              await setBotProfileAvatar(owned.botId, {
+                buffer, mimeType: validateBotAvatarBuffer(buffer),
+              }, expectedVersion, owned.currentAvatar, assertAvatarAccess);
+            } else if (resolvedAvatar.avatar) {
+              await updateBotProfile({ id: owned.botId, avatar: resolvedAvatar.avatar }, expectedVersion);
+            } else {
+              return { ok: false, errorCode: 'INVALID_ARGS', message: '头像内容无效' };
+            }
+            return { ok: true, effective: 'next-turn' as const };
+          } catch (err) {
+            return { ok: false, errorCode: isIpcError(err) ? err.code : 'BOT_PROFILE_UPDATE_FAILED',
+              message: err instanceof Error ? err.message : '无法更新伙伴头像' };
           }
         },
       },

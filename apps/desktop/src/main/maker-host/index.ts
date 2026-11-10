@@ -1151,6 +1151,11 @@ export function getMaker(): Maker {
           && session.getStatus() === 'active'
           && !session.remoteHostId);
       },
+      isCurrentSessionInstance: (sessionId: string, sessionInstanceId: string) => {
+        const session = _maker?.getSession(sessionId);
+        return Boolean(session && session.instanceId === sessionInstanceId
+          && session.getStatus() === 'active' && !isAppSessionBoundaryPending());
+      },
       isCurrentGrokLoginCaller: (sessionId: string, sessionInstanceId: string) => {
         const session = _maker?.getSession(sessionId);
         return Boolean(session && session.instanceId === sessionInstanceId
