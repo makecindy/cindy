@@ -52,7 +52,11 @@ export const imBotSettings = defineSettings({
     sectionKey: 'settings.imBot.groups.cindy',
     descriptionKey: 'settings.remoteControl.hook.feishu.description',
     // 关联码只在关联中显示, 搜「关联码」也能找到这张卡。
-    keywordKeys: ['settings.remoteControl.hook.feishu.bindCode.label', 'settings.remoteControl.hook.feishu.bindCode.hint'],
+    keywordKeys: [
+      'settings.remoteControl.hook.feishu.bindCode.label', 'settings.remoteControl.hook.feishu.bindCode.hint',
+      'settings.remoteControl.hook.feishu.disabledHint', 'settings.remoteControl.hook.feishu.chooseBot',
+      'settings.remoteControl.hook.feishu.connectBot', 'settings.remoteControl.hook.feishu.linkAnotherAccount',
+    ],
     aliases: ['Feishu', 'Lark', '飞书', 'Feishu bot', 'Lark bot'],
   },
   cindyFeishuWorkingDevice: {
