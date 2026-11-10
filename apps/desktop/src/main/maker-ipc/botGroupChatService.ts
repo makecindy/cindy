@@ -2278,4 +2278,5 @@ export type BotGroupTaskPostResult =
 
 export type BotGroupChatService = ReturnType<typeof createBotGroupChatService> & {
   chatServer?: import('../../shared/botGroupChat.js').ChatServerApi;
+  teammateHistory?(input: import('./teammateGroupHistory.js').TeammateGroupHistoryQuery): Promise<import('./teammateGroupHistory.js').TeammateGroupHistoryResult>;
 };

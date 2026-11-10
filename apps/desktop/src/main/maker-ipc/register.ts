@@ -3322,6 +3322,10 @@ export function tryGetBotDelegationService(): BotDelegationService | null {
   return botDelegationServiceHolder;
 }
 
+export function tryGetBotGroupHistoryReader() {
+  return botGroupChatServiceHolder?.teammateHistory;
+}
+
 export function tryGetBotDirectMessageService(): BotDirectMessageService | null {
   return botDirectMessageServiceHolder;
 }
