@@ -428,6 +428,18 @@ export function SidebarTopNav({
   const { dataOwnerId } = useAuth();
   const entries = useSidebarNavigationEntries();
   const [customizing, setCustomizing] = useState(false);
+  // Customize replaces More while open; when it closes (Done or Esc), focus returns to
+  // the recreated More button so keyboard users keep their place. Only focus that fell
+  // to the body with the panel moves; focus the user already put elsewhere stays.
+  const moreTriggerRef = useRef<HTMLButtonElement>(null);
+  const wasCustomizingRef = useRef(false);
+  useEffect(() => {
+    const closed = wasCustomizingRef.current && !customizing;
+    wasCustomizingRef.current = customizing;
+    if (closed && (document.activeElement === null || document.activeElement === document.body)) {
+      moreTriggerRef.current?.focus();
+    }
+  }, [customizing]);
   const [showHiddenSearch, setShowHiddenSearch] = useState(false);
   const [searchOpenSignal, setSearchOpenSignal] = useState(0);
   const actions = useSidebarNavigationActions(() => {
@@ -556,6 +568,7 @@ export function SidebarTopNav({
       onCustomize={() => setCustomizing(true)}
       trigger={() => (
         <button
+          ref={moreTriggerRef}
           type="button"
           // Keep the row lit while the pointer is over its menu.
           className={cn(ROW_CLASS, 'data-[state=open]:bg-sidebar-item-hover')}

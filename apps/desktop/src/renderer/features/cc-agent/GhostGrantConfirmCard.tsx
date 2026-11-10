@@ -18,10 +18,11 @@ import { Button } from '@/components/ui/button';
  *   Esc            → 拒绝
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Check, Folder, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
+import { shouldCardEscapeYield } from '@/lib/editableKeyboardTarget';
 import { cn } from '@/lib/utils';
 import type { PendingGhostGrantConfirm } from '@/lib/makerChatStore';
 
@@ -49,12 +50,16 @@ export function GhostGrantConfirmCard({ pending, onRespond }: GhostGrantConfirmC
     onRespond({ confirmed: false });
   }, [onRespond]);
 
+  const cardRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
         e.preventDefault();
         handleAllow();
       } else if (e.key === 'Escape') {
+        // Esc already handled elsewhere, or meant for a menu, dialog or control outside
+        // the card (such as the sidebar Customize panel), is not a cancel.
+        if (shouldCardEscapeYield(e, cardRef.current)) return;
         e.preventDefault();
         handleDeny();
       }
@@ -94,6 +99,7 @@ export function GhostGrantConfirmCard({ pending, onRespond }: GhostGrantConfirmC
 
   return (
     <div
+      ref={cardRef}
       className={cn(
         'w-full max-w-[914px] rounded-[12px] border p-4',
         'border-[var(--chat-input-border)] bg-[var(--chat-input-bg)]',

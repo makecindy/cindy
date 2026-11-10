@@ -43,6 +43,9 @@ const LAYER_SELECTOR = [
   '[role="dialog"]',
   '[role="alertdialog"]',
   '[data-radix-popper-content-wrapper]',
+  // MorphPopover 面板（输入框的 + / 权限菜单、模型选择器）：role="group"，在 document
+  // capture 里自己用 Esc 收起，且不 preventDefault。
+  '[data-morph-side]',
 ].join(',');
 
 /**
@@ -78,4 +81,18 @@ export function shouldCardShortcutYield(
   if (!insideOwner && target.closest(LAYER_SELECTOR)) return true;
   if (!target.closest(INTERACTIVE_SELECTOR)) return false;
   return !insideOwner || kind === 'activate';
+}
+
+/**
+ * Esc 的让位判据，给「卡片自己的输入框里 Esc 也表示取消」的确认卡片用（提交 Issue、
+ * 批量重命名任务、插件授权）。与 shouldCardShortcutYield 的区别只在卡片内部：焦点在卡片
+ * 自己的输入框或勾选框里时 Esc 仍归卡片。卡片外的判定完全一致：焦点在别处的可编辑控件、
+ * 控件或菜单 / 弹层 / 对话框（如侧栏「自定义」面板）里时让位。已被处理、输入法组字中的
+ * 按键一律让位。
+ */
+export function shouldCardEscapeYield(event: KeyboardEvent, owner: Element | null): boolean {
+  if (event.defaultPrevented || event.isComposing) return true;
+  const target = event.target;
+  if (target instanceof Node && owner?.contains(target)) return false;
+  return shouldCardShortcutYield(event, 'dismiss', owner);
 }
