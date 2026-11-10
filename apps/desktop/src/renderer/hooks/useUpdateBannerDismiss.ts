@@ -30,6 +30,8 @@ export type UpdateBannerDismissReason = 'user' | 'busy';
 
 interface DismissState {
   revealRequested: boolean;
+  /** 每次手动检查递增；让同一请求只绑定一次，用户随后关闭不会被重新弹出。 */
+  revealSeq: number;
   dismissed: boolean;
   reason: UpdateBannerDismissReason | null;
   dismissedStatus: string | null;
@@ -46,6 +48,7 @@ export function updateBannerDecisionVersion(version: string | null): string {
 
 const INITIAL_STATE: DismissState = {
   revealRequested: false,
+  revealSeq: 0,
   dismissed: false,
   reason: null,
   dismissedStatus: null,
@@ -160,15 +163,21 @@ export function restoreUpdateBanner(opts?: { pin?: boolean }) {
 
 /** 手动检查发现更新：即使下载未完成或横幅尚未挂载，也记住这次展示意图。 */
 export function requestUpdateBannerReveal() {
-  state = { ...state, revealRequested: true };
+  state = { ...state, revealRequested: true, revealSeq: state.revealSeq + 1 };
   emit();
 }
 
-/** 就绪后绑定实际版本，避免沿用上次关闭的版本或被忙碌探针再次隐藏。 */
-export function revealRequestedUpdateBanner(version: string | null) {
+/**
+ * 绑定展示请求到实际版本，避免沿用上次关闭的版本或被忙碌探针再次隐藏。
+ * superseding 携带的还是旧补丁版本，新版尚未就绪：先钉住让提醒可见，但保留请求，
+ * 等新版 ready 时再绑定新版本；只有 ready 才消费请求。
+ */
+export function revealRequestedUpdateBanner(version: string | null, consume: boolean) {
   if (!state.revealRequested) return;
   state = {
     ...INITIAL_STATE,
+    revealSeq: state.revealSeq,
+    revealRequested: !consume,
     decidedVersion: updateBannerDecisionVersion(version),
     pinnedByUser: true,
   };
@@ -216,6 +225,7 @@ export function useUpdateBannerDismiss() {
   return {
     dismissed: snap.dismissed,
     revealRequested: snap.revealRequested,
+    revealSeq: snap.revealSeq,
     reason: snap.reason,
     dismiss: dismissUpdateBanner,
     restore: restoreUpdateBanner,

@@ -48,6 +48,7 @@ export function useDeferUpdateBannerWhileBusy(
   const dismissApi = useUpdateBannerDismiss();
   const apiRef = useRef(dismissApi);
   apiRef.current = dismissApi;
+  const revealBoundRef = useRef<string | null>(null);
 
   const versionOrNull = version ?? null;
   const hideUntilDecided =
@@ -58,8 +59,15 @@ export function useDeferUpdateBannerWhileBusy(
   useEffect(() => {
     if (!isActiveUpdateStatus(status)) return;
 
-    if (getUpdateBannerDismissState().revealRequested) {
-      revealRequestedUpdateBanner(versionOrNull);
+    const requested = getUpdateBannerDismissState();
+    if (requested.revealRequested) {
+      // superseding 不消费请求，用 seq+状态+版本去重：同一请求只展开一次，
+      // 之后用户关闭时依赖变化不会把它重新弹出。
+      const key = `${requested.revealSeq}:${status}:${versionOrNull}`;
+      if (revealBoundRef.current !== key) {
+        revealBoundRef.current = key;
+        revealRequestedUpdateBanner(versionOrNull, status === 'ready');
+      }
       return;
     }
 

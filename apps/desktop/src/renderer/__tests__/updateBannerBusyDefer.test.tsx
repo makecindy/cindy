@@ -19,6 +19,7 @@ import {
   deferUpdateBannerBecauseBusy,
   dismissUpdateBanner,
   getUpdateBannerDismissState,
+  isUpdateBannerPinnedFor,
   markUpdateBannerAutoShown,
   resetUpdateBannerDismissStoreForTests,
   restoreUpdateBanner,
@@ -360,5 +361,21 @@ describe('manual update check reveals banner', () => {
     expect(relaunchToUpdate).not.toHaveBeenCalled();
     act(() => dismissUpdateBanner('ready', '1.2.3'));
     expect(screen.queryByRole('button', { name: EXPANDED })).toBeNull();
+  });
+  // 评审回归：superseding 期间手动检查（主进程回 downloading），旧补丁版本不能吞掉请求；
+  // 新版 ready 且任务忙碌时仍要展开，且之后用户关闭不会被重新弹出。
+  it('keeps the request through superseding and reveals the new version while busy', async () => {
+    anyActivityBlockingRelaunch.mockResolvedValue(true);
+    updateStatus.current = { status: 'superseding', version: '1.2.3', errorCode: null };
+    window.electronAPI.checkForUpdate = vi.fn().mockResolvedValue({ result: 'downloading' });
+    const { rerender } = render(<UpdateBanner isCollapsed={false} />);
+    await act(async () => { await checkForUpdateWithToast((key) => key); });
+    expect(getUpdateBannerDismissState().revealRequested).toBe(true);
+
+    updateStatus.current = { status: 'ready', version: '1.2.4', errorCode: null };
+    rerender(<UpdateBanner isCollapsed={false} />);
+    expect(await screen.findByRole('button', { name: EXPANDED })).toBeTruthy();
+    expect(getUpdateBannerDismissState().revealRequested).toBe(false);
+    expect(isUpdateBannerPinnedFor('1.2.4')).toBe(true);
   });
 });
