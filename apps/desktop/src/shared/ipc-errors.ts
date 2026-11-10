@@ -145,6 +145,7 @@ export type IpcErrorCode =
   // 供应商凭证 mutation 窗口(稍后重试)/ 远端不可表达(换来源)/ 订阅未连接(连接 Claude.ai)。
   | 'REMOTE_PROVIDER_UPDATING'
   | 'REMOTE_PROVIDER_UNSUPPORTED'
+  | 'REMOTE_CODEX_SOURCE_UNSUPPORTED'
   | 'REMOTE_NATIVE_OAUTH_UNAVAILABLE'
   // 工作区 .claude 设置会改写 Claude 订阅会话的上游 / 鉴权 / TLS 信任(workspace-settings-guard),
   // 拒绝启动订阅会话。
@@ -415,6 +416,7 @@ const IPC_ERROR_CODES: ReadonlySet<IpcErrorCode> = new Set<IpcErrorCode>([
   'PI_CATALOG_RELOAD_UNCONFIRMED',
   'REMOTE_PROVIDER_UPDATING',
   'REMOTE_PROVIDER_UNSUPPORTED',
+  'REMOTE_CODEX_SOURCE_UNSUPPORTED',
   'REMOTE_NATIVE_OAUTH_UNAVAILABLE',
   'CLAUDE_SUBSCRIPTION_WORKSPACE_OVERRIDE',
   'REMOTE_GATEWAY_ENDPOINT_UNAVAILABLE',

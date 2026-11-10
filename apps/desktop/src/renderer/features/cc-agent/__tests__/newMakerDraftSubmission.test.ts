@@ -24,6 +24,7 @@ import { createIpcError } from '../../../../shared/ipc-errors';
 import { dbToMakerAgentKind } from '../../../../shared/agentKindConversion';
 import { askPluginModelRoute, writePluginModelRouteNote } from '../pluginModelRoute';
 import type { GhostStartTaskRouteResult } from '../../../../shared/ghost';
+import { sshModel, sshNativeCodexProvider } from './sshModelFixtures';
 
 vi.mock('@/lib/makerTransport', () => ({ makerApiFor: vi.fn() }));
 vi.mock('@/features/device-link/remoteProjectsStore', () => ({ getSessionDeviceId: vi.fn() }));
@@ -579,6 +580,18 @@ describe('homepage submission to Main admission and first-message handoff', () =
     expect(result.errors).toEqual([]);
     expect(result.sendMessage.mock.calls[0][3]).toBe('medium');
     expect(result.ipcCreate.mock.calls[0][0].remoteHostId).toBe('fixture-host');
+  });
+  it('blocks a late non-native Codex route before creating an SSH task', async () => {
+    const result = await submit({
+      agentKind: 'codex', remoteHostId: 'fixture-host',
+      providers: [sshNativeCodexProvider([sshModel('remote-model')])],
+      model: 'remote-model', providerId: 'openai',
+      pluginRoute: async () => ({ outcome: 'routed', reason: 'fixture', route: {
+        agentKind: 'codex', model: 'remote-model', providerId: 'xd',
+      } }),
+    });
+    expect(result.createSession).not.toHaveBeenCalled();
+    expect(result.toastError).toHaveBeenCalledWith('settings.remote.startSession.unsupportedCodexSource');
   });
   it('does not use local metadata for an Agent running on another computer', async () => {
     const result = await submit({ agentDeviceId: 'other-computer', backendProviders: [provider(providerId, ['medium'])] });

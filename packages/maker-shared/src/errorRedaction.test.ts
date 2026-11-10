@@ -11,6 +11,7 @@ import {
   redactSensitiveText,
   redactSensitiveTextDeep,
   parseAgentErrorCode,
+  requiresAgentErrorConfigurationChange,
 } from './errorRedaction.js';
 
 describe('explicit Codex history recovery offer', () => {
@@ -356,6 +357,11 @@ describe('isGatewayProxyTokenInvalidError', () => {
 
 
 describe('agent error envelopes shared by desktop and mobile', () => {
+  it('does not offer retry for an unsupported SSH Codex source', () => {
+    expect(requiresAgentErrorConfigurationChange(
+      'LAZY_CREATE_FAILED: [REMOTE_CODEX_SOURCE_UNSUPPORTED] select the native connection',
+    )).toBe(true);
+  });
   it.each(['REMOTE_LOCAL_ONLY_PROVIDER', 'DEVICE_LINK_MEDIA_TRANSFER_FAILED', 'DEVICE_LINK_MEDIA_ACCESS_DENIED', 'DEVICE_LINK_BUSY', 'MCP_APPROVAL_CONFIRMATION_TIMEOUT', 'AUTO_REVIEW_UNAVAILABLE', 'SSH_HARNESS_SWITCH_UNSUPPORTED', 'MODEL_SELECTION_UNAVAILABLE', 'HARNESS_SWITCH_NOT_READY'])(
     'parses %s directly and inside an IPC error', code => {
       for (const prefix of ['', '[IPC_ERROR] ', "Error invoking remote method 'maker:send': Error: ", 'LAZY_CREATE_FAILED: ']) {

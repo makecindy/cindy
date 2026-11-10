@@ -33,7 +33,7 @@ export async function readSshCodexModelList(
 
 export function assertSshCodexModel(providers: ProviderView[], model: string, providerId?: string | null) {
   if (providerId && providerId !== 'openai') {
-    throwIpcError('INVALID_PARAMS', 'SSH Codex uses the remote native connection');
+    throwIpcError('REMOTE_CODEX_SOURCE_UNSUPPORTED', 'SSH Codex uses the remote native connection');
   }
   const descriptor = providers[0]?.models.codex?.find((item) => item.id === model);
   if (!descriptor) throwIpcError('INVALID_PARAMS', 'Model is unavailable on this SSH host; choose a remote Codex model');
