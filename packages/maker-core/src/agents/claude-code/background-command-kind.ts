@@ -20,7 +20,22 @@ const WRAPPER_HEADS = new Set(['sudo', 'nohup', 'time', 'exec', 'env', 'command'
 const SHELL_HEADS = new Set(['bash', 'sh', 'zsh']);
 /** 跑脚本名的入口：脚本名（按 `:` 分段）命中长驻词即服务。 */
 const SCRIPT_RUNNER_HEADS = new Set(['npm', 'pnpm', 'yarn', 'bun', 'turbo', 'nx', 'lerna', 'make', 'just']);
-const SCRIPT_RUNNER_EXEC_ARGS = new Set(['exec', 'dlx', 'x']);
+/** 包管理器的「执行外部程序」子命令：后面跟的是真实命令，递归判断。 */
+const SCRIPT_RUNNER_EXEC_SUBCOMMANDS = new Set(['exec', 'dlx', 'x']);
+/** 「运行脚本」子命令：脚本名在它后面。 */
+const SCRIPT_RUN_SUBCOMMANDS = new Set(['run', 'run-script']);
+/** 安装、发布等不执行项目脚本的子命令：选项值（`--include dev`）不是脚本名。 */
+const PACKAGE_ADMIN_SUBCOMMANDS = new Set([
+  'install', 'i', 'ci', 'add', 'remove', 'rm', 'uninstall', 'update', 'up', 'upgrade', 'link',
+  'unlink', 'publish', 'pack', 'init', 'create', 'audit', 'outdated', 'list', 'ls', 'why',
+  'config', 'cache', 'store', 'prune', 'dedupe', 'rebuild', 'login', 'logout', 'whoami', 'view',
+  'info', 'search', 'help', 'version', 'fetch', 'import', 'patch', 'approve-builds',
+]);
+/** 后面跟一个取值的选项（`--filter desktop`）：取值不是子命令也不是脚本名。 */
+const VALUE_OPTIONS = new Set([
+  '--filter', '-f', '--prefix', '--cwd', '--dir', '-c', '--workspace', '--include', '--omit',
+  '--registry', '--loglevel', '--reporter', '--config', '--userconfig', '--cache', '--tag',
+]);
 const LONG_LIVED_SCRIPT_WORDS = new Set(['dev', 'start', 'serve', 'watch', 'preview', 'storybook']);
 
 /** 启动即长驻的程序。 */
@@ -153,15 +168,22 @@ function isLongLivedSegment(rawTokens: string[], depth: number): boolean {
   }
 
   if (SCRIPT_RUNNER_HEADS.has(head)) {
-    const execIndex = tokens.findIndex(
-      (token, index) => index > 0 && SCRIPT_RUNNER_EXEC_ARGS.has(token.toLowerCase()),
-    );
-    if (execIndex > 0 && depth < MAX_SHELL_DEPTH) {
-      let rest = tokens.slice(execIndex + 1);
+    const parsed = parsePackageRunnerCommand(tokens);
+    if (!parsed) return false;
+    if (SCRIPT_RUNNER_EXEC_SUBCOMMANDS.has(parsed.subcommand)) {
+      if (depth >= MAX_SHELL_DEPTH) return false;
+      let rest = tokens.slice(parsed.subcommandIndex + 1);
       while (rest[0]?.startsWith('-')) rest = rest.slice(1);
       return isLongLivedSegment(rest, depth + 1);
     }
-    return positional.some(isLongLivedScriptName);
+    if (PACKAGE_ADMIN_SUBCOMMANDS.has(parsed.subcommand)) return false;
+    // `yarn workspace web dev`：子命令后先跟工作区名，脚本名在其后。
+    const scriptName = SCRIPT_RUN_SUBCOMMANDS.has(parsed.subcommand)
+      ? parsed.positionals[1]
+      : parsed.subcommand === 'workspace'
+        ? parsed.positionals[2]
+        : parsed.subcommand;
+    return scriptName !== undefined && isLongLivedScriptName(scriptName);
   }
 
   if (SERVICE_HEADS.has(head)) return true;
@@ -208,6 +230,30 @@ function isWatchFlag(arg: string): boolean {
 function isLongLivedScriptName(name: string): boolean {
   const parts = name.split(':');
   return LONG_LIVED_SCRIPT_WORDS.has(parts[0]!) || parts.includes('watch');
+}
+
+/**
+ * 拆包管理器命令（`pnpm --filter desktop test`）：跳过选项和它们的取值，第一个位置参数是子命令，
+ * 其后的位置参数按子命令的含义解读。选项取值（`--include dev`、`--filter dev`）因此不会被当成
+ * 脚本名。`--` 之后原样交给脚本，不再解析。
+ */
+function parsePackageRunnerCommand(
+  tokens: readonly string[],
+): { subcommand: string; subcommandIndex: number; positionals: string[] } | null {
+  const positionals: string[] = [];
+  let subcommandIndex = -1;
+  for (let i = 1; i < tokens.length; i += 1) {
+    const token = unquote(tokens[i]!).toLowerCase();
+    if (token === '--') break;
+    if (token.startsWith('-')) {
+      if (!token.includes('=') && VALUE_OPTIONS.has(token)) i += 1;
+      continue;
+    }
+    if (subcommandIndex < 0) subcommandIndex = i;
+    positionals.push(token);
+  }
+  const subcommand = positionals[0];
+  return subcommand === undefined ? null : { subcommand, subcommandIndex, positionals };
 }
 
 function programName(token: string): string {
