@@ -21,6 +21,7 @@ import { useTranslation } from 'react-i18next';
 import type { ProviderView } from '@cindy/model-providers';
 
 import { Button } from '@/components/ui/button';
+import { SETTINGS_PAGE_TITLE_CLASS, SettingsCard, SettingsSection } from '@/components/ui/settings-rows';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { useDeviceLinkDeviceList } from '@/features/device-link/useDeviceLinkDeviceList';
 import { useDeviceProviders } from '@/hooks/useDeviceProviders';
@@ -366,7 +367,7 @@ export function ProviderShareManagePage({
         >
           {providerIcon}
         </div>
-        <h2 className="min-w-0 flex-1 text-16 font-medium leading-[1.3] text-[var(--settings-section-title)]">
+        <h2 className={`min-w-0 flex-1 ${SETTINGS_PAGE_TITLE_CLASS}`}>
           {t('providerGroup.page.title', { provider: providerName })}
         </h2>
         <Button variant="cta" size="md" disabled={!canCreateLink} onClick={() => setLinkOpen(true)}>
@@ -396,11 +397,15 @@ export function ProviderShareManagePage({
       )}
 
       {(requests.length > 0 || reshares.length > 0) && (
-        <section className="mt-6 shrink-0" aria-labelledby="provider-share-pending-title">
-          <h3 id="provider-share-pending-title" className="mb-2 text-13 font-medium text-[var(--settings-section-title)]">
-            {t('providerShare.manage.pending.title')}
-          </h3>
-          <div className="overflow-hidden rounded-xl border border-[var(--settings-theme-card-border)] bg-[var(--settings-theme-card-bg)]">
+        <SettingsSection
+          className="mt-6 shrink-0"
+          aria-labelledby="provider-share-pending-title"
+          headingLevel={3}
+          titleId="provider-share-pending-title"
+          title={t('providerShare.manage.pending.title')}
+        >
+          {/* 待处理的申请是带头像和操作的条目列表，行结构不套设置行。 */}
+          <SettingsCard>
             {requests.map((item, index) => (
               <div
                 key={item.request.requestId}
@@ -504,8 +509,8 @@ export function ProviderShareManagePage({
                 </div>
               </div>
             ))}
-          </div>
-        </section>
+          </SettingsCard>
+        </SettingsSection>
       )}
 
       {providerForApproval?.subscriptionFastPolicy && <SubscriptionFastSetting provider={providerForApproval} deviceId={deviceId} />}

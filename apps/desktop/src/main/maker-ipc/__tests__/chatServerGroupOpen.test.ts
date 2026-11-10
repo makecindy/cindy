@@ -423,7 +423,7 @@ describe('Chat Server group open latency (simulated 100ms per request)', () => {
       return response(route);
     });
     await timed(() => service.getGroup(rooms[0]));
-    const result = await timed(() => action === 'main'
+    const result = await timed(async () => action === 'main'
       ? service.chatServer!.manage({ groupId: rooms[0], action: { type: 'read', messageId: root.id } })
       : action === 'thread' ? service.chatServer!.thread({ groupId: rooms[0], rootId: root.id, markRead: true })
         : service.chatServer!.followThread({ groupId: rooms[0], rootId: root.id, following: true }));

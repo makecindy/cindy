@@ -242,19 +242,19 @@ describe('durable chat history', () => {
     f.api.mockImplementation(async route => route.endsWith('/snapshot')
       ? { room: { id: 'room' }, cursor: '10', messages: [], reads: [] } : original(route));
     const cache = f.open(); await cache.snapshot('room'); f.api.mockClear();
-    expect(await cache.readState('room', { threadRootId: 'root', readSeq: '5', following: false, muted: false }, true)).toBe(true);
+    expect(await cache.readState('room', { threadRootId: null, readSeq: '5', following: false, muted: false, notificationScope: null }, true)).toBe(true);
     const writes = vi.mocked(f.store.write).mock.calls.length;
     expect(await cache.readState('room', [
-      { threadRootId: 'root', readSeq: '6', following: false, muted: true },
-      { threadRootId: 'root', readSeq: '7', following: true, muted: true },
+      { threadRootId: null, readSeq: '6', following: false, muted: true, notificationScope: 'all' },
+      { threadRootId: null, readSeq: '7', following: true, muted: true, notificationScope: 'mentions' },
     ])).toBe(true);
     expect(vi.mocked(f.store.write).mock.calls.length - writes).toBe(1);
-    expect(await cache.readState('room', { threadRootId: 'root', readSeq: '6', following: false, muted: false }, true)).toBe(true);
-    expect(await cache.snapshot('room')).toMatchObject({ reads: [{ thread_key: 'root', read_seq: '7', following: true, muted: true }] });
+    expect(await cache.readState('room', { threadRootId: null, readSeq: '6', following: false, muted: false, notificationScope: null }, true)).toBe(true);
+    expect(await cache.snapshot('room')).toMatchObject({ reads: [{ thread_key: 'main', read_seq: '7', following: true, muted: true, notification_scope: 'mentions' }] });
     expect(f.api).not.toHaveBeenCalled();
     expect(await cache.readState('room', { threadRootId: 'root', readSeq: 'not-a-sequence' })).toBe(false);
     f.api.mockClear(); f.setBatch({ cursor: '10', changes: [] });
-    expect(await f.open().snapshot('room')).toMatchObject({ reads: [{ read_seq: '7', following: true }] });
+    expect(await f.open().snapshot('room')).toMatchObject({ reads: [{ read_seq: '7', following: true, notification_scope: 'mentions' }] });
     expect(f.api.mock.calls.map(([route]) => route)).toEqual(['/changes?scope=conversation:room&after=10&limit=100']);
   });
 

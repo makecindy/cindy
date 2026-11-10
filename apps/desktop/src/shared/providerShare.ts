@@ -14,7 +14,7 @@ import type {
   ProviderShareRequestState,
 } from '@cindy/device-link';
 import type { DataOwnerPushStamp } from './dataOwnerPush';
-import type { ProviderShareInsights, ProviderShareQuotaAccount, ProviderShareVisibility } from './providerShareInsights';
+import type { ProviderShareInsights, ProviderShareQuotaAccountResult, ProviderShareVisibility } from './providerShareInsights';
 
 /** 本机收藏清理依据。未加载、断线和账号切换的空列表不能用于撤权清理。 */
 export interface ProviderShareReceivedSnapshot {
@@ -22,6 +22,25 @@ export interface ProviderShareReceivedSnapshot {
   /** 仅这些区域的名单完整，可据此清理已撤权收藏；其它区域不受影响。 */
   confirmedRegions: readonly ProviderShareReceived['owner']['region'][];
   received: readonly ProviderShareReceived[];
+  /** false = 分享运行时已停止/账号边界；empty + false 是权威清空，不是暂时投影。 */
+  active?: boolean;
+  /** Per-region remaining display budget measured by Main's wall and monotonic clocks. */
+  regionBudget?: Partial<Record<ProviderShareReceived['owner']['region'], ProviderShareRegionBudget>>;
+}
+
+/**
+ * Main -> renderer only. id identifies the authoritative list request that
+ * produced this window, so repeated reads cannot restart it. remainingMs is
+ * calculated from both clocks in Main; generatedAt lets the IPC hop subtract
+ * the time spent crossing processes. This is a display-trust window, never an
+ * authorization or offline grant.
+ */
+export interface ProviderShareRegionBudget {
+  id: string;
+  /** Monotonic confirmation order assigned by Main; never a wall-clock comparison. */
+  order?: number;
+  remainingMs: number;
+  generatedAt: number;
 }
 
 /** 本机收藏作为重启后的查询线索，不作为授权或撤权依据。 */
@@ -241,7 +260,7 @@ export interface ProviderShareCommandResult {
   'set-model-access': RemoteModelAccessView;
   'get-visibility': ProviderShareVisibility;
   'set-visibility': ProviderShareVisibility;
-  'quota-account': ProviderShareQuotaAccount;
+  'quota-account': ProviderShareQuotaAccountResult;
   insights: ProviderShareInsights;
   'get-run-limits': RemoteAgentLimitsView;
   'set-run-limits': RemoteAgentLimitsView;

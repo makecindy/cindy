@@ -343,6 +343,18 @@ test("client CI keeps the complete sharded unit gate on Windows", () => {
 	assert.doesNotMatch(runnerChecks, /^    strategy:/m);
 	assert.equal([...runnerChecks.matchAll(/^        run: pnpm test:runner$/gm)].length, 1);
 	assert.match(runnerChecks, /botCanonicalSession\.test\.ts/);
+	// Database safety gate: Linux skips the bundled sqlite-vec replay. Keep the
+	// conditional real-upgrade job on a supported runner behind the required check.
+	assert.match(runnerChecks, /^          lfs: true$/m);
+	assert.match(runnerChecks, /^          fetch-depth: 0$/m);
+	assert.match(runnerChecks, /^        id: database-changes\n        run: node scripts\/ci-database-tests\.mjs detect$/m);
+	assert.match(runnerChecks, /^        if: steps\.database-changes\.outputs\.required == 'true'\n        run: node scripts\/ci-database-tests\.mjs run$/m);
+	assert.doesNotMatch(runnerChecks, /continue-on-error:/);
+	const events = workflow.slice(workflow.indexOf('\non:'), workflow.indexOf('\npermissions:'));
+	for (const event of ['pull_request', 'merge_group', 'push', 'workflow_dispatch']) {
+		assert.match(events, new RegExp(`^  ${event}:`, 'm'));
+	}
+	assert.doesNotMatch(events, /paths(?:-ignore)?:/);
 
 	const gate = workflowJob(workflow, "windows-unit");
 	assert.ok(gate, "client CI must preserve the stable Windows unit check");
@@ -387,8 +399,16 @@ test("client CI runs Linux checks and complete unit shards in parallel behind st
 	assert.match(gate, /^    if: \$\{\{ always\(\) \}\}$/m);
 	assert.match(gate, /^      - verify-checks$/m);
 	assert.match(gate, /^      - linux-unit-shards$/m);
+	assert.match(gate, /^      - host-regressions$/m);
 	assert.match(gate, /^          VERIFY_CHECKS_RESULT: \$\{\{ needs\.verify-checks\.result \}\}$/m);
 	assert.match(gate, /^          LINUX_UNIT_SHARDS_RESULT: \$\{\{ needs\.linux-unit-shards\.result \}\}$/m);
 	assert.match(gate, /^          test "\$VERIFY_CHECKS_RESULT" = "success"$/m);
 	assert.match(gate, /^          test "\$LINUX_UNIT_SHARDS_RESULT" = "success"$/m);
+	assert.match(gate, /^          HOST_REGRESSIONS_RESULT: \$\{\{ needs\.host-regressions\.result \}\}$/m);
+	assert.match(gate, /^      - host-changes$/m);
+	assert.match(gate, /^          test "\$HOST_CHANGES_RESULT" = "success"$/m);
+	assert.match(gate, /true:success\|false:skipped/);
+	const host = workflowJob(workflow, "host-regressions");
+	assert.match(host, /^    needs: host-changes$/m);
+	assert.match(host, /^    if: needs\.host-changes\.outputs\.required == 'true'$/m);
 });

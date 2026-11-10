@@ -18,3 +18,17 @@ export function hasAdditionalSentence(
     sentenceCount(current) > sentenceCount(previous)
   );
 }
+
+/**
+ * Refinement requests a managed voice-server session accepts when the server
+ * does not report its limit: servers from before pause-time refinement allow
+ * one attempt plus one client fallback retry.
+ */
+export const LEGACY_MANAGED_REFINE_REQUEST_LIMIT = 2;
+
+/** Reads `refiner.maxRefineRequests` from a voice-server session response. */
+export function resolveManagedRefineRequestLimit(value: unknown): number {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 1
+    ? value
+    : LEGACY_MANAGED_REFINE_REQUEST_LIMIT;
+}

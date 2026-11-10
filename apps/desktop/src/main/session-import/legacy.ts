@@ -11,6 +11,7 @@
  * 补齐只做这一次，之后同样按「只导入、不同步」处理。
  */
 
+import { recordPrRefsForImportedMessages } from '../git-context/prRefsStore.js';
 import { getCurrentDbClientUserId, getDbClient } from '../localDb/client/current.js';
 import { createLogger } from '../logger.js';
 import { resolveSourceSessions } from './scan.js';
@@ -80,6 +81,7 @@ async function adoptOne(row: LegacyRow): Promise<void> {
       await sink.push(message);
     }
     await sink.flush();
+    void recordPrRefsForImportedMessages(row.id).catch(() => undefined);
   }
   if (source === 'claude' && nativeSessionId && !continued && nativeSessionId !== row.sdkSessionId) {
     await runImportTx({ action: 'commit', sessionId: row.id, now: Date.now(), status: 'ready', issue: null, unhide: false, sessionPatch: { sdkSessionId: nativeSessionId } });

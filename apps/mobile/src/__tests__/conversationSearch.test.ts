@@ -104,6 +104,64 @@ const studio: ConversationSearchDeviceOrigin = {
 };
 
 describe('searchConversationsAcrossDevices', () => {
+  // Test value (unit): the production fan-out must publish completed devices while
+  // another device is pending. Existing tests await only the final page and miss
+  // the all-devices barrier. Two deferred hosts, overlapping IDs, a result limit,
+  // and both reply orders expose premature completion or arrival-dependent merging.
+  // Standalone Vitest runtime: 1.49s (2026-11-04).
+  it.each(['dev-a', 'dev-b'])('publishes %s first and merges late results with stable deduplication', async (firstDevice) => {
+    const replies = new Map<string, (page: ConversationSearchResponse) => void>();
+    const progress: ConversationSearchResponse[] = [];
+    let firstProgress!: () => void;
+    const firstPublished = new Promise<void>((resolve) => { firstProgress = resolve; });
+    let settled = false;
+    const pending = searchConversationsAcrossDevices([
+      studio, { deviceId: 'dev-b', deviceName: 'Laptop', reachable: true },
+    ], { query: 'needle', limit: 2 }, {
+      invoke: vi.fn((deviceId: string) => new Promise<ConversationSearchResponse>((resolve) => {
+        replies.set(deviceId, resolve);
+      })) as ConversationSearchInvoke,
+      getCachedSessions: () => [],
+      onProgress: (page) => { progress.push(page); firstProgress(); },
+    }).then((page) => { settled = true; return page; });
+    const response = indexedPage(['overlap', 'overlap', 'lower']);
+    replies.get(firstDevice)!(response);
+    await firstPublished;
+    expect(settled).toBe(false);
+    expect(progress[0].results.map((item) => `${item.session.deviceLinkDeviceId}:${item.session.id}`))
+      .toEqual([`${firstDevice}:overlap`, `${firstDevice}:lower`]);
+    replies.get(firstDevice === 'dev-a' ? 'dev-b' : 'dev-a')!(response);
+    const final = await pending;
+    expect(final.results.map((item) => `${item.session.deviceLinkDeviceId}:${item.session.id}`))
+      .toEqual(['dev-a:overlap', 'dev-b:overlap']);
+    expect(progress.at(-1)).toEqual(final);
+  });
+
+  // A failed slow host must add its filtered cache without retracting an earlier
+  // offline result. The old final-only tests do not observe this intermediate page.
+  it('publishes offline cache immediately and merges filtered error fallback later', async () => {
+    let rejectSlow!: (error: Error) => void;
+    let firstProgress!: (page: ConversationSearchResponse) => void;
+    const firstPublished = new Promise<ConversationSearchResponse>((resolve) => { firstProgress = resolve; });
+    const invoke = vi.fn(() => new Promise<ConversationSearchResponse>((_resolve, reject) => { rejectSlow = reject; }));
+    const pending = searchConversationsAcrossDevices([
+      { ...studio, reachable: false }, { deviceId: 'dev-b', deviceName: 'Laptop', reachable: true },
+    ], { query: 'needle', filters: { status: 'active', workingDirs: ['/repo'] } }, {
+      invoke: invoke as ConversationSearchInvoke,
+      getCachedSessions: () => [
+        session({ id: 'offline', title: 'Needle' }),
+        session({ id: 'failed', title: 'Needle', deviceLinkDeviceId: 'dev-b' }),
+        session({ id: 'archived', title: 'Needle', deviceLinkDeviceId: 'dev-b', status: 'archived' }),
+        session({ id: 'outside', title: 'Needle', deviceLinkDeviceId: 'dev-b', workingDir: '/elsewhere' }),
+      ],
+      onProgress: firstProgress,
+    });
+    expect((await firstPublished).results.map((item) => item.session.id)).toEqual(['offline']);
+    expect(invoke).toHaveBeenCalledTimes(1);
+    rejectSlow(new Error('[TIMEOUT] slow host'));
+    expect((await pending).results.map((item) => item.session.id)).toEqual(['offline', 'failed']);
+  });
+
   // #7026: the alias fallback could outrank an indexed body hit and erase its
   // message client id. Existing alias coverage had no overlapping body result.
   // Unit: one host body hit below 1,000,000 plus a cached alias hit is sufficient;
@@ -478,7 +536,7 @@ describe('helpers', () => {
 
   it('keeps an empty indexed search visible so filters are not silently dropped', () => {
     expect(shouldReplaceListWithSearchResults('pi', 'ready')).toBe(true);
-    expect(shouldReplaceListWithSearchResults('pi', 'searching')).toBe(false);
+    expect(shouldReplaceListWithSearchResults('pi', 'searching')).toBe(true);
     expect(shouldReplaceListWithSearchResults('', 'ready')).toBe(false);
   });
 

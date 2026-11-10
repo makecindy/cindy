@@ -78,8 +78,16 @@ describe('GitHub recovery host wiring', () => {
     }));
   });
 
-  it.each(['untrusted', 'unknown-contract', 'owner-boundary'])('does not read credentials for %s', async (reason) => {
-    if (reason === 'untrusted') h.ghost!.trust = undefined;
+  it('uses an approved local plugin with a different id and no official trust', async () => {
+    h.ghost!.manifest.id = 'github-helper';
+    h.ghost!.namespace = 'local';
+    h.ghost!.dir = '/tmp/_ns/local/github-helper';
+    h.ghost!.trust = undefined;
+    expect(await resolveGithubAuthRecovery(request)).toContain('"ghost_id":"github-helper","namespace":"local"');
+  });
+
+  it.each(['unapproved', 'unknown-contract', 'owner-boundary'])('does not read credentials for %s', async (reason) => {
+    if (reason === 'unapproved') h.ghost!.approval = { state: 'legacy-unapproved' };
     if (reason === 'unknown-contract') h.ghost!.manifest.network = undefined;
     if (reason === 'owner-boundary') h.boundary = true;
     expect(await resolveGithubAuthRecovery(request)).toBeNull();
@@ -102,14 +110,9 @@ describe('GitHub recovery host wiring', () => {
 
   // PR #6349: a successful /user probe must not redirect to an instance that
   // networkSlot rejects before reading either credential source.
-  it.each(['organization', 'pending', 'unconfirmed'] as const)('rejects %s instances before reading credentials', async (identity) => {
-    if (identity === 'organization') {
-      h.ghost!.namespace = 'acme';
-      h.ghost!.dir = '/tmp/_ns/acme/cindy-github';
-    } else {
-      h.ghost!.namespaceState = identity;
-      if (identity === 'pending') delete h.ghost!.namespace;
-    }
+  it.each(['pending', 'unconfirmed'] as const)('rejects %s instances before reading credentials', async (identity) => {
+    h.ghost!.namespaceState = identity;
+    if (identity === 'pending') delete h.ghost!.namespace;
     expect(await resolveGithubAuthRecovery(request)).toBeNull();
     expect(h.readGh).not.toHaveBeenCalled();
     expect(h.readSecret).not.toHaveBeenCalled();

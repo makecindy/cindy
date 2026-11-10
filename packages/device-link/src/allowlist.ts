@@ -25,6 +25,7 @@
  * Renderer 可调用。它由业务 dispatch 拦截,绝不放行通用 UI / shell IPC。
  */
 import { FILE_PEER_CHANNEL } from './filePeer.js';
+import { MACHINE_STATUS_CHANNEL } from './machineStatus.js';
 import { PROVIDER_GROUP_REMOTE_CHANNEL } from './providerGroup.js';
 import { REMOTE_AGENT_CHANNEL } from './remoteAgent.js';
 import {
@@ -37,7 +38,10 @@ import {
   ORCA_REMOTE_WORKER_RELEASE_CHANNEL,
 } from './orcaRemoteWorker.js';
 import { TASK_MIGRATION_CHANNEL } from './taskMigration.js';
+import { SETUP_SNAPSHOT_CHANNEL, SETUP_SNAPSHOT_TIMEOUT_MS } from './setupSnapshot.js';
+import { SETUP_TRANSFER_CHANNEL, SETUP_TRANSFER_TIMEOUT_MS } from './setupTransfer.js';
 import {
+  COMPANION_LIVE_CHANNEL,
   COMPANION_CLOUD_CAPS_CHANNEL,
   COMPANION_CLOUD_FLUSH_CHANNEL,
   COMPANION_CLOUD_HAND_OVER_CHANNEL,
@@ -324,6 +328,7 @@ const CORE_INVOKE_CHANNELS: readonly string[] = [
   'git-context:pr-refs:list',
   'git-context:pr-refs:manage',
   'git-context:pr-status',
+  'git-context:mr-status',
   'git-context:github-read',
   // —— 通用远程资源面——
   // 固定的 manifest / list / get / invoke 入口。业务模块只在被控端 provider
@@ -390,6 +395,15 @@ const CORE_INVOKE_CHANNELS: readonly string[] = [
   DL_MEDIA_FETCH_CHANNEL,
   FILE_PEER_CHANNEL,
   TASK_MIGRATION_CHANNEL,
+  // 新电脑设置(docs/product-rules/new-device-setup-migration.md):同账号新电脑读取这台电脑的
+  // 非秘密配置快照(只读，被控端 dispatch 拦截执行)。不含密钥、OAuth、IM 凭证、登录与系统授权，
+  // 不写被控端任何状态；共享任务访客与供应商分享受邀者在 dispatch 再拒一次。老版本无 handler →
+  // CHANNEL_NOT_ALLOWED，新电脑提示更新那台电脑。
+  SETUP_SNAPSHOT_CHANNEL,
+  // 新电脑设置的密钥与 SSH 一步(同一规则页):新电脑请求复制指定连接的密钥、为它的新 SSH 公钥
+  // 在这台电脑能连上的服务器上授权。被控端必须由人在本机确认(显示请求电脑、逐项名称与校验码)
+  // 后才执行;密钥只以本次请求的临时公钥加密返回。OAuth 登录与私钥不经此通道。同样只给同账号电脑。
+  SETUP_TRANSFER_CHANNEL,
   // 远程 Agent(被控端 dispatch 拦截执行，不落 ipcMain handler)：在被控端用它自己的登录与
   // 供应商运行 Agent，文件、命令与 Cindy 工具回到控制端执行。准入同 fs:list-dir 的论证：
   // 同账号 + 被控端显式打开远程控制时，控制端本就能驱动被控端的 Agent；不进共享任务白名单。
@@ -437,6 +451,14 @@ const EXTENDED_INVOKE_CHANNELS: readonly string[] = [
   'maker:schedule:create-from-template',
   // script 任务能力选择器的可用性探测:纯只读查询,意识状态在被控端才有意义
   'maker:schedule:script-capability-status',
+  // Status only: webhook-set-secret carries a credential and webhook-rotate-url replaces the
+  // address; both stay on the computer that runs the schedule.
+  'maker:schedule:webhook-status',
+  'maker:schedule:webhook-receiver',
+  // 同账号查看和释放云端地址；不携带密钥、不执行任务，不要求旧设备在线。
+  'maker:schedule:webhook-account',
+  'maker:schedule:webhook-release',
+  'maker:schedule:webhook-restore',
   // —— 会话未读已读回执(控制端真实展示会话内容后,把被控端的会话未读态清掉)——
   // 准入:会话粒度状态操作(与 mark-run-read 同类),无 event.sender 依赖、无 shell/UI
   // 副作用;语义在被控端执行才正确(灵动岛 / Dock 角标 / 侧栏红绿点的未读真相都在被控端
@@ -482,7 +504,15 @@ const EXTENDED_INVOKE_CHANNELS: readonly string[] = [
   ORCA_EXECUTION_DEVICES_CHANNEL,
   // 云端伙伴：交出伙伴前探测目标电脑是否支持接手(只读常量，无 sender 依赖、无本机 UI 副作用)。
   // 老版本无 handler → CHANNEL_NOT_ALLOWED，交出方拒绝该目标。
+  // 这台电脑此刻的资源情况(只读，真相在被控端，无 sender 依赖、无 UI 副作用)。不进 sharedTask 访客白名单；
+  // 老版本无 handler → CHANNEL_NOT_ALLOWED，控制端显示需要更新。
+  MACHINE_STATUS_CHANNEL,
   COMPANION_CLOUD_CAPS_CHANNEL,
+  // 插件「查看伙伴」跨电脑读取(只读)：主力电脑返回本机可见伙伴的插件视图(状态、工作阶段、当前步骤、
+  // 待处理请求标题、最新回复)。同账号且主力电脑开启远程控制时，控制端本就能经 sessions / messages 通道读到这些
+  // 对话内容，此处不扩大可见范围；handler 不依赖 sender、无本机 UI 副作用，不进 sharedTask 访客白名单。
+  // 老版本无 handler → CHANNEL_NOT_ALLOWED，查看端退回伙伴列表里的状态。
+  COMPANION_LIVE_CHANNEL,
   // 云端伙伴：在任一台电脑上更换伙伴的主力电脑。只读读取主力电脑视角的可接手电脑，以及请主力电脑
   // 交出伙伴(写)。准入同本机伙伴设置的「主力电脑」一行：同账号 + 主力电脑开启远程控制时控制端本就
   // 能远程改这个伙伴；交出走被控端同一业务流程(同步、忙碌检查、比较后改主力电脑)，handler 不依赖
@@ -557,6 +587,9 @@ const EXTENDED_INVOKE_CHANNELS: readonly string[] = [
   // Codex app-server 官方控制面:额度/reset 次数读取 + 经 desktop 账号绑定 offer 的
   // 人工 reset。mutation 不接收 creditId,不能泛化成任意账号/凭证控制入口。
   'maker:usage:codex-rate-limits',
+  // Owner-only native subscription profile management; no credentials cross this channel.
+  'maker:subscription-accounts',
+  'maker:subscription-pool:quota',
   'maker:usage:codex-rate-limit-reset',
   'maker:usage:codex-reset-auto-use',
   // 桌面小组件快照（只读，被控端 dispatch 拦截；准入同上方用量只读通道）。
@@ -577,6 +610,7 @@ const EXTENDED_INVOKE_CHANNELS: readonly string[] = [
   // Same-account read-only Kimi quota; no secrets, arbitrary endpoints, shared-task or share guests.
   // Old hosts reject the channel; callers never fall back to their local account.
   'maker:usage:kimi-coding',
+  'maker:usage:opencode-go',
   // cc 默认路由会话的生效计费路由观察值(只读,'gateway' | 'subscription' | null):
   // 控制端远程会话据此判定订阅 / 网关显示形态 —— 路由真值在被控端 proxy 的按请求
   // 观察 registry 里,控制端拿本机凭证状态重算必然张冠李戴。入参 sessionId,无
@@ -815,6 +849,7 @@ export const PUSH_FORWARD_ALLOWLIST: ReadonlySet<string> = new Set([
   // headers 观察器按 (5h,7d,status) 签名去抖、端点刷新 180s 节流,只有数值变化才
   // 广播,不随 turn 内逐请求刷帧。
   'usage:claude-subscription-changed',
+  'subscription-accounts:changed',
   // Codex 账号订阅用量变化(账号级组合 payload:app-server 桶表 + WHAM web 槽):
   // 控制端远程 codex / chatgpt-bridge 会话 chip 镜像被控端限额窗口。频率上限:
   // app-server 每 turn 记录一次、WHAM 后台刷新 10s 节流。
@@ -926,6 +961,10 @@ export const INVOKE_TIMEOUT_OVERRIDES_MS: Readonly<Record<string, number>> = {
   [COMPANION_CLOUD_HAND_OVER_CHANNEL]: COMPANION_CLOUD_HAND_OVER_TIMEOUT_MS,
   [COMPANION_CLOUD_MERGE_CHANNEL]: COMPANION_CLOUD_MERGE_TIMEOUT_MS,
   [COMPANION_CLOUD_FLUSH_CHANNEL]: COMPANION_CLOUD_HAND_OVER_TIMEOUT_MS,
+  // 设置快照要读插件、技能并等那台电脑的窗口回答界面偏好，可能超过默认 30s。
+  [SETUP_SNAPSHOT_CHANNEL]: SETUP_SNAPSHOT_TIMEOUT_MS,
+  // 要等那台电脑上的人确认(最多 2 分钟),再逐台连接 SSH 服务器授权新公钥。
+  [SETUP_TRANSFER_CHANNEL]: SETUP_TRANSFER_TIMEOUT_MS,
   // listing tier 轻量 DB 读:毫秒级查询,12s 仍等不到只能是链路问题,快速失败喂给熔断器。
   // 12s 同时覆盖被控端冷启动 DB 迁移的常见时长(那类失败是快速返回的 DbClient not ready,
   // 不吃满超时),不会误伤首拉重试。

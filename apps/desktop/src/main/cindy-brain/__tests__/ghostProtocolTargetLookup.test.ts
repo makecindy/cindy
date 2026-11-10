@@ -71,6 +71,7 @@ function productionCallbacks(
   })({
     getGhostManager: () => manager,
     isAppSessionBoundaryPending: () => false,
+    getAppCapabilities: () => ({ canUseCindyAccountServices: true }),
     isGhostAvailableForActiveSession: () => true,
     activeOwnerScopeKey: () => owner,
     installedGhostMutationTargetToken,

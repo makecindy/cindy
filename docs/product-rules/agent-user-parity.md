@@ -71,14 +71,21 @@ Agent 新建普通独立任务（`send_to_session` create 与 `start_session_tas
 
 | 对象     | 操作                                                       | 本机 | 跨电脑           |
 | -------- | ---------------------------------------------------------- | ---- | ---------------- |
+| 模型目录 | `configure_model_provider` 的 `rediscover`：内置供应商复用设置页真实刷新，等待发现完成后返回目录 | 有（2026-11-10；Claude 订阅通过内置 CLI 的 SDK 发现） | 在执行电脑的任务中调用；同账号远控 UI 复用原有刷新 IPC |
+| 模型供应商 | `configure_model_connection`：查询预设、读取／添加／编辑／删除 API 与免密本机连接、安全填写或更换密钥、发现与设置型号、验证连接 | 有（2026-11-07；复用设置页事务，保存、目录获取与推理验证分别报告） | 在执行电脑的任务中调用；手机及同账号电脑沿原有加密代输入卡填写密钥，不支持指定另一台电脑或 SSH |
+| 订阅账号 | `configure_model_provider` 的 `subscriptionAccounts`：查看、官方 CLI 登录、暂停、限额、权重与调度策略 | 有（Claude / Codex，同供应商内多账号） | 工具按目标电脑的本机任务执行；同账号远控 UI 复用管理 IPC |
 | 任务     | 列出、搜索、读聊天记录、发现电脑                           | 有   | 有               |
 | 任务     | 获取可直接引用的任务链接（列表、搜索、聊天记录与摘要返回 sessionUrl） | 有 | 有（链接携带所属电脑；旧远端查询结果由调用端补齐） |
 | 任务     | 读摘要（状态、最后的要求与回答、模型路线、PR、排队数）     | 有   | 有（2026-10-17） |
 | GitHub | 查询明确 PR 的 CI、评审和变化；明确关联、移除、恢复、固定、排序 | 有（桌面与手机关联管理） | 有：helper `github` 类目，同账号跨电脑；脚本 `github.read` |
-| 任务     | 给既有任务发消息                                           | 有   | 有（2026-10-14） |
+| 机器     | 看账号下的电脑与 SSH 主机及实时资源（`list_machines`，[规则](cindy-machines.md)） | 有（含 SSH 普通任务） | 有（2026-11-02） |
+| 任务     | 给既有任务发消息（隐藏群专线不是群聊收件地址，返回不支持且说明未送达） | 有 | 有（2026-10-14；接收电脑执行同一判定，隐藏目标仍优先遵守可见性检查） |
 | 任务     | 新建任务（继承项目、选择已有项目或不绑项目，执行目录独立）   | 有   | 无               |
+| 任务     | 新建任务时选择 Agent 所在电脑（`send_to_session` create 的 `agent_device_id`，取 `list_available_models` 的 `locations[]`；只换 Agent 用的远程或分享供应商，任务与文件仍在本机） | 有 | 有（2026-11-07；SSH 任务不支持；那台没有所需模型或连不上返回 `PROVIDER_ROUTE_UNAVAILABLE`，不自动换电脑） |
 | 任务     | 归档 / 取消归档                                             | 有   | 有（2026-10-16） |
+| 共享任务 | 为当前原任务生成原生邀请、查询共享状态（`create_shared_task_invitation` / `get_shared_task_state`） | 有（房主；沿用任务权限，Plan 只读） | 手机或同账号其他电脑控制当前任务时在任务宿主执行；不支持指定其他任务 |
 | 任务     | 改名、移动、标签                                            | 有   | 无               |
+| 任务     | 给当前任务新建 Cindy 托管 worktree（默认最新远端默认分支，可指定基线分支 `base_ref`；绑定当前任务，随归档回收；不搬任务、不重启） | 有（`create_task_worktree`，2026-10-31；基线分支 2026-11-10） | 无 |
 | 任务     | 看输入队列；编辑 / 撤回 / 调序自己发的排队消息；插话；停止 | 有   | 无               |
 | 任务     | 模型、推理强度、Fast                                       | 有   | 无               |
 | 任务     | 删除、Fork、Rewind、切换权限档、代用户确认权限或回答提问   | 无   | 无               |
@@ -94,6 +101,7 @@ Agent 新建普通独立任务（`send_to_session` create 与 `start_session_tas
 | 定时任务 | 查可选运行位置与模型；设每次新建任务的 Agent 运行位置（其他电脑 / 分享来的供应商） | 有（2026-10-22） | 无 |
 | 定时任务 | 删除单条运行记录、标记已读                                 | 无   | 无               |
 | 项目     | 列出、登记、改名、移除；工作目录列表                       | 有   | 无               |
+| 项目     | 查询新项目存放位置（`list_projects.projects_root`，含来源） | 有（只读；修改该设置暂无 Agent 工具，按 #8259 维护者初审意见保留为缺口） | 无 |
 | 任务导入 | 扫描其他 AI 编程工具的任务、开始导入、查进度与结果（与设置 → 任务导入同一实现） | 有（2026-10-30） | 无 |
 | 伙伴     | 发现伙伴、伙伴间消息                                       | 有   | 有               |
 | 伙伴     | 自身关联项目：列出、添加与移除（原有文件工具按需读资料） | 有 | 无（远程设置界面可管理） |
@@ -104,7 +112,7 @@ Agent 新建普通独立任务（`send_to_session` create 与 `start_session_tas
 | 伙伴     | 按已证实归属搜索跨渠道聊天、按最近活动列出旧任务           | 有   | 有（历史查询，两端需支持筛选参数） |
 | 伙伴     | 查看自己的本机 IM 连接分配与状态                         | 有   | 无               |
 | 伙伴     | 开关自己的记忆与系统技能（待办、例行任务、工作台与跟进；`set_teammate_capability` kind=feature，与能力页同一份设置；读取核心细则与系统技能全文用 `read_teammate_skill`） | 有（2026-11-01） | 无（远程设置界面可管理） |
-| 伙伴     | 给自己添加消息平台连接（Telegram、飞书 / Lark、企业微信、钉钉、Discord；`connect_account` kind=host、id=`im-<渠道>` 发授权卡，主人在可信电脑卡片上逐项填写凭证，与「消息平台」设置页同一添加实现；移除仍在设置页） | 有（2026-11-01） | 无 |
+| 伙伴     | 给自己添加消息平台连接（Telegram、飞书 / Lark、企业微信、钉钉、Discord、iMessage / BlueBubbles；`connect_account` kind=host、id=`im-<渠道>` 发授权卡，主人在可信电脑卡片上逐项填写凭证，与「消息平台」设置页同一添加实现；移除仍在设置页） | 有（2026-11-01） | 无 |
 | 伙伴     | 「一眼」投影（等你 / 在做；用户界面已改为近况，2026-10-21） | 有   | 无               |
 | 伙伴     | 跟进任务：读取与继续（自动跟进所有任务的伙伴）             | 有   | 有（2026-10-17） |
 | 伙伴     | 查看与更换主力电脑                                         | 有   | 有（2026-10-17） |
@@ -134,6 +142,9 @@ Worker 工具省略 working_dir 时保持继承 Lead 任务记录目录，不跟
   `apps/desktop/src/main/mcp-integrations/schedulerDevices.ts`。
 - 跨电脑发消息：`apps/desktop/src/main/mcp-integrations/sessionHandoffRemote.ts`、
   `apps/desktop/src/main/maker-ipc/sessionHandoffIpc.ts`。
+- 新建任务的 Agent 所在电脑：`packages/lizi-mcps/src/xdt-helper/send_to_session.ts` 的 `agent_device_id`，
+  host 侧解析见 `apps/desktop/src/main/maker-ipc/sendToSessionExecutionConfig.ts`
+  （`resolveSendToSessionCreateRoute`）。
 - 任务摘要（`get_task_digest`）：`packages/lizi-mcps/src/xdt-helper/get_task_digest.ts`（输出合同 ≤2KB）、
   `apps/desktop/src/main/mcp-integrations/taskDigest.ts` 与 `taskDigestHost.ts`（跨电脑只读，复用
   `local-db:sessions:get`、`maker:list-active`、历史消息与 PR 状态通道）。
@@ -146,10 +157,11 @@ Worker 工具省略 working_dir 时保持继承 Lead 任务记录目录，不跟
 - 协议与兼容见 [`../dev-rules/protocol-compatibility.md`](../dev-rules/protocol-compatibility.md)
   「Agent 跨电脑管理定时任务与发消息」。
 
-伙伴或普通任务代主人下达要求时，由宿主附上当前输入中可核实的用户原话，工具参数承载必要的轻度补充；
-自主消息、自动化与回传保持正常正文，无原话不加空栏。伙伴通话和继续转交已核实请求
-保留同一来源；接收任务沿用原请求范围和当前权限档，不增加交接确认。来源回执不是新的执行权限档。
-详见 [消息来源](message-source.md#跨任务请求与伙伴通话的原话2026-10-202026-10-21-收窄)。
+伙伴或普通任务代用户转交工作时，正文就是 Agent 写的内容；宿主在发送端判断这次转交是不是用户要的
+（Auto 审核、Ask 确认或完全访问），通过后接收任务按这段内容审核，没通过的 Auto 转交不发送。
+回到原话所在任务的消息、自主消息与自动化不带用户授权。接收任务沿用当前权限档，不增加交接确认；来源回执
+不是新的执行权限档。本机和同账号跨电脑沿用同一规则，旧接收端仍收旧格式。
+详见 [消息来源](message-source.md#跨任务委派发送端判断正文是原文2026-11-05)。
 
 ### 模型速度
 
@@ -175,8 +187,7 @@ Ask 或审核要求确认时复用现有确认入口；Plan 不允许副作用�
 审核到执行及延迟投递均保留账号、实例、权限／Plan 代次与输入边界校验，
 不得借定时工作扩大原授权范围。
 2026-10-29 修订：伙伴的来源记录与访问权限、操作风险分开。移除自主工具白名单与
-例行任务的静默 `NEEDS_OWNER_REQUEST`；普通操作沿用任务权限，仅对自主删除自动化、
-代答授权、恢复暂停、调度命令、独立完全访问 Agent、授予常驻指令等明确风险显示可操作的一次性授权请求与等待状态。
+例行任务的静默 `NEEDS_OWNER_REQUEST`；普通操作沿用任务权限，仅对自主代答授权、恢复暂停、调度命令、独立完全访问 Agent、授予常驻指令等明确风险显示可操作的一次性授权请求与等待状态。
 确认、拒绝与取消共用桌面／手机原交互通道。见 [伙伴操作权限](teammate-authority.md)。
 2026-10-22 修订：伙伴、转入消息与定时跟进的任务操作
 统一沿用普通任务权限流程：Full Access 免审、Auto 使用原有自动审核、Ask 使用原有确认。
@@ -231,8 +242,21 @@ Bearer、PUT 票据或受管文件路径。公开写入遵循当前任务 Full A
 `ghost_cancel_plugin_review` 使用本人版本的精确 revision，区分停止上传与取消审核，沿现有 Full Access/Auto/Ask 授权。
 旧版本包仍可安装，成功提审后的同版本不再支持改包重提。
 
+自动化任务的 Webhook 触发（2026-11-04 更新）：桌面任务表单与 `schedule_create` / `schedule_update` 共用 `webhookTrigger`（含事件筛选和发送方 `source`），`schedule_get` 返回接收地址和状态。设置密钥（生成或粘贴）和更换地址只由用户在任务所在电脑的详情操作，这是凭证规则带来的有意差异：明文不能进入任务记录，工具参数夹带密钥会被拒绝。账号管理与用户能力一致：`schedule_webhook_list` 查看本账号所有电脑的地址及用量，`schedule_webhook_release` 释放离线旧电脑的名额；`schedule_webhook_restore` 明确重新连接，支持 `device` 选择在线目标电脑，恢复后仍须用户配置密钥。第一步 scheduler 类目索引说明账号范围与离线释放。写操作经过现有权限，自主伙伴释放／恢复分别按删除／恢复风险处理。规则见 [schedule-webhook-trigger.md](schedule-webhook-trigger.md)。使用 Webhook 需要 Cindy 账号：未登录或没有接收服务时 Agent 开启报错，表单隐藏入口；可用性由任务所在电脑的 `webhook-receiver` 决定。
+
+Webhook 跨电脑配置（2026-11-06）：`schedule_create` / `schedule_update` 的 `device` 可设置或清空目标电脑的 `webhookTrigger`。第一步 scheduler 类目索引即说明触发配置可指定电脑，并区分密钥和普通地址轮换仍由用户在目标电脑详情操作。沿用同账号远程控制权限，写前检查目标的 `supportsScheduleWebhookTrigger`，开启时再检查其 `webhook-receiver`；旧版本或不可用目标明确报错，清空不要求接收服务可用。`schedule_get` 指定电脑或 `all` 查询也返回目标电脑的 `webhookStatus`：通过现有只读状态通道补取，失败时明确报告该电脑查询失败，两次读取之间及返回前复核账号。未增加密钥工具或跨账号权限。
+
 自动化与例行任务的插件前置检查（2026-10-31）：桌面「前置检查」与 `schedule_create` / `schedule_update` / `routine_save` 共用 `preRunPlugin`（插件实例 id + 出错处理），Agent 与用户能力一致；只能在插件所在的电脑上设置，跨电脑的 `schedule_update` 明确拒绝。
+
+自动化截止时间：桌面创建与编辑表单、项目自动化配置和 `schedule_create` / `schedule_update` 共用 `expireAt`。到期后不再自动启动，已开始的运行允许完成；手动立即运行仍可使用。桌面按编辑设备的本地时区显示，保存绝对时间戳；`schedule_update` 省略表示保留，传 `null` 表示清除，本机与跨电脑一致。手机端没有自动化管理入口。
 
 伙伴例行任务送达与发现（2026-10-30）：Pi 直接 `routine_save` 与 helper 同时提供 `modelOverride`、`sessionMode`、`delivery`；伙伴 essential tools 提供 `schedule_list_models` 和 `routine_delivery_targets`。价格与能力来自实际连接来源，保留 unknown；本机位置 `local` 保存为 null。桌面、Agent 和另一电脑上的设置共用 `routineTools`，默认结果直接显示在发起伙伴主任务；显式处理才唤醒模型，IM 只使用已连接机器人的已知收件人。执行和送达失败分开记录，静默检查仍静默。
 
 GitHub 查询与关联的独立语义、缓存和游标合同见 [GitHub 状态与关联](github-status-and-associations.md)。
+
+### 普通提问入口（2026-11-08）
+
+Claude Code／Pi 的非阻塞澄清恢复独立的 `ask_user_question_async`；Pi 同步展示为直接工具，
+无需先检索 MCP。Codex 保持原生提问入口。独立的 `request_input_handoff` 处理窗口与截图二维码，
+三个 Harness 直接可发现；Grok 登录恢复 auth 类目的 `start_grok_device_login`。移除 `ask_owner`，
+既有同步提问、卡片和回答生命周期保持不变。

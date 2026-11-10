@@ -18,6 +18,7 @@ import {
 } from '@/session/composerDocument';
 import { composerNodesForBoundedPlainTextPaste } from '@/session/composerPaste';
 import { buildComposerRichInputHtml, type ComposerRichInputTheme } from '@/session/composerRichInputHtml';
+import type { ComposerTextScrollEdge } from '@/session/composerResize';
 import { COMPOSER_SINGLE_LINE_HEIGHT } from '@/session/composerTextMetrics';
 import {
   parseComposerWebMessage,
@@ -26,9 +27,9 @@ import {
 import { COMPOSER_PASTED_IMAGE_FILE_PREFIX } from '@/session/pastedImageAttachment';
 import { registerMobileMessageWebView } from '@/session/mobileMessageWebViewMetrics';
 import { useComposerWebViewRecovery } from '@/session/useComposerWebViewRecovery';
+import { Gesture, GestureDetector } from '@/platform/gestureHandler';
 
 export interface ComposerRichInputHandle {
-  expand?(): void;
   /** WebView read barrier; validates the caller's scope before acknowledging the draft. */
   flushDocument?(isCurrent?: () => boolean): Promise<ComposerDocument>;
   getSelection(draft: string): ComposerSelection;
@@ -61,6 +62,8 @@ export interface ComposerRichInputProps {
   onPasteImages?: (uris: string[]) => void;
   onPasteImagesLoadFailed?: () => void;
   onPasteImagesLoading?: (count: number) => void;
+  /** 文字滚到了哪一端；按在文字上上下拖动时据此决定滚动还是调高输入框。 */
+  onScrollEdgeChange?: (edge: ComposerTextScrollEdge) => void;
   opticalPadding?: boolean;
   placeholder: string;
   resolveSessionLinkLabel?: (href: string) => Promise<ResolvedSessionLinkSemantic | null>;
@@ -69,6 +72,9 @@ export interface ComposerRichInputProps {
 }
 
 interface PendingImagePaste {
+  // Acceptance belongs to this start event, not to props when FileReader finishes.
+  deliver: ComposerRichInputProps['onPasteImages'];
+  fail: ComposerRichInputProps['onPasteImagesLoadFailed'];
   expectedCount: number;
   settledIndexes: Set<number>;
   urisByIndex: Map<number, string>;
@@ -92,6 +98,7 @@ const ComposerWebInput = forwardRef<ComposerRichInputHandle, ComposerRichInputPr
     onPasteImages,
     onPasteImagesLoadFailed,
     onPasteImagesLoading,
+    onScrollEdgeChange,
     opticalPadding = true,
     placeholder,
     resolveSessionLinkLabel,
@@ -179,13 +186,13 @@ const ComposerWebInput = forwardRef<ComposerRichInputHandle, ComposerRichInputPr
       readyRef.current = false;
       pendingFocusRef.current = false;
       if (pendingDocumentRef.current) pendingDocumentRef.current.focusAfter = false;
-      const failedPastes = pendingImagePastesRef.current.size;
+      const failedPastes = [...pendingImagePastesRef.current.values()];
       pendingImagePastesRef.current.clear();
       pendingImagePasteOrderRef.current = [];
       const pendingUris = [...pendingPastedImageFilesRef.current];
       pendingPastedImageFilesRef.current.clear();
       if (pendingUris.length > 0) void deleteComposerPastedImageUris(pendingUris);
-      for (let i = 0; i < failedPastes; i += 1) onPasteImagesLoadFailed?.();
+      for (const batch of failedPastes) batch.fail?.();
       onBlur?.();
     }, () => readyRef.current);
     const { generation, current: currentGeneration } = recovery;
@@ -330,19 +337,19 @@ const ComposerWebInput = forwardRef<ComposerRichInputHandle, ComposerRichInputPr
         const uris = [...batch.urisByIndex.entries()]
           .sort(([left], [right]) => left - right)
           .map(([, uri]) => uri);
-        if (uris.length > 0 && onPasteImages) {
+        if (uris.length > 0 && batch.deliver) {
           // 所有权在调用前转交上传 hook；后续成功 / 失败 / 取消由其负责清理。
           for (const uri of uris) pendingPastedImageFilesRef.current.delete(uri);
-          onPasteImages(uris);
+          batch.deliver(uris);
         } else {
           if (uris.length > 0) {
             for (const uri of uris) pendingPastedImageFilesRef.current.delete(uri);
             void deleteComposerPastedImageUris(uris);
           }
-          onPasteImagesLoadFailed?.();
+          batch.fail?.();
         }
       }
-    }, [onPasteImages, onPasteImagesLoadFailed]);
+    }, []);
 
     useEffect(() => {
       disposedRef.current = false;
@@ -482,6 +489,7 @@ const ComposerWebInput = forwardRef<ComposerRichInputHandle, ComposerRichInputPr
         }
         return;
       }
+      if (message.type === 'scroll-edge') return onScrollEdgeChange?.({ atTop: message.atTop, atBottom: message.atBottom });
       if (message.type === 'focus') return onFocus?.();
       if (message.type === 'blur') return onBlur?.();
       if (message.type === 'paste-text-request') {
@@ -490,12 +498,14 @@ const ComposerWebInput = forwardRef<ComposerRichInputHandle, ComposerRichInputPr
       }
       if (message.type === 'paste-images-start') {
         pendingImagePastesRef.current.set(message.requestId, {
+          deliver: onPasteImages,
+          fail: onPasteImages ? onPasteImagesLoadFailed : undefined,
           expectedCount: message.count,
           settledIndexes: new Set(),
           urisByIndex: new Map(),
         });
         pendingImagePasteOrderRef.current.push(message.requestId);
-        onPasteImagesLoading?.(Math.max(0, message.count));
+        if (onPasteImages) onPasteImagesLoading?.(Math.max(0, message.count));
         return;
       }
       if (message.type === 'paste-image-failed') {
@@ -517,12 +527,18 @@ const ComposerWebInput = forwardRef<ComposerRichInputHandle, ComposerRichInputPr
             }
           });
       }
-    }, [applyDocument, commitPlainTextPaste, focusEditor, hidden, inject, maxHeight, onBlur, onChangeDocument, onFocus, onHeightChange, onPasteImagesLoading, persistPastedImage, runtimeConfig, settlePastedImage, generation, currentGeneration, recovery.onPong, recovery.onReady, rejectSnapshot]);
+    }, [applyDocument, commitPlainTextPaste, focusEditor, hidden, inject, maxHeight, onBlur, onChangeDocument, onFocus, onHeightChange, onPasteImages, onPasteImagesLoadFailed, onPasteImagesLoading, onScrollEdgeChange, persistPastedImage, runtimeConfig, settlePastedImage, generation, currentGeneration, recovery.onPong, recovery.onReady, rejectSnapshot]);
 
     const heightStyle = useAnimatedStyle(() => ({ height: animatedHeight?.value ?? height }));
+    // Android: a gesture that takes over (dragging the composer taller) only stops
+    // forwarding touches to native children; the WebView never sees ACTION_CANCEL and
+    // finishes the stale touch as a tap / scroll. Registering its frame as a native
+    // view lets RNGH send that cancel. UIKit already cancels touches on iOS.
+    const touchGesture = useMemo(() => Gesture.Native().enabled(Platform.OS === 'android'), []);
     return (
       // WebView's imperative ref is a command handle, not a Fabric host ref.
       // Animate its native View container and let the WebView fill that frame.
+      <GestureDetector gesture={touchGesture}>
       <Animated.View style={[styles.frame, heightStyle, { opacity: hidden ? 0 : 1 }]}>
       <WebView
         key={generation}
@@ -560,6 +576,7 @@ const ComposerWebInput = forwardRef<ComposerRichInputHandle, ComposerRichInputPr
         textInteractionEnabled
       />
       </Animated.View>
+      </GestureDetector>
     );
   },
 );

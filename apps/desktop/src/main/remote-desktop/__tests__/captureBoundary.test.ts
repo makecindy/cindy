@@ -181,6 +181,9 @@ vi.mock('../controller', () => ({
     handoffWindow(value: string) {
       return value === h.lease ? h.handoff : null;
     }
+    liveScreen() {
+      return null;
+    }
     isBackgroundViewing(value: string) {
       return value === h.lease && h.background;
     }

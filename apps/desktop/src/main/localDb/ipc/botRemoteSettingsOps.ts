@@ -6,6 +6,7 @@ import {
 import type { BotAutonomySettingsView } from '../../../shared/botAutonomy.js';
 import {
   BOT_IM_CHANNELS,
+  isBotImGroupChatId,
   type BotImAdoptablePersonalBotsPayload,
   type BotImChannel,
   type BotImConnectionAddResult,
@@ -135,17 +136,24 @@ export function projectBotSettingsProfile(raw: unknown): Record<string, unknown>
 }
 
 /** Whitelist of what an autosave may write; raising permissions stays in the confirmed generic form. */
-export function readBotSettingsPatch(value: unknown): Record<string, unknown> {
+export function readBotSettingsPatch(value: unknown, allowEmpty = false): Record<string, unknown> {
   const patch = record(value, 'patch');
   keysWithin(patch, BOT_SETTINGS_PATCH_FIELDS, 'patch');
-  if (patch.capabilities !== undefined) keysWithin(record(patch.capabilities, 'capabilities'), BOT_SETTINGS_CAPABILITY_FIELDS, 'capabilities');
+  if (patch.capabilities !== undefined) {
+    const capabilities = record(patch.capabilities, 'capabilities');
+    keysWithin(capabilities, BOT_SETTINGS_CAPABILITY_FIELDS, 'capabilities');
+    const location = capabilities.agentDeviceId;
+    if (location !== undefined && location !== null
+      && (typeof location !== 'string' || !/^[A-Za-z0-9_.:-]{1,128}$/.test(location))) {
+      fail('Invalid model execution location');
+    }
+  }
   if (patch.capabilityBaseline !== undefined) record(patch.capabilityBaseline, 'capabilityBaseline');
-  if (!Object.keys(patch).length) fail('patch is empty');
+  if (!allowEmpty && !Object.keys(patch).length) fail('patch is empty');
   return patch;
 }
 
 const ACTIONS = new Set(['resume', 'restart', 'delete']);
-const GROUP_CHAT_ID = /^-?\d{1,32}$/;
 const LANE_SESSION_ID = /^[A-Za-z0-9_.:-]{1,200}$/;
 
 /** A connection page operation may touch only this teammate's own connections. */
@@ -155,7 +163,8 @@ async function ownConnection(deps: BotSettingsOpsDeps, call: BotSettingsCall): P
   return own ? id : throwIpcError('NOT_FOUND', 'Connection unavailable');
 }
 const onlyThisTeammate = (deps: BotSettingsOpsDeps, payload: BotImConnectionListPayload, call: BotSettingsCall): BotImConnectionListPayload =>
-  ({ connections: payload.connections.filter((connection) => connection.botId === botOf(call)) });
+  ({ connections: payload.connections.filter((connection) => connection.botId === botOf(call)
+    && (connection.channel !== 'imessage' || (Array.isArray(call.args.supportedChannels) && call.args.supportedChannels.includes('imessage')))) });
 
 /** The path of the WeChat working folder belongs to the teammate's computer. */
 const wechatSettings = (settings: unknown) => ({ ...record(settings, 'settings'), workingDir: null });
@@ -189,6 +198,14 @@ export function createBotRemoteSettingsOps(deps: BotSettingsOpsDeps): Partial<Re
       const botId = botOf(call);
       const patch = readBotSettingsPatch(call.args.patch);
       return { profile: projectBotSettingsProfile(await deps.updateProfile({ id: botId, ...patch })) };
+    },
+    'profile.acceptModelSelection': async call => {
+      const patch = readBotSettingsPatch(call.args.patch, true);
+      const version = call.args.expectedVersion;
+      if (!Number.isSafeInteger(version) || (version as number) < 1) fail('Invalid profile version');
+      return { profile: projectBotSettingsProfile(await deps.updateProfile({
+        id: botOf(call), ...patch, acceptSavedModelSelectionVersion: version,
+      })) };
     },
     'profile.chooseAvatar': async call => ({
       profile: projectBotSettingsProfile(await deps.setAvatar(botOf(call), text(call.args.avatarImageBase64, 'avatarImageBase64', 80_000))),
@@ -299,7 +316,7 @@ export function createBotRemoteSettingsOps(deps: BotSettingsOpsDeps): Partial<Re
     'channels.im.listGroups': async call => deps.channels.im.listGroups(await ownConnection(deps, call)),
     'channels.im.setGroupActivation': async call => {
       const id = await ownConnection(deps, call);
-      if (typeof call.args.chatId !== 'string' || !GROUP_CHAT_ID.test(call.args.chatId)) fail('chatId is invalid');
+      if (!isBotImGroupChatId(call.args.chatId)) fail('chatId is invalid');
       return deps.channels.im.setGroupActivation(id, call.args.chatId as string, call.args.mode === 'always' ? 'always' : 'mention');
     },
     'channels.im.listLanes': async call => deps.channels.im.listLanes(await ownConnection(deps, call)),

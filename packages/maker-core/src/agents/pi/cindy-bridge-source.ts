@@ -2589,6 +2589,7 @@ interface McpServerRef {
 }
 
 const CINDY_MCP_LIST_TOOLS = 'cindy_mcp_list_tools';
+const CINDY_ASYNC_QUESTION_TOOL = 'ask_user_question_async';
 const CINDY_MCP_CALL_TOOL = 'cindy_mcp_call_tool';
 const CINDY_START_SESSION_TASK_TOOL = 'start_session_task';
 const CINDY_CHECK_SESSION_TASK_TOOL = 'check_session_task';
@@ -2597,6 +2598,8 @@ const CINDY_STOP_SESSION_TASK_TOOL = 'stop_session_task';
 const CINDY_SEND_TO_AGENT_TOOL = 'send_to_agent';
 const CINDY_CHECK_AGENT_MESSAGE_TOOL = 'check_agent_message';
 const CINDY_LIST_AGENTS_TOOL = 'list_agents';
+const CINDY_LIST_MACHINES_TOOL = 'list_machines';
+const CINDY_INPUT_HANDOFF_TOOL = 'request_input_handoff';
 const CINDY_CREATE_TEAMMATE_TOOL = 'create_teammate';
 const CINDY_BOT_MEMORY_TOOL = 'bot_memory';
 const CINDY_DIRECT_BOT_TOOLS = new Set([
@@ -3378,6 +3381,13 @@ class CindyMcpGateway {
     };
   }
 
+  /** The real MCP identity of a tool the model called by its short name, for the permission and capture hooks. */
+  resolveHookedCall(toolName: string, input: unknown): ResolvedMcpGatewayCall | null {
+    if (toolName === CINDY_MCP_CALL_TOOL) return this.resolveCall(input);
+    if (CINDY_DIRECT_BOT_TOOLS.has(toolName) || toolName === CINDY_LIST_MACHINES_TOOL || toolName === CINDY_ASYNC_QUESTION_TOOL || toolName === CINDY_INPUT_HANDOFF_TOOL) return this.resolveDirectHelperTool(toolName, input);
+    return toolName === CINDY_BOT_MEMORY_TOOL ? this.resolveBotMemory(input) : null;
+  }
+
   resolveStartSessionTask(input: unknown): ResolvedMcpGatewayCall | null {
     return this.resolveDirectHelperTool(CINDY_START_SESSION_TASK_TOOL, input);
   }
@@ -4021,6 +4031,46 @@ class CindyMcpGateway {
         },
         execute: async (_toolCallId: string, params: unknown, signal?: AbortSignal) =>
           this.executeStartSessionTask(params, signal),
+      });
+    }
+
+    // Match synchronous question discoverability while retaining the host schema and lifecycle.
+    const asyncQuestion = this.tools.get(mcpGatewayKey('cindy_helper', CINDY_ASYNC_QUESTION_TOOL));
+    if (asyncQuestion && !options.deniedTools?.includes(CINDY_ASYNC_QUESTION_TOOL)) {
+      pi.registerTool({
+        name: CINDY_ASYNC_QUESTION_TOOL,
+        label: 'Ask an optional question',
+        description: asyncQuestion.description,
+        parameters: asyncQuestion.inputSchema,
+        execute: async (_id: string, params: unknown, signal?: AbortSignal) =>
+          this.executeDirectHelperTool(CINDY_ASYNC_QUESTION_TOOL, params, signal),
+      });
+    }
+
+    // Publish the host's handoff schema directly, including screenshot QR support.
+    // Preserve the MCP identity for approval/capture; do not duplicate a Pi-only schema.
+    const handoff = this.resolveDirectHelperTool(CINDY_INPUT_HANDOFF_TOOL, {});
+    if (handoff) {
+      pi.registerTool({
+        name: CINDY_INPUT_HANDOFF_TOOL,
+        label: 'Input handoff',
+        description: handoff.tool.description,
+        parameters: handoff.tool.inputSchema,
+        execute: async (_toolCallId: string, params: unknown, signal?: AbortSignal) =>
+          this.executeDirectHelperTool(CINDY_INPUT_HANDOFF_TOOL, params, signal),
+      });
+    }
+
+    // The first step of any work across computers: behind the MCP gateway, models answered
+    // with their own ssh commands instead of finding it.
+    if (this.resolveDirectHelperTool(CINDY_LIST_MACHINES_TOOL, {})) {
+      pi.registerTool({
+        name: CINDY_LIST_MACHINES_TOOL,
+        label: 'List machines',
+        description: 'List the computers on this account and the SSH hosts configured here, with live CPU, memory and disk. Use it first whenever the user asks about their machines or SSH hosts, or work may need another computer, more resources or a different system; it reads all of them in one call, so do not run ssh or read ~/.ssh yourself for this. It reports facts and picks nothing. Each unreadable machine carries an availability reason: report it as given, and never call host_key_changed a password problem.',
+        parameters: { type: 'object', properties: {}, additionalProperties: false },
+        execute: async (_toolCallId: string, params: unknown, signal?: AbortSignal) =>
+          this.executeDirectHelperTool(CINDY_LIST_MACHINES_TOOL, params, signal),
       });
     }
 
@@ -5228,13 +5278,7 @@ export default async function cindyBridge(piApi: any) {
     // Pi sees one stable gateway schema, while Host policy and approval UI must
     // continue seeing the real MCP identity and real arguments. That preserves
     // every existing per-server policy without loading each schema at startup.
-    const resolvedGatewayCall = event.toolName === CINDY_MCP_CALL_TOOL
-      ? mcpGateway.resolveCall(event.input)
-      : CINDY_DIRECT_BOT_TOOLS.has(event.toolName)
-        ? mcpGateway.resolveDirectHelperTool(event.toolName, event.input)
-        : event.toolName === CINDY_BOT_MEMORY_TOOL
-          ? mcpGateway.resolveBotMemory(event.input)
-        : null;
+    const resolvedGatewayCall = mcpGateway.resolveHookedCall(event.toolName, event.input);
     // 分类只认「解析成功」：披露状态不参与权限命名与采集分类，否则被门拦下的那次
     // 会被当成非 gateway 调用，权限命名与采集都会漏掉这一条。
     const gatewayCall = resolvedGatewayCall;
@@ -5244,6 +5288,9 @@ export default async function cindyBridge(piApi: any) {
     if (
       (event.toolName === CINDY_MCP_CALL_TOOL
         || CINDY_DIRECT_BOT_TOOLS.has(event.toolName)
+        || event.toolName === CINDY_LIST_MACHINES_TOOL
+        || event.toolName === CINDY_ASYNC_QUESTION_TOOL
+        || event.toolName === CINDY_INPUT_HANDOFF_TOOL
         || event.toolName === CINDY_BOT_MEMORY_TOOL)
       && !gatewayCall
     ) return;
@@ -5328,13 +5375,7 @@ export default async function cindyBridge(piApi: any) {
   });
 
   pi.on('tool_result', async (event: any, ctx: any) => {
-    const resolvedGatewayCall = event.toolName === CINDY_MCP_CALL_TOOL
-      ? mcpGateway.resolveCall(event.input)
-      : CINDY_DIRECT_BOT_TOOLS.has(event.toolName)
-        ? mcpGateway.resolveDirectHelperTool(event.toolName, event.input)
-        : event.toolName === CINDY_BOT_MEMORY_TOOL
-          ? mcpGateway.resolveBotMemory(event.input)
-        : null;
+    const resolvedGatewayCall = mcpGateway.resolveHookedCall(event.toolName, event.input);
     // 分类只认「解析成功」：自愈放行的首次调用发生在记账之前，若在这里按披露状态
     // 判定，它会被当成非 gateway 调用，权限命名与采集都会漏掉这一条。
     const gatewayCall = resolvedGatewayCall;
@@ -5362,6 +5403,10 @@ export default async function cindyBridge(piApi: any) {
   const VISION_DEFAULT_PROMPT =
     'Describe this image accurately and factually. Do NOT guess or fabricate details. ' +
     'Report visible text verbatim. If the image contains UI elements, list their labels and state.';
+  // /v1/messages 强制要求 max_tokens。思考模型先写 thinking 块，1024 常被吃光，
+  // 正文为空，视觉桥误判图片不可用（#4580）。4096 留给思考加一段描述，同时保持有界。
+  // 对齐 host 侧 VISION_ANTHROPIC_MAX_TOKENS。
+  const VISION_ANTHROPIC_MAX_TOKENS = 4096;
   const VISION_LOCATE_PROMPT_PREFIX =
     'Locate the target below and return its bounding box as "x1,y1,x2,y2" ' +
     '(pixel coordinates, top-left origin). If the target is not present, return NOT_FOUND. Target: ';
@@ -5415,6 +5460,20 @@ export default async function cindyBridge(piApi: any) {
       buf[8] === 0x57 && buf[9] === 0x45 && buf[10] === 0x42 && buf[11] === 0x50
     ) return 'image/webp';
     return null;
+  }
+
+  // Anthropic 视觉响应的正文。thinking / redacted_thinking 不是图片描述；
+  // 只有思考、没有 text 时返回空串，调用方按空描述失败（#4580）。
+  function anthropicVisionText(blocks: unknown): string {
+    if (!Array.isArray(blocks)) return '';
+    return blocks
+      .map((block) => {
+        if (!block || typeof block !== 'object') return '';
+        const b = block as { type?: unknown; text?: unknown };
+        if (b.type === 'thinking' || b.type === 'redacted_thinking') return '';
+        return typeof b.text === 'string' ? b.text : '';
+      })
+      .join('');
   }
 
   async function callPiVision(
@@ -5478,9 +5537,8 @@ export default async function cindyBridge(piApi: any) {
       : wire === 'anthropic-messages'
         ? {
             model: spec.model,
-            // /v1/messages 强制要求 max_tokens,缺省会 400 让 anthropic 风格后端
-            // 看起来不可用(对齐 host 侧 VISION_ANTHROPIC_MAX_TOKENS=1024)。
-            max_tokens: 1024,
+            // /v1/messages 强制要求 max_tokens。过小会被 thinking 块吃光（#4580）。
+            max_tokens: VISION_ANTHROPIC_MAX_TOKENS,
             messages: [
               {
                 role: 'user',
@@ -5536,12 +5594,7 @@ export default async function cindyBridge(piApi: any) {
     let content: unknown = null;
     if (wire === 'anthropic-messages') {
       const blocks = (json as { content?: unknown })?.content;
-      if (Array.isArray(blocks)) {
-        content = blocks
-          .map((b) => (b && typeof b === 'object' ? (b as { text?: unknown }).text : ''))
-          .filter((t): t is string => typeof t === 'string')
-          .join('');
-      }
+      content = anthropicVisionText(blocks);
     } else if (wire === 'openai-responses') {
       const output = (json as { output?: unknown })?.output;
       if (Array.isArray(output)) {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { keyboardControlRegion, controlRegion, floatingTopRow, sharedStatusRowDrawerTop, windowDivision, type WindowGeometry } from '@/platform/windowGeometry';
+import { keyboardControlRegion, controlRegion, floatingTopRow, sharedStatusRowDrawerTop, sharedStatusRowTrailingReserve, windowDivision, type WindowGeometry } from '@/platform/windowGeometry';
 import { foldDesktopLayout } from '@/remote-desktop/foldDesktopLayout';
 import { sessionPaneLayout } from '@/session/sessionPaneLayout';
 
@@ -41,7 +41,7 @@ describe('adaptive window regions', () => {
   // Unit: Duo resize request (2026-10-23). Existing tests cover fixed panes only;
   // dragging beyond either edge must not squeeze the list or message composer away.
   it('clamps manual column widths and reserves at least 400pt for the conversation', () => {
-    for (const [requested, expected] of [[100, 240], [360, 360], [900, 420]]) {
+    for (const [requested, expected] of [[100, 300], [360, 360], [900, 420]]) {
       const p = sessionPaneLayout(window(), requested);
       expect(p.sidebarWidth).toBe(expected);
       expect(p.detail.x + p.detail.width).toBe(840);
@@ -158,4 +158,33 @@ describe('floating top row beside the Duo status area', () => {
   it('keeps a margin from the top edge beside a vertical system bar', () => {
     expect(floatingTopRow(window(), 44)).toEqual({ top: 12, left: 12, right: 72, sharedStatusRow: false });
   });
+});
+
+// Regression: Duo portrait home (2026-11-03). The native bar moved its trailing items left of the
+// status area (wider with a Live Activity), but the title view kept the full-bar width and the
+// device name ran under the remote-desktop / display pill.
+describe('native bar trailing reserve beside the Duo status area', () => {
+  const portrait = (statusX: number, patch: Partial<WindowGeometry> = {}) => window({ width: 662, height: 942, barEdge: 'none',
+    insets: { top: 82, left: 0, right: 0, bottom: 20 },
+    regions: [{ kind: 'occlusion', x: statusX, y: 0, width: 662 - statusX, height: 82 }], ...patch });
+  it('follows the reported status area plus the bar item spacing', () => {
+    expect(sharedStatusRowTrailingReserve(portrait(520), 82)).toBe(158);
+    expect(sharedStatusRowTrailingReserve(portrait(440), 82)).toBe(238);
+  });
+  it('reserves nothing for ordinary bars, a centered island or a vertical rail', () => {
+    expect(sharedStatusRowTrailingReserve(portrait(520, { regions: [] }), 82)).toBe(0);
+    expect(sharedStatusRowTrailingReserve(portrait(520, { reservedRegionsSupported: false }), 82)).toBe(0);
+    expect(sharedStatusRowTrailingReserve(portrait(520, { regions: [{ kind: 'occlusion', x: 270, y: 0, width: 120, height: 37 }] }), 82)).toBe(0);
+    expect(sharedStatusRowTrailingReserve(window(), 44)).toBe(0);
+  });
+  // Unit regression for the A. title: existing cases omit full-width top occlusions.
+  // A 402pt phone with a bar below its 62pt status area must keep its title width.
+  it('does not subtract the status area from a native bar below it or before measurement', () => {
+    const phone = portrait(0, { width: 402, regularWidth: false,
+      insets: { top: 62, left: 0, right: 0, bottom: 34 },
+      regions: [{ kind: 'occlusion', x: 0, y: 0, width: 402, height: 62 }] });
+    expect(sharedStatusRowTrailingReserve(phone, 116)).toBe(0);
+    expect(sharedStatusRowTrailingReserve(portrait(520), 0)).toBe(0);
+  });
+
 });

@@ -12,7 +12,7 @@
 
 - **iOS 优先**,触控优先,跟随系统 light / dark 自动切换(`useColorScheme`)。
 - **灰度环境**:除已登记、各有限定用途的语义色外(品牌 teal 就绪态、Heart Orange 运行 / thinking 态、自动审批与伙伴未读的信息蓝、额度条、失败状态红和 Beta 渠道红色状态徽标等,见 §2 色表与根规范 `DESIGN.md` §2 / §15.13),界面全是黑白之间的灰阶。不引入未登记的装饰色;新增有色用途先在根规范 `DESIGN.md` §2 / §10 登记。
-  - 唯一的个性化例外:用户在设置里主动选择的「我的消息气泡颜色」,只染用户自己的消息气泡,默认仍是灰阶;规则见根规范 `DESIGN.md`「Personal message bubble colors」。
+  - 唯一的个性化例外:用户在设置里主动选择的「我的消息气泡颜色」,只染用户自己的消息气泡,默认仍是灰阶;规则见本文 §9「Personal message bubble colors」。
   - 模型选择器的账号额度条沿用桌面语义：剩余 ≥30% 用 `textSecondary`，10% < 剩余 <30% 用 `quotaBarWarn`，剩余 ≤10% 用 `quotaBarCrit`。额度专用语义在根规范 `DESIGN.md` §2 / §10 登记，不借用房主皇冠或任务错误 token。颜色只用于额度条，百分比文字继续保留；iOS / Android 共用真实比例绘制，不设置最小填充长度，0% 留空。
 - **圆角走四档阶梯**(与 `src/theme/tokens.ts` 的 `radius` 一致,守护测试拦截阶梯外值):`micro`(4,缩略图内 chip、勾选指示器等微元素)/ `control`(8,卡片内层控件)/ `container`(12,卡片 / 容器)/ `pill`(9999,交互元素)。**禁止**阶梯外中间值(0 / 3 / 6 / 28 等)与字面量圆角。根规范 `docs/design-rules/DESIGN.md` §5 的圆角清单约束的是桌面 surface;mobile 圆角阶梯以 `tokens.ts` 为准。两端档位差异(如 `micro 4` 不等于桌面只给键帽的 4px)是 `design-governance.md` §10「Mobile 用途差异」的待裁决项,裁决前保持现状。
 - **默认零阴影**:层次靠背景色差 + 1px 边框。2026-09-27 用户明确要求的局部例外：首页主菜单抽屉（含伙伴入口）用右侧容器圆角与柔和投影，颜色走 homeDrawerShadow，外壳承载阴影、内层裁切内容；不扩展到页面卡片或任务列表侧栏，见 DESIGN.md §6。
@@ -49,7 +49,7 @@
 | `statusReady` | `#19D2C1` | `#19D2C1` | 就绪 / 在线点(品牌 teal,**语义不变**) |
 | `statusAccent` | `#EA6B17` | `#EA6B17` | 运行 / thinking + 完全访问权限(Heart Orange,**语义不变**) |
 | `quotaBarWarn` | `#F3A115` | `#F3A115` | 账号额度条剩余不足 30%、高于 10% 的填充，其他用途不复用 |
-| `quotaBarCrit` | `#D91F37` | `#D91F37` | 账号额度条剩余不超过 10% 的填充，其他用途不复用 |
+| `quotaBarCrit` | `#EF4444` | `#EF4444` | 账号额度条剩余不超过 10% 的填充，其他用途不复用 |
 | `betaChannelBadgeBackground` | `#DF0C27` | `#DF0C27` | Beta 渠道开关已打开时,当前版本旁的状态徽标底色 |
 | `betaChannelBadgeForeground` | `#FFFFFF` | `#FFFFFF` | Beta 渠道状态徽标文字,与底色对比度 4.98:1 |
 | `permAutoAccent` | `#417CDD` | `#417CDD` | 自动审批权限模式强调 |
@@ -102,9 +102,9 @@
 3. **字号只用 11 档阶梯**:11 / 12 / 13 / 15 / 16 / 17 / 18 / 20 / 24 / 30 / 40。成句的话至少 13。
 4. **每个文字样式都配行高**,按上表成对;单行输入框不设行高。
 
-**登记例外**(只有这些可以偏离上表,新增例外先改本节):话题内“New”分界标签使用 `threadUnreadDivider` 红色、13/18 常规字重(2026-10-29 用户指定,与 0.5pt 横线同色);首页列表与队友行的节奏行高(18/28、15/26、13/22);代码 / diff 的紧凑行高;对话 Markdown 标题与长文 24 行高;与相邻图标 / 按钮对齐的文字;行内强调(Markdown strong 700、搜索命中、价格折扣);登录品牌画布(见根规范 §3 豁免表)。
+**登记例外**(只有这些可以偏离上表,新增例外先改本节):群聊正文 `@点名` 按用户 2026-11-04 裁决与 PC 对齐，使用专用 `groupMentionText`（数值正本 `tokens.ts`，对应 CINDY `msg-link`），不加下划线、底色或额外字重，详见根规范 §14.5；话题内“New”分界标签使用 `threadUnreadDivider` 红色、13/18 常规字重(2026-10-29 用户指定,与 0.5pt 横线同色);首页列表与队友行的节奏行高(18/28、15/26、13/22);代码 / diff 的紧凑行高;对话 Markdown 标题与长文 24 行高;与相邻图标 / 按钮对齐的文字;行内强调(Markdown strong 700、搜索命中、价格折扣);登录品牌画布(见根规范 §3 豁免表)。
 
-**机器会拦什么**:阶梯外字号 / 行高 / 字重与裸数字、缺行高、浅色字配粗字重(`typographyTokenDiscipline.test.ts`);字号阶梯本身、文字三档与占位字对比度、深浅双模式同键(`themeTokens.test.ts`)。**拦不住、靠 review 的**:角色选错(比如把说明文字放 12 号、把标题写成 500)、例外被滥用。评审时对照上表逐行看。
+**机器会拦什么**:阶梯外字号 / 行高 / 字重与裸数字、缺行高、浅色字配粗字重(`typographyTokenDiscipline.test.ts`);文字用了五档中性字色与已登记语义色以外的 token、占位字没用 `textPlaceholder`(`textColorDiscipline.test.ts`,存量按次数登记、只许减少);字号阶梯本身、文字三档与占位字对比度、深浅双模式同键(`themeTokens.test.ts`)。**拦不住、靠 review 的**:角色选错(比如把说明文字放 12 号、把标题写成 500)、例外被滥用。评审时对照上表逐行看。
 
 ### 字号 `typeScale`(按角色选,2026-09-27 用户定稿收拢为 11 档)
 
@@ -385,3 +385,57 @@ iOS 新增与改造界面遵循 [iOS 原生界面规范](../../../docs/design-ru
 ActivityIndicator。未知结果保留原有退出/修改/同 operationId 重试语义。永久或未知有效期
 不占位，只有真实有限期显示日期。Android 保留现有键盘适配 sheet，仅复用上述身份和操作。
 原生验收由主控统一完成；独立 SwiftUI 设计样张不等于产品 RN 运行证据。
+
+### 远程桌面适配与手势（2026-11-07）
+
+「适配屏幕」与声音、后台运行同级，使用 Fullscreen 图标；选中状态沿用本机按被控设备和显示器保存的分辨率偏好。方向跟随系统，不再提供手动旋转按钮。开启后，旋转、折叠和复古外观切换按实际画面区域调整电脑分辨率；布局稳定 200ms 后才发起调整，请求期间发生变化只采用最新区域。
+
+内屏竖向适配保留顶部返回按钮、底部工具栏及各 16pt 留白；Duo 外屏和展开后的横屏使用完整画面，系统安全区仅用于安排控件。复古外观按显示器玻璃开口适配，不能让旧的电脑长宽比反过来决定开口。
+
+画面可缩到适配大小以下并自由平移。手势过程中不吸附；捏合的全部手指松开后，大小在适配大小的 80%～120% 内时，以 280ms 动画恢复到适配大小并居中。这里的 1:1 指适配大小，不是电脑像素与手机像素一一对应。偏离更远则保留大小与位置。
+
+在适配大小平移后，水平、垂直独立吸附：距离中心不超过对应可用画面尺寸的 20%（每轴最多 96pt）时，松手后对齐该轴；更远仍可停留。新触摸立即中断动画，减少动态效果时直接到达目标。实现与回归见 `src/remote-desktop/RemoteDesktopScreen.tsx`、`packages/maker-shared/src/remote-desktop/viewerRuntime.js` 及 `screen.test.tsx`、`viewer.test.ts`。
+
+### 折叠态远程桌面默认键盘（2026-11-01）
+
+竖向半折叠时，下半屏默认是跟随 Light/Dark 主题的完整键盘与触控板，替代原来的 Macintosh II 复古外观和工具栏。
+顶行是无键帽的图标条：esc、桌面级快捷键、撤销、重做、fn 和手机输入法入口。图标条高度取一行按键的 0.74 倍，不高于按键行（2026-11-07 用户决定）；触控板固定占下半屏可用高度的 32%（不低于 96pt），其余给按键。桌面级快捷键按被控电脑系统变化，按住图标时显示名称。
+顶行右端是剪贴板和控制面板。触控板按 1.9:1 居中，两侧留白；可见面板之外的掌托区域同样移动指针。
+修饰键点一次作用于下一个键，点两次锁定，再点一次取消；按住则与同时按下的键组合。单独点按不发给电脑。
+按键圆角 8pt，字号用 `body` 与 `micro`。
+顶部保留与复古外观相同的 44pt 左右滑动切换栏（2026-11-06 用户决定），从折痕处开始、覆盖折痕下的安全边距，按键紧接在它下面；「控制」面板里也能切换外观。
+
+所有远程键盘共用一套布局和输入逻辑（`RemoteKeySurface`）：
+- 复古外观只保留标准键盘（`classic`）：13 列错列键位、印刷文字键帽、没有图标条，工具栏照常显示。键盘按宽度定成近方形，机身底座按键槽九宫格贴合，手掌区留给控件和工具栏。其余按键从工具栏的键盘按钮进入。
+- 非折叠屏「电脑键盘」宽度不足 560pt 时用紧凑布局：字母页 10 列，符号和方向键放到 `#+=` 页，F1–F12 与 Home 等由 fn 层提供；更宽时与折叠态相同。
+- 面板顶部是两种键盘共用的一条 44pt 栏：左边切换键盘，右边剪贴板和收起，中间的键随模式变化。系统键盘模式下中间是 esc、Tab 和方向键。
+- 切换时栏和画面不动：电脑键盘的高度取该方向上系统键盘最近一次的高度。切到系统键盘时，iOS 先保留按键，等系统键盘升起盖住后再换成栏。
+
+---
+
+## 9. 从根规范迁入的手机规则
+
+> 迁自 `docs/design-rules/DESIGN.md`，规范效力不变。本节未注明文档的 `§N` 均指根规范 `DESIGN.md`，不是本文的章节。
+
+### Personal message bubble colors (Mobile, 2026-10-12)
+
+手机版设置提供「我的消息气泡颜色」:默认继续跟随现有主题,另有初稿、晨光、灵感、梦境、夜猫、项圈六个预设和自定义颜色。名称取自 Cindy 自身的设定(创作的一天、黑猫与红项圈),不使用公司名或游戏 IP;各语言意译,不逐字翻译。此项是用户主动选择的个性化例外,只作用于确认是自己发出的消息气泡(会话、待发送与伙伴群聊)和设置预览,不染色 Agent 回复、系统卡片或页面背景。共享任务里所有 user 消息都右对齐,因此按归属而不是对齐判断:访客消息只有作者账号是当前账号才染,房主消息只在不是以访客身份查看时染;归属只用于展示,不作权限依据。偏好仅保存在本机;选「默认」即删除 override。桌面端暂未提供。
+
+颜色由 packages/maker-shared/src/userBubbleAppearance.ts 在运行期按 light/dark 生成背景、前景与描边,属于治理合同 §3.4 的运行时派生值,消费者只用该结果,不把用户输入直接拼进样式。预设柔化较强;自定义色着色更明显。着色强度会自动收敛到气泡内实际出现的文字(正文、次要文字、弱提示、行内代码)都不低于 4.5:1、派生前景不低于 7:1;已满足的颜色不降低。项圈取品牌红色相,只用柔化后的浅红调,不直接使用品牌红。
+
+iOS 使用原生 Form 二级页:顶部是与真实气泡同款的预览,预设与「自定义颜色」同在一个 inline Picker 勾选列表;选中自定义才在其下展开一条彩虹色带(仅选色相,外形对齐系统滑块)。iOS 没有比系统 ColorPicker 更轻的自由选色组件,系统取色面板因功能过多不采用。拖动时只更新本页预览,松手才保存;保存失败的提示提供「重试」。Android 沿用设置页内的面板实现。
+
+### Mobile task home teammate section (owner-approved “A+B”, 2026-10-24)
+
+The task home opens with a “Teammates” section above shared tasks, Pinned and projects. Its header uses the project/Pinned header geometry (56pt, 22 chevron + 20 icon + 16/28 title + 13 count) and a trailing 20pt “+” whose 44pt target ends on the 16pt right edge. Expanded, it shows 78pt teammate rows (teammates and groups mixed by activity), previewing three; the “Show all N” / “Show less” row is 48pt, 15/20 secondary text aligned to the rows’ text column (72pt). Collapsed, it shows the existing avatar strip by default; disabling avatars keeps only the 56pt header and its small create action, with no empty body. The existing home display menu (···) has a “Teammates” submenu whose “Show avatars when collapsed” item controls the horizontally scrolling strip: 36pt avatars in 48pt touch cells, 8pt gap, 16pt side insets, 12/18 names (primary + medium when unread), one 10pt solid status dot in a 2pt surface ring anchored 1pt beyond the bottom-right edge, and a dashed 36pt create circle in the same 48pt touch cell last. Phones scroll instead of the Desktop +N. Desktop, iOS and Android use the same 36px/pt collapsed portrait and 44px/pt list portrait (owner correction, 2026-10-31). Keep collapsed touch targets at least 48px/pt: the portrait has 6px/pt space on each side for the bottom-right dot. Anchor the dot to the portrait, not the touch target; keep the selection plate independent of portrait sizing. The Desktop +N circle and Mobile create circle follow the collapsed portrait size; group portraits scale within the same 36px/pt frame (two-member portraits use 26px/pt images). Status-dot size and meaning are unchanged. A pending decision (cyan) takes priority over error/offline (red), running (orange), completed unread (green), and ordinary unread (blue); idle has no dot. The overflow entry aggregates the highest-priority hidden state. Completion requires a real result and a local unread receipt; selection alone never clears a pending decision. Roster avatars have no online dot or working ring; unread counts remain separate. Teammate selection uses the quiet theme surface with normal sidebar text (never the task sidebar’s inverse fill); Desktop collapsed selection is a 56px quiet-surface plate behind the avatar with the governed 12px container radius (the expanded selected row's fill and radius), not an outline, so stacked group avatars are not cut (owner decision, 2026-10-30; replaces the 1px tertiary circular outline). Selection does not replace or recolor the activity dot. Phones navigate to the full-screen chat and retain their native press feedback, without a persistent selected home row. The avatar preference is an explicit account-scoped override, default on for new and existing users without writing an override, preserving explicit off choices and independent of the remembered fold state; changing it while expanded takes effect on the next collapse. When avatars are hidden, existing attention and bot/group unread (including threads) appear as a small header dot with an accessible status and no fabricated count. New messages never expand the section or enable avatars; header taps only expand/collapse. Both states swap with the list’s 225ms disclosure; reduced motion switches instantly. Every language must fit the header and names without widening; long names truncate to one line within the cell.
+
+There is one mobile home, as on Desktop (owner decision, 2026-10-24): no separate teammate home, no Tasks/Teammates switch in the drawer and no Teammates entry in the title scope menu. Home search keeps the section and lists every matching teammate and group as expanded rows, without the fold toggle or create entries; with no match the section is absent. Clearing search restores the saved display choice. Teammate unread shows on the section's rows, enabled strip cells, or compact header, not as a count on a mode switch. Implementation and regression coverage: `apps/mobile/src/session/HomeTeammatesSection.tsx`, `homeChromeMenus.ts`, and `src/__tests__/HomeTeammatesSection.test.tsx`.
+
+### Mobile new-task morph
+
+- **Mobile new-task morph(移动端新建按钮形变)** — the seventh sanctioned motion class (approved 2026-09-29), **only** for the iOS home floating new-task button and the composer pill it becomes (`apps/mobile/modules/cindy-composer-morph`):
+  - **Definition**: on touch-down the 55pt round button stretches horizontally, in place, into the equal-height composer pill (it does not play the button's own press). A stand-in glass grows over the old screen while the new-task page mounts; once the page is ready the real composer glass takes over with the stand-in's current velocity, so the trajectory is continuous and nothing is swapped at the end. Sliding off before release springs back into the button and does not navigate. Later, a tap on the pill opens it upward into the full composer card and then focuses the input; the keyboard follows (per-frame keyboard follow is layout, not motion, and has no easing).
+  - **Parameters**: button → pill uses an underdamped spring, stiffness **305**, damping ratio **0.67** (response ≈ 0.36s), one visible overshoot of ≈ 14pt on a phone pill, kept inside the 16pt screen inset; the stand-in, the real glass and the slide-off return share this spring. Pill → card uses a critically damped spring, stiffness **320**, damping ratio **1** (no overshoot), so the card is open before the keyboard starts rising. Both springs take their duration from physics; the nominal `UIViewPropertyAnimator` durations in code are ignored. Handoff fades: the old-screen snapshot clears in 0.16s ease-out, the stand-in reveals over 0.18s ease-out and dissolves over 0.22s ease-in-out after a 0.06s delay, and the composer controls fade in over 0.24s ease-out after a 0.1s delay. Native focus is requested 0.05s after the card starts opening.
+  - **Timing guards (not motion)**: a 1.6s native timeout ends a morph whose target never appears; the new-task page restores its normal push animation on `transitionEnd`, with a 1600ms fallback; the JS fallback focus (320ms) and focus-release grace (400ms) in `useComposerPillOpen.ts` only cover a missing native view or refused focus.
+  - **Degradation**: under Reduce Motion neither the morph nor the pill opening plays — the page and card land directly in place. Without the native module (non-iOS or older binaries) the JS path navigates and focuses without a morph.
+  - **Scope boundary**: this button and pill only. Its overshoot must not leak into other buttons, sheets or navigation; other mobile transitions stay on the §14.4 Motion tokens. Implementation: `CindyComposerMorphModule.swift`, `ComposerMorphSource.ios.tsx`, `ComposerFrame.ios.tsx`, `useComposerPillOpen.ts`; geometry in `composerGeometry.ts`, behavior notes in `apps/mobile/docs/navigation-and-composer.md`.

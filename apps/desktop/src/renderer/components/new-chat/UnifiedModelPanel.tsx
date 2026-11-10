@@ -71,14 +71,16 @@ import {
   favoriteMatchesSelection,
   engineOfAgentKind,
   entryMatchesModelId,
-  wireModelIdOf,
+  wireModelIdOf, entryWireIds, entryModelIds, readEntryPreference,
   buildUnifiedListSections,
   buildUnifiedRail,
   computeSelectedRowScrollTop,
+  enginePreferenceModelIds,
   priceTierOf,
   railItemKey,
   resolveFavoriteRowConfig,
   resolveUnifiedRowConfig,
+  resolveStoredModelEntry,
   sameAnchor,
   unavailableFavoriteEntry,
   type ForeignFavoriteRow,
@@ -438,10 +440,11 @@ export function UnifiedModelPanel({
     ? remoteSources.favoritesDeviceId
     : isSharedProvider ? undefined : deviceId;
   const remoteFavorites = useRemoteModelFavorites(favoritesListDeviceId);
+  // Request-local drafts still pass through the normal execution-source projections.
   const sharedFavorites = useProviderShareFavorites(
     deviceId,
     storedFavorites,
-    remoteSources?.favoritesDeviceId ? remoteFavorites : undefined,
+    preferenceStore?.favorites ?? (remoteSources?.favoritesDeviceId ? remoteFavorites : undefined),
     remoteSources?.shareFavoriteSources,
   );
   const sharedFavoriteSources = useProviderShareFavoriteSources(remoteSources?.shareFavoriteSources);
@@ -450,9 +453,9 @@ export function UnifiedModelPanel({
   const agentDeviceFavorites = useAgentDeviceFavorites({
     deviceId: remoteSources?.active && !isSharedProvider ? deviceId : undefined,
     homeDeviceId: favoritesHomeDeviceId,
-    home: remoteSources?.favoritesDeviceId
+    home: preferenceStore?.favorites ?? (remoteSources?.favoritesDeviceId
       ? remoteFavorites
-      : { items: storedFavorites, store: LOCAL_MODEL_FAVORITE_STORE },
+      : { items: storedFavorites, store: LOCAL_MODEL_FAVORITE_STORE }),
   });
   useEffect(() => {
     if (isSharedProvider || hasRemoteSources) ensureProviderShareReceivedStarted();
@@ -463,9 +466,9 @@ export function UnifiedModelPanel({
     if (homeFavoriteItems) requestProviderShareFavoriteRegions(providerShareFavoriteRegionsOf(homeFavoriteItems));
   }, [homeFavoriteItems]);
   const favorites = selectionPolicy === 'official' ? NO_FAVORITES
-    : preferenceStore ? preferenceStore.favorites.items
     : isSharedProvider ? sharedFavorites.items
     : remoteSources ? agentDeviceFavorites.items
+    : preferenceStore ? preferenceStore.favorites.items
     : deviceId ? remoteFavorites.items : storedFavorites;
   const storedRecentModels = useRecentModels();
   // official 入口(设置页 / create-agent)刻意不展示「最近」:那里的选择动作不记录(见
@@ -546,6 +549,14 @@ export function UnifiedModelPanel({
     () =>
       unifiedModelEntries({
         providers,
+        ...(!preferenceStore && (modelMemory?.editMany || configurationEnabled === false) ? { aliasPreferences: (providerId: string, agent: AgentKind, modelId: string) => ({
+          engine: selectionPolicy === 'personalized' ? getEngineOverride(providerId, modelId) : undefined,
+          customThinking: modelMemory?.getThinking?.(agent, providerId, modelId) !== undefined,
+          customPrice: (() => { const p = priceOf(providerId, modelId, agent); return p?.kind === 'priced' && p.current.source === 'user-override'; })(),
+          effort: modelMemory?.getEffort(agent, providerId, modelId),
+          fast: modelMemory?.getFast(agent, providerId, modelId),
+          visible: predicatesRef.current.isVisible(providerId, providers.find((p) => p.id === providerId)!.models[agent]!.find((m) => m.id === modelId)!, agent),
+        }) } : {}),
         ...(agents ? { agents } : {}),
         isVisible: (providerId, model, agent) =>
           predicatesRef.current.isVisible(providerId, model, agent),
@@ -561,7 +572,7 @@ export function UnifiedModelPanel({
         ...(keepModel ? { keepModel } : {}),
       }),
     // biome-ignore lint/correctness/useExhaustiveDependencies: 谓词经 ref 读取,刷新信号是 sourceVersion(见其注释);agents 以 agentsKey 表达身份;keepModel 以 keepModelKey 表达身份。
-    [providers, agentsKey, scope, sourceVersion, keepModelKey, includePaymentRequired],
+    [providers, agentsKey, scope, sourceVersion, keepModelKey, includePaymentRequired, enginePrefsVersion, memoryVersion, modelMemory, selectionPolicy, configurationEnabled, priceOf, preferenceStore, getEngineOverride],
   );
 
   const localRailItems = remoteSources?.localRailItems;
@@ -634,10 +645,7 @@ export function UnifiedModelPanel({
   const activeFavoriteUid = useMemo(() => {
     const item = favorites.find((favorite) => favorite.uid === selectedFavoriteUid);
     if (!item) return null;
-    const entry = entries.find(
-      (candidate) =>
-        candidate.providerId === item.providerId && entryMatchesModelId(candidate, item.modelId),
-    );
+    const entry = resolveStoredModelEntry(entries, item.providerId, item.modelId);
     return entry &&
       favoriteMatchesSelection({
         entry,
@@ -691,15 +699,15 @@ export function UnifiedModelPanel({
       const base = resolveUnifiedRowConfig({
         entry,
         ...(personalized
-          ? { engineOverride: getEngineOverride(entry.providerId, entry.modelId) }
+          ? { engineOverride: entry.aliasEntries ? readEntryPreference(entry, entryModelIds(entry), getEngineOverride) : enginePreferenceModelIds(entry).map(id => getEngineOverride(entry.providerId, id)).find(value => value !== undefined) }
           : {}),
         // ★ 记忆表按 **wire id** 存取(既有消费方的口径),不是行的归一化身份。
         ...(personalized
           ? {
               memoryEffort: (agent: AgentKind) =>
-                modelMemory?.getEffort(agent, entry.providerId, wireModelIdOf(entry, agent)),
+                readEntryPreference(entry, entryWireIds(entry, agent), (pid, id) => modelMemory?.getEffort(agent, pid, id)),
               memoryFast: (agent: AgentKind) =>
-                modelMemory?.getFast(agent, entry.providerId, wireModelIdOf(entry, agent)),
+                readEntryPreference(entry, entryWireIds(entry, agent), (pid, id) => modelMemory?.getFast(agent, pid, id)),
             }
           : {}),
         agentFastModeCapable,
@@ -788,7 +796,7 @@ export function UnifiedModelPanel({
       return resolveUnifiedRowConfig({
         entry,
         ...(selectionPolicy === 'personalized'
-          ? { engineOverride: getEngineOverride(entry.providerId, entry.modelId) }
+          ? { engineOverride: entry.aliasEntries ? readEntryPreference(entry, entryModelIds(entry), getEngineOverride) : enginePreferenceModelIds(entry).map(id => getEngineOverride(entry.providerId, id)).find(value => value !== undefined) }
           : {}),
         ...(sessionAgent ? { pinnedEngine: engineOfAgentKind(sessionAgent) } : {}),
         ...(isSelectedModelRow && liveEngineAgent
@@ -830,9 +838,7 @@ export function UnifiedModelPanel({
       const group = deviceFavoriteGroups?.find((candidate) => candidate.deviceId === source.deviceId);
       if (group) {
         const ofProvider = group.entries.filter((candidate) => candidate.providerId === source.providerId);
-        const entry =
-          ofProvider.find((candidate) => candidate.modelId === item.modelId) ??
-          ofProvider.find((candidate) => entryMatchesModelId(candidate, item.modelId));
+        const entry = resolveStoredModelEntry(ofProvider, source.providerId, item.modelId);
         return entry ? { entry, favorite, agentDeviceId: source.deviceId } : null;
       }
       return unavailableDeviceIds?.includes(source.deviceId)
@@ -1059,9 +1065,9 @@ export function UnifiedModelPanel({
     runExternal,
   } = useUnifiedRowActions({
     engineStore: preferenceStore?.engines,
-    favoriteStore: preferenceStore ? preferenceStore.favorites.store : isSharedProvider
+    favoriteStore: isSharedProvider
       ? sharedFavorites.store
-      : remoteSources ? agentDeviceFavorites.store : deviceId ? remoteFavorites.store : undefined,
+      : remoteSources ? agentDeviceFavorites.store : preferenceStore ? preferenceStore.favorites.store : deviceId ? remoteFavorites.store : undefined,
     onFavoriteError: () => toast.error(t('newChat.modelSelector.unified.favoritesSaveFailed')),
     interactionDisabled,
     recordRecentUsage,
@@ -1085,9 +1091,9 @@ export function UnifiedModelPanel({
         entry,
         engineOverride: engine,
         memoryEffort: (agent) =>
-          modelMemory?.getEffort(agent, entry.providerId, wireModelIdOf(entry, agent)),
+          readEntryPreference(entry, entryWireIds(entry, agent), (pid, id) => modelMemory?.getEffort(agent, pid, id)),
         memoryFast: (agent) =>
-          modelMemory?.getFast(agent, entry.providerId, wireModelIdOf(entry, agent)),
+          readEntryPreference(entry, entryWireIds(entry, agent), (pid, id) => modelMemory?.getFast(agent, pid, id)),
         agentFastModeCapable,
       }),
     // 「按这份收藏副本解析该行」——与收藏行渲染(configOf 的 favorite 分支)走**同一个**
@@ -1105,7 +1111,7 @@ export function UnifiedModelPanel({
       resolveUnifiedRowConfig({
         entry,
         ...(selectionPolicy === 'personalized'
-          ? { engineOverride: getEngineOverride(entry.providerId, entry.modelId) }
+          ? { engineOverride: entry.aliasEntries ? readEntryPreference(entry, entryModelIds(entry), getEngineOverride) : enginePreferenceModelIds(entry).map(id => getEngineOverride(entry.providerId, id)).find(value => value !== undefined) }
           : {}),
         agentFastModeCapable,
         ...(sessionAgent ? { pinnedEngine: engineOfAgentKind(sessionAgent) } : {}),
@@ -1263,6 +1269,7 @@ export function UnifiedModelPanel({
     const rowElement = (
       <UnifiedModelRow
         key={key}
+        measurementOnly={sizer}
         entry={row.entry}
         anchor={row.anchor}
         config={config}
@@ -1339,7 +1346,7 @@ export function UnifiedModelPanel({
    * 多出跨引擎警示行与更宽的行集,面板于是在一次打开内二次撑宽。
    *
    * 修法:打开的第一帧就渲染一份**不可见**的全量视图交给 `w-max` 量宽,面板从此按最宽视图
-   * 定宽,切 rail 只换可见内容、不再改宽度。取舍写明:代价是一次打开多渲染一份静态行
+   * 定宽,切 rail 只换可见内容、不再改宽度。取舍写明:代价是过滤视图多渲染一份测宽行
    * (无交互、无 hover、不进 listbox),换来宽度稳定。
    *
    * field 形态宽度绑 trigger；当前已是全量视图时无需重复量宽。
@@ -1490,7 +1497,8 @@ export function UnifiedModelPanel({
           ) : catalogNotice ? (
             catalogNotice
           ) : !hasRows && !(pinnedTopHasRows && effectiveRail.kind === 'all') ? (
-            <div className="px-3 py-6 text-center text-13 text-[var(--text-tertiary)]">
+            // 与跨 Harness 提示一样,空态文案在已定宽的面板内换行,不参与 max-content 撑宽。
+            <div className="w-0 min-w-full px-3 py-6 text-center text-13 text-[var(--text-tertiary)]">
               {/* 最近 / ★ 视图的空态是引导语,不是「没有匹配」(设计稿 favEmpty;两格常驻后必经)。 */}
               {!query.trim() && effectiveRail.kind === 'favorites'
                 ? t('newChat.modelSelector.unified.favoritesEmpty')
@@ -1535,7 +1543,7 @@ export function UnifiedModelPanel({
                   const matchingFavorite = row.recent
                     ? favorites.find((favorite) => {
                         if (favorite.providerId !== row.entry.providerId) return false;
-                        if (!entryMatchesModelId(row.entry, favorite.modelId)) return false;
+                        if (resolveStoredModelEntry(entries, favorite.providerId, favorite.modelId) !== row.entry) return false;
                         const favoriteConfig = resolveFavoriteRowConfig({
                           entry: row.entry,
                           item: favorite,
@@ -1624,9 +1632,10 @@ export function UnifiedModelPanel({
         </div>
         {/* 定宽 sizer(见 widthSizerSections 的说明):不可见、零高度、不进 listbox,
           只为让 `w-max` 从第一帧起就按**最宽视图**(rail=all + 空搜索)量宽。
-          行复用 `<UnifiedModelRow>` 以求零漂移:handler 全 noop、selected=false
-          (不带 data-model-selected,自动对齐永远不会挑中它)、interactionDisabled。
+          行复用 `<UnifiedModelRow measurementOnly>` 的排版:固定尺寸图标/按钮只留占位,
+          不挂来源配额订阅、不生成交互节点或选中标记,自动对齐不会挑中它。
           横向 padding / scrollbar-gutter 与真列表逐字一致,量出来的才是同一条宽度;
+          同样复用 morph-panel-list-scroll 的 8px 滚动条,避免全局 12px gutter 在首次过滤时撑宽。
           **纵向 padding 一点不能带**(2026-08-19 预审 P1-2):border-box 下 h-0 只把内容盒
           钳到 0,纵向 padding 仍占真实高度 —— 带上真列表的 p-2 pb-3 会让 sizer 占 20px,
           把「切视图宽度抖」换成「切视图高度抖」。纵向本来就与量宽无关。 */}
@@ -1635,7 +1644,7 @@ export function UnifiedModelPanel({
             aria-hidden
             role="presentation"
             data-width-sizer
-            className="invisible h-0 overflow-hidden px-2 [scrollbar-gutter:stable]"
+            className="morph-panel-list-scroll invisible h-0 overflow-hidden px-2 [scrollbar-gutter:stable]"
           >
             {widthSizerSections.map((section) => (
               <div key={section.key}>
@@ -1650,6 +1659,7 @@ export function UnifiedModelPanel({
                   return (
                     <UnifiedModelRow
                       key={anchorKey(row.anchor)}
+                      measurementOnly
                       entry={row.entry}
                       anchor={row.anchor}
                       config={config}
@@ -1707,6 +1717,7 @@ export function UnifiedModelPanel({
             return (
               <ModelConfigFlyout
                 entry={target.entry}
+                deviceId={deviceId}
                 config={config}
                 state={state}
                 sourceLabel={providerLabel(target.entry.providerId)}

@@ -8,6 +8,8 @@ import {
 } from '@cindy/device-link';
 import { createRemoteSessionHandoff } from '../sessionHandoffRemote.js';
 import { releaseRemoteTaskActionReceipt, validateRemoteTaskActionReceipt } from '../../maker-ipc/remoteTaskActionReceipt.js';
+import { captureAgentRequest } from '../../maker-ipc/forwardedRequest.js';
+import { matchesForwardedRequest } from '../../../shared/forwardedRequest.js';
 
 const issued: string[] = [];
 afterEach(() => { issued.splice(0).forEach(releaseRemoteTaskActionReceipt); });
@@ -38,6 +40,47 @@ function setup(outcome: unknown = { ok: true, result: accepted }) {
 }
 
 describe('cross-device send_to_session sender', () => {
+  // 2026-11-05: a newer receiver takes the agent's own text with a checked hand-off; an older one
+  // still verifies the quoted envelope, so it keeps receiving exactly what it received before.
+  // Unit: real capture and sender against both capability answers, plus a refused hand-off.
+  it.each([
+    [{ taskActionVersion: 1, plainRequestBody: 1 }, 'plain'],
+    [{ taskActionVersion: 1 }, 'legacy'],
+  ] as const)('chooses the body the receiver can verify (%j)', async (capability, expected) => {
+    const invoke = vi.fn(async (_device: string, _channel: string, args: unknown[]): Promise<InvokeResultPayload> => {
+      if ((args[0] as { action?: string }).action === 'task-action-capability') return { ok: true, result: capability };
+      issued.push((args[0] as { taskActionReceipt: string }).taskActionReceipt);
+      return { ok: true, result: accepted };
+    });
+    const captureRequest = (sessionId: string, message: string, target?: { sessionId?: string }) => captureAgentRequest(sessionId, message,
+      { clientId: 'owner-input', authoredText: '修好就合进去' }, async () => [], true, true,
+      { targetSessionId: target?.sessionId, authorize: async () => ({ kind: 'authorized' }) });
+    const send = createRemoteSessionHandoff({ invoke, captureAccess: () => () => {}, captureRequest });
+    expect(await send({ deviceId: 'mbp', sessionId: 's9' },
+      { message: 'Fix #12 and merge it.', sender: async () => ({ sessionId: 'me', title: 'T' }) })).toEqual(accepted);
+    const wire = invoke.mock.calls.at(-1)![2][0] as { message: string; requestSource: Parameters<typeof matchesForwardedRequest>[0] };
+    expect(matchesForwardedRequest(wire.requestSource, wire.message)).toBe(true);
+    if (expected === 'plain') {
+      expect(wire.message).toBe('Fix #12 and merge it.');
+      expect(wire.requestSource).toEqual({ sessionId: 'me', clientId: 'owner-input', plainBody: true, delegatedText: 'Fix #12 and merge it.' });
+    } else {
+      expect(wire.message).toContain('修好就合进去');
+      expect(wire.requestSource).toEqual({ userText: '修好就合进去', sessionId: 'me', clientId: 'owner-input', ownerVerified: true });
+    }
+  });
+
+  it('sends nothing to the other computer when this computer refuses the hand-off', async () => {
+    const invoke = vi.fn(async (): Promise<InvokeResultPayload> => ({ ok: true, result: accepted }));
+    const send = createRemoteSessionHandoff({ invoke, captureAccess: () => () => {},
+      captureRequest: (sessionId, message) => captureAgentRequest(sessionId, message,
+        { clientId: 'owner-input', authoredText: 'Only check it' }, async () => [], true, true,
+        { authorize: async () => ({ kind: 'blocked', reason: 'Not requested.' }) }) });
+    expect(await send({ deviceId: 'mbp', sessionId: 's9' },
+      { message: 'Deploy it.', sender: async () => ({ sessionId: 'me', title: 'T' }) }))
+      .toEqual({ ok: false, errorCode: 'DELEGATION_NOT_AUTHORIZED', message: 'Not requested.' });
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
   // #6399, unit: the existing result-code matrix did not inspect receipt lifetime.
   // Known-unsent attempts must not exhaust the 256 live delivery slots; unknown
   // attempts and accepted queued messages must remain verifiable by the receiver.

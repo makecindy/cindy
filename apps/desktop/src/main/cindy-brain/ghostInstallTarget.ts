@@ -1,5 +1,5 @@
 import type { InstalledGhost } from '../../shared/ghost.js';
-import { hasDeliveryNamespace, installedGhostStoragePart } from '../../shared/pluginIdentity.js';
+import { hasDeliveryNamespace, installedGhostStoragePart, LOCAL_PLUGIN_NAMESPACE } from '../../shared/pluginIdentity.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 
 export interface GhostInstallTargetOption {
@@ -53,13 +53,14 @@ export function resolveForgeInstallTarget(
       (options.installCopy === true || options.namespace !== undefined)) ||
     (options.namespace !== undefined &&
       options.namespace !== null &&
+      options.namespace !== LOCAL_PLUGIN_NAMESPACE &&
       options.namespace !== currentNamespace)
   ) {
     throwIpcError('INVALID_PARAMS', 'Choose either an existing Plugin instance or a separate copy');
   }
   const sameId = ghosts.filter((g) => g.manifest.id === ghostId);
   const permitted = sameId.filter(
-    (g) => hasDeliveryNamespace(g) && (g.namespace === null || g.namespace === currentNamespace),
+    (g) => hasDeliveryNamespace(g) && (g.namespace === null || g.namespace === LOCAL_PLUGIN_NAMESPACE || g.namespace === currentNamespace),
   );
   if (options.targetInstanceId !== undefined) {
     const installed = permitted.find(
@@ -70,27 +71,12 @@ export function resolveForgeInstallTarget(
     return { namespace: installed.namespace!, installed };
   }
   // A login's organization is not the provenance of a local package. New
-  // installs default to root; organization installs require an explicit target.
-  const namespace = options.namespace ?? null;
+  // installs default to local; organization installs require an explicit target.
+  const namespace = options.namespace === undefined ? LOCAL_PLUGIN_NAMESPACE : options.namespace;
   const installed = permitted.find((g) => g.namespace === namespace);
   if (options.installCopy === true) {
     if (installed) throwIpcError('ALREADY_EXISTS', '当前身份已安装此插件，请选择更新已有插件');
     return { namespace };
   }
-  if (installed || options.namespace !== undefined || sameId.length === 0)
-    return { namespace, ...(installed ? { installed } : {}) };
-  // Keep an existing sole organization install in place, with its own state.
-  // This is an update, not permission to create another organization instance.
-  if (sameId.length === 1 && permitted.length === 1)
-    return { namespace: permitted[0].namespace!, installed: permitted[0] };
-  throw new GhostInstallTargetRequiredError(
-    permitted.map((g) => ({
-      instanceId: installedGhostStoragePart(g),
-      name: g.manifest.name,
-      namespace: g.namespace!,
-      version: g.manifest.version,
-      enabled: g.enabled,
-    })),
-    null,
-  );
+  return { namespace, ...(installed ? { installed } : {}) };
 }

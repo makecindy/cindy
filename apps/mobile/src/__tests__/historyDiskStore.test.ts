@@ -40,6 +40,19 @@ describe('history disk cache', () => {
     expect(await restarted.read('first', current)).toBe('hello');
     expect(h.io.read).toHaveBeenCalledTimes(2); // index and requested body only
   });
+  // Reopening cached chats must not rewrite the whole index just to touch LRU metadata:
+  // the production store has no eviction quota. Existing restart tests did not count IO.
+  it('reads cached conversations without index writes, but persists missing-file cleanup', async () => {
+    const h = fixture();
+    await h.cache.write('chat', 'saved conversation', current);
+    vi.mocked(h.io.write).mockClear();
+    for (let i = 0; i < 20; i++) expect(await h.cache.read('chat', current)).toBe('saved conversation');
+    expect(h.io.write).not.toHaveBeenCalled();
+    const index = JSON.parse(h.files.get('index.json')!);
+    h.files.delete(index.chat.file);
+    expect(await h.cache.read('chat', current)).toBeNull();
+    expect(JSON.parse(h.files.get('index.json')!)).not.toHaveProperty('chat');
+  });
   it('retains existing history above the old GiB quota when adding another view', async () => {
     const h = fixture();
     const index: Record<string, unknown> = {};

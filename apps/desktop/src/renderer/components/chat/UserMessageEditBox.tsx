@@ -5,15 +5,13 @@ import { Button } from '@/components/ui/button';
  * edit-last-message: 最后一条 user 消息的 inline 编辑态(Codex 同款交互)。
  *
  * UserMessage 点铅笔后原地把文本气泡替换成本组件:textarea 预填原文 +
- * 右下 [取消][发送]。运行中点铅笔时 UserMessage 已立即中断当前 turn(产品
- * 决策,对齐 Codex 调研:点编辑的意图就是"停下来我要改";取消编辑 AI 不会
- * 继续工作——interrupt 终止性、无恢复原语,Codex 同语义)。rewind + 重发只在
- * 点「发送」时执行,取消对**对话历史**零副作用(原样恢复),比 Codex 的
- * "确认瞬间就裁历史"更安全。
+ * 右下 [取消][发送]。运行中点铅笔不中断当前 turn(interrupt 终止性、无恢复
+ * 原语):中断、rewind 与重发都只在点「发送」时执行,取消对运行中的 turn 与
+ * 对话历史都零副作用(原样恢复)。
  *
- * 发送时序:若 renderer 仍观察到 sessionRunning(点铅笔的 stop 还在收尾),
- * 先经 onRequestStop 再补一次中断(幂等保险),挂起等 idle(spinner 常亮),
- * 翻 false 后由 effect 接力提交,15s 超时兜底报错退回编辑态。main 侧
+ * 发送时序:若 renderer 观察到 sessionRunning,先经 onRequestStop 中断,
+ * 挂起等 idle(spinner 常亮),翻 false 后由 effect 接力提交,15s 超时兜底
+ * 报错退回编辑态。main 侧
  * isTurnRunning 与 renderer 状态的毫秒级尾差由
  * commitEditAndResendWithRunningRetry 的有限重试消化。
  *
@@ -31,6 +29,7 @@ import { useTranslation } from 'react-i18next';
 
 import {
   findSlashCommandToken,
+  isSlashCommandRuntimeAlias,
   leadingSlashCommandRange,
   restoreSlashCommandRuntimeAlias,
   slashCommandRangeCoversToken,
@@ -203,7 +202,7 @@ export function UserMessageEditBox({
           : undefined;
       const rebuiltSlashRange = leadingSlashCommandRange(submitText);
       const submitTokenIsRuntimeAlias = rebuiltSlashRange
-        ? submitText.slice(rebuiltSlashRange.start, rebuiltSlashRange.end).toLowerCase().startsWith('/skill:')
+        ? isSlashCommandRuntimeAlias(submitText.slice(rebuiltSlashRange.start, rebuiltSlashRange.end))
         : false;
       const preservedSlashCommandRanges = visibleTextUnchanged && slashCommandRanges !== undefined
         ? [...slashCommandRanges]
@@ -270,10 +269,9 @@ export function UserMessageEditBox({
     submittingRef.current = true;
     setSubmitting(true);
     if (sessionRunning) {
-      // 点铅笔时 UserMessage 已发出中断;走到这里说明 stop 还在收尾(或极端
-      // 情况下丢失),再补一次(幂等保险),挂起等 renderer 观察到 idle
-      // (sessionRunning 翻 false → 下方 effect 接力提交)。15s 兜底:stop
-      // 一直没生效(远端断链等)则报错退回编辑态,文本不丢。
+      // 运行中发送:此刻才中断当前 turn(点铅笔不中断),挂起等 renderer
+      // 观察到 idle(sessionRunning 翻 false → 下方 effect 接力提交)。15s 兜底:
+      // stop 一直没生效(远端断链等)则报错退回编辑态,文本不丢。
       onRequestStop();
       pendingSendRef.current = true;
       waitTimeoutRef.current = setTimeout(() => {

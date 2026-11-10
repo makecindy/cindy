@@ -5,6 +5,7 @@
  * 归属校验、reason 截断;turn 翻译器状态机与 usage 归一化;activity 边界配对与轮次来源过滤。
  */
 
+import fs from 'node:fs';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
@@ -34,6 +35,17 @@ import {
   type InstalledGhost,
 } from '../../../shared/ghost';
 import { installedGhostStoragePart } from '../../../shared/pluginIdentity.js';
+import { createGhostProductionCallbacks } from './ghostProductionCallbacksFixture.js';
+import { GhostNotificationIndex } from '../ghostNotificationIndex.js';
+
+const createSessionNotification = createGhostProductionCallbacks<{
+  notifyGhostSessionEvent(
+    kind: 'created' | 'archived' | 'switched',
+    data: { sessionId: string },
+    claim: () => Promise<boolean>,
+    releaseRaw: (resetPrimary?: boolean) => void,
+  ): void;
+}>({ functions: ['notifyGhostSessionEvent'] });
 
 describe('did-session-switched primary session resolution', () => {
   it('allows ordinary sessions and Orca leads, but never workers or background sessions', () => {
@@ -135,9 +147,9 @@ describe('createGhostPrimarySessionFocusTracker', () => {
   });
 
   it('claims publication at the final async boundary', async () => {
-    const pending: Array<{ sessionId: string; claim: () => Promise<boolean> }> = [];
-    const tracker = createGhostPrimarySessionFocusTracker(async () => 'lead', (sessionId, claim) => {
-      pending.push({ sessionId, claim });
+    const pending: Array<{ sessionId: string; claim: () => Promise<boolean>; releaseRaw: (resetPrimary?: boolean) => void }> = [];
+    const tracker = createGhostPrimarySessionFocusTracker(async () => 'lead', (sessionId, claim, releaseRaw) => {
+      pending.push({ sessionId, claim, releaseRaw });
     });
 
     tracker.note('worker-1');
@@ -147,6 +159,8 @@ describe('createGhostPrimarySessionFocusTracker', () => {
 
     await expect(pending[0]?.claim()).resolves.toBe(false);
     await expect(pending[1]?.claim()).resolves.toBe(true);
+    // A late discovery failure must not erase the newer focus's deduplication.
+    pending[0]?.releaseRaw(true);
     await expect(pending[1]?.claim()).resolves.toBe(false);
   });
 
@@ -322,6 +336,221 @@ describe('subscriptionGateway owner boundary', () => {
 });
 
 const TURN_DATA = { sessionId: 's1', agent: 'claude-code' };
+
+// Unit regression: async discovery must preserve ordered delivery without a
+// synchronous scan, and must not reuse another owner's pending discovery.
+// Existing fan-out tests only exercise synchronous discovery / wake boundaries.
+describe('asynchronous notification discovery', () => {
+  // Unit performance regression: when recursive watching is unavailable, the
+  // real index scans on each read. Preflight and delivery must share one read
+  // for each lifecycle event, while the next event must still discover afresh.
+  it.each(['created', 'archived', 'switched'] as const)('scans once per %s event without filesystem watchers', async (kind) => {
+    const watch = vi.spyOn(fs, 'watch').mockImplementation(() => { throw new Error('watch unavailable'); });
+    const subscriber = ghost('a', { topics: ['session'] });
+    const scan = vi.fn(async () => [subscriber]);
+    const index = new GhostNotificationIndex({ roots: () => [process.cwd()], scan });
+    try {
+      const { gw, sent, running } = makeGateway({ listGhostsAsync: () => index.read() });
+      running.add('a');
+      const { notifyGhostSessionEvent } = createSessionNotification({
+        ghostOwnerScope: { capture: () => 1, isCurrent: () => true, isStable: () => true },
+        getGhostSubscriptionGateway: () => gw,
+        isGhostEligibleSession: async () => ({ outcome: 'eligible' }),
+      });
+      notifyGhostSessionEvent(kind, { sessionId: 'A' }, async () => true, () => {});
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(watch).toHaveBeenCalled();
+      expect(sent).toHaveLength(1);
+      expect(scan).toHaveBeenCalledTimes(1);
+      notifyGhostSessionEvent(kind, { sessionId: 'B' }, async () => true, () => {});
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(sent).toHaveLength(2);
+      expect(scan).toHaveBeenCalledTimes(2);
+    } finally {
+      index.dispose();
+      watch.mockRestore();
+    }
+  });
+
+  // Unit regression: an unreadable discovery root must not reserve a failed
+  // focus, either when the same raw focus retries or when the user returns.
+  it.each([false, true])('recovers after discovery fails (retry same focus: %s)', async (retrySameFocus) => {
+    let failDiscovery = false;
+    const subscriber = ghost('a', { topics: ['session'] });
+    const { gw, sent, running } = makeGateway({
+      listGhostsAsync: async () => {
+        if (failDiscovery) throw new Error('receipt root temporarily unreadable');
+        return [subscriber];
+      },
+    });
+    running.add('a');
+    const eligible = vi.fn(async () => ({ outcome: 'eligible' }));
+    const { notifyGhostSessionEvent } = createSessionNotification({
+      ghostOwnerScope: { capture: () => 1, isCurrent: () => true, isStable: () => true },
+      getGhostSubscriptionGateway: () => gw,
+      isGhostEligibleSession: eligible,
+    });
+    const tracker = createGhostPrimarySessionFocusTracker(
+      async (id) => id,
+      (sessionId, claim, releaseRaw) => notifyGhostSessionEvent('switched', { sessionId }, claim, releaseRaw),
+    );
+    tracker.note('A');
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    failDiscovery = true;
+    tracker.note('B');
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(sent).toHaveLength(1);
+    expect(eligible).toHaveBeenCalledTimes(1);
+
+    failDiscovery = false;
+    if (retrySameFocus) {
+      tracker.note('B');
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(sent).toHaveLength(2);
+    }
+    tracker.note('A');
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(sent.map(({ payload }) => 'data' in payload ? payload.data : undefined)).toEqual(
+      (retrySameFocus ? ['A', 'B', 'A'] : ['A', 'A']).map(sessionId => ({ sessionId })),
+    );
+  });
+
+  // Unit regression (PR #8752): the gateway-only preflight tests did not cover
+  // focus bookkeeping across an empty subscription set. A -> disabled B -> A
+  // must deliver both A events through the production notification entry.
+  it('advances focus without subscribers so re-enabling does not suppress a return', async () => {
+    let enabled = true;
+    const subscriber = ghost('a', { topics: ['session'] });
+    const { gw, sent, running } = makeGateway({
+      listGhostsAsync: async () => enabled ? [subscriber] : [],
+    });
+    running.add('a');
+    const eligible = vi.fn(async () => ({ outcome: 'eligible' }));
+    const { notifyGhostSessionEvent } = createSessionNotification({
+      ghostOwnerScope: { capture: () => 1, isCurrent: () => true, isStable: () => true },
+      getGhostSubscriptionGateway: () => gw,
+      isGhostEligibleSession: eligible,
+    });
+    const tracker = createGhostPrimarySessionFocusTracker(
+      async (id) => id,
+      (sessionId, claim, releaseRaw) => notifyGhostSessionEvent('switched', { sessionId }, claim, releaseRaw),
+    );
+    tracker.note('A');
+    await vi.waitFor(() => expect(sent).toHaveLength(1));
+
+    enabled = false;
+    tracker.note('B');
+    // Drain the async focus/notification chain without sleeping or assuming
+    // how many Promise continuations the implementation uses.
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(eligible).toHaveBeenCalledTimes(1);
+    expect(sent).toHaveLength(1);
+
+    enabled = true;
+    tracker.note('A');
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(sent.map(({ payload }) => 'data' in payload ? payload.data : undefined)).toEqual([
+      { sessionId: 'A' }, { sessionId: 'A' },
+    ]);
+    expect(eligible).toHaveBeenCalledTimes(2);
+  });
+
+  it('preflights the requested topic without waking unrelated or disabled plugins', async () => {
+    const { gw, deps } = makeGateway({ listGhostsAsync: async () => [
+      ghost('idle', { topics: ['session'] }), ghost('off', { topics: ['turn'] }, false),
+      ghost('hooks', { hooks: ['will-user-message'] }),
+    ] });
+    await expect(gw.preparePublish('session')).resolves.toEqual(expect.any(Function));
+    await expect(gw.preparePublish('turn')).resolves.toBeNull();
+    expect(deps.wake).not.toHaveBeenCalled();
+  });
+
+  // Prepared candidates are discovery hints, never cached authorization.
+  it.each(['approval', 'disabled', 'topic', 'owner'] as const)('rechecks %s after preparing an event', async (change) => {
+    let owner = 1;
+    const candidate = { ...ghost('a', { topics: ['session'] }), approval: { state: 'approved' as const, revision: 'old' } };
+    let live = candidate;
+    const { gw, sent, running, deps } = makeGateway({
+      listGhostsAsync: async () => [candidate],
+      findGhostForDelivery: () => live,
+      ownerScope: { capture: () => owner, isCurrent: stamp => stamp === owner, isStable: () => true },
+    });
+    running.add('a');
+    const publish = await gw.preparePublish('session');
+    expect(publish).not.toBeNull();
+    if (change === 'approval') live = { ...candidate, approval: { state: 'approved', revision: 'new' } };
+    if (change === 'disabled') live = { ...candidate, enabled: false };
+    if (change === 'topic') live = { ...candidate, manifest: { ...candidate.manifest, subscribe: { topics: ['turn'] } } };
+    if (change === 'owner') owner++;
+    publish?.('did-session-switched', { sessionId: 'A' });
+    expect(sent).toHaveLength(0);
+    expect(deps.wake).not.toHaveBeenCalled();
+  });
+
+  it('rejects an indexed subscriber after its approval was replaced without refreshing the index', async () => {
+    const candidate = { ...ghost('a', { topics: ['turn'] }), approval: { state: 'approved' as const, revision: 'old' } };
+    const { gw, sent, deps } = makeGateway({
+      listGhostsAsync: async () => [candidate],
+      findGhostForDelivery: () => ({ ...candidate, approval: { state: 'approved', revision: 'new' } }),
+    });
+    gw.publish('turn', 'did-turn-start', TURN_DATA);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(sent).toEqual([]);
+    expect(deps.wake).not.toHaveBeenCalled();
+  });
+
+  it('shares an in-flight scan, delivers in order and refreshes the next burst', async () => {
+    let resolve!: (ghosts: InstalledGhost[]) => void;
+    const pending = new Promise<InstalledGhost[]>((done) => { resolve = done; });
+    const listGhosts = vi.fn(() => { throw new Error('synchronous scan'); });
+    const listGhostsAsync = vi.fn(() => pending);
+    const subscriber = ghost('a', { topics: ['turn'] });
+    const { gw, sent, running } = makeGateway({ listGhosts, listGhostsAsync });
+    running.add('a');
+    gw.publish('turn', 'did-turn-start', TURN_DATA);
+    gw.publish('turn', 'did-turn-end', { ...TURN_DATA, durationMs: 5, endReason: 'completed' });
+    expect(sent).toEqual([]);
+    expect(listGhostsAsync).toHaveBeenCalledOnce();
+    resolve([subscriber]);
+    await vi.waitFor(() => expect(sent.map(({ payload }) => payload.name)).toEqual(['did-turn-start', 'did-turn-end']));
+    gw.publish('turn', 'did-turn-start', TURN_DATA);
+    await vi.waitFor(() => expect(sent).toHaveLength(3));
+    expect(listGhostsAsync).toHaveBeenCalledTimes(2);
+    expect(listGhosts).not.toHaveBeenCalled();
+  });
+
+  it('starts fresh discovery after owner changes while an old scan is pending', async () => {
+    let owner = 1;
+    const releases: Array<(ghosts: InstalledGhost[]) => void> = [];
+    const { gw, sent, running } = makeGateway({
+      listGhostsAsync: () => new Promise((resolve) => { releases.push(resolve); }),
+      ownerScope: { capture: () => owner, isCurrent: (stamp) => stamp === owner, isStable: () => true },
+    });
+    running.add('a');
+    gw.publish('turn', 'did-turn-start', { ...TURN_DATA, sessionId: 'old' });
+    owner++;
+    gw.publish('turn', 'did-turn-start', { ...TURN_DATA, sessionId: 'new' });
+    expect(releases).toHaveLength(2);
+    releases[0]!([ghost('a', { topics: ['turn'] })]);
+    releases[1]!([ghost('a', { topics: ['turn'] })]);
+    await vi.waitFor(() => expect(sent).toHaveLength(1));
+    expect(sent[0]!.payload).toMatchObject({ data: { sessionId: 'new' } });
+  });
+
+  it('does not deliver when the subscriber was disabled during discovery', async () => {
+    const subscriber = ghost('a', { topics: ['turn'] });
+    const { gw, sent, running } = makeGateway({
+      listGhostsAsync: async () => [subscriber],
+      findGhostForDelivery: () => ({ ...subscriber, enabled: false }),
+    });
+    running.add('a');
+    gw.publish('turn', 'did-turn-start', TURN_DATA);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(sent).toEqual([]);
+  });
+});
 
 describe('did- 旁听扇出', () => {
   it('does not deliver an old buffered event after its physical key has been reused', async () => {
@@ -1567,10 +1796,10 @@ describe('control points', () => {
 
     const routed = gw.screenControlPoint(start, startData, { pluginId: 'r1', onFailure: 'block' });
     await vi.advanceTimersByTimeAsync(0);
-    verdict(0, { agentKind: 'cc', model: 'opus', providerId: 'anthropic', effort: 'high', endpoint: 'https://evil' });
+    verdict(0, { agentKind: 'cc', model: 'opus', providerId: 'anthropic', effort: 'high', agentDeviceId: 'share:fixture', endpoint: 'https://evil' });
     expect(await routed).toEqual({
       action: 'route', ghostId: 'r1', ghostName: '意识r1', reason: 'code',
-      route: { agentKind: 'cc', model: 'opus', providerId: 'anthropic', effort: 'high' },
+      route: { agentKind: 'cc', model: 'opus', providerId: 'anthropic', effort: 'high', agentDeviceId: 'share:fixture' },
     });
 
     const malformed = gw.screenControlPoint(start, startData, { pluginId: 'r1', onFailure: 'block' });

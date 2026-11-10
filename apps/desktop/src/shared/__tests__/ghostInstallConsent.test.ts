@@ -37,6 +37,28 @@ function installed(
 }
 
 describe('plugin install consent', () => {
+  it('requires consent when an ordinary plugin switches a saved PAT to shared gh login', () => {
+    const secret = { key: 'github_pat', label: 'GitHub', inject: {
+      header: 'Authorization', format: 'Bearer {value}', hosts: ['api.github.com'],
+    } };
+    const base = manifest({ settingsHtml: 'settings.html', network: { hosts: ['api.github.com'], secrets: [secret] } });
+    const next = manifest({ settingsHtml: 'settings.html', network: { hosts: ['api.github.com'], secrets: [{ ...secret, source: 'gh-cli' }] } });
+    expect(evaluateGhostInstallConsent(installed(base), next)).toMatchObject({ kind: 'update',
+      added: expect.arrayContaining([expect.objectContaining({ key: 'network:secret:github_pat' })]),
+    });
+  });
+  // Contract: auto execution is an explicit permission, including declarations
+  // preserved by an older Host without a grant. Existing tests covered only tools.
+  it('asks for auto execution until it has an explicit approval baseline', () => {
+    const next = manifest({ tools: [{ name: 'forecast', description: 'Read the forecast', approval: 'auto' }] });
+    const old = installed(next);
+    const facts = evaluateGhostInstallConsent(old, next);
+    expect(facts).toMatchObject({ kind: 'update', added: [expect.objectContaining({ key: 'tool-auto:forecast' })] });
+    expect(evaluateGhostInstallConsent({ ...old, approvedAutoTools: ['forecast'] }, next)).toBeNull();
+    expect(evaluateGhostInstallConsent(installed(manifest()), manifest({
+      tools: [{ name: 'forecast', description: 'Read the forecast', approval: 'each-call' }],
+    }))).toBeNull();
+  });
   it('always asks on first install and lists every non-tool permission', () => {
     const facts = evaluateGhostInstallConsent(null, manifest());
     expect(facts).toMatchObject({ kind: 'install', ghostId: 'weather-chip', version: '1.0.0' });

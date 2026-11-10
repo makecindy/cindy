@@ -1,3 +1,4 @@
+import type { TextInputInstance } from 'react-native';
 import { ModelSpeedIcon } from "./ModelSpeedIcon";
 import { ModelQuotaBar } from "./ModelQuotaBar";
 import { ErrorNotice } from "@/components/ErrorNotice";
@@ -24,15 +25,7 @@ import {
   X,
   Zap,
 } from "lucide-react-native";
-import {
-  Pressable,
-  FlatList,
-  Platform,
-  StyleSheet,
-  View,
-  useWindowDimensions,
-  type TextInput as RNTextInput,
-} from "react-native";
+import { Pressable, FlatList, Platform, StyleSheet, View, useWindowDimensions } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useTranslation } from "react-i18next";
 import { Text, TextInput } from "@/components/AppText";
@@ -195,7 +188,7 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
   const [snap, setSnap] = useState<ContextSheetSnap>("half");
   const [page, setPage] = useState<Page>(null);
   const [effortExpanded, setEffortExpanded] = useState(false);
-  const searchRef = useRef<RNTextInput>(null);
+  const searchRef = useRef<TextInputInstance>(null);
   const modelListRef = useRef<FlatList>(null);
   const modelItems = useMemo(
     () =>
@@ -816,7 +809,7 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
                     windowSize={3}
                     removeClippedSubviews={false}
                     ListHeaderComponent={
-                      p.error ? <ErrorNotice message={p.error} /> : null
+                      (p.error ? <ErrorNotice message={p.error} /> : null) ?? undefined
                     }
                     ListEmptyComponent={
                       <Text style={styles.empty} testID={`${p.testID}.empty`}>

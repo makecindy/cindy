@@ -49,6 +49,12 @@ vi.mock('@/contexts/AuthContext', () => ({
   useOptionalDataOwnerGeneration: () => ownerGeneration.value,
 }));
 
+// 本文件只测详情页其它区块;介绍区带着完整 Markdown 渲染器(会初始化真实 i18n),另有专门测试。
+vi.mock('../PluginReadmeSection', () => ({
+  PluginReadmeSection: () => null,
+  usePluginReadme: () => null,
+}));
+
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
     t: (key: string, options?: Record<string, unknown>) => {
@@ -355,6 +361,7 @@ describe('Ghost plugin detail sections', () => {
   it.each([
     { layout: 'legacy', connection: { status: 'missing' } },
     { layout: 'root', connection: { status: 'auth', source: 'token' } },
+    { layout: 'local', connection: { status: 'auth', source: 'token' } },
   ])(
     'connects GitHub in $layout layout and reloads settings after authorization',
     async ({ layout, connection }) => {
@@ -376,12 +383,14 @@ describe('Ghost plugin detail sections', () => {
       });
       const ghost: InstalledGhost = {
         manifest: { schemaVersion: 3, minCindyVersion: '0.1.0', kind: 'chip',
-          id: 'cindy-github', name: 'GitHub', version: '1.0.0', entry: 'main.js', settingsHtml: 'settings.html' },
-        dir: path.join('plugins', ...(layout === 'root' ? ['_ns', '_root'] : []), 'cindy-github'),
-        namespace: null,
+          id: layout === 'local' ? 'github-helper' : 'cindy-github', name: 'GitHub', version: '1.0.0', entry: 'main.js', settingsHtml: 'settings.html',
+          network: { hosts: ['api.github.com'], secrets: [{ key: 'github_pat', label: 'GitHub', source: 'gh-cli',
+            inject: { header: 'Authorization', format: 'Bearer {value}', hosts: ['api.github.com'] } }] } },
+        dir: path.join('plugins', ...(layout === 'root' ? ['_ns', '_root'] : layout === 'local' ? ['_ns', 'local'] : []), layout === 'local' ? 'github-helper' : 'cindy-github'),
+        namespace: layout === 'local' ? 'local' : null,
         enabled: true,
         approval: { state: 'approved', revision: '00000000-0000-4000-8000-000000000001' },
-        trust: { ...detail.trust, publisherName: 'Cindy Plugin Market' },
+        trust: layout === 'local' ? undefined : { ...detail.trust, publisherName: 'Cindy Plugin Market' },
       };
       const { unmount } = render(
         <GhostPluginDetailView
@@ -407,6 +416,18 @@ describe('Ghost plugin detail sections', () => {
       unmount();
     },
   );
+  it('lets the owner explicitly choose a browser plugin instance', async () => {
+    vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
+    const activateBrowser = vi.fn(async () => ({ ok: true }));
+    Object.assign(window.electronAPI, { ghosts: { activateBrowser } });
+    const ghost = { manifest: { browserExtension: { pageControl: true } }, enabled: true } as InstalledGhost;
+    render(<GhostPluginDetailView ghost={ghost} detail={detail} panelStatus={null}
+      onBack={vi.fn()} onToggle={vi.fn()} onUse={vi.fn()} onUpdate={vi.fn()}
+      onUpdateFromFile={vi.fn()} onUninstall={vi.fn()} toggleDisabled={false} />);
+    fireEvent.click(screen.getByText('settings.ghosts.detail.browserUse'));
+    await waitFor(() => expect(activateBrowser).toHaveBeenCalledWith(detail.id));
+    expect(await screen.findByText('settings.ghosts.detail.browserActivated')).toBeTruthy();
+  });
   it('places Background Tasks after settings and before Tools for plugins declaring hiddenTasks', async () => {
     vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
     const listBackgroundTasks = vi.fn(async () => ({ items: [
@@ -455,6 +476,20 @@ describe('Ghost plugin detail sections', () => {
     expect(requestTaskApproval).toHaveBeenCalledWith(detail.id, 'observe');
     rerender(view(true));
     expect(screen.queryByRole('button', { name: 'settings.ghosts.perm.agentObserveRequest' })).toBeNull();
+  });
+  // unit: a declined first-use companions prompt is not retried by the plugin; this Host button is the only re-approval path.
+  it('offers a separate companions permission retry that requests only companions', () => {
+    vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
+    const requestTaskApproval = vi.fn(async () => ({ granted: false }));
+    Object.assign(window.electronAPI, { ghosts: { requestTaskApproval } });
+    const ghost = { manifest: { agent: { companions: true } }, enabled: true } as InstalledGhost;
+    const view = (approved = false) => <GhostPluginDetailView ghost={{ ...ghost, ...(approved ? { companionsCapabilityApproved: true as const } : {}) }} detail={detail} panelStatus="Docked" onBack={vi.fn()} onToggle={vi.fn()} onUse={vi.fn()} onUpdate={vi.fn()} onUpdateFromFile={vi.fn()} onUninstall={vi.fn()} toggleDisabled={false} />;
+    const { rerender } = render(view());
+    expect(screen.queryByRole('button', { name: 'settings.ghosts.perm.agentObserveRequest' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'settings.ghosts.perm.agentCompanionsRequest' }));
+    expect(requestTaskApproval).toHaveBeenCalledWith(detail.id, 'companions');
+    rerender(view(true));
+    expect(screen.queryByRole('button', { name: 'settings.ghosts.perm.agentCompanionsRequest' })).toBeNull();
   });
   it('uses the shared Cindy Switch for the plugin enabled control', () => {
     vi.stubGlobal(
@@ -888,6 +923,23 @@ describe('Ghost plugin detail sections', () => {
     expect(onUpdate).not.toHaveBeenCalled();
   });
 
+  it('does not offer in-place file updates for a market instance', () => {
+    vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
+    const ghost = { manifest: { id: detail.ghostId, name: detail.name, version: '1.0.0', entry: 'main.js' },
+      dir: '/plugins/market', enabled: true, namespace: null, namespaceState: 'confirmed',
+      publishingSource: { kind: 'public-market', pluginId: 'published' },
+      approval: { state: 'approved', revision: 'receipt' } } as InstalledGhost;
+    const update = vi.fn();
+    render(<GhostPluginDetailView ghost={ghost} detail={detail} panelStatus={null} onBack={vi.fn()}
+      onToggle={vi.fn()} onUse={vi.fn()} onUpdate={vi.fn()} onUpdateFromFile={update}
+      onUninstall={vi.fn()} toggleDisabled={false} />);
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'settings.ghosts.detail.moreActions' }),
+      { button: 0, ctrlKey: false });
+    expect(screen.queryByRole('menuitem', { name: 'settings.ghosts.detail.updateFromFile' })).toBeNull();
+    expect(screen.getByRole('menuitem', { name: 'settings.ghosts.uninstall' })).toBeTruthy();
+    expect(update).not.toHaveBeenCalled();
+  });
+
   it('hides the local .cindy update entry for reserved official ids outside dev builds', async () => {
     vi.stubGlobal(
       'ResizeObserver',
@@ -923,9 +975,8 @@ describe('Ghost plugin detail sections', () => {
     );
     expect(
       screen.queryByRole('menuitem', { name: 'settings.ghosts.detail.updateFromFile' }),
-    ).toBeNull();
-    // 只剩卸载一项时不画悬空分割线。
-    expect(screen.queryByRole('separator')).toBeNull();
+    ).toBeTruthy();
+    expect(screen.queryByRole('separator')).toBeTruthy();
     expect(screen.getByRole('menuitem', { name: 'settings.ghosts.uninstall' })).toBeTruthy();
     vi.unstubAllEnvs();
   });

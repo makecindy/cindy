@@ -83,6 +83,21 @@ describe("simulator native compatibility", () => {
         compute,
       }).healthy,
     ).toBe(true);
-    expect(compute).toHaveBeenCalledWith("/worktree/mobile", env);
+    expect(compute).toHaveBeenCalledWith("/worktree/mobile", env, 'ios');
+  });
+
+  // Windows whoami previously invoked xcrun. Android must compare the APK's
+  // embedded hash against Android's Expo workflow, never iOS or a version label (unit).
+  it.each([
+    [current, 'native-matched'], [previous, 'native-mismatch'], ['', 'native-unknown'],
+  ])('checks an Android APK fingerprint: %s', (hash, code) => {
+    const compute = vi.fn(() => current);
+    const env = { EXPO_PUBLIC_CINDY_AUTH_REGION: 'global' };
+    expect(inspectSimulatorNativeIdentity({
+      appPath: '/data/app/pkg/base.apk', projectDir: '/repo/mobile', env, platform: 'android',
+      readInstalledFingerprint: () => hash, compute,
+    })).toMatchObject({ code, healthy: code === 'native-matched' });
+    if (hash) expect(compute).toHaveBeenCalledWith('/repo/mobile', env, 'android');
+    else expect(compute).not.toHaveBeenCalled();
   });
 });
