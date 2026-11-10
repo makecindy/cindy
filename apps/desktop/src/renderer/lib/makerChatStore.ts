@@ -5252,7 +5252,13 @@ function requestInputProjection(
           } else if (hostRecovery && projection.turnInProgress === true) {
             setState(sessionId, s => ({
               ...s, isStreaming: true,
-              agentStatus: { ...s.agentStatus, isRunning: true },
+              agentStatus: {
+                ...s.agentStatus,
+                isRunning: true,
+                // 断连期间新起的一轮：这个窗口从没见过它开始，必须铸一个新时钟。
+                // 沿用上一轮的残留会让这一轮的失败看起来是重复告警，主进程按 id 直接吞掉。
+                ...turnClockForRunning(s.agentStatus),
+              },
             }));
           }
           applyInputProjection(projection, { supersedeQueries: false });
