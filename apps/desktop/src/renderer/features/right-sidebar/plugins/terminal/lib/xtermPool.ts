@@ -4,7 +4,7 @@
  * 普通 tab 切换保留挂载并隐藏,任务切换等路径仍可能卸载 TabBody,
  * 但 PTY 在 main 进程仍然存活。如果每次重新挂载都重建 xterm Terminal,scrollback
  * (用户看过的输出历史)就丢了。pool 把 Terminal 实例跟 tabId 绑定,跨 mount/unmount
- * 复用,只在 plugin.onBeforeClose 真正关 tab 时才 dispose。
+ * 复用。已退出且隐藏的实例转为紧凑快照；关闭 tab 时连快照一起释放。
  *
  * 跟 web-browser plugin 的 BrowserWebviewPool 同款思路,但简单很多——xterm
  * Terminal 只是个 JS 对象,没有像 webview 那样必须保活的 DOM,挂到哪个 div
@@ -23,6 +23,7 @@ import '@xterm/xterm/css/xterm.css';
 import { Terminal, type ITerminalOptions } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
+import { SerializeAddon } from '@xterm/addon-serialize';
 
 import { createLogger } from '@/lib/logger';
 import {
@@ -30,11 +31,16 @@ import {
   DEFAULT_TERMINAL_FONT_FAMILY,
 } from '@/../shared/appearanceSettings';
 
-import { xtermEntries as pool, type XtermEntry } from './xtermEntries';
+import type { TerminalExitInfo, TerminalDataEvent, TerminalExitEvent } from '@/../shared/terminal-bridge';
+import { xtermEntries as pool, xtermSnapshots as snapshots, type XtermEntry } from './xtermEntries';
 
 export type { XtermEntry } from './xtermEntries';
 
 const log = createLogger('terminal');
+const serializers = new WeakMap<Terminal, SerializeAddon>();
+const pendingSuspensions = new Map<string, { cancel(): void }>();
+const detachedStreams = new Map<string, () => void>();
+const exits = new Map<string, TerminalExitInfo>();
 
 const DEFAULT_OPTIONS: ITerminalOptions = {
   // Codex 同款字号 / 字体;cursorBlink 跟 iTerm 默认行为对齐。
@@ -59,6 +65,8 @@ const DEFAULT_OPTIONS: ITerminalOptions = {
 
 /** 获取或创建某个 tabId 的 xterm 实例。重复调用同 id 返回同一个。 */
 export function getOrCreateXterm(tabId: string): XtermEntry {
+  detachedStreams.get(tabId)?.();
+  pendingSuspensions.get(tabId)?.cancel();
   let entry = pool.get(tabId);
   if (entry) return entry;
   const terminal = new Terminal(DEFAULT_OPTIONS);
@@ -70,6 +78,9 @@ export function getOrCreateXterm(tabId: string): XtermEntry {
   const webLinks = new WebLinksAddon(openTerminalExternalLink);
   terminal.loadAddon(fitAddon);
   terminal.loadAddon(webLinks);
+  const serializer = new SerializeAddon();
+  terminal.loadAddon(serializer);
+  serializers.set(terminal, serializer);
   attachSelectionCopyShortcut(terminal);
   entry = {
     terminal,
@@ -78,7 +89,91 @@ export function getOrCreateXterm(tabId: string): XtermEntry {
     ptyAttached: false,
   };
   pool.set(tabId, entry);
+  const snapshot = snapshots.get(tabId);
+  if (snapshot) {
+    snapshots.delete(tabId);
+    entry.lastSize = snapshot.lastSize;
+    entry.ptyAttached = snapshot.ptyAttached;
+    terminal.resize(snapshot.lastSize.cols, snapshot.lastSize.rows);
+    const restoredEntry = entry;
+    entry.restored = new Promise(resolve => terminal.write(snapshot.data, () => {
+      terminal.scrollToLine(snapshot.viewportY);
+      restoredEntry.restored = undefined;
+      resolve();
+    }));
+  }
   return entry;
+}
+
+/** Exit state belongs to this renderer lifetime, not hydrated/persisted tab state. */
+export function getXtermExit(tabId: string): TerminalExitInfo | null {
+  return exits.get(tabId) ?? null;
+}
+
+export function setXtermExit(tabId: string, exit: TerminalExitInfo | null): void {
+  if (exit) exits.set(tabId, exit);
+  else exits.delete(tabId);
+}
+
+/** Keep receiving output while a running tab's body is unmounted. */
+export function detachXterm(tabId: string): void {
+  detachedStreams.get(tabId)?.();
+  if (!pool.has(tabId)) return;
+  if (getXtermExit(tabId)) {
+    void suspendExitedXterm(tabId);
+    return;
+  }
+  const offData = window.electronAPI.terminal.onData((event: TerminalDataEvent) => {
+    if (event.id === tabId) pool.get(tabId)?.terminal.write(event.chunk);
+  });
+  const offExit = window.electronAPI.terminal.onExit((event: TerminalExitEvent) => {
+    if (event.id !== tabId) return;
+    setXtermExit(tabId, event.exit);
+    stop();
+    void suspendExitedXterm(tabId);
+  });
+  const stop = () => {
+    offData();
+    offExit();
+    detachedStreams.delete(tabId);
+  };
+  detachedStreams.set(tabId, stop);
+}
+
+/** Only call for an exited, hidden terminal. Keep ANSI history, release its renderer. */
+export function suspendExitedXterm(tabId: string): Promise<boolean> {
+  const entry = pool.get(tabId);
+  if (!entry) return Promise.resolve(false);
+  pendingSuspensions.get(tabId)?.cancel();
+  return new Promise((resolve) => {
+    const request = { cancel() { pendingSuspensions.delete(tabId); resolve(false); } };
+    pendingSuspensions.set(tabId, request);
+    // PTY exit can arrive before xterm finishes parsing its last output batch.
+    entry.terminal.write('', () => {
+      if (pendingSuspensions.get(tabId) !== request || pool.get(tabId) !== entry) {
+        resolve(false);
+        return;
+      }
+      pendingSuspensions.delete(tabId);
+      try {
+        snapshots.set(tabId, {
+          // Store compact UTF-8 bytes, not the serializer's per-cell string ropes.
+          data: new TextEncoder().encode(serializers.get(entry.terminal)!.serialize()),
+          lastSize: { cols: entry.terminal.cols, rows: entry.terminal.rows },
+          ptyAttached: entry.ptyAttached,
+          viewportY: entry.terminal.buffer.active.viewportY,
+        });
+      } catch {
+        // Retain the live view if serialization fails; never discard history.
+        snapshots.delete(tabId);
+        resolve(false);
+        return;
+      }
+      pool.delete(tabId);
+      try { entry.terminal.dispose(); } catch { /* Snapshot remains recoverable. */ }
+      resolve(true);
+    });
+  });
 }
 
 /**
@@ -104,6 +199,10 @@ export function openTerminalExternalLink(_event: MouseEvent, uri: string): void 
 
 /** 仅供 plugin.onBeforeClose 调用：真正销毁实例 + 释放 GPU/DOM 资源。 */
 export function disposeXterm(tabId: string): void {
+  detachedStreams.get(tabId)?.();
+  exits.delete(tabId);
+  snapshots.delete(tabId);
+  pendingSuspensions.get(tabId)?.cancel();
   const entry = pool.get(tabId);
   if (!entry) return;
   pool.delete(tabId);
@@ -116,7 +215,9 @@ export function disposeXterm(tabId: string): void {
 
 /** 测试用 */
 export function __resetPoolForTesting(): void {
-  for (const [id] of pool) disposeXterm(id);
+  for (const id of new Set([...pool.keys(), ...snapshots.keys(), ...exits.keys()])) disposeXterm(id);
+  snapshots.clear();
+  pendingSuspensions.clear();
 }
 
 function attachSelectionCopyShortcut(terminal: Terminal): void {

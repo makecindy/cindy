@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { TabKindHostContext } from '../../../types';
+import type { TerminalExitEvent } from '@/../shared/terminal-bridge';
 
 const fit = vi.fn();
 const resize = vi.fn(async () => undefined);
@@ -31,9 +32,13 @@ vi.mock('react-i18next', () => ({
 vi.mock('@/components/ui/spinner', () => ({ Spinner: () => null }));
 vi.mock('../lib/xtermPool', () => ({
   getOrCreateXterm: () => entry,
+  detachXterm: vi.fn(),
+  getXtermExit: vi.fn(() => null),
+  setXtermExit: vi.fn(),
 }));
 
 import { TerminalTabBody } from '../TerminalTabBody';
+import { detachXterm } from '../lib/xtermPool';
 
 class TestResizeObserver {
   static callback: ResizeObserverCallback | null = null;
@@ -60,6 +65,8 @@ function makeContext(overrides: Partial<TabKindHostContext> = {}): TabKindHostCo
 }
 
 beforeEach(() => {
+  vi.mocked(detachXterm).mockClear();
+  entry.ptyAttached = true;
   fit.mockClear();
   resize.mockClear();
   entry.terminal.open.mockClear();
@@ -126,6 +133,34 @@ describe('TerminalTabBody sidebar visibility', () => {
     expect(resize).toHaveBeenCalledWith('terminal-1', 100, 24);
   });
 
+  it('releases an exited hidden view and restores it without creating a new PTY', () => {
+    const ctx = makeContext();
+    const state = { created: true, exited: { code: 0, signal: null }, title: '', shellId: '', shellDisplayName: '' };
+    const view = render(<TerminalTabBody state={state} ctx={ctx} active shellVisible />);
+    view.rerender(<TerminalTabBody state={state} ctx={ctx} active shellVisible={false} />);
+    expect(detachXterm).toHaveBeenCalledWith('terminal-1');
+    view.rerender(<TerminalTabBody state={state} ctx={ctx} active shellVisible />);
+    expect(entry.terminal.open).toHaveBeenCalledTimes(2);
+    expect(window.electronAPI.terminal.create).not.toHaveBeenCalled();
+  });
+
+  // Unit: hydrateState clears persisted exit flags on each sidebar render.
+  // Native exit must remain visible and must not attempt create on an exited PTY.
+  it('keeps the runtime exit when the parent hydrates away its exit patch', () => {
+    let onExit!: (event: TerminalExitEvent) => void;
+    vi.mocked(window.electronAPI.terminal.onExit).mockImplementation(listener => {
+      onExit = listener;
+      return vi.fn();
+    });
+    const state = { created: false, exited: null, title: '', shellId: '', shellDisplayName: '' };
+    const ctx = makeContext();
+    const view = render(<TerminalTabBody state={state} ctx={ctx} active />);
+    act(() => onExit({ id: ctx.tabId, exit: { code: 0, signal: null } }));
+    view.rerender(<TerminalTabBody state={{ ...state }} ctx={ctx} active />);
+    expect(screen.getByText('rightSidebar.terminal.restart')).toBeTruthy();
+    expect(window.electronAPI.terminal.create).not.toHaveBeenCalled();
+  });
+
   it('drops an already queued fit when the sidebar collapses before its animation frame', () => {
     let frame: FrameRequestCallback | undefined;
     vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => {
@@ -159,6 +194,7 @@ describe('TerminalTabBody sidebar visibility', () => {
 
 describe('TerminalTabBody remote ownership', () => {
   it('continues to create a PTY for a confirmed local session', async () => {
+    entry.ptyAttached = false;
     render(
       <TerminalTabBody
         state={{ created: false, exited: null, title: '', shellId: '', shellDisplayName: '' }}
@@ -173,6 +209,7 @@ describe('TerminalTabBody remote ownership', () => {
   });
 
   it('creates the local PTY after device-link ownership resolves from unknown to local', async () => {
+    entry.ptyAttached = false;
     const unresolvedContext = makeContext({ deviceLinkDeviceId: undefined });
     const state = { created: false, exited: null, title: '', shellId: '', shellDisplayName: '' };
     const view = render(<TerminalTabBody state={state} ctx={unresolvedContext} active />);

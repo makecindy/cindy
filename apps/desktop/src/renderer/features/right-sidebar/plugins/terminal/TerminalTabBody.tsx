@@ -10,7 +10,7 @@ import { Button } from '@/components/ui/button';
  *   3. PTY 输出 → main 推 terminal:data event → 自己按 id filter → terminal.write(chunk)
  *   4. PTY 退出 → state.exited 填上 → 渲染 overlay (退出码 + Restart 按钮)
  *      点 Restart → IPC.terminal.restart(id) → 清 state.exited
- *   5. unmount(切走 / 整个 RSB 关）：仅离开 DOM，xterm 实例和 PTY 都保活
+ *   5. 隐藏 / unmount：运行中的 PTY 继续接收输出；已退出的 xterm 转为快照
  *   6. 真正销毁(关 tab 触发 plugin.onBeforeClose)：disposeXterm + IPC.terminal.dispose
  *
  * resize：ResizeObserver 监听 slot 尺寸 → fitAddon.fit() → 拿 cols/rows → IPC.terminal.resize
@@ -24,7 +24,7 @@ import { useTranslation } from 'react-i18next';
 
 import { Spinner } from '@/components/ui/spinner';
 import type { TabKindHostContext } from '../../types';
-import { getOrCreateXterm, type XtermEntry } from './lib/xtermPool';
+import { getOrCreateXterm, detachXterm, getXtermExit, setXtermExit, type XtermEntry } from './lib/xtermPool';
 import { createTerminalFontController } from './lib/terminalFont';
 import { useTerminalFontSettings } from './lib/useTerminalFontSettings';
 import type {
@@ -89,16 +89,19 @@ function LocalTerminalTabBody({ state, ctx, active, shellVisible = true }: Props
   const aliveRef = useRef(true);
   const shellVisibleRef = useRef(shellVisible);
   shellVisibleRef.current = shellVisible;
+  const [runtimeExit, setRuntimeExit] = useState(() => getXtermExit(tabId));
+  const exited = runtimeExit ?? state.exited;
 
   const [runtimeError, setRuntimeError] = useState<RuntimeError | null>(null);
   const [restarting, setRestarting] = useState(false);
+  const suspended = exited !== null && !restarting && (active === false || !shellVisible);
 
   // ─── 1. xterm DOM 挂载 + IPC data/exit 订阅 ───
   // 用 useLayoutEffect 确保 paint 前 DOM 已经 attach,避免首帧空白
   useLayoutEffect(() => {
     aliveRef.current = true;
     const slot = slotRef.current;
-    if (!slot) return;
+    if (!slot || suspended) return;
 
     const entry = getOrCreateXterm(tabId);
     entryRef.current = entry;
@@ -129,6 +132,8 @@ function LocalTerminalTabBody({ state, ctx, active, shellVisible = true }: Props
     const offExit = window.electronAPI.terminal.onExit((evt: unknown) => {
       const ex = evt as TerminalExitEvent;
       if (!aliveRef.current || ex.id !== tabId) return;
+      setXtermExit(tabId, ex.exit);
+      setRuntimeExit(ex.exit);
       patchState({ exited: ex.exit });
     });
 
@@ -140,6 +145,11 @@ function LocalTerminalTabBody({ state, ctx, active, shellVisible = true }: Props
 
     // 折叠侧栏或隐藏页签时保留最后可用尺寸，恢复可见后再测量。
     if (activeRef.current !== false && shellVisibleRef.current) fitNow(entry, slot);
+    void entry.restored?.then(() => {
+      if (aliveRef.current && entryRef.current === entry && activeRef.current !== false && shellVisibleRef.current) {
+        fitAndPushSize(entry, tabId, slot);
+      }
+    });
 
     return () => {
       aliveRef.current = false;
@@ -149,14 +159,16 @@ function LocalTerminalTabBody({ state, ctx, active, shellVisible = true }: Props
       onDataDisposerRef.current = null;
       offData();
       offExit();
-      // xterm 实例和 PTY 都保活,这里仅 detach DOM 不 dispose
+      entryRef.current = null;
+      detachXterm(tabId);
+      // A running PTY retains its view; an exited one keeps a compact ANSI snapshot.
     };
-  }, [tabId, patchState]);
+  }, [tabId, patchState, suspended]);
 
   // Font changes are independent from the DOM/PTY lifecycle and never focus the terminal.
   useEffect(() => {
     fontControllerRef.current?.update({ terminalFamily, terminalSize });
-  }, [terminalFamily, terminalSize, tabId, patchState]);
+  }, [terminalFamily, terminalSize, tabId, patchState, suspended]);
 
   // ─── 2. PTY 创建 / 跨窗口 re-attach ───
   // 两种进入条件:
@@ -167,10 +179,10 @@ function LocalTerminalTabBody({ state, ctx, active, shellVisible = true }: Props
   //      ptyManager.create 是幂等 attach、可换 owner —— 再调一次把 sink 切到本窗口,
   //      输入输出即恢复(xterm scrollback 是 per-renderer 的,迁移后丢失可接受)。
   useEffect(() => {
-    if (restarting) return;
+    if (restarting || exited || suspended) return;
     const entry = entryRef.current;
     if (!entry) return;
-    if (state.created && entry.ptyAttached) return;
+    if (entry.ptyAttached) return;
     const isReattach = state.created;
     let cancelled = false;
     const { cols, rows } = entry.lastSize;
@@ -211,7 +223,7 @@ function LocalTerminalTabBody({ state, ctx, active, shellVisible = true }: Props
     return () => {
       cancelled = true;
     };
-  }, [state.created, restarting, tabId, workdir, patchState]);
+  }, [state.created, exited, suspended, restarting, tabId, workdir, patchState]);
 
   // ─── 3. ResizeObserver → fit → IPC resize ───
   useEffect(() => {
@@ -248,7 +260,13 @@ function LocalTerminalTabBody({ state, ctx, active, shellVisible = true }: Props
     setRestarting(true);
     setRuntimeError(null);
     try {
+      const previousExit = getXtermExit(tabId);
       const result = await window.electronAPI.terminal.restart(tabId);
+      // A short-lived restarted shell can exit before the IPC reply arrives.
+      if (getXtermExit(tabId) === previousExit) {
+        setXtermExit(tabId, null);
+        if (aliveRef.current) setRuntimeExit(null);
+      }
       if (!aliveRef.current) return;
       // The exited PTY ignored font-driven resizes. Restart uses its old grid,
       // so resend the latest usable size even when the renderer has not changed.
@@ -278,9 +296,9 @@ function LocalTerminalTabBody({ state, ctx, active, shellVisible = true }: Props
   return (
     <div className="relative h-full w-full bg-[#1c1c1c]">
       <div ref={slotRef} className="absolute top-2 bottom-0 left-2 right-2" />
-      {state.exited != null && !runtimeError && (
+      {exited != null && !runtimeError && (
         <ExitedOverlay
-          exit={state.exited}
+          exit={exited}
           restarting={restarting}
           onRestart={onRestart}
           t={t}
@@ -305,7 +323,7 @@ function hasSize(slot: HTMLElement): boolean {
 }
 
 function fitNow(entry: XtermEntry, slot: HTMLElement): void {
-  if (!hasSize(slot)) return;
+  if (entry.restored || !hasSize(slot)) return;
   try {
     entry.fitAddon.fit();
     entry.lastSize = { cols: entry.terminal.cols, rows: entry.terminal.rows };
@@ -315,7 +333,7 @@ function fitNow(entry: XtermEntry, slot: HTMLElement): void {
 }
 
 function fitAndPushSize(entry: XtermEntry, tabId: string, slot: HTMLElement): void {
-  if (!hasSize(slot)) return;
+  if (entry.restored || !hasSize(slot)) return;
   try {
     entry.fitAddon.fit();
   } catch {
