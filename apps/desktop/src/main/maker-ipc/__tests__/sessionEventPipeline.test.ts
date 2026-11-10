@@ -81,9 +81,6 @@ vi.mock('../../turnCostBroadcaster.js', () => ({
 vi.mock('../../modelMismatchBroadcaster.js', () => ({
   recordModelMismatchOnMessage: effects.fn('recordModelMismatchOnMessage'),
 }));
-vi.mock('../botLearningReview.js', () => ({
-  reviewTeammateLearning: effects.fn('reviewTeammateLearning'),
-}));
 vi.mock('../../usage/claudeAccountUsage.js', () => ({
   triggerClaudeAccountUsageRefresh: effects.fn('triggerClaudeAccountUsageRefresh'),
 }));
@@ -301,10 +298,8 @@ function harness() {
     deferUnsuccessfulProductTurn: (owner: Parameters<typeof failureGate.defer>[0]) => failureGate.defer(owner),
     log,
     botCompactRuntimeRefreshCoordinator: { noteBoundary: vi.fn() },
-    workingMemoryRefresh: { markCompacted: vi.fn() },
     wireNoteMemory: { reset: vi.fn() },
     attemptBotCompactRuntimeRefresh: vi.fn(),
-    botDelegationServiceHolder: { settleSession: vi.fn(async () => {}) },
     isFencedStaleSessionTerminal: vi.fn(() => false),
     redactEventForRenderer: vi.fn((value: AgentEvent): AgentEvent => ({ ...value, data: { redacted: true } })),
     interruptedTurnAutoResumeGuard: {
@@ -2546,24 +2541,6 @@ describe('usage through the production event pipeline', () => {
 
 
 describe('Bot adapters in the shared event pipeline', () => {
-  it.each(['a long but incomplete answer', ''])('settles output-limit with its available result (%j) before the paired done', async (result) => {
-    const h = harness();
-    h.emit(event('error', {
-      reason: 'output-limit', message: 'Pi reached the model output limit.',
-      isTerminal: true, result,
-    }, { source: 'pi', sessionTurnGeneration: 4 }));
-    await microtasks();
-    expect(h.deps.botDelegationServiceHolder.settleSession).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
-      childSessionId: 'task', outcome: 'error', resultText: result,
-      error: 'Pi reached the model output limit.',
-    }));
-    h.deps.autoResumeBookkeeping.consumeFailedTurnCompletionTail.mockReturnValue(true);
-    h.emit(event('done', { status: 'failed', result }, { source: 'pi', sessionTurnGeneration: 4 }));
-    await microtasks();
-    expect(h.deps.botDelegationServiceHolder.settleSession).toHaveBeenCalledOnce();
-    await h.dispose();
-  });
-
   it('keeps peer replies private in persistence and broadcast before done clears the input', () => {
     const h = harness();
     h.deps.agentInputCoordinatorHolder.getActiveInputClientId.mockReturnValue('bot-dm:thread:delivery');
@@ -2803,17 +2780,12 @@ describe('Bot adapters in the shared event pipeline', () => {
     h.deps.attemptBotCompactRuntimeRefresh.mockImplementation(() => { void coordinator.attempt(h.session); });
     h.emit(event('compact_boundary'));
     expect(h.deps.botCompactRuntimeRefreshCoordinator.noteBoundary).not.toHaveBeenCalled();
-    // 原生摘要可能丢掉账本内容:下一次发送补一份工作记忆。
-    expect(h.deps.workingMemoryRefresh.markCompacted).toHaveBeenCalledWith('task');
     // 原生摘要可能丢掉了环境说明:下一轮整体重发。
     expect(h.deps.wireNoteMemory.reset).toHaveBeenCalledWith('task');
     expect(h.deps.attemptBotCompactRuntimeRefresh).not.toHaveBeenCalled();
     h.deps.agentInputCoordinatorHolder.getQueueControlSnapshot.mockReturnValue({ pendingQueue: [{}] });
     h.emit(event('done', { result: 'first result' }));
     await microtasks();
-    expect(h.deps.botDelegationServiceHolder.settleSession).toHaveBeenCalledWith(expect.objectContaining({
-      childSessionId: 'task', resultText: 'first result', hadPendingInputAtTerminal: true,
-    }));
     expect(h.deps.attemptBotCompactRuntimeRefresh).toHaveBeenCalledWith(h.session, 'event:done');
     expect(close).not.toHaveBeenCalled();
     expect(bootstrap).not.toHaveBeenCalled();

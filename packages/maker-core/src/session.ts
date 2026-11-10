@@ -645,6 +645,8 @@ export class Session {
   private turnGeneration = 0;
   /** 已为哪个 turn 代号排过 abort 复核；同一 turn 上重复 abort 不重复排。 */
   private abortRecoveryScheduledFor: number | null = null;
+  /** Host operations can start new work without creating a user-turn generation. */
+  private abortRecoveryEpoch = 0;
   private lastEventType: string | null = null;
   /** 优雅停止所需的 turn 控制事实；不承担 UI/MCP 会话状态投影。 */
   private turnControlState: TurnControlState | null = null;
@@ -677,8 +679,8 @@ export class Session {
         && generation === this.turnGeneration,
       isLateAnswer: (generation) => generation !== this.turnGeneration || !this.handle.isTurnRunning?.(),
       resolve: (request) => this.interactionListener!(request),
-      deliver: async (text, signal, requestId) => {
-        if (this.asyncQuestionAnswerDispatcher) return this.asyncQuestionAnswerDispatcher(text, signal, requestId);
+      deliver: async (text, signal, requestId, displayText) => {
+        if (this.asyncQuestionAnswerDispatcher) return this.asyncQuestionAnswerDispatcher(text, signal, requestId, displayText);
         const options = { signal, [ASYNC_QUESTION_ANSWER]: true as const };
         if (this.handle.isTurnRunning?.()) {
           try { await this.steer(text, options); return; } catch (error) {
@@ -881,10 +883,13 @@ export class Session {
     return snapshot;
   }
 
-  private asyncQuestionAnswerDispatcher?: (text: string, signal: AbortSignal, requestId: string) => Promise<void>;
+  private asyncQuestionAnswerDispatcher?: (text: string, signal: AbortSignal, requestId: string, displayText: string) => Promise<void>;
 
-  /** Hosts with a durable input queue own admission/persistence of question replies. */
-  setAsyncQuestionAnswerDispatcher(dispatch: (text: string, signal: AbortSignal, requestId: string) => Promise<void>): void {
+  /**
+   * Hosts with a durable input queue own admission/persistence of question replies.
+   * `text` is the model's copy; `displayText` is what history and queues show.
+   */
+  setAsyncQuestionAnswerDispatcher(dispatch: (text: string, signal: AbortSignal, requestId: string, displayText: string) => Promise<void>): void {
     this.asyncQuestionAnswerDispatcher = dispatch;
   }
 
@@ -2233,6 +2238,9 @@ export class Session {
   /** 手动压缩会话上下文(capability 见 Capabilities.manualCompact)。 */
   async compactSession(instructions?: string): Promise<ManualCompactResult> {
     this.ensureActive();
+    if (this.agentKind === 'codex' && (this.sendReservation !== null || this.hostTurnLeases.size > 0)) {
+      throw new Error('Cannot compact while a Codex send is reserved');
+    }
     if (!this.capabilities.manualCompact?.supported) {
       throw new NotSupportedError(
         'manualCompact',
@@ -2241,6 +2249,16 @@ export class Session {
     }
     if (!this.handle.compactSession) {
       throw new NotSupportedError('manualCompact', { supported: false, reason: 'not-implemented' });
+    }
+    if (this.agentKind === 'codex') {
+      // Only a fully settled prior turn may yield to native compaction. Retire
+      // its Stop check without inventing a new user turn; a Stop on the compact
+      // itself must still get a fresh, bounded recovery check.
+      if (this.isTurnRunning() || this.hasUnsettledTurn()) {
+        throw this.createSessionRunningError();
+      }
+      this.abortRecoveryEpoch += 1;
+      this.abortRecoveryScheduledFor = null;
     }
     return this.handle.compactSession(instructions);
   }
@@ -3507,7 +3525,7 @@ export class Session {
     // 复核于是关掉一条其实还响应得动的会话(第十八轮 P1)。与 armTurnStallSlice、codex 的
     // armUpstreamIdleSlice、claude-code 的 armUpstreamResponseIdleSlice、scheduler 的
     // absorbSuspendGap、排队派发的 QUEUED_DISPATCH_SUSPEND_GAP_MS 同源:壁钟差 ≠ 清醒时间。
-    this.armAbortRecoverySlice(generation, graceMs, graceMs, trigger);
+    this.armAbortRecoverySlice(generation, graceMs, graceMs, trigger, ++this.abortRecoveryEpoch);
   }
 
   /** 宽限的分片计时:片尾核对壁钟,发现被冻结过就把那一片作废重开(额度不扣)。 */
@@ -3516,10 +3534,12 @@ export class Session {
     remainingMs: number,
     graceMs: number,
     trigger: 'stall-watchdog' | 'manual-abort',
+    recoveryEpoch: number,
   ): void {
     const slice = Math.min(remainingMs, TURN_STALL_SLICE_MS);
     const startedAt = Date.now();
     const timer = setTimeout(() => {
+      if (recoveryEpoch !== this.abortRecoveryEpoch) return;
       const elapsed = Date.now() - startedAt;
       if (elapsed > slice + TURN_STALL_SUSPEND_GAP_MS) {
         this.logger.info('abort recovery skipped a suspended slice', {
@@ -3527,12 +3547,12 @@ export class Session {
           sliceMs: slice,
           elapsedMs: elapsed,
         });
-        this.armAbortRecoverySlice(generation, remainingMs, graceMs, trigger);
+        this.armAbortRecoverySlice(generation, remainingMs, graceMs, trigger, recoveryEpoch);
         return;
       }
       const left = remainingMs - Math.max(0, elapsed);
       if (left > 0) {
-        this.armAbortRecoverySlice(generation, left, graceMs, trigger);
+        this.armAbortRecoverySlice(generation, left, graceMs, trigger, recoveryEpoch);
         return;
       }
       // 把真正生效的宽限与触发来源带进复核:两条路径的宽限不同(手动 60s / 看门狗 10s),

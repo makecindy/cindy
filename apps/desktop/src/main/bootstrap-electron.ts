@@ -5,14 +5,11 @@ import { updatePersonalLocalPlugins } from './cindy-brain/index.js';
 import { observeDesktopStartupResult } from './devStartupStatus.js';
 import { registerRuntimeSettingsSection } from './app-settings/runtime.js';
 import { z as settingsSchema } from 'zod';
-import { deliverRoutineResult, listRoutineDeliveryTargets } from './routines/delivery.js';
 import { flushPluginUsageLifecycle } from './plugin-usage/current.js';
 import { flushSessionPiTurnUsage, retryPendingPiUsageReceipts } from './maker-ipc/piUsageReceipts.js';
 import { onUsagePricingChanged } from './usage/pricingChanges.js';
 import { registerAccessibilitySupportIpc } from './accessibility-support-ipc.js';
 import { mcpAppSchemePrivilege, registerMcpAppProtocol } from './mcp-apps/sandboxProtocol.js';
-import { prepareImportedAutomation, finishImportedAutomation } from './bot-import/automationRuntime.js';
-import { ensureImportedAutomationReady, recoverCompanionImports } from './bot-import/host.js';
 import { listWorktreeRecycleStatus, controlWorktreeRecycle } from './worktree/recycleControls';
 import { registerFilePeerIpc } from './device-link/filePeer';
 import { registerTaskMigrationIpc } from './task-migration/service';
@@ -852,7 +849,7 @@ import { SidebarTabWindowsController } from './sidebar-tab-window/controller.js'
 import { resolveWindowBoundsNearPoint } from './windowBounds.js';
 import { createSidebarTabWindow } from './sidebar-tab-window/window.js';
 import { registerSidebarTabWindowIpc } from './sidebar-tab-window/ipc.js';
-import { hasAssignedBotWorkbenchTab, setRightSidebarTabsChangeBroadcaster } from './localDb/ipc/rightSidebarTabs.js';
+import { setRightSidebarTabsChangeBroadcaster } from './localDb/ipc/rightSidebarTabs.js';
 import {
   readRsbWindowSettings,
   resetRsbWindowSettingsForStartup,
@@ -860,7 +857,6 @@ import {
 } from './right-sidebar-window/settings-store.js';
 import {
   anySessionInTurn,
-  allowBotWorkbenchPendingPermission,
   listInTurnSessionIds,
   applyCodexSpawnConfigChangeWithRestart,
   clearDeferredCodexRestartForOwnerBoundary,
@@ -874,8 +870,6 @@ import {
   createAutomationUserTurnGitBaselineHooks,
   registerModelVisibilitySyncIpc,
   registerMakerIpc as registerMakerCoreIpc,
-  tryGetBotDelegationService,
-  restoreBotRuntimeForCurrentOwner,
   restoreOrcaRemoteWorkersForCurrentOwner,
   stopOrcaRemoteWorkersForOwnerBoundary,
   isSessionTurnPendingCompletion,
@@ -1276,11 +1270,8 @@ import {
   getScheduleStorageIfInitialized,
   getProjectAutomationLoader,
 } from './scheduler-host/index.desktop.js';
-import { configureRoutineHost } from './routines/service.js';
-import { configureBotAutonomyHost, initBotAutonomy } from './bot-autonomy/service.js';
 import { voiceCallCoordinator } from './voice-conversation/callCoordinator.js';
 import { hasVoiceConversationLease } from './voice-conversation/lease.js';
-import { getBotRemoteResourceSource, ensureBotRoutineLaneSession } from './localDb/ipc/bots.js';
 import {
   registerScheduleHandlers,
   awaitAccountSchedulerReady,
@@ -1471,26 +1462,6 @@ async function waitForCurrentAccountProviderModelsReady(): Promise<void> {
   }
 }
 
-// Live getters preserve account/scheduler replacement without loading Main modules at dispatch time.
-configureRoutineHost({
-  deliverResult: deliverRoutineResult, deliveryTargets: listRoutineDeliveryTargets,
-  assertImportedAutomationReady: ensureImportedAutomationReady, prepareImportedAutomation, finishImportedAutomation, recoverImports: recoverCompanionImports,
-  getBot: getBotRemoteResourceSource,
-  ensureRoutineSession: ensureBotRoutineLaneSession,
-  closeRoutineSession: async (sessionId) => {
-    await getMakerIfReady()?.closeSession(sessionId);
-  },
-  // fresh 任务未被派发即回收：复用普通任务同一条删除写入（不另起并行写链）。
-  deleteRoutineSession: async (sessionId) => {
-    await patchSessionMetaInDb(sessionId, { status: 'deleted' });
-  },
-  getScheduler: getSchedulerIfInitialized,
-  getScheduleStorage,
-  screenControlPoint: screenGhostControlPoint,
-  resolvePreRunPlugin: resolveGhostControlPointPlugin,
-});
-// 伙伴自主跟进：跟随例行任务引擎生命周期（引擎每次创建后重新登记 host:sessions 事件源）。
-configureBotAutonomyHost({ getMainWindow: () => mainWindowRef });
 voiceCallCoordinator.configure({
   hostSender: () => {
     const win = mainWindowRef;
@@ -1503,7 +1474,6 @@ voiceCallCoordinator.configure({
   onActiveChange: (active) => setMainWindowBackgroundThrottlingForVoiceCall(active),
   leaseHeld: hasVoiceConversationLease,
 });
-initBotAutonomy();
 
 /**
  * Phase 4: 不再用 `_schedulerStarted` flag —— `startScheduler()` 内部以 `_scheduler`
@@ -1611,6 +1581,15 @@ async function attemptStartSchedulerOnce(): Promise<void> {
       attachProjectAutomationEventListeners(getProjectAutomationLoader());
       _scheduleIpcRegistered.add(scheduler);
     }
+    // Teammates become projects (V2): needs the scheduler for their automations. Once per
+    // teammate (receipt); runs in the background and never blocks startup.
+    void import('./maker-ipc/botV2Migration.js')
+      .then(({ migrateTeammatesToV2 }) => migrateTeammatesToV2())
+      .catch(error => console.warn('[bootstrap-electron] teammate V2 upgrade not started', error));
+    // Resume a companion import interrupted by a restart; never blocks startup.
+    void import('./bot-import/host.js')
+      .then(({ recoverCompanionImports }) => recoverCompanionImports())
+      .catch(error => console.warn('[bootstrap-electron] companion import recovery not started', error));
   } catch (err) {
     console.error('[bootstrap-electron] startScheduler failed (non-fatal):', err);
   }
@@ -2675,18 +2654,6 @@ const rsbWindowController = new RsbWindowController({
 registerRsbWindowIpc({
   controller: rsbWindowController,
   getMainWindow: () => mainWindowRef,
-  allowBotWorkbenchPermission: allowBotWorkbenchPendingPermission,
-  authorizePoppedWorkbench: async (sender, botId) => {
-    const slot = sidebarTabWindowsController.slotForSender(sender);
-    if (!slot?.visible) return false;
-    const assignment = slot.assignment;
-    if (!assignment?.sessionId || assignment.context.remoteHostId !== null) return false;
-    const owner = await resolveRsbHostContextFromSession(assignment.sessionId);
-    if (owner?.botOwner?.botId !== botId || !owner.botOwner.canonical || owner.remoteHostId !== null) return false;
-    const hasTab = await hasAssignedBotWorkbenchTab(assignment.sessionId, assignment.tabs.map((tab) => tab.tabId), botId);
-    return hasTab && slot.visible && slot.assignment === assignment &&
-      sidebarTabWindowsController.slotForSender(sender) === slot;
-  },
 });
 
 
@@ -5012,11 +4979,7 @@ const registerIpcHandlers = () => {
   });
 
   // 系统级通知（CC Agent session 完成时弹出 / 可选飞书私聊）
-  const isCompletionHandledByTeammate = (sessionId: string): Promise<boolean> =>
-    tryGetBotDelegationService()?.isCompletionHandledByTeammate(sessionId) ?? Promise.resolve(false);
   initNotificationService({
-    isCompletionHandledByTeammate: (sessionId) => getAgentIslandService()?.waitForCompletionNotification(sessionId)
-      ?? isCompletionHandledByTeammate(sessionId),
     isTaskAlertShownElsewhere: (kind) => getAgentIslandService()?.ownsTaskAlert(kind) === true,
     shouldSilenceTaskNotification: (kind) => getAgentIslandService()?.shouldSilenceTaskNotification(kind) === true,
     getWindow: () => getWindow() ?? null,
@@ -5025,8 +4988,6 @@ const registerIpcHandlers = () => {
   initWecomGroupNotificationIpc();
   setCompanionAvatarResolver((request) => companionAvatarCache.resolve(request));
   initAgentIslandService({
-    // The relay waits for native done before checking the durable result handoff.
-    isCompletionHandledByTeammate,
     getMainWindow: () => getWindow() ?? null,
     isPlannedRemoteDaemonClose: isCcMgrUpgradeInFlight,
     onSessionActivityChange: (activity) => {
@@ -10160,10 +10121,6 @@ app.on('ready', async () => {
         });
       }
       checkDatabaseSizeWarningAtStartup();
-      // Bot recovery is owner-scoped and must start only after DbClient
-      // takeover. registerMakerIpc also invokes this once its services exist,
-      // covering both possible splash/login orderings without duplicate runs.
-      void restoreBotRuntimeForCurrentOwner();
       void restoreOrcaRemoteWorkersForCurrentOwner();
       startReadyWorktreeMaintenance();
       // An Agent-approved update restarted the app: write its outcome back to the task.

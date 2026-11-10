@@ -11,8 +11,6 @@ import { sendVoiceCallCommand, useVoiceCallSummary } from '../bots/voice/voiceCa
 import { visibleVoiceCallMessages } from '../bots/voice/VoiceCallTranscript';
 import { useMessageReadAloud } from '../bots/voice/useMessageReadAloud';
 import { MessageReadAloudContext } from '@/components/chat/MessageReadAloudContext';
-import { RemoteBotFollowUpInvitation } from '@/features/bots/RemoteBotFollowUpInvitation';
-import { BotFollowUpInvitation } from '@/features/bots/BotFollowUpInvitation';
 import { formatSessionDuration } from '@/lib/sessionDurationFormat';
 import { shouldShowOpenPathError } from '../../../shared/openPathResult';
 import { shouldShowFailedScheduleNotice } from '@cindy/maker-shared/schedule-model';
@@ -1091,8 +1089,6 @@ function CCAgentSessionContent({
     search.set('settingsPage', 'voice');
     navigate(`${location.pathname}?${search.toString()}`);
   }, [location.pathname, location.search, navigate]);
-  const [followUpInvitationSession, setFollowUpInvitationSession] = useState<string | null>(null);
-  useEffect(() => setFollowUpInvitationSession(null), [sessionId]);
   const showCenteredControlledBanner = hasControlledBanner && !controlledBannerCollapsed;
   // assistant 气泡左侧的伙伴头像。节点在整场对话里是同一个,memo 住让 MessageItem
   // 的 memo 比较仍然成立(否则每帧新节点 = 全流重渲染)。
@@ -2197,7 +2193,7 @@ function CCAgentSessionContent({
   const realAgentKind = dbToMakerAgentKind(session?.agentKind);
   const isCodex = displayAgentKind === 'codex';
   // 手动压缩通道判定(#1927/#1933 review):真实 Claude Code → maker:input:compact;
-  // 其余 agent 声明 manualCompact.supported(当前仅 pi)→ maker:compact-session;其余无入口。
+  // 其余 agent 声明 manualCompact.supported(Pi / Codex)→ maker:compact-session;其余无入口。
   // 能力取**真实 agent**(displayAgentKind 在 pending switch 期间可能乐观指向目标 agent,
   // 用它判定会与 realAgentKind 分流不一致);remoteDeviceId 让远程 pi 取被控端能力。
   const { capabilities: realSessionCaps } = useAgentCapabilities(realAgentKind, remoteDeviceId);
@@ -4068,7 +4064,6 @@ function CCAgentSessionContent({
       if (cindyMakeInputLocked) return false;
       invalidateHistoryRecoveryNavigation();
       const deliveryMode = opts?.deliveryMode ?? 'queue';
-      const sendOwner = getDataOwnerGeneration();
       const originalMessage = message;
       const navigationRequestVersion =
         !opts?.literalText && deliveryMode !== 'steer' && matchNavigationCommandName(message)
@@ -4368,9 +4363,6 @@ function CCAgentSessionContent({
         );
         if (accepted && sessionId && replyQuote) clearSentBotReplyQuote(sessionId, replyQuote);
         if (accepted && sessionId) {
-          if (isDataOwnerGenerationCurrent(sendOwner) && currentSessionIdRef.current === sessionId) {
-            setFollowUpInvitationSession(sessionId);
-          }
           void dispatchDeferredUiAssignment(sessionId, undefined).catch((err) => {
             log.error('recover deferred Worker assignment after user message failed', err);
             toast.error(t('newChat.collaboration.assignmentFailed'));
@@ -4392,9 +4384,6 @@ function CCAgentSessionContent({
       );
       if (accepted && sessionId && replyQuote) clearSentBotReplyQuote(sessionId, replyQuote);
       if (accepted && sessionId) {
-        if (isDataOwnerGenerationCurrent(sendOwner) && currentSessionIdRef.current === sessionId) {
-          setFollowUpInvitationSession(sessionId);
-        }
         void dispatchDeferredUiAssignment(sessionId, undefined).catch((err) => {
           log.error('recover deferred Worker assignment after user message failed', err);
           toast.error(t('newChat.collaboration.assignmentFailed'));
@@ -4609,13 +4598,17 @@ function CCAgentSessionContent({
             toast.info(t('ccAgent.sidebar.sessionMenu.compactNothing'));
           } else if (result) {
             toast.success(t('ccAgent.sidebar.sessionMenu.compactSuccess'));
+          } else {
+            // Older device-link hosts may still return null for an unavailable handle.
+            toast.warning(t('ccAgent.sidebar.sessionMenu.compactFailed'));
           }
-          // null:会话无 live 进程 / 不支持(入口已按 gate 隐藏,极少走到)。静默即可。
         } catch (err) {
           if (!compactRequestGuard.isCurrent(sourceSessionId, begun.epoch)) return;
           // 失败给可理解提示,不泄漏裸 IPC 错误。
           log.warn('context ring compact-session failed', err);
-          toast.warning(t('ccAgent.sidebar.sessionMenu.compactFailed'));
+          toast.warning(t(extractIpcError(err)?.code === 'NOT_FOUND'
+            ? 'ccAgent.sidebar.sessionMenu.compactResumeFirst'
+            : 'ccAgent.sidebar.sessionMenu.compactFailed'));
         }
         return;
       }
@@ -6012,14 +6005,6 @@ function CCAgentSessionContent({
                  InteractionPromptHost: 普通模式下行为不变(直接 inline 渲染)。
                  当外部 (workdir-browse 等窄 rail 场景) 挂了 InteractionPromptSlot
                  时,卡片会被 portal 出去,这里就显占位。 */}
-              {!readOnly && botChatIdentity?.canonicalChat && botChatIdentity.id === 'cindy-default' && !isStreaming && !agentStatus.isRunning && !shareSelectionBlocked
-                && !pendingPlanReview && !pendingPermission && !pendingAskUser && !pendingPluginSetup
-                && !pendingIssueConfirm && !pendingRenameSessionsConfirm && !pendingGhostGrantConfirm
-                && !pendingRemoteDesktopConfirmation && !pendingInputHandoff && followUpInvitationSession === sessionId && (
-                remoteDeviceId
-                  ? <RemoteBotFollowUpInvitation key={`${remoteDeviceId}:${sessionId}`} deviceId={remoteDeviceId} botId={botChatIdentity.id} />
-                  : <BotFollowUpInvitation key={`follow-up-invitation:${sessionId}`} botId={botChatIdentity.id} engaged />
-              )}
               <InteractionPromptHost
                 hasInteraction={
                   !!(
@@ -6485,8 +6470,8 @@ function CCAgentSessionContent({
                       deviceId={remoteDeviceId}
                       onCompact={
                         // 按 agent 能力分流(#1927/#1933 review):claude-code 走 inputCoordinator,
-                        // 其余声明 manualCompact.supported(当前仅 pi)走 compact-session 通道;
-                        // codex 无手动 compact(上游自动压缩)保持纯展示。pi 的 SSH 远程会话
+                        // 其余声明 manualCompact.supported(Pi / Codex)走 compact-session 通道;
+                        // SSH 远程会话
                         // (remoteHostId)无 compact-session 路由 → 不开放(与 SessionContentHeader
                         // 压缩菜单仅本地/device-link 一致);device-link 远程 pi 走隧道,照常开放。
                         // pi 回合运行中会拒绝压缩 → compact-session 通道在 running 时禁用
@@ -6494,7 +6479,7 @@ function CCAgentSessionContent({
                         // claude-input 保留旧行为(turn 中可走 inputCoordinator)。
                         !readOnly &&
                         compactChannel !== null &&
-                        !(realAgentKind === 'pi' && !!session?.remoteHostId) &&
+                        !(compactChannel === 'compact-session' && !!session?.remoteHostId) &&
                         session != null &&
                         agentStatus.contextTokens > 0 &&
                         !(compactChannel === 'compact-session' && agentStatus.isRunning)
@@ -6559,6 +6544,7 @@ function CCAgentSessionContent({
         onClose={() => setCreateWorkerOpen(false)}
         onCreate={requestEnableCollab}
         title={t('orca.createWorker.enableCollabTitle')}
+        description={t('orca.createWorker.enableCollabDescription')}
         submitLabel={t('orca.createWorker.enableCollabSubmit')}
         requireWorkerPermissionModeSupport
         deviceId={remoteDeviceId}

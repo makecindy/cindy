@@ -52,6 +52,7 @@ import {
   DEVICE_LINK_PUSH,
   type DeviceLinkDeviceView,
   type DeviceLinkState,
+  type DeviceLinkPeerLinksSnapshot,
 } from '../../shared/deviceLinkIpc';
 import {
   getDeviceLinkStatus,
@@ -87,6 +88,7 @@ import {
   isLatestControllerDisplayNameDirectoryRefresh,
   readControllerDisplayNameFreshnessSince,
   waitForNewerControllerDisplayNameDirectoryRefresh,
+  getDeviceLinkPeerLinks,
 } from './index';
 import { getActiveControllers } from './dispatch.desktop';
 import { rewriteOutboundMedia, withPeerAttachmentUpload } from './outboundMedia';
@@ -94,6 +96,7 @@ import { createSentImageRetainer } from './remoteMediaPersistentCache';
 import { withOutboundReviewConfirmation } from '../maker-ipc/reviewOutboundInput.js';
 import { confirmReviewArtifacts } from '../reviewer/confirmReviewArtifacts.js';
 import { tryUploadPeerAttachment } from './filePeer';
+import { withAgentNetMediaTarget } from './agentNetMediaRouting.js';
 import { withSourceFileAccessRecovery, releaseSourceFileAccessUploads } from './sourceFileAccessRecovery';
 import { parseSharedTaskPeer, scrubSharedProviderCatalog } from '@cindy/device-link';
 import { withSharedTaskMedia } from './sharedTaskMediaContext.js';
@@ -167,6 +170,8 @@ export interface DeviceLinkIpcDeps {
   /** Whether a presence delta is newer than this directory request. */
   isPresenceFreshAfterRequest?(deviceId: string, requestEpoch: number): boolean;
   getState(): DeviceLinkState;
+  /** 远程连接拓扑:本机链路快照(只读) */
+  getPeerLinks(): DeviceLinkPeerLinksSnapshot;
   setEnabled(enabled: boolean): Promise<void>;
   setKeepAwake(enabled: boolean): Promise<void>;
   apiFetch<T>(path: string, opts?: { method?: string; body?: unknown }): Promise<T>;
@@ -237,6 +242,7 @@ export function defaultDeps(): DeviceLinkIpcDeps {
         unresponsiveDeviceIds: getUnresponsiveDeviceIds(),
       };
     },
+    getPeerLinks: getDeviceLinkPeerLinks,
     setEnabled: setRemoteControlEnabled,
     setKeepAwake: setKeepAwakeEnabled,
     // 官方中转或自建中转(凭证与 401 语义不同,见 deviceLinkApi.ts)。
@@ -339,6 +345,11 @@ function rethrowServerError(err: unknown): never {
 }
 
 // ─── handler bodies(纯函数,可注入依赖)──────────────────────────────────────
+
+/** 远程连接拓扑快照:纯转发,门禁在注册处(trusted renderer + 账号能力)。 */
+export function handleGetPeerLinks(deps: DeviceLinkIpcDeps): DeviceLinkPeerLinksSnapshot {
+  return deps.getPeerLinks();
+}
 
 export function handleGetState(deps: DeviceLinkIpcDeps): DeviceLinkState {
   const state = deps.getState();
@@ -860,8 +871,8 @@ export async function handleInvoke(
         throwIpcError('DEVICE_LINK_CHANNEL_NOT_ALLOWED', 'Queued content editing is not supported by the target device');
       }
       callArgs = await withPeerAttachmentUpload((source, mime, signal) => peer ? Promise.resolve(null) : tryUploadPeerAttachment(normalizedDeviceId, source, mime, deps.invoke, undefined, signal), () =>
-        withSharedTaskMedia(peer?.role === 'host' ? peer.sharedTaskId : undefined,
-          () => existing ? deps.rewriteOutboundMedia!(channel, callArgs, existing) : deps.rewriteOutboundMedia!(channel, callArgs)),
+        withAgentNetMediaTarget(normalizedDeviceId, () => withSharedTaskMedia(peer?.role === 'host' ? peer.sharedTaskId : undefined,
+          () => existing ? deps.rewriteOutboundMedia!(channel, callArgs, existing) : deps.rewriteOutboundMedia!(channel, callArgs))),
         createSentImageRetainer(normalizedDeviceId));
      } catch (err) {
        if (isIpcError(err) && (err.code === 'DEVICE_LINK_CHANNEL_NOT_ALLOWED'
@@ -1800,6 +1811,11 @@ export function registerDeviceLinkIpc(deps: DeviceLinkIpcDeps = defaultDeps()): 
     DEVICE_LINK_INVOKE.LIST_DEVICES,
     gated(() => handleListDevices(deps)),
   );
+  ipcMain.handle(DEVICE_LINK_INVOKE.GET_PEER_LINKS, (e) => {
+    // 新增的特权只读(本账号设备的链路拓扑):先拒外来 frame,再看账号能力。
+    assertTrustedAppRendererEvent(e);
+    return gated(() => handleGetPeerLinks(deps))();
+  });
   ipcMain.handle(DEVICE_LINK_INVOKE.RENAME_DEVICE, (_e, payload: unknown) => {
     requireDeviceLinkCapability();
     const p = (payload ?? {}) as { deviceId?: unknown; name?: unknown };

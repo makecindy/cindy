@@ -4012,7 +4012,7 @@ describe('AgentInputCoordinator send transaction', () => {
             hostSnapshot: {
               availability: 'ready',
               activity: 'working',
-              activeDelegations: 1,
+              activeDelegations: 0,
             },
           }
         : reference);
@@ -4023,12 +4023,8 @@ describe('AgentInputCoordinator send transaction', () => {
 
     expect(h.refreshAgentReferencesBeforeDispatch).toHaveBeenCalledOnce();
     const sentMessage = h.sendToAgent.mock.calls[0]?.[1];
-    expect(JSON.stringify(sentMessage)).toContain(
-      'availability=ready; activity=working; active_tracked_tasks=1',
-    );
-    expect(JSON.stringify(sentMessage)).not.toContain(
-      'availability=ready; activity=idle; active_tracked_tasks=0',
-    );
+    expect(JSON.stringify(sentMessage)).toContain('availability=ready; activity=working.');
+    expect(JSON.stringify(sentMessage)).not.toContain('availability=ready; activity=idle.');
   });
 
   it('awaits the pre-dispatch hook after persistence and before vendor dispatch', async () => {

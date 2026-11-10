@@ -449,6 +449,7 @@ test("unit workspace concurrency reserves the full worker budget for heavy works
 		"**/*.e2e.test.ts",
 		"**/*.git-integration.test.ts",
 		"src/agents/shared/auto-review-remote-wiring.test.ts",
+		"src/agents/pi/__tests__/pi-extra-dirs-prompt.test.ts",
 	]);
 	assert.deepEqual(makerCore.tiers.unit.command, {
 		type: "packageBin",
