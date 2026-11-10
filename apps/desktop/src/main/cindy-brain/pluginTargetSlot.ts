@@ -47,6 +47,7 @@ export interface PluginTargetAdapter {
   /** Set only after the live Auto review resolver is installed. */
   delegationReviewAvailable?(): boolean;
   candidates(kind: PluginTargetKind): Promise<PluginTargetCandidate[]>;
+  targetForSession(sessionId: string): Promise<PluginTargetRef>;
   assertCreatePermission(pluginId: string, permissionMode: PluginTaskPermissionMode): void;
   assertProjectDispatch(pluginId: string, taskId: string): Promise<void>;
   create(
@@ -143,6 +144,16 @@ export class PluginTargetSlot {
       return { targets: candidates.map((item) => ({ ...item, kind: request.targetKind })) };
     }
     if (request.kind === 'resolve') {
+      if (request.session !== undefined) {
+        if (request.target !== undefined || !keyString(request.session)) return fail('INVALID_PARAMS');
+        const target = await adapter.targetForSession(request.session);
+        authorized();
+        const view = await resolve(target);
+        if (target.kind === 'bot' && await adapter.session('bot', target.id) !== request.session)
+          return fail('TARGET_UNAVAILABLE');
+        authorized();
+        return view;
+      }
       if (!isTarget(request.target)) return fail('INVALID_PARAMS');
       return resolve(request.target);
     }

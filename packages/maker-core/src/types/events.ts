@@ -462,7 +462,7 @@ export interface UsageSnapshot {
   generationActive?: boolean;
   /** False when live TPS must be hidden. Omitted on placeholder status frames. */
   generationReliable?: boolean;
-  /** Host-measured live tok/s (Pi extension algorithm). Display only. */
+  /** Host-measured live tok/s. Display only. */
   tokenSpeed?: TokenSpeedSnapshot;
   /**
    * Host/bridge 自动 compact 已确定性失败，下次 send 应换干净原生窗口。

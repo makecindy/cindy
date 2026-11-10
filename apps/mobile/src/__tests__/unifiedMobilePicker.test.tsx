@@ -4,7 +4,21 @@ import { createRoot } from 'react-dom/client';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { UnifiedModelPickerSheet } from '@/session/UnifiedModelPickerSheet';
 import { resolveStoredModelEntry } from '@cindy/model-providers';
+import {
+  __flushForTest as flushRemoteAgentModelMemory,
+  __resetForTest as resetRemoteAgentModelMemory,
+  hydrateRemoteAgentModelMemory,
+  remoteAgentModelMemoryFor,
+} from '@/session/remoteAgentModelMemory';
 vi.mock('expo-crypto', () => ({ randomUUID: () => 'test-uuid' }));
+const asyncStore = vi.hoisted(() => new Map<string, string>());
+vi.mock('@react-native-async-storage/async-storage', () => ({
+  default: {
+    getItem: vi.fn(async (key: string) => asyncStore.get(key) ?? null),
+    setItem: vi.fn(async (key: string, value: string) => { asyncStore.set(key, value); }),
+    removeItem: vi.fn(async (key: string) => { asyncStore.delete(key); }),
+  },
+}));
 const test = vi.hoisted(() => ({ view: null as any, favoritesReady:true, quotas:{} as any, syncError:null as unknown, prefs: {favorites:[],engines:{}} as any, save: vi.fn(), entries: [] as any[],
   // 按传入的目录派生(供应商组用例:每台电脑的供应商各有自己的行与正在用的来源);缺省用上面的固定值。
   entriesFor: null as null | ((providers: any[]) => any[]), activeSource: null as null | ((input: any) => string | null) }));
@@ -26,7 +40,11 @@ vi.mock('@/session/unifiedMobileModels',async importOriginal=>({...await importO
 vi.mock('react-i18next',()=>({useTranslation:()=>({t:(key:string)=>key})}));
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT=true;
 let root:ReturnType<typeof createRoot>;
-beforeEach(()=>{test.favoritesReady=true;test.syncError=null;test.quotas={};test.entriesFor=null;test.activeSource=null;test.save.mockReset().mockImplementation(async value => {test.prefs=value;});test.prefs={favorites:[],engines:{}};test.entries=[{
+beforeEach(async ()=>{
+  await flushRemoteAgentModelMemory();
+  asyncStore.clear();
+  resetRemoteAgentModelMemory();
+  test.favoritesReady=true;test.syncError=null;test.quotas={};test.entriesFor=null;test.activeSource=null;test.save.mockReset().mockImplementation(async value => {test.prefs=value;});test.prefs={favorites:[],engines:{}};test.entries=[{
   providerId:'account',modelId:'model',displayName:'Model',candidates:['codex','claude-code'],recommended:'codex',nativeAgent:'codex',
   capabilities:{codex:{wireModelId:'codex/model',efforts:['medium','high'],defaultEffort:'medium',supportsFastMode:true,contextWindow:200000},
   'claude-code':{wireModelId:'model',efforts:['medium','high'],defaultEffort:'medium',supportsFastMode:false,contextWindow:200000}},
@@ -283,6 +301,67 @@ it('removes the opened stale copy rather than another favorite matching its fall
   await act(async()=>test.view.onOptions(test.view.groups[0].rows[1]));
   await act(async()=>test.view.options.onFavorite());
   expect(test.prefs.favorites).toEqual([other]);
+});
+
+// Follow-up to #9591, unit: the model row must recognize a seeded favorite
+// (stored effort null/empty, shown as the catalog default) and unfavorite it.
+// A non-default tier or a retired effort must not match that default. Adjusting
+// the opened copy must say the original is kept, including on another computer.
+const modelRow = (remote: boolean) => test.view.groups.flatMap((group: any) => group.rows)
+  .find((row: any) => !row.favorite && !!row.remoteDevice === remote);
+it.each([
+  [false, ''],
+  [false, null],
+  [true, ''],
+] as const)('unfavorites a seeded default from the model row instead of saving a duplicate (remote=%s, effort=%s)', async (remote, effort) => {
+  const saved = {uid:'seed',providerId:remote ? studioSource : 'account',modelId:'model',agent:'codex',effort,fast:false};
+  test.prefs.favorites=[saved];
+  await (remote ? mountRemote(null) : mount());
+  await act(async()=>test.view.onOptions(modelRow(remote)));
+  expect(test.view.options.row.favorite).toBeUndefined();
+  expect(test.view.options.row.config.effort).toBe('medium');
+  expect(test.view.options.isFavorite).toBe(true);
+  await act(async()=>test.view.options.onFavorite());
+  expect(test.prefs.favorites).toEqual([]);
+  expect(test.view.options.isFavorite).toBe(false);
+  expect(test.view.groups.some((group:any)=>group.key==='favorites')).toBe(false);
+});
+it.each([
+  {effort:'',selected:'high'},
+  {effort:'retired',selected:'medium'},
+])('keeps the star hollow when stored effort $effort is not the displayed $selected row', async ({effort,selected}) => {
+  const saved = {uid:'seed',providerId:'account',modelId:'model',agent:'codex',effort,fast:false};
+  test.prefs.favorites=[saved];
+  await mount(undefined,{selectedEffort:selected});
+  await act(async()=>test.view.onOptions(modelRow(false)));
+  expect(test.view.options.isFavorite).toBe(false);
+  await act(async()=>test.view.options.onFavorite());
+  expect(test.prefs.favorites).toHaveLength(2);
+  expect(test.prefs.favorites[0]).toEqual(saved);
+});
+it.each([false, true])('says the original favorite is kept when a seeded favorite changes parameters (remote=%s)', async remote => {
+  const saved = {uid:'seed',providerId:remote ? studioSource : 'account',modelId:'model',agent:'codex',effort:'',fast:false};
+  test.prefs.favorites=[saved];
+  const {onSelect}=remote ? await mountRemote(null) : await mount();
+  await act(async()=>test.view.onOptions(test.view.groups[0].rows[0]));
+  expect(test.view.options.isFavorite).toBe(true);
+  await act(async()=>test.view.options.onChange({...test.view.options.row.config,effort:'high'}));
+  expect(test.view.options.notice).toBe('models.unified.originalFavoriteKept');
+  expect(test.prefs.favorites).toEqual([saved]);
+  expect(test.view.options.isFavorite).toBe(false);
+  if (remote) expect(onSelect).not.toHaveBeenCalled();
+});
+it('rejects saving a seeded favorite onto another copy of the same default', async () => {
+  const seed = {uid:'seed',providerId:'account',modelId:'model',agent:'codex',effort:'',fast:false};
+  const explicit = {...seed,uid:'explicit',effort:'medium'};
+  test.prefs.favorites=[seed,explicit];
+  await mount();
+  await act(async()=>test.view.onOptions(test.view.groups[0].rows[0]));
+  await act(async()=>test.view.options.onEditFavorite());
+  await act(async()=>test.view.options.onSaveEdit());
+  expect(test.view.error).toBe('models.unified.favoriteExists');
+  expect(test.save).not.toHaveBeenCalled();
+  expect(test.prefs.favorites).toEqual([seed,explicit]);
 });
 
 it('adjusts model preferences from favorite details without overwriting the original copy', async () => {
@@ -576,16 +655,17 @@ const studioCatalog = {
   providers:[{id:'account',name:'Studio Provider',models:{},connected:true,logoKind:'anthropic'}],
 };
 const remoteId = 'remote:["device-studio-mac","account"]';
-async function mountRemote(selectedDeviceId:string|null,onSelect=vi.fn(async()=>true),catalog:any=studioCatalog) {
+async function mountRemote(selectedDeviceId:string|null,onSelect=vi.fn(async()=>true),catalog:any=studioCatalog,visible=true) {
   const onClose=vi.fn();
+  const modelMemory={getEffort:()=>undefined,getFast:()=>undefined,setEffort:vi.fn(),setFast:vi.fn(),clearEffort:vi.fn(),clearFast:vi.fn()};
   await act(async()=>root.render(createElement(UnifiedModelPickerSheet,{
-    visible:true,onClose,providers:[{id:'account',name:'Provider',models:{},connected:true}],agentKind:'codex',capabilities:{hasFastMode:true},
+    visible,onClose,providers:[{id:'account',name:'Provider',models:{},connected:true}],agentKind:'codex',capabilities:{hasFastMode:true},
     activeModelId:'codex/model',selectedProviderId:'account',selectedEffort:'medium',selectedFastMode:false,
-    existingSessionRoute:true,modelMemory:{getEffort:()=>undefined,getFast:()=>undefined,setEffort:vi.fn(),setFast:vi.fn()},
+    existingSessionRoute:true,modelMemory,
     unified:{scope:'user-device',agents:['codex','claude-code'],loadCapabilities:async()=>({hasFastMode:true}),onSelect,
       remote:{catalogs:[catalog],selectedDeviceId}},
   } as any)));
-  return {onSelect,onClose};
+  return {onSelect,onClose,modelMemory};
 }
 it('lists another computer\'s providers after the controlled computer\'s own',async()=>{
   await mountRemote(null);
@@ -623,7 +703,7 @@ it('opens on the Agent\'s computer and marks the current model there',async()=>{
 it('keeps settings of another computer\'s rows out of this phone\'s preferences',async()=>{
   const {onSelect}=await mountRemote(null);
   await act(async()=>test.view.onOptions(test.view.groups[1].rows[0]));
-  // 收藏照样可用(存到被控电脑,位置编进来源),参数调整仍不写进手机的偏好。
+  // 收藏照样可用(存到被控电脑,位置编进来源)。档位不写被控电脑的引擎偏好,也不写本机模型记忆。
   expect(test.view.options.favoritesDisabled).toBe(false);
   expect(test.view.options.canReset).toBe(false);
   await act(async()=>test.view.options.onChange({...test.view.options.row.config,effort:'high'}));
@@ -635,6 +715,59 @@ it('keeps settings of another computer\'s rows out of this phone\'s preferences'
   await act(async()=>test.view.onBack());
   await act(async()=>test.view.onSelect(test.view.groups[1].rows[0]));
   expect(onSelect).toHaveBeenCalledWith(expect.objectContaining({effort:'high'}),{deviceId:'device-studio-mac'});
+});
+
+// 远程档位以前只活在本次打开的 remoteConfigs 里,关掉选择器或重启就回到推荐档。
+// 生产入口是 UnifiedModelPickerSheet:调另一台电脑上的模型,关掉再打开、以及清掉内存缓存后从
+// AsyncStorage 灌回,行上仍然是 high / Fast;另一台电脑和本机 modelMemory 不受影响;恢复推荐会删掉。
+it('remembers effort and Fast for another computer\'s model across reopen and restart', async () => {
+  const first = await mountRemote(null);
+  const remoteRow = () => test.view.groups.find((group: any) => group.key === remoteId).rows[0];
+  await act(async () => test.view.onOptions(remoteRow()));
+  await act(async () => test.view.options.onChange({ ...test.view.options.row.config, effort: 'high', fast: true }));
+  expect(test.save).not.toHaveBeenCalled();
+  expect(first.modelMemory.setEffort).not.toHaveBeenCalled();
+  expect(first.modelMemory.setFast).not.toHaveBeenCalled();
+  expect(remoteRow().config).toMatchObject({ effort: 'high', fast: true });
+
+  await mountRemote(null, first.onSelect, studioCatalog, false);
+  await mountRemote(null, first.onSelect, studioCatalog, true);
+  expect(remoteRow().config).toMatchObject({ effort: 'high', fast: true });
+
+  await mountRemote(null, first.onSelect, studioCatalog, false);
+  await act(async () => {
+    await flushRemoteAgentModelMemory();
+    resetRemoteAgentModelMemory();
+    await hydrateRemoteAgentModelMemory();
+  });
+  await mountRemote(null, first.onSelect, studioCatalog, true);
+  expect(remoteRow().config).toMatchObject({ effort: 'high', fast: true });
+  expect(remoteAgentModelMemoryFor('device-other').getEffort('codex', 'account', 'codex/model')).toBeUndefined();
+
+  await mountRemote(null, first.onSelect, { ...studioCatalog, deviceId: 'device-other', name: 'Other' }, true);
+  const otherRow = test.view.groups.flatMap((group: any) => group.rows).find((row: any) => row.remoteDevice);
+  expect(otherRow.config).toMatchObject({ effort: 'medium', fast: false });
+
+  await mountRemote(null, first.onSelect, studioCatalog, true);
+  await act(async () => test.view.onOptions(remoteRow()));
+  await act(async () => test.view.options.onReset());
+  expect(test.view.options.row.config).toMatchObject({ effort: 'medium', fast: false });
+  expect(test.view.options.canReset).toBe(false);
+  await mountRemote(null, first.onSelect, studioCatalog, false);
+  await mountRemote(null, first.onSelect, studioCatalog, true);
+  expect(remoteRow().config).toMatchObject({ effort: 'medium', fast: false });
+
+  const selected = await mountRemote('device-studio-mac', first.onSelect);
+  // 前面已经打开过,初始来源定位只发生一次;这里按选中的远程行找,不靠分组下标。
+  const selectedRemote = test.view.groups.flatMap((group: any) => group.rows).find((row: any) => row.selected && row.remoteDevice);
+  await act(async () => test.view.onOptions(selectedRemote));
+  await act(async () => test.view.options.onChange({ ...test.view.options.row.config, effort: 'high', fast: true }));
+  expect(first.onSelect).toHaveBeenCalledWith(expect.objectContaining({ effort: 'high', fast: true }), { deviceId: 'device-studio-mac' });
+  expect(selected.modelMemory.setEffort).not.toHaveBeenCalled();
+  await mountRemote(null, first.onSelect, studioCatalog, false);
+  await mountRemote(null, first.onSelect, studioCatalog, true);
+  expect(remoteRow().selected).toBe(false);
+  expect(remoteRow().config).toMatchObject({ effort: 'high', fast: true });
 });
 
 // 收藏另一台电脑上的模型:收藏存在被控电脑,来源里编进电脑;和本机收藏排在一起,点开就在那台运行。
