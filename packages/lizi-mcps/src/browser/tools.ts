@@ -14,7 +14,7 @@ import {
   type ResolvedBrowserScreenshot,
 } from '../types.js';
 import type { BrowserToolContentBlock, BrowserToolRegistry, BrowserToolResult } from './tool-registry.js';
-import { cdpCommandIssue, runCdpCommands, type CdpCommand } from './cdp.js';
+import { cdpCommandIssue, runCdpCommands } from './cdp.js';
 import {
   buildExtractFnSource,
   collectSelectors,
@@ -650,7 +650,7 @@ export function registerBrowserTools(registry: BrowserToolRegistry, deps: Browse
       deferValidation: z.boolean().optional().describe('saveRecipe: 仅明确读取步骤的新流程可存候选，下次真实任务校验；交互和任意脚本须当次验证，不为测试重放写操作'),
       steps: z.array(z.record(z.string(), z.unknown())).min(1).max(BATCH_MAX_STEPS).optional().describe(
         'action=batch: 按顺序执行的步骤,每步是本工具的一份普通参数(open/navigate/snapshot/screenshot/act/extract/requests/responseBody/tabs/focus/close/dialog/console/cdp)。' +
-          '任一步失败即停,返回已完成各步的结果,后面的不执行。没写 targetId 的步骤沿用 batch 的 targetId,或本次 batch 里 open/navigate 刚得到的标签页。' +
+          '任一步失败即停,返回已完成各步的结果,后面的不执行;执行中浏览器模式被切换也会停。screenshot 步骤最多 3 个。没写 targetId 的步骤沿用 batch 的 targetId,或本次 batch 里 open/navigate 刚得到的标签页。' +
           '例:[{action:"act",request:{kind:"type",ref:"e12",text:"Ada"}},{action:"act",request:{kind:"click",ref:"e20"},afterSnapshot:{}}]',
       ),
       commands: z.array(z.strictObject({
@@ -775,7 +775,9 @@ export function registerBrowserTools(registry: BrowserToolRegistry, deps: Browse
         .describe('action=act 时的具体动作请求'),
     },
     // Named so a batch can run each step through this same path (same checks, hints and bounds).
-    handler: async function handle(args, onTarget?: (targetId: string) => void): Promise<BrowserToolResult> {
+    // `checkOnly` stops right before anything is dispatched: a batch uses it to ask every step the very
+    // question the real call would ask, so the two can never disagree about what is a bad step.
+    handler: async function handle(args, onTarget?: (targetId: string) => void, checkOnly = false): Promise<BrowserToolResult> {
       try {
         if (args.target === 'user-browser' || args.target === 'external' || args.target === 'rsb-webview') {
           const { target: _browserName, ...rest } = args;
@@ -787,7 +789,15 @@ export function registerBrowserTools(registry: BrowserToolRegistry, deps: Browse
           if (!args.steps?.length) return errorResult('batch', 'batch requires steps:[{action,...}, ...]');
           if (args.afterSnapshot) return errorResult('batch', 'afterSnapshot 写在需要观察的那一步里,不写在 batch 外层');
           // Validate every step before running any: a typo in step 3 must not leave steps 1-2 done.
+          // Each step goes through the real handler up to the point of dispatch (`checkOnly`), so schema,
+          // protocol, backend and per-action argument checks are the same predicates the call itself uses.
+          const messageOf = (ran: BrowserToolResult): string => {
+            const text = ran.content.find((block): block is { type: 'text'; text: string } => block.type === 'text')?.text;
+            try { return String((JSON.parse(text ?? '{}') as { message?: unknown }).message ?? text ?? ''); } catch { return text ?? ''; }
+          };
           const steps: Array<typeof args> = [];
+          // Whether some step before this one can have produced a tab by the time this one runs.
+          let hasTarget = args.targetId !== undefined;
           for (const [index, raw] of args.steps.entries()) {
             const action = typeof raw.action === 'string' ? raw.action : '';
             if (!BATCH_ACTIONS.has(action)) {
@@ -800,17 +810,32 @@ export function registerBrowserTools(registry: BrowserToolRegistry, deps: Browse
               ...raw,
             });
             if (!checked.ok) return errorResult('batch', `steps[${index}] 参数不合法:${checked.issues.join('; ')}。整批未执行。`);
-            // What the active browser cannot do is known up front too; do not find out halfway through.
-            const unsupportedStep = unsupportedByBackend(checked.data, deps)
-              ?? (action === 'cdp' && Array.isArray(checked.data.commands) ? cdpCommandIssue(checked.data.commands as CdpCommand[]) : undefined);
-            if (unsupportedStep) return errorResult('batch', `steps[${index}] ${unsupportedStep} 整批未执行。`);
-            steps.push(checked.data as typeof args);
+            const stepArgs = checked.data as typeof args;
+            const needsTab = BATCH_TAB_ACTIONS.has(action) && stepArgs.targetId === undefined && stepArgs.request?.targetId === undefined;
+            const probe = await handle(needsTab && hasTarget ? { ...stepArgs, targetId: '(batch)' } : stepArgs, undefined, true);
+            if (probe.isError) return errorResult('batch', `steps[${index}] ${messageOf(probe)} 整批未执行。`);
+            steps.push(stepArgs);
+            if (action !== 'tabs') hasTarget = true;
           }
+          // Images are returned whole or not at all: refuse up front what could not be returned.
+          const screenshots = steps.filter((step) => step.action === 'screenshot').length;
+          if (screenshots > BATCH_MAX_IMAGES) {
+            return errorResult('batch', `一批最多 ${BATCH_MAX_IMAGES} 个 screenshot 步骤(收到 ${screenshots} 个),多出的图片无法随结果返回。把多出的截图拆到另一次调用。整批未执行。`);
+          }
+          // One backend for the whole batch: a switch in the middle (the user, or another task) would
+          // leave later steps on a different browser with stale tabs and refs, so they do not run.
+          const batchScope = syncBackendScope();
           let current = args.targetId;
           const done: unknown[] = [];
           const images: BrowserToolContentBlock[] = [];
           let failed = false;
           for (const step of steps) {
+            if (syncBackendScope() !== batchScope) {
+              done.push({ ok: false, action: 'batch', errorCode: 'BROWSER_RUNTIME_INVALID_REQUEST',
+                message: '浏览器后端在批量执行中途被切换,这一步和后面的都没有执行。先 status 确认当前模式并重新观察页面,不要整批重放。' });
+              failed = true;
+              break;
+            }
             const inherits = current !== undefined && step.targetId === undefined && step.request?.targetId === undefined
               && BATCH_TAB_ACTIONS.has(step.action);
             const ran = await handle(inherits ? { ...step, targetId: current } : step, (targetId) => { current = targetId; });
@@ -818,7 +843,7 @@ export function registerBrowserTools(registry: BrowserToolRegistry, deps: Browse
             let parsed: unknown = text ?? null;
             try { if (text !== undefined) parsed = JSON.parse(text); } catch { /* Keep the raw text. */ }
             done.push(parsed);
-            for (const block of ran.content) if (block.type === 'image' && images.length < BATCH_MAX_IMAGES) images.push(block);
+            for (const block of ran.content) if (block.type === 'image') images.push(block);
             if (ran.isError) { failed = true; break; }
           }
           return {
@@ -1274,18 +1299,16 @@ export function registerBrowserTools(registry: BrowserToolRegistry, deps: Browse
           };
         }
 
-        let result;
+        // Everything that can be refused without touching the page is refused here, for the real call and for
+        // a batch's pre-check alike.
         if (args.action === 'extract') {
-          // Supply the fixed read spec for the runtime's isolated DOM reader,
-          // plus the generated fn for backends using the legacy evaluate path.
           if (!args.extract) {
             return errorResult('extract', 'extract requires an `extract` spec ({ from?, multiple?, fields, limit? })');
           }
-          const spec = args.extract as ExtractSpec;
           // Teach-via-error (upstream idiom): the observed model mistake is
           // putting an attribute in the selector ("h3 a@title"). Catch it before
           // running and show the correct field shape instead of failing in-page.
-          const attrMistake = collectSelectors(spec).find((s) => s.includes('@'));
+          const attrMistake = collectSelectors(args.extract as ExtractSpec).find((s) => s.includes('@'));
           if (attrMistake) {
             return errorResult('extract', `选择器 "${attrMistake}" 含 "@"。${EXTRACT_FIELD_HINT}`);
           }
@@ -1300,6 +1323,19 @@ export function registerBrowserTools(registry: BrowserToolRegistry, deps: Browse
               'extract 暂不支持 frame(frame-scoped extraction);底层 evaluate 不接受 frame。请在主文档上 extract,或先用 snapshot 的 frame 参数定位再抓。',
             );
           }
+        } else if (args.action === 'cdp') {
+          if (!args.commands?.length) return errorResult('cdp', 'cdp requires commands:[{method, params?}, ...]');
+          if (!args.targetId) return errorResult('cdp', 'cdp requires targetId(tabs / open 返回的标签页)');
+          const issue = cdpCommandIssue(args.commands);
+          if (issue) return errorResult('cdp', issue);
+        }
+        if (checkOnly) return { content: [{ type: 'text', text: resultText({ ok: true, action: args.action, checked: true }) }] };
+
+        let result;
+        if (args.action === 'extract') {
+          // Supply the fixed read spec for the runtime's isolated DOM reader,
+          // plus the generated fn for backends using the legacy evaluate path.
+          const spec = args.extract as ExtractSpec;
           result = await runtime.call({
             action: 'act',
             profile: args.profile,
@@ -1312,12 +1348,8 @@ export function registerBrowserTools(registry: BrowserToolRegistry, deps: Browse
             },
           } as BrowserControlRequest);
         } else if (args.action === 'cdp') {
-          if (!args.commands?.length) return errorResult('cdp', 'cdp requires commands:[{method, params?}, ...]');
-          if (!args.targetId) return errorResult('cdp', 'cdp requires targetId(tabs / open 返回的标签页)');
-          const issue = cdpCommandIssue(args.commands);
-          if (issue) return errorResult('cdp', issue);
           // Same guarded runtime as every other action: paused on a page where the owner just typed a secret.
-          const ran = await runCdpCommands(runtime, { profile: args.profile, targetId: args.targetId }, args.commands, {
+          const ran = await runCdpCommands(runtime, { profile: args.profile, targetId: args.targetId! }, args.commands!, {
             ...(typeof args.maxChars === 'number' && args.maxChars > 0 ? { maxChars: args.maxChars } : {}),
           });
           result = {

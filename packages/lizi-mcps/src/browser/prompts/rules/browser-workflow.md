@@ -69,7 +69,7 @@
 - 适合:同一页填多个字段再提交;点击后等待某个内容出现再读取;依次打开几个已知地址各读一段。例:`{action:"batch",steps:[{action:"act",request:{kind:"click",ref:"e7"}},{action:"act",request:{kind:"wait",text:"加载完成"}},{action:"extract",extract:{fields:{total:"#total"}}}]}`。
 - 把观察和它服务的动作放进同一次调用(末步带 `afterSnapshot`,或后面接一步 `extract` / `snapshot`),不要单独花一轮只做等待或只看一眼。batch 里的读取要收窄:`extract` 取字段,`snapshot` 默认最多 6000 字符。
 - 下一步取决于还没看到的页面内容时不要猜:`ref` 只来自已经看到的快照,跳到新页面后的元素要先观察再操作(可以用 `selector` 的步骤除外)。
-- 任一步失败就停,结果里 `failedStep` 之后的都没有执行,之前的已经生效:先看已完成各步的结果和当前页面,只补做剩下的,**不要整批重放**。参数写错时整批都不会执行。
+- 任一步失败就停,结果里 `failedStep` 之后的都没有执行,之前的已经生效:先看已完成各步的结果和当前页面,只补做剩下的,**不要整批重放**。执行中浏览器模式被切换(用户或别的任务改了设置)也会在那一步停下。参数写错、当前浏览器做不了的操作、一批里超过 3 个 `screenshot` 步骤,这些在第一步执行前就会被整批拒绝。
 - `recipe`、`upload`、`setBackend`、`start` / `stop` 不能放进 batch,单独调用。
 
 <!-- backend: external, rsb-webview -->

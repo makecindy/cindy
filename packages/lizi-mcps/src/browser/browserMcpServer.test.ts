@@ -1983,6 +1983,12 @@ describe('browser · batch, cdp and target-tailored rules', () => {
     { action: 'screenshot' },
     // A protocol command the agent may not send is known up front too (seen live: it used to surface mid-batch).
     { action: 'cdp', commands: [{ method: 'Network.getCookies' }] },
+    // Review on #9701 (Greptile P1, Codex P2): what the step's own handler would refuse, schema-valid as it is,
+    // must be refused before the first step runs. Last round only the schema and the backend were asked.
+    { action: 'cdp' },
+    { action: 'navigate', url: 'file:///tmp/x' },
+    { action: 'extract' },
+    { action: 'snapshot', afterSnapshot: {} },
   ])('refuses the whole batch before dispatch when a step is %j', async (step) => {
     const h = await scripted(() => undefined, { setBackend: async (backend) => backend, backendCapabilities: () => ({ screenshot: false }) });
     try {
@@ -1990,6 +1996,42 @@ describe('browser · batch, cdp and target-tailored rules', () => {
       expect(isError).toBe(true);
       expect(body.ok).toBe(false);
       expect(h.calls).toEqual([]);
+    } finally { await h.cleanup(); }
+  });
+
+  // Review on #9701 (Greptile P2): only the first three images used to be returned and the rest vanished
+  // while their steps still reported success. Now a batch that could not return them is refused whole.
+  it('refuses a batch with more screenshot steps than it can return, before running any', async () => {
+    const h = await scripted(() => undefined);
+    try {
+      const { isError, body } = await h.invoke({ action: 'batch', targetId: 't1', steps: [
+        { action: 'navigate', url: 'https://example.test/' },
+        ...Array.from({ length: 4 }, () => ({ action: 'screenshot' })),
+      ] });
+      expect(isError).toBe(true);
+      expect(body.message).toContain('最多 3 个 screenshot');
+      expect(h.calls).toEqual([]);
+    } finally { await h.cleanup(); }
+  });
+
+  // Review on #9701 (Greptile P1): each step re-entered the handler and accepted whatever backend was
+  // current then, so a switch during a wait let later steps run on another browser with stale tabs and refs.
+  it('stops the rest of a batch when the backend is switched in the middle', async () => {
+    let scope = { lifecycle: {}, backend: {} };
+    const h = await scripted((request) => {
+      if (request.action === 'act') scope = { lifecycle: {}, backend: {} };
+      return undefined;
+    }, { getBackendScope: () => scope });
+    try {
+      const { isError, body } = await h.invoke({ action: 'batch', targetId: 't1', steps: [
+        { action: 'act', request: { kind: 'click', ref: 'e1' } },
+        { action: 'navigate', url: 'https://example.test/next' },
+        { action: 'act', request: { kind: 'click', ref: 'e2' } },
+      ] });
+      expect(isError).toBe(true);
+      expect(body).toMatchObject({ ok: false, completed: 1, total: 3, failedStep: 1 });
+      expect(body.steps[1].message).toContain('被切换');
+      expect(h.calls.map((request) => request.action)).toEqual(['act']);
     } finally { await h.cleanup(); }
   });
 
