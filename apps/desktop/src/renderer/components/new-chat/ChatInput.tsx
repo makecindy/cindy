@@ -395,6 +395,7 @@ import {
 import { useOptionalAuthDeviceId } from '@/contexts/AuthContext';
 import { controlledTaskAgentLocationReadable } from '@/lib/controlledTaskAgentLocation';
 import { modelCatalogKey } from '../../../shared/controlledModelCatalog';
+import { normalizeSessionContextWindowBounds } from '../../../shared/sessionContextWindowBounds';
 import {
   setSessionFavoriteAnchor as setSessionFavoriteAnchorMemory,
   useSessionFavoriteAnchor,
@@ -7117,8 +7118,25 @@ export function ChatInput({
               targetAgentKind,
             )
           : null;
+      // 暂存的同引擎选择会把确认窗口带到发送边界，main 在那里按「任务预算 + 模型级上限」
+      // 收敛后的窗口逐值校验。本机路由先向 main 要这个值；目录窗口只是退路，设过上限时它会
+      // 比 main 的值大，确认就永远对不上。
+      const stagedEffectiveWindow =
+        stagingSameAgentSelection && verifiedTargetContextWindow === undefined &&
+        !remoteDeviceId && targetAgentKind
+          ? normalizeSessionContextWindowBounds(
+            await window.electronAPI.maker
+              .getSessionContextWindowBounds(sessionId, {
+                agent: targetAgentKind,
+                providerId: targetRouteProviderId,
+                model: newModelId,
+              })
+              .catch(() => null),
+          )?.effectiveWindow ?? undefined
+          : undefined;
       const targetContextWindow =
         verifiedTargetContextWindow ??
+        stagedEffectiveWindow ??
         (targetProviderId !== undefined
           ? targetRouteProviderId && targetAgentKind
             ? resolveProviderModelContextWindow({

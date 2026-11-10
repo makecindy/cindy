@@ -64,6 +64,18 @@ describe('ChatInput model source switching wiring', () => {
     );
   });
 
+  it('confirms staged selections with the window main verifies at send', () => {
+    const start = chatInputSource.indexOf('const confirmModelSwitchContextGuard = useCallback(');
+    const end = chatInputSource.indexOf('// session-agent-switch', start);
+    const guard = chatInputSource.slice(start, end);
+    // 目录窗口不含模型级上限与任务预算；暂存确认必须先用 main 的实际窗口。
+    expect(guard).toContain('.getSessionContextWindowBounds(sessionId, {');
+    expect(guard).toContain(')?.effectiveWindow ?? undefined');
+    expect(guard.indexOf('stagedEffectiveWindow ??')).toBeLessThan(
+      guard.indexOf('resolveProviderModelContextWindow({'),
+    );
+  });
+
   it('guards model-only duplicate ids with the provider preserved by the final route', () => {
     const modelStart = chatInputSource.indexOf('const performModelChange = useCallback(');
     const providerStart = chatInputSource.indexOf('const performProviderChange = useCallback(');
