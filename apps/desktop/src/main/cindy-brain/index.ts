@@ -2284,7 +2284,7 @@ const pluginInvocations = new PluginInvocations({
     })().catch(() => { failed = true; queued.length = 0; });
     return {
       isCurrent: () => {
-        if (failed) return false;
+        // Usage reporting is auxiliary; a binding failure must not invalidate the invocation.
         if (handle) {
           const current = service.captureBound(id, revision);
           return current?.subjectId === handle.subjectId &&
