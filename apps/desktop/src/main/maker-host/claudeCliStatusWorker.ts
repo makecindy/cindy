@@ -2,7 +2,8 @@ import { execFileSync } from 'node:child_process';
 // eslint-disable-next-line no-restricted-imports -- CLI startup can block Electron Main on Windows.
 import { parentPort, workerData } from 'node:worker_threads';
 
-import { CLAUDE_SUBSCRIPTION_CLI_ISOLATION_ARGS } from '@cindy/maker-core';
+// 只引入轻量子路径：worker 单独打包，不能把整个 maker-core 带进来。
+import { CLAUDE_SUBSCRIPTION_CLI_ISOLATION_ARGS } from '@cindy/maker-core/claude-subscription-isolation';
 
 export interface ClaudeCliStatusRequest {
   binary: string;
