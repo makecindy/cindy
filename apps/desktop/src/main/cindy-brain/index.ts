@@ -2156,7 +2156,8 @@ export function getGhostManager(): GhostManager {
             project: (record, receipt) => ({
               publishingSource: projectPluginPublishingSource(record, receipt, { kind: 'invalid' }),
             }),
-            isCurrent: () => true,
+            // A failed read is not a validated snapshot; let async scans retry.
+            isCurrent: () => false,
           };
         }
       },

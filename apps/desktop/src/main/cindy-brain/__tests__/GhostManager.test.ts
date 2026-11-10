@@ -31,6 +31,13 @@ import { forgeInstallOriginForMembership } from '../forgeOidcInstallConfirmBridg
 import { installedGhostPhysicalRelId, installedGhostStoragePart, pluginInstallStoragePart } from '../../../shared/pluginIdentity';
 import { runGhostSnapshotWorkerRequest } from '../ghostSnapshotWorkerProcess';
 import { writeTestCindyPackage } from './cindyPackageFixture';
+import { PluginMarketLedger } from '../../plugin-market/ledger';
+import { projectPluginPublishingSource } from '../pluginPublishingSource';
+import { createGhostProductionCallbacks } from './ghostProductionCallbacksFixture';
+
+const productionManager = createGhostProductionCallbacks<{ getGhostManager(): GhostManager }>({
+  functions: ['getGhostManager'], initialize: 'let managerSingleton = null;',
+});
 
 const canLinkFile = (() => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ghost-manager-file-link-probe-'));
@@ -4272,6 +4279,53 @@ describe('GhostManager · list', () => {
     prepare.mockClear();
     expect(manager.list()).toHaveLength(2);
     expect(prepare).toHaveBeenCalledTimes(1);
+  });
+
+  // PR #9754 review, unit: one approved plugin and a failed ledger snapshot.
+  // The custom projector test above misses the production catch branch. Run
+  // that callback through listAsync: transient IO must recover, persistent IO
+  // must reject within the retry limit instead of publishing unavailable sources.
+  it.each(['transient', 'persistent'] as const)('handles %s listing snapshot failures through production wiring', async (failure) => {
+    await manager.install(await makeCindy('ledger-retry.cindy', goodManifest()), { namespace: null });
+    const ledger = new PluginMarketLedger(path.join(workDir, 'market', 'ledger.v1.json'));
+    manager = productionManager({
+      // Keep production source callbacks; unrelated app services stay isolated.
+      GhostManager: class extends GhostManager {
+        constructor(options: GhostManagerOptions) {
+          super({ getRootDir: options.getRootDir, prepareListingSources: options.prepareListingSources });
+        }
+      },
+      brainRootDir: () => rootDir,
+      activeOwnerScopeKey: () => 'owner',
+      broadcastGhostsChanged: vi.fn(),
+      getResolvedMainLocale: () => 'zh-CN',
+      loadGhostTrustRegistry: () => ({}),
+      isTrustedBundledSource: () => false,
+      log: { warn: vi.fn(), info: vi.fn() },
+      getGhostSetupManifestTracker: () => ({ seed: vi.fn() }),
+      getPluginMarketLedger: () => ledger,
+      projectPluginPublishingSource,
+    }).getGhostManager();
+    const unavailable = () => { throw Object.assign(new Error('ledger locked'), { code: 'EBUSY' }); };
+    const snapshot = vi.spyOn(ledger, 'createListingLookup');
+    try {
+      if (failure === 'transient') {
+        snapshot.mockImplementationOnce(unavailable);
+        await expect(manager.listAsync()).resolves.toMatchObject([{
+          enabled: true, approval: { state: 'approved' },
+          publishingSource: { kind: 'local', source: 'manual' },
+        }]);
+        expect(snapshot).toHaveBeenCalledTimes(2);
+      } else {
+        snapshot.mockImplementation(unavailable);
+        await expect(manager.listAsync()).rejects.toThrow('ghost installations changed repeatedly during background scan');
+        expect(snapshot).toHaveBeenCalledTimes(3);
+        // The synchronous path still fails closed without changing approval.
+        expect(manager.list()).toMatchObject([{
+          enabled: true, approval: { state: 'approved' }, publishingSource: { kind: 'unavailable' },
+        }]);
+      }
+    } finally { snapshot.mockRestore(); }
   });
 
   it.each(['owner', 'uninstall'] as const)('async scan does not publish stale approval after %s changes during IO', async (change) => {
