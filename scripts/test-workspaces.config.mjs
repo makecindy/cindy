@@ -98,6 +98,8 @@ const makerPiManagerIntegrationInclude = [
 ];
 const desktopE2eInclude = [
   'src/main/maker-host/__tests__/*.e2e.test.ts',
+  // The Terra proxy regression starts a real Codex binary when explicitly configured.
+  'src/main/maker-host/__tests__/codexTerraProxy.integration.test.ts',
   // Guest fork through a provider group with a real Claude Code; skipped without apps/claude-code-bin.
   'src/main/remote-agent/__tests__/groupRelayClaudeFork.e2e.test.ts',
   'src/main/remote-agent/__tests__/startupProbe.e2e.test.ts',

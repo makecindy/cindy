@@ -2,7 +2,7 @@
  * Regression: Codex may report Ultra/Fast while the Desktop proxy changes or
  * drops the outgoing effort or priority tier. The smallest failing input is a
  * Terra request on the official API route with both options selected.
- * Integration tier: native Codex, the real Desktop proxy and a loopback API;
+ * E2E tier: native Codex, the real Desktop proxy and a loopback API;
  * no account or paid inference. The maker-core test bypasses the Desktop proxy,
  * while the existing proxy unit suite does not start a real Codex process.
  */
@@ -50,45 +50,56 @@ describe.skipIf(!binary)('native Terra Ultra and Fast through the Cindy proxy', 
     const home = path.join(fixture.root, 'home');
     const codex = path.join(fixture.root, 'codex');
     const work = path.join(fixture.root, 'work');
-    for (const dir of [home, codex, work]) fs.mkdirSync(dir);
-    const homeSpy = vi.spyOn(os, 'homedir').mockReturnValue(home);
     const requests: Array<Record<string, unknown>> = [];
     const failures: unknown[] = [];
-    const server = createServer(async (req, res) => {
-      try {
-        const chunks: Buffer[] = [];
-        for await (const chunk of req) chunks.push(Buffer.from(chunk));
-        if (req.method !== 'POST' || !req.url?.endsWith('/responses')) {
-          res.writeHead(404).end();
-          return;
-        }
-        expect(req.headers.authorization).toBe('Bearer synthetic-openai-key');
-        requests.push(JSON.parse(Buffer.concat(chunks).toString('utf8')) as Record<string, unknown>);
-        const item = { type: 'message', id: 'msg_terra_result', role: 'assistant', status: 'completed',
-          content: [{ type: 'output_text', text: 'SYNTHETIC_TERRA_OK', annotations: [] }] };
-        const events = [
-          { type: 'response.created', response: { id: 'terra-response', status: 'in_progress', output: [] } },
-          { type: 'response.output_item.done', output_index: 0, item },
-          { type: 'response.completed', response: { id: 'terra-response', status: 'completed', output: [item],
-            usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 } } },
-        ];
-        res.writeHead(200, { 'content-type': 'text/event-stream', connection: 'close' });
-        res.end(events.map(event => 'event: ' + event.type + '\ndata: ' + JSON.stringify(event) + '\n\n').join(''));
-      } catch (error) {
-        failures.push(error);
-        res.writeHead(500).end('Synthetic API failure');
-      }
-    });
-    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
-    fixture.gateway = 'http://127.0.0.1:' + (server.address() as AddressInfo).port;
-    const catalog = await import('../active-catalog.js');
-    const routing = await import('../provider-route.js');
-    const proxy = await import('../codex-proxy-host.js');
-    const sessions = await import('../session-provider-store.js');
-    const { buildCodexProxySpawnArgs } = await import('../codex-gateway-config.js');
+    let homeSpy: { mockRestore(): void } | undefined;
+    let server: ReturnType<typeof createServer> | undefined;
+    let catalogForCleanup: typeof import('../active-catalog.js') | undefined;
+    let routingForCleanup: typeof import('../provider-route.js') | undefined;
+    let proxyForCleanup: typeof import('../codex-proxy-host.js') | undefined;
+    let sessionsForCleanup: typeof import('../session-provider-store.js') | undefined;
     let agent: CodexAgent | undefined;
     let handle: AgentSessionHandle | undefined;
     try {
+      for (const dir of [home, codex, work]) fs.mkdirSync(dir);
+      homeSpy = vi.spyOn(os, 'homedir').mockReturnValue(home);
+      const apiServer = createServer(async (req, res) => {
+        try {
+          const chunks: Buffer[] = [];
+          for await (const chunk of req) chunks.push(Buffer.from(chunk));
+          if (req.method !== 'POST' || !req.url?.endsWith('/responses')) {
+            res.writeHead(404).end();
+            return;
+          }
+          expect(req.headers.authorization).toBe('Bearer synthetic-openai-key');
+          requests.push(JSON.parse(Buffer.concat(chunks).toString('utf8')) as Record<string, unknown>);
+          const item = { type: 'message', id: 'msg_terra_result', role: 'assistant', status: 'completed',
+            content: [{ type: 'output_text', text: 'SYNTHETIC_TERRA_OK', annotations: [] }] };
+          const events = [
+            { type: 'response.created', response: { id: 'terra-response', status: 'in_progress', output: [] } },
+            { type: 'response.output_item.done', output_index: 0, item },
+            { type: 'response.completed', response: { id: 'terra-response', status: 'completed', output: [item],
+              usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 } } },
+          ];
+          res.writeHead(200, { 'content-type': 'text/event-stream', connection: 'close' });
+          res.end(events.map(event => 'event: ' + event.type + '\ndata: ' + JSON.stringify(event) + '\n\n').join(''));
+        } catch (error) {
+          failures.push(error);
+          res.writeHead(500).end('Synthetic API failure');
+        }
+      });
+      server = apiServer;
+      await new Promise<void>(resolve => apiServer.listen(0, '127.0.0.1', resolve));
+      fixture.gateway = 'http://127.0.0.1:' + (apiServer.address() as AddressInfo).port;
+      const catalog = await import('../active-catalog.js');
+      catalogForCleanup = catalog;
+      const routing = await import('../provider-route.js');
+      routingForCleanup = routing;
+      const proxy = await import('../codex-proxy-host.js');
+      proxyForCleanup = proxy;
+      const sessions = await import('../session-provider-store.js');
+      sessionsForCleanup = sessions;
+      const { buildCodexProxySpawnArgs } = await import('../codex-gateway-config.js');
       const provider = buildUserProvider({ id: 'openai-api', name: 'Synthetic OpenAI', runtimes: { codex: {
         baseUrl: fixture.gateway + '/v1', wireProtocol: 'openai-responses', models: [{ id: model, name: model,
           discoveredMetadata: { efforts: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'], supportsFastMode: true } }],
@@ -155,19 +166,25 @@ describe.skipIf(!binary)('native Terra Ultra and Fast through the Cindy proxy', 
       expect(JSON.stringify(requests[0]!.input)).toContain('Proactive multi-agent delegation is active.');
       expect(events.join('')).toContain('SYNTHETIC_TERRA_OK');
     } finally {
-      await handle?.close();
-      await agent?.dispose();
-      proxy.unregister('native-terra-api');
-      sessions.clearSessionProvider('native-terra-api');
-      await proxy.disposeCodexProxy();
-      proxy.clearCodexProxyAuthInjection();
-      routing.setCustomProviderKeyReader(() => null);
-      catalog.setCustomProviders([]);
-      homeSpy.mockRestore();
-      server.closeAllConnections();
-      await new Promise<void>(resolve => server.close(() => resolve()));
-      fs.rmSync(fixture.root, { recursive: true, force: true });
-      fixture.gateway = '';
+      try {
+        await handle?.close();
+        await agent?.dispose();
+        proxyForCleanup?.unregister('native-terra-api');
+        sessionsForCleanup?.clearSessionProvider('native-terra-api');
+        await proxyForCleanup?.disposeCodexProxy();
+        proxyForCleanup?.clearCodexProxyAuthInjection();
+        routingForCleanup?.setCustomProviderKeyReader(() => null);
+        catalogForCleanup?.setCustomProviders([]);
+      } finally {
+        homeSpy?.mockRestore();
+        const apiServer = server;
+        if (apiServer) {
+          apiServer.closeAllConnections();
+          await new Promise<void>(resolve => apiServer.close(() => resolve()));
+        }
+        fs.rmSync(fixture.root, { recursive: true, force: true });
+        fixture.gateway = '';
+      }
     }
   }, 60_000);
 });
