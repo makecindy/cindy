@@ -17,6 +17,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   boundsFillWorkArea,
+  fitReplacementStartupBounds,
   manageWindowStatePreservingNormalBounds,
   normalBoundsForPersistence,
   planWindowRestore,
@@ -714,5 +715,45 @@ describe('manageWindowStatePreservingNormalBounds', () => {
         screen.workArea,
       ),
     ).toBe(false);
+  });
+});
+
+describe('fitReplacementStartupBounds', () => {
+  // #9572 复审：启动替换分支用默认 1280×800 加保存的 x/y 直接建窗口。工作区高 680 时底边落到
+  // 任务栏下面，紧接着的保存把这个超尺寸矩形写成取消最大化的还原目标。
+  // 生产入口：fitReplacementStartupBounds，bootstrap 只在 replaceWithDefaultSize 时调用。
+  // 最小输入：1280×680 工作区、默认 1280×800。高度必须不低于 600 且小于 680，底边不超出。
+  // Tier: unit。
+  it('shrinks the default startup size onto a short work area without going under the minimum', () => {
+    const workArea = { x: 0, y: 40, width: 1280, height: 680 };
+    const fitted = fitReplacementStartupBounds(
+      { x: 0, y: 40 },
+      { width: 1280, height: 800 },
+      workArea,
+    );
+
+    expect(fitted.height).toBeGreaterThanOrEqual(600);
+    expect(fitted.height).toBeLessThan(workArea.height);
+    expect(fitted.y + fitted.height).toBeLessThanOrEqual(workArea.y + workArea.height);
+    expect(fitted.x).toBeGreaterThanOrEqual(workArea.x);
+    expect(fitted.width).toBeLessThanOrEqual(workArea.width);
+  });
+
+  // #9572 复审：工作区正好等于默认尺寸时，原样创建就是贴满，取消最大化没有更小的尺寸可去。
+  // 最小输入：1280×800 工作区、默认 1280×800。结果必须落在工作区内，且不能正好等于工作区。
+  // Tier: unit。
+  it('does not recreate the work area when the default size already equals it', () => {
+    const workArea = { x: 100, y: 20, width: 1280, height: 800 };
+    const fitted = fitReplacementStartupBounds(
+      { x: 100, y: 20 },
+      { width: 1280, height: 800 },
+      workArea,
+    );
+
+    expect(fitted.x).toBeGreaterThanOrEqual(workArea.x);
+    expect(fitted.y).toBeGreaterThanOrEqual(workArea.y);
+    expect(fitted.x + fitted.width).toBeLessThanOrEqual(workArea.x + workArea.width);
+    expect(fitted.y + fitted.height).toBeLessThanOrEqual(workArea.y + workArea.height);
+    expect(fitted.width === workArea.width && fitted.height === workArea.height).toBe(false);
   });
 });

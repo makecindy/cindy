@@ -138,6 +138,7 @@ import {
 } from './mainWindowMaximizeRecovery';
 import {
   commitReplacedNormalBounds,
+  fitReplacementStartupBounds,
   manageWindowStatePreservingNormalBounds,
   planWindowRestore,
 } from './mainWindowWorkAreaBounds';
@@ -4368,15 +4369,24 @@ const createWindow = () => {
   // A snapped rectangle is not a legal restore size. Create from the same
   // defaults the keeper uses on a first launch, but keep the saved x/y: that is
   // the display the work-area fill was on. Omitting them centers on the primary
-  // display and the keeper would then remember the wrong monitor.
-  const mainWindow = new BrowserWindow({
-    ...(restorePlan.replaceWithDefaultSize
-      ? {
+  // display and the keeper would then remember the wrong monitor. The default
+  // 1280×800 is taller than a 1280×680 work area, so fit it before the window
+  // exists; the save right after construction persists whatever was created.
+  const replacementBounds = restorePlan.replaceWithDefaultSize
+    ? fitReplacementStartupBounds(
+        { x: mainWindowState.x, y: mainWindowState.y },
+        { width: defaultWindowWidth, height: defaultWindowHeight },
+        screen.getDisplayMatching({
           x: mainWindowState.x,
           y: mainWindowState.y,
           width: defaultWindowWidth,
           height: defaultWindowHeight,
-        }
+        }).workArea,
+      )
+    : null;
+  const mainWindow = new BrowserWindow({
+    ...(replacementBounds
+      ? replacementBounds
       : {
           x: mainWindowState.x,
           y: mainWindowState.y,

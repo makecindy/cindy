@@ -234,8 +234,39 @@ function placeOntoLiveDisplay(
   const maxX = to.x + Math.max(0, to.width - width);
   const maxY = to.y + Math.max(0, to.height - height);
   return {
-    x: Math.min(Math.max(to.x + (bounds.x - from.x), to.x), maxX),
-    y: Math.min(Math.max(to.y + (bounds.y - from.y), to.y), maxY),
+    x: clampToWorkArea(to.x + (bounds.x - from.x), to.x, maxX),
+    y: clampToWorkArea(to.y + (bounds.y - from.y), to.y, maxY),
+    width,
+    height,
+  };
+}
+
+/** Keep a coordinate inside [min, max]. A zero-width remainder collapses to min. */
+function clampToWorkArea(value: number, min: number, max: number): number {
+  return Math.min(Math.max(value, min), max);
+}
+
+/**
+ * The startup replacement creates the window from the default size plus the saved
+ * x/y, before any maximize. On a work area shorter than that default the bottom
+ * lands under the taskbar, and the following save persists that rectangle as the
+ * unmaximize target. Fit the default size with the same rules as a cross-display
+ * restore, then keep x/y inside the work area the saved point belongs to.
+ */
+export function fitReplacementStartupBounds(
+  saved: Pick<WorkAreaRect, 'x' | 'y'>,
+  size: Pick<WorkAreaRect, 'width' | 'height'>,
+  workArea: WorkAreaRect,
+  minimum: { width: number; height: number } = {
+    width: MIN_RESTORE_WIDTH,
+    height: MIN_RESTORE_HEIGHT,
+  },
+): WorkAreaRect {
+  const width = fitRestoreSize(size.width, workArea.width, minimum.width);
+  const height = fitRestoreSize(size.height, workArea.height, minimum.height);
+  return {
+    x: clampToWorkArea(saved.x, workArea.x, workArea.x + Math.max(0, workArea.width - width)),
+    y: clampToWorkArea(saved.y, workArea.y, workArea.y + Math.max(0, workArea.height - height)),
     width,
     height,
   };
