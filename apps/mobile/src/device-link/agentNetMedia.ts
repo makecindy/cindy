@@ -49,7 +49,9 @@ async function identityFor(enrollment?: MobileAgentNetEnrollmentOptions): Promis
   identity.signer.assertCurrent(); return identity;
 }
 export function canUploadMobileAgentNetMedia(deviceId?: string): boolean {
-  if (deviceId && isScopedPeer(deviceId)) { try { return !!mobileAgentNetSharingMediaTarget(deviceId); } catch { return false; } }
+  // A missing V2 route may use V1; a known V2 route's offline/denial error must
+  // propagate so mixed mode cannot silently upload the attachment as plaintext.
+  if (deviceId && isScopedPeer(deviceId)) return !!mobileAgentNetSharingMediaTarget(deviceId);
   return !!deviceId && isMobileAgentNetActive() && !!mobileAgentNetMediaPeer(deviceId);
 }
 export async function uploadMobileAgentNetMedia(deviceId: string | undefined, size: number, contentType: string,
