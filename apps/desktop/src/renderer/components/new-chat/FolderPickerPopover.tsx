@@ -509,7 +509,7 @@ export function FolderPickerPopover({
             shrink-0,始终钉在弹层底部。 */}
         <div
           ref={setUpperScrollEl}
-          data-folder-picker-scroll="true"
+          data-folder-picker-scroll={upperScrollOverflows ? true : undefined}
           onScroll={updateUpperScrollFade}
           className={cn(
             'pending-queue-scroll -mr-2 flex min-h-0 flex-1 flex-col overflow-x-hidden overflow-y-auto overscroll-contain pr-2',
@@ -574,17 +574,14 @@ export function FolderPickerPopover({
                       value={projectQuery}
                       onChange={(e) => {
                         setProjectQuery(e.target.value);
-                        // 回到结果顶部:充足态列表自滚 → 重置列表自身(旧行为);
-                        // 溢出态滚动在上半区容器 → 对齐到搜索框(它 sticky 钉在顶部,
-                        // 首个结果紧跟其下);没有搜索框时对齐到列表顶。
-                        if (upperScrollOverflows && upperScrollEl) {
-                          const anchor = searchAnchorEl ?? projectScrollEl;
-                          if (anchor) {
-                            upperScrollEl.scrollTop =
-                              anchor.getBoundingClientRect().top -
-                              upperScrollEl.getBoundingClientRect().top +
-                              upperScrollEl.scrollTop;
-                          }
+                        // 列表处于普通文档流,即使搜索框已经 sticky 吸顶,仍能从列表
+                        // 坐标还原其流内位置。减去搜索框高度,让首项完整出现在它下方。
+                        if (upperScrollOverflows && upperScrollEl && projectScrollEl) {
+                          upperScrollEl.scrollTop =
+                            projectScrollEl.getBoundingClientRect().top -
+                            upperScrollEl.getBoundingClientRect().top +
+                            upperScrollEl.scrollTop -
+                            (searchAnchorEl?.getBoundingClientRect().height ?? 0);
                         } else if (projectScrollEl) {
                           projectScrollEl.scrollTop = 0;
                         }
