@@ -102,13 +102,13 @@ export async function runAgentNetNativeSmoke(): Promise<void> {
     const mediaApi: NativeMediaApi = {
       request: async () => { throw new Error('NATIVE_UNEXPECTED_MEDIA_REQUEST'); },
       putMediaChunk: async () => { throw new Error('NATIVE_UNEXPECTED_MEDIA_UPLOAD'); },
-      async mediaResponse(_id, range) {
+      async withMediaResponse(_id, range, consume) {
         const match = /^bytes=(\d+)-(\d+)$/.exec(range);
         if (!match) throw new Error('INVALID_MEDIA_RANGE');
         const start = Number(match[1]), end = Number(match[2]);
         const bytes = stored.slice(start, end + 1);
-        return { status: 206, headers: new Headers({ 'content-range': `bytes ${start}-${end}/${stored.length}` }),
-          arrayBuffer: async () => bytes.buffer } as Response;
+        return consume({ status: 206, headers: new Headers({ 'content-range': `bytes ${start}-${end}/${stored.length}` }),
+          arrayBuffer: async () => bytes.buffer } as Response);
       },
     };
     const preview = await openNativeMediaStream(mediaApi, { command: value => command(player, value),

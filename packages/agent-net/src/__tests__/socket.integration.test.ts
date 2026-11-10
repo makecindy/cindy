@@ -110,7 +110,9 @@ async function network(udp: boolean, ingress?: 'gateway', isolated = false, scop
         if (isolated) expect(socket.certificateFor('a-host')?.signature).toBe(bootstrap.ownerCertificate.signature);
         sockets.push(socket); return socket;
       },
-      timing: { requestTimeoutMs: 4000, pingIntervalMs: 1000, transportRetryIntervalMs: 100, reconnectBaseMs: 20, reconnectMaxMs: 100 },
+      // Keep the SDK's production ACK recovery window. A 100ms test override
+      // can restart a healthy stream while a large result is still arriving.
+      timing: { requestTimeoutMs: 4000, pingIntervalMs: 1000, reconnectBaseMs: 20, reconnectMaxMs: 100 },
       logger: { debug() {}, info() {}, warn() {}, error() {} },
     });
     cleanup.push(() => client.stop()); client.start(); return client;
@@ -144,8 +146,10 @@ it.each([false, true])('runs existing RPC and multi-megabyte results through cer
   // Use the production SDK deadline for the large transfer; ordinary RPCs keep
   // the fixture's short deadline. Slow hosted macOS/Windows CPUs must still
   // deliver every byte and satisfy the encryption assertions below.
+  const socketCount = f.sockets.length;
   const large = await f.controller.invoke('a-host', { channel: 'test:large', args: [] }, 30_000);
   expect(large.ok && String(large.result).length).toBe('confidential-result-'.length * 160000);
+  expect(f.sockets).toHaveLength(socketCount);
   expect(f.captured.length).toBeGreaterThan(100);
   expect(f.captured.some((bytes) => bytes.includes(Buffer.from('private-business-value-0123456789')) || bytes.includes(Buffer.from('confidential-result-')))).toBe(false);
   if (udp) {
