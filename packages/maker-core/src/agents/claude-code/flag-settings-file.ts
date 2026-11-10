@@ -45,7 +45,14 @@ export async function materializeClaudeFlagSettings(
   }
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-claude-settings-'));
   const settingsPath = path.join(dir, 'settings.json');
-  await fs.writeFile(settingsPath, JSON.stringify(settings), { encoding: 'utf8', mode: 0o600 });
+  try {
+    await fs.writeFile(settingsPath, JSON.stringify(settings), { encoding: 'utf8', mode: 0o600 });
+  } catch (error) {
+    // mkdtemp 已经建好目录, 写入失败 (ENOSPC / EIO) 时调用方还没拿到 disposer,
+    // 启动失败和关闭路径都回收不到它 —— 在这里尽力删掉再抛原始错误。
+    await fs.rm(dir, { recursive: true, force: true }).catch(() => {});
+    throw error;
+  }
   return {
     kind: 'file',
     settingsPath,
