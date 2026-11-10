@@ -1718,6 +1718,49 @@ export function createTurnRunner(
         return { kind: 'rejected', reason: 'aborted' };
       }
 
+      // 项目资源漂移(如会话中途 openspec init):空闲时经 Maker 以 runtime-refresh
+      // 回收运行时,再按 DB 行自愈重建 —— 与桌面发送事务同口径,IM 直发不用旧资源。
+      // 无 agent-switch 锁的装配不支持关闭后重建,保持原样投递。
+      let driftRecycled = false;
+      try {
+        driftRecycled = !!(deps.acquirePendingAgentSwitch
+          && await getMaker().recyclePiRuntimeIfResourcesDrifted(state.makerSession));
+      } catch (err) {
+        // close 抛出时 Session 已停在 error(performClose 不回退),旧实例不可用:
+        // 只能走重建;仍 active 才原样投递(Codex P2, 2026-11-10)。
+        driftRecycled = !!deps.acquirePendingAgentSwitch && state.makerSession.getStatus() !== 'active';
+        log.warn('im send: resource-drift recycle failed',
+          err instanceof Error ? err.message : String(err));
+      }
+      if (driftRecycled) {
+        await refreshSessionAfterPendingAgentSwitch(state, state.makerSession.id, userId);
+        log.info('im send: project resources drifted, recycled runtime before dispatch');
+      }
+      // 回收+重建是异步窗口:/stop 可能恰好落在其中;喊停后不得再开始执行,与上方
+      // aborted 分支同口径收尾(此时尚未发送,无需补终态章)。经函数读取:上方检查
+      // 已把控制流收窄到 'done'|'error',但运行时值在回收窗口内仍可变为 'aborted'。
+      const turnTerminalNow = (): 'done' | 'aborted' | 'error' => item.turn.terminalKind;
+      if (turnTerminalNow() === 'aborted') {
+        const index = state.queue.indexOf(item.turn);
+        if (index >= 0) state.queue.splice(index, 1);
+        if (output.kind === 'chunked-text' && item.turn.chunkedReplyBegun) {
+          try {
+            await output.commitFinal({
+              userId,
+              text: ui.agent.stopDone(0),
+              terminal: 'aborted',
+              threadTs: item.turn.scopeKey,
+            });
+          } catch (err) {
+            log.warn(`cancelled reply finalization failed: ${err instanceof Error ? err.message : String(err)}`);
+          }
+        }
+        await completeTurnCallbackAfterAck(item.turn);
+        settleTurnTerminal(item.turn);
+        if (!finishDeferredDetachIfIdle(state)) armDispatchRetry(state, userId);
+        return { kind: 'rejected', reason: 'aborted' };
+      }
+
       const sendResult = await state.makerSession.send(outgoingMessage as typeof item.userMessage, {
         planMode: false,
         // IM owns successful replies, including turns in an attached desktop task.

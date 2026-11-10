@@ -41,6 +41,9 @@ import type { GoalStatusUpdate, SessionLike } from './types';
 export interface StartGoalControllerDeps {
   maker: Maker;
   getDb: () => GoalDrizzleDb;
+  /** 项目资源漂移回收 seam(pi 本地根任务):空闲时经 Maker 以 runtime-refresh 原因
+   * 关闭旧运行时,goal 直派随后的 ensureSession 活化即重扫重建。默认用 deps.maker。 */
+  recyclePiRuntimeIfResourcesDrifted?: (sessionId: string) => Promise<boolean>;
   /** 状态变化广播到 renderer(→ GOAL_STATUS_CHANGED)。 */
   broadcastStatus: (update: GoalStatusUpdate) => void;
   beforeDispatchUserTurn?: (sessionId: string, signal?: AbortSignal) => void | Promise<void>;
@@ -73,6 +76,7 @@ export function startGoalController(deps: StartGoalControllerDeps): GoalControll
         warn: (message, meta) => logger.warn(message, meta),
       }),
     acquirePendingAgentSwitch: acquirePendingAgentSwitchForDirectSend,
+    recyclePiRuntimeIfResourcesDrifted: deps.recyclePiRuntimeIfResourcesDrifted,
     isSessionInTurn,
     ensureInputReady: ensureGoalInputReady,
     isInputBlocked: isGoalInputBlocked,

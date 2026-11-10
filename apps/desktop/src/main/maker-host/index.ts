@@ -55,6 +55,7 @@ import path from 'node:path';
 
 import {
   Maker,
+  type Session,
   isBotMcpServerAllowed,
   ClaudeCodeAgent,
   CodexAgent,
@@ -2885,6 +2886,11 @@ export function getMaker(): Maker {
           await writeCodexHistoryHasProductPrompt(sessionId, historyHasProductPrompt);
         },
         onClose: async (sessionId, options) => {
+          // 抑制态必须在首个 await 前取样:Maker.close 不等 onClose,调用方(漂移
+          // 回收包裹/任务移动/桌面发送 seam)的抑制窗口会在 close 返回后即释放,
+          // 而本钩子先等 worktree lease 的文件操作才查抑制表 —— 重查会错过窗口,
+          // 让重建期间的 close 照删暂存附件(Greptile P1,2026-11-10)。
+          const rehydrateSuppressedAtClose = rehydrateCloseSuppression.isSuppressed(sessionId);
           clearUsagePricing(sessionId);
           const lease = worktreeRuntimeLeases.get(options);
           if (lease) {
@@ -2904,10 +2910,19 @@ export function getMaker(): Maker {
             // 这)。回收只由会话显式删除/归档驱动,见 localDb/ipc/sessions.ts →
             // worktree/sessionRemovalRecycle.ts。
             await WorktreePool.releaseWorktree(sessionId).catch(() => undefined);
-          });
+          }, { forceSkip: rehydrateSuppressedAtClose });
         },
       },
     });
+    // 漂移回收的 close 必须在抑制窗口内:直发链路(IM turnRunner/hook/scheduler/goal)
+    // 回收后立刻按 DB 行重建同一任务,窗口内 onClose 跳过临时附件清理与 worktree
+    // 释放 —— 否则重建后的 turn 会丢转录里引用的暂存附件(Codex P2,2026-11-10)。
+    // 桌面发送事务的同一 close 在 register.ts 的 deps seam 处已各自包裹,此处收口
+    // 其余全部直发调用方(getMaker 侧不经过 seam)。
+    const baseRecyclePiRuntimeIfResourcesDrifted
+      = _maker.recyclePiRuntimeIfResourcesDrifted.bind(_maker);
+    _maker.recyclePiRuntimeIfResourcesDrifted = async (session: Session) =>
+      withRehydrateCloseSuppressed(session.id, () => baseRecyclePiRuntimeIfResourcesDrifted(session));
     // 本机作为「Agent 运行的电脑」：同账号另一台电脑的任务可让 Agent 在这里运行。
     installRemoteAgentHost({
       getMaker: () => getMaker(),
