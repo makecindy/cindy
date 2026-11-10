@@ -102,6 +102,13 @@ export async function openMobileAgentNetSocket(options: MobileAgentNetEnrollment
   guard();
   let identity = await ensureMobileAgentNetIdentity(options); guard();
   const cached = await readMobileAgentNetDirectory(identity); guard();
+  const cachedDirectory = [...(cached?.devices ?? [])];
+  // Match Desktop's offline startup: our validated local certificate keeps the
+  // node alive for V1 compatibility, without authorizing any unknown remote peer
+  // or extending the cached directory's original validity window.
+  if (!cachedDirectory.some(view => view.certificate.deviceId === identity.api.identity.deviceId)) {
+    cachedDirectory.push({ certificate: identity.api.certificate, name: '', online: false, remoteControlEnabled: false, capabilities: [] });
+  }
   let addresses: string[] = [];
   try { const address = await Network.getIpAddressAsync(); if (address && address !== '0.0.0.0') addresses = [address]; }
   catch { /* Relay remains available without a local candidate. */ }
@@ -110,7 +117,7 @@ export async function openMobileAgentNetSocket(options: MobileAgentNetEnrollment
   try {
     const socket = await AgentNetSocket.openWithBindings({
       client: identity.api, assertCurrent: guard, userId: owner.accountId,
-      cachedDirectory: cached?.devices, directoryExpiresAt: cached?.expiresAt,
+      cachedDirectory, directoryExpiresAt: cached?.expiresAt,
       onDirectory: devices => {
         void writeMobileAgentNetDirectory(identity, devices).catch(() => undefined);
         updateMobileAgentNetNotificationTrust(identity, devices, guard);
