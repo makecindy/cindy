@@ -843,6 +843,54 @@ describe('routine check configuration', () => {
     } finally { await f.engine.stop(); }
   });
 
+  // #9580: the editor saves absent checks as null before Run Now. Exercise the real
+  // save/run boundary (unit, in-memory persistence); existing built-in tests only
+  // round-trip identical field shapes and miss this rejected no-op save.
+  it('runs a built-in after saving explicitly empty optional checks', async () => {
+    const f = await fixture();
+    const id = 'builtin-follow-up-bot';
+    try {
+      await f.engine.ensureBuiltin('bot', 'follow-up', input, id);
+      const saved = await f.engine.put('bot', { ...input, preRunPlugin: null, preRunHook: null }, id);
+      expect(saved).toMatchObject({ ...input, builtin: 'follow-up' });
+      await f.engine.runNow('bot', id);
+      await vi.waitFor(() => expect(f.engine.history(id)[0]?.status).toBe('success'));
+      const restarted = await fixture(undefined, f.snapshot());
+      try { expect(restarted.engine.list('bot')).toEqual([saved]); }
+      finally { await restarted.engine.stop(); }
+    } finally { await f.engine.stop(); }
+  });
+
+  // Null is only equivalent to absence when no check exists. Real additions,
+  // removals and edits must still fail without changing the stored host template.
+  it('keeps built-in pre-run checks protected across optional-field round trips', async () => {
+    const f = await fixture();
+    const id = 'builtin-follow-up-bot';
+    const checks = {
+      preRunHook: { command: 'check', timeoutMs: 3000 },
+      preRunPlugin: { pluginId: 'gate', onFailure: 'block' as const },
+    };
+    try {
+      const empty = await f.engine.ensureBuiltin('bot', 'follow-up', input, id);
+      for (const change of [{ preRunHook: checks.preRunHook }, { preRunPlugin: checks.preRunPlugin }]) {
+        await expect(f.engine.put('bot', { ...input, ...change }, id)).rejects.toThrow('BUILTIN_ROUTINE');
+        expect(f.engine.list('bot')).toEqual([empty]);
+      }
+      const configured = await f.engine.ensureBuiltin('bot', 'follow-up', { ...input, ...checks }, id);
+      expect(await f.engine.put('bot', input, id)).toEqual(configured);
+      for (const change of [
+        { preRunHook: null }, { preRunPlugin: null },
+        { preRunHook: { ...checks.preRunHook, command: 'different' } },
+        { preRunHook: { ...checks.preRunHook, timeoutMs: 4000 } },
+        { preRunPlugin: { ...checks.preRunPlugin, pluginId: 'other' } },
+        { preRunPlugin: { ...checks.preRunPlugin, onFailure: 'allow' as const } },
+      ]) {
+        await expect(f.engine.put('bot', { ...input, ...change }, id)).rejects.toThrow('BUILTIN_ROUTINE');
+        expect(f.engine.list('bot')).toEqual([configured]);
+      }
+    } finally { await f.engine.stop(); }
+  });
+
   /*
    * 测试价值
    * - 生产入口与可观察结果：RoutineEngine.put / ensureBuiltin 经同一串行写队列后落地的内置规则（enabled、prompt）。

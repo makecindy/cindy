@@ -10,6 +10,10 @@ import {
 export class SidebarWindowExpansion {
   private readonly expanded = new WeakMap<BrowserWindow, { before: Rectangle; after: Rectangle; contained: boolean }>();
 
+  // The expanded width and the standalone rectangle are independent user states.
+  // Keep this across sidebar toggles, but let destroyed windows release it.
+  private readonly lastExpandedWidth = new WeakMap<BrowserWindow, number>();
+
   /**
    * Persist the standalone rectangle even while the combined window is open.
    * `getLiveBounds` stays the real window so Snap / work-area fill detection still
@@ -35,6 +39,7 @@ export class SidebarWindowExpansion {
     const bounds = win.getBounds();
     if (requested === 0) {
       if (previous) {
+        this.lastExpandedWidth.set(win, bounds.width);
         // Divider and native-window edits while open are temporary allocation only.
         // A display removed or shrunk while open can leave the old rectangle off-screen.
         // Judge it against the display it belongs to, not the one the window is on now:
@@ -50,11 +55,12 @@ export class SidebarWindowExpansion {
     }
     if (previous) return 0;
     const room = Math.max(0, workArea.x + workArea.width - bounds.x - bounds.width);
-    const growth = Math.min(Math.ceil(requested), room);
+    const targetWidth = this.lastExpandedWidth.get(win) ?? bounds.width + requested;
+    const growth = Math.min(Math.ceil(targetWidth - bounds.width), room);
     // Record before setBounds: native resize listeners may persist synchronously.
     const state = { before: bounds, after: bounds, contained: rectInsideWorkArea(bounds, workArea) };
     this.expanded.set(win, state);
-    if (growth > 0) win.setBounds({ ...bounds, width: bounds.width + growth });
+    if (growth !== 0) win.setBounds({ ...bounds, width: bounds.width + growth });
     const after = win.getBounds();
     state.after = after;
     return after.width - bounds.width;

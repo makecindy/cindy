@@ -1169,11 +1169,15 @@ it('cancels an MCP form explicitly without submitting a partial draft', async ()
 
 // Regression: model withdrawal must not discard typing or send without a user gesture.
 // Entry: remote push -> real store and interaction form. Tier: unit.
-it.each([false, true])('handles model withdrawal with edited=%s', async (edited) => {
+it.each([
+  { edited: false, companion: false },
+  { edited: true, companion: false },
+  { edited: true, companion: true },
+])('handles model withdrawal with edited=$edited companion=$companion', async ({ edited, companion }) => {
   remoteSessionStore.setPendingInteractions('s1', [{ persistId: 'original-row', request: {
-    kind: 'ask_user_question', requestId, delivery: 'async', questions: [{ question: 'Original?' }],
+    kind: 'ask_user_question', requestId, delivery: 'async', questions: [{ question: 'Original?', header: 'Device' }],
   } }]);
-  await act(async () => root.render(<Harness />));
+  await act(async () => root.render(<Harness companion={companion} />));
   if (edited) await type('interaction.ask.textInput', 'Finished');
   const input = host.querySelector('[data-testid="interaction.ask.textInput"]');
   await act(async () => remoteSessionStore.applyRemotePush('d1', 'maker:interaction-dismissed', {
@@ -1189,6 +1193,8 @@ it.each([false, true])('handles model withdrawal with edited=%s', async (edited)
     return;
   }
   expect(host.querySelector('[data-testid="interaction.ask.textInput"]')).toBe(input);
+  expect(host.textContent).toContain('interaction.panel.questionWithdrawn');
+  expect(host.querySelector('[data-testid="interaction.ask.withdrawn"]')).not.toBeNull();
   expect(readAskUserDraft(requestId)?.customInput).toBe('Finished');
   expect(host.querySelector('[data-testid="interaction.ask.submitButton"]')?.getAttribute('aria-label')).toBe('interaction.panel.sendSupplement');
   expect(remoteSessionStore.getVisiblePendingInteractions('s1')[0].request.withdrawalReason).toBe('已从日志确认');

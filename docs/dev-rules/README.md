@@ -34,7 +34,7 @@
 | 日志采集、脱敏、上报、行格式与崩溃标记 | [日志上报](log-upload-and-redaction.md) |
 | 本地协议包、插件分发来源、device-link、relay、wire protocol 与 allowlist | [协议兼容](protocol-compatibility.md) |
 | 服务器请求、订阅、同步、轮询与重试的调用方式、共享压力及缺陷审查 | [服务器通道调用审查](server-channel-review.md) |
-| package 依赖、Main 模块加载与布局树 | [架构原则与不变量](architecture-invariants.md) |
+| package 依赖、Main 模块加载、共用主体与桌面／Host 装配、布局树 | [架构原则与不变量](architecture-invariants.md) |
 | Settings、配置文件、偏好、运行时 profile 与能力开关 | [配置与 override](configuration-and-overrides.md) |
 | workdir、Agent 进程、任务数据、IPC／推送与断链恢复 | [远程与手机适配](remote-and-mobile-adaptation.md) |
 | 托管 worktree、提交、PR、直推、review、项目知识归属与文档整理原则 | [开发工作流](development-workflow.md) |
