@@ -901,3 +901,20 @@ it('normalizes already-saved local routes on restore instead of returning the ol
     expect(edited.modelOverride?.agentDeviceId).toBeNull();
   } finally { await restored.engine.stop(); }
 });
+
+// #9616 / unit: explicit default delivery is an equivalent built-in setting,
+// not an instruction edit; existing builtin tests only toggle enabled/model.
+it('accepts the fixed main-task delivery without unlocking built-in behavior', async () => {
+  const f = await fixture();
+  try {
+    const id = 'builtin-follow-up-bot';
+    await f.engine.ensureBuiltin('bot', 'follow-up', input, id);
+    const direct = await f.engine.put('bot', { ...input, delivery: { kind: 'companion', mode: 'direct' } }, id);
+    expect(direct.delivery).toEqual({ kind: 'companion', mode: 'direct' });
+    for (const delivery of [{ kind: 'none' }, { kind: 'companion', mode: 'process' }, { kind: 'im', targetId: 'receiver' }] as const) {
+      await expect(f.engine.put('bot', { ...input, delivery }, id)).rejects.toThrow('BUILTIN_ROUTINE');
+    }
+    await expect(f.engine.put('bot', { ...input, prompt: 'edited' }, id)).rejects.toThrow('BUILTIN_ROUTINE');
+    expect((await f.engine.ensureBuiltin('bot', 'follow-up', input, id))?.delivery).toEqual(direct.delivery);
+  } finally { await f.engine.stop(); }
+});

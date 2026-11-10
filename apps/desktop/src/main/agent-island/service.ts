@@ -479,6 +479,7 @@ export class AgentIslandService {
     wasReplacementTurnDispatching: boolean;
   }>();
   private readonly deferredCompletions = new Map<string, { event: AgentEvent; suppressAttention: boolean }>();
+  private readonly forwardedReportSessions = new Map<string, object>();
   private readonly deferredRemoteAuthErrors = new Map<string, {
     meta: AgentIslandSessionMeta;
     event: AgentEvent;
@@ -1059,7 +1060,23 @@ export class AgentIslandService {
     return this.sessionActivityRelay.waitForCompletionNotification(sessionId);
   }
 
+  /** A host report will alert from another task; retain this task's execution and
+   * real interactions, without emitting a second terminal alert from its lane. */
+  beginForwardedReport(sessionId: string, runId: string): () => void {
+    const token = {};
+    this.forwardedReportSessions.set(sessionId, token);
+    return () => {
+      if (this.forwardedReportSessions.get(sessionId) !== token) return;
+      this.forwardedReportSessions.delete(sessionId);
+      // Reuse scheduler silence's existing short tail guard for late done events.
+      const tailId = `forwarded-report:${runId}`;
+      this.markSilencedScheduleRun(tailId, sessionId);
+      this.scheduleSilencedRunClear(tailId, SILENCED_COMPLETION_CLEAR_MS);
+    };
+  }
+
   resetRuntimeState(): void {
+    this.forwardedReportSessions.clear();
     this.clearPublishTimer();
     this.clearStreamingPreviewPublishTimer();
     this.flushLayoutPreferenceWrites();
@@ -1236,6 +1253,7 @@ export class AgentIslandService {
     }
     const changed = applyAgentIslandEvent(this.state, hydrated, event, now, {
       suppressCompletionAttention,
+      suppressErrorAttention: this.forwardedReportSessions.has(hydrated.sessionId),
       // Direct IM sends bypass handleUserPrompt. Running preserves unread in the
       // live state/ledger, so use that state (including any intervening read ack).
       preserveCompletionAttention: suppressCompletionAttention && !this.isGroupLaneEvent(hydrated.sessionId, event) && (
@@ -1973,7 +1991,8 @@ export class AgentIslandService {
     return event.agentMeta?.botTaskCoordination === true
       || event.agentMeta?.botPrivateReply === true
       || this.isGroupLaneEvent(sessionId, event)
-      || event.turnOrigin?.surface === 'im' || this.silencedSessionRunIds.has(sessionId);
+      || event.turnOrigin?.surface === 'im' || this.silencedSessionRunIds.has(sessionId)
+      || this.forwardedReportSessions.has(sessionId);
   }
 
   private isGroupLaneEvent(sessionId: string, event: AgentEvent): boolean {

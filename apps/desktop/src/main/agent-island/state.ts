@@ -125,6 +125,8 @@ interface AgentIslandSessionMeta {
 
 interface ApplyAgentIslandEventOptions {
   suppressCompletionAttention?: boolean;
+  /** Host-owned forwarding keeps errors visible in history but alerts at the report destination. */
+  suppressErrorAttention?: boolean;
   preserveCompletionAttention?: boolean;
   /** Snapshot that permits this terminal error's paired completion event. */
   allowCompletionAfterTerminalError?: boolean;
@@ -895,7 +897,19 @@ export function applyAgentIslandEvent(
     // 报错必须挂未读:smart suppress(用户正停在该会话)只抑制自动展开,不代表
     // 用户真的看到了报错内容。unread 只能由显式已读 ack(renderer 确认报错 UI
     // 真实展示给用户)清除,否则条目会在 errorUntil 过期后被 prune 静默删除。
-    requestAttentionReveal(state, session, now, AGENT_ISLAND_ERROR_REVEAL_DWELL_MS, { forceUnread: true });
+    // Forwarded reports alert from their destination, with an OS fallback on
+    // publication failure; only their duplicate execution-lane alert is suppressed.
+    if (options.suppressErrorAttention) {
+      session.errorUntil = null;
+      session.revealUntil = null;
+      session.deferredReveal = false;
+      session.deferredRevealReason = null;
+      session.queuedRevealDwellMs = null;
+      removeQueuedTransientReveal(state, session.sessionId);
+      if (state.activeTransientSessionId === session.sessionId) state.activeTransientSessionId = null;
+    } else {
+      requestAttentionReveal(state, session, now, AGENT_ISLAND_ERROR_REVEAL_DWELL_MS, { forceUnread: true });
+    }
     syncRemoteUnreadTerminal(state, session);
     // 新失败真正换卡:被点击的旧卡随之失效。
     replaceAgentIslandCard(session, now);

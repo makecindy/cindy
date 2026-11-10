@@ -11,7 +11,7 @@
  */
 
 import type { BrowserWindow } from 'electron';
-import type { Notifier, Schedule, ScheduleRun } from '@cindy/maker-scheduler';
+import type { Notifier, Schedule, ScheduleRun, PrepareScheduleNotification } from '@cindy/maker-scheduler';
 import { stripXdtFileLinks, stripXdtImageLinks, type FeishuIM } from '@cindy/im';
 
 import type { Logger } from '@cindy/maker-scheduler';
@@ -42,7 +42,7 @@ export interface DesktopNotifierDeps {
 export class DesktopNotifier implements Notifier {
   constructor(private readonly deps: DesktopNotifierDeps) {}
 
-  async notify(schedule: Schedule, run: ScheduleRun): Promise<void> {
+  async notify(schedule: Schedule, run: ScheduleRun, prepare?: PrepareScheduleNotification): Promise<void> {
     // 链路代次在任何 await 之前捕获:飞书分支的 await 期间可能发生登出/换号,
     // 发送侧按代次不一致丢弃,旧账号调度的通知不会进新账号的链路。
     const generation = getMobileNotifyGeneration();
@@ -55,6 +55,20 @@ export class DesktopNotifier implements Notifier {
       }
     }
     if (getMobileNotifyGeneration() !== generation) return;
+    if (prepare) {
+      try {
+        const prepared = await prepare(run);
+        if (!prepared || getMobileNotifyGeneration() !== generation) return;
+        run = prepared;
+      } catch (error) {
+        // Publication failure must not turn a successful execution into a false
+        // delivery notification. Keep the original execution lane as the fallback.
+        this.deps.logger.warn?.('scheduler report delivery failed', error);
+        if (getMobileNotifyGeneration() !== generation) return;
+        run = { ...run, sessionId: run.sessionId || schedule.targetSessionId, status: 'failed', resultText: undefined,
+          errorMsg: error instanceof Error ? error.message : 'Routine delivery failed' };
+      }
+    }
     // 「消息免打扰」任务不再发个人提醒。wecomGroup 是共享群通知,不跟个人静音走;
     // 手机通道在 sendMobileSessionNotify 内另有同一道门,覆盖不走这里的调用方。
     const muted = run.sessionId ? isSessionNotificationsMutedSync(run.sessionId) : false;
@@ -62,7 +76,8 @@ export class DesktopNotifier implements Notifier {
       schedule.notify.desktop &&
       !muted &&
       this.deps.shouldNotifyDesktop() &&
-      (!this.deps.isRunAlertShownElsewhere(run) || (run.status === 'failed' && !run.sessionId))
+      // Forwarded reports have suppressed their execution-lane terminal alert.
+      (prepare || !this.deps.isRunAlertShownElsewhere(run) || (run.status === 'failed' && !run.sessionId))
     ) {
       try {
         this.notifyDesktop(schedule, run);

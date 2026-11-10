@@ -752,7 +752,7 @@ export class ScriptScheduleRunner {
         resultText: result.resultText,
       };
       try {
-        await this.deps.notifier.notify(schedule, finalRun);
+        await this.deps.notifier.notify(schedule, finalRun, ...(ctx.prepareNotification ? [(run: ScheduleRun) => ctx.prepareNotification!(run, ctx.signal)] as const : []));
       } catch (err) {
         this.deps.logger.warn?.('script notifier.notify threw (should not happen)', err);
       }
@@ -771,7 +771,7 @@ export class ScriptScheduleRunner {
       errorMsg: errMsg,
     };
     try {
-      await this.deps.notifier.notify(schedule, fauxRun);
+      await this.deps.notifier.notify(schedule, fauxRun, ...(ctx.prepareNotification ? [(run: ScheduleRun) => ctx.prepareNotification!(run, ctx.signal)] as const : []));
     } catch {
       // DesktopNotifier already swallows; keep script runner fail-safe if a notifier regresses.
     }

@@ -18,7 +18,7 @@ import type { BrowserWindow } from 'electron';
 import { eq } from 'drizzle-orm';
 
 import { Scheduler } from '@cindy/maker-scheduler';
-import type { FireContext, Logger, PreRunPluginConfig, Schedule, ScheduleRunner } from '@cindy/maker-scheduler';
+import type { FireContext, Logger, PreRunPluginConfig, Schedule, ScheduleRun, ScheduleRunner } from '@cindy/maker-scheduler';
 import type { GhostControlPointResult, GhostScheduleRunPointData } from '../../shared/ghost.js';
 import type { DiagnosePreRunHookFailure } from './pre-run-hook-diagnosis';
 import type { Maker } from '@cindy/maker-core';
@@ -205,7 +205,7 @@ async function startSchedulerInternal(deps: StartSchedulerDeps): Promise<Schedul
     ctx.onRunnerNotified?.('failure');
     await notifier.notify(schedule, {
       id: ctx.runId, scheduleId: schedule.id, firedAt: ctx.firedAt, finishedAt: Date.now(), status: 'failed', errorMsg,
-    }).catch(() => {});
+    }, ...(ctx.prepareNotification ? [(run: ScheduleRun) => ctx.prepareNotification!(run, ctx.signal)] as const : [])).catch(() => {});
   };
   const runner: ScheduleRunner = {
     fire: (schedule, ctx) =>
@@ -273,7 +273,7 @@ async function startSchedulerInternal(deps: StartSchedulerDeps): Promise<Schedul
     // 卡死收口刻意绕过 runner —— 要么它压根不返回、要么它把守卫 abort 当普通中断处理。
     // 没有这条线,用户配了桌面/飞书通知也只会看到一个未读红点(PR #944 review P1)。
     // notify() 自身保证不 throw;这里再读回真实 run 行,让通知内容与历史一致。
-    notifyForcedFailure: async ({ scheduleId, runId, errorMsg }) => {
+    notifyForcedFailure: async ({ scheduleId, runId, errorMsg, prepareNotification }) => {
       const schedule = await storage.get(scheduleId);
       if (!schedule) return;
       const run = (await storage.listRuns(scheduleId, 20)).find((r) => r.id === runId);
@@ -282,6 +282,7 @@ async function startSchedulerInternal(deps: StartSchedulerDeps): Promise<Schedul
       await notifier.notify(
         schedule,
         buildForcedFailureRun({ scheduleId, runId, errorMsg, run, now: Date.now() }),
+        ...(prepareNotification ? [prepareNotification] as const : []),
       );
     },
   });

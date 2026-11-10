@@ -1,4 +1,4 @@
-import type { RoutineState, RoutineRun, Schedule, ScheduleRun } from '@cindy/maker-scheduler';
+import type { RoutineState, RoutineRun, Schedule, ScheduleRun, RunNowOptions } from '@cindy/maker-scheduler';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 const mock = vi.hoisted(() => ({
   scope: 'owner-a',
@@ -14,6 +14,7 @@ const mock = vi.hoisted(() => ({
   save: vi.fn<(state: RoutineState) => Promise<void>>(async () => {}),
   ensureRoutineSession: vi.fn(async ({ routineId }: { routineId: string }) => ({ ok: true as const, sessionId: `lane-${routineId}`, created: false })),
   closeRoutineSession: vi.fn(async () => {}),
+  beginForwardedReport: vi.fn(), finishForwardedReport: vi.fn(),
   deliverResult: vi.fn(async (_input: { assertCurrent(): void }) => {}),
   deleteRoutineSession: vi.fn(async () => {}),
   getBot: vi.fn(async () => ({ status: 'active', canonicalSessionId: 'canonical-task' })),
@@ -26,7 +27,7 @@ const mock = vi.hoisted(() => ({
     ]),
   },
   scheduler: {
-    runNow: vi.fn(async (): Promise<{ runId: string; deferred?: boolean; silenced?: boolean }> => ({ runId: 'execution' })),
+    runNow: vi.fn<(id: string, options?: RunNowOptions) => Promise<{ runId: string; deferred?: boolean; silenced?: boolean }>>(async () => ({ runId: 'execution' })),
     pause: vi.fn(async () => ({}) as Schedule),
     delete: vi.fn(async () => {}),
   },
@@ -75,6 +76,7 @@ beforeEach(() => { mock.readProfiles.mockImplementation(async () => mock.profile
 beforeEach(() => configureRoutineHost({
   getBot: mock.getBot, ensureRoutineSession: mock.ensureRoutineSession,
   closeRoutineSession: mock.closeRoutineSession,
+  beginForwardedReport: (sessionId, runId) => { mock.beginForwardedReport(sessionId, runId); return mock.finishForwardedReport; },
   deliverResult: mock.deliverResult,
   deleteRoutineSession: mock.deleteRoutineSession,
   getScheduler: () => mock.schedulerReady ? mock.scheduler : null,
@@ -92,6 +94,7 @@ afterEach(async () => {
   mock.dbOwner = null;
   mock.load.mockResolvedValue(null);
   mock.deliverResult.mockResolvedValue(undefined);
+  mock.getBot.mockResolvedValue({ status: 'active', canonicalSessionId: 'canonical-task' });
   mock.scheduler.runNow.mockResolvedValue({ runId: 'execution' });
   mock.storage.get.mockResolvedValue(null);
   mock.profiles = [];
@@ -1205,4 +1208,192 @@ it('delivers a completed run after the routine is edited while it runs', async (
   await routineTools.runNow('bot', routine.id);
   await vi.waitFor(async () => expect((await routineTools.history('bot', routine.id))[0]?.status).toBe('success'));
   expect((await routineTools.history('bot', routine.id))[0]).toMatchObject({ delivery: { status: 'delivered' } });
+});
+
+// #9616 / unit: the public runNow path must publish built-in follow-up reports
+// before notifying, while preserving the execution lane in history. Existing
+// delivery cases only cover ordinary routines, not this formerly excluded builtin.
+it.each(['persistent', 'fresh'] as const)('returns %s follow-up reports to the main task before notifying', async (sessionMode) => {
+  const engine = await getRoutineEngine();
+  const routine = await engine.ensureBuiltin('bot', 'follow-up', {
+    name: 'Follow', prompt: 'Check', enabled: true, silentWhenIdle: true, sessionMode,
+    triggers: [{ id: 'tick', kind: 'interval', intervalMs: 60000 }],
+  }, 'builtin-follow-up-bot');
+  if (!routine) throw new Error('Missing builtin');
+  mock.scheduler.runNow.mockImplementationOnce(async (_id, options) => {
+    expect(options?.prepareNotification).toBeTypeOf('function');
+    const original: ScheduleRun = { id: 'execution', scheduleId: `routine-${routine.id}`,
+      sessionId: 'execution-lane', firedAt: 1, status: 'success', resultText: 'Reviewed PR' };
+    const routed = await options!.prepareNotification!(original);
+    expect(mock.deliverResult).toHaveBeenCalledOnce();
+    expect(routed).toMatchObject({ sessionId: 'canonical-task', resultText: 'Reviewed PR' });
+    expect(original.sessionId).toBe('execution-lane');
+    await options!.prepareNotification!(original);
+    expect(mock.deliverResult).toHaveBeenCalledOnce();
+    return { runId: 'execution' };
+  });
+  await routineTools.runNow('bot', routine.id);
+  await vi.waitFor(async () => expect((await routineTools.history('bot', routine.id))[0]?.status).toBe('success'));
+  expect((await routineTools.history('bot', routine.id))[0]).toMatchObject({
+    sessionId: expect.stringContaining(`lane-${routine.id}`), delivery: { status: 'delivered' },
+  });
+});
+
+it.each(['success', 'failed'] as const)('retains %s follow-up results when main-task delivery fails', async (status) => {
+  const engine = await getRoutineEngine();
+  const routine = await engine.ensureBuiltin('bot', 'follow-up', {
+    name: 'Follow', prompt: 'Check', enabled: true, silentWhenIdle: true,
+    triggers: [{ id: 'tick', kind: 'interval', intervalMs: 60000 }],
+  }, 'builtin-follow-up-bot');
+  if (!routine) throw new Error('Missing builtin');
+  mock.deliverResult.mockRejectedValueOnce(new Error('disk unavailable'));
+  mock.storage.listRuns.mockResolvedValueOnce([{ id: 'execution', scheduleId: 'backing', firedAt: 1,
+    status, resultText: 'Reviewed PR', errorMsg: status === 'failed' ? 'agent failed' : undefined }]);
+  mock.scheduler.runNow.mockImplementationOnce(async (_id, options) => {
+    expect(options?.prepareNotification).toBeTypeOf('function');
+    await expect(options!.prepareNotification!({ id: 'execution', scheduleId: 'backing', firedAt: 1,
+      status, resultText: 'Reviewed PR', errorMsg: 'agent failed' })).rejects.toThrow('disk unavailable');
+    return { runId: 'execution' };
+  });
+  await routineTools.runNow('bot', routine.id);
+  await vi.waitFor(async () => expect((await routineTools.history('bot', routine.id))[0]?.status).toBe(status));
+  expect((await routineTools.history('bot', routine.id))[0]).toMatchObject({
+    resultText: 'Reviewed PR', delivery: { status: 'failed', error: 'disk unavailable' },
+  });
+  expect(mock.deliverResult).toHaveBeenCalledOnce();
+});
+
+// #9616 / unit: idle and empty outcomes must remain quiet; failures before a
+// session binds still need a visible report. No external resources or real waits.
+it.each(['quiet', 'empty', 'failed-before-session'] as const)('handles follow-up outcome %s', async (outcome) => {
+  const engine = await getRoutineEngine();
+  const routine = await engine.ensureBuiltin('bot', 'follow-up', {
+    name: 'Follow', prompt: 'Check', enabled: true, silentWhenIdle: true,
+    triggers: [{ id: 'tick', kind: 'interval', intervalMs: 60000 }],
+  }, 'builtin-follow-up-bot');
+  if (!routine) throw new Error('Missing builtin');
+  const status = outcome === 'failed-before-session' ? 'failed' : 'success';
+  mock.storage.listRuns.mockResolvedValueOnce([{ id: 'execution', scheduleId: 'backing', firedAt: 1,
+    status, resultText: outcome === 'empty' ? '  ' : 'Reviewed PR', errorMsg: 'precheck failed' }]);
+  mock.scheduler.runNow.mockImplementationOnce(async (_id, options) => {
+    if (outcome !== 'quiet') {
+      const routed = await options!.prepareNotification!({ id: 'execution', scheduleId: 'backing', firedAt: 1,
+        status, resultText: '  ', errorMsg: 'precheck failed' });
+      expect(routed?.sessionId ?? null).toBe(outcome === 'empty' ? null : 'canonical-task');
+    }
+    return { runId: 'execution', ...(outcome === 'quiet' ? { silenced: true } : {}) };
+  });
+  await routineTools.runNow('bot', routine.id);
+  await vi.waitFor(async () => expect((await routineTools.history('bot', routine.id))[0]?.status).toBe(status));
+  if (outcome === 'failed-before-session') {
+    expect(mock.deliverResult).toHaveBeenCalledWith(expect.objectContaining({
+      sessionId: `lane-${routine.id}`, targetSessionId: 'canonical-task', text: expect.stringContaining('precheck failed'),
+    }));
+  } else expect(mock.deliverResult).not.toHaveBeenCalled();
+});
+
+// #9616 / unit: mutation while an async publication is pending must invalidate
+// the guarded write and suppress its notification, including watchdog aborts.
+it.each(['watchdog', 'account', 'pause'] as const)('cancels a follow-up report across %s during publication', async (boundary) => {
+  const engine = await getRoutineEngine();
+  const input = { name: 'Follow', prompt: 'Check', enabled: true, silentWhenIdle: true,
+    triggers: [{ id: 'tick', kind: 'interval' as const, intervalMs: 60000 }] };
+  const routine = await engine.ensureBuiltin('bot', 'follow-up', input, 'builtin-follow-up-bot');
+  if (!routine) throw new Error('Missing builtin');
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  mock.deliverResult.mockImplementationOnce(async ({ assertCurrent }) => { await gate; assertCurrent(); });
+  mock.scheduler.runNow.mockImplementationOnce(async (_id, options) => {
+    const execution = new AbortController();
+    const notification = options!.prepareNotification!({ id: 'execution', scheduleId: 'backing', firedAt: 1,
+      status: 'success', resultText: 'Reviewed PR' }, execution.signal);
+    await vi.waitFor(() => expect(mock.deliverResult).toHaveBeenCalledOnce());
+    if (boundary === 'watchdog') execution.abort();
+    if (boundary === 'account') mock.scope = 'owner-b';
+    if (boundary === 'pause') await engine.put('bot', { ...input, enabled: false }, routine.id);
+    release();
+    await expect(notification).resolves.toBeNull();
+    mock.scope = 'owner-a';
+    return { runId: 'execution' };
+  });
+  await routineTools.runNow('bot', routine.id);
+  await vi.waitFor(async () => expect((await routineTools.history('bot', routine.id))[0]?.finishedAt).toBeDefined());
+});
+
+it('shares simultaneous follow-up publication and re-resolves the current main task', async () => {
+  const engine = await getRoutineEngine();
+  const routine = await engine.ensureBuiltin('bot', 'follow-up', {
+    name: 'Follow', prompt: 'Check', enabled: true, silentWhenIdle: true,
+    triggers: [{ id: 'tick', kind: 'interval', intervalMs: 60000 }],
+  }, 'builtin-follow-up-bot');
+  if (!routine) throw new Error('Missing builtin');
+  mock.scheduler.runNow.mockImplementationOnce(async (_id, options) => {
+    mock.getBot.mockResolvedValue({ status: 'active', canonicalSessionId: 'replacement-main' });
+    const row: ScheduleRun = { id: 'execution', scheduleId: 'backing', firedAt: 1, status: 'success', resultText: 'Reviewed PR' };
+    const [a, b] = await Promise.all([options!.prepareNotification!(row), options!.prepareNotification!(row)]);
+    expect(a?.sessionId).toBe('replacement-main');
+    expect(b).toEqual(a);
+    // A cached successful report must not become a notification for a new account.
+    mock.scope = 'owner-b';
+    await expect(options!.prepareNotification!(row)).resolves.toBeNull();
+    mock.scope = 'owner-a';
+    expect(mock.deliverResult).toHaveBeenCalledOnce();
+    expect(mock.deliverResult).toHaveBeenCalledWith(expect.objectContaining({ targetSessionId: 'replacement-main' }));
+    return { runId: 'execution' };
+  });
+  await routineTools.runNow('bot', routine.id);
+  await vi.waitFor(async () => expect((await routineTools.history('bot', routine.id))[0]?.status).toBe('success'));
+});
+
+// #9616 / unit: suppressing the lane before acceptance can swallow the active
+// owner's completion while the follow-up is merely queued or deferred.
+it.each([true, false])('defers lane-alert forwarding until accepted execution (deferred=%s)', async (deferred) => {
+  const engine = await getRoutineEngine();
+  const routine = await engine.ensureBuiltin('bot', 'follow-up', {
+    name: 'Follow', prompt: 'Check', enabled: true, silentWhenIdle: true,
+    triggers: [{ id: 'tick', kind: 'interval', intervalMs: 60000 }],
+  }, 'builtin-follow-up-bot');
+  if (!routine) throw new Error('Missing builtin');
+  mock.scheduler.runNow.mockImplementationOnce(async (_id, options) => {
+    expect(mock.beginForwardedReport).not.toHaveBeenCalled();
+    if (!deferred) {
+      options?.onTurnActive?.('accepted-lane');
+      expect(mock.beginForwardedReport).toHaveBeenCalledWith('accepted-lane', expect.any(String));
+    }
+    return { runId: 'execution', deferred };
+  });
+  await routineTools.runNow('bot', routine.id);
+  if (deferred) {
+    await vi.waitFor(() => expect(mock.scheduler.runNow).toHaveBeenCalledOnce());
+    expect(mock.beginForwardedReport).not.toHaveBeenCalled();
+    expect(mock.finishForwardedReport).not.toHaveBeenCalled();
+  } else {
+    await vi.waitFor(async () => expect((await routineTools.history('bot', routine.id))[0]?.status).toBe('success'));
+    expect(mock.finishForwardedReport).toHaveBeenCalledOnce();
+  }
+});
+
+// #9616 / unit: watchdog notification can finish while runner.fire never returns.
+// Its lane-alert forwarding scope must be released by the report, not by runNow.
+it('releases lane-alert forwarding on failure report before execution returns', async () => {
+  const engine = await getRoutineEngine();
+  const routine = await engine.ensureBuiltin('bot', 'follow-up', {
+    name: 'Follow', prompt: 'Check', enabled: true, silentWhenIdle: true,
+    triggers: [{ id: 'tick', kind: 'interval', intervalMs: 60000 }],
+  }, 'builtin-follow-up-bot');
+  if (!routine) throw new Error('Missing builtin');
+  let releasedBeforeReturn = false;
+  mock.storage.listRuns.mockResolvedValueOnce([{ id: 'execution', scheduleId: 'backing', firedAt: 1,
+    status: 'failed', errorMsg: 'watchdog failed' }]);
+  mock.scheduler.runNow.mockImplementationOnce(async (_id, options) => {
+    options?.onTurnActive?.('lane');
+    await options!.prepareNotification!({ id: 'execution', scheduleId: 'backing', firedAt: 1,
+      status: 'failed', errorMsg: 'watchdog failed' });
+    releasedBeforeReturn = mock.finishForwardedReport.mock.calls.length === 1;
+    return { runId: 'execution' };
+  });
+  await routineTools.runNow('bot', routine.id);
+  await vi.waitFor(async () => expect((await routineTools.history('bot', routine.id))[0]?.status).toBe('failed'));
+  expect(releasedBeforeReturn).toBe(true);
+  expect(mock.finishForwardedReport).toHaveBeenCalledOnce();
 });

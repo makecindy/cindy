@@ -361,8 +361,10 @@ export class RoutineEngine {
       if (existing?.builtin && !options.builtin &&
         JSON.stringify(parseRoutineInput({ ...existing, enabled: input.enabled,
           ...(existing.builtin !== 'nightly-learning' ? { modelOverride: input.modelOverride } : {}),
-          sessionMode: input.sessionMode })) !== JSON.stringify(input))
-        throw new Error(`${BUILTIN_ROUTINE_ERROR}: built-in instructions and triggers cannot be edited`);
+          sessionMode: input.sessionMode,
+          ...(existing.builtin === 'follow-up' && input.delivery?.kind === 'companion' && input.delivery.mode === 'direct'
+            ? { delivery: input.delivery } : {}) })) !== JSON.stringify(input))
+        throw new Error(`${BUILTIN_ROUTINE_ERROR}: built-in settings cannot be edited; only enabled, sessionMode, and the follow-up model or companion/direct delivery may change`);
       const builtin = options.builtin ?? existing?.builtin;
       const builtinVersion = options.builtinVersion ?? existing?.builtinVersion;
       if (creationId && existing && JSON.stringify(parseRoutineInput(existing)) !== JSON.stringify(input)) throw new Error("Routine already created; refresh before editing");

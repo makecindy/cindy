@@ -84,7 +84,7 @@ export function registerRoutineTools(
         z.object({ kind: z.literal('companion'), mode: z.enum(['direct', 'process']) }),
         z.object({ kind: z.literal('im'), targetId: z.string().min(1).max(4096) }),
         z.object({ kind: z.literal('none') }),
-      ]).optional().describe('Final delivery: default companion/direct displays the result without another model call. companion/process asks the companion to process it only when requested. im uses an id from routine_delivery_targets. none keeps only the independent task. Omission preserves saved choices; silent checks still suppress idle delivery.'),
+      ]).optional().describe('Final delivery: default companion/direct displays the result without another model call. companion/process asks the companion to process it only when requested. im uses an id from routine_delivery_targets. none keeps only the independent task. Omission preserves saved choices; silent checks still suppress idle delivery. Built-in follow-up reports return to the main task; only companion/direct is accepted for its delivery. Built-in instructions, triggers and quiet settings remain host-owned.'),
       silentWhenIdle: z.boolean().optional().describe('Set true for checks: no routine chatter, report only when needed via schedule_notify_current_run. Reminders and scheduled delivery default to false. Preserve existing user choices.'),
       preRunPlugin: z.object({
         pluginId: z.string().min(1).max(512),

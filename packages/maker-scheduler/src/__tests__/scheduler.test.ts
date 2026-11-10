@@ -15,6 +15,7 @@ import type {
 import type { ScheduleStorage } from '../interfaces/schedule-storage.js';
 import type { FireContext, FireResult, ScheduleRunner } from '../interfaces/schedule-runner.js';
 import type { Logger } from '../interfaces/logger.js';
+import type { PrepareScheduleNotification } from '../interfaces/notifier.js';
 
 class InMemoryStorage implements ScheduleStorage {
   schedules = new Map<string, Schedule>();
@@ -4404,12 +4405,19 @@ describe('Scheduler: 排队不占槽与卡死守卫', () => {
   it('强制收口经 notifyForcedFailure 出口投通知', async () => {
     vi.useFakeTimers();
     try {
-      const notified: Array<{ scheduleId: string; runId: string; errorMsg: string }> = [];
+      // #9616: the same host publication barrier must survive a runner that never settles.
+      const onTurnActive = vi.fn();
+      const prepareNotification = vi.fn(async (run: ScheduleRun) => ({ ...run, sessionId: 'canonical' }));
+      const notified: Array<{ scheduleId: string; runId: string; errorMsg: string; prepareNotification?: PrepareScheduleNotification }> = [];
       const storage = new InMemoryStorage();
       const clock = new FakeClock();
       const scheduler = new Scheduler({
         storage,
-        runner: { fire: () => new Promise<FireResult>(() => {}) },
+        runner: { fire: (_schedule, ctx) => {
+          expect(ctx.prepareNotification).toBe(prepareNotification);
+          ctx.onTurnActive?.('accepted-lane');
+          return new Promise<FireResult>(() => {});
+        } },
         clock,
         generateId: makeIdGen(),
         tickIntervalMs: 60_000_000,
@@ -4422,8 +4430,10 @@ describe('Scheduler: 排队不占槽与卡死守卫', () => {
         instanceId: 'test-notify',
       });
       const sch = await scheduler.create({ ...baseInput, manual: true });
-      void scheduler.runNow(sch.id);
+      void scheduler.runNow(sch.id, { prepareNotification, onTurnActive });
       await vi.waitFor(() => expect(scheduler.getRuntimeSnapshot().slotsInUse).toBe(1));
+      // The live public snapshot must remain transferable while callbacks are in flight.
+      expect(() => structuredClone(scheduler.getRuntimeSnapshot())).not.toThrow();
       clock.advance(60_001);
       await vi.advanceTimersByTimeAsync(RUN_HEARTBEAT_INTERVAL_MS);
       clock.advance(30_001);
@@ -4431,6 +4441,8 @@ describe('Scheduler: 排队不占槽与卡死守卫', () => {
       await vi.waitFor(() => expect(notified).toHaveLength(1));
       expect(notified[0]!.scheduleId).toBe(sch.id);
       expect(notified[0]!.errorMsg).toMatch(/stalled/);
+      expect(notified[0]!.prepareNotification).toBe(prepareNotification);
+      expect(onTurnActive).toHaveBeenCalledWith('accepted-lane');
       await scheduler.stop();
     } finally {
       vi.useRealTimers();
@@ -5720,4 +5732,28 @@ it('keeps internal routine schedules out of public management while retaining ho
   await h.scheduler.runNow(publicSchedule.id);
   expect(h.runner.fire).toHaveBeenCalledTimes(2);
   await h.scheduler.stop();
+});
+
+// #9616 / unit: target validation can fail before runner.fire. A forwarded
+// report still needs its notification path, with original failed execution history.
+it('prepares a host failure report when validation rejects before the runner', async () => {
+  const storage = new InMemoryStorage();
+  const runner = { fire: vi.fn(async () => ({ sessionId: 'lane' })) };
+  const prepareNotification = vi.fn(async (run: ScheduleRun) => ({ ...run, sessionId: 'canonical' }));
+  const notify = vi.fn(async (input: { runId: string; errorMsg: string; prepareNotification?: PrepareScheduleNotification }) => {
+    expect(await input.prepareNotification?.({ id: input.runId, scheduleId: 'schedule', firedAt: 1,
+      status: 'failed', errorMsg: input.errorMsg })).toMatchObject({ sessionId: 'canonical' });
+  });
+  const scheduler = new Scheduler({ storage, runner, clock: new FakeClock(), generateId: makeIdGen(),
+    validateTargetSession: async (_id, operation) => { if (operation === 'fire') throw new Error('target unavailable'); },
+    notifyForcedFailure: notify,
+  });
+  try {
+    const schedule = await scheduler.create({ ...baseInput, targetSessionId: 'lane' });
+    await scheduler.runNow(schedule.id, { prepareNotification });
+    expect(runner.fire).not.toHaveBeenCalled();
+    expect(notify).toHaveBeenCalledOnce();
+    expect(prepareNotification).toHaveBeenCalledOnce();
+    expect([...storage.runs.values()]).toEqual([expect.objectContaining({ status: 'failed', sessionId: 'lane', errorMsg: 'target unavailable' })]);
+  } finally { await scheduler.stop(); }
 });

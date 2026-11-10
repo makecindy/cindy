@@ -14,6 +14,8 @@ import {
   type PreRunPluginConfig,
   type Schedule,
   type ScheduleStorage,
+  type ScheduleRun,
+  type PrepareScheduleNotification,
   type Scheduler,
 } from '@cindy/maker-scheduler';
 import {
@@ -59,6 +61,8 @@ export interface RoutineHostDeps {
   getBot(botId: string): Promise<{ status: string; canonicalSessionId?: string | null }>;
   ensureRoutineSession(input: { botId: string; routineId: string; title: string; modelOverride?: RoutineModel | null }): Promise<{ ok: true; sessionId: string; created: boolean } | { ok: false; message: string }>;
   closeRoutineSession?(sessionId: string): Promise<void>;
+  /** Suppress duplicate lane alerts while a terminal report is forwarded to the main task. */
+  beginForwardedReport?(sessionId: string, runId: string): () => void;
   /**
    * Fresh 任务未被派发给模型时回收：它与普通任务一样出现在任务列表里，
    * 留着就只是一条永远不会被打开的空壳。
@@ -245,27 +249,77 @@ async function execute(scope: string, routine: Routine, run: RoutineRun, signal:
   if (imported?.exhausted) return { skipped: true, disableRoutine: true };
   if (imported?.skipped) return { skipped: true };
   let delivery: RoutineRun['delivery'];
-  const deliver = async (text: string, sessionId: string, silenced = false) => {
+  let finishForwardedReport: (() => void) | undefined;
+  const finishReport = () => {
+    const finish = finishForwardedReport;
+    finishForwardedReport = undefined;
+    finish?.();
+  };
+  const deliver = async (text: string, sessionId: string, silenced = false, options?: {
+    targetSessionId?: string; runId?: string; assertCurrent?: () => void;
+  }) => {
     delivery = { status: 'suppressed' };
-    if (signal.aborted || silenced || !text.trim() || routine.delivery?.kind === 'none') return;
+    if (signal.aborted || silenced || !text.trim() || routine.delivery?.kind === 'none') return delivery;
     try {
       const send = getRoutineHost().deliverResult;
       if (!send) throw new Error('Routine delivery is unavailable');
-      await send({ routine, runId: run.id, sessionId, targetSessionId: bot.canonicalSessionId!, text,
+      await send({ routine, runId: options?.runId ?? run.id, sessionId, targetSessionId: options?.targetSessionId ?? bot.canonicalSessionId!, text,
         // Delivery follows a finished result, not a pending prompt: editing the routine
         // only invalidates dispatch. Pause/delete/stop all abort the run signal.
-        assertCurrent: () => { assertScope(scope); if (signal.aborted) throw new Error('Routine delivery cancelled'); },
+        assertCurrent: () => { assertScope(scope); if (signal.aborted) throw new Error('Routine delivery cancelled'); options?.assertCurrent?.(); },
       });
       delivery = { status: 'delivered' };
     } catch (error) {
       delivery = { status: 'failed', error: error instanceof Error ? error.message : String(error) };
     }
+    return delivery;
   };
   if (imported?.direct !== undefined) {
     const exhausted = await getRoutineHost().finishImportedAutomation?.(root, routine, bot.canonicalSessionId, run.id, imported.direct, true, signal, () => assertScope(scope),
-      routine.delivery ? text => deliver(text, bot.canonicalSessionId!) : undefined);
+      routine.delivery ? async text => { await deliver(text, bot.canonicalSessionId!); } : undefined);
     return { resultText: imported.direct, ...(delivery ? { delivery } : {}), ...(exhausted ? { disableRoutine: true } : {}) };
   }
+  // Built-in follow-up uses the same direct delivery as ordinary routines, but
+  // publishes before notifying so clicking a notification always finds its report.
+  const followUp = routine.builtin === 'follow-up' && (!routine.delivery ||
+    (routine.delivery.kind === 'companion' && routine.delivery.mode === 'direct'));
+  const reportEpoch = generation;
+  const reports = new Map<ScheduleRun['status'], Promise<ScheduleRun | null>>();
+  const prepareNotification: PrepareScheduleNotification | undefined = followUp ? (completed, executionSignal) => {
+    const assertReportCurrent = () => {
+      assertScope(scope);
+      if (generation !== reportEpoch || signal.aborted ||
+        (completed.status === 'success' && executionSignal?.aborted)) throw new Error('Routine delivery cancelled');
+    };
+    const cancelOrThrow = (error: unknown): null => {
+      // A pause, stop or account transition during publication (or a late
+      // duplicate notification) must not alert the replacement account.
+      try { assertReportCurrent(); } catch { return null; }
+      delivery = { status: 'failed', error: error instanceof Error ? error.message : String(error) };
+      throw error;
+    };
+    const previous = reports.get(completed.status);
+    if (previous) return previous.then(result => { assertReportCurrent(); return result; }).catch(cancelOrThrow);
+    const preparing = (async () => {
+      if (signal.aborted || !['success', 'failed'].includes(completed.status) ||
+        (completed.status === 'success' && !completed.resultText?.trim())) return null;
+      assertReportCurrent();
+      const target = await getRoutineHost().getBot(routine.botId);
+      assertReportCurrent();
+      if (target.status !== 'active' || !target.canonicalSessionId) throw new Error('The teammate is unavailable');
+      const text = completed.status === 'success' ? completed.resultText! :
+        `${routine.name}\n\n${completed.errorMsg || 'Routine execution did not complete'}`;
+      const outcome = await deliver(text, completed.sessionId || schedule.targetSessionId!, false, {
+        targetSessionId: target.canonicalSessionId,
+        runId: completed.status === 'success' ? run.id : `${run.id}:failure`, assertCurrent: assertReportCurrent,
+      });
+      assertReportCurrent();
+      if (outcome.status === 'failed') throw new Error(outcome.error);
+      return outcome.status === 'delivered' ? { ...completed, sessionId: target.canonicalSessionId } : null;
+    })().catch(cancelOrThrow).finally(finishReport);
+    reports.set(completed.status, preparing);
+    return preparing;
+  } : undefined;
   const persistent = routine.sessionMode !== 'fresh';
   // Fresh mode still creates a host-owned lane so it inherits the same bot
   // permissions and model route; the lane is closed after this trigger.
@@ -349,7 +403,11 @@ async function execute(scope: string, routine: Routine, run: RoutineRun, signal:
       await discardFreshLane();
       return { deferred: true };
     }
-    const result = await scheduler.runNow(id, { deferToCaller: true, internalRoutine: true, canDispatch });
+    const result = await scheduler.runNow(id, { deferToCaller: true, internalRoutine: true, canDispatch,
+      ...(prepareNotification ? { prepareNotification, onTurnActive: (sessionId: string) => {
+        assertScope(scope);
+        if (!signal.aborted) finishForwardedReport ??= getRoutineHost().beginForwardedReport?.(sessionId, run.id);
+      } } : {}) });
     assertScope(scope);
     // The routine queue owns this batch and its retry delay, not the backing schedule.
     // 延后＝本轮没有模型轮次，空壳任务不保留（重试会建新任务）。
@@ -367,9 +425,9 @@ async function execute(scope: string, routine: Routine, run: RoutineRun, signal:
     const discarded = !persistent && completed.status === 'skipped';
     const exhausted = imported && completed.status === 'success'
       ? await getRoutineHost().finishImportedAutomation?.(root, routine, lane.sessionId, run.id, completed.resultText ?? '', false, signal, () => assertScope(scope),
-        routine.delivery ? text => deliver(text, lane.sessionId, result.silenced) : undefined) : false;
+        routine.delivery ? async text => { await deliver(text, lane.sessionId, result.silenced); } : undefined) : false;
     // Imported output is redacted by its existing finish path before selected delivery.
-    if (!imported && (routine.delivery || !routine.builtin) && completed.status === 'success')
+    if (!imported && !delivery && (followUp || routine.delivery || !routine.builtin) && completed.status === 'success')
       await deliver(completed.resultText ?? '', lane.sessionId, result.silenced);
     return {
       ...(delivery ? { delivery } : {}),
@@ -384,6 +442,7 @@ async function execute(scope: string, routine: Routine, run: RoutineRun, signal:
         : { error: completed?.errorMsg ?? 'Routine execution did not complete' }),
     };
   } finally {
+    finishReport();
     signal.removeEventListener('abort', abort);
     await cancellation;
     if (!persistent) {

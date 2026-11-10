@@ -330,3 +330,50 @@ it('does not notify a replacement account after the failure history read crosses
   expect(sendMarkdownText).not.toHaveBeenCalled();
   expect(sendMobileSessionNotify).not.toHaveBeenCalled();
 });
+
+// #9616 / unit: blocked publication must block both notifications; forwarding a
+// report must not rewrite the execution-history row. Existing cases have no async routing.
+it('waits for report publication before routing desktop and mobile to the main task', async () => {
+  vi.clearAllMocks();
+  isSessionNotificationsMutedSync.mockReturnValue(false);
+  const { notifier } = createNotifier({ isRunAlertShownElsewhere: () => true });
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const original = run('success');
+  const sending = notifier.notify(schedule, original, async row => {
+    await gate;
+    return { ...row, sessionId: 'canonical' };
+  });
+  expect(showDesktopSessionEvent).not.toHaveBeenCalled();
+  expect(sendMobileSessionNotify).not.toHaveBeenCalled();
+  release();
+  await sending;
+  expect(showDesktopSessionEvent).toHaveBeenCalledWith(expect.any(Function), expect.objectContaining({ sessionId: 'canonical' }));
+  expect(sendMobileSessionNotify).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'canonical' }));
+  expect(original.sessionId).toBe('session-1');
+});
+
+// #9616 / unit: cancellation, owner transitions and publication failure have
+// distinct observable notifications, rather than unconditional success alerts.
+it.each(['cancelled', 'account', 'failed', 'failed-before-session', 'muted'] as const)('handles prepared notification %s', async (outcome) => {
+  vi.clearAllMocks();
+  vi.mocked(getMobileNotifyGeneration).mockReturnValue(7);
+  isSessionNotificationsMutedSync.mockImplementation(id => outcome === 'muted' && id === 'canonical');
+  const { notifier, warn } = createNotifier();
+  const beforeSession = outcome === 'failed-before-session';
+  await notifier.notify(beforeSession ? { ...schedule, targetSessionId: 'fallback-lane' } : schedule,
+    beforeSession ? { ...run('success'), sessionId: undefined } : run('success'), async row => {
+    if (outcome === 'cancelled') return null;
+    if (outcome === 'account') vi.mocked(getMobileNotifyGeneration).mockReturnValue(8);
+    if (outcome === 'failed' || beforeSession) throw new Error('publication failed');
+    return { ...row, sessionId: 'canonical' };
+  });
+  if (outcome === 'failed' || beforeSession) {
+    expect(warn).toHaveBeenCalled();
+    expect(showDesktopSessionEvent).toHaveBeenCalledWith(expect.any(Function), expect.objectContaining({ sessionId: beforeSession ? 'fallback-lane' : 'session-1', kind: 'error' }));
+    expect(sendMobileSessionNotify).toHaveBeenCalledWith(expect.objectContaining({ sessionId: beforeSession ? 'fallback-lane' : 'session-1', kind: 'error', detail: 'publication failed' }));
+  } else expect(showDesktopSessionEvent).not.toHaveBeenCalled();
+  if (outcome === 'account' || outcome === 'cancelled') expect(sendMobileSessionNotify).not.toHaveBeenCalled();
+  vi.mocked(getMobileNotifyGeneration).mockReturnValue(7);
+  isSessionNotificationsMutedSync.mockReturnValue(false);
+});

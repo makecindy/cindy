@@ -27,6 +27,7 @@ import type { ScheduleStorage } from '../interfaces/schedule-storage.js';
 import type { ChildRunInput, FireContext, ScheduleRunner } from '../interfaces/schedule-runner.js';
 import type { Clock } from '../interfaces/clock.js';
 import type { Logger } from '../interfaces/logger.js';
+import type { PrepareScheduleNotification } from '../interfaces/notifier.js';
 import { nextCronOrMonthlyFire } from './monthlyClamp.js';
 import { normalizeScheduleWebhookSource } from '../webhook-formats.js';
 
@@ -60,6 +61,10 @@ function assertScheduleMutationGuard(expected: ScheduleMutationGuard | undefined
 const SCRIPT_CAPABILITY_SET: ReadonlySet<ScriptCapability> = new Set(SCRIPT_CAPABILITIES);
 
 export interface RunNowOptions {
+  /** Host publication barrier shared by runner and watchdog notifications; never persisted. */
+  prepareNotification?: PrepareScheduleNotification;
+  /** Host observer of the accepted execution, not queueing or a deferred attempt. */
+  onTurnActive?: (sessionId: string) => void;
   deferToCaller?: boolean;
   internalRoutine?: true;
   canDispatch?: () => boolean;
@@ -246,11 +251,12 @@ export interface SchedulerOptions {
    */
   suspendGapMs?: number;
   /**
-   * **强制释放路径专用**的通知出口。通知投递平时住在 host 的两个 runner 里(它们各自
+   * **runner 无法通知时**的宿主失败出口。通知投递平时住在 host 的两个 runner 里(它们各自
    * 持有 Notifier),但 runner 永不返回时那条链路根本不会执行 —— 用户配了 desktop /
    * feishu 通知也只会看到一个未读红点(review #944 P1)。
    *
-   * 只在 forceReleaseStalledRun 里调用。守卫 abort 被 runner 老实响应的那条路径**不**
+   * 卡死强制释放以及带 prepareNotification 的 runNow 在 runner 派发前失败时复用此出口。
+   * 守卫 abort 被 runner 老实响应且已认领失败通知的那条路径**不**
    * 走这里:那时 runner 已经 settle 并自己投过通知,引擎再投一次就是重复推送
    * (review #944 第二轮)。
    *
@@ -260,6 +266,7 @@ export interface SchedulerOptions {
     scheduleId: string;
     runId: string;
     errorMsg: string;
+    prepareNotification?: PrepareScheduleNotification;
   }) => Promise<void> | void;
   /** 宿主注入的 Scheduler 实例标识，用于区分同机多实例日志。 */
   instanceId?: string;
@@ -362,6 +369,7 @@ interface StalledClaimPlan {
 }
 
 interface InflightAttempt extends SchedulerInflightRun {
+  prepareNotification?: PrepareScheduleNotification;
   lastLongRunningLogAt?: number;
   /** 卡死判定命中并已发出 abort 的时刻；用于计算强制收回槽位的宽限。 */
   stallAbortedAt?: number;
@@ -1252,6 +1260,8 @@ export class Scheduler extends EventEmitter {
       phase: 'loading',
     });
     try {
+      const attempt = this.inflightAttempts.get(runId);
+      if (attempt) attempt.prepareNotification = options?.prepareNotification;
       return await this.runNowInner(id, runId, options);
     } finally {
       this.finishInflightAttempt(runId);
@@ -1385,6 +1395,7 @@ export class Scheduler extends EventEmitter {
         webhook: options?.webhook,
         resumeSessionId: recovery?.sessionId,
         canDispatch: options?.canDispatch,
+        prepareNotification: options?.prepareNotification,
         ...(options?.trigger ? { trigger: options.trigger } : {}),
         ...(options?.expectedSchedule?.effectiveWorkingDir
           ? { expectedPreRunWorkingDir: options.expectedSchedule.effectiveWorkingDir } : {}),
@@ -1394,6 +1405,7 @@ export class Scheduler extends EventEmitter {
         onTurnActive: (sessionId) => {
           continuationAccepted = true;
           this.buildOnTurnActive(runId)(sessionId);
+          options?.onTurnActive?.(sessionId);
         },
         createChildRun: this.buildCreateChildRun(schedule.id, firedAt),
         onQueueWaitStart: this.buildOnQueueWaitStart(runId),
@@ -1409,6 +1421,12 @@ export class Scheduler extends EventEmitter {
     } catch (err) {
       if (recovery && !continuationAccepted && !this.abandonedRuns.has(runId)) throw err;
       runError = err instanceof Error ? err.message : String(err);
+      // A host-owned report must also cover validation/setup failures before the
+      // runner can notify. Claim first, just like the runner, to avoid watchdog duplicates.
+      if (options?.prepareNotification && !controller.signal.aborted && this.needsForcedFailureNotification(runId)) {
+        this.buildOnRunnerNotified(runId)('failure');
+        await this.notifyForcedFailure(schedule.id, runId, runError);
+      }
     } finally {
       knownSessionId = this.resolveTerminalSessionId(runId, runSessionId, schedule.targetSessionId);
       this.unregisterInflight(schedule.id, runId);
@@ -3305,7 +3323,9 @@ export class Scheduler extends EventEmitter {
   ): Promise<void> {
     if (!this.notifyForcedFailureHook) return;
     try {
-      await this.notifyForcedFailureHook({ scheduleId, runId, errorMsg });
+      const prepareNotification = this.inflightAttempts.get(runId)?.prepareNotification;
+      await this.notifyForcedFailureHook({ scheduleId, runId, errorMsg,
+        ...(prepareNotification ? { prepareNotification } : {}) });
     } catch (err) {
       this.logger?.warn?.('scheduler: notifyForcedFailure hook threw', {
         scheduleId,

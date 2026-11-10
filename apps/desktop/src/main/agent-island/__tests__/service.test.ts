@@ -4644,6 +4644,40 @@ describe('AgentIslandService native publishing', () => {
     service.resetRuntimeState();
   });
 
+  // #9616 / unit: a forwarded report has its own destination alert. Clearing
+  // the scheduler's quiet flag must not recreate a lane alert; normal subsequent
+  // work must still alert after the forwarding scope is released.
+  it.each(['done', 'error'] as const)('keeps forwarded %s reports out of execution-lane alerts', async (terminal) => {
+    vi.useFakeTimers();
+    try {
+      const { AgentIslandService } = await import('../service.js');
+      const publish = vi.fn((state: AgentIslandDisplayState) => state.visible);
+      const playSound = vi.fn<(sound: AgentIslandSoundChoice) => boolean>(() => true);
+      const service = new AgentIslandService({ getMainWindow: () => null,
+        nativeHost: { failed: false, publish, playSound } });
+      syncEnabledForTest(service, publish);
+      service.setSoundSettings({ enabled: true, sounds: { ...DEFAULT_AGENT_ISLAND_SOUND_SETTINGS.sounds,
+        start: customSound('start.wav'), complete: customSound('complete.wav'), error: customSound('error.wav') } });
+      const meta = { sessionId: 'lane', agentKind: 'codex' as const };
+      const finish = service.beginForwardedReport('lane', 'routine-run');
+      service.handleUserPrompt(meta, 'follow up');
+      service.handleScheduleEvent({ type: 'silenced', scheduleId: 'schedule', runId: 'execution', sessionId: 'lane' });
+      service.handleScheduleEvent({ type: 'notified', scheduleId: 'schedule', runId: 'execution', sessionId: 'lane' });
+      playSound.mockClear();
+      service.handleAgentEvent(meta, terminal === 'done' ? doneEvent() :
+        { type: 'error', data: { message: 'failed', isTerminal: true } });
+      expect(playSound).not.toHaveBeenCalled();
+      expect(publish.mock.calls.at(-1)?.[0].displayPolicy).toBe('closed');
+      finish();
+      service.handleAgentEvent(meta, doneEvent());
+      expect(playSound).not.toHaveBeenCalled();
+      service.handleUserPrompt(meta, 'new owner request');
+      playSound.mockClear();
+      service.handleAgentEvent(meta, doneEvent());
+      expect(playSound).toHaveBeenCalledWith(customSound('complete.wav'));
+    } finally { vi.useRealTimers(); }
+  });
+
   it('does not play a completion sound or reveal card for a silenced scheduler completion', async () => {
     vi.useFakeTimers();
     try {

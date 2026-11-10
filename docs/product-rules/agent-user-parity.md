@@ -250,7 +250,7 @@ Webhook 跨电脑配置（2026-11-06）：`schedule_create` / `schedule_update` 
 
 自动化截止时间：桌面创建与编辑表单、项目自动化配置和 `schedule_create` / `schedule_update` 共用 `expireAt`。到期后不再自动启动，已开始的运行允许完成；手动立即运行仍可使用。桌面按编辑设备的本地时区显示，保存绝对时间戳；`schedule_update` 省略表示保留，传 `null` 表示清除，本机与跨电脑一致。手机端没有自动化管理入口。
 
-伙伴例行任务送达与发现（2026-10-30）：Pi 直接 `routine_save` 与 helper 同时提供 `modelOverride`、`sessionMode`、`delivery`；伙伴 essential tools 提供 `schedule_list_models` 和 `routine_delivery_targets`。价格与能力来自实际连接来源，保留 unknown；本机位置 `local` 保存为 null。桌面、Agent 和另一电脑上的设置共用 `routineTools`，默认结果直接显示在发起伙伴主任务；显式处理才唤醒模型，IM 只使用已连接机器人的已知收件人。执行和送达失败分开记录，静默检查仍静默。
+伙伴例行任务送达与发现（2026-10-30）：Pi 直接 `routine_save` 与 helper 同时提供 `modelOverride`、`sessionMode`、`delivery`；伙伴 essential tools 提供 `schedule_list_models` 和 `routine_delivery_targets`。价格与能力来自实际连接来源，保留 unknown；本机位置 `local` 保存为 null。桌面、Agent 和另一电脑上的设置共用 `routineTools`，默认结果直接显示在发起伙伴主任务；显式处理才唤醒模型，IM 只使用已连接机器人的已知收件人。执行和送达失败分开记录，静默检查仍静默。内置跟进的有效汇报也默认回到主任务，通知在汇报落库后跳转主任务；`routine_save` 接受等价的 `companion/direct` 设置，其它内置投递方式与静默变更仍受宿主限制。
 
 GitHub 查询与关联的独立语义、缓存和游标合同见 [GitHub 状态与关联](github-status-and-associations.md)。
 

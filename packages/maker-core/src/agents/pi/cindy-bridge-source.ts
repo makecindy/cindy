@@ -4215,7 +4215,7 @@ class CindyMcpGateway {
             { type: 'object', properties: { kind: { const: 'companion' }, mode: { type: 'string', enum: ['direct', 'process'] } }, required: ['kind', 'mode'], additionalProperties: false },
             { type: 'object', properties: { kind: { const: 'im' }, targetId: { type: 'string' } }, required: ['kind', 'targetId'], additionalProperties: false },
             { type: 'object', properties: { kind: { const: 'none' } }, required: ['kind'], additionalProperties: false },
-          ], description: 'Final delivery defaults to companion/direct without a model call. process wakes the companion only when requested; im uses routine_delivery_targets.id; none keeps the independent task. Omission preserves saved choices.' },
+          ], description: 'Final delivery defaults to companion/direct without a model call. process wakes the companion only when requested; im uses routine_delivery_targets.id; none keeps the independent task. Omission preserves saved choices. Built-in follow-up reports return to the main task and accept only companion/direct delivery; built-in instructions, triggers and quiet settings remain host-owned.' },
           sessionMode: { type: 'string', enum: ['persistent', 'fresh'], description: 'persistent reuses this routine task and context; fresh starts a new task each trigger. Omission preserves the saved mode. Read back with routine_list.' },
           silentWhenIdle: { type: 'boolean', description: 'Set true for checks with no-change reporting suppressed. Set false for reminders/scheduled delivery. Omitted defaults to false; preserve user choices.' },
           preRunHook: { anyOf: [{ type: 'null' }, { type: 'object', properties: {

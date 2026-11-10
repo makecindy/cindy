@@ -1,4 +1,5 @@
 import type { PreRunHookRunResult, RunStatus, Schedule, ScheduleWebhookEvent, ScheduleRunTrigger } from '../types.js';
+import type { PrepareScheduleNotification } from './notifier.js';
 
 export interface ChildRunInput {
   sessionId?: string;
@@ -8,6 +9,7 @@ export interface ChildRunInput {
 }
 
 export interface FireContext {
+  prepareNotification?: PrepareScheduleNotification;
   runId: string;
   firedAt: number;
   /** Continue the interrupted conversation, without replaying the initial prompt or precheck. */

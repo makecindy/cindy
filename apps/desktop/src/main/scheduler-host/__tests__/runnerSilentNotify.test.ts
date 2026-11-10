@@ -3,7 +3,7 @@ import { describe, expect, it, vi, beforeEach } from 'vitest';
 import type { AgentEvent, Maker, Session, SessionSendResult } from '@cindy/maker-core';
 import type { Scheduler } from '@cindy/maker-scheduler';
 import { SCHEDULER_RUN_ID_VENDOR_OPTION } from '@cindy/maker-scheduler';
-import type { FireContext, Logger, Notifier, Schedule } from '@cindy/maker-scheduler';
+import type { FireContext, Logger, Notifier, Schedule, ScheduleRun } from '@cindy/maker-scheduler';
 
 const mocks = vi.hoisted(() => ({
   executePreRunHook: vi.fn(),
@@ -1037,4 +1037,26 @@ describe('MakerScheduleRunner silent-run notification skip', () => {
 
     expect(notifier.notify).toHaveBeenCalledTimes(1);
   });
+  // #9616 / unit: exercise the real runner-to-notifier boundary. The execution
+  // signal must reach the publication guard without rewriting the fire result.
+  it('passes the publication guard and execution signal to the notifier', async () => {
+    const h = createSessionHarness(acceptingSend());
+    const ctx = createFireContext();
+    const prepare = vi.fn(async (row: ScheduleRun, signal?: AbortSignal) => {
+      expect(signal).toBe(ctx.signal);
+      return { ...row, sessionId: 'canonical' };
+    });
+    ctx.prepareNotification = prepare;
+    const { runner } = createRunnerHarness(h.session, { silenced: false,
+      notifyImpl: async (_schedule, row, barrier) => {
+        expect(await barrier?.(row)).toMatchObject({ sessionId: 'canonical' });
+      },
+    });
+    const pending = runner.fire(baseSchedule(), ctx);
+    await vi.waitFor(() => expect(mocks.createMessage).toHaveBeenCalled());
+    h.emit({ type: 'done', data: { result: 'Report' } });
+    await expect(pending).resolves.toMatchObject({ sessionId: h.session.id });
+    expect(prepare).toHaveBeenCalledOnce();
+  });
+
 });

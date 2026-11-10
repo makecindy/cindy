@@ -3557,7 +3557,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
           isDataOwnerBroadcastScopeCurrent(ownerScope) &&
           !(finalRun.status === 'success' && ctx.signal.aborted)
         ) {
-          await this.deps.notifier.notify(schedule, finalRun);
+          await this.deps.notifier.notify(schedule, finalRun, ...(ctx.prepareNotification ? [(run: ScheduleRun) => ctx.prepareNotification!(run, ctx.signal)] as const : []));
         }
       } catch (err) {
         // 即便 Notifier 实现违规 throw，runner 也要兜住 —— 通知不能阻塞 run 结果上报
@@ -3937,7 +3937,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
     // 见 finalizeRun:先认领再投递,避免 await 期间强制收口并发投出第二条。
     ctx.onRunnerNotified?.('failure');
     try {
-      await this.deps.notifier.notify(schedule, fauxRun);
+      await this.deps.notifier.notify(schedule, fauxRun, ...(ctx.prepareNotification ? [(run: ScheduleRun) => ctx.prepareNotification!(run, ctx.signal)] as const : []));
     } catch {
       /* notifier 已做兜底，再炸只能 swallow */
     }

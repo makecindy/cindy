@@ -1446,6 +1446,7 @@ configureRoutineHost({
   assertImportedAutomationReady: ensureImportedAutomationReady, prepareImportedAutomation, finishImportedAutomation, recoverImports: recoverCompanionImports,
   getBot: getBotRemoteResourceSource,
   ensureRoutineSession: ensureBotRoutineLaneSession,
+  beginForwardedReport: (sessionId, runId) => getAgentIslandService()?.beginForwardedReport(sessionId, runId) ?? (() => {}),
   closeRoutineSession: async (sessionId) => {
     await getMakerIfReady()?.closeSession(sessionId);
   },
