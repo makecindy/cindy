@@ -2875,7 +2875,13 @@ describe('Windows updater prerequisites', () => {
 describe('splash 启动下载 0% 显式广播', () => {
   interface SentIpc {
     channel: string;
-    payload: { progress?: number; received?: number; total?: number };
+    payload: {
+      status?: string;
+      version?: string;
+      progress?: number;
+      received?: number;
+      total?: number;
+    };
   }
 
   function makeProgressCollector() {
@@ -2906,6 +2912,44 @@ describe('splash 启动下载 0% 显式广播', () => {
     // setStatus('ready') 会触发 evaluateAutoRelaunch;关掉无人值守开关,
     // 避免测试进程里真的走到 executeRelaunch(spawn + process.exit)。
     readAutoUpdateSettings.mockReturnValue({ autoRelaunchOnIdle: false });
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：checkForUpdate → update-status IPC。渲染端先收到 downloading，
+  //   下载完成后必须再收到 { status: 'ready', version }，手动安装入口才会出现。
+  // - Bug／规则依据：PR #9667 Codex P2（线程 PRRT_kwDOTgdRUs61odlb）。进度广播不走 setStatus，
+  //   内存 currentStatus 仍可能是冷启动快路径写下的 ready，终态 ready 被当成没变化而丢掉。
+  // - 现有覆盖缺口：相邻用例只看进度通道的 0% / 100%，没有覆盖「广播过 downloading 之后 ready 仍要再发」。
+  // - 最小失败输入：下载回调里先推一条 50% 进度，再让 download 成功。旧去重会把终态 ready 丢掉。
+  // - tier：unit。走生产 checkForUpdate 入口，不启 Electron。
+  it('进度广播 downloading 之后仍然把终态 ready 推给渲染端', async () => {
+    const { sends } = makeProgressCollector();
+    download.mockImplementation(async ({
+      targetPath,
+      onProgress,
+    }: {
+      targetPath: string;
+      onProgress?: (event: { loaded: number; total: number | null; percent: number | null; speedBps: number }) => void;
+    }) => {
+      // flush() 只重发最后一次真正上升过的进度。先推一条中间值，下载完成前渲染端才会看到 downloading。
+      onProgress?.({ loaded: 50, total: 123, percent: 50, speedBps: 0 });
+      fs.mkdirSync(path.join(TEST_USER_DATA, 'updates'), { recursive: true });
+      fs.writeFileSync(targetPath, 'update');
+      return { path: targetPath, size: 123 };
+    });
+
+    const { checkForUpdate, stopUpdateService } = await freshUpdateService('darwin');
+    try {
+      expect(await checkForUpdate(updateManifest())).toBe('ready');
+      const statuses = sends
+        .filter((entry) => entry.channel === 'update-status')
+        .map((entry) => entry.payload);
+      const lastDownloading = statuses.findLast((payload) => payload.status === 'downloading');
+      expect(lastDownloading).toMatchObject({ status: 'downloading', version: '0.0.65' });
+      expect(statuses[statuses.length - 1]).toEqual({ status: 'ready', version: '0.0.65' });
+    } finally {
+      stopUpdateService();
+    }
   });
 
   it('启动(非 wasReady)路径:download() 之前恰好广播一次 progress:0', async () => {

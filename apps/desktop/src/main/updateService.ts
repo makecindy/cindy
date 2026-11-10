@@ -212,6 +212,12 @@ const STARTUP_MANIFEST_TIMEOUT_MS = 8_000;
 
 let currentStatus: UpdateStatus = 'idle';
 let readyVersion: string | undefined;
+/**
+ * 上一次真正经 `broadcastStatus` 推给渲染端的快照。
+ * 进度广播不走 `setStatus`，`currentStatus` 可能仍停在冷启动快路径写下的 ready，
+ * 去重必须比这份，不能比内存状态机。
+ */
+let lastBroadcastPayload: UpdateStatusPayload | undefined;
 /** Version of the patch currently being downloaded (downloading / superseding only). */
 let downloadingVersion: string | undefined;
 let readyFilePath: string | undefined;
@@ -268,6 +274,7 @@ function getUpdatesDir(): string {
 }
 
 function broadcastStatus(payload: UpdateStatusPayload): void {
+  lastBroadcastPayload = { ...payload };
   for (const win of BrowserWindow.getAllWindows()) {
     if (!win.isDestroyed()) {
       win.webContents.send('update-status', payload);
@@ -292,10 +299,20 @@ function broadcastChannelSettings(): void {
 }
 
 function setStatus(status: UpdateStatus, extra?: Partial<UpdateStatusPayload>): void {
-  const unchanged = currentStatus === status
-    && (extra?.version === undefined || extra.version === readyVersion)
-    && extra?.errorCode === lastErrorCode
-    && extra?.progress === undefined;
+  const candidate: UpdateStatusPayload = { status, ...extra };
+  // 去重比的是上一次真正发出去的快照，不是 currentStatus。
+  // 进度通道会直接 broadcastStatus({ status: 'downloading', ... })，这时内存里的
+  // currentStatus 仍可能是冷启动快路径写下的 ready。若只用 currentStatus 判断，
+  // 下载完成后的 setStatus('ready') 会被当成没变化而丢掉，渲染端停在 downloading。
+  const sameAsLastBroadcast = lastBroadcastPayload !== undefined
+    && lastBroadcastPayload.status === candidate.status
+    && lastBroadcastPayload.version === candidate.version
+    && lastBroadcastPayload.errorCode === candidate.errorCode
+    && lastBroadcastPayload.progress === candidate.progress;
+  // 重试安装会先把内存里的 update_apply_aborted 清掉，再在中止时写回同一个错误码。
+  // 快照本身没变，但渲染端必须再收到这一次，否则横幅会丢掉错误态。
+  const errorCodeRestored = extra?.errorCode !== undefined && extra.errorCode !== lastErrorCode;
+  const unchanged = sameAsLastBroadcast && !errorCodeRestored;
   currentStatus = status;
   if (status !== 'downloading' && status !== 'superseding') downloadingVersion = undefined;
   lastErrorCode = extra?.errorCode;
@@ -303,7 +320,7 @@ function setStatus(status: UpdateStatus, extra?: Partial<UpdateStatusPayload>): 
   // again restarts the auto-relaunch decision and tells the renderer something
   // changed when nothing did.
   if (unchanged) return;
-  broadcastStatus({ status, ...extra });
+  broadcastStatus(candidate);
   if (status === 'ready' && !startupUpdateCheckInProgress && !extra?.errorCode) {
     pendingStatusReadyDecision = evaluateAutoRelaunch('status-ready');
     void pendingStatusReadyDecision;
@@ -1599,14 +1616,22 @@ async function abortApply(reason: string): Promise<void> {
   }
   if (supersedingInFlight) {
     // 新版 B 还在下,保持 superseding 与 downloadingVersion,只在错误码里表达这次安装已取消。
-    // 重复 abort 落到同一个错误码时不再广播,和 setStatus 对未变化 payload 的处理一致。
-    if (lastErrorCode !== UPDATE_APPLY_ABORTED_ERROR_CODE) {
-      lastErrorCode = UPDATE_APPLY_ABORTED_ERROR_CODE;
-      broadcastStatus({
-        status: 'superseding',
-        version: readyVersion,
-        errorCode: UPDATE_APPLY_ABORTED_ERROR_CODE,
-      });
+    // 重复 abort 落到同一个错误码时不再广播。这里不走 setStatus：快照没变，
+    // 且内存里的错误码也没被清掉重写，才算真正没变化。
+    const supersedingAbort: UpdateStatusPayload = {
+      status: 'superseding',
+      version: readyVersion,
+      errorCode: UPDATE_APPLY_ABORTED_ERROR_CODE,
+    };
+    const alreadyBroadcast = lastBroadcastPayload !== undefined
+      && lastBroadcastPayload.status === supersedingAbort.status
+      && lastBroadcastPayload.version === supersedingAbort.version
+      && lastBroadcastPayload.errorCode === supersedingAbort.errorCode
+      && lastBroadcastPayload.progress === supersedingAbort.progress;
+    const errorCodeRestored = lastErrorCode !== UPDATE_APPLY_ABORTED_ERROR_CODE;
+    lastErrorCode = UPDATE_APPLY_ABORTED_ERROR_CODE;
+    if (!alreadyBroadcast || errorCodeRestored) {
+      broadcastStatus(supersedingAbort);
     }
     return;
   }
@@ -2974,6 +2999,7 @@ export async function enableUncustomizedBetaChannel(
 }
 
 export function stopUpdateService(): void {
+  lastBroadcastPayload = undefined;
   if (firstCheckTimer) {
     clearTimeout(firstCheckTimer);
     firstCheckTimer = null;
