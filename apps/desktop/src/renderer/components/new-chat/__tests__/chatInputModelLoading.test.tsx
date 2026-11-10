@@ -176,8 +176,12 @@ it.each([
   { input: '@| word rest', name: 'README.md', remaining: '  word rest' },
   { input: '@fo|obar rest', name: 'foobar', remaining: ' rest' },
   { input: '@fo|obarbaz rest', name: 'foobar', remaining: ' obarbaz rest' },
+  // An agent's filename (`reviewer.md`) is one of its exact names.
+  { input: '@rev|iewer.md rest', name: 'reviewer', relPath: '.claude/agents/reviewer.md', remaining: ' rest', agent: true },
   { input: '@fo|', name: 'folder', remaining: ' ' },
   { input: '@fo|obar rest', name: 'foobar', remaining: '@foobar/ rest', directory: true },
+  // Drill-down keeps following draft text out of the path, with the caret still after `/`.
+  { input: '@|word rest', name: 'foobar', remaining: '@foobar/ word rest', directory: true },
   // Re-selecting a directory whose `/` is already in the draft must not repeat the path.
   { input: '@fo|obar/ rest', name: 'foobar', remaining: '@foobar/ rest', directory: true },
   { input: '@foobar|/ rest', name: 'foobar', remaining: '@foobar/ rest', directory: true },
@@ -193,7 +197,7 @@ it.each([
   { input: '@|word rest', name: null, remaining: 'word rest' },
   // An action consumes the rest of its own typed label, but nothing unrelated.
   { input: '@Col|laboration rest', name: null, label: 'Collaboration', remaining: 'rest' },
-])('preserves unrelated draft text when selecting @ completion in $input ($name)', async ({ input, name, relPath, label, remaining, directory, plugin }) => {
+])('preserves unrelated draft text when selecting @ completion in $input ($name)', async ({ input, name, relPath, label, remaining, directory, plugin, agent }) => {
   const run = vi.fn();
   const ghost: GhostComposerEntry = { manifest: { id: name ?? 'unused', name: plugin ?? 'unused', command: name ?? undefined }, enabled: true };
   if (plugin) h.composerGhosts = [ghost];
@@ -201,7 +205,7 @@ it.each([
     ? { kind: 'action', action: { id: 'attach-files', label: label ?? 'Attach files', run } }
     : plugin
       ? { kind: 'resource', item: { type: 'plugin-command', name: ghost.manifest.name, relPath: name, pluginId: installedGhostStoragePart(ghost) } }
-      : { kind: 'resource', item: { type: directory ? 'dir' : 'file', name, relPath: relPath ?? name } };
+      : { kind: 'resource', item: { type: directory ? 'dir' : agent ? 'agent' : 'file', name, relPath: relPath ?? name } };
   try {
     render(<ChatInput {...props} sessionId={undefined} onSend={vi.fn()} />);
     await waitFor(() => expect(h.editor).not.toBeNull());
@@ -215,6 +219,7 @@ it.each([
     const nodes = h.editor!.getJSON().content![0].content ?? [];
     const doc = h.editor!.state.doc;
     expect(doc.textBetween(0, doc.content.size, '', '')).toBe(remaining);
+    if (directory) expect(h.editor!.state.selection.from).toBe(remaining.indexOf(' ') + 1);
     expect(nodes.filter(node => node.type === 'mentionChip')).toHaveLength(name === null || directory || plugin ? 0 : 1);
     expect(run).toHaveBeenCalledTimes(name === null ? 1 : 0);
   } finally {

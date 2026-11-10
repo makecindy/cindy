@@ -5444,6 +5444,8 @@ export function ChatInput({
         selectedItem.name,
         selectedItem.name.replace(/\.md$/, ''),
         selectedItem.relPath,
+        // An agent's filename (`reviewer.md`) is one of its exact names too.
+        ...(selectedItem.type === 'agent' ? [selectedItem.relPath.split('/').pop() ?? ''] : []),
       ], !directoryQuery);
       if (!range) return;
       const { from, to } = range;
@@ -5484,6 +5486,12 @@ export function ChatInput({
           setAtFocus(0);
           return;
         }
+        // Draft text right after the range stays out of the path: add a space, but keep
+        // the caret after `/` so the drill-down query stays `dir/`.
+        const after = editor.state.doc.resolve(to).nodeAfter;
+        const needsSeparator = !!after
+          && (after.isText ? !/^\s/.test(after.text ?? '') : after.type.name !== 'hardBreak');
+        const pathText = `@${directoryQuery}`;
         editor
           .chain()
           .focus()
@@ -5491,8 +5499,9 @@ export function ChatInput({
             tr.replaceWith(
               from,
               to,
-              editor.schema.text(`@${directoryQuery}`),
+              editor.schema.text(needsSeparator ? `${pathText} ` : pathText),
             );
+            if (needsSeparator) tr.setSelection(TextSelection.create(tr.doc, from + pathText.length));
             return true;
           })
           .run();
