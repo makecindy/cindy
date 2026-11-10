@@ -608,11 +608,12 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
   /** (multi-team)绑定动作 IPC 的统一收口(应用快照 + 失败 toast)。 */
   const [selectingWorkingDevice, setSelectingWorkingDevice] = useState(false);
   const workingSelectionSequence = useRef(0);
-  const selectWorkingDevice = async () => {
+  const selectWorkingDevice = async (bindingId?: string) => {
     const sequence = ++workingSelectionSequence.current;
     setSelectingWorkingDevice(true);
     try {
-      await window.electronAPI.hookControl.providerBindSelect('feishu');
+      if (bindingId) await window.electronAPI.hookControl.providerBindSelect('feishu', bindingId);
+      else await window.electronAPI.hookControl.providerBindSelect('feishu');
       if (mountedRef.current && workingSelectionSequence.current === sequence) {
         toast.success(t('settings.remoteControl.hook.feishu.workingDeviceSet'));
       }
@@ -953,9 +954,9 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
     }
   };
 
-  const handleProviderUnlink = async (provider: NeutralCardProvider) => {
-    const targetBindingId =
-      hook?.[provider].binding?.state === 'confirmed' ? hook[provider].binding.bindingId : null;
+  const handleProviderUnlink = async (provider: NeutralCardProvider, bindingId?: string) => {
+    const targetBindingId = bindingId ??
+      (hook?.[provider].binding?.state === 'confirmed' ? hook[provider].binding.bindingId : null);
     if (targetBindingId === null) return;
     const ok = await confirm({
       title: t(`settings.remoteControl.hook.${provider}.unlinkConfirmTitle`),
@@ -963,7 +964,8 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
       confirmText: t(`settings.remoteControl.hook.${provider}.unlink`),
       cancelText: t('settings.remoteControl.hook.notInstalled.confirmCancel'),
     });
-    const currentBinding = hookRef.current?.[provider].binding;
+    const currentView = hookRef.current?.[provider];
+    const currentBinding = bindingId ? currentView?.bindings?.find((row) => row.bindingId === bindingId) : currentView?.binding;
     if (
       !ok ||
       !mountedRef.current ||
@@ -976,7 +978,9 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
       ++workingSelectionSequence.current;
       setSelectingWorkingDevice(false);
     }
-    runHookAction(() => window.electronAPI.hookControl.providerBindRevoke(provider));
+    runHookAction(() => bindingId
+      ? window.electronAPI.hookControl.providerBindRevoke(provider, bindingId)
+      : window.electronAPI.hookControl.providerBindRevoke(provider));
   };
 
   /**
@@ -1492,6 +1496,8 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
     const view = hook[provider] as ProviderHookView | undefined;
     if (view === undefined) return null; // 旧 main 快照尚无该 provider 字段时不渲染
     const cs = providerCardState(provider, view);
+    const accountRows = provider === 'feishu' ? view.bindings ?? [] : [];
+    const multiAccount = provider === 'feishu' && (view.multiBindAvailable === true || accountRows.length > 1);
     if (!cs.visible) return null;
     const prefsState =
       provider === 'telegram'
@@ -1510,7 +1516,8 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
               : 'settings.tina.prefs.providerX',
         )}
         description={t(`settings.remoteControl.hook.${provider}.description`)}
-        routeSummary={companion ? null : cs.bindingLine}
+        routeSummary={companion ? null : multiAccount && accountRows.length > 0
+          ? t('settings.remoteControl.hook.feishu.linkedAccounts', { count: accountRows.length }) : cs.bindingLine}
         status={<ChannelStatusBadge tone={cs.badge.tone} label={cs.badge.label} />}
         headerAction={
           <Switch data-setting-id={setting.id}
@@ -1610,7 +1617,7 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
                   {t(`settings.remoteControl.hook.${provider}.cancel`)}
                 </Button>
               ) : null}
-              {cs.confirmed ? (
+              {cs.confirmed && !multiAccount ? (
                 <>
                   {cs.actions.includes('open_provider') ? (
                     <Button data-settings-search-action="Open the channel connection or group setup link"
@@ -1654,7 +1661,7 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
                     </Button>
                   ) : null}
                 </>
-              ) : cs.canStartLink ? (
+              ) : cs.canStartLink && !(multiAccount && accountRows.length > 0) ? (
                 <Button data-settings-search-action="Start or cancel linking this bot account"
                   variant="secondary"
                   size="xs"
@@ -1667,6 +1674,43 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
                       ? `settings.remoteControl.hook.${provider}.connect`
                       : `settings.remoteControl.hook.${provider}.retry`,
                   )}
+                </Button>
+              ) : null}
+            </div>
+          ) : null}
+
+          {multiAccount && accountRows.length > 0 ? (
+            <div className="flex flex-col gap-2">
+              {accountRows.map((account, index) => (
+                <div key={account.bindingId} role="group" aria-label={account.principalName ?? account.principalId ?? ''}
+                  className="flex flex-wrap items-center justify-between gap-2 border-t border-[var(--border-default)] pt-2">
+                  <span className="min-w-0 break-all text-12 text-[var(--text-primary)]">
+                    {account.principalName ?? account.principalId}
+                  </span>
+                  <div className="flex flex-wrap items-center gap-2">
+                    {account.actions.includes('select_device') ? (
+                      <Button id={index === 0 ? imBotSettings.cindyFeishuWorkingDevice.targetId : undefined}
+                        data-setting-id={index === 0 ? imBotSettings.cindyFeishuWorkingDevice.id : undefined}
+                        variant="secondary" size="xs" compact type="button"
+                        disabled={selectingWorkingDevice || !view.available || view.status !== 'connected' || !view.enabled}
+                        onClick={() => void selectWorkingDevice(account.bindingId!)}>
+                        {t('settings.remoteControl.hook.feishu.setWorkingDevice')}
+                      </Button>
+                    ) : null}
+                    {account.actions.includes('revoke') ? (
+                      <Button data-settings-search-action="Unlink this bot account" variant="secondary" size="xs" compact type="button"
+                        disabled={!view.enabled || !view.available || view.status !== 'connected' || cs.inProgress}
+                        onClick={() => void handleProviderUnlink('feishu', account.bindingId!)}>
+                        {t('settings.remoteControl.hook.feishu.unlink')}
+                      </Button>
+                    ) : null}
+                  </div>
+                </div>
+              ))}
+              {view.enabled && view.available && view.status === 'connected' && view.multiBindAvailable && !cs.inProgress ? (
+                <Button data-settings-search-action="Link another Feishu account" variant="secondary" size="xs" compact type="button"
+                  className="self-start" onClick={() => runHookAction(() => window.electronAPI.hookControl.providerBindStart('feishu'))}>
+                  {t('settings.remoteControl.hook.feishu.addAccount')}
                 </Button>
               ) : null}
             </div>
@@ -1699,6 +1743,12 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
               <span className="text-11 leading-relaxed text-[var(--text-tertiary)]">
                 {t('settings.remoteControl.hook.feishu.bindCode.hint')}
               </span>
+              {multiAccount && cs.actions.includes('open_provider') ? (
+                <Button data-settings-search-action="Open the Feishu bot for code linking" variant="secondary" size="xs" compact type="button"
+                  className="self-start" onClick={() => handleProviderOpen('feishu', 'provider')}>
+                  {t('settings.remoteControl.hook.feishu.openBot')}
+                </Button>
+              ) : null}
             </div>
           ) : null}
 

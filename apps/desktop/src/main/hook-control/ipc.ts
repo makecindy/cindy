@@ -250,7 +250,7 @@ function slackLocalPrefsView(): HookPrefsView {
 
 function providerLocalPrefsView(provider: Exclude<HookPrefsChannel, 'slack'>): ProviderPrefsView {
   const lane = ensureInstances().manager.snapshot()[provider];
-  const confirmed = lane.binding?.state === 'confirmed' ? lane.binding : null;
+  const confirmed = lane.bindings?.[0] ?? (lane.binding?.state === 'confirmed' ? lane.binding : null);
   return {
     provider,
     bindingId: confirmed?.bindingId ?? null,
@@ -358,6 +358,10 @@ function channelLiveBindingKey(channel: HookPrefsChannel): string | null {
     return binding?.state === 'confirmed'
       ? `slack:single:${binding.slackUserId ?? ''}:${binding.teamName ?? ''}`
       : null;
+  }
+  if (channel === 'feishu' && snap.feishu.multiBindAvailable) {
+    const ids = (snap.feishu.bindings ?? []).map((row) => row.bindingId).sort();
+    return ids.length > 0 ? `feishu:multi:${ids.join(',')}` : null;
   }
   const binding = snap[channel].binding;
   return binding?.state === 'confirmed'
@@ -876,9 +880,11 @@ export function registerHookControlIpc(): void {
     requireHookControl();
     const { manager: m } = ensureInstances();
     const provider = requireNeutralProvider(payload);
+    const request = requireObject(payload);
+    const bindingId = request.bindingId === undefined ? undefined : requireString(request.bindingId, 'bindingId');
     const assertAccount = captureChannelAccount();
     try {
-      await m.providerBindSelect(provider);
+      await m.providerBindSelect(provider, bindingId);
     } catch (error) {
       if (error instanceof HookNotConnectedError) throwIpcError('HOOK_NOT_CONNECTED', hookNotConnectedIpcMessage(provider));
       throwIpcError('PRECONDITION_FAILED', 'Unable to set working computer');
@@ -891,7 +897,9 @@ export function registerHookControlIpc(): void {
     requireHookControl();
     const { manager: m } = ensureInstances();
     const provider = requireNeutralProvider(payload);
-    if (!m.providerBindRevoke(provider)) {
+    const request = requireObject(payload);
+    const bindingId = request.bindingId === undefined ? undefined : requireString(request.bindingId, 'bindingId');
+    if (!m.providerBindRevoke(provider, bindingId)) {
       throwIpcError(
         'HOOK_NOT_CONNECTED',
         `${providerDisplayName(provider)} binding is not connected`,

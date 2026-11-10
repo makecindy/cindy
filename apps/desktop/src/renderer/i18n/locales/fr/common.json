@@ -6530,7 +6530,9 @@
             "hint": "Ou envoyez ce code au bot Cindy en message privé dans Feishu / Lark"
           },
           "setWorkingDevice": "Définir comme ordinateur de travail",
-          "workingDeviceSet": "Ordinateur de travail défini"
+          "workingDeviceSet": "Ordinateur de travail défini",
+          "addAccount": "Associer un autre compte",
+          "linkedAccounts": "Comptes associés : {{count}}"
         }
       },
       "summary": {

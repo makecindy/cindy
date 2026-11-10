@@ -16,6 +16,22 @@ const disabledLane = {
 };
 
 function view(kind: string): SlackHookView {
+  if (kind === 'multi' || kind === 'multi-pending') {
+    const base = view(kind === 'multi' ? 'confirmed' : 'pending');
+    const first = view('confirmed').feishu.binding!;
+    base.feishu.multiBindAvailable = true;
+    if (kind === 'multi-pending' && base.feishu.binding) {
+      base.feishu.binding.remediationUrl = first.remediationUrl;
+      base.feishu.binding.actions.push('open_provider');
+    }
+    base.feishu.bindings = [
+      { ...first, principalName: '产品团队账号' },
+      { ...first, bindingId: 'partner', principalId: 'ou_partner', principalName: '合作伙伴账号' },
+      { ...first, bindingId: 'project', principalId: 'ou_project', principalName: '项目团队账号' },
+      { ...first, bindingId: 'personal', principalId: 'ou_personal', principalName: '个人飞书账号' },
+    ];
+    return base;
+  }
   const feishu =
     kind === 'unavailable'
       ? { ...disabledLane, enabled: true, url: 'ws://127.0.0.1:8794', status: 'connected' as const }

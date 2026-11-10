@@ -6422,7 +6422,9 @@
             "hint": "または Feishu / Lark で Cindy bot にこのコードをダイレクトメッセージで送信してください"
           },
           "setWorkingDevice": "作業用パソコンに設定",
-          "workingDeviceSet": "作業用パソコンに設定しました"
+          "workingDeviceSet": "作業用パソコンに設定しました",
+          "addAccount": "別のアカウントを連携",
+          "linkedAccounts": "連携済みアカウント：{{count}}"
         }
       },
       "summary": {

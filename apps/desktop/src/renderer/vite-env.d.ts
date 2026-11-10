@@ -4602,9 +4602,11 @@ interface ElectronAPI {
     ) => Promise<{ hook: import('../shared/hookControlIpc').SlackHookView }>;
     providerBindSelect: (
       provider: 'telegram' | 'x' | 'feishu',
+      bindingId?: string,
     ) => Promise<{ hook: import('../shared/hookControlIpc').SlackHookView }>;
     providerBindRevoke: (
       provider: 'telegram' | 'x' | 'feishu',
+      bindingId?: string,
     ) => Promise<{ hook: import('../shared/hookControlIpc').SlackHookView }>;
     openProviderAction: (
       provider: 'telegram' | 'x' | 'feishu',

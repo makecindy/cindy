@@ -18,6 +18,7 @@ import {
   HOOK_FEATURE_LIFECYCLE_ANNOUNCEMENT,
   HOOK_FEATURE_MULTI_TEAM,
   HOOK_FEATURE_PROVIDER_BIND,
+  HOOK_FEATURE_PROVIDER_MULTI_BIND,
   HOOK_FEATURE_PROVIDER_BEHAVIOR,
   HOOK_FEATURE_PROVIDER_FEISHU,
   HOOK_FEATURE_PROVIDER_PREFS,
@@ -123,6 +124,10 @@ function memoryStore(initial: Partial<SlackHookConfigState> & { url: string }): 
     },
     setLifecycleAnnouncementOverride(enabled) {
       state = { ...state, lifecycleAnnouncementOverride: enabled };
+      return state;
+    },
+    setFeishuBindingsCache(entries) {
+      state = { ...state, feishuBindingsCache: entries, feishuBindingCache: entries[0] ?? null };
       return state;
     },
     setProviderBindingCache(provider, entry) {
@@ -3365,7 +3370,7 @@ describe('官方飞书 / Lark provider lane', () => {
     if (opts === undefined) throw new Error('Feishu transport was not created');
     expect(opts.url).toBe('ws://127.0.0.1:8794');
     // 第一里程碑由服务端排版: 不得声明 msg.op 或任何 Telegram 专属能力。
-    expect(opts.buildHello().features).toEqual(FEISHU_FEATURES);
+    expect(opts.buildHello().features).toEqual([...FEISHU_FEATURES, HOOK_FEATURE_PROVIDER_MULTI_BIND]);
     expect(opts.buildHello().features).not.toContain(HOOK_FEATURE_MESSAGE_OPS);
     expect(opts.buildHello().statusReactions).toBeUndefined();
 
@@ -4865,5 +4870,103 @@ describe('多 workspace 绑定(multi-team)', () => {
       ),
     );
     await expect(promise).resolves.toEqual({ bound: true, prefs: [] });
+  });
+});
+
+// Test value: manager production dispatch/query/bind entry points must accept both
+// bound identities, retain authorization during an additive attempt, and reject a removed
+// identity. Existing single-identity cases cannot distinguish these branches. Tier: unit.
+describe('Feishu multiple identity authorization', () => {
+  it('keeps multiple identities usable while linking, then removes exactly one binding', () => {
+    const dispatcher = stubDispatcher();
+    const { manager, transports, sent } = feishuLaneHarness({ dispatcher }, { feishuEnabled: true });
+    manager.sync();
+    const opts = transports[0]!;
+    opts.onWelcome?.({ serverName: 'feishu', features: [...FEISHU_FEATURES, HOOK_FEATURE_PROVIDER_MULTI_BIND] });
+    opts.onStatus('connected', null);
+    const a = { ...FEISHU_CONFIRMED, actions: ['revoke', 'select_device'] };
+    const b = { ...a, bindingId: 'binding-b', principalId: 'ou_b', principalName: 'Account B' };
+    const c = { ...a, bindingId: 'binding-c', principalId: 'ou_c' };
+    const d = { ...a, bindingId: 'binding-d', principalId: 'ou_d' };
+    opts.onMessage(makeProviderBindState({ ...a, bindings: [a, b, c, d] }), () => true);
+    expect(manager.snapshot().feishu.bindings).toHaveLength(4);
+    const dispatch = (principal: string) => opts.onMessage(makeTaskDispatch({ requestId: `work-${principal}`,
+      externalKey: `feishu:topic:cli_app:oc_group:oc_group:${principal}:g0`, workspace: 'chat', prompt: 'work', source: { im: 'feishu' } }), () => true);
+    expect(manager.providerBindStart('feishu')).toBe(true);
+    const start = sent.filter((message) => message.type === 'provider.bind.start').at(-1)!;
+    opts.onMessage(makeProviderBindUpdate({ ...FEISHU_PENDING, replyTo: start.payload.requestId }), () => true);
+    opts.onMessage(makeProviderBindUpdate({ ...a, completedAttemptId: 'earlier-attempt' }), () => true);
+    expect(manager.snapshot().feishu.binding?.attemptId).toBe(FEISHU_PENDING.attemptId);
+    dispatch('ou_user'); dispatch('ou_b'); dispatch('ou_c'); dispatch('ou_d');
+    expect(dispatcher.handleDispatch).toHaveBeenCalledTimes(4);
+    expect(manager.snapshot().feishu.bindings).toHaveLength(4);
+    expect(manager.providerBindCancel('feishu')).toBe(true);
+    const cancel = sent.filter((message) => message.type === 'provider.bind.cancel').at(-1)!;
+    opts.onMessage(makeProviderBindUpdate({ ...FEISHU_PENDING, state: 'failed', connectUrl: null, bindCode: null,
+      expiresAt: null, reason: 'cancelled', replyTo: cancel.payload.requestId, actions: ['retry'] }), () => true);
+    expect(manager.providerBindRevoke('feishu', b.bindingId)).toBe(true);
+    const revoke = sent.filter((message) => message.type === 'provider.bind.revoke').at(-1)!;
+    opts.onMessage(makeProviderBindUpdate({ ...b, state: 'revoked', reason: 'user-revoked', replyTo: revoke.payload.requestId }), () => true);
+    expect(manager.snapshot().feishu.enabled).toBe(true);
+    expect(manager.snapshot().feishu.bindings?.map((row) => row.bindingId)).toEqual([a.bindingId, c.bindingId, d.bindingId]);
+    dispatch('ou_b'); dispatch('ou_user');
+    expect(dispatcher.handleDispatch).toHaveBeenCalledTimes(5);
+    // Delayed confirmations cannot resurrect the binding removed above.
+    opts.onMessage(makeProviderBindUpdate(b), () => true);
+    expect(manager.snapshot().feishu.bindings).toHaveLength(3);
+  });
+});
+
+describe('Feishu multi-account initial state races', () => {
+  it.each(['confirm-before-snapshot', 'revoke-before-snapshot', 'last-revoked'])('merges initial state without restoring revoked identities: %s', (order) => {
+    const dispatcher = stubDispatcher();
+    const { manager, transports } = feishuLaneHarness({ dispatcher }, { feishuEnabled: true });
+    manager.sync(); const opts = transports[0]!;
+    opts.onWelcome?.({ serverName: 'feishu', features: [...FEISHU_FEATURES, HOOK_FEATURE_PROVIDER_MULTI_BIND] });
+    opts.onStatus('connected', null);
+    const a = FEISHU_CONFIRMED;
+    const b = { ...a, bindingId: 'binding-b', principalId: 'ou_b' };
+    if (order === 'confirm-before-snapshot') opts.onMessage(makeProviderBindUpdate(b), () => true);
+    opts.onMessage(makeProviderBindUpdate({ ...a, state: 'revoked', reason: 'user-revoked' }), () => true);
+    expect(manager.snapshot().feishu.enabled).toBe(true);
+    const dispatch = (principal: string) => opts.onMessage(makeTaskDispatch({ requestId: `race-${principal}`,
+      externalKey: `feishu:dm:cli_app:${principal}:g0`, workspace: 'chat', prompt: 'work', source: { im: 'feishu' } }), () => true);
+    dispatch('ou_b');
+    expect(dispatcher.handleDispatch).not.toHaveBeenCalled();
+    opts.onMessage(makeProviderBindState({ ...a, bindings: order === 'revoke-before-snapshot' ? [a, b] : [a] }), () => true);
+    expect(manager.snapshot().feishu.bindings?.map((row) => row.bindingId)).toEqual(order === 'last-revoked' ? [] : [b.bindingId]);
+    expect(manager.snapshot().feishu.binding?.bindingId).toBe(order === 'last-revoked' ? null : b.bindingId);
+    dispatch('ou_user'); dispatch('ou_b');
+    expect(dispatcher.handleDispatch).toHaveBeenCalledTimes(order === 'last-revoked' ? 0 : 1);
+  });
+});
+
+describe('Feishu multi-account queries and settings', () => {
+  it('authorizes either bound query identity and mirrors settings to both bindings', async () => {
+    const { manager, transports, sent } = feishuLaneHarness({}, { feishuEnabled: true });
+    manager.sync(); const opts = transports[0]!;
+    opts.onWelcome?.({ serverName: 'feishu', features: [...FEISHU_FEATURES, HOOK_FEATURE_PROVIDER_MULTI_BIND] });
+    opts.onStatus('connected', null);
+    const a = FEISHU_CONFIRMED; const b = { ...a, bindingId: 'binding-b', principalId: 'ou_b' };
+    opts.onMessage(makeProviderBindState({ ...a, bindings: [a, b] }), () => true);
+    const replies: HookMessage[] = [];
+    for (const principalId of ['ou_user', 'ou_b', 'ou_unknown']) {
+      opts.onMessage(makeQueryRequest({ queryId: principalId, kind: 'workspaces', recipient: { scopeId: 'cli_app', principalId } }),
+        (message) => { replies.push(message); return true; });
+    }
+    await vi.waitFor(() => expect(replies).toHaveLength(3), { interval: 1 });
+    expect(replies).toEqual(expect.arrayContaining([
+      expect.objectContaining({ payload: expect.objectContaining({ queryId: 'ou_user', ok: true }) }),
+      expect.objectContaining({ payload: expect.objectContaining({ queryId: 'ou_b', ok: true }) }),
+      expect.objectContaining({ payload: expect.objectContaining({ queryId: 'ou_unknown', ok: false }) }),
+    ]));
+    const update = manager.setProviderWorkspacePrefs('feishu', 'chat', { model: 'model-a' });
+    for (const row of [a, b]) {
+      await vi.waitFor(() => expect(sent.filter((message) => message.type === 'provider.prefs.set').at(-1)?.payload.bindingId).toBe(row.bindingId), { interval: 1 });
+      const frame = sent.filter((message) => message.type === 'provider.prefs.set').at(-1)!;
+      opts.onMessage(makeProviderPrefsState({ provider: 'feishu', replyTo: frame.payload.requestId,
+        bindingId: row.bindingId, scopeId: null, bound: true, prefs: [{ workspace: 'chat', model: 'model-a', effort: null, agentKind: null, permissionMode: null }] }), () => true);
+    }
+    await expect(update).resolves.toMatchObject({ bindingId: a.bindingId });
   });
 });

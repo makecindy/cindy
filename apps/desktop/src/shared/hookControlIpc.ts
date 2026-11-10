@@ -161,6 +161,9 @@ export interface ProviderHookView {
   /** Telegram 行为设置增量能力；旧 main 快照缺省时按 false。 */
   behaviorAvailable?: boolean;
   binding: ProviderBindingView | null;
+  /** Confirmed Feishu identities; pending attempts remain in binding. */
+  bindings?: ProviderBindingView[];
+  multiBindAvailable?: boolean;
   /**
    * 派发任务时使用的默认工作目录别名(null = 内置「对话」伪目录)。
    *

@@ -486,3 +486,24 @@ it('persists X companion assignment only for the current account', () => {
   store.setXCompanionBotId(null);
   expect(makeStore(undefined, () => owner).get().xCompanionBotId).toBeNull();
 });
+
+// Test value: credential-free identities must survive restart under their Cindy owner;
+// the old singular-cache coverage cannot detect a missing second identity. Minimal input:
+// two Feishu binding rows, reload, then another Cindy account. Tier: unit/temp files.
+it('persists multiple Feishu identities and isolates their cache by Cindy account', () => {
+  let account = 'account-one';
+  const store = makeStore(undefined, () => account);
+  const rows = ['a', 'b'].map((id) => ({ bindingId: id, principalId: `ou_${id}`, principalName: id,
+    scopeId: 'cli_app', scopeName: 'Cindy' }));
+  store.setFeishuBindingsCache(rows);
+  expect(makeStore(undefined, () => account).get().feishuBindingsCache).toEqual(rows);
+  account = 'account-two';
+  expect(store.get().feishuBindingsCache ?? []).toEqual([]);
+  account = 'account-one';
+  expect(store.get().feishuBindingsCache).toEqual(rows);
+  // A downgrade to a single-binding server must not restore the retired second row.
+  store.setProviderBindingCache('feishu', rows[0]!);
+  const restored = makeStore(undefined, () => account).get();
+  expect(restored.feishuBindingCache).toEqual(rows[0]);
+  expect(restored.feishuBindingsCache).toBeUndefined();
+});

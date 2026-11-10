@@ -26,6 +26,7 @@ import {
   HOOK_FEATURE_MULTI_TEAM,
   HOOK_FEATURE_SESSION_RESULT,
   HOOK_FEATURE_PROVIDER_BIND,
+  HOOK_FEATURE_PROVIDER_MULTI_BIND,
   HOOK_FEATURE_PROVIDER_BEHAVIOR,
   HOOK_FEATURE_PROVIDER_FEISHU,
   HOOK_FEATURE_PROVIDER_PREFS,
@@ -309,8 +310,8 @@ export interface HookControlManager {
   setProviderEnabled(provider: HookProvider, enabled: boolean): void;
   providerBindStart(provider: NeutralHookProvider): boolean;
   providerBindCancel(provider: NeutralHookProvider): boolean;
-  providerBindRevoke(provider: NeutralHookProvider): boolean;
-  providerBindSelect(provider: NeutralHookProvider): Promise<void>;
+  providerBindRevoke(provider: NeutralHookProvider, bindingId?: string): boolean;
+  providerBindSelect(provider: NeutralHookProvider, bindingId?: string): Promise<void>;
   /** 在本机安全打开 provider 的绑定链接 / bot 主页 / 加群链接(main 边界校验)。 */
   openProviderAction(
     provider: NeutralHookProvider,
@@ -561,6 +562,9 @@ interface NeutralProviderLane {
   lastError: string | null;
   /** Provider-neutral state; confirmed cache survives provider disable/restart. */
   binding: ProviderBindingView | null;
+  confirmedBindings: ProviderBindingView[];
+  revokedBindingIds: Set<string>;
+  snapshotChanges: Map<string, ProviderBindingView>;
   /** Toggle-on waits for welcome + authoritative state before starting a new attempt. */
   autoBindIntent: boolean;
   /** Only a locally initiated attempt may automatically open the provider once. */
@@ -833,7 +837,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
     requiredFeatures: feishuProviderFeatures,
     // 与 Telegram 相同: 服务端按 hello.features 判定 provider 协商结果, 客户端
     // 要求的基础能力必须全部自报。
-    helloFeatures: feishuProviderFeatures,
+    helloFeatures: [...feishuProviderFeatures, HOOK_FEATURE_PROVIDER_MULTI_BIND],
     isEnabled: () => store.get().feishuEnabled,
     setEnabled: (enabled) => {
       store.setProviderEnabled('feishu', enabled);
@@ -901,6 +905,9 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
       status: null,
       lastError: null,
       binding: config.restoreCachedBinding(),
+      confirmedBindings: [],
+      revokedBindingIds: new Set(),
+      snapshotChanges: new Map(),
       autoBindIntent: false,
       openRequestId: null,
       bindRequest: null,
@@ -917,6 +924,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
   const telegramLane = createNeutralLane(telegramConfig);
   const xLane = createNeutralLane(xConfig);
   const feishuLane = createNeutralLane(feishuConfig);
+  restoreFeishuBindings();
   /** 全部 provider-neutral 线; 遍历顺序即启动 / hello 重发顺序。 */
   const lanes: readonly NeutralProviderLane[] = [telegramLane, xLane, feishuLane];
   // key 收窄到 NeutralHookProvider: 'slack' 走 legacy 线, 在编译期就挡在本表外
@@ -1033,7 +1041,13 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
     trackAccountOp(sweepGroupWindowExpired());
     dispatcher?.activateAccount();
     multiBindings = store.get().bindingsCache.map((entry) => ({ ...entry, displaced: false }));
-    for (const lane of lanes) lane.binding = lane.config.restoreCachedBinding();
+    for (const lane of lanes) {
+      lane.binding = lane.config.restoreCachedBinding();
+      lane.confirmedBindings = [];
+      lane.revokedBindingIds.clear();
+      lane.snapshotChanges.clear();
+    }
+    restoreFeishuBindings();
     startEnabledProviders();
     notifyStatus(toView());
   }
@@ -1172,9 +1186,10 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
   function sendLanePrefsRequest(
     lane: NeutralProviderLane,
     build: (requestId: string, bindingId: string) => HookMessage,
+    selectedBindingId?: string,
   ): Promise<ProviderPrefsView> {
     const t = lane.transport;
-    const bindingId = lane.binding?.state === 'confirmed' ? lane.binding.bindingId : null;
+    const bindingId = confirmedLaneBindings(lane).find((row) => selectedBindingId === undefined || row.bindingId === selectedBindingId)?.bindingId ?? null;
     if (
       t === null ||
       lane.status !== 'connected' ||
@@ -1365,6 +1380,36 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
     };
   }
 
+  function multiBindReady(lane: NeutralProviderLane): boolean {
+    return lane.config.provider === 'feishu' && lane.serverFeatures.includes(HOOK_FEATURE_PROVIDER_MULTI_BIND);
+  }
+
+  function confirmedLaneBindings(lane: NeutralProviderLane): ProviderBindingView[] {
+    return multiBindReady(lane) ? lane.confirmedBindings : lane.binding?.state === 'confirmed' ? [lane.binding] : [];
+  }
+
+  function restoreFeishuBindings(): void {
+    const base = feishuConfig.restoreCachedBinding();
+    const saved = store.get();
+    const entries = saved.feishuBindingsCache ?? (saved.feishuBindingCache ? [saved.feishuBindingCache] : []);
+    feishuLane.confirmedBindings = base === null ? [] : entries.map((row) => ({
+      ...base, ...row, state: 'confirmed' as const,
+      remediationUrl: feishuBotUrlOrNull(base.remediationUrl, row.scopeId),
+    }));
+  }
+
+  function persistFeishuBindings(lane: NeutralProviderLane): void {
+    try {
+      store.setFeishuBindingsCache(lane.confirmedBindings.flatMap((row) =>
+        row.bindingId && row.principalId && row.scopeId && row.scopeName ? [{
+          bindingId: row.bindingId, principalId: row.principalId, principalName: row.principalName,
+          scopeId: row.scopeId, scopeName: row.scopeName,
+        }] : []));
+    } catch (error) {
+      log.warn(`persist Feishu binding list failed (${error instanceof Error ? error.name : 'unknown'})`);
+    }
+  }
+
   /** 本线的 IPC 视图切片(形状与历史 SlackHookView.telegram 字段完全一致)。 */
   function laneView(lane: NeutralProviderLane): ProviderHookView {
     const enabled = lane.config.isEnabled();
@@ -1383,6 +1428,10 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
             : null,
       available: laneCapabilityReady(lane),
       capabilityPending: enabled && url.length > 0 && !lane.serverWelcomeReceived,
+      ...(lane.config.provider === 'feishu' ? {
+        bindings: lane.confirmedBindings.map((row) => ({ ...row, actions: row.actions.filter((action) => action !== 'select_device' || selectionReady) })),
+        multiBindAvailable: multiBindReady(lane),
+      } : {}),
       behaviorAvailable:
         lane.config.provider === 'telegram' &&
         lane.serverFeatures.includes(HOOK_FEATURE_PROVIDER_BEHAVIOR),
@@ -1623,7 +1672,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
         return false;
       }
       return (
-        lane.binding?.bindingId === request.bindingId && payload.bindingId === request.bindingId
+        confirmedLaneBindings(lane).some((row) => row.bindingId === request.bindingId) && payload.bindingId === request.bindingId
       );
     }
 
@@ -1634,6 +1683,13 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
     }
 
     const current = lane.binding;
+    if (multiBindReady(lane)) {
+      if (isStateSnapshot) return false; // Only the initial authoritative snapshot may replace the list.
+      if (payload.state === 'confirmed') return !lane.revokedBindingIds.has(payload.bindingId!);
+      if (payload.state === 'revoked' || payload.state === 'superseded') {
+        return lane.awaitingStateSnapshot || lane.confirmedBindings.some((row) => row.bindingId === payload.bindingId);
+      }
+    }
     if (current === null) {
       return (
         payload.state === 'none' ||
@@ -1672,14 +1728,14 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
       lane.transport === null ||
       lane.status !== 'connected' ||
       !laneCapabilityReady(lane) ||
-      !lane.config.isEnabled()
+      !lane.config.isEnabled() || (multiBindReady(lane) && lane.awaitingStateSnapshot)
     ) {
       return false;
     }
     // Pending/awaiting flows deliberately allow an explicit retry so a stale
-    // one-time link can be superseded. A durable confirmed binding must never
-    // be replaced by a duplicate/stale renderer invocation.
-    if (lane.binding?.state === 'confirmed') return false;
+    // one-time link can be superseded. A confirmed binding blocks duplicate
+    // single-account starts; negotiated Feishu starts explicitly add an identity.
+    if (lane.binding?.state === 'confirmed' && !multiBindReady(lane)) return false;
     const requestId = randomUUID();
     if (
       !lane.transport.send(makeProviderBindStart({ requestId, provider: lane.config.provider }))
@@ -1767,10 +1823,51 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
     }
     // An update accepted after welcome is newer than the still-in-flight
     // initial snapshot; do not let that older snapshot roll it back.
-    if (!isStateSnapshot) lane.awaitingStateSnapshot = false;
+    if (!isStateSnapshot && !multiBindReady(lane)) lane.awaitingStateSnapshot = false;
     const previousBindingId = lane.binding?.state === 'confirmed' ? lane.binding.bindingId : null;
     const view = providerBindingView(lane.config.provider, acceptedPayload);
-    lane.binding = view;
+    if (lane.config.provider === 'feishu') {
+      if (multiBindReady(lane)) {
+        if (isStateSnapshot) {
+          lane.revokedBindingIds.clear();
+          lane.confirmedBindings = (acceptedPayload.bindings ?? (view.state === 'confirmed' ? [acceptedPayload] : []))
+            .map((row) => providerBindingView('feishu', lane.config.normalizeBindingPayload?.(row) ?? row));
+          for (const [id, change] of lane.snapshotChanges) {
+            lane.confirmedBindings = lane.confirmedBindings.filter((row) => row.bindingId !== id);
+            if (change.state === 'confirmed') lane.confirmedBindings.push(change);
+            else lane.revokedBindingIds.add(id);
+          }
+          lane.snapshotChanges.clear();
+        } else if (view.state === 'confirmed' && view.bindingId) {
+          const index = lane.confirmedBindings.findIndex((row) => row.bindingId === view.bindingId);
+          if (index < 0) lane.confirmedBindings.push(view);
+          else lane.confirmedBindings[index] = view;
+        } else if ((view.state === 'revoked' || view.state === 'superseded') && view.bindingId) {
+          lane.revokedBindingIds.add(view.bindingId);
+          lane.confirmedBindings = lane.confirmedBindings.filter((row) => row.bindingId !== view.bindingId);
+        }
+      } else {
+        lane.confirmedBindings = view.state === 'confirmed' ? [view] : [];
+      }
+    }
+    if (multiBindReady(lane) && !isStateSnapshot && lane.awaitingStateSnapshot && view.bindingId) {
+      lane.snapshotChanges.set(view.bindingId, view);
+    }
+    const previous = lane.binding;
+    if (multiBindReady(lane) && !isStateSnapshot && previous?.attemptId
+      && (view.state === 'confirmed' || view.state === 'revoked' || view.state === 'superseded')
+      && acceptedPayload.completedAttemptId !== previous.attemptId) {
+      persistFeishuBindings(lane);
+      if (view.state === 'confirmed') onHookReadyForPrefsMirror?.('feishu');
+      notifyStatus(toView());
+      return;
+    }
+    lane.binding = multiBindReady(lane) && (view.state === 'revoked' || view.state === 'superseded')
+      ? (previous?.attemptId ? previous : lane.confirmedBindings[0] ?? view) : view;
+    if (multiBindReady(lane) && isStateSnapshot && !previous?.attemptId) {
+      lane.binding = lane.confirmedBindings[0] ?? { ...view, state: 'none', bindingId: null,
+        principalId: null, principalName: null, actions: [] };
+    }
     const currentBindingId = view.state === 'confirmed' ? view.bindingId : null;
     if (previousBindingId !== null && previousBindingId !== currentBindingId) {
       // Binding identity is the prefs isolation key. Fail every old request
@@ -1782,7 +1879,10 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
         resetGroupContextCursorsSafely();
       }
     }
-    persistLaneBinding(lane, view);
+    if (multiBindReady(lane)) {
+      persistFeishuBindings(lane);
+      if (view.state === 'confirmed') onHookReadyForPrefsMirror?.('feishu');
+    } else persistLaneBinding(lane, view);
     if (
       (view.state === 'pending' || view.state === 'awaiting_confirmation') &&
       view.expiresAt !== null
@@ -1821,6 +1921,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
     if (
       lane.autoBindIntent &&
       view.state === 'none' &&
+      !(multiBindReady(lane) && lane.confirmedBindings.length > 0) &&
       lane.config.isEnabled()
     ) {
       if (initiateProviderBind(lane)) lane.autoBindIntent = false;
@@ -1831,7 +1932,9 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
     // Wait for authoritative truth, never close immediately after sending revoke.
     // Persist the disabled intent so sync/restart cannot reopen an unlinked lane.
     if (
-      view.state === 'revoked' || view.state === 'superseded' || view.state === 'none'
+      (view.state === 'revoked' || view.state === 'superseded' || view.state === 'none'
+        || (multiBindReady(lane) && lane.binding?.state === 'none'))
+      && !(multiBindReady(lane) && (lane.confirmedBindings.length > 0 || lane.awaitingStateSnapshot))
     ) {
       lane.config.setEnabled(false);
       stopLane(lane);
@@ -2402,8 +2505,8 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
       if (pending === null || msg.payload.requestId !== pending.requestId || msg.payload.bindingId !== pending.bindingId) return;
       lane.pendingSelection = null;
       clearTimeout(pending.timer);
-      if (msg.payload.ok && lane.binding?.state === 'confirmed' && lane.binding.bindingId === pending.bindingId
-        && lane.binding.scopeId === pending.scopeId) pending.resolve();
+      if (msg.payload.ok && confirmedLaneBindings(lane).some((row) => row.bindingId === pending.bindingId
+        && row.scopeId === pending.scopeId)) pending.resolve();
       else pending.reject(new Error('Working computer selection failed'));
       return;
     }
@@ -2441,8 +2544,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
           log.warn('provider prefs state bindingId mismatch, dropped');
           return;
         }
-        const currentBindingId =
-          lane.binding?.state === 'confirmed' ? lane.binding.bindingId : null;
+        const currentBindingId = confirmedLaneBindings(lane).find((row) => row.bindingId === pending.bindingId)?.bindingId ?? null;
         if (msg.payload.bindingId !== currentBindingId) {
           lane.pendingPrefs.delete(msg.payload.replyTo);
           clearTimeout(pending.timer);
@@ -2455,7 +2557,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
         pending.resolve(view);
         return;
       }
-      const currentBindingId = lane.binding?.state === 'confirmed' ? lane.binding.bindingId : null;
+      const currentBindingId = confirmedLaneBindings(lane).find((row) => row.bindingId === msg.payload.bindingId)?.bindingId ?? null;
       if (msg.payload.bindingId !== currentBindingId) {
         log.warn('stale provider prefs push for a different binding, dropped');
         return;
@@ -2614,7 +2716,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
       // 一致才回答(同 task.dispatch 的绑定核对), 否则不交出本机的工作目录与模型清单。
       if (expectedProvider === 'feishu') {
         const recipient = msg.payload.recipient;
-        const binding = lane?.binding;
+        const binding = lane && recipient ? confirmedLaneBindings(lane).find((row) => row.scopeId === recipient.scopeId && row.principalId === recipient.principalId) : null;
         if (
           recipient === undefined ||
           lane === null ||
@@ -2754,9 +2856,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
         (feishuLane === null ||
           lane === null ||
           lane.awaitingStateSnapshot ||
-          lane.binding?.state !== 'confirmed' ||
-          lane.binding.scopeId !== feishuLane.appId ||
-          lane.binding.principalId !== feishuLane.openId);
+          !confirmedLaneBindings(lane).some((row) => row.scopeId === feishuLane.appId && row.principalId === feishuLane.openId));
       // 接收日志: 复用已有会话的派发在 dispatcher 里是静默路径(只有新建才留
       // worktree 痕迹), 没有这条就无法区分「没收到」和「静默复用」。lane
       // key 含 IM 用户/聊天标识，不写日志。
@@ -2994,6 +3094,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
         lane.serverWelcomeReceived = true;
         const supported = laneCapabilityReady(lane);
         lane.awaitingStateSnapshot = supported;
+        lane.snapshotChanges.clear();
         if (!supported) {
           // A rolling deployment may briefly route this enabled client to an
           // older node. Preserve the user's explicit preference and keep the
@@ -3390,13 +3491,14 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
       }
       return sent;
     },
-    providerBindRevoke(provider) {
+    providerBindRevoke(provider, selectedBindingId) {
       const lane = laneByProvider.get(provider);
       if (lane === undefined) return false;
-      const bindingId = lane.binding?.state === 'confirmed' ? lane.binding.bindingId : null;
+      const selected = confirmedLaneBindings(lane).find((row) => selectedBindingId === undefined || row.bindingId === selectedBindingId);
+      const bindingId = selected?.bindingId ?? null;
       if (
         !bindingId ||
-        !lane.binding?.actions.includes('revoke') ||
+        !selected?.actions.includes('revoke') ||
         lane.transport === null ||
         lane.status !== 'connected' ||
         !laneCapabilityReady(lane)
@@ -3414,9 +3516,9 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
       }
       return sent;
     },
-    async providerBindSelect(provider) {
+    async providerBindSelect(provider, selectedBindingId) {
       const lane = laneByProvider.get(provider);
-      const binding = lane?.binding;
+      const binding = lane ? confirmedLaneBindings(lane).find((row) => selectedBindingId === undefined || row.bindingId === selectedBindingId) : null;
       if (provider !== 'feishu' || !lane || !accountActive || disposed || lane.status !== 'connected'
         || !lane.config.isEnabled() || !laneCapabilityReady(lane) || lane.awaitingStateSnapshot || lane.bindRequest?.kind === 'revoke'
         || lane.transport === null || binding?.state !== 'confirmed' || !binding.bindingId
@@ -3460,10 +3562,14 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
         }),
       );
     },
-    setProviderWorkspacePrefs(provider, workspace, patch) {
+    async setProviderWorkspacePrefs(provider, workspace, patch) {
       const lane = laneByProvider.get(provider);
       if (lane === undefined) return Promise.reject(new HookNotConnectedError(provider));
-      return sendLanePrefsRequest(lane, (requestId, bindingId) =>
+      const targets = confirmedLaneBindings(lane).map((row) => row.bindingId!);
+      if (targets.length === 0) throw new HookNotConnectedError(provider);
+      let first: ProviderPrefsView | undefined;
+      for (const target of targets) {
+        const result = await sendLanePrefsRequest(lane, (requestId, bindingId) =>
         makeProviderPrefsSet({
           requestId,
           provider,
@@ -3474,8 +3580,10 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
           ...(patch.effort !== undefined ? { effort: patch.effort } : {}),
           ...(patch.agentKind !== undefined ? { agentKind: patch.agentKind } : {}),
           ...(patch.permissionMode !== undefined ? { permissionMode: patch.permissionMode } : {}),
-        }),
-      );
+        }), target);
+        first ??= result;
+      }
+      return first!;
     },
     getTelegramBehavior(bindingId) {
       return sendTelegramBehaviorRequest(bindingId, (requestId, currentBindingId) =>
@@ -3553,6 +3661,9 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
         serverWelcomeReceived = false;
         for (const lane of lanes) {
           lane.binding = null;
+          lane.confirmedBindings = [];
+          lane.revokedBindingIds.clear();
+          lane.snapshotChanges.clear();
           lane.serverFeatures = [];
           lane.serverWelcomeReceived = false;
         }

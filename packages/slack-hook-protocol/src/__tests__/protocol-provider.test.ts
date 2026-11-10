@@ -529,3 +529,22 @@ describe('working computer selection', () => {
     expectReject({ ...makeProviderBindSelection({ ...payload, ok: true }), payload: { ...payload, ok: 'true' } }, 'ok');
   });
 });
+
+// Multi-account authorization depends on an unambiguous complete identity list.
+// Two confirmed Feishu rows are the minimal new wire input; existing tests cover only
+// one row. Duplicate principals, cross-app rows and nesting must be rejected. Tier: unit.
+describe('Feishu multi-bind snapshots', () => {
+  it('round-trips multiple identities and rejects ambiguous or nested lists', () => {
+    const a = { ...CONFIRMED, provider: 'feishu', scopeId: 'cli_app' };
+    const b = { ...a, bindingId: 'binding-b', principalId: 'ou_b' };
+    roundTrip(makeProviderBindState({ ...a, bindings: [a, b] }));
+    for (const bindings of [[a, a], [a, { ...b, principalId: a.principalId }],
+      [a, { ...b, scopeId: 'cli_other' }], [a, { ...b, bindings: [a] }]]) {
+      expectReject(makeProviderBindState({ ...a, bindings }), 'bindings');
+    }
+    expectReject(makeProviderBindUpdate({ ...a, bindings: [a] }), 'bindings');
+    expectReject(makeProviderBindState({ ...a, bindings: [] }), 'bindings');
+    roundTrip(makeProviderBindUpdate({ ...a, completedAttemptId: 'add-account-attempt' }));
+    expectReject(makeProviderBindUpdate({ ...PENDING, completedAttemptId: 'not-complete' }), 'completedAttemptId');
+  });
+});

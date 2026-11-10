@@ -2461,3 +2461,29 @@ describe('HookConnectionsSection binding actions (Telegram / X / Feishu)', () =>
     expect(dialog.confirm).not.toHaveBeenCalled();
   });
 });
+
+// Test value: render the actual settings entry; two account rows must route unlink
+// and working-device selection by binding id. Existing UI cases only have one row.
+// Minimal failure: two confirmed identities on one Feishu card. Tier: unit/jsdom.
+it('adds another Feishu account and applies per-account actions without unlinking the other account', async () => {
+  const account = (bindingId: string, name: string) => ({ provider: 'feishu' as const, state: 'confirmed' as const,
+    bindingId, principalId: `ou_${bindingId}`, principalName: name, attemptId: null, scopeId: 'cli_app', scopeName: 'Cindy',
+    connectUrl: null, bindCode: null, expiresAt: null, reason: null, remediationUrl: null, actions: ['revoke', 'select_device'] });
+  const a = account('a', 'Account A'); const b = account('b', 'Account B');
+  const hook: SlackHookView = { ...BASE_HOOK, feishu: { ...BASE_HOOK.feishu, enabled: true, available: true,
+    status: 'connected', url: 'wss://feishu.example.test', binding: a, bindings: [a, b], multiBindAvailable: true } };
+  ipc.get.mockResolvedValue({ hook });
+  ipc.providerBindSelect.mockResolvedValue({ hook });
+  ipc.providerBindStart.mockResolvedValue({ hook });
+  ipc.providerBindRevoke.mockResolvedValue({ hook: { ...hook, feishu: { ...hook.feishu, bindings: [a] } } });
+  render(<HookConnectionsSection />); await expandChannelCard(FEISHU_CARD);
+  const row = within(await screen.findByRole('group', { name: 'Account B' }));
+  fireEvent.click(row.getByRole('button', { name: 'settings.remoteControl.hook.feishu.setWorkingDevice' }));
+  await waitFor(() => expect(ipc.providerBindSelect).toHaveBeenCalledWith('feishu', 'b'));
+  fireEvent.click(screen.getByRole('button', { name: 'settings.remoteControl.hook.feishu.addAccount' }));
+  await waitFor(() => expect(ipc.providerBindStart).toHaveBeenCalledWith('feishu'));
+  fireEvent.click(row.getByRole('button', { name: 'settings.remoteControl.hook.feishu.unlink' }));
+  await waitFor(() => expect(ipc.providerBindRevoke).toHaveBeenCalledWith('feishu', 'b'));
+  await waitFor(() => expect(screen.queryByRole('group', { name: 'Account B' })).toBeNull());
+  expect(screen.getByRole('group', { name: 'Account A' })).toBeTruthy();
+});

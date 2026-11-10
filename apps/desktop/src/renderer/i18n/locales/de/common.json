@@ -6465,7 +6465,9 @@
             "hint": "Oder sende diesen Code in Feishu / Lark per Direktnachricht an den Cindy-Bot"
           },
           "setWorkingDevice": "Als Arbeitscomputer festlegen",
-          "workingDeviceSet": "Arbeitscomputer festgelegt"
+          "workingDeviceSet": "Arbeitscomputer festgelegt",
+          "addAccount": "Weiteres Konto verknüpfen",
+          "linkedAccounts": "Verknüpfte Konten: {{count}}"
         }
       },
       "summary": {

@@ -246,6 +246,23 @@ Desktop 与 Mobile 明确标注估算和排除项。旧端忽略可选字段，�
 回调（`onHookReadyForPrefsMirror`）按客户端支持集收窄。没有服务端部署、数据库、环境变量、
 Device Link 或自建中转变化；协议包改动会触发服务端全部服务的 CI。
 
+### 自建飞书应用多身份绑定（2026-11-10，未发布）
+
+两仓协议追加可选 `provider-multi-bind-v1`；服务端只对当前自建应用协商，不对商店应用开放。
+`provider.bind.state.bindings` 为同一应用内全部 confirmed 状态，校验唯一 bindingId / principalId，拒绝嵌套；
+旧字段保留最早的绑定。追加确认的 `completedAttemptId` 只结束匹配尝试；其它 confirmed/revoked 事件只修改对应身份。
+客户端等待本次连接的权威快照后才按列表授权 task.dispatch 与 query.request；初始快照与实时更新交错时合并变更。
+新增、取消或失败不清除已有身份，单独解绑不影响其它账号的任务、偏好或工作电脑选择。
+
+Main 的账号分区配置可选保存飞书 bindingsCache 数组，兼容读取原 singular bindingCache，不保存任何 provider token。
+设置页逐账号解绑、选择工作电脑；既有 revoke/select IPC 可选追加 bindingId，主进程与服务端都核对本机归属。
+全局默认目录/模型偏好沿原 mirror 流程逐绑定同步，不新增轮询、第三方凭证、Device Link 帧或远控 allowlist。
+手机没有官方飞书设置入口；任务执行共用宿主，官方与自建中转继续透传既有任务协议，无需更新中转。
+
+旧服务端不协商新能力，新客户端保持单绑定；旧客户端连接新服务端只收到最早绑定，其它身份的任务不投递给旧端。
+先发布服务端追加 migration 并完成全部副本升级，再发客户端和开放追加关联；已产生多身份后不可回退旧服务端。
+服务端 migration 与运行态部署核验在 server 仓维护，不能把本地检查作为已部署证据。
+
 ## 群内能力提示（非执行终态）
 
 复用现有通用 card 消息合同，新增 `cindy.capability-notice` / `schemaRevision: 1`：data 只带固定 code（`GROUP_AUTHORIZATION_REQUIRED`、`GROUP_AUTHORIZATION_UNAVAILABLE`、`ATTACHMENTS_UNAVAILABLE`），fallback 为执行电脑本地化的完整可读提示。以伙伴 actor 发往原主群或话题；同执行 ID、epoch、类别复用同一稳定幂等 ID，并按既有消息 POST 合同放入 `operationId`（不发送本地 `clientId` 字段）；投递重试不创建执行、不结算模型轮次。

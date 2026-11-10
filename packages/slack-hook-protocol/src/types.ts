@@ -958,6 +958,10 @@ export interface ProviderBindStatusPayload {
   /** Optional safe recovery/provider URL interpreted by the host application. */
   remediationUrl: string | null;
   actions: ProviderBindAction[];
+  /** Negotiated Feishu multi-bind snapshot; omitted by legacy peers. Rows are confirmed bindings. */
+  bindings?: ProviderBindStatusPayload[];
+  /** Matches a completed additive attempt without disturbing another attempt. */
+  completedAttemptId?: string;
 }
 
 export type ProviderBindUpdatePayload = ProviderBindStatusPayload;
@@ -1389,6 +1393,8 @@ export const HOOK_FEATURE_MULTI_TEAM = 'multi-team';
 
 /** Both peers must advertise this before using provider.bind.* frames. */
 export const HOOK_FEATURE_PROVIDER_BIND = 'provider-bind-v1';
+/** Multiple Feishu identities on one desktop; both peers must advertise it. */
+export const HOOK_FEATURE_PROVIDER_MULTI_BIND = 'provider-multi-bind-v1';
 
 /** Both peers must advertise this before using provider.prefs.* frames. */
 export const HOOK_FEATURE_PROVIDER_PREFS = 'provider-prefs-v1';

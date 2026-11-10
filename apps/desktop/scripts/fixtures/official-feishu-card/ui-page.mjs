@@ -19,6 +19,8 @@ export default {
     `,
   },
   cases: {
+    multi: { about: 'Multiple identities share one computer with per-account unlink and working-device selection', data: { kind: 'multi' } },
+    'multi-pending': { about: 'Additive linking preserves existing account rows', data: { kind: 'multi-pending' } },
     default: {
       about: 'Pending bind: authorize-page actions plus the one-time link code with copy',
       data: { kind: 'pending' },
@@ -51,6 +53,10 @@ export default {
       const row = page.locator('#cindy-im-feishu');
       assert.equal(await row.getByRole('status').textContent(), await ui.t('settings.remoteControl.hook.feishu.status.none'));
       assert.ok(await card.getByRole('button', { name: await ui.t('settings.remoteControl.hook.feishu.retry'), exact: true }).isVisible());
+    }
+    if (ui.data.kind === 'multi' || ui.data.kind === 'multi-pending') {
+      assert.equal(await card.getByRole('group').count(), 4);
+      assert.ok(await card.getByText('合作伙伴账号', { exact: true }).isVisible());
     }
     if (ui.data.kind === 'confirmed') {
       assert.ok(await card.getByRole('button', { name: await ui.t('settings.remoteControl.hook.feishu.setWorkingDevice'), exact: true }).isVisible());

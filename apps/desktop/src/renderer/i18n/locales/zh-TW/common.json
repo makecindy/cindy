@@ -6422,7 +6422,9 @@
             "hint": "或者在飛書裡把關聯碼私訊傳給 Cindy 機器人"
           },
           "setWorkingDevice": "設為工作電腦",
-          "workingDeviceSet": "已設為工作電腦"
+          "workingDeviceSet": "已設為工作電腦",
+          "addAccount": "關聯其他飛書帳號",
+          "linkedAccounts": "已關聯帳號：{{count}} 個"
         }
       },
       "summary": {

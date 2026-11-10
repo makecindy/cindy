@@ -6422,7 +6422,9 @@
             "hint": "或者在飞书里把关联码私聊发给 Cindy 机器人"
           },
           "setWorkingDevice": "设为工作电脑",
-          "workingDeviceSet": "已设为工作电脑"
+          "workingDeviceSet": "已设为工作电脑",
+          "addAccount": "关联其他飞书账号",
+          "linkedAccounts": "已关联账号：{{count}} 个"
         }
       },
       "summary": {
