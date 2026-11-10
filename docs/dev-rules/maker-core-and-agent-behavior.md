@@ -673,7 +673,8 @@ sessionRunningRetry 就停。每次因 replacement 关闭而重新入队都计�
   判断规则的不变量写在 `background-command-kind.ts` 文件头，新增写法前先对照：只有命令自己的前台
   部分永远不结束才算服务；`;` `&&` 顺序执行、`|` 管道、单个 `&` 的后台作业（除非有 `wait`）
   按各自的存活语义；只看真正执行的程序与子命令（选项取值、`install` 类子命令不是脚本名）；
-  看不懂的结构不猜，按工作。
+  看不懂的结构不猜，按工作；不认识的外层命令（`nice`、`timeout`）也不让内层参数越过它决定结果。
+  有意不处理的写法（子 shell、`$(…)`、控制流、`xargs`、别名、表外程序）按工作，范围写在该文件头。
 - **只改展示**：回合结束而仍有 `work` 命令在跑时，Desktop 主进程广播
   `maker:session-background-work-changed`，任务列表、折叠栏、系统角标与伙伴任务入口经
   `useSessionDisplayRunningState` 显示为运行中；任务内状态栏写「正在后台工作」，只剩 `service`

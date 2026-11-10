@@ -19,7 +19,12 @@
  *     的安装发布类子命令不是脚本名；`2>&1`、`&>` 里的 `&` 不是命令分隔符。
  *  4. 单一判断入口：splitCommandSegments 拆段，isLongLivedCommand 汇总，isLongLivedSegment
  *     判单段；shell -c 递归复用同一套，不另写第二份。
- *  5. 看不懂的结构（子 shell、`$(…)`、控制流）不猜，按 work。
+ *  5. 看不懂的结构（子 shell、`$(…)`、控制流）不猜，按 work。外层命令不认识（`nice`、`ionice`、
+ *     `timeout` 等）同理：不让内层参数（`--watch`）越过它直接决定结果。
+ *
+ * 范围（有意不处理，按 work）：子 shell / 命令组 / `$(…)`、`while`/`for` 等控制流、`xargs`、
+ * shell 别名与函数、不在下面各表里的程序。这些写法启动的服务会多亮一段时间（最多到 SDK 的后台
+ * 命令超时），不会让工作被误显示为已结束。新增判断必须是某条不变量的缺口，不为单个写法加特例。
  */
 export type BackgroundCommandKind = 'work' | 'service';
 
@@ -48,6 +53,12 @@ const VALUE_OPTIONS = new Set([
   '--registry', '--loglevel', '--reporter', '--config', '--userconfig', '--cache', '--tag',
 ]);
 const LONG_LIVED_SCRIPT_WORDS = new Set(['dev', 'start', 'serve', 'watch', 'preview', 'storybook']);
+
+/** 带监听模式的工具：参数里有 `--watch` 才算长驻。 */
+const WATCH_CAPABLE_HEADS = new Set([
+  'vitest', 'jest', 'tsc', 'tsx', 'mocha', 'ava', 'karma', 'webpack', 'rollup', 'esbuild', 'tsup',
+  'parcel', 'sass', 'tailwindcss',
+]);
 
 /** 启动即长驻的程序。 */
 const SERVICE_HEADS = new Set([
@@ -201,7 +212,9 @@ function isLongLivedSegment(rawTokens: string[], depth: number): boolean {
   const args = tokens.slice(1).map((token) => unquote(token).toLowerCase());
   const positional = args.filter((arg) => !arg.startsWith('-'));
 
-  if (args.some(isWatchFlag)) return true;
+  // `--watch` 只对认得的程序生效（带监听模式的工具、包管理器转发给脚本的参数）。不认识的外层命令
+  // （`timeout -k 5s 60s pnpm vitest --watch`、`nice`…）不让内层参数直接决定结果，按工作。
+  if (WATCH_CAPABLE_HEADS.has(head) && args.some(isWatchFlag)) return true;
 
   if (SHELL_HEADS.has(head)) {
     const scriptIndex = tokens.findIndex((token, index) => index > 0 && /^-[a-z]*c$/.test(token));
@@ -219,6 +232,8 @@ function isLongLivedSegment(rawTokens: string[], depth: number): boolean {
       return isLongLivedSegment(rest, depth + 1);
     }
     if (PACKAGE_ADMIN_SUBCOMMANDS.has(parsed.subcommand)) return false;
+    // 包管理器会把参数转给脚本（`pnpm test --watch`、`npm test -- --watch`）。
+    if (args.some(isWatchFlag)) return true;
     // `yarn workspace web dev`：子命令后先跟工作区名，脚本名在其后。
     const scriptName = SCRIPT_RUN_SUBCOMMANDS.has(parsed.subcommand)
       ? parsed.positionals[1]
