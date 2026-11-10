@@ -12,12 +12,37 @@ export default {
     'narrow-weight': { about: '320-pixel content width with task limit, weight, assignment and account menu controls' },
     codex: { about: 'Codex accounts and weight strategy' },
     error: { about: 'Unavailable status read and inline retry on focus' },
+    'provider-auth': { about: 'Codex provider-managed authentication explains the independent-account recovery action' },
+    'provider-auth-preview': { about: 'Provider-managed authentication offers a separate account directory at 320px', viewport: { width: 320, height: 600 } },
+    empty: { about: 'Nothing signed in: no placeholder account, strategy or count, only Add account' },
   },
   async check(page, ui) {
+    if (ui.case === 'provider-auth-preview') {
+      await page.getByText(await ui.t('subscriptionAccounts.providerManagedAuth'), { exact: true }).waitFor();
+      await page.getByRole('button', { name: await ui.t('subscriptionAccounts.signIn.anotherAccount'), exact: true }).waitFor();
+      assert.equal(await page.getByRole('button', { name: await ui.t('subscriptionAccounts.signIn.useCodex'), exact: true }).count(), 0);
+      assert.equal(await page.locator('main').evaluate(element => element.scrollWidth <= element.clientWidth), true);
+      await ui.capture('provider-auth-preview');
+      return;
+    }
     await page.getByTestId('subscription-accounts').waitFor();
     assert.equal(await page.locator('main').evaluate(element => element.scrollWidth <= element.clientWidth), true);
+    if (ui.case === 'provider-auth') {
+      await page.getByRole('button', { name: await ui.t('subscriptionAccounts.add'), exact: true }).click();
+      await page.getByText(await ui.t('subscriptionAccounts.providerManagedAuth'), { exact: true }).waitFor();
+      await ui.capture('provider-auth');
+      return;
+    }
     if (ui.case === 'error') {
       await page.getByRole('alert').waitFor();
+      return;
+    }
+    if (ui.case === 'empty') {
+      await page.getByRole('button', { name: await ui.t('subscriptionAccounts.add'), exact: true }).waitFor();
+      await page.waitForFunction(() => !document.querySelector('.animate-spinner'));
+      assert.equal(await page.getByTestId('subscription-account').count(), 0);
+      assert.equal(await page.getByRole('radiogroup').count(), 0);
+      assert.equal(await page.getByRole('switch').count(), 0);
       return;
     }
     assert.equal(await page.getByRole('switch').count(), 3);

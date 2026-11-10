@@ -52,10 +52,10 @@ import { buildVisionBridgeProxyTransform } from '../vision-bridge/vision-bridge-
 import { CLAUDE_PROVIDER_AUTH_PLACEHOLDER_KEY, anthropicCatalogModelIds, isAnthropicWireModel } from './claude-gateway-config.js';
 import { getActiveCatalog } from './active-catalog.js';
 import { providerModelRecord, modelWithInterface, type Provider } from '@cindy/model-providers';
-import { outboundFetch } from './outbound-fetch.js';
+import { outboundFetch } from './outbound-fetch.desktop.js';
 import { invocationModelRecord, requiresNativeProviderAuth } from './pi-provider-transport.js';
 import { createClaudeProviderBridge } from './claude-provider-bridge.js';
-import { isOpenAiSubscriptionProviderId } from './codex-account-auth.js';
+import { isOpenAiSubscriptionProviderId } from './codex-account-auth.desktop.js';
 import { createPiWebSocketRequestPreparer, resolvePiWebSocketUpstream, piWebSocketTransforms } from './pi-subscription-websocket.js';
 import { isClaudeSubscriptionProviderId, isXaiSubscriptionProviderId } from './subscription-account-auth.js';
 import {

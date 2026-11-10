@@ -145,7 +145,7 @@ vi.mock('../device-link/broadcast-tap', () => ({
   isDataOwnerBroadcastScopeCurrent: () => ownerScopeCurrent,
 }));
 const drainPersistQueue = vi.fn((): Promise<void> => Promise.resolve());
-vi.mock('../messagePersistBroadcaster', () => ({
+vi.mock('../messagePersistBroadcaster.desktop', () => ({
   drainPersistQueue: () => drainPersistQueue(),
 }));
 const drainSessionActiveTurnWrites = vi.fn((_sessionId: string): Promise<void> => Promise.resolve());
@@ -194,7 +194,7 @@ async function freshService() {
   drainSessionActiveTurnWrites.mockReset().mockResolvedValue(undefined);
   getSessionNotificationTurnSignal.mockReset().mockReturnValue(undefined);
   const service = await import('../notificationService');
-  const { setMainLocale } = await import('../i18n');
+  const { setMainLocale } = await import('../i18n.desktop');
   // 既有分发断言以简中为基准；需要验证其它语言的用例会在调用前显式切换。
   setMainLocale('zh-CN');
   return service;
@@ -1186,7 +1186,7 @@ describe('notificationService — channels 分发', () => {
 
   it('zh-TW → 桌面与飞书使用繁中，空标题兜底也跟随当前语言', async () => {
     const { initNotificationService, showDesktopSessionEvent } = await freshService();
-    const { setMainLocale } = await import('../i18n');
+    const { setMainLocale } = await import('../i18n.desktop');
     const feishuIm = makeFeishuIm('ou_owner');
     initNotificationService(baseDeps(feishuIm));
     setMainLocale('zh-TW');
@@ -1531,7 +1531,7 @@ describe('teammate reply previews', () => {
   });
   it('uses localized reply fallback without inventing task completion when there is no body', async () => {
     const { initNotificationService } = await freshService();
-    const { setMainLocale } = await import('../i18n');
+    const { setMainLocale } = await import('../i18n.desktop');
     setMainLocale('en');
     readSessionNotificationPreview.mockResolvedValue({ teammateName: 'Mochi' });
     initNotificationService(baseDeps(makeFeishuIm('owner')));

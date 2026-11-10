@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   normalizeRepeatedResponseToolCallIds,
   normalizeRepeatedResponseToolCallIdsFromBody,
+  normalizeDeepSeekV41ToolHistory,
 } from '../../providers/history';
 
 describe('Responses tool history normalization', () => {
@@ -101,5 +102,56 @@ describe('Responses tool history normalization', () => {
 
     expect(repaired && JSON.parse(repaired.toString('utf8')).input).toHaveLength(2);
     expect(normalizeRepeatedResponseToolCallIdsFromBody(Buffer.from('{'))).toBeNull();
+  });
+});
+
+describe('DeepSeek V4.1 interleaved tool results', () => {
+  const call = { type: 'function_call', call_id: 'call_1', name: 'read', arguments: '{}' };
+  const output = { type: 'function_call_output', call_id: 'call_1', output: 'one' };
+  const developer = { type: 'message', role: 'developer', content: 'Keep the result.' };
+
+  // The real XD Responses endpoint rejects an otherwise complete result separated
+  // from its call by developer context. Preserve every item and only move results
+  // across developer messages within the same complete batch.
+  it('preserves reasoning, multiple results and image output while completing the batch', () => {
+    const reasoning = { type: 'reasoning', content: [{ type: 'reasoning_text', text: 'synthetic' }] };
+    const patch = { type: 'custom_tool_call', call_id: 'call_2', name: 'apply_patch', input: 'patch' };
+    const image = { type: 'custom_tool_call_output', call_id: 'call_2', output: [{ type: 'input_image', image_url: 'data:image/png;base64,AA==' }] };
+    const extraDeveloper = { role: 'developer', content: 'Continue.' };
+    const user = { type: 'message', role: 'user', content: 'Next turn.' };
+    const input = [reasoning, call, patch, image, developer, output, extraDeveloper, user];
+    const body = { model: 'deepseek/deepseek-v4.1-flash', input };
+
+    const result = normalizeDeepSeekV41ToolHistory(body);
+
+    expect(result).toEqual({ kind: 'normalized', body: { ...body, input: [reasoning, call, patch, image, output, developer, extraDeveloper, user] } });
+    expect(body.input).toEqual([reasoning, call, patch, image, developer, output, extraDeveloper, user]);
+    if (result.kind !== 'normalized') throw new Error('expected normalized history');
+    expect(normalizeDeepSeekV41ToolHistory(result.body)).toEqual({ kind: 'unchanged' });
+  });
+
+  it.each([
+    [call, output, developer],
+    [developer, call, output],
+    [call, { type: 'message', role: 'user', content: 'interruption' }, output],
+    [call, { type: 'reasoning', content: [] }, output],
+    [call],
+  ])('leaves history without an interleaved developer message unchanged', (...input) => {
+    expect(normalizeDeepSeekV41ToolHistory({ input })).toEqual({ kind: 'unchanged' });
+  });
+
+  it.each([
+    [call, developer],
+    [call, developer, { ...output, output: undefined, name: 'other' }],
+    [call, developer, { type: 'function_call_output', call_id: 'call_1' }],
+    [call, developer, { ...output, type: 'custom_tool_call_output' }],
+    [call, developer, { ...output, namespace: 'other' }],
+    [call, developer, output, { ...output }],
+    [call, { ...call }, developer, output],
+    [call, developer, { type: 'message', role: 'user', content: 'interruption' }, output],
+    [call, developer, { type: 'reasoning', content: [] }, output],
+    [call, developer, { ...output, call_id: 'other' }],
+  ])('rejects an incomplete or ambiguous developer-interleaved batch', (...input) => {
+    expect(normalizeDeepSeekV41ToolHistory({ input })).toEqual({ kind: 'invalid' });
   });
 });

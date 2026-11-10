@@ -1,476 +1,417 @@
-/**
- * Input queue for the browser client.
- *
- * The renderer's composer enqueues messages (`maker.input.enqueue`) instead of
- * calling `maker.send`. One runtime owns one turn per task, so this queue keeps
- * the real semantics: the next item starts when the previous turn reaches its
- * terminal event, and `stop` aborts the running turn while leaving the rest of
- * the queue in place.
- */
+import { AgentInputCoordinator } from '../../../desktop/src/main/maker-ipc/agent-input-coordinator.ts';
+import { isDeviceLinkInvoke, isMobileControllerInvoke, readDeviceLinkInvokeSourceDevice } from '../../../desktop/src/main/device-link/invoke-context.ts';
+import { stampTrustedDeviceLinkQueuedOrigin, stampTrustedDesktopQueuedOrigin } from '../../../desktop/src/main/maker-ipc/queuedInputOrigin.ts';
+import { createTurnExecutor, autoReviewAuthorizationOptions } from './turn-executor.mjs';
+import { createAppMessageSender } from '../../../desktop/src/main/mcp-apps/messageSender.ts';
+import { MCP_APP_MESSAGE_GUARD } from '../../../desktop/src/main/mcp-apps/message.ts';
+import { randomUUID } from 'node:crypto';
+import { createSchedulerQueueBridge } from '../../../desktop/src/main/maker-ipc/schedulerQueueBridge.ts';
+import { createQueuedAcceptedCallbacks } from '../../../desktop/src/main/maker-ipc/queuedAcceptedCallbacks.ts';
+import { runSchedulerQueuedPreparation } from '../../../desktop/src/main/maker-ipc/schedulerQueuedPreparation.ts';
 
-function toMakerAgentKind(kind) {
-  if (kind === 'codex') return 'codex';
-  if (kind === 'pi') return 'pi';
-  return 'claude-code';
+function storedSessionOptions(stored) {
+  return { agentKind: makerKind(stored.agentKind), model: stored.model || '',
+    workingDir: stored.workingDir || '', effort: stored.effort || undefined,
+    permissionMode: stored.permissionMode || undefined, providerId: stored.providerId ?? undefined,
+    fastMode: stored.fastMode ?? undefined, planMode: stored.planModeEnabled ?? undefined,
+    resumeSessionId: stored.sdkSessionId || undefined };
 }
 
-function toDbAgentKind(kind) {
-  if (kind === 'codex') return 'codex';
-  if (kind === 'pi') return 'pi';
-  return 'cc';
+const makerKind = kind => kind === 'cc' ? 'claude-code' : kind;
+const errorText = error => error instanceof Error ? error.message : String(error);
+
+/** Only composition fields cross the browser trust boundary. Host receipts,
+ * scheduler origins, hook bypasses and remote-device identity never do. */
+function composeInput(item, stored) {
+  if (!item || typeof item.clientId !== 'string' || !item.clientId.trim()) throw new Error('clientId is required');
+  const text = typeof item.text === 'string' ? item.text : item.content;
+  if (typeof text !== 'string' || !text.trim()) throw new Error('message text is required');
+  const opts = item.createOpts ?? {};
+  const agentKind = makerKind(opts.agentKind || item.agentKind || stored.agentKind);
+  if (!['claude-code', 'codex', 'pi'].includes(agentKind)) throw new Error('invalid agent kind');
+  const model = item.model || opts.model || stored.model || '';
+  const workingDir = item.workingDir || opts.workingDir || stored.workingDir || '';
+  const effort = item.effort || opts.effort || stored.effort || '';
+  const permissionMode = item.permissionMode || opts.permissionMode || stored.permissionMode || '';
+  const content = typeof item.persistedContent === 'string' ? item.persistedContent : text;
+  // The renderer already separates visible composer text from its serialized
+  // storage envelope. Keep that distinction in queue snapshots and projections.
+  const displayContent = typeof item.chatMessage?.content === 'string' ? item.chatMessage.content : text;
+  const result = { clientId: item.clientId, text, persistedContent: content,
+    model, workingDir, effort, permissionMode,
+    chatMessage: { ...item.chatMessage, clientId: item.clientId, role: 'user', content: displayContent },
+    createOpts: { agentKind, model, workingDir, effort: effort || undefined,
+      permissionMode: permissionMode || undefined, providerId: stored.providerId ?? undefined,
+      fastMode: stored.fastMode ?? undefined, planMode: stored.planModeEnabled ?? undefined } };
+  for (const key of ['files', 'mentions', 'sessionRefs', 'agentReferences']) {
+    if (item[key] !== undefined) {
+      if (!Array.isArray(item[key])) throw new Error(`invalid ${key}`);
+      result[key] = item[key];
+    }
+  }
+  // Only the in-process App service can mint this symbol. Wire JSON cannot
+  // promote page text into user intent or recreate a grant after a crash.
+  if (typeof item[MCP_APP_MESSAGE_GUARD] === 'function') {
+    result[MCP_APP_MESSAGE_GUARD] = item[MCP_APP_MESSAGE_GUARD];
+    result.sourcePlugin = item.sourcePlugin;
+    result.autoReviewUserText = { kind: 'delegated-continuation' };
+  }
+  // AsyncLocalStorage belongs to authenticated dispatch, never the wire item.
+  const remote = isDeviceLinkInvoke();
+  if (remote && isMobileControllerInvoke()) result.fromMobileClient = true;
+  // An MCP App message is page content relayed by the in-process App service.
+  // The desktop stamp would record its text as the user's own authored intent,
+  // and the device stamp strips the source plugin it exists to forge-proof, so
+  // keep the delegated receipt and restore the plugin the service minted.
+  const fromApp = typeof item[MCP_APP_MESSAGE_GUARD] === 'function';
+  const stamped = stampTrustedDeviceLinkQueuedOrigin(
+    // Browser input has no native desktop command privilege.
+    fromApp ? result : stampTrustedDesktopQueuedOrigin(result, true),
+    remote, readDeviceLinkInvokeSourceDevice(),
+  );
+  if (fromApp) stamped.sourcePlugin = result.sourcePlugin;
+  return stamped;
 }
 
-/**
- * @param {{
- *   getMaker: () => any,
- *   hub: {publish: (event: unknown) => void},
- *   readSession: (sessionId: string) => Promise<{
- *     id: string, agentKind: string, model: string, workingDir: string, providerId: string | null
- *   }>,
- *   sent: (sessionId: string) => void,
- * }} deps
- */
+/** Node assembly of the desktop input transaction. There is one queue state
+ * machine for both launchers; this module owns only IO and runtime lifetime. */
 export function createInputQueue(deps) {
-  /** @type {Map<string, {items: Array<{clientId: string, text: string}>, running: boolean, unsubscribe: (() => void) | null}>} */
-  const sessions = new Map();
+  let runtime = createRuntime();
 
-  function stateFor(sessionId) {
-    let state = sessions.get(sessionId);
-    if (!state) {
-      state = {
-        items: [],
-        active: null,
-        running: false,
-        unsubscribe: null,
-        queueExpanded: false,
-        queueInteractionLocks: [],
-        queueEditLocks: [],
-      };
-      sessions.set(sessionId, state);
+  function createRuntime() {
+    const states = new Map();
+    const schedulePreparations = new Map();
+    const scheduleDiscardWatchers = new Map();
+    const scheduleAdmissions = new Map();
+    const acceptedCallbacks = createQueuedAcceptedCallbacks();
+    let closing = false;
+    let owner;
+    const isCurrent = () => !deps.getOwner || (owner !== undefined && owner != null && deps.getOwner() === owner);
+    function assertCurrent() {
+      if (!deps.getOwner) return;
+      if (owner === undefined) owner = deps.getOwner();
+      if (!isCurrent()) throw new Error('input runtime owner changed');
     }
-    return state;
-  }
-
-  /**
-   * Full `AgentInputProjection`. The renderer's store reads every field, so a
-   * partial object makes it rebuild state on each render and trips React's
-   * update-depth guard.
-   */
-  function projection(sessionId) {
-    const state = sessions.get(sessionId);
-    return {
-      sessionId,
-      turnInProgress: state?.running === true,
-      // Project the renderer's own queued item back verbatim: the queue UI reads
-      // persistedContent/model/effort/permissionMode and the attachment lists.
-      pendingQueue: [...(state?.items ?? [])],
-      clearBoundaryMs: null,
-      continuationInFlightClientId: null,
-      continuationTurnClientId: null,
-      steeringQueueClientIds: [],
-      queuePaused: Boolean(state?.queuePaused),
-      queueExpanded: Boolean(state?.queueExpanded),
-      queueInteractionLocks: [...(state?.queueInteractionLocks ?? [])],
-      queueEditLocks: [...(state?.queueEditLocks ?? [])],
-      queueAbortPending: false,
-      error: state?.error ?? null,
-      recovery: null,
-      errorRetryText: null,
-      usageLimitWait: null,
-      credentialSwitchWait: null,
-    };
-  }
-
-  function emitProjection(sessionId) {
-    const proj = projection(sessionId);
-    deps.hub?.publish({ type: 'input_projection', sessionId, projection: proj });
-    return proj;
-  }
-
-  function persistReply(sessionId, state, message) {
-    if (!deps.persistMessage) return;
-    state.unsaved ??= new Map();
-    state.unsaved.set(message.clientId, message);
-    state.persistence = (state.persistence ?? Promise.resolve()).then(async () => {
-      try {
-        await deps.persistMessage(sessionId, message);
-        state.unsaved.delete(message.clientId);
-      } catch (error) {
-        state.error = error instanceof Error ? error.message : String(error);
-        state.queuePaused = true;
-        emitProjection(sessionId);
-      }
+    function stateFor(id) {
+      if (!states.has(id)) states.set(id, { commands: Promise.resolve(), writing: Promise.resolve(),
+        admission: 0, closed: false, snapshot: [], persistenceError: null });
+      return states.get(id);
+    }
+    function project(value) {
+      const error = states.get(value.sessionId)?.persistenceError;
+      return error ? { ...value, error, queuePaused: true } : value;
+    }
+    function publish(value) {
+      if (isCurrent()) deps.hub?.publish({ type: 'input_projection', sessionId: value.sessionId, projection: project(value) });
+    }
+    function persistenceFailed(id, error) {
+      stateFor(id).persistenceError = errorText(error);
+      coordinator.setExecutionPaused(id, true);
+      publish(coordinator.getProjection(id));
+    }
+    function persist(id, snapshot) {
+      const state = stateFor(id);
+      state.snapshot = snapshot;
+      const writing = state.writing.catch(() => {}).then(() => { assertCurrent(); return deps.persistQueueSnapshot?.(id, snapshot); });
+      state.writing = writing;
+      void writing.catch(error => persistenceFailed(id, error));
+      return writing;
+    }
+    async function flushed(id) {
+      const state = stateFor(id);
+      let writing;
+      do { writing = state.writing; await writing; } while (writing !== state.writing);
+    }
+    const executor = createTurnExecutor({ ...deps,
+      assertCurrent, isCurrent,
+      isExecutionPaused: id => coordinator.isExecutionPaused(id),
+      isStoppingRuntime: () => closing,
+      persistMessage: deps.persistMessage ?? (async () => {}),
+      onPersistenceError: persistenceFailed,
+      onTerminal: (id, type, error, meta) => {
+        coordinator.onTurnEvent(id, type, error, undefined, meta);
+        deps.onSessionSettled?.(id);
+      },
     });
-  }
-
-  async function dispatch(sessionId) {
-    const state = stateFor(sessionId);
-    if (state.disposed || state.running || state.stopping || state.settling || state.queuePaused || state.queueInteractionLocks.length > 0
-      || state.queueEditLocks.includes(state.items[0]?.clientId)) return;
-    // The running message leaves the queue: the projection's pendingQueue is
-    // what is still waiting, matching the desktop renderer's expectation.
-    const next = state.items.shift();
-    if (!next) return;
-    state.active = next;
-    // Reserve before the first await: HTTP requests may arrive concurrently.
-    state.running = true;
-    const generation = state.generation ?? 0;
-    let session;
-    let dbKind;
-    let prepared;
-    state.preparing = new Promise(resolve => { prepared = resolve; });
-    try {
-      const stored = await deps.readSession(sessionId);
-      const maker = deps.getMaker();
-      const makerKind = toMakerAgentKind(next.agentKind || stored.agentKind);
-      dbKind = toDbAgentKind(next.agentKind || stored.agentKind);
-
-      // Persist user message immediately so both browser SSE and device-link see it
-      if (deps.persistMessage) {
-        await deps.persistMessage(sessionId, {
-          clientId: next.clientId,
-          role: 'user',
-          content: next.persistedContent || next.text,
-          createdAt: next.createdAt,
-          agentKind: dbKind,
-        });
-      }
-
-      session = maker.getSession(sessionId);
-      if (session && session.agentKind && session.agentKind !== makerKind) {
-        if (typeof maker.closeSession === 'function') {
-          await maker.closeSession(sessionId);
+    const coordinator = new AgentInputCoordinator({
+      sendToAgent: async (id, message, createOpts, sendOpts) => {
+        const clientId = sendOpts.persistUserMessage?.clientId;
+        try {
+          await runSchedulerQueuedPreparation(clientId, schedulePreparations,
+            () => { scheduleDiscardWatchers.delete(clientId); acceptedCallbacks.discard(clientId); });
+          assertCurrent();
+          const result = await executor.send(id, message, createOpts, sendOpts);
+          await acceptedCallbacks.settle(id, sendOpts, result);
+          return result;
+        } catch (error) {
+          await acceptedCallbacks.rollback(id, clientId);
+          throw error;
         }
-        session = null;
-      }
-      if (!session) {
-        session = await maker.createSession({
-          id: sessionId,
-          agentKind: makerKind,
-          workingDir: next.workingDir || stored.workingDir,
-          // The composer owns the route for this message; the row only supplies the
-          // fallback when the item does not name one.
-          model: next.model || stored.model,
-          effort: next.effort || stored.effort || undefined,
-          permissionMode: next.permissionMode || stored.permissionMode || undefined,
-          fastMode: stored.fastMode ?? undefined,
-          planMode: stored.planModeEnabled ?? undefined,
-          providerId: stored.providerId ?? undefined,
-          resumeSessionId: makerKind === toMakerAgentKind(stored.agentKind)
-            ? stored.sdkSessionId || undefined : undefined,
-        });
-      }
-
-    } catch (error) {
-      state.running = false;
-      state.active = null;
-      state.error = error instanceof Error ? error.message : String(error);
-      if ((state.generation ?? 0) === generation) state.items.unshift(next);
-      state.queuePaused = true;
-      emitProjection(sessionId);
-      throw error;
-    } finally {
-      prepared();
-      state.preparing = null;
-    }
-    if ((state.generation ?? 0) !== generation) {
-      return;
-    }
-
-    // Permission prompts and questions must reach a client before the turn can
-    // continue; the broker owns that handshake.
-    deps.interactions?.attach(session, sessionId);
-
-    state.running = true;
-    state.error = null;
-    emitProjection(sessionId);
-
-    state.unsubscribe?.();
-    let finished = false;
-    let turnAssistantClientId = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-    let turnError = null;
-
-    const finish = () => {
-      if (finished || (state.generation ?? 0) !== generation) return;
-      finished = true;
-      state.settling = true;
-      if (turnError) state.queuePaused = true;
-      state.unsubscribe?.();
-      state.unsubscribe = null;
-      state.active = null;
-      emitProjection(sessionId);
-      // A turn stopped before its final event still leaves what the user saw.
-      if (!finalTextPersisted && assistantText.trim() && deps.persistMessage) {
-        persistReply(sessionId, state, {
-          clientId: turnAssistantClientId,
-          role: 'assistant',
-          content: assistantText,
-          agentKind: dbKind,
-        });
-      } else if (!finalTextPersisted && turnError && deps.persistMessage) {
-        persistReply(sessionId, state, {
-          clientId: `${turnAssistantClientId}:error`,
-          role: 'error',
-          content: JSON.stringify({ message: turnError }),
-          agentKind: dbKind,
-        });
-      }
-      // Start the next queued item from a microtask so the terminal event of
-      // this turn is delivered first.
-      state.settlement = Promise.resolve(state.persistence).then(() => {
-        state.running = false;
-        state.settling = false;
-        state.finish = null;
-        emitProjection(sessionId);
-      });
-      void state.settlement.then(() => dispatch(sessionId)).catch(() => {});
-    };
-    state.finish = () => { finish(); return state.settlement; };
-
-    let assistantText = '';
-    let finalTextPersisted = false;
-    state.unsubscribe = session.onEvent((event) => {
-      // One turn can hold several assistant messages (text, tool call, final answer);
-      // each is stored under its own id or the later ones collide on clientId.
-      if (event.agentMeta?.uuid && typeof event.agentMeta.uuid === 'string') {
-        turnAssistantClientId = event.agentMeta.uuid;
-      }
-      if (event.type === 'error') {
-        turnError = event.data?.message || event.message || (typeof event.data === 'string' ? event.data : 'Agent error');
-        state.error = turnError;
-        finalTextPersisted = false;
-      }
-      deps.hub.publish({
-        type: 'agent_event',
-        sessionId,
-        event,
-        persistId: turnAssistantClientId,
-        ...event,
-      });
-      if (event.type === 'text' && typeof event.data?.text === 'string') {
-        if (event.data.isFinal) {
-          // Final text carries the complete assistant answer for this turn.
-          if (deps.persistMessage) {
-            persistReply(sessionId, state, {
-              clientId: turnAssistantClientId,
-              role: 'assistant',
-              content: event.data.text,
-              agentMeta: event.agentMeta ?? null,
-              agentKind: dbKind,
-            });
-          }
-          assistantText = '';
-          finalTextPersisted = true;
-        } else {
-          assistantText += event.data.text;
-          finalTextPersisted = false;
-        }
-      }
-      if (event.type === 'done' || (event.type === 'error' && event.turnScope !== 'background')) {
-        finish();
-      }
+      },
+      steerToAgent: async (id, message, opts) => {
+        opts.signal?.throwIfAborted();
+        await opts[MCP_APP_MESSAGE_GUARD]?.();
+        await opts.beforeProviderStart?.();
+        assertCurrent(); opts.signal?.throwIfAborted();
+        const session = deps.getMaker().getSession(id);
+        if (!session) throw new Error('NO_ACTIVE_TURN');
+        const result = await session.steer(message, autoReviewAuthorizationOptions(opts));
+        if (!result || result.accepted === false) throw new Error(result?.reason || 'steer rejected');
+      },
+      abortSession: id => {
+        const promise = executor.abort(id);
+        stateFor(id).aborting = promise;
+        return promise;
+      },
+      isTurnRunning: executor.isRunning,
+      isLiveTurnRunning: id => deps.getMaker()?.getSession(id)?.isTurnRunning?.(),
+      isLiveSessionPresent: id => !!deps.getMaker()?.getSession(id),
+      getTurnGeneration: id => deps.getMaker()?.getSession(id)?.getTurnGeneration?.() ?? null,
+      getTurnSessionIdentity: id => deps.getMaker()?.getSession(id) ?? null,
+      getObservedCurrentTurnTerminal: id => deps.getMaker()?.getSession(id)?.getObservedCurrentTurnTerminal?.(),
+      reconcileTurnIdle: executor.reconcileIdle,
+      getAgentKind: id => makerKind(deps.getMaker()?.getSession(id)?.agentKind) ?? null,
+      getSdkSessionId: async id => (await deps.readSession(id)).sdkSessionId || undefined,
+      hasAssistantProgressAfter: deps.hasAssistantProgressAfter,
+      getRecoveryContextSnapshot: deps.getRecoveryContextSnapshot,
+      hasPendingInteraction: id => (deps.interactions?.pending(id)?.length ?? 0) > 0,
+      hasPendingCredentialSwitch: deps.hasPendingCredentialSwitch,
+      createUserMessage: (id, input, options) => deps.persistMessage?.(id, input, options),
+      touchUserSend: deps.touchUserSend ?? (async () => {}),
+      emitProjection: publish,
+      persistQueueSnapshot: persist,
+      loadQueueSnapshot: deps.loadQueueSnapshot,
+      loadClearBoundary: deps.loadClearBoundary,
+      getPersistedClientIds: deps.getPersistedClientIds,
+      onAcceptedQueuedMessage: async (id, item) => {
+        schedulePreparations.delete(item.clientId);
+        scheduleDiscardWatchers.delete(item.clientId);
+        await acceptedCallbacks.run(id, item);
+      },
+      onDiscardedQueuedMessage: (_id, item) => {
+        acceptedCallbacks.discard(item.clientId);
+        schedulePreparations.delete(item.clientId);
+        const discarded = scheduleDiscardWatchers.get(item.clientId);
+        scheduleDiscardWatchers.delete(item.clientId);
+        discarded?.();
+      },
     });
-
-    try {
-      const result = await session.send(next.text);
-      if (!result || result.accepted !== true) {
-        turnError = 'send_rejected';
-        state.error = turnError;
-        deps.hub.publish({
-          type: 'error',
-          sessionId,
-          event: { type: 'error', reason: 'send_rejected', detail: result ?? null },
-          reason: 'send_rejected',
-          detail: result ?? null,
-        });
-        finish();
-        return;
-      }
-      deps.sent(sessionId);
-    } catch (error) {
-      turnError = error instanceof Error ? error.message : String(error);
-      state.error = turnError;
-      deps.hub.publish({
-        type: 'error',
-        sessionId,
-        event: {
-          type: 'error',
-          reason: 'send_failed',
-          message: turnError,
+    const scheduleBridge = createSchedulerQueueBridge({
+      coordinator,
+      isSessionBusy: id => coordinator.shouldQueueNewTurn(id) ||
+        deps.getMaker().getSession(id)?.isTurnRunning?.() === true,
+      getSessionMeta: id => deps.getMaker().getSessionMeta(id),
+      getSessionRowSnapshot: id => deps.readSession(id),
+      createId: randomUUID,
+      preparations: schedulePreparations,
+      discardWatchers: scheduleDiscardWatchers,
+      enqueue: async req => {
+        const id = req.targetSessionId;
+        const state = stateFor(id);
+        const admission = scheduleAdmissions.get(id);
+        const stored = await deps.readSession(id);
+        assertCurrent();
+        if (admission === undefined || admission !== state.admission || closing || state.closed) {
+          throw new Error('input cancelled before acceptance');
+        }
+        const createOpts = { ...storedSessionOptions(stored),
+          planMode: req.inheritTargetPlanMode ? Boolean(stored.planModeEnabled) : false };
+        // This entry is only called by the local scheduler, never a wire request.
+        // In particular it must not go through composeInput's user-origin stamp.
+        const item = { clientId: req.clientId, text: req.message,
+          persistedContent: req.persistedContent, origin: req.origin, createOpts,
+          model: createOpts.model, workingDir: createOpts.workingDir,
+          effort: createOpts.effort ?? '', permissionMode: createOpts.permissionMode ?? 'ask',
+          chatMessage: { clientId: req.clientId, role: 'user', content: req.persistedContent } };
+        acceptedCallbacks.register(req.clientId, () => req.onAccepted({
+          permissionMode: createOpts.permissionMode, planMode: createOpts.planMode,
+        }), req.onAcceptedRollback);
+        coordinator.setExecutionPaused(id, true);
+        try {
+          coordinator.enqueue(id, item);
+          await flushed(id);
+        } catch (error) {
+          acceptedCallbacks.discard(req.clientId);
+          throw error;
+        } finally {
+          if (!stateFor(id).persistenceError) coordinator.setExecutionPaused(id, false);
+        }
+      },
+    });
+    function command(id, fn) {
+      const state = stateFor(id);
+      const admission = state.admission;
+      const result = state.commands.catch(() => {}).then(async () => {
+        if (closing || state.closed) throw new Error('session is closed');
+        assertCurrent();
+        await coordinator.ensureQueueRestored(id);
+        assertCurrent();
+        if (state.admission !== admission) throw new Error('input cancelled before acceptance');
+        return fn(state, admission);
+      });
+      state.commands = result;
+      return result;
+    }
+    async function mutate(id, fn) {
+      return command(id, async state => {
+        coordinator.setExecutionPaused(id, true);
+        const result = fn();
+        await flushed(id);
+        if (!state.persistenceError) coordinator.setExecutionPaused(id, false);
+        return project(result);
+      });
+    }
+    async function stop(id, options = { keepQueue: true, pauseQueue: true }) {
+      const state = stateFor(id);
+      state.admission += 1;
+      await coordinator.ensureQueueRestored(id);
+      // Abort is urgent. A pending steer/send command may itself need this
+      // cancellation to settle, so never serialize Stop behind that promise.
+      coordinator.stop(id, options);
+      await state.aborting;
+      await state.commands.catch(() => {});
+      await flushed(id);
+      return project(coordinator.getProjection(id));
+    }
+    const api = {
+      schedulerQueue: () => ({ ...scheduleBridge,
+        ensureQueueRestored: id => command(id, () => coordinator.isQueueRestored(id)),
+        isSessionBusy: id => { assertCurrent(); return scheduleBridge.isSessionBusy(id); },
+        enqueuePrompt: req => command(req.sessionId, async (_state, admission) => {
+          // The bridge reads metadata and the stored row before enqueue. Keep
+          // the original command generation across every one of those reads.
+          scheduleAdmissions.set(req.sessionId, admission);
+          try { return await scheduleBridge.enqueuePrompt(req); }
+          finally { scheduleAdmissions.delete(req.sessionId); }
+        }),
+        removeQueuedPrompt: (id, clientId) => {
+          // Coordinator owns the immediate cancellation; persist() serializes its snapshot.
+          assertCurrent(); coordinator.remove(id, clientId);
         },
-        reason: 'send_failed',
-        message: turnError,
-      });
-      finish();
-    }
+        getLastUserActionAt: id => states.get(id)?.lastUserActionAt ?? null,
+      }),
+      isTurnRunning: executor.isRunning,
+      wakeSession: (id, reason) => coordinator.wakeSession(id, reason),
+      restoreSession: (id, check) => command(id, async () => {
+        await check(); assertCurrent();
+        const session = await executor.restoreSession(id, storedSessionOptions(await deps.readSession(id)), check);
+        await check(); assertCurrent(); return session;
+      }),
+      enqueueDurableWrite: (id, label, fn) => command(id, () => executor.enqueueDurableWrite(id, label, fn)),
+      projection: id => project(coordinator.getProjection(id)),
+      getProjection: id => command(id, () => api.projection(id)),
+      inputStatus: (id, clientId) => command(id, async () => {
+        const projection = api.projection(id);
+        if (executor.isInputRunning(id, clientId)) return 'running';
+        if (projection.recovery?.clientId === clientId) return 'interrupted';
+        if (projection.pendingQueue.some(item => item.clientId === clientId)) return 'queued';
+        const known = await deps.getPersistedClientIds?.(id, [clientId]);
+        assertCurrent();
+        return known?.has(clientId) ? 'recorded' : 'unknown';
+      }),
+      enqueue(id, item) {
+        const admission = stateFor(id).admission;
+        return command(id, async state => {
+          if (coordinator.hasKnownClientId(id, item?.clientId)) {
+            await flushed(id);
+            return api.projection(id);
+          }
+          const known = await deps.getPersistedClientIds?.(id, [item?.clientId]);
+          if (known?.has(item?.clientId)) return api.projection(id);
+          const composed = composeInput(item, await deps.readSession(id));
+          assertCurrent();
+          if (admission !== state.admission || closing) throw new Error('input cancelled before acceptance');
+          state.lastUserActionAt = Date.now();
+          coordinator.setExecutionPaused(id, true);
+          coordinator.enqueue(id, composed);
+          await flushed(id);
+          if (!state.persistenceError) coordinator.setExecutionPaused(id, false);
+          return api.projection(id);
+        });
+      },
+      stop,
+      async resume(id) {
+        if (stateFor(id).closed) return api.projection(id);
+        return command(id, async (state, admission) => {
+          await state.aborting?.catch(error => { if (executor.isRunning(id)) throw error; });
+          await executor.retryPersistence(id);
+          if (state.persistenceError) await persist(id, state.snapshot);
+          await flushed(id);
+          if (state.admission !== admission) throw new Error('input cancelled before acceptance');
+          state.persistenceError = null;
+          coordinator.resume(id);
+          coordinator.setExecutionPaused(id, false);
+          return api.projection(id);
+        });
+      },
+      retryLastError: id => command(id, () => coordinator.retryLastError(id)),
+      clearError: id => command(id, () => coordinator.clearError(id)),
+      steer(id, item) {
+        return command(id, async (state, admission) => {
+          const composed = composeInput(item, await deps.readSession(id));
+          assertCurrent();
+          if (state.admission !== admission) throw new Error('input cancelled before acceptance');
+          return coordinator.steer(id, composed);
+        });
+      },
+      remove: (id, clientId) => mutate(id, () => coordinator.remove(id, clientId)),
+      updateText: (id, clientId, text) => mutate(id, () => coordinator.updateText(id, clientId, text)),
+      updateContent(id, clientId, item) {
+        return command(id, async state => {
+          const old = coordinator.getProjection(id).pendingQueue.find(row => row.clientId === clientId);
+          if (!old) return api.projection(id);
+          const composed = composeInput({ ...old, ...item, clientId,
+            persistedContent: item.persistedContent ?? item.text ?? old.persistedContent }, await deps.readSession(id));
+          assertCurrent();
+          coordinator.setExecutionPaused(id, true);
+          coordinator.updateContent(id, clientId, composed);
+          await flushed(id);
+          if (!state.persistenceError) coordinator.setExecutionPaused(id, false);
+          return api.projection(id);
+        });
+      },
+      move: (id, clientId, index) => mutate(id, () => coordinator.move(id, clientId, index)),
+      setExpanded: (id, expanded) => command(id, () => coordinator.setExpanded(id, expanded)),
+      setInteractionLock: (id, lock, locked) => command(id, () => coordinator.setInteractionLock(id, lock, locked)),
+      setEditLock: (id, clientId, locked) => command(id, () => coordinator.setEditLock(id, clientId, locked)),
+      // This endpoint clears pending inputs, not persisted history. Only the
+      // history service may advance the durable conversation clear boundary.
+      clearSession: id => stop(id, { keepQueue: false }),
+      async disposeSession(id) {
+        stateFor(id).closed = true;
+        await stop(id);
+        coordinator.clearSession(id);
+        coordinator.onSessionClosed(id);
+        await executor.close(id);
+        await flushed(id);
+      },
+      async dispose() {
+        closing = true;
+        const settled = await Promise.allSettled([...states.keys()].map(async id => {
+          try { await stop(id); }
+          finally {
+            coordinator.onSessionClosed(id);
+            try { await executor.close(id); }
+            finally { await flushed(id); }
+          }
+        }));
+        const errors = settled.filter(result => result.status === 'rejected').map(result => result.reason);
+        if (errors.length) throw new AggregateError(errors, 'Failed to drain task persistence');
+      },
+    };
+    api.sendAppMessage = createAppMessageSender({
+      queueOnly: true, owner: deps.getOwner,
+      readClearBoundary: deps.loadClearBoundary,
+      restoreQueue: id => command(id, () => {}),
+      clearBoundary: id => coordinator.getClearBoundaryMs(id),
+      getSessionMeta: deps.readSession, createClientId: randomUUID,
+      buildQueueItem: async ({ message, meta, targetSessionId, ...item }) => ({ ...item, text: message,
+        createOpts: storedSessionOptions(meta), model: meta.model, workingDir: meta.workingDir }),
+      enqueue: (id, item) => api.enqueue(id, item),
+    });
+    return api;
   }
-
-  return {
-    projection,
-    getProjection(sessionId) {
-      return projection(sessionId);
-    },
-    async enqueue(sessionId, item) {
-      const state = stateFor(sessionId);
-      if (state.disposed) throw new Error('session is closed');
-      const text = (typeof item?.text === 'string' && item.text.trim())
-        ? item.text
-        : (typeof item?.content === 'string' && item.content.trim())
-        ? item.content
-        : (typeof item?.persistedContent === 'string' && item.persistedContent.trim())
-        ? item.persistedContent
-        : '';
-      if (!text.trim()) throw new Error('message text is required');
-      const clientId = typeof item?.clientId === 'string' && item.clientId
-        ? item.clientId
-        : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-      state.items.push({
-        ...item,
-        clientId,
-        text,
-        persistedContent: typeof item?.persistedContent === 'string' ? item.persistedContent : text,
-        model: typeof item?.model === 'string' ? item.model : '',
-        effort: typeof item?.effort === 'string' ? item.effort : '',
-        permissionMode: typeof item?.permissionMode === 'string' ? item.permissionMode : '',
-        workingDir: typeof item?.workingDir === 'string' ? item.workingDir : '',
-      });
-      emitProjection(sessionId);
-      await dispatch(sessionId);
-      return projection(sessionId);
-    },
-    async stop(sessionId) {
-      const state = stateFor(sessionId);
-      if (state.stopping) { await state.stopping; return projection(sessionId); }
-      state.queuePaused = true;
-      // Cancel asynchronous preparation, but retain an active turn's listener
-      // through abort so text already shown remains in history after stopping.
-      if (state.preparing) state.generation = (state.generation ?? 0) + 1;
-      const stop = (async () => {
-        await state.preparing;
-        const session = deps.getMaker()?.getSession(sessionId);
-        if (session) await session.abort();
-        await state.finish?.();
-        state.running = false;
-        state.active = null;
-      })();
-      state.stopping = stop;
-      try { await stop; }
-      finally {
-        state.stopping = null;
-        emitProjection(sessionId);
-      }
-      return projection(sessionId);
-    },
-    async disposeSession(sessionId) {
-      const state = stateFor(sessionId);
-      state.disposed = true;
-      state.items = [];
-      await this.stop(sessionId);
-      await deps.getMaker()?.closeSession?.(sessionId);
-    },
-    async dispose() {
-      await Promise.all([...sessions.keys()].map(id => this.disposeSession(id)));
-    },
-    async steer(sessionId, item) {
-      const session = deps.getMaker().getSession(sessionId);
-      if (!session) return false;
-      const text = typeof item?.text === 'string' ? item.text : '';
-      if (!text.trim()) return false;
-      const result = await session.steer(text).catch(() => null);
-      return Boolean(result && result.accepted !== false);
-    },
-    async remove(sessionId, clientId) {
-      const state = sessions.get(sessionId);
-      if (state) state.items = state.items.filter((entry) => entry.clientId !== clientId);
-      return emitProjection(sessionId);
-    },
-    async updateContent(sessionId, clientId, item) {
-      const state = stateFor(sessionId);
-      const index = state.items.findIndex((entry) => entry.clientId === clientId);
-      if (index !== -1) {
-        state.items[index] = {
-          ...state.items[index],
-          ...item,
-          clientId,
-          text: typeof item?.text === 'string' ? item.text : state.items[index].text,
-          persistedContent: typeof item?.persistedContent === 'string'
-            ? item.persistedContent
-            : typeof item?.text === 'string'
-              ? item.text
-              : state.items[index].persistedContent,
-        };
-      }
-      return emitProjection(sessionId);
-    },
-    async updateText(sessionId, clientId, newText) {
-      const state = stateFor(sessionId);
-      const index = state.items.findIndex((entry) => entry.clientId === clientId);
-      if (index !== -1) {
-        state.items[index] = {
-          ...state.items[index],
-          text: String(newText ?? ''),
-          persistedContent: String(newText ?? ''),
-        };
-      }
-      return emitProjection(sessionId);
-    },
-    async move(sessionId, clientId, targetIndex) {
-      const state = stateFor(sessionId);
-      const index = state.items.findIndex((entry) => entry.clientId === clientId);
-      if (index !== -1 && typeof targetIndex === 'number' && Number.isFinite(targetIndex)) {
-        const [moved] = state.items.splice(index, 1);
-        const clampedIndex = Math.max(0, Math.min(targetIndex, state.items.length));
-        state.items.splice(clampedIndex, 0, moved);
-      }
-      return emitProjection(sessionId);
-    },
-    async setExpanded(sessionId, expanded) {
-      const state = stateFor(sessionId);
-      state.queueExpanded = Boolean(expanded);
-      return emitProjection(sessionId);
-    },
-    async setInteractionLock(sessionId, lockId, locked) {
-      const state = stateFor(sessionId);
-      if (locked) {
-        if (!state.queueInteractionLocks.includes(lockId)) {
-          state.queueInteractionLocks.push(lockId);
-        }
-      } else {
-        state.queueInteractionLocks = state.queueInteractionLocks.filter((id) => id !== lockId);
-        await dispatch(sessionId);
-      }
-      return emitProjection(sessionId);
-    },
-    async setEditLock(sessionId, clientId, locked) {
-      const state = stateFor(sessionId);
-      if (locked) {
-        if (!state.queueEditLocks.includes(clientId)) {
-          state.queueEditLocks.push(clientId);
-        }
-      } else {
-        state.queueEditLocks = state.queueEditLocks.filter((id) => id !== clientId);
-        await dispatch(sessionId);
-      }
-      return emitProjection(sessionId);
-    },
-    async clearSession(sessionId) {
-      const state = sessions.get(sessionId);
-      if (state) state.items = [];
-      return emitProjection(sessionId);
-    },
-    async resume(sessionId) {
-      const state = stateFor(sessionId);
-      await state.stopping;
-      await state.settlement;
-      // Retrying a failed save never resends the completed model turn.
-      for (const message of state.unsaved?.values() ?? []) {
-        await deps.persistMessage(sessionId, message);
-        state.unsaved.delete(message.clientId);
-      }
-      state.error = null;
-      state.queuePaused = false;
-      await dispatch(sessionId);
-      return emitProjection(sessionId);
-    },
-  };
+  const api = Object.fromEntries(Object.keys(runtime).map(name => [name, (...args) => runtime[name](...args)]));
+  api.dispose = async () => { try { await runtime.dispose(); } finally { runtime = createRuntime(); } };
+  return api;
 }

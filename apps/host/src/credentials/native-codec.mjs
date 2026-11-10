@@ -1,7 +1,7 @@
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
-import { fileURLToPath } from 'node:url';
+import { hostRuntimeLayout } from '../runtime-layout.mjs';
 import { KEYCHAIN_IDENTITY_MARKER_FILE, resolveDevKeychainDecision } from '../../../desktop/src/main/devKeychainName.js';
 import { createKeychainMarkerIo } from '../../../desktop/src/main/devKeychainMarkerIo.js';
 
@@ -24,8 +24,10 @@ export function createNativeCredentialCodec(options) {
   if (identity.kind === 'abort') throw new Error('CREDENTIAL_IDENTITY_UNAVAILABLE');
   const appName = identity.kind === 'rename' ? identity.appName : 'Cindy';
   const run = options.run ?? spawnSync;
-  const binary = options.electronBinary ?? createRequire(new URL('../../../desktop/package.json', import.meta.url))('electron');
-  const script = fileURLToPath(new URL('./electron-codec.cjs', import.meta.url));
+  const layout = hostRuntimeLayout();
+  const binary = options.electronBinary ?? layout.electronBinary
+    ?? createRequire(new URL('../../../desktop/package.json', import.meta.url))('electron');
+  const script = layout.credentialScript;
   function invoke(operation, value) {
     const env = { ...process.env, CINDY_HOST_DATA_DIR: options.userDataDir, CINDY_HOST_CREDENTIAL_APP: appName };
     delete env.ELECTRON_RUN_AS_NODE;

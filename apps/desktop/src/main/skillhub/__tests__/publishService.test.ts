@@ -42,7 +42,7 @@ vi.mock('../../clientEndpointsService', () => ({
   getClientEndpoint: vi.fn(() => 'https://skillhub.test.invalid'),
 }));
 
-vi.mock('../../serverApiClient', async () => {
+vi.mock('../../serverApiClient.desktop', async () => {
   class ServerApiError extends Error {
     constructor(
       public readonly code: string,
@@ -189,7 +189,7 @@ describe('SkillPublishService', () => {
       ].join('\n'),
     );
 
-    const { serverApiFetch } = await import('../../serverApiClient');
+    const { serverApiFetch } = await import('../../serverApiClient.desktop');
     const { computeFolderHash } = await import('../folderHash');
     const { writeSnapshot } = await import('../snapshot');
     const { pack } = await import('../zipPacker');
@@ -274,7 +274,7 @@ describe('SkillPublishService', () => {
       ].join('\n'),
     );
 
-    const { serverApiFetch } = await import('../../serverApiClient');
+    const { serverApiFetch } = await import('../../serverApiClient.desktop');
     const { computeFolderHash } = await import('../folderHash');
     const { writeSnapshot } = await import('../snapshot');
     const { pack } = await import('../zipPacker');
@@ -357,7 +357,7 @@ describe('SkillPublishService', () => {
       ].join('\n'),
     );
 
-    const { serverApiFetch } = await import('../../serverApiClient');
+    const { serverApiFetch } = await import('../../serverApiClient.desktop');
     const { computeFolderHash } = await import('../folderHash');
     const { writeSnapshot } = await import('../snapshot');
     const { pack } = await import('../zipPacker');
@@ -445,7 +445,7 @@ describe('SkillPublishService', () => {
       ].join('\n'),
     );
 
-    const { serverApiFetch } = await import('../../serverApiClient');
+    const { serverApiFetch } = await import('../../serverApiClient.desktop');
     const { computeFolderHash } = await import('../folderHash');
     const { writeSnapshot } = await import('../snapshot');
     const { pack } = await import('../zipPacker');
@@ -527,7 +527,7 @@ describe('SkillPublishService', () => {
       ].join('\n'),
     );
 
-    const { serverApiFetch } = await import('../../serverApiClient');
+    const { serverApiFetch } = await import('../../serverApiClient.desktop');
     const { computeFolderHash } = await import('../folderHash');
     const { writeSnapshot } = await import('../snapshot');
     const { pack } = await import('../zipPacker');
@@ -613,7 +613,7 @@ describe('SkillPublishService', () => {
       ].join('\n'),
     );
 
-    const { serverApiFetch } = await import('../../serverApiClient');
+    const { serverApiFetch } = await import('../../serverApiClient.desktop');
     const { computeFolderHash } = await import('../folderHash');
     const { writeSnapshot } = await import('../snapshot');
     const { pack } = await import('../zipPacker');
@@ -701,7 +701,7 @@ describe('SkillPublishService', () => {
       ].join('\n'),
     );
 
-    const { serverApiFetch } = await import('../../serverApiClient');
+    const { serverApiFetch } = await import('../../serverApiClient.desktop');
     const { computeFolderHash } = await import('../folderHash');
     const { writeSnapshot } = await import('../snapshot');
     const { pack } = await import('../zipPacker');
@@ -811,7 +811,7 @@ describe('SkillPublishService', () => {
       ].join('\n'),
     );
 
-    const { ServerApiError, serverApiFetch } = await import('../../serverApiClient');
+    const { ServerApiError, serverApiFetch } = await import('../../serverApiClient.desktop');
     const { computeFolderHash } = await import('../folderHash');
     const { pack } = await import('../zipPacker');
     const { net } = await import('electron');
@@ -1037,7 +1037,7 @@ describe('SkillPublishService', () => {
   it('treats blocked scan status as terminal when polling publish scan results', async () => {
     vi.useFakeTimers();
     try {
-      const { serverApiFetch } = await import('../../serverApiClient');
+      const { serverApiFetch } = await import('../../serverApiClient.desktop');
       const { SkillPublishService } = await import('../publishService');
 
       vi.mocked(serverApiFetch).mockResolvedValue({
@@ -1078,7 +1078,7 @@ describe('SkillPublishService', () => {
   it('delivers manual rejection feedback when review finishes during the publish poll', async () => {
     vi.useFakeTimers();
     try {
-      const { serverApiFetch } = await import('../../serverApiClient');
+      const { serverApiFetch } = await import('../../serverApiClient.desktop');
       const { SkillPublishService } = await import('../publishService');
       vi.mocked(serverApiFetch).mockResolvedValue({
         status: 'rejected', rejectionReason: 'Remove private notes',
@@ -1102,7 +1102,7 @@ describe('SkillPublishService', () => {
   it('finishes the publish-scoped poll when machine review hands off to manual review', async () => {
     vi.useFakeTimers();
     try {
-      const { serverApiFetch } = await import('../../serverApiClient');
+      const { serverApiFetch } = await import('../../serverApiClient.desktop');
       const { SkillPublishService } = await import('../publishService');
 
       vi.mocked(serverApiFetch).mockResolvedValue({
@@ -1143,7 +1143,7 @@ describe('SkillPublishService', () => {
   it('stops polling when the release is waiting for Platform review', async () => {
     vi.useFakeTimers();
     try {
-      const { serverApiFetch } = await import('../../serverApiClient');
+      const { serverApiFetch } = await import('../../serverApiClient.desktop');
       const { SkillPublishService } = await import('../publishService');
 
       vi.mocked(serverApiFetch).mockResolvedValue({ status: 'pending', gates: [] });
@@ -1171,7 +1171,7 @@ describe('SkillPublishService', () => {
     'drops private feedback and stops polling across %s', async (transition) => {
       vi.useFakeTimers();
       try {
-        const { serverApiFetch } = await import('../../serverApiClient');
+        const { serverApiFetch } = await import('../../serverApiClient.desktop');
         const { SkillPublishService } = await import('../publishService');
         let resolvePoll!: (value: unknown) => void;
         vi.mocked(serverApiFetch).mockImplementationOnce(() => new Promise((resolve) => { resolvePoll = resolve; }));
@@ -1199,7 +1199,7 @@ describe('SkillPublishService', () => {
   it('does not send a scheduled scan request with the next account credentials', async () => {
     vi.useFakeTimers();
     try {
-      const { serverApiFetch } = await import('../../serverApiClient');
+      const { serverApiFetch } = await import('../../serverApiClient.desktop');
       const { SkillPublishService } = await import('../publishService');
       const service = new SkillPublishService({ scanPollIntervalMs: 10 });
       service.startScanPoll('review-helper', '1.0.1');
@@ -1215,7 +1215,7 @@ describe('SkillPublishService', () => {
   it.each(['signed-out', 'boundary-pending'] as const)('does not start a poll while %s', async (state) => {
     vi.useFakeTimers();
     try {
-      const { serverApiFetch } = await import('../../serverApiClient');
+      const { serverApiFetch } = await import('../../serverApiClient.desktop');
       const { SkillPublishService } = await import('../publishService');
       if (state === 'signed-out') authState.ownerId = null;
       if (state === 'boundary-pending') authState.boundaryPending = true;
@@ -1231,7 +1231,7 @@ describe('SkillPublishService', () => {
   it('ignores stale scan poll responses after a newer poll starts', async () => {
     vi.useFakeTimers();
     try {
-      const { serverApiFetch } = await import('../../serverApiClient');
+      const { serverApiFetch } = await import('../../serverApiClient.desktop');
       const { SkillPublishService } = await import('../publishService');
 
       let resolveOldPoll!: (value: {

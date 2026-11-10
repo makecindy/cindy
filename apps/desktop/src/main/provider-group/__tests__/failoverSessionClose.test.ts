@@ -12,12 +12,12 @@ import { describe, expect, it, vi } from 'vitest';
 import { CONTINUE_AFTER_ERROR_PROMPT } from '../../../shared/interruptedTurn';
 import type { AgentInputQueuedMessage } from '../../../shared/agentInputQueue';
 import type { ProviderGroupConfig, ProviderGroupMember } from '../../../shared/providerGroup';
-import { AgentInputCoordinator, type AgentInputCoordinatorDeps } from '../../maker-ipc/agent-input-coordinator';
+import { AgentInputCoordinator, type AgentInputCoordinatorDeps } from '../../maker-ipc/agent-input-coordinator.desktop';
 import { shouldPreserveWaitingContinuationOnlyAutoResume } from '../../maker-ipc/interruptedTurnAutoResume';
 import { createSessionBindingLifecycle, runSessionCloseCleanup } from '../../maker-ipc/sessionBindingLifecycle';
 import type { IpcHandler } from '../../maker-ipc/ipcHandlerRegistry';
 import { registerStopSessionBackgroundTasksHandler } from '../../maker-ipc/stopSessionBackgroundTasksHandler';
-import type { ProviderGroupBinding } from '../bindings';
+import type { ProviderGroupBinding } from '../bindings.desktop';
 import type { ProviderGroupDirectory, ResolvedMemberState, ResolvedProviderGroupMember } from '../directory';
 import { createProviderGroupRouter } from '../router';
 import {

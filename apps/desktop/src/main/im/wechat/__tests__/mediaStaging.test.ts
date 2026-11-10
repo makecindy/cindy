@@ -12,7 +12,7 @@ vi.mock('../silkDecoder', () => ({
   decodeWechatSilkToWav: mocks.decodeWechatSilkToWav,
 }));
 
-vi.mock('../../../cindy-media/blobStore', () => ({
+vi.mock('../../../cindy-media/blobStore.desktop', () => ({
   resolveSafe: mocks.resolveSafe,
 }));
 

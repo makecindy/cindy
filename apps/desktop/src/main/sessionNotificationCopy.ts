@@ -5,7 +5,7 @@
  * renderer locale key。函数每次调用都现场执行 t()，因此 renderer 通过
  * setMainLocale() 切换语言后，下一条通知会立即跟随，不需要额外缓存或事件机制。
  */
-import { t } from './i18n.js';
+import { t } from './i18n.desktop.js';
 
 export type SessionEventKind = 'done' | 'error' | 'needs-reply';
 

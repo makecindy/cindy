@@ -136,7 +136,7 @@ vi.mock('../../dialogueWorkspace', () => ({ ensureDialogueWorkspaceDir: vi.fn() 
 vi.mock('../../../git-context/prRefsStore', () => ({
   recomputePrRefsForSession: vi.fn(async () => undefined),
 }));
-vi.mock('../../../imageCacheStore', () => ({ removeSession: vi.fn(async () => undefined) }));
+vi.mock('../../../imageCacheStore.desktop', () => ({ removeSession: vi.fn(async () => undefined) }));
 vi.mock('../../../device-link/sharedTaskRuntime.js', () => ({
   closeSharedTaskForTask: h.closeSharedTask,
   prepareSharedTaskClosureForTask: h.prepareSharedTaskClosure,
@@ -162,11 +162,14 @@ vi.mock('../../../security/trustedAppRenderer.js', () => ({
     !w.isDestroyed() && w.trusted !== false,
 }));
 vi.mock('../../agentIslandSessionPatch', () => ({ notifyAgentIslandSessionPatch: vi.fn() }));
-vi.mock('../../../messagePersistBroadcaster', () => ({ noteSessionClearBoundary: vi.fn() }));
+vi.mock('../../../messagePersistBroadcaster.desktop', () => ({ noteSessionClearBoundary: vi.fn() }));
 vi.mock('../../toolResultCompaction.js', () => ({
   compactSessionToolResultsBestEffort: h.compactSessionToolResultsBestEffort,
 }));
-vi.mock('../../../sessionIds', () => ({ resolveBusinessSessionId: (id: string) => id }));
+vi.mock('../../../sessionIds', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../../../sessionIds')>(),
+  resolveBusinessSessionId: (id: string) => id,
+}));
 vi.mock('../../../maker-host/claude-transcript-relocation.js', () => ({
   relocateClaudeTranscriptsForSessionMove: h.relocate,
 }));
