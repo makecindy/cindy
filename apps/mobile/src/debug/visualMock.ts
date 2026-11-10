@@ -201,8 +201,9 @@ export function seedVisualMockStore(): void {
     remoteSessionStore.setPendingInteractions(session.id, visualMockPendingInteractions(session.id));
   }
   remoteSessionStore.setActiveSessionSnapshots(VISUAL_MOCK_DEVICE_ID, [
-    { sessionId: 'visual-running', isTurnRunning: true },
-    { sessionId: 'visual-automation-running', isTurnRunning: true },
+    { sessionId: 'visual-running', isTurnRunning: true, activityPhase: 'running', activityAttention: false },
+    { sessionId: 'visual-automation-running', isTurnRunning: true, activityPhase: 'running', activityAttention: false },
+    { sessionId: 'visual-pending', isTurnRunning: true, activityPhase: 'needs-interaction', activityAttention: true },
   ]);
   void loadVisualRealDataSnapshot().then((snapshot) => {
     seedRealDataStore(snapshot);
@@ -270,6 +271,21 @@ async function visualMockInvoke<T = unknown>(
   channel: string,
   args: unknown[] = [],
 ): Promise<T> {
+  if (channel === 'local-db:messages:around-client-id' && typeof args[0] === 'string' && args[0].startsWith('qa-process-')) {
+    if (args[0] === 'qa-process-unavailable') throw new Error('Process unavailable');
+    return [
+      { clientId: 'qa-source', role: 'user', content: 'Weather request' },
+      ...(args[0] === 'qa-process-tools' ? [
+        { clientId: 'qa-note', role: 'assistant', content: '我先查询天气。', agentMeta: { assistantPhase: 'commentary' } },
+        { clientId: 'qa-tool', role: 'tool_use', content: { toolName: 'Weather', toolUseId: 'qa-tool', input: { city: 'Shanghai' } } },
+        { clientId: 'qa-result', role: 'tool_result', toolUseId: 'qa-tool', content: 'Sunny, 20°C' },
+      ] : []),
+      { clientId: 'qa-final', role: 'assistant', content: 'Final answer', agentMeta: { assistantPhase: 'final_answer', turnCompleted: true } },
+    ] as T;
+  }
+  // Keep the real remote viewer in its initial waiting state for UI screenshots.
+  // Only the __DEV__ mock provider reaches this; no computer is contacted.
+  if (channel === 'device-link:remote-desktop:v1') return new Promise<T>(() => {});
   const github = githubPrVisualFixture(channel, args[0]);
   if (github !== undefined) return github as T;
   const mask = groupMaskVisualFixture(channel, args[0]);

@@ -48,13 +48,14 @@ function usageCache(providerId: string) {
   return cache;
 }
 
-export function requestClaudeSubscriptionRefresh(providerId = 'anthropic'): void {
-  usageCache(providerId).refresh();
+export function requestClaudeSubscriptionRefresh(providerId = 'anthropic', shareIfPending = false): void {
+  usageCache(providerId).refresh(shareIfPending);
 }
 
 export function useClaudeSubscriptionUsage(
   enabled: boolean,
   providerId = 'anthropic',
+  options: { live?: boolean } = {},
 ): ClaudeSubscriptionUsageSnapshot | null {
-  return usageCache(providerId).useSnapshot(enabled);
+  return usageCache(providerId).useSnapshot(enabled, options);
 }

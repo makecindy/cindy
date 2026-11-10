@@ -3429,6 +3429,7 @@ describe("Pi provider-aware model routing", () => {
   it.each([
     ["anthropic-messages", "messages-model", undefined],
     ["openai-responses", "responses-model", "http://127.0.0.1:9988/v1"],
+    ["openai-responses", "google/gemini-4-argon", "http://127.0.0.1:9988/v1"],
     ["openai-completions", "moonshotai/kimi-k3", "http://127.0.0.1:9988/v1"],
     [
       "google-generative-ai",
@@ -3525,6 +3526,9 @@ describe("Pi provider-aware model routing", () => {
       );
       expect(model).toMatchObject({ api });
       expect(model?.baseUrl).toBe(baseUrl);
+      if (api === "openai-responses" && modelId === "google/gemini-4-argon") {
+        expect(model?.headers).toBeUndefined();
+      }
       if (api === "openai-completions") {
         expect(model?.compat).toMatchObject({
           maxTokensField: "max_tokens",

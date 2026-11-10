@@ -54,6 +54,7 @@ vi.mock('@/hooks/useWallpaperSettings', () => ({
     setWallpaper: vi.fn(),
     visibility: 0.37,
     setVisibility: vi.fn(),
+    previewVisibility: vi.fn(),
     previewBlur: vi.fn(),
     setMotion: vi.fn(),
     resetWallpaper: vi.fn(),
@@ -99,26 +100,26 @@ vi.mock('@/components/ui/slider', () => ({
   },
 }));
 
-vi.mock('../FontFamilyPicker', () => ({ FontFamilyPicker: () => null }));
+vi.mock('../FontFamilyPicker', () => ({ FontFamilyPicker: () => null, FontFamilyResetButton: () => null }));
 vi.mock('../LayoutResetControl', () => ({ LayoutResetControl: () => null }));
 
 describe('AppearanceSection accessibility', () => {
   it('labels the UI, code and terminal font-size number inputs', () => {
     render(<AppearanceSection />);
     const visibility = screen.getByRole('slider', {
-      name: 'settings.appearance.wallpaper.visibilityLabel',
+      name: 'settings.appearance.wallpaper.desktopVisibilityLabel',
     });
     expect(visibility.getAttribute('min')).toBe('0');
     expect(visibility.getAttribute('max')).toBe('1');
     expect(visibility.getAttribute('step')).toBe('0.01');
     expect(visibility.getAttribute('aria-describedby')).toBe('wallpaper-visibility-hint');
     expect(screen.getByText('37%')).toBeTruthy();
-    const blur = screen.getByRole('slider', { name: 'settings.appearance.wallpaper.blurLabel' });
+    const blur = screen.getByRole('slider', { name: 'settings.appearance.wallpaper.desktopBlurLabel' });
     expect(blur.getAttribute('min')).toBe('0');
     expect(blur.getAttribute('max')).toBe('20');
     expect(blur.getAttribute('step')).toBe('1');
     expect(blur.getAttribute('aria-describedby')).toBe('wallpaper-blur-hint');
-    expect(blur.hasAttribute('disabled')).toBe(true);
+    expect(blur.hasAttribute('disabled')).toBe(false);
 
     const wallpapers = within(
       screen.getByRole('radiogroup', { name: 'settings.appearance.wallpaper.aria' }),

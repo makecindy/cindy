@@ -512,6 +512,43 @@ describe('composer body drag (press anywhere on the card)', () => {
     expect(harness.result.visibleContentHeight).toBe(110);
   });
 
+  // #9452: Android ReactEditText takes the native touch lock on DOWN. RNGH
+  // emits onTouchesCancelled from inside cancel(), before its CANCELLED state
+  // is committed. Re-entering the manager there can fail/reset the handler,
+  // leaving the outer cancellation without an orchestrator (native fatal).
+  // Existing gesture mocks never invalidated this native registration. Exercise
+  // the real hook's pending/active callbacks with that synchronous boundary;
+  // unit tier, smallest input is DOWN -> native cancel (or a drag -> cancel).
+  it.each([false, true])('lets native cancellation finish without resetting its handler (dragging=%s)', (dragging) => {
+    const input = { ...composerInput(), bodyDragEnabled: true };
+    const harness = mountComposer(input);
+    const body = harness.result.bodyGesture as unknown as BodyGesture;
+    const drag = bodyDrag(harness.result.bodyGesture);
+    drag.down(440);
+    if (dragging) {
+      drag.move(430);
+      drag.move(400);
+      expect(harness.result.contentHeight.value).toBe(90);
+    }
+    let registered = true;
+    // A synchronous fail inside native cancellation cleans up its registration
+    // before the outer cancel() has committed CANCELLED.
+    drag.manager.fail.mockImplementation(() => { registered = false; });
+    const nativeCancel = () => {
+      body.cancelled({}, drag.manager);
+      if (!registered) throw new Error('Manually handled gesture had not been assigned to any detector');
+      registered = false;
+      body.finalizeManual();
+    };
+    expect(nativeCancel).not.toThrow();
+    flushJS();
+    expect(harness.result.active.value).toBe(false);
+    expect(harness.result.contentHeight.value).toBe(60);
+    expect(harness.result.mode).toBe('auto');
+    expect(input.onSnapToAuto).not.toHaveBeenCalled();
+    if (dragging) expect(input.onGrabberTouchActiveChange).toHaveBeenLastCalledWith(false);
+  });
+
   it('drags the collapsed pill open with the finger: toolbar first, then height; short pulls fall back', () => {
     const input = { ...composerInput(), collapsed: true, bodyDragEnabled: true, onDragOpenChange: vi.fn(), onDragOpenCommit: vi.fn() };
     const harness = mountComposer(input);

@@ -66,6 +66,7 @@ export default defineConfig({
   },
   test: {
     globals: true,
+    setupFiles: ['./src/test/vitest/user-data-dir-setup.ts'],
     // Main-process tests do real IO (loopback HTTP servers, git subprocesses,
     // heavy module imports through the vite-node transform). On Windows those
     // are markedly slower and, under the full desktop suite's worker-pool

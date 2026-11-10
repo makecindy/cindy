@@ -53,6 +53,16 @@ import { BRAND_IDENTITY } from '@cindy/maker-shared/brand-identity';
 import * as canaryFlagStore from './canaryFlagStore';
 import { decodeAccessTokenOrgSlug } from './authTokenClaims';
 import { AuthRefreshBackoff } from './authRefreshBackoff';
+import {
+  ACCOUNT_DELETION_RECEIPT_KEY,
+  AUTH_ACCOUNT_LOGOUT_TOMBSTONES_KEY,
+  AUTH_ACCOUNT_VAULT_KEY,
+  AUTH_SESSION_KEY,
+  LEGACY_ACCOUNT_REFRESH_TOKEN_KEY,
+  LEGACY_REFRESH_TOKEN_KEY,
+  LEGACY_RESOURCE_REFRESH_TOKEN_KEY,
+  PERSISTED_AUTH_CREDENTIAL_KEYS,
+} from './authCredentialKeys';
 import { getProviderSecretStore } from './secrets/providerSecretStore.js';
 import {
   runRefreshWithReplacementRetry,
@@ -203,20 +213,14 @@ const AUTH_REGION: AuthRegion =
 function authServerUrl(realm: AuthRegion = activeAuthRealm): string {
   return getClientEndpointForRealm(realm, 'authApiBaseUrl');
 }
-const AUTH_SESSION_KEY = 'cindy_auth_session_v1';
-const AUTH_ACCOUNT_VAULT_KEY = 'cindy_auth_accounts_v1';
 const AUTH_ACCOUNT_VAULT_LOCK_FILE = '.cindy-auth-accounts-v1.lock';
-const AUTH_ACCOUNT_LOGOUT_TOMBSTONES_KEY = 'cindy_auth_account_logout_tombstones_v1';
 // The aggregate vault stays readable by v1 clients for explicit-login
 // compatibility. Per-membership logout tombstones live in a separate key that
 // older clients never read or rewrite, so their Passport sync cannot resurrect
 // an account explicitly logged out by a newer client.
 const AUTH_ACCOUNT_VAULT_VERSION = 2 as const;
 const AUTH_ACCOUNT_LOGOUT_TOMBSTONES_VERSION = 1 as const;
-const LEGACY_RESOURCE_REFRESH_TOKEN_KEY = 'cindy_auth_refresh_token';
-const ACCOUNT_DELETION_RECEIPT_KEY = 'cindy_auth_account_deletion_receipt';
-const LEGACY_ACCOUNT_REFRESH_TOKEN_KEY = 'cindy_auth_account_refresh_token';
-const LEGACY_REFRESH_TOKEN_KEY = 'refresh_token';
+
 const DEFAULT_MODEL = 'claude-sonnet-4-6';
 const DEFAULT_EFFORT = 'medium';
 
@@ -513,6 +517,34 @@ export function isPassiveSharedUserDataInstance(): boolean {
   return !app.isPackaged && process.env.XDT_PASSIVE_SHARED_USER_DATA === '1';
 }
 
+let delegatedAuthState: AuthState | null = null;
+let authRefreshOverride: ((options?: { serverRejectedToken?: boolean }) => Promise<AuthState>) | null = null;
+/**
+ * In host client mode, the background cindy-host is the single writer that
+ * owns token refresh and rotation. This override delegates refresh without
+ * touching persisted credentials on disk.
+ */
+export function setAuthRefreshOverride(
+  fn: ((options?: { serverRejectedToken?: boolean }) => Promise<AuthState>) | null,
+): void {
+  authRefreshOverride = fn;
+  delegatedAuthState = null;
+}
+
+export function receiveHostAuthState(state: AuthState): void {
+  if (!authRefreshOverride) throw new Error('Host auth state requires explicit client mode');
+  // The Host owns durable credentials and owner selection. This client only
+  // commits its in-memory owner so local readers never fall back to a stale
+  // account (and a remote logout clears that owner before notifying windows).
+  if (state.isAuthenticated && state.user?.id) {
+    commitVolatileAppSession('cloud', state.user.id);
+  } else {
+    commitVolatileAppSession('signed-out');
+  }
+  delegatedAuthState = state;
+  notifyRenderer();
+}
+
 /**
  * passive 实例「本进程已登出」的墓碑(进程内,不落盘)。
  *
@@ -640,14 +672,7 @@ function readSafe(key: string): string | null {
 // logout tombstones. Only definite absence permits the fresh-profile login UI;
 // checking filenames does not probe the encryption backend or decrypt anything.
 function hasPotentiallyPersistedAuthCredentials(): boolean {
-  return [
-    AUTH_SESSION_KEY,
-    AUTH_ACCOUNT_VAULT_KEY,
-    AUTH_ACCOUNT_LOGOUT_TOMBSTONES_KEY,
-    LEGACY_RESOURCE_REFRESH_TOKEN_KEY,
-    LEGACY_ACCOUNT_REFRESH_TOKEN_KEY,
-    LEGACY_REFRESH_TOKEN_KEY,
-  ].some((key) =>
+  return PERSISTED_AUTH_CREDENTIAL_KEYS.some((key) =>
     ['', '.bak'].some((suffix) => {
       try {
         fs.accessSync(path.join(SAFE_STORAGE_DIR(), `${key}.enc${suffix}`), fs.constants.F_OK);
@@ -3602,6 +3627,7 @@ function broadcastToRenderers(channel: string, payload: unknown): void {
  * 修改直接写 auth-server(updateServerProfile),本地覆写层已退役。
  */
 function snapshotAuthState(): AuthState {
+  if (delegatedAuthState) return delegatedAuthState;
   const appSession = getActiveAppSession();
   const isCloudAuthenticated =
     appSession.mode === 'cloud' && accessToken !== null && currentUser !== null;
@@ -4694,6 +4720,10 @@ export async function updateServerProfile(
 }
 
 export async function initialize(options: AuthInitializeOptions = {}): Promise<AuthState> {
+  if (authRefreshOverride) {
+    receiveHostAuthState(await authRefreshOverride());
+    return delegatedAuthState!;
+  }
   const initializeStartEpoch = authStateEpoch;
   const settledLoginsAtInitialize = settledLoginCommitCount;
   // A renderer can mount after the boundary-pending broadcast. Keep startup
@@ -4856,14 +4886,10 @@ export async function initialize(options: AuthInitializeOptions = {}): Promise<A
   // 进程内去重:主窗流程还挂着(黑洞网络)时,副窗 / 右侧栏窗口 mount 触发的
   // initialize() 复用同一个 in-flight promise,避免并发轮换同一枚 refresh token。
   if (coldStartAuthInFlight === null) {
-    coldStartAuthInFlight = runColdStartRefreshFlow(storedToken, persistedSession.realm).finally(
-      () => {
-        // Keep every fallback edge until the shared refresh settles: sibling renderer
-        // timeouts may append another edge while the network flow is still pending.
-        coldStartTimeoutFallbacks.clear();
-        coldStartAuthInFlight = null;
-      },
-    );
+    coldStartAuthInFlight = runColdStartRefreshFlow(storedToken, persistedSession.realm).finally(() => {
+      coldStartTimeoutFallbacks.clear();
+      coldStartAuthInFlight = null;
+    });
   }
   // 黑洞 / captive-portal 网络护栏:限时等待,超时先以未登录返回解锁 splash,
   // 流程继续后台跑;迟到成功由流程内部广播登录态(renderer 自动跳回主界面)。
@@ -6074,6 +6100,10 @@ export async function dispatchLoginAction(action: unknown): Promise<DesktopLogin
 }
 
 export async function refresh(options?: { serverRejectedToken?: boolean }): Promise<boolean> {
+  if (authRefreshOverride !== null) {
+    receiveHostAuthState(await authRefreshOverride(options));
+    return delegatedAuthState!.isAuthenticated;
+  }
   if (getActiveAppSession().mode === 'local') {
     log.debug('runtime refresh skipped in local mode');
     return false;

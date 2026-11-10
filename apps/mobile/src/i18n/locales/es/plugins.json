@@ -366,5 +366,13 @@
     "merged": "Fusionada",
     "closed": "Cerrada",
     "draft": "Borrador"
+  },
+  "taskArchive": {
+    "now": "Archivar ahora",
+    "pending": "Se archivará al salir de esta tarea",
+    "cancel": "Cancelar",
+    "cancelled": "No se archivará automáticamente esta vez",
+    "archived": "Se archivó «{{title}}»",
+    "undo": "Deshacer"
   }
 }

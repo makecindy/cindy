@@ -777,6 +777,7 @@ interface SessionInputState {
   error: string | null;
   /** Stable error reason for live projections; null when no terminal error is active. */
   errorReason: string | null;
+  errorPersistBinding: { message: string; persistId: string } | null;
   /** The failed scheduled input was persisted before its recovery was released. */
   errorCanContinue: boolean;
   /** Bounded structured details for tool-loop terminal errors. */
@@ -890,6 +891,7 @@ interface PendingAutoResumeRecovery {
   recovery: Extract<AgentInputRecovery, { kind: 'active-turn' }>;
   error: string | null;
   errorReason: string | null;
+  errorPersistBinding: SessionInputState['errorPersistBinding'];
   toolLoop: AgentInputToolLoopDetails | null;
   outputLimit: OutputLimitDetails | null;
   stickyError: string | null;
@@ -920,6 +922,7 @@ function createInitialInputState(
     activeTurn: null,
     error: null,
     errorReason: null,
+    errorPersistBinding: null,
     errorCanContinue: false,
     toolLoop: null,
     outputLimit: null,
@@ -1159,9 +1162,10 @@ function recordPendingTerminalEvent(active: ActiveTurn, event: ActiveTurnTermina
 }
 
 function clearErrorProjectionSignals(
-  state: Pick<SessionInputState, 'errorReason' | 'toolLoop' | 'outputLimit' | 'errorCanContinue'>,
+  state: Pick<SessionInputState, 'errorReason' | 'errorPersistBinding' | 'toolLoop' | 'outputLimit' | 'errorCanContinue'>,
 ): void {
   state.errorReason = null;
+  state.errorPersistBinding = null;
   state.toolLoop = null;
   state.outputLimit = null;
   state.errorCanContinue = false;
@@ -2976,6 +2980,7 @@ export class AgentInputCoordinator {
     // accepted 清理吞掉;合成收口分支需要回放它(review #939 第三轮)。
     const priorError = accepted.error;
     const priorErrorReason = accepted.errorReason;
+    const priorErrorPersistBinding = accepted.errorPersistBinding;
     const priorToolLoop = accepted.toolLoop;
     const priorOutputLimit = accepted.outputLimit;
     const priorStickyError = accepted.stickyError;
@@ -3081,6 +3086,7 @@ export class AgentInputCoordinator {
       if (priorError || priorRecovery) {
         latest.error = priorError;
         latest.errorReason = priorErrorReason;
+        latest.errorPersistBinding = priorErrorPersistBinding;
         latest.toolLoop = priorToolLoop;
         latest.outputLimit = priorOutputLimit;
         latest.stickyError = priorStickyError;
@@ -3500,6 +3506,7 @@ export class AgentInputCoordinator {
     }
     const previousError = state.error;
     const previousErrorReason = state.errorReason;
+    const previousErrorPersistBinding = state.errorPersistBinding;
     const previousToolLoop = state.toolLoop;
     const previousOutputLimit = state.outputLimit;
     const previousStickyError = state.stickyError;
@@ -3561,6 +3568,7 @@ export class AgentInputCoordinator {
           recovery,
           error: previousError,
           errorReason: previousErrorReason,
+          errorPersistBinding: previousErrorPersistBinding,
           toolLoop: previousToolLoop,
           outputLimit: previousOutputLimit,
           stickyError: previousStickyError,
@@ -4081,6 +4089,16 @@ export class AgentInputCoordinator {
       restoredGeneration: previous,
     });
     active.vendorTurnGeneration = previous;
+  }
+
+  /** Called synchronously after terminal ownership is settled and a row ID is reserved.
+   * The live event delivers the ID; future projection reads must retain the same identity.
+   * Keep the message with it so a different dispatch/sticky error cannot inherit the row.
+   */
+  bindErrorPersistId(sessionId: string, persistId: string, message: string): void {
+    const state = this.states.get(sessionId);
+    if (!persistId || !message || !state?.error || state.error !== message) return;
+    state.errorPersistBinding = { message, persistId };
   }
 
   onTurnEvent(
@@ -4635,6 +4653,9 @@ export class AgentInputCoordinator {
       queueEditLocks: [...state.queueEditLocks],
       queueAbortPending: state.queueAbortPending,
       error,
+      ...(error && state.errorPersistBinding?.message === error
+        ? { errorPersistId: state.errorPersistBinding.persistId }
+        : {}),
       ...(error && state.errorCanContinue ? { errorCanContinue: true } : {}),
       ...(error && state.errorReason ? { errorReason: state.errorReason } : {}),
       ...(error && state.toolLoop ? { toolLoop: state.toolLoop } : {}),
@@ -6262,6 +6283,7 @@ export class AgentInputCoordinator {
     this.pendingAutoResumeRecoveries.delete(clientId);
     state.error = pending.error;
     state.errorReason = pending.errorReason;
+    state.errorPersistBinding = pending.errorPersistBinding;
     state.toolLoop = pending.toolLoop;
     state.outputLimit = pending.outputLimit;
     state.stickyError = pending.stickyError;

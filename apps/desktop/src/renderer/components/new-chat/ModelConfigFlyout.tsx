@@ -34,6 +34,8 @@ export interface ModelConfigFlyoutProps {
   state: ModelConfigFlyoutState;
   /** 来源供应商展示名。 */
   sourceLabel: string;
+  /** Catalog source; only a local catalog may read this computer's preferences/native metadata. */
+  deviceId?: string;
   price: ModelPricePresentation | null;
   /** 档位 → 显示文案(按当前选中引擎取,i18n)。 */
   effortLabelOf: (agent: AgentKind, effort: Effort) => string;
@@ -69,6 +71,7 @@ export function ModelConfigFlyout({
   config,
   state,
   sourceLabel,
+  deviceId,
   price,
   effortLabelOf,
   justFavorited = false,
@@ -84,7 +87,7 @@ export function ModelConfigFlyout({
   const { t } = useTranslation();
   const displayName = localizedModelName(entry.displayName, t);
   const showSlider = config.efforts.length > 1;
-  const contextLimit = useModelContextLimit({
+  const contextLimit = useModelContextLimit(deviceId ? null : {
     providerId: entry.providerId,
     agent: config.engine === 'cc' ? 'claude-code' : config.engine,
     modelId: config.wireModelId ?? entry.modelId,
@@ -161,7 +164,7 @@ export function ModelConfigFlyout({
           <>
             {' · '}
             {t('newChat.modelSelector.meta.context', {
-              value: codexDefaultContext
+              value: codexDefaultContext && !deviceId
                 ? codexContext ? formatContextWindow(codexContext.contextWindow) : t('settings.providers.models.advanced.codexContextUnknown')
                 : formatContextWindow(contextWindow),
             })}

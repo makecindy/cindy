@@ -1,3 +1,4 @@
+import { configureUserDataDir } from '../../userDataPath.js';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import os, { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -164,6 +165,7 @@ describe('buildPiAgent roster prompt assembly', () => {
     writeFileSync(path.join(process.env.PI_CODING_AGENT_DIR!, 'AGENTS.md'), 'host global context canary');
     workingDir = path.join(root, 'workspace');
     state.userDataPath = path.join(root, 'user-data');
+    configureUserDataDir(state.userDataPath);
     state.binaryPath = path.join(root, 'pi');
     state.ripgrepPath = path.join(root, 'rg');
     mkdirSync(workingDir, { recursive: true });

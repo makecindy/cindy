@@ -21,9 +21,10 @@ export interface CompanionThreads {
   open(message: NormalizedRemoteMessage): void;
 }
 
-/** Topics belong to the host's canonical Bot chat; the full task route owns their runtime. */
-export function useCompanionThreads({ deviceId, deviceName, botId, sessionId, enabled, avatar, controlsReady = true }: {
-  deviceId: string; deviceName: string; botId: string; sessionId: string; enabled: boolean; avatar: ReactNode; controlsReady?: boolean;
+/** Topics belong to the host's canonical Bot chat. The resident message surface
+ * retains presentation reads; actions still use the current route's authority. */
+export function useCompanionThreads({ deviceId, deviceName, botId, sessionId, enabled, avatar, controlsReady = true, active = true }: {
+  deviceId: string; deviceName: string; botId: string; sessionId: string; enabled: boolean; avatar: ReactNode; controlsReady?: boolean; active?: boolean;
 }): CompanionThreads | undefined {
   const { accountGeneration } = useAuth();
   const { invoke, connectionEpoch } = useDeviceLink();
@@ -31,18 +32,18 @@ export function useCompanionThreads({ deviceId, deviceName, botId, sessionId, en
   const router = useRouter();
   const { t } = useTranslation();
   const profile = useRemoteCompanionQuery<{ dmThreadsSupported?: boolean; canonicalSessionId?: string }>(
-    deviceId, 'local-db:bots:get', [botId], { enabled: enabled && !!botId });
+    deviceId, 'local-db:bots:get', [botId], { enabled: enabled && !!botId, active });
   const supported = enabled && profile.value?.dmThreadsSupported === true && profile.value.canonicalSessionId === sessionId;
   const query = useRemoteCompanionQuery<BotDmThreadSummary[]>(deviceId, 'local-db:bots:dm-thread:list', [{ botId, rootSessionId: sessionId }],
-    { enabled: supported, refreshIntervalMs: 10_000 });
-  const scope = JSON.stringify([accountGeneration, connectionEpoch, deviceId, botId, sessionId, enabled, controlsReady, query.online, focused]);
+    { enabled: supported, active, refreshIntervalMs: 10_000 });
+  const scope = JSON.stringify([accountGeneration, connectionEpoch, deviceId, botId, sessionId, enabled, controlsReady, query.online, focused, active]);
   const current = useRef(scope); current.current = scope;
   const pending = useRef<string | null>(null);
   const attempt = useRef(0);
   const [busyScope, setBusyScope] = useState<string | null>(null);
   useEffect(() => { pending.current = null; setBusyScope(null); return () => { attempt.current += 1; }; }, [scope]);
   const open = useCallback((message: NormalizedRemoteMessage) => {
-    if (!supported || !controlsReady || !focused || !query.online || pending.current === scope) return;
+    if (!supported || !controlsReady || !focused || !active || !query.online || pending.current === scope) return;
     pending.current = scope; setBusyScope(scope);
     const request = ++attempt.current;
     const rootClientId = message.source.clientId || message.source.id;
@@ -68,10 +69,10 @@ export function useCompanionThreads({ deviceId, deviceName, botId, sessionId, en
         if (valid()) setBusyScope(null);
       }
     })();
-  }, [botId, controlsReady, deviceId, deviceName, focused, invoke, query.online, router, scope, sessionId, supported, t]);
+  }, [active, botId, controlsReady, deviceId, deviceName, focused, invoke, query.online, router, scope, sessionId, supported, t]);
   const threads = useMemo(() => new Map((query.value ?? []).map(thread => [thread.rootClientId, thread])), [query.value]);
-  return useMemo(() => supported ? { threads, avatar, busy: busyScope === scope || !query.online || !controlsReady, open } : undefined,
-    [supported, threads, avatar, busyScope, scope, query.online, controlsReady, open]);
+  return useMemo(() => supported ? { threads, avatar, busy: busyScope === scope || !query.online || !controlsReady || !active, open } : undefined,
+    [supported, threads, avatar, busyScope, scope, query.online, controlsReady, active, open]);
 }
 
 export function CompanionThreadSummary({ message, topics }: { message: NormalizedRemoteMessage; topics: CompanionThreads }) {

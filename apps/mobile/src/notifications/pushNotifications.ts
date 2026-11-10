@@ -1,4 +1,5 @@
 import { i18n } from '@/i18n';
+import { mobileDebugLog } from '@/debug/mobileDebugLog';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Platform } from 'react-native';
 import type { ClientEndpointRegion } from '@cindy/maker-shared/client-endpoints';
@@ -16,6 +17,7 @@ import {
 } from '@/config/devServerEnvironment';
 import { getActiveSelfHostedRelay } from '@/device-link/selfHostedRelayRouting';
 import Notifications from './nativeNotifications';
+import { readIosPushEnvironment } from './nativePushEnvironment';
 import { buildPushTokenRegistrationBody, parseNotificationResponseDeepLink } from './pushRegistrationModel';
 
 /** APNs / FCM registration, scoped to the current account realm and lifecycle. */
@@ -357,7 +359,10 @@ async function syncPushRegistrationInternal(
     permission = await Notifications.requestPermissionsAsync();
     if (lifecycleGeneration !== pushLifecycleGeneration) return 'skipped';
   }
-  if (permission.status !== 'granted') return 'permission-denied';
+  if (permission.status !== 'granted') {
+    mobileDebugLog('warn', 'network', 'push registration', { stage: 'permission-denied', realm });
+    return 'permission-denied';
+  }
 
   let deviceToken;
   try { deviceToken = await Notifications.getDevicePushTokenAsync(); }
@@ -367,13 +372,17 @@ async function syncPushRegistrationInternal(
     throw error;
   }
   if (lifecycleGeneration !== pushLifecycleGeneration) return 'skipped';
+  const apnsEnvironment = Platform.OS === 'ios' ? await readIosPushEnvironment() : undefined;
+  if (lifecycleGeneration !== pushLifecycleGeneration) return 'skipped';
   const body = buildPushTokenRegistrationBody({
     token: typeof deviceToken.data === 'string' ? deviceToken.data : '',
     region: AUTH_REGION,
-    isDevBuild: __DEV__,
+    apnsEnvironment,
     platform: Platform.OS === 'android' ? 'android' : 'ios',
   });
   if (!body) return 'skipped';
+  mobileDebugLog('info', 'network', 'push registration', { stage: 'registering', realm,
+    appVariant: body.appVariant, apnsEnv: body.apnsEnv });
 
   // PUT 响应丢失时无法判断服务端是否提交，发出前即标记“可能已注册”；
   // 后续只能在该区域持有有效会话时做幂等 DELETE。
@@ -407,6 +416,8 @@ async function syncPushRegistrationInternal(
     return 'skipped';
   }
   await removePushRealm(PUSH_PENDING_UNREGISTER_KEY, realm, stateScope);
+  mobileDebugLog('info', 'network', 'push registration', { stage: 'registered', realm,
+    appVariant: body.appVariant, apnsEnv: body.apnsEnv });
   return 'registered';
 }
 
@@ -416,7 +427,13 @@ export function syncPushRegistration(opts: {
 }): Promise<PushSyncResult> {
   const lifecycleGeneration = pushLifecycleGeneration;
   return runPushMutation(() =>
-    syncPushRegistrationInternal(opts, lifecycleGeneration),
+    syncPushRegistrationInternal(opts, lifecycleGeneration).catch((error: unknown) => {
+      const status = (error as { status?: unknown } | null)?.status;
+      // Only structured, non-secret diagnostics. Never log a token, request body or raw error.
+      mobileDebugLog('warn', 'network', 'push registration', { stage: 'failed',
+        ...(typeof status === 'number' ? { status } : {}) });
+      throw error;
+    }),
   );
 }
 

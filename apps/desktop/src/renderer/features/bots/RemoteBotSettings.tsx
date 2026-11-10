@@ -11,7 +11,7 @@ import {
 } from '@cindy/device-link';
 import { Button } from '@/components/ui/button';
 import { Input, Textarea } from '@/components/ui/input';
-import { Switch } from '@/components/ui/switch';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Select } from '@/components/ui/select';
 import { Spinner } from '@/components/ui/spinner';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
@@ -22,6 +22,7 @@ import {
 import { isDeviceLinkRemotePushCurrent } from '@/lib/remoteDataOwnerPushFence';
 import { createCoalescedRefresh } from '@/lib/coalescedRefresh';
 import { extractIpcError } from '@/utils/ipcError';
+import { cn } from '@/lib/utils';
 import { BotModelChainEditor } from './BotModelChainEditor';
 import { BotTaskModelEditor } from './BotTaskModelEditor';
 import { BotPortraitPicker } from './BotPortraitPicker';
@@ -389,13 +390,19 @@ function RemoteBotSettingsContent({ bot, beforeCloseRef, onDeleted, initialPage 
     error === 'conflict' ||
     !!panel?.action?.disabled;
   const disabled = unavailable || convertingPortrait || preparingPortrait;
-  const row = (id: string, title: string, action: () => void) => (
+  // Irreversible actions (delete, remove) take the danger treatment (DESIGN.md §4 destructive actions).
+  const row = (id: string, title: string, action: () => void, danger = false) => (
     <button
       key={id}
       type="button"
       disabled={busy || convertingPortrait || preparingPortrait || loading || revisionPending}
       onClick={action}
-      className="flex min-h-10 w-full items-center justify-between gap-3 rounded-full px-3 py-2 text-left text-13 hover:bg-[var(--surface-hover)] disabled:opacity-50"
+      className={cn(
+        'flex min-h-10 w-full items-center justify-between gap-3 rounded-full px-3 py-2 text-left text-13 disabled:opacity-50',
+        danger
+          ? 'text-[var(--text-danger)] hover:bg-[color-mix(in_srgb,var(--text-danger)_8%,transparent)]'
+          : 'hover:bg-[var(--surface-hover)]',
+      )}
     >
       <span>{title}</span>
       <ChevronRight size={16} />
@@ -413,15 +420,19 @@ function RemoteBotSettingsContent({ bot, beforeCloseRef, onDeleted, initialPage 
         <label
           key={field.id}
           htmlFor={id}
-          className="flex flex-col gap-2 text-13 text-[var(--text-secondary)]"
+          className={cn(
+            'flex gap-2 text-13 text-[var(--text-secondary)]',
+            // A Save-gated option is a Checkbox, its label to the right (DESIGN.md §4 Switch or Checkbox).
+            field.kind === 'toggle' ? 'flex-row-reverse items-center justify-end' : 'flex-col',
+          )}
         >
           <span>{label(field.label)}</span>
           {field.kind === 'toggle' ? (
-            <Switch
+            <Checkbox
               id={id}
               checked={draft[field.id] === true}
               disabled={disabled}
-              onCheckedChange={change}
+              onChange={(event) => change(event.target.checked)}
             />
           ) : field.kind === 'select' ? (
             <Select
@@ -663,7 +674,7 @@ function RemoteBotSettingsContent({ bot, beforeCloseRef, onDeleted, initialPage 
                   )}
                 </div>
               ) : item.action && ['restart', 'resume', 'delete', 'remove'].includes(item.id) ? (
-                row(item.id, label(item.action.label), () => void submit(item, {}, true))
+                row(item.id, label(item.action.label), () => void submit(item, {}, true), item.id === 'delete' || item.id === 'remove')
               ) : item.action || item.text ? (
                 row(item.id, label(item.title), () => void open(item.id))
               ) : null,
