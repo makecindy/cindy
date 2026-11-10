@@ -83,7 +83,14 @@ export function NativeBottomSheet({
           onClose();
         }}
       >
-        <RNHostView matchContents>
+        {/*
+          Expo UI 58 splits `matchContents` per axis: `true` measures BOTH axes
+          from the children, so the sheet's RN content collapsed to the width of
+          its widest child (the update card, the account switcher, every other
+          single-level sheet). Only the height may follow the content — the
+          width stays the sheet's (#9612).
+        */}
+        <RNHostView matchContents={{ vertical: true }}>
           <GestureHandlerRootView style={{ maxHeight: height }}>
             <PaneViewportProvider value={{ width, height }}>
               <NativeSheetContext.Provider value={context}>
