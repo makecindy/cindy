@@ -1,6 +1,9 @@
-import * as Notifications from 'expo-notifications';
 import { requireOptionalNativeModule } from 'expo-modules-core';
+import Notifications from './nativeNotifications';
 import { readIosPushEnvironment } from './nativePushEnvironment';
+
+/** expo-notifications IosAuthorizationStatus.PROVISIONAL; the SDK enum stays behind the adapter. */
+const IOS_STATUS_PROVISIONAL = 3;
 
 export interface PushDiagnostic {
   bundleId: string;
@@ -27,7 +30,7 @@ export async function readIosPushDiagnostic(isCurrent: () => boolean): Promise<P
     bundleId: application?.applicationId ?? '—',
     build: application?.nativeBuildVersion ?? '—',
     environment,
-    permission: permission.ios?.status === Notifications.IosAuthorizationStatus.PROVISIONAL
+    permission: permission.ios?.status === IOS_STATUS_PROVISIONAL
       ? 'provisional' : permission.status,
     alerts: permission.ios?.allowsAlert ?? null,
     lockScreen: permission.ios?.allowsDisplayOnLockScreen ?? null,
