@@ -875,8 +875,8 @@
       "runningCount_one": "{{count}} tarefa em execução",
       "runningCount_other": "{{count}} tarefas em execução",
       "limitAria": "Limite de tarefas de {{name}}",
-      "limitOption_one": "Máx. {{count}}",
-      "limitOption_other": "Máx. {{count}}",
+      "limitOption_one": "Até {{count}}",
+      "limitOption_other": "Até {{count}}",
       "weightAria": "Peso de {{name}}",
       "weightOption": "Peso {{weight}}",
       "assignAria": "Atribuir tarefas a {{name}}",
@@ -929,7 +929,7 @@
       },
       "accountCount_many": "{{count}} contas",
       "runningCount_many": "{{count}} tarefas em execução",
-      "limitOption_many": "Máx. {{count}}"
+      "limitOption_many": "Até {{count}}"
     },
     "rebalance": {
       "title": "Continuar em {{label}}?",
@@ -11530,6 +11530,9 @@
       "databaseDriver": "Não foi possível carregar o controlador da base de dados. Atualize ou repare o Cindy e tente novamente.",
       "databaseUnavailable": "Não foi possível ler a base de dados de origem. Os dados originais não foram alterados; tente novamente após a reparação.",
       "fileTooLarge": "Um ficheiro ou esta importação excede o limite de leitura. O conteúdo não foi truncado.",
+      "sourceFileTooLarge": "Um ficheiro excede o limite de leitura. Este item não foi totalmente importado.",
+      "snapshotTooLarge": "O volume total de dados desta leitura excede o limite. A importação está incompleta.",
+      "itemTooLarge": "Os ficheiros deste item excedem 128 MiB no total. Este item não foi totalmente importado.",
       "memoryMetadata": "O resumo ou o título da memória excede os requisitos de armazenamento.",
       "memoryWrite": "A escrita da memória ou a verificação de integridade falhou. Pode tentar novamente.",
       "memoryChanged": "A memória guardada foi alterada e não foi substituída.",

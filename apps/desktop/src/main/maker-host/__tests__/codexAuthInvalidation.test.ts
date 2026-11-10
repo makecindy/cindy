@@ -1,10 +1,15 @@
 import { configureOwnerContext } from '../../ownerContext.js';
 import fs from 'node:fs';
+import { EventEmitter } from 'node:events';
+import * as childProcess from 'node:child_process';
+import * as binaries from '../../agent-binaries/index.js';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+
+vi.mock('node:child_process', { spy: true });
 
 // Load the adapter graph during collection, not inside the first assertion
 // (cold transforms under the Windows CI pool are unrelated to file identity).
@@ -22,7 +27,6 @@ import {
 } from '../codex-auth-invalidation.js';
 
 const dirs: string[] = [];
-const expectedSharedLinkType = process.platform === 'win32' ? 'hardlink' : 'symlink';
 
 /** 探测真实文件 symlink 能力；Windows 未启用 Developer Mode 时会返回 EPERM。 */
 function canCreateFileSymlink(): boolean {
@@ -68,6 +72,13 @@ vi.mock('electron', () => ({
 
 vi.mock('@cindy/maker-core', () => ({}));
 
+vi.mock('../codex-auth-file-move', () => ({
+  moveCodexAuthFile: async (from: string, to: string) => {
+    if (fs.existsSync(to)) throw Object.assign(new Error('exists'), { code: 'EEXIST' });
+    fs.renameSync(from, to);
+  },
+}));
+
 vi.mock('../../appSessionState.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../appSessionState.js')>();
   return {
@@ -107,13 +118,20 @@ function deferred<T = void>() {
 }
 
 function expectPlatformSharedLink(systemAuth: string, localAuth: string): void {
-  expect(fs.lstatSync(localAuth).isSymbolicLink()).toBe(process.platform !== 'win32');
   const systemStat = fs.statSync(systemAuth);
-  const localStat = fs.statSync(localAuth);
-  expect({ dev: localStat.dev, ino: localStat.ino }).toEqual({
-    dev: systemStat.dev,
-    ino: systemStat.ino,
-  });
+  // Codex 0.165+ 拒绝 nlink>1。普通共享使用 symlink；只读 Dev 快照可以是独立副本。
+  expect(systemStat.nlink).toBe(1);
+  if (fs.lstatSync(localAuth).isSymbolicLink()) {
+    const localStat = fs.statSync(localAuth);
+    expect({ dev: localStat.dev, ino: localStat.ino }).toEqual({
+      dev: systemStat.dev,
+      ino: systemStat.ino,
+    });
+    return;
+  }
+  expect(process.platform).toBe('win32');
+  expect(fs.statSync(localAuth).ino).not.toBe(systemStat.ino);
+  expect(fs.readFileSync(localAuth, 'utf8')).toBe(fs.readFileSync(systemAuth, 'utf8'));
 }
 
 it('compares Codex hard-link identities without Windows number precision collisions', () => {
@@ -619,6 +637,81 @@ describe('Codex system credential suppression marker', () => {
     expect(JSON.parse(fs.readFileSync(localAuth, 'utf8'))).toMatchObject({
       tokens: { access_token: 'new-local-token', account_id: 'acct-1' },
     });
+  });
+
+  // #9316: 旧开发实现的备份不能区分崩溃和原生登出。保留字节供人工恢复,
+  // 不凭配对文件自动恢复授权,更不能越过用户断开闸门。
+  it('preserves old backup bytes without reviving a suppressed native login', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'xdt-codex-swap-before-gate-'));
+    dirs.push(root);
+    h.userDataDir = path.join(root, 'user-data');
+    h.dataOwnerId = 'owner-a';
+    const home = path.join(root, 'home');
+    const systemAuth = path.join(home, '.codex', 'auth.json');
+    const codexHome = path.join(h.userDataDir, 'codex-home');
+    const localAuth = path.join(codexHome, 'auth.json');
+    vi.spyOn(os, 'homedir').mockReturnValue(home);
+    fs.mkdirSync(path.dirname(systemAuth), { recursive: true });
+    fs.mkdirSync(codexHome, { recursive: true });
+    const credential = JSON.stringify({
+      account: { email: 'user@example.test' },
+      tokens: { access_token: 'system-token', account_id: 'acct-1' },
+    });
+    fs.writeFileSync(systemAuth, credential);
+    // 用户主动断开留下的 durable marker: 对账被抑制。
+    expect(
+      writeInvalidatedSystemCodexAuthMarker(
+        codexHome,
+        systemAuth,
+        CODEX_USER_DISCONNECT_REASON,
+        localAuth,
+      ),
+    ).toBe(true);
+    // 崩在发布之前: 目标被挪到备份名, 同一次调用的 sidecar 还在。
+    fs.renameSync(systemAuth, `${systemAuth}.4242.0.swapbak`);
+    fs.writeFileSync(`${systemAuth}.4242.0.copytmp`, credential);
+
+    const { DesktopCodexAuthAdapter } = await import('../auth-adapters.js');
+    const adapter = new DesktopCodexAuthAdapter();
+    await adapter.getState({ credentialMode: 'oauth-bearer' });
+
+    expect(fs.existsSync(systemAuth)).toBe(false);
+    expect(fs.readFileSync(`${systemAuth}.4242.0.swapbak`, 'utf8')).toBe(credential);
+    expect(fs.readFileSync(`${systemAuth}.4242.0.copytmp`, 'utf8')).toBe(credential);
+  });
+
+  // 上一轮恢复因瞬时原因失败而留下的配对备份, 在目标被本机 Codex 重建出来之后就是
+  // 纯残留: 留着它, 本机 Codex 之后登出(自己删掉 auth.json)时会被下一次对账当成
+  // 崩过的替换, 把旧账号凭证倒回来(#9316 review)。
+  it('does not consume another profile backup pair or restore it after native logout', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'xdt-codex-swap-pair-retire-'));
+    dirs.push(root);
+    h.userDataDir = path.join(root, 'user-data');
+    h.dataOwnerId = 'owner-a';
+    const home = path.join(root, 'home');
+    const systemAuth = path.join(home, '.codex', 'auth.json');
+    const codexHome = path.join(h.userDataDir, 'codex-home');
+    vi.spyOn(os, 'homedir').mockReturnValue(home);
+    fs.mkdirSync(path.dirname(systemAuth), { recursive: true });
+    fs.mkdirSync(codexHome, { recursive: true });
+    const credential = JSON.stringify({
+      account: { email: 'user@example.test' },
+      tokens: { access_token: 'system-token', account_id: 'acct-1' },
+    });
+    fs.writeFileSync(systemAuth, credential);
+    fs.writeFileSync(`${systemAuth}.4242.0.swapbak`, credential);
+    fs.writeFileSync(`${systemAuth}.4242.0.copytmp`, credential);
+
+    const { DesktopCodexAuthAdapter } = await import('../auth-adapters.js');
+    const adapter = new DesktopCodexAuthAdapter();
+    await adapter.getState({ credentialMode: 'oauth-bearer' });
+
+    expect(fs.readFileSync(systemAuth, 'utf8')).toBe(credential);
+    expect(fs.readFileSync(`${systemAuth}.4242.0.swapbak`, 'utf8')).toBe(credential);
+    expect(fs.readFileSync(`${systemAuth}.4242.0.copytmp`, 'utf8')).toBe(credential);
+    fs.unlinkSync(systemAuth);
+    await adapter.getState({ credentialMode: 'oauth-bearer' });
+    expect(fs.existsSync(systemAuth)).toBe(false);
   });
 
   it('persists first explicit login provenance before reconciling a different system account', async () => {
@@ -1265,97 +1358,132 @@ describe('Codex system credential suppression marker', () => {
     expect(readCodexOneShotCreds()).toBeNull();
   });
 
-  it('persists unproven child suppression without modifying shared F2', async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'xdt-codex-unproven-child-'));
-    dirs.push(root);
-    h.userDataDir = path.join(root, 'user-data');
-    h.dataOwnerId = 'owner-a';
-    const home = path.join(root, 'home');
-    const systemAuth = path.join(home, '.codex', 'auth.json');
-    const codexHome = path.join(h.userDataDir, 'codex-home');
-    const localAuth = path.join(codexHome, 'auth.json');
-    const markerPath = getCodexAuthInvalidationMarkerPath(codexHome);
-    vi.spyOn(os, 'homedir').mockReturnValue(home);
-    fs.mkdirSync(path.dirname(systemAuth), { recursive: true });
-    fs.mkdirSync(codexHome, { recursive: true });
-    fs.writeFileSync(
-      systemAuth,
-      JSON.stringify({ tokens: { access_token: 'system-f2-token', account_id: 'acct-1' } }),
-      { mode: 0o600 },
+  // #9316 / unit: invalidate → restart → native atomic replacement must not revive
+  // a rejected standalone Windows credential. The old host-only fixture missed this
+  // topology split; real symlinks must still expose F3 pending account-RPC verification.
+  describe.each([
+    { platform: 'win32', linkType: 'hardlink' },
+    { platform: 'win32', linkType: 'symlink' },
+    { platform: 'darwin', linkType: 'symlink' },
+  ] as const)('unproven child suppression ($platform/$linkType)', ({ platform, linkType }) => {
+    it.skipIf(linkType === 'symlink' && !canLinkFile)(
+      'persists suppression without modifying shared F2',
+      async () => {
+        vi.spyOn(process, 'platform', 'get').mockReturnValue(platform);
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'xdt-codex-unproven-child-'));
+        dirs.push(root);
+        h.userDataDir = path.join(root, 'user-data');
+        h.dataOwnerId = 'owner-a';
+        const home = path.join(root, 'home');
+        const systemAuth = path.join(home, '.codex', 'auth.json');
+        const codexHome = path.join(h.userDataDir, 'codex-home');
+        const localAuth = path.join(codexHome, 'auth.json');
+        const markerPath = getCodexAuthInvalidationMarkerPath(codexHome);
+        vi.spyOn(os, 'homedir').mockReturnValue(home);
+        fs.mkdirSync(path.dirname(systemAuth), { recursive: true });
+        fs.mkdirSync(codexHome, { recursive: true });
+        fs.writeFileSync(
+          systemAuth,
+          JSON.stringify({ tokens: { access_token: 'system-f2-token', account_id: 'acct-1' } }),
+          { mode: 0o600 },
+        );
+        if (linkType === 'hardlink') fs.linkSync(systemAuth, localAuth);
+        else fs.symlinkSync(systemAuth, localAuth, 'file');
+        fs.writeFileSync(
+          path.join(h.userDataDir, 'native-provider-auth.json'),
+          JSON.stringify({
+            openai: 'owner-a',
+            sharedSystemCredential: { openai: 'owner-a' },
+          }),
+        );
+        const f2Bytes = fs.readFileSync(systemAuth);
+        const f2Stat = fs.statSync(systemAuth);
+        const rmSpy = vi.spyOn(fs.promises, 'rm');
+        const chmodSpy = vi.spyOn(fs.promises, 'chmod');
+        const { DesktopCodexAuthAdapter } = await import('../auth-adapters.js');
+        const adapter = new DesktopCodexAuthAdapter();
+        const onLogoutSuccess = vi.fn().mockResolvedValue(undefined);
+        const broadcast = vi.fn().mockResolvedValue(undefined);
+        adapter.setOnLogoutSuccess(onLogoutSuccess);
+        adapter.setOnInvalidatedBroadcast(broadcast);
+
+        await expect(
+          adapter.invalidate('child_auth_rejected', { credentialAttribution: 'unproven' }),
+        ).resolves.toBeUndefined();
+
+        expect(onLogoutSuccess).not.toHaveBeenCalled();
+        expect(broadcast).toHaveBeenCalledWith('child_auth_rejected', 'system-shared', false);
+        expect(readInvalidatedSystemCodexAuthMarker(codexHome)).toMatchObject({
+          reason: 'child_auth_rejected',
+          credentialScope: 'system-shared',
+          recoveryOwnerId: 'owner-a',
+          unprovenCredentialAttribution: true,
+        });
+        expect(rmSpy).not.toHaveBeenCalled();
+        expect(chmodSpy).not.toHaveBeenCalled();
+        expect(fs.readFileSync(systemAuth)).toEqual(f2Bytes);
+        expect(fs.readFileSync(localAuth)).toEqual(f2Bytes);
+        expect(fs.statSync(systemAuth)).toMatchObject({ ino: f2Stat.ino, mode: f2Stat.mode });
+        await expect(adapter.getState({ credentialMode: 'oauth-bearer' })).resolves.toMatchObject({
+          authenticated: false,
+          errorReason: 'child_auth_rejected',
+          credentialScope: 'system-shared',
+        });
+
+        const restartedAdapter = new DesktopCodexAuthAdapter();
+        await expect(
+          restartedAdapter.getState({ credentialMode: 'oauth-bearer' }),
+        ).resolves.toMatchObject({
+          authenticated: false,
+          errorReason: 'child_auth_rejected',
+          credentialScope: 'system-shared',
+        });
+        expect(fs.readFileSync(systemAuth)).toEqual(f2Bytes);
+        expect(fs.readFileSync(localAuth)).toEqual(f2Bytes);
+
+        rmSpy.mockRestore();
+        const replacement = path.join(path.dirname(systemAuth), 'auth.f3.json');
+        fs.writeFileSync(
+          replacement,
+          JSON.stringify({ tokens: { access_token: 'system-f3-token', account_id: 'acct-1' } }),
+          { mode: 0o600 },
+        );
+        fs.renameSync(replacement, systemAuth);
+        const f3Bytes = fs.readFileSync(systemAuth);
+        const f3Stat = fs.statSync(systemAuth);
+        if (linkType === 'hardlink') {
+          // The native replacement left the old inode as a standalone Windows file.
+          // Preserving it is intentional; it remains unusable until explicit login.
+          for (const reader of [restartedAdapter, new DesktopCodexAuthAdapter()]) {
+            await expect(reader.getState({ credentialMode: 'oauth-bearer' })).resolves.toMatchObject({
+              authenticated: false,
+              errorReason: 'child_auth_rejected',
+            });
+            await expect(reader.getAccessToken()).resolves.toBeNull();
+          }
+          expect(fs.readFileSync(localAuth)).toEqual(f2Bytes);
+          expect(fs.statSync(localAuth)).toMatchObject({ ino: f2Stat.ino, nlink: 1 });
+          expect(readInvalidatedSystemCodexAuthMarker(codexHome)).toMatchObject({
+            reason: 'child_auth_rejected',
+            unprovenCredentialAttribution: true,
+          });
+        } else {
+          await expect(
+            restartedAdapter.getState({ credentialMode: 'oauth-bearer' }),
+          ).resolves.toMatchObject({
+            authenticated: true,
+            credentialScope: 'system-shared',
+            recoveryRequiredReason: 'child_auth_rejected',
+          });
+          await expect(restartedAdapter.getAccessToken()).resolves.toBe('system-f3-token');
+          await restartedAdapter.verifyRecoveryWithAccountRpc(async () => undefined);
+          expect(fs.existsSync(markerPath)).toBe(false);
+        }
+        expect(fs.readFileSync(systemAuth)).toEqual(f3Bytes);
+        expect(fs.statSync(systemAuth)).toMatchObject({ ino: f3Stat.ino, mode: f3Stat.mode });
+        expect(chmodSpy).not.toHaveBeenCalled();
+      },
     );
-    if (process.platform === 'win32') fs.linkSync(systemAuth, localAuth);
-    else fs.symlinkSync(systemAuth, localAuth);
-    fs.writeFileSync(
-      path.join(h.userDataDir, 'native-provider-auth.json'),
-      JSON.stringify({
-        openai: 'owner-a',
-        sharedSystemCredential: { openai: 'owner-a' },
-      }),
-    );
-    const f2Bytes = fs.readFileSync(systemAuth);
-    const f2Stat = fs.statSync(systemAuth);
-    const rmSpy = vi.spyOn(fs.promises, 'rm');
-    const chmodSpy = vi.spyOn(fs.promises, 'chmod');
-    const { DesktopCodexAuthAdapter } = await import('../auth-adapters.js');
-    const adapter = new DesktopCodexAuthAdapter();
-    const onLogoutSuccess = vi.fn().mockResolvedValue(undefined);
-    const broadcast = vi.fn().mockResolvedValue(undefined);
-    adapter.setOnLogoutSuccess(onLogoutSuccess);
-    adapter.setOnInvalidatedBroadcast(broadcast);
-
-    await expect(
-      adapter.invalidate('child_auth_rejected', { credentialAttribution: 'unproven' }),
-    ).resolves.toBeUndefined();
-
-    expect(onLogoutSuccess).not.toHaveBeenCalled();
-    expect(broadcast).toHaveBeenCalledWith('child_auth_rejected', 'system-shared', false);
-    expect(readInvalidatedSystemCodexAuthMarker(codexHome)).toMatchObject({
-      reason: 'child_auth_rejected',
-      credentialScope: 'system-shared',
-      recoveryOwnerId: 'owner-a',
-      unprovenCredentialAttribution: true,
-    });
-    expect(rmSpy).not.toHaveBeenCalled();
-    expect(chmodSpy).not.toHaveBeenCalled();
-    expect(fs.readFileSync(systemAuth)).toEqual(f2Bytes);
-    expect(fs.readFileSync(localAuth)).toEqual(f2Bytes);
-    expect(fs.statSync(systemAuth)).toMatchObject({ ino: f2Stat.ino, mode: f2Stat.mode });
-    await expect(adapter.getState({ credentialMode: 'oauth-bearer' })).resolves.toMatchObject({
-      authenticated: false,
-      errorReason: 'child_auth_rejected',
-      credentialScope: 'system-shared',
-    });
-
-    const restartedAdapter = new DesktopCodexAuthAdapter();
-    await expect(
-      restartedAdapter.getState({ credentialMode: 'oauth-bearer' }),
-    ).resolves.toMatchObject({
-      authenticated: false,
-      errorReason: 'child_auth_rejected',
-      credentialScope: 'system-shared',
-    });
-    expect(fs.readFileSync(systemAuth)).toEqual(f2Bytes);
-    expect(fs.readFileSync(localAuth)).toEqual(f2Bytes);
-
-    rmSpy.mockRestore();
-    const replacement = path.join(path.dirname(systemAuth), 'auth.f3.json');
-    fs.writeFileSync(
-      replacement,
-      JSON.stringify({ tokens: { access_token: 'system-f3-token', account_id: 'acct-1' } }),
-      { mode: 0o600 },
-    );
-    fs.renameSync(replacement, systemAuth);
-    await expect(
-      restartedAdapter.getState({ credentialMode: 'oauth-bearer' }),
-    ).resolves.toMatchObject({
-      authenticated: true,
-      credentialScope: 'system-shared',
-      recoveryRequiredReason: 'child_auth_rejected',
-    });
-    await expect(restartedAdapter.getAccessToken()).resolves.toBe('system-f3-token');
-    await restartedAdapter.verifyRecoveryWithAccountRpc(async () => undefined);
-    expect(fs.existsSync(markerPath)).toBe(false);
-    expect(chmodSpy).not.toHaveBeenCalled();
   });
 
   it('keeps unproven shared suppression across restart when marker commit fails', async () => {
@@ -1803,10 +1931,11 @@ describe('Codex system credential suppression marker', () => {
       }),
     );
     fs.renameSync(replacement, systemAuth);
-    if (process.platform === 'win32') {
-      expect(fs.readFileSync(localAuth, 'utf8')).not.toBe(fs.readFileSync(systemAuth, 'utf8'));
-    } else {
+    // symlink 跟着原子替换走；建不出 symlink 时留下的独立副本仍停在替换前的内容。
+    if (fs.lstatSync(localAuth).isSymbolicLink()) {
       expect(fs.readFileSync(localAuth, 'utf8')).toBe(fs.readFileSync(systemAuth, 'utf8'));
+    } else {
+      expect(fs.readFileSync(localAuth, 'utf8')).not.toBe(fs.readFileSync(systemAuth, 'utf8'));
     }
 
     const broadcast = vi.fn();
@@ -1816,8 +1945,8 @@ describe('Codex system credential suppression marker', () => {
     ).resolves.toBeUndefined();
     expect(JSON.parse(fs.readFileSync(bindingFile, 'utf8'))).not.toHaveProperty('revoked.openai');
     const restartedAdapter = new DesktopCodexAuthAdapter();
-    if (process.platform === 'win32') {
-      // Windows local 仍是 F1 旧 hardlink，generation 匹配；清掉 F1 后从 system F2 恢复。
+    if (!fs.lstatSync(localAuth).isSymbolicLink()) {
+      // 没有 symlink 时本地仍是替换前的副本，generation 匹配；清掉后从 system F2 恢复。
       expect(broadcast).toHaveBeenCalledWith('token_revoked', 'system-shared');
       expect(readInvalidatedSystemCodexAuthMarker(codexHome)).toMatchObject({
         credentialScope: 'system-shared',
@@ -1852,7 +1981,7 @@ describe('Codex system credential suppression marker', () => {
     });
   });
 
-  it('repairs a pre-upgrade Windows hardlink rotated before provenance migration', async () => {
+  it('preserves a detached Windows credential without copying either direction', async () => {
     const originalPlatform = process.platform;
     Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
     try {
@@ -1901,19 +2030,21 @@ describe('Codex system credential suppression marker', () => {
         new DesktopCodexAuthAdapter().getState({ credentialMode: 'oauth-bearer' }),
       ).resolves.toMatchObject({
         authenticated: true,
-        credentialScope: 'system-shared',
+        credentialScope: 'instance-isolated',
         credentialDiagnostics: {
-          linkType: 'hardlink',
+          linkType: 'file',
           healthy: true,
-          orphanRepair: 'relinked',
+          orphanRepair: 'none',
         },
       });
 
-      expect(fs.readFileSync(localAuth, 'utf8')).toContain('system-f2-token');
-      expect(fs.readFileSync(localAuth, 'utf8')).not.toContain('system-f1-token');
+      expect(fs.lstatSync(localAuth).isSymbolicLink()).toBe(false);
+      expect(fs.statSync(systemAuth).nlink).toBe(1);
+      expect(fs.readFileSync(localAuth, 'utf8')).toContain('system-f1-token');
+      expect(fs.readFileSync(localAuth, 'utf8')).not.toContain('system-f2-token');
       const localStat = fs.statSync(localAuth);
       const systemStatAfterReconcile = fs.statSync(systemAuth);
-      expect({ dev: localStat.dev, ino: localStat.ino }).toEqual({
+      expect({ dev: localStat.dev, ino: localStat.ino }).not.toEqual({
         dev: systemStatAfterReconcile.dev,
         ino: systemStatAfterReconcile.ino,
       });
@@ -2629,48 +2760,80 @@ describe('Codex system credential suppression marker', () => {
     expect(fs.existsSync(path.join(h.userDataDir, 'native-provider-auth.json'))).toBe(false);
   });
 
-  it('repairs an unproven local auth orphan instead of preserving its refresh token', async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'xdt-codex-orphan-repair-'));
-    dirs.push(root);
-    h.userDataDir = path.join(root, 'user-data');
-    h.dataOwnerId = 'owner-a';
-    const home = path.join(root, 'home');
-    const systemAuth = path.join(home, '.codex', 'auth.json');
-    const localAuth = path.join(h.userDataDir, 'codex-home', 'auth.json');
-    vi.spyOn(os, 'homedir').mockReturnValue(home);
-    fs.mkdirSync(path.dirname(systemAuth), { recursive: true });
-    fs.mkdirSync(path.dirname(localAuth), { recursive: true });
-    fs.writeFileSync(
-      systemAuth,
-      JSON.stringify({ tokens: { access_token: 'system-token', account_id: 'system-account' } }),
-    );
-    fs.writeFileSync(
-      localAuth,
-      JSON.stringify({ tokens: { access_token: 'orphan-token', account_id: 'old-account' } }),
-    );
-    fs.writeFileSync(
-      path.join(h.userDataDir, 'native-provider-auth.json'),
-      JSON.stringify({
-        openai: 'owner-a',
-        sources: { openai: 'native-harness-inherited' },
-      }),
-    );
+  // #9316 / unit: getState must preserve existing Windows standalone auth even
+  // without isolated provenance; POSIX retains its existing orphan-repair policy.
+  // Run both decisions on every host instead of hiding the Windows assertion in CI.
+  describe.each(['win32', 'darwin'] as const)(
+    'standalone credential reconciliation (%s)',
+    (platform) => {
+      it.skipIf(platform === 'darwin' && !canLinkFile)(
+        'preserves Windows auth and repairs POSIX orphans',
+        async () => {
+          vi.spyOn(process, 'platform', 'get').mockReturnValue(platform);
+          const root = fs.mkdtempSync(path.join(os.tmpdir(), 'xdt-codex-orphan-repair-'));
+          dirs.push(root);
+          h.userDataDir = path.join(root, 'user-data');
+          h.dataOwnerId = 'owner-a';
+          const home = path.join(root, 'home');
+          const systemAuth = path.join(home, '.codex', 'auth.json');
+          const localAuth = path.join(h.userDataDir, 'codex-home', 'auth.json');
+          vi.spyOn(os, 'homedir').mockReturnValue(home);
+          fs.mkdirSync(path.dirname(systemAuth), { recursive: true });
+          fs.mkdirSync(path.dirname(localAuth), { recursive: true });
+          fs.writeFileSync(
+            systemAuth,
+            JSON.stringify({
+              tokens: { access_token: 'system-token', account_id: 'system-account' },
+            }),
+          );
+          fs.writeFileSync(
+            localAuth,
+            JSON.stringify({ tokens: { access_token: 'orphan-token', account_id: 'old-account' } }),
+          );
+          fs.writeFileSync(
+            path.join(h.userDataDir, 'native-provider-auth.json'),
+            JSON.stringify({
+              openai: 'owner-a',
+              sources: { openai: 'native-harness-inherited' },
+            }),
+          );
 
-    const { DesktopCodexAuthAdapter } = await import('../auth-adapters.js');
-    const state = await new DesktopCodexAuthAdapter().getState({ credentialMode: 'oauth-bearer' });
+          const localBefore = fs.readFileSync(localAuth);
+          const localInode = fs.statSync(localAuth).ino;
+          const systemBefore = fs.readFileSync(systemAuth);
+          const systemInode = fs.statSync(systemAuth).ino;
+          const { DesktopCodexAuthAdapter } = await import('../auth-adapters.js');
+          const adapter = new DesktopCodexAuthAdapter();
+          const state = await adapter.getState({ credentialMode: 'oauth-bearer' });
 
-    expect(state).toMatchObject({
-      authenticated: true,
-      credentialScope: 'system-shared',
-      credentialDiagnostics: {
-        linkType: expectedSharedLinkType,
-        healthy: true,
-        orphanRepair: 'relinked',
-      },
-    });
-    expectPlatformSharedLink(systemAuth, localAuth);
-    expect(fs.readFileSync(localAuth, 'utf8')).toContain('system-token');
-  });
+          if (platform === 'win32') {
+            expect(state).toMatchObject({
+              authenticated: true,
+              credentialScope: 'unknown',
+              credentialDiagnostics: { linkType: 'file', healthy: false, orphanRepair: 'none' },
+            });
+            expect(fs.readFileSync(localAuth)).toEqual(localBefore);
+            expect(fs.statSync(localAuth).ino).toBe(localInode);
+            await expect(adapter.getAccessToken()).resolves.toBe('orphan-token');
+          } else {
+            expect(state).toMatchObject({
+              authenticated: true,
+              credentialScope: 'system-shared',
+              credentialDiagnostics: {
+                linkType: 'symlink',
+                healthy: true,
+                orphanRepair: 'relinked',
+              },
+            });
+            expectPlatformSharedLink(systemAuth, localAuth);
+            expect(fs.readFileSync(localAuth, 'utf8')).toContain('system-token');
+          }
+          expect(fs.readFileSync(systemAuth)).toEqual(systemBefore);
+          expect(fs.statSync(systemAuth).ino).toBe(systemInode);
+        },
+      );
+    },
+  );
 
   it('preserves explicit isolated auth across owner A to B to A without exposing it to B', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'xdt-codex-isolated-preserve-'));
@@ -2768,6 +2931,56 @@ describe('Codex system credential suppression marker', () => {
       invalidatedReason: 'token_invalidated',
       credentialScope: 'system-shared',
     });
+  });
+
+  // #9316: 其它 profile 的硬链接由该 profile 自己迁移。当前实例不能通过替换
+  // 系统 inode 拆链,否则可能覆盖原生刷新或撤销登出。
+  it('共享已是 symlink 时不替换系统文件或改动另一个 profile 的旧硬链接', async ({ skip }) => {
+    if (!canLinkFile) skip();
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'xdt-codex-residual-hardlink-'));
+    dirs.push(root);
+    h.userDataDir = path.join(root, 'user-data');
+    h.dataOwnerId = 'owner-a';
+    const home = path.join(root, 'home');
+    const systemAuth = path.join(home, '.codex', 'auth.json');
+    const localAuth = path.join(h.userDataDir, 'codex-home', 'auth.json');
+    const otherProfile = path.join(root, 'other-profile', 'auth.json');
+    const bindingFile = path.join(h.userDataDir, 'native-provider-auth.json');
+    vi.spyOn(os, 'homedir').mockReturnValue(home);
+    fs.mkdirSync(path.dirname(systemAuth), { recursive: true });
+    fs.mkdirSync(path.dirname(localAuth), { recursive: true });
+    fs.mkdirSync(path.dirname(otherProfile), { recursive: true });
+    fs.writeFileSync(
+      systemAuth,
+      JSON.stringify({ tokens: { access_token: 'system-f1-token', account_id: 'acct-1' } }),
+      { mode: 0o600 },
+    );
+    fs.symlinkSync(systemAuth, localAuth, 'file');
+    fs.linkSync(systemAuth, otherProfile);
+    fs.writeFileSync(
+      bindingFile,
+      JSON.stringify({
+        openai: 'owner-a',
+        selfAuthorized: { openai: 'owner-a' },
+        sources: { openai: 'explicit-provider-oauth' },
+      }),
+    );
+    expect(fs.statSync(systemAuth).nlink).toBe(2);
+
+    const originalSystem = fs.statSync(systemAuth, { bigint: true });
+    const { DesktopCodexAuthAdapter } = await import('../auth-adapters.js');
+    const adapter = new DesktopCodexAuthAdapter();
+    const first = await adapter.getState({ credentialMode: 'oauth-bearer' });
+    // 诊断如实保留其它 profile 的链接数。
+    expect(first.credentialDiagnostics?.systemAuthLinkCount).toBe(2);
+
+    const second = await adapter.getState({ credentialMode: 'oauth-bearer' });
+    // 重复对账也不改写系统文件或另一个 profile。
+    expect(second.credentialDiagnostics?.systemAuthLinkCount).toBe(2);
+    expect(fs.statSync(systemAuth).nlink).toBe(2);
+    expect(fs.statSync(systemAuth, { bigint: true }).ino).toBe(originalSystem.ino);
+    expect(fs.readFileSync(otherProfile)).toEqual(fs.readFileSync(systemAuth));
+    expect(fs.readFileSync(systemAuth, 'utf8')).toContain('system-f1-token');
   });
 });
 
@@ -3049,5 +3262,266 @@ describe('deferred Codex OAuth dispatch proof', () => {
     expect(adapter.captureOAuthDispatchProof('synthetic-b', 'account-b')?.()).toBe(true);
     await adapter.invalidate('token_revoked', { credentialAttribution: 'unproven' });
     expect(adapter.captureOAuthDispatchProof('synthetic-b', 'account-b')).toBeNull();
+  });
+});
+
+// #9316: real adapter entry, fake CLI/OS boundaries. Denied symlinks may fall
+// back only when OAuth writes are allowed and the credential is independent.
+// Dev, failed unlink, and a new alias during setup failed before the gate fix.
+// Unit tier: assert child launch/refusal and native bytes, without real waits.
+it.each([
+  'missing',
+  'hardlink',
+  'hardlink-without-account',
+  'file',
+  'dev',
+  'hardlink-locked',
+  'late-hardlink',
+] as const)(
+  'Windows without symlink privilege enforces the independent OAuth boundary (local=%s)',
+  async (initial) => {
+    const originalPlatform = process.platform;
+    Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+    try {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-independent-oauth-'));
+      dirs.push(root);
+      h.userDataDir = path.join(root, 'data');
+      h.dataOwnerId = 'owner-a';
+      const home = path.join(root, 'home');
+      vi.spyOn(os, 'homedir').mockReturnValue(home);
+      const systemAuth = path.join(home, '.codex', 'auth.json');
+      const localAuth = path.join(h.userDataDir, 'codex-home', 'auth.json');
+      fs.mkdirSync(path.dirname(systemAuth), { recursive: true });
+      fs.mkdirSync(path.dirname(localAuth), { recursive: true });
+      const credential = JSON.stringify({
+        tokens: {
+          access_token: 'fake-native',
+          account_id: initial === 'hardlink-without-account' ? undefined : 'native',
+        },
+      });
+      fs.writeFileSync(systemAuth, credential);
+      const before = fs.statSync(systemAuth, { bigint: true });
+      if (initial.startsWith('hardlink')) fs.linkSync(systemAuth, localAuth);
+      if (initial === 'file') fs.writeFileSync(localAuth, 'existing-independent-credential');
+      if (initial === 'dev') h.isPackaged = false;
+      if (initial === 'hardlink-locked') {
+        const unlink = fs.unlinkSync;
+        vi.spyOn(fs, 'unlinkSync').mockImplementation((file) => {
+          if (String(file) === localAuth)
+            throw Object.assign(new Error('locked'), { code: 'EBUSY' });
+          return unlink(file);
+        });
+      }
+      vi.spyOn(fs.promises, 'symlink').mockRejectedValue(
+        Object.assign(new Error('denied'), { code: 'EPERM' }),
+      );
+      const copy = vi.spyOn(fs.promises, 'copyFile');
+      const { DesktopCodexAuthAdapter } = await import('../auth-adapters.js');
+      const adapter = new DesktopCodexAuthAdapter();
+      await adapter.getState({ credentialMode: 'oauth-bearer' });
+      if (initial === 'file')
+        expect(fs.readFileSync(localAuth, 'utf8')).toBe('existing-independent-credential');
+      else expect(fs.existsSync(localAuth)).toBe(initial === 'hardlink-locked');
+      expect(fs.statSync(systemAuth).nlink).toBe(initial === 'hardlink-locked' ? 2 : 1);
+      vi.spyOn(adapter, 'ensureGlobalCodexAssets').mockImplementation(async () => {
+        if (initial === 'late-hardlink') fs.linkSync(systemAuth, localAuth);
+      });
+      const binaryPath = path.join(root, 'fake-codex.exe');
+      vi.spyOn(binaries, 'getCachedBinaryStatus').mockReturnValue({
+        binaryReady: true,
+        binaryPath,
+      } as ReturnType<typeof binaries.getCachedBinaryStatus>);
+      vi.spyOn(binaries, 'isVettedAgentBinaryPath').mockReturnValue(true);
+      const spawn = vi.spyOn(childProcess, 'spawn').mockImplementation(() => {
+        const child = Object.assign(new EventEmitter(), {
+          stdout: new EventEmitter(),
+          stderr: new EventEmitter(),
+        });
+        queueMicrotask(() => {
+          fs.writeFileSync(
+            localAuth,
+            JSON.stringify({
+              tokens: { access_token: 'fake-independent', account_id: 'independent' },
+            }),
+          );
+          child.emit('exit', 0);
+        });
+        return child as childProcess.ChildProcess;
+      });
+      if (initial === 'dev' || initial === 'hardlink-locked' || initial === 'late-hardlink') {
+        await expect(adapter.triggerLogin({ mode: 'local' })).resolves.toMatchObject({
+          authenticated: false,
+          errorReason: initial === 'dev' ? 'dev_oauth_write_blocked' : 'local_auth_unavailable',
+          ...(initial === 'dev' ? { oauthWritesBlocked: true } : {}),
+        });
+        expect(spawn).not.toHaveBeenCalled();
+        expect(copy).not.toHaveBeenCalled();
+        expect(fs.readFileSync(systemAuth, 'utf8')).toBe(credential);
+        expect(fs.statSync(systemAuth, { bigint: true }).ino).toBe(before.ino);
+        return;
+      }
+      await expect(adapter.triggerLogin({ mode: 'local' })).resolves.toMatchObject({
+        authenticated: true,
+        credentialScope: 'instance-isolated',
+      });
+      expect(spawn).toHaveBeenCalledWith(
+        binaryPath,
+        ['login'],
+        expect.objectContaining({
+          env: expect.objectContaining({ CODEX_HOME: path.dirname(localAuth) }),
+        }),
+      );
+      expect(copy).not.toHaveBeenCalled();
+      expect(fs.readFileSync(systemAuth, 'utf8')).toBe(credential);
+      expect(fs.statSync(systemAuth, { bigint: true }).ino).toBe(before.ino);
+      // A later native refresh/logout must neither overwrite the independent login
+      // nor be undone by a subsequent background reconcile.
+      fs.writeFileSync(
+        systemAuth,
+        JSON.stringify({ tokens: { access_token: 'fake-native-new', account_id: 'native' } }),
+      );
+      await adapter.getState({ credentialMode: 'oauth-bearer' });
+      fs.unlinkSync(systemAuth);
+      await adapter.getState({ credentialMode: 'oauth-bearer' });
+      expect(fs.existsSync(systemAuth)).toBe(false);
+      expect(fs.readFileSync(localAuth, 'utf8')).toContain('fake-independent');
+    } finally {
+      Object.defineProperty(process, 'platform', { value: originalPlatform, configurable: true });
+    }
+  },
+);
+
+describe('Codex 系统凭证备份与旧硬链接 (#9316 review)', () => {
+  it('系统凭证缺失时保留旧备份,但不自动恢复登录', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'xdt-codex-swap-recovery-'));
+    dirs.push(root);
+    h.userDataDir = path.join(root, 'user-data');
+    const home = path.join(root, 'home');
+    vi.spyOn(os, 'homedir').mockReturnValue(home);
+    const systemAuth = path.join(home, '.codex', 'auth.json');
+    fs.mkdirSync(path.dirname(systemAuth), { recursive: true });
+    fs.writeFileSync(systemAuth, JSON.stringify({ tokens: { access_token: 'recovered-token' } }));
+    // 模拟上一次替换崩在窗口里:旧目标被挪到备份名,新凭证还没发布 —— 同一次调用的
+    // sidecar 还在,配对才是「崩在发布之前」的凭据(#9316 review)。
+    const backup = `${systemAuth}.4242.0.swapbak`;
+    const sidecar = `${systemAuth}.4242.0.copytmp`;
+    fs.renameSync(systemAuth, backup);
+    fs.writeFileSync(sidecar, JSON.stringify({ tokens: { access_token: 'recovered-token' } }));
+
+    const { DesktopCodexAuthAdapter } = await import('../auth-adapters.js');
+    const adapter = new DesktopCodexAuthAdapter();
+    // 对账后续步骤(读账号、建共享链接等)在本机环境可能走不通,不影响这里断言的恢复。
+    await adapter.getState({ credentialMode: 'oauth-bearer' }).catch(() => undefined);
+
+    expect(fs.existsSync(systemAuth)).toBe(false);
+    expect(JSON.parse(fs.readFileSync(backup, 'utf8')).tokens.access_token).toBe('recovered-token');
+    expect(fs.existsSync(backup)).toBe(true);
+    expect(fs.existsSync(sidecar)).toBe(true);
+  });
+
+  it('系统凭证缺失且没有备份时不凭空造出登录态', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'xdt-codex-swap-recovery-none-'));
+    dirs.push(root);
+    h.userDataDir = path.join(root, 'user-data');
+    const home = path.join(root, 'home');
+    vi.spyOn(os, 'homedir').mockReturnValue(home);
+    const systemAuth = path.join(home, '.codex', 'auth.json');
+    fs.mkdirSync(path.dirname(systemAuth), { recursive: true });
+
+    const { DesktopCodexAuthAdapter } = await import('../auth-adapters.js');
+    const adapter = new DesktopCodexAuthAdapter();
+    await adapter.getState({ credentialMode: 'oauth-bearer' }).catch(() => undefined);
+
+    expect(fs.existsSync(systemAuth)).toBe(false);
+  });
+
+  // #9316 / unit: directory aliases are the same entry, not removable hardlinks.
+  // Cover login, background reconciliation and invalidation through public entries.
+  it.each(['win32', 'darwin'] as const)(
+    'preserves native auth through a directory alias (%s)',
+    async (platform) => {
+      vi.spyOn(process, 'platform', 'get').mockReturnValue(platform);
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-codex-directory-alias-'));
+      dirs.push(root);
+      h.userDataDir = path.join(root, 'user-data');
+      h.dataOwnerId = 'owner-a';
+      const home = path.join(root, 'home');
+      vi.spyOn(os, 'homedir').mockReturnValue(home);
+      const systemAuth = path.join(home, '.codex', 'auth.json');
+      const codexHome = path.join(h.userDataDir, 'codex-home');
+      fs.mkdirSync(path.dirname(systemAuth), { recursive: true });
+      fs.mkdirSync(h.userDataDir, { recursive: true });
+      fs.symlinkSync(path.dirname(systemAuth), codexHome, 'junction');
+      const bytes = JSON.stringify({ tokens: { access_token: 'alias-token', account_id: 'acct-1' } });
+      fs.writeFileSync(systemAuth, bytes);
+      const before = fs.statSync(systemAuth, { bigint: true });
+      const { DesktopCodexAuthAdapter } = await import('../auth-adapters.js');
+      const adapter = new DesktopCodexAuthAdapter();
+      await expect(adapter.triggerLogin({ mode: 'local' })).resolves.toMatchObject({
+        authenticated: true,
+        credentialScope: 'system-shared',
+      });
+      await expect(adapter.getState({ credentialMode: 'oauth-bearer' })).resolves.toMatchObject({
+        authenticated: true,
+      });
+      await expect(adapter.getAccessToken()).resolves.toBe('alias-token');
+      await adapter.invalidate('token_revoked');
+      await expect(adapter.getAccessToken()).resolves.toBeNull();
+      expect(fs.readFileSync(systemAuth, 'utf8')).toBe(bytes);
+      expect(fs.lstatSync(systemAuth).isSymbolicLink()).toBe(false);
+      expect(fs.statSync(systemAuth, { bigint: true })).toMatchObject({
+        ino: before.ino,
+        nlink: before.nlink,
+      });
+    },
+  );
+
+  // 升级前的 profile 把本地这份硬链到系统凭证(nlink=2)。durable disconnect 期间对账被
+  // 抑制,硬链一直没迁移;本地登录若只凭「身份相同」就短路,会跳过残留硬链清理 ——
+  // 登录报 system-shared,Codex 0.165+ 却因为 nlink>1 存不住新 token(#9316 review)。
+  it('本地登录把升级前的存量硬链拆掉,不再报 system-shared 却存不住凭证', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'xdt-codex-legacy-hardlink-login-'));
+    dirs.push(root);
+    h.userDataDir = path.join(root, 'user-data');
+    h.dataOwnerId = 'owner-a';
+    const home = path.join(root, 'home');
+    const systemAuth = path.join(home, '.codex', 'auth.json');
+    const codexHome = path.join(h.userDataDir, 'codex-home');
+    const localAuth = path.join(codexHome, 'auth.json');
+    vi.spyOn(os, 'homedir').mockReturnValue(home);
+    fs.mkdirSync(path.dirname(systemAuth), { recursive: true });
+    fs.mkdirSync(codexHome, { recursive: true });
+    fs.writeFileSync(
+      systemAuth,
+      JSON.stringify({ tokens: { access_token: 'legacy-token', account_id: 'acct-1' } }),
+    );
+    fs.linkSync(systemAuth, localAuth);
+    expect(fs.statSync(systemAuth, { bigint: true }).nlink).toBe(2n);
+    // durable disconnect 抑制着对账:存量硬链因此一直没被迁移。
+    expect(
+      writeInvalidatedSystemCodexAuthMarker(
+        codexHome,
+        systemAuth,
+        CODEX_USER_DISCONNECT_REASON,
+        localAuth,
+      ),
+    ).toBe(true);
+
+    const { DesktopCodexAuthAdapter } = await import('../auth-adapters.js');
+    const adapter = new DesktopCodexAuthAdapter();
+    await expect(adapter.triggerLogin({ mode: 'local' })).resolves.toMatchObject({
+      authenticated: true,
+    });
+
+    expect(fs.statSync(systemAuth, { bigint: true }).nlink).toBe(1n);
+    // 拆链后本地这份不再与系统凭证共用 inode(换成新 inode 或改成软链),内容仍可用 ——
+    // 登录读的是系统凭证。
+    expect(fs.lstatSync(localAuth, { bigint: true }).ino).not.toBe(
+      fs.statSync(systemAuth, { bigint: true }).ino,
+    );
+    expect(JSON.parse(fs.readFileSync(localAuth, 'utf8')).tokens.access_token).toBe(
+      JSON.parse(fs.readFileSync(systemAuth, 'utf8')).tokens.access_token,
+    );
+    expect(fs.existsSync(getCodexAuthInvalidationMarkerPath(codexHome))).toBe(false);
   });
 });

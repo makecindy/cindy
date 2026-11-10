@@ -67,6 +67,7 @@
     "./message-source": "./src/messageSource.ts",
     "./message-window": "./src/messageWindow.ts",
     "./orca-team": "./src/orcaTeam.ts",
+    "./orca-queue": "./src/orcaQueue.ts",
     "./mobile-home": "./src/mobileHome.ts",
     "./tool-process-media": "./src/toolProcessMedia.ts",
     "./payload-summary": "./src/payloadSummary.ts",
