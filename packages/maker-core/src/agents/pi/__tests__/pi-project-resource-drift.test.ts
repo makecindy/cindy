@@ -377,4 +377,37 @@ describe('piProjectResourcesDrifted', () => {
     symlinkSync(realB, link, linkType);
     expect(piProjectResourcesDrifted(baseline)).toBe(true);
   });
+
+  it('retargeting the `.pi` junction to a same-mtime twin tree is drift (resolved pi-root identity)', () => {
+    // 回归(Codex P2):`.pi` 本体是仓内软链时,改指结构相同、mtime 碰巧一致的
+    // 另一资源树 —— watch 面取的是解析后目标的 mtime,碰撞时快检放行旧 argv;
+    // 唯一信号是资源根的解析身份(realpath)。
+    const targetA = path.join(project, 'pi-a');
+    const targetB = path.join(project, 'pi-b');
+    const piLink = path.join(project, '.pi');
+    writeSkill(path.join('pi-a', 'skills'), 'alpha');
+    // Windows utimes 有精度截断:先把 A 的各层目录对齐到整秒,让快照值与 B 的
+    // 对齐值可以逐位相等(mtime 碰撞前提才成立)。
+    const aligned = new Date(Math.floor(Date.now() / 1000) * 1000);
+    for (const dir of [[] as string[], ['skills'], ['skills', 'alpha']]) {
+      utimesSync(path.join(targetA, ...dir), aligned, aligned);
+    }
+    symlinkSync(targetA, piLink, 'junction');
+    const baseline = snapshot();
+    expect(piProjectResourcesDrifted(baseline)).toBe(false);
+
+    // B:同名结构、不同内容;目录 mtime 调成与 A 逐层一致(watch 面失明的碰撞前提)。
+    // 同名结构:让 mtime 碰撞成为唯一干扰源,解析身份才是本用例的信号。
+    writeSkill(path.join('pi-b', 'skills'), 'alpha');
+    // 根目录也要对齐:watch 面包含 `.pi` 解析后的目标目录自身。B 的对齐值复用
+    // A 的整秒时间,让 watch 面逐位相等(mtime 碰撞前提)。
+    for (const dir of [[] as string[], ['skills'], ['skills', 'alpha']]) {
+      utimesSync(path.join(targetB, ...dir), aligned, aligned);
+    }
+    rmSync(piLink);
+    symlinkSync(targetB, piLink, 'junction');
+
+    // 改指后 lexical watch 面与 mtime 全等,唯一信号是 `.pi` 解析身份变化。
+    expect(piProjectResourcesDrifted(baseline)).toBe(true);
+  });
 });
