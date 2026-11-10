@@ -4680,6 +4680,42 @@ describe('AgentIslandService native publishing', () => {
     } finally { vi.useRealTimers(); }
   });
 
+  // #9616 / unit: pre-existing unread must survive forwarding without turning
+  // the new error into a native alert. Existing cases start with a clean lane.
+  it.each(['completed', 'error'] as const)('keeps old %s unread without alerting for a forwarded error', async (previous) => {
+    vi.useFakeTimers();
+    try {
+      const { AgentIslandService } = await import('../service.js');
+      const publish = vi.fn((state: AgentIslandDisplayState) => state.visible);
+      const playSound = vi.fn<(sound: AgentIslandSoundChoice) => boolean>(() => true);
+      const service = new AgentIslandService({ getMainWindow: () => null,
+        nativeHost: { failed: false, publish, playSound } });
+      syncEnabledForTest(service, publish);
+      service.setSoundSettings({ enabled: true, sounds: { ...DEFAULT_AGENT_ISLAND_SOUND_SETTINGS.sounds,
+        error: customSound('error.wav') } });
+      const meta = { sessionId: 'lane', agentKind: 'codex' as const };
+      const error = { type: 'error' as const, data: { message: 'failed', isTerminal: true } };
+      service.handleUserPrompt(meta, 'previous request');
+      service.handleAgentEvent(meta, previous === 'completed' ? doneEvent() : error);
+      expect(service.getSessionActivitySnapshot('lane')).toMatchObject({ attention: true });
+      vi.advanceTimersByTime(60000);
+      service.handleUserPrompt(meta, 'follow up');
+      const finish = service.beginForwardedReport('lane', 'routine-run');
+      playSound.mockClear();
+      service.handleAgentEvent(meta, { ...error, turnOrigin: { kind: 'scheduler', runId: 'routine-run' } });
+      expect(playSound).not.toHaveBeenCalled();
+      expect(publish.mock.calls.at(-1)?.[0].displayPolicy).toBe('closed');
+      expect(service.getSessionActivitySnapshot('lane')).toMatchObject({ phase: 'error', attention: true });
+      finish();
+      service.handleAgentEvent(meta, doneEvent());
+      expect(playSound).not.toHaveBeenCalled();
+      expect(publish.mock.calls.at(-1)?.[0].displayPolicy).toBe('closed');
+      service.handleUserPrompt(meta, 'new owner request');
+      service.handleAgentEvent(meta, { ...error, turnOrigin: { kind: 'user' } });
+      expect(playSound).toHaveBeenCalledWith(customSound('error.wav'));
+    } finally { vi.useRealTimers(); }
+  });
+
   // #9616 / unit: the old report can still be publishing when the owner starts
   // the next turn. Its late cleanup must not silence that new turn's terminal.
   it.each([['done', 'user'], ['error', 'user'], ['done', 'scheduler']] as const)('alerts for a new %s/%s turn while an old forwarded report is pending', async (terminal, kind) => {

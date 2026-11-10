@@ -141,6 +141,8 @@ interface AgentIslandSessionState {
     lastAlertMention: boolean;
   };
   completionNotification?: 'silent';
+  /** Native projection only; prior unread remains in activity/relay state. */
+  forwardedErrorAlertSuppressed?: boolean;
   pendingDeviceCompletionNotification?: boolean;
   sessionId: string;
   title: string | null;
@@ -870,6 +872,7 @@ export function applyAgentIslandEvent(
     clearAssistantStream(session);
     session.running = false;
     session.phase = 'error';
+    session.forwardedErrorAlertSuppressed = options.suppressErrorAttention === true;
     session.completedAt = null;
     session.interactionKind = undefined;
     session.pendingInteractionIds.clear();
@@ -1960,6 +1963,7 @@ function markSessionRunning(
     session.startedAt = now;
   }
   session.completionNotification = undefined;
+  session.forwardedErrorAlertSuppressed = false;
   session.running = true;
   session.completedUntil = null;
   session.completedAt = null;
@@ -2951,6 +2955,9 @@ function shouldDisplaySession(
   // 「消息免打扰」只从展示面排除:任务仍在岛面以外的所有面(侧栏实时活动、等待
   // 交互态、远端活动镜像)照常可见,所以这里是过滤而不是把条目从 state 里删掉。
   if (state.displaySuppressedSessionIds.has(session.sessionId)) return false;
+  // An old unread is still real, but must not promote this forwarded error into
+  // a fresh native card/sound. Activity snapshots deliberately retain attention.
+  if (session.phase === 'error' && session.forwardedErrorAlertSuppressed) return false;
   return isSessionVisible(session, now, preserveExpiredTransient)
     && !isVisibleInteractionSuppressed(state, session, now);
 }
