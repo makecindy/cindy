@@ -15,8 +15,8 @@ import {
   getGrokAccessToken,
   getGrokOAuthCredentialGeneration,
   hasGrokOAuthLogin,
-} from '../grok-oauth-login.js';
-import { outboundFetch } from '../outbound-fetch.js';
+} from '../grok-oauth-login.desktop.js';
+import { outboundFetch } from '../outbound-fetch.desktop.js';
 import { invalidateXaiBridgeAuth } from '../xai-auth-invalidation-host.js';
 import type { XaiBridgeAuthInvalidationResult } from '../xai-bridge-auth-invalidation.js';
 

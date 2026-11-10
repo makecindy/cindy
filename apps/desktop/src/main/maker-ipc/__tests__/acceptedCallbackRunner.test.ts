@@ -6,6 +6,8 @@
  * 心跳明明已顺延/终止,prompt 却脱离 run 继续执行并烧 token(review #944 第十一轮 P1)。
  */
 import { describe, expect, it, vi } from 'vitest';
+import type { AgentInputQueuedMessage } from '../../../shared/agentInputQueue.js';
+import { createQueuedAcceptedCallbacks } from '../queuedAcceptedCallbacks.js';
 
 import {
   AcceptedCallbackDispatchCancelled,
@@ -16,6 +18,56 @@ import {
 function createLog() {
   return { warn: vi.fn() };
 }
+
+describe('queued acceptance settlement', () => {
+  const item: AgentInputQueuedMessage = {
+    clientId: 'queued', text: 'continue', persistedContent: 'continue',
+    model: 'test', effort: '', permissionMode: 'ask', workingDir: '/tmp',
+    chatMessage: { clientId: 'queued', role: 'user', content: 'continue' },
+    createOpts: { agentKind: 'claude-code', model: 'test', workingDir: '/tmp' },
+  };
+  const sendOpts = { persistUserMessage: { clientId: item.clientId, content: item.text, delivery: 'turn' as const } };
+
+  it('commits accepted side effects once only after dispatch succeeds', async () => {
+    const callbacks = createQueuedAcceptedCallbacks();
+    const events: string[] = [];
+    callbacks.register(item.clientId, () => { events.push('accepted'); },
+      () => { events.push('rollback'); }, () => { events.push('commit'); });
+    await callbacks.run('s', item);
+    expect(events).toEqual(['accepted']);
+    const outcome = { kind: 'session-dispatch' as const, source: 'orca', dispatched: true as const };
+    await callbacks.settle('s', sendOpts, outcome);
+    await callbacks.settle('s', sendOpts, outcome);
+    await callbacks.rollback('s', item.clientId);
+    expect(events).toEqual(['accepted', 'commit']);
+  });
+
+  it('rolls back a cancelled acceptance once and never commits it', async () => {
+    const callbacks = createQueuedAcceptedCallbacks();
+    const rollback = vi.fn();
+    const commit = vi.fn();
+    const cancelled = new AcceptedCallbackDispatchCancelled('delivery revoked');
+    callbacks.register(item.clientId, () => { throw cancelled; }, rollback, commit);
+    await expect(callbacks.run('s', item)).rejects.toBe(cancelled);
+    await callbacks.settle('s', sendOpts, { kind: 'session-dispatch', source: 'orca', dispatched: false,
+      reason: 'cancelled-before-dispatch', message: 'delivery revoked', context: 'test' });
+    await callbacks.rollback('s', item.clientId);
+    expect(rollback).toHaveBeenCalledExactlyOnceWith('cancelled-before-dispatch');
+    expect(commit).not.toHaveBeenCalled();
+  });
+
+  it('discarding an unaccepted item has no accepted, commit or rollback side effects', async () => {
+    const callbacks = createQueuedAcceptedCallbacks();
+    const accepted = vi.fn(), rollback = vi.fn(), commit = vi.fn();
+    callbacks.register(item.clientId, accepted, rollback, commit);
+    callbacks.discard(item.clientId);
+    await callbacks.run('s', item);
+    await callbacks.rollback('s', item.clientId);
+    expect(accepted).not.toHaveBeenCalled();
+    expect(rollback).not.toHaveBeenCalled();
+    expect(commit).not.toHaveBeenCalled();
+  });
+});
 
 describe('runAcceptedCallback', () => {
   it('普通副作用失败只记日志,不拦派发', async () => {

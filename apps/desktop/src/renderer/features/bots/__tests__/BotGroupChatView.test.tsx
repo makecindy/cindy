@@ -143,6 +143,7 @@ it.each(['PageUp', 'Home', 'scrollbar'])('keeps explicit %s browsing while conte
   vi.stubGlobal('ResizeObserver', class {
     constructor(private callback: ResizeObserverCallback) {}
     observe(element: Element) { observed.set(element, this.callback); }
+    unobserve(element: Element) { observed.delete(element); }
     disconnect() {}
   });
   renderView();
@@ -414,7 +415,7 @@ afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 describe('BotGroupChatView', () => {
   // Review 4362888100: main group and thread timelines own separate scroll roots.
   it.each(['group', 'thread'])('sanitizes selection copy in the real %s timeline', async (timeline) => {
-    vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
+    vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
     mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ serverBacked: true }) });
     renderView();
     let message = await screen.findByText('@小满 帮我查余票');
@@ -857,6 +858,7 @@ describe('BotGroupChatView', () => {
       vi.stubGlobal('ResizeObserver', class {
         constructor(private callback: ResizeObserverCallback) {}
         observe(element: Element) { observed.set(element, this.callback); }
+        unobserve(element: Element) { observed.delete(element); }
         disconnect() {}
       });
       vi.stubGlobal('PointerEvent', class extends MouseEvent {
@@ -2581,6 +2583,7 @@ describe('BotGroupChatView', () => {
       vi.stubGlobal('ResizeObserver', class {
         constructor(private callback: ResizeObserverCallback) {}
         observe(element: Element) { observed.set(element, this.callback); }
+        unobserve(element: Element) { observed.delete(element); }
         disconnect() {}
       });
       const messages = [
@@ -3985,6 +3988,7 @@ describe('thread previews and posting to the main chat', () => {
       vi.stubGlobal('ResizeObserver', class {
         constructor(private callback: ResizeObserverCallback) {}
         observe(element: Element) { observed.set(element, this.callback); }
+        unobserve(element: Element) { observed.delete(element); }
         disconnect() {}
       });
       const scroller = await renderProcessScroller(context);
@@ -4015,6 +4019,7 @@ describe('thread previews and posting to the main chat', () => {
     vi.stubGlobal('ResizeObserver', class {
       constructor(private callback: ResizeObserverCallback) {}
       observe(element: Element) { observed.set(element, this.callback); }
+      unobserve(element: Element) { observed.delete(element); }
       disconnect() {}
     });
     const scroller = await renderProcessScroller(context);
@@ -4060,6 +4065,7 @@ describe('thread previews and posting to the main chat', () => {
     vi.stubGlobal('ResizeObserver', class {
       constructor(private callback: ResizeObserverCallback) {}
       observe(element: Element) { observed.set(element, this.callback); }
+      unobserve(element: Element) { observed.delete(element); }
       disconnect() {}
     });
     const scroller = await renderProcessScroller(context);
@@ -4094,6 +4100,7 @@ describe('thread previews and posting to the main chat', () => {
     vi.stubGlobal('ResizeObserver', class {
       constructor(private callback: ResizeObserverCallback) {}
       observe(element: Element) { observed.set(element, this.callback); }
+      unobserve(element: Element) { observed.delete(element); }
       disconnect() {}
     });
     const scroller = await renderProcessScroller(context);
@@ -4126,6 +4133,7 @@ describe('thread previews and posting to the main chat', () => {
     vi.stubGlobal('ResizeObserver', class {
       constructor(private callback: ResizeObserverCallback) {}
       observe(element: Element) { observed.set(element, this.callback); }
+      unobserve(element: Element) { observed.delete(element); }
       disconnect() {}
     });
     const scroller = await renderProcessScroller(context);
@@ -5230,7 +5238,7 @@ it('sends a rich control to the group outbox without consuming the composer draf
 
 // Unit: an explicit rich submit must use the open thread and ignore composer-only flags.
 it('sends a rich control only to its thread and keeps the thread draft and main-share choice', async () => {
-  vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
+  vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
   const content = '```cindy-ui\n' + JSON.stringify({ seq: 1, version: 1, op: 'create', id: 'submit', kind: 'button', props: { label: 'Rich thread submit', send: 'Reply from the card' } }) + '\n```';
   mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ serverBacked: true }) });
   mocks.thread.mockResolvedValue({ ok: true, root: msg({ id: 'u1', content: 'Thread root' }), hasMore: false,
@@ -5278,7 +5286,7 @@ it('renders a verified shared bot answer with its send action disabled', async (
 // PR #8439 P1: simulate a committed reply whose receipt is lost. Existing happy-path
 // routing coverage did not detect a second server-side reply after retry/remount (unit tier).
 it('reuses a rich thread reply attempt after a lost receipt and panel remount', async () => {
-  vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
+  vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
   const content = '```cindy-ui\n' + [
     { seq: 1, version: 1, op: 'create', id: 'text', kind: 'input', props: { label: 'Retry reply text', default: 'First reply' } },
     { seq: 2, op: 'create', id: 'send', kind: 'button', props: { label: 'Retry rich reply', send: { ref: 'text' } } },

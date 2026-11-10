@@ -3,7 +3,7 @@ import os from 'node:os';
 import { ipcMain } from 'electron';
 
 import { isIpcError } from '../../shared/ipc-errors.js';
-import { ServerApiError } from '../serverApiClient.js';
+import { ServerApiError } from '../serverApiClient.desktop.js';
 import { isPluginMarketPassthroughErrorCode } from './api.js';
 import {
   isGhostInstallApprovalToken,

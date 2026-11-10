@@ -60,6 +60,15 @@ export const generalSettings = defineSettings({
     titleKey: 'settings.sections.composer',
     sectionKey: 'settings.sections.composer',
   },
+  defaultNewTaskWorkingDir: {
+    id: 'general.defaultNewTaskWorkingDir',
+    tab: 'general',
+    targetId: 'settings-default-new-task-working-dir',
+    titleKey: 'settings.defaultNewTaskWorkingDir.title',
+    sectionKey: 'settings.tabs.general',
+    descriptionKey: 'settings.defaultNewTaskWorkingDir.hint',
+    keywordKeys: ['settings.defaultNewTaskWorkingDir.label'],
+  },
   collaboration: {
     id: 'general.collaboration',
     tab: 'general',

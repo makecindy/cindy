@@ -38,7 +38,7 @@ import {
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer';
 import { DesktopCaptureWindow } from './captureWindow';
 import { denyAppDesktopCapture } from './capturePermissions';
-import { readDeviceLinkSettings, writeDeviceLinkSetting } from '../device-link/settings-store';
+import { readDeviceLinkSettings, writeDeviceLinkSetting } from '../device-link/settings-store.desktop';
 import { throwIpcError } from '../utils/ipcValidate';
 import { RemoteDesktopController, type DesktopControllerDeps } from './controller';
 import { getInputHandoffService } from '../input-handoff/service';

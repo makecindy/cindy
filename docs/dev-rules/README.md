@@ -15,7 +15,7 @@
 | 已发生过的任务体验回归、测试入口与运行命令 | [任务回归台账](session-regressions.md) |
 | Desktop 启动、重启与验证 | [桌面开发](desktop-development.md) |
 | 免登录 UI 模拟数据、`--mock` 启动、数据正本与写入边界 | [UI 模拟数据](ui-mock-data.md) |
-| Mobile 开发、模拟器、原生配置／依赖与冷更确认 | [手机开发](mobile-development.md) |
+| Mobile 开发、模拟器、原生配置／依赖与冷更边界 | [手机开发](mobile-development.md) |
 | Renderer、preload、窗口、IPC、CSP 与特权边界 | [Electron 进程边界](electron-security-and-process-boundaries.md) |
 | 凭证、持久数据、临时文件与测试目录 | [本地存储](credentials-and-local-storage.md) |
 | 媒体生成、导入、附件、缓存、协议与回收 | [媒体存储](media-storage-and-protocols.md) |

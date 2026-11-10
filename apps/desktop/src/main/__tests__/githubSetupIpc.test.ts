@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 vi.mock('../secrets/providerSecretStore', () => ({ readGhostSecret: vi.fn() }));
-vi.mock('../maker-host/outbound-fetch', () => ({ outboundFetch: vi.fn() }));
+vi.mock('../maker-host/outbound-fetch.desktop', () => ({ outboundFetch: vi.fn() }));
 vi.mock('../appSessionState', () => ({ activeOwnerScopeKey: () => 'test-owner', getActiveAppSession: () => ({ dataOwnerId: 'test-owner' }) }));
 const mocks = vi.hoisted(() => ({
   handlers: new Map<string, (...args: any[]) => unknown>(),
@@ -40,7 +40,7 @@ vi.mock('../git-context/githubSetup', () => ({
 }));
 import { openGithubSignIn, readGithubConnection, registerGithubSetupIpc } from '../git-context/githubSetupIpc';
 import { readGhostSecret } from '../secrets/providerSecretStore';
-import { outboundFetch } from '../maker-host/outbound-fetch';
+import { outboundFetch } from '../maker-host/outbound-fetch.desktop';
 import { getGhostSetupChangeBus } from '../cindy-brain/ghostSetupChangeBus';
 
 beforeEach(() => {

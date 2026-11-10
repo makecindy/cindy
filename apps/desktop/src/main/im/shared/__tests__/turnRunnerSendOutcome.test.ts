@@ -24,7 +24,7 @@ import type {
   TurnPermissionPolicy,
 } from '@cindy/maker-core';
 import type { ChannelIM } from '@cindy/im';
-import { setMainLocale } from '../../../i18n';
+import { setMainLocale } from '../../../i18n.desktop';
 import { createTelegramGuestTurnPermissionPolicy } from '../../telegram/permissionPolicy';
 import { createDingTalkTurnPermissionPolicy } from '../../dingtalk/permissionPolicy';
 import { createFeishuGroupTurnPermissionPolicy } from '../../feishu/permissionPolicy';
@@ -135,7 +135,7 @@ vi.mock('../../../goal-host/inactiveNote', () => ({
   peekGoalInactiveNote: mocks.peekGoalInactiveNote,
 }));
 
-vi.mock('../../../imageCacheStore', () => ({
+vi.mock('../../../imageCacheStore.desktop', () => ({
   resolveSafe: mocks.resolveXdtImageUrl,
 }));
 
