@@ -830,6 +830,65 @@ describe('MorphPopover interaction contract', () => {
     expect(panel.style.height).toBe('80px');
   });
 
+  // #9573 复审（codex P2）：内滚层的定高会算进外壳 scrollHeight。旧实现在量自然高度前
+  // 不松这层定高，于是「上一轮的整段高度 + 边框」被当成新内容高度写回去，短列表在内容
+  // 没变、也没搜索的情况下也会一路长到上限。jsdom 没有排版，这里按浏览器的口径模拟：
+  // 内层带定高时外壳 scrollHeight = 定高 + 2px 边框。
+  // 最小输入：短列表内容 200、上限 240，连续三次内容重测。Tier: unit。
+  it('内滚层的定高不会被当成内容高度叠回外壳', async () => {
+    vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockReturnValue(480);
+    vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockImplementation(function (this: HTMLElement) {
+      if (this.getAttribute('role') !== 'group') return 0;
+      const inner = this.querySelector('[data-morph-scroll="inner"]') as HTMLElement | null;
+      const pinned = inner ? Number.parseFloat(inner.style.height) || 0 : 0;
+      return Math.max(200, pinned + (pinned > 0 ? 2 : 0));
+    });
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue(new DOMRect(20, 800, 120, 30));
+    class ResizeObserverStub {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    }
+    vi.stubGlobal('ResizeObserver', ResizeObserverStub);
+
+    function Host() {
+      const [open, setOpen] = useState(false);
+      return (
+        <>
+          <button type="button" onClick={() => setOpen(true)}>
+            Toggle
+          </button>
+          <MorphPopover
+            open={open}
+            onOpenChange={setOpen}
+            panelWidth={480}
+            maxContentHeight={240}
+            panelAriaLabel="Morph panel"
+            trigger={<span />}
+          >
+            <div data-morph-scroll="inner">short list</div>
+          </MorphPopover>
+        </>
+      );
+    }
+
+    render(<Host />);
+    fireEvent.click(screen.getByRole('button', { name: 'Toggle' }));
+    const panel = await screen.findByRole('group', { name: 'Morph panel' });
+    await waitFor(() => {
+      expect(panel.style.height).toBe('200px');
+    });
+    const content = panel.firstElementChild as HTMLElement;
+    const inner = panel.querySelector('[data-morph-scroll="inner"]') as HTMLElement;
+    expect(inner.style.height).toBe('200px');
+
+    for (let round = 0; round < 3; round += 1) {
+      content.dispatchEvent(new CustomEvent(MORPH_CONTENT_RESIZE_EVENT, { bubbles: true }));
+    }
+    expect(panel.style.height).toBe('200px');
+    expect(inner.style.height).toBe('200px');
+  });
+
   // #9573 复审：普通动效下，扫描结果 / 模型列表会在 220ms 开场动画内派发重测。
   // 旧监听当场改宽高，会把正在过渡的面板拽到终态。生产入口：MorphPopover 打开后、settle 前派发重测。
   // 现有收缩用例走 reduced-motion，settle 已完成，盖不住这条时序。

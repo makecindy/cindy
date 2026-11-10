@@ -199,6 +199,19 @@ function pinInnerScrollHeight(content: HTMLDivElement, shellHeightPx: number | n
   for (const node of pinned) node.style.height = height;
 }
 
+/** 量自然高度前必须先松掉上一次的定高,否则 scrollHeight 会带着旧高度再叠一次边框。 */
+function releasePinnedScrollHeights(root: HTMLElement): void {
+  for (const node of root.querySelectorAll<HTMLElement>('[data-morph-scroll="inner"]')) {
+    node.style.height = '';
+  }
+}
+
+/** 面板写入的 height 是 border-box,内容区可用高度必须扣掉上下边框。 */
+function panelBorderY(panel: HTMLElement): number {
+  const style = getComputedStyle(panel);
+  return (Number.parseFloat(style.borderTopWidth) || 0) + (Number.parseFloat(style.borderBottomWidth) || 0);
+}
+
 /** overflow-y:auto/hidden 会把 visible 的 overflow-x 算成 auto;横轴必须显式 hidden。 */
 function setContentOverflowY(
   content: HTMLDivElement | null,
@@ -280,6 +293,9 @@ export function MorphPopover({
       const prevW = panel.style.width;
       const prevH = panel.style.height;
       panel.style.height = 'auto';
+      // 内滚层的定高会算进 scrollHeight;不松掉就会把上一轮的整段高度当成内容高度量出来,
+      // 再加边框 → 短列表在内容没变时也会一路长到上限 (codex P2, #9536)。
+      releasePinnedScrollHeights(panel);
       let desiredW: number;
       if (panelWidthMode === 'trigger') {
         // 字段形态: 面板与 trigger 逐像素同宽(不取 max —— 内容再宽也不得溢出
@@ -370,7 +386,8 @@ export function MorphPopover({
     }
     // 高度没变也要重算内滚约束：切到二级页后外壳被锁住，列表必须接过这个确定高度。
     if (settledRef.current && contentRef.current) {
-      pinInnerScrollHeight(contentRef.current, m.h);
+      // m.h 是 border-box,内滚层只能用内容区那一块。
+      pinInnerScrollHeight(contentRef.current, m.h - panelBorderY(panel));
     }
   }, [measure]);
 
@@ -495,7 +512,7 @@ export function MorphPopover({
       const focusDelay = reduced ? 0 : MORPH_MS;
       closeTimerRef.current = setTimeout(() => {
         settledRef.current = true;
-        setContentOverflowY(contentRef.current, 'auto', m.h);
+        setContentOverflowY(contentRef.current, 'auto', m.h - panelBorderY(panel));
         // RO 在 opening 期间收到的尺寸变化不会在 settled 后自动重发,这里补量一次
         // (异步 capability / provider 列表在开场动画内返回时防面板卡旧尺寸)。
         // 开场期间的显式重测只登记、不改几何；这次补量读的是此刻的内容，等于把登记兑现。
