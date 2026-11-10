@@ -2308,8 +2308,29 @@ const pluginWallpaper = new PluginWallpaperSlot({
     const info = await ledger.getBlobInfo(parsed.hash, db);
     assertCurrent();
     if (!info || info.ext !== parsed.ext || info.bytes > MAX_WALLPAPER_IMAGE_BYTES) return null;
-    const { readBoundedFileNoFollow } = await import('../utils/readBoundedFile.js');
-    return readBoundedFileNoFollow(blobStore.resolveSafe(url).absPath, MAX_WALLPAPER_IMAGE_BYTES, { nonBlocking: true });
+    // 走媒体仓的受检打开流程:父目录符号链接、打开后被替换都在 openBlobFile 里拒。
+    // readBoundedFileNoFollow 的 O_NOFOLLOW 只保护最后一段路径,仓内目录被换成
+    // 符号链接时仍会读出仓外字节。
+    const opened = await blobStore.openBlobFile(url);
+    try {
+      assertCurrent();
+      if (opened.totalSize <= 0 || opened.totalSize > MAX_WALLPAPER_IMAGE_BYTES) return null;
+      const buffer = Buffer.allocUnsafe(opened.totalSize);
+      let offset = 0;
+      while (offset < buffer.length) {
+        const { bytesRead } = await opened.file.read(
+          buffer,
+          offset,
+          buffer.length - offset,
+          offset,
+        );
+        if (bytesRead === 0) break;
+        offset += bytesRead;
+      }
+      return offset === buffer.length ? buffer : null;
+    } finally {
+      await opened.file.close();
+    }
   },
   setImage: async (bytes, assertCurrent) => {
     const { setCustomWallpaperImage } = await import('../custom-wallpaper.js');

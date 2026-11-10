@@ -239,6 +239,8 @@
       "panelTab": "Panel \"{{title}}\" · se abre dentro de la página de complementos",
       "mainView": "Puede agregar una entrada \"{{title}}\" a la barra lateral de Cindy",
       "mainViewDetail": "Al abrirlo, se muestra la vista principal en la zona de pruebas del complemento y no otorga acceso a archivos, redes o credenciales.",
+      "wallpaper": "Cambiar el fondo de Cindy",
+      "wallpaperDetail": "Puede reemplazar y activar el fondo de este perfil de escritorio de Cindy para todas sus cuentas. No cambia el fondo del sistema. Se validan las imágenes y se conservan la visibilidad y el desenfoque.",
       "code": "código ejecutable",
       "codeDetail": "Se ejecuta en una zona de pruebas aislada sin acceso a sus archivos o red.",
       "resident": "Siempre activo (se inicia cuando está habilitado, mantiene un proceso en segundo plano incluso cuando está inactivo)",

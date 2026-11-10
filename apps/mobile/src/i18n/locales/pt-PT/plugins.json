@@ -239,6 +239,8 @@
       "panelTab": "Painel \"{{title}}\" · abre dentro da página Plugins",
       "mainView": "Pode adicionar uma entrada «{{title}}» à barra lateral de Cindy",
       "mainViewDetail": "Ao abri-la, é apresentada a vista principal na sandbox do plugin, sem conceder acesso a ficheiros, rede ou credenciais.",
+      "wallpaper": "Alterar o papel de parede do Cindy",
+      "wallpaperDetail": "Pode substituir e ativar o papel de parede deste perfil de ambiente de trabalho do Cindy para todas as suas contas. Não altera o papel de parede do sistema. As imagens são validadas; a visibilidade e a desfocagem são preservadas.",
       "code": "Código executável",
       "codeDetail": "É executado numa sandbox isolada, sem acesso aos seus ficheiros ou à rede.",
       "resident": "Sempre ativo (inicia ao ativar e mantém um processo em segundo plano mesmo quando inativo)",
