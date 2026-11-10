@@ -284,6 +284,26 @@ describe('remoteSessionStore', () => {
     expect(remoteSessionStore.getVisiblePendingInteractions('s1')).toHaveLength(0);
   });
 
+  // Regression: editing a second async question must not drop the first one's unsent supplement when it is withdrawn.
+  it('keeps every edited async question when an earlier one is withdrawn', () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1')]);
+    const ask = (requestId: string): PendingInteraction => ({ persistId: `p-${requestId}`,
+      request: { kind: 'ask_user_question', requestId, delivery: 'async', questions: [{ question: `${requestId}?` }] } });
+    const [a, b] = [ask('qa'), ask('qb')];
+    remoteSessionStore.setPendingInteractions('s1', [a, b]);
+    remoteSessionStore.protectAsyncQuestion('s1', a);
+    remoteSessionStore.protectAsyncQuestion('s1', b);
+    remoteSessionStore.applyRemotePush('dev-1', 'maker:interaction-dismissed', {
+      sessionId: 's1', requestId: 'qa', reason: 'question_withdrawn', withdrawalReason: '已确认',
+    });
+    expect(remoteSessionStore.getVisiblePendingInteractions('s1').map(i => i.request.requestId)).toEqual(['qa', 'qb']);
+    expect(remoteSessionStore.getVisiblePendingInteractions('s1')[0]).toMatchObject({
+      retainedDraft: true, request: { withdrawalReason: '已确认' },
+    });
+    remoteSessionStore.releaseProtectedQuestion('s1', 'qa');
+    expect(remoteSessionStore.getVisiblePendingInteractions('s1').map(i => i.request.requestId)).toEqual(['qb']);
+  });
+
   it('keeps an edited async question across disconnection but removes it on explicit history clearing', () => {
     remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1')]);
     const item: PendingInteraction = { persistId: 'p1',
