@@ -796,6 +796,18 @@ export function UnifiedModelPickerSheet(
           row.config,
         ),
     );
+  // An opened copy keeps its identity when catalog defaults or capability
+  // fallbacks change its displayed configuration (notably seeded favorites).
+  // Once the user adjusts parameters, the ordinary exact-match rule applies.
+  // Keep matchingFavorite separate for duplicate detection during explicit edits.
+  const favoriteToRemove =
+    row && originFavorite && sameConfiguration(
+      resolveMobileModelConfig(row.entry, {
+        favorite: originFavorite,
+        fastCapable: row.remoteDevice ? () => true : fastCapable,
+      }),
+      row.config,
+    ) ? originFavorite : matchingFavorite;
   const recommendedConfig =
     row &&
     resolveMobileModelConfig(row.entry, {
@@ -1177,7 +1189,7 @@ export function UnifiedModelPickerSheet(
                 .join(" · "),
               price: price ? `${price.title}\n${price.amountsLine}` : null,
               favoritesDisabled: !prefs.favoritesReady || favoriteSource === null,
-              isFavorite: !!matchingFavorite,
+              isFavorite: !!favoriteToRemove,
               canReset,
               configurationSummary: [
                 mobileAgentLabel(row.config.agent),
@@ -1257,11 +1269,11 @@ export function UnifiedModelPickerSheet(
                 if (!prefs.favoritesReady || favoriteEdit || favoriteSource === null)
                   return;
                 void transact(async (isCurrent) => {
-                  if (matchingFavorite) {
+                  if (favoriteToRemove) {
                     await prefs.save({
                       ...prefs.value,
                       favorites: prefs.value.favorites.filter(
-                        (item) => item.uid !== matchingFavorite.uid,
+                        (item) => item.uid !== favoriteToRemove.uid,
                       ),
                     });
                     if (isCurrent())
