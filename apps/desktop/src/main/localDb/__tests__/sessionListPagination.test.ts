@@ -3,14 +3,14 @@ import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { eq, getTableColumns, getTableName } from 'drizzle-orm';
 import { expect, it } from 'vitest';
 import { sessions, messages, taskTags, sessionTaskTags, botSessionLinks, botProfiles } from '../schema';
-import { selectSessionListRows, ordinaryTaskListFilter, flattenSessionReadRow } from '../sessionQueries';
+import { selectSessionListRows, selectOrdinarySessionListRows, flattenSessionReadRow } from '../sessionQueries';
 import type { DbClient } from '../client/DbClient';
 
 it('pages the actual list query across tied timestamps without skipping or repeating rows', async () => {
   const sqlite = new Database(':memory:');
   try {
     // Derive columns from production schema; no account DB or migrations are touched.
-    for (const table of [sessions, messages, taskTags, sessionTaskTags, botSessionLinks]) {
+    for (const table of [sessions, messages, taskTags, sessionTaskTags, botSessionLinks, botProfiles]) {
       sqlite.exec(
         `CREATE TABLE "${getTableName(table)}" (${Object.values(getTableColumns(table))
           .map((column) => `"${column.name}" ${column.getSQLType()}`)
@@ -19,7 +19,7 @@ it('pages the actual list query across tied timestamps without skipping or repea
     }
     const db = drizzle(sqlite) as unknown as DbClient['drizzle'];
     const insert = sqlite.prepare(
-      'INSERT INTO sessions (id,status,updated_at,list_preview,list_message_count) VALUES (?,?,?, ?,0)',
+      "INSERT INTO sessions (id,status,updated_at,list_preview,list_message_count,source) VALUES (?,?,?, ?,0,'desktop')",
     );
     for (let n = 0; n < 507; n++)
       insert.run(`s${String(n).padStart(4, '0')}`, 'archived', Math.floor(n / 3), 'cached preview');
@@ -31,7 +31,7 @@ it('pages the actual list query across tied timestamps without skipping or repea
     const ids: string[] = [];
     let before: { id: string; updatedAt: number } | undefined;
     for (;;) {
-      const rows = await selectSessionListRows(db, eq(sessions.status, 'archived'), 200, before);
+      const rows = await selectOrdinarySessionListRows(db, { cap: 200, statusFilter: 'archived', before });
       ids.push(...rows.map((row) => row.session.id));
       const tail = rows.at(-1)?.session;
       if (rows.length < 200 || !tail) break;
@@ -75,7 +75,7 @@ it('lists linked teammate routine/channel tasks, keeping private lanes and hidde
     sqlite.exec("UPDATE sessions SET hidden_at=1 WHERE id='hidden'");
     insert.run('ordinary', 'desktop', 'active');
     const db = drizzle(sqlite) as unknown as DbClient['drizzle'];
-    const rows = await selectSessionListRows(db, ordinaryTaskListFilter(), 100);
+    const rows = await selectOrdinarySessionListRows(db, { cap: 100, statusFilter: null });
     expect(rows.map(row => row.session.id).sort()).toEqual(['channel', 'ordinary', 'routine', 'routine-persistent']);
     expect(flattenSessionReadRow(rows.find(row => row.session.id === 'channel')!).companion)
       .toEqual({ id: 'owner', role: 'channel', channel: 'feishu' });

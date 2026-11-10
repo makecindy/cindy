@@ -4268,7 +4268,18 @@
           "ariaLabel": "Deinen anderen Computern und den Personen, mit denen du teilst, die Nutzung dieses Anbieters erlauben",
           "writeFailed": "Die Fernzugriffseinstellung konnte nicht gespeichert werden. Bitte versuche es erneut."
         },
-        "moreActionsAria": "Weitere Aktionen"
+        "moreActionsAria": "Weitere Aktionen",
+        "runLocation": {
+          "label": "Ausführen auf",
+          "optionLocal": "Dieser Computer",
+          "notSignedIn": "Nicht angemeldet",
+          "autoBorrowing": "Dieser Computer ist nicht angemeldet, daher laufen neue Aufgaben auf {{device}}. Keine Anmeldung nötig.",
+          "local": "Neue Aufgaben laufen auf diesem Computer. Du kannst stattdessen einen deiner anderen angemeldeten Computer wählen.",
+          "pinned": "Neue Aufgaben laufen auf {{device}} mit dessen Anmeldung. Laufende Aufgaben bleiben, wo sie sind.",
+          "inline": "Läuft auf",
+          "signInHere": "Auf diesem Computer anmelden",
+          "writeFailed": "Der Ausführungsort konnte nicht gespeichert werden. Bitte versuche es erneut."
+        }
       },
       "detect": {
         "groupLabel": "Auf diesem Gerät erkannt",
@@ -5336,6 +5347,15 @@
         "ariaLabel": "Mit {{shortcut}} Nachrichten senden"
       }
     },
+    "defaultNewTaskWorkingDir": {
+      "title": "Standard-Arbeitsverzeichnis für neue Aufgaben",
+      "label": "Standardverzeichnis auf diesem Computer",
+      "hint": "Für neue lokale Aufgaben ohne ausgewähltes Projekt wird dieses Verzeichnis vorausgewählt. Ein ausdrücklich gewähltes Projekt, ein Dialog oder ein Remote-Computer hat Vorrang.",
+      "unset": "Nicht festgelegt (kein Verzeichnis vorausgewählt)",
+      "choose": "Verzeichnis auswählen",
+      "clear": "Standardverzeichnis löschen",
+      "failed": "Das Standard-Arbeitsverzeichnis konnte nicht gespeichert werden. Bitte erneut versuchen."
+    },
     "linkOpen": {
       "title": "Links öffnen",
       "description": "Wähle, wo Links in Nachrichten geöffnet werden. Klicke mit der rechten Maustaste auf einen Link, um nur für diesen Link eine andere Option zu verwenden.",
@@ -6222,13 +6242,18 @@
         "allowInboundAria": "Umschalten, ob {{name}} dieses Gerät steuern darf",
         "peerControlOff": "Die Fernsteuerung ist auf diesem Gerät nicht aktiviert",
         "masterOffHint": "Aktiviere zuerst den Hauptschalter oben",
-        "controllingThisMac": "Mit Cindy verbunden"
+        "controllingThisMac": "Mit Cindy verbunden",
+        "useThisDeviceModels": "Modelle hier nutzen",
+        "allowModelUseAria": "{{name}} die Modelle dieses Computers nutzen lassen"
       },
       "toast": {
         "revoked": "Zugriff für dieses Gerät widerrufen",
         "revokeFailed": "Zugriff konnte nicht widerrufen werden",
         "restored": "Zugriff für dieses Gerät wiederhergestellt",
-        "restoreFailed": "Zugriff konnte nicht wiederhergestellt werden"
+        "restoreFailed": "Zugriff konnte nicht wiederhergestellt werden",
+        "modelUseRestored": "Dieser Computer kann die Modelle wieder nutzen",
+        "modelUseRevoked": "Dieser Computer kann die Modelle nicht mehr nutzen",
+        "modelUseFailed": "„Modelle hier nutzen“ konnte nicht gespeichert werden. Bitte versuche es erneut."
       },
       "sections": {
         "myDevices": "Meine Geräte",
@@ -9087,6 +9112,8 @@
       "daysWindow": "{{days}} T"
     },
     "claude": {
+      "totalWeeklyLabel": "Woche gesamt",
+      "temporarilyLimited": "Vorübergehend begrenzt",
       "waitingDetail": "Die Claude-Abonutzung wird nach Abschluss der nächsten Gesprächsrunde aktualisiert.",
       "weeklyLabel": "Wöchentlich",
       "modelWeeklyLabel": "{{model}} wöchentlich",
@@ -14344,7 +14371,7 @@
       "running": "Wird ausgeführt…",
       "waitingWorkflow": "Warten auf Workflow…",
       "waitingWorkflowProgress": "Warten auf Workflow · {{done}}/{{total}} Agents",
-      "turnStart": "{{status}}",
+      "turnStart": "Wird verarbeitet, {{name}}…",
       "issueTip": "{{name}}, nutze /issue, um uns Feedback oder Vorschläge zu senden",
       "runningTool": "{{tool}} läuft…"
     },
@@ -19821,6 +19848,8 @@
     "lineNumbers": "Zeilennummern"
   },
   "subscriptionAccounts": {
+    "unassigned": "Konto nicht zugewiesen",
+    "providerManagedAuth": "Der aktuelle Codex-Anbieter stellt keine ChatGPT-Kontoinformationen bereit. Wähle beim Hinzufügen des Anbieters „$t(subscriptionAccounts.signIn.anotherAccount)“, um einen separaten Ordner zu verwenden.",
     "signIn": {
       "checking": "Lokales Konto wird geprüft…",
       "detected": "Angemeldetes Konto gefunden",
@@ -19869,5 +19898,15 @@
     "browserFallback": "Öffne GitHub, um Cindy einen Stern zu geben.",
     "openGithub": "GitHub öffnen",
     "openFailed": "GitHub konnte nicht geöffnet werden."
+  },
+  "hostConnection": {
+    "connecting": "Verbindung mit Cindy wird hergestellt…",
+    "restoring": "Aufgabenstatus wird wiederhergestellt…",
+    "retrying": "Aufgabenstatus noch nicht synchronisiert. Neuer Versuch…",
+    "pairing": "Verbindung erneut autorisieren",
+    "pairingHelp": "Lass diese Seite geöffnet. Führe im Terminal, in dem du Cindy Host gestartet hast, den Befehl zum Öffnen des Webclients erneut aus. Kopple die neue Seite und kehre hierher zurück.",
+    "keepDraft": "Dein Entwurf bleibt erhalten. Der Aufgabenstatus wird nach Wiederherstellung der Verbindung synchronisiert.",
+    "retry": "Erneut verbinden",
+    "desktopAuthHelp": "Aktualisiere die Host-Verbindungseinstellungen im Startterminal und öffne diesen experimentellen Client erneut."
   }
 }

@@ -12,7 +12,7 @@ import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../../appSessi
 import { createLogger, type Logger } from '../../logger.js';
 import { getProviderSecretStore } from '../../secrets/providerSecretStore.js';
 import { setDiscoveredProviderMediaModels, setOpenAiImagesApiKeyConfigured } from '../active-catalog.js';
-import { outboundFetch } from '../outbound-fetch.js';
+import { outboundFetch } from '../outbound-fetch.desktop.js';
 
 const OPENAI_MODELS_URL = 'https://api.openai.com/v1/models';
 const HTTP_TIMEOUT_MS = 15_000;

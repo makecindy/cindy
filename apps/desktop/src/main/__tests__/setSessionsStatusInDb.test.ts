@@ -80,7 +80,7 @@ vi.mock('../device-link/broadcast-tap', () => ({
 vi.mock('../agent-island/service.js', () => ({
   getAgentIslandService: () => h.agentIslandService,
 }));
-vi.mock('../imageCacheStore', () => ({ removeSession: vi.fn() }));
+vi.mock('../imageCacheStore.desktop', () => ({ removeSession: vi.fn() }));
 vi.mock('../maker-host/index.js', () => ({
   getMakerIfReady: () => ({ closeSession: h.closeSession, isSessionAlive: h.isSessionAlive }),
 }));

@@ -196,8 +196,9 @@ Cindy 面向大众用户，让人以简单高效的方式用 AI 完成工作。�
 - 新增或修改直接／间接的服务器请求、订阅、推送、同步、轮询或重试（包括界面调用方）前，
   必须先读 `docs/dev-rules/server-channel-review.md`：结合通道用途、共享容量与累计压力
   检查调用方式及次数频率；自审与 AI review 按实际严重程度报告问题，不排除 P2 缺陷。
-- 修改 package 依赖方向、main 进程模块加载方式，或主界面布局树结构前，必须先读
-  `docs/dev-rules/architecture-invariants.md`。
+- 修改 package 依赖方向、main 进程模块加载方式、桌面与 Node Host（`apps/host`）共用的业务主体
+  （`*.desktop.ts` 装配、工厂端口注入），或主界面布局树结构前，必须先读
+  `docs/dev-rules/architecture-invariants.md`；改共用主体后还要跑 Host 的测试和类型检查（§5）。
 - 新增或修改 Settings UI、配置文件、本地偏好、运行时 profile，或 agent／MCP／provider
   开关前，必须先读 `docs/dev-rules/configuration-and-overrides.md`。
 - 新增或修改涉及 workdir 文件、agent 进程、会话数据的功能，新增 IPC channel／推送事件，

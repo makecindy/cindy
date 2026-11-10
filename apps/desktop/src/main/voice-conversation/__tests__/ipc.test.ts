@@ -40,13 +40,13 @@ vi.mock('../../secrets/providerSecretStore.js', () => ({
   readCustomProviderKey: h.readKey,
   getProviderSecretStore: () => ({ get: () => 'test-key' }),
 }));
-vi.mock('../../maker-host/generic-oauth.js', () => ({
+vi.mock('../../maker-host/generic-oauth.desktop.js', () => ({
   readCachedGenericOAuthAccessToken: h.oauthToken,
 }));
 vi.mock('../../model-access/effectiveEndpoint.js', () => ({
   effectiveXdGatewayBaseUrl: () => 'https://gateway.test/v1',
 }));
-vi.mock('../../maker-host/outbound-fetch.js', () => ({ outboundFetch: vi.fn() }));
+vi.mock('../../maker-host/outbound-fetch.desktop.js', () => ({ outboundFetch: vi.fn() }));
 vi.mock('../../appCapabilities.js', () => ({
   getAppCapabilities: () => ({ canUseCindyGateway: true }),
 }));
@@ -71,7 +71,7 @@ vi.mock('../dialogue.js', () => ({ CompanionCallDialogue: class {
 
 import { normalizeVoiceInputSettings } from '../../../shared/voiceInputData.js';
 import { registerVoiceConversationIpc } from '../index.js';
-import { outboundFetch } from '../../maker-host/outbound-fetch.js';
+import { outboundFetch } from '../../maker-host/outbound-fetch.desktop.js';
 import { clearModelVisibilityMirror, setModelVisibilityMirror } from '../../maker-host/model-visibility-mirror.js';
 const sender = (id = 1) => ({ sender: { id, once: vi.fn(), on: vi.fn() } });
 const call = (name: string, ...args: unknown[]) =>

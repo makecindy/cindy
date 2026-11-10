@@ -23,10 +23,10 @@ import { constants, type Stats } from 'node:fs';
 import fs from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 
-import * as imageCacheStore from '../imageCacheStore.js';
+import * as imageCacheStore from '../imageCacheStore.desktop.js';
 import { CHAT_FOLDER_MIME } from '../../shared/chatFolderAttachment.js';
 import { extractChatFolder } from '../file-browser/chat-folder-transfer.js';
-import * as cindyMediaBlobStore from '../cindy-media/blobStore.js';
+import * as cindyMediaBlobStore from '../cindy-media/blobStore.desktop.js';
 import * as cindyMediaLedger from '../cindy-media/ledger.js';
 import { ingestMedia } from '../cindy-media/ingest.js';
 import { createLogger } from '../logger.js';

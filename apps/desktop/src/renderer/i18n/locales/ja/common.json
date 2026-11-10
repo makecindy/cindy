@@ -4225,7 +4225,18 @@
           "ariaLabel": "他のパソコンと共有相手にこのプロバイダーの利用を許可",
           "writeFailed": "リモート利用の設定を保存できませんでした。もう一度お試しください。"
         },
-        "moreActionsAria": "その他の操作"
+        "moreActionsAria": "その他の操作",
+        "runLocation": {
+          "label": "実行するコンピュータ",
+          "optionLocal": "このコンピュータ",
+          "notSignedIn": "未ログイン",
+          "autoBorrowing": "このコンピュータは未ログインのため、新しいタスクは {{device}} で実行します。ログインは不要です。",
+          "local": "新しいタスクはこのコンピュータで実行します。ログイン済みの別のコンピュータも選べます。",
+          "pinned": "新しいタスクは {{device}} で、そのコンピュータのログインを使って実行します。実行中のタスクはそのままです。",
+          "inline": "実行先",
+          "signInHere": "このコンピュータでログイン",
+          "writeFailed": "実行先を保存できませんでした。もう一度お試しください。"
+        }
       },
       "detect": {
         "groupLabel": "このデバイスで検出",
@@ -5293,6 +5304,15 @@
         "ariaLabel": "{{shortcut}}でメッセージを送信"
       }
     },
+    "defaultNewTaskWorkingDir": {
+      "title": "新しいタスクの既定の作業ディレクトリ",
+      "label": "このコンピューターの既定の作業ディレクトリ",
+      "hint": "プロジェクトを選んでいない新しいローカルタスクでは、このディレクトリを事前に選択します。明示的に選んだプロジェクト、対話、リモートコンピューターが優先されます。",
+      "unset": "未設定（ディレクトリを事前選択しない）",
+      "choose": "ディレクトリを選択",
+      "clear": "既定を解除",
+      "failed": "既定の作業ディレクトリを保存できませんでした。もう一度お試しください。"
+    },
     "linkOpen": {
       "title": "リンクを開く",
       "description": "メッセージ内のリンクの開き先を選びます。右クリックで、そのリンクだけ別の開き先を選べます。",
@@ -6131,7 +6151,7 @@
           "switchFromHost": "このコンピュータのリレーは停止し、参加しているデバイスは切断されます。",
           "switchFromMember": "このコンピュータは「{{name}}」から退出します。再参加するには、相手に新しい参加リンクを作ってもらう必要があります。",
           "switchConfirm": "切り替える",
-          "switchFromOfficial": "デバイス間のリモート操作は「{{name}}」経由になります。自分のリレーを使っている間は、スマホのシステム通知は使えません。プロバイダーの共有と共有タスクは引き続き Cindy 公式リレーを経由します。"
+          "switchFromOfficial": "デバイス間のリモート操作は「{{name}}」経由になります。自分のリレーを使っている間は、スマホのプッシュ通知は使えません。プロバイダー共有と共有タスクは引き続き Cindy 公式リレーを経由します。"
         },
         "dialog": {
           "steps": {
@@ -6179,13 +6199,18 @@
         "allowInboundAria": "{{name}} に本機の操作を許可するか切り替え",
         "peerControlOff": "相手側が操作を許可していません",
         "masterOffHint": "先に上のメインスイッチをオンにしてください",
-        "controllingThisMac": "Cindy に接続中"
+        "controllingThisMac": "Cindy に接続中",
+        "useThisDeviceModels": "このPCのモデルを使う",
+        "allowModelUseAria": "{{name}} にこのコンピュータのモデルの使用を許可"
       },
       "toast": {
         "revoked": "このデバイスのアクセス権を撤回しました",
         "revokeFailed": "撤回に失敗しました",
         "restored": "このデバイスのアクセス権を復元しました",
-        "restoreFailed": "復元に失敗しました"
+        "restoreFailed": "復元に失敗しました",
+        "modelUseRestored": "このコンピュータのモデルを再び使えるようにしました",
+        "modelUseRevoked": "このコンピュータのモデルを使えないようにしました",
+        "modelUseFailed": "「このPCのモデルを使う」を保存できませんでした。もう一度お試しください。"
       },
       "sections": {
         "myDevices": "マイデバイス",
@@ -9044,6 +9069,8 @@
       "daysWindow": "{{days}}日"
     },
     "claude": {
+      "totalWeeklyLabel": "週間合計",
+      "temporarilyLimited": "一時的に制限中",
       "waitingDetail": "Claude サブスクリプションの使用量は次回のターン完了後に更新されます。",
       "weeklyLabel": "週間",
       "modelWeeklyLabel": "{{model}} 週間",
@@ -19749,6 +19776,8 @@
     "lineNumbers": "行番号"
   },
   "subscriptionAccounts": {
+    "unassigned": "アカウント未割り当て",
+    "providerManagedAuth": "現在の Codex プロバイダーでは ChatGPT アカウント情報を取得できません。プロバイダーの追加時に「$t(subscriptionAccounts.signIn.anotherAccount)」を選ぶと、別のフォルダーを使用できます。",
     "signIn": {
       "checking": "ローカルアカウントを確認中…",
       "detected": "ログイン済みのアカウントが見つかりました",
@@ -19797,5 +19826,15 @@
     "browserFallback": "GitHub を開いて Cindy にスターを付けてください。",
     "openGithub": "GitHub を開く",
     "openFailed": "GitHub を開けませんでした。"
+  },
+  "hostConnection": {
+    "connecting": "Cindy に接続中…",
+    "restoring": "タスクの状態を復元中…",
+    "retrying": "タスクの状態を再同期しています…",
+    "pairing": "接続の再認証が必要です",
+    "pairingHelp": "このページを開いたまま、Cindy Host を起動したターミナルでウェブ画面を開くコマンドを再実行してください。新しいページでペアリングし、このページに戻ってください。",
+    "keepDraft": "入力中の下書きは保持されます。接続が回復すると、タスクの状態が同期されます。",
+    "retry": "再接続",
+    "desktopAuthHelp": "起動用ターミナルで接続設定を更新してから、この実験的なクライアントを開き直してください。"
   }
 }

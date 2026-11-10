@@ -27,10 +27,10 @@ import {
   openMainWindowRemoteControlSettings,
   openMainWindowVoiceSettings,
 } from '../deepLink.js';
-import { getActiveControllers } from '../device-link/dispatch.js';
+import { getActiveControllers } from '../device-link/dispatch.desktop.js';
 import { getReceivedShares, onProviderShareReceivedChanged, providerShareAccessEpoch } from '../device-link/providerShareGuest.js';
 import { readReceivedProviderShareQuota } from '../device-link/providerShareRuntime.js';
-import { getResolvedMainLocale, mainStringKeysUnder, rawMainString } from '../i18n.js';
+import { getResolvedMainLocale, mainStringKeysUnder, rawMainString } from '../i18n.desktop.js';
 import { createLogger } from '../logger.js';
 import { inspectAppDefaultModel } from '../maker-ipc/appDefaultModelControl.js';
 import { applyNewMakerDraftRoute } from '../maker-ipc/register.js';

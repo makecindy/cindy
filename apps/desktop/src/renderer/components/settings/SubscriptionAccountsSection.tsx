@@ -28,6 +28,7 @@ import {
   formatCodexPlanLabel,
 } from '@/lib/subscriptionPlanLabel';
 import { toast } from '@/lib/toast';
+import { extractIpcError } from '@/utils/ipcError';
 import { cn } from '@/lib/utils';
 import {
   QUOTA_WINDOW_COLUMNS,
@@ -35,11 +36,12 @@ import {
   QuotaWindowSubgridContext,
 } from '../status/QuotaHoverCard';
 import { buildSubscriptionAccountUsageCard } from '../status/usageCardModel';
-import type {
-  SubscriptionAccountCommand,
-  SubscriptionAccountView,
-  SubscriptionPoolView,
-  SubscriptionProvider,
+import {
+  isUnusedDefaultAccount,
+  type SubscriptionAccountCommand,
+  type SubscriptionAccountView,
+  type SubscriptionPoolView,
+  type SubscriptionProvider,
 } from '../../../shared/subscriptionAccounts';
 import type { ProviderGroupStrategy } from '../../../shared/providerGroup';
 import { shouldShowOpenPathError } from '../../../shared/openPathResult';
@@ -54,20 +56,9 @@ const statusDot: Record<SubscriptionAccountView['status'], string> = {
   unavailable: 'var(--remote-status-disconnected)',
 };
 
-/**
- * Before anything signs in, the host still lists the CLI default slot. Alone, signed out, idle and
- * with no known identity it is not an account yet: the provider header's sign-in (or Add) fills it,
- * so nothing is listed. A known identity that needs signing in again stays listed.
- */
+/** Alone, the unused default slot lists nothing: the provider header's sign-in (or Add) fills it. */
 function isUnusedDefaultSlot(accounts: SubscriptionAccountView[]): boolean {
-  const [only, ...rest] = accounts;
-  return (
-    rest.length === 0 &&
-    only?.id === 'default' &&
-    only.status === 'signed-out' &&
-    only.running === 0 &&
-    !only.identity
-  );
+  return accounts.length === 1 && isUnusedDefaultAccount(accounts[0]);
 }
 
 function AccountTag({ children }: { children: ReactNode }) {
@@ -147,8 +138,13 @@ export function SubscriptionAccountsSection({
       await window.electronAPI.subscriptionAccounts.command(command);
       await refresh();
     } catch (error) {
-      if (!String(error).includes('SUBSCRIPTION_LOGIN_CANCELLED'))
-        toast.error(t('subscriptionAccounts.failed'));
+      const code = extractIpcError(error)?.code;
+      if (code !== 'SUBSCRIPTION_LOGIN_CANCELLED')
+        toast.error(t(
+          code === 'SUBSCRIPTION_CODEX_PROVIDER_AUTH'
+            ? 'subscriptionAccounts.providerManagedAuth'
+            : 'subscriptionAccounts.failed',
+        ));
       await refresh();
     } finally {
       inFlight.current = false;

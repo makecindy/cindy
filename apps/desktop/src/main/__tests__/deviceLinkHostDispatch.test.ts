@@ -48,7 +48,7 @@ vi.mock('../logger', () => ({
   createLogger: () => ({ warn: vi.fn(), info: vi.fn(), debug: vi.fn(), error: vi.fn() }),
 }));
 // 被控开关:由 h.settings 控制(双层门禁第一道)。
-vi.mock('../device-link/settings-store', () => ({
+vi.mock('../device-link/settings-store.desktop', () => ({
   readDeviceLinkSettings: () => h.settings,
 }));
 import {
@@ -57,7 +57,7 @@ import {
   setRemoteWorkingDirGuard,
   setRemoteSettingsPersist,
   __testing as dispatchTesting,
-} from '../device-link/dispatch';
+} from '../device-link/dispatch.desktop';
 import { createRemoteWorkingDirGuard } from '../device-link/remote-workdir-guard';
 import { createIpcError } from '../../shared/ipc-errors';
 import { __testing as registry } from '../device-link/invoke-registry';

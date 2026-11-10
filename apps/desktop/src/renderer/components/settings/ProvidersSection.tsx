@@ -1,4 +1,6 @@
 import { providersSettings } from './ProvidersSection.settings-search';
+import { ProviderRunLocationSubtitle } from './ProviderRunLocationRow';
+import { useProviderBorrow } from '@/hooks/useProviderBorrow';
 import { AddSpeechModelsDialog } from './AddSpeechModelsDialog';
 import { providerSpeechSetup } from '../../../shared/speechProviderSetup';
 import { useCodexRateLimits } from '@/hooks/useCodexRateLimits';
@@ -697,6 +699,8 @@ function DetailHeader({
 }) {
   const { t } = useTranslation();
   const management = useProviderManagement(provider);
+  // Borrowing another computer's sign-in: this computer's own accounts and "not connected" do not apply.
+  const borrowing = useProviderBorrow(provider).borrowed !== null;
   const canRename = !!provider && provider.id !== 'xd' && !isOrganizationManagedProvider(provider);
   const resolvedDelete =
     deleteAction ??
@@ -822,11 +826,20 @@ function DetailHeader({
                 {badge}
               </div>
               <span
-                className="truncate text-13 leading-tight"
+                className="flex min-w-0 items-center gap-1 text-13 leading-tight"
                 style={{ color: 'var(--settings-integration-subtitle)' }}
               >
-                {subtitle}
-                {singleAgentNote ? ` · ${singleAgentNote}` : ''}
+                {provider ? (
+                  <ProviderRunLocationSubtitle
+                    provider={provider}
+                    subtitle={`${subtitle}${singleAgentNote ? ` · ${singleAgentNote}` : ''}`}
+                  />
+                ) : (
+                  <span className="min-w-0 truncate">
+                    {subtitle}
+                    {singleAgentNote ? ` · ${singleAgentNote}` : ''}
+                  </span>
+                )}
               </span>
             </div>
           </div>
@@ -836,7 +849,7 @@ function DetailHeader({
               data-testid="provider-detail-actions"
               className="flex shrink-0 items-center gap-2.5"
             >
-              {status?.kind === 'connected' ? (
+              {borrowing ? null : status?.kind === 'connected' ? (
                 <ConnectedPill />
               ) : status?.kind === 'reconnect-required' ? (
                 <ReconnectRequiredPill />
@@ -845,7 +858,7 @@ function DetailHeader({
                   {status.label}
                 </span>
               ) : null}
-              {primaryAction && <PillButton {...primaryAction} />}
+              {primaryAction && !borrowing && <PillButton {...primaryAction} />}
             </div>
             {/* 供应商级低频动作(停用/启用):所有供应商详情头统一入口。停用 = 保留凭证、
               整体不可路由(model-disable-store);恢复入口在菜单与下方的已停用条带都有。 */}
@@ -877,6 +890,11 @@ function DetailHeader({
                     <DropdownMenuItem onClick={editAction.onClick} disabled={editAction.disabled}>
                       <Pencil size={18} className="mr-2.5" />
                       {editAction.label}
+                    </DropdownMenuItem>
+                  )}
+                  {borrowing && primaryAction && (
+                    <DropdownMenuItem onClick={primaryAction.onClick} disabled={primaryAction.disabled}>
+                      {t('settings.providers.detail.runLocation.signInHere')}
                     </DropdownMenuItem>
                   )}
                   {menuItems}
@@ -919,7 +937,7 @@ function DetailHeader({
         {detail && <div className="px-5 pb-4">{detail}</div>}
         {provider?.subscriptionFastPolicy && <div className="px-5 pb-4"><SubscriptionFastSetting key={provider.id} provider={provider} /></div>}
         {/* Pooled subscription accounts show the provider card in the default account's row. */}
-        {subscriptionPool && (
+        {subscriptionPool && !borrowing && (
           <SubscriptionAccountsSection
             key={subscriptionPool}
             providerId={subscriptionPool}
@@ -996,7 +1014,11 @@ function NativeSubscriptionHeader({ provider, onChanged, children, providerId, o
       }
       onChanged();
     } catch (error) {
-      if (!String(error).includes('SUBSCRIPTION_LOGIN_CANCELLED')) toast.error(t('subscriptionAccounts.failed'));
+      const code = extractIpcError(error)?.code;
+      if (code !== 'SUBSCRIPTION_LOGIN_CANCELLED')
+        toast.error(t(code === 'SUBSCRIPTION_CODEX_PROVIDER_AUTH'
+          ? 'subscriptionAccounts.providerManagedAuth'
+          : 'subscriptionAccounts.failed'));
     } finally { login.current = null; setBusy(false); }
   };
   return <DetailHeader provider={provider ? { ...provider, connected } : provider} children={children}
@@ -2356,6 +2378,7 @@ function ListRow({
 }) {
   const { t } = useTranslation();
   const management = useProviderManagement(provider);
+  const borrowing = useProviderBorrow(provider).borrowed !== null;
   const localLive = useManagedLocalRuntimeLive(provider.id);
   const modelCount = useMemo(
     () => (providerHasModels(provider) ? buildUnionRows(provider).length : null),
@@ -2452,7 +2475,7 @@ function ListRow({
                   ? localLive
                     ? 'var(--remote-status-ready)'
                     : 'var(--border-default)'
-                  : provider.connected && !provider.suspended
+                  : (provider.connected || borrowing) && !provider.suspended
                     ? 'var(--remote-status-ready)'
                     : 'var(--border-default)',
             }}
@@ -2676,6 +2699,11 @@ export function ProvidersSection() {
   // 共享 provider 快照保持目录原序，避免显示偏好影响模型来源推导；只有设置页左栏
   // 应用 Main 并列下发的 owner-scoped 显示顺序。Cindy 登录引导与检测建议是伪行，
   // 不进入持久化顺序。
+  // 自己另一台电脑已登录并开放的内置供应商：本机没登录过也列出，按「运行于」那台显示为可用。
+  const borrowableIds = useMemo(
+    () => new Set(ownRemoteProviders.filter(entry => !entry.group).map(entry => entry.provider.id)),
+    [ownRemoteProviders],
+  );
   const visibleProviders = useMemo(() => {
     const rows: ProviderView[] = [];
     for (const p of providers) {
@@ -2690,7 +2718,8 @@ export function ProvidersSection() {
           p.connected ||
           p.removed === false ||
           (p.id === 'openai' && openaiReconnectRequired) ||
-          openaiHasImageCap
+          openaiHasImageCap ||
+          (borrowableIds.has(p.id) && p.agents.length > 0 && !p.suspended)
         ) {
           rows.push(p);
         }
@@ -2714,7 +2743,7 @@ export function ProvidersSection() {
       }
     }
     return rows;
-  }, [providers, openaiReconnectRequired]);
+  }, [providers, openaiReconnectRequired, borrowableIds]);
 
   const orderedVisibleProviders = useMemo(
     () => applyProviderOrder(visibleProviders, providerOrder),
@@ -2731,7 +2760,10 @@ export function ProvidersSection() {
   const sharedLocalProviders = listProviders.filter(provider => ownedShares.get(null)?.has(provider.id));
   const ordinaryLocalProviders = listProviders.filter(provider => !ownedShares.get(null)?.has(provider.id));
   const sharedRemoteProviders = ownRemoteProviders.filter(entry => ownedShares.get(entry.deviceId)?.has(entry.provider.id));
-  const ordinaryRemoteProviders = ownRemoteProviders.filter(entry => !ownedShares.get(entry.deviceId)?.has(entry.provider.id));
+  // The same provider on another computer folds into this computer's listed entry (run location lives there).
+  const localProviderIds = new Set(listProviders.map(item => item.id));
+  const ordinaryRemoteProviders = ownRemoteProviders.filter(entry => !ownedShares.get(entry.deviceId)?.has(entry.provider.id)
+    && (entry.group || !localProviderIds.has(entry.provider.id)));
 
   useEffect(() => {
     if (pendingProviderOrder && pendingProviderOrder.dataOwnerId !== dataOwnerId) {
@@ -2978,6 +3010,7 @@ export function ProvidersSection() {
         }
       : selected;
   }, [selectedId, listProviders, codexAuth.state, openaiPoolState, dataOwnerId]);
+  const selectedBorrow = useProviderBorrow(effectiveSelected);
 
   const handleDelete = useCallback(
     async (p: ProviderView) => {
@@ -3549,7 +3582,7 @@ export function ProvidersSection() {
                           />
                         )}
                         <UnifiedModelList
-                          provider={effectiveSelected}
+                          provider={selectedBorrow.borrowed ? { ...effectiveSelected, connected: true } : effectiveSelected}
                           onAddSpeechModels={providerSpeechSetup(effectiveSelected) ? () => {
                             setSpeechProvider({ provider: effectiveSelected, owner: dataOwnerId, generation: ownerGeneration });
                           } : undefined}
