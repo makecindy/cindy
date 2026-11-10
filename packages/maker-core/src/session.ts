@@ -1098,7 +1098,12 @@ export class Session {
           // work. This path is safe to reschedule and must not arm the
           // ambiguous-tail drain used for unknown dispatch failures.
           dispatchConfirmedUndispatched = true;
-          return { accepted: false, reason: 'provider-rejected-before-dispatch' };
+          // A cancelled adapter preflight is also a definite non-dispatch.
+          // Preserve Stop's reason so hosts do not report it as a send failure.
+          return {
+            accepted: false,
+            reason: reservation.cancelled ? 'cancelled-before-dispatch' : 'provider-rejected-before-dispatch',
+          };
         }
         // Cancellation cannot downgrade an explicitly ambiguous provider result
         // into "cancelled before dispatch"; that would skip the mandatory

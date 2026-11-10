@@ -100,6 +100,7 @@ vi.mock('../rpc-client.js', () => ({
 }));
 
 import { PiAgent } from '../index.js';
+import { Session } from '../../../session.js';
 import { PINNED_SKILL_INVOCATION } from '../../base-agent.js';
 import type { AgentDeps } from '../../base-agent.js';
 import type { Logger } from '../../../interfaces/logger.js';
@@ -271,23 +272,53 @@ describe('Pi runtime capability lifecycle', () => {
     }
   });
 
-  it('preserves cancellation while pinned discovery retries are exhausted', async () => {
+  // #9626 review (unit): Stop must release Session's dispatch reservation before
+  // discovery settles. The previous case advanced the full retry chain after
+  // abort, so it could not detect a blocked next send or a terminal-drain fence.
+  it.each([
+    { phase: 'retry backoff', elapsed: 0 },
+    { phase: 'pending catalog RPC', elapsed: 4_000 },
+  ])('releases a cancelled pinned send during $phase without stopping discovery', async ({ elapsed }) => {
     vi.useFakeTimers();
     captured.runtimeFailures.add('s1');
-    const controller = new AbortController();
-    const sendOptions = { ...pinnedSkill(), signal: controller.signal };
-    const handle = await new PiAgent(deps()).startSession({ sessionId: 's1', workingDir: cwd, model: 'm' });
+    const sendOptions = pinnedSkill();
+    const agent = new PiAgent(deps());
+    const handle = await agent.startSession({ sessionId: 's1', workingDir: cwd, model: 'm' });
+    const session = new Session({
+      id: 's1', agentKind: 'pi', workDir: cwd, handle,
+      capabilities: agent.capabilities, logger: noopLogger, turnStallMs: 0,
+    });
     try {
       await vi.waitFor(() => expect(handle.getRuntimeCapabilities?.()?.status).toBe('failed'));
-      const send = handle.send({ type: 'user', content: '/skill:learn' }, sendOptions)
-        .then(() => undefined, (error: unknown) => error);
+      let outcome: unknown = 'pending';
+      const send = session.send('/skill:learn', sendOptions)
+        .then((result) => { outcome = result; }, (error: unknown) => { outcome = error; });
+      captured.runtimeFailures.delete('s1');
+      captured.runtimeDeferred = true;
+      await vi.advanceTimersByTimeAsync(elapsed);
+      expect(outcome).toBe('pending');
+      await expect(session.send('overlapping send')).rejects.toMatchObject({ code: 'SESSION_RUNNING' });
+      await session.abort();
+      // Do not advance discovery's retry clock: cancellation itself must settle.
       await vi.advanceTimersByTimeAsync(0);
-      controller.abort();
-      await vi.advanceTimersByTimeAsync(34_000);
-      expect(await send).toEqual(new Error('pi send cancelled before acceptance'));
+      expect(outcome).toEqual({ accepted: false, reason: 'cancelled-before-dispatch' });
+      await send;
       expect(captured.instances[0]!.requests.filter((request) => request.type === 'prompt')).toEqual([]);
+      await expect(session.send('continue normally')).resolves.toEqual({ accepted: true });
+
+      // The shared discovery still completes, but cannot revive the cancelled input.
+      await vi.advanceTimersByTimeAsync(4_000 - elapsed);
+      expect(captured.runtimeRelease).toBeTypeOf('function');
+      captured.runtimeRelease?.();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(handle.getRuntimeCapabilities?.()?.status).toBe('loaded');
+      expect(captured.instances[0]!.requests.filter((request) => request.type === 'get_commands')).toHaveLength(2);
+      expect(captured.instances[0]!.requests.filter((request) => request.type === 'prompt')).toEqual([
+        { type: 'prompt', message: 'continue normally' },
+      ]);
     } finally {
-      await handle.close();
+      captured.runtimeRelease?.();
+      await session.close();
     }
   });
 

@@ -6454,17 +6454,23 @@ export class PiAgent extends BaseAgent {
       runtimeCapabilityRefreshPromise = tracked;
       return tracked;
     };
-    const awaitRuntimeCapabilitiesForSlashCommand = async (text: string, pinnedSkill = false): Promise<void> => {
+    const awaitRuntimeCapabilitiesForSlashCommand = async (
+      text: string,
+      pinnedSkill = false,
+      signal?: AbortSignal,
+    ): Promise<void> => {
       const trimmed = text.trimStart();
       // 只有已确认 loaded 的清单才能放行派发;非 loaded(unknown/failed)清单是
       // 过渡快照:若重试链仍在跑,等它(重试成功会升级为 loaded);重试已耗尽时
-      // runtimeCapabilityRefreshPromise 为 undefined,race 立即返回,由调用方继续
+      // runtimeCapabilityRefreshPromise 为 undefined,立即返回,由调用方继续
       // 普通命令转义或 pinned Skill 来源校验。
       if (
         !trimmed.startsWith('/')
         || (trimmed.startsWith('/skill:') && !pinnedSkill)
         || runtimeCapabilityManifest?.status === 'loaded'
       ) return;
+      const pending = runtimeCapabilityRefreshPromise;
+      if (!pending) return;
       // get_commands starts asynchronously after Pi's ready boundary. A prompt
       // template selected on a brand-new task must wait for that exact runtime
       // catalog instead of being escaped into ordinary model text.
@@ -6475,10 +6481,26 @@ export class PiAgent extends BaseAgent {
       // 此时初次采集还在跑 —— 上限必须盖住链尾,否则重试成功前一瞬仍会逃逸
       // (Codex P2:10s cap 在 10.6s 才就绪的场景下提前胜出)。链结束或耗尽时
       // promise 已 settle,race 立即返回,不把用户卡在派发上。
-      await Promise.race([
-        runtimeCapabilityRefreshPromise,
-        new Promise<void>((resolve) => { setTimeout(resolve, 60_000).unref?.(); }),
-      ]);
+      let finishWaiting!: () => void;
+      let timeout!: ReturnType<typeof setTimeout>;
+      const deadlineOrAbort = new Promise<void>((resolve) => {
+        finishWaiting = resolve;
+        timeout = setTimeout(resolve, 60_000);
+        timeout.unref?.();
+        signal?.addEventListener('abort', finishWaiting, { once: true });
+        if (signal?.aborted) finishWaiting();
+      });
+      try {
+        await Promise.race([pending, deadlineOrAbort]);
+        if (signal?.aborted) {
+          // No prompt has reached Pi. Let Session release its reservation without
+          // waiting for a terminal event; the shared catalog retry keeps running.
+          throw new TurnDispatchRejectedError('pi send cancelled before acceptance');
+        }
+      } finally {
+        clearTimeout(timeout);
+        signal?.removeEventListener('abort', finishWaiting);
+      }
     };
     const routeManagedPackageCommand = async (
       text: string,
@@ -7875,7 +7897,11 @@ export class PiAgent extends BaseAgent {
           // acceptance boundary. A Stop that races after that point must not
           // erase the user message/receipt while leaving an installed package.
           if (!managedPackageRoute.accepted) rejectIfCancelled(sendOpts, 'send');
-          await awaitRuntimeCapabilitiesForSlashCommand(text, pinnedSkill !== undefined);
+          await awaitRuntimeCapabilitiesForSlashCommand(
+            text,
+            pinnedSkill !== undefined,
+            managedPackageRoute.accepted ? undefined : sendOpts?.signal,
+          );
           if (!managedPackageRoute.accepted) rejectIfCancelled(sendOpts, 'send');
           if (pinnedSkill) {
             text = preparePinnedPiSkillInvocation(text, pinnedSkill, runtimeCapabilityManifest);
