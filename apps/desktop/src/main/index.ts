@@ -1,3 +1,4 @@
+import { configureWindowsAtomicRename } from './windowsAtomicRename.js';
 import './personalLaunchCwd.js';
 // Entry: Electron startup → bootstrap-electron.ts (dynamic import).
 import fixPath from 'fix-path';
@@ -14,7 +15,7 @@ import { refreshBrowserRuntimeConfigDir } from '@cindy/browser-control-runtime/c
 import { CURRENT_CINDY_REGION } from '../shared/brandRegion.js';
 import { resolveRegionUserDataDirName } from './regionUserData.js';
 import { createLogger, initLogger } from './logger.js';
-import { configureUserDataDir } from './userDataPath.js';
+import { configureUserDataDir, configureAppDataDir } from './userDataPath.js';
 import { beginDesktopDevInstance, type DesktopDevMode } from './devStartupStatus.js';
 import { ensureSystemBinPathForMachineId } from './deviceId.js';
 import { configureLinuxPasswordStore } from './linuxPasswordStore.js';
@@ -311,6 +312,12 @@ const desktopDevInstanceOptions = (() => {
 // Pin shared storage after all profile/version/dev overrides. Capturing the
 // regional default above would make an isolated runtime write into that profile.
 configureUserDataDir(app.getPath('userData'));
+configureAppDataDir(app.getPath('appData'));
+configureWindowsAtomicRename({
+  packagedBinary: app.isPackaged ? path.join(process.resourcesPath, 'tools', 'windows-atomic-rename', 'cindy-windows-atomic-rename.exe') : undefined,
+  sourceFile: app.isPackaged ? undefined : path.join(app.getAppPath(), 'native', 'windows-atomic-rename', 'main.rs'),
+  cacheDir: path.join(app.getPath('userData'), 'windows-atomic-rename'),
+});
 
 // Pin after the last userData setPath. Vite's main bundle require()s
 // @cindy/browser-control-runtime at chunk load (before this body), so

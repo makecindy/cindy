@@ -858,7 +858,7 @@
       },
       "runningCount_other": "{{count}} 件差事方行",
       "limitAria": "{{name}} 之並行上限",
-      "limitOption_other": "至多 {{count}}",
+      "limitOption_other": "並行 {{count}}",
       "weightAria": "{{name}} 之權重",
       "weightOption": "輕重 {{weight}}",
       "assignAria": "分差事予 {{name}}",
@@ -5196,6 +5196,15 @@
         "hint": "啟則按 {{shortcut}} 遣訊；闔則按 Enter 遣訊，按 Shift+Enter 換行。",
         "ariaLabel": "以 {{shortcut}} 遣訊"
       }
+    },
+    "defaultNewTaskWorkingDir": {
+      "title": "新任務常例工作目錄",
+      "label": "此機常例工作目錄",
+      "hint": "新立此機之任而未擇項目，則先取此目錄；若已明擇項目、言談或遠機，仍從其擇。",
+      "unset": "未設（不預取目錄）",
+      "choose": "擇目錄",
+      "clear": "清常例目錄",
+      "failed": "存常例工作目錄未成，請重試"
     },
     "linkOpen": {
       "title": "啟連結",
@@ -11388,6 +11397,9 @@
       "databaseDriver": "資料庫驅動程式不能載，請更新或修復 Cindy 後再試。",
       "databaseUnavailable": "來源資料庫不可讀，原資料未動。修復後可再試。",
       "fileTooLarge": "卷或此次資料逾讀取上限，未截而納。",
+      "sourceFileTooLarge": "單卷逾讀取上限，此項未全納。",
+      "snapshotTooLarge": "此次所讀資料累計逾限，未能全納。",
+      "itemTooLarge": "此項諸卷合計逾 128 MiB，未全納。",
       "memoryMetadata": "記憶摘要或標題不合存儲之要。",
       "memoryWrite": "記憶寫入或完整性檢查未成，可再試。",
       "memoryChanged": "已存之記憶有變，未覆寫。",
@@ -12998,6 +13010,11 @@
     "jumpToBottom": "至底",
     "prevMessageJump": "至上一問：{{preview}}",
     "askUserQuestion": {
+    "unanswered": "未答",
+    "withdrawn": "無須再答",
+    "withdrawnDraft": "此問無須再答。\n{{reason}}\n草稿尚存，可另作補充傳送。",
+    "sendSupplement": "傳送補充",
+
       "voice": {
         "hint": "可言「第一項」或選項之名；多選畢，請言「確認選擇」。",
         "freeTextHint": "可徑言其答，察畢言「確認選擇」以呈。",
@@ -14109,6 +14126,7 @@
       "taskAutoArchived": "「{{title}}」已封存",
       "taskAutoArchivedUndo": "撤",
       "taskAutoArchivePending": "離此任務後自封存",
+      "taskAutoArchiveBlockedDirty": "「{{title}}」工作區尚有未提交之改，未自封存",
       "taskAutoArchiveCancel": "取消",
       "taskAutoArchiveCancelled": "此番不自封存",
       "taskArchiveNow": "即封存"
@@ -19710,6 +19728,7 @@
     }
   },
   "subscriptionAccounts": {
+    "providerManagedAuth": "Codex 目前供方未提供 ChatGPT 帳號資訊。請於新增供方時選「$t(subscriptionAccounts.signIn.anotherAccount)」，另用獨立目錄",
     "signIn": {
       "checking": "正察本機帳號…",
       "detected": "已有帳號登入",
@@ -19758,5 +19777,15 @@
     "browserFallback": "請至 GitHub 為 Cindy 點 Star",
     "openGithub": "開啟 GitHub",
     "openFailed": "未能開啟 GitHub"
+  },
+  "hostConnection": {
+    "connecting": "正連 Cindy 後臺…",
+    "restoring": "正復任務之態…",
+    "retrying": "任務未同步，正重試…",
+    "pairing": "連接須再授權",
+    "pairingHelp": "請留此頁。於啟動 Cindy 後臺之終端重行打開網頁之命令，於新頁配對畢，再返此頁。",
+    "keepDraft": "草稿仍存。連接復通，任務之態將自同步。",
+    "retry": "重試連接",
+    "desktopAuthHelp": "請於啟動終端更新後臺連接設定，再啟此實驗客戶端。"
   }
 }

@@ -135,11 +135,16 @@
     "permissionDenied": "通知權限未開啟，請在系統設定中允許 Cindy 傳送通知。",
     "unregisterQueued": "已關閉，連網後自動完成註銷。",
     "preview": "顯示訊息內容預覽",
-    "background": "在背景保持訊息連線",
+    "background": "背景通知",
     "backgroundActive": "正在背景接收訊息",
     "backgroundStop": "停止接收",
-    "backgroundHint": "背景連線不依賴 Google，會顯示常駐通知；可隨時在通知欄停止。",
-    "googleUnavailable": "Google 推播暫時無法使用。可開啟背景訊息連線接收訊息。"
+    "backgroundHint": "Google 推播可能無法使用時，Cindy 會自動保持背景連線，連線期間會顯示常駐通知。",
+    "googleUnavailable": "Google 推播暫時無法使用，將依通知設定使用背景連線。",
+    "backgroundModes": {
+      "auto": "自動",
+      "on": "始終開啟",
+      "off": "關閉"
+    }
   },
   "about": {
     "sectionTitle": "關於這臺手機",

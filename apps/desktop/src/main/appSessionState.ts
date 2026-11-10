@@ -5,7 +5,8 @@
  * verified a real membership for the current process; local mode always uses
  * the reserved owner below and never masquerades as a server user id.
  */
-import { app } from 'electron';
+import os from 'node:os';
+import { getUserDataDir } from './userDataPath.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { dataOwnerStorageKey } from './dataOwnerPath.js';
@@ -44,7 +45,7 @@ configureOwnerContext({
   // Some services register before authentication settles. Give them an
   // ephemeral process namespace so they can initialize without ever
   // reading or writing a real owner's private state.
-  fallbackBaseDir: () => path.join(app.getPath('temp'), 'cindy-no-session', String(process.pid)),
+  fallbackBaseDir: () => path.join(os.tmpdir(), 'cindy-no-session', String(process.pid)),
 });
 
 export function ownerScopedUserDataPath(...parts: string[]): string {
@@ -59,7 +60,7 @@ const log = createLogger('appSessionState');
 const DEFAULTS: PersistedAppSessionSettings = { activeMode: 'signed-out' };
 
 function settingsFilePath(): string {
-  return path.join(app.getPath('userData'), 'app-session.json');
+  return path.join(getUserDataDir(), 'app-session.json');
 }
 
 function normalize(raw: unknown): PersistedAppSessionSettings {

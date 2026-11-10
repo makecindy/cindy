@@ -36,6 +36,11 @@
     "exit": "退出计划模式"
   },
   "panel": {
+    "questionUnanswered": "未回答",
+    "questionWithdrawn": "无需再回答",
+    "withdrawnDraft": "这个问题已不再需要回答。\n{{reason}}\n草稿已保留，你仍可作为补充发送。",
+    "sendSupplement": "发送补充",
+
     "readOnlyKind": "待确认",
     "readOnlyTitle": "电脑端正在等待确认",
     "pendingRequests": "待处理请求",

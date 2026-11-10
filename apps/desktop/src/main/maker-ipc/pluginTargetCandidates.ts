@@ -4,7 +4,7 @@ import { getCurrentDbClientSnapshot } from '../localDb/client/current.js';
 import { botProfiles, botSessionLinks, sessions } from '../localDb/schema.js';
 import { listRecentWorkdirs } from '../localDb/ipc/recentWorkdirs.js';
 import { resolveBotCanonicalSession } from './botCanonicalSessionRegistry.js';
-import type { PluginTargetCandidate, PluginTargetKind } from '../../shared/pluginTargets.js';
+import type { PluginTargetCandidate, PluginTargetKind, PluginTargetRef } from '../../shared/pluginTargets.js';
 
 export async function listPluginTargetCandidates(
   kind: PluginTargetKind,
@@ -84,4 +84,25 @@ export async function resolvePluginTargetSession(
   const canonical = await resolveBotCanonicalSession(id);
   if (canonical.status !== 'resolved') throw new Error('TARGET_UNAVAILABLE');
   return canonical.sessionId;
+}
+
+/** Reverse only the authoritative canonical link; other companion sessions are not targets. */
+export async function resolvePluginSessionTarget(sessionId: string): Promise<PluginTargetRef> {
+  const snapshot = getCurrentDbClientSnapshot();
+  if (!snapshot) throw new Error('HOST_NOT_READY');
+  const links = await snapshot.client.drizzle
+    .select({ botId: botSessionLinks.botId, role: botSessionLinks.role, archivedAt: botSessionLinks.archivedAt })
+    .from(botSessionLinks)
+    .where(eq(botSessionLinks.sessionId, sessionId))
+    .limit(2);
+  if (getCurrentDbClientSnapshot() !== snapshot) throw new Error('PERMISSION_DENIED');
+  if (links.length === 0) return { kind: 'task', id: sessionId };
+  const link = links[0]!;
+  if (links.length !== 1 || link.role !== 'canonical' || link.archivedAt !== null)
+    throw new Error('TARGET_UNAVAILABLE');
+  const canonical = await resolveBotCanonicalSession(link.botId);
+  if (getCurrentDbClientSnapshot() !== snapshot) throw new Error('PERMISSION_DENIED');
+  if (canonical.status !== 'resolved' || canonical.sessionId !== sessionId)
+    throw new Error('TARGET_UNAVAILABLE');
+  return { kind: 'bot', id: link.botId };
 }

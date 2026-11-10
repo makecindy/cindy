@@ -865,8 +865,8 @@
       "runningCount_one": "{{count}} Aufgabe läuft",
       "runningCount_other": "{{count}} Aufgaben laufen",
       "limitAria": "Aufgabenlimit für {{name}}",
-      "limitOption_one": "Max. {{count}}",
-      "limitOption_other": "Max. {{count}}",
+      "limitOption_one": "Bis {{count}}",
+      "limitOption_other": "Bis {{count}}",
       "weightAria": "Gewichtung für {{name}}",
       "weightOption": "Gewichtung {{weight}}",
       "assignAria": "Aufgaben {{name}} zuweisen",
@@ -5305,6 +5305,15 @@
         "hint": "Wenn aktiviert, sendet {{shortcut}} Nachrichten. Wenn die Eingabetaste deaktiviert ist, sendet sie Nachrichten und Umschalt+Eingabetaste fügt eine neue Zeile ein.",
         "ariaLabel": "Mit {{shortcut}} Nachrichten senden"
       }
+    },
+    "defaultNewTaskWorkingDir": {
+      "title": "Standard-Arbeitsverzeichnis für neue Aufgaben",
+      "label": "Standardverzeichnis auf diesem Computer",
+      "hint": "Für neue lokale Aufgaben ohne ausgewähltes Projekt wird dieses Verzeichnis vorausgewählt. Ein ausdrücklich gewähltes Projekt, ein Dialog oder ein Remote-Computer hat Vorrang.",
+      "unset": "Nicht festgelegt (kein Verzeichnis vorausgewählt)",
+      "choose": "Verzeichnis auswählen",
+      "clear": "Standardverzeichnis löschen",
+      "failed": "Das Standard-Arbeitsverzeichnis konnte nicht gespeichert werden. Bitte erneut versuchen."
     },
     "linkOpen": {
       "title": "Links öffnen",
@@ -11433,6 +11442,9 @@
       "databaseDriver": "Der Datenbanktreiber konnte nicht geladen werden. Aktualisiere oder repariere Cindy und versuch es erneut.",
       "databaseUnavailable": "Die Quelldatenbank konnte nicht gelesen werden. Die Originaldaten sind unverändert. Versuch es nach der Reparatur erneut.",
       "fileTooLarge": "Eine Datei oder dieser Import überschreitet das Leselimit. Inhalte wurden nicht gekürzt.",
+      "sourceFileTooLarge": "Eine einzelne Datei überschreitet das Leselimit. Dieses Element wurde nicht vollständig importiert.",
+      "snapshotTooLarge": "Die Gesamtdatenmenge dieses Lesevorgangs überschreitet das Limit. Der Import ist unvollständig.",
+      "itemTooLarge": "Die Dateien dieses Elements überschreiten insgesamt 128 MiB. Dieses Element wurde nicht vollständig importiert.",
       "memoryMetadata": "Die Zusammenfassung oder der Titel der Erinnerung überschreitet die Speichergrenzen.",
       "memoryWrite": "Das Speichern der Erinnerung oder die Integritätsprüfung ist fehlgeschlagen. Du kannst es erneut versuchen.",
       "memoryChanged": "Die gespeicherte Erinnerung wurde geändert und nicht überschrieben.",
@@ -13023,6 +13035,11 @@
     "prevMessageJump": "Zum vorherigen Prompt springen: {{preview}}",
     "sessionLoading": "Aufgabe wird geladen",
     "askUserQuestion": {
+    "unanswered": "Unbeantwortet",
+    "withdrawn": "Keine Antwort mehr nötig",
+    "withdrawnDraft": "Diese Frage braucht keine Antwort mehr.\n{{reason}}\nIhr Entwurf bleibt erhalten und kann als Ergänzung gesendet werden.",
+    "sendSupplement": "Ergänzung senden",
+
       "voice": {
         "hint": "Sag die Nummer oder den Namen einer Option. Sag bei Mehrfachauswahl anschließend „Auswahl bestätigen“.",
         "freeTextHint": "Sag deine Antwort, prüfe sie und sag dann „Auswahl bestätigen“, um sie abzusenden.",
@@ -14147,6 +14164,7 @@
       "taskAutoArchived": "„{{title}}“ archiviert",
       "taskAutoArchivedUndo": "Rückgängig",
       "taskAutoArchivePending": "Wird beim Verlassen dieser Aufgabe archiviert",
+      "taskAutoArchiveBlockedDirty": "„{{title}}“ wurde nicht automatisch archiviert: Der Arbeitsbereich enthält nicht committete Änderungen",
       "taskAutoArchiveCancel": "Abbrechen",
       "taskAutoArchiveCancelled": "Diesmal keine automatische Archivierung",
       "taskArchiveNow": "Jetzt archivieren"
@@ -14305,7 +14323,7 @@
       "running": "Wird ausgeführt…",
       "waitingWorkflow": "Warten auf Workflow…",
       "waitingWorkflowProgress": "Warten auf Workflow · {{done}}/{{total}} Agents",
-      "turnStart": "{{status}}",
+      "turnStart": "Wird verarbeitet, {{name}}…",
       "issueTip": "{{name}}, nutze /issue, um uns Feedback oder Vorschläge zu senden",
       "runningTool": "{{tool}} läuft…"
     },
@@ -19782,6 +19800,7 @@
     "lineNumbers": "Zeilennummern"
   },
   "subscriptionAccounts": {
+    "providerManagedAuth": "Der aktuelle Codex-Anbieter stellt keine ChatGPT-Kontoinformationen bereit. Wähle beim Hinzufügen des Anbieters „$t(subscriptionAccounts.signIn.anotherAccount)“, um einen separaten Ordner zu verwenden.",
     "signIn": {
       "checking": "Lokales Konto wird geprüft…",
       "detected": "Angemeldetes Konto gefunden",
@@ -19830,5 +19849,15 @@
     "browserFallback": "Öffne GitHub, um Cindy einen Stern zu geben.",
     "openGithub": "GitHub öffnen",
     "openFailed": "GitHub konnte nicht geöffnet werden."
+  },
+  "hostConnection": {
+    "connecting": "Verbindung mit Cindy wird hergestellt…",
+    "restoring": "Aufgabenstatus wird wiederhergestellt…",
+    "retrying": "Aufgabenstatus noch nicht synchronisiert. Neuer Versuch…",
+    "pairing": "Verbindung erneut autorisieren",
+    "pairingHelp": "Lass diese Seite geöffnet. Führe im Terminal, in dem du Cindy Host gestartet hast, den Befehl zum Öffnen des Webclients erneut aus. Kopple die neue Seite und kehre hierher zurück.",
+    "keepDraft": "Dein Entwurf bleibt erhalten. Der Aufgabenstatus wird nach Wiederherstellung der Verbindung synchronisiert.",
+    "retry": "Erneut verbinden",
+    "desktopAuthHelp": "Aktualisiere die Host-Verbindungseinstellungen im Startterminal und öffne diesen experimentellen Client erneut."
   }
 }

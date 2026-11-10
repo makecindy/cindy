@@ -6,7 +6,7 @@ vi.mock('../../appSessionState.js', () => ({ activeOwnerScopeKey: () => state.ke
 vi.mock('../../authManager.js', () => ({ getAuthState: () => ({ isAuthenticated: state.authenticated, user: { name: 'Account Guest' } }),
   getCurrentUserId: () => state.accountId, getActiveAuthRealm: () => state.region, getAccessToken: () => state.token }));
 vi.mock('../../clientEndpointsService.js', () => ({ getClientEndpoint: () => state.endpoint }));
-vi.mock('../../serverApiClient.js', () => ({ serverApiFetch: http }));
+vi.mock('../../serverApiClient.desktop.js', () => ({ serverApiFetch: http }));
 import { captureSharedTaskBoundaryClose, forgetSharedTaskList, runWithSharedTaskCallerGuard, sharedTaskApi } from '../sharedTaskApi.js';
 
 beforeEach(() => {

@@ -858,7 +858,7 @@
       },
       "runningCount_other": "{{count}} 個任務執行中",
       "limitAria": "{{name}} 的並行上限",
-      "limitOption_other": "上限 {{count}}",
+      "limitOption_other": "同時 {{count}}",
       "weightAria": "{{name}} 的權重",
       "weightOption": "權重 {{weight}}",
       "assignAria": "給 {{name}} 分配任務",
@@ -5196,6 +5196,15 @@
         "hint": "開啟後按 {{shortcut}} 傳送訊息；關閉後按 Enter 傳送訊息，按 Shift+Enter 換行。",
         "ariaLabel": "使用 {{shortcut}} 傳送訊息"
       }
+    },
+    "defaultNewTaskWorkingDir": {
+      "title": "新任務預設工作目錄",
+      "label": "本機預設工作目錄",
+      "hint": "建立本機任務且未選擇專案時，預先選取此目錄。明確選擇的專案、對話或遠端裝置仍優先。",
+      "unset": "未設定（不預選目錄）",
+      "choose": "選擇目錄",
+      "clear": "清除預設目錄",
+      "failed": "儲存預設工作目錄失敗，請重試"
     },
     "linkOpen": {
       "title": "開啟連結",
@@ -11388,6 +11397,9 @@
       "databaseDriver": "資料庫驅動程式無法載入，請更新或修復 Cindy 後重試。",
       "databaseUnavailable": "無法讀取來源資料庫，原資料未變更。修復後可重試。",
       "fileTooLarge": "檔案或本次資料超過讀取上限，未截斷匯入。",
+      "sourceFileTooLarge": "單一檔案超過讀取上限，此項未完整匯入。",
+      "snapshotTooLarge": "本次讀取的資料累計超過上限，未能完整匯入。",
+      "itemTooLarge": "此項檔案的總大小超過 128 MiB，未完整匯入。",
       "memoryMetadata": "記憶摘要或標題不符合儲存要求。",
       "memoryWrite": "記憶寫入或完整性檢查失敗，可重試。",
       "memoryChanged": "已儲存的記憶發生變更，未覆寫。",
@@ -13006,6 +13018,11 @@
     "jumpToBottom": "跳到底部",
     "prevMessageJump": "跳到上一則提問：{{preview}}",
     "askUserQuestion": {
+    "unanswered": "未回答",
+    "withdrawn": "無需再回答",
+    "withdrawnDraft": "這個問題已不再需要回答。\n{{reason}}\n草稿已保留，你仍可作為補充傳送。",
+    "sendSupplement": "傳送補充",
+
       "voice": {
         "hint": "可以說「第一項」或選項名稱；多選後請說「確認選擇」。",
         "freeTextHint": "可以直接說出回答，檢查後說「確認選擇」提交。",
@@ -14117,6 +14134,7 @@
       "taskAutoArchived": "已歸檔「{{title}}」",
       "taskAutoArchivedUndo": "撤銷",
       "taskAutoArchivePending": "離開此任務後將自動封存",
+      "taskAutoArchiveBlockedDirty": "「{{title}}」工作區有未提交變更，未自動封存",
       "taskAutoArchiveCancel": "取消",
       "taskAutoArchiveCancelled": "本次不會自動封存",
       "taskArchiveNow": "立即封存"
@@ -19710,6 +19728,7 @@
     "lineNumbers": "行號"
   },
   "subscriptionAccounts": {
+    "providerManagedAuth": "Codex 目前的供應商未提供 ChatGPT 帳號資訊。請在新增供應商時選擇「$t(subscriptionAccounts.signIn.anotherAccount)」，使用獨立目錄",
     "signIn": {
       "checking": "正在偵測本機帳號…",
       "detected": "偵測到已登入帳號",
@@ -19758,5 +19777,15 @@
     "browserFallback": "前往 GitHub 為 Cindy 點 Star",
     "openGithub": "開啟 GitHub",
     "openFailed": "無法開啟 GitHub"
+  },
+  "hostConnection": {
+    "connecting": "正在連線 Cindy 後台…",
+    "restoring": "正在恢復任務狀態…",
+    "retrying": "任務狀態尚未同步，正在重試…",
+    "pairing": "需要重新授權連線",
+    "pairingHelp": "請保留此頁。在啟動 Cindy 後台的終端重新執行開啟網頁的命令，完成新頁面的配對，再回到此頁。",
+    "keepDraft": "已輸入的草稿會保留。連線恢復後將自動同步任務狀態。",
+    "retry": "重試連線",
+    "desktopAuthHelp": "請在啟動終端更新後台連線設定，然後重新開啟這個實驗客戶端。"
   }
 }

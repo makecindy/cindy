@@ -69,14 +69,14 @@ import {
   recordXaiSubscriptionUsageSnapshot,
 } from '../usageBroadcaster.js';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState.js';
-import { isOpenAiSubscriptionProviderId } from '../maker-host/codex-account-auth.js';
+import { isOpenAiSubscriptionProviderId } from '../maker-host/codex-account-auth.desktop.js';
 import { desktopCodexAuthAdapter } from '../maker-host/auth-adapters.js';
 import { hasClaudeNativeLogin } from '../maker-host/claude-native-auth.js';
 import { peekClaudeCliLoginStatus } from '../maker-host/claude-native-cli-status.js';
-import { readClaudeCliPlanUsage } from '../maker-host/claude-native-cli.js';
+import { readClaudeCliPlanUsage } from '../maker-host/claude-native-cli.desktop.js';
 import { observeSubscriptionAccountUsage } from '../subscription-accounts/runtime.js';
-import { getGrokAccessToken, hasGrokOAuthLogin } from '../maker-host/grok-oauth-login.js';
-import { outboundFetch } from '../maker-host/outbound-fetch.js';
+import { getGrokAccessToken, hasGrokOAuthLogin } from '../maker-host/grok-oauth-login.desktop.js';
+import { outboundFetch } from '../maker-host/outbound-fetch.desktop.js';
 import { CodexResetAutoUse, parseCodexResetAutoUse } from '../usage/codexResetAutoUse.js';
 import { codexResetAutoUseStore, codexResetAccountKey } from '../usage/codexResetAutoUseStore.js';
 import { observeUsageChanges } from '../usageBroadcaster.js';

@@ -15,6 +15,7 @@ import { startLocalDiagnostics } from '@/debug/localDiagnostics';
 import { MobileOutboxBridge } from '@/session/MobileOutboxBridge';
 import { RemoteHistoryPrefetchBridge } from '@/session/RemoteHistoryPrefetchBridge';
 import { UsageWidgetBridge } from '@/widgets/UsageWidgetBridge';
+import { AgentActivityBridge } from '@/widgets/AgentActivityBridge';
 import { HandheldModeBridge } from '@/handheld/HandheldModeBridge';
 import {
   DarkTheme as NavigationDarkTheme,
@@ -423,6 +424,7 @@ function RootAfterUpdateChannel({ channel }: { channel: UpdateChannel }) {
         <MobileOutboxBridge />
         <RemoteHistoryPrefetchBridge />
         <UsageWidgetBridge />
+        <AgentActivityBridge />
         {/* 掌机模式:手柄语音键 / 焦点导航 / 副屏(仅含 cindy-handheld 的 Android 原生包,不渲染 UI) */}
         <HandheldModeBridge />
         <NavigationGate />
@@ -477,7 +479,7 @@ function RootLayout() {
     // 白底体系(PR4a):错误屏包 MobileLoginHandoffStage(品牌显示),阻断内容层
     // 透明置于其上——阻断语义不变:没有"跳过 / 稍后再说",只有重试。
     body = (
-      <MobileLoginHandoffStage>
+      <MobileLoginHandoffStage staticBrand>
         <StartupGateBlockedContent
           title={loginText('endpointGateTitle')}
           subtitle={loginText('endpointGateSubtitle').replace(
@@ -501,7 +503,7 @@ function RootLayout() {
     // 业务树整体不挂载,含 AuthProvider / DeviceLinkProvider / 预创建 worktree 恢复桥:
     // 强更期间不该发起任何 Device Link 调用;恢复账本是持久化的,阻断解除后下次启动照常补偿。
     body = (
-      <MobileLoginHandoffStage>
+      <MobileLoginHandoffStage staticBrand>
         <ForcedUpdateGateContent target={forcedUpdate} />
       </MobileLoginHandoffStage>
     );

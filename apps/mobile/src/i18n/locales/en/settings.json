@@ -135,11 +135,16 @@
     "permissionDenied": "Allow Cindy notifications in your system settings.",
     "unregisterQueued": "Turned off. Unregistering will finish once you’re back online.",
     "preview": "Show chat previews",
-    "background": "Keep chat connected in background",
-    "backgroundActive": "Receiving chat messages in background",
+    "background": "Background notifications",
+    "backgroundActive": "Receiving notifications in background",
     "backgroundStop": "Stop receiving",
-    "backgroundHint": "The background connection works without Google and shows an ongoing notification. You can stop it from that notification.",
-    "googleUnavailable": "Google push is unavailable. Enable the background chat connection to receive messages."
+    "backgroundHint": "Cindy automatically keeps a background connection when Google push may be unavailable. An ongoing notification is shown while connected.",
+    "googleUnavailable": "Google push is unavailable. Background delivery follows your notification settings.",
+    "backgroundModes": {
+      "auto": "Automatic",
+      "on": "Always on",
+      "off": "Off"
+    }
   },
   "about": {
     "sectionTitle": "About This Phone",
