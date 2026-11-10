@@ -159,6 +159,7 @@ import { startGrokDeviceLogin, grokDeviceLoginStatus, cancelGrokDeviceLogin } fr
 
 export interface DesktopMcpProvidersDeps {
   askUserQuestionAsync?: XdtHelperMcpDeps['askUserQuestionAsync'];
+  manageUserQuestions?: XdtHelperMcpDeps['manageUserQuestions'];
   runtimeCapabilities?: XdtHelperMcpDeps['runtimeCapabilities'];
   botCapabilities: Pick<ReturnType<typeof createBotCapabilityService>, 'list' | 'select'> & Partial<Pick<ReturnType<typeof createBotCapabilityService>, 'models' | 'setDefaultModel'>>;
   createMediaDownloadContext?: CindyGhostsHostDeps['createMediaDownloadContext'];
@@ -1040,6 +1041,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
         }
       },
       askUserQuestionAsync: deps.askUserQuestionAsync,
+      manageUserQuestions: deps.manageUserQuestions,
       sessionImport: sessionImportCallbacks,
       renameSessions: async ({ changes, dryRun }) => {
         if (!tryGetDbClient()) {

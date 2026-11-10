@@ -13026,6 +13026,11 @@
     "prevMessageJump": "Zum vorherigen Prompt springen: {{preview}}",
     "sessionLoading": "Aufgabe wird geladen",
     "askUserQuestion": {
+    "unanswered": "Unbeantwortet",
+    "withdrawn": "Keine Antwort mehr nötig",
+    "withdrawnDraft": "Diese Frage braucht keine Antwort mehr.\n{{reason}}\nIhr Entwurf bleibt erhalten und kann als Ergänzung gesendet werden.",
+    "sendSupplement": "Ergänzung senden",
+
       "voice": {
         "hint": "Sag die Nummer oder den Namen einer Option. Sag bei Mehrfachauswahl anschließend „Auswahl bestätigen“.",
         "freeTextHint": "Sag deine Antwort, prüfe sie und sag dann „Auswahl bestätigen“, um sie abzusenden.",

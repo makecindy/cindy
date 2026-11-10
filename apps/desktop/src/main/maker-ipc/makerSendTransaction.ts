@@ -8,6 +8,7 @@ import {
   AUTO_REVIEW_USER_INTENT,
   INHERITED_CAPABILITY_SELECTION,
   MAIN_OWNED_SEND_CONTEXT,
+  ASYNC_QUESTION_ANSWER,
   PINNED_SKILL_INVOCATION,
   LIBRARY_READ_ROOT,
   type AgentKind,
@@ -271,6 +272,7 @@ type MakerSendOptions = {
   readonly [AUTO_REVIEW_USER_INTENT]?: AutoReviewUserIntent;
   readonly [INHERITED_CAPABILITY_SELECTION]?: string;
   readonly [MAIN_OWNED_SEND_CONTEXT]?: MainOwnedSendContext;
+  readonly [ASYNC_QUESTION_ANSWER]?: true;
   messageUuid?: string;
   userName?: string;
   throwOnStartFailure?: boolean;
@@ -1937,6 +1939,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
           ...(so.toolsDisabled === true ? { toolsDisabled: true } : {}),
           turnAttemptToken: so.turnAttemptToken,
           signal: so.signal,
+          [ASYNC_QUESTION_ANSWER]: so[ASYNC_QUESTION_ANSWER],
           [PI_CACHE_RECOVERY_EXPECTATION]: so[PI_CACHE_RECOVERY_EXPECTATION],
           ...(so.onVendorTurnReserved ? { onTurnReserved: so.onVendorTurnReserved } : {}),
           // scheduler 排队消息:origin 打到本轮 turnOrigin(IM 转播识别自动 turn),

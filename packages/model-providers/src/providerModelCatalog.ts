@@ -121,15 +121,32 @@ export function providerModelGenerationRecord(modelId: string, upstream: string,
   const { cost: _cost, execution, ...metadata } = previous;
   const { headers: _headers, ...parameters } = execution.pi;
   return { ...metadata, id: modelId, name: modelId, upstream, inheritedFrom: previous.id,
-    execution: { pi: structuredClone(parameters) } };
+    execution: { pi: piParametersForEndpoint(parameters, previous.upstream, upstream) } };
+}
+
+function piParametersForEndpoint(parameters: ProviderModelRecord['execution']['pi'], declaredUpstream: string, upstream: string) {
+  const inherited = structuredClone(parameters);
+  let endpoint = normalize(upstream);
+  try { endpoint = normalize(new URL(endpoint).href); } catch { /* Invalid endpoints cannot match a catalog route. */ }
+  // A saved preset ID survives URL edits; it is not a declaration that the new
+  // channel understands message-scoped effort. Match the actual endpoint or a
+  // declared account template. SDK path aliases are resolved by the caller.
+  if (parameters.api === 'anthropic-messages' && inherited.compat?.supportsMidConvoEffort === true &&
+      providerEndpointBindings(normalize(declaredUpstream), endpoint) === null) {
+    delete inherited.compat.supportsMidConvoEffort;
+  }
+  return inherited;
 }
 
 /** Account-specific endpoints may still explicitly reference a maintained connection template. */
-export function providerPresetModelRecord(presetId: string | undefined, modelId: string, api?: PiModelApi): ProviderModelRecord | undefined {
+export function providerPresetModelRecord(presetId: string | undefined, modelId: string, api?: PiModelApi, upstream?: string): ProviderModelRecord | undefined {
   if (!presetId) return undefined;
   const provider = sourceProviderForPreset(presetId);
   const matches = PROVIDER_MODEL_CATALOG.providers[provider]?.filter(row => row.id === modelId && (!api || row.execution.pi.api === api));
-  return matches?.length === 1 ? matches[0] : undefined;
+  const row = matches?.length === 1 ? matches[0] : undefined;
+  return row && upstream !== undefined
+    ? { ...row, execution: { pi: piParametersForEndpoint(row.execution.pi, row.upstream, upstream) } }
+    : row;
 }
 
 /** Preserve the upstream adapter identity, independently of a user's connection UUID. */

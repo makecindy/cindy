@@ -36,6 +36,11 @@
     "exit": "出谋划式"
   },
   "panel": {
+    "questionUnanswered": "未答",
+    "questionWithdrawn": "无须再答",
+    "withdrawnDraft": "此问无须再答。\n{{reason}}\n草稿尚存，可另作补充发送。",
+    "sendSupplement": "发送补充",
+
     "readOnlyKind": "待确",
     "readOnlyTitle": "机上方待确认",
     "pendingRequests": "待理之请",

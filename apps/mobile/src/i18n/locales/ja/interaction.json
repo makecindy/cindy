@@ -36,6 +36,11 @@
     "exit": "プランモードを終了"
   },
   "panel": {
+    "questionUnanswered": "未回答",
+    "questionWithdrawn": "回答は不要になりました",
+    "withdrawnDraft": "この質問への回答は不要になりました。\n{{reason}}\n下書きは保存されています。補足として送信できます。",
+    "sendSupplement": "補足を送信",
+
     "readOnlyKind": "確認待ち",
     "readOnlyTitle": "パソコンで確認を待っています",
     "pendingRequests": "保留中のリクエスト",
