@@ -6431,11 +6431,12 @@ function CCAgentSessionContent({
                     </WorkingDirectoryTip>
                   )}
 
-                  {sessionId && !readOnly && !remoteDeviceId && !session?.remoteHostId && (
+                  {sessionId && viewVisible && !readOnly && !remoteDeviceId && !session?.remoteHostId && (
                     <PluginTaskStatus
                       sessionId={sessionId}
                       workingDir={session?.workingDir}
                       routeKey={JSON.stringify([session?.agentKind, session?.providerId, session?.model, session?.agentDeviceId])}
+                      sidebarTargetSessionId={sidebarTargetSessionId}
                     />
                   )}
                   {/* Right: Context capacity indicator */}

@@ -146,29 +146,35 @@ export class GhostTaskStatusSlot {
     const existing = this.inFlight.get(key);
     if (existing) return existing.then((value) => (current() ? value : null));
     const requestId = randomUUID();
+    let settle!: (value: GhostTaskStatusReply | null) => void;
     const result = new Promise<GhostTaskStatusReply | null>((resolve) => {
-      const timer = setTimeout(() => finish(null), 8000);
-      const finish = (value: GhostTaskStatusReply | null) => {
-        if (!this.pending.delete(requestId)) return;
-        clearTimeout(timer);
-        this.inFlight.delete(key);
-        resolve(current() ? value : null);
-      };
-      this.pending.set(requestId, { id, current, finish });
-      void this.deps
-        .wake(ghost)
-        .then((ready) => {
-          if (!this.pending.has(requestId)) return;
-          if (
-            !ready ||
-            !current() ||
-            !this.deps.send(id, { type: 'task-status', requestId, sessionId, modelRoute })
-          )
-            finish(null);
-        })
-        .catch(() => finish(null));
+      settle = resolve;
     });
+    const timer = setTimeout(() => finish(null), 8000);
+    const finish = (value: GhostTaskStatusReply | null) => {
+      if (!this.pending.delete(requestId)) return;
+      clearTimeout(timer);
+      this.inFlight.delete(key);
+      settle(current() ? value : null);
+    };
+    this.pending.set(requestId, { id, current, finish });
+    // Register the in-flight entry before waking. `wake()` may stop the sandbox
+    // synchronously (e.g. the install identity changed), which cancels this
+    // request through `onStateChanged` while the executor is still running; a
+    // settled promise cached afterwards would keep every later poll at `null`.
     this.inFlight.set(key, result);
+    void this.deps
+      .wake(ghost)
+      .then((ready) => {
+        if (!this.pending.has(requestId)) return;
+        if (
+          !ready ||
+          !current() ||
+          !this.deps.send(id, { type: 'task-status', requestId, sessionId, modelRoute })
+        )
+          finish(null);
+      })
+      .catch(() => finish(null));
     return result;
   }
 

@@ -27,11 +27,13 @@ vi.mock('@/components/ui/tooltip', () => ({
   Tip: ({ children }: { children: React.ReactNode }) => children,
 }));
 
+const originalGhosts = mocks.ghosts;
 afterEach(() => {
   cleanup();
   vi.useRealTimers();
   mocks.disabled.clear();
   mocks.open.mockReset();
+  mocks.ghosts = originalGhosts;
 });
 const status = (label: string) => [{ instanceId: 'demo', name: 'Demo', label }];
 function bridge(taskStatus: unknown) {
@@ -111,4 +113,29 @@ it('refreshes on a route change and does not show the previous route while waiti
     resolve(status('new'));
   });
   expect(screen.getByRole('button').textContent).toBe('Demo: new');
+});
+
+// unit regression: 其它插件的 OAuth 角标等投影更新会替换整份 ghosts 数组,
+// 不能因此重启轮询,也不能让已有状态在回复前消失。
+it('does not restart polling when an unrelated ghost projection changes', async () => {
+  const request = vi.fn(async () => status('50%'));
+  bridge(request);
+  const view = render(<PluginTaskStatus sessionId="one" />);
+  await act(async () => {});
+  expect(screen.getByRole('button').textContent).toBe('Demo: 50%');
+  mocks.ghosts = [...mocks.ghosts];
+  view.rerender(<PluginTaskStatus sessionId="one" />);
+  expect(request).toHaveBeenCalledTimes(1);
+  expect(screen.getByRole('button').textContent).toBe('Demo: 50%');
+});
+
+// unit: 内嵌在他人侧栏里的会话(Orca worker、侧聊)打开的是宿主任务的页签桶,
+// 点了看不到插件任务页,所以不显示入口也不轮询。
+it('hides the launcher when the sidebar belongs to another task', async () => {
+  const request = vi.fn(async () => status('50%'));
+  bridge(request);
+  render(<PluginTaskStatus sessionId="worker" sidebarTargetSessionId="lead" />);
+  await act(async () => {});
+  expect(request).not.toHaveBeenCalled();
+  expect(screen.queryByRole('button')).toBeNull();
 });

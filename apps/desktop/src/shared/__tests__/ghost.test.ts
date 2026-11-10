@@ -2461,6 +2461,10 @@ describe('ghost · panel.position 校验', () => {
     if (status.ok) expect(diffGhostPermissionItems(ok.manifest, status.manifest).added).toEqual([
       expect.objectContaining({ key: 'task-view', detailKey: 'taskViewStatusDetail' }),
     ]);
+    // unit: statusBar 是只认字面量 true 的加档开关；错误类型不能当未知字段放行,
+    // 否则装包成功但入口静默不出现。
+    expect(validateGhostManifest(withTask({ html: 'task.html', statusBar: 'true' })).ok).toBe(false);
+    expect(validateGhostManifest(withTask({ html: 'task.html', statusBar: false })).ok).toBe(false);
     expect(diffGhostPermissionItems({ ...ok.manifest, taskView: undefined }, ok.manifest).added).toEqual([
       expect.objectContaining({ key: 'task-view', kind: 'task-view', labelKey: 'taskView' }),
     ]);

@@ -1779,9 +1779,15 @@ function validateGhostManifestInput(value: unknown, preserveHistoricalParameterS
     if (!isSafeGhostRelativePath(raw.taskView.html)) {
       return { ok: false, reason: 'taskView.html 必填，且必须是安装目录内的安全相对路径' };
     }
+    // 状态栏入口是加档能力，只接受字面量 true；其它类型若当作未知字段放行，
+    // 会在装包成功后静默不显示入口。
+    if (raw.taskView.statusBar !== undefined && raw.taskView.statusBar !== true) {
+      return { ok: false, reason: 'taskView.statusBar 只接受字面量 true' };
+    }
     taskView = {
-      ...unknownDeclarationFields(raw.taskView, ['html', 'title']),
+      ...unknownDeclarationFields(raw.taskView, ['html', 'title', 'statusBar']),
       ...(raw.taskView.title !== undefined ? { title: raw.taskView.title } : {}),
+      ...(raw.taskView.statusBar === true ? { statusBar: true as const } : {}),
       html: raw.taskView.html,
     };
   }

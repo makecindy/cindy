@@ -103,6 +103,35 @@ it('coalesces windows watching the same task and cancels replies from stopped ru
   expect(s.slot.reply('local-demo', reply)).toEqual({ ok: false });
 });
 
+it('re-queries after a wake that cancels the request synchronously', async () => {
+  // unit: spawn() may stop the previous sandbox and cancel in-flight status
+  // requests before its promise settles. The cancelled request must not leave a
+  // settled promise cached for this key, or every later poll reuses the null.
+  const ghost = {
+    manifest: { taskView: { html: 'task.html', statusBar: true } },
+    enabled: true,
+    approval: { state: 'approved', revision: 'one' },
+  } as InstalledGhost;
+  const send = vi.fn(() => true);
+  const holder: { slot?: GhostTaskStatusSlot } = {};
+  const wake = vi.fn(async () => {
+    holder.slot!.cancel('local-demo');
+    return true;
+  });
+  holder.slot = new GhostTaskStatusSlot({
+    getGhost: () => ghost,
+    ownerScope: () => 'owner',
+    wake,
+    send,
+  });
+  expect(await holder.slot.query('local-demo', 'task')).toBeNull();
+  expect(send).not.toHaveBeenCalled();
+  void holder.slot.query('local-demo', 'task');
+  await Promise.resolve();
+  expect(wake).toHaveBeenCalledTimes(2);
+  expect(send).toHaveBeenCalledTimes(1);
+});
+
 it('rejects oversized data and releases failed or timed-out requests', async () => {
   vi.useFakeTimers();
   const s = setup();
