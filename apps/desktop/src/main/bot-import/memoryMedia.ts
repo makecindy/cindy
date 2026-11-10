@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { getDbClient } from '../localDb/client/current.js';
 import { ingestMedia } from '../cindy-media/ingest.js';
 import { hasRef, removeRefs } from '../cindy-media/ledger.js';
-import { captureMediaRefCompensationScope } from '../cindy-media/refCompensationJournal.js';
+import { captureMediaRefCompensationScope } from '../cindy-media/refCompensationJournal.desktop.js';
 import { sniffMediaMime } from '../cindy-media/sniffMediaMime.js';
 import { CompanionImportError } from './types.js';
 

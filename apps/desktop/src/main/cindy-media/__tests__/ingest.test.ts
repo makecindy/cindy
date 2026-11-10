@@ -15,12 +15,13 @@ import os from 'node:os';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import type { LedgerDb } from '../ledger';
-import type { MediaRefCompensationScope } from '../refCompensationJournal';
+import type { MediaRefCompensationScope } from '../refCompensationJournal.desktop';
 import { fileSymlinkFixture } from './fileSymlinkFixture';
+import { dataOwnerStorageKey } from '../../dataOwnerPath';
 
 let tmpUserData = '';
 const OWNER_ID = 'owner-a';
-const OWNER_KEY = 'a'.repeat(20);
+const OWNER_KEY = dataOwnerStorageKey(OWNER_ID);
 const OWNER_SCOPE_KEY = 'cloud:owner-a:1';
 
 const symlinkSupported = (() => {
@@ -54,7 +55,7 @@ vi.mock('../../appSessionState', () => ({
 const schema = await import('../../localDb/schema');
 const ledger = await import('../ledger');
 const ingest = await import('../ingest');
-const refCompensation = await import('../refCompensationJournal');
+const refCompensation = await import('../refCompensationJournal.desktop');
 
 const MIGRATION_0070 = path.resolve(__dirname, '../../../../drizzle/0070_woozy_harpoon.sql');
 const { default: migration0071 } = (await import('../../../../drizzle/scripts/0071_bright_ultron')) as {

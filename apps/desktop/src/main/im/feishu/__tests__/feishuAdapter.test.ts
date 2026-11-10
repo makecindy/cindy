@@ -58,7 +58,7 @@ import type {
   IMMessageEvent,
   IMStatus,
 } from '@cindy/im';
-import { getResolvedMainLocale, setMainLocale } from '../../../i18n';
+import { getResolvedMainLocale, setMainLocale } from '../../../i18n.desktop';
 import { buildFeishuAdapter, feishuToolsHint } from '../adapter';
 import { formatHistoryTime } from '../groupContext';
 

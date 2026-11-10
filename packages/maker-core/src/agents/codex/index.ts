@@ -881,7 +881,6 @@ interface LiveAskUserRequest {
   questions: ToolRequestUserInputQuestion[];
   detached: boolean;
   continuationStarted: boolean;
-  delivery?: 'async';
   permissionPolicy: TurnPermissionPolicy | null;
   capabilitySelectionText: string;
   autoReviewIntent: AutoReviewUserIntent;
@@ -8440,11 +8439,10 @@ assertRouteCurrent();
         (meta) => meta.turnId === turnId,
         cancelledDynamicToolResponse('turn_completed'),
       );
-      // Desktop 只有一个 pendingAskUser，只保留最后一张同步提问。
-      // 异步提问不阻塞结束：未回答的卡片随原 turn 到期，不代选或续跑。
+      // Only synchronous RPCs belong to this provider continuation. Async items are Session-owned.
       const lives = [...liveAskUserByRequestId.values()].filter((live) => live.turnId === turnId);
       const latest = lives.at(-1);
-      const keep = latest?.delivery === 'async' ? null : latest ?? null;
+      const keep = latest ?? null;
       if (keep) {
         keep.detached = true;
         retainInteractionContinuation(turnId, keep.requestId);
@@ -8458,7 +8456,7 @@ assertRouteCurrent();
       };
       for (const live of lives) {
         if (keep && live.requestId === keep.requestId) continue;
-        dismiss(live.requestId, live.delivery === 'async' ? 'turn_completed' : 'superseded');
+        dismiss(live.requestId, 'superseded');
       }
       for (const meta of [...cancelledUserInput, ...cancelledDynamicTools]) {
         dismiss(serverInteractionId(meta.requestId), 'turn_completed');
@@ -8488,7 +8486,7 @@ assertRouteCurrent();
       autoReviewIntent?: AutoReviewUserIntent,
     ): Promise<void> {
       if (closed) return;
-      if (live.delivery !== 'async' && await waitForYieldContinuationIdle()) return;
+      if (await waitForYieldContinuationIdle()) return;
       if (closed) return;
       const message = formatAskUserContinuationMessage(live.questions, answers);
       const sendOptions: CodexInternalSendOptions = {
@@ -8501,7 +8499,7 @@ assertRouteCurrent();
       };
       try {
         await sendInteractionContinuation(live.requestId, { type: 'user', content: message }, sendOptions,
-          'ask_user continuation turn failed to start', live.delivery === 'async' ? live.turnId : null);
+          'ask_user continuation turn failed to start', null);
       } catch (error) {
         emitAskUserContinuationStartFailure(error);
       }
@@ -9864,7 +9862,6 @@ assertRouteCurrent();
       turnId?: string | null,
       isRequestPending: () => boolean = () => true,
       toolUseId?: string,
-      delivery?: 'async',
       isBlocking?: boolean,
     ): Promise<ToolRequestUserInputResponse> {
       if (questions.some((q) => q.isSecret)) {
@@ -9874,21 +9871,8 @@ assertRouteCurrent();
         });
         return emptyUserInputResponse(questions);
       }
-      // A blocking tool must remain answerable; optional cards may not cover it.
-      if (delivery === 'async') {
-        if ([...liveAskUserByRequestId.values()].some((live) => live.delivery !== 'async')) {
-          return emptyUserInputResponse(questions);
-        }
-      }
-      // The shared card has one slot: either kind of new question replaces an
-      // unanswered async card. Answered cards have already left this map.
-      for (const live of liveAskUserByRequestId.values()) {
-        if (live.delivery === 'async') dismissLiveAskUser(live.requestId, 'superseded');
-      }
-      // Async items already deduplicate lifecycle notifications by item id.
-      // Only synchronous protocol aliases may share pending/submitted answers
-      // by content: distinct async items must always own their own decisions.
-      const fingerprint = turnId && delivery !== 'async' ? userInputQuestionsFingerprint(questions) : null;
+      // Synchronous aliases may share a pending/submitted response by content.
+      const fingerprint = turnId ? userInputQuestionsFingerprint(questions) : null;
       const submittedForTurn = turnId ? submittedUserInputByTurn.get(turnId) : undefined;
       const replay = fingerprint ? submittedForTurn?.get(fingerprint) : undefined;
       if (replay) {
@@ -9921,7 +9905,7 @@ assertRouteCurrent();
             turnId,
           });
           return isRequestPending()
-            ? askUserViaInteraction(requestId, questions, turnId, isRequestPending, toolUseId, delivery, isBlocking)
+            ? askUserViaInteraction(requestId, questions, turnId, isRequestPending, toolUseId, isBlocking)
             : emptyUserInputResponse(questions);
         }
         return responseFromUserInputAnswersByPosition(questions, joined.answersByPosition);
@@ -9934,7 +9918,6 @@ assertRouteCurrent();
           questions,
           detached: false,
           continuationStarted: false,
-          delivery,
           permissionPolicy: activeTurnPermissionPolicy,
           capabilitySelectionText: (
             (turnId ? capabilitySelectionTextByTurnId.get(turnId) : undefined)
@@ -9947,7 +9930,6 @@ assertRouteCurrent();
           kind: 'ask_user_question',
           requestId,
           ...(toolUseId ? { toolUseId } : {}),
-          ...(delivery ? { delivery } : {}),
           questions: questionsToAskUserItems(questions),
           ...(isBlocking === false ? { isBlocking: false } : {}),
         });
@@ -9966,12 +9948,6 @@ assertRouteCurrent();
           questions,
           responseFromAskUserAnswers(questions, decision.answers),
         );
-        // Optional skips/cancellations settle the card without changing intent,
-        // claiming a continuation, or sending synthetic "no answer" input.
-        if (live.delivery === 'async'
-          && (decision.dismissed === true || !hasSubmittedUserInput(answersByPosition))) {
-          return answersByPosition;
-        }
         // 澄清必须锚在发起提问那一轮的审查意图上。卡片挂起期间后续 turn 可能改写
         // currentAutoReviewIntent；plan_review 已用 planRequestAutoReviewIntent 防漂。
         const continuationAutoReviewIntent = composeAutoReviewIntentWithClarification(
@@ -9981,14 +9957,11 @@ assertRouteCurrent();
         setAutoReviewIntent(continuationAutoReviewIntent);
         if (
           live
-          && (live.detached || live.delivery === 'async')
+          && live.detached
           && !live.continuationStarted
           && decision.dismissed !== true
         ) {
           live.continuationStarted = true;
-          if (live.delivery === 'async' && live.turnId) {
-            retainInteractionContinuation(live.turnId, requestId);
-          }
           // Pass the applied, normalized snapshot so send can reuse this transition.
           void startAskUserContinuation(live, decision.answers ?? {}, currentAutoReviewIntent);
         } else if (live?.detached && decision.dismissed === true) {
@@ -10062,17 +10035,19 @@ assertRouteCurrent();
     ): boolean {
       const rawQuestions = asyncUserInputQuestions(params.item);
       if (!rawQuestions) return false;
-      // Only the completed root message opens the question editor. Its prose remains in history.
+      // The question card owns the question text and answer history; suppress duplicate fallback prose.
       if (phase !== 'completed' || reviewMode || params.threadId !== threadId) return true;
       let seen = asyncQuestionItemsByTurn.get(params.turnId);
       if (seen?.has(params.item.id)) return true;
       if (!seen) asyncQuestionItemsByTurn.set(params.turnId, seen = new Set());
       seen.add(params.item.id);
       const requestId = serverInteractionId(`async:${params.turnId}:${params.item.id}`);
-      void askUserViaInteraction(requestId, normalizeRequestUserInputQuestions(rawQuestions),
-        params.turnId, () => !closed && !completedTurnIds.has(params.turnId), undefined, 'async')
+      // Native async messages have no response RPC. Session owns their lifetime and
+      // delivers accepted answers through the same input path as every other harness.
+      void dispatchInteraction({ kind: 'ask_user_question', requestId, delivery: 'async',
+        questions: questionsToAskUserItems(normalizeRequestUserInputQuestions(rawQuestions)) })
         .catch((error: unknown) => log.warn('async user input interaction failed', { requestId, error: String(error) }));
-      return false;
+      return true;
     }
 
     async function requestUserInputAsPermission(
@@ -10177,7 +10152,6 @@ assertRouteCurrent();
                 params.turnId,
                 () => userInputBroker.has({ connectionId, requestId: meta.requestId }),
                 params.itemId,
-                undefined,
                 params.isBlocking,
               );
           settle(response);

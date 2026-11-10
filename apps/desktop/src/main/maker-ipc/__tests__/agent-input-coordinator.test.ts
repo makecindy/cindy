@@ -5,14 +5,14 @@ import { authorizeGroupTool, registerGroupToolAuthority } from '../botGroupToolA
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { ScriptTarget, transpileModule } from 'typescript';
-import { AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT, appendAutoReviewUserIntent } from '@cindy/maker-core';
+import { ASYNC_QUESTION_ANSWER, AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT, appendAutoReviewUserIntent } from '@cindy/maker-core';
 import { REPLY_QUOTE_SOURCE_CONTENT } from '../chatReplyQuoteNote';
 import { AUTO_REVIEW_DELEGATED_CONTINUATION, restoreAutoReviewUserIntent, type AutoReviewHistoryMessage } from '../autoReviewUserIntent.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { admitTaskAction, bindTaskActionInput, settleTaskActionInput, taskActionInputGuard } from '../taskActionAuthorization.js';
-import { AgentInputCoordinator } from '../agent-input-coordinator.js';
+import { AgentInputCoordinator } from '../agent-input-coordinator.desktop.js';
 import { ProviderGroupUsageLimitError, providerGroupSwitchCause } from '../../provider-group/failurePolicy.js';
-import type { Session } from '@cindy/maker-core';
+import { SUPERSEDE_ASYNC_QUESTIONS, type Session } from '@cindy/maker-core';
 import { createSessionBindingLifecycle, createSessionCloseTeardown } from '../sessionBindingLifecycle.js';
 import { captureProductTurnFailureOwner, createDeferredProductTurnFailureGate } from '../productTurnFailureOwner.js';
 import { createProviderGroupHeldRecovery, createProviderGroupHeldTurnErrors } from '../../provider-group/heldTurnErrors.js';
@@ -52,7 +52,7 @@ import type {
   AgentInputCoordinatorDeps,
   AgentInputHostSendFailureCode,
   AgentInputSendResult,
-} from '../agent-input-coordinator.js';
+} from '../agent-input-coordinator.desktop.js';
 import type {
   AgentInputCreateOpts,
   AgentInputProjection,
@@ -528,7 +528,7 @@ describe('MCP App queued message grants', () => {
 describe('INPUT_ENQUEUE crash-restored remote Worker pause', () => {
   function hostInput(
     h: ReturnType<typeof createHarness>, remote = true, mobile = false,
-    resumeInterruptedScheduleRun: typeof import('../../scheduler-host/index.js').resumeInterruptedScheduleRun = async () => null,
+    resumeInterruptedScheduleRun: typeof import('../../scheduler-host/index.desktop.js').resumeInterruptedScheduleRun = async () => null,
   ) {
     return createInputEnqueueHarness(h.coordinator, { remote, mobile, resumeInterruptedScheduleRun }).enqueue;
   }
@@ -541,7 +541,7 @@ describe('INPUT_ENQUEUE crash-restored remote Worker pause', () => {
       const sid = 'interrupted-scheduled-task';
       h.setLoadQueueSnapshot(async () => [makeItem('later', 'queued later task')]);
       const done = deferred<void>();
-      const resume = vi.fn<typeof import('../../scheduler-host/index.js').resumeInterruptedScheduleRun>(async (sessionId, enqueue) => ({
+      const resume = vi.fn<typeof import('../../scheduler-host/index.desktop.js').resumeInterruptedScheduleRun>(async (sessionId, enqueue) => ({
         completion: Promise.resolve().then(async () => {
           await enqueue({ sessionId, text: CONTINUE_AFTER_APP_EXIT_PROMPT,
             persistedContent: CONTINUE_AFTER_APP_EXIT_PROMPT,
@@ -632,7 +632,7 @@ describe('INPUT_ENQUEUE crash-restored remote Worker pause', () => {
     const h = createHarness();
     const entered = deferred<void>();
     const prepare = deferred<void>();
-    const resume: typeof import('../../scheduler-host/index.js').resumeInterruptedScheduleRun = async (sessionId, enqueue) => ({
+    const resume: typeof import('../../scheduler-host/index.desktop.js').resumeInterruptedScheduleRun = async (sessionId, enqueue) => ({
       completion: Promise.resolve().then(async () => {
         entered.resolve();
         await prepare.promise;
@@ -1074,6 +1074,27 @@ describe('AgentInputCoordinator Orca priority queue transactions', () => {
     expect(sendOpts).toMatchObject({ sourceDevice, persistUserMessage: { sourcePlugin } });
     // 来源不是 maker-core turn origin。
     expect(sendOpts).not.toHaveProperty('origin');
+  });
+
+  // Regression: source-blind Session cleanup let automatic messages erase unanswered cards.
+  // Entry: production coordinator steering; assert the host-only classification reaching Session.
+  // Minimum: one input per distinct provenance; tier: unit.
+  it.each([
+    ['user', {}, true],
+    ['scheduler', { origin: { kind: 'scheduler', scheduleId: 's', scheduleName: 'scheduled' } }, false],
+    ['worker', { origin: { kind: 'orca', senderLabel: 'Worker' } }, false],
+    ['teammate', { origin: { kind: 'session', senderSessionId: 'bot' } }, false],
+    ['auto-resume', { autoResume: true }, false],
+    ['plugin', { sourcePlugin: { pluginId: 'p' } }, false],
+    ['shared guest', { sharedTaskAuthor: { accountId: 'guest' } }, false],
+  ] as const)('only marks the user’s ordinary steer for question supersession: %s', async (_label, source, expected) => {
+    const h = createHarness();
+    h.setRunning(true);
+    await h.coordinator.steer('question-source', makeItem('source-input', 'Update', source as never));
+    expect(h.steerToAgent).toHaveBeenCalledOnce();
+    expect(h.steerToAgent.mock.calls[0][2]?.[SUPERSEDE_ASYNC_QUESTIONS]).toBe(expected ? true : undefined);
+    h.coordinator.enqueue('question-source', makeItem('source-enqueue', 'Queued update', source as never));
+    expect(h.onOwnerMessage).toHaveBeenCalledTimes(expected ? 1 : 0);
   });
 
   it('carries message sources through steer delivery and the steer user row', async () => {
@@ -2065,6 +2086,23 @@ function createHarness(opts?: {
   };
 }
 
+describe('async question input admission', () => {
+  it.each(['send', 'steer'] as const)('passes question identity through ordinary %s admission and persistence', async (action) => {
+    const h = createHarness();
+    const item = makeItem('question-reply:q1', 'Answer to the pending question');
+    if (action === 'steer') {
+      h.setRunning(true);
+      await expect(h.coordinator.steer('question-task', item, { touchUserSend: true })).resolves.toBe(true);
+      expect(h.steerToAgent.mock.calls[0][2]?.[ASYNC_QUESTION_ANSWER]).toBe(true);
+    } else {
+      h.coordinator.enqueue('question-task', item);
+      await vi.waitFor(() => expect(h.sendToAgent).toHaveBeenCalledOnce());
+      expect(h.sendToAgent.mock.calls[0][3]?.[ASYNC_QUESTION_ANSWER]).toBe(true);
+    }
+    await vi.waitFor(() => expect(mocks.createMessage.mock.calls.some((call) => (call[1] as { clientId?: string }).clientId === item.clientId)).toBe(true));
+  });
+});
+
 describe('agent-chosen control steering', () => {
   const sid = 'lead-report';
   function expected(h: ReturnType<typeof createHarness>) {
@@ -2206,9 +2244,12 @@ describe('agent-chosen control steering', () => {
     const queue = h.coordinator.getQueueControlSnapshot(sid).pendingQueue;
     expect(queue.map(item => item.clientId)).toEqual(['report']);
     expect(h.coordinator.isQueuePaused(sid)).toBe(true);
+    expect(h.coordinator.isPausedForUncertainDelivery(sid)).toBe(true);
     h.coordinator.onTurnEvent(sid, 'done');
     await flush();
     expect(h.sendToAgent).not.toHaveBeenCalled();
+    h.coordinator.resume(sid);
+    expect(h.coordinator.isPausedForUncertainDelivery(sid)).toBe(false);
   });
   it('reports screened rejection without reviving blocked content as ordinary input', async () => {
     const h = createHarness();

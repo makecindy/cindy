@@ -11,7 +11,7 @@ import {
   RemoteResourceRegistryError,
 } from '../device-link/remoteResourceRegistry.js';
 import { resolvePreferredSystemLocale } from '../../shared/locale.js';
-import { t } from '../i18n.js';
+import { t } from '../i18n.desktop.js';
 import { cindyMakeManager } from './manager.js';
 import { actCindyMakeTest } from './testRuntime.js';
 import {

@@ -1,8 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 const fetch = vi.hoisted(() => vi.fn());
-vi.mock('../../serverApiClient.js', () => ({ serverApiFetch: fetch, ServerApiError: class extends Error { constructor(public code: string, public statusCode: number) { super(code); } } }));
+vi.mock('../../serverApiClient.desktop.js', () => ({ serverApiFetch: fetch, ServerApiError: class extends Error { constructor(public code: string, public statusCode: number) { super(code); } } }));
 vi.mock('../../clientEndpointsService.js', () => ({ getClientEndpoint: () => 'https://models.example.test' }));
-import { ServerApiError } from '../../serverApiClient.js';
+import { ServerApiError } from '../../serverApiClient.desktop.js';
 import { readOrganizationAccountUsage } from '../organizationAccountUsage';
 const valid = { spend: 12, maxBudget: 100, currency: 'CNY', budgetResetAt: '2026-11-01T00:00:00Z' };
 beforeEach(() => { fetch.mockReset().mockResolvedValue(valid); });

@@ -48,6 +48,7 @@ export function SubscriptionSignInChoices({
   }, [providerId, attempt]);
   const account = view?.accounts.find((item) => item.id === 'default');
   const detected = account?.status === 'ready' || account?.status === 'limited';
+  const providerManagedAuth = account?.authIssue === 'codex-provider-managed-auth';
   const hasOtherAccounts = view?.accounts.some((item) => item.id !== 'default');
   const loading = !view && !failed;
   return (
@@ -81,6 +82,11 @@ export function SubscriptionSignInChoices({
           </div>
         </div>
       )}
+      {providerManagedAuth && (
+        <p role="alert" className="text-12 text-[var(--text-secondary)]">
+          {t('subscriptionAccounts.providerManagedAuth')}
+        </p>
+      )}
       {failed && (
         <div
           role="alert"
@@ -112,7 +118,7 @@ export function SubscriptionSignInChoices({
           </Button>
         ) : (
           <>
-            {!loading && !failed && (
+            {!loading && !failed && !providerManagedAuth && (
               <Button
                 data-settings-search-action="Connect the detected default subscription account"
                 variant="primary"
@@ -129,7 +135,7 @@ export function SubscriptionSignInChoices({
                 )}
               </Button>
             )}
-            {(detected || hasOtherAccounts || loading || failed) && (
+            {(detected || hasOtherAccounts || loading || failed || providerManagedAuth) && (
               <Button
                 data-settings-search-action="Sign in to another account within this provider"
                 variant="secondary"

@@ -10,7 +10,7 @@ import type { PiUsageWrite } from '../../localDb/worker/opHandlers/piUsageTx.js'
 import * as broadcastTap from '../../device-link/broadcast-tap.js';
 import { createBotCompactRuntimeRefreshCoordinator } from '../botCompactRuntimeRefresh.js';
 import { createContextOverflowRollover } from '../contextOverflowRollover.js';
-import { setMainLocale } from '../../i18n.js';
+import { setMainLocale } from '../../i18n.desktop.js';
 import { installSessionTurnObserver } from '../sessionTurnObserver.js';
 import { onChannelTurn } from '../channelTurnSignal.js';
 import { createSessionBindingLifecycle } from '../sessionBindingLifecycle.js';
@@ -132,13 +132,13 @@ vi.mock('../../maker-host/active-catalog.js', () => ({
 vi.mock('../../maker-host/claude-session-route-registry.js', () => ({
   readClaudeSessionRoute: effects.fn('readClaudeSessionRoute'),
 }));
-vi.mock('../../maker-host/codex-proxy-host.js', () => ({
+vi.mock('../../maker-host/codex-proxy-host.desktop.js', () => ({
   getCodexProxyAuthInjection: effects.fn('getCodexProxyAuthInjection'),
 }));
 vi.mock('../../maker-host/provider-route.js', () => ({
   isUserProviderSession: effects.fn('isUserProviderSession'),
 }));
-vi.mock('../../messagePersistBroadcaster.js', () => ({
+vi.mock('../../messagePersistBroadcaster.desktop.js', () => ({
   reserveTurnErrorPersistId: effects.fn('reserveTurnErrorPersistId'),
   backgroundTurnPredatesSessionClear: effects.fn('backgroundTurnPredatesSessionClear'),
   noteAgentMeta: effects.fn('noteAgentMeta'),
@@ -153,6 +153,7 @@ vi.mock('../../messagePersistBroadcaster.js', () => ({
   onThinkingEvent: effects.fn('onThinkingEvent'),
   onToolResultEvent: effects.fn('onToolResultEvent'),
   onToolResultFullEvent: effects.fn('onToolResultFullEvent'),
+  persistToolProcessMedia: effects.fn('persistToolProcessMedia'),
   onToolUseEvent: effects.fn('onToolUseEvent'),
   consumeLastAssistantPersistId: effects.fn('consumeLastAssistantPersistId'),
   consumeLastTopLevelAssistantPersistId: effects.fn('consumeLastTopLevelAssistantPersistId'),
