@@ -747,6 +747,7 @@ import {
 import { loadPluginMediaAvailability } from './pluginMediaCatalogFallback.js';
 import * as ledger from '../cindy-media/ledger.js';
 import { ingestMedia, supportedMime } from '../cindy-media/ingest.js';
+import { resolveGeneratedVideoMime } from '../cindy-media/generatedMedia.js';
 import { captureMediaRefCompensationScope } from '../cindy-media/refCompensationJournal.desktop.js';
 import { sniffMediaMime } from '../cindy-media/sniffMediaMime.js';
 import { recordGhostCallMedia } from './ghostMediaLedger.js';
@@ -5312,7 +5313,9 @@ async function runGhostVideo(
   const r = await submitAndAwaitVideo(registry, params);
   return {
     buffer: r.buffer,
-    mimeType: r.mimeType,
+    // 签名下载的头不可信。闻出视频用闻出的类型;错误页 / JSON 在这里抛,
+    // 不把失败页交给 saveGhostMedia 入仓。认不出的字节保持原来的兜底 mp4。
+    mimeType: resolveGeneratedVideoMime(r.buffer, r.mimeType),
     // 实际生效参数回执(执行器已把上游上报值与提交值合并过)。
     videoParams: {
       durationSeconds: r.effectiveParams.duration,

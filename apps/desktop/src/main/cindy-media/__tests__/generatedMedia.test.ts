@@ -31,8 +31,10 @@ const { default: migration0071 } = (await import('../../../../drizzle/scripts/00
 
 const PNG_BYTES = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 9]);
 const PNG_HASH = createHash('sha256').update(PNG_BYTES).digest('hex');
-const MP4_BYTES = Buffer.from('fake-mp4-bytes');
+/** 最小 isom/ftyp 盒。旧测试用的纯文本冒充 mp4,修了「错误页也入仓」之后不再合法。 */
+const MP4_BYTES = Buffer.from('000000146674797069736f6d00000000', 'hex');
 const MP4_HASH = createHash('sha256').update(MP4_BYTES).digest('hex');
+const QT_BYTES = Buffer.from('00000014667479707174202000000000', 'hex');
 
 function freshDb(): LedgerDb {
   const raw = new Database(':memory:');
@@ -123,7 +125,7 @@ describe('createBlobVideoStorage.saveVideo(生成视频入仓)', () => {
     expect(fs.existsSync(saved.originalPath)).toBe(true);
     expect(db.select().from(schema.mediaRefs).all()).toHaveLength(0);
 
-    const mov = await storage.saveVideo(Buffer.from('fake-mov'), 'video/quicktime');
+    const mov = await storage.saveVideo(QT_BYTES, 'video/quicktime');
     expect(mov.xdtVideoUrl).toMatch(/\.mov$/);
   });
 
@@ -133,15 +135,34 @@ describe('createBlobVideoStorage.saveVideo(生成视频入仓)', () => {
     await expect(storage.saveVideo(MP4_BYTES, '')).rejects.toThrow(/mime is required/);
   });
 
-  it('上游 content-type 不可信:带参数/octet-stream 归一化兜底 mp4,长任务不再最后一步炸(review P1)', async () => {
+  it('上游 content-type 不可信:带参数/octet-stream 归一化兜底 mp4,长任务不再最后一步炸(review P1)', () => {
     expect(generatedMedia.normalizeGeneratedVideoMime('video/mp4; charset=binary')).toBe('video/mp4');
     expect(generatedMedia.normalizeGeneratedVideoMime('VIDEO/QUICKTIME')).toBe('video/quicktime');
     expect(generatedMedia.normalizeGeneratedVideoMime('application/octet-stream')).toBe('video/mp4');
     expect(generatedMedia.normalizeGeneratedVideoMime('video/x-unknown')).toBe('video/mp4');
-    // 端到端:octet-stream 的字节照样入仓成 .mp4
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果:createBlobVideoStorage.saveVideo / resolveGeneratedVideoMime;
+  //   入仓扩展名跟随闻出的容器,错误页不入仓。
+  // - Bug／规则依据:签名下载返回 HTML/JSON 时仍显示成功并存成 .mp4。
+  // - 现有覆盖缺口:旧用例只用「octet-stream 一律兜底 mp4」,不看字节。
+  // - 最小失败输入:HTML 正文 + 上游 video/mp4。
+  // - tier:unit,内存账本,不起网络。
+  it('先闻字节:isom 入仓为 mp4,错误页报错,认不出的字节仍兜底 mp4', async () => {
     const storage = generatedMedia.createBlobVideoStorage(db);
-    const saved = await storage.saveVideo(Buffer.from('sig-url-bytes'), 'application/octet-stream');
-    expect(saved.xdtVideoUrl).toMatch(/\.mp4$/);
+    const sniffed = await storage.saveVideo(MP4_BYTES, 'application/octet-stream');
+    expect(sniffed.mime).toBe('video/mp4');
+    expect(sniffed.xdtVideoUrl).toMatch(/\.mp4$/);
+
+    const html = Buffer.from('<html><body>cdn error</body></html>');
+    await expect(storage.saveVideo(html, 'video/mp4')).rejects.toThrow(/错误页或 JSON/);
+    await expect(storage.saveVideo(Buffer.from('{"status":"processing"}'), 'video/mp4')).rejects.toThrow(/错误页或 JSON/);
+    expect(db.select().from(schema.mediaBlobs).all()).toHaveLength(1);
+
+    const unknown = await storage.saveVideo(Buffer.from('not-a-container'), 'application/octet-stream');
+    expect(unknown.mime).toBe('video/mp4');
+    expect(unknown.xdtVideoUrl).toMatch(/\.mp4$/);
   });
 });
 
