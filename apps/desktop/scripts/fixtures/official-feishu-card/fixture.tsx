@@ -19,16 +19,16 @@ function view(kind: string): SlackHookView {
   const feishu =
     kind === 'unavailable'
       ? { ...disabledLane, enabled: true, url: 'ws://127.0.0.1:8794', status: 'connected' as const }
-      : kind === 'confirmed'
+      : kind === 'confirmed' || kind === 'revoked' || kind === 'released'
         ? {
             ...disabledLane,
-            enabled: true,
+            enabled: kind !== 'released',
             url: 'ws://127.0.0.1:8794',
-            status: 'connected' as const,
-            available: true,
+            status: kind === 'released' ? 'disabled' as const : 'connected' as const,
+            available: kind !== 'released',
             binding: {
               provider: 'feishu' as const,
-              state: 'confirmed' as const,
+              state: kind === 'confirmed' ? 'confirmed' as const : 'revoked' as const,
               attemptId: null,
               bindingId: 'b1',
               principalId: 'ou_1',
@@ -40,7 +40,7 @@ function view(kind: string): SlackHookView {
               expiresAt: null,
               reason: null,
               remediationUrl: 'https://applink.feishu.cn/client/bot/open?appId=cli_app',
-              actions: ['revoke', 'open_provider', 'select_device'],
+              actions: kind === 'confirmed' ? ['revoke', 'open_provider', 'select_device'] : ['retry'],
             },
           }
         : {

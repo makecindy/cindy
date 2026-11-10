@@ -1,5 +1,7 @@
 // @vitest-environment jsdom
 
+import { copyRenderedSelection } from '../../../../test/vitest/rendererSelectionStyles';
+
 import { act, cleanup, createEvent, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { Tooltip } from '@/components/ui/tooltip';
 import userEvent from '@testing-library/user-event';
@@ -408,6 +410,24 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
 describe('BotGroupChatView', () => {
+  // Review 4362888100: main group and thread timelines own separate scroll roots.
+  it.each(['group', 'thread'])('sanitizes selection copy in the real %s timeline', async (timeline) => {
+    vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
+    mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ serverBacked: true }) });
+    renderView();
+    let message = await screen.findByText('@小满 帮我查余票');
+    if (timeline === 'thread') {
+      fireEvent.click((await screen.findAllByRole('button', { name: 'bots.groupChat.server.startTopic' }))[0]!);
+      message = await within(screen.getByRole('complementary')).findByText('Reply to u1');
+    }
+    const text = message.textContent!;
+    const { event, formats } = copyRenderedSelection(message);
+    expect(event.defaultPrevented).toBe(true);
+    expect(formats.get('text/plain')).toBe(text);
+    expect(formats.get('text/html')).toContain(text);
+    expect(formats.get('text/html')).not.toMatch(/class=|background|color:/);
+  });
+
   function localResult(request: BotGroupOutboxCommandRequest, entries: BotGroupOutboxStoredEntry[] = []): BotGroupOutboxCommandResult {
     return { ok: true, owner: request.owner, instanceId: 'main-test', revision: 1, entries };
   }
@@ -1157,6 +1177,10 @@ describe('BotGroupChatView', () => {
     await user.type(within(panel).getByRole('textbox'), 'Unsent thread reply');
     if (kind === 'image') fireEvent.load(screen.getByAltText('photo.png'));
     await user.click(screen.getByRole('button', { name: kind === 'image' ? 'photo.png' : 'note.md' }));
+    // PR #9499 CI: the first text preview imports the real editor bundle. Wait
+    // for that import inside act before starting the DOM wait; cold Windows
+    // transforms can exceed its 1s budget. Keep the Escape/draft assertions below.
+    if (kind !== 'image') await act(async () => { await vi.dynamicImportSettled(); });
     // 文本预览弹窗按需加载：首次打开要等分包挂载后才有遮罩层。
     const preview = kind === 'image'
       ? document.activeElement!

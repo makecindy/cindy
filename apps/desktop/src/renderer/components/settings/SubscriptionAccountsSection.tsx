@@ -11,8 +11,10 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/button';
 import { Select } from '@/components/ui/select';
+import { SegmentedControl } from '@/components/ui/segmented-control';
 import { Switch } from '@/components/ui/switch';
 import { Spinner } from '@/components/ui/spinner';
+import { Tip } from '@/components/ui/tooltip';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import {
   DropdownMenu,
@@ -188,9 +190,6 @@ export function SubscriptionAccountsSection({
           </Button>
         </div>
       </div>
-      <p className="mt-2 text-12 leading-relaxed text-[var(--text-secondary)]">
-        {t('subscriptionAccounts.note')}
-      </p>
       {failed && (
         <p role="alert" className="mt-3 text-12 text-[var(--text-danger)]">
           {t('subscriptionAccounts.failed')}
@@ -214,23 +213,25 @@ export function SubscriptionAccountsSection({
             <span className="text-13 font-medium text-[var(--text-secondary)]">
               {t('subscriptionAccounts.strategy')}
             </span>
-            <Select
+            {/* Same control and option order as the provider group strategy (ProviderGroupSection). */}
+            <SegmentedControl
               {...accountSetting.controlProps}
-              label={t('subscriptionAccounts.strategy')}
+              aria-label={t('subscriptionAccounts.strategy')}
               value={view.strategy === 'usage' ? 'least' : view.strategy}
               disabled={busy}
-              className="h-8"
               options={strategies.map((value) => ({
                 value,
                 label: t(`providerGroup.strategy.${value}`),
               }))}
-              onValueChange={(value) =>
+              onValueChange={(value) => {
+                // Only a changed strategy is saved, as with the previous picker.
+                if (value === (view.strategy === 'usage' ? 'least' : view.strategy)) return;
                 void run({
                   action: 'configure',
                   providerId,
-                  strategy: value as ProviderGroupStrategy,
-                })
-              }
+                  strategy: value,
+                });
+              }}
             />
           </div>
           {/* One grid for every account: each usage card joins it as a subgrid, so the bars of all
@@ -310,7 +311,7 @@ export function SubscriptionAccountsSection({
                             </span>
                             {plan && <AccountTag>{plan}</AccountTag>}
                             {account.id === 'default' && !account.legacy && (
-                              <AccountTag>{t('subscriptionAccounts.default')}</AccountTag>
+                              <AccountTag>{t('subscriptionAccounts.defaultTag')}</AccountTag>
                             )}
                           </div>
                           <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-12 text-[var(--text-secondary)]">
@@ -329,7 +330,7 @@ export function SubscriptionAccountsSection({
                           </div>
                         </div>
                       </div>
-                      <div className="ml-auto flex max-w-full shrink-0 flex-wrap items-center justify-end gap-1.5">
+                      <div className="ml-auto flex max-w-full shrink-0 flex-wrap items-center justify-end gap-2">
                         <Select
                           {...accountSetting.controlProps}
                           label={t('providerGroup.member.limitAria', { name })}
@@ -386,16 +387,23 @@ export function SubscriptionAccountsSection({
                         />
                         <DropdownMenu>
                           <DropdownMenuTrigger asChild>
-                            <Button
-                              data-settings-search-action="Open sign-in, folder and removal actions for this subscription account"
-                              variant="secondary"
-                              tone="quiet"
-                              size="md"
-                              compact
-                              aria-label={t('providerGroup.member.moreAria', { name })}
-                            >
-                              <MoreHorizontal size={16} />
-                            </Button>
+                            {/* Below the button, so the tip shown on keyboard focus (e.g. after Esc
+                                closes the menu) never covers the controls wrapped above it. */}
+                            <Tip side="bottom" text={t('providerGroup.member.moreAria', { name })}>
+                              {/* The negative margins cancel the round face's padding: the dots keep
+                                  the same 8px gap as the other controls and end on the row's right
+                                  edge, in line with the reset times below. */}
+                              <Button
+                                data-settings-search-action="Open sign-in, folder and removal actions for this subscription account"
+                                variant="secondary"
+                                tone="quiet"
+                                size="sm"
+                                className="-mx-2 w-7 px-0"
+                                aria-label={t('providerGroup.member.moreAria', { name })}
+                              >
+                                <MoreHorizontal size={16} />
+                              </Button>
+                            </Tip>
                           </DropdownMenuTrigger>
                           <DropdownMenuContent align="end">
                             <DropdownMenuItem

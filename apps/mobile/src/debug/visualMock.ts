@@ -201,8 +201,9 @@ export function seedVisualMockStore(): void {
     remoteSessionStore.setPendingInteractions(session.id, visualMockPendingInteractions(session.id));
   }
   remoteSessionStore.setActiveSessionSnapshots(VISUAL_MOCK_DEVICE_ID, [
-    { sessionId: 'visual-running', isTurnRunning: true },
-    { sessionId: 'visual-automation-running', isTurnRunning: true },
+    { sessionId: 'visual-running', isTurnRunning: true, activityPhase: 'running', activityAttention: false },
+    { sessionId: 'visual-automation-running', isTurnRunning: true, activityPhase: 'running', activityAttention: false },
+    { sessionId: 'visual-pending', isTurnRunning: true, activityPhase: 'needs-interaction', activityAttention: true },
   ]);
   void loadVisualRealDataSnapshot().then((snapshot) => {
     seedRealDataStore(snapshot);

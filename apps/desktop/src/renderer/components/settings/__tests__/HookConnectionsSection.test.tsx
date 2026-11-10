@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { SlackHookView } from '../../../../shared/hookControlIpc';
@@ -34,13 +34,13 @@ const authUser = vi.hoisted(() => ({
 }));
 vi.mock('@/contexts/AuthContext', () => ({ useOptionalAuthUser: () => authUser.current }));
 
-/** t 只回键名 —— 插值参数另存一份, 让"文案带没带上正确的值"也能断言。 */
+/** Keep translation keys observable; unwrap the transport label so its actual status is testable. */
 const tCalls: Array<{ key: string; vars?: Record<string, unknown> }> = [];
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
     t: (key: string, vars?: Record<string, unknown>) => {
       tCalls.push({ key, vars });
-      return key;
+      return key === 'settings.remoteControl.hook.transportStatus' ? String(vars?.status) : key;
     },
   }),
 }));
@@ -178,6 +178,57 @@ const BASE_HOOK: SlackHookView = {
 // 原名 'HookConnectionsSection Telegram binding actions' —— 本 suite 现在同时覆盖
 // Telegram 绑定动作与 X 的用法告知/确认门, 名字得跟上, 否则失败用例的定位会误导人。
 describe('HookConnectionsSection binding actions (Telegram / X / Feishu)', () => {
+  // Unit regression: a live server socket is not a linked IM account. Exercise the
+  // real card through status pushes; existing action tests never revoked a live
+  // binding while leaving its transport connected.
+  it.each(['telegram', 'x', 'feishu'] as const)('shows the %s account lifecycle without a false connected badge', async (provider) => {
+    let pushStatus!: (view: SlackHookView) => void;
+    ipc.onStatusChanged.mockImplementation((listener) => { pushStatus = listener; return () => {}; });
+    const binding = { provider, state: 'confirmed' as const, attemptId: null, bindingId: 'binding-1',
+      principalId: 'user-1', principalName: 'Alice', scopeId: 'scope-1', scopeName: 'Cindy',
+      connectUrl: null, bindCode: null, expiresAt: null, reason: null, remediationUrl: null,
+      actions: ['revoke'] };
+    const view = { ...BASE_HOOK[provider], enabled: true, available: true, status: 'connected' as const,
+      url: 'wss://im.example.test', binding };
+    ipc.get.mockResolvedValue({ hook: { ...BASE_HOOK, [provider]: view } });
+    render(<HookConnectionsSection />);
+    await screen.findByRole('switch', { name: `settings.remoteControl.hook.${provider}.toggleAria` });
+    const card = within(document.getElementById(`cindy-im-${provider}`)!);
+    expect(card.getByRole('status').textContent).toBe('settings.remoteControl.hook.status.connected');
+    await act(async () => pushStatus({ ...BASE_HOOK, [provider]: { ...view,
+      binding: { ...binding, state: 'revoked', actions: ['retry'] } } }));
+    expect(card.getByRole('status').textContent).toBe(`settings.remoteControl.hook.${provider}.status.none`);
+    ipc.providerBindStart.mockResolvedValue({ hook: { ...BASE_HOOK, [provider]: { ...view,
+      binding: { ...binding, state: 'revoked', actions: ['retry'] } } } });
+    expect(card.queryByText(`settings.remoteControl.hook.${provider}.status.revoked`)).toBeNull();
+    fireEvent.click(card.getByRole('button', { name: new RegExp(`settings\\.tina\\.prefs\\.provider${provider === 'x' ? 'X' : provider === 'feishu' ? 'Feishu' : 'Telegram'}`) }));
+    fireEvent.click(await card.findByRole('button', { name: `settings.remoteControl.hook.${provider}.retry` }));
+    await waitFor(() => expect(ipc.providerBindStart).toHaveBeenCalledWith(provider));
+    await act(async () => pushStatus({ ...BASE_HOOK, [provider]: { ...view,
+      binding: { ...binding, state: 'pending', bindingId: null, attemptId: 'new-attempt', actions: ['cancel'] } } }));
+    expect(card.getByRole('status').textContent).toBe('settings.remoteControl.hook.authorizing');
+    await act(async () => pushStatus({ ...BASE_HOOK, [provider]: view }));
+    expect(card.getByRole('status').textContent).toBe('settings.remoteControl.hook.status.connected');
+    expect(ipc.setEnabled).not.toHaveBeenCalled();
+    await act(async () => pushStatus({ ...BASE_HOOK, [provider]: { ...view,
+      enabled: false, available: false, status: 'disabled',
+      binding: { ...binding, state: 'revoked', actions: ['retry'] } } }));
+    expect(card.getByRole('switch').getAttribute('aria-checked')).toBe('false');
+    expect(card.getByRole('status').textContent).toBe(`settings.remoteControl.hook.${provider}.status.disabled`);
+    expect(card.queryByText(`settings.remoteControl.hook.${provider}.status.revoked`)).toBeNull();
+  });
+
+  it.each([false, true])('does not claim a connected Slack account without a retained binding (communications: %s)', async (retained) => {
+    ipc.get.mockResolvedValue({ hook: { ...BASE_HOOK, enabled: true, status: 'connected', serverMultiTeam: true,
+      serverSlackCommunications: true, bindings: retained ? [{ teamId: 'T1', teamName: 'Workspace',
+        slackUserId: 'U1', slackUserName: 'Alice', displaced: true, communicationsEnabled: true }] : [] } });
+    render(<HookConnectionsSection />);
+    await screen.findByRole('switch', { name: 'settings.remoteControl.hook.toggleAria' });
+    expect(within(document.getElementById('cindy-im-slack')!).getByRole('status').textContent).toBe(
+      retained ? 'settings.remoteControl.hook.status.connected' : 'settings.remoteControl.hook.statusUnbound',
+    );
+  });
+
   // Unit regression (#8481): resolve each rendered provider switch through the
   // production catalog to its own card, rather than accepting the parent group.
   it.each(['telegram', 'x', 'feishu'])('binds the %s switch to its provider search target', async (provider) => {
@@ -843,6 +894,9 @@ describe('HookConnectionsSection binding actions (Telegram / X / Feishu)', () =>
 
     render(<HookConnectionsSection />);
     await waitFor(() => expect(dialog.confirm).toHaveBeenCalledOnce());
+    expect(within(document.getElementById('cindy-im-slack')!).getByRole('status').textContent).toBe(
+      'settings.remoteControl.hook.notInstalled.status',
+    );
     await expandChannelCard(SLACK_CARD);
     expect(
       screen.queryByRole('button', {
@@ -1002,10 +1056,9 @@ describe('HookConnectionsSection binding actions (Telegram / X / Feishu)', () =>
       await screen.findByText('settings.remoteControl.hook.binding.state.denied'),
     ).toBeTruthy();
     expect(screen.queryByText('server-specific cancellation text')).toBeNull();
-    expect(tCalls).toContainEqual({
-      key: 'settings.remoteControl.hook.transportStatus',
-      vars: { status: 'settings.remoteControl.hook.status.connected' },
-    });
+    expect(within(document.getElementById('cindy-im-slack')!).getByRole('status').textContent).toBe(
+      'settings.remoteControl.hook.status.disabled',
+    );
     expect(tCalls).toContainEqual({
       key: 'settings.remoteControl.hook.accountStatus',
       vars: { status: 'settings.remoteControl.hook.statusUnbound' },
@@ -1046,10 +1099,9 @@ describe('HookConnectionsSection binding actions (Telegram / X / Feishu)', () =>
         vars: { status: 'settings.remoteControl.hook.statusBoundTeam' },
       }),
     );
-    expect(tCalls).toContainEqual({
-      key: 'settings.remoteControl.hook.transportStatus',
-      vars: { status: 'settings.remoteControl.hook.status.connecting' },
-    });
+    expect(within(document.getElementById('cindy-im-slack')!).getByRole('status').textContent).toBe(
+      'settings.remoteControl.hook.status.connecting',
+    );
   });
 
   it('keeps active Slack workspaces visible while the multi-workspace transport is offline', async () => {
@@ -1079,10 +1131,9 @@ describe('HookConnectionsSection binding actions (Telegram / X / Feishu)', () =>
         vars: { status: 'settings.remoteControl.hook.statusBoundTeam' },
       }),
     );
-    expect(tCalls).toContainEqual({
-      key: 'settings.remoteControl.hook.transportStatus',
-      vars: { status: 'settings.remoteControl.hook.status.error' },
-    });
+    expect(within(document.getElementById('cindy-im-slack')!).getByRole('status').textContent).toBe(
+      'settings.remoteControl.hook.status.error',
+    );
   });
 
   it('allows only one Slack reauthorization request while the action is in flight', async () => {

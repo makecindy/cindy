@@ -1,0 +1,28 @@
+{
+  "name": "@cindy/host",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "cindy-host": "./src/main.ts",
+    "cindy-host-login": "./src/main.ts"
+  },
+  "scripts": {
+    "start": "node --import tsx --import ./src/loaders/register-raw.mjs src/main.ts",
+    "test": "node --import tsx --import ./src/loaders/register-raw.mjs --test \"src/**/*.test.mjs\""
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.1",
+    "tsx": "^4.19.0"
+  },
+  "dependencies": {
+    "@cindy/auth-client": "workspace:*",
+    "@cindy/device-link": "workspace:*",
+    "@cindy/maker-core": "workspace:*",
+    "@cindy/maker-shared": "workspace:*",
+    "@cindy/model-providers": "workspace:*",
+    "better-sqlite3": "^12.9.0",
+    "node-machine-id": "^1.1.12",
+    "ws": "^8.18.0"
+  }
+}

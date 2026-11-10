@@ -383,6 +383,8 @@ export interface CatalogModel {
   sortOrder?: number;
   /** 上下文窗口（tokens）。该 agent 下的权威值(host 派生进 ModelDescriptor.contextWindow)。 */
   contextWindow: number;
+  /** Host-owned explicit working budget. Kept separate from the catalog default for settings. */
+  contextWindowOverride?: number;
   /** Provider-declared maximum before a per-harness recommended window is applied. */
   contextWindowMax?: number;
   /**

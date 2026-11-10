@@ -865,8 +865,8 @@
       "runningCount_one": "{{count}} Aufgabe läuft",
       "runningCount_other": "{{count}} Aufgaben laufen",
       "limitAria": "Aufgabenlimit für {{name}}",
-      "limitOption_one": "Max. {{count}}",
-      "limitOption_other": "Max. {{count}}",
+      "limitOption_one": "Bis {{count}}",
+      "limitOption_other": "Bis {{count}}",
       "weightAria": "Gewichtung für {{name}}",
       "weightOption": "Gewichtung {{weight}}",
       "assignAria": "Aufgaben {{name}} zuweisen",
@@ -881,6 +881,7 @@
         "pausedLocal": "Nimmt keine neuen Aufgaben von anderen Computern an",
         "cooling": "In Abkühlphase",
         "coolingUntil": "In Abkühlphase · etwa {{time}} wieder verfügbar",
+        "quotaExhausted": "Kontingent aufgebraucht",
         "offline": "Offline",
         "unreachableHere": "Von diesem Computer aus nicht erreichbar",
         "unavailable": {
@@ -922,9 +923,13 @@
       "description": "Um das Kontingent aller Konten gleichmäßig zu nutzen, sende diese Nachricht über {{label}} ({{quota}}). Die letzten Nachrichten und eine Zusammenfassung werden übernommen; ältere Details können verloren gehen.",
       "quota": "{{left}} % übrig",
       "quotaReset": "{{left}} % übrig · {{reset}}",
-      "confirm": "Wechseln",
-      "cancel": "Abbrechen",
-      "remember": "Ab jetzt automatisch wechseln (nur für diese Aufgabe)"
+      "confirm": "Nur dieses Mal wechseln",
+      "cancel": "Jetzt nicht",
+      "remember": "Künftig ohne Nachfrage automatisch wechseln",
+      "disable": "Nicht automatisch wechseln und nicht erneut fragen",
+      "disableFailed": "Es konnte nicht bestätigt werden, ob deine Auswahl gespeichert wurde. Prüfe die Verbindung und ob Cindy auf dem Computer mit dieser Aufgabe aktuell ist, und versuche es erneut. Diese Nachricht wird wie gewohnt gesendet.",
+      "choiceLabel": "Wechselverhalten (nur diese Aufgabe)",
+      "send": "Nachricht senden"
     },
     "deleteConfirm": {
       "title": "Anbietergruppe {{provider}} löschen?",
@@ -7410,6 +7415,11 @@
         "installedExpand": "Alle {{count}} installierten Plugins anzeigen",
         "installedCollapse": "Weitere installierte Plugins ausblenden",
         "recommendedSection": "Empfohlen",
+        "todayRecommendations": "Heutige Empfehlungen",
+        "marketSection": "Plugin-Marktplatz",
+        "browseMarket": "Plugin-Marktplatz durchsuchen",
+        "searching": "Suche läuft…",
+        "allLoaded": "Alle {{count}} Plugins angezeigt",
         "updatesAvailable": "{{count}} Plugin-Updates verfügbar",
         "updateAll": "Alle aktualisieren",
         "ignoreRound": "Diese Runde überspringen",
@@ -7439,7 +7449,15 @@
       },
       "market": {
         "publisherKind": {
-          "official": "Offiziell"
+          "official": "Offiziell",
+          "community": "Community"
+        },
+        "publisherDescription": {
+          "official": "Von Cindy veröffentlicht und gepflegt",
+          "community": "Von Community-Entwicklern veröffentlicht und gepflegt",
+          "team": "Von deiner Organisation mit berechtigten Mitgliedern geteilt",
+          "custom": "Aus einem hinzugefügten Git- oder lokalen Ordner-Marktplatz",
+          "local": "Aus einer lokalen Datei installiert oder auf diesem Computer entwickelt"
         },
         "scopeAria": "Plugin-Quellen filtern",
         "scope": {
@@ -11415,6 +11433,9 @@
       "databaseDriver": "Der Datenbanktreiber konnte nicht geladen werden. Aktualisiere oder repariere Cindy und versuch es erneut.",
       "databaseUnavailable": "Die Quelldatenbank konnte nicht gelesen werden. Die Originaldaten sind unverändert. Versuch es nach der Reparatur erneut.",
       "fileTooLarge": "Eine Datei oder dieser Import überschreitet das Leselimit. Inhalte wurden nicht gekürzt.",
+      "sourceFileTooLarge": "Eine einzelne Datei überschreitet das Leselimit. Dieses Element wurde nicht vollständig importiert.",
+      "snapshotTooLarge": "Die Gesamtdatenmenge dieses Lesevorgangs überschreitet das Limit. Der Import ist unvollständig.",
+      "itemTooLarge": "Die Dateien dieses Elements überschreiten insgesamt 128 MiB. Dieses Element wurde nicht vollständig importiert.",
       "memoryMetadata": "Die Zusammenfassung oder der Titel der Erinnerung überschreitet die Speichergrenzen.",
       "memoryWrite": "Das Speichern der Erinnerung oder die Integritätsprüfung ist fehlgeschlagen. Du kannst es erneut versuchen.",
       "memoryChanged": "Die gespeicherte Erinnerung wurde geändert und nicht überschrieben.",
@@ -12531,6 +12552,12 @@
       "missingDir": "Ordner nicht gefunden"
     },
     "pendingQueue": {
+      "stopping": "Wird gestoppt",
+      "queued": "In der Warteschlange",
+      "editingInComposer": "Wird im Eingabefeld unten bearbeitet…",
+      "moveUp": "Nach vorne verschieben",
+      "moveDown": "Nach hinten verschieben",
+      "cancelSend": "Senden abbrechen",
       "regionAria": "Warteschlange ausstehender Nachrichten",
       "listAria": "Nachrichten in der Warteschlange",
       "pausedFooter": "Aufgabe gestoppt, Warteschlange pausiert",
@@ -14123,6 +14150,7 @@
       "taskAutoArchived": "„{{title}}“ archiviert",
       "taskAutoArchivedUndo": "Rückgängig",
       "taskAutoArchivePending": "Wird beim Verlassen dieser Aufgabe archiviert",
+      "taskAutoArchiveBlockedDirty": "„{{title}}“ wurde nicht automatisch archiviert: Der Arbeitsbereich enthält nicht committete Änderungen",
       "taskAutoArchiveCancel": "Abbrechen",
       "taskAutoArchiveCancelled": "Diesmal keine automatische Archivierung",
       "taskArchiveNow": "Jetzt archivieren"
@@ -19769,10 +19797,10 @@
       "useCodex": "Mit Codex anmelden"
     },
     "title": "Abonnementkonten",
-    "note": "Das erste Konto verwendet den Standardordner der CLI. Weitere Konten melden sich separat an. Neue Aufgaben werden verteilt; bestehende Aufgaben behalten ihr Konto.",
     "strategy": "Lastverteilung",
     "add": "Konto hinzufügen",
     "default": "Standardordner",
+    "defaultTag": "Standard",
     "ready": "Verbunden",
     "signedOut": "Anmeldung erforderlich",
     "unavailable": "Status nicht verfügbar",
@@ -19794,5 +19822,17 @@
     "logExcerpt": "Relevante Protokolle (Auszug, möglicherweise unvollständig)",
     "logsUnavailable": "Keine relevanten Protokolle verfügbar. Die Ursache ist noch unbekannt.",
     "failed": "Die Diagnose konnte nicht vorbereitet werden. Bitte versuche es erneut."
+  },
+  "githubStar": {
+    "title": "Gefällt dir Cindy?",
+    "description": "Gib Cindy auf GitHub einen Stern, um das Projekt zu unterstützen.",
+    "dismiss": "Nicht mehr anzeigen",
+    "action": "Cindy unterstützen",
+    "starring": "Ein Stern leuchtet…",
+    "thanks": "Danke für den Stern!",
+    "thanksDescription": "Deine Unterstützung hilft Cindy zu wachsen.",
+    "browserFallback": "Öffne GitHub, um Cindy einen Stern zu geben.",
+    "openGithub": "GitHub öffnen",
+    "openFailed": "GitHub konnte nicht geöffnet werden."
   }
 }

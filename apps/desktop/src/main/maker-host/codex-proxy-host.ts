@@ -655,6 +655,24 @@ function reconcileResponsesReasoningEffort(
   return effort === body.reasoning.effort ? body : applyReasoningEffortOverride(body, effort ?? null);
 }
 
+/**
+ * 父任务存的是原生档位，出站前要先换成目标模型真正会发出的 HTTP 档。
+ * 收敛口径与 createProviderModelRewriteTransform 用的 reconcileOutboundReasoningEffort 相同：
+ * 目录声明了能力就按能力收敛（xhigh 落到只支持 low/high 的模型上是 high，
+ * ultra 不在声明里就落到最高兼容档）。目录没声明能力时原样保留，不猜。
+ */
+function httpEffortForRoute(
+  route: CodexSubagentRouteSnapshot,
+): CodexSubagentRouteSnapshot['reasoningEffort'] | undefined {
+  if (route.reasoningEffort === undefined) return undefined;
+  const model = getActiveCatalog().providers.find(provider => provider.id === route.providerId)
+    ?.models.codex?.find(candidate => candidate.id === route.catalogModel);
+  const efforts = model?.efforts ?? [];
+  if (efforts.length === 0) return route.reasoningEffort;
+  const resolved = reconcileOutboundReasoningEffort(route.reasoningEffort, efforts);
+  return resolved ?? null;
+}
+
 function observedReasoningEffort(body: Record<string, unknown>): string | undefined {
   if (!isPlainObject(body.reasoning) || typeof body.reasoning.effort !== 'string') {
     return undefined;
@@ -676,6 +694,23 @@ function recordObservedSubagentIdentity(
   });
 }
 
+/**
+ * 观察点必须落在整条出站链之后。前面的强制路由会先盖上父任务存档档位
+ * （例如 xhigh），createProviderModelRewriteTransform 才按目标模型能力
+ * 收敛成真正发出去的档。卡片读的是这份观察值，记早了就会展示模型没跑过的档。
+ */
+function createObservedSubagentIdentityTransform(): RequestTransform {
+  return (body, ctx) => {
+    if (!isPlainObject(body) || typeof body.model !== 'string') return null;
+    recordObservedSubagentIdentity(
+      ctx.headers,
+      body.model,
+      observedReasoningEffort(body),
+    );
+    return null;
+  };
+}
+
 export function getObservedCodexSubagentIdentity(
   childThreadId: string,
 ): CodexObservedSubagentIdentity | undefined {
@@ -683,9 +718,9 @@ export function getObservedCodexSubagentIdentity(
 }
 
 /**
- * Codex Subagent 请求的统一观察/路由入口。旧固定路由按冻结快照替换模型；智能
- * 调配按 Codex 在 spawn_agent 中实际选出的 model 查 Provider。没有 Cindy 路由时
- * 也记录原生 Sol/Terra 的真实请求身份，供卡片展示。必须放在 Provider 兼容层之前。
+ * Codex Subagent 请求的统一路由入口。旧固定路由按冻结快照替换模型；智能调配按
+ * Codex 在 spawn_agent 中实际选出的 model 查 Provider。必须放在 Provider 兼容层之前，
+ * 身份记录则等整条出站链收敛后再做（createObservedSubagentIdentityTransform）。
  */
 function createForcedSubagentRequestTransform(): RequestTransform {
   return (body, ctx) => {
@@ -695,25 +730,15 @@ function createForcedSubagentRequestTransform(): RequestTransform {
     const requestedModel = typeof body.model === 'string' ? body.model : '';
     const route = subagentRouteFromHeaders(ctx.headers)
       ?? smartSubagentRouteFromHeaders(ctx.headers, requestedModel);
-    if (!route) {
-      recordObservedSubagentIdentity(
-        ctx.headers,
-        requestedModel,
-        observedReasoningEffort(body),
-      );
-      return null;
-    }
+    if (!route) return null;
     const next: Record<string, unknown> = {
       ...body,
       model: route.catalogModel,
     };
-    const routed = applyReasoningEffortOverride(next, route.reasoningEffort);
-    recordObservedSubagentIdentity(
-      ctx.headers,
-      route.catalogModel,
-      observedReasoningEffort(routed),
-    );
-    return routed;
+    // 父档位先按目标模型能力收敛成真正会发出的 HTTP 档，再盖到子请求上。
+    // 同供应商也要盖：spawn_agent 选的 low 不是父任务存的 high。
+    // ultra 在这里已经变成最高兼容档，不会再被字面写回。
+    return applyReasoningEffortOverride(next, httpEffortForRoute(route));
   };
 }
 
@@ -1284,6 +1309,7 @@ function createChatBridgeDecision(
         bridge: 'chat',
         providerId,
         upstreamBase: route.routing.upstream,
+        headers: ctx?.headers,
       });
       // 只把入站头快照交给 bridge 解析稳定会话 ID(→ x-opencode-session,#4073);bridge 不透传
       // 这些头,凭证与 Codex 账号头仍由 buildLocalHandlerHeaders 的隔离边界管。
@@ -1330,6 +1356,7 @@ interface PrepareLocalBridgeBodyOptions {
   bridge: 'chat' | 'anthropic';
   providerId: string;
   upstreamBase: string;
+  headers?: Readonly<Record<string, string>>;
 }
 
 /**
@@ -1361,6 +1388,14 @@ function prepareLocalBridgeBody(opts: PrepareLocalBridgeBodyOptions): unknown {
     if (isPlainObject(body) && typeof body.model === 'string') {
       body = reconcileProviderReasoningEffort(body, opts.providerId, body.model);
     }
+  }
+  // 本地桥不走共享 transform 链，档位收敛完就在这里记。卡片读到的是桥真正发出去的档。
+  if (isPlainObject(body) && typeof body.model === 'string' && opts.headers) {
+    recordObservedSubagentIdentity(
+      opts.headers,
+      body.model,
+      observedReasoningEffort(body),
+    );
   }
   if (opts.instructions && isPlainObject(body)) {
     const existing = body.instructions;
@@ -1606,6 +1641,7 @@ function createAnthropicBridgeDecision(
         bridge: 'anthropic',
         providerId,
         upstreamBase,
+        headers: ctx?.headers,
       });
       return handler.handle({ parsedBody: body, ctx, res });
     },
@@ -3352,6 +3388,9 @@ function createTransformRequestChain(
   if (process.env.XDT_CODEX_PROXY_DUMP_TRANSFORMED_BODY === '1') {
     transforms.push(createDumpTransform());
   }
+  // 档位与模型改写都在上面收敛。卡片读的观察身份必须是这份最终会发出去的值。
+  // 放在调试转储之后：转储只是旁路，不能盖掉它记下的出站身份。
+  transforms.push(createObservedSubagentIdentityTransform());
   return transforms;
 }
 
@@ -3536,7 +3575,21 @@ async function createCodexProxyHandle(
         scoped.onRequestSettled = transform.onRequestSettled;
         return scoped;
       },
-    ).concat((body, ctx) => crossProviderRequests.has(ctx.headers) ? null : frozenReasoning(body, ctx)),
+    ).concat((body, ctx) => {
+      // 同连接的命名空间路由不跑普通改写链，档位只在这条专用 transform 里收敛。
+      // 观察点必须排在它后面，卡片才读到真正发出去的档，而不是父任务存档档位。
+      if (crossProviderRequests.has(ctx.headers)) return null;
+      const reconciled = frozenReasoning(body, ctx);
+      const outgoing = isPlainObject(reconciled) ? reconciled : body;
+      if (isPlainObject(outgoing) && typeof outgoing.model === 'string') {
+        recordObservedSubagentIdentity(
+          ctx.headers,
+          outgoing.model,
+          observedReasoningEffort(outgoing),
+        );
+      }
+      return reconciled;
+    }),
     routeOpaqueRequestBody: (ctx) => isCodexCustomProviderNamespacePath(ctx.url),
     bypassRequestTransforms: (_body, ctx) => {
       const path = parseCodexCustomProviderPath(ctx.url);

@@ -1,3 +1,4 @@
+import { appendPendingQueueItems } from './pendingQueueItems';
 import { AttachmentCollectionContext, type AttachmentCollectionItem } from './AttachmentCollection';
 import { attachmentPreviewKind, previewSourceName } from '@cindy/maker-shared/attachment-preview';
 import { TeammateProcessStatus } from '@/features/bots/TeammateProcessStatus';
@@ -61,6 +62,7 @@ import { getDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import { createPortal, flushSync } from 'react-dom';
 import { GitFork } from 'lucide-react';
 import { SelectionQuoteButton } from './SelectionQuoteButton';
+import { copyChatSelection } from './chatSelectionClipboard';
 import {
   groupWorkRuns,
   isCompletedAssistantMessage,
@@ -330,6 +332,7 @@ function hasNestedScrollableAncestorThatCanScrollDown(
 import { UserMessage } from './UserMessage';
 import { AssistantMessage } from './AssistantMessage';
 import { MessageSourceLabels } from './MessageSourceLabels';
+import { BotMessageTimelineHeader } from './BotMessageTimelineHeader';
 import { AskUserQuestionBubble } from './AskUserQuestionBubble';
 import type { ErrorDiagnosisSource } from '@/lib/errorDiagnosisPrompt';
 import { ErrorMessageCard } from './ErrorMessageCard';
@@ -426,7 +429,6 @@ const NO_UNREAD_KEYS: ReadonlySet<string> = new Set();
 import {
   collectBotMessageTimeGroups,
   findFirstUnreadBotReplyClientId,
-  formatBotMessageGroupTime,
 } from '@/features/bots/botConversationTimeline';
 import { NAVIGATION_KEYS, useNavigationKeyListener } from './useNavigationKeyListener';
 export function isScrollNavigationKey(key: string): boolean {
@@ -439,6 +441,8 @@ import type { TurnUsageDetails } from '../../../shared/turnUsageDetails';
 import { hasReviewableTurnChanges, type TurnChangeSetSummary } from '../../../shared/turnChangeSet';
 
 interface MessageStreamProps {
+  pendingMessages?: readonly ChatMessage[];
+  renderPendingMessage?: (message: ChatMessage) => ReactNode;
   /** Content before history, sharing its scrolling and measured content height. */
   header?: ReactNode;
   /** Host forms share the measured scroll area, outside message virtualization. */
@@ -2951,6 +2955,8 @@ export const WorkGroupRenderItemView = memo(function WorkGroupRenderItemView({
 export function MessageStream({
   header,
   footer,
+  pendingMessages,
+  renderPendingMessage,
   onAskInSideChat,
   historyVisibleAfter,
   sessionId,
@@ -3361,9 +3367,13 @@ export function MessageStream({
       ),
       forkOrigin,
     );
-    return simplifiedBotConversation
-      ? botProcessItems(grouped, isSessionStreaming, botTailReplyIds)
-      : grouped;
+    return appendPendingQueueItems(
+      simplifiedBotConversation
+        ? botProcessItems(grouped, isSessionStreaming, botTailReplyIds)
+        : grouped,
+      pendingMessages ?? [],
+      messages,
+    );
   }, [
     ungroupedRenderItems,
     isSessionStreaming,
@@ -3372,6 +3382,8 @@ export function MessageStream({
     historySnapshot?.ready,
     visibleGeneratedFileKeys,
     workGroupProjection,
+    pendingMessages,
+    messages,
     botTailReplyIds,
   ]);
   const renderMetadataItems = renderMetadataProjection(allRenderItems);
@@ -6475,6 +6487,7 @@ export function MessageStream({
             <div
               ref={scrollRef}
               data-scroll-container=""
+              onCopy={copyChatSelection}
               className="h-full w-full overflow-y-auto overflow-x-hidden [scrollbar-gutter:stable]"
               onScroll={handleScroll}
               onPointerDownCapture={() => refreshViewportAnchor()}
@@ -6745,9 +6758,9 @@ export function MessageStream({
                     // 分享选择:复选框与光栅化定位属性都挂在这个**既有** wrapper 上,
                     // 不新增 DOM 层级 —— 多包一层会让 AssistantMessage 子树在进出
                     // 选择模式时 remount(mermaid 重渲、GhostToolCard iframe 重载)。
-                    const shareable =
-                      Boolean(sessionId) && Boolean(msg.clientId) && isShareableMessage(msg);
-                    const messageNode = (
+                    const pending = item.pending === true;
+                    const shareable = !pending && Boolean(sessionId) && Boolean(msg.clientId) && isShareableMessage(msg);
+                    const messageNode = pending && renderPendingMessage ? renderPendingMessage(msg) : (
                       <MessageItem
                         message={msg}
                         toolResult={singleResultMap.get(msg.clientId)}
@@ -6805,29 +6818,8 @@ export function MessageStream({
                           data-message-client-id={msg.clientId}
                           className={cn('scroll-mt-20 rounded-xl transition-[background-color,box-shadow]', highlightClass)}
                         >
-                          {startsUnread ? (
-                            <div
-                              className="mb-3 flex items-center gap-3"
-                              role="separator"
-                              aria-label={t('bots.chat.newMessagesBoundary')}
-                            >
-                              <div className="h-px flex-1 bg-[var(--bot-unread-bg)] opacity-30" />
-                              <span className="shrink-0 text-11 font-medium tracking-[0.08em] text-[var(--bot-unread-bg)]">
-                                {t('bots.chat.newMessagesBoundary')}
-                              </span>
-                              <div className="h-px flex-1 bg-[var(--bot-unread-bg)] opacity-30" />
-                            </div>
-                          ) : null}
-                          {groupTimestamp !== undefined ? (
-                            <time
-                              dateTime={new Date(groupTimestamp).toISOString()}
-                              className="mb-3 block text-center text-11 text-[var(--text-tertiary)]"
-                            >
-                              {formatBotMessageGroupTime(
-                                groupTimestamp,
-                                i18n.resolvedLanguage ?? i18n.language,
-                              )}
-                            </time>
+                          {startsUnread || groupTimestamp !== undefined ? (
+                            <BotMessageTimelineHeader startsUnread={startsUnread} groupTimestamp={groupTimestamp} />
                           ) : null}
                           <div {...shareAttributes} className={cn(shareable && 'relative')}>
                             {shareable && shareSelectionActive ? (

@@ -875,8 +875,8 @@
       "runningCount_one": "Tarea {{count}} ejecutándose",
       "runningCount_other": "Tareas {{count}} en ejecución",
       "limitAria": "Límite de tareas para {{name}}",
-      "limitOption_one": "Max {{count}}",
-      "limitOption_other": "Max {{count}}",
+      "limitOption_one": "{{count}} tarea",
+      "limitOption_other": "{{count}} tareas",
       "weightAria": "Peso para {{name}}",
       "weightOption": "Peso {{weight}}",
       "assignAria": "Asignar tareas a {{name}}",
@@ -891,6 +891,7 @@
         "pausedLocal": "No aceptar nuevas tareas de otras computadoras",
         "cooling": "Enfriándose",
         "coolingUntil": "En espera · Disponible aproximadamente a las {{time}}",
+        "quotaExhausted": "Cuota agotada",
         "offline": "Sin conexión",
         "unreachableHere": "No puedo acceder desde esta computadora",
         "unavailable": {
@@ -928,7 +929,7 @@
       },
       "accountCount_many": "cuentas {{count}}",
       "runningCount_many": "Tareas {{count}} en ejecución",
-      "limitOption_many": "Max {{count}}"
+      "limitOption_many": "{{count}} tareas"
     },
     "rebalance": {
       "title": "¿Continuar en {{label}}?",
@@ -937,9 +938,13 @@
       "description": "Para utilizar la cuota de cada cuenta de manera uniforme, envíe este mensaje desde {{label}} ({{quota}}). Los últimos mensajes y un resumen se conservan; Es posible que se pierdan detalles más antiguos.",
       "quota": "{{left}}% restante",
       "quotaReset": "{{left}}% restante · {{reset}}",
-      "confirm": "Cambiar",
-      "cancel": "Cancelar",
-      "remember": "Cambiar automáticamente a partir de ahora (solo esta tarea)"
+      "confirm": "Cambiar solo esta vez",
+      "cancel": "Ahora no",
+      "remember": "Cambiar automáticamente sin volver a preguntar",
+      "disable": "No cambiar automáticamente ni volver a preguntar",
+      "disableFailed": "No se pudo confirmar si se guardó tu elección. Comprueba la conexión y que Cindy esté actualizado en el ordenador donde está la tarea, e inténtalo de nuevo. Este mensaje se enviará con normalidad.",
+      "choiceLabel": "Cambio de ordenador (solo esta tarea)",
+      "send": "Enviar mensaje"
     },
     "deleteConfirm": {
       "title": "¿Eliminar el grupo de proveedores {{provider}}?",
@@ -7475,6 +7480,11 @@
         "installedExpand": "Mostrar los {{count}} complementos instalados",
         "installedCollapse": "Ocultar complementos instalados adicionales",
         "recommendedSection": "Recomendado",
+        "todayRecommendations": "Recomendados de hoy",
+        "marketSection": "Mercado de complementos",
+        "browseMarket": "Explorar el mercado de complementos",
+        "searching": "Buscando…",
+        "allLoaded": "Se muestran los {{count}} complementos",
         "updatesAvailable": "{{count}} actualizaciones de complementos disponibles",
         "updateAll": "Actualizar todos",
         "ignoreRound": "Ignorar esta vez",
@@ -7504,7 +7514,15 @@
       },
       "market": {
         "publisherKind": {
-          "official": "Oficial"
+          "official": "Oficial",
+          "community": "Comunidad"
+        },
+        "publisherDescription": {
+          "official": "Publicado y mantenido por Cindy",
+          "community": "Publicado y mantenido por desarrolladores de la comunidad",
+          "team": "Compartido por tu organización con los miembros autorizados",
+          "custom": "De un mercado Git o de una carpeta local que añadiste",
+          "local": "Instalado desde un archivo local o desarrollado en este equipo"
         },
         "scopeAria": "Filtrar orígenes de complementos",
         "scope": {
@@ -11512,6 +11530,9 @@
       "databaseDriver": "No se pudo cargar el controlador de la base de datos. Actualice o repare Cindy y luego vuelva a intentarlo.",
       "databaseUnavailable": "No se pudo leer la base de datos de origen. Los datos originales no se modifican; Vuelva a intentarlo después de la reparación.",
       "fileTooLarge": "Un archivo o esta importación excede el límite de lectura. El contenido no fue truncado.",
+      "sourceFileTooLarge": "Un archivo supera el límite de lectura. Este elemento no se ha importado por completo.",
+      "snapshotTooLarge": "El volumen total de datos de esta lectura supera el límite. La importación está incompleta.",
+      "itemTooLarge": "Los archivos de este elemento superan los 128 MiB en total. Este elemento no se ha importado por completo.",
       "memoryMetadata": "El resumen o título de la memoria excede los requisitos de almacenamiento.",
       "memoryWrite": "Falló la escritura en memoria o la verificación de integridad. Puedes volver a intentarlo.",
       "memoryChanged": "La memoria guardada fue modificada y no se ha sobrescrito.",
@@ -12629,6 +12650,12 @@
       "missingDir": "Carpeta no encontrada"
     },
     "pendingQueue": {
+      "stopping": "Parando",
+      "queued": "En cola",
+      "editingInComposer": "Editando en el cuadro de entrada a continuación…",
+      "moveUp": "Mover antes",
+      "moveDown": "Mover más tarde",
+      "cancelSend": "Cancelar envío",
       "regionAria": "Cola de mensajes pendientes",
       "listAria": "Mensajes en cola",
       "pausedFooter": "Tarea detenida, cola en pausa",
@@ -14254,6 +14281,7 @@
       "taskAutoArchived": "Se archivó «{{title}}»",
       "taskAutoArchivedUndo": "Deshacer",
       "taskAutoArchivePending": "Se archivará al salir de esta tarea",
+      "taskAutoArchiveBlockedDirty": "No se archivó «{{title}}» automáticamente: hay cambios sin confirmar en su espacio de trabajo",
       "taskAutoArchiveCancel": "Cancelar",
       "taskAutoArchiveCancelled": "No se archivará automáticamente esta vez",
       "taskArchiveNow": "Archivar ahora"
@@ -19956,10 +19984,10 @@
       "useCodex": "Iniciar sesión con Codex"
     },
     "title": "Cuentas de suscripción",
-    "note": "La primera cuenta usa la carpeta predeterminada de la CLI. Las cuentas adicionales inician sesión por separado. Las tareas nuevas se distribuyen; las existentes conservan su cuenta.",
     "strategy": "Equilibrio de carga",
     "add": "Añadir cuenta",
     "default": "Carpeta predeterminada",
+    "defaultTag": "Predeterminada",
     "ready": "Conectada",
     "signedOut": "Requiere iniciar sesión",
     "unavailable": "Estado no disponible",
@@ -19981,5 +20009,17 @@
     "logExcerpt": "Registros relevantes (extracto, puede estar incompleto)",
     "logsUnavailable": "No hay registros relevantes disponibles. La causa aún se desconoce.",
     "failed": "No se pudo preparar el diagnóstico. Inténtalo de nuevo."
+  },
+  "githubStar": {
+    "title": "¿Te gusta Cindy?",
+    "description": "Dale una estrella a Cindy en GitHub para apoyar el proyecto.",
+    "dismiss": "No volver a mostrar",
+    "action": "Apoyar a Cindy",
+    "starring": "Encendiendo una estrella…",
+    "thanks": "¡Gracias por la estrella!",
+    "thanksDescription": "Tu apoyo ayuda a Cindy a crecer.",
+    "browserFallback": "Abre GitHub para darle una estrella a Cindy.",
+    "openGithub": "Abrir GitHub",
+    "openFailed": "No se pudo abrir GitHub."
   }
 }

@@ -1,6 +1,10 @@
 // @ts-nocheck —— 被测对象是 .mjs 开发工具模块，vitest 跑其纯函数。
-import { join } from 'node:path';
+import { readFileSync } from 'node:fs';
+import { join, resolve } from 'node:path';
+import { runInNewContext } from 'node:vm';
 import { describe, expect, it, vi } from 'vitest';
+import { inspectSimulatorNativeIdentity } from '../../scripts/lib/sim-native-identity.mjs';
+import { readAndroidInstalledFingerprint, runAndroidProbe } from '../../scripts/lib/android-simulator.mjs';
 import {
   bootedSimulatorLinesForTarget,
   classifySimMetroListener,
@@ -21,6 +25,95 @@ import {
 } from '../../scripts/lib/sim-whoami.mjs';
 
 const SIMULATOR_UDID = 'A1B2C3D4-E5F6-47A8-9B0C-D1E2F3A4B5C6';
+
+// Load the real CLI's native-check/reporting tail once. OS/process boundaries
+// are injected; assertions below inspect its output and exit status, not source text.
+const whoamiSource = readFileSync(resolve(process.cwd(), 'scripts/sim-whoami.mjs'), 'utf8');
+const nativeWorkflowStart = whoamiSource.indexOf('const native =');
+if (nativeWorkflowStart < 0) throw new Error('Missing whoami native reporting workflow');
+const nativeWorkflow = `(async () => { ${whoamiSource.slice(nativeWorkflowStart)} })()`;
+
+async function reportNativeIdentity({ platform = 'android', readError, installedHash = 'a'.repeat(40),
+  apkEntries = ['assets/fingerprint'], jsonOutput = false } = {}) {
+  const lines = [];
+  const log = (...args) => lines.push(args.join(' '));
+  const processStub = { env: {}, exitCode: 0 };
+  const read = (_path, args = []) => {
+    if (readError) throw Object.assign(new Error('private adb output'), { code: readError });
+    if (args.includes('-l')) return 'Archive: /installed/app\n  Length      Date    Time    Name\n'
+      + apkEntries.map((entry) => `       40  2026-01-01 00:00   ${entry}`).join('\n')
+      + `\n---------                     -------\n       40                     ${apkEntries.length} files`;
+    if (platform === 'android' && !apkEntries.includes('assets/fingerprint')) {
+      throw Object.assign(new Error('private unzip output: filename not matched'), { status: 11 });
+    }
+    return installedHash;
+  };
+  await runInNewContext(nativeWorkflow, {
+    inspectTargetNativeIdentity,
+    inspectSimulatorNativeIdentity: (options) => inspectSimulatorNativeIdentity({ ...options, read, compute: () => 'a'.repeat(40) }),
+    readAndroidInstalledFingerprint: (options) => readAndroidInstalledFingerprint({
+      ...options, run: (adb, args) => runAndroidProbe(adb, args, read),
+    }),
+    timedCheck: (_stage, run) => run(),
+    targetBooted: ['selected-device'], probeErrors: [], container: '/installed/app', platform,
+    androidTools: platform === 'android' ? { adb: '/sdk/adb' } : null,
+    selected: { serial: 'emulator-5556', avd: 'test-avd' },
+    mobileDir: '/repo/apps/mobile', worktreeRoot: '/repo', healthy: true,
+    process: processStub, console: { log, error: log }, jsonOutput, uiMock: true, region: 'global',
+    withLocalMobileRegionConfig: (env) => env, mobileClientBundleEnv: () => ({}),
+    simulatorUdid: platform === 'android' ? 'emulator-5556' : SIMULATOR_UDID,
+    ports: [8082], expectedPort: 8082, expectedSource: 'branch@commit', envFingerprint: 'env',
+    inspectSimMetroIdentity: () => ({ healthy: true, anyMetro: true, currentSourceOnExpectedPort: true,
+      metros: [], probeErrors: [], canSuggestStart: false }),
+    deviceSet: { name: platform, path: null }, backendNotice: null, booted: ['selected-device'],
+    inspectSimulatorViewer: async () => ({ available: true, running: true }),
+    checks: [], startedAt: Date.now(), requireViewer: false, bundleId: 'app.cindy', installed: {},
+  });
+  return { output: lines.join('\n'), exitCode: processStub.exitCode,
+    json: jsonOutput ? JSON.parse(lines.at(-1)) : undefined };
+}
+
+describe('mobile:sim:whoami native recovery guidance', () => {
+  // #9422 review P1: existing tests covered adb and fingerprint errors separately,
+  // but missed the real CLI advising rebuild after an installed APK read failed.
+  // Unit: inject one failed read, exercise production reporting and JSON/exit status.
+  it.each([
+    ['android', 'ETIMEDOUT', 'installed-fingerprint-timeout'],
+    ['android', 'ECONNRESET', 'installed-fingerprint-unreadable'],
+    ['ios', 'EACCES', 'installed-fingerprint-unreadable'],
+  ])('retries the probe instead of recommending rebuild: %s %s', async (platform, readError, reason) => {
+    const text = await reportNativeIdentity({ platform, readError });
+    expect(text.exitCode).toBe(1);
+    expect(text.output).toContain('原生身份检查未完成');
+    expect(text.output).toContain('重试');
+    expect(text.output).not.toContain('请运行 pnpm mobile:sim:rebuild');
+    if (platform === 'android') expect(text.output).toContain('adb');
+    const json = await reportNativeIdentity({ platform, readError, jsonOutput: true });
+    expect(json.exitCode).toBe(1);
+    expect(json.json).toMatchObject({ healthy: false, native: { code: 'native-unknown', reason } });
+    expect(text.output + json.output).not.toContain('private adb output');
+  });
+
+  it.each([
+    { platform: 'android', installedHash: 'b'.repeat(40) },
+    { platform: 'android', installedHash: '' },
+    // PR #9475: unlike an empty successful read, unzip may exit nonzero for a
+    // missing entry. Unit: real reader/reporting, injected process boundary;
+    // a similarly named archive member must not hide the missing fingerprint.
+    { platform: 'android', apkEntries: ['assets/fingerprint.backup'] },
+    { platform: 'ios', readError: 'ENOENT' },
+  ])('still recommends rebuilding an incompatible or fingerprint-less package: %j', async (options) => {
+    const result = await reportNativeIdentity(options);
+    expect(result.exitCode).toBe(1);
+    expect(result.output).toContain('请运行 pnpm mobile:sim:rebuild');
+    if (options.apkEntries) {
+      const json = await reportNativeIdentity({ ...options, jsonOutput: true });
+      expect(json.exitCode).toBe(1);
+      expect(json.json.native.reason).toBe('installed-fingerprint-missing');
+      expect(result.output + json.output).not.toContain('private unzip output');
+    }
+  });
+});
 
 describe('mobile:sim:whoami Metro port', () => {
   it.each([
@@ -395,6 +488,23 @@ describe('mobile:sim simulator choice', () => {
 });
 
 describe('mobile:sim:whoami bundle identity', () => {
+  // Windows acceptance must select a specific adb emulator and the Android
+  // package, not an iOS UUID/bundleIdentifier; unit, no device or process I/O.
+  it('accepts only emulator serials for an Android target', () => {
+    expect(extractSimWhoamiUdidArgs(['--udid', 'emulator-5556'], 'android'))
+      .toEqual({ simulatorUdid: 'emulator-5556', passthrough: [] });
+    expect(() => extractSimWhoamiUdidArgs(['--udid', SIMULATOR_UDID], 'android')).toThrow();
+    expect(() => extractSimWhoamiUdidArgs(['--udid', 'emulator-5556'])).toThrow();
+  });
+
+  it('resolves Android identity without falling back to the iOS bundle', () => {
+    const execFile = () => JSON.stringify({ ios: { bundleIdentifier: 'app.ios' }, android: { package: 'app.android' } });
+    expect(resolveMobileSimulatorBundleId('global', { execFile, platform: 'android' })).toBe('app.android');
+    expect(() => resolveMobileSimulatorBundleId('global', {
+      execFile: () => JSON.stringify({ ios: { bundleIdentifier: 'app.ios' } }), platform: 'android',
+    })).toThrow(/android.package/);
+  });
+
   // 2026-10-29: identity checks stalled for minutes with no actionable phase.
   // Unit: a timed-out Expo config must remain an explicit error, never a guessed bundle ID.
   it('reports the bounded Expo config timeout without leaking child output', () => {
