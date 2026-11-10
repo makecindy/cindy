@@ -38,6 +38,23 @@ beforeEach(() => {
 afterEach(() => fs.rmSync(h.dir, { recursive: true, force: true }));
 
 describe('profile-wide wallpaper preference', () => {
+  // Unit persistence regression: upgrade reads must leave the old file untouched;
+  // a desktop opt-in survives reread without rewriting artwork or other settings.
+  it('persists desktop visibility separately and removes only its override on reset', async () => {
+    const file = path.join(h.dir, 'appearance-settings.json');
+    const original = JSON.stringify({ wallpaperVisibility: 0.8, wallpaperBlur: 12, uiSize: 18 });
+    fs.writeFileSync(file, original);
+    expect(readAppearanceSettings()).not.toHaveProperty('desktopVisibility');
+    expect(fs.readFileSync(file, 'utf8')).toBe(original);
+    for (const desktopVisibility of [0.6, 0]) {
+      await writeAppearanceSettingsPatch({ desktopVisibility });
+      expect(readAppearanceSettings()).toMatchObject({ desktopVisibility, wallpaperVisibility: 0.8, wallpaperBlur: 12 });
+      expect(JSON.parse(fs.readFileSync(file, 'utf8')).desktopVisibility).toBe(desktopVisibility);
+    }
+    await writeAppearanceSettingsPatch({ desktopVisibility: null });
+    expect(JSON.parse(fs.readFileSync(file, 'utf8'))).toEqual(JSON.parse(original));
+  });
+
   it('keeps blur opt-in, preserves explicit zero and deletes only its override on reset', async () => {
     const file = path.join(h.dir, 'appearance-settings.json');
     const original = JSON.stringify({ uiSize: 18, wallpaperVisibility: 0.5 });

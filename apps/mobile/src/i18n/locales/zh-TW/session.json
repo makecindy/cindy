@@ -817,7 +817,10 @@
     "quotaReset": "還剩 {{left}}%，{{reset}}後重置",
     "confirm": "換過去",
     "remember": "換過去，以後自動換（僅此任務）",
-    "cancel": "取消"
+    "cancel": "取消",
+    "disable": "不自動切換（僅本任務）",
+    "disableFailed": "無法確認選擇是否已儲存。請檢查連線，並確認任務所在電腦上的 Cindy 已更新後重試。這則訊息仍會照常傳送。",
+    "moreOptions": "更多選項"
   },
   "messageEdit": {
     "editing": "正在編輯訊息",

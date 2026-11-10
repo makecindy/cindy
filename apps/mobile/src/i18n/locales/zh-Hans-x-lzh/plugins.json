@@ -362,5 +362,13 @@
     "merged": "已合并",
     "closed": "已闭",
     "draft": "草稿"
+  },
+  "taskArchive": {
+    "now": "即封存",
+    "pending": "离此任务后自封存",
+    "cancel": "取消",
+    "cancelled": "此番不自封存",
+    "archived": "「{{title}}」已封存",
+    "undo": "撤"
   }
 }

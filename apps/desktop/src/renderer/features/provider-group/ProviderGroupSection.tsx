@@ -25,6 +25,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { SegmentedControl } from '@/components/ui/segmented-control';
+import { SETTINGS_HINT, SETTINGS_SECTION_TITLE_CLASS, SettingsBlock, SettingsCard, SettingsRow } from '@/components/ui/settings-rows';
 import { Select } from '@/components/ui/select';
 import { Switch } from '@/components/ui/switch';
 import { Tip } from '@/components/ui/tooltip';
@@ -170,14 +171,15 @@ export function ProviderGroupSection({ providerId, providerName, deviceId, devic
   return (
     <section className="mt-6 shrink-0" aria-labelledby="provider-group-title" data-testid="provider-group-section">
       <div className="mb-2 flex flex-wrap items-center gap-2">
-        <h3 id="provider-group-title" className="text-13 font-medium text-[var(--settings-section-title)]">
+        <h3 id="provider-group-title" className={SETTINGS_SECTION_TITLE_CLASS}>
           {t('providerGroup.section.title')}
         </h3>
         {/* 台数按电脑算：一台电脑上的几个账号算一台(与入口的「N 台电脑」一致)。 */}
         {config && <span className="text-13 text-[var(--text-tertiary)]">{providerGroupDeviceCount(config.members)}</span>}
         <span className="flex-1" />
         {config && (
-          <Button variant="secondary" size="sm" compact tone="quiet" disabled={blocked} onClick={() => void deleteGroup()}>
+          // Deleting the group is irreversible: danger tone (DESIGN.md §4 destructive actions).
+          <Button variant="secondary" size="sm" compact tone="danger" disabled={blocked} onClick={() => void deleteGroup()}>
             {t('providerGroup.section.delete')}
           </Button>
         )}
@@ -186,7 +188,7 @@ export function ProviderGroupSection({ providerId, providerName, deviceId, devic
         </Button>
       </div>
 
-      <div className="overflow-hidden rounded-xl border border-[var(--settings-theme-card-border)] bg-[var(--settings-theme-card-bg)]">
+      <SettingsCard>
         {!config ? (
           <p className="px-4 py-7 text-center text-13 leading-[1.5] text-[var(--text-secondary)]">
             {group.loading
@@ -230,7 +232,7 @@ export function ProviderGroupSection({ providerId, providerName, deviceId, devic
                 </div>
               );
             })}
-            <div className="flex flex-col gap-1.5 border-t border-[var(--settings-theme-card-border)] px-4 py-3">
+            <SettingsBlock className="flex flex-col gap-1.5">
               <div className="flex flex-wrap items-center gap-3">
                 <span className="text-13 text-[var(--text-primary)]">{t('providerGroup.strategy.label')}</span>
                 <SegmentedControl
@@ -251,42 +253,44 @@ export function ProviderGroupSection({ providerId, providerName, deviceId, devic
               <span className="text-12 leading-[1.4] text-[var(--text-tertiary)]">
                 {t('providerGroup.strategy.quotaFirst')}
               </span>
-            </div>
-            <div className="flex items-start justify-between gap-3 border-t border-[var(--settings-theme-card-border)] px-4 py-3">
-              <div className="flex min-w-0 flex-col gap-0.5">
-                <span className="text-13 text-[var(--text-primary)]">{t('providerGroup.autoSwitch.label')}</span>
-                <span className="text-12 leading-[1.4] text-[var(--text-tertiary)]">
-                  {t('providerGroup.autoSwitch.description')}
-                </span>
-              </div>
-              <Switch
-                checked={config.autoSwitch}
-                disabled={blocked}
-                aria-label={t('providerGroup.autoSwitch.label')}
-                onCheckedChange={(autoSwitch) => void save({ ...config, autoSwitch })}
-              />
-            </div>
+            </SettingsBlock>
+            <SettingsRow
+              title={t('providerGroup.autoSwitch.label')}
+              hint={t('providerGroup.autoSwitch.description')}
+              trailing={
+                <Switch
+                  checked={config.autoSwitch}
+                  disabled={blocked}
+                  aria-label={t('providerGroup.autoSwitch.label')}
+                  onCheckedChange={(autoSwitch) => void save({ ...config, autoSwitch })}
+                />
+              }
+            />
             {fastPolicySupported && (
-              <div className="flex items-start justify-between gap-3 border-t border-[var(--settings-theme-card-border)] px-4 py-4">
-                <div className="flex min-w-0 flex-col gap-1">
-                  <span className="text-13 font-medium text-[var(--text-primary)]">{t('subscriptionFastPolicy.label')}</span>
-                  <span className="text-12 leading-[1.4] text-[var(--text-secondary)]">{t('subscriptionFastPolicy.groupHint')}</span>
-                  {group.view?.fastPolicyPending && <span role="status" className="text-12 leading-[1.4] text-[var(--text-secondary)]">{t('subscriptionFastPolicy.pending')}</span>}
-                </div>
-                <Switch checked={config.allowFast !== false} disabled={blocked} aria-label={t('subscriptionFastPolicy.label')}
-                  onCheckedChange={allowFast => void save({ ...config, allowFast })} />
-              </div>
+              <SettingsRow
+                title={t('subscriptionFastPolicy.label')}
+                hint={
+                  <span className="flex flex-col gap-1">
+                    <span>{t('subscriptionFastPolicy.groupHint')}</span>
+                    {group.view?.fastPolicyPending && <span role="status">{t('subscriptionFastPolicy.pending')}</span>}
+                  </span>
+                }
+                trailing={
+                  <Switch checked={config.allowFast !== false} disabled={blocked} aria-label={t('subscriptionFastPolicy.label')}
+                    onCheckedChange={allowFast => void save({ ...config, allowFast })} />
+                }
+              />
             )}
           </>
         )}
-      </div>
+      </SettingsCard>
       {config && group.failed && (
-        <p role="status" className="mt-2 text-12 leading-[1.5] text-[var(--text-secondary)]">
+        <p role="status" className={cn('mt-2', SETTINGS_HINT)}>
           {t(group.errorKey ?? 'providerGroup.section.loadFailed')}
         </p>
       )}
       {config && (
-        <p className="mt-2 text-12 leading-[1.5] text-[var(--text-tertiary)]">{t('providerGroup.section.note')}</p>
+        <p className={cn('mt-2', SETTINGS_HINT)}>{t('providerGroup.section.note')}</p>
       )}
 
       {addOpen && (
@@ -395,6 +399,7 @@ function MemberRow({
   // 无障碍标签与移出确认用：账号行带上电脑名，同一台电脑的几个账号不会重名。
   const label = accountName === null ? computer : `${computer} · ${accountName}`;
   const ready = status?.state === 'available' || status?.state === 'full';
+  const quotaExhausted = status?.state === 'cooling' && status.usageLimit != null;
   const running = status?.running ?? 0;
   // 能用的时候状态词本身就报负载(「空闲」/「N 个任务运行中」)，所以每行永远看得出这台现在跑了几个；
   // 「已满」等于跑满上限，上限就在旁边的下拉里，不必再报一遍数。其余状态(冷却、不在线、已暂停)
@@ -453,15 +458,17 @@ function MemberRow({
                 />
               </span>
               <span className="flex flex-wrap items-center gap-1.5 text-12 text-[var(--text-secondary)]">
-                <span
-                  aria-hidden="true"
-                  className="h-1.5 w-1.5 shrink-0 rounded-full"
-                  style={{ background: ready ? 'var(--remote-status-ready)' : 'var(--remote-status-disconnected)' }}
-                />
+                <span className="inline-flex min-w-0 max-w-full items-center gap-1.5">
+                  <span
+                    aria-hidden="true"
+                    className="h-1.5 w-1.5 shrink-0 rounded-full"
+                    style={{ background: quotaExhausted ? 'var(--quota-bar-crit)' : ready ? 'var(--remote-status-ready)' : 'var(--remote-status-disconnected)' }}
+                  />
+                  <span className="min-w-0">{member.kind === 'local' && status?.state === 'paused'
+                    ? t('providerGroup.member.status.pausedLocal')
+                    : memberStatusText(t, status, i18n.language)}</span>
+                </span>
                 {/* 运行数是状态，上限是设置：各说一次，不再出现「0 / 10」与下拉里重复同一个上限。 */}
-                <span>{member.kind === 'local' && status?.state === 'paused'
-                  ? t('providerGroup.member.status.pausedLocal')
-                  : memberStatusText(t, status, i18n.language)}</span>
                 {appendRunning && (
                   <>
                     <span aria-hidden="true">·</span>

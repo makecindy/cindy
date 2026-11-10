@@ -77,6 +77,11 @@ export function isBotGroupRuntimeFailureCode(value: unknown): value is BotGroupR
   return typeof value === 'string' && BOT_GROUP_RUNTIME_FAILURE_CODES.some(code => code === value);
 }
 
+export type BotGroupRuntimeFailureReason = 'unclaimed_timeout';
+export function readBotGroupRuntimeFailureReason(code: unknown, value: unknown): BotGroupRuntimeFailureReason | undefined {
+  return code === 'RUNTIME_TIMEOUT' && value === 'unclaimed_timeout' ? value : undefined;
+}
+
 /** Current execution state, separate from persisted/paginated chat messages. */
 export interface BotGroupExecutionFailureView {
   executionId: string;
@@ -85,6 +90,7 @@ export interface BotGroupExecutionFailureView {
   botId: string;
   botName: string;
   code: BotGroupRuntimeFailureCode;
+  reason?: BotGroupRuntimeFailureReason;
   planId: string | null;
   updatedAt?: number;
 }
@@ -99,8 +105,10 @@ export function readBotGroupExecutionFailure(value: unknown, roomId: string): Bo
     || typeof row.bot_id !== 'string' || !row.bot_id
     || typeof row.epoch !== 'number' || !Number.isSafeInteger(row.epoch) || row.epoch < 0) return null;
   const updatedAt = typeof row.updated_at === 'string' ? Date.parse(row.updated_at) : NaN;
+  const reason = readBotGroupRuntimeFailureReason(row.failure_code, row.failure_reason);
   return { executionId: row.id, epoch: row.epoch, sourceMessageId: row.source_message_id,
     botId: row.bot_id, botName: '', code: isBotGroupRuntimeFailureCode(row.failure_code) ? row.failure_code : 'RUNTIME_ERROR',
+    ...(reason ? { reason } : {}),
     planId: typeof row.plan_id === 'string' ? row.plan_id : null,
     ...(Number.isFinite(updatedAt) ? { updatedAt } : {}) };
 }
@@ -198,6 +206,7 @@ export interface BotGroupMessageView {
   noticeCode: BotGroupNoticeCode | null;
   /** Localized cause and remedy for a failed execution; raw diagnostics stay on the executor. */
   runtimeFailureCode?: BotGroupRuntimeFailureCode;
+  runtimeFailureReason?: BotGroupRuntimeFailureReason;
   capabilityNoticeCode?: BotGroupCapabilityNoticeCode;
   /** The plan this message belongs to: the 安排卡, a step hand-off or the plan's end. */
   planId: string | null;

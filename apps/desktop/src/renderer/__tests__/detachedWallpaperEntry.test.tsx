@@ -22,7 +22,10 @@ vi.mock('@/i18n', () => ({}));
 vi.mock('../themes/colors', () => ({}));
 vi.mock('../themes/local-themes', () => ({ bootstrapLocalThemesSync: vi.fn() }));
 vi.mock('../themes/theme-service', () => ({ themeService: { applyTheme: vi.fn() } }));
-vi.mock('../hooks/useTheme', () => ({ getInitialThemeVariant: () => ({ theme: 'test' }) }));
+vi.mock('../hooks/useTheme', () => ({
+  followLocalThemeChanges: vi.fn(),
+  getInitialThemeVariant: () => ({ theme: 'test' }),
+}));
 vi.mock('../hooks/useFontSettings', () => ({
   applyFontSettings: vi.fn(),
   getInitialFontSettings: vi.fn(),

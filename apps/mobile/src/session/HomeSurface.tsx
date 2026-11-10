@@ -1,4 +1,6 @@
+import { taskListSessionTarget } from './sessionDrawerNavigation';
 import type { ViewInstance } from 'react-native';
+import { useTaskListNavigation } from './useTaskListNavigation';
 import { useCloudCompanionHome } from '@/chat/useCloudCompanion';
 import { cloudCompanionRows } from '@/chat/cloudCompanion';
 import { normalizeTaskTeammateSelection, taskTeammateKey, taskTeammateOptions } from './teammateTaskSource';
@@ -79,7 +81,6 @@ import { useAuth } from '@/auth/AuthContext';
 import { HomeTeammatesSection, useHomeTeammatesSectionContext } from './HomeTeammatesSection';
 import { HomeRosterProvider } from './HomeRosterContext';
 import { createDisclosureListCell, DisclosureGroupView, DisclosureItem, ListDisclosureScope, useDisclosurePrepare, useListDisclosureTransition } from './listDisclosureTransition';
-import { useGuardedPush } from '@/utils/useGuardedPush';
 import { useHomeMenuFadeTiming } from '@/session/homeMenuFadeTiming';
 import {
   MainWindowActionButton,
@@ -96,6 +97,7 @@ import { HomeGlassMenuPanel, HomeMenuScrim } from '@/session/HomeGlassMenuPanel'
 import { FilterReminderDot } from '@/components/FilterReminderDot';
 import { HomeHeaderGlassButton } from '@/session/HomeHeaderGlassButton';
 import { useAdaptiveWindow } from '@/platform/AdaptiveWindowContext';
+import { sessionPaneLayout } from './sessionPaneLayout';
 import { sharedStatusRowTrailingReserve } from '@/platform/windowGeometry';
 import { useBalancedTitle } from '@/platform/chrome/balancedTitle';
 import { HomeSearchBar } from '@/session/HomeSearchBar';
@@ -491,6 +493,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
   // The retained page and its visible sidebar must never release each other's subscriptions.
   const HOME_LIST_SUBSCRIPTION_OWNER = `device-list:${useId()}`;
   const embedded = width !== undefined;
+  const homeGeometry = useAdaptiveWindow();
   const residentList = useResidentHomeList(embedded);
   // Captured here: Android draws the list above the route, outside its roster and navigation context.
   const teammatesSectionContext = useHomeTeammatesSectionContext();
@@ -543,14 +546,11 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
     (next) => saveHomeCollapse({ sharedCollapsed: next }));
   // 所有前进导航(进会话 / 新建 / 设置 / 组页面)统一走守卫 push:列表卡顿时的
   // 连点会各自触发一次裸 push,把同一页压进栈 N 层(返回也要 N 次)。
-  const push = useGuardedPush();
-  const navigationHost = useRef({ runNavigation, onSelectSession });
-  navigationHost.current = { runNavigation, onSelectSession };
+  const sidebarNavigation = embedded || sessionPaneLayout(homeGeometry).persistent;
+  const guardedPush = useTaskListNavigation({ sidebar: sidebarNavigation, runNavigation });
+  const navigationHost = useRef({ onSelectSession });
+  navigationHost.current = { onSelectSession };
   const router = useRouter();
-  const guardedPush = useCallback((href: Parameters<typeof push>[0]) => {
-    const run = navigationHost.current.runNavigation;
-    if (run) run(() => push(href)); else push(href);
-  }, [push]);
   const { width: windowWidth, height: screenHeight } = useWindowDimensions();
   const screenWidth = width ?? windowWidth;
   const auth = useAuth();
@@ -2563,26 +2563,12 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
       navigationHost.current.onSelectSession(item);
       return;
     }
-    const session = item.session as RemoteSession;
-    // 打开会话走可达优先(与详情页 openSession 口径一致):被认领的 stale 会话优先用 canonicalDeviceId
-    // (当前可达设备),否则 re-link 后旧 deviceId 不可达会导致「首页卡片点开打不开」。回退物理 id / store 索引。
-    const deviceId = session.canonicalDeviceId ?? session.deviceLinkDeviceId ?? remoteSessionStore.getSessionDeviceId(session.id);
-    if (!deviceId) {
+    const target = taskListSessionTarget(item, id => remoteSessionStore.getSessionDeviceId(id));
+    if (!target) {
       setError(t('devices.list.error.sessionDeviceNotFound'));
       return;
     }
-    const focusClientId = 'searchFocusClientId' in item
-      ? (item as { searchFocusClientId?: string }).searchFocusClientId
-      : undefined;
-    const href = {
-      pathname: '/sessions/[sessionId]',
-      params: {
-        deviceId,
-        deviceName: deviceDisplayName(deviceId, session.deviceLinkDeviceName),
-        sessionId: session.id,
-        ...(focusClientId ? { focusClientId } : {}),
-      },
-    } as const;
+    const href = { pathname: '/sessions/[sessionId]', params: { ...target } } as const;
     rememberTask(href);
     guardedPush(href);
   }, [guardedPush, rememberTask, swipeRegistry, t]);
@@ -3161,13 +3147,13 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
   }, [guardedPush, home.deviceFilters, selectedDeviceId, selectedDeviceLabel]);
 
   const nativeHomeHeader = !embedded && usesNativeStackHeader();
-  const homeGeometry = useAdaptiveWindow();
   const keepMenuTopLeft = nativeHomeHeader && homeGeometry.barEdge !== 'none';
-  const homeStatusRowReserve = sharedStatusRowTrailingReserve(homeGeometry);
   const nativeHeaderHeight = useOptionalHeaderHeight();
+  const homeStatusRowReserve = sharedStatusRowTrailingReserve(homeGeometry, nativeHeaderHeight);
   const chromeHeight = nativeHomeHeader
     ? nativeHeaderHeight + (headerHeight ?? 0)
-    : (headerHeight ?? edgePadding.paddingTop + HOME_HEADER_MIN_HEIGHT);
+    : (headerHeight ?? (embedded ? spacing.lg : edgePadding.paddingTop)
+      + Math.max(HOME_HEADER_MIN_HEIGHT, navigationChrome.target + spacing.md));
   const homeListNode = (
     <HomeRowDisplayContext.Provider value={rowDisplay}>
     <HomeListViewportContext.Provider value={childViewport}>
@@ -3514,7 +3500,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
               </HomeHeaderGlassButton>
             ) : null}
             {/* 侧栏本地菜单完整保留分组和多层筛选;系统顶栏继续使用自己的原生菜单。 */}
-            <HomeDisplayMenu actions={homeDisplayPullDownActions} onAction={handleDisplayAction} accessibilityLabel={displayA11y}>
+            <HomeDisplayMenu actions={stableDisplayActions} onAction={stableDisplayAction} accessibilityLabel={displayA11y}>
               <View>
                 <Ellipsis color={colors.textPrimary} size={iconSize.action} strokeWidth={iconStroke.regular} />
                 {/* 在看已归档任务时标一个点,提醒列表不是平常的进行中任务。 */}

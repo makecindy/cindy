@@ -76,6 +76,8 @@ export interface ProviderConnectionReaders {
 }
 
 export interface ProviderServiceDeps {
+  /** Read once per view; exact agent/provider/model keys, never written into the catalog. */
+  getModelContextLimits?: () => Readonly<Record<string, number>>;
   projectProvider?: (provider: ProviderView) => ProviderView;
   getProviderPresentation?: (providerId: string) => { name?: string; removed?: boolean; logoKind?: ProviderView['logoKind'] };
   /** Exact-route user budget/price overrides keep independent rows. */
@@ -212,7 +214,18 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
     if (!readOpts.snapshotOnly && deps.subscriptionAccountInfo) await Promise.all(catalog.providers
       .filter(p => p.id === 'anthropic' || p.id === 'xai' || p.auth.native === 'claude' || p.auth.native === 'xai')
       .map(async p => subscriptionInfo.set(p.id, await deps.subscriptionAccountInfo!(p.id))));
-    return buildRegistry(catalog, connected, discoveryFailures, deps.getModelAccess?.()).map((provider) => {
+    const contextLimits = deps.getModelContextLimits?.() ?? {};
+    return buildRegistry(catalog, connected, discoveryFailures, deps.getModelAccess?.()).map((provider) => ({
+      ...provider,
+      models: Object.fromEntries(Object.entries(provider.models).map(([agent, models]) => [
+        agent, models?.map((model) => {
+          const { contextWindowOverride: _previous, ...base } = model;
+          const limit = contextLimits[`${agent}:${provider.id}:${model.id}`];
+          return typeof limit === 'number' && Number.isFinite(limit) && limit > 0
+            ? { ...base, contextWindowOverride: limit } : base;
+        }),
+      ])),
+    })).map((provider) => {
       if (!deps.hasModelAliasOverride) return provider;
       const blocked = new Set(Object.entries(provider.models).flatMap(([agent, models]) =>
         (models ?? []).filter((m) => m.selectionAliasKey &&

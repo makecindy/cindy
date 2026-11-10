@@ -782,7 +782,7 @@ function decodeOrigin(value: unknown): TurnPermissionOrigin | undefined {
     case 'hook':
       return typeof value.source === 'string' ? { kind: 'hook', source: value.source } : undefined;
     case 'im': {
-      const channels = ['feishu', 'discord', 'slack', 'wechat', 'telegram', 'dingtalk', 'wecom'] as const;
+      const channels = ['feishu', 'discord', 'slack', 'wechat', 'telegram', 'dingtalk', 'wecom', 'imessage'] as const;
       const channel = channels.find((item) => item === value.channel);
       return channel ? prune({ kind: 'im' as const, channel, taskId: optString(value.taskId, 256) }) : undefined;
     }
@@ -811,38 +811,38 @@ export async function decodeSendOptions(value: unknown, callbacks: DecodeSendCal
     toolsDisabled: optBool(value.toolsDisabled),
   });
   if (value.transcriptCallback === true) opts.onTranscriptUserEntry = callbacks.onTranscriptUserEntry;
-  if (isRecord(value.turnPolicy)) {
+  if (value.turnPolicy !== undefined) {
     const policy = value.turnPolicy;
+    if (!isRecord(policy)) throw new Error('REMOTE_AGENT_INVALID: invalid turn permission policy');
     const origin = decodeOrigin(policy.origin);
+    if (!origin) throw new Error('REMOTE_AGENT_INVALID: unsupported turn permission origin');
     const surface = policy.confirmationSurface === 'channel' ? 'channel' : 'desktop';
     const force = policy.forceConfirm === 'channel'
       ? channelForceConfirmToolCall
       : policy.forceConfirm === 'channel-mutating'
         ? channelForceConfirmMutatingToolCall
         : () => true;
-    if (origin) {
-      opts.turnPermissionPolicy = prune({
-        origin,
-        confirmationSurface: surface,
-        confirmationTimeoutMs: optNumber(policy.confirmationTimeoutMs),
-        autoReviewContext: isRecord(policy.autoReviewContext) ? policy.autoReviewContext : undefined,
-        onInteractionStateChange: policy.stateCallback === true ? callbacks.onInteractionStateChange : undefined,
-        forceConfirmToolCall: force,
-      }) as unknown as TurnPermissionPolicy;
-    }
+    opts.turnPermissionPolicy = prune({
+      origin,
+      confirmationSurface: surface,
+      confirmationTimeoutMs: optNumber(policy.confirmationTimeoutMs),
+      autoReviewContext: isRecord(policy.autoReviewContext) ? policy.autoReviewContext : undefined,
+      onInteractionStateChange: policy.stateCallback === true ? callbacks.onInteractionStateChange : undefined,
+      forceConfirmToolCall: force,
+    }) as unknown as TurnPermissionPolicy;
   }
   if (isRecord(value.cindy)) {
     const cindy = value.cindy;
-    if (isRecord(cindy.mainOwned)) {
+    if (cindy.mainOwned !== undefined) {
+      if (!isRecord(cindy.mainOwned)) throw new Error('REMOTE_AGENT_INVALID: invalid Main-owned send context');
       const origin = decodeOrigin(cindy.mainOwned.origin);
-      if (origin) {
-        opts[MAIN_OWNED_SEND_CONTEXT] = prune({
-          origin,
-          rawChannelText: optString(cindy.mainOwned.rawChannelText),
-          // Re-projected here: shape and bounds are never taken from the wire as-is.
-          autoReviewReferences: projectAutoReviewUserReferences(cindy.mainOwned.autoReviewReferences),
-        });
-      }
+      if (!origin) throw new Error('REMOTE_AGENT_INVALID: unsupported Main-owned origin');
+      opts[MAIN_OWNED_SEND_CONTEXT] = prune({
+        origin,
+        rawChannelText: optString(cindy.mainOwned.rawChannelText),
+        // Re-projected here: shape and bounds are never taken from the wire as-is.
+        autoReviewReferences: projectAutoReviewUserReferences(cindy.mainOwned.autoReviewReferences),
+      });
     }
     if (isRecord(cindy.autoReviewSourceContent)) {
       const message = await decodeUserMessage(cindy.autoReviewSourceContent, callbacks.writeAttachment);

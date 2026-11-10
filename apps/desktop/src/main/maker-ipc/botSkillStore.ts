@@ -694,6 +694,22 @@ export function validateBotSkillFiles(slug: string,
 export async function importBotSkillFiles(userDataDir: string, botId: string, slug: string,
   files: readonly { name: string; bytes: Buffer; executable: boolean; interpreterLink?: string }[], assertOwner: () => void, enabled = true): Promise<void> {
   validateBotSkillFiles(slug, files);
+  await importBotSkillDirectory(userDataDir, botId, slug, async temporary => {
+    for (const file of files) {
+      const output = path.join(temporary, ...file.name.split('/'));
+      await fs.mkdir(path.dirname(output), { recursive: true, mode: 0o700 });
+      assertOwner();
+      if (file.interpreterLink) await fs.symlink(file.interpreterLink, output, 'file');
+      else await fs.writeFile(output, file.bytes, { flag: 'wx', mode: file.executable ? 0o700 : 0o600 });
+    }
+  }, assertOwner, enabled);
+}
+
+/** Shared publication boundary for legacy buffers and streamed encrypted Skills.
+ * populate must validate its complete source before the directory is activated. */
+export async function importBotSkillDirectory(userDataDir: string, botId: string, slug: string,
+  populate: (temporary: string) => Promise<void>, assertOwner: () => void, enabled = true): Promise<void> {
+  if (!normalizeBotSkillSlug(slug) || normalizeBotSkillSlug(slug) !== slug) throw new BotSkillStoreError('INVALID_ARGS', 'Invalid imported skill');
   await ensureLayout(userDataDir, botId);
   assertOwner();
   // Slugs identify one skill across both stores. A source must not create a
@@ -709,13 +725,9 @@ export async function importBotSkillFiles(userDataDir: string, botId: string, sl
   const temporary = path.join(botSkillRootDir(userDataDir, botId), `.import-skill-${randomUUID()}`);
   await fs.mkdir(temporary, { mode: 0o700 });
   try {
-    for (const file of files) {
-      const output = path.join(temporary, ...file.name.split('/'));
-      await fs.mkdir(path.dirname(output), { recursive: true, mode: 0o700 });
-      assertOwner();
-      if (file.interpreterLink) await fs.symlink(file.interpreterLink, output, 'file');
-      else await fs.writeFile(output, file.bytes, { flag: 'wx', mode: file.executable ? 0o700 : 0o600 });
-    }
+    await populate(temporary);
+    const manifest = await fs.lstat(path.join(temporary, 'SKILL.md'));
+    if (!manifest.isFile() || !manifest.size) throw new BotSkillStoreError('INVALID_ARGS', 'Invalid imported skill entrypoint');
     assertOwner();
     try {
       await fs.rename(temporary, target);
@@ -725,23 +737,43 @@ export async function importBotSkillFiles(userDataDir: string, botId: string, sl
       if (!['EEXIST', 'ENOTEMPTY', 'EPERM'].includes((error as NodeJS.ErrnoException).code ?? '')) throw error;
       // Resume after a committed rename, without overwriting a later user edit.
       if (!(await fs.lstat(target)).isDirectory()) throw new BotSkillStoreError('INVALID_ARGS', 'Invalid imported skill folder');
-      for (const file of files) {
-        const entry = path.join(target, ...file.name.split('/'));
-        if (file.interpreterLink) {
-          if (!(await fs.lstat(entry)).isSymbolicLink() || await fs.readlink(entry) !== file.interpreterLink)
-            throw new BotSkillStoreError('INVALID_ARGS', 'Imported interpreter was edited');
-          continue;
-        }
-        const resolved = await fs.realpath(entry);
-        const relative = path.relative(await fs.realpath(target), resolved);
-        if (relative.startsWith('..' + path.sep) || path.isAbsolute(relative)) throw new BotSkillStoreError('INVALID_ARGS', 'Invalid imported skill resource');
-        const stat = await fs.lstat(entry);
-        if (!stat.isFile() || !(await fs.readFile(entry)).equals(file.bytes))
-          throw new BotSkillStoreError('INVALID_ARGS', 'Imported skill was edited');
-      }
+      await compareImportedSkillDirectory(temporary, target, assertOwner);
     }
     assertOwner();
   } finally { await fs.rm(temporary, { recursive: true, force: true }); }
+}
+
+async function compareImportedSkillDirectory(source: string, target: string, assertOwner: () => void): Promise<void> {
+  const changed = () => new BotSkillStoreError('INVALID_ARGS', 'Imported skill was edited');
+  for await (const entry of await fs.opendir(source)) {
+    assertOwner();
+    const left = path.join(source, entry.name), right = path.join(target, entry.name);
+    const a = await fs.lstat(left), b = await fs.lstat(right);
+    if (a.isSymbolicLink()) {
+      if (!b.isSymbolicLink() || await fs.readlink(left) !== await fs.readlink(right)) throw new BotSkillStoreError('INVALID_ARGS', 'Imported interpreter was edited');
+    } else if (a.isDirectory()) {
+      if (!b.isDirectory()) throw changed();
+      await compareImportedSkillDirectory(left, right, assertOwner);
+    } else {
+      if (!a.isFile() || !b.isFile() || a.size !== b.size || process.platform !== 'win32' && (a.mode & 0o111) !== (b.mode & 0o111)) throw changed();
+      const x = await fs.open(left, 'r');
+      try {
+        const y = await fs.open(right, 'r');
+        try {
+          const bx = Buffer.alloc(64 * 1024), by = Buffer.alloc(bx.length);
+          for (let offset = 0; offset < a.size;) {
+            assertOwner();
+            const count = Math.min(bx.length, a.size - offset);
+            const rx = await x.read(bx, 0, count, offset), ry = await y.read(by, 0, count, offset);
+            if (rx.bytesRead !== count || ry.bytesRead !== count || !bx.subarray(0, count).equals(by.subarray(0, count))) throw changed();
+            offset += count;
+          }
+          const after = await y.stat();
+          if (after.size !== b.size || after.mtimeMs !== b.mtimeMs || after.ctimeMs !== b.ctimeMs) throw changed();
+        } finally { await y.close(); }
+      } finally { await x.close(); }
+    }
+  }
 }
 
 /** 删除一个技能。不存在时返回 false,不抛 —— 重复删除是安全的。 */

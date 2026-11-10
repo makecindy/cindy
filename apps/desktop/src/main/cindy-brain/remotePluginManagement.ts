@@ -13,6 +13,9 @@ import type {
   PluginMarketDetail,
   PluginMarketInstallOptions,
   PluginMarketSnapshot,
+  PluginMarketQuery,
+  PluginMarketPage,
+  PluginMarketItem,
 } from '../../shared/pluginMarket.js';
 import type {
   PluginManagementProject,
@@ -57,7 +60,9 @@ export interface RemotePluginManagementDeps {
   capture(peer: string): () => boolean;
   captureReceipt(peer: string): () => boolean;
   market: {
-    snapshot(): Promise<PluginMarketSnapshot>;
+    snapshot(legacyCatalog?: boolean): Promise<PluginMarketSnapshot>;
+    query?(input: PluginMarketQuery): Promise<PluginMarketPage>;
+    recommendations?(): Promise<PluginMarketItem[]>;
     detail(id: string): Promise<PluginMarketDetail>;
     install(
       id: string,
@@ -204,11 +209,22 @@ export class RemotePluginManagement {
       return result(snapshot);
     }
     if (request.actionId === 'management:snapshot') {
-      if (Object.keys(input).length) return invalid();
+      const read = input.read;
+      if (Object.keys(input).some(key => key !== 'read' && key !== 'query')) return invalid();
+      if (read !== undefined && !['capabilities', 'installed', 'catalog', 'recommendations'].includes(String(read))) return invalid();
       const current = this.deps.capture(peer);
       if (!current()) return unavailable();
+      if (read === 'capabilities') return result({ catalogPaging: !!this.deps.market.query && !!this.deps.market.recommendations });
+      if (read === 'catalog' || read === 'recommendations') {
+        const value = read === 'catalog' && this.deps.market.query
+          ? await this.deps.market.query(input.query as PluginMarketQuery ?? {})
+          : read === 'recommendations' && this.deps.market.recommendations
+            ? await this.deps.market.recommendations() : null;
+        if (!current()) return unavailable();
+        return result(value);
+      }
       const [market, projects] = await Promise.all([
-        this.deps.market.snapshot(),
+        this.deps.market.snapshot(read === undefined),
         this.deps.projects?.list(),
       ]);
       if (!current()) return unavailable();

@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { parseManifest, queueRequest, runtimeEnv, toolBundle } from '../personal-build/managed.mjs';
 import { checkCheckout } from '../personal-build/checkout-guard.mjs';
 import { run } from '../personal-build.mjs';
+import { personalLaunchCommand } from '../personal-build/automatic.mjs';
 
 // Script integration tier. Legacy update errors could overwrite work or roll old code onto a
 // partially migrated database. Exercise the actual shell engine in disposable Git worktrees;
@@ -16,6 +17,34 @@ import { run } from '../personal-build.mjs';
 const here = path.dirname(fileURLToPath(import.meta.url));
 const temp = t => { const p = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-managed-')); t.after(() => fs.rmSync(p, { recursive: true, force: true })); return p; };
 const put = (p, s) => { fs.mkdirSync(path.dirname(p), { recursive: true }); fs.writeFileSync(p, s); };
+
+test('supervised terminal forwards the same credential certificate as the legacy resolver', { skip: process.platform !== 'darwin' }, t => {
+  const root = temp(t), bin = path.join(root, 'bin'), data = path.join(root, 'profile');
+  fs.mkdirSync(bin); fs.mkdirSync(data);
+  // Apple names signing identities by the SHA-1 fingerprint of the certificate; this is the fingerprint of
+  // the stubbed fixture bytes below (printf "fixture certificate, not a real credential" | shasum -a 1).
+  const previous = '39D80FB7DBAD88F2C9CAD8CD560F6C31611D8F04', other = 'B'.repeat(40);
+  const stub = (name, body) => { put(path.join(bin, name), '#!/bin/sh\n' + body); fs.chmodSync(path.join(bin, name), 0o755); };
+  stub('security', `printf '%s\\n' '  1) ${previous} "Apple Development: Fixture"' '  2) ${other} "Apple Development: Other"'`);
+  stub('zsh', 'printf "%s\\n" "$TEST_SHELL_IDENTITY"');
+  stub('codesign', 'for arg do case "$arg" in --extract-certificates=*) prefix=${arg#*=};; esac; done\nprintf "%s" "fixture certificate, not a real credential" > "${prefix}0"');
+  const env = { PATH: `${bin}:/usr/bin:/bin`, HOME: root, ZDOTDIR: root,
+    PERSONAL_DATA_DIR: data, PERSONAL_STATE_DIR: root,
+    PERSONAL_TOOLS_DIR: path.resolve(here, '../personal-build') };
+  const start = extra => {
+    const r = spawnSync('/bin/zsh', ['-f', '-c', personalLaunchCommand, 'personal-build',
+      '/bin/sh', '-c', 'printf "CHILD_IDENTITY=%s\\n" "$CINDY_REMOTE_CREDENTIALS_SIGNING_IDENTITY"'],
+      { env: { ...env, ...extra }, encoding: 'utf8' });
+    assert.equal(r.status, 0, r.stderr);
+    return /CHILD_IDENTITY=(.*)/.exec(r.stdout)?.[1];
+  };
+  assert.equal(start({ CINDY_REMOTE_CREDENTIALS_SIGNING_IDENTITY: other }), other);
+  assert.equal(start({ TEST_SHELL_IDENTITY: previous }), previous);
+  // Multiple identities must not pick an arbitrary certificate.
+  assert.equal(start({}), '');
+  put(path.join(data, 'remote-desktop/native-credentials/old/cindy-macos-remote-credentials'), 'fixture');
+  assert.equal(start({}), previous);
+});
 
 test('legacy manifests stay data, unsafe paths fail, and pending requests cannot be overwritten', t => {
   const root = temp(t), target = 'a'.repeat(40);
@@ -35,6 +64,18 @@ test('deployed bundle is self-contained and paths with spaces survive dispatch',
   const env = runtimeEnv(c, path.join(root, 'config file.json'));
   assert.equal(env.PERSONAL_CONFIG, path.join(root, 'config file.json'));
   assert.ok(new RegExp(env.PERSONAL_ELECTRON_RE).test(path.join(c.runtime.clientDir, 'node_modules/electron/dist/Electron.app/Contents/MacOS/Electron')));
+});
+
+// Legacy gates identify the app by process name; a native build runs from the shared runtime cache.
+// Minimal input: one checkout with a native receipt plus another checkout using the same runtime.
+test('legacy process identity covers a native build\'s shared runtime for its own checkout only', { skip: process.platform !== 'darwin' && 'macOS-only native runtime' }, t => {
+  const root = temp(t), client = path.join(root, 'client'), runtime = path.join(root, 'runtime');
+  put(path.join(client, 'apps/desktop/resources/personal-native.json'), JSON.stringify({ state: 'built', runtime: { directory: runtime } }));
+  const c = { name: 'fixture', region: 'global', app: { checkout: root, repository: 'example/app' }, runtime: { clientDir: client, stagingDir: 'stage', stateDir: 'state', dataDir: 'data', node: process.execPath, mode: 'shared', toolPaths: [], idleMinutes: 120 } };
+  const re = new RegExp(runtimeEnv(c, path.join(root, 'config.json')).PERSONAL_ELECTRON_RE), exe = path.join(runtime, 'Cindy.app/Contents/MacOS/Electron');
+  assert.ok(re.test(`${exe} ${client}/apps/desktop`));
+  assert.equal(re.test(`${exe} ${path.join(root, 'other')}/apps/desktop`), false);
+  assert.equal(re.test(`${exe}-helper ${client}/apps/desktop`), false);
 });
 
 const shellAvailable = spawnSync('zsh', ['--version']).status === 0 && spawnSync('sqlite3', ['--version']).status === 0;

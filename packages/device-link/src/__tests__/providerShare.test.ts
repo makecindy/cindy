@@ -107,6 +107,15 @@ describe('provider share api', () => {
     expect(shares[0].owner).toEqual({ displayName: 'Magi', avatarUrl: 'https://cdn.example/a.png', region: 'global' });
   });
 
+  it('keeps original host presence distinct from an authorized standby and accepts legacy servers', async () => {
+    const row = { shareId: 's1', memberId: 'm1', providerId: 'p', providerLabel: 'Fake', hostDeviceId: 'primary', deviceName: 'Fake',
+      owner: { displayName: 'Fake', avatarUrl: null, region: 'global' }, status: 'active', hostOnline: false, hostCapable: true };
+    expect((await api({ shares: [{ ...row, standbyOnline: true }] }).listReceived())[0]).toMatchObject({ hostOnline: true, hostDeviceOnline: false, standbyOnline: true });
+    const legacy = (await api({ shares: [row] }).listReceived())[0];
+    expect(legacy.hostOnline).toBe(false);
+    expect(legacy).not.toHaveProperty('hostDeviceOnline');
+  });
+
   it('rejects malformed pairing codes and sends invitations only in the body', async () => {
     await expect(api({ requestId: 'r1', status: 'pending', pairingCode: '12a4', expiresAt: new Date().toISOString() })
       .sendRequest(TOKEN, 'card')).rejects.toThrow();
