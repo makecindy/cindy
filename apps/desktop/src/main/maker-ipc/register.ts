@@ -3863,7 +3863,6 @@ function attemptBotCompactRuntimeRefresh(session: WiredSession, trigger: string)
 function isPendingDesktopOnlyConfirmation(requestId: string): boolean {
   return (
     mcpSetupBridge.has(requestId) ||
-    issueConfirmBridge.pendingSnapshots().some(({ request }) => request.requestId === requestId) ||
     renameSessionsConfirmBridge
       .pendingSnapshots()
       .some(({ request }) => request.requestId === requestId) ||
@@ -22666,7 +22665,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       // permission / ask / plan and setup cancellation remain remotely
       // resolvable. Host-owned setup side effects and Desktop-only confirmations
       // may only originate from the trusted local Desktop.
-      assertResolveInteractionOrigin(decision, isPendingDesktopOnlyConfirmation(requestId));
+      assertResolveInteractionOrigin(
+        decision,
+        isPendingDesktopOnlyConfirmation(requestId),
+        issueConfirmBridge.pendingSnapshots().some(({ request }) => request.requestId === requestId),
+      );
       const sharedTask = getDeviceLinkInvokeContext()?.sharedTask;
       if (sharedTask) {
         // The initial dispatch check may be separated from this handler by an
@@ -22747,9 +22750,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   ipcMain.handle(MAKER_INVOKE.GET_PENDING_INTERACTIONS, (_e, sessionId: unknown) => {
     if (typeof sessionId !== 'string' || !sessionId) return [];
     let pending = getPendingInteractionsForSession(sessionId);
-    // Shared-task guests never see the owner's input handoff.
+    // Owner-only input and unpublished feedback/identity stay out of guest snapshots.
     if (getDeviceLinkInvokeContext()?.sharedTask)
-      pending = pending.filter(({ request }) => request.kind !== 'input_handoff');
+      pending = pending.filter(({ request }) => request.kind !== 'input_handoff' && request.kind !== 'issue_confirm');
     return projectPendingInteractionsForRemote(pending, isDeviceLinkInvoke());
   });
 

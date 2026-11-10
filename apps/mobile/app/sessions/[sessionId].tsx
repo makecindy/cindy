@@ -2715,8 +2715,11 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     ?? pendingCreationReason
     ?? (sessionOperationLayout.showQueue ? null : composerDisabledReason);
   // 代输入在伙伴对话里同样贴在输入框上方:它是一条入口,填写在原生表单里完成。
-  const companionInlineInteraction = companionChat && pending.length > 0 && !pendingInteractionFullHeight
-    && activePendingKind !== 'input_handoff';
+  const inlineFeedbackInteraction = activePendingKind === 'issue_confirm'
+    && activePendingInteraction?.request.remoteConfirmSupported === true
+    && !pendingInteractionBlocksComposer;
+  const companionInlineInteraction = inlineFeedbackInteraction || (companionChat && pending.length > 0 && !pendingInteractionFullHeight
+    && activePendingKind !== 'input_handoff');
   const showMessageHistory = companionInlineInteraction || sessionOperationLayout.messageHistoryMode === 'visible'
     || (sessionOperationLayout.messageHistoryMode === 'collapsed' && pendingHistoryExpanded);
   // 冷开即出壳:session 元信息还没回来,但不是真正不可用(离线/被撤销,看 remoteUnavailableReason)——
@@ -11011,7 +11014,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
                     remoteDeviceId={deviceId}
                     bottomOverlayHeight={bottomOverlayHeight}
                     renderScrollComponent={renderMessageScroll}
-                    contentBottomInset={companionInlineInteraction && !shareSelectionActive
+                    contentBottomInset={companionInlineInteraction && !inlineFeedbackInteraction && !shareSelectionActive
                       ? spacing.md
                       : nativeComposerFrameAvailable && sessionOperationLayout.composerSlot === 'editable' && !shareSelectionActive
                       ? bottomOverlayHeight > 0 ? bottomOverlayHeight : MOBILE_MESSAGE_LIST_BOTTOM_PADDING
@@ -11331,12 +11334,12 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
             <View
               style={[
                 styles.pendingInteractionSurface,
-                pendingInteractionFullHeight
+                pendingInteractionFullHeight && activePendingKind !== 'issue_confirm'
                   ? {
-                    height: nativeShellLayout.pendingSurfaceExpandedHeight,
-                    maxHeight: nativeShellLayout.pendingSurfaceExpandedHeight,
+                    height: Math.min(nativeShellLayout.pendingSurfaceExpandedHeight, composerRegion.height),
+                    maxHeight: Math.min(nativeShellLayout.pendingSurfaceExpandedHeight, composerRegion.height),
                   }
-                  : { maxHeight: nativeShellLayout.pendingSurfaceMaxHeight },
+                  : { maxHeight: Math.min(nativeShellLayout.pendingSurfaceMaxHeight, composerRegion.height) },
               ]}
               testID="interaction.bottomSurface"
             >
@@ -11344,7 +11347,11 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
                 <View
                   style={[
                     styles.pendingInteractionFullContent,
-                    { height: nativeShellLayout.pendingSurfaceExpandedHeight },
+                    // The native control region can be shorter than the screen-derived
+                    // sheet height. Keep the pinned footer inside that clipping boundary.
+                    activePendingKind === 'issue_confirm'
+                      ? { flexGrow: 0, flexShrink: 1, maxHeight: Math.min(nativeShellLayout.pendingSurfaceMaxHeight, composerRegion.height) }
+                      : { height: Math.min(nativeShellLayout.pendingSurfaceExpandedHeight, composerRegion.height) },
                   ]}
                   testID="interaction.bottomScroll"
                 >
@@ -11355,7 +11362,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
                     safeAreaBottomInset={insets.bottom}
                     collapse={pendingInteractionCollapse}
                     deviceId={deviceId}
-                    fillAvailableHeight
+                    fillAvailableHeight={activePendingKind !== 'issue_confirm'}
                     sessionId={sessionId}
                     interactions={pending}
                     activeRequestId={pendingInteractionActiveRequestId}

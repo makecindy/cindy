@@ -16301,7 +16301,15 @@
       "regionCodeCn": "CN",
       "regionCodeDev": "Dev",
       "submit": "提交反馈",
-      "cancel": "取消"
+      "cancel": "取消",
+      "previewLabel": "GitHub · 公开反馈",
+      "edit": "修改",
+      "doneEditing": "完成修改",
+      "publicSubmit": "公开提交反馈",
+      "publicationNotice": "提交后，内容和署名将公开在 GitHub。",
+      "attribution": "署名：{{name}}",
+      "environment": "附带运行环境",
+      "identitySettings": "署名与账号"
     },
     "redirect": {
       "descriptionBefore": "在对话中输入 ",
