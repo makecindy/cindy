@@ -34,10 +34,11 @@ export interface CompanionEnvironment {
   automations?: Record<string, { kind: 'hermes' | 'openclaw'; original: Record<string, unknown>; sourceRoot: string; sourceWorkspace?: string; sourceId?: string;
     /** Missing or pending means source ownership has not been safely handed over. */
     handover?: 'pending' | 'ready';
-    issues?: string[]; deliveries?: import('./types.js').ImportedDelivery[]; completed?: number; lastRun?: string;
-    /** Resume a partially sent result before executing another occurrence. */
-    deliveryProgress?: { runId: string; text: string; direct: boolean; deliveries: import('./types.js').ImportedDelivery[]; next: number };
-    monitorHash?: string; monitorOutput?: string; prepared?: { runId: string; prompt: string; direct?: string; skipped?: boolean; monitorHash?: string; monitorOutput?: string } }>;
+    /** Chat destinations of older checkpoints; results now stay in the automation's task. */
+    issues?: string[]; deliveries?: import('./types.js').ImportedDelivery[];
+    // Older bindings may also hold the removed import runtime's counters and pending output
+    // (completed, lastRun, deliveryProgress, monitor*, prepared): kept as stored, never read.
+  }>;
 }
 
 export interface CompanionSecretIo {

@@ -11,14 +11,12 @@ import { toast } from '@/components/ui/toast';
 import { cn } from '@/lib/utils';
 import { extractIpcError } from '@/utils/ipcError';
 import type { BotCoreSkill, BotSkillDetail } from '../../../shared/botSkill';
-import type { BotSystemSkillId } from '../../../shared/botSystemSkills';
 import { useBotTranslation } from './botPronounContext';
 import type { BotProfile } from './botStore';
 import { useBotSettingsTarget } from './useBotSettingsTarget';
 
 export type BotSkillPageView =
   | { type: 'core' }
-  | { type: 'system'; id: BotSystemSkillId }
   | { type: 'learned'; slug: string; editing?: boolean };
 
 const CORE_ITEMS = ['tasks', 'teammates', 'models', 'memory', 'self'] as const;
@@ -26,24 +24,19 @@ const DESCRIPTION_MAX = 280;
 const BODY_MAX = 64 * 1024;
 
 /**
- * A Skill's own page inside the capability page: the shared core (read-only), a system Skill and
- * what turning it off stops, or a learned Skill to turn off, edit or delete. The settings page's
+ * A Skill's own page inside the capability page: the shared core (read-only) or a learned Skill
+ * to turn off, edit or delete. The settings page's
  * back button returns to the list (BotCapabilitySettings `backRef`).
  */
-export function BotSkillPage({ bot, view, onView, systemSkillOn, onSystemSkillChange, onLearnedChanged, editorDirtyRef }: {
+export function BotSkillPage({ bot, view, onView, onLearnedChanged, editorDirtyRef }: {
   bot: BotProfile;
   view: BotSkillPageView;
   onView: (view: BotSkillPageView | null) => void;
-  systemSkillOn: (id: BotSystemSkillId) => boolean;
-  onSystemSkillChange?: (id: BotSystemSkillId, on: boolean) => void;
   onLearnedChanged: () => void;
   /** Set while a learned Skill is being edited: whether the draft differs from what was opened. */
   editorDirtyRef?: MutableRefObject<(() => boolean) | null>;
 }) {
   if (view.type === 'core') return <CorePage />;
-  if (view.type === 'system') {
-    return <SystemPage id={view.id} on={systemSkillOn(view.id)} onChange={onSystemSkillChange} />;
-  }
   return <LearnedPage bot={bot} slug={view.slug} editing={Boolean(view.editing)}
     onEdit={(editing) => onView({ ...view, editing })} onDeleted={() => { onLearnedChanged(); onView(null); }}
     onChanged={onLearnedChanged} editorDirtyRef={editorDirtyRef} />;
@@ -106,19 +99,6 @@ function CorePage() {
           </pre>
         </details>
       ) : null}
-    </article>
-  );
-}
-
-function SystemPage({ id, on, onChange }: { id: BotSystemSkillId; on: boolean; onChange?: (id: BotSystemSkillId, on: boolean) => void }) {
-  const { t } = useBotTranslation();
-  return (
-    <article className="animate-fade-in pt-1">
-      <Heading title={t(`bots.capabilities.system.items.${id}.name`)} meta={t('bots.capabilities.system.pageMeta')} />
-      <SwitchCard title={t('bots.capabilities.system.use')} hint={t(`bots.capabilities.system.items.${id}.hint`)}
-        checked={on} disabled={!onChange} onChange={(value) => onChange?.(id, value)} />
-      <p className="px-1 pb-1 pt-5 text-12 font-medium leading-[1.33] text-[var(--text-secondary)]">{t('bots.capabilities.system.whenOff')}</p>
-      <p className="px-1 text-13 leading-[1.6] text-[var(--text-secondary)]">{t(`bots.capabilities.system.items.${id}.off`)}</p>
     </article>
   );
 }

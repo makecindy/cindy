@@ -339,7 +339,13 @@ export function startImOrchestrators(): void {
         });
         return { kind: 'dingtalk', im, orchestrator };
       }
-      const im = createBotDiscordIM(prefix);
+      // 服务器频道白名单按连接各一份、每次使用时现读连接记录：撤销 / 删除连接即时生效，
+      // 不同连接（不同 connectionId）互不串；存量记录没有该字段 = 不开放任何频道。
+      const im = createBotDiscordIM(prefix, {
+        channelAccess: {
+          read: () => readBotImConnection(record.id)?.discordChannelAccess ?? { channels: [] },
+        },
+      });
       const orchestrator = wireDiscordOrchestrator(im, DISCORD_CONFIG, {
         instanceKey: `discord#${record.id}`,
         companionBotId: record.botId,
@@ -692,12 +698,14 @@ async function reconcileOwnerScopedImWorkingDirs(): Promise<void> {
           id: sessions.id,
           workingDir: sessions.workingDir,
           botContextId: sessions.imBotContextId,
+          imUserId: sessions.imUserId,
         })
         .from(sessions)
         .where(eq(sessions.source, 'discord'));
       for (const row of rows) {
         if (!row.botContextId) continue;
-        const scoped = discordAdapter.sessions.ensureWorkingDir(row.botContextId);
+        // 服务器频道 lane 各有独立托管目录, 按 lane id 重算, 不能被改写回私聊目录。
+        const scoped = discordAdapter.sessions.ensureWorkingDir(row.botContextId, row.imUserId ?? undefined);
         if (row.workingDir === scoped) continue;
         await db.update(sessions).set({ workingDir: scoped }).where(eq(sessions.id, row.id));
       }

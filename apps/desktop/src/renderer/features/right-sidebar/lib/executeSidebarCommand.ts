@@ -1,6 +1,5 @@
 import { openPluginTaskTab } from './openPluginTaskTab';
 import { openPluginUiView } from './openPluginUiView';
-import { openRoutinesTab } from './openRoutinesTab';
 import { openMailPreview, openMailCard } from './mailPreview';
 /** 执行 main 已裁决并推给当前 renderer host 的 RSB command。 */
 
@@ -40,10 +39,6 @@ export async function executeSidebarCommand(command: RsbWindowCommand): Promise<
       ...(command.resourceViewId ? { resourceViewId: command.resourceViewId } : {}),
       ...(command.resourceInput ? { resourceInput: command.resourceInput } : {}),
     });
-    return;
-  }
-  if (command.type === 'open-routines-tab') {
-    await openRoutinesTab(command.sessionId, command.botId);
     return;
   }
   if (command.type === 'open-web-browser') {

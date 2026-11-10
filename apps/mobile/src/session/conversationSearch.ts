@@ -30,6 +30,7 @@ import {
 } from '@cindy/maker-shared/session-list';
 import type { DeviceAccessState } from '@cindy/maker-shared/device-list';
 import { collapseWorktreeDirForGrouping } from '@cindy/maker-shared/worktree-paths';
+import { isTeammateProjectPath } from '@cindy/maker-shared/teammate-project';
 import { CINDY_MAKE_ENABLED, isCindyMakeSource } from '@cindy/maker-shared/cindy-make-feature';
 import { mobilePresentationLocalizer } from '@/i18n/presentationLocalizer';
 import { createMobileMakerTransport } from '@/device-link/mobileMakerTransport';
@@ -507,7 +508,7 @@ export function listConversationSearchProjects(
     const deviceId = session.canonicalDeviceId ?? session.deviceLinkDeviceId;
     if (!deviceId) continue;
     const workingDir = stripTrailingPathSeparators((session.projectDir ?? session.workingDir)?.trim() ?? '');
-    if (!workingDir) continue;
+    if (!workingDir || isTeammateProjectPath(workingDir)) continue;
     const dirKey = collapseWorktreeDirForGrouping(workingDir) ?? workingDir;
     const key = `${deviceId}:${dirKey}`;
     const group = groupedSessions.get(key) ?? [];

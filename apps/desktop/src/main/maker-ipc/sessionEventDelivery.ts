@@ -10,6 +10,7 @@ import {
   isOversizedHistoryErrorData,
   isUnsupportedRequestOptionErrorData,
 } from './contextOverflowRollover.js';
+import { syncBackgroundCommandWork } from '../maker-host/claude-background-command-work-sync.js';
 import { noteClaudeSessionTurnState } from '../maker-host/claude-session-background-activity.js';
 import { DeferredCodexRestartService } from './deferredCodexRestart.js';
 import {
@@ -173,6 +174,7 @@ export function deliverSessionEvent(
     deps.notifyGoalIdleAfterTurnSettled(session.id);
     // 后台活动检测:done / 终止型 error = 逻辑 turn 结束,记录结束时刻。
     // 此后若该会话进程仍有 API 流量(后台子 agent),record 路径会点亮横幅。
+    syncBackgroundCommandWork(session);
     noteClaudeSessionTurnState(session.id, false);
     // turn 收尾打标(last_turn_ended_at)不在此处:done / terminal error 的本 turn
     // 持久化(assistant flush / orphan tool_result / error 行)在下方 flush 块才
@@ -204,7 +206,10 @@ export function deliverSessionEvent(
           deps.agentInputCoordinatorHolder?.isAutoResumeDeferred(session.id),
       });
     }
+    syncBackgroundCommandWork(session);
     noteClaudeSessionTurnState(session.id, false);
+  } else if (event.type === 'agent_task_update') {
+    syncBackgroundCommandWork(session);
   }
   if (event.type === 'done' && !isContinuationBoundary) {
     void deps.gitSnapshotCoordinator?.onTurnEnd(session.id);

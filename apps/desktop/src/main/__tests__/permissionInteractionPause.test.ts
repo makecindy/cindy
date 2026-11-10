@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import ts from 'typescript';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import type { InteractionDecision, InteractionRequest, InteractionResolver } from '@cindy/maker-core';
 import { createSharedPermission, type SharedPermission } from '../maker-ipc/sharedPermission';
 import { beginInteractionRoute, installDesktopInteractionHandler, type InteractionHandler, type InteractionSession } from '../maker-ipc/interactionRouter';
@@ -11,14 +11,13 @@ const source = readFileSync(new URL('../maker-ipc/register.ts', import.meta.url)
 const ast = ts.createSourceFile('register.ts', source, ts.ScriptTarget.ES2022, true);
 const names = new Set([
   'installDesktopInteractionListener', 'clearPendingInteraction',
-  'schedulePendingPermissionTimeout', 'setPendingInteractionTimeoutsPaused',
+  'schedulePendingPermissionTimeout',
   'resolvePendingInteraction', 'cancelPendingInteraction', 'defaultDecisionForPending',
   'cleanupPendingAgentInteractionsForSession', 'takePendingInteractionsForSession',
   'bindSharedPermission',
 ]);
 const functions = ast.statements.filter((node) => ts.isFunctionDeclaration(node)
   && node.name && names.has(node.name.text)).map(node => node.getText(ast).replace(/^export /, ''));
-let holdInputSource = '';
 let resolveHandlerSource = '';
 let interactionReaderSource = '';
 function visit(node: ts.Node): void {
@@ -29,18 +28,14 @@ function visit(node: ts.Node): void {
     && node.arguments[0]?.getText(ast) === 'MAKER_INVOKE.RESOLVE_INTERACTION') {
     resolveHandlerSource = node.arguments[1].getText(ast);
   }
-  if (ts.isPropertyAssignment(node) && node.name.getText(ast) === 'holdInput') {
-    holdInputSource = node.initializer.getText(ast);
-  }
   ts.forEachChild(node, visit);
 }
 visit(ast);
-if (!holdInputSource) throw new Error('Task holdInput adapter missing');
 if (!resolveHandlerSource) throw new Error('Resolve interaction IPC handler missing');
 if (!interactionReaderSource) throw new Error('Shared-task interaction reader missing');
 const compiled = ts.transpileModule(`${functions.join('\n')}
 setSharedTaskInteractionReader(${interactionReaderSource});
-return { install: installDesktopInteractionListener, hold: ${holdInputSource},
+return { install: installDesktopInteractionListener,
   answer: resolvePendingInteraction, cleanup: cleanupPendingAgentInteractionsForSession,
   take: takePendingInteractionsForSession, resolveFromIpc: ${resolveHandlerSource} };`, {
   compilerOptions: { target: ts.ScriptTarget.ES2022 },
@@ -66,6 +61,7 @@ function harness() {
     setSharedTaskInteractionReader,
     isPluginSetupInteractionDecision: () => false,
     assertResolveInteractionOrigin: vi.fn(), isPendingDesktopOnlyConfirmation: () => false,
+    issueConfirmBridge: { pendingSnapshots: () => [] },
     pendingInteractionResolvers: entries,
     agentInputCoordinatorHolder: coordinator, inputCoordinator: coordinator,
     PERMISSION_INTERACTION_TIMEOUT_MS: 10 * MINUTE,
@@ -81,7 +77,6 @@ function harness() {
   };
   const runtime = new Function(...Object.keys(deps), compiled)(...Object.values(deps)) as {
     install: (session: InteractionSession) => void;
-    hold: (id: string, held: boolean) => string[];
     answer: (id: string, decision: InteractionDecision) => boolean;
     cleanup: (id: string, reason: string) => void;
     take: (id: string) => Array<{ resolve: (decision: InteractionDecision) => void; sharedPermission?: SharedPermission }>;
@@ -208,254 +203,4 @@ it('times out an untouched optional question but keeps an active editor pending'
   h.answer('active', { kind: 'ask_user_question', answers: { choice: 'User answer' } });
   await expect(active.promise).resolves.toMatchObject({ answers: { choice: 'User answer' } });
   h.cleanup('blocking-task', 'session_closed');
-});
-
-it.each(['session_aborted', 'turn_idle_reconcile'])('retains async questions across %s without bypassing an execution hold', async (reason) => {
-  const h = harness();
-  const q = h.request('async', 'task', 'ask_user_question', undefined, undefined, undefined, 'async');
-  h.hold('task', true);
-  h.cleanup('task', reason);
-  await vi.advanceTimersByTimeAsync(30 * MINUTE);
-  expect(q.settled).not.toHaveBeenCalled();
-  await expect(h.resolveFromIpc({}, 'async', { kind: 'ask_user_question', answers: { q: 'Yes' } })).resolves.toEqual({ accepted: false });
-  h.hold('task', false);
-  await expect(h.resolveFromIpc({}, 'async', { kind: 'ask_user_question', answers: { q: 'Yes' } })).resolves.toEqual({ accepted: true });
-  await expect(q.promise).resolves.toMatchObject({ answers: { q: 'Yes' } });
-});
-
-describe('permission timeout follows the task pause lifecycle', () => {
-  // IM permission contract: production listener cancellation must dismiss paused cards too.
-  // Existing cases stop the whole task; a single aborted provider request must also settle
-  // Desktop and an IM takeover, reject late approval, and leave other tasks alone (unit).
-  it.each(['desktop', 'im-takeover'])('dismisses an aborted request while paused on %s', async (surface) => {
-    const h = harness();
-    const abort = new AbortController();
-    const p = h.request('permission', 'task', 'permission', undefined, abort.signal);
-    const other = h.request('other', 'other-task');
-    const taken = surface === 'im-takeover' ? h.take('task')[0] : undefined;
-    h.hold('task', true);
-    const allow = { kind: 'permission', behavior: 'allow' } as const;
-    if (taken) taken.resolve(allow);
-    else expect(h.answer('permission', allow)).toBe(false);
-    expect(p.settled).not.toHaveBeenCalled();
-    abort.abort();
-    const denied = { kind: 'permission', behavior: 'deny', reason: 'session_aborted' };
-    await expect(p.promise).resolves.toEqual(denied);
-    expect(h.entries.has('permission')).toBe(false);
-    expect(h.dismiss).toHaveBeenCalledTimes(1);
-    if (taken) await expect(taken.sharedPermission!.result).resolves.toEqual(denied);
-    h.hold('task', false);
-    expect(h.answer('permission', allow)).toBe(false);
-    expect(taken?.sharedPermission?.decide(allow)).not.toBe(true);
-    expect(h.entries.has('other')).toBe(true);
-    expect(other.settled).not.toHaveBeenCalled();
-    expect(h.answer('other', allow)).toBe(true);
-    await expect(other.promise).resolves.toEqual(allow);
-  });
-
-  it('holds a shared route timeout until resume without closing either surface early', async () => {
-    const h = harness();
-    h.hold('task', true);
-    let shared!: SharedPermission;
-    const p = h.request('permission', 'task', 'permission', (_req, permission) => {
-      shared = permission!;
-      return shared.result;
-    });
-    await vi.advanceTimersByTimeAsync(30 * MINUTE);
-    expect(p.settled).not.toHaveBeenCalled();
-    expect(shared.decision).toBeUndefined();
-    expect(h.dismiss).not.toHaveBeenCalled();
-    h.hold('task', false);
-    await expect(p.promise).resolves.toMatchObject({ behavior: 'deny', reason: 'interaction_timeout' });
-    await expect(shared.result).resolves.toMatchObject({ behavior: 'deny', reason: 'interaction_timeout' });
-    p.lease!.release();
-  });
-
-  it.each(['resume', 'session_aborted', 'session_closed', 'release'] as const)(
-    'keeps a new IM answer provisional until %s and converges every surface', async finish => {
-      const h = harness();
-      h.hold('task', true);
-      let shared!: SharedPermission;
-      const presented = vi.fn();
-      const p = h.request('permission', 'task', 'permission', (_req, permission) => {
-        shared = permission!;
-        void shared.result.then(presented);
-        // Synchronous channel answers must already see the Host pause gate.
-        expect(shared.decide({ kind: 'permission', behavior: 'allow' })).toBe(true);
-        expect(shared.decide({ kind: 'permission', behavior: 'deny' })).toBe(false);
-        return shared.result;
-      });
-      await vi.advanceTimersByTimeAsync(1);
-      expect(p.settled).not.toHaveBeenCalled();
-      expect(presented).not.toHaveBeenCalled();
-      expect(h.dismiss).not.toHaveBeenCalled();
-      expect(shared.decision).toBeUndefined();
-      if (finish === 'resume') h.hold('task', false);
-      else if (finish === 'release') p.lease!.release();
-      else h.cleanup('task', finish);
-      const expected = finish === 'resume'
-        ? { kind: 'permission', behavior: 'allow' }
-        : { kind: 'permission', behavior: 'deny', reason: finish === 'release' ? 'interaction_route_released' : finish };
-      await expect(p.promise).resolves.toEqual(expected);
-      await expect(shared.result).resolves.toEqual(expected);
-      expect(presented).toHaveBeenCalledExactlyOnceWith(expected);
-      expect(h.dismiss).toHaveBeenCalledTimes(1);
-      h.hold('task', false);
-      expect(shared.decide({ kind: 'permission', behavior: 'allow' })).toBe(false);
-      p.lease!.release();
-    },
-  );
-
-  it('keeps the permission pending across its original deadline and resumes only the remaining budget', async () => {
-    const h = harness();
-    const p = h.request();
-    await vi.advanceTimersByTimeAsync(3 * MINUTE);
-    h.hold('task', true);
-    expect(h.answer('permission', { kind: 'permission', behavior: 'allow' })).toBe(false);
-    await vi.advanceTimersByTimeAsync(30 * MINUTE);
-    expect(p.settled).not.toHaveBeenCalled();
-    expect(h.entries.has('permission')).toBe(true);
-    h.hold('task', false);
-    await vi.advanceTimersByTimeAsync(7 * MINUTE - 1);
-    expect(p.settled).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(1);
-    expect(p.settled).toHaveBeenCalledExactlyOnceWith({ kind: 'permission', behavior: 'deny', reason: 'timeout' });
-    expect(h.answer('permission', { kind: 'permission', behavior: 'allow' })).toBe(false);
-    expect(h.dismiss).toHaveBeenCalledTimes(1);
-  });
-
-  it('does not reset or consume the remaining budget on repeated pause/resume', async () => {
-    const h = harness();
-    const p = h.request();
-    await vi.advanceTimersByTimeAsync(4 * MINUTE);
-    h.hold('task', true);
-    await vi.advanceTimersByTimeAsync(20 * MINUTE);
-    h.hold('task', true);
-    h.hold('task', false);
-    await vi.advanceTimersByTimeAsync(2 * MINUTE);
-    h.hold('task', false);
-    h.hold('task', true);
-    await vi.advanceTimersByTimeAsync(20 * MINUTE);
-    h.hold('task', false);
-    await vi.advanceTimersByTimeAsync(4 * MINUTE - 1);
-    expect(p.settled).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(1);
-    expect(p.settled).toHaveBeenCalledTimes(1);
-  });
-
-  it('holds permissions raised after pause and leaves another task safety timeout running', async () => {
-    const h = harness();
-    h.hold('task', true);
-    const paused = h.request();
-    const other = h.request('other-permission', 'other-task');
-    await vi.advanceTimersByTimeAsync(20 * MINUTE);
-    expect(paused.settled).not.toHaveBeenCalled();
-    expect(other.settled).toHaveBeenCalledExactlyOnceWith({ kind: 'permission', behavior: 'deny', reason: 'timeout' });
-    h.hold('task', false);
-    await vi.advanceTimersByTimeAsync(10 * MINUTE);
-    expect(paused.settled).toHaveBeenCalledTimes(1);
-  });
-
-  it.each(['session_aborted', 'session_closed'])('cleans up a paused permission once on %s without resurrecting its timer', async reason => {
-    const h = harness();
-    const p = h.request();
-    h.hold('task', true);
-    h.cleanup('task', reason);
-    h.cleanup('task', reason);
-    h.hold('task', false);
-    await vi.advanceTimersByTimeAsync(20 * MINUTE);
-    expect(p.settled).toHaveBeenCalledExactlyOnceWith({ kind: 'permission', behavior: 'deny', reason });
-    expect(h.entries.size).toBe(0);
-    expect(h.dismiss).toHaveBeenCalledTimes(1);
-    expect(vi.getTimerCount()).toBe(0);
-  });
-
-  it('accepts one answer after resume and cancels the remaining timeout', async () => {
-    const h = harness();
-    const p = h.request();
-    h.hold('task', true);
-    await vi.advanceTimersByTimeAsync(20 * MINUTE);
-    h.hold('task', false);
-    expect(h.answer('permission', { kind: 'permission', behavior: 'allow' })).toBe(true);
-    expect(h.answer('permission', { kind: 'permission', behavior: 'deny' })).toBe(false);
-    await vi.advanceTimersByTimeAsync(20 * MINUTE);
-    expect(p.settled).toHaveBeenCalledExactlyOnceWith({ kind: 'permission', behavior: 'allow' });
-    expect(h.dismiss).toHaveBeenCalledTimes(1);
-  });
-
-  it.each(['permission', 'ask_user_question', 'plan_review'] as const)('defers a migrated %s answer until resume and ignores duplicates', async kind => {
-    const h = harness();
-    const p = h.request(kind, 'task', kind);
-    const [taken] = h.take('task');
-    expect(h.take('task')).toEqual([]);
-    h.hold('task', true);
-    const answer: InteractionDecision = kind === 'ask_user_question'
-      ? { kind, answers: { choice: 'yes' } }
-      : { kind, behavior: 'allow' };
-    taken.resolve(answer);
-    taken.resolve({ kind: 'permission', behavior: 'deny' });
-    await vi.advanceTimersByTimeAsync(30 * MINUTE);
-    expect(p.settled).not.toHaveBeenCalled();
-    expect(h.entries.size).toBe(1);
-    expect(h.hold('task', false)).toEqual([kind]);
-    expect(h.hold('task', false)).toEqual([]);
-    await p.promise;
-    expect(p.settled).toHaveBeenCalledExactlyOnceWith(answer);
-    taken.resolve(answer);
-    expect(h.entries.size).toBe(0);
-  });
-
-  it.each(['session_aborted', 'session_closed'])('cancels a deferred migrated answer on %s', async reason => {
-    const h = harness();
-    const p = h.request();
-    const [taken] = h.take('task');
-    h.hold('task', true);
-    taken.resolve({ kind: 'permission', behavior: 'allow' });
-    expect(taken.sharedPermission!.decision).toBeUndefined();
-    h.cleanup('task', reason);
-    h.cleanup('task', reason);
-    h.hold('task', false);
-    taken.resolve({ kind: 'permission', behavior: 'allow' });
-    await vi.advanceTimersByTimeAsync(30 * MINUTE);
-    expect(p.settled).toHaveBeenCalledExactlyOnceWith({ kind: 'permission', behavior: 'deny', reason });
-    await expect(taken.sharedPermission!.result).resolves.toEqual({ kind: 'permission', behavior: 'deny', reason });
-    expect(h.entries.size).toBe(0);
-  });
-
-  it('defers the migrated channel safety timeout until resume', async () => {
-    const h = harness();
-    const p = h.request();
-    const [taken] = h.take('task');
-    h.hold('task', true);
-    taken.resolve({ kind: 'permission', behavior: 'deny', reason: 'timeout' });
-    await vi.advanceTimersByTimeAsync(30 * MINUTE);
-    expect(p.settled).not.toHaveBeenCalled();
-    h.hold('task', false);
-    await p.promise;
-    expect(p.settled).toHaveBeenCalledExactlyOnceWith({ kind: 'permission', behavior: 'deny', reason: 'timeout' });
-  });
-
-  it('keeps transferred permissions out of the Desktop timer lifecycle', async () => {
-    const h = harness();
-    const p = h.request();
-    h.hold('task', true);
-    const [taken] = h.take('task');
-    h.hold('task', false);
-    await vi.advanceTimersByTimeAsync(20 * MINUTE);
-    expect(p.settled).not.toHaveBeenCalled();
-    taken.resolve({ kind: 'permission', behavior: 'allow' });
-    await p.promise;
-    expect(p.settled).toHaveBeenCalledTimes(1);
-    expect(vi.getTimerCount()).toBe(0);
-  });
-
-  it.each(['ask_user_question', 'plan_review'] as const)('does not add a timeout to %s when resumed', async kind => {
-    const h = harness();
-    const p = h.request(kind, 'task', kind);
-    h.hold('task', true);
-    h.hold('task', false);
-    await vi.advanceTimersByTimeAsync(60 * MINUTE);
-    expect(p.settled).not.toHaveBeenCalled();
-    expect(vi.getTimerCount()).toBe(0);
-  });
 });
