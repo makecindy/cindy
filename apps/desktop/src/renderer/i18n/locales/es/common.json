@@ -6652,6 +6652,7 @@
         "renameFailed": "Error al cambiar el nombre",
         "deleted": "Dispositivo eliminado",
         "deleteOnline": "Este servidor aún no admite la eliminación de dispositivos en línea. Vuelva a intentarlo después de actualizar el servicio.",
+        "deleteRejectedWhileOffline": "No se pudo eliminar el dispositivo: el servidor aún lo registra como en línea, aunque aquí aparece sin conexión.",
         "deleteFailed": "Error al eliminar",
         "disconnected": "Se desconectaron todas las conexiones remotas",
         "disconnectFailed": "No se pudo desconectar la conexión remota",

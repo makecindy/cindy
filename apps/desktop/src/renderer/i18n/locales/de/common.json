@@ -6587,6 +6587,7 @@
         "renameFailed": "Umbenennen fehlgeschlagen",
         "deleted": "Gerät gelöscht",
         "deleteOnline": "Dieser Server unterstützt das Entfernen von Online-Geräten noch nicht. Versuche es nach der Aktualisierung des Dienstes erneut.",
+        "deleteRejectedWhileOffline": "Gerät konnte nicht gelöscht werden: Der Server führt es noch als online, obwohl es hier als offline angezeigt wird.",
         "deleteFailed": "Löschen fehlgeschlagen",
         "disconnected": "Alle Remote-Verbindungen getrennt",
         "disconnectFailed": "Remote-Verbindung konnte nicht getrennt werden",

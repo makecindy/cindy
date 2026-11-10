@@ -6544,6 +6544,7 @@
         "renameFailed": "易名未成",
         "deleted": "设备已删",
         "deleteOnline": "今服务器尚不支持移除在线设备，请俟服务升级后再试。",
+        "deleteRejectedWhileOffline": "设备未能删除：服务器仍记其在线，与列表所示失联不合",
         "deleteFailed": "删除未成",
         "disconnected": "诸远程连接已断",
         "disconnectFailed": "断开远程连接未成",
