@@ -1,4 +1,5 @@
 import { isSafeGhostRelativePath } from './internal/ghostPath.js';
+import { GHOST_TOOLS_MAX } from './internal/toolsLimit.js';
 import { validateWithStoredMcpApps, parseGhostMcpApps, type GhostMcpApps } from './toolUi.js';
 import { parseGhostSecretCheck, type GhostSecretCheckDecl } from './secretCheck.js';
 import { parseGhostRoutineEvents, type GhostRoutineEvents } from './routineEvents.js';
@@ -19,6 +20,9 @@ export const GHOST_MANIFEST_SCHEMA_VERSION = 3 as const;
 
 /** ghost.json 的 description / whenToUse 字符上限。 */
 export const GHOST_MANIFEST_SUMMARY_MAX_CHARS = 300;
+
+/** tools 声明条数上限,见 internal/toolsLimit.ts。 */
+export { GHOST_TOOLS_MAX };
 
 /** Cindy host locales supported by Plugin manifest resources. */
 export type GhostManifestLocales = {
@@ -1903,8 +1907,8 @@ function validateGhostManifestInput(value: unknown, preserveHistoricalParameterS
   // 工具声明(卡槽②):与 slots 含 'tool' 严格成对,规则同 panel。
   let tools: GhostToolDecl[] | undefined;
   if (raw.tools !== undefined) {
-    if (!Array.isArray(raw.tools) || raw.tools.length === 0 || raw.tools.length > 16) {
-      return { ok: false, reason: 'tools 必须是 1–16 项的数组' };
+    if (!Array.isArray(raw.tools) || raw.tools.length === 0 || raw.tools.length > GHOST_TOOLS_MAX) {
+      return { ok: false, reason: `tools 必须是 1–${GHOST_TOOLS_MAX} 项的数组` };
     }
     tools = [];
     const seenNames = new Set<string>();

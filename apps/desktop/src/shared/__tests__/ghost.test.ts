@@ -1653,7 +1653,7 @@ describe('ghost · 芯片型清单(schemaVersion 2)', () => {
     expect(withTools(['panel', 'tool'], [{ name: 'gen_image', description: '生成图片' }]).ok).toBe(
       true,
     );
-    // 名字非法 / 重名 / 描述空 / 超 16 条
+    // 名字非法 / 重名 / 描述空 / 超 48 条
     expect(withTools(['panel', 'tool'], [{ name: 'Bad', description: 'y' }]).ok).toBe(false);
     expect(
       withTools(
@@ -1668,9 +1668,15 @@ describe('ghost · 芯片型清单(schemaVersion 2)', () => {
     expect(
       withTools(
         ['panel', 'tool'],
-        Array.from({ length: 17 }, (_, i) => ({ name: `t${i}`, description: 'y' })),
+        Array.from({ length: 48 }, (_, i) => ({ name: `t${i}`, description: 'y' })),
       ).ok,
-    ).toBe(false);
+    ).toBe(true);
+    expect(
+      withTools(
+        ['panel', 'tool'],
+        Array.from({ length: 49 }, (_, i) => ({ name: `t${i}`, description: 'y' })),
+      ),
+    ).toEqual({ ok: false, reason: 'tools 必须是 1–48 项的数组' });
   });
 
   it('@ 资源入口只可引用一个已声明工具，并按已知字段收窄', () => {
