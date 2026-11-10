@@ -3,7 +3,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { app } from 'electron';
-import { and, asc, desc, eq, gt, gte, inArray, isNull, lt, lte, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, gte, inArray, isNull, lt, lte, ne, or, sql } from 'drizzle-orm';
 import type { DeviceLinkDeviceView } from '../../shared/deviceLinkIpc.js';
 import { activeOwnerScopeKey, ownerScopedUserDataPath } from '../appSessionState.js';
 import { atomicWriteFileSync, readAtomicFileSync } from '../utils/atomicWriteFile.js';
@@ -32,7 +32,7 @@ import { mergeCompanionWorkbench, readCompanionWorkbench } from '../maker-ipc/bo
 import { importCompanionRoutines, listCompanionRoutines, type CompanionRoutineValue } from '../routines/service.js';
 import type { TeammateTodo } from '@cindy/maker-shared/teammate-todo';
 import { portableTodo, travellingTodos } from './travel.js';
-import type { CompanionMaterializeHost } from './materialize.js';
+import { assertCompanionIdentity, type CompanionMaterializeHost } from './materialize.js';
 import { companionHomes } from './homes.js';
 import { createMcpServerNamesReader } from './mcpServerNames.js';
 import { companionHasLocalData } from './localData.js';
@@ -64,6 +64,17 @@ function profileTemplateId(capabilitiesJson: string | null, identitySource: stri
     if (typeof value === 'string' && value) return value;
   } catch { /* fall back to the identity */ }
   return inferBotTemplatePresetId(identitySource);
+}
+
+/** Same singleton predicate as the profile transaction, excluding only the exact cloud id. */
+async function findConflictingCindy(botId: string): Promise<string | null> {
+  const rows = await getDbClient().drizzle
+    .select({ id: botProfiles.id, config: botProfileVersions.capabilitiesJson, identity: botProfileVersions.identitySource })
+    .from(botProfiles).innerJoin(botProfileVersions,
+      and(eq(botProfileVersions.botId, botProfiles.id), eq(botProfileVersions.version, botProfiles.currentVersion)))
+    .where(and(ne(botProfiles.id, botId), ne(botProfiles.status, 'archived')));
+  return rows.find(row => JSON.parse(row.config).templateId === 'cindy'
+    || inferBotTemplatePresetId(row.identity) === 'cindy')?.id ?? null;
 }
 
 const readMcpServerNames = createMcpServerNamesReader(listCustomMcpServers, activeOwnerScopeKey);
@@ -175,15 +186,27 @@ function createMaterializer(input: {
         .from(botProfiles).where(eq(botProfiles.id, botId)).limit(1);
       return row ?? null;
     },
+    findConflictingCindy,
     // Normal creation path: no invitation, no generated persona, the new home's default model.
     createProfile: async ({ id, name, description, identitySource, userContextSource, avatar, templateId }, fence) => {
+      await assertCompanionIdentity({ findConflictingCindy }, id, templateId, fence);
       const restored = await restoreCloudAvatar(avatar, fence.signal);
       fence.assertCurrent();
-      await createBotProfile({ id, name: name.slice(0, 200), description, identitySource, userContextSource,
-        ...('portable' in restored ? { avatar: restored.portable } : { avatarImageBase64: restored.imageBase64 }) },
-      { templateId, allowSameName: true, avatarFallback: 'fallback' in restored && restored.fallback === true });
+      try {
+        await createBotProfile({ id, name: name.slice(0, 200), description, identitySource, userContextSource,
+          ...('portable' in restored ? { avatar: restored.portable } : { avatarImageBase64: restored.imageBase64 }) },
+        { templateId, allowSameName: true, avatarFallback: 'fallback' in restored && restored.fallback === true });
+      } catch (error) {
+        // A Cindy may have been created while the avatar was downloading. The transaction
+        // still rejects it atomically; translate that conflict without weakening its guard.
+        if ((error as { code?: unknown })?.code === 'ALREADY_EXISTS') {
+          await assertCompanionIdentity({ findConflictingCindy }, id, templateId, fence);
+        }
+        throw error;
+      }
     },
     updateProfile: async ({ id, name, description, identitySource, userContextSource, avatar, templateId }, fence) => {
+      await assertCompanionIdentity({ findConflictingCindy }, id, templateId, fence);
       const restored = await restoreCloudAvatar(avatar, fence.signal);
       fence.assertCurrent();
       await updateBotProfile({ id, name: name.slice(0, 200), enabled: true,

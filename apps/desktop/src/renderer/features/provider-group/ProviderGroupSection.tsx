@@ -178,7 +178,8 @@ export function ProviderGroupSection({ providerId, providerName, deviceId, devic
         {config && <span className="text-13 text-[var(--text-tertiary)]">{providerGroupDeviceCount(config.members)}</span>}
         <span className="flex-1" />
         {config && (
-          <Button variant="secondary" size="sm" compact tone="quiet" disabled={blocked} onClick={() => void deleteGroup()}>
+          // Deleting the group is irreversible: danger tone (DESIGN.md §4 destructive actions).
+          <Button variant="secondary" size="sm" compact tone="danger" disabled={blocked} onClick={() => void deleteGroup()}>
             {t('providerGroup.section.delete')}
           </Button>
         )}

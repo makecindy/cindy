@@ -858,7 +858,7 @@
       },
       "runningCount_other": "{{count}} 件実行中",
       "limitAria": "{{name}} の同時実行数の上限",
-      "limitOption_other": "上限 {{count}}",
+      "limitOption_other": "同時 {{count}}",
       "weightAria": "{{name}} の重み",
       "weightOption": "重み {{weight}}",
       "assignAria": "{{name}} に割り当てる",
@@ -913,9 +913,13 @@
       "description": "各アカウントのクォータを均等に使い切るため、このメッセージは {{label}} から送ることをおすすめします（{{quota}}）。直近数回のやり取りと要約は引き継がれますが、それより前の細部は失われることがあります。",
       "quota": "残り {{left}}%",
       "quotaReset": "残り {{left}}%・{{reset}}",
-      "confirm": "切り替える",
-      "cancel": "キャンセル",
-      "remember": "今後は確認せず自動で切り替える（このタスクのみ）"
+      "confirm": "今回だけ切り替える",
+      "cancel": "今は切り替えない",
+      "remember": "今後は確認せず自動で切り替える",
+      "disable": "自動では切り替えず、確認もしない",
+      "disableFailed": "選択が保存されたか確認できませんでした。接続を確認し、タスクがあるパソコンの Cindy を最新版にしてから、もう一度お試しください。このメッセージは通常どおり送信されます。",
+      "choiceLabel": "切り替え方法（このタスクのみ）",
+      "send": "メッセージを送信"
     },
     "deleteConfirm": {
       "title": "{{provider}} のプロバイダーグループを削除しますか？",
@@ -3594,7 +3598,7 @@
           "scanning": "保存済み設定を読み取り中…",
           "empty": "保存済み API 設定が見つかりません。",
           "failed": "読み取りを完了できませんでした。再試行してください。",
-          "edit": "補完・編集",
+          "edit": "編集",
           "editFailed": "URL、プロトコル、キーを確認して再試行してください。",
           "editNote": "キーを空欄にすると読み取り済みの認証情報を保持します。URL やプロトコルを変更すると新しいキーが必要です。",
           "name": "表示名",
@@ -11414,6 +11418,9 @@
       "databaseDriver": "データベースドライバーを読み込めません。Cindy を更新または修復して再試行してください。",
       "databaseUnavailable": "元のデータベースを読み込めません。元データは変更されていません。修復後に再試行できます。",
       "fileTooLarge": "ファイルまたはインポート全体が読み取り上限を超えています。内容は切り捨てていません。",
+      "sourceFileTooLarge": "単一のファイルが読み取り上限を超えています。この項目は完全にはインポートされていません。",
+      "snapshotTooLarge": "今回読み取るデータの合計が上限を超えています。インポートは未完了です。",
+      "itemTooLarge": "この項目のファイルの合計が 128 MiB を超えています。この項目は完全にはインポートされていません。",
       "memoryMetadata": "メモリの概要またはタイトルが保存要件を満たしていません。",
       "memoryWrite": "メモリの保存または整合性確認に失敗しました。再試行できます。",
       "memoryChanged": "保存済みのメモリが変更されているため、上書きしていません。",
@@ -13033,6 +13040,11 @@
     "prevMessageJump": "前の質問へ移動：{{preview}}",
     "sessionLoading": "セッションを読み込み中",
     "askUserQuestion": {
+    "unanswered": "未回答",
+    "withdrawn": "回答は不要になりました",
+    "withdrawnDraft": "この質問への回答は不要になりました。\n{{reason}}\n下書きは保存されています。補足として送信できます。",
+    "sendSupplement": "補足を送信",
+
       "voice": {
         "hint": "選択肢の番号または名前を話してください。複数選択後は「選択を確定」と言ってください。",
         "freeTextHint": "回答を話し、内容を確認してから「選択を確定」と言って送信してください。",
@@ -14144,6 +14156,7 @@
       "taskAutoArchived": "「{{title}}」をアーカイブしました",
       "taskAutoArchivedUndo": "元に戻す",
       "taskAutoArchivePending": "このタスクを離れると自動アーカイブします",
+      "taskAutoArchiveBlockedDirty": "「{{title}}」は作業フォルダに未コミットの変更があるため、自動アーカイブされませんでした",
       "taskAutoArchiveCancel": "キャンセル",
       "taskAutoArchiveCancelled": "今回は自動アーカイブしません",
       "taskArchiveNow": "今すぐアーカイブ"
@@ -19747,10 +19760,10 @@
       "useCodex": "Codex でログイン"
     },
     "title": "サブスクリプションアカウント",
-    "note": "最初のアカウントは CLI の既定フォルダーを使います。追加アカウントは個別にログインします。新しいタスクは分散され、既存のタスクは元のアカウントを使い続けます。",
     "strategy": "負荷分散",
     "add": "アカウントを追加",
     "default": "既定フォルダー",
+    "defaultTag": "既定",
     "ready": "接続済み",
     "signedOut": "ログインが必要",
     "unavailable": "状態を取得できません",

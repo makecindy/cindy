@@ -875,8 +875,8 @@
       "runningCount_one": "Tarea {{count}} ejecutándose",
       "runningCount_other": "Tareas {{count}} en ejecución",
       "limitAria": "Límite de tareas para {{name}}",
-      "limitOption_one": "Max {{count}}",
-      "limitOption_other": "Max {{count}}",
+      "limitOption_one": "{{count}} tarea",
+      "limitOption_other": "{{count}} tareas",
       "weightAria": "Peso para {{name}}",
       "weightOption": "Peso {{weight}}",
       "assignAria": "Asignar tareas a {{name}}",
@@ -929,7 +929,7 @@
       },
       "accountCount_many": "cuentas {{count}}",
       "runningCount_many": "Tareas {{count}} en ejecución",
-      "limitOption_many": "Max {{count}}"
+      "limitOption_many": "{{count}} tareas"
     },
     "rebalance": {
       "title": "¿Continuar en {{label}}?",
@@ -938,9 +938,13 @@
       "description": "Para utilizar la cuota de cada cuenta de manera uniforme, envíe este mensaje desde {{label}} ({{quota}}). Los últimos mensajes y un resumen se conservan; Es posible que se pierdan detalles más antiguos.",
       "quota": "{{left}}% restante",
       "quotaReset": "{{left}}% restante · {{reset}}",
-      "confirm": "Cambiar",
-      "cancel": "Cancelar",
-      "remember": "Cambiar automáticamente a partir de ahora (solo esta tarea)"
+      "confirm": "Cambiar solo esta vez",
+      "cancel": "Ahora no",
+      "remember": "Cambiar automáticamente sin volver a preguntar",
+      "disable": "No cambiar automáticamente ni volver a preguntar",
+      "disableFailed": "No se pudo confirmar si se guardó tu elección. Comprueba la conexión y que Cindy esté actualizado en el ordenador donde está la tarea, e inténtalo de nuevo. Este mensaje se enviará con normalidad.",
+      "choiceLabel": "Cambio de ordenador (solo esta tarea)",
+      "send": "Enviar mensaje"
     },
     "deleteConfirm": {
       "title": "¿Eliminar el grupo de proveedores {{provider}}?",
@@ -3684,7 +3688,7 @@
           "scanning": "Leyendo configuraciones guardadas…",
           "empty": "No se encontraron configuraciones de API guardadas.",
           "failed": "No se pudo completar la lectura. Inténtalo de nuevo.",
-          "edit": "Completar o editar",
+          "edit": "Editar",
           "editFailed": "Revisa la URL, el protocolo y la clave, e inténtalo de nuevo.",
           "editNote": "Deja la clave vacía para conservar la credencial leída. Cambiar la URL o el protocolo requiere una clave nueva.",
           "name": "Nombre visible",
@@ -11556,6 +11560,9 @@
       "databaseDriver": "No se pudo cargar el controlador de la base de datos. Actualice o repare Cindy y luego vuelva a intentarlo.",
       "databaseUnavailable": "No se pudo leer la base de datos de origen. Los datos originales no se modifican; Vuelva a intentarlo después de la reparación.",
       "fileTooLarge": "Un archivo o esta importación excede el límite de lectura. El contenido no fue truncado.",
+      "sourceFileTooLarge": "Un archivo supera el límite de lectura. Este elemento no se ha importado por completo.",
+      "snapshotTooLarge": "El volumen total de datos de esta lectura supera el límite. La importación está incompleta.",
+      "itemTooLarge": "Los archivos de este elemento superan los 128 MiB en total. Este elemento no se ha importado por completo.",
       "memoryMetadata": "El resumen o título de la memoria excede los requisitos de almacenamiento.",
       "memoryWrite": "Falló la escritura en memoria o la verificación de integridad. Puedes volver a intentarlo.",
       "memoryChanged": "La memoria guardada fue modificada y no se ha sobrescrito.",
@@ -13154,6 +13161,11 @@
     "prevMessageJump": "Ir al prompt anterior: {{preview}}",
     "sessionLoading": "Cargando tarea",
     "askUserQuestion": {
+    "unanswered": "Sin respuesta",
+    "withdrawn": "Ya no necesita respuesta",
+    "withdrawnDraft": "Esta pregunta ya no necesita respuesta.\n{{reason}}\nTu borrador se conserva y puedes enviarlo como información adicional.",
+    "sendSupplement": "Enviar información adicional",
+
       "voice": {
         "hint": "Di el número o el nombre de una opción. Para seleccionar varias, di después «confirmar selección».",
         "freeTextHint": "Di tu respuesta, revísala y luego di «confirmar selección» para enviarla.",
@@ -14304,6 +14316,7 @@
       "taskAutoArchived": "Se archivó «{{title}}»",
       "taskAutoArchivedUndo": "Deshacer",
       "taskAutoArchivePending": "Se archivará al salir de esta tarea",
+      "taskAutoArchiveBlockedDirty": "No se archivó «{{title}}» automáticamente: hay cambios sin confirmar en su espacio de trabajo",
       "taskAutoArchiveCancel": "Cancelar",
       "taskAutoArchiveCancelled": "No se archivará automáticamente esta vez",
       "taskArchiveNow": "Archivar ahora"
@@ -20006,10 +20019,10 @@
       "useCodex": "Iniciar sesión con Codex"
     },
     "title": "Cuentas de suscripción",
-    "note": "La primera cuenta usa la carpeta predeterminada de la CLI. Las cuentas adicionales inician sesión por separado. Las tareas nuevas se distribuyen; las existentes conservan su cuenta.",
     "strategy": "Equilibrio de carga",
     "add": "Añadir cuenta",
     "default": "Carpeta predeterminada",
+    "defaultTag": "Predeterminada",
     "ready": "Conectada",
     "signedOut": "Requiere iniciar sesión",
     "unavailable": "Estado no disponible",

@@ -119,3 +119,16 @@ bundle id 投递打开链接事件，外部链接会落到 Cindy 的实例。采
 回归位于 `browserExtensionSlot.test.ts`、`bridge.test.ts`、`user-browser-backend.test.ts`、
 `health-service.test.ts` 和 `BrowserBackendSubsection.test.tsx`；界面场景为
 `automation-settings/browser-updating` 与 `automation-settings/browser-selection`。
+
+
+## 用户浏览器自动启动与扩展保活（2026-11-10）
+
+「我的浏览器」的实际任务调用（含 start、tabs）在连接缺失时按需启动系统选择的 Chromium，
+等待扩展上线后才投递作业；并发调用共用一次准备。status / doctor / profiles / stop 保持只读，
+设置页不唤起浏览器。启动不传 URL、user-data-dir 或调试端口，不抢焦点、不关闭用户浏览器。
+指定 profile 的调用不猜测对应浏览器；未配对、插件缺失／更新中也不另起浏览器规避。
+
+扩展保活独立于页面作业，用现有 /health 验证同一会话，保持旧宿主兼容。长页面等待或闲置页清理
+不能阻塞保活和轮询；HTTP 的截止时间覆盖启动标识读取、响应头和正文。丢失结果保持 unknown，
+不重放页面操作。Chrome 的 service worker 允许休眠，定时器不能作为唯一的恢复来源，保留 alarms
+与启动事件兜底。测试用虚拟时钟验证长操作、清理悬挂、并发启动和启动后扩展仍不可用。

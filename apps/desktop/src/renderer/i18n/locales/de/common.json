@@ -865,8 +865,8 @@
       "runningCount_one": "{{count}} Aufgabe läuft",
       "runningCount_other": "{{count}} Aufgaben laufen",
       "limitAria": "Aufgabenlimit für {{name}}",
-      "limitOption_one": "Max. {{count}}",
-      "limitOption_other": "Max. {{count}}",
+      "limitOption_one": "Bis {{count}}",
+      "limitOption_other": "Bis {{count}}",
       "weightAria": "Gewichtung für {{name}}",
       "weightOption": "Gewichtung {{weight}}",
       "assignAria": "Aufgaben {{name}} zuweisen",
@@ -923,9 +923,13 @@
       "description": "Um das Kontingent aller Konten gleichmäßig zu nutzen, sende diese Nachricht über {{label}} ({{quota}}). Die letzten Nachrichten und eine Zusammenfassung werden übernommen; ältere Details können verloren gehen.",
       "quota": "{{left}} % übrig",
       "quotaReset": "{{left}} % übrig · {{reset}}",
-      "confirm": "Wechseln",
-      "cancel": "Abbrechen",
-      "remember": "Ab jetzt automatisch wechseln (nur für diese Aufgabe)"
+      "confirm": "Nur dieses Mal wechseln",
+      "cancel": "Jetzt nicht",
+      "remember": "Künftig ohne Nachfrage automatisch wechseln",
+      "disable": "Nicht automatisch wechseln und nicht erneut fragen",
+      "disableFailed": "Es konnte nicht bestätigt werden, ob deine Auswahl gespeichert wurde. Prüfe die Verbindung und ob Cindy auf dem Computer mit dieser Aufgabe aktuell ist, und versuche es erneut. Diese Nachricht wird wie gewohnt gesendet.",
+      "choiceLabel": "Wechselverhalten (nur diese Aufgabe)",
+      "send": "Nachricht senden"
     },
     "deleteConfirm": {
       "title": "Anbietergruppe {{provider}} löschen?",
@@ -3635,7 +3639,7 @@
           "scanning": "Gespeicherte Konfigurationen werden gelesen…",
           "empty": "Keine gespeicherten API-Konfigurationen gefunden.",
           "failed": "Lesen nicht abgeschlossen. Bitte erneut versuchen.",
-          "edit": "Ergänzen oder bearbeiten",
+          "edit": "Bearbeiten",
           "editFailed": "URL, Protokoll und Schlüssel prüfen und erneut versuchen.",
           "editNote": "Ein leeres Schlüsselfeld behält die gelesenen Zugangsdaten bei. Eine geänderte URL oder ein anderes Protokoll erfordert einen neuen Schlüssel.",
           "name": "Anzeigename",
@@ -11459,6 +11463,9 @@
       "databaseDriver": "Der Datenbanktreiber konnte nicht geladen werden. Aktualisiere oder repariere Cindy und versuch es erneut.",
       "databaseUnavailable": "Die Quelldatenbank konnte nicht gelesen werden. Die Originaldaten sind unverändert. Versuch es nach der Reparatur erneut.",
       "fileTooLarge": "Eine Datei oder dieser Import überschreitet das Leselimit. Inhalte wurden nicht gekürzt.",
+      "sourceFileTooLarge": "Eine einzelne Datei überschreitet das Leselimit. Dieses Element wurde nicht vollständig importiert.",
+      "snapshotTooLarge": "Die Gesamtdatenmenge dieses Lesevorgangs überschreitet das Limit. Der Import ist unvollständig.",
+      "itemTooLarge": "Die Dateien dieses Elements überschreiten insgesamt 128 MiB. Dieses Element wurde nicht vollständig importiert.",
       "memoryMetadata": "Die Zusammenfassung oder der Titel der Erinnerung überschreitet die Speichergrenzen.",
       "memoryWrite": "Das Speichern der Erinnerung oder die Integritätsprüfung ist fehlgeschlagen. Du kannst es erneut versuchen.",
       "memoryChanged": "Die gespeicherte Erinnerung wurde geändert und nicht überschrieben.",
@@ -13049,6 +13056,11 @@
     "prevMessageJump": "Zum vorherigen Prompt springen: {{preview}}",
     "sessionLoading": "Aufgabe wird geladen",
     "askUserQuestion": {
+    "unanswered": "Unbeantwortet",
+    "withdrawn": "Keine Antwort mehr nötig",
+    "withdrawnDraft": "Diese Frage braucht keine Antwort mehr.\n{{reason}}\nIhr Entwurf bleibt erhalten und kann als Ergänzung gesendet werden.",
+    "sendSupplement": "Ergänzung senden",
+
       "voice": {
         "hint": "Sag die Nummer oder den Namen einer Option. Sag bei Mehrfachauswahl anschließend „Auswahl bestätigen“.",
         "freeTextHint": "Sag deine Antwort, prüfe sie und sag dann „Auswahl bestätigen“, um sie abzusenden.",
@@ -14173,6 +14185,7 @@
       "taskAutoArchived": "„{{title}}“ archiviert",
       "taskAutoArchivedUndo": "Rückgängig",
       "taskAutoArchivePending": "Wird beim Verlassen dieser Aufgabe archiviert",
+      "taskAutoArchiveBlockedDirty": "„{{title}}“ wurde nicht automatisch archiviert: Der Arbeitsbereich enthält nicht committete Änderungen",
       "taskAutoArchiveCancel": "Abbrechen",
       "taskAutoArchiveCancelled": "Diesmal keine automatische Archivierung",
       "taskArchiveNow": "Jetzt archivieren"
@@ -19819,10 +19832,10 @@
       "useCodex": "Mit Codex anmelden"
     },
     "title": "Abonnementkonten",
-    "note": "Das erste Konto verwendet den Standardordner der CLI. Weitere Konten melden sich separat an. Neue Aufgaben werden verteilt; bestehende Aufgaben behalten ihr Konto.",
     "strategy": "Lastverteilung",
     "add": "Konto hinzufügen",
     "default": "Standardordner",
+    "defaultTag": "Standard",
     "ready": "Verbunden",
     "signedOut": "Anmeldung erforderlich",
     "unavailable": "Status nicht verfügbar",

@@ -858,7 +858,7 @@
       },
       "runningCount_other": "{{count}}개 실행 중",
       "limitAria": "{{name}}의 동시 실행 한도",
-      "limitOption_other": "한도 {{count}}",
+      "limitOption_other": "동시 {{count}}개",
       "weightAria": "{{name}}의 가중치",
       "weightOption": "가중치 {{weight}}",
       "assignAria": "{{name}}에 배정",
@@ -913,9 +913,13 @@
       "description": "각 계정의 할당량을 고르게 쓰기 위해 이 메시지는 {{label}}에서 보내는 것을 권장합니다({{quota}}). 최근 몇 번의 대화와 요약은 이어지지만, 그 이전의 세부 내용은 빠질 수 있습니다.",
       "quota": "{{left}}% 남음",
       "quotaReset": "{{left}}% 남음 · {{reset}}",
-      "confirm": "전환",
-      "cancel": "취소",
-      "remember": "앞으로 묻지 않고 자동 전환(이 작업만)"
+      "confirm": "이번에만 전환",
+      "cancel": "지금은 전환 안 함",
+      "remember": "앞으로 묻지 않고 자동 전환",
+      "disable": "자동 전환 및 확인 안 함",
+      "disableFailed": "선택이 저장되었는지 확인하지 못했습니다. 연결을 확인하고 작업이 있는 컴퓨터의 Cindy가 최신 버전인지 확인한 후 다시 시도해 주세요. 이 메시지는 평소대로 전송됩니다.",
+      "choiceLabel": "전환 방식(이 작업에만 적용)",
+      "send": "메시지 보내기"
     },
     "deleteConfirm": {
       "title": "{{provider}} 제공자 그룹을 삭제할까요?",
@@ -3594,7 +3598,7 @@
           "scanning": "저장된 설정 읽는 중…",
           "empty": "저장된 API 설정이 없습니다.",
           "failed": "읽기를 완료하지 못했습니다. 다시 시도하세요.",
-          "edit": "보완 또는 편집",
+          "edit": "편집",
           "editFailed": "URL, 프로토콜과 키를 확인하고 다시 시도하세요.",
           "editNote": "키를 비워 두면 읽은 인증 정보를 유지합니다. URL이나 프로토콜을 바꾸면 새 키가 필요합니다.",
           "name": "표시 이름",
@@ -11414,6 +11418,9 @@
       "databaseDriver": "데이터베이스 드라이버를 불러올 수 없습니다. Cindy를 업데이트하거나 복구한 뒤 다시 시도하세요.",
       "databaseUnavailable": "원본 데이터베이스를 읽을 수 없습니다. 원본은 변경되지 않았으며 복구 후 다시 시도할 수 있습니다.",
       "fileTooLarge": "파일 또는 전체 자료가 읽기 한도를 초과했습니다. 내용을 잘라서 가져오지 않았습니다.",
+      "sourceFileTooLarge": "개별 파일이 읽기 한도를 초과했습니다. 이 항목을 완전히 가져오지 못했습니다.",
+      "snapshotTooLarge": "이번에 읽는 데이터의 총량이 한도를 초과했습니다. 가져오기가 완료되지 않았습니다.",
+      "itemTooLarge": "이 항목의 파일 총크기가 128 MiB를 초과했습니다. 이 항목을 완전히 가져오지 못했습니다.",
       "memoryMetadata": "기억 요약 또는 제목이 저장 요건에 맞지 않습니다.",
       "memoryWrite": "기억 저장 또는 무결성 확인에 실패했습니다. 다시 시도할 수 있습니다.",
       "memoryChanged": "저장된 기억이 변경되어 덮어쓰지 않았습니다.",
@@ -13033,6 +13040,11 @@
     "prevMessageJump": "이전 질문으로 이동: {{preview}}",
     "sessionLoading": "세션 불러오는 중",
     "askUserQuestion": {
+    "unanswered": "답변 없음",
+    "withdrawn": "더 이상 답변이 필요하지 않습니다",
+    "withdrawnDraft": "이 질문에 더 이상 답변할 필요가 없습니다.\n{{reason}}\n초안은 보관되며 추가 정보로 보낼 수 있습니다.",
+    "sendSupplement": "추가 정보 보내기",
+
       "voice": {
         "hint": "옵션 번호나 이름을 말하세요. 여러 개를 선택한 뒤에는 “선택 확인”이라고 말하세요.",
         "freeTextHint": "답변을 말하고 내용을 검토한 뒤 “선택 확인”이라고 말하여 제출하세요.",
@@ -14144,6 +14156,7 @@
       "taskAutoArchived": "\"{{title}}\"을(를) 보관했습니다",
       "taskAutoArchivedUndo": "실행 취소",
       "taskAutoArchivePending": "이 작업을 나가면 자동으로 보관됩니다",
+      "taskAutoArchiveBlockedDirty": "「{{title}}」 작업 공간에 커밋하지 않은 변경 사항이 있어 자동 보관하지 않았습니다",
       "taskAutoArchiveCancel": "취소",
       "taskAutoArchiveCancelled": "이번에는 자동으로 보관하지 않습니다",
       "taskArchiveNow": "지금 보관"
@@ -19747,10 +19760,10 @@
       "useCodex": "Codex로 로그인"
     },
     "title": "구독 계정",
-    "note": "첫 계정은 CLI 기본 폴더를 사용합니다. 추가 계정은 별도로 로그인합니다. 새 작업은 계정에 분산되고 기존 작업은 원래 계정을 유지합니다.",
     "strategy": "부하 분산",
     "add": "계정 추가",
     "default": "기본 폴더",
+    "defaultTag": "기본",
     "ready": "연결됨",
     "signedOut": "로그인 필요",
     "unavailable": "상태를 확인할 수 없음",

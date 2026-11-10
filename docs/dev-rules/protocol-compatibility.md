@@ -1,5 +1,50 @@
 # 跨端协议兼容
 
+## 任务汇总与 ActivityKit Push（2026-11-10，未发布）
+
+官方 Device Link 新增同账号、设备绑定 Bearer 路由：`PUT /api/device-link/task-activity`
+接受本机完整执行摘要，`GET` 返回 `{schemaVersion:1, accountId, version, waitingCount,
+unreadCount, runningCount, badgeCount, complete}`。`accountId` 来自已验签 membership，
+`version` 为数据库持久单调十进制字符串，`badgeCount=waitingCount+unreadCount`。
+`complete=false` 代表部分电脑缺失／离线／摘要过期，不得作为全局角标绝对值；不按通知次数加减。
+PUT 的 selected 只含任务 ID、截断标题和状态，优先等待操作→未读结果→运行中，不上传消息或工具参数。
+
+`PUT /api/device-link/live-activity` 接收原生 ActivityKit 的 start/update token、activityId、
+系统启用／移除状态、本地化状态文字、构建线、APNs 环境和「服务端地址＋账号」scope。
+`supportsInputPushToken` 表示 iOS 18+ 支持；`DELETE` 只注销本账号本设备的活动，不触碰普通推送。
+APNs 采用 `CindyAgentActivityAttributes`，`attributes.accountId` 存 scope，ContentState 的既有
+JSON 字段保持不变。手机不再以不完整 Home 列表覆盖已接管的服务端活动。
+
+服务端先执行追加 migration，再启动兼容旧客户端的接口，随后更新 Desktop 与原生手机包。
+旧服务端 404/405 或无新原生方法时保留既有本地活动；普通 push-token 可选能力
+`taskBadgeVersion:1` 缺省不支持，只有支持的安装收到无弹窗角标推送。iOS 用 `aps.badge`；
+Android 保持 FCM data-only，`data.badge` 与 `data.notification_count` 是字符串，不能增加
+notification 对象绕过账号过滤。角标分支独立挂载，不放进 iOS ActivityKit 条件中。
+
+自建中转不配置官方 APNs 凭证，也不接收上述云端请求；两端在自建模式跳过上报／注册，继续
+透传既有任务活动。既有 WS 协议和 allowlist 不变，无需升级已部署的自建中转。手机 token 同步
+测试覆盖不向自建地址发送账号凭证，原有连接与本地展示保持回归覆盖。
+服务端改动在独立 server 仓维护；上线和真实系统 Push 验收分别记录，不以本地测试代替已部署。
+
+## 远程模型显式窗口（#9501）
+
+`maker:provider:list` 的模型行可选增加 `contextWindowOverride`，仅表示来源电脑的显式工作预算。
+原 `contextWindow` 与 `contextWindowMax` 的默认／容量含义不变；远程 Agent 选择共用投影合入
+有效窗口，设置页保留默认及恢复默认语义。旧提供端缺字段时沿用原值，旧使用端忽略字段；
+提供端和使用端均升级后生效。分享备用执行目录在发布时将有效预算写进原 `contextWindow`，
+不增加服务端字段。运行时仍在实际执行电脑读取本机窗口与压缩比例。
+
+无新帧、channel、allowlist、权限、订阅或请求；官方及自建中转透传原 invoke JSON，无需升级。
+回归通过供应商服务、隧道序列化、远程选择与备用目录发布生产入口验证；不改变连接恢复机制。
+
+## 当前错误的历史行关联（2026-11-09）
+
+`AgentInputProjection` 可选返回 `errorPersistId`，指向当前错误横幅承接的持久化错误行。
+新 Desktop 在重载、重连仅收到状态快照时恢复该 ID，沿用现有精确 ID 去重，不按文案合并
+不同失败。旧 Host 缺字段时保留同一错误已知的事件关联；错误替换或清除时不继承旧 ID。
+旧客户端忽略此可选字段；Mobile 原有终态事件关联保持兼容。沿用既有 invoke／push 与
+授权，官方和自建中转均只透传既有 payload，无需服务端或 relay 升级。
+
 ## 供应商内多订阅账号（2026-11-07，未发布）
 
 同账号远控新增 `maker:subscription-accounts`（查看、添加、重连、取消、移出、策略）及
@@ -790,7 +835,9 @@ Renderer → Main 输入附带可选 `projectDir`，旧输入缺字段时回落�
 
 本机 Agent 工具的新建模式中，省略 `project_path` 继承来源归属，字符串选择已有项目，
 显式 `null` 创建不绑项目的任务；适配层必须保留缺省与 null 的区别。
-无法确定来源归属时明确失败，不以新执行目录猜测或登记项目。
+无法确定来源归属时明确失败，不以新执行目录登记项目。来源不绑项目且省略 `project_path` 时，
+宿主按请求的 `working_dir` 向上匹配最近的已登记可见项目（`resolveSessionProject`），匹配不到
+仍不绑项目；创建回执新增可选 `project_note`，旧调用方忽略即可。
 不绑项目且未传 `working_dir` 时复用既有托管目录创建流程；传目录或使用 worktree 也不改变归属。
 创建回执返回 `project_path`、实际 `working_dir` 与 `workspace_kind`；
 `list_projects` / `create_project` 保留 `working_dir` 并新增 `project_path` 回执。
@@ -1385,19 +1432,33 @@ schema、数据库或 Mobile 原生指纹。完整管理需要两端客户端更
 ## 实时生成速度
 
 既有 maker status 可选携带 `tokenSpeed`（`rate`、`average`、`tokens`、`elapsedMs`、
-`streaming`），由主机计算；Codex 使用真实输出用量与配对生成时长，最近三个有效区间按
-时长加权（包含请求后的首响应等待，排除工具与审批等待）。Claude Code / Pi 使用基于
-`pi-token-speed` 的流式文字／思考／所有工具参数估算，从首个内容块开始，工具调用生成
-结束即暂停。两种口径不能直接作为模型性能横向排名。收尾 `rate` 仍携带平均值以兼容旧端；
-新端只更新本轮平均，保留最近速度及曲线，不把最终校准当作新的速度样本。
+`streaming`），由主机计算。Claude Code、Codex、Pi 共用同一口径：**从每个请求的首字节起算的
+生成速度**，等待首字节、工具执行与审批不计入。流式内容用于实时读数，请求结束时供应商报告的
+真实输出（含思考／推理 token 数）替换估算并校准后续估算：
+
+- 正文与工具参数按文字估算（Claude Code 按字符，Codex 与 Pi 按词），比例随真实用量学习；
+- 思考按摘要文字或供应商给出的 token 估计折算到真实思考量；完全不流出的思考（Codex 推理）
+  按已完成请求测得的思考节奏以时间计；
+- 首字节之前已生成的内容（首包、整条到达的工具调用、报告了却从未流出的推理）不进入任何
+  速度，其生成时间按已测得的速度补回 `elapsedMs`，且不超过该请求等待首字节的时长；本轮尚未
+  测得速度时先以等待时长计，测得后替换。
+
+`rate` 是最近 5 秒（思考摘要为 30 秒）的速度，至少 3 秒的请求结束时取该请求的真实速度；
+工具执行或等待首字节期间 `streaming` 为 false。任意时刻 `tokens / elapsedMs` 等于 `average`，
+自行相除的旧端读到同一数值。收尾 `rate` 仍携带平均值以兼容旧端；新端只更新本轮平均，保留
+最近速度及曲线，不把最终校准当作新的速度样本。
+口径来自真实录制的流：改动计数、窗口或校准前后，用 `pnpm exec tsx scripts/token-speed-replay.ts`
+回放（不带参数时回放测试用的 Claude Code 与 Codex 录制，也可传入 `scripts/token-speed-capture.ts`
+新录的一轮），对照运行中显示值与真实用量之比。Pi 的供应商凭证只在应用内注入，无法在应用外
+录制，目前以会话记录回测计数，流式节奏尚未实测。
 仅用于显示，不参与费用、缓存或上下文计数。新客户端校验数值，非法即丢弃；旧主机省略时
 沿用原 usage 计数路径，旧客户端忽略新增字段。主机检测到挂起或时钟异常时，本轮后续帧不再携带该字段并标记
 `generationReliable: false`，客户端据此丢弃已保留的速度。无需服务端更新、新通道、权限或
 数据库 migration。
 
-Codex 的速度累计独立于计费桶：同一产品轮次中的原生接续保留已配对的输出与时长，
-用户新消息同时清零；原生 turn 的测速源计数从零开始。计时未增加但输出增加的区间不进入
-速度分子或分母，暂时发 `generationReliable: false`，下一个有效区间恢复；费用仍完整记账。
+Codex 的速度累计独立于计费桶：同一产品轮次中的原生接续保留已测得的输出与时长，
+用户新消息同时清零。工具占用轮次期间到达的输出（code mode、后台工具）没有自己的模型时长，
+不进入速度分子或分母，暂时发 `generationReliable: false`，下一个可配对的响应恢复；费用仍完整记账。
 旧客户端使用的 `outputTokens` / `generationDurationMs` 与速度快照同源，不能用计费桶
 补速度分子。若某个原生 turn 丢失过配对区间，其结束用量不附完整输出的生成时长。
 `tokenSpeed.peak` 是新增可选字段，保存产品轮次内已测最近速度的峰值；新端跨重连读取，
@@ -3188,6 +3249,25 @@ B 上的 Worker 是一条普通任务，`sessions.orca_remote_lead`(migration 01
 
 ## 供应商组任务进行中换号
 
+2026-11-03 新增独立动作 `rebalance-preference { sessionId, enabled: boolean }` → `{ ok: boolean }`，
+发给**任务所在电脑**，与下面两种动作复用本机 IPC 和同账号 `provider-group:remote` 入口及原有准入。
+`enabled: false` 显式关闭本任务的配额均衡换号（含同账号自动接续），不关闭故障恢复或手动换电脑；
+`true` 删除该 override，恢复原默认/自动偏好。`sessionId` 沿用已有 id 校验，非布尔值回 `[INVALID_PARAMS]`。
+任务尚未归组或服务未装配回 `ok: false`；落盘失败不能回成功。关闭后清理未消费决定，发送前再次核对关闭状态，
+拒绝旧控制端的缓存 `rebalance-decision`。
+保存前读取当前组和任务实际位置核验归属，不能仅凭尚未清理的旧绑定写入。控制端 5 秒等待到期只释放发送，
+继续处理迟到的保存回包；不能把界面超时当作明确失败，连接错误提示保存结果未确认。
+成功保存后经已有 `local-db:sessions:patched` 广播可选布尔字段 `providerGroupRebalanceEnabled`，本机窗口与同账号
+控制端据此按任务电脑 + 任务 id 清理已缓存及在途提议；广播沿用写入前捕获的 owner scope。旧端忽略新字段。
+旧端不认识新动作时明确拒绝，控制端提示保存失败并在原位置发送，
+不得降级成换号确认。旧动作和旧客户端不变。
+
+持久文件新增可选 `disabledRebalance: { [sessionId]: at }`（每类偏好最多 4000 条），旧 `autoRebalance` 保留；
+新端读取旧文件按未关闭处理。降级旧版本无法执行关闭语义，可能恢复旧版配额均衡行为，旧版写入也可能丢弃新字段。
+本次只扩展端到端 invoke 的业务 payload，不改变 envelope、channel、allowlist、relay 握手/路由或重连；
+官方及自建中转均按现有通用通道透传，无需更改服务器。协议与业务回归由 `remoteHandler.test.ts`、
+`ipc.test.ts`、`service.test.ts` 及两端提示测试覆盖。
+
 产品规则见 [`provider-groups.md`](../product-rules/provider-groups.md) §6.2（2026-10-21 用户裁决：上一轮结束、用户发下一条消息
 前弹窗问要不要换号，可为这个任务选「以后自动换」，手机与电脑一致）。
 
@@ -3213,8 +3293,10 @@ B 上的 Worker 是一条普通任务，`sessions.orca_remote_lead`(migration 01
   分配，但不能作为主动换号结果；旧调用端不传该字段，行为不变。
 - **分隔条内容可选 `switchReason: 'quota-rebalance'`**：`agent_switch` 边界行（`AgentSwitchBoundaryContent`）只在供应商组为此换了
   电脑时带上，桌面与手机在位置后写「· 这个账号的配额更该先用」。旧端忽略，照常只显示位置。
-- **本机持久数据**：「以后自动换」存在按账号隔离的 `provider-group-session-prefs.json`（`{ autoRebalance: { [sessionId]: at } }`，
-  最多 4000 条、超出丢最早的；读不出时保留原文件、按都没选过处理）。不同步、不外发；降级旧版忽略这个文件，相当于每次都不提议。
+- **本机持久数据**：自动偏好与显式关闭状态存在按账号隔离的 `provider-group-session-prefs.json`
+  （`{ autoRebalance: { [sessionId]: at }, disabledRebalance?: { [sessionId]: at } }`），每类最多 4000 条、超出丢最早的；
+  读不出时保留原文件、按都没选过处理。文件不同步、不外发；手机与其他控制端通过上述动作读取建议、保存选择。
+  不支持新动作的旧版本会忽略关闭状态，降级风险见本节开头。
 - 实现：`provider-group/service.ts`、`usage.ts`(`providerGroupRebalanceTarget`)、`router.ts`(`rebalanceCandidates`)、`runtime.ts`、
   `ipc.ts`、`remoteHandler.ts`、`remoteRegistration.ts`、`sessionPrefs.ts`、`maker-ipc/sessionAgentSwitchHandler.ts`；客户端
   `renderer/features/provider-group/sessionRebalancePrompt.ts` 与 `apps/mobile/src/session/sessionRebalancePrompt.ts`。回归见
@@ -4151,6 +4233,10 @@ PC 同源 ghostPermissionItems 声明摘要投影并排除 tool，以请求 loca
 拒绝非空输入（`INVALID_PARAMS`）才进入既有 v1 快照路径；普通读取失败不得回退全量。
 旧控制端的空输入仍返回原有 v1 全量快照，旧 Host 的历史网络限制保留。推荐池由页面持有，
 切换列表、搜索及详情返回不重新请求；没有新增远程 channel、授权或 relay 配置。
+Host 访问 plugin-server 的按需读取接口（`catalog`、`defaults`、`resolve`、`recommendations`）可能先于
+服务端上线：只有旧服务端的「接口不存在」才回退到改版前的整份目录读取（`resolve` 404/405；`defaults`
+首页 404/405 或被旧路由当成插件 ID 返回 400；`catalog` / `recommendations` 的 400 先用 `defaults` 首页
+确认），按市场地址在进程内记住 10 分钟；网络、鉴权、5xx 与组织变更等错误照旧失败，不回退。
 `management:snapshot` 的可选 `projects` 字段投影目标 Host 的最近项目 ID、显示名及可选只读
 `path`，用于复用本机 Project Scope 的目录展示（含暂时不存在的最近目录，不按任务归档过滤）；
 控制端以 Host 生成的项目 ID 请求 `management:project-state`，返回该项目的禁用实例和
@@ -5040,6 +5126,8 @@ X 属于公开帖子接入，本轮不新增付费历史抓取；其已有推文
 
 ## 插件伙伴委派协议与回执（未发布）
 
+`targets.resolve` 增量接受 `{session:sessionId}`，与原 `{target:{kind,id}}` 互斥；返回同样的目标元数据。普通可用任务返回 task，伙伴唯一 canonical 主对话返回 bot 与伙伴 ID，其他伙伴会话返回 TARGET_UNAVAILABLE。旧调用、批准与持久数据不变；旧 Host 不支持新参数时返回 INVALID_PARAMS，不应自动改投其他目标。仅复用本机插件管子，无 device-link、官方或自建 relay 改动。
+
 agent.delegation 为可选独立能力，依赖 tasks + targets，只有 Host 确认的
 delegationCapabilityApproved 才授予；历史未知字段、旧 tasks/targets 批准不推断新授权。
 缺省不改变旧权限项、批准、配置或回执摘要；已安装的历史字段保留，不因新校验停用。
@@ -5296,3 +5384,39 @@ executionId 调用 `complete`；打开任务的无 executionId `accept` 只确�
 已接受任务的容量。完成回执在准入请求发出前捕获，响应丢失时也会尝试释放原轮次，失败沿原任务收尾路径重试；
 撤权后仍可释放原轮次，旧回执不能释放后续轮次。服务端记录取消标识，先到的释放回执可阻止迟到准入。
 这是本次备用执行能力的配套接口，需使用包含上述接线的 Desktop；不改变既有在线 O 的委派路径。
+
+### 异步问答按 Codex 原生终端保留（2026-11-10）
+
+复用现有 `ask_user_question` / `delivery=async` 和 `resolveInteraction` 通道。新执行端将
+同批问题拆成独立 requestId；保留原生问题 id（旧端仍可按题干回答），新批次累积。
+完成、失败、Stop 不撤掉未答题；关闭／清空或接受普通新输入才撤销。回答当前题保留其他题，
+空答案只跳过当前题。执行端收到回答后先由既有输入队列接纳，再返回 accepted；明确失败
+仍保留问题，结果未知不自动重放。权限、账户和远控来源检查沿用既有边界。
+桌面新端提供逐题切换，手机复用问题队列。旧桌面可能只显示最近一题，升级后通过原 pending
+快照恢复完整集合；新版查看端连接旧执行端仍接受旧的撤题事件及已编辑草稿补充，不推断
+旧宿主具备保留能力。不新增 IPC、relay 帧或要求中转升级。
+
+
+### 异步问题主动撤回（2026-11-10）
+
+三种 Harness 共用直接发现的 `cindy_helper.manage_user_questions`（Pi 同名直接工具）：
+`list` 返回当前任务逐题 request_id、题干和 pending／answer_in_flight；`withdraw` 必须给
+精确 ID 与用户语言的原因，返回逐题 withdrawn／not_pending／answer_in_flight。仅当前活跃
+Session 实例的已证实根代理可调用；不提供通用 call_tool 别名，不涉及同步问题或权限审批。
+既有 `interaction_dismissed` 增加 `reason=question_withdrawn` 和可选 `withdrawalReason`；
+持久化沿用 `status=cancelled`，只增加同名原因字段，无 schema migration。旧查看端仍按
+cancelled 处理，新端显示「无需再回答」及原因；当前正在编辑的本地草稿保留为补充发送入口。
+撤回不发送输入、不重开任务；已进入提交的答案优先。手机复用已确认撤卡的旧快照抑制。
+结束、超时不自动撤题；模型根据工具说明审查是否仍有价值，明确撤回已过时问题。
+
+共享 `ask_user_question_async` 的回执保持 request_id／status，增补逐题
+`questions: [{request_id, question}]` 和当前 `pending_count`，旧消费者可忽略。
+撤回仍须显式 request_ids；漏传不等于撤回全部。Codex 原生回执不改，可先 list 获取逐题 ID。
+清题来源由宿主判断；自动输入不会撤题。`SUPERSEDE_ASYNC_QUESTIONS` 是进程内 Symbol，
+不接受来自 Renderer／Device Link 的同名字符串参数，不新增跨端权限或协议字段。
+
+撤回原因限制 200 字符。未答失效的历史行显示题干与「未回答」；手机须等权威 pending
+快照后才判断持久 pending 行是否失效，未知状态保持隐藏，待答集合变化须使历史渲染缓存失效。
+撤回后保留本端草稿，选项转为可编辑的补充文本，不再提供原选项、跳过等旧动作。
+原轮次结束后才交付的回答在原回复格式外附带 `cindy_question_context`，提醒核对适用性与
+不要重复已完成工作；运行中同轮回答不添加。该上下文不是用户新授权，不新增 RPC 字段。

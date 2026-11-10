@@ -326,6 +326,8 @@ describe('ScheduleWebhookHost 服务器通道', () => {
     await start([original]);
     await host.setSecret(original);
     await vi.waitFor(() => expect(host.status(original)?.connected).toBe(true));
+    // Welcome starts a separate reconciliation; connected alone is not admission-ready.
+    await host.refreshStatus();
     server.push({ batchId: 'before-disable', endpointId: 'whk-s1', scheduleId: 's1', events: [event('before-disable')], omitted: 0 });
     await vi.waitFor(() => expect(server.frames).toContainEqual({ type: 'ack', batchId: 'before-disable' }));
     await host.stop();
@@ -341,6 +343,7 @@ describe('ScheduleWebhookHost 服务器通道', () => {
     await host.refreshStatus();
     expect(host.status(enabled)).toMatchObject({ hasSecret: false });
     await vi.waitFor(() => expect(host.status(enabled)?.connected).toBe(true));
+    await host.refreshStatus();
     server.push({ batchId: 'old', endpointId: 'whk-s1', scheduleId: 's1', events: [event('old')], omitted: 0 });
     server.push({ batchId: 'new', endpointId: server.endpoints.get('s1')!.id, scheduleId: 's1', events: [event('new')], omitted: 0 });
     await vi.waitFor(() => expect(server.frames).toContainEqual({ type: 'ack', batchId: 'new' }));
@@ -389,7 +392,7 @@ describe('ScheduleWebhookHost 服务器通道', () => {
   it('旧服务明确提示账号管理未部署，原接收能力继续工作', async () => {
     await start([schedule('s1')]);
     await expect(host.accountOverview()).rejects.toThrow('WEBHOOK_MANAGEMENT_UNAVAILABLE');
-    expect(host.status(schedule('s1'))?.url).toBeTruthy();
+    await vi.waitFor(() => expect(host.status(schedule('s1'))?.url).toBeTruthy());
   });
 
   it('未登录时不发任何请求也不连接，配置保留；登录后恢复', async () => {

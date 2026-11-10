@@ -4,23 +4,31 @@ import type { RoutineDeliveryTarget } from '@cindy/maker-scheduler';
 import { getDbClient } from '../localDb/client/current.js';
 import { sessions } from '../localDb/schema.js';
 import { createMessage } from '../localDb/ipc/messages.js';
+import { createLogger } from '../logger.js';
 import { getImOrchestrator, listImOrchestrators, type ImOrchestrator } from '../im/shared/orchestrator.js';
 import { buildBotImConnectionListPayload, getBotImConnectionOrchestrator } from '../im/shared/botImConnectionRuntime.js';
 import { listBotImConnectionLanes } from '../im/shared/botImLaneRuntime.js';
+import { readWechatChannelSettings } from '../im/wechat/channelSettings.js';
+import type { WechatIM } from '../im/wechat/WechatIM.js';
 import type { RoutineHostDeps } from './service.js';
 import { getRoutineResultDispatch } from './deliveryDispatch.js';
 import { UI_ACTION_TRIGGER_PREFIX } from '../../shared/interruptedTurn.js';
 
-type ResolvedTarget = RoutineDeliveryTarget & { orchestrator: ImOrchestrator; receiver: string; contextId: string };
+const log = createLogger('RoutineDelivery');
+
+type ResolvedTarget = RoutineDeliveryTarget & {
+  orchestrator: ImOrchestrator; receiver: string; contextId: string; isCurrent?: () => boolean;
+};
 
 /** Only the current account's connected bots and known recipients are discoverable. */
 async function resolveTargets(botId: string): Promise<ResolvedTarget[]> {
   const targets = new Map<string, ResolvedTarget>();
-  const add = (key: string, contextId: string, orchestrator: ImOrchestrator, receiver: string, recipient: string) => {
-    const id = JSON.stringify([key, contextId, receiver]);
+  const add = (key: string, contextId: string, orchestrator: ImOrchestrator, receiver: string, recipient: string,
+    binding?: { epoch?: string; isCurrent: () => boolean }) => {
+    const id = JSON.stringify([key, contextId, receiver, ...(binding?.epoch ? [binding.epoch] : [])]);
     targets.set(id, { id, channel: orchestrator.channel,
       name: orchestrator.adapter.getBotDisplayName?.() || orchestrator.channel,
-      recipient, receiver, orchestrator, contextId });
+      recipient, receiver, orchestrator, contextId, isCurrent: binding?.isCurrent });
   };
   for (const connection of buildBotImConnectionListPayload(botId).connections) {
     const orchestrator = getBotImConnectionOrchestrator(connection.id);
@@ -49,6 +57,28 @@ async function resolveTargets(botId: string): Promise<ResolvedTarget[]> {
     if (status.kind !== 'connected') continue;
     const contextId = orchestrator.adapter.getBotContextId?.() || status.appId;
     if (!contextId) continue;
+    let personalBinding: { isCurrent: () => boolean } | undefined;
+    if (orchestrator.channel === 'wechat') {
+      const companionBotId = readWechatChannelSettings().companionBotId;
+      if (companionBotId && companionBotId !== botId) continue;
+      const bindingIsCurrent = () => getImOrchestrator('wechat') === orchestrator
+        && readWechatChannelSettings().companionBotId === companionBotId;
+      personalBinding = { isCurrent: bindingIsCurrent };
+      if (companionBotId) {
+        // Bound WeChat chats live in source=bot sessions, not channel sessions.
+        // Only expose the verified owner with a usable context in this binding.
+        const owner = await (orchestrator.adapter.im as WechatIM).getOwnerDeliveryTarget().catch(() => {
+          // A broken local context makes only this destination unavailable.
+          // Do not log context/decryption errors, which may contain private data.
+          log.warn('WeChat routine destination lookup failed');
+          return null;
+        });
+        const isCurrent = () => !!owner?.isCurrent() && bindingIsCurrent();
+        if (owner && isCurrent()) add('wechat', contextId, orchestrator, owner.receiver, owner.receiver,
+          { epoch: owner.bindingEpoch, isCurrent });
+        continue;
+      }
+    }
     const feishu = orchestrator.channel === 'feishu';
     const rows = await getDbClient().drizzle.select({
       receiver: feishu ? sessions.feishuOpenId : sessions.imUserId,
@@ -58,8 +88,8 @@ async function resolveTargets(botId: string): Promise<ResolvedTarget[]> {
       eq(feishu ? sessions.feishuBotAppId : sessions.imBotContextId, contextId),
       ne(sessions.status, 'deleted'),
     ));
-    for (const row of rows) if (row.receiver)
-      add(orchestrator.channel, contextId, orchestrator, row.receiver, row.title || row.receiver);
+    for (const row of rows) if (row.receiver && personalBinding?.isCurrent() !== false)
+      add(orchestrator.channel, contextId, orchestrator, row.receiver, row.title || row.receiver, personalBinding);
   }
   return [...targets.values()];
 }
@@ -77,7 +107,7 @@ export const deliverRoutineResult: NonNullable<RoutineHostDeps['deliverResult']>
     const target = (await resolveTargets(routine.botId)).find(row => row.id === delivery.targetId);
     assertCurrent();
     const status = target?.orchestrator.adapter.im.getStatus();
-    if (!target || status?.kind !== 'connected'
+    if (!target || status?.kind !== 'connected' || target.isCurrent?.() === false
       || (target.orchestrator.adapter.getBotContextId?.() || status.appId) !== target.contextId)
       throw new Error('Routine destination is disconnected or unavailable');
     await target.orchestrator.adapter.im.sendMarkdownText(target.receiver, `${routine.name}\n\n${text}`);

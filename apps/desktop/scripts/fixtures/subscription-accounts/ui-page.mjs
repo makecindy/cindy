@@ -12,6 +12,7 @@ export default {
     'narrow-weight': { about: '320-pixel content width with task limit, weight, assignment and account menu controls' },
     codex: { about: 'Codex accounts and weight strategy' },
     error: { about: 'Unavailable status read and inline retry on focus' },
+    empty: { about: 'Nothing signed in: no placeholder account, strategy or count, only Add account' },
   },
   async check(page, ui) {
     await page.getByTestId('subscription-accounts').waitFor();
@@ -20,8 +21,16 @@ export default {
       await page.getByRole('alert').waitFor();
       return;
     }
+    if (ui.case === 'empty') {
+      await page.getByRole('button', { name: await ui.t('subscriptionAccounts.add'), exact: true }).waitFor();
+      await page.waitForFunction(() => !document.querySelector('.animate-spinner'));
+      assert.equal(await page.getByTestId('subscription-account').count(), 0);
+      assert.equal(await page.getByRole('radiogroup').count(), 0);
+      assert.equal(await page.getByRole('switch').count(), 0);
+      return;
+    }
     assert.equal(await page.getByRole('switch').count(), 3);
-    assert.equal(await page.getByRole('combobox').first().getAttribute('data-setting-id'), 'providers.subscriptionAccounts');
+    assert.equal(await page.getByRole('radiogroup', { name: await ui.t('subscriptionAccounts.strategy'), exact: true }).getAttribute('data-setting-id'), 'providers.subscriptionAccounts');
     // Every account's bars share one column, whatever each account's own labels and numbers are.
     const bars = await page.getByRole('progressbar').evaluateAll(elements =>
       elements.map(element => {

@@ -8,6 +8,7 @@ import { open } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { isAbsolute, join, resolve } from 'node:path';
 import Database from 'better-sqlite3';
+import { resolveBetterSqliteNativeBinding } from '../../localDb/betterSqliteFactory.js';
 import { stripJsonComments } from '../../../shared/theme-import/vscode.js';
 import { parse as parseToml } from 'smol-toml';
 import {
@@ -161,7 +162,9 @@ function headers(value: unknown): Record<string, string> | undefined {
     Object.values(map).some((v) => typeof v !== 'string')
   )
     throw new SourceError('unsupported');
-  return Object.fromEntries(Object.entries(map).map(([k, v]) => [k, str(v)]));
+  return Object.keys(map).length
+    ? Object.fromEntries(Object.entries(map).map(([k, v]) => [k, str(v)]))
+    : undefined;
 }
 function protocol(value: unknown): ProviderWireProtocol | undefined {
   const v = str(value);
@@ -227,8 +230,17 @@ function claude(ref: string, name: string, config: ObjectMap): LocalSourceEntry 
 }
 function codex(config: ObjectMap, key = ''): LocalSourceEntry[] {
   const profiles = Object.values(obj(config.profiles)).map(obj);
-  return Object.entries(obj(config.model_providers)).map(([id, raw]) => {
+  const entries = Object.entries(obj(config.model_providers)).map(([id, raw]) => {
     const p = obj(raw);
+    // auth.json belongs to OpenAI auth, not to arbitrary selected providers.
+    // Never substitute it for an unresolved env key or command-backed token.
+    const openAiKey =
+      config.model_provider === id &&
+      p.requires_openai_auth === true &&
+      p.env_key === undefined &&
+      p.auth === undefined
+        ? key
+        : '';
     const ms = [
       config.model_provider === id ? config.model : undefined,
       ...profiles
@@ -239,7 +251,7 @@ function codex(config: ObjectMap, key = ''): LocalSourceEntry[] {
       'codex',
       str(p.base_url),
       p.wire_api === undefined ? 'openai-responses' : protocol(p.wire_api),
-      first(p.experimental_bearer_token, config.model_provider === id ? key : ''),
+      first(p.auth === undefined ? p.experimental_bearer_token : undefined, openAiKey),
       ms,
       p.http_headers,
     );
@@ -250,6 +262,25 @@ function codex(config: ObjectMap, key = ''): LocalSourceEntry[] {
       ...(p.env_http_headers ? { issue: 'unsupported' as const } : {}),
     };
   });
+  if (
+    key &&
+    (!config.model_provider || config.model_provider === 'openai') &&
+    !entries.some((entry) => entry.ref === 'openai')
+  )
+    entries.push({
+      ref: 'openai',
+      name: 'OpenAI',
+      endpoints: [
+        endpoint(
+          'codex',
+          'https://api.openai.com/v1',
+          'openai-responses',
+          key,
+          config.model ? [config.model] : [],
+        ),
+      ],
+    });
+  return entries;
 }
 function generic(ref: string, name: string, app: string, raw: ObjectMap): LocalSourceEntry[] {
   if (app === 'claude' || app === 'claude-desktop') return [claude(ref, name, raw)];
@@ -328,7 +359,13 @@ async function database(path: string, query: string): Promise<ObjectMap[]> {
   } finally {
     await handle.close();
   }
-  const db = new Database(path, { readonly: true, fileMustExist: true, timeout: 100 });
+  const nativeBinding = resolveBetterSqliteNativeBinding();
+  const db = new Database(path, {
+    readonly: true,
+    fileMustExist: true,
+    timeout: 100,
+    ...(nativeBinding ? { nativeBinding } : {}),
+  });
   try {
     db.pragma('query_only = ON');
     const rows: ObjectMap[] = [];
@@ -379,20 +416,6 @@ async function read(
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
     }
     const entries = codex(config, key);
-    if (!entries.length && key && (!config.model_provider || config.model_provider === 'openai'))
-      entries.push({
-        ref: 'openai',
-        name: 'OpenAI',
-        endpoints: [
-          endpoint(
-            'codex',
-            'https://api.openai.com/v1',
-            'openai-responses',
-            key,
-            config.model ? [config.model] : [],
-          ),
-        ],
-      });
     const profiles = [config, ...Object.values(obj(config.profiles)).map(obj)];
     for (const profile of profiles) {
       if (!profile.model_catalog_json) continue;

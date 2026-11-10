@@ -269,7 +269,7 @@ export class InputHandoffService {
         errorCode: 'TARGET_IS_CINDY',
         message: (frontIsHost ? 'Cindy itself is in front, and ' : '')
           + 'Cindy\'s own window cannot be handed off. A screen shown inside Cindy (such as the device simulator) is not a '
-          + 'window here: for a sign-in QR code on it, ask again with kind="scan" and `image` set to a fresh screenshot; '
+          + 'window here: for a sign-in QR code on it, call request_input_handoff with `image` set to a fresh screenshot; '
           + 'for other fields there, tell the owner what is needed.',
       };
     }

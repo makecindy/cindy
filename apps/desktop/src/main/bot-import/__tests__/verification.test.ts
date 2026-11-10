@@ -2,11 +2,12 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { createServer, type Server } from 'node:http';
 vi.mock('../../maker-host/index.js', () => ({ getMakerIfReady: vi.fn() }));
 vi.mock('../../localDb/ipc/bots.js', () => ({ getBotRemoteResourceSource: vi.fn() }));
-vi.mock('../runtime.js', () => ({ companionEnvironmentStore: { read: vi.fn() } }));
+vi.mock('../runtime.js', () => ({ companionEnvironmentStore: { read: vi.fn(), readResource: vi.fn() } }));
 vi.mock('../../maker-host/session-storage.js', () => ({ desktopSessionStorage: { getStatus: vi.fn(async () => 'active') } }));
 import { getMakerIfReady } from '../../maker-host/index.js';
 import { getBotRemoteResourceSource } from '../../localDb/ipc/bots.js';
 import { companionEnvironmentStore } from '../runtime.js';
+import { captureSkillArchive } from '../skillArchive.js';
 import { matchesReadEvidence, readImportHttpEvidence, verifyImportedAutomation } from '../verification.js';
 import { indexAutomationDependencies, normalizeAutomation } from '../sourceAutomations.js';
 import { resolveImportEnvironmentDependencies } from '../environmentSelection.js';
@@ -55,7 +56,7 @@ it.each(['http', 'monitor'])('requires permission before a credential-bearing %s
   expect(JSON.stringify(confirmProbe.mock.calls)).not.toContain('fixture-private-token');
 });
 
-it('verifies a selected skill bundled script using real HTTP without giving the planner its key', async () => {
+it.each(['inline', 'archive'])('verifies a selected %s skill bundled script using real HTTP without giving the planner its key', async storage => {
   let authorized = false;
   server = createServer((req, res) => {
     authorized = req.headers.authorization === 'Bearer fixture-private-token';
@@ -69,6 +70,19 @@ it('verifies a selected skill bundled script using real HTTP without giving the 
   vi.mocked(getMakerIfReady).mockReturnValue({ oneShot, getSession: vi.fn(), getSessionMeta: vi.fn().mockResolvedValue({ agentKind: 'pi', model: 'fixture-model' }) } as never);
   vi.mocked(getBotRemoteResourceSource).mockResolvedValue({ canonicalSessionId: 'fixture-session' } as never);
   const skill: ImportItem = { view: { id: 'skill', name: 'dashboard fixture-private-token', category: 'skills', selected: true }, files: [{ name: 'scripts/fake-native-access-token-query.py', bytes: Buffer.from('url = os.environ["DATA_URL"]\ntoken = os.environ["DATA_TOKEN"]\n# private auth: fake-native-access-token'), executable: false }] };
+  // Dependency-first snapshots must preserve the actual entry point and query
+  // in both storage formats, without spending planning context on libraries.
+  skill.files!.unshift(...Array.from({ length: 4 }, (_, i) => ({ name: `node_modules/lib/dependency${i}.js`, bytes: Buffer.from('dependency_noise'.repeat(2300)), executable: false })));
+  skill.files!.push({ name: 'SKILL.md', bytes: Buffer.from('# Dashboard\nRead scripts/query.py for the actual query.'), executable: false });
+  if (storage === 'archive') {
+    const records: string[] = [];
+    const { ref } = await captureSkillArchive('bot', { ...skill, filesComplete: true }, {
+      async writeResource(key, id, chunks) { for await (const chunk of chunks) records.push(chunk); return { key, id, digest: 'fixture' }; },
+      async *readResource() { yield* records; },
+    }, {}, () => {});
+    skill.skillArchive = ref; skill.files = undefined;
+    vi.mocked(companionEnvironmentStore.readResource).mockImplementation(async function* () { yield* records; });
+  }
   const result = await verifyImportedAutomation('/fixture', 'bot', {
     view: { id: 'job', name: 'Daily', category: 'automations', selected: true, dependsOn: ['skill'] },
     automation: { sourceId: 'job', original: {}, fingerprint: 'fixture', input: { name: 'Daily', prompt: 'Read dashboard data', enabled: true, triggers: [],  } },
@@ -79,11 +93,13 @@ it('verifies a selected skill bundled script using real HTTP without giving the 
   expect(prompt).toContain('scripts/');
   expect(prompt).toContain('-query.py');
   expect(prompt).toContain('DATA_TOKEN');
+  expect(prompt).toContain('for the actual query');
+  expect(prompt).not.toContain('dependency_noise');
   expect(prompt).not.toContain('fixture-private-token');
   expect(prompt).not.toContain('fake-native-access-token');
   expect(prompt).not.toContain('UNSELECTED_TOKEN');
   expect(skill.view.name).toBe('dashboard fixture-private-token');
-  expect(skill.files![0]!.name).toBe('scripts/fake-native-access-token-query.py');
+  if (storage === 'inline') expect(skill.files!.some(file => file.name === 'scripts/fake-native-access-token-query.py')).toBe(true);
 });
 
 it('keeps HTTP base paths opaque while resolving the exact URL and appended resources privately', async () => {

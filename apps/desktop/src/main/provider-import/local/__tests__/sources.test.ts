@@ -1,8 +1,9 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import Database from 'better-sqlite3';
+import * as sqliteRuntime from '../../../localDb/betterSqliteFactory.js';
 import { readLocalProviderSource, staticJson, type LocalSourceContext } from '../sources.js';
 
 let home: string;
@@ -62,7 +63,7 @@ describe('saved API sources (isolated fake credentials only)', () => {
   it('reads Codex providers/profile models and API key only for its selected provider', async () => {
     await put(
       '.codex/config.toml',
-      'model_provider="one"\nmodel="alpha"\n[model_providers.one]\nbase_url="https://relay.test/v1"\nwire_api="responses"\n[model_providers.two]\nbase_url="https://other.test/v1"\nwire_api="chat"\n[profiles.work]\nmodel_provider="one"\nmodel="beta"',
+      'model_provider="one"\nmodel="alpha"\n[model_providers.one]\nbase_url="https://relay.test/v1"\nwire_api="responses"\nrequires_openai_auth=true\n[model_providers.two]\nbase_url="https://other.test/v1"\nwire_api="chat"\n[profiles.work]\nmodel_provider="one"\nmodel="beta"',
     );
     await put('.codex/auth.json', {
       OPENAI_API_KEY: 'FAKE-API',
@@ -88,6 +89,109 @@ describe('saved API sources (isolated fake credentials only)', () => {
       env: { SECRET_VAR: 'DO-NOT-RESOLVE' },
     });
     expect(result.entries[0].endpoints[0].apiKey).toBeUndefined();
+  });
+  // Auth sources are independent in Codex. A relay must not adopt an official
+  // key simply because both are saved locally (credentials-and-local-storage).
+  // Existing env_key coverage had no OPENAI_API_KEY, so it missed this leak.
+  // Unit fixtures exercise both adapters without resolving env or executing auth.
+  it.each(
+    (['codex', 'cc-switch'] as const).flatMap((source) =>
+      [
+        '',
+        'requires_openai_auth=false',
+        'env_key="RELAY_KEY"',
+        'requires_openai_auth=true\nenv_key="RELAY_KEY"',
+        'auth={command="NEVER_EXECUTE"}',
+        'requires_openai_auth=true\nauth={command="NEVER_EXECUTE"}',
+      ].map((auth) => ({ source, auth })),
+    ),
+  )('never assigns the official key to independent $source auth: $auth', async ({ source, auth }) => {
+    const config =
+      'model_provider="relay"\n[model_providers.relay]\nbase_url="https://relay.test/v1"\n' + auth;
+    if (source === 'codex') {
+      await put('.codex/config.toml', config);
+      await put('.codex/auth.json', { OPENAI_API_KEY: 'FAKE-OFFICIAL-ONLY' });
+    } else {
+      await put('.cc-switch/config.json', {
+        codex: {
+          providers: {
+            relay: {
+              name: 'Relay',
+              settingsConfig: { config, auth: { OPENAI_API_KEY: 'FAKE-OFFICIAL-ONLY' } },
+            },
+          },
+        },
+      });
+    }
+    const result = await readLocalProviderSource(source, context);
+    expect(result.entries).toHaveLength(1);
+    expect(result.entries[0].endpoints[0].apiKey).toBeUndefined();
+    expect(JSON.stringify(result)).not.toContain('FAKE-OFFICIAL-ONLY');
+  });
+  it.each(
+    (['codex', 'cc-switch'] as const).flatMap((source) =>
+      [undefined, 'openai'].map((selected) => ({ source, selected })),
+    ),
+  )(
+    'still includes the official OpenAI API configuration with unused custom providers ($source, $selected)',
+    async ({ source, selected }) => {
+      const config =
+        (selected ? `model_provider="${selected}"\n` : '') +
+        'model="official-model"\n[model_providers.unused]\nbase_url="https://relay.test/v1"';
+      if (source === 'codex') {
+        await put('.codex/config.toml', config);
+        await put('.codex/auth.json', { OPENAI_API_KEY: 'FAKE-OFFICIAL-ONLY' });
+      } else {
+        await put('.cc-switch/config.json', {
+          codex: {
+            providers: {
+              official: {
+                name: 'Official',
+                settingsConfig: { config, auth: { OPENAI_API_KEY: 'FAKE-OFFICIAL-ONLY' } },
+              },
+            },
+          },
+        });
+      }
+      const result = await readLocalProviderSource(source, context);
+      const prefix = source === 'codex' ? '' : 'codex/official/';
+      expect(result.entries).toHaveLength(2);
+      expect(result.entries.find((e) => e.ref === prefix + 'openai')?.endpoints[0]).toMatchObject({
+        baseUrl: 'https://api.openai.com/v1',
+        protocol: 'openai-responses',
+        apiKey: 'FAKE-OFFICIAL-ONLY',
+        models: [{ id: 'official-model' }],
+      });
+      expect(result.entries.find((e) => e.ref === prefix + 'unused')?.endpoints[0].apiKey).toBeUndefined();
+    },
+  );
+  // Protocol selection is user-visible in the import editor. An absent Codex
+  // wire uses its default, but an unknown explicit wire must require user input.
+  // Existing cases only exercise an explicit Responses configuration (unit tier).
+  it.each([
+    [undefined, 'openai-responses'],
+    ['chat', 'openai-chat'],
+    ['unknown-wire', undefined],
+  ])('preserves Codex protocol intent for wire_api=%s', async (wire, expected) => {
+    await put(
+      '.codex/config.toml',
+      '[model_providers.custom]\nbase_url="https://relay.test/v1"\n' +
+        (wire === undefined ? '' : `wire_api="${wire}"\n`),
+    );
+    const result = await readLocalProviderSource('codex', context);
+    expect(result.issue).toBeUndefined();
+    expect(result.entries).toHaveLength(1);
+    expect(result.entries[0].endpoints[0].protocol).toBe(expected);
+  });
+  it('requires protocol selection for an explicit unknown OpenCode SDK, including known providers', async () => {
+    await put('.local/share/opencode/auth.json', { openai: { type: 'api', key: 'FAKE-KEY' } });
+    await put('.config/opencode/opencode.json', {
+      provider: { openai: { npm: 'unknown-sdk', options: { baseURL: 'https://relay.test/v1' } } },
+    });
+    const result = await readLocalProviderSource('opencode', context);
+    expect(result.entries).toHaveLength(1);
+    expect(result.entries[0].endpoints[0].protocol).toBeUndefined();
+    expect(result.entries[0].endpoints[0].baseUrl).toBe('https://relay.test/v1');
   });
   it('reads bounded external Codex model catalogs without changing upstream IDs', async () => {
     await put(
@@ -245,6 +349,23 @@ describe('saved API sources (isolated fake credentials only)', () => {
       disabled: true,
       endpoints: [{ protocol: 'openai-responses' }],
     });
+    expect(result.entries[1].endpoints[0].headers).toBeUndefined();
+    // Regression: Electron must use its selected native binding, not silently
+    // fall back to the Node ABI module. Ordinary Node-only fixtures missed this.
+    // A missing explicit binding must fail the source instead of reading via the
+    // default binding (unit tier; real Electron ABI smoke is in acceptance evidence).
+    const binding = vi
+      .spyOn(sqliteRuntime, 'resolveBetterSqliteNativeBinding')
+      .mockReturnValue(join(home, 'missing-native-binding.node'));
+    try {
+      expect(await readLocalProviderSource('alma', context)).toEqual({
+        source: 'alma',
+        entries: [],
+        issue: 'invalid',
+      });
+    } finally {
+      binding.mockRestore();
+    }
   });
   it('distinguishes missing, corrupted and oversized sources with no parser content leakage', async () => {
     expect((await readLocalProviderSource('claude-code', context)).issue).toBe('missing');

@@ -875,8 +875,8 @@
       "runningCount_one": "{{count}} tarefa em execução",
       "runningCount_other": "{{count}} tarefas em execução",
       "limitAria": "Limite de tarefas de {{name}}",
-      "limitOption_one": "Máx. {{count}}",
-      "limitOption_other": "Máx. {{count}}",
+      "limitOption_one": "Até {{count}}",
+      "limitOption_other": "Até {{count}}",
       "weightAria": "Peso de {{name}}",
       "weightOption": "Peso {{weight}}",
       "assignAria": "Atribuir tarefas a {{name}}",
@@ -929,7 +929,7 @@
       },
       "accountCount_many": "{{count}} contas",
       "runningCount_many": "{{count}} tarefas em execução",
-      "limitOption_many": "Máx. {{count}}"
+      "limitOption_many": "Até {{count}}"
     },
     "rebalance": {
       "title": "Continuar em {{label}}?",
@@ -938,9 +938,13 @@
       "description": "Para usar a cota de todas as contas de forma equilibrada, envie esta mensagem de {{label}} ({{quota}}). As últimas mensagens e um resumo serão transferidos; detalhes mais antigos podem ser perdidos.",
       "quota": "{{left}}% restante",
       "quotaReset": "{{left}}% restante · {{reset}}",
-      "confirm": "Trocar",
-      "cancel": "Cancelar",
-      "remember": "Alternar automaticamente a partir de agora (só nesta tarefa)"
+      "confirm": "Alternar só desta vez",
+      "cancel": "Agora não",
+      "remember": "Alternar automaticamente sem perguntar novamente",
+      "disable": "Não alternar automaticamente nem perguntar novamente",
+      "disableFailed": "Não foi possível confirmar se sua escolha foi salva. Verifique a conexão e se o Cindy está atualizado no computador onde está a tarefa e tente novamente. Esta mensagem será enviada normalmente.",
+      "choiceLabel": "Troca de computador (só nesta tarefa)",
+      "send": "Enviar mensagem"
     },
     "deleteConfirm": {
       "title": "Excluir o grupo de provedores {{provider}}?",
@@ -3684,7 +3688,7 @@
           "scanning": "Lendo configurações salvas…",
           "empty": "Nenhuma configuração de API salva foi encontrada.",
           "failed": "Não foi possível concluir a leitura. Tente novamente.",
-          "edit": "Completar ou editar",
+          "edit": "Editar",
           "editFailed": "Confira a URL, o protocolo e a chave e tente novamente.",
           "editNote": "Deixe a chave em branco para manter a credencial lida. Alterar a URL ou o protocolo exige uma nova chave.",
           "name": "Nome de exibição",
@@ -11556,6 +11560,9 @@
       "databaseDriver": "Não foi possível carregar o driver do banco de dados. Atualize ou repare o Cindy e tente novamente.",
       "databaseUnavailable": "Não foi possível ler o banco de dados de origem. Os dados originais não foram alterados; tente novamente após o reparo.",
       "fileTooLarge": "Um arquivo ou esta importação excede o limite de leitura. O conteúdo não foi truncado.",
+      "sourceFileTooLarge": "Um arquivo excede o limite de leitura. Este item não foi totalmente importado.",
+      "snapshotTooLarge": "O volume total de dados desta leitura excede o limite. A importação está incompleta.",
+      "itemTooLarge": "Os arquivos deste item excedem 128 MiB no total. Este item não foi totalmente importado.",
       "memoryMetadata": "O resumo ou o título da memória excede os limites de armazenamento.",
       "memoryWrite": "Falha ao gravar a memória ou verificar sua integridade. Você pode tentar novamente.",
       "memoryChanged": "A memória salva foi alterada e não foi sobrescrita.",
@@ -13154,6 +13161,11 @@
     "prevMessageJump": "Ir para o prompt anterior: {{preview}}",
     "sessionLoading": "Carregando tarefa",
     "askUserQuestion": {
+    "unanswered": "Sem resposta",
+    "withdrawn": "Não precisa mais de resposta",
+    "withdrawnDraft": "Esta pergunta não precisa mais de resposta.\n{{reason}}\nSeu rascunho foi mantido e pode ser enviado como complemento.",
+    "sendSupplement": "Enviar complemento",
+
       "voice": {
         "hint": "Diga o número ou nome de uma opção. Para várias escolhas, diga “confirmar seleção” ao terminar.",
         "freeTextHint": "Diga sua resposta, revise-a e diga “confirmar seleção” para enviar.",
@@ -14304,6 +14316,7 @@
       "taskAutoArchived": "\"{{title}}\" arquivada",
       "taskAutoArchivedUndo": "Desfazer",
       "taskAutoArchivePending": "Será arquivada ao sair desta tarefa",
+      "taskAutoArchiveBlockedDirty": "“{{title}}” não foi arquivada automaticamente: há alterações não commitadas no espaço de trabalho",
       "taskAutoArchiveCancel": "Cancelar",
       "taskAutoArchiveCancelled": "Não será arquivada automaticamente desta vez",
       "taskArchiveNow": "Arquivar agora"
@@ -20006,10 +20019,10 @@
       "useCodex": "Entrar com o Codex"
     },
     "title": "Contas de assinatura",
-    "note": "A primeira conta usa a pasta padrão da CLI. As contas adicionais fazem login separadamente. Novas tarefas são distribuídas; as existentes mantêm sua conta.",
     "strategy": "Balanceamento de carga",
     "add": "Adicionar conta",
     "default": "Pasta padrão",
+    "defaultTag": "Padrão",
     "ready": "Conectada",
     "signedOut": "Login necessário",
     "unavailable": "Status indisponível",

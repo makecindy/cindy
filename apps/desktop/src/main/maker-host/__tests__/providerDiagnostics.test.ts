@@ -29,10 +29,16 @@ import {
 } from '../provider-diagnostics.js';
 import { probeProviderProtocols } from '../provider-protocol-probe.js';
 import { setCustomProviders } from '../active-catalog.js';
+import {
+  __resetModelVisibilityMirrorForTest,
+  clearModelVisibilityMirror,
+  setModelVisibilityMirror,
+} from '../model-visibility-mirror.js';
 
 afterEach(() => {
   setCustomProviders([]);
   setDiagnosticsKeyReader(() => null);
+  __resetModelVisibilityMirrorForTest();
   probeLog.warn.mockClear();
 });
 
@@ -792,6 +798,171 @@ describe('resolveSavedProbeSpec / testProviderConnection(saved)', () => {
         },
       },
     ]);
+    setDiagnosticsKeyReader(() => 'sk-saved');
+    expect(resolveSavedProbeSpec('my-relay', 'claude-code').modelId).toBe('glm-5.2');
+  });
+
+  it('用户明确开启的不是列表第一个聊天模型时,探测用该可见模型(issue #9470)', () => {
+    const provider = buildUserProvider(config);
+    setCustomProviders([
+      {
+        ...provider,
+        models: {
+          ...provider.models,
+          'claude-code': [
+            {
+              id: 'glm-5.2',
+              name: 'GLM',
+              contextWindow: 128_000,
+              efforts: [],
+              defaultEffort: null,
+            },
+            {
+              id: 'glm-4.5',
+              name: 'GLM 4.5',
+              contextWindow: 128_000,
+              efforts: [],
+              defaultEffort: null,
+            },
+          ],
+        },
+      },
+    ]);
+    setModelVisibilityMirror({ 'claude-code:my-relay:glm-4.5': true });
+    setDiagnosticsKeyReader(() => 'sk-saved');
+    expect(resolveSavedProbeSpec('my-relay', 'claude-code').modelId).toBe('glm-4.5');
+  });
+
+  // 测试价值:生产入口 resolveSavedProbeSpec,可观察结果是探测请求用的 modelId。
+  // Bug #9470 / PR #9571 P1:镜像只存显式开关,关掉写 false、没拨过无条目。
+  // 原兜底只认 === true,会把显式隐藏的第一个坏模型当成探测目标。
+  // 最小失败输入:候选 [glm-5.2, glm-4.5],只把 glm-5.2 标成 false。tier: unit。
+  it('显式隐藏第一个聊天模型、第二个未拨过时,探测跳过隐藏项选第二个', () => {
+    const provider = buildUserProvider(config);
+    setCustomProviders([
+      {
+        ...provider,
+        models: {
+          ...provider.models,
+          'claude-code': [
+            {
+              id: 'glm-5.2',
+              name: 'GLM',
+              contextWindow: 128_000,
+              efforts: [],
+              defaultEffort: null,
+            },
+            {
+              id: 'glm-4.5',
+              name: 'GLM 4.5',
+              contextWindow: 128_000,
+              efforts: [],
+              defaultEffort: null,
+            },
+          ],
+        },
+      },
+    ]);
+    setModelVisibilityMirror({ 'claude-code:my-relay:glm-5.2': false });
+    setDiagnosticsKeyReader(() => 'sk-saved');
+    expect(resolveSavedProbeSpec('my-relay', 'claude-code').modelId).toBe('glm-4.5');
+  });
+
+  // 全部显式隐藏时仍要能测连接:退回第一个可选模型,不要因为没有可见模型而抛空。
+  it('全部聊天模型都被显式隐藏时,探测仍退回第一个可选模型', () => {
+    const provider = buildUserProvider(config);
+    setCustomProviders([
+      {
+        ...provider,
+        models: {
+          ...provider.models,
+          'claude-code': [
+            {
+              id: 'glm-5.2',
+              name: 'GLM',
+              contextWindow: 128_000,
+              efforts: [],
+              defaultEffort: null,
+            },
+            {
+              id: 'glm-4.5',
+              name: 'GLM 4.5',
+              contextWindow: 128_000,
+              efforts: [],
+              defaultEffort: null,
+            },
+          ],
+        },
+      },
+    ]);
+    setModelVisibilityMirror({
+      'claude-code:my-relay:glm-5.2': false,
+      'claude-code:my-relay:glm-4.5': false,
+    });
+    setDiagnosticsKeyReader(() => 'sk-saved');
+    expect(resolveSavedProbeSpec('my-relay', 'claude-code').modelId).toBe('glm-5.2');
+  });
+
+  // 镜像未就绪时 getModelVisibilityOverride 抛 MODEL_VISIBILITY_NOT_READY。
+  // 探测不能因此失败,必须走原来的第一个可选模型。
+  it('可见性镜像未就绪时走兜底且不抛错', () => {
+    const provider = buildUserProvider(config);
+    setCustomProviders([
+      {
+        ...provider,
+        models: {
+          ...provider.models,
+          'claude-code': [
+            {
+              id: 'glm-5.2',
+              name: 'GLM',
+              contextWindow: 128_000,
+              efforts: [],
+              defaultEffort: null,
+            },
+            {
+              id: 'glm-4.5',
+              name: 'GLM 4.5',
+              contextWindow: 128_000,
+              efforts: [],
+              defaultEffort: null,
+            },
+          ],
+        },
+      },
+    ]);
+    clearModelVisibilityMirror();
+    setDiagnosticsKeyReader(() => 'sk-saved');
+    expect(resolveSavedProbeSpec('my-relay', 'claude-code').modelId).toBe('glm-5.2');
+  });
+
+  it('没有显式可见偏好时,探测仍退回第一个聊天模型', () => {
+    const provider = buildUserProvider(config);
+    setCustomProviders([
+      {
+        ...provider,
+        models: {
+          ...provider.models,
+          'claude-code': [
+            {
+              id: 'glm-5.2',
+              name: 'GLM',
+              contextWindow: 128_000,
+              efforts: [],
+              defaultEffort: null,
+            },
+            {
+              id: 'glm-4.5',
+              name: 'GLM 4.5',
+              contextWindow: 128_000,
+              efforts: [],
+              defaultEffort: null,
+            },
+          ],
+        },
+      },
+    ]);
+    setModelVisibilityMirror({});
     setDiagnosticsKeyReader(() => 'sk-saved');
     expect(resolveSavedProbeSpec('my-relay', 'claude-code').modelId).toBe('glm-5.2');
   });

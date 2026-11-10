@@ -137,7 +137,7 @@ it('saves enabled state and does not run a routine just by saving', async () => 
   const api = setup();
   render(<BotRoutines botId="bot" />);
   fireEvent.click(await screen.findByText('Daily report'));
-  fireEvent.click(screen.getByRole('switch', { name: 'routines.enabled' }));
+  fireEvent.click(screen.getByRole('checkbox', { name: 'routines.enabled' }));
   fireEvent.click(screen.getByRole('button', { name: 'routines.save' }));
   await waitFor(() => expect(api.save).toHaveBeenCalledWith('bot', expect.objectContaining({ enabled: false }), 'daily'));
   expect(toastSuccess).toHaveBeenCalledWith('routines.saved');
@@ -195,8 +195,8 @@ it('saves advanced quiet and pre-run settings without executing a check on open'
   expect(api.save).not.toHaveBeenCalled();
   expect(api.runNow).not.toHaveBeenCalled();
   fireEvent.click(screen.getByText('routines.advancedSettings'));
-  expect(screen.getByRole('switch', { name: 'routines.quiet' }).getAttribute('aria-checked')).toBe('true');
-  fireEvent.click(screen.getByRole('switch', { name: 'routines.quiet' }));
+  expect((screen.getByRole('checkbox', { name: 'routines.quiet' }) as HTMLInputElement).checked).toBe(true);
+  fireEvent.click(screen.getByRole('checkbox', { name: 'routines.quiet' }));
   fireEvent.change(screen.getByLabelText('routines.checkCommand'), { target: { value: 'node check.mjs' } });
   fireEvent.change(screen.getByLabelText('routines.timeoutMs'), { target: { value: '3000' } });
   fireEvent.click(screen.getByRole('button', { name: 'routines.save' }));
@@ -227,7 +227,7 @@ it('starts a new unclassified routine with delivery enabled', async () => {
   render(<BotRoutines botId="bot" />);
   fireEvent.click(screen.getByRole('button', { name: 'routines.add' }));
   fireEvent.click(screen.getByText('routines.advancedSettings'));
-  expect(screen.getByRole('switch', { name: 'routines.quiet' }).getAttribute('aria-checked')).toBe('false');
+  expect((screen.getByRole('checkbox', { name: 'routines.quiet' }) as HTMLInputElement).checked).toBe(false);
 });
 
 it('lets number and time fields be cleared and retyped without saving invalid schedules', async () => {

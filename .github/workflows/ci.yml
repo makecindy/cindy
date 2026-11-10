@@ -52,6 +52,11 @@ jobs:
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
 
+      - name: Check built-in Skill bundle versions
+        env:
+          SKILLS_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before || 'HEAD' }}
+        run: node scripts/check-built-in-skills.mjs --base-ref "$SKILLS_BASE_REF"
+
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
@@ -378,6 +383,9 @@ jobs:
       # 保留 Windows 路径、进程与锁的自测覆盖。
       - name: Run Windows test runner self-tests
         run: pnpm test:runner
+
+      - name: Check Windows Codex credential publication
+        run: node --experimental-strip-types apps/desktop/scripts/check-windows-codex-auth-move.mjs
 
       # localDb suites are outside the unit tier; exercise these DB boundaries on both OSes.
       - name: Run companion database regressions
