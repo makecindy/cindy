@@ -11,6 +11,10 @@ name: vendor-update
 #   pr    — holds the write token but never runs vendor code: it re-downloads the recorded
 #           versions, verifies upstream checksums, rewrites the pins and opens the PR.
 #
+# Release builds (package-desktop.mjs, default --vendors pinned) run on the signing machine and never
+# execute these runtimes, so every pin must pass this gate before it lands: pull requests that change a
+# pin, the SDK version or the gate itself run the gate job alone on the PR's pins (--gate-only).
+#
 # PRs opened with the default GITHUB_TOKEN do not start client-ci and need the repository setting
 # "Allow GitHub Actions to create and approve pull requests". Set the VENDOR_UPDATE_TOKEN secret
 # (GitHub App or fine-grained token: contents + pull requests write) so the PR gets normal CI.
@@ -19,13 +23,26 @@ on:
   schedule:
     - cron: '17 6 * * *'
   workflow_dispatch:
+  pull_request:
+    paths:
+      - 'tools/claude/latest.json'
+      - 'tools/codex/latest.json'
+      - 'tools/codex-package/latest.json'
+      - 'tools/pi/latest.json'
+      - 'tools/ripgrep/latest.json'
+      - 'packages/maker-core/package.json'
+      - 'packages/maker-cc-manager/package.json'
+      - 'pnpm-lock.yaml'
+      - 'scripts/vendor-update.mjs'
+      - 'scripts/smoke-claude-sdk.mjs'
+      - '.github/workflows/vendor-update.yml'
 
 permissions:
   contents: read
 
 concurrency:
-  group: vendor-update
-  cancel-in-progress: false
+  group: vendor-update-${{ github.event_name == 'pull_request' && github.ref || 'daily' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   gate:
@@ -61,10 +78,16 @@ jobs:
         env:
           XDT_SKIP_AGENT_BIN_INSTALL: '1'
 
+      - name: Run the gate on this pull request's pins
+        if: github.event_name == 'pull_request'
+        run: node scripts/vendor-update.mjs --gate-only
+
       - name: Update runtimes and run the gate
+        if: github.event_name != 'pull_request'
         run: node scripts/vendor-update.mjs --record="$RUNNER_TEMP/vendors.json"
 
       - name: Upload passing versions
+        if: github.event_name != 'pull_request'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: vendor-versions
@@ -73,6 +96,7 @@ jobs:
 
   pr:
     needs: gate
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
