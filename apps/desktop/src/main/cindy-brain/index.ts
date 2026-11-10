@@ -3675,7 +3675,7 @@ async function bindPluginUsage(ghost: InstalledGhost, previousRevision?: string)
   const existing = ghost.approval.state === 'approved' && typeof service.captureBound === 'function'
     ? service.captureBound(instanceKey, ghost.approval.revision)
     : null;
-  if (existing) return;
+  if (previousRevision === undefined && existing) return;
   try {
     await withGhostInstallLock(ghost.manifest.id, async () => {
       if (activeOwnerScopeKey() !== scope || isAppSessionBoundaryPending()) return;

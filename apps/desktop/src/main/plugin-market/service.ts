@@ -293,7 +293,8 @@ function installedGhostMatchingMarketPluginNow(
   const exact = typeof manager.findInstalledInstance === 'function'
     ? manager.findInstalledInstance(plugin.ghostId)
     : null;
-  if (exact && exact.namespace === plugin.namespace) return exact;
+  const expectedNamespace = hasDeliveryNamespace(plugin) ? plugin.namespace : null;
+  if (exact && exact.namespace === expectedNamespace) return exact;
   return installedGhostMatchingMarketPlugin(plugin, listMarketInstallations());
 }
 
