@@ -51,6 +51,10 @@ ipcRenderer.on('ghost-pipe:message', (_event, payload: unknown) => {
 });
 
 contextBridge.exposeInMainWorld('cindy', {
+  ui: {
+    setStatus: (reply: import('../shared/ghostTaskStatus').GhostTaskStatusReply): Promise<{ ok: boolean }> =>
+      ipcRenderer.invoke('ghost-pipe:send', { ...reply, type: 'task-status-result' }),
+  },
   ping: (): Promise<{ ok: true; id: string }> => ipcRenderer.invoke('ghost-pipe:ping'),
   onHostMessage: (cb: HostMessageListener): (() => void) => {
     listeners.add(cb);

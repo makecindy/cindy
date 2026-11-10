@@ -1452,6 +1452,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       (): import('../shared/homePluginRecommendations').HomePluginRecommendationsSnapshot =>
         ipcRenderer.sendSync('ghosts:recommendations'),
     listSync: (): { ghosts: unknown[] } => ipcRenderer.sendSync('ghosts:list'),
+    taskStatus: (sessionId: string): Promise<import('../shared/ghostTaskStatus').GhostTaskStatus[]> =>
+      ipcRenderer.invoke('ghosts:task-status', sessionId),
     recentUsageSync: (): { ids: string[] } => {
       try {
         const result = ipcRenderer.sendSync('ghosts:recent-usage') as { ids?: unknown } | null;

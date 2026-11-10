@@ -188,6 +188,7 @@ import { useSessionBinding } from '@/hooks/useSessionBinding';
 import { useVendorAuthGate } from '@/hooks/useVendorAuthGate';
 import { useProviders } from '@/hooks/useProviders';
 import { useAuth } from '@/contexts/AuthContext';
+import { PluginTaskStatus } from '@/cindy-brain/PluginTaskStatus';
 import { notifySharedTaskEnded } from '@/features/device-link/SharedTaskEndedNotice';
 import {
   getDataOwnerGeneration,
@@ -6430,6 +6431,9 @@ function CCAgentSessionContent({
                     </WorkingDirectoryTip>
                   )}
 
+                  {sessionId && !readOnly && !remoteDeviceId && !session?.remoteHostId && (
+                    <PluginTaskStatus sessionId={sessionId} workingDir={session?.workingDir} />
+                  )}
                   {/* Right: Context capacity indicator */}
                   <div className="flex shrink-0 items-center gap-3">
                     {session?.usedProjectContext && (

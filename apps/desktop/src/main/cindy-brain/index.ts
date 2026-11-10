@@ -701,6 +701,8 @@ import { resolveOneshotCatalogModel } from '../utility-model/textOneshotPinOptio
 import { hasOneshotProviderCredential } from '../utility-model/oneshotProviderUsability.js';
 import { readGhostCindyInflightLimit, relocateGhostCindyPrefs } from './cindyPrefsStore.js';
 import { createGhostComposerListHandler } from './ghostComposerIpc.js';
+import { createGhostTaskStatusHandler, GhostTaskStatusSlot } from './taskStatusSlot.js';
+import { GHOST_TASK_STATUS_CHANNEL } from '../../shared/ghostTaskStatus.js';
 import { createGhostDisplayListHandler } from './ghostDisplayListIpc.js';
 import { GHOST_COMPOSER_LIST_CHANNEL } from '../../shared/ghostComposer.js';
 import {
@@ -2277,7 +2279,10 @@ export function getGhostRuntime(): GhostRuntime {
         const storagePart = isValidPluginInstallRelId(id) ? pluginInstallStoragePart(id) : id;
         log.info('ghost runtime state', { id, state });
         if (state !== 'running') disconnectRoutineSource(storagePart);
-        if (['off', 'stopping', 'crashed', 'fused'].includes(state)) pluginDeviceSync.invalidate(storagePart);
+        if (['off', 'stopping', 'crashed', 'fused'].includes(state)) {
+          pluginDeviceSync.invalidate(storagePart);
+          taskStatusSlotSingleton?.cancel(storagePart);
+        }
         // 崩溃/熄灯时把该意识名下的在途工具调用收掉(结构化失败给 agent)。
         getGhostPipeDispatcher().onRuntimeState(storagePart, state);
         if (state !== 'running') {
@@ -4631,6 +4636,21 @@ export function getGhostPreviewSlot(): GhostPreviewSlot {
     });
   }
   return previewSlotSingleton;
+}
+
+let taskStatusSlotSingleton: GhostTaskStatusSlot | null = null;
+
+function getGhostTaskStatusSlot(): GhostTaskStatusSlot {
+  return taskStatusSlotSingleton ??= new GhostTaskStatusSlot({
+    getGhost: findGhostForInstanceId,
+    ownerScope: activeOwnerScopeKey,
+    wake: async (ghost) => {
+      const runtime = getGhostRuntime();
+      const started = await runtime.spawn(ghost);
+      return started.ok && await runtime.waitUntilRunning(installedGhostStoragePart(ghost));
+    },
+    send: sendToGhostLogic,
+  });
 }
 
 let taskViewSlotSingleton: GhostTaskViewSlot | null = null;
@@ -9771,6 +9791,7 @@ export function registerGhostIpc(): void {
     if (!id) throwIpcError('PERMISSION_DENIED', '非意识电子脑上下文');
     requireGhostAvailableForActiveSession(id);
     const type = (payload as { type?: unknown } | null)?.type;
+    if (type === 'task-status-result') return getGhostTaskStatusSlot().reply(id, payload);
     if (type === 'recommendations-update') {
       const ghost = findGhostForInstanceId(id);
       if (!ghost || !ghost.enabled) return { ok: false, errorCode: 'GHOST_ASLEEP' };
@@ -10295,6 +10316,18 @@ export function registerGhostIpc(): void {
   ipcMain.on('ghosts:list', (event) => {
     event.returnValue = displayList();
   });
+  ipcMain.handle(GHOST_TASK_STATUS_CHANNEL, createGhostTaskStatusHandler({
+    authorize: (event) => {
+      // Task pages are local-only; remote/shared callers cannot wake owner plugins.
+      if (getDeviceLinkInvokeContext()) throwIpcError('PERMISSION_DENIED', 'Local task UI only');
+      assertTrustedAppRendererEvent(event);
+    },
+    scope: () => isAppSessionBoundaryPending() ? null : activeOwnerScopeKey(),
+    session: getSessionFsSnapshot,
+    list: availableGhosts,
+    disabled: isGhostDisabledForWorkdir,
+    slot: getGhostTaskStatusSlot(),
+  }));
   ipcMain.handle(GHOST_COMPOSER_LIST_CHANNEL, createGhostComposerListHandler({
     list: availableGhosts,
     disabledIds: listDisabledGhostIdsForWorkdir,

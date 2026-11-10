@@ -555,6 +555,8 @@ export interface GhostMainViewDecl {
  * `session` 得知自己所在的任务，逻辑页经 `cindy.taskView({sessionId})` 打开或聚焦它。
  */
 export interface GhostTaskViewDecl {
+  /** Also expose this task page as a native, plain-text task status launcher. */
+  statusBar?: true;
   /** 页签标题；缺省回退插件 name。 */
   title?: string;
   /** 任务页入口（安装目录内安全相对路径）。 */

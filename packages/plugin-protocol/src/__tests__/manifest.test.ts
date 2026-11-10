@@ -1031,6 +1031,9 @@ describe('Ghost manifest contract', () => {
       taskView: { title: 'Simulator', html: 'ui/task.html' },
     } as const;
     expect(validateGhostManifest(direct)).toMatchObject({ ok: true, manifest: { taskView: direct.taskView } });
+    // unit: status launcher is additive presentation; preserve old/unknown task-page metadata.
+    const status = { ...direct, taskView: { ...direct.taskView, statusBar: true } };
+    expect(validateGhostManifest(status)).toMatchObject({ ok: true, manifest: { taskView: status.taskView } });
     expect(validateGhostManifest({ ...direct, taskView: { html: '../task.html' } }).ok).toBe(false);
     expect(validateGhostManifest({ ...direct, taskView: { title: 'Simulator' } }).ok).toBe(false);
     const v2 = { ...validManifest, minCindyVersion: '1.2.3', slots: ['task-view'], tools: undefined, taskView: { html: 'task.html' } };

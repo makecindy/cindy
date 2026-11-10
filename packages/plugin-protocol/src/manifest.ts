@@ -196,6 +196,8 @@ export interface GhostMainViewDecl {
 
 /** 跟对话的任务页:页签存在各任务的右侧栏里,随任务切换;页面经查询参数 `session` 得知所在任务。 */
 export interface GhostTaskViewDecl {
+  /** Native task status launcher for this page (Desktop). */
+  statusBar?: true;
   /** 页签标题；缺省回退插件 name。 */
   title?: string;
   /** 任务页入口（安装目录内安全相对路径）。 */
