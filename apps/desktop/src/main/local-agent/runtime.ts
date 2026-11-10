@@ -578,13 +578,29 @@ export async function openLocalAgentRuntime(
           // 可见变体的 Session 由 Maker 托管:必须走 Maker 的 runtime-refresh 关闭
           // (实例方法自带 rehydrate 抑制窗口)。直接 Session.close 不登记原因,会
           // 被按 unexpected 丢掉排队回合,未抑制的 onClose 会在重建前清掉暂存附件
-          // (Codex P1,2026-11-10)。不可见变体不在 activeSessions,Maker 回收恒
-          // false,回退直关。
-          if (!(await maker.recyclePiRuntimeIfResourcesDrifted(previous).catch(() => false))) {
+          // (Codex P1,2026-11-10)。
+          // 回收抛错时**不得**在抑制窗口外裸 close 重试:那样一旦成功,onClose 的
+          // 临时附件清理会在 start() 恢复同一份转录前删掉它引用的暂存文件
+          // (Codex P2,2026-11-10)。抛错后的处置:实例已非 active(close 失败停在
+          // error)则直接重建 —— Maker.createSession 自带 error 实例的关闭重试;
+          // 仍 active 则本轮跳过重建,保住旧运行时与暂存附件,下一条消息再试。
+          // 不可见变体不由 Maker 托管(不在 activeSessions),没有抑制窗口语义,
+          // 直关即可。
+          let rebuild = false;
+          if (visibleHost) {
+            try {
+              rebuild = await maker.recyclePiRuntimeIfResourcesDrifted(previous);
+            } catch {
+              rebuild = previous.getStatus() !== 'active';
+            }
+          } else {
             await previous.close();
+            rebuild = true;
           }
-          assertCurrent(current);
-          handle = await start(previous.sdkSessionId, current);
+          if (rebuild) {
+            assertCurrent(current);
+            handle = await start(previous.sdkSessionId, current);
+          }
         }
         if (params.effort !== undefined) {
           await handle.setEffort(params.effort as Parameters<Session['setEffort']>[0]);

@@ -245,12 +245,10 @@ import {
 import {
   assertPiSpawnArgvFitsPlatform,
   collectPiProjectResourceCliPaths,
-  collectPiProjectResourceSurface,
   emptyPiProjectResourceCliPaths,
   filterPiProjectCliSkills,
   piProjectResourceCliArgs,
   piProjectResourcesDrifted,
-  resolvePiResourceRepoRoot,
   snapshotPiProjectResourceLaunch,
 } from './project-resource-cli.js';
 import {
@@ -4069,19 +4067,14 @@ export class PiAgent extends BaseAgent {
     // Local root tasks load project skills/prompts/extensions in place via
     // explicit CLI flags. Keep --no-approve so `.pi/settings.json` is unread.
     // 受邀者：只要会话目录内的技能与提示词模板，项目扩展不加载(会在本机执行)。
-    // 项目资源表面(spawn 采样):argv 路径集合与盯视基线出自**同一次遍历**
-    // (collectPiProjectResourceSurface)—— 结构不变量:基线与 argv 消费的状态
-    // 不可能不一致,快检只需检测「盘上 ≠ 基线」。分两次调用会重新造出「集合与
-    // 基线不同批」的永久漏检窗口(Codex P2,2026-11-10)。受邀者同样建快照
-    // (镜像同步进来的新技能必须能检出),裁剪口径经 restrict 下发,比较对
-    // fresh 做同一裁剪。
-    const projectResourceSurfaceAtLaunch = loadProjectResourcesInPlace
-      ? collectPiProjectResourceSurface(opts.workingDir)
-      : null;
-    const collectedProjectResources = projectResourceSurfaceAtLaunch
+    // 采集只发生这一次:其结果既是 argv 资源段,也是漂移检测的基准。漂移判定
+    // 复用同一个 collector 重新采集后逐项比较(见 piProjectResourcesDrifted),
+    // 不另存任何基线 —— 存基线就等于手写一份「collector 消费什么」的镜像,
+    // 镜像与实现必然分歧(2026-11-10 六轮漏检全部出在这里)。
+    const collectedProjectResources = loadProjectResourcesInPlace
       ? guestRoot
-        ? restrictPiGuestProjectResources(projectResourceSurfaceAtLaunch.paths, guestRoot)
-        : projectResourceSurfaceAtLaunch.paths
+        ? restrictPiGuestProjectResources(collectPiProjectResourceCliPaths(opts.workingDir), guestRoot)
+        : collectPiProjectResourceCliPaths(opts.workingDir)
       : emptyPiProjectResourceCliPaths();
     const projectResourceCli = loadProjectResourcesInPlace
       ? {
@@ -4093,15 +4086,11 @@ export class PiAgent extends BaseAgent {
         }
       : collectedProjectResources;
     // 启动快照:供运行时空闲时的资源漂移检测(见 handle.hasProjectResourceDrift)。
-    // 快照存未经禁用过滤的原始收集结果(受邀者已按 guestRoot 裁剪),与 drift
-    // 检测的 fresh collect 经同一 restrict 裁剪后同口径可比;受邀者裁剪缺了会拿
-    // 全量比裁剪基线恒判漂移,回收死循环。
-    const projectResourceLaunchSnapshot = projectResourceSurfaceAtLaunch
+    // 只存 argv 实际用的集合与受邀者裁剪口径 —— 没有第二份基线。
+    const projectResourceLaunchSnapshot = loadProjectResourcesInPlace
       ? snapshotPiProjectResourceLaunch(
         opts.workingDir,
         collectedProjectResources,
-        projectResourceSurfaceAtLaunch.repoRoot,
-        projectResourceSurfaceAtLaunch.watch,
         guestRoot ? (paths) => restrictPiGuestProjectResources(paths, guestRoot) : undefined)
       : null;
 
