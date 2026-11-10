@@ -17,7 +17,7 @@ import { createDbClient } from '../../localDb/client/DbClient';
 import type { DbClient } from '../../localDb/client/DbClient';
 import { clearCurrentDbClient, setCurrentDbClient } from '../../localDb/client/current';
 import { recordScheduleRunCostDirect } from '../runCostLedger';
-import { DrizzleScheduleStorage, type SchedulerDrizzleDb } from '../storage';
+import { DrizzleScheduleStorage, type SchedulerDrizzleDb } from '../storage.desktop';
 
 function actualMoneyFromLegacyUsd(amountUsd: number) {
   return {

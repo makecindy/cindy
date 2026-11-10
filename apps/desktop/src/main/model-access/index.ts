@@ -12,7 +12,7 @@ import { createLogger } from '../logger.js';
 import * as authManager from '../authManager.js';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState.js';
 import { isExternalOrganizationByokUser } from './organizationManaged.js';
-import { serverApiFetch, ServerApiError } from '../serverApiClient.js';
+import { serverApiFetch, ServerApiError } from '../serverApiClient.desktop.js';
 import { getClientEndpoint } from '../clientEndpointsService.js';
 import { getProviderSecretStore } from '../secrets/providerSecretStore.js';
 import {

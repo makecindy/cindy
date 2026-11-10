@@ -5197,6 +5197,15 @@
         "ariaLabel": "以 {{shortcut}} 遣讯"
       }
     },
+    "defaultNewTaskWorkingDir": {
+      "title": "新任务常例工作目录",
+      "label": "此机常例工作目录",
+      "hint": "新立此机之任而未择项目，则先取此目录；若已明择项目、言谈或远机，仍从其择。",
+      "unset": "未设（不预取目录）",
+      "choose": "择目录",
+      "clear": "清常例目录",
+      "failed": "存常例工作目录未成，请重试"
+    },
     "linkOpen": {
       "title": "启链接",
       "description": "择讯中链接打开之处，右键可临时更换",
@@ -19720,6 +19729,7 @@
   },
   "subscriptionAccounts": {
     "unassigned": "账号待定",
+    "providerManagedAuth": "Codex 目前供方未提供 ChatGPT 账号资讯。请于新增供方时选「$t(subscriptionAccounts.signIn.anotherAccount)」，另用独立目录",
     "signIn": {
       "checking": "正察本机账号…",
       "detected": "已有账号登录",
@@ -19768,5 +19778,15 @@
     "browserFallback": "请至 GitHub 为 Cindy 点 Star",
     "openGithub": "开启 GitHub",
     "openFailed": "未能开启 GitHub"
+  },
+  "hostConnection": {
+    "connecting": "正连 Cindy 后台…",
+    "restoring": "正复任务之态…",
+    "retrying": "任务未同步，正重试…",
+    "pairing": "连接须再授权",
+    "pairingHelp": "请留此页。于启动 Cindy 后台之终端重行打开网页之命令，于新页配对毕，再返此页。",
+    "keepDraft": "草稿仍存。连接复通，任务之态将自同步。",
+    "retry": "重试连接",
+    "desktopAuthHelp": "请于启动终端更新后台连接设置，再启此实验客户端。"
   }
 }

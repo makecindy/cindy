@@ -12,7 +12,7 @@ vi.mock('../../appSessionState.js', () => ({ activeOwnerScopeKey: () => api.scop
   isAppSessionBoundaryPending: () => false, getActiveAppSession: () => ({ mode: 'cloud', dataOwnerId: api.scope }) }));
 vi.mock('../../authManager.js', () => ({ getAuthState: () => ({ isAuthenticated: true }) }));
 vi.mock('../../clientEndpointsService.js', () => ({ getClientEndpoint: () => api.endpoint }));
-vi.mock('../../serverApiClient.js', () => ({ serverApiFetch: api.fetch }));
+vi.mock('../../serverApiClient.desktop.js', () => ({ serverApiFetch: api.fetch }));
 vi.mock('../../utils/ipcValidate.js', () => ({ throwIpcError: (code: string) => { throw new Error(code); } }));
 
 const input = { shareId: 'share', memberId: 'member', guestDeviceId: 'guest', executorDeviceId: 'executor' };

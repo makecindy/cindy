@@ -5197,6 +5197,15 @@
         "ariaLabel": "使用 {{shortcut}} 傳送訊息"
       }
     },
+    "defaultNewTaskWorkingDir": {
+      "title": "新任務預設工作目錄",
+      "label": "本機預設工作目錄",
+      "hint": "建立本機任務且未選擇專案時，預先選取此目錄。明確選擇的專案、對話或遠端裝置仍優先。",
+      "unset": "未設定（不預選目錄）",
+      "choose": "選擇目錄",
+      "clear": "清除預設目錄",
+      "failed": "儲存預設工作目錄失敗，請重試"
+    },
     "linkOpen": {
       "title": "開啟連結",
       "description": "選擇訊息連結的開啟位置，右鍵可臨時更換",
@@ -19720,6 +19729,7 @@
   },
   "subscriptionAccounts": {
     "unassigned": "帳號待分配",
+    "providerManagedAuth": "Codex 目前的供應商未提供 ChatGPT 帳號資訊。請在新增供應商時選擇「$t(subscriptionAccounts.signIn.anotherAccount)」，使用獨立目錄",
     "signIn": {
       "checking": "正在偵測本機帳號…",
       "detected": "偵測到已登入帳號",
@@ -19768,5 +19778,15 @@
     "browserFallback": "前往 GitHub 為 Cindy 點 Star",
     "openGithub": "開啟 GitHub",
     "openFailed": "無法開啟 GitHub"
+  },
+  "hostConnection": {
+    "connecting": "正在連線 Cindy 後台…",
+    "restoring": "正在恢復任務狀態…",
+    "retrying": "任務狀態尚未同步，正在重試…",
+    "pairing": "需要重新授權連線",
+    "pairingHelp": "請保留此頁。在啟動 Cindy 後台的終端重新執行開啟網頁的命令，完成新頁面的配對，再回到此頁。",
+    "keepDraft": "已輸入的草稿會保留。連線恢復後將自動同步任務狀態。",
+    "retry": "重試連線",
+    "desktopAuthHelp": "請在啟動終端更新後台連線設定，然後重新開啟這個實驗客戶端。"
   }
 }

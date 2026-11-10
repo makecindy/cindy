@@ -9,7 +9,7 @@ import { safeStorage } from 'electron';
 import { randomBytes, createCipheriv, createDecipheriv } from 'node:crypto';
 
 const setupDialog = vi.hoisted(() => ({ showMessageBox: vi.fn() }));
-vi.mock('../../i18n.js', () => ({ t: (key: string) => key }));
+vi.mock('../../i18n.desktop.js', () => ({ t: (key: string) => key }));
 
 vi.mock('electron', async (importOriginal) => {
   const actual = await importOriginal<typeof import('electron')>();
@@ -45,7 +45,7 @@ import {
   listCustomMcpNamesForSetup,
   updateCustomMcpServer,
   validateCustomMcpConfig,
-} from '../custom-mcp-store.js';
+} from '../custom-mcp-store.desktop.js';
 import { confirmSetupTransfer } from '../../setup-migration/transferPrompt.js';
 import { createSetupTransferSource, SetupTransferBox } from '../../setup-migration/transfer.js';
 import { parseSetupSecretBundle, type SetupSecretBundle } from '@cindy/device-link';

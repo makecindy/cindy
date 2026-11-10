@@ -20,7 +20,7 @@ import { supportsMediaCapability } from '../cindy-media/mediaCapabilities.js';
 import { listProviderMediaModels } from '../cindy-media/providerMediaRuntime.js';
 import { isCatalogMediaModelVisible } from '../cindy-brain/mediaDisplayVisibility.js';
 import { readModelDisableOverrides } from '../maker-host/model-disable-store.js';
-import { serverApiFetch, ServerApiError } from '../serverApiClient.js';
+import { serverApiFetch, ServerApiError } from '../serverApiClient.desktop.js';
 
 const MEDIA_MODEL_REQUEST_TIMEOUT_MS = 20_000;
 const MEDIA_GUIDE_PREFLIGHT_TIMEOUT_MS = 5_000;
