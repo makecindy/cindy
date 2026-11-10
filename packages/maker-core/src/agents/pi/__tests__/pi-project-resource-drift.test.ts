@@ -407,7 +407,66 @@ describe('piProjectResourcesDrifted', () => {
     rmSync(piLink);
     symlinkSync(targetB, piLink, 'junction');
 
+
     // 改指后 lexical watch 面与 mtime 全等,唯一信号是 `.pi` 解析身份变化。
+    expect(piProjectResourcesDrifted(baseline)).toBe(true);
+  });
+
+  it('retargeting the `.agents` junction to a same-mtime twin tree is drift (uniform resolved identity)', () => {
+    // 根治回归(Codex P2 族第三击):`.agents` 链根改指。统一解析身份基线后,
+    // 任意层级改指同 mtime 的孪生树都必然触发,不再需要逐点枚举。
+    const targetA = path.join(project, 'agents-a');
+    const targetB = path.join(project, 'agents-b');
+    const agentsLink = path.join(project, '.agents');
+    writeSkill(path.join('agents-a', 'skills'), 'alpha');
+    // Windows utimes 精度截断:先整秒对齐 A,快照值与 B 的对齐值才能逐位相等。
+    const aligned = new Date(Math.floor(Date.now() / 1000) * 1000);
+    for (const dir of [[] as string[], ['skills'], ['skills', 'alpha']]) {
+      utimesSync(path.join(targetA, ...dir), aligned, aligned);
+    }
+    symlinkSync(targetA, agentsLink, 'junction');
+    const baseline = snapshot();
+    expect(piProjectResourcesDrifted(baseline)).toBe(false);
+
+    // B:同名结构;三层 mtime 与 A 全等(watch 面失明的碰撞前提)。
+    writeSkill(path.join('agents-b', 'skills'), 'alpha');
+    for (const dir of [[] as string[], ['skills'], ['skills', 'alpha']]) {
+      utimesSync(path.join(targetB, ...dir), aligned, aligned);
+    }
+    rmSync(agentsLink);
+    symlinkSync(targetB, agentsLink, 'junction');
+
+    expect(piProjectResourcesDrifted(baseline)).toBe(true);
+  });
+
+  it('retargeting a nested namespace junction to a same-mtime twin tree is drift (any depth)', () => {
+    // 通用性证明:不是 `.pi`/`.agents` 根,而是嵌套 namespace 级软链改指。
+    // rm/symlink 会改 `.pi/skills` 自身 mtime,retarget 后把它恢复到快照值,
+    // 让解析身份成为唯一信号。
+    const targetA = path.join(project, 'ns-a');
+    const targetB = path.join(project, 'ns-b');
+    const nsLink = path.join(project, '.pi', 'skills', '@scope');
+    mkdirSync(path.dirname(nsLink), { recursive: true });
+    writeSkill('ns-a', 'alpha');
+    const aligned = new Date(Math.floor(Date.now() / 1000) * 1000);
+    const skillsDir = path.join(project, '.pi', 'skills');
+    for (const dir of [[] as string[], ['alpha']]) {
+      utimesSync(path.join(targetA, ...dir), aligned, aligned);
+    }
+    utimesSync(skillsDir, aligned, aligned);
+    symlinkSync(targetA, nsLink, 'junction');
+    const baseline = snapshot();
+    expect(piProjectResourcesDrifted(baseline)).toBe(false);
+
+    writeSkill('ns-b', 'alpha');
+    for (const dir of [[] as string[], ['alpha']]) {
+      utimesSync(path.join(targetB, ...dir), aligned, aligned);
+    }
+    rmSync(nsLink);
+    symlinkSync(targetB, nsLink, 'junction');
+    // rm/symlink 弄脏了 `.pi/skills` 的 mtime,恢复到快照值以隔离信号。
+    utimesSync(skillsDir, aligned, aligned);
+
     expect(piProjectResourcesDrifted(baseline)).toBe(true);
   });
 });

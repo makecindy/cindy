@@ -219,7 +219,10 @@ export interface PiProjectResourceLaunchSnapshot {
    * 变化只作重扫信号(见 piProjectResourcesDrifted),确认集合未变后就地更新,避免
    * 嵌套目录 git init 在无实际资源变化时多余回收。必须与 watchRootMtimes 同批采样
    * (都先于 paths 收集),否则窗口内新旧边界会与路径集合错配。 */
-  readonly state: { repoRoot: string; resolvedWorkingDir: string | null; resolvedPiRoot: string | null };
+  readonly state: { repoRoot: string; resolvedWorkingDir: string | null };
+  /** 每个 watch root 的解析身份(realpath)。基线不只记 mtime:被盯路径的软链改指
+   * 同 mtime 的孪生树时,解析身份是唯一信号;与 watchRootMtimes 同 key 同批。 */
+  readonly watchRootsResolved: Map<string, string | null>;
 }
 
 /**
@@ -373,11 +376,19 @@ export function snapshotPiProjectResourceLaunch(
     // 旧物理根 mtime 均不变,快检放行旧 argv(Codex P2,2026-11-10)。
     state: {
       repoRoot,
+      // 收集器与 watch 面都按解析后的 scanRoot 取物理路径:快照必须同时记住
+      // 解析结果,否则 workingDir 经软链启动、软链改指同仓另一目录时,边界与
+      // 旧物理根 mtime 均不变,快检放行旧 argv(Codex P2,2026-11-10)。scanRoot
+      // 刻意不是 watch key(不含 workingDir 本身),单独成字段。
       resolvedWorkingDir: realpathOrNull(workingDir),
-      // `.pi` 本体是仓内软链时改指同 mtime 的另一资源树:watch 面取解析后目标的
-      // mtime,碰撞时唯一信号是资源根的解析身份(Codex P2)。
-      resolvedPiRoot: realpathOrNull(path.join(workingDir, '.pi')),
     },
+    // 每个 watch root 的解析身份:任意层级(`.pi`、`.agents` 链、namespace、单个
+    // skill 目录)改指同 mtime 的孪生树时 mtime 面致盲,唯一完备信号是逐 key 的
+    // 解析身份(workingDir→`.pi`→`.agents` 三连击后的根治,取代逐点枚举)。realpath
+    // 含全链路解析,未枚举的嵌套软链同样覆盖。
+    watchRootsResolved: new Map(
+      [...watchRootMtimes.keys()].map((dir) => [dir, realpathOrNull(dir)] as const),
+    ),
   });
 }
 
@@ -409,10 +420,15 @@ export function piProjectResourcesDrifted(snapshot: PiProjectResourceLaunchSnaps
   // 解析根变化是唯一信号(Codex P2)。解析失败(悬空)与有值不等同。失败信号。
   const resolvedWorkingDir = realpathOrNull(snapshot.workingDir);
   const resolvedWorkingDirChanged = resolvedWorkingDir !== snapshot.state.resolvedWorkingDir;
-  // `.pi` 资源根本体改指同 mtime 的另一资源树:watch 面取的是解析后目标的
-  // mtime,碰撞时唯一信号是资源根的解析身份(Codex P2)。
-  const resolvedPiRoot = realpathOrNull(path.join(snapshot.workingDir, '.pi'));
-  const resolvedPiRootChanged = resolvedPiRoot !== snapshot.state.resolvedPiRoot;
+  // 任一 watch root 的解析身份变化(软链改指同 mtime 的孪生树):mtime 面碰撞
+  // 时这是唯一信号;realpath 含全链路,任意层级的改指都会落到某个 key 上。
+  let resolvedRootChanged = false;
+  for (const [dir, resolvedAtLaunch] of snapshot.watchRootsResolved) {
+    if (realpathOrNull(dir) !== resolvedAtLaunch) {
+      resolvedRootChanged = true;
+      break;
+    }
+  }
   let mtimeChanged = false;
   for (const [dir, mtimeAtLaunch] of snapshot.watchRootMtimes) {
     if (statMtimeMs(dir) !== mtimeAtLaunch) {
@@ -420,7 +436,7 @@ export function piProjectResourcesDrifted(snapshot: PiProjectResourceLaunchSnaps
       break;
     }
   }
-  if (!boundaryChanged && !resolvedWorkingDirChanged && !resolvedPiRootChanged && !mtimeChanged) return false;
+  if (!boundaryChanged && !resolvedWorkingDirChanged && !resolvedRootChanged && !mtimeChanged) return false;
 
   // 重扫与启动同序:先采样 watch 基线,再收集路径 —— 重扫窗口内新增的资源落在
   // 基线之后,下次快检仍会检出;反序(先路径后基线)会把新 mtime 与旧集合固化在
@@ -443,13 +459,17 @@ export function piProjectResourcesDrifted(snapshot: PiProjectResourceLaunchSnaps
   // 重扫窗口内解析根又变了(软链再次改指):按漂移交回收路径重建,不把混合口径
   // 的解析根写回快照。
   if (realpathOrNull(snapshot.workingDir) !== resolvedWorkingDir) return true;
-  // 重扫窗口内资源根又改指:同上,按漂移交回收路径重建,不写回混合口径。
-  if (realpathOrNull(path.join(snapshot.workingDir, '.pi')) !== resolvedPiRoot) return true;
+  // 重扫窗口内解析身份又有变化(任意层级再次改指):按漂移交回收路径重建,不把
+  // 混合口径的基线写回快照。
+  for (const [dir, resolvedAtSignal] of snapshot.watchRootsResolved) {
+    if (realpathOrNull(dir) !== resolvedAtSignal) return true;
+  }
   snapshot.watchRootMtimes.clear();
   for (const [dir, mtime] of freshRoots) snapshot.watchRootMtimes.set(dir, mtime);
+  snapshot.watchRootsResolved.clear();
+  for (const dir of freshRoots.keys()) snapshot.watchRootsResolved.set(dir, realpathOrNull(dir));
   snapshot.state.repoRoot = repoRoot;
   snapshot.state.resolvedWorkingDir = resolvedWorkingDir;
-  snapshot.state.resolvedPiRoot = resolvedPiRoot;
   return false;
 }
 
