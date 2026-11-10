@@ -1790,8 +1790,7 @@ function ModelSelectorContentView({
       // 只列那台电脑开了「允许被远程调用」的供应商；一个都没开的电脑整段不出现。
       const shared = catalog
         ? remoteAgentProviders(catalog.providers).filter(
-          (provider) => !remoteProviderGroups.hidden.has(remoteProviderEntryKey(device.deviceId, provider.id))
-            && !runLocationFold.hiddenRemote.has(remoteProviderEntryKey(device.deviceId, provider.id)),
+          (provider) => !remoteProviderGroups.hidden.has(remoteProviderEntryKey(device.deviceId, provider.id)),
         )
         : [];
       if (!catalog || shared.length === 0) return [];
@@ -1802,8 +1801,11 @@ function ModelSelectorContentView({
         includePaymentRequired: true,
         scope: 'draft',
       });
-      const providerIds = [...new Set(entries.map((entry) => entry.providerId))];
-      return providerIds.length > 0
+      // 「运行于」收起的供应商只是不占左栏；那台电脑上的收藏仍按完整目录解析，不因收起消失。
+      const providerIds = [...new Set(entries.map((entry) => entry.providerId))].filter(
+        (providerId) => !runLocationFold.hiddenRemote.has(remoteProviderEntryKey(device.deviceId, providerId)),
+      );
+      return entries.length > 0
         ? [{ deviceId: device.deviceId, providers: shared, providerIds, entries }]
         : [];
     });
@@ -1869,11 +1871,9 @@ function ModelSelectorContentView({
   const remoteAgentLabelOf = useCallback(
     (targetDeviceId: string, providerId: string): string => {
       const device = remoteAgentDevices?.find((entry) => entry.deviceId === targetDeviceId);
-      // 左栏收起的(本机就能用、只列一处)供应商浏览那台的目录时照样出现，名字从那台的完整目录取。
       const provider = remoteAgentGroups
         .find((group) => group.deviceId === targetDeviceId)
-        ?.providers.find((entry) => entry.id === providerId)
-        ?? remoteDeviceCatalogs.get(targetDeviceId)?.providers.find((entry) => entry.id === providerId);
+        ?.providers.find((entry) => entry.id === providerId);
       // 组只写有几台，不写是哪几台(2026-10-10 用户要求)；分享来的组目录里本来就只有台数。
       // 台数按电脑算：一台电脑上的几个账号算一台。
       const groupMembers = remoteProviderGroups.groups.get(remoteProviderEntryKey(targetDeviceId, providerId))?.members;
@@ -1889,7 +1889,7 @@ function ModelSelectorContentView({
         })
         : t('newChat.modelSelector.unified.railRemoteProvider', values);
     },
-    [remoteAgentDevices, remoteAgentGroups, remoteDeviceCatalogs, remoteProviderGroups, t],
+    [remoteAgentDevices, remoteAgentGroups, remoteProviderGroups, t],
   );
   // 供应商组那一项的用量跟着任务实际运行的那台(provider-groups.md §10)：组分好电脑后任务记录改成那台的
   // 位置与供应商，与输入框下方的用量同一份；还没分到电脑(草稿、没运行过、用的不是这个组)时不显示某一台

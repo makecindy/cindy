@@ -88,6 +88,7 @@ vi.mock('../device-link/index', () => ({
   setKeepAwakeEnabled: vi.fn(),
   providerShareHostInvoke: vi.fn(),
   revokeController: vi.fn(),
+  setControllerModelUse: vi.fn(),
   restoreController: vi.fn(),
   beginControllerDisplayNameDirectoryRefresh: () => 1,
   isLatestControllerDisplayNameDirectoryRefresh: () => true,
@@ -297,6 +298,7 @@ describe('device-link IPC handlers', () => {
       standby: false,
       controlledBy: [],
       revokedControllers: [],
+      modelUseRevokedControllers: [],
       disabledControlDeviceIds: [],
       unresponsiveDeviceIds: [],
     });
@@ -1650,6 +1652,7 @@ describe('device-link settings normalize', () => {
       remoteControlEnabled: false,
       keepAwake: false,
       revokedControllers: [],
+      modelUseRevokedControllers: [],
       disabledControlDeviceIds: [],
       lastKnownDeviceNames: {},
     });
@@ -1658,6 +1661,7 @@ describe('device-link settings normalize', () => {
       remoteControlEnabled: false,
       keepAwake: false,
       revokedControllers: [],
+      modelUseRevokedControllers: [],
       disabledControlDeviceIds: [],
       lastKnownDeviceNames: {},
     });
@@ -1666,6 +1670,7 @@ describe('device-link settings normalize', () => {
       remoteControlEnabled: false,
       keepAwake: false,
       revokedControllers: [],
+      modelUseRevokedControllers: [],
       disabledControlDeviceIds: [],
       lastKnownDeviceNames: {},
     });
@@ -1674,6 +1679,7 @@ describe('device-link settings normalize', () => {
       remoteControlEnabled: true,
       keepAwake: false,
       revokedControllers: [],
+      modelUseRevokedControllers: [],
       disabledControlDeviceIds: [],
       lastKnownDeviceNames: {},
     });
@@ -1689,6 +1695,7 @@ describe('device-link settings normalize', () => {
       remoteControlEnabled: false,
       keepAwake: false,
       revokedControllers: [],
+      modelUseRevokedControllers: [],
       disabledControlDeviceIds: ['dev-1', 'dev-2'],
       lastKnownDeviceNames: {},
     });
@@ -1709,6 +1716,7 @@ describe('device-link settings normalize', () => {
       remoteControlEnabled: false,
       keepAwake: false,
       revokedControllers: [],
+      modelUseRevokedControllers: [],
       disabledControlDeviceIds: [],
       lastKnownDeviceNames: { 'dev-1': 'MacBook Pro' },
     });
