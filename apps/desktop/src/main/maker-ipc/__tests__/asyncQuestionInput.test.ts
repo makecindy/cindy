@@ -19,6 +19,7 @@ function harness() {
   let paused = false;
   const generation = 1;
   let held = false;
+  let uncertain = false;
   const inputBoundary = new AbortController();
   const session = { id: 'task', getTurnGeneration: () => 3 };
   const coordinator = {
@@ -27,6 +28,7 @@ function harness() {
     getProjection: () => ({ queuePaused: paused }),
     getGeneration: () => generation,
     getInputAbortSignal: () => inputBoundary.signal,
+    isPausedForUncertainDelivery: () => uncertain,
     steerControlInput: vi.fn(async () => 'not-attempted'),
     enqueue: vi.fn(), resume: vi.fn(),
   };
@@ -39,7 +41,7 @@ function harness() {
     { getSessionMeta: async () => ({}), getSession: () => session }, coordinator, build, createHash, ...Object.values(identityDeps),
   ) as (session: unknown, text: string, signal: AbortSignal, requestId: string) => Promise<void>;
   return { coordinator, build, run: (text = 'Answer') => run(session, text, new AbortController().signal, 'q1'),
-    pause: () => { paused = true; }, stop: () => { inputBoundary.abort(); paused = true; }, hold: () => { held = true; } };
+    pause: () => { paused = true; }, stop: () => { inputBoundary.abort(); paused = true; }, hold: () => { held = true; }, uncertainPause: () => { paused = true; uncertain = true; } };
 }
 
 it.each(['steered', 'queued'])('does not replay or unpause a %s answer', async (outcome) => {
@@ -64,6 +66,14 @@ it('resumes an answer explicitly submitted after Stop', async () => {
   expect(h.coordinator.steerControlInput).not.toHaveBeenCalled();
   expect(h.coordinator.enqueue).toHaveBeenCalledOnce();
   expect(h.coordinator.resume).toHaveBeenCalledWith('task');
+});
+
+it('keeps the protective pause of an ACK-uncertain steer when another answer is submitted', async () => {
+  const h = harness(); h.uncertainPause();
+  await h.run();
+  expect(h.coordinator.steerControlInput).not.toHaveBeenCalled();
+  expect(h.coordinator.enqueue).toHaveBeenCalledOnce();
+  expect(h.coordinator.resume).not.toHaveBeenCalled();
 });
 
 it.each(['restore', 'build'])('does not override a newer Stop during %s', async (stage) => {

@@ -21320,7 +21320,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     assertCurrent();
     inputCoordinator.enqueue(session.id, item);
     // An answer submitted after Stop explicitly resumes; a newer Stop still wins the race.
-    if (pausedBeforeAnswer && inputCoordinator.getProjection(session.id).queuePaused) inputCoordinator.resume(session.id);
+    // An ACK-uncertain steer keeps its protective pause: only an explicit user decision may re-dispatch it.
+    if (pausedBeforeAnswer && inputCoordinator.getProjection(session.id).queuePaused &&
+      !inputCoordinator.isPausedForUncertainDelivery(session.id)) inputCoordinator.resume(session.id);
   };
 
   explicitStopImpl = async (sessionId) => {
