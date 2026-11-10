@@ -4,10 +4,12 @@
  * 意识没有文件系统(沙箱红线不破),想落盘只能经管子请主机代写:
  *
  *   电子脑 cindy.send({type:'fs-request', op, root, path?, content?, …})
- *     → 按执行上下文与 root 三档守门:
+ *     → 按执行上下文与 root 四档守门:
  *       'data'    私有数据目录 userData/ghost-fs/<ghostId>——自己的储物柜,
  *                 要求插件自主 fs 声明;免确认;全 op(write/read/list/delete);
  *                 配额封顶;卸载回收。
+ *       'picked' 新的系统目录选择签发的不透明引用，须批准 files 组；
+ *                 自主读写、列举、删除与监听，不借用任务身份。旧 pick 不补引用。
  *       'workdir' 当前任务工作目录——write/read/list/delete/watch/changes/unwatch;
  *                 必须带 callId(主机凭
  *                 cardService 严格反查当前 Agent 调用与 session,不信意识
@@ -52,7 +54,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type { AutoReviewDecision, ReviewableAction } from '@cindy/maker-core';
-import { deleteEntry, listDir, readFileChunk } from '@cindy/file-browser-core';
+import { deleteEntry, listDir, readFileChunk, writeFileBytes } from '@cindy/file-browser-core';
 
 import {
   GHOST_FS_DATA_MAX_FILES,
@@ -72,6 +74,8 @@ import {
 } from '../../shared/ghost.js';
 import type { GhostGrantConfirmDecision, GhostGrantConfirmPayload } from './ghostGrantConfirmBridge.js';
 import { installedGhostMutationTargetToken } from '../../shared/pluginIdentity.js';
+import { hasPluginHostToolGroupApproval } from './taskCapability.js';
+import type { PickedDirectory } from './pickGrantsStore.js';
 
 /** 会话快照:fs 槽 workdir 档守门要看的全部字段。 */
 export interface FsSessionSnapshot {
@@ -89,6 +93,7 @@ export interface FsSlotDeps {
   getGhost(id: string): InstalledGhost | null;
   /** Host account generation; never supplied by the plugin. */
   ownerKey?(): string;
+  resolvePickedDirectory?(ghostId: string, ref: string): PickedDirectory | null;
   getCallSignal?(ghostId: string, callId: string): AbortSignal | null;
   /** Adapter to the Host's existing file watcher, not a plugin-owned OS watcher. */
   watchDirectory?(root: string, changed: (event: { path: string; type: 'create' | 'update' | 'delete' }) => void,
@@ -292,7 +297,7 @@ const fail = (message: string): GhostPipeFsResult => ({ ok: false, message });
 
 export class GhostFsSlot {
   private readonly watches = new Map<string, {
-    ghostId: string; callId: string; sessionId: string; path: string; current(): boolean;
+    ghostId: string; callId: string; sessionId: string | null; path: string; current(): boolean;
     sequence: number; events: Array<{ sequence: number; path: string; type: 'create' | 'update' | 'delete' }>;
     resetRequired: boolean; close(): void;
   }>();
@@ -319,11 +324,30 @@ export class GhostFsSlot {
     return this.inFlightRequests.has(ghostId);
   }
 
+  /** MCP task callers use their live Session, without manufacturing a plugin
+   * identity or a ghost_call receipt. Mutations follow the tool's native risk
+   * approval; live Plan and owner changes still prevent the actual operation. */
+  async handleTaskFsRequest(sessionId: string, instanceId: string | undefined, req: Record<string, unknown>,
+    isCurrent: () => boolean, signal?: AbortSignal): Promise<GhostPipeFsResult> {
+    const owner = this.deps.ownerKey?.();
+    const session = await this.sessionSnapshotResolver(sessionId, instanceId);
+    if (!session || session.remoteHostId || !session.workingDir || req.directoryRef !== undefined) return fail('当前任务没有可用的本机工作目录');
+    const current = () => isCurrent() && session.isCurrent?.() !== false && this.deps.ownerKey?.() === owner && !signal?.aborted;
+    const mutation = req.op === 'write' || req.op === 'delete';
+    if (mutation && (session.planModeEnabled || session.permissionMode === 'plan')) return fail('计划模式不能修改文件');
+    const op = req.op as GhostFsOp;
+    if (!current() || !GHOST_FS_OPS.includes(op)) return fail('当前任务或文件操作已失效');
+    return this.handleDirectoryOperation(`task:${sessionId}`, op, req, { key: `task:${sessionId}:${instanceId ?? ''}`,
+      sessionId, session, root: await fs.promises.realpath(session.workingDir), current, signal, mutationApproved: true,
+      verify: async () => { if (!current()) throw new Error('TASK_AUTHORIZATION_EXPIRED'); },
+    });
+  }
+
   /** 处理一条 fs-request(ghost-pipe:send 的 invoke 返回值即本结果)。 */
-  async handleFsRequest(ghostId: string, payload: unknown): Promise<GhostPipeFsResult> {
+  async handleFsRequest(ghostId: string, payload: unknown, pageCurrent: () => boolean = () => true): Promise<GhostPipeFsResult> {
     this.inFlightRequests.set(ghostId, (this.inFlightRequests.get(ghostId) ?? 0) + 1);
     try {
-      return await this.dispatch(ghostId, payload);
+      return await this.dispatch(ghostId, payload, pageCurrent);
     } catch (err) {
       // 兜底:任何未预期异常都收敛成结构化失败,不给沙箱一个 rejected promise。
       this.deps.log?.warn('ghost fs-request unexpected failure', {
@@ -338,7 +362,7 @@ export class GhostFsSlot {
     }
   }
 
-  private async dispatch(ghostId: string, payload: unknown): Promise<GhostPipeFsResult> {
+  private async dispatch(ghostId: string, payload: unknown, pageCurrent: () => boolean): Promise<GhostPipeFsResult> {
     const ghost = this.deps.getGhost(ghostId);
     if (!ghost) return fail('意识未装入');
     const req = (payload ?? {}) as Record<string, unknown>;
@@ -346,6 +370,7 @@ export class GhostFsSlot {
     const root = req.root as GhostFsRoot;
     if (!GHOST_FS_OPS.includes(op)) return fail(`op 必须是 ${GHOST_FS_OPS.join(' / ')}`);
     if (!GHOST_FS_ROOTS.includes(root)) return fail(`root 必须是 ${GHOST_FS_ROOTS.join(' / ')}`);
+    if (root === 'picked') return this.handlePickedDirectory(ghostId, ghost, op, req, pageCurrent);
 
     // data 是插件自己的持久私有存储，继续要求 manifest.fs。workdir
     // 只有能严格证明处于当前 Agent ghost_call 内才可复用会话文件
@@ -368,6 +393,37 @@ export class GhostFsSlot {
     if (root === 'save') return op === 'write' ? this.handleSaveWrite(ghostId, req) : fail('root:"save" 只支持 op:"write"');
     if (op !== 'write') return this.handleWorkdirOperation(ghostId, ghost, op, req);
     return this.handleWorkdirWrite(ghostId, ghost, req);
+  }
+
+  private async handlePickedDirectory(ghostId: string, ghost: InstalledGhost, op: GhostFsOp,
+    req: Record<string, unknown>, pageCurrent: () => boolean): Promise<GhostPipeFsResult> {
+    if (!hasPluginHostToolGroupApproval(ghost, 'files') || typeof req.directoryRef !== 'string') return fail('亲选目录操作需要已批准的 files 组和 directoryRef');
+    const ref = req.directoryRef;
+    const directory = this.deps.resolvePickedDirectory?.(ghostId, ref);
+    if (!directory) return fail('目录引用不存在或已撤销，请重新选择');
+    const owner = this.deps.ownerKey?.(), installation = installedGhostMutationTargetToken(ghost, '');
+    const current = () => {
+      const latest = this.deps.getGhost(ghostId), selected = this.deps.resolvePickedDirectory?.(ghostId, ref);
+      return pageCurrent() && hasPluginHostToolGroupApproval(latest, 'files') && latest?.dir === ghost.dir
+        && installedGhostMutationTargetToken(latest!, '') === installation && this.deps.ownerKey?.() === owner
+        && selected?.path === directory.path && selected.dev === directory.dev && selected.ino === directory.ino;
+    };
+    const verify = async () => {
+      try {
+        if (!current()) throw new Error('DIRECTORY_AUTHORIZATION_EXPIRED');
+        const [real, stat] = await Promise.all([fs.promises.realpath(directory.path), fs.promises.lstat(directory.path, { bigint: true })]);
+        if (real !== directory.path || !stat.isDirectory() || stat.isSymbolicLink() || stat.dev.toString() !== directory.dev || stat.ino.toString() !== directory.ino || !current()) throw new Error('DIRECTORY_IDENTITY_CHANGED');
+      } catch (error) {
+        for (const watcher of this.watches.values()) if (watcher.ghostId === ghostId && watcher.callId === `picked:${ref}`) watcher.close();
+        throw error;
+      }
+    };
+    await verify();
+    const result = await this.handleDirectoryOperation(ghostId, op, req, {
+      key: `picked:${ref}`, sessionId: null, session: null, root: directory.path, current, verify,
+    });
+    await verify();
+    return result;
   }
 
   /** The file browser, remote file service and plugins use the same filesystem core. */
@@ -393,6 +449,17 @@ export class GhostFsSlot {
         && live.sessionInstanceId === info.sessionInstanceId;
     };
     if (!current()) return fail('调用或安装授权已失效');
+    return this.handleDirectoryOperation(ghostId, op, req, { key: `workdir:${callId}`, sessionId: info.sessionId,
+      session, root: await fs.promises.realpath(session.workingDir), current,
+      signal: this.deps.getCallSignal?.(ghostId, callId) ?? undefined,
+      verify: async () => { if (!current()) throw new Error('CALL_EXPIRED'); },
+    });
+  }
+
+  private async handleDirectoryOperation(ghostId: string, op: GhostFsOp, req: Record<string, unknown>,
+    scope: { key: string; sessionId: string | null; session: FsSessionSnapshot | null; root: string; current(): boolean;
+      verify(): Promise<void>; signal?: AbortSignal; mutationApproved?: true }): Promise<GhostPipeFsResult> {
+    const { key: callId, sessionId, session, root, current, signal } = scope;
     if (op === 'changes' || op === 'unwatch') {
       const watchId = typeof req.watchId === 'string' ? req.watchId : '';
       const watcher = this.watches.get(watchId);
@@ -411,9 +478,14 @@ export class GhostFsSlot {
       if (reason) return fail(reason);
     } else if (op !== 'list' && op !== 'watch') return fail('path 必须是非空相对路径');
     const relPath = rel as string;
-    const root = await fs.promises.realpath(session.workingDir);
     const target = path.join(root, ...relPath.split('/'));
     if (!isInsideDir(root, target) || (relPath !== '' && !await deepestExistingAncestorInside(root, target))) return fail('path 越界');
+    if (op === 'write') {
+      const decoded = decodeContent(req.content, req.encoding);
+      if ('error' in decoded) return fail(decoded.error);
+      await writeFileBytes(root, relPath, decoded.bytes, scope.verify);
+      return { ok: true, op: 'write', path: relPath, bytes: decoded.bytes.byteLength };
+    }
     let stat: fs.Stats;
     try { stat = await fs.promises.lstat(target); } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
@@ -424,29 +496,29 @@ export class GhostFsSlot {
     if (!current()) return fail('调用已结束');
 
     if (op === 'watch') {
-      const signal = this.deps.getCallSignal?.(ghostId, callId);
-      if (!stat.isDirectory() || !signal || signal.aborted || !this.deps.watchDirectory) return fail('当前调用无法建立目录监听');
+      if (!stat.isDirectory() || (sessionId !== null && !signal) || signal?.aborted || !this.deps.watchDirectory) return fail('当前调用无法建立目录监听');
       for (const [watchId, watcher] of this.watches) {
         if (watcher.ghostId === ghostId && watcher.callId === callId && watcher.path === relPath && watcher.current()) {
           return { ok: true, op: 'watch', watchId, cursor: watcher.sequence };
         }
       }
+      if ([...this.watches.values()].filter(watcher => watcher.ghostId === ghostId).length >= 32) return fail('目录监听数已达上限，请释放不再使用的监听');
       const watchId = randomUUID();
       let release: (() => Promise<void>) | undefined;
       let closed = false;
       const entry = {
-        ghostId, callId, sessionId: info.sessionId, path: relPath, current: () => current() && !signal.aborted,
+        ghostId, callId, sessionId, path: relPath, current: () => current() && !signal?.aborted,
         sequence: 0, events: [] as Array<{ sequence: number; path: string; type: 'create' | 'update' | 'delete' }>, resetRequired: false,
         close: () => {
           if (closed) return;
           closed = true;
           this.watches.delete(watchId);
-          signal.removeEventListener('abort', entry.close);
+          signal?.removeEventListener('abort', entry.close);
           if (release) void release().catch(() => this.deps.log?.warn('file watcher release failed', { ghostId }));
         },
       };
       this.watches.set(watchId, entry);
-      signal.addEventListener('abort', entry.close, { once: true });
+      signal?.addEventListener('abort', entry.close, { once: true });
       try {
         release = await this.deps.watchDirectory(target, event => {
           if (closed) return;
@@ -492,19 +564,19 @@ export class GhostFsSlot {
     }
     if (op !== 'delete') return fail('不支持的工作目录操作');
     // Delete always has its own decision; a previous write confirmation grants no delete authority.
-    let verdict = workdirWriteVerdict(session.permissionMode, session.planModeEnabled);
+    let verdict = session && !scope.mutationApproved ? workdirWriteVerdict(session.permissionMode, session.planModeEnabled) : 'allow';
     if (verdict === 'deny') return fail('当前会话处于计划/只读模式，不允许删除');
     if (verdict === 'review') {
       let decision: AutoReviewDecision;
-      try { decision = await session.reviewAction?.({ kind: 'other', description: `Delete ${relPath} from the current working directory`, requireConsent: true }) ?? { verdict: 'ask' }; }
+      try { decision = await session?.reviewAction?.({ kind: 'other', description: `Delete ${relPath} from the current working directory`, requireConsent: true }) ?? { verdict: 'ask' }; }
       catch { decision = { verdict: 'ask' }; }
       if (!current()) return fail('调用已结束');
       if (decision.verdict === 'block') return fail('自动审核拒绝删除');
       verdict = decision.verdict === 'allow' ? 'allow' : 'confirm';
     }
     if (verdict === 'confirm') {
-      const decision = await this.deps.requestWriteConfirm(info.sessionId, {
-        ghostId, ghostName: ghost.manifest.name, lane: 'fs_delete',
+      const decision = await this.deps.requestWriteConfirm(sessionId!, {
+        ghostId, ghostName: this.deps.getGhost(ghostId)?.manifest.name ?? ghostId, lane: 'fs_delete',
         items: [{ name: path.basename(target), absPath: target, size: stat.size, isDirectory: stat.isDirectory() }],
       });
       if (!decision.confirmed) return fail('本次删除未获批准');
@@ -513,6 +585,7 @@ export class GhostFsSlot {
     if (!current() || !await deepestExistingAncestorInside(root, target)) return fail('目录或调用授权已失效');
     const latest = await fs.promises.lstat(target);
     if (latest.isSymbolicLink() || latest.dev !== stat.dev || latest.ino !== stat.ino || !current()) return fail('删除目标已变化');
+    await scope.verify();
     await deleteEntry(root, relPath);
     return current() ? { ok: true, op: 'delete', path: relPath, existed: true } : fail('调用已结束');
   }
@@ -821,7 +894,7 @@ export class GhostFsSlot {
     let confirmedMemoryKey: string | null = null;
     if (verdict === 'confirm') {
       const parentDir = path.dirname(target);
-      const memoryKey = `${info.sessionId} ${ghostId} ${foldCase(parentDir)}`;
+      const memoryKey = `${info.sessionId}\u0000${ghostId}\u0000${foldCase(parentDir)}`;
       const targetToken = installedGhostMutationTargetToken(ghost, '');
       const bindingKey = memoryKey + '\u0000' + targetToken;
       if (automaticReview || targetToken === null || !this.workdirGrants.has(bindingKey)) {
@@ -876,7 +949,7 @@ export class GhostFsSlot {
   /** 会话关闭时清掉该会话的确认记忆(防 Set 无界增长)。 */
   cleanupForSession(sessionId: string): void {
     for (const watch of this.watches.values()) if (watch.sessionId === sessionId) watch.close();
-    const prefix = `${sessionId} `;
+    const prefix = `${sessionId}\u0000`;
     for (const key of Array.from(this.workdirGrants)) {
       if (key.startsWith(prefix)) this.workdirGrants.delete(key);
     }
@@ -884,5 +957,9 @@ export class GhostFsSlot {
 
   disposeAll(): void {
     for (const watch of this.watches.values()) watch.close();
+  }
+
+  disposePlugin(ghostId: string): void {
+    for (const watch of this.watches.values()) if (watch.ghostId === ghostId) watch.close();
   }
 }

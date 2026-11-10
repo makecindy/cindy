@@ -23,6 +23,7 @@ import { recordGhostCallMedia } from '../../../desktop/src/main/cindy-brain/ghos
 import type { GhostGrantConfirmBridge } from '../../../desktop/src/main/cindy-brain/ghostGrantConfirmBridge.js';
 import type { Session } from '@cindy/maker-core';
 import { GhostFsSlot } from '../../../desktop/src/main/cindy-brain/fsSlot.js';
+import { getGhostPickedDirectory } from '../../../desktop/src/main/cindy-brain/pickGrantsStore.js';
 import { GhostNotifySlot } from '../../../desktop/src/main/cindy-brain/notifySlot.js';
 import { getDirDepositVault, getSaveDepositVault } from '../../../desktop/src/main/cindy-brain/dirDeposit.js';
 import { PluginDownloadSlot } from '../../../desktop/src/main/cindy-brain/downloadSlot.js';
@@ -147,6 +148,7 @@ export async function createHostPluginRuntime(options: PluginRuntimeOptions) {
     broadcast: payload => { if (current()) options.publish('ghosts:card-updated', payload); }, log,
   });
   const fsSlot = new GhostFsSlot({ getGhost, dataRootDir: () => root('ghost-fs'),
+    ownerKey: () => owner, resolvePickedDirectory: getGhostPickedDirectory,
     callInfo: id => current() ? cards.callInfoOf(id) : null,
     inFlightCallInfo: id => current() ? cards.inFlightCallInfoOf(id) : null,
     getSessionSnapshot: async (id, instance) => current() ? resolveGhostFsSessionSnapshot(options.getSession, id, instance) : null,
@@ -204,7 +206,7 @@ export async function createHostPluginRuntime(options: PluginRuntimeOptions) {
   });
   const ownerScope = { capture: () => owner, isCurrent: (value: unknown) => value === owner && current(), isStable: (value: unknown) => value === owner && current() };
   const node = createHostNodeRuntimeBroker(assets.nodeWorker!, { getGhost, ownerScope,
-    hostToolRequest: options.hostToolRequest, onStopped: options.onPluginStopped,
+    hostToolRequest: options.hostToolRequest, onStopped: id => { fsSlot.disposePlugin(id); options.onPluginStopped?.(id); },
     readSecret: secret.readGhostSecret, secretSaved: secret.ghostSecretSaved,
     resolveOauthSecret: async (id, key, accountId) => {
       const decl = getGhost(id)?.manifest.network?.secrets?.find(item => item.key === key && item.source === 'oauth')?.oauth;
@@ -222,7 +224,7 @@ export async function createHostPluginRuntime(options: PluginRuntimeOptions) {
   const notify = new GhostNotifySlot({ getGhost, broadcast: payload => options.publish('ghosts:notify', payload), log });
   const pipe = createGhostExecutionPipe({ dispatcher: () => dispatcher,
     hostTools: options.hostToolRequest,
-    fetch: (id, payload) => network.handleFetchRequest(id, payload), files: (id, payload) => fsSlot.handleFsRequest(id, payload),
+    fetch: (id, payload) => network.handleFetchRequest(id, payload), files: (id, payload, check) => fsSlot.handleFsRequest(id, payload, check),
     network: (id, payload) => network.handleNetworkRequest(id, payload),
     library: (id, payload) => library.handleLibraryRequest(id, payload),
     download: (id, payload, check) => download.handle(id, payload, check),
@@ -291,7 +293,7 @@ export async function createHostPluginRuntime(options: PluginRuntimeOptions) {
   });
   const runtime = new GhostRuntime({ adapter: sandbox.adapter, log,
     onStateChanged: (id, state) => {
-      if (state !== 'running') { network.disposeGhost(id); options.onPluginStopped?.(id); }
+      if (state !== 'running') { network.disposeGhost(id); fsSlot.disposePlugin(id); options.onPluginStopped?.(id); }
       dispatcher?.onRuntimeState(id, state); options.publish('ghosts:runtime-changed', { states: runtime.listStates() });
     } });
   const dispatcher = new GhostPipeDispatcher({ getGhost, runtimeStateOf: id => runtime.stateOf(id),
@@ -347,6 +349,7 @@ export async function createHostPluginRuntime(options: PluginRuntimeOptions) {
   }
   async function dispose() {
     closed = true; stopSignal.abort(); runtime.destroyAll();
+    fsSlot.disposeAll();
     const errors: unknown[] = [];
     const finish = async (work: () => Promise<unknown>) => { try { await work(); } catch (error) { errors.push(error); } };
     await finish(() => network.disposeAll());

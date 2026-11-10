@@ -52,7 +52,8 @@ export type XdtHelperToolCategory =
   | 'bots'
   | 'github'
   | 'settings'
-  | 'terminal';
+  | 'terminal'
+  | 'files';
 
 export type XdtHelperToolContentBlock =
   | { type: 'text'; text: string }

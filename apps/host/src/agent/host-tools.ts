@@ -18,6 +18,8 @@ import { getCurrentDbClientSnapshot, tryGetDbClient } from '../../../desktop/src
 import { getDesktopMcpToolApprovalPolicy } from '../../../desktop/src/main/maker-host/mcp-tool-approval-policy.js';
 import { HostTerminalService } from '../../../desktop/src/main/terminal/hostTerminalService.js';
 import { createTerminalToolExecutor } from '../../../desktop/src/main/terminal/terminalToolAccess.js';
+import { createFileToolExecutor } from '../../../desktop/src/main/cindy-brain/fileToolAccess.js';
+import type { GhostFsSlot } from '../../../desktop/src/main/cindy-brain/fsSlot.js';
 import { ownerScopedPath } from '../../../desktop/src/main/dataOwnerPath.js';
 import type { createHostConfirmations } from '../host-confirmations.js';
 
@@ -31,6 +33,7 @@ interface Options {
   getSession(id: string): Session | undefined;
   confirmations: ReturnType<typeof createHostConfirmations>;
   terminal?: HostTerminalService;
+  files?: () => GhostFsSlot;
   invokeRemote?: ChatHistoryReaderDeps['invokeRemote'];
   taskActions?: Omit<Parameters<typeof createDesktopTaskActionAuthorizer>[0], 'getSession' | 'confirm'>;
   t(key: string): string;
@@ -77,6 +80,7 @@ export function createHostToolService(options: Options) {
       },
       history: createHistoryToolCallbacks({ authorizeCall,
         invokeRemote: options.invokeRemote ?? (async () => { throw new DeviceLinkError('NOT_CONNECTED', 'Device Link is unavailable'); }) }),
+      ...(options.files ? { files: createFileToolExecutor(options.files, getPluginHostToolCaller) } : {}),
       terminal: createTerminalToolExecutor({ service: terminal, owner: options.owner,
         pending: () => !current(), pluginCall: getPluginHostToolCaller, getGhost: options.getGhost,
         getSession: options.getSession, pluginDirectory: id => ownerScopedPath(options.profileDir, options.ownerId, 'ghost-fs', id) }),

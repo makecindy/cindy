@@ -1,6 +1,6 @@
 ## 4.10 文件操作(fs 能力)
 
-沙箱本身没有文件系统，字节始终由主机落盘。三档目的地的声明边界不同：
+沙箱本身没有文件系统，字节始终由主机落盘。四档目的地的声明边界不同：
 
 - `root:'workdir'`：当前 Agent tool-call 内传 `callId: msg.callId` 即可按会话
   permission mode 读写、列举、删除和监听，不需要 `"fs": true`。
@@ -8,6 +8,8 @@
   `"fs": true`。
 - `root:'data'`：这是插件脱离当前 Agent 调用仍可持久读写的私有目录，
   属于自主 Host 能力；使用它才声明 `"fs": true`，并在插件详情如实展示。
+- `root:'picked'`：使用已批准的 `agent.hostTools:["files"]` 与一次新的
+  `pick({mode:'directory',access:'files'})` 返回的 `directoryRef`，不借用任务、无需 callId。
 
 ```js
 // 写自己的私有数据目录(免确认;适合缓存、大结果落盘、跨生命周期状态)
@@ -45,7 +47,7 @@ await cindy.send({ type: 'fs-request', op: 'write', root: 'save',
 await cindy.fs({ op: 'write', root: 'data', path: 'a.txt', content: 'hi' });
 ```
 
-三档目的地(都由主机强制,写错拿到的是结构化拒绝):
+四档目的地(都由主机强制,写错拿到的是结构化拒绝):
 
 - `root:'data'` **私有数据目录**:你的专属储物柜(卸载时整体回收,沉睡保留)。
   免确认,全操作(write/read/list/delete)。配额:总量 256MB、2000 个文件;
@@ -69,6 +71,16 @@ await cindy.fs({ op: 'write', root: 'data', path: 'a.txt', content: 'hi' });
 - `root:'save'` **过户目录**:仅 write,凭主 agent 在 ghost_call 顶层传 `save_dir`
   过户后注入的 `args.save_deposit.token` 写入(与 §4.7 fetch `as:'file'` 下载
   落盘同一张票:限时、限次数、限字节、文件名主机消毒、永不覆盖已有文件)。
+- `root:'picked'` **自主授权目录**：同一宿主文件服务提供 read/write/list/delete/watch/changes/unwatch。
+  每次传 `directoryRef`；相对路径、16 MiB 单次读写、非递归列举、监听的 256 条元数据及游标缺口
+  规则与 workdir 相同。写入使用文件浏览器同一原子发布器；目录内的自主写入和删除已由亲选授权，
+  删除目录包含其内容，不能删除根本身。最多同时保留本插件 32 个监听；不用时 unwatch。
+  监听不需要 Agent 在途调用，停用、原运行页结束、换源、账号或安装变化时清理；旧引用不能授权新目录身份。
+  沙箱调用 `cindy.fs`；逻辑页与 Node Worker 也可经公共入口
+  `cindy.host.call('cindy_helper','file_request',{op:'read',directoryRef,path:'a.txt'})` 操作相同目录。
+  公共工具入口的 write/delete 仍执行其原生逐次风险确认。普通 Agent 使用该工具时由真实 Session
+  定位当前工作目录，计划模式禁止修改，不借用插件引用。Node Host 复用已提供的文件服务，未装配
+  系统选择器或 watcher 时明确不支持该部分，不在控制端操作远端路径。
 
 通用规则:
 

@@ -14,6 +14,7 @@ import { GhostNetworkSlot } from '../../desktop/src/main/cindy-brain/networkSlot
 import { GhostOauthAccountManager } from '../../desktop/src/main/cindy-brain/ghostOauthAccounts.ts';
 import { createHostNodeRuntimeBroker } from './plugins/node-process.ts';
 import { HostTerminalService } from '../../desktop/src/main/terminal/hostTerminalService.ts';
+import { GhostFsSlot } from '../../desktop/src/main/cindy-brain/fsSlot.ts';
 import { defaultPtySpawn } from '../../desktop/src/main/terminal/ptyFactory.ts';
 import { createHostToolService } from './agent/host-tools.ts';
 import { createHostConfirmations } from './host-confirmations.ts';
@@ -147,10 +148,10 @@ test('runs and reaps real plugin workers through the common broker', async t => 
   const ghost = { manifest: { id: 'test-node', name: 'Node fixture', version: '1.0.0', node: {
     entry: 'worker.cjs', protocol: 'json-rpc-stdio', entries: ['child.cjs'], childSpawn: true,
     secretBindings: [{ key: 'raw_account', label: 'Account', oauthSecret: 'account', methods: ['raw-account'] }],
-  }, agent: { hostTools: ['terminal'] }, network: { hosts: ['api.example.test', 'http://127.0.0.1:' + port, 'ws://127.0.0.1:' + port],
+  }, agent: { hostTools: ['terminal', 'files'] }, network: { hosts: ['api.example.test', 'http://127.0.0.1:' + port, 'ws://127.0.0.1:' + port],
     secrets: [{ key: 'account', label: 'Account', source: 'oauth', inject: { header: 'Authorization', format: 'Bearer {value}', hosts: ['api.example.test'] },
       oauth: { authorizeUrl: 'https://accounts.example.test/authorize', tokenUrl: 'https://accounts.example.test/token', scopes: ['read'], clientId: 'fixture-client' } }] } }, dir, enabled: true,
-    approval: { state: 'approved', revision: 'real-worker-fixture' }, approvedHostToolGroups: ['terminal'] };
+    approval: { state: 'approved', revision: 'real-worker-fixture' }, approvedHostToolGroups: ['terminal', 'files'] };
   const original = { ...ghost, manifest: { ...ghost.manifest, id: 'source-account' } };
   const values = new Map([
     ['source-account:account-client-id', 'fixture-client'],
@@ -187,6 +188,14 @@ test('runs and reaps real plugin workers through the common broker', async t => 
     return pty;
   } });
   const owner = () => ({ dataOwnerId: 'fixture-owner', ownerGeneration: 1 });
+  const directoryStat = fs.statSync(dir, { bigint: true });
+  const selectedDirectory = { ref: 'fixture-files', path: fs.realpathSync(dir), dev: directoryStat.dev.toString(), ino: directoryStat.ino.toString() };
+  const fileService = new GhostFsSlot({ getGhost: () => ghost, ownerKey: () => 'fixture-owner:1', dataRootDir: () => dir,
+    // Only the native-selection receipt is supplied by this fixture. Worker,
+    // private control pipe, public gateway, shared registry and filesystem are real.
+    resolvePickedDirectory: (id, ref) => id === 'test-node' && ref === selectedDirectory.ref ? selectedDirectory : null,
+    callInfo: () => null, inFlightCallInfo: () => null, getSessionSnapshot: async () => null,
+    requestWriteConfirm: async () => ({ confirmed: false, reason: 'cancelled' }), writeSaveDeposit: async () => null });
   const database = { drizzle: {} }; setCurrentDbClient(database, 'fixture-owner');
   const confirmations = createHostConfirmations({ current: () => true });
   const disconnect = confirmations.connect('web:fixture', event => {
@@ -194,7 +203,7 @@ test('runs and reaps real plugin workers through the common broker', async t => 
       confirmations.resolve('web:fixture', 'confirm', event.payload.requestId, true));
     return true;
   });
-  const hostTools = createHostToolService({ terminal: terminals, profileDir: dir, ownerId: 'fixture-owner', owner,
+  const hostTools = createHostToolService({ terminal: terminals, files: () => fileService, profileDir: dir, ownerId: 'fixture-owner', owner,
     getGhost: () => ghost, getSession: () => undefined, current: () => true, confirmations, t: key => key,
     manager: { approveTaskCapability: async () => { throw new Error('fixture group was already approved'); } },
   });
@@ -231,6 +240,17 @@ test('runs and reaps real plugin workers through the common broker', async t => 
       assert.equal(result.result.ok, true, JSON.stringify(result));
       return result.result;
     };
+    // §21 integration: execute a real plugin's host.call across the private FD,
+    // approval gateway and common service; the plugin never receives a path.
+    const fileCall = (op, args = {}) => terminalCall('file_request', { op, directoryRef: selectedDirectory.ref, ...args });
+    await fileCall('write', { path: 'exports/worker.txt', content: 'worker-selected-directory' });
+    assert.equal((await fileCall('read', { path: 'exports/worker.txt' })).content, 'worker-selected-directory');
+    assert.equal((await fileCall('list', { path: 'exports' })).entries[0].path, 'exports/worker.txt');
+    const escaped = await broker.handleRequest('test-node', { type: 'node-request', method: 'terminal',
+      params: { tool: 'file_request', args: { op: 'read', directoryRef: selectedDirectory.ref, path: '../outside.txt' } } });
+    assert.equal(escaped.result.ok, false);
+    await fileCall('delete', { path: 'exports/worker.txt' });
+    assert.equal(fs.existsSync(path.join(dir, 'exports/worker.txt')), false);
     const terminal = await terminalCall('terminal_start', { program: { command: process.execPath, args: [path.join(dir, 'terminal.cjs')] } });
     await ready;
     const output = await terminalCall('terminal_read', { id: terminal.job.id });
@@ -254,6 +274,7 @@ test('runs and reaps real plugin workers through the common broker', async t => 
     ghost.enabled = false;
     assert.equal((await broker.handleRequest('test-node', { type: 'node-request', method: 'echo' })).ok, false);
   } finally {
+    fileService.disposeAll();
     disconnect(); confirmations.close(); hostTools.close(); clearCurrentDbClient(database);
     await network.disposeAll(); await broker.stopAndWait('test-node'); broker.destroyAll();
   }

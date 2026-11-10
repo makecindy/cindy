@@ -48,6 +48,26 @@ it('discovers and dispatches terminal jobs through the shared schema for tasks a
   } finally { await client.close(); await server.close(); }
 });
 
+// §21 unit: production registry discovery and schema validation were missing
+// for authorized directory IO. One plugin reference must be forwarded intact;
+// malformed operations must be rejected before the Host touches any files.
+it('discovers the shared files service and validates its opaque directory requests', async () => {
+  const context = { agentKind: 'codex' as const, workingDir: '', hostCaller: {
+    kind: 'plugin' as const, pluginId: 'files', dataOwnerId: 'owner', ownerGeneration: 1,
+  } };
+  const call = vi.fn(async () => ({ ok: true, op: 'read', content: 'selected' }));
+  const server = createXdtHelperMcpServer({ files: { call } }, context);
+  try {
+    expect(server.hostTools.describe('file_request')).toMatchObject({ category: 'files' });
+    expect(parsePayload(await server.hostTools.call('file_request', { op: 'read', directoryRef: 'selected', path: 'a.txt' })))
+      .toMatchObject({ ok: true, content: 'selected' });
+    expect(call).toHaveBeenCalledExactlyOnceWith(context, { op: 'read', directoryRef: 'selected', path: 'a.txt' }, undefined);
+    expect(parsePayload(await server.hostTools.call('file_request', { op: 'exec', directoryRef: 'selected' })))
+      .toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+    expect(call).toHaveBeenCalledOnce();
+  } finally { await server.close(); }
+});
+
 it('validates attachment reads against the same history scope before host I/O', async () => {
   let denied = false;
   const readSessionAttachment = vi.fn(async () => ({ ok: true as const, base64: 'dGV4dA==', nextOffset: null }));

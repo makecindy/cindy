@@ -4,7 +4,7 @@ export interface GhostExecutionPipePorts {
   dispatcher(): GhostPipeDispatcher;
   fetch(id: string, payload: unknown): Promise<unknown>;
   network?(id: string, payload: unknown): Promise<unknown>;
-  files(id: string, payload: unknown): Promise<unknown>;
+  files(id: string, payload: unknown, current: () => boolean): Promise<unknown>;
   library(id: string, payload: unknown): Promise<unknown>;
   download(id: string, payload: unknown, current: () => boolean): Promise<unknown>;
   node(id: string, payload: unknown, current: () => boolean): Promise<unknown>;
@@ -30,7 +30,7 @@ export function createGhostExecutionPipe(ports: GhostExecutionPipePorts) {
     }
     if (type === 'fetch-request') return ports.fetch(id, payload);
     if (type === 'network-request') return ports.network?.(id, payload) ?? Promise.reject(new Error('UNSUPPORTED_CAPABILITY'));
-    if (type === 'fs-request') return ports.files(id, payload);
+    if (type === 'fs-request') return ports.files(id, payload, current);
     if (type === 'library-request') return ports.library(id, payload);
     if (type === 'download-request') return ports.download(id, payload, current);
     return ports.node(id, payload, current);

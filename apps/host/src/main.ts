@@ -541,6 +541,7 @@ async function ensureRuntime(ownerId: string): Promise<void> {
   hostTools = createHostToolService({ profileDir: dataDir, ownerId,
     owner: () => ({ dataOwnerId: getActiveAppSession().dataOwnerId, ownerGeneration: getActiveAppSession().generation }),
     current: toolOwnerCurrent, getGhost: id => plugins?.getGhost(id) ?? null, manager: pluginManager,
+    files: () => { if (!plugins) throw new Error('UNSUPPORTED_CAPABILITY'); return plugins.fsSlot; },
     getSession: id => agentGraph?.maker.getSession(id), confirmations: hostConfirmations, t: i18n.t,
     taskActions: {
       input: id => inputQueue.taskActionInput(id),

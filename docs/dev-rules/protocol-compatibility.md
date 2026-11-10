@@ -109,7 +109,7 @@ Ghost manifest、自建中转同步维护与 Review 清单。每项具体能力�
   只有改变既有字段结构或安全语义时才需要协调协议升级。
 - 插件必须检测接口并处理不支持响应，局部降级或提示升级。`minCindyVersion` 不能替代
   这些处理：手动导入、旧版或其它安装渠道仍可能将包交给不适配客户端。
-- `agent.hostTools: string[]` 增量声明宿主工具组，当前识别 history/control/handoff/settings/scheduler/terminal。
+- `agent.hostTools: string[]` 增量声明宿主工具组，当前识别 history/control/handoff/settings/scheduler/terminal/files。
   未知字符串保留但不授权；receipt 增量可选 `approvedHostToolGroups` 不改变版本，旧记录可继续读取，缺少批准只影响新接口。
   UI 管子新增 `host-tool-request`，Node 私有通道使用同类型加 `reqId`，共用宿主校验及 Agent 工具处理器；返回原始 MCP 结果。
   旧宿主可保留清单但不支持接口，插件须检测 `cindy.host?.call` 并处理不支持响应。无 Session 的插件调用方不会改变原任务调用方协议或身份；不涉及 device-link wire 变更。
@@ -126,6 +126,11 @@ Ghost manifest、自建中转同步维护与 Review 清单。每项具体能力�
   错误与来源范围。任务动作的输入快照与确认复用共享实现，不新增身份字段、任务副本或批准记录。
   Node Host 未装配的服务返回 MCP `UNSUPPORTED_CAPABILITY`，附当前执行环境不支持的说明；当前包括生产调度器。
   Desktop 原有暂未就绪场景仍返回 `HOST_NOT_READY`。不新增调用字段，也不改变旧宿主返回值。
+  `files` 增量复用同一组批准事实。`pick-request.access:'files'` 成功时返回可选 `directoryRef`；
+  `fs-request.root:'picked'` 只接受该 Host 签发的同实例引用。旧 pick 路径没有新增访问权，未知组也不补批准。
+  原亲选目录文件仅增量增加可选 roots 记录，grants 原结构及 errand 语义保持；换源归档同时搬移两类事实。
+  helper `file_request` 沿用公共工具通道，不改变 `cindy.host.call`、管子请求或调用方身份签名；
+  旧 Host 不支持新 root/op 时明确失败。没有新远控 channel 或 relay payload，手机不把控制端目录当成执行端目录。
 - 历史查询通道增量支持 `list_teammates`，复用同一个工具 registry 校验与宿主目录读取；不新增 channel。
   目录和指定 `teammate_id` 的关系分别分页，默认 100、最多 1000，返回 `nextCursor` / `hasMore`，游标复用历史查询的编码。
 - `control/delete_session` 为增量 Agent 工具，插件通过同一入口调用；本机复用 `patchSessionMetaInDb(status:'deleted')`，

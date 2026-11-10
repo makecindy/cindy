@@ -285,6 +285,7 @@ export function getDesktopMcpToolApprovalPolicy(
       return 'prompt-each-time';
     }
     const action = progressive ? innerName : toolName;
+    if (action === 'file_request' && (!args || !['read', 'list', 'watch', 'changes', 'unwatch'].includes(String(args.op)))) return 'prompt-each-time';
     if (action && ['terminal_start', 'terminal_write', 'terminal_resize', 'terminal_stop', 'terminal_forget'].includes(action)) return 'prompt-each-time';
     // Use the normal runtime permission flow once: Full Access bypasses approval,
     // Auto reviews the call, and Ask requests confirmation. Host guards retain scope checks.
