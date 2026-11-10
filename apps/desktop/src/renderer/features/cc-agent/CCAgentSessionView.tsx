@@ -6432,7 +6432,11 @@ function CCAgentSessionContent({
                   )}
 
                   {sessionId && !readOnly && !remoteDeviceId && !session?.remoteHostId && (
-                    <PluginTaskStatus sessionId={sessionId} workingDir={session?.workingDir} />
+                    <PluginTaskStatus
+                      sessionId={sessionId}
+                      workingDir={session?.workingDir}
+                      routeKey={JSON.stringify([session?.agentKind, session?.providerId, session?.model, session?.agentDeviceId])}
+                    />
                   )}
                   {/* Right: Context capacity indicator */}
                   <div className="flex shrink-0 items-center gap-3">

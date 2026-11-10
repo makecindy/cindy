@@ -2588,7 +2588,7 @@ export function ghostPermissionItems(manifest: GhostManifest): GhostPermissionIt
       kind: 'task-view',
       labelKey: 'taskView',
       labelArgs: { title: manifest.taskView.title ?? manifest.name },
-      detailKey: 'taskViewDetail',
+      detailKey: manifest.taskView.statusBar === true ? 'taskViewStatusDetail' : 'taskViewDetail',
     });
   }
   if (manifest.routineEvents) {

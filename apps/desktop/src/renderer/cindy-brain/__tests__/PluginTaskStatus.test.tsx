@@ -86,3 +86,29 @@ it('stops polling in a hidden document and clears failed status results', async 
   });
   expect(screen.queryByRole('button')).toBeNull();
 });
+
+// unit regression: switching the selected model in the same task must immediately
+// remove the old model's quota and request a fresh status, not wait 30 seconds.
+it('refreshes on a route change and does not show the previous route while waiting', async () => {
+  let resolve!: (value: ReturnType<typeof status>) => void;
+  const request = vi
+    .fn()
+    .mockResolvedValueOnce(status('old'))
+    .mockImplementationOnce(
+      () =>
+        new Promise((r) => {
+          resolve = r;
+        }),
+    );
+  bridge(request);
+  const view = render(<PluginTaskStatus sessionId="one" routeKey="magpie/model-one" />);
+  await act(async () => {});
+  expect(screen.getByRole('button').textContent).toBe('Demo: old');
+  view.rerender(<PluginTaskStatus sessionId="one" routeKey="magpie/model-two" />);
+  expect(screen.queryByRole('button')).toBeNull();
+  expect(request).toHaveBeenCalledTimes(2);
+  await act(async () => {
+    resolve(status('new'));
+  });
+  expect(screen.getByRole('button').textContent).toBe('Demo: new');
+});

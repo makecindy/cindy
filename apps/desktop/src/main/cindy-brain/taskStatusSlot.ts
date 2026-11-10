@@ -9,7 +9,11 @@ import { throwIpcError } from '../utils/ipcValidate.js';
 
 interface TaskSnapshot {
   workingDir: string | null;
-  remoteHostId: string | null;
+  remoteHostId?: string | null;
+  agentDeviceId?: string | null;
+  agentKind?: string | null;
+  providerId?: string | null;
+  model?: string | null;
 }
 
 /** Host-only projection. The adapter authenticates the caller before any work. */
@@ -34,7 +38,12 @@ export function createGhostTaskStatusHandler(deps: {
     if (owner === null) return [];
     const session = await deps.session(sessionId);
     const current = () => deps.scope() === owner;
-    if (!session || session.remoteHostId || !current()) return [];
+    if (!session || session.remoteHostId || session.agentDeviceId || !current()) return [];
+    const modelRoute: GhostTaskStatusRequest['modelRoute'] = {
+      agentKind: session.agentKind ?? null,
+      providerId: session.providerId ?? null,
+      model: session.model ?? null,
+    };
     const ghosts = deps.list();
     const tokens = new Map(
       ghosts.map((ghost) => [
@@ -47,7 +56,7 @@ export function createGhostTaskStatusHandler(deps: {
         const id = installedGhostStoragePart(ghost);
         const allowed = () => current() && !deps.disabled(id, session.workingDir);
         if (!allowed()) return null;
-        const result = await deps.slot.query(id, sessionId, allowed);
+        const result = await deps.slot.query(id, sessionId, allowed, modelRoute);
         if (!allowed() || !result) return null;
         return {
           instanceId: id,
@@ -58,7 +67,16 @@ export function createGhostTaskStatusHandler(deps: {
       }),
     );
     const latest = current() ? await deps.session(sessionId) : null;
-    if (!current() || !latest || latest.workingDir !== session.workingDir || latest.remoteHostId)
+    if (
+      !current() ||
+      !latest ||
+      latest.workingDir !== session.workingDir ||
+      latest.remoteHostId ||
+      latest.agentDeviceId ||
+      latest.agentKind !== session.agentKind ||
+      latest.providerId !== session.providerId ||
+      latest.model !== session.model
+    )
       return [];
     const installed = new Map(
       deps.list().map((ghost) => [installedGhostStoragePart(ghost), ghost]),
@@ -97,6 +115,11 @@ export class GhostTaskStatusSlot {
     id: string,
     sessionId: string,
     allowed: () => boolean = () => true,
+    modelRoute: GhostTaskStatusRequest['modelRoute'] = {
+      agentKind: null,
+      providerId: null,
+      model: null,
+    },
   ): Promise<GhostTaskStatusReply | null> {
     const ghost = this.deps.getGhost(id);
     if (
@@ -119,7 +142,7 @@ export class GhostTaskStatusSlot {
         token === ghostInstallApprovalToken(latest.approval)
       );
     };
-    const key = JSON.stringify([owner, id, sessionId, token]);
+    const key = JSON.stringify([owner, id, sessionId, token, modelRoute]);
     const existing = this.inFlight.get(key);
     if (existing) return existing.then((value) => (current() ? value : null));
     const requestId = randomUUID();
@@ -139,7 +162,7 @@ export class GhostTaskStatusSlot {
           if (
             !ready ||
             !current() ||
-            !this.deps.send(id, { type: 'task-status', requestId, sessionId })
+            !this.deps.send(id, { type: 'task-status', requestId, sessionId, modelRoute })
           )
             finish(null);
         })

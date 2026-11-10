@@ -7794,6 +7794,7 @@
         "mainViewDetail": "Beim Öffnen wird die Hauptansicht in der Plugin-Sandbox angezeigt. Es wird kein Zugriff auf Dateien, Netzwerk oder Zugangsdaten gewährt.",
         "taskView": "Aufgabenseite „{{title}}“ · öffnet sich in der Seitenleiste der Aufgabe",
         "taskViewDetail": "Der Tab folgt der Aufgabe und öffnet sich in der Plugin-Sandbox. Er gewährt keinen Zugriff auf Dateien, Netzwerk oder Zugangsdaten.",
+        "taskViewStatusDetail": "Zeigt den Aufgabenstatus in der Fußzeile und erhält Engine, Verbindungs-ID und Modell-ID der aktuellen Aufgabe. Ein Klick öffnet den Aufgaben-Tab in der Sandbox. Nachrichteninhalte, Endpunkte und Zugangsdaten werden nicht geteilt.",
         "code": "Ausführbarer Code",
         "codeDetail": "Läuft in einer isolierten Sandbox ohne Zugriff auf deine Dateien oder das Netzwerk.",
         "resident": "Dauerhaft aktiv (startet beim Aktivieren und behält auch im Leerlauf einen Hintergrundprozess bei)",

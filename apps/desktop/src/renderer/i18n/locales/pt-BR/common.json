@@ -7864,6 +7864,7 @@
         "mainViewDetail": "Ao abri-la, a visualização principal é exibida na sandbox do plugin, sem conceder acesso a arquivos, rede ou credenciais.",
         "taskView": "Página da tarefa “{{title}}” · abre na barra lateral da tarefa",
         "taskViewDetail": "A aba acompanha a tarefa e abre no sandbox do plugin; ela não concede acesso a arquivos, rede ou credenciais.",
+        "taskViewStatusDetail": "Mostra o status no rodapé da tarefa e recebe o mecanismo, o ID da conexão e o ID do modelo atuais. Um clique abre sua aba isolada. Não compartilha mensagens, endpoints nem credenciais.",
         "code": "Código executável",
         "codeDetail": "É executado em uma sandbox isolada, sem acesso aos seus arquivos ou à rede.",
         "resident": "Sempre ativo (inicia ao ser ativado e mantém um processo em segundo plano mesmo quando ocioso)",

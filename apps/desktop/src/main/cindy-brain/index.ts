@@ -10323,7 +10323,7 @@ export function registerGhostIpc(): void {
       assertTrustedAppRendererEvent(event);
     },
     scope: () => isAppSessionBoundaryPending() ? null : activeOwnerScopeKey(),
-    session: getSessionFsSnapshot,
+    session: getSessionRowSnapshot,
     list: availableGhosts,
     disabled: isGhostDisabledForWorkdir,
     slot: getGhostTaskStatusSlot(),

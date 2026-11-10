@@ -174,3 +174,50 @@ it('authorizes before reading and rechecks task/workdir/owner after asynchronous
   await expect(handler(event, 'task')).rejects.toThrow('untrusted');
   expect(read).not.toHaveBeenCalled();
 });
+
+// unit regression: the old status request only carried a task id, forcing plugins
+// to guess another profile's private database. Verify the production handler +
+// slot send only the selected route and discard replies after route changes.
+it('projects the current local task route without task contents and rejects a route changed in flight', async () => {
+  const s = setup();
+  Object.assign(s.ghost.manifest, { id: 'local-demo', name: 'Demo' });
+  let session = {
+    workingDir: '/isolated/project',
+    remoteHostId: null,
+    agentDeviceId: null as string | null,
+    agentKind: 'codex',
+    providerId: 'magpie-local',
+    model: 'codex/gpt-test',
+    title: 'private task',
+    sdkSessionId: 'private-account-id',
+  };
+  const handler = createGhostTaskStatusHandler({
+    authorize: () => {},
+    scope: () => 'owner',
+    session: async () => session,
+    list: () => [s.ghost],
+    disabled: () => false,
+    slot: s.slot,
+  });
+  s.send.mockImplementation((_id, request) => {
+    s.slot.reply('local-demo', { requestId: request.requestId, label: '16%' });
+    return true;
+  });
+  expect(await handler({} as IpcMainInvokeEvent, 'task')).toMatchObject([{ label: '16%' }]);
+  expect(s.send.mock.calls[0][1]).toEqual({
+    type: 'task-status',
+    requestId: expect.any(String),
+    sessionId: 'task',
+    modelRoute: { agentKind: 'codex', providerId: 'magpie-local', model: 'codex/gpt-test' },
+  });
+  s.send.mockImplementationOnce((_id, request) => {
+    session = { ...session, providerId: 'openai' };
+    s.slot.reply('local-demo', { requestId: request.requestId, label: 'old quota' });
+    return true;
+  });
+  expect(await handler({} as IpcMainInvokeEvent, 'task')).toEqual([]);
+  session = { ...session, agentDeviceId: 'other-computer' };
+  s.send.mockClear();
+  expect(await handler({} as IpcMainInvokeEvent, 'task')).toEqual([]);
+  expect(s.send).not.toHaveBeenCalled();
+});

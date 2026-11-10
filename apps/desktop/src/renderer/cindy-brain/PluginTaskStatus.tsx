@@ -15,9 +15,11 @@ import { installedGhostStoragePart } from '../../shared/pluginIdentity';
 export function PluginTaskStatus({
   sessionId,
   workingDir,
+  routeKey = '',
 }: {
   sessionId: string;
   workingDir?: string | null;
+  routeKey?: string;
 }) {
   const ghosts = useInstalledGhosts();
   const disabled = useWorkdirDisabledGhostIds(workingDir, ghosts);
@@ -34,6 +36,7 @@ export function PluginTaskStatus({
   const [snapshot, setSnapshot] = useState<{
     sessionId: string;
     workingDir: typeof workingDir;
+    routeKey: string;
     owner: typeof owner;
     ghosts: typeof ghosts;
     statuses: GhostTaskStatus[];
@@ -49,7 +52,7 @@ export function PluginTaskStatus({
       try {
         const statuses = await window.electronAPI.ghosts.taskStatus(sessionId);
         if (!disposed && isDataOwnerGenerationCurrent(owner))
-          setSnapshot({ sessionId, workingDir, owner, ghosts, statuses });
+          setSnapshot({ sessionId, workingDir, routeKey, owner, ghosts, statuses });
       } catch {
         if (!disposed) setSnapshot(null);
       } finally {
@@ -67,12 +70,13 @@ export function PluginTaskStatus({
       clearInterval(timer);
       document.removeEventListener('visibilitychange', onVisibility);
     };
-  }, [sessionId, workingDir, eligibleKey, ghosts, owner]);
+  }, [sessionId, workingDir, routeKey, eligibleKey, ghosts, owner]);
 
   const statuses =
     snapshot?.sessionId === sessionId &&
     snapshot.ghosts === ghosts &&
     snapshot.workingDir === workingDir &&
+    snapshot.routeKey === routeKey &&
     isDataOwnerGenerationCurrent(snapshot.owner)
       ? snapshot.statuses.filter((s) =>
           eligible.some((g) => installedGhostStoragePart(g) === s.instanceId),

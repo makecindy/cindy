@@ -10,6 +10,12 @@ export interface GhostTaskStatusRequest {
   type: 'task-status';
   requestId: string;
   sessionId: string;
+  /** Host-selected local route only; never endpoints, credentials or account identity. */
+  modelRoute: {
+    agentKind: string | null;
+    providerId: string | null;
+    model: string | null;
+  };
 }
 export interface GhostTaskStatusReply {
   requestId: string;

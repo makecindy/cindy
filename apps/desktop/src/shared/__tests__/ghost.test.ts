@@ -2455,10 +2455,12 @@ describe('ghost · panel.position 校验', () => {
     expect(ok).toMatchObject({ ok: true, manifest: { taskView: { title: '模拟器', html: 'task.html' } } });
     if (!ok.ok) throw new Error('expected a valid manifest');
     expect(ghostWebviewEntryPaths(ok.manifest)).toContain('/task.html');
-    // unit: additive status presentation must round-trip without changing task-page permissions.
+    // unit: enabling route-aware status must disclose the added model context during review.
     const status = validateGhostManifest(withTask({ title: '模拟器', html: 'task.html', statusBar: true }));
     expect(status).toMatchObject({ ok: true, manifest: { taskView: { statusBar: true } } });
-    if (status.ok) expect(diffGhostPermissionItems(ok.manifest, status.manifest).added).toEqual([]);
+    if (status.ok) expect(diffGhostPermissionItems(ok.manifest, status.manifest).added).toEqual([
+      expect.objectContaining({ key: 'task-view', detailKey: 'taskViewStatusDetail' }),
+    ]);
     expect(diffGhostPermissionItems({ ...ok.manifest, taskView: undefined }, ok.manifest).added).toEqual([
       expect.objectContaining({ key: 'task-view', kind: 'task-view', labelKey: 'taskView' }),
     ]);
