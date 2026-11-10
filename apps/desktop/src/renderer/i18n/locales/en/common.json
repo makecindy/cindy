@@ -19900,5 +19900,11 @@
     "keepDraft": "Your draft stays here. Task state will sync when the connection recovers.",
     "retry": "Retry connection",
     "desktopAuthHelp": "Update the Host connection settings in your launch terminal, then reopen this experimental client."
+  },
+  "remoteControlConsent": {
+    "title": "Allow remote control of this computer?",
+    "detail": "Request from {{device}}\nPurpose: {{purpose}}\n\nEnabling this setting lets devices on your account control this computer, including running tasks and accessing files. It stays enabled until you turn it off in Settings.",
+    "decline": "Not now",
+    "enable": "Enable remote control"
   }
 }

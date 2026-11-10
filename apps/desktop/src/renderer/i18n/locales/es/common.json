@@ -20087,5 +20087,11 @@
     "keepDraft": "Tu borrador se conserva. Las tareas se sincronizarán cuando se restablezca la conexión.",
     "retry": "Reconectar",
     "desktopAuthHelp": "Actualiza la configuración de conexión en el terminal de inicio y vuelve a abrir este cliente experimental."
+  },
+  "remoteControlConsent": {
+    "title": "¿Permitir el control remoto de este ordenador?",
+    "detail": "Solicitud de {{device}}\nMotivo: {{purpose}}\n\nLos dispositivos de tu cuenta podrán controlar este ordenador, ejecutar tareas y acceder a archivos. Seguirá activado hasta que lo desactives en Ajustes.",
+    "decline": "Ahora no",
+    "enable": "Activar control remoto"
   }
 }

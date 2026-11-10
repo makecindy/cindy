@@ -20087,5 +20087,11 @@
     "keepDraft": "O rascunho será mantido. As tarefas serão sincronizadas quando a ligação for restabelecida.",
     "retry": "Voltar a ligar",
     "desktopAuthHelp": "Atualize as definições de ligação no terminal de arranque e reabra este cliente experimental."
+  },
+  "remoteControlConsent": {
+    "title": "Permitir o controlo remoto deste computador?",
+    "detail": "Pedido de {{device}}\nFinalidade: {{purpose}}\n\nOs dispositivos da sua conta poderão controlar este computador, executar tarefas e aceder a ficheiros. A opção mantém-se ativa até a desativar nas definições.",
+    "decline": "Agora não",
+    "enable": "Ativar controlo remoto"
   }
 }
