@@ -1037,45 +1037,38 @@ export function CreateWorkerPopover({
     [confirmDialog, selectedWorkerPermissionMode, t],
   );
 
-  // 弹窗打开期间，手机或另一台电脑可能已改了这台电脑的角色清单(App 直接写进存储)。提交时
-  // 角色清单以存储里最新的为准，只叠加本次提交涉及的角色，不用打开时的快照覆盖别处的改动。
-  const withLatestRoles = (base: WorkerCreationPrefs): WorkerCreationPrefs => {
-    const { rolesByOwner } = readWorkerCreationPrefs();
-    const next = { ...base };
-    if (rolesByOwner) next.rolesByOwner = rolesByOwner;
-    else delete next.rolesByOwner;
-    return next;
-  };
-
   const handleCreate = useCallback(async () => {
     if (!canCreate || submittingRef.current) return;
     submittingRef.current = true;
     setIsSubmitting(true);
     // 提交前对 (来源, 模型) 再收窄一次:收敛 effect 与提交之间目录可能已变化。
     const submitProviderId = narrowProviderSource(providerSource, model);
-    const nextPrefs: WorkerCreationPrefs = {
-      ...prefs,
+    // 弹窗打开期间，手机或另一台电脑可能已改了这台电脑的记忆(角色清单、上次选择，App 直接写进存储)。
+    // 所以记忆以存储里最新的为准，只叠加本次提交自己的字段，不用打开时的快照覆盖别处的改动。
+    const withSubmission = (base: WorkerCreationPrefs): WorkerCreationPrefs => ({
+      ...base,
       // 只记手动确认的路线，默认跟随与运行设备的临时目录不固化成模型偏好。
       ...(!sshRemote && !executionDevice && modelSelectionChosenRef.current ? {
         modelSelectionByHost: {
-          ...prefs.modelSelectionByHost,
+          ...base.modelSelectionByHost,
           [modelSelectionScope]: { agent, agentDeviceId, model, effort, fast, providerId: submitProviderId },
         },
       } : {}),
       lastAgent: agent,
       workerPermissionMode: supportsWorkerPermissionModeSelection
         ? selectedWorkerPermissionMode
-        : prefs.workerPermissionMode,
+        : base.workerPermissionMode,
       // 远程路线单独记在 modelSelectionByHost，不覆盖旧版逐 Agent 的本机目录记忆。
       [agent]: deviceId
-        ? prefs[agent]
+        ? base[agent]
         : {
             model,
             effort,
             fast,
             providerId: submitProviderId,
           },
-    };
+    });
+    const latestWithSubmission = () => withSubmission(readWorkerCreationPrefs());
     // 这个角色这次的内容：任务文字(为空或就是预设自带的那句则不记)、权限、手动选定的模型路线。
     // 自定义角色同时留在预设里，下次打开回到它。
     const starterTaskKey = workerStarterTaskKey(activeRole);
@@ -1093,7 +1086,7 @@ export function CreateWorkerPopover({
       // 角色的「上次选择」(choice)。只有那台电脑版本太旧时，「上次选择」才按旧办法记在这台电脑上。
       const memoryHome = remoteRoles?.deviceId === leadDeviceId ? remoteRoles.memory : 'none';
       const rememberHere = () => {
-        const merged = withLatestRoles(nextPrefs);
+        const merged = latestWithSubmission();
         setPrefs(merged);
         writeWorkerCreationPrefs(merged);
       };
@@ -1124,7 +1117,7 @@ export function CreateWorkerPopover({
           });
       }
     } else {
-      const nextPrefsWithRole = rememberWorkerRoleSubmission(withLatestRoles(nextPrefs), dataOwnerId, {
+      const nextPrefsWithRole = rememberWorkerRoleSubmission(latestWithSubmission(), dataOwnerId, {
         role: activeRole,
         ...(rememberedTask !== undefined ? { task: rememberedTask } : {}),
         ...(rememberedPermission ? { permission: rememberedPermission } : {}),

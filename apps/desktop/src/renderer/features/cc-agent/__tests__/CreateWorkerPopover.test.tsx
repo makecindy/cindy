@@ -871,6 +871,26 @@ describe('CreateWorkerPopover', () => {
     expect(roles.find((entry) => entry.role === 'researcher')?.task).toBe('Read the changelog');
   });
 
+  // 回归(PR #9731 review)：同一个窗口期里，别处写进这台电脑的「上次选择」(手动选定的完整路线、
+  // 其他 Agent 的模型)也不能被打开时的快照覆盖。生产入口 CreateWorkerPopover 提交；最小失败输入：
+  // 打开 → 存储里经 choice 写入 pi 的模型与路线 → 提交，路线和 pi 的模型仍在。
+  it('keeps the last choice another controller wrote while the dialog was open when submitting', async () => {
+    const onCreate = vi.fn();
+    render(<CreateWorkerPopover open onClose={vi.fn()} onCreate={onCreate} />);
+    const agentModel = { model: 'pi-fast-1', effort: 'low', fast: false, providerId: 'pi-provider' };
+    const route = { agent: 'pi' as const, agentDeviceId: null, model: 'pi-fast-1', effort: 'low', fast: false, providerId: 'pi-provider' };
+    writeWorkerCreationPrefs(
+      applyWorkerRolesMutation(readWorkerCreationPrefs(), null, {
+        kind: 'remember', role: 'researcher', choice: { agent: 'pi', agentModel, route },
+      }),
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'orca.createWorker.submit' }));
+    await waitFor(() => expect(onCreate).toHaveBeenCalledOnce());
+    const defaults = toRemoteWorkerRoles(readWorkerCreationPrefs(), null).defaults;
+    expect(defaults?.model).toEqual(route);
+    expect(defaults?.agents.pi).toEqual(agentModel);
+  });
+
   it('requires a role name for a custom Worker and submits it trimmed', async () => {
     const onCreate = vi.fn();
     render(<CreateWorkerPopover open onClose={vi.fn()} onCreate={onCreate} />);
