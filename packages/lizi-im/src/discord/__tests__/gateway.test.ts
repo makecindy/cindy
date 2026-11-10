@@ -389,13 +389,17 @@ describe('discord gateway guild messages', () => {
     await gateway.destroy();
   });
 
-  it('forwards text channel and thread messages, ignoring other channel types, bots, webhooks and system messages', async () => {
+  it('forwards text channels and their threads, ignoring other parents, bots, webhooks and system messages', async () => {
     const { gateway, onDmMessage, onGuildMessage } = harness();
     await gateway.connect('token');
     const client = discordMock.MockDiscordClient.instances[0];
 
     client.emit('messageCreate', guildMessage({ id: 'text' }));
-    client.emit('messageCreate', guildMessage({ id: 'thread', channel: { type: 11 } }));
+    client.emit('messageCreate', guildMessage({ id: 'thread', channel: { type: 11, parent: { type: 0 } } }));
+    client.emit('messageCreate', guildMessage({ id: 'private-thread', channel: { type: 12, parent: { type: 0 } } }));
+    client.emit('messageCreate', guildMessage({ id: 'forum-post', channel: { type: 11, parent: { type: 15 } } }));
+    client.emit('messageCreate', guildMessage({ id: 'announcement-thread', channel: { type: 10, parent: { type: 5 } } }));
+    client.emit('messageCreate', guildMessage({ id: 'unknown-parent', channel: { type: 11, parent: null } }));
     client.emit('messageCreate', guildMessage({ id: 'voice', channel: { type: 2 } }));
     client.emit('messageCreate', guildMessage({ id: 'forum', channel: { type: 15 } }));
     client.emit('messageCreate', guildMessage({ id: 'bot', author: { id: 'u2', bot: true } }));
@@ -404,7 +408,7 @@ describe('discord gateway guild messages', () => {
     client.emit('messageCreate', guildMessage({ id: 'sys', system: true, type: 18 }));
     client.emit('messageCreate', guildMessage({ id: 'noguild', guildId: null }));
 
-    expect(onGuildMessage.mock.calls.map(([m]) => (m as { id: string }).id)).toEqual(['text', 'thread']);
+    expect(onGuildMessage.mock.calls.map(([m]) => (m as { id: string }).id)).toEqual(['text', 'thread', 'private-thread']);
     expect(onDmMessage).not.toHaveBeenCalled();
     await gateway.destroy();
   });
