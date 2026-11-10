@@ -47,7 +47,9 @@ export function createBingWallpaperService(deps: BingWallpaperServiceDeps) {
   }
   function schedule() {
     clearTimeout(timer);
-    if (!market || disposed || pending) return;
+    // Preferences can also change through migration, outside the IPC callbacks.
+    // A cancelled check must not keep revalidating an inactive cache every second.
+    if (!market || disposed || pending || deps.activeMarket() !== market) return;
     // Bound stale future timestamps after wall-clock changes; no short polling loop.
     const delay = Math.min(
       6 * HOUR,

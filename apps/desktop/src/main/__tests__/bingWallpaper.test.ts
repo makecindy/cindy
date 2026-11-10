@@ -180,6 +180,7 @@ function harness() {
       cache = value;
     },
     state: () => cache,
+    changeSourceWithoutNotification: (value: string | null) => { active = value; },
   };
 }
 describe('daily wallpaper lifecycle', () => {
@@ -192,6 +193,22 @@ describe('daily wallpaper lifecycle', () => {
   afterEach(() => {
     h.service.dispose();
     vi.useRealTimers();
+  });
+
+  // #9640, unit: migration can write appearance preferences without an IPC
+  // reconcile. At the next due check, an inactive source must not retain a
+  // one-second cache-validation loop. Existing switches notify reconcile directly.
+  it('stops scheduling when the source changes outside the IPC notification path', async () => {
+    h.active('en-US');
+    await h.service.refresh();
+    h.changeSourceWithoutNotification(null);
+    const due = h.state().nextCheckAt;
+    await vi.advanceTimersByTimeAsync(due - Date.now());
+    expect(h.metadata).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
+    const validations = h.validate.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(h.validate).toHaveBeenCalledTimes(validations);
   });
 
   it('does no background work while unselected and coalesces requests across windows', async () => {
