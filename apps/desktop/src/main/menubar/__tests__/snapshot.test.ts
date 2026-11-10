@@ -12,6 +12,7 @@ import {
   type MenubarSubscriptionInput,
 } from '../snapshot';
 import { buildMenubarUiStrings, createMenubarTranslate, fillTemplate } from '../strings';
+import { buildAgentIslandQuota } from '../../agent-island/quota';
 import { buildUsageWidgetSnapshot } from '../../quota-overview/widgetSnapshot';
 
 const NOW = Date.UTC(2026, 9, 11, 3, 0, 0);
@@ -80,6 +81,9 @@ describe('buildMenubarView', () => {
     const alpha = view.sources.find((s) => s.id === 'alpha');
     expect(alpha).toMatchObject({ value: '61.8K', valueUnit: 'credits', reserve: true, fill: 0, level: 'error' });
     expect(alpha?.accessibilityLabel).toContain('61,838');
+    // PR #8622: the new value/unit shape must stay readable through the real island projection.
+    // Unit tier; old hand-built island fixtures missed the minimal 61_838-credit regression.
+    expect(buildAgentIslandQuota(view).find((item) => item.id === 'alpha')?.text).toBe('61.8K credits');
     expect(view.details.alpha.action).toEqual({ kind: 'new-task', providerId: 'codex-alpha' });
   });
 
