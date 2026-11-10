@@ -10,6 +10,7 @@ import {
   parseInvokeTransferOptions,
   type DeviceLinkTransferCodec,
 } from '../invokeTransfer.js';
+import { applyInvokeResultPatch, sampleInvokeResultText } from '../invokeDelta.js';
 
 const codec: Required<Omit<DeviceLinkTransferCodec, 'gunzipBase64Async'>> = {
   gzipBase64: (text) => gzipSync(Buffer.from(text, 'utf8')).toString('base64'),
@@ -193,5 +194,51 @@ describe('invoke result transfer encoding', () => {
     expect(prepared.decode({ ok: true, result: null, transfer: { tag: 't', gzipBase64: bomb } }))
       .toMatchObject({ ok: false, error: { code: 'IPC_ERROR' } });
     expect(cache.prepare('desktop', { channel: 'c', args: [] }).payload.transfer?.ifNoneMatch).toBeUndefined();
+  });
+});
+
+describe('invoke result delta', () => {
+  it('reads one full result after a run of deltas the controller could not hash', () => {
+    const cache = new InvokeResultCache({ gunzipBase64: codec.gunzipBase64 });
+    const request = { channel: 'local-db:sessions:list', args: [200, 'active'] };
+    let rows = [{ id: 'a', n: 0 }, { id: 'b', n: 0 }];
+    cache.prepare('desktop', request).decode({ ok: true, result: rows, transfer: { tag: 't0' } });
+    const sent: Array<string | undefined> = [];
+    for (let n = 1; n <= 9; n++) {
+      const prepared = cache.prepare('desktop', request);
+      sent.push(prepared.payload.transfer?.ifNoneMatch);
+      if (!prepared.payload.transfer?.ifNoneMatch) break;
+      rows = [{ id: 'a', n }, rows[1]!];
+      const text = JSON.stringify(rows);
+      prepared.decode({ ok: true, result: null, transfer: { tag: `t${n}`, delta: {
+        base: `t${n - 1}`, length: text.length, sample: sampleInvokeResultText(text), patch: { a: [[rows[0]], 1] } } } });
+    }
+    // One plain (re-serialized) base plus deltas: the ninth read goes without a base.
+    expect(sent.slice(0, 7)).toEqual(['t0', 't1', 't2', 't3', 't4', 't5', 't6']);
+    expect(sent.at(-1)).toBeUndefined();
+  });
+
+  it('rejects a same-length rebuild with rows out of place on a controller that cannot hash', () => {
+    // Mobile injects gunzip only: length and the sampled digest are its whole check.
+    const cache = new InvokeResultCache({ gunzipBase64: codec.gunzipBase64 });
+    const request = { channel: 'local-db:sessions:list', args: [200, 'active'] };
+    const rows = [{ id: 'a', title: 'x'.repeat(40) }, { id: 'b', title: 'y'.repeat(40) }];
+    cache.prepare('desktop', request).decode({ ok: true, result: rows, transfer: { tag: 'base' } });
+    const expected = JSON.stringify([rows[1], rows[0], { id: 'c', title: 'z'.repeat(40) }]);
+    const prepared = cache.prepare('desktop', request);
+    expect(prepared.payload.transfer).toEqual({ gzip: 1, ifNoneMatch: 'base', delta: 1 });
+    // Indices swapped against the expected order: same length, different text.
+    expect(prepared.decode({ ok: true, result: null, transfer: { tag: 'next', delta: {
+      base: 'base', length: expected.length, sample: sampleInvokeResultText(expected),
+      patch: { a: [0, 1, [{ id: 'c', title: 'z'.repeat(40) }]] } } } })).toMatchObject({ ok: false });
+    expect(prepared.retryWithoutBase()).toBe(true);
+    expect(cache.prepare('desktop', request).payload.transfer?.ifNoneMatch).toBeUndefined();
+  });
+
+  it('refuses a patch that repeats a large base element past the decode limit', () => {
+    // Each index reuses one 1 MB element; 8 references would rebuild 8 MB from a few bytes.
+    const base = JSON.stringify([{ body: 'x'.repeat(1024 * 1024) }]);
+    expect(() => applyInvokeResultPatch(base, { a: Array(8).fill(0) }, INVOKE_TRANSFER_MAX_CHARS))
+      .toThrow('delta result too large');
   });
 });

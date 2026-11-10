@@ -9,6 +9,7 @@ import {
   encodeInvokeResultTransfer,
   type DeviceLinkTransferCodec,
 } from './invokeTransfer.js';
+import { InvokeDeltaBases } from './invokeDelta.js';
 import { decodeScopedEnvelope, encodeScopedEnvelope, type ScopeSupport } from './providerShareEnvelope.js';
 import { isProviderSharePeer, parseProviderSharePeer } from './providerSharePeer.js';
 import { isSharedTaskPeer } from './sharedTaskPeer.js';
@@ -1292,6 +1293,7 @@ export class DeviceLinkClient {
     this.messageReuse.clear();
     this.historyViewDelta.clear();
     this.invokeResultCache.clear();
+    this.invokeDeltaBases.clear();
     this.inboundInvokeTransfer.clear();
     this.inboundInvokeChannels.clear();
     if (this.stopped) return;
@@ -1906,6 +1908,8 @@ export class DeviceLinkClient {
     this.cancelTimeoutCloseNotify(dst);
     this.pendingInboundLinkOffers.delete(dst);
     const peer = this.peerTransport.get(dst);
+    // 被控端主动关掉某个控制端（撤销、踢出、关闭远控、退出）：它的增量基准不再需要。
+    if (direction === 'inbound' && reason !== 'transport-timeout') this.invokeDeltaBases.forgetPeer(dst);
     if (direction === 'inbound') {
       if (isProviderSharePeer(dst)) {
         this.clearProviderShareDirectLease(dst);
@@ -1980,6 +1984,8 @@ export class DeviceLinkClient {
     }
     const requestId = createRequestId();
     const queuedAt = this.monotonicNow();
+    // 调度槽的上限，也是增量失败后重发可用的总预算。
+    const slotBudgetMs = Math.min(timeoutMs ?? this.timing.requestTimeoutMs, 30_000);
     const send = async () => {
       const admissionMs = Math.round(this.monotonicNow() - queuedAt);
       // Admission may wait: validate caller ownership/cancellation after dequeue,
@@ -1998,23 +2004,40 @@ export class DeviceLinkClient {
         const reuse = this.messageReuse.prepare(dst, payload);
         const delta = isScopedPeer(dst) ? null : this.historyViewDelta.prepare(dst, reuse.payload, fullHistory);
         const tagged = requestSessionTagCatalog(delta?.payload ?? reuse.payload);
-        const transfer = isScopedPeer(dst) ? null : this.invokeResultCache.prepare(dst, tagged);
-        const env = await this.request(
-          { v: PROTOCOL_VERSION, kind: 'invoke', dst, payload: transfer?.payload ?? tagged },
-          'invoke-result',
-          timeoutMs, true, { id, admissionMs, source: options?.diagnosticSource ?? 'client', operation: diagnosticOperation(payload) },
-        );
-        this.reportInvokeMetric(payload, env.payload as InvokeResultPayload);
-        const decodeStarted = this.monotonicNow();
-        const result = transfer
-          ? await transfer.decode(env.payload as InvokeResultPayload, (timing) => this.reportInvokeDecode(payload, timing))
-          : env.payload as InvokeResultPayload;
+        let decodeStarted = 0;
+        let sentId = id;
+        const sentAt = this.monotonicNow();
+        const exchange = async (exchangeId: string, timeout: number | undefined) => {
+          const transfer = isScopedPeer(dst) ? null : this.invokeResultCache.prepare(dst, tagged);
+          const env = await this.request(
+            { v: PROTOCOL_VERSION, kind: 'invoke', dst, payload: transfer?.payload ?? tagged },
+            'invoke-result',
+            timeout, true, { id: exchangeId, admissionMs, source: options?.diagnosticSource ?? 'client', operation: diagnosticOperation(payload) },
+          );
+          this.reportInvokeMetric(payload, env.payload as InvokeResultPayload);
+          decodeStarted = this.monotonicNow();
+          const result = transfer
+            ? await transfer.decode(env.payload as InvokeResultPayload, (timing) => this.reportInvokeDecode(payload, timing))
+            : env.payload as InvokeResultPayload;
+          return { result, retry: transfer?.retryWithoutBase() === true };
+        };
+        const first = await exchange(id, timeoutMs);
+        let result = first.result;
+        // 只读列表的增量套用失败时基准已丢弃，不带基准重发一次拿全文（不会再成循环）。
+        // 重发前复核调用方仍有效，只用原超时预算（含调度槽上限）剩下的部分；剩得太少就
+        // 直接返回这次失败，下一次读取自然拿全文。
+        const remainingMs = slotBudgetMs - Math.round(this.monotonicNow() - sentAt);
+        if (first.retry && remainingMs >= 100) {
+          options?.preSend?.();
+          sentId = createRequestId();
+          result = (await exchange(sentId, remainingMs)).result;
+        }
         const restored = result.ok
           ? reuse.decode(decodeModelSpeedPayload(payload.channel, decodeSessionTagCatalog(payload.channel, result.result)))
           : undefined;
         const decoded = result.ok ? { ...result, result: delta ? delta.decode(restored) : restored } : result;
         const decodeMs = Math.round(this.monotonicNow() - decodeStarted);
-        if (decodeMs >= 250) this.stallDiagnostics.record('decode', { request: diagnosticRef(id), channel: diagnosticChannel(payload.channel), decodeMs });
+        if (decodeMs >= 250) this.stallDiagnostics.record('decode', { request: diagnosticRef(sentId), channel: diagnosticChannel(payload.channel), decodeMs });
         return decoded;
       };
       try {
@@ -2028,7 +2051,7 @@ export class DeviceLinkClient {
     };
     return (bypassInvokeScheduling(payload) ? send() : this.invokeScheduler.run(
       dst, resolveInvokePriority(payload.channel, options?.background),
-      Math.min(timeoutMs ?? this.timing.requestTimeoutMs, 30_000), send, { channel: payload.channel, request: requestId, source: options?.diagnosticSource ?? 'client' },
+      slotBudgetMs, send, { channel: payload.channel, request: requestId, source: options?.diagnosticSource ?? 'client' },
     )).catch((error: unknown) => {
       if (error instanceof DeviceLinkError && error.code === 'BACKPRESSURE' && !error.inFlight) {
         this.log.debug(`device-link invoke admission failed dst=${dst.slice(0, 8)} channel=${payload.channel} priority=${resolveInvokePriority(payload.channel, options?.background)} elapsedMs=${Math.round(this.monotonicNow() - queuedAt)} reason=${error.message}`);
@@ -2041,7 +2064,7 @@ export class DeviceLinkClient {
   sendInvokeResult(dst: string, requestId: string, payload: InvokeResultPayload): void {
     const encodeStarted = this.monotonicNow();
     const transfer = this.opts.transferCodec ? this.inboundInvokeTransfer.get(dst, requestId) : undefined;
-    if (transfer) payload = encodeInvokeResultTransfer(transfer, payload, this.opts.transferCodec!);
+    if (transfer) payload = encodeInvokeResultTransfer(transfer, payload, this.opts.transferCodec!, { src: dst, bases: this.invokeDeltaBases });
     const peer = this.peerTransport.get(dst);
     const encodeMs = Math.round(this.monotonicNow() - encodeStarted);
     if (encodeMs >= 250) this.stallDiagnostics.record('encode', { request: diagnosticRef(requestId), dst: diagnosticRef(dst), encodeMs });
@@ -3717,6 +3740,8 @@ export class DeviceLinkClient {
   private readonly historyViewDelta = new HistoryViewDeltaCache();
   private readonly invokeResultCache: InvokeResultCache;
   private readonly inboundInvokeTransfer = new InboundInvokeTransferOptions();
+  /** 被控端：各控制端各请求最近一次发出的结果全文，供 `transfer.delta` 回增量。 */
+  private readonly invokeDeltaBases = new InvokeDeltaBases();
   /** Channel of each recent inbound invoke, so a queued reply can be labelled. Diagnostics only. */
   private readonly inboundInvokeChannels = new Map<string, string>();
   private readonly backlogWarnings = new BacklogWarnLimiter();

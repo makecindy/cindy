@@ -8688,6 +8688,59 @@ describe('定时重发的单趟预算(TRANSPORT_RETRY_PASS_BUDGET)', () => {
     controller.stop();
   }, 10_000);
 
+  it('invoke 结果增量:列表只回变化的行,坏增量不带基准重发', async () => {
+    const codec = {
+      gzipBase64: (text: string) => gzipSync(Buffer.from(text, 'utf8')).toString('base64'),
+      gunzipBase64: (base64: string, maxChars: number) => gunzipSync(Buffer.from(base64, 'base64'), { maxOutputLength: maxChars }).toString('utf8'),
+      contentTag: (text: string) => createHash('sha256').update(text).digest('base64url'),
+    };
+    const relay = new MemoryRelay();
+    const host = makeRelayClient(relay, 'desktop', undefined, { transferCodec: codec });
+    const controller = makeRelayClient(relay, 'ios', undefined, { transferCodec: codec });
+    // Distinct previews keep gzip honest: the full list cannot shrink to a few hundred bytes.
+    let rows = Array.from({ length: 200 }, (_, i) => ({ id: `session-${i}`, title: `任务 ${i}`,
+      preview: createHash('sha256').update(String(i)).digest('hex'), status: 'idle' }));
+    let corrupt = false;
+    const handled: Envelope[] = [];
+    const offHost = host.onFrame((env) => {
+      if (env.kind === 'link-open' && env.src && env.id) host.sendLinkAccept(env.src, env.id, { appVersion: '1', allowlistHash: 'hash' });
+      if (env.kind !== 'invoke' || !env.src || !env.id) return;
+      handled.push(env);
+      const transfer = (env.payload as InvokePayload).transfer;
+      if (corrupt && transfer?.ifNoneMatch) {
+        // A delta against the right base that rebuilds the wrong length.
+        host.sendInvokeResult(env.src, env.id, { ok: true, result: null, transfer: { tag: 'x', delta: { base: transfer.ifNoneMatch, length: 1, sample: 0, patch: { a: [0] } } } });
+      } else host.sendInvokeResult(env.src, env.id, { ok: true, result: rows });
+    });
+    host.start();
+    controller.start();
+    await relay.settleUntil(() => host.getStatus() === 'online' && controller.getStatus() === 'online');
+    await Promise.all([controller.openLink('desktop', { controllerName: 'iPhone', protocolVersion: 1, appVersion: '1' }, 500), relay.settle()]);
+    const responseBytes = () => (relay.deliveredTo.get('ios') ?? []).filter((env) => env.kind === 'invoke-result')
+      .map((env) => Buffer.byteLength(JSON.stringify(env.payload)));
+    const call = async () => {
+      const pending = controller.invoke('desktop', { channel: 'local-db:sessions:list', args: [200, 'active'] }, 1_000);
+      await relay.settle();
+      return pending;
+    };
+
+    await expect(call()).resolves.toEqual({ ok: true, result: rows });
+    expect((handled[0]!.payload as InvokePayload).transfer).toEqual({ gzip: 1, delta: 1 });
+    rows = [{ ...rows[7]!, status: 'running' }, ...rows.filter((_, i) => i !== 7)];
+    await expect(call()).resolves.toEqual({ ok: true, result: rows });
+    const [full, delta] = responseBytes();
+    expect(delta).toBeLessThan(full! / 4);
+
+    corrupt = true;
+    const before = handled.length;
+    await expect(call()).resolves.toEqual({ ok: true, result: rows });
+    expect(handled.slice(before).map((env) => (env.payload as InvokePayload).transfer?.ifNoneMatch === undefined)).toEqual([false, true]);
+
+    offHost();
+    host.stop();
+    controller.stop();
+  }, 10_000);
+
   it('invoke 结果传输编码:未注入编码器的旧控制端收到的结果与 wire 格式都不变', async () => {
     const relay = new MemoryRelay();
     const host = makeRelayClient(relay, 'desktop', undefined, {

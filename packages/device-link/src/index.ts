@@ -18,6 +18,7 @@ export * from "./directRtcRuntime.js";
 export { DIRECT_LINK_RUNTIME_SOURCE } from "./directRuntimeSource.js";
 export * from "./transport.js";
 export * from "./invokeTransfer.js";
+export { INVOKE_DELTA_CHANNELS, isInvokeDeltaChannel, type InvokeResultDelta, type InvokeResultPatch } from "./invokeDelta.js";
 export * from "./topics.js";
 export * from "./attachmentOssRef.js";
 export * from "./contactsSyncProtocol.js";
