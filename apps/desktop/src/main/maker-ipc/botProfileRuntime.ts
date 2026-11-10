@@ -611,6 +611,26 @@ export async function hydrateBotProfileRuntime(
         memoryRef('bot', botMemoryScopeKey, 'read-write', botMemoryIndex),
         memoryRef('user', `profile:${row.botId}:v${row.profileVersion}`, 'read-only', userContextSource),
       ];
+  // Canonical Chats, private-chat topics, group lanes and IM channel lanes follow
+  // Profile updates; delegation children stay frozen.
+  const followsProfile = row.role === 'canonical' || row.role === 'thread' || row.role === 'routine' || row.role === 'group' || row.role === 'channel';
+  const [previousSnapshot] = await db
+    .select({
+      profileVersion: botRuntimeSnapshots.profileVersion,
+      resolvedJson: botRuntimeSnapshots.resolvedJson,
+    })
+    .from(botRuntimeSnapshots)
+    .where(
+      and(
+        eq(botRuntimeSnapshots.sessionId, opts.id),
+        inArray(botRuntimeSnapshots.status, ['applied', 'degraded']),
+      ),
+    )
+    .orderBy(desc(botRuntimeSnapshots.preparedAt))
+    .limit(1);
+  const previousResolved = previousSnapshot
+    ? parseObject(previousSnapshot.resolvedJson)
+    : null;
   let runtimeConfiguredSkills = skillMode === 'allowlist' ? [...configuredSkills] : [];
   let resolvedSkills = configuredSkills;
   let unavailableSkills: string[] = [];
@@ -625,8 +645,13 @@ export async function hydrateBotProfileRuntime(
         workingDir: opts.workingDir,
         remoteHostId: opts.remoteHostId,
       });
+      // A frozen delegation task keeps the official set it already ran with, so a
+      // task frozen before this inheritance existed resumes instead of drifting.
+      const frozenNames = previousSnapshot && !followsProfile && Array.isArray(previousResolved?.skillResources)
+        ? new Set((previousResolved.skillResources as Array<{ name?: unknown }>).map(entry => entry.name)) : null;
       const official = chatOnly ? [] : catalog.filter(item => item.cindyOfficial &&
-        item.enabled !== false && item.runtimeStatus !== 'failed');
+        item.enabled !== false && item.runtimeStatus !== 'failed' &&
+        (!frozenNames || frozenNames.has(item.runtimeCommandName?.trim() || item.name.trim())));
       const officialNames = new Set(official.flatMap(item => [item.name.trim(), item.runtimeCommandName?.trim()].filter(Boolean)));
       // Native engines can discover the same command in a personal/project source.
       // Default inheritance grants only the attested file, not its namesakes.
@@ -1111,23 +1136,6 @@ export async function hydrateBotProfileRuntime(
     }),
     runtimeEpoch: { sha256: runtimeEpochSha256 },
   });
-  const [previousSnapshot] = await db
-    .select({
-      profileVersion: botRuntimeSnapshots.profileVersion,
-      resolvedJson: botRuntimeSnapshots.resolvedJson,
-    })
-    .from(botRuntimeSnapshots)
-    .where(
-      and(
-        eq(botRuntimeSnapshots.sessionId, opts.id),
-        inArray(botRuntimeSnapshots.status, ['applied', 'degraded']),
-      ),
-    )
-    .orderBy(desc(botRuntimeSnapshots.preparedAt))
-    .limit(1);
-  const previousResolved = previousSnapshot
-    ? parseObject(previousSnapshot.resolvedJson)
-    : null;
   const previousRuntimeEpoch = previousResolved
     ? parseObject(
         typeof previousResolved.runtimeEpoch === 'string'
@@ -1135,9 +1143,6 @@ export async function hydrateBotProfileRuntime(
           : JSON.stringify(previousResolved.runtimeEpoch ?? {}),
       )
     : null;
-  // Canonical Chats, private-chat topics, group lanes and IM channel lanes follow
-  // Profile updates; delegation children stay frozen.
-  const followsProfile = row.role === 'canonical' || row.role === 'thread' || row.role === 'routine' || row.role === 'group' || row.role === 'channel';
   const runtimeEpochChanged = followsProfile && previousSnapshot !== undefined
     ? previousSnapshot.profileVersion !== row.profileVersion
       || previousRuntimeEpoch?.sha256 !== runtimeEpochSha256

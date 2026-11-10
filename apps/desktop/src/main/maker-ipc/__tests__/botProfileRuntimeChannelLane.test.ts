@@ -49,6 +49,24 @@ describe('IM channel lanes hydrate the full Bot profile', () => {
     expect(opts.botRuntimeProfile?.skillPolicy.catalog.find(item => item.path === '/official/pr/SKILL.md')).toMatchObject({ contentSha256: 'a'.repeat(64) });
   });
 
+  it('resumes a frozen delegation task with the official set it already ran with', async () => {
+    const resource = (name: string, path: string) => ({ name, path, sha256: 'a'.repeat(64) });
+    const run = async (skillResources: unknown[]) => {
+      seed('delegation', null, { skillMode: 'allowlist', skills: ['personal'] });
+      state.rows.push([{ profileVersion: 3, resolvedJson: JSON.stringify({ skillResources }) }]);
+      const opts = { id: 'child', agentKind: 'codex', workingDir: '/bots/bot/workspace', model: 'm' } as MakerSessionCreateOpts;
+      await hydrateBotProfileRuntime(opts, { listSkills: async () => [
+        { name: 'pr', path: '/official/pr/SKILL.md', cindyOfficial: true },
+        { name: 'learn', path: '/official/learn/SKILL.md', cindyOfficial: true },
+        { name: 'personal', path: '/personal/SKILL.md' },
+      ], fingerprintSkillSource: async () => 'a'.repeat(64) }, { persistSnapshot: false });
+      return opts.botRuntimeProfile?.skillPolicy.configured;
+    };
+    const personal = resource('personal', '/personal/SKILL.md');
+    expect(await run([personal])).toEqual(['personal']);
+    expect(await run([personal, resource('pr', '/official/pr/SKILL.md')])).toEqual(['personal', 'pr']);
+  });
+
   it('keeps official inheritance under legacy defaults and fails closed on unreadable sources', async () => {
     seed('canonical', null);
     const opts = { id: 'main', agentKind: 'codex', workingDir: '/bots/bot/workspace', model: 'm' } as MakerSessionCreateOpts;
