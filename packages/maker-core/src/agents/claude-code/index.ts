@@ -4694,6 +4694,16 @@ export class ClaudeCodeAgent extends BaseAgent {
         flagSettingsFile = null;
         throw error;
       }
+      if (closed) {
+        // 关闭在准备阶段赢了这个竞态 (close 已删过旧文件并提前返回, 不会再来收这一份)。
+        // 调用方建完这个 query 会立刻关掉它, 借着那次 close 一并把文件删掉 —— 不在这里
+        // 直接删, 免得抢在 CLI 读 settings 之前。
+        const closeQueryAfterHandleClose = query.close.bind(query);
+        query.close = () => {
+          try { return closeQueryAfterHandleClose(); }
+          finally { releaseFlagSettingsFile(); }
+        };
+      }
       if (newSdkSessionId && finalFork && resumeSdkSid) {
         unacceptedForks.add(query);
       } else if (newSdkSessionId) {
