@@ -7,6 +7,7 @@
  * session — the host runtime lease exists for that reason.
  */
 
+import { readSessionDeviceId, serializeHostSession } from './device-identity.mjs';
 import { serializeAuthSessionRecord } from '@cindy/auth-client';
 
 import { AUTH_SESSION_KEY } from '../../../desktop/src/main/authCredentialKeys.ts';
@@ -27,7 +28,9 @@ import { parseAuthSessionRecord } from '@cindy/auth-client';
  * @returns {Promise<RefreshResult>}
  */
 export async function refreshHostSession(deps) {
-  const record = parseAuthSessionRecord(deps.store.read(AUTH_SESSION_KEY));
+  const raw = deps.store.read(AUTH_SESSION_KEY);
+  const record = parseAuthSessionRecord(raw);
+  const deviceId = readSessionDeviceId(raw);
   if (!record) throw new Error('no stored Cindy session to refresh');
   const tokens = await deps.refresh(record.refreshToken);
   if (!tokens.accessToken) throw new Error('refresh response contained no access token');
@@ -35,7 +38,7 @@ export async function refreshHostSession(deps) {
   if (rotated) {
     deps.store.write(
       AUTH_SESSION_KEY,
-      serializeAuthSessionRecord(record.realm, tokens.refreshToken),
+      deviceId ? serializeHostSession(record.realm, tokens.refreshToken, deviceId) : serializeAuthSessionRecord(record.realm, tokens.refreshToken),
     );
   }
   return { sessionToken: tokens.accessToken, realm: record.realm, rotated };

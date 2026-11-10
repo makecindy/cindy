@@ -31,8 +31,8 @@ import {
   reserveTurnErrorPersistId,
   resetTurnPersistState,
   saveTurnStartedAtForDeferred,
-} from '../messagePersistBroadcaster.js';
-import { AgentInputCoordinator } from './agent-input-coordinator.js';
+} from '../messagePersistBroadcaster.desktop.js';
+import { AgentInputCoordinator } from './agent-input-coordinator.desktop.js';
 import { MAKER_PUSH } from './channels.js';
 import { type OrcaTeamService } from './orcaTeamService.js';
 import {

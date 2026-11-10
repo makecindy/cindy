@@ -17,7 +17,7 @@ import {
   GHOST_INSTALL_CONSENT_TOOL_NAME,
   type GhostInstallConsentRequest,
 } from '../../shared/ghostInstallConsent.js';
-import { t as mainTranslate } from '../i18n.js';
+import { t as mainTranslate } from '../i18n.desktop.js';
 import {
   trackGhostInstallConsentPrompt,
   type GhostInstallConsentPrompt,

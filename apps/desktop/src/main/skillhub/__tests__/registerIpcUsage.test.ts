@@ -22,7 +22,7 @@ const comparePublishedSkill = vi.fn();
 vi.mock('../publishedComparison', () => ({ comparePublishedSkill }));
 const showOpenDialog = vi.fn();
 const showMessageBox = vi.fn();
-vi.mock('../../i18n.js', () => ({ t: (key: string) => key }));
+vi.mock('../../i18n.desktop.js', () => ({ t: (key: string) => key }));
 const assertTrustedAppRendererEvent = vi.fn();
 const isTrustedAppRendererWindow = vi.fn();
 const publishServiceOptions = vi.hoisted(() => ({ onProgress: null as null | ((event: unknown) => void) }));
@@ -224,7 +224,7 @@ describe('registerSkillhubIpc usage handlers', () => {
         if (transition === 'revoked') getAllowedProjectRoots.mockResolvedValueOnce([]);
         if (transition === 'failure') throw new Error('unreadable local directory');
         if (['429', '503', 'network', '404'].includes(transition)) {
-          const { ServerApiError } = await import('../../serverApiClient');
+          const { ServerApiError } = await import('../../serverApiClient.desktop');
           throw new ServerApiError('TEST_ERROR', transition === 'network' ? 0 : Number(transition), 'remote failure');
         }
         return { status: 'different', version: '1.0.0', pending: false, changes: [{ oldContent: 'private content' }] };

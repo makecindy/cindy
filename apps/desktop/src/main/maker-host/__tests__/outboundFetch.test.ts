@@ -63,7 +63,7 @@ import {
   rewritePinnedProxyDispatchOptions,
   resolveConnectOptions,
   resolveOutboundDispatcher,
-} from '../outbound-fetch.js';
+} from '../outbound-fetch.desktop.js';
 
 /** 取包装 dispatcher 对某个目标 URL 实际选中的底层 dispatcher(重定向选路即走这条)。 */
 function pick(dispatcher: unknown, url: string): unknown {

@@ -19776,5 +19776,15 @@
     "browserFallback": "前往 GitHub 为 Cindy 点 Star",
     "openGithub": "打开 GitHub",
     "openFailed": "未能打开 GitHub"
+  },
+  "hostConnection": {
+    "connecting": "正在连接 Cindy 后台…",
+    "restoring": "正在恢复任务状态…",
+    "retrying": "任务状态暂未同步，正在重试…",
+    "pairing": "需要重新连接授权",
+    "pairingHelp": "请保留此页。在启动 Cindy 后台的终端重新运行打开网页的命令，完成新页面的配对，再回到此页。",
+    "keepDraft": "已输入的草稿会保留。连接恢复后将自动同步任务状态。",
+    "retry": "重试连接",
+    "desktopAuthHelp": "请在启动终端更新后台连接设置，然后重新打开这个实验客户端。"
   }
 }

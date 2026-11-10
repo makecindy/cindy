@@ -4,11 +4,11 @@ import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { authorizedSessionPathStillBound, type SessionPathAuthorization } from '@cindy/mcps';
 import { classifyLocalAttachmentPath } from '../cindy-brain/ghostLocalPathGrant.js';
-import { mimeForExt } from './blobStore.js';
+import { mimeForExt } from './blobStore.desktop.js';
 import { ingestMedia } from './ingest.js';
 import { hasRef } from './ledger.js';
 import { sniffMediaMime } from './sniffMediaMime.js';
-import { captureMediaRefCompensationScope } from './refCompensationJournal.js';
+import { captureMediaRefCompensationScope } from './refCompensationJournal.desktop.js';
 import { getDbClient } from '../localDb/client/current.js';
 import { getActiveAppSession, isAppSessionBoundaryPending } from '../appSessionState.js';
 

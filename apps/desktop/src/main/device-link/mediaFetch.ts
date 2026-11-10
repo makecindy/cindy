@@ -28,9 +28,9 @@ import { open, realpath, stat } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { FILE_INLINE_MAX_BYTES } from '@cindy/device-link';
 
-import * as imageCacheStore from '../imageCacheStore.js';
+import * as imageCacheStore from '../imageCacheStore.desktop.js';
 import * as videoCacheStore from '../videoCacheStore.js';
-import * as cindyMediaBlobStore from '../cindy-media/blobStore.js';
+import * as cindyMediaBlobStore from '../cindy-media/blobStore.desktop.js';
 import { getSensitiveMediaBlocklist, isPathAllowedAgainst } from '../filePathPolicy.js';
 import { materializeSshRemoteMedia } from '../file-browser/ssh-media.js';
 import { getSessionFsSnapshot } from '../localDb/ipc/sessions.js';

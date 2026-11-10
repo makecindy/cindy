@@ -1015,3 +1015,49 @@ it('forwards validated progress only within the owning call, retaining heartbeat
   expect(onProgress).toHaveBeenCalledTimes(3);
   expect(h.dispatcher.handleToolProgress('art', { callId, progress: 3 }).accepted).toBe(false);
 });
+
+// Integration adapter boundary, unit tier: headless delivery has an async ACK.
+// Existing fake/IPC transports return a boolean; they cannot reveal a rejected
+// Promise being mistaken for successful dispatch, or owner changes before ACK.
+describe('asynchronous sandbox delivery', () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  it.each(['false', 'reject', 'throw'] as const)('settles immediately when delivery reports %s', async mode => {
+    const h = makeHarness();
+    h.deps.sendToGhost.mockImplementation(() => {
+      if (mode === 'throw') throw new Error('closed');
+      return mode === 'reject' ? Promise.reject(new Error('closed')) : Promise.resolve(false);
+    });
+    expect(await h.dispatcher.callGhostTool(CALL)).toMatchObject({ ok: false, errorCode: 'GHOST_CRASHED' });
+    expect(h.dispatcher.pendingCount()).toBe(0);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('rejects an owner switch before the acknowledgement without accepting usage', async () => {
+    let current = true;
+    let acknowledge!: (value: boolean) => void;
+    const accepted = vi.fn();
+    const h = makeHarness({ ownerScope: { capture: () => 'owner-1', isCurrent: () => current, isStable: () => current },
+      prepareUsage: () => ({ accepted, settled: vi.fn() }) });
+    h.deps.sendToGhost.mockImplementation(() => new Promise<boolean>(resolve => { acknowledge = resolve; }));
+    const result = h.dispatcher.callGhostTool(CALL);
+    current = false; acknowledge(true);
+    expect(await result).toMatchObject({ ok: false, errorCode: 'GHOST_ASLEEP' });
+    expect(accepted).not.toHaveBeenCalled();
+    expect(h.dispatcher.pendingCount()).toBe(0);
+  });
+
+  it('observes a result that arrives before the transport acknowledgement exactly once', async () => {
+    const accepted = vi.fn(), settled = vi.fn();
+    const h = makeHarness({ prepareUsage: () => ({ accepted, settled }) });
+    h.deps.sendToGhost.mockImplementation((_id, payload) => {
+      h.dispatcher.handleToolResult('art', { callId: payload.callId, ok: true, result: 'done' });
+      return Promise.resolve(true);
+    });
+    expect(await h.dispatcher.callGhostTool(CALL)).toEqual({ ok: true, result: 'done' });
+    expect(accepted).toHaveBeenCalledTimes(1);
+    expect(settled).toHaveBeenCalledExactlyOnceWith('succeeded');
+    expect(h.dispatcher.pendingCount()).toBe(0);
+  });
+});
