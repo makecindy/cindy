@@ -75,20 +75,22 @@ export async function readTeammateTasks(input: {
     if (response.collectionId !== 'teammates' || !Array.isArray(response.items)) throw new Error('Invalid teammates');
     const items = normalizeRemoteCollectionItems(response, 'teammates').filter(item => item.ref.kind === 'bot');
     rosterRead = true;
+    let revoked = false;
     await runHomeDeviceSyncBatch(items, async (item) => {
+      if (revoked || !current()) return;
       const bot: TaskTeammate = { id: item.ref.id, name: resolveRemoteText(item.display.title), avatar: item.display.avatar };
       owners.set(bot.id, bot);
       const session = item.links?.find(link => link.rel === 'conversation' && link.target.kind === 'session')?.target;
       if (session?.kind !== 'session') return;
-      if (!current()) return [];
+      if (!current()) return;
       try {
         const reply = await invoke<{ ok: boolean; delegations: Array<{ requestingBotId: string; childSessionId: string }> }>(
           deviceId, 'maker:bot-delegations:list', [session.sessionId]);
-        if (!current()) return [];
+        if (!current()) return;
         if (!reply?.ok || !Array.isArray(reply.delegations)) return;
         checked.add(bot.id);
         for (const task of reply.delegations) if (task.requestingBotId === bot.id && typeof task.childSessionId === 'string') creators.set(task.childSessionId, bot);
-      } catch (error) { if (isAccessRevokedError(error)) throw error; }
+      } catch (error) { if (isAccessRevokedError(error)) { revoked = true; throw error; } }
     }, 3);
   } catch (error) { if (isAccessRevokedError(error)) throw error; }
   if (!current()) return [];
@@ -107,6 +109,8 @@ export async function readTeammateTasks(input: {
 export function publishHomeTaskSnapshot(input: Omit<Parameters<typeof readTeammateTasks>[0], 'publishInitial'> & {
   publish(rows: RemoteSession[]): void;
   onReady(): void;
+  /** A rejected optional snapshot must remain eligible for a later Home refill. */
+  onDiscard?(): void;
 }): Promise<void> {
   return readTeammateTasks({ ...input, publishInitial: rows => {
     if (!input.current()) return;
@@ -114,5 +118,9 @@ export function publishHomeTaskSnapshot(input: Omit<Parameters<typeof readTeamma
     input.onReady();
   } }).then(rows => {
     if (input.current()) input.publish(rows);
+    else input.onDiscard?.();
+  }, error => {
+    if (!input.current()) input.onDiscard?.();
+    throw error;
   });
 }

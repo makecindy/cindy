@@ -2592,7 +2592,7 @@ async function sendSubscribe(
     settleDeviceSend(deviceId, slot, 'inconclusive');
     throw err;
   }
-  // ensureOnlineForRequest 最长等待 1.5s;期间 App 可能已退后台并开始释放
+  // ensureOnlineForRequest 在当前握手期间可延长等待；期间 App 可能已退后台并开始释放
   // heavy topics。真正 invoke 前再检查一次,避免迟到 subscribe 覆盖 unsubscribe。
   if (shouldSend && !shouldSend()) {
     settleDeviceSend(deviceId, slot, 'inconclusive');

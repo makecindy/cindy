@@ -6938,7 +6938,7 @@ describe('DeviceLinkClient', () => {
   // Unit: a mobile read started during a >1.5s handshake used to enter retry
   // sleep. Verify hello-ack releases it immediately, while the default still expires.
   it.each([false, true])('waitUntilOnline waits for hello-ack immediately (slow upgrade=%s)', async (slowUpgrade) => {
-    vi.useFakeTimers();
+    vi.useFakeTimers({ toFake: ['Date', 'performance', 'setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
     const h = makeHarness({ timing: { handshakeTimeoutMs: 3000 } });
     try {
       h.client.start();
@@ -6964,7 +6964,7 @@ describe('DeviceLinkClient', () => {
   });
 
   it('ends the optional handshake wait at its deadline when hello-ack never arrives', async () => {
-    vi.useFakeTimers();
+    vi.useFakeTimers({ toFake: ['Date', 'performance', 'setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
     const h = makeHarness({ timing: { handshakeTimeoutMs: 3000, reconnectBaseMs: 10_000 } });
     try {
       h.client.start();
@@ -6974,6 +6974,29 @@ describe('DeviceLinkClient', () => {
       await vi.advanceTimersByTimeAsync(3000);
       await waiting;
       expect(h.sockets).toHaveLength(1);
+    } finally {
+      h.client.stop();
+      vi.useRealTimers();
+    }
+  });
+
+  // Unit / review: early handshake close kept the old 12s timer while retries
+  // changed epochs. Both close and explicit replacement must restore the original budget.
+  it.each(['close', 'replace'] as const)('bounds an interrupted handshake wait (%s)', async reason => {
+    vi.useFakeTimers({ toFake: ['Date', 'performance', 'setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
+    const h = makeHarness({ timing: { handshakeTimeoutMs: 12_000, reconnectBaseMs: 400, reconnectMaxMs: 400 } });
+    try {
+      h.client.start();
+      await vi.advanceTimersByTimeAsync(0);
+      let failure: unknown;
+      const waiting = h.client.waitUntilOnline(1500, { waitForHandshake: true }).catch(error => { failure = error; });
+      await vi.advanceTimersByTimeAsync(200);
+      if (reason === 'close') h.current().emit('close', 1006);
+      else h.client.restartConnection('test-replacement');
+      await vi.advanceTimersByTimeAsync(1300);
+      expect(failure).toMatchObject({ code: 'NOT_CONNECTED', message: 'not online within 1500ms' });
+      await waiting;
+      expect(h.sockets.length).toBeGreaterThan(1);
     } finally {
       h.client.stop();
       vi.useRealTimers();

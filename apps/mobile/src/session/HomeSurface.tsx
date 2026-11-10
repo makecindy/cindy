@@ -267,7 +267,7 @@ import {
   resolveHomeDeviceSyncIds,
   runHomeDeviceSyncBatch,
 } from '@/session/homeDeviceSync';
-import { createHomeListFreshness, planHomeListFocusReturn } from '@/session/homeListFreshness';
+import { createHomeRefreshRequests, createHomeListFreshness, planHomeListFocusReturn } from '@/session/homeListFreshness';
 import { serializeNewSessionDeviceOptions } from '@/session/newSession';
 import {
   buildRemoteSessionCardPreview,
@@ -623,21 +623,11 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
   // 最近一次离开首页的时刻；null = 当前在首页（或尚未离开过）。
   const homeBlurredAtRef = useRef<number | null>(null);
   // 待完成的整轮重拉（含设备清单），由 startSilentHomeSync 统一登记。值是请求序号，只有在它
-  // 之后开始的 loadHome 整轮成功提交才清除；同连接的重复触发共用请求，失败或失焦后保留。
-  const homeFullReloadOnFocusRef = useRef<number | null>(null);
-  const homeFullReloadSeqRef = useRef(0);
-  const requestHomeFullReload = useCallback(() => {
-    homeFullReloadOnFocusRef.current ??= ++homeFullReloadSeqRef.current;
-  }, []);
-  // 自动化角标待补刷的设备：首页被盖住时收到事件、或刷新被失焦跳过／结果被丢弃。值是登记
-  // 序号，只有同一序号的刷新成功应用后才清除；回首页只刷新这些设备。
-  const homeScheduleIndexDirtyRef = useRef(new Map<string, number>());
-  const homeScheduleIndexDirtySeqRef = useRef(0);
-  const markHomeScheduleIndexDirty = useCallback((deviceId: string) => {
-    const seq = ++homeScheduleIndexDirtySeqRef.current;
-    homeScheduleIndexDirtyRef.current.set(deviceId, seq);
-    return seq;
-  }, []);
+  // 之后开始的 loadHome 整轮成功提交才清除；在途新触发保留最新补跑，失败或失焦后请求仍保留。
+  const homeRefreshRequests = useRef(createHomeRefreshRequests()).current;
+  const requestHomeFullReload = homeRefreshRequests.requestFull;
+  // Keep dirty automation indexes until their matching successful read is applied.
+  const markHomeScheduleIndexDirty = homeRefreshRequests.markScheduleDirty;
   const homeSyncRowsRef = useRef<ReturnType<typeof toDeviceListItems<DeviceView>>>([]);
   const hydrateDeviceSessionsRef = useRef<HydrateDeviceSessions>(async () => ({
     failure: null,
@@ -845,8 +835,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
     foregroundStartedAtRef.current = null;
     homeListFreshnessRef.current.clear();
     homeBlurredAtRef.current = null;
-    homeFullReloadOnFocusRef.current = null;
-    homeScheduleIndexDirtyRef.current.clear();
+    homeRefreshRequests.clear();
     scheduleIndexDeferRegistryRef.current.cancelAll();
     scheduleEventVersionsRef.current.clear();
     presenceFreshnessRef.current = createPresenceFreshnessTracker();
@@ -896,7 +885,6 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
   const retireHomeSync = useCallback(() => {
     syncInFlightRef.invalidate();
     setRefreshing(false);
-    homeDeviceSyncLimiterRef.current = new HomeDeviceSyncLimiter();
     homeHydrateInFlightByDeviceRef.current.clear();
     homeTeammateReadByDeviceRef.current.clear();
     for (const deviceId of homeSyncTargetDeviceIdsRef.current) advanceHomeSyncGeneration(deviceId);
@@ -1038,9 +1026,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
           sessionIds,
           nextIndex,
         ));
-        if (homeScheduleIndexDirtyRef.current.get(deviceId) === pendingSeq) {
-          homeScheduleIndexDirtyRef.current.delete(deviceId);
-        }
+        homeRefreshRequests.completeSchedule(deviceId, pendingSeq);
       })
       .catch(() => {
         // 网络失败时保留旧数据,不清零已有徽标——数据清零只应由明确的"已读"事件触发。
@@ -1099,8 +1085,16 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
             remoteSessionStore.setDeviceSessions(device.deviceId, device.name, rows);
             scheduleHomeListSnapshotPersist(homeCacheUserId, () => remoteSessionStore.getSessions());
           },
+          onDiscard: () => {
+            if (homeAccountGenerationRef.current === expectedAccountGeneration
+              && homeTeammateReadByDeviceRef.current.get(device.deviceId) === enrichmentToken) {
+              // Also invalidates an in-flight markFresh token, so a discarded
+              // optional result cannot be followed by a falsely fresh list.
+              homeListFreshnessRef.current.invalidate(device.deviceId);
+            }
+          },
           onReady: () => {
-            const syncedAt = Date.now();
+            const syncedAt = Math.max(lastSyncedAtRef.current ?? 0, Date.now());
             lastSyncedAtRef.current = syncedAt;
             setLastSyncedAt(syncedAt);
             updateDeviceConnectionState(device.deviceId, 'idle');
@@ -1312,7 +1306,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
     const visible = options.visible === true;
     if (visible) setRefreshing(true);
     const read = async (isCurrent: () => boolean) => {
-      const fullReloadRequestAtStart = homeFullReloadOnFocusRef.current;
+      const fullReloadRequestAtStart = homeRefreshRequests.captureFull();
       loadHomeCountRef.current += 1;
       if (__DEV__) mobileDebugLog('debug', 'performance', 'home load started', { count: loadHomeCountRef.current });
       setError(null);
@@ -1453,10 +1447,11 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
       if (finalBudgetAllowsDisplay) {
         devicesRef.current = nextDevices;
         setDevices(nextDevices);
-        if (!staleDirectory) {
-          lastSyncedAtRef.current = now;
-          setLastSyncedAt(now);
-          if (homeFullReloadOnFocusRef.current === fullReloadRequestAtStart) homeFullReloadOnFocusRef.current = null;
+        if (!staleDirectory && hydrateResults.every(({ result }) => !result.superseded && !result.failure)) {
+          const syncedAt = Math.max(lastSyncedAtRef.current ?? 0, Date.now());
+          lastSyncedAtRef.current = syncedAt;
+          setLastSyncedAt(syncedAt);
+          homeRefreshRequests.completeFull(fullReloadRequestAtStart);
         }
       } else {
         devicesRef.current = [];
@@ -1708,7 +1703,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
 
   // 刷新首页的自动化角标(scheduleIndex)。整轮返回(首次、后台、重连、离开太久)兜底刷新
   // 所有设备:那些情况下自动化事件可能漏收。普通返回只刷新离开期间收到过事件的设备——
-  // 事件走首页常驻的 `sessions` 订阅,离开期间照常到达(见 homeScheduleIndexDirtyRef)。
+  // 事件走首页常驻的 `sessions` 订阅,离开期间照常到达(见 homeRefreshRequests)。
   const refreshHomeScheduleIndexes = useCallback((onlyDeviceIds?: ReadonlySet<string>) => {
     for (const device of devicesRef.current) {
       if (!homeSyncTargetDeviceIdsRef.current.has(device.deviceId)) continue;
@@ -1724,7 +1719,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
   // 初次加载 + 每次重连(connectionEpoch 变化)都全量刷新。presence 只在状态"变化"时广播、
   // 服务端没有面向新连接的全量重放,后台期间(client.stop)漏掉的上/下线事件只能靠重连时
   // 重拉 REST 快照兜底,否则设备可用性会一直停留在断线前的旧状态。loadHome 内部有
-  // syncInFlight 去重,冷启动时与上线瞬间的两次触发只会实际执行一次。
+  // 同轮尚未开始的触发合并；在途触发保留最新一次补跑，重连退役旧轮后立即重读。
   // 首次触发同时等首页列表缓存种入完成(homeListCacheHydrated,AsyncStorage 读一个小 key,毫秒级):
   // 保证缓存先画、fresh 后覆盖的顺序确定,避免 loadHome 清理下线设备后缓存又把 stale shard 种回去。
   // 所有整轮同步触发（首次、重连、需整轮的返回、依赖变化）都经过这里：先登记整轮
@@ -1772,7 +1767,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
     // already confirmed focus, so open the scope gate now instead of skipping this return.
     screenFocusedRef.current = true;
     const blurredAt = returnedAt ?? homeBlurredAtRef.current;
-    const forceFull = homeFullReloadOnFocusRef.current !== null;
+    const forceFull = homeRefreshRequests.captureFull() !== null;
     homeBlurredAtRef.current = null;
     const plan = planHomeListFocusReturn({
       forceFull,
@@ -1783,7 +1778,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
       freshness: homeListFreshnessRef.current,
       listMutationEpoch: (deviceId) => remoteSessionStore.captureDeviceSessionListMutationEpoch(deviceId),
     });
-    const scheduleDirty = new Set(homeScheduleIndexDirtyRef.current.keys());
+    const scheduleDirty = homeRefreshRequests.scheduleDeviceIds();
     if (plan.kind === 'refill') {
       refillStaleHomeDevices(plan.deviceIds);
       if (scheduleDirty.size > 0) refreshHomeScheduleIndexes(scheduleDirty);

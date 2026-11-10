@@ -119,3 +119,25 @@ export function planHomeListFocusReturn(input: {
     )),
   };
 }
+
+/** Outstanding Home refresh intent; only the matching successful read can consume it. */
+export function createHomeRefreshRequests() {
+  let sequence = 0;
+  let full: number | null = null;
+  const schedules = new Map<string, number>();
+  return {
+    requestFull() { full = ++sequence; },
+    captureFull: () => full,
+    completeFull(token: number | null) { if (full === token) full = null; },
+    markScheduleDirty(deviceId: string) {
+      const token = ++sequence;
+      schedules.set(deviceId, token);
+      return token;
+    },
+    scheduleDeviceIds: () => new Set(schedules.keys()),
+    completeSchedule(deviceId: string, token: number) {
+      if (schedules.get(deviceId) === token) schedules.delete(deviceId);
+    },
+    clear() { full = null; schedules.clear(); },
+  };
+}

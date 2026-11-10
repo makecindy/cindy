@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { rehydrateDeviceLinkPeer, type DeviceLinkRehydrateDeps } from '@/device-link/rehydrate';
 import {
   createHomeListFreshness,
+  createHomeRefreshRequests,
   HOME_LIST_FOCUS_REUSE_MAX_MS,
   planHomeListFocusReturn,
 } from '@/session/homeListFreshness';
@@ -173,4 +174,48 @@ describe('Home list freshness on return', () => {
     home.freshness.clear();
     expect(home.freshness.isFresh('mac')).toBe(false);
   });
+});
+
+// Unit / review: source-string checks could not detect consumption of a newer
+// full refresh or automation event by a late older round. Exercise the production intent owner.
+it('keeps newer full refresh intent through an old commit and an unsuccessful read', () => {
+  const requests = createHomeRefreshRequests();
+  requests.requestFull();
+  const old = requests.captureFull();
+  requests.requestFull();
+  const latest = requests.captureFull();
+  requests.completeFull(old);
+  expect(requests.captureFull()).toBe(latest);
+  // A failed/superseded read does not complete the token: returning Home still needs full work.
+  const plan = planHomeListFocusReturn({ forceFull: requests.captureFull() !== null,
+    blurredAt: 900, now: 1000, lastSyncedAt: 800, deviceIds: [],
+    freshness: createHomeListFreshness(), listMutationEpoch: () => 0 });
+  expect(plan).toEqual({ kind: 'full' });
+  requests.completeFull(latest);
+  expect(requests.captureFull()).toBeNull();
+});
+
+it('selects only dirty automation indexes and cannot consume a later event with an old reply', () => {
+  const requests = createHomeRefreshRequests();
+  const old = requests.markScheduleDirty('pc');
+  expect([...requests.scheduleDeviceIds()]).toEqual(['pc']); // healthy mac is not reread
+  const latest = requests.markScheduleDirty('pc');
+  requests.completeSchedule('pc', old);
+  expect([...requests.scheduleDeviceIds()]).toEqual(['pc']);
+  requests.completeSchedule('pc', latest);
+  expect([...requests.scheduleDeviceIds()]).toEqual([]);
+});
+
+it('clears account-owned intent and prevents old freshness tokens from reviving it', () => {
+  const requests = createHomeRefreshRequests();
+  const freshness = createHomeListFreshness();
+  requests.requestFull();
+  requests.markScheduleDirty('old-account-pc');
+  const token = freshness.capture('old-account-pc');
+  requests.clear();
+  freshness.clear();
+  freshness.markFresh('old-account-pc', token);
+  expect(requests.captureFull()).toBeNull();
+  expect([...requests.scheduleDeviceIds()]).toEqual([]);
+  expect(freshness.isFresh('old-account-pc')).toBe(false);
 });

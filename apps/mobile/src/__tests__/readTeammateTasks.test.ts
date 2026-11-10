@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { REMOTE_RESOURCE_LIST_CHANNEL } from '@cindy/device-link';
 import type { RemoteInvoke } from '@/device-link/mobileMakerTransport';
 import { publishHomeTaskSnapshot, readTeammateTasks } from '@/session/readTeammateTasks';
+import { createHomeListFreshness } from '@/session/homeListFreshness';
 import { normalizeTaskTeammateSelection, taskTeammateKey, taskTeammateOptions } from '@/session/teammateTaskSource';
 import type { RemoteSession } from '@/session/types';
 import type { HostedRemoteCollectionItem } from '@/device-link/remoteResources';
@@ -143,4 +144,41 @@ it('makes Home ready before teammate history finishes and fences its late result
   finish({ ok: true, sessions: [] });
   await reading;
   expect(publish).toHaveBeenCalledOnce();
+});
+
+// Review regression (unit): blur/push discarded optional history after the list
+// had become fresh. Pending history + invalidation must make the next Home visit refill.
+it.each([true, false])('retains refill intent when enrichment is discarded (list fresh first=%s)', async freshFirst => {
+  const freshness = createHomeListFreshness();
+  const token = freshness.capture('mac');
+  let current = true;
+  let finish!: (value: unknown) => void;
+  const pending = new Promise(resolve => { finish = resolve; });
+  const reading = publishHomeTaskSnapshot({ ...input, invoke: (async () => pending) as RemoteInvoke,
+    sessions: [task('ordinary')], current: () => current, publish: () => {}, onReady: () => {},
+    onDiscard: () => freshness.invalidate('mac') });
+  if (freshFirst) freshness.markFresh('mac', token);
+  current = false; // Home blurred or a list mutation superseded this snapshot.
+  finish({ ok: true, sessions: [] });
+  await reading;
+  if (!freshFirst) freshness.markFresh('mac', token);
+  expect(freshness.isFresh('mac')).toBe(false);
+});
+
+it('stops queued delegation reads after access is revoked', async () => {
+  const pending: Array<{ resolve(value: unknown): void; reject(error: Error): void }> = [];
+  const invoke = vi.fn(async (_device: string, api: string) => {
+    if (api === 'local-db:history:query') return { ok: true, sessions: [] };
+    if (api === REMOTE_RESOURCE_LIST_CHANNEL) return { collectionId: 'teammates', items:
+      Array.from({ length: 6 }, (_, i) => bot(`bot${i}`)) };
+    return new Promise((resolve, reject) => pending.push({ resolve, reject }));
+  });
+  const reading = readTeammateTasks({ ...input, invoke: invoke as RemoteInvoke, sessions: [] });
+  const rejected = expect(reading).rejects.toThrow('REVOKED');
+  await vi.waitFor(() => expect(pending).toHaveLength(3));
+  pending[0].reject(new Error('[DEVICE_LINK_ACCESS_REVOKED] revoked'));
+  pending[1].resolve({ ok: true, delegations: [] });
+  pending[2].resolve({ ok: true, delegations: [] });
+  await rejected;
+  expect(pending).toHaveLength(3);
 });

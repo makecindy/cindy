@@ -973,15 +973,11 @@ describe('Home list sync wiring', () => {
     expect(hydrate.slice(hydrate.indexOf('} catch (err) {'))).toContain('homeListFreshnessRef.current.invalidate(device.deviceId);');
   });
 
-
-
   it('keeps automation badge refreshes pending until one is applied', () => {
     const refresh = source.slice(source.indexOf('const refreshDeviceScheduleIndex = useCallback('), source.indexOf('const hydrateDeviceSessionsOnce = useCallback('));
     // Recorded before the focus gate, so a skipped refresh or a dropped in-flight result is refilled on return.
     expect(refresh.indexOf('const pendingSeq = markHomeScheduleIndexDirty(deviceId);'))
       .toBeLessThan(refresh.indexOf("if (!screenFocusedRef.current || AppState.currentState !== 'active') return;"));
-    const apply = refresh.slice(refresh.indexOf('setScheduleIndex((current) => replaceSessionScheduleIndexEntries('));
-    expect(apply).toMatch(/if \(homeScheduleIndexDirtyRef\.current\.get\(deviceId\) === pendingSeq\) \{\s*homeScheduleIndexDirtyRef\.current\.delete\(deviceId\);/);
     const hydrate = source.slice(source.indexOf('const hydrateDeviceSessionsOnce = useCallback('), source.indexOf('const hydrateDeviceSessions = useCallback('));
     expect(hydrate.indexOf('markHomeScheduleIndexDirty(device.deviceId);'))
       .toBeLessThan(hydrate.indexOf('scheduleIndexDeferRegistryRef.current.schedule(device.deviceId'));
