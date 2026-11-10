@@ -155,13 +155,13 @@ describe('prepareBotProjectWorkspace', () => {
   });
 
   // QA recheck: with the project's Skills folder linked elsewhere, the starter template wrote through the link.
-  it.skipIf(process.platform === 'win32')('writes nothing through a Skills folder the project linked elsewhere', async () => {
+  it('writes nothing through a Skills folder the project linked elsewhere', async () => {
     root = await fs.mkdtemp(path.join(os.tmpdir(), 'teammate-skill-link-'));
     const elsewhere = path.join(root, 'elsewhere');
     await fs.mkdir(elsewhere);
     const workspace = teammateWorkspaceDir(root, 'bot_mia');
     await fs.mkdir(path.join(workspace, '.agents'), { recursive: true });
-    await fs.symlink(elsewhere, path.join(workspace, '.agents', 'skills'));
+    await fs.symlink(elsewhere, path.join(workspace, '.agents', 'skills'), process.platform === 'win32' ? 'junction' : 'dir');
     await fs.mkdir(path.join(root, 'bots', 'bot_mia', 'skills', 'report'), { recursive: true });
     await fs.writeFile(path.join(root, 'bots', 'bot_mia', 'skills', 'report', 'SKILL.md'), 'v1');
     await prepareBotProjectWorkspace({ botId: 'bot_mia', displayName: 'Mia', ownerRoot: root });
@@ -172,6 +172,7 @@ describe('prepareBotProjectWorkspace', () => {
   // QA 2026-11-10: a Skill folder the project already had was skipped whole (its other files lost),
   // every link was dropped (a Skill's own `instructions.md -> real.md` broke), and a memory folder
   // that could not be read counted as empty, so the upgrade finished without the memories.
+  // symlink-platform-skip: Windows cannot make a folder unreadable with chmod, which the retry case needs.
   it.skipIf(process.platform === 'win32')('merges Skill files, keeps links inside a Skill and retries an unreadable memory folder', async () => {
     root = await fs.mkdtemp(path.join(os.tmpdir(), 'teammate-skill-merge-'));
     const legacy = path.join(root, 'bots', 'bot_mia', 'skills', 'report');
