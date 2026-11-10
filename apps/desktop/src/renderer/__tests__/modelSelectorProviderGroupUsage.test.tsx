@@ -81,6 +81,7 @@ const catalogs = vi.hoisted(() => {
     key, kind, agentDeviceId, providerId, limit: 4, weight: 1, paused: false,
   });
   return {
+    provider,
     selfDeviceId: 'desk',
     local: [provider('a-local', 'A Local', 'me@desk')] as unknown[],
     localGroups: {
@@ -351,5 +352,51 @@ describe('模型列表里供应商组那一项的用量', () => {
         members: [{ key: 'local', kind: 'local', agentDeviceId: null, providerId: 'a-local', limit: 4, weight: 1, paused: false }],
       };
     }
+  });
+});
+
+// 同账号借用(供应商「运行于」)：同一个供应商在本机和另一台自己的电脑上都能用时只列一处。
+describe('同一个供应商在几台自己的电脑上只列一项', () => {
+  const renderNewTask = () => render(
+    React.createElement(ModelSelectorContent, {
+      modelId: 'opus', effort: 'high', onModelChange: vi.fn(), onEffortChange: vi.fn(),
+      currentProviderId: 'a-local', onProviderChange: vi.fn(), vendorKey: 'cc',
+      remoteAgent: { devices, selectedDeviceId: null, selfDeviceId: 'desk', onRelocate: vi.fn(async () => true) },
+    }),
+  );
+  const railNames = () => screen.getAllByRole('button').map((button) => button.getAttribute('aria-label') ?? button.textContent ?? '');
+  const withShared = async (local: Record<string, unknown>, check: () => void) => {
+    const original = { local: catalogs.local, laptop: catalogs.byDevice['device-d'] };
+    catalogs.local = [...catalogs.local, catalogs.provider('b-shared', 'B Shared', 'me@desk', local)];
+    catalogs.byDevice['device-d'] = [...original.laptop!, catalogs.provider('b-shared', 'B Shared', 'laptop-b@x', { remoteInvocationEnabled: true })];
+    try {
+      renderNewTask();
+      await act(async () => {});
+      check();
+    } finally {
+      catalogs.local = original.local;
+      catalogs.byDevice['device-d'] = original.laptop!;
+    }
+  };
+
+  it('signed in here: only this computer\'s entry, no copy from the laptop', async () => {
+    await withShared({}, () => {
+      expect(railNames().some((name) => name.startsWith('B Shared · me@desk'))).toBe(true);
+      expect(railNames().some((name) => name.startsWith('B Shared · Laptop'))).toBe(false);
+    });
+  });
+
+  it('not signed in here: the laptop\'s entry stands in, once', async () => {
+    await withShared({ connected: false }, () => {
+      expect(railNames().filter((name) => name.startsWith('B Shared')).length).toBe(1);
+      expect(railNames().some((name) => name.startsWith('B Shared · Laptop'))).toBe(true);
+    });
+  });
+
+  it('pinned to the laptop: the laptop\'s entry replaces this computer\'s', async () => {
+    await withShared({ runLocation: 'device-d' }, () => {
+      expect(railNames().filter((name) => name.startsWith('B Shared')).length).toBe(1);
+      expect(railNames().some((name) => name.startsWith('B Shared · Laptop'))).toBe(true);
+    });
   });
 });
