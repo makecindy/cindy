@@ -66,6 +66,7 @@ function harness() {
     setSharedTaskInteractionReader,
     isPluginSetupInteractionDecision: () => false,
     assertResolveInteractionOrigin: vi.fn(), isPendingDesktopOnlyConfirmation: () => false,
+    issueConfirmBridge: { pendingSnapshots: () => [] },
     pendingInteractionResolvers: entries,
     agentInputCoordinatorHolder: coordinator, inputCoordinator: coordinator,
     PERMISSION_INTERACTION_TIMEOUT_MS: 10 * MINUTE,
