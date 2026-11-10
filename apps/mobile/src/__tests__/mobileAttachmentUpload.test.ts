@@ -3,7 +3,7 @@ import { setMobileAuthOwner } from '@/auth/authOwnerGeneration';
 import { apiFetchRaw } from '@/api/client';
 import { installPeerUpload } from '@/device-link/peerFileRegistry';
 import { installMobileAgentNetMedia } from '@/device-link/agentNetMediaRegistry';
-import { buildPeerAttachmentRef, parsePeerAttachmentRef } from '@cindy/device-link';
+import { buildPeerAttachmentRef, parsePeerAttachmentRef, sharedTaskHostPeer } from '@cindy/device-link';
 import { DEVICE_LINK_API_BASE_URL, getOfficialDeviceLinkApiBaseUrl, setDeviceLinkApiBaseOverride } from '@/config/env';
 import { i18n } from '@/i18n';
 import { buildAttachmentOssRef, parseAttachmentOssRef } from '@/session/attachmentOssRef';
@@ -28,6 +28,29 @@ const readFileChunk = vi.fn(async (_uri: string, _position: number, length: numb
 beforeEach(() => setMobileAuthOwner('alice'));
 
 describe('mobileAttachmentUpload', () => {
+  // Unit: the production attachment entries must retain the scoped destination
+  // supplied by useMobileLocalAttachments. Existing encrypted tests only used a
+  // same-account device, so dropping deviceId for sharedTaskId went unnoticed.
+  it.each((['body', 'file'] as const).flatMap(path => [false, true].map(onlyEncrypted => ({ path, onlyEncrypted }))))
+    ('keeps shared-task $path uploads encrypted (onlyEncrypted=$onlyEncrypted)', async ({ path, onlyEncrypted }) => {
+      const deviceId = sharedTaskHostPeer('unit-shared-task', 'host'), legacy = vi.fn();
+      const off = installMobileAgentNetMedia({ available: device => device === deviceId, requiresEncryption: () => onlyEncrypted,
+        async upload(options) {
+          expect(options.deviceId).toBe(deviceId);
+          expect(await options.read(0, 3)).toEqual(new Uint8Array([120, 120, 120]));
+          return { key: 'agent-net-v3/unit-shared-fixture', sha256: 'a'.repeat(64) };
+        } });
+      try {
+        const options = { token: 'unit-unused-token', deviceId, sharedTaskId: 'unit-shared-task',
+          deps: { apiFetch: legacy, fetch: legacy, readFileChunk: async () => 'eHh4' } };
+        const candidate = { name: 'note.txt', size: 3, mimeType: 'text/plain' };
+        const attachment = path === 'body'
+          ? await uploadMobileAttachment(candidate, new Uint8Array([120, 120, 120]).buffer, options)
+          : await uploadMobileAttachmentFromFile(candidate, 'file:///unit-note', options);
+        expect(parseAttachmentOssRef(attachment.path)?.ossKey).toBe('agent-net-v3/unit-shared-fixture');
+        expect(legacy).not.toHaveBeenCalled();
+      } finally { off(); }
+    });
   // Production file upload must select the V2 encrypting adapter before OSS,
   // and a native failure must not send the same attachment through plaintext.
   it.each([false, true])('keeps an encrypted upload on its selected adapter (native failure=%s)', async (fails) => {

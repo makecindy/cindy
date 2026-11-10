@@ -301,7 +301,7 @@ export async function uploadMobileAttachment(
   // presign 前先校验体积:超出 OSS 上限的文件若先 presign + PUT、再在
   // buildMobileUploadedAttachment 处被拒,会在 device-link OSS 桶里留下永不被引用的孤儿对象。
   assertMobileDocumentSize(candidate.size);
-  const encrypted = await tryUploadEncryptedMobileMedia({ deviceId: options.sharedTaskId ? undefined : options.deviceId,
+  const encrypted = await tryUploadEncryptedMobileMedia({ deviceId: options.deviceId,
     size: candidate.size, contentType: effectiveUploadMimeType(candidate.mimeType), read: async (offset, length) => {
       if (body instanceof Blob) return new Uint8Array(await body.slice(offset, offset + length).arrayBuffer());
       if (body instanceof ArrayBuffer) return new Uint8Array(body, offset, length);
@@ -355,7 +355,7 @@ export async function uploadMobileAttachmentFromFile(
   const peerCandidate = !!options.deviceId && !options.sharedTaskId;
   if (
     !isWithinMobileOssAttachmentLimit(candidate.size) &&
-    !canUploadEncryptedMobileMedia(options.sharedTaskId ? undefined : options.deviceId) &&
+    !canUploadEncryptedMobileMedia(options.deviceId) &&
     !(peerCandidate && await canMobilePeerUpload(options.deviceId!, candidate.size))
   ) {
     assertMobileOssAttachmentSize(candidate.size);
@@ -384,7 +384,7 @@ export async function uploadMobileAttachmentFromFile(
     if (snapshot.size !== candidate.size) {
       throw new Error(`Attachment size changed: expected ${candidate.size}, actual ${snapshot.size}`);
     }
-    const encrypted = await tryUploadEncryptedMobileMedia({ deviceId: options.sharedTaskId ? undefined : options.deviceId,
+    const encrypted = await tryUploadEncryptedMobileMedia({ deviceId: options.deviceId,
       size: candidate.size, contentType: effectiveUploadMimeType(candidate.mimeType), signal: options.signal,
       assertCurrent: () => { if (!isActive()) throw new Error('AGENT_NET_OWNER_CHANGED'); },
       read: async (offset, length) => {
