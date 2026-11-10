@@ -521,3 +521,13 @@ allowlist；SSH、远程任务及手机不会误触本机重启提示。此功�
 验证入口：`crashDiagnosis.test.ts`、`StartupRecoveryDialogs.test.tsx`，以及
 `pnpm ui:check --page crash-diagnosis --case all --theme all`。单页场景不覆盖原生崩溃、
 真实模型执行或 issue 提交，须与定向测试及完整 Desktop 验收分开报告。
+
+## 侧边栏与主窗口几何
+
+主窗口的位置和大小以没有右侧边栏时的矩形为准。打开侧边栏前保存该矩形，
+打开期间分隔线只调整两侧空间分配，原生窗口移动和缩放也不覆盖这份基准；
+关闭侧边栏或离开对应页面后恢复打开前的矩形。最大化／全屏时不强制修改窗口边界。
+窗口状态持久化同样读取这份基准，重启后若侧边栏仍打开，则从基准重新展开，
+不能再次从已保存的主窗口宽度中扣除侧边栏。旧版本保存的矩形作为首次升级后的基准。
+实现见 `main/sidebarWindowExpansion.ts`、`renderer/layout/sidebarPresentation.ts`；
+回归见 `sidebarWindowExpansion.test.ts` 和 `sidebarPresentation.test.tsx`。
