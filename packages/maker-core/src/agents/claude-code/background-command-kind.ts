@@ -16,7 +16,8 @@
  *     `|` 管道只要有一段不结束就不结束；以单个 `&` 结尾的段是后台作业，命令不等它
  *     （除非有 `wait`），所以 `pnpm dev & …; pnpm test; kill $!` 是 work。
  *  3. 只看真正执行的程序名与子命令：选项和选项取值（`--include dev`、`--filter dev`）、包管理
- *     的安装发布类子命令不是脚本名；`2>&1`、`&>` 里的 `&` 不是命令分隔符。
+ *     的安装发布类子命令不是脚本名；`2>&1`、`&>` 里的 `&` 不是命令分隔符；heredoc 正文
+ *     （`cat <<'EOF' > script` … `EOF`）是数据，不是命令。
  *  4. 单一判断入口：splitCommandSegments 拆段，isLongLivedCommand 汇总，isLongLivedSegment
  *     判单段；shell -c 递归复用同一套，不另写第二份。
  *  5. 看不懂的结构（子 shell、`$(…)`、控制流）不猜，按 work。外层命令不认识（`nice`、`ionice`、
@@ -143,6 +144,8 @@ function splitCommandSegments(command: string): CommandSegment[] {
     segments.push({ text: current, background });
     current = '';
   };
+  // 本行出现过的 heredoc 结束词；下一个换行之后的正文整段跳过。
+  const pendingHeredocs: string[] = [];
   for (let i = 0; i < command.length; i += 1) {
     const ch = command[i]!;
     if (quote) {
@@ -154,6 +157,21 @@ function splitCommandSegments(command: string): CommandSegment[] {
       quote = ch;
       current += ch;
       continue;
+    }
+    if (ch === '<' && command[i + 1] === '<') {
+      if (command[i + 2] === '<') {
+        // here-string `<<<`：不是 heredoc。
+        current += '<<<';
+        i += 2;
+        continue;
+      }
+      const heredoc = HEREDOC_OPERATOR.exec(command.slice(i, i + 200));
+      if (heredoc) {
+        pendingHeredocs.push(heredoc[1] ?? heredoc[2] ?? heredoc[3]!);
+        current += heredoc[0];
+        i += heredoc[0].length - 1;
+        continue;
+      }
     }
     if (ch === '&') {
       // `2>&1`、`>&2`、`&>file` 里的 & 属于重定向，不是分隔符。
@@ -175,12 +193,33 @@ function splitCommandSegments(command: string): CommandSegment[] {
     if (ch === '\n' || ch === ';' || ch === '|') {
       if (ch === '|' && command[i + 1] === '|') i += 1;
       push(false);
+      if (ch === '\n') {
+        for (const delimiter of pendingHeredocs.splice(0)) {
+          i = skipHeredocBody(command, i + 1, delimiter) - 1;
+        }
+      }
       continue;
     }
     current += ch;
   }
   push(false);
   return segments;
+}
+
+/** `<<EOF`、`<<-EOF`、`<<'EOF'`、`<<"EOF"`：结束词在第 1、2、3 个捕获组之一。 */
+const HEREDOC_OPERATOR = /^<<-?\s*(?:'([^'\n]+)'|"([^"\n]+)"|([A-Za-z_][A-Za-z0-9_]*))/;
+
+/** 从 `start`（正文第一行行首）找结束行，返回结束行之后的位置；找不到就吞到结尾。 */
+function skipHeredocBody(command: string, start: number, delimiter: string): number {
+  let lineStart = start;
+  while (lineStart < command.length) {
+    const lineEnd = command.indexOf('\n', lineStart);
+    const end = lineEnd < 0 ? command.length : lineEnd;
+    if (command.slice(lineStart, end).trim() === delimiter) return lineEnd < 0 ? command.length : lineEnd + 1;
+    if (lineEnd < 0) break;
+    lineStart = lineEnd + 1;
+  }
+  return command.length;
 }
 
 function tokenize(segment: string): string[] {

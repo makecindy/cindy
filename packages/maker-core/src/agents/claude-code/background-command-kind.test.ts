@@ -30,6 +30,10 @@ describe('classifyBackgroundCommand', () => {
     ['nohup pnpm dev > dev.log 2>&1 & pnpm test', 'work'],
     ['pnpm dev &', 'work'],
     ['timeout 60 pnpm dev', 'work'],
+    // heredoc 正文是数据，不是命令
+    ["cat <<'EOF' > /tmp/example-script\npnpm dev\nEOF\npnpm test", 'work'],
+    ['cat <<-EOF > run.sh\n\tpnpm dev\n\tEOF\npnpm test', 'work'],
+    ['cat <<< "pnpm dev"', 'work'],
     // 不认识的外层命令不让内层参数直接决定结果：timeout 给了期限，按工作
     ['timeout -k 5s 60s pnpm vitest --watch', 'work'],
     ['nice -n 10 pnpm vitest --watch', 'work'],
@@ -45,6 +49,8 @@ describe('classifyBackgroundCommand', () => {
     ['pnpm --filter desktop dev', 'service'],
     // 顺序执行卡在第一个不会结束的段；管道有一段不结束就不结束；wait 会等后台作业
     ['pnpm test && pnpm dev', 'service'],
+    // heredoc 之后的真实命令仍然要判断
+    ['cat <<EOF > run.sh\necho hi\nEOF\npnpm dev', 'service'],
     ['pnpm dev | tee dev.log', 'service'],
     ['pnpm dev > dev.log 2>&1 & wait', 'service'],
     ['pnpm dev 2>&1', 'service'],
