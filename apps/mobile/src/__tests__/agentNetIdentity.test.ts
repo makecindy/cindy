@@ -53,7 +53,8 @@ it.each(['network', 'service'] as const)('retains the stored certificate on a %s
   const first = await ensureMobileAgentNetIdentity(options), previous = first.api.certificate;
   await clearMobileAgentNetIdentity(); state.writes.mockClear();
   const stored = [...state.vault.values()];
-  if (kind === 'network') failure = new TypeError('Network request failed'); else status = 503;
+  if (kind === 'network') failure = new TypeError('Network request failed');
+  else vi.mocked(fetch).mockResolvedValueOnce(new Response('Service unavailable', { status: 503 }));
   const retained = await ensureMobileAgentNetIdentity(options);
   expect(retained.api.certificate).toEqual(previous);
   expect([...state.vault.values()]).toEqual(stored); expect(state.writes).not.toHaveBeenCalled();

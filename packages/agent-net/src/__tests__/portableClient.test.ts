@@ -146,6 +146,11 @@ it.each(['portable', 'node'] as const)('does not reclassify %s caller cancellati
   expect(error.status).toBeUndefined();
 });
 
+it.each(['portable', 'node'] as const)('preserves a %s service outage status when a proxy returns non-JSON', async kind => {
+  const value = fixture(false, kind, async () => new Response('Service unavailable', { status: 503 }));
+  await expect(value.api.request('GET', '/directory')).rejects.toMatchObject({ status: 503 });
+});
+
 it('keeps an owner change terminal when Fetch fails at the same time', async () => {
   let changed = false;
   const value = fixture(false, 'portable', async () => { changed = true; throw new TypeError('Network request failed'); },

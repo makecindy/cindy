@@ -85,7 +85,7 @@ async function post(base: string, resource: string, body: unknown, guard: () => 
     try { return await read(); }
     catch (error) {
       guard();
-      if (status && status >= 400 && status < 500 && status !== 429) {
+      if (status && status >= 400) {
         const code = 'AGENT_NET_REQUEST_' + status;
         throw Object.assign(new Error(code), { status, code });
       }

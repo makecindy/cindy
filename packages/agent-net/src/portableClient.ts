@@ -104,7 +104,7 @@ export class PortableAgentNetClient implements SocketClient {
         // Only Fetch/body transport errors are transient. Caller cancellation,
         // invalid JSON and authenticated server rejections keep their meaning.
         if (!options?.signal?.aborted) {
-          if (status && status >= 400 && status < 500 && status !== 429) throw new PortableAgentNetClientError(status, 'AGENT_NET_REQUEST_FAILED');
+          if (status && status >= 400) throw new PortableAgentNetClientError(status, 'AGENT_NET_REQUEST_FAILED');
           if (controller.signal.aborted) throw new PortableAgentNetClientError(0, 'AGENT_NET_REQUEST_TIMEOUT');
           if (error instanceof TypeError || (error as { name?: unknown } | null)?.name === 'AbortError') {
             throw new PortableAgentNetClientError(0, 'AGENT_NET_NETWORK_ERROR');

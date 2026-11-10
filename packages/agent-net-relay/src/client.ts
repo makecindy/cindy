@@ -108,7 +108,7 @@ export class AgentNetClient {
       try { return await read(); }
       catch (error) {
         if (!options?.signal?.aborted) {
-          if (status && status >= 400 && status < 500 && status !== 429) throw new AgentNetClientError(status, 'AGENT_NET_REQUEST_FAILED');
+          if (status && status >= 400) throw new AgentNetClientError(status, 'AGENT_NET_REQUEST_FAILED');
           if (controller.signal.aborted) throw new AgentNetClientError(0, 'AGENT_NET_REQUEST_TIMEOUT');
           if (error instanceof TypeError || (error as { name?: unknown } | null)?.name === 'AbortError') {
             throw new AgentNetClientError(0, 'AGENT_NET_NETWORK_ERROR');
