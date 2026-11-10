@@ -676,11 +676,12 @@ sessionRunningRetry 就停。每次因 replacement 关闭而重新入队都计�
   时写「后台服务运行中」且不再呼吸。回合边界、完成提醒、发送与排队、停止语义都不变——
   `local_bash` 仍不进 `WAKE_BACKGROUND_TASK_TYPES`，用户 Stop 不会杀后台命令。
 - **边界**：命令结束到自动续跑那一轮开始之间保留 5 秒，列表不会先闪成已结束；续跑没来到点熄灭，
-  关闭任务进程立即熄灭。主进程在任务表变化与回合收尾时读 `Session.listBackgroundTasks()`，不靠
-  事件配对（Query 换代会不带事件地清表）。只覆盖 Agent 进程在本机的 Claude Code 任务：SSH 远程
+  关闭任务进程立即熄灭。主进程在任务表变化、回合收尾和回退提交（`maker-orchestration/rewind.ts`，
+  关闭旧 Query 时 agent 同步清表）后读 `Session.listBackgroundTasks()`，不靠事件配对（Query 换代
+  会不带事件地清表），读取入口统一在 `maker-host/claude-background-command-work-sync.ts`。只覆盖 Agent 进程在本机的 Claude Code 任务：SSH 远程
   工作区、在其他电脑上运行 Agent 的任务、device-link 控制端的任务列表和手机任务列表尚未接入。
 - 实现与回归：`maker-host/claude-session-background-activity.ts`、
-  `maker-ipc/sessionEventDelivery.ts`（均在 `apps/desktop/src/main/`）；测试见
+  `maker-ipc/sessionEventDelivery.ts`（均在 `apps/desktop/src/main/`）；测试见 `rewind.test.ts`、
   `background-command-kind.test.ts`、`abort-stops-background-tasks.test.ts`、
   `claudeSessionBackgroundActivity.test.ts`、`sessionEventPipeline.test.ts`。
 

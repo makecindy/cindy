@@ -144,9 +144,7 @@ function isLongLivedSegment(rawTokens: string[], depth: number): boolean {
   const args = tokens.slice(1).map((token) => unquote(token).toLowerCase());
   const positional = args.filter((arg) => !arg.startsWith('-'));
 
-  if (args.some((arg) => arg === '--watch' || arg.startsWith('--watch=') || arg === '--watchall')) {
-    return true;
-  }
+  if (args.some(isWatchFlag)) return true;
 
   if (SHELL_HEADS.has(head)) {
     const scriptIndex = tokens.findIndex((token, index) => index > 0 && /^-[a-z]*c$/.test(token));
@@ -193,6 +191,14 @@ function isLongLivedSegment(rawTokens: string[], depth: number): boolean {
     default:
       return false;
   }
+}
+
+/** `--watch` / `--watch=true` / `--watchAll` 开监听；`--watch=false`、`--watch=0`、`--no-watch` 明确关掉。 */
+function isWatchFlag(arg: string): boolean {
+  if (arg === '--watch' || arg === '--watchall') return true;
+  if (!arg.startsWith('--watch=')) return false;
+  const value = arg.slice('--watch='.length);
+  return value !== 'false' && value !== '0' && value !== 'no' && value !== 'off';
 }
 
 /**

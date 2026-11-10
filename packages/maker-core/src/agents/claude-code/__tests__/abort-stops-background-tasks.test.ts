@@ -2317,6 +2317,26 @@ describe('ClaudeCodeAgent abort stops background wake tasks', () => {
     await handle.close().catch(() => undefined);
   });
 
+  // 回退提交会关闭旧 Query,CLI 子进程连同它的后台命令一起终止。快照必须立刻反映这一点:宿主据此
+  // 刷新任务列表,否则已不存在的命令会让任务一直显示运行中,直到下一次发送才换 Query 清表。
+  it('rewind commit closes the Query and drops its background commands from the snapshot', async () => {
+    const { handle, stream, events, fakeQueries } = await startSessionWithStream();
+
+    await handle.send({ type: 'user', content: 'run the tests in the background' });
+    stream.emit(taskStarted('bash-1', 'local_bash'));
+    await waitFor(() => taskEvents(events).length >= 1, 'task_started observed');
+    stream.emit(turnResult('tests started'));
+    await waitFor(() => handle.isTurnRunning?.() === false, 'turn settled');
+    expect(handle.listBackgroundTasks?.()).toHaveLength(1);
+
+    await handle.commitRewindFiles?.('user-uuid-1', 'assistant-uuid-1');
+    expect(fakeQueries[0]?.close).toHaveBeenCalledTimes(1);
+    expect(handle.listBackgroundTasks?.()).toEqual([]);
+
+    stream.end();
+    await handle.close().catch(() => undefined);
+  });
+
   it('stopTask rejection does not leak an awaiting claim after interrupt succeeds', async () => {
     const { handle, stream, events, fakeQuery } = await startSessionWithStream();
 

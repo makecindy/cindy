@@ -8104,6 +8104,10 @@ export class ClaudeCodeAgent extends BaseAgent {
         }
         // turn 没在跑了, 清守卫标记 (rewind 必然在 idle 时调, 但兜底一把)
         turnInFlight = false;
+        // close 会连 CLI 子进程一起杀,后台任务(含后台命令)随之终止:与其它 close 路径同口径立即清表。
+        // 不等下次 send 换 Query 时清,否则宿主在这段空窗里读到的快照仍带着已死的任务。
+        runningBackgroundTasks.clear();
+        terminalBackgroundTaskIds.clear();
         // bridge counter 兜底: rewind idle 时应该已经归零, 但如果上一轮 bridge 中途异常
         // (SDK 崩 / abort 未 drain result) counter 可能残留, 会污染 rebuild 后的第一 turn。
         clearBridgeState();

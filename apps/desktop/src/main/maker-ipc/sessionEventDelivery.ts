@@ -10,11 +10,8 @@ import {
   isOversizedHistoryErrorData,
   isUnsupportedRequestOptionErrorData,
 } from './contextOverflowRollover.js';
-import {
-  hasWorkingBackgroundCommand,
-  noteClaudeSessionBackgroundCommandWork,
-  noteClaudeSessionTurnState,
-} from '../maker-host/claude-session-background-activity.js';
+import { syncBackgroundCommandWork } from '../maker-host/claude-background-command-work-sync.js';
+import { noteClaudeSessionTurnState } from '../maker-host/claude-session-background-activity.js';
 import { DeferredCodexRestartService } from './deferredCodexRestart.js';
 import {
   isTerminalTurnErrorEvent,
@@ -231,22 +228,3 @@ export function deliverSessionEvent(
 }
 
 export type SessionDeliveryResult = ReturnType<typeof deliverSessionEvent>;
-
-/**
- * 用会话的权威后台任务快照刷新「后台命令仍在工作」。回合收尾先刷新再记边沿:Query 换代会
- * 不带事件地清空任务表,收尾时重读一次才不会拿旧值点亮。
- * 只覆盖 Agent 进程在本机的任务:SSH 远程工作区与在其他电脑上运行 Agent 的任务,终态可能掉在
- * 断连窗口里,本地没有自愈路径,会一直亮着。
- */
-function syncBackgroundCommandWork(session: Session): void {
-  if (session.remoteHostId || session.agentDeviceId) return;
-  if (typeof session.listBackgroundTasks !== 'function') return;
-  try {
-    noteClaudeSessionBackgroundCommandWork(
-      session.id,
-      hasWorkingBackgroundCommand(session.listBackgroundTasks()),
-    );
-  } catch {
-    // 快照读不到就保持现状,不为展示信号打断事件投递。
-  }
-}
