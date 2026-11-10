@@ -835,7 +835,12 @@ export function useOrcaWorkerForm(params: {
     const source = rolesMakerRef.current;
     if (home) {
       // 本页手头的这份跟着更新(不落盘)：马上再打开表单时不用等那台电脑读回来。
-      memoryHomeRef.current = { ...home, prefs: mergeOrcaWorkerChoice(home.prefs, submitted) };
+      const merged = mergeOrcaWorkerChoice(home.prefs, submitted);
+      // 这次提交的来源也留在手头这份里：马上再打开表单切 Agent 时，不能退回「不指定来源」。
+      if (submitted.model) {
+        merged.agents[choice.agent] = { ...merged.agents[choice.agent], providerId: choice.model?.providerId ?? null };
+      }
+      memoryHomeRef.current = { ...home, prefs: merged };
       const entries = withRememberedOrcaRole(roleEntriesRef.current ?? [], mutation);
       roleEntriesRef.current = entries;
       setRolesState({ source, entries });

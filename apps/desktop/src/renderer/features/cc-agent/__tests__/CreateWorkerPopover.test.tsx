@@ -725,6 +725,32 @@ describe('CreateWorkerPopover', () => {
       view.unmount();
     });
 
+    // 回归(PR #9731 review)：被控端给某个 Agent 记的来源(providerId)要带回，不能因为任务在另一台电脑
+    // 就置空；否则同一个模型可能走别的来源，提交时还会把被控端记的来源写成「不指定」。
+    it('brings back the provider the controlled computer remembered for its last Agent', async () => {
+      const remote = installRemoteHost('memoryHost', {
+        ...DEFAULT_WORKER_CREATION_PREFS,
+        lastAgent: 'codex',
+        codex: { model: 'gpt-host', effort: 'high', fast: false, providerId: 'xd' },
+      });
+      mocks.capabilitiesByAgent['claude-code'] = {
+        availableModels: [{ id: 'claude-opus-4-7' }],
+        supportsOrcaWorkerPermissionMode: true,
+      } as never;
+      mocks.capabilitiesByAgent.codex = { availableModels: [{ id: 'gpt-host' }] } as never;
+      mocks.modelsByAgent.codex = [model('gpt-host')];
+      mocks.remoteProviders = [{
+        id: 'xd', name: 'XD', connected: true, agents: ['codex'], models: { codex: [model('gpt-host')] },
+      }];
+      const onCreate = vi.fn();
+      render(<CreateWorkerPopover open deviceId="device-a" onClose={vi.fn()} onCreate={onCreate} />);
+      await waitFor(() => expect(screen.getByTestId('model-selector').dataset.currentProvider).toBe('xd'));
+      fireEvent.click(screen.getByRole('button', { name: 'orca.createWorker.submit' }));
+      await waitFor(() => expect(onCreate).toHaveBeenCalledOnce());
+      expect(onCreate.mock.calls[0]![0]).toMatchObject({ agent: 'codex', model: 'gpt-host', providerId: 'xd' });
+      await waitFor(() => expect(remote.prefs().codex.providerId).toBe('xd'));
+    });
+
     it('opens on first-time defaults without touching local memory when the computer is only unreachable', async () => {
       const invoke = vi.fn(async (_device: string, channel: string) => {
         if (channel === 'maker:worker-roles:get') throw new Error('[DEVICE_LINK_TIMEOUT] no reply');

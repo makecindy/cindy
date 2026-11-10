@@ -481,7 +481,9 @@ export function CreateWorkerPopover({
   // 按一份「上次选择」和角色清单把表单恢复成打开时的样子：回到第一个(上次用的)角色，带出它记的
   // 任务、模型和权限，没记过的用「上次选择」。本机任务打开时用这台电脑的；远程控制的任务读到那台
   // 电脑的记忆后再按它恢复一次。
-  const restoreForm = (stored: WorkerCreationPrefs, roles: WorkerRolePrefs) => {
+  // prefsFromHost：这份「上次选择」是任务所在的电脑自己记的(本机任务，或读到了被控端的记忆)。
+  // 它记的来源(providerId)属于那台电脑的目录，可以带回；操作端自己的旧记忆里的来源不能用在别的电脑上。
+  const restoreForm = (stored: WorkerCreationPrefs, roles: WorkerRolePrefs, prefsFromHost: boolean) => {
     // 这一排按最近使用排序，第一个就是上次用的角色；全部移除后只剩角色名输入。
     const role = listedWorkerRoles(roles)[0] ?? null;
     const roleMemory = role === null ? undefined : workerRoleMemory(roles, role);
@@ -502,7 +504,9 @@ export function CreateWorkerPopover({
     setEffort(agentPrefs.effort);
     setFast(agentPrefs.fast);
     setAgentDeviceId(selection ? selection.agentDeviceId : leadLocation);
-    setProviderSource(selection ? selection.providerId : leadDeviceId || leadLocation ? null : agentPrefs.providerId);
+    setProviderSource(
+      selection ? selection.providerId : (leadDeviceId && !prefsFromHost) || leadLocation ? null : agentPrefs.providerId,
+    );
     setSelectedRole(role);
     setCustomRole('');
     setInitialTask(defaultTaskForRef.current(role, roles));
@@ -518,10 +522,10 @@ export function CreateWorkerPopover({
     interactedRef.current = false;
     // 远程控制的任务：角色清单和「上次选择」都以那台电脑为准，这里先按没有记录打开，读到后再
     // 套用(见下)；不拿这台电脑自己的记忆垫底。
-    if (leadDeviceId) restoreFormRef.current(DEFAULT_WORKER_CREATION_PREFS, EMPTY_WORKER_ROLE_PREFS);
+    if (leadDeviceId) restoreFormRef.current(DEFAULT_WORKER_CREATION_PREFS, EMPTY_WORKER_ROLE_PREFS, false);
     else {
       const stored = readWorkerCreationPrefs();
-      restoreFormRef.current(stored, readWorkerRolePrefs(stored, getDataOwnerGeneration().dataOwnerId));
+      restoreFormRef.current(stored, readWorkerRolePrefs(stored, getDataOwnerGeneration().dataOwnerId), true);
     }
     setMoreSettingsOpen(false);
     setExecutionDeviceId(null);
@@ -567,6 +571,9 @@ export function CreateWorkerPopover({
     return () => { disposed = true; };
   }, [executionDevice?.supportsAgentDevice, executionDeviceId, open, remoteAgentDevices]);
 
+  // 当前这份「上次选择」是不是任务所在的电脑自己记的(本机任务，或已读到被控端的记忆)。
+  const hostPrefs =
+    !leadDeviceId || (remoteRoles?.deviceId === leadDeviceId && remoteRoles.memory === 'host');
   const selectExecutionDevice = useCallback(
     (next: string | null) => {
       if (next === executionDeviceId) return;
@@ -577,9 +584,9 @@ export function CreateWorkerPopover({
       setRemoteDirMode('dialogue');
       setRemoteDir('');
       // 换工作电脑后重新按它的目录选择来源；回到 Lead 时恢复本机记忆。
-      setProviderSource(next || leadDeviceId ? null : prefs[agent].providerId);
+      setProviderSource(next || (leadDeviceId && !hostPrefs) ? null : prefs[agent].providerId);
     },
-    [agent, executionDeviceId, leadDeviceId, prefs],
+    [agent, executionDeviceId, hostPrefs, leadDeviceId, prefs],
   );
 
   useEffect(() => {
@@ -668,9 +675,10 @@ export function CreateWorkerPopover({
       setModel(remembered.model);
       setEffort(remembered.effort);
       setFast(remembered.fast);
-      setProviderSource(deviceId ? null : remembered.providerId);
+      // Agent 就在任务所在的电脑上、也没选运行设备，且这份记忆来自那台电脑时，带回它记的来源。
+      setProviderSource(!agentDeviceId && !executionDeviceId && hostPrefs ? remembered.providerId : null);
     },
-    [agent, agentDeviceId, deviceId, effort, fast, model, prefs, providerSource],
+    [agent, agentDeviceId, deviceId, effort, executionDeviceId, fast, hostPrefs, model, prefs, providerSource],
   );
 
   const updateModel = useCallback(
@@ -916,6 +924,7 @@ export function CreateWorkerPopover({
         restoreFormRef.current(
           fromRemoteWorkerDefaults(remote, modelSelectionScope) ?? DEFAULT_WORKER_CREATION_PREFS,
           roles,
+          true,
         );
       })
       .catch((error) => {
@@ -925,7 +934,7 @@ export function CreateWorkerPopover({
         const unsupported = extractIpcError(error)?.code === 'DEVICE_LINK_CHANNEL_NOT_ALLOWED';
         setRemoteRoles({ deviceId: leadDeviceId, prefs: null, memory: unsupported ? 'controller' : 'none' });
         if (unsupported && !interactedRef.current) {
-          restoreFormRef.current(readWorkerCreationPrefs(), EMPTY_WORKER_ROLE_PREFS);
+          restoreFormRef.current(readWorkerCreationPrefs(), EMPTY_WORKER_ROLE_PREFS, false);
         }
       });
     return () => {

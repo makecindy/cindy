@@ -624,6 +624,11 @@ describe('worker roles kept on the task computer', () => {
     expect(host.applyWorkerRoles).toHaveBeenLastCalledWith(expect.objectContaining({
       choice: expect.objectContaining({ agent: 'codex', agentModel: expect.objectContaining({ providerId: 'openai' }) }),
     }));
+    // 提交后马上再打开：手头这份也带着刚提交的来源，切走再切回不会退成「不指定」。
+    act(() => { latest!.reset(); });
+    await act(async () => { latest!.changeAgent('claude-code'); });
+    await act(async () => { latest!.changeAgent('codex'); });
+    expect(latest!.form.model).toMatchObject({ id: 'codex/gpt-5.5', providerId: 'openai' });
   });
 
   it('keeps a form the user already changed when the role list arrives late', async () => {
