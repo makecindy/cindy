@@ -45,7 +45,7 @@ import {
   type ProviderVideoConnection,
 } from './providerMediaRuntime.js';
 import { validateCustomVideoBody, videoRelayResultHosts } from './customVideoProtocol.js';
-import { fetchVideoTaskContent, isVideoTaskContentRef } from './videoTaskContent.js';
+import { fetchVideoTaskContent, isVideoTaskContentRef, videoTaskContentUrl } from './videoTaskContent.js';
 import { sniffMediaMime, additionalMp3BytesNeeded } from './sniffMediaMime.js';
 import {
   countMediaInvocations,
@@ -104,7 +104,7 @@ interface MediaAuthScope {
   generation: number;
   downloadContext?: MediaDownloadContext;
   assertSourceCurrent?(): void;
-  taskContent?: { connection: ProviderVideoConnection; taskId: string; resultHosts?: string[] };
+  taskContent?: { connection: ProviderVideoConnection; taskId: string; contentPath?: string; resultHosts?: string[] };
 }
 
 function currentAuthScope(downloadContext?: MediaDownloadContext): MediaAuthScope {
@@ -819,8 +819,8 @@ async function mediaBytes(
   let buffer: Buffer;
   let headerMime: string | null = null;
   if (extractor.encoding === 'url') {
-    const downloaded = scope.taskContent && isVideoTaskContentRef(raw, scope.taskContent.taskId, scope.taskContent.connection.baseUrl)
-      ? await fetchVideoTaskContent(scope.taskContent.connection, scope.taskContent.taskId, scope.downloadContext?.signal)
+    const downloaded = scope.taskContent && isVideoTaskContentRef(raw, scope.taskContent.taskId, scope.taskContent.connection.baseUrl, scope.taskContent.contentPath)
+      ? await fetchVideoTaskContent(scope.taskContent.connection, scope.taskContent.taskId, scope.downloadContext?.signal, scope.taskContent.contentPath)
       : await downloadMediaResult({
       raw,
       allowedHosts: [...(extractor.allowedUrlHosts ?? []), ...(scope.taskContent?.resultHosts ?? [])],
@@ -894,6 +894,13 @@ async function materializeResults(
         throw new MediaInvocationError('MEDIA_RESULT_INVALID', '上游返回的媒体结果数量超过限制');
       }
     }
+  }
+  if (found.length === 0 && scope.taskContent?.contentPath) {
+    const extractor = extractors.find(item => item.encoding === 'url' && item.kind === 'video');
+    if (extractor) found.push({
+      raw: videoTaskContentUrl(scope.taskContent.taskId, scope.taskContent.connection.baseUrl, scope.taskContent.contentPath),
+      extractor,
+    });
   }
   if (found.length === 0) {
     throw new MediaInvocationError('MEDIA_RESULT_MISSING', '上游成功响应中没有找到媒体结果');
@@ -1704,6 +1711,7 @@ async function pollInvocation(
       scope.taskContent = {
         connection: { baseUrl: connection.baseUrl, headers: connection.headers ?? {}, revision: invocation.guide.binding.connectionRevision, assertCurrent: () => assertAuthScope(scope, invocation.owner) },
         taskId: invocation.taskId,
+        contentPath: guide.contentPath,
         ...(invocation.guide.binding.videoProtocol === 'openai-videos'
           ? { resultHosts: videoRelayResultHosts(connection.baseUrl) } : {}),
       };

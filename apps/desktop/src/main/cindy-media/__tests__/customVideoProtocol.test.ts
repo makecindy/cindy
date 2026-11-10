@@ -7,6 +7,20 @@ import { parsePreparedMediaInvocationGuide } from '../../../shared/mediaInvocati
 const model = { id: 'private-video', name: 'Video', providerId: 'relay', mode: 'video_generation' as const, modalities: { input: ['text', 'image'], output: ['video'] } };
 
 describe('custom xAI Videos protocol', () => {
+  // /v1/videos 回归：标准图片输入在付费边界不得被当作未知字段；原测试只有 MiniMax content。
+  // unit，最小输入为 prompt + 一条受管图片引用；仍拒绝非图片、超量、混合格式和文生视频引用。
+  it('validates relay input_reference as one or two images without MiniMax content', () => {
+    const ref = `cindy-media://blobs/${'a'.repeat(64)}.png`;
+    for (const input_reference of [ref, [ref, 'https://images.example/last.png']]) {
+      expect(() => validateCustomVideoBody({ prompt: 'move', input_reference }, true, 'openai-videos')).not.toThrow();
+    }
+    for (const input_reference of [[], [ref, ref, ref], 'file:///private/file', 'data:video/mp4;base64,AA==']) {
+      expect(() => validateCustomVideoBody({ prompt: 'move', input_reference }, true, 'openai-videos')).toThrow();
+    }
+    expect(() => validateCustomVideoBody({ prompt: 'move', input_reference: ref, content: [] }, true, 'openai-videos')).toThrow();
+    expect(() => validateCustomVideoBody({ prompt: 'move', input_reference: ref }, false, 'openai-videos')).toThrow();
+  });
+
   it.each([
     ['minimax-videos', 'https://video.example/v1', 'https://video.example'],
     ['minimax-videos', 'https://video.example/prefix/v1', 'https://video.example/prefix'],

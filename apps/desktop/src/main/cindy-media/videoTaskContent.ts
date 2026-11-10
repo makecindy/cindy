@@ -16,10 +16,22 @@ async function availableDownloadBytes(directory: string): Promise<bigint> {
   }
 }
 
+function taskContentPath(taskId: string, template = '/videos/{taskId}/content'): string {
+  if (!/^[a-zA-Z0-9_-]{1,256}$/.test(taskId)) throw new MediaDownloadError('MEDIA_RESULT_INVALID', '视频任务 ID 无效');
+  if (!template.startsWith('/') || template.startsWith('//') || template.includes('\\') || !template.includes('{taskId}')) {
+    throw new MediaDownloadError('MEDIA_RESULT_INVALID', '视频任务内容路径无效');
+  }
+  return template.replaceAll('{taskId}', taskId);
+}
+
+export function videoTaskContentUrl(taskId: string, baseUrl: string, contentPath?: string): string {
+  return `${baseUrl.replace(/\/+$/, '')}${taskContentPath(taskId, contentPath)}`;
+}
+
 /** A private task resource, never an arbitrary URL authorized to receive an API key. */
-export function isVideoTaskContentRef(raw: string, taskId: string, baseUrl: string): boolean {
+export function isVideoTaskContentRef(raw: string, taskId: string, baseUrl: string, contentPath?: string): boolean {
   if (!/^[a-zA-Z0-9_-]{1,256}$/.test(taskId)) return false;
-  const relative = `/videos/${taskId}/content`;
+  const relative = taskContentPath(taskId, contentPath);
   const base = baseUrl.replace(/\/+$/, '');
   return raw === relative || raw === relative.slice(1) ||
     raw === `${new URL(base).pathname}${relative}` || raw === `${base}${relative}`;
@@ -30,9 +42,9 @@ export async function fetchVideoTaskContent(
   connection: ProviderVideoConnection,
   taskId: string,
   signal?: AbortSignal,
+  contentPath?: string,
 ): Promise<{ filePath: string; headerMime: string | null; dispose(): Promise<void> }> {
-  if (!/^[a-zA-Z0-9_-]{1,256}$/.test(taskId)) throw new MediaDownloadError('MEDIA_RESULT_INVALID', '视频任务 ID 无效');
-  const url = `${connection.baseUrl.replace(/\/+$/, '')}/videos/${taskId}/content`;
+  const url = videoTaskContentUrl(taskId, connection.baseUrl, contentPath);
   const started = Date.now();
   for (let attempt = 0; attempt < 3; attempt += 1) {
     connection.assertCurrent();

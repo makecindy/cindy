@@ -49,6 +49,8 @@ export interface MediaSyncResponseGuide {
 export interface MediaAsyncPollGuide {
   method: 'GET' | 'POST';
   path: string;
+  /** Original task's authenticated download endpoint when no media URL is returned. */
+  contentPath?: string;
   headers?: Record<string, string>;
   bodyTaskIdPath?: string[];
   statusPath: string[];
@@ -383,6 +385,7 @@ function pollError(value: unknown, path: string): string | null {
     [
       'method',
       'path',
+      'contentPath',
       'headers',
       'bodyTaskIdPath',
       'statusPath',
@@ -400,6 +403,12 @@ function pollError(value: unknown, path: string): string | null {
     return `${path}.method must be GET or POST`;
   error = relativePathError(value.path, `${path}.path`, true);
   if (error) return error;
+  if (value.contentPath !== undefined) {
+    error = relativePathError(value.contentPath, `${path}.contentPath`, true);
+    if (error) return error;
+    if (!(value.contentPath as string).includes('{taskId}'))
+      return `${path}.contentPath must include {taskId}`;
+  }
   error = headersError(value.headers, `${path}.headers`);
   if (error) return error;
   if (value.method === 'GET') {

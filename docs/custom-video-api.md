@@ -75,19 +75,20 @@ MiniMax V2 视频接口的中转。
 | --- | --- | --- |
 | 生成/图生视频 | `POST /videos`，JSON | `id` |
 | 查询原任务 | `GET /videos/{id}` | `status`：`queued`/`in_progress`，完成为 `completed`，失败为 `failed`/`cancelled`/`expired` |
-| 成品 | `video_url`（tu-zi）或 `url`（new-api） | 中转站自己的 `/videos/<原任务ID>/content` 用原连接凭证读取；该中转站域名（含子域名）下的其他地址自动下载，不带凭证；其他主机走下载审批 |
+| 成品 | `video_url`（tu-zi）或 `url`（new-api）；没有 URL 时使用 Guide 的 `poll.contentPath` | 中转站自己的 `/videos/<原任务ID>/content` 用原连接凭证读取；该中转站域名（含子域名）下的其他地址自动下载，不带凭证；其他主机走下载审批 |
 
 - 请求体按 tu-zi 文档的 MiniMax-H3 写法：必填 `prompt`；OpenAI 风格字段 `seconds`（字符串）、`size`，
   与模型自身字段 `content`、`duration`、`ratio`、`resolution` 可以并存，另有可选 `watermark`。
-  `content` 沿用上文 MiniMax 的规则：一条 text，图生视频再放 1–2 张首帧／尾帧；图生视频必须用
-  `content` 传图。文生视频不能用 `adaptive` 画幅。各字段的取值范围由中转站和模型决定，客户端只
+  `content` 沿用上文 MiniMax 的规则：一条 text，图生视频再放 1–2 张首帧／尾帧。
+  标准图生视频格式使用 `input_reference`，值为一条 Cindy 图片引用或 1–2 条图片引用的数组；
+  与 MiniMax-H3 的 `content` 二选一。文生视频不能用 `adaptive` 画幅。各字段的取值范围由中转站和模型决定，客户端只
   做类型与格式检查。
-- 参考素材、remix、`input_reference` 等其他字段在付费提交前拒绝。各家中转站对字段的映射不同，
+- 视频／音频参考素材、remix 等其他字段在付费提交前拒绝。各家中转站对字段的映射不同，
   验收以实际出片为准。
-- 成片地址只在响应里给出时才读取。只提供 `/videos/{id}/content`、不在查询结果里给地址的中转站，
-  本协议暂不支持。
+- 已完成任务只提供 `/videos/{id}/content` 时，按 Server Guide 声明的 `poll.contentPath` 下载原任务。
+  未声明该字段的既有 Guide／任务仍按响应里的成片 URL 读取，不在客户端猜测新路径。
 
-依据：[tu-zi 视频生成任务 API](https://api.tu-zi.com/docs/api/video)、
+依据：[tu-zi 视频生成任务 API](https://api.tu-zi.com/docs/api/reference-relay-openai-video)、
 [new-api 查询视频](https://github.com/QuantumNous/new-api-docs/blob/main/docs/api/query-video.md)。
 
 ## 兼容与失败恢复

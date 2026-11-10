@@ -16,6 +16,24 @@ const operation = {
 const protocol = { schemaVersion: 1, guideId: 'opaque-server-id', revision: 'server-revision' };
 
 describe('媒体协议说明与本地执行绑定', () => {
+  // /v1/videos 成片仅从原任务下载的协议回归；unit：Server Guide 与持久快照必须保留下载路径。
+  it('roundtrips an optional task content path and rejects absolute or unbound paths', () => {
+    const asyncOperation = { ...operation, response: { mode: 'async', taskIdPath: ['id'], poll: {
+      method: 'GET', path: '/videos/{taskId}', contentPath: '/videos/{taskId}/content', statusPath: ['status'],
+      successValues: ['completed'], failureValues: ['failed'], recommendedIntervalMs: 5_000,
+      timeoutMs: 30_000, maxResponseBytes: 1_024, media: operation.response.media,
+    } } };
+    const snapshot = { ...protocol, ...asyncOperation, modelId: 'private-video',
+      binding: { providerId: 'relay', executor: 'provider-video', connectionRevision: '1:connection' } };
+    expect(parseMediaInvocationGuide({ ...protocol, operations: [asyncOperation] })).toMatchObject({ ok: true });
+    expect(parsePreparedMediaInvocationGuide(JSON.parse(JSON.stringify(snapshot)))).toEqual({ ok: true, value: snapshot });
+    for (const contentPath of ['https://other.example/{taskId}', '/videos/content']) {
+      expect(parseMediaInvocationGuide({ ...protocol, operations: [{ ...asyncOperation,
+        response: { ...asyncOperation.response, poll: { ...asyncOperation.response.poll, contentPath } },
+      }] })).toMatchObject({ ok: false });
+    }
+  });
+
   it('接受无连接的 Server Guide，并丢弃旧响应附带的连接信息', () => {
     expect(parseMediaInvocationGuide({ ...protocol, operations: [operation] })).toMatchObject({ ok: true });
     const parsed = parseMediaInvocationGuide({

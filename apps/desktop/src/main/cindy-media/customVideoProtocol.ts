@@ -77,7 +77,7 @@ function validateMinimaxContent(content: unknown, image: boolean): void {
 }
 
 function validateOpenaiVideoBody(body: Record<string, unknown>, image: boolean): void {
-  const fields = ['prompt', 'seconds', 'size', 'content', 'duration', 'ratio', 'resolution', 'watermark'];
+  const fields = ['prompt', 'seconds', 'size', 'content', 'input_reference', 'duration', 'ratio', 'resolution', 'watermark'];
   if (Object.keys(body).some(key => !fields.includes(key))) throw new Error('视频请求包含当前协议不支持的字段');
   if (typeof body.prompt !== 'string' || !body.prompt.trim()) throw new Error('视频请求必须提供 prompt');
   if (body.seconds !== undefined && (typeof body.seconds !== 'string' || !/^[1-9][0-9]{0,2}$/.test(body.seconds))) throw new Error('seconds 必须是表示整数秒的字符串');
@@ -86,5 +86,12 @@ function validateOpenaiVideoBody(body: Record<string, unknown>, image: boolean):
   if (body.ratio !== undefined && (typeof body.ratio !== 'string' || !/^(adaptive|[1-9][0-9]?:[1-9][0-9]?)$/.test(body.ratio) || (!image && body.ratio === 'adaptive'))) throw new Error('视频画幅不受支持');
   if (body.resolution !== undefined && (typeof body.resolution !== 'string' || !/^[0-9]{3,4}[pP]$|^[1-9][kK]$/.test(body.resolution))) throw new Error('视频分辨率不受支持');
   if (body.watermark !== undefined && typeof body.watermark !== 'boolean') throw new Error('watermark 必须是布尔值');
-  if (body.content !== undefined || image) validateMinimaxContent(body.content, image);
+  if (body.input_reference !== undefined) {
+    if (!image || body.content !== undefined) throw new Error('input_reference 仅用于图生视频，且不能与 content 混用');
+    const refs = Array.isArray(body.input_reference) ? body.input_reference : [body.input_reference];
+    if (refs.length < 1 || refs.length > 2 || refs.some(ref => typeof ref !== 'string' ||
+      !/^(cindy-media:\/\/blobs\/|xdt-image:\/\/|data:image\/(png|jpeg|webp);base64,|https:\/\/)/.test(ref))) {
+      throw new Error('input_reference 必须提供 1–2 条有效的图片引用');
+    }
+  } else if (body.content !== undefined || image) validateMinimaxContent(body.content, image);
 }

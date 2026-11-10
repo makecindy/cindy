@@ -265,6 +265,7 @@ function providerServerGuide(modelId: string, protocol: string) {
       operations: ['video.generate', 'video.image_to_video'].map(capability => ({
         ...operation({ mode: 'async', taskIdPath: [minimax ? 'task_id' : 'id'], poll: {
           method: 'GET', path: minimax ? '/v2/query/video_generation/{taskId}' : '/videos/{taskId}',
+          ...(!minimax ? { contentPath: '/videos/{taskId}/content' } : {}),
           statusPath: minimax ? ['task', 'status'] : ['status'],
           successValues: [minimax ? 'succeeded' : 'completed'], failureValues: ['failed', 'cancelled', 'expired'],
           recommendedIntervalMs: 5_000, timeoutMs: 30_000, maxResponseBytes: 1_048_576,
@@ -275,7 +276,7 @@ function providerServerGuide(modelId: string, protocol: string) {
           required: minimax ? ['content', 'resolution', 'duration'] : ['prompt'],
           properties: { content: { type: 'array' }, resolution: { type: 'string' }, duration: { type: 'integer' },
             ratio: { type: 'string' }, ...(!minimax ? { prompt: { type: 'string' }, seconds: { type: 'string' },
-              size: { type: 'string' }, watermark: { type: 'boolean' } } : {}) },
+              size: { type: 'string' }, watermark: { type: 'boolean' }, input_reference: {} } : {}) },
         },
       })),
     } };
@@ -629,6 +630,35 @@ describe('Cindy Core media invocation state and security boundary', () => {
     expect(mocks.outboundFetch.mock.calls[1]![0]).toBe('https://relay.example/v2/query/video_generation/paid-task');
     expect(mocks.outboundFetch.mock.calls[3]![1].headers ?? {}).not.toHaveProperty('authorization');
     expect(mocks.outboundFetch.mock.calls.filter(([, call]) => call.method === 'POST')).toHaveLength(1);
+  });
+
+  // /v1/videos 回归：原用例只测试返回了媒体 URL 的任务；unit，经真实 Core 入口验证
+  // 标准图片引用展开与 completed + id 的成片入仓，且只提交一次付费请求。
+  it.each([false, true])('relay image inputs reach the upstream and completed tasks use Guide contentPath (array=%s)', async array => {
+    setupCustomVideo('openai-videos');
+    mocks.readBlob.mockResolvedValue({ buffer: PNG, mimeType: 'image/png' });
+    mocks.ingestMedia.mockResolvedValue({ url: `cindy-media://blobs/${'a'.repeat(64)}.mp4` });
+    const prepared = await callCindyMedia({ action: 'prepare', providerId: 'relay', modelId: 'private-video', capability: 'video.image_to_video' });
+    const invocationId = prepared.invocation_id as string;
+    const ref = `cindy-media://blobs/${'a'.repeat(64)}.png`;
+    const data = `data:image/png;base64,${PNG.toString('base64')}`;
+    mocks.outboundFetch.mockResolvedValueOnce(Response.json({ id: 'paid-task', status: 'queued' }))
+      .mockResolvedValueOnce(Response.json({ id: 'paid-task', status: 'completed' }))
+      .mockResolvedValueOnce(new Response(MP4, { headers: { 'content-type': 'video/mp4' } }));
+    expect(await callCindyMedia({ action: 'request', invocationId, body: {
+      prompt: 'cat waves', input_reference: array ? [ref, ref] : ref, seconds: '8',
+    } })).toMatchObject({ ok: true, status: 'pending' });
+    expect(JSON.parse(mocks.outboundFetch.mock.calls[0]![1].body)).toEqual({
+      model: 'private-video', prompt: 'cat waves', input_reference: array ? [data, data] : data, seconds: '8',
+    });
+    expect(await callCindyMedia({ action: 'poll', invocationId })).toMatchObject({ status: 'complete',
+      xdt_video_urls: [`cindy-media://blobs/${'a'.repeat(64)}.mp4`] });
+    const download = mocks.outboundFetch.mock.calls[2]!;
+    expect(download[0]).toBe('https://relay.example/v1/videos/paid-task/content');
+    expect(download[1]).toMatchObject({ method: 'GET', redirect: 'manual', headers: { authorization: 'Bearer test-relay-key' } });
+    expect(mocks.ingestMedia).toHaveBeenCalledOnce();
+    expect(mocks.outboundFetch.mock.calls.filter(([, init]) => init.method === 'POST')).toHaveLength(1);
+    expect(mocks.rows.get(invocationId)?.state).toBe('complete');
   });
 
   // Relay /v1/videos (tu-zi style): the documented MiniMax-H3 body is sent as-is under /v1,
