@@ -5,6 +5,7 @@ import { requestPluginOauth, invalidatePluginOauth, supportsRemotePluginOauth } 
 import WebSocket from 'ws';
 import { DeviceLinkClient } from '@cindy/device-link';
 import { HOST_CONTRACT_CHANNELS } from '@cindy/maker-shared/host-channel-contract';
+import type { TaskTagRequest } from '@cindy/maker-shared';
 import { createInboundDispatch } from '../../desktop/src/main/device-link/dispatch.js';
 import { createInvokeRegistry } from '../../desktop/src/main/device-link/invokeRegistryCore.js';
 import { createDeviceLinkSettingsStore } from '../../desktop/src/main/device-link/settings-store.js';
@@ -14,7 +15,7 @@ import * as botBoundary from '../../desktop/src/main/device-link/remoteBotSessio
 import * as sharedTasks from '../../desktop/src/main/device-link/sharedTaskDispatch.js';
 import { admitSharedTaskFsWatchTopics } from '../../desktop/src/main/device-link/sharedTaskFileAccess.js';
 import * as broadcastTap from '../../desktop/src/main/device-link/broadcast-tap.js';
-import { createTaskTagService, TASK_TAG_CHANNEL } from '../../desktop/src/main/localDb/ipc/taskTagService.js';
+import { TASK_TAG_CHANNEL } from '../../desktop/src/main/localDb/ipc/taskTagService.js';
 import { readRemoteBotSessionAccess, readRemoteBotSessionAccessBatch } from '../../desktop/src/main/localDb/ipc/botRemoteSessionAccess.js';
 import { createInteractionProjection, projectInteractionDismissedForRemote } from '../../desktop/src/main/cindy-brain/interactionProjection.js';
 import { RECOVERY_CHECKPOINT_MARKER } from '../../desktop/src/main/maker-ipc/recoveryMarker.js';
@@ -110,13 +111,8 @@ export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
     try { const result = await work; assertCurrent(); return result; }
     finally { pending.delete(work); }
   };
-  const tags = createTaskTagService({ ...broadcastTap,
-    broadcastSessionPatched: (sessionId, patch, scope) => {
-      scope ??= broadcastTap.captureDataOwnerBroadcastScope();
-      if (!broadcastTap.isDataOwnerBroadcastScopeCurrent(scope)) return;
-      broadcastTap.tapWindowBroadcast('local-db:sessions:patched', { sessionId, patch }, scope.ownerStamp);
-    },
-  });
+  const tags = { executeTaskTags: (request: TaskTagRequest) =>
+    call('/api/task-tags/execute', { request }) };
   const dispatch = createInboundDispatch({
     // Platform capabilities are added only when their backing services are wired.
     sameAccountCapabilities: () => [],
@@ -192,6 +188,7 @@ export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
     };
     const id = event.sessionId;
     switch (event.type) {
+      case 'task_tags_changed': emit('local-db:task-tags:changed', event.payload); break;
       case 'plugin_push':
         if (['ghosts:changed', 'ghosts:runtime-changed', 'ghosts:card-updated', 'ghosts:notify'].includes(event.channel))
           emit(event.channel, event.payload);

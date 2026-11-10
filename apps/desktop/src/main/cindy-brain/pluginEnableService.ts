@@ -32,7 +32,7 @@ export async function setPluginEnabled(
     if (!enabled) await ports.stop(storagePart);
     assertCurrent?.();
     await ports.persist(installedGhostPhysicalRelId(target), enabled, expectedApproval ?? approval, assertCurrent);
-    assertCurrent?.();
+    // The receipt is committed. Complete its effects even if the caller disconnected.
     if (enabled) ports.start(storagePart);
     await ports.didChange(id, enabled);
     return { ok: true };

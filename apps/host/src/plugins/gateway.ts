@@ -99,6 +99,7 @@ export function createHostPluginGateway(options: GatewayOptions) {
     resolveGhostAttachmentUrl: createGhostAttachmentResolver(hostBlobStore, createImageCacheStore(() => options.profileDir)),
     getGhostGrantConfirmBridge: () => options.fileConfirmation,
     getGhostSetupCoordinator: () => runtime.authorization.coordinator,
+    setupFollowsToolCancellation: true,
     t: runtime.authorization.i18n.t,
   });
   const hostDeps: CindyGhostsHostDeps = {

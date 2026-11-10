@@ -95,6 +95,9 @@ import { configureGhostSnapshotProcess } from '../../desktop/src/main/cindy-brai
 import { withCrossProcessLock } from '../../desktop/src/main/device-link/crossProcessLock.js';
 import { createChatHandler } from './chat.mjs';
 import { createEventHub } from './events.mjs';
+import { createTaskTagService } from '../../desktop/src/main/localDb/ipc/taskTagService.js';
+import { executeConversationSearch } from '../../desktop/src/main/localDb/ipc/search.js';
+import { captureDataOwnerBroadcastScope, isDataOwnerBroadcastScopeCurrent } from '../../desktop/src/main/device-link/broadcast-tap.js';
 import { createInputQueue } from './agent/input-queue.mjs';
 import { applyLiveSessionSettings } from './agent/session-settings.mjs';
 import { createInteractionBroker } from './agent/interactions.mjs';
@@ -665,6 +668,17 @@ async function ensureRuntime(ownerId: string): Promise<void> {
 }
 
 const eventHub = createEventHub();
+const taskTags = createTaskTagService({
+  captureDataOwnerBroadcastScope,
+  isDataOwnerBroadcastScopeCurrent,
+  broadcastSessionPatched: (sessionId, patch, scope) => {
+    if (scope && !isDataOwnerBroadcastScopeCurrent(scope)) return;
+    eventHub.publish({ type: 'session_changed', sessionId, patch });
+  },
+  tapWindowBroadcast: (_channel, payload, ownerStamp) => {
+    eventHub.publish({ type: 'task_tags_changed', payload, ownerStamp });
+  },
+});
 const sessionDraftPorts = {
   emitSessionCreated: (sessionId: string) => eventHub.publish({ type: 'session_changed', action: 'create', sessionId }),
   emitSessionListChangedLocally: (sessionId: string) => eventHub.publish({ type: 'session_changed', action: 'delete', sessionId }),
@@ -858,6 +872,8 @@ function writeProfileAppearance(patch: unknown) {
 }
 
 const serverDeps = {
+  executeTaskTags: taskTags.executeTaskTags,
+  searchConversations: executeConversationSearch,
   instanceId,
   isOwnerReady: () => runtime.state === 'ready' && account.authenticated && !isAppSessionBoundaryPending(),
   requestStop: () => stop(),

@@ -3,7 +3,7 @@ import { sessions } from './schema.js';
 import { getDbClient } from './client/current.js';
 import { createLogger } from '../logger.js';
 
-const log = createLogger('localDb');
+const log = createLogger('sessions');
 
 export interface SessionRowSnapshot {
   status: string;

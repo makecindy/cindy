@@ -4345,3 +4345,13 @@ describe('对话文件交接(cindy_handoff_files)', async () => {
     expect(dispatchedArgs()).toEqual({ keep: 1 });
   });
 });
+
+// Host extraction must preserve Desktop's persistent setup card lifetime;
+// a tool timeout is not a user cancellation of the setup interaction.
+it('does not couple ordinary desktop setup cards to a tool abort signal', async () => {
+  listMock.mockReturnValue([chipGhost('art')]);
+  const controller = new AbortController();
+  await makeDeps().callGhostTool({ ghostId: 'art', tool: 'run', args: {}, signal: controller.signal });
+  expect(ensureReadyMock).toHaveBeenCalled();
+  expect(ensureReadyMock.mock.calls[0][0].signal).toBeUndefined();
+});

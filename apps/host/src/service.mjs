@@ -6,6 +6,13 @@ export function createHostService(deps) {
   return async function invoke(pathname, body = {}, context = {}) {
     const url = { pathname };
 
+    if (url.pathname === '/api/task-tags/execute') {
+        return { status: 200, body: await deps.executeTaskTags(body.request) };
+    }
+    if (url.pathname === '/api/conversations/search') {
+        return { status: 200, body: await deps.searchConversations(body.request) };
+    }
+
     if (url.pathname === '/api/runtime/sessions') {
         return { status: 200, body: await deps.listRunningSessions(body.options) };
     }

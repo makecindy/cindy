@@ -19,6 +19,18 @@ export interface HostChannelDef {
 }
 
 export const HOST_CONTRACT_CHANNELS: readonly HostChannelDef[] = [
+  {
+    desktopChannel: 'local-db:task-tags:execute',
+    webPath: 'localDb.taskTags.execute',
+    hostPath: '/api/task-tags/execute',
+    body: ([request]) => ({ request }),
+  },
+  {
+    desktopChannel: 'local-db:conversations:search',
+    webPath: 'localDb.conversations.search',
+    hostPath: '/api/conversations/search',
+    body: ([request]) => ({ request }),
+  },
   // --- Sessions ---
   {
     desktopChannel: 'local-db:sessions:list',

@@ -33,7 +33,7 @@ import { registerRightSidebarTabsIpc } from './rightSidebarTabs';
 import { registerSubagentRunsIpc } from './subagentRuns';
 import { enqueueDurableWrite } from '../../messagePersistBroadcaster.desktop';
 import { registerDevSqliteVecIpc } from './dev/sqliteVec';
-import { registerSearchIpc } from './search';
+import { registerSearchIpc } from './search.desktop';
 import { registerRemoteHistoryIpc } from './history';
 import { registerHistoryQueryIpc } from './historyQuery';
 import { recoverActiveTeammateInvitations, registerBotIpc } from './bots';

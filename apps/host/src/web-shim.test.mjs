@@ -4,6 +4,7 @@ import test, { afterEach } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { buildWebShim } from './web-client-build.mjs';
 import { createHostServer } from './server.mjs';
+import { createHostService } from './service.mjs';
 
 // Production entry: evaluate the browser shim and invoke its public preload API.
 // Regression: auth aliases doubled /api, local entry spread a Promise and
@@ -22,17 +23,18 @@ function browser(respond = () => ({}), script = source, openEvents = (_url, { si
   const calls = [];
   const listeners = new Map();
   const redirects = [];
-  const window = { crypto: { randomUUID: () => 'test-id' }, addEventListener(name, listener) { listeners.set(name, listener); } };
+  const opened = [];
+  const window = { open: (...args) => opened.push(args), crypto: { randomUUID: () => 'test-id' }, addEventListener(name, listener) { listeners.set(name, listener); } };
   const context = vm.createContext({
     window, navigator: { language: 'en', platform: 'test', clipboard: { writeText() {} } },
     document: { createElement: () => ({ dataset: {} }), head: { appendChild() {} } },
-    location: { replace(url) { redirects.push(url); } }, console, TextDecoder, AbortController, URLSearchParams, setTimeout, clearTimeout,
+    location: { href: 'http://127.0.0.1:1234/#/cc-agent/old', replace(url) { redirects.push(url); } }, console, TextDecoder, AbortController, URL, URLSearchParams, setTimeout, clearTimeout,
     fetch: async (url, options) => {
       // Keep the background event subscription pending, without timers/handles.
       if (url.startsWith('/events')) return openEvents(url, options);
       const body = JSON.parse(options.body);
       calls.push({ url, body, credentials: options.credentials });
-      const result = respond(url, body);
+      const result = await respond(url, body);
       if (result instanceof Response) return result;
       return { ok: true, text: async () => JSON.stringify(result) };
     },
@@ -41,8 +43,19 @@ function browser(respond = () => ({}), script = source, openEvents = (_url, { si
   calls.length = 0; // Ignore the independent plugin-list boot read.
   const close = () => listeners.get('pagehide')?.({ persisted: false });
   cleanups.push(close);
-  return { api: window.electronAPI, calls, redirects, focus: () => listeners.get('focus')?.(), close };
+  return { api: window.electronAPI, calls, redirects, opened, focus: () => listeners.get('focus')?.(), close };
 }
+
+// Browser Files have no local filesystem authority, and opening a task must
+// stay on this Host origin. These public preload paths were missing entirely.
+test('browser-only task actions preserve synchronous paths and same-origin navigation', async () => {
+  const b = browser();
+  assert.equal(b.api.getFilePath({ name: 'test.txt' }), '');
+  await b.api.maker.openSessionInNewWindow('task/a');
+  assert.deepEqual(b.opened, [['http://127.0.0.1:1234/#/cc-agent/task%2Fa', '_blank', 'noopener,noreferrer']]);
+  await assert.rejects(b.api.maker.openSessionInNewWindow('task', 'another-device'), /HOST_CHANNEL_UNSUPPORTED/);
+  assert.equal(b.opened.length, 1);
+});
 
 test('both auth API shapes use the same Host routes', async () => {
   const b = browser(() => ({ isAuthenticated: true }));
@@ -80,6 +93,7 @@ test('history events reach the browser preload subscribers exactly once', async 
     { seq: 1, type: 'message_deleted', sessionId: 'task', clientId: 'draft', clientIds: ['draft'] },
     { seq: 2, type: 'error_persisted', sessionId: 'task', persistId: 'err' },
     { seq: 3, type: 'subagent_runs_changed', sessionId: 'task' },
+    { seq: 4, type: 'task_tags_changed', payload: { tags: [{ id: 'tag', name: 'Review', color: 'blue' }] }, ownerStamp: { dataOwnerId: 'owner', ownerGeneration: 1 } },
   ];
   const b = browser(() => ({}), source, () => new Response(new ReadableStream({ start(controller) {
     controller.enqueue(new TextEncoder().encode(frames.map(frame => `data: ${JSON.stringify(frame)}\n\n`).join('')));
@@ -88,11 +102,32 @@ test('history events reach the browser preload subscribers exactly once', async 
   b.api.localDb.messages.onDeleted(event => received.push(event));
   b.api.localDb.messages.onErrorPersisted(event => received.push(event));
   b.api.localDb.subagentRuns.onChanged(event => received.push(event));
+  b.api.localDb.taskTags.onChanged((payload, ownerStamp) => received.push({ payload, ownerStamp }));
   for (let n = 0; n < 40; n++) await Promise.resolve();
   assert.deepEqual(JSON.parse(JSON.stringify(received)), [
     frames[0], { sessionId: 'task', persistId: 'err' }, frames[2],
+    { payload: frames[3].payload, ownerStamp: frames[3].ownerStamp },
   ]);
   b.close();
+});
+
+// Real preload -> Host service contract. The task menu failed on execute(),
+// while search silently returned null. Plain boot/list tests missed both routes.
+// Minimal unit input: one tag request and one keyword query; no network or DB.
+test('task tags and conversation search reach the Host business service', async () => {
+  const requests = [];
+  const tags = { tags: [{ id: 'tag', name: 'Review', color: 'blue' }], sessions: [] };
+  const search = { query: 'needle', results: [{ sessionId: 'task' }], vectorUsed: false };
+  const service = createHostService({
+    executeTaskTags: request => { requests.push(request); return tags; },
+    searchConversations: request => { requests.push(request); return search; },
+  });
+  const b = browser(async (route, body) => (await service(route, body)).body);
+  const tagRequest = { action: 'get', sessionIds: ['task'] };
+  const searchRequest = { query: 'needle', filters: { status: 'active' } };
+  assert.deepEqual(JSON.parse(JSON.stringify(await b.api.localDb.taskTags.execute(tagRequest))), tags);
+  assert.deepEqual(JSON.parse(JSON.stringify(await b.api.localDb.conversations.search(searchRequest))), search);
+  assert.deepEqual(requests, [tagRequest, searchRequest]);
 });
 
 // An unsupported write used to resolve successfully even though nothing was

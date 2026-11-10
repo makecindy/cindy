@@ -34,9 +34,12 @@ function composeInput(item, stored) {
   const effort = item.effort || opts.effort || stored.effort || '';
   const permissionMode = item.permissionMode || opts.permissionMode || stored.permissionMode || '';
   const content = typeof item.persistedContent === 'string' ? item.persistedContent : text;
+  // The renderer already separates visible composer text from its serialized
+  // storage envelope. Keep that distinction in queue snapshots and projections.
+  const displayContent = typeof item.chatMessage?.content === 'string' ? item.chatMessage.content : text;
   const result = { clientId: item.clientId, text, persistedContent: content,
     model, workingDir, effort, permissionMode,
-    chatMessage: { ...item.chatMessage, clientId: item.clientId, role: 'user', content },
+    chatMessage: { ...item.chatMessage, clientId: item.clientId, role: 'user', content: displayContent },
     createOpts: { agentKind, model, workingDir, effort: effort || undefined,
       permissionMode: permissionMode || undefined, providerId: stored.providerId ?? undefined,
       fastMode: stored.fastMode ?? undefined, planMode: stored.planModeEnabled ?? undefined } };

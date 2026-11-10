@@ -294,6 +294,8 @@ type PlatformService = "community" | "contributionOwnerKey" | "assertContributio
 export type PluginGatewayPorts = Omit<GhostGatewayPorts, PlatformService> & Partial<Pick<GhostGatewayPorts, PlatformService>> & {
   getGhostGrantConfirmBridge?: typeof desktopGrantBridge;
   getGhostSetupCoordinator?: typeof desktopSetupCoordinator;
+  /** Host waits may follow tool cancellation; desktop setup cards retain their own lifetime. */
+  setupFollowsToolCancellation?: boolean;
 };
 
 export function createGhostGateway(ports: PluginGatewayPorts) {
@@ -2537,7 +2539,7 @@ function getCindyGhostsMcpDeps(
         ghostId: instanceId,
         ...(!grantOnly ? { tool } : {}),
         workingDir: sessionWorkdir,
-        signal,
+        ...(ports.setupFollowsToolCancellation ? { signal } : {}),
         ...(setupPlan ? { plan: setupPlan } : {}),
       });
       if (!setup.ok) return setup;

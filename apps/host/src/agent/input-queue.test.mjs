@@ -547,6 +547,27 @@ test('the projection carries every field the renderer reads', () => {
   }
 });
 
+// Regression: Host overwrote the renderer's display text with serialized storage
+// JSON. Existing queue tests used plain persisted strings and missed this. Unit
+// coverage enters enqueue/updateContent and checks projection, dispatch and storage.
+// Standalone input-queue.test.mjs regression run: 2.23s on the local macOS host.
+test('queued composer content stays readable while storage retains its structured payload', async t => {
+  const h = createHarness();
+  t.after(() => h.queue.dispose());
+  await enqueue(h, 'display', { clientId: 'running', text: 'running' });
+  const persistedContent = JSON.stringify({ text: 'test', images: [], files: [], slashCommandRanges: [] });
+  const queued = await enqueue(h, 'display', {
+    clientId: 'queued', text: 'test with provider context', persistedContent,
+    chatMessage: { content: 'test', slashCommandRanges: [] },
+  });
+  assert.equal(queued.pendingQueue[0].chatMessage.content, 'test');
+  assert.equal(queued.pendingQueue[0].persistedContent, persistedContent);
+  h.maker.getSession('display').emit({ type: 'done' });
+  await waitFor(() => h.maker.getSession('display').sent.length === 2);
+  assert.equal(h.maker.getSession('display').sent[1], 'test with provider context');
+  assert.equal(h.persisted.find(row => row.clientId === 'queued').content, persistedContent);
+});
+
 test('updateContent updates queued item text and preserves metadata', async () => {
   const h = createHarness();
   await enqueue(h, 'task-5', { clientId: 'a', text: 'running' });
@@ -554,6 +575,7 @@ test('updateContent updates queued item text and preserves metadata', async () =
 
   const proj = await h.queue.updateContent('task-5', 'b', {
     text: 'updated text',
+    persistedContent: JSON.stringify({ text: 'updated text', images: [], files: [] }),
     files: [{ id: 'f1' }],
     chatMessage: { text: 'updated text' },
   });
@@ -563,6 +585,7 @@ test('updateContent updates queued item text and preserves metadata', async () =
   assert.equal(updatedItem.text, 'updated text');
   assert.deepEqual(updatedItem.files, [{ id: 'f1' }]);
   assert.equal(updatedItem.chatMessage.text, 'updated text');
+  assert.equal(updatedItem.chatMessage.content, 'updated text');
 });
 
 test('updateText and move modify pending queue entries', async () => {
@@ -728,7 +751,9 @@ test('restart restores a paused durable queue and deduplicates accepted input', 
   const first = createHarness(persistence);
   await first.queue.enqueue('durable', { clientId: 'a', text: 'already running' });
   await waitFor(() => delivered.has('a'));
-  await first.queue.enqueue('durable', { clientId: 'b', text: 'pending' });
+  const pendingContent = JSON.stringify({ text: 'pending', images: [], files: [], slashCommandRanges: [] });
+  await first.queue.enqueue('durable', { clientId: 'b', text: 'pending', persistedContent: pendingContent,
+    chatMessage: { content: 'pending' } });
   await first.queue.dispose();
   clearCurrentDbClient();
   sqlite.close();
@@ -744,6 +769,8 @@ test('restart restores a paused durable queue and deduplicates accepted input', 
   try {
     const restored = await restarted.queue.getProjection('durable');
     assert.deepEqual(restored.pendingQueue.map(item => item.clientId), ['b']);
+    assert.equal(restored.pendingQueue[0].chatMessage.content, 'pending');
+    assert.equal(restored.pendingQueue[0].persistedContent, pendingContent);
     assert.equal(restored.queuePaused, true);
     assert.equal(restarted.maker.sessions.size, 0);
     await restarted.queue.enqueue('durable', { clientId: 'a', text: 'already running' });

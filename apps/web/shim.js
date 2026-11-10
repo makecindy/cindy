@@ -261,6 +261,18 @@ import { startHostEventStream } from '@cindy/maker-shared/host-event-stream';
 
   // Channel table: electronAPI paths the host actually implements.
   const routes = {
+    // Browser Files have no privileged host path. Keep the synchronous preload
+    // shape so the composer reports its existing unsupported-upload message,
+    // rather than sending a Promise as a filesystem path.
+    'getFilePath': () => '',
+    'maker.openSessionInNewWindow': ([sessionId, deviceId]) => {
+      if (typeof sessionId !== 'string' || !sessionId || deviceId) {
+        return unsupported('maker.openSessionInNewWindow');
+      }
+      const url = new URL(location.href);
+      url.hash = `/cc-agent/${encodeURIComponent(sessionId)}`;
+      window.open(url.href, '_blank', 'noopener,noreferrer');
+    },
     ...hostChannels,
     'hostConnection.retry': () => eventConnection?.reconnect(),
     // Host-side telemetry sink: the browser already logs to its console.
@@ -948,6 +960,7 @@ import { startHostEventStream } from '@cindy/maker-shared/host-event-stream';
    */
   const SYNC_CHANNEL = /(Sync$|getSync$|listSync$|getDataSnapshot$)/;
   const SYNC_CHANNELS = {
+    'getFilePath': true,
     'sidebarSettings.loadSnapshot': true,
     'layout.getStateSync': true,
     'appearanceSettings.getSync': true,
@@ -1054,6 +1067,8 @@ import { startHostEventStream } from '@cindy/maker-shared/host-event-stream';
         } else if (parsed.type === 'appearance_changed') {
           settingsMirror.appearance = parsed.appearance;
           emit('appearanceSettings.onChanged', parsed.appearance);
+        } else if (parsed.type === 'task_tags_changed') {
+          emit('localDb.taskTags.onChanged', parsed.payload, parsed.ownerStamp);
         } else if (parsed.type === 'session_changed') {
           if (parsed.action === 'create') {
             emit('localDb.sessions.onCreated', parsed.session);
