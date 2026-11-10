@@ -206,7 +206,7 @@ export function BotChannelsPage({ bot }: { bot: BotProfile }) {
                   <p className="mt-0.5 flex min-w-0 items-center gap-1.5 text-12 text-[var(--text-secondary)]">
                     {identity ? (
                       <>
-                        <span className="min-w-0 truncate">{identity}</span>
+                        <span className="min-w-0 truncate" title={identity}>{identity}</span>
                         <span aria-hidden className="text-[var(--text-tertiary)]">
                           ·
                         </span>
@@ -222,7 +222,7 @@ export function BotChannelsPage({ bot }: { bot: BotProfile }) {
                         className="h-1.5 w-1.5 shrink-0 rounded-full"
                         style={{ backgroundColor: STATUS_DOT[status.tone] }}
                       />
-                      <span className="truncate">
+                      <span className="truncate" title={`${t(`bots.channels.status.${status.key}`)}${status.detail ? ` · ${status.detail}` : ''}`}>
                         {t(`bots.channels.status.${status.key}`)}
                         {status.detail ? ` · ${status.detail}` : ''}
                       </span>
@@ -405,54 +405,58 @@ function OwnerPairingPanel({
               </div>
               {canConfirmHere ? (
                 <form
-                  className="flex min-w-0 flex-wrap items-end gap-2"
+                  className="min-w-0"
                   onSubmit={(event) => {
                     event.preventDefault();
                     void approve(request);
                   }}
                 >
-                  <div className="min-w-0 flex-1 basis-40">
-                    <FormField label={t('bots.channels.pairing.codeLabel')}>
-                      {(control) => (
-                        <Input
-                          {...control}
-                          mono
-                          value={codes[request.userId] ?? ''}
-                          onChange={(value) => setCodes((current) => ({ ...current, [request.userId]: value }))}
-                          placeholder={t('bots.channels.pairing.codePlaceholder')}
-                          autoComplete="off"
-                          spellCheck={false}
-                          maxLength={32}
-                          disabled={busyUserId !== null}
-                        />
-                      )}
-                    </FormField>
-                  </div>
-                  <div className="flex shrink-0 items-center gap-2">
-                    <Button
-                      type="button"
-                      variant="secondary"
-                      tone="quiet"
-                      size="sm"
-                      compact
-                      disabled={busyUserId !== null}
-                      aria-label={t('bots.channels.pairing.dismissAria', { who: who(request) })}
-                      onClick={() => void dismiss(request)}
-                    >
-                      {t('bots.channels.pairing.dismiss')}
-                    </Button>
-                    <Button
-                      type="submit"
-                      variant="primary"
-                      size="sm"
-                      compact
-                      loading={busyUserId === request.userId}
-                      disabled={!(codes[request.userId] ?? '').trim() || (busyUserId !== null && busyUserId !== request.userId)}
-                      aria-label={t('bots.channels.pairing.approveAria', { who: who(request) })}
-                    >
-                      {t('bots.channels.pairing.approve')}
-                    </Button>
-                  </div>
+                  <FormField label={t('bots.channels.pairing.codeLabel')}>
+                    {(control) => (
+                      // 输入框与按钮同高(32px)同一行居中; 窄窗口换行时按钮靠右。
+                      <div className="flex min-w-0 flex-wrap items-center gap-2">
+                        <div className="min-w-0 flex-1 basis-40">
+                          <Input
+                            {...control}
+                            size="sm"
+                            mono
+                            value={codes[request.userId] ?? ''}
+                            onChange={(value) => setCodes((current) => ({ ...current, [request.userId]: value }))}
+                            placeholder={t('bots.channels.pairing.codePlaceholder')}
+                            autoComplete="off"
+                            spellCheck={false}
+                            maxLength={32}
+                            disabled={busyUserId !== null}
+                          />
+                        </div>
+                        <div className="ml-auto flex shrink-0 items-center gap-2">
+                          <Button
+                            type="button"
+                            variant="secondary"
+                            tone="quiet"
+                            size="md"
+                            compact
+                            disabled={busyUserId !== null}
+                            aria-label={t('bots.channels.pairing.dismissAria', { who: who(request) })}
+                            onClick={() => void dismiss(request)}
+                          >
+                            {t('bots.channels.pairing.dismiss')}
+                          </Button>
+                          <Button
+                            type="submit"
+                            variant="primary"
+                            size="md"
+                            compact
+                            loading={busyUserId === request.userId}
+                            disabled={!(codes[request.userId] ?? '').trim() || (busyUserId !== null && busyUserId !== request.userId)}
+                            aria-label={t('bots.channels.pairing.approveAria', { who: who(request) })}
+                          >
+                            {t('bots.channels.pairing.approve')}
+                          </Button>
+                        </div>
+                      </div>
+                    )}
+                  </FormField>
                 </form>
               ) : null}
               {error && error.userId === request.userId ? (
