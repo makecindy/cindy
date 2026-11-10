@@ -52,4 +52,20 @@ describe('memoryTidyTrigger', () => {
     await expect(trigger.onTurnDone('task-1')).resolves.toBeUndefined();
     expect(tidy).toHaveBeenCalledTimes(1);
   });
+
+  // 评审 (Greptile P1): 账号只在循环前核对一次的话, 第一份整理等模型时切了账号, 后面的会按旧任务整理新账号。
+  it('第一份整理期间切了账号: 后面的不再整理', async () => {
+    const owner = { key: 'owner-a' };
+    const { tidy, getManager } = fakeManager(owner);
+    tidy.mockImplementationOnce(async () => {
+      owner.key = 'owner-b';
+      throw new Error('memory:not-ready');
+    });
+    const trigger = createMemoryTidyTrigger();
+
+    trigger.noteWrite('task-1', '/repo', getManager);
+    trigger.noteWrite('task-1', 'user:account', getManager);
+    await trigger.onTurnDone('task-1');
+    expect(tidy.mock.calls).toEqual([['/repo', 'auto']]);
+  });
 });

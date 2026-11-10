@@ -110,7 +110,10 @@ describe('MakerMemoryManager.tidy', () => {
     await rm(root, { recursive: true, force: true });
   });
 
-  function managerWith(reply: (prompt: string) => string | null | Promise<string | null>) {
+  function managerWith(
+    reply: (prompt: string) => string | null | Promise<string | null>,
+    config?: { hardIndexBytes: number },
+  ) {
     const reviewOneShot = vi.fn(async (prompt: string) => reply(prompt));
     const manager = new MakerMemoryManager({
       basePath: root,
@@ -120,6 +123,7 @@ describe('MakerMemoryManager.tidy', () => {
       initialEnabled: true,
       isIndependentScope: (key) => key.startsWith('bot:'),
       reviewOneShot,
+      ...(config ? { config } : {}),
     });
     return { manager, reviewOneShot };
   }
@@ -195,6 +199,117 @@ describe('MakerMemoryManager.tidy', () => {
 
     expect(await manager.tidy(WORKDIR, 'manual')).toEqual({ status: 'unavailable' });
     expect((await (await manager.getStore(WORKDIR)).list()).length).toBe(2);
+    manager.dispose();
+  });
+
+  // 评审 (Codex P1 / Greptile P1): 提议是按快照做的, 落盘时参与判断的每一条记忆都得核对, 否则会按旧内容误删。
+  it('合并的来源在模型思考期间被改过: 整项不动, 保留的那条也不被改写', async () => {
+    let manager!: MakerMemoryManager;
+    ({ manager } = managerWith(async () => {
+      await manager.write(WORKDIR, {
+        type: 'feedback', name: 'zh', title: 'zh', description: 'zh hook', body: '这条刚被改过', mode: 'update',
+      });
+      return mergePlan;
+    }));
+    await write(manager, 'zh', '回复一律用中文');
+    await write(manager, 'zh2', '始终用中文回复');
+
+    expect(await manager.tidy(WORKDIR, 'manual')).toEqual({ status: 'done', run: null });
+    const bodies = Object.fromEntries((await (await manager.getStore(WORKDIR)).list()).map((r) => [r.filename, r.body]));
+    expect(bodies).toEqual({ 'feedback_zh.md': '这条刚被改过', 'feedback_zh2.md': '始终用中文回复' });
+    manager.dispose();
+  });
+
+  it('覆盖方在模型思考期间被删: 不删被它覆盖的那条, 否则这件事不再有任何副本', async () => {
+    let manager!: MakerMemoryManager;
+    ({ manager } = managerWith(async () => {
+      await (await manager.getStore(WORKDIR)).delete('feedback_zh2.md');
+      return JSON.stringify({
+        merges: [],
+        deletes: [{ filename: 'feedback_zh.md', supersededBy: 'feedback_zh2.md', reason: '被覆盖' }],
+      });
+    }));
+    await write(manager, 'zh', '回复一律用中文');
+    await write(manager, 'zh2', '始终用中文回复');
+
+    expect(await manager.tidy(WORKDIR, 'manual')).toEqual({ status: 'done', run: null });
+    expect((await (await manager.getStore(WORKDIR)).list()).map((r) => r.filename)).toEqual(['feedback_zh.md']);
+    manager.dispose();
+  });
+
+  // 评审 (Codex P2 / Greptile P1): 满额的记忆正是最需要整理的, 预算要按合并后的结果算。
+  it('索引已到硬上限时整理仍能合并 (中间态会超限、结果更小), 并可撤销', async () => {
+    const plan = JSON.stringify({
+      merges: [{
+        sources: ['feedback_zh.md', 'feedback_zh2.md'],
+        title: '始终用中文回复(含总结)', description: '用户要求全程使用中文交流和回复，包括总结', body: '始终用中文回复。', reason: '同一件事',
+      }],
+      deletes: [],
+    });
+    const seed = managerWith(() => plan);
+    await seed.manager.write(WORKDIR, { type: 'feedback', name: 'zh', title: '回复一律用中文', description: '用户要求所有回复一律使用中文', body: '回复一律用中文' });
+    await seed.manager.write(WORKDIR, { type: 'feedback', name: 'zh2', title: '始终用中文回复', description: '用户要求全程使用中文交流', body: '始终用中文回复' });
+    const full = await (await seed.manager.getStore(WORKDIR)).getIndexSize();
+    seed.manager.dispose();
+    // 上限正好等于现在的索引: 先改写保留的那条 (标题更长) 时来源还在, 中间态会超限; 合并完成后索引更小。
+    const tight = managerWith(() => plan, { hardIndexBytes: full });
+    const store = await tight.manager.getStore(WORKDIR);
+
+    const outcome = await tight.manager.tidy(WORKDIR, 'manual');
+    expect(outcome.status).toBe('done');
+    expect((await store.list()).map((r) => r.filename)).toEqual(['feedback_zh2.md']);
+
+    // 撤销把两条都恢复出来; 恢复的是整理前已经存在的内容, 不能被索引上限挡住。
+    const [run] = await tight.manager.listTidyRuns(WORKDIR);
+    expect(await tight.manager.undoTidy(WORKDIR, run!.id)).toEqual({ restored: 2, skipped: 0 });
+    expect((await store.list()).map((r) => r.filename).sort()).toEqual(['feedback_zh.md', 'feedback_zh2.md']);
+    tight.manager.dispose();
+  });
+
+  it('索引原本就超过硬上限 (旧记忆并入后): 撤销仍能完整恢复, 不把预算失败算成「整理后被改过」', async () => {
+    const plan = JSON.stringify({
+      merges: [{ sources: ['feedback_zh.md', 'feedback_zh2.md'], title: 'z', description: 'z', body: 'z', reason: '同一件事' }],
+      deletes: [],
+    });
+    const { manager } = managerWith(() => plan);
+    await write(manager, 'zh', '回复一律用中文');
+    await write(manager, 'zh2', '始终用中文回复');
+    await write(manager, 'other', '称用户不称主人');
+    manager.dispose();
+    // 上限比现在的索引小很多: 等于升级前就超限的库。
+    const over = managerWith(() => plan, { hardIndexBytes: 120 });
+    expect((await over.manager.tidy(WORKDIR, 'manual')).status).toBe('done');
+    const [run] = await over.manager.listTidyRuns(WORKDIR);
+    expect(await over.manager.undoTidy(WORKDIR, run!.id)).toEqual({ restored: 2, skipped: 0 });
+    expect((await over.manager.listTidyRuns(WORKDIR))[0]?.undoneAt).toBeTruthy();
+    over.manager.dispose();
+  });
+
+  // 评审 (Greptile P1): 整理等模型的时候用户撤销了旧记录, 整理结束不能把那个标记冲掉。
+  it('整理期间撤销了旧记录: 整理提交后那条的「已撤销」标记还在, 新记录也在', async () => {
+    const first = managerWith(() => mergePlan);
+    await write(first.manager, 'zh', '回复一律用中文');
+    await write(first.manager, 'zh2', '始终用中文回复');
+    await first.manager.tidy(WORKDIR, 'manual');
+    const [oldRun] = await first.manager.listTidyRuns(WORKDIR);
+    first.manager.dispose();
+
+    let manager!: MakerMemoryManager;
+    const plan = JSON.stringify({
+      merges: [{ sources: ['feedback_zh2.md', 'feedback_x.md'], title: 'x', description: 'x', body: 'x', reason: '同一件事' }],
+      deletes: [],
+    });
+    ({ manager } = managerWith(async () => {
+      await manager.undoTidy(WORKDIR, oldRun!.id);
+      return plan;
+    }));
+    await write(manager, 'x', '新的一条');
+    // undo 把 zh 写回来了; 再造出第二轮整理要用到的两条。
+    const outcome = await manager.tidy(WORKDIR, 'manual');
+    expect(outcome.status).toBe('done');
+    const runs = await manager.listTidyRuns(WORKDIR);
+    expect(runs.find((r) => r.id === oldRun!.id)?.undoneAt).toBeTruthy();
+    expect(runs.length).toBe(outcome.status === 'done' && outcome.run ? 2 : 1);
     manager.dispose();
   });
 

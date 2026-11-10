@@ -49,6 +49,9 @@ export function createMemoryTidyTrigger() {
       const manager = entry.getManager();
       if (!manager || manager.currentOwnerScopeKey() !== entry.owner) return;
       for (const storeKey of entry.storeKeys) {
+        // 每次整理前都重新核对账号: 第一次等模型的时候切了账号, 后面的不能再按旧任务去整理新账号的记忆
+        // (共享的管理器此时已经指向新账号, 同名的键会打开新账号的那一份)。
+        if (manager.currentOwnerScopeKey() !== entry.owner) return;
         try {
           const outcome = await manager.tidy(storeKey, 'auto');
           if (outcome.status === 'failed') log.warn('memory tidy produced no usable plan');

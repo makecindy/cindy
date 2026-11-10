@@ -682,4 +682,21 @@ describe('Cindy 记忆工具:账号级与项目两份之间的路由', () => {
     ]);
     expect(await stored()).toEqual({ user: ['user_concise.md'], project: [] });
   });
+
+  // 评审 (Greptile P1): 目标在两份里都有又没指明 scope 时, 不替调用方挑一份去覆盖。
+  it('合并的目标在两份里都有同名文件:不传 scope 报 INVALID_PARAMS 且什么都不动,指明 scope 后照常', async () => {
+    await call('memory_write', entry('feedback', 'style', { body: 'project copy' }));
+    await call('memory_write', entry('feedback', 'style', { body: 'user copy', scope: 'user' }));
+    await call('memory_write', entry('feedback', 'extra', { body: 'extra' }));
+
+    const args = { sources: ['feedback_extra.md'], target: entry('feedback', 'style', { body: 'merged' }) };
+    expect(await call('memory_consolidate', args)).toMatchObject({ ok: false, code: 'INVALID_PARAMS' });
+    expect(await stored()).toEqual({ user: ['feedback_style.md'], project: ['feedback_extra.md', 'feedback_style.md'] });
+    expect(data(await call('memory_read', { filename: 'feedback_style.md', scope: 'user' })))
+      .toMatchObject({ body: expect.stringContaining('user copy') });
+
+    expect(data(await call('memory_consolidate', { ...args, scope: 'project' })))
+      .toMatchObject({ scope: 'project', filename: 'feedback_style.md' });
+    expect(await stored()).toEqual({ user: ['feedback_style.md'], project: ['feedback_style.md'] });
+  });
 });

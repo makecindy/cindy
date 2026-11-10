@@ -33,6 +33,7 @@ vi.mock('@/components/ui/toast', () => ({
 
 import { BotMemorySettings } from '../BotMemorySettings';
 import { MemoryEntriesPanel } from '@/components/settings/MemoryEntriesPanel';
+import { MemoryEntriesView, type MemoryEntriesSource } from '@/components/memory/MemoryEntriesView';
 import { setMakerMemoryEnabled } from '@/lib/memorySettingsStore';
 
 const summaries: BotMemorySummary[] = [
@@ -509,5 +510,41 @@ describe('MemoryEntriesPanel (Cindy memory)', () => {
     ));
     await waitFor(() => expect(entries.scopes).toHaveBeenCalledTimes(2));
     expect(entries.list).toHaveBeenCalledTimes(2);
+  });
+});
+
+/**
+ * 测试价值(共用列表 MemoryEntriesView 切换范围, Greptile 评审)
+ * - 生产入口与可观察结果: 渲染 MemoryEntriesView, 把 source.key 换成另一份记忆; 断言新结果到达之前
+ *   旧范围的条目不再显示 (也就点不到), 到达后显示新范围的条目。
+ * - 规则依据: 列表只显示属于当前范围的条目; 旧条目可点会拿旧文件名去读新范围 (没有同名文件就突然退回
+ *   列表, 有同名文件则打开另一条内容)。
+ * - 现有覆盖缺口: 上面的用例都不切换范围。
+ * - 最小失败输入: 范围 A 已加载, 换成范围 B 而 B 的列表还没回来。
+ * - tier: unit(jsdom)。
+ */
+describe('MemoryEntriesView switching to another memory', () => {
+  const entry = (filename: string, title: string): BotMemorySummary => ({
+    filename, type: 'feedback', title, preview: '', updatedAt: '2026-09-17T05:01:04.387Z',
+  });
+  const sourceOf = (key: string, list: MemoryEntriesSource['list']): MemoryEntriesSource => ({
+    key, list, read: vi.fn(), update: vi.fn(), delete: vi.fn(),
+  });
+  const refs = { backRef: { current: null }, leaveRef: { current: null } };
+  const texts = { deleteDescription: () => '', changed: '' };
+
+  it('does not keep showing (or opening) the previous memory while the new one loads', async () => {
+    let finishB!: (items: BotMemorySummary[]) => void;
+    const a = sourceOf('scope-a', async () => [entry('feedback_only-in-a.md', '只在 A 里')]);
+    const b = sourceOf('scope-b', () => new Promise((resolve) => { finishB = resolve; }));
+    const view = render(<MemoryEntriesView source={a} texts={texts} {...refs} />);
+    expect(await screen.findByText('只在 A 里')).toBeTruthy();
+
+    view.rerender(<MemoryEntriesView source={b} texts={texts} {...refs} />);
+    expect(screen.queryByText('只在 A 里')).toBeNull();
+
+    await act(async () => finishB([entry('feedback_only-in-b.md', '只在 B 里')]));
+    expect(await screen.findByText('只在 B 里')).toBeTruthy();
+    expect(screen.queryByText('只在 A 里')).toBeNull();
   });
 });

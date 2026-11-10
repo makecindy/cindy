@@ -217,9 +217,16 @@ function MemoryList({
   const sourceRef = useSourceRef(source);
   const { day } = useDateLabels();
   const [query, setQuery] = useState('');
-  const [entries, setEntries] = useState<BotMemorySummary[] | null>(null);
-  const [total, setTotal] = useState<number | null>(null);
-  const [failed, setFailed] = useState(false);
+  // 结果带着它属于哪一份记忆: 切换范围后, 新结果到达前旧范围的条目既不显示也不能点
+  // (点了会拿旧文件名去读新范围: 没有同名文件就突然退回列表, 有同名文件则打开另一条内容)。
+  const [loaded, setLoaded] = useState<{
+    key: string;
+    entries: BotMemorySummary[] | null;
+    total: number | null;
+    failed: boolean;
+  }>({ key: source.key, entries: null, total: null, failed: false });
+  const current = loaded.key === source.key ? loaded : { key: source.key, entries: null, total: null, failed: false };
+  const { entries, total, failed } = current;
   const [reload, setReload] = useState(0);
 
   useEffect(() => {
@@ -230,12 +237,21 @@ function MemoryList({
         .list(search || undefined)
         .then((next) => {
           if (cancelled) return;
-          setEntries(next);
-          if (!search) setTotal(next.length);
-          setFailed(false);
+          setLoaded((prev) => ({
+            key: source.key,
+            entries: next,
+            total: !search ? next.length : prev.key === source.key ? prev.total : null,
+            failed: false,
+          }));
         })
         .catch(() => {
-          if (!cancelled) setFailed(true);
+          if (cancelled) return;
+          setLoaded((prev) => ({
+            key: source.key,
+            entries: prev.key === source.key ? prev.entries : null,
+            total: prev.key === source.key ? prev.total : null,
+            failed: true,
+          }));
         });
     };
     const timer = search ? setTimeout(run, SEARCH_DEBOUNCE_MS) : null;

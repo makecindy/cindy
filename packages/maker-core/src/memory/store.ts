@@ -200,6 +200,46 @@ export class MakerMemoryStore {
     return saved;
   }
 
+  /** 整理的一次合并 (见 MemoryStorage.applyTidyMerge)。 */
+  async applyTidyMerge(
+    input: Parameters<MemoryStorage['applyTidyMerge']>[0],
+  ): Promise<Awaited<ReturnType<MemoryStorage['applyTidyMerge']>>> {
+    this.assertScopeOk();
+    await this.init();
+    const result = await this.storage.applyTidyMerge(input);
+    await this.syncWrite({ ok: true, filename: input.keep.filename });
+    for (const filename of result.deleted) this.syncDelete(filename);
+    return result;
+  }
+
+  /** 整理里的一次「已被覆盖」的删除 (见 MemoryStorage.applyTidyCoveredDelete)。 */
+  async applyTidyCoveredDelete(input: Parameters<MemoryStorage['applyTidyCoveredDelete']>[0]): Promise<void> {
+    this.assertScopeOk();
+    await this.init();
+    await this.storage.applyTidyCoveredDelete(input);
+    this.assertScopeOk();
+    this.syncDelete(input.target.filename);
+  }
+
+  /** 撤销整理时恢复一条记忆 (见 MemoryStorage.restoreSnapshot)。 */
+  async restoreSnapshot(opts: Parameters<MemoryStorage['restoreSnapshot']>[0]): Promise<void> {
+    this.assertScopeOk();
+    await this.init();
+    await this.storage.restoreSnapshot(opts);
+    await this.syncWrite({ ok: true, filename: 'filename' in opts ? opts.filename : buildFilename(opts.type, opts.name) });
+  }
+
+  private syncDelete(filename: string): void {
+    try {
+      this.fts.delete(filename);
+    } catch (e) {
+      this.logger.warn('memory fts delete failed (file already removed, will rebuild on next sanity)', {
+        filename,
+        error: String(e),
+      });
+    }
+  }
+
   private async syncWrite(result: WriteResult): Promise<WriteResult> {
     // storage await 后、FTS 同步前复核 (review #2388 Codex 15th P1): 边界不得
     // 让 manager.write 直接路径 (Pi compaction) 改旧 owner 的 fts.db。
@@ -261,6 +301,21 @@ export class MakerMemoryStore {
     }
     this.assertScopeOk();
     return normalizeTidyState(raw);
+  }
+
+  /**
+   * 在目录锁内读最新的整理状态、交给 update 改、再写回。整理和撤销都用它提交:
+   * 整理要等模型好几秒, 期间用户可能撤销了旧记录; 各自拿启动时读到的整份状态去覆盖,
+   * 就会把对方刚写下的标记冲掉。
+   */
+  async updateTidyState(update: (current: TidyState) => TidyState): Promise<TidyState> {
+    this.assertScopeOk();
+    await this.init();
+    return this.storage.runExclusive(async () => {
+      const next = update(await this.readTidyState());
+      await this.writeTidyState(next);
+      return next;
+    });
   }
 
   /** 同目录临时文件再 rename, 中途退出不留半截文件。 */

@@ -329,6 +329,8 @@ export class MakerMemoryManager {
   private readonly mergedSubScopes = new Set<string>();
   /** 正在整理的 store key; 同一份记忆不并发整理。 */
   private readonly tidying = new Set<string>();
+  /** 正在撤销的整理记录 (`<store key>\n<run id>`); 同一次整理不并发撤销两回。 */
+  private readonly undoing = new Set<string>();
 
   constructor(private readonly deps: MakerMemoryManagerDeps) {
     this.enabled = deps.initialEnabled ?? false;
@@ -1371,7 +1373,7 @@ export class MakerMemoryManager {
       if (!this.deps.reviewOneShot) return { status: 'unavailable' };
       const nowIso = new Date(now).toISOString();
       // 先记下这次尝试: 辅助模型不可用或输出不可解析时, 不在每一轮任务结束后重试。
-      await store.writeTidyState({ ...state, lastAttemptAt: nowIso });
+      await store.updateTidyState((current) => ({ ...current, lastAttemptAt: nowIso }));
       const text = await this.deps.reviewOneShot(buildTidyPrompt(records), TIDY_ONE_SHOT_OPTS);
       // 模型调用横跨 await: 账号边界已变则丢弃提议, 不落盘。
       this.assertScopeUnchanged(scopeAtEntry);
@@ -1381,51 +1383,61 @@ export class MakerMemoryManager {
       if (!plan) return { status: 'failed' };
       const valid = validateTidyPlan(plan, records, store.config);
       const byName = new Map(records.map((r) => [r.filename, r]));
+      // 每个文件此刻的版本: 本轮自己改写过的 (合并后的保留条目) 更新, 删掉的移除。
+      // 一项操作用到的每一条记忆都按这里的版本在存储锁内核对, 任一不符整项跳过。
+      const live = new Map(records.map((r) => [r.filename, r.frontmatter.updatedAt]));
       const changes: TidyChange[] = [];
       let failure: unknown = null;
       try {
         for (const merge of valid.merges) {
           // 保留最近改过的那一条的文件名, 其余并入后删除。
-          const [keep, ...rest] = merge.sources
+          const members = merge.sources
             .map((name) => byName.get(name)!)
             .sort((a, b) => b.frontmatter.updatedAt.localeCompare(a.frontmatter.updatedAt));
+          const [keep, ...rest] = members;
           if (!keep) continue;
-          let saved: MemoryRecord;
+          let applied: Awaited<ReturnType<MakerMemoryStore['applyTidyMerge']>>;
           try {
-            saved = await store.update(keep.filename, keep.frontmatter.updatedAt, {
-              title: merge.title,
-              description: merge.description,
-              body: merge.body,
+            applied = await store.applyTidyMerge({
+              keep: { filename: keep.filename, updatedAt: live.get(keep.filename)! },
+              sources: rest.map((r) => ({ filename: r.filename, updatedAt: live.get(r.filename)! })),
+              changes: { title: merge.title, description: merge.description, body: merge.body },
             });
           } catch (e) {
             if (isSkippableTidyError(e)) continue;
             throw e;
           }
+          live.set(keep.filename, applied.saved.frontmatter.updatedAt);
           changes.push({
             kind: 'updated',
             filename: keep.filename,
             before: tidySnapshot(keep),
             after: {
-              title: saved.frontmatter.title,
-              description: saved.frontmatter.description,
-              body: saved.body,
-              updatedAt: saved.frontmatter.updatedAt,
+              title: applied.saved.frontmatter.title,
+              description: applied.saved.frontmatter.description,
+              body: applied.saved.body,
+              updatedAt: applied.saved.frontmatter.updatedAt,
             },
             reason: merge.reason,
           });
-          for (const other of rest) {
-            try {
-              await store.delete(other.filename, other.frontmatter.updatedAt);
-              changes.push({ kind: 'deleted', filename: other.filename, before: tidySnapshot(other), reason: merge.reason });
-            } catch (e) {
-              if (!isSkippableTidyError(e)) throw e;
-            }
+          for (const name of applied.deleted) {
+            live.delete(name);
+            changes.push({ kind: 'deleted', filename: name, before: tidySnapshot(byName.get(name)!), reason: merge.reason });
           }
+          if (applied.failure) throw applied.failure;
         }
         for (const del of valid.deletes) {
           const record = byName.get(del.filename)!;
+          const target = live.get(record.filename);
+          const covering = live.get(del.supersededBy);
+          // 自己或覆盖它的那一条在本轮已经不在了 (被并入后删掉): 覆盖关系无从核对, 不删。
+          if (target === undefined || covering === undefined) continue;
           try {
-            await store.delete(record.filename, record.frontmatter.updatedAt);
+            await store.applyTidyCoveredDelete({
+              target: { filename: record.filename, updatedAt: target },
+              coveredBy: { filename: del.supersededBy, updatedAt: covering },
+            });
+            live.delete(record.filename);
             changes.push({ kind: 'deleted', filename: record.filename, before: tidySnapshot(record), reason: del.reason });
           } catch (e) {
             if (!isSkippableTidyError(e)) throw e;
@@ -1437,18 +1449,19 @@ export class MakerMemoryManager {
       // 中途出错也要把已做的改动记下来, 否则它们无法撤销。
       const run: TidyRun | null =
         changes.length > 0 ? { id: randomUUID(), at: nowIso, trigger, changes } : null;
-      const next: TidyState = {
+      // 提交时合并最新的状态: 等模型的这段时间里, 用户可能撤销了旧记录, 整份覆盖会冲掉那个标记。
+      const commit = (current: TidyState): TidyState => ({
         version: 1,
         lastAttemptAt: nowIso,
-        lastTidyAt: failure ? state.lastTidyAt : nowIso,
-        runs: run ? [run, ...state.runs].slice(0, TIDY_MAX_RUNS) : state.runs,
-      };
+        lastTidyAt: failure ? current.lastTidyAt : nowIso,
+        runs: run ? [run, ...current.runs].slice(0, TIDY_MAX_RUNS) : current.runs,
+      });
       if (failure) {
-        await store.writeTidyState(next).catch((e) =>
+        await store.updateTidyState(commit).catch((e) =>
           this.logger.warn('memory tidy: could not record partial run', { error: String(e) }));
         throw failure;
       }
-      await store.writeTidyState(next);
+      await store.updateTidyState(commit);
       this.logger.info('memory tidy finished', { trigger, changes: changes.length });
       return { status: 'done', run };
     } finally {
@@ -1468,48 +1481,63 @@ export class MakerMemoryManager {
    */
   async undoTidy(storeKey: string, runId: string): Promise<{ restored: number; skipped: number }> {
     const store = await this.getStore(storeKey, { skipDisabledCheck: true });
-    const state = await store.readTidyState();
-    const run = state.runs.find((r) => r.id === runId);
+    const run = (await store.readTidyState()).runs.find((r) => r.id === runId);
     if (!run) throw new MemoryError('not-found', 'tidy run not found');
     if (run.undoneAt) return { restored: 0, skipped: 0 };
-    let restored = 0;
-    let skipped = 0;
-    for (const change of run.changes) {
-      try {
-        if (change.kind === 'updated') {
-          if (!change.after) {
-            skipped += 1;
-            continue;
+    // 同一次整理同时被撤销两回 (连点、两个窗口): 第二个什么都不做, 不把已恢复的条目当成「被改过」。
+    const inFlight = `${storeKey}\n${runId}`;
+    if (this.undoing.has(inFlight)) return { restored: 0, skipped: 0 };
+    this.undoing.add(inFlight);
+    try {
+      let restored = 0;
+      let skipped = 0;
+      for (const change of run.changes) {
+        try {
+          if (change.kind === 'updated') {
+            if (!change.after) {
+              skipped += 1;
+              continue;
+            }
+            await store.restoreSnapshot({
+              filename: change.filename,
+              expectedUpdatedAt: change.after.updatedAt,
+              changes: {
+                title: change.before.title,
+                description: change.before.description,
+                body: change.before.body,
+              },
+            });
+          } else {
+            const parsed = parseFilename(change.filename);
+            if (!parsed) {
+              skipped += 1;
+              continue;
+            }
+            await store.restoreSnapshot({
+              type: parsed.type,
+              name: parsed.slug,
+              title: change.before.title,
+              description: change.before.description,
+              body: change.before.body,
+              mode: 'create',
+            });
           }
-          await store.update(change.filename, change.after.updatedAt, {
-            title: change.before.title,
-            description: change.before.description,
-            body: change.before.body,
-          });
-        } else {
-          const parsed = parseFilename(change.filename);
-          if (!parsed) {
-            skipped += 1;
-            continue;
-          }
-          await store.write({
-            type: parsed.type,
-            name: parsed.slug,
-            title: change.before.title,
-            description: change.before.description,
-            body: change.before.body,
-            mode: 'create',
-          });
+          restored += 1;
+        } catch (e) {
+          if (!isSkippableTidyError(e)) throw e;
+          skipped += 1;
         }
-        restored += 1;
-      } catch (e) {
-        if (!isSkippableTidyError(e)) throw e;
-        skipped += 1;
       }
+      // 只给这一次的记录打上标记, 其余沿用提交时读到的最新状态 (这段时间里整理可能刚写入了新记录)。
+      const undoneAt = new Date().toISOString();
+      await store.updateTidyState((current) => ({
+        ...current,
+        runs: current.runs.map((r) => (r.id === runId ? { ...r, undoneAt } : r)),
+      }));
+      return { restored, skipped };
+    } finally {
+      this.undoing.delete(inFlight);
     }
-    run.undoneAt = new Date().toISOString();
-    await store.writeTidyState(state);
-    return { restored, skipped };
   }
 
   /** 直接给 store 一个 write 入口. mcp-server 层会拿这个 (而不是先 getStore 再 write) */

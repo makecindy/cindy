@@ -48,7 +48,9 @@ export function registerMemoryConsolidateTool(registry: MemoryToolRegistry, deps
         const wanted = scope as MemoryScopeName | undefined;
         const targetFile = `${target.type}_${target.name}.md`;
         // 结果放哪一份: 指定的优先; 目标已存在就跟着它; 否则按新条目的规则。
-        const existing = wanted ? null : await storeHolding(ctx, targetFile).catch(() => null);
+        // 两份里都有同名目标又没指明 scope 时, storeHolding 报「要指明 scope」: 原样返回给调用方,
+        // 不替它挑一份去覆盖。
+        const existing = wanted ? null : await storeHolding(ctx, targetFile);
         const dest = existing && (await existing.store.read(targetFile).then(() => true, () => false))
           ? existing
           : await storeForNew(ctx, wanted, target.type);
