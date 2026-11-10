@@ -19,6 +19,7 @@ import { inspectCindyFile } from '../../cindy-files/reader';
 import { getLocalThemesDir, loadLocalThemes, loadLocalThemesSync, resetLocalThemesMigrationForTest } from '../loader';
 import { installThemePackage, readThemePackageResourceSync } from '../packages';
 import { importThemePackageFromTask } from '../agent';
+import * as atomicWrites from '../../utils/atomicWriteFile';
 
 let root: string;
 const light = { id: 'mist-light', name: 'Mist', type: 'light', family: 'mist', colors: { surface: '#fafafa' }, brand: { icon: 'assets/icon.png' } };
@@ -238,10 +239,10 @@ describe('theme package installation and loading', () => {
     const before = loadLocalThemesSync();
     const index = path.join(dir, '.packages', 'installed.json');
     const beforeIndex = fs.readFileSync(index);
-    const rename = fs.renameSync;
-    vi.spyOn(fs, 'renameSync').mockImplementation((from, to) => {
-      if (to === index) throw Object.assign(new Error('Write failed'), { code: 'EIO' });
-      return rename(from, to);
+    // Inject at the installer's commit boundary: raw rename path spelling is
+    // platform-dependent and must not decide whether the failure is exercised.
+    vi.spyOn(atomicWrites, 'atomicWriteFileSync').mockImplementation(() => {
+      throw Object.assign(new Error('Write failed'), { code: 'EIO' });
     });
     const update = await packageFile([{ ...light, colors: { surface: '#abcdef' } }], { 'assets/icon.png': Buffer.concat([icon, Buffer.from('replacement')]) });
     await expect(installThemePackage(update, dir)).rejects.toThrow('Write failed');
