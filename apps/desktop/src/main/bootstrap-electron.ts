@@ -124,6 +124,7 @@ import {
   recordDesktopDevAuthStartupResult,
   markDesktopDevStartupFailed,
   markDesktopDevWindowReady,
+  enableDesktopDevQuitRequests,
 } from './devStartupStatus';
 import {
   installWindowFullscreenStateBroadcast,
@@ -11094,6 +11095,11 @@ onQuit('local-db-close', () => localDbCloseDb(), 'post-async');
 // original mode (5s), then await Electron geometry (5s). Keep a margin before
 // the existing 20s hard-exit watchdog; completed disposers never wait this long.
 installQuitHandler(16000);
+if (!app.isPackaged && process.platform === 'win32') {
+  const stopQuitRequests = enableDesktopDevQuitRequests(() => app.quit());
+  onQuit('dev-quit-requests', stopQuitRequests);
+  process.once('exit', stopQuitRequests);
+}
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
