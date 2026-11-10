@@ -946,6 +946,8 @@ export type LiziMcpCallerKind = 'root' | 'descendant' | 'unknown';
 export interface LiziMcpSessionContext {
   agentKind: string;
   workingDir: string;
+  /** Host-attested plugin caller. This never supplies or inherits a Session identity. */
+  hostCaller?: Extract<import('./tool-call-authority.js').HostToolCaller, { kind: 'plugin' }>;
   /** Host-owned memory namespace override shared with the agent prompt path. */
   memoryScopeKey?: string;
   /**
@@ -1006,6 +1008,8 @@ export interface LiziMcpProvider {
   };
   isEnabled?(context: LiziMcpSessionContext): boolean;
   toClaudeSdkConfig(context: LiziMcpSessionContext): unknown | null;
+  /** Same registered tool handlers, for another attested in-process caller. */
+  toHostTools?(context: LiziMcpSessionContext): import('./host-tool-runtime.js').HostToolRuntime;
   /** Remote MCP config for Codex app-server; SDK instance providers use the host HTTP bridge instead. */
   toCodexMcpConfig?(context: LiziMcpSessionContext): CodexHttpMcpConfig | null;
   /** Extra env required by remote MCP configs, e.g. bearer tokens. */

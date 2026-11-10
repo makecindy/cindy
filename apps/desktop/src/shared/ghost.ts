@@ -376,6 +376,7 @@ export const GHOST_NODE_CHILD_MODE_FLAG = '__cindy-node-child__';
 
 /** worker → 主机:代启/喂 stdin/收 stdin/杀进程。 */
 export type GhostNodeChildToHostMessage =
+  | (GhostPipeHostToolRequest & { reqId: string })
   | { type: 'authenticated-fetch'; reqId: string; rpcId: string; authorization: string; request: Record<string, unknown> }
   | { type: 'plugin-authorize'; reqId: string; rpcId: string; request: PluginAuthorizationRequest }
   | { type: 'device-authorize'; reqId: string; rpcId: string; url: string }
@@ -403,6 +404,12 @@ function isChildId(v: unknown): v is string {
 export function parseGhostNodeChildToHostMessage(raw: unknown): GhostNodeChildToHostMessage | null {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
   const m = raw as Record<string, unknown>;
+  if (m.type === 'host-tool-request') {
+    if (Object.keys(m).sort().join(',') !== 'args,reqId,server,tool,type' || !isChildId(m.reqId) ||
+      typeof m.server !== 'string' || typeof m.tool !== 'string' || !m.args || typeof m.args !== 'object' || Array.isArray(m.args)) return null;
+    try { JSON.stringify(m.args); } catch { return null; }
+    return { type: m.type, reqId: m.reqId, server: m.server, tool: m.tool, args: m.args as Record<string, unknown> };
+  }
   if (m.type === 'authenticated-fetch') {
     if (!isChildId(m.reqId) || typeof m.rpcId !== 'string' || !/^\d{1,16}$/.test(m.rpcId)) return null;
     if (Object.keys(m).sort().join(',') !== 'authorization,reqId,request,rpcId,type'
@@ -7007,6 +7014,13 @@ export type GhostAppRegion = 'cn' | 'global';
  * 上行:读取宿主公开上下文。`cindy.request({kind:'app-context'})` 是 preload
  * 提供的语法糖,底层仍走同一根 ghost-pipe 与主机公开上下文校验。
  */
+export interface GhostPipeHostToolRequest {
+  type: 'host-tool-request';
+  server: string;
+  tool: string;
+  args: Record<string, unknown>;
+}
+
 export type GhostPipeHostRequest =
   | {
       type: 'host-request';

@@ -17,6 +17,7 @@ import {
 } from '../../../shared/pluginIdentity.js';
 
 const productionIdentityDeps = {
+  requestPluginHostToolCall: async () => ({ isError: true, content: [{ type: 'text', text: '{"ok":false,"errorCode":"HOST_NOT_READY"}' }] }),
   createGhostExecutionPipe,
   setPluginEnabled,
   parsePluginStoragePart,

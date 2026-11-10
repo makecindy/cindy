@@ -8041,6 +8041,8 @@
         "hostTools_scheduler": "Automatisierungsverwaltung",
         "hostTools_schedulerDetail": "Mit Cindys Werkzeugen automatische Aufgaben erstellen, auflisten, ändern, pausieren, fortsetzen, löschen und ausführen sowie den Verlauf lesen. Vorgänge mit hohem Risiko erfordern jedes Mal eine Bestätigung.",
         "hostToolsRequest": "Berechtigung für {{group}} prüfen",
+        "hostToolCallTitle": "Plugin-Vorgang erlauben",
+        "hostToolCallMessage": "Das Plugin „{{name}}“ möchte {{server}} / {{tool}} aufrufen. Diese Erlaubnis gilt nur für die folgenden Parameter.",
         "agentHiddenTasks": "Kann Hintergrundaufgaben erstellen, die in der Aufgabenliste ausgeblendet sind",
         "agentHiddenTasksDetail": "Von diesem Plugin erstellte Aufgaben können in der Aufgabenliste, der Suche und den Benachrichtigungen ausgeblendet bleiben. Unter „Hintergrundaufgaben“ auf der Seite dieses Plugins kannst du sie jederzeit ansehen, öffnen oder in der Aufgabenliste einblenden; bei der Deinstallation des Plugins werden sie wieder eingeblendet.",
         "agentErrand": "Aufgaben erstellen, Arbeiten ausführen und Ergebnisse lesen",

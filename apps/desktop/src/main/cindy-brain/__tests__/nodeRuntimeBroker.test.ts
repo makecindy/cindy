@@ -11,6 +11,7 @@ import type { InstalledGhost } from '../../../shared/ghost';
 import {
   createUtilityNodeWorkerProcess,
   GhostNodeRuntimeBroker,
+  type GhostNodeRuntimeBrokerDeps,
   type NodeWorkerStartupObservation,
   type NodeWorkerStartupState,
   type NodeWorkerProcess,
@@ -2646,6 +2647,7 @@ describe('nodeRuntimeBroker · 宿主代启子进程(childSpawn,2026-07-23)', ()
     ghost: InstalledGhost,
     spawnChild?: () => FakeRawChild,
     autoSpawnChild = true,
+    hostToolRequest?: GhostNodeRuntimeBrokerDeps['hostToolRequest'],
   ) {
     const worker = new FakeControlProcess((message) => {
       if (message.id !== undefined && typeof message.method === 'string') {
@@ -2655,6 +2657,7 @@ describe('nodeRuntimeBroker · 宿主代启子进程(childSpawn,2026-07-23)', ()
     const spawned: Array<{ entryPath: string; args: string[]; child: FakeRawChild }> = [];
     const broker = new GhostNodeRuntimeBroker({
       getGhost: () => ghost,
+      hostToolRequest,
       spawnProcess: () => worker as unknown as NodeWorkerProcess,
       spawnChildProcess: (entryPath, _cwd, _ghostId, args) => {
         const child = spawnChild?.() ?? new FakeRawChild();
@@ -2666,6 +2669,34 @@ describe('nodeRuntimeBroker · 宿主代启子进程(childSpawn,2026-07-23)', ()
     await broker.handleRequest('node-ghost', rpcRequest()); // 拉起 worker
     return { broker, worker, spawned };
   }
+
+  // §1.2/§3: the private worker port binds the real install and uses the UI gateway;
+  // a plugin can call independently of an Agent RPC, and a changed installation cancels the result.
+  it.each([false, true])('routes autonomous Host tools through the shared gateway and fences install changes: %s', async stale => {
+    const ghost = childSpawnGhost();
+    ghost.approval = { state: 'approved', revision: 'r1' };
+    let finish!: () => void;
+    const gate = new Promise<void>(resolve => { finish = resolve; });
+    const result = { content: [{ type: 'text', text: '{"ok":true,"tasks":[]}' }] };
+    const hostToolRequest = vi.fn(async (id: string, payload: unknown, current: () => boolean) => {
+      expect(id).toBe('node-ghost');
+      expect(payload).toMatchObject({ server: 'cindy_helper', tool: 'list_sessions', args: {} });
+      expect(current()).toBe(true);
+      await gate;
+      return result;
+    });
+    const { broker, worker } = await bootWorker(ghost, undefined, true, hostToolRequest);
+    try {
+      worker.emitControl({ type: 'host-tool-request', reqId: 'host1', server: 'cindy_helper', tool: 'list_sessions', args: {} });
+      await vi.waitFor(() => expect(hostToolRequest).toHaveBeenCalledOnce());
+      if (stale) ghost.approval = { state: 'approved', revision: 'r2' };
+      finish();
+      await vi.waitFor(() => expect(worker.lastOf('node-host-result')).toMatchObject({ reqId: 'host1', ok: true }));
+      const reply = worker.lastOf('node-host-result')!;
+      if (stale) expect(reply.result).toMatchObject({ isError: true, content: [{ text: '{"ok":false,"errorCode":"PERMISSION_DENIED"}' }] });
+      else expect(reply.result).toEqual(result);
+    } finally { broker.destroyAll(); }
+  });
 
   it('未声明 childSpawn:代生请求收到结构化拒绝,不 fork', async () => {
     const { worker, spawned } = await bootWorker(childSpawnGhost(false));

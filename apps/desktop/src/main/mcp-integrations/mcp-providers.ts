@@ -26,7 +26,7 @@ import { createMoveSession } from './moveSession.js';
 import { createTaskWorktreeHost } from './createTaskWorktree.js';
 import { sessionImportCallbacks } from '../session-import/agentTools.js';
 import { listProjects, renameProject, removeProject, readCurrentSessionProject } from './projectManagement.js';
-import { activeOwnerScopeKey, isAppSessionBoundaryPending, ownerScopedUserDataPath } from '../appSessionState.js';
+import { activeOwnerScopeKey, getActiveDataOwnerPushStamp, isAppSessionBoundaryPending, ownerScopedUserDataPath } from '../appSessionState.js';
 import { botProfileDir } from '../maker-ipc/botProfileFolder.js';
 import type { createBotCapabilityService } from '../maker-ipc/botCapabilityService.js';
 import { join as pathJoin } from 'node:path';
@@ -113,6 +113,7 @@ import { runBotProjectsTool } from '../maker-ipc/botLinkedProjects.js';
 import { createTaskDigestReader } from './taskDigest.js';
 import { createDesktopTaskDigestDeps } from './taskDigestHost.js';
 import { createTaskToolCallAuthorizer } from '../maker-ipc/taskToolCallAuthorizer.js';
+import { authorizePluginHostToolCall, getPluginHostToolCaller, setHostToolProviders } from './hostToolCaller.js';
 import { createDesktopTaskActionAuthorizer } from '../maker-ipc/taskActionHost.js';
 import { authorizeGroupTool } from '../maker-ipc/botGroupToolAuthorization.js';
 import { createSharedTaskTools } from './sharedTaskTools.js';
@@ -369,6 +370,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
   };
 
   const authorizeTaskToolCall = createTaskToolCallAuthorizer({
+    authorizePluginCall: authorizePluginHostToolCall,
     getDb: () => (isAppSessionBoundaryPending() ? null : tryGetDbClient()),
     isScopeCurrent: (db) => !isAppSessionBoundaryPending() && db === tryGetDbClient(),
     authorizeAction: createDesktopTaskActionAuthorizer({
@@ -377,16 +379,19 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
   });
   // Companion history uses the same account scope as ordinary task history.
   const botReadsAccountHistory = async (sessionId: string | undefined): Promise<boolean> => {
+    if (!sessionId && getPluginHostToolCaller()) return true;
     const result = await authorizeTaskToolCall({ sessionId, server: 'cindy_helper', tool: 'history', args: {} });
     return result.ok;
   };
 
   const withAccountDataAccess = async <T>(sessionId: string | undefined, operation: (assertCurrent: () => Promise<void>) => Promise<T>): Promise<T> => {
     const dbClient = tryGetDbClient();
-    if (!dbClient || !sessionId) throw new Error('Account data caller unavailable');
+    const plugin = !sessionId ? getPluginHostToolCaller() : undefined;
+    if (!dbClient || (!sessionId && !plugin)) throw new Error('Account data caller unavailable');
     const assertAccess = async () => {
+      plugin?.assertCurrent();
       if (isAppSessionBoundaryPending() || dbClient !== tryGetDbClient()) throw new Error('Account changed');
-      if (await resolveHelperSurface(dbClient, sessionId) === 'restricted')
+      if (sessionId && await resolveHelperSurface(dbClient, sessionId) === 'restricted')
         throw new Error('Account data is unavailable for this task');
       if (isAppSessionBoundaryPending() || dbClient !== tryGetDbClient()) throw new Error('Account changed');
     };
@@ -1537,5 +1542,6 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
     }),
   });
 
+  setHostToolProviders(gated, getActiveDataOwnerPushStamp());
   return gated;
 }

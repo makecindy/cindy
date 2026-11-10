@@ -64,7 +64,8 @@ export interface TaskActionScope {
 }
 
 interface ActionContext {
-  sessionId: string;
+  sessionId?: string;
+  caller?: Extract<NonNullable<Call['caller']>, { kind: 'plugin' }>;
   tool: string;
   fingerprint: string;
   assertCurrent(): Promise<void>;
@@ -171,6 +172,30 @@ export async function admitTaskAction(
         },
         operation,
       );
+    },
+  };
+}
+
+/** The plugin gateway has checked the declared group and the shared per-call policy.
+ * Reuse mutation and queued-delivery guards without attributing the action to a task. */
+export function admitPluginTaskAction(call: Call, assertCurrent: () => void): Decision {
+  if (call.caller?.kind !== 'plugin' || call.sessionId !== undefined) return denied();
+  const caller = call.caller;
+  const fingerprint = taskActionFingerprint(call);
+  let consumed = false;
+  return {
+    ok: true,
+    run: async operation => {
+      if (consumed || fingerprint !== taskActionFingerprint(call)) throw new TaskActionAuthorizationError();
+      consumed = true;
+      const assertActive = () => {
+        try { assertCurrent(); } catch { throw new TaskActionAuthorizationError(); }
+      };
+      assertActive();
+      return actionContext.run({ caller, tool: call.tool, fingerprint,
+        assertCurrent: async () => assertActive(), assertCurrentSync: assertActive,
+        assertDeliveryCurrent: async () => assertActive(),
+      }, operation);
     },
   };
 }

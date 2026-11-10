@@ -156,6 +156,32 @@ function requestPluginTaskApproval(id: string, isCurrent: () => boolean, confirm
   }, capability));
 }
 
+/** UI and Node requests share this exact gateway, including first-use and per-call approval. */
+function requestPluginHostToolCall(id: string, payload: unknown, current: () => boolean) {
+  return handlePluginHostToolRequest(id, payload, current, {
+    getGhost: findGhostForInstanceId, owner: getActiveDataOwnerPushStamp, createRuntime: createHostToolRuntime,
+    approveGroup: (pluginId, group, active) => requestPluginTaskApproval(pluginId, active, facts => {
+      const window = getDeepLinkMainWindow();
+      if (!window || !isTrustedAppRendererWindow(window)) return Promise.resolve(false);
+      return createWindowGhostInstallConsentPrompt(window.webContents)({ purpose: 'task-capability', initiator: 'user', origin: 'local-file', facts });
+    }, false, `host-tools:${group}`),
+    policy: (serverName, name, args) => getDesktopMcpToolApprovalPolicy({ serverName, toolName: 'call_tool', toolParams: { name, args } }),
+    confirm: async ({ pluginId, pluginName, server, tool, args }) => {
+      const parent = getDeepLinkMainWindow();
+      if (!parent || parent.isDestroyed() || !isTrustedAppRendererWindow(parent)) return false;
+      const decision = await dialog.showMessageBox(parent, {
+        type: 'question', title: t('settings.ghosts.perm.hostToolCallTitle'),
+        message: t('settings.ghosts.perm.hostToolCallMessage').replaceAll('{{name}}', () => pluginName)
+          .replaceAll('{{server}}', () => server).replaceAll('{{tool}}', () => tool),
+        detail: `${pluginId}\n\n${JSON.stringify(args, null, 2)}`,
+        buttons: [t('settings.ghosts.connections.confirmAllow'), t('common.cancel')], defaultId: 1, cancelId: 1, noLink: true,
+      });
+      return decision.response === 0;
+    },
+    recordCall: (pluginId, server, tool) => log.info('plugin host tool returned', { source: `插件 ${pluginId}`, server, tool }),
+  });
+}
+
 /** Same Main approval boundary for local dialogs and negotiated remote management receipts. */
 export async function requestPluginUiApproval(id: string, sender?: WebContents, explicit = false,
   remote?: { prompt: GhostInstallConsentPrompt; assertCurrent(): void }) {
@@ -685,7 +711,9 @@ import { readModelDisableOverrides } from '../maker-host/model-disable-store.js'
 import { isCatalogMediaModelVisible } from './mediaDisplayVisibility.js';
 import { readProviderOrder } from '../maker-host/provider-order-store.js';
 import { guardedOutboundFetch, outboundFetch } from '../maker-host/outbound-fetch.desktop.js';
-import { setGhostToolApprovalResolver } from '../maker-host/mcp-tool-approval-policy.js';
+import { getDesktopMcpToolApprovalPolicy, setGhostToolApprovalResolver } from '../maker-host/mcp-tool-approval-policy.js';
+import { createHostToolRuntime } from '../mcp-integrations/hostToolCaller.js';
+import { handlePluginHostToolRequest } from './hostToolSlot.js';
 import { getSharedGhCliTokenSource } from '../git-context/ghCliTokenSource.js';
 import { bindingStore } from '../im/binding.js';
 import { copyPrivateDeviceCode } from '../plugin-oauth/deviceCodeClipboard.js';
@@ -2617,6 +2645,7 @@ export function getGhostNodeRuntimeBroker(): GhostNodeRuntimeBroker {
       secretSaved: ghostSecretSaved,
       authenticatedFetch: (ghostId, request, authorization, assertCurrent, signal) =>
         getGhostNetworkSlot().handleAuthenticatedNodeFetch(ghostId, request, authorization, assertCurrent, signal),
+      hostToolRequest: requestPluginHostToolCall,
       resolveOauthSecret: async (ghostId, secretKey, accountId) => {
         const ghost = findGhostForInstanceId(ghostId);
         const source = ghost
@@ -9737,6 +9766,7 @@ export function registerGhostIpc(): void {
     download: (id, payload, current) => pluginDownloads.handle(id, payload, current),
     node: (id, payload, current) => pluginDownloads.withNodeDownloads(id, payload as Record<string, unknown>,
       request => getGhostNodeRuntimeBroker().handleRequest(id, request), current),
+    hostTools: requestPluginHostToolCall,
     warn: (message, details) => log.warn(message, details),
   });
   ipcMain.handle('ghost-pipe:send', async (event, payload: unknown) => {

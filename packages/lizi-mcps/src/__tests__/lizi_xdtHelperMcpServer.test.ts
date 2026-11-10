@@ -7,6 +7,24 @@ import type { LiziMcpSessionContext } from '../types.js';
 
 const TARGET_SESSION_ID = "11111111-1111-4111-8111-111111111111";
 
+// §1.2 Host tools: a plugin is a caller, never an impersonated Session. Native MCP and
+// in-process callers must execute the same schema, handler, result and authorization path.
+it('offers the same in-process handler to a plugin without borrowing a Session', async () => {
+  const setSessionsStatus = vi.fn(async ({ sessionIds, status }) => ({ ok: true as const,
+    changed: sessionIds.map((sessionId: string) => ({ sessionId, title: 'Task', workingDir: null, status })) }));
+  const server = createXdtHelperMcpServer({ setSessionsStatus }, {
+    agentKind: 'claude-code', workingDir: '', hostCaller: { kind: 'plugin', pluginId: 'dashboard', dataOwnerId: 'owner', ownerGeneration: 1 },
+  });
+  expect(server.hostTools.describe('archive_sessions')).toMatchObject({ name: 'archive_sessions', category: 'control' });
+  expect(parsePayload(await server.hostTools.call('archive_sessions', { session_ids: [TARGET_SESSION_ID] })))
+    .toMatchObject({ ok: true, count: 1 });
+  expect(parsePayload(await server.hostTools.call('archive_sessions', { sessionIds: [TARGET_SESSION_ID] })))
+    .toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+  expect(setSessionsStatus).toHaveBeenCalledOnce();
+  expect(server.hostTools.describe('request_input_handoff')).toBeUndefined();
+  await server.close();
+});
+
 // Unit, real MCP wire: three harness contexts discover one shared capability.
 // A read must never dispatch an association write; shared guests cannot use it.
 it('exposes GitHub to all harnesses without implicit association', async () => {

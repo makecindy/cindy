@@ -8113,6 +8113,8 @@
         "hostTools_scheduler": "Gestión de automatizaciones",
         "hostTools_schedulerDetail": "Crear, consultar, editar, pausar, reanudar, eliminar y ejecutar tareas automáticas, y leer su historial con las herramientas de Cindy. Las operaciones de alto riesgo requieren confirmación cada vez.",
         "hostToolsRequest": "Revisar el permiso de {{group}}",
+        "hostToolCallTitle": "Permitir operación del complemento",
+        "hostToolCallMessage": "El complemento «{{name}}» quiere llamar a {{server}} / {{tool}}. Esta autorización solo se aplica a los parámetros siguientes.",
         "agentHiddenTasks": "Puede crear tareas en segundo plano ocultas de la lista de tareas",
         "agentHiddenTasksDetail": "Las tareas que crea este complemento pueden permanecer fuera de la lista de tareas, la búsqueda y las notificaciones. Siempre puedes verlos, abrirlos o mostrarlos en la lista de tareas desde Tareas en segundo plano en la página de este complemento; desinstalar el complemento los muestra nuevamente.",
         "agentErrand": "Crear tareas, realizar trabajos y leer resultados",

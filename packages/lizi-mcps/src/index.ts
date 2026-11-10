@@ -9,6 +9,8 @@
 export const VERSION = '0.0.0';
 
 export * from './types.js';
+export * from './host-tool-runtime.js';
+export type { HostToolCaller } from './tool-call-authority.js';
 export * from './providers.js';
 export type { ToolCallAuthorization, ToolCallAuthorizer } from './tool-call-authority.js';
 

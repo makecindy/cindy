@@ -38,6 +38,7 @@ import { registerSessionTagTools, type SessionTagsCallback } from './xdt-helper/
  */
 
 import { BRAND_NAME } from '@cindy/maker-shared/branding';
+import type { HostToolMcpServer, HostToolRuntime } from './host-tool-runtime.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { ListToolsRequestSchema, type Tool } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
@@ -358,44 +359,43 @@ function registerCallToolEntry(
   telemetry: {
     logger?: LiziMcpLogger;
     getSessionId: () => string | undefined;
+    getHostCaller: () => import('./types.js').LiziMcpSessionContext['hostCaller'];
     authorizeCall?: ToolCallAuthorizer;
   },
   allowedSurface: () => Promise<HelperSurfaceAllow>,
-): void {
-  server.tool(
-    'call_tool',
-    D_CALL_TOOL,
-    CALL_TOOL_INPUT,
-    async ({ name, args }, extra) => {
-      const allowed = await allowedSurface();
-      const definition = registry.get(name);
-      if (definition && !toolAllowed(allowed, definition)) {
-        return errorPayload(
-          'CAPABILITY_NOT_AVAILABLE',
-          '这个工具不属于当前任务的能力面；请重新调用 list_tools。',
-        );
-      }
-      const result = definition
-        ? await withToolCallAuthority(
-          telemetry.authorizeCall,
-          { sessionId: telemetry.getSessionId(), server: 'cindy_helper', tool: name, args },
-          () => registry.call(name, args, extra?.signal),
-        )
-        : errorPayload('UNKNOWN_TOOL', 'Unknown helper tool.', {
-            available: registry.list().filter((tool) => toolAllowed(allowed, tool)).map((tool) => tool.name),
-          });
-      // errorCode 遥测:UNKNOWN_TOOL / INVALID_ARGS / 业务 errorCode 返回给模型自纠
-      // 之前在这里落一条日志,否则 agent 犯错→自纠 的事件在日志里完全不存在。
-      logToolResultErrorCode({
-        logger: telemetry.logger,
-        server: 'cindy_helper',
-        tool: name,
-        result,
-        sessionId: telemetry.getSessionId(),
-      });
-      return result;
-    },
-  );
+): HostToolRuntime['call'] {
+  const call: HostToolRuntime['call'] = async (name, args, signal) => {
+    const allowed = await allowedSurface();
+    const definition = registry.get(name);
+    if (definition && !toolAllowed(allowed, definition)) {
+      return errorPayload(
+        'CAPABILITY_NOT_AVAILABLE',
+        '这个工具不属于当前任务的能力面；请重新调用 list_tools。',
+      );
+    }
+    const result = definition
+      ? await withToolCallAuthority(
+        telemetry.authorizeCall,
+        { sessionId: telemetry.getSessionId(), server: 'cindy_helper', tool: name, args,
+          ...(telemetry.getHostCaller() ? { caller: telemetry.getHostCaller() } : {}) },
+        () => registry.call(name, args, signal),
+      )
+      : errorPayload('UNKNOWN_TOOL', 'Unknown helper tool.', {
+          available: registry.list().filter((tool) => toolAllowed(allowed, tool)).map((tool) => tool.name),
+        });
+    // errorCode 遥测:UNKNOWN_TOOL / INVALID_ARGS / 业务 errorCode 返回给模型自纠
+    // 之前在这里落一条日志,否则 agent 犯错→自纠 的事件在日志里完全不存在。
+    logToolResultErrorCode({
+      logger: telemetry.logger,
+      server: 'cindy_helper',
+      tool: name,
+      result,
+      sessionId: telemetry.getSessionId(),
+    });
+    return result;
+  };
+  server.tool('call_tool', D_CALL_TOOL, CALL_TOOL_INPUT, ({ name, args }, extra) => call(name, args, extra?.signal));
+  return call;
 }
 
 /** Teammate discovery and a group lane's private message to its owner. */
@@ -582,12 +582,13 @@ export interface XdtHelperMcpSessionCtx {
   getSessionContext?: () => import('./types.js').LiziMcpSessionContext | undefined;
   sessionId?: string;
   vendorOptions?: Record<string, unknown>;
+  hostCaller?: import('./types.js').LiziMcpSessionContext['hostCaller'];
 }
 
 export function createXdtHelperMcpServer(
   deps: XdtHelperMcpDeps,
   sessionCtx: XdtHelperMcpSessionCtx,
-): McpServer {
+): HostToolMcpServer {
   const server = new McpServer({
     name: 'cindy_helper',
     version: '1.0.0',
@@ -820,11 +821,12 @@ export function createXdtHelperMcpServer(
     });
   }
   registerListToolsEntry(server, registry, allowedSurface, sessionCtx);
-  registerCallToolEntry(server, registry, {
+  const call = registerCallToolEntry(server, registry, {
     logger: deps.logger,
     // per-call 解析:codex HTTP bridge 的 server factory 阶段 ctx 是空的,
     // tool-call 阶段由 AsyncLocalStorage 恢复,所以 sessionId 必须调用时再取。
     getSessionId: () => resolveLiziMcpSessionContext(sessionCtx).sessionId,
+    getHostCaller: () => resolveLiziMcpSessionContext(sessionCtx).hostCaller,
     ...(deps.authorizeCall ? { authorizeCall: deps.authorizeCall } : {}),
   }, allowedSurface);
 
@@ -971,5 +973,12 @@ export function createXdtHelperMcpServer(
       ] };
     });
   }
-  return server;
+  return Object.assign(server, { hostTools: {
+    describe(name: string) {
+      const tool = registry.get(name);
+      return tool ? { name: tool.name, category: tool.category } : undefined;
+    },
+    call,
+    close: () => server.close(),
+  } });
 }

@@ -7998,6 +7998,8 @@
         "hostTools_scheduler": "자동화 관리",
         "hostTools_schedulerDetail": "Cindy의 자동화 도구로 자동 작업을 생성, 조회, 수정, 일시 정지, 재개, 삭제, 즉시 실행하고 실행 기록을 볼 수 있습니다. 위험도가 높은 작업은 매번 확인합니다.",
         "hostToolsRequest": "{{group}} 권한 확인",
+        "hostToolCallTitle": "플러그인 작업 허용",
+        "hostToolCallMessage": "플러그인 ‘{{name}}’이(가) {{server}} / {{tool}}을(를) 호출하려고 합니다. 이번 허용은 아래 매개변수에만 적용됩니다.",
         "agentHiddenTasks": "세션 목록에 표시되지 않는 백그라운드 세션을 만들 수 있음",
         "agentHiddenTasksDetail": "이 플러그인이 만든 세션을 세션 목록, 검색, 알림에 표시하지 않을 수 있습니다. 플러그인 상세의 「백그라운드 세션」에서 언제든지 확인하고 열거나 세션 목록에 표시할 수 있으며, 플러그인을 제거하면 다시 표시됩니다.",
         "agentErrand": "작업을 만들고 실행하며 결과를 읽을 수 있습니다",

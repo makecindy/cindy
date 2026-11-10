@@ -8113,6 +8113,8 @@
         "hostTools_scheduler": "Gestão de automatizações",
         "hostTools_schedulerDetail": "Criar, consultar, editar, pausar, retomar, eliminar e executar tarefas automáticas e ler o histórico com as ferramentas da Cindy. As operações de alto risco exigem sempre confirmação.",
         "hostToolsRequest": "Rever permissão de {{group}}",
+        "hostToolCallTitle": "Permitir operação do plugin",
+        "hostToolCallMessage": "O plugin «{{name}}» pretende chamar {{server}} / {{tool}}. Esta autorização aplica-se apenas aos parâmetros abaixo.",
         "agentHiddenTasks": "Pode criar tarefas em segundo plano ocultas da lista de tarefas",
         "agentHiddenTasksDetail": "As tarefas criadas por este plugin podem ficar fora da lista de tarefas, da pesquisa e das notificações. Pode sempre vê-las, abri-las ou mostrá-las na lista de tarefas a partir de Tarefas em segundo plano na página deste plugin; desinstalar o plugin volta a mostrá-las.",
         "agentErrand": "Criar tarefas, realizar trabalho e ler resultados",

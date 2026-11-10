@@ -25,6 +25,7 @@ import settings from '../../../resources/system-skills/cindy-plugin-creator/refe
 import notifications from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-notifications.md?raw';
 import filesAndLibrary from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-files-and-library.md?raw';
 import agentTasks from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-agent-tasks.md?raw';
+import hostTools from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-host-tools.md?raw';
 import interactivePages from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-interactive-pages.md?raw';
 import nodeWorker from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-node-worker.md?raw';
 import sessionContext from '../../../resources/system-skills/cindy-plugin-creator/references/plugin-session-context.md?raw';
@@ -70,6 +71,7 @@ export const FORGE_GUIDE = [
   notifications,
   filesAndLibrary,
   agentTasks,
+  hostTools,
   nodeWorker,
   sessionContext,
   directoryPicker,

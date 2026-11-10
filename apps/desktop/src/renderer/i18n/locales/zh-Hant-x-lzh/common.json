@@ -7984,6 +7984,8 @@
         "hostTools_scheduler": "自動化治辦",
         "hostTools_schedulerDetail": "得循 Cindy 之器建、查、改、停、復、刪及即行自動任務，並閱執行之錄。涉重險者每次親允。",
         "hostToolsRequest": "確認{{group}}之權柄",
+        "hostToolCallTitle": "允外掛行事",
+        "hostToolCallMessage": "外掛「{{name}}」欲調 {{server}} / {{tool}}。此允僅施於下列參數。",
         "agentHiddenTasks": "可立不見於差事錄之背後差事",
         "agentHiddenTasksDetail": "本法器所立之差事，可不現於差事錄、搜尋與告中。君可隨時於法器詳情之「背後差事」中觀之、啟之，或令顯於差事錄；卸除法器時，此等差事將復顯示。",
         "agentErrand": "可立差事、行事並讀結果",
