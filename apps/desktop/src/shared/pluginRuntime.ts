@@ -1,7 +1,7 @@
 import { isGhostControlPointId, type GhostControlPointFailureAction, type GhostControlPointId } from './ghost.js';
 
 /** Task-local opt-in. An installed capability alone never selects a provider. */
-export const RUNTIME_PLUGIN_POINTS = ['will-start-turn', 'will-model-request', 'will-compose-context', 'will-search-memory'] as const;
+export const RUNTIME_PLUGIN_POINTS = ['will-start-turn', 'will-model-request', 'will-compose-context', 'will-search-memory', 'system-prompt'] as const;
 export type RuntimePluginPoint = (typeof RUNTIME_PLUGIN_POINTS)[number];
 export interface RuntimePluginTarget {
   pluginId: string;

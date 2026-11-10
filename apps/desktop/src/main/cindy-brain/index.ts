@@ -1,6 +1,7 @@
 import { setPluginEnabled } from './pluginEnableService.js';
 import { createRuntimePluginControl } from './runtimeControl.js';
 import { createRuntimeContextProviders } from './runtimeContext.js';
+import { createStaticPromptProvider } from './staticPrompt.js';
 import { readRuntimePluginSettings } from '../maker-host/runtime-plugin-settings.js';
 import { createGhostExecutionPipe } from './executionPipe.js';
 import { createPluginFileAccess } from '../mcp-apps/pluginFileAccess.js';
@@ -8,7 +9,7 @@ import { ownsPersonalBuildMonitor } from '../personalBuildMonitor.js';
 import { importPickedFiles } from './pickedFiles.js';
 import { mediaTypeForLibraryPath } from './runtime/ghostFiles.js';
 import { pluginUiPromptDeclined, pluginUiPromptSuppressed, deferPluginUiPrompt, declinePluginUiPrompt } from './pluginUiPreferences.js';
-import { ghostPermissionItems } from '../../shared/ghost.js';
+import { ghostPermissionItems, declaredGhostControlPoints } from '../../shared/ghost.js';
 import { refreshPluginApps } from '../mcp-integrations/plugin-app-registry.js';
 import { revokePluginAppServers, stopPluginAppInstance } from '../mcp-apps/runtime.js';
 import { checkGhostSecret } from './runtime/ghostSecretCheck.js';
@@ -3155,6 +3156,8 @@ function runtimeContextProviders() {
 export function composeGhostRuntimeContext(sessionId: string, text: string, signal?: AbortSignal): Promise<string> | undefined {
   return runtimeContextProviders().compose(sessionId, text, signal);
 }
+export const ghostTaskSystemPrompt = createStaticPromptProvider({ readSettings: readRuntimePluginSettings,
+  find: id => findInstalledGhostByInstanceId(availableGhosts(), id) ?? undefined });
 export function searchGhostRuntimeMemories(query: string,
   opts: { type?: 'user' | 'feedback' | 'project' | 'reference'; limit?: number },
   context?: { sessionId?: string }) {
@@ -3221,7 +3224,7 @@ export function ghostPickerModels(): GhostPickerModel[] {
 /** 某插件看到的控制节点目录(只读；不含其它插件信息)。 */
 export function ghostControlPointInfo(ghostId: string): GhostControlPointInfo[] {
   const ghost = findInstalledGhostByInstanceId(availableGhosts(), ghostId);
-  const declared = new Set(ghost?.manifest.subscribe?.hooks ?? []);
+  const declared = new Set(ghost ? declaredGhostControlPoints(ghost.manifest) : []);
   return GHOST_CONTROL_POINT_IDS.map((point) => ({
     id: point,
     actions: GHOST_CONTROL_POINTS[point].actions,

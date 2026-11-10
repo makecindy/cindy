@@ -1,5 +1,7 @@
 {
   "runtimePlugins": {
+    "save": "Guardar",
+    "promptUnsupported": "Este local de execução do Pi não suporta fragmentos de instruções de sistema.",
     "title": "Plugins da tarefa",
     "description": "Selecione os plugins desta tarefa. As alterações aplicam-se a partir da próxima mensagem.",
     "unsupported": "O processamento de cada pedido só está disponível com Pi local. O motor desta tarefa não o suporta.",
@@ -8114,6 +8116,8 @@
         "subscribeScheduleRunDetail": "As automatizações em que o escolheres em Verificação prévia consultam-no primeiro. Vê o nome e as instruções e pode ignorar ou parar essa execução, mas não aprovar nada por ti.",
         "subscribeRoutineRun": "Pode verificar rotinas de colegas escolhidas antes de serem executadas",
         "subscribeRoutineRunDetail": "As rotinas em que o escolheres em Verificação prévia consultam-no primeiro. Vê as instruções e os eventos que as acionaram e pode ignorar ou parar essa execução, mas não aprovar nada por ti.",
+        "systemPrompt": "Pode adicionar instruções de sistema às tarefas selecionadas",
+        "systemPromptDetail": "Os textos estáticos abaixo seguem as instruções fixas da Cindy apenas nas tarefas que selecionam este plugin. O pacote define a ordem e os motores. As alterações aplicam-se a partir da próxima mensagem; os erros seguem a definição da tarefa.",
         "subscribeComposeContext": "Pode adicionar referências antes das respostas nas tarefas selecionadas",
         "subscribeComposeContextDetail": "Só as tarefas selecionadas partilham a mensagem atual. Os resultados são referências normais, não instruções de sistema nem autorizações. Os erros seguem a definição da tarefa.",
         "subscribeSearchMemory": "Pode fornecer memórias às tarefas selecionadas",

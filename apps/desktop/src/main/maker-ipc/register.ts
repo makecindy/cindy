@@ -5,7 +5,8 @@ import { createTaskRuntimePlugins } from './runtimePlugins.js';
 import { RuntimePluginControlError } from '../cindy-brain/runtimeControl.js';
 import { readRuntimePluginSettings, writeRuntimePluginSettings } from '../maker-host/runtime-plugin-settings.js';
 import { parseRuntimePluginSettings } from '../../shared/pluginRuntime.js';
-import { resolveGhostControlPointPlugin, getGhostRuntimePluginControl, composeGhostRuntimeContext, isPluginModelRouteAvailableNow } from '../cindy-brain/index.js';
+import { resolveGhostControlPointPlugin, getGhostRuntimePluginControl, composeGhostRuntimeContext, ghostTaskSystemPrompt, isPluginModelRouteAvailableNow } from '../cindy-brain/index.js';
+import { assembleSystemPromptSections, TASK_SYSTEM_PROMPT } from '@cindy/maker-core';
 import { z as settingsSchema } from 'zod';
 import { registerPreferenceControlIpc } from '../app-settings/preferences.js';
 import { configureModelSettingsActions } from '../app-settings/models.js';
@@ -9203,6 +9204,16 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     return context;
   }
 
+  const appliedTaskPrompts = new WeakMap<Awaited<ReturnType<typeof maker.createSession>>, string>();
+  const readTaskPrompt = (sessionId: string, agentKind: AgentKind, agentDeviceId?: string | null) =>
+    ghostTaskSystemPrompt(sessionId, agentKind === 'claude-code' ? 'cc' : agentKind, !(agentKind === 'pi' && agentDeviceId));
+  const assertTaskPromptCurrent = (sessionId: string) => {
+    const live = maker.getSession(sessionId);
+    if (live && (appliedTaskPrompts.get(live) ?? '') !== readTaskPrompt(sessionId, live.agentKind, live.agentDeviceId)) {
+      throw new RuntimePluginControlError('block', '', true, 'prompt-selection-changed');
+    }
+  };
+
   async function bootstrapSession(o: CreateOpts, assertAccess?: () => void, nativeHistoryResume = false): Promise<{
     session: Awaited<ReturnType<typeof maker.createSession>>;
     didInjectOrcaInstructions: boolean;
@@ -9352,8 +9363,15 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         delete vendorOptions._cindyRequireNativeResume;
         if (nativeHistoryResume || nativeRelocation?.nativeId) vendorOptions._cindyRequireNativeResume = true;
         o.vendorOptions = vendorOptions;
-        session = await maker.createSession(o, creationSignal);
-        try { assertAccess?.(); } catch (error) {
+        const taskPrompt = o.id ? readTaskPrompt(o.id, o.agentKind, o.agentDeviceId) : '';
+        const runtimeOpts = taskPrompt ? { ...o,
+          ...(o.agentKind === 'pi' ? { [TASK_SYSTEM_PROMPT]: taskPrompt } : {
+            userPrompt: assembleSystemPromptSections(o.userPrompt?.trim() ?? '', [{ name: 'task', order: 0, text: taskPrompt }]),
+          }),
+        } : o;
+        session = await maker.createSession(runtimeOpts, creationSignal);
+        appliedTaskPrompts.set(session, taskPrompt);
+        try { assertAccess?.(); assertTaskPromptCurrent(session.id); } catch (error) {
           const cancelledSession = session;
           session = undefined;
           await maker.closeSessionIfCurrent(cancelledSession, 'requested');
@@ -9368,6 +9386,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         nativeRelocation = undefined;
       } catch (error) {
         assertAccess?.();
+        if (error instanceof RuntimePluginControlError) throw error;
         // Native ownership is unresolved, not a route/resume failure. Do not
         // relocate history or try another provider while the old handle lives.
         if (error instanceof SessionCreationCleanupPendingError) throw error;
@@ -18425,6 +18444,18 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     prewarmSession: prewarmSessionRuntime,
     hydrateActiveOrcaSession,
   } = createMakerSendTransaction({
+    prepareRuntimePrompt: sessionId => {
+      const live = maker.getSession(sessionId);
+      if (!live) {
+        if (!readRuntimePluginSettings(sessionId)?.['system-prompt']?.length) return undefined;
+        return readSessionRuntimeProfiles(sessionId).then(profiles => {
+          if (!profiles) throw new RuntimePluginControlError('block', '', true, 'task-unavailable');
+          readTaskPrompt(sessionId, profiles.effective.agentKind, profiles.effective.agentDeviceId);
+        });
+      }
+      if (live.isTurnRunning() || (appliedTaskPrompts.get(live) ?? '') === readTaskPrompt(sessionId, live.agentKind, live.agentDeviceId)) return undefined;
+      return withRehydrateCloseSuppressed(sessionId, () => maker.closeSession(sessionId, 'agent-switch'));
+    },
     composeRuntimeContext: composeGhostRuntimeContext,
     prepareRuntimeTurn: (sessionId, message, signal) => {
       const prepared = taskRuntimePlugins.prepare(sessionId, message, signal);
@@ -18606,6 +18637,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       }).catch((error) => log.warn('turn model attribution failed', { sessionId, error }));
     },
     assertBeforeVendorDispatch: (sessionId, sendOpts) => {
+      assertTaskPromptCurrent(sessionId);
       const remote = isDeviceLinkInvoke();
       assertRemoteInputClearNotInFlight(sessionId, remote);
       const precondition = readRemoteInputClearBoundaryPrecondition(sendOpts);

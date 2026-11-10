@@ -4588,6 +4588,12 @@ export default async function cindyBridge(piApi: any) {
     ? createCindyGuestToolGate(piApi, [${JSON.stringify(CINDY_SUBAGENT_TOOL_NAME)}])
     : null;
   const pi = guestToolGate ? guestToolGate.pi : piApi;
+  const taskSystemPromptFile = process.env.CINDY_PI_TASK_SYSTEM_PROMPT_FILE;
+  delete process.env.CINDY_PI_TASK_SYSTEM_PROMPT_FILE;
+  const taskSystemPrompt = taskSystemPromptFile ? readFileSync(taskSystemPromptFile, 'utf8') : '';
+  if (taskSystemPrompt) pi.on('before_agent_start', (event: any) => ({
+    systemPrompt: event.systemPrompt + '\n\n' + taskSystemPrompt,
+  }));
   if (localHostToolsOnly) {
     const allowed = new Set(['cindy_mcp_list_tools', 'cindy_mcp_call_tool']);
     const isolate = () => pi.setActiveTools([...allowed]);

@@ -32,7 +32,7 @@ import { ANSWER_DELIVERY_PROMPT, PI_ANSWER_DELIVERY_PROMPT } from '@cindy/maker-
 import { PiRpcProcess } from '../rpc-client.js';
 import * as sessionJsonlScan from '../session-jsonl-scan.js';
 import { providerCatalogForPi, providerModelGenerationRecord, providerPresetModelRecord, BUNDLED_CATALOG } from '@cindy/model-providers';
-import { MODEL_REQUEST_CONTROL, TurnPermissionPolicyUnsupportedError, type AgentDeps, type AgentSessionHandle } from '../../base-agent.js';
+import { assembleSystemPromptSections, MODEL_REQUEST_CONTROL, TASK_SYSTEM_PROMPT, TurnPermissionPolicyUnsupportedError, type AgentDeps, type AgentSessionHandle } from '../../base-agent.js';
 import type { AgentEvent } from '../../../types/events.js';
 import type { Logger } from '../../../interfaces/logger.js';
 
@@ -516,6 +516,36 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
       await handle?.close();
       rmSync(workingDir, { recursive: true, force: true });
     }
+  });
+
+  // Integration: the native before_agent_start tail preserves the exact prefix.
+  // A near-budget fragment also exercises file handoff instead of inline argv/env.
+  it('appends selected static fragments to the actual system request with the fixed prefix intact', { timeout: 30_000 }, async () => {
+    const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-static-prompt-'));
+    const systems: string[] = [];
+    const early = 'EARLY {{literal}} FRAGMENT ' + 'x'.repeat(32_000);
+    try {
+      for (const selected of [false, true]) {
+        const taskPrompt = assembleSystemPromptSections('', selected
+          ? [{ name: 'late', order: 20, text: 'LATE FRAGMENT' }, { name: 'early', order: 10, text: early }] : []);
+        const handle = await new PiAgent(buildDeps()).startSession({ sessionId: `static-prompt-${selected}`, workingDir,
+          model: 'pi-test-model', permissionMode: 'bypassPermissions', userPrompt: 'Original task instructions',
+          ...(taskPrompt ? { [TASK_SYSTEM_PROMPT]: taskPrompt } : {}) });
+        const before = seenRequests.length;
+        try {
+          const done = (async () => { for await (const event of handle.events()) {
+            if (event.type === 'error') throw new Error(JSON.stringify(event.data));
+            if (event.type === 'done') return;
+          } })();
+          await handle.send({ type: 'user', content: 'Reply briefly.' });
+          await done;
+          const body = JSON.parse(seenRequests[before].body);
+          systems.push(typeof body.system === 'string' ? body.system : body.system.map((block: { text: string }) => block.text).join('\n\n'));
+          expect(JSON.stringify(body.messages)).not.toContain('EARLY {{literal}} FRAGMENT');
+        } finally { await handle.close(); }
+      }
+      expect(systems[1]).toBe(systems[0] + '\n\n' + early + '\n\nLATE FRAGMENT');
+    } finally { rmSync(workingDir, { recursive: true, force: true }); }
   });
 
   // #8887, integration: the real runtime generates the retry lifecycle after

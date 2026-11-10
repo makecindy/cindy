@@ -17,6 +17,7 @@
 | `will-model-request` | 本机 Pi 的每次模型请求，包含工具结果后的继续请求 | allow / route（select 阶段）/ transform（payload 阶段）/ skip / block | 每次询问 8 秒 |
 | `will-compose-context` | 每条模型消息装配时，为选了该插件的任务补参考资料 | allow / context / skip / block | 8 秒 |
 | `will-search-memory` | 所选任务调用已有 `cindy_memory.memory_search` 时 | allow / memories | 8 秒，失败保留 Cindy 结果 |
+| `system-prompt` | 装配所选任务的系统提示词；由清单 `systemPrompt` 静态提供，不发送询问 | 无运行期裁决 | 不启动插件 |
 
 运行时用 `host-request` 查当前 Cindy 实际提供哪些节点,别靠版本号猜:
 
@@ -63,7 +64,7 @@ cindy.onHostMessage(async (msg) => {
 | `allow` | 不反对,照常执行(之后还有脚本前置检查的,再跑脚本) |
 | `skip` | 这次不执行,记为"跳过"(不计费、不通知);下次照常触发 |
 | `block` | 这次不执行,记为"失败",`reason` 会显示在运行记录里 |
-| `route` | 仅 `will-start-task`:这个新任务改用 `route` 指定的模型,见下文 |
+| `route` | 在 `will-start-task`、`will-start-turn` 或 `will-model-request` 的 select 阶段选模型，见下文 |
 
 规则(主机强制):
 
@@ -196,3 +197,44 @@ cindy.send({ type: 'event-verdict', hookId: msg.hookId, action: 'memories',
 可用；不开启记忆时保持原行为。提供者超时、停用、出错或给了非法数据时忽略其结果，Cindy
 原有检索仍正常返回；这个节点只有“照常检索”的出错策略。源任务／账号失效后丢弃迟到结果。
 Claude Code、Codex、Pi 都复用同一个检索入口；多插件仅调用任务实际选择的提供者。
+
+### 静态系统提示词片段
+
+v3 清单直接声明 `systemPrompt`，不要在 `subscribe.hooks` 写 `system-prompt`：
+
+```json
+"systemPrompt": [
+  { "id": "style", "text": "Use the project's documented terminology.",
+    "order": 100, "scope": "selected-task" },
+  { "id": "coding", "text": "Explain the verification result after coding.",
+    "order": 200, "scope": "selected-task", "agentKinds": ["cc", "codex", "pi"] }
+]
+```
+
+正文是包内清单中的静态文本，不读取路径、运行脚本或展开模板。每项必须有唯一 `id`（最多
+128 字符）、非空 `text`、整数 `order` 和 `scope: "selected-task"`；最多 32 项，正文合计
+最多 32768 字符。`agentKinds` 可选，未写时对全部支持的引擎生效。当前唯一作用范围是用户
+明确选择了本插件的任务，不能声明全局范围。
+
+安装／更新确认以独立权限行显示完整片段、顺序、范围和引擎；更改这些内容需要重新确认该项
+权限。插件详情也展示原文。用户随后在任务菜单的「任务插件」中选择系统指令提供者，下一条
+消息起生效。片段先按 `order` 升序，再按 `插件 id:片段 id` 字典序排列；多个插件共用这个
+次序，宿主还限制装配总量。只有所选且已批准、已启用的插件可以参与。停用、卸载或不支持
+当前执行位置时，使用用户为该插件选择的出错策略。
+
+片段进入真正的系统指令通道，放在原有固定前缀之后；未选择时提示词字节保持原样，不启动
+插件。Claude Code／Codex 复用现有任务级系统指令尾段；Pi 使用原生 `before_agent_start`
+在完整原生提示词之后追加。选择变化时宿主通过既有会话恢复流程更新下次运行，不改主人原话。
+
+| 引擎与位置 | 静态系统片段 |
+| --- | --- |
+| Claude Code | 支持，现有任务级系统指令通道 |
+| Codex | 支持，原生 developer instructions |
+| 本机／SSH Pi | 支持，原生 `before_agent_start` |
+| 设备托管 Pi | 不支持，设备传输尚无宿主静态片段入口 |
+
+这是未发布能力。旧宿主会忽略未知 `systemPrompt`；仅使用这些新增节点的开发示例不得宣称
+旧正式版已支持。发布时把 `minCindyVersion` 写成实际首个支持版本；运行期用 `control-points`
+探测新能力，静态片段是否获准由返回的 `declared / active` 判断。
+
+最小开发示例：[Runtime Context Example](examples/runtime-context/README.md)，含完整清单与可直接打包的 `main.js`。

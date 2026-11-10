@@ -274,6 +274,7 @@ export interface MakerSendTransactionLog {
 }
 
 export interface MakerSendTransactionDeps {
+  prepareRuntimePrompt?(sessionId: string): Promise<void> | undefined;
   composeRuntimeContext?(sessionId: string, text: string, signal?: AbortSignal): Promise<string> | undefined;
   prepareRuntimeTurn?(sessionId: string, message: unknown, signal?: AbortSignal): Promise<{
     options?: Partial<SessionSendOptions>; failure?: DesktopMakerSendResult;
@@ -1104,6 +1105,14 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
           ...(clientId ? { clientId } : {}),
         } : undefined,
       );
+      try {
+        const promptPreparation = deps.prepareRuntimePrompt?.(sessionId);
+        if (promptPreparation) await promptPreparation;
+      } catch (error) {
+        if (!(error instanceof RuntimePluginControlError) || requestedSendOpts.signal?.aborted) throw error;
+        return toCompatibleMakerSendResult(createHostSendFailure(error.action === 'skip' ? 'PLUGIN_TURN_SKIPPED' : 'PLUGIN_TURN_BLOCKED',
+          'The selected system prompt provider is unavailable.'));
+      }
       // 发送前的准备期间就被停止(如供应商组正在等原电脑恢复)：不再打开会话、不再派发，与 Session 在派发前
       // 收到取消是同一个结果，由调用方按「派发前取消」收尾。
       if (requestedSendOpts.signal?.aborted) {

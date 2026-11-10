@@ -1,5 +1,7 @@
 {
   "runtimePlugins": {
+    "save": "Save",
+    "promptUnsupported": "This Pi execution location does not support system prompt fragments.",
     "title": "Task plugins",
     "description": "Select plugins for this task. Changes apply from your next message.",
     "unsupported": "Per-request processing is supported only for local Pi. This task’s engine does not support it.",
@@ -8042,6 +8044,8 @@
         "subscribeScheduleRunDetail": "Automations where you choose it under Pre-run check ask it first. It sees the automation's name and instructions and can skip or stop that run, but can't approve anything for you.",
         "subscribeRoutineRun": "Can check chosen teammate routines before they run",
         "subscribeRoutineRunDetail": "Routines where you choose it under Pre-run check ask it first. It sees the routine's instructions and the events that triggered it, and can skip or stop that run, but can't approve anything for you.",
+        "systemPrompt": "Can add system instructions to selected tasks",
+        "systemPromptDetail": "The static fragments below are added after Cindy’s fixed instructions only in tasks where you select this plugin. Order and engine scope come from the package. Changes apply from the next message; errors follow the task setting.",
         "subscribeComposeContext": "Can add reference material before replies in selected tasks",
         "subscribeComposeContextDetail": "Only selected tasks share their current message with this plugin. Its results are ordinary reference material, not system instructions or approval. Errors follow the task setting.",
         "subscribeSearchMemory": "Can provide memories for selected tasks",

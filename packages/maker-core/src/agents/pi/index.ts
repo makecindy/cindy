@@ -72,6 +72,7 @@ import {
   LOCAL_AGENT_CLIENT,
   MAIN_OWNED_SEND_CONTEXT,
   MODEL_REQUEST_CONTROL,
+  TASK_SYSTEM_PROMPT,
   ASYNC_QUESTION_ANSWER,
   PINNED_SKILL_INVOCATION,
   PI_REQUEST_BODY_RECOVERY_EXHAUSTED,
@@ -345,6 +346,7 @@ const PI_EXTENSION_BUNDLE_HASH_ENV = 'CINDY_PI_EXTENSION_BUNDLE_HASH';
  * 旧提示词的旧进程。进 spawn env 后由远端 envHash 覆盖，变化即条件 restart。
  */
 const PI_APPEND_SYSTEM_PROMPT_HASH_ENV = 'CINDY_PI_APPEND_SYSTEM_PROMPT_HASH';
+const PI_TASK_SYSTEM_PROMPT_FILE_ENV = 'CINDY_PI_TASK_SYSTEM_PROMPT_FILE';
 /** 远端附件内联上限:超过则 fail-before-dispatch, 不静默截断。 */
 const REMOTE_PI_ATTACHMENT_MAX_BYTES = 256 * 1024;
 /** 会话 configHome 内的追加提示词文件名(见 startSession 里 --append-system-prompt 的传参)。 */
@@ -4107,6 +4109,8 @@ export class PiAgent extends BaseAgent {
     let managedSkillPaths: string[];
     let managedSkillRoot: string | undefined;
     let args: string[];
+    const taskSystemPrompt = opts[TASK_SYSTEM_PROMPT] ?? '';
+    let taskSystemPromptPath: string | undefined;
     try {
       const managedSkillGrants = snapshotManagedSkillGrants(isolatedBotProfile(opts.botRuntimeProfile)?.skillPolicy);
       // 受邀者不带本机安装的托管技能(属于本机用户与其组织)。
@@ -4140,6 +4144,10 @@ export class PiAgent extends BaseAgent {
         ? joinRemotePosixPath(configHome, CINDY_APPEND_SYSTEM_PROMPT_FILENAME)
         : undefined;
       if (appendSystemPromptPath) await writeFile(appendSystemPromptPath, appendSystemPrompt);
+      if (taskSystemPrompt) {
+        taskSystemPromptPath = joinRemotePosixPath(configHome, 'task-system-prompt.md');
+        await writeFile(taskSystemPromptPath, taskSystemPrompt, 0o600);
+      }
 
       args = [
         '--mode',
@@ -5768,6 +5776,7 @@ export class PiAgent extends BaseAgent {
         const normalizedKey = key.toLowerCase();
         if (
           normalizedKey === PI_MANAGED_RG_PATH_ENV.toLowerCase()
+          || normalizedKey === PI_TASK_SYSTEM_PROMPT_FILE_ENV.toLowerCase()
           || normalizedKey === PI_LEGACY_SUBAGENT_NODE_ENV.toLowerCase()
           || normalizedKey === PI_ELECTRON_RUN_AS_NODE_ENV.toLowerCase()
         ) {
@@ -5775,6 +5784,7 @@ export class PiAgent extends BaseAgent {
         }
       }
       if (managedRipgrepPath) spawnEnv[PI_MANAGED_RG_PATH_ENV] = managedRipgrepPath;
+      spawnEnv[PI_TASK_SYSTEM_PROMPT_FILE_ENV] = taskSystemPromptPath ?? '';
       // models.json + settings.json 内容 hash 进 spawn env —— 远端 daemon 的
       // envHash 覆盖它, 路由或 retry/transport 改写时条件 restart, 不误 attach。
       // 仅远端注入(本地无 envHash 机制); 值本身无凭证(只是内容指纹)。
@@ -5789,10 +5799,9 @@ export class PiAgent extends BaseAgent {
           .slice(0, 16);
         // 追加提示词本体在文件里，命令行不再带它；指纹进 env 才让提示词变化
         // 触发远端 restart 而不是纯 attach。
-        spawnEnv[PI_APPEND_SYSTEM_PROMPT_HASH_ENV] = createHash('sha256')
-          .update(appendSystemPrompt)
-          .digest('hex')
-          .slice(0, 16);
+        const promptHash = createHash('sha256').update(appendSystemPrompt);
+        if (taskSystemPrompt) promptHash.update('\0task\0').update(taskSystemPrompt);
+        spawnEnv[PI_APPEND_SYSTEM_PROMPT_HASH_ENV] = promptHash.digest('hex').slice(0, 16);
       }
       mergeLoopbackNoProxy(spawnEnv);
       durableSpawnEnv = spawnEnv;

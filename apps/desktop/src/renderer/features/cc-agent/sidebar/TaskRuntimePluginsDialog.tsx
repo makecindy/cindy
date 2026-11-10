@@ -56,12 +56,13 @@ export function TaskRuntimePluginsDialog({ session, onDismiss }: { session: Sess
             for (const target of selected) if (!list.some(item => item.pluginId === target.pluginId)) {
               list.push({ pluginId: target.pluginId, name: t('scheduler.editor.preRunPlugin.unavailable') });
             }
-            const unsupported = point === 'will-model-request' && (session.agentKind !== 'pi' || !!session.remoteHostId || !!session.agentDeviceId);
+            const unsupported = point === 'will-model-request' && (session.agentKind !== 'pi' || !!session.remoteHostId || !!session.agentDeviceId)
+              || point === 'system-prompt' && session.agentKind === 'pi' && !!session.agentDeviceId;
             const spec = GHOST_CONTROL_POINTS[point];
             return <fieldset key={point} disabled={busy || !loaded} className="flex flex-col gap-2">
               <legend className="mb-2 text-14 font-medium text-[var(--text-primary)]">{t(`settings.ghosts.perm.${spec.labelKey}`)}</legend>
               {(point === 'will-compose-context' || point === 'will-search-memory') && <p className="text-13 leading-5 text-[var(--text-secondary)]">{t(`settings.ghosts.perm.${spec.detailKey}`)}</p>}
-              {unsupported && <p className="text-13 leading-5 text-[var(--text-secondary)]">{t('runtimePlugins.unsupported')}</p>}
+              {unsupported && <p className="text-13 leading-5 text-[var(--text-secondary)]">{t(point === 'system-prompt' ? 'runtimePlugins.promptUnsupported' : 'runtimePlugins.unsupported')}</p>}
               {loaded && !list.length && <p className="text-13 text-[var(--text-secondary)]">{t('scheduler.editor.preRunPlugin.empty')}</p>}
               {list.map(plugin => {
                 const target = selected.find(item => item.pluginId === plugin.pluginId);
@@ -85,8 +86,8 @@ export function TaskRuntimePluginsDialog({ session, onDismiss }: { session: Sess
           {failed && <p role="alert" className="text-13 text-[var(--text-primary)]">{t('runtimePlugins.failed')}</p>}
         </div>
         <div className="flex justify-end gap-2">
-          <Button palette="confirmation" variant="primary" disabled={!loaded || busy} onClick={() => void save()}>{t('common.save')}</Button>
-          <Button palette="confirmation" variant="secondary" disabled={busy} onClick={onDismiss}>{t('common.cancel')}</Button>
+          <Button palette="confirmation" variant="primary" disabled={!loaded || busy} onClick={() => void save()}>{t('runtimePlugins.save')}</Button>
+          <Button palette="confirmation" variant="secondary" disabled={busy} onClick={onDismiss}>{t('commonUi.confirmDialog.cancel')}</Button>
         </div>
       </Dialog.Content>
     </Dialog.Portal>

@@ -28,7 +28,7 @@ it('starts unselected and saves only explicit task choices', async () => {
   expect((router as HTMLInputElement).checked).toBe(false);
   expect((editor as HTMLInputElement).checked).toBe(false);
   fireEvent.click(router);
-  fireEvent.click(screen.getByRole('button', { name: 'common.save' }));
+  fireEvent.click(screen.getByRole('button', { name: 'runtimePlugins.save' }));
   await waitFor(() => expect(dismiss).toHaveBeenCalledOnce());
   expect(runtimePlugins.mock.calls).toEqual([['task'], ['task', {
     'will-start-turn': [{ pluginId: 'will-start-turn', onFailure: 'block' }],
@@ -40,7 +40,7 @@ it('does not save a stale owner selection and disables unsupported request contr
   const editor = await screen.findByRole('checkbox', { name: 'will-model-request' });
   expect((editor as HTMLInputElement).disabled).toBe(true);
   setDataOwnerGeneration('other-owner');
-  fireEvent.click(screen.getByRole('button', { name: 'common.save' }));
+  fireEvent.click(screen.getByRole('button', { name: 'runtimePlugins.save' }));
   expect(runtimePlugins).toHaveBeenCalledTimes(1);
   expect(dismiss).not.toHaveBeenCalled();
 });

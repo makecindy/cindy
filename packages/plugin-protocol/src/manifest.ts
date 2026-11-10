@@ -3,6 +3,7 @@ import { validateWithStoredMcpApps, parseGhostMcpApps, type GhostMcpApps } from 
 import { parseGhostSecretCheck, type GhostSecretCheckDecl } from './secretCheck.js';
 import { parseGhostRoutineEvents, type GhostRoutineEvents } from './routineEvents.js';
 import { parseGhostModelsNeeds, type GhostModelsNeeds } from './pluginModels.js';
+import { parseGhostSystemPromptFragments, type GhostSystemPromptFragment } from './runtimeContext.js';
 import { GHOST_LOCALES, type GhostLocale } from './locales.js';
 import { validateGhostReadmeDeclaration } from './readme.js';
 export { GHOST_LOCALES, type GhostLocale } from './locales.js';
@@ -897,6 +898,8 @@ export const GHOST_SETUP_KV_KEY_RE = /^[A-Za-z0-9_.-]{1,64}$/;
 
 /** 已校验的 ghost.json 协议文档；Desktop 会再投影成无 slots 的运行时模型。 */
 export interface GhostManifest {
+  /** Static task-scoped system instructions, reviewed verbatim at install/update. */
+  systemPrompt?: GhostSystemPromptFragment[];
   /** Optional MCP Apps resources and links to existing tools. */
   mcpApps?: unknown;
   /** Host-owned mail editor; providers supply mailbox adapters only. */
@@ -1215,6 +1218,7 @@ const GHOST_MANIFEST_KNOWN_TOP_LEVEL_FIELDS = new Set([
   'mcpApps',
   'routineEvents',
   'models',
+  'systemPrompt',
   'schemaVersion',
   'id',
   'name',
@@ -2076,6 +2080,11 @@ function validateGhostManifestInput(value: unknown, preserveHistoricalParameterS
   if (routineEvents === null) return { ok: false, reason: 'Invalid routineEvents declaration' };
   const models = raw.models === undefined ? undefined : parseGhostModelsNeeds(raw.models);
   if (models === null) return { ok: false, reason: 'models must be { "types": [...] } with unique type names' };
+  const systemPrompt = prepared.schemaVersion === 3 && raw.systemPrompt !== undefined
+    ? parseGhostSystemPromptFragments(raw.systemPrompt) : undefined;
+  if (raw.systemPrompt !== undefined && !systemPrompt && !preserveHistoricalParameterSize) {
+    return { ok: false, reason: 'systemPrompt 必须是 v3 静态片段数组，含唯一 id、text、整数 order、scope: selected-task' };
+  }
   let subscribe: GhostSubscribeNeeds | undefined;
   if (raw.subscribe !== undefined) {
     if (!isPlainObject(raw.subscribe)) {
@@ -3984,6 +3993,7 @@ function validateGhostManifestInput(value: unknown, preserveHistoricalParameterS
       ...(subscribe !== undefined ? { subscribe } : {}),
       ...(routineEvents !== undefined ? { routineEvents } : {}),
       ...(models !== undefined ? { models } : {}),
+      ...(systemPrompt !== undefined ? { systemPrompt } : {}),
       ...(network !== undefined ? { network } : {}),
       ...(raw.command !== undefined ? { command: raw.command as string } : {}),
       ...(keywords !== undefined ? { keywords } : {}),

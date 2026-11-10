@@ -89,8 +89,9 @@ describe('local application task takeover', () => {
     const { deps, session } = createDeps();
     deps.prepareRuntimeTurn = async () => { order.push('plugin'); return { options: { [MODEL_REQUEST_CONTROL]: control } }; };
     deps.applyPendingAgentSwitch = async () => { order.push('route'); };
+    deps.prepareRuntimePrompt = async () => { order.push('prompt'); };
     await createMakerSendTransaction(deps).sendToAgentAccepted('session-1', 'hello');
-    expect(order).toEqual(['plugin', 'route']);
+    expect(order).toEqual(['plugin', 'route', 'prompt']);
     expect(vi.mocked(session.send).mock.calls[0][1]?.[MODEL_REQUEST_CONTROL]).toBe(control);
   });
 

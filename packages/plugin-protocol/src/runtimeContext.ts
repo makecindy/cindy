@@ -1,9 +1,34 @@
 /** Data supplied by runtime providers. Origin is always attached by the Host. */
 export interface GhostContextBlock { id: string; text: string }
 export interface GhostMemoryEntry { id: string; title: string; content: string; type?: 'user' | 'feedback' | 'project' | 'reference' }
+export interface GhostSystemPromptFragment {
+  id: string;
+  text: string;
+  order: number;
+  scope: 'selected-task';
+  agentKinds?: Array<'cc' | 'codex' | 'pi'>;
+}
 export const GHOST_CONTEXT_MAX_CHARS = 32768;
 const record = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value);
 const text = (value: unknown, max: number): value is string => typeof value === 'string' && value.length > 0 && value.length <= max;
+
+export function parseGhostSystemPromptFragments(value: unknown): GhostSystemPromptFragment[] | undefined {
+  if (!Array.isArray(value) || value.length === 0 || value.length > 32) return undefined;
+  const result: GhostSystemPromptFragment[] = [];
+  const ids = new Set<string>();
+  let size = 0;
+  for (const item of value) {
+    if (!record(item) || !text(item.id, 128) || ids.has(item.id) || !text(item.text, GHOST_CONTEXT_MAX_CHARS)
+      || !item.text.trim() || (size += item.text.length) > GHOST_CONTEXT_MAX_CHARS
+      || typeof item.order !== 'number' || !Number.isSafeInteger(item.order) || item.scope !== 'selected-task'
+      || (item.agentKinds !== undefined && (!Array.isArray(item.agentKinds) || !item.agentKinds.length
+        || !item.agentKinds.every(kind => ['cc', 'codex', 'pi'].includes(kind))))) return undefined;
+    ids.add(item.id);
+    result.push({ id: item.id, text: item.text, order: item.order, scope: 'selected-task',
+      ...(Array.isArray(item.agentKinds) ? { agentKinds: [...new Set(item.agentKinds)] as GhostSystemPromptFragment['agentKinds'] } : {}) });
+  }
+  return result;
+}
 
 export function parseGhostContextBlocks(value: unknown): GhostContextBlock[] | undefined {
   if (!Array.isArray(value) || value.length > 32) return undefined;

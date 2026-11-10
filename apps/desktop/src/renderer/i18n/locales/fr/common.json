@@ -1,5 +1,7 @@
 {
   "runtimePlugins": {
+    "save": "Enregistrer",
+    "promptUnsupported": "Cet emplacement d’exécution de Pi ne prend pas en charge les fragments d’instructions système.",
     "title": "Plugins de la tâche",
     "description": "Choisissez les plugins de cette tâche. Les changements prennent effet au prochain message.",
     "unsupported": "Le traitement de chaque requête est disponible uniquement avec Pi en local. Le moteur de cette tâche ne le prend pas en charge.",
@@ -8114,6 +8116,8 @@
         "subscribeScheduleRunDetail": "Les automatisations pour lesquelles tu le choisis dans Vérification préalable le consultent d’abord. Il voit leur nom et leurs instructions et peut ignorer ou arrêter cette exécution, sans rien approuver à ta place.",
         "subscribeRoutineRun": "Peut vérifier les routines choisies avant leur exécution",
         "subscribeRoutineRunDetail": "Les routines pour lesquelles tu le choisis dans Vérification préalable le consultent d’abord. Il voit leurs instructions et les événements déclencheurs et peut ignorer ou arrêter cette exécution, sans rien approuver à ta place.",
+        "systemPrompt": "Peut ajouter des instructions système aux tâches sélectionnées",
+        "systemPromptDetail": "Les textes statiques ci-dessous suivent les instructions fixes de Cindy uniquement dans les tâches où ce plugin est sélectionné. Le paquet définit l’ordre et les moteurs concernés. Les changements prennent effet au prochain message ; les erreurs suivent le réglage de la tâche.",
         "subscribeComposeContext": "Peut ajouter des références avant les réponses des tâches sélectionnées",
         "subscribeComposeContextDetail": "Seules les tâches sélectionnées partagent leur message actuel. Les résultats sont des références ordinaires, sans instruction système ni autorisation. Les erreurs suivent le réglage de la tâche.",
         "subscribeSearchMemory": "Peut fournir des souvenirs aux tâches sélectionnées",

@@ -1,5 +1,6 @@
 import type { GhostRuntimeControlPointResult, GhostControlPointData } from '../../shared/ghost.js';
 import type { RuntimePluginPoint, RuntimePluginSettings, RuntimePluginTarget } from '../../shared/pluginRuntime.js';
+type RuntimeControlPoint = Exclude<RuntimePluginPoint, 'system-prompt'>;
 
 export class RuntimePluginControlError extends Error {
   constructor(
@@ -17,12 +18,12 @@ export class RuntimePluginControlError extends Error {
 export function createRuntimePluginControl(deps: {
   readSettings(sessionId: string): RuntimePluginSettings | undefined;
   captureOwner(): () => boolean;
-  screen(point: RuntimePluginPoint, data: GhostControlPointData, target: RuntimePluginTarget): Promise<GhostRuntimeControlPointResult>;
+  screen(point: RuntimeControlPoint, data: GhostControlPointData, target: RuntimePluginTarget): Promise<GhostRuntimeControlPointResult>;
 }) {
   return {
     /** Undefined is deliberately synchronous: no selection adds no await or data lookup. */
     run<Data extends GhostControlPointData>(
-      point: RuntimePluginPoint,
+      point: RuntimeControlPoint,
       sessionId: string,
       readData: () => Promise<Data>,
       apply: (

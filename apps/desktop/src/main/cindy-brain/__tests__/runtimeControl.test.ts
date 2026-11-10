@@ -5,6 +5,9 @@ import type { RuntimePluginPoint, RuntimePluginSettings, RuntimePluginTarget } f
 import { MODEL_REQUEST_CONTROL } from '@cindy/maker-core';
 import { createTaskRuntimePlugins } from '../../maker-ipc/runtimePlugins.js';
 import { createRuntimeContextProviders } from '../runtimeContext.js';
+import { createStaticPromptProvider } from '../staticPrompt.js';
+import type { InstalledGhost } from '../../../shared/ghost.js';
+import { assembleSystemPromptSections } from '@cindy/maker-core';
 
 // Test value: the production controller must never load data or call plugins for
 // unselected tasks, must preserve selected order, and must not apply stale answers.
@@ -12,6 +15,27 @@ import { createRuntimeContextProviders } from '../runtimeContext.js';
 // host effects. Minimum failure: an empty selection or revocation during an ask.
 // Tier: unit, injected transport, no processes/network/waits.
 describe('task runtime plugin control', () => {
+  // System prompt contract, unit: task opt-in and package scope filter before
+  // registration; order/name are stable, and the fixed prefix is untouched.
+  it('assembles selected static sections in stable order after the fixed prefix', () => {
+    let settings: RuntimePluginSettings = {};
+    const find = vi.fn((id: string) => ({ enabled: true, approvedControlPoints: ['system-prompt'],
+      manifest: { systemPrompt: [
+        { id: 'last', order: 20, text: 'LAST', scope: 'selected-task' },
+        { id: 'first', order: 10, text: `${id} {{literal}}`, scope: 'selected-task', agentKinds: ['pi'] },
+      ] },
+    } as unknown as InstalledGhost));
+    const provider = createStaticPromptProvider({ readSettings: () => settings, find });
+    const prefix = 'Fixed prefix\n\nOriginal task instructions';
+    expect(provider('unselected', 'pi')).toBe('');
+    expect(find).not.toHaveBeenCalled();
+    expect(assembleSystemPromptSections(prefix, [])).toBe(prefix);
+    settings = { 'system-prompt': [{ pluginId: 'z', onFailure: 'block' }, { pluginId: 'a', onFailure: 'block' }] };
+    const text = provider('selected', 'pi');
+    expect(text).toBe('a {{literal}}\n\nz {{literal}}\n\nLAST\n\nLAST');
+    expect(assembleSystemPromptSections(prefix, [{ name: 'task', order: 0, text }])).toBe(prefix + '\n\n' + text);
+    expect(provider('selected', 'codex')).toBe('LAST\n\nLAST');
+  });
   const input: GhostRuntimePointData = { sessionId: 'task', text: 'work', route: { agentKind: 'pi', providerId: 'p', model: 'm1' } };
 
   function fixture(initial: RuntimePluginSettings = {}) {

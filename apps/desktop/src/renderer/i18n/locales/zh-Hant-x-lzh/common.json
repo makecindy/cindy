@@ -1,5 +1,7 @@
 {
   "runtimePlugins": {
+    "save": "存之",
+    "promptUnsupported": "此 Pi 所在之處不支援系統提示詞片段。",
     "title": "差事法器",
     "description": "為此差事擇法器，改動自下條消息生效。",
     "unsupported": "逐次請求前處置僅本機 Pi 可用，此差事引擎不支援。",
@@ -8044,6 +8046,8 @@
         "subscribeRoutineRunDetail": "凡於「預檢」擇之之例行差事，每番觸發必先詢之。其可見差事之指令与觸發事件之內容，可令此番略過或止之，不能代君准允。",
         "subscribeScheduleRun": "可於君所擇之自動化運行前行檢",
         "subscribeScheduleRunDetail": "凡於「預檢」擇之之自動化，運行前必先詢之。其可見此自動化之名与指令，可令此番略過或止之，不能代君准允。",
+        "systemPrompt": "可為所選差事補系統提示詞",
+        "systemPromptDetail": "下列靜文唯入所選差事，置 Cindy 固定提示詞之後；次序與引擎之域依包中所載。改動自下條訊息生效，有誤依差事所設處置。",
         "subscribeComposeContext": "可於所選差事答前補資料",
         "subscribeComposeContextDetail": "唯所選差事交其當前消息。所返為參閱之材，不入系統提示詞，不作主人授權；有誤依差事所設處置。",
         "subscribeSearchMemory": "可為所選差事供記憶",

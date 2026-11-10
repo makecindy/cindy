@@ -6,7 +6,7 @@ import { parseGhostRoutineEvents, type GhostRoutineEvents } from '@cindy/plugin-
 import { parseGhostModelsNeeds, type GhostModelsNeeds } from '@cindy/plugin-protocol';
 export type { GhostModelRoute } from '@cindy/plugin-protocol';
 import type { GhostModelRoute } from '@cindy/plugin-protocol';
-import type { GhostContextBlock, GhostMemoryEntry } from '@cindy/plugin-protocol';
+import { parseGhostSystemPromptFragments, type GhostSystemPromptFragment, type GhostContextBlock, type GhostMemoryEntry } from '@cindy/plugin-protocol';
 import { parseMailReader } from '@cindy/maker-shared/mail-message';
 import { isPluginModelSelection, parsePluginAuthorizationRequest, type PluginAuthorizationRequest, type PluginAuthorizationResult, type PluginModelSelection } from '@cindy/device-link';
 import {
@@ -799,6 +799,10 @@ export const GHOST_CONTROL_POINTS = {
     defaultOnFailure: 'allow', timeoutMs: 8_000, permissionKey: 'subscribe:hooks:search-memory',
     labelKey: 'subscribeSearchMemory', detailKey: 'subscribeSearchMemoryDetail',
   },
+  'system-prompt': {
+    actions: ['allow'], failureActions: ['allow', 'skip', 'block'], defaultOnFailure: 'block', timeoutMs: 8_000,
+    permissionKey: 'system-prompt', labelKey: 'systemPrompt', detailKey: 'systemPromptDetail',
+  },
 } as const satisfies Record<string, GhostControlPointSpec>;
 export type GhostControlPointId = keyof typeof GHOST_CONTROL_POINTS;
 export const GHOST_CONTROL_POINT_IDS = Object.keys(GHOST_CONTROL_POINTS) as GhostControlPointId[];
@@ -813,8 +817,9 @@ export function declaredAutoApproveTools(manifest: Pick<GhostManifest, 'tools'>)
 }
 
 /** 插件 manifest 里声明且当前 Host 认识的控制节点。 */
-export function declaredGhostControlPoints(manifest: Pick<GhostManifest, 'subscribe'>): GhostControlPointId[] {
-  return (manifest.subscribe?.hooks ?? []).filter(isGhostControlPointId);
+export function declaredGhostControlPoints(manifest: Pick<GhostManifest, 'subscribe' | 'systemPrompt'>): GhostControlPointId[] {
+  const points = (manifest.subscribe?.hooks ?? []).filter((point): point is Exclude<GhostControlPointId, 'system-prompt'> => isGhostControlPointId(point) && point !== 'system-prompt');
+  return manifest.systemPrompt?.length ? [...points, 'system-prompt'] : points;
 }
 
 /** 某个已装插件在该控制节点上是否生效:声明 + 用户确认过。 */
@@ -1675,6 +1680,7 @@ export function isGhostSetupErrorCode(value: unknown): value is GhostSetupErrorC
 
 /** ghost.json 清单(不变量由 validateGhostManifest 保证)。 */
 export interface GhostManifest {
+  systemPrompt?: GhostSystemPromptFragment[];
   /** Optional MCP Apps resources and links to existing tools. */
   mcpApps?: unknown;
   /** Optional v3 extension, validated only when projecting homepage recommendations. */
@@ -2244,6 +2250,8 @@ export function ghostDeclaresHiddenTasks(manifest: Pick<GhostManifest, 'agent'> 
 
 export function ghostPermissionItems(manifest: GhostManifest): GhostPermissionItem[] {
   const items: GhostPermissionItem[] = [];
+  if (manifest.systemPrompt?.length) items.push({ key: 'system-prompt', kind: 'subscribe',
+    labelKey: 'systemPrompt', detailKey: 'systemPromptDetail', detail: JSON.stringify(manifest.systemPrompt, null, 2) });
   if (pluginHasToolUi(manifest)) items.push({ key: 'ui:pages', kind: 'panel', labelKey: 'mcpUi',
     detailKey: 'uiPageAccess', detailArgs: {
       pages: (getPluginToolUi(manifest)?.resources ?? []).map(resource => resource.uri).sort().join(', ') || '—',
@@ -2679,6 +2687,7 @@ export function ghostPermissionItems(manifest: GhostManifest): GhostPermissionIt
         }
         // 控制节点逐点一项，key 来自目录：新增节点自动进确认清单，更新新增节点会被 diff 拦下复核。
         for (const point of declaredGhostControlPoints(manifest)) {
+          if (point === 'system-prompt') continue;
           const spec = GHOST_CONTROL_POINTS[point];
           hookItems.push({
             key: spec.permissionKey,
@@ -2942,6 +2951,7 @@ export function diffInstalledGhostPermissionItems(
       mcpApps: installed.uiCapabilityApproved === true ? installed.manifest.mcpApps : undefined,
       // 同理：声明了但用户从没确认过的控制节点不算旧权限，更新时作为新增项复核。
       subscribe: withoutUnapprovedControlPoints(installed),
+      systemPrompt: installed.approvedControlPoints?.includes('system-prompt') ? installed.manifest.systemPrompt : undefined,
       tools: withoutUnapprovedAutoTools(installed),
     };
     const diff = diffGhostPermissionItems(previous, next);
@@ -3440,6 +3450,7 @@ const GHOST_MANIFEST_KNOWN_TOP_LEVEL_FIELDS = new Set([
   'mcpApps',
   'routineEvents',
   'models',
+  'systemPrompt',
   'schemaVersion',
   'id',
   'name',
@@ -5600,6 +5611,11 @@ function validateGhostManifestInput(
   if (routineEvents === null) return { ok: false, reason: 'Invalid routineEvents declaration' };
   const models = raw.models === undefined ? undefined : parseGhostModelsNeeds(raw.models);
   if (models === null) return { ok: false, reason: 'models must be { "types": [...] } with unique type names' };
+  const systemPrompt = prepared.schemaVersion === 3 && raw.systemPrompt !== undefined
+    ? parseGhostSystemPromptFragments(raw.systemPrompt) : undefined;
+  if (raw.systemPrompt !== undefined && !systemPrompt && !preserveHistoricalParameterSize) {
+    return { ok: false, reason: 'systemPrompt 必须是 v3 静态片段数组，含唯一 id、text、整数 order、scope: selected-task' };
+  }
   let subscribe: GhostSubscribeNeeds | undefined;
   if (raw.subscribe !== undefined) {
     if (!isPlainObject(raw.subscribe)) {
@@ -6798,6 +6814,7 @@ function validateGhostManifestInput(
       ...(subscribe !== undefined ? { subscribe } : {}),
       ...(routineEvents !== undefined ? { routineEvents } : {}),
       ...(models !== undefined ? { models } : {}),
+      ...(systemPrompt !== undefined ? { systemPrompt } : {}),
       ...(network !== undefined ? { network } : {}),
       ...(preview !== undefined ? { preview } : {}),
       ...(browserExtension !== undefined ? { browserExtension } : {}),

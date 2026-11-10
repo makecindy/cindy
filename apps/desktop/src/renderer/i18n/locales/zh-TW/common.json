@@ -1,5 +1,7 @@
 {
   "runtimePlugins": {
+    "save": "儲存",
+    "promptUnsupported": "目前 Pi 執行位置不支援系統提示詞片段。",
     "title": "任務插件",
     "description": "為這個任務選擇插件。修改從下一則訊息起生效。",
     "unsupported": "每次請求前處理僅支援本機 Pi，目前任務的引擎不支援。",
@@ -7999,6 +8001,8 @@
         "subscribeScheduleRunDetail": "在「前置檢查」裡選了它的自動化，執行前會先詢問它。它看得到這項自動化的名稱和指令，可以讓這次跳過或停止，但不能替你核准。",
         "subscribeRoutineRun": "可在你選定的夥伴例行任務執行前做檢查",
         "subscribeRoutineRunDetail": "在「前置檢查」裡選了它的例行任務，每次觸發後會先詢問它。它看得到例行任務的指令和觸發它的事件內容，可以讓這次跳過或停止，但不能替你核准。",
+        "systemPrompt": "可為所選任務補充系統提示詞",
+        "systemPromptDetail": "下方靜態片段只會進入選了這個插件的任務，放在 Cindy 固定提示詞之後，順序與引擎範圍依套件宣告。修改從下一則訊息起生效，出錯時依任務設定處理。",
         "subscribeComposeContext": "可在所選任務回覆前補充資料",
         "subscribeComposeContextDetail": "只有選了它的任務會將目前訊息交給它。回傳內容作為一般參考資料，不進入系統提示詞，也不代表主人授權。出錯時依任務設定處理。",
         "subscribeSearchMemory": "可為所選任務提供記憶",
