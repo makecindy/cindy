@@ -58,6 +58,8 @@ export const BOT_SETTINGS_OPS = [
   'channels.im.remove',
   'channels.im.listGroups',
   'channels.im.setGroupActivation',
+  'channels.im.listDiscordChannels',
+  'channels.im.setDiscordChannelAccess',
   'channels.im.listLanes',
   'channels.im.resetLane',
   'channels.im.listAdoptable',

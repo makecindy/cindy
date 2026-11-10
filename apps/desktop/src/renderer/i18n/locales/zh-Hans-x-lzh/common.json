@@ -4705,7 +4705,7 @@
     },
     "discordBot": {
       "title": "Discord 机器人",
-      "description": "系君自建之 Discord Bot，于 Discord 私聊中连 {{appName}}。",
+      "description": "系君自建之 Discord Bot，于 Discord 私聊与君所选之服务器频道中连 {{appName}}。",
       "statusAria": "Discord 机器人之状：{{status}}",
       "status": {
         "needsConfig": "待设",
@@ -4749,6 +4749,64 @@
         "cellLabel": "讯之告",
         "hint": "上下线时，由 Discord Bot 遣告讯"
       },
+      "channels": {
+        "title": "服务器频道",
+        "summary": {
+          "unknown": "方读……",
+          "off": "未启",
+          "on": "已启 {{count}} 服务器"
+        },
+        "hint": "默不开放。启一服务器，于其文字频道 @ 机器人即可召之；每频道、每话题，各有其独立之上下文，机器人亦仅得见 @ 之讯。",
+        "ownerOnly": "今唯君可召。",
+        "offline": "机器人未连线，连上方可择频道；已启者仍旧。",
+        "members": {
+          "label": "许频道成员用之",
+          "notice": "频道成员默不许。许之，则于该频道 @ 机器人之成员，得用{{name}}已设之工具，并共{{name}}之记忆；权限一依{{name}}所设，指令仍唯君可用。",
+          "aria": "许 #{{channel}} 之成员用之",
+          "guildAria": "许 {{guild}} 之成员用之"
+        },
+        "loading": "方读机器人所在之服务器……",
+        "refresh": "刷新",
+        "empty": "机器人尚未入任何服务器。请于 Discord Developer Portal 生邀请链接，邀之入服务器，再刷新。",
+        "noTextChannels": "无文字频道",
+        "toggleAria": "启 {{guild}} 之 #{{channel}}",
+        "error": {
+          "load": "读服务器列表失败。",
+          "save": "此番所改未能存，今显现所存之设。",
+          "unsupported": "彼电脑上之 Cindy 版本较旧，未能于此设服务器频道。请先升彼电脑上之 Cindy 至最新版。"
+        },
+        "permission": {
+          "cannotSend": "机器人于此频道不得见亦不得言",
+          "limited": "缺权限：{{list}}",
+          "separator": "、",
+          "readHistory": "Read Message History",
+          "embed": "Embed Links",
+          "attachFiles": "Attach Files",
+          "sendInThreads": "Send Messages in Threads"
+        },
+        "unavailable": {
+          "title": "已不可用之服务器或频道",
+          "hint": "此等已删，或机器人已不在其服务器，可自列中移之。",
+          "remove": "移之"
+        },
+        "ownerOnlyCardNotice": "唯此机器人之主，方可按此钮。",
+        "guild": {
+          "summary": {
+            "off": "未启",
+            "all": "诸频道",
+            "selected": "已择 {{count}} 频道",
+            "none": "未择频道"
+          },
+          "toggleAria": "启 {{guild}}",
+          "more": "余",
+          "modeAria": "{{guild}} 所涵之频道",
+          "mode": {
+            "all": "诸频道",
+            "selected": "唯所择"
+          },
+          "allHint": "后增之文字频道亦在其中；机器人唯于可见可言之频道应之。"
+        }
+      },
       "ownerNotice": {
         "linked": "✅ 已相系矣，径来言谈便是~",
         "disconnected": "🔌 已断其系，需时再连便是~",
@@ -4765,11 +4823,11 @@
         },
         "step2": {
           "title": "Privileged Intent",
-          "body": "P1 私聊之能，无须打开任何 Privileged Intent。"
+          "body": "无须打开任何 Privileged Intent（Message Content 仍闭）。于服务器中，机器人仅得见 @ 之讯。"
         },
         "step3": {
           "title": "邀 Bot",
-          "body": "于 OAuth2 URL Generator 勾选 scope bot，并授 Send Messages、Read Message History、Attach Files 之权，邀 Bot 入君所在之任一 server；DM 须君与 Bot 同在一 server。"
+          "body": "于 OAuth2 URL Generator 勾选 scope bot，并授 View Channels、Send Messages、Send Messages in Threads、Embed Links、Attach Files、Read Message History、Add Reactions 之权，邀 Bot 入君所在之任一 server；DM 须君与 Bot 同在一 server。"
         },
         "step4": {
           "title": "录用户 ID",

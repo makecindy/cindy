@@ -11,6 +11,7 @@ import {
   type BotImChannel,
   type BotImConnectionAddResult,
   type BotImConnectionGroupsPayload,
+  type BotImDiscordChannelsPayload,
   type BotImConnectionLanesPayload,
   type BotImConnectionListPayload,
 } from '../../../shared/botImConnection.js';
@@ -67,6 +68,8 @@ export interface BotSettingsOpsDeps {
       remove(id: string): Promise<BotImConnectionListPayload>;
       listGroups(id: string): Promise<BotImConnectionGroupsPayload>;
       setGroupActivation(id: string, chatId: string, mode: 'mention' | 'always'): Promise<BotImConnectionGroupsPayload>;
+      listDiscordChannels(id: string): Promise<BotImDiscordChannelsPayload>;
+      setDiscordChannelAccess(id: string, access: unknown): Promise<BotImDiscordChannelsPayload>;
       listLanes(id: string): Promise<BotImConnectionLanesPayload>;
       resetLane(id: string, sessionId: string): Promise<BotImConnectionLanesPayload>;
       listAdoptable(): Promise<BotImAdoptablePersonalBotsPayload>;
@@ -287,6 +290,12 @@ export function createBotRemoteSettingsOps(deps: BotSettingsOpsDeps): Partial<Re
       const id = await ownConnection(deps, call);
       if (!isBotImGroupChatId(call.args.chatId)) fail('chatId is invalid');
       return deps.channels.im.setGroupActivation(id, call.args.chatId as string, call.args.mode === 'always' ? 'always' : 'mention');
+    },
+    // 白名单只属于这位伙伴自己的连接（ownConnection 校验 botId 归属）；整份替换由主进程规整后落盘。
+    'channels.im.listDiscordChannels': async call => deps.channels.im.listDiscordChannels(await ownConnection(deps, call)),
+    'channels.im.setDiscordChannelAccess': async call => {
+      const id = await ownConnection(deps, call);
+      return deps.channels.im.setDiscordChannelAccess(id, record(call.args.access, 'access'));
     },
     'channels.im.listLanes': async call => deps.channels.im.listLanes(await ownConnection(deps, call)),
     'channels.im.resetLane': async call => {

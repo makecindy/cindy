@@ -4705,7 +4705,7 @@
     },
     "discordBot": {
       "title": "Discord 機器人",
-      "description": "繫結你自建的 Discord Bot，在 Discord 私聊裡連線 {{appName}}。",
+      "description": "繫結你自建的 Discord Bot，在 Discord 私聊和你選定的伺服器頻道裡連線 {{appName}}。",
       "statusAria": "Discord 機器人狀態：{{status}}",
       "status": {
         "needsConfig": "需要配置",
@@ -4749,6 +4749,64 @@
         "cellLabel": "訊息通知",
         "hint": "上下線時由 Discord Bot 傳送通知訊息"
       },
+      "channels": {
+        "title": "伺服器頻道",
+        "summary": {
+          "unknown": "讀取中…",
+          "off": "未開啟",
+          "on": "已開啟 {{count}} 個伺服器"
+        },
+        "hint": "預設不開放。開啟一個伺服器後，在它的文字頻道裡 @ 機器人即可召喚；每個頻道、每個話題各有獨立的上下文，機器人也只會收到 @ 它的訊息。",
+        "ownerOnly": "目前只有你本人能召喚。",
+        "offline": "機器人未連線，連上後才能選擇頻道；已啟用的頻道維持不變。",
+        "members": {
+          "label": "允許頻道成員使用",
+          "notice": "頻道成員預設關閉。允許後，在該頻道 @ 機器人的成員會用到{{name}}已設定的工具，並共用{{name}}的記憶；權限沿用{{name}}的權限設定，指令仍只有你能用。",
+          "aria": "允許 #{{channel}} 的成員使用",
+          "guildAria": "允許 {{guild}} 的成員使用"
+        },
+        "loading": "正在讀取機器人所在的伺服器…",
+        "refresh": "重新整理",
+        "empty": "機器人還沒有加入任何伺服器。請在 Discord Developer Portal 產生邀請連結把它加入伺服器，再點重新整理。",
+        "noTextChannels": "沒有文字頻道",
+        "toggleAria": "啟用 {{guild}} 的 #{{channel}}",
+        "error": {
+          "load": "讀取伺服器列表失敗。",
+          "save": "這次修改沒有儲存成功，已顯示目前實際儲存的設定。",
+          "unsupported": "那台電腦上的 Cindy 版本較舊，暫不支援在這裡設定伺服器頻道。請先把那台電腦上的 Cindy 升級到最新版。"
+        },
+        "permission": {
+          "cannotSend": "機器人在此頻道無法檢視或發言",
+          "limited": "缺少權限：{{list}}",
+          "separator": "、",
+          "readHistory": "Read Message History",
+          "embed": "Embed Links",
+          "attachFiles": "Attach Files",
+          "sendInThreads": "Send Messages in Threads"
+        },
+        "unavailable": {
+          "title": "已不可用的伺服器或頻道",
+          "hint": "這些已被刪除，或機器人已不在對應伺服器，可以從列表中移除。",
+          "remove": "移除"
+        },
+        "ownerOnlyCardNotice": "只有這個機器人的主人才能點這個按鈕。",
+        "guild": {
+          "summary": {
+            "off": "未開啟",
+            "all": "全部頻道",
+            "selected": "已選 {{count}} 個頻道",
+            "none": "未選擇頻道"
+          },
+          "toggleAria": "開啟 {{guild}}",
+          "more": "更多",
+          "modeAria": "{{guild}} 涵蓋的頻道",
+          "mode": {
+            "all": "全部頻道",
+            "selected": "僅指定頻道"
+          },
+          "allHint": "包含之後新增的文字頻道；機器人只會在有檢視和發言權限的頻道裡回應。"
+        }
+      },
       "ownerNotice": {
         "linked": "✅ 關聯好啦，直接開聊就行~",
         "disconnected": "🔌 已斷開關聯啦，需要時再連上就行~",
@@ -4765,11 +4823,11 @@
         },
         "step2": {
           "title": "Privileged Intent",
-          "body": "P1 私聊能力無需開啟任何 Privileged Intent。"
+          "body": "無需開啟任何 Privileged Intent（保持 Message Content 關閉）。在伺服器裡，機器人只會收到 @ 它的訊息。"
         },
         "step3": {
           "title": "邀請 Bot",
-          "body": "在 OAuth2 URL Generator 勾選 scope bot，並授予 Send Messages、Read Message History、Attach Files 權限，把 Bot 邀請到任一你所在的 server；DM 需要你和 Bot 有共同 server。"
+          "body": "在 OAuth2 URL Generator 勾選 scope bot，並授予 View Channels、Send Messages、Send Messages in Threads、Embed Links、Attach Files、Read Message History、Add Reactions 權限，把 Bot 邀請到任一你所在的 server；DM 需要你和 Bot 有共同 server。"
         },
         "step4": {
           "title": "複製使用者 ID",

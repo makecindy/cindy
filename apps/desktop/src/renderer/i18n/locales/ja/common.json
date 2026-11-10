@@ -4705,7 +4705,7 @@
     },
     "discordBot": {
       "title": "Discord ボット",
-      "description": "自分で作成した Discord ボットを連携し、Discord の DM から {{appName}} を使えるようにします。",
+      "description": "自分で作成した Discord ボットを連携し、Discord の DM と選んだサーバーのチャンネルから {{appName}} を使えるようにします。",
       "statusAria": "Discord ボットの状態: {{status}}",
       "status": {
         "needsConfig": "設定が必要",
@@ -4749,6 +4749,64 @@
         "cellLabel": "メッセージ通知",
         "hint": "このデバイスのオンライン・オフライン時に Discord Bot から通知メッセージを送信します"
       },
+      "channels": {
+        "title": "サーバーのチャンネル",
+        "summary": {
+          "unknown": "確認中…",
+          "off": "オフ",
+          "on": "有効なサーバー: {{count}}"
+        },
+        "hint": "初期状態では何も開放されていません。サーバーを有効にすると、そのテキストチャンネルで Bot に @ メンションして呼び出せます。チャンネルごと、スレッドごとにコンテキストは別々で、Bot が受け取るのは @ メンションされたメッセージだけです。",
+        "ownerOnly": "現在呼び出せるのはあなただけです。",
+        "offline": "Bot が接続されていません。接続するとチャンネルを選べます。有効にしたチャンネルはそのままです。",
+        "members": {
+          "label": "チャンネルのメンバーに許可",
+          "notice": "チャンネルのメンバーは初期状態でオフです。許可すると、そのチャンネルで Bot に @ メンションしたメンバーは {{name}} に設定済みのツールを使い、{{name}} のメモリを共有します。権限は {{name}} の権限設定に従い、コマンドは引き続きあなただけが使えます。",
+          "aria": "#{{channel}} のメンバーに許可",
+          "guildAria": "{{guild}} のメンバーに許可"
+        },
+        "loading": "Bot が参加しているサーバーを読み込み中…",
+        "refresh": "更新",
+        "empty": "Bot はまだどのサーバーにも参加していません。Discord Developer Portal で招待リンクを作って追加してから、更新してください。",
+        "noTextChannels": "テキストチャンネルがありません",
+        "toggleAria": "{{guild}} の #{{channel}} を有効にする",
+        "error": {
+          "load": "サーバー一覧を読み込めませんでした。",
+          "save": "変更を保存できませんでした。現在保存されている設定を表示しています。",
+          "unsupported": "そのパソコンの Cindy は古いバージョンのため、ここではサーバーのチャンネルを設定できません。先にそのパソコンの Cindy を最新版に更新してください。"
+        },
+        "permission": {
+          "cannotSend": "Bot はこのチャンネルを表示または発言できません",
+          "limited": "不足している権限: {{list}}",
+          "separator": "、",
+          "readHistory": "Read Message History",
+          "embed": "Embed Links",
+          "attachFiles": "Attach Files",
+          "sendInThreads": "Send Messages in Threads"
+        },
+        "unavailable": {
+          "title": "利用できないサーバーまたはチャンネル",
+          "hint": "削除されたか、Bot がそのサーバーにいません。一覧から削除できます。",
+          "remove": "削除"
+        },
+        "ownerOnlyCardNotice": "このボタンを使えるのは Bot のオーナーだけです。",
+        "guild": {
+          "summary": {
+            "off": "オフ",
+            "all": "すべてのチャンネル",
+            "selected": "{{count}} チャンネルを選択中",
+            "none": "チャンネル未選択"
+          },
+          "toggleAria": "{{guild}} を有効にする",
+          "more": "詳細",
+          "modeAria": "{{guild}} の対象チャンネル",
+          "mode": {
+            "all": "すべてのチャンネル",
+            "selected": "指定したチャンネルのみ"
+          },
+          "allHint": "あとから追加されたテキストチャンネルも含みます。Bot が表示と発言をできるチャンネルでのみ応答します。"
+        }
+      },
       "ownerNotice": {
         "linked": "✅ 連携できました。準備できたらそのまま話しかけてください。",
         "disconnected": "🔌 連携を解除しました。必要になったらまたつないでください。",
@@ -4765,11 +4823,11 @@
         },
         "step2": {
           "title": "Privileged Intent",
-          "body": "P1 の DM 機能では Privileged Intent を有効にする必要はありません。"
+          "body": "Privileged Intent は不要です（Message Content はオフのままにします）。サーバーでは、Bot は @ メンションされたメッセージだけを受け取ります。"
         },
         "step3": {
           "title": "Bot を招待",
-          "body": "OAuth2 URL Generator で scope bot を選択し、Send Messages、Read Message History、Attach Files 権限を付与します。自分が参加している任意の server に Bot を招待してください。DM には自分と Bot が同じ server にいる必要があります。"
+          "body": "OAuth2 URL Generator で scope bot を選択し、View Channels、Send Messages、Send Messages in Threads、Embed Links、Attach Files、Read Message History、Add Reactions 権限を付与します。自分が参加している任意の server に Bot を招待してください。DM には自分と Bot が同じ server にいる必要があります。"
         },
         "step4": {
           "title": "ユーザー ID をコピー",

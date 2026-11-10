@@ -21,7 +21,7 @@ const discordMock = vi.hoisted(() => {
     ready = false;
     user: { id: string; tag: string } | null = { id: 'bot-id', tag: 'bot#0000' };
 
-    constructor() {
+    constructor(readonly options: Record<string, unknown> = {}) {
       MockDiscordClient.instances.push(this);
     }
 
@@ -61,7 +61,16 @@ const discordMock = vi.hoisted(() => {
 });
 
 vi.mock('discord.js', () => ({
-  ChannelType: { DM: 1 },
+  ChannelType: {
+    DM: 1,
+    GuildText: 0,
+    GuildVoice: 2,
+    AnnouncementThread: 10,
+    PublicThread: 11,
+    PrivateThread: 12,
+    GuildForum: 15,
+  },
+  MessageType: { Default: 0, Reply: 19, ThreadCreated: 18 },
   Client: discordMock.MockDiscordClient,
   Events: {
     ClientReady: 'clientReady',
@@ -74,7 +83,7 @@ vi.mock('discord.js', () => ({
     ShardReconnecting: 'shardReconnecting',
     ShardResume: 'shardResume',
   },
-  GatewayIntentBits: { DirectMessages: 2, Guilds: 1 },
+  GatewayIntentBits: { DirectMessages: 4096, GuildMessages: 512, Guilds: 1 },
   Partials: { Channel: 1 },
 }));
 
@@ -107,6 +116,7 @@ function createGatewayHarness(): { gateway: ReturnType<typeof createDiscordGatew
   const gateway = createDiscordGateway({
     onButtonInteraction: vi.fn(),
     onDmMessage: vi.fn(),
+    onGuildMessage: vi.fn(),
     onStatus(status) {
       statuses.push(status);
     },
@@ -229,6 +239,7 @@ describe('discord gateway pure logic', () => {
     const gateway = createDiscordGateway({
       onButtonInteraction: vi.fn(),
       onDmMessage: vi.fn(),
+      onGuildMessage: vi.fn(),
       onStatus() {
         if (rejectStatus) throw new Error('status callback failed');
       },
@@ -309,6 +320,110 @@ describe('discord gateway pure logic', () => {
     emitReady(clientB, 'helper#0000');
     expect(statuses.at(-1)).toEqual({ kind: 'connected', appId: 'helper#0000' });
 
+    await gateway.destroy();
+  });
+
+  it.each(['resolved', 'rejected'] as const)(
+    'drops a button from a replaced connection after its acknowledgement %s',
+    async (outcome) => {
+      const ack = deferred<void>();
+      const onButtonInteraction = vi.fn();
+      const gateway = createDiscordGateway({
+        onButtonInteraction,
+        onDmMessage: vi.fn(),
+        onGuildMessage: vi.fn(),
+        onStatus: vi.fn(),
+      });
+      await gateway.connect('token-a');
+      const oldClient = discordMock.MockDiscordClient.instances[0];
+      oldClient.emit('interactionCreate', {
+        isButton: () => true,
+        deferUpdate: () => ack.promise,
+      });
+
+      await gateway.destroy();
+      await gateway.connect('token-b');
+      if (outcome === 'resolved') ack.resolve();
+      else ack.reject(new Error('expired acknowledgement'));
+      await ack.promise.catch(() => undefined);
+
+      expect(onButtonInteraction).not.toHaveBeenCalled();
+      await gateway.destroy();
+    },
+  );
+});
+
+describe('discord gateway guild messages', () => {
+  function harness() {
+    const onDmMessage = vi.fn();
+    const onGuildMessage = vi.fn();
+    const gateway = createDiscordGateway({
+      onButtonInteraction: vi.fn(),
+      onDmMessage,
+      onGuildMessage,
+      onStatus: vi.fn(),
+    });
+    return { gateway, onDmMessage, onGuildMessage };
+  }
+  const guildMessage = (overrides: Record<string, unknown> = {}) => ({
+    id: 'm1',
+    guildId: 'g1',
+    system: false,
+    webhookId: null,
+    type: 0,
+    author: { id: 'u1', bot: false },
+    channel: { type: 0 },
+    ...overrides,
+  });
+
+  it('requests only the standard GuildMessages intent, never MessageContent', async () => {
+    const { gateway } = harness();
+    await gateway.connect('token');
+    const intents = discordMock.MockDiscordClient.instances[0].options.intents as number[];
+
+    expect(intents).toEqual([1, 512, 4096]);
+    expect(discordMock.MockDiscordClient.instances[0].options.allowedMentions).toEqual({
+      parse: [],
+      repliedUser: false,
+    });
+    await gateway.destroy();
+  });
+
+  it('forwards text channels and their threads, ignoring other parents, bots, webhooks and system messages', async () => {
+    const { gateway, onDmMessage, onGuildMessage } = harness();
+    await gateway.connect('token');
+    const client = discordMock.MockDiscordClient.instances[0];
+
+    client.emit('messageCreate', guildMessage({ id: 'text' }));
+    client.emit('messageCreate', guildMessage({ id: 'thread', channel: { type: 11, parent: { type: 0 } } }));
+    client.emit('messageCreate', guildMessage({ id: 'private-thread', channel: { type: 12, parent: { type: 0 } } }));
+    client.emit('messageCreate', guildMessage({ id: 'forum-post', channel: { type: 11, parent: { type: 15 } } }));
+    client.emit('messageCreate', guildMessage({ id: 'announcement-thread', channel: { type: 10, parent: { type: 5 } } }));
+    client.emit('messageCreate', guildMessage({ id: 'unknown-parent', channel: { type: 11, parent: null } }));
+    client.emit('messageCreate', guildMessage({ id: 'voice', channel: { type: 2 } }));
+    client.emit('messageCreate', guildMessage({ id: 'forum', channel: { type: 15 } }));
+    client.emit('messageCreate', guildMessage({ id: 'bot', author: { id: 'u2', bot: true } }));
+    client.emit('messageCreate', guildMessage({ id: 'self', author: { id: 'bot-id', bot: false } }));
+    client.emit('messageCreate', guildMessage({ id: 'hook', webhookId: 'w1' }));
+    client.emit('messageCreate', guildMessage({ id: 'sys', system: true, type: 18 }));
+    client.emit('messageCreate', guildMessage({ id: 'noguild', guildId: null }));
+
+    expect(onGuildMessage.mock.calls.map(([m]) => (m as { id: string }).id)).toEqual(['text', 'thread', 'private-thread']);
+    expect(onDmMessage).not.toHaveBeenCalled();
+    await gateway.destroy();
+  });
+
+  it('delivers a replayed guild message once and routes DMs separately', async () => {
+    const { gateway, onDmMessage, onGuildMessage } = harness();
+    await gateway.connect('token');
+    const client = discordMock.MockDiscordClient.instances[0];
+
+    client.emit('messageCreate', guildMessage({ id: 'replay' }));
+    client.emit('messageCreate', guildMessage({ id: 'replay' }));
+    client.emit('messageCreate', { id: 'dm', author: { id: 'u1', bot: false }, channel: { type: 1 } });
+
+    expect(onGuildMessage).toHaveBeenCalledTimes(1);
+    expect(onDmMessage).toHaveBeenCalledTimes(1);
     await gateway.destroy();
   });
 });

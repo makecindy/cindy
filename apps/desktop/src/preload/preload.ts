@@ -467,6 +467,31 @@ type VoiceInputModelSelectionPatchWire = {
   customAsrApiKey?: string | null;
   refinerProviderChain?: string[] | null;
 };
+type DiscordBotChannelAccessWire = import('../shared/botImConnection').BotImDiscordChannelAccess;
+type DiscordBotChannelListingWire = {
+  status:
+    | { kind: 'idle' }
+    | { kind: 'connecting' }
+    | { kind: 'connected'; appId: string }
+    | { kind: 'conflict'; appId: string }
+    | { kind: 'error'; reason: string };
+  guilds: Array<{
+    id: string;
+    name: string;
+    channels: Array<{
+      id: string;
+      name: string;
+      permissions: {
+        view: boolean;
+        send: boolean;
+        readHistory: boolean;
+        embed: boolean;
+        attachFiles: boolean;
+        sendInThreads: boolean;
+      };
+    }>;
+  }>;
+};
 type DiscordBotSessionAuthCheckWire = {
   ok: boolean;
   missing: 'gateway-key' | 'agent-oauth' | 'provider-key' | 'provider-disconnected' | null;
@@ -2609,6 +2634,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ok: boolean;
       lifecycleAnnouncement: boolean;
     }> => ipcRenderer.invoke('discordBot:set-lifecycle-announcement', { enabled }),
+    // 服务器频道白名单（默认空 = 不开放）；清单只读机器人当前连接缓存。
+    listChannels: (): Promise<DiscordBotChannelListingWire> =>
+      ipcRenderer.invoke('discordBot:list-channels'),
+    getChannelAccess: (): Promise<DiscordBotChannelAccessWire> =>
+      ipcRenderer.invoke('discordBot:get-channel-access'),
+    setChannelAccess: (access: DiscordBotChannelAccessWire): Promise<DiscordBotChannelAccessWire> =>
+      ipcRenderer.invoke('discordBot:set-channel-access', access),
     checkSessionAuth: (): Promise<DiscordBotSessionAuthCheckWire> =>
       ipcRenderer.invoke('discordBot:check-session-auth'),
     onStatusChange: fanOutDiscordBotStatusChange,
@@ -2704,6 +2736,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
       mode: import('../shared/botImConnection').BotImGroupActivationMode;
     }): Promise<import('../shared/botImConnection').BotImConnectionGroupsPayload> =>
       ipcRenderer.invoke('botImConnection:set-group-activation', payload),
+    listDiscordChannels: (payload: {
+      id: string;
+    }): Promise<import('../shared/botImConnection').BotImDiscordChannelsPayload> =>
+      ipcRenderer.invoke('botImConnection:list-discord-channels', payload),
+    setDiscordChannelAccess: (payload: {
+      id: string;
+      access: import('../shared/botImConnection').BotImDiscordChannelAccess;
+    }): Promise<import('../shared/botImConnection').BotImDiscordChannelsPayload> =>
+      ipcRenderer.invoke('botImConnection:set-discord-channel-access', payload),
     listLanes: (payload: {
       id: string;
     }): Promise<import('../shared/botImConnection').BotImConnectionLanesPayload> =>

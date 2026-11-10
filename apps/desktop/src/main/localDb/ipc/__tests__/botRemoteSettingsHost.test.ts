@@ -51,7 +51,8 @@ function setup(overrides: { allowed?: boolean; visible?: boolean; ownerCurrent?:
       im: {
         list: vi.fn(async () => ({ connections: [{ id: 'mine', botId: 'bot-1' }, { id: 'theirs', botId: 'bot-2' }] })),
         remove: vi.fn(async () => ({ connections: [{ id: 'theirs', botId: 'bot-2' }], archivedSessionIds: [] })),
-        listGroups: vi.fn(async () => ({ groups: [] })), setGroupActivation: vi.fn(), listLanes: vi.fn(async () => ({ lanes: [] })),
+        listGroups: vi.fn(async () => ({ groups: [] })), setGroupActivation: vi.fn(),
+        listDiscordChannels: vi.fn(async (id: string) => ({ connectionId: id })), setDiscordChannelAccess: vi.fn(async (id: string) => ({ connectionId: id })), listLanes: vi.fn(async () => ({ lanes: [] })),
         resetLane: vi.fn(), listAdoptable: vi.fn(async () => ({ bots: [] })), adopt: vi.fn(),
       },
       wechat: vi.fn(async () => ({
@@ -195,6 +196,21 @@ it('keeps "not provided" and "reset to default" apart when a voice preference is
   // The catalog is host-wide; a failing voice service never leaks its message.
   (deps.voice.models as unknown as ReturnType<typeof vi.fn>).mockImplementation(() => { throw new Error('key sk-secret rejected'); });
   expect(await call('voice.models', undefined, null)).toEqual({ ok: false, code: 'PRECONDITION_FAILED', message: 'Voice conversation is unavailable.' });
+});
+
+it('lets a teammate page manage only its own Discord connection channel allowlist', async () => {
+  const { deps, call } = setup();
+  const access = { channels: [{ guildId: '200000000000000001', channelId: '300000000000000001', allowMembers: true }] };
+  expect(await call('channels.im.listDiscordChannels', { id: 'theirs' })).toMatchObject({ ok: false, code: 'NOT_FOUND' });
+  expect(await call('channels.im.setDiscordChannelAccess', { id: 'theirs', access })).toMatchObject({ ok: false, code: 'NOT_FOUND' });
+  expect(deps.channels.im.listDiscordChannels).not.toHaveBeenCalled();
+  expect(deps.channels.im.setDiscordChannelAccess).not.toHaveBeenCalled();
+
+  expect(await call('channels.im.setDiscordChannelAccess', { id: 'mine', access })).toMatchObject({ ok: true, value: { connectionId: 'mine' } });
+  expect(deps.channels.im.setDiscordChannelAccess).toHaveBeenCalledWith('mine', access);
+  expect(await call('channels.im.listDiscordChannels', { id: 'mine' })).toMatchObject({ ok: true, value: { connectionId: 'mine' } });
+  // The allowlist is a structured object, never a bare string.
+  expect(await call('channels.im.setDiscordChannelAccess', { id: 'mine', access: 'all' })).toMatchObject({ ok: false });
 });
 
 it('limits messaging-platform operations to this teammate and keeps the WeChat folder path home', async () => {

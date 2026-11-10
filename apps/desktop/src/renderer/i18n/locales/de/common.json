@@ -4748,7 +4748,7 @@
     },
     "discordBot": {
       "title": "Discord Bot",
-      "description": "Verbinde deinen eigenen Discord-Bot, damit {{appName}} über Discord-Direktnachrichten arbeiten kann.",
+      "description": "Verbinde deinen eigenen Discord-Bot, damit {{appName}} über Discord-DMs und die von dir gewählten Server-Kanäle arbeiten kann.",
       "statusAria": "Discord-Bot-Status: {{status}}",
       "status": {
         "needsConfig": "Konfiguration erforderlich",
@@ -4792,6 +4792,64 @@
         "cellLabel": "Nachrichtenbenachrichtigungen",
         "hint": "Den Discord-Bot eine Nachricht senden lassen, wenn dieses Gerät online oder offline geht"
       },
+      "channels": {
+        "title": "Server-Kanäle",
+        "summary": {
+          "unknown": "Wird geprüft…",
+          "off": "Aus",
+          "on": "Aktivierte Server: {{count}}"
+        },
+        "hint": "Standardmäßig ist nichts freigegeben. Aktiviere einen Server und erwähne den Bot in dessen Textkanälen mit @, um ihn aufzurufen. Jeder Kanal und jeder Thread hat seinen eigenen, getrennten Kontext, und der Bot erhält nur Nachrichten, die ihn mit @ erwähnen.",
+        "ownerOnly": "Derzeit kannst nur du ihn aufrufen.",
+        "offline": "Der Bot ist nicht verbunden. Verbinde ihn, um Kanäle auszuwählen; bereits aktivierte Kanäle bleiben aktiv.",
+        "members": {
+          "label": "Kanalmitglieder erlauben",
+          "notice": "Kanalmitglieder sind standardmäßig ausgeschaltet. Wenn du sie erlaubst, nutzen Mitglieder, die den Bot mit @ erwähnen, die Tools, die {{name}} bereits hat, und teilen sich den Speicher von {{name}}. Die Berechtigungen folgen der Berechtigungseinstellung von {{name}}, und Befehle bleiben nur dir vorbehalten.",
+          "aria": "Mitglieder von #{{channel}} erlauben",
+          "guildAria": "Mitglieder von {{guild}} erlauben"
+        },
+        "loading": "Server, auf denen dein Bot ist, werden gelesen…",
+        "refresh": "Aktualisieren",
+        "empty": "Der Bot ist noch auf keinem Server. Lade ihn über das Discord Developer Portal ein und aktualisiere dann.",
+        "noTextChannels": "Keine Textkanäle",
+        "toggleAria": "#{{channel}} auf {{guild}} aktivieren",
+        "error": {
+          "load": "Deine Server konnten nicht geladen werden.",
+          "save": "Die Änderung konnte nicht gespeichert werden. Angezeigt wird der aktuell gespeicherte Stand.",
+          "unsupported": "Auf diesem Computer läuft eine ältere Cindy-Version, die Server-Kanäle von hier aus nicht verwalten kann. Aktualisiere zuerst Cindy auf diesem Computer."
+        },
+        "permission": {
+          "cannotSend": "Der Bot kann diesen Kanal weder sehen noch dort Nachrichten senden",
+          "limited": "Fehlende Berechtigungen: {{list}}",
+          "separator": ", ",
+          "readHistory": "Read Message History",
+          "embed": "Embed Links",
+          "attachFiles": "Attach Files",
+          "sendInThreads": "Send Messages in Threads"
+        },
+        "unavailable": {
+          "title": "Nicht verfügbare Server oder Kanäle",
+          "hint": "Sie wurden gelöscht, oder der Bot ist nicht mehr auf dem Server. Du kannst sie aus der Liste entfernen.",
+          "remove": "Entfernen"
+        },
+        "ownerOnlyCardNotice": "Nur der Besitzer dieses Bots kann diese Schaltfläche verwenden.",
+        "guild": {
+          "summary": {
+            "off": "Aus",
+            "all": "Alle Kanäle",
+            "selected": "{{count}} Kanäle ausgewählt",
+            "none": "Keine Kanäle ausgewählt"
+          },
+          "toggleAria": "{{guild}} aktivieren",
+          "more": "Mehr",
+          "modeAria": "Abgedeckte Kanäle in {{guild}}",
+          "mode": {
+            "all": "Alle Kanäle",
+            "selected": "Nur ausgewählte Kanäle"
+          },
+          "allHint": "Schließt später hinzugefügte Textkanäle ein. Der Bot antwortet nur in Kanälen, in denen er Nachrichten sehen und senden kann."
+        }
+      },
       "ownerNotice": {
         "linked": "✅ Alles verknüpft. Sende einfach eine Nachricht, wenn du bereit bist.",
         "disconnected": "🔌 Verknüpfung aufgehoben. Verknüpfe mich wieder, wenn du mich brauchst.",
@@ -4808,11 +4866,11 @@
         },
         "step2": {
           "title": "Privileged Intent",
-          "body": "P1-Direktnachrichten erfordern keinen Privileged Intent."
+          "body": "Es wird kein Privileged Intent benötigt (Message Content bleibt aus). Auf Servern erhält der Bot nur Nachrichten, die ihn mit @ erwähnen."
         },
         "step3": {
           "title": "Bot einladen",
-          "body": "Wähle im OAuth2 URL Generator den Scope „bot“ aus und gewähre „Send Messages“, „Read Message History“ und „Attach Files“. Lade den Bot auf einen Server ein, auf dem du Mitglied bist. Für Direktnachrichten müsst ihr einen gemeinsamen Server haben."
+          "body": "Wähle im OAuth2 URL Generator den Scope bot und erteile View Channels, Send Messages, Send Messages in Threads, Embed Links, Attach Files, Read Message History und Add Reactions. Lade den Bot auf einen beliebigen Server ein, auf dem du bist; für DMs müssen du und der Bot einen gemeinsamen Server haben."
         },
         "step4": {
           "title": "Eigene Nutzer-ID kopieren",
