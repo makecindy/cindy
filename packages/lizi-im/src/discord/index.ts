@@ -1085,7 +1085,7 @@ export class DiscordIM extends BaseIM implements ChannelIM {
     const stagedDiscards: Array<() => Promise<void>> = [];
     try {
       const isOwner = m.author.id === acceptedContext.ownerUserId;
-      const channelName = m.channel?.parent?.name ?? m.channel?.name;
+      const channelName = lane.threadId ? m.channel?.parent?.name ?? m.channel?.name : m.channel?.name;
       const speakerName = m.member?.displayName ?? m.author.globalName ?? m.author.username ?? m.author.id;
       const event = await normalizeInboundMessage(
         m,

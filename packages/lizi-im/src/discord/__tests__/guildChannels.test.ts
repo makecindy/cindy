@@ -287,6 +287,18 @@ describe('DiscordIM guild channel inbound', () => {
     expect(h.events).toEqual([]);
   });
 
+  it('uses the text channel name rather than its category in the interaction source', async () => {
+    const h = await harness();
+    const message = guildMessage();
+    message.channel.parentId = '500000000000000001';
+    message.channel.parent = { name: 'Engineering' };
+    await h.emitGuild(message);
+
+    expect(h.events).toHaveLength(1);
+    expect(h.events[0].interactionSource?.chatName).toBe('Guild #general');
+    expect(h.events[0].interactionSource?.threadName).toBeUndefined();
+  });
+
   it('accepts a channel created after the server was set to all channels, and its threads, without any list update', async () => {
     const h = await harness({ channels: [], guilds: [{ guildId: GUILD, enabled: true, mode: 'all' }] });
     await h.emitGuild(guildMessage({ id: 'n1', channelId: '300000000000000099' }));
@@ -338,7 +350,10 @@ describe('DiscordIM guild channel inbound', () => {
       [`${CHANNEL}|c1`, LANE],
       [`${THREAD}|t1`, THREAD_LANE],
     ]);
-    expect(h.events[1].interactionSource?.threadName).toBe('a-thread');
+    expect(h.events[1].interactionSource).toMatchObject({
+      chatName: 'Guild #general',
+      threadName: 'a-thread',
+    });
   });
 
   it('drops a message whose whitelist entry is revoked while attachments download', async () => {
