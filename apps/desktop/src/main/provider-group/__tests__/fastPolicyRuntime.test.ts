@@ -68,7 +68,7 @@ vi.mock('../../device-link/providerShareApi.js', () => ({
     if (state.pair?.generation === generation) state.pair = null;
   },
 }));
-vi.mock('../../device-link/settings-store.js', () => ({
+vi.mock('../../device-link/settings-store.desktop.js', () => ({
   readDeviceLinkSettings: () => ({ remoteControlEnabled: true, revokedControllers: state.revoked }),
   onDeviceLinkSettingChanged: () => () => {},
 }));
@@ -124,7 +124,7 @@ vi.mock('../guestRelay.js', () => ({
 vi.mock('../../device-link/broadcast-tap.js', () => ({
   captureDataOwnerBroadcastScope: () => state.owner, isDataOwnerBroadcastScopeCurrent: () => true,
 }));
-vi.mock('../../device-link/dispatch.js', () => ({ setRemoteAgentHandler(handler: typeof state.hostHandler) { state.hostHandler = handler; } }));
+vi.mock('../../device-link/dispatch.desktop.js', () => ({ setRemoteAgentHandler(handler: typeof state.hostHandler) { state.hostHandler = handler; } }));
 vi.mock('../../device-link/providerShareReshare.js', () => ({ handleProviderShareReshare() {}, providerShareReshareAllows() {} }));
 vi.mock('../reshareRuntime.js', () => ({ providerGroupReshare: {} }));
 vi.mock('../runtime.js', () => ({

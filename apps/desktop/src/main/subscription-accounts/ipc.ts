@@ -11,7 +11,7 @@ export { parseSubscriptionAccountCommand } from './commands.js';
 import { executeSubscriptionAccountCommand } from './service.js';
 import { onSubscriptionAccountsChanged, readSubscriptionPoolUsage, readLegacySubscriptionPoolUsage, readSubscriptionSessionUsage } from './runtime.js';
 import { broadcast } from '../device-link/index.js';
-import { setRemoteSubscriptionPoolQuotaReader } from '../device-link/dispatch.js';
+import { setRemoteSubscriptionPoolQuotaReader } from '../device-link/dispatch.desktop.js';
 import { readLegacySubscriptionQuota } from './legacyQuota.js';
 
 export function registerSubscriptionAccountsIpc(): void {

@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SharedTaskPeerCapture } from '../sharedTaskDispatch.js';
 
 const snapshot = vi.hoisted(() => vi.fn());
-vi.mock('../../localDb/ipc/sessions.js', () => ({ getSessionFsSnapshot: snapshot }));
+vi.mock('../../localDb/sessionFsSnapshot.js', () => ({ getSessionFsSnapshot: snapshot }));
 
 import { admitSharedTaskFsWatchTopics, assertSharedTaskWorkdir } from '../sharedTaskFileAccess.js';
 import { releaseSharedTaskWatchesOnWorkdirChange } from '../sharedTaskDispatch.js';

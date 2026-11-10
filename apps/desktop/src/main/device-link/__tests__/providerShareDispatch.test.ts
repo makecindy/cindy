@@ -18,8 +18,8 @@ const warn = vi.hoisted(() => vi.fn());
 vi.mock('../../logger', () => ({
   createLogger: () => ({ info: vi.fn(), debug: vi.fn(), warn, error: vi.fn() }),
 }));
-vi.mock('../settings-store', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('../settings-store')>()),
+vi.mock('../settings-store.desktop', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../settings-store.desktop')>()),
   readDeviceLinkSettings: () => ({ remoteControlEnabled: true, keepAwake: false, revokedControllers: [], disabledControlDeviceIds: [] }),
 }));
 
@@ -33,7 +33,7 @@ import {
   setRemoteAgentHandler,
   setRemoteSubscriptionPoolQuotaReader,
   setRemoteClaudeSubscriptionUsageReader,
-} from '../dispatch';
+} from '../dispatch.desktop';
 import { readLegacySubscriptionQuota } from '../../subscription-accounts/legacyQuota';
 
 const GUEST = providerShareGuestPeer('share-1', 'member-1', 'laptop');

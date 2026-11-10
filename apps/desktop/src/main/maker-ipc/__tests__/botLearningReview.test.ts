@@ -69,7 +69,7 @@ vi.mock('../../localDb/client/current.js', () => {
   };
   return { getDbClient: () => db };
 });
-vi.mock('../../messagePersistBroadcaster.js', () => ({
+vi.mock('../../messagePersistBroadcaster.desktop.js', () => ({
   drainPersistQueue: async () => {},
   enqueueDurableWrite: async (_: unknown, run: () => unknown) => run(),
 }));

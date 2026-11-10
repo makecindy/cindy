@@ -5,8 +5,11 @@
  * forwards the channels the host implements to the loopback HTTP API, using the
  * HttpOnly cookie obtained through explicit browser pairing. Unknown actions
  * reject with `HOST_CHANNEL_UNSUPPORTED`; optional reads retain fallback shapes
- * for renderer boot. Explicit desktop-only placeholders still need auditing.
+ * for renderer boot. Shared routes are defined by host-channel-contract.
  */
+
+import { createHostChannelHandlers, unsupportedHostChannel } from '@cindy/maker-shared/host-channel-contract';
+import { startHostEventStream } from '@cindy/maker-shared/host-event-stream';
 
 (function installCindyHostShim() {
   // Polyfill Web Crypto randomUUID in insecure contexts (e.g. plain HTTP over LAN IP).
@@ -104,22 +107,26 @@
     if (!ownerStamp().dataOwnerId) throw new Error('sidebar settings require an active account');
   }
 
-  async function rpc(path, args) {
+  async function requestHost(path, args, method = 'POST', signal) {
     const headers = { 'content-type': 'application/json' };
-    const response = await fetch(`/api${path}`, {
-      method: 'POST',
+    const response = await fetch(path, {
+      method,
+      signal,
       headers,
-      body: JSON.stringify(args ?? null),
+      body: method === 'GET' ? undefined : JSON.stringify(args ?? null),
       credentials: 'same-origin',
     });
     if (!response.ok) {
-      if (response.status === 401) location.replace('/connect');
+      if (response.status === 401) eventConnection?.authorizationRequired();
       const detail = await response.text().catch(() => '');
       throw Object.assign(new Error(detail || `host ${path} failed`), { code: `HTTP_${response.status}` });
     }
     const text = await response.text();
     return text ? JSON.parse(text) : null;
   }
+
+  const rpc = (path, args) => requestHost(`/api${path}`, args);
+  const hostChannels = createHostChannelHandlers(requestHost);
 
   /**
    * Frozen singletons for the channels the host answers with a constant.
@@ -254,6 +261,20 @@
 
   // Channel table: electronAPI paths the host actually implements.
   const routes = {
+    // Browser Files have no privileged host path. Keep the synchronous preload
+    // shape so the composer reports its existing unsupported-upload message,
+    // rather than sending a Promise as a filesystem path.
+    'getFilePath': () => '',
+    'maker.openSessionInNewWindow': ([sessionId, deviceId]) => {
+      if (typeof sessionId !== 'string' || !sessionId || deviceId) {
+        return unsupported('maker.openSessionInNewWindow');
+      }
+      const url = new URL(location.href);
+      url.hash = `/cc-agent/${encodeURIComponent(sessionId)}`;
+      window.open(url.href, '_blank', 'noopener,noreferrer');
+    },
+    ...hostChannels,
+    'hostConnection.retry': () => eventConnection?.reconnect(),
     // Host-side telemetry sink: the browser already logs to its console.
     'logToMain': (args) => {
       const [, scope, message] = args ?? [];
@@ -266,8 +287,6 @@
     // Boot-time snapshot; the host has no microphone permission surface.
     // Voice settings/history come from owners/<key>/voice-input-data.v1.json.
     'voiceInput.getDataSnapshot': () => settingsMirror.voiceInput,
-    'auth.getState': () => rpc('/auth/state'),
-    'auth.refresh': () => rpc('/auth/refresh'),
     // Renderer boot gates: answer with the host defaults instead of stalling.
     'maker.send': async (args) => {
       const [sessionId, message, createOpts] = args ?? [];
@@ -309,11 +328,6 @@
       })();
       return { accepted: true };
     },
-    'maker.listProviders': () => rpc('/providers'),
-    'maker.usage.getModelPricing': () => rpc('/usage/model-pricing'),
-    'maker.usage.getReferenceModelPricing': () => rpc('/usage/reference-model-pricing'),
-    'modelAccess.getStatus': () => rpc('/model-access'),
-    'modelAccess.retry': () => rpc('/model-access'),
     // The host has no provider-sharing service: report "not ready" in the real
     // shapes instead of fabricating shares.
     'providerShare.command': (args) => {
@@ -342,15 +356,9 @@
       if (!capabilitiesCache.has(key)) {
         capabilitiesCache.set(
           key,
-          rpc('/capabilities', { agentKind: key }).then((res) => {
-            if (res && res.capabilities) {
-              return {
-                ...res.capabilities,
-                ...res,
-                capabilities: res.capabilities,
-              };
-            }
-            return res;
+          hostChannels['maker.getCapabilities']([key]).catch(error => {
+            capabilitiesCache.delete(key);
+            throw error;
           }),
         );
       }
@@ -358,18 +366,12 @@
     },
     'maker.input.getProjection': (args) => {
       if (window.__noProjection === true) return Promise.reject(new Error('projection disabled for diagnosis'));
-      return rpc('/input/projection', { sessionId: args?.[0] });
+      return hostChannels['maker.input.getProjection'](args);
     },
     'maker.input.enqueue': (args) => {
       ensureEventStream();
-      return rpc('/input/enqueue', { sessionId: args?.[0], item: args?.[1] ?? {} });
+      return hostChannels['maker.input.enqueue'](args);
     },
-    'maker.input.stop': (args) => rpc('/input/stop', { sessionId: args?.[0] }),
-    'maker.input.steer': async (args) => {
-      const result = await rpc('/input/steer', { sessionId: args?.[0], item: args?.[1] ?? {} });
-      return Boolean(result?.ok);
-    },
-    'maker.input.remove': (args) => rpc('/input/remove', { sessionId: args?.[0], clientId: args?.[1] }),
     'maker.input.updateContent': (args) => rpc('/input/update-content', { sessionId: args?.[0], clientId: args?.[1], item: args?.[2] }),
     'maker.input.updateText': (args) => rpc('/input/update-text', { sessionId: args?.[0], clientId: args?.[1], newText: args?.[2] }),
     'maker.input.move': (args) => rpc('/input/move', { sessionId: args?.[0], clientId: args?.[1], targetIndex: args?.[2] }),
@@ -377,14 +379,6 @@
     'maker.input.setInteractionLock': (args) => rpc('/input/set-interaction-lock', { sessionId: args?.[0], lockId: args?.[1], locked: args?.[2] }),
     'maker.input.setEditLock': (args) => rpc('/input/set-edit-lock', { sessionId: args?.[0], clientId: args?.[1], locked: args?.[2] }),
     'maker.input.clearSession': (args) => rpc('/input/clear-session', { sessionId: args?.[0] }),
-    'maker.input.resume': (args) => rpc('/input/resume', { sessionId: args?.[0] }),
-    'maker.getPendingInteractions': (args) => rpc('/interactions/pending', { sessionId: args?.[0] }),
-    'maker.resolveInteraction': async (args) => {
-      const [requestId, decision] = args ?? [];
-      const res = await rpc('/interactions/respond', { requestId, decision });
-      return { accepted: Boolean(res?.ok || res?.accepted) };
-    },
-    'maker.listAvailableAgents': () => rpc('/agents'),
     'maker.setPermissionMode': (args) => {
       const sessionId = args?.[0];
       const mode = args?.[1];
@@ -432,12 +426,8 @@
       if (!sessionId) return Promise.resolve();
       return rpc('/sessions/update', { sessionId, patch: { planModeEnabled } });
     },
-    'maker.setThinkingEnabled': () => Promise.resolve(),
-    'maker.listAgentCommands': (args) => rpc('/agent-commands', { agentKind: args?.[0], sessionId: args?.[1]?.sessionId }),
-    'maker.listAgentSkills': (args) => rpc('/agent-skills', { agentKind: args?.[0], workingDir: args?.[1]?.workingDir, sessionId: args?.[1]?.sessionId, forceReload: args?.[1]?.forceReload === true }),
+    'maker.setThinkingEnabled': () => unsupported('maker.setThinkingEnabled'),
     'maker.listDesktopCommands': () => ({ success: true, commands: STATIC.emptyList }),
-    'maker.discardProvisionalSession': (args) => rpc('/sessions/discard', { sessionId: args?.[0] }),
-    'maker.commitProvisionalSession': (args) => rpc('/sessions/commit', { sessionId: args?.[0] }),
     'maker.claimLegacyModelVisibilityOwner': () => ({
       dataOwnerId: window.__cindyBoot?.auth?.ownerId ?? null,
       ownerGeneration: 1,
@@ -452,10 +442,10 @@
     'maker.memoryGetSettings': () => STATIC.memorySettings,
     'maker.memoryGetSettingsState': () => ({ ...STATIC.memorySettings, isCustomized: false, customizedKeys: [], defaults: STATIC.memorySettings }),
     'maker.memoryGet': () => ({ enabled: true, source: 'host-runtime' }),
-    'maker.memorySet': () => ({ effective: 'immediate', isCustomized: false, customizedKeys: [], defaults: STATIC.memorySettings }),
-    'maker.memoryReset': () => ({ removedEntries: 0, removedBytes: 0 }),
-    'maker.makerMemorySetEnabled': () => ({ effective: 'next-session', isCustomized: false, customizedKeys: [], defaults: STATIC.memorySettings, codexRestartDeferred: false }),
-    'maker.makerMemoryReset': () => ({ removedCount: 0 }),
+    'maker.memorySet': () => unsupported('maker.memorySet'),
+    'maker.memoryReset': () => unsupported('maker.memoryReset'),
+    'maker.makerMemorySetEnabled': () => unsupported('maker.makerMemorySetEnabled'),
+    'maker.makerMemoryReset': () => unsupported('maker.makerMemoryReset'),
     'maker.memoryPreserveLegacyMakerDisabled': () => STATIC.memorySettings,
     'voiceInput.getReadinessCached': () => STATIC.voiceNotReady,
     'voiceInput.getMicrophonePermissionCached': () => ({ granted: false, state: 'unsupported' }),
@@ -465,9 +455,6 @@
     'voiceInput.getHistoryForRefinement': () => STATIC.emptyList,
     'voiceInput.getModelSelection': () => STATIC.voiceModelSelection,
     'voiceInput.onDataChanged': () => () => {},
-    'appShortcuts.getState': () => STATIC.appShortcuts,
-    'appShortcuts.setOverride': () => ({ overrides: STATIC.emptyOverrides }),
-    'appShortcuts.clearOverride': () => ({ overrides: STATIC.emptyOverrides }),
     'accessibilitySupport.getSync': () => false,
     'ghosts.unreadSync': () => STATIC.ghostsUnread,
     'ghosts.recentUsageSync': () => STATIC.ghostRecentUsage,
@@ -494,9 +481,6 @@
     'deviceLink.listDevices': () => STATIC.deviceLinkDevices,
     'deviceLink.mirrorCache.getSessionList': () => STATIC.emptyList,
     'deviceLink.mirrorCache.putSessionList': () => undefined,
-    'localDb.sessions.interruptedPending': () => rpc('/sessions/interrupted-pending'),
-    'localDb.sessions.errorTailPending': () => rpc('/sessions/error-tail-pending'),
-    'localDb.sessions.interruptedResumeCandidates': () => rpc('/sessions/interrupted-candidates'),
     'localDb.sessions.setPinnedCardSummaries': () => undefined,
     'localDb.bots.workbench.followScopes': () => STATIC.emptyList,
     'sharedTask.account': () => STATIC.emptyList,
@@ -513,7 +497,7 @@
     'localDb.sessionImport.cancel': () => null,
     'localDb.sessionImport.relocate': () => null,
     'maker.gitSafetyGet': () => STATIC.gitSafetyOff,
-    'maker.gitSafetySet': () => STATIC.gitSafetyOff,
+    'maker.gitSafetySet': () => unsupported('maker.gitSafetySet'),
     // The host already opened and migrated the owner database before serving.
     'localDb.ensureReady': () => ({ ready: true }),
     // The browser cannot create a local identity. Preserve the Host's actual
@@ -523,8 +507,8 @@
     // The host exposes no cloud login surface; the entry step still offers the
     // local profile, which is what the desktop client shows when signed out.
     'authGetLoginState': () => ({ success: true, state: { step: 'entry' } }),
-    'authInitialize': () => rpc('/auth/state', {}),
-    'authRefresh': () => rpc('/auth/refresh', {}).then(state => state.isAuthenticated),
+    'authInitialize': () => hostChannels['auth.getState'](),
+    'authRefresh': () => hostChannels['auth.refresh'](),
     'checkEnvironment': () => {
       const harness = window.__cindyBoot?.harness ?? {};
       const entry = (ready) => (ready ? { status: 'passed' } : { status: 'failed', error: 'not installed' });
@@ -544,12 +528,12 @@
     'appearanceSettings.getSync': () => settingsMirror.appearance,
     'appearanceSettings.get': () => Promise.resolve({ value: settingsMirror.appearance, overrides: {} }),
     'appearanceSettings.setPatch': async (args) => {
-      settingsMirror.appearance = await rpc('/settings/appearance/set', { patch: args?.[0] ?? {} });
+      settingsMirror.appearance = await hostChannels['appearanceSettings.setPatch'](args);
       emit('appearanceSettings.onChanged', settingsMirror.appearance);
       return settingsMirror.appearance;
     },
     'appearanceSettings.reset': async () => {
-      settingsMirror.appearance = await rpc('/settings/appearance/reset');
+      settingsMirror.appearance = await hostChannels['appearanceSettings.reset']();
       emit('appearanceSettings.onChanged', settingsMirror.appearance);
       return settingsMirror.appearance;
     },
@@ -585,13 +569,13 @@
     // Layout tree comes from <dataDir>/layout.v1.json.
     'layout.getStateSync': () => ({ layout: settingsMirror.layout }),
     'layout.set': async (args) => {
-      const layout = await rpc('/settings/layout/set', { layout: args?.[0] ?? null });
+      const { layout } = await hostChannels['layout.set'](args);
       settingsMirror.layout = layout;
       emit('layout.onChanged', { layout });
       return { layout, persisted: true };
     },
     'layout.reset': async () => {
-      const layout = await rpc('/settings/layout/reset');
+      const { layout } = await hostChannels['layout.reset']();
       settingsMirror.layout = layout;
       emit('layout.onChanged', { layout });
       return { layout, persisted: true };
@@ -674,8 +658,6 @@
       emit('appShortcuts.onChanged', settingsMirror.appShortcuts);
       return { overrides: {} };
     },
-    'maker.listActive': (args) => rpc('/runtime/sessions', { options: args?.[0] }),
-    'remoteDesktop.state': () => Promise.resolve(STATIC.remoteDesktopState),
     'sidebarSettings.claimLegacyRendererOwner': () => STATIC.claimDenied,
     'setUpdateRelaunchTheme': () => undefined,
     'theme.applyVibrancy': () => undefined,
@@ -685,28 +667,10 @@
     'syncProviderModelMemory': () => undefined,
     'setClassicalReplyStyle': () => undefined,
     'setApplicationMenuLocale': () => undefined,
-    'localDb.sessions.create': (args) => rpc('/sessions/create', args?.[0] ?? {}),
-    'localDb.sessions.update': (args) => rpc('/sessions/update', { sessionId: args?.[0], patch: args?.[1] ?? {} }),
-    'localDb.sessions.get': (args) => rpc('/sessions/get', { sessionId: args?.[0] }),
     'localDb.sessions.delete': (args) => rpc('/sessions/delete', { sessionId: args?.[0] }),
-    'localDb.sessions.list': (args) => rpc('/sessions/list', { limit: args?.[0], status: args?.[1], options: args?.[2] }),
-    'localDb.recentWorkdirs.list': () => rpc('/recent-workdirs/list'),
-    'localDb.projectAliases.list': () => rpc('/project-aliases/list'),
-    'localDb.projectAliases.set': (args) => rpc('/project-aliases/set', args?.[0] ?? {}),
-    'localDb.projectAliases.delete': (args) => rpc('/project-aliases/delete', typeof args?.[0] === 'string' ? { projectKey: args[0] } : (args?.[0] ?? {})),
     'localDb.sessions.messages': async (args) => rpc('/sessions/messages', args),
     'localDb.rightSidebarTabs.list': () => STATIC.rightSidebarTabs,
-    'localDb.messages.create': (args) => rpc('/messages/create', { sessionId: args?.[0], message: args?.[1] ?? {} }),
-    'localDb.messages.list': (args) => rpc('/messages/list', { sessionId: args?.[0], limit: args?.[1]?.limit, before: args?.[1]?.before ?? null }),
-    'localDb.messages.estimatedSessionValue': (args) => rpc('/messages/estimated-value', { sessionId: args?.[0] }),
-    'localDb.messages.historyView': (args) => rpc('/messages/history-view', { sessionId: args?.[0], before: args?.[1]?.before ?? null }),
     'localDb.messages.workDetails': (args) => rpc('/messages/work-details', { sessionId: args?.[0], ref: args?.[1], after: args?.[2]?.after ?? null }),
-    'pluginMarket.listInstalled': () => rpc('/plugins/list'),
-    'logToMain': (args) => {
-      const [, scope, message] = args ?? [];
-      window.__cindyErrors?.push(`${scope}: ${String(message).slice(0, 400)}`);
-      return undefined;
-    },
     'voiceConversation.publishCallStatus': () => undefined,
     'voiceConversation.callStatus': () => null,
     'voiceInput.prewarm': () => undefined,
@@ -716,9 +680,9 @@
     'maker.browser.status': () => ({ running: false, available: false }),
     'browserBackend.getState': () => ({ mode: 'none', backend: 'none' }),
     'browserBackend.getHealth': () => ({ ready: false }),
-    'browserBackend.setKind': () => ({ success: true }),
-    'browserBackend.setUseRealProfile': () => ({ success: true }),
-    'browserBackend.recover': () => ({ success: true }),
+    'browserBackend.setKind': () => unsupported('browserBackend.setKind'),
+    'browserBackend.setUseRealProfile': () => unsupported('browserBackend.setUseRealProfile'),
+    'browserBackend.recover': () => unsupported('browserBackend.recover'),
     'browserBackend.probeSourceRead': () => ({ ok: false }),
     'maker.computer.status': () => ({ available: false, running: false, error: null, permissions: {} }),
     'maker.computer.restart': () => undefined,
@@ -733,18 +697,8 @@
       isCustomized: false,
       customizedKeys: [],
     }),
-    'maker.android.setDefaultDevice': () => ({
-      value: { defaultDeviceSerial: null, adbPathOverride: null },
-      defaults: { defaultDeviceSerial: null, adbPathOverride: null },
-      isCustomized: false,
-      customizedKeys: [],
-    }),
-    'maker.android.setAdbPath': () => ({
-      value: { defaultDeviceSerial: null, adbPathOverride: null },
-      defaults: { defaultDeviceSerial: null, adbPathOverride: null },
-      isCustomized: false,
-      customizedKeys: [],
-    }),
+    'maker.android.setDefaultDevice': () => unsupported('maker.android.setDefaultDevice'),
+    'maker.android.setAdbPath': () => unsupported('maker.android.setAdbPath'),
     'maker.android.prepareAdb': () => ({
       supported: true,
       ready: false,
@@ -762,10 +716,10 @@
     }),
     'maker.plugins.getState': () => ({ activePlugins: [], effectiveEnabled: false }),
     'maker.plugins.list': () => STATIC.emptyList,
-    'maker.plugins.setEnabled': () => undefined,
-    'maker.plugins.setProjectEnabled': () => undefined,
-    'maker.plugins.clearEnabled': () => undefined,
-    'maker.plugins.clearProjectEnabled': () => undefined,
+    'maker.plugins.setEnabled': () => unsupported('maker.plugins.setEnabled'),
+    'maker.plugins.setProjectEnabled': () => unsupported('maker.plugins.setProjectEnabled'),
+    'maker.plugins.clearEnabled': () => unsupported('maker.plugins.clearEnabled'),
+    'maker.plugins.clearProjectEnabled': () => unsupported('maker.plugins.clearProjectEnabled'),
     'billing.getBalance': () => STATIC.billingBalance,
     'billing.getCreditUsage': () => STATIC.creditUsage,
     'billing.getCatalog': () => STATIC.billingCatalog,
@@ -773,10 +727,10 @@
     'billing.getCurrentSubscription': () => STATIC.billingSubscription,
     'authListAccounts': () => accountSwitcherSnapshot(),
     'authSyncAccounts': () => accountSwitcherSnapshot(),
-    'authSwitchAccount': () => undefined,
+    'authSwitchAccount': () => unsupported('authSwitchAccount'),
     'authBeginAddAccount': () => ({ success: false, code: 'NOT_SUPPORTED', state: null }),
     'authCancelAddAccount': () => undefined,
-    'authLogout': async () => { const result = await rpc('/auth/logout', {}); location.replace('/connect'); return result; },
+    'authLogout': async () => { const result = await hostChannels['auth.logout'](); location.replace('/connect'); return result; },
     'authGetAccountDeletionAvailability': () => ({ success: true, value: { available: false, reason: 'not_supported' } }),
     'authRequestAccountDeletionChallenge': () => ({ success: false, code: 'NOT_SUPPORTED' }),
     'authConfirmAccountDeletion': () => ({ success: false, code: 'NOT_SUPPORTED' }),
@@ -797,6 +751,8 @@
     'workLouderCodex.publishTasks': () => undefined,
     'notificationClearSessionAttention': () => undefined,
     'notificationMarkSessionAttention': () => undefined,
+    // Task lifecycle presentation only; there is no native notification surface.
+    'notificationShowSessionEvent': () => undefined,
     'maker.autoTitle': (args) => rpc('/sessions/auto-title', args?.[0] ?? {}),
     'notificationSetAppAttentionCount': () => undefined,
     'localDb.orcaWorkflows.getCollaborationSettings': () => ({ enabled: false }),
@@ -809,47 +765,47 @@
     'localThemes.list': () => [],
     'workLouderCodex.getState': () => ({ available: false, connected: false, tasks: [] }),
     'workLouderCodex.probe': () => ({ available: false, connected: false }),
-    'workLouderCodex.setEnabled': () => ({ ok: true }),
+    'workLouderCodex.setEnabled': () => unsupported('workLouderCodex.setEnabled'),
     'xboxGamepad.getState': () => ({ available: false, connected: false }),
     'xboxGamepad.probe': () => ({ available: false, connected: false }),
-    'xboxGamepad.setEnabled': () => ({ ok: true }),
+    'xboxGamepad.setEnabled': () => unsupported('xboxGamepad.setEnabled'),
     'selfHostedRelay.command': () => ({ ok: false, unsupported: true }),
     'dialogueWorkspace.get': () => ({ path: null }),
-    'dialogueWorkspace.set': () => ({ ok: true }),
+    'dialogueWorkspace.set': () => unsupported('dialogueWorkspace.set'),
     'projectsRoot.get': () => ({ path: null }),
-    'projectsRoot.set': () => ({ ok: true }),
+    'projectsRoot.set': () => unsupported('projectsRoot.set'),
     'worktreeRecycle.list': () => [],
-    'worktreeRecycle.clean': () => ({ ok: true }),
-    'worktreeRecycle.restore': () => ({ ok: true }),
+    'worktreeRecycle.clean': () => unsupported('worktreeRecycle.clean'),
+    'worktreeRecycle.restore': () => unsupported('worktreeRecycle.restore'),
     'getAutoUpdateSettings': () => ({ autoUpdate: false, channel: 'stable' }),
-    'setAutoUpdateSettings': () => ({ autoUpdate: false, channel: 'stable' }),
+    'setAutoUpdateSettings': () => unsupported('setAutoUpdateSettings'),
     'ccSetDebugNet': () => undefined,
     'getLogUploadSettings': () => ({ enabled: false }),
-    'setLogUploadSettings': () => ({ enabled: false }),
-    'worktreeRecycle.empty': () => ({ ok: true }),
+    'setLogUploadSettings': () => unsupported('setLogUploadSettings'),
+    'worktreeRecycle.empty': () => unsupported('worktreeRecycle.empty'),
     'remoteSsh.listHosts': () => [],
     'localDb.maintenance.getLastResult': () => null,
     'localDb.maintenance.chooseBackupDirectory': () => ({ canceled: true }),
     'localDb.maintenance.scan': () => ({ sessions: 0, messages: 0, estimatedBytes: 0 }),
-    'localDb.maintenance.schedule': () => ({ ok: true }),
-    'localDb.maintenance.openLastBackupDirectory': () => ({ ok: true }),
+    'localDb.maintenance.schedule': () => unsupported('localDb.maintenance.schedule'),
+    'localDb.maintenance.openLastBackupDirectory': () => unsupported('localDb.maintenance.openLastBackupDirectory'),
     'cindyMediaStorage.stats': () => STATIC.mediaStorageStats,
     'cindyMediaStorage.scan': () => ({ totalCount: 0, totalBytes: 0, candidateCount: 0, candidateBytes: 0 }),
-    'cindyMediaStorage.cleanup': () => ({ success: true, deletedCount: 0, reclaimedBytes: 0 }),
-    'cindyMediaStorage.reconcile': () => ({ success: true, fixedCount: 0 }),
-    'cindyMediaStorage.openLegacyImagesDir': () => ({ ok: true }),
-    'cindyMediaStorage.clearLegacyImagesDir': () => ({ ok: true }),
-    'cindyMediaStorage.openChatAttachmentsDir': () => ({ ok: true }),
-    'cindyMediaStorage.clearChatAttachmentsDir': () => ({ ok: true }),
+    'cindyMediaStorage.cleanup': () => unsupported('cindyMediaStorage.cleanup'),
+    'cindyMediaStorage.reconcile': () => unsupported('cindyMediaStorage.reconcile'),
+    'cindyMediaStorage.openLegacyImagesDir': () => unsupported('cindyMediaStorage.openLegacyImagesDir'),
+    'cindyMediaStorage.clearLegacyImagesDir': () => unsupported('cindyMediaStorage.clearLegacyImagesDir'),
+    'cindyMediaStorage.openChatAttachmentsDir': () => unsupported('cindyMediaStorage.openChatAttachmentsDir'),
+    'cindyMediaStorage.clearChatAttachmentsDir': () => unsupported('cindyMediaStorage.clearChatAttachmentsDir'),
     'getUpdateChannelSettings': () => ({ channel: 'stable', autoUpdate: false }),
     'maker.chatDisplayCache': () => STATIC.emptyRecord,
     'agentIsland.setCompanionChats': () => undefined,
     'agentIsland.setRemoteSessions': () => undefined,
+    'agentIsland.setVisibleSession': () => undefined,
     'pluginContributions.reviewUpdates': () => STATIC.emptyList,
     'pluginMarket.snapshot': () => STATIC.pluginMarketSnapshot,
     'ghosts.workdirPrefsSync': () => STATIC.workdirPrefs,
     'ghosts.workdirPrefs': () => STATIC.workdirPrefs,
-    'ghosts.listCardsBySession': () => [],
     'worktreeRestoreStatus': () => ({}),
     'feishuBot.getState': () => ({
       service: 'feishu',
@@ -861,37 +817,37 @@
       ownerOpenId: null,
       lifecycleAnnouncement: true,
     }),
-    'feishuBot.save': () => ({ verdict: 'idle' }),
-    'feishuBot.clear': () => undefined,
-    'feishuBot.reconnect': () => ({ verdict: 'idle' }),
-    'feishuBot.setLifecycleAnnouncement': () => undefined,
+    'feishuBot.save': () => unsupported('feishuBot.save'),
+    'feishuBot.clear': () => unsupported('feishuBot.clear'),
+    'feishuBot.reconnect': () => unsupported('feishuBot.reconnect'),
+    'feishuBot.setLifecycleAnnouncement': () => unsupported('feishuBot.setLifecycleAnnouncement'),
     'feishuBot.registrationBegin': () => ({ success: false }),
     'feishuBot.registrationCancel': () => undefined,
     'dingtalkBot.getState': () => ({ appKey: null, hasSecret: false, ownerUserId: null, status: { kind: 'idle' } }),
-    'dingtalkBot.save': () => ({ appKey: null, hasSecret: false, ownerUserId: null, status: { kind: 'idle' } }),
-    'dingtalkBot.reconnect': () => ({ appKey: null, hasSecret: false, ownerUserId: null, status: { kind: 'idle' } }),
-    'dingtalkBot.clear': () => undefined,
+    'dingtalkBot.save': () => unsupported('dingtalkBot.save'),
+    'dingtalkBot.reconnect': () => unsupported('dingtalkBot.reconnect'),
+    'dingtalkBot.clear': () => unsupported('dingtalkBot.clear'),
     'discordBot.getStatus': () => ({ status: { kind: 'idle' }, ownerUserId: '', lifecycleAnnouncement: true }),
-    'discordBot.setConfig': () => ({ success: true }),
-    'discordBot.reconnect': () => ({ success: true }),
-    'discordBot.disconnect': () => ({ success: true }),
-    'discordBot.setLifecycleAnnouncement': () => ({ success: true }),
+    'discordBot.setConfig': () => unsupported('discordBot.setConfig'),
+    'discordBot.reconnect': () => unsupported('discordBot.reconnect'),
+    'discordBot.disconnect': () => unsupported('discordBot.disconnect'),
+    'discordBot.setLifecycleAnnouncement': () => unsupported('discordBot.setLifecycleAnnouncement'),
     'telegramBot.getStatus': () => ({ status: { kind: 'idle' }, ownerUserId: '', botUsername: null }),
-    'telegramBot.setConfig': () => ({ success: true }),
-    'telegramBot.disconnect': () => ({ success: true }),
-    'telegramBot.setOnline': () => ({ success: true }),
+    'telegramBot.setConfig': () => unsupported('telegramBot.setConfig'),
+    'telegramBot.disconnect': () => unsupported('telegramBot.disconnect'),
+    'telegramBot.setOnline': () => unsupported('telegramBot.setOnline'),
     'wecomBot.getStatus': () => ({ status: { kind: 'idle' }, botId: '', ownerUserId: '' }),
-    'wecomBot.setConfig': () => ({ success: true }),
-    'wecomBot.reconnect': () => ({ success: true }),
-    'wecomBot.disconnect': () => ({ success: true }),
+    'wecomBot.setConfig': () => unsupported('wecomBot.setConfig'),
+    'wecomBot.reconnect': () => unsupported('wecomBot.reconnect'),
+    'wecomBot.disconnect': () => unsupported('wecomBot.disconnect'),
     'wechatBot.getState': () => ({ status: 'idle', botAccount: null, loginQrCode: null }),
     'wechatBot.getChannelSettings': () => ({ defaultAgentKind: 'claude-code', defaultModel: '', defaultWorkingDir: null, companionBotId: null }),
     'wechatBot.authorize': () => ({ success: false }),
     'wechatBot.cancelAuthorization': () => undefined,
-    'wechatBot.unbind': () => true,
+    'wechatBot.unbind': () => unsupported('wechatBot.unbind'),
     'wechatBot.chooseWorkingDirectory': () => undefined,
-    'wechatBot.resetWorkingDirectory': () => undefined,
-    'wechatBot.setCompanion': () => true,
+    'wechatBot.resetWorkingDirectory': () => unsupported('wechatBot.resetWorkingDirectory'),
+    'wechatBot.setCompanion': () => unsupported('wechatBot.setCompanion'),
     'maker.imDefaultSettingsGet': () => ({
       agentKind: 'claude-code',
       agents: {
@@ -900,11 +856,10 @@
         'pi': { model: '' },
       },
     }),
-    'maker.imDefaultSettingsSet': () => undefined,
+    'maker.imDefaultSettingsSet': () => unsupported('maker.imDefaultSettingsSet'),
     'wecomGroupNotification.getState': () => ({ enabled: false }),
     'maker.projectAutomation.listPendingImports': () => STATIC.emptyList,
     'appearanceSettings.ensureWallpaperImage': () => null,
-    'localDb.maintenance.getLastResult': () => null,
     'appReadyForBot': () => true,
     'sidebarTabWindow.getState': () => ({ visible: false }),
     'rightSidebarWindow.getState': () => ({ visible: false }),
@@ -929,23 +884,13 @@
     'binding.listAttached': () => STATIC.emptyList,
     'maker.getCompanionCloudState': () => STATIC.companionCloud,
     'ghosts.legacyRecoveryStatus': () => ({ inProgress: false }),
-    'maker.auth.getState': () => ({ authenticated: true }),
     'maker.requestProviderModelsAutoRefresh': () => undefined,
     'maker.scanLocalCli': () => STATIC.localCliDetections,
     'maker.llamaCppStatus': () => STATIC.llamaCppStatus,
     'maker.localModelStatus': () => STATIC.localModelStatus,
-    'maker.agent.getStatus': (args) => {
-      const kind = args?.[0] ?? 'claude-code';
-      return {
-        ready: true,
-        binaryReady: true,
-        authReady: true,
-        binaryPath: kind,
-      };
-    },
     'maker.prewarmSession': () => undefined,
     'maker.piKernel.getState': () => STATIC.piKernelState,
-    'maker.piKernel.install': () => ({ restartRequired: false }),
+    'maker.piKernel.install': () => unsupported('maker.piKernel.install'),
     'maker.agent.getBinaryVersion': (args) => ({
       kind: args?.[0] ?? 'claude-code',
       binaryPath: args?.[0] ?? null,
@@ -955,8 +900,8 @@
       latestCheckFailed: false,
     }),
     'maker.visionBridgeSettingsGet': () => STATIC.visionBridgeSettings,
-    'maker.visionBridgeSettingsSet': () => STATIC.visionBridgeSettings,
-    'maker.visionBridgeSettingsReset': () => STATIC.visionBridgeSettings,
+    'maker.visionBridgeSettingsSet': () => unsupported('maker.visionBridgeSettingsSet'),
+    'maker.visionBridgeSettingsReset': () => unsupported('maker.visionBridgeSettingsReset'),
     'maker.getGoalStatus': () => null,
     'maker.setGoal': () => unsupported('maker.setGoal'),
     'maker.clearGoal': () => unsupported('maker.clearGoal'),
@@ -967,22 +912,22 @@
     'maker.updateCustomMcpServer': () => unsupported('maker.updateCustomMcpServer'),
     'maker.deleteCustomMcpServer': () => unsupported('maker.deleteCustomMcpServer'),
     'maker.refreshCustomMcpCodex': () => unsupported('maker.refreshCustomMcpCodex'),
-    'prepareHarnessUpdate': () => undefined,
+    'prepareHarnessUpdate': () => unsupported('prepareHarnessUpdate'),
     'anyActivityBlockingRelaunch': () => false,
-    'relaunchForHarnessUpdate': () => undefined,
+    'relaunchForHarnessUpdate': () => unsupported('relaunchForHarnessUpdate'),
     'maker.updateGoal': () => unsupported('maker.updateGoal'),
     'localAgent.developerConnection': () => ({ state: 'stopped' }),
     'localAgent.connections': () => STATIC.emptyList,
-    'localAgent.answerConfirmation': () => true,
-    'localAgent.setCreateVisibleSessions': () => true,
-    'localAgent.revoke': () => true,
+    'localAgent.answerConfirmation': () => unsupported('localAgent.answerConfirmation'),
+    'localAgent.setCreateVisibleSessions': () => unsupported('localAgent.setCreateVisibleSessions'),
+    'localAgent.revoke': () => unsupported('localAgent.revoke'),
     'remoteDesktop.state': () => ({ enabled: false, active: null, overlay: false, permissionGuide: false, windowsSupport: 'unavailable' }),
     'remoteDesktop.permissions': () => ({ screen: 'granted', accessibility: 'granted', inputMonitoring: 'granted' }),
     'remoteDesktop.openPermission': () => undefined,
     'remoteDesktop.dismissPermissionGuide': () => undefined,
-    'remoteDesktop.enable': () => undefined,
+    'remoteDesktop.enable': () => unsupported('remoteDesktop.enable'),
     'remoteDesktop.windowsSupport': () => undefined,
-    'remoteDesktop.stop': () => undefined,
+    'remoteDesktop.stop': () => unsupported('remoteDesktop.stop'),
     'maker.usage.getHistory': () => ({
       ...STATIC.usageHistory,
       todayKey: new Date().toISOString().slice(0, 10),
@@ -992,9 +937,6 @@
     'maker.usage.getCodexRateLimits': () => ({ available: false }),
     'maker.usage.getClaudeSubscription': () => null,
     'maker.usage.getXaiSubscription': () => null,
-    'maker.usage.getModelPricing': () => null,
-    'maker.usage.getReferenceModelPricing': () => ({ overrides: {}, catalog: [] }),
-    'maker.listTurnChangeSets': () => [],
     'maker.getSessionAgentSwitchIntent': (args) => (
       rpc('/sessions/agent-switch-intent', { sessionId: args?.[0] })
     ),
@@ -1009,7 +951,6 @@
     'maker.claudeOAuthStatus': () => ({ connected: false }),
     'maker.claudeSessionRouteGet': () => null,
     'learn.listRuns': () => [],
-    'localDb.subagentRuns.list': () => [],
   };
 
   /**
@@ -1019,6 +960,7 @@
    */
   const SYNC_CHANNEL = /(Sync$|getSync$|listSync$|getDataSnapshot$)/;
   const SYNC_CHANNELS = {
+    'getFilePath': true,
     'sidebarSettings.loadSnapshot': true,
     'layout.getStateSync': true,
     'appearanceSettings.getSync': true,
@@ -1042,9 +984,7 @@
       }
       return Promise.resolve(null);
     }
-    return Promise.reject(Object.assign(new Error(`HOST_CHANNEL_UNSUPPORTED: ${path}`), {
-      code: 'HOST_CHANNEL_UNSUPPORTED',
-    }));
+    return Promise.reject(unsupportedHostChannel(path));
   }
 
   const appVersion = window.__cindyBoot?.appVersion ?? '0.1.124';
@@ -1060,119 +1000,119 @@
    * One long-lived SSE connection carries every runtime event; `maker.onEvent`
    * subscribers receive them through the same fan-out the preload provides.
    */
-  let eventStreamStarted = false;
-  let lastEventSeq = null;
+  let eventConnection = null;
+  let connectionState = { status: 'connecting', connection: 0, recovery: 0 };
   function ensureEventStream() {
-    if (eventStreamStarted) return;
-    eventStreamStarted = true;
-    void (async () => {
-      for (;;) {
-        try {
-          const url = lastEventSeq != null ? `/events?since=${lastEventSeq}` : '/events';
-          const headers = {};
-          if (lastEventSeq != null) headers['last-event-id'] = String(lastEventSeq);
-          const response = await fetch(url, { credentials: 'same-origin', headers });
-          if (response.status === 401) { location.replace('/connect'); return; }
-          if (!response.ok || !response.body) throw new Error(`events ${response.status}`);
-          const reader = response.body.getReader();
-          const decoder = new TextDecoder();
-          let buffer = '';
-          for (;;) {
-            const { value, done } = await reader.read();
-            if (done) break;
-            buffer += decoder.decode(value, { stream: true });
-            let index;
-            while ((index = buffer.indexOf('\n\n')) !== -1) {
-              const chunk = buffer.slice(0, index);
-              buffer = buffer.slice(index + 2);
-              const line = chunk.split('\n').find((entry) => entry.startsWith('data: '));
-              if (!line) continue;
-              try {
-                const parsed = JSON.parse(line.slice(6));
-                if (parsed && typeof parsed.seq === 'number') lastEventSeq = parsed.seq;
-                (window.__hostEvents ??= []).push(parsed);
-                if (window.__hostEvents.length > 200) window.__hostEvents.shift();
-                // Interaction traffic has its own preload channels; everything
-                // else stays on the shared event stream.
-                if (parsed.type === 'auth_changed') {
-                  window.__cindyBoot.auth = { user: parsed.user, ownerId: parsed.dataOwnerId };
-                  emit('onAuthStateChange', parsed);
-                } else if (parsed.type === 'interaction_request') {
-                  emit('maker.onInteractionRequest', { sessionId: parsed.sessionId, request: parsed.request });
-                } else if (parsed.type === 'interaction_dismissed') {
-                  emit('maker.onInteractionDismissed', {
-                    sessionId: parsed.sessionId,
-                    requestId: parsed.requestId,
-                    reason: parsed.reason,
-                  });
-                } else if (parsed.type === 'settings_changed') {
-                  if (parsed.domain === 'appearance') {
-                    settingsMirror.appearance = parsed.value;
-                    emit('appearanceSettings.onChanged', parsed.value);
-                  } else if (parsed.domain === 'layout') {
-                    settingsMirror.layout = parsed.value;
-                    emit('layout.onChanged', { layout: parsed.value });
-                  } else if (parsed.domain === 'shortcuts') {
-                    settingsMirror.appShortcuts = parsed.value;
-                    emit('appShortcuts.onChanged', parsed.value);
-                  } else if (parsed.domain === 'sidebar') {
-                    settingsMirror.sidebar = parsed.value;
-                    syncSnapshots.delete('sidebarSettings.loadSnapshot\u0000[]');
-                    if (Array.isArray(parsed.value?.pinnedOrder)) {
-                      emit('sidebarSettings.onPinnedOrderChanged', parsed.value.pinnedOrder, ownerStamp());
-                    }
-                    if (Array.isArray(parsed.value?.hiddenProjectKeys)) {
-                      emit('sidebarSettings.onHiddenProjectKeysChanged', parsed.value.hiddenProjectKeys, ownerStamp());
-                    }
-                  }
-                } else if (parsed.type === 'appearance_changed') {
-                  settingsMirror.appearance = parsed.appearance;
-                  emit('appearanceSettings.onChanged', parsed.appearance);
-                } else if (parsed.type === 'session_changed') {
-                  if (parsed.action === 'create') {
-                    emit('localDb.sessions.onCreated', parsed.session);
-                  } else if (parsed.action === 'update' || parsed.patch) {
-                    emit('localDb.sessions.onPatched', { sessionId: parsed.sessionId, patch: parsed.patch });
-                  } else if (parsed.action === 'discard_provisional' || parsed.status === 'deleted') {
-                    emit('localDb.sessions.onPatched', { sessionId: parsed.sessionId, patch: { status: 'deleted' } });
-                  } else if (parsed.status) {
-                    emit('localDb.sessions.onPatched', { sessionId: parsed.sessionId, patch: { status: parsed.status } });
-                  }
-                } else if (parsed.type === 'message_created') {
-                  emit('localDb.messages.onCreated', { sessionId: parsed.sessionId, message: parsed.message });
-                } else if (parsed.type === 'input_projection') {
-                  emit('maker.onInputProjection', parsed.projection);
-                } else if (parsed.type === 'project_aliases_changed') {
-                  emit('localDb.projectAliases.onChanged');
-                } else {
-                  const event = parsed.event ?? {
-                    type: parsed.type,
-                    data: parsed.data,
-                    source: parsed.source,
-                    agentMeta: parsed.agentMeta,
-                    turnContinuationId: parsed.turnContinuationId,
-                    turnScope: parsed.turnScope,
-                    turnOrigin: parsed.turnOrigin,
-                  };
-                  emit('maker.onEvent', {
-                    sessionId: parsed.sessionId,
-                    event,
-                    persistId: parsed.persistId,
-                    resolvedContent: parsed.resolvedContent,
-                  });
-                  if (event.type === 'status' && event.data?.status === 'closed') {
-                    emit('maker.onStatusChanged', { sessionId: parsed.sessionId, status: 'closed' });
-                  }
-                }
-              } catch { /* ignore partial */ }
+    if (eventConnection) return;
+    eventConnection = startHostEventStream({
+      open: (query, signal) => fetch(`/events${query}`, { credentials: 'same-origin', signal }),
+      beforeEvents: async (signal) => {
+        const auth = await requestHost('/api/auth/state', null, 'POST', signal);
+        if (signal.aborted) return;
+        (window.__cindyBoot ??= {}).auth = { user: auth.user, ownerId: auth.dataOwnerId };
+        emit('onAuthStateChange', auth);
+      },
+      onState: (state) => {
+        connectionState = state;
+        emit('hostConnection.onStateChanged', state);
+      },
+      onEvent: (parsed) => {
+        (window.__hostEvents ??= []).push(parsed);
+        if (window.__hostEvents.length > 200) window.__hostEvents.shift();
+        // Interaction traffic has its own preload channels; everything
+        // else stays on the shared event stream.
+        if (parsed.type === 'auth_changed') {
+          (window.__cindyBoot ??= {}).auth = { user: parsed.user, ownerId: parsed.dataOwnerId };
+          emit('onAuthStateChange', parsed);
+        } else if (parsed.type === 'interaction_request') {
+          emit('maker.onInteractionRequest', { sessionId: parsed.sessionId, request: parsed.request });
+        } else if (parsed.type === 'interaction_dismissed') {
+          emit('maker.onInteractionDismissed', {
+            sessionId: parsed.sessionId,
+            requestId: parsed.requestId,
+            reason: parsed.reason,
+          });
+        } else if (parsed.type === 'plugin_push') {
+          const subscriber = {
+            'ghosts:changed': 'ghosts.onChanged',
+            'ghosts:runtime-changed': 'ghosts.onRuntimeChanged',
+            'ghosts:card-updated': 'ghosts.onCardUpdated',
+            'ghosts:notify': 'ghosts.onNotify',
+            'maker:auth:state-changed': 'maker.auth.onStateChanged',
+            'maker:auth:login-progress': 'maker.auth.onLoginProgress',
+            'model-access:status-change': 'modelAccess.onStatusChange',
+            'maker:codex-runtime-route-changed': 'maker.onCodexRuntimeRouteChanged',
+          }[parsed.channel];
+          if (subscriber) emit(subscriber, parsed.payload);
+        } else if (parsed.type === 'settings_changed') {
+          if (parsed.domain === 'appearance') {
+            settingsMirror.appearance = parsed.value;
+            emit('appearanceSettings.onChanged', parsed.value);
+          } else if (parsed.domain === 'layout') {
+            settingsMirror.layout = parsed.value;
+            emit('layout.onChanged', { layout: parsed.value });
+          } else if (parsed.domain === 'shortcuts') {
+            settingsMirror.appShortcuts = parsed.value;
+            emit('appShortcuts.onChanged', parsed.value);
+          } else if (parsed.domain === 'sidebar') {
+            settingsMirror.sidebar = parsed.value;
+            syncSnapshots.delete('sidebarSettings.loadSnapshot\u0000[]');
+            if (Array.isArray(parsed.value?.pinnedOrder)) {
+              emit('sidebarSettings.onPinnedOrderChanged', parsed.value.pinnedOrder, ownerStamp());
+            }
+            if (Array.isArray(parsed.value?.hiddenProjectKeys)) {
+              emit('sidebarSettings.onHiddenProjectKeysChanged', parsed.value.hiddenProjectKeys, ownerStamp());
             }
           }
-        } catch {
-          // Reconnect with a short backoff; the host keeps the task running.
+        } else if (parsed.type === 'appearance_changed') {
+          settingsMirror.appearance = parsed.appearance;
+          emit('appearanceSettings.onChanged', parsed.appearance);
+        } else if (parsed.type === 'task_tags_changed') {
+          emit('localDb.taskTags.onChanged', parsed.payload, parsed.ownerStamp);
+        } else if (parsed.type === 'session_changed') {
+          if (parsed.action === 'create') {
+            emit('localDb.sessions.onCreated', parsed.session);
+          } else if (parsed.action === 'update' || parsed.patch) {
+            emit('localDb.sessions.onPatched', { sessionId: parsed.sessionId, patch: parsed.patch });
+          } else if (parsed.action === 'discard_provisional' || parsed.status === 'deleted') {
+            emit('localDb.sessions.onPatched', { sessionId: parsed.sessionId, patch: { status: 'deleted' } });
+          } else if (parsed.status) {
+            emit('localDb.sessions.onPatched', { sessionId: parsed.sessionId, patch: { status: parsed.status } });
+          }
+        } else if (parsed.type === 'message_created') {
+          emit('localDb.messages.onCreated', { sessionId: parsed.sessionId, message: parsed.message });
+        } else if (parsed.type === 'message_deleted') {
+          emit('localDb.messages.onDeleted', parsed);
+        } else if (parsed.type === 'error_persisted') {
+          emit('localDb.messages.onErrorPersisted', { sessionId: parsed.sessionId, persistId: parsed.persistId });
+        } else if (parsed.type === 'subagent_runs_changed') {
+          emit('localDb.subagentRuns.onChanged', parsed);
+        } else if (parsed.type === 'input_projection') {
+          emit('maker.onInputProjection', parsed.projection);
+        } else if (parsed.type === 'project_aliases_changed') {
+          emit('localDb.projectAliases.onChanged');
+        } else {
+          const event = parsed.event ?? {
+            type: parsed.type,
+            data: parsed.data,
+            source: parsed.source,
+            agentMeta: parsed.agentMeta,
+            turnContinuationId: parsed.turnContinuationId,
+            turnScope: parsed.turnScope,
+            turnOrigin: parsed.turnOrigin,
+          };
+          emit('maker.onEvent', {
+            sessionId: parsed.sessionId,
+            event,
+            persistId: parsed.persistId,
+            resolvedContent: parsed.resolvedContent,
+          });
+          if (event.type === 'status' && event.data?.status === 'closed') {
+            emit('maker.onStatusChanged', { sessionId: parsed.sessionId, status: 'closed' });
+          }
         }
-        await new Promise((resolve) => setTimeout(resolve, 1_000));
-      }
-    })();
+      },
+    });
   }
 
   /** Event listeners registered through `onX` members. */
@@ -1199,7 +1139,7 @@
   let ghostsCache = null;
   void (async () => {
     try {
-      const installed = await rpc('/ghosts');
+      const installed = await hostChannels['ghosts.listSync']();
       ghostsCache = Array.isArray(installed) ? installed : [];
     } catch {
       ghostsCache = [];
@@ -1209,6 +1149,7 @@
 
   /** Non-function members the preload exposes as plain values. */
   const VALUE_CHANNELS = Object.freeze({
+    'hostConnection.client': 'browser',
     'osRelease': window.__cindyBoot?.osRelease ?? '',
     'clientEndpoints.websiteUrl': 'https://cindy.app',
     'appDisplayVersion': appVersion,
@@ -1269,6 +1210,7 @@
             const set = listeners.get(channel) ?? new Set();
             set.add(callback);
             listeners.set(channel, set);
+            if (channel === 'hostConnection.onStateChanged') callback(connectionState);
             return () => set.delete(callback);
           };
         }
@@ -1309,6 +1251,18 @@
   window.addEventListener('error', (event) => {
     console.error('[cindy-web] renderer error', event.error ?? event.message);
   });
+  window.addEventListener('focus', () => {
+    if (connectionState.status === 'authorization-required') eventConnection?.reconnect();
+  });
+  if (typeof BroadcastChannel !== 'undefined') {
+    const pairing = new BroadcastChannel('cindy-host-pairing');
+    pairing.onmessage = () => {
+      if (connectionState.status === 'authorization-required') eventConnection?.reconnect();
+    };
+    window.addEventListener('pagehide', event => { if (!event.persisted) pairing.close(); });
+  }
+  window.addEventListener('pagehide', event => { if (!event.persisted) eventConnection?.stop(); });
+  window.addEventListener('pageshow', event => { if (event.persisted) eventConnection?.reconnect(); });
   // Start event stream immediately on boot
   ensureEventStream();
   void pending;

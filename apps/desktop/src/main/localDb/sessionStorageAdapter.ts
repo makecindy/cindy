@@ -137,9 +137,11 @@ export class OwnerSessionStorage implements SessionStorage {
     // DB 的 status 列 ('active'|'archived'|'deleted') 是产品归档语义, 走 IPC local-db:sessions:update,
     // 不在这里写 —— maker-core 接口已经移除了 status 字段。
     await db.update(sessions).set(updateFields).where(eq(sessions.id, id));
-    const updated = await this.get(id);
-    if (!updated) throw new Error(`Session ${id} not found after update`);
-    return updated;
+    // The write and its readback belong to the same captured database, even
+    // when the active account changes while the write is settling.
+    const rows = await db.select().from(sessions).where(eq(sessions.id, id)).limit(1);
+    if (!rows[0]) throw new Error(`Session ${id} not found after update`);
+    return rowToMeta(rows[0]);
   }
 
   async compareAndClearSdkSessionId(

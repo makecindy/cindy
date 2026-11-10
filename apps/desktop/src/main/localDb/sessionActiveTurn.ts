@@ -183,15 +183,22 @@ function chainWrite(sessionId: string, op: () => Promise<void>): Promise<void> {
   return next;
 }
 
+/** Freeze the writer at admission, before a queue/barrier can outlive its owner. */
+function captureMarkerDb() {
+  try { return getDbClient().drizzle; }
+  catch { return null; }
+}
+
 /** turn 启动:写 active_turn_started_at = now。fire-and-forget,失败只落日志。 */
 export function markSessionTurnStarted(sessionId: string): void {
   if (_quitFrozen) return;
   const startedAt = Date.now();
+  const db = captureMarkerDb();
   _notificationTurns.set(sessionId, { startedAt, sequence: ++_notificationTurnSequence });
   chainWrite(sessionId, async () => {
     try {
-      await getDbClient()
-        .drizzle.update(sessions)
+      if (!db) return;
+      await db.update(sessions)
         .set({ activeTurnStartedAt: startedAt })
         .where(eq(sessions.id, sessionId));
     } catch (err) {
@@ -242,11 +249,12 @@ export function markSessionTurnEndedAfterBarrier(sessionId: string, barrier: Pro
   if (isEndedWriteSuppressed()) return;
   const endedAt = Date.now();
   const notifyContext = captureTurnEndedPersistedContext();
+  const db = captureMarkerDb();
   const notificationTurn = _notificationTurns.get(sessionId);
   if (notificationTurn && notificationTurn.endedAt === undefined) notificationTurn.endedAt = endedAt;
   void barrier.then(
-    () => enqueueEndedWrite(sessionId, endedAt, notifyContext),
-    () => enqueueEndedWrite(sessionId, endedAt, notifyContext),
+    () => enqueueEndedWrite(sessionId, endedAt, notifyContext, db),
+    () => enqueueEndedWrite(sessionId, endedAt, notifyContext, db),
   );
 }
 
@@ -288,10 +296,11 @@ export async function ackSessionTurnEndedIfUnchanged(
   if (_quitFrozen) return false;
   const endedAt = Date.now();
   const notifyContext = captureTurnEndedPersistedContext();
+  const db = captureMarkerDb();
   let landed = false;
   await chainWrite(sessionId, async () => {
     try {
-      const db = getDbClient().drizzle;
+      if (!db) return;
       await db
         .update(sessions)
         .set({ lastTurnEndedAt: sql`MAX(COALESCE(${sessions.lastTurnEndedAt}, 0), ${endedAt})` })
@@ -322,10 +331,12 @@ export async function ackSessionTurnEndedIfUnchanged(
 }
 
 /** ended 写入的唯一落库实现:MAX 守卫 + per-session 链,见 markSessionTurnEnded 注释。 */
-function enqueueEndedWrite(sessionId: string, endedAt: number, notifyContext: unknown): Promise<void> {
+function enqueueEndedWrite(
+  sessionId: string, endedAt: number, notifyContext: unknown, db = captureMarkerDb(),
+): Promise<void> {
   return chainWrite(sessionId, async () => {
     try {
-      const db = getDbClient().drizzle;
+      if (!db) return;
       await db
         .update(sessions)
         .set({ lastTurnEndedAt: sql`MAX(COALESCE(${sessions.lastTurnEndedAt}, 0), ${endedAt})` })

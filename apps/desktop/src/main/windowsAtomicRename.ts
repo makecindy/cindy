@@ -4,11 +4,21 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
-import { app } from 'electron';
 
-const exec = promisify(execFile);
 const binaryName = 'cindy-windows-atomic-rename.exe';
 let resolvingBinary: Promise<string> | undefined;
+
+export interface WindowsAtomicRenamePaths {
+  packagedBinary?: string;
+  sourceFile?: string;
+  cacheDir: string;
+}
+let configuredPaths: WindowsAtomicRenamePaths | undefined;
+/** The launcher supplies paths before starting any file-writing services. */
+export function configureWindowsAtomicRename(paths: WindowsAtomicRenamePaths): void {
+  configuredPaths = { ...paths };
+  resolvingBinary = undefined;
+}
 
 function windowsTarget(): string {
   if (process.arch === 'arm64') return 'aarch64-pc-windows-msvc';
@@ -23,14 +33,15 @@ async function resolveRustc(): Promise<string> {
 
 async function resolveBinary(): Promise<string> {
   if (process.platform !== 'win32') throw new Error('Windows atomic rename is Windows-only');
-  if (app.isPackaged) {
-    return path.join(process.resourcesPath, 'tools', 'windows-atomic-rename', binaryName);
-  }
+  const paths = configuredPaths;
+  if (!paths) throw new Error('Windows atomic rename paths are not configured');
+  if (paths.packagedBinary) return paths.packagedBinary;
   const target = windowsTarget();
-  const source = path.join(app.getAppPath(), 'native', 'windows-atomic-rename', 'main.rs');
+  const source = paths.sourceFile;
+  if (!source) throw new Error('Windows atomic rename source is not configured');
   const sourceBytes = await fs.readFile(source);
   const digest = createHash('sha256').update(target).update(sourceBytes).digest('hex');
-  const directory = path.join(app.getPath('userData'), 'windows-atomic-rename', digest);
+  const directory = path.join(paths.cacheDir, digest);
   const binary = path.join(directory, binaryName);
   try {
     await fs.access(binary);
@@ -42,7 +53,7 @@ async function resolveBinary(): Promise<string> {
   const buildDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-atomic-rename-build-'));
   const built = path.join(buildDirectory, binaryName);
   try {
-    await exec(await resolveRustc(), [
+    await promisify(execFile)(await resolveRustc(), [
       source,
       '--edition=2021',
       '-C', 'opt-level=s',
@@ -71,7 +82,7 @@ export async function atomicReplaceWindowsDirectoryEntry(
   destination: string,
 ): Promise<void> {
   const binary = await (resolvingBinary ??= resolveBinary());
-  await exec(binary, [source, destination], {
+  await promisify(execFile)(binary, [source, destination], {
     timeout: 15_000,
     windowsHide: true,
     maxBuffer: 64 * 1024,
