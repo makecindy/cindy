@@ -24,6 +24,25 @@ Windows Android Studio SDK location; they do not need to be on `PATH`. The
 command does not rebuild the native app, so install the matching development
 package first when switching build identity.
 
+Windows Android identity checks use the following command (replace the serial and
+port with the selected emulator and Metro):
+
+```sh
+pnpm mobile:sim:whoami -- --mock --udid emulator-5554 --port 8082 --json
+```
+
+They read the resolved `android.package`, installed version/debug flag and the APK's
+`assets/fingerprint`, compare it with the Android Expo Updates fingerprint, and reuse
+the Metro worktree/source/environment checks. Failed adb reads remain failures;
+APK fingerprint timeouts/unreadable results keep a distinct `native.reason` and
+ask you to repair adb/fingerprint reads and retry, without recommending a rebuild.
+If extracting the fingerprint exits unsuccessfully, a successful archive listing
+that lacks the exact `assets/fingerprint` entry identifies a missing fingerprint
+and recommends rebuilding. Failed listings remain probe failures.
+Multiple online emulators require an explicit serial. Physical phones are not selected.
+`--viewer` remains iOS-only: Android window and page verification requires a real screenshot.
+`mobile:sim:up` is still iOS-only; Windows uses `start` and `rebuild` separately.
+
 The three commands share Metro worktree, source, region and environment checks.
 `whoami` success proves identity consistency, not that the app has loaded a bundle
 or displayed a page (`pageVerified` remains false). `rebuild` reports installation
@@ -438,7 +457,9 @@ The native build number only proves native installation. `whoami` also compares
 the installed `EXUpdates.bundle/fingerprint` with the current worktree's Expo
 Updates fingerprint, using the same development environment and workflow as the
 native build. A missing/unreadable fingerprint (`native-unknown`) or difference
-(`native-mismatch`) fails the check even when Metro is correct. Run ordinary
+(`native-mismatch`) fails the check even when Metro is correct. For a read or
+calculation failure, fix the probe and retry before deciding whether to rebuild.
+For a genuinely missing fingerprint or a mismatch, run ordinary
 `mobile:sim:rebuild` without `--clean`; it rejects incompatible cached artifacts
 and checks the built and installed app before handing it off. For example,
 switching worktrees with different `@expo/ui` versions can otherwise silently

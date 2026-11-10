@@ -32,6 +32,7 @@ vi.mock('../../logger', () => ({
 
 vi.mock('../../authManager', () => ({
   getCurrentUserId: vi.fn(() => 'user-1'),
+  getCurrentDataOwnerId: vi.fn(() => 'user-1'),
 }));
 
 vi.mock('../registry', () => ({
@@ -48,6 +49,7 @@ vi.mock('../../maker-host/shared-global-skills.js', () => ({
   prepareSharedGlobalSkillLinks: vi.fn(async () => ({ warnings: [] })),
   prepareSharedProjectSkillLinks: vi.fn(async () => ({ warnings: [] })),
   projectWorkingDirFromSkillPath: vi.fn(() => null),
+  shouldProjectToClaudeSkills: vi.fn(async () => true),
 }));
 
 vi.mock('../installService', () => ({
@@ -126,6 +128,42 @@ description: A demo skill
     expect(outside.success).toBe(false);
     if (!outside.success) {
       expect(outside.message).toMatch(/\.agents\/skills|\.claude\/skills/);
+    }
+  });
+
+  it('creates the Claude discovery link for a global import only when projection is allowed (#9282)', async () => {
+    const shared = await import('../../maker-host/shared-global-skills.js');
+    const { ensureSymlinkToShared } = await import('../installService');
+    const { importLocalSkill } = await import('../importLocalSkill');
+    const fakeHome = path.join(TEST_ROOT, 'claude-gate-home');
+    const home = vi.spyOn(os, 'homedir').mockReturnValue(fakeHome);
+    try {
+      vi.mocked(ensureSymlinkToShared).mockClear();
+      vi.mocked(shared.shouldProjectToClaudeSkills).mockResolvedValue(true);
+      const onZip = await writeZip({
+        'SKILL.md': '---\nname: gate-on-skill\ndescription: d.\n---\nBody\n',
+      });
+      const on = await importLocalSkill({ filePath: onZip });
+      expect(on).toMatchObject({ success: true });
+      expect(ensureSymlinkToShared).toHaveBeenCalledWith(
+        path.join(fakeHome, '.claude', 'skills', 'gate-on-skill'),
+        path.join(fakeHome, '.agents', 'skills', 'gate-on-skill'),
+      );
+
+      vi.mocked(ensureSymlinkToShared).mockClear();
+      vi.mocked(shared.shouldProjectToClaudeSkills).mockResolvedValue(false);
+      const offZip = await writeZip({
+        'SKILL.md': '---\nname: gate-off-skill\ndescription: d.\n---\nBody\n',
+      });
+      const off = await importLocalSkill({ filePath: offZip });
+      expect(off).toMatchObject({ success: true });
+      // 门关：导入成功但不主动创建 ~/.claude（目录与链接都不建）。
+      expect(ensureSymlinkToShared).not.toHaveBeenCalled();
+      expect(fs.existsSync(path.join(fakeHome, '.claude'))).toBe(false);
+      expect(fs.existsSync(path.join(fakeHome, '.agents', 'skills', 'gate-off-skill'))).toBe(true);
+    } finally {
+      home.mockRestore();
+      vi.mocked(shared.shouldProjectToClaudeSkills).mockResolvedValue(true);
     }
   });
 });

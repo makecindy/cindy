@@ -191,6 +191,12 @@ export interface OrcaInterAgentDispatcherDeps<TSessionMeta> {
   /** 直发前与 sendToSessionInternal 共用同一套满窗 / compact 失败换窗预检。 */
   prepareUnhealthySession?: (sessionId: string) => Promise<boolean | void>;
   /**
+   * 直发前补齐 Orca 装载：目标在 runtime 已启动后才成为 Lead/Worker（例如从协同面板
+   * 开启协同）时，live handle 还没有 Orca 说明与工具。与用户发送共用同一套重建；
+   * 已装载或非 Orca 时是空操作。
+   */
+  hydrateOrcaSessionIfNeeded?: (sessionId: string, meta: TSessionMeta) => Promise<void>;
+  /**
    * 校验 imagePaths(存在性 + 图片扩展名), 返回逐张附件元数据或错误消息。
    * fs 属 host 边界, dispatcher 不直接碰文件系统。
    */
@@ -679,6 +685,16 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
           throw new Error('Agent switch is still pending; retry the send after recovery');
         }
         await deps.prepareUnhealthySession?.(params.targetSessionId);
+        try {
+          await deps.hydrateOrcaSessionIfNeeded?.(params.targetSessionId, meta);
+        } catch (err) {
+          // Best effort: a failed rebuild either left the old runtime (deliver as before)
+          // or closed it (no live below, so the lazy-resume path starts a hydrated one).
+          log.warn('orca inter-agent hydrate before direct send failed', {
+            targetSessionId: params.targetSessionId,
+            err: err instanceof Error ? err.message : String(err),
+          });
+        }
         const live = deps.getLiveSession(params.targetSessionId);
         if (!live) return null;
         const origin = await resolveOrigin();
@@ -960,6 +976,33 @@ export function rebuildQueuedOrcaLeadMessage(
 ): AgentInputQueuedMessage {
   const agentMessageText = formatAgentMessage('lead', rawContent, workerId);
   const persistedContent = formatOrcaCommunicationMessage('lead', rawContent);
+  return {
+    ...entry,
+    text: agentMessageText,
+    persistedContent,
+    chatMessage: {
+      ...entry.chatMessage,
+      content: persistedContent,
+    },
+    ...(entry.origin?.kind === 'orca'
+      ? { origin: { ...entry.origin, displayText: rawContent } }
+      : {}),
+  };
+}
+
+/**
+ * 按 worker→lead 排队消息的原始派发格式重建正文,供 Worker「改写 / 合并自己排队中的回报」使用。
+ * 与 rebuildQueuedOrcaLeadMessage 对称:四处正文的格式耦合同源,身份与调度字段锚定原条目。
+ * `workerRole` 取当前 role(改名后的回报前缀跟随新名字),查不到时省略。
+ */
+export function rebuildQueuedOrcaWorkerMessage(
+  entry: AgentInputQueuedMessage,
+  rawContent: string,
+  workerId: string,
+  workerRole?: string,
+): AgentInputQueuedMessage {
+  const agentMessageText = formatAgentMessage('worker', rawContent, workerId, workerRole);
+  const persistedContent = formatOrcaCommunicationMessage('worker', rawContent);
   return {
     ...entry,
     text: agentMessageText,

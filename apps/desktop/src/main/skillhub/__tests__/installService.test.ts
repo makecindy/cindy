@@ -91,6 +91,7 @@ vi.mock('../../maker-host/shared-global-skills.js', () => ({
   prepareSharedGlobalSkillLinks: vi.fn(async () => ({ warnings: [] })),
   prepareSharedProjectSkillLinks: vi.fn(async () => ({ warnings: [] })),
   projectWorkingDirFromSkillPath: vi.fn(() => null),
+  shouldProjectToClaudeSkills: vi.fn(async () => true),
 }));
 
 async function makeZip(files: Record<string, string>): Promise<Uint8Array> {
@@ -1239,6 +1240,35 @@ describe('skillhub/installService', () => {
     expect(sharedSkills.prepareSharedProjectSkillLinks).toHaveBeenCalledWith({
       workingDir: projectRoot,
     });
+  });
+
+  it('creates the Claude discovery link for a global install only when projection is allowed (#9282)', async () => {
+    const fakeHome = path.join(TEST_ROOT, 'claude-gate-home');
+    const sharedSkills = await import('../../maker-host/shared-global-skills.js');
+    const { install } = await import('../installService');
+    const home = vi.spyOn(os, 'homedir').mockReturnValue(fakeHome);
+    try {
+      const { registryService } = await import('../registry');
+      vi.mocked(registryService.addInstall).mockResolvedValue(undefined);
+      const zipBuf = await makeZip({ 'SKILL.md': 'global content' });
+      await setupInstallDownload('claude-gate-on', zipBuf);
+      vi.mocked(sharedSkills.shouldProjectToClaudeSkills).mockResolvedValue(true);
+      const on = await install({ name: 'claude-gate-on', version: '1.0.0' }, () => {});
+      expect(on).toMatchObject({ success: true });
+      expect(fs.existsSync(path.join(fakeHome, '.claude', 'skills', 'claude-gate-on'))).toBe(true);
+
+      const zipBuf2 = await makeZip({ 'SKILL.md': 'global content' });
+      await setupInstallDownload('claude-gate-off', zipBuf2);
+      vi.mocked(sharedSkills.shouldProjectToClaudeSkills).mockResolvedValue(false);
+      const off = await install({ name: 'claude-gate-off', version: '1.0.0' }, () => {});
+      expect(off).toMatchObject({ success: true });
+      // 门关：安装成功但不主动创建 ~/.claude（目录与链接都不建）。
+      expect(fs.existsSync(path.join(fakeHome, '.claude', 'skills', 'claude-gate-off'))).toBe(false);
+      expect(fs.existsSync(path.join(fakeHome, '.agents', 'skills', 'claude-gate-off'))).toBe(true);
+    } finally {
+      home.mockRestore();
+      vi.mocked(sharedSkills.shouldProjectToClaudeSkills).mockResolvedValue(true);
+    }
   });
 
   it('force-updates the physical skill while preserving a project compatibility link', async () => {

@@ -858,7 +858,7 @@
       },
       "runningCount_other": "{{count}} 件差事方行",
       "limitAria": "{{name}} 之並行上限",
-      "limitOption_other": "至多 {{count}}",
+      "limitOption_other": "並行 {{count}}",
       "weightAria": "{{name}} 之權重",
       "weightOption": "輕重 {{weight}}",
       "assignAria": "分差事予 {{name}}",
@@ -873,6 +873,7 @@
         "pausedLocal": "已暫停接外來之新差事",
         "cooling": "方歇",
         "coolingUntil": "冷卻中 · 約 {{time}} 復",
+        "quotaExhausted": "限額已盡",
         "offline": "失聯",
         "unreachableHere": "自此機連不上",
         "unavailable": {
@@ -912,9 +913,13 @@
       "description": "為均用各名籍之限額，宜將此訊易至 {{label}} 遣之（{{quota}}）。易後攜近數輪言談與摘要，更早之細節或記不全。",
       "quota": "尚餘 {{left}}%",
       "quotaReset": "尚餘 {{left}}%，{{reset}}",
-      "confirm": "易之",
-      "cancel": "罷",
-      "remember": "此後自動易之，不復詢問（僅此差事）"
+      "confirm": "惟此次換之",
+      "cancel": "暫不換",
+      "remember": "此後自動切換，不復問",
+      "disable": "勿自動切換，亦不復問",
+      "disableFailed": "未能確認此選擇已存。請查連線，並確認任務所在電腦之 Cindy 已更新，再試。此訊仍照常送出。",
+      "choiceLabel": "切換之法（僅此任務）",
+      "send": "續發此訊"
     },
     "deleteConfirm": {
       "title": "刪 {{provider}} 之供方組乎？",
@@ -2425,7 +2430,7 @@
       "skinLabel": "角色",
       "skinHint": "任務膠囊與動態島中所顯之角色。",
       "soundLabel": "事之音",
-      "soundHint": "為諸類提醒擇 8-bit 之音，任務膠囊與動態島共之；點按之音唯觸任務膠囊時鳴。",
+      "soundHint": "事件設音，則獨奏所擇之聲；未設或關之，則從系統通知之設。",
       "soundAria": "切換任務膠囊之音",
       "soundSelectAria": "{{event}}之音",
       "soundPreviewAria": "先聽{{event}}之音",
@@ -2480,7 +2485,7 @@
         "select": "點選"
       },
       "soundOptions": {
-        "none": "無",
+        "none": "從系統",
         "startup-chime": "啟動之音",
         "ring-chime": "圓環之音",
         "item-found": "得寶",
@@ -7367,6 +7372,11 @@
         "installedExpand": "展全部已納法器 {{count}} 件",
         "installedCollapse": "收餘下已納法器",
         "recommendedSection": "所薦",
+        "todayRecommendations": "今日所薦",
+        "marketSection": "法器市集",
+        "browseMarket": "覽法器市集",
+        "searching": "檢索中…",
+        "allLoaded": "諸法器已盡示，共 {{count}} 件",
         "updatesAvailable": "法器 {{count}} 件可更新",
         "updateAll": "盡更新",
         "ignoreRound": "此輪略之",
@@ -7396,7 +7406,15 @@
       },
       "market": {
         "publisherKind": {
-          "official": "官設"
+          "official": "官設",
+          "community": "社群"
+        },
+        "publisherDescription": {
+          "official": "Cindy 官方所製，發布維護",
+          "community": "社群開發者所製，發布維護",
+          "team": "本組織共享於獲准成員",
+          "custom": "取自所添 Git 或本機目錄市集",
+          "local": "由本機檔案安裝，或於本機開發"
         },
         "scopeAria": "篩法器之來源",
         "scope": {
@@ -10722,6 +10740,9 @@
         "stepFailed": "{{name}}此步生謬，未竟",
         "stepTimeout": "{{name}}久未竟，此步暫止",
         "stepUnavailable": "{{name}}今不可用，此步無從行",
+        "runtimeFailureReason": {
+          "unclaimed_timeout": "{{name}}逾候未始處理，此請已終。\n請夥伴之主查其電腦之 Cindy 運行與網路連線。"
+        },
         "runtimeFailure": {
           "REMOTE_DEVICE_LIMIT": "{{name}}不能回覆：同僚所在裝置所留之遠端差事數已達上限。\n請同僚之主封存暫不用之差事，或請遠方之機之主於「遠端與分享」中提高上限。",
           "REMOTE_TOTAL_LIMIT": "{{name}}不能回覆：遠方之機所留差事總數已達上限。\n請彼機之主釋暫不用之差事，或於「遠端與分享」中提高上限。",
@@ -11367,6 +11388,9 @@
       "databaseDriver": "資料庫驅動程式不能載，請更新或修復 Cindy 後再試。",
       "databaseUnavailable": "來源資料庫不可讀，原資料未動。修復後可再試。",
       "fileTooLarge": "卷或此次資料逾讀取上限，未截而納。",
+      "sourceFileTooLarge": "單卷逾讀取上限，此項未全納。",
+      "snapshotTooLarge": "此次所讀資料累計逾限，未能全納。",
+      "itemTooLarge": "此項諸卷合計逾 128 MiB，未全納。",
       "memoryMetadata": "記憶摘要或標題不合存儲之要。",
       "memoryWrite": "記憶寫入或完整性檢查未成，可再試。",
       "memoryChanged": "已存之記憶有變，未覆寫。",
@@ -11510,7 +11534,8 @@
         "lark": "Lark",
         "wecom": "企業微信",
         "dingtalk": "釘釘",
-        "discord": "Discord"
+        "discord": "Discord",
+        "imessage": "iMessage"
       },
       "status": {
         "connected": "已連",
@@ -11641,6 +11666,22 @@
           "existing": "用已於 Cindy 設置之機器人",
           "manual": "填新憑證",
           "moveNote": "此機器人將自 規制 → IM 機器人 移來，彼處將空；原有私訊與群組改由 {{name}} 接續回覆。"
+        },
+        "imessage": {
+          "serverUrlLabel": "BlueBubbles 服務端",
+          "serverUrlPlaceholder": "http://192.168.1.20:1234",
+          "passwordLabel": "API 密鑰",
+          "passwordPlaceholder": "••••••••",
+          "ownerAddressLabel": "君之 iMessage 位址",
+          "ownerAddressPlaceholder": "owner@example.com",
+          "chatGuidsLabel": "言談 GUID（逗號相隔）",
+          "chatGuidsPlaceholder": "any;-;owner@example.com",
+          "listenHostLabel": "本機偵聽位址",
+          "listenHostPlaceholder": "192.168.1.10",
+          "listenPortLabel": "本機偵聽埠",
+          "listenPortPlaceholder": "18747",
+          "hint": "於本地網路接 BlueBubbles，僅理所選言談。接入前，須先停其餘自動應答程式，以免重答。",
+          "uncertain": "{{count}} 則消息尚待核驗。先查往來記錄，再議重試，勿重答。"
         }
       },
       "removeConfirm": {
@@ -12465,6 +12506,12 @@
       "missingDir": "目錄不存"
     },
     "pendingQueue": {
+      "stopping": "方止",
+      "queued": "方候",
+      "editingInComposer": "方於下方輸入框修之…",
+      "moveUp": "前移一位",
+      "moveDown": "後移一位",
+      "cancelSend": "罷遣",
       "regionAria": "待遣之訊佇列",
       "listAria": "佇列之訊",
       "pausedFooter": "差事已止，佇列暫停",
@@ -14065,6 +14112,7 @@
       "taskAutoArchived": "「{{title}}」已封存",
       "taskAutoArchivedUndo": "撤",
       "taskAutoArchivePending": "離此任務後自封存",
+      "taskAutoArchiveBlockedDirty": "「{{title}}」工作區尚有未提交之改，未自封存",
       "taskAutoArchiveCancel": "取消",
       "taskAutoArchiveCancelled": "此番不自封存",
       "taskArchiveNow": "即封存"
@@ -19677,10 +19725,10 @@
       "useCodex": "以 Codex 登入"
     },
     "title": "訂閱帳號",
-    "note": "首號沿用 CLI 預設目錄，增號各自登入。新務依策分派，舊務仍用原號。",
     "strategy": "負載平衡",
     "add": "新增帳號",
     "default": "預設目錄",
+    "defaultTag": "預設",
     "ready": "已連線",
     "signedOut": "須登入",
     "unavailable": "狀態暫不可得",
@@ -19689,7 +19737,8 @@
     "removeTitle": "移出 {{name}}？",
     "removeDescription": "Cindy 將不再給這個帳號分配任務。CLI 登入和對話歷史仍保留在本機。",
     "failed": "無法讀取或更新帳號。請檢查 CLI 登入和網路連線後重試。",
-    "directory": "帳號目錄",
+    "openDirectory": "啟帳號目錄",
+    "openDirectoryFailed": "帳號目錄未能啟，或已移或已刪。",
     "loginAgain": "重登",
     "login": "登入"
   },
@@ -19701,5 +19750,17 @@
     "logExcerpt": "相關日誌（節錄，或有未全）",
     "logsUnavailable": "未得相關日誌，其因未明。",
     "failed": "診斷資料未備，請重試。"
+  },
+  "githubStar": {
+    "title": "喜用 Cindy 乎？",
+    "description": "願於 GitHub 點 Star，以助 Cindy",
+    "dismiss": "毋再提醒",
+    "action": "為 Cindy 喝采",
+    "starring": "點亮此星…",
+    "thanks": "承蒙賜 Star！",
+    "thanksDescription": "得君相助，Cindy 日進",
+    "browserFallback": "請至 GitHub 為 Cindy 點 Star",
+    "openGithub": "開啟 GitHub",
+    "openFailed": "未能開啟 GitHub"
   }
 }

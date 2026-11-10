@@ -1,7 +1,10 @@
+import { TaskArchiveUndoSlot } from '@/session/TaskArchiveUndoNotice';
 import { composerRowChrome } from '@/session/composerGeometry';
 import { ResizableComposerInputRow } from '@/session/ResizableComposerInputRow';
 import { useComposerDragOpen } from '@/session/useComposerDragOpen';
 import type { ViewInstance, ScrollViewInstance } from 'react-native';
+import { useTaskListBack } from '@/utils/useTaskListBack';
+import { useConversationTaskDrawer } from '@/session/useConversationTaskDrawer';
 import { ComposerAttachmentPreview } from "@/session/ComposerAttachmentPreview";
 import { snapshotRichAnswerValues } from '@/session/RichAnswer';
 import { PluginUiEnablePrompt } from '@/plugins/PluginUiEnablePrompt';
@@ -26,7 +29,7 @@ import { RecentMessageHistories, MessageHistoryOverlay } from '@/session/RecentM
 import { rememberRecentTask } from '@/session/recentTasks';
 import { SystemNavigationBack, useSystemNavigationBack } from '@/platform/chrome/SystemNavigationBack';
 import { keyboardControlRegion, sharedStatusRowDrawerTop, sharedStatusRowTrailingReserve, type LayoutRect } from '@/platform/windowGeometry';
-import { useAdaptiveWindow, PaneViewportProvider } from '@/platform/AdaptiveWindowContext';
+import { useAdaptiveWindow, useAdaptiveWindowDimensions, PaneViewportProvider } from '@/platform/AdaptiveWindowContext';
 import { useSessionHeaderHeight } from '@/session/useSessionHeaderHeight';
 import { useDoubleTap } from '@/session/useDoubleTap';
 import { useSessionPaneLayout, useSessionSidebarWidthPreference } from '@/session/ResidentHomeList';
@@ -35,7 +38,8 @@ import { getActiveMobileSessionRealm } from '@/config/env';
 import { FailedScheduleNotice } from '@/session/FailedScheduleNotice';
 import { shouldShowFailedScheduleNotice, type FailedScheduleRunSnapshot } from '@cindy/maker-shared/schedule-model';
 import type { TokenSpeedSnapshot } from '@cindy/maker-shared/usage-format';
-import { CompanionThreadRoot, useCompanionThreads } from '@/session/CompanionThreads';
+import { CompanionThreadRoot } from '@/session/CompanionThreads';
+import { SessionMessageHistory } from '@/session/SessionMessageHistory';
 import { CompanionHeader } from '@/session/CompanionHeader';
 import { CloudHomeUnreachableNotice, isMessageWaitingForCloudHome, useSustained } from '@/session/CloudHomeUnreachableNotice';
 import { useCloudCompanionHome } from '@/chat/useCloudCompanion';
@@ -93,7 +97,7 @@ import { renderConversationShareHtmlToPng } from 'xdt-screenshot-monitor';
 import { Stack, useFocusEffect, useIsFocused, useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
 import { useTaskLiveScreens } from '@/remote-desktop/useTaskLiveScreens';
 import { liveScreenParam } from '@/remote-desktop/liveScreen';
-import { forwardRef, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode, type RefObject, type SetStateAction } from 'react';
+import { memo, forwardRef, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode, type RefObject, type SetStateAction } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -106,7 +110,6 @@ import {
   ScrollView,
   StyleSheet,
   View,
-  useWindowDimensions,
   type GestureResponderEvent,
   type LayoutChangeEvent,
   type PressableProps,
@@ -124,7 +127,7 @@ import { SessionHeaderNativeBack, SessionHeaderNativeActions, SessionHeaderNativ
 import { TaskTagDots } from '@/session/TaskTags';
 
 import { ScreenBackButton } from '@/components/MobilePrimitives';
-import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { useAuth } from '@/auth/AuthContext';
 import { usePromptRecommendation } from '@/session/usePromptRecommendation';
 import { PromptRecommendation } from '@/session/PromptRecommendation';
@@ -190,7 +193,6 @@ import { startFocusedTopicSubscription } from '@/device-link/focusedTopicSubscri
 import { InteractionPanel, type MobilePlanViewerState } from '@/session/InteractionPanel';
 import {
   COMPANION_AVATAR_SIZE,
-  MessageRenderer,
   findLastUserMessageClientId,
   type CompanionQuoteOptions,
   type MobileMessageActionBusyKind,
@@ -653,16 +655,17 @@ import {
 import { deferScheduleIndexHydration } from '@/session/scheduleIndexDefer';
 import { sessionMayHaveScheduleRuns } from '@/session/scheduleIndex';
 import { confirmArchiveWithSchedules, loadActiveBoundScheduleNames } from '@/session/archiveScheduleConfirm';
+import { useTaskAutoArchive } from '@/session/useTaskAutoArchive';
 import { useSessionListActions } from '@/session/useSessionListActions';
 import { markSessionScheduleRunsRead, unreadRunIdFromProjection } from '@/session/scheduleRunRead';
 import { useRemoteScheduleEventSnapshot } from '@/scheduler/remoteScheduleEvents';
 import { buildSessionNativeShellLayout } from '@/session/mobileNativeShellLayout';
 import { buildWideSessionNavLayout } from '@/session/wideSessionNav';
-import { homeDismissCount } from '@/session/teammateNavigation';
-import { SessionListDrawer, useSessionListDrawerMotion, useSessionListDrawerOpenGesture } from '@/session/SessionListDrawer';
+import { SessionFloatingDrawer } from '@/session/SessionTaskDrawer';
 import { GestureDetector } from '@/platform/gestureHandler';
 import {
   switchDrawerSessionInPlace,
+  taskListSessionTarget,
   type SessionRouteParamsNavigation,
 } from '@/session/sessionDrawerNavigation';
 import {
@@ -1066,9 +1069,13 @@ function composerDraftScopeKey(sessionId: string, routeDraft: string | null): st
   return JSON.stringify([sessionId, routeDraft ?? '']);
 }
 
+// Sidebar and task metadata can update independently of the conversation content.
+// Keep the keyed task lifetime, but skip parent-only rerenders of the heavy detail.
+const MemoizedSessionScreenContent = memo(SessionScreenContent);
+
 export default function SessionScreen() {
   return (
-    <SessionTaskLayout>{(chrome) => <SessionScreenContent {...chrome} />}</SessionTaskLayout>
+    <SessionTaskLayout>{(chrome) => <MemoizedSessionScreenContent {...chrome} />}</SessionTaskLayout>
   );
 }
 
@@ -1197,8 +1204,9 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   }, [deviceId, sessionId]);
   const auth = useAuth();
   const outboxOwner = useSyncExternalStore(subscribeMobileAuthOwner, getMobileAuthOwner, getMobileAuthOwner);
-  const windowDimensions = useWindowDimensions();
-  const insets = useSafeAreaInsets();
+  const adaptiveWindow = useAdaptiveWindow();
+  const windowDimensions = useAdaptiveWindowDimensions();
+  const insets = adaptiveWindow.insets;
   const keyboardState = useMobileKeyboardState();
   const {
     connectionEpoch,
@@ -3110,7 +3118,6 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       deviceDisplayName(agentDeviceId, undefined, remoteAgentCatalogs),
     [remoteAgentCatalogs],
   );
-  const adaptiveWindow = useAdaptiveWindow();
   const paneLayout = useSessionPaneLayout();
   const horizontalSystemHeader = Platform.OS === 'ios' && adaptiveWindow.barEdge === 'none'
     && !paneLayout.persistent && !shareSelectionActive;
@@ -3152,11 +3159,9 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     windowHeight: windowDimensions.height,
     windowWidth: windowDimensions.width,
   }), [adaptiveWindow, nativeHeaderHeight, sidebarWidthPreference.width, windowDimensions.height, windowDimensions.width]);
-  const [sessionListDrawerOpen, setSessionListDrawerOpen] = useState(false);
   // 父级镜像 overlay 的真实存续期:打开时立即 true,退场动画完成 + native 子树卸载后的
   // onClosed 才 false。它同时保证退场期 TalkBack 背景隔离,以及旋转/收窄退出宽屏时
   // 不会提前卸载 Drawer 而吞掉 pending 导航。
-  const [sessionListDrawerOverlayMounted, setSessionListDrawerOverlayMounted] = useState(false);
   // iOS 系统导航栏在 RN 内容之上,临时抽屉放进独立窗口(aboveSystemBar)盖住它,系统栏
   // 留在遮罩下原地不动,不随抽屉开合收起。
   // Duo shares the status area with its native toolbar. Its measured height
@@ -3168,101 +3173,9 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   const sessionListDrawerTopInset = horizontalSystemHeader
     ? sharedStatusRowDrawerTop(nativeHeaderHeight, insets.top) : undefined;
   // 退出宽屏后 layout.drawerWidth 会变 0;退场期间继续用最后一个有效宽度,避免面板几何跳变。
-  const sessionListDrawerWidthRef = useRef(wideSessionNav.drawerWidth);
-  if (wideSessionNav.enabled) sessionListDrawerWidthRef.current = wideSessionNav.drawerWidth;
-  // 抽屉里的导航动作必须等退场动画结束、GestureDetector/Reanimated overlay 真正
-  // 卸载后再执行。Android 原生 Screen 换页与该子树卸载同帧存在 native crash 竞态。
-  const pendingDrawerNavigationRef = useRef<(() => void) | null>(null);
-  // pending 只能拦住「首击本身就是导航」的连点;遮罩/back/左滑/当前任务先关闭时 pending
-  // 仍为空。closing 从任一关闭入口同步置 true,完整覆盖退场 commit 前的快速二次点击。
-  const sessionListDrawerClosingRef = useRef(false);
-  // overlayMounted for gesture callbacks that can arrive before it renders.
-  const sessionListDrawerShownRef = useRef(false);
-  const openSessionListDrawer = useCallback(() => {
-    if (!wideSessionNav.enabled || paneLayout.persistent || sessionListDrawerClosingRef.current) return;
-    sessionListDrawerShownRef.current = true;
-    setSessionListDrawerOverlayMounted(true);
-    setSessionListDrawerOpen(true);
-  }, [paneLayout.persistent, wideSessionNav.enabled]);
-  // Floating mode: a rightward swipe on the task pulls the list out instead of
-  // going back; let go too early and it slides back.
-  const sessionListDrawerFloating = wideSessionNav.enabled && !paneLayout.persistent;
-  const sessionListDrawerMotion = useSessionListDrawerMotion();
-  // Whether the drawer has rendered open since it was last released. A pull
-  // cancelled before that (busy JS thread: open and cancel batched together)
-  // leaves the drawer unmounted, so nothing would ever call onClosed.
-  const sessionListDrawerOpenCommittedRef = useRef(false);
-  useEffect(() => {
-    if (sessionListDrawerOpen) sessionListDrawerOpenCommittedRef.current = true;
-    else if (!sessionListDrawerOverlayMounted) sessionListDrawerOpenCommittedRef.current = false;
-  }, [sessionListDrawerOpen, sessionListDrawerOverlayMounted]);
-  const settleSessionListDrawerPull = useCallback(() => {
-    if (!sessionListDrawerShownRef.current || sessionListDrawerClosingRef.current) return;
-    if (!sessionListDrawerOpenCommittedRef.current) {
-      sessionListDrawerShownRef.current = false;
-      setSessionListDrawerOpen(false);
-      setSessionListDrawerOverlayMounted(false);
-      return;
-    }
-    sessionListDrawerClosingRef.current = true;
-    setSessionListDrawerOpen(false);
-  }, []);
-  // Stays enabled while the finger that opened the list is still down.
-  const [sessionListDrawerPulling, setSessionListDrawerPulling] = useState(false);
-  const pullSessionListDrawer = useCallback(() => {
-    setSessionListDrawerPulling(true);
-    openSessionListDrawer();
-  }, [openSessionListDrawer]);
-  const endSessionListDrawerPull = useCallback(() => setSessionListDrawerPulling(false), []);
-  const sessionListDrawerPullGesture = useSessionListDrawerOpenGesture({
-    motion: sessionListDrawerMotion,
-    enabled: sessionListDrawerFloating && (!sessionListDrawerOverlayMounted || sessionListDrawerPulling),
-    width: sessionListDrawerWidthRef.current,
-    onOpen: pullSessionListDrawer,
-    onCancel: settleSessionListDrawerPull,
-    onSettle: endSessionListDrawerPull,
+  const { sessionListDrawerOpen, sessionListDrawerOverlayMounted, sessionListDrawerWidthRef, sessionListDrawerClosingRef, pendingDrawerNavigationRef, openSessionListDrawer, closeSessionListDrawer, sessionListDrawerFloating, sessionListDrawerMotion, sessionListDrawerPullGesture, queueDrawerNavigation, handleSessionListDrawerClosed } = useConversationTaskDrawer({
+    enabled: wideSessionNav.enabled, persistent: paneLayout.persistent, width: wideSessionNav.drawerWidth,
   });
-  const closeSessionListDrawer = useCallback(() => {
-    if (!sessionListDrawerOverlayMounted) return;
-    if (sessionListDrawerClosingRef.current) return;
-    sessionListDrawerClosingRef.current = true;
-    setSessionListDrawerOpen(false);
-  }, [sessionListDrawerOverlayMounted]);
-  // 旋转 / 分屏收窄回到窄屏形态时,抽屉没有入口也没有意义,直接关掉。
-  useEffect(() => {
-    if (!wideSessionNav.enabled && sessionListDrawerOverlayMounted) closeSessionListDrawer();
-  }, [closeSessionListDrawer, sessionListDrawerOverlayMounted, wideSessionNav.enabled]);
-  // 抽屉打开时由 SessionListDrawer 消费 Android back 并发起关闭;open=false 后该监听会
-  // 卸载,但 overlay 仍要退场约 motionDuration.exit。这个窗口临时吞掉 back,避免原生
-  // Screen 返回与 GestureDetector/Reanimated 子树卸载再次挤进同一帧。onClosed 提交
-  // overlayMounted=false 后自动移除,正常返回链(含 useGuardedBack)随即恢复。
-  useEffect(() => {
-    if (Platform.OS !== 'android' || !sessionListDrawerOverlayMounted || sessionListDrawerOpen) return;
-    const subscription = BackHandler.addEventListener('hardwareBackPress', () => true);
-    return () => subscription.remove();
-  }, [sessionListDrawerOpen, sessionListDrawerOverlayMounted]);
-  const queueDrawerNavigation = useCallback((action: () => void) => {
-    // closing 覆盖所有关闭来源,包括 pending 为空的纯关闭;首个意图获胜。
-    if (sessionListDrawerClosingRef.current || pendingDrawerNavigationRef.current) return;
-    if (paneLayout.persistent && !sessionListDrawerOverlayMounted) { action(); return; }
-    sessionListDrawerClosingRef.current = true;
-    pendingDrawerNavigationRef.current = action;
-    setSessionListDrawerOpen(false);
-  }, [paneLayout.persistent, sessionListDrawerOverlayMounted]);
-  const handleSessionListDrawerClosed = useCallback(() => {
-    const action = pendingDrawerNavigationRef.current;
-    sessionListDrawerClosingRef.current = false;
-    setSessionListDrawerOverlayMounted(false);
-    sessionListDrawerShownRef.current = false;
-    if (!action) return;
-    pendingDrawerNavigationRef.current = null;
-    action();
-  }, []);
-  useEffect(() => {
-    if (!paneLayout.persistent || !sessionListDrawerOverlayMounted) return;
-    setSessionListDrawerOpen(false);
-    closeSessionListDrawer();
-  }, [paneLayout.persistent, sessionListDrawerOverlayMounted, closeSessionListDrawer]);
   const handleDrawerSelectSession = useCallback((item: RemoteSessionListItem) => {
     const targetSession = item.session as RemoteSession;
     const focusClientId = 'searchFocusClientId' in item
@@ -3276,10 +3189,8 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     // 回退物理 id / store 索引。校验先于关闭动画:失败时保持抽屉打开 + Alert 反馈
     // (文案与首页同键)——先关再弹会让 200ms 后的读屏焦点归还从错误弹窗手里抢焦点,
     // 且抽屉留在原地,用户可直接改选别的任务。
-    const targetDeviceId = targetSession.canonicalDeviceId
-      ?? targetSession.deviceLinkDeviceId
-      ?? remoteSessionStore.getSessionDeviceId(targetSession.id);
-    if (!targetDeviceId) {
+    const destination = taskListSessionTarget(item, id => remoteSessionStore.getSessionDeviceId(id));
+    if (!destination) {
       Alert.alert(t('devices.list.error.sessionDeviceNotFound'));
       return;
     }
@@ -3292,12 +3203,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       // 否则上传完成回调会经 optionsRef 的最新闭包把 A 的产物追加进 B 的 composer。
       discardAllPendingUploadsForScopeChange();
       discardSessionComposerAttachmentStateRef.current();
-      switchDrawerSessionInPlace(navigation, {
-        deviceId: targetDeviceId,
-        deviceName: deviceDisplayName(targetDeviceId, targetSession.deviceLinkDeviceName),
-        sessionId: targetSession.id,
-        ...(focusClientId ? { focusClientId } : {}),
-      });
+      switchDrawerSessionInPlace(navigation, destination);
     });
   }, [closeSessionListDrawer, navigation, queueDrawerNavigation, sessionId, t]);
   // 前进导航防连点:快速双击「新建」会把 /sessions/new 压栈两层(返回要退两次),
@@ -6410,9 +6316,9 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   const companionReplyAvatar = useMemo(() => companionChat ? companionPortrait(COMPANION_AVATAR_SIZE) : undefined,
     [companionChat, companionPortrait]);
   const companionThreadAvatar = useMemo(() => companionPortrait(iconSize.lg), [companionPortrait]);
-  const companionThreads = useCompanionThreads({ deviceId, deviceName, sessionId,
+  const companionThreadOptions = { deviceId, deviceName, sessionId,
     botId: companionDisplay?.ref.id ?? '', avatar: companionThreadAvatar,
-    enabled: companionChat && !companionEntry.readOnly && !companionEntry.threadRootSessionId, controlsReady: companionEntry.ready });
+    enabled: companionChat && !companionEntry.readOnly && !companionEntry.threadRootSessionId, controlsReady: companionEntry.ready };
   const companionThreadRoot = companionEntry.threadRootSessionId ? (
     <CompanionThreadRoot
     deviceId={deviceId} rootSessionId={companionEntry.threadRootSessionId} rootClientId={companionEntry.threadRootClientId}
@@ -9637,18 +9543,14 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
 
   // 自愈返回:canGoBack 与真实栈不一致时(reload 恢复深路由 / 重复压栈残留),
   // GO_BACK 会被静默吞掉,生产表现为"点返回永远没反应"——校验兜底见 useGuardedBack。
-  const goBackToHome = useGuardedBack();
+  const goBackOneLevel = useGuardedBack();
+  const backToTaskList = useTaskListBack();
+  const goBackToHome = companionChat && !companionEntry.threadRootSessionId ? backToTaskList : goBackOneLevel;
   // Dragging the floating list on to full screen is a way back: the list
   // becomes Home where it is, so this pop skips the slide.
   const [sessionListDrawerDismissingToHome, setSessionListDrawerDismissingToHome] = useState(false);
   // Home, not one step back: a task opened from a teammate's chat sits above it.
-  const goHomeFromDrawer = useCallback(() => {
-    const state = navigation.getState() as { routes?: { name: string; params?: unknown }[]; index?: number } | undefined;
-    const routes = state?.routes?.slice(0, (state.index ?? 0) + 1) ?? [];
-    const count = homeDismissCount(routes);
-    if (count === null) goBackToHome();
-    else if (count > 0) router.dismiss(count);
-  }, [goBackToHome, navigation, router]);
+  const goHomeFromDrawer = backToTaskList;
   const dismissSessionListDrawerToHome = useCallback(() => {
     if (sessionListDrawerClosingRef.current || pendingDrawerNavigationRef.current) return;
     navigation.setOptions({ animation: 'none' });
@@ -9995,6 +9897,28 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       }
     })();
   }, [currentSession, deviceId, goBackToHome, invoke, maker, patchSessionFromList, sessionId, sessionSubscriptionIdentity, t]);
+
+  // 插件卡片「立即归档」走与菜单相同的流程;合并后自动归档在离开任务页时进行(与电脑端同一规则)。
+  const archiveFromCard = useCallback(() => {
+    void patchSessionMeta({ status: 'archived' }, async (isCurrent) => {
+      const names = deviceId
+        ? await loadActiveBoundScheduleNames({ deviceId, invoke, sessionId, source: sessionSourceForSchedule })
+        : [];
+      return isCurrent() && confirmArchiveWithSchedules(t, names);
+    });
+  }, [deviceId, invoke, patchSessionMeta, sessionId, sessionSourceForSchedule, t]);
+  useTaskAutoArchive({
+    session: currentSession?.id === sessionId ? currentSession : null,
+    deviceId,
+    invoke,
+    // 普通任务页才自动收走:主机托管、协同成员、伙伴与侧聊不算(与电脑端一致)。
+    enabled: !sessionManagedByHost && currentSession?.orcaRole !== 'worker'
+      && currentSession?.source !== 'bot' && currentSession?.source !== 'side-chat',
+    historyLoaded: readAckSyncedKey === `${sessionId}:${connectionEpoch}`,
+    messages,
+    archive: archiveFromCard,
+    patchSession: patchSessionFromList,
+  });
 
   const previewRewindAtMessage = useCallback(async (clientId: string, draft: MobileMessageDraft) => {
     if (messageActionBusy) return;
@@ -10413,7 +10337,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     <Stack.Screen options={{ gestureEnabled: !sessionListDrawerOverlayMounted && !sessionListDrawerFloating }} />
     {companionHeaderShown ? (
         <>
-      {horizontalSystemHeader ? null : (
+      {horizontalSystemHeader || adaptiveWindow.barEdge !== 'none' ? null : (
             <Stack.Screen options={COMPANION_NATIVE_HEADER_OPTIONS} />
           )}
       {companionEntry.threadRootSessionId ? (
@@ -10423,7 +10347,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
           ) : (
             <CompanionHeader key={`${auth.accountGeneration}:${deviceId}:${companionResource.ref.id}`}
         nativeHeader={horizontalSystemHeader}
-        resource={companionResource} deviceId={deviceId} deviceName={deviceName} online={!remoteUnavailableReason} controlsReady={companionEntry.ready}
+        resource={companionResource} deviceId={deviceId} deviceName={deviceName} online={!remoteUnavailableReason}
         settingsRequest={companionSettingsRequest?.sessionId === sessionId ? companionSettingsRequest : undefined}
         working={!!companionWorkingLabel}
         sessionId={sessionId ?? ''}
@@ -11093,8 +11017,8 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
 
                 <SessionQuickSendProvider value={canUseComposer ? async (text) => (await send({ independentText: text })) === true : null}>
                 <ChatFilePathContext.Provider value={chatFilePathContextValue}>
-                  <MessageRenderer companion={companionChat} companionQuote={companionQuoteOptions}
-                    companionThreads={companionThreads} conversationHeader={companionThreadRoot}
+                  <SessionMessageHistory companion={companionChat} companionQuote={companionQuoteOptions}
+                    companionThreadOptions={companionThreadOptions} conversationHeader={companionThreadRoot}
                     onOpenCompanionSettings={openCompanionSettings} onCompanionReadThrough={companionChat ? companionEntry.markReadThrough : undefined} companionWorkingLabel={companionWorkGroupLabel}
                     companionAttentionLabel={activePendingKind ? (companionWorkGroupLabel ?? undefined)
                               : undefined}
@@ -11709,6 +11633,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
                   </RouteActionButton>
                 </View>
               ) : null}
+              <TaskArchiveUndoSlot active={liveScreensFocused} />
               <SessionResourceCards state={sessionResourceCards} />
               {!sessionResourceCards.blocked ? (
                           <SessionComposerInput
@@ -11803,7 +11728,8 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
         {/* The persistent panel belongs to SessionTaskLayout, outside this keyed
             task. Modal drawers keep their exit/navigation lifecycle here. */}
         {!paneLayout.persistent || sessionListDrawerOverlayMounted ? (
-        <SessionListDrawer
+        <SessionFloatingDrawer
+          overlayMounted={sessionListDrawerOverlayMounted}
           aboveSystemBar={Platform.OS === 'ios'}
           newSessionActionRef={homeNewSessionActionRef}
           newSessionInSystemBar={paneLayout.persistent && Platform.OS === 'ios' && adaptiveWindow.barEdge !== 'none'}
@@ -11814,6 +11740,9 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
           onSelectSession={handleDrawerSelectSession}
           open={sessionListDrawerOpen}
           topInset={sessionListDrawerTopInset}
+          retainedHeight={liveScreensFocused && sessionListDrawerFloating && adaptiveWindow.reservedRegionsSupported
+            && adaptiveWindow.regularWidth && adaptiveWindow.regions.some(region => region.kind === 'occlusion')
+            ? Math.max(1, adaptiveWindow.height - (sessionListDrawerTopInset ?? insets.top)) : undefined}
           width={sessionListDrawerWidthRef.current}
           resize={paneLayout.persistent ? undefined : sessionListDrawerResize}
           motion={sessionListDrawerMotion}
@@ -11974,8 +11903,8 @@ function SessionHeaderBar({
   const titleDoubleTap = sharedTaskEnded ? undefined : onTitleDoubleTap;
   const handleTitlePress = useDoubleTap(titleDoubleTap);
   const systemBack = useSystemNavigationBack();
-  const headerWindow = useWindowDimensions();
-  const headerInsets = useSafeAreaInsets();
+  const headerWindow = useAdaptiveWindow();
+  const headerInsets = headerWindow.insets;
   // Budget the title together with both toolbars; UIKit cannot shrink a
   // fixed-size React title's contents when the trailing glass capsule grows.
   const nativeTitleMaxWidth = Math.max(0, Math.min(240,
@@ -12675,7 +12604,7 @@ function SessionComposerInput({
   const { t, i18n: i18nInstance } = useTranslation();
   const { colors } = useTheme();
   const styles = useThemedStyles(makeStyles);
-  const windowDimensions = useWindowDimensions();
+  const windowDimensions = useAdaptiveWindow();
   const composerDock = useComposerDock();
   const [composerFocused, setComposerFocused] = useState(false);
   const composerPillOpen = useComposerPillOpen(composerDock.enabled && canUseComposer, () => composerInputRef.current?.focus());

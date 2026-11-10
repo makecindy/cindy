@@ -7,3 +7,10 @@ export function botGroupRoute(host: RemoteResourceHostTarget, groupId: string) {
     params: { groupId, ...(host.deviceId ? { deviceId: host.deviceId, deviceName: host.deviceName } : {}) },
   };
 }
+
+/** The native route, including the data authority and topic. Reopening a group
+ * should reuse its screen/scroll/composer, never create another full timeline. */
+export function botGroupRouteKey(params: { deviceId?: unknown; groupId?: unknown; threadRootId?: unknown }) {
+  const first = (value: unknown) => Array.isArray(value) ? value[0] ?? '' : value ?? '';
+  return JSON.stringify([first(params.deviceId), first(params.groupId), first(params.threadRootId)]);
+}

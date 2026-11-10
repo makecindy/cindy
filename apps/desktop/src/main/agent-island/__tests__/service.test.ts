@@ -3424,6 +3424,8 @@ describe('AgentIslandService native publishing', () => {
     service.handleUserPrompt({ sessionId: 's1', agentKind: 'codex' }, 'run tests');
     service.handleAgentEvent({ sessionId: 's1', agentKind: 'codex' }, doneEvent());
 
+    // Regression: the system activity must open the task it actually displays, even with Agent Notch off.
+    expect(liveActivity.sync).toHaveBeenLastCalledWith(expect.objectContaining({ taskUrl: 'cindy://session/s1' }));
     expect(playSoundWithoutHelper.mock.calls).toEqual([[customSound('start.wav')], [customSound('complete.wav')]]);
     expect(playSound).not.toHaveBeenCalled();
     expect([service.ownsTaskAlert('done'), service.ownsTaskAlert('needs-reply'), service.ownsTaskAlert('error')])
@@ -3432,6 +3434,38 @@ describe('AgentIslandService native publishing', () => {
     service.resetRuntimeState();
     // Sign-out / account switch must not leave the old account's tasks in the system UI.
     expect(liveActivity.sync).toHaveBeenCalledWith(null);
+  });
+
+  // Unit regression: completion without a Cindy sound must use OS settings, while
+  // another configured event still plays only its own sound. Covers both native surfaces.
+  it.each(['configured', 'none', 'disabled'].flatMap(choice =>
+    [false, true].map(liveOnly => ({ choice, liveOnly }))))('uses per-event sound ownership (%j)', async ({ choice, liveOnly }) => {
+    const { AgentIslandService } = await import('../service.js');
+    const publish = vi.fn(() => true);
+    const playSound = vi.fn(() => true);
+    let liveOwnsAlerts = liveOnly;
+    const liveActivity = { sync: vi.fn(), ownsAlerts: () => liveOwnsAlerts };
+    const service = new AgentIslandService({ getMainWindow: () => null,
+      nativeHost: { failed: false, publish, playSound },
+      liveActivity: liveActivity as unknown as AgentIslandLiveActivity,
+      playSoundWithoutHelper: playSound,
+    });
+    service.setEnabled(!liveOnly);
+    service.setSoundSettings({ enabled: choice !== 'disabled', sounds: {
+      ...DEFAULT_AGENT_ISLAND_SOUND_SETTINGS.sounds,
+      complete: choice === 'none' ? { type: 'builtin', id: 'none' } : customSound('complete.wav'),
+    } });
+    service.handleUserPrompt({ sessionId: 'sound-policy', agentKind: 'codex' }, 'run');
+    playSound.mockClear();
+    service.handleAgentEvent({ sessionId: 'sound-policy', agentKind: 'codex' }, doneEvent());
+    expect(playSound.mock.calls.length > 0).toBe(choice === 'configured');
+    expect(service.shouldSilenceTaskNotification('done')).toBe(choice === 'configured');
+    expect(service.ownsTaskAlert('done')).toBe(choice === 'configured');
+    expect(service.shouldSilenceTaskNotification('needs-reply')).toBe(choice !== 'disabled');
+    expect(service.shouldSilenceTaskNotification('error')).toBe(choice !== 'disabled');
+    liveOwnsAlerts = false;
+    service.setEnabled(false);
+    expect(service.shouldSilenceTaskNotification('done')).toBe(false);
   });
 
   it('plays the start sound on user prompt without waiting for an isRunning status event', async () => {
@@ -7485,6 +7519,23 @@ describe('Agent Island device sessions', () => {
     };
   }
 
+  // Unit regression: a remote needs-input card must address its owning computer;
+  // existing island focus tests did not inspect the system Live Activity payload.
+  it('links the system needs-input card to the remote task on its owning computer', async () => {
+    const { AgentIslandService } = await import('../service.js');
+    const liveActivity = { sync: vi.fn(), ownsAlerts: () => true };
+    const service = new AgentIslandService({
+      getMainWindow: () => null,
+      nativeHost: { failed: false, publish: () => true, playSound: () => true },
+      liveActivity: liveActivity as unknown as AgentIslandLiveActivity,
+    });
+    service.setEnabled(true);
+    service.setDeviceSessions([deviceSession('needs-interaction')]);
+    expect(liveActivity.sync).toHaveBeenLastCalledWith(expect.objectContaining({
+      status: 'attention', taskUrl: 'cindy://session/remote-1?device=device-a',
+    }));
+  });
+
   it('stays silent for first-seen remote tasks and sounds on observed completion', async () => {
     const { AgentIslandService } = await import('../service.js');
     const publish = vi.fn(() => true);
@@ -7575,6 +7626,22 @@ describe('Agent Island device sessions', () => {
     (service as unknown as { focusSession(id: string): void }).focusSession('remote-1');
     expect(takePendingDeepLink()).toMatchObject({ type: 'session', id: 'remote-1', deviceId: 'device-a' });
     service.resetRuntimeState();
+  });
+
+  // Unit regression: with the island on, a remote completion without a Cindy sound used to
+  // reach neither the island sound nor the OS notification.
+  it('hands remote completions to the OS when the island has no sound for them', async () => {
+    const { AgentIslandService } = await import('../service.js');
+    const publish = vi.fn(() => true);
+    const playSound = vi.fn(() => true);
+    const onDeviceSessionEvent = vi.fn();
+    const service = new AgentIslandService({ getMainWindow: () => null, nativeHost: { failed: false, publish, playSound }, onDeviceSessionEvent });
+    syncEnabledForTest(service, publish);
+    service.setSoundSettings({ enabled: true, sounds: { ...DEFAULT_AGENT_ISLAND_SOUND_SETTINGS.sounds, complete: { type: 'builtin', id: 'none' } } });
+    service.setDeviceSessions([deviceSession('running')]);
+    service.setDeviceSessions([deviceSession('completed')]);
+    expect(playSound).not.toHaveBeenCalled();
+    expect(onDeviceSessionEvent).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'remote-1', kind: 'done' }));
   });
 
   it('hands observed transitions to desktop notifications when the island is off', async () => {

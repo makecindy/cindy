@@ -52,13 +52,18 @@ function hydrate(owner: string, entry: Entry): Promise<void> {
   return entry.loading;
 }
 
+function useHomePreferenceEntry(user: MobileUser | null) {
+  const owner = homeNavigationOwner(user);
+  const entry = entryFor(owner);
+  useEffect(() => { if (owner) void hydrate(owner, entry); }, [entry, owner]);
+  return { owner, entry };
+}
+
 /** Shared reactive preference for home and companion headers; defaults never write themselves. */
 export function useHomeMode() {
   const { user } = useAuth();
-  const owner = homeNavigationOwner(user);
-  const entry = entryFor(owner);
+  const { owner, entry } = useHomePreferenceEntry(user);
   const snapshot = useSyncExternalStore(subscribe, () => entry.snapshot, () => initial);
-  useEffect(() => { if (owner) void hydrate(owner, entry); }, [entry, owner]);
   const update = useCallback((patch: { lastTeammate?: LastTeammateIdentity | null; teammatesCollapsed?: boolean; showCollapsedTeammateAvatars?: boolean }) => {
     if (!owner) return Promise.resolve();
     // Hydrate first so one write cannot erase the other, not yet read, preference.
@@ -79,7 +84,10 @@ export function useHomeMode() {
 /** Hold the startup splash until the home's teammate section knows its stored collapse state. */
 export function useHomeStartupSplashRelease(releaseSplash: () => void): void {
   const auth = useAuth();
-  const { owner, hydrated } = useHomeMode();
+  const { owner, entry } = useHomePreferenceEntry(auth.user);
+  // AuthGate owns the root navigator. Selecting a teammate must not refresh that tree just
+  // because the startup gate was also listening to lastTeammate or home display preferences.
+  const hydrated = useSyncExternalStore(subscribe, () => entry.snapshot.hydrated, () => initial.hydrated);
   useEffect(() => {
     if (auth.initialized && (!auth.isAuthenticated || !owner || hydrated)) releaseSplash();
   }, [auth.initialized, auth.isAuthenticated, hydrated, owner, releaseSplash]);

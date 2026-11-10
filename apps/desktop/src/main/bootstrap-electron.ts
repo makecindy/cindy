@@ -136,10 +136,17 @@ import {
   readPersistedWindowMaximized,
   type MainWindowMaximizeRecoveryController,
 } from './mainWindowMaximizeRecovery';
+import {
+  commitReplacedNormalBounds,
+  fitReplacementStartupBounds,
+  manageWindowStatePreservingNormalBounds,
+  planWindowRestore,
+} from './mainWindowWorkAreaBounds';
 import { prewarmMacComputerPermissionGuideHelper } from './computer-permission-guide/MacComputerPermissionGuideNativeHost.js';
 import { handleOpenChatGPTApp } from './chatgpt-app.js';
 import { tapWindowBroadcast } from './device-link/broadcast-tap.js';
 import {
+  setTurnChangeSetWindowBroadcast,
   waitForTurnChangeSetActions,
   waitForTurnChangeSetPersistence,
 } from './turn-change-set/store.js';
@@ -471,6 +478,16 @@ import { cindyGhostSchemePrivilege } from './cindy-brain/runtime/electronSandbox
 import { fetchReleaseNotes, fetchReleaseNotesIndex } from './releaseNotesService';
 import { resolveWorkspacePathCached, resolveWorkspacePathBatchCached } from './pathResolver';
 import { registerLocalDbIpc } from './localDb/ipc/registerAll';
+import {
+  claimProxiedChannels,
+  createHostClient,
+  installUnsupportedMakerFallbacks,
+  registerHostDelegatedIpc,
+  registerHostDelegatedSync,
+  resolveHostDelegation,
+  startHostEventBridge,
+  type HostDelegationConfig,
+} from './host-delegation';
 import { hasRecentWorkdir, listRecentWorkdirs } from './localDb/ipc/recentWorkdirs';
 import { getActiveCatalog } from './maker-host/active-catalog';
 import { resolveSessionContextWindow } from '../shared/sessionContextWindow';
@@ -536,8 +553,18 @@ import {
   beginSessionTurnEndedSuppression,
   freezeSessionActiveTurnMarkers,
 } from './localDb/sessionActiveTurn';
-import { getDrizzleDir } from './localDb/migrate';
-import { resolveSqliteVecExtPath } from './localDb/sqliteVecLoader';
+import { configureMigrationRuntime } from './localDb/migrationRuntime';
+import { configureLocalDbHostUi } from './localDb/hostUi';
+import { configureUiText } from './uiText';
+import { runPendingDbSlimmingAtStartup } from './localDb/dbSlimmingStartup';
+import { shouldShowNativeFatalDialog } from './localDb/fatalDialogPolicy';
+import { loadSqliteVec } from './localDb/sqliteVecLoader';
+import { getDrizzleDir, resolveDesktopDrizzleDir } from './localDb/migrate';
+import {
+  configureSqliteVecExtPath,
+  resolveDesktopSqliteVecExtPath,
+  resolveSqliteVecExtPath,
+} from './localDb/sqliteVecLoader';
 import {
   startEmbeddingHost,
   stopEmbeddingHost,
@@ -726,12 +753,14 @@ import {
   builtInSkillDescriptors,
 } from './maker-host/built-in-skills.js';
 import { isCindyLearnSkillEnabled, isCindyLearnSkillEnabledForCommandListing } from './skillhub/activationPreferences';
+import { setHostClientMode } from './host-client-mode.js';
 // Maker Core 一阶段重构（新链路）—— 静态 import 避免 dynamic import 触发 vite chunking
 // 让 imageProtocol 等需要 app.ready 前注册的模块跑在错误时机。getMaker() 是 lazy 的，
 // 静态 import 不会触发 Maker / Agent 的实例化。
 import {
   desktopClaudeAuthAdapter,
   getMaker as getMakerCore,
+  setMakerClientMode,
   getMakerIfReady,
   resetMaker,
   shutdownLspServerPool,
@@ -1249,10 +1278,12 @@ import { hasVoiceConversationLease } from './voice-conversation/lease.js';
 import { getBotRemoteResourceSource, ensureBotRoutineLaneSession } from './localDb/ipc/bots.js';
 import {
   registerScheduleHandlers,
+  awaitAccountSchedulerReady,
   attachSchedulerEventListeners,
   resetSchedulerReady,
 } from './maker-ipc/schedule.js';
-import { registerProjectAutomationIpc } from './maker-ipc/project-automation.js';
+import { reconcileRenamedBuiltinGhostCards } from './cindy-brain/cardStoreDb.js';
+import { attachProjectAutomationEventListeners, registerProjectAutomationIpc } from './maker-ipc/project-automation.js';
 import {
   startGoalController,
   getGoalController,
@@ -1266,6 +1297,121 @@ import { registerGoalHandlers, broadcastGoalStatus } from './maker-ipc/goal.js';
 import { createLogger as createSchedulerLogger } from './logger.js';
 
 let makerProviderRefreshConfigured = false;
+
+/** Resolved once: client mode is a process-lifetime decision. */
+let hostDelegationConfig: HostDelegationConfig | null | undefined;
+function hostDelegation(): HostDelegationConfig | null {
+  if (hostDelegationConfig === undefined) {
+    hostDelegationConfig = resolveHostDelegation({
+      env: process.env,
+      userDataDir: app.getPath('userData'),
+    });
+  }
+  return hostDelegationConfig;
+}
+
+const hostClientMode = hostDelegation() !== null;
+if (hostClientMode) {
+  console.log('[bootstrap-electron] client mode requested at startup');
+}
+
+/** Client mode: the host owns every runtime channel; install its proxies now. */
+function installHostClientMode(): boolean {
+  const delegation = hostDelegation();
+  if (!delegation) return false;
+  setMakerClientMode(true);
+  // The host owns the profile's database too; a local open would be a second writer.
+  setHostClientMode(true);
+  const hostClient = createHostClient(delegation);
+  const installed = registerHostDelegatedIpc({ client: hostClient, ipcMain });
+  // Registered outside the runtime block by other modules; drop those so the
+  // host stays authoritative instead of throwing on a duplicate handler.
+  claimProxiedChannels(ipcMain, (channel) => {
+    console.log(`[bootstrap-electron] client mode keeps the host handler for ${channel}`);
+  });
+  installUnsupportedMakerFallbacks({
+    ipcMain,
+    log: (channel) => {
+      console.log(`[bootstrap-electron] client mode unsupported maker fallback for ${channel}`);
+    },
+  });
+  console.log(`[bootstrap-electron] client mode: delegating to ${delegation.baseUrl}`);
+  console.log(`[bootstrap-electron] client mode proxies: ${installed.join(', ')}`);
+  void registerHostDelegatedSync({
+    channel: 'ghosts:list',
+    path: '/api/ghosts',
+    client: hostClient,
+    map: (response) => ({ ghosts: Array.isArray(response) ? response : [] }),
+    ipcMain,
+  });
+  void registerHostDelegatedSync({
+    channel: 'maker:model-visibility:legacy-owner-claim-sync',
+    path: '/api/model-visibility/claim',
+    client: hostClient,
+    ipcMain,
+  });
+  authManager.setAuthRefreshOverride(async () =>
+    await hostClient.request('/api/auth/refresh', {}) as authManager.AuthState,
+  );
+  const sendToAllWindows = (channel: string, ...args: unknown[]) => {
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (!win.isDestroyed()) win.webContents.send(channel, ...args);
+    }
+  };
+  startHostEventBridge({
+    baseUrl: delegation.baseUrl,
+    token: delegation.token,
+    onInputProjection: (payload) => sendToAllWindows('maker:input:projection', payload),
+    onInteractionRequest: (payload) => sendToAllWindows('maker:interaction-request', payload),
+    onInteractionDismissed: (payload) => sendToAllWindows('maker:interaction-dismissed', payload),
+    onAuthChanged: (payload) => authManager.receiveHostAuthState(payload as authManager.AuthState),
+    broadcast: (payload) => {
+      sendToAllWindows(MAKER_PUSH.EVENT, payload);
+    },
+    onSettingsChanged: (domain, value) => {
+      if (domain === 'appearance') {
+        sendToAllWindows('appearance-settings:changed', value);
+      } else if (domain === 'layout') {
+        sendToAllWindows('layout:changed', { layout: value });
+      } else if (domain === 'shortcuts') {
+        sendToAllWindows('app-shortcuts:changed', value);
+      } else if (domain === 'sidebar') {
+        const val = value as { pinnedProjectKeys?: unknown[]; hiddenProjectKeys?: unknown[] } | undefined;
+        if (Array.isArray(val?.pinnedProjectKeys)) {
+          sendToAllWindows('sidebar-settings:pinned-order-changed', val.pinnedProjectKeys);
+        }
+        if (Array.isArray(val?.hiddenProjectKeys)) {
+          sendToAllWindows('sidebar-settings:hidden-project-keys-changed', val.hiddenProjectKeys);
+        }
+      }
+    },
+    onSessionChanged: (event: any) => {
+      if (event?.action === 'create') {
+        sendToAllWindows('local-db:sessions:created', { sessionId: event.sessionId, session: event.session });
+      } else if (event?.action === 'update' || event?.patch) {
+        sendToAllWindows('local-db:sessions:patched', { sessionId: event.sessionId, patch: event.patch });
+      } else if (event?.action === 'delete' || event?.action === 'discard_provisional') {
+        sendToAllWindows('local-db:sessions:patched', { sessionId: event.sessionId, patch: { status: 'deleted' } });
+      }
+    },
+    onMessageCreated: (event: any) => {
+      sendToAllWindows('local-db:messages:created', { sessionId: event?.sessionId, message: event?.message });
+    },
+    onProjectAliasesChanged: () => {
+      sendToAllWindows('local-db:project-aliases:changed', {});
+    },
+    onError: (error) => {
+      console.warn(
+        '[bootstrap-electron] host event bridge disconnected:',
+        error instanceof Error ? error.message : String(error),
+      );
+    },
+  });
+  return true;
+}
+
+if (hostClientMode) installHostClientMode();
+
 let startPendingAccountProviderReadiness: { ownerId: string; start: () => void } | null = null;
 
 function markMakerProviderRefreshConfigured(): void {
@@ -1362,6 +1508,7 @@ function attemptStartScheduler(): Promise<void> {
 }
 
 async function attemptStartSchedulerOnce(): Promise<void> {
+  if (hostClientMode) return;
   // 两个前置条件必须满足才能启动：
   //   1. maker 单例已构造 (splash check-environment 完成 → registerMakerIpcsAfterSplash)
   //   2. DbClient 已 smoke 通过 (user login → renderer 触发 'local-db:ensure-ready' IPC)
@@ -1436,7 +1583,7 @@ async function attemptStartSchedulerOnce(): Promise<void> {
           console.warn('[usage-limit] schedule reconciliation failed', error));
       });
       attachSchedulerEventListeners(scheduler, getScheduleStorage());
-      registerProjectAutomationIpc(getProjectAutomationLoader());
+      attachProjectAutomationEventListeners(getProjectAutomationLoader());
       _scheduleIpcRegistered.add(scheduler);
     }
   } catch (err) {
@@ -1680,7 +1827,8 @@ function rebindChatEmbeddingSettingsWatcher(): void {
   chatEmbeddingSettingsWatcher.rebind(ownerScopedUserDataPath('chat-embedding-settings.json'));
 }
 
-app.once('will-quit', () => chatEmbeddingSettingsWatcher.dispose());
+// The quit coordinator finishes with app.exit(), which bypasses will-quit.
+onQuit('chat-embedding-settings-watcher', () => chatEmbeddingSettingsWatcher.dispose());
 
 /**
  * 「聊天嵌入」关闭时的收尾: 总是让 chat 的 enqueue 守卫立即失效; 但只有在没有插件
@@ -1720,8 +1868,75 @@ import {
   setCcDebugTailingEnabled,
   type LogLevel,
 } from './logger.js';
-initLogger();
+// Idempotent: index.ts already initialized the logger with its Electron facts.
+initLogger({
+  isPackaged: app.isPackaged,
+  userDataDir: app.getPath('userData'),
+  version: app.getVersion(),
+});
 const dbClientLog = createLogger('DbClient');
+// Storage paths are host facts: install them once so localDb never needs to
+// import Electron for packaged/dev layout questions.
+configureMigrationRuntime({
+  drizzleDir: resolveDesktopDrizzleDir(app.isPackaged),
+  isPackaged: app.isPackaged,
+});
+configureSqliteVecExtPath(resolveDesktopSqliteVecExtPath(app.isPackaged));
+// Database startup reaches the user through these ports; the Node host installs
+// headless equivalents instead of importing Electron.
+configureUiText((key, fallback) => {
+  const localized = t(key);
+  return localized === key ? fallback : localized;
+});
+configureLocalDbHostUi({
+  isPackaged: () => app.isPackaged,
+  reportFatal: (title, detail, code) => {
+    if (!shouldShowNativeFatalDialog(code)) {
+      console.error(JSON.stringify({ event: 'localDb.fatal.rendererOwned', code, title, detail }));
+      return;
+    }
+    try {
+      dialog.showMessageBoxSync({
+        type: 'error',
+        title,
+        message: title,
+        detail: `${detail}\n\n请重启应用，或在系统资源管理器中打开数据目录手动处理。`,
+        buttons: ['好的'],
+        defaultId: 0,
+      });
+    } catch (error) {
+      console.error('showFatalDialog failed', error);
+    }
+  },
+  broadcast: (channel, payload) => {
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (win.isDestroyed()) continue;
+      try {
+        win.webContents.send(channel, payload);
+      } catch {
+        /* destroyed renderer */
+      }
+    }
+  },
+  exitApp: (code) => app.exit(code),
+  showMessageBoxSync: (options) => dialog.showMessageBoxSync({
+    type: 'warning',
+    title: '本地 DB schema 仍有残留不一致',
+    message: '反射自愈无法修复以下不一致(改类型 / 删列 / 缺 NOT NULL 列等):',
+    detail: '选「Nuke 重建」会把当前 DB 改名为 .bak.nuke-<时间>(永久保留)；选「忽略继续」会带着不一致启动。',
+    buttons: options.buttons,
+    defaultId: options.defaultId ?? 0,
+    cancelId: options.cancelId ?? 1,
+  }),
+  showInfo: (title, message) => {
+    dialog.showMessageBoxSync({ type: 'info', title, message, buttons: ['好的'] });
+  },
+  runStartupSlimming: (args) => runPendingDbSlimmingAtStartup({
+    ...args,
+    loadVectorExtension: (maintenanceDb) => loadSqliteVec(maintenanceDb).loaded,
+    log: console as never,
+  }),
+});
 const authBoundaryLog = createLogger('auth-boundary');
 // 镜像缓存清理失败会把 MirrorCachePurgeError 的 root/remaining 本地缓存路径写进日志,单独一个
 // 子 scope,好让日志上报的来源白名单把它排除掉(auth-boundary 根只留不带路径的服务停止诊断)。
@@ -2659,7 +2874,9 @@ setRemotePluginManagementServices({
     write: async (id, visible, assertCurrent) => { await setLocalMainViewHidden(id, !visible, assertCurrent); },
   },
   market: {
-    snapshot: () => getPluginMarketService().snapshot({ discoveryOnly: true }),
+    snapshot: legacyCatalog => getPluginMarketService().snapshot({ discoveryOnly: true, legacyCatalog }),
+    query: input => getPluginMarketService().query(input),
+    recommendations: () => getPluginMarketService().recommendations(),
     detail: id => getPluginMarketService().detail(id),
     install: async (id, options, prompt, assertCurrent, assertScope) => {
       await getPluginMarketService().install(id, options, { consent: { prompt, initiator: 'user' }, assertCurrent, assertScope });
@@ -4120,23 +4337,62 @@ const createWindow = () => {
   const persistedMaximized = readPersistedWindowMaximized(
     path.join(app.getPath('userData'), mainWindowStateFile),
   );
+  const defaultWindowWidth = 1280;
+  const defaultWindowHeight = 800;
   const mainWindowState = windowStateKeeper({
     file: mainWindowStateFile,
-    defaultWidth: 1280,
-    defaultHeight: 800,
+    defaultWidth: defaultWindowWidth,
+    defaultHeight: defaultWindowHeight,
     // Applying fullscreen while a hidden macOS window is still starting can
     // leave the restored window without native traffic lights.
     fullScreen: process.platform !== 'darwin',
   });
   const shouldRestoreMacFullscreen = process.platform === 'darwin' && mainWindowState.isFullScreen;
-  const shouldRestoreMaximized =
-    !shouldRestoreMacFullscreen && (persistedMaximized || Boolean(mainWindowState.isMaximized));
-
+  // Windows Snap persists a work-area rectangle with isMaximized=false (#9461).
+  // That becomes the unmaximize target, so the maximize button looks dead and an
+  // auto-hidden taskbar stays visible. Come back maximized, and create from the
+  // library default size so the first unmaximize is not the work area again.
+  // A later save writes the real maximize flag and keeps the last normal size.
+  const restorePlan = planWindowRestore(
+    {
+      x: mainWindowState.x,
+      y: mainWindowState.y,
+      width: mainWindowState.width,
+      height: mainWindowState.height,
+      isMaximized: persistedMaximized || Boolean(mainWindowState.isMaximized),
+      isFullScreen: Boolean(mainWindowState.isFullScreen),
+    },
+    screen,
+    { restoringMacFullscreen: shouldRestoreMacFullscreen },
+  );
+  const shouldRestoreMaximized = restorePlan.restoreMaximized;
+  // A snapped rectangle is not a legal restore size. Create from the same
+  // defaults the keeper uses on a first launch, but keep the saved x/y: that is
+  // the display the work-area fill was on. Omitting them centers on the primary
+  // display and the keeper would then remember the wrong monitor. The default
+  // 1280×800 is taller than a 1280×680 work area, so fit it before the window
+  // exists; the save right after construction persists whatever was created.
+  const replacementBounds = restorePlan.replaceWithDefaultSize
+    ? fitReplacementStartupBounds(
+        { x: mainWindowState.x, y: mainWindowState.y },
+        { width: defaultWindowWidth, height: defaultWindowHeight },
+        screen.getDisplayMatching({
+          x: mainWindowState.x,
+          y: mainWindowState.y,
+          width: defaultWindowWidth,
+          height: defaultWindowHeight,
+        }).workArea,
+      )
+    : null;
   const mainWindow = new BrowserWindow({
-    x: mainWindowState.x,
-    y: mainWindowState.y,
-    width: mainWindowState.width,
-    height: mainWindowState.height,
+    ...(replacementBounds
+      ? replacementBounds
+      : {
+          x: mainWindowState.x,
+          y: mainWindowState.y,
+          width: mainWindowState.width,
+          height: mainWindowState.height,
+        }),
     minWidth: 800,
     minHeight: 600,
     title: BRAND_NAME,
@@ -4285,7 +4541,17 @@ const createWindow = () => {
 
   // Wire resize / move / maximize / fullscreen listeners that persist the
   // state to disk on `close`. Must run before any user resize event fires.
-  mainWindowState.manage(mainWindow);
+  // On Windows the keeper sees the last normal rectangle instead of a snapped
+  // work-area fill, so that fill cannot become the next restore size (#9461).
+  // The keeper keeps this filtered view for its whole lifetime; the window itself
+  // is untouched, so drag / sidebar reads still see the live rectangle.
+  manageWindowStatePreservingNormalBounds(mainWindowState, mainWindow, screen);
+  // The constructor size is not the rectangle the keeper will save. `saveState`
+  // copies the live normal bounds into its closure; `maximize()` after that only
+  // flips the flag, so quit no longer writes the old work-area rectangle back.
+  if (restorePlan.replaceWithDefaultSize) {
+    commitReplacedNormalBounds(mainWindowState, mainWindow);
+  }
   if (shouldRestoreMaximized && !mainWindow.isMaximized()) mainWindow.maximize();
   // Windows can transiently unmaximize during display/DPI re-layout. macOS
   // owns its native Zoom behavior, so do not install the Windows recovery
@@ -4550,7 +4816,7 @@ const databaseSizeWarningSettingsWatcher = createDatabaseSizeWarningSettingsWatc
   broadcastDatabaseSizeWarningChanged();
 });
 
-app.once('will-quit', () => databaseSizeWarningSettingsWatcher.dispose());
+onQuit('database-size-warning-settings-watcher', () => databaseSizeWarningSettingsWatcher.dispose());
 
 function rebindDatabaseSizeWarningSettingsWatcher(): void {
   databaseSizeWarningSettingsWatcher.rebind(getDatabaseSizeWarningSettingsFilePath());
@@ -4707,6 +4973,7 @@ const registerIpcHandlers = () => {
     isCompletionHandledByTeammate: (sessionId) => getAgentIslandService()?.waitForCompletionNotification(sessionId)
       ?? isCompletionHandledByTeammate(sessionId),
     isTaskAlertShownElsewhere: (kind) => getAgentIslandService()?.ownsTaskAlert(kind) === true,
+    shouldSilenceTaskNotification: (kind) => getAgentIslandService()?.shouldSilenceTaskNotification(kind) === true,
     getWindow: () => getWindow() ?? null,
     feishuIm,
   });
@@ -4742,7 +5009,7 @@ const registerIpcHandlers = () => {
       if (win) dispatchApplicationMenuCommand(win, resolveNewMakerMenuCommand(false));
     },
   });
-  app.once('will-quit', stopMenubarService);
+  onQuit('menubar-service', stopMenubarService);
   // macOS「离开时继续工作」(默认关):开着时本机不因空闲熄屏锁屏;主人离开后盖黑色遮罩,
   // 本机有人按键/点击即转系统真锁屏。共享 userData 的被动实例不接管本机屏幕。
   if (!authManager.isPassiveSharedUserDataInstance()) {
@@ -4757,11 +5024,11 @@ const registerIpcHandlers = () => {
   }
   // 灵动岛余量:与菜单栏同一份余量概览(顺序、显示与隐私设置都跟菜单栏),岛开着时才读取。
   const agentIsland = getAgentIslandService();
-  if (agentIsland) app.once('will-quit', startAgentIslandQuota(agentIsland, getQuotaOverviewService()));
+  if (agentIsland) onQuit('agent-island-quota', startAgentIslandQuota(agentIsland, getQuotaOverviewService()));
 
   // 全局框选截图快捷键 (键盘快捷键设置里可改)，支持复制、保存、贴图与新任务。
   initRegionScreenshot();
-  app.once('will-quit', stopRegionScreenshot);
+  onQuit('region-screenshot', stopRegionScreenshot);
 
   // 「在新窗口打开」会话多开 —— 新建一个完整窗口定位到该 session, 初始 bounds 取主窗。
   ipcMain.handle(
@@ -6556,6 +6823,12 @@ const registerIpcHandlers = () => {
   disposePiRuntimeRecovery = () => piRuntimeRecovery.dispose();
   const registerMakerIpcsAfterSplash = async (): Promise<void> => {
     if (makerIpcsRegistered) return;
+    // Client mode already installed the host proxies; the desktop runtime must
+    // never register competing handlers.
+    if (hostClientMode) {
+      makerIpcsRegistered = true;
+      return;
+    }
     // Compose here: IM runtime and hook IPC depend on maker-host, so the host
     // receives a reader instead of importing those modules during tool calls.
     setBotConversationConnectionsReader(async (botId) => {
@@ -6638,6 +6911,7 @@ const registerIpcHandlers = () => {
       registerRelaunchBusyActivityIpc(readRelaunchActivitySources, {
         describeTurns: () => describeRelaunchTurns(() => listInTurnSessionIds(getMakerIfReady())),
       });
+      // Client mode returned above and never reaches the runtime assembly.
       // getMakerCore() 首次调用触发 Maker 构造，同时发起自定义 MCP 初始加载。
       // await 确保第一个会话的 mcpProviders 数组已填入已保存的自定义 MCP（P2 冷启动竞态修复）。
       getMakerCore();
@@ -6739,8 +7013,12 @@ const registerIpcHandlers = () => {
           return null;
         }
       });
-      // maker:goal:* handler 同样提前一次性注册(eager);handler 内部 getGoalController()
-      // 取单例,invoke 时 controller 已由 attemptStartScheduler → startGoalController 启动。
+      // Project automation shares the scheduler gate; register even before its loader exists.
+      registerProjectAutomationIpc(async () => {
+        await awaitAccountSchedulerReady();
+        return getProjectAutomationLoader();
+      });
+      // Goal handlers also wait for account-host readiness when startup is still in flight.
       registerGoalHandlers();
       // clear-context 清目标 / turn 收尾 idle 兜底续跑(setter 注入,null-safe)。
       setGoalClearObserver((sid) => {
@@ -6781,6 +7059,15 @@ const registerIpcHandlers = () => {
       // 不阻塞启动 —— 老链路仍可用; 下次 splash retry 再尝试。
     }
 
+    // The change-set store no longer imports Electron; the desktop supplies its
+    // window fan-out here.
+    setTurnChangeSetWindowBroadcast((payload, ownerStamp) => {
+      for (const win of BrowserWindow.getAllWindows()) {
+        if (win.isDestroyed()) continue;
+        win.webContents.send(MAKER_PUSH.TURN_CHANGE_SET_UPDATED, payload, ownerStamp);
+      }
+    });
+
     startReadyWorktreeMaintenance();
     // 删除 worktree 时因拿不到全局 safe.directory 锁而落盘的残留路径, 启动期补清。
     void reconcilePendingSafeDirectoryCleanups().catch((err) => {
@@ -6788,11 +7075,6 @@ const registerIpcHandlers = () => {
         '[bootstrap-electron] safe.directory cleanup reconcile failed (non-fatal):',
         err,
       );
-    });
-    // 同窗口的 shadow savepoint 对账:owning session 已删除的孤儿保存点链
-    // (refs/cindy/savepoints/<sid>)启动期补删。fire-and-forget,不阻塞启动。
-    void reconcileSavepointRefsForDeletedSessions().catch((err) => {
-      console.error('[bootstrap-electron] savepoint reconcile failed (non-fatal):', err);
     });
 
     // Scheduler / Goal / Learn 统一由 localDb onReady 在 provider readiness settle 后启动。
@@ -9680,6 +9962,7 @@ app.on('ready', async () => {
     discardStaleOwner: (userId) =>
       lifecycleDbClientManager.dispose(`stale-owner-after-ready:${userId}`),
     beforeEnsureReady: async (userId) => {
+      if (hostClientMode) return;
       // Provider discovery is detached from DB read readiness for the same owner, but a
       // different owner must not replace the DB while the previous account task can still
       // update owner-scoped catalogs or agent environments.
@@ -9758,6 +10041,7 @@ app.on('ready', async () => {
       }
     },
     onReady: async (userId) => {
+      if (hostClientMode) return;
       const startupHooksStartedAt = performance.now();
       let startupPhaseStartedAt = startupHooksStartedAt;
       const logStartupPhase = (phase: string): void => {
@@ -9805,6 +10089,10 @@ app.on('ready', async () => {
         }
         return;
       }
+      // Await idempotent history repair after DB takeover, including same-owner retries.
+      // Failure goes through ensure-ready's existing retry path, never a false completion.
+      await reconcileRenamedBuiltinGhostCards(userId);
+      dbClientLog.info('builtin ghost card rename reconciliation completed');
       if (getActiveAppSession().dataOwnerId === userId) {
         void getGhostManager().retryInterruptedMutationsAfterDbReady().catch((error) => {
           dbClientLog.warn('ghost mutation recovery after DB readiness failed', {
@@ -10264,6 +10552,7 @@ app.on('ready', async () => {
   // 设备互联(跨设备远程控制):登录后连 relay,登出即断;开关与设备列表 IPC 一并注册
   let updateRelaunchRemoteBusy = false;
   initDeviceLinkService({
+    taskActivity: getAgentIslandService() ?? undefined,
     onControlledStateChanged: refreshQuotaPanelsControlState,
     onUpdateRelaunchBusyChanged: (busy) => {
       const transition = decideUpdateRelaunchBusyTransition(updateRelaunchRemoteBusy, busy);
@@ -11087,6 +11376,11 @@ function startReadyWorktreeMaintenance(): void {
       if (!isReady() || tryGetDbClient() !== db) return;
       await WorktreePool.recoverPool().catch((error) =>
         dbClientLog.warn('worktree pool recovery postponed', error),
+      );
+      if (!isReady() || tryGetDbClient() !== db) return;
+      // This DB-backed repair used to run at Maker registration, before DB takeover.
+      await reconcileSavepointRefsForDeletedSessions().catch((error) =>
+        dbClientLog.warn('savepoint reconcile postponed', error),
       );
       if (tryGetDbClient() === db) lastWorktreeMaintenanceDb = db;
     },

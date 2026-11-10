@@ -40,6 +40,7 @@ import {
 	writeDarwinTerminalLaunchScript,
 	darwinTerminalSourceCommand,
 	prepareDarwinTerminalLaunch,
+	currentDarwinTerminal,
 	waitForDesktopStartup,
 	shouldRefuseHostedRestart,
 	commandContainsPath,
@@ -732,19 +733,21 @@ test("preserve-running only shares a target with live records from the same regi
 test("desktop restart runner forwards user args (incl. --isolated) into the kill stage", () => {
 	const root = "/repo/cindy";
 	const steps = buildDesktopRestartSteps(
-		["--region=global", "--isolated=tgbot-review", "--wait-ready"],
+		["--region=global", "--isolated=tgbot-review", "--reuse-terminal", "--wait-ready"],
 		root,
 	);
 	assert.deepEqual(steps[0].args, [
 		stepScript(root, "restart-desktop-remote.mjs"),
 		"--region=global",
 		"--isolated=tgbot-review",
+		"--reuse-terminal",
 		"--kill-only",
 	]);
 	assert.deepEqual(steps[steps.length - 1].args, [
 		stepScript(root, "restart-desktop-remote.mjs"),
 		"--region=global",
 		"--isolated=tgbot-review",
+		"--reuse-terminal",
 		"--wait-ready",
 	]);
 });
@@ -1762,6 +1765,71 @@ test("logged terminal command keeps the child exit code and caps the log size", 
 	}
 });
 
+test("reusing a terminal refuses headless input instead of opening a window", () => {
+	if (process.platform !== "darwin" || !process.stdin.isTTY) {
+		assert.throws(() => currentDarwinTerminal(), /requires a live macOS terminal/);
+	}
+});
+
+test("personal coordinator reuses its input terminal with redirected output and drains after ready", {
+	skip: process.platform !== "darwin", timeout: 30_000,
+}, (t) => {
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cindy-one-terminal-"));
+	t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+	const module = new URL("../restart-desktop-remote.mjs", import.meta.url).href;
+	const quote = value => `'${value.replaceAll("'", "'\\''")}'`;
+	const app = path.join(dir, "app with 'quotes.mjs");
+	fs.writeFileSync(app, `
+import fs from 'node:fs';
+if (!process.stdin.isTTY || !process.stdout.isTTY) process.exit(91);
+console.log('fixture-ready');
+setTimeout(() => {
+  for (let i = 0; i < 144; i++) fs.writeSync(1, 'x'.repeat(65536));
+  console.log('fixture-after-log-cap');
+  process.exit(7);
+}, 150);
+`);
+	const coordinator = path.join(dir, "coordinator.mjs");
+	fs.writeFileSync(coordinator, `
+import fs from 'node:fs';
+import { currentDarwinTerminal, launchDarwinDevInCurrentTerminal } from ${JSON.stringify(module)};
+if (!process.stdin.isTTY || process.stdout.isTTY) process.exit(92);
+const tty = currentDarwinTerminal();
+const child = launchDarwinDevInCurrentTerminal(${JSON.stringify(`${quote(process.execPath)} ${quote(app)}`)}, ${JSON.stringify(path.join(dir, "dev.log"))});
+child.on('error', error => { throw error; });
+child.on('exit', code => { console.log(JSON.stringify({code, tty})); process.exit(code); });
+`);
+	const supervisor = path.join(dir, "supervisor.mjs");
+	fs.writeFileSync(supervisor, `
+import fs from 'node:fs';
+import { spawnSync } from 'node:child_process';
+const output = fs.openSync(${JSON.stringify(path.join(dir, "coordinator.log"))}, 'w');
+const result = spawnSync(process.execPath, [${JSON.stringify(coordinator)}], {
+  detached: true, stdio: ['inherit', output, output], timeout: 20000,
+});
+fs.closeSync(output);
+process.exit(result.status ?? 93);
+`);
+	const display = fs.openSync(path.join(dir, "terminal.log"), "w");
+	let result;
+	try {
+		// A test PTY stands in for an existing Terminal window. The production
+		// coordinator receives its stdin while its stdout is redirected to a file.
+		result = spawnSync("/usr/bin/script", ["-q", "/dev/null", process.execPath, supervisor], {
+			stdio: ["ignore", display, display], timeout: 25000,
+		});
+	} finally { fs.closeSync(display); }
+	assert.equal(result.error, undefined);
+	assert.equal(result.status, 7, fs.readFileSync(path.join(dir, "coordinator.log"), "utf8"));
+	const receipt = JSON.parse(fs.readFileSync(path.join(dir, "coordinator.log"), "utf8"));
+	assert.match(receipt.tty, /^\/dev\/tty/);
+	assert.equal(receipt.code, 7);
+	assert.equal(fs.statSync(path.join(dir, "dev.log")).size, 8 * 1024 * 1024);
+	assert.match(fs.readFileSync(path.join(dir, "dev.log"), "utf8").slice(0, 100), /fixture-ready/);
+	assert.match(fs.readFileSync(path.join(dir, "terminal.log"), "utf8").slice(-200), /fixture-after-log-cap/);
+	assert.equal(fs.existsSync(path.join(dir, "dev.log.fifo")), false);
+});
+
 test("readDesktopDevLogTail strips terminal control sequences and keeps the last lines", () => {
 	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cindy-dev-log-"));
 	try {
@@ -1776,4 +1844,31 @@ test("readDesktopDevLogTail strips terminal control sequences and keeps the last
 	} finally {
 		fs.rmSync(dir, { recursive: true, force: true });
 	}
+});
+
+// Shared signed runtimes must still identify each release/profile independently;
+// otherwise an upgrade can overlook a running instance or claim another release ready.
+// Minimal input: two releases sharing one binary; only one has a live renderer. Tier: unit + temp receipt.
+test('whoami attributes a shared personal shell to its business checkout', { skip: process.platform !== 'darwin' && 'macOS-only fixed app runtime' }, () => {
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'shared-shell-whoami-'));
+ try {
+  const roots=['first','second'].map(n=>path.join(dir,n)), runtime=path.join(dir,'runtime');
+  for(const root of roots){const resources=path.join(root,'apps/desktop/resources');fs.mkdirSync(resources,{recursive:true});
+   fs.writeFileSync(path.join(resources,'personal-native.json'),JSON.stringify({runtime:{directory:runtime,key:'runtime-fixture',digest:'fixture-digest'}}));}
+  const fixed=path.join(dir,'Cindy Personal.app');
+  fs.writeFileSync(fixed+'.personal-install.json',JSON.stringify({key:'runtime-fixture',digest:'fixture-digest'}));
+  const binary=path.join(runtime,'Cindy.app/Contents/MacOS/Electron');
+  const processes=[{pid:11,ppid:1,command:`${binary} ${roots[0]}/apps/desktop`},
+   {pid:12,ppid:11,command:`helper --type=renderer --app-path=${roots[0]}/apps/desktop --user-data-dir=${dir}/sandbox`},
+   {pid:21,ppid:1,command:`${fixed}/Contents/MacOS/Electron ${roots[1]}/apps/desktop`}];
+  const found=identifyDesktopProcesses(processes,roots.map(rootDir=>({rootDir,branch:null})));
+  assert.deepEqual(found.map(i=>[i.pid,i.rootDir,i.ready]),[[11,roots[0],true],[21,roots[1],false]]);
+  assert.equal(isRepositoryDesktopDevProcess(processes[0],[roots[0]],999),true);
+  assert.equal(isRepositoryDesktopDevProcess(processes[0],[roots[1]],999),false);
+  assert.equal(isRepositoryDesktopDevProcess(processes[2],[roots[1]],999),true);
+  assert.ok(devEnvPrefix({CINDY_PERSONAL_FIXED_APP:fixed},'darwin').includes(`CINDY_PERSONAL_FIXED_APP='${fixed}'`));
+  assert.ok(darwinStaleDevEnvUnset({}).includes('CINDY_PERSONAL_FIXED_APP'));
+  fs.unlinkSync(fixed+'.personal-install.json');
+  assert.equal(identifyDesktopProcesses(processes,roots.map(rootDir=>({rootDir,branch:null}))).length,1);
+ } finally {fs.rmSync(dir,{recursive:true,force:true});}
 });

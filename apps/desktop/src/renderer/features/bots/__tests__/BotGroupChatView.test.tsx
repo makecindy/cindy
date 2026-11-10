@@ -1,5 +1,7 @@
 // @vitest-environment jsdom
 
+import { copyRenderedSelection } from '../../../../test/vitest/rendererSelectionStyles';
+
 import { act, cleanup, createEvent, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { Tooltip } from '@/components/ui/tooltip';
 import userEvent from '@testing-library/user-event';
@@ -96,9 +98,16 @@ vi.mock('@/components/ui/confirm-dialog-provider', () => ({
   useConfirmDialog: () => ({ confirm: vi.fn(async () => false) }),
   useOptionalConfirmDialog: () => null,
 }));
-vi.mock('@/components/chat/MarkdownRenderer', () => ({
-  MarkdownRenderer: ({ content }: { content: string }) => <div data-markdown>{content}</div>,
-}));
+vi.mock('@/contexts/AuthContext', () => ({ useAuth: () => ({ user: { id: 'account-a' } }) }));
+vi.mock('@/components/chat/MarkdownRenderer', async () => {
+  const { RichAnswer } = await import('@/components/chat/RichAnswer');
+  const { splitRichAnswer } = await import('@cindy/maker-shared/rich-answer');
+  return { MarkdownRenderer: ({ content, renderRichAnswers, streamFadeKey }: any) => <div data-markdown>
+    {renderRichAnswers ? splitRichAnswer(content).map(part => part.kind === 'rich'
+      ? <RichAnswer key={part.key} source={part.source} complete stateKey={`${streamFadeKey}:${part.key}`} renderMarkdown={text => <span>{text}</span>} />
+      : part.source) : content}
+  </div> };
+});
 vi.mock('mermaid', () => ({ default: {
   initialize: vi.fn(), parse: vi.fn().mockResolvedValue(true),
   render: vi.fn().mockResolvedValue({ svg: '<svg viewBox="0 0 100 100"><text>Diagram</text></svg>' }),
@@ -401,6 +410,24 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
 describe('BotGroupChatView', () => {
+  // Review 4362888100: main group and thread timelines own separate scroll roots.
+  it.each(['group', 'thread'])('sanitizes selection copy in the real %s timeline', async (timeline) => {
+    vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
+    mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ serverBacked: true }) });
+    renderView();
+    let message = await screen.findByText('@小满 帮我查余票');
+    if (timeline === 'thread') {
+      fireEvent.click((await screen.findAllByRole('button', { name: 'bots.groupChat.server.startTopic' }))[0]!);
+      message = await within(screen.getByRole('complementary')).findByText('Reply to u1');
+    }
+    const text = message.textContent!;
+    const { event, formats } = copyRenderedSelection(message);
+    expect(event.defaultPrevented).toBe(true);
+    expect(formats.get('text/plain')).toBe(text);
+    expect(formats.get('text/html')).toContain(text);
+    expect(formats.get('text/html')).not.toMatch(/class=|background|color:/);
+  });
+
   function localResult(request: BotGroupOutboxCommandRequest, entries: BotGroupOutboxStoredEntry[] = []): BotGroupOutboxCommandResult {
     return { ok: true, owner: request.owner, instanceId: 'main-test', revision: 1, entries };
   }
@@ -1150,6 +1177,10 @@ describe('BotGroupChatView', () => {
     await user.type(within(panel).getByRole('textbox'), 'Unsent thread reply');
     if (kind === 'image') fireEvent.load(screen.getByAltText('photo.png'));
     await user.click(screen.getByRole('button', { name: kind === 'image' ? 'photo.png' : 'note.md' }));
+    // PR #9499 CI: the first text preview imports the real editor bundle. Wait
+    // for that import inside act before starting the DOM wait; cold Windows
+    // transforms can exceed its 1s budget. Keep the Escape/draft assertions below.
+    if (kind !== 'image') await act(async () => { await vi.dynamicImportSettled(); });
     // 文本预览弹窗按需加载：首次打开要等分包挂载后才有遮罩层。
     const preview = kind === 'image'
       ? document.activeElement!
@@ -5188,6 +5219,115 @@ it('reads historical group process from the execution computer after a home chan
   await screen.findByText('Original computer progress');
   expect(mocks.remoteInvoke).toHaveBeenCalledWith('original-mac', 'local-db:messages:around-client-id', ['old-lane', 'source', { radius: 80 }]);
   expect(mocks.remoteInvoke.mock.calls.every(([device]) => device === 'original-mac')).toBe(true);
+});
+
+// Unit: mount the actual group and rich controls. A text projection cannot prove routing,
+// draft isolation, local state restoration or read-only behavior (docs/rich-answers.md).
+it('sends a rich control to the group outbox without consuming the composer draft', async () => {
+  const content = '```cindy-ui\n' + [
+    { seq: 1, version: 1, op: 'create', id: 'place', kind: 'input', props: { label: 'Rich destination', default: 'Hangzhou' } },
+    { seq: 2, op: 'create', id: 'send', kind: 'button', props: { label: 'Rich submit', send: { op: 'concat', args: ['Plan ', { ref: 'place' }] } } },
+  ].map(op => JSON.stringify(op)).join('\n') + '\n```';
+  mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ messages: [msg({ id: 'rich-send-group', authorKind: 'bot', authorBotId: 'a', content })] }) });
+  renderView();
+  const input = await screen.findByLabelText('Rich destination');
+  const composer = document.querySelector('main textarea')!;
+  fireEvent.change(composer, { target: { value: 'Keep my draft' } });
+  fireEvent.change(input, { target: { value: 'Shanghai' } });
+  expect(mocks.sendBotGroupMessage).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole('button', { name: 'Rich submit' }));
+  await waitFor(() => expect(mocks.sendBotGroupMessage).toHaveBeenCalledWith(expect.objectContaining({ groupId: 'g1', text: 'Plan Shanghai', mentions: { all: false, botIds: [] } })));
+  expect(mocks.sendBotGroupMessage.mock.calls[0]![0].quote).toBeUndefined();
+  expect((composer as HTMLTextAreaElement).value).toBe('Keep my draft');
+});
+
+// Unit: an explicit rich submit must use the open thread and ignore composer-only flags.
+it('sends a rich control only to its thread and keeps the thread draft and main-share choice', async () => {
+  vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
+  const content = '```cindy-ui\n' + JSON.stringify({ seq: 1, version: 1, op: 'create', id: 'submit', kind: 'button', props: { label: 'Rich thread submit', send: 'Reply from the card' } }) + '\n```';
+  mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ serverBacked: true }) });
+  mocks.thread.mockResolvedValue({ ok: true, root: msg({ id: 'u1', content: 'Thread root' }), hasMore: false,
+    replies: [msg({ id: 'rich-thread-reply', authorKind: 'bot', authorBotId: 'a', content })] });
+  mocks.reply.mockResolvedValue({ ok: true, messageId: 'rich-thread-sent' });
+  renderView();
+  fireEvent.click((await screen.findAllByRole('button', { name: 'bots.groupChat.server.startTopic' }))[0]!);
+  const panel = screen.getByRole('complementary');
+  const button = await within(panel).findByRole('button', { name: 'Rich thread submit' });
+  const composer = panel.querySelector('textarea')!;
+  fireEvent.change(composer, { target: { value: 'Thread draft' } });
+  const alsoSend = within(panel).getByRole('checkbox');
+  fireEvent.click(alsoSend);
+  fireEvent.click(button);
+  await waitFor(() => expect(mocks.reply).toHaveBeenCalledWith(expect.objectContaining({ groupId: 'g1', rootId: 'u1', text: 'Reply from the card' })));
+  expect(mocks.shareToMain).not.toHaveBeenCalled();
+  expect(composer.value).toBe('Thread draft');
+  expect(alsoSend.getAttribute('aria-checked')).toBe('true');
+});
+
+it.each(['archived', 'dissolved'])('disables rich answer submissions in %s group history', async state => {
+  const content = '```cindy-ui\n' + JSON.stringify({ seq: 1, version: 1, op: 'create', id: 'submit', kind: 'button', props: { label: 'Read-only rich submit', send: 'Must not send' } }) + '\n```';
+  mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ archived: state === 'archived',
+    ...(state === 'dissolved' ? { dissolvedAt: '2026-10-15T00:00:00Z' } : {}),
+    messages: [msg({ id: `rich-readonly-${state}`, authorKind: 'bot', content })] }) });
+  renderView();
+  const button = await screen.findByRole('button', { name: 'Read-only rich submit' });
+  expect((button as HTMLButtonElement).disabled).toBe(true);
+  fireEvent.click(button);
+  expect(mocks.sendBotGroupMessage).not.toHaveBeenCalled();
+});
+
+it('renders a verified shared bot answer with its send action disabled', async () => {
+  const content = '```cindy-ui\n' + JSON.stringify({ seq: 1, version: 1, op: 'create', id: 'submit', kind: 'button', props: { label: 'Shared rich submit', send: 'Must not send from a quote' } }) + '\n```';
+  mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ serverBacked: true, messages: [msg({ id: 'shared-rich', threadShare: {
+    messageId: 'rich-source', threadRootId: 'u1', status: 'available', authorKind: 'bot', authorBotId: 'a', authorName: 'Aster',
+    sharedByAuthor: false, content, attachments: [], createdAt: 1700000000000, edited: false,
+  } })] }) });
+  renderView();
+  const button = await screen.findByRole('button', { name: 'Shared rich submit' });
+  expect((button as HTMLButtonElement).disabled).toBe(true);
+  expect(mocks.sendBotGroupMessage).not.toHaveBeenCalled();
+});
+
+// PR #8439 P1: simulate a committed reply whose receipt is lost. Existing happy-path
+// routing coverage did not detect a second server-side reply after retry/remount (unit tier).
+it('reuses a rich thread reply attempt after a lost receipt and panel remount', async () => {
+  vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
+  const content = '```cindy-ui\n' + [
+    { seq: 1, version: 1, op: 'create', id: 'text', kind: 'input', props: { label: 'Retry reply text', default: 'First reply' } },
+    { seq: 2, op: 'create', id: 'send', kind: 'button', props: { label: 'Retry rich reply', send: { ref: 'text' } } },
+  ].map(op => JSON.stringify(op)).join('\n') + '\n```';
+  mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ serverBacked: true }) });
+  mocks.thread.mockResolvedValue({ ok: true, root: msg({ id: 'u1', content: 'Retry root' }), hasMore: false,
+    replies: [msg({ id: 'rich-retry-origin', authorKind: 'bot', authorBotId: 'a', content })] });
+  const saved = new Map<string, string>();
+  let loseReceipt = true;
+  mocks.reply.mockImplementation(async ({ clientId }: { clientId: string }) => {
+    if (!saved.has(clientId)) saved.set(clientId, `server-reply-${saved.size + 1}`);
+    if (loseReceipt) { loseReceipt = false; throw new Error('TIMEOUT'); }
+    return { ok: true, messageId: saved.get(clientId)! };
+  });
+  renderView();
+  const open = async () => {
+    fireEvent.click((await screen.findAllByRole('button', { name: 'bots.groupChat.server.startTopic' }))[0]!);
+    const panel = screen.getByRole('complementary');
+    return { panel, button: await within(panel).findByRole('button', { name: 'Retry rich reply' }) };
+  };
+  let view = await open();
+  fireEvent.click(view.button);
+  await within(view.panel).findByText('richAnswer.sendFailed');
+  const firstId = mocks.reply.mock.calls[0]![0].clientId;
+  fireEvent.click(within(view.panel).getByRole('button', { name: 'bots.close' }));
+  await waitFor(() => expect(screen.queryByRole('complementary')).toBeNull());
+  view = await open();
+  fireEvent.click(view.button);
+  await within(view.panel).findByRole('button', { name: 'richAnswer.sent' });
+  expect(mocks.reply.mock.calls[1]![0].clientId).toBe(firstId);
+  expect(saved.size).toBe(1);
+  fireEvent.change(within(view.panel).getByLabelText('Retry reply text'), { target: { value: 'New reply' } });
+  fireEvent.click(within(view.panel).getByRole('button', { name: 'Retry rich reply' }));
+  await waitFor(() => expect(mocks.reply).toHaveBeenCalledTimes(3));
+  expect(mocks.reply.mock.calls[2]![0].clientId).not.toBe(firstId);
+  expect(saved.size).toBe(2);
 });
 
 // Unit regression: the reported weather reply has a valid anchor and only a

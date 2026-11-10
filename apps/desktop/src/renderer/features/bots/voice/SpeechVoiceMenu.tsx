@@ -28,6 +28,7 @@ type Props = Pick<
   | 'error'
   | 'onValueChange'
 > & {
+  options: NonNullable<SelectProps['options']>;
   previewVoice?: string;
   previewPhase: string;
   previewDisabled: boolean;

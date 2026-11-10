@@ -364,5 +364,13 @@
     "merged": "Merged",
     "closed": "Closed",
     "draft": "Draft"
+  },
+  "taskArchive": {
+    "now": "Archive now",
+    "pending": "Will archive when you leave this task",
+    "cancel": "Cancel",
+    "cancelled": "Will not auto-archive this time",
+    "archived": "Archived \"{{title}}\"",
+    "undo": "Undo"
   }
 }

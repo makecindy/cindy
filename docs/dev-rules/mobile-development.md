@@ -127,6 +127,59 @@ Metro，那里没有 Metro 响应时才退回 `8081`。`8081` 属于其他任务
 
 ## 分层验证
 
+### iPhone 任务灵动岛
+
+`AgentActivityBridge` 注册独立的 ActivityKit start/update token；成功后由官方 Device Link
+服务按执行电脑上报的完整快照汇总并发送 APNs，手机挂起时也可以接收系统更新。
+旧服务端返回 404/405、旧原生包或自建中转时，保留 Home 与 host live-activity 的本地同步。
+`cindy-agent-activity` 用 ActivityKit 维护一个聚合活动；等待操作的任务优先，其次未读完成／错误
+结果，最后是运行中；标题、角色状态与点击目标使用同一优先级。排除缓存种子、未确认新建、归档
+和离线电脑的任务，结果已读后移除。
+内容只包含截断标题、本地化状态、任务数和带电脑 ID 的任务深链，不放工具参数或消息正文；
+锁屏标题使用系统 `privacySensitive()`。退出账号／切换账号会结束旧活动。
+
+WidgetKit 的收起、最小、展开与锁屏视图在 `plugins/usage-widgets/CindyAgentActivityWidget.swift`，
+复用已有扩展；ActivityAttributes 从原生模块复制到扩展编译，避免两份 schema 漂移。
+美术直接复用桌面角色目录中的 Cindy（手机版选定角色）：`node apps/mobile/scripts/export-agent-activity-artwork.mjs`
+调用桌面 helper 的 `--export-mascots`，导出含眼睛和姿态的三张静帧，并从桌面实时活动导出
+运行中橙／待处理青／完成绿的颜色目录；手机计数使用「待关注 · 运行中」，待关注包含等待操作和
+未读完成／错误结果。有等待操作时左侧为青色，否则为完成绿；例如一个未读结果和五个运行中
+显示绿色 `1` 与橙色 `5`，只有未读结果时也显示数量。左侧数量由既有总数减运行数得到，兼容旧活动数据。
+生成物随原生 Asset Catalog 编译，不另画手机角色。桌面角色或颜色更新后重跑导出并提交生成物；加 `--check`
+可在任意平台核验角色选择、源文件与生成物的哈希。手机固定使用 Cindy，不同步电脑的个性化皮肤选择。
+Android 与没有此模块的旧安装包不调用 ActivityKit。
+
+推送权限与实时活动权限分开：ActivityKit 读取系统 `areActivitiesEnabled`，不读取普通通知
+偏好，也不要求普通 APNs device token。iOS 17.2+ 注册 push-to-start token，iOS 18+ 声明
+`supportsInputPushToken`；较早系统须先前台创建活动，再注册该活动的 update token。
+没有新增 App 内开关，用户仍通过 iOS 的实时活动设置控制。关闭普通通知不会注销实时活动。
+APNs 环境复用普通推送的原生签名环境读取：development 对应 sandbox、production 对应 prod，
+不以 JavaScript 的 `__DEV__` 判断；环境未知时保留本地同步，关闭／注销不依赖环境读取成功。
+
+Desktop 仅在官方连接在线时上传本机完整活动摘要，排除远程镜像与群聊，不受 Home 分页或岛面
+显示 TTL 限制；一秒合并变化，相同摘要在一分钟心跳之前不重复发送，最多一条请求在途。
+服务端保存每台电脑的一份摘要和账号单调版本；角标只接受全部电脑在线且快照新鲜的完整汇总。
+灵动岛可展示在线电脑的任务；部分离线且在线任务为空时不发送结束，保留旧内容。
+服务端 APNs 内容的 `staleDate` 为发送时间加 150 秒；没有后续更新时，沿用最后一次内容的过期时间。
+账号切换／退出先清本地活动，再等待已发注册收尾并注销旧注册；原生用「端点＋账号」scope
+拒绝迟到的旧账号活动。离线注销不能撤回已被 APNs 接受的消息，新账号 token 注册会转移旧归属。
+用户手动移除活动后，本地与服务端均抑制重新创建，直到任务清空或重新登录；更新与结束不发提醒。
+原生将已观察到的移除账号 scope 保存在现有 UserDefaults 偏好中，进程重启后恢复；不保存 token。
+任务清空、账号清理或切换时同时清除该标记，旧账号迟到的移除事件不改写当前账号偏好。
+后台启动由系统决定，APNs 可能延迟、限频或丢失，不能承诺强杀后持续实时更新。
+本地降级模式的 `staleDate` 为更新时加 120 秒，前台每分钟续期，检测到连接中断则立即标记过期；
+账号清理与无任务结束不等待一秒合并。
+
+接口与发布顺序见[协议兼容的任务汇总与实时活动](protocol-compatibility.md#任务汇总与-activitykit-push2026-11-10未发布)。
+定向验证覆盖 token 轮换、旧服务端、自建中转跳过、账号切换与在途注册后注销；服务端另有真实
+PostgreSQL 的多电脑、版本、设备移除和活动 start/update/end 集成测试。原生编译不是系统
+推送验收：后台／冷启动、跨端已读与真实 APNs 仍需在部署后的签名安装包上核验。
+新增原生模块与扩展源码需要新 iOS 安装包，不能只发 OTA。共享 config plugin 的变更也会
+改变 Android 指纹（虽然没有新增 Android 功能），应随计划内双端原生发版交付；两端存量
+安装均需升级对应原生包才能继续接收新指纹的 OTA，按冷更门单独确认。
+原生验收需检查紧凑／展开／锁屏、浅深模式、点击任务定位、账号切换、后台过期和关闭实时活动。
+TypeScript 测试不能替代这些原生验收。
+
 Release 构建必须使用 `NODE_ENV=production BABEL_ENV=production`，包括手动调用
 `xcodebuild`、Gradle 或 `expo export:embed --dev false`。Expo 会保留父进程的环境变量，
 因此 `__DEV__=false` 或 Xcode 的 Release 配置本身不能证明 Worklets 已按生产模式编译。
@@ -147,6 +200,9 @@ pnpm --filter mobile test:smoke
 - 视觉改动同时遵守 [Cindy 设计规范](../design-rules/cindy-design-system.md) 与
   [Mobile 设计规范](../../apps/mobile/docs/mobile-design-guide.md)。
 - 记录实际执行和结果；未执行的高相关检查必须说明原因。
+
+消息与任务行的尺寸订阅、代码着色优化及测量边界见
+[手机消息渲染的共享优化](../../apps/mobile/docs/mobile-render-performance.md)。
 
 ## 专项入口
 
@@ -468,7 +524,9 @@ A、B、L1、R1 会占用其原有操作，设置页有明确提示。
 ### 伙伴通信通知
 
 `plugins/with-communication-notifications.js` 为当前 bundle identity 生成
-`CindyNotificationService` 扩展，启用 Communication Notifications，并向 EAS 登记扩展签名。
+`CindyNotificationService` 扩展，并向 EAS 登记扩展签名。Communication Notifications
+权限仅声明在主 App target 上；通知扩展负责处理通知内容，不重复声明该权限，否则
+Xcode 自动签名会以 entitlement 无法写入 profile 拒绝构建。
 扩展消费伙伴回复与群消息的可选 `sender` 数据；保留正文、深链和系统隐私设置，任何处理失败或
 系统超时都回退原通知，且只交付一次。头像不发起网络请求、不读取用户账号存储。
 Swift 源码和打包头像显式进入 fingerprint。首次发布需要原生新包和重新生成的签名配置；
