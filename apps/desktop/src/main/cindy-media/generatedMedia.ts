@@ -138,37 +138,58 @@ function generatedVideoBodyPreview(buffer: Uint8Array): string {
   return text;
 }
 
-/** 错误页 / JSON 正文。只认开头,避免把视频里碰巧出现的字符当成错误页。 */
+const GENERATED_VIDEO_ERROR_PREFIXES = ['<!doctype', '<html', '{', '[', '<?xml', '<error'] as const;
+
+function isGeneratedVideoAsciiSpace(byte: number | undefined): boolean {
+  return byte === 0x20 || byte === 0x09 || byte === 0x0a || byte === 0x0d;
+}
+
+function generatedVideoAsciiAt(buffer: Uint8Array, offset: number, text: string): boolean {
+  if (offset < 0 || buffer.byteLength < offset + text.length) return false;
+  for (let i = 0; i < text.length; i += 1) {
+    if (buffer[offset + i] !== text.charCodeAt(i)) return false;
+  }
+  return true;
+}
+
+function findGeneratedVideoAscii(buffer: Uint8Array, offset: number, text: string): number {
+  const last = buffer.byteLength - text.length;
+  for (let i = Math.max(0, offset); i <= last; i += 1) {
+    if (generatedVideoAsciiAt(buffer, i, text)) return i;
+  }
+  return -1;
+}
+
+/**
+ * 错误页 / JSON / XML 正文。先跳过 BOM、空白和前置 HTML 注释,再只认开头,
+ * 避免把视频里碰巧出现的字符当成错误页。注释没有闭合就不把后面的字节当成正文开头。
+ */
 function looksLikeGeneratedVideoErrorBody(buffer: Uint8Array): boolean {
   let offset = 0;
   if (buffer.byteLength >= 3 && buffer[0] === 0xef && buffer[1] === 0xbb && buffer[2] === 0xbf) {
     offset = 3;
   }
-  while (
-    offset < buffer.byteLength
-    && (buffer[offset] === 0x20 || buffer[offset] === 0x09 || buffer[offset] === 0x0a || buffer[offset] === 0x0d)
-  ) {
-    offset += 1;
+  while (offset < buffer.byteLength) {
+    while (offset < buffer.byteLength && isGeneratedVideoAsciiSpace(buffer[offset])) offset += 1;
+    if (!generatedVideoAsciiAt(buffer, offset, '<!--')) break;
+    const end = findGeneratedVideoAscii(buffer, offset + 4, '-->');
+    if (end < 0) return false;
+    offset = end + 3;
   }
   const head = buffer.subarray(offset, Math.min(buffer.byteLength, offset + 16));
   const ascii = generatedVideoBodyPreview(head).toLowerCase();
-  return ascii.startsWith('<!doctype')
-    || ascii.startsWith('<html')
-    || ascii.startsWith('{')
-    || ascii.startsWith('[');
+  return GENERATED_VIDEO_ERROR_PREFIXES.some((prefix) => ascii.startsWith(prefix));
 }
 
 /**
  * 入仓前的视频类型。返回 null 表示「不是可判定的视频」:调用方继续用自己的声明。
- * 错误页 / JSON 直接抛,正文摘要最多 64 字节,且只留可见 ASCII。
+ * 错误页 / JSON 直接抛。错误信息只留分类和上游声明,不附正文,避免签名 URL 和响应内容进日志。
  */
 export function sniffGeneratedVideoMime(buffer: Uint8Array, declaredMime: string): string | null {
   const sniffed = sniffMediaMime(buffer, declaredMime);
   if (sniffed?.startsWith('video/')) return sniffed;
   if (looksLikeGeneratedVideoErrorBody(buffer)) {
-    throw new Error(
-      `生成视频不是受支持的视频(实际是错误页或 JSON,上游声明 ${declaredMime || '缺失'}):正文开头 ${generatedVideoBodyPreview(buffer)}`,
-    );
+    throw new Error(`生成视频不是受支持的视频(实际是错误页或 JSON,上游声明 ${declaredMime || '缺失'})`);
   }
   return null;
 }

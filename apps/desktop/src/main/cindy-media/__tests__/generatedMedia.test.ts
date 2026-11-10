@@ -31,10 +31,13 @@ const { default: migration0071 } = (await import('../../../../drizzle/scripts/00
 
 const PNG_BYTES = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 9]);
 const PNG_HASH = createHash('sha256').update(PNG_BYTES).digest('hex');
-/** 最小 isom/ftyp 盒。旧测试用的纯文本冒充 mp4,修了「错误页也入仓」之后不再合法。 */
-const MP4_BYTES = Buffer.from('000000146674797069736f6d00000000', 'hex');
+/**
+ * 最小 isom/ftyp 盒。头部 00000014 声明 20 字节,必须把兼容品牌补齐,
+ * 否则嗅探会因裁断盒当成认不出,测试就只走上游声明兜底。
+ */
+const MP4_BYTES = Buffer.from('000000146674797069736f6d0000000069736f6d', 'hex');
 const MP4_HASH = createHash('sha256').update(MP4_BYTES).digest('hex');
-const QT_BYTES = Buffer.from('00000014667479707174202000000000', 'hex');
+const QT_BYTES = Buffer.from('0000001466747970717420200000000071742020', 'hex');
 
 function freshDb(): LedgerDb {
   const raw = new Database(':memory:');
@@ -143,22 +146,47 @@ describe('createBlobVideoStorage.saveVideo(生成视频入仓)', () => {
   });
 
   // 测试价值
-  // - 生产入口与可观察结果:createBlobVideoStorage.saveVideo / resolveGeneratedVideoMime;
-  //   入仓扩展名跟随闻出的容器,错误页不入仓。
-  // - Bug／规则依据:签名下载返回 HTML/JSON 时仍显示成功并存成 .mp4。
-  // - 现有覆盖缺口:旧用例只用「octet-stream 一律兜底 mp4」,不看字节。
-  // - 最小失败输入:HTML 正文 + 上游 video/mp4。
+  // - 生产入口与可观察结果:createBlobVideoStorage.saveVideo;
+  //   扩展名跟随闻出的容器,带注释的错误页不入仓,报错不带上游正文。
+  // - Bug／规则依据:签名下载返回 HTML/JSON 时仍显示成功并存成 .mp4;
+  //   错误信息夹带正文会把签名 URL 写进日志。
+  // - 现有覆盖缺口:样例比声明的盒短,嗅探直接放弃;octet-stream 兜底也是 mp4,
+  //   看不出字节优先。前置 HTML 注释的错误页也会漏进仓。
+  // - 最小失败输入:声明成 video/mp4 的 qt 盒;以 <!-- --> 开头的 HTML。
   // - tier:unit,内存账本,不起网络。
-  it('先闻字节:isom 入仓为 mp4,错误页报错,认不出的字节仍兜底 mp4', async () => {
+  it('先闻字节:声明不一致仍用容器,带注释的错误页不入仓且报错不带正文', async () => {
     const storage = generatedMedia.createBlobVideoStorage(db);
     const sniffed = await storage.saveVideo(MP4_BYTES, 'application/octet-stream');
     expect(sniffed.mime).toBe('video/mp4');
     expect(sniffed.xdtVideoUrl).toMatch(/\.mp4$/);
+    // 声明成 quicktime 时兜底会变成 .mov;仍是 mp4 才说明嗅探真的跑过。
+    const declaredQuickTime = await storage.saveVideo(MP4_BYTES, 'video/quicktime');
+    expect(declaredQuickTime.mime).toBe('video/mp4');
+    expect(declaredQuickTime.xdtVideoUrl).toBe(sniffed.xdtVideoUrl);
+    const sniffedMov = await storage.saveVideo(QT_BYTES, 'video/mp4');
+    expect(sniffedMov.mime).toBe('video/quicktime');
+    expect(sniffedMov.xdtVideoUrl).toMatch(/\.mov$/);
 
-    const html = Buffer.from('<html><body>cdn error</body></html>');
-    await expect(storage.saveVideo(html, 'video/mp4')).rejects.toThrow(/错误页或 JSON/);
-    await expect(storage.saveVideo(Buffer.from('{"status":"processing"}'), 'video/mp4')).rejects.toThrow(/错误页或 JSON/);
-    expect(db.select().from(schema.mediaBlobs).all()).toHaveLength(1);
+    const rejected = [
+      ['<html><body>cdn error</body></html>', 'cdn error'],
+      ['{"status":"processing","url":"https://cdn.example/v.mp4?X-Amz-Signature=secret"}', 'X-Amz-Signature'],
+      ['<!-- error --><html><body>cdn error</body></html>', 'cdn error'],
+      ['<!-- comment1 --> <!-- comment2 -->\n<!DOCTYPE html><html><body>gateway down</body></html>', 'gateway down'],
+      ['<?xml version="1.0"?><Error><Code>AccessDenied</Code></Error>', 'AccessDenied'],
+      ['<error>upstream failed</error>', 'upstream failed'],
+    ] as const;
+    for (const [body, leaked] of rejected) {
+      let message = '';
+      try {
+        await storage.saveVideo(Buffer.from(body), 'video/mp4');
+      } catch (err) {
+        message = err instanceof Error ? err.message : '';
+      }
+      expect(message, body).toMatch(/错误页或 JSON/);
+      expect(message, body).not.toContain(leaked);
+      expect(message, body).not.toContain(body.slice(0, 24));
+    }
+    expect(db.select().from(schema.mediaBlobs).all()).toHaveLength(2);
 
     const unknown = await storage.saveVideo(Buffer.from('not-a-container'), 'application/octet-stream');
     expect(unknown.mime).toBe('video/mp4');
