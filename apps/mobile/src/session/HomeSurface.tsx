@@ -658,6 +658,8 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<HomeConnectionError>(null);
   const [lastSyncedAt, setLastSyncedAt] = useState<number | null>(null);
+  // Only whole-home syncs refresh remote collection discovery; per-device readiness must not fan out manifests.
+  const [directorySyncedAt, setDirectorySyncedAt] = useState<number | null>(null);
   const clearDirectoryBudget = useCallback(() => {
     const budget = directoryBudgetRef.current;
     if (budget.timer !== null) clearTimeout(budget.timer);
@@ -682,6 +684,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
     setDevices([]);
     lastSyncedAtRef.current = null;
     setLastSyncedAt(null);
+    setDirectorySyncedAt(null);
     setRefreshing(true);
     void loadHomeRef.current({ visible: true });
   }, []);
@@ -852,6 +855,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
     setRefreshing(false);
     setError(null);
     setLastSyncedAt(null);
+    setDirectorySyncedAt(null);
     setDeviceConnectionStates({});
     setScheduleIndex(new Map());
     setHostProjectOrders(new Map());
@@ -1447,6 +1451,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
       if (finalBudgetAllowsDisplay) {
         devicesRef.current = nextDevices;
         setDevices(nextDevices);
+        if (!staleDirectory) setDirectorySyncedAt(Date.now());
         if (!staleDirectory && hydrateResults.every(({ result }) => !result.superseded && !result.failure)) {
           const syncedAt = Math.max(lastSyncedAtRef.current ?? 0, Date.now());
           lastSyncedAtRef.current = syncedAt;
@@ -2019,7 +2024,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
     return () => { cancelled = true; };
   }, [accountGeneration, homeCacheUserId]);
   useEffect(() => {
-    if (resourceCacheAccount !== accountGeneration || !homeListCacheHydrated || (deviceModels.length === 0 && lastSyncedAt === null)) return;
+    if (resourceCacheAccount !== accountGeneration || !homeListCacheHydrated || (deviceModels.length === 0 && directorySyncedAt === null)) return;
     let cancelled = false;
     const targets = remoteResourceDiscoveryTargets(deviceModels, remoteHomeCollectionsRef.current);
     if (targets.length === 0) {
@@ -2055,7 +2060,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
     accountGeneration,
     connectionEpoch,
     resourceCacheAccount,
-    lastSyncedAt,
+    directorySyncedAt,
     homeListCacheHydrated,
     homeCacheUserId,
     deviceModels,

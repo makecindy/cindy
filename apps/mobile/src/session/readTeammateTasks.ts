@@ -104,6 +104,8 @@ export async function readTeammateTasks(input: {
   });
 }
 
+let homeTaskSnapshotSeq = 0;
+
 /** Publish a usable Home list now; completion only represents optional enrichment.
  * The caller fences both phases by account, connection, scope and list mutation. */
 export function publishHomeTaskSnapshot(input: Omit<Parameters<typeof readTeammateTasks>[0], 'publishInitial'> & {
@@ -112,7 +114,10 @@ export function publishHomeTaskSnapshot(input: Omit<Parameters<typeof readTeamma
   /** A rejected optional snapshot must remain eligible for a later Home refill. */
   onDiscard?(): void;
 }): Promise<void> {
-  return readTeammateTasks({ ...input, publishInitial: rows => {
+  // Companion reads batch per scope with the first caller's invoke/fence. Give every
+  // snapshot its own queue so a superseded snapshot cannot reject a newer one's reads.
+  const scope = JSON.stringify([input.scope, ++homeTaskSnapshotSeq]);
+  return readTeammateTasks({ ...input, scope, publishInitial: rows => {
     if (!input.current()) return;
     input.publish(rows);
     input.onReady();

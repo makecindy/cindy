@@ -182,3 +182,34 @@ it('stops queued delegation reads after access is revoked', async () => {
   await rejected;
   expect(pending).toHaveLength(3);
 });
+
+// Review regression (PR #9752, unit): every Home publish creates a new enrichment fence,
+// but companion reads batched by the caller scope reused the superseded snapshot's invoke.
+// The newer snapshot's lane reads were rejected and silently dropped from the list.
+it('keeps a newer snapshot\'s lanes while a superseded snapshot batch is in flight', async () => {
+  const lane = (id: string) => task(id, { source: 'bot', companion: { id: 'cindy-default', role: 'channel' } });
+  const history = { ok: true, sessions: [lane('lane')] };
+  let releaseOld!: (value: unknown) => void;
+  let oldCurrent = true;
+  const oldInvoke = vi.fn(async (_device: string, api: string) => {
+    if (!oldCurrent) throw new Error('superseded');
+    if (api === 'local-db:history:query') return history;
+    if (api === 'local-db:sessions:get-many') return new Promise(resolve => { releaseOld = resolve; });
+    return { collectionId: 'teammates', items: [] };
+  });
+  const old = publishHomeTaskSnapshot({ ...input, invoke: oldInvoke as RemoteInvoke, sessions: [task('ordinary')],
+    current: () => oldCurrent, publish: () => {}, onReady: () => {} });
+  await vi.waitFor(() => expect(releaseOld).toBeTypeOf('function'));
+  oldCurrent = false;
+  const publish = vi.fn();
+  const newer = publishHomeTaskSnapshot({ ...input, sessions: [task('ordinary')], publish, onReady: () => {},
+    invoke: (async (_device: string, api: string, args: [string[]]) => {
+      if (api === 'local-db:history:query') return history;
+      if (api === 'local-db:sessions:get-many') return args[0].map((id: string) => lane(id));
+      return { collectionId: 'teammates', items: [] };
+    }) as RemoteInvoke });
+  await new Promise(resolve => setTimeout(resolve, 0));
+  releaseOld([lane('lane')]);
+  await Promise.all([old, newer]);
+  expect(publish.mock.lastCall?.[0].map((row: RemoteSession) => row.id)).toEqual(['ordinary', 'lane']);
+});
