@@ -6101,7 +6101,7 @@
           "switchFromHost": "이 컴퓨터의 중계가 중지되고, 참여한 기기는 연결이 끊어집니다.",
           "switchFromMember": "이 컴퓨터는 {{name}}에서 나갑니다. 다시 참여하려면 상대방이 새 참여 링크를 만들어야 합니다.",
           "switchConfirm": "전환",
-          "switchFromOfficial": "기기 간 원격 제어가 {{name}}을(를) 거쳐 중계됩니다. 내 중계를 사용하는 동안에는 휴대폰 시스템 알림을 사용할 수 없습니다. 제공자 공유와 공유 작업은 계속 Cindy 공식 중계를 거칩니다."
+          "switchFromOfficial": "기기 간 원격 제어가 {{name}}을(를) 거쳐 중계됩니다. 내 중계를 사용하는 동안에는 휴대폰 푸시 알림을 사용할 수 없습니다. 제공자 공유와 공유 작업은 계속 Cindy 공식 중계를 거칩니다."
         },
         "dialog": {
           "steps": {
@@ -13010,6 +13010,11 @@
     "prevMessageJump": "이전 질문으로 이동: {{preview}}",
     "sessionLoading": "세션 불러오는 중",
     "askUserQuestion": {
+    "unanswered": "답변 없음",
+    "withdrawn": "더 이상 답변이 필요하지 않습니다",
+    "withdrawnDraft": "이 질문에 더 이상 답변할 필요가 없습니다.\n{{reason}}\n초안은 보관되며 추가 정보로 보낼 수 있습니다.",
+    "sendSupplement": "추가 정보 보내기",
+
       "voice": {
         "hint": "옵션 번호나 이름을 말하세요. 여러 개를 선택한 뒤에는 “선택 확인”이라고 말하세요.",
         "freeTextHint": "답변을 말하고 내용을 검토한 뒤 “선택 확인”이라고 말하여 제출하세요.",

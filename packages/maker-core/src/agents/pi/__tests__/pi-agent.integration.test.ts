@@ -31,7 +31,7 @@ import { PiAgent } from '../index.js';
 import { ANSWER_DELIVERY_PROMPT, PI_ANSWER_DELIVERY_PROMPT } from '@cindy/maker-shared/rich-answer-guide';
 import { PiRpcProcess } from '../rpc-client.js';
 import * as sessionJsonlScan from '../session-jsonl-scan.js';
-import { providerCatalogForPi, BUNDLED_CATALOG } from '@cindy/model-providers';
+import { providerCatalogForPi, providerModelGenerationRecord, providerPresetModelRecord, BUNDLED_CATALOG } from '@cindy/model-providers';
 import { TurnPermissionPolicyUnsupportedError, type AgentDeps, type AgentSessionHandle } from '../../base-agent.js';
 import type { AgentEvent } from '../../../types/events.js';
 import type { Logger } from '../../../interfaces/logger.js';
@@ -2236,6 +2236,66 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
       await handle?.close();
     }
   }
+
+  // #9630, integration: catalog inheritance -> models.json -> real Pi HTTP.
+  // Existing effort coverage used Gateway Chat, not native Anthropic relays.
+  it.each([
+    ['claude-opus-5', 'relay'],
+    ['claude-opus-5-5', 'relay'],
+    ['claude-fable-5-1', 'relay'],
+    ['claude-fable-5-2', 'relay'],
+    ['claude-sonnet-5-5', 'relay'],
+    ['claude-opus-5', 'preset-relay'],
+    ['claude-opus-5-5', 'preset-relay'],
+    ['claude-opus-5-5', 'official'],
+    ['claude-opus-5-5', 'explicit'],
+  ] as const)('Anthropic effort boundary: %s (%s)', { timeout: 30_000 }, async (id, source) => {
+    const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-anthropic-effort-'));
+    const upstream = source === 'official' ? 'https://api.anthropic.com' : endpoint;
+    const preset = source === 'preset-relay' ? 'anthropic-api' : undefined;
+    const row = (preset ? providerPresetModelRecord(preset, id, 'anthropic-messages', upstream) : undefined)
+      ?? providerModelGenerationRecord(id, upstream, 'anthropic-messages', preset)!;
+    const deps = buildDeps();
+    deps.resolvePiNativeProviders = async () => ({
+      providers: [{ id: 'effort-relay', name: 'Effort fixture', baseUrl: endpoint,
+        ...(preset ? { adapterProvider: 'anthropic' } : {}),
+        api: 'anthropic-messages', apiKeyEnvVar: 'CINDY_TEST_EFFORT_KEY',
+        models: [{ id, reasoning: row.reasoning, contextWindow: row.contextWindow,
+          maxTokens: row.maxOutput, thinkingLevelMap: row.execution.pi.thinkingLevelMap,
+          compat: { ...row.execution.pi.compat,
+            ...(source === 'explicit' ? { supportsMidConvoEffort: true } : {}) },
+        }],
+      }],
+      env: { CINDY_TEST_EFFORT_KEY: 'fixture-only-key' },
+    });
+    let handle: AgentSessionHandle | undefined;
+    try {
+      handle = await new PiAgent(deps).startSession({ sessionId: `effort-${source}-${id}`,
+        workingDir, model: id, providerId: 'effort-relay', effort: 'medium' });
+      for (const effort of ['medium', 'low', 'high'] as const) {
+        await handle.setEffort!(effort);
+        const before = seenRequests.length;
+        const done = (async () => {
+          for await (const event of handle!.events()) if (event.type === 'done') return event;
+        })();
+        await handle.send({ type: 'user', content: `Reply at ${effort} effort.` });
+        expect((await done)?.data).toMatchObject({ status: 'completed' });
+        const requests = seenRequests.slice(before);
+        expect(requests).toHaveLength(1);
+        expect(new URL(requests[0]!.url, endpoint).pathname).toBe('/v1/messages');
+        const body = JSON.parse(requests[0]!.body);
+        const messageScoped = source === 'official' || source === 'explicit';
+        expect(body.output_config.effort).toBe(messageScoped ? 'high' : effort);
+        const effortMessages = body.messages.filter((message: { role: string; output_config?: unknown }) =>
+          message.role === 'system' && message.output_config);
+        if (messageScoped) expect(effortMessages.at(-1).output_config.effort).toBe(effort);
+        else expect(effortMessages).toEqual([]);
+      }
+    } finally {
+      await handle?.close();
+      rmSync(workingDir, { recursive: true, force: true });
+    }
+  });
 
   // Integration: the real Pi request builder must preserve declared low and
   // upstream remaps, while an unavailable low must follow the catalog default.

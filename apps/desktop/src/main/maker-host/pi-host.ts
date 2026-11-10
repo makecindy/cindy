@@ -1332,13 +1332,22 @@ export function buildPiNativeProvidersFromConfigs(
       officialPiRouteMatches('openai', rt.baseUrl, rt.wireProtocol)
         ? officialPiModels('openai')?.find((model) => model.id === 'gpt-6-astra')
         : undefined;
-    const standardModels = rt.models.map(model => {
+    // Use the same effective endpoint for catalog compatibility as for the SDK.
+    // Explicit model routes and request paths keep their existing path semantics.
+    const catalogUpstreams = rt.models.map(model => {
+      const upstream = model.route?.baseUrl ?? rt.baseUrl;
+      const api = model.api ?? model.piApi ?? model.route?.wireProtocol ?? rt.wireProtocol;
+      return api === 'anthropic-messages' && authMethod !== 'oauth' && !rt.requestPath && !model.route
+        ? anthropicRootForV1Endpoint(upstream) ?? upstream : upstream;
+    });
+    const standardModels = rt.models.map((model, index) => {
       if (model.route?.requestPath || rt.requestPath) return undefined;
-      const row = providerModelRecord(model.id, model.route?.baseUrl ?? rt.baseUrl,
+      const upstream = catalogUpstreams[index]!;
+      const row = providerModelRecord(model.id, upstream,
         model.api ?? model.piApi ?? (model.route ? model.route.wireProtocol : rt.wireProtocol),
         !model.api && !model.piApi && !model.route)
-        ?? ((model.api ?? model.piApi) ? providerPresetModelRecord(rt.catalogPresetId, model.id, model.api ?? model.piApi) : undefined)
-        ?? providerModelGenerationRecord(model.id, model.route?.baseUrl ?? rt.baseUrl,
+        ?? ((model.api ?? model.piApi) ? providerPresetModelRecord(rt.catalogPresetId, model.id, model.api ?? model.piApi, upstream) : undefined)
+        ?? providerModelGenerationRecord(model.id, upstream,
           model.api ?? model.piApi ?? (model.route ? model.route.wireProtocol : rt.wireProtocol), rt.catalogPresetId);
       if (!row || !PI_NATIVE_APIS.has(row.execution.pi.api as PiNativeApi)) return undefined;
       return {
@@ -1415,9 +1424,10 @@ export function buildPiNativeProvidersFromConfigs(
       const api = modelApis[index];
       // The native ChatGPT subscription transport owns its authentication separately.
       if (!api || api === 'openai-codex-responses') return [];
-      const row = providerModelRecord(model.id, model.route?.baseUrl ?? rt.baseUrl, api)
-        ?? providerPresetModelRecord(rt.catalogPresetId, model.id, api)
-        ?? providerModelGenerationRecord(model.id, model.route?.baseUrl ?? rt.baseUrl, api, rt.catalogPresetId);
+      const upstream = catalogUpstreams[index]!;
+      const row = providerModelRecord(model.id, upstream, api)
+        ?? providerPresetModelRecord(rt.catalogPresetId, model.id, api, upstream)
+        ?? providerModelGenerationRecord(model.id, upstream, api, rt.catalogPresetId);
       const adapter = row ? providerModelAdapterId(row, rt.catalogPresetId) : undefined;
       return adapter ? [adapter] : [];
     }));

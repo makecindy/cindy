@@ -13009,6 +13009,11 @@
     "jumpToBottom": "跳到底部",
     "prevMessageJump": "跳到上一則提問：{{preview}}",
     "askUserQuestion": {
+    "unanswered": "未回答",
+    "withdrawn": "無需再回答",
+    "withdrawnDraft": "這個問題已不再需要回答。\n{{reason}}\n草稿已保留，你仍可作為補充傳送。",
+    "sendSupplement": "傳送補充",
+
       "voice": {
         "hint": "可以說「第一項」或選項名稱；多選後請說「確認選擇」。",
         "freeTextHint": "可以直接說出回答，檢查後說「確認選擇」提交。",

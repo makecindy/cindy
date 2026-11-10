@@ -13010,6 +13010,11 @@
     "prevMessageJump": "跳到上一条提问：{{preview}}",
     "sessionLoading": "正在加载任务",
     "askUserQuestion": {
+    "unanswered": "未回答",
+    "withdrawn": "无需再回答",
+    "withdrawnDraft": "这个问题已不再需要回答。\n{{reason}}\n草稿已保留，你仍可作为补充发送。",
+    "sendSupplement": "发送补充",
+
       "voice": {
         "hint": "可以说“第一项”或选项名称；多选后请说“确认选择”。",
         "freeTextHint": "可以直接说出回答，检查后说“确认选择”提交。",
