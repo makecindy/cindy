@@ -4285,8 +4285,13 @@ describe('GhostManager · list', () => {
   // The custom projector test above misses the production catch branch. Run
   // that callback through listAsync: transient IO must recover, persistent IO
   // must reject within the retry limit instead of publishing unavailable sources.
-  it.each(['transient', 'persistent'] as const)('handles %s listing snapshot failures through production wiring', async (failure) => {
-    await manager.install(await makeCindy('ledger-retry.cindy', goodManifest()), { namespace: null });
+  // Empty scans and skipped invalid directories need no source evidence at all.
+  it.each(['empty', 'unprojected', 'transient', 'persistent'] as const)('handles %s listing snapshot failures through production wiring', async (failure) => {
+    if (failure === 'unprojected') {
+      await fs.promises.mkdir(path.join(rootDir, 'broken'), { recursive: true });
+    } else if (failure !== 'empty') {
+      await manager.install(await makeCindy('ledger-retry.cindy', goodManifest()), { namespace: null });
+    }
     const ledger = new PluginMarketLedger(path.join(workDir, 'market', 'ledger.v1.json'));
     manager = productionManager({
       // Keep production source callbacks; unrelated app services stay isolated.
@@ -4309,7 +4314,12 @@ describe('GhostManager · list', () => {
     const unavailable = () => { throw Object.assign(new Error('ledger locked'), { code: 'EBUSY' }); };
     const snapshot = vi.spyOn(ledger, 'createListingLookup');
     try {
-      if (failure === 'transient') {
+      if (failure === 'empty' || failure === 'unprojected') {
+        snapshot.mockImplementation(unavailable);
+        await expect(manager.listAsync()).resolves.toEqual([]);
+        expect(manager.list()).toEqual([]);
+        expect(snapshot).not.toHaveBeenCalled();
+      } else if (failure === 'transient') {
         snapshot.mockImplementationOnce(unavailable);
         await expect(manager.listAsync()).resolves.toMatchObject([{
           enabled: true, approval: { state: 'approved' },

@@ -2908,7 +2908,7 @@ export class GhostManager {
         isPresenceUnknown: () => false,
       });
       const result: InstalledGhost[] = [];
-      const sources = this.options.prepareListingSources?.();
+      const sources = this.createListingSources();
       for (const entry of entries) {
         result.push(...this.projectListedEntries([entry], readReceipt, disabled, sources?.project));
         await new Promise<void>((resolve) => setImmediate(resolve));
@@ -2928,6 +2928,21 @@ export class GhostManager {
       };
     }
     throw new Error('ghost installations changed repeatedly during background scan');
+  }
+
+  private createListingSources(): ReturnType<NonNullable<GhostManagerOptions['prepareListingSources']>> | undefined {
+    const prepare = this.options.prepareListingSources?.bind(this.options);
+    if (!prepare) return undefined;
+    let snapshot: ReturnType<typeof prepare> | undefined;
+    return {
+      project: (record, receipt) => {
+        // Empty scans and skipped entries must not depend on ledger readability.
+        // Share one snapshot only after a projected instance actually needs it.
+        snapshot ??= prepare();
+        return snapshot.project(record, receipt);
+      },
+      isCurrent: () => snapshot?.isCurrent() ?? true,
+    };
   }
 
   private async listContentEntriesAsync(root: string): Promise<Array<{ relId: string; dir: string }>> {
@@ -2984,7 +2999,7 @@ export class GhostManager {
       isPresenceUnknown: (relId) => this.isContentPresenceUnknown(relId),
     });
     const result = this.projectListedEntries(entries, readReceipt, undefined,
-      this.options.prepareListingSources?.().project);
+      this.createListingSources()?.project);
     result.sort((a, b) => a.manifest.id.localeCompare(b.manifest.id));
     return { ghosts: result, registry };
   }
