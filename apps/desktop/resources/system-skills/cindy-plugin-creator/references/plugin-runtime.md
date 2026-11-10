@@ -27,9 +27,8 @@ cindy.send({ type: 'tool-result', callId: msg.callId, ok: true, result: {
   // 自己的卡(§4.5 data-ghost-audio 插槽),那时结果多带 xdt_audio_in_card: true
   // + xdt_anchor_card_id(主机验证卡里真含插槽才压基座的重复播放器;
   // xdt_audio_tracks 仍要发——手机端靠它)。
-  // 3D 产物(GLB 已入媒体库)可另带
-  // _xdt_model_files: [{ provider: 'cindy', url: 'cindy-media://….glb', format: 'GLB' }]
-  // ——与 xdt_image_urls 按位配对,用户点对应预览图直接进应用内 3D 查看器。
+  // 3D 产物给出普通文件地址，由回复中的路径或 Markdown 链接打开文件预览。
+  // 不需要 _xdt_model_files，也不与 xdt_image_urls 配对。
   //
   // ⚠️ 媒体字段是**数据通道**,不只是桌面渲染指令:IM/远程会话(Slack/飞书)的
   // 出站与手机端都靠这些字段把你的产物送到用户手里。**任何情况下都不要删掉/
@@ -227,8 +226,9 @@ await cindy.send({ type: 'cindy-request', kind: 'release_media', hash: r.hash })
 
 规矩(都会被主机强制,不是建议):
 
-- **类型按字节判**:主机读魔数,只收图片 / 视频 / 音频 / glb。你自报的 mime 或
-  文件名一概不参考,识别不出直接拒——别拿 svg、zip、json 来试;
+- **类型按字节判**:只收图片 / 视频 / 音频及 GLB / GLTF / OBJ / FBX / STL / PLY / DAE / 3MF / 3DS。
+  你自报的 mime 或文件名一概不参考，识别不出直接拒；普通 SVG、ZIP、JSON 不入仓，
+  GLTF 和 3MF 必须通过对应模型结构校验;
 - **单次 ≤50MB**(解码后字节)。字节要以 base64 走一次 IPC,再大请自己在面板侧
   压缩或分片,别指望上限继续抬;
 - **每个插件配额 1GB**,只算寄存物(你生成的图不占这个额)。同一张图反复寄存

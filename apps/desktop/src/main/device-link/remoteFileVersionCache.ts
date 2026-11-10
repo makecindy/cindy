@@ -9,6 +9,7 @@ import {
   supportedMime,
 } from '../cindy-media/integrationCache';
 import { sniffMediaMime } from '../cindy-media/sniffMediaMime';
+import { isModelMediaCandidate } from '../cindy-media/modelMediaMime';
 import { scanCache, evictCacheBlobs, CACHE_LIMIT_BYTES } from '../cindy-media/recycler';
 import {
   readVersionedRemoteFile,
@@ -117,12 +118,22 @@ export function remoteFileVersionCache(
       // Bounded sniff; never load a large media file into main-process memory.
       let verified: string | null;
       if (Buffer.isBuffer(file)) {
-        verified = sniffMediaMime(file.subarray(0, 4096), mimeType);
+        verified = sniffMediaMime(isModelMediaCandidate(file.subarray(0, 4096), mimeType) && size <= 256 * 1024 * 1024 ? file : file.subarray(0, 4096), mimeType);
       } else {
         const handle = await fs.open(file, 'r');
         try {
-          const probe = Buffer.alloc(Math.min(size, 4096));
-          const { bytesRead } = await handle.read(probe, 0, probe.length, 0);
+          let probe = Buffer.alloc(Math.min(size, 4096));
+          let { bytesRead } = await handle.read(probe, 0, probe.length, 0);
+          if (isModelMediaCandidate(probe.subarray(0, bytesRead), mimeType) && size <= 256 * 1024 * 1024) {
+            probe = Buffer.alloc(size);
+            bytesRead = 0;
+            while (bytesRead < size) {
+              assertCurrent();
+              const next = await handle.read(probe, bytesRead, size - bytesRead, bytesRead);
+              if (!next.bytesRead) return;
+              bytesRead += next.bytesRead;
+            }
+          }
           verified = sniffMediaMime(probe.subarray(0, bytesRead), mimeType);
         } finally {
           await handle.close();

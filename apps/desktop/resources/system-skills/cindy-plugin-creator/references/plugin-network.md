@@ -31,7 +31,7 @@ const r = await cindy.fetch({
 //   { ok:true, status, headers, media: { url: 'cindy-media://blobs/<指纹>.<后缀>', hash, ext, bytes } }
 //   **字节不进你的沙箱**:主机直接落媒体总仓、记到你名下(与 cindy 代办产物同等待遇:
 //   可当改图源图、可上画廊、交卷 xdt_image_urls 可渲染)。受支持类型 = 图片(png/jpg/
-//   webp/gif)/ 视频(mp4/webm/mov)/ 音频(mp3/wav/m4a/ogg)/ 3D(glb);上限 256MB,
+//   webp/gif)/ 视频(mp4/webm/mov)/ 音频(mp3/wav/m4a/ogg)/ 3D(glb/gltf/obj/fbx/stl/ply/dae/3mf/3ds);上限 256MB,
 //   超限整单拒(不截断)。Content-Type 只作为线索,落仓前主机会按字节验证真实媒体类型;
 //   对缺失、text/plain 或通用 octet-stream 这类常见误报/泛化声明,主机会按受支持
 //   媒体的有限魔数尝试识别。识别成功仍走同一媒体总仓,并以字节识别出的 MIME 落仓;

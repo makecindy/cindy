@@ -28,7 +28,6 @@ import {
   PreviewFooter,
 } from "./PreviewChrome";
 import { PdfDocumentPreview } from "./PdfDocumentPreview";
-import { ModelDocumentPreview } from "./ModelDocumentPreview";
 import { NativeVideoPlayer } from "./NativeVideoPlayer";
 import { RemoteMediaPlayerWebView } from "./mediaPlayerWebView";
 import { downloadRemoteMediaShareTemp } from "./remoteMediaDiskCacheExpo";
@@ -163,7 +162,6 @@ function RemoteAttachmentBody({
   const resolver = useRef(resolve);
   resolver.current = resolve;
   const [file, setFile] = useState<ResolvedPreviewFile | null>(null);
-  const [local, setLocal] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
   const [nativeFailed, setNativeFailed] = useState(false);
   const [retry, setRetry] = useState(0);
@@ -174,31 +172,16 @@ function RemoteAttachmentBody({
   useEffect(() => {
     alive.current = true;
     const abort = new AbortController();
-    let owned: string | null = null;
     let releaseSource: (() => void) | undefined;
     setFile(null);
-    setLocal(null);
     setFailed(false);
     setNativeFailed(false);
     void resolver
       .current(abort.signal)
-      .then(async (value) => {
+      .then((value) => {
         if (abort.signal.aborted) return;
         releaseSource = value.protectLocalFile?.();
         setFile(value);
-        if (attachmentPreviewKind(name, value.mimeType) !== "model") return;
-        owned = await downloadRemoteMediaShareTemp(
-          value.url,
-          value.mimeType ?? "application/octet-stream",
-          name,
-          abort.signal,
-        );
-        if (!owned) throw new Error("PREVIEW_DOWNLOAD_FAILED");
-        if (abort.signal.aborted) {
-          remove(owned);
-          return;
-        }
-        setLocal(owned);
       })
       .catch(() => {
         if (!abort.signal.aborted) setFailed(true);
@@ -209,7 +192,6 @@ function RemoteAttachmentBody({
       shareAbort.current?.abort();
       void Promise.resolve(shareWork.current)
         .finally(() => {
-          if (owned) remove(owned);
           releaseSource?.();
         })
         .catch(() => {});
@@ -221,28 +203,27 @@ function RemoteAttachmentBody({
     const request = new AbortController();
     shareAbort.current = request;
     const work = (async () => {
-      let uri = local;
+      let uri: string | null = null;
       try {
-        if (!uri)
-          uri = await downloadRemoteMediaShareTemp(
-            file.url,
-            file.mimeType ?? "application/octet-stream",
-            name,
-            request.signal,
-          );
+        uri = await downloadRemoteMediaShareTemp(
+          file.url,
+          file.mimeType ?? "application/octet-stream",
+          name,
+          request.signal,
+        );
         if (!uri) throw new Error("PREVIEW_DOWNLOAD_FAILED");
         if (alive.current)
           await Sharing.shareAsync(uri, { mimeType: file.mimeType });
       } catch {
         if (alive.current) Alert.alert(t("groupChat.server.attachmentFailed"));
       } finally {
-        if (uri && uri !== local) remove(uri);
+        if (uri) remove(uri);
         if (alive.current) setSharing(false);
         shareWork.current = null;
       }
     })();
     shareWork.current = work;
-  }, [file, local, name, t]);
+  }, [file, name, t]);
   const center = (text: string) => (
     <View style={styles.center}>
       <Text style={[textStyles.body, { color: colors.textSecondary }]}>
@@ -283,14 +264,6 @@ function RemoteAttachmentBody({
           </View>
         ) : kind === "pdf" ? (
           <PdfDocumentPreview uri={file.url} />
-        ) : kind === "model" ? (
-          local ? (
-            <ModelDocumentPreview uri={local} name={name} />
-          ) : (
-            <View style={styles.center}>
-              <ActivityIndicator color={colors.textSecondary} />
-            </View>
-          )
         ) : kind === "video" && !nativeFailed ? (
           <NativeVideoPlayer
             url={file.url}

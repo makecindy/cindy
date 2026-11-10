@@ -353,6 +353,16 @@ describe('sniffImageMime', () => {
 });
 
 describe('remote-media source', () => {
+  it.each([
+    ['model/gltf-binary', '.glb'], ['model/gltf+json', '.gltf'], ['model/obj', '.obj'],
+    ['model/fbx', '.fbx'], ['model/stl', '.stl'], ['model/ply', '.ply'],
+    ['model/vnd.collada+xml', '.dae'], ['model/3mf', '.3mf'], ['model/3ds', '.3ds'],
+  ])('preserves the file extension when saving remote %s', async (mimeType, ext) => {
+    const deps = makeDeps({ fetchRemoteMediaImage: vi.fn(async () => ({ buffer: Buffer.from('model'), mimeType })) });
+    await createLightboxMediaHandlers(deps).saveAs({ url: 'cindy-remote-media://m/abc/def' });
+    expect(deps.showSaveDialog).toHaveBeenCalledWith({ defaultPath: path.join('/downloads', 'media-1720000000000' + ext) });
+  });
+
   it('classifies cindy-remote-media urls', () => {
     expect(classifyLightboxMediaUrl('cindy-remote-media://m/abc/def').kind).toBe('remote-media');
   });

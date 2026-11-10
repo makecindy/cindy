@@ -25,21 +25,17 @@
 
 import { CHAT_FOCUS_CLASS } from './chatChrome';
 import { useId, useRef, useState } from 'react';
-import { Box, Copy, FolderOpen } from 'lucide-react';
+import { Copy, FolderOpen } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { cn } from '@/lib/utils';
-import { Spinner } from '@/components/ui/spinner';
-import { toast } from '@/lib/toast';
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import { extractIpcError } from '@/utils/ipcError';
 import { ImageLightbox } from './ImageLightbox';
 import { useImageClipboard } from './useImageClipboard';
-import { ModelLightbox } from './ModelLightbox';
 import { ImageMissingPlaceholder } from './ImageMissingPlaceholder';
 import { ChatLoadingImage } from './ChatLoadingImage';
 import { useRemoteMediaUrl } from '@/hooks/useRemoteMediaUrl';
@@ -54,13 +50,7 @@ interface ChatImageViewProps {
   src: string;
   filename: string;
   variant: ChatImageVariant;
-  /**
-   * 当这张图是一个 3D 模型任务的预览缩略图时,把对应模型文件的元数据传过来。
-   * 设置后点击路由到 ModelLightbox(3D 查看器),右键菜单从默认的"复制图片 /
-   * 打开图片所在目录"换成"打开模型 / 打开模型所在目录" — 操作的是模型文件
-   * 本体(mivo fileId 懒下载 / cindy-media 总仓 GLB),不是预览图本身。
-   * undefined 时菜单/行为完全不变,跟未引入这个 prop 之前等价。
-   */
+  /** Legacy metadata; thumbnails use ordinary image actions. */
   modelFile?: ToolMediaModelFile;
   /**
    * 所在会话 id。远程(device-link)会话里图片字节在被控端,需把 src 改写成
@@ -109,7 +99,6 @@ export function ChatImageView({
   src,
   filename,
   variant,
-  modelFile,
   sessionId,
   annotationSourceUrl,
   annotationStrokes,
@@ -118,9 +107,7 @@ export function ChatImageView({
   // 远程会话改写到 cindy-remote-media://;本地会话原样。下游一律用 displaySrc(渲染 +
   // gallery + lightbox + 动作判定),保留远端归属。
   const displaySrc = useRemoteMediaUrl(src, sessionId);
-  // 'image' = 2D 预览图 lightbox; 'model' = `<model-viewer>` 3D lightbox。
-  // 同一个 state 槽位避免两种 lightbox 同时出现 (且统一受 scroll-lock 影响)。
-  const [lightboxOpen, setLightboxOpen] = useState<'image' | 'model' | null>(null);
+  const [lightboxOpen, setLightboxOpen] = useState(false);
   const previewTriggerRef = useRef<HTMLImageElement>(null);
   const longImageHintId = useId();
   const [imageSize, setImageSize] = useState<{ src: string; width: number; height: number } | null>(null);
@@ -128,11 +115,11 @@ export function ChatImageView({
   // Key the measurement by the resolved URL so replacement/remote resolution cannot
   // temporarily apply the previous image's dimensions to a different attachment.
   const longImage =
-    variant === 'user-attached' && !modelFile &&
+    variant === 'user-attached' &&
     imageSize?.src === displaySrc && imageSize.width > 0 &&
     imageSize.height / imageSize.width > 3;
   const closePreview = () => {
-    setLightboxOpen(null);
+    setLightboxOpen(false);
     previewTriggerRef.current?.focus({ preventScroll: true });
   };
   // Remote URLs retain bounded transport retries; local images share Markdown's
@@ -144,11 +131,6 @@ export function ChatImageView({
   // Right-click → 复制图片 / 打开图片所在目录. Mirrors MarkdownRenderer.LightboxImage
   // and ImageLightbox so user-attached 图和 assistant tool-output 图右键交互一致。
   const [menuPos, setMenuPos] = useState<{ x: number; y: number } | null>(null);
-  // 模型菜单项里某一项正在执行(下载 + open/reveal)时禁用整组菜单 — 模型
-  // 第一次打开时需要从 mivo 拉文件,可能要 1-3 秒,菜单瞬时关闭看上去像
-  // 没响应。pending 状态显示 spinner + 抑制重复点击。
-  const [modelPending, setModelPending] = useState<'open' | 'reveal' | null>(null);
-
   const { canCopy, canReveal: canRevealInFolder, copyImage, revealImage } = useImageClipboard(displaySrc);
 
   if (imageStatus) {
@@ -163,7 +145,7 @@ export function ChatImageView({
 
   const { style, className } = VARIANT_STYLES[variant];
 
-  const showMenu = modelFile !== undefined || canCopy || canRevealInFolder;
+  const showMenu = canCopy || canRevealInFolder;
 
   async function handleCopyImage(): Promise<void> {
     setMenuPos(null);
@@ -173,35 +155,6 @@ export function ChatImageView({
   async function handleRevealInFolder(): Promise<void> {
     setMenuPos(null);
     await revealImage();
-  }
-
-  async function handleModelAction(action: 'open' | 'reveal'): Promise<void> {
-    if (!modelFile || modelPending) return;
-    setModelPending(action);
-    try {
-      // 意识链路:GLB 已在媒体总仓,按 URL 解析本机文件即可,不依赖宿主
-      // mivo key。open 的 IPC 失败以 throwIpcError 编码抛出,由 catch 统一 toast。
-      if (action === 'open') {
-        await window.electronAPI.openMediaWithDefaultApp({ url: modelFile.url });
-      } else {
-        const res = await window.electronAPI.showItemInFolder({ url: modelFile.url });
-        if (!res.success) {
-          toast.error(res.error ?? t('chat.media.openFolderFailed'));
-        }
-      }
-    } catch (err) {
-      // openMediaWithDefaultApp 走 throwIpcError 编码([CODE] message),按
-      // 规则 13 用 extractIpcError 解码后展示;非 IPC 错误回退 i18n 兜底文案。
-      toast.error(
-        extractIpcError(err)?.message ??
-          (action === 'open'
-            ? t('chat.media.openModelFailed', 'Failed to open model')
-            : t('chat.media.openFolderFailed')),
-      );
-    } finally {
-      setModelPending(null);
-      setMenuPos(null);
-    }
   }
 
   return (
@@ -238,19 +191,7 @@ export function ChatImageView({
           // 会话内翻图的数据源:lightbox 打开后会扫描所有带此属性的图,按 DOM
           // 顺序拼成可左右翻页的列表。见 ImageLightbox.collectGallery。
           data-gallery-src={displaySrc}
-          // 3D 模型预览图 → 弹 ModelLightbox 直接渲真模型;普通图 → 走 ImageLightbox。
-          // model-viewer 只原生支持 glTF/GLB,非此两者退回 2D 预览,
-          // 用户仍可右键 "打开模型" 用系统程序打开。
-          onClick={(e) => {
-            const next =
-              modelFile && ['GLB', 'GLTF'].includes(modelFile.format.toUpperCase())
-                ? 'model'
-                : 'image';
-            // 打 image lightbox 前,在被点的这张图上做个临时标记,让 lightbox
-            // 精确定位到用户点的这张(而不是按 src 搜到的第一张)。model 路径
-            // 不进 gallery,不标记。
-            setLightboxOpen(next);
-          }}
+          onClick={() => setLightboxOpen(true)}
           onContextMenu={(e) => {
             if (!showMenu) return;
             e.preventDefault();
@@ -273,8 +214,6 @@ export function ChatImageView({
         <DropdownMenu
           open={menuPos !== null}
           onOpenChange={(open) => {
-            // 下载/打开 in-flight 时不允许外部关闭菜单,避免用户以为没生效。
-            if (!open && modelPending) return;
             if (!open) setMenuPos(null);
           }}
         >
@@ -293,58 +232,22 @@ export function ChatImageView({
             />
           </DropdownMenuTrigger>
           <DropdownMenuContent align="start" sideOffset={2}>
-            {modelFile ? (
-              <>
-                <DropdownMenuItem
-                  disabled={modelPending !== null}
-                  onSelect={(e) => {
-                    // 阻止 Radix 默认的 close-on-select,等下载完成再关菜单。
-                    e.preventDefault();
-                    void handleModelAction('open');
-                  }}
-                >
-                  {modelPending === 'open' ? (
-                    <Spinner size={16} className="mr-2" />
-                  ) : (
-                    <Box className="mr-2 h-4 w-4" />
-                  )}
-                  {t('chat.media.openModel', 'Open model')}
-                </DropdownMenuItem>
-                <DropdownMenuItem
-                  disabled={modelPending !== null}
-                  onSelect={(e) => {
-                    e.preventDefault();
-                    void handleModelAction('reveal');
-                  }}
-                >
-                  {modelPending === 'reveal' ? (
-                    <Spinner size={16} className="mr-2" />
-                  ) : (
-                    <FolderOpen className="mr-2 h-4 w-4" />
-                  )}
-                  {t('chat.media.revealModel', 'Reveal model in folder')}
-                </DropdownMenuItem>
-              </>
-            ) : (
-              <>
-                {canCopy && (
-                  <DropdownMenuItem onClick={handleCopyImage}>
-                    <Copy className="mr-2 h-4 w-4" />
-                    {t('chat.media.copyImage')}
-                  </DropdownMenuItem>
-                )}
-                {canRevealInFolder && (
-                  <DropdownMenuItem onClick={handleRevealInFolder}>
-                    <FolderOpen className="mr-2 h-4 w-4" />
-                    {t('chat.media.revealImage')}
-                  </DropdownMenuItem>
-                )}
-              </>
+            {canCopy && (
+              <DropdownMenuItem onClick={handleCopyImage}>
+                <Copy className="mr-2 h-4 w-4" />
+                {t('chat.media.copyImage')}
+              </DropdownMenuItem>
+            )}
+            {canRevealInFolder && (
+              <DropdownMenuItem onClick={handleRevealInFolder}>
+                <FolderOpen className="mr-2 h-4 w-4" />
+                {t('chat.media.revealImage')}
+              </DropdownMenuItem>
             )}
           </DropdownMenuContent>
         </DropdownMenu>
       ) : null}
-      {lightboxOpen === 'image' &&
+      {lightboxOpen &&
         (annotationSourceUrl && annotationStrokes?.length && displaySrc === src ? (
           // 历史带标注图的再编辑视图:打开未烧录原图 + 持久化笔迹(可撤销/
           // 续画,出口是"发送到对话"生成新消息)。displaySrc !== src 说明是
@@ -363,12 +266,6 @@ export function ChatImageView({
             filename={filename}
             src={displaySrc} enableGallery onClose={closePreview} />
         ))}
-      {lightboxOpen === 'model' && modelFile && (
-        <ModelLightbox
-          source={{ kind: 'blob', url: modelFile.url, poster: displaySrc }}
-          onClose={closePreview}
-        />
-      )}
     </>
   );
 }

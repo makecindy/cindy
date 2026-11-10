@@ -89,16 +89,15 @@ describe('classifyMarkdownHref', () => {
     expect(classifyMarkdownHref('file:///abs/a.svg')).toBe('image-local');
   });
 
-  it('returns model-local for 3D model extensions (case-insensitive)', () => {
-    expect(classifyMarkdownHref('/abs/character.glb')).toBe('model-local');
-    expect(classifyMarkdownHref('~/Downloads/character.fbx')).toBe('model-local');
-    expect(classifyMarkdownHref('C:\\models\\char.FBX')).toBe('model-local');
-    expect(classifyMarkdownHref('assets/scene.GLB')).toBe('model-local');
+  it('uses the ordinary local-file route for 3D extensions (case-insensitive)', () => {
+    expect(classifyMarkdownHref('/abs/character.glb')).toBe('text-local');
+    expect(classifyMarkdownHref('~/Downloads/character.fbx')).toBe('text-local');
+    expect(classifyMarkdownHref('C:\\models\\char.FBX')).toBe('text-local');
+    expect(classifyMarkdownHref('assets/scene.GLB')).toBe('text-local');
   });
 
-  it('returns model-local for .gltf — model check must beat the text fallback', () => {
-    // .gltf 底层是 JSON;若 model 分支排在 text 判定之后会被 'text-local' 抢走。
-    expect(classifyMarkdownHref('/abs/scene.gltf')).toBe('model-local');
+  it('uses the ordinary local-file route for glTF', () => {
+    expect(classifyMarkdownHref('/abs/scene.gltf')).toBe('text-local');
   });
 
   // Trailing-separator paths classify as 'directory' so the renderer can

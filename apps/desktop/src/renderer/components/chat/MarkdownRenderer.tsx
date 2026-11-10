@@ -65,7 +65,6 @@ import { useTranslation } from 'react-i18next';
 import { cn, basename } from '@/lib/utils';
 import {
   looksLikeFilePath,
-  MODEL_EXT_RE,
   normalizeMarkdownImageSrc,
   resolveLocalPath,
   resolveLocalPathSmart,
@@ -101,7 +100,6 @@ import {
   peekRemotePathVerdict,
   peekRemotePathVerdictForRender,
   remotePathVerdictKey,
-  downloadRemoteChatEntry,
   subscribeRemotePathVerdictChange,
   verifyRemotePathCached,
 } from '@/lib/remoteFileOpen';
@@ -129,7 +127,6 @@ import { isManagedMarkdownVideoUrl, markdownMediaFilename } from './markdownMedi
 import { MarkdownDiffBlock } from './MarkdownDiffBlock';
 import { MarkdownMermaidBlock } from './MarkdownMermaidBlock';
 import { TextLightbox } from './lazyPreviewLightboxes';
-import { ModelLightbox } from './ModelLightbox';
 import { useFileChipContextMenu } from './useFileChipContextMenu';
 import {
   isHtmlFilePath,
@@ -992,7 +989,6 @@ function LightboxImage({
 
 function localKindFromAbsPath(absPath: string, fallback: MarkdownLocalKind): MarkdownLocalKind {
   if (/\.(png|jpe?g|gif|webp|svg|bmp|ico)(\?.*)?$/i.test(absPath)) return 'image';
-  if (MODEL_EXT_RE.test(absPath)) return 'model';
   return fallback;
 }
 
@@ -1403,7 +1399,6 @@ async function activateResolvedLocalTarget(
   },
   setLightboxSrc: (src: string) => void,
   setTextLightboxFile: (file: { path: string; name: string; line?: number } | null) => void,
-  setModelLightboxPath: (absPath: string | null) => void,
 ): Promise<void> {
   const remoteOrigin = isRemoteFileOrigin(ctx.origin) ? ctx.origin : null;
   // 目录 chip:定位进侧边栏文件浏览器(远程零特判——file-browser plugin 自身
@@ -1444,24 +1439,6 @@ async function activateResolvedLocalTarget(
     if (cachePath) setLightboxSrc(toLocalFileUrl(cachePath));
     return;
   }
-  // 3D 模型:.glb/.gltf → 应用内 ModelLightbox;.fbx → Finder 定位。
-  // FBX 不做应用内预览(model-viewer 只认 glTF;three.js 自渲的 Phong 观感
-  // 与 GLB 差异大反而误导),也不能丢给 openPath——macOS「预览」不认 FBX
-  // 会弹"文件已损坏"的误导弹窗,定位到文件让用户拖进 DCC 才是本意。
-  if (target.localKind === 'model') {
-    if (remoteOrigin) {
-      // 3D 远程本期不做(xdt-model:// 无远程管线):下载到本地并在文件管理器
-      // 定位,不误开本机同路径文件。
-      await downloadRemoteChatEntry(remoteOrigin, ctx.workingDir, target.absPath);
-      return;
-    }
-    if (/\.fbx(\?.*)?$/i.test(target.absPath)) {
-      void window.electronAPI.showItemInFolder({ filePath: target.absPath });
-      return;
-    }
-    setModelLightboxPath(target.absPath);
-    return;
-  }
   if (!(await shouldOpenTextLightboxForOrigin(ctx, target.absPath))) return;
   setTextLightboxFile({
     path: target.absPath,
@@ -1475,8 +1452,7 @@ export function QuestionReferenceText({ text, onPreviewOpenChange }: { text: str
   const ctx = useChatSessionFile();
   const [image, setImage] = useState<string | null>(null);
   const [file, setFile] = useState<{ path: string; name: string; line?: number } | null>(null);
-  const [model, setModel] = useState<string | null>(null);
-  const previewOpen = !!(image || file || model);
+  const previewOpen = !!(image || file);
   useEffect(() => {
     onPreviewOpenChange?.(previewOpen);
     return () => onPreviewOpenChange?.(false);
@@ -1496,12 +1472,10 @@ export function QuestionReferenceText({ text, onPreviewOpenChange }: { text: str
         anchorProps={{}}
         setLightboxSrc={setImage}
         setTextLightboxFile={setFile}
-        setModelLightboxPath={setModel}
       >{part.text}</MarkdownTargetLink>
     ) : part.text)}
     {image && <ImageLightbox src={image} onClose={() => setImage(null)} />}
     {file && <TextLightbox filePath={file.path} fileName={file.name} initialLine={file.line} onClose={() => setFile(null)} />}
-    {model && <ModelLightbox source={{ kind: 'local', absPath: model }} onClose={() => setModel(null)} />}
   </>;
 }
 
@@ -1513,7 +1487,6 @@ function MarkdownTargetLink({
   localFileRefs,
   setLightboxSrc,
   setTextLightboxFile,
-  setModelLightboxPath,
   anchorProps,
   allowPrivilegedLinks,
   fromBarePath,
@@ -1528,7 +1501,6 @@ function MarkdownTargetLink({
   localFileRefs?: readonly KnownLocalFileRef[];
   setLightboxSrc: (src: string) => void;
   setTextLightboxFile: (file: { path: string; name: string; line?: number } | null) => void;
-  setModelLightboxPath: (absPath: string | null) => void;
   anchorProps: Record<string, unknown>;
   allowPrivilegedLinks: boolean;
   /**
@@ -1561,6 +1533,8 @@ function MarkdownTargetLink({
       const element = document.getElementById(target.id);
       if (element) element.scrollIntoView({ behavior: 'smooth', block: 'start' });
       else toast.error(t('chat.markdownRenderer.anchorNotFound'));
+    } else if (target.kind === 'media-file-url') {
+      setTextLightboxFile({ path: target.href, name: basename(target.href) });
     } else if (target.kind === 'local-image-url') {
       setLightboxSrc(rewriteToRemoteMediaOrigin(target.href, remoteMediaOrigin));
     } else if (target.kind === 'local-candidate' && !fromBarePath) {
@@ -1599,7 +1573,7 @@ function MarkdownTargetLink({
         } else {
           await activateResolvedLocalTarget(
             resolved, { ...fileCtx, sidebarTargetSessionId },
-            setLightboxSrc, setTextLightboxFile, setModelLightboxPath,
+            setLightboxSrc, setTextLightboxFile,
           );
         }
       } catch {
@@ -1634,7 +1608,6 @@ function MarkdownTargetLink({
         { ...fileCtx, sidebarTargetSessionId },
         setLightboxSrc,
         setTextLightboxFile,
-        setModelLightboxPath,
       );
     // 正文裸写的路径:一律走下划线链接形态,不进等宽 chip 分支。它的未点亮态是普通
     // 正文,套上等宽会让同一句里点亮/未点亮的两条路径在字体、底色、下划线三处齐变
@@ -1724,7 +1697,6 @@ function InlineCodeWithTarget({
   props,
   setLightboxSrc,
   setTextLightboxFile,
-  setModelLightboxPath,
   sessionId,
 }: {
   text: string;
@@ -1734,7 +1706,6 @@ function InlineCodeWithTarget({
   props: Record<string, unknown>;
   setLightboxSrc: (src: string) => void;
   setTextLightboxFile: (file: { path: string; name: string; line?: number } | null) => void;
-  setModelLightboxPath: (absPath: string | null) => void;
   /** 当前会话 id;透传给 FileTargetChip 的"打开方式"菜单。 */
   sessionId?: string;
 }) {
@@ -1747,6 +1718,23 @@ function InlineCodeWithTarget({
     workingDir,
     isStreaming,
   );
+
+  if (target.kind === 'media-file-url') {
+    return (
+      <code className={cn(INLINE_CODE_CLASS)} {...props}>
+        <MarkdownTargetLink
+          href={target.href}
+          workingDir={workingDir}
+          isStreaming={isStreaming}
+          sessionId={sessionId}
+          allowPrivilegedLinks
+          anchorProps={{}}
+          setLightboxSrc={setLightboxSrc}
+          setTextLightboxFile={setTextLightboxFile}
+        >{children}</MarkdownTargetLink>
+      </code>
+    );
+  }
 
   // Only uniquely-resolved local files/directories get the chip upgrade.
   // Everything else (regular inline code, unresolved file-looking text,
@@ -1773,7 +1761,6 @@ function InlineCodeWithTarget({
           { ...fileCtx, sidebarTargetSessionId },
           setLightboxSrc,
           setTextLightboxFile,
-          setModelLightboxPath,
         )
       }
       sessionId={sessionId}
@@ -1868,8 +1855,6 @@ const MarkdownRendererBase = memo(function MarkdownRendererBase({
     name: string;
     line?: number;
   } | null>(null);
-  // model-local chip/link click → in-app 3D preview (ModelLightbox, local mode).
-  const [modelLightboxPath, setModelLightboxPath] = useState<string | null>(null);
   // workingDir and localFileRefs are stable within a session lifecycle — they
   // only change on session switch or when the message list gains a new user
   // attachment. So in steady-state streaming, the components object is still
@@ -1963,7 +1948,6 @@ const MarkdownRendererBase = memo(function MarkdownRendererBase({
             props={safeProps}
             setLightboxSrc={setLightboxSrc}
             setTextLightboxFile={setTextLightboxFile}
-            setModelLightboxPath={setModelLightboxPath}
             sessionId={currentSessionId}
           >
             {children}
@@ -2036,7 +2020,6 @@ const MarkdownRendererBase = memo(function MarkdownRendererBase({
             localFileRefs={localFileRefs}
             setLightboxSrc={setLightboxSrc}
             setTextLightboxFile={setTextLightboxFile}
-            setModelLightboxPath={setModelLightboxPath}
             anchorProps={safeProps}
             allowPrivilegedLinks={allowPrivilegedLinks}
             fromBarePath={fromBarePath}
@@ -2109,12 +2092,6 @@ const MarkdownRendererBase = memo(function MarkdownRendererBase({
           fileName={textLightboxFile.name}
           initialLine={textLightboxFile.line}
           onClose={() => setTextLightboxFile(null)}
-        />
-      )}
-      {modelLightboxPath && (
-        <ModelLightbox
-          source={{ kind: 'local', absPath: modelLightboxPath }}
-          onClose={() => setModelLightboxPath(null)}
         />
       )}
     </div>

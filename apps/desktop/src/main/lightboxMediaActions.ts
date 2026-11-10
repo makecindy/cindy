@@ -23,6 +23,7 @@ import { isDangerousAttachmentName } from '../shared/attachmentSafety';
 
 import { isIpcErrorCode } from '../shared/ipc-errors';
 import { throwIpcError } from './utils/ipcValidate';
+import { MODEL_MIME_BY_EXT } from './cindy-media/modelMediaMime';
 
 // ---------------------------------------------------------------------------
 // 纯函数:媒体源分类
@@ -485,7 +486,7 @@ export function createLightboxMediaHandlers(deps: LightboxMediaDeps): LightboxMe
           'audio/wav': '.wav',
           'audio/ogg': '.ogg',
           'application/pdf': '.pdf',
-          'model/gltf-binary': '.glb',
+          ...Object.fromEntries(Object.entries(MODEL_MIME_BY_EXT).map(([ext, mime]) => [mime, ext])),
         };
         suggested = `${mime.startsWith('image/') ? 'image' : 'media'}-${deps.now()}${mediaExt[mime] ?? (mime.startsWith('image/') ? extForMimeType(mime) : '.bin')}`;
       } else {

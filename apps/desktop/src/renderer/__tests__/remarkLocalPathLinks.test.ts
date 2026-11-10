@@ -35,6 +35,15 @@ function linkUrls(children: PhrasingContent[]): string[] {
 }
 
 describe('remarkLocalPathLinks', () => {
+  // Plain managed file references must use the same clickable entry as authored links (unit).
+  it('links a managed blob reference without splitting out a fake relative path', () => {
+    const url = 'cindy-media://blobs/' + 'a'.repeat(64) + '.glb';
+    const out = runOnText('下载 ' + url + '\n另见 src/App.tsx');
+    expect(linkUrls(out)).toEqual([url, 'src/App.tsx']);
+    expect(linkUrls(runOnText(url + '/extra.glb'))).toEqual([]);
+    expect(linkUrls(runOnText('https://example.com/' + url))).toEqual([]);
+  });
+
   // ── 应该 linkify 的场景 ──
 
   it('正文里的相对路径(带分隔符 + 扩展名)', () => {

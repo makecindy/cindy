@@ -26,6 +26,8 @@
 
 ## 哪些内容进入媒体总仓
 
+3D 文件的媒体入仓支持 GLB / GLTF / OBJ / FBX / STL / PLY / DAE / 3MF / 3DS，按内容识别，不信任文件名或上游 MIME。普通 JSON、XML、ZIP 不因此获准入仓；GLTF、DAE、3MF 需通过模型结构校验。现有归属、大小和配额限制不变。
+
 - Cindy 需要拥有、缓存或持久化副本的图片、视频、音频和 3D 模型，统一进入
   `apps/desktop/src/main/cindy-media/` 管理的内容寻址仓。
 - 用户磁盘上的原始文件如果只需就地读取，可以继续走已有受控本地文件通道；不要仅为

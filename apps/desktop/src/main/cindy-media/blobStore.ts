@@ -15,6 +15,7 @@
  */
 
 import { app } from 'electron';
+import { MODEL_MIME_BY_EXT } from './modelMediaMime';
 import { createHash, randomUUID } from 'node:crypto';
 import { constants as fsConstants, type Stats } from 'node:fs';
 import path from 'node:path';
@@ -46,7 +47,7 @@ const MIME_BY_EXT: Record<string, string> = {
   '.wav': 'audio/wav',
   '.m4a': 'audio/mp4',
   '.ogg': 'audio/ogg',
-  '.glb': 'model/gltf-binary',
+  ...MODEL_MIME_BY_EXT,
 };
 
 const EXT_BY_MIME: Record<string, string> = {
@@ -61,7 +62,7 @@ const EXT_BY_MIME: Record<string, string> = {
   'audio/wav': '.wav',
   'audio/mp4': '.m4a',
   'audio/ogg': '.ogg',
-  'model/gltf-binary': '.glb',
+  ...Object.fromEntries(Object.entries(MODEL_MIME_BY_EXT).map(([ext, mime]) => [mime, ext])),
 };
 
 export interface WrittenBlob {

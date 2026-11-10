@@ -26,13 +26,6 @@ import { isWindowsPathLike } from '../../shared/workingDir';
 
 /** Image extension whitelist. Case-insensitive. Allows `?v=2`-style suffix. */
 const IMAGE_EXT_RE = /\.(png|jpe?g|gif|webp|svg|bmp|ico)(\?.*)?$/i;
-/** 3D model extension whitelist. .glb/.gltf open the in-app ModelLightbox;
- *  .fbx is classified as model too but activates as reveal-in-Finder (no
- *  in-app FBX preview, and openPath would hit macOS Preview's misleading
- *  "damaged file" dialog). Must be checked BEFORE the text fallback in
- *  classifyMarkdownHref — .gltf is JSON underneath and would otherwise be
- *  swallowed by 'text-local'. */
-export const MODEL_EXT_RE = /\.(glb|gltf|fbx)(\?.*)?$/i;
 /** Has any 1-10 char file extension (e.g. `.tsx`, `.md`, `.txt`). */
 const HAS_EXT_RE = /\.[a-z0-9]{1,10}(\?.*)?$/i;
 /** Windows absolute path: `C:\foo` or `C:/foo`. */
@@ -48,7 +41,6 @@ const TRAILING_SEP_RE = /[\\/]$/;
 
 export type LocalHrefKind =
   | 'image-local'
-  | 'model-local'
   | 'text-local'
   | 'external'
   | 'directory';
@@ -167,9 +159,6 @@ export function classifyMarkdownHref(href: string | undefined): LocalHrefKind {
   // and the IPC read would just fail with EISDIR).
   if (looksLikeDirectoryPath(probe)) return 'directory';
   if (IMAGE_EXT_RE.test(probe)) return 'image-local';
-  // Model check must precede the text fallback: .gltf is a JSON file and
-  // would otherwise classify as 'text-local'.
-  if (MODEL_EXT_RE.test(probe)) return 'model-local';
   return 'text-local';
 }
 

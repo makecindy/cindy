@@ -10,8 +10,7 @@ import { FileTypeIcon } from '@/components/ui/file-type-icon';
  * 交互:
  *   - 左键 → 与正文文件链接同策(对齐 MarkdownRenderer activateResolvedLocalTarget):
  *     可识别文件直接在 Cindy 内打开——HTML → 安全网页预览,文本/代码 →
- *     TextLightbox,图片 → ImageLightbox,glb/gltf → ModelLightbox;其余(xlsx /
- *     pdf 等)交系统默认应用(远程会话取回缓存副本再打开)。
+ *     TextLightbox,图片 → ImageLightbox;其余走统一文件预览或不可预览文件信息。
  *   - 右键 → 共享文件 chip 菜单(复制 / 路径 / 定位 / 打开方式…),与聊天里其它
  *     文件 chip 一致。
  *
@@ -52,7 +51,6 @@ import { isRemoteFileOrigin, toRemoteMediaOrigin } from '@/lib/sessionFileOrigin
 import {
   fetchChatFileWithToasts,
   remotePathVerdictKey,
-  downloadRemoteChatEntry,
   subscribeRemotePathVerdictChange,
   type RemotePathVerdict,
   verifyRemotePathCached,
@@ -65,7 +63,6 @@ import { useFileChipContextMenu } from './useFileChipContextMenu';
 import { activateInlineLinkFromKeyboard } from './linkInteraction';
 import { ImageLightbox } from './ImageLightbox';
 import { TextLightbox } from './lazyPreviewLightboxes';
-import { ModelLightbox } from './ModelLightbox';
 import { isHtmlFilePath, openHtmlFileByPreference } from './useOpenWithMenu';
 
 function formatArtifactSummaryValue(summary: DocumentArtifactMetadata['summary']): number | string {
@@ -259,7 +256,6 @@ function GeneratedFileChip({
   const remoteOrigin = isRemoteFileOrigin(fileCtx.origin) ? fileCtx.origin : null;
   const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
   const [textLightboxOpen, setTextLightboxOpen] = useState(false);
-  const [modelLightboxPath, setModelLightboxPath] = useState<string | null>(null);
   const [thumbnailFailed, setThumbnailFailed] = useState(false);
   const htmlWithSession = isHtmlFilePath(file.path) ? fileCtx.sessionId : undefined;
   const sidebarTargetSessionId = useSidebarTargetSessionId(htmlWithSession);
@@ -278,8 +274,7 @@ function GeneratedFileChip({
   });
 
   // 左键与正文文件链接同策(见文件头注释)。HTML 按网页打开偏好渲染；其它
-  // 非文本兜底交给 shouldOpenTextLightboxForOrigin:本地 openPath、远程取回
-  // 缓存副本,均含失败 toast。
+  // 所有非图片文件复用统一文件入口,按类型预览或显示文件信息。
   const open = async (): Promise<void> => {
     const kind = classifyMarkdownHref(file.path);
     if (kind === 'image-local') {
@@ -300,19 +295,6 @@ function GeneratedFileChip({
       }
       const cachePath = await fetchChatFileWithToasts(remoteOrigin, fileCtx.workingDir, file.path);
       if (cachePath) setLightboxSrc(toLocalFileUrl(cachePath));
-      return;
-    }
-    if (kind === 'model-local') {
-      if (remoteOrigin) {
-        await downloadRemoteChatEntry(remoteOrigin, fileCtx.workingDir, file.path);
-        return;
-      }
-      // FBX 无应用内预览且 openPath 有误导弹窗风险(正文链接同款取舍)→ 定位。
-      if (/\.fbx$/i.test(file.path)) {
-        void window.electronAPI.showItemInFolder({ filePath: file.path });
-        return;
-      }
-      setModelLightboxPath(file.path);
       return;
     }
     if (htmlWithSession) {
@@ -479,12 +461,6 @@ function GeneratedFileChip({
           filePath={file.path}
           fileName={file.name}
           onClose={() => setTextLightboxOpen(false)}
-        />
-      )}
-      {modelLightboxPath && (
-        <ModelLightbox
-          source={{ kind: 'local', absPath: modelLightboxPath }}
-          onClose={() => setModelLightboxPath(null)}
         />
       )}
     </>

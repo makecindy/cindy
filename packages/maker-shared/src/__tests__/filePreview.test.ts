@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { attachmentPreviewKind } from '../attachmentPreview.js';
 import {
   describeTextPreviewFailure,
   formatByteSize,
@@ -11,6 +12,14 @@ import {
 } from '../filePreview.js';
 
 describe('file preview shared model', () => {
+  // Generic 3D file preview replaces unsupported-file fallback, including text-based glTF (unit).
+  it.each(['glb', 'gltf', 'obj', 'fbx', 'stl', 'ply', 'dae', '3mf', '3ds'])(
+    'routes %s files to the model preview by extension', (ext) => {
+      expect(attachmentPreviewKind('scene.' + ext.toUpperCase())).toBe('model');
+      expect(attachmentPreviewKind('scene.' + ext + '.zip')).toBe('file');
+    },
+  );
+
   it('formats preview status without implying eager file reads', () => {
     expect(textPreviewStatusText({ status: 'idle' }, true)).toContain('按需读取远程文本预览');
     expect(textPreviewStatusText({ status: 'loading' }, true)).toBe('正在从远程电脑读取文本预览');

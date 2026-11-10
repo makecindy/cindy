@@ -1,3 +1,5 @@
+import { sniffModelMediaMime } from './modelMediaMime';
+
 /**
  * sniffMediaMime.ts — 媒体总仓支持类型的保守魔数识别。
  * ---------------------------------------------------------------------------
@@ -216,5 +218,5 @@ export function sniffMediaMime(bytes: Uint8Array, declaredMime = ''): string | n
 
   if (looksLikeWebm(bytes)) return 'video/webm';
   if (looksLikeGlb(bytes)) return 'model/gltf-binary';
-  return null;
+  return sniffModelMediaMime(bytes);
 }

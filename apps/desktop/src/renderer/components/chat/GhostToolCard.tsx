@@ -44,7 +44,6 @@ import { Check, ChevronDown, Copy, FolderOpen, Ghost, Loader2 } from 'lucide-rea
 
 import { ImageLightbox } from './ImageLightbox';
 import { mailCardFooterHtml, updateMailCardDocument } from './mailCardFooter';
-import { ModelLightbox } from './ModelLightbox';
 import { GhostCardLinkConfirm, GhostCardPromptPanel } from './GhostCardHostPrompts';
 import { GhostCardModelSelect } from './GhostCardModelSelect';
 import { toast } from '@/lib/toast';
@@ -309,9 +308,6 @@ function GhostCardCanvas({
     }
   }, [html, mail]);
   const [lightbox, setLightbox] = useState<{ src: string; galleryId: string } | null>(null);
-  // data-ghost-model 声明的 3D 预览:点击开应用内 3D 查看器(GLB 已在媒体
-  // 总仓,blob 来源直读,预览图作 poster)。
-  const [modelView, setModelView] = useState<{ url: string; poster: string } | null>(null);
   // data-ghost-prompt 类动作的宿主输入面板(与老基座 ChatImageActions 的
   // imgPrompt popover 同体验:点按钮 → 弹输入框 → 回车/发送)。卡内零脚本,
   // 输入框是宿主交互面(同 lightbox 一层),文字随 card-action 的 prompt 回传。
@@ -616,23 +612,17 @@ function GhostCardCanvas({
           img.style.opacity = '1';
         });
       }
-      // 图片点击的四级路由:data-ghost-action(动作按钮)> data-ghost-link
-      // (外链,均由下面的循环挂)> data-ghost-model(3D 预览 → 应用内 3D
-      // 查看器)> 普通看大图 lightbox。
+      // 图片上的动作和外链优先，其余图片统一进入看图器。
       if (!img.closest('[data-ghost-action], [data-ghost-link]')) {
         img.style.cursor = 'pointer';
-        const modelUrl = img.dataset.ghostModel;
-        const galleryId = modelUrl
-          ? null
-          : ghostCardGalleryId(callId, galleryImageIndex++);
+        const galleryId = ghostCardGalleryId(callId, galleryImageIndex++);
         img.addEventListener('click', (e) => {
           e.stopPropagation();
           // 点击发生在 iframe 里,焦点会留在 guest 文档——keydown 不跨文档冒泡,
           // 不挪回宿主的话 Esc/方向键/缩放键都进不了 lightbox(与
           // GhostMediaLightboxHost 同坑同解:blur 掉 iframe,键盘立即归位)。
           iframeRef.current?.blur();
-          if (modelUrl) setModelView({ url: modelUrl, poster: img.src });
-          else if (galleryId) setLightbox({ src: img.src, galleryId });
+          setLightbox({ src: img.src, galleryId });
         });
       }
       // 右键 → 宿主图片菜单(复制图片 / 打开所在目录,与基座 ChatImageView 同
@@ -1102,12 +1092,6 @@ function GhostCardCanvas({
           enableGallery
           onClose={() => setLightbox(null)}
           sessionId={sessionId}
-        />
-      ) : null}
-      {modelView ? (
-        <ModelLightbox
-          source={{ kind: 'blob', url: modelView.url, poster: modelView.poster }}
-          onClose={() => setModelView(null)}
         />
       ) : null}
     </div>

@@ -40,7 +40,7 @@ const picked = await cindy.pick({
 // {ok:true,files:[{name,size,mimeType,ref,sha256?,deposit?,path?}]}
 ```
 
-需要 pick:true；into:'library' 还需 library:true。图片、音视频和 glb 也可用 into:'media'。
+需要 pick:true；into:'library' 还需 library:true。图片、音视频和 GLB / GLTF / OBJ / FBX / STL / PLY / DAE / 3MF / 3DS 也可用 into:'media'。
 accept 是扩展名或 MIME 数组，作为选择提示；不要拿它代替业务类型校验。一次最多
 32 个文件。取消返回 CANCELLED，对话框忙时返回 BUSY；不要自动重弹。
 多选失败可能附上已成功的 files 和 failedFile，保留成功引用并说明未完成项。
