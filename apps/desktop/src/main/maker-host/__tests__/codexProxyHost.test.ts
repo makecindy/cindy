@@ -6581,8 +6581,8 @@ describe('codex proxy host', () => {
   // 测试价值
   // - 生产入口与可观察结果：ensureCodexProxyReady 装上的 transformRequest。
   //   cindy_custom 命名空间里，不支持 Responses custom tools 的连接仍要把 exec 从
-  //   type:'custom' 转成 function；产品提示词注入仍跳过（#9759）。
-  // - Bug／规则依据：#9759。命名空间包装原先只放行工具 ID 校正，exec 适配被整段跳过。
+  //   type:'custom' 转成 function；产品提示词要注入，模型改写仍跳过（#9759）。
+  // - Bug／规则依据：#9759。命名空间包装放行提示词注入与 exec 适配，但不跑模型改写。
   // - 现有覆盖缺口：上面的 round-trip 走的是普通 /responses，不经过命名空间包装。
   // - 最小失败输入：已登记的 Responses 路由，url 为 /_cindy/custom-provider/<routeId>/responses，
   //   工具 type:'custom' name:'exec'，并注册了产品提示词。
@@ -6604,13 +6604,29 @@ describe('codex proxy host', () => {
         },
       },
     });
+    // 自定义供应商没有 modelIdRewrite，真实改写本来就是空操作。这里给它装上前缀剥离，
+    // 模型改写 transform 一旦被调用就会改掉 model；它没被调用时 model 保持原样。
+    provider.routing.codex!.modelIdRewrite = { stripPrefix: 'namespace-' };
     expect(provider.routing.codex?.supportsResponsesCustomTools).toBe(false);
     const catalog = { ...BUNDLED_CATALOG, providers: [...BUNDLED_CATALOG.providers, provider] };
     setActiveCatalog(catalog);
-    const route = deriveCodexCustomProviderRoutes(catalog)[0]!;
+    const route = deriveCodexCustomProviderRoutes(catalog).find(item => item.providerId === provider.id)!;
     host.setCodexAppliedCustomProviderRoutes([route]);
     host.registerComposed('session-namespace-exec', 'thread-namespace-exec', 'PRODUCT_PROMPT');
     setSessionProvider('session-namespace-exec', provider.id);
+    // 桩默认返回 null。这里按真实注入行为把 registry 里的产品提示词拼进 instructions，
+    // 才能证明命名空间包装真的放行了注入 transform，而不是只放行了 exec 适配。
+    mockState.injectionTransform.mockImplementation((body: unknown, ctx: unknown) => {
+      if (!body || typeof body !== 'object' || Array.isArray(body)) return null;
+      const record = body as { instructions?: unknown };
+      const before = typeof record.instructions === 'string' ? record.instructions : '';
+      const headers = ctx && typeof ctx === 'object' && 'headers' in ctx
+        ? (ctx as { headers?: Record<string, string> }).headers
+        : undefined;
+      const product = mockState.capturedRegistry?.get(headers?.['thread-id'] ?? '');
+      if (!product || before.includes(product)) return null;
+      return { ...record, instructions: before ? `${before}\n\n${product}` : product };
+    });
     mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
       url: 'http://127.0.0.1:43210',
       dispose: vi.fn(async () => undefined),
@@ -6639,7 +6655,8 @@ describe('codex proxy host', () => {
         if (next !== null && next !== undefined) current = next;
       }
       expect(current).toMatchObject({
-        instructions: 'base instructions',
+        instructions: 'base instructions\n\nPRODUCT_PROMPT',
+        model: 'namespace-model',
         tools: [expect.objectContaining({
           type: 'function',
           name: 'exec',
@@ -6651,7 +6668,16 @@ describe('codex proxy host', () => {
           arguments: '{"input":"text(\\"local\\")"}',
         })],
       });
-      expect((current as { instructions: string }).instructions).not.toContain('PRODUCT_PROMPT');
+      // 模型改写仍不跑：命名空间请求保留冻结路由自己的 model。
+      // 同一供应商走普通 /responses 时，同一条 transform 会把前缀剥掉，证明断言有效。
+      expect((current as { model: string }).model).toBe('namespace-model');
+      let ordinary: unknown = body;
+      const ordinaryCtx = { ...ctx, url: '/responses' };
+      for (const transform of transforms) {
+        const next = transform(ordinary, ordinaryCtx);
+        if (next !== null && next !== undefined) ordinary = next;
+      }
+      expect((ordinary as { model: string }).model).toBe('model');
     } finally {
       host.unregister('session-namespace-exec');
       clearSessionProvider('session-namespace-exec');
@@ -8292,6 +8318,74 @@ describe('codex proxy host', () => {
     });
     clearSessionProvider('session-minimax');
     setCustomProviders([]);
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：ensureCodexProxyReady 装上的 transformRequest。
+  //   MiniMax 上游的命名空间请求里 reasoning.summary 被移除、xhigh 被收敛成 high。
+  // - Bug／规则依据：#9759。命名空间包装跳过了 MiniMax 参数兼容 transform，
+  //   Codex 每轮强制的 summary:'auto' 会直接 400。
+  // - 现有覆盖缺口：上面的收敛用例走普通 /responses，不经过命名空间包装。
+  // - 最小失败输入：MiniMax 上游、已登记的 Responses 路由，
+  //   url 为 /_cindy/custom-provider/<routeId>/responses，reasoning 为 xhigh + summary。
+  // - tier：unit。进程内代理桩，不访问网络。
+  it('clamps MiniMax reasoning on a custom-provider namespace route', async () => {
+    const host = await freshCodexProxyHost();
+    const { BUNDLED_CATALOG, buildUserProvider } = await import('@cindy/model-providers');
+    const { setActiveCatalog } = await import('../active-catalog.js');
+    const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+    const { deriveCodexCustomProviderRoutes } = await import('../codex-custom-provider-route.js');
+    const provider = buildUserProvider({
+      id: 'namespace-minimax',
+      name: 'Namespace MiniMax',
+      runtimes: {
+        codex: {
+          baseUrl: 'https://api.minimaxi.com/v1',
+          wireProtocol: 'openai-responses',
+          models: [{ id: 'MiniMax-M3', name: 'MiniMax M3', reasoning: true, reasoningEfforts: ['high'] }],
+        },
+      },
+    });
+    const catalog = { ...BUNDLED_CATALOG, providers: [...BUNDLED_CATALOG.providers, provider] };
+    setActiveCatalog(catalog);
+    const route = deriveCodexCustomProviderRoutes(catalog).find(item => item.providerId === provider.id)!;
+    host.setCodexAppliedCustomProviderRoutes([route]);
+    host.registerComposed('session-namespace-minimax', 'thread-namespace-minimax', 'PRODUCT_PROMPT');
+    setSessionProvider('session-namespace-minimax', provider.id);
+    mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
+      url: 'http://127.0.0.1:43210',
+      dispose: vi.fn(async () => undefined),
+    });
+    try {
+      await host.ensureCodexProxyReady();
+      const transforms = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0]?.transformRequest ?? [];
+      const ctx = {
+        reqId: 9760,
+        method: 'POST',
+        url: `/_cindy/custom-provider/${route.routeId}/responses`,
+        headers: { 'thread-id': 'thread-namespace-minimax' },
+        upstreamBase: 'https://api.minimaxi.com/v1',
+      };
+      let current: unknown = {
+        model: 'MiniMax-M3',
+        reasoning: { effort: 'xhigh', summary: 'auto' },
+        input: [{ role: 'user', content: 'hello' }],
+      };
+      for (const transform of transforms) {
+        const next = transform(current, ctx);
+        if (next !== null && next !== undefined) current = next;
+      }
+      expect(current).toEqual({
+        model: 'MiniMax-M3',
+        reasoning: { effort: 'high' },
+        input: [{ role: 'user', content: 'hello' }],
+      });
+    } finally {
+      host.unregister('session-namespace-minimax');
+      clearSessionProvider('session-namespace-minimax');
+      host.setCodexAppliedCustomProviderRoutes([]);
+      setActiveCatalog(BUNDLED_CATALOG);
+    }
   });
 
   it('keeps xhigh effort for non-MiniMax custom Responses providers', async () => {
@@ -10270,7 +10364,14 @@ describe('createModelRoutingTransform —— custom Provider native imagegen pre
       expect(received.at(-1)?.body).toEqual(parentBody);
       expect(await post(namespace, parentBody, 'same-provider')).toBe(200);
       expect(received.at(-1)?.body).toEqual(parentBody);
-      expect(mockState.injectionTransform).toHaveBeenCalledTimes(2);
+      // 提示词注入现在属于命名空间白名单，同供应商的命名空间请求也会跑到它。
+      // 「不继承跨供应商出站链」看的是请求体保持原样，而不是注入 transform 没被调用。
+      // 跨供应商逃逸会把 url 改写成 /responses 再跑整条链；同供应商请求保持命名空间路径。
+      const injectionUrls = () => mockState.injectionTransform.mock.calls.map(
+        ([, callCtx]) => (callCtx as { url?: string }).url ?? '',
+      );
+      expect(injectionUrls().filter(url => url === '/responses')).toHaveLength(2);
+      expect(injectionUrls().filter(url => url.startsWith('/_cindy/custom-provider/'))).toHaveLength(2);
       // Changing ownership or routing during the token read must not enable the chain.
       for (const change of ['mutation', 'unregister'] as const) {
         host.unregister('wire-source'); register();
@@ -10287,7 +10388,8 @@ describe('createModelRoutingTransform —— custom Provider native imagegen pre
         release();
         expect(await pending).toBe(503);
         expect(received).toHaveLength(count);
-        expect(mockState.injectionTransform).toHaveBeenCalledTimes(2);
+        // 授权在读 token 期间被改掉时，请求不得再进入跨供应商出站链。
+        expect(injectionUrls().filter(url => url === '/responses')).toHaveLength(2);
       }
       // Authorization remains checked after the newly enabled transform chain.
       host.unregister('wire-source'); register();
@@ -10298,7 +10400,8 @@ describe('createModelRoutingTransform —— custom Provider native imagegen pre
       const count = received.length;
       expect(await post(namespace, body, 'transform-race')).toBe(503);
       expect(received).toHaveLength(count);
-      expect(mockState.injectionTransform).toHaveBeenCalledTimes(3);
+      // 这次逃逸已经进入了出站链，所以 /responses 下的注入调用多一次。
+      expect(injectionUrls().filter(url => url === '/responses')).toHaveLength(3);
       expect(readOAuth).toHaveBeenCalledTimes(5);
     } finally {
       release(); host.unregister('wire-source'); sessions.clearSessionProvider('wire-source');

@@ -3318,6 +3318,9 @@ function createTransformRequestChain(
 ): {
   transforms: RequestTransform[];
   execFunctionAdapterTransform: RequestTransform;
+  codexTransform: RequestTransform;
+  miniMaxResponsesCompatTransform: RequestTransform;
+  providerRequestTransform: RequestTransform;
 } {
   const execFunctionAdapterTransform: RequestTransform = (body, ctx) => {
     if (!isPlainObject(body)) return null;
@@ -3352,6 +3355,8 @@ function createTransformRequestChain(
   execFunctionAdapterTransform.onRequestSettled = (requestId) => {
     execAdapter.releaseResponse(requestId);
   };
+  const codexTransform = createCodexTransform();
+  const miniMaxResponsesCompatTransform = createMiniMaxResponsesCompatTransform();
   const transforms: RequestTransform[] = [
     createArmedHttpRecoveryStripTransform(),
     createActiveStripTransform({
@@ -3371,7 +3376,7 @@ function createTransformRequestChain(
     // collab_spawn 的首个 HTTP 请求可能早于 thread/started / spawn item。强制路由
     // transform 先懒登记血缘，随后 instructions transform 才能在同一请求注入产品提示词。
     createForcedSubagentRequestTransform(),
-    createCodexTransform(),
+    codexTransform,
     createLockedSubagentExecGuardTransform(),
     createGatewayNativeWebSearchTransform(frozenAuthInjection),
     // 必须先于 xAI/MiniMax 兼容改写:先把供应商绑定的历史项降级成标准 message，
@@ -3410,7 +3415,7 @@ function createTransformRequestChain(
     createXaiResponsesCompatTransform(pricing),
     createGatewayGrokResponsesCompatTransform(frozenAuthInjection),
     createByteDanceSeedResponsesCompatTransform(),
-    createMiniMaxResponsesCompatTransform(),
+    miniMaxResponsesCompatTransform,
     createProviderModelRewriteTransform(frozenAuthInjection),
     providerRequestTransform,
     createArmedHttpRecoveryStripTransform(true),
@@ -3439,7 +3444,13 @@ function createTransformRequestChain(
   // 档位与模型改写都在上面收敛。卡片读的观察身份必须是这份最终会发出去的值。
   // 放在调试转储之后：转储只是旁路，不能盖掉它记下的出站身份。
   transforms.push(createObservedSubagentIdentityTransform());
-  return { transforms, execFunctionAdapterTransform };
+  return {
+    transforms,
+    execFunctionAdapterTransform,
+    codexTransform,
+    miniMaxResponsesCompatTransform,
+    providerRequestTransform,
+  };
 }
 
 /**
@@ -3591,17 +3602,25 @@ async function createCodexProxyHandle(
   const {
     transforms: transformChain,
     execFunctionAdapterTransform,
+    codexTransform,
+    miniMaxResponsesCompatTransform,
+    providerRequestTransform,
   } = createTransformRequestChain(
     frozenAuthInjection, execAdapter, pricing, guestProviderId !== undefined,
   );
-  // Namespaced Responses use a frozen Provider route. Preserve its native
-  // fields and model. The dedicated transform below reconciles effort against
-  // that same snapshot; ordinary session/catalog transforms stay out.
-  // execFunctionAdapterTransform is the exception: its own precondition already
-  // narrows to supportsResponsesCustomTools === false, so only connections that
-  // reject Responses custom tools are rewritten, and native custom routes are
-  // left alone (#9759).
+  // 命名空间上的 Responses 走冻结的供应商路由，要保住它自己的 model 与原生字段。
+  // 所以模型改写、会话/目录类 transform 仍然不跑；档位只由下面那条专用 transform
+  // 按同一份快照收敛。
+  // 放行的只有四类：提示词注入、供应商参数兼容（MiniMax 不接受 reasoning.summary
+  // 与 xhigh）、provider 请求归一化、exec 工具适配。工具 ID 校正本来就在白名单里。
+  // exec 适配自己的前置条件已经收窄到 supportsResponsesCustomTools === false，
+  // 原生支持 custom tools 的路由不会被改写（#9759）。
+  // 白名单按引用相等判断，必须放链里的同一个实例：providerRequestTransform 和
+  // execFunctionAdapterTransform 都挂了 errorMode / onRequestSettled，重新创建函数对不上。
   const customProviderNamespaceTransforms = new Set<RequestTransform>([
+    codexTransform,
+    miniMaxResponsesCompatTransform,
+    providerRequestTransform,
     normalizeResponsesToolItemIds,
     execFunctionAdapterTransform,
   ]);
