@@ -286,4 +286,22 @@ describe('wallpaper blur gesture persistence', () => {
     act(() => changed({ ...saved, wallpaperId: 'none' }));
     expect(screen.getByRole('slider', { name: 'settings.appearance.wallpaper.desktopBlurLabel' }).getAttribute('aria-valuenow')).toBe('12');
   });
+  // Unit: Windows Acrylic has one system strength, so the desktop blur there
+  // is a Switch. It shares wallpaperBlur with artwork, so turning it back on
+  // must restore the previous artwork strength rather than a fixed value.
+  it('uses an on/off switch for desktop blur on Windows and restores the last strength', async () => {
+    (window.electronAPI as { platform: string }).platform = 'win32';
+    saved = { ...saved, wallpaperId: 'none', desktopVisibility: 0.4, wallpaperBlur: 7 };
+    render(view());
+    expect(screen.queryByRole('slider', { name: 'settings.appearance.wallpaper.desktopBlurLabel' })).toBeNull();
+    const toggle = screen.getByRole('switch', { name: 'settings.appearance.wallpaper.desktopBlurLabel' });
+    expect(toggle.getAttribute('aria-checked')).toBe('true');
+    fireEvent.click(toggle);
+    await waitFor(() => expect(setPatch).toHaveBeenLastCalledWith({ wallpaperBlur: 0 }));
+    expect(toggle.getAttribute('aria-checked')).toBe('false');
+    fireEvent.click(toggle);
+    await waitFor(() => expect(setPatch).toHaveBeenLastCalledWith({ wallpaperBlur: 7 }));
+    act(() => changed({ ...saved, wallpaperId: 'cindy-window' }));
+    expect(thumb().getAttribute('aria-valuenow')).toBe('7');
+  });
 });

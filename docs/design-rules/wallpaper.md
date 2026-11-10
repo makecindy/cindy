@@ -113,6 +113,13 @@ clear NSWindow background needs a visually negligible alpha (0.001), restored
 when blur is cleared without overwriting the next theme's background.
 The private API is resolved at runtime; a missing addon or failed call falls back
 to the system material. Windows 11 continues to use Acrylic for nonzero values;
+its tint follows each window's own light/dark mode, which Cindy sets from its resolved
+theme rather than the Windows setting (2026-11-11: a dark theme on light Windows had
+shown a white-tinted backdrop) and re-asserts after Windows theme changes. Acrylic's
+own tint strength is system-defined, so 100% desktop transparency with blur remains a
+theme-tinted frost rather than clear glass. Because that strength is fixed,
+the Windows desktop blur control is a Switch rather than a slider (artwork blur
+stays a slider); turning it on restores the last nonzero shared blur value;
 systems without a native material retain clear transparency. The hint describes
 system-default fallback where adjustable blur is unavailable. A successful native
 call alone is not visual acceptance; keep the research document's validation limits.

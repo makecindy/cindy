@@ -671,6 +671,7 @@ import { sidebarWindowExpansion } from './sidebarWindowExpansion';
 import { registerSidebarWindowExpansionIpc } from './sidebarWindowExpansionIpc';
 import { WindowManualDragController } from './windowManualDrag';
 import { loadWindowsTaskbarNative } from './windowsTaskbarNative';
+import { setWindowsWindowDarkMode } from './windowsWindowDarkMode';
 import {
   issueWritableDirectoryPickerGrant,
   issueWritableDirectoryRecentGrant,
@@ -5189,6 +5190,8 @@ const registerIpcHandlers = () => {
       win.setBackgroundMaterial(config.backgroundMaterial);
       win.webContents.send(WINDOW_BACKDROP_MATERIAL_CHANGED_CHANNEL, config.backgroundMaterial);
     }
+    // The Windows 11 backdrop is tinted by the window's mode: follow Cindy's theme.
+    setWindowsWindowDarkMode(win, isDark);
     if (process.platform === 'darwin') applyMacWindowBackdrop(win, config);
     else win.setBackgroundColor(config.backgroundColor);
     applyVibrancyToSecondaryWindows(familyId, isDark);

@@ -2332,6 +2332,7 @@
         "desktopVisibilityHint": "Mostra a área de trabalho e as janelas atrás da Cindy. Textos e controles permanecem nítidos.",
         "desktopBlurLabel": "Desfoque da área de trabalho",
         "desktopBlurHint": "Desfoca a área de trabalho atrás da janela. 0 desativa; valores maiores aumentam o desfoque. Sistemas sem ajuste de intensidade usam o efeito padrão.",
+        "desktopBlurSwitchHint": "Desfoca a área de trabalho atrás da janela com o efeito do sistema do Windows. Requer o Windows 11 versão 22H2 ou posterior.",
         "blurLabel": "Desfoque do papel de parede",
         "blurHint": "Desfoque apenas o papel de parede. Defina como 0 para desativar. Desfocar papéis de parede animados aumenta o uso da GPU.",
         "motionLabel": "Exibição",

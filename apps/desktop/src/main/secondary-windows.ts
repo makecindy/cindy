@@ -1,4 +1,5 @@
 import { applyMacWindowBackdrop } from './macosDesktopBlur';
+import { setWindowsWindowDarkMode } from './windowsWindowDarkMode';
 /**
  * secondary-windows —— 「在新窗口打开」会话多开功能的主进程侧。
  *
@@ -300,6 +301,7 @@ export function applyVibrancyToSecondaryWindows(familyId: string, isDark: boolea
         );
       }
     }
+    setWindowsWindowDarkMode(win, isDark);
     if (process.platform === 'darwin') applyMacWindowBackdrop(win, config);
     else win.setBackgroundColor(config.backgroundColor);
   }
