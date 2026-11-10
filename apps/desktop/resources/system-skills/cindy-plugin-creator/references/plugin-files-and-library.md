@@ -259,11 +259,12 @@ await cindy.library({
   （与 hashes / library 三选一，文件名是净化后的原名，另附 `filename*`）；本机处理则由页面从
   `hostContext.toolInfo.tool._meta['cindy/attachments']` 找到同一 `uri` 的项，用
   `_meta['cindy/file'].url` 读取，在页面里解析后再调用你的 app-only 工具保存结果。
-- 插件拿不到字节和路径，也不能删除副本；副本连续 7 天未使用后宿主自动删除（卡片签发地址、
+- 原交接接口不返回字节和路径，也不能删除副本；另获 `storage` 组批准后可按下节分块读取和删除自己的副本。
+  副本连续 7 天未使用后宿主自动删除（卡片签发地址、
   页面读取、`upload.handoff` 上传成功都算使用，会顺延），用户也可以在插件详情页逐个删除。
   之后上传返回 `errorCode:'HANDOFF_UNAVAILABLE'`，页面上该项没有 `url`；请提示用户重新发送。
   `expiresAt` 是收到时的当前到期时间，使用时会顺延，不要把它当成固定截止时间。
-- 手机和其他电脑暂时打不开带这类文件的卡片；Node 工作进程不能使用这个能力。
+- 手机和其他电脑暂时打不开带这类文件的卡片；Node 工作进程使用下节 `storage_request` 读取自己的交接副本，原卡片通道限制保持。
 - 需要 `minCindyVersion: 0.1.122-beta`；旧宿主不认识这个参数，非媒体文件仍会要求改用 dir。
 
 ```js
@@ -279,3 +280,54 @@ _meta['cindy/file'].url 取临时只读地址。不要拼地址、传本机路�
 大文件优先由 cindy.pick 写入 Library，再由工具上传；页面不搬运完整文件字节。
 参数、限额、拖放和下载写法统一见[§4.23 文件参考](examples/interactive-pages/REFERENCE.md#文件)，
 完整代码见[files 示例](examples/interactive-pages/files/)。
+
+### 4.10.4 统一存储接口与跨插件分享
+
+声明 `"agent":{"hostTools":["storage"]}`。安装/更新和详情页单列权限，receipt 记录组批准，
+旧声明不会自动补批准。逻辑页和 Node Worker 使用同一公共工具入口：
+
+```js
+const storage = async args => {
+  const result = await cindy.host.call('cindy_helper', 'storage_request', args);
+  const value = JSON.parse(result.content.find(item => item.type === 'text').text);
+  if (result.isError || !value.ok) throw new Error(value.errorCode);
+  return value;
+};
+const { providers } = await storage({ op: 'providers' });
+const own = await storage({ op: 'call', provider: 'kv', request: { op: 'read' } });
+const { targets } = await storage({ op: 'targets' });
+// 让用户选 targets 中的实际实例；不能拿 manifest id 猜物理实例。
+await storage({ op: 'share', targetPluginId: chosenTarget.id,
+  source: { provider: 'kv', key: 'selectedBusinessRecord' } });
+```
+
+Host 的 `HostStorageProvider` 接口统一提供 id、operations、可用性、call 和可选 snapshot；
+provider 继续拥有自己的 IO 与持久化，不复制一套存储实现。`providers` 只表示当前插件声明下
+可调用的接口；窗口、磁盘和连接是否就绪仍以实际回执为准。宿主尚未提供的 provider 返回
+`UNSUPPORTED_PROVIDER`，不要猜默认存储或读写 Host 文件。
+
+| provider | request | 既有边界 |
+| --- | --- | --- |
+| `kv` | `read`；`write` 带 value 对象 | 本插件自定义参数，64 KiB、整体覆盖写，不含凭证保险库 |
+| `data` | read/write/list/delete，与 fs:data 同参数 | 另需 fs:true，保留原配额与卸载清理 |
+| `library` | 与 cindy.library 相同的 op 与参数 | 另需 library:true，保留原子写、分块流、SQL 门与卸载不删 |
+| `handoff` | list；read/delete/touch 带 ref，read 可传 offset | 只处理本插件的交接副本，read 每次最多 64 KiB base64，并返回 nextOffset、原名和 sha256；读取会续期 |
+| `media` | read 带 ref，可传 offset | 只读本插件获授的 cindy-media 引用，每次最多 64 KiB base64，返回 nextOffset |
+
+分享是具体内容的独立副本，接收方从 `provider:'handoff'` 的 list/read 取得，也可自行保存进
+自己的 KV 或 Library；源文件后续更新不会同步。source 为
+`{provider:'kv',key}`、`{provider:'data'|'library',path}` 或 `{provider:'handoff'|'media',ref}`。
+单份最多 64 MiB，仍受源 provider 原有读取上限和接收方交接配额约束；Library/data 的普通 read
+上限为 16 MiB，不因为分享绕过。副本沿用 7 天使用续期、SHA-256 和用户详情页删除机制。
+
+双方都须启用、安装已批准且 `storage` 组已获批准；targets 只列同账号本机、同组织范围且
+namespace 已确认的接收方。个人 root 与 local 实例属于个人范围；组织实例只与同一组织互享。
+分享不会替目标插件启用能力、批准权限或创建账号，也不能直接查询他人的 KV/库/凭证。
+普通 Agent 没有插件存储身份，直接调用返回 `PLUGIN_CONTEXT_REQUIRED`；应经该插件的工具操作其业务数据。
+
+宿主每次单独展示可信来源、接收方、文件名和字节数，用户拒绝或无确认客户端时不交付。
+确认期间 owner、安装、启用态或内容改变会阻止交付；`STALE_RESOURCE` 要重新展示当前内容并确认。
+`SHARE_RESULT_UNKNOWN` 表示写入阶段的回执不确定；返回 targetPluginId 和 file 的 name/size/sha256，
+先由接收方按这些事实查询交接列表，不能自动重发。底层 provider 失败的 reason 等结构化字段保留。
+已交付且被对方读取或另存的内容无法收回。停用/卸载仍可从 Cindy 管理页执行，不由插件控制。
+旧 Host 不提供此工具时提示能力不可用，保留本插件其它功能，不要求重装旧插件。

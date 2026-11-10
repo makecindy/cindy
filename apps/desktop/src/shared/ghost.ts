@@ -2757,6 +2757,7 @@ export function ghostPermissionItems(manifest: GhostManifest): GhostPermissionIt
   if (manifest.node) codeDetailKey = 'codeDetailWithNode';
   else if (declaredGhostHostToolGroups(manifest).includes('terminal')) codeDetailKey = 'codeDetailTerminal';
   else if (declaredGhostHostToolGroups(manifest).includes('files')) codeDetailKey = 'codeDetailFiles';
+  else if (declaredGhostHostToolGroups(manifest).includes('storage')) codeDetailKey = 'codeDetailStorage';
   else if (manifest.network) codeDetailKey = 'codeDetailNetwork';
   else codeDetailKey = 'codeDetail';
   items.push({

@@ -68,6 +68,26 @@ it('discovers the shared files service and validates its opaque directory reques
   } finally { await server.close(); }
 });
 
+// §27 unit: provider selection and explicit snapshot sharing must use the same
+// public registry. Existing directory tests do not cover storage providers.
+it('discovers storage providers through the public tool and rejects undeclared request shapes', async () => {
+  const call = vi.fn(async (): Promise<Record<string, unknown>> => ({ ok: true, providers: [{ id: 'library' }] }));
+  const server = createXdtHelperMcpServer({ storage: { call } }, { agentKind: 'codex', workingDir: '' });
+  try {
+    expect(server.hostTools.describe('storage_request')).toMatchObject({ category: 'storage' });
+    expect(parsePayload(await server.hostTools.call('storage_request', { op: 'providers' })))
+      .toMatchObject({ ok: true, providers: [{ id: 'library' }] });
+    expect(parsePayload(await server.hostTools.call('storage_request', { op: 'share', targetPluginId: 'other' })))
+      .toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+    expect(call).toHaveBeenCalledOnce();
+    const file = { name: 'business.json', size: 3, sha256: 'a'.repeat(64) };
+    call.mockResolvedValueOnce({ ok: false, errorCode: 'SHARE_RESULT_UNKNOWN', targetPluginId: 'receiver', file });
+    const uncertain = await server.hostTools.call('storage_request', { op: 'share', targetPluginId: 'receiver', source: { provider: 'kv', key: 'record' } });
+    expect(uncertain.isError).toBe(true);
+    expect(parsePayload(uncertain)).toMatchObject({ ok: false, errorCode: 'SHARE_RESULT_UNKNOWN', targetPluginId: 'receiver', file });
+  } finally { await server.close(); }
+});
+
 it('validates attachment reads against the same history scope before host I/O', async () => {
   let denied = false;
   const readSessionAttachment = vi.fn(async () => ({ ok: true as const, base64: 'dGV4dA==', nextOffset: null }));

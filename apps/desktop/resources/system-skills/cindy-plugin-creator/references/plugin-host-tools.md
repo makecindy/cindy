@@ -17,6 +17,7 @@
 | `scheduler` | `cindy_scheduler` | 定时任务管理 |
 | `terminal` | `cindy_helper` | 宿主管理的命令、交互终端与后台作业 |
 | `files` | `cindy_helper` | 授权目录的文件操作与监听；调用 `file_request` |
+| `storage` | `cindy_helper` | 本插件存储接口与每次确认的跨插件副本分享；调用 `storage_request` |
 
 每组在安装、更新确认和详情页各列一行权限。新增组需要批准；移除组立即收权。旧安装记录不会自动获得新能力，首次调用可请求宿主确认。用户拒绝后由详情页手动重试，插件不要循环请求。未知组按 Manifest v3 原样保存，当前宿主不授权。
 

@@ -53,7 +53,8 @@ export type XdtHelperToolCategory =
   | 'github'
   | 'settings'
   | 'terminal'
-  | 'files';
+  | 'files'
+  | 'storage';
 
 export type XdtHelperToolContentBlock =
   | { type: 'text'; text: string }

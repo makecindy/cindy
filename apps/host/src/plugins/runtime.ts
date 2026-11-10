@@ -24,6 +24,8 @@ import type { GhostGrantConfirmBridge } from '../../../desktop/src/main/cindy-br
 import type { Session } from '@cindy/maker-core';
 import { GhostFsSlot } from '../../../desktop/src/main/cindy-brain/fsSlot.js';
 import { getGhostPickedDirectory } from '../../../desktop/src/main/cindy-brain/pickGrantsStore.js';
+import { HostStorageService, type StorageShareFacts } from '../../../desktop/src/main/cindy-brain/storageService.js';
+import { createHostStorageProviders } from '../../../desktop/src/main/cindy-brain/storageProviders.js';
 import { GhostNotifySlot } from '../../../desktop/src/main/cindy-brain/notifySlot.js';
 import { getDirDepositVault, getSaveDepositVault } from '../../../desktop/src/main/cindy-brain/dirDeposit.js';
 import { PluginDownloadSlot } from '../../../desktop/src/main/cindy-brain/downloadSlot.js';
@@ -61,6 +63,7 @@ interface PluginRuntimeOptions {
   getUser?(): User | null;
   account?: PluginAccountPorts;
   confirmConnectionHost?(id: string, label: string, host: string): Promise<boolean>;
+  confirmStorageShare?(facts: StorageShareFacts, current: () => boolean): Promise<boolean>;
   appContext(): GhostAppContextResult;
   getSession(id: string): Session | undefined;
   requestFileConfirmation: GhostGrantConfirmBridge['request'];
@@ -154,6 +157,11 @@ export async function createHostPluginRuntime(options: PluginRuntimeOptions) {
     getSessionSnapshot: async (id, instance) => current() ? resolveGhostFsSessionSnapshot(options.getSession, id, instance) : null,
     requestWriteConfirm: (id, payload) => { assertCurrent(); return options.requestFileConfirmation(id, payload); },
     writeSaveDeposit: (id, token, name, bytes) => getSaveDepositVault().write(id, token, name, bytes), log });
+  const storage = new HostStorageService({ ownerKey: () => owner, getGhost, handoff, listGhosts: () => options.manager.list(),
+    providers: createHostStorageProviders({ kv, files: fsSlot, library, handoff, media: files,
+      kvChanged: id => authorization.changes.emit(id, { source: 'kv' }) }),
+    confirmShare: (facts, check) => options.confirmStorageShare?.(facts, () => current() && check()) ?? Promise.resolve(false),
+  });
   const network = new GhostNetworkSlot({ getGhost, captureRequestGuard: guard,
     inFlightCallInfo: id => current() ? cards.inFlightCallInfoOf(id) : null,
     getCallSignal: (id, callId) => dispatcher.getPendingCallSignal(id, callId) ?? undefined,
@@ -368,7 +376,7 @@ export async function createHostPluginRuntime(options: PluginRuntimeOptions) {
     if (errors.length) throw new AggregateError(errors, 'Plugin runtime cleanup failed');
   }
   return {
-    list: () => options.manager.listAsync(), reconcile, cards, library, fsSlot, network, secret, node, authorization,
+    list: () => options.manager.listAsync(), reconcile, cards, library, fsSlot, storage, network, secret, node, authorization,
     manager: options.manager, getGhost, current, assertCurrent, dispatcher, handoff, files,
     captureMutationOwner() { assertCurrent(); return getActiveAppSession(); },
     acquireMutationLease(expected: ActiveAppSession) {

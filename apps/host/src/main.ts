@@ -76,6 +76,7 @@ import { ownerScopedPath } from '../../desktop/src/main/dataOwnerPath.js';
 import { createHostPluginRuntime } from './plugins/runtime.js';
 import { createHostPluginGateway } from './plugins/gateway.js';
 import { createHostToolService } from './agent/host-tools.js';
+import { storageShareMessage } from '../../desktop/src/main/cindy-brain/storageService.js';
 import { createHostConfirmations } from './host-confirmations.js';
 import { createMainI18n } from '../../desktop/src/main/i18n.js';
 import { GHOST_HOST_TOOL_GROUPS } from '@cindy/plugin-protocol';
@@ -542,6 +543,7 @@ async function ensureRuntime(ownerId: string): Promise<void> {
     owner: () => ({ dataOwnerId: getActiveAppSession().dataOwnerId, ownerGeneration: getActiveAppSession().generation }),
     current: toolOwnerCurrent, getGhost: id => plugins?.getGhost(id) ?? null, manager: pluginManager,
     files: () => { if (!plugins) throw new Error('UNSUPPORTED_CAPABILITY'); return plugins.fsSlot; },
+    storage: () => { if (!plugins) throw new Error('UNSUPPORTED_CAPABILITY'); return plugins.storage; },
     getSession: id => agentGraph?.maker.getSession(id), confirmations: hostConfirmations, t: i18n.t,
     taskActions: {
       input: id => inputQueue.taskActionInput(id),
@@ -549,6 +551,13 @@ async function ensureRuntime(ownerId: string): Promise<void> {
   });
   plugins = await createHostPluginRuntime({ profileDir: dataDir, ownerId, manager: pluginManager, credentials,
     hostToolRequest: hostTools.request, onPluginStopped: hostTools.stopPlugin,
+    confirmStorageShare: async (facts, check) => {
+      if (!check() || !hostConfirmations) return false;
+      const confirmed = await hostConfirmations.confirm({ ghostId: facts.sourceId, ghostName: facts.sourceName,
+        body: `${storageShareMessage(i18n.t, facts)}\n\n${facts.sourceId}\n→ ${facts.targetId}`,
+        confirmText: i18n.t('settings.ghosts.connections.confirmAllow'), cancelText: null, danger: false });
+      return check() && confirmed;
+    },
     getLoginEmail: () => accountUser?.email ?? null,
     getUser: () => accountUser,
     account: {

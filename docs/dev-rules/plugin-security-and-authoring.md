@@ -196,7 +196,7 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
   批准后，插件创建的任务及 Worker 中的 Agent 按普通任务的权限使用已连接工具；
   创建回执仅约束插件直接管理该任务，不参与任务内 Agent 的工具权限判定。
   插件直接调用 `cindy.tasks` 仍只管理本插件的任务。
-- `agent.hostTools: string[]` 直接声明 `history` / `control` / `handoff` / `settings` / `scheduler` / `terminal` / `files` 工具组，每组独立展示和批准。
+- `agent.hostTools: string[]` 直接声明 `history` / `control` / `handoff` / `settings` / `scheduler` / `terminal` / `files` / `storage` 工具组，每组独立展示和批准。
   receipt 的可选 `approvedHostToolGroups` 仅记录显式批准；旧记录缺失时首次调用复用现有确认，拒绝后由详情页手动重试。
   新增组算扩权，同来源更新只保留仍声明的已批准组，移除或卸载即失效，不改变旧插件其它能力。
   `cindy.host.call(server, tool, args)` 的 UI 与 Node 请求共用 `hostToolSlot`，通过同一 provider / registry 调用 Agent 工具处理器，禁止另写插件业务实现。
@@ -227,6 +227,12 @@ Library 请求同时绑定迁移代次和安装批准，根解析、排队及开
   Agent 调用后者使用真实 Session 工作目录，写/删走原风险规则，Plan 仍只读。引用仅限原实例、账号与执行电脑。
   Host 数据目录及其祖先不得作为新访问根。根身份、安装/owner 与批准在 IO 前后复核，写入复用文件浏览器原子发布，
   自主监听在停用、页面结束或授权变化时关闭。Node 缺少选择器/watcher 时按实际支持返回错误，不补第二套服务。
+  `storage` 的 `storage_request` 统一转发既有 KV/fs:data/Library/handoff/媒体接口，仍由原存储拥有数据与生命周期。
+  `HostStorageProvider` 只定义转发与 snapshot seam，不另建数据副本、权限账本或通用插件注册中心。
+  跨插件分享是原 handoff 的显式副本：双方独立批准 storage，namespace 已确认且同账号本机/同组织，
+  可信宿主每次确认双方名称、具体文件与字节数。确认前后复核安装/owner，确认后复读源并校验摘要，变更拒绝；
+  只在最终 IO 期间持有原 handoff relocation hold，不阻塞用户等待确认时停用或恢复。写入回执不明返回 SHARE_RESULT_UNKNOWN，
+  补偿只用原 owner 根，不重发；副本仍按原 TTL/配额/SHA/详情删除管理。接收方已读取或另存的副本不能宣称可撤回。
 - `subscribe.topics` 的 `message` / `task-state` 独立展示和批准，receipt 可选 `approvedEventTopics` 只记录显式事实，不从旧未知声明推断。
   消息仅在持久化后通知，结构化附件使用不透明位置引用；附件读取只覆盖已有宿主授权的本机媒体和 grant / deposit / handoff 引用，复用既有账本和交接。历史 JSON 的 `files.path`、绝对路径、旧文件直读 URL 及跨电脑附件返回 `UNSUPPORTED_CAPABILITY`，不以消息形状授予文件读取权限，不新增可信来源表或确认流程。
   状态只发布生命周期变化（开始、结束、出错、等待权限/回答、排队、取消及归档/恢复/删除），复用宿主规范投影，不含活动摘要、标题标签或工具参数；不发布高频进度和活动变化。

@@ -3,7 +3,8 @@ import { permissionModeOrAsk } from '@cindy/maker-shared/permission-mode';
 import { createIMessageMcpServer } from './imessageMcpServer';
 import { createTerminalToolExecutor } from '../terminal/terminalToolAccess.js';
 import { createFileToolExecutor } from '../cindy-brain/fileToolAccess.js';
-import { getGhostFsSlot } from '../cindy-brain/index.js';
+import { getGhostFsSlot, getGhostStorageService } from '../cindy-brain/index.js';
+import { createStorageToolExecutor } from '../cindy-brain/storageToolAccess.js';
 import { getDesktopHostTerminalService } from '../terminal/terminalService.desktop.js';
 import { getDefaultShellPref } from '../terminal/terminalPrefsStore.js';
 import { findGhostForInstanceId } from '../cindy-brain/index.js';
@@ -718,6 +719,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
     // (LLM 调工具时) registerMakerIpc 早已执行完毕, holder 已 ready。
     xdtHelper: {
       files: createFileToolExecutor(getGhostFsSlot, getPluginHostToolCaller),
+      storage: createStorageToolExecutor(getGhostStorageService, getPluginHostToolCaller),
       terminal: createTerminalToolExecutor({ service: getDesktopHostTerminalService(), owner: getActiveDataOwnerPushStamp,
         pending: isAppSessionBoundaryPending, pluginCall: getPluginHostToolCaller, getGhost: findGhostForInstanceId,
         getSession: getTaskActionSession, pluginDirectory: id => ownerScopedUserDataPath('ghost-fs', id), defaultShell: getDefaultShellPref }),

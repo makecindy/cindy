@@ -611,6 +611,8 @@ import { ghostTokenBrokerInstallError } from './ghostTokenBrokerInstallError.js'
 import { ghostBrokerRedirectPortInstallError } from './ghostBrokerRedirectPort.js';
 import { ConnectionTokenProvider, type IssuedConnectionToken } from './connectionTokenProvider.js';
 import { GhostFsSlot } from './fsSlot.js';
+import { HostStorageService, storageShareMessage } from './storageService.js';
+import { createHostStorageProviders } from './storageProviders.js';
 import { GhostLibrarySlot } from './librarySlot.js';
 import { LibraryBindingStore, assertLibraryMetaOwner, relocateLibraryMetaOwner, validateLibraryCandidateLocation } from './libraryBinding.js';
 import { LibraryVault, statfsFreeBytes, DEFAULT_LIBRARY_LIMITS } from './libraryVault.js';
@@ -6918,6 +6920,33 @@ export function getGhostNetworkSlot(): GhostNetworkSlot {
 }
 
 let fsSlotSingleton: GhostFsSlot | null = null;
+let storageServiceSingleton: HostStorageService | null = null;
+
+export function getGhostStorageService(): HostStorageService {
+  storageServiceSingleton ??= new HostStorageService({
+    ownerKey: () => JSON.stringify(getActiveDataOwnerPushStamp()), getGhost: findGhostForInstanceId,
+    listGhosts: () => getGhostManager().list(),
+    handoff: getGhostHandoffStore(),
+    providers: createHostStorageProviders({
+      kv: {
+        readStrict: id => { if (!ghostSetupKvStore) throw new Error('HOST_NOT_READY'); return ghostSetupKvStore.readStrict(id); },
+        write: (id, value) => { if (!ghostSetupKvStore) throw new Error('HOST_NOT_READY'); ghostSetupKvStore.write(id, value); },
+      }, kvChanged: id => getGhostSetupChangeBus().emit(id, { source: 'kv' }),
+      files: getGhostFsSlot(), library: getGhostLibrarySlot(), handoff: getGhostHandoffStore(),
+      media: createPluginFileAccess({ libraryPath: (id, relative) => getGhostLibrarySlot().resolvePanelFilePath(id, relative),
+        libraryMime: mediaTypeForLibraryPath, openHandoff: (id, ref) => getGhostHandoffStore().openForPage(id, ref) }),
+    }),
+    confirmShare: async (facts, current) => {
+      const parent = getDeepLinkMainWindow();
+      if (!current() || !parent || !isTrustedAppRendererWindow(parent)) return false;
+      const answer = await dialog.showMessageBox(parent, { type: 'question', title: t('settings.ghosts.perm.storageShareTitle'),
+        message: storageShareMessage(t, facts), detail: `${facts.sourceId}\n→ ${facts.targetId}`,
+        buttons: [t('settings.ghosts.connections.confirmAllow'), t('common.cancel')], defaultId: 1, cancelId: 1, noLink: true });
+      return current() && answer.response === 0;
+    },
+  });
+  return storageServiceSingleton;
+}
 
 /**
  * fs 槽单例(写文件,2026-07-14):deps 全部懒取现查——意识清单实扫、
