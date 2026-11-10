@@ -100,6 +100,7 @@ import {
   useDeviceProviders,
 } from '@/hooks/useDeviceProviders';
 import { useDevicesProviders } from '@/hooks/useDevicesProviders';
+import { effectiveRunLocation, RUN_LOCATION_LOCAL } from '@/lib/providerRunLocation';
 import { modelCatalogKey, type ControlledModelFavoriteSource } from '../../../shared/controlledModelCatalog';
 import { RemoteSourceMark } from '@/components/icons/RemoteSourceMark';
 import { buildUnifiedRail, remoteAgentProviders } from './unifiedModelSelection';
@@ -1756,6 +1757,37 @@ function ModelSelectorContentView({
   /** 正在浏览归的组那一项所在的目录：那一项里的模型显示为正在用的，选中时留在此刻运行的那台。 */
   const browsingBoundGroupEntry =
     stayInGroup && boundEntry !== null && (remoteBrowse?.deviceId ?? null) === boundEntry.deviceId;
+  /**
+   * 同账号借用(供应商「运行于」)：同一个供应商在本机和自己的其他电脑上都能用时只列一处——本机能用且没改选
+   * 就是本机那一项，否则是「运行于」那台电脑那一项。只管本机任务、同账号电脑、不在供应商组里的供应商；
+   * 当前任务此刻正在用的那一项始终保留，免得选中项消失。
+   */
+  const runLocationFold = useMemo(() => {
+    const hiddenRemote = new Set<string>();
+    const hiddenLocal = new Set<string>();
+    if (!remoteAgentDevices || homeDeviceId) return { hiddenRemote, hiddenLocal };
+    for (const provider of localProviders.providers) {
+      if (localProviderGroups[provider.id]) continue;
+      const candidates = remoteAgentDevices.flatMap((device) => {
+        if (isProviderShareAgentDeviceId(device.deviceId)) return [];
+        const offered = remoteDeviceCatalogs.get(device.deviceId)?.providers.find((entry) => entry.id === provider.id);
+        return offered?.connected && !offered.suspended && offered.remoteInvocationEnabled === true
+          && !(offered as { group?: unknown }).group
+          ? [{ deviceId: device.deviceId, name: device.name }]
+          : [];
+      });
+      if (candidates.length === 0) continue;
+      const location = effectiveRunLocation(provider as typeof provider & { runLocation?: string }, candidates);
+      for (const candidate of candidates) {
+        const inUse = candidate.deviceId === remoteAgentDeviceId && provider.id === currentProviderId;
+        if (candidate.deviceId !== location && !inUse) hiddenRemote.add(remoteProviderEntryKey(candidate.deviceId, provider.id));
+      }
+      const localInUse = !remoteAgentDeviceId && provider.id === currentProviderId;
+      if (location !== RUN_LOCATION_LOCAL && !localInUse) hiddenLocal.add(provider.id);
+    }
+    return { hiddenRemote, hiddenLocal };
+  }, [remoteAgentDevices, homeDeviceId, localProviders.providers, localProviderGroups, remoteDeviceCatalogs,
+    remoteAgentDeviceId, currentProviderId]);
   const remoteAgentGroups = useMemo(() => {
     if (!remoteAgentDevices) return [];
     return remoteAgentDevices.flatMap((device) => {
@@ -1774,12 +1806,15 @@ function ModelSelectorContentView({
         includePaymentRequired: true,
         scope: 'draft',
       });
-      const providerIds = [...new Set(entries.map((entry) => entry.providerId))];
-      return providerIds.length > 0
+      // 「运行于」收起的供应商只是不占左栏；那台电脑上的收藏仍按完整目录解析，不因收起消失。
+      const providerIds = [...new Set(entries.map((entry) => entry.providerId))].filter(
+        (providerId) => !runLocationFold.hiddenRemote.has(remoteProviderEntryKey(device.deviceId, providerId)),
+      );
+      return entries.length > 0
         ? [{ deviceId: device.deviceId, providers: shared, providerIds, entries }]
         : [];
     });
-  }, [remoteAgentDevices, remoteDeviceCatalogs, remoteProviderGroups]);
+  }, [remoteAgentDevices, remoteDeviceCatalogs, remoteProviderGroups, runLocationFold]);
   // 目录还在读或读取失败的其他电脑(分享不算):收藏区里它们的收藏置灰列出,不当作模型已下架。
   const remoteAgentUnavailableDeviceIds = useMemo(
     () =>
@@ -1797,7 +1832,7 @@ function ModelSelectorContentView({
     if (!hasRemoteAgent) return undefined;
     void visibilityVersion;
     const entries = unifiedModelEntries({
-      providers: homeProviders,
+      providers: homeProviders.filter((provider) => !runLocationFold.hiddenLocal.has(provider.id)),
       isVisible: homeDeviceId
         ? (providerId, model, agent) =>
             isDeviceModelVisible(homeModelVisibilityOverrides, agent, providerId, model)
@@ -1813,6 +1848,7 @@ function ModelSelectorContentView({
     homeModelVisibilityOverrides,
     localProviders.providerOrder,
     visibilityVersion,
+    runLocationFold,
   ]);
   // 供应商组在分组标题与左栏提示里带上台数(provider-groups.md §10)：「Anthropic · 供应商组 · 2 台电脑」。
   // 只算任务所在电脑就是本机时本机建的组；被控电脑上的任务看那台的目录，不在这里标。远程 Agent 面板正在浏览
@@ -3649,6 +3685,10 @@ function ModelSelectorContentView({
             providerUsage={providerUsageScope}
             providerGroupUsage={providerGroupUsage}
             providers={providers}
+            // 「运行于」另一台的本机供应商只从模型分组收起；本机收藏仍按完整目录解析。
+            {...(!deviceId && runLocationFold.hiddenLocal.size > 0
+              ? { listHiddenProviderIds: runLocationFold.hiddenLocal }
+              : {})}
             providerOrder={deviceId ? undefined : localProviders.providerOrder}
             {...(unifiedAgents ? { agents: unifiedAgents } : {})}
             scope={unifiedScope}

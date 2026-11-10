@@ -4238,7 +4238,18 @@
           "ariaLabel": "Allow your other computers and the people you share with to use this provider",
           "writeFailed": "Couldn't save the remote access setting. Please try again."
         },
-        "moreActionsAria": "More Actions"
+        "moreActionsAria": "More Actions",
+        "runLocation": {
+          "label": "Run on",
+          "optionLocal": "This computer",
+          "notSignedIn": "Not signed in",
+          "autoBorrowing": "This computer isn't signed in, so new tasks run on {{device}}. No sign-in needed.",
+          "local": "New tasks run on this computer. You can pick another of your signed-in computers instead.",
+          "pinned": "New tasks run on {{device}} with its sign-in. Running tasks stay where they are.",
+          "inline": "Runs on",
+          "signInHere": "Sign in on this computer",
+          "writeFailed": "Couldn't save where this provider runs. Please try again."
+        }
       },
       "detect": {
         "groupLabel": "Detected on this device",
@@ -6201,13 +6212,18 @@
         "allowInboundAria": "Toggle whether {{name}} can control this device",
         "peerControlOff": "Remote control not enabled on that device",
         "masterOffHint": "Turn on the master switch above first",
-        "controllingThisMac": "Connected to Cindy"
+        "controllingThisMac": "Connected to Cindy",
+        "useThisDeviceModels": "Use this device's models",
+        "allowModelUseAria": "Let {{name}} use this computer's models"
       },
       "toast": {
         "revoked": "Access revoked for this device",
         "revokeFailed": "Failed to revoke access",
         "restored": "Access restored for this device",
-        "restoreFailed": "Failed to restore access"
+        "restoreFailed": "Failed to restore access",
+        "modelUseRestored": "That computer can use this computer's models again",
+        "modelUseRevoked": "That computer can no longer use this computer's models",
+        "modelUseFailed": "Couldn't save \"Use this device's models\". Please try again."
       },
       "sections": {
         "myDevices": "My devices",
@@ -9066,6 +9082,8 @@
       "daysWindow": "{{days}}d"
     },
     "claude": {
+      "totalWeeklyLabel": "Total Week",
+      "temporarilyLimited": "Temporarily Limited",
       "waitingDetail": "Claude subscription usage will update after the next turn completes.",
       "weeklyLabel": "Weekly",
       "modelWeeklyLabel": "{{model}} weekly",
