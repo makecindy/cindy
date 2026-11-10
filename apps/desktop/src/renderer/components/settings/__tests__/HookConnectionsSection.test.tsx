@@ -888,6 +888,9 @@ describe('HookConnectionsSection binding actions (Telegram / X / Feishu)', () =>
 
     render(<HookConnectionsSection />);
     await waitFor(() => expect(dialog.confirm).toHaveBeenCalledOnce());
+    expect(within(document.getElementById('cindy-im-slack')!).getByRole('status').textContent).toBe(
+      'settings.remoteControl.hook.notInstalled.status',
+    );
     await expandChannelCard(SLACK_CARD);
     expect(
       screen.queryByRole('button', {

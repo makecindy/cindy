@@ -1123,8 +1123,10 @@ export function HookConnectionsSection({ companion }: { companion?: { id: string
   const slackBadge = connectionBadge(
     hook.enabled ? hook.status : 'disabled',
     toggleChecked,
-    hook.enabled && (bindingState === 'pending' || hook.pendingBind?.state === 'pending' || isNotInstalled),
-    t('settings.remoteControl.hook.statusUnbound'),
+    hook.enabled && (bindingState === 'pending' || hook.pendingBind?.state === 'pending'),
+    t(isNotInstalled
+      ? 'settings.remoteControl.hook.notInstalled.status'
+      : 'settings.remoteControl.hook.statusUnbound'),
   );
   /**
    * provider-neutral 渠道卡(Telegram / X)的派生展示状态。i18n 前缀按
