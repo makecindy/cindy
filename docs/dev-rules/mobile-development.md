@@ -60,6 +60,21 @@ pnpm mobile:sim:start:cn
 `ANDROID_SDK_ROOT`、`ANDROID_HOME` 或 Windows 标准 Android Studio SDK 目录解析工具，
 不要求把 `adb`、`emulator` 加进 `PATH`。
 
+Windows 的 `mobile:sim:rebuild` 会给 Gradle 传入
+`-Pexpo.android.cmakeObjectPathMax=0`，让 App 和原生依赖保留 CMake 的平台默认路径上限与
+哈希缩短行为。Expo SDK 58 默认把上限提高到 1024，但 Android SDK 附带的旧 Ninja 仍可能
+在深层 worktree 中报 `mkdir(...): No such file or directory`。该参数只作用于本次 Windows
+开发构建，不修改系统长路径设置、SDK 或应用原生配置；macOS 构建保持原有行为。
+同一次 Windows 构建还通过 `sim-windows-native.gradle` 缩短 App 的 CMake staging 目录，
+在当前 worktree 根目录的 `.cxx/` 与系统临时目录的 `cx-<项目路径哈希>/` 中选较短者，给
+Gesture Handler 等生成目标的长名称留出路径空间；显式配置的 `buildStagingDirectory` 保持原值。
+缓存按当前 worktree 的 App 项目路径隔离并供后续构建复用，根目录的 `.cxx/` 已由 Git 忽略；
+临时目录被系统清理后会自动重建。这些目录只含可再生成的原生构建产物，不搬动源码、
+不修改 prebuild 生成文件，也不改变 APK 的输出位置。
+这不能保证任意深度的目录都可构建：若 CMake 仍警告对象文件 `cannot be safely placed under
+this directory`，需进一步缩短显式构建输出路径，或使用支持长路径的 Ninja 并启用 Windows
+长路径。单个原生库通过不能代替完整 APK 构建验证。
+
 修改原生依赖、Expo 原生配置，或切换到尚未安装对应开发包的区域时，重新构建：
 
 这里的 `rebuild` 是“准备兼容原生包”的入口：先复用匹配缓存，未命中才完整编译。
@@ -133,13 +148,19 @@ Metro，那里没有 Metro 响应时才退回 `8081`。`8081` 属于其他任务
 服务按执行电脑上报的完整快照汇总并发送 APNs，手机挂起时也可以接收系统更新。
 旧服务端返回 404/405、旧原生包或自建中转时，保留 Home 与 host live-activity 的本地同步。
 `cindy-agent-activity` 用 ActivityKit 维护一个聚合活动；等待操作的任务优先，其次未读完成／错误
-结果，最后是运行中；标题、角色状态与点击目标使用同一优先级。排除缓存种子、未确认新建、归档
+结果，最后是运行中；标题、角色状态与展开后的任务链接使用同一优先级。排除缓存种子、未确认新建、归档
 和离线电脑的任务，结果已读后移除。
 内容只包含截断标题、本地化状态、任务数和带电脑 ID 的任务深链，不放工具参数或消息正文；
 锁屏标题使用系统 `privacySensitive()`。退出账号／切换账号会结束旧活动。
 
 WidgetKit 的收起、最小、展开与锁屏视图在 `plugins/usage-widgets/CindyAgentActivityWidget.swift`，
 复用已有扩展；ActivityAttributes 从原生模块复制到扩展编译，避免两份 schema 漂移。
+收起／最小灵动岛点击固定进入首页，不因未读计数或最近一次推送的任务而改变。展开后点击
+任务标题／状态区域进入显示的任务，角色与计数区域仍回首页；锁屏／横幅展示具体任务，
+点击进入该任务。系统标记内容过期后，所有入口回首页，不再沿用旧任务目标。
+首页 URL 使用扩展的 `CindyURLScheme`，保持 Global／CN／beta 安装身份；任务深链继续
+使用既有 payload 的 `url`，本地同步与服务端 APNs 更新共用这套呈现逻辑，无须更改推送协议。
+现有实时活动 payload 不含消息 ID，因此任务链接进入对应任务，不承诺精确定位某条消息。
 美术直接复用桌面角色目录中的 Cindy（手机版选定角色）：`node apps/mobile/scripts/export-agent-activity-artwork.mjs`
 调用桌面 helper 的 `--export-mascots`，导出含眼睛和姿态的三张静帧，并从桌面实时活动导出
 运行中橙／待处理青／完成绿的颜色目录；手机计数使用「待关注 · 运行中」，待关注包含等待操作和
