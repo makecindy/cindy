@@ -42,7 +42,8 @@ vi.mock('react-native', async () => {
     Platform: { OS: 'ios', select: (s: any) => s.ios ?? s.default },
     StyleSheet: { create: (s: any) => s, flatten: (s: any) => s, hairlineWidth: 1 },
     Easing: { linear: (n: number) => n, bezier: () => (n: number) => n },
-    AccessibilityInfo: {}, Alert: {}, Linking: {}, StatusBar: {},
+    AccessibilityInfo: {}, Alert: {}, Linking: {}, StatusBar: {}, AppState: { currentState: 'active', addEventListener: () => ({ remove() {} }) },
+    Dimensions: { get: () => ({ width: 402, height: 874, scale: 3, fontScale: 1 }), addEventListener: () => ({ remove() {} }) },
     useWindowDimensions: () => ({ width: 402, height: 874, scale: 3, fontScale: 1 }),
   };
 });
@@ -53,7 +54,7 @@ vi.mock('lucide-react-native', () => ({
   ArrowLeftRight: () => null, ArrowUp: () => null, Bot: () => null, Check: () => null, ChevronDown: () => null, ChevronRight: () => null, ChevronUp: () => null, Circle: () => null, CircleAlert: () => null, CircleCheck: () => null, CircleDashed: () => null, CircleMinus: () => null, CircleStop: () => null, CircleX: () => null, Copy: () => null, Ellipsis: () => null, ExternalLink: () => null, File: () => null, Ghost: () => null, Layers: () => null, ListTodo: () => null, LoaderCircle: () => null, PencilLine: () => null, RefreshCw: () => null, Send: () => null, Share: () => null, Sparkles: () => null, Split: () => null, Timer: () => null, Trash2: () => null, TriangleAlert: () => null, Undo2: () => null, X: () => null,
 }));
 vi.mock('react-native-svg', () => ({ default: () => null, Circle: () => null }));
-vi.mock('react-native-uitextview', () => ({ UITextView: () => null }));
+vi.mock('react-native-uitextview', async () => ({ UITextView: (await import('react-native')).Text }));
 vi.mock('expo-image', async () => {
   const { createElement } = await import('react');
   return { Image: ({ source, onLoad, onError, onDisplay, transition, style }: any) => {
@@ -111,7 +112,6 @@ vi.mock('@/session/BotGroupTextAttachmentPreview', async () => {
     },
   };
 });
-vi.mock('@/session/MarkdownBlockContent', () => ({ MarkdownBlockContent: () => null }));
 vi.mock('@/session/MessageActionSheet', () => ({ MessageActionSheet: () => null }));
 vi.mock('@/session/AuthorizationMessageCard', () => ({ AuthorizationMessageCard: () => null }));
 vi.mock('@/session/CompanionMessageActions', () => ({ CompanionMessageActions: () => null }));
@@ -120,7 +120,8 @@ vi.mock('@/session/PendingSendBubble', () => ({ PendingSendBubble: () => null })
 vi.mock('@/session/messageActions', async (original) => ({ ...await original<object>(), copyMessageText: vi.fn(), writeClipboardText: vi.fn() }));
 
 import { BotGroupMessageAttachments, botGroupAttachmentRuns } from '@/session/BotGroupMessageAttachments';
-import { AttachmentStrip } from '@/session/MessageRenderer';
+import { AttachmentStrip, MarkdownBody } from '@/session/MessageRenderer';
+import { ChatFilePathContext } from '@/session/chatFilePathContext';
 import { MessageLoadingImage } from '@/session/MessageLoadingImage';
 import { buildMessageContentLayout } from '@/session/messageContentLayout';
 import { MessageContentLongPressContext } from '@/session/messageContentLongPress';
@@ -264,6 +265,26 @@ describe('group image attachments outside LegendList (#5278)', () => {
     host!.remove();
     const reopened = await renderAttachment('historical-message');
     expect(reopened.querySelector('img')?.getAttribute('src')).toBe(thumbnailUrl);
+  });
+});
+
+// #9650: group and cloud-companion rich answers render MarkdownBody in a plain ScrollView.
+// Before the fix, LegendList row state read a null list store and Android crashed on entry.
+describe('rich answer bodies outside LegendList', () => {
+  it('renders Markdown and lit file paths around a cindy-ui block without a list provider', async () => {
+    host = document.createElement('div');
+    root = createRoot(host);
+    const statPath = vi.fn(async () => ({ kind: 'file' as const }));
+    const content = 'See `src/app.ts` first.\n\n```cindy-ui\n'
+      + '{"version":1,"seq":1,"op":"create","id":"intro","kind":"markdown","props":{"text":"Rich **intro**"}}\n```';
+    await act(async () => root!.render(createElement(ChatFilePathContext.Provider, {
+      value: { deviceId: 'device', workdir: '/work', statPath } as any,
+    }, createElement(MarkdownBody, {
+      renderRichAnswers: true, text: content, layout: buildMessageContentLayout({ screenWidth: 402 }),
+    }))));
+    expect(host.textContent).toContain('Rich intro');
+    expect(host.textContent).toContain('src/app.ts');
+    expect(statPath).toHaveBeenCalledWith('/work/src/app.ts');
   });
 });
 
