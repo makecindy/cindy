@@ -839,6 +839,33 @@ describe('useSessionRunningStatus silenced completion handling', () => {
     expect(onSessionError).toHaveBeenLastCalledWith('s-turn', 'turn:2000:error');
   });
 
+  // 测试价值:生产入口 useSessionRunningStatus 的 onSessionError。第二个参数就是
+  // 发送方写进 IPC 载荷的 alertEventId；空着表示这次不带标识，主进程不会按上一次去重。
+  // Bug #9575:配额错误弹过之后，恢复尝试没有新的 running 帧，lastStartedAt 不推进，
+  // 失败仍用 turn:1000:error，第二次回调到了但桌面通知被吞。
+  // 现有「下一轮失败用新时间」盖不住「同一时间、中间只靠恢复标记再跑起来」。
+  // 最小失败输入:先错误停在 turnStartedAt 1000，再以 hasSessionRecoveryPending 跑起来，
+  // 仍用 1000 以错误停下。tier: unit。
+  it('配额错误弹过之后，恢复尝试失败不再沿用原来的轮次标识', async () => {
+    const onSessionError = vi.fn();
+    renderHook(() => useSessionRunningStatus(undefined, { onSessionError }));
+
+    await emitSnapshot(new Map([['quota', { ...status(true), turnStartedAt: 1_000 }]]));
+    storeMock.terminalErrorSessions.add('quota');
+    await emitSnapshot(new Map([['quota', { ...status(false, true), turnStartedAt: 1_000 }]]));
+    expect(onSessionError).toHaveBeenNthCalledWith(1, 'quota', 'turn:1000:error');
+
+    storeMock.terminalErrorSessions.delete('quota');
+    storeMock.recoverySessions.add('quota');
+    await emitSnapshot(new Map([['quota', { ...status(true), turnStartedAt: 1_000 }]]));
+    storeMock.recoverySessions.delete('quota');
+    storeMock.terminalErrorSessions.add('quota');
+    await emitSnapshot(new Map([['quota', { ...status(false, true), turnStartedAt: 1_000 }]]));
+
+    expect(onSessionError).toHaveBeenCalledTimes(2);
+    expect(onSessionError.mock.calls[1]).toEqual(['quota']);
+  });
+
   it('keeps a still-real error badge when a new turn starts while the terminal error persists', async () => {
     renderHook(() => useSessionRunningStatus(undefined));
 

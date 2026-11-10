@@ -200,6 +200,13 @@ export function useSessionRunningStatus(
 
   /** 本 hook 因 turn 以错误结束而点的红点(新一轮正常结束时据此收掉过期的那颗)。 */
   const liveErrorMarkedRef = useRef(new Set<string>());
+  /**
+   * 这一段「逻辑上在跑」是协调器的恢复尝试，不是新的供应商回合。
+   * 上升沿读 hasSessionRecoveryPending：配额错误之后的续跑不会再来一帧 running。
+   */
+  const recoveryAttemptRunningRef = useRef(new Set<string>());
+  /** 已经用过的失败告警轮次时间。恢复尝试没推进它时，不能再用同一个 turn:…:error。 */
+  const errorAlertTurnRef = useRef(new Map<string, number>());
 
   /**
    * Pending done-notifications waiting for a debounce window to expire.
@@ -221,6 +228,11 @@ export function useSessionRunningStatus(
     // --- 1. Detect new turn starts ---
     for (const sessionId of currentRunningSet) {
       if (!prevRunning.has(sessionId)) {
+        if (makerChatStore.hasSessionRecoveryPending(sessionId)) {
+          recoveryAttemptRunningRef.current.add(sessionId);
+        } else {
+          recoveryAttemptRunningRef.current.delete(sessionId);
+        }
         // 只清「run 已终态」的标记(用户手动起的新对话或下一个 run);run 还在跑时
         // 是 subagent 续 turn / silent-stop 自动续跑,标记必须留着。兜底定时器不在
         // 这里动 —— 统一由本 effect 末尾的对账按当前 running 状态处理。
@@ -259,6 +271,7 @@ export function useSessionRunningStatus(
     for (const sessionId of prevRunning) {
       if (!currentRunningSet.has(sessionId)) {
         // Session transitioned from running -> not running.
+        const recoveryAttempt = recoveryAttemptRunningRef.current.delete(sessionId);
         const info = statusMap.get(sessionId);
         // side-task(mivo 等 skipTurnReset)的结束不是 turn 终态:done/error/角标/
         // 通知全部跳过。transition entry 只存活一个投递窗口(store 调度清除),
@@ -298,7 +311,20 @@ export function useSessionRunningStatus(
           addSessionAttention(sessionId, 'error');
           liveErrorMarkedRef.current.add(sessionId);
           if (!notificationOwnedByScheduler) {
-            const alertEventId = sessionAlertEventId('error', info?.turnStartedAt);
+            const turnAlertId = sessionAlertEventId('error', info?.turnStartedAt);
+            const turnClock = turnAlertId
+              ? Number(/^turn:(\d+):error$/.exec(turnAlertId)?.[1])
+              : undefined;
+            // 配额错误已经用这个轮次时间弹过。恢复尝试失败时 applyInputProjection
+            // 不推进 lastStartedAt，再用 turn:…:error 会被主进程账本当成重复吞掉。
+            // 这次不带轮次标识：没有标识就照常通知，不和上一次配额错误抵销。
+            const repeatedRecoveryFailure = recoveryAttempt
+              && turnClock !== undefined
+              && errorAlertTurnRef.current.get(sessionId) === turnClock;
+            if (turnClock !== undefined && !repeatedRecoveryFailure) {
+              errorAlertTurnRef.current.set(sessionId, turnClock);
+            }
+            const alertEventId = repeatedRecoveryFailure ? undefined : turnAlertId;
             if (alertEventId) onSessionErrorRef.current?.(sessionId, alertEventId);
             else onSessionErrorRef.current?.(sessionId);
           }
