@@ -4195,7 +4195,19 @@
           "ariaLabel": "允許你的其他電腦和你分享的人呼叫此供應商",
           "writeFailed": "遠端呼叫設定未能儲存，請重試"
         },
-        "moreActionsAria": "更多操作"
+        "moreActionsAria": "更多操作",
+        "runLocation": {
+          "label": "在哪台電腦執行",
+          "optionLocal": "這台電腦",
+          "notSignedIn": "未登入",
+          "offline": "離線",
+          "autoBorrowing": "這台電腦還沒登入，新任務在 {{device}} 上執行，不用再登入。",
+          "local": "新任務在這台電腦執行。也可以改選你另一台已登入的電腦。",
+          "pinned": "新任務在 {{device}} 上執行，使用那台電腦的登入。已在執行的任務不受影響。",
+          "pinnedOffline": "{{device}} 離線，新任務暫時無法執行。可以改選其他電腦。",
+          "inline": "執行於",
+          "signInHere": "在這台電腦登入"
+        }
       },
       "detect": {
         "groupLabel": "檢測到本機 CLI",
