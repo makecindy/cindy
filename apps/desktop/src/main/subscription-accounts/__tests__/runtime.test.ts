@@ -108,6 +108,91 @@ beforeEach(() => {
 });
 
 describe('native account assignment on the executing computer', () => {
+  // #9517 review, unit: Add must recover both bound and unbound managed defaults.
+  // A disconnected pool and a first Add bypassed the bound-default fallback.
+  it.each([
+    { bound: true, configured: true },
+    { bound: false, configured: true },
+    { bound: false, configured: false },
+  ])('adds an isolated account for a managed default (bound=$bound, configured=$configured)', async ({ bound, configured }) => {
+    h.bound = bound;
+    if (configured) h.pools.openai = { strategy: 'least', accounts: [account('default')], disconnected: !bound };
+    const signedIn = new Set<string>();
+    h.read.mockImplementation(async (_provider, directory: string) =>
+      directory === 'openai/default'
+        ? { authenticated: false, errorReason: 'codex_provider_managed_auth' }
+        : { authenticated: signedIn.has(directory), identity: 'new@example.test' },
+    );
+    h.login.mockImplementation(async (_provider, directory: string) => { signedIn.add(directory); });
+
+    const result = await runSubscriptionAccountCommand({ action: 'add', providerId: 'openai', loginKey: 'recover' });
+
+    expect(h.login).toHaveBeenCalledOnce();
+    const newAccount = result.accounts.find((entry) => entry.id !== 'default');
+    expect(newAccount).toMatchObject({ status: 'ready', identity: 'new@example.test' });
+    expect(h.login).toHaveBeenCalledWith('openai', `openai/${newAccount!.id}`, expect.any(AbortSignal));
+    expect(h.pools.openai!.accounts.map((entry) => entry.id)).toEqual(['default', newAccount!.id]);
+    expect(result.accounts[0]).toMatchObject({ id: 'default', status: 'signed-out' });
+    expect(result.accounts[0].authIssue).toBe(bound ? 'codex-provider-managed-auth' : undefined);
+    expect(h.pools.openai!.disconnected).toBe(false);
+    expect(h.legacyLogin).not.toHaveBeenCalled();
+  });
+
+  // Unit, #9517: redirecting an unbound default must preserve cancellation and
+  // leave the disconnected pool unauthorized until an independent login succeeds.
+  it('cancels isolated recovery without reconnecting the unbound default and can retry', async () => {
+    h.bound = false;
+    h.pools.openai = { strategy: 'least', accounts: [account('default')], disconnected: true };
+    h.read.mockImplementation(async (_provider, directory: string) => directory === 'openai/default'
+      ? { authenticated: false, errorReason: 'codex_provider_managed_auth' }
+      : { authenticated: false });
+    let started!: () => void;
+    const loginStarted = new Promise<void>((resolve) => { started = resolve; });
+    h.login.mockImplementationOnce((_provider, _directory, signal: AbortSignal) => new Promise<void>((_resolve, reject) => {
+      signal.addEventListener('abort', () => reject(new Error('login_cancelled')), { once: true });
+      started();
+    }));
+    const pending = runSubscriptionAccountCommand({ action: 'add', providerId: 'openai', loginKey: 'cancel-new' });
+    const cancelled = expect(pending).rejects.toThrow('login_cancelled');
+    await loginStarted;
+    await runSubscriptionAccountCommand({ action: 'cancel', providerId: 'openai', loginKey: 'cancel-new' });
+    await cancelled;
+    expect(h.login.mock.calls[0][1]).not.toBe('openai/default');
+    expect(h.pools.openai!.disconnected).toBe(true);
+    await runSubscriptionAccountCommand({ action: 'add', providerId: 'openai', loginKey: 'retry-new' });
+    expect(h.login).toHaveBeenCalledTimes(2);
+    expect(h.login.mock.calls[1][1]).not.toBe('openai/default');
+  });
+
+  // #9517, unit: the real connection/reconnection entry must reject the CLI's
+  // provider-managed auth state before login. Existing cases only cover signed-in/out.
+  it.each([
+    { action: 'connect', target: 'default', providerId: 'openai', loginKey: 'provider' },
+    { action: 'add', providerId: 'openai', loginKey: 'provider' },
+    { action: 'login', accountId: 'second', providerId: 'openai', loginKey: 'provider' },
+  ] as const)('does not relaunch login for provider-managed authentication ($action)', async (command) => {
+    h.bound = false;
+    h.pools.openai = { strategy: 'least', accounts: [account('default'), account('second')] };
+    h.read.mockResolvedValue({ authenticated: false, errorReason: 'codex_provider_managed_auth' });
+    if (command.action === 'connect') {
+      const preview = await runSubscriptionAccountCommand({ action: 'preview', providerId: 'openai' });
+      expect(preview.accounts[0]).toMatchObject({ status: 'signed-out', authIssue: 'codex-provider-managed-auth' });
+      expect(h.usage).not.toHaveBeenCalled();
+    }
+    await expect(runSubscriptionAccountCommand(command)).rejects.toThrow('codex_provider_managed_auth');
+    expect(h.login).not.toHaveBeenCalled();
+    // The blocked attempt releases its login reservation, and "new" keeps using
+    // its own directory instead of the incompatible default profile.
+    h.read.mockImplementation(async (_provider, directory) => ({
+      authenticated: !directory.endsWith('/default'),
+      ...(directory.endsWith('/default') ? { errorReason: 'codex_provider_managed_auth' } : {}),
+    }));
+    const next = await runSubscriptionAccountCommand({ action: 'connect', target: 'new', providerId: 'openai', loginKey: 'next' });
+    expect(h.login).toHaveBeenCalledOnce();
+    expect(h.login.mock.calls[0][1]).not.toBe('openai/default');
+    expect(next.accounts.at(-1)?.status).toBe('ready');
+  });
+
   // Unit, #9295 review: reset lookups refresh the pinned profile rather than
   // taking a different ready account; prior tests only covered pool availability.
   it.each([
@@ -258,13 +343,14 @@ describe('native account assignment on the executing computer', () => {
       );
     },
   );
-  it.each(['anthropic', 'openai'] as const)(
-    'explicitly connects the detected %s default without another browser login',
-    async (providerId) => {
+  it.each(['anthropic', 'openai'].flatMap(providerId =>
+    ['connect', 'add'].map(action => ({ providerId: providerId as SubscriptionProvider, action: action as 'connect' | 'add' }))))(
+    'connects the detected $providerId default through $action without another browser login',
+    async ({ providerId, action }) => {
       h.bound = false;
       h.pools = {};
       await runSubscriptionAccountCommand({
-        action: 'connect',
+        action,
         target: 'default',
         providerId,
         loginKey: 'existing',
@@ -600,19 +686,21 @@ describe('native account assignment on the executing computer', () => {
     expect(secondary?.account.configDir).toBe('openai/second');
     secondary?.release();
   });
-  it('reuses the default folder when the saved first account is no longer logged in', async () => {
-    h.pools.anthropic!.accounts = [account('default')];
+  it.each(['anthropic', 'openai'].flatMap(providerId =>
+    [true, false].map(bound => ({ providerId: providerId as SubscriptionProvider, bound }))))('reuses the signed-out $providerId default folder with binding=$bound', async ({ providerId, bound }) => {
+    h.bound = bound;
+    h.pools[providerId] = { strategy: 'least', accounts: [account('default')] };
     h.read.mockResolvedValue({ authenticated: false });
     h.login.mockImplementation(async () => {
       h.read.mockResolvedValue({ authenticated: true });
     });
     await runSubscriptionAccountCommand({
       action: 'add',
-      providerId: 'anthropic',
+      providerId,
       loginKey: 'reconnect-first',
     });
-    expect(h.login).toHaveBeenCalledWith('anthropic', 'anthropic/default', expect.any(AbortSignal));
-    expect(h.pools.anthropic!.accounts.map((a) => a.id)).toEqual(['default']);
+    expect(h.login).toHaveBeenCalledWith(providerId, `${providerId}/default`, expect.any(AbortSignal));
+    expect(h.pools[providerId]!.accounts.map((a) => a.id)).toEqual(['default']);
   });
   it('only marks the selected account disconnected after a rejected bridge credential', async () => {
     h.pools.openai = { strategy: 'round', accounts: [account('default'), account('second')] };
