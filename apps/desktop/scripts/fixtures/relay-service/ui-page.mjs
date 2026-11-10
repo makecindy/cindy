@@ -249,6 +249,9 @@ export default {
       await alice.getByRole('button', { name: await ui.t(`${relay}.tenants.revoke`), exact: true }).click();
       const confirmation = page.getByRole('alertdialog', { name: await ui.t(`${relay}.tenants.revokeTitle`, { account: 'Alice' }), exact: true });
       await confirmation.getByRole('button', { name: await ui.t(`${relay}.tenants.revoke`), exact: true }).click();
+      // The confirmation temporarily hides the background from the accessibility
+      // tree. Wait for its close before counting the remaining account rows.
+      await confirmation.waitFor({ state: 'detached' });
       await alice.waitFor({ state: 'detached', timeout: 3_000 });
       assert.equal(await tenants.getByRole('listitem').count(), 1);
     } else if (ui.case === 'shared') {

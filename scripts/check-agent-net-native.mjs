@@ -25,6 +25,8 @@ const pnpm = (args, extraEnv = env) => process.env.npm_execpath
   ? run(process.execPath, [process.env.npm_execpath, ...args], { env: extraEnv })
   : run(process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm', args, { env: extraEnv, shell: process.platform === 'win32' });
 pnpm(['--filter', '@cindy/agent-net', 'prepare-core']);
-pnpm(['--filter', '@cindy/agent-net', 'exec', 'vitest', 'run'], {
+// Match the integration tier: real native processes and transport timers run
+// in one worker, rather than competing with another socket suite in this gate.
+pnpm(['--filter', '@cindy/agent-net', 'exec', 'vitest', 'run', '--pool=forks', '--maxWorkers=1'], {
   ...env, CINDY_AGENT_NET_NATIVE_LIBRARY: library, PYTHON: python,
 });

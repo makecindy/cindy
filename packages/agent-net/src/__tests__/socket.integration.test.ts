@@ -395,7 +395,9 @@ it('does not renew an expired public-directory cache or use it for an offline bu
 });
 
 // Bug: cached identities could keep an existing direct path, but could not find it after both nodes restarted.
-// Integration tier: real signed LAN beacons + Noise UDP, while the relay is stopped before either node opens.
+// Integration tier: real signed loopback multicast LAN beacons + Noise UDP,
+// while the relay is stopped before either node opens. Bind both discovery and
+// transport to loopback so the result does not depend on a runner's VPN/LAN route.
 it('rediscovers certified peers on the LAN after both nodes restart without any server', async () => {
   const f = await network(true), directory = await f.a.directory();
   f.host.stop(); f.controller.stop(); await f.relay.close();
@@ -405,7 +407,7 @@ it('rediscovers certified peers on the LAN after both nodes restart without any 
       getHello: () => ({ deviceName: api.identity.deviceId, platform: 'test', appVersion: '1', remoteControlEnabled, busy: false }),
       createWebSocket: async () => {
         const socket = await AgentNetSocket.open({ client: api, userId: f.bootstrap.ownerCertificate.subject, module: f.module,
-          cachedDirectory: directory, directoryExpiresAt: Date.now() + 60_000, udp: true });
+          cachedDirectory: directory, directoryExpiresAt: Date.now() + 60_000, udp: true, bindAddress: '127.0.0.1' });
         opened.push(socket); cleanup.push(() => socket.close()); return socket;
       }, timing: { requestTimeoutMs: 4000 }, logger: { debug() {}, info() {}, warn() {}, error() {} } });
     cleanup.push(() => client.stop()); client.start(); return client;

@@ -535,6 +535,8 @@ export default {
     requiredUnitWorkspace('cindy-tools', 'packages/cindy-tools'),
     requiredUnitWorkspace('@cindy/device-link', 'packages/device-link'),
     requiredUnitWorkspace('@cindy/device-link-relay', 'packages/device-link-relay'),
+    noCollectableWorkspace('@cindy/device-link-sharing', 'packages/device-link-sharing',
+      'Shared sharing-domain implementation is exercised by the agent-net-relay integration suite and Desktop provider-share/shared-task runtime suites; this package has no standalone test files.'),
     requiredUnitWorkspace('@cindy/agent-net-protocol', 'packages/agent-net-protocol'),
     noCollectableWorkspace('@cindy/agent-net-core', 'packages/agent-net-core',
       'Rust core has its cargo/simulation suites; the Node ABI is exercised by agent-net integration tests.'),
@@ -543,6 +545,11 @@ export default {
       cwd: 'packages/agent-net',
       status: 'required',
       tiers: {
+        unit: {
+          status: 'required',
+          command: unitVitestCommand(),
+          exclude: ['src/__tests__/*.integration.test.ts'],
+        },
         integration: {
           status: 'manual',
           reason: 'Real Rust WASM, UDP/WebSocket, signed device certificates and existing DeviceLinkClient interop.',

@@ -16,8 +16,11 @@ export class LanDiscovery {
   private readonly answered = new Set<string>();
   private started = false;
   private closed = false;
+  private readonly interfaces: string[] = [];
   constructor(private readonly options: {
     identity: Identity; networkId: string; port: number;
+    /** Match an explicitly bound transport, including loopback-only integration runs. */
+    interfaceAddress?: string;
     certificateFor(device: string): DeviceCertificate | undefined;
     onCandidate(device: string, address: { address: string; port: number }): void;
   }) {}
@@ -31,9 +34,12 @@ export class LanDiscovery {
       if (this.closed) return;
       socket.setMulticastTTL(1); socket.setMulticastLoopback(true);
       let joined = false;
-      for (const entries of Object.values(os.networkInterfaces())) for (const entry of entries ?? []) {
-        if (entry.family !== 'IPv4' || entry.internal) continue;
-        try { socket.addMembership(GROUP, entry.address); joined = true; } catch { /* A disappearing interface is optional. */ }
+      const addresses = this.options.interfaceAddress && this.options.interfaceAddress !== '0.0.0.0'
+        ? [this.options.interfaceAddress]
+        : Object.values(os.networkInterfaces()).flatMap(entries => (entries ?? [])
+          .filter(entry => entry.family === 'IPv4' && !entry.internal).map(entry => entry.address));
+      for (const address of new Set(addresses)) {
+        try { socket.addMembership(GROUP, address); this.interfaces.push(address); joined = true; } catch { /* A disappearing interface is optional. */ }
       }
       if (!joined) { try { socket.addMembership(GROUP); } catch { this.close(); return; } }
       this.announce();
@@ -48,7 +54,16 @@ export class LanDiscovery {
   }
   private announce(): void {
     if (this.closed || !this.socket) return;
-    this.socket.send(Buffer.from(this.beacon()), PORT, GROUP, () => undefined);
+    const bytes = Buffer.from(this.beacon());
+    if (!this.interfaces.length) { this.socket.send(bytes, PORT, GROUP, () => undefined); return; }
+    // Joining a group does not select the outgoing interface. A VPN/default
+    // route can otherwise send every beacon away from the joined local LAN.
+    for (const address of this.interfaces) {
+      try {
+        this.socket.setMulticastInterface(address);
+        this.socket.send(bytes, PORT, GROUP, () => undefined);
+      } catch { /* An interface may disappear after membership was established. */ }
+    }
   }
   /** Bounded, signed and replay-limited; source addresses are observed, never supplied by a peer. */
   receive(bytes: Uint8Array, source: string): void {
