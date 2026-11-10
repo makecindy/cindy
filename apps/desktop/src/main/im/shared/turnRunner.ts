@@ -4007,7 +4007,7 @@ export function createTurnRunner(
       const view = composeStreamingView(turn, true);
       const body = view ? `${view}\n\n❌ 错误：${msg}` : `❌ 错误：${msg}`;
       await finalizeTurnStream(turn, body);
-    } else {
+    } else if (!turn.streamingOutputInvalidated) {
       try {
         if (output.kind === 'chunked-text') {
           await output.commitFinal({

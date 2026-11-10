@@ -4669,6 +4669,71 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
   });
 
 describe('初始流式输出面创建失败的收口降级(#2164)', () => {
+  it('settles an invalidated error without claiming the next identity opener and drains queued work', async () => {
+    const start = deferred<void>();
+    const nextHandle = { messageId: 'stream-next', append: vi.fn(), replace: vi.fn(), finalize: vi.fn(), close: vi.fn() };
+    mocks.feishuIm.startStreamingText.mockResolvedValue(nextHandle).mockImplementationOnce(async () => {
+      await start.promise;
+      throw Object.assign(new Error('discord owner changed'), { code: 'IM_OUTPUT_INVALIDATED' });
+    });
+    mocks.resolveXdtImageUrl.mockReturnValue({ absPath: '/media/generated.png' });
+    const h = setupSession(async () => ({ accepted: true }));
+    const firstComplete = vi.fn();
+    const dispatch = await getRunner().dispatchAgentTurn({
+      botContextId: 'cli_test_bot', userId: 'ou_user', userMessageId: 'old-identity',
+      text: 'request', attachments: [], queueMode: 'external',
+      beforeProviderStart: async () => {}, onTurnComplete: firstComplete,
+    });
+    if (dispatch.kind !== 'accepted') throw new Error('expected accepted dispatch');
+    h.emit({ type: 'tool_result_full', data: { fullText: '{"xdt_image_url":"xdt-image://generated.png"}' } });
+    h.emit({ type: 'text', data: { text: 'old identity answer', isFinal: true } });
+    const nextComplete = vi.fn();
+    await runDefaultTurn(nextComplete, { userMessageId: 'next-identity', text: 'next request' });
+    expect(h.send).toHaveBeenCalledOnce();
+    mocks.feishuIm.sendText.mockClear();
+    mocks.feishuIm.sendFile.mockClear();
+    mocks.feishuIm.consumePendingOpenerCard.mockClear();
+    mocks.feishuIm.takeNotedFallbackOpenerId.mockClear();
+    mocks.feishuIm.getPendingOpenerTrigger.mockReturnValue('next-identity');
+    mocks.feishuIm.takeNotedFallbackOpenerId.mockReturnValue('next-opener');
+
+    h.emit({ type: 'error', data: { message: 'provider failed', isTerminal: true } });
+    start.resolve();
+    await expect(dispatch.terminal).resolves.toMatchObject({ kind: 'error' });
+    await waitForAssertion(() => expect(h.send).toHaveBeenCalledTimes(2));
+
+    expect(mocks.feishuIm.sendText).not.toHaveBeenCalled();
+    expect(mocks.feishuIm.sendFile).not.toHaveBeenCalled();
+    expect(mocks.feishuIm.consumePendingOpenerCard).not.toHaveBeenCalled();
+    expect(mocks.feishuIm.takeNotedFallbackOpenerId).not.toHaveBeenCalled();
+    expect(firstComplete).toHaveBeenCalledOnce();
+    expect(nextComplete).not.toHaveBeenCalled();
+
+    h.emit({ type: 'text', data: { text: 'next identity answer', isFinal: true } });
+    h.emit({ type: 'done', data: {} });
+    await waitForAssertion(() => {
+      expect(nextComplete).toHaveBeenCalledOnce();
+      expect(nextHandle.finalize.mock.calls[0]?.[0]).toBe('next identity answer');
+    });
+  });
+
+  it('keeps error fallback after an ordinary stream creation failure', async () => {
+    mocks.feishuIm.startStreamingText.mockRejectedValueOnce(new Error('card create denied'));
+    const h = setupSession(async () => ({ accepted: true }));
+    const dispatch = await getRunner().dispatchAgentTurn({
+      botContextId: 'cli_test_bot', userId: 'ou_user', userMessageId: 'msg-error',
+      text: 'request', attachments: [], queueMode: 'external',
+      beforeProviderStart: async () => {},
+    });
+    if (dispatch.kind !== 'accepted') throw new Error('expected accepted dispatch');
+    h.emit({ type: 'text', data: { text: 'partial answer' } });
+    h.emit({ type: 'error', data: { message: 'provider failed', isTerminal: true } });
+    await expect(dispatch.terminal).resolves.toMatchObject({ kind: 'error' });
+    expect(mocks.feishuIm.sendText).toHaveBeenCalledExactlyOnceWith(
+      'ou_user', expect.stringMatching(/❌ 错误：.*provider failed/), { threadTs: undefined },
+    );
+  });
+
   it('settles an invalidated output without retrying text or media under a new identity', async () => {
     mocks.feishuIm.startStreamingText.mockRejectedValue(
       Object.assign(new Error('discord owner changed'), { code: 'IM_OUTPUT_INVALIDATED' }),
