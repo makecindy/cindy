@@ -1093,6 +1093,22 @@ describe('group timeline', () => {
     expect(all('botGroup.notice')[0]?.textContent).not.toContain(`groupChat.notice.runtimeFailure.${runtimeFailureCode}.details`);
   });
 
+  it.each([false, true])('shows unclaimed timeout guidance in main and thread without model setup advice (thread=%s)', async thread => {
+    h.chat.server = true;
+    await render(group({ messages: [message('failure', 1, { kind: 'notice', authorKind: 'system',
+      authorName: 'Bot', noticeCode: 'member-timeout', runtimeFailureCode: 'RUNTIME_TIMEOUT',
+      runtimeFailureReason: 'unclaimed_timeout', ...(thread ? { threadRootId: 'thread-root' } : {}) })] }),
+      'ready', thread ? 'thread-root' : '', '');
+    const notice = all('botGroup.notice')[0]!;
+    expect(notice.textContent).toContain('groupChat.notice.runtimeFailureReason.unclaimed_timeout.summary(name=Bot)');
+    expect(notice.textContent).not.toContain('runtimeFailure.RUNTIME_TIMEOUT');
+    const toggle = [...notice.querySelectorAll('button')].find(button => button.textContent === 'session.tail.showErrorDetails')!;
+    await act(async () => toggle.click());
+    expect(notice.textContent).toContain('groupChat.notice.runtimeFailureReason.unclaimed_timeout.details');
+    expect(notice.textContent).not.toContain('runtimeFailureSetupHint');
+    expect(h.chat.act).not.toHaveBeenCalled();
+  });
+
   // #7769: model-switch advice must retain its computer location after disclosure.
   it.each(['AUTH_REQUIRED', 'RATE_LIMITED', 'UPSTREAM_OVERLOADED', 'RUNTIME_TIMEOUT'] as const)(
     'keeps computer setup guidance inside thread details: %s', async runtimeFailureCode => {
@@ -2633,6 +2649,38 @@ describe('mobile group threads', () => {
   const rootMessage = () => message(rootId, 1, { authorKind: 'user', isSelf: false, content: 'Original question', replyCount: 0 });
   const threadGroup = (overrides: Partial<BotGroupRemoteChatData> = {}) => group({
     messages: [rootMessage()], plans: [], openPlan: null, serverBacked: true, ...overrides,
+  });
+
+  it.each(['user', 'bot'] as const)('shows copy feedback for a %s message and restores the action after 1.5 seconds', async authorKind => {
+    vi.useFakeTimers();
+    const clipboard = vi.mocked((await import('expo-clipboard')).setStringAsync);
+    let finish!: () => void;
+    clipboard.mockReturnValueOnce(new Promise<boolean>(resolve => { finish = () => resolve(true); }));
+    await render(threadGroup({ messages: [message(rootId, 1, { authorKind, isSelf: authorKind === 'user', content: 'Copy this message' })] }), 'ready', undefined, '');
+    const id = `botGroup.thread.context.${rootId}.action.copy`;
+    await click(id);
+    expect(byId(id)!.disabled).toBe(true);
+    expect(byId(id)!.getAttribute('aria-label')).toBe('message.renderer.copyStateCopying');
+    await click(id);
+    expect(clipboard).toHaveBeenCalledExactlyOnceWith('Copy this message');
+    await act(async () => finish());
+    expect(byId(id)!.disabled).toBe(false);
+    expect(byId(id)!.getAttribute('aria-label')).toBe('message.renderer.copyStateCopied');
+    await act(async () => vi.advanceTimersByTime(1500));
+    expect(byId(id)!.getAttribute('aria-label')).toBe('groupChat.thread.copy');
+  });
+
+  it('does not report success when clipboard writing fails and lets the user retry', async () => {
+    const clipboard = vi.mocked((await import('expo-clipboard')).setStringAsync);
+    clipboard.mockRejectedValueOnce(new Error('Clipboard unavailable'));
+    await render(threadGroup(), 'ready', undefined, '');
+    const id = `botGroup.thread.context.${rootId}.action.copy`;
+    await click(id);
+    expect(byId(id)!.getAttribute('aria-label')).toBe('message.renderer.copyStateFailed');
+    expect(byId(id)!.disabled).toBe(false);
+    await click(id);
+    expect(clipboard).toHaveBeenCalledTimes(2);
+    expect(byId(id)!.getAttribute('aria-label')).toBe('message.renderer.copyStateCopied');
   });
 
   // Unit: attachment-only messages retain footer actions without wrapping the attachment.

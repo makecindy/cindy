@@ -130,6 +130,31 @@ const RICH_ANSWER = [
 export const UI_MOCK_TASKS: readonly UiMockTask[] = [
   ...UI_MOCK_SHOWCASE_TASKS,
   {
+    id: 'ui-mock-inline-math',
+    title: '行内公式语义验收',
+    project: 'cindy-demo',
+    agentKind: 'codex', model: 'gpt-5.5', effort: 'medium',
+    status: 'active', source: 'desktop', minutesAgo: 1,
+    messages: [
+      { role: 'user', text: '检查行内公式的符号、参数和上下标。' },
+      { role: 'assistant', text: String.raw`单字符参数：$e\in\mathcal E$。
+
+花括号参数：$e\in\mathcal{E}$。
+
+符号边界：$\mathrm{\alpha}x$；嵌套样式：$\mathbf{\mathcal{E}}$。
+
+分数与根号：$\frac\mathrm{12}2$，$\sqrt\mathrm{2}$。
+
+上下标：$x^{\mathrm{12}}+y_\mathrm i$。
+
+字面花括号：$e\in\mathrm{\{E\}}$。
+
+块级公式对照：
+
+$$e\in\mathcal{E},\quad x^{12}+y_i$$` },
+    ],
+  },
+  {
     id: 'visual-running',
     title: '重构登录页布局',
     project: 'cindy-demo',

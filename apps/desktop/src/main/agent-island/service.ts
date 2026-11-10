@@ -2082,6 +2082,11 @@ export class AgentIslandService {
     return this.buildSessionActivityPayload().map(canonicalSessionActivity);
   }
 
+  /** Complete owned-host list, including unread results past the island's display TTL. */
+  getLocalTaskActivitySnapshots(): AgentIslandSessionSnapshot[] {
+    return buildAllSessionActivitySnapshots(this.state);
+  }
+
   /** Read the same canonical snapshot used by sidebar and device-list relays. */
   getSessionActivitySnapshot(sessionId: string): SessionActivitySnapshot | null {
     const activity = this.buildSessionActivityPayload()

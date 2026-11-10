@@ -865,8 +865,8 @@
       "runningCount_one": "{{count}} task running",
       "runningCount_other": "{{count}} tasks running",
       "limitAria": "Task limit for {{name}}",
-      "limitOption_one": "Limit {{count}}",
-      "limitOption_other": "Limit {{count}}",
+      "limitOption_one": "{{count}} task",
+      "limitOption_other": "{{count}} tasks",
       "weightAria": "Weight for {{name}}",
       "weightOption": "Weight {{weight}}",
       "assignAria": "Assign tasks to {{name}}",
@@ -881,6 +881,7 @@
         "pausedLocal": "Not accepting new tasks from other computers",
         "cooling": "Cooling down",
         "coolingUntil": "Cooling down · back around {{time}}",
+        "quotaExhausted": "Quota exhausted",
         "offline": "Offline",
         "unreachableHere": "Can’t reach it from this computer",
         "unavailable": {
@@ -922,9 +923,13 @@
       "description": "To use every account’s quota evenly, send this message from {{label}} ({{quota}}). The last few messages and a summary carry over; older details may be lost.",
       "quota": "{{left}}% left",
       "quotaReset": "{{left}}% left · {{reset}}",
-      "confirm": "Switch",
-      "cancel": "Cancel",
-      "remember": "Switch automatically from now on (this task only)"
+      "confirm": "Switch this time only",
+      "cancel": "Not now",
+      "remember": "Switch automatically from now on",
+      "disable": "Do not switch automatically",
+      "disableFailed": "Couldn't confirm whether your choice was saved. Check the connection and make sure Cindy on the task’s computer is up to date, then try again. This message will still be sent as usual.",
+      "choiceLabel": "Switching preference (this task only)",
+      "send": "Send message"
     },
     "deleteConfirm": {
       "title": "Delete the {{provider}} provider group?",
@@ -7410,6 +7415,11 @@
         "installedExpand": "Show all {{count}} installed plugins",
         "installedCollapse": "Hide additional installed plugins",
         "recommendedSection": "Recommended",
+        "todayRecommendations": "Today's picks",
+        "marketSection": "Plugin marketplace",
+        "browseMarket": "Browse plugin marketplace",
+        "searching": "Searching…",
+        "allLoaded": "All {{count}} plugins shown",
         "updatesAvailable": "{{count}} plugin updates available",
         "updateAll": "Update all",
         "ignoreRound": "Ignore this round",
@@ -7439,7 +7449,15 @@
       },
       "market": {
         "publisherKind": {
-          "official": "Official"
+          "official": "Official",
+          "community": "Community"
+        },
+        "publisherDescription": {
+          "official": "Published and maintained by Cindy",
+          "community": "Published and maintained by community developers",
+          "team": "Shared by your organization with authorized members",
+          "custom": "From a Git or local folder marketplace you added",
+          "local": "Installed from a local file or developed on this computer"
         },
         "scopeAria": "Filter plugin sources",
         "scope": {
@@ -10769,6 +10787,9 @@
         "stepFailed": "{{name}} ran into a problem and didn’t finish this step",
         "stepTimeout": "{{name}} took too long, so this step was stopped",
         "stepUnavailable": "{{name}} is unavailable and can’t do this step",
+        "runtimeFailureReason": {
+          "unclaimed_timeout": "{{name}} did not start processing within the waiting period. This request has ended.\nAsk the teammate’s owner to check that Cindy is running and the network is connected on its computer."
+        },
         "runtimeFailure": {
           "REMOTE_DEVICE_LIMIT": "{{name}} can’t reply: the teammate’s device has reached its remote session limit.\nAsk the teammate’s owner to archive unused sessions, or ask the remote computer’s owner to raise the limit in Remote & sharing.",
           "REMOTE_TOTAL_LIMIT": "{{name}} can’t reply: the remote computer has reached its total remote session limit.\nAsk that computer’s owner to release unused sessions or raise the limit in Remote & sharing.",
@@ -11414,6 +11435,9 @@
       "databaseDriver": "The database driver could not load. Update or repair Cindy, then retry.",
       "databaseUnavailable": "The source database could not be read. Original data is unchanged; retry after repair.",
       "fileTooLarge": "A file or this import exceeds the read limit. Content was not truncated.",
+      "sourceFileTooLarge": "One file exceeds the read limit. This item was not fully imported.",
+      "snapshotTooLarge": "The total data for this read exceeds the limit. The import is incomplete.",
+      "itemTooLarge": "The files in this item exceed 128 MiB in total. This item was not fully imported.",
       "memoryMetadata": "The memory summary or title exceeds storage requirements.",
       "memoryWrite": "Memory writing or integrity verification failed. You can retry.",
       "memoryChanged": "The saved memory was changed and has not been overwritten.",
@@ -12530,6 +12554,12 @@
       "missingDir": "Folder not found"
     },
     "pendingQueue": {
+      "stopping": "Stopping",
+      "queued": "Queued",
+      "editingInComposer": "Editing in the input box below…",
+      "moveUp": "Move earlier",
+      "moveDown": "Move later",
+      "cancelSend": "Cancel send",
       "regionAria": "Pending message queue",
       "listAria": "Queued messages",
       "pausedFooter": "Task stopped, queue paused",
@@ -14159,6 +14189,7 @@
       "taskAutoArchived": "Archived \"{{title}}\"",
       "taskAutoArchivedUndo": "Undo",
       "taskAutoArchivePending": "Will archive when you leave this task",
+      "taskAutoArchiveBlockedDirty": "“{{title}}” was not auto-archived: its workspace has uncommitted changes",
       "taskAutoArchiveCancel": "Cancel",
       "taskAutoArchiveCancelled": "Will not auto-archive this time",
       "taskArchiveNow": "Archive now"
@@ -19774,10 +19805,10 @@
       "useCodex": "Sign in with Codex"
     },
     "title": "Subscription accounts",
-    "note": "The first account uses the CLI’s default folder. Additional accounts sign in separately. New tasks are balanced across accounts; existing tasks keep their account.",
     "strategy": "Load balancing",
     "add": "Add account",
     "default": "Default folder",
+    "defaultTag": "Default",
     "ready": "Connected",
     "signedOut": "Sign in required",
     "unavailable": "Status unavailable",
@@ -19799,5 +19830,17 @@
     "logExcerpt": "Relevant logs (excerpt; may be incomplete)",
     "logsUnavailable": "No relevant logs are available. The cause is not yet known.",
     "failed": "Could not prepare the diagnosis. Please try again."
+  },
+  "githubStar": {
+    "title": "Enjoying Cindy?",
+    "description": "Give Cindy a star on GitHub to support the project.",
+    "dismiss": "Dismiss",
+    "action": "Cheer on Cindy",
+    "starring": "Lighting a star…",
+    "thanks": "Thanks for the Star!",
+    "thanksDescription": "Your support helps Cindy grow.",
+    "browserFallback": "Open GitHub to star Cindy.",
+    "openGithub": "Open GitHub",
+    "openFailed": "Could not open GitHub."
   }
 }

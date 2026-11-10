@@ -16,6 +16,13 @@ export * from './interfaces/index.js';
 
 // agents
 export * from './agents/index.js';
+export {
+  CLAUDE_CLI_STATUS_ARGS,
+  parseClaudeCliLoginStatus,
+  readClaudeCliLoginStatusBySpawn,
+  type ClaudeCliLoginStatus,
+  type ReadClaudeCliStatusOptions,
+} from './agents/claude-code/cli-login-status.js';
 export { workspaceSettingsFiles, parseClaudeSettingsJson } from './agents/claude-code/workspace-settings-guard.js';
 export * from './agents/pi/managed-command.js';
 export { evaluatePiProjectTrust, piProjectKey } from './agents/pi/project-trust.js';
@@ -90,6 +97,12 @@ export {
   type ConsolidateOptions,
   type ConsolidateResult,
 } from './memory/store.js';
+export {
+  createMakerMemoryManagerForHost,
+  attachAgentsToMakerMemory,
+  type MakerMemoryHostContext,
+  type MemoryHostSession,
+} from './memory/host-factory.js';
 export {
   MakerMemoryManager,
   type MakerMemoryManagerDeps,

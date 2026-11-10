@@ -635,6 +635,14 @@ export interface MakerSendTransaction {
    * the next send then follows its normal path.
    */
   prewarmSession(sessionId: string, createOpts: CreateOpts): Promise<boolean>;
+  /**
+   * Main-side senders that reach an idle live session without this transaction (Orca
+   * inter-agent delivery) call this first, so a session that became an Orca Lead/Worker
+   * while its runtime was already up starts the turn with its Orca instructions and
+   * tools, as a user send would. Returns true only when the runtime was rebuilt; on
+   * false the caller re-reads the live session and continues.
+   */
+  hydrateActiveOrcaSession(sessionId: string, createOpts: CreateOpts): Promise<boolean>;
 }
 
 type ResolveSessionResult =
@@ -1059,6 +1067,37 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
     return session?.codexThreadMayHaveRollout;
   }
 
+  /**
+   * A live session that became an Orca Lead/Worker after its runtime started has neither
+   * the Orca instructions nor the Orca MCP context yet. Rebuild it before its next turn.
+   * Returns null when nothing had to change (already hydrated, not an Orca session, or a
+   * turn is running — the caller's running guard owns that case).
+   */
+  async function hydrateActiveOrcaSessionIfNeeded(
+    sess: MakerSendTransactionSession,
+    createOpts: CreateOpts,
+    fromDeviceLinkClient: boolean,
+  ): Promise<ResolveSessionResult | null> {
+    const sessionId = sess.id;
+    if (deps.isOrcaMcpHydrated(sessionId)) return null;
+    // Launch-only preferences (custom prompt, memory, reasoning display) live only on the
+    // running handle; callers that rebuild createOpts from the DB do not carry them.
+    const startupPreferences = Object.fromEntries(
+      Object.entries(sess.hostStartupPreferences ?? {})
+        .filter(([key]) => createOpts[key as keyof typeof createOpts] === undefined),
+    );
+    const co = deps.buildCreateOptsWithStderr({ ...createOpts, ...startupPreferences, id: sessionId });
+    const shouldHydrateOrcaMcp = await deps.synthesizeOrcaVendorOptionsFromDb(sessionId, co);
+    if (!shouldHydrateOrcaMcp) return null;
+    if (sess.isTurnRunning()) {
+      deps.log.warn('send: active Orca session needs MCP rehydrate but turn is running', {
+        sessionId,
+      });
+      return null;
+    }
+    return rehydrateActiveSession(sessionId, co, fromDeviceLinkClient);
+  }
+
   async function lazyCreateSession(
     sessionId: string,
     createOpts: CreateOpts,
@@ -1143,6 +1182,12 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       if (deps.getSession(sessionId)) return false;
       const lazy = await lazyCreateSession(sessionId, createOpts);
       return lazy.kind === 'session';
+    },
+    async hydrateActiveOrcaSession(sessionId, createOpts) {
+      const sess = deps.getSession(sessionId);
+      if (!sess) return false;
+      const hydrated = await hydrateActiveOrcaSessionIfNeeded(sess, createOpts, false);
+      return hydrated?.kind === 'session';
     },
     async sendToAgentAccepted(
       sessionId,
@@ -1327,28 +1372,14 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
             ),
           );
         }
-        if (!deps.isOrcaMcpHydrated(sessionId) && createOpts) {
-          const co = deps.buildCreateOptsWithStderr({
-            ...(createOpts as CreateOpts),
-            id: sessionId,
-          });
-          const shouldHydrateOrcaMcp = await deps.synthesizeOrcaVendorOptionsFromDb(sessionId, co);
-          if (shouldHydrateOrcaMcp) {
-            if (sess.isTurnRunning()) {
-              // 仍交给下方统一 running guard 抛 SESSION_RUNNING，避免重复分支。
-              deps.log.warn('send: active Orca session needs MCP rehydrate but turn is running', {
-                sessionId,
-              });
-            } else {
-              const rehydrated = await rehydrateActiveSession(
-                sessionId,
-                co,
-                requestedSendOpts.fromDeviceLinkClient === true,
-              );
-              if (rehydrated.kind === 'failure') return rehydrated.result;
-              sess = rehydrated.session;
-            }
-          }
+        if (createOpts) {
+          const hydrated = await hydrateActiveOrcaSessionIfNeeded(
+            sess,
+            createOpts as CreateOpts,
+            requestedSendOpts.fromDeviceLinkClient === true,
+          );
+          if (hydrated?.kind === 'failure') return hydrated.result;
+          if (hydrated) sess = hydrated.session;
         }
       }
 

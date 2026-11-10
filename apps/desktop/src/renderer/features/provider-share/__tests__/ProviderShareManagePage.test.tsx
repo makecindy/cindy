@@ -537,7 +537,8 @@ describe('ProviderShareManagePage', () => {
   // 2026-10-17 用户确认原型：与设置 → 用量同一套，默认合计，可以只看一个人或一台电脑。
   // 测试价值：经真实管理页验证 2026-10-19 用户要求的单卡切换与移出电脑隐藏；原覆盖同时渲染三张表，
   // 没有「当前组只有本机、历史仍有另一台」输入。最小失败输入为 xdGroup + 一条已移出电脑的用量，tier: unit。
-  // 本机整文件实测 19.23s（收集 8.02s、27 项执行 9.63s）；新增回归 395ms。复用原有管理页 fixture，避免另开同入口的小文件。
+  // 本机整文件实测 20.13s（收集 7.87s、42 项执行 10.93s）；真实管理页加载多个设置组件，整体超过 10s。
+  // 复用原有管理页 fixture，避免另开同入口的小文件。
   it('switches one breakdown card between people, current computers and models without losing historical totals', async () => {
     localGroups = { xd: { ...xdGroup, members: [xdGroup.members[0]!] } };
     renderPage();
@@ -559,9 +560,101 @@ describe('ProviderShareManagePage', () => {
     expect(screen.getAllByTestId('provider-usage-model').map((row) => row.textContent))
       .toEqual(expect.arrayContaining([expect.stringContaining('Opus 5.5')]));
     expect(screen.getByTestId('provider-usage-summary').textContent).toBe(summary);
+    // 已移出电脑的历史在按电脑分色柱图里也归入「更早的记录」，不单独暴露电脑分段。
+    const stack = screen.getByRole('radiogroup', { name: 'providerGroup.usage.stack.aria' });
+    fireEvent.click(within(stack).getByRole('radio', { name: 'providerGroup.usage.stack.computer' }));
+    for (const day of ['2026-10-16', '2026-10-15']) {
+      const bar = document.querySelector<HTMLElement>(`[data-day="${day}"]`);
+      const descriptionId = bar?.getAttribute('aria-describedby');
+      const description = descriptionId ? document.getElementById(descriptionId)?.textContent : null;
+      expect(description).toContain('providerGroup.usage.unattributed');
+      expect(description).not.toContain('Studio');
+    }
     pickUsageBreakdown('party');
     expect(usageRowText(0)).toContain('52.0k');
     expect(usageRowText(1)).toContain('1.5M');
+  });
+
+  // 测试价值：真实管理页把仅有 cache 的用量显示在概览、按人/电脑/模型和柱图中（provider-groups.md §7），
+  // 并保留只有金额、没有 token 的记录在按人/按电脑表里的估算金额。
+  // 原覆盖的 input/output 都非零，漏掉 cache 仍能显示用量；最小输入为 cacheRead=1000、其余三类为 0。
+  // tier: unit，复用管理页 IPC fixture，不访问真实账号或设备。
+  it('counts cache-only usage in the overview, breakdowns and daily chart without losing estimated cost', async () => {
+    localGroups = { xd: xdGroup };
+    const history = usageHistory();
+    history.self.days = [
+      { ...usageDay(TODAY, 'claude-sonnet-5', 0, 2.5), outputTokens: 0, cacheReadTokens: 100 },
+      { ...usageDay('2026-10-16', 'claude-fable-5-1', 0, 1.25, 'device:studio:xd-2'), outputTokens: 0, cacheCreateTokens: 200 },
+    ];
+    history.members[0]!.days = [
+      { ...usageDay(TODAY, 'claude-opus-5-5', 0, 31.2, 'device:studio:xd-2'), outputTokens: 0, cacheReadTokens: 1_000 },
+    ];
+    // 只有 SDK 金额、没有 token 的记录：概览与模型表合计金额，按人/按电脑也不能把金额藏成 —。
+    history.relays = [{
+      deviceId: 'cost-only', deviceName: null, lastUsedAt: 1,
+      days: [{ ...usageDay(TODAY, 'claude-sonnet-5', 0, 0.5, 'share:share-9:xd'), outputTokens: 0, turns: 0 }],
+    }];
+    const respond = command.getMockImplementation()!;
+    command.mockImplementation(async (cmd: { action: string }) => cmd.action === 'usage-history' ? history : respond(cmd));
+
+    renderPage();
+    await findMemberRow();
+    const summary = within(screen.getByTestId('provider-usage-summary'));
+    expect(summary.getByText('1.1k')).toBeTruthy(); // 今日 100 + 1000。
+    expect(summary.getByText('1.3k')).toBeTruthy(); // 所选范围再加昨天的 200。
+    expect(summary.getByText('$35.45')).toBeTruthy();
+    expect(usageRowText(0)).toContain('300');
+    expect(usageRowText(1)).toContain('1.0k');
+    expect(usageRowText(1)).toContain('76.9%');
+    // cache-only 成员仍算用过一台组内电脑。
+    expect(within(screen.getAllByTestId('provider-usage-row')[1]!).getAllByRole('cell')[5]!.textContent).toBe('1');
+    expect(usageRowText(2)).toContain('$0.50');
+
+    pickUsageBreakdown('computer');
+    const computers = screen.getAllByTestId('provider-usage-computer');
+    expect(computers[0]!.textContent).toContain('100');
+    expect(computers[1]!.textContent).toContain('1.2k');
+    // Studio 上只有 cache 的两条记录仍算两个使用方。
+    expect(within(computers[1]!).getAllByRole('cell')[5]!.textContent).toBe('2');
+    expect(computers[2]!.textContent).toContain('$0.50');
+
+    pickUsageBreakdown('model');
+    const models = screen.getAllByTestId('provider-usage-model');
+    expect(models.map((row) => within(row).getAllByRole('cell')[1]!.textContent)).toEqual(['1.0k', '200', '100']);
+    expect(within(models[0]!).getAllByRole('cell').map((cell) => cell.textContent))
+      .toEqual(expect.arrayContaining(['1.0k', '76.9%', '0', '0', '1.0k', '0', '100%', '$31.20']));
+    const dailyBar = document.querySelector<HTMLElement>(`[data-day="${TODAY}"]`);
+    expect(dailyBar?.getAttribute('aria-label')).toContain('"tokens":"1.1k"');
+  });
+
+  // 测试价值：真实管理页在只有 SDK 金额、没有 token/turns 时，概览、按人、按电脑（含更早的记录）
+  // 与按模型都保留该金额；providerShareRuntime 明确保留这类行。原覆盖只查按人/按电脑，未查按模型与移出电脑。
+  // 最小失败输入：单行 turns=0、四类 token=0、amount=0.5 USD，memberKey 为已移出电脑。tier: unit。
+  it('keeps amount-only records visible in model and earlier-computer breakdowns', async () => {
+    localGroups = { xd: xdGroup };
+    const history = usageHistory();
+    history.self.days = [{
+      ...usageDay(TODAY, 'claude-haiku-4-5', 0, 0.5, 'device:retired:xd-2'),
+      outputTokens: 0, turns: 0,
+    }];
+    history.members = [];
+    const respond = command.getMockImplementation()!;
+    command.mockImplementation(async (cmd: { action: string }) => cmd.action === 'usage-history' ? history : respond(cmd));
+
+    renderPage();
+    await waitFor(() => expect(screen.getByTestId('provider-usage-summary').textContent).toContain('$0.50'));
+    expect(usageRowText(0)).toContain('$0.50');
+
+    pickUsageBreakdown('computer');
+    const earlier = screen.getAllByTestId('provider-usage-computer').find((row) => row.getAttribute('data-computer-key') === '');
+    expect(earlier?.textContent).toContain('$0.50');
+
+    pickUsageBreakdown('model');
+    const model = screen.getAllByTestId('provider-usage-model').find((row) => row.textContent?.includes('Haiku 4.5'));
+    expect(model).toBeTruthy();
+    const cells = within(model!).getAllByRole('cell').map((cell) => cell.textContent);
+    expect(cells[1]).toBe('—');
+    expect(cells[8]).toBe('$0.50');
   });
 
   it('splits usage by computer in the group and narrows everything to one person when their row is picked', async () => {
@@ -698,12 +791,19 @@ describe('ProviderShareManagePage', () => {
 
   // 那台电脑还没更新、不认识按天明细：退回所有时间的合计，时间固定为所有时间，不显示两张图。
   it('falls back to all-time totals when the provider computer has not been updated', async () => {
+    const legacyOwn = ownUsage();
+    legacyOwn.local!.models[0]!.cacheReadTokens = 100_000;
+    legacyOwn.local!.models[0]!.cacheCreateTokens = 20_000;
+    const legacyOwned = owned();
+    legacyOwned.shares[0]!.members[0]!.models[0]!.cacheReadTokens = 2_000_000;
+    legacyOwned.shares[0]!.members[0]!.models[0]!.cacheCreateTokens = 100_000;
     const remoteCommand = vi.spyOn(window.electronAPI.providerGroup, 'command');
     remoteCommand.mockImplementation(async (cmd) => {
       if (cmd.action === 'remote-manage' && cmd.request.action === 'manage-share') {
         const action = cmd.request.command.action;
         if (action === 'usage-history') throw new Error('[UNSUPPORTED_CAPABILITY] Provider management requires an update');
-        if (action === 'own-usage') return ownUsage();
+        if (action === 'own-usage') return legacyOwn;
+        if (action === 'owned') return legacyOwned;
         return command(cmd.request.command);
       }
       return { providerId: 'xd', config: null, members: [] };
@@ -715,9 +815,12 @@ describe('ProviderShareManagePage', () => {
       request: { action: 'manage-share', command: { action: 'own-usage', providerId: 'xd', range: 'all' } },
     }));
     expect(await screen.findByText(/providerGroup\.usage\.legacyNote/)).toBeTruthy();
-    await waitFor(() => expect(usageRowText(0)).toContain('52.0k'));
+    // 旧回包已经带了 cache：不需要更新协议就能在展示时计入，输入分项与金额不变。
+    await waitFor(() => expect(usageRowText(0)).toContain('172.0k'));
+    expect(usageRowText(0)).toContain('$3.75');
     // 分享的人所有时间的合计来自 owned。
-    expect(usageRowText(1)).toContain('1.5M');
+    expect(usageRowText(1)).toContain('3.6M');
+    expect(usageRowText(1)).toContain('$31.20');
     // 选不了时间：不摆出时间范围与日期。
     expect(screen.queryByRole('combobox', { name: 'usageHistory.range.ariaLabel' })).toBeNull();
     expect(screen.queryByLabelText('usageHistory.range.date')).toBeNull();

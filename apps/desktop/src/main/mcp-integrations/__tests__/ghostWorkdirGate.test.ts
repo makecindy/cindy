@@ -3629,6 +3629,7 @@ describe('market install live authority', () => {
     const ghost = { manifest: { id: 'mail-suite', name: 'Mail', version: '1' }, enabled: true };
     const market = {
       snapshot: vi.fn(async () => ({ items: [], unavailableReason: null, customSourceNames: [], unavailableCustomSourceNames: [] })),
+      query: vi.fn(async () => ({ items: [], nextCursor: null, counts: null, unavailableReason: null, customSourceNames: [], unavailableCustomSourceNames: [] })),
       detail: vi.fn(async () => ({ ghostId: 'mail-suite', releaseId: 'r1', manifest: ghost.manifest })),
       install: vi.fn(async (_id: string, _options: unknown, context: InstallContext) => { context.assertCurrent?.(); return { ghost }; }),
     };

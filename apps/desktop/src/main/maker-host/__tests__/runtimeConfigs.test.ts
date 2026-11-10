@@ -7,6 +7,11 @@ let memorySettings = {
   pi: false,
 };
 
+import { configureUserDataDir } from '../../userDataPath.js';
+
+// The settings stores read the profile root from the injected host facts.
+configureUserDataDir('/tmp/xdt-maker-test-user-data');
+
 vi.mock('electron', () => ({
   app: {
     isPackaged: false,
@@ -40,8 +45,11 @@ vi.mock('../../model-access/effectiveEndpoint.js', async () => {
 });
 
 describe('runtime-configs', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.resetModules();
+    // resetModules clears the injected host facts, so reinstall them per test.
+    const { configureUserDataDir: configure } = await import('../../userDataPath.js');
+    configure('/tmp/xdt-maker-test-user-data');
     memorySettings = {
       maker: true,
       claudeCode: false,
@@ -150,6 +158,8 @@ describe('runtime-configs', () => {
 
 it('never treats a retired independent Claude account as a connected subscription for spawn flags', async () => {
   vi.resetModules();
+  const { configureUserDataDir: configure } = await import('../../userDataPath.js');
+  configure('/tmp/xdt-maker-test-user-data');
   const readBuiltin = vi.fn(() => true);
   vi.doMock('../active-catalog.js', () => ({ getActiveCatalog: () => ({ providers: [
     { id: 'claude-work', auth: { method: 'oauth', native: 'claude' } },

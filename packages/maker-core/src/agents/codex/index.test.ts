@@ -1866,6 +1866,10 @@ function installFakeHost(
       catalogModel: string;
       reasoningEffort: import('./app-server/protocol.js').ReasoningEffort | null;
     };
+    smartSubagentRoutes?: Array<{
+      providerId: string;
+      catalogModel: string;
+    }>;
     observedSubagentIdentities?: Record<string, { model: string; reasoningEffort?: string }>;
     openAiWebSocketsEnabled?: boolean;
     userAgent?: string;
@@ -1976,6 +1980,7 @@ function installFakeHost(
   );
   const getSubagentModelFallback = vi.fn(() => opts.subagentModelFallback);
   const getSubagentRoute = vi.fn(() => opts.subagentRoute);
+  const getSmartSubagentRoutes = vi.fn(() => opts.smartSubagentRoutes);
   const getObservedSubagentIdentity = vi.fn(
     (childThreadId: string) => opts.observedSubagentIdentities?.[childThreadId],
   );
@@ -2005,6 +2010,7 @@ function installFakeHost(
     getSessionMcpConfig,
     getSubagentModelFallback,
     getSubagentRoute,
+    getSmartSubagentRoutes,
     getObservedSubagentIdentity,
     getOpenAiWebSocketsEnabled,
     getConnectionId: () => opts.connectionId ?? 'test-connection',
@@ -7697,11 +7703,15 @@ describe('CodexAgent thread/settings/update channel', () => {
       model: 'gpt-5.4',
       workingDir: '/repo',
     });
-    // 模拟 renderer 单次切换全量重调 set*: 都是与启动时相同的值 → 一条 RPC 都不该发
+    // 模拟 renderer 单次切换全量重调 set*: 模型与 fast 和启动时相同，一条 RPC 都不该发。
+    // 档位例外：启动没传 effort 时 high 只是目录默认，当轮显式选 high 是「未选 → 已选」，
+    // 必须推一次，后面拉起的子代理才继承得到。
     await handle.setModel?.('gpt-5.4'); // 同 model
-    await handle.setEffort?.('high'); // 默认就是 high
+    await handle.setEffort?.('high');
     await handle.setFastMode?.(false); // 启动未开 fast → 仍是关
-    expect(settingsCalls(host)).toEqual([]);
+    expect(settingsCalls(host)).toEqual([
+      { threadId: 'start-thread-id', effort: 'high' },
+    ]);
     await handle.close();
   });
 
@@ -7859,6 +7869,256 @@ describe('CodexAgent send', () => {
       expect(turns.at(-1)?.collaborationMode).toMatchObject({
         mode: 'default', settings: { reasoning_effort: null },
       });
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it('does not stamp the catalog default onto smart subagent routes when the task never stored an effort', async () => {
+    // 测试价值
+    // - 生产入口与可观察结果：CodexAgent.startSession 登记给宿主的 reasoningEffort。
+    //   没带档位时字段必须缺席，宿主才不会用 high 盖住子代理自己选的 low。
+    // - Bug／规则依据：PR #9582 Greptile P1。从未存过档位的任务应保持原行为。
+    // - 现有覆盖缺口：相邻用例都传入了 opts.effort，盖不住「字段缺失 → 目录默认 high」。
+    // - 最小失败输入：startSession 不传 effort，且智能路由已开启。
+    // - tier：unit。只走内存 fake host，不碰网络或进程。
+    const registerCodexSystemPromptForThread = vi.fn();
+    const agent = new CodexAgent(createDeps({}, { registerCodexSystemPromptForThread }));
+    const smartRoute = { providerId: 'custom', catalogModel: 'gpt-5.6-sol' };
+    installFakeHost(agent, () => undefined, {
+      codexProxyActive: true,
+      smartSubagentRoutes: [smartRoute],
+    });
+    const handle = await agent.startSession({
+      sessionId: 'session-never-stored-effort',
+      model: 'gpt-5.6-sol',
+      workingDir: '/repo',
+    });
+    try {
+      expect(handle.getEffort?.()).toBe('high');
+      const registered = registerCodexSystemPromptForThread.mock.calls.at(-1)?.[0];
+      expect(registered).toMatchObject({
+        sessionId: 'session-never-stored-effort',
+        threadId: 'start-thread-id',
+        smartSubagentRoutes: [smartRoute],
+      });
+      expect(registered).not.toHaveProperty('reasoningEffort');
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it('stamps the stored effort onto smart subagent routes when restoring a task', async () => {
+    // 测试价值
+    // - 生产入口与可观察结果：恢复时把存档档位登记给宿主，宿主据此盖章。
+    // - Bug／规则依据：PR #9582。存档档位与目录默认必须能区分。
+    // - 现有覆盖缺口：上面的用例只覆盖「从未存过」；存档 high 与默认 high 值相同，
+    //   必须单独证明它仍然会被登记。
+    // - 最小失败输入：resume 且 opts.effort 为 high。
+    // - tier：unit。
+    const registerCodexSystemPromptForThread = vi.fn();
+    const agent = new CodexAgent(createDeps({}, { registerCodexSystemPromptForThread }));
+    const smartRoute = { providerId: 'custom', catalogModel: 'gpt-5.6-sol' };
+    installFakeHost(agent, () => undefined, {
+      codexProxyActive: true,
+      smartSubagentRoutes: [smartRoute],
+    });
+    const handle = await agent.startSession({
+      sessionId: 'session-restored-high',
+      model: 'gpt-5.6-sol',
+      effort: 'high',
+      workingDir: '/repo',
+      resumeSessionId: '11111111-1111-4111-8111-111111111111',
+    });
+    try {
+      expect(registerCodexSystemPromptForThread).toHaveBeenLastCalledWith(expect.objectContaining({
+        sessionId: 'session-restored-high',
+        threadId: 'resume-thread-id',
+        smartSubagentRoutes: [smartRoute],
+        reasoningEffort: 'high',
+      }));
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it('selecting the catalog default high still counts as an explicit choice', async () => {
+    // 测试价值
+    // - 生产入口与可观察结果：startSession 不传 effort 时档位是默认 high，但没登记给宿主。
+    //   当轮 setEffort('high') 必须补上登记，跨供应商子代理才跟父任务走。
+    // - Bug／规则依据：PR #9582 P2。同值去重把「未选 → 已选」也跳过了。
+    // - 现有覆盖缺口：相邻用例改的是 low，值和默认不同，盖不住这条同值路径。
+    // - 最小失败输入：startSession 不传 effort，随后 setEffort('high')。
+    // - tier：unit。只走内存 fake host，不碰网络或进程。
+    const registerCodexSystemPromptForThread = vi.fn();
+    const agent = new CodexAgent(createDeps({}, { registerCodexSystemPromptForThread }));
+    const smartRoute = { providerId: 'custom', catalogModel: 'gpt-5.6-sol' };
+    installFakeHost(agent, (method) => {
+      if (method === Method.ThreadSettingsUpdate) return {};
+      return undefined;
+    }, {
+      codexProxyActive: true,
+      smartSubagentRoutes: [smartRoute],
+    });
+    const handle = await agent.startSession({
+      sessionId: 'session-select-default-high',
+      model: 'gpt-5.6-sol',
+      workingDir: '/repo',
+    });
+    try {
+      expect(handle.getEffort?.()).toBe('high');
+      expect(registerCodexSystemPromptForThread.mock.calls.at(-1)?.[0]).not.toHaveProperty('reasoningEffort');
+      const callsBefore = registerCodexSystemPromptForThread.mock.calls.length;
+      await handle.setEffort?.('high');
+      expect(registerCodexSystemPromptForThread.mock.calls.length).toBeGreaterThan(callsBefore);
+      expect(registerCodexSystemPromptForThread).toHaveBeenLastCalledWith(expect.objectContaining({
+        sessionId: 'session-select-default-high',
+        threadId: 'start-thread-id',
+        smartSubagentRoutes: [smartRoute],
+        reasoningEffort: 'high',
+      }));
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it('stamps an explicit this-turn effort change onto smart subagent routes', async () => {
+    // 测试价值
+    // - 生产入口与可观察结果：从未存过档位的任务，当轮 setEffort 后登记给宿主的是新档位。
+    // - Bug／规则依据：PR #9582。显式选择必须算已选，不能因为启动时没存过就一直不盖章。
+    // - 现有覆盖缺口：「an explicit this-turn effort wins」启动时已经带了 xhigh，
+    //   盖不住「默认 high → 当轮改档」这条从无到有的路径。
+    // - 最小失败输入：startSession 不传 effort，随后 setEffort('low')。
+    // - tier：unit。
+    const registerCodexSystemPromptForThread = vi.fn();
+    const agent = new CodexAgent(createDeps({}, { registerCodexSystemPromptForThread }));
+    const smartRoute = { providerId: 'custom', catalogModel: 'gpt-5.6-sol' };
+    installFakeHost(agent, (method) => {
+      if (method === Method.ThreadSettingsUpdate) return {};
+      return undefined;
+    }, {
+      codexProxyActive: true,
+      smartSubagentRoutes: [smartRoute],
+    });
+    const handle = await agent.startSession({
+      sessionId: 'session-explicit-this-turn',
+      model: 'gpt-5.6-sol',
+      workingDir: '/repo',
+    });
+    try {
+      expect(registerCodexSystemPromptForThread.mock.calls.at(-1)?.[0]).not.toHaveProperty('reasoningEffort');
+      await handle.setEffort?.('low');
+      expect(registerCodexSystemPromptForThread).toHaveBeenLastCalledWith(expect.objectContaining({
+        sessionId: 'session-explicit-this-turn',
+        threadId: 'start-thread-id',
+        smartSubagentRoutes: [smartRoute],
+        reasoningEffort: 'low',
+      }));
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it('restored empty effort does not overwrite the stored level', async () => {
+    const registerCodexSystemPromptForThread = vi.fn();
+    const agent = new CodexAgent(createDeps({}, { registerCodexSystemPromptForThread }));
+    const smartRoute = { providerId: 'custom', catalogModel: 'gpt-5.6-sol' };
+    const turns: TurnStartParams[] = [];
+    const host = installFakeHost(agent, (method, params) => {
+      if (method === Method.TurnStart) {
+        turns.push(JSON.parse(JSON.stringify(params)) as TurnStartParams);
+        return { turn: { id: `turn-${turns.length}` } };
+      }
+      return undefined;
+    }, {
+      codexProxyActive: true,
+      smartSubagentRoutes: [smartRoute],
+    });
+    const handle = await agent.startSession({
+      sessionId: 'session-restored-xhigh',
+      model: 'gpt-5.6-sol',
+      effort: 'xhigh',
+      workingDir: '/repo',
+      resumeSessionId: '11111111-1111-4111-8111-111111111111',
+    });
+    try {
+      expect(registerCodexSystemPromptForThread).toHaveBeenLastCalledWith(expect.objectContaining({
+        sessionId: 'session-restored-xhigh',
+        threadId: 'resume-thread-id',
+        smartSubagentRoutes: [smartRoute],
+        reasoningEffort: 'xhigh',
+      }));
+      host.getThreadHandlers()?.threadSettingsUpdated?.({
+        threadId: 'resume-thread-id',
+        threadSettings: { model: 'gpt-5.6-sol', effort: null, serviceTier: null },
+      });
+      host.getThreadHandlers()?.threadSettingsUpdated?.({
+        threadId: 'resume-thread-id',
+        threadSettings: { model: 'gpt-5.6-sol', effort: 'none', serviceTier: null },
+      });
+      expect(registerCodexSystemPromptForThread).toHaveBeenCalledTimes(1);
+      expect(handle.getEffort?.()).toBe('xhigh');
+      await handle.send({ type: 'user', content: 'continue' });
+      expect(turns).toHaveLength(1);
+      expect(turns[0]?.effort).toBe('xhigh');
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it('an explicit this-turn effort wins', async () => {
+    const registerCodexSystemPromptForThread = vi.fn();
+    const agent = new CodexAgent(createDeps({}, { registerCodexSystemPromptForThread }));
+    const smartRoute = { providerId: 'custom', catalogModel: 'gpt-5.6-sol' };
+    const turns: TurnStartParams[] = [];
+    const host = installFakeHost(agent, (method, params) => {
+      if (method === Method.TurnStart) {
+        turns.push(JSON.parse(JSON.stringify(params)) as TurnStartParams);
+        return { turn: { id: `turn-${turns.length}` } };
+      }
+      if (method === Method.ThreadSettingsUpdate) return {};
+      return undefined;
+    }, {
+      codexProxyActive: true,
+      smartSubagentRoutes: [smartRoute],
+    });
+    const handle = await agent.startSession({
+      sessionId: 'session-explicit-effort',
+      model: 'gpt-5.6-sol',
+      effort: 'xhigh',
+      workingDir: '/repo',
+      resumeSessionId: '11111111-1111-4111-8111-111111111111',
+    });
+    try {
+      await handle.setEffort?.('max');
+      host.getThreadHandlers()?.threadSettingsUpdated?.({
+        threadId: 'resume-thread-id',
+        threadSettings: { model: 'gpt-5.6-sol', effort: null, serviceTier: null },
+      });
+      expect(handle.getEffort?.()).toBe('max');
+      expect(registerCodexSystemPromptForThread).toHaveBeenLastCalledWith(expect.objectContaining({
+        reasoningEffort: 'max',
+        smartSubagentRoutes: [smartRoute],
+      }));
+      await handle.send({ type: 'user', content: 'continue' });
+      expect(turns.at(-1)?.effort).toBe('max');
+
+      // 当轮显式改成「不用推理」后，server 回带的默认档不得再填回去。
+      await handle.setEffort?.('' as Effort);
+      host.getThreadHandlers()?.threadSettingsUpdated?.({
+        threadId: 'resume-thread-id',
+        threadSettings: { model: 'gpt-5.6-sol', effort: 'high', serviceTier: null },
+      });
+      expect(handle.getEffort?.()).toBe('');
+      expect(registerCodexSystemPromptForThread).toHaveBeenLastCalledWith(expect.objectContaining({
+        reasoningEffort: '',
+      }));
+      host.getThreadHandlers()?.turnCompleted?.({
+        threadId: 'resume-thread-id',
+        turn: { id: 'turn-1', status: 'completed' },
+      });
+      await handle.send({ type: 'user', content: 'again' });
+      expect(turns.at(-1)).not.toHaveProperty('effort');
     } finally {
       await handle.close();
     }
@@ -18987,8 +19247,8 @@ describe('CodexAgent MCP thread context hooks', () => {
         name: 'cindy__ask_user_question',
       }),
     ]);
-    expect(startParams.dynamicTools?.[0]?.description).toContain('the user asks to choose');
-    expect(startParams.dynamicTools?.[0]?.description).toContain('provide a generic list');
+    expect(startParams.dynamicTools?.[0]?.description).toContain('Prefer native request_user_input');
+    expect(startParams.dynamicTools?.[0]?.description).toContain('Use native request_user_input_async');
     expect(startParams.dynamicTools?.[0]?.description).toContain('Ask 1 to 3 short questions in a single call');
     expect(startParams.dynamicTools?.[0]?.description).toContain('returns the awaited result as a JSON string');
     expect(startParams.dynamicTools?.[0]?.description).toContain('JSON.parse(raw)');
@@ -19534,12 +19794,14 @@ describe('CodexAgent MCP thread context hooks', () => {
           last: { inputTokens: 10, outputTokens: 100, cachedInputTokens: 0 },
         },
       });
-      const expectSample = (outputTokens: number, generationDurationMs: number) =>
+      // A response that streamed nothing is timed by the model time it took, wait included,
+      // until the turn has measured a speed of its own.
+      const expectSample = (outputTokens: number, generationDurationMs: number, streaming: boolean) =>
         expect(handle.getUsageSnapshot()).toMatchObject({
           outputTokens, generationDurationMs, generationReliable: true,
-          tokenSpeed: { tokens: outputTokens, elapsedMs: generationDurationMs, rate: 100, streaming: true },
+          tokenSpeed: { tokens: outputTokens, elapsedMs: generationDurationMs, average: 100, streaming },
         });
-      expectSample(100, 1_000);
+      expectSample(100, 1_000, false);
       const tool = { id: 'tool-1', type: 'mcpToolCall', server: 'test', tool: 'read', arguments: {} };
       handlers.itemStarted!({ threadId: 'start-thread-id', turnId: 'turn-1', item: tool });
       now = 6_000;
@@ -19548,14 +19810,14 @@ describe('CodexAgent MCP thread context hooks', () => {
       handlers.itemStarted!({ threadId: 'start-thread-id', turnId: 'turn-1',
         item: { id: 'reasoning-2', type: 'reasoning', summary: [], content: [] } });
       // No second usage yet: 100 / 1s, never 100 / 5s.
-      expectSample(100, 1_000);
+      expectSample(100, 1_000, true);
       handlers.tokenUsageUpdated!({
         threadId: 'start-thread-id', turnId: 'turn-1', tokenUsage: {
           total: { totalTokens: 120, inputTokens: 20, outputTokens: 100, cachedInputTokens },
           last: { inputTokens: 10, outputTokens: 0, cachedInputTokens },
         },
       });
-      expectSample(100, 1_000);
+      expectSample(100, 1_000, true);
       expect(handle.getUsageSnapshot().tokenUsage).toBe(120 - cachedInputTokens);
       handlers.tokenUsageUpdated!({
         threadId: 'start-thread-id', turnId: 'turn-1', tokenUsage: {
@@ -19563,7 +19825,7 @@ describe('CodexAgent MCP thread context hooks', () => {
           last: { inputTokens: 10, outputTokens: 400, cachedInputTokens: 0 },
         },
       });
-      expectSample(500, 5_000);
+      expectSample(500, 5_000, false);
       now = 11_000;
       handlers.tokenUsageUpdated!({
         threadId: 'start-thread-id', turnId: 'turn-1', tokenUsage: {
@@ -19571,7 +19833,7 @@ describe('CodexAgent MCP thread context hooks', () => {
           last: { inputTokens: 10, outputTokens: 0, cachedInputTokens: 0 },
         },
       });
-      expectSample(500, 5_000);
+      expectSample(500, 5_000, false);
       expect(handle.getUsageSnapshot().tokenUsage).toBe(540 - cachedInputTokens);
       handlers.turnCompleted!({ threadId: 'start-thread-id', turn: { id: 'turn-1', status: 'completed' } });
       await waitForExpectation(() => expect(events.some((event) => event.type === 'done')).toBe(true));
@@ -19630,7 +19892,8 @@ describe('CodexAgent MCP thread context hooks', () => {
       expect(handle.beginTurnContinuationWait?.(events.find(event => event.type === 'done')?.turnContinuationId)).toBe('active');
       await waitForExpectation(() => expect(turnSeq).toBe(2));
       handlers.turnStarted!({ threadId: 'start-thread-id', turn: { id: 'turn-2' } });
-      expect(handle.getUsageSnapshot().generationReliable).toBe(false);
+      // A native continuation keeps the product turn's measurement.
+      expect(handle.getUsageSnapshot().tokenSpeed).toMatchObject({ tokens: 1_000, elapsedMs: 10_000 });
       now = 13_000;
       usage('turn-2', 200, 1_220);
       expect(handle.getUsageSnapshot()).toMatchObject({
@@ -19646,9 +19909,11 @@ describe('CodexAgent MCP thread context hooks', () => {
       handlers.itemCompleted!({ threadId: 'start-thread-id', turnId: 'turn-2', item: tool });
       now = 25_000;
       usage('turn-2', 377, 2_001_617);
+      // The unpaired 2M tokens stay out. Nothing in this turn has streamed, so no speed is
+      // measured yet and each response still counts over the model time it took.
       expect(handle.getUsageSnapshot()).toMatchObject({
         outputTokens: 1_577, generationDurationMs: 22_000, generationReliable: true,
-        tokenSpeed: { tokens: 1_577, elapsedMs: 22_000, rate: 37.7, peak: 100 },
+        tokenSpeed: { tokens: 1_577, elapsedMs: 22_000 },
       });
       expect(handle.getUsageSnapshot().tokenUsage).toBe(2_000_607);
       handlers.turnCompleted!({ threadId: 'start-thread-id', turn: { id: 'turn-2', status: 'completed' } });
@@ -19656,7 +19921,7 @@ describe('CodexAgent MCP thread context hooks', () => {
       handlers.turnStarted!({ threadId: 'start-thread-id', turn: { id: 'turn-3' } });
       now = 35_000;
       usage('turn-3', 377, 2_002_004);
-      expect(handle.getUsageSnapshot().tokenSpeed).toMatchObject({ tokens: 377, elapsedMs: 10_000, average: 37.7, peak: 37.7 });
+      expect(handle.getUsageSnapshot().tokenSpeed).toMatchObject({ tokens: 377, elapsedMs: 10_000, average: 37.7 });
     } finally {
       await handle.close();
       nowSpy.mockRestore();

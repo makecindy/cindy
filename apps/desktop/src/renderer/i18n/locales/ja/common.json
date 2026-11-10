@@ -858,7 +858,7 @@
       },
       "runningCount_other": "{{count}} 件実行中",
       "limitAria": "{{name}} の同時実行数の上限",
-      "limitOption_other": "上限 {{count}}",
+      "limitOption_other": "同時 {{count}}",
       "weightAria": "{{name}} の重み",
       "weightOption": "重み {{weight}}",
       "assignAria": "{{name}} に割り当てる",
@@ -873,6 +873,7 @@
         "pausedLocal": "他のパソコンからの新しいタスクは受付停止中",
         "cooling": "クールダウン中",
         "coolingUntil": "クールダウン中 · {{time}} ごろ回復",
+        "quotaExhausted": "クォータを使い切りました",
         "offline": "オフライン",
         "unreachableHere": "このパソコンから接続できません",
         "unavailable": {
@@ -912,9 +913,13 @@
       "description": "各アカウントのクォータを均等に使い切るため、このメッセージは {{label}} から送ることをおすすめします（{{quota}}）。直近数回のやり取りと要約は引き継がれますが、それより前の細部は失われることがあります。",
       "quota": "残り {{left}}%",
       "quotaReset": "残り {{left}}%・{{reset}}",
-      "confirm": "切り替える",
-      "cancel": "キャンセル",
-      "remember": "今後は確認せず自動で切り替える（このタスクのみ）"
+      "confirm": "今回だけ切り替える",
+      "cancel": "今は切り替えない",
+      "remember": "今後は確認せず自動で切り替える",
+      "disable": "自動では切り替えず、確認もしない",
+      "disableFailed": "選択が保存されたか確認できませんでした。接続を確認し、タスクがあるパソコンの Cindy を最新版にしてから、もう一度お試しください。このメッセージは通常どおり送信されます。",
+      "choiceLabel": "切り替え方法（このタスクのみ）",
+      "send": "メッセージを送信"
     },
     "deleteConfirm": {
       "title": "{{provider}} のプロバイダーグループを削除しますか？",
@@ -7367,6 +7372,11 @@
         "installedExpand": "インストール済みプラグイン {{count}} 件をすべて表示",
         "installedCollapse": "追加のインストール済みプラグインを隠す",
         "recommendedSection": "おすすめ",
+        "todayRecommendations": "今日のおすすめ",
+        "marketSection": "プラグインマーケット",
+        "browseMarket": "プラグインマーケットを見る",
+        "searching": "検索中…",
+        "allLoaded": "全 {{count}} 件のプラグインを表示しました",
         "updatesAvailable": "{{count}} 件のプラグイン更新があります",
         "updateAll": "すべて更新",
         "ignoreRound": "今回は無視",
@@ -7396,7 +7406,15 @@
       },
       "market": {
         "publisherKind": {
-          "official": "公式"
+          "official": "公式",
+          "community": "コミュニティ"
+        },
+        "publisherDescription": {
+          "official": "Cindy が公式に公開・保守しています",
+          "community": "コミュニティ開発者が公開・保守しています",
+          "team": "組織内の権限を持つメンバーに共有されています",
+          "custom": "追加した Git またはローカルフォルダーのマーケットから取得",
+          "local": "このコンピューター上で開発、またはローカルファイルからインストール"
         },
         "scopeAria": "プラグインの提供元を絞り込む",
         "scope": {
@@ -10724,6 +10742,9 @@
         "stepFailed": "{{name}} はエラーのため、このステップを完了できませんでした",
         "stepTimeout": "{{name}} の作業に時間がかかりすぎたため、このステップを止めました",
         "stepUnavailable": "{{name}} は現在利用できないため、このステップを進められません",
+        "runtimeFailureReason": {
+          "unclaimed_timeout": "{{name}}は待機期限内に処理を開始できませんでした。今回のリクエストは終了しました。\nパートナーのオーナーに、所属するパソコンで Cindy が正常に動作し、ネットワークに接続されているか確認してもらってください。"
+        },
         "runtimeFailure": {
           "REMOTE_DEVICE_LIMIT": "{{name}}は返信できません：この仲間のデバイスのリモートセッション数が上限に達しました。\n仲間の所有者に不要なセッションのアーカイブを依頼するか、リモートのパソコンの所有者に「リモートと共有」で上限の変更を依頼してください。",
           "REMOTE_TOTAL_LIMIT": "{{name}}は返信できません：リモートのパソコンのセッション総数が上限に達しました。\nそのパソコンの所有者に不要なセッションの解放、または「リモートと共有」での上限変更を依頼してください。",
@@ -11369,6 +11390,9 @@
       "databaseDriver": "データベースドライバーを読み込めません。Cindy を更新または修復して再試行してください。",
       "databaseUnavailable": "元のデータベースを読み込めません。元データは変更されていません。修復後に再試行できます。",
       "fileTooLarge": "ファイルまたはインポート全体が読み取り上限を超えています。内容は切り捨てていません。",
+      "sourceFileTooLarge": "単一のファイルが読み取り上限を超えています。この項目は完全にはインポートされていません。",
+      "snapshotTooLarge": "今回読み取るデータの合計が上限を超えています。インポートは未完了です。",
+      "itemTooLarge": "この項目のファイルの合計が 128 MiB を超えています。この項目は完全にはインポートされていません。",
       "memoryMetadata": "メモリの概要またはタイトルが保存要件を満たしていません。",
       "memoryWrite": "メモリの保存または整合性確認に失敗しました。再試行できます。",
       "memoryChanged": "保存済みのメモリが変更されているため、上書きしていません。",
@@ -12484,6 +12508,12 @@
       "missingDir": "フォルダが見つかりません"
     },
     "pendingQueue": {
+      "stopping": "停止処理中",
+      "queued": "順番待ち",
+      "editingInComposer": "下の入力欄で編集中…",
+      "moveUp": "1つ前へ",
+      "moveDown": "1つ後ろへ",
+      "cancelSend": "送信をキャンセル",
       "regionAria": "送信待ちメッセージのキュー",
       "listAria": "キュー内のメッセージ",
       "pausedFooter": "タスク停止、キューは一時停止中",
@@ -14093,6 +14123,7 @@
       "taskAutoArchived": "「{{title}}」をアーカイブしました",
       "taskAutoArchivedUndo": "元に戻す",
       "taskAutoArchivePending": "このタスクを離れると自動アーカイブします",
+      "taskAutoArchiveBlockedDirty": "「{{title}}」は作業フォルダに未コミットの変更があるため、自動アーカイブされませんでした",
       "taskAutoArchiveCancel": "キャンセル",
       "taskAutoArchiveCancelled": "今回は自動アーカイブしません",
       "taskArchiveNow": "今すぐアーカイブ"
@@ -19702,10 +19733,10 @@
       "useCodex": "Codex でログイン"
     },
     "title": "サブスクリプションアカウント",
-    "note": "最初のアカウントは CLI の既定フォルダーを使います。追加アカウントは個別にログインします。新しいタスクは分散され、既存のタスクは元のアカウントを使い続けます。",
     "strategy": "負荷分散",
     "add": "アカウントを追加",
     "default": "既定フォルダー",
+    "defaultTag": "既定",
     "ready": "接続済み",
     "signedOut": "ログインが必要",
     "unavailable": "状態を取得できません",
@@ -19727,5 +19758,17 @@
     "logExcerpt": "関連ログ（抜粋、不完全な場合があります）",
     "logsUnavailable": "関連ログがありません。原因はまだ不明です。",
     "failed": "診断情報を準備できませんでした。もう一度お試しください。"
+  },
+  "githubStar": {
+    "title": "Cindy は気に入りましたか？",
+    "description": "GitHub でスターを付けて Cindy を応援しませんか。",
+    "dismiss": "今後表示しない",
+    "action": "Cindy を応援する",
+    "starring": "星を灯しています…",
+    "thanks": "スターをありがとうございます！",
+    "thanksDescription": "応援が Cindy の成長につながります。",
+    "browserFallback": "GitHub を開いて Cindy にスターを付けてください。",
+    "openGithub": "GitHub を開く",
+    "openFailed": "GitHub を開けませんでした。"
   }
 }

@@ -3,6 +3,7 @@ export * from './routineEvents.js';
 export * from './pluginModels.js';
 export * from './recommendations.js';
 export * from './delivery.js';
+export * from './catalog.js';
 export * from './memberUpload.js';
 export * from './usage.js';
 export * from './secretCheck.js';

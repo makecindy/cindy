@@ -898,7 +898,7 @@ function DetailHeader({
                   {resolvedDelete && (
                     <>
                       <DropdownMenuSeparator />
-                      <DropdownMenuItem onClick={resolvedDelete.onClick} disabled={management.busy}>
+                      <DropdownMenuItem variant="danger" onClick={resolvedDelete.onClick} disabled={management.busy}>
                         <Trash2 size={18} className="mr-2.5" />
                         {resolvedDelete.label}
                       </DropdownMenuItem>
@@ -1940,8 +1940,8 @@ function XdGatewayHeader({
         </DropdownMenuItem>
       )}
       {connected && (
-        <DropdownMenuItem onClick={() => void handleDisconnect()}>
-          <LogOut size={14} className="mr-2.5 text-[var(--text-tertiary)]" />
+        <DropdownMenuItem variant="danger" onClick={() => void handleDisconnect()}>
+          <LogOut size={14} className="mr-2.5" />
           {t('settings.providers.button.disconnect')}
         </DropdownMenuItem>
       )}

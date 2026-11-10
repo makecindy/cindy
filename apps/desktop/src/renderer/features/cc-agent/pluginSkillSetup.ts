@@ -73,7 +73,7 @@ export async function pluginSetupRoute(
   pluginId: string,
 ): Promise<string | null> {
   if (ghost) return `/plugins?ghost=${encodeURIComponent(installedGhostStoragePart(ghost))}`;
-  const market = await window.electronAPI.pluginMarket.snapshot();
+  const market = await window.electronAPI.pluginMarket.lookup([pluginId]);
   const matches = market.items.filter(
     (item) => item.ghostId === pluginId && item.installState !== 'conflict',
   );

@@ -23,7 +23,7 @@ import { hasEmbeddedImPrompt } from './userMessageDisplayText';
  */
 
 import { ChatBubble, CHAT_BUBBLE_COLUMN_CLASS } from './ChatBubble';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Bot,
   ChevronDown,
@@ -146,6 +146,10 @@ type UserImageItem =
   | { base64: string; mimeType: string; originalName?: string };
 
 interface UserMessageProps {
+  /** Pending delivery uses the same bubble, with queue actions instead of history actions. */
+  pendingActions?: ReactNode;
+  pendingEditing?: boolean;
+  pendingIndicator?: ReactNode;
   sharedAuthorName?: string;
   /** 共享任务成员 id:作者行悬停显示。 */
   sharedAuthorMemberId?: string;
@@ -823,6 +827,9 @@ export function renderContent(
 // 老 UserImageItemView 已迁出,见 ChatImageView.tsx。
 
 export function UserMessage({
+  pendingActions,
+  pendingEditing,
+  pendingIndicator,
   sharedAuthorName,
   sharedAuthorMemberId,
   workingDir,
@@ -1258,7 +1265,7 @@ export function UserMessage({
   );
 
   // Attachments belong to the user message independently of its visual shell.
-  const messageActions = (
+  const messageActions = pendingActions ?? (
     <MessageActionBar
       createdAt={createdAt}
       copyText={copyText}
@@ -1336,8 +1343,7 @@ export function UserMessage({
       // scrollIntoView 也以此为目标)。messageClientId 缺失时不挂属性,以免
       // querySelector 命中"data-user-msg-id" 空字符串。
       {...(messageClientId ? { 'data-user-msg-id': messageClientId } : {})}
-      // 自己发送的消息不显示主动浮出的“添加到对话”；右键菜单仍可添加。
-      data-selection-floating-quote-disabled=""
+      data-selection-quote-scope=""
       className={cn(
         'flex w-full',
         orcaCommunication || hookSource ? 'justify-start' : 'justify-end',
@@ -1346,6 +1352,7 @@ export function UserMessage({
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
     >
+      {pendingIndicator && <span className="mr-2 flex h-12 shrink-0 items-center text-[var(--text-secondary)]">{pendingIndicator}</span>}
       <div
         className={cn(
           'flex flex-col gap-2',
@@ -1412,7 +1419,7 @@ export function UserMessage({
               </button>
               {orcaExpanded && (
                 <div className="border-t border-[var(--msg-tool-card-border)] px-3 py-2">
-                  <pre className="m-0 whitespace-pre-wrap break-words font-mono text-[length:calc(var(--app-code-font-size)_-_2px)] leading-[calc(var(--app-code-font-size)_+_4px)] text-foreground">
+                  <pre data-selection-quote-body="" className="m-0 whitespace-pre-wrap break-words font-mono text-[length:calc(var(--app-code-font-size)_-_2px)] leading-[calc(var(--app-code-font-size)_+_4px)] text-foreground">
                     {displayContent}
                   </pre>
                 </div>
@@ -1530,7 +1537,7 @@ export function UserMessage({
                     {...(inlineQuoteCount === 0 && !displayBubbleBody.trim() && !attachmentsInBubble
                       ? { [SHARE_SOURCE_ATTR]: '' }
                       : {})}
-                    className="select-text"
+                    className={cn("select-text", pendingEditing && "opacity-40 transition-opacity motion-reduce:transition-none")}
                   >
                     {ghostChipDisplay && (
                       <GhostSummonCard
@@ -1565,6 +1572,7 @@ export function UserMessage({
                     )}
                     {inlineQuoteCount > 0 ? (
                       <div
+                        data-selection-quote-body=""
                         className={cn(
                           'min-w-0 whitespace-pre-wrap [overflow-wrap:anywhere]',
                           longMessageCollapsed &&
@@ -1644,6 +1652,7 @@ export function UserMessage({
                       <PluginUiBody position="message.body" role="user" sessionId={sessionId} disabled={isRemoteFileOrigin(sessionFileCtx.origin)}
                         plugin={sourcePlugin?.pluginId} context={() => ({ message: { clientId: messageClientId, role: 'user', content } })}>
                       <div
+                        data-selection-quote-body=""
                         className={cn(
                           'whitespace-pre-wrap [overflow-wrap:anywhere]',
                           longMessageCollapsed &&

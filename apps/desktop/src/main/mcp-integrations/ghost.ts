@@ -510,7 +510,7 @@ export interface ToolResultImageDescription {
 }
 
 export interface CindyGhostsHostDeps {
-  pluginMarket?: Pick<PluginMarketService, 'snapshot' | 'detail' | 'install'>;
+  pluginMarket?: Pick<PluginMarketService, 'query' | 'detail' | 'install'>;
   createMediaDownloadContext?: (sessionId: string, sessionInstanceId: string) => MediaDownloadContext | undefined;
   /** 当前 Desktop 版本；Forge scaffold 用它生成具体插件包的默认最低版本。 */
   getAppVersion?: () => string;

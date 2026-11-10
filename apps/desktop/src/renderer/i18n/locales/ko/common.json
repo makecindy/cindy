@@ -858,7 +858,7 @@
       },
       "runningCount_other": "{{count}}개 실행 중",
       "limitAria": "{{name}}의 동시 실행 한도",
-      "limitOption_other": "한도 {{count}}",
+      "limitOption_other": "동시 {{count}}개",
       "weightAria": "{{name}}의 가중치",
       "weightOption": "가중치 {{weight}}",
       "assignAria": "{{name}}에 배정",
@@ -873,6 +873,7 @@
         "pausedLocal": "다른 컴퓨터의 새 작업 수신 중지",
         "cooling": "대기 중",
         "coolingUntil": "대기 중 · {{time}}쯤 복구",
+        "quotaExhausted": "할당량 소진",
         "offline": "오프라인",
         "unreachableHere": "이 컴퓨터에서 연결할 수 없음",
         "unavailable": {
@@ -912,9 +913,13 @@
       "description": "각 계정의 할당량을 고르게 쓰기 위해 이 메시지는 {{label}}에서 보내는 것을 권장합니다({{quota}}). 최근 몇 번의 대화와 요약은 이어지지만, 그 이전의 세부 내용은 빠질 수 있습니다.",
       "quota": "{{left}}% 남음",
       "quotaReset": "{{left}}% 남음 · {{reset}}",
-      "confirm": "전환",
-      "cancel": "취소",
-      "remember": "앞으로 묻지 않고 자동 전환(이 작업만)"
+      "confirm": "이번에만 전환",
+      "cancel": "지금은 전환 안 함",
+      "remember": "앞으로 묻지 않고 자동 전환",
+      "disable": "자동 전환 및 확인 안 함",
+      "disableFailed": "선택이 저장되었는지 확인하지 못했습니다. 연결을 확인하고 작업이 있는 컴퓨터의 Cindy가 최신 버전인지 확인한 후 다시 시도해 주세요. 이 메시지는 평소대로 전송됩니다.",
+      "choiceLabel": "전환 방식(이 작업에만 적용)",
+      "send": "메시지 보내기"
     },
     "deleteConfirm": {
       "title": "{{provider}} 제공자 그룹을 삭제할까요?",
@@ -7367,6 +7372,11 @@
         "installedExpand": "설치된 플러그인 {{count}}개 모두 보기",
         "installedCollapse": "추가 설치 플러그인 숨기기",
         "recommendedSection": "추천",
+        "todayRecommendations": "오늘의 추천",
+        "marketSection": "플러그인 마켓",
+        "browseMarket": "플러그인 마켓 둘러보기",
+        "searching": "검색 중…",
+        "allLoaded": "플러그인 {{count}}개를 모두 표시했습니다",
         "updatesAvailable": "플러그인 업데이트 {{count}}개 사용 가능",
         "updateAll": "모두 업데이트",
         "ignoreRound": "이번은 무시",
@@ -7396,7 +7406,15 @@
       },
       "market": {
         "publisherKind": {
-          "official": "공식"
+          "official": "공식",
+          "community": "커뮤니티"
+        },
+        "publisherDescription": {
+          "official": "Cindy 공식 배포 및 유지 관리",
+          "community": "커뮤니티 개발자가 배포 및 유지 관리",
+          "team": "조직에서 권한이 있는 구성원에게 공유",
+          "custom": "추가한 Git 또는 로컬 폴더 마켓에서 제공",
+          "local": "로컬 파일에서 설치하거나 이 컴퓨터에서 개발"
         },
         "scopeAria": "플러그인 출처 필터",
         "scope": {
@@ -10724,6 +10742,9 @@
         "stepFailed": "{{name}} 님이 오류로 이 단계를 끝내지 못했습니다",
         "stepTimeout": "{{name}} 님의 작업이 너무 오래 걸려 이 단계를 멈췄습니다",
         "stepUnavailable": "{{name}} 님을 지금 사용할 수 없어 이 단계를 진행할 수 없습니다",
+        "runtimeFailureReason": {
+          "unclaimed_timeout": "{{name}}이(가) 대기 시간 내에 처리를 시작하지 못해 이번 요청이 종료되었습니다.\n파트너의 소유자에게 해당 컴퓨터에서 Cindy가 정상 실행 중이고 네트워크에 연결되어 있는지 확인해 달라고 요청하세요."
+        },
         "runtimeFailure": {
           "REMOTE_DEVICE_LIMIT": "{{name}}이(가) 답장할 수 없습니다. 이 동료가 있는 기기의 원격 세션 수가 한도에 도달했습니다.\n동료의 소유자에게 사용하지 않는 세션을 보관해 달라고 요청하거나, 원격 컴퓨터의 소유자에게 원격 및 공유에서 한도를 높여 달라고 요청하세요.",
           "REMOTE_TOTAL_LIMIT": "{{name}}이(가) 답장할 수 없습니다. 원격 컴퓨터의 전체 원격 세션 수가 한도에 도달했습니다.\n해당 컴퓨터의 소유자에게 불필요한 세션을 해제하거나 원격 및 공유에서 한도를 높여 달라고 요청하세요.",
@@ -11369,6 +11390,9 @@
       "databaseDriver": "데이터베이스 드라이버를 불러올 수 없습니다. Cindy를 업데이트하거나 복구한 뒤 다시 시도하세요.",
       "databaseUnavailable": "원본 데이터베이스를 읽을 수 없습니다. 원본은 변경되지 않았으며 복구 후 다시 시도할 수 있습니다.",
       "fileTooLarge": "파일 또는 전체 자료가 읽기 한도를 초과했습니다. 내용을 잘라서 가져오지 않았습니다.",
+      "sourceFileTooLarge": "개별 파일이 읽기 한도를 초과했습니다. 이 항목을 완전히 가져오지 못했습니다.",
+      "snapshotTooLarge": "이번에 읽는 데이터의 총량이 한도를 초과했습니다. 가져오기가 완료되지 않았습니다.",
+      "itemTooLarge": "이 항목의 파일 총크기가 128 MiB를 초과했습니다. 이 항목을 완전히 가져오지 못했습니다.",
       "memoryMetadata": "기억 요약 또는 제목이 저장 요건에 맞지 않습니다.",
       "memoryWrite": "기억 저장 또는 무결성 확인에 실패했습니다. 다시 시도할 수 있습니다.",
       "memoryChanged": "저장된 기억이 변경되어 덮어쓰지 않았습니다.",
@@ -12484,6 +12508,12 @@
       "missingDir": "폴더를 찾을 수 없음"
     },
     "pendingQueue": {
+      "stopping": "중지 처리 중",
+      "queued": "대기 중",
+      "editingInComposer": "아래 입력창에서 편집 중…",
+      "moveUp": "한 칸 앞으로",
+      "moveDown": "한 칸 뒤로",
+      "cancelSend": "전송 취소",
       "regionAria": "전송 대기 중인 메시지 큐",
       "listAria": "큐의 메시지",
       "pausedFooter": "작업 중지됨, 대기열 일시정지",
@@ -14093,6 +14123,7 @@
       "taskAutoArchived": "\"{{title}}\"을(를) 보관했습니다",
       "taskAutoArchivedUndo": "실행 취소",
       "taskAutoArchivePending": "이 작업을 나가면 자동으로 보관됩니다",
+      "taskAutoArchiveBlockedDirty": "「{{title}}」 작업 공간에 커밋하지 않은 변경 사항이 있어 자동 보관하지 않았습니다",
       "taskAutoArchiveCancel": "취소",
       "taskAutoArchiveCancelled": "이번에는 자동으로 보관하지 않습니다",
       "taskArchiveNow": "지금 보관"
@@ -19702,10 +19733,10 @@
       "useCodex": "Codex로 로그인"
     },
     "title": "구독 계정",
-    "note": "첫 계정은 CLI 기본 폴더를 사용합니다. 추가 계정은 별도로 로그인합니다. 새 작업은 계정에 분산되고 기존 작업은 원래 계정을 유지합니다.",
     "strategy": "부하 분산",
     "add": "계정 추가",
     "default": "기본 폴더",
+    "defaultTag": "기본",
     "ready": "연결됨",
     "signedOut": "로그인 필요",
     "unavailable": "상태를 확인할 수 없음",
@@ -19727,5 +19758,17 @@
     "logExcerpt": "관련 로그(발췌, 일부 누락 가능)",
     "logsUnavailable": "관련 로그가 없습니다. 원인은 아직 알 수 없습니다.",
     "failed": "진단 정보를 준비하지 못했습니다. 다시 시도해 주세요."
+  },
+  "githubStar": {
+    "title": "Cindy가 마음에 드시나요?",
+    "description": "GitHub에서 스타를 눌러 Cindy를 응원해 주세요.",
+    "dismiss": "다시 표시하지 않기",
+    "action": "Cindy 응원하기",
+    "starring": "별을 밝히는 중…",
+    "thanks": "스타를 눌러 주셔서 감사합니다!",
+    "thanksDescription": "여러분의 응원이 Cindy의 성장에 도움이 됩니다.",
+    "browserFallback": "GitHub를 열어 Cindy에 스타를 눌러 주세요.",
+    "openGithub": "GitHub 열기",
+    "openFailed": "GitHub를 열지 못했습니다."
   }
 }
