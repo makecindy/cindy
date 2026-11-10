@@ -90,6 +90,7 @@ import {
   requestMcpSetupForSession,
 } from '../maker-ipc/register.js';
 import { createBotProfile } from '../localDb/ipc/bots.js';
+import { readTeammateDirectory } from '../localDb/teammateDirectory.js';
 import { submitGithubIssueForSession } from '../github-issue/index.js';
 import {
   listWorkdirsForHistory,
@@ -1301,6 +1302,11 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
         authorizePath: (request) => authorizeDesktopSessionPath(request, deps.getLiveSessionGrantState),
       }),
       history: {
+        listTeammates: callerSessionId => withAccountDataAccess(callerSessionId, async assertCurrent => {
+          const teammates = await readTeammateDirectory();
+          await assertCurrent();
+          return { ok: true as const, teammates };
+        }),
         sessionUrl: (sessionId) => buildHistorySessionDeepLink(sessionId, getDeviceId()),
         remote: deps.historyRemote,
         resolveSessionScope: async ({ callerSessionId, callerMemoryScopeKey }) => {

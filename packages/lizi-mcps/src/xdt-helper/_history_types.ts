@@ -93,6 +93,7 @@ export interface HistorySession {
   createdAt: number; // unix ms
   updatedAt: number;
   userSendAt: number | null;
+  hiddenAt?: number | null;
   messageCount: number;
   lastActivityAt?: number;
   companion?: HistoryCompanion | null;
@@ -242,6 +243,7 @@ export interface SearchChatHistoryResult {
 // ── Deps interface ─────────────────────────────────────────────────────────
 
 export interface XdtHelperHistoryDeps {
+  listTeammates?: (callerSessionId?: string) => Promise<ControlResult<{ teammates: unknown[] }>>;
   /** Host-built task link; accepts local ids or deviceId::sessionId. No lookup or permission grant. */
   sessionUrl?: (sessionId: string) => string;
   remote?: import('./_history_devices.js').HistoryRemoteDeps;

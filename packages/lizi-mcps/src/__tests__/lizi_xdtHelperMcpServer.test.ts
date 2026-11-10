@@ -7,6 +7,20 @@ import type { LiziMcpSessionContext } from '../types.js';
 
 const TARGET_SESSION_ID = "11111111-1111-4111-8111-111111111111";
 
+// Unit, real shared handler: ordinary tasks and plugins need the account directory,
+// including paused/hidden companions and stored relationships, without a bot identity.
+it('discovers the complete teammate directory through history for task and plugin callers', async () => {
+  const listTeammates = vi.fn(async () => ({ ok: true as const, teammates: [{ id: 'paused', status: 'paused', hiddenAt: 1,
+    sessions: [{ sessionId: 'channel-task', role: 'route', channel: 'telegram' }] }] }));
+  const history = { listTeammates, listWorkdirs: vi.fn(), listSessions: vi.fn(), getMessages: vi.fn(), searchChatHistory: vi.fn() };
+  const server = createXdtHelperMcpServer({ history }, { agentKind: 'codex', workingDir: '', sessionId: 'ordinary' });
+  expect(server.hostTools.describe('list_teammates')).toMatchObject({ category: 'history' });
+  expect(parsePayload(await server.hostTools.call('list_teammates', {}))).toMatchObject({ ok: true,
+    teammates: [{ id: 'paused', status: 'paused', hiddenAt: 1, sessions: [{ sessionId: 'channel-task' }] }] });
+  expect(listTeammates).toHaveBeenCalledOnce();
+  await server.close();
+});
+
 // §1.2 Host tools: a plugin is a caller, never an impersonated Session. Native MCP and
 // in-process callers must execute the same schema, handler, result and authorization path.
 it('offers the same in-process handler to a plugin without borrowing a Session', async () => {

@@ -17,6 +17,7 @@ import {
   resolveStoredWorkingDirCandidates,
 } from '../workingDirHistoryFilter';
 import { listSessionsForHistory, listWorkdirsForHistory } from '../chatHistoryReader';
+import { readTeammateDirectory } from '../teammateDirectory';
 import { clearCurrentDbClient, setCurrentDbClient } from '../client/current';
 import type { DbClient } from '../client/DbClient';
 import * as schema from '../schema';
@@ -52,6 +53,7 @@ function createLocalDb(): Database.Database {
       plan_mode_enabled INTEGER NOT NULL DEFAULT 0,
       cleared_at INTEGER,
       pinned_at INTEGER,
+      hidden_at INTEGER,
       summary TEXT,
       provider_id TEXT,
       forked_at_message_id TEXT,
@@ -139,6 +141,30 @@ describe('normalizeHistoryWorkingDir', () => {
       '//server/share/repo',
     );
   });
+});
+
+// Unit through the production reader: hiding affects the sidebar, not account history.
+it('enumerates hidden dialogue tasks with their visibility metadata', async () => {
+  const db = useDb();
+  insertSession(db, 'hidden-dialogue', '/tmp/dialogue', 1000);
+  db.prepare("UPDATE sessions SET hidden_at=2000, workspace_kind='dialogue' WHERE id='hidden-dialogue'").run();
+  const result = await listSessionsForHistory({ workdir: null, fromMs: null, toMs: null, agentKind: null,
+    includeDeleted: false, limit: 10, cursor: null, order: 'desc' });
+  expect(result.items).toEqual([expect.objectContaining({ id: 'hidden-dialogue', hiddenAt: 2000, workspaceKind: 'dialogue' })]);
+});
+
+it('reads hidden and paused teammates with every persisted lane without activating them', async () => {
+  const db = useDb();
+  db.exec(`CREATE TABLE bot_profiles (id TEXT, display_name TEXT, status TEXT, hidden_at INTEGER, updated_at INTEGER);
+    ALTER TABLE bot_session_links ADD COLUMN archived_at INTEGER;
+    ALTER TABLE bot_session_links ADD COLUMN created_at INTEGER DEFAULT 0;
+    INSERT INTO bot_profiles VALUES ('paused','Paused','paused',1,2);
+    INSERT INTO bot_session_links(session_id, bot_id, role, route_key) VALUES
+      ('main','paused','canonical',NULL), ('channel','paused','route','telegram:1'), ('history','paused','history',NULL);`);
+  const result = await readTeammateDirectory();
+  expect(result).toEqual([{ id: 'paused', name: 'Paused', status: 'paused', hiddenAt: 1,
+    sessions: expect.arrayContaining([expect.objectContaining({ sessionId: 'channel', routeKey: 'telegram:1' }),
+      expect.objectContaining({ sessionId: 'history', role: 'history' }), expect.objectContaining({ sessionId: 'main' })]) }]);
 });
 
 describe('resolveStoredWorkingDirCandidates', () => {

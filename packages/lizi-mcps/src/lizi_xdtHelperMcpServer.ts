@@ -39,6 +39,7 @@ import { registerSessionTagTools, type SessionTagsCallback } from './xdt-helper/
 
 import { BRAND_NAME } from '@cindy/maker-shared/branding';
 import type { HostToolMcpServer, HostToolRuntime } from './host-tool-runtime.js';
+import { registerListTeammatesTool } from './xdt-helper/list_teammates.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { ListToolsRequestSchema, type Tool } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
@@ -207,9 +208,10 @@ export const HELPER_CATEGORY_DESCRIPTIONS: Record<(typeof CATEGORY_ENUM)[number]
   history: [
     '按话题查找跨渠道聊天，支持伙伴归属（teammate_id）、最近活动时间与真实来源；',
     '不要默认限制当前工作目录或创建日期。',
+    'list_teammates 枚举伙伴及已保存的任务关系（含隐藏与暂停），list_sessions 包含隐藏任务并返回 hiddenAt。',
     '查询任务、工作目录、聊天记录、任务摘要与输入队列；',
     '任务结果附带可直接引用的 sessionUrl，已知 id 要链接用 get_task_digest。',
-    '任务列表、搜索、读取聊天记录、任务摘要（get_task_digest）可跨电脑（device 参数 / deviceId::sessionId）；',
+    '伙伴目录、任务列表、搜索、读取聊天记录、任务摘要（get_task_digest）可跨电脑（device 参数 / deviceId::sessionId）；',
     '搜索还能查到主力电脑离线的伙伴的云端对话；',
     '其余本机。',
   ].join(''),
@@ -709,6 +711,7 @@ export function createXdtHelperMcpServer(
 
   // History 类工具: 仅 host 注入了 history 回调时注册。
   if (deps.history) {
+    registerListTeammatesTool(registry, { history: deps.history, getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx) });
     const historyDeps = {
       history: deps.history,
       getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx),
