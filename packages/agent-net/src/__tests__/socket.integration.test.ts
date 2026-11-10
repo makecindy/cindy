@@ -111,10 +111,15 @@ async function network(udp: boolean, ingress?: 'gateway', isolated = false, scop
           tap: (data) => captured.push(Buffer.from(data)),
         });
         if (isolated) expect(socket.certificateFor('a-host')?.signature).toBe(bootstrap.ownerCertificate.signature);
+        socket.on('close', (code: number) => phase?.('socket-close ' + api.identity.deviceId + ' ' + code));
+        socket.on('error', (error: unknown) => phase?.('socket-error ' + api.identity.deviceId + ' ' + String(error).slice(0, 300)));
         sockets.push(socket); return socket;
       },
       timing: { requestTimeoutMs: 4000, pingIntervalMs: 1000, transportRetryIntervalMs: 100, reconnectBaseMs: 20, reconnectMaxMs: 100 },
-      logger: { debug() {}, info() {}, warn() {}, error() {} },
+      logger: { debug() {},
+        info(message) { phase?.('info ' + api.identity.deviceId + ' ' + String(message).slice(0, 300)); },
+        warn(message) { phase?.('warn ' + api.identity.deviceId + ' ' + String(message).slice(0, 300)); },
+        error(message) { phase?.('error ' + api.identity.deviceId + ' ' + String(message).slice(0, 300)); } },
     });
     cleanup.push(() => client.stop()); client.start(); return client;
   };
