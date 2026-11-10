@@ -4,7 +4,7 @@ import { configureSessionModelInterfaceStorage, sessionModelInterface } from './
 import { readGeneratedImageEpoch } from '../cindy-media/generatedImageStorage';
 import { resolveHelperSurface } from '../mcp-integrations/helperSurface.js';
 import { readAgentCapabilityCatalog, RUNTIME_MCP_NAMES_KEY, type AgentCapabilityQuery } from './agentCapabilityCatalog.js';
-import { listCindyManagedSkills, prepareCindyCodexSkills } from './managed-skills.js';
+import { listCindyManagedSkills, prepareCindyCodexSkills, markCindyOfficialSkills } from './managed-skills.js';
 import { scanLocalCustomizations } from '../skillhub/customizationScanHost';
 import { createCompanionImportProvider } from '../bot-import/importProvider.js';
 import { COMPANION_CONNECTIONS_MCP_NAME, createCompanionConnectionsProvider, readCompanionConnectionsAvailability } from '../bot-import/connectionProvider.js';
@@ -923,6 +923,7 @@ function createDesktopBotCapabilityService() {
   return createBotCapabilityService({
     getMaker, getPluginRegistry, isBotToolsetAvailable,
     listMcpServers: listBotRuntimeMcpServers,
+    markOfficialSkills: markCindyOfficialSkills,
     readConversationConnections: async (botId) => {
       if (!_readBotConversationConnections) throw new Error('Bot conversation connections reader is not initialized');
       return _readBotConversationConnections(botId);
@@ -2893,7 +2894,7 @@ export function getMaker(): Maker {
           remoteHostId,
           forceReload: agentKind === 'codex' && skillLinksChanged,
         });
-        return result.skills;
+        return markCindyOfficialSkills(result.skills, remoteHostId);
       },
       listMcpServers: listBotRuntimeMcpServers,
       // 伙伴绑了哪些平台的机器人(不含凭证): 主任务据此挂渠道原生 API 工具(见 hydrate 内注释)。

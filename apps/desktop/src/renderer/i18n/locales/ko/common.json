@@ -11291,7 +11291,8 @@
       "toolSettings": "도구 설정",
       "notTurnedOn": "이 컴퓨터에서 아직 켜지지 않음",
       "turnOn": "켜기",
-      "permissions": "권한"
+      "permissions": "권한",
+      "officialInherited": "Cindy 공식 · 이 컴퓨터 설정 따름"
     },
     "systemSkills": {
       "followOffHint": "{{name}}의 시스템 스킬 ‘작업대와 후속 확인’이 꺼져 있습니다. 기능 페이지에서 다시 켜면 사용할 수 있습니다.",

@@ -11291,7 +11291,8 @@
       "toolSettings": "工具設定",
       "notTurnedOn": "這台電腦尚未開啟",
       "turnOn": "去開啟",
-      "permissions": "權限"
+      "permissions": "權限",
+      "officialInherited": "Cindy 官方 · 跟隨本機啟停"
     },
     "systemSkills": {
       "followOffHint": "{{name}} 的系統技能「工作台與追蹤」已關閉，在能力頁重新開啟後才能使用。",

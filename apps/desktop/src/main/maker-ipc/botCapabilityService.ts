@@ -23,8 +23,9 @@ import {
 
 type Kind = 'skill' | 'mcp' | 'toolset';
 type Input = { callerSessionId: string; kind: Kind | 'feature' };
-type Entry = { id: string; name: string; description: string; available: boolean; joined: boolean };
+type Entry = { id: string; name: string; description: string; available: boolean; joined: boolean; cindyOfficial?: boolean };
 export interface BotCapabilityServiceDeps {
+  markOfficialSkills?: <T extends { path?: string }>(skills: readonly T[], remoteHostId?: string) => Promise<Array<T & { cindyOfficial: boolean }>>;
   readConversationConnections?(botId: string): Promise<NonNullable<BotControlState['conversations']>['connections']>;
   getMaker: () => Pick<Maker, 'listAgentSkills'>;
   resolveBotAgentKind: (sessionId: string, modelChain?: BotModelRoute[]) => Promise<AgentKind | null>;
@@ -148,7 +149,10 @@ async function catalog(input: { callerSessionId: string; kind: Kind }, ctx: Pick
       remoteHostId: ctx.remoteHostId ?? undefined,
       ...(options?.forceReload ? { forceReload: true } : {}),
     });
-    items = result.skills.map((skill) => ({
+    const skills = deps.markOfficialSkills
+      ? await deps.markOfficialSkills(result.skills, ctx.remoteHostId ?? undefined) : result.skills;
+    items = skills.map((skill) => ({
+      cindyOfficial: skill.cindyOfficial === true,
       id: skill.name,
       name: skill.name,
       description: skill.description ?? '',
@@ -200,7 +204,7 @@ async function catalog(input: { callerSessionId: string; kind: Kind }, ctx: Pick
   }
   ctx.assertOwner();
   const inherit = input.kind !== 'skill' && ctx.config[fields[input.kind].mode] === 'inherit';
-  const result = items.map((item) => ({ ...item, joined: joined.has(item.id) || (inherit && item.available) }));
+  const result = items.map((item) => ({ ...item, joined: item.cindyOfficial ? item.available : joined.has(item.id) || (inherit && item.available) }));
   // Uninstalled references remain removable, instead of silently disappearing.
   for (const id of joined)
     if (!result.some((item) => item.id === id))
@@ -253,6 +257,13 @@ async function selectBotCapability(input: Input & { id: string; joined: boolean 
         ok: false as const,
         errorCode: 'CAPABILITY_NOT_SELECTABLE',
         message: '该工具集是伙伴固定能力，无需加入且不能移除',
+      };
+    }
+    if (kind === 'skill') {
+      const item = (await catalog({ ...input, kind }, ctx, deps)).find(entry => entry.id === input.id);
+      if (item?.cindyOfficial) return {
+        ok: false as const, errorCode: 'CAPABILITY_NOT_SELECTABLE',
+        message: 'Cindy 官方技能跟随本机的启停设置，无需为伙伴单独加入或移除。',
       };
     }
     const field = fields[kind];

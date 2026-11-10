@@ -11336,7 +11336,8 @@
       "toolSettings": "Tool-Einstellungen",
       "notTurnedOn": "Auf diesem Computer noch nicht eingeschaltet",
       "turnOn": "Einschalten",
-      "permissions": "Berechtigungen"
+      "permissions": "Berechtigungen",
+      "officialInherited": "Offiziell von Cindy · Folgt den Einstellungen dieses Computers"
     },
     "systemSkills": {
       "followOffHint": "Der System-Skill „Arbeitsplatz und Nachverfolgung“ von {{name}} ist aus. Schalte ihn unter „Fähigkeiten“ wieder ein, um dies zu nutzen.",

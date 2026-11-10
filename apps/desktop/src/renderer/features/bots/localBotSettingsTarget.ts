@@ -78,6 +78,7 @@ async function loadCatalog(
       id: item.name,
       name: item.name,
       description: item.description,
+      cindyOfficial: item.cindyOfficial,
       available: item.enabled !== false && item.runtimeStatus !== 'failed',
     }));
   }

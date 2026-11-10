@@ -11433,7 +11433,8 @@
       "toolSettings": "Ajustes de herramientas",
       "notTurnedOn": "Aún no está activada en esta computadora",
       "turnOn": "Activar",
-      "permissions": "Permisos"
+      "permissions": "Permisos",
+      "officialInherited": "Oficial de Cindy · Sigue la configuración de este equipo"
     },
     "systemSkills": {
       "followOffHint": "La habilidad del sistema «Panel y seguimiento» de {{name}} está desactivada. Vuelve a activarla en Capacidades para usar esto.",
