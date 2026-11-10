@@ -150,6 +150,10 @@ vi.mock('@cindy/anthropic-compat-proxy', async (importOriginal) => {
         /input\[\d+\]\.id[\s\S]{0,120}?(?:string too long|string_above_max_length)|string_above_max_length[\s\S]{0,120}?input\[\d+\]\.id/i.test(text),
       strip: () => null,
     }),
+    // 原生 reasoning content 的 recovery 规则和 strip 保留真实实现：
+    // 命名空间用例要证明 controller 激活后第一次请求就被洗掉。
+    createResponsesReasoningContentRecoveryRule: actual.createResponsesReasoningContentRecoveryRule,
+    stripResponsesReasoningContentFromBody: actual.stripResponsesReasoningContentFromBody,
     stripNonCanonicalResponsesItemIdsFromBody: () => null,
     shortenOversizedResponsesItemIdsFromBody: () => null,
     stripNonAnthropicFields: mockState.stripNonAnthropicFields,
@@ -8556,6 +8560,161 @@ describe('codex proxy host', () => {
       clearSessionProvider('session-namespace-vision');
       host.setCodexAppliedCustomProviderRoutes([]);
       setActiveCatalog(BUNDLED_CATALOG);
+    }
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：ensureCodexProxyReady 装上的 transformRequest。
+  //   Volcengine Ark / Seed 形态的自定义供应商，命名空间请求打到上游前
+  //   reasoning.summary 已被删掉，回放的 assistant 消息带 status: 'completed'。
+  // - Bug／规则依据：#9759。命名空间白名单漏了 ByteDance Seed 兼容，
+  //   Codex 每轮强制的 summary:'auto' 会直接打到不接受它的 Seed 上游。
+  // - 现有覆盖缺口：Seed 兼容本身有单测，但走普通 /responses，不经过命名空间包装。
+  // - 最小失败输入：Ark 上游、已登记的 Responses 路由，
+  //   url 为 /_cindy/custom-provider/<routeId>/responses，reasoning.summary 为 'auto'，
+  //   input 含一条没有 status 的 assistant 消息。
+  // - tier：unit。进程内代理桩，不访问网络。
+  it('strips Seed reasoning.summary on a custom-provider namespace route', async () => {
+    const host = await freshCodexProxyHost();
+    const { BUNDLED_CATALOG, buildUserProvider } = await import('@cindy/model-providers');
+    const { setActiveCatalog } = await import('../active-catalog.js');
+    const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+    const { deriveCodexCustomProviderRoutes } = await import('../codex-custom-provider-route.js');
+    const provider = buildUserProvider({
+      id: 'namespace-seed',
+      name: 'Namespace Seed',
+      runtimes: {
+        codex: {
+          baseUrl: 'https://ark.cn-beijing.volces.com/api/v3',
+          wireProtocol: 'openai-responses',
+          models: [{ id: 'production-deployment', name: 'Production Deployment', reasoning: true, reasoningEfforts: ['high'] }],
+        },
+      },
+    });
+    const catalog = { ...BUNDLED_CATALOG, providers: [...BUNDLED_CATALOG.providers, provider] };
+    setActiveCatalog(catalog);
+    const route = deriveCodexCustomProviderRoutes(catalog).find(item => item.providerId === provider.id)!;
+    host.setCodexAppliedCustomProviderRoutes([route]);
+    host.registerComposed('session-namespace-seed', 'thread-namespace-seed', 'PRODUCT_PROMPT');
+    setSessionProvider('session-namespace-seed', provider.id);
+    mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
+      url: 'http://127.0.0.1:43210',
+      dispose: vi.fn(async () => undefined),
+    });
+    try {
+      await host.ensureCodexProxyReady();
+      const transforms = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0]?.transformRequest ?? [];
+      const ctx = {
+        reqId: 9763,
+        method: 'POST',
+        url: `/_cindy/custom-provider/${route.routeId}/responses`,
+        headers: { 'thread-id': 'thread-namespace-seed' },
+        upstreamBase: 'https://ark.cn-beijing.volces.com/api/v3',
+      };
+      let current: unknown = {
+        model: 'production-deployment',
+        reasoning: { summary: 'auto' },
+        input: [
+          { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'earlier answer' }] },
+        ],
+      };
+      for (const transform of transforms) {
+        const next = transform(current, ctx);
+        if (next !== null && next !== undefined) current = next;
+      }
+      expect(current).toEqual({
+        model: 'production-deployment',
+        input: [{
+          type: 'message',
+          role: 'assistant',
+          status: 'completed',
+          content: [{ type: 'output_text', text: 'earlier answer' }],
+        }],
+      });
+      expect(JSON.stringify(current)).not.toContain('"summary"');
+    } finally {
+      host.unregister('session-namespace-seed');
+      clearSessionProvider('session-namespace-seed');
+      host.setCodexAppliedCustomProviderRoutes([]);
+      setActiveCatalog(BUNDLED_CATALOG);
+    }
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：ensureCodexProxyReady 装上的 transformRequest。
+  //   responses reasoning content 的 controller 已激活时，命名空间请求在第一次
+  //   打到上游前就把 reasoning_text 洗掉，不再等 400/422 重试。
+  // - Bug／规则依据：#9759。命名空间白名单整类跳过了按线程激活的恢复清洗，
+  //   恢复过的线程每轮都要多打一次必失败的上游请求。
+  // - 现有覆盖缺口：普通 /responses 已有「激活后下一轮预洗」用例，不经过命名空间包装。
+  // - 最小失败输入：已登记的 Responses 路由，controller.markActive 后的一次
+  //   命名空间请求，input 含 type:reasoning 且 content 里有 reasoning_text。
+  // - tier：unit。进程内代理桩，不访问网络。
+  it('pre-strips activated reasoning content on a custom-provider namespace route', async () => {
+    const host = await freshCodexProxyHost(true);
+    const { BUNDLED_CATALOG, buildUserProvider } = await import('@cindy/model-providers');
+    const { setActiveCatalog } = await import('../active-catalog.js');
+    const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+    const { deriveCodexCustomProviderRoutes } = await import('../codex-custom-provider-route.js');
+    const { responsesReasoningContentStripController } = await import('../thread-strip-controllers.js');
+    const provider = buildUserProvider({
+      id: 'namespace-strip-provider',
+      name: 'Namespace Strip Provider',
+      runtimes: {
+        codex: {
+          baseUrl: 'https://example.com/v1',
+          wireProtocol: 'openai-responses',
+          models: [{ id: 'custom-model', name: 'Custom Model' }],
+        },
+      },
+    });
+    const catalog = { ...BUNDLED_CATALOG, providers: [...BUNDLED_CATALOG.providers, provider] };
+    setActiveCatalog(catalog);
+    const route = deriveCodexCustomProviderRoutes(catalog).find(item => item.providerId === provider.id)!;
+    host.setCodexAppliedCustomProviderRoutes([route]);
+    host.registerComposed('session-namespace-strip', 'thread-namespace-strip', 'PRODUCT_PROMPT');
+    setSessionProvider('session-namespace-strip', provider.id);
+    responsesReasoningContentStripController.markActive('thread-namespace-strip', 'custom-model');
+    mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
+      url: 'http://127.0.0.1:43210',
+      dispose: vi.fn(async () => undefined),
+    });
+    const kept = { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'continue' }] };
+    try {
+      await host.ensureCodexProxyReady();
+      const transforms = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0]?.transformRequest ?? [];
+      const ctx = {
+        reqId: 9764,
+        method: 'POST',
+        url: `/_cindy/custom-provider/${route.routeId}/responses`,
+        headers: { 'thread-id': 'thread-namespace-strip' },
+        upstreamBase: 'https://example.com/v1',
+      };
+      let current: unknown = {
+        model: 'custom-model',
+        input: [
+          {
+            type: 'reasoning',
+            summary: [],
+            content: [{ type: 'reasoning_text', text: 'provider-private' }],
+            encrypted_content: 'blob',
+          },
+          kept,
+        ],
+      };
+      for (const transform of transforms) {
+        const next = transform(current, ctx);
+        if (next !== null && next !== undefined) current = next;
+      }
+      expect((current as { input: unknown[] }).input).toEqual([kept]);
+      expect(JSON.stringify(current)).not.toContain('reasoning_text');
+    } finally {
+      responsesReasoningContentStripController.clear('thread-namespace-strip');
+      host.unregister('session-namespace-strip');
+      clearSessionProvider('session-namespace-strip');
+      host.setCodexAppliedCustomProviderRoutes([]);
+      setActiveCatalog(BUNDLED_CATALOG);
+      mockState.realStripTransforms = false;
     }
   });
 

@@ -3317,12 +3317,7 @@ function createTransformRequestChain(
   guest = false,
 ): {
   transforms: RequestTransform[];
-  execFunctionAdapterTransform: RequestTransform;
-  codexTransform: RequestTransform;
-  miniMaxResponsesCompatTransform: RequestTransform;
-  providerRequestTransform: RequestTransform;
-  crossProviderCompactionCompatTransform: RequestTransform;
-  visionBridgeTransform?: RequestTransform;
+  customProviderNamespaceTransforms: ReadonlySet<RequestTransform>;
 } {
   const execFunctionAdapterTransform: RequestTransform = (body, ctx) => {
     if (!isPlainObject(body)) return null;
@@ -3365,18 +3360,52 @@ function createTransformRequestChain(
   const crossProviderCompactionCompatTransform = createCrossProviderCompactionCompatTransform();
   // guest 隔离不装视觉桥：视觉桥走的是本机用户自己的视觉供应商，供应商分享的访客不能用。
   const visionBridgeTransform = guest ? undefined : buildVisionBridgeProxyTransform(log);
+  // 命名空间白名单按引用相等判定，链里再内联调用就进不了 Set。
+  // Seed 兼容会删掉 Codex 每轮强制的 reasoning.summary，并给回放的 assistant 消息补 status。
+  // 这 7+2 个恢复清洗只在 controller 已激活（或设置开启）后才动手，用于同一份历史下一轮提前洗掉。
+  // 构造参数、enabled 谓词和在链里的位置保持不变，不合并。
+  const byteDanceSeedResponsesCompatTransform = createByteDanceSeedResponsesCompatTransform();
+  const armedHttpRecoveryStripTransform = createArmedHttpRecoveryStripTransform();
+  const encryptedStripTransform = createActiveStripTransform({
+    controller: encryptedStripController,
+    enabled: () => readSilentEncryptedRetrySettings().enabled,
+    strip: stripEncryptedContentFromBody,
+  });
+  const imageGenerationStripTransform = createActiveStripTransform({
+    controller: imageGenerationStripController,
+    enabled: () => true,
+    strip: stripImageGenerationItemsWithoutIdFromBody,
+  });
+  const xaiModelInputStripTransform = createActiveStripTransform({
+    controller: xaiModelInputStripController,
+    enabled: () => true,
+    strip: sanitizeXaiModelInputFromBody,
+  });
+  const responsesItemIdStripTransform = createActiveStripTransform({
+    controller: responsesItemIdStripController,
+    enabled: () => true,
+    strip: stripNonCanonicalResponsesItemIdsFromBody,
+  });
+  const responsesItemIdLengthStripTransform = createActiveStripTransform({
+    controller: responsesItemIdLengthStripController,
+    enabled: () => true,
+    strip: shortenOversizedResponsesItemIdsFromBody,
+  });
+  const armedHttpRecoveryStripTransformLate = createArmedHttpRecoveryStripTransform(true);
+  const responsesReasoningContentStripTransform = createActiveStripTransform({
+    controller: responsesReasoningContentStripController,
+    enabled: () => true,
+    strip: stripResponsesReasoningContentFromBody,
+  });
+  const responsesToolCallHistoryStripTransform = createActiveStripTransform({
+    controller: responsesToolCallHistoryStripController,
+    enabled: () => true,
+    strip: normalizeRepeatedResponseToolCallIdsFromBody,
+  });
   const transforms: RequestTransform[] = [
-    createArmedHttpRecoveryStripTransform(),
-    createActiveStripTransform({
-      controller: encryptedStripController,
-      enabled: () => readSilentEncryptedRetrySettings().enabled,
-      strip: stripEncryptedContentFromBody,
-    }),
-    createActiveStripTransform({
-      controller: imageGenerationStripController,
-      enabled: () => true,
-      strip: stripImageGenerationItemsWithoutIdFromBody,
-    }),
+    armedHttpRecoveryStripTransform,
+    encryptedStripTransform,
+    imageGenerationStripTransform,
     // Guardian uses an isolated child thread. Resolve its parent business
     // session and select that session's real provider model before provider
     // compatibility transforms inspect the request.
@@ -3392,24 +3421,12 @@ function createTransformRequestChain(
     crossProviderCompactionCompatTransform,
     // 必须在 compaction 降级之后:自定义 LiteLLM 别名首次 422 会激活本 strip,
     // 若先于降级跑,会把 compaction 当未知 type 丢掉,明文「早期上下文不可用」提示就没了。
-    createActiveStripTransform({
-      controller: xaiModelInputStripController,
-      enabled: () => true,
-      strip: sanitizeXaiModelInputFromBody,
-    }),
+    xaiModelInputStripTransform,
     // issue #4738: 上游拒绝过一次不合规 message/reasoning id 后, 该 thread 后续每次发送
     // 前都预洗, 避免每轮先 400 再重试。
-    createActiveStripTransform({
-      controller: responsesItemIdStripController,
-      enabled: () => true,
-      strip: stripNonCanonicalResponsesItemIdsFromBody,
-    }),
+    responsesItemIdStripTransform,
     // issue #4227: 同理, 上游拒绝过一次超长 item id 后, 该 thread 后续发送前预改写。
-    createActiveStripTransform({
-      controller: responsesItemIdLengthStripController,
-      enabled: () => true,
-      strip: shortenOversizedResponsesItemIdsFromBody,
-    }),
+    responsesItemIdLengthStripTransform,
     // Providers that explicitly lack Responses custom tools still accept ordinary
     // functions. Adapt before provider sanitizers, then restore custom_tool_call
     // events on the matching response stream.
@@ -3422,16 +3439,12 @@ function createTransformRequestChain(
     sanitizeDeepSeekV4CustomTools,
     createXaiResponsesCompatTransform(pricing),
     createGatewayGrokResponsesCompatTransform(frozenAuthInjection),
-    createByteDanceSeedResponsesCompatTransform(),
+    byteDanceSeedResponsesCompatTransform,
     miniMaxResponsesCompatTransform,
     createProviderModelRewriteTransform(frozenAuthInjection),
     providerRequestTransform,
-    createArmedHttpRecoveryStripTransform(true),
-    createActiveStripTransform({
-      controller: responsesReasoningContentStripController,
-      enabled: () => true,
-      strip: stripResponsesReasoningContentFromBody,
-    }),
+    armedHttpRecoveryStripTransformLate,
+    responsesReasoningContentStripTransform,
     // 视觉桥透明替换（层 A，Responses 格式）：controller 未注入时短路透传，零干扰；
     // 注入后把纯文本模型请求 input[] 里的 input_image 转成文字描述。放在 strip 之前与
     // Anthropic 链一致，避免未来 strip 扩展覆盖 Responses input_image 时吃掉图。
@@ -3439,11 +3452,7 @@ function createTransformRequestChain(
     // Run after every provider dialect rewrite: xAI can also turn custom calls into functions.
     // This covers native-custom routes and tool-less /responses/compact without changing call_id.
     normalizeResponsesToolItemIds,
-    createActiveStripTransform({
-      controller: responsesToolCallHistoryStripController,
-      enabled: () => true,
-      strip: normalizeRepeatedResponseToolCallIdsFromBody,
-    }),
+    responsesToolCallHistoryStripTransform,
     stripNonAnthropicFields,
   ];
   if (process.env.XDT_CODEX_PROXY_DUMP_TRANSFORMED_BODY === '1') {
@@ -3452,15 +3461,33 @@ function createTransformRequestChain(
   // 档位与模型改写都在上面收敛。卡片读的观察身份必须是这份最终会发出去的值。
   // 放在调试转储之后：转储只是旁路，不能盖掉它记下的出站身份。
   transforms.push(createObservedSubagentIdentityTransform());
-  return {
-    transforms,
-    execFunctionAdapterTransform,
+  // 白名单必须和上面这条链用同一批实例。按引用相等判断，链外再 new 一次对不上。
+  // 放行的是提示词注入、供应商参数兼容、请求归一化、exec 工具适配、工具 ID 校正、
+  // 加密压缩历史降级、视觉桥、Seed 兼容，以及按线程激活的恢复清洗。
+  // 模型改写和会话/目录/提示词注入之外的身份类 transform 不在这里。
+  // Seed 兼容按是不是 Seed 请求自己判断；非 Seed 请求直接 return null。
+  // 恢复清洗只在对应 controller 已激活后才改 body。
+  // 视觉桥仅在非 guest 时入链，白名单按同一实例追加；guest 不入链也不入白名单。
+  const customProviderNamespaceTransforms = new Set<RequestTransform>([
     codexTransform,
     miniMaxResponsesCompatTransform,
     providerRequestTransform,
+    normalizeResponsesToolItemIds,
+    execFunctionAdapterTransform,
     crossProviderCompactionCompatTransform,
-    visionBridgeTransform,
-  };
+    ...(visionBridgeTransform ? [visionBridgeTransform] : []),
+    byteDanceSeedResponsesCompatTransform,
+    armedHttpRecoveryStripTransform,
+    encryptedStripTransform,
+    imageGenerationStripTransform,
+    xaiModelInputStripTransform,
+    responsesItemIdStripTransform,
+    responsesItemIdLengthStripTransform,
+    armedHttpRecoveryStripTransformLate,
+    responsesReasoningContentStripTransform,
+    responsesToolCallHistoryStripTransform,
+  ]);
+  return { transforms, customProviderNamespaceTransforms };
 }
 
 /**
@@ -3609,40 +3636,12 @@ async function createCodexProxyHandle(
     });
     return recovered;
   };
-  const {
-    transforms: transformChain,
-    execFunctionAdapterTransform,
-    codexTransform,
-    miniMaxResponsesCompatTransform,
-    providerRequestTransform,
-    crossProviderCompactionCompatTransform,
-    visionBridgeTransform,
-  } = createTransformRequestChain(
+  const { transforms: transformChain, customProviderNamespaceTransforms } = createTransformRequestChain(
     frozenAuthInjection, execAdapter, pricing, guestProviderId !== undefined,
   );
   // 命名空间上的 Responses 走冻结的供应商路由，要保住它自己的 model 与原生字段。
   // 所以模型改写、会话/目录类 transform 仍然不跑；档位只由下面那条专用 transform
-  // 按同一份快照收敛。
-  // 放行的只有四类：提示词注入、供应商参数兼容（MiniMax 不接受 reasoning.summary
-  // 与 xhigh）、provider 请求归一化、exec 工具适配。工具 ID 校正本来就在白名单里。
-  // exec 适配自己的前置条件已经收窄到 supportsResponsesCustomTools === false，
-  // 原生支持 custom tools 的路由不会被改写（#9759）。
-  // 白名单按引用相等判断，必须放链里的同一个实例：providerRequestTransform 和
-  // execFunctionAdapterTransform 都挂了 errorMode / onRequestSettled，重新创建函数对不上。
-  // 加密压缩历史降级和视觉桥也必须留在名下：前者按 upstreamBase 判断，
-  // 自定义供应商上游正好走「解不开的 compaction / encrypted_content 换成明文提示」；
-  // 后者只在 shouldBridge 为真（纯文本模型且视觉桥已装配）时把 input_image 换成文字描述。
-  // 跳过会把不可解密的历史和原图原样发给非 GPT / 纯文本上游。
-  // 视觉桥仅在非 guest 时入链，白名单按同一实例追加；guest 不入链也不入白名单。
-  const customProviderNamespaceTransforms = new Set<RequestTransform>([
-    codexTransform,
-    miniMaxResponsesCompatTransform,
-    providerRequestTransform,
-    normalizeResponsesToolItemIds,
-    execFunctionAdapterTransform,
-    crossProviderCompactionCompatTransform,
-    ...(visionBridgeTransform ? [visionBridgeTransform] : []),
-  ]);
+  // 按同一份快照收敛。白名单是链构建时那一批实例，按引用相等判断。
   const transformRequest: RequestTransform[] = transformChain.map(
     (transform): RequestTransform => {
       const scoped: RequestTransform = (body, ctx) => {
