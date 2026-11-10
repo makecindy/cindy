@@ -62,7 +62,12 @@ export function mobileFavoriteMutation(
     modelId: next.modelId,
     agent: next.agent === "claude-code" ? ("cc" as const) : next.agent,
     ...(next.effort ? { effort: next.effort } : {}),
-    ...(next.fast ? { fast: true as const } : {}),
+    // 速度是三态。收成 true 后，星标对不上 ultrafast，再点会再加一条。
+    ...(next.fast === "ultrafast"
+      ? { fast: "ultrafast" as const }
+      : next.fast
+        ? { fast: true as const }
+        : {}),
   };
   const expected = before.find((value) => value.uid === next.uid);
   return expected ? { kind: "update", expected, item } : { kind: "add", item };

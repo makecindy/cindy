@@ -56,6 +56,25 @@ it('two controllers add independently without replacing the table; duplicate add
   accessHostModelFavorites('owner', { kind: 'add', item });
   expect(accessHostModelFavorites('owner')).toHaveLength(2);
 });
+// 回归：被控端按配置身份去重。fast 与 ultrafast 是两条；重复添加 ultrafast 不新增。
+// 改推理档不得把已存的 ultrafast 收成普通 fast。
+it('keeps ultrafast distinct from fast and does not duplicate a repeated add', () => {
+  accessHostModelFavorites('owner', { kind: 'add', item: { ...item, fast: true } });
+  const first = accessHostModelFavorites('owner', { kind: 'add', item: { ...item, fast: 'ultrafast' } });
+  const again = accessHostModelFavorites('owner', { kind: 'add', item: { ...item, fast: 'ultrafast' } });
+  expect(again.map((entry) => entry.fast)).toEqual([true, 'ultrafast']);
+  expect(again.map((entry) => entry.uid)).toEqual(first.map((entry) => entry.uid));
+  const ultra = again.find((entry) => entry.fast === 'ultrafast')!;
+  accessHostModelFavorites('owner', {
+    kind: 'update',
+    expected: ultra,
+    item: { ...item, effort: 'low', fast: 'ultrafast' },
+  });
+  expect(accessHostModelFavorites('owner').find((entry) => entry.uid === ultra.uid)).toMatchObject({
+    effort: 'low',
+    fast: 'ultrafast',
+  });
+});
 it('rejects a stale edit and never resurrects a removed favorite', () => {
   const [original] = accessHostModelFavorites('owner', { kind: 'add', item });
   accessHostModelFavorites('owner', {
