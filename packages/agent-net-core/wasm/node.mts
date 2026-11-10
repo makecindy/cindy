@@ -165,11 +165,11 @@ interface Exports {
   stats(): number;
 }
 
-const DEFAULT_MODULE_URL = new URL('../target/wasm32-unknown-unknown/release/agent_net_wasm.wasm', import.meta.url);
+const DEFAULT_MODULE_URL = new URL('../dist/core.wasm', import.meta.url);
 let defaultModule: WebAssembly.Module | null = null;
 
 /**
- * 读编好的核心：默认是本仓库里的 release 产物（`cargo build --release -p agent-net-wasm --target wasm32-unknown-unknown`），
+ * 读编好的核心：默认是 `build.mjs` 校验并暂存的分发产物 `dist/core.wasm`，无需本机编译 Rust，
  * 环境变量 `AGENT_NET_WASM` 可以指定别的文件（打包成单个脚本、放到别的机器上跑时用）。
  */
 export function loadModule(): WebAssembly.Module {
