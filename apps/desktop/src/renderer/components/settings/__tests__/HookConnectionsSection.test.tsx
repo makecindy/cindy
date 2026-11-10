@@ -665,6 +665,8 @@ describe('HookConnectionsSection binding actions (Telegram / X / Feishu)', () =>
     await act(async () => listener({ ...hook, feishu: { ...hook.feishu, bindings: [first, { ...second, workingDevice: { name: 'My Mac', isCurrent: true } }] } }));
     expect(screen.queryByRole('button', { name: action })).toBeNull();
     await act(async () => listener({ ...hook, feishu: { ...hook.feishu, available: false, applications: [], bindings: [], binding: null } }));
+    expect(screen.queryByText('settings.remoteControl.hook.feishu.disabledHint')).toBeNull();
+    expect(screen.getByText('settings.remoteControl.hook.feishu.unavailableHint')).toBeTruthy();
     expect(screen.queryByText('Alice')).toBeNull();
     expect(screen.queryByRole('button', { name: 'settings.remoteControl.hook.feishu.connect' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'settings.remoteControl.hook.feishu.connectBot' })).toBeNull();
