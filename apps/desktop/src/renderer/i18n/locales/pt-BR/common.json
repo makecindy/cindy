@@ -19847,5 +19847,11 @@
     "keepDraft": "Seu rascunho será mantido. As tarefas serão sincronizadas quando a conexão for restabelecida.",
     "retry": "Reconectar",
     "desktopAuthHelp": "Atualize as configurações de conexão no terminal de inicialização e reabra este cliente experimental."
+  },
+  "remoteControlConsent": {
+    "title": "Permitir o controle remoto deste computador?",
+    "detail": "Solicitação de {{device}}\nFinalidade: {{purpose}}\n\nOs dispositivos da sua conta poderão controlar este computador, executar tarefas e acessar arquivos. A opção permanece ativa até você desativá-la nas configurações.",
+    "decline": "Agora não",
+    "enable": "Ativar controle remoto"
   }
 }

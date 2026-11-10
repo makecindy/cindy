@@ -19591,5 +19591,11 @@
     "keepDraft": "草稿仍存。连接复通，任务之态将自同步。",
     "retry": "重试连接",
     "desktopAuthHelp": "请于启动终端更新后台连接设置，再启此实验客户端。"
+  },
+  "remoteControlConsent": {
+    "title": "许远控此机乎？",
+    "detail": "请求来自「{{device}}」\n所为：{{purpose}}\n\n启用后，同账号设备可远控此机，执行任务、访问文件。此设长效，可随时于设置中关闭。",
+    "decline": "暂不开启",
+    "enable": "开启远程控制"
   }
 }

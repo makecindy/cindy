@@ -108,7 +108,7 @@ import {
   registerTeammateProjectTools,
   type TeammateProjectsCallback,
 } from './xdt-helper/teammate_projects.js';
-import { LIST_MACHINES_TOOL_NAME, registerListMachinesTool, type ListMachinesCallbacks } from './xdt-helper/list_machines.js';
+import { registerRemoteControlRequestTool, registerListMachinesTool, type ListMachinesCallbacks } from './xdt-helper/list_machines.js';
 import { registerTeammateHomeTools, type TeammateHomeCallbacks } from './xdt-helper/teammate_home.js';
 import {
   registerBotCapabilityTools,
@@ -827,25 +827,35 @@ export function createXdtHelperMcpServer(
       getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx),
       callbacks: deps.machines,
     });
-    const definition = machineTools.get(LIST_MACHINES_TOOL_NAME)!;
-    server.registerTool(definition.name, {
-      description: definition.description, inputSchema: z.strictObject(definition.inputShape),
-    }, async (args) => {
-      const allowed = await allowedSurface();
-      if (!allowed.categories?.has('cindy')) {
-        return errorPayload('CAPABILITY_NOT_AVAILABLE', '这个工具不属于当前任务的能力面。');
-      }
-      return withToolCallAuthority(
-        deps.authorizeCall,
-        { sessionId: resolveLiziMcpSessionContext(sessionCtx).sessionId, server: 'cindy_helper', tool: definition.name, args },
-        () => machineTools.call(definition.name, args),
-      );
+    registerRemoteControlRequestTool(machineTools, {
+      getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx), callbacks: deps.machines,
     });
+    registerRemoteControlRequestTool(registry, {
+      getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx), callbacks: deps.machines,
+    });
+    for (const summary of machineTools.list('cindy')) {
+      const definition = machineTools.get(summary.name)!;
+      server.registerTool(definition.name, {
+        description: definition.description, inputSchema: z.strictObject(definition.inputShape),
+      }, async (args) => {
+        const allowed = await allowedSurface();
+        if (!allowed.categories?.has('cindy')) {
+          return errorPayload('CAPABILITY_NOT_AVAILABLE', '这个工具不属于当前任务的能力面。');
+        }
+        return withToolCallAuthority(
+          deps.authorizeCall,
+          { sessionId: resolveLiziMcpSessionContext(sessionCtx).sessionId, server: 'cindy_helper', tool: definition.name, args },
+          () => machineTools.call(definition.name, args),
+        );
+      });
+    }
   }
   const machineListing = async (): Promise<Tool[]> => {
-    const definition = machineTools.get(LIST_MACHINES_TOOL_NAME);
-    if (!definition || !(await allowedSurface()).categories?.has('cindy')) return [];
-    return [{ name: definition.name, description: definition.description, inputSchema: z.toJSONSchema(z.strictObject(definition.inputShape)) as Tool['inputSchema'] }];
+    if (!(await allowedSurface()).categories?.has('cindy')) return [];
+    return machineTools.list('cindy').map(summary => {
+      const definition = machineTools.get(summary.name)!;
+      return { name: definition.name, description: definition.description, inputSchema: z.toJSONSchema(z.strictObject(definition.inputShape)) as Tool['inputSchema'] };
+    });
   };
 
   // Pi already provides direct Bot tools through its native bridge. CC and Codex

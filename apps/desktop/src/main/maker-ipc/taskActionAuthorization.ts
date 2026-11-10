@@ -29,6 +29,7 @@ export const TASK_ACTION_TOOLS: ReadonlySet<string> = new Set([
   'move_session',
   'manage_session_prs',
   'create_shared_task_invitation',
+  'request_remote_control',
 ]);
 
 export const ORCA_TASK_ACTION_TOOLS: ReadonlySet<string> = new Set([

@@ -1,5 +1,33 @@
 # 跨端协议兼容
 
+## 请求开启远程控制（2026-11-10，未发布）
+
+新增同账号 `push` channel `device-link:remote-control-consent`，沿现有加密／签名消息通道，
+不依赖 `link-open` 或远控开关。payload 为 `{version:1,kind:"request",id,purpose,ttlMs}`
+或 `{version:1,kind:"result",id,result}`。请求 ID 为随机 UUID，目的最长 500 字符。`ttlMs` 是发送方声明的相对寿命（正数，接收端取其与 45 秒的较小值），
+接收端按本机时钟计时，不使用发送方的绝对时间戳，因此不受两台电脑时差影响；缺少数字 `ttlMs`
+的请求帧会被丢弃。
+接收端仅接受在线、非手机、非撤权、非跨账号设备；本机原生确认框明确说明开启持续有效的
+远控设置。弹窗必须挂到本机主窗口（macOS 无父窗口时不响应取消）；主窗口不可用则失败，
+不退回无父窗口弹窗。用途和设备名称移除控制／方向字符、压成单行，最多显示 200 字符。
+过期结算独立于原生弹窗回调，关闭弹窗并释放接收位，不等用户再点击。远端消息不能代替
+点击确认，写入在原设置写锁内再次验证请求仍有效。设置生效通过本机
+`device-link:control-enabled-changed` 通知设置页；初次读取的旧快照不能覆盖新通知。
+
+请求不执行工作、不授予单次文件权限，也不修改普通 invoke/link-open 的门禁。每台电脑
+同时只显示一个确认框，同一来源一分钟内不重复弹窗；重复 ID 丢弃。断线、退出或切换账号
+取消当前等待；迟到、过期、不同来源的回执不恢复任务。工具最多等 47 秒，返回 enabled、
+declined、expired、busy、failed、unavailable 或 no_response；只有 enabled 可继续原操作。
+无响应不能断言是旧版，需同时考虑不可达；不自动重复授权请求。
+
+旧客户端忽略新增 push，不开启设置；新客户端最终返回 no_response。官方和已部署自建中转
+均透传既有 push，CONTROL_KINDS 的 link-open/invoke 门禁不变，无需升级中转或修改服务端。
+共享客户端新增关闭链路后的此 channel 透传项，未扩大 invoke allowlist。手机任务的 Agent
+运行在 Desktop 时使用该电脑的同一工具入口；本次不在手机添加原生授权框，目标限电脑。
+验证覆盖共享客户端、relay 单测，以及真实自建中转加入／签名／重连；互通中确认远控关闭时
+请求 push 可送达，而同目标普通 invoke 仍报 REMOTE_DISABLED。实际账号跨电脑和各平台原生
+窗口效果需另行验收，不能把本地互通当作线上发布。
+
 ## Claude 自动续跑开始标记（2026-11-11）
 
 既有 Agent `status` 事件的 data 可选增加 `providerInitiatedTurn: true`，仅在适配层确认顶层
@@ -8,6 +36,21 @@
 任务宿主翻译，远程 Agent 沿用既有事件 data 透传；手机使用任务宿主的错误和等待投影。
 不增加帧、channel、allowlist 或网络请求，官方与自建中转均无需改动；恢复只针对本任务，
 不重启共享连接或重放其它任务。
+
+## 手机收藏分享来的模型（2026-11-10，未发布）
+
+`maker:provider-share:received-catalogs` 的每条分享可选附加 `favoriteSource`：
+`{ shareId, memberId, providerId, owner: { region: 'cn' | 'global' } }`。它只用来把收藏写成被控电脑
+现有 `maker:model-favorites` 里的来源键 `provider-share-favorite:` 加上这四段，与 Desktop 本机收藏同一身份。
+不含凭证，也不授予运行权限。
+
+旧手机忽略未知字段。旧电脑不带该字段时，新手机不收藏这条分享，也不用手机自己或别的电脑的成员身份代替。
+字段不合法，或 `shareId` / `providerId` 与这一条分享不一致时，丢掉字段、保留目录。
+
+收藏的读、增、改、删仍走原 `maker:model-favorites`。来源键长于该通道既有的 512 时，手机不提供星标；
+被控电脑回复时继续滤掉超长来源，避免旧客户端整表解析失败。Desktop 本机存储上限仍是 2048。
+不新增 channel、allowlist、帧、能力位或中转路由。官方与自建中转只透传原 invoke 正文，中转内核不解析该字段，
+无需升级中转程序；已部署的中转转发未知 JSON 字段，新手机连接旧电脑时星标保持不可用。
 
 ## 实验性 Host 网页适配层（2026-11-10，未发布）
 

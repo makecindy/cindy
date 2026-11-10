@@ -19663,5 +19663,11 @@
     "keepDraft": "Dein Entwurf bleibt erhalten. Der Aufgabenstatus wird nach Wiederherstellung der Verbindung synchronisiert.",
     "retry": "Erneut verbinden",
     "desktopAuthHelp": "Aktualisiere die Host-Verbindungseinstellungen im Startterminal und öffne diesen experimentellen Client erneut."
+  },
+  "remoteControlConsent": {
+    "title": "Fernsteuerung dieses Computers erlauben?",
+    "detail": "Anfrage von {{device}}\nZweck: {{purpose}}\n\nGeräte Ihres Kontos können diesen Computer steuern, Aufgaben ausführen und auf Dateien zugreifen. Die Einstellung bleibt aktiv, bis Sie sie in den Einstellungen deaktivieren.",
+    "decline": "Jetzt nicht",
+    "enable": "Fernsteuerung aktivieren"
   }
 }

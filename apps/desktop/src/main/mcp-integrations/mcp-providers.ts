@@ -1047,6 +1047,14 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
         },
       },
       ...(deps.machineDirectory ? { machines: {
+        requestRemoteControl: async ({ callerSessionId, deviceId, purpose }: { callerSessionId: string; deviceId: string; purpose: string }) => {
+          if (isSessionSharedTaskActive(callerSessionId) || isAppSessionBoundaryPending()) {
+            return { ok: false as const, errorCode: 'PERMISSION_DENIED', message: 'Not available in this task' };
+          }
+          const { requestRemoteControlConsent } = await import('../device-link/index.js');
+          const status = await requestRemoteControlConsent(deviceId, purpose);
+          return { ok: true as const, status };
+        },
         list: async ({ callerSessionId }: { callerSessionId: string }) => {
           // 共享任务里的访客不是账号本人，不能经 Agent 看到账号下的机器。
           if (isSessionSharedTaskActive(callerSessionId)) {

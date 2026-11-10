@@ -30,9 +30,11 @@ import {
   isProviderAccessDeniedError,
   parseProviderSharePeer,
   providerShareGuestPeer,
+  providerShareFavoriteSource,
   scrubProviderShareLabel,
   scrubSharedProviderCatalog,
   type InvokeResultPayload,
+  type ProviderShareFavoriteSource,
   type ProviderShareReceived,
   type ProviderShareReceivedCatalog,
 } from '@cindy/device-link';
@@ -1239,6 +1241,22 @@ export async function executeProviderShareManagementCommand(command: ProviderSha
   return result;
 }
 
+/** 收藏身份与 Desktop 本机收藏同一套键。编不进去就不附带，手机不会另找成员身份。 */
+function receivedFavoriteSource(share: ProviderShareReceived): ProviderShareFavoriteSource | undefined {
+  const favoriteSource: ProviderShareFavoriteSource = {
+    shareId: share.shareId,
+    memberId: share.memberId,
+    providerId: share.providerId,
+    owner: { region: share.owner.region },
+  };
+  try {
+    providerShareFavoriteSource(favoriteSource);
+    return favoriteSource;
+  } catch {
+    return undefined;
+  }
+}
+
 const CATALOG_READ_TIMEOUT_MS = 10_000;
 const LINK_TTL_SAFETY_MS = 5_000;
 
@@ -1277,6 +1295,7 @@ async function receivedCatalogs(args: unknown[]): Promise<{ ready: boolean; shar
     ready: isReceivedSharesReady(),
     shares: await Promise.all(shares.map(async (share): Promise<ProviderShareReceivedCatalog> => {
       const agentDeviceId = `share:${share.shareId}`;
+      const favoriteSource = receivedFavoriteSource(share);
       let catalog: unknown = null;
       if (includeCatalog && invoke && share.status === 'active') {
         let timer: ReturnType<typeof setTimeout> | undefined;
@@ -1303,6 +1322,7 @@ async function receivedCatalogs(args: unknown[]): Promise<{ ready: boolean; shar
         owner: { displayName: share.owner.displayName, avatarUrl: share.owner.avatarUrl },
         status: share.status,
         hostOnline: share.hostOnline,
+        ...(favoriteSource ? { favoriteSource } : {}),
         catalog,
       };
     })),

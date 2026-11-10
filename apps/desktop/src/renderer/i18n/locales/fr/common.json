@@ -19847,5 +19847,11 @@
     "keepDraft": "Votre brouillon est conservé. L’état des tâches sera synchronisé au rétablissement de la connexion.",
     "retry": "Reconnecter",
     "desktopAuthHelp": "Mettez à jour les paramètres de connexion dans le terminal de lancement, puis rouvrez ce client expérimental."
+  },
+  "remoteControlConsent": {
+    "title": "Autoriser le contrôle à distance de cet ordinateur ?",
+    "detail": "Demande de {{device}}\nMotif : {{purpose}}\n\nLes appareils de votre compte pourront contrôler cet ordinateur, exécuter des tâches et accéder aux fichiers. Ce réglage reste actif jusqu’à sa désactivation dans les paramètres.",
+    "decline": "Pas maintenant",
+    "enable": "Activer le contrôle à distance"
   }
 }
