@@ -36,6 +36,7 @@ export function createBingWallpaperService(deps: BingWallpaperServiceDeps) {
   let timer: ReturnType<typeof setTimeout> | undefined;
   let nextAttemptAt = 0;
   let lastAttemptAt = -Infinity;
+  let lastCheckAt = -Infinity;
   let failures = 0;
   let lastStatus: BingWallpaperStatus = 'idle';
   let lastFailureStatus: Extract<BingWallpaperStatus, 'stale' | 'failed'> | null = null;
@@ -69,10 +70,12 @@ export function createBingWallpaperService(deps: BingWallpaperServiceDeps) {
   async function check(force = false): Promise<void> {
     if (disposed || !market || pending) return pending ?? undefined;
     const at = now();
-    if (at < lastAttemptAt) {
+    if (at < lastCheckAt) {
       lastAttemptAt = -Infinity;
       nextAttemptAt = 0;
     }
+    // Cache hits and deadline-gated checks also establish a wall-clock baseline.
+    lastCheckAt = at;
     if (
       ((!force || failures > 0) && at < nextAttemptAt) ||
       at - lastAttemptAt < MIN_CHECK_INTERVAL

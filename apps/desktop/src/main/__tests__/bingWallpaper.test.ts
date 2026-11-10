@@ -237,6 +237,27 @@ describe('daily wallpaper lifecycle', () => {
     expect(h.image).not.toHaveBeenCalled();
     expect(h.publish.mock.calls[0][1]).toBeNull();
   });
+  // #9758 review: a startup cache hit makes no network attempt. Wall-clock
+  // rollback must still invalidate its normal deadline on a non-forced wake/focus
+  // check. Existing rollback coverage exercises host publication, after fetching.
+  it('automatically refreshes after clock rollback following a startup cache hit', async () => {
+    const at = Date.now();
+    h.cache({ current: saved(), previous: null, checkedAt: at, nextCheckAt: at + 5 * 3600_000 });
+    h.active('en-US');
+    await h.service.refresh();
+    expect(h.metadata).not.toHaveBeenCalled();
+    expect(h.status).toHaveBeenLastCalledWith('ready');
+
+    vi.setSystemTime(at - 24 * 3600_000);
+    h.service.reconcile();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.metadata).toHaveBeenCalledOnce();
+    expect(h.state().checkedAt).toBeLessThan(at);
+    expect(h.status).toHaveBeenLastCalledWith('ready');
+    h.service.reconcile();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.metadata).toHaveBeenCalledOnce();
+  });
   it('publishes the next image after its scheduled local-date rollover', async () => {
     vi.setSystemTime(new Date(2026, 10, 9, 23, 50));
     const yesterday = metadata();
