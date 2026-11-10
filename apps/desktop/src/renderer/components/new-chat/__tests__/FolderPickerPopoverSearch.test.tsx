@@ -119,6 +119,38 @@ describe('FolderPickerPopover project search', () => {
     expect(onSelect).toHaveBeenCalledWith(manyProjects[4].path, 'project', manyProjects[4]);
   });
 
+  it('keeps fading the list itself while it scrolls independently in the ample state', () => {
+    // 保留 main 的 Portal 挂载后测量、滚动时切换边缘渐隐的回归覆盖。
+    // 上半区放得下(scrollHeight 300 < clientHeight 400),列表自身可滚(392 > 252),
+    // 通过真实组件的 scroll 事件验证充足态列表的渐隐切换。
+    const height = vi
+      .spyOn(HTMLElement.prototype, 'scrollHeight', 'get')
+      .mockImplementation(function (this: HTMLElement) {
+        return this.hasAttribute('data-folder-picker-list') ? 392 : 300;
+      });
+    const client = vi
+      .spyOn(HTMLElement.prototype, 'clientHeight', 'get')
+      .mockImplementation(function (this: HTMLElement) {
+        return this.hasAttribute('data-folder-picker-list') ? 252 : 400;
+      });
+    try {
+      renderPicker(manyProjects);
+      const list = document.querySelector('[data-folder-picker-list]') as HTMLElement;
+      // 上半区放得下:列表保留独立滚动标记与自滚动契约。
+      expect(list.hasAttribute('data-folder-picker-scroll')).toBe(true);
+      expect(list.className).toContain('folder-picker-fade-bottom');
+      expect(list.className).not.toContain('folder-picker-fade-top');
+
+      list.scrollTop = 140;
+      fireEvent.scroll(list);
+      expect(list.className).toContain('folder-picker-fade-top');
+      expect(list.className).not.toContain('folder-picker-fade-bottom');
+    } finally {
+      height.mockRestore();
+      client.mockRestore();
+    }
+  });
+
   // PR #9334: production wheel/search handlers must move the active scroller.
   // Existing filtering tests never scrolled; class snapshots could pass with broken handlers.
   // Unit tier: inject DOM measurements (jsdom has no layout), dispatch real DOM events,
