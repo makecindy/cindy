@@ -44,6 +44,43 @@ afterEach(() => {
 });
 
 describe('application wallpaper lifecycle', () => {
+  // #9758 review, unit: host repairs identical content to the same URL after
+  // startup decode fails. Existing tests retry only through a manual click.
+  it.each(['loading', 'ready'] as const)('automatically re-decodes a repaired unchanged URL from %s', async (initialStatus) => {
+    const url = 'cindy-media://client-wallpaper/' + 'a'.repeat(64) + '.webp';
+    const attempts: Array<{ resolve: () => void; reject: () => void }> = [];
+    vi.stubGlobal('Image', class {
+      src = '';
+      decode = () => new Promise<void>((resolve, reject) => {
+        attempts.push({ resolve, reject: () => reject(new Error('missing file')) });
+      });
+    });
+    const snapshot = (status: 'loading' | 'ready') => ({ ...DEFAULT_APPEARANCE_SETTINGS,
+      wallpaperId: 'bing-daily' as const, wallpaperVisibility: 0.6, wallpaperBlur: 9,
+      bingWallpaper: { status, image: { url, imageKey: url, market: 'en-US', date: '20261109',
+        title: 'Example', copyright: 'Example', sourceUrl: '' } },
+    });
+    let changed!: (value: ReturnType<typeof snapshot>) => void;
+    const refresh = vi.fn();
+    vi.stubGlobal('electronAPI', { appearanceSettings: {
+      getSync: () => snapshot(initialStatus),
+      onChanged: (callback: typeof changed) => { changed = callback; return () => {}; },
+      refreshBingWallpaper: refresh,
+    } });
+    render(<WallpaperSettingsProvider><Controls /></WallpaperSettingsProvider>);
+    await act(async () => attempts[0].reject());
+    expect(screen.getByTestId('bing-decode-failed').textContent).toBe('true');
+    // Also covers loading/ready notifications batched into one React render.
+    act(() => { changed(snapshot('loading')); changed(snapshot('ready')); });
+    expect(attempts).toHaveLength(2);
+    act(() => changed(snapshot('ready')));
+    expect(attempts).toHaveLength(2);
+    await act(async () => attempts[1].resolve());
+    expect(screen.getByTestId('bing-decode-failed').textContent).toBe('false');
+    expect(document.documentElement.style.getPropertyValue('--app-wallpaper-image')).toBe('url("' + url + '")');
+    expect(document.documentElement.style.getPropertyValue('--app-wallpaper-blur')).toBe('9px');
+    expect(refresh).not.toHaveBeenCalled();
+  });
   // #9640, unit: real provider/canvas. A daily image can change URL without changing its
   // source ID; visibility/blur persist and a failed decode exposes a same-URL retry.
   it('decodes daily changes, keeps the previous image on failure and clears it after reset', async () => {

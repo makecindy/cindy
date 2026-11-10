@@ -185,6 +185,14 @@ export function WallpaperSettingsProvider({
     let revision = 0;
     const apply = (next: AppearanceSettings) => {
       const confirmed = pickWallpaperSettings(normalizeAppearanceSettings(next));
+      // A host repair can restore identical bytes at the same content-addressed
+      // URL. Retry decoding on readiness, even if React batches loading/ready.
+      if (
+        confirmed.wallpaperId === 'bing-daily' &&
+        confirmed.bingWallpaper?.image &&
+        confirmed.bingWallpaper.status === 'ready' &&
+        confirmedRef.current.bingWallpaper?.status !== 'ready'
+      ) setBingDecodeRetryKey((key) => key + 1);
       confirmedRef.current = confirmed;
       const optimistic = pendingRef.current.reduce(
         (current, pending) => ({ ...current, ...pending.patch }),
