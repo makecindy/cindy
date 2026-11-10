@@ -9,7 +9,6 @@ import { useTranslation } from 'react-i18next';
 
 import { useDeviceProviderSubscriptionCard } from '@/components/settings/useProviderSubscriptionCard';
 import { QuotaHoverCard } from '@/components/status/QuotaHoverCard';
-import { buildSubscriptionAccountUsageCard } from '@/components/status/usageCardModel';
 import { providerWeeklyQuotaSource } from '@/components/new-chat/useProviderWeeklyQuota';
 import { useDeviceProviders } from '@/hooks/useDeviceProviders';
 import { useProviders } from '@/hooks/useProviders';
@@ -46,7 +45,7 @@ export function GroupMemberQuota({
   /** 左侧缩进，让卡片内容与行里的电脑名对齐(卡片自带 16px 内边距)。 */
   inset?: string;
 }) {
-  const { t, i18n } = useTranslation();
+  const { t } = useTranslation();
   // Keep observing presence while offline, independently of quota/provider hooks.
   // The group's cached status can lag a reconnect; the shared device list lets
   // quota reads recover without waiting for that cache and the next group poll.
@@ -267,11 +266,8 @@ export function GroupMemberQuota({
     !quotaOffline && !!provider && !provider.removed && provider.auth?.method === 'oauth' &&
       (!provider.access || provider.access.kind === 'subscription'),
   );
-  const multipleAccounts = accounts && accounts.length > 1 ? accounts : null;
-  const onlyAddedAccount = accounts?.length === 1 && accounts[0].account.id !== 'default' ? accounts[0].account : null;
-  const shownCard = onlyAddedAccount
-    ? buildSubscriptionAccountUsageCard(onlyAddedAccount.usage, t, Date.now(), i18n?.resolvedLanguage ?? i18n?.language)
-    : card;
+  const listedAccounts = accounts && (accounts.length > 1 ||
+    (accounts.length === 1 && accounts[0].account.id !== 'default')) ? accounts : null;
   const [waitedOut, setWaitedOut] = useState(false);
   const waitKey = target.kind === 'share' ? '' : `${remoteDeviceId ?? ''}\n${target.providerId}`;
   useEffect(() => {
@@ -283,7 +279,7 @@ export function GroupMemberQuota({
   let note: string | null = null;
   if (target.kind === 'share') note = t('providerGroup.member.quota.share');
   else if (quotaOffline) note = t('providerGroup.member.quota.offline');
-  else if (!shownCard && !multipleAccounts) {
+  else if (!card && !listedAccounts) {
     if (provider && !providerWeeklyQuotaSource({ ...provider, suspended: false })) {
       note = t('providerGroup.member.quota.none');
     } else if (waitedOut || (target.kind === 'device' && deviceCatalog.error)) {
@@ -296,10 +292,10 @@ export function GroupMemberQuota({
   return (
     // 紧贴在电脑这一行下面：行本身已说明是哪台电脑，卡片不再出「Claude · 套餐」标题行。
     <div id={id} data-testid="provider-group-member-quota" className={cn('-mt-1', inset)}>
-      {multipleAccounts ? (
-        <GroupMemberAccountList accounts={multipleAccounts} defaultCard={card} />
-      ) : shownCard ? (
-        <QuotaHoverCard variant="embedded" hideIdentity account={shownCard} />
+      {listedAccounts ? (
+        <GroupMemberAccountList accounts={listedAccounts} defaultCard={card} hideAccountNames={listedAccounts.length === 1} />
+      ) : card ? (
+        <QuotaHoverCard variant="embedded" hideIdentity account={card} />
       ) : (
         <p className="px-4 pb-3 text-12 leading-[1.5] text-[var(--text-tertiary)]">{note}</p>
       )}

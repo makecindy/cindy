@@ -857,14 +857,23 @@ describe('GroupMemberQuota', () => {
     expect(rows.every(row => row.textContent?.includes('subscriptionAccounts.signedOut'))).toBe(true);
   });
 
-  it('shows the signed-in account alone instead of an unused default slot', async () => {
+  // r4523511784: hiding the single account name must retain its allocation/login status.
+  it.each(['ready', 'paused', 'signed-out'])('shows a single added %s account without its name', async (state) => {
     mocks.poolCommand.mockResolvedValue(pool([
       poolAccount('default', { status: 'signed-out' }),
-      poolAccount('work', { identity: 'second@example.com', usage: claudeUsage(25) }),
+      poolAccount('work', { identity: 'second@example.com', paused: state === 'paused',
+        status: state === 'signed-out' ? 'signed-out' : 'ready',
+        usage: state === 'signed-out' ? undefined : claudeUsage(25) }),
     ]));
     await show({ kind: 'local', providerId: 'anthropic' });
-    expect(screen.queryByTestId('provider-group-member-account')).toBeNull();
-    expect(screen.getByTestId('quota-card').textContent).not.toBe('This computer’s Claude');
+    expect(screen.queryByText('second@example.com')).toBeNull();
+    if (state === 'signed-out') {
+      expect(screen.getByText('subscriptionAccounts.signedOut')).toBeTruthy();
+      expect(screen.queryByTestId('quota-card')).toBeNull();
+    } else {
+      expect(screen.getByTestId('quota-card').textContent).not.toBe('This computer’s Claude');
+      if (state === 'paused') expect(screen.getByText('providerGroup.member.status.paused')).toBeTruthy();
+    }
   });
 
   it('says why an account has no bars and dims a paused one', async () => {

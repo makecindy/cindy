@@ -41,6 +41,14 @@ export default {
       about: 'One account keeps the original card with no account name',
       data: { single: true },
     },
+    'single-added-paused': {
+      about: 'One added account keeps its paused explanation without an account name',
+      data: { singleAdded: 'paused' },
+    },
+    'single-added-signed-out': {
+      about: 'One added account needs login and never borrows the unused default quota',
+      data: { singleAdded: 'signed-out' },
+    },
   },
   async ready(page) {
     await page.getByTestId('provider-group-member').first().waitFor();
@@ -50,7 +58,7 @@ export default {
       .click();
     await page
       .getByTestId('provider-group-member-quota')
-      .getByRole('progressbar')
+      .locator('[role="progressbar"], [data-testid="provider-group-member-account"]')
       .first()
       .waitFor();
   },
@@ -66,6 +74,21 @@ export default {
       return;
     }
     await accounts.first().waitFor();
+    if (ui.case.startsWith('single-added-')) {
+      assert.equal(await accounts.count(), 1);
+      assert.equal(await accounts.getByText('second@example.com', { exact: true }).count(), 0);
+      const paused = ui.case === 'single-added-paused';
+      await accounts
+        .getByText(
+          await ui.t(
+            paused ? 'providerGroup.member.status.paused' : 'subscriptionAccounts.signedOut',
+          ),
+          { exact: true },
+        )
+        .waitFor();
+      assert.equal(await accounts.getByRole('progressbar').count(), paused ? 2 : 0);
+      return;
+    }
     assert.equal(await accounts.count(), ui.case === 'states' ? 3 : 2);
     // Every account's bars share one column, whatever each account's own labels and numbers are.
     const bars = await page.getByRole('progressbar').evaluateAll((elements) =>

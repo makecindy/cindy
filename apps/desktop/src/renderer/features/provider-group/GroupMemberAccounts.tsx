@@ -112,9 +112,11 @@ export function useGroupMemberAccounts(
 export function GroupMemberAccountList({
   accounts,
   defaultCard,
+  hideAccountNames = false,
 }: {
   accounts: GroupMemberAccount[];
   defaultCard: UsageCardAccount | null;
+  hideAccountNames?: boolean;
 }) {
   const { t, i18n } = useTranslation();
   const locale = i18n?.resolvedLanguage ?? i18n?.language;
@@ -149,22 +151,26 @@ export function GroupMemberAccountList({
                 account.paused && 'opacity-60',
               )}
             >
-              <div className="flex min-w-0 items-baseline gap-2 px-4 pt-1">
-                <span
-                  title={name}
-                  className="min-w-0 truncate text-13 font-medium text-[var(--text-primary)]"
-                >
-                  {name}
-                </span>
-                {status && (
-                  <span
-                    title={status}
-                    className="min-w-0 truncate text-12 text-[var(--text-secondary)]"
-                  >
-                    {status}
-                  </span>
-                )}
-              </div>
+              {(!hideAccountNames || status) && (
+                <div className="flex min-w-0 items-baseline gap-2 px-4 pt-1">
+                  {!hideAccountNames && (
+                    <span
+                      title={name}
+                      className="min-w-0 truncate text-13 font-medium text-[var(--text-primary)]"
+                    >
+                      {name}
+                    </span>
+                  )}
+                  {status && (
+                    <span
+                      title={status}
+                      className="min-w-0 truncate text-12 text-[var(--text-secondary)]"
+                    >
+                      {status}
+                    </span>
+                  )}
+                </div>
+              )}
               {usage && <QuotaHoverCard variant="embedded" hideIdentity account={usage} />}
             </div>
           );

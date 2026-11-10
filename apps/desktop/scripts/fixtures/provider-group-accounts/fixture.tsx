@@ -58,12 +58,15 @@ const view: ProviderGroupView = {
   members: [{ ...member, state: 'available', running: 0, appVersion: '0.1.130' }],
 };
 
-function pool(data: {
+type AccountScenario = {
   states?: boolean;
   long?: boolean;
   single?: boolean;
   missingUsage?: boolean;
-}): SubscriptionPoolView {
+  singleAdded?: 'paused' | 'signed-out';
+};
+
+function pool(data: AccountScenario): SubscriptionPoolView {
   const first = account('default', {
     identity: data.long
       ? 'a-very-long-account-name-for-the-default-subscription@example.com'
@@ -74,18 +77,28 @@ function pool(data: {
     identity: data.long
       ? 'another-very-long-account-name-for-work@example.com'
       : 'second@example.com',
-    paused: data.states,
-    usage: data.missingUsage ? undefined : { claude: claude(12, 40, null) },
+    paused: data.states || data.singleAdded === 'paused',
+    status: data.singleAdded === 'signed-out' ? 'signed-out' : 'ready',
+    usage:
+      data.missingUsage || data.singleAdded === 'signed-out'
+        ? undefined
+        : { claude: claude(12, 40, null) },
   });
   return {
     providerId: 'anthropic',
     configured: !data.single,
     strategy: 'least',
-    accounts: data.single
-      ? [first]
-      : data.states
-        ? [first, second, account('home', { identity: 'third@example.com', status: 'signed-out' })]
-        : [first, second],
+    accounts: data.singleAdded
+      ? [account('default', { status: 'signed-out' }), second]
+      : data.single
+        ? [first]
+        : data.states
+          ? [
+              first,
+              second,
+              account('home', { identity: 'third@example.com', status: 'signed-out' }),
+            ]
+          : [first, second],
   };
 }
 
@@ -100,15 +113,7 @@ void mountPage({
       onChanged: subscription('groupChanged'),
     },
     subscriptionAccounts: {
-      command: async () =>
-        pool(
-          ctx.data as {
-            states?: boolean;
-            long?: boolean;
-            single?: boolean;
-            missingUsage?: boolean;
-          },
-        ),
+      command: async () => pool(ctx.data as AccountScenario),
       onChanged: subscription('subscriptionAccounts'),
     },
     maker: {
