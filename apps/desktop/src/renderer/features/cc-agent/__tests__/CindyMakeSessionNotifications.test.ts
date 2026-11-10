@@ -111,6 +111,7 @@ const send = vi.fn();
 const reviewTarget = vi.fn(async () => false);
 const botTitle = vi.fn(async (): Promise<string | null> => null);
 const leadOfWorker = vi.fn<(workerSessionId: string) => string | null>(() => null);
+const workerReportQuestion = vi.fn<(workerSessionId: string) => string | null>(() => null);
 beforeEach(() => { vi.clearAllMocks(); });
 afterEach(cleanup);
 
@@ -137,6 +138,7 @@ function dispatcher(local: NotificationSession[], remote: NotificationSession[] 
     shouldNotifyOrcaWorkerEvent,
     formatOrcaWorkerNotificationTitle,
     findOrcaLeadSessionIdForWorker: leadOfWorker,
+    findOrcaWorkerReportQuestion: workerReportQuestion,
     t: () => 'Unnamed task',
   };
   return new Function(...Object.keys(bindings), emitted)(...Object.values(bindings)) as (
@@ -267,6 +269,16 @@ describe('Orca Worker notification dispatch', () => {
     leadOfWorker.mockReturnValue(null);
     dispatcher([worker])('worker', 'error');
     expect(send).toHaveBeenCalledWith('worker', 'Worker · developer', 'error');
+  });
+
+  // 结构化回报把「等回复」具体化：blocked/failed 的 question 必须进通知文案，
+  // 否则用户只看到「等回复」而不知道要答什么。
+  it('把最新结构化回报里的问题接进通知标题', () => {
+    leadOfWorker.mockReturnValue('lead');
+    workerReportQuestion.mockReturnValue('选方案 A 还是 B');
+    dispatcher([lead, worker])('worker', 'needs-reply');
+    expect(workerReportQuestion).toHaveBeenCalledWith('worker');
+    expect(send).toHaveBeenCalledWith('worker', '重构登录 · Worker · developer · 选方案 A 还是 B', 'needs-reply');
   });
 
   it('远程控制另一台电脑的 Worker 不在范围内', () => {

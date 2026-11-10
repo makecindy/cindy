@@ -223,6 +223,19 @@ export function getSessionAttentionKindsWithOrcaLeads(): ReadonlyMap<string, Att
   return cachedMergedKinds;
 }
 
+/** Worker 最新结构化回报里的问题，最多 60 字；把「等回复」具体化到通知标题。 */
+export function findOrcaWorkerReportQuestion(workerSessionId: string): string | null {
+  for (const [, snapshot] of listRetainedWorkerProjections()) {
+    const worker = snapshot.workers.find((item) => item.sessionId === workerSessionId);
+    if (!worker) continue;
+    const question = worker.latestReport?.question?.trim();
+    if (!question) return null;
+    const chars = Array.from(question);
+    return chars.length > 60 ? `${chars.slice(0, 60).join('')}…` : question;
+  }
+  return null;
+}
+
 /**
  * Worker 自身事件是否单独发通知:只放行本机 Worker 的出错与需要确认;完成仍不单独通知,
  * 等 Lead 被回报唤起的那一轮以 Lead 名义统一通知。远程控制另一台电脑的 Worker 不在范围内。

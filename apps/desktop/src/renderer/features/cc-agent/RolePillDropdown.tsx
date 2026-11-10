@@ -332,6 +332,24 @@ function clearTimerRef(ref: { current: number | null }): void {
   }
 }
 
+function WorkerReportChip({ report }: { report: WorkerInfo['latestReport'] }) {
+  const { t } = useTranslation();
+  if (!report) return null;
+  const key = report.state === 'dropped' ? 'orca.workerReport.dropped'
+    : report.state === 'blocked' || report.state === 'failed' ? 'orca.workerReport.awaitingAnswer'
+    : report.state === 'ready' ? 'orca.workerReport.awaitingReview'
+    : null;
+  if (!key) return null;
+  return (
+    <span
+      className="ml-1 rounded-full bg-[var(--surface-chip)] px-1.5 text-10 text-[var(--text-tertiary)]"
+      title={report.question ?? report.summary ?? undefined}
+    >
+      {t(key)}
+    </span>
+  );
+}
+
 function WorkerSummary({
   worker,
   attentionKind,
@@ -383,6 +401,7 @@ function WorkerSummary({
             </span>
           </>
         )}
+        {!compact && <WorkerReportChip report={worker.latestReport} />}
       </div>
       {!compact && (
         <WorkerModelLine workerSessionId={worker.sessionId} model={worker.model} effort={worker.effort} device={worker.executionDevice} />

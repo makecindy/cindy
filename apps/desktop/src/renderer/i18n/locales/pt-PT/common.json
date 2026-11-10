@@ -17570,6 +17570,11 @@
     }
   },
   "orca": {
+    "workerReport": {
+      "dropped": "Sem ação necessária",
+      "awaitingAnswer": "Resposta necessária",
+      "awaitingReview": "A rever"
+    },
     "createWorker": {
       "title": "Criar novo Worker",
       "submit": "Criar Worker",

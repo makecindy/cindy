@@ -17407,6 +17407,11 @@
     }
   },
   "orca": {
+    "workerReport": {
+      "dropped": "Keine Aktion nötig",
+      "awaitingAnswer": "Antwort nötig",
+      "awaitingReview": "Zu prüfen"
+    },
     "createWorker": {
       "title": "Neuen Worker erstellen",
       "submit": "Worker erstellen",

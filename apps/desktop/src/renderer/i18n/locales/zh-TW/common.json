@@ -17340,6 +17340,11 @@
     }
   },
   "orca": {
+    "workerReport": {
+      "dropped": "無需處理",
+      "awaitingAnswer": "等回覆",
+      "awaitingReview": "待驗收"
+    },
     "createWorker": {
       "title": "建立新 Worker",
       "submit": "建立 Worker",

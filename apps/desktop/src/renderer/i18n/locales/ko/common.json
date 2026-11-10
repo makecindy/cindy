@@ -17340,6 +17340,11 @@
     }
   },
   "orca": {
+    "workerReport": {
+      "dropped": "조치 불필요",
+      "awaitingAnswer": "답변 대기",
+      "awaitingReview": "검토 대기"
+    },
     "createWorker": {
       "title": "새 Worker 만들기",
       "submit": "Worker 만들기",
