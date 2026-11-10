@@ -19728,6 +19728,7 @@
     }
   },
   "subscriptionAccounts": {
+    "unassigned": "帳號待定",
     "providerManagedAuth": "Codex 目前供方未提供 ChatGPT 帳號資訊。請於新增供方時選「$t(subscriptionAccounts.signIn.anotherAccount)」，另用獨立目錄",
     "signIn": {
       "checking": "正察本機帳號…",
