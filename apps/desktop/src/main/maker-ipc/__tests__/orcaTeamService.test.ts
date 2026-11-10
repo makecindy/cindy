@@ -1870,6 +1870,46 @@ describe('OrcaTeamService', () => {
     expect(onLeadWorkerReportsSettled).toHaveBeenCalledExactlyOnceWith('lead-1');
   });
 
+  // Rule: orca-team-architecture.md「消息派发与 auto-bridge」#12. Accepting a report, even into
+  // the Lead's queue, settles the assignment's duty to report, so withdrawing the assignment's
+  // only report would leave the Lead uninformed with nothing auto-bridged later. Review case:
+  // an earlier assignment's report still queued must not make the current one look covered.
+  // Unit tier, public service calls.
+  it('scopes report withdrawal to the Worker\'s current assignment', async () => {
+    const h = createDeps();
+    const sid = 'worker-session-1';
+    const send = () => h.service.sendToWorker({ callerLeadSessionId: 'lead-1', targetSessionId: sid, message: 'A' });
+    const report = (receipt: { delivered: boolean; queuedMessageId?: string }, accepted = true) =>
+      h.service.captureLocalWorkerReport(sid)(accepted, receipt);
+    const standing = (id: string) => h.service.workerReportWithdrawalStanding(sid, id);
+
+    expect(standing('r1')).toBe('untracked'); // no Lead assignment is running
+    await send();
+    await report({ delivered: false, queuedMessageId: 'rejected' }, false);
+    await report({ delivered: false, queuedMessageId: 'r1' });
+    expect(standing('rejected')).toBe('other-assignment'); // a refused send is not a report
+    expect(standing('r1')).toBe('last');
+    await report({ delivered: false, queuedMessageId: 'r2' });
+    expect(standing('r1')).toBe('covered');
+    // r2 left the Lead's queue undelivered (withdrawn, merged away, Stop): r1 is the only one again.
+    h.service.forgetWorkerQueuedReports(sid, ['r2']);
+    expect(standing('r1')).toBe('last');
+    await report({ delivered: true });
+    expect(standing('r1')).toBe('covered');
+
+    // Next assignment: its own single queued report is not covered by the previous one's.
+    await send();
+    await report({ delivered: false, queuedMessageId: 'r3' });
+    expect(standing('r3')).toBe('last');
+    expect(standing('r1')).toBe('other-assignment');
+
+    // Review finding (#9594): merging r1 (earlier assignment) with r3 keeps r1 and drops r3. The
+    // survivor takes over this assignment's report, so it can no longer be withdrawn.
+    h.service.forgetWorkerQueuedReports(sid, ['r3']);
+    h.service.adoptWorkerQueuedReport(sid, 'r1');
+    expect(standing('r1')).toBe('last');
+  });
+
   it.each([true, false])('waits outside the transition lock for an in-flight manual report: accepted=%s', async accepted => {
     let generation = 1;
     const runtime = { isTurnRunning: () => true, getTurnGeneration: () => generation };

@@ -304,7 +304,7 @@
       },
       "agentSwitch": {
         "usage-limit": "{{from}} alcanzó su límite de uso; continúa en {{to}}",
-        "auth": "{{from}} ha cerrado sesión; continúa en {{to}}",
+        "auth": "{{from}} no está autenticado; continúa en {{to}}",
         "unavailable": "No se pudo alcanzar {{from}}; continúa en {{to}}",
         "overload": "{{from}} estaba sobrecargado; continúa en {{to}}",
         "failed": "{{from}} tuvo un problema; continúa en {{to}}"

@@ -875,8 +875,8 @@
       "runningCount_one": "{{count}} tarefa em execução",
       "runningCount_other": "{{count}} tarefas em execução",
       "limitAria": "Limite de tarefas de {{name}}",
-      "limitOption_one": "Máx. {{count}}",
-      "limitOption_other": "Máx. {{count}}",
+      "limitOption_one": "Até {{count}}",
+      "limitOption_other": "Até {{count}}",
       "weightAria": "Peso de {{name}}",
       "weightOption": "Peso {{weight}}",
       "assignAria": "Atribuir tarefas a {{name}}",
@@ -929,7 +929,7 @@
       },
       "accountCount_many": "{{count}} contas",
       "runningCount_many": "{{count}} tarefas em execução",
-      "limitOption_many": "Máx. {{count}}"
+      "limitOption_many": "Até {{count}}"
     },
     "rebalance": {
       "title": "Continuar em {{label}}?",
@@ -4294,7 +4294,18 @@
           "ariaLabel": "Permitir que os seus outros computadores e as pessoas com quem partilha usem este fornecedor",
           "writeFailed": "Não foi possível guardar a definição de acesso remoto. Tente novamente."
         },
-        "moreActionsAria": "Mais ações"
+        "moreActionsAria": "Mais ações",
+        "runLocation": {
+          "label": "Executar em",
+          "optionLocal": "Este computador",
+          "notSignedIn": "Sem sessão",
+          "autoBorrowing": "Este computador não tem sessão iniciada, por isso as novas tarefas são executadas em {{device}}. Não é preciso iniciar sessão.",
+          "local": "As novas tarefas são executadas neste computador. Pode escolher outro dos seus computadores com sessão iniciada.",
+          "pinned": "As novas tarefas são executadas em {{device}} com a sessão desse computador. As tarefas em curso ficam onde estão.",
+          "inline": "Executa em",
+          "signInHere": "Iniciar sessão neste computador",
+          "writeFailed": "Não foi possível guardar onde este fornecedor é executado. Tente novamente."
+        }
       },
       "detect": {
         "groupLabel": "Detetado neste dispositivo",
@@ -5364,6 +5375,15 @@
         "ariaLabel": "Usar {{shortcut}} para enviar mensagens"
       }
     },
+    "defaultNewTaskWorkingDir": {
+      "title": "Diretório de trabalho predefinido para novas tarefas",
+      "label": "Diretório predefinido neste computador",
+      "hint": "Pré-selecionado para novas tarefas locais sem projeto escolhido. Um projeto, uma conversa ou um computador remoto selecionado explicitamente tem prioridade.",
+      "unset": "Não definido (nenhum diretório pré-selecionado)",
+      "choose": "Escolher diretório",
+      "clear": "Limpar predefinição",
+      "failed": "Não foi possível guardar o diretório de trabalho predefinido. Tenta novamente."
+    },
     "linkOpen": {
       "title": "Abrir ligações",
       "description": "Escolha onde abrir as ligações nas mensagens. Clique com o botão direito numa ligação para usar outra opção apenas nessa ligação.",
@@ -6253,13 +6273,18 @@
         "allowInboundAria": "Alternar permissão para {{name}} controlar este dispositivo",
         "peerControlOff": "Controlo remoto não ativado nesse dispositivo",
         "masterOffHint": "Ative primeiro o interruptor principal acima",
-        "controllingThisMac": "Ligado à Cindy"
+        "controllingThisMac": "Ligado à Cindy",
+        "useThisDeviceModels": "Usar os modelos daqui",
+        "allowModelUseAria": "Permitir que {{name}} use os modelos deste computador"
       },
       "toast": {
         "revoked": "Acesso revogado para este dispositivo",
         "revokeFailed": "Falha ao revogar o acesso",
         "restored": "Acesso restaurado para este dispositivo",
-        "restoreFailed": "Falha ao restaurar o acesso"
+        "restoreFailed": "Falha ao restaurar o acesso",
+        "modelUseRestored": "Esse computador pode voltar a usar os modelos deste",
+        "modelUseRevoked": "Esse computador já não pode usar os modelos deste",
+        "modelUseFailed": "Não foi possível guardar “Usar os modelos daqui”. Tente novamente."
       },
       "sections": {
         "myDevices": "Os meus dispositivos",
@@ -11530,6 +11555,9 @@
       "databaseDriver": "Não foi possível carregar o controlador da base de dados. Atualize ou repare o Cindy e tente novamente.",
       "databaseUnavailable": "Não foi possível ler a base de dados de origem. Os dados originais não foram alterados; tente novamente após a reparação.",
       "fileTooLarge": "Um ficheiro ou esta importação excede o limite de leitura. O conteúdo não foi truncado.",
+      "sourceFileTooLarge": "Um ficheiro excede o limite de leitura. Este item não foi totalmente importado.",
+      "snapshotTooLarge": "O volume total de dados desta leitura excede o limite. A importação está incompleta.",
+      "itemTooLarge": "Os ficheiros deste item excedem 128 MiB no total. Este item não foi totalmente importado.",
       "memoryMetadata": "O resumo ou o título da memória excede os requisitos de armazenamento.",
       "memoryWrite": "A escrita da memória ou a verificação de integridade falhou. Pode tentar novamente.",
       "memoryChanged": "A memória guardada foi alterada e não foi substituída.",
@@ -13128,6 +13156,11 @@
     "prevMessageJump": "Ir para o pedido anterior: {{preview}}",
     "sessionLoading": "A carregar tarefa",
     "askUserQuestion": {
+    "unanswered": "Sem resposta",
+    "withdrawn": "Já não precisa de resposta",
+    "withdrawnDraft": "Esta pergunta já não precisa de resposta.\n{{reason}}\nO rascunho foi guardado e pode ser enviado como complemento.",
+    "sendSupplement": "Enviar complemento",
+
       "voice": {
         "hint": "Diga o número ou nome de uma opção. Para várias escolhas, diga depois «confirmar seleção».",
         "freeTextHint": "Diga a sua resposta, reveja-a e diga «confirmar seleção» para enviar.",
@@ -14278,6 +14311,7 @@
       "taskAutoArchived": "\"{{title}}\" arquivada",
       "taskAutoArchivedUndo": "Desfazer",
       "taskAutoArchivePending": "Será arquivada ao sair desta tarefa",
+      "taskAutoArchiveBlockedDirty": "«{{title}}» não foi arquivada automaticamente: há alterações não submetidas no espaço de trabalho",
       "taskAutoArchiveCancel": "Cancelar",
       "taskAutoArchiveCancelled": "Sem arquivo automático desta vez",
       "taskArchiveNow": "Arquivar agora"
@@ -14437,7 +14471,7 @@
       "running": "Em execução…",
       "waitingWorkflow": "A aguardar o Workflow…",
       "waitingWorkflowProgress": "A aguardar o Workflow · {{done}}/{{total}} Agents",
-      "turnStart": "{{status}}",
+      "turnStart": "A processar, {{name}}…",
       "issueTip": "{{name}}, experimente /issue para nos enviar comentários ou sugestões",
       "runningTool": "{{tool}} em execução…"
     },
@@ -19969,6 +20003,8 @@
     "lineNumbers": "Números de linha"
   },
   "subscriptionAccounts": {
+    "unassigned": "Conta por atribuir",
+    "providerManagedAuth": "O fornecedor atual do Codex não disponibiliza informações da conta ChatGPT. Ao adicionar o fornecedor, selecione «$t(subscriptionAccounts.signIn.anotherAccount)» para usar uma pasta separada.",
     "signIn": {
       "checking": "A verificar a conta local…",
       "detected": "Conta com sessão iniciada encontrada",
@@ -20017,5 +20053,15 @@
     "browserFallback": "Abre o GitHub para dar uma estrela ao Cindy.",
     "openGithub": "Abrir GitHub",
     "openFailed": "Não foi possível abrir o GitHub."
+  },
+  "hostConnection": {
+    "connecting": "A ligar ao Cindy…",
+    "restoring": "A restaurar o estado das tarefas…",
+    "retrying": "Tarefas ainda não sincronizadas. A tentar novamente…",
+    "pairing": "É necessário autorizar a ligação",
+    "pairingHelp": "Mantenha esta página aberta. No terminal usado para iniciar o Cindy Host, execute novamente o comando para abrir o cliente web. Faça o emparelhamento na nova página e volte aqui.",
+    "keepDraft": "O rascunho será mantido. As tarefas serão sincronizadas quando a ligação for restabelecida.",
+    "retry": "Voltar a ligar",
+    "desktopAuthHelp": "Atualize as definições de ligação no terminal de arranque e reabra este cliente experimental."
   }
 }

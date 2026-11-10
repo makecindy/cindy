@@ -28,7 +28,7 @@ import {
   updateCustomMcpServer,
   validateCustomMcpConfig,
   type CustomMcpConfig,
-} from '../maker-host/custom-mcp-store.js';
+} from '../maker-host/custom-mcp-store.desktop.js';
 import { MAKER_INVOKE } from './channels.js';
 import type { IpcHandlerRegistry } from './ipcHandlerRegistry.js';
 

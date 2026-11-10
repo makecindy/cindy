@@ -1,8 +1,8 @@
 import { flushStandbyUsage, importStandbyUsage } from './providerShareAvailabilityUsage.js';
 import { publishShareAvailability, refreshStandbyGuests } from './providerShareAvailability.js';
 import { onProviderGroupChanged } from '../provider-group/store.js';
-import { onRemoteProviderAccessChanged } from '../maker-host/remote-provider-access-store.js';
-import { onDeviceLinkSettingChanged } from './settings-store.js';
+import { migrateRemoteProviderAccessDefault, onRemoteProviderAccessChanged } from '../maker-host/remote-provider-access-store.js';
+import { onDeviceLinkSettingChanged } from './settings-store.desktop.js';
 import { isProviderShareMemberBudget } from '../../shared/providerShareBudget.js';
 import { CONTROLLED_MODEL_CATALOG_CHANGED } from '../../shared/controlledModelCatalog.js';
 import { readMemberBudgetStatus, supportsMemberBudget } from './providerShareBudgetRuntime.js';
@@ -10,10 +10,10 @@ import { isRemoteAgentLimitsPatch } from '../../shared/remoteAgentLimits.js';
 import { supportsSubscriptionFastPolicy, unifiedModelKeyId } from '@cindy/model-providers';
 import { providerFastPolicy } from '../maker-host/provider-fast-policy-store.js';
 import { notifySubscriptionFastPolicyChanged } from '../maker-host/subscription-fast-policy.js';
-import { notifyProviderShareCatalogChanged } from './dispatch.js';
+import { notifyProviderShareCatalogChanged } from './dispatch.desktop.js';
 import { DEVICE_LINK_PUSH } from '../../shared/deviceLinkIpc.js';
 import { readRemoteAgentLimitsState, saveRemoteAgentLimits } from '../remote-agent/host/limitsStore.js';
-import { remoteAgentLimitUsage, revalidateRemoteModelAccess } from './dispatch.js';
+import { remoteAgentLimitUsage, revalidateRemoteModelAccess } from './dispatch.desktop.js';
 /**
  * 供应商分享的本机接线：分享者与受邀者两侧运行时的起停、推送给 Renderer、系统通知，以及
  * Renderer 的命令通道。账号操作只接受本机应用窗口，不能经设备互联从别的电脑调用。
@@ -60,7 +60,7 @@ import { isRemoteModelSelection, type RemoteModelAccessView } from '../../shared
 import { createProviderShareInsightsReader } from './providerShareInsights.js';
 import { readProviderShareQuota, readProviderShareQuotaAccountResult } from './providerShareQuota.js';
 import { isDataOwnerPushStamp } from '../../shared/dataOwnerPush.js';
-import { t } from '../i18n.js';
+import { t } from '../i18n.desktop.js';
 import { createLogger } from '../logger.js';
 import { focusMainWindow } from '../deepLink.js';
 import { isFocusedAppContentWindow } from '../windowFocusClassifier.js';
@@ -90,7 +90,7 @@ import {
   providerShareActiveControllers,
   revokeProviderShareControllers,
   setProviderShareAccess,
-} from './dispatch.js';
+} from './dispatch.desktop.js';
 import { getDeviceLinkInvokeContext } from './invoke-context.js';
 import { tapWindowBroadcast } from './broadcast-tap.js';
 import { MAKER_PUSH } from '../maker-ipc/channels.js';
@@ -124,6 +124,8 @@ import {
   clearProviderShareRequestQuiet,
   ensureProviderSharePeerKnown,
   getProviderShareHostSnapshot,
+  getProviderShareHostLoadedSnapshot,
+  onProviderShareHostChanged,
   getProviderShareQuietRequestIds,
   getProviderShareWatchedRequests,
   markProviderShareHostActive,
@@ -147,7 +149,7 @@ import {
   type ProviderShareReshareRecord,
 } from './providerShareReshare.js';
 import { getProviderShareUsageStore, installProviderShareUsageStore, providerUsageLocalDay } from './providerShareUsageStore.js';
-import { readDeviceLinkSettings, readLastKnownDeviceNames } from './settings-store.js';
+import { readDeviceLinkSettings, readLastKnownDeviceNames } from './settings-store.desktop.js';
 import { currentProviderPartyUsageStore, type ProviderPartyUsage } from '../usage/providerPartyUsageStore.js';
 
 const log = createLogger('provider-share');
@@ -364,6 +366,14 @@ export function startProviderShareRuntime(broadcast: Broadcast, options: { invok
   const stopModels = remoteModelAccess.subscribe(queueAvailabilityPublish);
   const stopAccess = onRemoteProviderAccessChanged(queueAvailabilityPublish);
   const stopSettings = onDeviceLinkSettingChanged(key => { if (key === 'remoteControlEnabled') queueAvailabilityPublish(); });
+  // 供应商默认对自己的电脑开放：等拿到本账号完整的分享快照，才知道哪些是为暂停分享特意关掉的。
+  const migrateAccessDefault = () => {
+    const loaded = getProviderShareHostLoadedSnapshot();
+    if (loaded) void migrateRemoteProviderAccessDefault(new Set(loaded.map((share) => share.providerId)))
+      .catch((error) => log.warn('remote provider access default migration failed', { error: String(error) }));
+  };
+  const stopAccessDefault = onProviderShareHostChanged(migrateAccessDefault);
+  migrateAccessDefault();
   const timer = setInterval(queueAvailabilityPublish, 60_000);
   timer.unref?.();
   availabilitySnapshot = undefined;
@@ -371,7 +381,7 @@ export function startProviderShareRuntime(broadcast: Broadcast, options: { invok
   stopAvailabilityPublisher = () => {
     availabilityPublisherEpoch += 1;
     availabilityPublishPending = false;
-    clearInterval(timer); stopGroup(); stopModels(); stopAccess(); stopSettings();
+    clearInterval(timer); stopGroup(); stopModels(); stopAccess(); stopSettings(); stopAccessDefault();
   };
 
   // 启动仲裁可能早于 IPC 注册；必须在 host 的第一轮快照前配置持久归属。

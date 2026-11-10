@@ -5,7 +5,7 @@ import { isCompanionShadowed } from '../companion-cloud/homes.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { withBotProfileLocks } from './botProfileLock.js';
 import { authorizeGroupTool, GroupToolAuthorizationError } from './botGroupToolAuthorization.js';
-import { t } from '../i18n.js';
+import { t } from '../i18n.desktop.js';
 import { AcceptedCallbackDispatchCancelled } from './acceptedCallbackRunner.js';
 
 import { and, asc, desc, eq, inArray, isNull, ne, sql } from 'drizzle-orm';

@@ -181,7 +181,7 @@ vi.mock('../../turn-change-set/store.js', () => ({
 vi.mock('../../maker-host/send-outcome.js', () => ({
   toDesktopSessionDispatchOutcome: () => ({ dispatched: true as const }),
 }));
-vi.mock('../../messagePersistBroadcaster.js', () => ({
+vi.mock('../../messagePersistBroadcaster.desktop.js', () => ({
   enqueueDurableWrite: vi.fn(async (_label: string, fn: () => unknown) => fn()),
 }));
 vi.mock('../../localDb/ipc/messages.js', () => ({
@@ -231,7 +231,7 @@ vi.mock('../../maker-ipc/agentHandoffPendingSingleton.js', () => ({
 vi.mock('../../goal-host/inactiveNote.js', () => ({
   peekGoalInactiveNote: h.peekGoalInactiveNote,
 }));
-vi.mock('../../imageCacheStore.js', () => ({
+vi.mock('../../imageCacheStore.desktop.js', () => ({
   resolveSafe: vi.fn(),
 }));
 // cindy-media:入站图片写入媒体总仓,mock 记调用。
@@ -261,7 +261,7 @@ vi.mock('../../cindy-media/ingest.js', () => ({
   ingestMedia: cindyMock.ingestMedia,
   supportedMime: cindyMock.supportedMime,
 }));
-vi.mock('../../cindy-media/blobStore.js', () => ({ resolveSafe: cindyMock.resolveSafe }));
+vi.mock('../../cindy-media/blobStore.desktop.js', () => ({ resolveSafe: cindyMock.resolveSafe }));
 vi.mock('../../worktree/index.js', () => ({
   worktreeStore: { get: () => undefined },
   WorktreeManager: { removeWorktreeForSession: vi.fn(async () => undefined) },
@@ -429,9 +429,9 @@ import { createMakerHookSessionRunner, extractToolResultMediaUrls } from '../ses
 import { MAIN_OWNED_SEND_CONTEXT, Session, type AgentSessionHandle, type Capabilities } from '@cindy/maker-core';
 import { observeHookTurn } from '../turnObserver.js';
 import { buildHookPromptNote, SLACK_HOOK_PROMPT_NOTE } from '../outbound.js';
-import { getResolvedMainLocale } from '../../i18n.js';
+import { getResolvedMainLocale } from '../../i18n.desktop.js';
 import { buildUiLanguageErrorNote } from '../../maker-ipc/uiLanguageErrorNote.js';
-import { resolveSafe as resolveXdtImage } from '../../imageCacheStore.js';
+import { resolveSafe as resolveXdtImage } from '../../imageCacheStore.desktop.js';
 import { isHeadlessGhostSetupTurn } from '../../mcp-integrations/ghostSetupInteractionSurface.js';
 import { createModelRoutingTransform, setClaudeProxySessionIdResolver } from '../../maker-host/anthropic-compat-proxy-host.js';
 import { clearAllSessionRuntimeAxes, setSessionEffort, setSessionFastMode } from '../../maker-host/session-effort-store.js';

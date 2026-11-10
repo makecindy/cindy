@@ -36,6 +36,11 @@
     "exit": "Planmodus beenden"
   },
   "panel": {
+    "questionUnanswered": "Unbeantwortet",
+    "questionWithdrawn": "Keine Antwort mehr nötig",
+    "withdrawnDraft": "Diese Frage braucht keine Antwort mehr.\n{{reason}}\nIhr Entwurf bleibt erhalten und kann als Ergänzung gesendet werden.",
+    "sendSupplement": "Ergänzung senden",
+
     "readOnlyKind": "Ausstehend",
     "readOnlyTitle": "Warten auf Bestätigung auf deinem Computer",
     "pendingRequests": "Ausstehende Anfragen",

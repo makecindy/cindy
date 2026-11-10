@@ -78,9 +78,9 @@ import { hydrateSessionProvider } from '../../maker-host/session-provider-store'
 import { setSessionEffort, setSessionFastMode } from '../../maker-host/session-effort-store';
 import { hasCustomProviderKey } from '../../maker-host/provider-route';
 import { createLogger } from '../../logger';
-import { t } from '../../i18n';
-import { resolveSafe as resolveXdtImageUrl } from '../../imageCacheStore';
-import { resolveSafe as resolveCindyMediaUrl } from '../../cindy-media/blobStore';
+import { t } from '../../i18n.desktop';
+import { resolveSafe as resolveXdtImageUrl } from '../../imageCacheStore.desktop';
+import { resolveSafe as resolveCindyMediaUrl } from '../../cindy-media/blobStore.desktop';
 import { beginHeadlessGhostSetupTurn } from '../../mcp-integrations/ghostSetupInteractionSurface.js';
 
 import {
@@ -103,6 +103,7 @@ import type {
   IMAttachment,
   IMMessageEvent,
   InteractiveCardSpec,
+  StreamingProcessRecord,
   StreamingTextHandle,
 } from '@cindy/im';
 import { transformXdtRefs } from '@cindy/im';
@@ -138,7 +139,7 @@ import { listMessagesForAgentHandoff } from '../../localDb/ipc/messages';
 import {
   enqueueDurableWrite,
   redactToolInputForUntrustedBoundary,
-} from '../../messagePersistBroadcaster';
+} from '../../messagePersistBroadcaster.desktop';
 import {
   cancelPending,
   registerPending,
@@ -166,6 +167,7 @@ import { materializeLocalMarkdownImageRefs, materializeLocalMarkdownImages } fro
 import { unlinkLocalFileLinks } from './localFileLinks';
 import {
   applyStatusTokenRate,
+  buildActivityRecord,
   clearRunningIndicators,
   createTurnActivity,
   markActivityWriting,
@@ -1064,6 +1066,57 @@ export function createTurnRunner(
       }
       target = created.target;
     }
+    // A cold companion task must reconcile its saved model before starting an
+    // agent. Otherwise a disconnected old provider can prevent both wiring and
+    // the later prepareSend guard from ever applying the new selection.
+    const coldCompanion = target.botOwned && !sessionStates.has(target.row.id)
+      && !wiringInFlight.has(target.row.id) && !getMaker().getSession(target.row.id);
+    if (coldCompanion && deps.companion?.prepareSend) {
+      let blocked: string | null;
+      try {
+        if (target.botOwned?.lane === 'channel') {
+          coldWiringVendorOptions.set(target.row.id, adapter.buildVendorOptions(userId, target.scopeKey));
+        }
+        blocked = await deps.companion.prepareSend(target.row.id);
+        if (!blocked) {
+          const refreshed = await repo.peekSessionById(target.row.id);
+          if (!refreshed) throw new Error(`companion session ${target.row.id} missing after route preparation`);
+          target = { ...target, row: refreshed };
+        }
+      } catch (err) {
+        if (isImAccountScopeClosedError(err)) throw err;
+        const normalized = normalizeSendError(err);
+        log.error(`${channel} companion preparation failed before dispatch`, {
+          kind: 'session-dispatch',
+          source: 'companion.prepareSend',
+          sessionId: hashLogSessionId(target.row.id),
+          reason: normalized.reason,
+          error: normalized.error,
+        });
+        await waitForAckCleanupBounded(discardHandedOverAck(userMessageId, args.ackReactionIdPromise));
+        if (args.queueMode === 'internal') {
+          try {
+            const text = ui.agent.sendInternalError(normalized.reason);
+            const consumed = (await args.onEarlyReject?.(normalized.reason, text)) ?? false;
+            if (!consumed) await sendTextClaimingOpener(userId, text, target.scopeKey);
+          } catch {
+            /* A failed notice must still return a definite pre-dispatch rejection. */
+          }
+        }
+        return { kind: 'rejected', reason: normalized.reason };
+      } finally {
+        coldWiringVendorOptions.delete(target.row.id);
+      }
+      if (blocked) {
+        const text = ui.agent.companionUnavailable?.(blocked) ?? ui.agent.runtimeError(blocked);
+        if (args.queueMode === 'internal') {
+          const consumed = (await args.onEarlyReject?.('companion_unavailable', text)) ?? false;
+          if (!consumed) await sendTextClaimingOpener(userId, text, target.scopeKey);
+        }
+        await discardHandedOverAck(userMessageId, args.ackReactionIdPromise);
+        return { kind: 'rejected', reason: 'companion_unavailable' };
+      }
+    }
     const row = target.row;
     const allowedFileRoots = resolveTurnFileRoots(row.workingDir, row.remoteHostId);
     let followTarget: ImDefaultRoute | null | undefined = null;
@@ -1071,7 +1124,10 @@ export function createTurnRunner(
     const sharedSession =
       target.attached || target.notificationReply === true || target.botOwned?.lane === 'canonical';
     const authNoticeAttached = target.attached || target.botOwned !== undefined;
-    if (!target.authChecked) {
+    // Live companion tasks may still be running on the previous selection.
+    // Authenticate them after prepareSend + the locked switch at dispatch, not
+    // against the stale row before their input has even reached the queue.
+    if (!target.authChecked && (!target.botOwned || coldCompanion)) {
       // 渠道默认跟随: 本条消息会在 send 锁内切到新默认时, 按新路由检查授权 ——
       // 否则旧默认坏掉(如供应商断开)时, 消息会先被「缺授权」挡掉, 永远换不过去。
       followTarget =
@@ -1472,7 +1528,6 @@ export function createTurnRunner(
         await item.turn.revalidateNotificationReply?.();
         await resolveNotificationTarget(rowId, item.turn.scopeKey);
       }
-      await beginChunkedReply(item.turn);
       // 伙伴任务: 与桌面发送同源的伙伴守卫(暂停 / 归档 → 回一句提示不发送),
       // 再对齐伙伴模型链、刷新能力纪元。要在拿 send 锁之前做 —— 对齐登记的切换
       // 意图由下面的锁内应用落实。
@@ -1555,19 +1610,24 @@ export function createTurnRunner(
       // 失败被吞后这条消息会按旧路由发送 —— 按实际路由补一次授权检查, 旧供应商断开
       // 时在这里给出缺授权提示, 而不是进发送流程运行时失败(PR #5155 review P2)。
       // 冷路径在接线前已查过一次, 这里兜的是接线后切换才失败 / 热任务的切换失败。
+      // 伙伴任务始终在守卫与锁内切换完成后检查实际路由, 不复用入队时的旧选择。
       const followAuthRoute = item.turn.followAuthRoute;
-      if (followAuthRoute) {
+      if (followAuthRoute || state.botLane) {
         const landed = await repo.peekSessionById(rowId);
-        if (landed && !sameImDefaultRoute(routeOfRow(landed), followAuthRoute)) {
+        if (state.botLane && !landed) {
+          throw new Error(`companion session ${rowId} missing before route authentication`);
+        }
+        if (landed && (state.botLane || (followAuthRoute && !sameImDefaultRoute(routeOfRow(landed), followAuthRoute)))) {
           const auth = await checkImRouteAuthDetailed(landed, undefined, authCheckDeps());
           if (!auth.ok) {
+            const attached = state.attached || !!state.botLane;
             const authStatus = { ...auth, agentKind: landed.agentKind, model: landed.model };
             if (item.turn.queueMode === 'internal') {
               const text =
-                ui.agent.authMissing?.({ ...authStatus, attached: state.attached }) ??
+                ui.agent.authMissing?.({ ...authStatus, attached }) ??
                 ui.agent.apiKeyMissing;
               const consumed = (await item.onEarlyReject?.('missing_auth', text)) ?? false;
-              if (!consumed) await replyMissingAuth(userId, authStatus, item.turn.scopeKey, state.attached);
+              if (!consumed) await replyMissingAuth(userId, authStatus, item.turn.scopeKey, attached);
             }
             // 文案已在上面按缺授权发过(外部队列由调用方消费), 这里只走收口。
             await handleSendPreDispatchFailure(state, userId, {
@@ -1581,6 +1641,10 @@ export function createTurnRunner(
           }
         }
       }
+
+      // Only claim a passive reply after preparation and route authentication.
+      // Rejected input must not leave a pending chunked response for the next turn.
+      await beginChunkedReply(item.turn);
 
       // session-agent-switch:本路径直发 session.send(不经 makerSendTransaction),
       // 交接注入自己接——切换后首条消息若来自 IM 渠道,新引擎同样需要交接上下文
@@ -2192,11 +2256,16 @@ export function createTurnRunner(
     }
   }
 
-  async function finalizeTurnStream(turn: TurnState, finalView: string): Promise<void> {
+  async function finalizeTurnStream(
+    turn: TurnState,
+    finalView: string,
+    process?: StreamingProcessRecord,
+  ): Promise<void> {
     const handle = turn.streamingHandle;
     if (!handle) return;
     try {
-      await handle.finalize(finalView);
+      if (process) await handle.finalize(finalView, { process });
+      else await handle.finalize(finalView);
     } catch (err) {
       if (output.kind === 'chunked-text') {
         turn.terminalKind = 'error';
@@ -3804,7 +3873,13 @@ export function createTurnRunner(
     }
     const finalView = composeStreamingView(turn);
     if (turn.streamingHandle) {
-      await finalizeTurnStream(turn, finalView.trim() ? finalView : '');
+      // 正常完成: 正文保持干净, 过程区不再丢弃 —— 交给渠道收成折叠的过程记录
+      // (卡片渠道支持折叠; 不支持的 handle 忽略它)。空回复没有可挂记录的正文。
+      const process =
+        output.kind === 'rich-card' && finalView.trim()
+          ? buildActivityRecord(turn.presenter.activity, Date.now())
+          : null;
+      await finalizeTurnStream(turn, finalView.trim() ? finalView : '', process ?? undefined);
     } else if (!finalView.trim() && turn.mediaAbsPaths.length === 0) {
       try {
         if (output.kind === 'chunked-text') {

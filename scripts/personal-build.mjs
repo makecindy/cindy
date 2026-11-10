@@ -379,6 +379,11 @@ export async function main(argv) {
     const file = need('report'), r = verifyReport(file);
     r.state = 'prepared'; delete r.checkedAt; delete r.checkError; write(file, r);
     try {
+      // Inspect the final composition and all side parents before installing dependencies
+      // or preparing native capabilities. A failed check cannot become a checked build.
+      execFileSync(process.execPath, ['scripts/check-built-in-skills.mjs', '--base-ref', r.app.baseSha], {
+        cwd: r.directory, stdio: 'inherit',
+      });
       pnpm(['install', '--frozen-lockfile'], r.directory);
       for (const args of [['--filter', 'desktop', 'db:validate'], ['check:design-inventory'], ['--filter', 'desktop', 'run', 'typecheck']]) pnpm(args, r.directory);
       const { prepareStableNativeCapabilities } = await import('./personal-build/native-capabilities.mjs');

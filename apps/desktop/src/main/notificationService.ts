@@ -36,7 +36,7 @@ import { readSessionNotificationPreview, type SessionNotificationPreview } from 
 import { drainSessionActiveTurnWrites, getSessionNotificationTurnSignal } from './localDb/sessionActiveTurn';
 import { assertTrustedAppRendererEvent } from './security/trustedAppRenderer';
 import { captureDataOwnerBroadcastScope, isDataOwnerBroadcastScopeCurrent } from './device-link/broadcast-tap';
-import { drainPersistQueue } from './messagePersistBroadcaster';
+import { drainPersistQueue } from './messagePersistBroadcaster.desktop';
 import { getInputHandoffNoticeOwnership } from './im/shared/inputHandoffChannelNotice';
 import { createLogger } from './logger';
 import {
