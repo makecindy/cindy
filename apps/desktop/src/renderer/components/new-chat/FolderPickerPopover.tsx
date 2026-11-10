@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { isTeammateProjectPath } from '@cindy/maker-shared/teammate-project';
 
 import { cn } from '@/lib/utils';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
@@ -178,8 +179,13 @@ export function FolderPickerPopover({
 }: FolderPickerPopoverProps) {
   const { t } = useTranslation();
   const isProjectPicker = projectOptions !== undefined;
-  const effectiveProjectOptions = projectOptions ?? [];
-  const recentFolders = open && !isProjectPicker ? getRecentFolders() : [];
+  // A teammate's project is reached from the teammate, not offered as a place for new work.
+  const effectiveProjectOptions = useMemo(
+    () => (projectOptions ?? []).filter((option) => !isTeammateProjectPath(option.path)),
+    [projectOptions],
+  );
+  const recentFolders = (open && !isProjectPicker ? getRecentFolders() : [])
+    .filter((folder) => !isTeammateProjectPath(folder.path));
   const selectionPendingRef = useRef(false);
   const [selectionPending, setSelectionPending] = useState(false);
   const [projectQuery, setProjectQuery] = useState('');

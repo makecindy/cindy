@@ -21,7 +21,7 @@ import { invokeProviderManagement } from '../provider-group/managementClient.js'
 import { readProviderGroup } from '../provider-group/store.js';
 import { readSubscriptionPoolAccountUsages } from '../subscription-accounts/runtime.js';
 import type { CodexAccountUsagePayload } from '../usageBroadcaster.js';
-import { serverApiFetch } from '../serverApiClient.js';
+import { serverApiFetch } from '../serverApiClient.desktop.js';
 import {
   readClaudeAccountUsageSnapshot,
   readClaudeAccountQuotaClear,

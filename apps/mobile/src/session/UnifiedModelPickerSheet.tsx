@@ -8,6 +8,8 @@ import * as ExpoCrypto from "expo-crypto";
 import {
   agentDeviceFavoriteSource,
   parseAgentDeviceFavoriteSource,
+  parseProviderShareFavoriteSource,
+  providerShareFavoriteWireKey,
 } from "@cindy/device-link";
 import { useTranslation } from "react-i18next";
 import type { MobileProviderMarkProps } from "./MobileProviderMark";
@@ -687,7 +689,7 @@ export function UnifiedModelPickerSheet(
   }));
   // 收藏和本机收藏排在同一节里:位置编在 providerId 里的,到那台电脑的目录里找模型,
   // 点开即在那台运行。那台电脑离线(包括只因任务的 Agent 在那台、靠缓存留在列表里)或没开放远程调用时
-  // 先不显示,收藏本身保留。
+  // 先不显示,收藏本身保留。分享来的模型用同一套规则:键必须对上当前这条分享的成员身份。
   const favorites = prefs.value.favorites.flatMap((item) => {
     const source = parseAgentDeviceFavoriteSource(item.providerId);
     if (source) {
@@ -701,6 +703,23 @@ export function UnifiedModelPickerSheet(
             makeRemoteRow(directory, entry, {
               ...item,
               providerId: source.providerId,
+            }),
+          ]
+        : [];
+    }
+    const share = parseProviderShareFavoriteSource(item.providerId);
+    if (share) {
+      const directory = remoteDirectories.find((value) => {
+        const identity = value.catalog.favoriteSource;
+        return !!identity && !value.catalog.offline
+          && providerShareFavoriteWireKey(identity) === item.providerId;
+      });
+      const entry = directory && resolveStoredModelEntry(directory.entries, share.providerId, item.modelId);
+      return directory && entry
+        ? [
+            makeRemoteRow(directory, entry, {
+              ...item,
+              providerId: share.providerId,
             }),
           ]
         : [];
@@ -818,12 +837,16 @@ export function UnifiedModelPickerSheet(
     config: favoriteEdit?.config ?? target?.config ?? sourceRow.config,
     favorite: originFavorite,
   };
-  // 这一行存进收藏时用的来源:被控电脑自己的供应商照旧;同账号另一台电脑的供应商把电脑编进去
-  // (同 id 供应商在两台电脑上不是同一个)。分享来的供应商暂不支持收藏,返回 null。
+  // 这一行存进收藏时用的来源:被控电脑自己的供应商照旧;同账号另一台电脑把电脑编进去。
+  // 分享来的供应商用 Desktop 同一套键(分享、成员、供应商、区域),并且必须能经收藏通道往返。
   const favoriteSourceOf = (value: UnifiedMobileRow): string | null => {
     const device = value.remoteDevice;
     if (!device) return value.entry.providerId;
-    if (isProviderShareAgentDeviceId(device.deviceId)) return null;
+    if (isProviderShareAgentDeviceId(device.deviceId)) {
+      const identity = remoteCatalogs.find((item) => item.deviceId === device.deviceId)?.favoriteSource;
+      if (!identity || identity.providerId !== value.entry.providerId) return null;
+      return providerShareFavoriteWireKey(identity);
+    }
     try {
       return agentDeviceFavoriteSource({
         deviceId: device.deviceId,

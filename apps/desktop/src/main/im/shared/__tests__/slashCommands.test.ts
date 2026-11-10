@@ -255,6 +255,36 @@ describe('IM slash commands', () => {
     expect(mocks.sendInteractiveCard).toHaveBeenCalled();
   });
 
+  it.each(['/ctr', '/exctr', '/session', '/project', '/workspace'])(
+    '公共对话(服务器频道)里 %s 不接入本机任务，私聊同一命令不受影响',
+    async (command) => {
+      const { enterControl } = await import('../controlState');
+      const { handlers } = makeHarness({
+        adapterOverrides: {
+          blocksLocalTaskAccess: (userId) => userId.startsWith('g/'),
+          ui: { ...ui, slash: { ...ui.slash, localTaskAccessUnavailable: (cmd) => `blocked ${cmd}` } },
+        },
+      });
+
+      await handlers.handleSlashCommand(command, { botContextId: 'bot', userId: 'g/1/2' });
+
+      expect(enterControl).not.toHaveBeenCalled();
+      expect(mocks.sendInteractiveCard).not.toHaveBeenCalled();
+      expect(mocks.sendMarkdownText).toHaveBeenCalledWith('g/1/2', expect.stringContaining('blocked'));
+    },
+  );
+
+  it('私聊 /ctr 在声明了 blocksLocalTaskAccess 的渠道里照常发卡', async () => {
+    const { enterControl } = await import('../controlState');
+    const { handlers } = makeHarness({
+      adapterOverrides: { blocksLocalTaskAccess: (userId) => userId.startsWith('g/') },
+    });
+
+    await handlers.handleSlashCommand('/ctr', SLASH_CTX);
+
+    expect(enterControl).toHaveBeenCalledWith('bot', 'ou_user');
+  });
+
   it('/ctr 发卡失败时不 enterControl(用户不会被锁死)', async () => {
     const { enterControl } = await import('../controlState');
     mocks.sendInteractiveCard.mockRejectedValueOnce(new Error('send failed'));

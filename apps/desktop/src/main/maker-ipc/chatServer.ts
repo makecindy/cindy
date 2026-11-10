@@ -9,9 +9,9 @@ import { app, net, nativeImage } from 'electron';
 import { validateAvatarUpload } from '../profileEdit.js';
 import { uploadPublicAsset } from '../ossPublicUpload.js';
 import { getClientEndpoint } from '../clientEndpointsService.js';
-import { signalBotAutonomyBotsChanged, subscribeBotProfilesChanged } from '../bot-autonomy/botsChangedSignal.js';
-import { t } from '../i18n.js';
-import { readFile as readMedia } from '../cindy-media/blobStore.js';
+import { signalBotProfilesChanged, subscribeBotProfilesChanged } from './botProfilesChangedSignal.js';
+import { t } from '../i18n.desktop.js';
+import { readFile as readMedia } from '../cindy-media/blobStore.desktop.js';
 import { getAccessToken, refresh } from '../authManager.js';
 import { retryAfterDeadline } from '@cindy/auth-client';
 import { parseChatInvitationShareId, parseChatInvitationToken } from '@cindy/device-link';
@@ -32,7 +32,6 @@ import { botGroupMentionAudience, splitBotGroupRelaySteps } from '@cindy/maker-s
 import { chatMigrationReceipts } from './chatMigrationReceipts.js';
 import { chatLocalHistory } from './chatLocalHistory.js';
 import { chatSendJournal } from './chatSendJournal.js';
-import { prepareBotGroupTaskPost, type BotGroupTaskPostSnapshot } from './botGroupTaskPostSnapshot.js';
 import { registerGroupToolAuthority, GroupToolAuthorizationError } from './botGroupToolAuthorization.js';
 import path from 'node:path';
 import { randomUUID, createHash } from 'node:crypto';
@@ -57,7 +56,7 @@ import {
   readBotGroupTaskCard, botGroupMessageSummaryText, botGroupProcessCard, readBotGroupProcessCard,
   readBotGroupCapabilityNotice, buildBotGroupCapabilityNotice, type BotGroupCapabilityNoticeCode,
 } from '../../shared/botGroupChat.js';
-import type { BotGroupChatService, BotGroupChatServiceDeps, BotGroupLaneTerminal, BotGroupPreparedAttachments, BotGroupTaskPostInput, BotGroupTaskPostResult } from './botGroupChatService.js';
+import type { BotGroupChatService, BotGroupChatServiceDeps, BotGroupLaneTerminal, BotGroupPreparedAttachments } from './botGroupChatService.js';
 import { readPersistedReplyText } from './botGroupChatService.js';
 import { botGroupRuntimeFailureCode, botGroupRuntimeFailureDetail } from './botGroupRuntimeFailure.js';
 import { chatGroupMemberName as memberName, chatGroupOwnerName, botGroupExecutionFailureBatches, latestBotGroupMessage } from '@cindy/maker-shared/botGroupPresentation';
@@ -363,7 +362,6 @@ export function withChatServer(local: BotGroupChatService, deps: BotGroupChatSer
     editPlanStep: (...args) => service().editPlanStep(...args),
     settleLaneTurn: (...args) => service().settleLaneTurn(...args),
     refreshPendingInteraction: local.refreshPendingInteraction,
-    postCompanionTaskMessage: (...args) => service().postCompanionTaskMessage(...args),
     dispose: () => { active.dispose(); local.dispose(); },
   };
 }
@@ -881,28 +879,6 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
    * upgraded history keeps its room. A pending upgrade is never cached, so it is asked again.
    */
   const resolvedGroups = new Map<string, string>();
-  /**
-   * The server room a task started from `groupId` posts into: the upgraded room of an old
-   * local group, or the id itself for a server room. Before returning `null` for a local source,
-   * recover its account-scoped migration receipt; background migration may not have run yet.
-   */
-  const taskRoomFor = async (groupId: string): Promise<string | null> => {
-    const known = resolvedGroups.get(groupId) ?? upgradedGroups.get(groupId);
-    if (known) return known;
-    if (!id.safeParse(groupId).success) return null;
-    const [localRow] = await getDbClient().drizzle.select({ id: botGroups.id }).from(botGroups).where(eq(botGroups.id, groupId)).limit(1);
-    if (localRow && (await localSources()).some(group => group.id === groupId)) {
-      // Registration identifies the receipt's actor/endpoint scope. Transient failure leaves delivery
-      // retryable rather than permanently falling back to private chat before we know the route.
-      await register('foreground');
-      if (upgradedGroups.has(groupId)) return upgradedGroups.get(groupId)!;
-      const receipt = chatMigrationReceipts(config.baseUrl, selfId, current).read(groupId);
-      if (!receipt) return null;
-      upgradedGroups.set(groupId, receipt.roomId);
-      return receipt.roomId;
-    }
-    return groupId;
-  };
   const resolveGroup = async (groupId: string) => {
     const known = resolvedGroups.get(groupId);
     if (known) { void ensureRegistered(); return known; }
@@ -1104,7 +1080,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       actors: () => actors, refresh: () => refreshHomes('background'), refreshForeground: () => refreshHomes('foreground'),
       publish: publishHomes, syncProfile: syncActorProfiles,
       // A copy that stops or starts being hidden changes who can follow tasks (the built-in follow-up routine).
-      onShadowChanged: signalBotAutonomyBotsChanged,
+      onShadowChanged: signalBotProfilesChanged,
       // The owner's attachments go with the conversation; other devices download them from the room.
       media: { upload: async (room, source, files, author) => {
         // The conversation mirror is not a file backup: large files stay a name in the room.
@@ -1257,6 +1233,8 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
                 for (const run of running.values()) if (run.execution.mask_owner_id && run.execution.conversation_id === change.entityId) void checkLease(run);
               }
               if (change.type === 'conversation.list.changed') personalList.merge(change.data);
+              // Only the account's own preferences reach this actor scope; consumers read the key themselves.
+              if (change.type === 'preference.changed' && typeof change.entityId === 'string') deps.onAccountPreferenceChanged?.(change.entityId);
               if (change.type === 'conversation.updated' && change.data?.dissolvedAt) retirePlanning(change.entityId);
               if (change.type === 'membership.changed' || change.type === 'conversation.updated') changed(change.entityId);
               // A Thread read on another device clears its unread here too.
@@ -2827,6 +2805,8 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
           ...request, ...conversation, ...(quotedMessage ? { referencedMessages: [focusMessage(quotedMessage)] } : {}),
           sourceMessageId: execution.source_message_id, unavailableAttachments: missingAttachments }),
         execution.access_mode === 'chat' ? 'This group has chat-only access: use only public identity and group messages. Private memory, owner files and tools are unavailable. Explain this boundary when asked to use them.' : 'Your owner has authorized this group to use your existing capabilities. Outputs are visible to every group member.',
+        // 2026-11-10: results reach the group only as a reply to a request here (no host delivery).
+        ...(execution.access_mode === 'chat' ? [] : ['Only your reply to a request here reaches the group; a message sent to this conversation later is not posted. So do not ask a task you start to send its result back here. When someone asks how it is going, read that task with `get_task_digest` and answer then.']),
         ...(talk ? discussionTurnBrief(talk, execution.plan_step!, briefHistory) : run.plan ? [run.workspace ? buildPlanStepBrief({ groupName: s.room.name, botName: bot.displayName, request: run.plan.request_text,
           attachments: attachments.map(a => a.name), attachmentsIncluded: true, steps: run.plan.steps, position: execution.plan_step!, workDir: run.workspace.workDir, branch: run.workspace.branch,
           recent: [], userNotes: run.plan.note_message_ids?.length ? { kind: 'more', texts: history.filter(m => run.plan!.note_message_ids!.includes(m.id)).map(bodyText) } : undefined, handoffs: run.plan.steps.filter(step => step.position < execution.plan_step!).flatMap(step => { const result = history.find(m => m.id === step.resultMessageId);
@@ -3887,90 +3867,6 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       if (terminal.activeInputClientId ? terminal.activeInputClientId !== run.clientId : !run.accepted) return false;
       await settleExecution(run, terminal, terminal.undispatched);
       return true;
-    },
-    // A teammate's own message about an independent task it started from this group
-    // (bot-group-chat.md §10): posted outside any execution, as that teammate, never as the owner.
-    postCompanionTaskMessage: async (input: BotGroupTaskPostInput): Promise<BotGroupTaskPostResult> => {
-      const refused = (errorCode: string): BotGroupTaskPostResult => ({ ok: false, errorCode, retryable: false });
-      try {
-        if (!current()) return refused('OWNER_CHANGED');
-        // An old local-only group has a UUID too: it is told from a server room by its local
-        // history row and upgrade mapping, never by id shape. Such a group cannot carry a
-        // teammate's own message, so the result stays in its task with a delivery failure
-        // instead of moving to a different conversation (bot-group-chat.md §10).
-        const roomId = await taskRoomFor(input.groupId);
-        if (!roomId) return local.postCompanionTaskMessage(input);
-        await register('foreground');
-        const actor = actors.find(a => a.kind === 'bot' && a.externalId === input.botId);
-        if (!actor) return refused('BOT_UNAVAILABLE');
-        const s = await snapshot(roomId);
-        if (s.room.archived || !s.members.some(m => m.id === actor.id && m.state === 'joined')) return refused('MEMBER_UNAVAILABLE');
-        const prepare = async (): Promise<BotGroupTaskPostSnapshot> => {
-            const produced: BotGroupAttachment[] = [];
-            const fs = await import('node:fs/promises');
-            for (const file of input.files ?? []) {
-              try {
-                const stat = await fs.lstat(file.absolutePath);
-                if (stat.isFile()) produced.push({ id: file.absolutePath, name: path.basename(file.absolutePath), category: 'file',
-                  mimeType: 'application/octet-stream', size: stat.size, path: file.absolutePath, url: null });
-              } catch (error) {
-                // Gone or unreadable for good (deleted since the task finished): simply not delivered.
-                // A transient filesystem failure keeps the whole message for a retry.
-                if (!fileRefusedHere(error)) throw error;
-              }
-            }
-            // Files go up one at a time so a refused file never holds back the others: a file this
-            // computer cannot send (empty, over the size limit, unreadable) or the server definitely
-            // refuses is left out with a warning, while a transient failure keeps the whole message for a retry.
-            const uploaded: ChatContentBlock[] = [];
-            for (const file of produced) {
-              try {
-                uploaded.push(...await media.upload(roomId, input.clientId, [file], actor.id));
-              } catch (error) {
-                if (!fileRefusedHere(error) && (!(error instanceof ChatResponseError) || retryableResponse(error))) throw error;
-                deps.log?.warn('Chat task delivery file refused', { groupId: roomId, ...chatErrorDiagnostic(error) });
-              }
-            }
-            // The server takes 8000 characters and BOT_GROUP_ATTACHMENTS_MAX files per message: a longer
-            // result and further files continue in follow-up messages (same idempotent operation id
-            // family), never silently cut.
-            const [first = '', ...rest] = splitChatMessageText(input.text.trim());
-            const fileBatches: ChatContentBlock[][] = [];
-            for (let at = 0; at < uploaded.length; at += BOT_GROUP_ATTACHMENTS_MAX) fileBatches.push(uploaded.slice(at, at + BOT_GROUP_ATTACHMENTS_MAX));
-            const [firstFiles = [], ...moreFiles] = fileBatches;
-            // A task started in a Thread reports into that Thread (bot-group-chat.md §10).
-            const where = input.threadRootId ? { threadRootId: id.parse(input.threadRootId) } : {};
-            const messages: BotGroupTaskPostSnapshot['messages'] = [{
-              operationId: input.clientId, content: [...(first ? [{ type: 'text', text: first }] : []), ...(input.card ? [input.card] : []), ...firstFiles], mentions: [], ...where,
-            }];
-            for (const [index, text] of rest.entries()) messages.push({
-              operationId: `${input.clientId}:${index + 2}`, content: [{ type: 'text', text }], mentions: [], ...where,
-            });
-            for (const [index, files] of moreFiles.entries()) messages.push({
-              operationId: `${input.clientId}:files:${index + 2}`, content: files, mentions: [], ...where,
-            });
-            return { actorId: actor.id, messages };
-          };
-        const frozen = input.preparePost ? await input.preparePost(prepare, { endpoint: config.baseUrl, selfId, roomId, clientId: input.clientId })
-          : input.card ? await prepareBotGroupTaskPost(input.card.data.meta.delegationId,
-            { endpoint: config.baseUrl, selfId, roomId, clientId: input.clientId }, prepare)
-          : (() => { throw new Error('TASK_DELIVERY_ORIGIN_MISSING'); })();
-        if (!current()) return refused('OWNER_CHANGED');
-        // Persist every part before the first POST. Retries (including after restart) use the
-        // same card, localized fallback, text and media references even if their sources change.
-        let messageId = '';
-        for (const body of frozen.messages) {
-          const posted = await api<{ id: string }>(`/conversations/${roomId}/messages`, 'POST', body, frozen.actorId);
-          messageId ||= posted.id;
-        }
-        changed(roomId);
-        return { ok: true, messageId };
-      } catch (error) {
-        deps.log?.warn('Chat task message post failed', { groupId: input.groupId, ...chatErrorDiagnostic(error) });
-        return { ok: false, errorCode: error instanceof Error ? error.message : 'REQUEST_FAILED',
-          retryable: !(error instanceof Error && error.message === 'TASK_DELIVERY_SCOPE_CHANGED')
-            && (!(error instanceof ChatResponseError) || retryableResponse(error)) };
-      }
     },
     setMembers: input => safe(async () => {
       const i = z.object({ groupId: id, botIds: z.array(z.string()).max(6), addOnly: z.boolean().optional() }).parse(input);

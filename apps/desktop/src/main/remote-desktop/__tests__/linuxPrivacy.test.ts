@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from 'vitest';
-vi.mock('../../i18n', () => ({ t: (key: string) => key }));
+vi.mock('../../i18n.desktop', () => ({ t: (key: string) => key }));
 import { LinuxPrivacyScreen } from '../linuxPrivacy';
 const owners: LinuxPrivacyScreen[] = [];
 afterEach(() => {

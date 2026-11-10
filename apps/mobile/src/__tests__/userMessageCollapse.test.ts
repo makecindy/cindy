@@ -168,7 +168,7 @@ const bubbleStatements = rendererFunction('MessageBubble').body!.statements;
 const collapseStart = bubbleStatements.indexOf(bodyStatement('automationOrigin', 'MessageBubble'));
 const collapseEnd = bubbleStatements.indexOf(bodyStatement('longMessageCollapsed', 'MessageBubble'));
 const collapseCode = bubbleStatements.slice(collapseStart, collapseEnd + 1).map(statement => statement.getText(rendererSource)).join(String.fromCharCode(10));
-const markdownStateCode = ['measuresSettledWidth', 'contentWidth', 'handleSettledWidthLayout', 'pinSettledWidth', 'settledTextStyle', 'renderSingleBlock']
+const markdownStateCode = ['measuresSettledWidth', 'useRowState', 'contentWidth', 'handleSettledWidthLayout', 'pinSettledWidth', 'settledTextStyle', 'renderSingleBlock']
   .map(name => bodyStatement(name, 'MarkdownBodyBase').getText(rendererSource)).join(String.fromCharCode(10));
 const markdownReturn = rendererFunction('MarkdownBodyBase').body!.statements.find(ts.isReturnStatement);
 if (!markdownReturn) throw new Error('MarkdownBody return was not found');
@@ -240,7 +240,7 @@ function BubbleHarness({ body, kind = 'user', automationOrigin: origin }) {
 return { BubbleHarness, MarkdownHarness };
 `, {
     useContext: React.useContext, useRef: React.useRef, useMemo: React.useMemo,
-    useEffect: React.useEffect, useCallback: React.useCallback, useRecyclingState: React.useState,
+    useEffect: React.useEffect, useCallback: React.useCallback, useRecyclingState: React.useState, useRowStateHook: () => React.useState,
     SelectionQuoteContext: React.createContext(null), useWindowDimensions: () => ({ fontScale: 1 }),
     Platform: harnessPlatform, StyleSheet: { flatten: (style: unknown) => style },
     selectableTextVerticalOffset, MAX_FONT_SIZE_MULTIPLIER: 2, i18n,

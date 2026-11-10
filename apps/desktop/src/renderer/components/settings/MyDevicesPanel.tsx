@@ -41,23 +41,7 @@ import {
   inboundToggleState,
   resolveActiveConnectionIssue,
 } from './myDevicesModel';
-
-function platformLabel(platform: string | null): string {
-  switch (platform) {
-    case 'darwin':
-      return 'macOS';
-    case 'win32':
-      return 'Windows';
-    case 'linux':
-      return 'Linux';
-    case 'ios':
-      return 'iOS';
-    case 'android':
-      return 'Android';
-    default:
-      return platform ?? '—';
-  }
-}
+import { platformLabel, relativeTime } from './deviceLabels';
 
 function hardwareLabel(deviceInfo: DeviceLinkDeviceInfo | null | undefined): string | null {
   const label = deviceInfo?.modelLabel?.trim() || deviceInfo?.cpuLabel?.trim();
@@ -94,24 +78,6 @@ function deviceSubtitle(
   ].filter(Boolean);
   if (opts.isControlling) parts.push(t('settings.remoteControl.myDevices.controllingThisMac'));
   return parts.join(' · ');
-}
-
-/** lastSeenAt 相对时间(分钟粒度,超过 7 天显示日期)。 */
-function relativeTime(
-  iso: string | null,
-  t: (k: string, o?: Record<string, unknown>) => string,
-): string {
-  if (!iso) return '—';
-  const ts = Date.parse(iso);
-  if (Number.isNaN(ts)) return '—';
-  const diffMin = Math.floor((Date.now() - ts) / 60_000);
-  if (diffMin < 1) return t('settings.devices.justNow');
-  if (diffMin < 60) return t('settings.devices.minutesAgo', { count: diffMin });
-  const diffHour = Math.floor(diffMin / 60);
-  if (diffHour < 24) return t('settings.devices.hoursAgo', { count: diffHour });
-  const diffDay = Math.floor(diffHour / 24);
-  if (diffDay < 7) return t('settings.devices.daysAgo', { count: diffDay });
-  return new Date(ts).toLocaleDateString();
 }
 
 /** 与设置搜索命中同款的短暂高亮(globals.css),时长也一致。 */
@@ -280,6 +246,7 @@ export function MyDevicesPanel({
   // 短期上下线 / 心跳不再让顺序跳动,设备只在原位改在线点。本机单独置顶(下面单独渲染)。
   const others = (s.devices ?? []).filter((d) => !d.isSelf).sort(compareDevicesByName);
   const revokedControllers = new Set(s.revokedControllers);
+  const modelUseRevoked = new Set(s.modelUseRevokedControllers);
   const controlling = new Set(s.controlledBy.map((c) => c.deviceId));
 
   const rowRefs = useRef(new Map<string, HTMLLIElement>());
@@ -605,6 +572,16 @@ export function MyDevicesPanel({
                       disabled={inbound.disabled}
                       onToggle={(v) => void onInboundChange(d.deviceId, v)}
                     />
+                    {/* 「用本机模型」跟着「控制本机」：能控制本机时默认可用，可以单独关掉。手机不借模型，不显示。 */}
+                    {canBeControlledPlatform(d.platform) && (
+                      <AccessPill
+                        label={t('settings.remoteControl.myDevices.useThisDeviceModels')}
+                        ariaLabel={t('settings.remoteControl.myDevices.allowModelUseAria', { name: d.name })}
+                        pressed={inbound.checked && !modelUseRevoked.has(d.deviceId)}
+                        disabled={inbound.disabled || !inbound.checked}
+                        onToggle={(v) => void s.setModelUse(d.deviceId, v)}
+                      />
+                    )}
                   </AccessRow>
                 </div>
               </li>

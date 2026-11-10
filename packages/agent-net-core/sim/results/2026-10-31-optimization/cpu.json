@@ -1,0 +1,168 @@
+{
+  "architecture": "arm64",
+  "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14)",
+  "payload_mib": 512,
+  "repetitions": 3,
+  "unit": "MiB/s",
+  "note": "in-memory, single core; excludes socket, encryption and sustained FEC-heavy path cost",
+  "rows": [
+    {
+      "policy": "auto",
+      "repeat": 1,
+      "case": "无丢包",
+      "ours": 5652,
+      "kcp": 227
+    },
+    {
+      "policy": "auto",
+      "repeat": 1,
+      "case": "丢 1%",
+      "ours": 4451,
+      "kcp": 216
+    },
+    {
+      "policy": "auto",
+      "repeat": 2,
+      "case": "无丢包",
+      "ours": 4370,
+      "kcp": 148
+    },
+    {
+      "policy": "auto",
+      "repeat": 2,
+      "case": "丢 1%",
+      "ours": 2922,
+      "kcp": 201
+    },
+    {
+      "policy": "auto",
+      "repeat": 3,
+      "case": "无丢包",
+      "ours": 4380,
+      "kcp": 191
+    },
+    {
+      "policy": "auto",
+      "repeat": 3,
+      "case": "丢 1%",
+      "ours": 3598,
+      "kcp": 207
+    },
+    {
+      "policy": "lean",
+      "repeat": 1,
+      "case": "无丢包",
+      "ours": 5268,
+      "kcp": 212
+    },
+    {
+      "policy": "lean",
+      "repeat": 1,
+      "case": "丢 1%",
+      "ours": 3488,
+      "kcp": 95
+    },
+    {
+      "policy": "lean",
+      "repeat": 2,
+      "case": "无丢包",
+      "ours": 981,
+      "kcp": 88
+    },
+    {
+      "policy": "lean",
+      "repeat": 2,
+      "case": "丢 1%",
+      "ours": 740,
+      "kcp": 65
+    },
+    {
+      "policy": "lean",
+      "repeat": 3,
+      "case": "无丢包",
+      "ours": 1265,
+      "kcp": 75
+    },
+    {
+      "policy": "lean",
+      "repeat": 3,
+      "case": "丢 1%",
+      "ours": 717,
+      "kcp": 70
+    },
+    {
+      "policy": "fast",
+      "repeat": 1,
+      "case": "无丢包",
+      "ours": 1210,
+      "kcp": 76
+    },
+    {
+      "policy": "fast",
+      "repeat": 1,
+      "case": "丢 1%",
+      "ours": 879,
+      "kcp": 110
+    },
+    {
+      "policy": "fast",
+      "repeat": 2,
+      "case": "无丢包",
+      "ours": 1689,
+      "kcp": 128
+    },
+    {
+      "policy": "fast",
+      "repeat": 2,
+      "case": "丢 1%",
+      "ours": 1558,
+      "kcp": 124
+    },
+    {
+      "policy": "fast",
+      "repeat": 3,
+      "case": "无丢包",
+      "ours": 2508,
+      "kcp": 156
+    },
+    {
+      "policy": "fast",
+      "repeat": 3,
+      "case": "丢 1%",
+      "ours": 3105,
+      "kcp": 175
+    }
+  ],
+  "summary": {
+    "auto": {
+      "无丢包": {
+        "ours_median": 4380,
+        "kcp_median": 191
+      },
+      "丢 1%": {
+        "ours_median": 3598,
+        "kcp_median": 207
+      }
+    },
+    "lean": {
+      "无丢包": {
+        "ours_median": 1265,
+        "kcp_median": 88
+      },
+      "丢 1%": {
+        "ours_median": 740,
+        "kcp_median": 70
+      }
+    },
+    "fast": {
+      "无丢包": {
+        "ours_median": 1689,
+        "kcp_median": 128
+      },
+      "丢 1%": {
+        "ours_median": 1558,
+        "kcp_median": 124
+      }
+    }
+  }
+}

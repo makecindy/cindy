@@ -8,17 +8,15 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-
-const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../..');
+import { hostRuntimeLayout } from '../runtime-layout.mjs';
 
 /**
  * @param {'cn' | 'global'} region
  * @param {string} [overrideDir]
- * @returns {{ authApiBaseUrl: string, authDesktopCallbackUrl?: string }}
+ * @returns {{ authApiBaseUrl: string, authDesktopCallbackUrl?: string, deviceLinkApiBaseUrl?: string, oauthBrokerApiBaseUrl?: string, modelAccessApiBaseUrl?: string }}
  */
 export function readAuthEndpoints(region, overrideDir = process.env.CINDY_HOST_ENDPOINT_DIR) {
-  const dir = overrideDir?.trim() || path.join(repoRoot, 'config');
+  const dir = overrideDir?.trim() || hostRuntimeLayout().configDir;
   const file = path.join(dir, region === 'cn' ? 'endpoint.json' : 'endpoint.global.json');
   const manifest = JSON.parse(fs.readFileSync(file, 'utf8'));
   const base = manifest.authApiBaseUrl;
@@ -28,6 +26,10 @@ export function readAuthEndpoints(region, overrideDir = process.env.CINDY_HOST_E
   const callback = manifest.authDesktopCallbackUrl;
   return {
     authApiBaseUrl: base,
+    ...(typeof manifest.oauthBrokerApiBaseUrl === 'string' && /^https:\/\//.test(manifest.oauthBrokerApiBaseUrl)
+      ? { oauthBrokerApiBaseUrl: manifest.oauthBrokerApiBaseUrl } : {}),
+    ...(typeof manifest.deviceLinkApiBaseUrl === 'string' && /^https:\/\//.test(manifest.deviceLinkApiBaseUrl)
+      ? { deviceLinkApiBaseUrl: manifest.deviceLinkApiBaseUrl } : {}),
     ...(typeof manifest.modelAccessApiBaseUrl === 'string' && /^https:\/\//.test(manifest.modelAccessApiBaseUrl)
       ? { modelAccessApiBaseUrl: manifest.modelAccessApiBaseUrl } : {}),
     ...(typeof callback === 'string' && callback ? { authDesktopCallbackUrl: callback } : {}),

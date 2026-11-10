@@ -10,7 +10,12 @@ vi.mock('react-i18next', async importOriginal => ({
   useTranslation: () => ({ t: (key: string) => key }),
 }));
 vi.mock('react-native', () => ({ Platform: { OS: 'android' }, View: 'div' }));
-vi.mock('lucide-react-native', () => ({ CircleStop: () => null, UserPlus: () => null }));
+vi.mock('lucide-react-native', () => ({ ChevronDown: () => null, ChevronUp: () => null, CircleStop: () => null, UserPlus: () => null }));
+vi.mock('@/session/permissionPresentation', () => ({
+  permissionAccentColor: () => '',
+  permissionPresentation: (mode: string) => ({ Icon: () => null, label: mode, accent: 'neutral' }),
+}));
+vi.mock('@/session/orcaWorkerRoles', () => ({ orcaRoleDisplayName: (role: string) => role }));
 vi.mock('@/theme', () => ({
   iconSize: {}, iconStroke: {}, lineHeight: {}, radius: {}, typeScale: {},
   useTheme: () => ({ colors: {} }),
@@ -26,10 +31,13 @@ vi.mock('@/session/ContextSheet', () => {
   </select>;
   return {
     ContextSheetGroup: ({ children }: { children: ReactNode }) => <div>{children}</div>,
-    ContextSheetChoiceRow: SelectRow, ContextSheetSelectRow: SelectRow,
+    ContextSheetChoiceRow: SelectRow, ContextSheetSelectRow: SelectRow, ContextSheetChipRow: () => null,
     ContextSheetRow: ({ testID, onPress }: { testID?: string; onPress?(): void }) =>
       <button data-testid={testID} onClick={onPress} />,
-    ContextSheetTextField: () => null, ContextSheetError: () => null, ContextSheetNote: () => null,
+    // 模型入口现在是任务框里工具行右侧的按钮。
+    ContextSheetTextField: ({ toolbar }: { toolbar?: { action: { testID?: string; onPress(): void } } }) =>
+      toolbar ? <button data-testid={toolbar.action.testID} onClick={toolbar.action.onPress} /> : null,
+    ContextSheetError: () => null, ContextSheetNote: () => null,
   };
 });
 
@@ -44,7 +52,8 @@ it.each([false, true])('keeps the work computer editable after choosing a model 
       role: 'developer', agent: 'codex', permissionMode: 'auto', model: null, initialTask: '',
       ...(workFirst ? { executionDeviceId: 'work-b' } : {}),
     });
-    return <OrcaWorkerFormView form={form} customRoleMode={false} onCustomRoleModeChange={() => {}}
+    return <OrcaWorkerFormView form={form} customRoleMode={false} roles={['developer']} rolesEditable
+      onSelectRole={() => {}} onRemoveRole={() => {}}
       onChange={patch => { changed(patch); setForm(current => ({ ...current, ...patch })); }}
       onAgentChange={() => {}} onPermissionChange={() => {}} agents={['codex']} busy={false}
       onPickDirectory={() => {}} onPickModel={() => setForm(current => ({ ...current, agentDeviceId: 'model-c' }))}
@@ -58,6 +67,8 @@ it.each([false, true])('keeps the work computer editable after choosing a model 
   try {
     await act(async () => root.render(<Form />));
     await act(async () => container.querySelector<HTMLButtonElement>('[data-testid="collab.modelRow"]')!.click());
+    // 运行设备收在「更多设置」里：没选运行设备时要先展开，已选(workFirst)时摘要行点开同样展开。
+    await act(async () => container.querySelector<HTMLButtonElement>('[data-testid="collab.moreSettings"]')!.click());
     const selector = container.querySelector<HTMLSelectElement>('[data-testid="collab.executionDevice"]');
     expect(selector).not.toBeNull();
     expect(selector!.disabled).toBe(false);

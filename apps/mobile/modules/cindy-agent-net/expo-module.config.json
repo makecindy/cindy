@@ -1,0 +1,12 @@
+{
+  "platforms": ["apple", "android"],
+  "apple": {
+    "podspecPath": [
+      "./ios/CindyAgentNetModule.podspec",
+      "../../../../packages/agent-net-native/CindyAgentNetNative.podspec"
+    ],
+    "swiftModuleName": "CindyAgentNetModule",
+    "modules": ["CindyAgentNetModule"]
+  },
+  "android": { "modules": ["app.cindy.agentnet.CindyAgentNetModule"] }
+}
