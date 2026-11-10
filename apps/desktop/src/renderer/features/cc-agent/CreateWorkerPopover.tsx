@@ -920,12 +920,14 @@ export function CreateWorkerPopover({
         const remote = parseOrcaWorkerRoles(value);
         const roles = fromRemoteWorkerRoles(remote, modelSelectionScope);
         setRemoteRoles({ deviceId: leadDeviceId, prefs: roles, memory: 'host' });
-        if (interactedRef.current) return;
-        restoreFormRef.current(
-          fromRemoteWorkerDefaults(remote, modelSelectionScope) ?? DEFAULT_WORKER_CREATION_PREFS,
-          roles,
-          true,
-        );
+        const stored = fromRemoteWorkerDefaults(remote, modelSelectionScope) ?? DEFAULT_WORKER_CREATION_PREFS;
+        // 用户已动过表单：不替他改选，但那台电脑记的「上次选择」仍要接过来，之后切换 Agent
+        // 等操作才会按它的记忆恢复，而不是退回首次默认值。
+        if (interactedRef.current) {
+          setPrefs(stored);
+          return;
+        }
+        restoreFormRef.current(stored, roles, true);
       })
       .catch((error) => {
         if (disposed) return;
@@ -933,8 +935,9 @@ export function CreateWorkerPopover({
         // 旧记忆。一时读不到(还没准备好、连不上)：保持按首次默认值打开，不提示错误。
         const unsupported = extractIpcError(error)?.code === 'DEVICE_LINK_CHANNEL_NOT_ALLOWED';
         setRemoteRoles({ deviceId: leadDeviceId, prefs: null, memory: unsupported ? 'controller' : 'none' });
-        if (unsupported && !interactedRef.current) {
-          restoreFormRef.current(readWorkerCreationPrefs(), EMPTY_WORKER_ROLE_PREFS, false);
+        if (unsupported) {
+          if (interactedRef.current) setPrefs(readWorkerCreationPrefs());
+          else restoreFormRef.current(readWorkerCreationPrefs(), EMPTY_WORKER_ROLE_PREFS, false);
         }
       });
     return () => {

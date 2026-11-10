@@ -751,6 +751,37 @@ describe('CreateWorkerPopover', () => {
       await waitFor(() => expect(remote.prefs().codex.providerId).toBe('xd'));
     });
 
+    // 回归(PR #9731 review)：用户在那台电脑的记忆读回来之前就动了表单，读回来的「上次选择」仍要接过来，
+    // 之后切换 Agent 才按它的记忆恢复，而不是退回首次默认值。生产入口 CreateWorkerPopover；最小失败
+    // 输入：读取未返回时点一下表单 → 读取返回(Codex 记的是 gpt-host) → 切到 Codex。
+    it('keeps the controlled computer’s last choice for later switches when the form was touched before it arrived', async () => {
+      mocks.remoteUnsupported = true;
+      const remote = installRemoteHost('memoryHost', {
+        ...DEFAULT_WORKER_CREATION_PREFS,
+        codex: { model: 'gpt-host', effort: 'high', fast: false, providerId: null },
+      });
+      mocks.capabilitiesByAgent.codex = { availableModels: [{ id: 'gpt-other' }, { id: 'gpt-host' }] } as never;
+      mocks.modelsByAgent.codex = [model('gpt-other'), model('gpt-host')];
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => { release = resolve; });
+      const real = (window as unknown as { electronAPI: { deviceLink: { invoke: typeof remote.invoke } } })
+        .electronAPI.deviceLink.invoke;
+      (window as unknown as { electronAPI: { deviceLink: { invoke: unknown } } }).electronAPI.deviceLink.invoke =
+        vi.fn(async (device: string, channel: string, args?: unknown[]) => {
+          if (channel === 'maker:worker-roles:get') await gate;
+          return real(device, channel, args);
+        });
+      render(<CreateWorkerPopover open deviceId="device-a" onClose={vi.fn()} onCreate={vi.fn()} />);
+      fireEvent.click(screen.getByRole('textbox', { name: 'orca.createWorker.initialTaskLabel' }));
+      release();
+      // 读取返回并被处理完(微任务排空)再切 Agent。
+      await act(async () => { for (let i = 0; i < 20; i += 1) await Promise.resolve(); });
+      // 先切到 Claude 再切回 Codex：回到 Codex 时按那台电脑记的模型恢复。
+      fireEvent.click(screen.getByRole('tab', { name: 'Claude' }));
+      fireEvent.click(screen.getByRole('tab', { name: 'Codex' }));
+      await waitFor(() => expect(screen.getByTestId('model-selector').textContent).toContain('gpt-host'));
+    });
+
     it('opens on first-time defaults without touching local memory when the computer is only unreachable', async () => {
       const invoke = vi.fn(async (_device: string, channel: string) => {
         if (channel === 'maker:worker-roles:get') throw new Error('[DEVICE_LINK_TIMEOUT] no reply');
