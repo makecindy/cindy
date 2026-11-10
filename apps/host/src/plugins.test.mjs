@@ -323,7 +323,8 @@ test('runs and reaps real plugin workers through the common broker', async t => 
     await ready;
     const output = await terminalCall('terminal_read', { id: terminal.job.id });
     assert.match(output.chunks.map(chunk => chunk.data).join(''), /managed-ready/);
-    await terminalCall('terminal_write', { id: terminal.job.id, data: 'managed-input\n' });
+    // xterm sends CR for Enter; Windows cooked input does not submit on LF.
+    await terminalCall('terminal_write', { id: terminal.job.id, data: 'managed-input\r' });
     await echo;
     const resumed = await terminalCall('terminal_read', { id: terminal.job.id, cursor: output.cursor, generation: output.generation });
     assert.match(resumed.chunks.map(chunk => chunk.data).join(''), /managed-input/);
