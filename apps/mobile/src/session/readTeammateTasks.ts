@@ -129,3 +129,35 @@ export function publishHomeTaskSnapshot(input: Omit<Parameters<typeof readTeamma
     throw error;
   });
 }
+
+type ActivitySnapshotStore = {
+  getSessionLiveActivity(sessionId: string, deviceId?: string): unknown;
+  getSessionRunStatus(sessionId: string): { isRunning: boolean };
+  setActiveSessionSnapshots(deviceId: string, response: unknown, activityEpochAtFetchStart: number): void;
+};
+
+/** The early activity snapshot can land before history-only lanes are installed; another
+ * device's list recompute then drops their alerts. Re-apply only those lost entries under
+ * the original fetch fence. A legacy array skips the complete-snapshot absence sweep, and a
+ * changed run flag means a later push owns the session. */
+export function restoreActivityForInstalledRows(
+  store: ActivitySnapshotStore,
+  deviceId: string,
+  snapshot: { response: unknown; epoch: number } | null,
+  rows: readonly RemoteSession[],
+): void {
+  if (!snapshot) return;
+  const response = snapshot.response as { format?: unknown; sessions?: unknown } | unknown[] | null;
+  const list = Array.isArray(response)
+    ? response
+    : (response && response.format === 'active-sessions-v2' && Array.isArray(response.sessions) ? response.sessions : []);
+  const ids = new Set(rows.map(row => row.id));
+  const lost = list.filter((item) => {
+    const entry = item as { sessionId?: unknown; isTurnRunning?: unknown } | null;
+    return !!entry && typeof entry.sessionId === 'string' && ids.has(entry.sessionId)
+      && typeof entry.isTurnRunning === 'boolean'
+      && store.getSessionRunStatus(entry.sessionId).isRunning === entry.isTurnRunning
+      && !store.getSessionLiveActivity(entry.sessionId, deviceId);
+  });
+  if (lost.length) store.setActiveSessionSnapshots(deviceId, lost, snapshot.epoch);
+}

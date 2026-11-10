@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import { REMOTE_RESOURCE_LIST_CHANNEL } from '@cindy/device-link';
 import type { RemoteInvoke } from '@/device-link/mobileMakerTransport';
-import { publishHomeTaskSnapshot, readTeammateTasks } from '@/session/readTeammateTasks';
+import { publishHomeTaskSnapshot, readTeammateTasks, restoreActivityForInstalledRows } from '@/session/readTeammateTasks';
+import { remoteSessionStore } from '@/session/remoteSessionStore';
 import { createHomeListFreshness } from '@/session/homeListFreshness';
 import { normalizeTaskTeammateSelection, taskTeammateKey, taskTeammateOptions } from '@/session/teammateTaskSource';
 import type { RemoteSession } from '@/session/types';
@@ -212,4 +213,32 @@ it('keeps a newer snapshot\'s lanes while a superseded snapshot batch is in flig
   releaseOld([lane('lane')]);
   await Promise.all([old, newer]);
   expect(publish.mock.lastCall?.[0].map((row: RemoteSession) => row.id)).toEqual(['ordinary', 'lane']);
+});
+
+// Review regression (PR #9752, unit): Home applies the activity snapshot before history-only
+// lanes are installed. Another device's list recompute drops those alerts; the lane publish
+// must restore them under the original fence without reverting a newer push.
+it('restores lost lane alerts when history-only lanes are installed after the activity snapshot', async () => {
+  remoteSessionStore.clear();
+  const lane = (id: string) => task(id, { source: 'bot', companion: { id: 'cindy-default', role: 'routine' } });
+  const alert = (sessionId: string) => ({ sessionId, isTurnRunning: false, activityPhase: 'error', activityAttention: true });
+  const epoch = remoteSessionStore.captureActiveSessionSnapshotEpoch();
+  const response = { format: 'active-sessions-v2', sessions: [alert('lost'), alert('cleared')] };
+  remoteSessionStore.setActiveSessionSnapshots('mac', response, epoch);
+  remoteSessionStore.setDeviceSessions('pc', 'PC', [task('other')]);
+  expect(remoteSessionStore.getSessionLiveActivity('lost')).toBeNull();
+  remoteSessionStore.applySessionActivity('mac', { sessionId: 'cleared', phase: 'error', attention: false });
+  await publishHomeTaskSnapshot({ ...input, sessions: [task('ordinary')], onReady: () => {},
+    publish: rows => {
+      remoteSessionStore.setDeviceSessions('mac', 'Mac', rows);
+      restoreActivityForInstalledRows(remoteSessionStore, 'mac', { response, epoch }, rows);
+    },
+    invoke: (async (_device: string, api: string, args: [string[]]) => {
+      if (api === 'local-db:history:query') return { ok: true, sessions: [lane('lost'), lane('cleared')] };
+      if (api === 'local-db:sessions:get-many') return args[0].map((id: string) => lane(id));
+      return { collectionId: 'teammates', items: [] };
+    }) as RemoteInvoke });
+  expect(remoteSessionStore.getSessionLiveActivity('lost', 'mac')).toMatchObject({ phase: 'error', attention: true });
+  expect(remoteSessionStore.getSessionLiveActivity('cleared', 'mac')).toBeNull();
+  remoteSessionStore.clear();
 });

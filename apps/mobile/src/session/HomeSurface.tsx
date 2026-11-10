@@ -5,7 +5,7 @@ import { useCloudCompanionHome } from '@/chat/useCloudCompanion';
 import { cloudCompanionRows } from '@/chat/cloudCompanion';
 import { normalizeTaskTeammateSelection, taskTeammateKey, taskTeammateOptions } from './teammateTaskSource';
 import { mobileDebugLog } from '@/debug/mobileDebugLog';
-import { publishHomeTaskSnapshot } from './readTeammateTasks';
+import { publishHomeTaskSnapshot, restoreActivityForInstalledRows } from './readTeammateTasks';
 import { deviceDisplayName } from '@/device-link/deviceName';
 import { MountOnFirstOpen } from './MountOnFirstOpen';
 import { getMobileAuthOwner, isMobileAuthOwnerCurrent } from '@/auth/authOwnerGeneration';
@@ -1064,6 +1064,8 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
         await subscribe(HOME_LIST_SUBSCRIPTION_OWNER, device.deviceId, ['sessions']);
         assertCurrentScope();
       });
+      // Applied before history-only lanes enter the store; their publish restores lost alerts.
+      let appliedActivitySnapshot: { response: unknown; epoch: number } | null = null;
       const publishList = (rows: RemoteSession[], mutationEpoch: number) => {
         if (!remoteSessionStore.isDeviceSessionListMutationEpochCurrent(device.deviceId, mutationEpoch)) return;
         const publishedSessions = remoteSessionStore.getHomeSessions();
@@ -1086,7 +1088,10 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
           sessions: rows, previous: publishedSessions, status: requestedListFilter, limit: LIST_LIMIT,
           current: enrichmentCurrent,
           publish: rows => {
-            remoteSessionStore.setDeviceSessions(device.deviceId, device.name, rows);
+            remoteSessionStore.batch(() => {
+              remoteSessionStore.setDeviceSessions(device.deviceId, device.name, rows);
+              restoreActivityForInstalledRows(remoteSessionStore, device.deviceId, appliedActivitySnapshot, rows);
+            });
             scheduleHomeListSnapshotPersist(homeCacheUserId, () => remoteSessionStore.getSessions());
           },
           onDiscard: () => {
@@ -1168,6 +1173,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
           activeSessions,
           activeSessionSnapshotEpoch,
         );
+        appliedActivitySnapshot = { response: activeSessions, epoch: activeSessionSnapshotEpoch };
       }
       // schedule-index(1+N 个 listRuns)是次要徽标数据,延后发,避开"开 app→立刻点会话"时和会话关键读
       // 抢同一条 WS 管道(见 scheduleIndexDefer / issue #324)。home 自动化分组与名称已由 fallbackScheduleInfo
