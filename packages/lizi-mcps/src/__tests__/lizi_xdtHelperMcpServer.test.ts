@@ -1324,6 +1324,32 @@ it('discovers native app settings in all three harnesses and rejects invalid or 
   }
 });
 
+// Unit, parity #7: plugins use the existing settings callbacks with no current task.
+// The task-only MCP case above would miss CAPABILITY_NOT_AVAILABLE for this caller.
+// Minimal input: list/get/update via Host handlers, with no sessionId in the context.
+it('reads and updates app settings through the shared handler for a plugin caller', async () => {
+  let state = { uiSize: 16, animation: true };
+  const settings = vi.fn(async (input: { callerSessionId?: string; operation: string; patch?: Record<string, unknown> }) => {
+    if (input.operation === 'update') state = { ...state, ...input.patch };
+    return input.operation === 'list' ? { sections: [{ id: 'appearance' }] } : { state: { ...state } };
+  });
+  const server = createXdtHelperMcpServer({ appSettings: { call: settings } }, {
+    agentKind: 'codex', workingDir: '', hostCaller: { kind: 'plugin', pluginId: 'dashboard', dataOwnerId: 'owner', ownerGeneration: 1 },
+  });
+  try {
+    expect(server.hostTools.describe('update_app_settings')).toMatchObject({ category: 'settings' });
+    expect(parsePayload(await server.hostTools.call('list_app_settings', {}))).toMatchObject({ ok: true, sections: [{ id: 'appearance' }] });
+    expect(parsePayload(await server.hostTools.call('get_app_settings', { section: 'appearance' }))).toMatchObject({ ok: true, state });
+    expect(parsePayload(await server.hostTools.call('update_app_settings', { section: 'appearance', patch: { uiSize: 18 } })))
+      .toMatchObject({ ok: true, state: { uiSize: 18, animation: true } });
+    expect(settings).toHaveBeenLastCalledWith({ callerSessionId: undefined, operation: 'update', section: 'appearance', patch: { uiSize: 18 } });
+    expect(settings.mock.calls.every(([input]) => input.callerSessionId === undefined)).toBe(true);
+    expect(parsePayload(await server.hostTools.call('update_app_settings', { patch: { uiSize: 20 } })))
+      .toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+    expect(settings).toHaveBeenCalledTimes(3);
+  } finally { await server.close(); }
+});
+
 // #9276, unit real MCP: cancellation previously stopped the caller but left Main
 // waiting for a key. Existing discovery tests never cancelled an in-flight call.
 it('forwards connection tool cancellation to the host in all three harnesses', async () => {

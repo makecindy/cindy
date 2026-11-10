@@ -134,8 +134,15 @@ Worker 工具省略 working_dir 时保持继承 Lead 任务记录目录，不跟
 面板默认识别实际目录属于 UI 行为；Agent 通过显式 working_dir 共用已有 worktree，
 通过 new_worktree 新建独立检出，二者按会话权限审批，并以返回的 working_dir 核对结果。
 
-表里「无」的项是待补的缺口，不是有意的限制。其中「切换权限档」「代用户确认权限或回答提问」
+表里「无」的项是待补的缺口，不是有意的限制。其中「代用户确认权限或回答提问」
 会让 Agent 改变约束自己的那一层，补之前需要单独的产品决定。
+
+插件宿主工具入口（2026-11-10）：`agent.hostTools` 分组批准后，插件以显式调用方经
+`cindy.host.call` 使用上述同一工具与宿主服务，不绑定当前任务。`scheduler` 已覆盖新建、修改、
+暂停、恢复、删除、立即运行和运行记录；`settings` 的应用分类读改复用设置页保存与生效路径，
+不返回秘密值。工具的本机/跨电脑范围不变，风险动作仍由宿主逐次确认。
+插件自己的设置界面不属于这些宿主工具。调用契约见
+[插件宿主工具](../../apps/desktop/resources/system-skills/cindy-plugin-creator/references/plugin-host-tools.md)。
 
 ## 实现入口
 
