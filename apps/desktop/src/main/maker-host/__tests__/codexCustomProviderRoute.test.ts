@@ -87,7 +87,9 @@ describe('Codex custom Provider identity', () => {
       resolveCodexCustomProviderModelProviderId(routes, 'provider-alpha', 'chat-text'),
     ).toBeNull();
 
-    const disabled = customProvider({
+    // Missing image generation is not a reason to drop the identity (#9611).
+    // A Responses model still gets cindy_custom_<hash>; only the actor header stays off.
+    const textOnly = customProvider({
       runtimes: {
         codex: {
           baseUrl: 'https://provider.example/v1',
@@ -96,7 +98,66 @@ describe('Codex custom Provider identity', () => {
         },
       },
     });
-    expect(deriveCodexCustomProviderRoutes(catalog(disabled))).toEqual([]);
+    const textRoutes = deriveCodexCustomProviderRoutes(catalog(textOnly));
+    expect(textRoutes).toHaveLength(1);
+    expect(textRoutes[0]).toMatchObject({
+      capabilities: { imageGeneration: false },
+      responseModels: ['vision-input'],
+    });
+    expect(
+      buildCodexCustomProviderArgs('http://127.0.0.1:43210', 'env-key', textRoutes).extraArgs.join(' '),
+    ).not.toContain('x-openai-actor-authorization');
+
+    const chatOnly = customProvider({
+      runtimes: {
+        codex: {
+          baseUrl: 'https://provider.example/v1',
+          wireProtocol: 'openai-chat',
+          models: [{ id: 'chat-only', name: 'Chat Only' }],
+        },
+      },
+    });
+    expect(deriveCodexCustomProviderRoutes(catalog(chatOnly))).toEqual([]);
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：deriveCodexCustomProviderRoutes / buildCodexCustomProviderArgs。
+  //   没有图片生成能力的 Responses 自定义供应商也要拿到 cindy_custom_<hash>，
+  //   并写进 Codex spawn 的 model_providers；否则 thread/resume 报 -32600（#9611）。
+  // - Bug／规则依据：#9611。旧门槛要求 capabilities 里至少一项为 true，普通文本供应商被整条丢掉。
+  // - 现有覆盖缺口：上面的用例把「没有 Responses 模型」和「没有图片能力」混在一起，
+  //   期望空路由；本用例只去掉 supportsImageGeneration，保留 Responses 模型。
+  // - 最小失败输入：openai-responses + 一个文本模型，不声明 supportsImageGeneration。
+  // - tier：unit。调公开函数，不启 Electron、不访问网络。
+  it('registers a Responses provider that has no image-generation capability', () => {
+    const textOnly = customProvider({
+      runtimes: {
+        codex: {
+          baseUrl: 'https://provider.example/v1',
+          requestPath: '/v1/responses',
+          wireProtocol: 'openai-responses',
+          models: [{ id: 'chat-text-only', name: 'Chat Text Only' }],
+        },
+      },
+    });
+    const routes = deriveCodexCustomProviderRoutes(catalog(textOnly));
+    expect(routes).toHaveLength(1);
+    expect(routes[0]).toMatchObject({
+      providerId: 'provider-alpha',
+      capabilities: { imageGeneration: false },
+      responseModels: ['chat-text-only'],
+    });
+    expect(routes[0]?.modelProviderId).toMatch(/^cindy_custom_[a-f0-9]{20}$/);
+    expect(
+      resolveCodexCustomProviderModelProviderId(routes, 'provider-alpha', 'chat-text-only'),
+    ).toBe(routes[0]?.modelProviderId);
+
+    const config = buildCodexCustomProviderArgs('http://127.0.0.1:43210', 'env-key', routes);
+    const argv = config.extraArgs.join(' ');
+    expect(argv).toContain(`model_providers.${routes[0]!.modelProviderId}.wire_api="responses"`);
+    expect(argv).toContain(`/_cindy/custom-provider/${routes[0]!.routeId}`);
+    expect(argv).not.toContain('x-openai-actor-authorization');
+    expect(argv).not.toContain('provider.example');
   });
 
   it('uses the applied Host snapshot to identify only real dynamic identity crossings', () => {
@@ -302,9 +363,19 @@ describe('Codex custom Provider identity', () => {
     expect(codexCustomProviderRouteSignature(catalog(buildUserProvider(effortChanged))))
       .not.toBe(codexCustomProviderRouteSignature(catalog(buildUserProvider(config))));
 
-    const disabled = structuredClone(config);
-    delete disabled.runtimes.codex?.supportsImageGeneration;
-    expect(codexCustomProviderConfigSignature(disabled)).toBe('');
+    // Turning image generation off changes the snapshot, but does not erase the identity (#9611).
+    const textOnly = structuredClone(config);
+    delete textOnly.runtimes.codex?.supportsImageGeneration;
+    const textSignature = codexCustomProviderConfigSignature(textOnly);
+    expect(textSignature).not.toBe('');
+    expect(textSignature).not.toBe(baseline);
+    expect(deriveCodexCustomProviderRoutes(catalog(buildUserProvider(textOnly)))).toMatchObject([
+      { capabilities: { imageGeneration: false }, responseModels: ['model-a', 'model-b'] },
+    ]);
+
+    const chatOnly = structuredClone(config);
+    chatOnly.runtimes.codex!.wireProtocol = 'openai-chat';
+    expect(codexCustomProviderConfigSignature(chatOnly)).toBe('');
   });
 
   it('parses only the dedicated route and strips the prefix completely', () => {

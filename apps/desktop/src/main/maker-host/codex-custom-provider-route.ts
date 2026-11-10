@@ -132,7 +132,9 @@ function routeForProvider(provider: Provider): CodexCustomProviderRoute | null {
   const capabilities: CodexCustomProviderCapabilities = {
     imageGeneration: routing.supportsImageGeneration === true,
   };
-  if (!Object.values(capabilities).some((enabled) => enabled === true)) return null;
+  // A text-only Responses provider still needs its cindy_custom_<hash> identity.
+  // Image generation only adds the actor header; it is not an admission ticket.
+  // Dropping the route makes thread/resume fail with -32600 (#9611).
   const responseModels = (provider.models.codex ?? []).filter(
     (model) => effectiveModelWireProtocol(model, routing) === 'openai-responses',
   );
