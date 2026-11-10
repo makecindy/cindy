@@ -873,6 +873,55 @@ describe('PluginMarketService migration and defaultInstall', () => {
     expect(h.api.listAll).not.toHaveBeenCalled();
   });
 
+  it('reuses one installation scan across sequential market pages', async () => {
+    const items = Array.from({ length: 30 }, (_, index) => summary({
+      id: 'c' + String(index).padStart(24, '0'),
+      ghostId: 'tool-' + index,
+      name: 'Tool ' + index,
+      namespace: null,
+    }));
+    const h = harness(items);
+    runtime.readBackgroundGhosts = vi.fn(async () => []);
+    let cursor: string | null = null;
+    for (let page = 0; page < 10; page += 1) {
+      const result = await h.service.query({ limit: 3, cursor });
+      cursor = result.nextCursor;
+    }
+    expect(runtime.readBackgroundGhosts).toHaveBeenCalledTimes(1);
+  });
+
+  it('rescans installation state after the installed identity changes', async () => {
+    const items = Array.from({ length: 6 }, (_, index) => summary({
+      id: 'c' + String(index).padStart(24, '0'),
+      ghostId: 'tool-' + index,
+      name: 'Tool ' + index,
+      namespace: null,
+    }));
+    const h = harness(items);
+    runtime.readBackgroundGhosts = vi.fn(async () => []);
+    await h.service.query({ limit: 3 });
+    expect(runtime.readBackgroundGhosts).toHaveBeenCalledTimes(1);
+    runtime.ghosts = [ghostEntry('tool-0')];
+    await h.service.query({ limit: 3 });
+    expect(runtime.readBackgroundGhosts).toHaveBeenCalledTimes(2);
+  });
+
+  it('hides counts instead of unbounded installed-count resolution', async () => {
+    const item = summary({ id: 'c000000000000000000000001', ghostId: 'tool-0', namespace: null });
+    const h = harness([item]);
+    (h.service as unknown as { countDeductionMaxBatches: number }).countDeductionMaxBatches = 1;
+    for (let index = 0; index < 101; index += 1) {
+      h.ledger.upsertInstallation(recordForTest({
+        ...item,
+        id: 'c' + String(index).padStart(24, '0'),
+        ghostId: 'installed-' + index,
+      }, { installed: true }));
+    }
+    const result = await h.service.query({ limit: 3, excludeInstalled: true });
+    expect(result.counts).toBeNull();
+    expect(h.api.resolve).not.toHaveBeenCalled();
+  });
+
   it('keeps unavailable installed targets when a bounded maintenance batch fails', async () => {
     const item = summary({ scope: 'organization', organizationId: 'org-1', namespace: 'acme' });
     const h = harness([item]);

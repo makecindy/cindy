@@ -137,6 +137,32 @@ describe('usage binding instance revalidation', () => {
   // Unit regression: a market refresh used to rescan every plugin once per
   // binding. Read the committed target inside the lock and retain fallback for
   // missing registry entries, without binding a same-name replacement instance.
+  it('skips rebinding when the installed revision already has a usage handle', async () => {
+    const { organization } = harness();
+    const bind = vi.fn(async () => {});
+    const captureBound = vi.fn(() => ({ subjectId: 'subject-1' }));
+    const list = vi.fn();
+    const findInstalledInstance = vi.fn();
+    const withGhostInstallLock = vi.fn(async () => {});
+    const api = loadUsageBinding({
+      activeOwnerScopeKey: () => 'owner-a',
+      currentPluginUsageService: () => ({ bind, captureBound }),
+      isAppSessionBoundaryPending: () => false,
+      getGhostManager: () => ({ list, findInstalledInstance }),
+      findInstalledGhostByInstanceId,
+      readPluginUsageIdentity: (ghost: InstalledGhost) => ghost.approval,
+      withGhostInstallLock,
+      log: { warn: vi.fn() },
+    });
+    await api.bindPluginUsage(organization);
+    expect(captureBound).toHaveBeenCalledWith(
+      installedGhostStoragePart(organization),
+      organization.approval.revision,
+    );
+    expect(withGhostInstallLock).not.toHaveBeenCalled();
+    expect(bind).not.toHaveBeenCalled();
+  });
+
   it.each(['indexed', 'fallback', 'removed', 'owner-changed'] as const)(
     'revalidates the committed installation with %s state', async (state) => {
       const { organization, root } = harness();

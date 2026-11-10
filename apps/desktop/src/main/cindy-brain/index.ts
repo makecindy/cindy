@@ -3671,12 +3671,16 @@ async function bindPluginUsage(ghost: InstalledGhost, previousRevision?: string)
   const scope = activeOwnerScopeKey();
   const service = currentPluginUsageService();
   if (!service) return;
+  const instanceKey = installedGhostStoragePart(ghost);
+  const existing = ghost.approval.state === 'approved' && typeof service.captureBound === 'function'
+    ? service.captureBound(instanceKey, ghost.approval.revision)
+    : null;
+  if (existing) return;
   try {
     await withGhostInstallLock(ghost.manifest.id, async () => {
       if (activeOwnerScopeKey() !== scope || isAppSessionBoundaryPending()) return;
       // A fallback bind can wait behind update/uninstall. Read the final committed identity.
       const manager = getGhostManager();
-      const instanceKey = installedGhostStoragePart(ghost);
       const installed = manager.findInstalledInstance(instanceKey)
         ?? findInstalledGhostByInstanceId(manager.list(), instanceKey);
       const identity = installed && readPluginUsageIdentity(installed);
