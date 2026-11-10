@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { Platform } from 'react-native';
 import { isSharedTaskPeer, TASK_MIGRATION_CHANNEL, type TaskMigrationView } from '@cindy/device-link';
 import { isTeammateProjectPath } from '@cindy/maker-shared/teammate-project';
 import { sessionProjectDirectory } from '@cindy/maker-shared/worktree-paths';
@@ -13,7 +14,7 @@ import type { RemoteSession } from './types';
 import { workspacePathsEqual } from './workspaceSelection';
 
 export function sessionAllowsProjectMove(session?: RemoteSession | null): boolean {
-  return !!session && session.status === 'active' && !session.remoteHostId
+  return (Platform.OS === 'ios' || Platform.OS === 'android') && !!session && session.status === 'active' && !session.remoteHostId
     && session.source !== 'review' && session.source !== 'bot' && session.orcaRole !== 'worker'
     && !isSharedTaskPeer(session.deviceLinkDeviceId ?? '')
     && !isSharedTaskPeer(session.canonicalDeviceId ?? '');
@@ -67,8 +68,9 @@ function SessionProjectMoveSheet({ session, preferredDeviceId, owner, onClosed }
     if (!current()) throw new Error('PROJECT_MOVE_CLOSED');
   }, [current]);
   const failureText = useCallback((err: unknown) => {
-    const text = String(err);
-    if (/CHANNEL_NOT_ALLOWED|MIGRATION_UNSUPPORTED|VERSION_MISMATCH/.test(text))
+    const code = typeof err === 'object' && err !== null && 'code' in err ? String(err.code) : '';
+    const text = `${code} ${String(err)}`;
+    if (/CHANNEL_NOT_ALLOWED|MIGRATION_UNSUPPORTED|MIGRATION_INVALID_REQUEST|VERSION_MISMATCH/.test(text))
       return t('session.menu.moveUnsupported');
     if (/WORKTREE_MOVE|WORKTREE.*BOUNDARY|WORKTREE.*MOVE/.test(text))
       return t('session.menu.moveWorktree');

@@ -5,16 +5,17 @@
 import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { sharedTaskHostPeer } from '@cindy/device-link';
+import { DeviceLinkError, sharedTaskHostPeer } from '@cindy/device-link';
 import { setMobileAuthOwner } from '@/auth/authOwnerGeneration';
 import { sessionAllowsProjectMove, useSessionProjectMoveSheet } from '@/session/SessionProjectMoveSheet';
 import type { NewTaskSelectionSheetProps } from '@/session/NewTaskSelectionSheet';
 import type { RemoteSession } from '@/session/types';
 
 const h = vi.hoisted(() => ({
-  invoke: vi.fn(), patch: vi.fn(), reseed: vi.fn(), running: false,
+  platform: 'ios', invoke: vi.fn(), patch: vi.fn(), reseed: vi.fn(), running: false,
   picker: null as NewTaskSelectionSheetProps | null,
 }));
+vi.mock('react-native', () => ({ Platform: { get OS() { return h.platform; } } }));
 vi.mock('@/device-link/DeviceLinkContext', () => ({ useDeviceLink: () => ({ invoke: h.invoke }) }));
 vi.mock('@/session/remoteSessionStore', () => ({
   resolveSessionWriteDevices: (_id: string, session: RemoteSession, preferred?: string) => ({
@@ -45,7 +46,7 @@ let move: ReturnType<typeof useSessionProjectMoveSheet>;
 function Harness() { move = useSessionProjectMoveSheet(); return move.sheet; }
 beforeEach(() => {
   (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
-  vi.clearAllMocks(); h.invoke.mockReset(); h.picker = null; h.running = false;
+  vi.clearAllMocks(); h.platform = 'ios'; h.invoke.mockReset(); h.picker = null; h.running = false;
   setMobileAuthOwner('owner-a');
   h.invoke.mockResolvedValue({ supported: true, projects: ['/project'] });
   container = document.createElement('div');
@@ -280,4 +281,37 @@ it('keeps move workspaces unavailable until host capabilities finish loading', a
   expect(h.picker?.workspaceLoading).toBe(true);
   await act(async () => finish({ supported: true, projects: ['/project'] }));
   expect(h.picker?.workspaceLoading).toBe(false);
+});
+
+// New phone / old host errors must explain the required desktop update.
+it.each([
+  { stage: 'caps', error: new DeviceLinkError('CHANNEL_NOT_ALLOWED', "channel 'maker:task-copy' not allowed remotely") },
+  { stage: 'move', error: new Error('MIGRATION_INVALID_REQUEST') },
+])('offers the host update recovery for $stage incompatibility', async ({ stage, error }) => {
+  if (stage === 'caps') {
+    h.invoke.mockRejectedValueOnce(error);
+    act(() => move.open(session, vi.fn()));
+    await act(async () => move.parentClosed());
+    expect(h.picker?.error).toBe('session.menu.moveUnsupported');
+  } else {
+    await open();
+    h.invoke.mockRejectedValueOnce(error);
+    await act(async () => h.picker!.onProject('/project'));
+    expect(h.picker?.actionError).toBe('session.menu.moveUnsupported');
+  }
+  expect(h.patch).not.toHaveBeenCalled();
+  expect(h.picker?.page).toBe('workspace');
+});
+
+// Only the native platforms have a real project picker; Web must not close its menu into a blank view.
+it.each(['ios', 'android', 'web'])('offers project moving only when %s has a picker', async platform => {
+  h.platform = platform;
+  const supported = platform !== 'web';
+  expect(sessionAllowsProjectMove(session)).toBe(supported);
+  const closeMenu = vi.fn();
+  act(() => move.open(session, closeMenu));
+  await act(async () => move.parentClosed());
+  expect(closeMenu).toHaveBeenCalledTimes(supported ? 1 : 0);
+  expect(h.invoke).toHaveBeenCalledTimes(supported ? 1 : 0);
+  if (!supported) expect(h.picker).toBeNull();
 });
