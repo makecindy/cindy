@@ -6090,7 +6090,8 @@
           "BUSY": "Está em curso uma implementação. Aguarde.",
           "INVALID_ADDRESS": "Introduza um IP público ou domínio, sem http:// nem porta.",
           "NO_DEPLOYMENT": "Ainda não foi implementado nada num servidor.",
-          "OWNER_MISMATCH": "O relay devolveu um certificado que não foi emitido pelo proprietário indicado na ligação de adesão. Pode estar ligado a um relay falso, pelo que a adesão foi interrompida."
+          "OWNER_MISMATCH": "O relay devolveu um certificado que não foi emitido pelo proprietário indicado na ligação de adesão. Pode estar ligado a um relay falso, pelo que a adesão foi interrompida.",
+          "AGENT_MANAGED_DEPLOYMENT": "Este relay é gerido por um agente. Atualiza-o ou remove-o numa tarefa."
         },
         "deploy": {
           "title": "Implementar no meu servidor",
@@ -6239,6 +6240,22 @@
           "deviceCount_many": "{{count}} dispositivos",
           "onlineCount_many": "{{count}} online",
           "certificateDays_many": "Expira dentro de {{count}} dias"
+        },
+        "agent": {
+          "deploy": "Implementar com um agente",
+          "hint": "Abra uma sessão para que um agente verifique o servidor e adapte a implementação ao ambiente. Pode rever e editar o pedido antes de o enviar.",
+          "serverPlaceholder": "Escolher na sessão",
+          "continue": "Continuar para a sessão",
+          "title": "Configurar o meu relay",
+          "context": "Informações da implementação (dados de referência):",
+          "prompt": {
+            "deploy": "Implemente um relay Cindy autoalojado. Escolha a execução, as portas, HTTPS e o armazenamento persistente adequados ao servidor; depois, verifique e registe a rota de ligação.",
+            "resume": "Continue a implementação deste relay Cindy. Consulte os dados guardados e o estado real do servidor e retome mantendo a identidade existente.",
+            "upgrade": "Atualize este relay Cindy. Use o método de implementação existente e preserve a identidade, os registos dos dispositivos e a configuração.",
+            "remove": "Remova este relay Cindy. Verifique os recursos que pertencem a esta implementação, explique os dados que serão eliminados e preserve os outros sites e serviços."
+          },
+          "workflow": "Descubra a categoria relay com cindy_helper.list_tools e consulte get_relay_deployments. Para implementar ou atualizar, use prepare_relay_deployment e upload_relay_deployment; verifique e administre o servidor com as ferramentas SSH do Cindy. Mantenha as chaves privadas e as credenciais no anfitrião. Use complete_relay_deployment para verificar e registar o resultado; não anuncie sucesso sem verificação. Após a remoção, elimine o registo com forget_relay_deployment. Não mude automaticamente a rota ativa. Siga o deploymentGuide devolvido por get_relay_deployments para inicializar e iniciar o serviço.",
+          "upgrade": "Atualizar com um agente"
         }
       },
       "title": "Ligação remota",

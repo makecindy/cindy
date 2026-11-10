@@ -6032,7 +6032,8 @@
           "BUSY": "A deployment is in progress. Please wait.",
           "INVALID_ADDRESS": "Enter a public IP or domain, without http:// or a port.",
           "NO_DEPLOYMENT": "Nothing has been deployed to a server yet.",
-          "OWNER_MISMATCH": "The relay returned a certificate that the owner in the join link didn't issue. You may be connected to a fake relay, so joining stopped."
+          "OWNER_MISMATCH": "The relay returned a certificate that the owner in the join link didn't issue. You may be connected to a fake relay, so joining stopped.",
+          "AGENT_MANAGED_DEPLOYMENT": "This relay is managed by an Agent. Upgrade or remove it from a task."
         },
         "deploy": {
           "title": "Deploy to my server",
@@ -6178,6 +6179,22 @@
           "version": "Relay version",
           "latest": "Up to date",
           "remove": "Remove This Relay"
+        },
+        "agent": {
+          "deploy": "Deploy with an Agent",
+          "hint": "Open a session where an Agent checks your server and adapts the deployment to its environment. You can review and edit the request before sending.",
+          "serverPlaceholder": "Choose in the session",
+          "continue": "Continue to session",
+          "title": "Set up my relay",
+          "context": "Deployment context (reference data):",
+          "prompt": {
+            "deploy": "Deploy a self-hosted Cindy relay for me. Choose the runtime, ports, HTTPS and persistent storage to suit the server, then verify and register the connection route.",
+            "resume": "Continue setting up this Cindy relay. Read its saved deployment details and resume from the actual server state, keeping the existing identity.",
+            "upgrade": "Upgrade this Cindy relay. Use its existing deployment method and preserve its identity, device records and configuration.",
+            "remove": "Remove this Cindy relay. Check which resources belong to this deployment, explain the data removal involved, and preserve other websites and services."
+          },
+          "workflow": "Discover the relay category with cindy_helper.list_tools, then read get_relay_deployments. For deployment or upgrade, use prepare_relay_deployment and upload_relay_deployment; inspect and operate the server through Cindy SSH tools. Keep private keys and credentials in the host. Use complete_relay_deployment to verify and register the result; do not report success without verification. After removal, use forget_relay_deployment to remove its record. Do not switch the active route automatically. Follow the deploymentGuide returned by get_relay_deployments.",
+          "upgrade": "Upgrade with an Agent"
         }
       },
       "title": "Remote Connection",

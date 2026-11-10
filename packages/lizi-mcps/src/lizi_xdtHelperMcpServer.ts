@@ -1,4 +1,5 @@
 import { registerPiRuntimeTools, type PiRuntimeCallbacks } from './xdt-helper/pi_runtime.js';
+import { registerRelayDeploymentTools, type RelayDeploymentCallbacks } from './xdt-helper/relay_deployment.js';
 import { createControlReader } from './xdt-helper/control-catalog.js';
 import { registerAppModelsTools, type AppModelsCallbacks } from './xdt-helper/app_models.js';
 import { registerAppSettingsTools, type AppSettingsCallbacks } from './xdt-helper/app_settings.js';
@@ -162,7 +163,7 @@ const CALL_TOOL_INPUT = {
 
 // list_tools 入口类目: cindy(自省) / control(会话控制面) / history(聊天历史) / feedback(官方反馈提交) / handoff(session 间 handoff)。
 // 协同 team 工具已拆到独立 cindy_orca server(插件开关 gate)。
-const CATEGORY_ENUM = ['cindy', 'auth', 'control', 'history', 'feedback', 'handoff', 'skills', 'app_update', 'bots', 'github', 'settings'] as const;
+const CATEGORY_ENUM = ['cindy', 'auth', 'control', 'history', 'feedback', 'handoff', 'skills', 'app_update', 'bots', 'github', 'settings', 'relay'] as const;
 
 /**
  * 类目概览里每个类目的一句话用途 + 作用范围(本机 / 可跨电脑)。只陈述事实:模型在概览
@@ -170,6 +171,7 @@ const CATEGORY_ENUM = ['cindy', 'auth', 'control', 'history', 'feedback', 'hando
  * 说明才发现。改工具的作用范围时同步改这里(测试按类目全集守护)。
  */
 export const HELPER_CATEGORY_DESCRIPTIONS: Record<(typeof CATEGORY_ENUM)[number], string> = {
+  relay: 'Agent 自适应部署连接线路：本机保存中转身份、上传程序、验证并登记线路及切换；可保留部署身份切回官方线路。服务器安装、TLS 和进程托管由 Agent 经 cindy_ssh 按环境选择；不要求固定 systemd、root 或 80/443。本机任务可用；手机可继续该任务。',
   cindy: `${BRAND_NAME} 能力说明、界面操作帮助（get_capabilities scope=help）与当前任务信息/交付回执（report_task_delivery）；get_capabilities({key:"self-management"}) 是管理自己的任务、定时任务、项目、伙伴的工具索引；get_capabilities({key:"computer-use"}) 说明桌面操作没开时怎么引导用户开启。本机。`,
   settings: '管理 Cindy 的全局设置、默认模型与 API 供应商连接（添加、安全填写密钥、发现型号、测试连接），普通任务和伙伴共用。作用于运行任务的本机；先查询当前值和可选项，再修改或恢复默认。密钥通过电脑或手机的加密代输入卡交给宿主。SSH 主机编辑使用 cindy_ssh。',
   auth: '本机窗口登录、保密输入与截图扫码（request_input_handoff）；MCP 设置表单（request_mcp_setup）；Grok 设备码登录、状态查询与取消（支持远程任务）。',
@@ -328,7 +330,7 @@ function registerListToolsEntry(
                 tools: tools.map((t) => ({
                   name: t.name,
                   description: t.description,
-                  ...(t.category === 'settings' || t.category === 'bots' || t.category === 'skills' || t.category === 'auth' ? {
+                  ...(t.category === 'settings' || t.category === 'bots' || t.category === 'skills' || t.category === 'auth' || t.category === 'relay' ? {
                     inputSchema: z.toJSONSchema(z.strictObject(registry.get(t.name)!.inputShape)),
                   } : {}),
                 })),
@@ -879,6 +881,7 @@ export interface XdtHelperMcpDeps {
    */
   botWorkbench?: BotWorkbenchCallbacks;
   appSettings?: AppSettingsCallbacks;
+  relayDeployment?: RelayDeploymentCallbacks;
   piRuntime?: PiRuntimeCallbacks;
   modelSettings?: AppModelsCallbacks;
   appModels?: Pick<BotCapabilityCallbacks, 'models' | 'setDefaultModel'>;
@@ -953,6 +956,7 @@ export function createXdtHelperMcpServer(
     if (context.remoteHostId) {
       defaultCategories.delete('app_update');
       defaultCategories.delete('settings');
+      defaultCategories.delete('relay');
     }
     const allow = (categories: ReadonlySet<string>): HelperSurfaceAllow => ({
       categories,
@@ -1148,6 +1152,7 @@ export function createXdtHelperMcpServer(
   if (deps.modelSettings) registerAppModelsTools(registry, deps.modelSettings, () => resolveLiziMcpSessionContext(sessionCtx));
   if (deps.piRuntime) registerPiRuntimeTools(registry, deps.piRuntime, () => resolveLiziMcpSessionContext(sessionCtx));
   if (deps.appSettings) registerAppSettingsTools(registry, deps.appSettings, () => resolveLiziMcpSessionContext(sessionCtx));
+  if (deps.relayDeployment) registerRelayDeploymentTools(registry, deps.relayDeployment, () => resolveLiziMcpSessionContext(sessionCtx));
   if (deps.appModels && !sessionCtx.remoteHostId) registerAppDefaultModelTools(registry, {
     getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx),
     callbacks: deps.appModels, category: 'settings',

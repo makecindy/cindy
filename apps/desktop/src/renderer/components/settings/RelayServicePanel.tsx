@@ -12,6 +12,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import { useTranslation } from 'react-i18next';
+import { useNavigate } from 'react-router-dom';
 import {
   ArrowRightLeft,
   Check,
@@ -26,6 +27,7 @@ import {
   Plus,
   RefreshCw,
   Server,
+  Sparkles,
   Settings2,
   Trash2,
   TriangleAlert,
@@ -41,6 +43,8 @@ import { Spinner } from '@/components/ui/spinner';
 import { Tip } from '@/components/ui/tooltip';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
+import { mapIpcErrorToI18nKey } from '@/utils/ipcError';
+import { buildRelayAgentPrompt, createRelayAgentTask, type RelayAgentAction } from './relayAgentTask';
 import {
   DEFAULT_RELAY_PORT,
   normalizeRelayAddress,
@@ -1526,11 +1530,13 @@ function ServerDetails({
   deployment,
   controller,
   status,
+  onAgentAction,
 }: {
   state: SelfHostedRelayState;
   deployment: SelfHostedRelayDeploymentView;
   controller: SelfHostedRelayController;
   status: SelfHostedRelayDeploymentStatus | null;
+  onAgentAction: (action: RelayAgentAction, deployment: SelfHostedRelayDeploymentView) => void;
 }) {
   const { t } = useTranslation();
   const job = state.deployJob;
@@ -1566,16 +1572,18 @@ function ServerDetails({
           label={t(`${MANAGE}.version`)}
           value={deployment.relayVersion}
           sub={
-            deployment.upgradeAvailable ? (
+            deployment.managedBy === 'agent' || deployment.upgradeAvailable ? (
               <Button
                 variant="secondary"
                 size="xs"
                 compact
                 className="mt-1"
                 disabled={busy}
-                onClick={() => void controller.run({ type: 'upgrade-deployment', relayId: deployment.relayId })}
+                onClick={() => deployment.managedBy === 'agent'
+                  ? onAgentAction('upgrade', deployment)
+                  : void controller.run({ type: 'upgrade-deployment', relayId: deployment.relayId })}
               >
-                {t(`${SERVER}.upgrade`, { version: state.bundledRelayVersion ?? '' })}
+                {deployment.managedBy === 'agent' ? t('settings.remoteControl.relay.agent.upgrade') : t(`${SERVER}.upgrade`, { version: state.bundledRelayVersion ?? '' })}
               </Button>
             ) : (
               t(`${MANAGE}.latest`)
@@ -1597,22 +1605,45 @@ function ServerDetails({
  */
 export function RelayServicePanel({ controller }: { controller: SelfHostedRelayController }) {
   const { t } = useTranslation();
+  const navigate = useNavigate();
   const confirmDialog = useOptionalConfirmDialog();
   const confirm = useConfirm();
-  const [form, setForm] = useState<'none' | 'host' | 'join'>('none');
+  const [form, setForm] = useState<'none' | 'host' | 'join' | 'agent'>('none');
+  const [agentHostId, setAgentHostId] = useState('');
+  const [agentStarting, setAgentStarting] = useState(false);
+  const agentStartingRef = useRef(false);
   const [deployOpen, setDeployOpen] = useState(false);
   const [deployInitial, setDeployInitial] = useState<DeployTarget | null>(null);
   const [deployInForm, setDeployInForm] = useState(false);
   const [deployOpenKey, setDeployOpenKey] = useState(0);
   const [renaming, setRenaming] = useState<SelfHostedRelayDeploymentView | null>(null);
   const { state, error } = controller;
-  const hosts = useSshHosts(Boolean(state?.available), deployOpen);
+  const hosts = useSshHosts(Boolean(state?.available), deployOpen || form === 'agent');
   const k = 'settings.remoteControl.relay';
   const job = state?.deployJob ?? null;
   const previousJobStatus = useRef(job?.status);
   // 详情只给正在用的那个服务器中转:没在用时设备数、证书等没有意义,也不去请求。
   const activeServer = state?.deployments.find((deployment) => deployment.active && deployment.relayVersion) ?? null;
   const deploymentStatus = useDeploymentStatus(state?.available ? activeServer?.relayId ?? null : null);
+
+  const openAgentTask = async (action: RelayAgentAction, deployment?: SelfHostedRelayDeploymentView) => {
+    if (agentStartingRef.current) return;
+    agentStartingRef.current = true;
+    setAgentStarting(true);
+    try {
+      const prompt = buildRelayAgentPrompt(t, action, {
+        host: action === 'deploy' ? hosts?.find((host) => host.id === agentHostId) : undefined,
+        deployment,
+      });
+      const id = await createRelayAgentTask(t(`${k}.agent.title`), prompt);
+      if (id) navigate(`/cc-agent/${id}`);
+    } catch (error) {
+      toast.error(t(mapIpcErrorToI18nKey(error, { fallback: 'settings.remote.startSession.createFailed' })));
+    } finally {
+      agentStartingRef.current = false;
+      setAgentStarting(false);
+    }
+  };
 
   // 移除完成后这一行随之消失,用一条提示说明结果。
   useEffect(() => {
@@ -1674,9 +1705,13 @@ export function RelayServicePanel({ controller }: { controller: SelfHostedRelayC
     const deployment = state.deployments.find((item) => item.relayId === relayId);
     if (deployment) void switchToDeployment(deployment);
   };
-  const removeDeployment = (relayId: string) => {
+  const removeDeployment = (deployment: SelfHostedRelayDeploymentView) => {
+    if (deployment.managedBy === 'agent') {
+      void openAgentTask('remove', deployment);
+      return;
+    }
     void confirm(t(`${SERVER}.removeTitle`), t(`${SERVER}.removeDescription`), t(`${SERVER}.remove`)).then((ok) => {
-      if (ok) void controller.run({ type: 'uninstall-deployment', relayId, removeData: true });
+      if (ok) void controller.run({ type: 'uninstall-deployment', relayId: deployment.relayId, removeData: true });
     });
   };
   /** `inForm`:直接显示表单(新部署、继续某条记录);否则跟着当前部署任务显示进度。 */
@@ -1688,7 +1723,7 @@ export function RelayServicePanel({ controller }: { controller: SelfHostedRelayC
     setDeployOpenKey((value) => value + 1);
     setDeployOpen(true);
   };
-  const openForm = (next: 'host' | 'join') => {
+  const openForm = (next: 'host' | 'join' | 'agent') => {
     controller.clearError();
     setForm(next);
   };
@@ -1736,11 +1771,15 @@ export function RelayServicePanel({ controller }: { controller: SelfHostedRelayC
     ) : removing ? (
       runningHint(t(`${DEPLOY}.running.uninstall`))
     ) : needsResume ? (
-      t(`${DEPLOY}.failed.deploy`)
+      t(deployment.managedBy === 'agent' ? `${ROUTE}.resume` : `${DEPLOY}.failed.deploy`)
     ) : (
       <span className="flex min-w-0 flex-wrap items-center gap-x-1.5">
         <span className="truncate">
-          {hostLabel(hosts, deployment.sshHostId)} · <span className="font-mono">{deployment.address}</span>
+          {deployment.managedBy === 'agent' ? (
+            <span className="font-mono">{deployment.baseUrl}</span>
+          ) : (
+            <>{hostLabel(hosts, deployment.sshHostId)} · <span className="font-mono">{deployment.address}</span></>
+          )}
         </span>
         {showStatus ? (
           <>
@@ -1761,10 +1800,12 @@ export function RelayServicePanel({ controller }: { controller: SelfHostedRelayC
       <Button
         variant="secondary"
         size="sm"
-        disabled={busy}
+        disabled={busy || agentStarting}
         onClick={() =>
           // 这一条刚失败过:回到它的进度看原因、重试;否则用记录里的设置打开表单。
-          rowJob?.action === 'deploy'
+          deployment.managedBy === 'agent'
+            ? void openAgentTask('resume', deployment)
+            : rowJob?.action === 'deploy'
             ? openDeploy(null, false)
             : openDeploy({ sshHostId: deployment.sshHostId, address: deployment.address, name: deployment.name, relayId: deployment.relayId }, true)
         }
@@ -1778,7 +1819,7 @@ export function RelayServicePanel({ controller }: { controller: SelfHostedRelayC
           <IconAction key="rename" label={t(`${ROUTE}.rename`)} disabled={busy} onClick={() => openRename(deployment)}>
             <Pencil aria-hidden size={14} />
           </IconAction>,
-          <IconAction key="remove" label={t(`${MANAGE}.remove`)} disabled={busy} onClick={() => removeDeployment(deployment.relayId)}>
+          <IconAction key="remove" label={t(`${MANAGE}.remove`)} disabled={busy || agentStarting} onClick={() => removeDeployment(deployment)}>
             <Trash2 aria-hidden size={14} />
           </IconAction>,
         ]}
@@ -1796,7 +1837,8 @@ export function RelayServicePanel({ controller }: { controller: SelfHostedRelayC
         side={side}
       >
         {inUse && complete && !removing ? (
-          <ServerDetails state={state} deployment={deployment} controller={controller} status={deploymentStatus.status} />
+          <ServerDetails state={state} deployment={deployment} controller={controller} status={deploymentStatus.status}
+            onAgentAction={(action, record) => void openAgentTask(action, record)} />
         ) : failedTask ? (
           <div className="rounded-lg border border-[var(--border-default)] px-3 py-3">
             <TaskPanel job={failedTask} controller={controller} />
@@ -1885,6 +1927,10 @@ export function RelayServicePanel({ controller }: { controller: SelfHostedRelayC
           ) : null}
           <li className="px-4 py-2">
             <div className="-mx-3 flex flex-wrap items-center gap-1">
+              <Button variant="secondary" size="sm" tone="quiet" compact disabled={agentStarting} onClick={() => openForm('agent')}>
+                <Sparkles aria-hidden size={13} />
+                {t(`${k}.agent.deploy`)}
+              </Button>
               <Button
                 variant="secondary"
                 size="sm"
@@ -1922,6 +1968,30 @@ export function RelayServicePanel({ controller }: { controller: SelfHostedRelayC
       {!deployOpen && form === 'none' && !renaming && error && error !== 'CANCELLED' ? (
         <CommandError error={error} port={state.host.port} detail={controller.errorDetail} />
       ) : null}
+      <FormDialog open={form === 'agent'} onClose={closeForm} title={t(`${k}.agent.deploy`)} description={t(`${k}.agent.hint`)}>
+        <div className="flex flex-col gap-3 px-4 pb-4">
+          <FieldRow label={t(`${DEPLOY}.server`)}>
+            <Select
+              label={t(`${k}.agent.serverPlaceholder`)}
+              value={agentHostId || "__choose_in_task__"}
+              className="w-full"
+              truncateOptions
+              onValueChange={(value) => setAgentHostId(value === "__choose_in_task__" ? "" : value)}
+              options={[
+                { value: '__choose_in_task__', label: t(`${k}.agent.serverPlaceholder`) },
+                ...(hosts ?? []).map((host) => ({ value: host.id, label: hostOptionLabel(host) })),
+              ]}
+            />
+          </FieldRow>
+        </div>
+        <DialogFooter>
+          <Button variant="secondary" size="sm" onClick={closeForm}>{t(`${DEPLOY}.cancel`)}</Button>
+          <Button variant="cta" size="sm" disabled={agentStarting} onClick={() => void openAgentTask('deploy')}>
+            {agentStarting ? <Spinner size={13} /> : null}
+            {t(`${k}.agent.continue`)}
+          </Button>
+        </DialogFooter>
+      </FormDialog>
       <FormDialog
         open={form === 'host'}
         onClose={closeForm}

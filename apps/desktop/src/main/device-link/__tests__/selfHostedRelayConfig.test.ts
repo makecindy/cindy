@@ -74,3 +74,30 @@ it('reads a legacy single deployment and writes the list with a legacy copy olde
   invalidateRelayConfigCache();
   expect(readRelayConfig().deployments).toEqual([deployment(1), second]);
 });
+
+// Agent 线路可能使用容器或非 root 服务；旧客户端不能丢掉 managedBy 后用固定 systemd 卸载器接管。
+// runtime fake 不经过磁盘解析；最小输入：两条 sshHostId 为空的 Agent 记录和一条旧部署。tier: unit。
+it('preserves multiple agent deployments while keeping the legacy installer projection separate', () => {
+  const agent = (index: number): RelayDeployment => ({ ...deployment(index), managedBy: 'agent', deploymentKey: `agent-${index}`,
+    sshHostId: '', ownerDeviceId: 'device', metadata: { sshHostId: 'real-ssh', runtime: 'container', programDir: '/srv/cindy' } });
+  const first = agent(2);
+  const pending = { ...agent(3), address: '', baseUrl: '', complete: false, relayVersion: '' };
+  writeRelayConfig({ version: 2, host, active: { relayId: first.relayId, name: first.name, baseUrl: first.baseUrl, role: 'owner', origin: 'server', deviceId: 'device', ownerPublicKey: KEY }, deployments: [deployment(1), first, pending] });
+  expect(JSON.parse(files.get(CONFIG)!).deployment).toEqual(deployment(1));
+  invalidateRelayConfigCache();
+  expect(readRelayConfig().deployments).toEqual([deployment(1), first, pending]);
+  writeRelayConfig({ ...readRelayConfig(), deployments: [first, pending] });
+  expect(JSON.parse(files.get(CONFIG)!).deployment).toBeNull();
+});
+
+// PR #8779 P1：重启后仍须区分最后上传位置与已核验的运行位置；runtime fake 不经过实际配置解析。
+// 最小输入：两个不同 SSH/目录的 metadata 与 lastUpload，同一条记录写入并重新加载。tier: unit。
+it('persists an upload receipt independently of the verified installation metadata', () => {
+  const lastUpload = { sshHostId: 'staging-ssh', remoteDir: '/srv/staging', bundlePath: '/srv/staging/relay.mjs', initPath: '/srv/staging/init.json',
+    bundleSha256: 'a'.repeat(64), initSha256: 'b'.repeat(64), uploadedAt: '2026-11-05T01:00:00.000Z' };
+  const record = { ...deployment(1), managedBy: 'agent' as const, deploymentKey: 'agent-staging', sshHostId: '', ownerDeviceId: 'device',
+    metadata: { sshHostId: 'live-ssh', programDir: '/opt/live-relay', dataDir: '/var/lib/live-relay' }, lastUpload };
+  writeRelayConfig({ version: 2, host, active: null, deployments: [record] });
+  invalidateRelayConfigCache();
+  expect(readRelayConfig().deployments).toEqual([record]);
+});

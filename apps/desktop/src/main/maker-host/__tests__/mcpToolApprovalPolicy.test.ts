@@ -498,6 +498,15 @@ describe('helper task workspace and SkillHub publication authorization', () => {
     expect(policy('call_tool', { name: 'get_teammate_home', args: { teammate_id: 'mia' } })).not.toBe('prompt-each-time');
   });
 
+  it('routes relay writes through the task permission mode while keeping local state reads available', () => {
+    for (const name of ['prepare_relay_deployment', 'upload_relay_deployment', 'complete_relay_deployment',
+      'use_relay_deployment', 'use_official_relay', 'forget_relay_deployment']) {
+      expect(policy('call_tool', { name, args: {} })).toBe('prompt-each-time');
+      expect(policy(name, {})).toBe('prompt-each-time');
+    }
+    expect(policy('call_tool', { name: 'get_relay_deployments', args: {} })).toBe('auto-approve');
+  });
+
   it('does not infer a safe helper action from missing or malformed evidence', () => {
     for (const params of [undefined, null, [], 'invalid JSON', {}, { name: '' }, { name: 42 }]) {
       expect(policy('call_tool', params)).toBe('prompt-each-time');

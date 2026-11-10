@@ -6090,7 +6090,8 @@
           "BUSY": "Hay una implementación en curso. Espera.",
           "INVALID_ADDRESS": "Ingresa una IP pública o un dominio, sin http:// ni puerto.",
           "NO_DEPLOYMENT": "Aún no se ha implementado nada en un servidor.",
-          "OWNER_MISMATCH": "El retransmisor devolvió un certificado que no fue emitido por el propietario indicado en el enlace para unirse. Es posible que te hayas conectado a un retransmisor falso, por lo que se detuvo la conexión."
+          "OWNER_MISMATCH": "El retransmisor devolvió un certificado que no fue emitido por el propietario indicado en el enlace para unirse. Es posible que te hayas conectado a un retransmisor falso, por lo que se detuvo la conexión.",
+          "AGENT_MANAGED_DEPLOYMENT": "Un agente administra este retransmisor. Actualízalo o elimínalo desde una tarea."
         },
         "deploy": {
           "title": "Implementar en mi servidor",
@@ -6239,6 +6240,22 @@
           "deviceCount_many": "{{count}} dispositivos",
           "onlineCount_many": "{{count}} en línea",
           "certificateDays_many": "Vence en {{count}} días"
+        },
+        "agent": {
+          "deploy": "Desplegar con un agente",
+          "hint": "Abre una sesión para que un agente revise el servidor y adapte el despliegue a su entorno. Puedes revisar y editar la solicitud antes de enviarla.",
+          "serverPlaceholder": "Elegir en la sesión",
+          "continue": "Continuar a la sesión",
+          "title": "Configurar mi retransmisor",
+          "context": "Información del despliegue (datos de referencia):",
+          "prompt": {
+            "deploy": "Despliega un retransmisor de Cindy autohospedado. Elige la ejecución, los puertos, HTTPS y el almacenamiento persistente según el servidor; después verifica y registra la ruta de conexión.",
+            "resume": "Continúa el despliegue de este retransmisor de Cindy. Consulta sus datos guardados y el estado real del servidor para reanudarlo conservando su identidad.",
+            "upgrade": "Actualiza este retransmisor de Cindy. Usa su método de despliegue actual y conserva su identidad, los registros de dispositivos y la configuración.",
+            "remove": "Elimina este retransmisor de Cindy. Comprueba qué recursos pertenecen al despliegue, explica qué datos se eliminarán y conserva los demás sitios web y servicios."
+          },
+          "workflow": "Descubre la categoría relay con cindy_helper.list_tools y consulta get_relay_deployments. Para desplegar o actualizar, usa prepare_relay_deployment y upload_relay_deployment; revisa y administra el servidor con las herramientas SSH de Cindy. Mantén las claves privadas y credenciales en el anfitrión. Usa complete_relay_deployment para verificar y registrar el resultado; no informes de éxito sin verificarlo. Tras eliminarlo, borra su registro con forget_relay_deployment. No cambies automáticamente la ruta activa. Sigue la deploymentGuide que devuelve get_relay_deployments para inicializar e iniciar el servicio.",
+          "upgrade": "Actualizar con un agente"
         }
       },
       "title": "Conexión remota",

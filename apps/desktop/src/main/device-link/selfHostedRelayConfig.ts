@@ -18,7 +18,7 @@ import { isRelayPublicKey } from '@cindy/device-link';
 import { activeOwnerScopeKey, getActiveAppSession, ownerScopedUserDataPath } from '../appSessionState.js';
 import { createLogger } from '../logger.js';
 import { oauthSecureStorageAvailable } from '../plugin-oauth/identityStore.js';
-import { DEFAULT_RELAY_PORT } from '../../shared/selfHostedRelay.js';
+import { DEFAULT_RELAY_PORT, parseAgentRelayDeploymentMetadata, parseAgentRelayUploadRecord, type AgentRelayDeploymentMetadata, type AgentRelayUploadRecord } from '../../shared/selfHostedRelay.js';
 import { setSelfHostedRelaySource, type ActiveSelfHostedRelay } from './selfHostedRelayRouting.js';
 
 const log = createLogger('self-hosted-relay:config');
@@ -53,6 +53,12 @@ export interface RelayHostSettings {
 
 /** 部署到服务器上的中转(本机是它的主人)。 */
 export interface RelayDeployment {
+  managedBy?: 'agent';
+  deploymentKey?: string;
+  metadata?: AgentRelayDeploymentMetadata;
+  lastUpload?: AgentRelayUploadRecord;
+  /** Agent 准备身份时绑定的本机设备，不能在设备身份变更后重新签成另一个主人。 */
+  ownerDeviceId?: string;
   sshHostId: string;
   /** 访问地址:域名或公网 IP(证书签给它)。 */
   address: string;
@@ -143,10 +149,11 @@ function parseActive(raw: unknown): ActiveRelay | null {
 function parseDeployment(raw: unknown): RelayDeployment | null {
   if (!raw || typeof raw !== 'object') return null;
   const d = raw as Record<string, unknown>;
+  const agent = d.managedBy === 'agent';
+  const lastUpload = agent ? parseAgentRelayUploadRecord(d.lastUpload) : null;
   if (
-    !isString(d.sshHostId) ||
-    !isString(d.address) ||
-    !isString(d.baseUrl) ||
+    (agent ? d.sshHostId !== '' || !isString(d.deploymentKey) || !isString(d.ownerDeviceId) : !isString(d.sshHostId)) ||
+    (agent ? typeof d.address !== 'string' || typeof d.baseUrl !== 'string' : !isString(d.address) || !isString(d.baseUrl)) ||
     !isString(d.relayId) ||
     !RELAY_ID_PATTERN.test(d.relayId) ||
     !isString(d.name) ||
@@ -157,9 +164,12 @@ function parseDeployment(raw: unknown): RelayDeployment | null {
     return null;
   }
   return {
-    sshHostId: d.sshHostId,
-    address: d.address,
-    baseUrl: d.baseUrl,
+    ...(agent ? { managedBy: 'agent' as const, deploymentKey: d.deploymentKey as string, ownerDeviceId: d.ownerDeviceId as string,
+      metadata: parseAgentRelayDeploymentMetadata(d.metadata) ?? {} } : {}),
+    ...(lastUpload ? { lastUpload } : {}),
+    sshHostId: d.sshHostId as string,
+    address: d.address as string,
+    baseUrl: d.baseUrl as string,
     relayId: d.relayId,
     name: d.name,
     ownerPublicKey: d.ownerPublicKey,
@@ -175,7 +185,8 @@ function parseDeployments(value: Record<string, unknown>): RelayDeployment[] {
   const result: RelayDeployment[] = [];
   for (const item of raw) {
     const deployment = parseDeployment(item);
-    if (deployment && !result.some((d) => d.relayId === deployment.relayId || d.sshHostId === deployment.sshHostId)) {
+    if (deployment && !result.some((d) => d.relayId === deployment.relayId ||
+      (deployment.managedBy === 'agent' ? d.managedBy === 'agent' && d.deploymentKey === deployment.deploymentKey : d.sshHostId === deployment.sshHostId))) {
       result.push(deployment);
     }
   }
@@ -204,7 +215,9 @@ function parseConfig(raw: unknown): RelayConfig {
 
 /** 写给旧版本看的那一条:正在用的优先,否则第一条。 */
 function legacyDeployment(config: RelayConfig): RelayDeployment | null {
-  return config.deployments.find((d) => d.relayId === config.active?.relayId) ?? config.deployments[0] ?? null;
+  // 旧版忽略 managedBy，不能把 Agent 的容器/用户服务误认作它的 systemd 安装。
+  const legacy = config.deployments.filter((d) => d.managedBy !== 'agent');
+  return legacy.find((d) => d.relayId === config.active?.relayId) ?? legacy[0] ?? null;
 }
 
 function secretsFile(relayId: string): string {

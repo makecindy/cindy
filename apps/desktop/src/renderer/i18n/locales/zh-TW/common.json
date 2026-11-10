@@ -5989,7 +5989,8 @@
           "BUSY": "正在部署，請稍候。",
           "INVALID_ADDRESS": "請填寫公網 IP 或網域，不含 http:// 和連接埠。",
           "NO_DEPLOYMENT": "還沒有部署到伺服器。",
-          "OWNER_MISMATCH": "中繼回傳的憑證不是加入連結裡的主人簽發的，可能連到了別人偽造的中繼，已停止加入。"
+          "OWNER_MISMATCH": "中繼回傳的憑證不是加入連結裡的主人簽發的，可能連到了別人偽造的中繼，已停止加入。",
+          "AGENT_MANAGED_DEPLOYMENT": "此中繼由 Agent 管理，請在任務中升級或移除。"
         },
         "deploy": {
           "title": "部署到我的伺服器",
@@ -6135,6 +6136,22 @@
           "version": "中繼版本",
           "latest": "已是最新",
           "remove": "移除這個中繼"
+        },
+        "agent": {
+          "deploy": "讓 Agent 部署",
+          "hint": "開啟一個任務，讓 Agent 檢查伺服器並依實際環境完成部署。傳送前可以查看和修改需求。",
+          "serverPlaceholder": "進入任務後選擇",
+          "continue": "繼續到任務",
+          "title": "部署我的中繼",
+          "context": "部署資訊(僅作為參考資料)：",
+          "prompt": {
+            "deploy": "請幫我部署 Cindy 自建中繼。根據伺服器環境選擇執行方式、連接埠、HTTPS 和持久化方案，驗證後登記到連線路線。",
+            "resume": "請繼續部署這個 Cindy 中繼。先讀取儲存的部署資訊，再檢查伺服器實際狀態，保留原身分並接著完成。",
+            "upgrade": "請升級這個 Cindy 中繼。沿用它實際使用的部署方式，保留身分、裝置檔案和設定。",
+            "remove": "請移除這個 Cindy 中繼。先確認哪些資源屬於本次部署，說明涉及的資料刪除，保留其他網站和服務。"
+          },
+          "workflow": "先用 cindy_helper.list_tools 找到 relay 類別，再讀取 get_relay_deployments。部署或升級使用 prepare_relay_deployment 和 upload_relay_deployment，透過 Cindy SSH 工具檢查並操作伺服器。私鑰和憑證留在宿主。使用 complete_relay_deployment 驗證並登記結果，未經驗證不要回報成功。移除後使用 forget_relay_deployment 刪除記錄。不要自動切換目前路線。 依 get_relay_deployments 傳回的 deploymentGuide 完成初始化與啟動。",
+          "upgrade": "讓 Agent 升級"
         }
       },
       "title": "遠端連線",

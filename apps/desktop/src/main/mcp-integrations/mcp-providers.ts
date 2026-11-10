@@ -5,6 +5,14 @@ import { manageAppSettings } from '../app-settings/sections.js';
 import { manageAppModels } from '../app-settings/models.js';
 import { classifyOrigin } from '../input-handoff/originPolicy.js';
 import { captureBotSettingsAccess } from '../maker-ipc/botCapabilityService.js';
+import {
+  getAgentRelayState,
+  projectAgentRelayState,
+  prepareAgentRelayDeployment,
+  uploadAgentRelayDeployment,
+  registerAgentRelayDeployment,
+  executeSelfHostedRelayCommand,
+} from '../device-link/selfHostedRelayRuntime.js';
 import { inspectAppDefaultModel, changeAppDefaultModel } from '../maker-ipc/appDefaultModelControl.js';
 import { hostname } from 'node:os';
 import { isSessionSharedTaskActive } from '../device-link/sharedTaskDispatch.js';
@@ -1450,6 +1458,38 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
             if (botGuard) await botGuard();
             if (input.operation === 'update' || input.operation === 'reset') await assertTaskActionCurrent();
           });
+        }),
+      },
+      relayDeployment: {
+        call: ({ callerSessionId, ...input }) => withAccountDataAccess(callerSessionId, async (assertCurrent) => {
+          const surface = await resolveHelperSurface(tryGetDbClient()!, callerSessionId);
+          const botGuard = surface === 'bot' || surface === 'bot-main'
+            ? await captureBotSettingsAccess(callerSessionId)
+            : undefined;
+          const guard = async () => {
+            await assertCurrent();
+            if (botGuard) await botGuard();
+            if (input.operation !== 'list') await assertTaskActionCurrent();
+          };
+          await guard();
+          if (input.operation === 'list') return { scope: 'local', state: getAgentRelayState() };
+          const options = { assertCurrent: guard };
+          const result = input.operation === 'prepare'
+            ? await prepareAgentRelayDeployment(input, options)
+            : input.operation === 'upload'
+              ? await uploadAgentRelayDeployment(input, options)
+              : input.operation === 'complete'
+                ? await registerAgentRelayDeployment(input, options)
+                : input.operation === 'use-official'
+                  ? await executeSelfHostedRelayCommand({ type: 'use-official' }, options)
+                  : await executeSelfHostedRelayCommand({
+                    type: input.operation === 'use' ? 'use-deployment' : 'forget-deployment',
+                    relayId: input.relayId,
+                  }, options);
+          await guard();
+          return result.error
+            ? { ok: false, errorCode: result.error, message: 'Relay operation was not confirmed. Read get_relay_deployments before retrying.' }
+            : { ...result, state: projectAgentRelayState(result.state), scope: 'local' };
         }),
       },
       appModels: {

@@ -6090,7 +6090,8 @@
           "BUSY": "Un déploiement est en cours. Veuillez patienter.",
           "INVALID_ADDRESS": "Saisissez une IP publique ou un domaine, sans http:// ni port.",
           "NO_DEPLOYMENT": "Rien n'a encore été déployé sur un serveur.",
-          "OWNER_MISMATCH": "Le relais a renvoyé un certificat qui n'a pas été émis par le propriétaire indiqué dans le lien d'invitation. Vous êtes peut-être connecté à un faux relais : la connexion a donc été interrompue."
+          "OWNER_MISMATCH": "Le relais a renvoyé un certificat qui n'a pas été émis par le propriétaire indiqué dans le lien d'invitation. Vous êtes peut-être connecté à un faux relais : la connexion a donc été interrompue.",
+          "AGENT_MANAGED_DEPLOYMENT": "Ce relais est géré par un Agent. Mettez-le à niveau ou supprimez-le depuis une tâche."
         },
         "deploy": {
           "title": "Déployer sur mon serveur",
@@ -6239,6 +6240,22 @@
           "deviceCount_many": "{{count}} appareils",
           "onlineCount_many": "{{count}} en ligne",
           "certificateDays_many": "Expire dans {{count}} jours"
+        },
+        "agent": {
+          "deploy": "Déployer avec un Agent",
+          "hint": "Ouvrez une session pour qu’un Agent examine votre serveur et adapte le déploiement à son environnement. Vous pourrez vérifier et modifier la demande avant de l’envoyer.",
+          "serverPlaceholder": "Choisir dans la session",
+          "continue": "Continuer vers la session",
+          "title": "Configurer mon relais",
+          "context": "Informations de déploiement (données de référence) :",
+          "prompt": {
+            "deploy": "Déployez un relais Cindy auto-hébergé. Choisissez le mode d’exécution, les ports, HTTPS et le stockage persistant adaptés au serveur, puis vérifiez et enregistrez la route de connexion.",
+            "resume": "Poursuivez le déploiement de ce relais Cindy. Consultez les informations enregistrées et l’état réel du serveur pour reprendre en conservant son identité.",
+            "upgrade": "Mettez à niveau ce relais Cindy. Utilisez sa méthode de déploiement actuelle et conservez son identité, les données des appareils et sa configuration.",
+            "remove": "Supprimez ce relais Cindy. Vérifiez les ressources appartenant à ce déploiement, expliquez quelles données seront supprimées et préservez les autres sites et services."
+          },
+          "workflow": "Découvrez la catégorie relay avec cindy_helper.list_tools, puis consultez get_relay_deployments. Pour déployer ou mettre à niveau, utilisez prepare_relay_deployment et upload_relay_deployment ; examinez et gérez le serveur avec les outils SSH de Cindy. Gardez les clés privées et les identifiants dans l’hôte. Utilisez complete_relay_deployment pour vérifier et enregistrer le résultat ; n’annoncez pas de réussite sans vérification. Après la suppression, effacez l’enregistrement avec forget_relay_deployment. Ne changez pas automatiquement la route active. Suivez le deploymentGuide renvoyé par get_relay_deployments pour initialiser et démarrer le service.",
+          "upgrade": "Mettre à niveau avec un Agent"
         }
       },
       "title": "Connexion à distance",
