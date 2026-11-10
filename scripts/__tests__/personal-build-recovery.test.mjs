@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
+import { once } from 'node:events';
 import { main } from '../personal-build.mjs';
 import { RecoveryJournal, compatibility, durableWrite } from '../personal-build/recovery.mjs';
 import { blockedAutomaticCandidate, launchSelected, trial, startTrial, readHeartbeat, acquire, validateBootstrap, validateManualUpgrade, restartWithSupervisorLock, waitForOwnedShutdown, fixedAppProcesses } from '../personal-build/automatic.mjs';
@@ -414,6 +415,46 @@ test('supervisor handoff binds owner and app generation and releases without sto
    publishSupervisorControl(lock,{...identity,appPid:43});
    await assert.rejects(requestSupervisorRelease(lock,42),/identity changed/);
  }finally{nextUnlock();}
+});
+
+// Script integration: the in-process handoff test cannot catch mismatched process ownership.
+// Two real processes exchange the production on-disk request; no app, TTY or user state is touched.
+test('supervisor handoff releases a different process lock while its owner stays alive', {timeout:5000}, async t => {
+  const { requestSupervisorRelease } = await import('../personal-build/supervisor-handoff.mjs');
+  const f = fixture(t), lock = path.join(f.dir, 'supervisor.lock');
+  const child = spawn(process.execPath, ['--input-type=module', '-e', `
+    const {acquire} = await import(process.argv[2]);
+    const {publishSupervisorControl,shouldYieldSupervisor} = await import(process.argv[3]);
+    const lock=process.argv[1], identity={appPid:42,generation:'test-generation',releaseId:'good'};
+    const unlock=acquire(lock); publishSupervisorControl(lock,identity);
+    process.on('message', message => {
+      if(message==='finish') { process.disconnect(); return; }
+      const yieldNow=shouldYieldSupervisor(lock,identity);
+      if(yieldNow) unlock();
+      process.send({yielded:yieldNow});
+    });
+    process.send({ready:true});
+  `, lock, new URL('../personal-build/lock.mjs', import.meta.url).href,
+  new URL('../personal-build/supervisor-handoff.mjs', import.meta.url).href],
+  { stdio: ['ignore', 'ignore', 'pipe', 'ipc'] });
+  const exited = once(child, 'exit');
+  t.after(async () => { if(child.exitCode===null && child.signalCode===null) child.kill(); await exited; });
+  const [ready] = await once(child, 'message');
+  assert.equal(ready.ready, true);
+  assert.throws(() => acquire(lock), /Already running/);
+  const exchange = async () => {
+    const reply = once(child, 'message'); child.send('inspect'); return (await reply)[0];
+  };
+  const result = await requestSupervisorRelease(lock, 42, { wait: exchange });
+  assert.equal(result.supervisorPid, child.pid);
+  assert.equal(result.released, true);
+  assert.equal(child.exitCode, null); // Yielding supervision must not end the terminal's owner.
+  const nextUnlock = acquire(lock);
+  try { assert.deepEqual(await exchange(), {yielded:false}); }
+  finally { nextUnlock(); }
+  child.send('finish');
+  const [code] = await exited;
+  assert.equal(code, 0);
 });
 
 test('pre-spawn failure can be checked and retried, and recovered supervision failure stays distinct',async t=>{

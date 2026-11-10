@@ -1,4 +1,31 @@
 {
+  "pushDiagnostics": {
+    "title": "Push diagnostics",
+    "read": "Read push status",
+    "busy": "Reading…",
+    "failed": "Could not read push status. Please try again.",
+    "copyFailed": "Could not copy the token.",
+    "copied": "Token copied.",
+    "bundle": "App ID",
+    "build": "Build",
+    "environment": "APNs environment",
+    "permission": "System permission",
+    "alerts": "Alerts",
+    "lockScreen": "Lock screen",
+    "notificationCenter": "Notification Center",
+    "copy": "Copy APNs token",
+    "hide": "Hide result",
+    "unknown": "Unknown",
+    "on": "On",
+    "off": "Off",
+    "hint": "Read only when requested. The APNs token is shown locally, never saved in diagnostics or uploaded by this tool, and hidden when you leave or background this screen. Copy only for Apple’s Push Notifications Console; copied text remains in your clipboard.",
+    "permissions": {
+      "granted": "Allowed",
+      "denied": "Denied",
+      "undetermined": "Not requested",
+      "provisional": "Quiet delivery"
+    }
+  },
   "localLogs": {
     "upload": "Upload logs",
     "uploadResult": {
