@@ -365,6 +365,7 @@ function createMakerHarness(session: Session) {
   return {
     getSession: vi.fn(() => session),
     createSession: vi.fn(async () => session),
+    recyclePiRuntimeIfResourcesDrifted: vi.fn(async () => false),
     on: vi.fn((listener: (event: MakerEvent) => void) => {
       makerEventListeners.push(listener);
       return () => {
@@ -1440,6 +1441,7 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     let live: Session | undefined = oldSession.session;
     const maker = {
       createSession: vi.fn(async () => oldSession.session),
+      recyclePiRuntimeIfResourcesDrifted: vi.fn(async () => false),
       getSession: vi.fn(() => live),
       on: vi.fn((listener: (event: MakerEvent) => void) => {
         makerEventListeners.push(listener);
@@ -1940,6 +1942,7 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     let live: Session | undefined = oldSession.session;
     const maker = {
       createSession: vi.fn(async () => oldSession.session),
+      recyclePiRuntimeIfResourcesDrifted: vi.fn(async () => false),
       getSession: vi.fn(() => live),
       on: vi.fn((listener: (event: MakerEvent) => void) => {
         makerEventListeners.push(listener);
@@ -1997,6 +2000,7 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
       let live: Session | undefined = oldSession.session;
       const maker = {
         createSession: vi.fn(async () => oldSession.session),
+      recyclePiRuntimeIfResourcesDrifted: vi.fn(async () => false),
         getSession: vi.fn(() => live),
         on: vi.fn((listener: (event: MakerEvent) => void) => {
           makerEventListeners.push(listener);
@@ -2097,6 +2101,7 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
       let live: Session | undefined = oldSession.session;
       mocks.getMaker.mockReturnValue({
         createSession: vi.fn(async () => oldSession.session),
+      recyclePiRuntimeIfResourcesDrifted: vi.fn(async () => false),
         getSession: vi.fn(() => live),
         on: vi.fn((listener: (event: MakerEvent) => void) => {
           makerEventListeners.push(listener);
@@ -2166,6 +2171,7 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     const releaseLock = vi.fn();
     mocks.getMaker.mockReturnValue({
       createSession: vi.fn(async () => oldSession.session),
+      recyclePiRuntimeIfResourcesDrifted: vi.fn(async () => false),
       getSession: vi.fn(() => live),
       on: vi.fn((listener: (event: MakerEvent) => void) => {
         makerEventListeners.push(listener);
@@ -2247,6 +2253,7 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     let live: Session | undefined = oldSession.session;
     const maker = {
       createSession: vi.fn(async () => oldSession.session),
+      recyclePiRuntimeIfResourcesDrifted: vi.fn(async () => false),
       getSession: vi.fn(() => live),
       on: vi.fn((listener: (event: MakerEvent) => void) => {
         makerEventListeners.push(listener);
@@ -4865,6 +4872,7 @@ describe('初始流式输出面创建失败的收口降级(#2164)', () => {
       let wired = false;
       return {
         getSession: vi.fn(() => (wired ? session : undefined)),
+        recyclePiRuntimeIfResourcesDrifted: vi.fn(async () => false),
         createSession: vi.fn(async () => {
           order.push('wire');
           wired = true;

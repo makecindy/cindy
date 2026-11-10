@@ -246,8 +246,11 @@ import {
   assertPiSpawnArgvFitsPlatform,
   collectPiProjectResourceCliPaths,
   emptyPiProjectResourceCliPaths,
+  type PiProjectResourceCliPaths,
   filterPiProjectCliSkills,
   piProjectResourceCliArgs,
+  piProjectResourcesDrifted,
+  snapshotPiProjectResourceLaunch,
 } from './project-resource-cli.js';
 import {
   createPiTranslateContext,
@@ -4065,20 +4068,30 @@ export class PiAgent extends BaseAgent {
     // Local root tasks load project skills/prompts/extensions in place via
     // explicit CLI flags. Keep --no-approve so `.pi/settings.json` is unread.
     // 受邀者：只要会话目录内的技能与提示词模板，项目扩展不加载(会在本机执行)。
-    const collectedProjectResources = loadProjectResourcesInPlace
-      ? guestRoot
-        ? restrictPiGuestProjectResources(collectPiProjectResourceCliPaths(opts.workingDir), guestRoot)
-        : collectPiProjectResourceCliPaths(opts.workingDir)
-      : emptyPiProjectResourceCliPaths();
+    // 采集只发生这一次:其结果既是 argv 资源段,也是漂移检测的基准。漂移判定
+    // 复用同一个 collector 重新采集后逐项比较(见 piProjectResourcesDrifted),
+    // 不另存任何基线 —— 存基线就等于手写一份「collector 消费什么」的镜像,
+    // 镜像与实现必然分歧(2026-11-10 六轮漏检全部出在这里)。
+    // spawn 时冻结的停用清单:argv 与漂移比较都必须用这一份,否则「删掉一个
+    // 从未加载的停用 skill」会被当成漂移,白等一次冷启动(Greptile P2)。
+    const disabledSkillPathsAtLaunch = currentDisabledSkillLaunchPaths(disabledSkillLaunch);
+    // 采集 → argv 资源集合的唯一口径(受邀者裁剪 + 停用过滤)。启动与漂移比较
+    // 共用它,所以「比较口径」不可能与「实际 argv」分叉。
+    const projectResourceToCliPaths = (collected: PiProjectResourceCliPaths): PiProjectResourceCliPaths => {
+      const scoped = guestRoot ? restrictPiGuestProjectResources(collected, guestRoot) : collected;
+      return {
+        ...scoped,
+        skills: filterPiProjectCliSkills(scoped.skills, disabledSkillPathsAtLaunch),
+      };
+    };
     const projectResourceCli = loadProjectResourcesInPlace
-      ? {
-          ...collectedProjectResources,
-          skills: filterPiProjectCliSkills(
-            collectedProjectResources.skills,
-            currentDisabledSkillLaunchPaths(disabledSkillLaunch),
-          ),
-        }
-      : collectedProjectResources;
+      ? projectResourceToCliPaths(collectPiProjectResourceCliPaths(opts.workingDir))
+      : emptyPiProjectResourceCliPaths();
+    // 启动快照:供运行时空闲时的资源漂移检测(见 handle.hasProjectResourceDrift)。
+    // 只存 argv 实际用的集合与该口径 —— 没有第二份基线。
+    const projectResourceLaunchSnapshot = loadProjectResourcesInPlace
+      ? snapshotPiProjectResourceLaunch(opts.workingDir, projectResourceCli, projectResourceToCliPaths)
+      : null;
 
     // Own the entire managed-skill setup in the existing startup rollback:
     // discovery and path checks can fail before any projection is created.
@@ -7789,6 +7802,10 @@ export class PiAgent extends BaseAgent {
         return runtimeCapabilityManifest;
       },
       disabledSkillPaths: disabledSkillSnapshot,
+      hasProjectResourceDrift() {
+        return projectResourceLaunchSnapshot !== null
+          && piProjectResourcesDrifted(projectResourceLaunchSnapshot);
+      },
       onRuntimeCapabilitiesChange(listener) {
         if (closed) {
           notifyRuntimeCapabilityListener(listener, undefined);
