@@ -54,6 +54,18 @@ user 锚点复制它之前的历史；assistant 锚点复制至下一条 user �
 两项支持 `deviceId::sessionId`，复用同账号远程控制。没有原生历史或检查点时返回宿主既有错误；不创建替代任务、不自动重试。
 跨电脑回执未知时先查看目标状态与历史，分叉尤其不能盲目重复，否则会生成多个任务。
 
+## 运行设置与任务消息
+
+`get_session_runtime({session_id})` 返回 `permission_mode` 与运行设置的 `generation`。
+`set_session_runtime({session_id,expected_generation,permission_mode})` 支持宿主现有权限档：
+`ask` / `default` / `acceptEdits` / `plan` / `auto` / `bypassPermissions`。插件每次调用走原生确认，
+变更使用界面同一提交队列、运行时更新、持久化与失败回滚；不会由插件直接写权限设置。
+单独改权限保留模型和待生效路线；同时修改时先应用运行设置，成功后提交权限。`generation` 保护运行设置，权限仍按原队列提交，
+模型可能等到下一次发送生效；权限档字段不替代独立的 Plan 开关。
+
+插件用 `send_to_session` 继续本机明确任务、或用 `steer_session({session_id,message})` 插话时，宿主记录插件来源，
+不会借用任务身份，也不会继承别的任务权限档。收件任务继续使用它当前的权限与 Plan 状态，界面标签和模型来源说明同源。
+
 ## 完整历史与附件
 
 `list_teammates({device:'all'})` 枚举伙伴及其已保存的任务关系（含隐藏、暂停和归档）；`list_sessions` 包含隐藏任务，并在隐藏时返回 `hiddenAt`。普通任务、独立对话、伙伴私聊、话题和渠道专线均以数据库里实际保存的来源和关系为准。跨设备按返回的电脑分组翻页；未查到的电脑保留错误与 `partial`，不据此认定任务不存在。

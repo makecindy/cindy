@@ -92,6 +92,8 @@ Ghost manifest、自建中转同步维护与 Review 清单。每项具体能力�
 - `control/fork_session` 与 `rewind_session` 通过共用的 UI 业务入口执行；远程复用既有 `maker:fork` / `maker:rewind:commit`。
   `message_client_id` 是历史消息现有 clientId，不另建检查点 ID 或迁移；原有控制端参数与行为保持。未收到可信回执返回结果未知，不重放写入。
   `get_chat_history.messages[].clientId` 为可选增量字段，透传 reader 已有的原生/UI 锚点；旧端缺失时不从存储行 id 猜测。
+- `get_session_runtime` 增量返回可选 `permission_mode`；`set_session_runtime` 接受该可选字段。
+  复用现有权限提交与回滚，省略字段时原任务调用保持原行为。插件继续/插话使用已有 `sourcePlugin` 来源元数据，不伪造当前任务。
 - `subscribe.topics` 增量识别 `message` / `task-state`，事件名为 `did-message-created` / `did-task-state-changed`，复用现有管子事件封装。
   receipt 增量可选 `approvedEventTopics`，不改变版本；旧宿主保存的未知 topic 不自动获得批准，原有 topic 继续原行为。
   新消息事件只提供正文和附件位置，不提供宿主路径；`historyCursor` 复用 `get_chat_history` 编解码，序号不作为持久重放凭证。

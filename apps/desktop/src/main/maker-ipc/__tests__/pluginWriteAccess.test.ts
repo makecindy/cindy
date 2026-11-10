@@ -17,9 +17,10 @@ const source = readFileSync(new URL('../register.ts', import.meta.url), 'utf8').
 const branch = source.slice(source.indexOf("      case 'requestWriteAccess': {"), source.indexOf("      case 'startTeam': {"));
 const js = ts.transpileModule(`return async function(pluginId, request, explicitWriteAccess = false, assertCallerCurrent = () => {}) { switch(request.kind) { ${branch} } }`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
 const settingSource = source.slice(source.indexOf('  ipcMain.handle(\n    MAKER_INVOKE.SET_PERMISSION_MODE,'), source.indexOf('  ipcMain.handle(\n    MAKER_INVOKE.SET_PLAN_MODE,'));
+const permissionCommitSource = source.slice(source.indexOf('  async function commitSessionPermissionMode('), source.indexOf('  ipcMain.handle(\n    MAKER_INVOKE.SET_PERMISSION_MODE,'));
 const planSource = source.slice(source.indexOf('  ipcMain.handle(\n    MAKER_INVOKE.SET_PLAN_MODE,'), source.indexOf('  ipcMain.handle(MAKER_INVOKE.EXPORT_SESSION_HTML,'));
 const planJs = ts.transpileModule(planSource, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
-const settingJs = ts.transpileModule(settingSource, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
+const settingJs = ts.transpileModule(permissionCommitSource + settingSource, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
 function fixture() {
  let identity = 'owner-epoch-install';
  let usesDefaults = true;

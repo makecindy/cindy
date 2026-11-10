@@ -94,6 +94,7 @@ function setup(opts?: {
     sessionExists: vi.fn(async () => opts?.exists ?? true),
     getLiveSession,
     getSessionActivitySnapshot: vi.fn(async () => activity),
+    setSessionPermissionMode: vi.fn(async ({ beforeMutation }: { sessionId: string; mode: string; beforeMutation?: () => Promise<void> }) => { await beforeMutation?.(); return true; }),
     getSessionRuntimeDetails: vi.fn(async () => ({
       ...activity,
       runtimeGeneration: 0,
@@ -135,10 +136,10 @@ function setup(opts?: {
         message,
       }: {
         queuedMessageId: string;
-        callerSessionId: string;
+        callerSessionId?: string;
         message: string;
       }) => ({
-        ...item({ kind: 'session', senderSessionId: callerSessionId, displayText: message }),
+        ...item(callerSessionId ? { kind: 'session', senderSessionId: callerSessionId, displayText: message } : undefined),
         clientId: queuedMessageId,
         chatMessage: { clientId: queuedMessageId, role: 'user' as const, content: message },
       }),
@@ -379,6 +380,16 @@ describe('session control domain service', () => {
       files: [{ name: 'notes.txt', path: '/repo/notes.txt' }],
       slashCommandRanges: [],
     });
+  });
+
+  // Unit parity #16: permission-only changes must use the UI commit service, preserving
+  // the model profile/pending mutation; previous runtime tests only exercised model axes.
+  it.each([0, 99])('changes permission without replacing the model profile (generation=%s)', async generation => {
+    const { deps, service } = setup();
+    const result = await service.setSessionRuntime({ targetSessionId: 'target', expectedGeneration: generation, patch: { permissionMode: 'bypassPermissions' } });
+    expect(result).toMatchObject(generation === 0 ? { ok: true, permissionMode: 'bypassPermissions', generation: 0 } : { ok: false, errorCode: 'CONFLICT' });
+    expect(deps.setSessionRuntime).not.toHaveBeenCalled();
+    expect(deps.setSessionPermissionMode).toHaveBeenCalledTimes(generation === 0 ? 1 : 0);
   });
 
   it('steers only a live supported turn and never falls back after a terminal race', async () => {

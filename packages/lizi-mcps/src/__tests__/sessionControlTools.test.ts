@@ -94,6 +94,22 @@ function setup(opts?: { sessionId?: string | undefined }) {
 }
 
 describe('cindy_helper session control tools', () => {
+  // Unit parity #16: the schema previously discarded permission_mode, making a permission-only
+  // request fail. Drive the production dispatcher, not a copied schema.
+  it('accepts a permission profile through the existing runtime update', async () => {
+    const { deps, registry } = setup();
+    expect(parse(await registry.call('set_session_runtime', { session_id: 'target', expected_generation: 1, permission_mode: 'bypassPermissions' })))
+      .toMatchObject({ ok: true });
+    expect(deps.setSessionRuntime).toHaveBeenCalledWith({ targetSessionId: 'target', expectedGeneration: 1, patch: { permissionMode: 'bypassPermissions' } });
+  });
+
+  it('allows an attested plugin to steer an explicit target without a caller task', async () => {
+    const { deps, registry } = setup({ sessionId: undefined });
+    deps.getSessionContext = () => ({ agentKind: 'codex', workingDir: '', hostCaller: { kind: 'plugin', pluginId: 'p', dataOwnerId: 'owner', ownerGeneration: 1 } });
+    expect(parse(await registry.call('steer_session', { session_id: 'target', message: 'continue' }))).toMatchObject({ ok: true, steered: true });
+    expect(deps.steerSession).toHaveBeenCalledWith({ callerSessionId: undefined, targetSessionId: 'target', message: 'continue' });
+  });
+
   it('forwards a complete harness selection and reports the next-send boundary', async () => {
     const { deps, registry } = setup();
     const old = { agentKind: 'claude-code' as const, model: 'claude-fable-5', providerId: null, effort: 'high' as const, fastMode: false };

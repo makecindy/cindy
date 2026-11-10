@@ -10,6 +10,13 @@ import {
 afterEach(() => setGhostToolApprovalResolver(null));
 
 describe('desktop Claude read-only allowlist', () => {
+  // Unit: profile changes remain risk actions even when they are the only runtime field.
+  it.each(['acceptEdits', 'auto', 'bypassPermissions'])('reviews explicit permission profile %s', permission_mode => {
+    const args = { session_id: 'target', expected_generation: 0, permission_mode };
+    expect(getDesktopMcpToolApprovalPolicy({ serverName: 'cindy_helper', toolName: 'set_session_runtime', toolParams: args })).toBe('prompt-each-time');
+    expect(getDesktopMcpToolApprovalPolicy({ serverName: 'cindy_helper', toolName: 'call_tool', toolParams: { name: 'set_session_runtime', args } })).toBe('prompt-each-time');
+  });
+
   // PR #9145: removing redundant Host consent must not let trusted MCP servers
   // bypass the task's normal review. Public policy entry, unit tier; both dispatch routes.
   it.each([
