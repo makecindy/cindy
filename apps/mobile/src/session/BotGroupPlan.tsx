@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { Alert, Animated as RNAnimated, Easing, Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { Alert, Animated as RNAnimated, Easing, Platform, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { useEffect, useRef, useState } from 'react';
 import { Check, ChevronDown, ChevronUp, Circle, CircleAlert, CircleCheck, CircleDashed, CircleMinus, FileText, ListChecks, Minus, Sparkles } from 'lucide-react-native';
 import { botGroupPlanStepState, botGroupQueueWindow, canSkipBotGroupPlanStep } from '@cindy/maker-shared/botGroupPresentation';
@@ -399,16 +399,17 @@ export function BotGroupPlanFollowUpRow({ plan, followUp, identityFor, deviceId,
   const busy = pending !== null;
   const primary = followUp.kind === 'continue' ? 'continue' : 'retry';
   const failed = followUp.kind === 'retry';
+  const [stackedActions, setStackedActions] = useState(false);
   return <View style={styles.followUp} testID={`botGroup.followUpRow.${followUp.kind}`}>
-    <View style={styles.followUpHeader}>
-      {failed ? <Text style={[styles.followUpText, styles.followUpWho]}>{t('groupChat.timeline.stepFailed', { name: identity.name })}</Text>
-        : <View style={styles.followUpWho}>
+    <View style={[styles.followUpHeader, stackedActions && styles.followUpHeaderStacked]}>
+      {failed ? <Text style={[styles.followUpText, styles.followUpWho, stackedActions && styles.followUpWhoStacked]}>{t('groupChat.timeline.stepFailed', { name: identity.name })}</Text>
+        : <View style={[styles.followUpWho, stackedActions && styles.followUpWhoStacked]}>
           <Text style={styles.followUpText}>{t('groupChat.timeline.nextStep')}</Text>
           <BotGroupAvatar deviceId={deviceId} identity={identity} size={BOT_GROUP_INLINE_AVATAR_SIZE} online={online} />
           <Text style={styles.followUpName} numberOfLines={1} ellipsizeMode="tail">{identity.name}</Text>
         </View>}
-      <View style={styles.followUpActions}>
-        <BotGroupPlanActions actions={[
+      <View style={[styles.followUpActions, Platform.OS !== 'ios' && styles.followUpActionsBounded, stackedActions && styles.followUpActionsStacked]}>
+        <BotGroupPlanActions onStacked={() => setStackedActions(true)} actions={[
           { label: t(plan?.kind === 'talk' ? 'groupChat.timeline.endTalk' : 'groupChat.timeline.endPlan'), busy: pending === 'dismiss', disabled: busy || !online, onPress: onEnd, testID: 'botGroup.followUp.end' },
           { label: t(failed ? 'groupChat.timeline.retryStep' : 'groupChat.timeline.continuePlan'), tone: 'primary', busy: pending === primary, disabled: busy || !online, onPress: failed ? onRetry : onContinue, testID: `botGroup.followUp.${primary}` },
         ]} />
@@ -422,11 +423,15 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   followUp: { backgroundColor: colors.surfaceElevated, borderColor: colors.border, borderWidth: 1,
     borderRadius: radius.container, paddingHorizontal: spacing.md, paddingVertical: spacing.sm, gap: spacing.xs },
   followUpHeader: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, minHeight: 44 },
+  followUpHeaderStacked: { flexDirection: 'column', alignItems: 'stretch' },
   followUpWho: { flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center', gap: spacing.xs },
+  followUpWhoStacked: { flex: 0 },
   followUpText: { color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
   followUpName: { flex: 1, minWidth: 0, color: colors.textPrimary, fontSize: typeScale.bodySmall, lineHeight: lineHeight.bodySmall, fontWeight: fontWeight.regular },
   followUpTask: { color: colors.textSecondary, fontSize: typeScale.bodySmall, lineHeight: lineHeight.bodySmall },
   followUpActions: { flexDirection: 'row', flexShrink: 0, alignItems: 'center', gap: spacing.xs },
+  followUpActionsBounded: { flexShrink: 1, maxWidth: '60%' },
+  followUpActionsStacked: { width: '100%', maxWidth: '100%' },
   talkCard: { backgroundColor: colors.surfaceElevated, borderColor: colors.border, borderWidth: 1,
     borderRadius: radius.container, padding: spacing.md, width: '100%', maxWidth: 720 },
   talkHeader: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', columnGap: spacing.sm, rowGap: spacing.xs },
