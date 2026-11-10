@@ -4690,6 +4690,9 @@ export class ClaudeCodeAgent extends BaseAgent {
         // 必须紧跟输出上限 / 模型 env 的快照之后再序列化设置: 设置层里的
         // CLAUDE_CODE_MAX_OUTPUT_TOKENS 与模型白名单都要反映这一次 spawn 的值。
         await prepareFlagSettings();
+        // 落盘是异步的：等它回来期间账号可能被换掉、伙伴可能被删。围栏要在
+        // 真正拉起 SDK 之前再验一次，失效的启动走下面 catch 的清理路径。
+        companionEnvironment?.assertCurrent?.();
         const queryArgs = createLocalQueryArgs();
         if (newSdkSessionId) sdkSessionId = newSdkSessionId;
         onRuntimeStartAttempted();
