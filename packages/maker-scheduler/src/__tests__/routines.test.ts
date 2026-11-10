@@ -361,6 +361,52 @@ describe("Routine event admission and execution", () => {
       }),
     ).toThrow();
   });
+
+  it('treats an empty id as omitted and creates distinct routines that can be removed', async () => {
+    const f = await fixture();
+    try {
+      const first = await f.engine.put('bot-a', input, '');
+      const second = await f.engine.put('bot-a', input, '');
+      const other = await f.engine.put('bot-b', input, '');
+      for (const routine of [first, second, other]) expect(routine.id).not.toBe('');
+      expect(new Set([first.id, second.id, other.id]).size).toBe(3);
+      expect(f.engine.list('bot-a')).toHaveLength(2);
+      expect(f.engine.list('bot-b')).toEqual([other]);
+      await f.engine.remove('bot-a', first.id);
+      expect(f.engine.list('bot-a')).toEqual([second]);
+      expect(f.engine.list('bot-b')).toEqual([other]);
+    } finally {
+      await f.engine.stop();
+    }
+  });
+
+  it('assigns a legacy empty routine id on start and moves its runs and cursors', async () => {
+    const first = await fixture();
+    const routine = await first.engine.put('bot', input);
+    await first.engine.runNow('bot', routine.id);
+    await vi.waitFor(() => expect(first.engine.history(routine.id)[0]?.status).toBe('success'));
+    await first.engine.stop();
+    const saved = structuredClone(first.snapshot()!);
+    saved.routines[0].id = '';
+    for (const run of saved.runs) run.routineId = '';
+    saved.next = { ':github': 1234, ':fallback': 5678 };
+    const restored = await fixture(undefined, saved);
+    try {
+      const [legacy] = restored.engine.list('bot');
+      expect(legacy.id).not.toBe('');
+      expect(restored.engine.history(legacy.id)).toHaveLength(1);
+      expect(restored.engine.history(legacy.id)[0].routineId).toBe(legacy.id);
+      expect(restored.snapshot()?.next).toEqual({
+        [`${legacy.id}:github`]: 1234,
+        [`${legacy.id}:fallback`]: 5678,
+      });
+      await restored.engine.remove('bot', legacy.id);
+      expect(restored.engine.list('bot')).toEqual([]);
+      expect(restored.engine.history(legacy.id)).toEqual([]);
+    } finally {
+      await restored.engine.stop();
+    }
+  });
 });
 
 it("retains the accepted batch when the canonical task defers and retries after backoff", async () => {
