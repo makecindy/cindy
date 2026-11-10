@@ -19333,6 +19333,7 @@
       "description": "勾選要從「{{name}}」遷移到這台電腦的內容。這台電腦上已經改過的設定會保留，不會被覆蓋。",
       "partial": "那台電腦上有部分內容這次沒能讀取，下面只列出讀到的內容。",
       "groupCount": "已選 {{selected}} / {{total}}",
+      "groupCount_other": "已選 {{selected}} / {{total}}",
       "present_one": "另有 {{count}} 項與這台電腦相同，無需遷移",
       "present_other": "另有 {{count}} 項與這台電腦相同，無需遷移",
       "start_one": "遷移 {{count}} 項",
