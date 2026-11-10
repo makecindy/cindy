@@ -269,7 +269,8 @@ export function createSlackMcpGatewayServer(deps: SlackHookMcpDeps): McpServer {
     descCallTool.trim(),
     {
       name: z.string().min(1).describe('工具名(slack_list_tools 可查)'),
-      arguments: jsonObjectArg('工具参数(按该工具的 inputSchema 传 JSON 对象; 无参可省略)'),
+      args: jsonObjectArg('工具参数(按该工具的 inputSchema 传 JSON 对象; 无参可省略; 与 arguments 同时提供时优先使用 args)'),
+      arguments: jsonObjectArg('兼容旧调用的工具参数别名; 新调用使用 args'),
       team_id: z.string().optional().describe(TEAM_ID_DESC),
       out_file: z
         .string()
@@ -278,9 +279,10 @@ export function createSlackMcpGatewayServer(deps: SlackHookMcpDeps): McpServer {
           '可选: 把完整结果 JSON 写进会话工作目录的该相对路径(如 tmp/slack-result.json), 只返回文件路径 —— 结果大、要交给脚本处理时用。结果超 50KB 时即使不传也会自动落盘返回路径',
         ),
     },
-    async ({ name, arguments: toolArgs, team_id, out_file }) => withAccountDataAccess(deps.withAccountDataAccess, deps.getSessionContext?.().sessionId, async assertCurrent => {
+    async ({ name, args, arguments: legacyArguments, team_id, out_file }) => withAccountDataAccess(deps.withAccountDataAccess, deps.getSessionContext?.().sessionId, async assertCurrent => {
       const bridge = requireBridge(deps);
       if ('err' in bridge) return bridge.err;
+      const toolArgs = args ?? legacyArguments;
       const r = await bridge.callTool('callTool', { name, ...(toolArgs !== undefined ? { arguments: toolArgs } : {}) }, team_id ?? null);
       // Recheck before returning private bytes or spilling them to the workdir.
       await assertCurrent();
