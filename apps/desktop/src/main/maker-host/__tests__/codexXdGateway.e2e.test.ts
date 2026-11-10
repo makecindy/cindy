@@ -182,7 +182,7 @@ describe.skipIf(!binary)('native Codex through the Cindy XD gateway proxy', () =
       fixture.gateway = 'http://127.0.0.1:' + (server.address() as AddressInfo).port;
       const catalog = await import('../active-catalog.js');
       const routing = await import('../provider-route.js');
-      const proxy = await import('../codex-proxy-host.js');
+      const proxy = await import('../codex-proxy-host.desktop.js');
       const sessions = await import('../session-provider-store.js');
       const { buildCodexProxySpawnArgs } = await import('../codex-gateway-config.js');
       let agent: CodexAgent | undefined;
@@ -386,7 +386,7 @@ describe('Codex Responses through a loopback XD gateway', () => {
       await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
       fixture.gateway = 'http://127.0.0.1:' + (server.address() as AddressInfo).port;
       const catalog = await import('../active-catalog.js');
-      const proxy = await import('../codex-proxy-host.js');
+      const proxy = await import('../codex-proxy-host.desktop.js');
       const sessions = await import('../session-provider-store.js');
       const tools = [
         { type: 'custom', name: 'exec', description: 'Run JavaScript' },

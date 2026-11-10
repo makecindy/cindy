@@ -6818,7 +6818,7 @@ describe('codex proxy host', () => {
     }
   });
 
-  it('preserves interleaved DeepSeek V4.1 history on Responses and compact', async () => {
+  it('normalizes interleaved DeepSeek V4.1 Responses history but preserves compact', async () => {
     const host = await freshCodexProxyHost();
     const { setXdGatewayModels } = await import('../active-catalog.js');
     const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
@@ -6843,6 +6843,7 @@ describe('codex proxy host', () => {
       ];
       const developer = { type: 'message', role: 'developer', content: 'context' };
       const input = [...calls, outputs[0], developer, outputs[1]];
+      const expectedInput = [...calls, ...outputs, developer];
       for (const url of ['/responses', '/responses/compact']) {
         let current: unknown = { model, input };
         const ctx = {
@@ -6853,7 +6854,7 @@ describe('codex proxy host', () => {
           headers: { 'thread-id': 'thread-deepseek-41' },
         };
         for (const transform of config.transformRequest) current = transform(current, ctx) ?? current;
-        expect(current).toMatchObject({ input });
+        expect(current).toMatchObject({ input: url === '/responses' ? expectedInput : input });
       }
     } finally {
       host.unregister('session-deepseek-41');
