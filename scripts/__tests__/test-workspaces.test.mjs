@@ -426,8 +426,8 @@ test("unit workspace concurrency reserves the full worker budget for heavy works
 		"run",
 		// win32 pins forks: threads segfaults the desktop suite there, and the
 		// LaunchServices churn that threads exists to avoid is macOS-only.
-		`--pool=${desktopUnitPool()}`,
-		`--maxWorkers=${desktopUnitWorkerCount()}`,
+		`--pool=${desktopUnitPool(undefined, undefined, undefined, process.env.XDT_DESKTOP_UNIT_POOL)}`,
+		`--maxWorkers=${desktopUnitWorkerCount(undefined, process.env.XDT_DESKTOP_UNIT_WORKERS)}`,
 		...unitTestShardArgs(),
 	]);
 	assert.equal(desktopUnitWorkerCount(1), 1);
@@ -522,7 +522,7 @@ test("unit tier pins an explicit vitest pool, forks only by documented exception
 	// finalizers crashing in isolate teardown) and no launchservicesd exists
 	// for the churn to hurt.
 	const forksByException = [
-		...(desktopUnitPool() === "forks" ? ["apps/desktop"] : []),
+		...(desktopUnitPool(undefined, undefined, undefined, process.env.XDT_DESKTOP_UNIT_POOL) === "forks" ? ["apps/desktop"] : []),
 		"packages/maker-core",
 	];
 	const unpinned = [];
@@ -558,6 +558,18 @@ test("desktop unit uses forks on Node 24+ to avoid native finalizer crashes", ()
 	assert.equal(desktopUnitPool("darwin", "22.23.0", false), "threads");
 	assert.equal(desktopUnitPool("win32", "22.23.0", false), "forks");
 	assert.equal(desktopUnitPool("darwin", "25.0.0", true), "forks");
+});
+
+// Unit: an explicit diagnostic mode must preserve the default resource policy and reject malformed input.
+test("desktop unit accepts explicit pool and worker overrides without changing defaults", () => {
+	assert.equal(desktopUnitPool("darwin", "22.23.0", false, "forks"), "forks");
+	assert.equal(desktopUnitPool("darwin", "22.23.0", false, ""), "threads");
+	assert.throws(() => desktopUnitPool("darwin", "22.23.0", false, "other"), /XDT_DESKTOP_UNIT_POOL/);
+	assert.equal(desktopUnitWorkerCount(32, "2"), 2);
+	assert.equal(desktopUnitWorkerCount(32, ""), 8);
+	for (const value of ["0", "-1", "2.5", "NaN"]) {
+		assert.throws(() => desktopUnitWorkerCount(32, value), /XDT_DESKTOP_UNIT_WORKERS/);
+	}
 });
 
 test("normalizeRelPath makes path matching independent of host path separators", () => {

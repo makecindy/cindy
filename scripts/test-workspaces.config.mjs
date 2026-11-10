@@ -40,7 +40,14 @@ export function desktopUnitPool(
   platform = process.platform,
   nodeVersion = process.versions.node,
   webstorageEnabled = nodeWebstorageEnabled(),
+  explicitPool,
 ) {
+  if (explicitPool !== undefined && explicitPool !== '') {
+    if (explicitPool !== 'threads' && explicitPool !== 'forks') {
+      throw new Error('XDT_DESKTOP_UNIT_POOL must be threads or forks');
+    }
+    return explicitPool;
+  }
   const nodeMajor = Number.parseInt(nodeVersion, 10);
   return webstorageEnabled || platform === 'win32' || nodeMajor >= 24 ? 'forks' : 'threads';
 }
@@ -309,7 +316,15 @@ const desktopGuardInclude = [
 
 export function desktopUnitWorkerCount(
   availableParallelism = os.availableParallelism(),
+  explicitWorkers,
 ) {
+  if (explicitWorkers !== undefined && explicitWorkers !== '') {
+    const workers = Number(explicitWorkers);
+    if (!/^\d+$/.test(explicitWorkers) || !Number.isSafeInteger(workers) || workers < 1) {
+      throw new Error('XDT_DESKTOP_UNIT_WORKERS must be a positive integer');
+    }
+    return workers;
+  }
   const available = Number.isFinite(availableParallelism)
     ? Math.floor(availableParallelism)
     : 1;
@@ -364,9 +379,10 @@ export default {
           // win32 stays on forks unconditionally — threads segfaults there and
           // the churn threads exists to avoid is macOS-only (see the pool note
           // at the top of this file).
+          // Explicit diagnostic overrides affect only this unit command; defaults stay unchanged.
           command: unitVitestCommand(
-            desktopUnitWorkerCount(),
-            desktopUnitPool(),
+            desktopUnitWorkerCount(undefined, process.env.XDT_DESKTOP_UNIT_WORKERS),
+            desktopUnitPool(undefined, undefined, undefined, process.env.XDT_DESKTOP_UNIT_POOL),
           ),
           exclude: [
             '**/*.git-integration.test.ts',
