@@ -6,7 +6,7 @@ import { approvedTaskDelegation, captureTaskActionDeliveryGuard, captureTaskActi
 import { authorizeGroupTool, GroupToolAuthorizationError } from './botGroupToolAuthorization.js';
 import { controlOwnedSessionExecution, isSameSessionExecution, withdrawOwnedSessionInputs } from './sessionExecutionOwnership.js';
 import { existsSync, statSync } from 'node:fs';
-import type { AgentInputCoordinator } from './agent-input-coordinator.js';
+import type { AgentInputCoordinator } from './agent-input-coordinator.desktop.js';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 
@@ -53,7 +53,7 @@ import type {
 } from '../../shared/botCollaboration.js';
 import { BOT_DELEGATION_CLIENT_ID, BOT_INTERJECTION_MAX_CHARS as MAX_INTERJECTION_CHARS, botInterjectionPreview } from '../../shared/botCollaboration.js';
 import { buildBotGroupTaskCard, parseBotGroupThreadRouteKey, type BotGroupTaskCardLabels, type BotGroupTaskCardState } from '../../shared/botGroupChat.js';
-import { t } from '../i18n.js';
+import { t } from '../i18n.desktop.js';
 import type { BotGroupTaskPostInput, BotGroupTaskPostResult } from './botGroupChatService.js';
 import { ensureBotWorkspaceDir } from './botProfileFolder.js';
 import type { SessionQueuedMessageControlResult, SessionSteerResult, SessionStopResult } from './sessionControlService.js';

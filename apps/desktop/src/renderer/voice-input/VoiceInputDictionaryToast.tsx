@@ -67,7 +67,7 @@ export function VoiceInputDictionaryToast() {
       <div
         className={cn(
           'flex h-11 w-max max-w-full shrink-0 items-center gap-2 rounded-xl border px-2.5',
-          'border-[var(--cmd-palette-border)] shadow-[var(--shadow-menu)] backdrop-blur-xl',
+          'border-[var(--cmd-palette-border)] shadow-[shadow:var(--shadow-menu)] backdrop-blur-xl',
         )}
         style={{ backgroundColor: 'color-mix(in srgb, var(--cmd-palette-bg) 95%, transparent)' }}
       >

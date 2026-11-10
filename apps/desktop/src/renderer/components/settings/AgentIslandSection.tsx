@@ -19,7 +19,10 @@ import {
   type ReactNode,
 } from 'react';
 import { Check, ChevronDown, Volume2 } from 'lucide-react';
+import { Tip } from '@/components/ui/tooltip';
 
+import { SettingsBlock, SettingsCard, SettingsField, SettingsRow, SettingsSection } from '@/components/ui/settings-rows';
+import { Select } from '@/components/ui/select';
 import { Switch } from '@/components/ui/switch';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
@@ -46,6 +49,7 @@ import {
   isSilentAgentIslandSoundChoice,
 } from '../../../shared/agentIsland';
 import { DefaultOverrideControls } from './DefaultOverrideControls';
+import { useSettingsSearchNavigation } from './SettingsSearchNavigation';
 
 const MASCOT_PREVIEW_URLS: Record<AgentIslandMascotSkin, string> = {
   cindy: cindyPreviewUrl,
@@ -68,15 +72,11 @@ type MascotAnimationMode = typeof MASCOT_ANIMATION_MODES[number];
 type MascotAnimationSteps = Record<AgentIslandMascotSkin, number>;
 const MASCOT_PREVIEW_VIEWBOX_SIZE = 16;
 /** 键帽圆角:原 SVG rect rx=0.12(键帽 1.8x0.7),换算成 CSS 双轴百分比。 */
-const MASCOT_KEY_BORDER_RADIUS = `${(0.12 / 1.8) * 100}% / ${(0.12 / 0.7) * 100}%`;
-const MASCOT_KEY_RECTS = Array.from({ length: 12 }, (_, index) => index);
 
 // 眼睛几何与配色必须与原生侧 SpriteMascotConfig 保持一致
 // (native/agent-island/macos-agent-island-helper.swift)，否则设置页预览和灵动岛实际渲染会不一样。
 const MASCOT_PREVIEW_CONFIGS: Record<Exclude<AgentIslandMascotSkin, 'pululu'>, MascotPreviewConfig> = {
   cindy: {
-    keyboardBase: 'rgb(38 43 69)',
-    keyboardKey: 'rgb(103 118 240)',
     eyeColor: 'rgb(107 61 50)',
     eyeLeftX: 6.71,
     eyeRightX: 9.3,
@@ -85,8 +85,6 @@ const MASCOT_PREVIEW_CONFIGS: Record<Exclude<AgentIslandMascotSkin, 'pululu'>, M
     eyeRy: 0.98,
   },
   blackcat: {
-    keyboardBase: 'rgb(31 36 41)',
-    keyboardKey: 'rgb(103 118 240)',
     eyeColor: 'rgb(253 207 69)',
     eyeLeftX: 5.95,
     eyeRightX: 10.05,
@@ -95,8 +93,6 @@ const MASCOT_PREVIEW_CONFIGS: Record<Exclude<AgentIslandMascotSkin, 'pululu'>, M
     eyeRy: 0.98,
   },
   erika: {
-    keyboardBase: 'rgb(51 71 77)',
-    keyboardKey: 'rgb(90 156 170)',
     eyeColor: 'rgb(135 93 66)',
     eyeLeftX: 6.84,
     eyeRightX: 9.16,
@@ -105,8 +101,6 @@ const MASCOT_PREVIEW_CONFIGS: Record<Exclude<AgentIslandMascotSkin, 'pululu'>, M
     eyeRy: 0.98,
   },
   tarara: {
-    keyboardBase: '#00615c',
-    keyboardKey: '#00d9c5',
     eyeColor: 'rgb(61 114 228)',
     eyeLeftX: 6.9,
     eyeRightX: 9.7,
@@ -115,8 +109,6 @@ const MASCOT_PREVIEW_CONFIGS: Record<Exclude<AgentIslandMascotSkin, 'pululu'>, M
     eyeRy: 0.98,
   },
   boli: {
-    keyboardBase: '#292e3a',
-    keyboardKey: '#707d94',
     eyeColor: 'black',
     eyeLeftX: 5.63,
     eyeRightX: 10.63,
@@ -126,8 +118,6 @@ const MASCOT_PREVIEW_CONFIGS: Record<Exclude<AgentIslandMascotSkin, 'pululu'>, M
     imageScale: 0.8,
   },
   whitesnow: {
-    keyboardBase: '#292e3a',
-    keyboardKey: '#707d94',
     eyeColor: 'black',
     eyeLeftX: 6.86,
     eyeRightX: 9.5,
@@ -136,8 +126,6 @@ const MASCOT_PREVIEW_CONFIGS: Record<Exclude<AgentIslandMascotSkin, 'pululu'>, M
     eyeRy: 1.02,
   },
   annie: {
-    keyboardBase: '#2e6b8f',
-    keyboardKey: '#77c4ea',
     eyeColor: 'rgb(174 33 70)',
     eyeLeftX: 6.31,
     eyeRightX: 9.56,
@@ -146,8 +134,6 @@ const MASCOT_PREVIEW_CONFIGS: Record<Exclude<AgentIslandMascotSkin, 'pululu'>, M
     eyeRy: 0.98,
   },
   chaku: {
-    keyboardBase: 'rgb(115 82 8)',
-    keyboardKey: 'rgb(253 207 69)',
     eyeColor: 'rgb(253 207 69)',
     eyeLeftX: 6.19,
     eyeRightX: 9.69,
@@ -156,8 +142,6 @@ const MASCOT_PREVIEW_CONFIGS: Record<Exclude<AgentIslandMascotSkin, 'pululu'>, M
     eyeRy: 0.98,
   },
   muffin: {
-    keyboardBase: 'rgb(48 61 97)',
-    keyboardKey: 'rgb(125 153 213)',
     eyeColor: 'black',
     eyeLeftX: 5.56,
     eyeRightX: 10.56,
@@ -173,8 +157,6 @@ const DEFAULT_MASCOT_ANIMATION_STEPS: MascotAnimationSteps = Object.fromEntries(
 ) as MascotAnimationSteps;
 
 interface MascotPreviewConfig {
-  keyboardBase: string;
-  keyboardKey: string;
   eyeColor: string;
   eyeLeftX: number;
   eyeRightX: number;
@@ -192,6 +174,11 @@ export function AgentIslandSection() {
     subtleRemindersCustomized,
     setSubtleReminders,
     resetSubtleReminders,
+    liveActivity,
+    liveActivityCustomized,
+    liveActivitySupported,
+    setLiveActivity,
+    resetLiveActivity,
     soundSettings,
     soundCustomized,
     mascotSkin,
@@ -208,6 +195,13 @@ export function AgentIslandSection() {
   } = useAgentIslandSettings();
   const { t } = useTranslation();
   const [animationSteps, setAnimationSteps] = useState<MascotAnimationSteps>(DEFAULT_MASCOT_ANIMATION_STEPS);
+  // The character list is a disclosure: the card shows only the current character until opened.
+  const [skinsOpen, setSkinsOpen] = useState(false);
+  const { entry: searchEntry, activation: searchActivation } = useSettingsSearchNavigation();
+  useEffect(() => {
+    // Searching a character name lands here; never hide what the search pointed at.
+    if (searchEntry?.id === agentIslandSettings.skinLabel.id) setSkinsOpen(true);
+  }, [searchEntry, searchActivation]);
   const [soundResetPending, setSoundResetPending] = useState(false);
   const [subtleRemindersPending, setSubtleRemindersPending] = useState(false);
   const handleSubtleRemindersChange = async (next: boolean) => {
@@ -216,6 +210,24 @@ export function AgentIslandSection() {
       if (!await setSubtleReminders(next)) toast.error(t('settings.agentIsland.subtleRemindersFailed'));
     } finally {
       setSubtleRemindersPending(false);
+    }
+  };
+  const [liveActivityPending, setLiveActivityPending] = useState(false);
+  const handleLiveActivityChange = async (next: boolean) => {
+    setLiveActivityPending(true);
+    try {
+      if (!await setLiveActivity(next)) toast.error(t('settings.agentIsland.liveActivityFailed'));
+    } finally {
+      setLiveActivityPending(false);
+    }
+  };
+  const handleResetLiveActivity = async () => {
+    setLiveActivityPending(true);
+    try {
+      if (await resetLiveActivity()) toast.success(t('settings.defaults.restored'));
+      else toast.error(t('settings.defaults.restoreFailed'));
+    } finally {
+      setLiveActivityPending(false);
     }
   };
   const handleResetSubtleReminders = async () => {
@@ -273,203 +285,206 @@ export function AgentIslandSection() {
     setAnimationSteps((current) => advanceMascotAnimationStep(current, skin));
   }, []);
 
+  // Character and sounds stay reachable when only the Live Activity is on.
+  const sharedVisible = enabled || (liveActivitySupported && liveActivity);
+
   if (!supported) {
     return (
-      <div className="flex flex-col gap-[14px]">
-        <h2 className="text-16 font-medium leading-[1.2] text-[var(--settings-section-title)]">
-          {t('settings.agentIsland.title')}
-        </h2>
+      <SettingsSection variant="page" title={t('settings.agentIsland.title')}>
         <SettingsCard>
-          <p className="text-13 leading-[1.45] text-[var(--text-secondary)]">
-            {t('settings.agentIsland.unsupported')}
-          </p>
+          <SettingsBlock>
+            <p className="text-13 leading-[1.45] text-[var(--text-secondary)]">
+              {t('settings.agentIsland.unsupported')}
+            </p>
+          </SettingsBlock>
         </SettingsCard>
-      </div>
+      </SettingsSection>
     );
   }
 
   return (
-    <div className="flex flex-col gap-[14px]">
-      <h2 className="text-16 font-medium leading-[1.2] text-[var(--settings-section-title)]">
-        {t('settings.agentIsland.title')}
-      </h2>
-
-      <SettingsCard className="flex items-center justify-between gap-3">
-        <div className="flex min-w-0 flex-col gap-1">
-          <p id={agentIslandSettings.enableLabel.targetId} className="text-13 font-medium text-[var(--settings-section-sublabel)]">
-            {t(agentIslandSettings.enableLabel.titleKey)}
-          </p>
-          <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
-            {t(agentIslandSettings.enableLabel.descriptionKey)}
-          </p>
-        </div>
-
-        <Switch data-setting-id={agentIslandSettings.enableLabel.id}
-          checked={enabled}
-          onCheckedChange={setEnabled}
-          aria-label={t('settings.agentIsland.enableAria')}
-        />
-      </SettingsCard>
-
-      {enabled && (
-        <>
-          <SettingsCard className="flex items-center justify-between gap-3">
-            <div className="flex min-w-0 flex-col gap-1">
-              <p id={agentIslandSettings.subtleRemindersLabel.targetId} className="text-13 font-medium text-[var(--settings-section-sublabel)]">
-                {t(agentIslandSettings.subtleRemindersLabel.titleKey)}
-              </p>
-              <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
-                {t(agentIslandSettings.subtleRemindersLabel.descriptionKey)}
-              </p>
-            </div>
-            <div className="flex shrink-0 items-center gap-2">
-              <DefaultOverrideControls
-                isCustomized={subtleRemindersCustomized}
-                disabled={subtleRemindersPending}
-                onReset={() => void handleResetSubtleReminders()}
+    <SettingsSection variant="page" title={t('settings.agentIsland.title')}>
+      {/* 几张卡片同属一组，彼此 14px */}
+      <SettingsSection>
+        {/* Agent Notch's own options grow out of its card, so they read as part of it. */}
+        <SettingsCard className="flex flex-col">
+          <SettingsRow
+            title={<span id={agentIslandSettings.enableLabel.targetId}>{t(agentIslandSettings.enableLabel.titleKey)}</span>}
+            hint={t(agentIslandSettings.enableLabel.descriptionKey)}
+            trailing={
+              <Switch data-setting-id={agentIslandSettings.enableLabel.id}
+                checked={enabled}
+                onCheckedChange={setEnabled}
+                aria-label={t('settings.agentIsland.enableAria')}
               />
-              <Switch
-                data-setting-id={agentIslandSettings.subtleRemindersLabel.id}
-                checked={subtleReminders}
-                disabled={subtleRemindersPending}
-                onCheckedChange={handleSubtleRemindersChange}
-                aria-label={t('settings.agentIsland.subtleRemindersLabel')}
+            }
+          />
+          {enabled && (
+            <>
+              <SettingsRow
+                title={<span id={agentIslandSettings.subtleRemindersLabel.targetId}>{t(agentIslandSettings.subtleRemindersLabel.titleKey)}</span>}
+                hint={t(agentIslandSettings.subtleRemindersLabel.descriptionKey)}
+                trailing={
+                  <div className="flex shrink-0 items-center gap-2">
+                    <DefaultOverrideControls
+                      isCustomized={subtleRemindersCustomized}
+                      disabled={subtleRemindersPending}
+                      onReset={() => void handleResetSubtleReminders()}
+                    />
+                    <Switch
+                      data-setting-id={agentIslandSettings.subtleRemindersLabel.id}
+                      checked={subtleReminders}
+                      disabled={subtleRemindersPending}
+                      onCheckedChange={handleSubtleRemindersChange}
+                      aria-label={t('settings.agentIsland.subtleRemindersLabel')}
+                    />
+                  </div>
+                }
               />
-            </div>
-          </SettingsCard>
-          <SettingsCard className="flex flex-col gap-3">
-            <div className="flex min-w-0 flex-col gap-1">
-              <p id={agentIslandSettings.displayLabel.targetId} className="text-13 font-medium text-[var(--settings-section-sublabel)]">
-                {t(agentIslandSettings.displayLabel.titleKey)}
-              </p>
-              <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
-                {t(agentIslandSettings.displayLabel.descriptionKey)}
-              </p>
-            </div>
-            <div className="relative min-w-0">
-              <select data-setting-id={agentIslandSettings.displayLabel.id}
-                value={displayTargetToOptionValue(displayTarget)}
-                onChange={(event) => setDisplayTarget(displayTargetFromOptionValue(event.target.value))}
-                className={cn(
-                  'h-9 w-full min-w-0 appearance-none rounded-full border py-0 pl-3 pr-9 text-12 outline-none',
-                  'bg-[var(--settings-input-bg)] text-[var(--settings-input-text)]',
-                  'border-[var(--settings-input-border)] focus:ring-2 focus:ring-[var(--focus-ring-soft)]',
-                )}
-                aria-label={t('settings.agentIsland.displaySelectAria')}
+              {/* 显示器选择整宽放在说明下面，不是左右一行 */}
+              <SettingsField
+                title={<span id={agentIslandSettings.displayLabel.targetId}>{t(agentIslandSettings.displayLabel.titleKey)}</span>}
+                hint={t(agentIslandSettings.displayLabel.descriptionKey)}
               >
-                <option value={DISPLAY_ALL_OPTION_VALUE}>
-                  {t('settings.agentIsland.displayAll')}
-                </option>
-                {displayOptions.map((option) => (
-                  <option
-                    key={option.id}
-                    value={displayTargetToOptionValue({ mode: 'display', displayId: option.id })}
-                  >
-                    {displayOptionLabels.get(option.id)}
-                  </option>
-                ))}
-                {selectedDisplayMissing && (
-                  <option value={displayTargetToOptionValue(displayTarget)}>
-                    {t('settings.agentIsland.displayMissing', { id: displayTarget.displayId })}
-                  </option>
-                )}
-              </select>
-              <ChevronDown
-                size={15}
-                className="pointer-events-none absolute right-3.5 top-1/2 -translate-y-1/2 text-[var(--text-secondary-mid)]"
-                aria-hidden="true"
-              />
-            </div>
-          </SettingsCard>
-
-          <SettingsCard className="flex flex-col gap-4">
-            <div className="flex min-w-0 flex-col gap-1">
-              <p id={agentIslandSettings.skinLabel.targetId} className="text-13 font-medium text-[var(--settings-section-sublabel)]">
-                {t(agentIslandSettings.skinLabel.titleKey)}
-              </p>
-              <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
-                {t(agentIslandSettings.skinLabel.descriptionKey)}
-              </p>
-            </div>
-
-            <div className="grid gap-2">
-              {AGENT_ISLAND_MASCOT_SKINS.map((skin) => (
-                <AgentIslandSkinRow
-                  key={skin}
-                  skin={skin}
-                  animationMode={animationModeForStep(animationSteps[skin])}
-                  onNextAnimation={handleNextMascotAnimation}
-                  selected={mascotSkin === skin}
-                  onSelect={setMascotSkin}
+                <Select data-setting-id={agentIslandSettings.displayLabel.id}
+                  width="full"
+                  value={displayTargetToOptionValue(displayTarget)}
+                  onValueChange={(value) => setDisplayTarget(displayTargetFromOptionValue(value))}
+                  label={t('settings.agentIsland.displaySelectAria')}
+                  options={[
+                    { value: DISPLAY_ALL_OPTION_VALUE, label: t('settings.agentIsland.displayAll') },
+                    ...displayOptions.map((option) => ({
+                      value: displayTargetToOptionValue({ mode: 'display', displayId: option.id }),
+                      label: displayOptionLabels.get(option.id) ?? '',
+                    })),
+                    ...(selectedDisplayMissing
+                      ? [{
+                          value: displayTargetToOptionValue(displayTarget),
+                          label: t('settings.agentIsland.displayMissing', { id: displayTarget.displayId }),
+                        }]
+                      : []),
+                  ]}
                 />
-              ))}
-            </div>
-          </SettingsCard>
+              </SettingsField>
+            </>
+          )}
+        </SettingsCard>
 
-          <SettingsCard className="flex flex-col gap-3">
-            <div className="flex items-center justify-between gap-3">
-              <div className="flex min-w-0 flex-col gap-1">
-                <p id={agentIslandSettings.soundLabel.targetId} className="text-13 font-medium text-[var(--settings-section-sublabel)]">
-                  {t(agentIslandSettings.soundLabel.titleKey)}
-                </p>
-                <p className="text-12 leading-[1.4] text-[var(--text-secondary)]">
-                  {t(agentIslandSettings.soundLabel.descriptionKey)}
-                </p>
-              </div>
-              <div className="flex shrink-0 items-center gap-2">
-                <DefaultOverrideControls
-                  isCustomized={soundCustomized}
-                  disabled={soundResetPending}
-                  onReset={() => void handleResetSoundSettings()}
-                />
-                <Switch data-setting-id={agentIslandSettings.soundLabel.id}
-                  checked={soundSettings.enabled}
-                  disabled={soundResetPending}
-                  onCheckedChange={setSoundEnabled}
-                  aria-label={t('settings.agentIsland.soundAria')}
-                />
-              </div>
-            </div>
-
-            {soundSettings.enabled && (
-              <div className="grid gap-2 border-t border-[var(--settings-theme-card-border)] pt-4">
-                {AGENT_ISLAND_SOUND_EVENTS.map((event) => (
-                  <AgentIslandSoundRow
-                    key={event}
-                    event={event}
-                    value={soundSettings.sounds[event]}
-                    onChange={(sound) => setSound(event, sound)}
-                    onSelectCustom={selectSoundFile}
-                    onPreview={previewSound}
+        {/* Independent of our own island: the system shows it even when ours is off. */}
+        {liveActivitySupported && (
+          <SettingsCard>
+            <SettingsRow
+              title={<span id={agentIslandSettings.liveActivityLabel.targetId}>{t(agentIslandSettings.liveActivityLabel.titleKey)}</span>}
+              hint={t(agentIslandSettings.liveActivityLabel.descriptionKey)}
+              trailing={
+                <div className="flex shrink-0 items-center gap-2">
+                  <DefaultOverrideControls
+                    isCustomized={liveActivityCustomized}
+                    disabled={liveActivityPending}
+                    onReset={() => void handleResetLiveActivity()}
                   />
-                ))}
-              </div>
-            )}
+                  <Switch
+                    data-setting-id={agentIslandSettings.liveActivityLabel.id}
+                    checked={liveActivity}
+                    disabled={liveActivityPending}
+                    onCheckedChange={(next) => void handleLiveActivityChange(next)}
+                    aria-label={t('settings.agentIsland.liveActivityLabel')}
+                  />
+                </div>
+              }
+            />
           </SettingsCard>
-        </>
-      )}
-    </div>
-  );
-}
+        )}
 
-function SettingsCard({
-  className,
-  children,
-}: {
-  className?: string;
-  children: ReactNode;
-}) {
-  return (
-    <div
-      className={cn(
-        'rounded-xl p-5',
-        'bg-[var(--settings-theme-card-bg)]',
-        'border border-[var(--settings-theme-card-border)]',
-        className,
-      )}
-    >
-      {children}
-    </div>
+        {/* Character and event sounds serve Agent Notch and the Live Activity alike; they
+        show whenever either is on, so no heading is needed. */}
+        {sharedVisible && (
+          <>
+            <SettingsCard className="flex flex-col">
+              <SettingsRow
+                data-setting-id={agentIslandSettings.skinLabel.id}
+                aria-expanded={skinsOpen}
+                aria-controls="settings-agent-island-skins"
+                onClick={() => setSkinsOpen((open) => !open)}
+                title={<span id={agentIslandSettings.skinLabel.targetId}>{t(agentIslandSettings.skinLabel.titleKey)}</span>}
+                hint={t(agentIslandSettings.skinLabel.descriptionKey)}
+                trailing={
+                  <span className="flex shrink-0 items-center gap-2">
+                    {/* The list's own preview, scaled down: sprite PNGs carry no eyes on their own. */}
+                    <span className="relative h-8 w-9 overflow-hidden rounded-lg" aria-hidden="true">
+                      <span className="absolute left-0 top-0 origin-top-left scale-[0.64]">
+                        <MascotPreview skin={mascotSkin} mode={animationModeForStep(animationSteps[mascotSkin])} />
+                      </span>
+                    </span>
+                    <span className="text-13 text-[var(--text-secondary)]">
+                      {t(`settings.agentIsland.skins.${mascotSkin}.name`)}
+                    </span>
+                    <ChevronDown
+                      size={15}
+                      className={cn('text-[var(--text-secondary-mid)] transition-transform', skinsOpen && 'rotate-180')}
+                      aria-hidden="true"
+                    />
+                  </span>
+                }
+              />
+              {skinsOpen && (
+                <>
+                  <SettingsBlock id="settings-agent-island-skins" className="grid gap-2">
+                    {AGENT_ISLAND_MASCOT_SKINS.map((skin) => (
+                      <AgentIslandSkinRow
+                        key={skin}
+                        skin={skin}
+                        animationMode={animationModeForStep(animationSteps[skin])}
+                        onNextAnimation={handleNextMascotAnimation}
+                        selected={mascotSkin === skin}
+                        onSelect={setMascotSkin}
+                      />
+                    ))}
+                  </SettingsBlock>
+                </>
+              )}
+            </SettingsCard>
+
+            <SettingsCard className="flex flex-col">
+              <SettingsRow
+                title={<span id={agentIslandSettings.soundLabel.targetId}>{t(agentIslandSettings.soundLabel.titleKey)}</span>}
+                hint={t(agentIslandSettings.soundLabel.descriptionKey)}
+                trailing={
+                  <div className="flex shrink-0 items-center gap-2">
+                    <DefaultOverrideControls
+                      isCustomized={soundCustomized}
+                      disabled={soundResetPending}
+                      onReset={() => void handleResetSoundSettings()}
+                    />
+                    <Switch data-setting-id={agentIslandSettings.soundLabel.id}
+                      checked={soundSettings.enabled}
+                      disabled={soundResetPending}
+                      onCheckedChange={setSoundEnabled}
+                      aria-label={t('settings.agentIsland.soundAria')}
+                    />
+                  </div>
+                }
+              />
+
+              {soundSettings.enabled && (
+                <SettingsBlock className="grid gap-2">
+                  {AGENT_ISLAND_SOUND_EVENTS.map((event) => (
+                    <AgentIslandSoundRow
+                      key={event}
+                      event={event}
+                      value={soundSettings.sounds[event]}
+                      onChange={(sound) => setSound(event, sound)}
+                      onSelectCustom={selectSoundFile}
+                      onPreview={previewSound}
+                    />
+                  ))}
+                </SettingsBlock>
+              )}
+            </SettingsCard>
+          </>
+        )}
+      </SettingsSection>
+    </SettingsSection>
   );
 }
 
@@ -600,8 +615,8 @@ function MascotPreviewImage({
 }
 
 /**
- * Sprite 皮肤预览:键盘与眼睛全部用绝对定位 HTML 元素表达(原为内联 SVG),
- * 让 keyboard-tap / key-flash / eye-focus 常驻动画挂在 HTML 上(规则 7)。
+ * Sprite 皮肤预览:眼睛用绝对定位 HTML 元素表达(原为内联 SVG),
+ * 让 eye-focus 等常驻动画挂在 HTML 上(规则 7)。
  * props(src / config)均为模块常量,memo 让 1.7s 轮播 tick 不再重渲此子树
  * (动画模式切换走父级 data-motion 属性,不经过本组件)。
  */
@@ -615,42 +630,6 @@ const SpriteMascotPreview = memo(function SpriteMascotPreview({
   const eyesBox = getMascotEyesBox(config);
   return (
     <div className="relative h-10 w-10">
-      <div
-        className="agent-island-mascot-keyboard pointer-events-none absolute inset-0"
-        aria-hidden="true"
-      >
-        <span
-          className="absolute block rounded-[50%] bg-black"
-          style={{
-            ...mascotViewBoxStyle(8 - 4.2, 14.3 - 0.48, 4.2 * 2, 0.48 * 2),
-            opacity: 0.28,
-          }}
-        />
-        <span
-          className="absolute block"
-          style={{
-            ...mascotViewBoxStyle(0.5, 13, 15, 3),
-            backgroundColor: config.keyboardBase,
-          }}
-        />
-        {MASCOT_KEY_RECTS.map((index) => {
-          const row = Math.floor(index / 6);
-          const col = index % 6;
-          return (
-            <span
-              key={index}
-              className="agent-island-mascot-key absolute block"
-              style={{
-                ...mascotViewBoxStyle(1 + col * 2.4, 13.5 + row * 1.2, 1.8, 0.7),
-                '--agent-island-key-delay': `${index * 38}ms`,
-                backgroundColor: index === 2 ? 'white' : config.keyboardKey,
-                borderRadius: MASCOT_KEY_BORDER_RADIUS,
-                opacity: index === 2 ? 0.9 : 1,
-              } as CSSProperties}
-            />
-          );
-        })}
-      </div>
       <div
         className="agent-island-mascot-character absolute inset-0 flex items-center justify-center"
         style={{ '--agent-island-mascot-scale': config.imageScale ?? 1 } as CSSProperties}
@@ -769,60 +748,59 @@ function AgentIslandSoundRow({
       >
         {t(`settings.agentIsland.soundEvents.${event}`)}
       </label>
-      <div className="relative min-w-0">
-        <select data-setting-id={agentIslandSettings.soundLabel.id}
-          id={`agent-island-sound-${event}`}
-          value={selectValue}
-          onChange={async (e) => {
-            const next = e.target.value;
-            if (next === CUSTOM_SOUND_OPTION_VALUE) {
-              const customSound = await onSelectCustom();
-              if (customSound) onChange(customSound);
-              return;
-            }
-            onChange({ type: 'builtin', id: next as AgentIslandSoundId });
-          }}
+      {/* Dense per-event list: compact 32px trigger filling its grid column. */}
+      <Select data-setting-id={agentIslandSettings.soundLabel.id}
+        id={`agent-island-sound-${event}`}
+        size="compact"
+        width="full"
+        truncateOptions
+        value={selectValue}
+        onValueChange={async (next) => {
+          if (next === CUSTOM_SOUND_OPTION_VALUE) {
+            const customSound = await onSelectCustom();
+            if (customSound) onChange(customSound);
+            return;
+          }
+          onChange({ type: 'builtin', id: next as AgentIslandSoundId });
+        }}
+        label={t('settings.agentIsland.soundSelectAria', {
+          event: t(`settings.agentIsland.soundEvents.${event}`),
+        })}
+        options={[
+          ...AGENT_ISLAND_SOUND_OPTIONS.map((option) => ({
+            value: option,
+            label: t(`settings.agentIsland.soundOptions.${option}`),
+          })),
+          {
+            value: CUSTOM_SOUND_OPTION_VALUE,
+            label: value.type === 'custom'
+              ? t('settings.agentIsland.soundOptions.customSelected', { name: value.name })
+              : t('settings.agentIsland.soundOptions.custom'),
+          },
+        ]}
+      />
+      <Tip
+        text={t('settings.agentIsland.soundPreviewAria', {
+          event: t(`settings.agentIsland.soundEvents.${event}`),
+        })}
+        side="top"
+      >
+        <button data-settings-search-action="Preview the selected notification sound"
+          type="button"
           className={cn(
-            'h-8 w-full min-w-0 appearance-none rounded-full border py-0 pl-3 pr-8 text-12 outline-none',
-            'bg-[var(--settings-input-bg)] text-[var(--settings-input-text)]',
-            'border-[var(--settings-input-border)] focus:ring-2 focus:ring-[var(--focus-ring-soft)]',
+            'flex h-8 w-8 items-center justify-center rounded-full border transition-colors',
+            'border-[var(--settings-input-border)] text-[var(--settings-section-sublabel)]',
+            'hover:bg-[var(--surface-chip)] disabled:cursor-default disabled:opacity-35',
           )}
-          aria-label={t('settings.agentIsland.soundSelectAria', {
+          disabled={isSilentAgentIslandSoundChoice(value)}
+          onClick={() => onPreview(value)}
+          aria-label={t('settings.agentIsland.soundPreviewAria', {
             event: t(`settings.agentIsland.soundEvents.${event}`),
           })}
         >
-          {AGENT_ISLAND_SOUND_OPTIONS.map((option) => (
-            <option key={option} value={option}>
-              {t(`settings.agentIsland.soundOptions.${option}`)}
-            </option>
-          ))}
-          <option value={CUSTOM_SOUND_OPTION_VALUE}>
-            {value.type === 'custom'
-              ? t('settings.agentIsland.soundOptions.customSelected', { name: value.name })
-              : t('settings.agentIsland.soundOptions.custom')}
-          </option>
-        </select>
-        <ChevronDown
-          size={14}
-          className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-[var(--text-secondary-mid)]"
-          aria-hidden="true"
-        />
-      </div>
-      <button data-settings-search-action="Preview the selected notification sound"
-        type="button"
-        className={cn(
-          'flex h-8 w-8 items-center justify-center rounded-full border transition-colors',
-          'border-[var(--settings-input-border)] text-[var(--settings-section-sublabel)]',
-          'hover:bg-[var(--surface-chip)] disabled:cursor-default disabled:opacity-35',
-        )}
-        disabled={isSilentAgentIslandSoundChoice(value)}
-        onClick={() => onPreview(value)}
-        aria-label={t('settings.agentIsland.soundPreviewAria', {
-          event: t(`settings.agentIsland.soundEvents.${event}`),
-        })}
-      >
-        <Volume2 size={14} />
-      </button>
+          <Volume2 size={14} aria-hidden />
+        </button>
+      </Tip>
     </div>
   );
 }

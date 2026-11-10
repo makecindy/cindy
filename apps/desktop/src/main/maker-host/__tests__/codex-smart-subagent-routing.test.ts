@@ -3,7 +3,9 @@ import type { CatalogModel, ProviderView } from '@cindy/model-providers';
 
 import {
   buildCodexSmartModelCatalog,
+  parentReasoningEffortForSmartRoute,
   selectCodexSmartSubagentCandidates,
+  withParentReasoningEffort,
 } from '../codex-smart-subagent-routing';
 
 function model(id: string, group = 'china'): CatalogModel {
@@ -208,5 +210,24 @@ describe('Codex smart Subagent catalog', () => {
       include_skills_usage_instructions: true,
       multi_agent_version: 'v2',
     });
+  });
+
+  it('stamps the parent level onto smart routes and leaves a missing level off', () => {
+    const routes = [
+      { providerId: 'openai', catalogModel: 'gpt-5.6-sol' },
+      { providerId: 'xd', catalogModel: 'deepseek/deepseek-v4-flash', reasoningEffort: 'low' as const },
+    ];
+    expect(withParentReasoningEffort(routes, 'xhigh')).toEqual([
+      { providerId: 'openai', catalogModel: 'gpt-5.6-sol', reasoningEffort: 'xhigh' },
+      { providerId: 'xd', catalogModel: 'deepseek/deepseek-v4-flash', reasoningEffort: 'xhigh' },
+    ]);
+    expect(parentReasoningEffortForSmartRoute('max')).toBe('max');
+    for (const missing of [undefined, null, '', '   ', 'none', 'default']) {
+      expect(parentReasoningEffortForSmartRoute(missing)).toBeUndefined();
+      expect(withParentReasoningEffort(routes, missing)).toEqual([
+        { providerId: 'openai', catalogModel: 'gpt-5.6-sol' },
+        { providerId: 'xd', catalogModel: 'deepseek/deepseek-v4-flash' },
+      ]);
+    }
   });
 });

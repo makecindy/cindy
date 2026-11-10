@@ -110,11 +110,13 @@ export function validPluginTaskRequest(value: unknown): value is PluginTaskReque
     if (
       !object(r) ||
       Object.keys(r).some(
-        (k) => !['agentKind', 'providerId', 'model', 'effort', 'fastMode'].includes(k),
+        (k) => !['agentKind', 'providerId', 'model', 'effort', 'fastMode', 'agentDeviceId'].includes(k),
       )
     )
       return false;
     if (
+      (r.agentDeviceId !== undefined && (typeof r.agentDeviceId !== 'string' ||
+        !/^[A-Za-z0-9_.:-]{1,128}$/.test(r.agentDeviceId) || r.agentDeviceId === 'local')) ||
       !['cc', 'codex', 'pi'].includes(String(r.agentKind)) ||
       !text(r.providerId, 128) ||
       !text(r.model, 256) ||
@@ -164,6 +166,7 @@ export async function handlePluginTaskRequest(
         targets: ['own-plugin-local-session'],
         maxPageSize: 100,
         exactRoute: true,
+        remoteRoutes: true,
         pluginDefaultModel: true,
         sourceCallContext: true,
         invocationContext: true,

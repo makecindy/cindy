@@ -13,7 +13,7 @@
 import { asc, eq, inArray, sql } from 'drizzle-orm';
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
 
-import { getDbClient } from '../localDb/client/current';
+import { getDbClient, getCurrentDbClientSnapshot } from '../localDb/client/current';
 import type * as schema from '../localDb/schema';
 import { ghostCards } from '../localDb/schema';
 import type { GhostCardRow } from './cardService';
@@ -138,6 +138,35 @@ export async function reassignGhostCards(
   db: GhostCardDb = defaultDb(),
 ): Promise<void> {
   await db.update(ghostCards).set({ ghostId: toGhostId }).where(eq(ghostCards.ghostId, fromGhostId));
+}
+
+/**
+ * 内置意识改名台账([旧 id, 新 id]):播种器的孤儿回收负责"旧包收走、新包
+ * 装上",这里驱动存量数据迁移(历史卡片归属 / KV 偏好)。改完名的条目长期
+ * 保留——老设备可能隔很多版本才升级,迁移必须一直在场。
+ */
+export const RENAMED_BUILTIN_GHOSTS: ReadonlyArray<readonly [string, string]> = [
+  ['cindy-mivo', 'xd-mivo'], // 2026-07-13 更名 XD Mivo
+  ['cindy-feishu', 'xd-feishu'], // 2026-07-16 更名 XD Feishu(企业档)
+];
+
+/** Called by localDb onReady before releasing history readers, independently of plugin provisioning. */
+export async function reconcileRenamedBuiltinGhostCards(userId: string): Promise<void> {
+  const owner = getCurrentDbClientSnapshot();
+  if (!owner || owner.userId !== userId) {
+    throw new Error('Ghost card migration database owner is not ready');
+  }
+  const assertCurrent = () => {
+    if (getCurrentDbClientSnapshot() !== owner) {
+      throw new Error('Ghost card migration database owner is not ready');
+    }
+  };
+  assertCurrent();
+  const db = owner.client.drizzle;
+  for (const [fromId, toId] of RENAMED_BUILTIN_GHOSTS) {
+    await reassignGhostCards(fromId, toId, db);
+    assertCurrent();
+  }
 }
 
 /** 上限裁剪:总行数超限时删最旧的溢出部分。导出供测试直调。 */

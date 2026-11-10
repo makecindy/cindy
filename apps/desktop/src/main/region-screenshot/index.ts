@@ -12,8 +12,9 @@ import {
 } from 'electron';
 
 import { createLogger } from '../logger';
+import { measureTraceOperation } from '../performance-trace/measure';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState';
-import { t } from '../i18n';
+import { t } from '../i18n.desktop';
 import type { SupportedLocale } from '../../shared/locale';
 import {
   getAppShortcutStore,
@@ -40,7 +41,7 @@ import {
   type RegionScreenshotResult,
 } from './session';
 import { SnapshotHelper, type SnapshotWindow } from './snapshotHost';
-import { captureScreenshotDisplays } from './liveCapture';
+import { captureScreenshotDisplays, nativeScreenshotPrecheck } from './liveCapture';
 import { REGION_CAPTURE_CHANNEL as LIVE } from '../../shared/regionCapture';
 import { registerRecordingAudioIpc } from './recordingAudio';
 
@@ -231,25 +232,38 @@ async function startRegionScreenshot(): Promise<void> {
     });
     let snapshotMs = 0;
     let captureMs = 0;
+    const displays = screen.getAllDisplays();
+    let releaseHelper!: () => void;
+    const helperFree = new Promise<void>((resolve) => { releaseHelper = resolve; });
+    // Register the window queries first: when Electron capture is chosen up
+    // front, captureScreenshotDisplays reaches getSources' synchronous work
+    // without yielding, so a later-registered query would wait behind it.
     const snapshot = helperReady.then(async (h) => {
-      const result = {
+      // Windows frames and window queries share one serial native helper. Do
+      // not let a slow optional query consume a queued frame's timeout (or kill
+      // its helper): finish every native frame first. Electron capture (macOS,
+      // HDR / wide gamut, or after native frames fail) does not use the helper,
+      // so the queries stay parallel with it.
+      if (!nativeScreenshotPrecheck(displays, h)) await helperFree;
+      const result = await measureTraceOperation('region-screenshot:windows', async () => ({
         windows: await h.windows(),
         frontmostPid: await h.frontmostPid(),
         topInsets: await h.screenInsets(),
-      };
+      }));
       snapshotMs = Date.now() - startedAt;
       return result;
     });
-    const displays = screen.getAllDisplays();
+    const captureReady = helperReady.then(async (h) => {
+      const result = await captureScreenshotDisplays(displays, h, releaseHelper);
+      captureMs = Date.now() - startedAt;
+      return result;
+    });
+    void captureReady.then(releaseHelper, releaseHelper);
     const [capture, snap] = await Promise.all([
-      helperReady.then(async (h) => {
-        const result = await captureScreenshotDisplays(displays, h);
-        captureMs = Date.now() - startedAt;
-        return result;
-      }),
+      captureReady,
       snapshot.catch(() => ({ windows: [] as SnapshotWindow[], frontmostPid: null, topInsets: new Map<number, number>() })),
     ]);
-    const { captures, backend } = capture;
+    const { captures, backend, fallbackReason } = capture;
     helper = await helperReady;
     if (isAppSessionBoundaryPending() || ownerScope !== activeOwnerScopeKey()) return;
     const capturedAt = Date.now();
@@ -268,7 +282,7 @@ async function startRegionScreenshot(): Promise<void> {
       topInsets: snap.topInsets,
       lastRegions,
       onRevealed: () => log.info('screenshot visible', {
-        totalMs: Date.now() - startedAt, captureMs, snapshotMs, backend,
+        totalMs: Date.now() - startedAt, captureMs, snapshotMs, backend, fallbackReason,
         displayCount: captures.length,
       }),
       openEditor: (image, display, selection) => editor.open(image, display, selection, ownerScope),
@@ -296,9 +310,12 @@ async function startRegionScreenshot(): Promise<void> {
     const opened = await session.open();
     log.info('screenshot opened', {
       opened,
+      // Keeps its original meaning (frames + window queries) for comparable logs.
       captureMs: capturedAt - startedAt,
+      frameMs: captureMs,
       snapshotMs,
       backend,
+      fallbackReason,
       openMs: Date.now() - capturedAt,
       windows: snap.windows.length,
     });

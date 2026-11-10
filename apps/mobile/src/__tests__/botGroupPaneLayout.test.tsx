@@ -1,3 +1,4 @@
+vi.mock('@/session/TaskDrawerPresentation', () => ({ useTaskDrawerPresentation: () => null }));
 // @vitest-environment jsdom
 import * as React from 'react';
 import { act } from 'react';
@@ -16,6 +17,7 @@ const geometry = (): WindowGeometry => ({
 vi.mock('react-native', async () => {
   const React = await import('react');
   return {
+    Platform: { OS: 'ios' }, BackHandler: { addEventListener: () => ({ remove() {} }) },
     StyleSheet: { create: (v: any) => v },
     useWindowDimensions: () => ({ width: state.width, height: 800 }),
     View: ({ children, style }: any) => {
@@ -25,11 +27,16 @@ vi.mock('react-native', async () => {
   };
 });
 vi.mock('react-native-safe-area-context', () => ({ useSafeAreaInsets: () => ({ top: 0, right: 0, bottom: 0, left: 0 }) }));
-vi.mock('expo-router', () => ({ useLocalSearchParams: () => ({ groupId: 'g1', deviceId: 'mac', deviceName: 'Mac' }) }));
+vi.mock('expo-router/react-navigation', () => ({ useIsFocused: () => true }));
+vi.mock('@/platform/gestureHandler', () => ({ GestureDetector: ({ children }: any) => children }));
+vi.mock('@/platform/AdaptiveWindowContext', () => ({ useAdaptiveWindow: () => geometry(), PaneViewportProvider: ({ children }: any) => children }));
+vi.mock('@/session/useSessionHeaderHeight', () => ({ useSessionHeaderHeight: () => 44 }));
+vi.mock('@/session/SessionPaneDivider', () => ({ SessionPaneDivider: () => null }));
+vi.mock('expo-router', () => ({ Stack: { Screen: () => null }, useLocalSearchParams: () => ({ groupId: 'g1', deviceId: 'mac', deviceName: 'Mac' }) }));
 vi.mock('@/auth/AuthContext', () => ({ useAuth: () => ({ accountGeneration: 1 }) }));
-vi.mock('@/session/ResidentHomeList', () => ({ useSessionPaneLayout: () => sessionPaneLayout(geometry()) }));
+vi.mock('@/session/ResidentHomeList', () => ({ useSessionSidebarWidthPreference: () => ({ width: null, setWidth() {} }), useSessionPaneLayout: () => sessionPaneLayout(geometry()) }));
 vi.mock('@/session/RecentMessageHistories', () => ({ MessageHistoryOverlay: ({ children }: any) => children }));
-vi.mock('@/session/SessionListDrawer', () => ({ SessionListDrawer: (props: any) => { state.drawer = props; return null; } }));
+vi.mock('@/session/SessionListDrawer', () => ({ useSessionListDrawerMotion: () => ({}), useSessionListDrawerOpenGesture: () => ({}), SessionListDrawer: (props: any) => { state.drawer = props; return null; } }));
 vi.mock('@/session/BotGroupChatScreen', async () => {
   const React = await import('react');
   return { BotGroupChatScreen: () => {
@@ -58,10 +65,11 @@ it('places the routed group chat beside a persistent sidebar and keeps it mounte
   expect(Number(pane().getAttribute('data-margin-right'))).toBe(1000 - wide.detail.x - wide.detail.width);
   expect(state.drawer).toMatchObject({ persistent: true, open: true, width: wide.sidebarWidth });
   expect(state.drawer.onSelectSession).toBeUndefined();
+  expect(state.drawer.topInset).toBeUndefined(); // Persistent columns must not add the group header height.
 
   state.width = 430; state.drawer = null; render();
   expect(pane().getAttribute('data-margin-left')).toBe('0');
-  expect(state.drawer).toBeNull();
+  expect(state.drawer).toMatchObject({ persistent: false, open: false });
 
   state.width = 1000; render();
   expect(Number(pane().getAttribute('data-margin-left'))).toBe(wide.detail.x);

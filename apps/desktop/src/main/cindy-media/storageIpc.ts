@@ -21,7 +21,7 @@
 
 import { createLogger } from '../logger';
 import { throwIpcError } from '../utils/ipcValidate';
-import * as blobStore from './blobStore';
+import * as blobStore from './blobStore.desktop';
 import * as ledger from './ledger';
 import * as recycler from './recycler';
 import * as legacyDeadDirs from './legacyDeadDirs';

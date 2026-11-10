@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const deps = vi.hoisted(() => ({ read: vi.fn(), session: vi.fn(), realpath: vi.fn(), stat: vi.fn(), query: vi.fn() }));
 vi.mock('../../localDb/client/current.js', () => ({ getDbClient: () => ({ query: deps.query }) }));
 vi.mock('node:fs/promises', () => ({ realpath: deps.realpath, stat: deps.stat }));
-vi.mock('../../cindy-media/blobStore.js', () => ({ parseBlobUrl: (url: string) => url === 'cindy-media://blobs/hash.png' ? { hash: 'hash' } : null }));
+vi.mock('../../cindy-media/blobStore.desktop.js', () => ({ parseBlobUrl: (url: string) => url === 'cindy-media://blobs/hash.png' ? { hash: 'hash' } : null }));
 vi.mock('../../cindy-media/ledger.js', () => ({ sessionCanRead: deps.read }));
 vi.mock('../../localDb/ipc/sessions.js', () => ({ getSessionFsSnapshot: deps.session }));
 import { assertSharedTaskMedia } from '../sharedTaskMediaAccess.js';

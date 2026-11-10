@@ -9,12 +9,16 @@ import type {
 export function pendingHarnessRuntimeMutation(
   intent: PendingAgentSwitchIntent | undefined,
   generation: number,
+  currentAgentDeviceId?: string | null,
 ): PendingSessionRuntimeMutation | null {
   if (intent?.runtimeSource !== 'agent') return null;
   return {
     generation,
     source: 'agent',
     profile: {
+      ...(intent.targetAgentDeviceId !== undefined || currentAgentDeviceId !== undefined
+        ? { agentDeviceId: intent.targetAgentDeviceId === undefined ? currentAgentDeviceId : intent.targetAgentDeviceId }
+        : {}),
       agentKind: intent.targetAgentKind,
       model: intent.model,
       providerId: intent.providerId ?? null,
@@ -52,6 +56,7 @@ export async function setSessionRuntimeHarness(
     beforeMutation?: () => Promise<void>;
     patch: {
       harness: AgentKind;
+      agentDeviceId?: string | null;
       model?: string;
       providerId?: string | null;
       effort?: Effort | null;
@@ -66,6 +71,10 @@ export async function setSessionRuntimeHarness(
       errorCode: 'INVALID_ARGS',
       message: 'harness requires a valid target harness and model',
     };
+  }
+  if (patch.agentDeviceId !== undefined && patch.agentDeviceId !== null &&
+    (!/^[A-Za-z0-9_.:-]{1,128}$/.test(patch.agentDeviceId) || patch.agentDeviceId === 'local')) {
+    return { ok: false, errorCode: 'INVALID_ARGS', message: 'Invalid Agent execution source' };
   }
   const owner = deps.ownerEpoch();
   try {
@@ -91,6 +100,9 @@ export async function setSessionRuntimeHarness(
         return { ok: false, errorCode: 'NOT_FOUND', message: `session ${id} not found` };
       const profile = await deps.resolve(
         {
+          ...(patch.agentDeviceId !== undefined || effective.agentDeviceId !== undefined
+            ? { agentDeviceId: patch.agentDeviceId === undefined ? effective.agentDeviceId : patch.agentDeviceId }
+            : {}),
           agentKind: patch.harness,
           model: patch.model!,
           // Never inherit an old harness's provider when selecting a new target.
@@ -123,7 +135,7 @@ export async function setSessionRuntimeHarness(
         effectiveBoundary: 'next_send',
         generation,
         effectiveProfile: effective,
-        pendingMutation: pendingHarnessRuntimeMutation(deps.pending(id), generation),
+        pendingMutation: pendingHarnessRuntimeMutation(deps.pending(id), generation, effective.agentDeviceId),
       };
     });
   } catch (error) {

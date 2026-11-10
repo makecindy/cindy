@@ -297,6 +297,56 @@ describe('prepareTaskWorktree', () => {
     expect(deps.detectCwd).toHaveBeenCalledWith(repo);
   });
 
+  // #9513:显式基线分支。默认路径取远端默认分支,给出 base_ref 时按该引用切出,
+  // 且引用解析不了必须报错而不是回退默认分支。
+  it('branches from the explicit base ref instead of the remote default branch', async () => {
+    const resolveFreshSource = vi.fn(async () => ({ sourceBranch: 'refs/remotes/origin/main' }));
+    const deps = makeDeps({ resolveFreshSource });
+    const res = await prepareTaskWorktree(deps, {
+      sessionId: 'task-1',
+      caller,
+      baseRef: 'release/2.x',
+    });
+    expect(res).toMatchObject({ ok: true, created: true, meta: { sourceBranch: 'release/2.x' } });
+    expect(deps.createWorktree).toHaveBeenCalledWith({
+      sessionId: 'task-1',
+      baseRepo: BASE,
+      name: 'fresh-name',
+      sourceBranch: 'release/2.x',
+    });
+    expect(resolveFreshSource).not.toHaveBeenCalled();
+  });
+
+  it('fails instead of falling back to the default branch when the base ref does not resolve', async () => {
+    const resolveFreshSource = vi.fn(async () => ({ sourceBranch: 'refs/remotes/origin/main' }));
+    const deps = makeDeps({
+      resolveFreshSource,
+      createWorktree: vi.fn(async () => ({
+        ok: false as const,
+        error: { kind: 'unknown' as const, message: '源分支 "release/2.x" 不存在' },
+      })),
+    });
+    const res = await prepareTaskWorktree(deps, {
+      sessionId: 'task-1',
+      caller,
+      baseRef: 'release/2.x',
+    });
+    expect(res).toMatchObject({ ok: false, errorCode: 'WORKTREE_UNAVAILABLE' });
+    expect(res.ok === false && res.message).toContain('release/2.x');
+    expect(resolveFreshSource).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['option injection', '-upload-pack=evil'],
+    ['empty', '   '],
+    ['control character', 'release/2.x\u0000'],
+  ] as const)('rejects a malformed base ref (%s) without touching git', async (_label, baseRef) => {
+    const deps = makeDeps();
+    const res = await prepareTaskWorktree(deps, { sessionId: 'task-1', caller, baseRef });
+    expect(res).toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+    expect(deps.createWorktree).not.toHaveBeenCalled();
+  });
+
   it('reports a directory that is not a git repository as WORKTREE_UNAVAILABLE', async () => {
     const deps = makeDeps({
       detectCwd: vi.fn(async () => ({ isGitRepo: false, isInsideWorktree: false, gitInstalled: true })),

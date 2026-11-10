@@ -9,7 +9,10 @@
  * 披露是产品有意接受的取舍，不要重新合并成 GHOST_NOT_FOUND。
  */
 
+import { compareCindyVersions } from '@cindy/plugin-protocol';
+
 import { isValidGhostId, type InstalledGhost } from '../../shared/ghost.js';
+
 import {
   findInstalledGhostByInstanceId,
   formatInstalledGhostAmbiguity,
@@ -19,7 +22,7 @@ import {
   resolveInstalledGhost,
   hasDeliveryNamespace,
 } from '../../shared/pluginIdentity.js';
-import { t } from '../i18n.js';
+
 
 export type GhostVisibilityResult =
   | { ok: true; ghost: InstalledGhost }
@@ -30,27 +33,81 @@ export type GhostVisibilityResult =
       candidates?: Array<{ ghostId: string; namespace: string | null }>;
     };
 
+
 export interface GhostVisibilityDeps {
   listGhosts: () => InstalledGhost[];
   /** Fresh exact-instance lookup, never a completed authorization cache. */
   findInstalledInstance?: (instanceKey: string) => InstalledGhost | undefined;
   isAvailableForActiveSession: (ghostId: string) => boolean;
   isDisabledForWorkdir: (ghostId: string, workdir: string | null) => boolean;
+  /**
+   * Whether discovery lists this copy for the Agent (for example it has tools or
+   * a manual). A bare name must pick its version among the same candidates that
+   * `ghost_list` shows, so a panel-only copy cannot win over a listed one.
+   */
+  isDiscoverable?: (ghost: InstalledGhost) => boolean;
+}
+export function createGhostVisibility(t: (key: string) => string) {
+
+
+/** Discovery policy only: never merge installation identity, credentials or state.
+ * A disabled/unavailable copy cannot hide a usable one. Organizations and
+ * unresolved legacy identities remain independent.
+ */
+function preferLatestLocalOrPublicGhosts(
+  ghosts: InstalledGhost[],
+  isEligible: (ghost: InstalledGhost) => boolean = () => true,
+): InstalledGhost[] {
+  const pairs = new Map<string, { local: InstalledGhost[]; public: InstalledGhost[] }>();
+  for (const ghost of ghosts) {
+    if (ghost.namespaceState === 'pending' || ghost.namespaceState === 'unconfirmed' ||
+        !hasDeliveryNamespace(ghost) || (ghost.namespace !== null && ghost.namespace !== 'local')) continue;
+    const pair = pairs.get(ghost.manifest.id) ?? { local: [], public: [] };
+    pair[ghost.namespace === 'local' ? 'local' : 'public'].push(ghost);
+    pairs.set(ghost.manifest.id, pair);
+  }
+  const hidden = new Set<InstalledGhost>();
+  for (const pair of pairs.values()) {
+    // Duplicate physical identities or invalid historical versions need explicit
+    // addressing; do not manufacture a winner from iteration order.
+    if (pair.local.length !== 1 || pair.public.length !== 1) continue;
+    const local = pair.local[0]!;
+    const published = pair.public[0]!;
+    const localEligible = isEligible(local);
+    const publicEligible = isEligible(published);
+    if (!localEligible && !publicEligible) continue;
+    if (localEligible !== publicEligible) {
+      hidden.add(localEligible ? published : local);
+      continue;
+    }
+    const order = compareCindyVersions(local.manifest.version, published.manifest.version);
+    if (order !== null) hidden.add(order > 0 ? published : local);
+  }
+  return ghosts.filter((ghost) => !hidden.has(ghost));
 }
 
-export function classifyGhostVisibility(
+
+function classifyGhostVisibility(
   ghostId: string,
   workdir: string | null,
   deps: GhostVisibilityDeps,
   namespace?: string | null,
 ): GhostVisibilityResult {
   const listed = deps.listGhosts();
-  // Agent、用户和深链传来的是逻辑名。裸 ghostId 在多个实例之间必须报歧义，
-  // 不能因为旧 root 的实例键恰好也是这个名字就选中它。
+  // Agent、用户和深链传来的是逻辑名。除 public/local 日常版本选择外，
+  // 多个实例仍报歧义，不能因为旧 root 的实例键恰好同名就选中它。
   // 存储键（_root__helper、_ns__acme__helper）不是合法 ghostId，按实例精确匹配。
   const byName = namespace !== undefined || isValidGhostId(ghostId);
+  // A bare name follows daily discovery. Explicit namespace/storage identity
+  // remains exact for developer tools, existing pages and in-flight operations.
+  const candidates = namespace === undefined && byName
+    ? preferLatestLocalOrPublicGhosts(
+        listed,
+        (ghost) => classifyGhostAvailability(ghost, workdir, deps).ok && (deps.isDiscoverable?.(ghost) ?? true),
+      )
+    : listed;
   const resolved = byName
-    ? resolveInstalledGhost(listed, ghostId, namespace)
+    ? resolveInstalledGhost(candidates, ghostId, namespace)
     : (() => {
         const ghost = findInstalledGhostByInstanceId(listed, ghostId);
         return ghost
@@ -101,6 +158,7 @@ export function classifyGhostVisibility(
   return classifyGhostAvailability(resolved.ghost, workdir, deps);
 }
 
+
 function classifyGhostAvailability(
   ghost: InstalledGhost,
   workdir: string | null,
@@ -136,7 +194,8 @@ function classifyGhostAvailability(
   return { ok: true, ghost };
 }
 
-export function classifyInstalledGhostVisibility(
+
+function classifyInstalledGhostVisibility(
   target: InstalledGhost,
   workdir: string | null,
   deps: GhostVisibilityDeps,
@@ -155,4 +214,6 @@ export function classifyInstalledGhostVisibility(
     return { ok: false, errorCode: 'GHOST_NOT_FOUND', message: t('newChat.pluginSetup.targetNotFound') };
   }
   return classifyGhostAvailability(ghost, workdir, deps);
+}
+return { preferLatestLocalOrPublicGhosts, classifyGhostVisibility, classifyInstalledGhostVisibility };
 }

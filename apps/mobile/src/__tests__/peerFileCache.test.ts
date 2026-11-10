@@ -62,7 +62,7 @@ vi.mock("expo-file-system", () => ({
     }
     async base64() { return Buffer.from(disk.files.get(this.uri)!).toString('base64'); }
     async text() { return new TextDecoder().decode(disk.files.get(this.uri)); }
-    write(value: string | Uint8Array) { disk.files.set(this.uri, typeof value === "string" ? new TextEncoder().encode(value) : value); }
+    writeSync(value: string | Uint8Array) { disk.files.set(this.uri, typeof value === "string" ? new TextEncoder().encode(value) : value); }
     async copy(target: { uri: string }) {
       disk.copying = true;
       if (disk.gate) await disk.gate;
@@ -113,7 +113,7 @@ it('restores preview bytes offline, isolates account/device/SSH, and rejects a c
   expect(createMobileHtmlPreviewCache(sharedTaskHostPeer('shared', 'host'), '/site')).toBeUndefined();
   const cache = createMobileHtmlPreviewCache('desktop-a', '/site')!;
   const input = new File('file:///input.html');
-  input.write('<p>Cached</p>');
+  input.writeSync('<p>Cached</p>');
   // A transfer saved before cache-first previews existed must also open offline.
   const transfer = await createPeerFileCache(JSON.stringify(['global', 'html-owner']));
   const meta = { ...metadata, size: input.size };
@@ -186,16 +186,16 @@ it.each(['', '<p>Old</p>'])('persists empty preview files after initial content 
   const cache = createMobileHtmlPreviewCache('desktop', '/site')!;
   const source = new File(`file:///input-${account}.html`);
   const destination = new File(`file:///output-${account}.html`);
-  source.write('<p>Old transfer</p>');
+  source.writeSync('<p>Old transfer</p>');
   const transfer = await createPeerFileCache(owner);
   const meta = { ...metadata, size: source.size };
   const media = { ossKey: '', ...meta };
   recordPeerMedia(media, source.uri, () => {});
   await transfer.store('desktop', remoteFileMediaUrl('/site/index.html', undefined, undefined,
     { baseDir: '/site', maxBytes: FILE_PEER_MAX_BYTES }), meta, media);
-  source.write(initial);
+  source.writeSync(initial);
   await cache.store('index.html', source, 'text/html');
-  source.write('');
+  source.writeSync('');
   await cache.store('index.html', source, 'text/html');
   expect(await cache.copy('index.html', destination)).toBe(0);
   expect(await destination.text()).toBe('');

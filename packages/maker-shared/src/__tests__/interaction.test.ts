@@ -3,6 +3,7 @@ import {
   splitQuestionReferences,
   asyncQuestionNeedsSupplement,
   formatAsyncQuestionSupplement,
+  withdrawnQuestionDraftText,
   buildAskQuestionProgressSummary,
   buildAskQuestionReviewPresentation,
   buildAskUserQuestionDecision,
@@ -25,10 +26,10 @@ import {
   describePermissionAction,
   formatPermissionInput,
   interactionBlocksRemoteComposer,
+  pendingInteractionsBlockRemoteComposer,
   isFreeTextAskOptionLabel,
   normalizeAskQuestions,
   normalizeIssueConfirm,
-  pendingInteractionsBlockRemoteComposer,
   permissionRiskSummary,
   permissionTitle,
   remoteInteractionHandling,
@@ -39,6 +40,14 @@ import {
   visibleAskOptions,
   type PendingInteractionLike,
 } from '../interaction.js';
+
+it('restores the composer for collapsed questions while another approval still blocks it', () => {
+  const question = { request: { kind: 'ask_user_question', requestId: 'q', delivery: 'async' } };
+  const permission = { request: { kind: 'permission', requestId: 'p' } };
+  expect(pendingInteractionsBlockRemoteComposer([question])).toBe(true);
+  expect(pendingInteractionsBlockRemoteComposer([question], ['q'])).toBe(false);
+  expect(pendingInteractionsBlockRemoteComposer([question, permission], ['q', 'p'])).toBe(true);
+});
 
 describe('interaction shared model', () => {
   // Unit regression: existing question presentation tests only covered prose.
@@ -101,6 +110,18 @@ describe('interaction shared model', () => {
     expect(formatAsyncQuestionSupplement([{ question: 'Scope?\nDetails?', header: 'Scope' }, { question: 'Skipped?' }],
       { Scope: 'Mobile too', 'Skipped?': '' })).toBe('> Scope?\n> Details?\n\nMobile too');
     expect(formatAsyncQuestionSupplement([{ question: 'Q?' }], {})).toBe('');
+  });
+
+
+  it('keeps delayed-answer context outside the native reply and never sends an empty reply', () => {
+    const question = { id: '["request_user_input_async","item",0]', question: 'Install?' };
+    const text = formatAsyncQuestionSupplement([question], { [question.id]: 'Yes' }, { late: true });
+    expect(text).toContain('</send_user_message_question_reply>\n\n<cindy_question_context>');
+    expect(text).toContain('whether the question still applies');
+    expect(text).toContain("not part of the user's answer or new authorization");
+    expect(formatAsyncQuestionSupplement([question], {}, { late: true })).toBe('');
+    expect(withdrawnQuestionDraftText('Details', ['A', 'B'])).toBe('A\nB\nDetails');
+    expect(withdrawnQuestionDraftText('', [], '["A","B"]')).toBe('A\nB');
   });
 
   it('never supplements an accepted native answer', async () => {
@@ -309,8 +330,8 @@ describe('interaction shared model', () => {
       name: 'browser', args: { action: 'recipe', recipeId: 'post-reply', site: 'x.com', text: 'hello' },
     }).preview).toBe('recipe {"recipeId":"post-reply","site":"x.com","text":"hello"}');
     // MCP names parse by plain string scan: both separators work and hostile names stay linear (CodeQL ReDoS).
-    expect(describePermissionAction('mcp__cindy_orca__create_workers', { n: 1 })).toMatchObject({ kind: 'plugin', subject: 'cindy_orca', preview: 'create_workers {"n":1}' });
-    expect(describePermissionAction('mcp:my-server:do_it', {})).toMatchObject({ kind: 'plugin', subject: 'my-server', preview: 'do_it' });
+    expect(describePermissionAction('mcp__cindy_orca__create_workers', { n: 1 })).toMatchObject({ kind: 'mcp', subject: 'cindy_orca', preview: 'create_workers {"n":1}' });
+    expect(describePermissionAction('mcp:my-server:do_it', {})).toMatchObject({ kind: 'mcp', subject: 'my-server', preview: 'do_it' });
     expect(describePermissionAction('mcp__', {}).kind).toBe('tool');
     const hostile = `mcp:9${'-9'.repeat(50_000)}`;
     const started = Date.now();
@@ -342,6 +363,17 @@ describe('interaction shared model', () => {
       toolName: 'Bash',
       metadata: { autoReviewUnavailable: true, autoReviewReason: 'stale' },
     }).autoReviewReason).toBeNull();
+  });
+
+  // Regression: ordinary MCP servers were labeled plugins and hid the Host's own title.
+  // Public presentation entry; unit tier; direct and progressive calls cover both preview paths.
+  it.each([
+    ['mcp__cindy_scheduler__schedule_delete', { id: 'completed-followup' }, '确认任务操作', '确认任务操作', 'schedule_delete {"id":"completed-followup"}'],
+    ['mcp:external-service:call_tool', { name: 'update_item', args: { id: 'item' } }, undefined, '允许使用 external-service?', 'update_item {"id":"item"}'],
+  ])('presents %s as an MCP tool without replacing an explicit title', (toolName, input, title, expectedTitle, code) => {
+    expect(buildPermissionReviewPresentation({
+      kind: 'permission', requestId: 'mcp-confirmation', toolName, input, title,
+    })).toMatchObject({ title: expectedTitle, code });
   });
 
   it('marks auto-review unavailable handoffs so mobile can localize the confirmation copy', () => {

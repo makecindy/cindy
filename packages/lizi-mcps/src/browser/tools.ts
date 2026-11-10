@@ -232,7 +232,7 @@ async function detectLoginWall(runtime: BrowserControlRuntime, profile: unknown,
     if (!checked.ok || (found?.password !== true && found?.code !== true)) return null;
     return {
       fields: [found.password === true ? 'password' : null, found.code === true ? 'one-time-code' : null].filter(Boolean),
-      hint: 'This page asks for a password or verification code. Do not type it yourself: call ask_owner with kind="fill" and this browser window as target (the browser\'s name as app and this page\'s title as window_title; a minimized window is brought back) so the owner completes the sign-in from their phone or another computer, then continue when it ends.',
+      hint: 'This page asks for a password or verification code. Do not type it yourself: call request_input_handoff with this browser window as target (the browser\'s name as app and this page\'s title as window_title; a minimized window is brought back) so the owner completes the sign-in from their phone or another computer, then continue when it ends.',
     };
   } catch {
     return null;
@@ -968,9 +968,13 @@ export function registerBrowserTools(registry: BrowserToolRegistry, deps: Browse
               try {
                 // Bundled recipes predate validation metadata; their guide
                 // supplies the owning site. Never guess from a host substring.
-                const sites = persisted.validation ? [persisted.validation.site] :
+                // A recipe listed under several guides for discovery keeps its
+                // first `match` host as the single persistence owner.
+                let sites = persisted.validation ? [persisted.validation.site] :
                   [...siteGuideRegistryFrom(await resolveUserLayer(deps)).values()]
                     .filter((g) => g.guide.recipes?.includes(id)).map((g) => g.guide.site);
+                const owner = persisted.match?.[0];
+                if (sites.length > 1 && owner && sites.includes(owner)) sites = [owner];
                 if (sites.length === 1) {
                   const saved = await deps.saveUserRecipe({ site: sites[0],
                     recipe: { ...persisted, validation: { ...persisted.validation, site: sites[0], state: 'suspended' } } });
@@ -1291,17 +1295,19 @@ export function registerBrowserTools(registry: BrowserToolRegistry, deps: Browse
           if (restricted) { retainResult = false; results.clear(); }
           if (!scopeIsCurrent() || !result.ok || extractFailed || restricted || args.action === 'close' || args.request?.kind === 'close') {
             if (targetKey) experiences.clear(targetKey);
-          } else if (args.action === 'open' || args.action === 'navigate') {
+          } else if (args.action === 'open' || args.action === 'navigate' || args.action === 'snapshot') {
             const actualUrl = (result.data as { url?: unknown } | undefined)?.url;
             const url = typeof actualUrl === 'string' ? actualUrl : args.url ?? args.targetUrl;
             if (url) {
               const site = new URL(url).hostname;
-              if (targetKey) experiences.start(targetKey, url);
+              if (targetKey && args.action !== 'snapshot') experiences.start(targetKey, url);
               const user = await resolveUserLayer(deps);
-              const key = JSON.stringify([site, args.profile ?? '', args.intent ?? '']);
+              const suggestions = suggestRecipes(recipeRegistryFrom(user), site, args.intent, args.profile, url);
+              // A homepage must not consume the later post-specific suggestion.
+              // Deduplicate by suggested capabilities, not every individual URL.
+              const key = JSON.stringify([site, args.profile ?? '', args.intent ?? '', suggestions.map(s => s.id)]);
               const version = user?.version ?? '';
               if (discovered.get(key) !== version) {
-                const suggestions = suggestRecipes(recipeRegistryFrom(user), site, args.intent, args.profile);
                 if (discovered.size >= 64) discovered.delete(discovered.keys().next().value!);
                 discovered.set(key, version);
                 if (suggestions.length) result = { ...result, recipeSuggestions: suggestions } as typeof result;

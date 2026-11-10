@@ -12,8 +12,8 @@ import { withSendToSessionLock, advanceSessionRewindGeneration } from './sendToS
 import { ipcMain } from 'electron';
 
 import { createLogger } from '../logger.js';
-import { previewRewindAtMessage, commitRewindAtMessage } from '../maker-orchestration/rewind.js';
-import { drainPersistQueue } from '../messagePersistBroadcaster.js';
+import { previewRewindAtMessage, commitRewindAtMessage, type RewindCommitOptions } from '../maker-orchestration/rewind.js';
+import { drainPersistQueue } from '../messagePersistBroadcaster.desktop.js';
 import { getGoalController } from '../goal-host/index.js';
 import { captureDataOwnerBroadcastScope } from '../device-link/broadcast-tap.js';
 import { broadcastSubagentRunsInvalidated } from '../localDb/ipc/subagentRuns.js';
@@ -43,7 +43,7 @@ const STOPPED_REWIND_TIMEOUT_MS = 15_000;
 async function commitAfterStopping(
   sessionId: string,
   clientId: string,
-  opts: { requireLatestUser: boolean; allowFileRestore?: boolean },
+  opts: RewindCommitOptions,
 ) {
   const deadline = Date.now() + STOPPED_REWIND_TIMEOUT_MS;
   while (true) {
@@ -61,7 +61,7 @@ async function commitAfterStopping(
 async function commitAfterPersistBarrier(
   sessionId: string,
   clientId: string,
-  opts: { requireLatestUser: boolean; allowFileRestore?: boolean },
+  opts: RewindCommitOptions,
 ) {
   // Rewind must see every chat/Subagent observation that was already queued
   // before its transaction chooses the visible tail. Otherwise a delayed
@@ -131,6 +131,7 @@ export function registerMakerRewindIpc(): void {
           : undefined;
       const commitOpts = {
         requireLatestUser,
+        ownerScope,
         ...(allowFileRestore === false ? { allowFileRestore: false as const } : {}),
       };
       let subagentFence: SubagentRewindFence | null = null;

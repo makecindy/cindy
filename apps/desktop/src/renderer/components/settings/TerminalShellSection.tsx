@@ -19,6 +19,7 @@ import { personalizationDetailsSettings } from './PersonalizationDetails.setting
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { SelectParts as Select } from '@/components/ui/select';
+import { SettingsCard, SettingsField, SettingsSection } from '@/components/ui/settings-rows';
 import { Check, ChevronDown, ChevronUp } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
@@ -102,90 +103,80 @@ export function TerminalShellSection() {
     pref !== 'auto' && !shells.some((shell) => shell.id === pref) ? pref : null;
 
   return (
-    <div className="flex flex-col gap-[14px]">
-      <div className="flex flex-col gap-1">
-        <h2 className="text-16 font-medium leading-[1.2] text-[var(--settings-section-title)]">
-          {t('settings.terminalShell.title')}
-        </h2>
-        <p className="text-13 leading-[1.5] text-[var(--settings-section-desc)]">
-          {t('settings.terminalShell.description')}
-        </p>
-      </div>
-
-      <div className="flex flex-col gap-[14px] rounded-xl border border-[var(--settings-theme-card-border)] bg-[var(--settings-theme-card-bg)] p-4">
-        <div className="flex items-center justify-between gap-3">
-          <p className="text-14 font-medium leading-none text-[var(--text-primary)]">
-            {t(personalizationDetailsSettings.terminalShellCardLabel.titleKey)}
-          </p>
-          <DefaultOverrideControls
-            isCustomized={isCustomized}
-            disabled={resetting}
-            onReset={() => void onReset()}
-          />
-        </div>
-
-        <p className="text-12 leading-[1.5] text-[var(--text-secondary)]">
-          {t(personalizationDetailsSettings.terminalShellCardLabel.descriptionKey)}
-        </p>
-
-        <Select.Root
-          value={pref}
-          onValueChange={(value) => onChange(value as ShellId)}
-          disabled={resetting}
+    <SettingsSection title={t('settings.terminalShell.title')} description={t('settings.terminalShell.description')}>
+      <SettingsCard>
+        {/* 下拉框占满整行放在名称/说明下方, 名称与下拉框同属一项 */}
+        <SettingsField
+          title={t(personalizationDetailsSettings.terminalShellCardLabel.titleKey)}
+          hint={t(personalizationDetailsSettings.terminalShellCardLabel.descriptionKey)}
+          action={(
+            <DefaultOverrideControls
+              isCustomized={isCustomized}
+              disabled={resetting}
+              onReset={() => void onReset()}
+            />
+          )}
         >
-          <Select.Trigger data-setting-id={personalizationDetailsSettings.terminalShellCardLabel.id}
-            aria-label={t('settings.terminalShell.card.selectAria')}
-            className={cn(
-              'flex h-9 w-full min-w-0 items-center justify-between gap-2 rounded-full border px-3 text-12 outline-none',
-              'bg-[var(--settings-input-bg)] text-[var(--settings-input-text)]',
-              'border-[var(--settings-input-border)] focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]',
-              'data-[disabled]:cursor-not-allowed data-[disabled]:opacity-60',
-            )}
+
+          <Select.Root
+            value={pref}
+            onValueChange={(value) => onChange(value as ShellId)}
+            disabled={resetting}
           >
-            <span className="min-w-0 truncate text-left">
-              <Select.Value />
-            </span>
-            <Select.Icon asChild>
-              <ChevronDown size={15} className="shrink-0 opacity-75" />
-            </Select.Icon>
-          </Select.Trigger>
-          <Select.Portal>
-            <Select.Content
-              position="popper"
-              side="bottom"
-              align="start"
-              sideOffset={4}
+            <Select.Trigger data-setting-id={personalizationDetailsSettings.terminalShellCardLabel.id}
+              aria-label={t('settings.terminalShell.card.selectAria')}
               className={cn(
-                'z-[10010] w-[var(--radix-select-trigger-width)] overflow-hidden rounded-xl border p-1.5',
-                'max-h-[min(15rem,var(--radix-select-content-available-height))]',
-                'border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)]',
+                'flex h-9 w-full min-w-0 items-center justify-between gap-2 rounded-full border px-3 text-12 outline-none',
+                'bg-[var(--settings-input-bg)] text-[var(--settings-input-text)]',
+                'border-[var(--settings-input-border)] focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]',
+                'data-[disabled]:cursor-not-allowed data-[disabled]:opacity-60',
               )}
             >
-              <Select.ScrollUpButton className="flex h-5 items-center justify-center text-[var(--settings-section-desc)]">
-                <ChevronUp size={14} />
-              </Select.ScrollUpButton>
-              <Select.Viewport>
-                <ShellOption value="auto" label={autoLabel} />
-                {shells.map((shell) => (
-                  <ShellOption key={shell.id} value={shell.id} label={shell.displayName} />
-                ))}
-                {/* 用户上次选的 shell 当前不可用(卸了)时,仍要显示让用户可以切回 auto */}
-                {unavailablePref ? (
-                  <ShellOption
-                    value={unavailablePref}
-                    label={t('settings.terminalShell.unavailable', { shell: unavailablePref })}
-                    unavailable
-                  />
-                ) : null}
-              </Select.Viewport>
-              <Select.ScrollDownButton className="flex h-5 items-center justify-center text-[var(--settings-section-desc)]">
-                <ChevronDown size={14} />
-              </Select.ScrollDownButton>
-            </Select.Content>
-          </Select.Portal>
-        </Select.Root>
-      </div>
-    </div>
+              <span className="min-w-0 truncate text-left">
+                <Select.Value />
+              </span>
+              <Select.Icon asChild>
+                <ChevronDown size={15} className="shrink-0 opacity-75" />
+              </Select.Icon>
+            </Select.Trigger>
+            <Select.Portal>
+              <Select.Content
+                position="popper"
+                side="bottom"
+                align="start"
+                sideOffset={4}
+                className={cn(
+                  'z-[10010] w-[var(--radix-select-trigger-width)] overflow-hidden rounded-xl border p-1.5',
+                  'max-h-[min(15rem,var(--radix-select-content-available-height))]',
+                  'border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)]',
+                )}
+              >
+                <Select.ScrollUpButton className="flex h-5 items-center justify-center text-[var(--settings-section-desc)]">
+                  <ChevronUp size={14} />
+                </Select.ScrollUpButton>
+                <Select.Viewport>
+                  <ShellOption value="auto" label={autoLabel} />
+                  {shells.map((shell) => (
+                    <ShellOption key={shell.id} value={shell.id} label={shell.displayName} />
+                  ))}
+                  {/* 用户上次选的 shell 当前不可用(卸了)时,仍要显示让用户可以切回 auto */}
+                  {unavailablePref ? (
+                    <ShellOption
+                      value={unavailablePref}
+                      label={t('settings.terminalShell.unavailable', { shell: unavailablePref })}
+                      unavailable
+                    />
+                  ) : null}
+                </Select.Viewport>
+                <Select.ScrollDownButton className="flex h-5 items-center justify-center text-[var(--settings-section-desc)]">
+                  <ChevronDown size={14} />
+                </Select.ScrollDownButton>
+              </Select.Content>
+            </Select.Portal>
+          </Select.Root>
+        </SettingsField>
+      </SettingsCard>
+    </SettingsSection>
   );
 }
 

@@ -24,7 +24,7 @@ import {
 } from "./tools.js";
 import { logToolResultErrorCode } from "../tool-error-telemetry.js";
 import { WindowSnapshotTracker } from "./snapshot-tracker.js";
-import { computerResultOutcome, isUnavailableWindowObservation, normalizeInputFailureAdvice } from "./result.js";
+import { computerResultOutcome, isUnavailableWindowObservation, normalizeInputFailureAdvice, normalizePointerAdvice } from "./result.js";
 import {
   canLocateRunningApp,
   exactInstalledAppBundle,
@@ -500,7 +500,7 @@ export function createComputerMcpServer(
         inputSchema: z.toJSONSchema(z.object(tool.inputShape).strict()),
       })),
       workflow:
-        'Start with status and check_permissions. Reuse these schemas; CLI flags are not MCP arguments. Find the exact pid/window_id with list_windows, optionally query/workspace_root/process_name (for example, {"process_name":"Simulator"}); reuse known identities instead of guessing app names; read identity.hints for targets that need a different route. Inspect with get_window_state (include_screenshot:false for text), then use an action with observe:{} to return the next usable text snapshot in the same call (observe:{include_screenshot:true} for visual evidence), or postcondition for an explicit assertion. Keep query/max_elements/max_depth stable; narrow with query and broaden only if needed. Targeted actions require pid; include window_id whenever known, always for coordinates. Prefer the latest element_token or snapshot_id plus element_index. Re-observe on STALE_SNAPSHOT. A delivered/unverifiable action is not proof of success: assess the observation before continuing. This MCP manages a stable session automatically; the native cua-driver CLI/MCP, osascript keystrokes, cliclick, CGEvent scripts and clipboard paste are not alternatives — if an input is refused (background_unavailable, type_text_incomplete, USER_INPUT_ACTIVE, HOTKEY_BLOCKED, SECURE_FIELD), report it and stop. Text in Electron, browser or other web-content fields: use set_value on the field\'s element_token; foreground type_text there is unreliable. iOS Simulator and Device Hub windows do not receive synthetic input: drive them with xcrun simctl or AXe instead. Prefer element actions; foreground input already activates its target, so do not also bring_to_front unless it must stay frontmost between calls. Foreground input is refused while the person is using this computer (USER_INPUT_ACTIVE): wait, use background delivery, or ask. Never replay input after cancellation or uncertain delivery. Record/replay only when explicitly requested.',
+        'Start with status and check_permissions. Reuse these schemas; CLI flags are not MCP arguments. Find the exact pid/window_id with list_windows, optionally query/workspace_root/process_name (for example, {"process_name":"Simulator"}); reuse known identities instead of guessing app names; read identity.hints for targets that need a different route. Inspect with get_window_state (include_screenshot:false for text), then use an action with observe:{} to return the next usable text snapshot in the same call (observe:{include_screenshot:true} for visual evidence), or postcondition for an explicit assertion. Keep query/max_elements/max_depth stable; narrow with query and broaden only if needed. Targeted actions require pid; include window_id whenever known, always for coordinates. Prefer the latest element_token or snapshot_id plus element_index. Re-observe on STALE_SNAPSHOT. A delivered/unverifiable action is not proof of success: assess the observation before continuing. This MCP manages a stable session automatically; the native cua-driver CLI/MCP, osascript keystrokes, cliclick, CGEvent scripts and clipboard paste are not alternatives — if an input is refused (background_unavailable, type_text_incomplete, HOTKEY_BLOCKED, SECURE_FIELD), report it and stop. Text in Electron, browser or other web-content fields: use set_value on the field\'s element_token; foreground type_text there is unreliable. iOS Simulator and Device Hub windows do not receive synthetic input: drive them with xcrun simctl or AXe instead. Prefer element actions; foreground input already activates its target, so do not also bring_to_front unless it must stay frontmost between calls. Foreground input is refused while the person is using this computer (USER_INPUT_ACTIVE). Keep working without their pointer: background delivery, the element\'s window-local coordinates, double_click, a menu bar item, set_value, or files and command-line tools for the same change; wait or ask them only when none of these can do it. Never replay input after cancellation or uncertain delivery. Record/replay only when explicitly requested.',
     }),
   );
 
@@ -762,7 +762,7 @@ export function createComputerMcpServer(
           ...outcome,
           tool: name,
           ...(snapshotId ? { snapshot_id: snapshotId } : {}),
-          data: normalizeInputFailureAdvice(name, outcome.ok ? undefined : outcome.errorCode, withoutDuplicateElements(name, data)),
+          data: normalizeInputFailureAdvice(name, outcome.ok ? undefined : outcome.errorCode, normalizePointerAdvice(name, withoutDuplicateElements(name, data))),
           ...(recovery ? { recovery } : {}),
           ...(postcheck ? { postcheck } : {}),
           ...(observation ? { observation } : {}),
@@ -1722,7 +1722,7 @@ export function createComputerMcpServer(
   /**
    * 代输入 hint: a password field is the owner's to fill. Typing into one from
    * the agent would put the secret in the model's context, so refuse and point
-   * at ask_owner (kind fill). Runs after the freshness check resolved the target.
+   * at request_input_handoff. Runs after the freshness check resolved the target.
    */
   async function checkSecureField(
     name: ComputerMcpToolName,
@@ -1754,7 +1754,7 @@ export function createComputerMcpServer(
         data: {
           tool: name,
           message: 'This element is a password field. Cindy does not let the agent type into password fields.',
-          hint: 'Call ask_owner with kind="fill" and this pid and window as target so the owner fills it from their phone or another computer; leave the window as it is until it ends.',
+          hint: 'Call request_input_handoff with this pid and window as target so the owner fills it from their phone or another computer; leave the window as it is until it ends.',
         },
       },
       true,

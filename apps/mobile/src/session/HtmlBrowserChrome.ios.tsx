@@ -199,7 +199,7 @@ function WebsitePreviewChrome(p: HtmlBrowserChromeProps) {
         <Host {...host} style={{ flex: 1, minWidth: 0, height: size }}>
           <HStack
             spacing={0}
-            modifiers={[frame({ maxWidth: Infinity, height: size }), capsule]}
+            modifiers={[frame({ height: size }), frame({ maxWidth: Infinity }), capsule]}
           >
             {editing ? (
               <TextField
@@ -215,7 +215,7 @@ function WebsitePreviewChrome(p: HtmlBrowserChromeProps) {
                 submitLabel("go"), onSubmit(submitAddress),
                 accessibilityLabel(t("files.preview.browserAddress")),
                 font({ size: typeScale.body }), padding({ leading: spacing.lg }),
-                frame({ maxWidth: Infinity, height: size }),
+                frame({ height: size }), frame({ maxWidth: Infinity }),
               ]}
             />
             ) : (
@@ -225,7 +225,7 @@ function WebsitePreviewChrome(p: HtmlBrowserChromeProps) {
               modifiers={[
                 buttonStyle("plain"),
                 disabled(p.pending === true),
-                frame({ maxWidth: Infinity, height: size }),
+                frame({ height: size }), frame({ maxWidth: Infinity }),
                 accessibilityLabel(
                   `${t("files.preview.browserAddress")}: ${p.address}`,
                 ),
@@ -237,7 +237,8 @@ function WebsitePreviewChrome(p: HtmlBrowserChromeProps) {
                   padding({ leading: spacing.lg }),
                   frame({
                     maxWidth: Infinity,
-                    height: size,
+                    minHeight: size,
+                    maxHeight: size,
                     alignment: "leading",
                   }),
                 ]}

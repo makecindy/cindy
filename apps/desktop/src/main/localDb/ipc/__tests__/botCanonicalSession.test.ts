@@ -1,3 +1,4 @@
+import { seedBotReadPositions, markBotReadPositions, pruneBotReadState as pruneHostBotReads } from '../../../maker-ipc/botReadStateStore';
 import { createTaskCompletionDeliveryHost } from '../../../maker-ipc/taskCompletionDeliveryHost';
 import { emitSessionCreated } from '../sessionCreatedBroadcast.js';
 import { captureAgentRequest } from '../../../maker-ipc/forwardedRequest';
@@ -10,9 +11,9 @@ import { createDrizzleProxy } from '../../client/drizzleProxy';
 import type { DbTransport } from '../../client/DbTransport';
 import { getSelectedNewMakerRoute, setNewMakerDraftCache } from '../../../maker-host/newMakerDefaultsCache';
 import { setModelVisibilityMirror } from '../../../maker-host/model-visibility-mirror';
-import { setMainLocale } from '../../../i18n';
+import { setMainLocale } from '../../../i18n.desktop';
 import Database from 'better-sqlite3';
-import { AgentInputCoordinator } from '../../../maker-ipc/agent-input-coordinator';
+import { AgentInputCoordinator } from '../../../maker-ipc/agent-input-coordinator.desktop';
 import { createSessionQueueControlService } from '../../../maker-ipc/sessionQueueControl';
 import { createMessage, readMessagesList } from '../messages';
 import { projectHistoryView } from '@cindy/maker-shared/message-window';
@@ -21,7 +22,9 @@ import type { AgentInputQueuedMessage } from '../../../../shared/agentInputQueue
 import type { ProviderView } from '@cindy/model-providers';
 import { createHash } from 'node:crypto';
 import { createCompanionCloudHost } from '../../../companion-cloud/host';
-import { clearSessionPersistState, noteSessionAgentKind, getAssistantSamplingRuntimeId } from '../../../messagePersistBroadcaster';
+import { materializeCompanion } from '../../../companion-cloud/materialize';
+import { fakeApi, memoryState } from '../../../companion-cloud/__tests__/fakes';
+import { clearSessionPersistState, noteSessionAgentKind, getAssistantSamplingRuntimeId } from '../../../messagePersistBroadcaster.desktop';
 import { join, resolve } from 'node:path';
 import { existsSync, mkdirSync, promises as fsPromises, readFileSync, rmSync, writeFileSync } from 'node:fs';
 
@@ -44,7 +47,7 @@ import type { CustomMcpConfig } from '../../../../shared/customMcp';
 import { Session } from '@cindy/maker-core';
 import { withSessionPermissionChange } from '../../../maker-ipc/sessionPermissionChange';
 import { getMaker, getPluginRegistry, isBotToolsetAvailable } from '../../../maker-host/index';
-import { getBuiltinMcpServerNames, refreshCustomMcpProviders, registerCustomMcpArrays, resetCustomMcpRegistry } from '../../../mcp-integrations/custom-mcp-registry';
+import { getBuiltinMcpServerNames, refreshCustomMcpProviders, registerCustomMcpArrays, resetCustomMcpRegistry } from '../../../mcp-integrations/custom-mcp-registry.desktop';
 import { isBotToolsetAvailableOnTarget } from '../../../../shared/botRemoteCapabilities';
 import { resolveBotAllowedBuiltinPluginIds } from '../../../maker-host/plugins/types';
 
@@ -64,7 +67,10 @@ vi.mock('../sessionCreatedBroadcast.js', () => ({ emitSessionCreated: vi.fn(), e
 vi.mock('electron-store', () => ({ default: class {
   private values = new Map<string, unknown>();
   get(key: string, fallback?: unknown) { return this.values.get(key) ?? fallback; }
-  set(key: string, value: unknown) { this.values.set(key, value); }
+  set(key: string | Record<string, unknown>, value?: unknown) {
+    if (typeof key === 'string') this.values.set(key, value);
+    else for (const [name, item] of Object.entries(key)) this.values.set(name, item);
+  }
   delete(key: string) { this.values.delete(key); }
 } }));
 vi.mock('../../../maker-ipc/appDefaultModelControl.js', async importOriginal => ({
@@ -187,8 +193,8 @@ vi.mock('../../../git-snapshot/projectGitBootstrap.js', () => ({
 vi.mock('../../../maker-host/git-safety-settings-store.js', () => ({
   readGitSafetySettings: () => ({ mode: 'all-projects', autoSnapshotEnabled: true, autoInitProjectGit: true }),
 }));
-vi.mock('../../../maker-host/custom-mcp-store.js', async (importOriginal) => ({
-  ...await importOriginal<typeof import('../../../maker-host/custom-mcp-store.js')>(),
+vi.mock('../../../maker-host/custom-mcp-store.desktop.js', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../../../maker-host/custom-mcp-store.desktop.js')>(),
   listCustomMcpServers: async () => h.customMcpConfigs,
 }));
 vi.mock('../../../maker-host/createDesktopProviderService.js', () => ({
@@ -290,7 +296,7 @@ import { assertRemoteBotInvocationAllowed, projectRemoteSessionResult, projectRe
 import { listBotSkillsForSession, saveBotSkillForSession } from '../../../maker-ipc/botSkillService';
 import { resolveBotCanonicalSession } from '../../../maker-ipc/botCanonicalSessionRegistry';
 import { provisionDefaultBot } from '../../../maker-ipc/botDefaultProvisioning';
-import { resolveSafe } from '../../../cindy-media/blobStore';
+import { resolveSafe } from '../../../cindy-media/blobStore.desktop';
 
 function testSha256(value: string): string {
   return createHash('sha256').update(value).digest('hex');
@@ -1112,6 +1118,45 @@ describe('Bot canonical Session lifecycle', () => {
   // name with a different companion already here; the two stay independent.
   describe('cloud take-over next to a same-named local companion', () => {
     const names = () => h.sqlite!.prepare("SELECT id FROM bot_profiles WHERE display_name = 'Release Bot' ORDER BY id").pluck().all();
+
+    // Regression (cloud-companions.md §6): the actual host + SQLite singleton must distinguish
+    // the exact externalId from a different Cindy, including legacy identity fingerprints.
+    // The pure materializer tests have no DB uniqueness constraint. DB tier; no user data/network.
+    it.each(['same-id', 'different-id', 'legacy-identity'] as const)('restores Cindy by identity: %s', async scenario => {
+      h.sqlite!.prepare('UPDATE bot_profile_versions SET capabilities_json = ?, identity_source = ? WHERE bot_id = ?')
+        .run(JSON.stringify(scenario === 'legacy-identity' ? {} : { templateId: 'cindy' }),
+          scenario === 'legacy-identity' ? BOT_TEMPLATE_PRESET_IDENTITIES.cindy : 'Custom Cindy identity', 'bot-1');
+      const original = await invoke('local-db:bots:get', 'bot-1');
+      const id = scenario === 'same-id' ? 'bot-1' : 'incoming_cindy';
+      const host = createCompanionCloudHost({
+        deliverToCanonical: async () => ({ ok: true }), ensureCanonicalSession: async () => 'unused',
+        rebuildContext: async () => 'rebuilt', listDevices: async () => [],
+      });
+      const { state } = memoryState();
+      const { api } = fakeApi(route => route === '/preferences'
+        ? [{ key: 'companion.profile.v1', revision: 1, value: {
+          name: 'Cloud Cindy', description: '', soul: 'Cloud identity', systemPrompt: '', user: '', templateId: 'cindy',
+        } }] : []);
+      const restore = () => materializeCompanion({ api, state,
+        host: { ...host.materializer!, latestRows: host.latestRows },
+        actor: { id: 'cloud-actor', externalId: id, name: 'Cloud Cindy', avatar: null }, roomId: async () => 'room',
+      });
+      if (scenario === 'same-id') {
+        expect(await restore()).toMatchObject({ created: false });
+        expect(await restore()).toMatchObject({ created: false, inserted: 0 });
+        expect(await invoke('local-db:bots:get', id)).toMatchObject({ id, name: 'Cloud Cindy' });
+        expect(state.isDemoted(id)).toBe(false);
+      } else {
+        await expect(restore()).rejects.toMatchObject({ message: 'LOCAL_CINDY_CONFLICT', conflictingBotId: 'bot-1' });
+        expect(await invoke('local-db:bots:get', 'bot-1')).toEqual(original);
+        expect(state.isDemoted(id)).toBe(true);
+        expect(state.bot(id)?.backedUp).toBeUndefined();
+        // The singleton no longer blocks after it is archived. This read alone must not create anything.
+        h.sqlite!.prepare("UPDATE bot_profiles SET status = 'archived' WHERE id = ?").run('bot-1');
+        expect(await host.materializer!.findConflictingCindy!(id)).toBeNull();
+      }
+      expect(h.sqlite!.prepare('SELECT id FROM bot_profiles').pluck().all()).toEqual(['bot-1']);
+    });
 
     // #6897 + #7213: the host create path must pass both flags into the real profile transaction.
     // The database-only name checks below cannot catch an omitted host flag. No network is used.
@@ -4263,6 +4308,20 @@ describe('Bots list unread projection', () => {
     return rows.find((row) => row.id === botId)!.unreadCount;
   }
 
+  // Merge compatibility: test the real list handler and SQLite-visible replies,
+  // not only the renderer projection. Host seeds must not hide a reply after a
+  // complete window's earlier seed; actual host acknowledgements still clear it.
+  it('does not let a host automatic seed hide replies past a complete window read position', async () => {
+    const sessionId = await canonicalFor('bot-1');
+    insertMessage(sessionId, { id: 'host-seed-reply', role: 'assistant', content: 'Unread reply', createdAt: 2000 });
+    try {
+      seedBotReadPositions({ 'bot-1': 3000 });
+      expect(await unreadFor('bot-1', { 'bot-1': 1000 })).toBe(1);
+      markBotReadPositions({ 'bot-1': 2000 });
+      expect(await unreadFor('bot-1', { 'bot-1': 1000 })).toBe(0);
+    } finally { pruneHostBotReads({ botIds: [] }); }
+  });
+
   it('remote reply watermark ignores user activity and private timeline traces', async () => {
     const sessionId = await canonicalFor('bot-1');
     insertMessage(sessionId, { id: 'reply', role: 'assistant', content: 'Visible result', createdAt: 1000 });
@@ -4358,7 +4417,7 @@ describe('Bots list unread projection', () => {
       agentMeta: { samplingAttemptPending: { runtimeId: 'old-runtime' }, turnCompleted: true } });
     const { assistantSamplingSettlements } = await import('../../../assistantSamplingSettlement.js');
     assistantSamplingSettlements.put({ sessionId, persistId: 'accepted-pending', patch: { samplingAttemptPending: false } });
-    const { clearSessionPersistState } = await import('../../../messagePersistBroadcaster.js');
+    const { clearSessionPersistState } = await import('../../../messagePersistBroadcaster.desktop.js');
     clearSessionPersistState(sessionId);
     h.getSession.mockReturnValue(null);
     if (projection === 'local') {
@@ -4394,6 +4453,29 @@ describe('Bots list unread projection', () => {
     expect(await unreadFor('bot-1', { 'bot-1': 2_000 })).toBe(2);
     // A read position exactly on a row means that row has been seen.
     expect(await unreadFor('bot-1', { 'bot-1': 4_000 })).toBe(0);
+  });
+
+  // Regression / unit: list/get and the remote projection must agree with the
+  // transcript's persisted tool-parent classification. Earlier coverage only
+  // used parentToolUseId, not the parentUuid written by message persistence.
+  // Minimal case: one read reply followed by a sealed child (or legacy parent).
+  it.each([
+    { parentUuid: 'toolu_child', internal: true },
+    { parentUuid: 'call_child', internal: true },
+    { parentUuid: 'Task_x1', internal: true },
+    { parentUuid: 'chatcmpl-tool-child', internal: true },
+    { parentUuid: '4f1c9a7e-3b2d-4c8a-9e5f-1a2b3c4d5e6f', internal: false },
+    { parentUuid: 'preceding-user-uuid', internal: false },
+  ])('keeps persisted parent $parentUuid consistent across list projections', async ({ parentUuid, internal }) => {
+    const sessionId = await canonicalFor('bot-1');
+    insertMessage(sessionId, { id: 'read-reply', role: 'assistant', content: 'Already read', createdAt: 1000 });
+    insertMessage(sessionId, { id: 'parented-reply', role: 'assistant', content: 'Later reply', createdAt: 2000,
+      agentMeta: { parentUuid, turnCompleted: true } });
+    const expected = { lastMessagePreview: internal ? 'Already read' : 'Later reply', lastMessageAt: internal ? 1000 : 2000 };
+    const rows = await invoke('local-db:bots:list', { lastReadAtByBotId: { 'bot-1': 1500 } }) as Array<{ id: string }>;
+    expect(rows.find(row => row.id === 'bot-1')).toMatchObject({ ...expected, unreadCount: internal ? 0 : 1 });
+    expect(await invoke('local-db:bots:get', 'bot-1')).toMatchObject(expected);
+    expect(await getBotRemoteResourceSource('bot-1')).toMatchObject({ ...expected, lastReplyAt: expected.lastMessageAt });
   });
 
   it('excludes commentary, pre-tool narration, empty and private rows from both badges and remote reply watermarks', async () => {

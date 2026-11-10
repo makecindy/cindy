@@ -3,7 +3,7 @@ import type { PluginMarketService } from './service.js';
 import type { PluginMarketItem } from '../../shared/pluginMarket.js';
 import { deliveryNamespaceFields } from '../../shared/pluginIdentity.js';
 import { isIpcError } from '../../shared/ipc-errors.js';
-import { ServerApiError } from '../serverApiClient.js';
+import { ServerApiError } from '../serverApiClient.desktop.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import {
   isPluginMarketPassthroughErrorCode,
@@ -17,7 +17,7 @@ interface InstalledState {
 }
 
 export interface PluginMarketAgentDeps {
-  market: Pick<PluginMarketService, 'snapshot' | 'detail' | 'install'>;
+  market: Pick<PluginMarketService, 'query' | 'detail' | 'install'>;
   installedState(ghostId: string, namespace?: string | null): InstalledState;
   /** Owner generation and caller identity are captured before discovery's first await. */
   captureRead(): () => void;
@@ -50,16 +50,12 @@ export function createPluginMarketAgentTools(deps: PluginMarketAgentDeps) {
   return {
     async search(query: string): Promise<Record<string, unknown>> {
       const assertCurrent = deps.captureRead();
-      const snapshot = await deps.market.snapshot({ discoveryOnly: true });
+      const snapshot = await deps.market.query({ query: query.trim().slice(0, 100), limit: 20, counts: false });
       assertCurrent();
-      const needle = query.trim().toLocaleLowerCase();
-      const matches = snapshot.items.filter(item =>
-        `${item.name} ${item.description ?? ''} ${item.ghostId} ${item.author ?? ''}`
-          .toLocaleLowerCase().includes(needle));
       return {
         ok: true,
-        items: matches.slice(0, 20).map(item => catalogItem(item, deps.installedState(item.ghostId, item.namespace))),
-        has_more: matches.length > 20,
+        items: snapshot.items.map(item => catalogItem(item, deps.installedState(item.ghostId, item.namespace))),
+        has_more: snapshot.nextCursor !== null,
         complete:
           !snapshot.unavailableReason &&
           !snapshot.organizationAccessError &&

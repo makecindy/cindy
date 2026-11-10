@@ -58,11 +58,11 @@ vi.mock('../../logger', async (importOriginal) => ({
   createLogger: () => diagnosticLog,
 }));
 
-vi.mock('../settings-store', () => ({
+vi.mock('../settings-store.desktop', () => ({
   readDeviceLinkSettings: () => deviceLinkSettings.value,
 }));
 // Observe dispatch's teardown calls without loading the unrelated desktop runtime.
-vi.mock('../../remote-desktop', () => ({ remoteDesktop: { stop: vi.fn(), signalingLost: vi.fn() } }));
+vi.mock('../../remote-desktop', () => ({ remoteDesktop: { stop: vi.fn(), signalingLost: vi.fn() }, requestRemoteDesktop: vi.fn() }));
 const sharedTask = vi.hoisted(() => ({ refresh: vi.fn(), capture: vi.fn() }));
 vi.mock('../sharedTaskDispatch.js', async (original) => ({
   ...await original<typeof import('../sharedTaskDispatch.js')>(),
@@ -80,13 +80,14 @@ import {
   flushRemoteInvokeResultOutboxOnReconnect,
   handleControllerOffline,
   setControllersChangedListener,
+  setRemoteInvokeBusyChangedListener,
   setOrdinaryPeerLinkAcceptedListener,
   setDispatchPresenceOfflineCheck,
   setSessionTextSnapshotReader,
   pushSessionActivityToController,
   wireInboundDispatch,
   hasRemoteInvokeWorkForPeer,
-} from '../dispatch';
+} from '../dispatch.desktop';
 import { __testing as invokeRegistry } from '../invoke-registry';
 import * as subscriptions from '../subscriptions';
 import { tapWindowBroadcast, tapRemoteModelCatalogChange } from '../broadcast-tap';
@@ -795,6 +796,51 @@ describe('[3] outbox 保留时长按 channel 收窄', () => {
 });
 
 describe('[5] orphan 截止时间按 channel 收窄', () => {
+  // Unit, PR #9153: the orphan result can finish while the actual handler is
+  // still running. Existing deadline tests only checked budgets, not diagnostics.
+  it('records execution completion only when the handler settles after the orphan deadline', async () => {
+    const client = mkClient();
+    const busy = vi.fn();
+    setRemoteInvokeBusyChangedListener(busy);
+    let finish!: (value: unknown) => void;
+    const handler = vi.fn(() => new Promise(resolve => { finish = resolve; }));
+    invokeRegistry.register('maker:compact-session', handler);
+    const requestId = 'abcdef12-0000-0000-0000-000000000000';
+    const handling = __testing.handleInvoke(client as never, 'ctrl-a', requestId,
+      { channel: 'maker:compact-session', args: ['s1'] });
+    const executionLogs = () => diagnosticLog.info.mock.calls
+      .filter(([message]) => typeof message === 'string' && message.startsWith('device-link diagnostic '))
+      .map(([message]) => JSON.parse(message.slice('device-link diagnostic '.length)))
+      .filter(record => record.stage === 'execution' && record.request === 'abcdef12');
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(handler).toHaveBeenCalledOnce();
+      expect(busy).toHaveBeenLastCalledWith(true);
+      const deadline = __testing.remoteInvokeOrphanTimeoutForChannelMs('maker:compact-session');
+      await vi.advanceTimersByTimeAsync(deadline);
+      await handling;
+      expect(client.sendInvokeResult).toHaveBeenCalledOnce();
+      expect(client.sendInvokeResult.mock.calls[0][2]).toMatchObject({ ok: false,
+        error: { code: 'IPC_ERROR', message: expect.stringContaining('[TIMEOUT]') } });
+      expect(busy).toHaveBeenLastCalledWith(false);
+      expect(executionLogs()).toContainEqual(expect.objectContaining({ outcome: 'waiting', activeStage: 'handler' }));
+      expect(executionLogs().some(record => record.outcome === 'settled')).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      finish({});
+      await vi.advanceTimersByTimeAsync(0);
+      expect(executionLogs()).toContainEqual(expect.objectContaining({ outcome: 'settled',
+        executionMs: deadline + 1_000, activeStage: null,
+        stagesMs: expect.objectContaining({ handler: deadline + 1_000 }) }));
+      expect(client.sendInvokeResult).toHaveBeenCalledOnce();
+      expect(busy.mock.calls).toEqual([[true], [false]]);
+    } finally {
+      finish?.({});
+      await vi.advanceTimersByTimeAsync(0);
+      setRemoteInvokeBusyChangedListener(null);
+    }
+  });
+
   it('默认 invoke 保持 60s，只有 compact 使用 22min 长预算', () => {
     const compactBudget = INVOKE_TIMEOUT_OVERRIDES_MS['maker:compact-session'];
     expect(compactBudget).toBe(11 * 60_000);

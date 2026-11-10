@@ -44,10 +44,24 @@ export default {
     'background-ask-voice': { about: 'Preview Escape preserves question-card dictation and its answer draft' },
     'background-voice': { about: 'Preview Escape leaves the real composer voice-cancel handler untouched until the document closes' },
     'fullscreen-video': { about: 'Fullscreen video exit and menus preserve search until a fresh Escape' },
+    'json-preview': { about: 'Non-Markdown preview owns Cmd+F: the search bar lives inside the lightbox and matches JSON content' },
     'toolbar-tooltip': { about: 'Focused and hovered toolbar tooltips own Escape before document find' },
   },
   async check(page, ui) {
     const findKey = ui.platform === 'darwin' ? 'Meta+f' : 'Control+f';
+    if (ui.case === 'json-preview') {
+      await page.getByTestId('open-preview').click();
+      const card = page.locator('[data-text-lightbox-card]');
+      await card.waitFor();
+      await page.keyboard.press(findKey);
+      const bar = card.locator('[data-doc-search-bar]');
+      await bar.waitFor();
+      await bar.getByRole('textbox').fill('苹果');
+      await bar.getByText('1/1', { exact: true }).waitFor();
+      assert.equal(await page.getByRole('searchbox').count(), 0);
+      await ui.capture('json-search');
+      return;
+    }
     // Keep a search open behind the preview to exercise retargeting and the
     // editor capture listener that used to consume the same shortcut first.
     const editor = ['background-editor', 'loading-editor', 'source-background-editor'].includes(ui.case);

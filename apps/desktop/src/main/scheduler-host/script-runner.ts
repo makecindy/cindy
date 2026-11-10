@@ -18,8 +18,8 @@ import { sessions } from '../localDb/schema';
 import { buildSkipResultText, executePreRunHook, formatPreRunHookFailure } from './pre-run-hook';
 import { withPreRunHookDiagnosis, type DiagnosePreRunHookFailure } from './pre-run-hook-diagnosis';
 import { capAppend, killProcessTree } from './proc-util';
-import type { SchedulerDrizzleDb } from './storage';
-import { isManagedScheduledTarget, restoreScheduledTarget } from './restore-target';
+import type { SchedulerDrizzleDb } from './storage.desktop';
+import type { isManagedScheduledTarget, restoreScheduledTarget } from './restore-target.desktop';
 
 const PROTOCOL = 'cindy-script/1' as const;
 const LEGACY_PROTOCOL = 'xdt-maker-script/1' as const;
@@ -141,7 +141,13 @@ function safeError(error: unknown): { code: string; message: string } {
 }
 
 export class ScriptScheduleRunner {
-  constructor(private readonly deps: ScriptScheduleRunnerDeps) {}
+  constructor(
+    private readonly deps: ScriptScheduleRunnerDeps,
+    private readonly targets: {
+      isManagedScheduledTarget: typeof isManagedScheduledTarget;
+      restoreScheduledTarget: typeof restoreScheduledTarget;
+    },
+  ) {}
 
   attachScheduler(scheduler: Scheduler): void {
     this.deps.scheduler = scheduler;
@@ -178,12 +184,12 @@ export class ScriptScheduleRunner {
         .select({ status: sessions.status, workingDir: sessions.workingDir, remoteHostId: sessions.remoteHostId,
           source: sessions.source, orcaRole: sessions.orcaRole, orcaRemoteLead: sessions.orcaRemoteLead }).from(sessions)
         .where(eq(sessions.id, schedule.targetSessionId)).limit(1);
-      if (!owner || owner.status === 'deleted' || (owner.status === 'archived' && isManagedScheduledTarget(owner))) {
+      if (!owner || owner.status === 'deleted' || (owner.status === 'archived' && this.targets.isManagedScheduledTarget(owner))) {
         await this.deps.scheduler.pause(schedule.id, { exemptRunId: ctx.runId });
         return { sessionId: '', skipped: true,
           resultText: `Script stopped: target session ${owner?.status ?? 'missing'}` };
       }
-      if (restore) await restoreScheduledTarget(schedule.targetSessionId, owner, ctx.signal);
+      if (restore) await this.targets.restoreScheduledTarget(schedule.targetSessionId, owner, ctx.signal);
     }
 
     return null;
@@ -219,6 +225,7 @@ export class ScriptScheduleRunner {
           scheduleName: schedule.name,
           runId: ctx.runId,
           firedAt: ctx.firedAt,
+          ...(ctx.webhook ? { webhook: ctx.webhook } : {}),
           workingDir: schedule.workingDir,
           lastFinishedAt: schedule.lastFinishedAt,
           ...(ctx.trigger ? { trigger: ctx.trigger } : {}),
@@ -531,6 +538,7 @@ export class ScriptScheduleRunner {
         firedAt: ctx.firedAt,
         workingDir: schedule.workingDir,
         ...(schedule.targetSessionId ? { targetSessionId: schedule.targetSessionId } : {}),
+        ...(ctx.webhook ? { webhook: ctx.webhook } : {}),
       },
     });
 

@@ -232,6 +232,7 @@ import {
 } from "../../base-agent.js";
 import type { ModelDescriptor } from "../../../types/capabilities.js";
 import type { Logger } from "../../../interfaces/logger.js";
+import { NATIVE_SUBSCRIPTION_ACCOUNT, type NativeSubscriptionAccount } from '../../../interfaces/auth-adapter.js';
 
 const noopLogger: Logger = {
   trace: () => {},
@@ -304,6 +305,38 @@ describe("Pi provider-aware model routing", () => {
   afterEach(() => {
     rmSync(agentHome, { recursive: true, force: true });
     rmSync(cwd, { recursive: true, force: true });
+  });
+
+  // Standard: the actual Pi launch passes the host account to auth and both authenticated proxy scopes.
+  it('binds the selected subscription account to the root and same-provider child proxy tokens', async () => {
+    const account: NativeSubscriptionAccount = { id: 'fixture-b', configDir: '/fixture/.codex-b',
+      assertCurrent: () => {}, readState: async () => ({ authenticated: true }) };
+    const state = vi.fn(async (options) => {
+      expect(options.nativeSubscriptionAccount).toBe(account);
+      return account.readState();
+    });
+    const release = vi.fn();
+    const register = vi.fn(() => release);
+    const agent = new PiAgent({
+      auth: { getState: state, triggerLogin: async () => ({ authenticated: true }),
+        logout: async () => {}, getAuthEnv: async () => ({}) },
+      runtimeConfig: { endpoint: 'http://127.0.0.1:9' }, binaryPath: path.join(agentHome, 'pi'),
+      logger: noopLogger, resolvePiAgentHome: () => agentHome, registerPiProxySession: register,
+      resolvePiNativeProviders: async () => ({ providers: [{ id: 'openai-codex', sourceProviderId: 'openai',
+        name: 'OpenAI', baseUrl: 'http://127.0.0.1:9', api: 'openai-codex-responses' as const,
+        headers: { 'x-cindy-pi-session-id': '$CINDY_PI_SESSION_ID', 'x-cindy-pi-session-token': '$CINDY_PI_SESSION_TOKEN' },
+        models: [{ id: 'chatgpt/gpt-6-astra' }] }], env: {} }),
+    });
+    const handle = await agent.startSession({ sessionId: 'selected-profile', workingDir: cwd,
+      model: 'chatgpt/gpt-6-astra', providerId: 'openai', [NATIVE_SUBSCRIPTION_ACCOUNT]: account });
+    try {
+      expect(state).toHaveBeenCalledTimes(1);
+      const registrations = register.mock.calls as unknown as [string, string, () => string, { nativeSubscriptionAccount?: NativeSubscriptionAccount }][];
+      expect(registrations.length).toBeGreaterThanOrEqual(2);
+      expect(registrations.every(call => call[3].nativeSubscriptionAccount === account)).toBe(true);
+      expect(new Set(registrations.map(call => call[1])).size).toBe(registrations.length);
+    } finally { await handle.close(); }
+    expect(release).toHaveBeenCalledTimes(register.mock.calls.length);
   });
 
   it("keeps native Fast in the host even when a Full Access shell can rewrite old preference files", async () => {
@@ -3396,6 +3429,7 @@ describe("Pi provider-aware model routing", () => {
   it.each([
     ["anthropic-messages", "messages-model", undefined],
     ["openai-responses", "responses-model", "http://127.0.0.1:9988/v1"],
+    ["openai-responses", "google/gemini-4-argon", "http://127.0.0.1:9988/v1"],
     ["openai-completions", "moonshotai/kimi-k3", "http://127.0.0.1:9988/v1"],
     [
       "google-generative-ai",
@@ -3492,6 +3526,9 @@ describe("Pi provider-aware model routing", () => {
       );
       expect(model).toMatchObject({ api });
       expect(model?.baseUrl).toBe(baseUrl);
+      if (api === "openai-responses" && modelId === "google/gemini-4-argon") {
+        expect(model?.headers).toBeUndefined();
+      }
       if (api === "openai-completions") {
         expect(model?.compat).toMatchObject({
           maxTokensField: "max_tokens",

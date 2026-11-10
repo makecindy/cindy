@@ -87,7 +87,7 @@ vi.mock('../../maker-host/index.js', () => ({
   }),
 }));
 
-vi.mock('../../scheduler-host/index.js', () => ({
+vi.mock('../../scheduler-host/index.desktop.js', () => ({
   getScheduler: () => null,
 }));
 

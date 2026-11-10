@@ -37,7 +37,7 @@ vi.mock('../../maker-orchestration/rewind.js', () => ({
   commitRewindAtMessage: mocks.commitRewindAtMessage,
 }));
 
-vi.mock('../../messagePersistBroadcaster.js', () => ({
+vi.mock('../../messagePersistBroadcaster.desktop.js', () => ({
   drainPersistQueue: mocks.drainPersistQueue,
 }));
 
@@ -148,6 +148,7 @@ describe('maker rewind IPC stop-then-rewind', () => {
     );
     expect(mocks.commitRewindAtMessage).toHaveBeenCalledWith('session-1', 'message-1', {
       requireLatestUser: false,
+      ownerScope: mocks.ownerScope,
     });
     expect(mocks.broadcastSubagentRunsInvalidated).toHaveBeenCalledWith(
       'session-1',
@@ -233,6 +234,7 @@ describe('maker rewind IPC stop-then-rewind', () => {
     );
     expect(mocks.commitRewindAtMessage).toHaveBeenCalledWith('session-1', 'message-1', {
       requireLatestUser: true,
+      ownerScope: mocks.ownerScope,
     });
   });
 

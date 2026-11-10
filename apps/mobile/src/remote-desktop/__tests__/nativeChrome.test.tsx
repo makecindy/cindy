@@ -345,7 +345,7 @@ it("offers a useful ideal popover height without forcing that height on a smalle
   // The RN scroll view has no intrinsic preferred height. Only a maximum
   // collapses it; a fixed height instead overflows the system popover bounds.
   expect(frames).toContainEqual({ minHeight: 44, idealHeight: 365, maxHeight: 365 });
-  expect(frames.filter((value) => value.height !== undefined)).toEqual([
+  expect(frames.filter((value) => 'height' in value && value.height !== undefined)).toEqual([
     { width: 44, height: 44 },
   ]);
   expect(v.host.textContent).toContain("Controls");

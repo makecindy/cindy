@@ -304,7 +304,7 @@
       },
       "agentSwitch": {
         "usage-limit": "{{from}} alcanzó su límite de uso; continúa en {{to}}",
-        "auth": "{{from}} ha cerrado sesión; continúa en {{to}}",
+        "auth": "{{from}} no está autenticado; continúa en {{to}}",
         "unavailable": "No se pudo alcanzar {{from}}; continúa en {{to}}",
         "overload": "{{from}} estaba sobrecargado; continúa en {{to}}",
         "failed": "{{from}} tuvo un problema; continúa en {{to}}"
@@ -461,9 +461,6 @@
     "close": "Cerrar",
     "reset": "Restablecer vista",
     "open": "Abrir vista previa",
-    "zoomIn": "Acercar",
-    "zoomOut": "Alejar",
-    "fit": "Ajustar a la ventana",
     "actualSize": "Tamaño real (1:1)",
     "save": "Guardar original",
     "share": "Compartir",

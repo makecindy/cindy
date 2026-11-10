@@ -1,3 +1,4 @@
+import type { ViewInstance } from 'react-native';
 import { createContext, useCallback, useContext, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Platform, StyleSheet, View } from 'react-native';
 import Animated from 'react-native-reanimated';
@@ -11,6 +12,8 @@ import { sessionPaneLayout } from './sessionPaneLayout';
 import { SessionPaneDivider } from './SessionPaneDivider';
 
 const PaneLayoutContext = createContext<ReturnType<typeof sessionPaneLayout> | null>(null);
+type SidebarWidthPreference = { width: number | null; setWidth(width: number): void };
+const SidebarWidthContext = createContext<SidebarWidthPreference | null>(null);
 
 export function useSessionPaneLayout() {
   const geometry = useAdaptiveWindow();
@@ -24,7 +27,7 @@ const Context = createContext<{
   mounted: { current: boolean };
   publish(entry: Entry): void;
   unpublish(owner: string): void;
-  host: React.RefObject<View | null>;
+  host: React.RefObject<ViewInstance | null>;
 } | null>(null);
 
 export function useResidentHomeList(embedded = false) {
@@ -33,6 +36,12 @@ export function useResidentHomeList(embedded = false) {
   // back, before JS focus changes. Keep that ownership at every window width.
   // Android retains the root host; modal drawers always stay in their surface.
   return { enabled: !!context && (embedded ? context.persistent : Platform.OS !== 'ios'), mounted: context?.mounted };
+}
+
+/** A native-docked Home already owns its whole list. Keep the list within that
+ * surface in both orientations instead of moving it to the legacy root host. */
+export function LocalHomeList({ children }: { children: ReactNode }) {
+  return <Context.Provider value={null}>{children}</Context.Provider>;
 }
 
 /** Preserve the resident-list owner when route content is re-hosted above this
@@ -47,12 +56,22 @@ export function useResidentHomeListContextBridge(children: ReactNode) {
   );
 }
 
+/** One task-list width for the side column and the floating quick-switch
+ * drawer: resizing either one is the same choice, with the same default and
+ * drag range. Only a constrained window or an actual hinge can override it. */
+export function useSessionSidebarWidthPreference(): SidebarWidthPreference {
+  const context = useContext(SidebarWidthContext);
+  const [width, setWidth] = useState<number | null>(null);
+  return context ?? { width, setWidth };
+}
+
 /** The list lives above route lifetimes. Owners only supply its frame and props;
  * never key the host by route, session, or presentation width. */
 export function ResidentHomeListProvider({ children }: { children: ReactNode }) {
   const geometry = useAdaptiveWindow();
-  // Window preference, shared by retained routes; rotation clamps only the
-  // displayed width, so returning to a wide window restores the user's choice.
+  // Window preference, shared by retained routes and the floating drawer;
+  // rotation clamps only the displayed width, so returning to a wide window
+  // restores the user's choice.
   const [sidebarWidth, setSidebarWidth] = useState<number | null>(null);
   const paneLayout = useMemo(() => sessionPaneLayout(geometry, sidebarWidth), [geometry, sidebarWidth]);
   const { persistent } = paneLayout;
@@ -63,7 +82,7 @@ export function ResidentHomeListProvider({ children }: { children: ReactNode }) 
   const rootHome = Platform.OS !== 'ios';
   const visible = (rootHome && homeRoute)
     || (persistent && isPaneDetailRoute(segments));
-  const host = useRef<View>(null);
+  const host = useRef<ViewInstance>(null);
   const mounted = useRef(false);
   const [entry, setEntry] = useState<Entry | null>(null);
   const reduceMotion = useReduceMotionEnabled();
@@ -72,10 +91,12 @@ export function ResidentHomeListProvider({ children }: { children: ReactNode }) 
     setEntry(current => current?.owner === owner ? null : current);
   }, []);
   const context = useMemo(() => ({ persistent, mounted, publish, unpublish, host }), [persistent, publish, unpublish]);
+  const widthPreference = useMemo(() => ({ width: sidebarWidth, setWidth: setSidebarWidth }), [sidebarWidth]);
   useLayoutEffect(() => {
     mounted.current = !!entry;
   }, [entry]);
-  return <PaneLayoutContext.Provider value={paneLayout}><Context.Provider value={context}>
+  return <SidebarWidthContext.Provider value={widthPreference}>
+    <PaneLayoutContext.Provider value={paneLayout}><Context.Provider value={context}>
     <View ref={host} collapsable={false} style={styles.root}>
       {children}
       {entry ? <Animated.View collapsable={false} pointerEvents={visible ? 'box-none' : 'none'}
@@ -98,7 +119,8 @@ export function ResidentHomeListProvider({ children }: { children: ReactNode }) 
         onResize={setSidebarWidth}
       /> : null}
     </View>
-  </Context.Provider></PaneLayoutContext.Provider>;
+  </Context.Provider></PaneLayoutContext.Provider>
+  </SidebarWidthContext.Provider>;
 }
 
 /** A route supplies a measuring slot, not another native list. Its header stays
@@ -109,7 +131,7 @@ export function ResidentHomeList({ children, focused, top, left, right }: {
   const context = useContext(Context);
   const unpublish = context?.unpublish;
   const owner = useId();
-  const anchor = useRef<View>(null);
+  const anchor = useRef<ViewInstance>(null);
   const latest = useRef({ children, focused });
   latest.current = { children, focused };
   const measureRevision = useRef(0);

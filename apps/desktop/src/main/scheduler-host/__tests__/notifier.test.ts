@@ -5,7 +5,7 @@ import type { FeishuIM } from '@cindy/im';
 
 import { showDesktopSessionEvent } from '../../notificationService';
 import { getMobileNotifyGeneration, sendMobileSessionNotify } from '../../device-link';
-import { DesktopNotifier } from '../notifier';
+import { DesktopNotifier } from '../notifier.desktop';
 
 vi.mock('../../notificationService', () => ({
   showDesktopSessionEvent: vi.fn(),
@@ -45,7 +45,7 @@ function createNotifier(opts?: {
   ownerOpenId?: string | null;
   sendMarkdownText?: ReturnType<typeof vi.fn>;
   shouldNotifyDesktop?: () => boolean;
-  isAgentIslandEnabled?: () => boolean;
+  isRunAlertShownElsewhere?: () => boolean;
   publishMarkdown?: ReturnType<typeof vi.fn>;
 }): {
   notifier: DesktopNotifier;
@@ -66,7 +66,7 @@ function createNotifier(opts?: {
     } as unknown as FeishuIM,
     logger: { warn },
     shouldNotifyDesktop: opts?.shouldNotifyDesktop ?? (() => true),
-    isAgentIslandEnabled: opts?.isAgentIslandEnabled ?? (() => false),
+    isRunAlertShownElsewhere: opts?.isRunAlertShownElsewhere ?? (() => false),
     wecomGroupPublisher: { publishMarkdown },
   });
   return { notifier, sendMarkdownText, warn, publishMarkdown };
@@ -145,7 +145,7 @@ describe('DesktopNotifier desktop status mapping', () => {
   });
 
   it('lets Agent Island replace a desktop notification for a session-bound run', async () => {
-    const { notifier } = createNotifier({ isAgentIslandEnabled: () => true });
+    const { notifier } = createNotifier({ isRunAlertShownElsewhere: () => true });
 
     await notifier.notify(schedule, run('failed'));
 
@@ -153,7 +153,7 @@ describe('DesktopNotifier desktop status mapping', () => {
   });
 
   it('keeps a desktop error notification when Agent Island cannot represent the failed run', async () => {
-    const { notifier } = createNotifier({ isAgentIslandEnabled: () => true });
+    const { notifier } = createNotifier({ isRunAlertShownElsewhere: () => true });
 
     await notifier.notify(schedule, { ...run('failed'), sessionId: undefined });
 
@@ -167,7 +167,7 @@ describe('DesktopNotifier desktop status mapping', () => {
   it.each(['success', 'aborted', 'interrupted'] as const)(
     'does not bypass Agent Island for a sessionless %s run',
     async (status) => {
-      const { notifier } = createNotifier({ isAgentIslandEnabled: () => true });
+      const { notifier } = createNotifier({ isRunAlertShownElsewhere: () => true });
 
       await notifier.notify(schedule, { ...run(status), sessionId: undefined });
 

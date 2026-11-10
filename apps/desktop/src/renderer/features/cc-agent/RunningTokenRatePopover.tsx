@@ -22,7 +22,7 @@ export function useRunningTokenRateHistory(input: {
   outputTokens: number;
   generationDurationMs: number;
   generationReliable: boolean;
-  /** Host-measured speed (Pi extension algorithm); old hosts omit it. */
+  /** Host-measured speed; old hosts omit it. */
   tokenSpeed?: TokenSpeedSnapshot;
 }) {
   const { sessionKey, startedAt, outputTokens, generationDurationMs, generationReliable, tokenSpeed } = input;
@@ -169,7 +169,7 @@ export function RunningTokenRatePopover({
     </div>
   );
   const surface =
-    'w-[320px] max-w-[calc(100vw-32px)] rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-3 text-[var(--text-primary)] shadow-[var(--shadow-menu)]';
+    'w-[320px] max-w-[calc(100vw-32px)] rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-3 text-[var(--text-primary)] shadow-[shadow:var(--shadow-menu)]';
   return (
     <Popover
       open={open}
