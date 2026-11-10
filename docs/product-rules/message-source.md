@@ -99,7 +99,7 @@ Agent 用 `send_to_session` 把消息发给另一台电脑上的既有任务时�
 - **跨电脑**：`send_to_session` 发送前的能力探测返回 `plainRequestBody: 1` 时才发原文与回执，旧接收端照旧
   收到三行包装与原话（发送端此刻读自己当前这条输入；已经转过一手的委派读不到原话，按普通消息发送）。
   （伙伴跨电脑私信 `send_to_agent` 已于 2026-11-08 移除，旧电脑再发来时返回 `UNSUPPORTED_CAPABILITY`。）
-  详见[协议兼容](../dev-rules/protocol-compatibility.md)「跨任务委派的原文正文」。
+  详见[协议兼容](../dev-rules/protocol-compatibility/cross-computer-task-action-receipt.md#跨任务委派的原文正文2026-11-05)「跨任务委派的原文正文」。
 - 实现：`apps/desktop/src/main/maker-ipc/forwardedRequest.ts`（`captureAgentRequest`）、`register.ts`
   （`captureSessionAgentRequest`）、`packages/maker-shared/src/autoReviewIntent.ts`（`verifiedOwnerRequestText`）、
   `messageSourceNote.ts`；回归见 `forwardedRequest.test.ts`、`messageSourceNote.test.ts`、
