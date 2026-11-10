@@ -151,6 +151,29 @@ test('Node history provider reads the current owner database and refuses a stale
   } finally { service.close(); confirmations.close(); clearCurrentDbClient(database); }
 });
 
+// Unit: §29 only exposes services supplied by this execution host. Unlike a
+// temporarily unready Desktop, Node has no production scheduler. One approved
+// scheduler invocation must report unsupported rather than invite retry; the
+// existing gateway still rejects disabled installations before this result.
+test('Node reports an unavailable scheduler as unsupported by the execution environment', async () => {
+  const ghost = { enabled: true, dir: '/fixture/scheduler', approvedHostToolGroups: ['scheduler'],
+    approval: { state: 'approved', revision: 'r1' }, manifest: { schemaVersion: 3,
+      id: 'scheduler', name: 'Scheduler', version: '1.0.0', kind: 'chip', entry: 'main.js', agent: { hostTools: ['scheduler'] } } };
+  const confirmations = createHostConfirmations({ current: () => true });
+  const service = createHostToolService({ profileDir: '/fixture', ownerId: 'owner', current: () => true,
+    owner: () => ({ dataOwnerId: 'owner', ownerGeneration: 1 }), getGhost: () => ghost,
+    getSession: () => undefined, manager: {}, confirmations, t: key => key });
+  const call = () => service.request('scheduler', { type: 'host-tool-request', server: 'cindy_scheduler',
+    tool: 'schedule_list', args: {} }, () => true);
+  const body = result => JSON.parse(result.content.find(item => item.type === 'text').text);
+  try {
+    assert.deepEqual(body(await call()), { ok: false, errorCode: 'UNSUPPORTED_CAPABILITY',
+      message: 'This execution environment does not support the requested Host service.' });
+    ghost.enabled = false;
+    assert.equal(body(await call()).errorCode, 'PERMISSION_DENIED');
+  } finally { service.close(); confirmations.close(); }
+});
+
 test('negotiated HTTP event streams deliver one live owner dialog without putting it in replay history', async t => {
   const confirmations = createHostConfirmations({ current: () => true });
   const events = createEventHub(), auth = createWebAuth();

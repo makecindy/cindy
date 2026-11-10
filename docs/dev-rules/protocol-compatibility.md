@@ -124,6 +124,8 @@ Ghost manifest、自建中转同步维护与 Review 清单。每项具体能力�
   到原窗口确认桥；断线取消，不重试写操作。不改变 device-link 或自建中转 wire payload。
   Node Host 的本机 `history` 查询增量接入相同回调和 owner 数据库，沿用原工具参数、分页、
   错误与来源范围。任务动作的输入快照与确认复用共享实现，不新增身份字段、任务副本或批准记录。
+  Node Host 未装配的服务返回 MCP `UNSUPPORTED_CAPABILITY`，附当前执行环境不支持的说明；当前包括生产调度器。
+  Desktop 原有暂未就绪场景仍返回 `HOST_NOT_READY`。不新增调用字段，也不改变旧宿主返回值。
 - 历史查询通道增量支持 `list_teammates`，复用同一个工具 registry 校验与宿主目录读取；不新增 channel。
   目录和指定 `teammate_id` 的关系分别分页，默认 100、最多 1000，返回 `nextCursor` / `hasMore`，游标复用历史查询的编码。
 - `control/delete_session` 为增量 Agent 工具，插件通过同一入口调用；本机复用 `patchSessionMetaInDb(status:'deleted')`，

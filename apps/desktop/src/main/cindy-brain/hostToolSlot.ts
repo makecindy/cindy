@@ -10,13 +10,15 @@ export interface PluginHostToolPorts {
   getGhost(id: string): InstalledGhost | null;
   owner(): DataOwnerPushStamp;
   createRuntime(server: string, caller: Extract<HostToolCaller, { kind: 'plugin' }>): HostToolRuntime | null;
+  /** A headless host may lack the service entirely rather than be starting it. */
+  unavailableRuntimeError?: { errorCode: string; message: string };
   approveGroup(id: string, group: GhostHostToolGroup, current: () => boolean): Promise<boolean>;
   policy(server: string, tool: string, args: Record<string, unknown>): string;
   confirm(input: { pluginId: string; pluginName: string; server: string; tool: string; args: Record<string, unknown> }): Promise<boolean>;
   recordCall?(pluginId: string, server: string, tool: string): void;
 }
 
-const fail = (errorCode: string) => ({ isError: true, content: [{ type: 'text' as const, text: JSON.stringify({ ok: false, errorCode }) }] });
+const fail = (errorCode: string, message?: string) => ({ isError: true, content: [{ type: 'text' as const, text: JSON.stringify({ ok: false, errorCode, ...(message ? { message } : {}) }) }] });
 
 /** Both logic pages and Node workers enter here with a Host-verified installation identity. */
 export async function handlePluginHostToolRequest(id: string, payload: unknown, pageCurrent: () => boolean, ports: PluginHostToolPorts) {
@@ -42,7 +44,7 @@ export async function handlePluginHostToolRequest(id: string, payload: unknown, 
   if (!ghost || !current()) return fail('PERMISSION_DENIED');
   const caller = { kind: 'plugin' as const, pluginId: id, ...owner };
   const runtime = ports.createRuntime(server, caller);
-  if (!runtime) return fail('HOST_NOT_READY');
+  if (!runtime) return fail(ports.unavailableRuntimeError?.errorCode ?? 'HOST_NOT_READY', ports.unavailableRuntimeError?.message);
   let closeStarted = false;
   try {
     const definition = runtime.describe(tool);

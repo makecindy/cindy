@@ -103,6 +103,8 @@ export function createHostToolService(options: Options) {
       return handlePluginHostToolRequest(id, payload, () => current() && pageCurrent(), {
         owner: options.owner, getGhost: options.getGhost,
         createRuntime: (server, caller) => createProviderHostToolRuntime(providers, server, caller),
+        unavailableRuntimeError: { errorCode: 'UNSUPPORTED_CAPABILITY',
+          message: 'This execution environment does not support the requested Host service.' },
         approveGroup,
         policy: (serverName, name, args) => getDesktopMcpToolApprovalPolicy({ serverName, toolName: 'call_tool', toolParams: { name, args } }),
         confirm: ({ pluginId, pluginName, server, tool, args }) => options.confirmations.confirm({
