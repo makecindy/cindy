@@ -340,6 +340,8 @@ export async function resolveSessionGitDir(
     sessionId: string;
     fallbackWorktreePath: string | null;
     fallbackWorkingDir: string | null;
+    /** Worker inheritance follows the Agent's latest tool directory. */
+    preferSelectedWorktree?: boolean;
   },
   deps: ResolveSessionGitDirDeps,
 ): Promise<SessionGitDirResult> {
@@ -353,10 +355,16 @@ export async function resolveSessionGitDir(
       break;
     }
   }
+  const preferSelectedWorktree = input.preferSelectedWorktree !== false;
+  // A persisted worktree path can outlive its checkout. readGitHead alone may
+  // resolve an ancestor repository, so verify the linked worktree first.
+  const liveWorktreePath = input.fallbackWorktreePath &&
+    (!deps.isLinkedWorktree || await deps.isLinkedWorktree(input.fallbackWorktreePath).catch(() => false))
+    ? input.fallbackWorktreePath : null;
   // A selected linked worktree is an explicit session setting. Old tool-use rows
   // can still point at another *valid* checkout after the task is moved. Mark it
   // as a trusted worktree source so an associated PR cannot override its branch.
-  if (candidate && input.fallbackWorkingDir &&
+  if (preferSelectedWorktree && candidate && input.fallbackWorkingDir &&
       path.resolve(candidate) !== path.resolve(input.fallbackWorkingDir) && deps.isLinkedWorktree &&
       await deps.isLinkedWorktree(input.fallbackWorkingDir).catch(() => false)) {
     const head = await deps.probeGitDir(input.fallbackWorkingDir);
@@ -366,10 +374,10 @@ export async function resolveSessionGitDir(
   }
 
   // An app-managed worktree is likewise a live binding, not a telemetry fallback.
-  if (input.fallbackWorktreePath) {
-    const head = await deps.probeGitDir(input.fallbackWorktreePath);
+  if (preferSelectedWorktree && liveWorktreePath) {
+    const head = await deps.probeGitDir(liveWorktreePath);
     if (head !== null) {
-      return { workdir: path.resolve(input.fallbackWorktreePath), head, source: 'worktree' };
+      return { workdir: path.resolve(liveWorktreePath), head, source: 'worktree' };
     }
   }
 
@@ -379,6 +387,11 @@ export async function resolveSessionGitDir(
       return { workdir: path.resolve(candidate), head, source: 'telemetry' };
     }
     // 最近的工作目录已不存在(worktree 删了)→ 不往回翻更早候选,落 fallback。
+  }
+
+  if (!preferSelectedWorktree && liveWorktreePath) {
+    const head = await deps.probeGitDir(liveWorktreePath);
+    if (head !== null) return { workdir: path.resolve(liveWorktreePath), head, source: 'worktree' };
   }
 
   // Ordinary project directory: tool-use can still identify a checkout entered via cd.
@@ -488,6 +501,7 @@ export async function resolveSessionGitDirLive(input: {
   sessionId: string;
   fallbackWorktreePath: string | null;
   fallbackWorkingDir: string | null;
+  preferSelectedWorktree?: boolean;
 }): Promise<SessionGitDirResult> {
   return resolveSessionGitDir(input, {
     recentToolUseContents: async (sid) => {
@@ -568,6 +582,7 @@ export async function resolveWorkerInheritedDirectory(
       sessionId: lead.id,
       fallbackWorkingDir: lead.workingDir,
       fallbackWorktreePath: lead.worktreePath ?? null,
+      preferSelectedWorktree: false,
     });
   } catch {
     return recorded;

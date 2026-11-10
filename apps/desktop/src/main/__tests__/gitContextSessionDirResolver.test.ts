@@ -176,6 +176,7 @@ describe('resolveSessionGitDir', () => {
       deps({
         contents: [toolUse('exec', { command: 'git status', cwd: '/Users/x/wt-a' })],
         gitDirs: { '/Users/x/wt-a': 'fix/old', '/Users/x/app-wt': 'fix/current' },
+        linkedWorktrees: ['/Users/x/app-wt'],
       }),
     );
     expect(res).toEqual({
@@ -183,6 +184,30 @@ describe('resolveSessionGitDir', () => {
       head: branchHead('fix/current'),
       source: 'worktree',
     });
+  });
+
+  it('ignores a recycled worktree path even when Git can read an ancestor HEAD', async () => {
+    const res = await resolveSessionGitDir(
+      { sessionId: 's', fallbackWorktreePath: '/Users/x/recycled', fallbackWorkingDir: '/Users/x/main' },
+      deps({
+        contents: [toolUse('exec', { command: 'git status', cwd: '/Users/x/current' })],
+        gitDirs: { '/Users/x/recycled': 'main', '/Users/x/current': 'fix/current' },
+        linkedWorktrees: [],
+      }),
+    );
+    expect(res).toMatchObject({ workdir: path.resolve('/Users/x/current'), source: 'telemetry' });
+  });
+
+  it('keeps telemetry first for Worker inheritance after the lead enters another checkout', async () => {
+    const res = await resolveSessionGitDir(
+      { sessionId: 's', fallbackWorktreePath: null, fallbackWorkingDir: '/Users/x/wt-a', preferSelectedWorktree: false },
+      deps({
+        contents: [toolUse('exec', { command: 'git status', cwd: '/Users/x/wt-b' })],
+        gitDirs: { '/Users/x/wt-a': 'fix/recorded', '/Users/x/wt-b': 'fix/current' },
+        linkedWorktrees: ['/Users/x/wt-a'],
+      }),
+    );
+    expect(res).toMatchObject({ workdir: path.resolve('/Users/x/wt-b'), source: 'telemetry' });
   });
 
   it('遥测命中:最近一条候选目录是 git → source=telemetry', async () => {
@@ -228,6 +253,7 @@ describe('resolveSessionGitDir', () => {
           toolUse('exec', { command: 'x', cwd: '/Users/x/main' }), // 更早的主 checkout 不该被翻出来
         ],
         gitDirs: { '/Users/x/main': 'main', '/Users/x/app-wt': 'feat/app' },
+        linkedWorktrees: ['/Users/x/app-wt'],
       }),
     );
     expect(res).toEqual({
@@ -243,6 +269,7 @@ describe('resolveSessionGitDir', () => {
       deps({
         contents: [toolUse('Read', { file_path: '/Users/x/wt-a/z.ts' })],
         gitDirs: { '/Users/x/app-wt': 'feat/app', '/Users/x/main': 'main' },
+        linkedWorktrees: ['/Users/x/app-wt'],
       }),
     );
     expect(res.source).toBe('worktree');
@@ -382,6 +409,21 @@ describe('collectTouchedDirs', () => {
 describe('Worker same-repository inheritance', () => {
   const recorded = {directory: '/repo', realDirectory: '/repo', checkoutRoot: '/repo', baseRepo: '/repo', commonDir: '/repo/.git',
     branch: 'main', exists: true, dirty: false, isWorktree: false};
+  it('passes telemetry-first mode when the lead has moved from its selected checkout', async () => {
+    const infer = vi.fn((input: Parameters<typeof resolveSessionGitDir>[0]) => resolveSessionGitDir(input,
+      {
+        recentToolUseContents: async () => [toolUse('exec', {command: 'git status', cwd: '/checkout-b'})],
+        probeGitDir: async dir => dir === '/checkout-a' || dir === '/checkout-b' ? branchHead('feature') : null,
+        isLinkedWorktree: async dir => dir === '/checkout-a',
+      }));
+    const result = await resolveWorkerInheritedDirectory({id: 'lead', workingDir: '/checkout-a'}, {
+      infer,
+      probe: async dir => ({...recorded, directory: dir, realDirectory: dir, checkoutRoot: dir,
+        commonDir: '/repo/.git', exists: true, isWorktree: true}),
+    });
+    expect(infer).toHaveBeenCalledWith(expect.objectContaining({preferSelectedWorktree: false}));
+    expect(result.directory).toBe(path.resolve('/checkout-b'));
+  });
   it.each([
     ['linked checkout', '/repo/.git', true, '/checkout'],
     ['independent clone', '/clone/.git', true, '/repo'],
