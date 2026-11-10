@@ -155,6 +155,26 @@ use the current GitHub CLI identity on each prepare. `base` defaults to the repo
   and add this separate registry: older tooling ignores the new property instead of failing to parse
   object-valued sources. The updated supervisor/build tooling is required to consume the registry.
 
+### macOS input permission identity
+
+Signed personal runtimes also embed `cindy-macos-desktop-input` under
+`Contents/Resources/tools/remote-desktop`, signed with the shell's developer certificate.
+The native receipt declares `capabilities.desktopInput`; source-mode Main then uses that
+sealed executable instead of compiling an ad-hoc copy in the profile cache. A declared but
+missing helper fails permission detection rather than silently changing identities. Both Swift
+sources participate in the runtime cache key so native changes rebuild the shell.
+
+The personal helper's compile-time caller mode accepts only its enclosing signed personal app,
+matching its team, exact Main executable, sealed helper bytes and kernel-audited stdio peer.
+It does not claim the hardened security boundary of official builds: personal source apps still
+run writable JavaScript. Official helpers retain their existing bundle allowlist and hardened
+runtime requirement; ordinary development checkouts retain their existing development binding.
+
+The system's app switch is not acceptance evidence. After an authorized switch, check screen
+recording and the actual input helper separately. Existing macOS grants may need user renewal;
+never edit the TCC database, substitute Main's grant for the helper probe, or report a grant merely
+because the app is signed. Building and isolated probing must not restart the active instance.
+
 ## Preparation and updates
 
 Each `prepare` uses a **new output directory**, preserving existing builds and dirty source worktrees.
@@ -654,10 +674,12 @@ restart wrapper still enforces profile exclusivity and runtime startup checks.
 
 Manual activation journals an explicit manual rollback policy before starting the candidate. It
 requires the same continuous readiness/remote-health probation before promotion. Failure/interruption
-blocks further starts instead of launching old code against potentially changed data; the independent
+after any spawn attempt blocks further starts instead of launching old code against potentially changed data; the independent
 rescue receipt also marks rollback compatibility unverified until successful promotion. This does not
 restore or overwrite databases, credentials or plugin ledgers. Preserve both version directories for
-inspection. This path does not accept changed migration artifacts or private database scripts.
+inspection. A caught failure proven to precede any spawn attempt can restore the old version;
+its result is `recovered`, not `verified`. Missing readiness or an interrupted supervisor is not that proof.
+This path does not accept changed migration artifacts or private database scripts.
 
 For an explicitly authorized immediate restart, use the single Terminal command:
 
@@ -674,13 +696,13 @@ wins the lock. `manual-activate` remains available after an independently reques
 
 A live supervisor owner causes `manual-restart` to fail before touching the app. Do not delete its lock,
 kill an unverified PID, or stop the app to get around it. With an older already-running supervisor,
-inspect its process identity and exit **only that supervisor** normally before retrying; the app must
-remain running. Automatic takeover of a live supervisor is not implemented. A competing launcher can
+use the explicit `supervisor-release` command when supported. An older supervisor without the
+control protocol needs an independently verified normal exit; the app must remain running. Compatible supervisors accept a generation-bound cooperative release request; older supervisors fail closed. A competing launcher can
 still win the lock, but then this command leaves the current app running. Dead owners are reclaimed by
 the existing lock implementation, never by the handover script.
 
 The output receipt is created exclusively: use a new path for each approved attempt. It records
-`blocked-before-stop`, `stopping`, `shutdown-unconfirmed`, `starting`, `activation-failed`, or `verified`.
+`blocked-before-stop`, `stopping`, `shutdown-unconfirmed`, `starting`, `activation-failed`, `recovered`, or `verified`.
 A crash leaves the last durable phase; inspect the receipt, journal and actual processes instead of
 replaying an old restart command. `verified` requires continuous readiness/remote-service probation,
 not phone UI testing. A startup failure keeps the existing manual rollback policy; it does not blindly
@@ -803,7 +825,10 @@ never install/replace the formal entry automatically.
 
 `fixed-install.mjs` copies and verifies the signed candidate next to the destination, then
 records a durable transition before renaming anything. The old physical bundle is retained
-as a hidden sibling; old runtime caches and business journal pointers are also retained.
+under the immutable runtime store’s `install-backups/previous-<uuid>.bundle`, outside
+Applications; old runtime caches and business journal pointers are also retained. The store must
+be on the installation volume so renames remain atomic. Existing version-1 sibling transitions
+can still be completed; legacy backups are reported by `doctor`, never silently deleted.
 An unchanged runtime is verified and reused without replacing its directory. A changed
 runtime requires the exact installed app to be stopped, the same Bundle ID and developer
 certificate, and the existing supervisor profile/stop guards. Changing signing identity is
@@ -862,3 +887,67 @@ environment and numeric HTTP failure status. It never records the native token o
 headers. A registered event confirms only registration, and a desktop notify-sent log confirms
 only enqueueing; neither proves APNs acceptance or notification display. Verify provider logs
 and the target phone before calling delivery successful.
+
+
+## 个人版交接与故障验收（2026-11-10）
+
+这套流程面向具备源码、GitHub 登录与本机签名环境的贡献者；目前仍运行签名外壳加源码
+开发服务，不是面向普通用户的独立分发包，也不承诺升级后自动继承 macOS 授权。
+
+- 每次新的升级请求重新 `prepare`，冻结 main、全部选中 PR（含草稿）的最新 SHA、插件仓
+  与本地补丁。用户等待确认期间不暗中改候选。确认前可运行 `freshness --config FILE
+  --report BUILD_REPORT` 查询是否有变化；失败表示需展示差异并选择重建或明确接受冻结版，
+  不能宣称它仍是最新。合成冲突留在候选目录供检查；优先更新冲突 PR，不重复维护私有解法。
+- `manual-check` 当前只对候选目录做隔离 smoke。禁止在当前运行基线的源码目录启动
+  第二个所谓隔离实例：仓库 restart 的终止范围按 checkout，不按数据目录。
+  mock/smoke 用候选自己的进程分区器检查整个 checkout，并要求启动器支持
+  `--refuse-running`，在实际停止/清缓存前再次拒绝占用；不支持此保护的旧候选必须重建。
+  正常隔离启动/恢复使用随工具发布的同一分区器做启动前检查，因此不要求旧版自带
+  标记。残留进程仍拒绝启动，不自动清理身份不明的进程；不能与另一个启动器并发操作同一 checkout。
+  完整真实交接演练暂未交付，不能把单版 smoke 或注入时钟的测试称为双实例验收。
+- `manual-restart` 先请求旧监督程序交出锁（绑定监督 PID、锁 token、应用 PID、启动代次
+  和版本），旧程序只退出监督循环，保持应用运行。新程序取得锁并复核身份后才正常退出
+  应用。也可显式用 `supervisor-release --config FILE --expected-pid PID` 单独交出监督。
+  旧版监督程序不支持此协议时明确阻断，不通过 kill/删锁兼容；升级工具自身仍需独立验收。
+  交出锁后旧进程仍持有 runner 子进程引用，终端在 runner 退出前不可关闭或复用；
+  释放监督权不等于释放界面服务所在的终端。
+- 签名要求变化在退出旧版前阻断。证书续期/身份迁移尚无自动命令，须单独准备和审核，
+  不接受静默换证或放宽校验。遗留安装事务可显式 `install-recover --config FILE --report
+  CHECKED_BUILD_REPORT`，要求监督锁可取得、应用与 runner 均已停止、报告和事务的 runtime
+  key/digest 一致；只完成文件事务，不启动应用、不更改业务 journal。候选开始尝试执行后，
+  数据兼容性未知仍禁止自动退回旧版。
+- 换壳后注销退役包的 LaunchServices 登记并重新登记固定安装路径；隔离 smoke 正常停止
+  后注销预览包，仍被别的实例使用则保留并警告。改名为 `.bundle` 本身不保证系统注销。
+  系统登记失败不得阻断文件安装或旧版恢复：完成文件事务，在安装元数据记录
+  `registrationPending`，由 doctor 提示、registry-clean 成功后清除；smoke 的登记错误
+  写入 `registrationWarnings`，不改变候选启动结果。停止进程失败仍使 smoke 失败。
+  `doctor` 列出同 Bundle ID 的登记路径；显式 `registry-clean --config FILE` 只注销
+  同 ID 且未运行的副本：状态目录内或固定包同级受管备份前缀内的退役包允许旧/临时签名，
+  其它位置仍要求同证书有效签名；同 ID 查询中已不存在的路径只注销陈旧登记。真实路径
+  是固定包的别名、异 ID、运行中或身份不明的条目保留。固定包始终验证原签名和摘要。
+  此命令不删除文件、不重置 TCC；登记查询限时 60 秒，注销/登记各限时 15 秒。
+  无法识别/核验的条目保留，命令报告未完成，不能据此宣称授权已经生效。
+- 主进程启动时消费并清除监控环境变量，生成目录只允许一个主进程写心跳；准备子进程
+  同样清除继承值。读取方继续验证 PID、代次与新鲜度，未知活动仍视为忙。
+- 只有当前调用栈确认**尚未尝试 spawn**，才允许恢复旧版；没有 ready、超时或监督程序
+  被中断都不构成这一证据。恢复结果标为 `recovered`、`verified:false`，不是新版升级成功。启动前的瞬时失败
+  不写入内容拒绝名单，修复环境并显式重新检查后可以手动重试同一候选；自动候选选择
+  排除 `launchFailure.id`，防止同一坏候选不断退出并恢复应用；恢复后监督异常仍保留 recovered 标志。
+  候选一旦尝试启动且无法确认兼容性，保持 blocked。使用 `doctor` / `auto-status`
+  检查及受保护的 `auto-recover`，不得手改 journal 或删除拒绝记录绕过检查。
+- 每次实际切换后分别核对屏幕录制与辅助功能的当前进程检查结果。系统设置里的开关、
+  codesign 成功、窗口出现、远程设备在线均不能替代这两项检查；未实测就保留未验收状态。
+
+`node scripts/personal-build.mjs prune-plan --config FILE` 只生成保留建议：保护 journal 的
+当前／上一版／失败版、独立 known-good、待切换候选、最新已检查版和最近两次准备；证据
+缺失则全部保留。没有删除能力，不遍历或删除任意 worktree、工具版本、原生缓存、旧备份。
+实施清理前必须再次检查运行进程、脏文件、Git 引用和恢复依赖；不能把按时间排序当成安全删除证明。
+
+验收分层：`personal-build-recovery.test.mjs` 在临时目录通过生产交接、安装器和 journal
+覆盖正常晋升、启动前恢复、启动后阻断，进程与时间为注入模型；它不冒充真实 GUI 演练。
+真实双版本演练仍未验收，尤其需要独立 checkout 和独立应用身份；不得启动当前基线来伪造演练。
+自动升级仍默认关闭，不能仅凭若干次通过就打开。
+
+后续独立阶段：正式打包产物、完整真实交接演练、执行文件删除的清理流程、证书身份迁移。
+这些需要独立验收；本轮没有改变当前运行实例或安装手机包。Push 注册缺陷独立于个人版工具
+交付，注册成功不是 APNs 送达证据；应分别核对签名环境、注册回执与目标真机收到通知。

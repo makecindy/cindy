@@ -35,6 +35,23 @@ async function resolveBinary(): Promise<string> {
   if (process.platform === 'linux') return resolveLinuxInputBinary();
   if (app.isPackaged)
     return path.join(process.resourcesPath, 'tools', 'remote-desktop', binaryName);
+  if (process.platform === 'darwin') {
+    // Personal source releases run writable JS, but their input helper is sealed
+    // inside the stable signed shell. Never silently replace it with a cache build.
+    let personal: { capabilities?: { desktopInput?: boolean } } | undefined;
+    try {
+      personal = JSON.parse(
+        await fs.readFile(path.join(app.getAppPath(), 'resources/personal-native.json'), 'utf8'),
+      );
+    } catch {
+      /* Ordinary source checkout, or legacy personal runtime. */
+    }
+    if (personal?.capabilities?.desktopInput === true) {
+      const shipped = path.join(process.resourcesPath, 'tools', 'remote-desktop', binaryName);
+      await fs.access(shipped);
+      return shipped;
+    }
+  }
   if (build) return build;
   const resolve = async () => {
     const sourceRoot = path.join(app.getAppPath(), 'native', 'remote-desktop');
