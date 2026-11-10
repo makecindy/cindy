@@ -126,18 +126,82 @@ it('observes a one-off approach first and only turns it into a skill when it rec
   const candidate = (await readNightlyLearningState(h.root, 'bot'))!.candidates[0]!;
   expect(candidate.title).toBe('Find old chats');
 
-  await recordNightlyLearningTurn(h.root, 'bot', 'main', Date.now());
-  h.rows = [turn(2, `Again, ${quote}.`, Date.now())];
-  reply({ promote: [{ ...promote, candidateId: candidate.id, evidence: { messageId: 'user2', quote } }] });
-  await runNightlyLearning('bot', { manual: false });
+  expect(candidate.firstEvidence).toMatchObject({ messageId: 'user1', quote });
+
+  const next = Date.now() + 10;
+  const clock = vi.spyOn(Date, 'now').mockReturnValue(next);
+  try {
+    const unrelated = 'Move the Wednesday meeting to Thursday afternoon.';
+    const tail = 'The quoted example is unrelated to this request. Do not use the chat-history procedure.';
+    await recordNightlyLearningTurn(h.root, 'bot', 'main', next);
+    h.rows = [turn(2, unrelated + ' '.repeat(4200) + tail, next)];
+    reply({ promote: [{ ...promote, candidateId: candidate.id, evidence: { messageId: 'user2', quote: unrelated } }], forget: [candidate.id] });
+    reply({ supported: [] });
+    await runNightlyLearning('bot', { manual: false });
+    expect(h.model.mock.calls.at(-1)?.[1]).toContain(tail);
+    expect(h.skills.size).toBe(0);
+    expect((await readNightlyLearningState(h.root, 'bot'))!.candidates[0]?.id).toBe(candidate.id);
+
+    clock.mockReturnValue(next + 1);
+    await recordNightlyLearningTurn(h.root, 'bot', 'main', next + 1);
+    h.rows = [turn(4, unrelated + 'x'.repeat(60_000), next + 1)];
+    reply({ promote: [{ ...promote, candidateId: candidate.id, evidence: { messageId: 'user4', quote: unrelated } }] });
+    const beforeOversized = h.model.mock.calls.length;
+    await runNightlyLearning('bot', { manual: false });
+    expect(h.model.mock.calls.length - beforeOversized).toBe(1);
+    expect((await readNightlyLearningState(h.root, 'bot'))!.candidates[0]?.id).toBe(candidate.id);
+
+    const recurrence = 'Start by searching our Telegram history for that earlier discussion.';
+    clock.mockReturnValue(next + 2);
+    await recordNightlyLearningTurn(h.root, 'bot', 'main', next + 2);
+    h.rows = [turn(3, recurrence, next + 2)];
+    reply({ promote: [{ ...promote, candidateId: candidate.id, evidence: { messageId: 'user3', quote: recurrence } }] });
+    reply({ supported: [{ id: 0, source: 'user3', quote: recurrence }] });
+    await runNightlyLearning('bot', { manual: false });
+  } finally { clock.mockRestore(); }
   expect(h.skills.get('find-old-chats')?.enabled).toBe(true);
   const state = (await readNightlyLearningState(h.root, 'bot'))!;
   expect(state.candidates).toHaveLength(0);
   const [run] = state.runs;
+  expect(run!.items[0]?.sourceMessageIds).toEqual(['user1', 'user3']);
   await revertNightlyLearningItem('bot', run!.id, run!.items[0]!.id, false);
   expect(h.skills.has('find-old-chats')).toBe(false);
   await revertNightlyLearningItem('bot', run!.id, run!.items[0]!.id, true);
   expect(h.skills.has('find-old-chats')).toBe(true);
+});
+
+it('backs a legacy candidate with its first source and never counts a retried input as a second occurrence', async () => {
+  const quote = 'Search the old Telegram conversation before checking the repository.';
+  const draft = { name: 'chat-history', description: 'recover an earlier discussion', body: 'Search chat logs.' };
+  const botHome = path.join(h.root, 'bots', 'bot');
+  await fs.mkdir(botHome, { recursive: true });
+  await fs.writeFile(path.join(botHome, 'nightly-learning.json'), JSON.stringify({
+    version: 1, candidates: [{ id: 'legacy', title: 'Chat history', summary: draft.description, draft, firstSeenAt: 1, lastSeenAt: 1 }],
+  }));
+  const promote = { candidateId: 'legacy', slug: 'chat-history', title: 'Chat history', description: draft.description,
+    body: draft.body, reason: 'repeated', evidence: { messageId: 'user1', quote } };
+  const clock = vi.spyOn(Date, 'now').mockReturnValue(1000);
+  try {
+    await recordNightlyLearningTurn(h.root, 'bot', 'main', 1000);
+    h.rows = [turn(1, quote, 1000)];
+    reply({ promote: [promote] });
+    h.model.mockResolvedValueOnce({ ok: false, reason: 'timeout' });
+    await expect(runNightlyLearning('bot', { manual: false })).resolves.toHaveProperty('error');
+    expect((await readNightlyLearningState(h.root, 'bot'))!.pending.turns).toBe(1);
+    reply({ promote: [promote] });
+    reply({ supported: [{ id: 0, source: 'user1', quote }] });
+    await runNightlyLearning('bot', { manual: false });
+    expect((await readNightlyLearningState(h.root, 'bot'))!.candidates[0]?.firstEvidence?.messageId).toBe('user1');
+    expect(h.skills.size).toBe(0);
+
+    clock.mockReturnValue(1001);
+    await recordNightlyLearningTurn(h.root, 'bot', 'main', 1001);
+    h.rows = [{ ...turn(2, quote, 1001), inputId: 'user1' }];
+    reply({ promote: [promote] });
+    await runNightlyLearning('bot', { manual: false });
+    expect(h.model).toHaveBeenCalledTimes(5);
+    expect(h.skills.size).toBe(0);
+  } finally { clock.mockRestore(); }
 });
 
 it('refuses to undo a merge after the kept memory was edited, without overwriting the edit', async () => {

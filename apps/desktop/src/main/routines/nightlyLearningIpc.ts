@@ -38,7 +38,7 @@ async function readView(botId: string): Promise<NightlyLearningView> {
     memoryEnabled,
     lastRun: state?.runs.find((run) => !run.manual || run.turns > 0 || run.outcome === 'failed') ?? null,
     runs: state?.runs ?? [],
-    candidates: (state?.candidates ?? []).map(({ draft: _draft, ...candidate }) => candidate),
+    candidates: (state?.candidates ?? []).map(({ draft: _draft, firstEvidence: _firstEvidence, ...candidate }) => candidate),
   };
 }
 

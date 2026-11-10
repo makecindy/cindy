@@ -13,12 +13,14 @@ import { buildBotMemoryScopeKey, MemoryError, type AgentKind, type MemoryRecord 
 import { activeOwnerScopeKey, isAppSessionBoundaryPending, ownerScopedUserDataPath } from '../appSessionState.js';
 import { getDbClient } from '../localDb/client/current.js';
 import { drainPersistQueue } from '../messagePersistBroadcaster.js';
+import type { UtilityTextRequestOptions } from '../utility-model/oneShotCandidates.js';
 import { createLogger } from '../logger.js';
 import { listInstalledSkills } from '../learn-host/skillsIndex.js';
 import { isSyntheticTriggerText } from '@cindy/maker-shared/synthetic-trigger';
 import { isAutomaticInputOriginKind } from '../../shared/agentInputQueue.js';
 import type { NightlyLearningItem, NightlyLearningRun } from '../../shared/botNightlyLearning.js';
 import { hasLearningEvidence, learningSnapshotBudget, learningSnapshotPrefix } from './botLearningReviewPlan.js';
+import { reviewNightlyEvidence, type LearningCitation } from './botNightlyEvidence.js';
 import { nightlyLearningInstructions, nightlyLearningSchema, type NightlyLearningPlan } from './botNightlyLearningPlan.js';
 import {
   MAX_NIGHTLY_CANDIDATES,
@@ -95,6 +97,8 @@ const parseMeta = (raw: string | null) => {
 
 type TurnScan = {
   turns: Turn[];
+  /** Full owner inputs for evidence review, kept outside the planning snapshot budget. */
+  ownerTexts: Map<string, string>;
   /** 读到了 until 之前的全部回复；否则 scannedThrough 是这一批扫到的最后一条回复的时间。 */
   complete: boolean;
   scannedThrough: number;
@@ -131,6 +135,7 @@ async function readTurns(botId: string, after: number, until: number, learned: R
     [botId, after, until],
   );
   const turns: Turn[] = [];
+  const ownerTexts = new Map<string, string>();
   let holdAt = Infinity;
   for (const row of rows.slice(0, MAX_REPLIES)) {
     const meta = parseMeta(row.meta);
@@ -146,6 +151,7 @@ async function readTurns(botId: string, after: number, until: number, learned: R
     const userText = row.role === 'channel' && typeof source?.userText === 'string'
       ? source.userText : textOf(row.inputContent ?? '');
     if (!userText.trim() || isSyntheticTriggerText(userText)) continue;
+    if (userText.length <= MESSAGE_BUDGET) ownerTexts.set(row.inputId, userText);
     turns.push({
       sessionId: row.sessionId,
       createdAt: row.createdAt,
@@ -156,7 +162,7 @@ async function readTurns(botId: string, after: number, until: number, learned: R
     });
   }
   const complete = rows.length <= MAX_REPLIES;
-  return { turns, complete, scannedThrough: complete ? until : rows[MAX_REPLIES - 1]!.createdAt, holdAt };
+  return { turns, ownerTexts, complete, scannedThrough: complete ? until : rows[MAX_REPLIES - 1]!.createdAt, holdAt };
 }
 
 /** 从工具调用记录里数这个伙伴的技能被读了几次：调用技能，或读了它技能目录下的 SKILL.md。 */
@@ -404,25 +410,22 @@ async function runLocked(
       candidates: candidates.map((c) => ({ id: c.id, title: c.title, summary: c.summary, firstSeenAt: new Date(c.firstSeenAt).toISOString() })),
       declined: state?.declined ?? [],
     });
-  const request = {
-    systemPrompt: nightlyLearningInstructions,
-    maxTokens: 8000,
-    timeoutMs: 120_000,
-    validateResponse: (text: string) => {
-      try { return nightlyLearningSchema.safeParse(JSON.parse(text)).success; } catch { return false; }
-    },
-    beforeDispatch: async () => current() && !!(await readBot(botId)),
-  };
-  let result = await requestUtilityText(getMaker(), input, request);
-  // 默认辅助模型链没有可用候选（例如没登录 Cindy、只连了自己的模型账号）时，改用这个伙伴主对话的模型路线。
-  if (!result.ok && result.reason === 'no_candidate' && bot.agentKind && bot.model && current()) {
-    result = await requestUtilityText(getMaker(), input, {
-      ...request,
-      agentKind: bot.agentKind as AgentKind,
-      model: bot.model,
+  const ask = async (input: string, options: UtilityTextRequestOptions) => {
+    const request = { ...options, timeoutMs: 120_000, beforeDispatch: async () => current() && !!(await readBot(botId)) };
+    const result = await requestUtilityText(getMaker(), input, request);
+    if (result.ok || result.reason !== 'no_candidate' || !bot.agentKind || !bot.model || !current()) return result;
+    return requestUtilityText(getMaker(), input, {
+      ...request, agentKind: bot.agentKind as AgentKind, model: bot.model,
       ...(bot.providerId ? { providerId: bot.providerId } : {}),
     });
-  }
+  };
+  const result = await ask(input, {
+    systemPrompt: nightlyLearningInstructions,
+    maxTokens: 8000,
+    validateResponse: (text) => {
+      try { return nightlyLearningSchema.safeParse(JSON.parse(text)).success; } catch { return false; }
+    },
+  });
   if (!current()) return { skipped: true, resultText: 'Owner changed' };
   if (!result.ok) {
     log.warn('nightly learning model call failed', { botId });
@@ -465,6 +468,32 @@ async function runLocked(
   const titleOf = (filename: string) =>
     appliedUpdates.get(filename) ?? memories.find((m) => m.filename === filename)?.frontmatter.title ?? filename;
   const memoryOps = [...plan.memories.filter((op) => op.op !== 'delete'), ...plan.memories.filter((op) => op.op === 'delete')];
+
+  const promotionItems = plan.promote.flatMap((op, id) => {
+    const candidate = candidates.find((c) => c.id === op.candidateId);
+    if (!candidate || !hasLearningEvidence(op, messages, true)) return [];
+    const first = candidate.firstEvidence;
+    if (first && first.userMessageId === op.evidence.messageId) return [];
+    const text = scan.ownerTexts.get(op.evidence.messageId);
+    if (!text) return [];
+    return [{ id, proposal: {
+      candidate: { title: candidate.title, summary: candidate.summary, draft: candidate.draft },
+      first: first ?? null,
+      skill: { title: op.title, description: op.description, body: op.body },
+      citedText: op.evidence.quote,
+    }, sources: [{ source: op.evidence.messageId, text }] }];
+  });
+  const recurrences = await reviewNightlyEvidence(ask,
+    'Does the current user request actually call for this candidate approach a second time? Judge the cited text in the context of the whole current message. ' +
+    'Compare the proposed skill with the saved candidate, its first evidence and the current request. Accept equivalent wording. Reject incidental topic overlap, negation, unrelated requests, or a skill with a different purpose. ' +
+    'For a legacy candidate with no first evidence, check only whether the current request demonstrates the approach; it will be saved as its first occurrence.',
+    promotionItems,
+  );
+  if (!current()) return { skipped: true, resultText: 'Owner changed' };
+  if (!recurrences) {
+    await recordRun({ id: runId, at: startedAt, manual: manual || undefined, outcome: 'failed', turns: selected.length, items: [], errorCode: 'MODEL_UNAVAILABLE' }, undefined, false);
+    return { error: 'Could not verify nightly skill promotions' };
+  }
 
   for (const op of store ? memoryOps : []) {
     if (!current()) break;
@@ -531,10 +560,16 @@ async function runLocked(
 
   // 只从上次已经在观察的做法转正（candidates 读自运行前的状态）：这一轮新加的观察项不能当场转正。
   const promoted = new Set<string>();
-  for (const op of plan.promote) {
+  const firstSeen = new Map<string, LearningCitation>();
+  for (const [id, op] of plan.promote.entries()) {
     if (!current()) break;
+    const supported = recurrences.get(id);
     const candidate = candidates.find((c) => c.id === op.candidateId);
-    if (!candidate || !hasLearningEvidence(op, messages, true)) continue;
+    if (!candidate || !supported || promoted.has(candidate.id)) continue;
+    if (!candidate.firstEvidence) {
+      if ((scan.ownerTexts.get(supported.source)?.length ?? Infinity) <= USER_TEXT_CHARS) firstSeen.set(candidate.id, supported);
+      continue;
+    }
     if (catalog.some((s) => s.slug === op.slug)) continue;
     try {
       if (await readSkill(botId, op.slug)) continue;
@@ -544,7 +579,8 @@ async function runLocked(
       };
       const afterSnap = await applySkill(botId, op.slug, target);
       promoted.add(candidate.id);
-      await add({ kind: 'skill', action: 'created', target: op.slug, title: op.title, reason: op.reason }, 'skill', null, afterSnap);
+      await add({ kind: 'skill', action: 'created', target: op.slug, title: op.title, reason: op.reason,
+        sourceMessageIds: [candidate.firstEvidence.messageId, supported.source] }, 'skill', null, afterSnap);
     } catch (error) {
       log.warn('nightly skill promotion skipped', { botId, error: String(error) });
     }
@@ -554,10 +590,21 @@ async function runLocked(
   const observed: NightlyLearningCandidateRecord[] = [];
   for (const op of plan.observe) {
     // 做法既可能出自主人的要求，也可能出自伙伴这一轮实际的做法，证据可以引用任一方的原文。
-    if (declined.has(op.title) || !messages.some((m) => m.id === op.evidence.messageId && m.text.includes(op.evidence.quote))) continue;
-    observed.push({ id: `c_${randomUUID().slice(0, 12)}`, title: op.title, summary: op.summary, draft: op.draft, firstSeenAt: startedAt, lastSeenAt: startedAt });
+    if (declined.has(op.title)) continue;
+    const turn = selected.find((t) => t.messages.some((m) => m.id === op.evidence.messageId && m.text.includes(op.evidence.quote)));
+    if (!turn) continue;
+    const source = turn.messages.find((m) => m.id === op.evidence.messageId)!;
+    const userMessageId = turn.messages[0]!.id;
+    const ownerText = scan.ownerTexts.get(userMessageId);
+    // Keep a bounded, complete owner request. If it will not fit, leave the candidate unanchored.
+    const firstEvidence = ownerText && ownerText.length <= USER_TEXT_CHARS
+      ? { ...op.evidence, role: source.role, userMessageId, context: ownerText } : undefined;
+    observed.push({ id: `c_${randomUUID().slice(0, 12)}`, title: op.title, summary: op.summary, draft: op.draft,
+      firstSeenAt: startedAt, lastSeenAt: startedAt, firstEvidence });
   }
   const forgotten = new Set(plan.forget);
+  // A failed or indeterminate promotion leaves the candidate available for the next run.
+  for (const op of plan.promote) forgotten.delete(op.candidateId);
 
   await recordRun(
     { id: runId, at: startedAt, ...(manual ? { manual: true } : {}), outcome: items.length ? 'learned' : 'nothing', turns: selected.length, items },
@@ -566,7 +613,12 @@ async function runLocked(
       const existingTitles = new Set(s.candidates.map((c) => c.title));
       s.candidates = [
         ...observed.filter((c) => !existingTitles.has(c.title)),
-        ...s.candidates.filter((c) => !promoted.has(c.id) && !forgotten.has(c.id)),
+        ...s.candidates.filter((c) => !promoted.has(c.id) && !forgotten.has(c.id)).map((c) => {
+          const evidence = firstSeen.get(c.id);
+          if (!evidence) return c;
+          const firstEvidence = { messageId: evidence.source, userMessageId: evidence.source, role: 'user' as const, quote: evidence.quote, context: scan.ownerTexts.get(evidence.source) };
+          return { ...c, firstEvidence, lastSeenAt: startedAt };
+        }),
       ].slice(0, MAX_NIGHTLY_CANDIDATES);
     },
   );

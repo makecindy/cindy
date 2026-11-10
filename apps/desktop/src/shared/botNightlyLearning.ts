@@ -17,6 +17,8 @@ export interface NightlyLearningItem {
   /** 被并入的那一条（合并时的来源），只用于展示。 */
   mergedInto?: string;
   reason: string;
+  /** 自动转正依据的首次与本次消息；只记录来源编号。 */
+  sourceMessageIds?: [string, string];
   undone?: boolean;
 }
 
