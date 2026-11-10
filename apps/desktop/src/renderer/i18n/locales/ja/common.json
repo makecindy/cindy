@@ -858,7 +858,7 @@
       },
       "runningCount_other": "{{count}} 件実行中",
       "limitAria": "{{name}} の同時実行数の上限",
-      "limitOption_other": "上限 {{count}}",
+      "limitOption_other": "同時 {{count}}",
       "weightAria": "{{name}} の重み",
       "weightOption": "重み {{weight}}",
       "assignAria": "{{name}} に割り当てる",
@@ -13010,6 +13010,11 @@
     "prevMessageJump": "前の質問へ移動：{{preview}}",
     "sessionLoading": "セッションを読み込み中",
     "askUserQuestion": {
+    "unanswered": "未回答",
+    "withdrawn": "回答は不要になりました",
+    "withdrawnDraft": "この質問への回答は不要になりました。\n{{reason}}\n下書きは保存されています。補足として送信できます。",
+    "sendSupplement": "補足を送信",
+
       "voice": {
         "hint": "選択肢の番号または名前を話してください。複数選択後は「選択を確定」と言ってください。",
         "freeTextHint": "回答を話し、内容を確認してから「選択を確定」と言って送信してください。",

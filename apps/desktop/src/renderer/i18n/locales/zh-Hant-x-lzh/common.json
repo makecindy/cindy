@@ -858,7 +858,7 @@
       },
       "runningCount_other": "{{count}} 件差事方行",
       "limitAria": "{{name}} 之並行上限",
-      "limitOption_other": "至多 {{count}}",
+      "limitOption_other": "並行 {{count}}",
       "weightAria": "{{name}} 之權重",
       "weightOption": "輕重 {{weight}}",
       "assignAria": "分差事予 {{name}}",
@@ -13001,6 +13001,11 @@
     "jumpToBottom": "至底",
     "prevMessageJump": "至上一問：{{preview}}",
     "askUserQuestion": {
+    "unanswered": "未答",
+    "withdrawn": "無須再答",
+    "withdrawnDraft": "此問無須再答。\n{{reason}}\n草稿尚存，可另作補充傳送。",
+    "sendSupplement": "傳送補充",
+
       "voice": {
         "hint": "可言「第一項」或選項之名；多選畢，請言「確認選擇」。",
         "freeTextHint": "可徑言其答，察畢言「確認選擇」以呈。",

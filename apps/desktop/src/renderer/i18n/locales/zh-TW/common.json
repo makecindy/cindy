@@ -858,7 +858,7 @@
       },
       "runningCount_other": "{{count}} 個任務執行中",
       "limitAria": "{{name}} 的並行上限",
-      "limitOption_other": "上限 {{count}}",
+      "limitOption_other": "同時 {{count}}",
       "weightAria": "{{name}} 的權重",
       "weightOption": "權重 {{weight}}",
       "assignAria": "給 {{name}} 分配任務",
@@ -13009,6 +13009,11 @@
     "jumpToBottom": "跳到底部",
     "prevMessageJump": "跳到上一則提問：{{preview}}",
     "askUserQuestion": {
+    "unanswered": "未回答",
+    "withdrawn": "無需再回答",
+    "withdrawnDraft": "這個問題已不再需要回答。\n{{reason}}\n草稿已保留，你仍可作為補充傳送。",
+    "sendSupplement": "傳送補充",
+
       "voice": {
         "hint": "可以說「第一項」或選項名稱；多選後請說「確認選擇」。",
         "freeTextHint": "可以直接說出回答，檢查後說「確認選擇」提交。",

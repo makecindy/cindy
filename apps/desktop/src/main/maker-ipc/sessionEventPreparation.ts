@@ -284,7 +284,7 @@ export function prepareSessionEvent(
   }
   const broadcastEvent = deps.redactEventForRenderer(attributedEvent);
   if (event.type === 'interaction_dismissed') {
-    const data = event.data as { requestId?: unknown; reason?: unknown };
+    const data = event.data as { requestId?: unknown; reason?: unknown; withdrawalReason?: unknown };
     if (typeof data.requestId === 'string') {
       deps.handleAgentIslandInteractionDismissed(session.id, data.requestId);
       const entry = deps.clearPendingInteraction(data.requestId);
@@ -293,13 +293,16 @@ export function prepareSessionEvent(
           entry.kind,
           typeof data.reason === 'string' ? data.reason : 'dismissed',
         );
+        const persistedDecision = data.reason === 'question_withdrawn' && entry.kind === 'ask_user_question'
+          && typeof data.withdrawalReason === 'string'
+          ? { ...decision, withdrawalReason: data.withdrawalReason } : decision;
         entry.resolve(decision);
         deps.persistInteractionDecision(
           session.id,
           entry.persistId,
           entry.kind,
           entry.request,
-          decision,
+          persistedDecision,
         );
       }
     }

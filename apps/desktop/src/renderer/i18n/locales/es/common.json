@@ -875,8 +875,8 @@
       "runningCount_one": "Tarea {{count}} ejecutándose",
       "runningCount_other": "Tareas {{count}} en ejecución",
       "limitAria": "Límite de tareas para {{name}}",
-      "limitOption_one": "Max {{count}}",
-      "limitOption_other": "Max {{count}}",
+      "limitOption_one": "{{count}} tarea",
+      "limitOption_other": "{{count}} tareas",
       "weightAria": "Peso para {{name}}",
       "weightOption": "Peso {{weight}}",
       "assignAria": "Asignar tareas a {{name}}",
@@ -929,7 +929,7 @@
       },
       "accountCount_many": "cuentas {{count}}",
       "runningCount_many": "Tareas {{count}} en ejecución",
-      "limitOption_many": "Max {{count}}"
+      "limitOption_many": "{{count}} tareas"
     },
     "rebalance": {
       "title": "¿Continuar en {{label}}?",
@@ -13131,6 +13131,11 @@
     "prevMessageJump": "Ir al prompt anterior: {{preview}}",
     "sessionLoading": "Cargando tarea",
     "askUserQuestion": {
+    "unanswered": "Sin respuesta",
+    "withdrawn": "Ya no necesita respuesta",
+    "withdrawnDraft": "Esta pregunta ya no necesita respuesta.\n{{reason}}\nTu borrador se conserva y puedes enviarlo como información adicional.",
+    "sendSupplement": "Enviar información adicional",
+
       "voice": {
         "hint": "Di el número o el nombre de una opción. Para seleccionar varias, di después «confirmar selección».",
         "freeTextHint": "Di tu respuesta, revísala y luego di «confirmar selección» para enviarla.",

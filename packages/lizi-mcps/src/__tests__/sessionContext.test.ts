@@ -304,6 +304,47 @@ describe('dynamic lizi MCP session context', () => {
     expect(tools(server).send_to_worker.description).toContain('steer_fallback_reason');
   });
 
+  // 2026-11-10: a sender that queued several messages had no cue that earlier ones were still
+  // unread, so it appended corrections instead of rewriting them. Existing cases stop at
+  // queued_message_id. Unit tier: the public send_to_worker handler with a fake queue.
+  it('lists the Lead\'s own unread messages in a queued send_to_worker receipt', async () => {
+    const deps = createOrcaDeps({
+      sendToWorker: vi.fn<OrcaMcpDeps['sendToWorker']>(async () => ({
+        ok: true, agentKind: 'codex', wakeKind: 'queued', targetTitle: null,
+        targetLastUserSendAt: null, queuedMessageId: 'queued-2',
+      })),
+      listWorkerQueuedMessages: vi.fn<OrcaMcpDeps['listWorkerQueuedMessages']>(async () => ({
+        ok: true, workerId: 'worker-1', workerSessionId: 'worker-session-1', status: 'running',
+        isWorking: true, willQueue: true, queuePaused: false,
+        messages: [
+          { queuedMessageId: 'queued-1', position: 0, source: 'lead', content: 'Use the v1 endpoint\nand retry', consuming: false },
+          { queuedMessageId: 'typed-1', position: 1, source: 'user', content: 'typed by the user', consuming: false },
+          { queuedMessageId: 'queued-2', position: 2, source: 'lead', content: 'Use the v2 endpoint', consuming: false },
+        ],
+      })),
+    });
+    const server = createOrcaMcpServer(deps, {
+      agentKind: 'codex', workingDir: '/repo', sessionId: 'lead-1', vendorOptions: { orcaRole: 'lead' },
+    });
+
+    expect(parse(await tools(server).send_to_worker.handler({
+      target_session_id: 'worker-session-1', message: 'Use the v2 endpoint',
+    }) as never)).toMatchObject({
+      ok: true,
+      wake_kind: 'queued',
+      queued_message_id: 'queued-2',
+      queue_position: 2,
+      queued_count: 3,
+      // Only what this Lead sent and can still rewrite; the user's queued message is not listed.
+      other_queued_messages: [
+        { queued_message_id: 'queued-1', position: 0, starts: 'Use the v1 endpoint and retry', consuming: false },
+      ],
+    });
+    expect(deps.listWorkerQueuedMessages).toHaveBeenCalledExactlyOnceWith({
+      callerLeadSessionId: 'lead-1', workerRef: 'worker-session-1',
+    });
+  });
+
   it('omits delivery from sendToWorker when the caller does not choose one', async () => {
     const deps = createOrcaDeps();
     const server = createOrcaMcpServer(deps, {

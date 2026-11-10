@@ -1144,8 +1144,8 @@ Todo 在桌面与手机都只在伙伴近况（6.3.4）里展示，两端共享�
 - 不隐瞒能力缺口：未安装、未连接、全局停用或当前引擎/远端不支持时明确返回状态。目录读取失败
   必须报告，不能用空列表启动并宣称已全配。Cindy 安装更新只能经 `install_app_update`
   由宿主向主人弹确认卡后执行（见 [`agent-app-update.md`](agent-app-update.md)），`check_app_update` 只检查更新。
-- 代输入（2026-10-13，[产品规则](input-handoff.md)）：伙伴与普通任务共用 `ask_owner`（fill／scan，
-  旧名 `request_input_handoff` 仍可调用）与终端 askpass，卡片同样只交给主人。伙伴设置能力页有独立开关（`capabilities.inputHandoff`，缺省为开）；
+- 代输入（2026-10-13，[产品规则](input-handoff.md)）：伙伴与普通任务共用 `request_input_handoff`（窗口／截图二维码）
+  与终端 askpass，卡片同样只交给主人。伙伴设置能力页有独立开关（`capabilities.inputHandoff`，缺省为开）；
   关闭后按伙伴**当前** Profile 即时对它所有运行中任务生效，工具调用与终端口令都直接拒绝，不影响普通任务。
 - 本改动不引入跨设备控制协议、新的 `control_session` 大工具或新的幂等数据库表。
   通用工具保留原名和发现路径。伙伴的身份、个人记忆和 Skill 学习与工具权限分开维护。

@@ -132,6 +132,7 @@ import {
   dispatchInterAgentMessage,
   captureRemoteWorkerReportSettlement,
   captureLocalWorkerReport,
+  getOrcaWorkerReportQueue,
   getSessionActiveInputClientIds,
   getSessionInputProvenance,
   isActiveInputOwnerAuthored,
@@ -1155,6 +1156,16 @@ export function getMaker(): Maker {
         return Boolean(session && session.instanceId === sessionInstanceId
           && session.getStatus() === 'active' && !isAppSessionBoundaryPending());
       },
+      manageUserQuestions: (
+        context: import('@cindy/mcps').LiziMcpSessionContext,
+        input: Parameters<import('@cindy/maker-core').Session['manageAsyncUserQuestions']>[0],
+      ) => {
+        const session = context.sessionId ? _maker?.getSession(context.sessionId) : undefined;
+        if (!session || session.instanceId !== context.sessionInstanceId || isAppSessionBoundaryPending()) {
+          throw new Error('Question caller is no longer active');
+        }
+        return session.manageAsyncUserQuestions(input);
+      },
       askUserQuestionAsync: (
         context: import('@cindy/mcps').LiziMcpSessionContext,
         questions: Parameters<import('@cindy/maker-core').Session['askUserQuestionAsync']>[0],
@@ -1352,6 +1363,13 @@ export function getMaker(): Maker {
       },
       dispatchInterAgentMessage,
       captureLocalWorkerReport,
+      // 宿主队列服务在 IPC 注册时创建(晚于本 deps 构造, 早于任何 bridge 回调), 调用时再取。
+      workerReportQueue: {
+        list: (identity) => getOrcaWorkerReportQueue().list(identity),
+        update: (params) => getOrcaWorkerReportQueue().update(params),
+        cancel: (params) => getOrcaWorkerReportQueue().cancel(params),
+        merge: (params) => getOrcaWorkerReportQueue().merge(params),
+      },
     } satisfies OrcaBridgeMcpDeps;
     const orcaWorkerBridgeProvider = createOrcaWorkerBridgeMcpProvider(orcaBridgeDeps);
     remoteWorkerBridge = createOrcaRemoteWorkerBridge({

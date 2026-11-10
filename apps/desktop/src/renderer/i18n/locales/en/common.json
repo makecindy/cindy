@@ -865,8 +865,8 @@
       "runningCount_one": "{{count}} task running",
       "runningCount_other": "{{count}} tasks running",
       "limitAria": "Task limit for {{name}}",
-      "limitOption_one": "Limit {{count}}",
-      "limitOption_other": "Limit {{count}}",
+      "limitOption_one": "{{count}} task",
+      "limitOption_other": "{{count}} tasks",
       "weightAria": "Weight for {{name}}",
       "weightOption": "Weight {{weight}}",
       "assignAria": "Assign tasks to {{name}}",
@@ -13063,6 +13063,11 @@
     "prevMessageJump": "Jump to previous prompt: {{preview}}",
     "sessionLoading": "Loading task",
     "askUserQuestion": {
+    "unanswered": "Unanswered",
+    "withdrawn": "No longer needs an answer",
+    "withdrawnDraft": "This question no longer needs an answer.\n{{reason}}\nYour draft is kept; you can send it as additional information.",
+    "sendSupplement": "Send additional information",
+
       "voice": {
         "hint": "Say an option number or name. For multiple choices, then say “confirm selection”.",
         "freeTextHint": "Say your answer, review it, then say “confirm selection” to submit.",

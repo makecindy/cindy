@@ -2124,6 +2124,7 @@ export function onInteractionResolved(
         requestId,
         questions: request.questions ?? [],
         status: cancelled ? 'cancelled' : 'answered',
+        ...(cancelled && typeof decision.withdrawalReason === 'string' ? { withdrawalReason: decision.withdrawalReason } : {}),
         answers,
       }, { acceptedAt, text: cancelled || !lines.length ? '' : `Clarifications:\n${lines.join('\n')}` });
       if (updated) broadcastMessageRow(sessionId, updated, ownerScope);

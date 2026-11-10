@@ -337,7 +337,7 @@ async function runProviderProbeUnlogged(
     throw new TypeError('no-auth provider probes require a loopback URL');
   }
   const start = Date.now();
-  const presetRow = providerPresetModelRecord(spec.catalogPresetId, spec.modelId, spec.api);
+  const presetRow = providerPresetModelRecord(spec.catalogPresetId, spec.modelId, spec.api, spec.baseUrl);
   const row = spec.nativeModel
     ?? providerModelRecord(spec.modelId, spec.baseUrl, spec.api ?? spec.wireProtocol)
     ?? (presetRow && (spec.api || !spec.wireProtocol || providerWireProtocolForApi(presetRow.execution.pi.api) === spec.wireProtocol)
