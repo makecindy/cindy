@@ -645,13 +645,14 @@ export async function hydrateBotProfileRuntime(
         workingDir: opts.workingDir,
         remoteHostId: opts.remoteHostId,
       });
-      // A frozen delegation task keeps the official set it already ran with, so a
-      // task frozen before this inheritance existed resumes instead of drifting.
-      const frozenNames = previousSnapshot && !followsProfile && Array.isArray(previousResolved?.skillResources)
-        ? new Set((previousResolved.skillResources as Array<{ name?: unknown }>).map(entry => entry.name)) : null;
+      // A frozen delegation task reproduces the files it already ran with: an official
+      // Skill is inherited only when that exact file is in the frozen snapshot, so a
+      // same-name personal file frozen before this inheritance existed stays in effect.
+      const frozenPaths = previousSnapshot && !followsProfile && Array.isArray(previousResolved?.skillResources)
+        ? new Set((previousResolved.skillResources as Array<{ path?: unknown }>).map(entry => entry.path)) : null;
       const official = chatOnly ? [] : catalog.filter(item => item.cindyOfficial &&
         item.enabled !== false && item.runtimeStatus !== 'failed' &&
-        (!frozenNames || frozenNames.has(item.runtimeCommandName?.trim() || item.name.trim())));
+        (!frozenPaths || frozenPaths.has(item.path?.trim() || null)));
       const officialNames = new Set(official.flatMap(item => [item.name.trim(), item.runtimeCommandName?.trim()].filter(Boolean)));
       // Native engines can discover the same command in a personal/project source.
       // Default inheritance grants only the attested file, not its namesakes.
