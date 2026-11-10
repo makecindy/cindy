@@ -160,11 +160,13 @@ export function MobileLoginHandoffStage(props: {
   const firstLaunchGate = useLoginFirstLaunchLight();
   const { mode: systemTheme } = useTheme();
   const handoff = resolveStartupSplashHandoff(firstLaunchGate, systemTheme);
-  // pending 时由 Android 原生帧复刻层继续覆盖；本舞台不提前猜测主题。
-  if (handoff.targetTheme == null) return null;
+  // 普通启动仍等主题交接；阻断时外层 splash 已隐藏，必须先挂载操作内容
+  // (含强更重新核对)，不能让首启存储读取把它们一起挡住。品牌图仍等主题确定。
+  const themePending = handoff.targetTheme == null;
+  if (themePending && !props.staticBrand) return null;
   return (
     <ThemeOverrideProvider mode={handoff.targetTheme}>
-      <MobileLoginHandoffStageInner {...props} />
+      <MobileLoginHandoffStageInner {...props} showBrand={themePending ? false : props.showBrand} />
     </ThemeOverrideProvider>
   );
 }

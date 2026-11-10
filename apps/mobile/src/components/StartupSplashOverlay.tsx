@@ -73,14 +73,15 @@ export function StartupSplashOverlay({
   // 露出已选定正确主题的 MobileLoginHandoffStage；iOS 不挂该层，行为不变。
   useEffect(() => {
     if (!nativeBridgeMounted) return;
-    // 阻断屏隐藏时动画 View 会卸载，取消回调不会 finished。此时已不再
-    // 展示原生首帧，直接收尾；重试恢复只展示正常 JS splash，不重放红底。
+    // 首启主题未决时，阻断操作已可用；重试/撤回恢复仍需原生复刻层兜底。
+    if (handoff.showNativeBridge) return;
+    // 主题确定后，阻断屏隐藏时动画 View 会卸载，取消回调不会 finished。
+    // 直接收尾；重试恢复展示已选定主题的 JS splash，不重放红底。
     if (hidden) {
       nativeBridgeOpacity.setValue(0);
       setNativeBridgeMounted(false);
       return;
     }
-    if (handoff.showNativeBridge) return;
     if (handoffContext?.state.reducedMotion) {
       nativeBridgeOpacity.setValue(0);
       setNativeBridgeMounted(false);

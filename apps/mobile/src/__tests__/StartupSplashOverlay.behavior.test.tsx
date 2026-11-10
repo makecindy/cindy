@@ -107,6 +107,26 @@ afterEach(() => {
 });
 
 describe('startup overlay interrupted by a blocking gate', () => {
+  // Once blocked content is available before theme selection, a real retry (or
+  // forced-update withdrawal) can restore this overlay while storage is pending.
+  it('restores the native bridge after a blocked-screen retry before theme selection', async () => {
+    fixture.gate = 'pending';
+    await render();
+    await render(true);
+    expect(container.querySelector('img')).toBeNull();
+    await render(false);
+    expect(container.querySelector('img')).not.toBeNull();
+    release();
+    advance(1000);
+    expect(container.querySelector('img')).not.toBeNull();
+    fixture.gate = 'passthrough';
+    await render();
+    advance(motionDuration.fast);
+    expect(container.querySelector('img')).toBeNull();
+    advance(1000);
+    expect(container.querySelector('[data-testid="splash"]')).toBeNull();
+  });
+
   it.each(['native bridge', 'outer overlay'] as const)('releases after hiding during the %s fade', async (phase) => {
     await render();
     if (phase === 'outer overlay') {

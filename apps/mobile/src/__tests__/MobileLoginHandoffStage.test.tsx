@@ -11,7 +11,10 @@ import { loginHandoffTotalMs, type LoginHandoffAction } from '@/auth/loginHandof
 // source guards for the root gates/outer splash. Minimal failure: a blocked stage
 // with auth-init pending still mounts a spinner. Unit tier; only native rendering,
 // animation and Metro asset resolution are adapted to the DOM (no network/storage).
-const fixture = vi.hoisted(() => ({ mode: 'light' as 'light' | 'dark' }));
+const fixture = vi.hoisted(() => ({
+  mode: 'light' as 'light' | 'dark',
+  gate: 'passthrough' as 'pending' | 'light' | 'passthrough',
+}));
 type NativeElement = HTMLDivElement & { nativeStyle?: Record<string, any> };
 const flatten = (style: any): Record<string, any> => Array.isArray(style)
   ? Object.assign({}, ...style.map(flatten)) : style ?? {};
@@ -68,7 +71,7 @@ vi.mock('@/theme', async () => {
     },
   };
 });
-vi.mock('@/auth/loginFirstLaunchGate', () => ({ useLoginFirstLaunchLight: () => 'passthrough' }));
+vi.mock('@/auth/loginFirstLaunchGate', () => ({ useLoginFirstLaunchLight: () => fixture.gate }));
 vi.mock('@/platform/AdaptiveWindowContext', () => ({
   useAdaptiveWindow: () => ({ width: 390, height: 844, barEdge: 'none' }),
 }));
@@ -103,6 +106,7 @@ function Probe() { handoff = useLoginHandoff(); return null; }
 beforeEach(() => {
   vi.useFakeTimers();
   fixture.mode = 'light';
+  fixture.gate = 'passthrough';
   (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
   container = document.createElement('div');
   document.body.appendChild(container);
@@ -115,12 +119,12 @@ afterEach(() => {
   delete (globalThis as any).IS_REACT_ACT_ENVIRONMENT;
 });
 
-async function renderStage(staticBrand?: boolean) {
+async function renderStage(staticBrand?: boolean, children?: ReactNode) {
   await act(async () => root.render(
     <MobileLoginHandoffProvider>
       <Probe />
       <Stage staticBrand={staticBrand} testID="stage">
-        <button>{staticBrand ? 'Blocked action' : 'Login action'}</button>
+        {children ?? <button>{staticBrand ? 'Blocked action' : 'Login action'}</button>}
       </Stage>
     </MobileLoginHandoffProvider>,
   ));
@@ -139,6 +143,44 @@ function expectStaticBrand() {
 }
 
 describe('blocked brand presentation', () => {
+  // #9515: the root hides its overlay as soon as a blocking gate is active.
+  // Pending first-launch storage must not also swallow the blocked action (or
+  // the mounted forced-update rechecker). Previous cases only used a ready gate.
+  it.each(['light', 'dark'] as const)('keeps blocked content mounted while theme selection is pending in %s mode', async (mode) => {
+    fixture.mode = mode;
+    fixture.gate = 'pending';
+    const retry = vi.fn();
+    const content = <button onClick={retry}>Retry</button>;
+    await renderStage(true, content);
+    const button = container.querySelector('button');
+    expect(button).not.toBeNull();
+    act(() => button!.click());
+    expect(retry).toHaveBeenCalledOnce();
+    expect(container.querySelectorAll('img')).toHaveLength(0);
+    expect(container.querySelector('[data-spinner]')).toBeNull();
+    expect((container.querySelector('[data-testid="stage"]') as NativeElement).nativeStyle!.backgroundColor)
+      .toBe((mode === 'dark' ? darkColors : lightColors).login.bgBase);
+    fixture.gate = 'passthrough';
+    await renderStage(true, content);
+    expect(container.querySelector('button')).toBe(button);
+    expectStaticBrand();
+    expect(handoff.ready).toBe(false);
+  });
+
+  it('still waits for the first-launch theme on the normal login stage', async () => {
+    fixture.mode = 'dark';
+    fixture.gate = 'pending';
+    await renderStage();
+    expect(container.querySelector('button')).toBeNull();
+    expect(container.querySelectorAll('img')).toHaveLength(0);
+    fixture.gate = 'light';
+    await renderStage();
+    expect(container.querySelector('button')?.textContent).toBe('Login action');
+    expect((container.querySelector('[data-testid="stage"]') as NativeElement).nativeStyle!.backgroundColor)
+      .toBe(lightColors.login.bgBase);
+    expect(container.querySelector('[data-spinner]')).not.toBeNull();
+  });
+
   it.each(['light', 'dark'] as const)('stays static with unfinished startup in %s mode', async (mode) => {
     fixture.mode = mode;
     await renderStage(true);
