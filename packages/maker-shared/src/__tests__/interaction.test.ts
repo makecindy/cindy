@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   splitQuestionReferences,
   asyncQuestionNeedsSupplement,
+  asyncQuestionReplyDisplayText,
+  formatAsyncQuestionReplyDisplay,
   formatAsyncQuestionSupplement,
   withdrawnQuestionDraftText,
   buildAskQuestionProgressSummary,
@@ -122,6 +124,21 @@ describe('interaction shared model', () => {
     expect(formatAsyncQuestionSupplement([question], {}, { late: true })).toBe('');
     expect(withdrawnQuestionDraftText('Details', ['A', 'B'])).toBe('A\nB\nDetails');
     expect(withdrawnQuestionDraftText('', [], '["A","B"]')).toBe('A\nB');
+  });
+
+  // Bug: an answer to a Codex question appeared in the conversation as the reply markup and
+  // the delayed-answer note sent to the model. Entry: the shared formatters every client uses.
+  it('reads an answer as question and answer, including rows saved in the model format', () => {
+    const question = { id: '["request_user_input_async","item",0]', question: 'Install?\nNow?' };
+    const answers = { [question.id]: ' Yes ' };
+    expect(formatAsyncQuestionReplyDisplay([question], answers)).toBe('> Install?\n> Now?\n\nYes');
+    expect(formatAsyncQuestionReplyDisplay([question], {})).toBe('');
+    expect(asyncQuestionReplyDisplayText(formatAsyncQuestionSupplement([question], answers, { late: true })))
+      .toBe('> Install?\n> Now?\n\nYes');
+    expect(asyncQuestionReplyDisplayText(formatAsyncQuestionSupplement([{ question: 'Q?' }], { 'Q?': 'A' }, { late: true })))
+      .toBe('> Q?\n\nA');
+    const unreadable = '<send_user_message_question_reply>\nnot a reply list\n</send_user_message_question_reply>';
+    expect(asyncQuestionReplyDisplayText(unreadable)).toBe(unreadable);
   });
 
   it('never supplements an accepted native answer', async () => {
@@ -805,6 +822,7 @@ describe('interaction shared model', () => {
   });
 
   it('only lets remotely resolvable interactions take over the controller composer', () => {
+    expect(remoteInteractionHandling({ request: { kind: 'issue_confirm', requestId: 'i1', remoteConfirmSupported: true } })).toBe('resolvable');
     expect(remoteInteractionHandling({ request: { kind: 'permission', requestId: 'p1' } })).toBe('resolvable');
     expect(remoteInteractionHandling({ request: { kind: 'ask_user_question', requestId: 'a1' } })).toBe('resolvable');
     expect(remoteInteractionHandling({ request: { kind: 'plan_review', requestId: 'pl1' } })).toBe('resolvable');
@@ -827,6 +845,15 @@ describe('interaction shared model', () => {
     expect(interactionBlocksRemoteComposer({ request: { kind: 'plugin_setup', requestId: 's1', revision: 1 } })).toBe(false);
     expect(interactionBlocksRemoteComposer({ request: { kind: 'future_kind', requestId: 'f1' } })).toBe(false);
     expect(interactionBlocksRemoteComposer(null)).toBe(false);
+    // Feedback review must keep normal chat available.
+    // It remains resolvable only through its confirmation, and cannot hide
+    // another pending permission's composer gate. Tier: unit, shared entry.
+    const feedback = { request: { kind: 'issue_confirm', requestId: 'i1', remoteConfirmSupported: true } };
+    expect(remoteInteractionHandling(feedback)).toBe('resolvable');
+    expect(pendingInteractionsBlockRemoteComposer([feedback])).toBe(false);
+    expect(pendingInteractionsBlockRemoteComposer([feedback,
+      { request: { kind: 'permission', requestId: 'p1' } },
+    ])).toBe(true);
   });
 
   it('lets the controller answer 代输入 without taking over its composer', () => {

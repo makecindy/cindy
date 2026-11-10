@@ -1,10 +1,18 @@
 {
+  "agentNet": {
+    "enabled": "Enable Agent-Net",
+    "onlyEncrypted": "Only use encrypted connections",
+    "hint": "Devices use end-to-end encryption. Encrypted-only mode requires Agent-Net on both devices.",
+    "updateRequired": "Install the latest app to use Agent-Net.",
+    "notConfigured": "This relay does not provide Agent-Net yet. Update it or join a V2 relay.",
+    "failed": "Could not change Agent-Net settings. Check the relay connection and try again."
+  },
   "settings": {
     "sectionTitle": "Relay Service",
     "currentLabel": "Relay Service",
     "official": "{{appName}} Official Relay",
     "switchToOfficial": "Switch Back to Official Relay",
-    "officialHint": "Your devices connect through the {{appName}} official relay. To use your own relay, show its join QR code on the computer running it and scan the code with your phone’s camera.",
+    "officialHint": "Your devices connect through the {{appName}} official relay. When one of your computers uses its own relay, it’s listed here: tap it to join. To join a relay someone shares with you, scan their QR code with your phone’s camera.",
     "selfHostedHint": "Your devices connect through your own relay at {{address}}. Sign-in, models, shared tasks, and other services still use {{appName}}.",
     "removedHint": "This phone was removed from the relay, or the relay was turned off. Switch back to the official relay, or join again from your computer.",
     "credentialMissingHint": "The relay credential isn’t on this phone anymore. Join again from your computer, or switch back to the official relay.",
@@ -12,7 +20,15 @@
     "confirmBody": "This phone will leave “{{name}}” and use the {{appName}} official relay. To use that relay again, join it again from your computer.",
     "confirmAction": "Switch Back",
     "switchFailed": "Couldn’t switch back to the official relay. Try again in a moment.",
-    "pushUnavailable": "While you use your own relay, task notifications from your computers aren’t sent to this phone."
+    "pushUnavailable": "While you use your own relay, task notifications from your computers aren’t sent to this phone.",
+    "accountManagedOn": "Managed on “{{device}}”",
+    "accountSwitchTitle": "Join “{{name}}”?",
+    "accountSwitchBody": "This relay belongs to your account. “{{device}}” lets this phone in automatically, so no share link is needed. While you use your own relay, this phone won’t get task notifications from your computer.",
+    "accountSwitchAction": "Join",
+    "sharedHint": "Your devices connect through a relay someone shared with you at {{address}} and reach only your own devices. Sign-in, models, shared tasks, and other services still use {{appName}}.",
+    "sharedCurrent": "{{name}} (shared by {{owner}})",
+    "accountSharedBy": "Shared by {{owner}} · joined on “{{device}}”",
+    "accountSharedOn": "Joined on “{{device}}”"
   },
   "issue": {
     "removedTitle": "Removed from Relay",
@@ -34,22 +50,28 @@
     "retry": "Try Again",
     "signedOut": "Sign in to {{appName}} first, then join this relay.",
     "signIn": "Sign In",
-    "invalidLink": "This join link isn’t valid or has expired. Create a new one on your computer.",
-    "cancelled": "Joining was canceled. To join this relay, create a new join link on your computer."
+    "invalidLink": "This share link isn’t valid or has expired. Create a new one on your computer.",
+    "cancelled": "Joining was canceled. To join this relay, create a new share link on your computer.",
+    "accountRequesting": "Asking “{{device}}” to let this phone in…",
+    "accountWaiting": "Joining, waiting for “{{device}}”…",
+    "openOnComputer": "This relay was shared by another account. Open this link on your computer to join. Once your computer joins, this phone sees it under Relay in Settings and can join with one tap."
   },
   "errors": {
     "unreachable": "Can’t reach this relay. Make sure your phone and computer are on the same network, or that your phone can open this address.",
-    "insecureUnreachable": "Can’t reach this relay. Phones can join a relay only over HTTPS. Set up a certificate for the relay on your computer, then create a new join link.",
-    "notRelay": "This address isn’t a {{appName}} relay. Check the join link.",
+    "insecureUnreachable": "Can’t reach this relay. Phones can join a relay only over HTTPS. Set up a certificate for the relay on your computer, then create a new share link.",
+    "notRelay": "This address isn’t a {{appName}} relay. Check the share link.",
     "incompatible": "This relay doesn’t work with this version of {{appName}}. Update both the relay and {{appName}}.",
     "accountMismatch": "This relay belongs to a different {{appName}} account.",
-    "codeInvalid": "This join link has expired. Create a new one on your computer.",
+    "codeInvalid": "This share link has expired. Create a new one on your computer.",
     "rateLimited": "Too many attempts. Try again later.",
     "rejected": "The join request was declined on the computer.",
-    "expired": "The request timed out while waiting for approval. Create a new join link on your computer.",
-    "ownerMismatch": "The relay returned a certificate that the owner in the join link didn’t issue. You may be connected to a fake relay, so joining stopped.",
+    "expired": "The request timed out while waiting for approval. Create a new share link on your computer.",
+    "ownerMismatch": "The relay returned a certificate that the owner in the share link didn’t issue. You may be connected to a fake relay, so joining stopped.",
     "failed": "Couldn’t join the relay. Try again later.",
-    "saveFailed": "The request was approved, but the relay credential couldn’t be saved on this phone. Create a new join link on your computer and try again.",
-    "credentialUnavailable": "This phone doesn’t have a usable relay credential. Join again, or switch back to the official relay in Settings."
+    "saveFailed": "The request was approved, but the relay credential couldn’t be saved on this phone. Create a new share link on your computer and try again.",
+    "credentialUnavailable": "This phone doesn’t have a usable relay credential. Join again, or switch back to the official relay in Settings.",
+    "ownerUnavailable": "“{{device}}” didn’t respond. Make sure {{appName}} is open and online there, or ask for a share link.",
+    "relayUnavailable": "“{{device}}” is no longer using this relay.",
+    "accountDirectoryUnavailable": "Can’t reach the {{appName}} account service right now, so your account’s relays can’t be loaded. Try again later, or ask for a share link."
   }
 }

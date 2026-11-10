@@ -42,6 +42,7 @@ vi.mock('../serverApiClient.desktop', () => {
 });
 vi.mock('./index', () => ({
   getDeviceLinkStatus: () => 'online',
+  getDeviceLinkPeerLinks: () => ({ links: [], relayRttMs: null }),
   hasOfflineDirectPath: () => false,
   isDeviceDataPathAvailable: dataPath.available,
   getDirectDataDeviceIds: () => [],
@@ -78,6 +79,7 @@ vi.mock('./index', () => ({
 }));
 vi.mock('../device-link/index', () => ({
   getDeviceLinkStatus: () => 'online',
+  getDeviceLinkPeerLinks: () => ({ links: [], relayRttMs: null }),
   hasOfflineDirectPath: () => false,
   isDeviceDataPathAvailable: dataPath.available,
   clearDeviceResponsiveness: vi.fn(),
@@ -88,6 +90,7 @@ vi.mock('../device-link/index', () => ({
   setKeepAwakeEnabled: vi.fn(),
   providerShareHostInvoke: vi.fn(),
   revokeController: vi.fn(),
+  setControllerModelUse: vi.fn(),
   restoreController: vi.fn(),
   beginControllerDisplayNameDirectoryRefresh: () => 1,
   isLatestControllerDisplayNameDirectoryRefresh: () => true,
@@ -189,6 +192,7 @@ function makeDeps(overrides?: Partial<DeviceLinkIpcDeps>): DeviceLinkIpcDeps {
       disabledControlDeviceIds: [],
       unresponsiveDeviceIds: [],
     }),
+    getPeerLinks: vi.fn(() => ({ links: [], relayRttMs: null })),
     setEnabled: vi.fn(),
     setKeepAwake: vi.fn(),
     apiFetch: vi.fn().mockResolvedValue({ devices: [] }),
@@ -200,6 +204,7 @@ function makeDeps(overrides?: Partial<DeviceLinkIpcDeps>): DeviceLinkIpcDeps {
     disconnectAll: vi.fn(),
     revoke: vi.fn(),
     restore: vi.fn(),
+    setModelUse: vi.fn(),
     setDeviceControlEnabled: vi.fn(async () => []),
     clearDeviceResponsiveness: vi.fn(),
     broadcast: vi.fn(),
@@ -296,6 +301,7 @@ describe('device-link IPC handlers', () => {
       standby: false,
       controlledBy: [],
       revokedControllers: [],
+      modelUseRevokedControllers: [],
       disabledControlDeviceIds: [],
       unresponsiveDeviceIds: [],
     });
@@ -1645,34 +1651,46 @@ describe('device-link revoke / restore handlers', () => {
 describe('device-link settings normalize', () => {
   it('非法输入回落默认值,布尔严格校验', () => {
     expect(settingsTesting.normalize(null)).toEqual({
+      agentNetEnabled: false,
+      agentNetOnlyEncrypted: false,
       remoteDesktopEnabled: false,
       remoteControlEnabled: false,
       keepAwake: false,
       revokedControllers: [],
+      modelUseRevokedControllers: [],
       disabledControlDeviceIds: [],
       lastKnownDeviceNames: {},
     });
     expect(settingsTesting.normalize({})).toEqual({
+      agentNetEnabled: false,
+      agentNetOnlyEncrypted: false,
       remoteDesktopEnabled: false,
       remoteControlEnabled: false,
       keepAwake: false,
       revokedControllers: [],
+      modelUseRevokedControllers: [],
       disabledControlDeviceIds: [],
       lastKnownDeviceNames: {},
     });
     expect(settingsTesting.normalize({ remoteControlEnabled: 'true' })).toEqual({
+      agentNetEnabled: false,
+      agentNetOnlyEncrypted: false,
       remoteDesktopEnabled: false,
       remoteControlEnabled: false,
       keepAwake: false,
       revokedControllers: [],
+      modelUseRevokedControllers: [],
       disabledControlDeviceIds: [],
       lastKnownDeviceNames: {},
     });
     expect(settingsTesting.normalize({ remoteControlEnabled: true })).toEqual({
+      agentNetEnabled: false,
+      agentNetOnlyEncrypted: false,
       remoteDesktopEnabled: false,
       remoteControlEnabled: true,
       keepAwake: false,
       revokedControllers: [],
+      modelUseRevokedControllers: [],
       disabledControlDeviceIds: [],
       lastKnownDeviceNames: {},
     });
@@ -1684,10 +1702,13 @@ describe('device-link settings normalize', () => {
         disabledControlDeviceIds: [' dev-1 ', 'dev-1', '', 42, 'dev-2'],
       }),
     ).toEqual({
+      agentNetEnabled: false,
+      agentNetOnlyEncrypted: false,
       remoteDesktopEnabled: false,
       remoteControlEnabled: false,
       keepAwake: false,
       revokedControllers: [],
+      modelUseRevokedControllers: [],
       disabledControlDeviceIds: ['dev-1', 'dev-2'],
       lastKnownDeviceNames: {},
     });
@@ -1704,10 +1725,13 @@ describe('device-link settings normalize', () => {
         },
       }),
     ).toEqual({
+      agentNetEnabled: false,
+      agentNetOnlyEncrypted: false,
       remoteDesktopEnabled: false,
       remoteControlEnabled: false,
       keepAwake: false,
       revokedControllers: [],
+      modelUseRevokedControllers: [],
       disabledControlDeviceIds: [],
       lastKnownDeviceNames: { 'dev-1': 'MacBook Pro' },
     });

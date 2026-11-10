@@ -14,8 +14,8 @@
  * 不接受该字段，改写 models.json 的 compat 后重放同一轮请求（PI provider compat 自愈）。
  *
  * 判据只认「被点名的可选字段 + 明确的 not supported/unsupported/未知请求字段 措辞或结构化 UNKNOWN_FIELD」同时出现：
- * 普通 400（鉴权/参数值错误/未点名已知字段）不满足；结构化错误的 `param` 缺省或为 null
- * 表示未指定参数；非 null 时必须点名这两类字段之一，避免误判其他参数错误。
+ * 普通 400（鉴权/参数值错误/未点名已知字段）不满足；结构化错误的 `param` 缺省、null 或空字符串
+ * 表示未指定参数；其他值必须点名这两类字段之一，避免误判其他参数错误。
  */
 export const UNSUPPORTED_REQUEST_OPTION_REASON = 'unsupported-request-option';
 
@@ -43,7 +43,7 @@ export function isUnsupportedRequestOptionErrorMessage(message: string): boolean
       for (let depth = 0; depth < 3; depth++) {
         if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
         const error = value as Record<string, unknown>;
-        if (Object.hasOwn(error, 'param') && error.param !== null && !CACHE_FIELDS.some((field) => field === error.param)) return false;
+        if (Object.hasOwn(error, 'param') && error.param !== null && error.param !== '' && !CACHE_FIELDS.some((field) => field === error.param)) return false;
         if (error.type !== undefined && !['invalid_request_error', 'unsupported_parameter'].includes(String(error.type))) return false;
         const data = error.data;
         if (error.code === 'UNKNOWN_FIELD' && data && typeof data === 'object' && 'field' in data) {

@@ -1,4 +1,9 @@
-import { parseModelFavoriteMutation, sameModelFavorite, type ModelFavoriteMutation } from '@cindy/device-link';
+import {
+  parseModelFavoriteMutation,
+  PROVIDER_SHARE_FAVORITE_SOURCE_MAX_LENGTH,
+  sameModelFavorite,
+  type ModelFavoriteMutation,
+} from '@cindy/device-link';
 /**
  * modelFavorites —— 统一模型选择器的「收藏 = 配置副本」存储(model-selector-unified
  * §1.5 / §2.3),localStorage 持久化,跨会话 / 跨重启在本机生效。
@@ -83,7 +88,8 @@ let requireDurableWrite = false;
 const STORAGE_KEY = 'xdt:modelFavorites:v1';
 // Shared sources contain two 128-character IDs and a 256-character provider ID.
 // JSON may expand each provider code unit to six characters (unpaired surrogates).
-export const LOCAL_FAVORITE_PROVIDER_ID_MAX_LENGTH = 2048;
+// The number lives with the shared key so Mobile and Desktop accept the same identity.
+export const LOCAL_FAVORITE_PROVIDER_ID_MAX_LENGTH = PROVIDER_SHARE_FAVORITE_SOURCE_MAX_LENGTH;
 
 /** 一条收藏所描述的完整配置(不含锚点)。归一化 / 身份规则与最近使用共用(见 modelConfigCopy)。 */
 export type ModelFavoriteConfig = ModelConfigCopy;

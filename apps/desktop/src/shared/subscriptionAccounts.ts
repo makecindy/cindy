@@ -91,6 +91,18 @@ export const DEFAULT_SUBSCRIPTION_ACCOUNT: SubscriptionAccountConfig = {
   limit: 4,
   weight: 1,
 };
+/**
+ * Before anything signs in, the host still lists the CLI default slot. Signed out, idle and with no
+ * known identity it is not an account yet; a known identity that needs signing in again still is.
+ */
+export function isUnusedDefaultAccount(account: SubscriptionAccountView): boolean {
+  return (
+    account.id === 'default' &&
+    account.status === 'signed-out' &&
+    account.running === 0 &&
+    !account.identity
+  );
+}
 export function isSubscriptionProvider(value: unknown): value is SubscriptionProvider {
   return value === 'anthropic' || value === 'openai';
 }

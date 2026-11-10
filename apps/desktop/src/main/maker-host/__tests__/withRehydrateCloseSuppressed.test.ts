@@ -134,4 +134,23 @@ describe('withRehydrateCloseSuppressed', () => {
       { sessionId: 'session-1' },
     );
   });
+
+  it('forceSkip skips side-effects even after the suppression window has been released', async () => {
+    // 回归(Greptile P1):Maker.close 不等 onClose;漂移回收包裹的窗口在 close
+    // 返回后即释放,而 onClose 先等 worktree lease 的文件操作才查抑制表 ——
+    // 重查会错过窗口照删暂存附件。入口取样(forceSkip)必须独立于当前表生效。
+    const log = makeLog();
+    const suppression = createRehydrateCloseSuppression(log);
+    const sideEffect = vi.fn(async () => undefined);
+
+    await suppression.withSuppressed('session-1', async () => undefined);
+    // 此刻窗口已释放(生产里对应 close 返回后调用方 finally 释放),但 onClose
+    // 入口在窗口内取样的抑制态必须仍然生效。
+    await suppression.runOnCloseSideEffects('session-1', sideEffect, { forceSkip: true });
+
+    expect(sideEffect).not.toHaveBeenCalled();
+    // 不传 forceSkip 时照常执行(其余调用方不受影响)。
+    await suppression.runOnCloseSideEffects('session-1', sideEffect);
+    expect(sideEffect).toHaveBeenCalledTimes(1);
+  });
 });

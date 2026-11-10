@@ -954,3 +954,21 @@ describe("table-heavy assistant replies", () => {
 });
 
 vi.mock('@/session/RemoteAttachmentPreview', () => ({ RemoteAttachmentPreview: () => null }));
+
+// Regression: tapping a cross-device source must reach the page's routing callback intact.
+it('opens cross-device source labels while redacted sources remain inert', () => {
+  const onOpenOriginSession = vi.fn();
+  const items = buildMobileMessageRenderItems([
+    msg('cross', 'go', { origin: { kind: 'session', senderSessionId: 'dev-A::task-1', senderSessionTitle: 'Source' } }),
+    msg('redacted', 'go', { origin: { kind: 'session' } }),
+  ], {}).filter(item => item.type === 'message');
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+  const host = document.createElement('div');
+  const root = createRoot(host);
+  act(() => root.render(<MessageRenderer items={items} onOpenOriginSession={onOpenOriginSession} />));
+  const labels = host.querySelectorAll('[data-testid="message.sessionOrigin"]');
+  expect(labels.length).toBe(2);
+  act(() => labels.forEach(label => label.dispatchEvent(new MouseEvent('click', { bubbles: true }))));
+  expect(onOpenOriginSession).toHaveBeenCalledExactlyOnceWith('dev-A::task-1');
+  act(() => root.unmount());
+});

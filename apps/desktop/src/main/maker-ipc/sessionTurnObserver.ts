@@ -12,6 +12,7 @@ import { SilentStopTurnLeaseGate, SessionTurnLeaseTracker } from './sessionTurnL
 import { prepareBotPermissionDispatch } from './botPermissionDispatch.js';
 
 export interface InstallSessionTurnObserverDeps {
+  readonly onProviderInitiatedTurn?: (session: Session, generation: number) => void;
   readonly beforeLocalProviderStart?: (session: Session) => Promise<void>;
   readonly silentStopTurnLeaseGate: Pick<
     SilentStopTurnLeaseGate,
@@ -111,7 +112,8 @@ export function installSessionTurnObserver(deps: InstallSessionTurnObserverDeps,
         deps.providerTurnLeaseId(session.instanceId, turnGeneration),
       );
     },
-    onProviderInitiatedTurn: () => {
+    onProviderInitiatedTurn: (generation) => {
+      deps.onProviderInitiatedTurn?.(session, generation);
       // Harness wake-ups (Claude Code background task notifications) skip beforeProviderStart.
       // IM relay decides synchronously inside this call, before the first event fans out.
       channelTurn.onProviderInitiatedTurn();

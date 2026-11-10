@@ -241,6 +241,34 @@ async function withScheduler<T>(cb: (deps: SchedulerDeps) => Promise<T>): Promis
 }
 
 /**
+ * Pause as the Automations page does. Also clears the automation's unread results: pausing
+ * means the owner no longer cares about the current batch. Shared with the teammate settings pages.
+ */
+export async function pauseScheduleClearingUnread(scheduleId: string): Promise<Schedule> {
+  return withScheduler(async ({ scheduler, storage }) => {
+    const result = await scheduler.pause(scheduleId);
+    // pause 后顺手清掉这条 schedule 名下的未读历史 —— 用户主动暂停就视为
+    // 已不再关心当前一批结果,badge 一并消化。失败仅记日志,不影响 pause 本身。
+    try {
+      const updated = await storage.markAllRunsRead(scheduleId);
+      if (updated > 0) {
+        broadcast(MAKER_PUSH.SCHEDULE_EVENT, { type: 'read', scheduleId });
+      }
+    } catch (readErr) {
+      log.warn(`[pause] mark-all-runs-read failed (non-fatal): ${String(readErr)}`);
+    }
+    return result;
+  });
+}
+
+/** The scheduler calls of the teammate settings pages; the same instance the Automations page uses. */
+export const scheduleHostAccess = {
+  list: () => withScheduler(({ scheduler }) => scheduler.list()),
+  inflight: (scheduleId: string) => withScheduler(({ scheduler }) => Promise.resolve(scheduler.getInflightCount(scheduleId))),
+  resume: (scheduleId: string) => withScheduler(({ scheduler }) => scheduler.resume(scheduleId)),
+};
+
+/**
  * Device-link JSON 边界翻译:mobile 清空 intervalMs 用可序列化的 null 表达
  * (`JSON.stringify` 会丢掉值为 undefined 的 key,见 maker-shared
  * scheduleTypes.RemoteScheduleWriteInput.intervalMs),而引擎契约是「带 key 的
@@ -456,23 +484,8 @@ export function registerScheduleHandlers(getMaker?: () => Maker | null): void {
     });
   });
 
-  ipcMain.handle(MAKER_INVOKE.SCHEDULE_PAUSE, async (_e, id: unknown) => {
-    const scheduleId = requireString(id, 'id');
-    return withScheduler(async ({ scheduler, storage }) => {
-      const result = await scheduler.pause(scheduleId);
-      // pause 后顺手清掉这条 schedule 名下的未读历史 —— 用户主动暂停就视为
-      // 已不再关心当前一批结果,badge 一并消化。失败仅记日志,不影响 pause 本身。
-      try {
-        const updated = await storage.markAllRunsRead(scheduleId);
-        if (updated > 0) {
-          broadcast(MAKER_PUSH.SCHEDULE_EVENT, { type: 'read', scheduleId });
-        }
-      } catch (readErr) {
-        log.warn(`[pause] mark-all-runs-read failed (non-fatal): ${String(readErr)}`);
-      }
-      return result;
-    });
-  });
+  ipcMain.handle(MAKER_INVOKE.SCHEDULE_PAUSE, async (_e, id: unknown) =>
+    pauseScheduleClearingUnread(requireString(id, 'id')));
 
   ipcMain.handle(MAKER_INVOKE.SCHEDULE_RESUME, async (_e, id: unknown, expectedRaw?: unknown) => {
     const scheduleId = requireString(id, 'id');

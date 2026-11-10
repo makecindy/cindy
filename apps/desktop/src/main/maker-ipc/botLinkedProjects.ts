@@ -10,9 +10,11 @@ import { extractDisplayName } from '../../shared/projectDisplayName.js';
 import { normalizeWorkingDirForStorage } from '../../shared/workingDir.js';
 import type { BotLinkedProject, BotProjectOption } from '../../shared/botWorkbench.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
-import { linkedProjectDirectoryKey, readBotLinkedProjects, setBotLinkedProject } from './botWorkbenchService.js';
+import { linkedProjectDirectoryKey, readBotLinkedProjects, setBotLinkedProject } from './botLinkedProjectStore.js';
 import { broadcastBotRemoteResourceChanged } from './botRemoteResourceInvalidation.js';
 import { withBotProfileLocks } from './botProfileLock.js';
+import { resolveTeammateMainCaller } from './botTaskCreation.js';
+import { assertTaskActionCurrent, captureTaskActionSyncGuard, hasTaskActionAuthorization } from './taskActionAuthorization.js';
 
 const groupKey = (directory: string) => projectKeyComparisonKey(`local:${directory}`, process.platform);
 const projectId = (project: Pick<BotLinkedProject, 'path' | 'deviceId'>) => createHash('sha256')
@@ -77,4 +79,33 @@ export async function botLinkedProjectAccess(botId: string) {
       });
     },
   };
+}
+
+/** list_teammate_projects / set_teammate_project: the teammate is derived from the caller's main chat. */
+export async function runBotProjectsTool(params: {
+  callerSessionId: string; projectId?: string; linked?: boolean; includeAvailable?: boolean;
+}) {
+  const owner = activeOwnerScopeKey();
+  try {
+    if (isAppSessionBoundaryPending()) throw new Error('OWNER_SCOPE_CHANGED');
+    const caller = await resolveTeammateMainCaller(params.callerSessionId);
+    if (!caller.ok) return caller;
+    if (owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending()) throw new Error('OWNER_SCOPE_CHANGED');
+    const access = await botLinkedProjectAccess(caller.botId);
+    let projects;
+    if (params.projectId !== undefined) {
+      if (typeof params.linked !== 'boolean' || !hasTaskActionAuthorization(params.callerSessionId))
+        return { ok: false as const, errorCode: 'TASK_ACTION_AUTHORIZATION_REQUIRED', message: 'Changing project links requires authorization.' };
+      await assertTaskActionCurrent();
+      projects = await access.set(params.projectId, params.linked, captureTaskActionSyncGuard());
+    } else projects = await access.read();
+    return { ok: true as const, projects: projects.filter(project => project.linked || params.includeAvailable).map(project => ({
+      project_id: project.id, name: project.name, working_dir: project.path,
+      device_id: project.deviceId ?? null, linked: project.linked, available_locally: project.available,
+      // These are locations to check on demand, not promises that the files exist.
+      ...(!project.deviceId && project.available ? { context_locations: ['AGENTS.md', 'CLAUDE.md', 'README.md', '.cindy/project-knowledge/TOC.md'] } : {}),
+    })) };
+  } catch {
+    return { ok: false as const, errorCode: 'PROJECTS_UNAVAILABLE', message: 'Could not read or save project links. Re-read the saved state before retrying.' };
+  }
 }

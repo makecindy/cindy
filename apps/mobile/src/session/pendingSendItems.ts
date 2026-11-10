@@ -1,3 +1,4 @@
+import { isAnsweredAsyncQuestionClientId } from '@cindy/maker-shared/interaction';
 import { forwardedRequestDisplayText } from '@cindy/maker-shared/message-source';
 /**
  * 待发送消息 → 消息流渲染项。
@@ -183,7 +184,7 @@ export function mergePendingSendItems(
 }
 
 type PendingSendTextSource = Pick<QueuedRemoteMessage, 'text' | 'chatMessage'>
-  & Partial<Pick<QueuedRemoteMessage, 'persistedContent' | 'files' | 'origin'>>;
+  & Partial<Pick<QueuedRemoteMessage, 'clientId' | 'persistedContent' | 'files' | 'origin'>>;
 
 function readRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' && !Array.isArray(value)
@@ -399,7 +400,7 @@ export function buildPendingSendItems(input: BuildPendingSendItemsInput): Mobile
   const seen = new Set<string>();
 
   const pushQueued = (item: QueuedRemoteMessage, phase: MobilePendingSendPhase, queueIndex: number | null) => {
-    if (seen.has(item.clientId) || input.hiddenClientIds.has(item.clientId)) return;
+    if (isAnsweredAsyncQuestionClientId(item.clientId) || seen.has(item.clientId) || input.hiddenClientIds.has(item.clientId)) return;
     seen.add(item.clientId);
     const attachments = queuedAttachmentThumbs(item, input.previewByOssRef, input.getImagePreview);
     const presentation = queueIndex === null
@@ -452,7 +453,7 @@ export function buildPendingSendItems(input: BuildPendingSendItemsInput): Mobile
   });
   // 本地 outbox 恒在最后:它们是最晚发出的消息。
   for (const item of input.outbox) {
-    if (seen.has(item.clientId) || input.hiddenClientIds.has(item.clientId)) continue;
+    if (isAnsweredAsyncQuestionClientId(item.clientId) || seen.has(item.clientId) || input.hiddenClientIds.has(item.clientId)) continue;
     seen.add(item.clientId);
     const uploadsPending = item.attachmentCount > 0 && item.uploadedCount < item.attachmentCount;
     // 断开时整条投递(含附件上传)都停着:附件没传完也写「等连上」,图片不再转圈。
