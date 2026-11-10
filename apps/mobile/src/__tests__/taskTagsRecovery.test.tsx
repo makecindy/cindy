@@ -2,6 +2,11 @@
 import React, { act } from "react";
 import { createRoot } from "react-dom/client";
 import { beforeEach, afterEach, it, expect, vi } from "vitest";
+// The tag shortcuts do not present project moving; isolate its unrelated native picker.
+vi.mock("@/session/SessionProjectMoveSheet", () => ({
+  sessionAllowsProjectMove: () => false,
+  useSessionProjectMoveSheet: () => ({ open: vi.fn(), parentClosed: vi.fn(), sheet: null }),
+}));
 const h = vi.hoisted(() => ({
   invoke: vi.fn(),
   compact: null as any,
