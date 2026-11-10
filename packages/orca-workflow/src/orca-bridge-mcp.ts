@@ -216,6 +216,36 @@ export type OrcaMessageDelivery = 'queue' | 'steer';
 export interface OrcaWorkerReportReceipt {
   delivered: boolean;
   queuedMessageId?: string;
+  /** 本次回报携带的结构化状态;缺省 = 旧的自由文本回报。 */
+  report?: OrcaStructuredWorkerReport;
+}
+
+/**
+ * Worker 结构化回报的六态。
+ * progress 只是内部进度(不结算、不打扰);waiting 是本轮干净结束;
+ * ready 完成待验收;blocked / failed 等人工;dropped 无需处理。
+ */
+export const ORCA_WORKER_REPORT_STATES = [
+  'progress',
+  'waiting',
+  'ready',
+  'blocked',
+  'failed',
+  'dropped',
+] as const;
+export type OrcaWorkerReportState = (typeof ORCA_WORKER_REPORT_STATES)[number];
+
+/** 结构化回报载荷;缺省时与本变更前完全一致。 */
+export interface OrcaStructuredWorkerReport {
+  state: OrcaWorkerReportState;
+  /** 至多一条、具体可回答的问题;blocked 时必须给出。 */
+  question?: string;
+  /** 本次做了什么、结果是什么。 */
+  summary?: string;
+  /** 实际跑过的验证。 */
+  verification?: string;
+  /** 已知风险或未覆盖项。 */
+  risk?: string;
 }
 
 /** 经 resolveWorkerLink 核实的 Worker 身份。 */
@@ -329,11 +359,12 @@ const SAFE_SEND_ERROR_CODES = new Set(['SESSION_RUNNING']);
 
 export const SEND_TO_LEAD_TOOL_DESCRIPTION = [
   'Pass the worker_id from the latest Lead message.',
-  'This tool is the assigned Orca Worker\'s direct reporting channel to the Lead.',
+  'The assigned Orca Worker\'s direct reporting channel to the Lead.',
   'Native subagents are internal helpers, so they return findings to the Worker instead of calling this tool.',
-  'Call once per turn, only with the final report or one blocking question.',
+  'Call once per turn with the final report or one blocking question; do not send progress, partial findings, or same-turn corrections.',
+  'Set report.state and put the full evidence (summary / verification / risk) there, not in extra messages.',
+  'At most one concrete question; mark drafts unfinished.',
   'After a question, stop and wait for send_to_worker.',
-  'Combine all results; do not send progress, partial findings, or same-turn corrections.',
   'If the Lead is blocked waiting on this report, delivery=steer delivers it into the Lead\'s current turn; otherwise keep the default.',
 ].join(' ');
 
@@ -935,8 +966,27 @@ export function createOrcaWorkerBridgeMcpProvider(deps: OrcaBridgeMcpDeps) {
             .enum(['queue', 'steer'])
             .optional()
             .describe('queue (default) = deliver now or queue behind the Lead\'s current turn; steer = try to enter the Lead\'s current turn.'),
+          report: z
+            .object({
+              state: z.enum(ORCA_WORKER_REPORT_STATES)
+                .describe('progress = internal update, no interruption; waiting = turn ended cleanly with nothing pending; ready = finished and verified; blocked = a person must answer (report.question required); failed = cannot continue; dropped = nothing for a person to act on.'),
+              question: z.string().min(1).optional()
+                .describe('At most one concrete, answerable question. Required when state is blocked.'),
+              summary: z.string().min(1).optional(),
+              verification: z.string().min(1).optional()
+                .describe('Checks actually run, or why none were run.'),
+              risk: z.string().min(1).optional(),
+            })
+            .optional()
+            .describe('Structured status. progress = internal update; waiting = turn ended cleanly; ready = finished and verified; blocked / failed = need a person; dropped = nothing to act on.'),
         },
-        async ({ message, worker_id, delivery }) => {
+        async ({ message, worker_id, delivery, report }) => {
+          if (report?.state === 'blocked' && !report.question?.trim()) {
+            return text({
+              error: 'a blocked report must carry one concrete question in report.question',
+              worker_id,
+            }, true);
+          }
           const authorization = authorizeSendToLeadCaller(resolveRuntimeMcpContext(ctx));
           if (!authorization.ok) return text(authorization.error, true);
           const resolved = await resolveLead(worker_id);
@@ -1017,8 +1067,8 @@ export function createOrcaWorkerBridgeMcpProvider(deps: OrcaBridgeMcpDeps) {
               // Host acceptance includes direct, queued and same-turn steered delivery.
               reportAccepted = true;
               reportReceipt = dispatchError.queued
-                ? { delivered: false, queuedMessageId: dispatchError.clientId }
-                : { delivered: true };
+                ? { delivered: false, queuedMessageId: dispatchError.clientId, ...(report ? { report } : {}) }
+                : { delivered: true, ...(report ? { report } : {}) };
               return text({
                 ok: true,
                 ...(dispatchError.steered ? { steered: true } : {}),
@@ -1051,7 +1101,7 @@ export function createOrcaWorkerBridgeMcpProvider(deps: OrcaBridgeMcpDeps) {
               });
             });
             reportAccepted = true;
-            reportReceipt = { delivered: true };
+            reportReceipt = { delivered: true, ...(report ? { report } : {}) };
             return text({
               ok: true,
               worker_id: link.workerId,

@@ -652,6 +652,47 @@ describe('orca_worker_bridge MCP helpers', () => {
     expect(statusUpdates).toEqual([]);
   });
 
+  // 2026-11-10 Super-agent 机制吸收：Worker 回报带六态结构化字段时，Host 拿到的回执必须
+  // 原样带上它（否则 Main 侧无法区分无操作/等人工/待验收），而 blocked 缺问题时不能发出。
+  // 生产入口：工具 handler + 注入的 captureLocalWorkerReport 回执；unit tier 同本文件其余用例。
+  it('forwards a structured report into the host receipt', async () => {
+    const lead = makeSession('lead-1');
+    const h = makeWorkerBridgeLeadHarness(lead);
+    const report = {
+      state: 'ready' as const,
+      summary: '已修好登录超时',
+      verification: 'vitest 通过',
+      risk: '未覆盖移动端',
+    };
+    const json = parseToolJson(await h.server._registeredTools.send_to_lead.handler({
+      worker_id: 'worker-1',
+      message: '已修好登录超时',
+      report,
+    }));
+
+    expect(json).toMatchObject({ ok: true });
+    expect(h.finishReport).toHaveBeenCalledExactlyOnceWith(
+      true,
+      { delivered: true, report },
+    );
+  });
+
+  it('refuses a blocked report without one concrete question', async () => {
+    const lead = makeSession('lead-1');
+    const h = makeWorkerBridgeLeadHarness(lead);
+    const result = await h.server._registeredTools.send_to_lead.handler({
+      worker_id: 'worker-1',
+      message: '需要你定方案 A 还是 B',
+      report: { state: 'blocked' },
+    });
+
+    const json = expectToolError(result);
+    expect(json).toMatchObject({ error: expect.stringContaining('report.question') });
+    // 无问题就不派发：Lead 不会收到一条无法回答的“等人工”，也不需要结算任何欠回报。
+    expect(h.finishReport).not.toHaveBeenCalled();
+    expect(lead.sent).toEqual([]);
+  });
+
   it('persists the report without completing the still-running Worker', async () => {
     const lead = makeSession('lead-1');
     const { server, persisted, statusUpdates } = makeWorkerBridgeLeadHarness(lead);
@@ -673,8 +714,7 @@ describe('orca_worker_bridge MCP helpers', () => {
     expect(lead.sent).toHaveLength(1);
   });
 
-  it.each(['dispatched', 'queued', 'steered'] as const)('settles host-owned %s reports without waiting for lead completion', async mode => {
-    const lead = makeSession('lead-1');
+  it.each(['dispatched', 'queued', 'steered'] as const)('settles host-owned %s reports without waiting for lead completion', async mode => {    const lead = makeSession('lead-1');
     lead.turnRunning = true;
     let accepted: (() => void | Promise<void>) | undefined;
     const dispatch = vi.fn<NonNullable<OrcaBridgeMcpDeps['dispatchInterAgentMessage']>>(async params => {

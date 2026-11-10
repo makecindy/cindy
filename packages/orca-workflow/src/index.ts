@@ -2,6 +2,7 @@ export {
   createOrcaWorkerBridgeMcpProvider,
   formatAgentMessage,
   formatOrcaCommunicationMessage,
+  ORCA_WORKER_REPORT_STATES,
   type OrcaBridgeMcpDeps,
   type OrcaToolResult,
   type OrcaLeadHistoryCursor,
@@ -11,6 +12,7 @@ export {
   type OrcaMessageDelivery,
   type OrcaPersistedSession,
   type OrcaSteerFallbackReason,
+  type OrcaStructuredWorkerReport,
   type OrcaTeamStore,
   type OrcaWorkerLink,
   type OrcaWorkerQueuedReport,
@@ -18,6 +20,7 @@ export {
   type OrcaWorkerReportQueueIdentity,
   type OrcaWorkerReportReceipt,
   type OrcaWorkerReportQueueStatus,
+  type OrcaWorkerReportState,
   type OrcaWorkerStatus,
   type OrcaWorkerVendorOptions,
 } from './orca-bridge-mcp.js';
