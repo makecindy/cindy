@@ -70,6 +70,8 @@ export interface DingTalkStreamClient {
 }
 
 export interface DingTalkIMOptions {
+  /** Companion connections can route guest DMs to isolated, restricted lanes. */
+  allowGuestDirectMessages?: boolean;
   /** 凭证键名前缀(伙伴自有连接各一个, 缺省空 = 设置页那份)。 */
   secretKeyPrefix?: string;
   /** 是否注册 `dingtalkBot:*` 设置卡 IPC 并广播状态(缺省 true; 伙伴连接关掉)。 */
@@ -679,7 +681,11 @@ export class DingTalkIM extends BaseIM implements ChannelIM {
     if (!this.ownerUserId) {
       if (isGroup || !this.claimOwner(envelope.senderId)) return;
     }
-    if (!isGroup && envelope.senderId !== this.ownerUserId) return;
+    if (
+      !isGroup &&
+      envelope.senderId !== this.ownerUserId &&
+      !this.options.allowGuestDirectMessages
+    ) return;
 
     const content = parseInboundContent(envelope);
     if (
@@ -720,7 +726,7 @@ export class DingTalkIM extends BaseIM implements ChannelIM {
       messageId: envelope.messageId,
       text,
       invoked: isGroup && envelope.mentioned,
-      ...(isGroup
+      ...(isGroup || this.options.allowGuestDirectMessages
         ? {
             speaker: {
               id: envelope.senderId,
