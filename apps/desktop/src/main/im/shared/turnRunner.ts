@@ -103,6 +103,7 @@ import type {
   IMAttachment,
   IMMessageEvent,
   InteractiveCardSpec,
+  StreamingProcessRecord,
   StreamingTextHandle,
 } from '@cindy/im';
 import { transformXdtRefs } from '@cindy/im';
@@ -166,6 +167,7 @@ import { materializeLocalMarkdownImageRefs, materializeLocalMarkdownImages } fro
 import { unlinkLocalFileLinks } from './localFileLinks';
 import {
   applyStatusTokenRate,
+  buildActivityRecord,
   clearRunningIndicators,
   createTurnActivity,
   markActivityWriting,
@@ -2192,11 +2194,16 @@ export function createTurnRunner(
     }
   }
 
-  async function finalizeTurnStream(turn: TurnState, finalView: string): Promise<void> {
+  async function finalizeTurnStream(
+    turn: TurnState,
+    finalView: string,
+    process?: StreamingProcessRecord,
+  ): Promise<void> {
     const handle = turn.streamingHandle;
     if (!handle) return;
     try {
-      await handle.finalize(finalView);
+      if (process) await handle.finalize(finalView, { process });
+      else await handle.finalize(finalView);
     } catch (err) {
       if (output.kind === 'chunked-text') {
         turn.terminalKind = 'error';
@@ -3804,7 +3811,13 @@ export function createTurnRunner(
     }
     const finalView = composeStreamingView(turn);
     if (turn.streamingHandle) {
-      await finalizeTurnStream(turn, finalView.trim() ? finalView : '');
+      // 正常完成: 正文保持干净, 过程区不再丢弃 —— 交给渠道收成折叠的过程记录
+      // (卡片渠道支持折叠; 不支持的 handle 忽略它)。空回复没有可挂记录的正文。
+      const process =
+        output.kind === 'rich-card' && finalView.trim()
+          ? buildActivityRecord(turn.presenter.activity, Date.now())
+          : null;
+      await finalizeTurnStream(turn, finalView.trim() ? finalView : '', process ?? undefined);
     } else if (!finalView.trim() && turn.mediaAbsPaths.length === 0) {
       try {
         if (output.kind === 'chunked-text') {
