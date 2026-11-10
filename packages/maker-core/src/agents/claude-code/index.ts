@@ -5840,6 +5840,14 @@ export class ClaudeCodeAgent extends BaseAgent {
               beginNewTurn(mutableFastMode ? 'priority' : 'standard');
               resetToolLoopGuards();
               turnInFlight = true;
+              // An API-error envelope produces no text/thinking/tool event. Tell
+              // Session that this is a new provider turn before translating it,
+              // or its terminal error looks like the previous done's stale tail.
+              forwardEventSink.push({
+                type: 'status',
+                source: 'claude-code',
+                data: { status: 'Thinking', isRunning: true, providerInitiatedTurn: true },
+              });
             }
             noteUpstreamResponseActivity(typeof rawType === 'string' ? rawType : 'unknown');
             const shouldCorrelateResumeFailure =

@@ -120,6 +120,7 @@ import { usePluginRemovalNoticeToast } from '@/hooks/usePluginRemovalNoticeToast
 import { requestProjectFocus } from '@/state/pendingProjectFocus';
 import { patchDraft } from '@/state/newMakerDraft';
 import { cn } from '@/lib/utils';
+import { FloatingUpdateBanner } from '@/components/sidebar/UpdateBanner';
 import { checkForUpdateWithToast } from '@/lib/checkForUpdateWithToast';
 import { createLogger } from '@/lib/logger';
 import { subscribeWorkLouderCodexAction } from '@/lib/workLouderCodexActions';
@@ -1995,6 +1996,12 @@ export function MainLayout() {
         )}
 
       </div>
+      {/* 手动检查的结果在设置页、隐藏侧栏和窄轨模式也必须可见；复用原横幅及重启确认。 */}
+      <FloatingUpdateBanner
+        enabled={isSettingsRoute || isSidebarCollapsed || isRailMode}
+        ownsPrerequisiteDialogs={isSettingsRoute}
+        onOpenVersionNotice={openVersionNotice}
+      />
       {/* Update notice dialog -- mounted inside FeatureSidebarSlotProvider (ThemeProvider scope) */}
       {releaseNotes && (
         <UpdateNoticeDialog

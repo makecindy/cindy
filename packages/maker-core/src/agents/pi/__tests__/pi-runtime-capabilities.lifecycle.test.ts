@@ -244,6 +244,9 @@ describe('Pi runtime capability lifecycle', () => {
       ]);
     } finally {
       captured.runtimeRelease?.();
+      // Real config-home cleanup may retry a transient Windows file lock.
+      // Keep fake time for discovery assertions, not filesystem teardown.
+      vi.useRealTimers();
       await handle.close();
     }
   });
@@ -268,6 +271,7 @@ describe('Pi runtime capability lifecycle', () => {
       expect(captured.instances[0]!.requests.filter((request) => request.type === 'get_commands')).toHaveLength(4);
       expect(captured.instances[0]!.requests.filter((request) => request.type === 'prompt')).toEqual([]);
     } finally {
+      vi.useRealTimers();
       await handle.close();
     }
   });
@@ -318,6 +322,7 @@ describe('Pi runtime capability lifecycle', () => {
       ]);
     } finally {
       captured.runtimeRelease?.();
+      vi.useRealTimers();
       await session.close();
     }
   });
@@ -335,6 +340,7 @@ describe('Pi runtime capability lifecycle', () => {
       captured.runtimeDeferred = true;
       await vi.advanceTimersByTimeAsync(4_000);
       expect(captured.runtimeRelease).toBeTypeOf('function');
+      vi.useRealTimers();
       await handle.close();
       captured.runtimeRelease?.();
       expect(await send).toBeInstanceOf(Error);
@@ -342,6 +348,7 @@ describe('Pi runtime capability lifecycle', () => {
       expect(captured.instances[0]!.requests.filter((request) => request.type === 'prompt')).toEqual([]);
     } finally {
       captured.runtimeRelease?.();
+      vi.useRealTimers();
       await handle.close();
     }
   });

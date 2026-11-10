@@ -26,6 +26,9 @@ import {
   type ProviderUsageSnapshots,
 } from './useProviderWeeklyQuota';
 import { QUOTA_TEXT_COLOR_CLASSES, quotaSeverity } from '../status/QuotaBar';
+import { useOptionalAuthDeviceId } from '@/contexts/AuthContext';
+import { providerAccountLabel } from '@/lib/providerDisplayName';
+import { DraftClaudeAccountProvider, useDraftClaudeAccount } from './DraftClaudeAccount';
 
 type SourceUsage = ProviderUsageSnapshots & {
   source: NonNullable<ProviderUsageSnapshots['source']>;
@@ -81,6 +84,11 @@ export function ModelSourceUsageProvider({
   const [nowMs, setNowMs] = useState(Date.now);
   const enabled = scope !== null && !isProviderShareAgentDeviceId(scope.deviceId);
   const deviceId = scope?.deviceId ?? null;
+  const selfDeviceId = useOptionalAuthDeviceId();
+  const previewPool = enabled && !!scope?.previewSubscriptionPool &&
+    (deviceId === null || deviceId === selfDeviceId) &&
+    providers.some(provider => provider.id === 'anthropic' && provider.auth?.method === 'oauth' &&
+      providerWeeklyQuotaSource(provider) === 'claude' && !provider.subscriptionAccount?.reconnectRequired);
   useEffect(() => {
     if (!enabled) return;
     const timer = setInterval(() => setNowMs(Date.now()), 1000);
@@ -112,13 +120,15 @@ export function ModelSourceUsageProvider({
       }, children)
     : children;
   return (
-    <ClockContext.Provider value={nowMs}>
-      {isolated ? (
-        <UsageContext.Provider value={NO_USAGE}>{content}</UsageContext.Provider>
-      ) : (
-        content
-      )}
-    </ClockContext.Provider>
+    <DraftClaudeAccountProvider enabled={previewPool}>
+      <ClockContext.Provider value={nowMs}>
+        {isolated ? (
+          <UsageContext.Provider value={NO_USAGE}>{content}</UsageContext.Provider>
+        ) : (
+          content
+        )}
+      </ClockContext.Provider>
+    </DraftClaudeAccountProvider>
   );
 }
 
@@ -204,16 +214,21 @@ function modelSourceQuota(
 export function ModelSourceDetails({
   providerId,
   label,
+  accountIdentity,
   modelId,
 }: {
   providerId: string;
   label: string;
+  accountIdentity?: string;
   modelId: string;
 }) {
   const { t } = useTranslation();
   const usages = useContext(UsageContext);
   const nowMs = useContext(ClockContext);
-  const { plan, windows } = modelSourceQuota(usages.get(providerId), modelId, nowMs);
+  const draftClaude = useDraftClaudeAccount(providerId);
+  const quota = modelSourceQuota(usages.get(providerId), modelId, nowMs);
+  const { windows } = quota;
+  const plan = draftClaude ? formatClaudeSubscriptionPlanLabel(draftClaude.plan) : quota.plan;
   const parts = windows
     .filter((window) => Number.isFinite(window.usedPercent))
     .map((window) => {
@@ -250,7 +265,8 @@ export function ModelSourceDetails({
     (best, part) => (!best || part.used >= best.used ? part : best),
     undefined,
   );
-  const source = [label, plan].filter(Boolean).join(' · ');
+  const identity = draftClaude ? draftClaude.identity ?? t('subscriptionAccounts.unassigned') : accountIdentity;
+  const source = [providerAccountLabel(label, identity), plan].filter(Boolean).join(' · ');
   return (
     <div
       data-model-source-details

@@ -2,7 +2,8 @@ import Constants from 'expo-constants';
 import * as Updates from 'expo-updates';
 import { useUpdates } from 'expo-updates';
 import { useRouter } from 'expo-router';
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
+import { usePaneViewport } from '@/platform/AdaptiveWindowContext';
 import {
   Alert,
   AppState,
@@ -65,11 +66,12 @@ import {
   isPushSupported,
   readPushEnabled,
   syncPushRegistration,
+  enablePushNotifications,
   writePushEnabled,
   readPushPreviewEnabled,
   writePushPreviewEnabled,
 } from '@/notifications/pushNotifications';
-import { isChatBackgroundSupported, readChatBackgroundEnabled, writeChatBackgroundEnabled } from '@/notifications/chatBackground';
+import { CHAT_BACKGROUND_MODES, type ChatBackgroundMode, isChatBackgroundSupported, readChatBackgroundMode, writeChatBackgroundMode } from '@/notifications/chatBackground';
 import {
   hydrateMobileVoiceDictionary,
   readCachedMobileVoiceDictionarySnapshot,
@@ -172,7 +174,9 @@ export default function SettingsScreen() {
   const [updateOutcome, setUpdateOutcome] = useState<ManualUpdateCheckOutcome | null>(null);
   const [pushEnabled, setPushEnabled] = useState(false);
   const [pushPreview, setPushPreview] = useState(true);
-  const [chatBackground, setChatBackground] = useState(false);
+  const [chatBackground, setChatBackground] = useState<ChatBackgroundMode>('auto');
+  const [backgroundPickerOpen, setBackgroundPickerOpen] = useState(false);
+  const [backgroundPickerSnap, setBackgroundPickerSnap] = useState<ContextSheetSnap>('half');
   const [pushBusy, setPushBusy] = useState(false);
   const [pushMessage, setPushMessage] = useState<string | null>(null);
   // 使用统计(TapDB)开关。真相在 analyticsConsentStore,这里只是视图态。
@@ -483,7 +487,7 @@ export default function SettingsScreen() {
       if (!cancelled) setPushEnabled(enabled);
     });
     void readPushPreviewEnabled().then(value => { if (!cancelled) setPushPreview(value); });
-    const refreshBackground = () => { void readChatBackgroundEnabled().then(value => { if (!cancelled) setChatBackground(value); }); };
+    const refreshBackground = () => { void readChatBackgroundMode().then(value => { if (!cancelled) setChatBackground(value); }); };
     refreshBackground();
     const foreground = AppState.addEventListener('change', state => { if (state === 'active') refreshBackground(); });
     return () => {
@@ -534,13 +538,12 @@ export default function SettingsScreen() {
         }
         return;
       }
-      const result = await syncPushRegistration({ enabled: true, apiFetch: auth.apiFetch });
+      const result = await enablePushNotifications({ apiFetch: auth.apiFetch,
+        onEnabled: () => setPushEnabled(true) });
       if (result === 'permission-denied') {
         setPushMessage(t('settings.notifications.permissionDenied'));
         return; // 权限被拒:开关保持关闭,不落盘
       }
-      await writePushEnabled(true);
-      setPushEnabled(true);
       if (result === 'local-only') setPushMessage(t('settings.notifications.googleUnavailable'));
     } catch (error) {
       setPushMessage(formatRemoteError(error));
@@ -817,16 +820,12 @@ export default function SettingsScreen() {
                 }).catch(error => setPushMessage(formatRemoteError(error))).finally(() => setPushBusy(false));
               }}
             />
-            {isChatBackgroundSupported() ? <SettingsSwitchRow
-              accessibilityLabel={t('settings.notifications.background')}
+            {isChatBackgroundSupported() ? <ChoicePickerRow
+              expanded={backgroundPickerOpen}
               label={t('settings.notifications.background')}
-              value={chatBackground}
-              disabled={pushBusy || !pushEnabled}
-              onValueChange={() => {
-                const next = !chatBackground;
-                void writeChatBackgroundEnabled(next).then(() => setChatBackground(next))
-                  .catch(error => setPushMessage(formatRemoteError(error)));
-              }}
+              value={t(`settings.notifications.backgroundModes.${chatBackground}`)}
+              onPress={() => { setBackgroundPickerSnap('half'); setBackgroundPickerOpen(true); }}
+              testID="settings.backgroundPicker"
             /> : null}
           </SettingsGroup>
         ) : null}
@@ -1097,6 +1096,36 @@ export default function SettingsScreen() {
         </View>
       </ScrollView>
       <SheetModal
+        nativePresentation
+        visible={backgroundPickerOpen}
+        onBackdropPress={() => setBackgroundPickerOpen(false)}
+        onRequestClose={() => setBackgroundPickerOpen(false)}
+      >
+        <NotificationPickerContent>
+          <SheetSurface
+            bottomInset={safeAreaInsets.bottom}
+            heights={choicePickerHeights}
+            onClose={() => setBackgroundPickerOpen(false)}
+            onSnapChange={setBackgroundPickerSnap}
+            snap={backgroundPickerSnap}
+            title={t('settings.notifications.background')}
+          >
+            <MobileChoicePickerList
+              activeId={chatBackground}
+              options={CHAT_BACKGROUND_MODES.map(id => ({ id, label: t(`settings.notifications.backgroundModes.${id}`) }))}
+              onSelect={value => {
+                const mode = CHAT_BACKGROUND_MODES.find(mode => mode === value);
+                if (!mode) return;
+                setBackgroundPickerOpen(false);
+                void writeChatBackgroundMode(mode).then(() => setChatBackground(mode))
+                  .catch(error => setPushMessage(formatRemoteError(error)));
+              }}
+              testID="settings.backgroundPicker.option"
+            />
+          </SheetSurface>
+        </NotificationPickerContent>
+      </SheetModal>
+      <SheetModal
         backdropTestID="settings.appearancePicker.backdrop"
         nativePresentation
         onBackdropPress={() => setAppearancePickerOpen(false)}
@@ -1172,6 +1201,13 @@ export default function SettingsScreen() {
       </SheetModal>
     </SafeAreaView>
   );
+}
+
+// Native sheets measure RN contents intrinsically; use the actual sheet/pane width
+// so the centered heading and choice rows do not shrink to the shortest label.
+function NotificationPickerContent({ children }: { children: ReactNode }) {
+  const viewport = usePaneViewport();
+  return <View style={{ width: viewport.width }}>{children}</View>;
 }
 
 const makeStyles = (colors: ThemeColors) => StyleSheet.create({
