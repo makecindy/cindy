@@ -414,7 +414,7 @@ it('remembers native edge resizing and reopens at the saved pixel width', async 
   expect((saved.content as SplitNode).children[1].node).toHaveProperty('preferredWidth', 500);
   await act(async () => { rendered.rerender(view(true)); });
   await act(async () => { rendered.rerender(view(false)); });
-  expect(expand).toHaveBeenLastCalledWith(501, undefined);
+  expect(expand).toHaveBeenLastCalledWith(501);
   expect(screen.getByTestId('w-right-tabs').textContent).toContain('calc(100cqw - 700px)');
   // A constrained open/fullscreen resize alone never rewrites the explicit preference.
   const count = setCalls.length;

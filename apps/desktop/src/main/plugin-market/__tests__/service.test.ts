@@ -266,7 +266,7 @@ import {
 const TEST_INSTALL_CONTEXT: PluginMarketInstallContext = {
   consent: { prompt: async () => true, initiator: 'user' },
 };
-import type { PluginMarketApi } from '../api';
+import { PluginMarketEndpointUnsupportedError, type PluginMarketApi } from '../api';
 import { downloadVerifiedPlugin } from '../download';
 import { createOrganizationPrefixStore } from '../organizationPrefixStore';
 
@@ -883,6 +883,21 @@ describe('PluginMarketService migration and defaultInstall', () => {
     expect(runtime.uninstall).not.toHaveBeenCalled();
     expect(h.ledger.installationForPlugin({ ghostId: item.ghostId, namespace: 'acme' })?.installed).toBe(true);
     expect(h.api.listAll).not.toHaveBeenCalled();
+  });
+
+  // unit：客户端先于 plugin-server 上线（无 defaults 接口）时，插件页与迁移仍要读到官方目录。
+  it('falls back to the full catalog only when the server lacks the defaults endpoint', async () => {
+    const item = summary({ namespace: null });
+    const h = harness([item]);
+    h.api.defaults.mockRejectedValueOnce(new PluginMarketEndpointUnsupportedError());
+    const result = await h.service.snapshot();
+    expect(result.unavailableReason).toBeNull();
+    expect(result.items.map(entry => entry.pluginId)).toContain(item.id);
+    expect(h.api.listAll).toHaveBeenCalledTimes(1);
+
+    h.api.defaults.mockRejectedValueOnce(new Error('network down'));
+    expect((await h.service.snapshot()).unavailableReason).toBe('network down');
+    expect(h.api.listAll).toHaveBeenCalledTimes(1);
   });
 
   it('upgrades the official simulator through the old route and atomically replaces its ledger key', async () => {

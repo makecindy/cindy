@@ -159,6 +159,7 @@ import { startGrokDeviceLogin, grokDeviceLoginStatus, cancelGrokDeviceLogin } fr
 
 export interface DesktopMcpProvidersDeps {
   askUserQuestionAsync?: XdtHelperMcpDeps['askUserQuestionAsync'];
+  manageUserQuestions?: XdtHelperMcpDeps['manageUserQuestions'];
   runtimeCapabilities?: XdtHelperMcpDeps['runtimeCapabilities'];
   botCapabilities: Pick<ReturnType<typeof createBotCapabilityService>, 'list' | 'select'> & Partial<Pick<ReturnType<typeof createBotCapabilityService>, 'models' | 'setDefaultModel'>>;
   createMediaDownloadContext?: CindyGhostsHostDeps['createMediaDownloadContext'];
@@ -1040,6 +1041,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
         }
       },
       askUserQuestionAsync: deps.askUserQuestionAsync,
+      manageUserQuestions: deps.manageUserQuestions,
       sessionImport: sessionImportCallbacks,
       renameSessions: async ({ changes, dryRun }) => {
         if (!tryGetDbClient()) {
@@ -1159,11 +1161,13 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
             };
           }
           try {
-            const project = await resolveSessionProject({ callerSessionId: params.callerSessionId, projectDir: params.projectDir });
+            const project = await resolveSessionProject({ callerSessionId: params.callerSessionId,
+              projectDir: params.projectDir, workingDir: params.workingDir });
             if (!project.ok) return project;
             const result = await svc.startSessionTask({ ...params, projectDir: project.projectDir,
               workingDir: params.workingDir ?? project.projectDir ?? undefined });
-            return result.ok ? { ...result, projectDir: project.projectDir } : result;
+            return result.ok ? { ...result, projectDir: project.projectDir,
+              ...('projectFromWorkingDir' in project ? { projectFromWorkingDir: true } : {}) } : result;
           } catch (err) {
             return {
               ok: false,
