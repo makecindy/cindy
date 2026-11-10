@@ -15,7 +15,7 @@ export default {
   viewport: { width: 900, height: 620 },
   real: 'ProviderGroupSection, GroupMemberQuota, GroupMemberAccountList, QuotaHoverCard shared columns, translations and themes',
   notCovered:
-    'Real subscription reads, sign-in, other computers over device link and Windows. Accounts and usage are fixture data.',
+    'Real subscription reads, sign-in and other computers over device link. Accounts and usage are fixture data.',
   stubs: {
     'src/renderer/hooks/useProviders': `export const useProviders = () => ({ providers: [${JSON.stringify(provider)}] });`,
   },
