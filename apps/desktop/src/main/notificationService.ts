@@ -187,8 +187,14 @@ interface NotifiedAlert {
   /**
    * 投进来的窗口。Electron 里每个 BrowserWindow 的 webContents id 不同，同一窗口恒定。
    * 拿不到时不参与跨窗合并：宁可少合并，也不把同一窗口的两次失败并成一次。
+   * 这是写下这条记录的那一扇；后来并进来的窗口在 `senders` 里。
    */
   senderId: number | undefined;
+  /**
+   * 参与过这条合并事件的全部窗口。只记下条的那一个时，另一扇窗的下一轮失败
+   * 仍会因为「不是这个 sender」被并掉。跨窗命中后把当前窗口并进来；写入时新建集合，不改已有的。
+   */
+  senders?: ReadonlySet<number>;
   /**
    * 另一扇窗已经弹过，这条只是同一事件换了个标识。精确标识再来仍不弹；
    * 但它不能当跨窗合并的锚点，否则下一轮失败会撞上这扇窗的别名被吞掉。
@@ -242,14 +248,43 @@ function readAlertSenderId(event: unknown): number | undefined {
 
 type NotifiedAlertMatch =
   | { matched: 'exact' }
-  | { matched: 'cross-window'; order: NotifiedAlert['order'] };
+  | { matched: 'cross-window'; order: NotifiedAlert['order']; anchorId: string };
+
+/**
+ * 这扇窗还没算进这条合并事件。没有窗口 id 时，只有对方记下过窗口才算另一扇；
+ * 两边都拿不到窗口就不合并，避免同一窗口的两次失败碰在一起。
+ */
+function senderHasNotJoinedAlert(alert: NotifiedAlert, senderId: number | undefined): boolean {
+  if (alert.senders) {
+    if (senderId === undefined) return alert.senders.size > 0;
+    return !alert.senders.has(senderId);
+  }
+  return alert.senderId !== senderId;
+}
+
+/** 跨窗命中后把当前窗口记进锚点。新建集合和条目，不改账本里原来那一份。 */
+function rememberJoinedSender(key: string, anchorId: string, senderId: number | undefined): void {
+  if (senderId === undefined) return;
+  const current = notifiedAlerts.get(key);
+  if (!current) return;
+  const index = current.findIndex(alert => alert.id === anchorId && alert.alias !== true);
+  if (index < 0) return;
+  const alert = current[index]!;
+  const previous = alert.senders ?? new Set(alert.senderId === undefined ? [] : [alert.senderId]);
+  if (previous.has(senderId)) return;
+  const senders = new Set(previous);
+  senders.add(senderId);
+  const next = current.slice();
+  next[index] = { ...alert, senders };
+  notifiedAlerts.set(key, next);
+}
 
 /**
  * 同一告警标识只弹一次。没有标识的调用不去重，照常通知：宁可多弹一次，
  * 也不能把新的提问或失败吞掉。
  *
  * 跨窗是另一回事，不靠时间窗判断：每个窗口的 webContents id 不同，同一窗口恒定。
- * 只有 id 不同、种类相同、内容尾相同、到达相差不到 1 秒，才当成同一条事件的两扇窗。
+ * 只有这扇窗还没参与过这条记录、种类相同、内容尾相同、到达相差不到 1 秒，才当成同一条事件的另一扇窗。
  * 同一窗口发来的两条永不合并，所以一秒内的两次失败各弹一次。
  * 别名（另一扇窗那条没弹、只为记住标识）不参与这次查找：它只靠精确标识挡住重放，
  * 不能把下一轮失败再并掉。命中跨窗时把已经弹过那条的顺序带回去，调用方记新标识时沿用它，不把副本排成最近一条。
@@ -270,10 +305,10 @@ function matchNotifiedAlert(
     alert.alias !== true
     && alert.kind === kind
     && alert.content === content
-    && alert.senderId !== senderId
+    && senderHasNotJoinedAlert(alert, senderId)
     && Math.abs(arrivedAt - alert.arrivedAt) < CROSS_WINDOW_ALERT_WINDOW_MS,
   );
-  return cross ? { matched: 'cross-window', order: cross.order } : undefined;
+  return cross ? { matched: 'cross-window', order: cross.order, anchorId: cross.id } : undefined;
 }
 
 /**
@@ -299,6 +334,8 @@ function rememberAlert(
     arrivedAt,
     content: alertContentKey(alertEventId),
     senderId,
+    // 先记下写这条的窗口。跨窗命中时再把另一扇窗并进新的集合，不在这里改已有条目。
+    ...(senderId === undefined ? {} : { senders: new Set<number>([senderId]) }),
     kind,
     // 别名只记住「这条标识已经处理过」。跨窗查找会跳过它，避免下一轮失败把它当成锚点。
     ...(alias ? { alias: true as const } : {}),
@@ -587,6 +624,8 @@ export function initNotificationService(deps: NotificationServiceDeps): void {
           // 对不上精确标识，窗口也过期了，会再弹。记成别名：精确标识仍然压住重放，
           // 跨窗查找会跳过它，下一轮失败不会被这扇窗的别名吞掉。顺序沿用已弹那条，
           // 不用本条自己的轮次时钟，免得这条晚到的副本变成「最近一条」、盖过真正更新的告警。
+          // 当前窗口也要并进锚点：只留下条的那一个 sender 时，这扇窗下一轮失败仍会撞上旧锚点。
+          rememberJoinedSender(desktopKey, priorAlert.anchorId, alertSenderId);
           rememberAlert(desktopKey, usableAlertEventId, priorAlert.order, alertArrivedAt, alertSenderId, kind, true);
         }
         if (channels?.mobile === true && (kind !== 'done' || !wasReplyNotified(mobileKey, eventId))) {

@@ -1506,6 +1506,38 @@ describe('notificationService — channels 分发', () => {
     }
   });
 
+  // Both windows are in the background. The first failure is one event seen twice,
+  // then the next failure lands inside 1s: 1000 (window 1) → 1002 (window 2) →
+  // 1200 (window 2) → 1200 (window 1). The anchor used to keep only window 1, so
+  // window 2's new failure still matched it (same `error` tail, other sender) and
+  // was recorded as an alias; window 1's copy was then swallowed by that exact id.
+  // The third delivery must toast. Counts are 1, 1, 2, 2.
+  it('toasts the next failure on both windows after both joined the first event', async () => {
+    const { initNotificationService } = await freshService();
+    initNotificationService(baseDeps(makeFeishuIm(null)));
+    const channels = { desktop: true, feishu: false, mobile: false };
+    let now = 1_700_000_000_000;
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    const deliver = (alertEventId: string, senderId: number) => invokeHandler({
+      sessionId: 's1', title: 'Task', kind: 'error', alertEventId, channels,
+    }, windowEvent(senderId));
+    try {
+      await deliver('turn:1000:error', 1);
+      expect(notificationCtor).toHaveBeenCalledTimes(1);
+      now += 2;
+      await deliver('turn:1002:error', 2);
+      expect(notificationCtor).toHaveBeenCalledTimes(1);
+      now += 198;
+      await deliver('turn:1200:error', 2);
+      expect(notificationCtor).toHaveBeenCalledTimes(2);
+      now += 2;
+      await deliver('turn:1200:error', 1);
+      expect(notificationCtor).toHaveBeenCalledTimes(2);
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
   // Same window, two needs-reply request keys. Different content must not merge
   // even inside the 1s window.
   it('toasts twice when the same window reports two different requests', async () => {
