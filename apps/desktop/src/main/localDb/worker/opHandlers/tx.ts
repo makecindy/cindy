@@ -3510,6 +3510,11 @@ function orcaReserveWorkerCreation(db: Database.Database, args: unknown): unknow
   return db.transaction(() => {
     // DELETE 即使没有命中也会先取得 writer lock，后续检查与 INSERT 因而跨连接串行。
     db.prepare('DELETE FROM orca_worker_creation_reservations WHERE expires_at <= ?').run(now);
+    // 已归档／已删除任务的 Worker 不再占用名字：把它的 label 改成带自身 id 的唯一值后放行
+    // （`~` 不在可填写的 label 字符集内，不会与任何新名字相撞）。记录、历史与关联都保留。
+    db.prepare(`UPDATE orca_workers SET label = label || '~' || id, updated_at = ?
+      WHERE team_id = ? AND label = ? COLLATE NOCASE
+        AND session_id IN (SELECT id FROM sessions WHERE status != 'active')`).run(now, teamId, label);
     const duplicateWorker = db.prepare(
       'SELECT 1 FROM orca_workers WHERE team_id = ? AND label = ? COLLATE NOCASE LIMIT 1',
     ).get(teamId, label);
