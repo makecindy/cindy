@@ -200,6 +200,11 @@ interface NotifiedAlert {
    * 但它不能当跨窗合并的锚点，否则下一轮失败会撞上这扇窗的别名被吞掉。
    */
   alias?: true;
+  /**
+   * 仅别名使用：这条标识所属的锚点（原本弹过的那条）。精确标识命中别名时沿它找回锚点，
+   * 把当前窗口记进那条的 `senders`。锚点自己不写这个字段。
+   */
+  anchorId?: string;
 }
 const NOTIFIED_ALERTS_PER_KEY = 8;
 /**
@@ -279,6 +284,11 @@ function rememberJoinedSender(key: string, anchorId: string, senderId: number | 
   notifiedAlerts.set(key, next);
 }
 
+/** 精确标识落在别名上时回到原本弹过的那条；锚点自己就是自己。 */
+function anchorIdForAlert(alert: NotifiedAlert): string {
+  return alert.alias === true && alert.anchorId !== undefined ? alert.anchorId : alert.id;
+}
+
 /**
  * 同一告警标识只弹一次。没有标识的调用不去重，照常通知：宁可多弹一次，
  * 也不能把新的提问或失败吞掉。
@@ -288,6 +298,7 @@ function rememberJoinedSender(key: string, anchorId: string, senderId: number | 
  * 同一窗口发来的两条永不合并，所以一秒内的两次失败各弹一次。
  * 别名（另一扇窗那条没弹、只为记住标识）不参与这次查找：它只靠精确标识挡住重放，
  * 不能把下一轮失败再并掉。命中跨窗时把已经弹过那条的顺序带回去，调用方记新标识时沿用它，不把副本排成最近一条。
+ * 精确标识命中同样不再弹，但要把当前窗口记进该标识所属锚点；命中的是别名就沿 `anchorId` 找回原本弹过的那条。
  */
 function matchNotifiedAlert(
   key: string,
@@ -299,7 +310,13 @@ function matchNotifiedAlert(
   if (!alertEventId) return undefined;
   const current = notifiedAlerts.get(key);
   if (!current) return undefined;
-  if (current.some(alert => alert.id === alertEventId)) return { matched: 'exact' };
+  const exact = current.find(alert => alert.id === alertEventId);
+  if (exact) {
+    // 相同标识不再弹。两扇窗采出同一个 id 时，第二扇也得算进这条合并事件，
+    // 否则它下一轮失败仍会因为「没参与过锚点」被并进上一轮。
+    rememberJoinedSender(key, anchorIdForAlert(exact), senderId);
+    return { matched: 'exact' };
+  }
   const content = alertContentKey(alertEventId);
   const cross = current.find(alert =>
     alert.alias !== true
@@ -325,6 +342,7 @@ function rememberAlert(
   senderId: number | undefined,
   kind: 'error' | 'needs-reply',
   alias = false,
+  anchorId?: string,
 ): void {
   const current = notifiedAlerts.get(key) ?? [];
   if (current.some(alert => alert.id === alertEventId)) return;
@@ -337,8 +355,8 @@ function rememberAlert(
     // 先记下写这条的窗口。跨窗命中时再把另一扇窗并进新的集合，不在这里改已有条目。
     ...(senderId === undefined ? {} : { senders: new Set<number>([senderId]) }),
     kind,
-    // 别名只记住「这条标识已经处理过」。跨窗查找会跳过它，避免下一轮失败把它当成锚点。
-    ...(alias ? { alias: true as const } : {}),
+    // 别名只记住「这条标识已经处理过」，并指向原本弹过的锚点。跨窗查找会跳过它，避免下一轮失败把它当成锚点。
+    ...(alias ? { alias: true as const, ...(anchorId !== undefined ? { anchorId } : {}) } : {}),
   };
   const newerAt = current.findIndex(alert => alert.order.source === order.source && alert.order.value > order.value);
   const next = newerAt === -1
@@ -626,7 +644,16 @@ export function initNotificationService(deps: NotificationServiceDeps): void {
           // 不用本条自己的轮次时钟，免得这条晚到的副本变成「最近一条」、盖过真正更新的告警。
           // 当前窗口也要并进锚点：只留下条的那一个 sender 时，这扇窗下一轮失败仍会撞上旧锚点。
           rememberJoinedSender(desktopKey, priorAlert.anchorId, alertSenderId);
-          rememberAlert(desktopKey, usableAlertEventId, priorAlert.order, alertArrivedAt, alertSenderId, kind, true);
+          rememberAlert(
+            desktopKey,
+            usableAlertEventId,
+            priorAlert.order,
+            alertArrivedAt,
+            alertSenderId,
+            kind,
+            true,
+            priorAlert.anchorId,
+          );
         }
         if (channels?.mobile === true && (kind !== 'done' || !wasReplyNotified(mobileKey, eventId))) {
           try {
