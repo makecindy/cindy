@@ -15,9 +15,11 @@ explicit; it does not become a reason to claim success or modify the host.
    For a portable package, pass `--package-root`, build it with `package_theme.py`
    and verify the exact `.cindy` file on the receiving client. A loose JSON check
    does not prove that the archive contains its referenced assets.
-2. For plugins, run the current Cindy plugin validator/build workflow from
-   `cindy-plugin-creator`. Check declared fields, resource IDs, paths, decodable
-   images/fonts and packaging. A local JSON check does not validate a plugin.
+2. Before making a companion plugin, confirm the target host exposes the matching
+   appearance API and current authoring reference. If either is absent, leave
+   those capabilities explicitly unavailable. Then use the plugin validator/build
+   workflow from `cindy-plugin-creator` to check declared fields, resources and
+   packaging. Manifest validation alone does not prove a field is implemented.
 3. Capture the prior theme family/mode and the settings this result will change.
    Preserve the original files. Test on the target computer and existing allowed
    profile; do not copy credentials or create an unrelated replacement account.

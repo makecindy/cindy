@@ -2,6 +2,7 @@
 
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { MemoryRouter } from 'react-router-dom';
 import { FontSettingsProvider } from '@/hooks/useFontSettings';
 import { AppearanceSection } from '../AppearanceSection';
 import zhCN from '@/i18n/locales/zh-CN/common.json';
@@ -83,9 +84,11 @@ afterEach(() => {
 
 function renderSettings() {
   render(
-    <FontSettingsProvider>
-      <AppearanceSection />
-    </FontSettingsProvider>,
+    <MemoryRouter>
+      <FontSettingsProvider>
+        <AppearanceSection />
+      </FontSettingsProvider>
+    </MemoryRouter>,
   );
 }
 

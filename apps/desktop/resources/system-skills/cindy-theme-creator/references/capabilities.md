@@ -1,8 +1,11 @@
 # Appearance capabilities and output formats
 
-This is a map of Cindy's existing appearance mechanisms, not a promise that every
-installed build exposes all of them. Inspect the target host and the current
-`cindy-plugin-creator` appearance reference before invoking plugin APIs.
+The data-only theme format supports global colors, mode pairing and brand images.
+The plugin capabilities below additionally require a host exposing the appearance
+API and its matching `cindy-plugin-creator` appearance reference. They are not
+available merely because an older host accepts unknown manifest fields. If the
+current reference/API is absent, report those parts as unavailable and deliver
+the supported theme package without a companion plugin.
 
 ## Capability map
 

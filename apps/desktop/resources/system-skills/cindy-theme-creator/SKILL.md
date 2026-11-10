@@ -21,9 +21,10 @@ Separate the following outputs:
   light/dark pairing and the new-task page's brand icon/logo, plus its assets.
   Read [package format](references/package-format.md) for portable delivery,
   validation, sharing and installation. Loose local JSON remains supported.
-- Cindy's plugin appearance API controls wallpaper, fonts, reading and message
-  styles, content colors, runtime app icons and temporary region visibility.
-  It writes the existing appearance settings; it is not a second global theme.
+- On hosts exposing the plugin appearance API, it controls wallpaper, fonts,
+  reading and message styles, content colors, runtime app icons and temporary
+  region visibility through the existing appearance settings. These are
+  conditional capabilities, not fields supported by the data-only theme format.
 - Images, fonts and videos are assets referenced by those outputs. Keep originals
   and reusable source files in the task's output folder.
 
@@ -39,6 +40,10 @@ settings, use `cindy_helper` discovery and its returned schemas. For a theme
 plugin, use the bundled `cindy-plugin-creator` Skill and its current appearance,
 resource and packaging references. Check `cindy.ui?.appearance` in the plugin;
 do not infer installed-version support from repository documentation alone.
+If that host contract or its current authoring reference is absent, deliver the
+supported theme package and identify the unavailable parts. Do not generate a
+companion plugin containing unknown appearance declarations: accepting such a
+manifest does not mean Cindy implements those fields.
 Only a plugin's declared resources can be passed to its appearance API. Do not
 invent helper tools, send plugin calls from the task shell, or edit Cindy's
 database, installation bundle or global system prompt.
