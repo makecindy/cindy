@@ -218,6 +218,11 @@ describe('设置页与会话挂载读的是同一份磁盘事实', () => {
     await fs.writeFile(path.join(projectSkills, 'standup', 'SKILL.md'), '---\nname: standup\ndescription: Daily standup notes\n---\nSteps');
     const later = await fs.readFile(path.join((await collectBotOwnSkillMounts('bot-2', v2)).pluginRoot, 'catalog.jsonl'), 'utf8');
     expect(later).toContain(JSON.stringify(path.join(projectSkills, 'standup', 'SKILL.md')).slice(1, -1));
+
+    // Updating a Skill through the save tool refreshes what the next turn mounts right away.
+    await saveBotSkillForSession({ ...SAVE, description: 'Updated weekly report steps' }, v2);
+    const updated = await fs.readFile(path.join((await collectBotOwnSkillMounts('bot-2', v2)).pluginRoot, 'catalog.jsonl'), 'utf8');
+    expect(updated).toContain('Updated weekly report steps');
   });
 
   it('returns nothing to mount for a Bot that never learned anything', async () => {
