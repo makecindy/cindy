@@ -244,6 +244,7 @@ import {
 import { createId } from '@paralleldrive/cuid2';
 import { redactSensitiveText } from '@cindy/maker-shared/error-redaction';
 import { normalizeOrcaWorkerLabel } from '@cindy/maker-shared/orca-team';
+import { ASYNC_QUESTION_ANSWERED_CLIENT_ID_PREFIX } from '@cindy/maker-shared/interaction';
 import { permissionModeOrAsk } from '@cindy/maker-shared/permission-mode';
 import {
   isProductTurnCompletionTailEvent,
@@ -3830,7 +3831,7 @@ type BotCompactRuntimeRefreshHandler = (
  * needs the register-time Maker/bootstrap closure, so keep one narrow holder
  * and let the instance-scoped coordinator own all compact settle signals.
  */
-let asyncQuestionInputDispatcher: ((session: NonNullable<ReturnType<Maker['getSession']>>, text: string, signal: AbortSignal, requestId: string) => Promise<void>) | undefined;
+let asyncQuestionInputDispatcher: ((session: NonNullable<ReturnType<Maker['getSession']>>, text: string, signal: AbortSignal, requestId: string, displayText: string) => Promise<void>) | undefined;
 let botCompactRuntimeRefreshHandler: BotCompactRuntimeRefreshHandler | null = null;
 /**
  * 逐轮环境说明(界面语言 / 客户端设备 / 个人版制作说明)的去重记忆:同一原生上下文里内容
@@ -6432,9 +6433,9 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
   const registration = sessionBindings.beginBinding(session);
   if (!registration) return;
 
-  session.setAsyncQuestionAnswerDispatcher((text, signal, requestId) => {
+  session.setAsyncQuestionAnswerDispatcher((text, signal, requestId, displayText) => {
     if (!asyncQuestionInputDispatcher) throw new Error('Question input dispatcher is unavailable');
-    return asyncQuestionInputDispatcher(session, text, signal, requestId);
+    return asyncQuestionInputDispatcher(session, text, signal, requestId, displayText);
   });
 
   registration.disposers.push(installSessionTurnObserver(sessionTurnObserverDependencies, session));
@@ -20803,7 +20804,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     getPersistedClientIds: getPersistedInputClientIds,
   });
   agentInputCoordinatorHolder = inputCoordinator;
-  asyncQuestionInputDispatcher = async (session, text, signal, requestId) => {
+  asyncQuestionInputDispatcher = async (session, text, signal, requestId, displayText) => {
     const sharedTask = getDeviceLinkInvokeContext()?.sharedTask;
     const pausedBeforeAnswer = inputCoordinator.getProjection(session.id).queuePaused;
     const inputGeneration = inputCoordinator.getGeneration(session.id);
@@ -20819,8 +20820,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     assertCurrent();
     if (!meta) throw new Error('Question session is no longer available');
     const digest = createHash('sha256').update(text).digest('hex');
+    // The question card already shows this answer: history keeps the readable copy for
+    // search, previews and older clients, and this identity keeps it out of the conversation.
     let item = await buildSessionControlInputItem({ targetSessionId: session.id, message: text,
-      persistedContent: text, clientId: `question-reply:${requestId}:${digest}`, meta, inheritTargetPlanMode: true });
+      persistedContent: displayText, clientId: `${ASYNC_QUESTION_ANSWERED_CLIENT_ID_PREFIX}${requestId}:${digest}`, meta, inheritTargetPlanMode: true });
     item = stampSharedTaskInput(item, sharedTask, item.createOpts);
     item = stampTrustedDeviceLinkQueuedOrigin(
       stampTrustedDesktopQueuedOrigin(stampMobileClientOrigin(item, isMobileControllerInvoke()), isDeviceLinkInvoke()),

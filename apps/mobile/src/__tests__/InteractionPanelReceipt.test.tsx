@@ -674,6 +674,9 @@ it.each(['send', 'close', 'stopped', 'stopped-empty', 'already-answered', 'uncon
     expect(text.split('\n\n<cindy_question_context>')[0]).toBe('> Original?\n\nFinished');
     expect(text).toContain('This is a delayed answer');
     expect(text).toContain('do not repeat work already completed');
+    // The note is for the model only: the message people see is the question and the answer.
+    expect(asyncReply.input.enqueue.mock.calls[0][1].chatMessage.content).toBe('> Original?\n\nFinished');
+    expect(asyncReply.input.enqueue.mock.calls[0][1].persistedContent).not.toContain('cindy_question_context');
     expect(asyncReply.input.resume).toHaveBeenCalledTimes(action === 'stopped' ? 1 : 0);
   } else expect(asyncReply.input.enqueue).not.toHaveBeenCalled();
 });

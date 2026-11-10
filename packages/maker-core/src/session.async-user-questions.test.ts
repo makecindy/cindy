@@ -247,6 +247,8 @@ describe.each(['claude-code', 'pi', 'codex'] as const)('%s terminal-aligned asyn
       s.end(); await flush();
       await expect(s.session.submitAsyncQuestionAnswer(id, answer)).resolves.toBe(true);
       expect(dispatch.mock.calls[1][0]).toBe(dispatch.mock.calls[0][0]);
+      // The Host stores this readable copy; the model's copy stays in the first argument.
+      expect(dispatch.mock.calls[0][3]).toBe('> Which scope?\n\nBoth');
       s.resolvers[0](answer);
       await flush();
       expect(dispatch).toHaveBeenCalledTimes(2);
