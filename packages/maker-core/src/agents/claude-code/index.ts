@@ -4470,10 +4470,19 @@ export class ClaudeCodeAgent extends BaseAgent {
         }) : undefined;
       // 短设置仍内联, 与既有行为逐字节一致。超限才写临时文件。同一会话复用一份
       // 文件, 重建时按当前设置重写 (热切白名单另走 applyFlagSettings, 不依赖它)。
+      // 落盘失败时托管技能插件已经铺好暂存目录, 而此刻 abort 监听与下面的
+      // 启动清理 try 都还没挂上 —— 必须在这里先把它拆掉, 否则整份暂存目录会残留。
       const flagSettingsDelivery = await materializeClaudeFlagSettings(
         buildSettings(),
         flagSettingsFile ?? undefined,
-      );
+      ).catch(async (error: unknown) => {
+        if (managedPlugins) {
+          await managedPlugins.dispose().catch((cleanupError) => {
+            log.warn('managed skill plugin cleanup failed', { error: String(cleanupError) });
+          });
+        }
+        throw error;
+      });
       if (flagSettingsDelivery.kind === 'file') flagSettingsFile = flagSettingsDelivery;
       const localClaudeSettingsOption = (): string | Settings =>
         flagSettingsDelivery.kind === 'inline'

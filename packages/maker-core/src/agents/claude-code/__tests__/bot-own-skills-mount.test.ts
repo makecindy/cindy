@@ -27,6 +27,26 @@ vi.mock('@anthropic-ai/claude-agent-sdk', () => ({
   query: sdkMock.query,
 }));
 
+// 设置落盘失败注入: 只有用例显式打开时才拒绝, 其余用例仍走真实实现。
+const flagSettingsMock = vi.hoisted(() => ({ fail: false, stagingAtFailure: [] as string[] }));
+
+vi.mock('../flag-settings-file.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../flag-settings-file.js')>();
+  return {
+    ...actual,
+    materializeClaudeFlagSettings: async (
+      ...args: Parameters<typeof actual.materializeClaudeFlagSettings>
+    ) => {
+      if (!flagSettingsMock.fail) return actual.materializeClaudeFlagSettings(...args);
+      const { promises: fsp } = await import('node:fs');
+      const osmod = (await import('node:os')).default;
+      flagSettingsMock.stagingAtFailure = (await fsp.readdir(osmod.tmpdir()))
+        .filter((name) => name.startsWith('cindy-claude-skills-'));
+      throw Object.assign(new Error('ENOSPC'), { code: 'ENOSPC' });
+    },
+  };
+});
+
 import { ClaudeCodeAgent } from '../index.js';
 
 const tempDirs: string[] = [];
@@ -473,5 +493,28 @@ describe('managed skill command collisions', () => {
     }));
     const result = await new ClaudeCodeAgent(deps).listRuntimeSkills({ workingDir: await isolatedWorkingDir(), runtimeConfigDir: configDir });
     expect(result.skills.map((skill) => skill.name)).toEqual(['learn', 'cindy-plugin-a:demo', 'cindy-plugin-b:demo']);
+  });
+});
+
+// 测试价值：托管技能插件的暂存目录在设置落盘失败时必须一起拆掉，否则每次启动失败
+// 都会留下一份 cindy-claude-skills-* 目录与技能链接。
+// 最小输入：一个受管技能 + 让 materializeClaudeFlagSettings 报 ENOSPC；tier unit。
+describe('managed skill staging cleanup when settings materialization fails', () => {
+  it('removes the staging dir created before the failure', async () => {
+    const before = (await fs.readdir(os.tmpdir())).filter((name) => name.startsWith('cindy-claude-skills-'));
+    flagSettingsMock.stagingAtFailure = [];
+    flagSettingsMock.fail = true;
+    try {
+      await expect(startBotSession({ managed: true, allowManaged: true })).rejects.toMatchObject({
+        cause: { code: 'ENOSPC' },
+      });
+    } finally {
+      flagSettingsMock.fail = false;
+    }
+
+    const created = flagSettingsMock.stagingAtFailure.filter((name) => !before.includes(name));
+    expect(created).toHaveLength(1);
+    const stillThere = (await fs.readdir(os.tmpdir())).filter((name) => created.includes(name));
+    expect(stillThere).toEqual([]);
   });
 });
