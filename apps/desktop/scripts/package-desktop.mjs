@@ -559,14 +559,16 @@ async function main() {
   // 测试门失败时 updateVendors 已恢复原 pin,这里直接中止,不产出带未验证组件的包。
   const vendorsMode = args.vendors;
   let vendors = null;
+  let vendorsDirtyBefore = [];
   if (vendorsMode) {
     const target = vendorsMode === 'latest' || vendorsMode === 'pinned'
       ? vendorsMode
       : JSON.parse(fs.readFileSync(path.resolve(vendorsMode), 'utf8')).vendors?.components;
     if (!target) throw new Error(`--vendors ${vendorsMode}: build-info.json 里没有 vendors.components`);
     console.log(`==> Agent runtimes: ${typeof target === 'string' ? target : `versions from ${vendorsMode}`} + smoke/integration gate`);
-    const { changes, steps, components } = await updateVendors({ target });
+    const { changes, steps, dirtyBefore, components } = await updateVendors({ target });
     vendors = { mode: typeof target === 'string' ? target : 'from-build-info', changes, gate: steps, components };
+    vendorsDirtyBefore = dirtyBefore;
   }
 
   // Linux 只校验 sqlite-vec 等原生运行资产。Claude/Codex/Pi 各平台都不进安装包
@@ -726,7 +728,7 @@ async function main() {
   // 安装包已产出,这一步失败只告警,不推翻本次打包。
   if (vendors?.changes.length) {
     try {
-      openPinPullRequest({ changes: vendors.changes, steps: vendors.gate });
+      openPinPullRequest({ changes: vendors.changes, steps: vendors.gate, dirtyBefore: vendorsDirtyBefore });
     } catch (err) {
       console.warn(`WARN: 升级后的 pin 未能自动提交(${err.message});请提交 tools/*/latest.json、SDK package.json 与 pnpm-lock.yaml。`);
     }

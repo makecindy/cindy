@@ -155,6 +155,13 @@ function saveCache(meta, version) {
     prerelease: meta.prerelease,
     draft: meta.draft,
     published_at: meta.published_at,
+    // Same shape as the other runtime pins, so release build-info can name every platform's
+    // archive. Digests come from the release API (absent only on releases before 2025-06).
+    runtimeAssets: Object.fromEntries(PLATFORMS.flatMap((platform) => {
+      const asset = meta.assets?.find((a) => a.name === archiveName(version, platform));
+      const sha256 = /^sha256:([0-9a-f]{64})$/.exec(asset?.digest ?? '')?.[1];
+      return asset && sha256 ? [[platform.key, { url: asset.browser_download_url, sha256, size: asset.size }]] : [];
+    })),
   };
   fs.mkdirSync(__dirname, { recursive: true });
   fs.writeFileSync(CACHE_FILE, JSON.stringify(cache, null, 2) + '\n');
