@@ -1215,12 +1215,18 @@ const serverDeps = {
     } else if (input.workspaceKind !== 'dialogue') {
       throw new Error('choose a project directory or create a dialogue task');
     }
-    return createUserSession({ ...input, agentKind: input.agentKind === 'claude-code' ? 'cc' : input.agentKind }, {
+    const row = await createUserSession({ ...input, agentKind: input.agentKind === 'claude-code' ? 'cc' : input.agentKind }, {
       // HTTP has no native folder-picker proof. The shared service rejects new
       // writable roots until a trusted directory-grant flow supplies one.
       senderId: 0, userDataDir: profileDir,
       notifyPluginSessionCreated: sessionDraftPorts.notifyPluginSessionCreated,
     });
+    // Connected clients refresh their task list from this event. An unsent
+    // draft announces itself when it is sent (commit), not here.
+    if (input.provisional !== true) {
+      eventHub.publish({ type: 'session_changed', action: 'create', session: row, sessionId: row.id });
+    }
+    return row;
   },
   chat: createChatHandler({
     readSession: (id: string) => sessionStorage?.get(id),
@@ -1484,7 +1490,6 @@ function startDeviceLink(): void {
       if (activeOwnerScopeKey() !== scope || isAppSessionBoundaryPending() || !agentGraph) throw new Error('Host account changed');
       const session = await agentGraph.maker.createSession({ ...opts, id: row.id });
       if (activeOwnerScopeKey() !== scope || isAppSessionBoundaryPending()) throw new Error('Host account changed');
-      eventHub.publish({ type: 'session_changed', action: 'create', session: row, sessionId: row.id });
       return { sessionId: session.id, agentKind: session.agentKind, workDir: session.workDir,
         capabilities: session.capabilities, usedProjectContext: false };
     },

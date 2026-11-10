@@ -415,6 +415,8 @@ test('an MCP App message is a delegated continuation that grants nothing', async
   // intent grants nothing.
   assert.equal(options[AUTO_REVIEW_SOURCE_CONTENT], '');
   assert.doesNotMatch(JSON.stringify(options[AUTO_REVIEW_USER_INTENT] ?? {}), /delete everything/);
+  // The model is told the text came from an App, not typed by the user.
+  assert.match(String(h.maker.getSession('app-task').sent[0]), /\[消息来源\]/);
   const row = h.persisted.find(message => message.clientId === 'app-1' && message.role === 'user');
   assert.deepEqual(row.agentMeta.sourcePlugin, { pluginId: 'mcp-app:server-1', name: 'App' });
   assert.deepEqual(row.agentMeta.autoReviewUserText, { kind: 'delegated-continuation' });

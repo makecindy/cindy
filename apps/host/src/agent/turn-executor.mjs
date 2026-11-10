@@ -5,8 +5,9 @@ import { setSessionProvider, clearSessionProvider } from '../../../desktop/src/m
 import { toDesktopSessionDispatchOutcome } from '../../../desktop/src/main/maker-host/send-outcome.ts';
 import { applyQueuedSessionSettings, rememberLiveSessionSettings } from './session-settings.mjs';
 import { MCP_APP_MESSAGE_GUARD } from '../../../desktop/src/main/mcp-apps/message.ts';
-import { prependNoteToWireUserMessage } from '../../../desktop/src/main/maker-ipc/agentHandoff.ts';
-import { readWireSourceDevice } from '../../../desktop/src/main/maker-ipc/messageSourceNote.ts';
+import { prependNoteToWireUserMessage, extractPlainText } from '../../../desktop/src/main/maker-ipc/agentHandoff.ts';
+import { readWireSourceDevice, buildWireMessageSourceNote } from '../../../desktop/src/main/maker-ipc/messageSourceNote.ts';
+import { FORWARDED_REQUEST_RECEIPT } from '../../../desktop/src/shared/forwardedRequest.ts';
 import { buildClientEnvironmentNote, shouldPrependMobileClientPromptNote } from '../../../desktop/src/main/maker-ipc/mobileClientPromptNote.ts';
 import { AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT } from '@cindy/maker-core';
 import { AUTO_REVIEW_DELEGATED_CONTINUATION, restoreAutoReviewUserIntent } from '../../../desktop/src/main/maker-ipc/autoReviewUserIntent.ts';
@@ -154,9 +155,24 @@ export function createTurnExecutor(deps) {
       // The host-stamped device of a remote input: shown as attribution on the
       // stored row, and told to the model once per message like the desktop does.
       const sourceDevice = readWireSourceDevice(sendOpts.sourceDevice);
-      const deviceNote = sourceDevice && shouldPrependMobileClientPromptNote(message, createOpts.agentKind)
+      const allowsNotes = shouldPrependMobileClientPromptNote(message, createOpts.agentKind);
+      const deviceNote = sourceDevice && allowsNotes
         ? buildClientEnvironmentNote({ device: sourceDevice }) : null;
-      const wireMessage = deviceNote ? prependNoteToWireUserMessage(message, deviceNote) : message;
+      // Who sent it (another task, a teammate, a plugin or App, a shared-task
+      // member) is told to the model only at dispatch, from the same stamped
+      // data the stored row shows; the stored body never contains it.
+      const origin = sendOpts.persistUserMessage;
+      const sourceNote = allowsNotes
+        ? buildWireMessageSourceNote({
+            origin: origin?.origin, sourcePlugin: origin?.sourcePlugin,
+            sharedTaskAuthor: origin?.sharedTaskAuthor, autoReviewUserText: origin?.[FORWARDED_REQUEST_RECEIPT],
+          }, {
+            visibleText: origin?.content !== undefined ? extractPlainText(origin.content).trim() : '',
+            autoResume: origin?.autoResume === true,
+          })
+        : null;
+      const withSource = sourceNote ? prependNoteToWireUserMessage(message, sourceNote) : message;
+      const wireMessage = deviceNote ? prependNoteToWireUserMessage(withSource, deviceNote) : withSource;
       const result = await session.send(wireMessage, { messageUuid: sendOpts.messageUuid,
         ...autoReviewAuthorizationOptions(sendOpts),
         ...(sendOpts.origin ? { origin: sendOpts.origin } : {}),
