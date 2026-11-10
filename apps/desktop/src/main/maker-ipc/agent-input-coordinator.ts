@@ -75,6 +75,7 @@ import type {
 } from '../../shared/agentInputQueue.js';
 import {
   HOST_ONLY_AGENT_PREFIX,
+  appendNoteToMakerUserMessage,
   buildMakerUserMessage,
   getAgentInputAttachmentBlockType,
   getAgentFacingText,
@@ -612,6 +613,16 @@ export interface AgentInputCoordinatorDeps {
    * 否则被丢弃项的暂存条目会永久泄漏。
    */
   onDiscardedQueuedMessage?: (sessionId: string, item: AgentInputQueuedMessage) => void;
+  /**
+   * 排队项派发那一刻，追加在发给模型的 wire 消息末尾的宿主说明；返回 null 不追加。
+   * `pendingQueue` 是该项取出后仍在等待的队列。说明不写回队列项（不进排队正文与落库正文）。
+   * 目前只用于协同消息的 Queue note，见 orcaQueueNote.ts。
+   */
+  describeQueueBehindDispatch?: (
+    sessionId: string,
+    item: AgentInputQueuedMessage,
+    pendingQueue: readonly AgentInputQueuedMessage[],
+  ) => string | null;
   /**
    * 这个会话的失败 turn 正在重试；`source` 区分人工操作与自动续跑。
    *
@@ -5202,6 +5213,29 @@ export class AgentInputCoordinator {
     state.drainWakeupGeneration += 1;
   }
 
+  /** A host note is optional context; building it must never keep the queue head from dispatching. */
+  private describeQueueBehindDispatch(
+    sessionId: string,
+    head: AgentInputQueuedMessage,
+  ): string | null {
+    try {
+      return (
+        this.deps.describeQueueBehindDispatch?.(
+          sessionId,
+          head,
+          this.getState(sessionId).pendingQueue,
+        ) ?? null
+      );
+    } catch (error) {
+      log.warn('queue note skipped', {
+        sessionId,
+        clientId: head.clientId,
+        errorName: error instanceof Error ? error.name : typeof error,
+      });
+      return null;
+    }
+  }
+
   private async drain(sessionId: string, reason: string): Promise<void> {
     const state = this.getState(sessionId);
     const compact = this.getDrainableCompact(sessionId, state);
@@ -5372,6 +5406,12 @@ export class AgentInputCoordinator {
         referenceContexts,
       );
       const makerUserMessage = buildMakerUserMessage(head, referenceContexts);
+      // Wire-only: derived from the live queue at this dispatch. The queue item and the stored
+      // replay copy (agentFacingWireContent, readable through history) never carry it.
+      const wireUserMessage = appendNoteToMakerUserMessage(
+        makerUserMessage,
+        this.describeQueueBehindDispatch(sessionId, head),
+      );
       active.sendStarted = true;
       active.dispatchLifecycle = 'sending';
       // Freeze side-effect timestamps before entering vendor code. A dispatch
@@ -5379,7 +5419,7 @@ export class AgentInputCoordinator {
       // post-dispatch acknowledgements must remain older than that marker.
       const preVendorDispatchAt = Math.max(0, Date.now() - 1);
       const appMessageGuard = queuedAppMessageGuard(head);
-      const result = await this.deps.sendToAgent(sessionId, makerUserMessage, head.createOpts, {
+      const result = await this.deps.sendToAgent(sessionId, wireUserMessage, head.createOpts, {
         ...(appMessageGuard || taskActionGuard ? { [MCP_APP_MESSAGE_GUARD]: async () => {
           try {
             await appMessageGuard?.();

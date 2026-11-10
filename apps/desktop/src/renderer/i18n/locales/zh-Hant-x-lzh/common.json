@@ -858,7 +858,7 @@
       },
       "runningCount_other": "{{count}} 件差事方行",
       "limitAria": "{{name}} 之並行上限",
-      "limitOption_other": "至多 {{count}}",
+      "limitOption_other": "並行 {{count}}",
       "weightAria": "{{name}} 之權重",
       "weightOption": "輕重 {{weight}}",
       "assignAria": "分差事予 {{name}}",

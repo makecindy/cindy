@@ -858,7 +858,7 @@
       },
       "runningCount_other": "{{count}} 個任務執行中",
       "limitAria": "{{name}} 的並行上限",
-      "limitOption_other": "上限 {{count}}",
+      "limitOption_other": "同時 {{count}}",
       "weightAria": "{{name}} 的權重",
       "weightOption": "權重 {{weight}}",
       "assignAria": "給 {{name}} 分配任務",

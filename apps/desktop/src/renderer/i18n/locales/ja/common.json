@@ -858,7 +858,7 @@
       },
       "runningCount_other": "{{count}} 件実行中",
       "limitAria": "{{name}} の同時実行数の上限",
-      "limitOption_other": "上限 {{count}}",
+      "limitOption_other": "同時 {{count}}",
       "weightAria": "{{name}} の重み",
       "weightOption": "重み {{weight}}",
       "assignAria": "{{name}} に割り当てる",
