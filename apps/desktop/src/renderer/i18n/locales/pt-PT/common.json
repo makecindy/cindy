@@ -6855,6 +6855,7 @@
         "renameFailed": "Não foi possível mudar o nome",
         "deleted": "Dispositivo eliminado",
         "deleteOnline": "Este servidor ainda não permite remover dispositivos online. Tente novamente após a atualização do serviço.",
+        "deleteRejectedWhileOffline": "Não foi possível eliminar o dispositivo: o servidor ainda o regista como online, embora apareça offline aqui.",
         "deleteFailed": "Falha ao eliminar",
         "disconnected": "Todas as ligações remotas desligadas",
         "disconnectFailed": "Falha ao desligar a ligação remota",
