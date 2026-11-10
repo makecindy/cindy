@@ -511,12 +511,18 @@ export function syncPushRegistration(opts: {
   return runPushMutation(async () => {
     const scope = capturePushStateScope(getActiveMobileSessionRealm());
     const registration: PushRegistrationStatus = { version: 1, at: Date.now(), realm: scope.legacyRealm, stage: 'starting' };
-    if (opts.enabled) await saveRegistrationStatus(registration, scope);
+    // A token-listener callback that dedupes or is fenced must not replace the evidence
+    // of the registration attempt that triggered it.
+    const fromTokenEvent = !!opts.deviceToken;
+    let advanced = !fromTokenEvent;
+    if (opts.enabled && !fromTokenEvent) await saveRegistrationStatus(registration, scope);
     try {
       const result = await syncPushRegistrationInternal(opts, lifecycleGeneration, registration, scope, owner);
+      advanced ||= registration.stage !== 'starting';
       registration.stage = result;
       return result;
     } catch (error: unknown) {
+      advanced ||= registration.stage !== 'starting';
       const status = httpErrorStatus(error);
       registration.stage = `failed:${registration.stage}`;
       // Only structured, non-secret diagnostics. Never log a token, request body or raw error.
@@ -524,7 +530,7 @@ export function syncPushRegistration(opts: {
         ...(typeof status === 'number' ? { status } : {}) });
       throw error;
     } finally {
-      if (opts.enabled) await saveRegistrationStatus({ ...registration, at: Date.now() }, scope);
+      if (opts.enabled && advanced) await saveRegistrationStatus({ ...registration, at: Date.now() }, scope);
     }
   });
 }

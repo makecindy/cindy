@@ -142,6 +142,23 @@ describe('push notification realm routing', () => {
     expect(raw).not.toContain('https://');
   });
 
+  // Codex review r4525113907: the deduped token-listener callback queued by the bootstrap
+  // read used to overwrite the real result with a bare `skipped` record.
+  it('keeps the registration result when the queued token event is deduplicated', async () => {
+    const apiFetch = vi.fn().mockResolvedValue({ registered: true });
+    const events: Promise<unknown>[] = [];
+    mocks.getDevicePushTokenAsync.mockImplementation(async () => {
+      const token = { type: 'ios' as const, data: 'apns-device-token' };
+      events.push(syncPushRegistration({ enabled: true, apiFetch, deviceToken: token }));
+      return token;
+    });
+    await syncPushRegistration({ enabled: true, apiFetch });
+    await Promise.all(events.splice(0));
+    const record = JSON.parse(store.get('cindy.push.lastRegistration')!);
+    expect(record).toMatchObject({ stage: 'registered', apnsEnv: 'sandbox' });
+    expect(record.endpoints).toEqual(expect.arrayContaining([{ service: 'device-link', outcome: 'accepted' }]));
+  });
+
   it('records native failure before HTTP and replaces it after a successful retry', async () => {
     mocks.getDevicePushTokenAsync.mockRejectedValueOnce(new Error('private native details'));
     const apiFetch = vi.fn().mockResolvedValue({ registered: true });
