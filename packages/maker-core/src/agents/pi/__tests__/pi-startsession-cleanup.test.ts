@@ -427,6 +427,40 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     } finally { await handle.close(); }
   });
 
+  it('exposes project resource drift on the handle for local root tasks', async () => {
+    const agent = new PiAgent(buildDeps());
+    mkdirSync(path.join(cwd, '.pi', 'skills', 'alpha'), { recursive: true });
+    writeFileSync(path.join(cwd, '.pi', 'skills', 'alpha', 'SKILL.md'), '---\nname: alpha\n---\n');
+    const handle = await agent.startSession({ ...opts(), sessionId: 'resource-drift' });
+    try {
+      expect(repeatedArgValues(knobs.spawnedArgs.at(-1)!, '--skill'))
+        .toContain(path.join(cwd, '.pi', 'skills', 'alpha'));
+      expect(handle.hasProjectResourceDrift?.()).toBe(false);
+      mkdirSync(path.join(cwd, '.pi', 'skills', 'beta'), { recursive: true });
+      writeFileSync(path.join(cwd, '.pi', 'skills', 'beta', 'SKILL.md'), '---\nname: beta\n---\n');
+      expect(handle.hasProjectResourceDrift?.()).toBe(true);
+      rmSync(path.join(cwd, '.pi', 'skills', 'beta'), { recursive: true, force: true });
+      expect(handle.hasProjectResourceDrift?.()).toBe(false);
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it('never reports project resource drift for bot profiles', async () => {
+    const agent = new PiAgent(buildDeps());
+    const handle = await agent.startSession({ ...opts(), sessionId: 'bot-no-drift', botRuntimeProfile: {
+      botId: 'bot', profileVersion: 1,
+      skillPolicy: { mode: 'allowlist', configured: [], catalog: [] },
+      mcpPolicy: { mode: 'allowlist', configured: [], catalog: [] },
+      toolsetPolicy: { mode: 'allowlist', configured: [], catalog: [] },
+    } });
+    try {
+      expect(handle.hasProjectResourceDrift?.()).toBe(false);
+    } finally {
+      await handle.close();
+    }
+  });
+
   it('disposes ctx (and does not close a nonexistent proc) when the process constructor throws synchronously', async () => {
     knobs.ctorThrows = true;
     const agent = new PiAgent(buildDeps());

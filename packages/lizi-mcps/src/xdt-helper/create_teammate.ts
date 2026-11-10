@@ -7,6 +7,8 @@ import { errorPayload, okPayload } from './_payload.js';
 export interface CreateTeammateCallbacks {
   create(params: {
     callerSessionId: string;
+    /** This turn's runtime instance; lets the host check who started the turn on IM lanes. */
+    callerSessionInstanceId?: string;
     name: string;
     description: string;
     identitySource: string;
@@ -24,7 +26,7 @@ export function registerCreateTeammateTool(
   registry.register({
     name: 'create_teammate',
     category: 'bots',
-    description: "Create a new Cindy Bot teammate directly when the user asks for one. Do not write a template file or tell the user to create it manually. Only a name is required. Follow the user’s Cindy default model chain and shared Bot baseline. Leave unspecified identity details open; the new teammate speaks for itself using its own runtime and memory. The returned bot id can be read with inspect_teammate_configuration. Available to ordinary local tasks and teammates. Creation uses the native invitation; while its chat is preparing, configuration remains readable and its model choice can be repaired. Runtime status not-prepared is not a reason to recreate the teammate. Creation does not start a delegated task.",
+    description: "Create a new Cindy Bot teammate directly when the user asks for one. Do not write a template file or tell the user to create it manually. Only a name is required. Follow the user’s Cindy default model chain and shared Bot baseline. Leave unspecified identity details open; the new teammate speaks for itself using its own runtime and memory. The returned bot id can be read with inspect_teammate_configuration. Available to ordinary local tasks and teammates. Creation uses the native invitation; while its chat is preparing, configuration remains readable and its model choice can be repaired. Runtime status not-prepared is not a reason to recreate the teammate. To message it, take its main chat session_id from list_agents and use send_to_session; creation alone does not start hidden work.",
     inputShape: {
       name: z.string().min(1).max(200).describe('Display name for the new teammate.'),
       description: z.string().max(4000).optional().describe('Role or purpose, only if the user supplied it.'),
@@ -41,8 +43,10 @@ export function registerCreateTeammateTool(
       if (!callerSessionId) {
         return errorPayload('NO_SESSION_CONTEXT', '当前调用未绑定任务。');
       }
+      const callerSessionInstanceId = deps.getSessionContext().sessionInstanceId;
       const result = await deps.callbacks.create({
         callerSessionId,
+        ...(callerSessionInstanceId ? { callerSessionInstanceId } : {}),
         name: name.trim(),
         description: description?.trim() ?? '',
         identitySource: identity_source?.trim() ?? '',

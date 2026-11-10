@@ -284,15 +284,14 @@ describe('codexHttpBridge', () => {
 
   it.each(['codex', 'claude-code'] as const)('serves live remote introspection and keeps Bot tasks scoped over the %s helper route', async (agentKind) => {
     let surface: 'bot' | 'default' = 'bot';
-    const start = vi.fn(async () => ({ ok: true as const, delegationId: 'remote-task', childSessionId: 'child-session', status: 'running', deadlineAt: 1000 }));
-    const unavailable = vi.fn(async () => ({ ok: false as const, errorCode: 'UNEXPECTED', message: 'unused' }));
+    const start = vi.fn(async () => ({ ok: true as const, agents: [{ id: 'remote-task' }], unavailableDevices: [] }));
     const machines = { computers: [{ name: 'Desktop', availability: 'online' }], ssh: [] };
     const listMachines = vi.fn(async () => ({ ok: true as const, machines }));
     bridge = await startCodexHttpBridge({
       serverFactories: { cindy_helper: () => createXdtHelperMcpServer({
         resolveSurface: async () => surface,
         machines: { list: listMachines },
-        sessionTasks: { startSessionTask: start, getSessionTask: unavailable, messageSessionTask: unavailable, stopSessionTask: unavailable },
+        botMessaging: { listAgents: start },
       }, { agentKind, workingDir: '', getSessionContext: getLiziMcpSessionContext }) },
       pluginIdByServerName: { cindy_helper: 'xdt_helper' },
       additionalBearerTokens: () => ['remote-test-token'],
@@ -329,11 +328,9 @@ describe('codexHttpBridge', () => {
     });
     const list = async () => readRpcResponse(await request('tools/list')) as Promise<{ result: { tools: Array<{ name: string }> } }>;
     await current.withDiscoveryContext(ctx, async () => {
-      expect((await list()).result.tools.map(t => t.name)).toEqual(expect.arrayContaining([
-        'start_session_task', 'check_session_task', 'message_session_task', 'stop_session_task',
-      ]));
+      expect((await list()).result.tools.map(t => t.name)).toEqual(expect.arrayContaining(['list_agents']));
       if (agentKind === 'codex') {
-        const denied = await request('tools/call', { name: 'start_session_task', arguments: { instruction: 'too early' } });
+        const denied = await request('tools/call', { name: 'list_agents', arguments: {} });
         expect(denied.status).toBe(401);
         await denied.text();
       }
@@ -342,11 +339,11 @@ describe('codexHttpBridge', () => {
     const firstList = await list();
     expect((await list()).result).toEqual(firstList.result);
     const result = await readRpcResponse(await request('tools/call', {
-      name: 'start_session_task', arguments: { project_path: '/project', instruction: 'Build the report' },
+      name: 'list_agents', arguments: {},
       ...(agentKind === 'codex' ? { _meta: { threadId: 'remote-thread' } } : {}),
     }));
     expect(result).toMatchObject({ result: { content: [{ type: 'text', text: expect.stringContaining('remote-task') }] } });
-    expect(start).toHaveBeenCalledWith(expect.objectContaining({ callerSessionId: 'remote-bot', objective: 'Build the report' }));
+    expect(start).toHaveBeenCalledWith({ callerSessionId: 'remote-bot' });
     // The ordinary remote surface retains Cindy introspection, but not local controls or Bot-only tasks.
     surface = 'default';
     expect((await list()).result.tools.map(t => t.name).sort()).toEqual(['call_tool', 'list_machines', 'list_tools']);
@@ -366,7 +363,7 @@ describe('codexHttpBridge', () => {
       name: 'call_tool', arguments: { name: 'get_current_session_id', args: {} },
     }));
     expect(introspection).toMatchObject({ result: { content: [{ text: expect.stringContaining('remote-bot') }] } });
-    await request('tools/call', { name: 'start_session_task', arguments: { instruction: 'denied' } }).then(readRpcResponse);
+    await request('tools/call', { name: 'list_agents', arguments: {} }).then(readRpcResponse);
     expect(start).toHaveBeenCalledTimes(1);
     if (agentKind === 'codex') {
       // A remote token cannot borrow a local or Pi context to get the broad helper surface.

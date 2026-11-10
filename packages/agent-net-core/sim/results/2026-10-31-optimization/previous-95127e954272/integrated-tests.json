@@ -1,0 +1,15 @@
+{
+  "command": [
+    "cargo",
+    "test",
+    "--profile",
+    "sim",
+    "--workspace",
+    "--features",
+    "agent-net-sim/kcp",
+    "--locked",
+    "--offline"
+  ],
+  "exit": 0,
+  "seconds": 110.21
+}

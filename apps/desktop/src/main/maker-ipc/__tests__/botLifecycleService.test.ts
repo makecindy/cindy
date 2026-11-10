@@ -2,7 +2,6 @@ import Database from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Maker } from '@cindy/maker-core';
-import { RoutineEngine } from '@cindy/maker-scheduler';
 
 const h = vi.hoisted(() => ({
   broadcastRemoteResourceChanged: vi.fn(),
@@ -25,6 +24,9 @@ vi.mock('../botRemoteResourceInvalidation.js', () => ({
 }));
 
 import { createBotLifecycleService } from '../botLifecycleService.js';
+import { teammateWorkspaceDir } from '../botProjectMemory.js';
+import { ownerScopedUserDataPath } from '../../appSessionState.js';
+import { normalizeRecentWorkdirPath } from '../../localDb/ipc/recentWorkdirsCore.js';
 import { tx as runWorkerTx } from '../../localDb/worker/opHandlers/tx.js';
 
 function createDatabase(): Database.Database {
@@ -34,8 +36,12 @@ function createDatabase(): Database.Database {
       id TEXT PRIMARY KEY,
       source TEXT NOT NULL,
       status TEXT NOT NULL,
-      updated_at INTEGER NOT NULL
+      updated_at INTEGER NOT NULL,
+      working_dir TEXT,
+      project_dir TEXT
     );
+    -- Same columns as the real table: the Windows removal reads last_used_at.
+    CREATE TABLE recent_workdirs (path TEXT PRIMARY KEY, last_used_at INTEGER NOT NULL DEFAULT 0);
     CREATE TABLE bot_profiles (
       id TEXT PRIMARY KEY,
       display_name TEXT NOT NULL,
@@ -82,7 +88,7 @@ function createDatabase(): Database.Database {
     INSERT INTO bot_session_links VALUES
       ('link-canonical', 'bot-1', 'canonical', 1, 'canonical', NULL, 1, NULL),
       ('link-delegation', 'bot-1', 'delegation-session', 1, 'delegation', 'delegation:d-1', 1, NULL);
-    INSERT INTO sessions VALUES
+    INSERT INTO sessions (id, source, status, updated_at) VALUES
       ('canonical', 'bot', 'active', 1),
       ('delegation-session', 'bot', 'active', 1);
   `);
@@ -96,7 +102,6 @@ function row(sqlite: Database.Database, table: string, id: string) {
 describe('Bot lifecycle coordinator', () => {
   let sqlite: Database.Database;
   let closeSession: ReturnType<typeof vi.fn>;
-  let cancelDelegationsForBot: ReturnType<typeof vi.fn>;
   let deleteProfileAndDetachSessions: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
@@ -106,7 +111,6 @@ describe('Bot lifecycle coordinator', () => {
     h.db = db;
     h.tx = async (name, args) => runWorkerTx(sqlite, { name: name as never, args } as never);
     closeSession = vi.fn(async () => undefined);
-    cancelDelegationsForBot = vi.fn(async () => 2);
     deleteProfileAndDetachSessions = vi.fn(async (
       botId: string,
       sessionIds: string[],
@@ -124,7 +128,6 @@ describe('Bot lifecycle coordinator', () => {
   function service(hooks: Partial<import('../botLifecycleService.js').BotLifecycleServiceDeps> = {}) {
     return createBotLifecycleService({
       maker: { closeSession } as unknown as Maker,
-      getDelegationService: () => ({ cancelDelegationsForBot } as never),
       deleteProfileAndDetachSessions,
       now: () => 10,
       ...hooks,
@@ -142,7 +145,6 @@ describe('Bot lifecycle coordinator', () => {
     expect(row(sqlite, 'sessions', 'canonical').status).toBe('active');
     expect(row(sqlite, 'bot_profiles', 'bot-1').canonical_session_id).toBe('canonical');
     expect(closeSession).not.toHaveBeenCalled();
-    expect(cancelDelegationsForBot).not.toHaveBeenCalled();
     expect(deleteProfileAndDetachSessions).not.toHaveBeenCalled();
   });
 
@@ -171,7 +173,7 @@ describe('Bot lifecycle coordinator', () => {
     expect(restartRuntime).not.toHaveBeenCalled();
   });
 
-  it('awaits routine pause/resume and keeps permanent deletion retryable until cleanup succeeds', async () => {
+  it('awaits pause/resume hooks and keeps permanent deletion retryable until cleanup succeeds', async () => {
     const onPaused = vi.fn(async () => {
       expect(row(sqlite, 'bot_profiles', 'bot-1').status).toBe('paused');
     });
@@ -180,7 +182,7 @@ describe('Bot lifecycle coordinator', () => {
     });
     const onBeforeDelete = vi.fn<() => Promise<void>>(async () => {
       expect(row(sqlite, 'bot_profiles', 'bot-1')).toBeDefined();
-      throw new Error('routine cleanup failed');
+      throw new Error('cleanup failed');
     });
     const lifecycle = service({ onPaused, onResumed, onBeforeDelete });
     await lifecycle.run({ botId: 'bot-1', action: 'pause' });
@@ -188,7 +190,7 @@ describe('Bot lifecycle coordinator', () => {
     expect(onPaused).toHaveBeenCalledOnce();
     expect(onResumed).toHaveBeenCalledOnce();
     const request = { botId: 'bot-1', action: 'delete' as const, confirmName: 'Helper' };
-    await expect(lifecycle.run(request)).rejects.toThrow('routine cleanup failed');
+    await expect(lifecycle.run(request)).rejects.toThrow('cleanup failed');
     expect(deleteProfileAndDetachSessions).not.toHaveBeenCalled();
     expect(row(sqlite, 'bot_profiles', 'bot-1').status).toBe('archived');
     onBeforeDelete.mockResolvedValue(undefined);
@@ -206,50 +208,11 @@ describe('Bot lifecycle coordinator', () => {
         "SELECT session_id FROM bot_lifecycle_events WHERE event_type = 'pause-requested'",
       ).get(),
     ).toEqual({ session_id: 'canonical' });
-    expect(cancelDelegationsForBot).toHaveBeenCalledWith('bot-1', expect.any(String));
     expect(closeSession).toHaveBeenCalledTimes(2);
     expect(closeSession).toHaveBeenCalledWith('canonical');
     expect(closeSession).toHaveBeenCalledWith('delegation-session');
-    expect(result).toMatchObject({ status: 'paused', affected: { sessions: 2, delegations: 2 } });
+    expect(result).toMatchObject({ status: 'paused', affected: { sessions: 2, delegations: 0 } });
     expect(h.broadcastRemoteResourceChanged).toHaveBeenCalledWith('bot-1');
-  });
-
-  it('retains paused routines and history across a failed profile deletion, then purges after retry commits', async () => {
-    let nextId = 0;
-    const engine = new RoutineEngine({
-      load: async () => null, save: async () => {}, execute: async () => ({}),
-      id: () => `fixture-${++nextId}`, now: () => 1000, changed: () => {},
-      onError: error => { throw error; },
-    });
-    await engine.start();
-    try {
-      const routine = await engine.put('bot-1', {
-        name: 'Report', prompt: 'Read data', enabled: true,
-        triggers: [{ id: 'tick', kind: 'interval', intervalMs: 60000 }],
-      });
-      await engine.runNow('bot-1', routine.id);
-      await vi.waitFor(() => expect(engine.history(routine.id)[0].status).toBe('success'));
-      const history = engine.history(routine.id);
-      const onDeleted = vi.fn(async (botId: string) => {
-        expect(row(sqlite, 'bot_profiles', botId)).toBeUndefined();
-        await engine.removeBot(botId);
-      });
-      const lifecycle = service({
-        onBeforeDelete: botId => engine.setBotPaused(botId, true), onDeleted,
-      });
-      const request = { botId: 'bot-1', action: 'delete' as const, confirmName: 'Helper' };
-      deleteProfileAndDetachSessions.mockRejectedValueOnce(new Error('fixture SQLite write failure'));
-      await expect(lifecycle.run(request)).rejects.toThrow('fixture SQLite write failure');
-      expect(row(sqlite, 'bot_profiles', 'bot-1').status).toBe('archived');
-      expect(engine.list('bot-1')).toHaveLength(1);
-      expect(engine.history(routine.id)).toEqual(history);
-      await expect(engine.runNow('bot-1', routine.id)).rejects.toThrow('paused');
-      expect(onDeleted).not.toHaveBeenCalled();
-      await expect(lifecycle.run(request)).resolves.toMatchObject({ status: 'deleted' });
-      expect(onDeleted).toHaveBeenCalledOnce();
-      expect(engine.list('bot-1')).toEqual([]);
-      expect(engine.history(routine.id)).toEqual([]);
-    } finally { await engine.stop(); }
   });
 
   it('reports committed deletion truthfully when post-commit secret cleanup needs retry', async () => {
@@ -326,7 +289,6 @@ describe('Bot lifecycle coordinator', () => {
 
     await expect(lifecycle.run({ botId: 'bot-1', action: 'pause' })).rejects.toThrow('已被另一处操作更新');
     expect(row(sqlite, 'bot_profiles', 'bot-1').status).toBe('active');
-    expect(cancelDelegationsForBot).not.toHaveBeenCalled();
     expect(closeSession).not.toHaveBeenCalled();
   });
 
@@ -401,6 +363,7 @@ describe('Bot lifecycle coordinator', () => {
       'bot-1',
       expect.arrayContaining(['canonical', 'delegation-session']),
       true,
+      [],
     );
     expect(row(sqlite, 'sessions', 'canonical')).toMatchObject({
       source: 'desktop',
@@ -421,7 +384,32 @@ describe('Bot lifecycle coordinator', () => {
       'bot-1',
       expect.arrayContaining(['canonical', 'delegation-session']),
       false,
+      [],
     );
     expect(result).toMatchObject({ action: 'delete', status: 'deleted' });
+  });
+
+  // Tier: behavior. Deleting a teammate left its project in the project list and the tasks in it
+  // (automation runs, tasks it opened there) in the task list (2026-11-10).
+  it('takes the teammate project and the tasks in it along when deleting', async () => {
+    const project = teammateWorkspaceDir(ownerScopedUserDataPath(), 'bot-1');
+    sqlite.prepare('INSERT INTO sessions (id, source, status, updated_at, working_dir, project_dir) VALUES (?, ?, ?, 1, ?, ?)')
+      .run('automation-run', 'scheduler', 'active', project, null);
+    sqlite.prepare('INSERT INTO sessions (id, source, status, updated_at, working_dir, project_dir) VALUES (?, ?, ?, 1, ?, ?)')
+      .run('opened-task', 'desktop', 'active', `${project}/notes`, project);
+    sqlite.prepare('INSERT INTO sessions (id, source, status, updated_at, working_dir, project_dir) VALUES (?, ?, ?, 1, ?, ?)')
+      .run('neighbour', 'desktop', 'active', `${project}-other`, `${project}-other`);
+    // Stored the way the project list stores them (forward slashes on Windows too).
+    const listed = [project, `${project}-other`].map(dir => normalizeRecentWorkdirPath(dir)!);
+    sqlite.prepare('INSERT INTO recent_workdirs (path) VALUES (?), (?)').run(...listed);
+
+    const result = await service().run({ botId: 'bot-1', action: 'delete', confirmName: 'Helper', keepTaskHistory: false });
+
+    expect(deleteProfileAndDetachSessions).toHaveBeenCalledWith('bot-1', expect.arrayContaining(['canonical']), false,
+      ['automation-run', 'opened-task']);
+    expect(closeSession).toHaveBeenCalledWith('automation-run');
+    expect(closeSession).not.toHaveBeenCalledWith('neighbour');
+    expect(sqlite.prepare('SELECT path FROM recent_workdirs').pluck().all()).toEqual([listed[1]]);
+    expect(result).toMatchObject({ status: 'deleted', affected: { sessions: 4 } });
   });
 });

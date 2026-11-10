@@ -13,6 +13,8 @@ export interface TeammateConfigurationPatch {
 
 export interface TeammateConfiguration {
   scope: 'local';
+  /** V2 inherits ordinary project/machine resources; references below are legacy saved data. */
+  project: { workingDir: string | null } | null;
   // Target inspection intentionally excludes the caller-only user context and memory.
   profile: { id: string; name: string; description: string; identitySource: string; version: number; avatar: string; avatarColor: string };
   model: { source: 'default' | 'override'; candidates: AppDefaultModelRoute[] | null };
@@ -21,7 +23,7 @@ export interface TeammateConfiguration {
     mcpServers: { mode: 'inherit' | 'allowlist'; ids: string[] };
     toolsets: { mode: 'inherit' | 'allowlist'; ids: string[] };
   };
-  catalog?: { kind: 'skill' | 'mcp' | 'toolset'; status: 'available' | 'unavailable'; message?: string; entries: { id: string; name: string; description: string; available: boolean; joined: boolean }[] };
+  catalog?: { kind: 'skill' | 'mcp' | 'toolset'; status: 'available' | 'unavailable'; message?: string; entries: { id: string; name: string; description: string; available: boolean; joined: boolean; cindyOfficial?: boolean }[] };
   runtime: { profileVersion: number | null; status: string | null; matchesSavedVersion: boolean };
 }
 
@@ -79,8 +81,7 @@ export interface BotCapabilityCallbacks {
 }
 
 /**
- * `feature` covers this teammate's own switches: `memory` and the system Skills
- * (`todo`, `routine`, `follow`). The others reference shared installations.
+ * `feature` covers this teammate's own `memory` switch. The others reference shared installations.
  */
 export type TeammateCapabilityKind = "skill" | "mcp" | "toolset" | "feature";
 
@@ -101,14 +102,12 @@ export interface BotControlState {
   session: { id: string; workingDir: string | null; remoteHostId: string | null };
   model: { source: "override" | "default"; candidates: { harness: string; providerId?: string | null; model: string }[] };
   memory: { enabled: boolean; scope: "self" };
-  /** System Skills this teammate turned off; the rest are on. */
-  systemSkillsOff?: string[];
   references: { skills: string[]; mcpServers: string[]; toolsets: string[] };
 }
 
 /** Shared by the core prompt's self-knowledge and the profile tools' descriptions; details live in read_teammate_skill. */
 export const TEAMMATE_CONTROL_GUIDANCE = [
-  'Use `get_teammate_state` to inspect your profile, stable chat, configured model candidates, memory switch, turned-off system Skills and capability references. Candidates and references are not proof of the model or tools running this turn; the live runtime and registered tools are authoritative. Empty references do not mean you have no Skills: the shared core and your personal shelf are separate.',
+  'Use `get_teammate_state` to inspect your profile, stable chat, configured model candidates, memory switch and capability references. Candidates and references are not proof of the model or tools running this turn; the live runtime and registered tools are authoritative. Empty references do not mean you have no Skills: the shared core and your personal shelf are separate.',
   'Use `update_teammate_profile` when the user asks to change your name, introduction, identity or your own model selection. Read the current version first and patch only the requested fields; for modelChain read `get_app_default_model` first and supply the complete ordered chain (1–5 routes), or null to follow the application default. Saves apply next turn and never change the application default, other teammates, Skills, memory or chat history. Details: `read_teammate_skill` name=models.',
 ].join('\n');
 
@@ -116,7 +115,7 @@ export const TEAMMATE_CONTROL_GUIDANCE = [
 export const BOT_CONTROL_GUIDANCE = TEAMMATE_CONTROL_GUIDANCE;
 
 const FIND_BOT_CAPABILITIES_CORE =
-  "按需查找应用已有的 Skill、MCP 连接或内置工具集，返回可用性和当前伙伴是否已加入；kind=feature 列出自己的记忆与系统技能开关。";
+  "按需查找应用已有的 Skill、MCP 连接或内置工具集，返回可用性和当前伙伴是否已加入；kind=feature 列出自己的记忆开关。";
 const FIND_BOT_CAPABILITIES_PLUGIN_SENTENCE =
   "插件用已安装插件网关的 ghost_list / ghost_info 发现并直接按现有授权调用。";
 
@@ -166,7 +165,7 @@ export function registerBotCapabilityTools(
   const botId = z.string().regex(/^[A-Za-z0-9_-]{1,128}$/).describe('Local stable botId from list_teammates or create_teammate.');
   if (deps.callbacks.inspectConfiguration) registry.register({
     name: 'inspect_teammate_configuration', category: 'bots',
-    description: '读取本机指定伙伴已保存的资料、版本、模型偏好、能力引用与运行版本。先用 list_teammates 获取稳定 id。默认不加载能力目录；需要时用 catalog 单独查询目标的 skill/mcp/toolset，目录失败不隐藏已保存的配置。model.candidates=null 表示跟随默认，可用型号另查 get_app_default_model。普通任务和伙伴均可用，不读取记忆、用户画像或连接凭证。',
+    description: '读取本机指定伙伴已保存的资料、版本、模型偏好、能力引用与运行版本。先用 list_teammates 获取稳定 id。默认不加载能力目录；需要时用 catalog 单独查询目标的 skill/mcp/toolset，目录失败不隐藏已保存的配置。project 非 null 表示伙伴项目模式，workingDir 是已准备的主任务目录（准备中可为 null），能力从项目与本机继承，references 仅为旧保存值。model.candidates=null 表示跟随默认，可用型号另查 get_app_default_model。普通任务和伙伴均可用，不读取记忆、用户画像或连接凭证。',
     inputShape: { botId, catalog: z.enum(['skill', 'mcp', 'toolset']).optional() },
     handler: async (input) => {
       const callerSessionId = deps.getSessionContext().sessionId;
@@ -177,7 +176,7 @@ export function registerBotCapabilityTools(
   });
   if (deps.callbacks.updateConfiguration) registry.register({
     name: 'update_teammate_configuration', category: 'bots',
-    description: '按已确定的设计修改指定伙伴。先 inspect_teammate_configuration，提交读取时的 expectedVersion 和局部 patch；冲突后先重新读取，不覆盖新修改。modelChain 使用 get_app_default_model 的有效 id，null 恢复默认。references 只引用已有能力；mcpServers/toolsets 的 null 恢复继承，数组是完整显式名单，省略保持原选择。保存与实际采用分开：deferred 表示等待目标安全运行边界，unconfirmed 表示后续同步未确认；回执不证明真实工具已装载。不修改权限、记忆、私有技能、例行任务。',
+    description: '按已确定的设计修改指定伙伴。先 inspect_teammate_configuration，提交读取时的 expectedVersion 和局部 patch；冲突后先重新读取，不覆盖新修改。modelChain 使用 get_app_default_model 的有效 id，null 恢复默认。伙伴项目模式拒绝 references patch；项目规则和方法使用已核实 project.workingDir 下的 AGENTS.md、.agents/skills，本机资源沿原生设置管理。仅旧版非项目伙伴可用 references 引用已有能力；mcpServers/toolsets 的 null 恢复继承，数组是完整显式名单，省略保持。保存与实际采用分开：deferred 表示等待目标安全运行边界，unconfirmed 表示后续同步未确认；回执不证明真实工具已装载。此接口不修改权限、记忆、项目文件或自动化。',
     inputShape: {
       botId, expectedVersion: z.number().int().positive(),
       patch: z.strictObject({
@@ -256,7 +255,7 @@ export function registerBotCapabilityTools(
     name: "set_teammate_capability",
     category: "bots",
     description:
-      "把查到的已有能力加入当前伙伴，或从当前伙伴移除。复用应用已有安装和连接，不修改共享源、凭证或全局开关。kind=feature 开关自己的记忆（memory）与系统技能（todo、routine、follow），只在主人要求时使用。新挂载在下一轮生效；当前轮不要声称已有尚未挂载的工具。",
+      "把查到的已有能力加入当前伙伴，或从当前伙伴移除。复用应用已有安装和连接，不修改共享源、凭证或全局开关。kind=feature 开关自己的记忆（memory），只在主人要求时使用。新挂载在下一轮生效；当前轮不要声称已有尚未挂载的工具。",
     inputShape: { kind, id: z.string().min(1).max(512), joined: z.boolean() },
     handler: async (input) => {
       const callerSessionId = deps.getSessionContext().sessionId;
@@ -285,7 +284,7 @@ export function registerAppDefaultModelTools(
 ): void {
   if (deps.callbacks.models) registry.register({
     name: 'get_app_default_model', category: deps.category ?? 'bots',
-    description: '读取当前用户在应用中选择的默认模型，以及已连接、已启用且引擎可用的型号。修改默认模型或为 start_session_task 单独选模前先读此表；查询不会更改设置。将 available 中的 id 用于 model_selection，它同时绑定型号、来源账号与引擎；不要猜型号或启用用户关闭的型号。伙伴显式配置的模型链可能与此默认值不同。',
+    description: '读取当前用户在应用中选择的默认模型，以及已连接、已启用且引擎可用的型号。修改默认模型前先读此表；查询不会更改设置。available 中的 id 同时绑定型号、来源账号与引擎；不要猜型号或启用用户关闭的型号。伙伴显式配置的模型链可能与此默认值不同。',
     inputShape: {},
     handler: async () => {
       const callerSessionId = deps.getSessionContext().sessionId;

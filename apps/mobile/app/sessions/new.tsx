@@ -678,6 +678,8 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
     // Worker 默认跟任务(Lead)的 Agent 所在电脑。
     leadAgentDeviceId: remoteAgentPick?.deviceId ?? null,
     agentLocationSelectable: workerAgentLocationSupported,
+    // 任务还没建：没有可审查、可测试的工作，内置角色不带出自带的首条任务。
+    leadHasWork: false,
   });
   const collabTarget = useMemo(() => ({
     orcaRole: null,
@@ -5766,9 +5768,9 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
             label={t('session.collab.draftSubmit')}
             onPress={() => {
               // 与桌面新建任务一样:确认协同草稿即记住这次的 Worker 选择。
-              collabForm.remember(collabForm.form);
+              collabForm.remember(collabForm.submission);
               collabDraftTargetRef.current = collabTargetKey;
-              setCollabDraft(collabForm.form);
+              setCollabDraft(collabForm.submission);
               setContextSheetView('main');
               setContextSheetOpen(false);
             }}
@@ -5875,12 +5877,16 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
               executionDevicesError={collabForm.executionDevicesError}
               busy={creating}
               customRoleMode={collabForm.customRoleMode}
+              description={t('session.collab.enableHint')}
               form={collabForm.form}
               notice={orcaCollabEntryHint(collabEntryStatus)}
               onAgentChange={collabForm.changeAgent}
               onChange={collabForm.patch}
-              onCustomRoleModeChange={collabForm.setCustomRoleMode}
               onPermissionChange={(mode) => void collabForm.changePermission(mode)}
+              onRemoveRole={collabForm.removeRole}
+              onSelectRole={collabForm.selectRole}
+              roles={collabForm.roles}
+              rolesEditable={collabForm.rolesEditable}
               onPickModel={collabForm.modelPicker.openPicker}
               onPickDirectory={collabForm.directoryPicker.openPicker}
             />

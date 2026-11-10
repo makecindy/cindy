@@ -63,7 +63,7 @@ function registerController(controller: RsbWindowController) {
     isDestroyed: () => false,
     webContents: mainWebContents,
   } as unknown as BrowserWindow;
-  registerRsbWindowIpc({ controller, getMainWindow: () => mainWindow, allowBotWorkbenchPermission: vi.fn(() => ({ accepted: true })) });
+  registerRsbWindowIpc({ controller, getMainWindow: () => mainWindow });
   return { handler: getSendCommandHandler(), mainWebContents };
 }
 
@@ -74,39 +74,6 @@ beforeEach(() => {
 });
 
 describe('right-sidebar-window IPC', () => {
-  it('allows only the visible detached Bot owner to approve its own permission', async () => {
-    const controller = makeController();
-    const sender = { id: 2 };
-    const approve = vi.fn(() => ({ accepted: true }));
-    controller.getVisibleSidebarWebContents.mockReturnValue(sender);
-    controller.getContext.mockReturnValue({ botOwner: { botId: 'bot-1', canonical: true }, remoteHostId: null });
-    registerRsbWindowIpc({ controller, getMainWindow: () => null, allowBotWorkbenchPermission: approve });
-    const handler = (ipcMain as unknown as { __handlers: Map<string, (e: unknown, p: unknown) => unknown> })
-      .__handlers.get(MAKER_INVOKE.RSB_WINDOW_ALLOW_BOT_WORKBENCH_PERMISSION)!;
-    const payload = { botId: 'bot-1', sessionId: 'task-1', requestId: 'permission-1' };
-    await expect(handler({ sender }, payload)).resolves.toEqual({ accepted: true });
-    expect(approve).toHaveBeenCalledWith('bot-1', 'task-1', 'permission-1');
-    await expect(handler({ sender: { id: 3 } }, payload)).resolves.toEqual({ accepted: false });
-    await expect(handler({ sender }, { ...payload, botId: 'bot-2' })).resolves.toEqual({ accepted: false });
-    await expect(handler({ sender }, { ...payload, requestId: '' })).rejects.toThrow(/requestId/);
-    expect(approve).toHaveBeenCalledTimes(1);
-  });
-  it('accepts a popped-out workbench only after Main verifies the assigned tab', async () => {
-    const controller = makeController();
-    const sender = { id: 4 };
-    const approve = vi.fn(() => ({ accepted: true }));
-    const authorizePoppedWorkbench = vi.fn(async () => true);
-    registerRsbWindowIpc({ controller, getMainWindow: () => null,
-      allowBotWorkbenchPermission: approve, authorizePoppedWorkbench });
-    const handler = (ipcMain as unknown as { __handlers: Map<string, (e: unknown, p: unknown) => unknown> })
-      .__handlers.get(MAKER_INVOKE.RSB_WINDOW_ALLOW_BOT_WORKBENCH_PERMISSION)!;
-    const payload = { botId: 'bot-1', sessionId: 'task-1', requestId: 'permission-1' };
-    await expect(handler({ sender }, payload)).resolves.toEqual({ accepted: true });
-    expect(authorizePoppedWorkbench).toHaveBeenCalledWith(sender, 'bot-1');
-    authorizePoppedWorkbench.mockResolvedValue(false);
-    await expect(handler({ sender }, payload)).resolves.toEqual({ accepted: false });
-    expect(approve).toHaveBeenCalledTimes(1);
-  });
   // The mail card gesture must survive detached-window routing without mail content.
   it('routes a mail card by ID and rejects malformed card references', async () => {
     const controller = makeController();

@@ -48,6 +48,11 @@ export interface CompanionCloudHost {
   onLocalChange?: (listener: (botId: string) => void) => () => void;
   /** Local side of taking a companion over; absent disables take-over and auto-materialize. */
   materializer?: Omit<CompanionMaterializeHost, 'latestRows'>;
+  /**
+   * The companion now runs here (a take-over, a pull-down or an un-demotion completed): make it a
+   * V2 teammate (a project) if it is not one yet. Idempotent; a failure is retried on the next arrival or start.
+   */
+  upgradeArrived?: (botId: string) => Promise<void>;
   /** The owner's devices from device-link. */
   listDevices?: () => Promise<DeviceLinkDeviceView[]>;
   /** Does that computer's Cindy support cloud companions (`maker:companion-cloud:caps`)? */
@@ -166,6 +171,12 @@ const REMOTE_HAND_OVER_VERSION = 2;
  * still refuse values only the store holds; a computer taking over itself reads the store directly.
  */
 const COMPANION_CLOUD_STORE_READ_VERSION = 3;
+/**
+ * Targets that run a V2 teammate (a project with rules, automations and project memory). An older
+ * computer is listed as outdated but can still take one (2026-11-10 owner): it runs there as before,
+ * with the chat history; the project rules and automations apply again back on a newer computer.
+ */
+const COMPANION_CLOUD_TEAMMATE_PROJECT_VERSION = 4;
 /** How long a move waits for the companion to finish its turn (the device-link budget is larger). */
 export const COMPANION_BUSY_WAIT_MS = 4 * 60_000;
 /** After asking the turn to stop, how long it may take to settle. */
@@ -422,6 +433,16 @@ export function startCompanionCloud(input: {
       ...(input.media ? { download: input.media.download } : {}),
       actor: { id: actor.id, externalId: botId, name: actor.name, avatar: actor.avatar ?? null },
       roomId: () => mirror.ensureRoom(botId, actor.id, actor.name) })
+      .then(result => {
+        // Arrived (taken over, pulled down or no longer demoted): a teammate still on V1 here
+        // becomes a project now, not only at the next start. Never holds up the arrival.
+        if (live() && input.host.upgradeArrived) {
+          void input.host.upgradeArrived(botId).catch(error => {
+            input.log?.warn('Teammate upgrade after arrival will retry', { actorId: actor.id, code: errorCode(error) });
+          });
+        }
+        return result;
+      })
       .finally(() => { materializing.delete(botId); });
     materializing.set(botId, run);
     return run;
@@ -658,6 +679,17 @@ export function startCompanionCloud(input: {
     return false;
   }
 
+  /**
+   * The cloud-companion version another computer declares (0: older than cloud companions or not
+   * reachable). Without the device-link probe every target counts as current.
+   */
+  async function targetVersion(deviceId: string): Promise<number> {
+    if (input.host.homeLink) return input.host.homeLink.version(deviceId).catch(() => 0);
+    const probe = input.host.probeCompanionCloud;
+    if (!probe) return COMPANION_CLOUD_TEAMMATE_PROJECT_VERSION;
+    return (await probe(deviceId).catch(() => false)) ? COMPANION_CLOUD_TEAMMATE_PROJECT_VERSION : 0;
+  }
+
   /** Everything the new home needs reaches the server, then the home moves and this copy is demoted. */
   async function handOver(actor: CompanionRuntimeActor, targetDeviceId: string, targetReadsStore: boolean): Promise<CompanionCloudActionResult> {
     // A running turn would keep working here (tools, files, replies) after the target took over.
@@ -791,11 +823,11 @@ export function startCompanionCloud(input: {
 
     async transferTargets() {
       const devices = (await input.host.listDevices?.().catch(() => []) ?? []).filter(isCompanionTransferTarget);
-      // Older Cindy versions cannot take a companion over: never strand one there.
-      const probe = input.host.probeCompanionCloud;
-      const supported = probe ? await Promise.all(devices.map(device => probe(device.deviceId).catch(() => false))) : devices.map(() => true);
-      return devices.filter((_device, index) => supported[index])
-        .map(device => ({ deviceId: device.deviceId, name: device.name, online: device.online }));
+      // Older Cindy versions cannot take a companion over: never strand one there. One that takes
+      // companions but not V2 teammates is listed as outdated, so the owner knows what moving there means.
+      const versions = await Promise.all(devices.map(device => targetVersion(device.deviceId)));
+      return devices.flatMap((device, index) => versions[index]! < 1 ? [] : [{ deviceId: device.deviceId, name: device.name, online: device.online,
+        ...(versions[index]! < COMPANION_CLOUD_TEAMMATE_PROJECT_VERSION ? { outdated: true } : {}) }]);
     },
 
     async transfer(botId, targetDeviceId, options) {
@@ -805,14 +837,13 @@ export function startCompanionCloud(input: {
       if (!actor || actor.homeDeviceId !== self) return { ok: false, code: 'FAILED', homeDeviceId: actor?.homeDeviceId ?? null };
       const devices = await input.host.listDevices?.().catch(() => []) ?? [];
       const target = devices.find(device => device.deviceId === targetDeviceId && isCompanionTransferTarget(device));
-      const probe = input.host.probeCompanionCloud;
-      if (!target || (probe && !(await probe(targetDeviceId).catch(() => false)))) return { ok: false, code: 'TARGET_UNAVAILABLE' };
+      const targetVersionNow = target ? await targetVersion(targetDeviceId) : 0;
+      if (!target || targetVersionNow < 1) return { ok: false, code: 'TARGET_UNAVAILABLE' };
       // No background cycle may write in between: one already in flight could carry older values
       // past the flush, or past the move. Background sync resumes after the copy is demoted.
       // Still working: wait for (or stop) the turn first, outside the sync lock so its reply keeps syncing.
       if (!(await settleBusy(actor.externalId, options?.whenBusy))) return { ok: false, code: 'BUSY' };
-      const targetVersion = await input.host.homeLink?.version(targetDeviceId).catch(() => 0) ?? 0;
-      return mirrors.exclusive(() => uploads.exclusive(() => handOver(actor, targetDeviceId, targetVersion >= COMPANION_CLOUD_STORE_READ_VERSION)));
+      return mirrors.exclusive(() => uploads.exclusive(() => handOver(actor, targetDeviceId, targetVersionNow >= COMPANION_CLOUD_STORE_READ_VERSION)));
     },
 
     async homeChoices(botId) {
@@ -848,7 +879,8 @@ export function startCompanionCloud(input: {
       const choices = await runtime.homeChoices(botId);
       if (choices.homeDeviceId === targetDeviceId) return { ok: true };
       if (choices.mode === 'unavailable') return { ok: false, code: choices.reason === 'HOME_OUTDATED' ? 'HOME_OUTDATED' : 'FAILED' };
-      if (!choices.targets.some(target => target.deviceId === targetDeviceId)) return { ok: false, code: 'TARGET_UNAVAILABLE' };
+      const chosen = choices.targets.find(target => target.deviceId === targetDeviceId);
+      if (!chosen) return { ok: false, code: 'TARGET_UNAVAILABLE' };
       if (choices.mode === 'local') return runtime.transfer(botId, targetDeviceId, options);
       if (choices.mode === 'takeOver') return runtime.takeOver(botId);
       // The home hands it over itself (flush, busy check, compare-and-set), exactly as from its own settings.

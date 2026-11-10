@@ -320,6 +320,15 @@ describe('resolveSoleSteerableQueuedMessage', () => {
     expect(resolveSoleSteerableQueuedMessage([queuedMessage()], idle)).toBe('client-1');
   });
 
+  it('never targets a hidden answered question reply, but still targets a supplement', () => {
+    const answered = queuedMessage({ clientId: 'question-reply:answered:request-1:digest' });
+    expect(getPendingQueueRowPresentation(answered)).toMatchObject({ canEdit: false, canSteer: false });
+    expect(resolveSoleSteerableQueuedMessage([answered], idle)).toBeNull();
+    expect(
+      resolveSoleSteerableQueuedMessage([queuedMessage({ clientId: 'question-reply:request-2:digest' })], idle),
+    ).toBe('question-reply:request-2:digest');
+  });
+
   it('declines when the target is ambiguous or the row cannot steer right now', () => {
     expect(
       resolveSoleSteerableQueuedMessage(
@@ -366,6 +375,19 @@ it('decodes forwarded queue display without mutating the queued body', () => {
 // not independent queue/history arrival: this unit regression prevents double rows
 // and keeps pending input out of turn grouping (minimum: one stale queue echo).
 describe('pending queue timeline', () => {
+  // PR #9727: an accepted answer is already visible on its card. Previous
+  // timeline coverage only tested deduplication against history. Tier: unit.
+  it('omits card answers before history arrives without consuming their queued payload', () => {
+    const first = queuedMessage().chatMessage;
+    const answer = { ...first, clientId: 'question-reply:answered:request-1' };
+    const supplement = { ...first, clientId: 'question-reply:request-2' };
+    const pending = [answer, first, supplement];
+    expect(appendPendingQueueItems([], pending, []).map(item => item.key))
+      .toEqual(['msg-client-1', 'msg-question-reply:request-2']);
+    expect(pending).toEqual([answer, first, supplement]);
+    expect(appendPendingQueueItems([], [answer], [])).toEqual([]);
+  });
+
   it('keeps queue order and the delivered message key while dropping stale queue echoes', () => {
     const first = queuedMessage().chatMessage;
     const second = { ...first, clientId: 'second', content: 'second' };
