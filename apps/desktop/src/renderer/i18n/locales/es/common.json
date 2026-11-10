@@ -9136,6 +9136,8 @@
       "daysWindow": "{{days}} d"
     },
     "claude": {
+      "totalWeeklyLabel": "Semana total",
+      "temporarilyLimited": "Limitado temporalmente",
       "waitingDetail": "El uso de la suscripción de Claude se actualizará cuando termine el próximo turno.",
       "weeklyLabel": "Semanal",
       "modelWeeklyLabel": "{{model}} semanal",

@@ -9066,6 +9066,8 @@
       "daysWindow": "{{days}} T"
     },
     "claude": {
+      "totalWeeklyLabel": "Woche gesamt",
+      "temporarilyLimited": "Vorübergehend begrenzt",
       "waitingDetail": "Die Claude-Abonutzung wird nach Abschluss der nächsten Gesprächsrunde aktualisiert.",
       "weeklyLabel": "Wöchentlich",
       "modelWeeklyLabel": "{{model}} wöchentlich",

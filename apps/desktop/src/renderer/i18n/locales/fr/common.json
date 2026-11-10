@@ -9136,6 +9136,8 @@
       "daysWindow": "{{days}} j"
     },
     "claude": {
+      "totalWeeklyLabel": "Semaine globale",
+      "temporarilyLimited": "Limité temporairement",
       "waitingDetail": "La consommation de l'abonnement Claude sera mise à jour à la fin du prochain tour.",
       "weeklyLabel": "Hebdomadaire",
       "modelWeeklyLabel": "{{model}} hebdomadaire",

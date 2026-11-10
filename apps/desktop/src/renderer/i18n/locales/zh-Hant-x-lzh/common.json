@@ -9023,6 +9023,8 @@
       "daysWindow": "{{days}}日"
     },
     "claude": {
+      "totalWeeklyLabel": "週總",
+      "temporarilyLimited": "暫限",
       "waitingDetail": "Claude 訂閱餘量將於下一輪畢後更新。",
       "weeklyLabel": "週限",
       "modelWeeklyLabel": "{{model}} 週限",
