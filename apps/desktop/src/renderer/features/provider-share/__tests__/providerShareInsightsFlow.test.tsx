@@ -87,6 +87,8 @@ vi.mock('../../../../main/device-link/settings-store.desktop.js', async (origina
 vi.mock('../../../../main/device-link/providerShareHost.js', () => ({
   startProviderShareHost: vi.fn(),
   stopProviderShareHost: vi.fn(),
+  getProviderShareHostLoadedSnapshot: () => null,
+  onProviderShareHostChanged: () => () => {},
   providerShareAccessRevision: () => 1,
   ownedProviderShareGuestAccess: () =>
     state.active ? { shareId: 'flow', memberId: 'guest', providerId: 'anthropic' } : null,
