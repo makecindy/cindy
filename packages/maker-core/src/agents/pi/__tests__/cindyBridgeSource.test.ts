@@ -445,6 +445,23 @@ function loadReviewSearchHelpers(
   return context as ReviewSearchHelpers;
 }
 
+function loadPiBashShellSettings(): {
+  readPiBashShellSettings: (settings: unknown) => { shellPath?: string; commandPrefix?: string };
+} {
+  const source = CINDY_BRIDGE_EXTENSION_SOURCE;
+  const start = source.indexOf('function readPiBashShellSettings(');
+  const end = source.indexOf('const piBashSettings =', start);
+  if (start < 0 || end <= start) {
+    throw new Error('Pi bash shell settings helper was not found in the generated bridge');
+  }
+  const factory = new Function(
+    `${source.slice(start, end)}; return { readPiBashShellSettings };`,
+  ) as () => {
+    readPiBashShellSettings: (settings: unknown) => { shellPath?: string; commandPrefix?: string };
+  };
+  return factory();
+}
+
 function loadBashTimeoutHelpers(): {
   resolveCindyBashTimeout: (params: unknown) => number;
   applyCindyBashTimeoutParams: (params: unknown) => Record<string, unknown>;
@@ -1451,6 +1468,42 @@ describe('cindy-bridge extension source', () => {
   it('keeps generated extension source free of template literals', () => {
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).not.toContain('`');
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).not.toContain('${');
+  });
+
+  it('forwards settings.json shellPath and shellCommandPrefix into the overriding bash tool (#9705)', () => {
+    const { readPiBashShellSettings } = loadPiBashShellSettings();
+    expect(readPiBashShellSettings(undefined)).toEqual({});
+    expect(readPiBashShellSettings(null)).toEqual({});
+    expect(readPiBashShellSettings({})).toEqual({});
+    expect(readPiBashShellSettings({
+      shellPath: '   ',
+      shellCommandPrefix: '',
+      npmCommand: ['npm'],
+    })).toEqual({});
+    expect(readPiBashShellSettings({
+      shellPath: '  /bin/zsh  ',
+      shellCommandPrefix: '  set -a; . "$HOME/.zshenv"; set +a  ',
+    })).toEqual({
+      shellPath: '/bin/zsh',
+      commandPrefix: 'set -a; . "$HOME/.zshenv"; set +a',
+    });
+    expect(readPiBashShellSettings({ shellCommandPrefix: 12, shellPath: ['/bin/zsh'] })).toEqual({});
+
+    const source = CINDY_BRIDGE_EXTENSION_SOURCE;
+    const bashStart = source.indexOf('const bashTool = createBashTool(process.cwd(), {');
+    const bashEnd = source.indexOf('var bashParameters = bashTool.parameters;', bashStart);
+    const bashCall = source.slice(bashStart, bashEnd);
+    expect(bashCall).toContain('...readPiBashShellSettings(piBashSettings)');
+    expect(bashCall).toContain('exposeSessionEnvironment: false');
+    expect(bashCall).toContain('isolatedBashEnvironment(env, bashPackageHome)');
+
+    // PowerShell keeps its own shell. A bash prefix or bash.exe path must not land there.
+    const powershellStart = source.indexOf('const powershellTool = createPowerShellTool(process.cwd(), {');
+    const powershellEnd = source.indexOf('var powershellParameters = powershellTool.parameters;', powershellStart);
+    const powershellCall = source.slice(powershellStart, powershellEnd);
+    expect(powershellCall).not.toContain('readPiBashShellSettings');
+    expect(powershellCall).not.toContain('commandPrefix');
+    expect(powershellCall).not.toContain('shellPath');
   });
 
   it('preserves the permission denial source across the private Pi UI envelope', () => {

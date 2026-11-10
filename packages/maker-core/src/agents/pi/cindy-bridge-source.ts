@@ -4920,10 +4920,24 @@ export default async function cindyBridge(piApi: any) {
       '. Values above the maximum are rejected as invalid.'
     );
   }
+  // createBashTool 只读入参，不读 settings.json。Cindy 用同名 bash 覆盖了 Pi 内置工具，
+  // 不把用户保留的 shellPath / shellCommandPrefix 传进去，这两个键写进会话配置也不会生效(#9705)。
+  // 配置键名是 shellCommandPrefix，工厂入参名是 commandPrefix。空白与非字符串当没配，走 Pi 默认 shell。
+  function readPiBashShellSettings(settings) {
+    var row = settings && typeof settings === 'object' ? settings : {};
+    var shellPath = typeof row.shellPath === 'string' ? row.shellPath.trim() : '';
+    var commandPrefix = typeof row.shellCommandPrefix === 'string' ? row.shellCommandPrefix.trim() : '';
+    var forwarded = {};
+    if (shellPath) forwarded.shellPath = shellPath;
+    if (commandPrefix) forwarded.commandPrefix = commandPrefix;
+    return forwarded;
+  }
+  const piBashSettings = typeof pi.getSettings === 'function' ? pi.getSettings() : initialNativeSettings;
   const bashTool = createBashTool(process.cwd(), {
     // PI_SESSION_FILE 会暴露 agentHome，继而让一次获批的 shell 定位并篡改
     // permission file；其余 PI_SESSION_* 元数据对完成编码任务也不是必需能力。
     exposeSessionEnvironment: false,
+    ...readPiBashShellSettings(piBashSettings),
     spawnHook: ({ command, cwd, env }) => ({
       command,
       cwd,
