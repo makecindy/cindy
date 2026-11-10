@@ -39,7 +39,7 @@ vi.mock('../runtime-configs.js', () => ({
   claudeUpstreamEndpoint: () => 'https://upstream.test/v1',
 }));
 
-vi.mock('../../mcp-integrations/piEnvironment.js', () => ({
+vi.mock('../../mcp-integrations/piEnvironment.desktop.js', () => ({
   getPiExtraSpawnConfig: async () => ({ mcpBridge: null, mcpEnv: {} }),
 }));
 
@@ -58,7 +58,7 @@ vi.mock('../claude-native-auth.js', () => ({
   hasClaudeNativeLoginUnbound: () => false,
 }));
 
-vi.mock('../grok-oauth-login.js', () => ({
+vi.mock('../grok-oauth-login.desktop.js', () => ({
   hasGrokOAuthLogin: () => false,
 }));
 

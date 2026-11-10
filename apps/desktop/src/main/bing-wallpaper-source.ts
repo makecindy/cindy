@@ -5,7 +5,7 @@ import {
   type GuardedFetchResult,
 } from '@cindy/browser-control-runtime/ssrf-runtime';
 import { parseOutboundProxyUrl } from '@cindy/anthropic-compat-proxy';
-import { createPinnedProxyDispatcher } from './maker-host/outbound-fetch.js';
+import { createPinnedProxyDispatcher } from './maker-host/outbound-fetch.desktop.js';
 import { resolveDesktopOutboundProxy } from './maker-host/outbound-proxy-resolver.js';
 import { prepareWallpaperImage } from './wallpaper-image.js';
 

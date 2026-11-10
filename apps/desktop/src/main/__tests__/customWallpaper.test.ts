@@ -14,6 +14,7 @@ vi.mock('../bing-wallpaper-source.js', () => ({
   bingWallpaperMarket: () => 'en-US',
   fetchBingMetadata: vi.fn(), fetchBingImage: vi.fn(),
 }));
+vi.mock('../i18n.desktop.js', () => ({ getResolvedMainLocale: () => 'en' }));
 vi.mock('electron', () => ({
   app: { getPath: () => h.dir },
   dialog: { showOpenDialog: h.picker },
@@ -58,7 +59,7 @@ import {
   readFile,
   readClientWallpaperFile,
   listBlobFiles,
-} from '../cindy-media/blobStore';
+} from '../cindy-media/blobStore.desktop';
 import * as recycler from '../cindy-media/recycler';
 
 beforeEach(() => {

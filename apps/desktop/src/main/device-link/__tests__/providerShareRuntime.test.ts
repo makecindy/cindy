@@ -42,7 +42,7 @@ vi.mock('../../clientEndpointsService.js', () => ({ getClientEndpoint: () => 'ht
 vi.mock('../../maker-host/remote-provider-access-store.js', () => ({
   isRemoteProviderInvocationAllowed: (id: string) => state.allowed.has(id),
 }));
-vi.mock('../settings-store.js', () => ({ readDeviceLinkSettings: () => ({ remoteControlEnabled: state.remoteControl }) }));
+vi.mock('../settings-store.desktop.js', () => ({ readDeviceLinkSettings: () => ({ remoteControlEnabled: state.remoteControl }) }));
 vi.mock('../providerShareApi.js', () => ({
   providerShareApi: {
     listOwned: async () => {

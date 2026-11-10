@@ -2590,6 +2590,7 @@ interface McpServerRef {
 
 const CINDY_MCP_LIST_TOOLS = 'cindy_mcp_list_tools';
 const CINDY_ASYNC_QUESTION_TOOL = 'ask_user_question_async';
+const CINDY_MANAGE_QUESTIONS_TOOL = 'manage_user_questions';
 const CINDY_MCP_CALL_TOOL = 'cindy_mcp_call_tool';
 const CINDY_START_SESSION_TASK_TOOL = 'start_session_task';
 const CINDY_CHECK_SESSION_TASK_TOOL = 'check_session_task';
@@ -3384,7 +3385,7 @@ class CindyMcpGateway {
   /** The real MCP identity of a tool the model called by its short name, for the permission and capture hooks. */
   resolveHookedCall(toolName: string, input: unknown): ResolvedMcpGatewayCall | null {
     if (toolName === CINDY_MCP_CALL_TOOL) return this.resolveCall(input);
-    if (CINDY_DIRECT_BOT_TOOLS.has(toolName) || toolName === CINDY_LIST_MACHINES_TOOL || toolName === CINDY_ASYNC_QUESTION_TOOL || toolName === CINDY_INPUT_HANDOFF_TOOL) return this.resolveDirectHelperTool(toolName, input);
+    if (CINDY_DIRECT_BOT_TOOLS.has(toolName) || toolName === CINDY_LIST_MACHINES_TOOL || toolName === CINDY_ASYNC_QUESTION_TOOL || toolName === CINDY_INPUT_HANDOFF_TOOL || toolName === CINDY_MANAGE_QUESTIONS_TOOL) return this.resolveDirectHelperTool(toolName, input);
     return toolName === CINDY_BOT_MEMORY_TOOL ? this.resolveBotMemory(input) : null;
   }
 
@@ -4035,15 +4036,16 @@ class CindyMcpGateway {
     }
 
     // Match synchronous question discoverability while retaining the host schema and lifecycle.
-    const asyncQuestion = this.tools.get(mcpGatewayKey('cindy_helper', CINDY_ASYNC_QUESTION_TOOL));
-    if (asyncQuestion && !options.deniedTools?.includes(CINDY_ASYNC_QUESTION_TOOL)) {
+    for (const questionTool of [CINDY_ASYNC_QUESTION_TOOL, CINDY_MANAGE_QUESTIONS_TOOL]) {
+      const definition = this.tools.get(mcpGatewayKey('cindy_helper', questionTool));
+      if (!definition || options.deniedTools?.includes(questionTool)) continue;
       pi.registerTool({
-        name: CINDY_ASYNC_QUESTION_TOOL,
-        label: 'Ask an optional question',
-        description: asyncQuestion.description,
-        parameters: asyncQuestion.inputSchema,
+        name: questionTool,
+        label: questionTool === CINDY_ASYNC_QUESTION_TOOL ? 'Ask an optional question' : 'Manage pending questions',
+        description: definition.description,
+        parameters: definition.inputSchema,
         execute: async (_id: string, params: unknown, signal?: AbortSignal) =>
-          this.executeDirectHelperTool(CINDY_ASYNC_QUESTION_TOOL, params, signal),
+          this.executeDirectHelperTool(questionTool, params, signal),
       });
     }
 
@@ -5290,6 +5292,7 @@ export default async function cindyBridge(piApi: any) {
         || CINDY_DIRECT_BOT_TOOLS.has(event.toolName)
         || event.toolName === CINDY_LIST_MACHINES_TOOL
         || event.toolName === CINDY_ASYNC_QUESTION_TOOL
+        || event.toolName === CINDY_MANAGE_QUESTIONS_TOOL
         || event.toolName === CINDY_INPUT_HANDOFF_TOOL
         || event.toolName === CINDY_BOT_MEMORY_TOOL)
       && !gatewayCall

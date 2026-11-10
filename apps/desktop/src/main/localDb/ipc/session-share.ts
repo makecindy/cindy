@@ -38,7 +38,7 @@ import {
 } from '../../session-share/sessionShareImport.js';
 import { getDbClient, tryGetDbClient } from '../client/current.js';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../../appSessionState.js';
-import { captureMediaRefCompensationScope } from '../../cindy-media/refCompensationJournal.js';
+import { captureMediaRefCompensationScope } from '../../cindy-media/refCompensationJournal.desktop.js';
 import { compactSessionToolResultsBestEffort } from '../toolResultCompaction.js';
 import {
   broadcastSessionPatched,

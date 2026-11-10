@@ -12,7 +12,7 @@ const removeRemote = vi.hoisted(() => vi.fn(async () => {}));
 vi.mock('../mediaTransfer', () => ({ uploadLocalFile, uploadBuffer, removeRemote, mimeOf: () => 'text/plain' }));
 
 const resolveSafe = vi.hoisted(() => vi.fn());
-vi.mock('../../imageCacheStore', () => ({ resolveSafe }));
+vi.mock('../../imageCacheStore.desktop', () => ({ resolveSafe }));
 
 vi.mock('../../logger', () => ({
   createLogger: () => ({ info: vi.fn(), debug: vi.fn(), warn: vi.fn(), error: vi.fn() }),

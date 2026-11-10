@@ -16,6 +16,7 @@ import { and, asc, desc, eq, gt, inArray, isNull, lt, lte, or, sql } from 'drizz
 import { extractText } from '../sessionTaskSummary.logic.js';
 
 import { getDbClient } from './client/current.js';
+import type { DbClient } from './client/DbClient.js';
 import { extractMessagePreview } from './mapper.js';
 import { messages, sessions } from './schema.js';
 import {
@@ -73,8 +74,9 @@ export interface LatestVisiblePreviewRow {
  */
 export async function latestVisiblePreviewRow(
   sessionId: string,
+  client: DbClient = getDbClient(),
 ): Promise<LatestVisiblePreviewRow | null> {
-  const [row] = await getDbClient()
+  const [row] = await client
     .drizzle.select({
       clientId: messages.clientId,
       content: messages.content,

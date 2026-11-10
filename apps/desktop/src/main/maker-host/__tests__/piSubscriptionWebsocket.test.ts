@@ -4,7 +4,7 @@ import type { NativeSubscriptionAccount } from '@cindy/maker-core';
 
 const state = vi.hoisted(() => ({ owner: 'owner-a', pending: false, provider: 'openai' as string | null, guest: false, hosted: false, fastAllowed: true }));
 vi.mock('../../appSessionState.js', () => ({ activeOwnerScopeKey: () => state.owner, isAppSessionBoundaryPending: () => state.pending }));
-vi.mock('../codex-account-auth.js', () => ({ isOpenAiSubscriptionProviderId: (id: string) => id === 'openai' || id === 'account-b' }));
+vi.mock('../codex-account-auth.desktop.js', () => ({ isOpenAiSubscriptionProviderId: (id: string) => id === 'openai' || id === 'account-b' }));
 vi.mock('../session-provider-store.js', () => ({ getSessionProvider: () => state.provider, hasHostedSessionModelAccess: () => state.hosted }));
 vi.mock('../guest-provider-route-store.js', () => ({ guestProviderRouteForSession: () => state.guest ? {} : null }));
 vi.mock('../anthropic-responses-bridge-host.js', () => ({ getChatgptBridgeAuthForDispatch: vi.fn(), invalidateChatgptBridgeAuth: vi.fn(async () => false) }));

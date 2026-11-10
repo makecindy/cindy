@@ -14,7 +14,7 @@ import { createBingWallpaperService } from '../bing-wallpaper-service';
 import type { BingWallpaperCache } from '../bing-wallpaper-settings';
 import type { BingWallpaperImage } from '../../shared/bingWallpaper';
 
-vi.mock('../maker-host/outbound-fetch.js', () => ({ createPinnedProxyDispatcher: vi.fn() }));
+vi.mock('../maker-host/outbound-fetch.desktop.js', () => ({ createPinnedProxyDispatcher: vi.fn() }));
 vi.mock('@cindy/browser-control-runtime/ssrf-runtime', () => ({
   fetchSingleHopWithSsrFGuard: vi.fn(),
 }));

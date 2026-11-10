@@ -3,7 +3,7 @@ import path from 'node:path';
 import { app, dialog, shell, type MenuItemConstructorOptions } from 'electron';
 
 import { createLogger, getLogDir } from './logger';
-import { t } from './i18n';
+import { t } from './i18n.desktop';
 
 const log = createLogger('log-support');
 

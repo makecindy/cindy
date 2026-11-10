@@ -5312,6 +5312,15 @@
         "ariaLabel": "Use {{shortcut}} to send messages"
       }
     },
+    "defaultNewTaskWorkingDir": {
+      "title": "Default working directory for new tasks",
+      "label": "Default directory on this computer",
+      "hint": "Preselect this directory for new local tasks with no project chosen. An explicitly selected project, dialogue, or remote computer takes priority.",
+      "unset": "Not set (no directory preselected)",
+      "choose": "Choose directory",
+      "clear": "Clear default",
+      "failed": "Could not save the default working directory. Try again."
+    },
     "linkOpen": {
       "title": "Open Links",
       "description": "Choose where links in messages open. Right-click a link to use another option just for that link.",
@@ -13069,6 +13078,11 @@
     "prevMessageJump": "Jump to previous prompt: {{preview}}",
     "sessionLoading": "Loading task",
     "askUserQuestion": {
+    "unanswered": "Unanswered",
+    "withdrawn": "No longer needs an answer",
+    "withdrawnDraft": "This question no longer needs an answer.\n{{reason}}\nYour draft is kept; you can send it as additional information.",
+    "sendSupplement": "Send additional information",
+
       "voice": {
         "hint": "Say an option number or name. For multiple choices, then say “confirm selection”.",
         "freeTextHint": "Say your answer, review it, then say “confirm selection” to submit.",
@@ -19792,6 +19806,7 @@
     "lineNumbers": "Line numbers"
   },
   "subscriptionAccounts": {
+    "providerManagedAuth": "The current Codex provider does not expose a ChatGPT account. When adding the provider, choose “$t(subscriptionAccounts.signIn.anotherAccount)” to use a separate folder.",
     "signIn": {
       "checking": "Checking local account…",
       "detected": "Signed-in account found",
@@ -19840,5 +19855,15 @@
     "browserFallback": "Open GitHub to star Cindy.",
     "openGithub": "Open GitHub",
     "openFailed": "Could not open GitHub."
+  },
+  "hostConnection": {
+    "connecting": "Connecting to Cindy…",
+    "restoring": "Restoring task state…",
+    "retrying": "Task state is not yet synced. Retrying…",
+    "pairing": "Connect authorization required",
+    "pairingHelp": "Keep this page open. In the terminal used to start Cindy Host, run the command to open the web client again. Pair the new page, then return here.",
+    "keepDraft": "Your draft stays here. Task state will sync when the connection recovers.",
+    "retry": "Retry connection",
+    "desktopAuthHelp": "Update the Host connection settings in your launch terminal, then reopen this experimental client."
   }
 }

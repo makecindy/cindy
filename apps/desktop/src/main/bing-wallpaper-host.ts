@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { getBackgroundVisibility } from '../shared/appearanceSettings.js';
 import { readAppearanceSettings } from './appearance-settings-store.js';
-import { getResolvedMainLocale } from './i18n.js';
+import { getResolvedMainLocale } from './i18n.desktop.js';
 import { bingWallpaperMarket, fetchBingImage, fetchBingMetadata } from './bing-wallpaper-source.js';
 import { createBingWallpaperService } from './bing-wallpaper-service.js';
 import {
@@ -11,7 +11,7 @@ import {
 } from './bing-wallpaper-settings.js';
 import { withClientWallpaperLock } from './cindy-media/clientWallpaperLock.js';
 import { ingestClientWallpaper } from './cindy-media/ingest.js';
-import { parseClientWallpaperUrl, resolveHashRef } from './cindy-media/blobStore.js';
+import { parseClientWallpaperUrl, resolveHashRef } from './cindy-media/blobStore.desktop.js';
 import { recycleClientWallpapers } from './cindy-media/recycler.js';
 import { readReferencedClientWallpaperUrls } from './custom-wallpaper-settings.js';
 import { readBoundedFileNoFollow } from './utils/readBoundedFile.js';
