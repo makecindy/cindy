@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { ClaudeSubscriptionUsageSnapshot } from '../../../shared/claudeSubscriptionUsage';
 import { normalizeProviderGroupConfig, PROVIDER_GROUP_STRATEGIES, type ProviderGroupMember } from '../../../shared/providerGroup';
 import { createProviderGroupDirectory } from '../directory';
-import { createProviderGroupRouter } from '../router';
+import { createProviderGroupRouter, type ProviderGroupRouterDeps } from '../router';
 import { providerGroupCodexUsageSnapshot } from '../usage';
 
 const NOW = 1_000_000;
@@ -101,7 +101,7 @@ describe('OpenAI subscription group routing', () => {
   });
 });
 
-function harness() {
+function harness(readPoolModelAvailability?: ProviderGroupRouterDeps['readPoolModelAvailability']) {
   let now = NOW;
   const config = normalizeProviderGroupConfig({
     strategy: 'usage', members: [{ kind: 'local' }, { kind: 'device', agentDeviceId: 'mini', providerId: 'anthropic' }],
@@ -118,6 +118,7 @@ function harness() {
   const writeCooling = vi.fn();
   const router = createProviderGroupRouter({
     directory, readGroup: () => config, listBindings: () => ({}), isTurnRunning: () => false,
+    readPoolModelAvailability,
     coolingStore: { read: () => ({}), write: writeCooling }, now: () => now, random: () => 0,
   });
   const pick = (model = OPUS, reserveFor?: string) => router.pick({ providerId: 'anthropic', agentKind: 'claude-code', model, reserveFor });
@@ -125,6 +126,51 @@ function harness() {
 }
 
 describe('provider-group quota routing', () => {
+  // #9833, unit: recovery must not erase newer failures or unrelated scopes.
+  // Previous cooldown tests had no asynchronous pool confirmation in pick().
+  it('recovers only the confirmed model and retains newer failures while sharing an in-flight read', async () => {
+    let finish!: (available: boolean) => void;
+    const read = vi.fn(() => new Promise<boolean>((resolve) => { finish = resolve; }));
+    const h = harness(read);
+    h.config.members[1].paused = true;
+    h.router.markCooling('anthropic', 'local', NOW + 100_000, OPUS);
+    h.router.markCooling('anthropic', 'local', NOW + 200_000, SONNET);
+    const first = h.pick(OPUS);
+    const second = h.pick(OPUS);
+    for (let i = 0; i < 30; i++) await Promise.resolve();
+    expect(read).toHaveBeenCalledTimes(1);
+    h.router.markCooling('anthropic', 'local', NOW + 300_000, OPUS);
+    finish(true);
+    expect((await first).kind).toBe('unavailable');
+    expect((await second).kind).toBe('unavailable');
+    expect(h.router.coolingUntil('anthropic', 'local', OPUS)).toBe(NOW + 300_000);
+    read.mockImplementation(async () => true);
+    h.router.markCooling('anthropic', 'local', NOW + 120_000); // auth/overload scope
+    expect((await h.pick(OPUS)).kind).toBe('unavailable');
+    expect(h.router.coolingUntil('anthropic', 'local', SONNET)).toBe(NOW + 200_000);
+    h.advance(120_001);
+    expect(await h.pick(OPUS)).toMatchObject({ member: { key: 'local' } });
+    expect(h.router.coolingUntil('anthropic', 'local', SONNET)).toBe(NOW + 200_000);
+  });
+
+  it('bounds a pool read and ignores a late positive result after the pick has returned', async () => {
+    vi.useFakeTimers();
+    try {
+      let finish!: (available: boolean) => void;
+      const h = harness(() => new Promise<boolean>((resolve) => { finish = resolve; }));
+      h.config.members[1].paused = true;
+      h.router.markCooling('anthropic', 'local', NOW + 100_000, OPUS);
+      const pick = h.pick(OPUS);
+      await vi.advanceTimersByTimeAsync(1500);
+      expect((await pick).kind).toBe('unavailable');
+      finish(true);
+      await Promise.resolve();
+      expect(h.router.coolingUntil('anthropic', 'local', OPUS)).toBe(NOW + 100_000);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   // Unit regression: an exhausted model plus a paused backup used to lose the quota reason
   // at pick(), preventing the task from showing/waiting for the actual reset.
   it('reports model quota exhaustion and the earliest usable reset without counting paused members', async () => {

@@ -5,10 +5,11 @@ import path from 'node:path';
 import { homedir } from 'node:os';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 const h = vi.hoisted(() => ({
-  handlers: new Map<string, (event: unknown, arg: unknown) => Promise<unknown>>(),
+  handlers: new Map<string, (event: unknown, arg: unknown, model?: unknown) => Promise<unknown>>(),
   context: null as null | { sharedTask?: object },
   trusted: true,
   execute: vi.fn(),
+  availability: vi.fn(),
   owner: 'owner-a',
   generation: 1,
   bindings: {} as Record<string, { providerId: 'anthropic' | 'openai'; accountId: string }>,
@@ -42,6 +43,7 @@ vi.mock('../service.js', () => ({ executeSubscriptionAccountCommand: h.execute }
 vi.mock('../runtime.js', () => ({
   onSubscriptionAccountsChanged: vi.fn(),
   readSubscriptionPoolUsage: vi.fn(async () => undefined),
+  readSubscriptionPoolModelAvailability: h.availability,
   readLegacySubscriptionPoolUsage: vi.fn(async () => undefined),
   readSubscriptionSessionUsage: vi.fn(async () => undefined),
 }));
@@ -58,8 +60,27 @@ beforeEach(() => {
   h.generation = 1;
   h.bindings = {};
   h.execute.mockReset().mockResolvedValue({ accounts: [] });
+  h.availability.mockReset().mockResolvedValue(true);
 });
 describe('subscription management boundary', () => {
+  // #9833, unit: new optional model query keeps old caller shape and the
+  // owner-only boundary. An aggregate/guest reply cannot authorize recovery.
+  it('supports model availability without changing old quota replies or admitting guests', async () => {
+    const quota = h.handlers.get('maker:subscription-pool:quota')!;
+    expect(await quota({}, 'anthropic')).toEqual({ providerId: 'anthropic', pooled: false, usage: null });
+    h.context = {};
+    expect(await quota({}, 'anthropic', 'sonnet')).toEqual({ providerId: 'anthropic', model: 'sonnet', available: true });
+    expect(h.availability).toHaveBeenCalledExactlyOnceWith('anthropic', 'sonnet');
+    for (const model of ['', ' ', 1, {}, 'x'.repeat(513)])
+      await expect(quota({}, 'anthropic', model)).rejects.toThrow('INVALID_PARAMS');
+    h.context = { sharedTask: {} };
+    await expect(quota({}, 'anthropic', 'sonnet')).rejects.toThrow('PERMISSION_DENIED');
+    h.context = null;
+    h.trusted = false;
+    await expect(quota({}, 'anthropic', 'sonnet')).rejects.toThrow('untrusted');
+    expect(h.availability).toHaveBeenCalledTimes(1);
+  });
+
   // #9517, unit: CLI provider-managed auth must survive the real handler and
   // renderer decoder as actionable copy, not the generic CLI/network failure.
   it('reports provider-managed authentication through the owner IPC error protocol', async () => {

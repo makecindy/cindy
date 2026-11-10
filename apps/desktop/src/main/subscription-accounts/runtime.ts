@@ -319,6 +319,32 @@ export async function readSubscriptionSessionUsage(provider: SubscriptionProvide
   return info.usage ?? null;
 }
 
+/** A positive result can retire a member/model cooldown, so unknown quota is
+ * not enough. This never selects/binds an account or changes an existing task. */
+export async function readSubscriptionPoolModelAvailability(
+  provider: SubscriptionProvider,
+  model: string,
+): Promise<boolean | null> {
+  const pool = readPool(provider);
+  if (!pool || pool.accounts.length < 2) return null;
+  if (pool.disconnected) return false;
+  const state = currentRuntime();
+  const infos = await Promise.all(pool.accounts.map((a) => snapshot(state, provider, a.id)));
+  assertOwner(state);
+  const latest = readPool(provider);
+  if (!latest || latest.disconnected) return false;
+  return latest.accounts.some((account) => {
+    const info = infos[pool.accounts.findIndex((a) => a.id === account.id)];
+    if (account.paused || !info?.auth.authenticated || info.unavailable
+      || [...state.logins].some(([key, login]) => key.startsWith(provider + ':') && login.accountId === account.id)
+      || (account.id === 'default' && !defaultAccountBound(provider))) return false;
+    const usage = providerGroupMemberUsageState(info.usage ?? {},
+      provider === 'openai' ? model.replace(/^chatgpt\//, '') : model,
+      Date.now(), provider === 'openai' ? 'codex' : 'claude-code');
+    return !usage.limited && usage.quota !== null;
+  });
+}
+
 export async function readSubscriptionPoolUsage(
   provider: SubscriptionProvider,
 ): Promise<Usage | null | undefined> {

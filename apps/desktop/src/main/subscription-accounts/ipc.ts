@@ -9,7 +9,7 @@ import {
 import { parseSubscriptionAccountCommand } from './commands.js';
 export { parseSubscriptionAccountCommand } from './commands.js';
 import { executeSubscriptionAccountCommand } from './service.js';
-import { onSubscriptionAccountsChanged, readSubscriptionPoolUsage, readLegacySubscriptionPoolUsage, readSubscriptionSessionUsage } from './runtime.js';
+import { onSubscriptionAccountsChanged, readSubscriptionPoolUsage, readSubscriptionPoolModelAvailability, readLegacySubscriptionPoolUsage, readSubscriptionSessionUsage } from './runtime.js';
 import { broadcast } from '../device-link/index.js';
 import { setRemoteSubscriptionPoolQuotaReader } from '../device-link/dispatch.desktop.js';
 import { readLegacySubscriptionQuota } from './legacyQuota.js';
@@ -21,12 +21,17 @@ export function registerSubscriptionAccountsIpc(): void {
   onSubscriptionAccountsChanged((providerId) =>
     broadcast('subscription-accounts:changed', { providerId }),
   );
-  ipcMain.handle('maker:subscription-pool:quota', async (event, providerId: unknown) => {
+  ipcMain.handle('maker:subscription-pool:quota', async (event, providerId: unknown, model?: unknown) => {
     const context = getDeviceLinkInvokeContext();
     if (context?.sharedTask) throwIpcError('PERMISSION_DENIED', 'Account quota requires the owner');
     if (!context) assertTrustedAppRendererEvent(event);
     if (!isSubscriptionProvider(providerId))
       throwIpcError('INVALID_PARAMS', 'Invalid subscription provider');
+    if (model !== undefined) {
+      if (typeof model !== 'string' || !model.trim() || model.length > 512)
+        throwIpcError('INVALID_PARAMS', 'Invalid subscription model');
+      return { providerId, model, available: await readSubscriptionPoolModelAvailability(providerId, model) };
+    }
     const usage = await readSubscriptionPoolUsage(providerId);
     return { providerId, pooled: usage !== undefined, usage: usage ?? null };
   });

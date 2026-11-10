@@ -78,6 +78,7 @@ import {
   readSubscriptionPool,
   disconnectSubscriptionPool,
   readSubscriptionPoolUsage,
+  readSubscriptionPoolModelAvailability,
   readLegacySubscriptionPoolUsage,
   readSubscriptionSessionUsage,
   readSubscriptionPoolAccountUsages,
@@ -88,6 +89,12 @@ import { providerGroupMemberUsageState, providerGroupCodexUsageFromReads, provid
 import { readLegacySubscriptionQuota } from '../legacyQuota.js';
 import { withSubscriptionAccounts } from '../agent.js';
 import { getSessionSubscriptionAccount } from '../session.js';
+import { createProviderGroupDirectory } from '../../provider-group/directory.js';
+import { createProviderGroupRouter, type ProviderGroupPersistedCooling } from '../../provider-group/router.js';
+import { createProviderGroupService, type ProviderGroupSessionRow } from '../../provider-group/service.js';
+import type { ProviderGroupBinding } from '../../provider-group/bindings.js';
+import { normalizeProviderGroupConfig } from '../../../shared/providerGroup.js';
+import type { ProviderView } from '@cindy/model-providers';
 const account = (id: string) => ({ id, paused: false, limit: 1, weight: 1 });
 let generation = 0;
 beforeEach(() => {
@@ -822,6 +829,93 @@ describe('native account assignment on the executing computer', () => {
       0, 0,
     ]);
   });
+  // #9833, unit: the actual account pool and group router must agree after an
+  // old task cools the member. Existing tests exercised these layers separately.
+  it.each(['persisted', 'terminal', 'startup'] as const)('assigns a new same-model task to the healthy account after a %s cooldown', async (failure) => {
+    const now = Date.now();
+    const model = 'claude-sonnet-5-5';
+    h.usage.mockImplementation(async (_provider: string, dir: string) => ({ claudeUsage: {
+      updatedAt: now,
+      fiveHour: { utilization: 10, resetsAt: now / 1000 + 3600 },
+      sevenDay: { utilization: dir.endsWith('default') ? 100 : 20, resetsAt: now / 1000 + 86400 },
+      scoped: [],
+    } }));
+    h.bindings.set('native:old', { providerId: 'anthropic', accountId: 'default' });
+    const config = normalizeProviderGroupConfig({ members: [{ kind: 'local' }] }, 'anthropic')!;
+    const directory = createProviderGroupDirectory({
+      listLocalProviders: async () => [{ id: 'anthropic', name: 'Anthropic', connected: true,
+        agents: ['claude-code'], auth: { method: 'oauth', native: 'claude' },
+        models: { 'claude-code': [{ id: model, name: model, efforts: [], defaultEffort: null }] },
+        routing: { 'claude-code': {} },
+      } as unknown as ProviderView],
+      localDeviceName: () => 'local', listDevices: async () => [], readDeviceProviders: async () => [],
+      listReceivedShares: () => [], isMobilePlatform: () => false,
+      readClaudeUsage: async () => (await readSubscriptionPoolUsage('anthropic'))?.claudeUsage ?? null,
+      now: () => now,
+    });
+    const bindings = new Map<string, ProviderGroupBinding>();
+    const router = createProviderGroupRouter({ directory, readGroup: () => config,
+      listBindings: () => Object.fromEntries(bindings), isTurnRunning: () => false, now: () => now, random: () => 0,
+      readPoolModelAvailability: async () => readSubscriptionPoolModelAvailability('anthropic', model),
+      coolingStore: { read: (): ProviderGroupPersistedCooling => failure === 'persisted'
+        ? { anthropic: { local: { 'claude:sonnet': now + 1_800_000 } } } : {}, write: vi.fn() },
+    });
+    const row: ProviderGroupSessionRow = { agentKind: 'claude-code', model, providerId: 'anthropic',
+      agentDeviceId: null, remoteHostId: null, sdkSessionId: null };
+    const switchAgentLocation = vi.fn();
+    const service = createProviderGroupService({ router, directory, readGroup: () => config,
+      readBinding: (id) => bindings.get(id) ?? null,
+      writeBinding: async (id, binding) => {
+        if (binding) bindings.set(id, { providerId: binding.providerId, memberKey: binding.memberKey, at: now });
+        else bindings.delete(id);
+      },
+      isReleased: () => false, markReleased: vi.fn(), readSessionRow: async (id) => ({ ...row, sdkSessionId: id === 'old' ? 'native:old' : null }),
+      resolveImplicitProvider: async () => 'anthropic', persistRoute: vi.fn(), hasAssistantHistory: async () => false,
+      isFailoverEligible: async () => true, leaseRecovery: () => ({}), isLeaseCurrent: () => true,
+      rearmContinue: () => 2, cancelContinue: vi.fn(), switchAgentLocation, isTurnRunning: () => false, hasLiveSession: () => false,
+      continueSession: async () => 'resumed', fallback: vi.fn(), readResetAt: () => null,
+      now: () => now, sleep: async () => {}, log: { info: vi.fn(), warn: vi.fn() },
+    });
+    if (failure !== 'persisted') {
+      bindings.set('old', { providerId: 'anthropic', memberKey: 'local', at: now });
+      if (failure === 'terminal') await service.onTurnError('old', { sdkError: 'rate_limit' }, 1);
+      else {
+        const context = await service.assignBeforeStart({ sessionId: 'old', agentKind: 'claude-code', model });
+        expect(context).not.toBeNull();
+        await service.nextAfterStartFailure(context!, new Error("You've hit your usage limit"));
+      }
+      expect(router.coolingUntil('anthropic', 'local', model)).toBe(now + 1_800_000);
+    }
+    expect(await service.assignBeforeStart({ sessionId: 'new', agentKind: 'claude-code', model }))
+      .toMatchObject({ member: { key: 'local' } });
+    const next = await acquireSubscriptionAccount('anthropic', model, ['task:new']);
+    expect(next?.account.configDir).toBe('anthropic/second');
+    next?.release();
+    await expect(acquireSubscriptionAccount('anthropic', model, ['native:old'])).rejects.toThrow('quota reset');
+    expect(h.bindings.get('native:old')?.accountId).toBe('default');
+    expect(switchAgentLocation).not.toHaveBeenCalled();
+  });
+  // #9833, unit: only an eligible account with known capacity may remove a
+  // member cooldown. Pool aggregate tests did not cover this positive proof.
+  it.each(['paused', 'removed', 'auth', 'unknown', 'exhausted', 'disconnected', 'single'] as const)(
+    'does not recover a member when the alternate account is %s', async (reason) => {
+      const now = Date.now();
+      h.usage.mockImplementation(async (_provider: string, dir: string) => reason === 'unknown' && dir.endsWith('second') ? {} : ({ claudeUsage: {
+        updatedAt: now, fiveHour: { utilization: 10, resetsAt: now / 1000 + 3600 },
+        sevenDay: { utilization: dir.endsWith('default') || reason === 'exhausted' ? 100 : 20, resetsAt: now / 1000 + 86400 },
+      } }));
+      h.read.mockImplementation(async (_provider: string, dir: string) => {
+        // Mutations happen while the CLI read is in flight, after the pool was captured.
+        if (reason === 'paused') h.pools.anthropic!.accounts[1].paused = true;
+        if (reason === 'removed') h.pools.anthropic!.accounts = h.pools.anthropic!.accounts.slice(0, 1);
+        if (reason === 'disconnected') h.pools.anthropic!.disconnected = true;
+        return { authenticated: !(reason === 'auth' && dir.endsWith('second')) };
+      });
+      if (reason === 'single') h.pools.anthropic!.accounts = [account('default')];
+      expect(await readSubscriptionPoolModelAvailability('anthropic', 'claude-sonnet-5-5'))
+        .toBe(reason === 'single' ? null : false);
+    },
+  );
   it('publishes usable model-specific Claude quota instead of the first account’s exhausted bucket', async () => {
     h.pools.anthropic!.strategy = 'order';
     h.usage.mockImplementation(async (_provider: string, dir: string) => ({
