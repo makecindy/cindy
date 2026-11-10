@@ -162,12 +162,7 @@
   },
   "taskActionConfirmation": {
     "title": "确认任务操作",
-    "once": "请核对下面的目标、动作和完整内容。允许仅对本次操作生效。",
-    "remove": "这会释放自动化的接收地址。请核对目标，仅允许这一次。",
-    "permission": "这会代你回答另一个任务的授权请求。请核对操作，仅允许这一次。",
-    "resume": "这会恢复已暂停的执行。请核对目标，仅允许这一次。",
-    "command": "这会在电脑上保存或运行命令，执行时不经过 Agent 的工具审批。请核对命令和工作目录，仅允许这一次。",
-    "authority": "这会创建或改写自动执行的指令，后续执行将沿用这份授权。请核对完整指令，批准仅用于本次保存。"
+    "once": "请核对下面的目标、动作和完整内容。允许仅对本次操作生效。"
   },
   "logSupport": {
     "title": "日志与反馈",
@@ -4710,7 +4705,7 @@
     },
     "discordBot": {
       "title": "Discord 机器人",
-      "description": "绑定你自建的 Discord Bot，在 Discord 私聊里连接 {{appName}}。",
+      "description": "绑定你自建的 Discord Bot，在 Discord 私聊和你选定的服务器频道里连接 {{appName}}。",
       "statusAria": "Discord 机器人状态：{{status}}",
       "status": {
         "needsConfig": "需要配置",
@@ -4754,6 +4749,64 @@
         "cellLabel": "消息通知",
         "hint": "上下线时由 Discord Bot 发送通知消息"
       },
+      "channels": {
+        "title": "服务器频道",
+        "summary": {
+          "unknown": "读取中…",
+          "off": "未开启",
+          "on": "已开启 {{count}} 个服务器"
+        },
+        "hint": "默认不开放。开启一个服务器后，在它的文字频道里 @ 机器人即可召唤；每个频道、每个话题各有独立的上下文，机器人也只会收到 @ 它的消息。",
+        "ownerOnly": "目前只有你本人能召唤。",
+        "offline": "机器人未连接，连上后才能选择频道；已启用的频道保持不变。",
+        "members": {
+          "label": "允许频道成员使用",
+          "notice": "频道成员默认关闭。允许后，在该频道 @ 机器人的成员会用到{{name}}已配置的工具，并共享{{name}}的记忆；权限沿用{{name}}的权限设置，命令仍只有你能用。",
+          "aria": "允许 #{{channel}} 的成员使用",
+          "guildAria": "允许 {{guild}} 的成员使用"
+        },
+        "loading": "正在读取机器人所在的服务器…",
+        "refresh": "刷新",
+        "empty": "机器人还没有加入任何服务器。请在 Discord Developer Portal 生成邀请链接把它加入服务器，再点刷新。",
+        "noTextChannels": "没有文字频道",
+        "toggleAria": "启用 {{guild}} 的 #{{channel}}",
+        "error": {
+          "load": "读取服务器列表失败。",
+          "save": "这次修改没有保存成功，已显示当前实际保存的设置。",
+          "unsupported": "那台电脑上的 Cindy 版本较旧，暂不支持在这里设置服务器频道。请先把那台电脑上的 Cindy 升级到最新版。"
+        },
+        "permission": {
+          "cannotSend": "机器人在此频道无法查看或发言",
+          "limited": "缺少权限：{{list}}",
+          "separator": "、",
+          "readHistory": "Read Message History",
+          "embed": "Embed Links",
+          "attachFiles": "Attach Files",
+          "sendInThreads": "Send Messages in Threads"
+        },
+        "unavailable": {
+          "title": "已不可用的服务器或频道",
+          "hint": "这些已被删除，或机器人已不在对应服务器，可以从列表里移除。",
+          "remove": "移除"
+        },
+        "ownerOnlyCardNotice": "只有这个机器人的主人才能点这个按钮。",
+        "guild": {
+          "summary": {
+            "off": "未开启",
+            "all": "全部频道",
+            "selected": "已选 {{count}} 个频道",
+            "none": "未选择频道"
+          },
+          "toggleAria": "开启 {{guild}}",
+          "more": "更多",
+          "modeAria": "{{guild}} 覆盖的频道",
+          "mode": {
+            "all": "全部频道",
+            "selected": "仅指定频道"
+          },
+          "allHint": "包含之后新增的文字频道；机器人只会在有查看和发言权限的频道里响应。"
+        }
+      },
       "ownerNotice": {
         "linked": "✅ 关联好啦，直接开聊就行~",
         "disconnected": "🔌 已断开关联啦，需要时再连上就行~",
@@ -4770,11 +4823,11 @@
         },
         "step2": {
           "title": "Privileged Intent",
-          "body": "P1 私聊能力无需开启任何 Privileged Intent。"
+          "body": "无需开启任何 Privileged Intent（保持 Message Content 关闭）。在服务器里，机器人只会收到 @ 它的消息。"
         },
         "step3": {
           "title": "邀请 Bot",
-          "body": "在 OAuth2 URL Generator 勾选 scope bot，并授予 Send Messages、Read Message History、Attach Files 权限，把 Bot 邀请到任一你所在的 server；DM 需要你和 Bot 有共同 server。"
+          "body": "在 OAuth2 URL Generator 勾选 scope bot，并授予 View Channels、Send Messages、Send Messages in Threads、Embed Links、Attach Files、Read Message History、Add Reactions 权限，把 Bot 邀请到任一你所在的 server；DM 需要你和 Bot 有共同 server。"
         },
         "step4": {
           "title": "复制用户 ID",
@@ -10189,70 +10242,20 @@
     },
     "glance": {
       "open": "{{name}}的近况",
-      "dueUnseen": "有待办到期",
       "computers": "电脑",
       "runningHere": "正在这台上运行",
       "online": "在线",
       "offline": "离线",
       "current": "当前",
       "offlineCount_other": "离线 {{count}} 台",
-      "todos": "待办",
       "showMore": "显示更多",
       "showLess": "收起",
       "doneCount_other": "已完成 {{count}}",
-      "delete": "删除",
-      "deleted": "已删除，同一件事以后不再记",
-      "undo": "撤销",
-      "undoFailed": "没能撤销，请重试",
-      "deleteFailed": "没能删除，请重试",
-      "check": "帮我查查",
-      "checkMeta": "在已连接的邮件和消息里找新待办",
-      "checkPrompt": "帮我查查已连接的邮箱、消息等来源里，有没有需要我处理的新事项，有就记成待办。",
-      "checkFailed": "没能发送，请重试",
-      "dailyCheck": "每天帮我查一次",
-      "dailyCheckMeta": "工作日 9:00，没有新待办不打扰",
       "recentTasks": "近期任务",
       "unread": "未读结果",
-      "stopDailyCheck": "停止每天检查",
-      "loadFailed": "待办加载失败，点击重试",
-      "dailyCheckFailed": "没能保存，请重试",
       "outputs": "输出内容",
       "outputMeta": "{{time}} · {{task}}",
-      "openFailed": "没能打开文件",
-      "source": {
-        "conversation": "你交代的",
-        "mail": "来自邮件",
-        "feishu": "来自飞书",
-        "github": "来自 GitHub",
-        "community": "来自社区",
-        "task": "来自任务"
-      }
-    },
-    "autonomy": {
-      "title": "跟进我的任务",
-      "descriptionOn": "{{name}}会在任务有变化时查看摘要并提醒你。",
-      "movedFrom": "已从{{name}}移到这里",
-      "heldBy": "现在由{{name}}负责，打开就移到这里。",
-      "routineScopeHint": "把你自己创建的任务也交给我跟进；下方内置跟进负责响应这些任务的变化。",
-      "heldByNobody": "尚未开启",
-      "restoreDefault": "恢复默认（{{name}}）",
-      "saveFailed": "没能保存，请重试",
-      "turnOff": {
-        "title": "关闭自动跟进所有任务？",
-        "description": "关闭后没有伙伴统一跟进所有任务。",
-        "confirm": "关闭",
-        "cancel": "取消"
-      },
-      "allowSchedulerFollow": {
-        "title": "它开的任务也交给{{name}}跟进",
-        "description": "默认{{scheduler}}只看不跟。打开后，{{name}}开的任务没做完时，{{scheduler}}也会接着跟进。"
-      },
-      "consent": "开启后，我会读取这台电脑上你创建的任务摘要，分析进展并提醒你重要变化。这会使用模型额度，你可以随时关闭。",
-      "invitation": {
-        "title": "要我帮你跟进任务吗？",
-        "start": "开始跟进",
-        "notNow": "暂不开启"
-      }
+      "openFailed": "没能打开文件"
     },
     "remoteSettings": {
       "empty": "暂无内容",
@@ -10274,9 +10277,6 @@
     },
     "creationName": "名字",
     "settingsBack": "返回设置",
-    "sidebar": {
-      "newTaskWith": "和{{name}}开个新任务"
-    },
     "title": "伙伴",
     "add": "添加伙伴",
     "createWizard": {
@@ -10287,7 +10287,22 @@
       "description": "伙伴会自己维护记忆和学会的做法。只有需要纠正时，才直接打开它的文件夹。",
       "contents": "包含 SOUL.md、USER.md、system_prompt.md，以及 Skill 和记忆文件夹。模型、权限和连接仍由 Cindy 管理。",
       "open": "打开文件夹",
-      "openFailed": "无法打开伙伴文件夹。"
+      "openFailed": "无法打开伙伴文件夹。",
+      "projectMode": {
+        "memoryReviewName": "{{name}} · 整理记忆",
+        "carryover": {
+          "title": "升级前没做完的事",
+          "intro": "伙伴升级时还没完成的事项。还有用的接着做，没用的直接删掉。旧版完整记录保存在伙伴文件夹的 v1-archive 里。",
+          "todos": "待办",
+          "work": "工作台",
+          "threads": "进行中",
+          "commitments": "答应过的",
+          "waiting": "在等",
+          "corrections": "你纠正过的做法",
+          "routines": "需要看一下的例行任务",
+          "upgrade": "升级时没能自动带过来的"
+        }
+      }
     },
     "profile": {
       "title": "资料",
@@ -10346,9 +10361,6 @@
     "model": {
       "description": "选择这个伙伴使用的模型。",
       "primary": "主模型",
-      "task": "任务模型",
-      "inheritPrimary": "继承主模型",
-      "inheritingPrimary": "继承主模型，用于新建后台任务",
       "restoreDefault": "恢复默认模型"
     },
     "modelChain": {
@@ -10476,11 +10488,10 @@
       "showReplyTargetHint": "伙伴回复上方标出它回的是你哪条消息。较早的回复不显示。"
     },
     "session": {
-      "ownedByBot": "{{name}} 的后台任务",
+      "ownedByBot": "{{name}} 开的",
       "backToBot": "回到 {{name}}"
     },
     "collab": {
-      "deliveryFailed": "结果未能送达原对话，已保存在本任务中",
       "backgroundTask": "后台任务",
       "trackedTask": "独立运行并自动回传结果",
       "stopTask": "停止任务",
@@ -10497,8 +10508,6 @@
       "actionFailed": "没发出去，再试一次。",
       "retrying": "还没开始，正在重试…",
       "status": {
-        "queued": "正在开始",
-        "waiting": "等待处理",
         "running": "正在做",
         "completed": "已完成",
         "failed": "失败了",
@@ -10514,13 +10523,6 @@
       },
       "viewResult": "查看结果",
       "noWrittenResult": "没有文字结果。",
-      "addNote": "补一句",
-      "addNotePlaceholder": "补充给后台任务的话，回车发送",
-      "addNoteSent": "已发给后台任务",
-      "stop": "停止",
-      "lookAt": "看看",
-      "awaitingConfirm": "等你确认：{{summary}}",
-      "awaitingConfirmGeneric": "等你确认",
       "elapsed": "已做 {{duration}}",
       "tookTime": "用时 {{duration}}",
       "expandResult": "展开结果",
@@ -10904,7 +10906,6 @@
         "planning": "正在安排…"
       },
       "task": {
-        "label": "任务",
         "state": {
           "started": "进行中",
           "waiting": "等你确认",
@@ -11260,30 +11261,6 @@
           }
         }
       },
-      "system": {
-        "group": "系统技能",
-        "meta": "已开 {{on}} / 共 {{total}}",
-        "pageMeta": "系统技能 · 随 Cindy 更新",
-        "use": "为这位伙伴开启",
-        "whenOff": "关闭后",
-        "items": {
-          "todo": {
-            "name": "待办",
-            "hint": "记下你交代的事和它发现的事，到期提醒你。",
-            "off": "不再记录、整理和提醒待办；已有待办保留，重新开启后继续。"
-          },
-          "routine": {
-            "name": "例行任务",
-            "hint": "帮你建立和维护定期执行的例行任务。",
-            "off": "不再新建或修改例行任务；已有例行任务照常运行，你仍可在「例行任务」页管理。"
-          },
-          "follow": {
-            "name": "工作台与跟进",
-            "hint": "关注你所有任务的近况，跟进你交给它的任务。",
-            "off": "不再主动查看和跟进你的任务；你仍可以在对话里直接问它。"
-          }
-        }
-      },
       "learned": {
         "group": "学会的技能",
         "empty": "还没有学会的技能。夜间学习会把反复用到的做法整理成技能，你也可以在对话里让它记下来。",
@@ -11320,10 +11297,6 @@
       "turnOn": "去开启",
       "permissions": "权限",
       "officialInherited": "Cindy 官方 · 跟随本机启停"
-    },
-    "systemSkills": {
-      "followOffHint": "{{name}} 的系统技能「工作台与跟进」已关闭，在能力页重新开启后才能使用。",
-      "offHint": "系统技能「{{skill}}」已关闭，在能力页重新开启后才会运行。"
     },
     "guided": {
       "title": "创建伙伴",
@@ -11470,6 +11443,10 @@
       "resumeToMove": "先恢复 {{name}}，再换到另一台电脑",
       "transferBusy": "{{name}} 还在回复，等这一轮结束再换电脑",
       "targetUnavailable": "「{{device}}」现在不可用，它需要在线并开启远程控制",
+      "targetOutdated": "「{{device}}」上的 Cindy 版本较旧，还不能运行「{{name}}」，请先在那台电脑上更新 Cindy",
+      "targetOutdatedItem": "换到「{{device}}」· 旧版 Cindy",
+      "targetOutdatedMeta": "旧版 Cindy",
+      "olderTargetNote": "「{{device}}」上是旧版 Cindy，{{name}} 在那里按旧方式运行：对话记录照常同步，项目规则和自动化在那里不生效。",
       "shadowTitle": "这个伙伴已在「{{device}}」上运行",
       "shadowHint": "这里的对话只能查看。",
       "openOnHome": "打开「{{device}}」上的伙伴",
@@ -11497,7 +11474,7 @@
       "mergeLabel": "合并重复的 Cindy",
       "mergeHint": "你有 {{count}} 个 Cindy：{{devices}}",
       "mergeTitle": "把 {{count}} 个 Cindy 合成一个？",
-      "mergeDescription": "合并后只留下一个 Cindy。其他 Cindy 的对话记录、记忆、技能、待办和例行任务会并进来；同名但内容不同的记忆和技能另存一份，不会覆盖。其他 Cindy 会停用，它们的资料仍保留在云端和原来的电脑上。",
+      "mergeDescription": "合并后只留下一个 Cindy。其他 Cindy 的对话记录、记忆、技能和例行任务会并进来；同名但内容不同的记忆和技能另存一份，不会覆盖。其他 Cindy 会停用，它们的资料仍保留在云端和原来的电脑上。",
       "mergeKeep": "保留哪一个的名字、性格和设置",
       "mergeAction": "合成一个",
       "merged": "{{count}} 个 Cindy 已合成一个，带过来 {{messages}} 条消息",
@@ -11881,6 +11858,15 @@
       "unavailable": "目录暂不可用",
       "failed": "项目未能更新，请重新加载核对保存结果。",
       "noAvailable": "更多项目可先在项目列表中添加。"
+    },
+    "automations": {
+      "title": "自动化",
+      "description": "{{name}} 项目里的自动化。在这里开关，编辑请到自动化页面。",
+      "empty": "{{name}} 还没有自动化。",
+      "failed": "自动化读取失败。",
+      "toggle": "启用「{{name}}」",
+      "manage": "在自动化页面管理",
+      "create": "去自动化页面新建"
     }
   },
   "common": {
@@ -13306,8 +13292,10 @@
     },
     "backgroundActivity": {
       "status": "后台子任务运行中，模型用量仍在消耗…",
-      "bashStatus_one": "后台任务运行中（{{count}} 个）…",
-      "bashStatus_other": "后台任务运行中（{{count}} 个）…",
+      "bashWorkStatus_one": "正在后台工作（{{count}} 个命令）…",
+      "bashServiceStatus_one": "后台服务运行中（{{count}} 个）",
+      "bashWorkStatus_other": "正在后台工作（{{count}} 个命令）…",
+      "bashServiceStatus_other": "后台服务运行中（{{count}} 个）",
       "stopAll": "全部停止",
       "stopAllTitle": "关闭该任务的后台进程，停止全部后台作业（任务可继续使用）",
       "stopBashTitle": "停止该任务仍在运行的后台作业（不关闭会话进程）",
@@ -14199,6 +14187,19 @@
       "closeDescription": "将停止并删除本次追问，主任务不受影响。",
       "closeConfirm": "关闭并删除",
       "closeFailed": "删除追问失败，请稍后重试。"
+    },
+    "botStartedTasks": {
+      "started": "开出的任务",
+      "handedTo": "交出的任务",
+      "open": "打开任务「{{title}}」",
+      "untitled": "未命名任务",
+      "startedOne": "开了任务",
+      "handedToOne": "交给任务"
+    },
+    "botTaskLetter": {
+      "replied": "回信",
+      "toggle": "展开或收起「{{title}}」的回信",
+      "openTask": "打开任务"
     }
   },
   "ccAgent": {
@@ -15397,7 +15398,8 @@
         "openConfigAria": "打开项目自动化配置文件",
         "openConfigFailed": "打开文件失败",
         "reload": "重新加载",
-        "reloadAria": "重新加载项目自动化配置"
+        "reloadAria": "重新加载项目自动化配置",
+        "teammate": "{{name}} · 伙伴"
       },
       "promote": {
         "menu": "提升为项目自动化",
@@ -18114,168 +18116,10 @@
     "compression": "用于精简冗长内容。"
   },
   "routines": {
-    "deliveryLabel": "最终送达",
-    "deliveryDirect": "直接显示在伙伴对话里",
-    "deliveryProcess": "交给伙伴处理后回复",
-    "deliveryIm": "发送到消息机器人",
-    "deliveryNone": "只保留在执行任务里",
-    "deliveryHint": "默认直接显示结果，不额外调用模型。开启静默检查后，无事时不送达。",
-    "deliveryRecipient": "接收位置",
-    "deliveryUnavailable": "当前接收位置不可用",
-    "deliveryNoRecipients": "请先连接消息机器人，并与它聊过一次，再重新打开此设置。",
-    "deliveryFailed": "已完成，送达失败",
-    "deliveryFailedHint": "执行结果已保留。请检查送达设置；不要为了补发而重新执行任务。",
-    "deliveryDelivered": "结果已送达",
-    "onEvent": "事件：{{source}} · {{event}}",
-    "triggerDetails": "查看触发条件（{{count}} 项，满足任一项即运行）",
-    "noTriggers": "尚未设置触发条件",
-    "unsavedTitle": "尚有未保存的修改",
-    "unsavedDescription": "离开后会丢弃这次对例行任务的修改。",
-    "discard": "放弃修改",
-    "continueEditing": "继续编辑",
-    "title": "例行任务",
-    "add": "添加例行任务",
-    "back": "返回例行任务",
-    "error": "无法更新例行任务，请检查设置后重试",
-    "empty": "添加例行任务，告诉伙伴做什么、何时运行",
-    "enabled": "已启用",
-    "paused": "已暂停",
-    "runNow": "立即运行",
-    "running": "运行中…",
-    "name": "名称",
-    "instructions": "指令",
-    "when": "何时运行",
-    "addTrigger": "再添加一个",
-    "removeTrigger": "移除触发器",
-    "schedule": "定时",
     "hourly": "每小时",
-    "daily": "每天",
-    "weekdays": "工作日",
-    "weekly": "每周",
-    "monthly": "每月",
-    "interval": "间隔",
-    "advanced": "高级…",
     "everyMinutes": "每 {{count}} 分钟",
-    "minutes": "分钟",
-    "expression": "Cron 表达式",
-    "timezone": "时区",
-    "delete": "删除例行任务",
-    "save": "保存例行任务",
-    "saved": "例行任务已保存",
-    "deleteConfirm": "删除这条例行任务，并取消等待中的运行？",
-    "keep": "保留例行任务",
-    "openTask": "查看任务",
-    "history": "运行历史",
-    "noRuns": "这条例行任务还未运行",
-    "field": "字段",
-    "operator": "条件",
-    "value": "值",
-    "addFilter": "添加条件",
-    "removeFilter": "移除条件",
     "pluginCapability": "向例行任务提交已声明的事件，只触发你配置的例行任务",
-    "time": "时间",
-    "day": "日期",
-    "weekday": "星期",
-    "status": {
-      "queued": "等待中",
-      "running": "运行中",
-      "success": "已完成",
-      "failed": "运行失败",
-      "interrupted": "已中断",
-      "cancelled": "已取消",
-      "skipped": "已检查 · 未唤醒模型"
-    },
-    "sourceStatus": {
-      "listening": "监听中",
-      "disconnected": "未监听",
-      "error": "来源需要检查"
-    },
-    "operators": {
-      "equals": "等于",
-      "contains": "包含",
-      "not-equals": "不等于"
-    },
-    "quiet": "检查没事不说话",
-    "sessionMode": "运行方式",
-    "sessionModePersistent": "沿用同一任务（保留上下文）",
-    "sessionModeFresh": "每次新建任务（隔离上下文）",
-    "sessionModeHint": "沿用同一任务会在同一条例行任务的对话里继续；每次新建会为每次触发创建一条独立任务，运行结束后关闭。",
-    "quietHint": "仅报告变化或问题。提醒和定时发送可关闭此项。",
-    "checkSource": "检查方式",
-    "checkCommand": "前置检查命令",
-    "checkHint": "可选。在电脑上先检查：退出码 2 跳过本轮，0 继续执行，异常仍会报告。清空可移除。",
-    "timeoutMs": "检查超时（毫秒，留空不限时）",
-    "advancedSettings": "高级设置",
-    "builtinFollowUp": {
-      "name": "跟进已接手的任务（内置）",
-      "hint": "任务卡住、等你、出错、达到用量上限或完成时跟进。只处理已交给我的任务。"
-    },
-    "todoCheck": {
-      "name": "每天查待办"
-    },
-    "builtinNightlyLearning": {
-      "name": "夜间学习（内置）",
-      "title": "夜间学习",
-      "hint": "每天 3:30 整理和你的对话：合并记忆，把反复用到的做法总结成技能。没有新对话就跳过，不调用模型。",
-      "hintWeekly": "每周一 3:30 整理这一周和你的对话：合并记忆，把反复用到的做法总结成技能。没有新对话就跳过，不调用模型。"
-    },
-    "nightly": {
-      "switchLabel": "到点自动整理",
-      "paused": "已暂停。对话照常计数，打开后到点开始整理。",
-      "running": "正在整理…",
-      "memoryOff": "记忆已关闭，只整理技能。",
-      "pending": "待整理",
-      "pendingTurns_one": "{{count}} 轮对话",
-      "pendingTurns_other": "{{count}} 轮对话",
-      "pendingNone": "没有新对话，到点会跳过",
-      "last": "上次",
-      "lastNever": "还没整理过",
-      "lastFailed": "没整理完，下次会再试",
-      "lastLearned_one": "整理了 {{count}} 项",
-      "lastLearned_other": "整理了 {{count}} 项",
-      "nothing": "没有需要整理的",
-      "viewHistory": "查看记录",
-      "notHere": "夜间学习只在伙伴的主力电脑上运行。",
-      "switchHint": "没有新对话就跳过，不调用模型",
-      "frequency": "频率",
-      "daily": "每天",
-      "weekly": "每周",
-      "dailyHint": "每天 3:30",
-      "weeklyHint": "每周一 3:30",
-      "runNow": "现在整理",
-      "history": "记录",
-      "empty": "还没有整理过。有新对话后，到点会第一次整理。",
-      "manual": "手动整理",
-      "readTurns_one": "看了 {{count}} 轮对话",
-      "readTurns_other": "看了 {{count}} 轮对话",
-      "undone": "已撤销",
-      "undo": "撤销",
-      "redo": "恢复",
-      "watching": "在观察的做法",
-      "watchingHint": "只出现过一次的做法先放在这里，不会加载。再遇到同类事才会总结成技能。",
-      "promote": "现在记成技能",
-      "decline": "不用学",
-      "changedSince": "这一条之后被改过，不能撤销",
-      "failed": "没能完成，请重试",
-      "item": {
-        "memoryCreated": "新记住「{{title}}」",
-        "memoryUpdated": "整理了记忆「{{title}}」",
-        "memoryDeleted": "删除了记忆「{{title}}」",
-        "memoryMerged": "把记忆「{{title}}」并入「{{into}}」",
-        "skillCreated": "新学技能「{{title}}」",
-        "skillUpdated": "更新了技能「{{title}}」",
-        "skillDisabled": "停用了技能「{{title}}」",
-        "skillMerged": "把技能「{{title}}」并入「{{into}}」并停用"
-      }
-    },
-    "remote": {
-      "pause": "暂停例行任务",
-      "resume": "恢复例行任务",
-      "addSchedule": "添加定时条件",
-      "addInterval": "添加间隔条件",
-      "addEvent": "添加事件触发器",
-      "filterField": "筛选字段"
-    }
+    "advancedSettings": "高级设置"
   },
   "cindyMakeDoctor": {
     "description": "检查本机构建 Cindy 所需的环境。用法：/cindy-make-doctor",
@@ -19618,10 +19462,7 @@
     "sourcePresent": "[来源] 用户原话由宿主原样保留，作为请求背景；当前请求在 Agent补充。",
     "sourceMissing": "[来源] 未找到可核验的用户原话。",
     "userPrefix": "用户原话：",
-    "agentPrefix": "Agent补充：",
-    "taskSource": "[任务来源] 本任务由伙伴发起。",
-    "taskId": "任务 ID：",
-    "contextReferences": "参考资料："
+    "agentPrefix": "Agent补充："
   },
   "sharing": {
     "loginRequired": "登录后分享",
@@ -19776,6 +19617,10 @@
     "openDirectoryFailed": "无法打开账号目录，它可能已被移动或删除。",
     "loginAgain": "重新登录",
     "login": "登录"
+  },
+  "sessionNotify": {
+    "finished": "这个任务这一轮做完了，最终答复如下：",
+    "ended": "这个任务这一轮没有正常结束，最后的输出如下："
   },
   "crashDiagnosis": {
     "title": "Cindy 上次意外退出了",

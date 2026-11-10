@@ -821,12 +821,6 @@
     "failed": "Impossible d'enregistrer. Réessayez.",
     "restore": "Réinitialiser"
   },
-  "followUp": {
-    "title": "Voulez-vous que je suive vos sessions ?",
-    "start": "Commencer le suivi",
-    "notNow": "Plus tard",
-    "saveFailed": "Impossible d'enregistrer. Réessayez."
-  },
   "providerGroupRebalance": {
     "title": "Continuer sur {{label}} ?",
     "body": "Pour consommer le quota de chaque compte de façon équilibrée, envoyez ce message depuis {{label}} ({{quota}}). Les derniers messages et un résumé sont repris ; des détails plus anciens peuvent être perdus.",

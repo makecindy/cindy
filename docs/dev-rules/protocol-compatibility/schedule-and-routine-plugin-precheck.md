@@ -10,3 +10,5 @@
 插件 id 只对插件所在的电脑有意义：`cindy_scheduler` 跨电脑修改拒绝设置该字段，伙伴搬家时带插件检查的
 例行任务先关闭再到达；Mobile 与项目自动化配置不编辑、不保存它。不新增 device-link channel：插件下拉用
 本机专用的 `ghosts:control-points:candidates`，不进 allowlist。
+（2026-11-08 起 V2 不再适用于伙伴例行任务：例行任务已转为伙伴项目的自动化，带插件检查的例行任务转成已暂停的自动化并在
+`CARRYOVER.md` 记一条说明；定时任务的 `preRunPlugin` 不变。）

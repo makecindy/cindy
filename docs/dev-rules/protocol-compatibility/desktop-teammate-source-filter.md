@@ -3,7 +3,7 @@
 > 通用规则与 Review 清单见[跨端协议兼容](../protocol-compatibility.md)；本文件只记录这一项能力的协议约定。
 
 桌面在读取 `teammates` 名册后，用每个伙伴的 `conversation` 任务 ID 调用既有的
-`maker:bot-delegations:list`。只将 `requestingBotId` 匹配、`childSessionId` 非空的记录
+`maker:bot-delegations:list`（委派退役后新 Host 只读应答旧行，见[「伙伴后台任务（委派）退役」](teammate-background-task-delegation-retirement.md)）。只将 `requestingBotId` 匹配、`childSessionId` 非空的记录
 作为创建来源；不把接手关系当创建，也不要求远端支持新增的 `created` link。
 包含活跃和归档任务，实际展示仍由任务列表状态筛选决定；旧版远端也能直接使用。
 已有 `following` 链接继续提供跟进标记，任务创建关系同时用于远程创建者头像。

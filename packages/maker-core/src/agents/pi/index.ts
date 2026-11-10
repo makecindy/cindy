@@ -99,6 +99,8 @@ import {
   type SendOptions,
   type StartSessionOptions,
   type TurnPermissionPolicy,
+  botRuntimeSkillPolicy,
+  isolatedBotProfile,
 } from '../base-agent.js';
 import {
   CINDY_BRIDGE_EXTENSION_FILENAME,
@@ -2687,7 +2689,8 @@ export class PiAgent extends BaseAgent {
     }
     assertRemotePiContextProfileAvailable(opts.remoteHostId, opts.model, opts.providerId);
     const reviewMode = opts.reviewMode === true;
-    const botMemoryScope = opts.makerMemoryScopeKey?.startsWith('bot:') === true;
+    // A teammate's memory follows its own switch, also once it is a project (V2, no `bot:` scope).
+    const botMemoryScope = opts.makerMemoryScopeKey?.startsWith('bot:') === true || opts.makerMemorySwitchOwned === true;
     const sessionMemoryEnabled = !reviewMode
       && (opts.makerMemoryEnabled ?? this.deps.runtimeConfig.makerMemoryEnabled ?? false) === true
       && (botMemoryScope || (this.memoryOverride ?? true));
@@ -3285,7 +3288,7 @@ export class PiAgent extends BaseAgent {
     // Bot contexts remain profile-only. SSH tasks use the remote user's rules,
     // never the controlling desktop's personal instructions.
     // 受邀者会话不带本机用户的全局说明(~/.pi/agent/AGENTS.md 等)。
-    const globalContextFiles = opts.botRuntimeProfile || hostedGuest ? [] : await readPiGlobalContext(
+    const globalContextFiles = isolatedBotProfile(opts.botRuntimeProfile) || hostedGuest ? [] : await readPiGlobalContext(
       this.deps.resolvePiGlobalContextHome?.(opts.remoteHostId),
       fileOps,
     );
@@ -3800,8 +3803,8 @@ export class PiAgent extends BaseAgent {
           // 不得再二次 resolve (Codex #2399 P2)。
           ...((sessionMemoryEnabled || opts.makerMemoryScopeKey) ? { memoryScopeKey } : {}),
           memoryEnabled: sessionMemoryEnabled,
-          ...(opts.botRuntimeProfile?.mcpPolicy
-            ? { botMcpPolicy: opts.botRuntimeProfile.mcpPolicy }
+          ...(isolatedBotProfile(opts.botRuntimeProfile)?.mcpPolicy
+            ? { botMcpPolicy: isolatedBotProfile(opts.botRuntimeProfile)!.mcpPolicy }
             : {}),
           vendorOptions: mutableVendorOptions,
           mcpCallerKind: 'root',
@@ -3885,7 +3888,7 @@ export class PiAgent extends BaseAgent {
     // 与用户段。前缀稳定(默认 prompt 静态),易变内容禁止进入(缓存规则 3.1)。
     // 设备托管(含受邀者)用任务所在电脑给的花名册：插件工具经隧道在那台，本机装的插件不进这个任务。
     const localGhostRoster = () => this.deps.getGhostRosterPrompt?.({ workingDir: opts.workingDir }) ?? '';
-    const ghostRosterPrompt = reviewMode || opts.botRuntimeProfile
+    const ghostRosterPrompt = reviewMode || isolatedBotProfile(opts.botRuntimeProfile)
       ? ''
       : hosted
         ? deviceHostedGhostRoster(hosted, opts.ghostRosterSnapshot, localGhostRoster)
@@ -3893,14 +3896,14 @@ export class PiAgent extends BaseAgent {
     const promptSourceEntries: Array<[string, string | undefined]> = [
       ['delivery', reviewMode ? undefined : this.deps.runtimeConfig.answerDeliveryPrompt?.trim()],
       ['profile', reviewMode ? undefined : opts.botProfilePrompt?.trim()],
-      ['host', opts.botRuntimeProfile ? undefined : this.deps.runtimeConfig.systemPrompt?.trim()],
+      ['host', isolatedBotProfile(opts.botRuntimeProfile) ? undefined : this.deps.runtimeConfig.systemPrompt?.trim()],
       ['plugins', ghostRosterPrompt.trim()],
       ['profile', reviewMode ? undefined : opts.botProfileContextPrompt?.trim()],
       ['memoryRules', makerMemoryPromptEnabled && !opts.makerMemoryScopeKey?.startsWith('bot:')
         ? MAKER_MEMORY_RULES : undefined],
       ['memoryIndex', makerMemoryIndex.trim()],
       ['user', reviewMode ? undefined : opts.botUserProfilePrompt?.trim()],
-      ['user', reviewMode || opts.botRuntimeProfile ? undefined : opts.userPrompt?.trim()],
+      ['user', reviewMode || isolatedBotProfile(opts.botRuntimeProfile) ? undefined : opts.userPrompt?.trim()],
       ['directories', piExtraDirsPrompt(mutableExtraDirs, mutableWritableDirs, mutableLibraryRoot)],
     ];
     const promptSources: PiPromptSource[] = promptSourceEntries.flatMap(([source, text]) =>
@@ -3948,11 +3951,11 @@ export class PiAgent extends BaseAgent {
     // skills. Missing/throwing authorities and paths fail closed; never infer
     // approval from permission mode, MCP/plugin state, or caller vendor options.
     // 受邀者不读本机用户的技能停用偏好(本机技能整体不加载)。
-    const disabledSkillPaths = opts.remoteHostId || opts.botRuntimeProfile || reviewMode || hostedGuest
+    const disabledSkillPaths = opts.remoteHostId || isolatedBotProfile(opts.botRuntimeProfile) || reviewMode || hostedGuest
       ? [] : [...(this.deps.getDisabledSkillPaths?.() ?? [])];
     let disabledSkillLaunch = snapshotDisabledSkillLaunch(disabledSkillPaths);
     const disabledSkillSnapshot = disabledSkillLaunch.identities;
-    const loadProjectResourcesInPlace = !reviewMode && !opts.botRuntimeProfile && !opts.remoteHostId && !opts[LOCAL_AGENT_CLIENT]?.hostToolsOnly;
+    const loadProjectResourcesInPlace = !reviewMode && !isolatedBotProfile(opts.botRuntimeProfile) && !opts.remoteHostId && !opts[LOCAL_AGENT_CLIENT]?.hostToolsOnly;
     let projectResourceAssembly = unavailablePiProjectResourceAssembly(
       reviewMode ? 'review-mode-project-resources-disabled' : 'approval-resolver-unavailable',
     );
@@ -3985,7 +3988,7 @@ export class PiAgent extends BaseAgent {
       requestedSkillCount: projectResourceAssembly.diagnostic.requestedSkillCount,
     });
     const botSkillSelection = applyPiBotSkillPolicy(
-      reviewMode ? undefined : opts.botRuntimeProfile?.skillPolicy,
+      reviewMode ? undefined : botRuntimeSkillPolicy(opts.botRuntimeProfile),
       projectResourceAssembly,
     );
     projectResourceAssembly = botSkillSelection.projectAssembly;
@@ -4099,7 +4102,7 @@ export class PiAgent extends BaseAgent {
     let managedSkillRoot: string | undefined;
     let args: string[];
     try {
-      const managedSkillGrants = snapshotManagedSkillGrants(opts.botRuntimeProfile?.skillPolicy);
+      const managedSkillGrants = snapshotManagedSkillGrants(isolatedBotProfile(opts.botRuntimeProfile)?.skillPolicy);
       // 受邀者不带本机安装的托管技能(属于本机用户与其组织)。
       // 任务所在电脑提供了托管技能时，它们已作为项目技能放在影子目录，本机的不再加载。
       const managedSkills = opts.remoteHostId || reviewMode || hostedGuest || hosted?.controllerManagedSkills || opts[LOCAL_AGENT_CLIENT]?.hostToolsOnly ? [] : await this.deps.getManagedSkills?.() ?? [];
@@ -4148,14 +4151,14 @@ export class PiAgent extends BaseAgent {
         initialWireModel,
         ...(reviewMode ? ['--tools', 'read,grep,find,ls'] : []),
         ...(opts[LOCAL_AGENT_CLIENT]?.hostToolsOnly ? ['--no-skills', '--no-context-files', '--no-prompt-templates'] : []),
-        // Bot sessions must not absorb project/global AGENTS.md or CLAUDE.md from
-        // the cwd chain — their context is the Bot profile, not the workspace.
-        ...(opts.botRuntimeProfile ? ['--no-context-files'] : []),
+        // Classic Bot sessions must not absorb project/global AGENTS.md or CLAUDE.md from
+        // the cwd chain — their context is the Bot profile. V2 teammates load them like any task.
+        ...(isolatedBotProfile(opts.botRuntimeProfile) ? ['--no-context-files'] : []),
         ...(botSkillSelection.disableImplicitSkills ? ['--no-skills'] : []),
         // 受邀者：不发现本机用户的技能、模板与会话目录之外的说明文件；受邀者自己的用下面的显式路径。
         ...(hostedGuest
           ? PI_DEVICE_HOSTED_GUEST_FLAGS.filter((flag) => !(
-            (flag === '--no-context-files' && opts.botRuntimeProfile)
+            (flag === '--no-context-files' && isolatedBotProfile(opts.botRuntimeProfile))
             || (flag === '--no-skills' && botSkillSelection.disableImplicitSkills)))
           : []),
         ...additionalSkillPaths.filter((skillPath) => !projectResourceCli.skills

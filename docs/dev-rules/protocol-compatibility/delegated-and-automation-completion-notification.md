@@ -19,3 +19,7 @@
 仍可能发独立完成通知，完整远端去重和保留旧未读时的静默需要两端更新。
 手机外部推送在执行端及远控 Desktop 的通知出口完成去重，手机无需新增协议处理；
 移动列表继续原 phase/attention 语义。无需服务端、数据库 migration 或 Mobile fingerprint 改动。
+
+V1 伙伴后台任务退役后（2026-11-08，见[「伙伴后台任务（委派）退役」](teammate-background-task-delegation-retirement.md)），新执行端不再发出 `pending` / `teammate`：
+宿主不再判定「同一委派执行结果已交回伙伴」，完成通知按普通任务处理。控制端继续识别旧执行端
+发来的这两个值，不改字段或枚举。
