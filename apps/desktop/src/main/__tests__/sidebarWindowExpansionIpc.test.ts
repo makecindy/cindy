@@ -28,7 +28,7 @@ it('uses only the sending window', () => {
   mocks.from.mockReturnValue(win);
   mocks.handle.mock.calls[0][1]({ sender }, 400);
   expect(mocks.from).toHaveBeenCalledWith(sender);
-  expect(mocks.update).toHaveBeenCalledWith(win, 400, {});
+  expect(mocks.update).toHaveBeenCalledWith(win, 400, {}, expect.anything());
 });
 it('validates restoration and shrink inputs before accessing native windows', () => {
   const handle = mocks.handle.mock.calls[0][1];
@@ -40,7 +40,7 @@ it('validates restoration and shrink inputs before accessing native windows', ()
   const win = { isDestroyed: () => false, getBounds: () => ({}), webContents: { getZoomFactor: () => 1 } };
   mocks.from.mockReturnValue(win);
   handle({}, 0, 301, true);
-  expect(mocks.update).toHaveBeenCalledWith(win, 301, {});
+  expect(mocks.update).toHaveBeenCalledWith(win, 301, {}, expect.anything());
 });
 
 it('converts CSS pixels to native pixels at the IPC boundary under page zoom', () => {
@@ -48,7 +48,7 @@ it('converts CSS pixels to native pixels at the IPC boundary under page zoom', (
   mocks.from.mockReturnValue(win);
   mocks.update.mockReturnValue(400);
   expect(mocks.handle.mock.calls[0][1]({}, 200, 100)).toBe(200);
-  expect(mocks.update).toHaveBeenCalledWith(win, 400, {});
+  expect(mocks.update).toHaveBeenCalledWith(win, 400, {}, expect.anything());
 });
 
 it('only reports explicit horizontal resizing, not programmatic/fullscreen changes', () => {

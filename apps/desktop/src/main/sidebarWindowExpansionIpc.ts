@@ -39,8 +39,8 @@ export function registerSidebarWindowExpansionIpc(): void {
     const scale = Number.isFinite(zoom) && zoom > 0 ? zoom : 1;
     const nativeShrink = typeof shrink === 'number' ? shrink * scale : undefined;
     const delta = adopt === true
-      ? expansion.update(win, nativeShrink ?? 0, screen.getDisplayMatching(win.getBounds()).workArea)
-      : expansion.update(win, width * scale, screen.getDisplayMatching(win.getBounds()).workArea);
+      ? expansion.update(win, nativeShrink ?? 0, screen.getDisplayMatching(win.getBounds()).workArea, screen)
+      : expansion.update(win, width * scale, screen.getDisplayMatching(win.getBounds()).workArea, screen);
     return delta / scale;
   });
 }

@@ -106,4 +106,41 @@ describe('sidebar window expansion', () => {
     controller.update(native, 0, area);
     expect(win.getBounds().width).toBe(900);
   });
+  // Review regression: the baseline view must not hide a real work-area fill.
+  it('still reports a Snap fill while open, but not its own expansion', () => {
+    const { win, native, area } = fixture();
+    win.setBounds({ x: -1920, y: 0, width: 960, height: 1080 });
+    const controller = new SidebarWindowExpansion();
+    let keeper!: PersistableWindow;
+    manageWindowStatePreservingNormalBounds(
+      { manage: (view) => { keeper = view; } },
+      controller.persistenceView(native),
+      { getDisplayMatching: () => ({ bounds: area, workArea: area }) },
+      'win32',
+    );
+    const before = win.getBounds();
+    // Full-height window at the left edge grows to the work-area edge by itself.
+    controller.update(native, 960, area);
+    expect(win.getBounds()).toEqual(area);
+    expect(keeper.isMaximized()).toBe(false);
+    expect(keeper.getBounds()).toEqual(before);
+    // The user then snaps it to fill: that is a real maximize to restore.
+    win.setBounds({ x: -1919, y: 1, width: 1918, height: 1079 });
+    expect(keeper.isMaximized()).toBe(true);
+    expect(keeper.getBounds()).toEqual(before);
+  });
+  it('keeps a removed display off-screen rectangle inside the work area on close', () => {
+    const { win, native, area } = fixture();
+    const controller = new SidebarWindowExpansion();
+    controller.update(native, 400, area);
+    const remaining = { x: 0, y: 0, width: 1280, height: 720 };
+    win.setBounds({ x: 100, y: 50, width: 1300, height: 700 });
+    const screenApi = { getPrimaryDisplay: () => ({ bounds: remaining, workArea: remaining }),
+      getDisplayMatching: () => ({ bounds: remaining, workArea: remaining }) };
+    controller.update(native, 0, remaining, screenApi);
+    const restored = win.getBounds();
+    expect(restored.x).toBeGreaterThanOrEqual(0);
+    expect(restored.x + restored.width).toBeLessThanOrEqual(1280);
+    expect(restored.width).toBe(900);
+  });
 });
