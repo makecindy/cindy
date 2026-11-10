@@ -188,6 +188,25 @@ describe('getSessionDisplayTitle', () => {
       'nightly-build',
     );
   });
+
+  it('localizes only the built-in follow-up default title for the current locale', () => {
+    const routine = {
+      companion: { id: 'bot', role: 'routine', routineId: 'builtin-follow-up-bot' },
+    };
+    const savedChinese = session({ ...routine, title: '跟进任务' });
+    expect(getSessionDisplayTitle(savedChinese, UNNAMED, () => 'Follow assigned sessions (built-in)'))
+      .toBe('Follow assigned sessions (built-in)');
+    expect(savedChinese.title).toBe('跟进任务');
+    expect(getSessionDisplayTitle(
+      session({ ...routine, title: '跟进已接手的任务（内置）' }),
+      UNNAMED,
+      () => 'Follow assigned sessions (built-in)',
+    )).toBe('跟进已接手的任务（内置）');
+
+    const custom = session({ ...routine, title: 'My follow-up name' });
+    expect(getSessionDisplayTitle(custom, UNNAMED, () => 'Follow assigned sessions (built-in)'))
+      .toBe('My follow-up name');
+  });
 });
 
 describe('isEmptyDraftSession', () => {

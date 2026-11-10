@@ -18,6 +18,10 @@ import {
   CINDY_MAKE_MERGE_SESSION_SOURCE,
   isCindyMakeFamilySource,
 } from '../../../../shared/cindyMakeMerge';
+import {
+  BUILTIN_FOLLOW_UP_ROUTINE_DEFAULT_TITLE,
+  BUILTIN_FOLLOW_UP_ROUTINE_PREFIX,
+} from '../../../../shared/botAutonomy';
 import { formatCindyMakeMergeTitle } from '../../../../shared/cindyMakeMergeTitle';
 import { SUPPORTED_LOCALES } from '../../../../shared/locale';
 import { getCrossLocaleString } from '@/i18n/crossLocale';
@@ -33,6 +37,7 @@ const MAKE_MERGE_TITLE_KEYS = [
   'cindyMake.history.mergeTaskTitle',
   'cindyMake.history.revertTaskTitle',
 ] as const;
+const BUILTIN_FOLLOW_UP_TITLE_KEY = 'routines.builtinFollowUp.name';
 
 type TranslateSessionTitle = (key: string) => string;
 
@@ -56,6 +61,14 @@ function getLegacyMakeTitleKey(
           return label !== undefined && title === formatCindyMakeTitle(label, worktree);
         })),
   );
+}
+
+function isDefaultBuiltInFollowUpTitle(session: Session): boolean {
+  if (
+    session.companion?.role !== 'routine' ||
+    !session.companion.routineId?.startsWith(BUILTIN_FOLLOW_UP_ROUTINE_PREFIX)
+  ) return false;
+  return session.title === BUILTIN_FOLLOW_UP_ROUTINE_DEFAULT_TITLE;
 }
 
 /**
@@ -100,6 +113,9 @@ export function getSessionDisplayTitle(
       ? formatCindyMakeMergeTitle(translate ? translate(key) : key, session.createdAt)
       : session.title;
     return formatCindyMakeTitle(title, cindyMakeWorktreeName(session.workingDir));
+  }
+  if (translate && isDefaultBuiltInFollowUpTitle(session)) {
+    return translate(BUILTIN_FOLLOW_UP_TITLE_KEY);
   }
   return getAutomationSessionDisplayTitle(session);
 }
