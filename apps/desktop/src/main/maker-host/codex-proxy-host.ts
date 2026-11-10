@@ -25,7 +25,7 @@ import {
 import { reconcileOutboundReasoningEffort } from './outbound-reasoning-effort.js';
 import { createPiProviderFetch, handlePiProviderRequest, invocationModelRecord, nativeBridgeApiKey, readBoundedResponseText, requiresNativeProviderAuth } from './pi-provider-transport.js';
 import { normalizeProviderRequest, normalizeMiniMaxResponsesReasoning, normalizeRepeatedResponseToolCallIdsFromBody } from '@cindy/model-compat';
-import { createCodexResponsesCompatibilityAdapter, sanitizeXaiTools, hasCacheOnlySearchProhibition, sanitizeByteDanceSeedTools, normalizeByteDanceSeedInput, sanitizeByteDanceSeedReasoning, normalizeStrictGatewayHistory, sanitizeDeepSeekV4CustomTools } from '@cindy/model-compat';
+import { createCodexResponsesCompatibilityAdapter, sanitizeXaiTools, hasCacheOnlySearchProhibition, sanitizeByteDanceSeedTools, normalizeByteDanceSeedInput, sanitizeByteDanceSeedReasoning, normalizeStrictGatewayHistory, normalizeDeepSeekV41ToolHistory, sanitizeDeepSeekV4CustomTools } from '@cindy/model-compat';
 import { bearerAccessTokenFromHeaders } from './chatgpt-bridge-auth-invalidation.js';
 import { isAppSessionBoundaryPending } from '../appSessionState.js';
 /**
@@ -1842,6 +1842,67 @@ function createStrictGatewayHistoryCompatTransform(): RequestTransform {
   };
 }
 
+const DEEPSEEK_V41_GATEWAY_MODEL = 'deepseek/deepseek-v4.1-flash';
+
+/** Only the verified XD Responses route may change the order of this history. */
+function isDeepSeekV41GatewayReplay(
+  body: Record<string, unknown>,
+  ctx: RequestTransformCtx,
+  frozenAuthInjection?: CodexProxyAuthInjection,
+): boolean {
+  if (
+    ctx.method !== 'POST' || ctx.url.split('?', 1)[0]?.replace(/\/+$/, '') !== '/responses' ||
+    body.model !== DEEPSEEK_V41_GATEWAY_MODEL
+  ) return false;
+  const { providerId, routing, catalogModel } = responsesCompatibilityRoute(body, ctx, frozenAuthInjection);
+  if (catalogModel !== DEEPSEEK_V41_GATEWAY_MODEL || providerId !== 'xd' || !routing
+    || (routing.wireProtocol ?? 'openai-responses') !== 'openai-responses') return false;
+  const endpoint = claudeUpstreamEndpoint().trim();
+  if (!endpoint) return false;
+  try {
+    const expected = new URL(buildCodexGatewayBaseUrl(endpoint));
+    if (expected.protocol !== 'https:' && expected.protocol !== 'http:') return false;
+    // Routing preflight runs before the final upstream is selected. Once it is
+    // known, only the exact dynamic XD endpoint is eligible for the rewrite.
+    if (!ctx.upstreamBase) return true;
+    const actual = new URL(ctx.upstreamBase);
+    return actual.origin === expected.origin &&
+      actual.pathname.replace(/\/+$/, '') === expected.pathname.replace(/\/+$/, '') &&
+      actual.search === expected.search;
+  } catch {
+    return false;
+  }
+}
+
+function createDeepSeekV41ReplayTransform(frozenAuthInjection?: CodexProxyAuthInjection): RequestTransform {
+  const transform: RequestTransform = (body, ctx) => {
+    if (!isPlainObject(body) || !ctx.upstreamBase || !isDeepSeekV41GatewayReplay(body, ctx, frozenAuthInjection)) return null;
+    const result = normalizeDeepSeekV41ToolHistory(body);
+    // The routing preflight normally returns a local 400 first. Fail closed if
+    // another earlier transform changes a safe request into an ambiguous batch.
+    if (result.kind === 'invalid') throw new Error('deepseek_tool_output_order_invalid');
+    return result.kind === 'normalized' ? result.body : null;
+  };
+  transform.errorMode = 'reject-request';
+  return transform;
+}
+
+function rejectAmbiguousDeepSeekReplay(): RoutingDecision {
+  return {
+    localHandler: async ({ res }) => {
+      if (res.headersSent || res.destroyed) return;
+      res.writeHead(400, { 'content-type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify({
+        error: {
+          type: 'invalid_request_error',
+          code: 'deepseek_tool_output_order_invalid',
+          message: 'Tool results in the conversation history are incomplete or ambiguous.',
+        },
+      }));
+    },
+  };
+}
+
 function createByteDanceSeedResponsesCompatTransform(): RequestTransform {
   return (body, ctx) => {
     if (!isPlainObject(body)) return null;
@@ -2985,7 +3046,6 @@ function resolveCodexCustomProviderRoutingDecision(
     if (customProviderRoute !== undefined) return customProviderRoute;
     // body 可能为 undefined —— 无 body 的 GET(典型: codex models-manager 的 `GET /models` 轮询,
     // 引擎现在也会对它跑路由)。不再因 body 非对象就短路;会话解析只依赖 headers,model 字段可选。
-    const gatewayKey = _readGatewayKey();
     const authInjection = frozenAuthInjection ?? getCodexProxyAuthInjection();
     const requestModel = isPlainObject(body) && typeof body.model === 'string' ? body.model : '';
     const reportedModel =
@@ -3015,6 +3075,14 @@ function resolveCodexCustomProviderRoutingDecision(
       ? resolvePendingSessionRouteDecision(sessionId, model || undefined)
       : null;
     if (pendingRoute) return pendingRoute;
+    // Route and authorize the actual model first. A child or Guardian can be
+    // sent with its parent's model and rewritten before leaving the proxy.
+    if (model === DEEPSEEK_V41_GATEWAY_MODEL && isPlainObject(body)
+      && isDeepSeekV41GatewayReplay({ ...body, model }, ctx, authInjection)
+      && normalizeDeepSeekV41ToolHistory(body).kind === 'invalid') {
+      return rejectAmbiguousDeepSeekReplay();
+    }
+    const gatewayKey = _readGatewayKey();
     const selectedRouting = subagentRoute
       ? getProviderRoutingDescriptor(
           subagentRoute.providerId,
@@ -3274,6 +3342,7 @@ function createTransformRequestChain(
     // Providers that explicitly lack Responses custom tools still accept ordinary
     // functions. Adapt before provider sanitizers, then restore custom_tool_call
     // events on the matching response stream.
+    createDeepSeekV41ReplayTransform(frozenAuthInjection),
     execFunctionAdapterTransform,
     createStrictGatewayHistoryCompatTransform(),
     // Gateway / LiteLLM / 自定义 grok 不走 xAI 订阅 transform，但仍必须在
