@@ -135,11 +135,16 @@
     "permissionDenied": "システム設定で Cindy の通知を許可してください。",
     "unregisterQueued": "オフにしました。オンラインになると登録解除が完了します。",
     "preview": "チャット内容をプレビュー",
-    "background": "バックグラウンドで接続を維持",
+    "background": "バックグラウンド通知",
     "backgroundActive": "バックグラウンドでメッセージを受信中",
     "backgroundStop": "受信を停止",
-    "backgroundHint": "Google を使わずに接続し、常駐通知を表示します。通知からいつでも停止できます。",
-    "googleUnavailable": "Google プッシュ通知を利用できません。バックグラウンド接続で受信できます。"
+    "backgroundHint": "Google のプッシュ通知が利用できない可能性がある場合、Cindy が自動で接続を維持します。接続中は常駐通知が表示されます。",
+    "googleUnavailable": "Google のプッシュ通知を利用できません。通知設定に従ってバックグラウンド接続を使用します。",
+    "backgroundModes": {
+      "auto": "自動",
+      "on": "常にオン",
+      "off": "オフ"
+    }
   },
   "about": {
     "sectionTitle": "このスマートフォンについて",
