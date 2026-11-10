@@ -3220,6 +3220,11 @@ export function getMaker(): Maker {
           await writeCodexHistoryHasProductPrompt(sessionId, historyHasProductPrompt);
         },
         onClose: async (sessionId, options) => {
+          // 抑制态必须在首个 await 前取样:Maker.close 不等 onClose,调用方(漂移
+          // 回收包裹/任务移动/桌面发送 seam)的抑制窗口会在 close 返回后即释放,
+          // 而本钩子先等 worktree lease 的文件操作才查抑制表 —— 重查会错过窗口,
+          // 让重建期间的 close 照删暂存附件(Greptile P1,2026-11-10)。
+          const rehydrateSuppressedAtClose = rehydrateCloseSuppression.isSuppressed(sessionId);
           clearUsagePricing(sessionId);
           const lease = worktreeRuntimeLeases.get(options);
           if (lease) {
@@ -3239,7 +3244,7 @@ export function getMaker(): Maker {
             // 这)。回收只由会话显式删除/归档驱动,见 localDb/ipc/sessions.ts →
             // worktree/sessionRemovalRecycle.ts。
             await WorktreePool.releaseWorktree(sessionId).catch(() => undefined);
-          });
+          }, { forceSkip: rehydrateSuppressedAtClose });
         },
       },
     });
