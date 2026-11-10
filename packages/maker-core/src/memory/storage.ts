@@ -234,6 +234,11 @@ export interface MemoryStorageMeta {
   lastUsedAt: string;
 }
 
+/** 撤销整理时恢复一条记忆: 改回整理前的内容, 或把被整理删掉的分片按原文件名建回。 */
+export type RestoreSnapshotInput =
+  | { kind: 'update'; filename: string; expectedUpdatedAt: string; changes: Pick<WriteOptions, 'title' | 'description' | 'body'> }
+  | { kind: 'create'; filename: string; title: string; description: string; body: string };
+
 export class MemoryStorage {
   private indexCache: string | null = null;
   /**
@@ -407,10 +412,8 @@ export class MemoryStorage {
    * 撤销整理时恢复整理前的内容。只恢复整理前已经存在过的记忆, 不受索引硬上限限制:
    * 升级或旧记忆并入后索引可以原本就超过上限, 整理把它缩小之后, 撤销不能因此被预算挡住。
    */
-  async restoreSnapshot(
-    opts: WriteOptions | { filename: string; expectedUpdatedAt: string; changes: Pick<WriteOptions, 'title' | 'description' | 'body'> },
-  ): Promise<WriteResult | MemoryRecord> {
-    if ('filename' in opts) {
+  async restoreSnapshot(opts: RestoreSnapshotInput): Promise<WriteResult | MemoryRecord> {
+    if (opts.kind === 'update') {
       return this.mutate(async () => {
         const current = await this.checkVersion(opts.filename, opts.expectedUpdatedAt);
         await this.writeFile(
@@ -422,9 +425,20 @@ export class MemoryStorage {
         return this.read(opts.filename);
       });
     }
-    this.validateOpts(opts);
+    // 恢复被整理删掉的分片: 用原来的文件名, 不套用新建分片的命名规则 (存量的
+    // `user_user_xxx.md` 双前缀分片能读、能改、能被整理删除, 也必须能撤销回来)。
+    // 文件名仍要能解析成合法的 type + slug, 且不会指到存储目录之外。
+    const parsed = parseFilename(opts.filename);
+    if (!parsed || opts.filename !== path.basename(opts.filename)) {
+      throw new MemoryError('invalid-slug', `cannot restore shard with invalid filename "${opts.filename}"`);
+    }
     return this.mutate(() =>
-      this.writeFile(opts, buildFilename(opts.type, opts.name), [], true));
+      this.writeFile(
+        { type: parsed.type, name: parsed.slug, title: opts.title, description: opts.description, body: opts.body, mode: 'create' },
+        opts.filename,
+        [],
+        true,
+      ));
   }
 
   /** 在目录锁内执行一段读-改-写 (整理状态的提交用), 与分片的写入和删除排同一个队列。 */

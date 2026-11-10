@@ -1385,6 +1385,9 @@ export class MakerMemoryManager {
       const nowIso = new Date(now).toISOString();
       // 先记下这次尝试: 辅助模型不可用或输出不可解析时, 不在每一轮任务结束后重试。
       await store.updateTidyState((current) => ({ ...current, lastAttemptAt: nowIso }));
+      // 状态写入横跨 await: 此时账号若已切换, 发出去的请求会以新账号的权限和供应商配置
+      // 携带旧账号的全部记忆, 事后丢弃结果撤不回, 所以要在发请求之前复核。
+      this.assertScopeUnchanged(scopeAtEntry);
       const text = await this.deps.reviewOneShot(buildTidyPrompt(records), TIDY_ONE_SHOT_OPTS);
       // 模型调用横跨 await: 账号边界已变则丢弃提议, 不落盘。
       this.assertScopeUnchanged(scopeAtEntry);
@@ -1510,6 +1513,7 @@ export class MakerMemoryManager {
               continue;
             }
             await store.restoreSnapshot({
+              kind: 'update',
               filename: change.filename,
               expectedUpdatedAt: change.after.updatedAt,
               changes: {
@@ -1519,18 +1523,12 @@ export class MakerMemoryManager {
               },
             });
           } else {
-            const parsed = parseFilename(change.filename);
-            if (!parsed) {
-              skipped += 1;
-              continue;
-            }
             await store.restoreSnapshot({
-              type: parsed.type,
-              name: parsed.slug,
+              kind: 'create',
+              filename: change.filename,
               title: change.before.title,
               description: change.before.description,
               body: change.before.body,
-              mode: 'create',
             });
           }
           restored += 1;

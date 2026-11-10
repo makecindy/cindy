@@ -226,7 +226,7 @@ export class MakerMemoryStore {
     this.assertScopeOk();
     await this.init();
     await this.storage.restoreSnapshot(opts);
-    await this.syncWrite({ ok: true, filename: 'filename' in opts ? opts.filename : buildFilename(opts.type, opts.name) });
+    await this.syncWrite({ ok: true, filename: opts.filename });
   }
 
   private syncDelete(filename: string): void {

@@ -11,7 +11,7 @@
  * 模块 (tidy.ts) 加它在 manager 上的入口; 用真 better-sqlite3 走生产的 store。
  */
 
-import { mkdtemp, rm } from 'node:fs/promises';
+import { copyFile, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -19,7 +19,7 @@ import DatabaseCtor from 'better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { MakerMemoryManager } from './manager.js';
-import { buildBotMemoryScopeKey } from './storage.js';
+import { buildBotMemoryScopeKey, memoryScopeDirName } from './storage.js';
 import { EMPTY_TIDY_STATE, isTidyDue, parseTidyPlan, validateTidyPlan, type TidyPlan } from './tidy.js';
 import { DEFAULT_MEMORY_CONFIG, type MemoryRecord, type MemoryType } from './types.js';
 import type { Logger } from '../interfaces/logger.js';
@@ -113,6 +113,7 @@ describe('MakerMemoryManager.tidy', () => {
   function managerWith(
     reply: (prompt: string) => string | null | Promise<string | null>,
     config?: { hardIndexBytes: number },
+    ownerScopeKey?: () => string,
   ) {
     const reviewOneShot = vi.fn(async (prompt: string) => reply(prompt));
     const manager = new MakerMemoryManager({
@@ -124,6 +125,7 @@ describe('MakerMemoryManager.tidy', () => {
       isIndependentScope: (key) => key.startsWith('bot:'),
       reviewOneShot,
       ...(config ? { config } : {}),
+      ...(ownerScopeKey ? { ownerScopeKey } : {}),
     });
     return { manager, reviewOneShot };
   }
@@ -310,6 +312,49 @@ describe('MakerMemoryManager.tidy', () => {
     const runs = await manager.listTidyRuns(WORKDIR);
     expect(runs.find((r) => r.id === oldRun!.id)?.undoneAt).toBeTruthy();
     expect(runs.length).toBe(outcome.status === 'done' && outcome.run ? 2 : 1);
+    manager.dispose();
+  });
+
+  // 评审 (Codex P2): 存量的双前缀分片 (`user_user_xxx.md`) 能被整理删除, 撤销必须能按原名建回。
+  it('撤销能恢复被整理删掉的存量双前缀分片', async () => {
+    const plan = JSON.stringify({
+      merges: [{ sources: ['feedback_feedback_zh.md', 'feedback_zh2.md'], title: 'z', description: 'z', body: 'z', reason: '同一件事' }],
+      deletes: [],
+    });
+    const { manager } = managerWith(() => plan);
+    await write(manager, 'zh', '回复一律用中文');
+    const dir = path.join(root, 'maker-memory', memoryScopeDirName(WORKDIR));
+    await copyFile(path.join(dir, 'feedback_zh.md'), path.join(dir, 'feedback_feedback_zh.md'));
+    await write(manager, 'zh2', '始终用中文回复');
+    await write(manager, 'other', '称用户不称主人');
+
+    expect((await manager.tidy(WORKDIR, 'manual')).status).toBe('done');
+    const store = await manager.getStore(WORKDIR);
+    expect((await store.list()).map((r) => r.filename)).not.toContain('feedback_feedback_zh.md');
+    const [run] = await manager.listTidyRuns(WORKDIR);
+    expect(run?.changes.map((c) => `${c.kind}:${c.filename}`)).toContain('deleted:feedback_feedback_zh.md');
+
+    expect(await manager.undoTidy(WORKDIR, run!.id)).toEqual({ restored: 2, skipped: 0 });
+    expect((await store.list()).map((r) => r.filename)).toContain('feedback_feedback_zh.md');
+    manager.dispose();
+  });
+
+  // 评审 (Codex P1): 发出的整理请求带着整份记忆, 账号在请求之前切换时不能发出去。
+  it('写完尝试记录后账号已切换: 不把旧账号的记忆发给辅助模型', async () => {
+    let owner = 'account-a';
+    const { manager, reviewOneShot } = managerWith(() => mergePlan, undefined, () => owner);
+    await write(manager, 'zh', '回复一律用中文');
+    await write(manager, 'zh2', '始终用中文回复');
+    const store = await manager.getStore(WORKDIR);
+    const realUpdate = store.updateTidyState.bind(store);
+    vi.spyOn(store, 'updateTidyState').mockImplementation(async (update) => {
+      const next = await realUpdate(update);
+      owner = 'account-b';
+      return next;
+    });
+
+    await expect(manager.tidy(WORKDIR, 'manual')).rejects.toThrow(/not-ready|memory/);
+    expect(reviewOneShot).not.toHaveBeenCalled();
     manager.dispose();
   });
 
