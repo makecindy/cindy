@@ -65,6 +65,34 @@ it('appends after synchronously flushing the pending editor save', async () => {
   expect(invoke).toHaveBeenCalledWith(null, expect.objectContaining({ op: 'host-result', error: undefined }));
 });
 
+// PR #9496: append/replace bypassed the registered composer's send lock.
+// Real Host + store + Tiptap registration; existing selection tests only guarded
+// replace-selection. Minimal input: a locked editor and one draft write. Tier: unit.
+it.each(['append', 'replace'])('rejects %s while the actual composer is locked for sending', async mode => {
+  const sessionId = `send-locked-${mode}`;
+  const original = plainTextToTiptapDoc('Message chosen by the user');
+  const editor = new Editor({ element: document.createElement('div'), extensions: [Document, Paragraph, Text], content: original });
+  let locked = true;
+  const release = registerPluginUiDraftEditor(sessionId, editor, () => locked);
+  saveDraft(sessionId, { text: original, attachments: [] });
+  stops.push(subscribePluginUiDraft(sessionId, () => {}));
+  render(<PluginUiHost />);
+  const write = () => receive({ requestId: 'send-locked', ownerStamp: { dataOwnerId: 'owner', ownerGeneration: 1 },
+    kind: 'draft', sessionId, mode, text: 'Plugin text', revision: pluginUiDraftSnapshot(sessionId).revision });
+  try {
+    await act(async () => write());
+    expect(getDraft(sessionId)?.text).toEqual(original);
+    expect(editor.getText()).toBe('Message chosen by the user');
+    expect(invoke).toHaveBeenLastCalledWith(null, expect.objectContaining({ error: 'MCP_APP_DRAFT_UNAVAILABLE' }));
+    locked = false;
+    await act(async () => write());
+    expect(getDraft(sessionId)?.text?.content).toEqual(mode === 'append'
+      ? [...original.content!, ...plainTextToTiptapDoc('Plugin text').content!]
+      : plainTextToTiptapDoc('Plugin text').content);
+    expect(invoke).toHaveBeenLastCalledWith(null, expect.objectContaining({ error: undefined }));
+  } finally { release(); editor.destroy(); }
+});
+
 it('applies and restores layout visibility through the original window command owner', async () => {
   render(<PluginUiHost />);
   await act(async () => receive({ requestId: 'regions', ownerStamp: { dataOwnerId: 'owner', ownerGeneration: 1 },

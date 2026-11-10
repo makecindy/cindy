@@ -1,6 +1,6 @@
 import { useEffect } from 'react';
 import { getDraft, saveDraft, plainTextToTiptapDoc } from '@/lib/composerDraftStore';
-import { pluginUiDraftSnapshot, subscribePluginUiDraft, replacePluginUiDraftSelection, readPluginUiDraftDocument } from './pluginUiContext';
+import { pluginUiDraftSnapshot, subscribePluginUiDraft, replacePluginUiDraftSelection, readPluginUiDraftDocument, assertPluginUiDraftWritable } from './pluginUiContext';
 import { openPluginUiView } from '@/features/right-sidebar/lib/openPluginUiView';
 import { usePluginUiLaunchers, runPluginUiLauncher } from './PluginUiContributions';
 import { matchesPluginAppShortcut } from '@/lib/appShortcutStore';
@@ -93,6 +93,7 @@ export function PluginUiHost() {
               action.input && typeof action.input === 'object' && !Array.isArray(action.input) ? action.input as Record<string, unknown> : undefined);
             result = { opened: true };
           } else if (action.kind === 'draft' && typeof action.sessionId === 'string' && typeof action.text === 'string') {
+            assertPluginUiDraftWritable(action.sessionId);
             const current = pluginUiDraftSnapshot(action.sessionId);
             if (action.mode !== 'append' && action.revision !== current.revision) throw new Error('MCP_APP_DRAFT_CHANGED');
             if (action.mode === 'replace-selection') {

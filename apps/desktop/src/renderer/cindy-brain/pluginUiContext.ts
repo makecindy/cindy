@@ -54,6 +54,12 @@ export function replacePluginUiDraftSelection(sessionId: string, text: string): 
   entry.editor.view.dispatch(entry.editor.state.tr.insertText(text, from, to));
 }
 
+/** No mounted editor means a stored draft; a live editor owns its existing lock. */
+export function assertPluginUiDraftWritable(sessionId: string): void {
+  const entry = editors.get(key(sessionId));
+  if (entry && (entry.editor.isDestroyed || !entry.editor.isEditable || entry.locked())) throw new Error('MCP_APP_DRAFT_UNAVAILABLE');
+}
+
 /** The existing draft store is authoritative; only active Views connect to it. */
 export function subscribePluginUiDraft(sessionId: string, listener: Listener): () => void {
   const id = key(sessionId);
