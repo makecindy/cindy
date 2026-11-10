@@ -1,3 +1,4 @@
+import './personalBuildMonitor.js';
 import { configureWindowsAtomicRename } from './windowsAtomicRename.js';
 import './personalLaunchCwd.js';
 // Entry: Electron startup → bootstrap-electron.ts (dynamic import).

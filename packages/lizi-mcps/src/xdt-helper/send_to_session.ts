@@ -23,7 +23,6 @@ export type SendToSessionCallback = (params: {
   targetSessionId?: string;
   message: string;
   dispatcherSessionId?: string;
-  messagePurpose?: "coordination" | "user-visible";
   title?: string;
   /** create 模式可选:true = 为新 session 预建独立 git worktree 并以其为 workingDir(jump 忽略)。 */
   useWorktree?: boolean;
@@ -76,8 +75,6 @@ export type SendToSessionCallback = (params: {
     | "LEAD_NOT_SUPPORTED"
     | "WORKTREE_UNAVAILABLE"
     | "HOST_NOT_READY"
-    /** The sending task's review did not confirm the owner asked for this hand-off; nothing was sent. */
-    | "DELEGATION_NOT_AUTHORIZED"
   >
 >;
 
@@ -130,7 +127,7 @@ const DESCRIPTION = [
   "",
   "把一条控制层 handoff 消息投递到一个 session。两种模式:",
   "- 传 target_session_id → jump:投递到该既有 session(已关闭会自动 resume),wake_kind 返 resumed / already-active;目标正在跑 turn 时消息进入其输入队列、当前 turn 结束后自动派发,wake_kind 返 queued(无需重试)。",
-  "- 目标在另一台电脑:target_session_id 传 deviceId::sessionId(history 类目 list_sessions 用 device 参数查到的 id 就是这个形式),消息经远程控制通道发给那台电脑上的既有任务,对方显示来自本任务。要求对方电脑在线并已开启远程控制;只支持发给既有任务(不能在另一台电脑新建),message_purpose 只能是 user-visible 或省略。",
+  "- 目标在另一台电脑:target_session_id 传 deviceId::sessionId(history 类目 list_sessions 用 device 参数查到的 id 就是这个形式),消息经远程控制通道发给那台电脑上的既有任务,对方显示来自本任务。要求对方电脑在线并已开启远程控制;只支持发给既有任务(不能在另一台电脑新建)。",
   "- 不传 target_session_id → create:新建任务并发送首条消息，可用 title 指定简短标题。Agent / model / effort / Fast 缺省继承当前任务。返回 wake_kind=created、target_session_id、project_path 与实际 working_dir；后续消息用返回的 id。",
   "【项目】省略 project_path 时继承来源任务的项目。来源本来不绑项目时：working_dir 在某个已登记且可见的项目里，就归到最近的那个项目（回执 project_note 会说明）；否则新任务也不绑项目。无法可靠确定来源归属时明确失败。也可显式复用 get_current_session_id.project_path；跨项目用 control/list_projects 选择已有项目。传 project_path:null 明确创建不绑项目的任务。临时目录、仓库子目录、worktree 都不会变成新项目。确需新增或恢复项目时，单独调用 create_project。",
   "",
@@ -224,11 +221,8 @@ export function registerSendToSessionTool(
         .string()
         .min(1)
         .describe(
-          "要发送的消息，对方收到的就是这段原文。当前输入属于用户请求或已核实转交时，宿主会在发送前核对这次转交在用户要求的范围内（Auto 下超出范围会被拒绝、不发送），通过后对方按这段内容处理；写清要做的事和必要背景，不扩大范围或要求重复确认。缺少背景先查看来源任务。自主消息、自动化通知和结果回传不代表用户。",
+          "要发送的消息，对方收到的就是这段原文，并附有本任务的 session_id；对方需要背景时可以用 get_chat_history 读本任务的对话。当前输入属于用户请求或其转交时，对方按这段内容处理，不扩大范围或要求重复确认。自主消息、自动化通知和结果回传不代表用户。",
         ),
-      message_purpose: z.enum(["coordination", "user-visible"]).optional().describe(
-        "委派子任务发给发起伙伴默认 coordination：原始来信隐藏，伙伴处理后的进度和结果可直接正常回复。user-visible 让来信本身可见。其他普通任务默认保持可见；coordination 仅限宿主核实的委派关系，不改变操作权限。正常完成自动回传，无需重发。",
-      ),
       title: z
         .string()
         .optional()
@@ -288,7 +282,6 @@ export function registerSendToSessionTool(
     handler: async ({
       target_session_id,
       message,
-      message_purpose,
       title,
       use_worktree,
       working_dir,
@@ -306,12 +299,6 @@ export function registerSendToSessionTool(
       if (qualified && qualified.deviceId !== "local") {
         if (!deps.sendToRemoteSession) {
           return errorPayload("REMOTE_UNSUPPORTED", "当前宿主不支持给其它电脑上的任务发消息。");
-        }
-        if (message_purpose === "coordination") {
-          return errorPayload(
-            "INVALID_ARGS",
-            "发给其它电脑上的任务时 message_purpose 只能是 user-visible 或省略。",
-          );
         }
         if (!ctx.sessionId) {
           return errorPayload("LEAD_NOT_SUPPORTED", "当前调用未绑定任务,无法标明消息来源。");
@@ -336,7 +323,6 @@ export function registerSendToSessionTool(
         targetSessionId: localTargetId,
         message,
         dispatcherSessionId: ctx.sessionId,
-        ...(message_purpose !== undefined ? { messagePurpose: message_purpose } : {}),
         title,
         useWorktree: use_worktree,
         workingDir: working_dir,

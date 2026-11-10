@@ -154,8 +154,6 @@ export interface PiExtraSpawnConfig {
     servers: PiMcpServerRef[];
     /** Bot-scoped memory is exposed as one typed Pi tool instead of nested discovery. */
     botMemoryFacade?: boolean;
-    /** Direct teammate tools left out because a system Skill is turned off; the helper also denies calls. */
-    deniedTools?: string[];
   } | null;
   /** 外部 MCP header 真值；只进 Pi 父进程 env，并在 bash spawn 边界剥离。 */
   mcpEnv?: Record<string, string>;
@@ -1769,6 +1767,34 @@ export interface BotRuntimeProfile {
   skillPolicy: BotRuntimeSkillPolicy;
   mcpPolicy: BotRuntimeMcpPolicy;
   toolsetPolicy: BotRuntimeToolsetPolicy;
+  /**
+   * Teammate V2 (project mode): the teammate is an ordinary project task with
+   * its identity layered on top. Context files, settings, Skills, MCP, memory
+   * and the host prompt are exactly those of an ordinary task in the same
+   * working directory; only the identity prompt and the teammate's own Skills
+   * are added. Without it the classic, isolated teammate runtime applies.
+   */
+  projectContext?: boolean;
+}
+
+/** The profile when the classic isolated teammate runtime applies; undefined for V2 and ordinary tasks. */
+export function isolatedBotProfile(profile: BotRuntimeProfile | undefined): BotRuntimeProfile | undefined {
+  return profile && !profile.projectContext ? profile : undefined;
+}
+
+/**
+ * Skill policy handed to the engines: the full allowlist for a classic teammate,
+ * only the teammate's own Skills for V2 (everything else loads as for any task).
+ */
+export function botRuntimeSkillPolicy(profile: BotRuntimeProfile | undefined): BotRuntimeSkillPolicy | undefined {
+  if (!profile) return undefined;
+  if (!profile.projectContext) return profile.skillPolicy;
+  const { ownSkills, ownSkillPluginRoots } = profile.skillPolicy;
+  return {
+    mode: 'inherit', configured: [], catalog: [],
+    ...(ownSkills ? { ownSkills } : {}),
+    ...(ownSkillPluginRoots ? { ownSkillPluginRoots } : {}),
+  };
 }
 
 /**
@@ -2048,6 +2074,11 @@ export interface StartSessionOptions {
    */
   makerMemoryScopeKey?: string;
   /**
+   * The host decided `makerMemoryEnabled` from the session owner's own switch (a teammate's memory
+   * setting), so an agent-level memory switch does not turn it off. Implied by a `bot:` scope.
+   */
+  makerMemorySwitchOwned?: boolean;
+  /**
    * Exact host-frozen memory bytes for this runtime start. When present the
    * harness must inject these bytes instead of re-reading MEMORY.md later in
    * startup, otherwise the persisted runtime snapshot and the actual prompt
@@ -2301,6 +2332,8 @@ export interface BackgroundTaskSnapshot {
   taskId: string;
   /** SDK task_type(local_bash / local_agent / local_workflow 等),缺失表示未知。 */
   taskType?: string;
+  /** 后台命令是工作还是长驻服务;与 agent_task_update 的同名字段同源,缺省按 work。 */
+  backgroundCommandKind?: 'work' | 'service';
   toolUseId?: string;
   title?: string;
   /**

@@ -1,6 +1,6 @@
 ## 4.6.2 控制节点:在 Cindy 的流程关键点先问你(subscribe.hooks)
 
-控制节点是 Cindy 预先埋在流程关键点的 `will-` 拦截点。用户在某个自动化或例行任务的
+控制节点是 Cindy 预先埋在流程关键点的 `will-` 拦截点。用户在某个自动化的
 「前置检查」里选了你的插件,或在新任务的模型选择器里选了你发布的模型(§4.6.3),到了节点主机就停下来
 问你,**不经过 Agent、不花模型回合**。插件不会自动管所有任务:只问选了它的那些任务。你可以在插件里调自己的规则、外部决策
 接口(例如 OpenAI Decisions、Jev)或任何服务,再回一个裁决。节点由 Cindy 统一维护,
@@ -11,7 +11,7 @@
 | 节点 | 什么时候问 | 能回的裁决 | 时限 |
 | --- | --- | --- | --- |
 | `will-schedule-run` | 每次自动化(定时任务,含脚本模式)运行前;恢复中断的续跑不再问 | allow / skip / block | 30 秒 |
-| `will-routine-run` | 伙伴例行任务每次被触发、建任务和调用模型之前 | allow / skip / block | 30 秒 |
+| `will-routine-run` | 兼容保留,不再触发:伙伴例行任务已改成项目自动化(2026-11-08),声明照常安装 | allow / skip / block | 30 秒 |
 | `will-start-task` | 新任务(含 `/goal` 开的)第一条消息发出、任务建好之前;只问一次,之后的消息不再问;伙伴对话不问 | allow / route | 8 秒 |
 
 运行时用 `host-request` 查当前 Cindy 实际提供哪些节点,别靠版本号猜:
@@ -27,7 +27,7 @@ const r = await cindy.request({ kind: 'control-points' });
 
 ```json
 "slots": ["subscribe", "network"],
-"subscribe": { "hooks": ["will-routine-run"] },
+"subscribe": { "hooks": ["will-schedule-run"] },
 "network": { "hosts": ["api.openai.com"], "secrets": [ ... ] }
 ```
 
@@ -40,7 +40,7 @@ const r = await cindy.request({ kind: 'control-points' });
 
 ```js
 cindy.onHostMessage(async (msg) => {
-  if (msg.type !== 'event' || msg.name !== 'will-routine-run') return;
+  if (msg.type !== 'event' || msg.name !== 'will-schedule-run') return;
   // msg.data:见下表;msg.deadline:本次截止时间(ms),外部请求的超时要留出余量。
   let action = 'allow', reason;
   try {
@@ -104,7 +104,7 @@ cindy.send({
 | `trigger` | `manual` / `cron` / `interval` / `once` |
 | `firedAt` | 触发时间(ms) |
 
-`will-routine-run`:
+`will-routine-run`(兼容保留,不再触发):
 
 | 字段 | 说明 |
 | --- | --- |

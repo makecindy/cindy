@@ -332,6 +332,7 @@ function hasNestedScrollableAncestorThatCanScrollDown(
 import { UserMessage } from './UserMessage';
 import { AssistantMessage } from './AssistantMessage';
 import { MessageSourceLabels } from './MessageSourceLabels';
+import { attachBotStartedTasks, BotStartedTasks, collectBotStartedTasks } from './BotStartedTasks';
 import { BotMessageTimelineHeader } from './BotMessageTimelineHeader';
 import { AskUserQuestionBubble } from './AskUserQuestionBubble';
 import type { ErrorDiagnosisSource } from '@/lib/errorDiagnosisPrompt';
@@ -1893,6 +1894,12 @@ export function buildRenderItems(
     }
 
     const slice = originalTurnSlice(lo, hi);
+    if (opts?.botSessionId) {
+      const startedTasks = collectBotStartedTasks(slice);
+      if (startedTasks.length > 0) {
+        items.push({ type: 'bot_started_tasks', key: `started-tasks-${messages[lo].clientId}`, tasks: startedTasks });
+      }
+    }
     const generatedByPath = new Map<string, GeneratedFileRef>();
     if (opts?.botSessionId) {
       for (const changeSet of changeSets) {
@@ -3367,7 +3374,7 @@ export function MessageStream({
     );
     return appendPendingQueueItems(
       simplifiedBotConversation
-        ? botProcessItems(grouped, isSessionStreaming, botTailReplyIds)
+        ? attachBotStartedTasks(botProcessItems(grouped, isSessionStreaming, botTailReplyIds))
         : grouped,
       pendingMessages ?? [],
       messages,
@@ -6602,6 +6609,13 @@ export function MessageStream({
                       );
                     }
 
+                    if (item.type === 'bot_started_tasks') {
+                      const tasks = <BotStartedTasks tasks={item.tasks} hostSessionId={sessionId} />;
+                      return botReplyColumnSpacer
+                        ? withAssistantAvatar(botReplyColumnSpacer, tasks, item.key)
+                        : <div key={item.key} data-render-item-key={item.key}>{tasks}</div>;
+                    }
+
                     if (item.type === 'generated_files') {
                       return (
                         <GeneratedFilesCard
@@ -7172,6 +7186,7 @@ const MessageItem = memo(function MessageItem({
             botStarterOptions={message.botStarterOptions}
             starterOptionsLocked={starterOptionsLocked}
             botTaskResults={message.turnCompleted === true ? message.botTaskResults : undefined}
+            botStartedTasks={message.botStartedTasks}
           />
         </>,
       );

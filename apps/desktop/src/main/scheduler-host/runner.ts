@@ -1,6 +1,6 @@
 import { beginQuietScheduledOutput, hidesScheduledTranscript, hasVisibleScheduledOutput, isQuietScheduledOutput } from './silent-output.js';
 import { untrustedJsonBlock } from '../../shared/untrustedPrompt.js';
-import { BUILTIN_ROUTINE_SCHEDULE_PREFIX, routineInstructionFromPrompt } from '../../shared/botAutonomy.js';
+import { routineInstructionFromPrompt } from '../../shared/botAutonomy.js';
 import {
   captureDataOwnerBroadcastScope,
   isDataOwnerBroadcastScopeCurrent,
@@ -683,7 +683,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
    * 排除后走可见失败:用户知道这次没跑成,可以自己再点一次,不会莫名多出自动运行。
    */
   private canDefer(schedule: Schedule, ctx: FireContext): boolean {
-    // RoutineEngine explicitly owns retries; no nextFireAt is armed in this mode.
+    // The caller (e.g. the webhook queue) explicitly owns retries; no nextFireAt is armed in this mode.
     if (ctx.deferToCaller) return true;
     return schedule.recurring === true && schedule.status === 'active' && schedule.manual !== true;
   }
@@ -691,7 +691,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
   /**
    * 记一次排队受理时的权限失效。返回非空表示稳定失配已持续，调用方应改为可见失败；
    * 文案不含 runId 等逐次变化的值，通知侧才能按相同 errorMsg 去重。
-   * RoutineEngine 自管重试(deferToCaller)的伙伴例行任务维持原顺延语义。
+   * 调用方自管重试(deferToCaller，如 webhook 队列)时维持原顺延语义。
    */
   private notePermissionMismatch(
     schedule: Schedule,
@@ -4021,16 +4021,7 @@ function buildScheduledRunContextInstruction(
     `firedAtInScheduleTimezone: ${firedAtInScheduleTimezone}`,
     'These timestamps identify when this run was triggered, not when a queued run started processing. Use the task instructions to determine the requested time range.',
     'Unattended: nobody is watching this run. Do not call ask_user_question — decide with a stated default and list any open question in the final report. In plan mode the plan review cannot be approved automatically: put the plan in the final report and leave execution to the owner.',
-    ...buildTeammateTurnAuthorityLine(schedule),
   ].join('\n');
-}
-
-/** Teammate routines state who the run speaks for; the host enforces the same boundary. */
-function buildTeammateTurnAuthorityLine(schedule: Pick<Schedule, 'id' | 'source'>): string[] {
-  if (schedule.source !== 'bot') return [];
-  return schedule.id.startsWith(BUILTIN_ROUTINE_SCHEDULE_PREFIX)
-    ? ['turnAuthority: autonomous. The host started this run; the owner did not ask for it. You may read, keep Todos, notify the owner and continue or re-route tasks already handed to you. Other changes to the owner\'s tasks need the owner\'s request: propose them in a Todo or notification instead.']
-    : ['turnAuthority: entrusted. This run carries out the standing instructions the owner set for this routine; stay within them.'];
 }
 
 function buildScheduleRefLine(schedule: Pick<Schedule, 'id' | 'name'>): string[] {
@@ -4052,7 +4043,7 @@ export function buildSilentRunInstruction(teammate = false): string {
   }
   return [
     '\n\n---\n[Silent scheduled run]',
-    `Successful checks without changes stay quiet. Do not announce checks or routine progress. If there is a new actionable result, a check failure, or this is an explicit reminder/scheduled delivery, call ${teammate ? 'cindy_helper' : 'cindy_scheduler'} call_tool({ name: "schedule_notify_current_run", args: {} }), then write the concise final report. Only that final report is published.`,
+    'Successful checks without changes stay quiet. Do not announce checks or routine progress. If there is a new actionable result, a check failure, or this is an explicit reminder/scheduled delivery, call cindy_scheduler call_tool({ name: "schedule_notify_current_run", args: {} }), then write the concise final report. Only that final report is published.',
   ].join('');
 }
 
