@@ -4,6 +4,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { WindowBehaviorSection } from '@/components/settings/WindowBehaviorSection';
+import { windowBehaviorSettings } from '@/components/settings/WindowBehaviorSection.settings-search';
 import type { LoginItemState } from '../../shared/loginItem';
 
 vi.mock('react-i18next', () => ({
@@ -65,6 +66,21 @@ afterEach(() => {
 
 describe('WindowBehaviorSection login startup', () => {
   const label = 'settings.windowBehavior.loginItem.label';
+
+  // Unit regression (PR #8481): the shared row stamped every switch with the
+  // section ID. Existing toggle tests covered saving, not search-control binding.
+  // Render all four macOS rows and verify their actual switches own distinct IDs.
+  it('binds each rendered behavior switch to its own searchable definition', async () => {
+    installWindowBehaviorApi('darwin');
+    window.electronAPI.windowBehavior.getMenubarState = vi.fn().mockResolvedValue({ available: true, enabled: true });
+    render(<WindowBehaviorSection />);
+    await screen.findByRole('switch', { name: windowBehaviorSettings.menubarLabel.titleKey });
+    for (const definition of [windowBehaviorSettings.devicesKeepAwake, windowBehaviorSettings.loginItemLabel,
+      windowBehaviorSettings.menubarLabel, windowBehaviorSettings.swallowActivationClickLabel]) {
+      const control = document.getElementById(definition.targetId)?.querySelector('[role="switch"]');
+      expect(control?.getAttribute('data-setting-id')).toBe(definition.id);
+    }
+  });
 
   it.each(['win32', 'darwin'] as const)(
     'starts off on %s and saves explicit on/off choices',

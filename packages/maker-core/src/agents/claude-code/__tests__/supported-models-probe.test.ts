@@ -61,12 +61,14 @@ function fakeQuery(supportedModels: () => Promise<unknown[]>) {
 }
 
 afterEach(() => {
+  vi.unstubAllEnvs();
   setClaudeSupportedModelsListener(null);
   sdkMock.query.mockReset();
 });
 
 describe('ClaudeCodeAgent.refreshLocalModels(主动读取订阅模型清单)', () => {
   it('用订阅登录起空闲 Query 只读 supportedModels,交给 host 后关闭,不发送任何消息', async () => {
+    vi.stubEnv('DISABLE_TELEMETRY', undefined);
     const listener = vi.fn();
     setClaudeSupportedModelsListener(listener);
     const models = [{ value: 'claude-fable-5-1', displayName: 'Fable' }];
@@ -86,6 +88,7 @@ describe('ClaudeCodeAgent.refreshLocalModels(主动读取订阅模型清单)', (
     // 不加载用户级设置:终端 claude 配的 apiKeyHelper / 网关模型名会让清单变成网关的模型。
     expect(options.settingSources).toEqual([]);
     expect(options.settings).toEqual({ apiKeyHelper: '' });
+    expect((options.env as Record<string, string>).DISABLE_TELEMETRY).toBeUndefined();
     // 输入队列在探测结束时关闭且从未写入:没有任何用户消息发往模型。
     const received: unknown[] = [];
     for await (const item of prompt) received.push(item);

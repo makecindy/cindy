@@ -192,6 +192,17 @@ Registry 的全部模型及其 routes，防止只翻译当前默认启用的几�
 
 ### 三引擎上下文预算（2026-09-09）
 
+- 远程 Agent 目录在供应商视图的模型行附加 `contextWindowOverride`，只取来源电脑当前账号的
+  精确「引擎 + 供应商连接 + 模型 ID」显式预算。`contextWindow` 保留设置页的目录默认值，
+  共用的 `remoteInvocationModels` 在远程选模时合入有效窗口；本机及远控设置页不把覆盖值当默认。
+  恢复默认后下次目录读取移除该字段；分享备用目录发布时合入现有 `contextWindow`。
+  Desktop 配置浮层按正在浏览的目录来源取值：远程 Agent、分享与被控电脑均使用来源窗口，
+  不读取控制端同名模型的偏好或 Codex 原生窗口。被控电脑选模只合入预算，保留完整目录；
+  本机浮层继续读取本机偏好与 Codex 原生元数据，远控设置页仍保留原始默认值。
+  Mobile 的 `mobileUnifiedEntries` 在选模派生时同样合入来源预算，包含直接控制电脑的基础目录；
+  仅合入预算，不套用远程 Agent 的授权过滤，也不修改缓存目录的默认值。
+  缺字段或无效值沿用原窗口，旧使用端忽略新增字段，因此完整修复要求提供端和使用端都升级。
+  压缩比例仍由执行电脑运行时读取，不从使用端反向覆盖；目录回归不代表真实长会话压缩已验收。
 - 以下字段指客户端 `CatalogModel`：`contextWindow` 是工作默认值，`contextWindowMax` 保留上游最大支持值；后者不能写入 Registry。
   单模型上下文设置另存用户预算；恢复默认删除预算，重新读取当前工作默认值。
   Claude Code、Codex、Pi 的创建、恢复、切换和历史整理都必须使用同一路由预算。
@@ -239,6 +250,16 @@ Codex 的 `context_window` 是工作默认，`max_context_window` 是原生最�
 下架型号不能因为补元数据而被重新加入。无原生数据时仍依赖 Registry，不能把读取失败推断成 872K 或 1M。
 
 2026-09-07 的全目录核对与源侧待办见 [2026-09-07 核对记录](../model-catalog-audit-2026-09-07.md)。
+
+官方 OpenAI API 的 Codex 连接另行读取 API 模式的 `model/list`，将明确报告的思考档位与
+Fast 合入 discovery 层；仅适用于 `https://api.openai.com/v1` Responses 路由及精确型号 ID。
+不从订阅账号复制能力、不扩充已配置模型成员，也不授予 Ultrafast；未知别名、中转和其它
+引擎保持原有能力来源。显式用户配置、服务端强制覆盖及本地覆盖仍按既有优先级处理。
+该快照只存内存，账号边界清空；API 探测不改写共享 Codex 历史目录。能力报告不证明 API
+账号的服务端权限。实现见 `codex-api-model-capabilities.ts`，原生验证见
+`packages/maker-core/src/agents/codex/api-capabilities.integration.test.ts`。
+Ultra 由 Codex 原生解释（含多 Agent 行为及普通 HTTP effort 映射），不能把字符串
+`ultra` 直接当成公共 Responses API 的 reasoning effort。
 
 ### 型号标准与 Gateway 控制（2026-09-07 用户裁决）
 

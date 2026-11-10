@@ -38,7 +38,7 @@ describe('session focus retry wiring', () => {
     const end = mainSource.indexOf('\n}\n\n/**\n * 会话切换上报入口', start);
     const body = mainSource.slice(start, end);
 
-    expect(body).toContain('onRetry: () => void = () => {}');
+    expect(body).toContain('onRetry: (resetPrimary?: boolean) => void = () => {}');
     expect(body).toContain("if (info.outcome === 'retry') onRetry();");
     expect(mainSource).toContain(
       "notifyGhostSessionEvent('switched', { sessionId }, claim, releaseRaw)",

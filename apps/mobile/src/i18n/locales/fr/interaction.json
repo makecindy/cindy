@@ -1,5 +1,7 @@
 {
   "permission": {
+    "mcpComplete": "Terminé",
+    "mcpCancel": "Annuler",
     "mode": {
       "default": "Autorisations par défaut",
       "acceptEdits": "Autoriser les modifications",
@@ -98,7 +100,14 @@
     "planFeedbackPlaceholder": "Indiquez à Claude quoi faire",
     "planFeedbackRequired": "Saisissez un retour avant d'envoyer.",
     "planFeedbackSubmit": "Envoyer le retour sur le plan",
-    "planFeedbackAccessibility": "Donner un retour pour modifier le plan"
+    "planFeedbackAccessibility": "Donner un retour pour modifier le plan",
+    "validation": {
+      "required": "Renseignez ce champ obligatoire.",
+      "choice": "Choisissez une des options proposées.",
+      "tooShort": "Saisissez au moins {{count}} caractères.",
+      "tooLong": "Saisissez au maximum {{count}} caractères."
+    },
+    "askRestrictedMetaCaption": "{{options}} · {{mode}}"
   },
   "kinds": {
     "permission": {
@@ -389,6 +398,8 @@
       "submitting": "Envoi en cours"
     },
     "permission": {
+      "titleStdin": "Autoriser la saisie dans ce terminal ?",
+      "titleMcpUrl": "Terminer la demande de {{server}}",
       "highRiskTitle": "Autorisation à haut risque à confirmer",
       "highRiskDetail": "Vérifiez la commande, puis confirmez à nouveau pour l'autoriser. Refusez-la en cas de doute.",
       "sessionAllowTitle": "Autoriser une fois ou toujours pour cette tâche",

@@ -342,9 +342,10 @@ describe.each(modes)('%s remote history visibility', (mode) => {
       ordinary: 'ordinary',
       visible: 'visible',
       zero: 'visible',
-      'hidden-0': 'hidden',
-      archived: 'hidden',
-      orphan: 'hidden',
+      // Listing preferences do not revoke the owner's exact-ID access.
+      'hidden-0': 'background',
+      archived: 'background',
+      orphan: 'background',
     });
   });
 
@@ -445,7 +446,7 @@ describe.each(modes)('%s remote history visibility', (mode) => {
         sessions: [{ id: 'ordinary' }],
         hasMore: true,
       });
-      if (['visible', 'zero'].includes(parent)) {
+      if (parent !== 'missing') {
         expect(result).toHaveProperty('sessions.0.parentSessionId', parent);
       } else {
         expect(result).not.toHaveProperty('sessions.0.parentSessionId');

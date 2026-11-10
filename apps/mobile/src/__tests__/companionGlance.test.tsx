@@ -10,13 +10,13 @@
  * - 最小失败输入：30 条未完成待办；一份含成品、源码、已删文件的完成委派与一份失败委派。
  * - tier：unit（jsdom 驱动真实 hook，device-link 用内存 fake）。
  */
-import { act, createElement } from 'react';
+import { act, createElement, useEffect } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { todoDateLabel, todoDueSoon, todoLocalDate, type TeammateTodo } from '@cindy/maker-shared/teammate-todo';
 
 const h = vi.hoisted(() => ({ items: [] as unknown[], reads: [] as Array<Record<string, unknown>>,
-  liveQuery: false, sessions: [] as any[], queried: [] as any[], delegations: [] as any[], prs: new Map(), activity: new Map(), closed: null as (() => void) | null, openURL: vi.fn(),
+  pageGate: null as Promise<void> | null, dailyCheck: false, liveQuery: false, sessions: [] as any[], queried: [] as any[], delegations: [] as any[], prs: new Map(), activity: new Map(), closed: null as (() => void) | null, openURL: vi.fn(),
 }));
 vi.mock('react-native', () => ({
   AppState: { currentState: 'active', addEventListener: () => ({ remove: () => undefined }) },
@@ -46,7 +46,7 @@ vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (s: string) => s, 
 vi.mock('@react-native-async-storage/async-storage', () => ({ default: { getItem: async () => null, setItem: async () => undefined } }));
 vi.mock('@/auth/AuthContext', () => ({ useAuth: () => ({ user: { id: 'u' }, accountGeneration: 1 }) }));
 // Stable like the real context: new functions per render would re-run the read effect forever.
-const link = vi.hoisted(() => ({ status: 'online', connectionEpoch: 1, getPresenceAvailability: () => true, invoke: vi.fn(), openLink: async () => undefined, onRemoteResourceChanged: () => () => undefined }));
+const link = vi.hoisted(() => ({ status: 'online', connectionEpoch: 1, getPresenceAvailability: () => true, invoke: vi.fn(), openLink: async () => undefined, onRemoteResourceChanged: vi.fn((_callback: any) => () => undefined) }));
 vi.mock('@/device-link/DeviceLinkContext', () => ({ useDeviceLink: () => link, subscribeRemoteBotChanges: () => () => undefined }));
 vi.mock('@/device-link/remoteResources', () => ({
   invokeRemoteResourceAction: vi.fn(),
@@ -54,7 +54,9 @@ vi.mock('@/device-link/remoteResources', () => ({
     const q = JSON.parse(query) as { view: string; offset: number; limit: number };
     h.reads.push(q);
     const matching = h.items.filter(item => (item as { status: string }).status === (q.view === 'done' ? 'done' : 'open'));
-    return { blocks: [{ primitive: 'teammate-todos', data: { items: matching.slice(q.offset, q.offset + q.limit), total: matching.length } }] };
+    const data = { items: matching.slice(q.offset, q.offset + q.limit), total: matching.length, dailyCheck: h.dailyCheck };
+    if (h.pageGate) await h.pageGate;
+    return { blocks: [{ primitive: 'teammate-todos', data }] };
   },
 }));
 vi.mock('expo-router', async () => { const { useEffect } = await import('react'); return { useFocusEffect: (fn: () => void) => useEffect(fn, [fn]) }; });
@@ -71,10 +73,72 @@ const { companionGlanceOutputs } = await import('@/session/companionProfileData'
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 let root: Root;
-beforeEach(() => { h.liveQuery = false; h.items = []; h.reads = []; h.sessions = []; h.queried = []; h.delegations = []; h.prs.clear(); h.activity.clear(); h.openURL.mockResolvedValue(undefined); root = createRoot(document.createElement('div')); });
+beforeEach(() => { h.pageGate = null; h.dailyCheck = false; h.liveQuery = false; h.items = []; h.reads = []; h.sessions = []; h.queried = []; h.delegations = []; h.prs.clear(); h.activity.clear(); h.openURL.mockResolvedValue(undefined); root = createRoot(document.createElement('div')); });
 afterEach(() => { act(() => root.unmount()); vi.useRealTimers(); });
 
 const todo = (id: string, status = 'open') => ({ id, status, title: id, revision: 1, sources: [], history: [] }) as unknown as TeammateTodo;
+
+it('pauses retained query reads without discarding layout data, then refreshes on activation', async () => {
+  vi.useFakeTimers(); h.liveQuery = true;
+  const { useRemoteCompanionQuery } = await import('@/session/useRemoteCompanionQuery');
+  let latest: ReturnType<typeof useRemoteCompanionQuery>;
+  let finish: ((value: unknown) => void) | undefined;
+  link.invoke.mockReset().mockResolvedValue({ id: 'bot', dmThreadsSupported: true });
+  function Probe({ active, botId = 'bot' }: { active: boolean; botId?: string }) {
+    latest = useRemoteCompanionQuery('pc', 'local-db:bots:get', [botId], { active, refreshIntervalMs: 1000 });
+    return null;
+  }
+  await act(async () => root.render(<Probe active />));
+  expect(latest!.value).toEqual({ id: 'bot', dmThreadsSupported: true });
+  await act(async () => root.render(<Probe active={false} />));
+  await act(async () => vi.advanceTimersByTime(3000));
+  expect(link.invoke).toHaveBeenCalledTimes(1);
+  expect(latest!.value).toEqual({ id: 'bot', dmThreadsSupported: true });
+  link.invoke.mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+  await act(async () => root.render(<Probe active />));
+  expect(link.invoke).toHaveBeenCalledTimes(2);
+  expect(latest!.value).toEqual({ id: 'bot', dmThreadsSupported: true });
+  await act(async () => finish!({ id: 'bot', dmThreadsSupported: false }));
+  expect(latest!.value).toEqual({ id: 'bot', dmThreadsSupported: false });
+  await act(async () => root.render(<Probe active={false} botId="other-bot" />));
+  expect(latest!.value).toBeNull();
+});
+
+// Unit regression: the real query used to publish every equal polling response, rebuilding
+// retained chat metadata. Pause coverage above did not cover active, unchanged snapshots.
+it('publishes only changed companion data while keeping refresh errors and removed fields visible', async () => {
+  vi.useFakeTimers(); h.liveQuery = true;
+  const { useRemoteCompanionQuery } = await import('@/session/useRemoteCompanionQuery');
+  let latest: ReturnType<typeof useRemoteCompanionQuery<any>>;
+  const changed = vi.fn();
+  let payload: any = { id: 'bot', threads: [{ id: 'one', replies: 1 }], setting: true };
+  link.invoke.mockReset().mockImplementation(async () => structuredClone(payload));
+  function Probe() {
+    latest = useRemoteCompanionQuery('pc', 'local-db:bots:get', ['bot'], { refreshIntervalMs: 1000 });
+    useEffect(() => { if (latest.value) changed(latest.value); }, [latest.value]);
+    return null;
+  }
+  await act(async () => root.render(<Probe />));
+  const first = latest!.value;
+  for (let i = 0; i < 10; i++) await act(async () => vi.advanceTimersByTimeAsync(1000));
+  expect(link.invoke).toHaveBeenCalledTimes(11);
+  expect(changed).toHaveBeenCalledTimes(1);
+  payload = { ...payload, setting: false };
+  await act(async () => vi.advanceTimersByTimeAsync(1000));
+  expect(latest!.value.setting).toBe(false);
+  expect(latest!.value.threads).toBe(first.threads);
+  payload = { id: 'bot', threads: [{ id: 'one', replies: 2 }] };
+  await act(async () => vi.advanceTimersByTimeAsync(1000));
+  expect(latest!.value).toEqual(payload);
+  payload = { ok: false };
+  await act(async () => vi.advanceTimersByTimeAsync(1000));
+  expect(latest!.error).toBe(true);
+  expect(latest!.value.threads[0].replies).toBe(2);
+  payload = { id: 'bot', threads: [{ id: 'one', replies: 2 }] };
+  await act(async () => vi.advanceTimersByTimeAsync(1000));
+  expect(latest!.error).toBe(false);
+  expect(changed).toHaveBeenCalledTimes(3);
+});
 
 it('reads every page of open todos, not just the host first page of 25', async () => {
   h.items = Array.from({ length: 30 }, (_, index) => todo(`o${index}`));
@@ -254,4 +318,53 @@ it('keeps the demo todo visible and preserves its empty and restore states', asy
   expect(data().items).toHaveLength(0);
   update('restore');
   expect(todoDueSoon(data().items[0])).toBe(true);
+});
+
+// Behavior: a retained, blurred chat keeps its content but performs no remote reads.
+it('pauses background todo reads, retains content, and refreshes on return', async () => {
+  h.items = [todo('cached')];
+  let latest!: ReturnType<typeof useCompanionGlanceTodos>;
+  function Probe({ active }: { active: boolean }) {
+    latest = useCompanionGlanceTodos({ deviceId: 'pc', deviceName: 'PC', botId: 'bot', enabled: true, active });
+    return null;
+  }
+  await act(async () => root.render(createElement(Probe, { active: true })));
+  const changed = link.onRemoteResourceChanged.mock.calls.at(-1)![0];
+  const cached = latest.todos;
+  await act(async () => root.render(createElement(Probe, { active: false })));
+  h.reads = [];
+  for (let i = 0; i < 10; i++) await act(async () => changed('pc', { collectionId: 'teammates' }));
+  expect(h.reads).toHaveLength(0);
+  expect(latest.todos).toBe(cached);
+  h.items = [todo('updated')];
+  await act(async () => root.render(createElement(Probe, { active: true })));
+  expect(latest.todos.open.map(item => item.id)).toEqual(['updated']);
+  expect(h.reads).toHaveLength(2);
+});
+
+// Behavior: late routine replies and in-flight pagination must not update a blurred/replaced chat.
+it('ignores late todo and daily-check replies after blur, and clears when the companion changes', async () => {
+  h.items = [todo('cached')];
+  let latest!: ReturnType<typeof useCompanionGlanceTodos>;
+  function Probe({ active, botId = 'bot' }: { active: boolean; botId?: string }) {
+    latest = useCompanionGlanceTodos({ deviceId: 'pc', deviceName: 'PC', botId, enabled: true, active });
+    return null;
+  }
+  await act(async () => root.render(createElement(Probe, { active: true })));
+  const cached = latest.todos;
+  let finish!: () => void;
+  h.pageGate = new Promise<void>(resolve => { finish = resolve; });
+  h.items = Array.from({ length: 30 }, (_, i) => todo(String(i)));
+  h.dailyCheck = true;
+  const changed = link.onRemoteResourceChanged.mock.calls.at(-1)![0];
+  await act(async () => changed('pc', { collectionId: 'teammates' }));
+  await act(async () => changed('pc', { collectionId: 'routines' }));
+  await act(async () => root.render(createElement(Probe, { active: false })));
+  h.reads = [];
+  await act(async () => finish());
+  expect(latest.todos).toBe(cached);
+  expect(h.reads).toHaveLength(0);
+  await act(async () => root.render(createElement(Probe, { active: false, botId: 'other' })));
+  expect(latest.loaded).toBe(false);
+  expect(latest.todos.open).toEqual([]);
 });

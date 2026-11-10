@@ -498,7 +498,9 @@ describe('maker SEND transaction', () => {
     'does not resume product work when %s wins after message persistence',
     async (reason) => {
       const dispatch = vi.fn();
+      const ackInterruptedTurnDispatched = vi.fn();
       const { deps, session } = createDeps({
+        ackInterruptedTurnDispatched,
         prepareProductTurn: () => dispatch,
         assertBeforeVendorDispatch: () => {
           throw new Error('stale input');
@@ -521,6 +523,7 @@ describe('maker SEND transaction', () => {
       else await expect(sending).resolves.toMatchObject({ accepted: false });
       expect(deps.createDbMessage).toHaveBeenCalledOnce();
       expect(dispatch).not.toHaveBeenCalled();
+      expect(ackInterruptedTurnDispatched).not.toHaveBeenCalled();
     },
   );
   it('dispatches a bound lazy session after one timed-out probe without probing again at bootstrap', async () => {
@@ -1682,7 +1685,17 @@ describe('maker SEND transaction', () => {
     expect(onUndispatchedDirectUserTurn).toHaveBeenCalledWith('session-1');
   });
 
-  it('acks an interrupted turn with the executor clock only after direct dispatch is accepted', async () => {
+  // Regression: typing a normal continuation after app restart must retire the
+  // old interruption just like the Continue button. The shared send transaction
+  // covers both coordinator queue dispatch and direct/remote sends (unit tier).
+  it.each([
+    { label: 'ordinary direct input', sendOpts: undefined },
+    {
+      label: 'ordinary queued input',
+      sendOpts: { persistUserMessage: { clientId: 'resume-input', content: 'Please continue.' } },
+    },
+    { label: 'legacy Continue input', sendOpts: { ackInterruptedTurnOnDispatch: true } },
+  ])('acks the old interruption only after $label is dispatched', async ({ sendOpts }) => {
     const ackInterruptedTurnDispatched = vi.fn(async () => {});
     const session = createSession({
       send: vi.fn(async () => {
@@ -1699,15 +1712,13 @@ describe('maker SEND transaction', () => {
 
     try {
       await expect(
-        transaction.sendToAgentAccepted('session-1', 'continue', undefined, {
-          ackInterruptedTurnOnDispatch: true,
-        }),
+        transaction.sendToAgentAccepted('session-1', 'Please continue.', undefined, sendOpts),
       ).resolves.toMatchObject({ accepted: true });
     } finally {
       now.mockRestore();
     }
 
-    expect(ackInterruptedTurnDispatched).toHaveBeenCalledWith('session-1', 49_999);
+    expect(ackInterruptedTurnDispatched).toHaveBeenCalledExactlyOnceWith('session-1', 49_999);
     expect(vi.mocked(session.send).mock.invocationCallOrder[0]).toBeLessThan(
       ackInterruptedTurnDispatched.mock.invocationCallOrder[0]!,
     );
@@ -2819,6 +2830,50 @@ describe('maker SEND transaction', () => {
     expect(deps.markOrcaRoleIfNeeded).toHaveBeenCalledWith('orca-session', 'lead');
     expect(oldSession.send).not.toHaveBeenCalled();
     expect(newSession.send).toHaveBeenCalled();
+  });
+
+  // Orca inter-agent delivery reaches an idle live session without sendToAgentAccepted;
+  // it uses this entry so a session that became a Lead after startup is rebuilt first.
+  it('rebuilds an idle live Orca session on request and leaves a hydrated one alone', async () => {
+    const oldSession = createSession({
+      id: 'orca-session',
+      workDir: 'C:\\repo',
+      hostStartupPreferences: { userPrompt: 'custom prompt', makerMemoryEnabled: false },
+    });
+    const newSession = createSession({ id: 'orca-session', workDir: 'C:\\repo' });
+    const hydrated = { current: false };
+    const { deps } = createDeps({
+      getSession: vi.fn(() => oldSession),
+      isOrcaMcpHydrated: vi.fn(() => hydrated.current),
+      synthesizeOrcaVendorOptionsFromDb: vi.fn(async () => true),
+      bootstrapSession: vi.fn(async () => {
+        hydrated.current = true;
+        return { session: newSession, didInjectOrcaInstructions: true, didInjectProjectContext: false };
+      }),
+    });
+    const transaction = createMakerSendTransaction(deps);
+    const createOpts: MakerSessionCreateOpts = {
+      id: 'orca-session',
+      agentKind: 'codex',
+      workingDir: 'C:\\repo',
+      model: 'gpt-5.4',
+      orcaRole: 'lead',
+    };
+
+    await expect(transaction.hydrateActiveOrcaSession('orca-session', createOpts)).resolves.toBe(true);
+    expect(deps.closeSession).toHaveBeenCalledTimes(1);
+    expect(deps.bootstrapSession).toHaveBeenCalledTimes(1);
+    // Startup preferences of the replaced runtime survive the rebuild.
+    expect(deps.bootstrapSession).toHaveBeenCalledWith(expect.objectContaining({
+      userPrompt: 'custom prompt',
+      makerMemoryEnabled: false,
+    }));
+    expect(deps.markOrcaRoleIfNeeded).toHaveBeenCalledWith('orca-session', 'lead');
+    expect(oldSession.send).not.toHaveBeenCalled();
+
+    await expect(transaction.hydrateActiveOrcaSession('orca-session', createOpts)).resolves.toBe(false);
+    expect(deps.closeSession).toHaveBeenCalledTimes(1);
+    expect(deps.bootstrapSession).toHaveBeenCalledTimes(1);
   });
 
   it('reconciles createOpts against DB before closing the old runtime on active Orca rehydrate (#2882)', async () => {

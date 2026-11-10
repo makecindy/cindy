@@ -1293,6 +1293,91 @@ describe('codexHttpBridge', () => {
     await stale.text();
   });
 
+  // Regression (2026-11 personal build): Pi exits without DELETE, so its MCP sessions
+  // (each a full McpServer with every tool schema) stayed forever — 77 opened, 0 closed
+  // in 40 minutes. Ending the Session must close them; a reattach that re-registers the
+  // same Session must not, and local Codex sessions (no ?session=) are never owned.
+  it('closes MCP sessions owned by a Session once its registration really ends', async () => {
+    bridge = await startCodexHttpBridge({
+      serverFactories: { cindy_orca: createTestServer },
+      logger: noopLogger(),
+    });
+    const initBody = JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'initialize',
+      params: { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'pi', version: '1.0.0' } },
+    });
+    const accept = { accept: 'application/json, text/event-stream', 'content-type': 'application/json' };
+
+    const codexInit = await fetch(bridge.url('cindy_orca'), {
+      method: 'POST',
+      headers: { ...accept, authorization: `Bearer ${bridge.token}` },
+      body: initBody,
+    });
+    expect(codexInit.status).toBe(200);
+    await codexInit.text();
+
+    const ctx = { agentKind: 'pi' as const, sessionId: 'pi-session', sessionInstanceId: 'pi-instance', workingDir: '/repo', vendorOptions: {} };
+    bridge.registerSessionCtx('pi-session', ctx);
+    bridge.registerSessionToken('pi-session', 'pi-token');
+    const piUrl = withMcpRouteIdentity(bridge.url('cindy_orca'), { sessionId: 'pi-session', sessionInstanceId: 'pi-instance' });
+    const piHeaders = { ...accept, authorization: 'Bearer pi-token' };
+    const piInit = await fetch(piUrl, { method: 'POST', headers: piHeaders, body: initBody });
+    expect(piInit.status).toBe(200);
+    const mcpSessionId = piInit.headers.get('mcp-session-id') ?? '';
+    await piInit.text();
+    expect(bridge.mcpSessionCount()).toBe(2);
+
+    // Reattach: a newer registration replaces the ctx; the old dispose arrives late.
+    const reattached = { ...ctx };
+    bridge.registerSessionCtx('pi-session', reattached);
+    bridge.unregisterSessionCtx('pi-session', ctx);
+    expect(bridge.mcpSessionCount()).toBe(2);
+    const call = await fetch(piUrl, {
+      method: 'POST',
+      headers: { ...piHeaders, 'mcp-session-id': mcpSessionId },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'current_session', arguments: {} } }),
+    });
+    expect(await readRpcResponse(call)).toMatchObject({ result: { content: [{ type: 'text', text: 'pi-session' }] } });
+
+    bridge.unregisterSessionCtx('pi-session', reattached);
+    expect(bridge.mcpSessionCount()).toBe(1);
+  });
+
+  // Review finding on the cleanup above: an initialize that already passed the ctx check
+  // can finish after the Session unregistered, missing the cleanup scan. The factory runs
+  // between the ctx check and the table insert, so unregistering there is that interleaving.
+  it('does not keep an MCP session whose owner unregistered while it was initializing', async () => {
+    const ctx = { agentKind: 'pi' as const, sessionId: 'pi-session', sessionInstanceId: 'pi-instance', workingDir: '/repo', vendorOptions: {} };
+    bridge = await startCodexHttpBridge({
+      serverFactories: {
+        cindy_orca: () => {
+          bridge?.unregisterSessionCtx('pi-session', ctx);
+          return createTestServer();
+        },
+      },
+      logger: noopLogger(),
+    });
+    bridge.registerSessionCtx('pi-session', ctx);
+    bridge.registerSessionToken('pi-session', 'pi-token');
+    const init = await fetch(
+      withMcpRouteIdentity(bridge.url('cindy_orca'), { sessionId: 'pi-session', sessionInstanceId: 'pi-instance' }),
+      {
+        method: 'POST',
+        headers: { accept: 'application/json, text/event-stream', 'content-type': 'application/json', authorization: 'Bearer pi-token' },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: 1,
+          method: 'initialize',
+          params: { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'pi', version: '1.0.0' } },
+        }),
+      },
+    );
+    await init.text();
+    expect(bridge.mcpSessionCount()).toBe(0);
+  });
+
   it('rejects an unregistered ?session= query while leaving token-only requests untouched', async () => {
     bridge = await startCodexHttpBridge({
       serverFactories: { cindy_test: createTestServer },

@@ -171,8 +171,8 @@ describe('recordGroupMessage', () => {
     expect(rows.n).toBe(1);
   });
 
-  it('正文全文入库, 但拼 prompt 仍按 500 字符截断', async () => {
-    const text = 'x'.repeat(700);
+  it('正文全文入库, 但拼 prompt 仍按 4000 字符截断', async () => {
+    const text = 'x'.repeat(4700);
     await recordGroupMessage(frame({ messageId: 'long', text }));
     const row = sqlite
       .prepare('SELECT text FROM hook_group_messages WHERE message_id = ?')
@@ -188,8 +188,9 @@ describe('recordGroupMessage', () => {
         prompt: 'q',
       })
     ).prefix;
-    expect(prefix).toContain('x'.repeat(500));
-    expect(prefix).not.toContain('x'.repeat(501));
+    expect(prefix).toContain('x'.repeat(3900));
+    expect(prefix).toContain('[…已截断]');
+    expect(prefix).not.toContain('x'.repeat(4001));
   });
 
   it('重置只删除官方 provider 的持久游标', async () => {
@@ -638,10 +639,44 @@ describe('buildGroupContextPrefix', () => {
       prompt: 'q',
       source: { im: 'telegram', triggerMessageId: '19' },
     });
-    // 500 body characters + the author prefix: seven messages fit 4000.
-    expect(assembly.messageCount).toBe(7);
-    expect(assembly.prefix).toContain('[... 更早的消息已省略 ...]');
+    // All nineteen previous messages fit; multiline bodies do not inflate the count.
+    expect(assembly.messageCount).toBe(19);
+    expect(assembly.prefix).not.toContain('[... 更早的消息已省略 ...]');
     expect(assembly.prefix).toContain('first\n[another author]');
+  });
+
+  // Regression: newer fallback topics used to consume the shared budget before
+  // General, then commit permanently advanced past the omitted General message.
+  it.each([
+    { name: '消息数量', count: 50, body: '话题消息', expectedCount: 49 },
+    { name: '字符', count: 5, body: '话题消息'.repeat(1000), expectedCount: 5 },
+  ])('$name预算先保主群流，再填兜底，并保留引用预留与提交回滚', async ({ count, body, expectedCount }) => {
+    await recordGroupMessage(frame({ messageId: 'general', text: 'General 待补充的消息' }));
+    await recordGroupMessage(frame({ messageId: 'quoted', text: '已在引用区提供' }));
+    for (let i = 0; i < count; i += 1) {
+      await recordGroupMessage(frame({ messageId: `topic-${i}`, threadId: '77', text: body }));
+    }
+    await recordGroupMessage(frame({ messageId: 'trigger', text: '当前请求' }));
+    const payload = {
+      requestId: 'primary-priority', externalKey, workspace: 'chat', sessionId: null, prompt: 'q',
+      source: { im: 'telegram' as const, triggerMessageId: 'trigger',
+        threadContext: [{ messageId: 'quoted', author: '引用人', text: '已在引用区提供' }] },
+    };
+    const assembly = await buildGroupContextPrefix(payload);
+    expect(assembly.messageCount).toBe(expectedCount);
+    expect(assembly.messageIds?.[0]).toBe('general');
+    expect(assembly.messageIds?.at(-1)).toBe(`topic-${count - 1}`);
+    expect(assembly.prefix).toContain('General 待补充的消息');
+    expect(assembly.prefix).not.toContain('已在引用区提供');
+    expect(assembly.prefix).not.toContain('当前请求');
+    expect(assembly.messageIds).not.toContain('topic-0');
+    const receipt = await assembly.commit();
+    expect((await buildGroupContextPrefix(payload)).messageCount).toBe(0);
+    await receipt?.rollback();
+    expect((await buildGroupContextPrefix(payload)).messageIds).toEqual(assembly.messageIds);
+    await (await buildGroupContextPrefix(payload)).commit();
+    await resetGroupContextCursors({ clearPersisted: false });
+    expect((await buildGroupContextPrefix(payload)).messageCount).toBe(0);
   });
 
   it('非群 lane 或空窗口返回空装配', async () => {
@@ -812,31 +847,6 @@ describe('buildGroupContextPrefix', () => {
     ).prefix;
     expect(prefix).toContain('主群里的话');
     expect(prefix).toContain('reply 链里的话');
-  });
-
-  it('其它 topic 的突发流量不得把主群流发言挤出预算', async () => {
-    // forum 群的 General 也走 group lane, 于是兜底集会带进该群其它 topic 的发言。
-    // 按全局 id 排序时它们(更新)会先吃满 4000 字符预算, 把主群流那条挤掉并让游标越过去
-    // —— 主群流预算优先, 兜底集只能用剩下的。
-    // 正文取到接近单条上限(500): 短句会在预算溢出后仍塞进缝隙, 用例就失去判别力。
-    await recordGroupMessage(
-      frame({ messageId: '40', text: `主群流的关键一句${'z'.repeat(500)}` }),
-    );
-    for (let i = 0; i < 20; i += 1) {
-      await recordGroupMessage(
-        frame({ messageId: `5${i}`, threadId: '77', text: `topic 长文${'x'.repeat(500)}` }),
-      );
-    }
-    const prefix = (
-      await buildGroupContextPrefix({
-        requestId: 'r-forum-burst',
-        externalKey: 'telegram:group:1:-900:9:g1',
-        workspace: 'chat',
-        sessionId: null,
-        prompt: 'q',
-      })
-    ).prefix;
-    expect(prefix).toContain('主群流的关键一句');
   });
 
   it('换绑 Telegram 主账号后不读取前一账号的群历史', async () => {

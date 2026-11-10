@@ -8,6 +8,7 @@ import {
   type RemoteCollectionListResponse,
   type RemoteResourceManifestResponse,
 } from '@cindy/device-link';
+import { groupSwitchVisualFixture } from './groupSwitchVisualFixture';
 import { UI_MOCK_ID_PREFIX } from '@cindy/maker-shared/ui-mock';
 import { BOT_GROUP_CHAT_PRIMITIVE, BOT_GROUP_REMOTE_COLLECTION_ID, BOT_GROUP_REMOTE_RESOURCE_KIND } from '@cindy/maker-shared/botGroupChat';
 
@@ -59,6 +60,9 @@ const glanceTodo = {
 
 export type GroupRunScene = 'single' | 'multiple' | 'stop-pending' | 'stop-failure' | 'stop-idle';
 let runSceneStopped = false;
+// Foreground refreshes deliver running -> idle -> another member's running round
+// without remounting the real group page or using its send/jump controls.
+let processRoundSnapshot = 0;
 const RUN_SCENE_IDS: Record<string, GroupRunScene> = {
   'visual-run-single': 'single', 'visual-run-multiple': 'multiple',
   'visual-run-stop-pending': 'stop-pending', 'visual-run-stop-failure': 'stop-failure',
@@ -175,8 +179,11 @@ export function teammateVisualFixture(channel: string, args: unknown[], now = FI
   if (channel === REMOTE_RESOURCE_MANIFEST_CHANNEL) return {
     protocolVersion: REMOTE_RESOURCE_PROTOCOL_VERSION,
     collections: [{ id: TEAMMATES, resourceKind: 'bot', title: 'Teammates', placement: 'home-scope',
-      actions: [{ id: 'open-create', label: 'New teammate' }] }],
+      actions: [{ id: 'open-create', label: 'New teammate' }] },
+      { id: BOT_GROUP_REMOTE_COLLECTION_ID, resourceKind: BOT_GROUP_REMOTE_RESOURCE_KIND, title: 'Groups', placement: 'home-scope' }],
   } satisfies RemoteResourceManifestResponse;
+  const groupSwitch = groupSwitchVisualFixture(channel, args[0]);
+  if (groupSwitch !== undefined) return groupSwitch;
   const request = args[0] as { collectionId?: string; ref?: { collectionId?: string; id?: string }; resourceRef?: { id?: string }; actionId?: string; query?: string; input?: { enabled?: boolean; operation?: string; op?: string; args?: { id?: string } } } | undefined;
   if (channel === REMOTE_RESOURCE_GET_CHANNEL && request?.ref?.id === 'todos:cindy-default') {
     const query = JSON.parse(request.query ?? '{}');
@@ -235,7 +242,7 @@ export function teammateVisualFixture(channel: string, args: unknown[], now = FI
     revision: 'process-1', display: { title: 'Design review' }, actions: [], links: [],
     blocks: [{ id: 'chat', primitive: BOT_GROUP_CHAT_PRIMITIVE, fallbackMarkdown: 'Design review', data: {
       id: request.ref.id, name: 'Design review', members: [{ botId: 'cindy-default', name: 'Cindy', status: 'active', isOwned: true, homeDeviceId: 'cindy-visual-mock-mac' }],
-      messages: [{ id: 'fixture-group-answer', sequence: 1, kind: 'message', authorKind: 'bot', authorBotId: 'cindy-default', authorName: 'Cindy',
+      messages: [...Array.from({ length: 12 }, (_, index) => ({ id: `fixture-history-${index}`, sequence: index + 1, kind: 'message', authorKind: 'user', authorName: '演示用户', content: `第 ${index + 1} 项进展已核对。`, createdAt: now - (13 - index) * MINUTE })), { id: 'fixture-group-answer', sequence: 13, kind: 'message', authorKind: 'bot', authorBotId: 'cindy-default', authorName: 'Cindy',
         content: '任务与 PR 的进展已整理，需要跟进的两项工作已列出。', createdAt: now,
         process: { groupId: request.ref.id, executionId: 'fixture-process-execution', sessionId: 'visual-teammate-process', clientId: 'fixture-process-source', durationMs: 60000 } }],
       plans: [], createdAt: now, updatedAt: now, round: { status: 'idle', canContinue: false, speakers: [] },
@@ -246,7 +253,7 @@ export function teammateVisualFixture(channel: string, args: unknown[], now = FI
     ref: { collectionId: BOT_GROUP_REMOTE_COLLECTION_ID, kind: BOT_GROUP_REMOTE_RESOURCE_KIND, id: request.ref.id },
     revision: 'visual-1', display: { title: 'Design review' }, actions: [], links: [],
     blocks: [{ id: 'chat', primitive: BOT_GROUP_CHAT_PRIMITIVE, fallbackMarkdown: 'Design review', data: {
-      id: request.ref.id, name: 'Design review',
+      id: request.ref.id, name: 'Design review', supportsAttachments: true,
       members: ['Aster (Ada)', 'Nova (Leo)', 'Leo', 'Mira (Ada)', 'Orin (Kai)', 'Quill', 'Ada', 'Kai', 'Rhea (Ada)']
         .map((name, index) => ({ botId: `visual-crowd-${index}`, name, status: 'active' })),
       messages: [{ id: 'visual-crowd-message', sequence: 1, kind: 'message', authorKind: 'bot', authorBotId: 'visual-crowd-0',
@@ -255,15 +262,26 @@ export function teammateVisualFixture(channel: string, args: unknown[], now = FI
     } }],
   };
   if (channel === REMOTE_RESOURCE_GET_CHANNEL && request?.ref?.collectionId === BOT_GROUP_REMOTE_COLLECTION_ID
-    && request.ref.id === 'visual-session-process') return {
-    ref: { collectionId: BOT_GROUP_REMOTE_COLLECTION_ID, kind: BOT_GROUP_REMOTE_RESOURCE_KIND, id: request.ref.id },
-    revision: 'visual-1', display: { title: '任务入口演示群' }, actions: [], links: [],
-    blocks: [{ id: 'chat', primitive: BOT_GROUP_CHAT_PRIMITIVE, fallbackMarkdown: 'Cindy 正在工作', data: {
-      id: request.ref.id, name: '任务入口演示群', members: [{ botId: 'cindy-default', name: 'Cindy', status: 'active' }],
-      messages: [], plans: [], createdAt: now, updatedAt: now,
-      round: { status: 'running', canContinue: false, speakers: [{ botId: 'cindy-default', activity: 'reply', sessionId: VISUAL_TEAMMATE_SESSION_ID }] },
-    } }],
-  };
+    && ['visual-session-process', 'visual-session-process-rollover', 'visual-session-process-scroll'].includes(request.ref.id ?? '')) {
+    const snapshot = request.ref.id === 'visual-session-process-rollover' ? ++processRoundSnapshot : 1;
+    // Both nested and outer lists must have a real native range for gesture-end checks.
+    const scrollScene = request.ref.id === 'visual-session-process-scroll';
+    return {
+      ref: { collectionId: BOT_GROUP_REMOTE_COLLECTION_ID, kind: BOT_GROUP_REMOTE_RESOURCE_KIND, id: request.ref.id },
+      revision: `visual-${snapshot}`, display: { title: '任务入口演示群' }, actions: [], links: [],
+      blocks: [{ id: 'chat', primitive: BOT_GROUP_CHAT_PRIMITIVE, fallbackMarkdown: 'Cindy 正在工作', data: {
+        id: request.ref.id, name: '任务入口演示群', members: [{ botId: 'cindy-default', name: 'Cindy', status: 'active' },
+          ...(request.ref.id === 'visual-session-process-rollover' ? [{ botId: 'abu', name: 'Abu', status: 'active' }] : [])],
+        messages: scrollScene ? Array.from({ length: 12 }, (_, index) => ({ id: `process-scroll-history-${index}`, sequence: index + 1,
+          kind: 'message', authorKind: 'user', authorName: '演示用户', content: `第 ${index + 1} 项进展已核对。`, createdAt: now - (13 - index) * MINUTE })) : [],
+        plans: [], createdAt: now, updatedAt: now,
+        round: snapshot === 2 ? { status: 'idle', canContinue: true, speakers: [] }
+          : { status: 'running', canContinue: false, speakers: scrollScene
+            ? Array.from({ length: 3 }, (_, index) => ({ botId: 'cindy-default', activity: 'reply', sessionId: VISUAL_TEAMMATE_SESSION_ID, executionId: `process-scroll-${index}` }))
+            : [{ botId: snapshot > 2 ? 'abu' : 'cindy-default', activity: 'reply', sessionId: VISUAL_TEAMMATE_SESSION_ID }] },
+      } }],
+    };
+  }
   // #7806 run-strip scenes: the four round states the screenshot matrix needs, synthetic only.
   if (channel === REMOTE_RESOURCE_GET_CHANNEL && request?.ref?.collectionId === BOT_GROUP_REMOTE_COLLECTION_ID
     && request.ref.id && RUN_SCENE_IDS[request.ref.id]) return runSceneResource(request.ref.id, RUN_SCENE_IDS[request.ref.id], now);

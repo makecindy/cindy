@@ -24,6 +24,7 @@ import { CreateWorkerPopover } from '@/features/cc-agent/CreateWorkerPopover';
 import { useTransientModelPickerPreferences } from '@/components/new-chat/modelPickerPreferences';
 import { PluginModelPickerDialog } from '@/cindy-brain/PluginModelPickerHost';
 import type { AgentCapabilities } from '@/hooks/useAgentCapabilities';
+import type { ProviderView } from '@cindy/model-providers';
 
 /** 统一面板发起的深度写入带上「面板已串行」标记(见 ModelSelector 的 onEffortChangeLive)。 */
 const FROM_PANEL = { serializedByPanel: true };
@@ -38,6 +39,7 @@ vi.mock('react-i18next', async (importOriginal) => ({
         'settings.providers.openai.title': 'OpenAI',
         'settings.providers.xd.title': 'Cindy AI',
         'newChat.modelSelector.modelListAria': '模型列表',
+        'newChat.modelSelector.meta.context': `上下文 ${options?.value}`,
         'newChat.modelSelector.search.noResults': '无匹配模型',
         'newChat.modelSelector.search.placeholderAll': '搜索模型…',
         'newChat.modelSelector.unified.favoritesGroup': '收藏',
@@ -84,7 +86,10 @@ vi.mock('@/hooks/useAgentCapabilities', () => ({
     error: null,
   }),
 }));
-vi.mock('@/hooks/useApiKey', () => ({ useApiKey: () => ({ hasSavedKey: true }) }));
+const keyPresence = vi.hoisted(() => ({ available: true, canReadKey: true }));
+vi.mock('@/hooks/useApiKey', () => ({ useApiKey: () => ({
+  hasSavedKey: keyPresence.available, canReadKey: keyPresence.canReadKey,
+}) }));
 vi.mock('@/hooks/useAvailableAgents', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/hooks/useAvailableAgents')>()),
   useModelPickerAgents: () => ['claude-code', 'codex'],
@@ -343,6 +348,8 @@ async function openFlyoutForRow(row: HTMLElement): Promise<HTMLElement> {
 }
 
 beforeEach(() => {
+  keyPresence.available = true;
+  keyPresence.canReadKey = true;
   onProviderChange.mockClear();
   resetEnginePrefs();
   resetFavorites();
@@ -446,6 +453,19 @@ describe('统一面板 · 打折 GPT-5.6 与 GPT-6 包月互切', () => {
       { from: routes[2]!, to: discounted, fast },
     ]),
   );
+  // Test value: a detached plugin panel deliberately cannot read raw gateway keys. Its connected
+  // Main catalog must still permit the same XD row. Existing tests always supplied a key.
+  // Minimal input: one connected XD provider, missing credential bridge; tier: unit.
+  it('selects a connected gateway model without a renderer credential read', async () => {
+    keyPresence.available = false;
+    keyPresence.canReadKey = false;
+    const onUnifiedSelect = vi.fn(() => true);
+    renderPanel({ vendorKey: 'codex', currentProviderId: 'openai', modelId: 'gpt-6-astra', onUnifiedSelect });
+    fireEvent.click(screen.getByText('Discount Sol'));
+    await waitFor(() => expect(onUnifiedSelect).toHaveBeenCalledWith(expect.objectContaining({
+      providerId: 'xd', modelId: 'codex/gpt-5.6-sol', engine: 'codex',
+    })));
+  });
   it.each(cases)(
     '$from.modelId → $to.modelId，Fast=$fast，失败可重试且不误报成功',
     async ({ from, to, fast }) => {
@@ -714,6 +734,86 @@ describe('统一模型选择器面板', () => {
       fireEvent.click(row);
     });
     expect(onFollow).toHaveBeenCalledTimes(1);
+  });
+});
+
+// #9501 review P2: the real selector/flyout read the controller's same-key window.
+// Existing rendering tests had no context-limit IPC response. Unit: remote 1M +
+// local 123K, including native Codex readback, source reset and controlled catalogs.
+describe('模型浮层上下文按目录来源隔离', () => {
+  const localProviders = providersRef.providers;
+  const getModelContextLimit = vi.fn();
+  beforeEach(() => {
+    getModelContextLimit.mockReset().mockResolvedValue({
+      limit: 123_000, isCustomized: true,
+      codexContext: { contextWindow: 256_000, usableContextWindow: 243_200,
+        autoCompactTokenLimit: 230_400, modelMaxContextWindow: null,
+        source: 'config', fallbackModel: false },
+    });
+    vi.stubGlobal('electronAPI', {
+      ...window.electronAPI,
+      maker: { ...window.electronAPI?.maker, getModelContextLimit },
+    });
+    remoteProvidersRef.providers = (localProviders as ProviderView[]).map((provider) => ({
+      ...provider, remoteInvocationEnabled: true,
+      models: Object.fromEntries(Object.entries(provider.models).map(([agent, models]) => [
+        agent, models?.map((model) => ({ ...model,
+          contextWindowOverride: provider.id === 'anthropic' ? 1_000_000
+            : agent === 'codex' ? 600_000 : 800_000,
+        })),
+      ])),
+    }));
+  });
+  afterEach(() => {
+    remoteProvidersRef.providers = [];
+    vi.unstubAllGlobals();
+  });
+
+  it.each([
+    { name: '同账号远程 Agent', props: { remoteAgent: {
+      devices: [{ deviceId: 'other', name: 'Other' }], selectedDeviceId: 'other',
+    } } },
+    { name: '分享供应商', props: { remoteAgent: {
+      devices: [{ deviceId: 'share:context', name: 'Shared' }], selectedDeviceId: 'share:context',
+    } } },
+    { name: '被控电脑', props: { deviceId: 'other' } },
+  ])('$name 的窗口与引擎切换只使用来源目录', async ({ props }) => {
+    renderPanel(props);
+    const claude = await openRowFlyout('Opus 5');
+    expect(within(claude).getByText(/上下文 1M/)).toBeTruthy();
+    if (props.remoteAgent) {
+      await act(async () => fireEvent.click(document.querySelector(
+        `[data-rail-item="remote:${props.remoteAgent.selectedDeviceId}:openai"]`,
+      )!));
+    }
+    const codex = await openRowFlyout('GPT-5.6');
+    expect(within(codex).getByText(/上下文 600K/)).toBeTruthy();
+    await act(async () => fireEvent.click(codex.querySelector('[data-engine-capsule="cc"]') as HTMLElement));
+    expect(within(codex).getByText(/上下文 800K/)).toBeTruthy();
+    expect(getModelContextLimit).not.toHaveBeenCalled();
+  });
+
+  it('来源恢复默认或旧目录缺少覆写时仍不读取本机同名设置', async () => {
+    remoteProvidersRef.providers = (localProviders as ProviderView[]).map((provider) => ({
+      ...provider, remoteInvocationEnabled: true,
+    }));
+    renderPanel({ remoteAgent: {
+      devices: [{ deviceId: 'other', name: 'Other' }], selectedDeviceId: 'other',
+    } });
+    expect(within(await openRowFlyout('Opus 5')).getByText(/上下文 200K/)).toBeTruthy();
+    expect(getModelContextLimit).not.toHaveBeenCalled();
+  });
+
+  it('本机仍读取精确模型设置及 Codex 原生窗口', async () => {
+    renderPanel();
+    expect(within(await openRowFlyout('Opus 5')).getByText(/上下文 123K/)).toBeTruthy();
+    expect(getModelContextLimit).toHaveBeenCalledWith({
+      providerId: 'anthropic', agent: 'claude-code', modelId: 'claude-opus-5',
+    });
+    expect(within(await openRowFlyout('GPT-5.6')).getByText(/上下文 256K/)).toBeTruthy();
+    expect(getModelContextLimit).toHaveBeenCalledWith({
+      providerId: 'openai', agent: 'codex', modelId: 'gpt-5.6',
+    });
   });
 });
 
@@ -4969,5 +5069,36 @@ describe('模态对话框滚动锁下的面板滚轮放行', () => {
     } finally {
       document.removeEventListener('wheel', reachedDocument);
     }
+  });
+});
+
+describe('verified DeepSeek aliases in the actual model panel', () => {
+  const originalProviders = providersRef.providers;
+  afterEach(() => { providersRef.providers = originalProviders; });
+  const models = () => ['deepseek-flash', 'deepseek-v4-flash'].map((id) => ({
+    id, name: 'DeepSeek V4.1 Flash', selectionAliasKey: 'deepseek-flash',
+    contextWindow: id === 'deepseek-flash' ? 1_048_576 : 1_000_000,
+    efforts: ['low', 'high'], defaultEffort: 'high', supportsImageInput: true,
+  }));
+  it('renders one row, inherits the legacy effort, and selects a real canonical wire ID', async () => {
+    providersRef.providers = [{ id: 'direct-ds', name: 'DeepSeek', source: 'user', agents: ['codex'], auth: { method: 'api-key' },
+      routing: { codex: { upstream: 'https://api.deepseek.com', wireProtocol: 'openai-chat' } }, connected: true, models: { codex: models() } }];
+    const change = vi.fn();
+    renderPanel({ vendorKey: 'codex', currentProviderId: 'other', modelId: 'other', onProviderChange: change,
+      modelMemory: { getEffort: (_, __, id) => id === 'deepseek-v4-flash' ? 'low' : undefined,
+        getFast: () => undefined, setEffort: vi.fn(), setFast: vi.fn(), editMany: () => true } });
+    expect(within(screen.getByRole('listbox')).getAllByText('DeepSeek V4.1 Flash')).toHaveLength(1);
+    await act(async () => { fireEvent.click(rowFor('DeepSeek V4.1 Flash')); });
+    expect(change).toHaveBeenCalledWith('direct-ds', 'deepseek-flash', 'low', false);
+  });
+  it('retains the exact old ID when the existing task is already using it', async () => {
+    providersRef.providers = [{ id: 'direct-ds', name: 'DeepSeek', source: 'user', agents: ['codex'], auth: { method: 'api-key' },
+      routing: { codex: {} }, connected: true, models: { codex: models() } }];
+    const change = vi.fn();
+    renderPanel({ actualRoute: true, vendorKey: 'codex', currentProviderId: 'direct-ds', modelId: 'deepseek-v4-flash', onProviderChange: change,
+      modelMemory: { getEffort: () => undefined, getFast: () => undefined, setEffort: vi.fn(), setFast: vi.fn(), editMany: () => true } });
+    expect(within(screen.getByRole('listbox')).getAllByText('DeepSeek V4.1 Flash')).toHaveLength(1);
+    await act(async () => { fireEvent.click(rowFor('DeepSeek V4.1 Flash')); });
+    expect(change).toHaveBeenCalledWith('direct-ds', 'deepseek-v4-flash', expect.any(String), false);
   });
 });

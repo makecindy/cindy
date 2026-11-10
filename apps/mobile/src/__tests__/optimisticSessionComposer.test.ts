@@ -200,7 +200,7 @@ describe('mobile optimistic composer while session is not ready', () => {
   it('keeps legacy Plan out of deferred delivery without affecting the modern Plan path', () => {
     const source = readSource(SCREEN);
     const guardStart = source.indexOf('const legacyPlanRequiresLiveDispatch =');
-    const optimisticClearStart = source.indexOf('if (!independent && text && !useDurableOutbox) applyComposerDocument(documentAfterOptimisticClear);');
+    const optimisticClearStart = source.indexOf('applyComposerDocument(documentAfterOptimisticClear);');
     const outboxStart = source.indexOf('if (useLocalOutbox) {', guardStart);
     const guard = source.slice(guardStart, outboxStart);
 
@@ -512,7 +512,7 @@ describe('mobile optimistic composer while session is not ready', () => {
     const source = readSource(SCREEN);
     const gate = source.indexOf('commandNeedsRemoteSession(earlyLocalCommand, earlyDesktopCommand)');
     expect(gate).toBeGreaterThan(-1);
-    const clear = source.indexOf('if (!independent && text && !useDurableOutbox) applyComposerDocument(documentAfterOptimisticClear);');
+    const clear = source.indexOf('applyComposerDocument(documentAfterOptimisticClear);');
     expect(clear).toBeGreaterThan(-1);
     expect(gate).toBeLessThan(clear);
     const branch = source.slice(gate, clear);

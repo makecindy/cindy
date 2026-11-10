@@ -18,6 +18,7 @@ const mocks = vi.hoisted(() => ({
   getPermissionsAsync: vi.fn(),
   requestPermissionsAsync: vi.fn(),
   getDevicePushTokenAsync: vi.fn(),
+  readIosPushEnvironment: vi.fn(),
   setNotificationHandler: vi.fn(),
 }));
 
@@ -43,6 +44,8 @@ vi.mock('expo-notifications', () => ({
 vi.mock('react-native', () => ({
   Platform: { OS: 'ios' },
 }));
+
+vi.mock('@/notifications/nativePushEnvironment', () => ({ readIosPushEnvironment: mocks.readIosPushEnvironment }));
 
 vi.mock('@/config/env', () => ({
   get AUTH_REGION() {
@@ -130,10 +133,25 @@ describe('push notification realm routing', () => {
     mocks.getDevicePushTokenAsync.mockResolvedValue({
       data: 'apns-device-token',
     });
+    mocks.readIosPushEnvironment.mockResolvedValue('development');
   });
 
   afterEach(() => {
     vi.unstubAllGlobals();
+  });
+
+  it('registers a development-signed Release build with sandbox APNs', async () => {
+    vi.stubGlobal('__DEV__', false);
+    const apiFetch = vi.fn().mockResolvedValue({ registered: true });
+    await expect(syncPushRegistration({ enabled: true, apiFetch })).resolves.toBe('registered');
+    expect(apiFetch.mock.calls[0][1].body).toMatchObject({ apnsEnv: 'sandbox' });
+  });
+
+  it('never uploads a token with an unknown signing environment', async () => {
+    mocks.readIosPushEnvironment.mockResolvedValue(null);
+    const apiFetch = vi.fn();
+    await expect(syncPushRegistration({ enabled: true, apiFetch })).rejects.toThrow('unknown APNs');
+    expect(apiFetch).not.toHaveBeenCalled();
   });
 
   it('向当前会话区域注册，但推送构建线仍保持安装包区域', async () => {

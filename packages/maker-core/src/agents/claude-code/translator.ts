@@ -379,6 +379,18 @@ type ResultUsageAggregate = {
   cacheCreateTokens?: number;
 };
 
+/**
+ * Anthropic 在 usage.cache_creation 里把缓存写入按 TTL 拆开；1h 写入单价高于 5m，
+ * 计价需单独带上这部分。上游不给拆分时返回 undefined（按 5m 单价兜底）。
+ */
+function cacheCreate1hTokensFromUsage(usage: unknown): number | undefined {
+  if (!usage || typeof usage !== 'object') return undefined;
+  const split = (usage as { cache_creation?: unknown }).cache_creation;
+  if (!split || typeof split !== 'object') return undefined;
+  const value = (split as { ephemeral_1h_input_tokens?: unknown }).ephemeral_1h_input_tokens;
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : undefined;
+}
+
 function resultUsageToTurnDelta(
   previous: ResultUsageAggregate | null,
   current: ResultUsageAggregate,
@@ -971,6 +983,24 @@ export function translateSdkMessage(
       // 都会回一条 control_response。这里只打日志做可见性 —— 排查"我点了切模型怎么没反应"很有用。
       // 不 push 任何 event 给上层 (renderer 不需要感知, IPC payload 也不必膨胀)。
       handleControlResponse(rawMsg, ctx);
+      return;
+    }
+
+    case 'command_lifecycle': {
+      // CLI 2.1.312 emits these command receipts although SDK 0.3.292's
+      // SDKMessage union omits them. A command may be folded into another turn;
+      // completed can precede OR follow result, so it must not drive Cindy's
+      // input queue, UI status or onTurnEnd. The existing result path owns that.
+      const commandUuid = msg.command_uuid;
+      const state = msg.state;
+      if (
+        typeof commandUuid === 'string' && commandUuid.length > 0 &&
+        (state === 'queued' || state === 'started' || state === 'completed')
+      ) return;
+      // cancelled/discarded/refused can describe a command that never ran.
+      // Keep them, malformed receipts and future states diagnosable without
+      // treating a command-level receipt as a whole-turn failure or retry signal.
+      ctx.log.warn('SDK ▷ non-success or unknown command lifecycle', { commandUuid, state });
       return;
     }
 
@@ -1851,6 +1881,7 @@ function handleStreamEvent(
       const dOut = usage.output_tokens ?? 0;
       const dCacheRead = usage.cache_read_input_tokens ?? 0;
       const dCacheCreate = usage.cache_creation_input_tokens ?? 0;
+      const dCacheCreate1h = cacheCreate1hTokensFromUsage(usage);
       // 累加进 tracker (跨多个 message_delta 会一直涨 —— 对标老 agentManager.ts:2362-2365
       // 的 session.currentTurn{Input,Output,CacheRead,CacheCreate}Tokens += dX)
       const segmentId =
@@ -1877,6 +1908,7 @@ function handleStreamEvent(
         outputTokens: dOut,
         cacheReadTokens: dCacheRead,
         cacheCreateTokens: dCacheCreate,
+        ...(dCacheCreate1h !== undefined ? { cacheCreate1hTokens: dCacheCreate1h } : {}),
         complete: hasCompleteUsageSnapshot,
       });
       if (parentToolUseId) noteClaudeSubagent(ctx.rt.generation);
@@ -1946,6 +1978,7 @@ function handleStreamEvent(
       const dIn = usage.input_tokens ?? 0;
       const dCacheRead = usage.cache_read_input_tokens ?? 0;
       const dCacheCreate = usage.cache_creation_input_tokens ?? 0;
+      const dCacheCreate1h = cacheCreate1hTokensFromUsage(usage);
       if (dIn > 0 || dCacheRead > 0 || dCacheCreate > 0) {
         ctx.tracker.upsertApiCallUsage(segmentId, {
           id: segmentId,
@@ -1955,6 +1988,7 @@ function handleStreamEvent(
           outputTokens: 0,
           cacheReadTokens: dCacheRead,
           cacheCreateTokens: dCacheCreate,
+          ...(dCacheCreate1h !== undefined ? { cacheCreate1hTokens: dCacheCreate1h } : {}),
           complete: false,
         });
       }

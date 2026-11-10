@@ -98,6 +98,12 @@ afterEach(() => {
 });
 
 describe('built-in Skills', () => {
+  it('stays above every bundle version pre-release builds of the /pr removal wrote', () => {
+    // Builds that still shipped the built-in /pr reached 78. A lower number would make
+    // prepareBuiltInSkills keep their newer bundle (and its pr/ folder) instead of replacing it.
+    expect(BUILT_IN_SKILLS_BUNDLE_VERSION).toBeGreaterThan(78);
+  });
+
   // Unit: the new authoring Skill must survive real bundle materialization with
   // every referenced chapter readable. Synthetic Skill fixtures did not cover
   // shipping missing resources or diverging legacy-tool documentation.
@@ -232,7 +238,8 @@ describe('built-in Skills', () => {
     expect(fs.readFileSync(path.join(repairedDescriptor.absolutePath, 'SKILL.md'), 'utf8')).toContain(
       '# Creator',
     );
-    expect(fs.existsSync(path.join(firstImmutablePath, 'SKILL.md'))).toBe(true);
+    // Repair publishes a new official copy; the user's modified bytes remain intact.
+    expect(fs.readFileSync(path.join(firstImmutablePath, 'SKILL.md'), 'utf8')).toBe('# Tampered\n');
 
     fs.appendFileSync(path.join(input.source, 'SKILL.md'), '\nUpdated\n');
     const updated = await prepareAndProjectBuiltInSkills({

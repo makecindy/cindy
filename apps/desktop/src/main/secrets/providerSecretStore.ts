@@ -8,6 +8,7 @@ import path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { migrateGhostSecretAliases } from './ghostSecretAliasMigration.js';
 import { readChunkedSecret, writeChunkedSecret } from './chunkedSecretFile.js';
+import { readStreamedSecret, writeStreamedSecret } from './streamedSecretFile.js';
 
 import { storedCustomProviderId } from '@cindy/model-providers';
 
@@ -395,6 +396,19 @@ export function createProviderSecretStore(
   };
 }
 
+/** Setup consent only: check the current owner's standard slot without opening the keychain. */
+export function providerSecretSavedForSetup(id: ProviderSecretId): boolean {
+  const physicalKey = resolveOwnerScopedSecretStorageKey(providerSecretStorageKey(id));
+  if (!physicalKey) return false;
+  try {
+    fs.statSync(path.join(secretDir(), `${physicalKey}.enc`));
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
+    throw error;
+  }
+}
+
 let singleton: ProviderSecretStore | null = null;
 
 /** 进程内单例(默认 Electron IO)。 */
@@ -708,6 +722,46 @@ export function readCustomMcpToken(mcpId: string): string | null {
       'read custom mcp token failed',
     );
     return null;
+  }
+}
+
+/** Writes a custom MCP access token under the same key the settings page uses (main-only callers). */
+export function storeCustomMcpToken(mcpId: string, value: string): boolean {
+  try {
+    const scopedKey = resolveOwnerScopedSecretStorageKey(customMcpSecretStorageKey(mcpId));
+    if (!scopedKey || !safeStorage.isEncryptionAvailable()) return false;
+    // Freeze the owner and directory before encryption. Keep the existing base64 format.
+    const directory = secretDir();
+    const target = path.join(directory, `${scopedKey}.enc`);
+    const encrypted = safeStorage.encryptString(value).toString('base64');
+    fs.mkdirSync(directory, { recursive: true });
+    const temporary = `${target}.${randomBytes(16).toString('hex')}.tmp`;
+    // Open outside the cleanup block: an exclusive-open collision is not our file.
+    const fd = fs.openSync(temporary, 'wx', 0o600);
+    try {
+      try {
+        fs.writeFileSync(fd, encrypted, 'utf-8');
+      } finally {
+        fs.closeSync(fd);
+      }
+      // Never delete the old target first, including when replacement is refused.
+      fs.renameSync(temporary, target);
+      return true;
+    } finally {
+      try {
+        fs.unlinkSync(temporary);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+          log.warn('custom mcp token temporary ciphertext cleanup failed');
+        }
+      }
+    }
+  } catch (err) {
+    log.warn(
+      { mcpId, err: err instanceof Error ? err.message : String(err) },
+      'write custom mcp token failed',
+    );
+    return false;
   }
 }
 
@@ -1078,7 +1132,7 @@ export const botEnvironmentSecretIo = {
     if (!/^bot_environment_[a-f0-9]{64}$/.test(key)) throw new Error('Invalid companion secret key');
     const scoped = resolveOwnerScopedSecretStorageKey(key);
     if (!scoped) throw new Error('Companion credential storage unavailable');
-    try { return fs.readdirSync(secretDir()).some(name => name === `${scoped}.enc` || companionTemporaryFile(name, scoped)); }
+    try { return fs.readdirSync(secretDir()).some(name => name === `${scoped}.enc` || name === `${scoped}.resources` || companionTemporaryFile(name, scoped)); }
     catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false; throw error; }
   },
   async read(key: string, assertCurrent?: () => void): Promise<string | null> {
@@ -1089,6 +1143,22 @@ export const botEnvironmentSecretIo = {
     const { scoped, assertOwner } = companionSecretScope(key, assertCurrent);
     await writeChunkedSecret(path.join(secretDir(), `${scoped}.enc`), scoped, value, companionCipher, assertOwner);
     return true;
+  },
+  async writeResource(key: string, id: string, chunks: AsyncIterable<string>, assertCurrent: () => void): Promise<string> {
+    if (!/^[a-f0-9]{64}$/.test(id)) throw new Error('Invalid companion resource id');
+    const { scoped, assertOwner } = companionSecretScope(key, assertCurrent);
+    return writeStreamedSecret(path.join(secretDir(), `${scoped}.resources`, `${id}.enc`), `${scoped}:${id}`, chunks, companionCipher, assertOwner);
+  },
+  async *readResource(key: string, id: string, digest: string, assertCurrent: () => void): AsyncGenerator<string> {
+    if (!/^[a-f0-9]{64}$/.test(id) || !/^[a-f0-9]{64}$/.test(digest)) throw new Error('Invalid companion resource id');
+    const { scoped, assertOwner } = companionSecretScope(key, assertCurrent);
+    yield* readStreamedSecret(path.join(secretDir(), `${scoped}.resources`, `${id}.enc`), `${scoped}:${id}`, digest, companionCipher, assertOwner);
+  },
+  async removeResourceFiles(key: string, assertCurrent: () => void): Promise<void> {
+    const { scoped, assertOwner } = companionSecretScope(key, assertCurrent, false);
+    assertOwner();
+    await fs.promises.rm(path.join(secretDir(), `${scoped}.resources`), { recursive: true, force: true });
+    assertOwner();
   },
   remove(key: string): boolean {
     if (!/^bot_environment_[a-f0-9]{64}$/.test(key)) return false;
@@ -1106,7 +1176,7 @@ const companionCipher = { encrypt: (value: string) => safeStorage.encryptString(
 function companionTemporaryFile(name: string, scoped: string): boolean {
   return name.startsWith(`${scoped}.enc.`) && /^[a-f0-9-]{36}\.tmp$/.test(name.slice(scoped.length + 5));
 }
-function companionSecretScope(key: string, assertCurrent: () => void = () => {}) {
+function companionSecretScope(key: string, assertCurrent: () => void = () => {}, requireEncryption = true) {
   if (!/^bot_environment_[a-f0-9]{64}$/.test(key)) throw new Error('Invalid companion secret key');
   const scoped = resolveOwnerScopedSecretStorageKey(key);
   const generation = getActiveAppSession().generation;
@@ -1114,7 +1184,7 @@ function companionSecretScope(key: string, assertCurrent: () => void = () => {})
     assertCurrent();
     if (!scoped || isAppSessionBoundaryPending() || resolveOwnerScopedSecretStorageKey(key) !== scoped || getActiveAppSession().generation !== generation)
       throw new Error('Companion credential owner changed');
-    if (!safeStorage.isEncryptionAvailable()) throw new Error('Companion credential storage unavailable');
+    if (requireEncryption && !safeStorage.isEncryptionAvailable()) throw new Error('Companion credential storage unavailable');
   };
   assertOwner(); return { scoped: scoped!, assertOwner };
 }

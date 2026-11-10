@@ -1,7 +1,8 @@
 import { MAX_FRAME_BYTES } from './protocol.js';
 import { byteLength } from './transport.js';
-import { DIRECT_LINK_MAX_PEERS, DIRECT_LINK_MAX_SDP, type DirectRuntime,
+import { DIRECT_LINK_MAX_SDP, type DirectRuntime, type DirectRuntimeCloseReason,
   type DirectRuntimeEvents, type DirectRuntimeSession } from './directNegotiation.js';
+import { DirectCapacityPool, DIRECT_LINK_DESKTOP_MAX_PEERS } from './directCapacity.js';
 
 export type DirectRuntimeCommand = { id: string; connection: string } & (
   | { action: 'offer' | 'close' }
@@ -10,41 +11,44 @@ export type DirectRuntimeCommand = { id: string; connection: string } & (
 );
 export type DirectRuntimeEvent =
   | { type: 'reply'; id: string; ok: boolean; value?: string }
-  | { type: 'open' | 'closed'; connection: string }
+  | { type: 'open' | 'closed'; connection: string; reason?: DirectRuntimeCloseReason }
   | { type: 'message'; connection: string; text: string }
   | { type: 'buffer'; connection: string; sequence: number; buffered: number };
 
 /** Same bridge on Desktop IPC and Mobile WebView. Buffers include messages still
  * crossing the native bridge; a frozen renderer cannot look like an empty channel. */
-export function createDirectRuntimeBridge() {
+export function createDirectRuntimeBridge(options: { maxPeers?: number; reservedPeers?: number } = {}) {
+  const capacity = new DirectCapacityPool(options.maxPeers, options.reservedPeers);
   let transport: ((command: DirectRuntimeCommand) => void) | undefined;
   let nextId = 0;
   const sessions = new Map<string, { events: DirectRuntimeEvents; buffered: number;
-    queue: Map<number, number>; sequence: number; acknowledged: number; open: boolean }>();
+    queue: Map<number, number>; sequence: number; acknowledged: number; open: boolean; release(): void }>();
   const pending = new Map<string, { connection: string; resolve(value: string): void;
     reject(error: Error): void; timer: ReturnType<typeof setTimeout> }>();
-  const close = (connection: string, notify = true) => {
+  const close = (connection: string, notify = true, reason: DirectRuntimeCloseReason = 'channel-closed') => {
     const s = sessions.get(connection);
     if (!s) return;
     sessions.delete(connection);
+    s.release();
     for (const [id, p] of pending) if (p.connection === connection) {
       pending.delete(id); clearTimeout(p.timer); p.reject(new Error('DIRECT_CHANNEL_CLOSED'));
     }
     if (notify) { try { transport?.({ id: String(++nextId), action: 'close', connection }); } catch { /* Host gone. */ } }
-    s.events.closed();
+    s.events.closed(reason);
   };
   const invoke = (connection: string, action: 'offer' | 'accept' | 'answer', sdp?: string) => new Promise<string>((resolve, reject) => {
     if (!sessions.has(connection) || !transport) { reject(new Error('DIRECT_RUNTIME_UNAVAILABLE')); return; }
     const id = String(++nextId);
-    const timer = setTimeout(() => { pending.delete(id); reject(new Error('DIRECT_RUNTIME_TIMEOUT')); close(connection); }, 10_000);
+    const timer = setTimeout(() => { pending.delete(id); reject(new Error('DIRECT_RUNTIME_TIMEOUT')); close(connection, true, 'runtime-timeout'); }, 10_000);
     pending.set(id, { connection, resolve, reject, timer });
     try {
       transport(action === 'offer' ? { id, connection, action } : { id, connection, action, sdp: sdp! });
     } catch { close(connection); }
   });
-  const runtime: DirectRuntime = { create(connection, events): DirectRuntimeSession {
-    if (!transport || sessions.has(connection) || sessions.size >= DIRECT_LINK_MAX_PEERS) throw new Error('DIRECT_RUNTIME_UNAVAILABLE');
-    const s = { events, buffered: 0, queue: new Map<number, number>(), sequence: 0, acknowledged: 0, open: false };
+  const runtime: DirectRuntime = { capacity, create(connection, events, options): DirectRuntimeSession {
+    if (!transport || sessions.has(connection)) throw new Error('DIRECT_RUNTIME_UNAVAILABLE');
+    const release = capacity.acquire(connection, options?.kind ?? 'device');
+    const s = { events, buffered: 0, queue: new Map<number, number>(), sequence: 0, acknowledged: 0, open: false, release };
     sessions.set(connection, s);
     return {
       offer: () => invoke(connection, 'offer'), accept: (sdp) => invoke(connection, 'accept', sdp),
@@ -66,10 +70,11 @@ export function createDirectRuntimeBridge() {
     runtime,
     attach(send: (command: DirectRuntimeCommand) => void) {
       transport = send;
+      capacity.wake();
       return () => {
         if (transport !== send) return;
         transport = undefined;
-        for (const connection of sessions.keys()) close(connection, false);
+        for (const connection of sessions.keys()) close(connection, false, 'runtime-unavailable');
       };
     },
     receive(value: unknown) {
@@ -80,14 +85,15 @@ export function createDirectRuntimeBridge() {
         if (!p) return;
         pending.delete(e.id); clearTimeout(p.timer);
         if (e.ok === true && (e.value === undefined || (typeof e.value === 'string' && e.value.length <= DIRECT_LINK_MAX_SDP))) p.resolve((e.value as string) ?? '');
-        else { p.reject(new Error('DIRECT_RUNTIME_FAILED')); close(p.connection); }
+        else { p.reject(new Error('DIRECT_RUNTIME_FAILED')); close(p.connection, true, 'runtime-failed'); }
         return;
       }
       if (typeof e.connection !== 'string') return;
       const s = sessions.get(e.connection);
       if (!s) return;
       if (e.type === 'open') { if (!s.open) { s.open = true; s.events.open(); } }
-      else if (e.type === 'closed') close(e.connection, false);
+      else if (e.type === 'closed') close(e.connection, false,
+        e.reason === 'network-failed' ? 'network-failed' : 'channel-closed');
       else if (e.type === 'message') {
         if (!s.open || typeof e.text !== 'string' || e.text.length > MAX_FRAME_BYTES || byteLength(e.text) > MAX_FRAME_BYTES) close(e.connection);
         else s.events.message(e.text);
@@ -114,12 +120,12 @@ export function createDirectRuntimeHost(runtime: DirectRuntime, emit: (event: Di
       try {
         let s = sessions.get(c.connection);
         if (c.action === 'offer' || c.action === 'accept') {
-          if (s || sessions.size >= DIRECT_LINK_MAX_PEERS) throw new Error();
+          if (s || sessions.size >= DIRECT_LINK_DESKTOP_MAX_PEERS) throw new Error();
           const session = runtime.create(c.connection, {
             open: () => emit({ type: 'open', connection: c.connection }),
             message: (text) => emit({ type: 'message', connection: c.connection, text }),
             drained: () => { const current = sessions.get(c.connection); if (current) emit({ type: 'buffer', connection: c.connection, sequence: current.sequence, buffered: current.session.bufferedAmount }); },
-            closed: () => { if (sessions.has(c.connection)) { sessions.delete(c.connection); emit({ type: 'closed', connection: c.connection }); } },
+            closed: (reason) => { if (sessions.has(c.connection)) { sessions.delete(c.connection); emit({ type: 'closed', connection: c.connection, reason }); } },
           });
           s = { session, sequence: 0 };
           sessions.set(c.connection, s);

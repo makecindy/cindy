@@ -67,7 +67,7 @@ async function materializeResource(deps: HtmlPreviewDeps, root: string, relative
       if (!(Paths.availableDiskSpace >= media.size + 256 * 1024 * 1024)) throw new Error('PREVIEW_DISK_FULL');
       if (media.inlineBase64 !== undefined) {
         destination.create();
-        destination.write(Uint8Array.from(atob(media.inlineBase64), (char) => char.charCodeAt(0)));
+        destination.writeSync(Uint8Array.from(atob(media.inlineBase64), (char) => char.charCodeAt(0)));
       } else if (media.url.startsWith('file://')) {
         await new File(media.url).copy(destination);
       } else {
@@ -95,7 +95,7 @@ async function materializeResource(deps: HtmlPreviewDeps, root: string, relative
       await cache?.store(relative, destination, mime);
       assertHtmlSnapshotActive(signal);
       if (html !== undefined) {
-        destination.write(withSnapshotHtmlCsp(html));
+        destination.writeSync(withSnapshotHtmlCsp(html));
       }
       return { filename, mime, bytes: media.size, html,
         route: media.inlineBase64 !== undefined ? 'inline' : media.url.startsWith('file://') ? 'direct' : 'upload' };
@@ -237,7 +237,7 @@ async function prepareLegacy(absPath: string, deps: HtmlPreviewDeps, signal: Abo
         if (media.size !== file.size) throw new Error('PREVIEW_CHANGED');
         if (media.inlineBase64 !== undefined) {
           destination.create();
-          destination.write(Uint8Array.from(atob(media.inlineBase64), (char) => char.charCodeAt(0)));
+          destination.writeSync(Uint8Array.from(atob(media.inlineBase64), (char) => char.charCodeAt(0)));
           if (destination.size !== file.size) throw new Error('PREVIEW_CHANGED');
         } else if (media.url.startsWith('file://')) {
           // File.copy is async; releasing first deletes the staged direct-transfer source mid-copy.
@@ -267,7 +267,7 @@ async function prepareLegacy(absPath: string, deps: HtmlPreviewDeps, signal: Abo
         assertHtmlSnapshotActive(signal);
         if (text !== undefined) {
           // Reject invalid UTF-8 instead of publishing a corrupted page. No source text is truncated.
-          destination.write(withSnapshotHtmlCsp(text));
+          destination.writeSync(withSnapshotHtmlCsp(text));
           if (file.relPath === entry) onEntryHtml?.(text);
         }
         manifest.push([file.relPath, String(index), mime]);
@@ -291,7 +291,7 @@ async function restoreCachedResource(cache: MobileHtmlPreviewCache, relative: st
       const mime = MIME[relative.split('.').pop()!.toLowerCase()] ?? 'application/octet-stream';
       const html = mime === 'text/html' ? new TextDecoder('utf-8', { fatal: true }).decode(await destination.bytes()) : undefined;
       if (html !== undefined) {
-        destination.write(withSnapshotHtmlCsp(html));
+        destination.writeSync(withSnapshotHtmlCsp(html));
       }
       return { size, mime, html };
     }

@@ -116,8 +116,18 @@ export function hasBroadcastTapListener(): boolean {
   return listener !== null;
 }
 
-/** Re-read through this task host, never relay the source's payload or recurse. */
-export function tapRemoteModelCatalogChange(deviceId: string, channel: string, revoked: boolean): void {
-  if (revoked || isSharedTaskPeer(deviceId) || isProviderSharePeer(deviceId) || !isModelCatalogSourceChange(channel)) return;
+/**
+ * Re-read through this task host, never relay the source's payload or recurse.
+ * Provider-share peers count only as the host of an active received share
+ * (`activeShareHost`): its catalog is routed through this computer too.
+ */
+export function tapRemoteModelCatalogChange(
+  deviceId: string,
+  channel: string,
+  revoked: boolean,
+  activeShareHost = false,
+): void {
+  if (revoked || isSharedTaskPeer(deviceId) || (isProviderSharePeer(deviceId) && !activeShareHost)
+    || !isModelCatalogSourceChange(channel)) return;
   tapWindowBroadcast(CONTROLLED_MODEL_CATALOG_CHANGED, {});
 }

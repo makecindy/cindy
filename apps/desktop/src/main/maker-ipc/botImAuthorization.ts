@@ -34,6 +34,14 @@ interface ImField {
 
 const OWNER_ID = (value: string) => /^\d{1,20}$/.test(value);
 const FIELDS: Record<BotImChannel, ImField[]> = {
+  imessage: [
+    { key: 'serverUrl', copy: 'imessage.serverUrl', maxLength: 2048 },
+    { key: 'password', copy: 'imessage.password', maxLength: 4096 },
+    { key: 'ownerAddress', copy: 'imessage.ownerAddress', maxLength: 320 },
+    { key: 'chatGuids', copy: 'imessage.chatGuids', maxLength: 52000 },
+    { key: 'listenHost', copy: 'imessage.listenHost', maxLength: 64 },
+    { key: 'listenPort', copy: 'imessage.listenPort', maxLength: 5, valid: v => /^\d{4,5}$/.test(v) && +v >= 1024 && +v <= 65535 },
+  ],
   telegram: [
     { key: 'token', copy: 'telegram.token', maxLength: 256, valid: (v) => /^\d{6,20}:[A-Za-z0-9_-]{20,}$/.test(v) },
     { key: 'ownerUserId', copy: 'telegram.owner', hint: 'telegram.ownerHint', maxLength: 20, valid: OWNER_ID },
@@ -148,7 +156,10 @@ export function createBotImAuthorizationAdapter(options: {
       try {
         let input;
         try {
-          input = parseBotImConnectionAddInput(payload);
+          input = parseBotImConnectionAddInput(channel === 'imessage' ? {
+            ...payload, groupAliases: [bot.name], chatGuids: String(payload.chatGuids).split(/[,\n]/).map(v => v.trim()).filter(Boolean),
+            listenPort: Number(payload.listenPort),
+          } : payload);
         } catch {
           return { ok: false, errorCode: 'INLINE_INVALID' };
         }

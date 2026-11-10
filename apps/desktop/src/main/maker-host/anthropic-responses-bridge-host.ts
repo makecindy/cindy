@@ -10,7 +10,7 @@ import { fastModelId, rewriteFastModel } from './model-fast-mode.js';
 import { captureUsagePricing, createUsagePricingObserver } from './model-usage-pricing.js';
 import type { ResponseObserverSink } from '@cindy/anthropic-compat-proxy';
 import { getSessionFastMode } from './session-effort-store.js';
-import { standardSpeedRequest } from '@cindy/maker-core';
+import { standardSpeedRequest, type NativeSubscriptionAccount } from '@cindy/maker-core';
 import { subscriptionRequestAllowsFast } from './subscription-fast-request-policy.js';
 import { isXaiSubscriptionProviderId } from './subscription-account-auth.js';
 /**
@@ -250,7 +250,18 @@ const invalidateDefaultChatgptBridgeAuth = createChatgptBridgeAuthInvalidator({
 
 export async function invalidateChatgptBridgeAuth(
   input: Parameters<typeof invalidateDefaultChatgptBridgeAuth>[0], providerId = 'openai',
+  account?: NativeSubscriptionAccount,
 ): Promise<boolean> {
+  if (account) {
+    account.assertCurrent();
+    return createChatgptBridgeAuthInvalidator({
+      getCurrentAccessToken: async () => (await account.readCodexTokens?.())?.accessToken ?? null,
+      invalidate: async reason => {
+        account.assertCurrent();
+        account.invalidateAuth?.(reason, input.failedAccessToken);
+      },
+    })(input);
+  }
   if (providerId === 'openai') return invalidateDefaultChatgptBridgeAuth(input);
   const owner = activeOwnerScopeKey();
   return createChatgptBridgeAuthInvalidator({
@@ -269,9 +280,20 @@ function throwIfOwnerBoundDispatchUnsafe(scopeAtStart: string): void {
 }
 
 /** 经 adapter 判连接态 → 读 codex-home/auth.json → 必要时刷新 → 返回 token 与可选 account id。 */
-export async function getChatgptBridgeAuth(providerId = 'openai'): Promise<{ accessToken: string; accountId: string | null }> {
+export async function getChatgptBridgeAuth(providerId = 'openai', account?: NativeSubscriptionAccount): Promise<{ accessToken: string; accountId: string | null; canDispatch?: () => boolean }> {
   const scopeAtStart = activeOwnerScopeKey();
   throwIfOwnerBoundDispatchUnsafe(scopeAtStart);
+  if (account) {
+    account.assertCurrent();
+    if (providerId !== 'openai' || !account.readCodexTokens || !(await account.readState()).authenticated)
+      throw new Error('The selected OpenAI subscription account requires login');
+    let tokens = await account.readCodexTokens();
+    if (isExpired(tokens.accessToken)) tokens = await account.readCodexTokens(true);
+    account.assertCurrent();
+    throwIfOwnerBoundDispatchUnsafe(scopeAtStart);
+    if (tokens.canDispatch && !tokens.canDispatch()) throw new Error('OpenAI authorization changed while preparing the request');
+    return { accessToken: tokens.accessToken, accountId: tokens.chatgptAccountId, canDispatch: tokens.canDispatch };
+  }
   if (providerId !== 'openai') {
     if (!codexAccountState(providerId).authenticated) throw new Error('OpenAI account is disconnected or requires login');
     const authPath = path.join(codexAccountHome(providerId), 'auth.json');
@@ -317,10 +339,17 @@ export async function getChatgptBridgeAuth(providerId = 'openai'): Promise<{ acc
 }
 
 /** A deferred child request must revalidate both credential and authorization at dispatch/retry. */
-export async function getChatgptBridgeAuthForDispatch(providerId = 'openai'): Promise<{
+export async function getChatgptBridgeAuthForDispatch(providerId = 'openai', account?: NativeSubscriptionAccount): Promise<{
   accessToken: string; accountId: string | null; canDispatch(): boolean;
 }> {
   const ownerScope = activeOwnerScopeKey();
+  if (account) {
+    const auth = await getChatgptBridgeAuth(providerId, account);
+    return { ...auth, canDispatch: () => {
+      try { account.assertCurrent(); return ownerScope === activeOwnerScopeKey() && !isAppSessionBoundaryPending() && (auth.canDispatch?.() ?? true); }
+      catch { return false; }
+    } };
+  }
   for (let attempt = 0; attempt < 2; attempt++) {
     const auth = await getChatgptBridgeAuth(providerId);
     throwIfOwnerBoundDispatchUnsafe(ownerScope);
@@ -338,7 +367,7 @@ export async function getChatgptBridgeAuthForDispatch(providerId = 'openai'): Pr
 }
 
 /** codex(ChatGPT 订阅)provider 配置:chatgpt/ 前缀 → codex 后端,注入订阅 OAuth + codex 专属头。 */
-function codexProviderConfig(providerId = 'openai'): BridgeProviderConfig {
+function codexProviderConfig(providerId = 'openai', account?: NativeSubscriptionAccount, captureProof?: (proof: (() => boolean) | undefined) => void): BridgeProviderConfig {
   return {
     prefix: CHATGPT_MODEL_PREFIX,
     wireProtocol: 'openai-responses',
@@ -351,13 +380,14 @@ function codexProviderConfig(providerId = 'openai'): BridgeProviderConfig {
       ?.find((entry) => entry.id === `${CHATGPT_MODEL_PREFIX}${model}`)?.efforts,
     // codex 后端不支持 max_output_tokens(会 400),保持默认 false。
     buildHeaders: async ({ sessionId }) => {
-      const { accessToken, accountId } = await getChatgptBridgeAuth(providerId);
+      const { accessToken, accountId, canDispatch } = await getChatgptBridgeAuth(providerId, account);
+      captureProof?.(canDispatch);
       return buildChatgptBridgeHeaders({ accessToken, accountId, sessionId });
     },
     onUpstreamError: async ({ status, body, requestHeaders }) => {
       const failedAccessToken = bearerAccessTokenFromHeaders(requestHeaders);
       if (!failedAccessToken) return;
-      await invalidateChatgptBridgeAuth({ status, body, failedAccessToken }, providerId);
+      await invalidateChatgptBridgeAuth({ status, body, failedAccessToken }, providerId, account);
     },
   };
 }
@@ -406,7 +436,19 @@ function xaiProviderConfig(providerId = 'xai'): BridgeProviderConfig {
  * 装配失败(理论上仅配置错误,如未实现的 wireProtocol)→ 返 null 并记 ERROR,routingTransform
  * 据此 passthrough(fail-open),不反复重试刷日志。
  */
-export function getResponsesBridgeHandler(providerId = 'openai'): ResponsesBridgeHandler | null {
+export function getResponsesBridgeHandler(providerId = 'openai', account?: NativeSubscriptionAccount): ResponsesBridgeHandler | null {
+  if (account) {
+    account.assertCurrent();
+    let proof: (() => boolean) | undefined;
+    return createResponsesHandler({
+      providers: [codexProviderConfig(providerId, account, current => { proof = current; })], logger: log,
+      fetchImpl: (...args) => {
+        account.assertCurrent();
+        if (proof && !proof()) throw new Error('OpenAI authorization changed before dispatch');
+        return outboundFetch(...args);
+      },
+    });
+  }
   if (providerId !== 'xai' && isXaiSubscriptionProviderId(providerId)) {
     return createResponsesHandler({ providers: [xaiProviderConfig(providerId)], logger: log, fetchImpl: outboundFetch });
   }
@@ -739,6 +781,7 @@ export function getPiNativeSubscriptionHandler(
   providerId: PiNativeSubscriptionProvider,
   sessionId: string,
   deps: PiNativeSubscriptionHandlerDeps = defaultPiNativeSubscriptionHandlerDeps,
+  account?: NativeSubscriptionAccount,
 ): LocalRequestHandler {
   return async ({ rawBody, parsedBody, ctx, res }) => {
     const upstream = piNativeUpstream(providerId, ctx.url);
@@ -847,10 +890,13 @@ export function getPiNativeSubscriptionHandler(
       }
       throwIfOwnerBoundDispatchUnsafe(scopeAtStart);
       let accessToken: string;
+      let canDispatch: (() => boolean) | undefined;
       let headers: Record<string, string>;
       if (isOpenAiSubscriptionProviderId(providerId)) {
-        const auth = providerId === 'openai' ? await deps.getChatgptAuth() : await deps.getChatgptAuth(providerId);
+        const auth = account ? await deps.getChatgptAuth(providerId, account)
+          : providerId === 'openai' ? await deps.getChatgptAuth() : await deps.getChatgptAuth(providerId);
         accessToken = auth.accessToken;
+        canDispatch = auth.canDispatch;
         headers = buildChatgptBridgeHeaders({
           accessToken,
           accountId: auth.accountId,
@@ -872,6 +918,8 @@ export function getPiNativeSubscriptionHandler(
       }
       if (contentEncoding) headers['content-encoding'] = contentEncoding;
       throwIfOwnerBoundDispatchUnsafe(scopeAtStart);
+      account?.assertCurrent();
+      if (canDispatch && !canDispatch()) throw new Error('OpenAI authorization changed before dispatch');
       const response = await deps.fetch(upstream.url, {
         method: 'POST',
         headers,
@@ -892,7 +940,8 @@ export function getPiNativeSubscriptionHandler(
             body: errorText,
             failedAccessToken: accessToken,
           };
-          if (providerId === 'openai') await deps.invalidateChatgpt(failure);
+          if (account) await deps.invalidateChatgpt(failure, providerId, account);
+          else if (providerId === 'openai') await deps.invalidateChatgpt(failure);
           else await deps.invalidateChatgpt(failure, providerId);
         } else {
           const failure = {

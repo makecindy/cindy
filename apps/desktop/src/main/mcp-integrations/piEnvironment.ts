@@ -219,6 +219,7 @@ export async function getPiExtraSpawnConfig(
         server.name === 'cindy_telegram_bot'
         && !hasImChannelVendorOptions(sessionCtx?.vendorOptions, 'telegram')
       ) return false;
+      if (server.name === 'cindy_imessage' && !hasImChannelVendorOptions(sessionCtx?.vendorOptions, 'imessage')) return false;
       if (!isBotMcpServerAllowed(sessionCtx?.botMcpPolicy, server.name)) return false;
       if (!collabEnabled && REMOTE_COLLAB_SERVER_NAMES.has(server.name)) return false;
       // Custom HTTP MCPs are `s.remote` and skip the SSH URL rewriter. Desktop

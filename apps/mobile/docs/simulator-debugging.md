@@ -5,6 +5,10 @@ or Windows Android Emulator. It exists because Expo Go, a development client,
 and an installed distribution build look similar during manual testing but prove
 different things.
 
+For task content that stays blank or frozen despite completed history updates,
+use the [native task-entry replay](blank-task-reproduction.md) to distinguish
+message delivery, list visibility and a stale navigation snapshot.
+
 On Windows, the explicit Mainland China one-command entry starts or reuses the
 `cindy-api36` AVD, waits for Android to finish booting, configures `adb reverse`,
 and then keeps the current worktree's Metro in the foreground:
@@ -19,6 +23,25 @@ SDK tools are resolved from `ANDROID_SDK_ROOT`, `ANDROID_HOME`, or the standard
 Windows Android Studio SDK location; they do not need to be on `PATH`. The
 command does not rebuild the native app, so install the matching development
 package first when switching build identity.
+
+Windows Android identity checks use the following command (replace the serial and
+port with the selected emulator and Metro):
+
+```sh
+pnpm mobile:sim:whoami -- --mock --udid emulator-5554 --port 8082 --json
+```
+
+They read the resolved `android.package`, installed version/debug flag and the APK's
+`assets/fingerprint`, compare it with the Android Expo Updates fingerprint, and reuse
+the Metro worktree/source/environment checks. Failed adb reads remain failures;
+APK fingerprint timeouts/unreadable results keep a distinct `native.reason` and
+ask you to repair adb/fingerprint reads and retry, without recommending a rebuild.
+If extracting the fingerprint exits unsuccessfully, a successful archive listing
+that lacks the exact `assets/fingerprint` entry identifies a missing fingerprint
+and recommends rebuilding. Failed listings remain probe failures.
+Multiple online emulators require an explicit serial. Physical phones are not selected.
+`--viewer` remains iOS-only: Android window and page verification requires a real screenshot.
+`mobile:sim:up` is still iOS-only; Windows uses `start` and `rebuild` separately.
 
 The three commands share Metro worktree, source, region and environment checks.
 `whoami` success proves identity consistency, not that the app has loaded a bundle
@@ -67,6 +90,27 @@ explicitly leaves visible-window acceptance to a screenshot/manual check. Withou
 `--viewer`, a missing external viewer does not fail embedded/headless identity checks.
 
 ## 截图与当前版本测试
+
+**默认入口：`pnpm mobile:sim:up`（只看界面加 `-- --mock`）。** 它按下面的流程完成第 1–6 步中除目检外的
+部分，并遵守同样的授权范围：不 `--clean`、不卸载、不新建或删除设备，不停止其他任务的 Metro（`--takeover`
+除外）。
+
+| 选择 | 规则 |
+|---|---|
+| 设备 | `--udid` → `--device <名称>` 或个人设置的 `CINDY_MOBILE_SIM_DEVICE` → 连着本 worktree Metro 的已开机 iPhone → 唯一一台候选（装了 App 且没有 Metro 在服务的已开机 iPhone，或装了 App 的关机 iPhone）。候选有多台时不猜，报 `DEVICE_CHOICE_NEEDED` 并列出候选，由用户指定；一台都没有时报 `NO_REUSABLE_DEVICE`，由 `next` 给出新建方法 |
+| Metro | 复用本 worktree 身份一致的 Metro；身份过期就重启自己的；`8081` 属于其他任务时用 `8082`–`8086` 的空闲端口，并把设备指过去 |
+| 原生包 | `native-matched` 就复用，否则运行 `rebuild`（先查缓存）；探测失败报 `NATIVE_PROBE_FAILED`，不当作需要重装 |
+| App | 启动后等 Metro 日志出现这次的 `iOS Bundled`，没等到就重新启动。`bundleVerified: false` 表示这个 Metro 没有日志（例如在日志功能之前启动），无法确认 |
+| 前台 | 读设备日志里 App 最新的运行状态，不在前台就切回前台（开机后系统偶尔会把它挤到后台）。`foreground: null` 表示日志里没有状态，未确认 |
+
+失败时结果 JSON 的 `code` 说明原因，`next` 说明下一步：`UNSUPPORTED_PLATFORM`、`BAD_ARGS`、
+`SIMULATOR_UNAVAILABLE`、`UNKNOWN_DEVICE`、`DEVICE_CHOICE_NEEDED`、`NO_REUSABLE_DEVICE`、`BOOT_FAILED`、`METRO_PROBE_FAILED`、
+`METRO_PORTS_BUSY`、`METRO_START_FAILED`、`NATIVE_PROBE_FAILED`、`IOS_BUILD_TOOLS_UNAVAILABLE`、
+`REBUILD_FAILED`、`LAUNCH_FAILED`、`BUNDLE_FAILED`、`BUNDLE_NOT_SEEN`、`APP_NOT_FOREGROUND`、`IDENTITY_FAILED`。Metro 日志由
+`mobile:sim:start` 写在系统临时目录（结果的 `metroLog`），验证后照常运行 `next` 里给出的 `mobile:sim:logcheck`；
+编译失败时，编译日志的路径在 `next` 里。
+
+只有 `up` 失败、或需要单独控制某一步时，才手动执行下面的流程。
 
 “给我看这次手机改动的截图”与启动当前版本测试共用此流程。本节是 Agent 做手机模拟器测试的
 唯一流程正本，不另设个人 Skill；开发者个人只保留常用机型、模拟器后端等偏好。
@@ -413,7 +457,9 @@ The native build number only proves native installation. `whoami` also compares
 the installed `EXUpdates.bundle/fingerprint` with the current worktree's Expo
 Updates fingerprint, using the same development environment and workflow as the
 native build. A missing/unreadable fingerprint (`native-unknown`) or difference
-(`native-mismatch`) fails the check even when Metro is correct. Run ordinary
+(`native-mismatch`) fails the check even when Metro is correct. For a read or
+calculation failure, fix the probe and retry before deciding whether to rebuild.
+For a genuinely missing fingerprint or a mismatch, run ordinary
 `mobile:sim:rebuild` without `--clean`; it rejects incompatible cached artifacts
 and checks the built and installed app before handing it off. For example,
 switching worktrees with different `@expo/ui` versions can otherwise silently
@@ -423,9 +469,8 @@ For JavaScript freshness, the Metro terminal must show a new bundle/reload after
 the source change. Matching native fingerprints does not prove page rendering.
 
 If a freshly built app exits before loading JavaScript with `UIScene life cycle
-is required`, check the SDK 57 scene backport: `expo >= 57.0.23` and
-`expo-build-properties` with `ios.enableSceneSupport: true`. The repository enables
-this official path for Xcode 27 / iOS 27. Prebuild should generate an
+is required`, check that SDK 58 prebuild has regenerated the scene lifecycle. Scene support
+is now the default; the SDK 57 `ios.enableSceneSupport` opt-in was removed. Prebuild should generate an
 `EXExpoAppSceneDelegate` manifest for the main app and make AppDelegate conform to
 `ExpoReactNativeFactoryProvider`; it must no longer create the legacy window.
 This native migration changes the runtime fingerprint and requires a new native

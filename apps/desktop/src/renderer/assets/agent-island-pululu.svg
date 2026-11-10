@@ -1,25 +1,8 @@
 <svg width="128" height="128" viewBox="0 0 128 128" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Pululu">
-  <ellipse cx="64" cy="113" rx="32" ry="5" fill="#000000" opacity="0.30"/>
   <ellipse cx="64" cy="64" rx="48" ry="48" fill="#E8EDF5"/>
   <ellipse cx="64" cy="56" rx="33.5" ry="33.5" fill="#4A4A57"/>
   <ellipse cx="35.6" cy="90" rx="8.8" ry="10" fill="#F2D973"/>
   <ellipse cx="92.4" cy="90" rx="8.8" ry="10" fill="#F2D973"/>
   <rect x="45.2" y="47.8" width="10.4" height="13.5" rx="5.2" fill="#F5F7FF"/>
   <rect x="72.4" y="47.8" width="10.4" height="13.5" rx="5.2" fill="#F5F7FF"/>
-  <rect x="4" y="96" width="120" height="24" rx="2" fill="#292E3A"/>
-  <g fill="#707D94">
-    <rect x="8" y="100" width="14" height="5.6" rx="1.2"/>
-    <rect x="27.2" y="100" width="14" height="5.6" rx="1.2"/>
-    <rect x="46.4" y="100" width="14" height="5.6" rx="1.2"/>
-    <rect x="65.6" y="100" width="14" height="5.6" rx="1.2"/>
-    <rect x="84.8" y="100" width="14" height="5.6" rx="1.2"/>
-    <rect x="104" y="100" width="14" height="5.6" rx="1.2"/>
-    <rect x="8" y="109.6" width="14" height="5.6" rx="1.2"/>
-    <rect x="27.2" y="109.6" width="14" height="5.6" rx="1.2"/>
-    <rect x="46.4" y="109.6" width="14" height="5.6" rx="1.2"/>
-    <rect x="65.6" y="109.6" width="14" height="5.6" rx="1.2"/>
-    <rect x="84.8" y="109.6" width="14" height="5.6" rx="1.2"/>
-    <rect x="104" y="109.6" width="14" height="5.6" rx="1.2"/>
-  </g>
-  <rect x="46.4" y="100" width="14" height="5.6" rx="1.2" fill="#FFFFFF" opacity="0.92"/>
 </svg>

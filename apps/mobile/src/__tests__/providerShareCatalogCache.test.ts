@@ -4,10 +4,12 @@ import {
   clearAllProviderShareCatalogs,
   evictProviderShareCatalogs,
   getCachedProviderShareCatalogs,
+  isProviderShareCatalogComplete,
   parseProviderShareCatalogPayload,
   parseProviderShareCatalogs,
   refreshProviderShareCatalogs,
   subscribeProviderShareCatalogs,
+  type ProviderShareCatalogEntry,
 } from '@/device-link/providerShareCatalogCache';
 
 const anthropic = {
@@ -43,8 +45,62 @@ const rawShare = (patch: Record<string, unknown> = {}) => ({
   ...patch,
 });
 
+const withRemaining = (share: ReturnType<typeof rawShare>, remainingMs = 1000) => ({
+  ...share,
+  catalog: { ...(share.catalog as Record<string, unknown>),
+    providerContinuity: { stale: true, remainingMs } },
+});
+
 afterEach(() => {
   clearAllProviderShareCatalogs();
+  vi.useRealTimers();
+});
+
+// Unit: failed refreshes used to keep re-exporting one share catalog indefinitely.
+it('expires a retained share catalog after its original budget and never revives it from a failed refresh', async () => {
+  vi.useFakeTimers({ toFake: ['Date', 'performance', 'setTimeout', 'clearTimeout'] });
+  const snapshot = rawShare();
+  const first = { ...snapshot, catalog: { ...snapshot.catalog, providerContinuity: { stale: true, remainingMs: 1000 } } };
+  await refreshProviderShareCatalogs('host', async () => ({ shares: [first] }));
+  await vi.advanceTimersByTimeAsync(700);
+  await refreshProviderShareCatalogs('host', async () => ({ shares: [rawShare({ hostOnline: false, catalog: null })] }));
+  expect(getCachedProviderShareCatalogs('host')?.[0].payload?.providers).toHaveLength(1);
+  await vi.advanceTimersByTimeAsync(301);
+  expect(getCachedProviderShareCatalogs('host')?.[0].payload).toBeNull();
+  await refreshProviderShareCatalogs('host', async () => ({ shares: [rawShare({ catalog: null })] }));
+  expect(getCachedProviderShareCatalogs('host')?.[0].payload).toBeNull();
+  await refreshProviderShareCatalogs('host', async () => ({ shares: [rawShare({ status: 'paused' })] }));
+  expect(getCachedProviderShareCatalogs('host')?.[0].payload).toBeNull();
+});
+
+// Unit: a suspended JS runtime can wake after the wall-clock deadline but before
+// the expiry timer callback runs. The synchronous cache read must not hand the
+// expired payload back while it is retiring that same entry.
+// Minimal input: one catalog with 1s remaining, jump the wall clock past it.
+it('does not return an expired catalog when the expiry timer has not run yet', async () => {
+  vi.useFakeTimers({ toFake: ['Date', 'performance', 'setTimeout', 'clearTimeout'] });
+  const snapshot = rawShare();
+  await refreshProviderShareCatalogs('host', async () => ({ shares: [{ ...snapshot,
+    catalog: { ...snapshot.catalog, providerContinuity: { stale: true, remainingMs: 1000 } } }] }));
+  vi.setSystemTime(Date.now() + 1001);
+  expect(getCachedProviderShareCatalogs('host')?.[0].payload).toBeNull();
+});
+
+it('defers a getter-discovered expiry notification until after the synchronous read', async () => {
+  vi.useFakeTimers({ toFake: ['Date', 'performance', 'setTimeout', 'clearTimeout'] });
+  const snapshot = rawShare();
+  await refreshProviderShareCatalogs('host', async () => ({ shares: [{ ...snapshot,
+    catalog: { ...snapshot.catalog, providerContinuity: { stale: true, remainingMs: 1000 } } }] }));
+  const events = vi.fn();
+  const off = subscribeProviderShareCatalogs('host', events);
+  vi.setSystemTime(Date.now() + 1001);
+  expect(getCachedProviderShareCatalogs('host')?.[0].payload).toBeNull();
+  // A mounted React consumer must not be updated while the getter is running.
+  expect(events).not.toHaveBeenCalled();
+  await Promise.resolve();
+  expect(events).toHaveBeenCalledTimes(1);
+  expect(events.mock.calls[0][0]?.[0]?.payload).toBeNull();
+  off();
 });
 
 describe('provider share catalog parsing', () => {
@@ -104,6 +160,147 @@ describe('provider share catalog cache', () => {
     expect(getCachedProviderShareCatalogs('controlled')).toBe(entries);
     expect(getCachedProviderShareCatalogs('elsewhere')).toBeUndefined();
     expect(listener).toHaveBeenCalledWith(entries);
+    unsubscribe();
+  });
+
+  it('keeps known shares and marks the list incomplete while a region is still loading', async () => {
+    const second = rawShare({ shareId: 'share-2', agentDeviceId: 'share:share-2' });
+    await refreshProviderShareCatalogs('host', async () => ({ ready: true, shares: [rawShare(), second] }));
+    expect(getCachedProviderShareCatalogs('host')).toHaveLength(2);
+    expect(isProviderShareCatalogComplete('host')).toBe(true);
+
+    await refreshProviderShareCatalogs('host', async () => ({ ready: false, shares: [rawShare()] }));
+    expect(getCachedProviderShareCatalogs('host')?.map(share => share.agentDeviceId))
+      .toEqual(['share:share-1', 'share:share-2']);
+    expect(isProviderShareCatalogComplete('host')).toBe(false);
+
+    await refreshProviderShareCatalogs('host', async () => ({ ready: true, shares: [rawShare()] }));
+    expect(getCachedProviderShareCatalogs('host')?.map(share => share.agentDeviceId)).toEqual(['share:share-1']);
+    expect(isProviderShareCatalogComplete('host')).toBe(true);
+  });
+
+  it('retires a retained missing share at its original directory deadline and never renews it on partial reads', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'performance', 'setTimeout', 'clearTimeout'] });
+    const a = withRemaining(rawShare({ shareId: 'a', agentDeviceId: 'share:a' }));
+    const b = withRemaining(rawShare({ shareId: 'b', agentDeviceId: 'share:b' }));
+    const c = withRemaining(rawShare({ shareId: 'c', agentDeviceId: 'share:c' }));
+    const events = vi.fn();
+    const off = subscribeProviderShareCatalogs('host', events);
+    await refreshProviderShareCatalogs('host', async () => ({ ready: true, shares: [a, b] }));
+    await vi.advanceTimersByTimeAsync(500);
+    await refreshProviderShareCatalogs('host', async () => ({ ready: false, shares: [c] }));
+    expect(getCachedProviderShareCatalogs('host')?.map(share => share.agentDeviceId))
+      .toEqual(['share:c', 'share:a', 'share:b']);
+
+    await vi.advanceTimersByTimeAsync(400);
+    await refreshProviderShareCatalogs('host', async () => ({ ready: false, shares: [c] }));
+    expect(getCachedProviderShareCatalogs('host')?.map(share => share.agentDeviceId))
+      .toEqual(['share:c', 'share:a', 'share:b']);
+
+    await vi.advanceTimersByTimeAsync(100);
+    expect(getCachedProviderShareCatalogs('host')?.map(share => share.agentDeviceId)).toEqual(['share:c']);
+    expect(getCachedProviderShareCatalogs('host')?.[0].payload).not.toBeNull();
+    expect(events.mock.calls.at(-1)?.[0].map((share: ProviderShareCatalogEntry) => share.agentDeviceId))
+      .toEqual(['share:c']);
+    off();
+  });
+
+  it('removes a retained share immediately when a complete list omits it', async () => {
+    const a = withRemaining(rawShare({ shareId: 'a', agentDeviceId: 'share:a' }));
+    const c = withRemaining(rawShare({ shareId: 'c', agentDeviceId: 'share:c' }));
+    await refreshProviderShareCatalogs('host', async () => ({ ready: true, shares: [a] }));
+    await refreshProviderShareCatalogs('host', async () => ({ ready: false, shares: [c] }));
+    expect(getCachedProviderShareCatalogs('host')?.map(share => share.agentDeviceId))
+      .toEqual(['share:c', 'share:a']);
+
+    await refreshProviderShareCatalogs('host', async () => ({ ready: true, shares: [c] }));
+    expect(getCachedProviderShareCatalogs('host')?.map(share => share.agentDeviceId)).toEqual(['share:c']);
+  });
+
+  it('starts a bounded absence window when a present entry had no readable catalog', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'performance', 'setTimeout', 'clearTimeout'] });
+    const a = withRemaining(rawShare({ shareId: 'a', agentDeviceId: 'share:a' }), 1000);
+    const c = withRemaining(rawShare({ shareId: 'c', agentDeviceId: 'share:c' }), 1000);
+    await refreshProviderShareCatalogs('host', async () => ({ ready: true, shares: [a] }));
+    await vi.advanceTimersByTimeAsync(1001);
+    expect(getCachedProviderShareCatalogs('host')?.[0].payload).toBeNull();
+
+    await refreshProviderShareCatalogs('host', async () => ({ ready: false,
+      shares: [{ ...a, catalog: null }, c] }));
+    expect(getCachedProviderShareCatalogs('host')?.[0].payload).toBeNull();
+
+    await refreshProviderShareCatalogs('host', async () => ({ ready: false, shares: [c] }));
+    expect(getCachedProviderShareCatalogs('host')?.map(share => share.agentDeviceId))
+      .toEqual(['share:c', 'share:a']);
+    await vi.advanceTimersByTimeAsync(30 * 60_000 - 1);
+    expect(getCachedProviderShareCatalogs('host')?.map(share => share.agentDeviceId))
+      .toEqual(['share:c', 'share:a']);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(getCachedProviderShareCatalogs('host')?.map(share => share.agentDeviceId)).toEqual(['share:c']);
+  });
+
+  it.each(['wall', 'mono'] as const)('notifies subscribers when a synchronous read prunes an expired retained entry (%s clock)', async clock => {
+    vi.useFakeTimers({ toFake: ['Date', 'performance', 'setTimeout', 'clearTimeout'] });
+    const a = withRemaining(rawShare({ shareId: 'a', agentDeviceId: 'share:a' }), 1000);
+    const c = withRemaining(rawShare({ shareId: 'c', agentDeviceId: 'share:c' }), 60_000);
+    await refreshProviderShareCatalogs('host', async () => ({ ready: true, shares: [a] }));
+    await refreshProviderShareCatalogs('host', async () => ({ ready: false, shares: [c] }));
+    const events = vi.fn();
+    const off = subscribeProviderShareCatalogs('host', events);
+    events.mockClear();
+
+    const wallStart = Date.now(), monoStart = performance.now();
+    const restore = clock === 'wall'
+      ? vi.spyOn(Date, 'now').mockReturnValue(wallStart + 1001)
+      : vi.spyOn(performance, 'now').mockReturnValue(monoStart + 1001);
+    try {
+      expect(getCachedProviderShareCatalogs('host')?.map(share => share.agentDeviceId)).toEqual(['share:c']);
+      expect(getCachedProviderShareCatalogs('host')?.map(share => share.agentDeviceId)).toEqual(['share:c']);
+      expect(events).not.toHaveBeenCalled();
+      await Promise.resolve();
+      expect(events).toHaveBeenCalledTimes(1);
+      expect(events.mock.calls[0][0].map((share: ProviderShareCatalogEntry) => share.agentDeviceId))
+        .toEqual(['share:c']);
+    } finally {
+      restore.mockRestore();
+      off();
+    }
+  });
+
+  it('starts the absence window from the last present observation, not the first missing read', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'performance', 'setTimeout', 'clearTimeout'] });
+    const a = rawShare({ shareId: 'a', agentDeviceId: 'share:a', catalog: null });
+    const c = rawShare({ shareId: 'c', agentDeviceId: 'share:c', catalog: null });
+    await refreshProviderShareCatalogs('host', async () => ({ ready: true, shares: [a] }));
+    await vi.advanceTimersByTimeAsync(29 * 60_000);
+    await refreshProviderShareCatalogs('host', async () => ({ ready: false, shares: [c] }));
+    expect(getCachedProviderShareCatalogs('host')?.map(share => share.agentDeviceId))
+      .toEqual(['share:c', 'share:a']);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(getCachedProviderShareCatalogs('host')?.map(share => share.agentDeviceId)).toEqual(['share:c']);
+  });
+
+  it('clears the cache and notifies mounted pickers on an explicit provider-share denial', async () => {
+    await refreshProviderShareCatalogs('host', async () => ({ ready: true,
+      shares: [withRemaining(rawShare({ shareId: 'a', agentDeviceId: 'share:a' }))] }));
+    const events = vi.fn();
+    const off = subscribeProviderShareCatalogs('host', events);
+    await expect(refreshProviderShareCatalogs('host', async () => {
+      throw Object.assign(new Error('[ACCESS_REVOKED] denied'), { code: 'ACCESS_REVOKED' });
+    })).rejects.toThrow('ACCESS_REVOKED');
+    expect(getCachedProviderShareCatalogs('host')).toBeUndefined();
+    expect(events).toHaveBeenLastCalledWith([]);
+    off();
+  });
+
+  it('clears mounted pickers when the controlled computer is evicted', async () => {
+    const listener = vi.fn();
+    const unsubscribe = subscribeProviderShareCatalogs('controlled', listener);
+    await refreshProviderShareCatalogs('controlled', async () => ({ shares: [rawShare()] }));
+    listener.mockClear();
+    evictProviderShareCatalogs('controlled');
+    expect(listener).toHaveBeenCalledWith([]);
+    expect(getCachedProviderShareCatalogs('controlled')).toBeUndefined();
     unsubscribe();
   });
 

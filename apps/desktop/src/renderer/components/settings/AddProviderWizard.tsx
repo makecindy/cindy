@@ -46,7 +46,8 @@ import { extractIpcError } from '@/utils/ipcError';
 import { pickWizardRecommend, type WizardRecommend } from './wizardRecommend';
 import { localCliDisplayName, type LocalCliDetection } from '../../../shared/localCliDetect';
 import { useProviderOAuthDeviceCode } from '@/hooks/useProviderOAuthDeviceCode';
-import { acquireCodexLogin, type CodexLoginLease } from '@/hooks/codexAuthLogin';
+import { isSubscriptionProvider } from '../../../shared/subscriptionAccounts';
+import { SubscriptionSignInChoices } from './SubscriptionSignInChoices';
 import { cardIcon, ProviderRow } from './ProviderRow';
 import { LocalOllamaInstall, offersManagedOllamaInstall } from './LocalOllamaInstall';
 import { MANAGED_LLAMACPP_PROVIDER_ID } from '../../../shared/llamaCpp';
@@ -59,6 +60,7 @@ import { isSpeechModel, SPEECH_API_PRESETS, speechReferenceModels, speechSetupTa
 
 import {
   isOpenRouterModelsUrl,
+  isOpenHubsModelsUrl,
   isLoopbackProviderUrl,
   isProviderRequestPath,
   presetDisplayName,
@@ -309,13 +311,6 @@ export function AddProviderWizard({
   const onClose = useCallback(() => dialog.close(notifyClosed), [dialog.close, notifyClosed]);
   const onDone = useCallback((id?: string) => dialog.close(() => notifyDone(id)), [dialog.close, notifyDone]);
   const onOpenCustomForm = useCallback(() => dialog.close(openCustomForm), [dialog.close, openCustomForm]);
-
-  // Native credentials alone do not mean this Cindy account has added the local
-  // connection. Keep the slot occupied when suspended or awaiting reconnection.
-  const localOpenAiAlreadyAdded = providers.some(
-    provider => provider.id === 'openai' &&
-      !provider.removed && (provider.connected || provider.removed === false || provider.openAiAccount?.reconnectRequired === true),
-  );
 
   const [presets, setPresets] = useState<ProviderPreset[]>([]);
   const [presetsLoadState, setPresetsLoadState] = useState<'loading' | 'ready' | 'failed'>('loading');
@@ -754,51 +749,28 @@ export function AddProviderWizard({
     if (login) void window.electronAPI.maker.providerOAuthCancel(login.providerId, { ownerId: login.ownerId, releaseOwner: true });
   }, []);
 
-  const useLocalOpenAiAccount = useCallback(async () => {
-    setLoggingIn(true);
-    let lease: CodexLoginLease | undefined;
-    const login = { cancel: () => lease?.release({ cancelIfLastOwner: true }) };
-    localLoginRef.current = login;
-    try {
-      lease = acquireCodexLogin('local');
-      const state = await lease.promise;
-      if (localLoginRef.current !== login) return;
-      if (state.authenticated && state.authSource === 'oauth' && state.credentialScope === 'system-shared') {
-        onDone('openai');
-      } else if (state.errorReason !== 'login_cancelled') {
-        toast.error(t('settings.providers.openai.localUnavailable'));
-      }
-    } catch {
-      if (localLoginRef.current === login) toast.error(t('settings.providers.openai.localUnavailable'));
-    } finally {
-      lease?.release();
-      if (localLoginRef.current === login) {
-        localLoginRef.current = null;
-        setLoggingIn(false);
-      }
-    }
-  }, [onDone, t]);
-
-  const useLocalClaudeAccount = useCallback(async () => {
+  const connectSubscription = useCallback(async (target: 'default' | 'new') => {
+    const providerId = sel?.kind === 'oauth' ? sel.provider.id : undefined;
+    if (!isSubscriptionProvider(providerId) || localLoginRef.current) return;
     setLoggingIn(true);
     const loginKey = crypto.randomUUID();
-    const login = { cancel: () => { void window.electronAPI.maker.claudeOAuthCancel(loginKey).catch(() => undefined); } };
+    const login = { cancel: () => { void window.electronAPI.subscriptionAccounts.command({ action: 'cancel', providerId, loginKey }).catch(() => {}); } };
     localLoginRef.current = login;
     try {
-      const result = await window.electronAPI.maker.claudeOAuthLogin(loginKey);
+      await window.electronAPI.subscriptionAccounts.command({ action: 'connect', providerId, target, loginKey });
       if (localLoginRef.current !== login) return;
-      if (result.ok) onDone('anthropic');
-      else if (result.reason === 'local_unavailable') toast.error(t('settings.providers.localAccount.unavailable'));
-      else if (result.reason === 'not_a_subscription') toast.error(t('settings.connections.claude.toast.notSubscription'));
-      else if (result.reason !== 'login_cancelled') toast.error(t('settings.connections.claude.toast.loginFailed'));
-    } catch { if (localLoginRef.current === login) toast.error(t('settings.connections.claude.toast.loginFailed')); }
-    finally {
+      toast.success(t('settings.providers.wizard.authorizedToast', { name: sel?.kind === 'oauth' ? sel.provider.name : providerId }));
+      onDone(providerId);
+    } catch (error) {
+      if (localLoginRef.current === login && !String(error).includes('SUBSCRIPTION_LOGIN_CANCELLED'))
+        toast.error(t('subscriptionAccounts.failed'));
+    } finally {
       if (localLoginRef.current === login) {
         localLoginRef.current = null;
         setLoggingIn(false);
       }
     }
-  }, [onDone, t]);
+  }, [sel, onDone, t]);
 
   // ── OAuth 授权（渠道登录后进入模型选择，原生订阅沿用已有流程）────────────────────
   const handleAuthorize = useCallback(
@@ -1098,6 +1070,9 @@ export function AddProviderWizard({
         ];
         return sources.map(async (source) => {
           try {
+            const openHubsInventory = preset.id === 'openhubs' && !source.route
+              && /^https:\/\/openhubs\.zhidemai\.com(?:\/v1)?\/?$/.test(source.baseUrl)
+              && !!source.modelsUrl && isOpenHubsModelsUrl(source.modelsUrl);
             const reuseDetection = detected?.catalog?.ok && agent === detected.agent
               && apiKey === detected.apiKey && source.baseUrl === detected.preset.runtimes[agent]?.baseUrl
               && !source.route && !source.modelsUrl?.includes('client_version=');
@@ -1107,6 +1082,7 @@ export function AddProviderWizard({
               baseUrl: source.baseUrl,
               authMethod: preset.authMethod ?? 'apiKey',
               modelsUrl: source.modelsUrl,
+              ...(openHubsInventory ? { allowEmpty: true } : {}),
               apiKey: apiKey.trim() || null,
               ...(source.wireProtocol ? { wireProtocol: source.wireProtocol } : {}),
               ...(rt.headers ? { headers: rt.headers } : {}),
@@ -1114,8 +1090,8 @@ export function AddProviderWizard({
             return {
               agent,
               modelsUrl: source.modelsUrl,
-              completeInventory: /^https:\/\/openrouter\.ai\/api(?:\/v1)?\/?$/.test(source.baseUrl)
-                && (!source.modelsUrl || isOpenRouterModelsUrl(source.modelsUrl)),
+              completeInventory: openHubsInventory || (/^https:\/\/openrouter\.ai\/api(?:\/v1)?\/?$/.test(source.baseUrl)
+                && (!source.modelsUrl || isOpenRouterModelsUrl(source.modelsUrl))),
               route: source.route,
               ok: !!(r.ok && r.models),
               models: r.models ?? [],
@@ -1594,7 +1570,7 @@ export function AddProviderWizard({
             {wizardTitle}
           </h3></Dialog.Title>
           {step === 1 ? (
-            <button
+            <button data-settings-search-action="Open the custom provider connection form"
               type="button"
               disabled={saving}
               onClick={() => { if (!savingRef.current) onOpenCustomForm(); }}
@@ -1868,66 +1844,42 @@ export function AddProviderWizard({
                   </span>
                   <span className="text-12" style={{ color: 'var(--text-tertiary)' }}>
                     {t(
-                      sel.provider.id === 'openai'
-                        ? localOpenAiAlreadyAdded
-                          ? 'settings.providers.openai.independentAccountDescription'
-                          : 'settings.providers.openai.accountSourcesDescription'
-                        : sel.provider.auth.oauth?.flow === 'device-code'
+                      sel.provider.auth.oauth?.flow === 'device-code'
                         ? 'settings.providers.wizard.deviceOAuthDesc'
                         : 'settings.providers.wizard.oauthDesc',
                     )}
                   </span>
                 </div>
               </div>
-              <div className="flex flex-wrap items-center gap-2">
+              {isSubscriptionProvider(sel.provider.id) && (
+                <SubscriptionSignInChoices key={sel.provider.id} providerId={sel.provider.id}
+                  busy={loggingIn} onConnect={target => void connectSubscription(target)} onCancel={cancelAuthorize} />
+              )}
+              <div className={cn('flex flex-wrap items-center gap-2', isSubscriptionProvider(sel.provider.id) && 'border-t border-[var(--border-default)] pt-4')}>
                 {/* 等待授权中按钮变「取消」(与详情头对称),不禁用——浏览器流挂起时用户必须能中止重试。 */}
-                {loggingIn ? (
+                {!isSubscriptionProvider(sel.provider.id) && (loggingIn ? (
                   <Button variant="secondary" size="lg" type="button" onClick={cancelAuthorize}>
                     <Spinner size={13} />
                     {t('settings.providers.button.cancel')}
                   </Button>
                 ) : (
                   <>
-                    {sel.provider.id === 'openai' && !localOpenAiAlreadyAdded && (
-                      <Button
-                        variant="secondary"
-                        size="lg"
-                        type="button"
-                        onClick={() => void useLocalOpenAiAccount()}
-                      >
-                        {t('settings.providers.openai.useLocalAccount')}
-                      </Button>
-                    )}
-                    {/* Claude 订阅唯一入口:已添加时点它等同重新连接本机 Claude Code 登录。 */}
-                    {sel.provider.id === 'anthropic' && (
-                      <Button
-                        variant="secondary"
-                        size="lg"
-                        type="button"
-                        onClick={() => void useLocalClaudeAccount()}
-                      >
-                        {t('settings.providers.localAccount.useClaude')}
-                      </Button>
-                    )}
-                    {/* Claude 订阅只能经内置 Claude Code 自己的登录使用,不提供独立账号。 */}
-                    {sel.provider.id !== 'anthropic' && (
                       <Button variant="secondary" size="lg" type="button" onClick={() => void handleAuthorize()}>
                         {t(
-                          ['openai', 'xai'].includes(sel.provider.id)
+                          sel.provider.id === 'xai'
                               ? 'settings.providers.openai.addIndependentAccount'
                               : sel.provider.auth.oauth?.flow === 'device-code'
                                 ? 'settings.providers.wizard.authorizeWithDeviceCode'
                                 : 'settings.providers.button.authorize',
                         )}
                       </Button>
-                    )}
                     {sel.provider.id === 'xai' && (
                       <Button variant="secondary" size="lg" type="button" onClick={() => void handleAuthorize('device')}>
                         {t('settings.connections.xai.deviceLogin')}
                       </Button>
                     )}
                   </>
-                )}
+                ))}
                 {/* 替代路径:API 用户没有订阅,OAuth 对其是错误路径——切到该渠道的
                     官方 API 预设表单(填 key),与从目录选预设完全同一条流水线。
                     与「授权」并排的次级描边按钮(White Pill):小灰字形态用户根本

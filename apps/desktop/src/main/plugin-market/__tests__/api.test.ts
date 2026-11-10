@@ -91,6 +91,24 @@ describe('PluginMarketApi 默认 fetcher 的日志隐私', () => {
 });
 
 describe('PluginMarketApi', () => {
+  // unit：v7.5 市场必须按页读取；旧 listAll 用例不能证明首屏不会追完整目录。
+  it('reads one catalog page and preserves complete query counts without following its cursor', async () => {
+    const fetcher = pagedFetcher({ plugins: [summary(PLUGIN_A, 'alpha')], nextCursor: 'next-page',
+      counts: { all: 200, public: 200, organization: 0, personal: 0 } });
+    const result = await new PluginMarketApi(fetcher).catalog({ query: 'alpha', limit: 12 });
+    expect(result.plugins).toHaveLength(1);
+    expect(result.counts?.all).toBe(200);
+    expect(result.nextCursor).toBe('next-page');
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(fetcher.mock.calls[0]![0]).toContain('/api/plugins/catalog?');
+  });
+
+  it('rejects incomplete target responses instead of interpreting them as missing installations', async () => {
+    const fetcher = pagedFetcher({ results: [], currentOrganization: null, removals: [] });
+    await expect(new PluginMarketApi(fetcher).resolve([{ key: 'installed', pluginId: PLUGIN_A }])).rejects.toThrow();
+    expect(fetcher.mock.calls[0]![0]).toBe('/api/plugins/resolve');
+  });
+
   it('paginates with opaque cursors and deduplicates repeated ids', async () => {
     const fetcher = pagedFetcher(
       { plugins: [summary(PLUGIN_A, 'alpha')], nextCursor: PLUGIN_A },
