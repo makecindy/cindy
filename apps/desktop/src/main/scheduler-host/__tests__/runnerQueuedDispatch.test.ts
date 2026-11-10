@@ -117,10 +117,10 @@ import {
   QUEUED_DISPATCH_TRACK_POLL_MS,
   type MakerScheduleRunnerDeps,
   type SchedulerQueueDeps,
-} from '../runner';
+} from '../runner.desktop';
 import { isHeadlessGhostSetupTurn } from '../../mcp-integrations/ghostSetupInteractionSurface';
 import { withScheduleLock } from '../scheduleLock';
-import { AgentInputCoordinator } from '../../maker-ipc/agent-input-coordinator.js';
+import { AgentInputCoordinator } from '../../maker-ipc/agent-input-coordinator.desktop.js';
 import { createInputEnqueueHarness } from '../../maker-ipc/__tests__/inputEnqueueHarness.js';
 import { CONTINUE_AFTER_APP_EXIT_PROMPT } from '../../../shared/interruptedTurn.js';
 import type { AgentInputQueuedMessage } from '../../../shared/agentInputQueue.js';
@@ -467,6 +467,7 @@ function createRunnerHarness(
     }),
     // issue #456:排队派发路径也按所选模型 efforts reconcile effort;测试经 availableModels 注入能力。
     getCapabilities: vi.fn((_agent: string) => ({ availableModels: opts.availableModels ?? [] })),
+    recyclePiRuntimeIfResourcesDrifted: vi.fn(async () => false),
   } as unknown as Maker;
   const runner = new MakerScheduleRunner({
     maker,

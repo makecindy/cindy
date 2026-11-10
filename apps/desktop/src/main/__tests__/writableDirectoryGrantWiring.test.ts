@@ -42,9 +42,14 @@ describe('writable directory grant wiring', () => {
     const createStart = sessions.indexOf("ipcMain.handle('local-db:sessions:create'");
     const updateStart = sessions.indexOf("ipcMain.handle('local-db:sessions:update'");
     const create = sessions.slice(createStart, updateStart);
-    expect(create).toContain('consumeWritableDirectoryPickerGrants({');
-    expect(create.indexOf('consumeWritableDirectoryPickerGrants({')).toBeLessThan(
-      create.indexOf('db.insert(sessions)'),
+    expect(create).toContain('assertTrustedAppRendererEvent(event)');
+    expect(create).toContain('return createUserSession(body, {');
+    expect(create).toContain('senderId: event.sender.id');
+    const service = read('main/localDb/ipc/createUserSession.ts');
+    expect(service).toContain('senderId: ports.senderId');
+    expect(service).toContain('consumeWritableDirectoryPickerGrants({');
+    expect(service.indexOf('consumeWritableDirectoryPickerGrants({')).toBeLessThan(
+      service.indexOf('db.insert(sessions)'),
     );
     // update handler 只做 adapter,业务体在 updateSessionInDb(MCP 会话操作工具共用同一路径)。
     const update = sessions.slice(updateStart, sessions.indexOf("'local-db:sessions:patch-meta'"));

@@ -858,7 +858,7 @@
       },
       "runningCount_other": "{{count}} 件差事方行",
       "limitAria": "{{name}} 之並行上限",
-      "limitOption_other": "至多 {{count}}",
+      "limitOption_other": "並行 {{count}}",
       "weightAria": "{{name}} 之權重",
       "weightOption": "輕重 {{weight}}",
       "assignAria": "分差事予 {{name}}",
@@ -873,6 +873,7 @@
         "pausedLocal": "已暫停接外來之新差事",
         "cooling": "方歇",
         "coolingUntil": "冷卻中 · 約 {{time}} 復",
+        "quotaExhausted": "限額已盡",
         "offline": "失聯",
         "unreachableHere": "自此機連不上",
         "unavailable": {
@@ -912,9 +913,13 @@
       "description": "為均用各名籍之限額，宜將此訊易至 {{label}} 遣之（{{quota}}）。易後攜近數輪言談與摘要，更早之細節或記不全。",
       "quota": "尚餘 {{left}}%",
       "quotaReset": "尚餘 {{left}}%，{{reset}}",
-      "confirm": "易之",
-      "cancel": "罷",
-      "remember": "此後自動易之，不復詢問（僅此差事）"
+      "confirm": "惟此次換之",
+      "cancel": "暫不換",
+      "remember": "此後自動切換，不復問",
+      "disable": "勿自動切換，亦不復問",
+      "disableFailed": "未能確認此選擇已存。請查連線，並確認任務所在電腦之 Cindy 已更新，再試。此訊仍照常送出。",
+      "choiceLabel": "切換之法（僅此任務）",
+      "send": "續發此訊"
     },
     "deleteConfirm": {
       "title": "刪 {{provider}} 之供方組乎？",
@@ -4190,7 +4195,18 @@
           "ariaLabel": "許君之他機與君所分享之人呼叫此供方",
           "writeFailed": "遠端呼叫之設未能存，請再試"
         },
-        "moreActionsAria": "餘者"
+        "moreActionsAria": "餘者",
+        "runLocation": {
+          "label": "運於何機",
+          "optionLocal": "此機",
+          "notSignedIn": "未登",
+          "autoBorrowing": "此機未登，新務借 {{device}} 以運之，無須再登。",
+          "local": "新務運於此機；亦可改擇汝他機之已登者。",
+          "pinned": "新務運於 {{device}}，用彼機之登錄；已行之務不移。",
+          "inline": "運於",
+          "signInHere": "於此機登錄",
+          "writeFailed": "運處未能存，請再試。"
+        }
       },
       "detect": {
         "groupLabel": "察得此機 CLI",
@@ -5192,6 +5208,15 @@
         "ariaLabel": "以 {{shortcut}} 遣訊"
       }
     },
+    "defaultNewTaskWorkingDir": {
+      "title": "新任務常例工作目錄",
+      "label": "此機常例工作目錄",
+      "hint": "新立此機之任而未擇項目，則先取此目錄；若已明擇項目、言談或遠機，仍從其擇。",
+      "unset": "未設（不預取目錄）",
+      "choose": "擇目錄",
+      "clear": "清常例目錄",
+      "failed": "存常例工作目錄未成，請重試"
+    },
     "linkOpen": {
       "title": "啟連結",
       "description": "擇訊中連結開啟之處，右鍵可臨時更換",
@@ -6144,13 +6169,18 @@
         "allowInboundAria": "切換是否許 {{name}} 控此機",
         "peerControlOff": "對方未許遠端操控",
         "masterOffHint": "須先開上方總開關",
-        "controllingThisMac": "已連 Cindy"
+        "controllingThisMac": "已連 Cindy",
+        "useThisDeviceModels": "用此機之模",
+        "allowModelUseAria": "許 {{name}} 用此機之模"
       },
       "toast": {
         "revoked": "已撤此裝置之存取權",
         "revokeFailed": "撤銷未成",
         "restored": "已復此裝置之存取權",
-        "restoreFailed": "恢復未成"
+        "restoreFailed": "恢復未成",
+        "modelUseRestored": "彼機復得用此機之模",
+        "modelUseRevoked": "彼機不復得用此機之模",
+        "modelUseFailed": "「用此機之模」未能存，請再試。"
       },
       "sections": {
         "myDevices": "我之裝置",
@@ -7367,6 +7397,11 @@
         "installedExpand": "展全部已納法器 {{count}} 件",
         "installedCollapse": "收餘下已納法器",
         "recommendedSection": "所薦",
+        "todayRecommendations": "今日所薦",
+        "marketSection": "法器市集",
+        "browseMarket": "覽法器市集",
+        "searching": "檢索中…",
+        "allLoaded": "諸法器已盡示，共 {{count}} 件",
         "updatesAvailable": "法器 {{count}} 件可更新",
         "updateAll": "盡更新",
         "ignoreRound": "此輪略之",
@@ -7396,7 +7431,15 @@
       },
       "market": {
         "publisherKind": {
-          "official": "官設"
+          "official": "官設",
+          "community": "社群"
+        },
+        "publisherDescription": {
+          "official": "Cindy 官方所製，發布維護",
+          "community": "社群開發者所製，發布維護",
+          "team": "本組織共享於獲准成員",
+          "custom": "取自所添 Git 或本機目錄市集",
+          "local": "由本機檔案安裝，或於本機開發"
         },
         "scopeAria": "篩法器之來源",
         "scope": {
@@ -8996,6 +9039,8 @@
       "daysWindow": "{{days}}日"
     },
     "claude": {
+      "totalWeeklyLabel": "週總",
+      "temporarilyLimited": "暫限",
       "waitingDetail": "Claude 訂閱餘量將於下一輪畢後更新。",
       "weeklyLabel": "週限",
       "modelWeeklyLabel": "{{model}} 週限",
@@ -11273,7 +11318,8 @@
       "toolSettings": "器具之設",
       "notTurnedOn": "此機尚未開",
       "turnOn": "往開",
-      "permissions": "權"
+      "permissions": "權",
+      "officialInherited": "Cindy 官方 · 隨本機啟停"
     },
     "systemSkills": {
       "followOffHint": "{{name}} 之系統技藝「案頭與督促」已關，於才能頁復開之乃可用。",
@@ -11370,6 +11416,9 @@
       "databaseDriver": "資料庫驅動程式不能載，請更新或修復 Cindy 後再試。",
       "databaseUnavailable": "來源資料庫不可讀，原資料未動。修復後可再試。",
       "fileTooLarge": "卷或此次資料逾讀取上限，未截而納。",
+      "sourceFileTooLarge": "單卷逾讀取上限，此項未全納。",
+      "snapshotTooLarge": "此次所讀資料累計逾限，未能全納。",
+      "itemTooLarge": "此項諸卷合計逾 128 MiB，未全納。",
       "memoryMetadata": "記憶摘要或標題不合存儲之要。",
       "memoryWrite": "記憶寫入或完整性檢查未成，可再試。",
       "memoryChanged": "已存之記憶有變，未覆寫。",
@@ -12980,6 +13029,11 @@
     "jumpToBottom": "至底",
     "prevMessageJump": "至上一問：{{preview}}",
     "askUserQuestion": {
+    "unanswered": "未答",
+    "withdrawn": "無須再答",
+    "withdrawnDraft": "此問無須再答。\n{{reason}}\n草稿尚存，可另作補充傳送。",
+    "sendSupplement": "傳送補充",
+
       "voice": {
         "hint": "可言「第一項」或選項之名；多選畢，請言「確認選擇」。",
         "freeTextHint": "可徑言其答，察畢言「確認選擇」以呈。",
@@ -13243,8 +13297,10 @@
     },
     "backgroundActivity": {
       "status": "後臺子差事方行，模型耗用未止…",
-      "bashStatus_one": "後臺差事方行（{{count}} 件）…",
-      "bashStatus_other": "後臺差事方行（{{count}} 件）…",
+      "bashWorkStatus_one": "後臺猶作（令 {{count}} 道）…",
+      "bashServiceStatus_one": "後臺常役方行（{{count}} 件）",
+      "bashWorkStatus_other": "後臺猶作（令 {{count}} 道）…",
+      "bashServiceStatus_other": "後臺常役方行（{{count}} 件）",
       "stopAll": "盡止",
       "stopAllTitle": "闔此差事之後臺程序，盡止後臺作業（差事仍可續用）",
       "stopBashTitle": "止此差事尚在行之後臺作業（不闔言談程序）",
@@ -14091,6 +14147,7 @@
       "taskAutoArchived": "「{{title}}」已封存",
       "taskAutoArchivedUndo": "撤",
       "taskAutoArchivePending": "離此任務後自封存",
+      "taskAutoArchiveBlockedDirty": "「{{title}}」工作區尚有未提交之改，未自封存",
       "taskAutoArchiveCancel": "取消",
       "taskAutoArchiveCancelled": "此番不自封存",
       "taskArchiveNow": "即封存"
@@ -19692,6 +19749,8 @@
     }
   },
   "subscriptionAccounts": {
+    "unassigned": "帳號待定",
+    "providerManagedAuth": "Codex 目前供方未提供 ChatGPT 帳號資訊。請於新增供方時選「$t(subscriptionAccounts.signIn.anotherAccount)」，另用獨立目錄",
     "signIn": {
       "checking": "正察本機帳號…",
       "detected": "已有帳號登入",
@@ -19703,10 +19762,10 @@
       "useCodex": "以 Codex 登入"
     },
     "title": "訂閱帳號",
-    "note": "首號沿用 CLI 預設目錄，增號各自登入。新務依策分派，舊務仍用原號。",
     "strategy": "負載平衡",
     "add": "新增帳號",
     "default": "預設目錄",
+    "defaultTag": "預設",
     "ready": "已連線",
     "signedOut": "須登入",
     "unavailable": "狀態暫不可得",
@@ -19740,5 +19799,21 @@
     "browserFallback": "請至 GitHub 為 Cindy 點 Star",
     "openGithub": "開啟 GitHub",
     "openFailed": "未能開啟 GitHub"
+  },
+  "hostConnection": {
+    "connecting": "正連 Cindy 後臺…",
+    "restoring": "正復任務之態…",
+    "retrying": "任務未同步，正重試…",
+    "pairing": "連接須再授權",
+    "pairingHelp": "請留此頁。於啟動 Cindy 後臺之終端重行打開網頁之命令，於新頁配對畢，再返此頁。",
+    "keepDraft": "草稿仍存。連接復通，任務之態將自同步。",
+    "retry": "重試連接",
+    "desktopAuthHelp": "請於啟動終端更新後臺連接設定，再啟此實驗客戶端。"
+  },
+  "remoteControlConsent": {
+    "title": "許遠控此機乎？",
+    "detail": "請求來自「{{device}}」\n所為：{{purpose}}\n\n啟用後，同帳號裝置可遠控此機，執行任務、存取檔案。此設長效，可隨時於設定中關閉。",
+    "decline": "暫不開啟",
+    "enable": "開啟遠端控制"
   }
 }

@@ -387,16 +387,8 @@ const rendererConfig = {
     include: ['@tiptap/react', 'highlight.js'],
   },
   server: {
-    // Prepare settings transforms in the dev server, without importing them into
-    // the renderer. Cold route loads otherwise wait seconds for the module graph.
-    // Production bundles keep their section-level code splitting unchanged.
-    warmup: {
-      clientFiles: [
-        './components/settings/**/*.tsx',
-        '!./components/settings/**/__tests__/**',
-        './features/billing/BillingPage.tsx',
-      ],
-    },
+    // Keep optional settings modules on demand. Warming the entire settings tree
+    // at startup can exhaust the Forge/Vite heap on Windows (#9504).
     watch: {
       // 被 exclude 的内部包以 node_modules 软链路径进模块图,默认 `**/node_modules/**`
       // 忽略规则会让 watcher 对它们的源码变更全盲(变更后引用新导出的组件热更、被引用包

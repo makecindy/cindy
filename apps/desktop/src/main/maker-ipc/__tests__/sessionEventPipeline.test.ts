@@ -10,7 +10,7 @@ import type { PiUsageWrite } from '../../localDb/worker/opHandlers/piUsageTx.js'
 import * as broadcastTap from '../../device-link/broadcast-tap.js';
 import { createBotCompactRuntimeRefreshCoordinator } from '../botCompactRuntimeRefresh.js';
 import { createContextOverflowRollover } from '../contextOverflowRollover.js';
-import { setMainLocale } from '../../i18n.js';
+import { setMainLocale } from '../../i18n.desktop.js';
 import { installSessionTurnObserver } from '../sessionTurnObserver.js';
 import { onChannelTurn } from '../channelTurnSignal.js';
 import { createSessionBindingLifecycle } from '../sessionBindingLifecycle.js';
@@ -132,13 +132,13 @@ vi.mock('../../maker-host/active-catalog.js', () => ({
 vi.mock('../../maker-host/claude-session-route-registry.js', () => ({
   readClaudeSessionRoute: effects.fn('readClaudeSessionRoute'),
 }));
-vi.mock('../../maker-host/codex-proxy-host.js', () => ({
+vi.mock('../../maker-host/codex-proxy-host.desktop.js', () => ({
   getCodexProxyAuthInjection: effects.fn('getCodexProxyAuthInjection'),
 }));
 vi.mock('../../maker-host/provider-route.js', () => ({
   isUserProviderSession: effects.fn('isUserProviderSession'),
 }));
-vi.mock('../../messagePersistBroadcaster.js', () => ({
+vi.mock('../../messagePersistBroadcaster.desktop.js', () => ({
   reserveTurnErrorPersistId: effects.fn('reserveTurnErrorPersistId'),
   backgroundTurnPredatesSessionClear: effects.fn('backgroundTurnPredatesSessionClear'),
   noteAgentMeta: effects.fn('noteAgentMeta'),
@@ -153,6 +153,7 @@ vi.mock('../../messagePersistBroadcaster.js', () => ({
   onThinkingEvent: effects.fn('onThinkingEvent'),
   onToolResultEvent: effects.fn('onToolResultEvent'),
   onToolResultFullEvent: effects.fn('onToolResultFullEvent'),
+  persistToolProcessMedia: effects.fn('persistToolProcessMedia'),
   onToolUseEvent: effects.fn('onToolUseEvent'),
   consumeLastAssistantPersistId: effects.fn('consumeLastAssistantPersistId'),
   consumeLastTopLevelAssistantPersistId: effects.fn('consumeLastTopLevelAssistantPersistId'),
@@ -170,7 +171,11 @@ vi.mock('../../messagePersistBroadcaster.js', () => ({
   resetTurnPersistState: effects.fn('resetTurnPersistState'),
   saveTurnStartedAtForDeferred: effects.fn('saveTurnStartedAtForDeferred'),
 }));
-vi.mock('../../maker-host/claude-session-background-activity.js', () => ({
+vi.mock('../../maker-host/claude-session-background-activity.js', async (importOriginal) => ({
+  hasWorkingBackgroundCommand: (
+    await importOriginal<typeof import('../../maker-host/claude-session-background-activity.js')>()
+  ).hasWorkingBackgroundCommand,
+  noteClaudeSessionBackgroundCommandWork: effects.fn('noteClaudeSessionBackgroundCommandWork'),
   noteClaudeSessionTurnState: effects.fn('noteClaudeSessionTurnState'),
 }));
 vi.mock('../../subagentObservationRewindFence.js', () => ({
@@ -357,6 +362,7 @@ function harness() {
       isActiveTaskCoordination: vi.fn(() => false),
       getQueueControlSnapshot: vi.fn(() => ({ pendingQueue: [] as unknown[] })),
       onTurnEvent: vi.fn(),
+      bindErrorPersistId: vi.fn(),
       noteSuppressedTerminalError: vi.fn(),
       onExternalTurnSettled: vi.fn(),
       isAutoResumePending: vi.fn(() => false),
@@ -458,6 +464,22 @@ function ordered(...names: string[]) {
 }
 
 describe('production Session event pipeline', () => {
+  // #8147 follow-up: the ID used by live delivery must also be retained by
+  // the coordinator so subsequent projection-only readers can deduplicate.
+  it('binds the reserved error row to the snapshot owner before broadcasting it', async () => {
+    const current = harness();
+    current.deps.redactEventForRenderer.mockImplementation(value => value);
+    try {
+      current.emit(event('error', { message: 'failed', isTerminal: true }));
+      expect(current.deps.agentInputCoordinatorHolder.bindErrorPersistId)
+        .toHaveBeenCalledWith('task', 'error-row', 'failed');
+      const delivered = current.deps.broadcastToAllWindows.mock.calls.find(
+        ([channel]) => channel === 'maker:event',
+      );
+      expect(delivered?.[1]).toMatchObject({ persistId: 'error-row' });
+    } finally { await current.dispose(); }
+  });
+
   it('accepts only provider-confirmed sampling items and releases the remainder at done', async () => {
     const current = harness();
     try {
@@ -1554,6 +1576,39 @@ describe('production Session event pipeline', () => {
     await h.dispose();
   });
 
+  // 任务列表的「后台命令仍在工作」来自会话的权威后台任务快照:任务表变化与回合收尾各刷新一次
+  // (收尾先刷新再记回合结束,换代清表不带事件)。SSH 远程任务的终态可能丢在断连窗口里,不参与。
+  it.each([
+    ['local task still running a test command', null, 'work', [true, true]],
+    ['local task that only left a dev server', null, 'service', [false, false]],
+    ['SSH remote task', 'ssh-host', 'work', []],
+  ] as const)(
+    'refreshes background command work from the session snapshot: %s',
+    async (_label, remoteHostId, backgroundCommandKind, expected) => {
+      const h = harness();
+      Object.defineProperty(h.session, 'remoteHostId', { value: remoteHostId });
+      vi.spyOn(h.session, 'listBackgroundTasks').mockReturnValue([
+        { taskId: 'bash-1', taskType: 'local_bash', backgroundCommandKind },
+      ]);
+      h.emit(event('status', { isRunning: true }));
+      h.emit(event('agent_task_update', { provider: 'claude-code', taskId: 'bash-1', status: 'running' }));
+      h.emit(event('done', { reason: 'completed' }));
+      expect(effects.fn('noteClaudeSessionBackgroundCommandWork').mock.calls).toEqual(
+        expected.map((hasWork) => ['task', hasWork]),
+      );
+      if (expected.length > 0) {
+        const calls = effects.calls.filter(
+          (name) => name === 'noteClaudeSessionBackgroundCommandWork' || name === 'noteClaudeSessionTurnState',
+        );
+        expect(calls.slice(-2)).toEqual([
+          'noteClaudeSessionBackgroundCommandWork',
+          'noteClaudeSessionTurnState',
+        ]);
+      }
+      await h.dispose();
+    },
+  );
+
   it.each([null, 'ssh-host'])(
     'only records local Codex account snapshots (remote=%s)',
     async (remoteHostId) => {
@@ -1610,10 +1665,10 @@ describe('provider turn observer on real Session.send', () => {
   });
 
   it.each([
-    [undefined, 'provider-wake-local'],
-    [{ kind: 'user' as const, surface: 'im' as const }, 'provider-wake'],
-    [{ kind: 'scheduler' as const, scheduleId: 'hook:slack', surface: 'im' as const }, 'provider-wake'],
-  ])('inherits the dispatched origin %j when announcing a harness wake-up', async (origin, expectedSource) => {
+    [undefined, 'provider-wake-local', true],
+    [{ kind: 'user' as const, surface: 'im' as const }, 'provider-wake', false],
+    [{ kind: 'scheduler' as const, scheduleId: 'hook:slack', surface: 'im' as const }, 'provider-wake', false],
+  ])('inherits the dispatched origin %j when announcing a harness wake-up', async (origin, expectedSource, zeroOutput) => {
     const pushed: Array<AgentEvent | null> = [];
     let wake: (() => void) | null = null;
     let running = false;
@@ -1644,7 +1699,11 @@ describe('provider turn observer on real Session.send', () => {
       await microtasks();
     };
     const order: string[] = [];
-    const dispose = installSessionTurnObserver(observerDeps(), session);
+    const dispose = installSessionTurnObserver({ ...observerDeps(), onProviderInitiatedTurn: (target, generation) => {
+      expect(target).toBe(session);
+      expect(generation).toBe(session.getTurnGeneration());
+      order.push('recovery-boundary');
+    } }, session);
     const unsubscribe = onChannelTurn((target, phase, source) => {
       if (target === session) order.push(`${phase}:${source ?? 'none'}`);
     });
@@ -1653,9 +1712,11 @@ describe('provider turn observer on real Session.send', () => {
       await session.send('launch background work', { origin });
       await emit(event('text', { text: 'launched agents' }));
       await emit(event('done'));
-      await emit(event('text', { text: 'agent result' }));
+      await emit(zeroOutput
+        ? event('status', { isRunning: true, providerInitiatedTurn: true }, { source: 'claude-code' })
+        : event('text', { text: 'agent result' }));
       await emit(event('done'));
-      expect(order).toEqual(['starting:none', 'text', 'done', `starting:${expectedSource}`, 'text', 'done']);
+      expect(order).toEqual(['starting:none', 'text', 'done', 'recovery-boundary', `starting:${expectedSource}`, zeroOutput ? 'status' : 'text', 'done']);
     } finally { off(); unsubscribe(); dispose(); await session.close(); }
   });
 

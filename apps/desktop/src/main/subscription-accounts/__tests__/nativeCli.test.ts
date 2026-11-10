@@ -11,6 +11,7 @@ const h = vi.hoisted(() => ({
   spawn: vi.fn(),
   error: false,
   hold: false,
+  accountResult: undefined as unknown,
 }));
 vi.mock('node:child_process', () => ({ spawn: h.spawn }));
 vi.mock('@cindy/maker-core', () => ({
@@ -22,7 +23,7 @@ vi.mock('@cindy/maker-core', () => ({
   }),
 }));
 vi.mock('../../agent-binaries/index.js', () => ({ getReadyBinaryPath: () => h.binary }));
-vi.mock('../../maker-host/claude-native-cli.js', () => ({
+vi.mock('../../maker-host/claude-native-cli.desktop.js', () => ({
   refreshClaudeCliLoginStatus: vi.fn(),
   readClaudeCliPlanUsage: vi.fn(),
   runClaudeCliLogin: vi.fn(),
@@ -43,6 +44,7 @@ beforeEach(() => {
   h.binary = '/fixture/codex';
   h.error = false;
   h.hold = false;
+  h.accountResult = undefined;
   children.length = 0;
   h.spawn.mockReset().mockImplementation((_binary, args, options) => {
     const child = Object.assign(new EventEmitter(), {
@@ -67,7 +69,7 @@ beforeEach(() => {
                   ? { id: 2, error: { message: 'fixture-secret-must-not-leak' } }
                   : {
                       id: 2,
-                      result: {
+                      result: h.accountResult ?? {
                         account: {
                           type: 'chatgpt',
                           email: options.env.CODEX_HOME + '@example.test',
@@ -87,6 +89,26 @@ beforeEach(() => {
 });
 afterEach(() => vi.useRealTimers());
 describe('official Codex profiles', () => {
+  // #9517, unit: the real account reader must distinguish provider-managed
+  // authentication from a signed-out ChatGPT account; older tests only returned ChatGPT.
+  it.each([
+    { account: null, requiresOpenaiAuth: false, reason: 'codex_provider_managed_auth' },
+    { account: null, requiresOpenaiAuth: true, reason: undefined },
+    { account: null, requiresOpenaiAuth: undefined, reason: undefined },
+    { account: { type: 'chatgpt' }, requiresOpenaiAuth: false, reason: undefined },
+  ])('classifies account=$account with requiresOpenaiAuth=$requiresOpenaiAuth', async ({ account, requiresOpenaiAuth, reason }) => {
+    h.accountResult = { account, requiresOpenaiAuth };
+    const result = await readNativeAccount('openai', '/fixture/custom-provider');
+    expect(result.authenticated).toBe(account?.type === 'chatgpt');
+    expect(result.errorReason).toBe(reason);
+  });
+
+  it('keeps the provider diagnosis if configuration changes while browser login is open', async () => {
+    h.accountResult = { account: null, requiresOpenaiAuth: false };
+    await expect(loginNativeAccount('openai', '/fixture/second', new AbortController().signal))
+      .rejects.toThrow('codex_provider_managed_auth');
+  });
+
   it('expires a selected-profile dispatch proof when that profile is replaced or removed', async () => {
     const dir = await mkdtemp(path.join(tmpdir(), 'cindy-subscription-proof-'));
     const authPath = path.join(dir, 'auth.json');

@@ -1385,6 +1385,12 @@ export interface AgentDeps {
       catalogModel: string;
       reasoningEffort?: ReasoningEffort | null;
     }>;
+    /**
+     * 本任务当前的思维深度。只在带了智能子代理路由时附上。
+     * 冷恢复登记路由时，session effort store 往往还没从数据库 hydrate；
+     * 空字符串是「这个模型不用推理」的哨兵，不得改成目录默认。
+     */
+    reasoningEffort?: Effort | '';
   }) => void;
 
   /** Desktop proxy observation of the model actually sent for one Codex child thread. */
@@ -2114,8 +2120,10 @@ export interface StartSessionOptions {
  * this proof. Main dispatchers attach it only after authenticating the source.
  */
 export const MAIN_OWNED_SEND_CONTEXT = Symbol('cindy.main-owned-send-context');
-/** Optional question replies must never be queued for a later execution. */
+/** Question replies preserve other pending questions; steer still rejects cross-generation delivery. */
 export const ASYNC_QUESTION_ANSWER = Symbol('cindy.async-question-answer');
+/** Host-classified ordinary user input only; absent on automation and question replies. Not an authorization grant. */
+export const SUPERSEDE_ASYNC_QUESTIONS = Symbol('cindy.supersede-async-questions');
 
 /** Call-local user content before Session replaces images with generated descriptions. */
 export const AUTO_REVIEW_SOURCE_CONTENT = Symbol('cindy.auto-review-source-content');
@@ -2161,6 +2169,7 @@ export const PI_CACHE_RECOVERY_EXPECTATION = Symbol('pi-cache-recovery-expectati
 export interface SendOptions {
   readonly [PI_CACHE_RECOVERY_EXPECTATION]?: import('./pi/cache-compatibility.js').PiCacheCompatibility;
   readonly [ASYNC_QUESTION_ANSWER]?: true;
+  readonly [SUPERSEDE_ASYNC_QUESTIONS]?: true;
   readonly [AUTO_REVIEW_SOURCE_CONTENT]?: UserMessage['content'];
   readonly [AUTO_REVIEW_USER_INTENT]?: AutoReviewUserIntent;
   readonly [AUTO_REVIEW_DELEGATED_CONTINUATION]?: true;
@@ -2292,6 +2301,8 @@ export interface BackgroundTaskSnapshot {
   taskId: string;
   /** SDK task_type(local_bash / local_agent / local_workflow 等),缺失表示未知。 */
   taskType?: string;
+  /** 后台命令是工作还是长驻服务;与 agent_task_update 的同名字段同源,缺省按 work。 */
+  backgroundCommandKind?: 'work' | 'service';
   toolUseId?: string;
   title?: string;
   /**
@@ -2697,6 +2708,11 @@ export interface AgentSessionHandle {
    * 默认实现为 false (capability 缺失时 host 不该问)。
    */
   isTurnRunning?(): boolean;
+  /**
+   * 盘上项目资源相对运行时启动快照是否已漂移(仅原地加载项目资源的 pi 本地根任务实现,
+   * 其余 agent 恒缺省)。host 可据此回收运行时,让下次 spawn 重扫并重算资源 argv。
+   */
+  hasProjectResourceDrift?(): boolean;
   /** A provider-owned preparatory turn still precedes the accepted user input.
    * Host timeouts must not resume it with a generic CONTINUE. Read synchronously
    * before abort clears the provider's existing preparation state.

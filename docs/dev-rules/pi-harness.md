@@ -106,7 +106,7 @@ Cindy 以 `pi --mode rpc` spawn pi 二进制(JSONL/stdio),`translator.ts` 把 pi
 
 同步提问继续使用 `ask_user_question`；异步提问直接展示 `ask_user_question_async`，
 从宿主 `cindy_helper` 已注册的定义获取说明与参数，执行仍走同一 MCP 通道及真实权限身份。
-宿主未提供时不注册，不另建卡片或答案队列。`ask_owner` 仅处理 fill／scan／connect，
+宿主未提供时不注册，不另建卡片或答案队列。独立的 `request_input_handoff` 直接注册并复用宿主 schema，处理窗口与截图二维码；
 不承接普通提问。异步问题随本轮结束或被替换而失效，用户答案经同轮 steer 交回。
 
 ## 2. 配置面:Cindy 显式设置 vs 放任 pi 默认
@@ -372,7 +372,13 @@ Pi CLI 管理入口、内核自更新与旧工具兼容的执行边界见
    不得读取/复制项目 `.pi/settings.json`，不得传 `--approve`，
    不得依赖 `PI_OFFLINE=1` 代替该 settings 硬门。root 不传 `--no-skills`，以保留现有
    user/global skill 行为；项目 skill 的 `loaded` 由当前会话 `get_commands` 对原路径 provenance
-   证明。
+   证明。运行时空闲且盘上资源集合相对启动快照漂移时，host 可在发送前回收进程
+   （经 Maker `closeSessionIfCurrent(session, 'runtime-refresh')`，让 session:closed
+   带上 IM runner 认识的刷新原因；直接 Session.close 会被按 unexpected 丢弃排队回合。
+   空闲口径与 closeIfIdle 一致：turn 运行中、结束未收口的 turn、换代续接、手动压缩 /
+   rewind 等宿主排他操作进行中绝不回收），由既有 lazy bootstrap
+   以相同的显式装配语义重扫重建 —— 资源集合是 spawn argv 的输入，只能进程重建时重算；
+   远端/Bot/受邀者会话无启动快照，不参与漂移检测。
 9. **Pi bash bounded timeout**:Cindy 覆盖的模型可调 `bash` 在 execute 入口强制默认
    `300s`、上限 `1800s`。缺省或非正数用默认;大于上限或非有限数字 fail-fast(参数错误,
    不是 `Command timed out`);合法秒数原样交给 Pi 原生执行器。不另起 timer / AbortController。

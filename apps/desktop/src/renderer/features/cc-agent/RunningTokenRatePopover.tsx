@@ -22,7 +22,7 @@ export function useRunningTokenRateHistory(input: {
   outputTokens: number;
   generationDurationMs: number;
   generationReliable: boolean;
-  /** Host-measured speed (Pi extension algorithm); old hosts omit it. */
+  /** Host-measured speed; old hosts omit it. */
   tokenSpeed?: TokenSpeedSnapshot;
 }) {
   const { sessionKey, startedAt, outputTokens, generationDurationMs, generationReliable, tokenSpeed } = input;

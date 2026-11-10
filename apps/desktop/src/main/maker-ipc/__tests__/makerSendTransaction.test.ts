@@ -41,7 +41,7 @@ import ts from 'typescript';
 import { createWorkingDirectoryRecovery } from '../workingDirectoryRecovery';
 import { createPreflightHarness, filesystemError } from './helpers/workingDirectoryPreflightHarness';
 import { buildCindyMakeTaskNote } from '../../cindy-make/taskNote';
-import { getResolvedMainLocale } from '../../i18n';
+import { getResolvedMainLocale } from '../../i18n.desktop';
 import { buildMobileClientPromptNote } from '../mobileClientPromptNote';
 import { buildUiLanguageErrorNote } from '../uiLanguageErrorNote';
 import * as mcpApps from '../../mcp-apps/runtime.js';
@@ -92,6 +92,31 @@ describe('local application task takeover', () => {
       expect(replacement.send).toHaveBeenCalledOnce();
     }
     expect(session.send).not.toHaveBeenCalled();
+  });
+});
+
+describe('project resource drift recycling', () => {
+  function driftDeps() {
+    const { deps, session } = createDeps();
+    const live = createSession({ hasRecyclableProjectResourceDrift: () => true });
+    deps.getSession = () => live;
+    return { deps, live, session };
+  }
+
+  it('recycles a drifted live runtime when createOpts allows lazy rebuild', async () => {
+    const { deps, live } = driftDeps();
+    await createMakerSendTransaction(deps).sendToAgentAccepted(
+      'session-1', 'hello', { id: 'session-1', agentKind: 'pi', workingDir: 'C:\\repo' });
+    expect(deps.closeSessionIfCurrent).toHaveBeenCalledWith('session-1');
+    expect(live.send).not.toHaveBeenCalled();
+  });
+
+  it('keeps the live-send path when no createOpts can rebuild the runtime', async () => {
+    const { deps, live } = driftDeps();
+    // 直发/老链路无 createOpts:回收后 lazy-create 无法重建,按原运行时投递
+    await createMakerSendTransaction(deps).sendToAgentAccepted('session-1', 'hello');
+    expect(deps.closeSessionIfCurrent).not.toHaveBeenCalled();
+    expect(live.send).toHaveBeenCalledOnce();
   });
 });
 describe('MCP App next-turn context', () => {
@@ -299,6 +324,7 @@ function createDeps(overrides: Partial<MakerSendTransactionDeps> = {}) {
     readScheduledPermissions: vi.fn(async () => ({ permissionMode: 'ask', planModeEnabled: false })),
     getSession: vi.fn((sessionId: string) => (sessionId === session.id ? session : undefined)),
     closeSession: vi.fn(async () => {}),
+    closeSessionIfCurrent: vi.fn(async () => {}),
     preflightBotRuntimeResources: vi.fn(async () => {}),
     getSessionMeta: vi.fn(async () => ({ title: '现有会话' })),
     ensureRemoteReadyForSessionStart: vi.fn(async () => {}),
@@ -2830,6 +2856,50 @@ describe('maker SEND transaction', () => {
     expect(deps.markOrcaRoleIfNeeded).toHaveBeenCalledWith('orca-session', 'lead');
     expect(oldSession.send).not.toHaveBeenCalled();
     expect(newSession.send).toHaveBeenCalled();
+  });
+
+  // Orca inter-agent delivery reaches an idle live session without sendToAgentAccepted;
+  // it uses this entry so a session that became a Lead after startup is rebuilt first.
+  it('rebuilds an idle live Orca session on request and leaves a hydrated one alone', async () => {
+    const oldSession = createSession({
+      id: 'orca-session',
+      workDir: 'C:\\repo',
+      hostStartupPreferences: { userPrompt: 'custom prompt', makerMemoryEnabled: false },
+    });
+    const newSession = createSession({ id: 'orca-session', workDir: 'C:\\repo' });
+    const hydrated = { current: false };
+    const { deps } = createDeps({
+      getSession: vi.fn(() => oldSession),
+      isOrcaMcpHydrated: vi.fn(() => hydrated.current),
+      synthesizeOrcaVendorOptionsFromDb: vi.fn(async () => true),
+      bootstrapSession: vi.fn(async () => {
+        hydrated.current = true;
+        return { session: newSession, didInjectOrcaInstructions: true, didInjectProjectContext: false };
+      }),
+    });
+    const transaction = createMakerSendTransaction(deps);
+    const createOpts: MakerSessionCreateOpts = {
+      id: 'orca-session',
+      agentKind: 'codex',
+      workingDir: 'C:\\repo',
+      model: 'gpt-5.4',
+      orcaRole: 'lead',
+    };
+
+    await expect(transaction.hydrateActiveOrcaSession('orca-session', createOpts)).resolves.toBe(true);
+    expect(deps.closeSession).toHaveBeenCalledTimes(1);
+    expect(deps.bootstrapSession).toHaveBeenCalledTimes(1);
+    // Startup preferences of the replaced runtime survive the rebuild.
+    expect(deps.bootstrapSession).toHaveBeenCalledWith(expect.objectContaining({
+      userPrompt: 'custom prompt',
+      makerMemoryEnabled: false,
+    }));
+    expect(deps.markOrcaRoleIfNeeded).toHaveBeenCalledWith('orca-session', 'lead');
+    expect(oldSession.send).not.toHaveBeenCalled();
+
+    await expect(transaction.hydrateActiveOrcaSession('orca-session', createOpts)).resolves.toBe(false);
+    expect(deps.closeSession).toHaveBeenCalledTimes(1);
+    expect(deps.bootstrapSession).toHaveBeenCalledTimes(1);
   });
 
   it('reconciles createOpts against DB before closing the old runtime on active Orca rehydrate (#2882)', async () => {

@@ -1,4 +1,5 @@
 import { findRemoteHistoryView } from '@/session/remoteHistoryViews';
+import { groupExecutionVisualFixture } from './groupExecutionVisualFixture';
 import { attachmentPreviewFixture } from "./attachmentPreviewFixture";
 import { githubPrVisualFixture } from './githubPrVisualFixture';
 import { groupMaskVisualFixture } from './groupMaskVisualFixture';
@@ -201,8 +202,9 @@ export function seedVisualMockStore(): void {
     remoteSessionStore.setPendingInteractions(session.id, visualMockPendingInteractions(session.id));
   }
   remoteSessionStore.setActiveSessionSnapshots(VISUAL_MOCK_DEVICE_ID, [
-    { sessionId: 'visual-running', isTurnRunning: true },
-    { sessionId: 'visual-automation-running', isTurnRunning: true },
+    { sessionId: 'visual-running', isTurnRunning: true, activityPhase: 'running', activityAttention: false },
+    { sessionId: 'visual-automation-running', isTurnRunning: true, activityPhase: 'running', activityAttention: false },
+    { sessionId: 'visual-pending', isTurnRunning: true, activityPhase: 'needs-interaction', activityAttention: true },
   ]);
   void loadVisualRealDataSnapshot().then((snapshot) => {
     seedRealDataStore(snapshot);
@@ -285,6 +287,8 @@ async function visualMockInvoke<T = unknown>(
   // Keep the real remote viewer in its initial waiting state for UI screenshots.
   // Only the __DEV__ mock provider reaches this; no computer is contacted.
   if (channel === 'device-link:remote-desktop:v1') return new Promise<T>(() => {});
+  const execution = groupExecutionVisualFixture(channel, args);
+  if (execution !== undefined) return execution as T;
   const github = githubPrVisualFixture(channel, args[0]);
   if (github !== undefined) return github as T;
   const mask = groupMaskVisualFixture(channel, args[0]);

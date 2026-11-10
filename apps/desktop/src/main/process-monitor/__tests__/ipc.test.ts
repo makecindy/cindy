@@ -1,4 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { EventEmitter } from 'node:events';
+import type { BrowserWindow, WebContents } from 'electron';
 
 const mocks = vi.hoisted(() => ({
   ipcHandle: vi.fn(),
@@ -32,6 +34,7 @@ import {
 } from '../../../shared/processMonitor.js';
 import { buildChildrenByParent, type OsProcessRow } from '../agent-scan.js';
 import { _resetProcessMonitorIpcForTests, registerProcessMonitorIpc } from '../ipc.js';
+import { ResourceUsageWindowController } from '../../resource-usage-window/controller.js';
 
 const SELF_PID = 4242;
 
@@ -128,6 +131,112 @@ describe('process monitor IPC authorization', () => {
     expect(sample).not.toHaveBeenCalled();
     expect(sender.once).toHaveBeenCalledOnce();
     expect(sender.send).not.toHaveBeenCalled();
+  });
+
+  // Unit regression for slow prewarm: drive the real controller and IPC handlers,
+  // not just a mocked gate. The missing case is subscribe arriving after timeout
+  // but before rendererReady. Verify delivered samples, single ticking and cleanup
+  // through late ready → first snapshot → open → close/reopen → dispose in flight.
+  // Single-file Vitest run: 1.78s (2026-11-10); OS sampling is injected, time is fake.
+  it('recovers a timed-out prewarm subscription without duplicate sampling or leaked timers', async () => {
+    vi.useFakeTimers();
+    let destroyed = false;
+    let visible = false;
+    const sender = Object.assign(new EventEmitter(), {
+      id: 1,
+      isDestroyed: () => destroyed,
+      send: vi.fn(),
+    });
+    const win = Object.assign(new EventEmitter(), {
+      webContents: sender,
+      isDestroyed: () => destroyed,
+      isVisible: () => visible,
+      isMinimized: () => false,
+      setTitle: vi.fn(),
+      focus: vi.fn(),
+      show: () => {
+        visible = true;
+        win.emit('show');
+      },
+      hide: () => {
+        visible = false;
+        win.emit('hide');
+      },
+      destroy: () => {
+        destroyed = true;
+        sender.emit('destroyed');
+        win.emit('closed');
+      },
+    });
+    const createWindow = vi.fn(() => win as unknown as BrowserWindow);
+    const mainSender = { id: 100 } as WebContents;
+    const resourceSender = sender as unknown as WebContents;
+    const controller = new ResourceUsageWindowController({
+      createWindow,
+      isOpenSender: (wc) => wc === mainSender,
+      resolveNativeTitle: () => 'Activity Monitor',
+      platform: 'linux',
+      prewarmTimeoutMs: 1000,
+    });
+    const snapshot = { capturedAtMs: 1, entries: [] };
+    const sample = vi.fn().mockResolvedValue(snapshot);
+    register({
+      sampler: { sample },
+      allowsSampling: (wc) => controller.allowsProcessMonitorSampling(wc),
+      sampleIntervalMs: 100,
+    });
+    const subscribe = () => handlerFor(PROCESS_MONITOR_SUBSCRIBE_CHANNEL)({ sender });
+    const unsubscribe = () => handlerFor(PROCESS_MONITOR_UNSUBSCRIBE_CHANNEL)({ sender });
+    const deliveredSamples = () =>
+      sender.send.mock.calls.filter(([channel]) => channel === PROCESS_MONITOR_SAMPLE_CHANNEL);
+    try {
+      controller.prewarm();
+      await vi.advanceTimersByTimeAsync(1000);
+      subscribe();
+      subscribe();
+      expect(sample).not.toHaveBeenCalled();
+      controller.markRendererReady(resourceSender);
+      await vi.advanceTimersByTimeAsync(100);
+      expect(deliveredSamples()).toEqual([[PROCESS_MONITOR_SAMPLE_CHANNEL, snapshot]]);
+      controller.markPresentationReady(resourceSender);
+      unsubscribe();
+      expect(visible).toBe(false);
+      expect(vi.getTimerCount()).toBe(0);
+
+      for (let opening = 0; opening < 2; opening += 1) {
+        const samplesBeforeOpen = sample.mock.calls.length;
+        controller.open(mainSender);
+        controller.open(mainSender);
+        subscribe();
+        subscribe();
+        await vi.advanceTimersByTimeAsync(100);
+        // One immediate sample and one interval tick, even with duplicate opens/subscribes.
+        expect(sample).toHaveBeenCalledTimes(samplesBeforeOpen + 2);
+        expect(deliveredSamples()).toHaveLength(samplesBeforeOpen + 2);
+        expect(visible).toBe(true);
+        controller.close(resourceSender);
+        unsubscribe();
+        expect(vi.getTimerCount()).toBe(0);
+        await vi.advanceTimersByTimeAsync(500);
+        expect(sample).toHaveBeenCalledTimes(samplesBeforeOpen + 2);
+      }
+
+      let finishSample!: (value: typeof snapshot) => void;
+      sample.mockImplementationOnce(() => new Promise((resolve) => { finishSample = resolve; }));
+      controller.open(mainSender);
+      subscribe();
+      const deliveredBeforeDispose = deliveredSamples().length;
+      controller.dispose();
+      finishSample(snapshot);
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(deliveredSamples()).toHaveLength(deliveredBeforeDispose);
+      expect(vi.getTimerCount()).toBe(0);
+      expect(sender.listenerCount('destroyed')).toBe(0);
+      expect(createWindow).toHaveBeenCalledOnce();
+    } finally {
+      controller.dispose();
+      vi.useRealTimers();
+    }
   });
 
   it('rechecks the Main sampling gate before each tick and before publishing', async () => {

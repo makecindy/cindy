@@ -32,7 +32,7 @@ import {
   resetGenericOAuthMemoryCache,
   runGenericOAuthLogin,
   type GenericOAuthStorage,
-} from '../generic-oauth.js';
+} from '../generic-oauth.desktop.js';
 import {
   buildRouteDecision,
   isHostInjectedAuthSession,
@@ -1017,7 +1017,7 @@ describe('close() 回执路径(裸 done 消除)', () => {
 
 describe('explicit provider metadata fields', () => {
   it('preserves false, empty efforts and null defaults without inventing a supplied name', async () => {
-    const { parseModelsListResponse } = await import('../generic-oauth.js');
+    const { parseModelsListResponse } = await import('../generic-oauth.desktop.js');
     expect(
       parseModelsListResponse({
         data: [

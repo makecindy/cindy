@@ -24,7 +24,7 @@ import type {
   TurnPermissionPolicy,
 } from '@cindy/maker-core';
 import type { ChannelIM } from '@cindy/im';
-import { setMainLocale } from '../../../i18n';
+import { setMainLocale } from '../../../i18n.desktop';
 import { createTelegramGuestTurnPermissionPolicy } from '../../telegram/permissionPolicy';
 import { createDingTalkTurnPermissionPolicy } from '../../dingtalk/permissionPolicy';
 import { createFeishuGroupTurnPermissionPolicy } from '../../feishu/permissionPolicy';
@@ -135,7 +135,7 @@ vi.mock('../../../goal-host/inactiveNote', () => ({
   peekGoalInactiveNote: mocks.peekGoalInactiveNote,
 }));
 
-vi.mock('../../../imageCacheStore', () => ({
+vi.mock('../../../imageCacheStore.desktop', () => ({
   resolveSafe: mocks.resolveXdtImageUrl,
 }));
 
@@ -365,6 +365,7 @@ function createMakerHarness(session: Session) {
   return {
     getSession: vi.fn(() => session),
     createSession: vi.fn(async () => session),
+    recyclePiRuntimeIfResourcesDrifted: vi.fn(async () => false),
     on: vi.fn((listener: (event: MakerEvent) => void) => {
       makerEventListeners.push(listener);
       return () => {
@@ -1440,6 +1441,7 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     let live: Session | undefined = oldSession.session;
     const maker = {
       createSession: vi.fn(async () => oldSession.session),
+      recyclePiRuntimeIfResourcesDrifted: vi.fn(async () => false),
       getSession: vi.fn(() => live),
       on: vi.fn((listener: (event: MakerEvent) => void) => {
         makerEventListeners.push(listener);
@@ -1940,6 +1942,7 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     let live: Session | undefined = oldSession.session;
     const maker = {
       createSession: vi.fn(async () => oldSession.session),
+      recyclePiRuntimeIfResourcesDrifted: vi.fn(async () => false),
       getSession: vi.fn(() => live),
       on: vi.fn((listener: (event: MakerEvent) => void) => {
         makerEventListeners.push(listener);
@@ -1997,6 +2000,7 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
       let live: Session | undefined = oldSession.session;
       const maker = {
         createSession: vi.fn(async () => oldSession.session),
+      recyclePiRuntimeIfResourcesDrifted: vi.fn(async () => false),
         getSession: vi.fn(() => live),
         on: vi.fn((listener: (event: MakerEvent) => void) => {
           makerEventListeners.push(listener);
@@ -2097,6 +2101,7 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
       let live: Session | undefined = oldSession.session;
       mocks.getMaker.mockReturnValue({
         createSession: vi.fn(async () => oldSession.session),
+      recyclePiRuntimeIfResourcesDrifted: vi.fn(async () => false),
         getSession: vi.fn(() => live),
         on: vi.fn((listener: (event: MakerEvent) => void) => {
           makerEventListeners.push(listener);
@@ -2166,6 +2171,7 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     const releaseLock = vi.fn();
     mocks.getMaker.mockReturnValue({
       createSession: vi.fn(async () => oldSession.session),
+      recyclePiRuntimeIfResourcesDrifted: vi.fn(async () => false),
       getSession: vi.fn(() => live),
       on: vi.fn((listener: (event: MakerEvent) => void) => {
         makerEventListeners.push(listener);
@@ -2247,6 +2253,7 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     let live: Session | undefined = oldSession.session;
     const maker = {
       createSession: vi.fn(async () => oldSession.session),
+      recyclePiRuntimeIfResourcesDrifted: vi.fn(async () => false),
       getSession: vi.fn(() => live),
       on: vi.fn((listener: (event: MakerEvent) => void) => {
         makerEventListeners.push(listener);
@@ -3691,6 +3698,29 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     expect(finalView).not.toContain('tok/s');
   });
 
+  // Rule: a completed card-channel turn hands its process record to the channel next to a
+  // clean answer; the process region used to be dropped at done, leaving nothing to review.
+  // Production entry: agent events -> turnRunner -> StreamingTextHandle.finalize.
+  // Coverage gap: completion tests only pinned the body; error closure keeps the process
+  // inside the text (covered above). Minimal input: one tool step, then text, then done.
+  it('finalizes a completed turn with a clean answer and its process record', async () => {
+    const handle = { messageId: 'stream-record', append: vi.fn(), replace: vi.fn(), finalize: vi.fn(), close: vi.fn() };
+    mocks.feishuIm.startStreamingText.mockResolvedValue(handle);
+    const h = setupSession(async () => ({ accepted: true }));
+    await runDefaultTurn();
+
+    h.emit({ type: 'tool_use', data: { toolName: 'Read', toolUseId: 'r1', input: { file_path: '/x/a.ts' } } });
+    h.emit({ type: 'text', data: { text: '结论', isFinal: true } });
+    await flushMicrotasks();
+    h.emit({ type: 'done', data: {} });
+
+    await waitForAssertion(() => expect(handle.finalize).toHaveBeenCalledTimes(1));
+    const [body, options] = handle.finalize.mock.calls[0];
+    expect(body).toBe('结论');
+    expect(options.process.title).toMatch(/^过程记录 · 1 项 · /);
+    expect(options.process.lines).toEqual(['✓ 读取 a.ts']);
+  });
+
   it('keeps streaming resumed-turn output into the same turn after a silentStop resume', async () => {
     const handle = {
       messageId: 'stream-resume',
@@ -4842,6 +4872,7 @@ describe('初始流式输出面创建失败的收口降级(#2164)', () => {
       let wired = false;
       return {
         getSession: vi.fn(() => (wired ? session : undefined)),
+        recyclePiRuntimeIfResourcesDrifted: vi.fn(async () => false),
         createSession: vi.fn(async () => {
           order.push('wire');
           wired = true;

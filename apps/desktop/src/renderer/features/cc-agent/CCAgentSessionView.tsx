@@ -154,7 +154,7 @@ import { UnreadFailedScheduleBanner } from '@/components/chat/UnreadFailedSchedu
 import { useReadFailedScheduleRuns } from '@/features/scheduler/hooks/useReadFailedScheduleRuns';
 import { useAutomationScheduleSessionInfo } from './hooks/useAutomationScheduleSessionIndex';
 import { markScheduleRunsReadAndSync } from '../scheduler/lib/scheduleRunReadSync';
-import { useBackgroundBashTasks } from '@/hooks/useBackgroundBashTasks';
+import { countWorkingBashTasks, useBackgroundBashTasks } from '@/hooks/useBackgroundBashTasks';
 import { useSessionBackgroundActivity } from '@/hooks/useSessionBackgroundActivity';
 import { useRemoteSessionBackgroundTasks } from '@/hooks/useRemoteSessionBackgroundTasks';
 import { workflowAgentVisualState } from '@/features/right-sidebar/plugins/background-tasks/workflowProgressModel';
@@ -1447,7 +1447,7 @@ function CCAgentSessionContent({
     }
   }, [session?.status, sessionId, navigate, ownsWindowRoute]);
   const vendorAuthGate = useVendorAuthGate();
-  const { confirmWithCheckbox } = useConfirmDialog();
+  const { confirm: confirmRebalance } = useConfirmDialog();
   const [workerRouteChecked, setWorkerRouteChecked] = useState<string | null>(null);
 
   useEffect(() => {
@@ -1904,6 +1904,8 @@ function CCAgentSessionContent({
     pendingPermission,
     respondToPermission,
     pendingAskUser,
+    pendingAskUserQueue,
+    selectAskUserQuestion,
     answerUserQuestion,
     pendingPluginSetup,
     pluginSetupViewerState,
@@ -4315,7 +4317,7 @@ function CCAgentSessionContent({
         recordRebalance = await offerSessionRebalance({
           sessionId,
           ...(remoteDeviceId ? { hostDeviceId: remoteDeviceId } : {}),
-          confirmWithCheckbox,
+          confirm: confirmRebalance,
           t,
         });
       }
@@ -4421,7 +4423,7 @@ function CCAgentSessionContent({
       vendorAuthGate,
       displayAgentKind,
       agentSwitchIntent,
-      confirmWithCheckbox,
+      confirmRebalance,
       remoteDeviceId,
       sessionHandoffPreparing,
       cindyMakeInputLocked,
@@ -5891,6 +5893,10 @@ function CCAgentSessionContent({
                   backgroundBashOnlyCount={
                     backgroundModelActive ? 0 : backgroundBashTasks.length
                   }
+                  // 其中仍在工作(会自己结束)的命令数;只剩长驻服务时换成静态的服务文案。
+                  backgroundBashWorkCount={
+                    backgroundModelActive ? 0 : countWorkingBashTasks(backgroundBashTasks)
+                  }
                   backgroundStopping={
                     backgroundActivity.stopping ||
                     backgroundBash.stopping ||
@@ -6073,6 +6079,8 @@ function CCAgentSessionContent({
                     workingDir={session?.workingDir ?? ''}
                     remoteHostId={session?.remoteHostId}
                     pending={pendingAskUser}
+                    pendingQuestions={pendingAskUserQueue}
+                    onSelectQuestion={selectAskUserQuestion}
                     onAnswer={answerUserQuestion}
                     viewerState={askUserViewerState}
                     onViewerStateChange={setAskUserViewerState}
@@ -6430,8 +6438,8 @@ function CCAgentSessionContent({
                     </WorkingDirectoryTip>
                   )}
 
-                  {/* Right: Context capacity indicator */}
-                  <div className="flex shrink-0 items-center gap-3">
+                  {/* Right: quota segments may wrap before the context indicator. */}
+                  <div className="flex min-w-0 max-w-full items-center gap-3">
                     {session?.usedProjectContext && (
                       <Tip text={t('ccAgent.layout.projectContextLoaded')} side="top">
                         <Brain
@@ -6675,6 +6683,7 @@ function RunningStatusBar({
   backgroundTasksRunning = false,
   workflowStatus,
   backgroundBashOnlyCount = 0,
+  backgroundBashWorkCount = backgroundBashOnlyCount,
   backgroundStopping = false,
   onStopBackgroundTasks,
   rightLeadingSlot = null,
@@ -6716,6 +6725,12 @@ function RunningStatusBar({
    * (不关常驻子进程)。0 = 维持原「仍在调模型」文案与止损语义。
    */
   backgroundBashOnlyCount?: number;
+  /**
+   * backgroundBashOnlyCount 里仍在工作的命令数(跑测试、构建等会自己结束的命令)。>0 用
+   * 「正在后台工作」文案并保留呼吸;为 0 说明只剩长驻服务(本地预览服务等),任务已做完,
+   * 换成静态的「后台服务运行中」。缺省 = 全部按工作算。
+   */
+  backgroundBashWorkCount?: number;
   /** 全停请求在飞(按钮禁用,防连点)。 */
   backgroundStopping?: boolean;
   /** 「全部停止」入口(关闭常驻 CC 子进程,会话可续)。 */
@@ -6788,9 +6803,14 @@ function RunningStatusBar({
     workflowStatus ??
     (backgroundTasksRunning
       ? backgroundBashOnlyCount > 0
-        ? t('chat.backgroundActivity.bashStatus', { count: backgroundBashOnlyCount })
+        ? backgroundBashWorkCount > 0
+          ? t('chat.backgroundActivity.bashWorkStatus', { count: backgroundBashWorkCount })
+          : t('chat.backgroundActivity.bashServiceStatus', { count: backgroundBashOnlyCount })
         : t('chat.backgroundActivity.status')
       : localizeAgentStatus(status, t));
+  // 只剩长驻服务:任务已经做完,不再呼吸,免得看起来还在干活。
+  const backgroundServiceOnly =
+    backgroundTasksRunning && backgroundBashOnlyCount > 0 && backgroundBashWorkCount === 0;
   // F-COMPACT-1: when SDK is auto-summarizing the conversation, give the
   // status bar a distinct icon so the user can tell "Compacting..." apart
   // from "Thinking..." — both share the shimmer animation by design, but
@@ -6938,7 +6958,13 @@ function RunningStatusBar({
           // - done 是 0.4s 一次性 pop(keyframe 已去掉 opacity、只动 transform)，turn
           //   结束那一刻(isDone 必伴随 !visible)要弹一下，故保持 !isHidden gate;
           //   不动 opacity 所以不会盖 fade。
-          isHidden ? '' : isDone ? 'status-bar-done' : visible && !reconnecting ? 'status-bar-shimmer' : '',
+          isHidden
+            ? ''
+            : isDone
+              ? 'status-bar-done'
+              : visible && !reconnecting && !backgroundServiceOnly
+                ? 'status-bar-shimmer'
+                : '',
         )}
         style={fadeStyle}
         aria-hidden={isHidden}
