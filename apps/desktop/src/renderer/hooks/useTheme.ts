@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useReducer, useState } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { createElement, type ReactNode } from 'react';
 
 import {
@@ -8,8 +8,9 @@ import {
   tryGetFamily,
 } from '../themes/families';
 import { onLocalThemesChange } from '../themes/local-themes';
-import { themeService } from '../themes/theme-service';
+import { presentTheme } from '../appearance/AppearancePresenter';
 import type { ThemeType } from '../themes/types';
+import { parseThemeSelection, type ThemeSelection } from '../../shared/appearanceDefinition';
 
 export type Theme = 'system' | 'light' | 'dark';
 
@@ -28,8 +29,7 @@ interface ThemeContextValue {
 const STORAGE_KEY = 'theme';
 const FAMILY_KEY = 'theme.familyId';
 const LOGIN_FIRST_LAUNCH_KEY = 'login.firstLaunchLightShown';
-// Legacy keys (旧版本两个独立 theme id): 读到后迁移到 FAMILY_KEY, 保留旧 key
-// 不清理 —— 避免用户回滚老版本时状态丢失。
+// Read-only upgrade sources. New selections are owned by the Host store.
 const LEGACY_LIGHT_ID_KEY = 'theme.lightId';
 const LEGACY_DARK_ID_KEY = 'theme.darkId';
 const PREFERS_DARK_QUERY = '(prefers-color-scheme: dark)';
@@ -43,17 +43,42 @@ export function resolveIsDark(theme: Theme): boolean {
 }
 
 const ThemeContext = createContext<ThemeContextValue | undefined>(undefined);
+let legacySelection: ThemeSelection | undefined;
+let themeMigration: Promise<boolean> | undefined;
+
+function hostSelection(): ThemeSelection | null {
+  return parseThemeSelection(window.electronAPI?.appearanceSettings?.getSync?.()?.themeSelection);
+}
+
+function readLegacySelectionOnce(): ThemeSelection {
+  if (legacySelection) return legacySelection;
+  let mode: Theme = 'system', familyId = DEFAULT_FAMILY_ID;
+  try {
+    const storedMode = localStorage.getItem(STORAGE_KEY);
+    if (storedMode === 'light' || storedMode === 'dark' || storedMode === 'system') mode = storedMode;
+    const storedFamily = localStorage.getItem(FAMILY_KEY);
+    if (storedFamily?.trim() && storedFamily.length <= 512) familyId = storedFamily;
+    else familyId = findFamilyByThemeId(localStorage.getItem(LEGACY_DARK_ID_KEY))?.id ??
+      findFamilyByThemeId(localStorage.getItem(LEGACY_LIGHT_ID_KEY))?.id ?? DEFAULT_FAMILY_ID;
+  } catch { /* Preserve the in-memory choice if renderer storage is unavailable. */ }
+  legacySelection = { mode, familyId };
+  return legacySelection;
+}
+
+/** Called before React's first render. Failure retains old bytes and this session's choice. */
+export async function migrateStoredThemeSelection(): Promise<boolean> {
+  if (hostSelection()) return true;
+  const bridge = window.electronAPI?.appearanceSettings;
+  if (!bridge?.migrateTheme) return false;
+  themeMigration ??= bridge.migrateTheme(readLegacySelectionOnce()).then(settings => !!parseThemeSelection(settings.themeSelection)).catch(() => {
+    window.electronAPI?.logToMain?.('warn', 'renderer/appearance', 'Theme selection migration failed; saved selection retained');
+    return false;
+  });
+  return themeMigration;
+}
 
 export function getStoredTheme(): Theme {
-  try {
-    const stored = localStorage.getItem(STORAGE_KEY);
-    if (stored === 'light' || stored === 'dark' || stored === 'system') {
-      return stored;
-    }
-  } catch {
-    // localStorage may be unavailable
-  }
-  return 'system';
+  return (hostSelection() ?? readLegacySelectionOnce()).mode;
 }
 
 /**
@@ -61,37 +86,9 @@ export function getStoredTheme(): Theme {
  * 的家族 → light 旧值的家族 → null (调用方落到 DEFAULT_FAMILY_ID)。
  * 大部分用户主用深色, 所以 dark 优先。
  */
-function migrateLegacyThemeIds(): string | null {
-  try {
-    const darkLegacy = localStorage.getItem(LEGACY_DARK_ID_KEY);
-    const darkFamily = findFamilyByThemeId(darkLegacy);
-    if (darkFamily) return darkFamily.id;
-    const lightLegacy = localStorage.getItem(LEGACY_LIGHT_ID_KEY);
-    const lightFamily = findFamilyByThemeId(lightLegacy);
-    if (lightFamily) return lightFamily.id;
-  } catch {
-    // localStorage may be unavailable
-  }
-  return null;
-}
-
 export function getStoredFamilyId(): string {
-  try {
-    const stored = localStorage.getItem(FAMILY_KEY);
-    if (stored && tryGetFamily(stored)) return stored;
-  } catch {
-    // localStorage may be unavailable
-  }
-  const migrated = migrateLegacyThemeIds();
-  if (migrated) {
-    try {
-      localStorage.setItem(FAMILY_KEY, migrated);
-    } catch {
-      // localStorage may be unavailable
-    }
-    return migrated;
-  }
-  return DEFAULT_FAMILY_ID;
+  const stored = (hostSelection() ?? readLegacySelectionOnce()).familyId;
+  return tryGetFamily(stored) ? stored : DEFAULT_FAMILY_ID;
 }
 
 function resolveActiveTheme(mode: Theme) {
@@ -143,7 +140,7 @@ export function applyThemeClass(theme: Theme, force = false): void {
     disableTransitionsTemporarily();
   }
 
-  themeService.applyTheme(nextTheme);
+  presentTheme(nextTheme);
 }
 
 /** 无 ThemeProvider 的窗口用。 */
@@ -209,7 +206,7 @@ function initLoginFirstLaunchLightGate(): boolean {
     const hasShownMarker = localStorage.getItem(LOGIN_FIRST_LAUNCH_KEY) !== null;
     firstLaunchLightSession = decideLoginFirstLaunchLight({
       hasShownMarker,
-      rendererStorageEmpty: localStorage.length === 0,
+      rendererStorageEmpty: localStorage.length === 0 && !hostSelection(),
       mainHasPersistedSession: mainProcessHasPersistedSession(),
     });
     if (!hasShownMarker) {
@@ -249,6 +246,8 @@ export function endLoginFirstLaunchLightGate(): void {
 
 export function __resetLoginFirstLaunchLightGateForTest(): void {
   firstLaunchLightSession = null;
+  legacySelection = undefined;
+  themeMigration = undefined;
 }
 
 export function ThemeProvider({
@@ -267,48 +266,36 @@ export function ThemeProvider({
       : window.matchMedia(PREFERS_DARK_QUERY).matches,
   );
   // Invalidate memos that depend on family membership when local themes change.
-  // Read latest values from storage to avoid closure staleness races.
+  // The catalog and Host snapshot are rebuildable projections, never preference owners.
   const [localThemeRev, bumpLocalThemeRev] = useReducer((n: number) => n + 1, 0);
   useEffect(() => onLocalThemesChange(() => {
-    let rawFamily: string | null = null;
-    try { rawFamily = localStorage.getItem(FAMILY_KEY); } catch { /* ok */ }
-    if (rawFamily && !tryGetFamily(rawFamily)) {
-      const fallback = DEFAULT_FAMILY_ID;
-      setFamilyIdState(fallback);
-      try { localStorage.setItem(FAMILY_KEY, fallback); } catch { /* ok */ }
-    }
+    setFamilyIdState(getStoredFamilyId());
     bumpLocalThemeRev();
     applyThemeClass(getStoredTheme(), true);
   }), []);
 
-  const setTheme = useCallback((next: Theme) => {
-    setThemeState(next);
-    try {
-      localStorage.setItem(STORAGE_KEY, next);
-    } catch {
-      // localStorage may be unavailable
-    }
-    applyThemeClass(next);
+  const requestedSelection = useRef<ThemeSelection | undefined>(undefined);
+  const requestSelection = useCallback((patch: Partial<ThemeSelection>) => {
+    const bridge = window.electronAPI?.appearanceSettings;
+    if (!bridge?.selectTheme) return;
+    const next = { ...(requestedSelection.current ?? hostSelection() ?? readLegacySelectionOnce()), ...patch };
+    requestedSelection.current = next;
+    void bridge.selectTheme(next).catch(() => {
+      window.electronAPI?.logToMain?.('warn', 'renderer/appearance', 'Theme selection write failed; saved selection retained');
+    }).finally(() => { if (requestedSelection.current === next) requestedSelection.current = undefined; });
   }, []);
+
+  const setTheme = useCallback((next: Theme) => requestSelection({ mode: next }), [requestSelection]);
 
   const setFamily = useCallback(
     (next: string) => {
       if (!tryGetFamily(next)) return;
-      setFamilyIdState(next);
-      try {
-        localStorage.setItem(FAMILY_KEY, next);
-      } catch {
-        // localStorage may be unavailable
-      }
-      // 本地主题可在 ID 不变时刷新配置，必须重新 apply 才会更新 CSS 与品牌素材订阅者。
-      applyThemeClass(theme, true);
+      requestSelection({ familyId: next });
     },
-    [theme],
+    [requestSelection],
   );
 
-  // setFamily / setTheme 各自已经调过 applyThemeClass; 这个 effect 只处理
-  // 初始挂载和 mode 变化 (setTheme 内部 set state 之后这里再跑一次也无害, 因为
-  // applyThemeClass 内部对相同结果做了 dataset 对比短路)。
+  // 初始挂载和宿主 mode 推送都从同一快照应用；相同投影由 dataset 比较短路。
   useEffect(() => {
     applyThemeClass(theme);
   }, [theme]);
@@ -336,32 +323,20 @@ export function ThemeProvider({
     };
   }, [theme]);
 
-  // 跨窗口主题同步:其他窗口切 theme/familyId 时(localStorage storage 事件,
-  // 本窗口 setItem 不触发 storage)刷新本窗口 state + 重应用主题,否则已打开的
-  // sidebar-window/副窗在主窗切 CINDY/亮暗时不跟随(B 实证 bug,计划 D2-3)。
+  // Cross-window synchronization consumes the same Host appearance publication.
   useEffect(() => {
-    const onStorage = (e: StorageEvent) => {
-      if (e.key === STORAGE_KEY) {
-        const next = e.newValue;
-        if (next === 'light' || next === 'dark' || next === 'system') {
-          setThemeState(next);
-          applyThemeClass(next);
-        }
-      } else if (e.key === FAMILY_KEY) {
-        const next = e.newValue;
-        if (next && tryGetFamily(next)) {
-          setFamilyIdState(next);
-          applyThemeClass(getStoredTheme());
-        }
-      }
-    };
-    window.addEventListener('storage', onStorage);
-    return () => window.removeEventListener('storage', onStorage);
+    return window.electronAPI?.appearanceSettings?.onChanged?.(settings => {
+      const next = parseThemeSelection(settings.themeSelection);
+      if (!next) return;
+      setThemeState(next.mode);
+      setFamilyIdState(tryGetFamily(next.familyId) ? next.familyId : DEFAULT_FAMILY_ID);
+      applyThemeClass(next.mode, true);
+    });
   }, []);
 
   // E4D 毛玻璃(R1 audit,用户裁决透壁纸 2026-07-17):family/theme 变化或 mount 时
   // 通知 main 开关 macOS vibrancy(仅 CINDY family 启用,其他恢复不透明)。覆盖
-  // setFamily/storage 跨窗口同步/mount 三个场景(任一变化都重应用)。
+  // setFamily/宿主跨窗口推送/mount 三个场景(任一变化都重应用)。
   useEffect(() => {
     if (!syncWindowVibrancy) return;
     const root = document.documentElement;

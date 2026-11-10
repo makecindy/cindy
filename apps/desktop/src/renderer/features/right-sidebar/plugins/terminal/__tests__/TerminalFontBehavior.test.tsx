@@ -15,6 +15,8 @@ vi.mock('react-i18next', () => ({
 }));
 
 import { TerminalTabBody } from '../TerminalTabBody';
+import { installAppearancePresenter } from '@/appearance/AppearancePresenter';
+import { applyFontSettings } from '@/hooks/useFontSettings';
 
 // Keep the pre-feature defaults literal: deriving these expectations from the
 // production constant would fail to catch an accidental change to old terminals.
@@ -224,6 +226,38 @@ afterEach(() => {
 });
 
 describe('TerminalTabBody terminal font preferences', () => {
+  // Complete-theme contract: xterm must measure only after the common presenter
+  // registers the packaged FontFace. Existing tests load system fonts only.
+  // Unit, real TerminalTabBody/presenter, deferred browser font decode.
+  it('waits for packaged terminal fonts before selecting and measuring them', async () => {
+    const family = `CindyTheme_${'b'.repeat(64)}`, decode = deferred<FontFace>();
+    let face!: FontFace;
+    vi.stubGlobal('FontFace', class {
+      constructor(public family: string) { face = this as unknown as FontFace; }
+      load = () => decode.promise;
+    });
+    const add = vi.fn();
+    Object.defineProperty(document, 'fonts', { configurable: true, value: { load: loadFonts, add, delete: vi.fn() } });
+    snapshot = { ...snapshot, terminalFamily: family, terminalSize: 17,
+      terminalFontResource: { family, reference: 'asset:terminal', hash: 'b'.repeat(64),
+        source: { themeId: 'theme', packageSha256: 'a'.repeat(64) } } };
+    Object.assign(api.appearanceSettings, { loadPluginFont: vi.fn(async () => ({ family, bytes: new ArrayBuffer(4) })) });
+    const release = installAppearancePresenter(applyFontSettings);
+    try {
+      const ctx = context();
+      render(<TerminalTabBody state={runningState} ctx={ctx} active />);
+      await flushWork();
+      const entry = entries.get(ctx.tabId)!;
+      expect(entry.terminal.options.fontFamily).toBe(ORIGINAL_FAMILY);
+      expect(loadFonts.mock.calls.some(([query]) => String(query).includes(family))).toBe(false);
+      await act(async () => { decode.resolve(face); }); await flushWork();
+      expect(add).toHaveBeenCalledWith(face);
+      expect(entry.terminal.options.fontFamily).toContain(family);
+      expect(entry.fitSamples.at(-1)).toMatchObject({ fontFamily: expect.stringContaining(family), fontSize: 17 });
+      expect(api.terminal.restart).not.toHaveBeenCalled();
+      expect(entry.terminal.open).toHaveBeenCalledOnce();
+    } finally { cleanup(); release(); }
+  });
   it('keeps the existing defaults and starts the PTY once without a settings provider', async () => {
     const ctx = context();
     entries.set(ctx.tabId, { ...makeEntry(), ptyAttached: false });

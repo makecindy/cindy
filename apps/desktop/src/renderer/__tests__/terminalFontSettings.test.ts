@@ -20,6 +20,14 @@ function installBridge(initial: AppearanceSettings) {
     snapshot = { ...snapshot, ...patch };
     onChanged?.(snapshot);
   });
+  const resetFields = vi.fn(async (fields: string[]) => {
+    for (const key of fields) {
+      if (key === 'terminalFamily') snapshot = { ...snapshot, terminalFamily: initial.terminalFamily };
+      if (key === 'terminalSize') snapshot = { ...snapshot, terminalSize: initial.terminalSize };
+    }
+    onChanged?.(snapshot);
+    return snapshot;
+  });
   const logToMain = vi.fn();
   Object.defineProperty(window, 'electronAPI', {
     configurable: true,
@@ -27,6 +35,7 @@ function installBridge(initial: AppearanceSettings) {
       appearanceSettings: {
         getSync: () => snapshot,
         setPatch,
+        resetFields,
         onChanged: vi.fn((callback: typeof onChanged) => {
           onChanged = callback;
           return () => {
@@ -39,6 +48,7 @@ function installBridge(initial: AppearanceSettings) {
   });
   return {
     setPatch,
+    resetFields,
     logToMain,
     broadcast: (next: Partial<AppearanceSettings>) => {
       snapshot = { ...snapshot, ...next };
@@ -103,12 +113,13 @@ describe('terminal font settings isolation', () => {
     expect(result.current.codeSize).toBe(18);
 
     act(() => result.current.resetTerminalFamily());
-    await waitFor(() => expect(bridge.setPatch).toHaveBeenCalledTimes(3));
-    expect(bridge.setPatch).toHaveBeenLastCalledWith({ terminalFamily: '' });
+    await waitFor(() => expect(bridge.resetFields).toHaveBeenCalledTimes(1));
+    expect(bridge.resetFields).toHaveBeenLastCalledWith(['terminalFamily', 'terminalFontResource']);
     expect(result.current.terminalSize).toBe(20);
     act(() => result.current.resetTerminalSize());
-    await waitFor(() => expect(bridge.setPatch).toHaveBeenCalledTimes(4));
-    expect(bridge.setPatch).toHaveBeenLastCalledWith({ terminalSize: 13 });
+    await waitFor(() => expect(bridge.resetFields).toHaveBeenCalledTimes(2));
+    expect(bridge.resetFields).toHaveBeenLastCalledWith(['terminalSize']);
+    expect(bridge.setPatch).toHaveBeenCalledTimes(2);
     expect(result.current.terminalFamily).toBe('');
     expect(result.current.terminalSize).toBe(13);
     expect([document.documentElement.style.cssText, document.body.style.cssText]).toEqual(

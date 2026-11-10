@@ -261,4 +261,34 @@ describe('font settings', () => {
       });
     }
   });
+
+  // Unit, real provider: a theme's terminal family/size differ from built-ins.
+  // Existing resets checked only static defaults and could silently mask themes.
+  it('resets only the chosen override and displays the effective theme font', async () => {
+    const originalElectronApi = window.electronAPI;
+    const setPatch = vi.fn();
+    let current = { uiSize: 18, terminalFamily: 'User Mono', terminalSize: 20 };
+    const resetFields = vi.fn(async (fields: string[]) => {
+      current = { ...current, ...(fields.includes('terminalFamily') ? { terminalFamily: 'Theme Mono' } : {}),
+        ...(fields.includes('terminalSize') ? { terminalSize: 16 } : {}) };
+      return current;
+    });
+    Object.defineProperty(window, 'electronAPI', { configurable: true, value: { appearanceSettings: {
+      getSync: () => current, onChanged: () => () => {}, setPatch, resetFields,
+    } } });
+    try {
+      const wrapper = ({ children }: { children: ReactNode }) => createElement(FontSettingsProvider, null, children);
+      const { result, unmount } = renderHook(() => useFontSettings(), { wrapper });
+      await act(async () => { result.current.resetTerminalFamily(); });
+      expect(resetFields).toHaveBeenLastCalledWith(['terminalFamily', 'terminalFontResource']);
+      expect(result.current).toMatchObject({ terminalFamily: 'Theme Mono', terminalSize: 20, uiSize: 18 });
+      await act(async () => { result.current.resetTerminalSize(); });
+      expect(resetFields).toHaveBeenLastCalledWith(['terminalSize']);
+      expect(result.current).toMatchObject({ terminalFamily: 'Theme Mono', terminalSize: 16, uiSize: 18 });
+      expect(setPatch).not.toHaveBeenCalled();
+      unmount();
+    } finally {
+      Object.defineProperty(window, 'electronAPI', { configurable: true, value: originalElectronApi });
+    }
+  });
 });

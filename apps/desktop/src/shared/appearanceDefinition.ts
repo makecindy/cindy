@@ -2,7 +2,7 @@ import { parsePluginAppearancePatch, type PluginAppearancePatch, type PluginAppe
 
 /** Data shared by theme defaults and the Host's fixed appearance capabilities. */
 export interface AppearanceDefinition extends Omit<PluginAppearancePatch, 'theme'> {
-  terminalFont?: PluginAppearanceFont;
+  terminalFont?: Omit<PluginAppearanceFont, 'weight' | 'style'>;
   /** Multiplier for the existing spacing tokens. */
   density?: number;
   /** Multiplier for motion durations; zero requests reduced motion. */
@@ -43,7 +43,7 @@ export function parseAppearanceDefinition(raw: unknown): AppearanceDefinition | 
   const parsed = Object.keys(fixed).length ? parsePluginAppearancePatch(fixed) : {};
   if (!parsed || 'theme' in parsed) return null;
   const terminal = terminalFont === undefined ? undefined : parsePluginAppearancePatch({ codeFont: terminalFont })?.codeFont;
-  if (terminalFont !== undefined && !terminal) return null;
+  if (terminalFont !== undefined && (!terminal || terminal.weight !== undefined || terminal.style !== undefined)) return null;
   if (density !== undefined && (typeof density !== 'number' || !Number.isFinite(density) || density < 0.75 || density > 1.25)) return null;
   if (motion !== undefined && (typeof motion !== 'number' || !Number.isFinite(motion) || motion < 0 || motion > 2)) return null;
   const result: AppearanceDefinition = { ...parsed, ...(terminal ? { terminalFont: terminal } : {}),

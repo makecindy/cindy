@@ -31,7 +31,7 @@ export class AppearanceService {
     const defaults = this.defaults(raw.value.themeSelection);
     const overrides = Object.fromEntries(raw.customizedKeys.filter(key => raw.value[key as keyof AppearanceSettings] !== undefined).map(key => [key, raw.value[key as keyof AppearanceSettings]]));
     const value = normalizeAppearanceSettings({ ...defaults, ...overrides });
-    for (const key of ['bodyFont', 'reading', 'contentStyle', 'uiFontTraits', 'codeFontTraits', 'terminalFontTraits'] as const) {
+    for (const key of ['bodyFont', 'reading', 'contentStyle', 'uiFontTraits', 'codeFontTraits'] as const) {
       if (defaults[key] && value[key]) Object.assign(value, { [key]: { ...defaults[key], ...value[key] } });
     }
     for (const prefix of ['ui', 'code', 'terminal'] as const) {

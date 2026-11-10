@@ -23,9 +23,10 @@ import {
 import { LocaleProvider } from './hooks/useLocale';
 import {
   getInitialThemeVariant,
+  migrateStoredThemeSelection,
   ThemeProvider,
 } from './hooks/useTheme';
-import { applyFontSettings, getInitialFontSettings } from './hooks/useFontSettings';
+import { applyFontSettings } from './hooks/useFontSettings';
 import { ConfirmDialogProvider } from './components/ui/confirm-dialog-provider';
 import { bootstrapChatEmbeddingFromMain } from './lib/chatEmbeddingStore';
 import { bootstrapGitSafetySettingsFromMain } from './lib/gitSafetySettingsStore';
@@ -44,7 +45,7 @@ import { installSwallowActivationClick } from './lib/swallowActivationClick';
 import { installEarlyKeyDownCapture } from './lib/earlyKeyDownCapture';
 import { getSwallowActivationClickEnabled } from './hooks/useSwallowActivationClickSettings';
 import { bootstrapLocalThemesSync } from './themes/local-themes';
-import { themeService } from './themes/theme-service';
+import { installAppearancePresenter, presentTheme } from './appearance/AppearancePresenter';
 import './styles/globals.css';
 import './styles/sortable.css';
 
@@ -75,8 +76,6 @@ const isVoiceInputDictionaryToast = view === 'voice-input-dictionary-toast';
 const isComputerPermissionGuide = view === 'computer-permission-guide';
 const isComputerPermissionBackdrop = view === 'computer-permission-backdrop';
 const isComputerPermissionView = isComputerPermissionGuide || isComputerPermissionBackdrop;
-const isAppearanceUtilityView =
-  isVoiceInputOverlay || isVoiceInputDictionaryToast || isComputerPermissionView;
 document.documentElement.dataset.platform = window.electronAPI.platform;
 document.documentElement.dataset.windowBackdropMaterial =
   window.electronAPI.windowBackdropMaterial ?? 'none';
@@ -132,12 +131,7 @@ if (import.meta.env.DEV) {
 }
 
 bootstrapLocalThemesSync();
-themeService.applyTheme(getInitialThemeVariant().theme);
-applyFontSettings(getInitialFontSettings());
-const disposeUtilityAppearanceSettingsSync = isAppearanceUtilityView
-  ? (window.electronAPI.appearanceSettings?.onChanged?.(applyFontSettings) ?? (() => {}))
-  : (): void => {};
-import.meta.hot?.dispose(disposeUtilityAppearanceSettingsSync);
+presentTheme(getInitialThemeVariant().theme);
 
 const rootElement = document.getElementById('root');
 if (!rootElement) {
@@ -146,6 +140,10 @@ if (!rootElement) {
 const root = createRoot(rootElement);
 
 void (async () => {
+  await migrateStoredThemeSelection();
+  presentTheme(getInitialThemeVariant().theme);
+  const disposeAppearancePresenter = installAppearancePresenter(applyFontSettings);
+  import.meta.hot?.dispose(disposeAppearancePresenter);
   if (isComputerPermissionBackdrop) {
     const { ComputerPermissionBackdrop } = await import(
       './components/settings/ComputerPermissionGuideWindow'

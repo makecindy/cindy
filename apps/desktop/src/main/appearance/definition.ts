@@ -1,11 +1,19 @@
-import type { PluginAppearancePatch } from '@cindy/plugin-protocol/appearance';
+import type { PluginAppearanceFont, PluginAppearancePatch } from '@cindy/plugin-protocol/appearance';
 import type { AppearanceDefinition } from '../../shared/appearanceDefinition.js';
 import type { AppearanceOverrides } from '../../shared/appearanceSettings.js';
 import type { AppearanceFontResource } from '../../shared/pluginAppearance.js';
 
 export const APPEARANCE_FONT_ROLES = ['uiFont', 'codeFont', 'bodyFont', 'terminalFont'] as const;
 export type AppearanceFontRole = typeof APPEARANCE_FONT_ROLES[number];
-export const APPEARANCE_RESET_FIELDS = [...APPEARANCE_FONT_ROLES, 'wallpaper', 'theme', 'reading', 'contentStyle', 'density', 'motion'] as const;
+const resetKeys: Record<string, readonly (keyof AppearanceOverrides)[]> = {
+  uiFont: ['uiFamily', 'uiSize', 'uiFontResource', 'uiFontTraits'],
+  codeFont: ['codeFamily', 'codeSize', 'codeFontResource', 'codeFontTraits'],
+  bodyFont: ['bodyFont', 'bodyFontResource'],
+  terminalFont: ['terminalFamily', 'terminalSize', 'terminalFontResource'],
+  wallpaper: ['wallpaperId', 'wallpaperOverlay', 'wallpaperMotion', 'wallpaperVisibility', 'wallpaperBlur'],
+  theme: ['themeColors'], reading: ['reading'], contentStyle: ['contentStyle'], density: ['density'], motion: ['motion'],
+};
+export const APPEARANCE_RESET_FIELDS = [...new Set([...Object.keys(resetKeys), ...Object.values(resetKeys).flat(), 'desktopVisibility'])];
 
 /** One translation into the Host settings model for theme defaults and fixed writes. */
 export function appearanceDefinitionToOverrides(
@@ -15,7 +23,7 @@ export function appearanceDefinitionToOverrides(
 ): AppearanceOverrides {
   const next: AppearanceOverrides = {};
   for (const role of APPEARANCE_FONT_ROLES) {
-    const font = patch[role];
+    const font: PluginAppearanceFont | undefined = patch[role];
     if (!font) continue;
     const { resource: _reference, ...traits } = font; void _reference;
     const asset = assets[role];
@@ -28,7 +36,7 @@ export function appearanceDefinitionToOverrides(
       const resourceKey = `${role}Resource` as 'uiFontResource', traitsKey = `${role}Traits` as 'uiFontTraits';
       if (asset || font.family !== undefined) { next[familyKey] = asset?.family ?? font.family!; next[resourceKey] = asset; }
       if (font.size !== undefined) next[sizeKey] = font.size;
-      if (font.weight !== undefined || font.style !== undefined) next[traitsKey] = { ...current[traitsKey],
+      if (role !== 'terminalFont' && (font.weight !== undefined || font.style !== undefined)) next[traitsKey] = { ...current[traitsKey],
         ...(font.weight !== undefined ? { weight: font.weight } : {}), ...(font.style ? { style: font.style } : {}) };
     }
   }
@@ -51,14 +59,9 @@ export function appearanceDefinitionToOverrides(
 /** Removing overrides follows the active theme, rather than pinning old defaults. */
 export function appearanceResetPatch(fields: readonly string[]): AppearanceOverrides {
   const next: AppearanceOverrides = {};
-  const keys: Record<string, readonly (keyof AppearanceOverrides)[]> = {
-    uiFont: ['uiFamily', 'uiSize', 'uiFontResource', 'uiFontTraits'],
-    codeFont: ['codeFamily', 'codeSize', 'codeFontResource', 'codeFontTraits'],
-    bodyFont: ['bodyFont', 'bodyFontResource'],
-    terminalFont: ['terminalFamily', 'terminalSize', 'terminalFontResource', 'terminalFontTraits'],
-    wallpaper: ['wallpaperId', 'wallpaperOverlay', 'wallpaperMotion', 'wallpaperVisibility', 'wallpaperBlur'],
-    theme: ['themeColors'], reading: ['reading'], contentStyle: ['contentStyle'], density: ['density'], motion: ['motion'],
-  };
-  for (const field of fields) for (const key of keys[field] ?? []) Object.assign(next, { [key]: undefined });
+  for (const field of fields) {
+    if (!APPEARANCE_RESET_FIELDS.includes(field)) continue;
+    for (const key of resetKeys[field] ?? [field]) Object.assign(next, { [key]: undefined });
+  }
   return next;
 }

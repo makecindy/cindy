@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { applyPluginAppearance, applyPluginAppearanceInWindow, usePluginAppearance } from '../usePluginAppearance';
 import { normalizeAppearanceSettings } from '@/../shared/appearanceSettings';
 import { applyFontSettings } from '@/hooks/useFontSettings';
+import { installAppearancePresenter } from '@/appearance/AppearancePresenter';
 
 // Real preference consumer: scoped CSS, stale resource completion and no font/style
 // work for the default profile. FontFace replaces only the browser font loader.
@@ -93,7 +94,7 @@ describe('plugin appearance renderer', () => {
       await act(async () => {
         expect(await applyPluginAppearanceInWindow(settings)).toEqual({ status });
       });
-      expect(document.querySelector('[data-cindy-plugin-appearance]')).toBeNull();
+      expect(document.querySelector('[data-cindy-appearance]')).toBeNull();
       expect(observe).not.toHaveBeenCalled(); expect(loadPluginFont).not.toHaveBeenCalled();
     } finally { hook.unmount(); }
   });
@@ -136,7 +137,7 @@ describe('plugin appearance renderer', () => {
     const applyFonts = vi.fn();
     const hook = renderHook(() => usePluginAppearance(applyFonts));
     await act(async () => {});
-    expect(document.querySelector('[data-cindy-plugin-appearance]')).toBeNull();
+    expect(document.querySelector('[data-cindy-appearance]')).toBeNull();
     expect(observe).not.toHaveBeenCalled(); expect(loadPluginFont).not.toHaveBeenCalled();
     expect(applyFonts).not.toHaveBeenCalled(); hook.unmount();
   });
@@ -179,5 +180,38 @@ describe('plugin appearance renderer', () => {
       if (descriptor) Object.defineProperty(document, 'fonts', descriptor);
       else Reflect.deleteProperty(document, 'fonts');
     }
+  });
+
+  // Complete-theme contract: startup and React share one document presenter;
+  // density/motion derive from foundation tokens and restore without compounding.
+  // Unit, real installer + settings events, observing CSSOM and subscription lifecycle.
+  it('shares one presenter and applies then restores density and motion', async () => {
+    let current = normalizeAppearanceSettings({ density: 0.9, motion: 0.5 });
+    let publish!: (settings: typeof current) => void;
+    const unsubscribe = vi.fn(), subscribe = vi.fn((receive: typeof publish) => {
+      publish = receive; return unsubscribe;
+    });
+    window.electronAPI = { appearanceSettings: { getSync: () => current, onChanged: subscribe } } as unknown as typeof window.electronAPI;
+    const releaseStartup = installAppearancePresenter(applyFontSettings);
+    const releaseReact = installAppearancePresenter(applyFontSettings);
+    try {
+      expect(subscribe).toHaveBeenCalledTimes(1);
+      const style = () => document.querySelector<HTMLStyleElement>('[data-cindy-appearance]');
+      const spacing = () => (style()?.sheet?.cssRules[0] as CSSStyleRule).style.getPropertyValue('--space-2');
+      expect(spacing()).toBe('0.45rem');
+      const motion = style()!.sheet!.cssRules[1] as CSSMediaRule;
+      expect(motion.conditionText).toBe('(prefers-reduced-motion:no-preference)');
+      expect((motion.cssRules[0] as CSSStyleRule).style.getPropertyValue('--motion-fast')).toBe('75ms');
+      await act(async () => {
+        current = normalizeAppearanceSettings({ density: 0.8, motion: 0 }); publish(current);
+      });
+      expect(spacing()).toBe('0.4rem');
+      expect(document.documentElement.dataset.cindyReducedMotion).toBe('true');
+      await act(async () => { current = normalizeAppearanceSettings({}); publish(current); });
+      expect(style()).toBeNull();
+      expect(document.documentElement.dataset.cindyReducedMotion).toBeUndefined();
+      releaseStartup(); expect(unsubscribe).not.toHaveBeenCalled();
+      releaseReact(); expect(unsubscribe).toHaveBeenCalledTimes(1);
+    } finally { releaseStartup(); releaseReact(); }
   });
 });

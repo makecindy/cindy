@@ -224,6 +224,7 @@ describe('application wallpaper lifecycle', () => {
         customWallpaperUrl: `cindy-media://client-wallpaper/${'a'.repeat(64)}.${ext}`,
       };
       const setPatch = vi.fn().mockResolvedValue(undefined);
+      const resetFields = vi.fn().mockResolvedValue(DEFAULT_APPEARANCE_SETTINGS);
       vi.stubGlobal('electronAPI', {
         appearanceSettings: {
           getSync: () => initial,
@@ -232,6 +233,7 @@ describe('application wallpaper lifecycle', () => {
             return () => {};
           },
           setPatch,
+          resetFields,
         },
       });
       const { unmount } = render(
@@ -254,7 +256,7 @@ describe('application wallpaper lifecycle', () => {
       expect(root.style.getPropertyValue('--app-wallpaper-blur')).toBe('');
       fireEvent.click(screen.getByText('Reset'));
       await waitFor(() =>
-        expect(setPatch).toHaveBeenLastCalledWith(expect.objectContaining({ wallpaperBlur: null })),
+        expect(resetFields).toHaveBeenCalledExactlyOnceWith(['wallpaper', 'desktopVisibility']),
       );
       expect(root.dataset.wallpaperBlur).toBeUndefined();
       unmount();
@@ -482,12 +484,13 @@ describe('application wallpaper lifecycle', () => {
 
   it('applies another window’s settings and removes the image when that window disables it', () => {
     let changed: (value: typeof DEFAULT_APPEARANCE_SETTINGS) => void = () => {};
-    const unsubscribe = vi.fn();
+    const unsubscribes: ReturnType<typeof vi.fn>[] = [];
     vi.stubGlobal('electronAPI', {
       appearanceSettings: {
         getSync: () => ({ ...DEFAULT_APPEARANCE_SETTINGS, wallpaperId: 'cindy-studio' }),
         onChanged: (fn: typeof changed) => {
           changed = fn;
+          const unsubscribe = vi.fn(); unsubscribes.push(unsubscribe);
           return unsubscribe;
         },
       },
@@ -501,7 +504,7 @@ describe('application wallpaper lifecycle', () => {
     act(() => changed({ ...DEFAULT_APPEARANCE_SETTINGS }));
     expect(document.documentElement.dataset.wallpaperActive).toBeUndefined();
     unmount();
-    expect(unsubscribe).toHaveBeenCalledOnce();
+    for (const unsubscribe of unsubscribes) expect(unsubscribe).toHaveBeenCalledOnce();
   });
 
   it('rolls back the document background if saving the selection fails', async () => {
@@ -526,6 +529,7 @@ describe('application wallpaper lifecycle', () => {
   it('persists motion independently, follows other windows, and resets it with wallpaper', async () => {
     let changed: (value: typeof DEFAULT_APPEARANCE_SETTINGS) => void = () => {};
     const setPatch = vi.fn().mockResolvedValue(undefined);
+    const resetFields = vi.fn().mockResolvedValue(DEFAULT_APPEARANCE_SETTINGS);
     vi.stubGlobal('electronAPI', {
       appearanceSettings: {
         getSync: () => ({ ...DEFAULT_APPEARANCE_SETTINGS, wallpaperId: 'cindy-studio' }),
@@ -534,6 +538,7 @@ describe('application wallpaper lifecycle', () => {
           return () => {};
         },
         setPatch,
+        resetFields,
       },
     });
     render(
@@ -556,15 +561,29 @@ describe('application wallpaper lifecycle', () => {
     expect(screen.getByTestId('motion').textContent).toBe('static');
     fireEvent.click(screen.getByText('Animate'));
     fireEvent.click(screen.getByText('Reset'));
-    expect(screen.getByTestId('motion').textContent).toBe('static');
     await waitFor(() =>
-      expect(setPatch).toHaveBeenLastCalledWith(
-        expect.objectContaining({
-          wallpaperMotion: 'static',
-          wallpaperId: 'none',
-          wallpaperVisibility: null,
-        }),
-      ),
+      expect(resetFields).toHaveBeenCalledExactlyOnceWith(['wallpaper', 'desktopVisibility']),
     );
+    expect(screen.getByTestId('motion').textContent).toBe('static');
+    expect(document.documentElement.dataset.wallpaperActive).toBeUndefined();
+  });
+
+  // Full theme contract, unit with the real wallpaper provider: removing the
+  // user's wallpaper override reveals the theme's artwork, never a static none.
+  it('restores the active theme wallpaper from the shared owner on reset', async () => {
+    const theme = { ...DEFAULT_APPEARANCE_SETTINGS, wallpaperId: 'cindy-studio' as const,
+      wallpaperBlur: 6, wallpaperVisibility: 0.8 };
+    const resetFields = vi.fn().mockResolvedValue(theme);
+    const setPatch = vi.fn();
+    vi.stubGlobal('electronAPI', { appearanceSettings: {
+      getSync: () => DEFAULT_APPEARANCE_SETTINGS, onChanged: () => () => {}, resetFields, setPatch,
+    } });
+    render(<WallpaperSettingsProvider><Controls /></WallpaperSettingsProvider>);
+    await act(async () => { fireEvent.click(screen.getByText('Reset')); });
+    expect(resetFields).toHaveBeenCalledExactlyOnceWith(['wallpaper', 'desktopVisibility']);
+    expect(setPatch).not.toHaveBeenCalled();
+    expect(document.documentElement.style.getPropertyValue('--app-wallpaper-image')).toBe(getBuiltinWallpaperBackground('cindy-studio'));
+    expect(document.documentElement.style.getPropertyValue('--app-wallpaper-blur')).toBe('6px');
+    expect(screen.getByTestId('visibility').textContent).toBe('0.8');
   });
 });

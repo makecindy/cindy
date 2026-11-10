@@ -199,7 +199,7 @@ export function WallpaperSettingsProvider({
     };
   }, []);
 
-  const patch = useCallback((next: Partial<WallpaperSettings>) => {
+  const patch = useCallback((next: Partial<WallpaperSettings>, resetFields?: string[]) => {
     const merged = { ...settingsRef.current, ...next };
     settingsRef.current = merged;
     setSettings(merged);
@@ -212,8 +212,18 @@ export function WallpaperSettingsProvider({
       .catch(() => undefined)
       .then(async () => {
         try {
-          await bridge.setPatch(next);
+          const result = resetFields
+            ? await bridge.resetFields!(resetFields)
+            : await bridge.setPatch(next);
           pendingRef.current = pendingRef.current.filter((pending) => pending.id !== id);
+          if (result) {
+            confirmedRef.current = pickWallpaperSettings(normalizeAppearanceSettings(result));
+            const optimistic = pendingRef.current.reduce(
+              (current, pending) => ({ ...current, ...pending.patch }), confirmedRef.current,
+            );
+            settingsRef.current = optimistic;
+            setSettings(optimistic);
+          }
         } catch {
           pendingRef.current = pendingRef.current.filter((pending) => pending.id !== id);
           const optimistic = pendingRef.current.reduce(
@@ -268,14 +278,14 @@ export function WallpaperSettingsProvider({
   const resetWallpaper = useCallback(() => {
     setBlurPreview(null);
     setVisibilityPreview(null);
-    patch({
+    patch(getBridge() ? {} : {
       wallpaperId: DEFAULT_APPEARANCE_SETTINGS.wallpaperId,
       wallpaperOverlay: DEFAULT_APPEARANCE_SETTINGS.wallpaperOverlay,
       wallpaperVisibility: null,
       desktopVisibility: null,
       wallpaperBlur: null,
       wallpaperMotion: DEFAULT_APPEARANCE_SETTINGS.wallpaperMotion,
-    });
+    }, ['wallpaper', 'desktopVisibility']);
   }, [patch]);
 
   const value = useMemo<WallpaperSettingsContextValue>(

@@ -155,12 +155,6 @@ export function FontSettingsProvider({ children }: { children: ReactNode }) {
   const writeQueueRef = useRef<Promise<void>>(Promise.resolve());
   const nextRequestIdRef = useRef(0);
 
-  const { uiFamily, codeFamily, uiSize, codeSize } = settings;
-  useEffect(() => {
-    // Terminal appearance is applied to xterm only, never to the global UI/code tokens.
-    applyFontSettings({ uiFamily, codeFamily, uiSize, codeSize });
-  }, [uiFamily, codeFamily, uiSize, codeSize]);
-
   useEffect(() => {
     const bridge = getBridge();
     if (!bridge?.onChanged) return;
@@ -185,7 +179,7 @@ export function FontSettingsProvider({ children }: { children: ReactNode }) {
     });
   }, [applyPluginSettings]);
 
-  const patch = useCallback((next: Partial<ConfigurableFontSettings>) => {
+  const patch = useCallback((next: Partial<ConfigurableFontSettings>, resetFields?: string[]) => {
     const previous = settingsRef.current;
     const merged = { ...previous, ...next };
     const bridge = getBridge();
@@ -203,10 +197,21 @@ export function FontSettingsProvider({ children }: { children: ReactNode }) {
       .catch(() => undefined)
       .then(async () => {
         try {
-          await bridge.setPatch(next);
+          const result = resetFields
+            ? await bridge.resetFields!(resetFields)
+            : await bridge.setPatch(next);
           pendingWritesRef.current = pendingWritesRef.current.filter(
             (pending) => pending.id !== requestId,
           );
+          if (result) {
+            const confirmed = normalizeAppearanceSettings(result);
+            confirmedSettingsRef.current = confirmed;
+            const optimistic = pendingWritesRef.current.reduce(
+              (current, pending) => ({ ...current, ...pending.patch }), confirmed,
+            );
+            settingsRef.current = optimistic;
+            setSettings(optimistic);
+          }
         } catch (error: unknown) {
           window.electronAPI?.logToMain?.(
             'error',
@@ -250,15 +255,17 @@ export function FontSettingsProvider({ children }: { children: ReactNode }) {
     (size: number) => patch({ terminalSize: clampAppearanceTerminalSize(size) }),
     [patch],
   );
-  const resetTerminalFamily = useCallback(() => setTerminalFamily(''), [setTerminalFamily]);
-  const resetTerminalSize = useCallback(
-    () => setTerminalSize(DEFAULT_TERMINAL_FONT_SIZE),
-    [setTerminalSize],
-  );
-  const resetUiFamily = useCallback(() => setUiFamily(''), [setUiFamily]);
-  const resetCodeFamily = useCallback(() => setCodeFamily(''), [setCodeFamily]);
-  const resetUiSize = useCallback(() => setUiSize(DEFAULT_UI_FONT_SIZE), [setUiSize]);
-  const resetCodeSize = useCallback(() => setCodeSize(DEFAULT_CODE_FONT_SIZE), [setCodeSize]);
+  // Without a Host this is only a local preview. Persisted resets always delete
+  // named overrides and take their effective values from the common owner.
+  const reset = useCallback((fields: string[], preview: Partial<ConfigurableFontSettings>) => {
+    patch(getBridge() ? {} : preview, fields);
+  }, [patch]);
+  const resetTerminalFamily = useCallback(() => reset(['terminalFamily', 'terminalFontResource'], { terminalFamily: '' }), [reset]);
+  const resetTerminalSize = useCallback(() => reset(['terminalSize'], { terminalSize: DEFAULT_TERMINAL_FONT_SIZE }), [reset]);
+  const resetUiFamily = useCallback(() => reset(['uiFamily', 'uiFontResource'], { uiFamily: '' }), [reset]);
+  const resetCodeFamily = useCallback(() => reset(['codeFamily', 'codeFontResource'], { codeFamily: '' }), [reset]);
+  const resetUiSize = useCallback(() => reset(['uiSize'], { uiSize: DEFAULT_UI_FONT_SIZE }), [reset]);
+  const resetCodeSize = useCallback(() => reset(['codeSize'], { codeSize: DEFAULT_CODE_FONT_SIZE }), [reset]);
 
   const value = useMemo<FontSettingsContextValue>(
     () => ({

@@ -79,6 +79,20 @@ const persisted = {
 };
 
 describe('appearance settings IPC authorization', () => {
+  // Theme defaults must survive a single-row reset. Unit: the real trusted IPC
+  // deletes only the named overrides, while unknown or state-owner fields fail.
+  it('resets individual font and wallpaper overrides without pinning static defaults', async () => {
+    const handler = mocks.ipcHandle.mock.calls.find(([name]) => name === 'appearance-settings:reset-fields')![1];
+    mocks.writeAppearanceSettingsPatch.mockResolvedValue(persisted);
+    await expect(handler({}, ['terminalFamily', 'terminalFontResource'])).resolves.toEqual(persisted);
+    expect(mocks.writeAppearanceSettingsPatch).toHaveBeenCalledExactlyOnceWith({
+      terminalFamily: undefined, terminalFontResource: undefined,
+    });
+    for (const field of ['themeSelection', 'customWallpaperUrl', 'unknown']) {
+      await expect(handler({}, [field])).rejects.toThrow('Invalid appearance reset');
+    }
+    expect(mocks.writeAppearanceSettingsPatch).toHaveBeenCalledTimes(1);
+  });
   it.each(['select-theme', 'migrate-theme', 'reset-fields'])('keeps %s unavailable to untrusted windows', async channel => {
     mocks.assertTrustedAppRendererEvent.mockImplementation(() => { throw new Error('untrusted app renderer'); });
     const handler = mocks.ipcHandle.mock.calls.find(([name]) => name === `appearance-settings:${channel}`)?.[1];

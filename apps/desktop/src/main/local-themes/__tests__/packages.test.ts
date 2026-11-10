@@ -140,6 +140,8 @@ describe('theme package installation and loading', () => {
     [{ wallpaper: { resource: 'library:private.png' } }, []],
     [{ density: 99 }, []],
     [{ motion: -1 }, []],
+    [{ terminalFont: { weight: 600 } }, []],
+    [{ terminalFont: { style: 'italic' } }, []],
     [{ arbitraryCss: 'body { display:none }' }, []],
     [{ bodyFont: { resource: 'asset:font' } }, [{ id: 'font', kind: 'font', path: 'assets/icon.png' }]],
   ])('rejects invalid v2 appearance or resource types before publication: %j', async (appearance, resources) => {
