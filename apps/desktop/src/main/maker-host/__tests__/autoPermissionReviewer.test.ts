@@ -294,7 +294,12 @@ describe('createAutoPermissionReviewer', () => {
     const requestText = vi.fn(async () => '{"verdict":"allow"}');
     const reviewer = createAutoPermissionReviewer({ requestText, logger: { debug: vi.fn(), warn: vi.fn() } });
     await expect(reviewer(request({ userIntent: '', action: { kind: 'exec', command: './runtime/node lab/preflight.cjs', cwd: '/repo' } })))
-      .resolves.toMatchObject({ verdict: 'block' });
+      .resolves.toMatchObject({
+        verdict: 'block',
+        // 宿主自己判的(没调模型)→ 标出来源,这条原因才能进诊断 / UI 通道。
+        hostReason: true,
+        reason: 'No user request authorizes this action; only reads may run without one.',
+      });
     expect(requestText).not.toHaveBeenCalled();
     await expect(reviewer(request({ userIntent: '', action: { kind: 'read', path: '/repo/README.md' } })))
       .resolves.toMatchObject({ verdict: 'allow' });

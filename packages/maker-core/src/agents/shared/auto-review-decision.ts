@@ -23,6 +23,18 @@ export type AutoReviewDecision = {
    */
   policyReason?: true;
   /**
+   * `true` = `reason` 是**宿主自己写死的判定**（delegate 在没有调用模型时给出的固定文案），
+   * 不是模型输出。模型判定永远不带这个标记 —— 模型只贡献 `reason` 里的纯文本。
+   *
+   * 与 `policyReason` 的分工：`policyReason` 标在**最终决定**上，由 maker-core 依据来源
+   * 自行加；本字段由 delegate 声明「这条 reason 出自宿主」。maker-core 见到它就把它转成
+   * `policyReason`（可进诊断 / UI 通道），其余 delegate 结果一律当模型自由文本处理。
+   *
+   * 委托方解析模型输出时是**新建对象**（不展开模型给的 JSON），所以模型无法自己带上这个
+   * 标记；只有宿主代码路径会标它。
+   */
+  hostReason?: true;
+  /**
    * `true` = 这个 `ask` 来自**审阅器没跑起来**（delegate 缺失 / 超时 / 抛错 / 返回非法），
    * 不是模型判定动作危险。
    *
@@ -613,11 +625,17 @@ export async function resolveAutoReviewDecision(
       const reason = typeof decision.reason === 'string'
         ? decision.reason.trim().slice(0, MAX_AUTO_REVIEW_REASON_CHARS)
         : '';
+      // delegate 明确声明「这条 reason 出自宿主固定文案」(它没有调用模型)→ 保留为
+      // policy 原因,能进诊断 / UI 通道。其余一律是模型自由文本:可能含参数、路径、
+      // 片段,不得外泄(Codex review #7356)。
+      const hostAuthored = decision.hostReason === true;
       return {
         verdict: decision.verdict,
         ...(reason ? { reason } : {}),
+        ...(hostAuthored ? { policyReason: true } : {}),
         // The delegate is the model boundary: anything it returns is model free
-        // text and must stay out of diagnostics (no policyReason marker).
+        // text and must stay out of diagnostics (no policyReason marker), unless
+        // the delegate declared the reason host-authored.
       };
     }
   } catch {
