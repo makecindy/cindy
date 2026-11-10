@@ -1,8 +1,10 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { PLUGIN_MEMBER_UPLOAD_MAX_UNCOMPRESSED_BYTES } from '@cindy/plugin-protocol';
-import { CINDY_PACKAGE_MANIFEST, CindyFileError, isCindyPackagePath, parseCindyPackageManifest } from '../../shared/cindyFile';
+import { CINDY_PACKAGE_MANIFEST, CindyFileError, isCindyPackagePath, parseCindyPackageManifest, type CindyThemePackageManifest } from '../../shared/cindyFile';
 import { parseLocalThemeDocument, type LocalThemeDocument } from '../../shared/local-themes';
+import { appearanceResourceReferences, type AppearanceResourceDefinition } from '../../shared/appearanceDefinition';
+import { APPEARANCE_RESOURCE_MAX_BYTES, inspectAppearanceResource, prepareAppearanceResource } from '../appearance/resources';
 import { CINDY_MANIFEST_MAX_BYTES, readCindyZipEntry, type InspectedCindyFile } from '../cindy-files/reader';
 import { atomicWriteFileSync } from '../utils/atomicWriteFile';
 import { withCrossProcessLock } from '../device-link/crossProcessLock';
@@ -47,11 +49,16 @@ function packageDirectory(parent: string, name: string): string {
   return real;
 }
 
-function parseTheme(raw: unknown): LocalThemeDocument {
+function parseTheme(raw: unknown, manifest: CindyThemePackageManifest): LocalThemeDocument {
   try {
     const theme = parseLocalThemeDocument(raw);
+    if (theme.appearance && manifest.formatVersion !== 2) throw new CindyFileError('invalid');
     for (const asset of Object.values(theme.brand ?? {})) {
       if (!isCindyPackagePath(asset)) throw new CindyFileError('invalid');
+    }
+    for (const ref of appearanceResourceReferences(theme.appearance ?? {})) {
+      const resource = manifest.resources?.find(r => `asset:${r.id}` === ref.reference);
+      if (!resource || (ref.kind === 'wallpaper' ? resource.kind === 'font' : resource.kind !== ref.kind)) throw new CindyFileError('invalid');
     }
     return theme;
   } catch { throw new CindyFileError('invalid'); }
@@ -128,11 +135,16 @@ export function readPackagedThemesSync(themesDir: string): PackagedThemeEntry[] 
         if (!manifest.themes.includes(ref.themePath)) throw new CindyFileError('invalid');
         const bytes = readBoundedFileNoFollowSync(packageFilePath(dir, ref.themePath), THEME_MAX_BYTES, { containWithin: dir });
         if (!bytes) throw new CindyFileError('invalid');
-        const theme = parseTheme(JSON.parse(bytes.toString('utf8')));
+        const theme = parseTheme(JSON.parse(bytes.toString('utf8')), manifest);
         if (theme.id !== ref.id) throw new CindyFileError('invalid');
         return theme;
       });
       checkVariants(themes);
+      for (const resource of manifest.resources ?? []) {
+        const bytes = readBoundedFileNoFollowSync(packageFilePath(dir, resource.path), APPEARANCE_RESOURCE_MAX_BYTES[resource.kind], { containWithin: dir });
+        if (!bytes) throw new CindyFileError('invalid');
+        inspectAppearanceResource(bytes, resource.kind);
+      }
       const entries = themes.map((theme, i): PackagedThemeEntry => ({
         file: path.join(PACKAGES_DIR, hash, references[i].themePath),
         theme: {
@@ -176,11 +188,16 @@ export async function installThemePackage(
     let raw: unknown;
     try { raw = JSON.parse((await read(relative, THEME_MAX_BYTES)).toString('utf8')); }
     catch { throw new CindyFileError('invalid'); }
-    const theme = parseTheme(raw);
+    const theme = parseTheme(raw, inspected.manifest);
     for (const asset of Object.values(theme.brand ?? {})) await read(asset, ASSET_MAX_BYTES);
     themes.push(theme);
   }
   checkVariants(themes);
+  try {
+    for (const resource of inspected.manifest.resources ?? []) {
+      await prepareAppearanceResource(await read(resource.path, APPEARANCE_RESOURCE_MAX_BYTES[resource.kind]), resource.kind);
+    }
+  } catch { throw new CindyFileError('invalid'); }
   // A file cannot also be an ancestor directory on any supported platform.
   for (const relative of files.keys()) {
     const parts = relative.split('/');
@@ -243,4 +260,24 @@ export async function installThemePackage(
       await fs.promises.rm(staging, { recursive: true, force: true });
     }
   });
+}
+
+/** Resolve a selected package resource from current committed references only. */
+export function readThemePackageResourceSync(themesDir: string, id: string, reference: string): {
+  bytes: Buffer; resource: AppearanceResourceDefinition; packageSha256: string;
+} {
+  const root = fs.realpathSync(themesDir);
+  const packages = packageDirectory(root, PACKAGES_DIR);
+  const ref = readInstalledReferences(packages).find(entry => entry.id === id);
+  if (!ref) throw new CindyFileError('invalid');
+  const dir = packageDirectory(packages, ref.packageSha256);
+  const manifestBytes = readBoundedFileNoFollowSync(packageFilePath(dir, CINDY_PACKAGE_MANIFEST), CINDY_MANIFEST_MAX_BYTES, { containWithin: dir });
+  if (!manifestBytes) throw new CindyFileError('invalid');
+  const manifest = parseCindyPackageManifest(JSON.parse(manifestBytes.toString('utf8')));
+  const resource = manifest.resources?.find(entry => `asset:${entry.id}` === reference);
+  if (!resource) throw new CindyFileError('invalid');
+  const bytes = readBoundedFileNoFollowSync(packageFilePath(dir, resource.path), APPEARANCE_RESOURCE_MAX_BYTES[resource.kind], { containWithin: dir });
+  if (!bytes) throw new CindyFileError('invalid');
+  inspectAppearanceResource(bytes, resource.kind);
+  return { bytes, resource, packageSha256: ref.packageSha256 };
 }

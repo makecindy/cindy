@@ -46,11 +46,17 @@ describe('Cindy file identification', () => {
 
   it.each([
     { ...manifest, type: 'future-document' },
-    { ...manifest, formatVersion: 2 },
+    { ...manifest, formatVersion: 3 },
   ])('reports unsupported types and newer formats without plugin fallback: %j', async (value) => {
     const file = await archive({ 'cindy.json': JSON.stringify(value) });
     await expect(inspectCindyFile(file)).rejects.toMatchObject({ code: 'unsupported' });
     expect(await fs.readdir(root)).toEqual(['sample.cindy']);
+  });
+
+  it('recognizes v2 resource declarations while preserving v1 dispatch', async () => {
+    const value = { ...manifest, formatVersion: 2, resources: [{ id: 'body', kind: 'font', path: 'assets/body.ttf' }] };
+    const result = await inspectCindyFile(await archive({ 'cindy.json': JSON.stringify(value) }));
+    expect(result).toMatchObject({ type: 'theme', manifest: value });
   });
 
   it.each([
@@ -58,6 +64,9 @@ describe('Cindy file identification', () => {
     JSON.stringify({ ...manifest, formatVersion: 0 }),
     JSON.stringify({ ...manifest, themes: ['../outside.json'] }),
     JSON.stringify({ ...manifest, themes: [] }),
+    JSON.stringify({ ...manifest, formatVersion: 2, resources: [{ id: 'bg', kind: 'image', path: '../outside.png' }] }),
+    JSON.stringify({ ...manifest, formatVersion: 2, resources: [{ id: 'bg', kind: 'script', path: 'code.js' }] }),
+    JSON.stringify({ ...manifest, formatVersion: 2, resources: [{ id: 'bg', kind: 'image', path: 'a.png' }, { id: 'bg', kind: 'image', path: 'b.png' }] }),
   ])('keeps invalid declarations separate from unsupported types: %s', async (value) => {
     await expect(inspectCindyFile(await archive({ 'cindy.json': value }))).rejects.toMatchObject({ code: 'invalid' });
   });

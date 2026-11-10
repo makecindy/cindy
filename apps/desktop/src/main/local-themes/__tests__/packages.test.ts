@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import JSZip from 'jszip';
+import sharp from 'sharp';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const home = vi.hoisted(() => ({ value: '' }));
@@ -16,7 +17,7 @@ vi.mock('../../app-settings/preferences', () => ({ manageAppPreferences: task.re
 
 import { inspectCindyFile } from '../../cindy-files/reader';
 import { getLocalThemesDir, loadLocalThemes, loadLocalThemesSync, resetLocalThemesMigrationForTest } from '../loader';
-import { installThemePackage } from '../packages';
+import { installThemePackage, readThemePackageResourceSync } from '../packages';
 import { importThemePackageFromTask } from '../agent';
 
 let root: string;
@@ -92,10 +93,10 @@ describe('theme imports from a Cindy task', () => {
 });
 afterEach(() => { vi.restoreAllMocks(); fs.rmSync(root, { recursive: true, force: true }); });
 
-async function packageFile(themes: unknown[] = [light, dark], assets: Record<string, Buffer> = { 'assets/icon.png': icon }) {
+async function packageFile(themes: unknown[] = [light, dark], assets: Record<string, Buffer> = { 'assets/icon.png': icon }, options: { formatVersion?: number; resources?: unknown[] } = {}) {
   const zip = new JSZip();
   const names = themes.map((_, i) => `themes/${i}.json`);
-  zip.file('wrapped/cindy.json', JSON.stringify({ formatVersion: 1, type: 'theme', themes: names }));
+  zip.file('wrapped/cindy.json', JSON.stringify({ formatVersion: 1, type: 'theme', themes: names, ...options }));
   themes.forEach((theme, i) => zip.file(`wrapped/${names[i]}`, JSON.stringify(theme)));
   for (const [name, bytes] of Object.entries(assets)) zip.file(`wrapped/${name}`, bytes);
   const file = path.join(root, 'mist.cindy');
@@ -112,6 +113,41 @@ async function packageFile(themes: unknown[] = [light, dark], assets: Record<str
  * Minimal failure: one declared theme plus one relative brand asset.
  */
 describe('theme package installation and loading', () => {
+  // v2's observable contract: all appearance defaults and bundled resources
+  // survive installation/restart; v1 tests never exercised these fields. Unit.
+  it('loads complete v2 appearance without rewriting authored documents', async () => {
+    const appearance = { uiFont: { family: 'Inter', size: 15 }, terminalFont: { family: 'Menlo', size: 14 },
+      bodyFont: { resource: 'asset:body', size: 16 }, wallpaper: { resource: 'asset:bg', visibility: 0.4 },
+      reading: { bodyLineHeight: 1.8 }, contentStyle: { messageGap: 12 }, density: 0.9, motion: 0.5 };
+    const font = fs.readFileSync(new URL('../../../../resources/system-skills/cindy-plugin-creator/references/examples/interactive-pages/host-ui/assets/JetBrainsMono-Regular.ttf', import.meta.url));
+    const background = await sharp({ create: { width: 1, height: 1, channels: 4, background: '#808080' } }).png().toBuffer();
+    const theme = { ...light, appearance };
+    const inspected = await packageFile([theme], { 'assets/icon.png': icon, 'assets/bg.png': background, 'assets/body.ttf': font },
+      { formatVersion: 2, resources: [{ id: 'body', kind: 'font', path: 'assets/body.ttf' }, { id: 'bg', kind: 'image', path: 'assets/bg.png' }] });
+    await installThemePackage(inspected, getLocalThemesDir());
+    expect(loadLocalThemesSync().themes[0]).toMatchObject({ appearance });
+    expect((await loadLocalThemes()).themes).toEqual(loadLocalThemesSync().themes);
+    const dir = path.join(getLocalThemesDir(), '.packages', inspected.packageSha256);
+    expect(fs.readFileSync(path.join(dir, 'themes/0.json'), 'utf8')).toBe(JSON.stringify(theme));
+    expect(fs.readFileSync(path.join(dir, 'assets/body.ttf'))).toEqual(font);
+    expect(readThemePackageResourceSync(getLocalThemesDir(), light.id, 'asset:body').bytes).toEqual(font);
+    expect(() => readThemePackageResourceSync(getLocalThemesDir(), light.id, 'asset:undeclared')).toThrow();
+  });
+
+  it.each([
+    [{ bodyFont: { resource: 'asset:missing' } }, []],
+    [{ bodyFont: { resource: 'asset:bg' } }, [{ id: 'bg', kind: 'image', path: 'assets/icon.png' }]],
+    [{ wallpaper: { resource: 'library:private.png' } }, []],
+    [{ density: 99 }, []],
+    [{ motion: -1 }, []],
+    [{ arbitraryCss: 'body { display:none }' }, []],
+    [{ bodyFont: { resource: 'asset:font' } }, [{ id: 'font', kind: 'font', path: 'assets/icon.png' }]],
+  ])('rejects invalid v2 appearance or resource types before publication: %j', async (appearance, resources) => {
+    const inspected = await packageFile([{ ...light, appearance }], { 'assets/icon.png': icon }, { formatVersion: 2, resources });
+    await expect(installThemePackage(inspected, getLocalThemesDir())).rejects.toMatchObject({ code: 'invalid' });
+    expect(fs.existsSync(path.join(getLocalThemesDir(), '.packages'))).toBe(false);
+  });
+
   it('loads both variants and local assets, preserves old themes, and repeats without duplication', async () => {
     const dir = getLocalThemesDir();
     fs.mkdirSync(dir, { recursive: true });
@@ -225,6 +261,7 @@ describe('theme package installation and loading', () => {
     [{ ...light, brand: { icon: '/author/icon.png' } }],
     [{ ...light, brand: { icon: '../outside.png' } }],
     [{ ...light, brand: { icon: 'missing.png' } }],
+    [{ ...light, appearance: { density: 0.9 } }],
     [light, light],
     [light, { ...light, id: 'other' }],
   ])('rejects invalid or ambiguous themes before publishing: %j', async (...themes) => {

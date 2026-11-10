@@ -1,4 +1,5 @@
 import type { ImageVisibleBounds } from './imageVisibleBounds';
+import { parseAppearanceDefinition, type AppearanceDefinition } from './appearanceDefinition';
 
 export const LOCAL_THEME_SUFFIX = '-local';
 
@@ -34,6 +35,7 @@ export interface LocalThemeWire {
    */
   family?: string;
   colors: Record<string, string>;
+  appearance?: AppearanceDefinition;
   /** 新版品牌区配置；renderer 装载时把路径转成 xdt-file:// URL。 */
   brand?: LocalThemeBrandConfig;
   /** loader 从透明像素计算出的运行时裁边信息，不写回用户 JSON。 */
@@ -98,6 +100,7 @@ export interface LocalThemeDocument {
   family?: string;
   colors: Record<string, string>;
   brand?: LocalThemeBrandConfig;
+  appearance?: AppearanceDefinition;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -147,6 +150,8 @@ export function parseLocalThemeDocument(raw: unknown): LocalThemeDocument {
   }
 
   const brand = parseBrand(raw.brand);
+  const appearance = raw.appearance === undefined ? undefined : parseAppearanceDefinition(raw.appearance);
+  if (appearance === null) throw new Error("Invalid 'appearance': expected a supported appearance definition.");
   // family 只认非空字符串;缺省/空白一律视为"不配对"(每个文件各自成家族),
   // 保持引入该字段前的行为。
   const family = typeof raw.family === 'string' && raw.family.trim().length > 0
@@ -159,5 +164,6 @@ export function parseLocalThemeDocument(raw: unknown): LocalThemeDocument {
     ...(family ? { family } : {}),
     colors,
     ...(brand ? { brand } : {}),
+    ...(appearance ? { appearance } : {}),
   };
 }
