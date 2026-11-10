@@ -57,7 +57,7 @@ export function CompanionCardActions({ children, style, onStacked }: {
 
 const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   actions: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm, marginTop: spacing.md },
-  actionsStacked: { width: '100%', gap: spacing.sm },
+  actionsStacked: { width: '100%', flexWrap: 'wrap', gap: spacing.sm },
   button: { flex: 1, minHeight: HEIGHT, borderRadius: radius.pill, alignItems: 'center', justifyContent: 'center', paddingHorizontal: spacing.md },
   primary: { backgroundColor: colors.cta },
   secondary: { backgroundColor: colors.surfaceChip },
