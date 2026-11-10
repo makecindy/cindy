@@ -13,7 +13,6 @@ let service: PluginAppearanceService | undefined;
 let preparing: Promise<PluginAppearanceService> | undefined;
 let apply: (settings: import('../../shared/appearanceSettings.js').AppearanceSettings) => Promise<PluginAppearanceResult['application']> =
   async () => ({ status: 'saved', reason: 'NO_VIEWING_WINDOW' });
-let restoreRequested = false;
 
 export function configurePluginAppearanceFiles(access: PluginFileAccess): PluginFileAccess {
   files = access;
@@ -39,7 +38,6 @@ async function reconcileAppearance(released?: string): Promise<void> {
     if (source && (!released || source.instanceId === released))
       await (await getPluginAppearanceService()).reconcile(released);
   }
-  if (restoreRequested) await restorePluginAppearanceIcon();
 }
 
 /** Heavy resource code is loaded only for selected appearance data or explicit calls. */
@@ -48,39 +46,28 @@ export async function getPluginAppearanceService(): Promise<PluginAppearanceServ
   if (preparing) return preparing;
   preparing = (async () => {
     if (!files) throw new Error('MCP_APP_HOST_NOT_READY');
-    const [{ PluginAppearanceService }, settings, owner, wallpaper, icons] = await Promise.all([
+    const [{ PluginAppearanceService }, settings, owner, wallpaper] = await Promise.all([
       import('../cindy-brain/pluginAppearanceService.js'), import('../appearance-settings-store.js'),
-      import('../appearance-settings-ipc.js'), import('../custom-wallpaper.js'), import('../app-icon.js'),
+      import('../appearance-settings-ipc.js'), import('../custom-wallpaper.js'),
     ]);
     service = new PluginAppearanceService({
       ready: () => !!files && sourcesAvailable(),
       current(instance) {
         const source = resolveSource(instance);
-        if (!source || !source.host.capabilities?.some(cap => cap === 'appearance' || cap === 'app-icon')) return null;
+        if (!source || !source.host.capabilities?.includes('appearance')) return null;
         try { source.config.plugin?.assertCurrent(); } catch { return null; }
         const key = createHash('sha256').update(`${source.owner}:${source.fingerprint}`).digest('hex');
-        const fields = (source.host.appearance?.fields ?? PLUGIN_APPEARANCE_FIELDS).filter(field => field === 'appIcon'
-          ? source.host.capabilities?.includes('app-icon') : source.host.capabilities?.includes('appearance'));
+        const fields = source.host.appearance?.fields ?? PLUGIN_APPEARANCE_FIELDS;
         return { id: instance, token: key, key, dir: source.ghost.dir,
           appearance: { fields: [...fields], resources: source.host.appearance?.resources } };
       },
       files: files!, read: settings.readAppearanceSettings, update: settings.updateAppearanceSettingsAtomic,
       saveWallpaper: wallpaper.savePluginWallpaper, revokeWallpaper: wallpaper.revokePluginWallpaper,
-      publish: owner.publishAppearanceFromOwner, apply: snapshot => apply(snapshot), applyAppIcon: icons.applyPluginAppIcon,
+      publish: owner.publishAppearanceFromOwner, apply: snapshot => apply(snapshot),
     });
     return service;
   })();
   try { return await preparing; } finally { preparing = undefined; }
-}
-
-export async function restorePluginAppearanceIcon(): Promise<void> {
-  restoreRequested = true;
-  if (!files || !sourcesAvailable()) return;
-  const { readAppearanceSettings } = await import('../appearance-settings-store.js');
-  const resource = readAppearanceSettings().appIconResource;
-  if (!resource || !resolveSource(resource.source.instanceId)) return;
-  restoreRequested = false;
-  await (await getPluginAppearanceService()).restoreAppIcon();
 }
 
 export function releasePluginAppearance(instance: string): void {

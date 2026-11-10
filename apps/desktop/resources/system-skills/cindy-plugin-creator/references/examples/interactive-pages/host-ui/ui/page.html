@@ -13,15 +13,15 @@ details{margin-top:16px}summary{cursor:pointer}h1{font-size:24px;margin-top:0}#s
 <label>草稿内容<textarea id="draft" maxlength="128000"></textarea></label>
 <div><button id="append" disabled>追加到草稿</button><button id="replace" disabled>替换草稿选区</button><button id="refresh" disabled>刷新示例状态</button></div>
 <p id="selection">请先在任务输入框选中文字，再打开快捷面板。</p>
-<details open><summary>外观与应用图标</summary>
+<details open><summary>外观</summary>
 <div><button id="style" disabled>预览正文样式与字体</button><button id="wallpaper" disabled>使用示例壁纸</button></div>
 <div><button id="appearance" disabled>读取外观设置</button><button id="reset" disabled>恢复外观默认值</button></div>
-<div><button id="icon" disabled>使用插件图片图标</button><button id="icon-reset" disabled>恢复应用图标</button></div></details>
+</details>
 <details><summary>区域显隐</summary><div id="regions"></div><button id="regions-reset" disabled>显示全部区域</button></details>
 <p id="status" role="status">正在连接…</p>
 <script type="module">
 import { App } from '@modelcontextprotocol/ext-apps';
-const app = new App({ name: '插件界面示例', version: '1.1.0' }, {}, { autoResize: true });
+const app = new App({ name: '插件界面示例', version: '1.1.1' }, {}, { autoResize: true });
 const status = document.querySelector('#status');
 const regions = ['workspace','sidebar','header','messages','composer','tools','windowControls'];
 for (const region of regions) {
@@ -42,7 +42,6 @@ function update() {
   document.querySelector('#replace').disabled = !cindy.source?.sessionId || !capabilities.includes('draft') || !selection;
   document.querySelector('#selection').textContent = selection ? `草稿选区：${selection.text}` : '请先在任务输入框选中文字，再打开快捷面板。';
   for (const id of ['appearance','style','wallpaper','reset']) document.querySelector(`#${id}`).disabled = !capabilities.includes('appearance');
-  for (const id of ['icon','icon-reset']) document.querySelector(`#${id}`).disabled = !capabilities.includes('app-icon');
   for (const button of document.querySelectorAll('[data-region],#regions-reset')) button.disabled = !capabilities.includes('visibility');
 }
 async function call(name, args) {
@@ -66,8 +65,6 @@ document.querySelector('#style').onclick = () => call('cindy.ui.appearance', { p
 } });
 document.querySelector('#wallpaper').onclick = () => call('cindy.ui.appearance', { patch: { wallpaper: { resource: 'asset:art', visibility: 0.2 } } });
 document.querySelector('#reset').onclick = () => call('cindy.ui.appearance', { reset: ['uiFont','codeFont','bodyFont','wallpaper','theme','reading','contentStyle'] });
-document.querySelector('#icon').onclick = () => call('cindy.ui.app-icon', { resource: 'asset:art' });
-document.querySelector('#icon-reset').onclick = () => call('cindy.ui.app-icon', { icon: 'default' });
 document.querySelector('#regions-reset').onclick = () => call('cindy.ui.visibility', { regions: Object.fromEntries(regions.map(region => [region,true])) });
 try { await app.connect(); update(); document.querySelector('#refresh').disabled = false; status.textContent = '可以操作。'; }
 catch { status.textContent = '页面未连接，请重新打开。'; }

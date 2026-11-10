@@ -2059,7 +2059,7 @@ describe('interactive page declarations', () => {
     expect(hostUiApprovalSubjects(host)).toContainEqual(expect.objectContaining({ key: 'contribution:help-menu' }));
   });
   it('validates appearance resource declarations and grants only known fields', () => {
-    const host = { capabilities: ['appearance'], appearance: { fields: ['bodyFont', 'future-field'],
+    const host = { capabilities: ['appearance', 'app-icon'], appearance: { fields: ['bodyFont', 'appIcon', 'future-field'],
       resources: [{ id: 'font', kind: 'font' as const, path: 'assets/font.woff2' }] } };
     expect(validateGhostManifest({ ...base, mcpApps: { ...base.mcpApps, host } }).ok).toBe(true);
     expect(hostUiApprovalSubjects(host).map(subject => subject.key)).toEqual([

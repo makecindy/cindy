@@ -2,7 +2,7 @@
   "schemaVersion": 3,
   "id": "host-ui-example",
   "name": "插件界面示例",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "minCindyVersion": "0.1.122-beta",
   "entry": "main.js",
   "icon": "assets/cat.png",
@@ -29,9 +29,9 @@
         { "id": "tool-body", "title": "示例页面", "position": "tool.body", "view": "task-board", "match": { "tools": ["refresh"] } }
       ],
       "commands": [{ "id": "open-board", "title": "打开示例工作台", "view": "board", "arguments": { "filter": "all" }, "shortcut": "Mod+Alt+Shift+Y" }],
-      "capabilities": ["context", "draft", "appearance", "visibility", "app-icon"],
+      "capabilities": ["context", "draft", "appearance", "visibility"],
       "appearance": {
-        "fields": ["uiFont", "codeFont", "bodyFont", "wallpaper", "theme", "reading", "contentStyle", "appIcon"],
+        "fields": ["uiFont", "codeFont", "bodyFont", "wallpaper", "theme", "reading", "contentStyle"],
         "resources": [
           { "id": "mono", "kind": "font", "path": "assets/JetBrainsMono-Regular.ttf" },
           { "id": "art", "kind": "image", "path": "assets/cat.png" }

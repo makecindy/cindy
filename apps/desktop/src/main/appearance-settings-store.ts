@@ -75,7 +75,7 @@ export const __testing = {
 /** New-computer setup: values the user changed here (docs/product-rules/new-device-setup-migration.md). */
 export const appearancePortableSettings = portableOverrideSettings(store, {
   // Host-owned media reference; a custom wallpaper image is not copied.
-  omitKeys: ['customWallpaperUrl', 'customWallpaperFallbackUrl', 'appIconResource', 'uiFontResource', 'codeFontResource', 'bodyFontResource'],
+  omitKeys: ['customWallpaperUrl', 'customWallpaperFallbackUrl', 'uiFontResource', 'codeFontResource', 'bodyFontResource'],
   optionalKeys: ['wallpaperBlur', 'wallpaperVisibility', 'desktopVisibility'],
   filter: (values) => {
     if (values.wallpaperId !== 'custom') return values;

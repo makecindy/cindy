@@ -1,5 +1,5 @@
 /** Author-facing types. No Host view bindings, transport or platform imports. */
-export type PluginAppearanceField = 'wallpaper' | 'uiFont' | 'codeFont' | 'bodyFont' | 'theme' | 'reading' | 'contentStyle' | 'appIcon';
+export type PluginAppearanceField = 'wallpaper' | 'uiFont' | 'codeFont' | 'bodyFont' | 'theme' | 'reading' | 'contentStyle';
 export type PluginAppearanceColor = 'text' | 'secondaryText' | 'surface' | 'border' | 'userBubble' | 'userText' | 'assistantBubble';
 /** asset:<declared id>, library:<owned relative path>, or an owned cindy-media reference. */
 export type PluginAppearanceResource = string;
@@ -11,8 +11,6 @@ export interface PluginAppearanceFont {
   style?: 'normal' | 'italic';
 }
 export interface PluginAppearancePatch {
-  /** Runtime Dock/window icon. Does not change the installed application's icon. */
-  appIcon?: { resource: PluginAppearanceResource };
   uiFont?: PluginAppearanceFont;
   codeFont?: PluginAppearanceFont;
   bodyFont?: PluginAppearanceFont;
@@ -30,7 +28,7 @@ export interface PluginAppearanceResult extends PluginAppearanceSnapshot {
 
 
 export const PLUGIN_APPEARANCE_FIELDS: readonly PluginAppearanceField[] = [
-  'wallpaper', 'uiFont', 'codeFont', 'bodyFont', 'theme', 'reading', 'contentStyle', 'appIcon',
+  'wallpaper', 'uiFont', 'codeFont', 'bodyFont', 'theme', 'reading', 'contentStyle',
 ];
 export const PLUGIN_APPEARANCE_COLORS: readonly PluginAppearanceColor[] = [
   'text', 'secondaryText', 'surface', 'border', 'userBubble', 'userText', 'assistantBubble',
@@ -61,8 +59,6 @@ export function isPluginAppearanceResource(value: unknown): value is string {
 /** Exact writable fields, not arbitrary CSS or a theme-token escape hatch. */
 export function parsePluginAppearancePatch(value: unknown): PluginAppearancePatch | null {
   if (!record(value) || !keys(value, PLUGIN_APPEARANCE_FIELDS)) return null;
-  if (value.appIcon !== undefined && (!record(value.appIcon) || !keys(value.appIcon, ['resource']) ||
-      !isPluginAppearanceResource(value.appIcon.resource))) return null;
   for (const role of ['uiFont', 'codeFont', 'bodyFont'] as const) {
     const font = value[role];
     if (font === undefined) continue;

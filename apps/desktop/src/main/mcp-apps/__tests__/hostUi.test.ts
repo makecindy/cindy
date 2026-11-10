@@ -36,7 +36,9 @@ it('keeps legacy appearance writes within the newly approved field list', async 
   const binding = bindPluginUiResource('renderer:1', 'task-a', 'plugin', 'task', () => 'rev');
   const signal = new AbortController().signal;
   await expect(binding.callHostTool!('cindy.ui.appearance', { patch: { codeSize: 18 } }, signal)).rejects.toThrow('FIELD_NOT_DECLARED');
-  await expect(binding.callHostTool!('cindy.ui.app-icon', { icon: 'cat' }, signal)).rejects.toThrow('FIELD_NOT_DECLARED');
+  expect(binding.hostTools?.some(tool => tool.name === 'cindy.ui.app-icon')).toBe(false);
+  await expect(binding.callHostTool!('cindy.ui.app-icon', { icon: 'cat' }, signal)).rejects.toThrow('MCP_APP_TOOL_NOT_VISIBLE');
+  await expect(binding.callHostTool!('cindy.ui.appearance', { patch: { appIcon: 'cat' } }, signal)).rejects.toThrow('MCP_APP_INVALID_REQUEST');
   expect(boundary.setAppearance).not.toHaveBeenCalled();
   await binding.callHostTool!('cindy.ui.appearance', { patch: { uiSize: 18 } }, signal);
   expect(boundary.setAppearance).toHaveBeenCalledExactlyOnceWith({ uiSize: 18 }, {

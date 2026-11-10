@@ -32,7 +32,7 @@ import {
   updateAppearanceSettingsAtomic,
   writeAppearanceSettingsPatch,
 } from './appearance-settings-store.js';
-import { applyDockIcon, applyPluginAppIconToWindow } from './app-icon.js';
+import { applyDockIcon } from './app-icon.js';
 import { pluginAppearanceRevision } from './cindy-brain/pluginAppearanceRevision.js';
 
 export { writeAppearanceSettingsPatch } from './appearance-settings-store.js';
@@ -50,7 +50,6 @@ export function registerAppearanceSettingsIpc(): void {
   // participate; embedded webpages and utility windows keep their own zoom.
   app.on('browser-window-focus', function restoreFocusedWindowZoom(_event, win) {
     restoreWindowZoom(win);
-    applyPluginAppIconToWindow(win);
   });
 
   // Must be registered before BrowserWindow creation: preload reads this on
@@ -199,8 +198,8 @@ function appearanceForWindow(
   win: BrowserWindow | null,
 ): AppearanceSettings {
   if (isAppContentWindow(win)) return settings;
-  const { customWallpaperUrl: _privateUrl, customWallpaperFallbackUrl: _fallback, appIconResource: _icon, ...publicSettings } = settings;
-  void _privateUrl; void _fallback; void _icon;
+  const { customWallpaperUrl: _privateUrl, customWallpaperFallbackUrl: _fallback, ...publicSettings } = settings;
+  void _privateUrl; void _fallback;
   return {
     ...publicSettings,
     wallpaperId: settings.wallpaperId === 'custom' ? 'none' : settings.wallpaperId,
@@ -335,7 +334,6 @@ function parsePatch(rawPatch: unknown): AppearanceOverrides {
   if ('appIcon' in raw) {
     if (!isAppIcon(raw.appIcon)) throwIpcError('INVALID_PARAMS', 'appIcon is not supported');
     patch.appIcon = raw.appIcon;
-    patch.appIconResource = undefined;
   }
   return patch;
 }
@@ -369,7 +367,6 @@ export const __testing = { parsePatch };
 /** Plugin settings use the same profile owner and existing window broadcast. */
 export function publishAppearanceFromOwner(settings: AppearanceSettings): void {
   applyAppearanceToWindows(settings);
-  if (!settings.appIconResource) applyDockIcon(settings);
   broadcast(settings);
 }
 

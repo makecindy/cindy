@@ -5,7 +5,7 @@ const pluginUiRecord = (value: unknown): value is Record<string, unknown> => !!v
 import { DEFAULT_APPEARANCE_SETTINGS, type AppearanceSettings, type AppearanceOverrides } from '../../shared/appearanceSettings.js';
 import type { PluginAppearanceSource, PluginFontResource } from '../../shared/pluginAppearance.js';
 import type { PluginFileAccess } from '../mcp-apps/pluginFiles.js';
-import { loadPluginAppearanceResource, type LoadedPluginAppearanceResource } from './pluginAppearanceResources.js';
+import { loadPluginAppearanceResource } from './pluginAppearanceResources.js';
 
 interface Instance { id: string; token: string; key: string; dir: string; appearance: NonNullable<GhostHostUi['appearance']> }
 interface Dependencies {
@@ -19,16 +19,12 @@ interface Dependencies {
   revokeWallpaper(isCurrent: (source: PluginAppearanceSource) => boolean): Promise<boolean>;
   publish(settings: AppearanceSettings): void;
   apply(settings: AppearanceSettings): Promise<PluginAppearanceResult['application']>;
-  applyAppIcon(bytes: Buffer | null): void;
 }
 const fontRoles = ['uiFont', 'codeFont', 'bodyFont'] as const;
-const iconIdentity = (resource: AppearanceSettings['appIconResource']) => resource &&
-  JSON.stringify([resource.source.instanceId, resource.source.key, resource.reference, resource.hash]);
 
 /** Thin adapter to the existing profile settings owner. No plugin preference store. */
 export class PluginAppearanceService {
   private mutations = 0;
-  private appliedIcon: string | undefined;
   constructor(private readonly deps: Dependencies) {}
 
   private access(id: string, assertCaller: () => void = () => {}) {
@@ -59,7 +55,6 @@ export class PluginAppearanceService {
       else if (field === 'theme' && s.themeColors) values.theme = s.themeColors;
       else if (field === 'reading' && s.reading) values.reading = s.reading;
       else if (field === 'contentStyle' && s.contentStyle) values.contentStyle = s.contentStyle;
-      else if (field === 'appIcon' && s.appIconResource?.source.instanceId === id) values.appIcon = { resource: s.appIconResource.reference };
     }
     assertCurrent();
     return { revision: revision(s), values };
@@ -105,14 +100,12 @@ export class PluginAppearanceService {
     let fallback: Buffer | undefined;
     if (patch.wallpaper?.resource) wallpaper = await loadPluginAppearanceResource(resourceSource, patch.wallpaper.resource, 'wallpaper');
     if (patch.wallpaper?.fallbackResource) fallback = (await loadPluginAppearanceResource(resourceSource, patch.wallpaper.fallbackResource, 'image')).bytes;
-    const icon = patch.appIcon ? await loadPluginAppearanceResource(resourceSource, patch.appIcon.resource, 'icon') : undefined;
     assertCurrent(); this.assertRevision(expected);
     let settings!: AppearanceSettings;
     const commit = async (publishWallpaper?: () => void) => { settings = await this.deps.update(current => {
       assertCurrent();
       this.assertRevision(expected);
       const next: AppearanceOverrides = {};
-      if (icon && patch.appIcon) next.appIconResource = { source, reference: patch.appIcon.resource, hash: icon.hash };
       for (const role of fontRoles) {
         const font = patch[role]; if (!font) continue;
         const { resource: _reference, ...traits } = font; void _reference;
@@ -146,7 +139,7 @@ export class PluginAppearanceService {
     if (wallpaper) await this.deps.saveWallpaper(wallpaper.bytes, { fallback, pluginSource: source,
       assertCurrent: () => { assertCurrent(); this.assertRevision(expected); }, commit });
     else await commit();
-    return this.finish(id, settings, assertCurrent, Object.keys(patch), icon);
+    return this.finish(id, settings, assertCurrent);
   }
 
   private assertRevision(expected?: string): void {
@@ -169,53 +162,23 @@ export class PluginAppearanceService {
           wallpaperVisibility: undefined, wallpaperBlur: undefined });
         else if (field === 'theme') next.themeColors = undefined;
         else if (field === 'reading') next.reading = undefined;
-        else if (field === 'appIcon') next.appIconResource = undefined;
         else next.contentStyle = undefined;
       }
       return next;
     });
-    return this.finish(id, settings, assertCurrent, raw as PluginAppearanceField[]);
+    return this.finish(id, settings, assertCurrent);
   }
 
-  private async finish(id: string, settings: AppearanceSettings, assertCurrent: () => void,
-    fields: readonly string[], icon?: LoadedPluginAppearanceResource): Promise<PluginAppearanceResult> {
-    assertCurrent();
-    const native = fields.includes('appIcon') ? await this.applyIcon(settings, icon)
-      .catch(() => ({ status: 'failed' as const, reason: 'APP_ICON_APPLICATION_FAILED' })) : undefined;
+  private async finish(id: string, settings: AppearanceSettings, assertCurrent: () => void): Promise<PluginAppearanceResult> {
     assertCurrent();
     if (revision(this.deps.read()) !== revision(settings))
       return { ...this.read(id, assertCurrent), application: { status: 'saved', reason: 'SUPERSEDED' } };
     this.deps.publish(settings);
-    let application = fields.every(field => field === 'appIcon') ? native! :
-      await this.deps.apply(settings).catch(() => ({ status: 'failed' as const, reason: 'APPLICATION_FAILED' }));
-    if (native?.status === 'failed' || native?.status === 'saved' && application.status !== 'failed') application = native;
+    let application = await this.deps.apply(settings).catch(() => ({ status: 'failed' as const, reason: 'APPLICATION_FAILED' }));
     assertCurrent();
     const snapshot = this.read(id, assertCurrent);
     if (snapshot.revision !== revision(settings)) application = { status: 'saved', reason: 'SUPERSEDED' };
     return { ...snapshot, application };
-  }
-
-  private async applyIcon(settings: AppearanceSettings, prepared?: LoadedPluginAppearanceResource): Promise<PluginAppearanceResult['application']> {
-    const resource = settings.appIconResource;
-    const isSelected = () => iconIdentity(this.deps.read().appIconResource) === iconIdentity(resource);
-    if (!isSelected()) return { status: 'saved', reason: 'SUPERSEDED' };
-    if (!resource) { this.deps.applyAppIcon(null); this.appliedIcon = undefined; return { status: 'applied' }; }
-    const { instance, fields, assertCurrent } = this.access(resource.source.instanceId);
-    if (!fields.includes('appIcon') || instance.key !== resource.source.key) throw new Error('RESOURCE_UNAVAILABLE');
-    const identity = iconIdentity(resource);
-    if (!prepared && this.appliedIcon === identity) return { status: 'applied' };
-    const loaded = prepared ?? await loadPluginAppearanceResource({ instanceId: instance.id, ghost: instance,
-      files: this.deps.files, assertCurrent }, resource.reference, 'icon');
-    assertCurrent();
-    if (loaded.hash !== resource.hash) throw new Error('RESOURCE_UNAVAILABLE');
-    if (!isSelected()) return { status: 'saved', reason: 'SUPERSEDED' };
-    this.deps.applyAppIcon(loaded.bytes);
-    this.appliedIcon = identity;
-    return { status: 'applied' };
-  }
-
-  async restoreAppIcon(): Promise<void> {
-    if (this.deps.ready() && this.deps.read().appIconResource) await this.applyIcon(this.deps.read());
   }
 
   async font(role: string): Promise<{ family: string; bytes: ArrayBuffer }> {
@@ -230,15 +193,14 @@ export class PluginAppearanceService {
   }
 
   async reconcile(released?: string): Promise<void> {
-    if (!this.deps.ready()) { if (this.deps.read().appIconResource) this.deps.applyAppIcon(null); this.appliedIcon = undefined; return; }
+    if (!this.deps.ready()) return;
     const isCurrent = (source: PluginAppearanceSource) => !this.deps.ready() || source.instanceId !== released && this.deps.current(source.instanceId)?.key === source.key;
     const before = this.deps.read();
     const stale = fontRoles.filter(role => {
       const resource = before[`${role}Resource` as 'uiFontResource']; return resource && !isCurrent(resource.source);
     });
     const wallpaperRemoved = await this.deps.revokeWallpaper(isCurrent);
-    const staleIcon = before.appIconResource && !isCurrent(before.appIconResource.source);
-    const settings = !stale.length && !wallpaperRemoved && !staleIcon ? this.deps.read() : await this.deps.update(current => {
+    const settings = !stale.length && !wallpaperRemoved ? this.deps.read() : await this.deps.update(current => {
       if (!this.deps.ready()) return {};
       const patch: AppearanceOverrides = {};
       for (const role of stale) {
@@ -250,15 +212,8 @@ export class PluginAppearanceService {
         } else { const family = role === 'uiFont' ? 'uiFamily' : 'codeFamily'; if (current[family] === resource.family) patch[family] = ''; }
       }
       if (wallpaperRemoved && current.wallpaperId === 'custom' && !this.deps.read().customWallpaperUrl) patch.wallpaperId = 'none';
-      if (current.appIconResource && !isCurrent(current.appIconResource.source)) patch.appIconResource = undefined;
       return patch;
     });
-    if (stale.length || wallpaperRemoved || staleIcon) this.deps.publish(settings);
-    if (!settings.appIconResource && !staleIcon) return;
-    try { await this.applyIcon(settings); }
-    catch (error) {
-      if (iconIdentity(this.deps.read().appIconResource) === iconIdentity(settings.appIconResource)) { this.deps.applyAppIcon(null); this.appliedIcon = undefined; }
-      throw error;
-    }
+    if (stale.length || wallpaperRemoved) this.deps.publish(settings);
   }
 }

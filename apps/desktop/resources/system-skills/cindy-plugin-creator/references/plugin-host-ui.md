@@ -103,14 +103,12 @@ if (app.getHostContext()?.cindy?.capabilities?.includes('draft')) {
 | 页面批准 | `cindy.ui.open({viewId,input?})`，只打开同插件已批准视图 |
 | `context` | 向标准 host context 推送获准的任务/正文投影和任务区域选中文字 |
 | `draft` | `cindy.ui.draft({mode:"read",revision?,offset?})` 按需完整读取；`{mode:"append"|"replace"|"replace-selection",text,revision?}` 编辑，替换整份草稿或选区须带最新 revision，冲突拒绝，不发送消息 |
-| `appearance` | `cindy.ui.appearance({patch?,reset?,ifRevision?})`，沿原外观设置读写，图标由独立能力控制 |
+| `appearance` | `cindy.ui.appearance({patch?,reset?,ifRevision?})`，沿原外观设置读写 |
 | `visibility` | `cindy.ui.visibility({visible?,regions?})`，读取或修改窗口及 workspace/sidebar/header/messages/composer/tools/windowControls 的显隐 |
-| `app-icon` | `cindy.ui.app-icon({icon:"default"|"cat"|"wordmark"|"mark"})` 或 `{resource:"asset:icon"}`，选择内置图标或获准图片 |
 
 原工具卡片仍沿原 MCP Apps 契约。任务页面也可使用标准 `ui/message` 与 `ui/update-model-context`；
 全局页面不能自行选任务发送。任务清空/归档、批准或 owner 变化后旧操作失效。
-图标用于 macOS Dock 及 Windows/Linux 运行窗口，不改 Finder/Launchpad；默认未选择自定义图标时不增加启动换图标调用。
-正式包效果须单独验收。区域显隐是临时的窗口状态，停用、撤权或卸载后释放；权限提示保持可操作。
+区域显隐是临时的窗口状态，停用、撤权或卸载后释放；权限提示保持可操作。
 
 ### 外观资源与正文样式
 
@@ -118,19 +116,18 @@ if (app.getHostContext()?.cindy?.capabilities?.includes('draft')) {
 
 ```json
 {
-  "capabilities": ["appearance", "app-icon"],
+  "capabilities": ["appearance"],
   "appearance": {
-    "fields": ["uiFont", "bodyFont", "wallpaper", "theme", "reading", "contentStyle", "appIcon"],
+    "fields": ["uiFont", "bodyFont", "wallpaper", "theme", "reading", "contentStyle"],
     "resources": [
       { "id": "font", "kind": "font", "path": "assets/font.ttf" },
-      { "id": "wallpaper", "kind": "image", "path": "assets/wallpaper.png" },
-      { "id": "icon", "kind": "image", "path": "assets/icon.png" }
+      { "id": "wallpaper", "kind": "image", "path": "assets/wallpaper.png" }
     ]
   }
 }
 ```
 
-`appearance` 控制外观字段，`app-icon` 单独控制图标；同时声明 `fields` 时仅开放列出的字段。
+`appearance` 控制外观字段；同时声明 `fields` 时仅开放列出的字段。
 资源引用支持 `asset:<id>`、本插件已获准 Library 文件 `library:<relative path>`，以及本插件拥有的 `cindy-media://blobs/...`；
 不接受任意磁盘路径或远程 URL。字体支持 TTF/OTF，字体与图片按格式和大小校验，视频壁纸可带静态 fallback。
 
@@ -147,13 +144,12 @@ await app.callServerTool({ name: 'cindy.ui.appearance', arguments: {
     theme: { light: { userBubble: '#f0f0f0', userText: '#202020' }, dark: { userBubble: '#303030', userText: '#eeeeee' } }
   }
 } });
-await app.callServerTool({ name: 'cindy.ui.app-icon', arguments: { resource: 'asset:icon' } });
 await app.callServerTool({ name: 'cindy.ui.appearance', arguments: { reset: ['bodyFont', 'wallpaper', 'reading', 'contentStyle', 'theme'] } });
 ```
 
 读取返回原设置及 `{revision,values}`；写入另有 `application.status`：`applied` 为实际消费端确认，
 `saved` 为已保存但尚未确认显示，`failed` 为未成功应用。主题分深浅色，正文样式只作用于消息区域；不接受任意 CSS。
-沿原设置通知更新，不随消息重复读取；相同字体资源复用已加载字体。资源来源失效后沿原设置流程清理，避免遗留不可用字体或图标。
+沿原设置通知更新，不随消息重复读取；相同字体资源复用已加载字体。资源来源失效后沿原设置流程清理，避免遗留不可用字体或壁纸。
 
 ### 原生小控件按需更新
 

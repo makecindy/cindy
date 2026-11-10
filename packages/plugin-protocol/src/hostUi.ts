@@ -6,7 +6,7 @@ export const HOST_UI_POSITIONS = [
   'turn.footer', 'message.body', 'tool.body',
 ] as const;
 export type GhostHostUiPosition = typeof HOST_UI_POSITIONS[number];
-export const HOST_UI_CAPABILITIES = ['context', 'draft', 'appearance', 'visibility', 'app-icon'] as const;
+export const HOST_UI_CAPABILITIES = ['context', 'draft', 'appearance', 'visibility'] as const;
 export type GhostHostUiCapability = typeof HOST_UI_CAPABILITIES[number];
 
 export interface GhostHostUiView {

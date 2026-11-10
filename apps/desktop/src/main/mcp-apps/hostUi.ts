@@ -118,9 +118,6 @@ export function bindPluginUiResource(caller: string, sessionId: string | null, i
   if (capabilities.includes('visibility')) tools.push(tool('visibility', 'Read or change the owning Cindy window or its UI regions.', {
     visible: { type: 'boolean' }, regions: { type: 'object', additionalProperties: { type: 'boolean' } },
   }));
-  if (capabilities.includes('app-icon')) tools.push(tool('app-icon', 'Choose builtin or approved custom runtime application artwork. Does not change Finder artwork.', {
-    icon: { enum: ['default', 'cat', 'wordmark', 'mark'] }, resource: { type: 'string' }, ifRevision: { type: 'string' },
-  }));
   return {
     id: `${instance}:${viewId}`, title: view.title, serverId: entry.config.id,
     serverRevision: revision(entry.config), resourceUri: view.resourceUri, assertCurrent, assertOperation, hostTools: tools,
@@ -183,7 +180,7 @@ export function bindPluginUiResource(caller: string, sessionId: string | null, i
           if (args.reset !== undefined) return result(await editPluginAppearance(instance,
             { kind: 'reset', fields: args.reset, ifRevision: args.ifRevision }, assertCurrent));
           if (!args.patch) {
-            const { uiFontResource: _ui, codeFontResource: _code, bodyFontResource: _body, appIconResource: _icon, ...settings } = readAppearanceSettings();
+            const { uiFontResource: _ui, codeFontResource: _code, bodyFontResource: _body, ...settings } = readAppearanceSettings();
             return result({ ...settings, ...(await getPluginAppearanceService()).read(instance, assertCurrent) });
           }
           if (typeof args.patch === 'object' && !Array.isArray(args.patch) &&
@@ -197,17 +194,6 @@ export function bindPluginUiResource(caller: string, sessionId: string | null, i
             if (Object.keys(args.patch).some(key => !entry.host.appearance!.fields.includes(fields[key]))) throw new Error('FIELD_NOT_DECLARED');
           }
           return result(await updateAppearanceFromSettings(args.patch, { ifRevision: args.ifRevision, assertCurrent }));
-        }
-        case 'cindy.ui.app-icon': {
-          if (args.resource !== undefined) {
-            if (args.icon !== undefined) throw new Error('MCP_APP_INVALID_REQUEST');
-            return result(await editPluginAppearance(instance, { kind: 'set', patch: { appIcon: { resource: args.resource } }, ifRevision: args.ifRevision }, assertCurrent));
-          }
-          if (!['default', 'cat', 'wordmark', 'mark'].includes(String(args.icon))) throw new Error('MCP_APP_INVALID_REQUEST');
-          if (entry.host.appearance && !entry.host.appearance.fields.includes('appIcon')) throw new Error('FIELD_NOT_DECLARED');
-          const { updateAppearanceFromSettings } = await import('../appearance-settings-ipc.js');
-          assertCurrent(); signal.throwIfAborted();
-          return result(await updateAppearanceFromSettings({ appIcon: args.icon }, { ifRevision: args.ifRevision, assertCurrent }));
         }
         case 'cindy.ui.visibility': {
           const window = callerWindow(caller);

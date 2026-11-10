@@ -3,7 +3,7 @@ import { expect, it, vi } from 'vitest';
 const h = vi.hoisted(() => ({
   wallpaper: { url: '', pluginSource: undefined as { instanceId: string; key: string } | undefined },
   settings: { wallpaperId: 'custom' } as Record<string, unknown>,
-  readResource: vi.fn(), icon: vi.fn(), publish: vi.fn(),
+  readResource: vi.fn(), publish: vi.fn(),
 }));
 vi.mock('../../custom-wallpaper-settings.js', () => ({ customWallpaperStore: { read: () => h.wallpaper } }));
 vi.mock('../../appearance-settings-store.js', () => ({
@@ -13,7 +13,6 @@ vi.mock('../../appearance-settings-store.js', () => ({
   },
 }));
 vi.mock('../../appearance-settings-ipc.js', () => ({ publishAppearanceFromOwner: h.publish }));
-vi.mock('../../app-icon.js', () => ({ applyPluginAppIcon: h.icon }));
 vi.mock('../../cindy-brain/pluginAppearanceResources.js', () => ({ loadPluginAppearanceResource: h.readResource }));
 vi.mock('../../custom-wallpaper.js', () => ({
   savePluginWallpaper: vi.fn(),
@@ -32,7 +31,7 @@ it('releases a wallpaper-only persisted selection without eager resource work du
   const describe = vi.fn(), read = vi.fn();
   configurePluginAppearanceFiles({ describe, read });
   await reconcilePluginAppearanceSources(() => undefined, () => true);
-  expect(h.publish).not.toHaveBeenCalled(); expect(h.icon).not.toHaveBeenCalled();
+  expect(h.publish).not.toHaveBeenCalled();
   const source = { owner: 'owner', fingerprint: 'approved', ghost: { dir: '/unused' },
     host: { capabilities: ['appearance'], appearance: { fields: ['wallpaper'] } }, config: { plugin: { assertCurrent() {} } } };
   h.wallpaper = { url: `cindy-media://client-wallpaper/${'b'.repeat(64)}.webp`,
@@ -45,5 +44,4 @@ it('releases a wallpaper-only persisted selection without eager resource work du
   await vi.waitFor(() => expect(h.wallpaper.url).toBe(''), { timeout: 100 });
   expect(h.settings.wallpaperId).toBe('none');
   expect(h.readResource).not.toHaveBeenCalled(); expect(describe).not.toHaveBeenCalled(); expect(read).not.toHaveBeenCalled();
-  expect(h.icon).not.toHaveBeenCalled();
 });
