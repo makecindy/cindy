@@ -2639,6 +2639,8 @@ type SendToSessionInternalResult =
       /** create + useWorktree 成功时为新 session 的 worktree 绝对路径;其余情况 undefined。 */
       worktreePath?: string | null;
       projectDir?: string | null;
+      /** The project was chosen because the requested execution directory is inside it. */
+      projectFromWorkingDir?: true;
       workspaceKind?: 'project' | 'dialogue';
       workingDir?: string;
       model?: string;
@@ -18352,6 +18354,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     setSessionRuntime: (params) => sessionControlService.setSessionRuntime(params),
     sendToSession: async (params) => {
       const ownerScope = captureDataOwnerBroadcastScope();
+      let projectFromWorkingDir = false;
       if (!params.targetSessionId && !params.createDefaults) {
         if (!params.dispatcherSessionId) {
           return { ok: false, errorCode: 'INVALID_ARGS',
@@ -18359,8 +18362,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         }
         const project = await resolveSessionProject({
           callerSessionId: params.dispatcherSessionId, projectDir: params.projectDir,
+          workingDir: params.workingDir,
         });
         if (!project.ok) return { ok: false, errorCode: 'INVALID_ARGS', message: project.message };
+        projectFromWorkingDir = 'projectFromWorkingDir' in project;
         params = { ...params, projectDir: project.projectDir,
           workingDir: params.workingDir ?? project.projectDir ?? undefined };
       }
@@ -18385,7 +18390,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       if (!isDataOwnerBroadcastScopeCurrent(ownerScope)) {
         return { ok: false, errorCode: 'AGENT_NOT_READY', message: 'Data owner changed before delivery.' };
       }
-      return sendToSessionInternal({
+      const sent = await sendToSessionInternal({
         ...params,
         ...(params.deliveryClientId ? { clientId: params.deliveryClientId } : {}),
         autoReviewUserText: request.autoReviewUserText,
@@ -18402,6 +18407,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           forceQueue: true,
         } : {}),
       });
+      return sent.ok && projectFromWorkingDir ? { ...sent, projectFromWorkingDir: true } : sent;
     },
     enableOrca: enableOrcaInternal,
     disableOrca: disableOrcaInternal,
