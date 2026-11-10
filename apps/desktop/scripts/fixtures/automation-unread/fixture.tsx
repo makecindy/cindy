@@ -5,6 +5,8 @@ import { AutomationSessionGroupItem } from '../../../src/renderer/features/cc-ag
 import type { Session } from '../../../src/renderer/lib/ccAgent.types';
 import { Button } from '../../../src/renderer/components/ui/button';
 const noop = () => {};
+// Relative to now so the 24h recent-run exemption never expires and the scenario stays stable.
+const now = Date.now();
 const sessions = Array.from(
   { length: 8 },
   (_, i) =>
@@ -13,8 +15,8 @@ const sessions = Array.from(
       title: i === 0 ? '组头代表的最新未读' : i === 7 ? '已读结果' : `巡检结果 ${i}`,
       status: 'active',
       source: 'scheduler',
-      createdAt: '2026-11-10T00:00:00Z',
-      updatedAt: '2026-11-10T00:00:00Z',
+      createdAt: new Date(now - i * 60_000).toISOString(),
+      updatedAt: new Date(now - i * 60_000).toISOString(),
       agentKind: 'codex',
       pinnedAt: null,
       sdkSessionId: null,
