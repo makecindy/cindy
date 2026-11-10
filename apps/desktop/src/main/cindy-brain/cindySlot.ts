@@ -617,6 +617,14 @@ export class GhostCindySlot {
   }
 
   /**
+   * 出网前后各看一次临时窗口:调用开始时 key 还没写入、await 期间 CredentialsSync
+   * 刚写好时,事后的探测已是就绪,单看它会把一次本可重试的失败报成终态。
+   */
+  private wasModelAccessTransient(atStart: boolean): boolean {
+    return atStart || this.isModelAccessTransient();
+  }
+
+  /**
    * 处理一条 cindy-request(ghost-pipe:send 的 invoke 返回值即本结果)。
    * 永不 reject——一切失败折叠成 { ok:false, message },沙箱拿到的是
    * 结构化拒绝而不是异常穿透。
@@ -696,6 +704,7 @@ export class GhostCindySlot {
     // 文本转向量(embed.text):同 oneshot 走独立分支 —— 不产媒体、不落总仓、
     // 没有归属查账与异步受理,整条媒体链的东西一样都用不上。
     if (p?.kind === 'embed_text') {
+      const transientAtStart = this.isModelAccessTransient();
       try {
         return await this.handleEmbedText(ghostId, payload);
       } catch (err) {
@@ -709,7 +718,7 @@ export class GhostCindySlot {
         // DISABLED 是用户停用,不受影响。
         if (
           (err as { code?: unknown } | null)?.code === 'AUTH_FAILED' &&
-          this.isModelAccessTransient()
+          this.wasModelAccessTransient(transientAtStart)
         ) {
           errorCode = 'INTERNAL';
         }
@@ -1487,6 +1496,7 @@ export class GhostCindySlot {
         logicalProvider: 'cindy',
       });
       let allowRetry = false;
+      const transientAtStart = this.isModelAccessTransient();
       try {
         const outcome = await searchWeb({ query, limit });
         if (
@@ -1515,7 +1525,7 @@ export class GhostCindySlot {
           if (
             outcome.errorCode === 'NOT_CONFIGURED' &&
             outcome.requestStarted === false &&
-            this.isModelAccessTransient()
+            this.wasModelAccessTransient(transientAtStart)
           ) {
             return {
               ok: false,
@@ -1662,6 +1672,7 @@ export class GhostCindySlot {
         const resolved = declaredModel ? this.deps.resolveOneshotModel?.(declaredModel) : null;
         if (resolved) route = { kind: 'catalog', ...resolved };
       }
+      const transientAtStart = this.isModelAccessTransient();
       const outcome = await oneshot({
         prompt,
         // 缺省不设输出上限:各供应商/模型按自然输出,60s 超时是实际边界;
@@ -1684,7 +1695,7 @@ export class GhostCindySlot {
         if (
           outcome.reason === 'no_candidate' &&
           (this.deps.isOwnerBoundaryPending() ||
-            (!pinnedOutsideCindy && this.isModelAccessTransient()))
+            (!pinnedOutsideCindy && this.wasModelAccessTransient(transientAtStart)))
         ) {
           return {
             ok: false,

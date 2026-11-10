@@ -528,6 +528,30 @@ describe('Cindy Web Search', () => {
     );
   });
 
+  // #7730 review:凭证在 await 期间写入时,事后探测已是就绪;调用开始时的临时状态
+  // 仍然算数,否则一次马上能成的请求会被报成终态。
+  it('搜索出网前凭证暂时不可用、返回前凭证已写入 → 仍按临时状态回 UPSTREAM_UNAVAILABLE', async () => {
+    let provisioning = true;
+    const { slot } = makeSlot({
+      getGhost: searchGhost,
+      searchWeb: vi.fn(async () => {
+        provisioning = false;
+        return {
+          ok: false as const,
+          errorCode: 'NOT_CONFIGURED' as const,
+          message: '搜索尚未就绪',
+          requestStarted: false,
+        };
+      }),
+      isModelAccessReady: () => !provisioning,
+      isModelAccessTransientlyUnavailable: () => provisioning,
+    });
+    expect(await slot.handleModelRequest('art', SEARCH_REQ)).toMatchObject({
+      ok: false,
+      errorCode: 'UPSTREAM_UNAVAILABLE',
+    });
+  });
+
   it('仅明确未出网的失败允许重试；已出网错误保留错误码并消费 binding', async () => {
     const notStartedSearch = vi.fn(async () => ({
       ok: false as const,
@@ -2068,6 +2092,21 @@ describe('快问快答(oneshot_text)', () => {
     expect(await slot.handleModelRequest('art', ONESHOT)).toMatchObject({ ok: false, errorCode });
   });
 
+  // #7730 review:oneshot 快照了缺 key 的状态回 no_candidate,CredentialsSync 在 promise
+  // 续体之前写好 key。事后看已就绪,但这单仍是临时失败,不能报终态 NO_CANDIDATE。
+  it('链上无候选时凭证在 await 期间写入 → 仍回 INTERNAL', async () => {
+    let provisioning = true;
+    const { slot } = withText({
+      oneshotText: vi.fn(async () => {
+        provisioning = false;
+        return { ok: false as const, reason: 'no_candidate' as const, message: '不行' };
+      }),
+      isModelAccessReady: () => !provisioning,
+      isModelAccessTransientlyUnavailable: () => provisioning,
+    });
+    expect(await slot.handleModelRequest('art', ONESHOT)).toMatchObject({ ok: false, errorCode: 'INTERNAL' });
+  });
+
   // #7730 review:插件钉在停用的非 Cindy 供应商上,requestUtilityText 对显式选择 fail closed、
   // 不回落 Cindy;凭证下发窗口救不回这条路由,不能改报临时失败。钉在 xd 上则仍是临时口径。
   it.each([
@@ -2419,6 +2458,22 @@ describe('文本转向量(embed_text)', () => {
       ...deps,
       isModelAccessReady: () => false,
       isModelAccessTransientlyUnavailable: () => true,
+    } as unknown as Partial<CindySlotDeps>);
+    expect(await slot.handleModelRequest('art', EMBED)).toMatchObject({
+      ok: false,
+      errorCode: 'INTERNAL',
+    });
+  });
+
+  it('执行层 AUTH_FAILED 时凭证在 await 期间写入 → 仍回 INTERNAL', async () => {
+    let provisioning = true;
+    const { slot } = withEmbed({
+      embedText: vi.fn(async () => {
+        provisioning = false;
+        throw Object.assign(new Error('no key'), { code: 'AUTH_FAILED' });
+      }),
+      isModelAccessReady: () => !provisioning,
+      isModelAccessTransientlyUnavailable: () => provisioning,
     } as unknown as Partial<CindySlotDeps>);
     expect(await slot.handleModelRequest('art', EMBED)).toMatchObject({
       ok: false,

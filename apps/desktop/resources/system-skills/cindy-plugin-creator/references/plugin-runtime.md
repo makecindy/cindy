@@ -122,6 +122,15 @@ const search = await cindy.send({
   callerTool: msg.tool,            // 与 callId 配对验身,必须逐字透传
 });
 // search = { ok:true, provider:'cindy', results:[{ title, url, snippet }] }
+// 失败 = { ok:false, message, errorCode },errorCode 怎么处理:
+//   'UPSTREAM_UNAVAILABLE' = 暂时不可用(上游故障、账号切换中,或刚登录凭证
+//     还在下发 / 同步暂时失败:这段窗口里"未配置"会改报成它)。稍后可以用同一个
+//     tool-call 再发一次;
+//   'NOT_CONFIGURED' = 主机或服务端确实没配好搜索,重试没用,如实告诉用户;
+//   'QUOTA_EXHAUSTED' / 'AUTH_REJECTED' = 额度或账号问题,提示用户处理,别重试;
+//   'RATE_LIMITED' = 退避后再试;'INVALID_PARAMS' / 'PERMISSION_DENIED' = 调用
+//     本身不对(参数、callId / callerTool 没透传),改代码;'RESPONSE_INVALID' /
+//     'INTERNAL' = 主机侧异常,别轰炸,报给用户即可。
 // 改图(需详单含 "edit";源图必须是本插件名下的,1–4 张——含用户过户给你的
 // args.attachments 指纹):
 //   { kind: 'edit_image', prompt, hashes: ['<指纹>'] }
@@ -286,7 +295,9 @@ const r = await cindy.send({
   声明前确认目标用户群的主机版本;
 - `errorCode:'NO_CANDIDATE'` = 用户当前没有可用的快速通道(未配置或凭证
   不可用)。**这是正常失败面**:如实提示用户,不要重试轰炸。账号切换、刚登录
-  凭证还在下发或同步暂时失败时主机回 `'INTERNAL'` 而不是它,稍后可以再试;
+  凭证还在下发或同步暂时失败时主机回 `'INTERNAL'` 而不是它,稍后可以再试。
+  例外:用户在详情页把这个插件钉在非 Cindy 的供应商上时,Cindy 凭证下发救不回
+  那条路由,这段窗口里无候选照样回 `'NO_CANDIDATE'`(账号切换期间仍回 `'INTERNAL'`);
 - `expectJson: true` 时主机会剥掉代码围栏并校验 JSON.parse,解析失败返回
   `errorCode:'BAD_MODEL_OUTPUT'`(message 带原始输出开头供排查)。字段结构
   在 prompt 里自己描述,主机不做逐字段 schema 校验;
