@@ -14467,7 +14467,12 @@
       "selectFolderFailed": "擇目錄未成，請再試",
       "projectsToggleExpand": "展諸案差事",
       "projectsToggleCollapse": "收諸案差事",
-      "filterAria": "側欄顯示規制（狀態：{{status}}，Harness：{{vendor}}，近活躍：{{lastActivity}}，分組：{{groupBy}}，排序：{{sortBy}}，案：{{projects}}，同僚：{{creators}}）",
+      "filterAria": "側欄顯示規制（狀態：{{status}}，Harness：{{vendor}}，近活躍：{{lastActivity}}，自動化：{{automation}}，分組：{{groupBy}}，排序：{{sortBy}}，案：{{projects}}，同僚：{{creators}}）",
+      "filterAutomationHeading": "自動化",
+      "filterAutomation": {
+        "all": "全部",
+        "hidden": "隱藏"
+      },
       "organizeSidebar": "側欄顯示規制",
       "filterAllText": "全",
       "filterSelectedProjects": "已擇 {{count}} 案",

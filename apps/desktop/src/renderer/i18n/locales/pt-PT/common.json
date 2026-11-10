@@ -14670,7 +14670,12 @@
       "selectFolderFailed": "Não foi possível selecionar a pasta. Tente novamente.",
       "projectsToggleExpand": "Expandir todas as sessões do projeto",
       "projectsToggleCollapse": "Recolher todas as sessões do projeto",
-      "filterAria": "Definições da barra lateral (Estado: {{status}}, Harness: {{vendor}}, Última atividade: {{lastActivity}}, Agrupar por: {{groupBy}}, Ordenar por: {{sortBy}}, Projetos: {{projects}}, Colegas: {{creators}})",
+      "filterAria": "Definições da barra lateral (Estado: {{status}}, Harness: {{vendor}}, Última atividade: {{lastActivity}}, Automatização: {{automation}}, Agrupar por: {{groupBy}}, Ordenar por: {{sortBy}}, Projetos: {{projects}}, Colegas: {{creators}})",
+      "filterAutomationHeading": "Automatização",
+      "filterAutomation": {
+        "all": "Todas",
+        "hidden": "Ocultas"
+      },
       "organizeSidebar": "Definições da barra lateral",
       "filterAllText": "todos",
       "filterSelectedProjects": "{{count}} selecionadas",

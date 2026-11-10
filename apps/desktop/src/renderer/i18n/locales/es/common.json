@@ -14670,7 +14670,12 @@
       "selectFolderFailed": "No se pudo seleccionar la carpeta. Vuelve a intentarlo.",
       "projectsToggleExpand": "Expandir todas las sesiones del proyecto",
       "projectsToggleCollapse": "Contraer todas las sesiones del proyecto",
-      "filterAria": "Configuración de la barra lateral (Estado: {{status}}, Harness: {{vendor}}, Última actividad: {{lastActivity}}, Agrupar por: {{groupBy}}, Ordenar por: {{sortBy}}, Proyectos: {{projects}}, Compañeros: {{creators}})",
+      "filterAria": "Configuración de la barra lateral (Estado: {{status}}, Harness: {{vendor}}, Última actividad: {{lastActivity}}, Automatización: {{automation}}, Agrupar por: {{groupBy}}, Ordenar por: {{sortBy}}, Proyectos: {{projects}}, Compañeros: {{creators}})",
+      "filterAutomationHeading": "Automatización",
+      "filterAutomation": {
+        "all": "Todas",
+        "hidden": "Ocultas"
+      },
       "organizeSidebar": "Configuración de la barra lateral",
       "filterAllText": "todos",
       "filterSelectedProjects": "{{count}} seleccionado",

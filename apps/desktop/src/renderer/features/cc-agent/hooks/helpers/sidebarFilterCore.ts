@@ -42,6 +42,7 @@ export const PINNED_SECTION_COLLAPSED_KEY = 'cc-agent.sidebar.pinnedSectionColla
 /** 单一混排列表(未按设备切段)里唯一对话组的折叠状态 key。 */
 export const DIALOGUE_GROUP_ALL_KEY = 'all';
 export const LAST_ACTIVITY_KEY = 'cc-agent.sidebar.filter.lastActivity';
+export const HIDE_AUTOMATION_KEY = 'cc-agent.sidebar.filter.hideAutomation';
 export const SORT_BY_KEY = 'cc-agent.sidebar.filter.sortBy';
 export const PROJECT_ORDER_KEY = 'cc-agent.sidebar.filter.projectOrder';
 export const TASK_INFO_KEY = 'cc-agent.sidebar.filter.taskInfo';
@@ -67,6 +68,8 @@ export type FilterVendor = 'all' | 'cc' | 'codex' | 'pi';
 export type FilterGroupBy = 'project' | 'flat';
 /** 最近活跃范围筛选。默认 all。 */
 export type FilterLastActivity = 'all' | '1d' | '3d' | '7d' | '30d';
+/** 自动化记录筛选。false = 全部（默认）；true = 隐藏自动化生成的任务记录。 */
+export type FilterHideAutomation = boolean;
 /** Sidebar 主列表任务排序。默认 recency(菜单文案「按时间排序」= 最近活动在前)。
  *  created = 创建时间倒序,不随任务活动重排。
  *  priority = 等待处理 > 运行中 > 其余按最近活动。
@@ -544,6 +547,31 @@ export function persistLastActivity(lastActivity: FilterLastActivity): void {
     storage.setItem(LAST_ACTIVITY_KEY, lastActivity);
   } catch (err) {
     log.warn('[useSidebarFilter] failed to persist lastActivity:', err);
+  }
+}
+
+/* ============================== hideAutomation load/persist ============================== */
+
+export function loadHideAutomation(): FilterHideAutomation {
+  const storage = safeStorage();
+  if (!storage) return false;
+  let raw: string | null = null;
+  try {
+    raw = storage.getItem(HIDE_AUTOMATION_KEY);
+  } catch (err) {
+    log.warn('[useSidebarFilter] failed to read hideAutomation:', err);
+    return false;
+  }
+  return raw === 'true';
+}
+
+export function persistHideAutomation(hideAutomation: FilterHideAutomation): void {
+  const storage = safeStorage();
+  if (!storage) return;
+  try {
+    storage.setItem(HIDE_AUTOMATION_KEY, hideAutomation ? 'true' : 'false');
+  } catch (err) {
+    log.warn('[useSidebarFilter] failed to persist hideAutomation:', err);
   }
 }
 

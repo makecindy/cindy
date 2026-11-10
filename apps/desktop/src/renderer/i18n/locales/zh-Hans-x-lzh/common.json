@@ -14467,7 +14467,12 @@
       "selectFolderFailed": "择目录未成，请再试",
       "projectsToggleExpand": "展诸案差事",
       "projectsToggleCollapse": "收诸案差事",
-      "filterAria": "侧栏显示规制（状态：{{status}}，Harness：{{vendor}}，近活跃：{{lastActivity}}，分组：{{groupBy}}，排序：{{sortBy}}，案：{{projects}}，同僚：{{creators}}）",
+      "filterAria": "侧栏显示规制（状态：{{status}}，Harness：{{vendor}}，近活跃：{{lastActivity}}，自动化：{{automation}}，分组：{{groupBy}}，排序：{{sortBy}}，案：{{projects}}，同僚：{{creators}}）",
+      "filterAutomationHeading": "自动化",
+      "filterAutomation": {
+        "all": "全部",
+        "hidden": "隐藏"
+      },
       "organizeSidebar": "侧栏显示规制",
       "filterAllText": "全",
       "filterSelectedProjects": "已择 {{count}} 案",

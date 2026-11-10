@@ -14533,7 +14533,12 @@
       "selectFolderFailed": "Ordner konnte nicht ausgewählt werden. Versuche es erneut.",
       "projectsToggleExpand": "Alle Projektsitzungen ausklappen",
       "projectsToggleCollapse": "Alle Projektsitzungen einklappen",
-      "filterAria": "Seitenleisteneinstellungen (Status: {{status}}, Harness: {{vendor}}, Letzte Aktivität: {{lastActivity}}, Gruppierung: {{groupBy}}, Sortierung: {{sortBy}}, Projekte: {{projects}}, Teammitglieder: {{creators}})",
+      "filterAria": "Seitenleisteneinstellungen (Status: {{status}}, Harness: {{vendor}}, Letzte Aktivität: {{lastActivity}}, Automatisierung: {{automation}}, Gruppierung: {{groupBy}}, Sortierung: {{sortBy}}, Projekte: {{projects}}, Teammitglieder: {{creators}})",
+      "filterAutomationHeading": "Automatisierung",
+      "filterAutomation": {
+        "all": "Alle",
+        "hidden": "Ausgeblendet"
+      },
       "organizeSidebar": "Seitenleisteneinstellungen",
       "filterAllText": "alle",
       "filterSelectedProjects": "{{count}} ausgewählt",
