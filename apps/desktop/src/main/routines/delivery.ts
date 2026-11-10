@@ -44,6 +44,7 @@ async function resolveTargets(botId: string): Promise<ResolvedTarget[]> {
           case 'telegram': receiver = encodeTelegramLaneUserId(lane.chatId, lane.threadId); break;
           case 'dingtalk': receiver = encodeDingTalkLaneUserId(lane.chatId); break;
           case 'wecom': receiver = encodeWecomGroupLane(lane.chatId); break;
+          case 'imessage': break;
           default: continue;
         }
       }
