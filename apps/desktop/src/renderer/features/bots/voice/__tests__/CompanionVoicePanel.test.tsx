@@ -783,6 +783,15 @@ it('offers unmute again after capture fails without replacing the call with a fu
   models = [{ id: 'tts', name: 'Speech', defaultVoice: 'alloy' }];
   render(panel());
   await waitFor(() => expect(audio.start).toHaveBeenCalledOnce());
+  // Production entry: CompanionVoicePanel mute control. The Windows shard can
+  // observe audio.start before React has left the microphone phase, where the
+  // button is still disabled; clicking then is a no-op and never exercises the
+  // intended mute/retry rule. Wait for the minimal user-operable state first.
+  await waitFor(() =>
+    expect(
+      screen.getByRole('button', { name: 'bots.voiceMode.mute' }).hasAttribute('disabled'),
+    ).toBe(false),
+  );
   fireEvent.click(screen.getByRole('button', { name: 'bots.voiceMode.mute' }));
   await waitFor(() =>
     expect(
