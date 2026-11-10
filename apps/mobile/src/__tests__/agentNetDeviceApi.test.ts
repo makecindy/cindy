@@ -66,6 +66,13 @@ it('keeps a live V2 directory during a transient legacy outage', async () => {
   expect(await request()).toMatchObject({ handled: true, value: { devices: [{ deviceId: 'new' }, { deviceId: 'shared' }] } });
 });
 
+it.each(['AGENT_NET_NETWORK_ERROR', 'AGENT_NET_REQUEST_TIMEOUT'])('keeps live legacy devices during a V2 %s', async code => {
+  fake.directory.mockRejectedValue(Object.assign(new Error(code), { status: 0, code }));
+  expect(await request()).toMatchObject({ handled: true, value: { devices: [{ deviceId: 'old' }, { deviceId: 'shared' }] } });
+  fake.encryptedOnly = true;
+  await expect(request()).rejects.toMatchObject({ status: 0, code });
+});
+
 it('rejects a mixed directory that finishes after the account changes', async () => {
   let finish!: (value: { devices: DeviceView[] }) => void;
   fake.legacy.mockReturnValue(new Promise(resolve => { finish = resolve; }));

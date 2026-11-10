@@ -14,7 +14,7 @@ import { readNativeMedia } from '../nativeMedia.js';
 import type { NativeEnginePort } from '../nativeTransport.js';
 
 afterEach(() => vi.useRealTimers());
-function fixture(complete = false, kind: 'portable' | 'node' = 'portable') {
+function fixture(complete = false, kind: 'portable' | 'node' = 'portable', requestFetch?: typeof fetch, assertCurrent = () => {}) {
   const identity = generateIdentity('media-controller'), { bootstrap } = createPrivateNetwork('Media cancellation', identity);
   let upstream!: AbortSignal, source!: ReadableStreamDefaultController<Uint8Array>;
   let noteRead!: () => void;
@@ -32,7 +32,7 @@ function fixture(complete = false, kind: 'portable' | 'node' = 'portable') {
     bootstrap.ownerCertificate, bootstrap.rootPublicKey, undefined, { fetch: fetchResponse })
     : new PortableAgentNetClient('https://relay.example.test', { identity,
       sign: async text => signature(identity.signingPrivateKey, text), random: async () => Buffer.alloc(32, 17).toString('base64url') },
-    bootstrap.ownerCertificate, bootstrap.rootPublicKey, { verifyCertificate, assertCurrent() {}, fetch: fetchResponse,
+    bootstrap.ownerCertificate, bootstrap.rootPublicKey, { verifyCertificate, assertCurrent, fetch: requestFetch ?? fetchResponse,
       sha256: value => createHash('sha256').update(value).digest('base64url'),
       createWebSocket() { throw new Error('No WebSocket in this fixture'); } });
   const command = vi.fn(async <T = unknown>(value: unknown): Promise<T> => ((value as { op: string }).op === 'mediaOpen'
@@ -86,4 +86,64 @@ it('also cancels an upload acknowledgement whose JSON body stalls after headers'
     expect(value.signal().aborted).toBe(true);
     expect(await outcome).toBeInstanceOf(Error);
   } finally { value.stop(); await outcome; }
+});
+
+// Directory fallback receives SDK errors, not ApiError. Previous media coverage
+// never exercised raw Fetch failures or the control request's 10-second deadline.
+// Unit: real request/signing/JSON path with injected Fetch, no I/O or real waits.
+it.each(['headers', 'body'] as const)('classifies a network failure during %s as an unavailable request', async stage => {
+  const requestFetch = vi.fn<typeof fetch>(async () => {
+    if (stage === 'headers') throw new TypeError('Network request failed');
+    return new Response(new ReadableStream({ start(controller) { controller.error(new TypeError('Network request failed')); } }));
+  });
+  const value = fixture(false, 'portable', requestFetch);
+  await expect(value.api.request('GET', '/directory')).rejects.toMatchObject({ status: 0, code: 'AGENT_NET_NETWORK_ERROR' });
+  expect(requestFetch).toHaveBeenCalledTimes(1);
+});
+
+it.each(['headers', 'body'] as const)('classifies the request deadline during %s without waiting in real time', async stage => {
+  vi.useFakeTimers();
+  let started!: () => void;
+  const ready = new Promise<void>(resolve => { started = resolve; });
+  const requestFetch: typeof fetch = async (_url, init) => {
+    const signal = init!.signal!;
+    started();
+    if (stage === 'headers') return new Promise((_resolve, reject) => signal.addEventListener('abort', () => reject(signal.reason), { once: true }));
+    return new Response(new ReadableStream({ start(controller) {
+      signal.addEventListener('abort', () => controller.error(signal.reason), { once: true });
+    } }));
+  };
+  const value = fixture(false, 'portable', requestFetch);
+  const outcome = value.api.request('GET', '/directory').catch(error => error);
+  await ready;
+  await vi.advanceTimersByTimeAsync(10_000);
+  expect(await outcome).toMatchObject({ status: 0, code: 'AGENT_NET_REQUEST_TIMEOUT' });
+  expect(vi.getTimerCount()).toBe(0);
+});
+
+it('preserves certificate denial and malformed JSON as terminal failures', async () => {
+  const denied = fixture(false, 'portable', async () => Response.json({ error: { code: 'CERTIFICATE_INVALID' } }, { status: 403 }));
+  await expect(denied.api.request('GET', '/directory')).rejects.toMatchObject({ status: 403, code: 'CERTIFICATE_INVALID' });
+  const malformed = fixture(false, 'portable', async () => new Response('not JSON'));
+  await expect(malformed.api.request('GET', '/directory')).rejects.toBeInstanceOf(SyntaxError);
+});
+
+it('does not reclassify caller cancellation as a transient outage', async () => {
+  let started!: () => void;
+  const ready = new Promise<void>(resolve => { started = resolve; });
+  const value = fixture(false, 'portable', async (_url, init) => new Promise((_resolve, reject) => {
+    init!.signal!.addEventListener('abort', () => reject(init!.signal!.reason), { once: true }); started();
+  }));
+  const caller = new AbortController(), outcome = value.api.request('GET', '/directory', undefined, { signal: caller.signal }).catch(error => error);
+  await ready; caller.abort();
+  const error = await outcome;
+  expect(error.name).toBe('AbortError');
+  expect(error.status).toBeUndefined();
+});
+
+it('keeps an owner change terminal when Fetch fails at the same time', async () => {
+  let changed = false;
+  const value = fixture(false, 'portable', async () => { changed = true; throw new TypeError('Network request failed'); },
+    () => { if (changed) throw new Error('AGENT_NET_OWNER_CHANGED'); });
+  await expect(value.api.request('GET', '/directory')).rejects.toThrow('AGENT_NET_OWNER_CHANGED');
 });
