@@ -41,7 +41,10 @@ export function createNodePluginProcessFactory(workerEntry: string) {
     }
     const child = spawn(process.execPath, [workerEntry, entryPath], {
       cwd: os.tmpdir(), env: pluginNodeEnvironment(ghostId),
-      stdio: ['ignore', 'pipe', 'pipe', 'pipe'], windowsHide: true,
+      // 'overlapped' is a plain pipe on POSIX. On Windows the worker opens this
+      // inherited descriptor with net.Socket, which libuv accepts only when the
+      // child's handle was created overlapped; a plain pipe never delivers `ready`.
+      stdio: ['ignore', 'pipe', 'pipe', 'overlapped'], windowsHide: true,
     });
     const control = child.stdio[3] as Duplex;
     const events = new EventEmitter();

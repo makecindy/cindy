@@ -128,6 +128,9 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
   assert.equal(source.deviceId, 'ios');
   assert.equal(source.platform, 'mobile');
   await waitFor(() => received.every(frames => frames.some(frame => frame.payload.channel === 'maker:input:projection')));
+  // Saved error rows must reach the channel desktop and mobile already listen on.
+  hub.publish({ type: 'error_persisted', sessionId: 'task', persistId: 'err' });
+  await waitFor(() => received.every(frames => frames.some(frame => frame.payload.channel === 'local-db:session:error-persisted')));
   await host.revoke('ios');
   const denied = await clients[0].invoke('host', { channel: 'local-db:sessions:get', args: ['task'] }).catch(error => ({ denied: error }));
   assert.ok(denied.denied || denied.ok === false);

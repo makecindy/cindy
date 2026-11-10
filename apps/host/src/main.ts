@@ -1187,6 +1187,11 @@ const serverDeps = {
     return { deleted: true, sessionId };
   },
   discardProvisionalSession: async (sessionId: string) => {
+    // Only an unsent draft may be closed: a late request for a task another
+    // client already sent must leave its queue running.
+    if (!isProvisionalSession(sessionId)) {
+      return { discarded: false, remaining: Boolean(await sessionStorage?.get(sessionId)) };
+    }
     await inputQueue.disposeSession(sessionId);
     pendingAgentSwitches.delete(sessionId);
     const discarded = await discardProvisionalSessionRow(sessionId, sessionDraftPorts);

@@ -198,7 +198,7 @@ export function createHostDeviceLink(deps: HostDeviceLinkPorts) {
       case 'input_projection': emit(MAKER_PUSH.INPUT_PROJECTION, event.projection); break;
       case 'message_created': emit('local-db:messages:created', { sessionId: id, message: event.message }); break;
       case 'message_deleted': emit('local-db:messages:deleted', event); break;
-      case 'error_persisted': emit('local-db:messages:error-persisted', { sessionId: id, persistId: event.persistId }); break;
+      case 'error_persisted': emit('local-db:session:error-persisted', { sessionId: id, persistId: event.persistId }); break;
       case 'subagent_runs_changed': emit('local-db:subagent-runs:changed', event); break;
       case 'session_created':
       case 'session_changed':

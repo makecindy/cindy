@@ -33,19 +33,21 @@ test('rejects missing, malformed and wrong bearer tokens', () => {
 
 test('a profile has one service owner and old cleanup cannot delete its replacement', async (t) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-host-lease-'));
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const leases = [];
+  // Windows cannot delete the SQLite lock file while a lease still holds it.
+  t.after(() => { for (const lease of leases) lease.release(); fs.rmSync(dir, { recursive: true, force: true }); });
   assert.deepEqual(await readHostProcessStatus(dir), { running: false });
   assert.deepEqual(await requestHostStop(dir), { stopping: false, running: false });
   const first = acquireHostServiceLease(dir);
   assert.equal(first.held, true);
-  t.after(() => first.release());
+  leases.push(first);
   const cleanup = publishHostEndpoint(dir, 'http://127.0.0.1:3456', 'old-instance');
   assert.equal(acquireHostServiceLease(dir).held, false);
   assert.equal(readHostEndpoint(dir).instanceId, 'old-instance');
   first.release();
   const replacement = acquireHostServiceLease(dir);
   assert.equal(replacement.held, true);
-  t.after(() => replacement.release());
+  leases.push(replacement);
   const cleanupReplacement = publishHostEndpoint(dir, 'http://127.0.0.1:3457', 'new-instance');
   cleanup();
   assert.equal(readHostEndpoint(dir).instanceId, 'new-instance');
