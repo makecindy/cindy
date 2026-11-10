@@ -20,7 +20,12 @@ import { existsSync, readFileSync, promises as fsp } from 'node:fs';
 import { MIRROR_ATTACHMENT_MAX_BYTES } from '../companion-cloud/mirror.js';
 import { request as httpRequest } from 'node:http';
 import { request as httpsRequest } from 'node:https';
-import { migrateLocalGroups, type ChatContentBlock } from './chatServerMigration.js';
+import {
+  CHAT_UPGRADE_RETRY_INITIAL_MS,
+  migrateLocalGroups,
+  nextChatUpgradeRetryDelay,
+  type ChatContentBlock,
+} from './chatServerMigration.js';
 import { chatErrorDiagnostic, chatGroupFailure, contentShapes, detailsDiagnostic, missingGroupCode } from './chatServerErrors.js';
 import { chatInviteShareBase, createChatInviteShare, notifyChatInviteRevoked, resolveChatInviteShare } from './chatInviteShares.js';
 import { createChatMedia } from './chatServerMedia.js';
@@ -777,7 +782,11 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
   });
   let upgrade: Promise<Map<string, string>> | undefined;
   let upgradeRetryAt = 0;
+  let upgradeRetryDelayMs = CHAT_UPGRADE_RETRY_INITIAL_MS;
   const upgradeErrors = new Map<string, string>();
+  // selfId is populated by register(); resolve the scoped store only after that
+  // point, and reuse the same factory at every read/write boundary.
+  const migrationReceipts = () => chatMigrationReceipts(config.baseUrl, selfId, current);
   const runUpgrade = async (mode: 'background' | 'foreground'): Promise<Map<string, string>> => {
     upgradeRetryAt = Infinity;
     await register(mode);
@@ -810,13 +819,25 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
         }
         upgradeErrors.delete(source); changed(room);
       },
-      onError: (source, error) => {
+      onError: (source, error, info) => {
+        if (info?.terminal) {
+          // Terminal means no automatic retry; never leave it in the pending map
+          // that drives the UI's "history will retry" state.
+          upgradeErrors.delete(source);
+          deps.log?.warn('Group history upgrade stopped', {
+            groupId: source,
+            ...chatErrorDiagnostic(error),
+            code: info.code,
+          });
+          changed(upgradedGroups.get(source) ?? source);
+          return;
+        }
         incomplete = true;
         upgradeErrors.set(source, error instanceof Error ? error.message : 'IMPORT_FAILED');
         deps.log?.warn('Group history upgrade will retry', { groupId: source, ...chatErrorDiagnostic(error) });
         changed(upgradedGroups.get(source) ?? source);
       },
-      receipts: chatMigrationReceipts(config.baseUrl, selfId, current),
+      receipts: migrationReceipts(),
       groups: localSources,
       messages: async (groupId, after) => {
         const rows = await db.select().from(botGroupMessages).where(and(eq(botGroupMessages.groupId, groupId), gt(botGroupMessages.sequence, after)))
@@ -842,7 +863,13 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       },
       attachments: (room, source, files, author) => media.upload(room, source, files, author),
     });
-    upgradeRetryAt = incomplete ? Date.now() + 60000 : Infinity;
+    if (incomplete) {
+      upgradeRetryAt = Date.now() + upgradeRetryDelayMs;
+      upgradeRetryDelayMs = nextChatUpgradeRetryDelay(upgradeRetryDelayMs);
+    } else {
+      upgradeRetryAt = Infinity;
+      upgradeRetryDelayMs = CHAT_UPGRADE_RETRY_INITIAL_MS;
+    }
     return upgradedGroups;
   };
   function ensureUpgrade(mode: 'background' | 'foreground'): Promise<Map<string, string>> {
@@ -850,8 +877,13 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       if (upgrade === pending) {
         // No migration ran when registration was locally deferred. Do not cache
         // that rejection as a failed import for a later foreground caller.
-        if (error instanceof WorkRequestDeferred) { upgrade = undefined; upgradeRetryAt = Date.now() + 2000; }
-        else upgradeRetryAt = Date.now() + 60000;
+        if (error instanceof WorkRequestDeferred) {
+          upgrade = undefined;
+          upgradeRetryAt = Date.now() + 2000;
+        } else {
+          upgradeRetryAt = Date.now() + upgradeRetryDelayMs;
+          upgradeRetryDelayMs = nextChatUpgradeRetryDelay(upgradeRetryDelayMs);
+        }
       }
       throw error;
     });
@@ -896,7 +928,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       // retryable rather than permanently falling back to private chat before we know the route.
       await register('foreground');
       if (upgradedGroups.has(groupId)) return upgradedGroups.get(groupId)!;
-      const receipt = chatMigrationReceipts(config.baseUrl, selfId, current).read(groupId);
+      const receipt = migrationReceipts().read(groupId);
       if (!receipt) return null;
       upgradedGroups.set(groupId, receipt.roomId);
       return receipt.roomId;
@@ -908,11 +940,29 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     if (known) { void ensureRegistered(); return known; }
     await ensureRegistered();
     if (upgradedGroups.has(groupId)) return upgradedGroups.get(groupId)!;
+    // A persisted terminal failure is not pending: surface the server's terminal
+    // category instead of leaving the group stuck on IMPORT_PENDING forever.
+    const failed = migrationReceipts().readFailure?.(groupId);
+    if (failed) {
+      // A later completed import supersedes a stale terminal file (for example
+      // after an older client unarchived and migrated the room).
+      const receipt = migrationReceipts().read(groupId);
+      if (receipt) {
+        upgradedGroups.set(groupId, receipt.roomId);
+        return receipt.roomId;
+      }
+      throw new Error(failed.code);
+    }
     // A server room has no local row; only an existing local history may still need its upgrade.
     const [localRow] = await getDbClient().drizzle.select({ id: botGroups.id }).from(botGroups).where(eq(botGroups.id, groupId)).limit(1);
     if (localRow && (await localSources()).some(group => group.id === groupId)) {
       await ensureUpgrade('foreground');
-      if (!upgradedGroups.has(groupId)) throw new Error('IMPORT_PENDING');
+      if (!upgradedGroups.has(groupId)) {
+        // The foreground run itself may have discovered the terminal state.
+        const failedAfter = migrationReceipts().readFailure?.(groupId);
+        if (failedAfter) throw new Error(failedAfter.code);
+        throw new Error('IMPORT_PENDING');
+      }
     }
     const room = upgradedGroups.get(groupId) ?? groupId;
     if (current()) resolvedGroups.set(groupId, room);
