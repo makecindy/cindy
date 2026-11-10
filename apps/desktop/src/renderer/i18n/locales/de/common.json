@@ -2316,6 +2316,7 @@
         "bingLoading": "Hintergrundbild wird aktualisiert…",
         "bingFailed": "Das tägliche Hintergrundbild kann nicht geladen werden",
         "bingStale": "Aktualisierung fehlgeschlagen. Das zwischengespeicherte Bild wird beibehalten.",
+        "bingDecodeFailed": "Das tägliche Bild konnte nicht dekodiert werden. Das vorherige Bild bleibt sichtbar.",
         "bingSource": "Über Dieses Bild"
       },
       "layout": {

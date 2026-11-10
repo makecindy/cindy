@@ -2354,6 +2354,7 @@
         "bingLoading": "Actualizando fondo…",
         "bingFailed": "No se puede cargar el fondo diario",
         "bingStale": "No se puede actualizar. Se conserva la imagen en caché.",
+        "bingDecodeFailed": "No se pudo decodificar la imagen diaria. Se conserva la imagen anterior.",
         "bingSource": "Acerca de Esta Imagen"
       },
       "layout": {

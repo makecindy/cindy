@@ -37,6 +37,7 @@ export function createBingWallpaperService(deps: BingWallpaperServiceDeps) {
   let lastAttemptAt = -Infinity;
   let failures = 0;
   let lastStatus: BingWallpaperStatus = 'idle';
+  let lastFailureStatus: Extract<BingWallpaperStatus, 'stale' | 'failed'> | null = null;
 
   function status(value: BingWallpaperStatus) {
     if (lastStatus === value) return;
@@ -101,6 +102,8 @@ export function createBingWallpaperService(deps: BingWallpaperServiceDeps) {
             cache.checkedAt <= at
           ) {
             nextAttemptAt = Math.min(cache.nextCheckAt, at + 6 * HOUR);
+            failures = 0;
+            lastFailureStatus = null;
             status('ready');
             return;
           }
@@ -118,6 +121,7 @@ export function createBingWallpaperService(deps: BingWallpaperServiceDeps) {
           await deps.publish(metadata, bytes, checkedAt, nextCheckAt, current);
           if (!current()) return;
           failures = 0;
+          lastFailureStatus = null;
           nextAttemptAt = nextCheckAt;
           status('ready');
         } catch (error) {
@@ -128,7 +132,8 @@ export function createBingWallpaperService(deps: BingWallpaperServiceDeps) {
               ? error.retryAfterMs
               : 0;
           nextAttemptAt = now() + Math.max(retry, serverDelay);
-          status(valid ? 'stale' : 'failed');
+          lastFailureStatus = valid ? 'stale' : 'failed';
+          status(lastFailureStatus);
         }
       })
       .finally(() => {
@@ -151,7 +156,11 @@ export function createBingWallpaperService(deps: BingWallpaperServiceDeps) {
         if (!market) status('idle');
         else if (failures === 0) nextAttemptAt = Math.min(nextAttemptAt, now());
       }
-      if (market) void check();
+      if (market) {
+        if (failures > 0 && now() < nextAttemptAt && lastFailureStatus)
+          status(lastFailureStatus);
+        void check();
+      }
     },
     refresh: () => check(true),
     dispose(): void {

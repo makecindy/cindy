@@ -20,8 +20,8 @@ vi.mock('@cindy/browser-control-runtime/ssrf-runtime', () => ({
 }));
 
 // #9640, unit: real source/service public entries; existing wallpaper tests only cover
-// immutable CDN assets. Minimal inputs: one Bing JSON image, a blocked response, a source
-// change during fetch, and a local-date rollover. Fake clock/network; no user data or sockets.
+// immutable CDN assets. Minimal inputs: one Bing JSON image, blocked requests, source changes
+// during fetch, local-date rollover, and re-selection during failure backoff. Fake clock/network.
 const raw = {
   images: [
     {
@@ -269,8 +269,26 @@ describe('daily wallpaper lifecycle', () => {
     await h.service.refresh();
     expect(h.metadata).toHaveBeenCalledOnce();
     expect(h.state().current).toEqual(saved());
+    expect(h.status).toHaveBeenLastCalledWith('stale');
     await vi.advanceTimersByTimeAsync(14 * 60_000);
     expect(h.metadata).toHaveBeenCalledTimes(2);
+  });
+  it.each([
+    [true, 'stale'],
+    [false, 'failed'],
+  ] as const)('restores the %s refresh state while waiting out backoff', async (cached, expectedStatus) => {
+    if (cached) h.cache({ current: saved(), previous: null, checkedAt: 0, nextCheckAt: 0 });
+    h.metadata.mockRejectedValue(new BingWallpaperRequestError(15 * 60_000));
+    h.active('en-US');
+    await h.service.refresh();
+    expect(h.status).toHaveBeenLastCalledWith(expectedStatus);
+
+    h.active(null);
+    expect(h.status).toHaveBeenLastCalledWith('idle');
+    h.active('en-US');
+    expect(h.status).toHaveBeenLastCalledWith(expectedStatus);
+    await h.service.refresh();
+    expect(h.metadata).toHaveBeenCalledOnce();
   });
   it('cancels late metadata after changing source without publishing or restarting', async () => {
     let finish!: (value: ReturnType<typeof metadata>) => void;

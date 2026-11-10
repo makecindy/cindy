@@ -2286,6 +2286,7 @@
         "bingLoading": "壁紙を更新中…",
         "bingFailed": "日替わり壁紙を読み込めません",
         "bingStale": "更新できません。キャッシュ済みの画像を表示します。",
+        "bingDecodeFailed": "今日の画像を表示できません。前の画像を引き続き表示します。",
         "bingSource": "画像の詳細を見る"
       },
       "layout": {

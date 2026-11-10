@@ -2286,6 +2286,7 @@
         "bingLoading": "正在更新桌布…",
         "bingFailed": "無法載入每日桌布",
         "bingStale": "暫時無法更新，繼續使用已快取圖片",
+        "bingDecodeFailed": "無法解碼每日圖片，繼續顯示上一張圖片。",
         "bingSource": "查看圖片出處"
       },
       "layout": {

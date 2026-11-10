@@ -2286,6 +2286,7 @@
         "bingLoading": "배경 화면 업데이트 중…",
         "bingFailed": "일일 배경 화면을 불러올 수 없습니다",
         "bingStale": "업데이트할 수 없습니다. 캐시된 이미지를 계속 표시합니다.",
+        "bingDecodeFailed": "오늘 이미지를 표시할 수 없어 이전 이미지를 계속 표시합니다.",
         "bingSource": "이미지 정보 보기"
       },
       "layout": {

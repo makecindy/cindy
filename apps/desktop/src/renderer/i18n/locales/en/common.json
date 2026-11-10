@@ -2316,6 +2316,7 @@
         "bingLoading": "Updating wallpaper…",
         "bingFailed": "Unable to load the daily wallpaper",
         "bingStale": "Unable to update. Keeping the cached image.",
+        "bingDecodeFailed": "Could not decode the daily image. Keeping the previous image.",
         "bingSource": "About This Image"
       },
       "layout": {

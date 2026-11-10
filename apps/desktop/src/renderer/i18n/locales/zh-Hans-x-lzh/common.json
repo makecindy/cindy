@@ -2286,6 +2286,7 @@
         "bingLoading": "壁纸更新中…",
         "bingFailed": "每日壁纸未能载入",
         "bingStale": "暂未能更新，仍用已存之图",
+        "bingDecodeFailed": "每日之图未能解码，仍显前图。",
         "bingSource": "察此图出处"
       },
       "layout": {

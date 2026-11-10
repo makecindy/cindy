@@ -2354,6 +2354,7 @@
         "bingLoading": "A atualizar a imagem de fundo…",
         "bingFailed": "Não foi possível carregar a imagem diária",
         "bingStale": "Não foi possível atualizar. A imagem em cache será mantida.",
+        "bingDecodeFailed": "Não foi possível descodificar a imagem diária. A imagem anterior continua visível.",
         "bingSource": "Sobre Esta Imagem"
       },
       "layout": {

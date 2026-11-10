@@ -42,6 +42,7 @@ export interface WallpaperSettings {
 }
 
 interface WallpaperSettingsContextValue extends WallpaperSettings {
+  bingDecodeFailed: boolean;
   playbackFailed: boolean;
   downloadPending: boolean;
   downloadFailed: boolean;
@@ -98,11 +99,22 @@ export function WallpaperSettingsProvider({
   const [blurPreview, setBlurPreview] = useState<number | null>(null);
   const [visibilityPreview, setVisibilityPreview] = useState<number | null>(null);
   const [failedUrl, setFailedUrl] = useState('');
+  const [bingDecodeFailedUrl, setBingDecodeFailedUrl] = useState('');
+  const [bingDecodeRetryKey, setBingDecodeRetryKey] = useState(0);
   const onPlaybackFailure = useCallback(
     () => setFailedUrl(settings.customWallpaperUrl ?? ''),
     [settings.customWallpaperUrl],
   );
   const onPlaybackReady = useCallback(() => setFailedUrl(''), []);
+  const onBingDecodeReady = useCallback((url: string) => {
+    setBingDecodeFailedUrl((failed) => failed === url ? '' : failed);
+  }, []);
+  const onBingDecodeError = useCallback(
+    (url: string) => {
+      if (settings.wallpaperId === 'bing-daily') setBingDecodeFailedUrl(url);
+    },
+    [settings.wallpaperId],
+  );
   const isDark = useIsDarkMode();
   const isDarkRef = useRef(isDark);
   isDarkRef.current = isDark;
@@ -119,16 +131,21 @@ export function WallpaperSettingsProvider({
   const downloadBytes = imageAsset.total + videoAsset.total;
   const downloadProgress =
     downloadBytes > 0 ? (imageAsset.loaded + videoAsset.loaded) / downloadBytes : 0;
+  const bingUrl = settings.bingWallpaper?.image?.url;
+  const bingDecodeFailed =
+    settings.wallpaperId === 'bing-daily' && !!bingUrl && bingDecodeFailedUrl === bingUrl;
   const retryDownload = useCallback(() => {
     if (settings.wallpaperId === 'bing-daily') {
+      if (bingUrl && bingDecodeFailedUrl === bingUrl) {
+        setBingDecodeRetryKey((key) => key + 1);
+      }
       void getBridge()?.refreshBingWallpaper?.().catch(() => undefined);
       return;
     }
     imageAsset.retry();
     videoAsset.retry();
-  }, [imageAsset.retry, videoAsset.retry, settings.wallpaperId]);
+  }, [imageAsset.retry, videoAsset.retry, settings.wallpaperId, bingUrl, bingDecodeFailedUrl]);
   const customUrl = normalizeCustomWallpaperUrl(settings.customWallpaperUrl);
-  const bingUrl = settings.bingWallpaper?.image?.url;
   let background: string | undefined;
   if (settings.wallpaperId === 'bing-daily') {
     background = bingUrl ? `url("${bingUrl}")` : undefined;
@@ -151,6 +168,9 @@ export function WallpaperSettingsProvider({
       settings.wallpaperId === 'custom' && !isCustomWallpaperVideo(customUrl)
         ? customUrl || undefined
         : undefined,
+    decodeRetryKey: bingDecodeRetryKey,
+    onDecodeError: onBingDecodeError,
+    onDecodeReady: onBingDecodeReady,
   });
   const settingsRef = useRef(settings);
   const confirmedRef = useRef(settings);
@@ -285,6 +305,7 @@ export function WallpaperSettingsProvider({
   const value = useMemo<WallpaperSettingsContextValue>(
     () => ({
       ...settings,
+      bingDecodeFailed,
       wallpaperBlur: blurPreview ?? settings.wallpaperBlur,
       visibility,
       playbackFailed: !!failedUrl && failedUrl === settings.customWallpaperUrl,
@@ -310,6 +331,7 @@ export function WallpaperSettingsProvider({
       blurPreview,
       setWallpaper,
       settings,
+      bingDecodeFailed,
       failedUrl,
       visibility,
       downloadPending,

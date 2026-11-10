@@ -24,6 +24,10 @@ export default {
       about: 'Failed refresh retains the cached image and exposes retry',
       data: { status: 'stale', cached: true },
     },
+    'decode-failed': {
+      about: 'Image decoding fails; the previous image remains with a retry action',
+      data: { status: 'ready', cached: true, decodeFailed: true },
+    },
   },
   async check(page, ui) {
     const tile = page.getByRole('radio', {
@@ -41,11 +45,14 @@ export default {
         .count(),
       0,
     );
-    if (ui.data.cached) {
+    if (ui.data.cached && !ui.data.decodeFailed) {
       await page.getByText('© Example Photographer', { exact: true }).waitFor();
       await page.getByText('2026-11-09 · Example landscape', { exact: true }).waitFor();
     }
-    if (ui.data.status === 'failed' || ui.data.status === 'stale') {
+    if (ui.data.decodeFailed) {
+      assert.equal(await page.getByText('© Example Photographer', { exact: true }).count(), 0);
+    }
+    if (ui.data.status === 'failed' || ui.data.status === 'stale' || ui.data.decodeFailed) {
       await page
         .getByRole('button', {
           name: await ui.t('settings.appearance.wallpaper.retryDownload'),

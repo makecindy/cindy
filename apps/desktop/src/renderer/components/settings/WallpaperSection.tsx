@@ -40,6 +40,7 @@ export function WallpaperSection() {
     wallpaperMotion,
     customWallpaperUrl,
     bingWallpaper,
+    bingDecodeFailed,
     playbackFailed,
     downloadPending,
     downloadFailed,
@@ -83,7 +84,7 @@ export function WallpaperSection() {
     if (visibility === 0) previewBlur(null);
   }, [visibility, previewBlur]);
   const isBing = wallpaperId === 'bing-daily';
-  const bingFailed = bingWallpaper?.status === 'failed' || bingWallpaper?.status === 'stale';
+  const bingFailed = bingDecodeFailed || bingWallpaper?.status === 'failed' || bingWallpaper?.status === 'stale';
   const bingLoading = bingWallpaper?.status === 'loading';
   const customVideo = isCustomWallpaperVideo(customWallpaperUrl);
   const downloading = isCdnWallpaper(wallpaperId) && downloadPending;
@@ -343,7 +344,8 @@ export function WallpaperSection() {
               <div role="status" className="flex flex-wrap items-center gap-2">
                 {bingLoading && <Spinner size={14} />}
                 {bingLoading && t('settings.appearance.wallpaper.bingLoading')}
-                {bingFailed && t(bingWallpaper?.image
+                {bingDecodeFailed && t('settings.appearance.wallpaper.bingDecodeFailed')}
+                {!bingDecodeFailed && bingFailed && t(bingWallpaper?.image
                   ? 'settings.appearance.wallpaper.bingStale'
                   : 'settings.appearance.wallpaper.bingFailed')}
                 {bingFailed && (
@@ -354,7 +356,7 @@ export function WallpaperSection() {
                   </Button>
                 )}
               </div>
-              {bingWallpaper?.image && (
+              {bingWallpaper?.image && !bingDecodeFailed && (
                 <div className="flex flex-col gap-1">
                   <p className="break-words">{bingWallpaper.image.date.replace(/^(\d{4})(\d{2})(\d{2})$/, '$1-$2-$3')} · {bingWallpaper.image.title}</p>
                   <p className="break-words">{bingWallpaper.image.copyright}</p>

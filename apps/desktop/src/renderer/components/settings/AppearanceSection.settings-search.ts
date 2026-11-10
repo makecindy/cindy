@@ -137,6 +137,7 @@ export const appearanceSettings = defineSettings({
       'settings.appearance.wallpaper.bingLoading',
       'settings.appearance.wallpaper.bingStale',
       'settings.appearance.wallpaper.bingFailed',
+      'settings.appearance.wallpaper.bingDecodeFailed',
       'settings.appearance.wallpaper.bingSource',
     ],
     sectionKey: 'settings.appearance.wallpaper.title',

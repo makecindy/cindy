@@ -25,6 +25,7 @@ function Controls() {
       <span data-testid="visibility">{settings.visibility}</span>
       <span data-testid="motion">{settings.wallpaperMotion}</span>
       <span data-testid="download-progress">{settings.downloadProgress}</span>
+      <span data-testid="bing-decode-failed">{String(settings.bingDecodeFailed)}</span>
     </>
   );
 }
@@ -44,16 +45,18 @@ afterEach(() => {
 
 describe('application wallpaper lifecycle', () => {
   // #9640, unit: real provider/canvas. A daily image can change URL without changing its
-  // source ID; visibility and blur must remain while the new image decodes or fails.
+  // source ID; visibility/blur persist and a failed decode exposes a same-URL retry.
   it('decodes daily changes, keeps the previous image on failure and clears it after reset', async () => {
     const first = 'cindy-media://client-wallpaper/' + 'a'.repeat(64) + '.webp';
     const second = 'cindy-media://client-wallpaper/' + 'b'.repeat(64) + '.webp';
     const third = 'cindy-media://client-wallpaper/' + 'c'.repeat(64) + '.webp';
-    const decodes = new Map<string, { resolve: () => void; reject: () => void }>();
+    const decodes = new Map<string, Array<{ resolve: () => void; reject: () => void }>>();
     vi.stubGlobal('Image', class {
       src = '';
       decode = () => new Promise<void>((resolve, reject) => {
-        decodes.set(this.src, { resolve, reject: () => reject(new Error('decode failed')) });
+        const attempts = decodes.get(this.src) ?? [];
+        attempts.push({ resolve, reject: () => reject(new Error('decode failed')) });
+        decodes.set(this.src, attempts);
       });
     });
     const snapshot = (url: string) => ({ ...DEFAULT_APPEARANCE_SETTINGS,
@@ -73,25 +76,31 @@ describe('application wallpaper lifecycle', () => {
       ensureWallpaperImage: ensureImage, ensureWallpaperVideo: ensureVideo,
     } });
     render(<WallpaperSettingsProvider><Controls /></WallpaperSettingsProvider>);
-    await act(async () => decodes.get(first)!.resolve());
+    await act(async () => decodes.get(first)![0].resolve());
     const root = document.documentElement;
     expect(root.style.getPropertyValue('--app-wallpaper-image')).toBe('url("' + first + '")');
     expect(root.style.getPropertyValue('--app-wallpaper-veil')).toBe('40%');
     expect(root.style.getPropertyValue('--app-wallpaper-blur')).toBe('9px');
     act(() => changed(snapshot(second)));
     expect(root.style.getPropertyValue('--app-wallpaper-image')).toBe('url("' + first + '")');
-    await act(async () => decodes.get(second)!.resolve());
+    await act(async () => decodes.get(second)![0].resolve());
     expect(root.style.getPropertyValue('--app-wallpaper-image')).toBe('url("' + second + '")');
     expect(root.style.getPropertyValue('--app-wallpaper-veil')).toBe('40%');
     expect(root.style.getPropertyValue('--app-wallpaper-blur')).toBe('9px');
     act(() => changed(snapshot(third)));
-    await act(async () => decodes.get(third)!.reject());
+    await act(async () => decodes.get(third)![0].reject());
     expect(root.style.getPropertyValue('--app-wallpaper-image')).toBe('url("' + second + '")');
     expect(root.style.getPropertyValue('--app-wallpaper-blur')).toBe('9px');
+    expect(screen.getByTestId('bing-decode-failed').textContent).toBe('true');
     fireEvent.click(screen.getByText('Retry'));
     expect(refresh).toHaveBeenCalledOnce();
     expect(ensureImage).not.toHaveBeenCalled();
     expect(ensureVideo).not.toHaveBeenCalled();
+    await waitFor(() => expect(decodes.get(third)).toHaveLength(2));
+    expect(screen.getByTestId('bing-decode-failed').textContent).toBe('true');
+    await act(async () => decodes.get(third)![1].resolve());
+    expect(root.style.getPropertyValue('--app-wallpaper-image')).toBe('url("' + third + '")');
+    expect(screen.getByTestId('bing-decode-failed').textContent).toBe('false');
     fireEvent.click(screen.getByText('Reset'));
     await act(async () => {});
     expect(root.style.getPropertyValue('--app-wallpaper-image')).toBe('');
