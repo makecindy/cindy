@@ -48,9 +48,15 @@ const file = createOverrideSettingsFile<DiscordChannelAccessConfig>({
 });
 
 export const discordChannelAccessStore: Required<DiscordChannelAccessStore> = {
-  read: () => file.read(),
+  read: () => {
+    file.invalidateIfChanged();
+    return file.read();
+  },
   write(config) {
-    file.writePatch(ownerOnly(config));
+    file.invalidateIfChanged();
+    const access = ownerOnly(config);
+    // writePatch 合并已有键，省略 guilds 会留下已撤销的服务器。
+    file.writePatch({ ...access, guilds: access.guilds ?? [] });
     return file.read();
   },
 };
