@@ -106,7 +106,8 @@ Claude.ai 登录，也不得收集、存储或中转订阅凭证。Cindy 因此�
 - 订阅链路（登录态检查、登录、余量查询、模型探测、本机订阅会话）不加载用户级
   `~/.claude/settings.json`：终端 `claude` 常在那里配 `apiKeyHelper`、`env.ANTHROPIC_BASE_URL` 与
   自定义模型名走网关，CLI 加载后会盖过订阅登录（`auth status` 报 `api_key_helper`、余量读不到、
-  模型清单变成网关的、会话请求可能发往网关）。直接拉起 CLI 时前置
+  模型清单变成网关的、会话请求可能发往网关）。直接拉起 CLI 时（含 Desktop 状态 worker，以及 Node host 用的
+  `readClaudeCliLoginStatusBySpawn`）前置
   `--setting-sources '' --settings '{"apiKeyHelper":""}'`，模型探测用 `settingSources: []`，本机订阅
   会话只加载 `project` / `local`（maker-core `subscription-settings-isolation`）。只作用于 Cindy 拉起的
   子进程，不改用户设置文件；API 路由、SSH 远端与终端 `claude` 照旧使用用户设置，订阅判定标准不变。
