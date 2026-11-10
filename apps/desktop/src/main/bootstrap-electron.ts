@@ -1,6 +1,3 @@
-import { workdirProbeHostClient } from './workdir-probe-host/index.js';
-import { setToolProcessMediaRemoteReader } from './cindy-media/toolProcessMedia.js';
-import { materializeSshRemoteMedia } from './file-browser/ssh-media.js';
 import type { HostConnectionState } from '@cindy/maker-shared/host-event-stream';
 import { applyMacWindowBackdrop, setMacSidebarWidth } from './macosDesktopBlur';
 import { createPersonalBuildMonitor } from './personalBuildMonitor.js';
@@ -3020,6 +3017,11 @@ import started from 'electron-squirrel-startup';
 
 import { APPLICATION_MENU_LABELS, type ApplicationMenuLocale } from './applicationMenuLabels.js';
 import { installCindyCliCommand, CLI_COMMAND_NAME } from './installCliCommand.js';
+// Keep these three last. Static imports evaluate in source order, so listing them
+// first would load everything they reach ahead of the existing startup sequence.
+import { workdirProbeHostClient } from './workdir-probe-host/index.js';
+import { setToolProcessMediaRemoteReader } from './cindy-media/toolProcessMedia.js';
+import { materializeSshRemoteMedia } from './file-browser/ssh-media.js';
 
 if (started) {
   app.quit();

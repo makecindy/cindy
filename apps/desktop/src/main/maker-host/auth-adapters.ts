@@ -1701,9 +1701,13 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
   /** Bind a host-owned request to the same credential and durable authorization as native Codex. */
   captureOAuthDispatchProof(accessToken: string, accountId: string | null, providerId = 'openai'): (() => boolean) | null {
     const independent = providerId !== 'openai';
+    const authenticated = () => independent
+      ? codexAccountState(providerId).authenticated : this.hasCodexOAuthLoginReadOnly();
+    // Resolve the account home only after the login check, so an unauthenticated
+    // provider yields null instead of reaching the home lookup.
+    if (!authenticated()) return null;
     const home = independent ? codexAccountHome(providerId) : this.codexHome;
-    return captureCodexOAuthDispatchProof({ home, accessToken, accountId,
-      authenticated: () => independent ? codexAccountState(providerId).authenticated : this.hasCodexOAuthLoginReadOnly(),
+    return captureCodexOAuthDispatchProof({ home, accessToken, accountId, authenticated,
       authorization: () => independent
         ? JSON.stringify(currentCodexCredentialGeneration(path.join(home, 'account.json')))
         : captureNativeProviderAuthorizationGeneration('openai'),
