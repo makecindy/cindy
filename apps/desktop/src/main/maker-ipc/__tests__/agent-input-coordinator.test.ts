@@ -1000,6 +1000,7 @@ describe('AgentInputCoordinator Orca priority queue transactions', () => {
         h.coordinator.mergeQueuedMessagesAtomically(sessionId, clientIds, buildReplacement).merged,
       resolveWorkerRole: async () => 'reviewer',
       reportWithdrawalStanding: () => 'other-assignment',
+      adoptQueuedReport: () => undefined,
       log: { info: () => undefined },
     });
     h.coordinator.setExecutionPaused(sid, true);

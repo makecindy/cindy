@@ -61,6 +61,7 @@ function makeLeadQueue(
   initial: AgentInputQueuedMessage[],
   opts: { standing?: (queuedIds: string[]) => WorkerReportWithdrawalStanding } = {},
 ) {
+  const adopted: string[] = [];
   let queue = [...initial];
   const withdrawn: string[] = [];
   const deps: OrcaWorkerReportQueueDeps = {
@@ -96,6 +97,9 @@ function makeLeadQueue(
     },
     resolveWorkerRole: async () => 'reviewer',
     // Default: no Lead assignment is running, so only the queue itself can be consulted.
+    adoptQueuedReport: (_workerSessionId, queuedMessageId) => {
+      adopted.push(queuedMessageId);
+    },
     reportWithdrawalStanding: () =>
       opts.standing?.(queue.map((item) => item.clientId)) ?? 'untracked',
     log: { info: () => undefined },
@@ -105,6 +109,7 @@ function makeLeadQueue(
     /** What the Lead would read, in order. */
     leadReads: () => queue.map((item) => `${item.clientId}:${item.text}`),
     withdrawn,
+    adopted,
   };
 }
 
@@ -212,6 +217,32 @@ describe('Worker management of its own reports queued at the Lead', () => {
       .resolves.toMatchObject({ ok: false, errorCode: 'NOT_YOUR_MESSAGE' });
     expect(leadReads()[0]).toBe('recovery:report being retried');
     expect(withdrawn).toEqual([]);
+  });
+
+  // Review finding (#9594): merging an earlier assignment's report with the current assignment's
+  // only report keeps the first id, so the survivor must take over the current assignment's
+  // record — otherwise it reads as "earlier assignment" and can be withdrawn, leaving the Lead
+  // with nothing from this assignment. Unit tier.
+  it.each([
+    { name: 'a merged report is the current assignment\'s', standing: 'last' as const, adopts: true },
+    { name: 'all merged reports belong to earlier assignments', standing: 'other-assignment' as const, adopts: false },
+  ])('hands the current assignment\'s report record to the merge survivor: $name', async ({ standing, adopts }) => {
+    const { service, adopted } = makeLeadQueue(
+      [ownReport('r1', 'earlier'), ownReport('r2', 'current')],
+      { standing: () => standing },
+    );
+
+    await expect(service.merge({ ...WORKER, queuedMessageIds: ['r1', 'r2'], message: 'one report' }))
+      .resolves.toMatchObject({ ok: true, queuedMessageId: 'r1' });
+    expect(adopted).toEqual(adopts ? ['r1'] : []);
+
+    // A refused merge must not move the record.
+    const refused = makeLeadQueue(
+      [ownReport('r1', 'earlier'), typedByUser('user-1', 'typed'), ownReport('r2', 'current')],
+      { standing: () => 'last' },
+    );
+    await refused.service.merge({ ...WORKER, queuedMessageIds: ['r1', 'r2'], message: 'one report' });
+    expect(refused.adopted).toEqual([]);
   });
 
   it('merges adjacent own reports into one and leaves the queue untouched when they are not adjacent', async () => {

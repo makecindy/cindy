@@ -92,6 +92,8 @@ export interface OrcaWorkerReportQueueDeps
     workerSessionId: string,
     queuedMessageId: string,
   ): WorkerReportWithdrawalStanding;
+  /** 合并保留下来的回报接替被合并掉的、属于当前派活的回报。 */
+  adoptQueuedReport(workerSessionId: string, queuedMessageId: string): void;
   log: { info: (message: string, meta?: Record<string, unknown>) => void };
 }
 
@@ -271,6 +273,13 @@ export function createOrcaWorkerReportQueue(deps: OrcaWorkerReportQueueDeps): Or
         }
         // 重建所需的异步读取必须在同步临界区之前完成。
         const role = await deps.resolveWorkerRole(params.workerId);
+        // 被合并掉的回报会经丢弃钩子销账；其中若有属于当前派活的，保留下来的那条要接替它的
+        // 账，否则合并后的回报会被当成更早派活的而放行撤回，Lead 就收不到本次结果。
+        // 必须在合并前判断：销账发生在合并之内。
+        const carriesCurrentAssignment = params.queuedMessageIds.some((id) => {
+          const standing = deps.reportWithdrawalStanding(params.workerSessionId, id);
+          return standing === 'covered' || standing === 'last';
+        });
         const merged = deps.mergeQueuedMessages(
           params.leadSessionId,
           params.queuedMessageIds,
@@ -298,6 +307,9 @@ export function createOrcaWorkerReportQueue(deps: OrcaWorkerReportQueueDeps): Or
               'no reports were changed: they must all be yours, still waiting, listed in queue order and next to each other in the Lead queue (consecutive positions); re-check the latest queue, or rewrite one with update_queued_report and withdraw the others',
             status,
           };
+        }
+        if (carriesCurrentAssignment) {
+          deps.adoptQueuedReport(params.workerSessionId, params.queuedMessageIds[0]!);
         }
         deps.log.info('orca worker merged queued reports', {
           workerId: params.workerId,

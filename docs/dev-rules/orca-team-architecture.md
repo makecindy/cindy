@@ -542,7 +542,9 @@ Worker turn 被 vendor 报终止型 error，但 interrupted-turn auto-resume 仍
       避免同一批并行撤回互相把对方当成「还留着一条」。
     - **合并**复用 `mergeQueuedMessagesAtomically`，同样要求目标在 Lead 队列里连续且按队列顺序给出
       （第 8 条）；不满足或含非本人条目时零修改，回 `QUEUE_CHANGED` 与该 Worker 最新的排队回报。
-      跨过他人消息合并会把较晚的内容挪到那条消息之前，所以不放宽。
+      跨过他人消息合并会把较晚的内容挪到那条消息之前，所以不放宽。被合并掉的回报若属于当前派活，保留下来的那条
+      接替它的账目（`adoptWorkerQueuedReport`，合并前判断、合并成功后过户）：否则合并后的回报会被
+      当成更早派活的而放行撤回，Lead 就收不到本次结果。
     运行设备上的 Worker 暂不支持这四个工具：跨设备只转发四个既有桥接工具，其余在运行设备侧直接回
     `REMOTE_WORKER_NOT_SUPPORTED`（不触发远程调用）；排队回执由 Lead 所在电脑生成，远端 Worker 照常
     拿到。实现指针：`orcaWorkerReportQueue.ts`、`orcaInterAgentDispatcher.ts` 的

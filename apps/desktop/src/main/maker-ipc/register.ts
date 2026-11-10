@@ -16740,6 +16740,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
     reportWithdrawalStanding: (workerSessionId, queuedMessageId) =>
       orcaTeamService.workerReportWithdrawalStanding(workerSessionId, queuedMessageId),
+    adoptQueuedReport: (workerSessionId, queuedMessageId) =>
+      orcaTeamService.adoptWorkerQueuedReport(workerSessionId, queuedMessageId),
     log,
   });
   // 数据库可能晚于本注册就绪；bootstrap 在接管数据库后会再调一次，两种顺序都覆盖。

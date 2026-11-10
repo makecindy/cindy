@@ -1902,6 +1902,12 @@ describe('OrcaTeamService', () => {
     await report({ delivered: false, queuedMessageId: 'r3' });
     expect(standing('r3')).toBe('last');
     expect(standing('r1')).toBe('other-assignment');
+
+    // Review finding (#9594): merging r1 (earlier assignment) with r3 keeps r1 and drops r3. The
+    // survivor takes over this assignment's report, so it can no longer be withdrawn.
+    h.service.forgetWorkerQueuedReports(sid, ['r3']);
+    h.service.adoptWorkerQueuedReport(sid, 'r1');
+    expect(standing('r1')).toBe('last');
   });
 
   it.each([true, false])('waits outside the transition lock for an in-flight manual report: accepted=%s', async accepted => {

@@ -568,6 +568,11 @@ export interface OrcaTeamService {
   ): WorkerReportWithdrawalStanding;
   /** A queued report left the Lead's queue undelivered (withdrawn, merged away, Stop, clear). */
   forgetWorkerQueuedReports(sessionId: string, queuedMessageIds: readonly string[]): void;
+  /**
+   * A merge kept `queuedMessageId` in place of reports that belonged to the current assignment:
+   * it now carries that assignment's report. No-op without a running assignment.
+   */
+  adoptWorkerQueuedReport(sessionId: string, queuedMessageId: string): void;
   /** Execution-device settlement retains its existing durable done semantics. */
   settleReportedWorker(
     capture: WorkerTerminalTurnCapture,
@@ -2151,6 +2156,9 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
       const state = autoBridge.get(sessionId);
       if (!state) return;
       for (const id of queuedMessageIds) state.queuedReportIds.delete(id);
+    },
+    adoptWorkerQueuedReport(sessionId, queuedMessageId) {
+      autoBridge.get(sessionId)?.queuedReportIds.add(queuedMessageId);
     },
     async settleReportedWorker(capture, commit) {
       const link = await deps.getWorkerLinkBySessionId(capture.sessionId);
