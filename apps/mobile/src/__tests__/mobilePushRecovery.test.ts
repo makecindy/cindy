@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createBackgroundConnection } from '@/device-link/backgroundConnection';
+import { BACKGROUND_SUSPEND_SUSPECT_MS, createBackgroundConnection } from '@/device-link/backgroundConnection';
 import { createRemoteSyncCoordinator, retryRemoteSyncRead } from '@/device-link/remoteSyncTask';
 import { readProgressiveMessageWindow, settleProgressiveSnapshot, runSessionMessagesSnapshotSingleFlight } from '@/device-link/sessionSnapshotSingleFlight';
 import { notificationRecoveryRoute } from '@/notifications/pushRegistrationModel';
@@ -29,7 +29,7 @@ describe('background push recovery', () => {
       isBackground: () => background,
       releaseTopics, stop, connect, report,
       pendingTransitions,
-      graceMs: 2500, releaseWaitMs: 1000, suspendMs: 10_000,
+      graceMs: 2500, releaseWaitMs: 1000, suspendMs: BACKGROUND_SUSPEND_SUSPECT_MS,
     });
     return { lifecycle, release, stop, connect, releaseTopics, report, active: () => { background = false; lifecycle.active(); } };
   }
@@ -67,10 +67,10 @@ describe('background push recovery', () => {
     expect(f.releaseTopics).toHaveBeenCalledTimes(2);
     expect(f.stop).not.toHaveBeenCalled();
     // Wall time passes without running timers: iOS suspended the JS runtime.
-    vi.setSystemTime(Date.now() + 60_000);
+    vi.setSystemTime(Date.now() + 2_000);
     f.active();
-    expect(f.report).toHaveBeenCalledWith({ phase: 'active', generation: 1, elapsedMs: 62500 });
-    expect(f.report).toHaveBeenLastCalledWith({ phase: 'stop', generation: 1, elapsedMs: 62500, reason: 'suspended' });
+    expect(f.report).toHaveBeenCalledWith({ phase: 'active', generation: 1, elapsedMs: 4500 });
+    expect(f.report).toHaveBeenLastCalledWith({ phase: 'stop', generation: 1, elapsedMs: 4500, reason: 'suspended' });
     expect(f.stop).toHaveBeenCalledTimes(1);
     expect(f.connect).toHaveBeenCalledTimes(1);
     expect(f.stop.mock.invocationCallOrder[0]).toBeLessThan(f.connect.mock.invocationCallOrder[0]);

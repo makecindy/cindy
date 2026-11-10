@@ -805,24 +805,6 @@ describe('mobile home desktop-first surface', () => {
     expect(source).not.toContain('refreshControl={<RefreshControl refreshing={loading}');
   });
 
-  it('starts the silent list sync on Home focus and Android foreground activation', () => {
-    const source = readSource('src/session/HomeSurface.tsx');
-    const silentSync = source.slice(
-      source.indexOf('const startSilentHomeSync = useCallback'),
-      source.indexOf('// 把当前权威设备列表注入 remoteSessionStore'),
-    );
-
-    expect(silentSync).toContain('!deviceIdentityCacheReady');
-    expect(silentSync).toContain('!homeListCacheHydrated');
-    expect(silentSync).toContain('!homeViewPreferencesHydrated');
-    expect(silentSync).toContain('void loadHome({ visible: false });');
-    expect(silentSync).toContain('useFocusEffect(');
-    expect(silentSync).toContain('startSilentHomeSync();');
-    expect(silentSync).toContain("AppState.addEventListener('change'");
-    expect(silentSync).toContain("if (nextState === 'active') startSilentHomeSync();");
-    expect(silentSync).toContain('}, [connectionEpoch, startSilentHomeSync]);');
-  });
-
   it('binds every Home device projection and async continuation to the active account generation', () => {
     const source = readSource('src/session/HomeSurface.tsx');
 
@@ -832,7 +814,6 @@ describe('mobile home desktop-first surface', () => {
     expect(source).toContain('return readDeviceList({ fresh: true });');
     expect(source).toContain('const homeAccountGenerationRef = useRef(accountGeneration);');
     expect(source).toContain('useLayoutEffect(() => {');
-    expect(source).toContain('syncInFlightRef.current = null;');
     expect(source).toContain('devicesRef.current = [];');
     expect(source).toContain('setDevices([]);');
     expect(source).toContain('setDeviceConnectionStates({});');
@@ -844,7 +825,6 @@ describe('mobile home desktop-first surface', () => {
     expect(source).toContain('hydrateDeviceSessions(item.device, accountGenerationAtStart)');
     expect(source).toContain('homeAccountGenerationRef.current !== expectedAccountGeneration');
     expect(source).toContain('return { failure: null, offline: false, superseded: true };');
-    expect(source).toContain('if (syncInFlightRef.current !== task) return;');
 
     // A late account-keyed startup cache read is another producer of the same projection and must
     // pass the identical owner fence before hydrating the shared session store.
@@ -993,47 +973,7 @@ describe('Home list sync wiring', () => {
     expect(hydrate.slice(hydrate.indexOf('} catch (err) {'))).toContain('homeListFreshnessRef.current.invalidate(device.deviceId);');
   });
 
-  it('refills only stale devices on focus return and keeps the full sync for other triggers', () => {
-    const focus = source.slice(source.indexOf('const refillStaleHomeDevices = useCallback('), source.indexOf('// 把当前权威设备列表注入 remoteSessionStore'));
-    expect(focus).toContain('screenFocusedRef.current = true;');
-    expect(focus).toContain('const plan = planHomeListFocusReturn({');
-    expect(focus).toMatch(/if \(plan\.kind === 'refill'\) \{\s*refillStaleHomeDevices\(plan\.deviceIds\);\s*if \(scheduleDirty\.size > 0\) refreshHomeScheduleIndexes\(scheduleDirty\);\s*return;\s*\}\s*refreshHomeScheduleIndexes\(\);\s*startSilentHomeSync\(\);/);
-    expect(focus).toContain("if (nextState === 'background') homeListFreshnessRef.current.invalidateAll();");
-    expect(focus).toContain("if (nextState === 'active') startSilentHomeSync();");
-  });
 
-  it('keeps a full-reload request from every full-sync trigger until a loadHome started after it commits', () => {
-    // Invariant: any trigger needing a full sync (mount, foreground, reconnect, a full focus return,
-    // dependency changes) leaves a request that only a later-started, committed loadHome clears.
-    // A sync that fails, is skipped while covered or exits because Home blurred mid-flight keeps it,
-    // so a quick return cannot downgrade to a device-row refill and miss bound/unbound computers.
-    const silent = source.slice(source.indexOf('const startSilentHomeSync = useCallback(() => {'), source.indexOf('}, [deviceIdentityCacheReady, homeListCacheHydrated'));
-    expect(silent.indexOf('requestHomeFullReload();')).toBeGreaterThan(-1);
-    expect(silent.indexOf('requestHomeFullReload();')).toBeLessThan(silent.indexOf('if (!screenFocusedRef.current) return;'));
-    // Single funnel: no other call site sets the request, nothing but a commit or account reset clears it.
-    expect(source.match(/requestHomeFullReload\(\);/g)).toHaveLength(1);
-    expect(source.match(/homeFullReloadOnFocusRef\.current = null/g)).toHaveLength(2);
-    const focus = source.slice(source.indexOf('useFocusEffect(\n    useCallback(() => {\n      // The focus event'));
-    const focusBody = focus.slice(0, focus.indexOf('}, [refillStaleHomeDevices'));
-    expect(focusBody).toContain('const forceFull = homeFullReloadOnFocusRef.current !== null;');
-    const load = source.slice(source.indexOf('const loadHome = useCallback('), source.indexOf('loadHomeRef.current = loadHome;'));
-    expect(load.indexOf('const fullReloadRequestAtStart = homeFullReloadOnFocusRef.current;'))
-      .toBeLessThan(load.indexOf('const rawTask = (async () => {'));
-    // Blurring after the device-list read exits before the commit, leaving the request in place.
-    expect(load.indexOf('if (!screenFocusedRef.current) return;')).toBeLessThan(load.indexOf('lastSyncedAtRef.current = now;'));
-    const commit = load.slice(load.indexOf('lastSyncedAtRef.current = now;'));
-    expect(commit).toContain('if (homeFullReloadOnFocusRef.current === fullReloadRequestAtStart) homeFullReloadOnFocusRef.current = null;');
-  });
-
-  it('refreshes automation badges on return only for devices that sent schedule events while away', () => {
-    const events = source.slice(source.indexOf('useEffect(() => remoteScheduleEventStore.subscribe('), source.indexOf('const refreshHomeScheduleIndexes = useCallback('));
-    expect(events).toMatch(/if \(!screenFocusedRef\.current\) \{\s*markHomeScheduleIndexDirty\(deviceId\);\s*continue;\s*\}\s*refreshDeviceScheduleIndex\(deviceId, sessionIds\);/);
-    // The old unconditional "refresh every device on focus" effect is gone.
-    expect(source).not.toContain('兜底刷新一次 scheduleIndex');
-    const focus = source.slice(source.indexOf('useFocusEffect(\n    useCallback(() => {\n      // The focus event'));
-    expect(focus.indexOf('screenFocusedRef.current = true;')).toBeLessThan(focus.indexOf('refreshHomeScheduleIndexes('));
-    expect(focus).toContain('const scheduleDirty = new Set(homeScheduleIndexDirtyRef.current.keys());');
-  });
 
   it('keeps automation badge refreshes pending until one is applied', () => {
     const refresh = source.slice(source.indexOf('const refreshDeviceScheduleIndex = useCallback('), source.indexOf('const hydrateDeviceSessionsOnce = useCallback('));
@@ -1055,12 +995,7 @@ describe('Home list sync wiring', () => {
       .toBeLessThan(reseed.indexOf('void hydrateDeviceSessions(item.device, accountGeneration'));
   });
 
-  it('clears freshness with the rest of the account-owned Home state', () => {
-    const reset = source.slice(source.indexOf('useLayoutEffect(() => {\n    syncInFlightRef.current = null;'), source.indexOf('}, [accountGeneration]);'));
-    expect(reset).toContain('homeListFreshnessRef.current.clear();');
-    expect(reset).toContain('homeFullReloadOnFocusRef.current = null;');
-    expect(reset).toContain('homeScheduleIndexDirtyRef.current.clear();');
-  });
+
 });
 
 

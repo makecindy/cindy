@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { REMOTE_RESOURCE_LIST_CHANNEL } from '@cindy/device-link';
 import type { RemoteInvoke } from '@/device-link/mobileMakerTransport';
-import { readTeammateTasks } from '@/session/readTeammateTasks';
+import { publishHomeTaskSnapshot, readTeammateTasks } from '@/session/readTeammateTasks';
 import { normalizeTaskTeammateSelection, taskTeammateKey, taskTeammateOptions } from '@/session/teammateTaskSource';
 import type { RemoteSession } from '@/session/types';
 import type { HostedRemoteCollectionItem } from '@/device-link/remoteResources';
@@ -96,4 +96,51 @@ it('publishes ordinary rows and cached lane ownership before optional history co
   await reading;
   expect(initial?.map((row: RemoteSession) => row.id)).toEqual(['ordinary', 'lane']);
   expect(initial?.[0].taskTeammate?.id).toBe('cindy-default');
+});
+
+// Unit regression: five bot delegation reads used to serialize; deferred replies
+// prove bounded overlap and preserve attribution rather than only counting calls.
+it('reads delegations in a bounded parallel batch and applies every creator', async () => {
+  const releases: Array<() => void> = [];
+  let active = 0, peak = 0;
+  const invoke = vi.fn(async (_device: string, api: string, args: string[]) => {
+    if (api === 'local-db:history:query') return { ok: true, sessions: [] };
+    if (api === REMOTE_RESOURCE_LIST_CHANNEL) return { collectionId: 'teammates', items:
+      Array.from({ length: 5 }, (_, i) => ({ ...bot(`bot${i}`), links: [
+        { rel: 'conversation', target: { kind: 'session', sessionId: `bot${i}` } },
+      ] })) };
+    active++;
+    peak = Math.max(peak, active);
+    await new Promise<void>(resolve => releases.push(resolve));
+    active--;
+    return { ok: true, delegations: [{ requestingBotId: args[0], childSessionId: args[0] }] };
+  });
+  const reading = readTeammateTasks({ ...input, invoke: invoke as RemoteInvoke,
+    sessions: Array.from({ length: 5 }, (_, i) => task(`bot${i}`)) });
+  await vi.waitFor(() => expect(releases).toHaveLength(3));
+  releases.splice(0).forEach(resolve => resolve());
+  await vi.waitFor(() => expect(releases).toHaveLength(2));
+  releases.splice(0).forEach(resolve => resolve());
+  const rows = await reading;
+  expect(peak).toBe(3);
+  expect(rows.map(row => row.taskTeammate?.id)).toEqual(['bot0', 'bot1', 'bot2', 'bot3', 'bot4']);
+});
+
+// Unit / foreground resume: the former awaited enrichment kept Home unready.
+// One pending history read must not delay publication + readiness; a later push
+// invalidates the optional response instead of rolling back the visible task.
+it('makes Home ready before teammate history finishes and fences its late result', async () => {
+  let finish!: (value: unknown) => void;
+  const pending = new Promise(resolve => { finish = resolve; });
+  let current = true;
+  const publish = vi.fn(), ready = vi.fn();
+  const invoke = vi.fn(async () => pending);
+  const reading = publishHomeTaskSnapshot({ ...input, invoke: invoke as RemoteInvoke,
+    sessions: [task('ordinary')], current: () => current, publish, onReady: ready });
+  expect(publish.mock.calls[0][0].map((row: RemoteSession) => row.id)).toEqual(['ordinary']);
+  expect(ready).toHaveBeenCalledOnce();
+  current = false;
+  finish({ ok: true, sessions: [] });
+  await reading;
+  expect(publish).toHaveBeenCalledOnce();
 });

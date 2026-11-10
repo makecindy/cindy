@@ -2,6 +2,7 @@ import { resolveRemoteText } from '@cindy/device-link';
 import { isAccessRevokedRemoteError as isAccessRevokedError } from '@cindy/maker-shared/device-link-contract';
 import type { RemoteInvoke } from '@/device-link/mobileMakerTransport';
 import { listRemoteCollection, normalizeRemoteCollectionItems } from '@/device-link/remoteResources';
+import { runHomeDeviceSyncBatch } from './homeDeviceSync';
 import { readCompanionTask } from './companionTaskReads';
 import { isTeammateTask, parseTaskCompanion, type TaskTeammate } from './teammateTaskSource';
 import type { RemoteSession } from './types';
@@ -74,21 +75,21 @@ export async function readTeammateTasks(input: {
     if (response.collectionId !== 'teammates' || !Array.isArray(response.items)) throw new Error('Invalid teammates');
     const items = normalizeRemoteCollectionItems(response, 'teammates').filter(item => item.ref.kind === 'bot');
     rosterRead = true;
-    for (const item of items) {
+    await runHomeDeviceSyncBatch(items, async (item) => {
       const bot: TaskTeammate = { id: item.ref.id, name: resolveRemoteText(item.display.title), avatar: item.display.avatar };
       owners.set(bot.id, bot);
       const session = item.links?.find(link => link.rel === 'conversation' && link.target.kind === 'session')?.target;
-      if (session?.kind !== 'session') continue;
+      if (session?.kind !== 'session') return;
       if (!current()) return [];
       try {
         const reply = await invoke<{ ok: boolean; delegations: Array<{ requestingBotId: string; childSessionId: string }> }>(
           deviceId, 'maker:bot-delegations:list', [session.sessionId]);
         if (!current()) return [];
-        if (!reply?.ok || !Array.isArray(reply.delegations)) continue;
+        if (!reply?.ok || !Array.isArray(reply.delegations)) return;
         checked.add(bot.id);
         for (const task of reply.delegations) if (task.requestingBotId === bot.id && typeof task.childSessionId === 'string') creators.set(task.childSessionId, bot);
       } catch (error) { if (isAccessRevokedError(error)) throw error; }
-    }
+    }, 3);
   } catch (error) { if (isAccessRevokedError(error)) throw error; }
   if (!current()) return [];
   return [...rows.values()].filter(row => row.source !== 'bot' || isTeammateTask(row)).map(row => {
@@ -98,5 +99,20 @@ export async function readTeammateTasks(input: {
     // Successful absence clears attribution; transient failure retains it on the same host.
     const retained = old && (!rosterRead || (owners.has(old.id) && !checked.has(old.id))) ? old : undefined;
     return { ...row, taskTeammate: found ?? retained ?? null };
+  });
+}
+
+/** Publish a usable Home list now; completion only represents optional enrichment.
+ * The caller fences both phases by account, connection, scope and list mutation. */
+export function publishHomeTaskSnapshot(input: Omit<Parameters<typeof readTeammateTasks>[0], 'publishInitial'> & {
+  publish(rows: RemoteSession[]): void;
+  onReady(): void;
+}): Promise<void> {
+  return readTeammateTasks({ ...input, publishInitial: rows => {
+    if (!input.current()) return;
+    input.publish(rows);
+    input.onReady();
+  } }).then(rows => {
+    if (input.current()) input.publish(rows);
   });
 }

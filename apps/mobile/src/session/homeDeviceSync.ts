@@ -136,3 +136,25 @@ function normalizeConcurrency(value: number): number {
     ? Math.max(1, Math.floor(value))
     : HOME_DEVICE_SYNC_CONCURRENCY;
 }
+
+/** Same-connection triggers join; a new connection never queues behind retired reads. */
+export class HomeSyncRound {
+  private generation = 0;
+  current: Promise<void> | null = null;
+
+  invalidate(): void {
+    this.generation += 1;
+    this.current = null;
+  }
+
+  run(read: (current: () => boolean) => Promise<void>): Promise<void> {
+    if (this.current) return this.current;
+    const generation = this.generation;
+    const task = Promise.resolve().then(() => {
+      if (generation === this.generation) return read(() => generation === this.generation);
+    })
+      .finally(() => { if (this.current === task) this.current = null; });
+    this.current = task;
+    return task;
+  }
+}

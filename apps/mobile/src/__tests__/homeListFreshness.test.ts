@@ -136,7 +136,7 @@ describe('Home list freshness on return', () => {
     expect(home.freshness.isFresh('mac')).toBe(false);
   });
 
-  it('falls back to a full reload after background, reconnect or a long stay away', async () => {
+  it('refills missed background pushes without a directory reload, but fully reloads after reconnect or a long absence', async () => {
     const home = createHarness(['mac', 'pc']);
     await home.hydrate('mac');
     await home.hydrate('pc');

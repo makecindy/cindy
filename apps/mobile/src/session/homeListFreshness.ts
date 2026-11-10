@@ -90,11 +90,11 @@ export type HomeListFocusReturnPlan =
 
 /**
  * What a return to Home should fetch. A short stay away after a completed sync only refills the
- * devices whose list may have missed a push. A long stay, no completed sync yet, or a background /
+ * devices whose list may have missed a push. A long stay, no completed sync yet, or a
  * reconnect while away falls back to the full device-list + per-device reload.
  */
 export function planHomeListFocusReturn(input: {
-  /** Set when the app went to the background or the relay reconnected while Home was covered. */
+  /** Set when the relay reconnected or a full reload remains outstanding. */
   forceFull: boolean;
   blurredAt: number | null;
   lastSyncedAt: number | null;

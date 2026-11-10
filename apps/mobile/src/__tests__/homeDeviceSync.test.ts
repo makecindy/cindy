@@ -4,6 +4,7 @@ import {
   diffHomeDeviceSyncScope,
   HOME_DEVICE_SYNC_CONCURRENCY,
   HomeDeviceSyncLimiter,
+  HomeSyncRound,
   resolveHomeDeviceSyncIds,
   runHomeDeviceSyncBatch,
 } from '@/session/homeDeviceSync';
@@ -93,4 +94,49 @@ describe('home device sync scope', () => {
     }
     await Promise.all([...initial, visible]);
   });
+});
+
+// Unit regression: overlapping foreground/epoch triggers previously queued complete
+// directory rounds. Pending promises expose new-connection progress and stale writes.
+it('joins same-connection rounds and starts a new round before the old read settles', async () => {
+  const sync = new HomeSyncRound();
+  let release!: () => void;
+  const pending = new Promise<void>(resolve => { release = resolve; });
+  const applied: string[] = [];
+  let reads = 0;
+  const old = sync.run(async current => {
+    reads++;
+    await pending;
+    if (current()) applied.push('old');
+  });
+  const duplicate = sync.run(async () => { reads++; });
+  expect(duplicate).toBe(old);
+  await Promise.resolve();
+  expect(reads).toBe(1);
+  sync.invalidate();
+  await sync.run(async current => {
+    reads++;
+    if (current()) applied.push('new');
+  });
+  expect(applied).toEqual(['new']);
+  release();
+  await old;
+  expect(reads).toBe(2);
+  expect(applied).toEqual(['new']);
+  expect(sync.current).toBeNull();
+});
+
+it('does not start a retired round or let its completion release the new round', async () => {
+  const sync = new HomeSyncRound();
+  let obsoleteReads = 0;
+  const old = sync.run(async () => { obsoleteReads++; });
+  sync.invalidate(); // Background or reconnect before the scheduled read starts.
+  let release!: () => void;
+  const latest = sync.run(() => new Promise<void>(resolve => { release = resolve; }));
+  await old;
+  expect(obsoleteReads).toBe(0);
+  expect(sync.current).toBe(latest);
+  release();
+  await latest;
+  expect(sync.current).toBeNull();
 });

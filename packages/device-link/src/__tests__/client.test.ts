@@ -6935,6 +6935,51 @@ describe('DeviceLinkClient', () => {
     h.client.stop();
   });
 
+  // Unit: a mobile read started during a >1.5s handshake used to enter retry
+  // sleep. Verify hello-ack releases it immediately, while the default still expires.
+  it.each([false, true])('waitUntilOnline waits for hello-ack immediately (slow upgrade=%s)', async (slowUpgrade) => {
+    vi.useFakeTimers();
+    const h = makeHarness({ timing: { handshakeTimeoutMs: 3000 } });
+    try {
+      h.client.start();
+      await vi.advanceTimersByTimeAsync(0);
+      let ready = false;
+      const mobile = h.client.waitUntilOnline(1500, { waitForHandshake: true }).then(() => { ready = true; });
+      const desktop = expect(h.client.waitUntilOnline(1500)).rejects.toMatchObject({ code: 'NOT_CONNECTED' });
+      await vi.advanceTimersByTimeAsync(2000);
+      if (slowUpgrade) {
+        h.current().emit('open');
+        await vi.advanceTimersByTimeAsync(1500); // past the first watchdog, inside hello-ack's window
+      }
+      await desktop;
+      expect(ready).toBe(false);
+      h.current().ack();
+      await mobile;
+      expect(ready).toBe(true);
+      expect(h.sockets).toHaveLength(1);
+    } finally {
+      h.client.stop();
+      vi.useRealTimers();
+    }
+  });
+
+  it('ends the optional handshake wait at its deadline when hello-ack never arrives', async () => {
+    vi.useFakeTimers();
+    const h = makeHarness({ timing: { handshakeTimeoutMs: 3000, reconnectBaseMs: 10_000 } });
+    try {
+      h.client.start();
+      await vi.advanceTimersByTimeAsync(0);
+      const waiting = expect(h.client.waitUntilOnline(1500, { waitForHandshake: true }))
+        .rejects.toMatchObject({ code: 'NOT_CONNECTED' });
+      await vi.advanceTimersByTimeAsync(3000);
+      await waiting;
+      expect(h.sockets).toHaveLength(1);
+    } finally {
+      h.client.stop();
+      vi.useRealTimers();
+    }
+  });
+
   it('waitUntilOnline:online 时立即 resolve', async () => {
     const h = makeHarness();
     h.client.start();
@@ -8385,7 +8430,7 @@ describe('DeviceLinkClient relay 拥塞断连(close 1013)', () => {
     h.client.stop();
   });
 
-  it('拥塞冷却不被请求路径打穿:waitUntilOnline 不 un-park,显式用户意图 override 才立即重连', async () => {
+  it.each([false, true])('拥塞冷却不被请求路径打穿 (waitForHandshake=%s)', async (waitForHandshake) => {
     // review P1:事故形态下在途请求经 waitUntilOnline → connectNow 清掉冷却
     // 计时器,每次 1013 后仍立即重连,循环掐不断。
     const h = makeHarness({
@@ -8405,7 +8450,7 @@ describe('DeviceLinkClient relay 拥塞断连(close 1013)', () => {
 
     h.current().emit('close', 1013, 'inbound backpressure');
     // 请求路径 un-park:冷却期间必须被 park,不新建连接,有界等待快速失败
-    await expect(h.client.waitUntilOnline(30)).rejects.toMatchObject({ code: 'NOT_CONNECTED' });
+    await expect(h.client.waitUntilOnline(30, { waitForHandshake })).rejects.toMatchObject({ code: 'NOT_CONNECTED' });
     expect(h.sockets.length).toBe(socketsBefore);
 
     // 显式用户意图(移动端回前台):override 立即重连

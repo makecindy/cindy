@@ -1229,7 +1229,7 @@ export class DeviceLinkClient {
    * 已 stopped 时不自动拉起连接
    * (start/stop 仍由宿主生命周期掌管),直接快速失败让上层感知。
    */
-  waitUntilOnline(timeoutMs?: number): Promise<void> {
+  waitUntilOnline(timeoutMs?: number, options?: { waitForHandshake?: boolean }): Promise<void> {
     if (this.status === 'online') return Promise.resolve();
     if (this.stopped) {
       return Promise.reject(new DeviceLinkError('NOT_CONNECTED', 'client stopped'));
@@ -1237,7 +1237,14 @@ export class DeviceLinkClient {
     // Only un-park a pending retry; concurrent waiters keep the in-flight handshake.
     if (this.reconnectTimer) this.connectNow('wait-until-online');
 
-    const timeout = timeoutMs ?? this.timing.requestTimeoutMs;
+    const requestedTimeout = timeoutMs ?? this.timing.requestTimeoutMs;
+    const attemptEpoch = this.connEpoch;
+    // Only an active socket handshake extends the read's wait, not token fetch or
+    // backoff. Recheck at expiry because TCP/TLS open starts a new hello-ack window.
+    const handshakeRemaining = () => options?.waitForHandshake && this.handshakeTimer
+      && !this.reconnectTimer && this.connEpoch === attemptEpoch && this.status === 'connecting'
+      ? Math.max(0, this.connectAttemptDeadlineWallAt - Date.now()) : 0;
+    const timeout = Math.max(requestedTimeout, handshakeRemaining());
     return new Promise<void>((resolve, reject) => {
       let off: (() => void) | null = null;
       const settle = (fn: () => void): void => {
@@ -1248,9 +1255,15 @@ export class DeviceLinkClient {
         clearTimeout(timer);
         fn();
       };
-      const timer = setTimeout(() => {
+      const onTimeout = () => {
+        const remaining = handshakeRemaining();
+        if (remaining > 0) {
+          timer = setTimeout(onTimeout, remaining);
+          return;
+        }
         settle(() => reject(new DeviceLinkError('NOT_CONNECTED', `not online within ${timeout}ms`)));
-      }, timeout);
+      };
+      let timer = setTimeout(onTimeout, timeout);
       off = this.onStatusChange((s) => {
         if (s === 'online') settle(resolve);
         else if (s === 'stopped') {
