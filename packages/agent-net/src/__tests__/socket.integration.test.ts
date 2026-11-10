@@ -148,7 +148,7 @@ it.each([false, true])('runs existing RPC and multi-megabyte results through cer
     device: socket.deviceId, pending: socket.bufferedAmount,
     peers: [...((socket as any).peers?.values() ?? [])].map((peer: any) => ({ device: peer.deviceId, stats: peer.channel.stats?.() })),
   })) });
-  const timer = setInterval(() => { samples.push(snapshot()); if (samples.length > 12) samples.shift(); }, 500);
+  const timer = setInterval(() => { samples.push(snapshot()); if (samples.length > 80) samples.shift(); }, 500);
   timer.unref();
   onTestFailed(() => { clearInterval(timer); console.error('[large-test-failed]', JSON.stringify({ udp, marks, samples, final: snapshot() })); });
   try {
@@ -175,8 +175,11 @@ it.each([false, true])('runs existing RPC and multi-megabyte results through cer
   }
   step('complete');
   console.log('[large-test-complete]', JSON.stringify({ udp, marks, samples, final: snapshot() }));
+  // Diagnostic only: observe whether a slow transfer eventually completes, then
+  // still fail the original 10s budget rather than turning a slow run green.
+  expect(performance.now() - began).toBeLessThan(10_000);
   } finally { clearInterval(timer); }
-});
+}, 40_000);
 
 // Main must not perform network frame parsing, Noise or retransmission work. Real worker + proxy broker,
 // rather than a mocked thread, protects the production boundary and shutdown/revocation behavior.

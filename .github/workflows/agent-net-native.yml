@@ -39,7 +39,11 @@ jobs:
           $hadFailure = $false
           for ($trial = 1; $trial -le 8; $trial++) {
             Write-Output ("diagnostic trial " + $trial)
-            pnpm --filter @cindy/agent-net exec vitest run src/__tests__/socket.integration.test.ts -t "runs existing RPC" --pool=forks --maxWorkers=1
+            if ($trial -le 4) {
+              pnpm --filter @cindy/agent-net exec vitest run src/__tests__/socket.integration.test.ts --pool=forks --maxWorkers=1
+            } else {
+              pnpm --filter @cindy/agent-net exec vitest run src/__tests__/socket.integration.test.ts -t "runs existing RPC" --pool=forks --maxWorkers=1
+            }
             if ($LASTEXITCODE -ne 0) { $hadFailure = $true }
           }
           if ($hadFailure) { exit 1 }
