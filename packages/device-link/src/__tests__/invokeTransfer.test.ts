@@ -12,7 +12,7 @@ import {
 } from '../invokeTransfer.js';
 import { applyInvokeResultPatch, sampleInvokeResultText } from '../invokeDelta.js';
 
-const codec: Required<Omit<DeviceLinkTransferCodec, 'gunzipBase64Async'>> = {
+const codec: Required<Omit<DeviceLinkTransferCodec, 'gunzipBase64Async' | 'deflateRawBase64' | 'inflateRawBase64'>> = {
   gzipBase64: (text) => gzipSync(Buffer.from(text, 'utf8')).toString('base64'),
   gunzipBase64: (base64, maxChars) => gunzipSync(Buffer.from(base64, 'base64'), { maxOutputLength: maxChars }).toString('utf8'),
   contentTag: (text) => createHash('sha256').update(text).digest('base64url'),

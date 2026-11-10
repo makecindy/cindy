@@ -205,7 +205,7 @@ import {
 import type { InputProjection, PendingInteraction, RemoteMessage } from '@/session/types';
 import { prepareVisualMockDeviceLinkContext } from '@/debug/visualMock';
 import { meterDeviceLinkInvokes, recordDeviceLinkPush } from '@/debug/deviceLinkTraffic';
-import { decodeGzipBase64TextBounded } from '@/utils/gzipBase64';
+import { decodeDeflateRawBase64TextBounded, decodeGzipBase64TextBounded } from '@/utils/gzipBase64';
 import { gunzipBase64OffThread } from '@/utils/gunzipOffThread';
 import { createLowPriorityReadGate, isLowPriorityRead, type LowPriorityReadGate } from './lowPriorityReadGate';
 import { invokeMetricLabel, jankMetricsEnabled, recordInvokeSent, recordInvokeTransfer, recordPushHandled } from '@/debug/jankMetrics';
@@ -1187,7 +1187,12 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       logger: mobileDeviceLinkLogger,
       // 弱网减流量：声明可解 gzip，大结果压缩、内容未变的结果只回标记（被控端支持时）。
       // 大结果在后台 runtime 解压，不占 JS 线程；不可用时内部回落 pako。
-      transferCodec: { gunzipBase64: decodeGzipBase64TextBounded, gunzipBase64Async: gunzipBase64OffThread },
+      // inflateRawBase64 让建链时声明 push-deflate：推送按序在 JS 线程同步解开（单条推送有界）。
+      transferCodec: {
+        gunzipBase64: decodeGzipBase64TextBounded,
+        gunzipBase64Async: gunzipBase64OffThread,
+        inflateRawBase64: decodeDeflateRawBase64TextBounded,
+      },
       invokeMetrics: { enabled: jankMetricsEnabled, record: recordInvokeTransfer, label: invokeMetricLabel },
       // Mobile 具备按 deviceId 独立 openLink/订阅/快照恢复能力。可靠 ACK
       // 耗尽时只复位该 peer，共享 WSS 和其它远端继续工作；恢复仍只使用所有

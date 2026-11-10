@@ -10,6 +10,12 @@ import {
   type DeviceLinkTransferCodec,
 } from './invokeTransfer.js';
 import { InvokeDeltaBases } from './invokeDelta.js';
+import {
+  DEVICE_LINK_CAPABILITY_PUSH_DEFLATE_V1,
+  decodePushTransfer,
+  encodePushTransfer,
+  isEncodedPushPayload,
+} from './pushTransfer.js';
 import { decodeScopedEnvelope, encodeScopedEnvelope, type ScopeSupport } from './providerShareEnvelope.js';
 import { isProviderSharePeer, parseProviderSharePeer } from './providerSharePeer.js';
 import { isSharedTaskPeer } from './sharedTaskPeer.js';
@@ -746,6 +752,11 @@ interface PeerTransportState {
   outboundExplicitlyClosed: boolean;
   /** 对端是否声明理解 transport-timeout 的瞬时重置语义(能力协商,见 transport.ts)。 */
   supportsTransportTimeoutClose: boolean;
+  /**
+   * 对端作为控制端在最近一次入站 link-open 声明能解开压缩推送(push-deflate-v1,见 pushTransfer.ts)。
+   * 与 supportsTransportTimeoutClose 同理只跟随入站声明,互控时出站 accept 不覆盖。
+   */
+  acceptsPushDeflate?: boolean;
   /** 显式关闭后收到的 allowlisted legacy invoke；只放行与 requestId 配对的一次回程。 */
   unlinkedLegacyResponseIds: Set<string>;
   pending: Map<number, PendingReliableMessage>;
@@ -2178,6 +2189,9 @@ export class DeviceLinkClient {
         matchingOffer.transportBaseSeq,
       );
       if (peerSupportsReliable) this.issueProviderShareDirectLease(dst);
+    } else {
+      // 没有对得上的 link-open 声明(被挤出或 requestId 不符):不知道对端能否解压缩推送。
+      this.setPeerPushDeflate(dst, peer, false);
     }
     peer.linkAcceptedInbound = true;
     peer.duplicateOpenRepair = null;
@@ -2202,7 +2216,7 @@ export class DeviceLinkClient {
   ): void {
     payload = encodeModelSpeedPayload(channel, payload);
     if (this.status !== 'online' && !this.hasOfflineDirectPath(dst)) return;
-    const pushPayload = {
+    let pushPayload: import('./protocol.js').PushPayload = {
       channel,
       payload,
       ...(ownerStamp ? { ownerStamp } : {}),
@@ -2215,6 +2229,14 @@ export class DeviceLinkClient {
         payload: pushPayload,
       });
       return;
+    }
+    const codec = this.opts.transferCodec;
+    const peer = this.peerTransport.get(dst);
+    // 只对走可靠传输、链路未被显式关闭、且最近一次 link-open 声明过能力的同账号控制端编码;
+    // 显式关闭后仍可发的旧路径推送(远控授权、插件同步等)照旧明文,对端此时可能已换版本。
+    if (codec?.deflateRawBase64 && peer?.reliable && peer.acceptsPushDeflate && !peer.explicitlyClosed
+      && !isScopedPeer(dst)) {
+      pushPayload = encodePushTransfer(pushPayload, codec);
     }
     this.sendPeerEnvelope({ v: PROTOCOL_VERSION, kind: 'push', dst, payload: pushPayload });
   }
@@ -2482,21 +2504,44 @@ export class DeviceLinkClient {
     }
   }
 
+  /**
+   * 对端不再(或不确定是否)声明 push-deflate 时停止编码,并把仍在 pending 的压缩推送原位
+   * 换成 skip 占位:同 seq、不留空洞,旧端不会收到 payload 为 null 的推送。链路此刻可发时
+   * 立即定向补发,否则由建链后的既有重放按预算推进;推送本就由重连 resync 补偿。
+   */
+  private setPeerPushDeflate(dst: string, peer: PeerTransportState, accepts: boolean): void {
+    const retired: PendingReliableMessage[] = [];
+    if (peer.acceptsPushDeflate && !accepts) {
+      for (const [seq, pending] of peer.pending) {
+        if (pending.envelope.kind === 'push' && isEncodedPushPayload(pending.envelope.payload)) {
+          this.replacePendingWithSkip(peer, seq, pending);
+          retired.push(pending);
+        }
+      }
+    }
+    peer.acceptsPushDeflate = accepts;
+    // 链路此刻可发时(无对应 offer 的 accept 不会再走重放)定向补发,接收端不会在这些 seq 上
+    // 停住;不可发时由建链后的重放推进,与 dropReliablePendingForRequest 同口径。
+    for (const pending of retired) this.sendSkipPlaceholderNow(dst, peer, pending);
+  }
+
+  /** 原位换成 skip 占位并重算预留字节;调用方决定是否立即发送。 */
+  private replacePendingWithSkip(peer: PeerTransportState, seq: number, pending: PendingReliableMessage): void {
+    const skipEnvelope: Envelope = { ...pending.envelope, payload: makeTransportSkipPayload() };
+    const skipBytes = this.measureReservedReliableBytes(skipEnvelope, peer.streamId, seq);
+    peer.pendingBytes += skipBytes - pending.bytes;
+    pending.envelope = skipEnvelope;
+    pending.bytes = skipBytes;
+    resetReliableSendRound(pending);
+    pending.sent = false;
+  }
+
   private dropReliablePendingForRequest(dst: string, requestId: string): void {
     const peer = this.peerTransport.get(dst);
     if (!peer) return;
     for (const [seq, pending] of peer.pending) {
       if (pending.envelope.id !== requestId) continue;
-      const skipEnvelope: Envelope = {
-        ...pending.envelope,
-        payload: makeTransportSkipPayload(),
-      };
-      const skipBytes = this.measureReservedReliableBytes(skipEnvelope, peer.streamId, seq);
-      peer.pendingBytes += skipBytes - pending.bytes;
-      pending.envelope = skipEnvelope;
-      pending.bytes = skipBytes;
-      resetReliableSendRound(pending);
-      pending.sent = false;
+      this.replacePendingWithSkip(peer, seq, pending);
       // **定向**发这一帧,不借道 retryPending:后者从队头遍历,skip 前面若压着超过预算的
       // pending,预算会在到达它之前用完 —— 注释说的「立刻发」就没发生,而接收端正等这个
       // seq,后面的可靠消息会一直阻塞(codex P2 第二轮)。skip payload 是单帧,不涉及预算;
@@ -3746,6 +3791,9 @@ export class DeviceLinkClient {
   /** Channel of each recent inbound invoke, so a queued reply can be labelled. Diagnostics only. */
   private readonly inboundInvokeChannels = new Map<string, string>();
   private readonly backlogWarnings = new BacklogWarnLimiter();
+  private readonly pushDecodeWarnings = new BacklogWarnLimiter();
+  /** 本进程内解不开过压缩推送的对端:之后的 link-open 不再向它声明 push-deflate。 */
+  private readonly pushDeflateRejectedPeers = new Map<string, number>();
 
   private rememberInboundInvokeChannel(env: Envelope): void {
     const channel = (env.payload as { channel?: unknown } | undefined)?.channel;
@@ -3769,6 +3817,27 @@ export class DeviceLinkClient {
   }
 
   private emitFrame(env: Envelope): boolean | Promise<boolean> {
+    // 先还原压缩推送,后面的所有消费方(直连信令、模型速度、正文复用、业务)只见原形状。
+    if (env.kind === 'push' && env.src && !isScopedPeer(env.src) && isEncodedPushPayload(env.payload)) {
+      const decoded = decodePushTransfer(env.payload, this.opts.transferCodec);
+      if (!decoded.ok) {
+        // 不能确认后静默丢掉:后续增量会接在缺口上,控制端没有任何信号去补。按 handler
+        // 失败处理(不 ACK、停住该流),走既有恢复:对端重试耗尽后重置链路,控制端重新
+        // link-open 并重读快照。之后对它不再声明能力,被控端随即把这条及其余压缩推送换成
+        // skip,恢复后改发明文,不会反复卡在同一条上。
+        const failures = (this.pushDeflateRejectedPeers.get(env.src) ?? 0) + 1;
+        this.pushDeflateRejectedPeers.delete(env.src);
+        this.pushDeflateRejectedPeers.set(env.src, failures);
+        if (this.pushDeflateRejectedPeers.size > 256) {
+          this.pushDeflateRejectedPeers.delete(this.pushDeflateRejectedPeers.keys().next().value!);
+        }
+        if (this.pushDecodeWarnings.shouldWarn(env.src, this.monotonicNow())) {
+          this.log.warn(`device-link undecodable push src=${env.src.slice(0, 8)} channel=${diagnosticChannel(env.payload.channel)} failures=${failures} reason=${decoded.reason}; push-deflate disabled for this peer`);
+        }
+        return false;
+      }
+      env = { ...env, payload: decoded.push };
+    }
     if (env.kind === 'push' && (env.payload as { channel?: string })?.channel === DIRECT_LINK_SIGNAL) {
       const signal = parseDirectSignal((env.payload as { payload?: unknown }).payload);
       if (signal && env.src && (!isScopedPeer(env.src) || this.hasProviderShareDirectLease(env.src))) {
@@ -5067,6 +5136,14 @@ export class DeviceLinkClient {
     const nextRemoteStreamId = reliable && typeof remoteStreamId === 'string' && remoteStreamId
       ? remoteStreamId
       : null;
+    // push-deflate 只认入站 link-open 的声明。出站 accept 不带控制端能力:对端换了 stream
+    // (重启,可能已降级)时先当作不支持,等它下次以控制端身份 link-open 再按声明恢复。
+    if (source === 'inbound-open') {
+      this.setPeerPushDeflate(dst, peer, !isScopedPeer(dst) && reliable
+        && capabilities!.includes(DEVICE_LINK_CAPABILITY_PUSH_DEFLATE_V1));
+    } else if (peer.remoteStreamId !== nextRemoteStreamId) {
+      this.setPeerPushDeflate(dst, peer, false);
+    }
     const nextRemoteBaseSeq = reliable && Number.isSafeInteger(remoteBaseSeq) && remoteBaseSeq! > 0
       ? remoteBaseSeq!
       : 1;
@@ -5110,6 +5187,9 @@ export class DeviceLinkClient {
         ...(this.directNegotiator && this.opts.directRuntimeEnabled?.() !== false && (!isScopedPeer(dst) || isProviderSharePeer(dst))
           ? [DIRECT_LINK_CAPABILITY] : []),
         ...(this.directNegotiator && this.opts.directRuntimeEnabled?.() !== false && isProviderSharePeer(dst) ? [PROVIDER_SHARE_DIRECT_CAPABILITY] : []),
+        // 推送必须按序同步交给业务,所以只看同步解码器;跨账号 peer 不用这套编码。
+        ...(this.opts.transferCodec?.inflateRawBase64 && !isScopedPeer(dst) && !this.pushDeflateRejectedPeers.has(dst)
+          ? [DEVICE_LINK_CAPABILITY_PUSH_DEFLATE_V1] : []),
       ]),
       transportStreamId: typeof payload.transportStreamId === 'string'
         ? payload.transportStreamId

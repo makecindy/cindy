@@ -74,6 +74,16 @@ export interface DeviceLinkTransferCodec {
   gzipBase64?(text: string): string;
   /** 被控端：结果内容标签，须抗碰撞（如 SHA-256）。 */
   contentTag?(text: string): string;
+  /**
+   * 被控端可选（推送编码，见 pushTransfer.ts）：raw DEFLATE，以 ASCII 字符串 dictionary
+   * 作预置字典，返回 base64。
+   */
+  deflateRawBase64?(text: string, dictionary: string): string;
+  /**
+   * 控制端可选：deflateRawBase64 的同步逆运算，同样受 maxChars 约束。推送须按序交给
+   * 业务，所以只有同步版本；提供它才会在建链时声明 push-deflate 能力。
+   */
+  inflateRawBase64?(base64: string, maxChars: number, dictionary: string): string;
 }
 
 /** 小结果编码收益抵不过开销，原样发送。 */

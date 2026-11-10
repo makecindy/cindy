@@ -35,6 +35,8 @@ import {
   parseTransportPayload,
 } from '../transport.js';
 import { PLUGIN_SYNC_CHANNEL } from '../pluginSyncProtocol.js';
+import { deflateRawBase64Sync, inflateRawBase64TextBounded } from '../nodeCompression.js';
+import { DEVICE_LINK_CAPABILITY_PUSH_DEFLATE_V1 } from '../pushTransfer.js';
 import { BACKLOG_WARN_MESSAGES, summarizeBacklog } from '../transportBacklog.js';
 import { sharedTaskGuestPeer } from '../sharedTaskPeer.js';
 import { DIRECT_LINK_SIGNAL, type DirectRuntime, type DirectRuntimeEvents } from '../directNegotiation.js';
@@ -12770,5 +12772,206 @@ describe('bounded ordinary direct continuity', () => {
       expect(owner.hasOfflineDirectPath('executor')).toBe(false);
       expect(direct.isOpen()).toBe(false);
     } finally { clock.mockRestore(); owner.stop(); executor.stop(); vi.useRealTimers(); }
+  });
+});
+
+/**
+ * 推送传输编码（push-deflate-v1，见 pushTransfer.ts 与 protocol-compatibility/device-link-push-deflate.md）。
+ * 生产入口：被控端 DeviceLinkClient.sendPush → 内存中继 → 控制端 onFrame。协议契约：只对
+ * 在 link-open 声明能力的控制端压缩；交给业务的推送与原 payload 逐字节一致且保序；旧控制端与
+ * 小推送的 wire 不变；控制端换成旧版本重新建链后，积压与后续推送都不再是压缩形状。
+ */
+describe('推送传输编码（push-deflate-v1）', () => {
+  const nodeCodec = {
+    deflateRawBase64: (text: string, dictionary: string) => deflateRawBase64Sync(text, 4, dictionary).compressed.toString('base64'),
+    inflateRawBase64: inflateRawBase64TextBounded,
+  };
+  const openLink = (client: DeviceLinkClient, relay: MemoryRelay) => Promise.all([
+    client.openLink('desktop', { controllerName: 'Controller', protocolVersion: 1, appVersion: '1' }, 500),
+    relay.settle(),
+  ]);
+  /** 中继实际投递的推送（分片按 seq 拼回整条），即线上的逻辑形状。 */
+  const deliveredPushes = (relay: MemoryRelay, dst: string, from = 0) => {
+    const bySeq = new Map<number, string[]>();
+    for (const env of (relay.deliveredTo.get(dst) ?? []).slice(from)) {
+      if (env.kind !== 'push') continue;
+      const parsed = parseTransportPayload(env.payload);
+      if (!parsed) continue;
+      const parts = bySeq.get(parsed.meta.seq) ?? [];
+      parts[parsed.meta.segment?.index ?? 0] = parsed.data;
+      bySeq.set(parsed.meta.seq, parts);
+    }
+    return [...bySeq.values()].map((parts) => JSON.parse(parts.join('')) as Record<string, unknown>)
+      .filter((push) => push.channel !== DEVICE_LINK_TRANSPORT_ACK_CHANNEL);
+  };
+  const isCompressed = (push: Record<string, unknown>) => push.payload === null
+    && typeof (push.transfer as { deflateBase64?: unknown } | undefined)?.deflateBase64 === 'string';
+  const largeBatch = (n: number) => ({
+    sessionId: 'session-1',
+    events: Array.from({ length: 6 }, (_, i) => ({
+      sessionId: 'session-1',
+      event: { type: 'text', data: { text: `第 ${n}-${i} 段：弱网下的流式正文 ✓`, isFinal: false }, source: 'claude-code' },
+      persistId: `persist-${n}`,
+    })),
+  });
+
+  it('只压缩声明能力的控制端收到的较大推送，业务收到的内容与顺序不变；旧控制端 wire 不变', async () => {
+    const relay = new MemoryRelay();
+    const host = makeRelayClient(relay, 'desktop', undefined, { transferCodec: nodeCodec });
+    const phone = makeRelayClient(relay, 'ios', undefined, { transferCodec: nodeCodec });
+    const legacy = makeRelayClient(relay, 'android');
+    const offered = new Map<string, unknown>();
+    host.onFrame((env) => {
+      if (env.kind !== 'link-open' || !env.src || !env.id) return;
+      offered.set(env.src, (env.payload as { capabilities?: string[] }).capabilities);
+      host.sendLinkAccept(env.src, env.id, { appVersion: '1', allowlistHash: 'hash' });
+    });
+    const received = new Map<string, unknown[]>();
+    for (const [id, client] of [['ios', phone], ['android', legacy]] as const) {
+      received.set(id, []);
+      client.onFrame((env) => { if (env.kind === 'push') received.get(id)!.push(env.payload); });
+    }
+    for (const client of [host, phone, legacy]) client.start();
+    await relay.settleUntil(() => [host, phone, legacy].every((client) => client.getStatus() === 'online'));
+    await openLink(phone, relay);
+    await openLink(legacy, relay);
+    expect(offered.get('ios')).toContain(DEVICE_LINK_CAPABILITY_PUSH_DEFLATE_V1);
+    expect(offered.get('android')).not.toContain(DEVICE_LINK_CAPABILITY_PUSH_DEFLATE_V1);
+
+    const pushes = [
+      { channel: 'maker:history-view-changed', payload: { sessionId: 'session-1' } },
+      { channel: 'maker:event:batch', payload: largeBatch(1) },
+      { channel: 'maker:status-changed', payload: { sessionId: 'session-1', status: 'idle' } },
+      { channel: 'maker:event:batch', payload: largeBatch(2) },
+      // 超过 512 KiB 的推送原样走可靠层（分片 / 超限兜底不变），不因压缩后放得下而改变。
+      { channel: 'local-db:messages:created', payload: { sessionId: 'session-1', message: { id: 'm', content: '长'.repeat(200_000) } } },
+    ];
+    for (const dst of ['ios', 'android']) {
+      for (const push of pushes) host.sendPush(dst, push.channel, push.payload, { dataOwnerId: 'owner', ownerGeneration: 3 });
+    }
+    await relay.settle();
+
+    const expected = pushes.map((push) => ({ ...push, ownerStamp: { dataOwnerId: 'owner', ownerGeneration: 3 } }));
+    expect(received.get('ios')).toEqual(expected);
+    expect(received.get('android')).toEqual(expected);
+    const phoneWire = deliveredPushes(relay, 'ios');
+    expect(phoneWire.map(isCompressed)).toEqual([false, true, false, true, false]);
+    // channel / ownerStamp 留在明文：可靠层的丢弃与合并判据只读这两项。
+    expect(phoneWire[1]).toMatchObject({ channel: 'maker:event:batch', ownerStamp: { dataOwnerId: 'owner', ownerGeneration: 3 } });
+    expect(JSON.stringify(phoneWire[1]).length).toBeLessThan(JSON.stringify(expected[1]).length * 0.6);
+    expect(deliveredPushes(relay, 'android')).toEqual(expected);
+    for (const client of [host, phone, legacy]) client.stop();
+  });
+
+  it('控制端换成不认识压缩推送的版本重新建链：积压的压缩推送换成 skip，之后的推送照旧明文', async () => {
+    const relay = new MemoryRelay();
+    const host = makeRelayClient(relay, 'desktop', undefined, { transferCodec: nodeCodec });
+    const phone = makeRelayClient(relay, 'ios', undefined, { transferCodec: nodeCodec });
+    const invokes: Envelope[] = [];
+    host.onFrame((env) => {
+      if (env.kind === 'link-open' && env.src && env.id) host.sendLinkAccept(env.src, env.id, { appVersion: '1', allowlistHash: 'hash' });
+      if (env.kind === 'invoke') invokes.push(env);
+    });
+    host.start();
+    phone.start();
+    await relay.settleUntil(() => host.getStatus() === 'online' && phone.getStatus() === 'online');
+    await openLink(phone, relay);
+    // 一个已送达、尚未回结果的请求：它的结果是 live 帧，重新建链时挡在可丢弃前缀之前，
+    // 后面的压缩推送因此会留在 pending 里等重放。
+    void phone.invoke('desktop', { channel: 'local-db:sessions:list', args: [] }, 1_000).catch(() => {});
+    await relay.settle();
+    relay.disconnect('ios');
+    phone.stop();
+    host.sendInvokeResult('ios', invokes[0]!.id!, { ok: true, result: [] });
+    host.sendPush('ios', 'maker:event:batch', largeBatch(1));
+    await relay.settle();
+
+    const downgraded = makeRelayClient(relay, 'ios');
+    const received: unknown[] = [];
+    downgraded.onFrame((env) => { if (env.kind === 'push') received.push(env.payload); });
+    downgraded.start();
+    await relay.settleUntil(() => downgraded.getStatus() === 'online');
+    const before = (relay.deliveredTo.get('ios') ?? []).length;
+    await openLink(downgraded, relay);
+    host.sendPush('ios', 'maker:event:batch', largeBatch(2));
+    await relay.settle();
+
+    const replayed = (relay.deliveredTo.get('ios') ?? []).slice(before)
+      .map((env) => parseTransportPayload(env.payload)).filter((parsed) => parsed !== null);
+    expect(replayed.some((parsed) => isTransportSkipPayload(JSON.parse(parsed!.data)))).toBe(true);
+    expect(replayed.some((parsed) => JSON.parse(parsed!.data)?.transfer !== undefined)).toBe(false);
+    expect(received).toEqual([{ channel: 'maker:event:batch', payload: largeBatch(2) }]);
+    host.stop();
+    downgraded.stop();
+  });
+
+  it('解不开的压缩推送不交给业务、不确认；控制端之后不再声明能力，恢复后推送改为明文送达', async () => {
+    const relay = new MemoryRelay();
+    // 被控端编码器坏了（或字典与对端不一致）：输出不是合法的 raw DEFLATE。
+    const host = makeRelayClient(relay, 'desktop', undefined, { transferCodec: {
+      deflateRawBase64: () => Buffer.from('not a deflate stream').toString('base64'),
+    } });
+    const phone = makeRelayClient(relay, 'ios', undefined, { transferCodec: nodeCodec, logger: { debug() {}, info() {}, warn() {}, error() {} } });
+    const offers: unknown[] = [];
+    host.onFrame((env) => {
+      if (env.kind !== 'link-open' || !env.src || !env.id) return;
+      offers.push((env.payload as { capabilities?: string[] }).capabilities);
+      host.sendLinkAccept(env.src, env.id, { appVersion: '1', allowlistHash: 'hash' });
+    });
+    const received: unknown[] = [];
+    phone.onFrame((env) => { if (env.kind === 'push') received.push(env.payload); });
+    host.start();
+    phone.start();
+    await relay.settleUntil(() => host.getStatus() === 'online' && phone.getStatus() === 'online');
+    await openLink(phone, relay);
+    host.sendPush('ios', 'maker:event:batch', largeBatch(1));
+    await relay.settle();
+    expect(received).toEqual([]);
+    expect(deliveredPushes(relay, 'ios').map(isCompressed)).toEqual([true]);
+
+    // 恢复路径（生产中由对端重试耗尽触发）：控制端重新建链，这次不再声明能力。
+    await openLink(phone, relay);
+    host.sendPush('ios', 'maker:event:batch', largeBatch(2));
+    await relay.settle();
+    expect(offers.at(0)).toContain(DEVICE_LINK_CAPABILITY_PUSH_DEFLATE_V1);
+    expect(offers.at(-1)).not.toContain(DEVICE_LINK_CAPABILITY_PUSH_DEFLATE_V1);
+    expect(received).toEqual([{ channel: 'maker:event:batch', payload: largeBatch(2) }]);
+    host.stop();
+    phone.stop();
+  });
+
+  it('互控时对端在出站 accept 里换了 stream（重启、能力未知）：停止压缩，直到它再以控制端声明', async () => {
+    const relay = new MemoryRelay();
+    const desktop = makeRelayClient(relay, 'desktop', undefined, { transferCodec: nodeCodec });
+    const peer = makeRelayClient(relay, 'peer', undefined, { transferCodec: nodeCodec });
+    const accept = (client: DeviceLinkClient) => client.onFrame((env) => {
+      if (env.kind === 'link-open' && env.src && env.id) client.sendLinkAccept(env.src, env.id, { appVersion: '1', allowlistHash: 'hash' });
+    });
+    accept(desktop);
+    accept(peer);
+    desktop.start();
+    peer.start();
+    await relay.settleUntil(() => desktop.getStatus() === 'online' && peer.getStatus() === 'online');
+    // peer 控制 desktop（声明能力），desktop 也控制 peer。
+    await openLink(peer, relay);
+    await Promise.all([desktop.openLink('peer', { controllerName: 'Desktop', protocolVersion: 1, appVersion: '1' }, 500), relay.settle()]);
+    desktop.sendPush('peer', 'maker:event:batch', largeBatch(1));
+    await relay.settle();
+    expect(deliveredPushes(relay, 'peer').map(isCompressed)).toEqual([true]);
+
+    // peer 重启成不认识压缩推送的版本，只作为被控端接受 desktop 的出站链路。
+    relay.disconnect('peer');
+    peer.stop();
+    const restarted = makeRelayClient(relay, 'peer');
+    accept(restarted);
+    restarted.start();
+    await relay.settleUntil(() => restarted.getStatus() === 'online');
+    const before = (relay.deliveredTo.get('peer') ?? []).length;
+    await Promise.all([desktop.openLink('peer', { controllerName: 'Desktop', protocolVersion: 1, appVersion: '1' }, 500), relay.settle()]);
+    desktop.sendPush('peer', 'maker:event:batch', largeBatch(2));
+    await relay.settle();
+    expect(deliveredPushes(relay, 'peer', before).map(isCompressed)).toEqual([false]);
+    desktop.stop();
+    restarted.stop();
   });
 });
