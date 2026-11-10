@@ -5423,9 +5423,13 @@ export function ChatInput({
       return to !== null && to >= from ? { from, to } : null;
     }
 
+    // The resolver stops at the first exact-length candidate, so try longer names
+    // first: the longest name the draft fully completes after the caret wins,
+    // whichever field (display name, command, path, `dir/`) it comes from.
+    const candidates = [...replacementNames].sort((a, b) => b.length - a.length);
     return {
       from,
-      to: resolveSlashCommandRunEnd(editor.state.doc, from, effectiveAt.query, replacementNames, { consumeFollowingWhitespace }),
+      to: resolveSlashCommandRunEnd(editor.state.doc, from, effectiveAt.query, candidates, { consumeFollowingWhitespace }),
     };
   }, [editor, effectiveAt]);
 
@@ -5433,9 +5437,8 @@ export function ChatInput({
     (selectedItem: AtResourceItem) => {
       if (!editor || !effectiveAt) return;
       const directoryQuery = getAtDirectoryCompletionQuery(selectedItem);
-      // An exact-length candidate stops the scan, so slash-terminated directory
-      // candidates go first: re-selecting `@dir|/` must also replace the existing `/`,
-      // whether the draft holds the full path or only the basename.
+      // Slash-terminated directory candidates let re-selecting `@dir|/` replace the
+      // existing `/`, whether the draft holds the full path or only the basename.
       const range = resolveEffectiveAtRange([
         ...(directoryQuery ? [directoryQuery, `${selectedItem.name}/`] : []),
         selectedItem.name,

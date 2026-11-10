@@ -185,13 +185,17 @@ it.each([
   { input: '@desktop|/ rest', name: 'desktop', relPath: 'apps/desktop', remaining: '@apps/desktop/ rest', directory: true },
   { input: '@desk|top/ rest', name: 'desktop', relPath: 'apps/desktop', remaining: '@apps/desktop/ rest', directory: true },
   // A plugin command placed at the start must not leave the typed name suffix behind.
-  { input: '@issu|es rest', name: 'issues', remaining: '$issues rest', plugin: true },
+  // `name` is the plugin command; `plugin` is its display name. Whichever of the two is
+  // longer, the selected plugin consumes the full typed name it exactly completes.
+  { input: '@issu|es rest', name: 'issues', remaining: '$issues rest', plugin: 'Issues' },
+  { input: '@git|hub rest', name: 'github', remaining: '$github rest', plugin: 'Git' },
+  { input: '@git|hub rest', name: 'git', remaining: '$git rest', plugin: 'GitHub' },
   { input: '@|word rest', name: null, remaining: 'word rest' },
   // An action consumes the rest of its own typed label, but nothing unrelated.
   { input: '@Col|laboration rest', name: null, label: 'Collaboration', remaining: 'rest' },
 ])('preserves unrelated draft text when selecting @ completion in $input ($name)', async ({ input, name, relPath, label, remaining, directory, plugin }) => {
   const run = vi.fn();
-  const ghost: GhostComposerEntry = { manifest: { id: 'issues', name: 'Issues', command: 'issues' }, enabled: true };
+  const ghost: GhostComposerEntry = { manifest: { id: name ?? 'unused', name: plugin ?? 'unused', command: name ?? undefined }, enabled: true };
   if (plugin) h.composerGhosts = [ghost];
   h.mentionEntry = name === null
     ? { kind: 'action', action: { id: 'attach-files', label: label ?? 'Attach files', run } }
