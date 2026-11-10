@@ -133,7 +133,19 @@ export function toCompatibleMakerSendResult(
 }
 
 const SAFE_ERROR_NAME_RE = /^[A-Za-z][A-Za-z0-9]{0,63}$/;
-const HOST_SEND_FAILURE_CODE_SET: ReadonlySet<string> = new Set(HOST_SEND_FAILURE_CODES);
+/**
+ * 可外发的错误 code 形态：大写标识符。
+ *
+ * 之前只认 `HOST_SEND_FAILURE_CODES` 这 8 个，于是 maker-core 的
+ * `Session ... is closing` / `PRECONDITION_FAILED` / 伙伴能力刷新等派发前失败全部被压成
+ * `safeMessage: 'Error'`：日志里只有 `reason: 'Error'`，渠道里只有「❌ 启动 agent 失败：Error」，
+ * 用户和值守的人都无法定位（issue #9636 / #8952）。
+ *
+ * 放宽的依据是**形态**而不是内容：`code` 是宿主自己赋的枚举标识符（`SESSION_CLOSED`、
+ * `PRECONDITION_FAILED`），不是自由文本；自由文本只可能出现在 `message` 里，而 `message`
+ * 依然不落日志、不进渠道文案。带空格 / 路径 / 引号的伪 code 仍会被丢弃。
+ */
+const SAFE_ERROR_CODE_RE = /^[A-Z][A-Z0-9_]{0,63}$/;
 
 export function sanitizeSendOutcomeError(err: unknown): SanitizedSendOutcomeError {
   if (!(err instanceof Error)) {
@@ -142,7 +154,7 @@ export function sanitizeSendOutcomeError(err: unknown): SanitizedSendOutcomeErro
   const rawName = typeof err.name === 'string' ? err.name : '';
   const errorName = SAFE_ERROR_NAME_RE.test(rawName) ? rawName : 'Error';
   const rawCode = (err as { code?: unknown }).code;
-  const code = typeof rawCode === 'string' && HOST_SEND_FAILURE_CODE_SET.has(rawCode)
+  const code = typeof rawCode === 'string' && SAFE_ERROR_CODE_RE.test(rawCode)
     ? rawCode
     : undefined;
   return {

@@ -84,6 +84,7 @@ import { resolveSafe as resolveCindyMediaUrl } from '../../cindy-media/blobStore
 import { beginHeadlessGhostSetupTurn } from '../../mcp-integrations/ghostSetupInteractionSurface.js';
 
 import {
+  createSessionUnavailableError,
   isTerminalAgentErrorEvent,
   MAIN_OWNED_SEND_CONTEXT,
   TurnPermissionPolicyUnsupportedError,
@@ -1546,7 +1547,9 @@ export function createTurnRunner(
             agentSwitchCloseSuppressed.delete(rowId);
           }
           if (sessionStates.get(rowId) !== state) {
-            throw new Error(`session ${rowId} closed while preparing the bot send`);
+            throw createSessionUnavailableError(
+              'SESSION_CLOSED', `session ${rowId} closed while preparing the bot send`,
+            );
           }
         } else {
           blocked = await deps.companion.prepareSend(rowId);
@@ -1581,7 +1584,9 @@ export function createTurnRunner(
       if (deps.prepareUnhealthySession) {
         await deps.prepareUnhealthySession(rowId);
         if (sessionStates.get(rowId) !== state) {
-          throw new Error(`session ${rowId} closed while checking its context before send`);
+          throw createSessionUnavailableError(
+            'SESSION_CLOSED', `session ${rowId} closed while checking its context before send`,
+          );
         }
       }
       // deferred 切换会关闭旧 session。apply 成功后重新读取 maker 里的 live
@@ -1600,7 +1605,9 @@ export function createTurnRunner(
           agentSwitchCloseSuppressed.delete(rowId);
         }
         if (sessionStates.get(rowId) !== state) {
-          throw new Error(`session ${rowId} closed while refreshing deferred agent switch`);
+          throw createSessionUnavailableError(
+            'SESSION_CLOSED', `session ${rowId} closed while refreshing deferred agent switch`,
+          );
         }
         await refreshSessionAfterPendingAgentSwitch(state, rowId, userId);
       } else {
@@ -2058,14 +2065,29 @@ export function createTurnRunner(
         sessionId,
         `session became ${row?.status ?? 'missing'} during route refresh`,
       );
-      throw new Error(`session ${sessionId} is not active after deferred agent switch`);
+      throw createSessionUnavailableError(
+        'SESSION_CLOSED', `session ${sessionId} is not active after deferred agent switch`,
+      );
     }
     let current = maker.getSession(sessionId);
+    // 身份相同不等于还活着：Maker 只在 status === 'closed' 时才把会话移出 activeSessions，
+    // 于是「close 已开始」「close 失败停在 error 态」的运行时仍是同一个实例 ——
+    // `current === previous` 会把它当成可用，`session.send` 随即抛出裸 Error，飞书上只剩
+    // 「❌ 启动 agent 失败：Error」（issue #9636）。这里按运行时状态判活，并复用下面同一套
+    // 「按最新 DB 行重建」：maker.createSession 内部会先等旧 close 结束、并自愈 error 态。
+    const unusable = describeUnusableRuntime(current);
+    if (unusable) {
+      log.info(
+        `rebuilding ${unusable} runtime before send session=${sessionId.slice(-8)}`,
+      );
+    }
     // apply 已提交 DB 但 bootstrap 失败时,直发路径也要像 makerSendTransaction 的
     // lazy-create 一样按最新 DB 行自愈,不能退回已关闭的 previous.send()。
-    if (!current) {
+    if (!current || unusable) {
       if (!row.workingDir) {
-        throw new Error(`session ${sessionId} missing after deferred agent switch`);
+        throw createSessionUnavailableError(
+          'SESSION_CLOSED', `session ${sessionId} missing after deferred agent switch`,
+        );
       }
       const agentKind = toCoreAgentKind(row.agentKind);
       hydrateSessionProvider(sessionId, row.providerId ?? null);
@@ -2175,13 +2197,38 @@ export function createTurnRunner(
 
   // ── per-session wiring (idempotent) ─────────────────────────────────────────
 
+  /**
+   * 缓存里的运行时还能不能收新输入。`null` = 可以继续用；否则返回不可用原因（写日志）。
+   *
+   * 只看对象身份不够：Maker 只在 status === 'closed' 时才把会话移出 activeSessions，
+   * 拆除已开始（`hasStartedClosing()`，含 close 失败停住的实例）或 close 刚失败的
+   * error 态仍是同一个实例，`session.send` 会直接抛「is closing / is in error state」。
+   * `'aborting'` 不算不可用：那是同一轮 Stop 的瞬态，不应该为它重建运行时。
+   *
+   * 测试替身可能没有这两个方法，缺省按「活着」处理。
+   */
+  function describeUnusableRuntime(session: MakerSession | undefined): string | null {
+    if (!session) return 'missing';
+    // status 比「拆除已开始」更具体：close 失败停住的实例两者都成立，日志要写 error。
+    if (typeof session.getStatus === 'function') {
+      const status = session.getStatus();
+      if (status === 'closed' || status === 'error') return `status=${status}`;
+    }
+    if (typeof session.hasStartedClosing === 'function' && session.hasStartedClosing()) {
+      return 'closing';
+    }
+    return null;
+  }
+
   async function ensureSessionWired(target: RouteTarget, userId: string): Promise<SessionState> {
     const existing = sessionStates.get(target.row.id);
     if (existing) {
       if (existing.detachDrainPromise) {
         const outcome = await existing.detachDrainPromise;
         if (outcome === 'cancelled') {
-          throw new Error(`session wiring cancelled during cleanup: ${target.row.id}`);
+          throw createSessionUnavailableError(
+            'SESSION_CLOSING', `session wiring cancelled during cleanup: ${target.row.id}`,
+          );
         }
         return ensureSessionWired(target, userId);
       }

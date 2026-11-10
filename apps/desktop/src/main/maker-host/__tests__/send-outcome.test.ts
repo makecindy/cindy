@@ -185,7 +185,33 @@ describe('desktop send outcome helper', () => {
     });
   });
 
-  it('exports the host failure code list used for sanitizer allow-listing', async () => {
+  /**
+   * 测试价值
+   * - 生产入口与可观察结果：`sanitizeSendOutcomeError` → 派发前失败日志的
+   *   `reason` / `errorCode` 与渠道失败文案；用户不再看到泛化的 `Error`。
+   * - Bug／规则依据：issue #9636、#8952；规则见 `docs/dev-rules/im-turn-flow.md` §3.6b。
+   * - 现有覆盖缺口：旧用例只证明 8 个宿主 code 被保留，没有覆盖 maker-core 的
+   *   `SESSION_*` 与 IPC `PRECONDITION_FAILED`，也没有锁住「伪 code 仍被丢弃」。
+   * - 最小失败输入：`Error` 带 `code: 'SESSION_CLOSING'`（修复前被丢弃）。
+   * - tier：unit。
+   */
+  it('keeps any identifier-shaped error code so runtime failures stay diagnosable', () => {
+    for (const code of ['SESSION_CLOSED', 'SESSION_CLOSING', 'SESSION_ERROR', 'PRECONDITION_FAILED']) {
+      const err = new Error('Session 123 is closing') as Error & { code?: string };
+      err.code = code;
+      expect(sanitizeSendOutcomeError(err)).toEqual({
+        errorName: 'Error',
+        errorCode: code,
+        safeMessage: code,
+      });
+    }
+    // code 只在**形态**上是枚举标识符时才保留；自由文本 / 路径 / 伪 code 继续丢弃。
+    const leaky = new Error('ordinary message') as Error & { code?: string };
+    leaky.code = 'SESSION_CLOSING C:\\Users\\sam\\secret.txt';
+    expect(sanitizeSendOutcomeError(leaky)).toEqual({ errorName: 'Error', safeMessage: 'Error' });
+  });
+
+  it('exports the host failure code list used for host-send typing', async () => {
     expect(HOST_SEND_FAILURE_CODES).toEqual([
       'WORKDIR_MISSING',
       'LAZY_CREATE_FAILED',
