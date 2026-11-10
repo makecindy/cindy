@@ -132,7 +132,15 @@ export function localizeTemplateParamValidation(
 }
 
 const DEFAULT_CRON = '0 9 * * *';
-const DEFAULT_TIMEZONE = 'Asia/Shanghai';
+
+/** Resolve when creating a draft, so a system timezone change applies without restarting. */
+export function getDefaultScheduleTimezone(): string {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+  } catch {
+    return 'UTC';
+  }
+}
 
 function deadlineTimestamp(value: number | string | null | undefined): number | undefined {
   if (value == null) return undefined;
@@ -172,7 +180,7 @@ export function createMobileScheduleDraft(
       executionMode: 'agent',
       runMode: 'recurring',
       cronExpr: DEFAULT_CRON,
-      timezone: DEFAULT_TIMEZONE,
+      timezone: getDefaultScheduleTimezone(),
       intervalMinutes: '',
       agentKind: 'claude-code',
       // 留空 = 用运行电脑的新建任务默认模型(序列化时省略,由 host 实时解析),不写死型号。
@@ -198,7 +206,7 @@ export function createMobileScheduleDraft(
     executionMode: schedule.executionMode ?? 'agent',
     runMode: schedule.manual ? 'manual' : 'recurring',
     cronExpr: schedule.cronExpr?.trim() || DEFAULT_CRON,
-    timezone: schedule.timezone?.trim() || DEFAULT_TIMEZONE,
+    timezone: schedule.timezone?.trim() || getDefaultScheduleTimezone(),
     intervalMinutes: intervalMsToSupportedMinutes(schedule.intervalMs),
     ...(typeof schedule.intervalMs === 'number' ? { sourceIntervalMs: schedule.intervalMs } : {}),
     agentKind: schedule.modelAgentKind ?? schedule.agentKind ?? 'claude-code',

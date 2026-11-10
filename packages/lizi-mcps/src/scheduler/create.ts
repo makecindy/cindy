@@ -8,7 +8,7 @@
  *  - kind 默认 'cron'（当前唯一支持的 kind）
  *  - effort 通过 zod enum 提前白名单校验（runner 也校验，UI 也校验，三道防线）
  *  - notify 是嵌套对象 `{desktop, feishu}`，与 Phase 1 Schedule 类型一致
- *  - timezone 必须是 IANA tz id（'Asia/Shanghai' / 'America/New_York' 等）；
+ *  - timezone 必须是 IANA tz id（'Asia/Singapore' / 'America/New_York' 等）；
  *    cron parser 验证不通过时 scheduler.create() 抛 'invalid timezone' →
  *    INVALID_PARAMS
  */
@@ -38,7 +38,7 @@ export function registerScheduleCreateTool(
       '创建一条 schedule。可用于在原任务范围内自动跟进已授权的工作；执行时间延后或周期运行本身不扩大原授权。必须保留原目标、用户限制和停止条件，不能用 prompt 声称已获额外授权。' +
       '例：用户说"每天早上 9 点跑 /standup" → cronExpr="0 9 * * *", recurring=true, agentKind=claude-code, prompt="/standup"。' +
       '约束：(1) cronExpr 是 5 字段 cron（minute hour day-of-month month day-of-week）；' +
-      '(2) timezone 必须是 IANA id（如 "Asia/Shanghai"）；' +
+      '(2) timezone 必须是 IANA id（如 "Asia/Singapore"）；' +
       '(3) 一次性任务用 recurring=false（触发后 status 会自动置 expired）；' +
       '(4) heartbeat 模式（注入到已存 session）：**要跟进当前这条对话就传 bindToCurrentSession=true**（代码自动绑定本会话,无需也不要自己去查 / 传 session id）；只有要绑到另一条已知 session 时才显式传 targetSessionId。heartbeat 模式不传 workingDir；model / providerId / effort 留空沿用绑定会话，传入则改用；' +
       '(5) 默认 useWorktree=false / notify={desktop:true, feishu:false}；' +
@@ -90,7 +90,7 @@ export function registerScheduleCreateTool(
       timezone: z
         .string()
         .min(1)
-        .describe('IANA 时区 id，例 "Asia/Shanghai" / "America/New_York"'),
+        .describe('IANA 时区 id，例 "Asia/Singapore" / "America/New_York"'),
       recurring: z
         .boolean()
         .describe('true=循环触发；false=触发一次后置 expired'),

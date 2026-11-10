@@ -15761,7 +15761,13 @@
         "label": "觸發方式",
         "timed": "定時"
       },
-      "runSettings": "運行設置"
+      "runSettings": "運行設置",
+      "timing": {
+        "timezone": "時區：{{timezone}}",
+        "next": "下次擬行：{{when}}",
+        "none": "期限內無可行之時",
+        "invalid": "下次之時未可算，請核時刻、時區及期限"
+      }
     },
     "chips": {
       "selectProject": "擇案",

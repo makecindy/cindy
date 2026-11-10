@@ -15827,7 +15827,13 @@
         "label": "Trigger mode",
         "timed": "Scheduled"
       },
-      "runSettings": "Run settings"
+      "runSettings": "Run settings",
+      "timing": {
+        "timezone": "Time zone: {{timezone}}",
+        "next": "Next run (estimated): {{when}}",
+        "none": "No run before the deadline",
+        "invalid": "Cannot calculate the next run. Check the schedule, time zone and deadline."
+      }
     },
     "chips": {
       "selectProject": "Select project",

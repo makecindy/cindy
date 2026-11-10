@@ -45,9 +45,9 @@ describe('BUILTIN_TEMPLATES', () => {
       expect(template.description.trim().length, `${template.id} description`).toBeGreaterThan(0);
       expect(template.prompt?.trim().length ?? 0, `${template.id} prompt`).toBeGreaterThan(0);
       expect(template.cronExpr, `${template.id} cronExpr`).toBeTruthy();
-      expect(template.timezone, `${template.id} timezone`).toBeTruthy();
       const from = Date.UTC(2026, 0, 1);
-      const next = nextRun(template.cronExpr!, from, template.timezone!);
+      // Templates without an explicit timezone inherit the creating client's zone.
+      const next = nextRun(template.cronExpr!, from, template.timezone ?? 'America/New_York');
       expect(next, `${template.id} nextRun`).toBeGreaterThan(from);
     }
   });

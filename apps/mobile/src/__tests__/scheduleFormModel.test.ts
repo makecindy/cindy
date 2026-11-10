@@ -39,6 +39,8 @@ function schedule(patch: Partial<RemoteSchedule> = {}): RemoteSchedule {
 }
 
 describe('mobile schedule form model', () => {
+  // PR #9318 / unit: exercise the mobile draft -> create-input entry point.
+  // CI runs in UTC; a fresh draft must use the system zone, not a fixed city.
   it('builds a desktop-compatible create input for recurring project schedules', () => {
     const draft = createMobileScheduleDraft(null, { fallbackWorkingDir: '/repo/xdt-maker' });
     const input = buildMobileScheduleInput({
@@ -54,7 +56,7 @@ describe('mobile schedule form model', () => {
       prompt: '每天检查 PR 状态',
       kind: 'cron',
       cronExpr: '*/15 * * * *',
-      timezone: 'Asia/Shanghai',
+      timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
       recurring: true,
       manual: false,
       intervalMs: 900_000,

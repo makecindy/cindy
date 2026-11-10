@@ -15761,7 +15761,13 @@
         "label": "트리거 방식",
         "timed": "예약 실행"
       },
-      "runSettings": "실행 설정"
+      "runSettings": "실행 설정",
+      "timing": {
+        "timezone": "시간대: {{timezone}}",
+        "next": "예상 다음 실행: {{when}}",
+        "none": "마감 전 실행 예정 없음",
+        "invalid": "다음 실행 시간을 계산할 수 없습니다. 일정, 시간대, 마감 시간을 확인하세요."
+      }
     },
     "chips": {
       "selectProject": "프로젝트 선택",

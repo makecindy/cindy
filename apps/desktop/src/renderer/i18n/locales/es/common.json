@@ -15974,7 +15974,13 @@
         "label": "Modo de activación",
         "timed": "Programado"
       },
-      "runSettings": "Ajustes de ejecución"
+      "runSettings": "Ajustes de ejecución",
+      "timing": {
+        "timezone": "Zona horaria: {{timezone}}",
+        "next": "Próxima ejecución estimada: {{when}}",
+        "none": "No hay ejecuciones antes de la fecha límite",
+        "invalid": "No se puede calcular la próxima ejecución. Comprueba la programación, la zona horaria y la fecha límite."
+      }
     },
     "chips": {
       "selectProject": "Seleccionar proyecto",

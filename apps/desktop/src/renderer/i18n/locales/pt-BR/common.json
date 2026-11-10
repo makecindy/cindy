@@ -15974,7 +15974,13 @@
         "label": "Modo de acionamento",
         "timed": "Agendado"
       },
-      "runSettings": "Configurações de execução"
+      "runSettings": "Configurações de execução",
+      "timing": {
+        "timezone": "Fuso horário: {{timezone}}",
+        "next": "Próxima execução estimada: {{when}}",
+        "none": "Nenhuma execução antes do prazo",
+        "invalid": "Não foi possível calcular a próxima execução. Verifique a programação, o fuso horário e o prazo."
+      }
     },
     "chips": {
       "selectProject": "Selecionar projeto",

@@ -15974,7 +15974,13 @@
         "label": "Mode de déclenchement",
         "timed": "Planifié"
       },
-      "runSettings": "Paramètres d’exécution"
+      "runSettings": "Paramètres d’exécution",
+      "timing": {
+        "timezone": "Fuseau horaire : {{timezone}}",
+        "next": "Prochaine exécution estimée : {{when}}",
+        "none": "Aucune exécution avant la date limite",
+        "invalid": "Impossible de calculer la prochaine exécution. Vérifiez la planification, le fuseau horaire et la date limite."
+      }
     },
     "chips": {
       "selectProject": "Sélectionner un projet",

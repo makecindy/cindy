@@ -16,6 +16,50 @@ import { PROJECT_AUTOMATION_REL_SEGMENTS } from '../../../shared/projectAutomati
 
 const workingDir = 'C:\\project';
 
+// System-timezone regression / unit: disk -> loader -> saved schedule. Prior
+// imports only ran in the default zone and missed timezone changes on later
+// reconciliation. Minimal input is a project config without a timezone.
+it('defaults only the first project import to the system timezone', async () => {
+  const dir = await fs.mkdtemp(path.join(tmpdir(), 'cindy-project-timezone-'));
+  const options = Intl.DateTimeFormat().resolvedOptions();
+  const zone = vi.spyOn(Intl.DateTimeFormat.prototype, 'resolvedOptions')
+    .mockReturnValue({ ...options, timeZone: 'America/New_York' });
+  try {
+    let saved: Schedule | undefined;
+    const loader = new ProjectAutomationLoader({
+      scheduler: {
+        create: async (input: CreateScheduleInput) => {
+          saved = { ...projectSchedule({ desktop: true, feishu: false }), ...input } as Schedule;
+          return saved;
+        },
+        update: async (_id: string, patch: Partial<Schedule>) => {
+          saved = { ...saved!, ...patch };
+          return saved;
+        },
+      } as unknown as ConstructorParameters<typeof ProjectAutomationLoader>[0]['scheduler'],
+      storage: { list: async () => saved ? [saved] : [] } as ConstructorParameters<typeof ProjectAutomationLoader>[0]['storage'],
+      getDb: () => ({
+        select: () => ({ from: () => ({ where: () => ({ limit: async () => [] }) }) }),
+        insert: () => ({ values: () => ({ onConflictDoUpdate: async () => {} }) }),
+      }) as unknown as ReturnType<ConstructorParameters<typeof ProjectAutomationLoader>[0]['getDb']>,
+      logger: { warn: vi.fn(), debug: vi.fn() },
+    });
+    const config = projectConfig();
+    await loader.upsertSchedule(dir, config);
+    expect(saved?.timezone).toBe('America/New_York');
+    zone.mockReturnValue({ ...options, timeZone: 'Europe/Berlin' });
+    expect(await loader.reconcile(dir)).toMatchObject({ inserted: 0, updated: 0 });
+    expect(saved?.timezone).toBe('America/New_York');
+    await loader.upsertSchedule(dir, { ...config, prompt: 'Updated prompt' });
+    expect(saved).toMatchObject({ prompt: 'Updated prompt', timezone: 'America/New_York' });
+    await loader.upsertSchedule(dir, { ...config, timezone: 'Europe/Berlin' });
+    expect(saved?.timezone).toBe('Europe/Berlin');
+  } finally {
+    zone.mockRestore();
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
 // #8237, unit: actual disk -> loader -> scheduler inputs. Existing reconciliation
 // tests did not distinguish repository discovery from an explicit editor save.
 // A valid file, with or without a hook, must create nothing before confirmation.

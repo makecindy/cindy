@@ -4,7 +4,7 @@
  * @vitest-environment jsdom
  */
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { Schedule } from '@cindy/maker-scheduler';
 
 import { makeFormFromSchedule } from '../useScheduleForm';
@@ -34,6 +34,22 @@ function makeSchedule(overrides: Partial<Schedule> = {}): Schedule {
 }
 
 describe('makeFormFromSchedule interval mode', () => {
+  // System-timezone regression / unit: module-load defaults stayed in Shanghai;
+  // new forms must read the current zone while existing schedules keep theirs.
+  it('refreshes the system timezone on creation without changing an edited schedule', () => {
+    const options = Intl.DateTimeFormat().resolvedOptions();
+    const zone = vi.spyOn(Intl.DateTimeFormat.prototype, 'resolvedOptions');
+    try {
+      zone.mockReturnValue({ ...options, timeZone: 'America/New_York' });
+      expect(makeFormFromSchedule(null).timezone).toBe('America/New_York');
+      zone.mockReturnValue({ ...options, timeZone: 'Europe/Berlin' });
+      expect(makeFormFromSchedule(null).timezone).toBe('Europe/Berlin');
+      expect(makeFormFromSchedule(makeSchedule()).timezone).toBe('Asia/Shanghai');
+    } finally {
+      zone.mockRestore();
+    }
+  });
+
   it('retains intervalMs when it disagrees with cronExpr', () => {
     const form = makeFormFromSchedule(makeSchedule());
 

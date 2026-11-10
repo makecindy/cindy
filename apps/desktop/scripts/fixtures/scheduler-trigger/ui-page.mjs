@@ -20,12 +20,23 @@ export default {
   },
   cases: { default: { about: 'Webhook → 手动 → 定时 → Webhook，弹窗及触发选择器不跳动' },
     create: { about: '新建表单使用相同的稳定切换布局' },
+    'new-timed': { about: '新建定时任务显示系统时区和预计下次触发时间' },
     scrolled: { about: '小窗口滚动后切换触发方式，配置区收起不拉回滚动位置', viewport: { width: 780, height: 620 } } },
   async ready(page) {
+    if (await page.locator('time').count()) return;
     const label = await page.evaluate(() => window.__uiPage.t('scheduler.editor.webhook.eventPicker.choose'));
     await page.getByRole('button', { name: label, exact: true }).waitFor();
   },
   async check(page, ui) {
+    if (ui.case === 'new-timed') {
+      const timezone = await page.evaluate(() => Intl.DateTimeFormat().resolvedOptions().timeZone);
+      const label = await ui.t('scheduler.editor.timing.timezone', { timezone });
+      await page.getByText(label, { exact: true }).waitFor();
+      const next = await page.locator('time').getAttribute('datetime');
+      assert.ok(Date.parse(next) > Date.now(), 'New schedule must preview a future trigger');
+      await ui.capture('system-timezone');
+      return;
+    }
     // Regression: the previous centered, content-sized dialog shrank immediately
     // when Webhook fields unmounted, then grew while run settings expanded.
     // jsdom form tests cannot observe rendered geometry; sample actual paint frames.

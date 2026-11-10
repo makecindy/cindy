@@ -21,7 +21,7 @@ void mountPage({
     webhookAccount: async () => ({ used: 1, limit: 10, endpoints: [] }),
     scriptCapabilityStatus: async () => ({ statuses: [] }),
   } } },
-  render: () => <ScheduleFormDialog open initial={ctx.case === 'create' ? null : schedule}
+  render: () => <ScheduleFormDialog open initial={['create', 'new-timed'].includes(ctx.case) ? null : schedule}
     initialValues={ctx.case === 'create' ? { webhookEnabled: true } : undefined}
     onOpenChange={() => {}} onSubmit={forbid('save automation')} />,
 });

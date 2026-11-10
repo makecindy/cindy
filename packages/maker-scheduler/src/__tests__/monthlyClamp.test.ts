@@ -41,7 +41,7 @@ describe('tryParseMonthlyPreset', () => {
 });
 
 describe('nextMonthlyFire', () => {
-  // Use Asia/Shanghai (UTC+8, no DST) for most cases — matches default UI timezone.
+  // Use Asia/Shanghai (UTC+8, no DST) as a stable explicit timezone for most cases.
 
   it('day=31 from mid-Jan → fires this month (1/31)', () => {
     // 2026-01-15 12:00 CST
