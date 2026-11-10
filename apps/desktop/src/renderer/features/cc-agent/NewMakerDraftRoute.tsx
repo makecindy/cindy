@@ -6469,6 +6469,7 @@ export function NewMakerDraftRoute() {
             setCreateWorkerOpen(false);
           }}
           title={t('orca.createWorker.enableCollabTitle')}
+          description={t('orca.createWorker.enableCollabDescription')}
           submitLabel={t('orca.createWorker.enableCollabSubmit')}
           requireWorkerPermissionModeSupport
           deviceId={effectiveDeviceLinkDeviceId ?? undefined}

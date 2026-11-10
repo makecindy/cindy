@@ -731,21 +731,34 @@
     "remoteDirPathHint": "於行之裝置上察目錄；不存則報謬，不改用 Lead 所在之機之目錄。",
     "remoteDirInvalid": "請書行之裝置上之絕對路徑。",
     "roleLabel": "角色之名",
-    "roleHint": "僅一名號，便於多協作者時辨其角色，不改其能",
-    "customRole": "自擬",
-    "customRolePlaceholder": "自訂角色之名",
-    "customRolePredefinedError": "自訂角色之名不可與預設角色同名",
+    "taskLabel": "Worker 所司何事",
+    "enableHint": "今之差事為 Lead，司分派與驗收；另一 Agent 為 Worker，司執行而回報。",
+    "roles": {
+      "reviewer": {
+        "name": "審查",
+        "task": "覽 Lead 之所為，略陳建言。"
+      },
+      "developer": {
+        "name": "開發"
+      },
+      "tester": {
+        "name": "測試",
+        "task": "測試 Lead 迄今之成果，報其未過者與重現之步。"
+      }
+    },
+    "addRole": "增角色",
+    "removeRoleHint": "久按可除之",
+    "removeRoleConfirmTitle": "除「{{role}}」乎？",
+    "removeRoleConfirmDesc": "日後可由「增角色」隨時復增之。",
+    "removeRoleConfirm": "除角色",
+    "moreSettings": "其餘規制",
     "agentLabel": "Agent",
-    "modelLabel": "模型",
     "modelDefault": "常例",
     "modelDefaultHint": "沿用電腦端之 Worker 預設模型",
-    "permissionLabel": "權柄模式",
     "permissionAuto": "自動審批",
     "permissionFull": "完全存取",
-    "permissionAutoHint": "許於工作區內讀寫，並自動審批提權之請求；高風險之操作或遭拒，或須確認。",
-    "permissionFullHint": "許修改任意之卷並行連網之指令，無須再確認。風險最高，僅宜可信之差事。",
     "initialTaskLabel": "初始差事（可略）",
-    "initialTaskPlaceholder": "予此 Worker 之首則差事，可略",
+    "initialTaskPlaceholder": "書其首事以付之；留空則待命，由 Lead 分派",
     "workerCountSummary_one": "{{count}} 個 Worker · {{running}} 方行",
     "workerCountSummary_other": "{{count}} 個 Worker · {{running}} 方行",
     "loading": "方讀 Worker…",

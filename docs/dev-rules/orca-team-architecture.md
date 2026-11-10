@@ -238,6 +238,58 @@ Worker 不出现在普通 sidebar。renderer 用 `isOrcaWorkerSession(session) =
 
 Worker 虽不进侧栏，它的出错与等待确认会汇总到所属 Lead 行（2026-10 用户裁决，只覆盖本机 Lead）：Lead 行的状态点、项目折叠灯、rail 瓷砖、排序钉住与 Dock 角标都按「Worker 出错（红）> Worker 等待确认（蓝）> Lead 自己的状态」取一档，红 / 蓝同样盖过运行中；Worker 的完成不汇总。汇总只是读侧派生：来源是 Worker 自己在 `sessionAttentionStore` 里的 attention 与 Worker 投影（`workerProjectionStore` 中仍被持有的 Lead；已归档 Worker、已结束协同的团队不在投影里，自然不计），生命周期完全跟随 Worker 的 attention（重试 / 关横幅、Lead 重新派活、确认被回答即消失），点开 Lead 不会清掉，正在看该 Lead 时也照常显示。汇总结果**不得写回** `sessionAttentionStore`：那份会同步到 Main（Dock / 灵动岛 / 远端），并被「导航即已读」的被动清除抹掉，会破坏 Lead 自身的 attention 生命周期与完成保持判定。Dock 角标一个 Lead 只算 1，口径与侧栏行一致。逐行组件（`SessionItem` / `SessionCard` / `SessionStatusIcon`）只能用按 id 的 primitive 订阅 `useOrcaLeadWorkerAttentionKind`，聚合视图用 `useSessionAttentionKindsWithOrcaLeads` / `useOrcaLeadWorkerAttention` 与 `mergeOrcaLeadNotifications`。实现指针：`apps/desktop/src/renderer/features/cc-agent/lib/orcaLeadWorkerAttention.ts`、`workerProjectionStore.ts` 的 `listRetainedWorkerProjections`、`lib/appAttentionCount.ts` 的 `orcaLeadWorkerAttention` 入参。
 
+Desktop 的「开启协同」与「创建新 Worker」共用 `CreateWorkerPopover`，表单按「让 Worker 做什么 → 首条任务 → 更多设置」
+排列（2026-11-10）。预设只决定提交的角色名和任务框里带出的内容，不改变 Agent、模型、权限或能力，逻辑在
+`apps/desktop/src/renderer/features/cc-agent/workerTemplates.ts`，记忆在 `state/workerCreationPrefs.ts`：
+
+- **内置预设**与 `ORCA_PREDEFINED_WORKER_ROLES` 一一对应，只留主流分工里最常用的三类，依次为审查（`reviewer`）、开发
+  （`developer`）、测试（`tester`）（用户要求精简，审查排第一）：拆解与规划由 Lead 承担。这份清单同时决定桌面「编辑 Worker」
+  弹窗列出的角色，以及读不到被控端清单时手机与远程操作端列出的角色；已有 Worker 的角色名不受影响，不在清单里的名字
+  按自定义显示。
+- **用户添加的预设**：这一排末尾的加号原地变成角色名输入，起名并创建后这个角色留在这一排。最多保留
+  `MAX_CUSTOM_WORKER_ROLES` 个，再添加时最久没用的让位。
+- **所有预设都能移除**（用户要求），内置的也一样：移除按钮平时不显示，鼠标移到角色上或键盘聚焦到它时才出现在胶囊
+  右上角；点击后先经确认弹窗（用户要求），确认后立即生效并清掉它记的内容。移除的内置预设只是不再列出
+  （`removedBuiltinRoles`），用加号输入它的角色名或当前语言下的显示名（不分大小写）再创建一次就回来；这只影响这台电脑
+  这个账号的创建表单（含从手机或另一台电脑操作它时看到的），不影响「编辑 Worker」弹窗。全部移除后这一排只剩角色名输入。
+- **按最近使用排序**（用户要求）：创建时用到的角色排到最前（`recentRoles`），没用过的内置预设按默认顺序跟在后面，
+  加号始终在最后。打开时选中第一个，也就是上次用的角色。
+- **每个角色各自的记忆**（用户要求）：创建时记下这个角色的任务文字、权限和手动选定的模型路线，下次选中它时一起带回；
+  没记过的字段跟随通用的上次选择，切换到这样的角色时表单当前的模型和权限保持不动。任务文字为空、超过
+  `MAX_REMEMBERED_WORKER_TASK_LENGTH`，或就是内置预设自带的那句话时不记。模型路线沿用通用记忆的规则：按任务所在电脑
+  隔离，SSH Lead 与选了其他运行设备时不记也不套用。项目、worktree 与运行设备仍然每次打开回到默认，不随角色记忆。
+- **自带的首条任务**：「审查」「测试」检查的对象就是 Lead 已有的工作，没记过文字时在已有任务里带出一句话的任务
+  （审查是「看一下 Lead 的工作，给出一些建议」，措辞由用户定：口吻放轻，不附加「不要修改」之类的限制）；新建任务的草稿还没有可查的
+  工作（没有 `leadSessionId`），不带出。切换预设只替换空的或仍是带出原样的任务，用户正在写的内容保留。
+- 角色记忆按账号隔离（`rolesByOwner`）：任务文字是用户内容，换账号后不显示。通用的模型与权限记忆（含 Agent 工具创建
+  Worker 时读取的默认值）照旧在每次创建时更新，不受角色记忆影响。
+- **以任务所在的电脑为准**（用户裁决）：角色清单、每个角色的记忆，以及不分角色的「上次选择」（上次用的 Agent、各
+  Agent 的模型、权限、手动选定的路线）都只存在任务所在的那台电脑上。任务在另一台电脑（device-link 被控端）时，弹窗
+  打开即向那台读（`maker:worker-roles:get`），读到后在没动过的表单上按它恢复；创建与移除改的也是那台
+  （`maker:worker-roles:apply`），操作端不读不写自己的记忆。读到之前按首次默认值打开，不拿操作端自己的记忆垫底。
+  那台版本太旧、没有这组通道时只列内置角色、不提供移除，「上次选择」沿用操作端原来的本地记忆（给旧版留的兼容）；
+  一时读不到时保持首次默认值，创建时仍尝试写回那台。被控端 main 只转手：读的是 renderer 镜像过来的快照，写则转给
+  自身 renderer 落回真源。协议细节见 [`protocol-compatibility.md`](protocol-compatibility.md)
+  「协同创建 Worker 的记忆以被控端为准」。
+
+权限与模型放在任务框底部一行，与聊天输入框同序（用户裁决）：权限在左，模型在右。项目与运行设备收在「更多设置」，
+收起时显示当前取值，里面有需要用户处理的问题时自动展开。提交的字段与 `maker:session:enable-orca` /
+`maker:worker:create` 的入参不变。界面验证见 `pnpm ui:check --page collab-start`。
+
+**手机端**（`OrcaWorkerFormView` + `useOrcaWorkerForm`）是同一套规则的另一个操作端，始终读写任务所在的电脑：
+
+- 打开表单即读那台电脑的清单，按它的顺序列出角色并选中第一个，带回它记的任务、权限和模型；读到时用户已经动过表单
+  就只更新这一排。提交（含新建任务里确认协同草稿）后把这次的内容记回那台电脑；长按角色经确认后从那台移除。
+  角色名、任务文字和按角色的记忆不写进手机的存储。
+- 那台电脑读不到清单（版本太旧、一时连不上）时只列内置角色，不显示加号，长按无效，提交时不写。
+- 判定规则与电脑端共用 `@cindy/maker-shared/orca-team`（哪些内置角色自带首条任务、输入内置角色的名字就是那个内置
+  角色、换角色只替换没改过的任务）；文字各端自备。新建任务的草稿同样不带出自带的首条任务。
+- 不分角色的「上次选择」也读写那台电脑（用户裁决）：角色自己没记过时表单从它起步，切 Agent 带出的也是那台电脑
+  记的模型。手机本地的 `orcaWorkerPrefs` 只在那台电脑版本太旧、没有这组通道时沿用；那台电脑能读到时手机不读不写它。
+  本页读到的内容只留在内存里，提交后同步更新，马上再打开表单时不用等那台电脑答复。
+- 界面：一张卡片里是角色、任务和一行工具，工具行左边是只有图标的权限（对齐手机输入框里的权限圆钮），右边是模型；
+  Agent、运行设备与目录收在「更多设置」。细则见 `apps/mobile/docs/mobile-design-guide.md` §4。
+
 Worktree 是可选项。旧调用方与 MCP 不传新字段时，Worker 仍继承 Lead 记录的目录。
 本机 Desktop 手动创建 Worker（包括开启协同的首个 Worker）可选择项目，并可为 Worker 单独新建 worktree。
 项目每次打开默认当前项目、不记忆选择；列表依次为当前项目、当前 data owner 主动选择且成功创建 Worker 的其他项目

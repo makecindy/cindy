@@ -14802,6 +14802,7 @@
         "compactSuccess": "コンテキストを圧縮しました",
         "compactSuccessWithTokens": "コンテキストを圧縮しました:{{before}}k → {{after}}k tokens",
         "compactFailed": "圧縮に失敗しました",
+        "compactResumeFirst": "先にメッセージを送信してタスクを再開してから、コンテキストを圧縮してください。",
         "compactNothing": "圧縮できる内容がまだありません",
         "sessionBranches": "セッション分岐",
         "copySessionLink": "セッションリンクをコピー"
@@ -16301,7 +16302,15 @@
       "regionCodeCn": "CN",
       "regionCodeDev": "Dev",
       "submit": "フィードバックを送信",
-      "cancel": "キャンセル"
+      "cancel": "キャンセル",
+      "previewLabel": "GitHub · 公開フィードバック",
+      "edit": "編集",
+      "doneEditing": "編集を完了",
+      "publicSubmit": "公開で送信",
+      "publicationNotice": "内容と署名は GitHub で公開されます。",
+      "attribution": "署名：{{name}}",
+      "environment": "動作環境を添付",
+      "identitySettings": "署名とアカウント"
     },
     "redirect": {
       "descriptionBefore": "チャットで ",
@@ -17353,15 +17362,37 @@
       "customRolePlaceholder": "+ カスタムロール名（任意）",
       "customRolePredefinedError": "カスタムロール名には既定ロール名を使用できません",
       "agentLabel": "Agent",
-      "modelLabel": "モデル",
       "permissionLabel": "権限モード",
       "noAvailableModels": "利用可能な {{agent}} モデルがありません。設定でプロバイダーの接続と認証情報を確認してください。",
       "effortLabel": "推論強度",
       "initialTaskLabel": "初期タスク",
-      "optional": "（任意）",
-      "initialTaskPlaceholder": "この Worker に渡す任意の最初のタスク",
+      "initialTaskPlaceholder": "最初に任せることを入力。空欄の場合は待機し、Lead が割り振ります",
       "enableCollabTitle": "コラボレーションを開始",
       "enableCollabSubmit": "コラボレーションを開始",
+      "enableCollabDescription": "このタスクが Lead となり、作業の割り振りと確認を担当します。Worker は別の独立した Agent で、作業を実行して結果を報告します。",
+      "templateLabel": "Worker に任せること",
+      "templates": {
+        "developer": {
+          "name": "開発"
+        },
+        "reviewer": {
+          "name": "レビュー",
+          "task": "Lead の作業を確認して、いくつか提案してください。"
+        },
+        "tester": {
+          "name": "テスト",
+          "task": "Lead のここまでの成果をテストし、失敗した項目と再現手順を報告してください。"
+        }
+      },
+      "removePreset": "{{role}} を削除",
+      "removePresetConfirm": {
+        "title": "「{{role}}」を削除しますか？",
+        "description": "「ロールを追加」からいつでも追加し直せます。",
+        "confirm": "ロールを削除",
+        "cancel": "キャンセル"
+      },
+      "addRole": "ロールを追加",
+      "moreSettings": "その他の設定",
       "executionDeviceLabel": "実行デバイス",
       "thisComputer": "このデバイス",
       "deviceOnline": "オンライン",

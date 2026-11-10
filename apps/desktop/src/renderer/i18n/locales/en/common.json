@@ -14868,6 +14868,7 @@
         "compactSuccess": "Context compacted",
         "compactSuccessWithTokens": "Context compacted: {{before}}k → {{after}}k tokens",
         "compactFailed": "Compaction failed",
+        "compactResumeFirst": "Send a message to resume this task before compacting its context.",
         "compactNothing": "Nothing to compact yet",
         "sessionBranches": "Session branches",
         "copySessionLink": "Copy session link"
@@ -16368,7 +16369,15 @@
       "regionCodeCn": "CN",
       "regionCodeDev": "Dev",
       "submit": "Submit Feedback",
-      "cancel": "Cancel"
+      "cancel": "Cancel",
+      "previewLabel": "GitHub · Public feedback",
+      "edit": "Edit",
+      "doneEditing": "Done editing",
+      "publicSubmit": "Submit publicly",
+      "publicationNotice": "Your feedback and attribution will be public on GitHub.",
+      "attribution": "By {{name}}",
+      "environment": "Environment included",
+      "identitySettings": "Name and account"
     },
     "redirect": {
       "descriptionBefore": "Type ",
@@ -17420,15 +17429,37 @@
       "customRolePlaceholder": "+ custom role name (optional)",
       "customRolePredefinedError": "Custom role name cannot use a predefined role name",
       "agentLabel": "Agent",
-      "modelLabel": "Model",
       "permissionLabel": "Permission Mode",
       "noAvailableModels": "No available {{agent}} model. Check the provider connection and credentials in Settings.",
       "effortLabel": "Reasoning Effort",
       "initialTaskLabel": "Initial Task",
-      "optional": "(optional)",
-      "initialTaskPlaceholder": "Optional first task for this worker",
+      "initialTaskPlaceholder": "Write the first thing to hand it, or leave blank and let the Lead assign work",
       "enableCollabTitle": "Start Collaboration",
       "enableCollabSubmit": "Start Collaboration",
+      "enableCollabDescription": "This task becomes the Lead: it assigns work and checks the results. The Worker is a separate Agent that does the work and reports back.",
+      "templateLabel": "What the Worker Does",
+      "templates": {
+        "developer": {
+          "name": "Develop"
+        },
+        "reviewer": {
+          "name": "Review",
+          "task": "Take a look at the Lead’s work and give some suggestions."
+        },
+        "tester": {
+          "name": "Test",
+          "task": "Test the Lead’s work so far and report what failed, with steps to reproduce."
+        }
+      },
+      "removePreset": "Remove {{role}}",
+      "removePresetConfirm": {
+        "title": "Remove “{{role}}”?",
+        "description": "You can add it back anytime with Add Role.",
+        "confirm": "Remove Role",
+        "cancel": "Cancel"
+      },
+      "addRole": "Add Role",
+      "moreSettings": "More Settings",
       "executionDeviceLabel": "Run on",
       "thisComputer": "Local",
       "deviceOnline": "Online",

@@ -14802,6 +14802,7 @@
         "compactSuccess": "上下文已压缩",
         "compactSuccessWithTokens": "上下文已缩：{{before}}k → {{after}}k tokens",
         "compactFailed": "压缩未成",
+        "compactResumeFirst": "请先发一言以续此事，再约上下文。",
         "compactNothing": "无可压缩者",
         "sessionBranches": "差事分支",
         "copySessionLink": "录差事链接"
@@ -16301,7 +16302,15 @@
       "regionCodeCn": "CN",
       "regionCodeDev": "Dev",
       "submit": "呈反馈",
-      "cancel": "罢"
+      "cancel": "罢",
+      "previewLabel": "GitHub · 公开反馈",
+      "edit": "修改",
+      "doneEditing": "改毕",
+      "publicSubmit": "公开呈送",
+      "publicationNotice": "呈送后，正文与署名皆公开于 GitHub。",
+      "attribution": "署名：{{name}}",
+      "environment": "附运行环境",
+      "identitySettings": "署名与账号"
     },
     "redirect": {
       "descriptionBefore": "于言谈中输入 ",
@@ -17353,15 +17362,37 @@
       "customRolePlaceholder": "+ 自拟角色名（可略）",
       "customRolePredefinedError": "自拟角色名不得与预设角色名同",
       "agentLabel": "Agent",
-      "modelLabel": "模型",
       "permissionLabel": "权柄模式",
       "noAvailableModels": "无可用之 {{agent}} 模型，请于规制中察供方之相通与凭证。",
       "effortLabel": "思之深浅",
       "initialTaskLabel": "首件差事",
-      "optional": "（可略）",
-      "initialTaskPlaceholder": "此 Worker 初阵之差事（可略）",
+      "initialTaskPlaceholder": "书其首事以付之；留空则待命，由 Lead 分派",
       "enableCollabTitle": "启协同",
       "enableCollabSubmit": "启协同",
+      "enableCollabDescription": "今之差事为 Lead，司分派与验收；另一 Agent 为 Worker，司执行而回报。",
+      "templateLabel": "Worker 所司何事",
+      "templates": {
+        "developer": {
+          "name": "开发"
+        },
+        "reviewer": {
+          "name": "审查",
+          "task": "览 Lead 之所为，略陈建言。"
+        },
+        "tester": {
+          "name": "测试",
+          "task": "测试 Lead 迄今之成果，报其未过者与重现之步。"
+        }
+      },
+      "removePreset": "除 {{role}}",
+      "removePresetConfirm": {
+        "title": "除「{{role}}」乎？",
+        "description": "日后可由「增角色」随时复增之。",
+        "confirm": "除角色",
+        "cancel": "罢"
+      },
+      "addRole": "增角色",
+      "moreSettings": "其余规制",
       "executionDeviceLabel": "行于何机",
       "thisComputer": "此机",
       "deviceOnline": "在线",

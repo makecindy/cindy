@@ -15012,6 +15012,7 @@
         "compactSuccess": "Contexto compactado",
         "compactSuccessWithTokens": "Contexto compactado: {{before}}k → {{after}}k tokens",
         "compactFailed": "No se pudo compactar",
+        "compactResumeFirst": "Envía un mensaje para reanudar esta tarea antes de compactar su contexto.",
         "compactNothing": "Aún no hay nada que compactar",
         "sessionBranches": "Ramas de la sesión",
         "copySessionLink": "Copiar enlace de la sesión"
@@ -16516,7 +16517,15 @@
       "regionCodeCn": "CN",
       "regionCodeDev": "Dev",
       "submit": "Enviar comentarios",
-      "cancel": "Cancelar"
+      "cancel": "Cancelar",
+      "previewLabel": "GitHub · Comentarios públicos",
+      "edit": "Editar",
+      "doneEditing": "Terminar edición",
+      "publicSubmit": "Enviar públicamente",
+      "publicationNotice": "El contenido y tu nombre serán públicos en GitHub.",
+      "attribution": "Por {{name}}",
+      "environment": "Entorno incluido",
+      "identitySettings": "Nombre y cuenta"
     },
     "redirect": {
       "descriptionBefore": "Escribe ",
@@ -17584,15 +17593,37 @@
       "customRolePlaceholder": "+ nombre de rol personalizado (opcional)",
       "customRolePredefinedError": "El nombre de rol personalizado no puede usar un nombre de rol predefinido",
       "agentLabel": "Agent",
-      "modelLabel": "Modelo",
       "permissionLabel": "Modo de permisos",
       "noAvailableModels": "No hay ningún modelo de {{agent}} disponible. Revisa la conexión del proveedor y las credenciales en Configuración.",
       "effortLabel": "Intensidad de razonamiento",
       "initialTaskLabel": "Tarea inicial",
-      "optional": "(opcional)",
-      "initialTaskPlaceholder": "Primera tarea opcional para este Worker",
+      "initialTaskPlaceholder": "Escribe lo primero que quieres encargarle o déjalo en blanco para que el Lead reparta el trabajo",
       "enableCollabTitle": "Iniciar colaboración",
       "enableCollabSubmit": "Iniciar colaboración",
+      "enableCollabDescription": "Esta tarea pasa a ser el Lead: reparte el trabajo y revisa los resultados. El Worker es otro Agent independiente que hace el trabajo e informa del resultado.",
+      "templateLabel": "Qué hace el Worker",
+      "templates": {
+        "developer": {
+          "name": "Desarrollar"
+        },
+        "reviewer": {
+          "name": "Revisar",
+          "task": "Échale un vistazo al trabajo del Lead y da algunas sugerencias."
+        },
+        "tester": {
+          "name": "Probar",
+          "task": "Prueba el trabajo del Lead hasta ahora e informa de los fallos con los pasos para reproducirlos."
+        }
+      },
+      "removePreset": "Quitar {{role}}",
+      "removePresetConfirm": {
+        "title": "¿Quitar «{{role}}»?",
+        "description": "Puedes volver a añadirlo cuando quieras con «Añadir rol».",
+        "confirm": "Quitar rol",
+        "cancel": "Cancelar"
+      },
+      "addRole": "Añadir rol",
+      "moreSettings": "Más configuración",
       "executionDeviceLabel": "Ejecutar en",
       "thisComputer": "Local",
       "deviceOnline": "En línea",

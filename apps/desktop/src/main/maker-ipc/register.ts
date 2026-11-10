@@ -763,6 +763,7 @@ import {
   getRemoteNewMakerDefaultsByVendor,
   getWorkerDefaultsFromNewMaker,
   getWorkerCreationSelection,
+  getWorkerRolesMirror,
   getSelectedNewMakerRoute,
   getWorkerPermissionModeFromCreationPrefs,
   type ProviderModelMemorySnapshot,
@@ -1009,6 +1010,11 @@ import {
 import { readLatestWorkerTurnError } from './orcaTurnErrorQuery.js';
 import { startOrcaTeamWithPermissionGate } from './orcaStartTeamPermissionGate.js';
 import { createWorkerCreationPrefsSyncHandler } from './workerCreationPrefsSyncHandler.js';
+import {
+  ORCA_WORKER_ROLES_APPLY,
+  ORCA_WORKER_ROLES_GET,
+  createWorkerRolesHandlers,
+} from './workerRolesSync.js';
 import {
   containsManagedAttachment,
   createMakerSendTransaction,
@@ -3857,7 +3863,6 @@ function attemptBotCompactRuntimeRefresh(session: WiredSession, trigger: string)
 function isPendingDesktopOnlyConfirmation(requestId: string): boolean {
   return (
     mcpSetupBridge.has(requestId) ||
-    issueConfirmBridge.pendingSnapshots().some(({ request }) => request.requestId === requestId) ||
     renameSessionsConfirmBridge
       .pendingSnapshots()
       .some(({ request }) => request.requestId === requestId) ||
@@ -7025,11 +7030,26 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         setWorkerCreationPrefsCache({ workerPermissionMode }),
       getActiveOwner: getActiveDataOwnerPushStamp,
       isBoundaryPending: isAppSessionBoundaryPending,
-      setSelection: (selection, ownerStamp) => setWorkerCreationPrefsCache({
-        workerPermissionMode: getWorkerPermissionModeFromCreationPrefs(), selection, ownerStamp,
+      setSelection: (selection, ownerStamp, roles) => setWorkerCreationPrefsCache({
+        workerPermissionMode: getWorkerPermissionModeFromCreationPrefs(), selection, roles, ownerStamp,
       }),
     }),
   );
+
+  // 协同角色清单的远程读写：真源仍是这台电脑 renderer 的 workerCreationPrefs，main 只读镜像、
+  // 把手机或远程控制的电脑发来的改动转给本机 renderer 写回。
+  const workerRoles = createWorkerRolesHandlers<Electron.IpcMainInvokeEvent>({
+    isDeviceLinkInvoke,
+    assertTrustedSender: (event) =>
+      assertTrustedAppRendererEvent(event as Parameters<typeof assertTrustedAppRendererEvent>[0]),
+    getActiveOwner: getActiveDataOwnerPushStamp,
+    isBoundaryPending: isAppSessionBoundaryPending,
+    getRoles: getWorkerRolesMirror,
+    forwardMutation: (mutation, ownerStamp) =>
+      broadcastToAllWindows(MAKER_PUSH.WORKER_ROLES_APPLY_REQUEST, { mutation, ownerStamp }),
+  });
+  ipcMain.handle(ORCA_WORKER_ROLES_GET, (event) => workerRoles.get(event));
+  ipcMain.handle(ORCA_WORKER_ROLES_APPLY, (event, mutation: unknown) => workerRoles.apply(event, mutation));
 
   const applyWorkerPermissionModePreference = (
     workerPermissionMode: OrcaWorkerPermissionMode,
@@ -22645,7 +22665,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       // permission / ask / plan and setup cancellation remain remotely
       // resolvable. Host-owned setup side effects and Desktop-only confirmations
       // may only originate from the trusted local Desktop.
-      assertResolveInteractionOrigin(decision, isPendingDesktopOnlyConfirmation(requestId));
+      assertResolveInteractionOrigin(
+        decision,
+        isPendingDesktopOnlyConfirmation(requestId),
+        issueConfirmBridge.pendingSnapshots().some(({ request }) => request.requestId === requestId),
+      );
       const sharedTask = getDeviceLinkInvokeContext()?.sharedTask;
       if (sharedTask) {
         // The initial dispatch check may be separated from this handler by an
@@ -22726,9 +22750,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   ipcMain.handle(MAKER_INVOKE.GET_PENDING_INTERACTIONS, (_e, sessionId: unknown) => {
     if (typeof sessionId !== 'string' || !sessionId) return [];
     let pending = getPendingInteractionsForSession(sessionId);
-    // Shared-task guests never see the owner's input handoff.
+    // Owner-only input and unpublished feedback/identity stay out of guest snapshots.
     if (getDeviceLinkInvokeContext()?.sharedTask)
-      pending = pending.filter(({ request }) => request.kind !== 'input_handoff');
+      pending = pending.filter(({ request }) => request.kind !== 'input_handoff' && request.kind !== 'issue_confirm');
     return projectPendingInteractionsForRemote(pending, isDeviceLinkInvoke());
   });
 
@@ -25166,16 +25190,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       }
       const sess = maker.getSession(sessionId);
       if (!sess) {
-        log.debug('compact-session: session not found, no-op', { sessionId });
-        return null;
+        throwIpcError('NOT_FOUND', 'Resume the task before compacting its context');
       }
       if (!sess.capabilities.manualCompact?.supported) {
-        // 调用方应先按 capabilities 隐藏入口,这里兜底 no-op。
-        log.debug('compact-session: agent does not support manual compact, no-op', {
-          sessionId,
-          agentKind: sess.agentKind,
-        });
-        return null;
+        throwIpcError('UNSUPPORTED_CAPABILITY', 'This agent does not support manual context compaction');
       }
       return sess.compactSession(instructions);
     },

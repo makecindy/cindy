@@ -448,6 +448,55 @@ the design archive for Cindy-伙伴能力页重设计-2026-11-01. Product rules:
 「伙伴技能分层」. (2026-11-08: the System skills group — todo, routine, follow — was removed with
 V2 teammates; the page no longer shows it.)
 
+### Worker creation dialog (owner-requested simplification, 2026-11-10; layout pending sign-off)
+
+Desktop `CreateWorkerPopover` serves Start Collaboration and Add Worker with one form of three
+blocks plus the primary button:
+
+- **Introduction.** Start Collaboration shows one secondary sentence under the title explaining
+  that the current task assigns and checks the work while the Worker does it. Add Worker omits it.
+- **Roles.** A single-select row of the dialog's existing pill chips answers what the Worker
+  does. It starts as Review, Develop and Test (owner request, 2026-11-10: few built-in roles,
+  Review first); roles the user adds join the row. Roles are ordered by most recent use and the
+  dialog opens on the first one. Selecting a role brings back the task text, model and permission
+  last submitted with it. Roles carry no description line. The row label contains the product
+  term Worker and is therefore not uppercased.
+- **Add role.** The row ends with a 32px round icon chip (plus) with a localized accessible name
+  and `Tip` (§14.6). Activating it replaces the chip in place with a pill input for the role name,
+  which takes focus; choosing another role restores the plus chip. There is no separate input row
+  or hint line.
+- **Remove role (owner decisions, 2026-11-10).** Every role, built-in or user-added, can be
+  removed. The control is an 18px round badge on the chip's top-right corner, panel-filled with a
+  1px border so it masks the chip outline. It is hidden at rest and appears only while the pointer
+  is over that chip or keyboard focus is inside it (opacity only, `--motion-fast`), so the row
+  never shifts. It has a localized accessible name and `Tip` naming the role. Removal always goes
+  through the shared `ConfirmDialog`. Removal is lightweight, so its copy stays low-key (owner
+  request): it only says the role can be added back anytime with Add Role. It does not list or
+  mention what is cleared; no warning tone, no destructive button.
+- **First task with permission and model.** One 12px container holds a frameless textarea and,
+  below it, one toolbar row in the composer's order (owner decision, 2026-11-10): the
+  `PermissionSelector` chip trigger on the left, the standard `ModelSelector` toolbar trigger on the
+  right. The dialog is modal, so the permission chip opens an anchored menu inside the dialog
+  (`useMorphPopover={false}`); the morphing menu mounts outside the dialog, where it cannot be
+  clicked. The container border takes `--text-secondary` only while the textarea has focus. There
+  are no separate Model or Permission field labels; the permission keeps its label as the
+  accessible context.
+- **More Settings.** Project and execution device sit in a frameless text disclosure that reuses
+  the Provider dialog disclosure treatment above (left chevron, 13px/500 section title color,
+  minimum 32px hit height, pill focus ring, 20px indent). While collapsed, the row shows the current
+  values in tertiary text. It opens by itself when a field inside needs the user (project
+  directory missing or unreadable, invalid folder on another computer) and cannot be collapsed
+  while that lasts. The expanded state is not remembered between openings.
+
+Initial focus goes to the first-task textarea, the form's primary input; choosing Custom moves
+focus to the role-name input. Tab containment, Esc, focus return and the blocked dismissal during
+creation are unchanged. Light and Dark use existing semantic tokens only.
+
+Mobile shows the same form in the "+" panel (`OrcaWorkerFormView`), rules in
+`apps/mobile/docs/mobile-design-guide.md` §4: one card with the role chips, the first task, and a
+toolbar row in the same order. On the phone the permission shrinks to the composer's icon-only
+button (owner request, 2026-11-10) and roles are removed by touch and hold.
+
 ### Inputs & Forms
 
 ```

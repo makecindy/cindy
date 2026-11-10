@@ -14802,6 +14802,7 @@
         "compactSuccess": "上下文已壓縮",
         "compactSuccessWithTokens": "上下文已壓縮：{{before}}k → {{after}}k tokens",
         "compactFailed": "壓縮失敗",
+        "compactResumeFirst": "請先傳送一則訊息恢復任務，再壓縮上下文。",
         "compactNothing": "暫無可壓縮內容",
         "sessionBranches": "任務分支",
         "copySessionLink": "複製任務連結"
@@ -16301,7 +16302,15 @@
       "regionCodeCn": "CN",
       "regionCodeDev": "Dev",
       "submit": "提交反饋",
-      "cancel": "取消"
+      "cancel": "取消",
+      "previewLabel": "GitHub · 公開回饋",
+      "edit": "修改",
+      "doneEditing": "完成修改",
+      "publicSubmit": "公開提交回饋",
+      "publicationNotice": "提交後，內容和署名將公開在 GitHub。",
+      "attribution": "署名：{{name}}",
+      "environment": "附帶執行環境",
+      "identitySettings": "署名與帳號"
     },
     "redirect": {
       "descriptionBefore": "在對話中輸入 ",
@@ -17353,15 +17362,37 @@
       "customRolePlaceholder": "+ 自定義角色名（可選）",
       "customRolePredefinedError": "自定義角色名不能使用預設角色名",
       "agentLabel": "Agent",
-      "modelLabel": "模型",
       "permissionLabel": "權限模式",
       "noAvailableModels": "沒有可用的 {{agent}} 模型，請在設定中檢查供應商連線和憑證。",
       "effortLabel": "推理強度",
       "initialTaskLabel": "初始任務",
-      "optional": "（可選）",
-      "initialTaskPlaceholder": "給這個 Worker 的可選第一條任務",
+      "initialTaskPlaceholder": "寫下交給它的第一件事；留空則先待命，由 Lead 分派",
       "enableCollabTitle": "開啟協同",
       "enableCollabSubmit": "開啟協同",
+      "enableCollabDescription": "目前任務作為 Lead 分派與驗收，另一個 Agent 作為 Worker 執行並回報。",
+      "templateLabel": "讓 Worker 做什麼",
+      "templates": {
+        "developer": {
+          "name": "開發"
+        },
+        "reviewer": {
+          "name": "審查",
+          "task": "看一下 Lead 的工作，給出一些建議。"
+        },
+        "tester": {
+          "name": "測試",
+          "task": "測試 Lead 目前的成果，回報未通過的地方與重現步驟。"
+        }
+      },
+      "removePreset": "移除 {{role}}",
+      "removePresetConfirm": {
+        "title": "移除「{{role}}」？",
+        "description": "隨時可以用「新增角色」加回來。",
+        "confirm": "移除角色",
+        "cancel": "取消"
+      },
+      "addRole": "新增角色",
+      "moreSettings": "更多設定",
       "executionDeviceLabel": "執行裝置",
       "thisComputer": "本機",
       "deviceOnline": "線上",

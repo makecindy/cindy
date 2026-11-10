@@ -14802,6 +14802,7 @@
         "compactSuccess": "컨텍스트를 압축했습니다",
         "compactSuccessWithTokens": "컨텍스트를 압축했습니다: {{before}}k → {{after}}k tokens",
         "compactFailed": "압축 실패",
+        "compactResumeFirst": "먼저 메시지를 보내 작업을 재개한 다음 컨텍스트를 압축하세요.",
         "compactNothing": "아직 압축할 내용이 없습니다",
         "sessionBranches": "세션 분기",
         "copySessionLink": "세션 링크 복사"
@@ -16301,7 +16302,15 @@
       "regionCodeCn": "CN",
       "regionCodeDev": "Dev",
       "submit": "피드백 제출",
-      "cancel": "취소"
+      "cancel": "취소",
+      "previewLabel": "GitHub · 공개 피드백",
+      "edit": "수정",
+      "doneEditing": "수정 완료",
+      "publicSubmit": "공개 제출",
+      "publicationNotice": "내용과 작성자 이름이 GitHub에 공개됩니다.",
+      "attribution": "작성자: {{name}}",
+      "environment": "실행 환경 포함",
+      "identitySettings": "이름 및 계정"
     },
     "redirect": {
       "descriptionBefore": "채팅에서 ",
@@ -17353,15 +17362,37 @@
       "customRolePlaceholder": "+ 사용자 지정 역할 이름(선택)",
       "customRolePredefinedError": "사용자 지정 역할 이름에는 기본 역할 이름을 사용할 수 없습니다",
       "agentLabel": "Agent",
-      "modelLabel": "모델",
       "permissionLabel": "권한 모드",
       "noAvailableModels": "사용 가능한 {{agent}} 모델이 없습니다. 설정에서 제공자 연결과 자격 증명을 확인하세요.",
       "effortLabel": "추론 강도",
       "initialTaskLabel": "초기 작업",
-      "optional": "(선택)",
-      "initialTaskPlaceholder": "이 Worker 에게 보낼 선택적 첫 작업",
+      "initialTaskPlaceholder": "처음 맡길 일을 입력하세요. 비워 두면 대기하며 Lead가 배분합니다",
       "enableCollabTitle": "협업 시작",
       "enableCollabSubmit": "협업 시작",
+      "enableCollabDescription": "이 작업이 Lead가 되어 일을 배분하고 결과를 확인합니다. Worker는 별도의 독립된 Agent로, 일을 수행하고 결과를 보고합니다.",
+      "templateLabel": "Worker에게 맡길 일",
+      "templates": {
+        "developer": {
+          "name": "개발"
+        },
+        "reviewer": {
+          "name": "리뷰",
+          "task": "Lead의 작업을 살펴보고 몇 가지 제안을 해 주세요."
+        },
+        "tester": {
+          "name": "테스트",
+          "task": "Lead가 지금까지 만든 결과물을 테스트하고 실패한 항목과 재현 절차를 보고하세요."
+        }
+      },
+      "removePreset": "{{role}} 제거",
+      "removePresetConfirm": {
+        "title": "“{{role}}” 역할을 제거할까요?",
+        "description": "‘역할 추가’로 언제든 다시 추가할 수 있습니다.",
+        "confirm": "역할 제거",
+        "cancel": "취소"
+      },
+      "addRole": "역할 추가",
+      "moreSettings": "추가 설정",
       "executionDeviceLabel": "실행 기기",
       "thisComputer": "이 기기",
       "deviceOnline": "온라인",

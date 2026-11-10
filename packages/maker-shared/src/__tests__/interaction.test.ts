@@ -805,6 +805,7 @@ describe('interaction shared model', () => {
   });
 
   it('only lets remotely resolvable interactions take over the controller composer', () => {
+    expect(remoteInteractionHandling({ request: { kind: 'issue_confirm', requestId: 'i1', remoteConfirmSupported: true } })).toBe('resolvable');
     expect(remoteInteractionHandling({ request: { kind: 'permission', requestId: 'p1' } })).toBe('resolvable');
     expect(remoteInteractionHandling({ request: { kind: 'ask_user_question', requestId: 'a1' } })).toBe('resolvable');
     expect(remoteInteractionHandling({ request: { kind: 'plan_review', requestId: 'pl1' } })).toBe('resolvable');
@@ -827,6 +828,15 @@ describe('interaction shared model', () => {
     expect(interactionBlocksRemoteComposer({ request: { kind: 'plugin_setup', requestId: 's1', revision: 1 } })).toBe(false);
     expect(interactionBlocksRemoteComposer({ request: { kind: 'future_kind', requestId: 'f1' } })).toBe(false);
     expect(interactionBlocksRemoteComposer(null)).toBe(false);
+    // Feedback review must keep normal chat available.
+    // It remains resolvable only through its confirmation, and cannot hide
+    // another pending permission's composer gate. Tier: unit, shared entry.
+    const feedback = { request: { kind: 'issue_confirm', requestId: 'i1', remoteConfirmSupported: true } };
+    expect(remoteInteractionHandling(feedback)).toBe('resolvable');
+    expect(pendingInteractionsBlockRemoteComposer([feedback])).toBe(false);
+    expect(pendingInteractionsBlockRemoteComposer([feedback,
+      { request: { kind: 'permission', requestId: 'p1' } },
+    ])).toBe(true);
   });
 
   it('lets the controller answer 代输入 without taking over its composer', () => {
