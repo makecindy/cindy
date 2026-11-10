@@ -1,4 +1,31 @@
 {
+  "pushDiagnostics": {
+    "title": "プッシュ通知の診断",
+    "read": "通知の状態を読み取る",
+    "busy": "読み取り中…",
+    "failed": "通知の状態を読み取れません。もう一度お試しください。",
+    "copyFailed": "トークンをコピーできません。",
+    "copied": "トークンをコピーしました。",
+    "bundle": "アプリ ID",
+    "build": "ビルド",
+    "environment": "APNs 環境",
+    "permission": "システムの許可",
+    "alerts": "バナー通知",
+    "lockScreen": "ロック画面",
+    "notificationCenter": "通知センター",
+    "copy": "APNs トークンをコピー",
+    "hide": "結果を非表示",
+    "unknown": "不明",
+    "on": "オン",
+    "off": "オフ",
+    "hint": "操作したときだけ読み取ります。APNs トークンはこの画面にのみ表示され、診断に保存もアップロードもされません。画面を離れるかバックグラウンドにすると非表示になります。Apple のプッシュ通知コンソール用にのみコピーしてください。コピーした内容はクリップボードに残ります。",
+    "permissions": {
+      "granted": "許可済み",
+      "denied": "拒否",
+      "undetermined": "未要求",
+      "provisional": "静かに配信"
+    }
+  },
   "localLogs": {
     "upload": "ログを送信",
     "uploadResult": {
