@@ -39,6 +39,18 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
 describe('ModelPreview', () => {
+  it.each([
+    ['file exceeds the preview size limit', 'chat.media.modelTooLarge', false],
+    ['file changed during read', 'chat.media.modelLoadFailed', true],
+  ])('distinguishes a local size rejection from other read failures: %s', async (message, expected, retryable) => {
+    const readFileBytes = vi.fn().mockRejectedValue(new Error('[PRECONDITION_FAILED] ' + message));
+    vi.stubGlobal('window', Object.assign(window, { electronAPI: { readFileBytes } }));
+    render(<ModelPreview url="xdt-file:///model.glb" path="/model.glb" filename="model.glb" />);
+    expect((await screen.findByRole('alert')).textContent).toContain(expected);
+    expect(Boolean(screen.queryByRole('button', { name: 'attachmentPreview.retry' }))).toBe(retryable);
+    expect(mocks.parse).not.toHaveBeenCalled();
+  });
+
   it('disposes late parsed objects after the file preview closes', async () => {
     let resolve!: (value: { animations: [] }) => void;
     mocks.parse.mockReturnValue(new Promise(value => { resolve = value; }));

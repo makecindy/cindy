@@ -13530,6 +13530,7 @@
       "openModelFailed": "Falha ao abrir modelo",
       "modelLoading": "Carregando modelo 3D…",
       "modelLoadFailed": "Falha ao carregar modelo 3D",
+      "modelTooLarge": "O arquivo excede {{maxSize}} e não pode ser visualizado no aplicativo.",
       "videoCopied": "Vídeo copiado",
       "copyVideo": "Copiar vídeo",
       "revealVideo": "Mostrar vídeo na pasta",

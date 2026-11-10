@@ -13390,6 +13390,7 @@
       "openModelFailed": "モデルを開けませんでした",
       "modelLoading": "3D モデルを読み込み中…",
       "modelLoadFailed": "3D モデルを読み込めませんでした",
+      "modelTooLarge": "ファイルが {{maxSize}} を超えているため、アプリ内でプレビューできません。",
       "videoCopied": "動画をコピーしました",
       "copyVideo": "動画をコピー",
       "revealVideo": "動画のフォルダを開く",

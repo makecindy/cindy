@@ -13447,6 +13447,7 @@
       "openModelFailed": "Failed to open model",
       "modelLoading": "Loading 3D model…",
       "modelLoadFailed": "Failed to load 3D model",
+      "modelTooLarge": "The file exceeds {{maxSize}} and cannot be previewed in the app.",
       "videoCopied": "Video copied",
       "copyVideo": "Copy video",
       "revealVideo": "Reveal video in folder",

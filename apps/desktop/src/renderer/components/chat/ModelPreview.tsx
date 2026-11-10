@@ -5,6 +5,7 @@ import { AnimationMixer, type Group } from 'three';
 import type { ViewerEngine } from 'mivo-model-viewer/core';
 import { Button } from '@/components/ui/button';
 import { Spinner } from '@/components/ui/spinner';
+import { extractIpcError } from '@/utils/ipcError';
 import { PreviewButton, PreviewFooter } from './PreviewChrome';
 import { loadPreviewModel } from './loadPreviewModel';
 
@@ -15,7 +16,7 @@ export function ModelPreview({ url, path, filename }: { url: string; path?: stri
   const container = useRef<HTMLDivElement>(null);
   const viewer = useRef<ViewerEngine | null>(null);
   const reset = useRef<(() => void) | null>(null);
-  const [phase, setPhase] = useState<'loading' | 'ready' | 'error'>('loading');
+  const [phase, setPhase] = useState<'loading' | 'ready' | 'error' | 'too-large'>('loading');
   const [retry, setRetry] = useState(0);
 
   useEffect(() => {
@@ -68,8 +69,11 @@ export function ModelPreview({ url, path, filename }: { url: string; path?: stri
         stopAnimation = engine.onBeforeRender(({ delta }) => mixer?.update(delta));
       }
       setPhase('ready');
-    })().catch(() => {
-      if (!controller.signal.aborted) setPhase('error');
+    })().catch((error: unknown) => {
+      if (controller.signal.aborted) return;
+      const ipcError = path ? extractIpcError(error) : null;
+      setPhase(ipcError?.code === 'PRECONDITION_FAILED' &&
+        ipcError.message === 'file exceeds the preview size limit' ? 'too-large' : 'error');
     });
     return () => {
       controller.abort();
@@ -100,11 +104,11 @@ export function ModelPreview({ url, path, filename }: { url: string; path?: stri
 
   return <>
     <div ref={container} className="absolute inset-x-0 bottom-16 top-16 overflow-hidden" aria-label={filename} />
-    {phase === 'error' && <div role="alert" className="absolute inset-x-0 bottom-16 top-16 flex flex-col items-center justify-center gap-3 text-sm text-[var(--text-secondary)]">
-      <span>{t('chat.media.modelLoadFailed')}</span>
-      <Button variant="secondary" size="sm" onClick={() => setRetry(value => value + 1)}>{t('attachmentPreview.retry')}</Button>
+    {(phase === 'error' || phase === 'too-large') && <div role="alert" className="absolute inset-x-0 bottom-16 top-16 flex flex-col items-center justify-center gap-3 text-sm text-[var(--text-secondary)]">
+      <span>{phase === 'too-large' ? t('chat.media.modelTooLarge', { maxSize: '30 MiB' }) : t('chat.media.modelLoadFailed')}</span>
+      {phase === 'error' && <Button variant="secondary" size="sm" onClick={() => setRetry(value => value + 1)}>{t('attachmentPreview.retry')}</Button>}
     </div>}
-    <PreviewFooter>
+    {phase === 'too-large' ? <PreviewFooter collectionOnly /> : <PreviewFooter>
       {phase === 'loading' ? <div role="status" className="flex items-center gap-2 text-sm text-[var(--text-secondary)]">
         <Spinner />{t('chat.media.modelLoading')}
       </div> : <>
@@ -112,6 +116,6 @@ export function ModelPreview({ url, path, filename }: { url: string; path?: stri
         <PreviewButton label={t('attachmentPreview.reset')} disabled={phase !== 'ready'} onClick={() => reset.current?.()}><RotateCcw className="h-4 w-4" /></PreviewButton>
         <PreviewButton label={t('chat.mermaidLightbox.zoomIn')} disabled={phase !== 'ready'} onClick={() => zoom(1 / 1.2)}><Plus className="h-4 w-4" /></PreviewButton>
       </>}
-    </PreviewFooter>
+    </PreviewFooter>}
   </>;
 }

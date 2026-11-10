@@ -13390,6 +13390,7 @@
       "openModelFailed": "打开模型失败",
       "modelLoading": "正在加载 3D 模型…",
       "modelLoadFailed": "加载 3D 模型失败",
+      "modelTooLarge": "文件超过 {{maxSize}}，无法在应用内预览。",
       "videoCopied": "视频已复制",
       "copyVideo": "复制视频",
       "revealVideo": "打开视频所在目录",
