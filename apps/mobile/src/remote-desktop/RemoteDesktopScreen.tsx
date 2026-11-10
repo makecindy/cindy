@@ -4078,6 +4078,8 @@ export function RemoteDesktopSession({
                 <ErrorNotice
                   message={unlockNotice}
                   testID="remoteDesktop.autoUnlockNotice"
+                  accessibilityRole="alert"
+                  accessibilityLiveRegion="polite"
                   onDismiss={security.clearNotice}
                   dismissLabel={t("remoteDesktop.close")}
                   dismissTestID="remoteDesktop.dismissUnlockNotice"

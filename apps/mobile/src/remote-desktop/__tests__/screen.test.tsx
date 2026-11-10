@@ -3517,6 +3517,10 @@ describe("remote desktop controls", () => {
     expect(notice?.textContent).toContain(
       "remoteDesktop.credentialUnlockUnavailable",
     );
+    // 自动解锁失败是异步出现的告警，读屏也必须能播报，不能只有视觉提示。
+    expect(
+      fixture.views["remoteDesktop.autoUnlockNotice"]?.accessibilityRole,
+    ).toBe("alert");
     expect(fixture.alert).not.toHaveBeenCalled();
     fixture.clearSecurityNotice.mockImplementation(() => {
       fixture.securityNotice = null;
