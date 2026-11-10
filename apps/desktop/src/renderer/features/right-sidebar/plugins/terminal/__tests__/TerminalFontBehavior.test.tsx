@@ -8,7 +8,7 @@ import type { TabKindHostContext } from '../../../types';
 import type { TerminalState } from '../index';
 import type { XtermEntry } from '../lib/xtermPool';
 
-const poolMocks = vi.hoisted(() => ({ getOrCreateXterm: vi.fn(), detachXterm: vi.fn(), getXtermExit: vi.fn(() => null), setXtermExit: vi.fn(), needsXtermAttach: vi.fn(() => false), restartXterm: (id: string) => window.electronAPI.terminal.restart(id), attachXterm: (params: Parameters<typeof window.electronAPI.terminal.create>[0]) => window.electronAPI.terminal.create(params) }));
+const poolMocks = vi.hoisted(() => ({ getOrCreateXterm: vi.fn(), detachXterm: vi.fn(), getXtermExit: vi.fn(() => null), setXtermExit: vi.fn(), onXtermExit: vi.fn(() => () => undefined), needsXtermAttach: vi.fn(() => false), restartXterm: (id: string) => window.electronAPI.terminal.restart(id), attachXterm: (params: Parameters<typeof window.electronAPI.terminal.create>[0]) => window.electronAPI.terminal.create(params) }));
 vi.mock('../lib/xtermPool', () => poolMocks);
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),

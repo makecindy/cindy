@@ -41,6 +41,7 @@ const serializers = new WeakMap<Terminal, SerializeAddon>();
 const pendingSuspensions = new Map<string, { cancel(): void }>();
 const detachedStreams = new Map<string, () => void>();
 const exits = new Map<string, TerminalExitInfo>();
+const exitListeners = new Map<string, Set<(exit: TerminalExitInfo) => void>>();
 
 const DEFAULT_OPTIONS: ITerminalOptions = {
   // Codex 同款字号 / 字体;cursorBlink 跟 iTerm 默认行为对齐。
@@ -111,8 +112,23 @@ export function getXtermExit(tabId: string): TerminalExitInfo | null {
 }
 
 export function setXtermExit(tabId: string, exit: TerminalExitInfo | null): void {
-  if (exit) exits.set(tabId, exit);
-  else exits.delete(tabId);
+  if (exit) {
+    exits.set(tabId, exit);
+    for (const listener of exitListeners.get(tabId) ?? []) listener(exit);
+  } else exits.delete(tabId);
+}
+
+/** Observe native exits and failed-transition rollback, including after a remount. */
+export function onXtermExit(tabId: string, listener: (exit: TerminalExitInfo) => void): () => void {
+  let listeners = exitListeners.get(tabId);
+  if (!listeners) exitListeners.set(tabId, listeners = new Set());
+  listeners.add(listener);
+  const current = getXtermExit(tabId);
+  if (current) listener(current);
+  return () => {
+    listeners.delete(listener);
+    if (listeners.size === 0) exitListeners.delete(tabId);
+  };
 }
 
 /** A different window may have restarted the PTY since this renderer owned it. */
@@ -252,6 +268,7 @@ export function __resetPoolForTesting(): void {
   for (const id of new Set([...pool.keys(), ...snapshots.keys(), ...exits.keys()])) disposeXterm(id);
   snapshots.clear();
   pendingSuspensions.clear();
+  exitListeners.clear();
 }
 
 function attachSelectionCopyShortcut(terminal: Terminal): void {

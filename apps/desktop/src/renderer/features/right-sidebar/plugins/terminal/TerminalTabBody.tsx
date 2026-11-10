@@ -24,7 +24,7 @@ import { useTranslation } from 'react-i18next';
 
 import { Spinner } from '@/components/ui/spinner';
 import type { TabKindHostContext } from '../../types';
-import { getOrCreateXterm, detachXterm, getXtermExit, setXtermExit, needsXtermAttach, attachXterm, restartXterm, type XtermEntry } from './lib/xtermPool';
+import { getOrCreateXterm, detachXterm, getXtermExit, setXtermExit, onXtermExit, needsXtermAttach, attachXterm, restartXterm, type XtermEntry } from './lib/xtermPool';
 import { createTerminalFontController } from './lib/terminalFont';
 import { useTerminalFontSettings } from './lib/useTerminalFontSettings';
 import type {
@@ -95,6 +95,10 @@ function LocalTerminalTabBody({ state, ctx, active, shellVisible = true }: Props
   const [runtimeError, setRuntimeError] = useState<RuntimeError | null>(null);
   const [restarting, setRestarting] = useState(false);
   const suspended = exited !== null && !restarting && !attachmentPending && (active === false || !shellVisible);
+
+  // The initiating view can unmount before restart fails. The pool's rollback
+  // must reach whichever view now owns the tab, even if its DOM is suspended.
+  useLayoutEffect(() => onXtermExit(tabId, setRuntimeExit), [tabId]);
 
   // ─── 1. xterm DOM 挂载 + IPC data/exit 订阅 ───
   // 用 useLayoutEffect 确保 paint 前 DOM 已经 attach,避免首帧空白

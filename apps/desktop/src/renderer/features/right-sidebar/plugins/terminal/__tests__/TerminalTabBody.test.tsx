@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { TabKindHostContext } from '../../../types';
@@ -35,13 +35,14 @@ vi.mock('../lib/xtermPool', () => ({
   detachXterm: vi.fn(),
   getXtermExit: vi.fn(() => null),
   setXtermExit: vi.fn(),
+  onXtermExit: vi.fn(() => () => undefined),
   needsXtermAttach: () => !entry.ptyAttached,
   restartXterm: (id: string) => window.electronAPI.terminal.restart(id),
   attachXterm: (params: Parameters<typeof window.electronAPI.terminal.create>[0]) => window.electronAPI.terminal.create(params),
 }));
 
 import { TerminalTabBody } from '../TerminalTabBody';
-import { detachXterm, getXtermExit } from '../lib/xtermPool';
+import { detachXterm, getXtermExit, onXtermExit } from '../lib/xtermPool';
 
 class TestResizeObserver {
   static callback: ResizeObserverCallback | null = null;
@@ -70,6 +71,8 @@ function makeContext(overrides: Partial<TabKindHostContext> = {}): TabKindHostCo
 beforeEach(() => {
   vi.mocked(detachXterm).mockClear();
   vi.mocked(getXtermExit).mockReturnValue(null);
+  vi.mocked(onXtermExit).mockReset();
+  vi.mocked(onXtermExit).mockReturnValue(() => undefined);
   entry.ptyAttached = true;
   fit.mockClear();
   resize.mockClear();
@@ -108,6 +111,34 @@ afterEach(() => {
 });
 
 describe('TerminalTabBody sidebar visibility', () => {
+  // Unit: #9815 discussion_r4528361916. A failed pending restart must restore
+  // the action in the replacement view, not just the now-unmounted initiator.
+  it('shows the restored exit when restart rejects after the view remounts', async () => {
+    const oldExit = { code: 0, signal: null };
+    const listeners = new Set<(exit: TerminalExitEvent['exit']) => void>();
+    vi.mocked(onXtermExit).mockImplementation((_id, listener) => {
+      listeners.add(listener);
+      return () => { listeners.delete(listener); };
+    });
+    let reject!: (error: Error) => void;
+    vi.mocked(window.electronAPI.terminal.restart).mockReturnValue(new Promise((_yes, no) => { reject = no; }));
+    const ctx = makeContext();
+    const state = { created: true, exited: null, title: '', shellId: '', shellDisplayName: '' };
+    const original = render(<TerminalTabBody state={{ ...state, exited: oldExit }} ctx={ctx} active />);
+    fireEvent.click(screen.getByText('rightSidebar.terminal.restart'));
+    original.unmount();
+    const replacement = render(<TerminalTabBody state={state} ctx={ctx} active />);
+    expect(screen.queryByText('rightSidebar.terminal.restart')).toBeNull();
+    await act(async () => {
+      for (const listener of listeners) listener(oldExit);
+      reject(new Error('spawn failed'));
+    });
+    expect(screen.getByText('rightSidebar.terminal.restart')).toBeTruthy();
+    expect(window.electronAPI.terminal.create).not.toHaveBeenCalled();
+    replacement.unmount();
+    expect(listeners.size).toBe(0);
+  });
+
   // Unit: #9815 discussion_r4528102364. A returned window can have an old
   // exit even though another window restarted the PTY; native attach is authoritative.
   it('reconciles an old exit after a window handoff before accepting input', async () => {

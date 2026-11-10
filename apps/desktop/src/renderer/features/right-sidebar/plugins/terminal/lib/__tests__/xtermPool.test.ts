@@ -2,7 +2,7 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { openTerminalExternalLink, getXtermExit, setXtermExit, restartXterm, attachXterm, detachXterm, getOrCreateXterm, suspendExitedXterm, disposeXterm, __resetPoolForTesting } from '../xtermPool';
+import { openTerminalExternalLink, getXtermExit, setXtermExit, onXtermExit, restartXterm, attachXterm, detachXterm, getOrCreateXterm, suspendExitedXterm, disposeXterm, __resetPoolForTesting } from '../xtermPool';
 
 const { warn } = vi.hoisted(() => ({
   warn: vi.fn(),
@@ -42,17 +42,23 @@ describe('openTerminalExternalLink', () => {
     const restarted = operation === 'restart' ? restartXterm('restarting') : attachXterm({ id: 'restarting', cwd: '/workspace' });
     detachXterm('restarting');
     expect(disposed).not.toHaveBeenCalled();
+    // A replacement body subscribes while the old native request is pending.
+    const notifyReplacement = vi.fn();
+    const offReplacement = onXtermExit('restarting', notifyReplacement);
     if (outcome === 'success') {
       data({ id: 'restarting', chunk: 'output before restart reply 中文\r\n' });
       exit({ id: 'restarting', exit: { code: 7, signal: null } });
       resolve({ shellId: 'zsh', shellDisplayName: 'zsh', pid: 42 });
       await restarted;
       expect(getXtermExit('restarting')).toEqual({ code: 7, signal: null });
+      expect(notifyReplacement).toHaveBeenCalledWith({ code: 7, signal: null });
     } else {
       reject(new Error('spawn failed'));
       await expect(restarted).rejects.toThrow('spawn failed');
       expect(getXtermExit('restarting')).toEqual(oldExit);
+      expect(notifyReplacement).toHaveBeenCalledWith(oldExit);
     }
+    offReplacement();
     await vi.waitFor(() => expect(disposed).toHaveBeenCalledOnce());
     const restored = getOrCreateXterm('restarting');
     await new Promise<void>(done => restored.terminal.write('', done));
